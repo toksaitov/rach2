@@ -345,9 +345,10 @@ static double tone_sine(double phase)
 }
 
 /** Require both tones together in at least two consecutive tenth-second
- * windows in channel `ch` of the recording `r`. Each tone must account for at least 10 percent
- * of the window's energy and exceed the silence threshold. A single tone,
- * sequential tones or one silent channel cannot pass. */
+ * windows in channel `ch` of the recording `r`. Each tone must account for
+ * at least 10 percent of the window's energy and exceed the silence
+ * threshold. A single tone, sequential tones or one silent channel cannot
+ * pass. */
 static int judge_mix(const struct recording *r, unsigned ch, const double *freqs)
 {
     unsigned rate = r->rate;

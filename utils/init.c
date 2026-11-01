@@ -752,10 +752,11 @@ static void save_mixer(void)
  * interrupted code was in the middle of; this one saves the backlights' and
  * the mixer's levels (`save_backlights`, `save_mixer`) with system calls
  * alone and then calls `reboot`, which is async-signal-safe and does not
- * return when it succeeds, so there is nothing to return to. A failed `reboot` falls to `_exit`,
- * and the kernel panics when init dies. The handler is installed with all three signals blocked
- * while it runs, so a second request, such as the second `poweroff` of a power button the firmware
- * reports twice, waits and is never answered.
+ * return when it succeeds, so there is nothing to return to. A failed
+ * `reboot` falls to `_exit`, and the kernel panics when init dies. The
+ * handler is installed with all three signals blocked while it runs, so a
+ * second request, such as the second `poweroff` of a power button the
+ * firmware reports twice, waits and is never answered.
  *
  * The kernel disables scheduling and writes out the root file system before
  * it stops the machine, and stops it even when that write fails. init does

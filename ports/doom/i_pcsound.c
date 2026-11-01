@@ -414,13 +414,14 @@ static uint32_t queued_level(uint32_t period)
 /**
  * Bring /dev/dsp's buffer up to queued_level. GETODELAY, a sample to a byte,
  * counts the buffer and what the kernel's mix and driver hold, which Doom
- * cannot shorten; GETOSPACE gives the buffer's part. When the time since the last
- * update is longer than what was queued then, the device played silence for
- * the rest, and each effect skips the part of it inside its life with
- * skip_channels, so that none plays late. The samples are mixed in chunks of MIX_BUFFER_SIZE, and what a write
- * does not take is dropped. The first write starts the device with
- * SNDCTL_DSP_POST, which would otherwise wait for its driver's buffer to
- * fill. The report gets the delay after the update.
+ * cannot shorten; GETOSPACE gives the buffer's part. When the time since the
+ * last update is longer than what was queued then, the device played silence
+ * for the rest, and each effect skips the part of it inside its life with
+ * skip_channels, so that none plays late. The samples are mixed in chunks of
+ * MIX_BUFFER_SIZE, and what a write does not take is dropped. The first
+ * write starts the device with SNDCTL_DSP_POST, which would otherwise wait
+ * for its driver's buffer to fill. The report gets the delay after the
+ * update.
  */
 static void dsp_update(void)
 {

@@ -450,7 +450,7 @@ void fbcon_gfx_frame(const uint8_t *pixels)
         return;
     }
     for (line = 0; line < GFX_HEIGHT; line++) {
-        /* The picture's row `row` on the screen shows line row * 200 / height. */
+        /* Screen row `row` shows the picture's line row * 200 / height. */
         uint32_t end = ((line + 1) * gfx_height + GFX_HEIGHT - 1) / GFX_HEIGHT;
         const uint8_t *src = pixels + line * GFX_WIDTH;
         uint8_t *q = gfx_line;
