@@ -15,6 +15,7 @@ struct acceptance {
     struct net_case *u;
     const char *work, *agent, *ready, *busy, *loading, *mark, *quit, *after_cancel, *signin;
     const char *running; /* the screen's text while the command runs, or "" */
+    const char *again;   /* the screen's request for a second Escape, or "" */
     char assets[4096], key[4096], root_key[4096], port[20], log[4096], target[100];
     char *screen;
     unsigned output;
@@ -631,6 +632,28 @@ static int escape_running(struct acceptance *s)
     return ok;
 }
 /**
+ * Press Escape to cancel the turn.
+ *
+ * OpenCode cancels a turn on a second Escape, which s->again asks for. For
+ * such an agent the key is pressed while the screen shows the turn or that
+ * request, a second apart: each press either asks for the second or is the
+ * second, and a request that lapses is made again. Return 1 once the screen
+ * shows neither, or 0 when the screen or a key fails.
+ */
+static int interrupt(struct acceptance *s)
+{
+    if (!*s->again)
+        return keys(s, 0, "Escape");
+    while (net_ok(s->u) && get_screen(s, 0)) {
+        if (!shows(s, s->busy) && !shows(s, s->again))
+            return 1;
+        if (!keys(s, 0, "Escape"))
+            return 0;
+        pause_read();
+    }
+    return 0;
+}
+/**
  * Ask for `sleep 600` and cancel the turn with Escape once it runs.
  *
  * Antigravity CLI sends a command to the background at most ten seconds
@@ -662,7 +685,7 @@ static int session_cancel(struct acceptance *s)
             return 0;
         }
     } else if (!send_text(s, request, "to finish.", 1) || !wait_guest(s, "sleeps", NULL, 1) ||
-               !keys(s, 0, "Escape") || !idle(s))
+               !interrupt(s) || !idle(s))
         return 0;
     if (*s->after_cancel && (!send_text(s, s->after_cancel, s->after_cancel, 2) || !idle(s)))
         return 0;
@@ -820,7 +843,9 @@ static int version(struct acceptance *s, const char *program, int after)
         strcpy(short_version, extra);
         short_version[strcspn(short_version, "-")] = 0;
         snprintf(expected, sizeof(expected), "Muse Code %s (%s)\n", short_version, extra);
-    } else
+    } else if (!strcmp(program, "opencode"))
+        snprintf(expected, sizeof(expected), "opencode v%s\n", extra);
+    else
         snprintf(expected, sizeof(expected), "gh version %s (", extra);
     ok = !strncmp(text, expected, strlen(expected));
     snprintf(expected, sizeof(expected), " /opt/%s/bin/%s\n", program, program);
@@ -919,7 +944,7 @@ static int setup(struct acceptance *s)
         return 0;
     if (!upload_files(s))
         return 0;
-    text = guest(s, "setup", "");
+    text = guest(s, "setup", NULL);
     if (!text)
         return 0;
     free(text);
@@ -1024,10 +1049,14 @@ int agent_accept_action(struct net_case *u, const char *work, const char *agent,
         s->loading = "";
         s->after_cancel = "";
         s->running = !strcmp(agent, "agy") ? "Running (sleep 600)" : "";
-        s->ready = !strcmp(agent, "claude") ? "bypass permissions on"
-                   : !strcmp(agent, "muse") ? "YOLO"
-                                            : "? for shortcuts";
-        s->busy = !strcmp(agent, "agy") ? "esc to cancel" : "esc to interrupt";
+        s->again = "";
+        s->ready = !strcmp(agent, "claude")     ? "bypass permissions on"
+                   : !strcmp(agent, "muse")     ? "YOLO"
+                   : !strcmp(agent, "opencode") ? "ctrl+p commands"
+                                                : "? for shortcuts";
+        s->busy = !strcmp(agent, "agy")        ? "esc to cancel"
+                  : !strcmp(agent, "opencode") ? "esc interrupt"
+                                               : "esc to interrupt";
         s->mark = !strcmp(agent, "codex") ? "\342\200\272"
                   : !strcmp(agent, "agy") ? ">"
                                           : "\342\235\257";
@@ -1035,10 +1064,15 @@ int agent_accept_action(struct net_case *u, const char *work, const char *agent,
         s->signin = !strcmp(agent, "claude")  ? "Select login method"
                     : !strcmp(agent, "codex") ? "Sign in with ChatGPT"
                     : !strcmp(agent, "agy")   ? "Google OAuth"
-                                              : "Log in with browser";
+                    : !strcmp(agent, "muse")  ? "Log in with browser"
+                                              : "Big Pickle OpenCode";
         if (!strcmp(agent, "codex")) {
             s->after_cancel = "/stop";
             s->loading = "loading";
+        }
+        if (!strcmp(agent, "opencode")) {
+            s->again = "esc again to interrupt";
+            s->loading = s->again;
         }
     }
     if (!strcmp(verb, "prepare"))

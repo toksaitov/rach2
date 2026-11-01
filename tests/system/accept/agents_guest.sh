@@ -6,10 +6,10 @@
 #
 # Usage: guest.sh COMMAND [AGENT] [ARGUMENT]
 #
-# AGENT is claude, codex, agy or muse. Each works in the disposable
-# repository ~/rach2-accept/AGENT, made from the files agents_accept.sh puts
-# in ~/rach2-accept/fixture, and its screen is the tmux session
-# rach2-accept-AGENT on the server rach2-accept. The commands:
+# AGENT is claude, codex, agy, muse or opencode. Each works in the
+# disposable repository ~/rach2-accept/AGENT, made from the files
+# agents_accept.sh puts in ~/rach2-accept/fixture, and its screen is the tmux
+# session rach2-accept-AGENT on the server rach2-accept. The commands:
 #
 #   prepare AGENT     make the repository again, with one commit.
 #   run AGENT ACTION  run the agent as ACTION says, in its repository and in
@@ -35,35 +35,44 @@
 #   work AGENT        print the repository's commits, its greeting, the result
 #                     of its check at HEAD and the files `git status` lists.
 #   credentials MODE [AGENT...]
-#                     print `FILE SHA256` or `FILE missing` for each selected
-#                     agent's credential and gh's, all agents by default.
+#                     print `SOURCE SHA256` or `SOURCE missing` for each
+#                     selected agent's credential source and gh's, all agents
+#                     by default.
 #   secrets MODE [AGENT...]
 #                     read a log on standard input and print how many strings
-#                     of those credential files it has.
+#                     of those credential sources it has.
 #   redact            copy standard input to standard output with each
 #                     credential string replaced, as below.
 #   filtered MODE [AGENT...]
 #                     print what `secrets MODE AGENT...` counts in those
-#                     files after `redact`: `0 of N` when the filter removes
-#                     every string.
-#   setup             give the account the settings and dummy keys that
+#                     sources after `redact`: `0 of N` when the filter
+#                     removes every string.
+#   setup [AGENT]     give the account the settings and dummy keys that
 #                     point every agent at the fake API server, for the QEMU
-#                     mode; the server's certificate authority is
-#                     ~/rach2-accept/ca.pem.
+#                     mode, and import OpenCode's key into its database when
+#                     AGENT is opencode; the server's certificate authority
+#                     is ~/rach2-accept/ca.pem.
 #
-# MODE is lenovo or qemu. The credentials of the Lenovo are the files the
-# manual pages name for each sign-in; those of the QEMU mode are the dummy
-# keys `setup` writes and the token it gives gh. A credential's strings are
-# its runs of 16 or more of the characters a token is written with, and only
+# MODE is lenovo or qemu. A credential source is a file and what reading it
+# prints: for most, the file itself; for OpenCode's database, opencode.db,
+# the secrets of its credential and account records, read by sqlite3 in one
+# transaction, so that the read is consistent while a session writes the
+# database and does not change with the sessions it stores. The sources of
+# the Lenovo are those the manual pages name for each sign-in; those of the
+# QEMU mode are the dummy keys `setup` writes, OpenCode's database, into
+# which `setup` imports its key, and the token `setup` gives gh. A
+# source's strings are the runs of 16 or more of the characters a token is
+# written with in what reading it prints, which may be binary, and only
 # their count is printed.
 #
 # Every command but setup, secrets and redact, run with start or resume, and
-# the watcher that watch starts, prints through `redact`, so that no text read from the machine has a
-# credential when it reaches agents_accept.sh; run with once prints its
-# standard error there too. `redact` reads the credential
-# files of both modes that exist, replaces each of their strings with
-# `[credential]`, and then each run of 16 or more token characters that is
-# part of one, such as the half of a string a screen wraps.
+# the watcher that watch starts, prints through `redact`, so that no text
+# read from the machine has a credential when it reaches agents_accept.sh;
+# run with once prints its standard error there too. `redact` reads the
+# credential sources of both modes that exist, replaces each of their
+# strings with `[credential]`, and then each run of 16 or more token
+# characters that is part of one, such as the half of a string a screen
+# wraps.
 
 set -u
 export LC_ALL=C.UTF-8
@@ -71,6 +80,7 @@ export LC_ALL=C.UTF-8
 DIR=$HOME/rach2-accept
 SERVER=rach2-accept
 CANCEL_LINE='sleep 600'
+OPENCODE_DB=$HOME/.local/share/opencode/opencode.db
 ONCE_PROMPT='Reply with the words: signed in.'
 
 # session AGENT: the agent's tmux session.
@@ -80,7 +90,10 @@ session() {
 
 # command AGENT ACTION: print the command line of ACTION for AGENT. MUSE_ARGS
 # is empty on the Lenovo; the QEMU mode's environment names the model of the
-# fake server's script.
+# fake server's script. OpenCode runs with a private server, which ends with
+# it, in place of the background service; its request without a screen runs
+# under SSH without the login shell whose profile turns off its update check,
+# so its command line does that.
 # shellcheck disable=SC2016 # the run command's eval expands MUSE_ARGS
 command_line() {
     case $1.$2 in
@@ -96,6 +109,11 @@ command_line() {
         muse.start) echo 'muse --yolo $MUSE_ARGS' ;;
         muse.resume) echo 'muse resume --last --yolo $MUSE_ARGS' ;;
         muse.once) echo "muse exec --yolo \$MUSE_ARGS '$ONCE_PROMPT'" ;;
+        opencode.start) echo 'opencode --standalone --auto' ;;
+        opencode.resume) echo 'opencode --standalone --auto --continue' ;;
+        opencode.once)
+            echo "OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --standalone '$ONCE_PROMPT' < /dev/null"
+            ;;
         gh.once) echo 'gh auth status' ;;
         *) return 1 ;;
     esac
@@ -122,14 +140,14 @@ descendants() {
         }' | sort -n
 }
 
-# credential_files MODE [AGENT...]: print the selected agents' credential
-# files and gh's, a path to a line; all agents if none are given. With MODE
-# `all`, include the files of both modes for the output filter.
-credential_files() {
+# credential_sources MODE [AGENT...]: print the selected agents' credential
+# sources and gh's, a path to a line; all agents if none are given. With MODE
+# `all`, include the sources of both modes for the output filter.
+credential_sources() {
     local mode=$1 agent
     shift
     if [ "$#" -eq 0 ]; then
-        set -- claude codex agy muse
+        set -- claude codex agy muse opencode
     fi
     for agent in "$@"; do
         if [ "$mode" != lenovo ]; then
@@ -143,15 +161,40 @@ credential_files() {
                 muse) printf '%s\n' "$HOME/.config/muse/auth.json" ;;
             esac
         fi
+        if [ "$agent" = opencode ]; then
+            printf '%s\n' "$OPENCODE_DB"
+        fi
     done
     printf '%s\n' "$HOME/.config/gh/hosts.yml"
 }
 
-# credential_strings MODE [AGENT...]: print the selected credential files'
-# strings that exist, each once, a string to a line.
+# source_read SOURCE: print what the credential source SOURCE holds, or
+# nothing when it holds no credential. OpenCode's database gives the secret
+# fields of its credential and account records, each table in the order of
+# its key, in one read transaction; sqlite3 opens it read-only and waits up
+# to ten seconds for a writer's lock.
+source_read() {
+    case $1 in
+        "$OPENCODE_DB")
+            [ ! -f "$1" ] || sqlite3 -readonly -batch -noheader -list "$1" \
+                '.timeout 10000' 'BEGIN' \
+                'SELECT value FROM credential ORDER BY id' \
+                'SELECT access_token, refresh_token FROM account ORDER BY id' \
+                'SELECT access_token, refresh_token FROM control_account ORDER BY email, url' \
+                'COMMIT'
+            ;;
+        *)
+            [ ! -f "$1" ] || cat "$1"
+            ;;
+    esac
+}
+
+# credential_strings MODE [AGENT...]: print the strings of the selected
+# credential sources, each once, a string to a line. grep reads a source as
+# text whatever bytes it holds.
 credential_strings() {
-    credential_files "$@" | while read -r file; do
-        [ ! -f "$file" ] || grep -oE '[A-Za-z0-9._~+/-]{16,}' "$file"
+    credential_sources "$@" | while read -r source; do
+        source_read "$source" | grep -aoE '[A-Za-z0-9._~+/-]{16,}'
     done | sort -u
 }
 
@@ -160,7 +203,7 @@ credential_strings() {
 # replaced by `[credential]`. awk reads the strings on descriptor 3, since a
 # process's arguments are readable by every user of the machine.
 redact() {
-    awk '
+    LC_ALL=C awk '
         function cut(text, string,    out, i) {
             out = ""
             while ((i = index(text, string)) > 0) {
@@ -206,17 +249,20 @@ scratch() {
     trap 'exit 143' TERM
 }
 
-# setup: write the QEMU mode's dummy keys, the environment that points the
-# agents at the fake server, and the settings each agent reads from its home.
+# setup [AGENT]: write the QEMU mode's dummy keys, the environment that points
+# the agents at the fake server, and the settings each agent reads from its
+# home. OpenCode keeps its key in its database, where only the program writes,
+# so for AGENT opencode its own `auth import` stores the key there.
 setup() {
     local ca=$DIR/ca.pem
     mkdir -p "$DIR/keys" "$HOME/.codex" "$HOME/.config/muse" "$HOME/.config/gh" \
-        "$HOME/.gemini/antigravity-cli" || return 1
+        "$HOME/.gemini/antigravity-cli" "$HOME/.config/opencode" || return 1
     umask 077
     printf '%s\n' rach2-offline-dummy-key > "$DIR/keys/claude"
     printf '%s\n' sk-fakeapi-dummy > "$DIR/keys/codex"
     printf '%s\n' rach2-offline-dummy-key > "$DIR/keys/agy"
     printf '%s\n' meta-fakeapi-dummy > "$DIR/keys/muse"
+    printf '%s\n' rach2-offline-dummy-key > "$DIR/keys/opencode"
     cat > "$DIR/env" <<EOF
 export ANTHROPIC_BASE_URL=https://fakeapi.test
 export ANTHROPIC_API_KEY=\$(cat "$DIR/keys/claude")
@@ -231,6 +277,8 @@ export GEMINI_API_KEY=\$(cat "$DIR/keys/agy")
 export GOOGLE_GEMINI_BASE_URL=https://fakeapi.test
 export SSL_CERT_FILE=$ca
 export META_API_KEY=\$(cat "$DIR/keys/muse")
+export OPENCODE_DISABLE_AUTOUPDATE=1
+export OPENCODE_DISABLE_MODELS_FETCH=1
 MUSE_ARGS='--model muse-spark-1.2'
 EOF
     cat > "$HOME/.codex/config.toml" <<'EOF'
@@ -280,6 +328,20 @@ github.com:
     user: rach2-test
     oauth_token: gho_rach2offlinedummytoken0000000000
 EOF
+    cat > "$HOME/.config/opencode/opencode.json" <<'EOF'
+{
+  "model": "anthropic/claude-sonnet-4-6",
+  "small_model": "anthropic/claude-sonnet-4-6",
+  "provider": {"anthropic": {"options": {"baseURL": "https://fakeapi.test/v1"}}}
+}
+EOF
+    if [ "${1:-}" = opencode ]; then
+        printf '[{"id": "cred_rach2accept", "integrationID": "anthropic", "label": "Anthropic",
+            "active": true, "value": {"type": "key", "key": "%s"}}]\n' \
+            "$(cat "$DIR/keys/opencode")" |
+            OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_MODELS_FETCH=1 \
+                opencode auth import --standalone > /dev/null
+    fi
 }
 
 # main COMMAND [AGENT] [ARGUMENT]: run COMMAND.
@@ -298,6 +360,8 @@ main() {
             MUSE_ARGS=
             # shellcheck disable=SC1091 # the QEMU mode's environment
             [ ! -f "$DIR/env" ] || . "$DIR/env"
+            # OpenCode signs in by the key in its database, not Claude Code's
+            [ "$2" != opencode ] || unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_MODEL
             if [ -d "$DIR/$2" ]; then
                 cd "$DIR/$2" || exit 1
             fi
@@ -370,13 +434,17 @@ main() {
             printf 'status %s\n' "$(git --no-optional-locks status --porcelain | tr '\n' ' ')"
             ;;
         credentials)
-            credential_files "${@:2}" | while read -r file; do
-                if [ -f "$file" ]; then
-                    printf '%s %s\n' "$file" "$(sha256sum < "$file" | cut -d ' ' -f 1)"
+            scratch
+            dir=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-sources.XXXXXX") || exit 1
+            credential_sources "${@:2}" | while read -r source; do
+                source_read "$source" > "$dir/read"
+                if [ -s "$dir/read" ]; then
+                    printf '%s %s\n' "$source" "$(sha256sum < "$dir/read" | cut -d ' ' -f 1)"
                 else
-                    printf '%s missing\n' "$file"
+                    printf '%s missing\n' "$source"
                 fi
             done
+            rm -rf "$dir"
             ;;
         screen)
             if [ "${3:-}" = all ]; then
@@ -390,7 +458,7 @@ main() {
             dir=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept-secrets.XXXXXX") || exit 1
             cat > "$dir/log"
             credential_strings "${@:2}" > "$dir/strings"
-            printf '%d of %d strings\n' "$(($(grep -oFf "$dir/strings" "$dir/log" | sort -u | wc -l)))" \
+            printf '%d of %d strings\n' "$(($(grep -aoFf "$dir/strings" "$dir/log" | sort -u | wc -l)))" \
                 "$(($(wc -l < "$dir/strings")))"
             rm -rf "$dir"
             ;;
@@ -398,12 +466,12 @@ main() {
             redact
             ;;
         filtered)
-            credential_files "${@:2}" | while read -r file; do
-                [ ! -f "$file" ] || cat "$file"
+            credential_sources "${@:2}" | while read -r source; do
+                source_read "$source"
             done | redact | main secrets "${@:2}"
             ;;
         setup)
-            setup
+            setup "${2:-}"
             ;;
         *)
             echo "usage: guest.sh COMMAND [AGENT] [ARGUMENT]" >&2

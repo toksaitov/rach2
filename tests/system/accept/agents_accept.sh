@@ -9,55 +9,58 @@
 #
 # Usage: agents_accept.sh lenovo USER [ADDRESS]
 #
-# For each agent of RACH2_ACCEPT_AGENTS, `claude codex agy muse` unless it
-# names fewer, the script makes a disposable repository on the machine,
+# For each agent of RACH2_ACCEPT_AGENTS, `claude codex agy muse opencode` unless
+# it names fewer, the script makes a disposable repository on the machine,
 # ~/rach2-accept/AGENT, from tests/system/fakeapi/repo: notes.txt asks for a
 # change to greeting.txt, and check.sh is its test. It then works as a person
 # does. Its own tmux, on this host, runs `ssh -tt` to the machine, and that
-# attaches to a tmux session there, in which the account's login shell
-# starts the agent. The script types into its own tmux, so that every key
-# goes through SSH's terminal, and reads the agent's screen from the
-# machine's tmux. A client that exits before the machine's session reports
-# it, as one does when the machine closes its connection during the SSH
-# banner exchange, is started again, and its status and its log are kept.
-# It answers the questions of a first start and of a new
-# directory, asks the agent to read notes.txt, do what it says, check the
-# change and commit it, and requires a second commit whose greeting.txt
-# check.sh passes, with nothing left uncommitted. It then asks for `sleep 600`
-# and cancels the turn with Escape once the command runs, which must leave
-# the agent at its prompt and no such command running; resizes its window,
-# which the agent's terminal must follow; kills its SSH client, after which
-# the session must lose its client and the agent go on, and attaches again;
-# and ends the agent and reopens its conversation, which must show the
-# cancelled request. While the agent runs, its process must run the
-# program of the agents layer, /opt/AGENT/bin/AGENT.
+# attaches to a tmux session there, in which the account's login shell starts
+# the agent. The script types into its own tmux, so that every key goes through
+# SSH's terminal, and reads the agent's screen from the machine's tmux. A client
+# that exits before the machine's session reports it, as one does when the
+# machine closes its connection during the SSH banner exchange, is started
+# again, and its status and its log are kept. It answers the questions of a
+# first start and of a new directory, asks the agent to read notes.txt, do what
+# it says, check the change and commit it, and requires a second commit whose
+# greeting.txt check.sh passes, with nothing left uncommitted. It then asks for
+# `sleep 600` and cancels the turn with Escape once the command runs, pressed
+# twice for an agent that asks for a second Escape, which must leave the agent
+# at its prompt and no such command running; resizes its window, which the
+# agent's terminal must follow; kills its SSH client, after which the session
+# must lose its client and the agent go on, and attaches again; and ends the
+# agent and reopens its conversation, which must show the cancelled request.
+# While the agent runs, its process must run the program of the agents layer,
+# /opt/AGENT/bin/AGENT.
 #
 # Before the sessions it requires each program's version to be the one its
-# recipe pins, and keeps the program's SHA-256 and that of each selected
-# agent's credential file and gh's. It reboots as root and requires each
-# file unchanged, every version and program unchanged, `gh auth status` to
-# pass, and each agent to answer one request without its screen, which only
-# a program still signed in can do. Last it sends its log to the machine,
-# which counts there the strings of the credential files the log has; none
-# may be in it. Only that count comes back. It removes ~/rach2-accept on the
-# machine at the end, and refuses to start when that directory exists
+# recipe pins, and keeps the program's SHA-256 and that of each selected agent's
+# credential source and gh's: a file, or for OpenCode the secrets of its
+# database's credential records, read in one transaction. It reboots as root and
+# requires each source unchanged, every version and program unchanged, `gh auth
+# status` to pass, and each agent to answer one request without its screen,
+# which only a program still signed in can do. Last it sends its log to the
+# machine, which counts there the strings of the credential sources the log has;
+# none may be in it. Only that count comes back. It removes ~/rach2-accept on
+# the machine at the end, and refuses to start when that directory exists
 # without the mark the script leaves in it.
 #
 # Each text the script reads from the machine, a screen, an answer or the
 # output of a step, passes first through a filter there that replaces each
-# string of a credential file with `[credential]`, so that the log has none
-# on any path to the script's exit. Before the sessions the script requires
-# the filter to remove every string of the credential files themselves.
+# string of a credential source with `[credential]`, so that the log has
+# none on any path to the script's exit. Before the sessions the script
+# requires the filter to remove every string of the credential sources
+# themselves.
 #
-# `lenovo` accepts the installed Lenovo as USER, the account the owner signed
-# in with, at ADDRESS, RACH2_MACHINE_ADDRESS or 192.168.0.106, by the key
+# `lenovo` accepts the installed Lenovo as USER, the account the owner signed in
+# with, at ADDRESS, RACH2_MACHINE_ADDRESS or 192.168.0.106, by the key
 # RACH2_ACCEPT_KEY names or ssh's own. It reboots the machine as root by the
 # development key, krffs/rach2_demo_ed25519, and only after the machine has
-# reported the Lenovo's station address, RACH2_MACHINE_MAC or
-# 28:d2:44:7e:e0:af. The credential files are the sign-ins the manual pages
-# name: ~/.claude/.credentials.json, ~/.codex/auth.json,
-# ~/.gemini/antigravity-cli/antigravity-oauth-token, ~/.config/muse/auth.json
-# and ~/.config/gh/hosts.yml. The log is build/images/agents-accept-lenovo.log.
+# reported the Lenovo's station address, RACH2_MACHINE_MAC or 28:d2:44:7e:e0:af.
+# The credential sources are the sign-ins the manual pages name:
+# ~/.claude/.credentials.json, ~/.codex/auth.json,
+# ~/.gemini/antigravity-cli/antigravity-oauth-token, ~/.config/muse/auth.json,
+# ~/.local/share/opencode/opencode.db and ~/.config/gh/hosts.yml. The log is
+# build/images/agents-accept-lenovo.log.
 #
 # It prints a line for each step, `agents-accept: PASS` and exits 0, or
 # `agents-accept: FAIL (N)` and exits 1; a usage error exits 2.
@@ -75,7 +78,7 @@ case $MODE in
         HOST=${3:-${RACH2_MACHINE_ADDRESS:-192.168.0.106}}
         PORT=22
         KEY=${RACH2_ACCEPT_KEY:-}
-        AGENTS=${RACH2_ACCEPT_AGENTS:-claude codex agy muse}
+        AGENTS=${RACH2_ACCEPT_AGENTS:-claude codex agy muse opencode}
         ROOT_KEY=$REPO/krffs/rach2_demo_ed25519
         mkdir -p "$REPO/build/images"
         LOG=$REPO/build/images/agents-accept-lenovo.log
@@ -87,7 +90,7 @@ case $MODE in
 esac
 for agent in $AGENTS; do
     case $agent in
-        claude | codex | agy | muse) ;;
+        claude | codex | agy | muse | opencode) ;;
         *) echo "agents_accept.sh: no agent named $agent" >&2; exit 2 ;;
     esac
 done
@@ -173,14 +176,17 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept.XXXXXX") || exit 1
 
 # The agent's own words and keys: its prompt, by a text the screen shows only
 # while the agent waits for a request; the text it shows only while it works,
-# and any it shows while it starts, when it may yet ask a question;
-# the mark before the selected answer of a question; how it ends; what more it
-# needs after a cancelled turn; the text it shows while it runs the command it
-# must cancel, for an agent that sends a command to the background after a
-# few seconds; and the menu it shows when nobody is signed in.
+# and any other it shows while it is not yet waiting, as when it starts and
+# may yet ask a question; the mark before the selected answer of a question;
+# how it ends; what more it needs after a cancelled turn; the text it shows
+# while it runs the command it must cancel, for an agent that sends a command
+# to the background after a few seconds; the text by which it asks for a
+# second Escape to cancel a turn; and the text it shows when nobody is signed
+# in. OpenCode with no sign-in offers a free model of its own provider.
 agent_set() {
     LOADING=""
     RUNNING=""
+    AGAIN=""
     case $1 in
         claude)
             READY="bypass permissions on"
@@ -216,6 +222,16 @@ agent_set() {
             AFTER_CANCEL=""
             SIGNIN="Log in with browser"
             ;;
+        opencode)
+            READY="ctrl+p commands"
+            BUSY="esc interrupt"
+            AGAIN="esc again to interrupt"
+            LOADING=$AGAIN
+            MARK=""
+            QUIT=/exit
+            AFTER_CANCEL=""
+            SIGNIN="Big Pickle OpenCode"
+            ;;
     esac
 }
 
@@ -228,6 +244,7 @@ version_line() {
         codex) echo "codex-cli $2" ;;
         agy) echo "$2" ;;
         muse) echo "Muse Code ${2%%-*} ($2)" ;;
+        opencode) echo "opencode v$2" ;;
         gh) echo "gh version $2 (*" ;;
     esac
 }
@@ -484,6 +501,24 @@ escape_running() {
     return 1
 }
 
+# interrupt: press Escape to cancel the turn. For an agent that asks for a
+# second Escape, press it while the screen shows the turn or AGAIN, a second
+# apart; each press either asks for the second or is the second, and a
+# request for the second that lapses is made again.
+interrupt() {
+    if [ -z "$AGAIN" ]; then
+        keys Escape
+        return
+    fi
+    while :; do
+        SCREEN=$(screen)
+        shows "$BUSY" || shows "$AGAIN" || return 0
+        keys Escape
+        # interval: a second for the agent to draw the key's effect
+        sleep 1
+    done
+}
+
 # attach: start the host's window of the agent, whose SSH client attaches to
 # the agent's session on the machine, made the first time. The client's
 # stderr goes to $work/client.AGENT.
@@ -569,7 +604,7 @@ step_session() {
     else
         send "the request" "$CANCEL" "to finish." sleeping || return 1
         until_guest_some "the command" sleeps "$agent" || return 1
-        keys Escape
+        interrupt
         idle "the cancelled turn" || return 1
     fi
     if [ -n "$AFTER_CANCEL" ]; then
@@ -649,7 +684,8 @@ answer() {
 }
 
 # acceptance_setup: put the guest driver and the fixture on the machine, and
-# record each program's version and the credential files before the sessions.
+# record each program's version and the credential sources before the
+# sessions.
 acceptance_setup() {
 # shellcheck disable=SC2016 # the machine's shell expands it
 HOME_M=$(m 'printf %s "$HOME"') || give_up "the account's home"
@@ -666,7 +702,7 @@ for file in "$REPO"/tests/system/fakeapi/repo/*; do
         give_up "the script's files on the machine"
 done
 
-# The versions and programs, and the credential files, before the reboot.
+# The versions and programs, and the credential sources, before the reboot.
 for program in $AGENTS gh; do
     version=$(sed -n 's/^VERSION=//p' "$PACKAGES/$program.sh")
     want=$(version_line "$program" "$version")
@@ -683,15 +719,15 @@ for program in $AGENTS gh; do
     esac
 done
 # shellcheck disable=SC2086 # AGENTS is the validated list of program names
-guest credentials "$MODE" $AGENTS > "$work/credentials.before" || give_up "the credential files"
+guest credentials "$MODE" $AGENTS > "$work/credentials.before" || give_up "the credential sources"
 while read -r file digest; do
-    [ "$digest" != missing ] || bad "no credential file $file"
+    [ "$digest" != missing ] || bad "no credential in $file"
 done < "$work/credentials.before"
 # shellcheck disable=SC2086 # AGENTS is the validated list of program names
 OUT=$(guest filtered "$MODE" $AGENTS)
 case $OUT in
     "0 of "[1-9]*) say "the machine's filter removes every credential string: OK" ;;
-    *) give_up "the machine's filter leaves [$OUT] of the credential files' strings" ;;
+    *) give_up "the machine's filter leaves [$OUT] of the credential sources' strings" ;;
 esac
 }
 
@@ -730,11 +766,11 @@ done
 say "the machine rebooted: OK"
 
 # shellcheck disable=SC2086 # AGENTS is the validated list of program names
-guest credentials "$MODE" $AGENTS > "$work/credentials.after" || give_up "the credential files after the reboot"
+guest credentials "$MODE" $AGENTS > "$work/credentials.after" || give_up "the credential sources after the reboot"
 if cmp -s "$work/credentials.before" "$work/credentials.after"; then
-    say "the credential files are as they were before the reboot: OK"
+    say "the credential sources are as they were before the reboot: OK"
 else
-    bad "the credential files changed in the reboot: $(cut -d ' ' -f 1 "$work/credentials.after" |
+    bad "the credential sources changed in the reboot: $(cut -d ' ' -f 1 "$work/credentials.after" |
         tr '\n' ' ')"
 fi
 for program in $AGENTS gh; do
@@ -763,8 +799,8 @@ done
 
 OUT=$(mi "bash ~/rach2-accept/guest.sh secrets $MODE $AGENTS" < "$LOG")
 case $OUT in
-    "0 of "*) say "the log has none of the credential files' strings: OK" ;;
-    *) bad "the log has $OUT of the credential files' strings" ;;
+    "0 of "*) say "the log has none of the credential sources' strings: OK" ;;
+    *) bad "the log has $OUT of the credential sources' strings" ;;
 esac
 m 'rm -rf ~/rach2-accept' || bad "$HOME_M/rach2-accept was not removed"
 if [ "$FAILS" -eq 0 ]; then

@@ -1,0 +1,41 @@
+{
+  "hosts": ["fakeapi.test"],
+  "session": {
+    "protocol": "anthropic",
+    "steps": [
+      {"unordered": true, "repeat": true,
+       "body": {"output_config": {"effort": "low"}},
+       "reply": [{"type": "text", "text": "Greet Rach2"}]},
+      {"tools": ["read", "shell", "edit"],
+       "reply": [{"type": "tool_use", "id": "toolu_notes", "name": "read",
+                  "input": {"path": "@REPO@/notes.txt"}}]},
+      {"results": [{"id": "toolu_notes",
+                    "contains": ["Change the greeting in greeting.txt to: hello, rach2"]}],
+       "reply": [{"type": "tool_use", "id": "toolu_greeting", "name": "read",
+                  "input": {"path": "@REPO@/greeting.txt"}}]},
+      {"results": [{"id": "toolu_greeting", "contains": ["hello, world"]}],
+       "reply": [{"type": "tool_use", "id": "toolu_edit", "name": "edit",
+                  "input": {"path": "@REPO@/greeting.txt", "oldString": "hello, world",
+                            "newString": "hello, rach2"}}]},
+      {"results": [{"id": "toolu_edit", "contains": ["greeting.txt"]}],
+       "reply": [{"type": "tool_use", "id": "toolu_commit", "name": "shell",
+                  "input": {"command": "sh check.sh && git commit -q -am 'Greet Rach2' && git log --format=%s -1"}}]},
+      {"results": [{"id": "toolu_commit", "contains": ["check: ok", "Greet Rach2"]}],
+       "reply": [{"type": "text",
+                  "text": "greeting.txt says hello, rach2, check.sh passes, and the change is committed."}]},
+      {"results": [{"id": "toolu_commit", "contains": ["check: ok", "Greet Rach2"]}],
+       "reply": [{"type": "tool_use", "id": "toolu_sleep", "name": "shell",
+                  "input": {"command": "sleep 600", "timeout": 0}}]}
+    ]
+  },
+  "after": {
+    "protocol": "anthropic",
+    "steps": [
+      {"unordered": true, "repeat": true,
+       "body": {"output_config": {"effort": "low"}},
+       "reply": [{"type": "text", "text": "Signed in"}]},
+      {"tools": ["read", "shell", "edit"],
+       "reply": [{"type": "text", "text": "signed in"}]}
+    ]
+  }
+}
