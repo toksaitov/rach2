@@ -476,7 +476,7 @@ void netlink_name(struct socket *sock, uint8_t *sa)
     struct netlink_state *st = state_of(sock);
 
     if (!st->bound) {
-        (void)netlink_bind(sock, 0, 0);
+        (void)netlink_bind(sock, 0, st->groups);
     }
     k_memset(sa, 0, SOCKADDR_NL_LEN);
     put16(sa, AF_NETLINK);
@@ -517,6 +517,20 @@ int netlink_genl_reply(struct socket *sock, uint32_t portid, const uint8_t *data
 
     if (st && st->protocol == NETLINK_GENERIC && st->pid == portid) {
         rc = len <= NL_DGRAM_MAX ? enqueue(st, data, len) : -EMSGSIZE;
+        if (!rc) {
+            uint8_t *copy = (uint8_t *)(st->tail + 1);
+            unsigned at;
+
+            for (at = 0; at + NLMSG_HDRLEN <= len;) {
+                unsigned size = get32(copy + at);
+
+                if (size < NLMSG_HDRLEN || size > len - at) {
+                    break;
+                }
+                put32(copy + at + 12, portid);
+                at += (size + 3u) & ~3u;
+            }
+        }
     }
     net_unlock(flags);
     return rc;
@@ -564,12 +578,17 @@ int netlink_ack(struct socket *sock, const uint8_t *req, int error, const char *
 {
     struct netlink_state *st = state_of(sock);
     struct genl_msg msg;
-    unsigned echo = error && !st->cap_ack ? get32(req) : NLMSG_HDRLEN;
-    unsigned base = (20u + echo + 3u) & ~3u;
-    unsigned cap = base + 512u;
-    uint8_t *buf = kzalloc(cap);
+    unsigned echo, base, cap;
+    uint8_t *buf;
     int rc;
 
+    if (!st) {
+        return -ENOENT;
+    }
+    echo = error && !st->cap_ack ? get32(req) : NLMSG_HDRLEN;
+    base = (20u + echo + 3u) & ~3u;
+    cap = base + 512u;
+    buf = kzalloc(cap);
     if (!buf) {
         return -ENOMEM;
     }
@@ -743,7 +762,7 @@ static uint32_t prefix_of(uint32_t mask)
 /* Userspace's link policy is separate from the driver's carrier state. */
 struct link_policy {
     const struct netdev *dev;
-    uint8_t mode, authorized, carrier;
+    uint8_t mode, authorized;
 };
 static struct link_policy link_policies[NETDEV_MAX + 1];
 
@@ -765,7 +784,6 @@ static struct link_policy *policy_of(const struct netdev *nd, int create)
     if (create && empty) {
         empty->dev = nd;
         empty->authorized = 1;
-        empty->carrier = (uint8_t)(nd->up && netdev_running(nd));
         return empty;
     }
     return 0;
@@ -775,22 +793,31 @@ static struct link_policy *policy_of(const struct netdev *nd, int create)
  * A loss of carrier revokes an authorization in userspace link mode. */
 static uint8_t operstate(const struct netdev *nd)
 {
+    uint32_t flags = net_lock();
     struct link_policy *p = policy_of(nd, 0);
     int running = nd->up && netdev_running(nd);
+    uint8_t oper;
 
-    if (p) {
-        if (!running && p->carrier && p->mode) {
-            p->authorized = 0;
-        }
-        p->carrier = (uint8_t)running;
+    if (p && !running) {
+        p->authorized = (uint8_t)!p->mode;
     }
-    if (nd->loopback) {
-        return IF_OPER_UNKNOWN;
-    }
-    if (!running) {
-        return IF_OPER_DOWN;
-    }
-    return p && !p->authorized ? IF_OPER_DORMANT : IF_OPER_UP;
+    oper = nd->loopback          ? IF_OPER_UNKNOWN
+           : !running            ? IF_OPER_DOWN
+           : p && !p->authorized ? IF_OPER_DORMANT
+                                 : IF_OPER_UP;
+    net_unlock(flags);
+    return oper;
+}
+
+/** Read the userspace link mode under network exclusion. */
+static uint8_t linkmode(const struct netdev *nd)
+{
+    uint32_t flags = net_lock();
+    struct link_policy *p = policy_of(nd, 0);
+    uint8_t mode = p ? p->mode : 0;
+
+    net_unlock(flags);
+    return mode;
 }
 
 /**
@@ -813,8 +840,7 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
     static const uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     int running = nd->up && netdev_running(nd);
     uint8_t oper = operstate(nd);
-    struct link_policy *policy = policy_of(nd, 0);
-    uint8_t mode = policy ? policy->mode : 0;
+    uint8_t mode = linkmode(nd);
     uint32_t up = (nd->up ? IFF_UP : 0) | (running ? IFF_LOWER_UP : 0) |
                   (running && oper != IF_OPER_DORMANT ? IFF_RUNNING : 0);
     uint8_t stats[96];
@@ -1276,11 +1302,7 @@ static void watch_take(struct watch_state *w)
         l->running = (uint8_t)(nd->up && netdev_running(nd));
         l->mtu = nd->mtu;
         l->oper = operstate(nd);
-        {
-            struct link_policy *p = policy_of(nd, 0);
-
-            l->mode = p ? p->mode : 0;
-        }
+        l->mode = linkmode(nd);
         for (j = -1; j < nd->naddr2; j++) {
             struct watch_addr4 *a = &w->addr4[w->naddr4];
 
@@ -1694,7 +1716,12 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
         if (!net_ns_seen() || nd->loopback) {
             return -EOPNOTSUPP;
         }
-        policy = policy_of(nd, 1);
+        {
+            uint32_t lock = net_lock();
+
+            policy = policy_of(nd, 1);
+            net_unlock(lock);
+        }
         if (!policy) {
             return -ENOSPC;
         }
@@ -1712,6 +1739,8 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
         }
     }
     if (policy) {
+        uint32_t lock = net_lock();
+
         if (mode && policy->mode != mode[0]) {
             policy->mode = mode[0];
             policy->authorized = (uint8_t)!mode[0];
@@ -1720,6 +1749,7 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
             policy->authorized = oper[0] == IF_OPER_UP;
         }
         (void)operstate(nd);
+        net_unlock(lock);
     }
     return 0;
 }
@@ -2688,7 +2718,7 @@ int32_t netlink_send(struct socket *sock, const uint8_t *buf, uint32_t len)
     int failed;
 
     if (!st->bound) {
-        (void)netlink_bind(sock, 0, 0);
+        (void)netlink_bind(sock, 0, st->groups);
     }
     if (st->protocol == NETLINK_KOBJECT_UEVENT) {
         return (int32_t)len;

@@ -20,6 +20,8 @@ The build-only inventory builder reads source metadata, compiles the checks and 
 
 The `icmp_hosttest.c` model sends pings with timer interrupts still pending at each attempt. It checks the deadline before and at its expiry, a count past 2^32 ticks, release of the deadline, and a reply received before the timer handler catches up. Its fragmentation-needed rows quote a TCP segment: a sequence past what was sent, one acknowledged, another connection's and a quote too short for the sequence leave the path MTU as it was, and only a sequence in flight lowers it and reaches TCP.
 
+The `genetlink_hosttest.c` model registers a family against the real generic dispatcher and netlink queue, resolves it through `nlctrl`, checks its operation and group nests, reads a dump in three datagrams, joins and leaves groups including group 40, and fills one reader's queue while another keeps receiving. It also checks privilege refusal, capped and extended errors, malformed and unaligned attributes, and the dormant/up link policy and route notifications. The model supplies one Ethernet card and empty address, route and socket tables.
+
 ## Results
 
 The driver prints one result, assertion and progress record per completed check, and the assertion `listed` for agreement between the manifest, source tree and prepared inventory. A source check missing from the manifest is not executed and fails `listed`; a declared check missing from the inventory fails its assertion and `listed`.

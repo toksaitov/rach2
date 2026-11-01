@@ -566,8 +566,10 @@ static int describe(struct genl_msg *msg, const struct genl_family *f, uint32_t 
         nest = nla_nest_start(msg, 6);
         for (i = 0; i < f->n_ops; ++i) {
             const struct genl_ops *op = &f->ops[i];
-            unsigned caps = op->flags | (op->doit ? 2u : 0) | (op->dumpit ? 4u : 0) |
-                            ((op->policy || f->policy) ? 8u : 0);
+            unsigned caps = f == &controller
+                                ? 14u
+                                : op->flags | (op->doit ? 2u : 0) | (op->dumpit ? 4u : 0) |
+                                      ((op->policy || f->policy) ? 8u : 0);
 
             item = nla_nest_start(msg, i + 1);
             nla_put_u32(msg, 1, op->cmd);
@@ -653,7 +655,8 @@ static int control(const struct genl_info *info, uint8_t *buf)
 
 /** Run a dump to completion, with each callback's messages in one datagram.
  * Dispatch retains the request and family through sleeping handlers. */
-static int run_dump(struct genl_info *info, const struct genl_ops *op, uint8_t *buf)
+static int run_dump(struct genl_info *info, const struct genl_ops *op, uint8_t *buf,
+                    const struct family_entry *entry)
 {
     struct genl_dump dump;
     struct genl_msg msg;
@@ -664,6 +667,10 @@ static int run_dump(struct genl_info *info, const struct genl_ops *op, uint8_t *
     do {
         unsigned at;
 
+        if (entry->retiring) {
+            rc = -ENOENT;
+            break;
+        }
         genl_msg_init(&msg, buf, MSG_CAP);
         more = op->dumpit(&dump, &msg);
         if (more < 0) {
@@ -786,12 +793,12 @@ int genl_dispatch(struct socket *sock, uint32_t portid, const uint8_t *req, unsi
             rc = -ENOMEM;
             goto out;
         }
-        rc = !entry ? control(&info, buf) : run_dump(&info, op, buf);
+        rc = !entry ? control(&info, buf) : run_dump(&info, op, buf, entry);
     } else {
         rc = op->doit(&info);
     }
 out:
-    if (rc || (info.flags & ACK)) {
+    if (rc || ((info.flags & ACK) && (info.flags & DUMP) != DUMP)) {
         sent = netlink_ack(sock, req, rc, detail, bad);
     } else {
         sent = 0;

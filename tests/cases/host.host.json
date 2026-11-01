@@ -326,6 +326,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "genetlink",
+          "checks": "tests/host/genetlink_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "gptdisk",
           "checks": "tests/host/gptdisk_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

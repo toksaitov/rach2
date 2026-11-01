@@ -8,7 +8,8 @@ struct socket;
 /*
  * netlink: AF_NETLINK sockets of the NETLINK_ROUTE protocol, the way a Linux
  * program asks the kernel what interfaces, addresses and routes it has, and
- * changes them.
+ * changes them. NETLINK_GENERIC dispatches registered families through
+ * genetlink.h, with nlctrl discovery, multipart replies and group events.
  *
  * BusyBox's `ip` works through such a socket, and Chromium watches the
  * machine's addresses through one. A request is a netlink message, a
@@ -23,13 +24,14 @@ struct socket;
  * each interface) and RTM_GETNETCONF; and, for one object, RTM_GETLINK by an
  * interface's index or name, RTM_GETROUTE for a destination (`ip route get`)
  * and RTM_GETNETCONF by an index. The changes RTM_NEWLINK and RTM_SETLINK (an
- * interface up or down, its MTU), RTM_NEWADDR, RTM_DELADDR, RTM_NEWROUTE,
- * RTM_DELROUTE, RTM_NEWNEIGH and RTM_DELNEIGH are made for a privileged caller
- * through the operations the ioctls use, and refused with EPERM for any other;
- * an MTU out of the interface's range is EINVAL, and a new name, which an
- * interface here cannot take, EOPNOTSUPP. Another request is answered with an
- * NLMSG_ERROR of EOPNOTSUPP. In a network namespace other than the first, a
- * dump is empty and any other request finds no interface.
+ * interface up or down, its MTU, link mode and operstate), RTM_NEWADDR,
+ * RTM_DELADDR, RTM_NEWROUTE, RTM_DELROUTE, RTM_NEWNEIGH and RTM_DELNEIGH are
+ * made for a privileged caller through the operations the ioctls use, and
+ * refused with EPERM for any other; an MTU out of the interface's range is
+ * EINVAL, and a new name, which an interface here cannot take, EOPNOTSUPP.
+ * Another request is answered with an NLMSG_ERROR of EOPNOTSUPP. In a network
+ * namespace other than the first, a dump is empty and any other request finds
+ * no interface.
  *
  * A socket joins multicast groups by its bind's `nl_groups`, groups 1 to
  * 32, and by NETLINK_ADD_MEMBERSHIP, and hears of the first namespace's
@@ -73,7 +75,7 @@ struct socket;
 
 /** Give `sock` the state of a netlink socket of `protocol`; 0, -ENOMEM, or
  * -EPROTONOSUPPORT for a protocol other than NETLINK_ROUTE,
- * NETLINK_SOCK_DIAG and NETLINK_KOBJECT_UEVENT. */
+ * NETLINK_SOCK_DIAG, NETLINK_KOBJECT_UEVENT and NETLINK_GENERIC. */
 int netlink_open(struct socket *sock, int protocol);
 
 /** Free the state of a netlink socket and what is queued on it. */
@@ -83,16 +85,17 @@ void netlink_close(struct socket *sock);
  * each of groups 1 to 32. With `pid` 0 the kernel picks one: the
  * calling process's id when no other netlink socket has it, else the next
  * free one of a count from 2^31, where no process id is. Returns 0, or
- * -EADDRINUSE when another netlink socket has the port id asked for. Takes
+ * -EADDRINUSE when another socket of this protocol has the port id asked
+ * for, or -EINVAL for an unknown generic group. Takes
  * `net_lock` itself. */
 int netlink_bind(struct socket *sock, uint32_t pid, uint32_t groups);
 
 /** Set the SOL_NETLINK option `optname` of `sock` to `val`, the int the
  * caller gave in `optlen` bytes: NETLINK_ADD_MEMBERSHIP and
- * NETLINK_DROP_MEMBERSHIP a group, of which those past 32 are taken and
- * hear nothing, and NETLINK_NO_ENOBUFS. Another option is accepted with no
+ * NETLINK_DROP_MEMBERSHIP a group, including generic groups above 32;
+ * NETLINK_NO_ENOBUFS, NETLINK_EXT_ACK and NETLINK_CAP_ACK. Another option has no
  * effect. Returns 0, or -EINVAL for a value shorter than an int or a group
- * of 0 or less. Takes net_lock. */
+ * of 0 or less or an unknown generic group, or -ENOMEM. Takes net_lock. */
 int32_t netlink_setsockopt(struct socket *sock, int optname, int val, int optlen);
 
 /** Compare the state notifications are made from with the last, ten times

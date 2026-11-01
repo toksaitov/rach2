@@ -1066,7 +1066,9 @@ static int32_t netlink_send_user(struct socket *sock, uintptr_t buf_ptr, int len
         kfree(copy);
         return -EFAULT;
     }
+    socket_ref(sock);
     rc = netlink_send(sock, copy, (uint32_t)len);
+    socket_unref(sock);
     kfree(copy);
     return rc;
 }
@@ -2969,7 +2971,11 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
         total += (uint32_t)iov[i].iov_len;
     }
     if (entry->sock->family == AF_NETLINK) {
-        rc = netlink_send(entry->sock, gathered, total);
+        struct socket *sock = entry->sock;
+
+        socket_ref(sock);
+        rc = netlink_send(sock, gathered, total);
+        socket_unref(sock);
     } else {
         rc = udp_sendto(entry, gathered, (int)total, name_ptr, (int)namelen, opt);
     }

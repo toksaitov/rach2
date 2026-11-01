@@ -1,0 +1,150 @@
+.Dd November 2, 2026
+.Dt GENETLINK 7
+.Os
+.Sh NAME
+.Nm genetlink
+.Nd generic netlink families, requests and multicast events
+.Sh SYNOPSIS
+.In sys/socket.h
+.In linux/netlink.h
+.In linux/genetlink.h
+.Ft int
+.Fn socket "AF_NETLINK" "SOCK_RAW" "NETLINK_GENERIC"
+.Sh DESCRIPTION
+A generic netlink socket uses protocol 16 of
+.Dv AF_NETLINK .
+.Dv SOCK_RAW
+and
+.Dv SOCK_DGRAM
+have the same behavior.
+Any user may open a socket and discover families; an operation marked for
+network administration needs privilege in the network namespace.
+.Pp
+Each request begins with
+.Vt struct nlmsghdr ,
+whose type is the family ID, followed by the four-byte
+.Vt struct genlmsghdr :
+a command byte, a version byte and two reserved bytes.
+A family's private header follows, padded to four bytes, then its attributes.
+An attribute has a native-endian 16-bit length, including its four-byte
+header, a 16-bit type and its payload, padded to four bytes.
+The type's high bits mark a nest or network byte order.
+Unknown attribute IDs are skipped; a truncated attribute, repeated known
+attribute or value outside its policy is
+.Er EINVAL .
+.Pp
+Set
+.Dv NLM_F_REQUEST
+and choose a sequence number.
+Replies repeat that sequence number and use the socket's assigned port ID;
+the request's claimed port ID does not select its recipient.
+.Xr recv 2
+reads one datagram, which may contain several complete messages.
+.Sh FAMILY DISCOVERY
+The controller,
+.Ql nlctrl ,
+has ID
+.Dv GENL_ID_CTRL
+(16) and version 2.
+Send
+.Dv CTRL_CMD_GETFAMILY
+(3) with a terminated
+.Dv CTRL_ATTR_FAMILY_NAME
+or a 16-bit
+.Dv CTRL_ATTR_FAMILY_ID .
+The name takes precedence when both are present.
+A family not registered is
+.Er ENOENT .
+With
+.Dv NLM_F_DUMP ,
+the request lists the controller and every registered family.
+.Pp
+Each description is
+.Dv CTRL_CMD_NEWFAMILY
+(1), with the family's ID, name, version, private header size and maximum
+attribute ID in
+.Dv CTRL_ATTR_FAMILY_ID ,
+.Dv CTRL_ATTR_FAMILY_NAME ,
+.Dv CTRL_ATTR_VERSION ,
+.Dv CTRL_ATTR_HDRSIZE
+and
+.Dv CTRL_ATTR_MAXATTR .
+.Dv CTRL_ATTR_OPS
+contains a nested entry per operation, with its command ID and flags:
+administrative privilege (1), a single request handler (2), a dump handler
+(4) and an attribute policy (8).
+.Dv CTRL_ATTR_MCAST_GROUPS
+contains nested entries with a terminated group name and its global
+32-bit group number.
+.Sh MULTICAST
+Join groups 1 through 32 with the corresponding bits of
+.Va sockaddr_nl.nl_groups
+at
+.Xr bind 2 .
+The options
+.Dv NETLINK_ADD_MEMBERSHIP
+(1) and
+.Dv NETLINK_DROP_MEMBERSHIP
+(2), at level
+.Dv SOL_NETLINK
+(270), join or leave a group by its integer number, including numbers
+above 32.
+A group must be registered; zero, a negative number or an unknown group is
+.Er EINVAL .
+Membership is idempotent.
+.Pp
+Every member in the first network namespace receives its own copy.
+A socket whose queue would exceed 64 KiB misses that event and its next
+receive reports
+.Er ENOBUFS ;
+subsequent receives read the datagrams already queued.
+Other members continue to receive.
+.Dv NETLINK_NO_ENOBUFS
+(5), set to a nonzero integer, suppresses the error but does not prevent
+dropped events.
+A consumer that loses events must obtain a new dump.
+.Sh DUMPS AND ERRORS
+A dump carries
+.Dv NLM_F_MULTI
+on each message and ends with
+.Dv NLMSG_DONE ,
+whose 32-bit payload is zero on success or a negative error number.
+Read until that terminal message; a dump may span several datagrams.
+It serves as a successful dump's acknowledgement.
+Handlers run during the send, and the datagrams wait in the socket's queue.
+.Pp
+A failed request receives
+.Dv NLMSG_ERROR
+with a negative error number followed by the original request.
+.Dv NLM_F_ACK
+also requests this message on success, with an error number of zero.
+A success echoes only the original header.
+.Dv NETLINK_CAP_ACK
+(10), set to a nonzero integer, also limits an error's echo to the header;
+.Dv NLM_F_CAPPED
+marks the shortened echo.
+.Pp
+.Dv NETLINK_EXT_ACK
+(11), set to a nonzero integer, permits explanatory attributes after the
+aligned echo.
+.Dv NLM_F_ACK_TLVS
+marks their presence:
+.Dv NLMSGERR_ATTR_MSG
+is a terminated explanation and
+.Dv NLMSGERR_ATTR_OFFS
+is the byte offset of an offending attribute from the request's start.
+Neither attribute is required on every error.
+.Sh LIMITS
+A generic data datagram is at most 32448 bytes.
+An uncapped error may also echo the complete request of up to 65536 bytes.
+A registered family has at most 4096 attribute IDs and a name of at most
+15 bytes.
+The controller reports registered families but sends no notifications
+when families are registered or removed.
+.Sh SEE ALSO
+.Xr bind 2 ,
+.Xr recv 2 ,
+.Xr send 2 ,
+.Xr setsockopt 2 ,
+.Xr socket 2 ,
+.Xr netlink 7

@@ -30,6 +30,13 @@ and
 Any user may open one.
 .Pp
 A socket of protocol
+.Dv NETLINK_GENERIC
+(16) discovers families, sends their requests and receives their multicast
+events, as
+.Xr genetlink 7
+specifies.
+.Pp
+A socket of protocol
 .Dv NETLINK_SOCK_DIAG
 (4) answers the dump request
 .Dv SOCK_DIAG_BY_FAMILY
@@ -364,7 +371,22 @@ in the change mask, and set its MTU to
 .Dv IFLA_MTU ,
 from 68 to 1500 on a card and only 65536 on
 .Li lo .
-Another MTU is
+.Dv IFLA_LINKMODE
+is a one-byte policy: 0 for the default, 1 for userspace authorization.
+A running link in mode 1 starts dormant, and
+.Dv IFLA_OPERSTATE
+sets it to dormant (5) or up (6), as a supplicant does before and after
+authentication.
+The two attributes are reported in
+.Dv RTM_NEWLINK .
+A dormant link keeps
+.Dv IFF_LOWER_UP
+but clears
+.Dv IFF_RUNNING .
+Administrative down or lost carrier reports down (2), and a carrier loss
+revokes the authorization in mode 1.
+Loopback does not accept these policy attributes.
+Another MTU or invalid policy value is
 .Er EINVAL ,
 and an
 .Dv IFLA_IFNAME
@@ -502,7 +524,7 @@ of
 .Dv AF_NETLINK :
 a port id of 0 has the kernel pick one, the process's ID for its first
 socket and a number above 2^31 for the rest, and another taken by a
-socket already is
+socket of the same protocol already is
 .Er EADDRINUSE .
 Its
 .Fa nl_groups
@@ -514,7 +536,9 @@ of level
 .Dv NETLINK_ADD_MEMBERSHIP
 and leaves one with
 .Dv NETLINK_DROP_MEMBERSHIP ;
-a group past 32 is taken and hears nothing, and a group of 0 is
+a generic netlink group past 32 is joined by these options; other
+protocols accept such a group and send nothing to it.
+A group of 0 is
 .Er EINVAL .
 A socket of
 .Dv NETLINK_ROUTE
@@ -525,7 +549,8 @@ with sequence number and port id 0:
 .Bl -tag -width "RTNLGRP_IPV4_IFADDR"
 .It Dv RTNLGRP_LINK No (1)
 .Dv RTM_NEWLINK
-when an interface goes up or down, its card's link does, or its MTU changes.
+when an interface goes up or down, its card's link does, or its MTU,
+link mode or operational state changes.
 No interface is ever removed, so
 .Dv RTM_DELLINK
 is never sent.
@@ -572,6 +597,13 @@ receive fails with
 as Linux's does when its buffer is full, unless it set
 .Dv NETLINK_NO_ENOBUFS ;
 the receives after it go on with what is queued.
+Generic netlink also takes
+.Dv NETLINK_CAP_ACK
+and
+.Dv NETLINK_EXT_ACK ,
+as
+.Xr genetlink 7
+specifies.
 Another option of the level is accepted and changes nothing.
 A socket that sends before it is bound, or whose name
 .Xr getsockname 2
@@ -588,4 +620,5 @@ reports the kernel.
 .Xr setsockopt 2 ,
 .Xr socket 2 ,
 .Xr proc 5 ,
+.Xr genetlink 7 ,
 .Xr ipv6 7
