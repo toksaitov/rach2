@@ -63,6 +63,20 @@ int net_addr_source(net_addr_t bound, net_addr_t dst, net_addr_t *src)
     return 0;
 }
 
+int net_addr_link_down(net_addr_t dst)
+{
+    struct netdev *nd;
+    uint8_t via[16];
+    uint32_t via4;
+
+    if (dst.family == AF_INET6) {
+        nd = ip6_route(dst.v6, (int)dst.scope, via);
+    } else {
+        nd = ip_is_local(dst.v4) ? 0 : netdev_route(dst.v4, &via4);
+    }
+    return nd && !nd->loopback && !netdev_running(nd);
+}
+
 /** A card's hop limit is the routers'; `lo` has none advertised. */
 uint8_t socket_hops6(const struct socket *sock, const uint8_t *dst, int ifindex)
 {

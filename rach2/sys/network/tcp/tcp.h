@@ -87,10 +87,62 @@
  * tcp_orphan_retries). */
 #define TCP_ORPHAN_TICKS        TCP_MS(30000)
 /* How long queued bytes may wait from the first transmit the driver refused
- * to the last, with no segment sent between, before the connection is given
- * up: 30 s, within the retransmission give-up. */
+ * to the last, with no segment sent between and the link up, before the
+ * connection is given up: 30 s. While the link is down the wait does not
+ * run, so a cable out for a minute ends nothing. */
 #define TCP_REFUSE_GIVEUP_TICKS TCP_MS(30000)
-#define TCP_MAX_RETX            7 /* give up after this many retransmissions */
+/* A handshake is given up after this many retransmissions of its SYN or
+ * SYN-ACK. */
+#define TCP_SYN_RETRIES         7
+/*
+ * The give-up of a synchronized connection is Linux's: the time that
+ * `tcp_retries2` retransmissions take when the first waits 200 ms and each
+ * doubles up to 120 s, about 924.6 s for the default of 15, measured from
+ * the first timeout's segment (`tcp_retx_limit`). These are Linux's figures
+ * and not this stack's own bounds above, so that a connection to a peer
+ * that went away lasts as long as on Linux. TCP_USER_TIMEOUT replaces the
+ * figure with the socket's own, in milliseconds, in every state.
+ */
+#define TCP_RETRIES2_DEFAULT    15
+#define TCP_MODEL_RTO_BASE_MS   200u
+#define TCP_MODEL_RTO_MAX_MS    120000u
+
+/*
+ * Keepalive, as Linux's: a connection with SO_KEEPALIVE set and nothing
+ * queued or in flight that has received nothing for TCP_KEEPIDLE seconds is
+ * sent a probe, one old byte, and another each TCP_KEEPINTVL seconds while
+ * none is answered; when TCP_KEEPCNT probes went unanswered the connection
+ * is reset and closed with ETIMEDOUT. A socket's 0 is the default, the
+ * value of /proc/sys/net/ipv4/tcp_keepalive_time, _intvl or _probes. The
+ * bounds a socket's value must keep to are Linux's.
+ */
+#define TCP_KEEPIDLE_DEFAULT  7200
+#define TCP_KEEPINTVL_DEFAULT 75
+#define TCP_KEEPCNT_DEFAULT   9
+#define TCP_KEEPIDLE_MAX      32767
+#define TCP_KEEPINTVL_MAX     32767
+#define TCP_KEEPCNT_MAX       127
+
+/*
+ * Path MTU black-hole detection, as Linux's `tcp_mtu_probing` (RFC 4821).
+ * Mode 1, the default here, starts it when a full-size segment has timed
+ * out TCP_RETRIES1 times in a row: the segment size falls to
+ * TCP_BASE_MSS, and halves at each further timeout, down to the floor of
+ * TCP_MSS_DEFAULT on IPv4 and TCP_MSS_FLOOR6 on IPv6. Once started, a probe
+ * of the size halfway to the largest the path may carry is sent from new
+ * data; its acknowledgement raises the segment size to it, and its loss
+ * lowers the top of the search. A search that has closed to within
+ * TCP_MTU_PROBE_THRESH bytes starts again from the top after
+ * TCP_PROBE_INTERVAL, as does one TCP_PROBE_INTERVAL after a timeout
+ * lowered the size. Mode 2 starts every connection at TCP_BASE_MSS and
+ * probes upward; mode 0 does neither.
+ */
+#define TCP_MTU_PROBING_DEFAULT 1
+#define TCP_RETRIES1            3
+#define TCP_BASE_MSS            1024u
+#define TCP_MSS_FLOOR6          1220u
+#define TCP_MTU_PROBE_THRESH    8u
+#define TCP_PROBE_INTERVAL      TCP_MS(600000)
 
 /* Loss recovery (RFC 5681, RFC 6582). The third duplicate acknowledgement
  * in a row means a segment was lost and the ones after it arrived. After a
@@ -214,6 +266,31 @@ struct tcb {
     uint32_t zwp_timer;     /* zero-window probe countdown; 0 = off   */
     uint32_t tx_refused;    /* transmits the driver refused, a count */
     uint32_t refused_since; /* ticks+1 at the first refusal still unresolved; 0 = none */
+    /* ticks+1 at the sending of what the first of the timeouts in a row
+     * found unacknowledged, which the give-up counts from; 0 = none. */
+    uint32_t retx_stamp;
+
+    /* Keepalive. `ka_armed` is set once the tick has seen SO_KEEPALIVE on
+     * the socket, and `ka_since` is the tick of the last segment received
+     * or of that arming; `ka_probes` counts the probes unanswered since,
+     * the last sent at the tick `ka_probe_at`. */
+    uint8_t ka_armed;
+    uint8_t ka_probes;
+    uint32_t ka_since;
+    uint32_t ka_probe_at;
+
+    /* Black-hole detection and probing (TCP_MTU_PROBING_DEFAULT). `mss_max`
+     * is the largest segment the peer and the path allow, which `snd_mss`
+     * returns to; `mss_hi` the top of the search; `mtup_on` whether the
+     * search has started. A probe of `probe_size` bytes at `probe_seq` is in
+     * flight while `probe_size` is not 0, and the next may go at the tick
+     * `probe_after`. */
+    uint8_t mtup_on;
+    uint16_t mss_max;
+    uint16_t mss_hi;
+    uint16_t probe_size;
+    uint32_t probe_seq;
+    uint32_t probe_after;
 
     /* The round-trip samples timed to the microsecond, for `ss -i`: the
      * timer above runs on ticks, and a round trip on a LAN is under one. */
@@ -251,6 +328,18 @@ struct tcb {
     uint32_t inode;
 };
 
+/*
+ * The /proc/sys/net/ipv4 settings: tcp_keepalive_time and
+ * tcp_keepalive_intvl in seconds, tcp_keepalive_probes, tcp_retries2 and
+ * tcp_mtu_probing, read by each connection when it needs them, so that a
+ * write applies to the connections open as well as to new ones.
+ */
+extern int tcp_keepalive_time;
+extern int tcp_keepalive_intvl;
+extern int tcp_keepalive_probes;
+extern int tcp_retries2;
+extern int tcp_mtu_probing;
+
 /** Empty the list of control blocks, and have the next `tcp_listen` or
  * `tcp_connect` draw a new key for the initial sequence numbers. Called
  * once, at boot, from `init_network`. */
@@ -273,10 +362,11 @@ void tcp_path_mtu(uint32_t local_ip, uint32_t remote_ip, uint16_t local_port, ui
  * Drive every connection's timers, once a tick, from the timer interrupt:
  * free a TIME_WAIT or FIN_WAIT_2 block with no socket whose time is up, send
  * again an acknowledgement the driver refused, retransmit when the
- * retransmission timer runs out and give up with ETIMEDOUT after
- * TCP_MAX_RETX of them, give up a detached block whose peer acknowledged
- * nothing for TCP_ORPHAN_TICKS, probe a closed window, and send what
- * refused transmits left in the send rings.
+ * retransmission timer runs out and give up with ETIMEDOUT at the limit of
+ * `tcp_retx_limit`, give up a detached block whose peer acknowledged
+ * nothing for TCP_ORPHAN_TICKS, probe a closed window, send keepalive
+ * probes and reset a connection that answers none, and send what refused
+ * transmits left in the send rings.
  */
 void tcp_tick(void);
 

@@ -190,8 +190,9 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * unmapped id reads as (proc/ns.h); the boot's UUID and a new one for
  * each open; the bounds of descriptors and open files and the count of
  * those open (fs/fd.h); whether exec randomizes a new image's layout
- * (mm/vm.h); and net/ipv6/conf, whose entries follow the table's
- * (`synth_sys_ipv6`). An entry whose text is empty is procfs's, which
+ * (mm/vm.h); net/ipv6/conf, whose entries follow the table's
+ * (`synth_sys_ipv6`); and TCP's keepalive defaults, black-hole detection and
+ * give-up (tcp.h). An entry whose text is empty is procfs's, which
  * reads its value when the file is opened. A new entry goes at the end, so
  * that the indices SYNTH_SYS_ names stay the same. */
 static const struct {
@@ -241,7 +242,12 @@ static const struct {
                {1, "file-nr", ""},
                {6, "randomize_va_space", ""},
                {20, "ipv6", 0},
-               {42, "conf", 0}};
+               {42, "conf", 0},
+               {21, "tcp_keepalive_time", ""},
+               {21, "tcp_keepalive_intvl", ""},
+               {21, "tcp_keepalive_probes", ""},
+               {21, "tcp_mtu_probing", ""},
+               {21, "tcp_retries2", ""}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
@@ -301,7 +307,8 @@ int synth_sys_writable(int entry)
            (entry >= SYNTH_SYS_INOTIFY_QUEUED && entry <= SYNTH_SYS_INOTIFY_WATCHES) ||
            (entry >= SYNTH_SYS_MAX_MAP_COUNT && entry <= SYNTH_SYS_OVERFLOWUID) ||
            entry == SYNTH_SYS_NR_OPEN || entry == SYNTH_SYS_FILE_MAX ||
-           entry == SYNTH_SYS_RANDOMIZE_VA_SPACE;
+           entry == SYNTH_SYS_RANDOMIZE_VA_SPACE ||
+           (entry >= SYNTH_SYS_TCP_KEEPALIVE_TIME && entry <= SYNTH_SYS_TCP_RETRIES2);
 }
 
 /* The files of /proc/net after the first four, by origin and name. */
@@ -320,11 +327,12 @@ static const struct {
                 {SYNTH_PROC_NETTCP6, "tcp6"},
                 {SYNTH_PROC_NETUDP6, "udp6"},
                 {SYNTH_PROC_NETRAW6, "raw6"},
+                {SYNTH_PROC_NETNETSTAT, "netstat"},
                 {SYNTH_PROC_NETSTAT_RT, "stat/rt_cache"},
                 {SYNTH_PROC_NETSTAT_ARP, "stat/arp_cache"}};
 
 /* The files of `netfiles` directly in /proc/net, the ones before stat's. */
-#define SYNTH_NET_FILES 12
+#define SYNTH_NET_FILES 13
 
 int synth_net_slot(int origin)
 {

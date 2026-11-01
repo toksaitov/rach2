@@ -89,6 +89,14 @@ struct net_mib {
     uint32_t tcp_retrans_segs;
     uint32_t tcp_in_errs; /* a bad length, header length or checksum */
     uint32_t tcp_out_rsts;
+    /* The TcpExt counts of /proc/net/netstat, as Linux names them: the
+     * retransmission timeouts, the connections they ended, the keepalive
+     * probes sent, and the probes of a larger segment lost and taken. */
+    uint32_t tcp_timeouts;
+    uint32_t tcp_abort_on_timeout;
+    uint32_t tcp_keepalive;
+    uint32_t tcp_mtup_fail;
+    uint32_t tcp_mtup_success;
     uint32_t udp_in_datagrams;
     uint32_t udp_no_ports; /* no socket has the port */
     uint32_t udp_in_errors;

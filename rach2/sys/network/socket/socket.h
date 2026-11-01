@@ -216,6 +216,16 @@ typedef struct socket {
     int reuseaddr;
     int bound_device;
 
+    /* A stream's keepalive and give-up (tcp.h): SO_KEEPALIVE, and
+     * TCP_KEEPIDLE and TCP_KEEPINTVL in seconds and TCP_KEEPCNT, each 0 for
+     * the /proc/sys default; TCP_USER_TIMEOUT in milliseconds, 0 for none.
+     * A connection a listener accepts takes the listener's. */
+    int keepalive;
+    int keepidle;
+    int keepintvl;
+    int keepcnt;
+    uint32_t user_timeout;
+
     /* The TCP control block of a stream socket. NULL for the other types,
      * and for a stream before `connect` or `listen` or once the block has
      * been detached from it (tcp.h). */

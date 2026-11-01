@@ -941,6 +941,207 @@ static void ephemeral_rows(void)
 }
 
 /**
+ * Tick the clock until the stack has sent a segment more than `before` or
+ * `most` ticks have passed; returns the ticks taken.
+ */
+static unsigned tick_until_sent(unsigned before, unsigned most)
+{
+    unsigned j;
+
+    for (j = 0; j < most && n_segs == before; j++) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    return j;
+}
+
+/**
+ * Check keepalive: an idle connection without SO_KEEPALIVE sends nothing;
+ * with it and TCP_KEEPIDLE 2, TCP_KEEPINTVL 1 and TCP_KEEPCNT 3, the first
+ * probe goes two seconds after the option is seen, one byte at snd_una less
+ * one; an answer starts the wait again; three unanswered probes a second
+ * apart are followed a second later by a reset and the connection's end
+ * with ETIMEDOUT, each probe counted in TCPKeepAlive. A peer's own probe, a
+ * bare acknowledgement below rcv_nxt, is answered.
+ */
+static void keepalive_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 21000, probes = net_mib.tcp_keepalive;
+    uint16_t lport;
+    unsigned waits[4], i;
+
+    reset_all();
+    conn = open_conn(&sock, 97, &peer_seq, &lport);
+    rx(97, lport, peer_seq - 1, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+    CHECK("a peer's keepalive probe is answered",
+          n_segs == 1 && last_flags() == F_ACK && read32be(segs[0].data + 8) == peer_seq);
+    n_segs = 0;
+    CHECK("an idle connection without SO_KEEPALIVE sends nothing",
+          tick_until_sent(0, 3 * TICK_HZ) == 3 * TICK_HZ);
+    sock.keepalive = 1;
+    sock.keepidle = 2;
+    sock.keepintvl = 1;
+    sock.keepcnt = 3;
+    kernel_ticks++;
+    tcp_tick();
+    CHECK("the first probe goes after TCP_KEEPIDLE",
+          tick_until_sent(0, 3 * TICK_HZ) == 2 * TICK_HZ && n_segs == 1);
+    CHECK("one old byte at snd_una less one", segs[0].len == TCP_HDR_SIZE + 1 &&
+                                                  read32be(segs[0].data + 4) == conn->snd_una - 1 &&
+                                                  segs[0].data[13] == F_ACK);
+    rx(97, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+    CHECK("an answer clears the count", conn->ka_probes == 0);
+    n_segs = 0;
+    for (i = 0; i < 4; i++) {
+        waits[i] = tick_until_sent(i, 3 * TICK_HZ);
+    }
+    CHECK("unanswered, the probes go a second apart after the idle time",
+          waits[0] == 2 * TICK_HZ && waits[1] == TICK_HZ && waits[2] == TICK_HZ);
+    CHECK("and a second after the third the peer is reset",
+          waits[3] == TICK_HZ && n_segs == 4 && last_flags() == (F_RST | F_ACK));
+    CHECK("and the connection ends with ETIMEDOUT",
+          conn->state == TCP_CLOSED && conn->so_error == ETIMEDOUT);
+    CHECK("each probe counted", net_mib.tcp_keepalive == probes + 4);
+}
+
+/**
+ * Check the give-up: a peer that answers nothing ends an established
+ * connection when Linux's tcp_retries2 of 15 would, after 924.6 s and not
+ * before, counted in TCPAbortOnTimeout; TCP_USER_TIMEOUT 5000 ends one five
+ * seconds after its data was sent. While the card reports its link down, a
+ * driver that refuses every frame for a minute ends nothing, and the data
+ * goes when the link comes back.
+ */
+static void giveup_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 23000, sent, aborts = net_mib.tcp_abort_on_timeout;
+    uint16_t lport;
+    static uint8_t bytes[100];
+    unsigned j;
+
+    reset_all();
+    conn = open_conn(&sock, 98, &peer_seq, &lport);
+    CHECK("data goes to a peer that will answer nothing", tcp_send(&sock, bytes, 100) == 100);
+    sent = (uint32_t)kernel_ticks;
+    while (conn->state == TCP_ESTABLISHED && kernel_ticks - sent < 2000u * TICK_HZ) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    CHECK("the connection lasts Linux's 924.6 s",
+          kernel_ticks - sent >= TCP_MS(924600) &&
+              kernel_ticks - sent < TCP_MS(924600) + TCP_RTO_MAX);
+    CHECK("and then ends with ETIMEDOUT", conn->state == TCP_CLOSED && conn->so_error == ETIMEDOUT);
+    CHECK("counted as an abort on timeout", net_mib.tcp_abort_on_timeout == aborts + 1);
+
+    reset_all();
+    conn = open_conn(&sock, 99, &peer_seq, &lport);
+    sock.user_timeout = 5000;
+    CHECK("data goes under a user timeout", tcp_send(&sock, bytes, 100) == 100);
+    sent = (uint32_t)kernel_ticks;
+    while (conn->state == TCP_ESTABLISHED && kernel_ticks - sent < 60u * TICK_HZ) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    CHECK("TCP_USER_TIMEOUT ends it when it says", conn->state == TCP_CLOSED &&
+                                                       kernel_ticks - sent >= TCP_MS(5000) &&
+                                                       kernel_ticks - sent <= TCP_MS(5000) + 1);
+
+    reset_all();
+    conn = open_conn(&sock, 100, &peer_seq, &lport);
+    link_down = 1;
+    ip_tx_refuse = 1000000;
+    CHECK("data is taken with the link down", tcp_send(&sock, bytes, 100) == 100 && n_segs == 0);
+    for (j = 0; j < 60u * TICK_HZ; j++) {
+        kernel_ticks++;
+        tcp_tick();
+    }
+    CHECK("a minute of refusals with the link down ends nothing",
+          conn->state == TCP_ESTABLISHED && conn->send_head == conn->send_ack);
+    link_down = 0;
+    ip_tx_refuse = 0;
+    kernel_ticks++;
+    tcp_tick();
+    CHECK("and the data goes when the link is back",
+          n_segs == 1 && conn->send_head == conn->send_tail);
+}
+
+/**
+ * Check black-hole detection, `tcp_mtu_probing` 1: with mode 0, timeouts
+ * leave the segment size alone; with mode 1, the third timeout in a row of
+ * full-size segments lowers it to 1024 and the fourth to IPv4's floor, 536,
+ * the resends going at the new size. TCP_PROBE_INTERVAL later a probe of
+ * 998 bytes, halfway to 1460, goes ahead of new data, and its
+ * acknowledgement makes it the size, counted in TCPMTUPSuccess; the next
+ * probe, of 1229, goes at once, and its timeout lowers the top of the
+ * search below it, counted in TCPMTUPFail.
+ */
+static void blackhole_rows(void)
+{
+    struct socket sock;
+    struct tcb *conn;
+    uint32_t peer_seq = 25000, won = net_mib.tcp_mtup_success, lost = net_mib.tcp_mtup_fail;
+    uint16_t lport;
+    static uint8_t bytes[8000];
+    unsigned k;
+
+    reset_all();
+    tcp_mtu_probing = 0;
+    conn = open_conn(&sock, 101, &peer_seq, &lport);
+    CHECK("4000 bytes go", tcp_send(&sock, bytes, 4000) == 4000);
+    for (k = 0; k < 5; k++) {
+        (void)tick_until_sent(n_segs, 70u * TICK_HZ);
+    }
+    CHECK("with mode 0 five timeouts leave the size", conn->snd_mss == TCP_MSS);
+    tcp_mtu_probing = 1;
+
+    reset_all();
+    conn = open_conn(&sock, 102, &peer_seq, &lport);
+    CHECK("4000 bytes go into a black hole", tcp_send(&sock, bytes, 4000) == 4000);
+    (void)tick_until_sent(n_segs, 70u * TICK_HZ);
+    (void)tick_until_sent(n_segs, 70u * TICK_HZ);
+    CHECK("two timeouts leave the size", conn->snd_mss == TCP_MSS);
+    n_segs = 0;
+    (void)tick_until_sent(0, 70u * TICK_HZ);
+    CHECK("the third lowers it to 1024",
+          conn->snd_mss == 1024 && segs[0].len == TCP_HDR_SIZE + 1024);
+    n_segs = 0;
+    (void)tick_until_sent(0, 70u * TICK_HZ);
+    CHECK("the fourth to the floor",
+          conn->snd_mss == TCP_MSS_DEFAULT && segs[0].len == TCP_HDR_SIZE + TCP_MSS_DEFAULT);
+    while (conn->snd_una != conn->snd_nxt) {
+        rx(102, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+    }
+
+    kernel_ticks += TCP_PROBE_INTERVAL;
+    conn->cwnd = 20 * TCP_MSS;
+    conn->ssthresh = 65535;
+    n_segs = 0;
+    CHECK("8000 bytes go after the interval", tcp_send(&sock, bytes, 8000) == 8000);
+    CHECK("the first a probe halfway to 1460",
+          n_segs >= 1 && segs[0].len == TCP_HDR_SIZE + 998 && conn->probe_size == 998);
+    CHECK("the rest at the floor", n_segs >= 2 && segs[1].len == TCP_HDR_SIZE + TCP_MSS_DEFAULT);
+    while (conn->snd_una != conn->snd_nxt || conn->send_head != conn->send_tail) {
+        rx(102, lport, peer_seq, conn->snd_nxt, F_ACK, 65535, (const char *)0, 0);
+    }
+    CHECK("its acknowledgement makes it the size",
+          conn->snd_mss == 998 && conn->probe_size == 0 && net_mib.tcp_mtup_success == won + 1);
+
+    conn->cwnd = 20 * TCP_MSS;
+    n_segs = 0;
+    CHECK("8000 bytes more go", tcp_send(&sock, bytes, 8000) == 8000);
+    CHECK("led by the next probe, of 1229",
+          n_segs >= 1 && segs[0].len == TCP_HDR_SIZE + 1229 && conn->probe_size == 1229);
+    (void)tick_until_sent(n_segs, 70u * TICK_HZ);
+    CHECK("whose timeout lowers the top below it", conn->probe_size == 0 && conn->mss_hi == 1228 &&
+                                                       conn->snd_mss == 998 &&
+                                                       net_mib.tcp_mtup_fail == lost + 1);
+}
+
+/**
  * Run the cases, each against a table put back to its initial state:
  *
  *   * the rows of test_send_checks, then forty control blocks at once, one
@@ -965,7 +1166,8 @@ static void ephemeral_rows(void)
  *     it to the retransmission timer; and a connection whose driver refuses
  *     every transmit is given up after the bound rather than kept for ever;
  *   * the rows of peer_mss_row, window_scale_rows, sack_rows, half_close_rows,
- *     ephemeral_rows and path_mtu_row;
+ *     ephemeral_rows, path_mtu_row, keepalive_rows, giveup_rows and
+ *     blackhole_rows;
  *   * a zero window that closes over a refused segment is flow control, not a
  *     continuing refusal: the connection is kept past the bound and the segment
  *     goes when the window reopens. A connection last in the list behind four
@@ -1006,12 +1208,12 @@ static void ephemeral_rows(void)
  *   * a peer that stops answering a SYN: the stack retransmits with a doubling
  *     timer and gives up, rather than holding the connection for ever. The
  *     timer counts ticks and `tcp_tick` is one tick, so this is the timer
- *     running rather than the clock jumping: the five backoffs together are
- *     about six thousand ticks. The gaps between the attempts are checked,
- *     since a stack that retried every tick would also give up in the end. The
- *     control block stays until the socket lets go of it, as a program still
- *     holding the descriptor expects; the socket is told that the connection
- *     ended.
+ *     running rather than the clock jumping: the TCP_SYN_RETRIES backoffs
+ *     together are 183 seconds of ticks. The gaps between the attempts are
+ *     checked, since a stack that retried every tick would also give up in
+ *     the end. The control block stays until the socket lets go of it, as a
+ *     program still holding the descriptor expects; the socket is told that
+ *     the connection ended.
  *
  * Returns the number of failed checks, at most 255.
  */
@@ -1244,6 +1446,9 @@ int main(void)
     half_close_rows();
     ephemeral_rows();
     path_mtu_row();
+    keepalive_rows();
+    giveup_rows();
+    blackhole_rows();
 
     {
         struct socket socks[6];
@@ -1681,7 +1886,7 @@ int main(void)
         {
             unsigned last_at = 0, gaps[8], n_gaps = 0, before = 0;
 
-            for (tries = 0; tries < 20000 && conn->state != TCP_CLOSED; tries++) {
+            for (tries = 0; tries < 400u * TICK_HZ && conn->state != TCP_CLOSED; tries++) {
                 kernel_ticks++;
                 tcp_tick();
                 if (n_segs != before) {

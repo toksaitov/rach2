@@ -15,6 +15,16 @@ int net_addr_local(net_addr_t addr)
     return addr.family != AF_INET6 && ip_is_local(addr.v4);
 }
 
+/* Whether the model's card reports its link down. */
+static int link_down;
+
+/** Report the model card's link, whatever the destination. */
+int net_addr_link_down(net_addr_t dst)
+{
+    (void)dst;
+    return link_down;
+}
+
 /** Match the model's IPv4 listener address or its wildcard. */
 int socket_address_matches(const struct socket *s, net_addr_t dst)
 {

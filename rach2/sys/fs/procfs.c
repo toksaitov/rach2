@@ -3991,6 +3991,28 @@ static int procfs_gen_netsnmp(struct procfs_text *t)
     return t->len;
 }
 
+/**
+ * Render /proc/net/netstat: of the TcpExt counters Linux keeps, the ones
+ * this stack has (`net_mib`), a line of names and a line of values, in
+ * Linux's order, which `nstat` reads by name: the retransmission timeouts
+ * and the connections they ended, the keepalive probes, and the probes of
+ * a larger segment lost and taken.
+ */
+static int procfs_gen_netnetstat(struct procfs_text *t)
+{
+    const struct net_mib *m = &net_mib;
+
+    ap_str(t, "TcpExt: TCPTimeouts TCPAbortOnTimeout TCPKeepAlive TCPMTUPFail TCPMTUPSuccess\n"
+              "TcpExt:");
+    ap_mib(t, m->tcp_timeouts);
+    ap_mib(t, m->tcp_abort_on_timeout);
+    ap_mib(t, m->tcp_keepalive);
+    ap_mib(t, m->tcp_mtup_fail);
+    ap_mib(t, m->tcp_mtup_success);
+    ap_ch(t, '\n');
+    return t->len;
+}
+
 /** Append `v` as eight lowercase hex digits and `sep`, as /proc/net/stat's
  * files have each counter. */
 static void ap_stat(struct procfs_text *t, uint32_t v, const char *sep)
@@ -4379,6 +4401,8 @@ static int procfs_gen_net(struct procfs_text *t, int origin)
         return procfs_gen_netunix(t);
     case SYNTH_PROC_NETSOCKSTAT:
         return procfs_gen_netsockstat(t);
+    case SYNTH_PROC_NETNETSTAT:
+        return procfs_gen_netnetstat(t);
     default:
         return procfs_gen_netsnmp(t);
     }
@@ -5831,6 +5855,10 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
     return fd;
 }
 
+/* The most seconds a /proc/sys file of TCP's takes: as many as the kernel's
+ * clock counts in 31 bits. */
+#define SYSCTL_SECONDS_MAX (0x7FFFFFFF / TICK_HZ)
+
 /* The /proc/sys files whose values are their owners' variables, and the
  * range a write must fall in, as Linux's `proc_dointvec_minmax` takes one. */
 static const struct {
@@ -5845,7 +5873,12 @@ static const struct {
                    {SYNTH_SYS_OVERFLOWGID, &ns_overflowgid, 0, 65535},
                    {SYNTH_SYS_OVERFLOWUID, &ns_overflowuid, 0, 65535},
                    {SYNTH_SYS_NR_OPEN, &fd_nr_open, FD_NR_OPEN_MIN, FD_NR_OPEN_MAX},
-                   {SYNTH_SYS_RANDOMIZE_VA_SPACE, &randomize_va_space, 0, 2}};
+                   {SYNTH_SYS_RANDOMIZE_VA_SPACE, &randomize_va_space, 0, 2},
+                   {SYNTH_SYS_TCP_KEEPALIVE_TIME, &tcp_keepalive_time, 1, SYSCTL_SECONDS_MAX},
+                   {SYNTH_SYS_TCP_KEEPALIVE_TIME + 1, &tcp_keepalive_intvl, 1, SYSCTL_SECONDS_MAX},
+                   {SYNTH_SYS_TCP_KEEPALIVE_TIME + 2, &tcp_keepalive_probes, 0, 255},
+                   {SYNTH_SYS_TCP_KEEPALIVE_TIME + 3, &tcp_mtu_probing, 0, 2},
+                   {SYNTH_SYS_TCP_RETRIES2, &tcp_retries2, 0, 255}};
 
 /** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
 static int sysctl_int(int entry)

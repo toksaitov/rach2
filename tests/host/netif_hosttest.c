@@ -1,8 +1,8 @@
 /**
- * Exercise the socket address and option handlers with two interfaces, the
- * creation flags of socket and accept4, an accept the heap has no room to
- * give a descriptor, a recvfrom given an address and no length pointer, and
- * the descriptor accept reserves while it copies the peer's address.
+ * Exercise the socket address and option handlers with two interfaces, a
+ * stream's keepalive options, the creation flags of socket and accept4, an accept the heap has no
+ * room to give a descriptor, a recvfrom given an address and no length pointer, and the descriptor
+ * accept reserves while it copies the peer's address.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/network/socket/address.c
@@ -49,6 +49,10 @@ static fd_table_t files; /* the process's table, whose entries are `table` */
 struct percpu cpu_table[NR_CPUS] = {{.current = &proc}};
 uint32_t net_ip_addr = 0x0a00020fu;
 uint8_t net_mac[6] = {0x52, 0x54, 0, 0x12, 0x34, 0x56};
+/* The keepalive defaults getsockopt reads, which tcp.c defines. */
+int tcp_keepalive_time = TCP_KEEPIDLE_DEFAULT;
+int tcp_keepalive_intvl = TCP_KEEPINTVL_DEFAULT;
+int tcp_keepalive_probes = TCP_KEEPCNT_DEFAULT;
 static struct netdev cards[2]; /* eth0 and eth1, indices 1 and 2 */
 static struct socket sock;     /* the socket of descriptor 3 */
 static struct tcb control;
@@ -419,6 +423,57 @@ static void device_option(void)
 }
 
 /**
+ * Set and read a stream's keepalive options: SO_KEEPALIVE as set, the
+ * keepalive values the /proc/sys defaults until set and as set after,
+ * values out of Linux's range refused with EINVAL and the value kept, and
+ * TCP_USER_TIMEOUT in milliseconds. A datagram socket keeps none of the
+ * TCP options and reads them as 0.
+ */
+static void keepalive_options(void)
+{
+    int type = sock.type;
+
+    sock.type = SOCK_STREAM;
+    SC_WLE32(user + 8, 4);
+    CHECK(do_getsockopt(3, IPPROTO_TCP, TCP_KEEPIDLE, 32, 8) == 0 && SC_LE32(user + 32) == 7200,
+          "keepidle reads the default");
+    SC_WLE32(user + 16, 1);
+    CHECK(do_setsockopt(3, SOL_SOCKET, SO_KEEPALIVE, 16, 4) == 0 && sock.keepalive == 1,
+          "keepalive set");
+    SC_WLE32(user + 8, 4);
+    CHECK(do_getsockopt(3, SOL_SOCKET, SO_KEEPALIVE, 32, 8) == 0 && SC_LE32(user + 32) == 1,
+          "keepalive reads back");
+    SC_WLE32(user + 16, 2);
+    CHECK(do_setsockopt(3, IPPROTO_TCP, TCP_KEEPIDLE, 16, 4) == 0, "keepidle set");
+    SC_WLE32(user + 16, 1);
+    CHECK(do_setsockopt(3, IPPROTO_TCP, TCP_KEEPINTVL, 16, 4) == 0, "keepintvl set");
+    SC_WLE32(user + 16, 3);
+    CHECK(do_setsockopt(3, IPPROTO_TCP, TCP_KEEPCNT, 16, 4) == 0, "keepcnt set");
+    SC_WLE32(user + 8, 4);
+    CHECK(do_getsockopt(3, IPPROTO_TCP, TCP_KEEPCNT, 32, 8) == 0 && SC_LE32(user + 32) == 3,
+          "keepcnt reads back");
+    SC_WLE32(user + 16, 128);
+    CHECK(do_setsockopt(3, IPPROTO_TCP, TCP_KEEPCNT, 16, 4) == -EINVAL && sock.keepcnt == 3,
+          "keepcnt past 127 refused");
+    SC_WLE32(user + 16, 0);
+    CHECK(do_setsockopt(3, IPPROTO_TCP, TCP_KEEPIDLE, 16, 4) == -EINVAL && sock.keepidle == 2,
+          "keepidle of 0 refused");
+    SC_WLE32(user + 16, 5000);
+    CHECK(do_setsockopt(3, IPPROTO_TCP, TCP_USER_TIMEOUT, 16, 4) == 0 && sock.user_timeout == 5000,
+          "user timeout set");
+    SC_WLE32(user + 8, 4);
+    CHECK(do_getsockopt(3, IPPROTO_TCP, TCP_USER_TIMEOUT, 32, 8) == 0 && SC_LE32(user + 32) == 5000,
+          "user timeout reads back");
+    sock.type = SOCK_DGRAM;
+    SC_WLE32(user + 8, 4);
+    CHECK(do_getsockopt(3, IPPROTO_TCP, TCP_KEEPIDLE, 32, 8) == 0 && SC_LE32(user + 32) == 0,
+          "a datagram socket keeps no TCP option");
+    sock.type = type;
+    sock.keepalive = sock.keepidle = sock.keepintvl = sock.keepcnt = 0;
+    sock.user_timeout = 0;
+}
+
+/**
  * Check getsockname on a packet socket bound to each interface and to none:
  * the index, family, protocol and hardware address, the length of 20 given
  * back whole when the buffer is smaller and the address cut to fit, and an
@@ -697,6 +752,7 @@ int main(void)
     entry.sock = &sock;
     entry.ofd = &description;
     device_option();
+    keepalive_options();
     packet_names();
     packet_wake();
     inet_names();

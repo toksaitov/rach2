@@ -1931,6 +1931,79 @@ static int32_t do_shutdown(int fd, int how)
 
 #define TCP_NODELAY 1
 
+#define TCP_KEEPIDLE 4
+
+#define TCP_KEEPINTVL 5
+
+#define TCP_KEEPCNT 6
+
+#define TCP_USER_TIMEOUT 18
+
+/** Whether `optname` is one of the TCP options a stream socket keeps:
+ * TCP_KEEPIDLE, TCP_KEEPINTVL, TCP_KEEPCNT and TCP_USER_TIMEOUT. */
+static int tcp_option_kept(int optname)
+{
+    return optname == TCP_KEEPIDLE || optname == TCP_KEEPINTVL || optname == TCP_KEEPCNT ||
+           optname == TCP_USER_TIMEOUT;
+}
+
+/**
+ * Keep the TCP option `optname` (`tcp_option_kept`) of the integer `val`
+ * on the stream socket `sock`, with Linux's bounds: TCP_KEEPIDLE and
+ * TCP_KEEPINTVL 1 to 32767 seconds, TCP_KEEPCNT 1 to 127, and
+ * TCP_USER_TIMEOUT any count of milliseconds not negative, 0 for none.
+ * Returns 0, or -EINVAL for a value shorter than an int or out of range.
+ * The connection reads them at each tick (tcp.h).
+ */
+static int32_t tcp_option_set(struct socket *sock, int optname, int optlen, int val)
+{
+    int most = TCP_KEEPINTVL_MAX;
+
+    if (optname == TCP_KEEPCNT) {
+        most = TCP_KEEPCNT_MAX;
+    } else if (optname == TCP_KEEPIDLE) {
+        most = TCP_KEEPIDLE_MAX;
+    }
+    if (optlen < (int)sizeof(int)) {
+        return -EINVAL;
+    }
+    if (optname == TCP_USER_TIMEOUT) {
+        if (val < 0) {
+            return -EINVAL;
+        }
+        sock->user_timeout = (uint32_t)val;
+        return 0;
+    }
+    if (val < 1 || val > most) {
+        return -EINVAL;
+    }
+    if (optname == TCP_KEEPIDLE) {
+        sock->keepidle = val;
+    } else if (optname == TCP_KEEPINTVL) {
+        sock->keepintvl = val;
+    } else {
+        sock->keepcnt = val;
+    }
+    return 0;
+}
+
+/** The TCP option `optname` (`tcp_option_kept`) of the stream socket
+ * `sock` as getsockopt reads it: a keepalive value as the socket set it,
+ * else the /proc/sys default it takes, and TCP_USER_TIMEOUT as set. */
+static int tcp_option_get(const struct socket *sock, int optname)
+{
+    if (optname == TCP_KEEPIDLE) {
+        return sock->keepidle ? sock->keepidle : tcp_keepalive_time;
+    }
+    if (optname == TCP_KEEPINTVL) {
+        return sock->keepintvl ? sock->keepintvl : tcp_keepalive_intvl;
+    }
+    if (optname == TCP_KEEPCNT) {
+        return sock->keepcnt ? sock->keepcnt : tcp_keepalive_probes;
+    }
+    return (int)sock->user_timeout;
+}
+
 /** The interface of index `ifindex`, or NULL for one that does not
  * exist, 0 and negative indexes among them. */
 static struct netdev *iface_of(int ifindex)
@@ -2198,16 +2271,17 @@ static int32_t icmp6_filter_get(struct socket *sock, uintptr_t optval_ptr, uintp
 }
 
 /**
- * setsockopt: keep SO_BROADCAST and SO_REUSEADDR, the hop limit IP_TTL (1 to
- * 255), SO_BINDTODEVICE, an interface by name or none for an empty name,
- * SO_RCVBUF, which Linux doubles and bounds by SOCK_RCVBUF_MAX and
- * SOCK_RCVBUF_MIN, and IP_MTU_DISCOVER, an IP_PMTUDISC_* value, and accept
- * every other option with no effect, so that the setup of a
- * forking server that sets TCP_NODELAY or SO_KEEPALIVE succeeds; failing
- * them would stop programs that set options a small stack has no use for.
- * Returns 0, or -EINVAL for a flag or hop limit shorter than an int, a hop
- * limit or IP_MTU_DISCOVER out of range or a SO_BINDTODEVICE value of no
- * bytes, -ENODEV for an
+ * setsockopt: keep SO_BROADCAST, SO_REUSEADDR and SO_KEEPALIVE, the hop
+ * limit IP_TTL (1 to 255), SO_BINDTODEVICE, an interface by name or none
+ * for an empty name, SO_RCVBUF, which Linux doubles and bounds by
+ * SOCK_RCVBUF_MAX and SOCK_RCVBUF_MIN, IP_MTU_DISCOVER, an IP_PMTUDISC_*
+ * value, and on a stream socket the keepalive's TCP_KEEPIDLE, TCP_KEEPINTVL
+ * and TCP_KEEPCNT and TCP_USER_TIMEOUT (`tcp_option_set`), and accept every
+ * other option with no effect, so that the setup of a forking server that
+ * sets TCP_NODELAY succeeds; failing them would stop programs that set
+ * options a small stack has no use for. Returns 0, or -EINVAL for a flag or
+ * hop limit shorter than an int, a hop limit, IP_MTU_DISCOVER or TCP option
+ * out of range or a SO_BINDTODEVICE value of no bytes, -ENODEV for an
  * unknown interface, -EFAULT, or -ENOPROTOOPT for the two options below.
  *
  * Two options fail with -ENOPROTOOPT. A DHCP client sets PACKET_AUXDATA on a
@@ -2341,14 +2415,21 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
         return 0;
     }
 
-    if (level == SOL_SOCKET && (optname == SO_BROADCAST || optname == SO_REUSEADDR)) {
+    if (level == IPPROTO_TCP && tcp_option_kept(optname) && entry->sock->type == SOCK_STREAM) {
+        return tcp_option_set(entry->sock, optname, optlen, val);
+    }
+
+    if (level == SOL_SOCKET &&
+        (optname == SO_BROADCAST || optname == SO_REUSEADDR || optname == SO_KEEPALIVE)) {
         if (optlen < (int)sizeof(int)) {
             return -EINVAL;
         }
         if (optname == SO_BROADCAST) {
             entry->sock->broadcast = val ? 1 : 0;
-        } else {
+        } else if (optname == SO_REUSEADDR) {
             entry->sock->reuseaddr = val ? 1 : 0;
+        } else {
+            entry->sock->keepalive = val ? 1 : 0;
         }
     }
     return 0;
@@ -2356,11 +2437,14 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
 
 /** getsockopt: report the options programs read at setup: SO_ERROR (the
  * pending connection error, cleared by the read), SO_TYPE (the real socket
- * type), SO_REUSEADDR, SO_BROADCAST, SO_RCVBUF and IP_MTU_DISCOVER as stored, SO_BINDTODEVICE as
- * the interface name, and IP_OPTIONS as empty, a result of width 0, since no socket keeps IP
- * options: OpenSSH's server ends a connection whose socket reports any. A result is truncated to
- * the caller's capacity, and the length written is what was copied, less than an int for a caller
- * that offered less. SO_ERROR is read and cleared under the network lock, so the interrupt that
+ * type), SO_REUSEADDR, SO_BROADCAST, SO_KEEPALIVE, SO_RCVBUF and
+ * IP_MTU_DISCOVER as stored, a stream's keepalive values and
+ * TCP_USER_TIMEOUT (`tcp_option_get`), SO_BINDTODEVICE as the interface
+ * name, and IP_OPTIONS as empty, a result of width 0, since no socket keeps
+ * IP options: OpenSSH's server ends a connection whose socket reports any. A
+ * result is truncated to the caller's capacity, and the length written is
+ * what was copied, less than an int for a caller that offered less.
+ * SO_ERROR is read and cleared under the network lock, so the interrupt that
  * sets it cannot come between. The IPv6 options read back as `ipv6_get`
  * reports them, and a raw ICMPv6 socket's filter as `icmp6_filter_get`
  * does. Returns 0, -ENOPROTOOPT for IP_HDRINCL, for an IPv6 option of a
@@ -2443,8 +2527,13 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
         val = entry->sock->broadcast;
     } else if (level == SOL_SOCKET && optname == SO_REUSEADDR) {
         val = entry->sock->reuseaddr;
+    } else if (level == SOL_SOCKET && optname == SO_KEEPALIVE) {
+        val = entry->sock->keepalive;
+    } else if (level == IPPROTO_TCP && tcp_option_kept(optname) &&
+               entry->sock->type == SOCK_STREAM) {
+        val = tcp_option_get(entry->sock, optname);
     } else {
-        val = 0; /* SO_KEEPALIVE / TCP_NODELAY and the rest: off/none */
+        val = 0; /* TCP_NODELAY and the rest: off or none */
     }
     if (!optval_ptr || !optlen_ptr) {
         return -EFAULT;

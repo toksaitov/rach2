@@ -157,6 +157,8 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_NETTCP6     61
 #define SYNTH_PROC_NETUDP6     62
 #define SYNTH_PROC_NETRAW6     63
+/* /proc/net/netstat, the last of `synth_net_file`'s. */
+#define SYNTH_PROC_NETNETSTAT  64
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */
@@ -272,6 +274,11 @@ int synth_sys_count(void);
 #define SYNTH_IPV6_STABLE_SECRET     4
 #define SYNTH_IPV6_USE_TEMPADDR      5
 #define SYNTH_IPV6_KEYS              6
+/* The entries of net/ipv4's tcp_keepalive_time, tcp_keepalive_intvl,
+ * tcp_keepalive_probes, tcp_mtu_probing and tcp_retries2, in that order,
+ * whose values procfs reads from tcp.h's variables. */
+#define SYNTH_SYS_TCP_KEEPALIVE_TIME 44
+#define SYNTH_SYS_TCP_RETRIES2       48
 /**
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the
