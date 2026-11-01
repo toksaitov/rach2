@@ -313,37 +313,44 @@ static int set_source(int fd, const char *name, int recmask)
     return 0;
 }
 
-/** Run the command the arguments name. Exits 0, 1 on a failure and 2 on a
- *  usage error. */
-int main(int argc, char **argv)
+/**
+ * Check the arguments against the usage. Returns the channel the first
+ * argument names, -1 for a command that names none, or -2 on a usage error.
+ */
+static int parse(int argc, char **argv)
 {
-    int fd, left, right, devmask, recmask, recsrc, ch = -1, i, status = 0;
+    int ch = -1;
 
     if (argc == 2 && strcmp(argv[1], "mute") != 0 && strcmp(argv[1], "unmute") != 0) {
         ch = channel(argv[1]);
     } else if (argc == 3 && strcmp(argv[1], "=rec") != 0) {
         ch = channel(argv[1]);
     }
-    if (!(argc == 1 || (argc == 2 && ch < 0 && strcmp(argv[1], "mute") == 0) ||
-          (argc == 2 && ch < 0 && strcmp(argv[1], "unmute") == 0) ||
-          (argc == 3 && strcmp(argv[1], "=rec") == 0) || ((argc == 2 || argc == 3) && ch >= 0))) {
-        fputs("usage: mixer [NAME [N | L:R | +N | -N] | =rec NAME | mute | unmute]\n", stderr);
-        return 2;
+    if (argc == 1 || (argc == 3 && strcmp(argv[1], "=rec") == 0) ||
+        ((argc == 2 || argc == 3) && ch >= 0)) {
+        return ch;
     }
-    fd = open(MIXER_DEVICE, O_RDWR);
-    if (fd < 0) {
-        fprintf(stderr, "mixer: " MIXER_DEVICE ": %s\n", strerror(errno));
-        return 1;
+    if (argc == 2 && (strcmp(argv[1], "mute") == 0 || strcmp(argv[1], "unmute") == 0)) {
+        return -1;
     }
+    return -2;
+}
+
+/**
+ * Run on the open mixer `fd` the command the arguments name, whose channel
+ * `parse` found as `ch`. Returns 0, 1 on a failure and 2 on a usage error.
+ */
+static int run(int fd, int argc, char **argv, int ch)
+{
+    int left, right, devmask, recmask, recsrc, i, status = 0;
+
     if (get_int(fd, MIXER_READ(SOUND_MIXER_DEVMASK), &devmask) != 0 ||
         get_int(fd, MIXER_READ(SOUND_MIXER_RECMASK), &recmask) != 0 ||
         get_int(fd, MIXER_READ(SOUND_MIXER_RECSRC), &recsrc) != 0) {
-        close(fd);
         return 1;
     }
     if (ch >= 0 && !((devmask | recmask) & 1 << ch)) {
         fprintf(stderr, "mixer: %s: no such channel\n", argv[1]);
-        close(fd);
         return 2;
     }
     if (argc == 1) {
@@ -370,6 +377,25 @@ int main(int argc, char **argv)
     } else {
         status = unmute(fd, left, right);
     }
+    return status;
+}
+
+/** Run the command the arguments name. Exits 0, 1 on a failure and 2 on a
+ *  usage error. */
+int main(int argc, char **argv)
+{
+    int fd, status, ch = parse(argc, argv);
+
+    if (ch == -2) {
+        fputs("usage: mixer [NAME [N | L:R | +N | -N] | =rec NAME | mute | unmute]\n", stderr);
+        return 2;
+    }
+    fd = open(MIXER_DEVICE, O_RDWR);
+    if (fd < 0) {
+        fprintf(stderr, "mixer: " MIXER_DEVICE ": %s\n", strerror(errno));
+        return 1;
+    }
+    status = run(fd, argc, argv, ch);
     close(fd);
     return status;
 }

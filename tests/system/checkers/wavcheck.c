@@ -49,6 +49,15 @@ struct wav {
     long data_len;
 };
 
+/* The samples of a recording, `frames` frames of `channels` interleaved
+   samples each, taken at `rate` frames a second. */
+struct recording {
+    short *samples;
+    long frames;
+    unsigned channels;
+    unsigned rate;
+};
+
 /** The little-endian 16-bit value at `p`. */
 static unsigned rd16(const unsigned char *p)
 {
@@ -69,7 +78,7 @@ static unsigned long rd32(const unsigned char *p)
  * The chunks are read up to the data chunk. A chunk of length zero ends the
  * search: it is a header QEMU did not go back to complete, which is what a
  * recording from a machine that was stopped rather than shut down has. The
- * samples must be 16-bit with one to eight channels, since main's frame
+ * samples must be 16-bit with one to eight channels, since read_recording's
  * buffer holds eight. Returns 0, or 2 having said why the file is refused.
  */
 static int wav_open(const char *path, FILE **out, struct wav *w)
@@ -269,24 +278,23 @@ static int sweep(const short *s, long frames, double rate, const double *freqs, 
 }
 
 /**
- * Judge channel `c` of the `frames` frames of `channels` channels at
- * `samples`, recorded at `rate`, against the `n_notes` frequencies of
- * `freqs`. The silence is trimmed from both ends of the channel when at
+ * Judge channel `c` of the recording `r` against the `n_notes` frequencies
+ * of `freqs`. The silence is trimmed from both ends of the channel when at
  * least a quarter of a second is left, since QEMU writes from when the
  * machine opens the device until it is stopped, and what is left is swept.
  * Messages name the channel when the recording has more than one. Returns
  * sweep's status, or 1 when the channel is too short for the notes.
  */
-static int judge(const short *samples, long frames, unsigned channels, unsigned c, double rate,
-                 const double *freqs, int n_notes)
+static int judge(const struct recording *r, unsigned c, const double *freqs, int n_notes)
 {
     char who[32];
     short *s;
-    long i, lo = 0, hi = frames;
+    long i, frames = r->frames, lo = 0, hi = frames;
+    double rate = (double)r->rate;
     int rc;
 
     who[0] = '\0';
-    if (channels > 1) {
+    if (r->channels > 1) {
         sprintf(who, "channel %u: ", c + 1);
     }
     s = (short *)malloc((size_t)frames * sizeof(short));
@@ -294,7 +302,7 @@ static int judge(const short *samples, long frames, unsigned channels, unsigned 
         return 2;
     }
     for (i = 0; i < frames; i++) {
-        s[i] = samples[i * (long)channels + (long)c];
+        s[i] = r->samples[i * (long)r->channels + (long)c];
     }
     while (lo < frames && s[lo] > -QUIET && s[lo] < QUIET) {
         lo++;
@@ -337,12 +345,12 @@ static double tone_sine(double phase)
 }
 
 /** Require both tones together in at least two consecutive tenth-second
- * windows in channel `ch`. Each tone must account for at least 10 percent
+ * windows in channel `ch` of the recording `r`. Each tone must account for at least 10 percent
  * of the window's energy and exceed the silence threshold. A single tone,
  * sequential tones or one silent channel cannot pass. */
-static int judge_mix(const short *samples, long frames, unsigned channels, unsigned ch,
-                     unsigned rate, const double *freqs)
+static int judge_mix(const struct recording *r, unsigned ch, const double *freqs)
 {
+    unsigned rate = r->rate;
     long at, i, n = (long)rate / 10;
     double power, re[2], im[2], phase[2], step[2], energy, q;
     int k, both, run = 0, most = 0;
@@ -351,12 +359,12 @@ static int judge_mix(const short *samples, long frames, unsigned channels, unsig
         return 2;
     for (k = 0; k < 2; k++)
         step[k] = freqs[k] / rate;
-    for (at = 0; at + n <= frames; at += n) {
+    for (at = 0; at + n <= r->frames; at += n) {
         power = 0;
         for (k = 0; k < 2; k++)
             re[k] = im[k] = phase[k] = 0;
         for (i = 0; i < n; i++) {
-            double value = samples[(at + i) * (long)channels + (long)ch];
+            double value = r->samples[(at + i) * (long)r->channels + (long)ch];
 
             power += value * value;
             for (k = 0; k < 2; k++) {
@@ -386,29 +394,16 @@ static int judge_mix(const short *samples, long frames, unsigned channels, unsig
 }
 
 /**
- * Check the recording against the frequencies, as the file's comment says.
- *
- * QEMU writes the data length only when it closes the file, which a machine
- * its case stops does not let it do, so a zero length or one past the end
- * of the file means that the samples run to the end. Each channel is judged
- * on its own, never mixed with another, since mixing would cancel a tone in
- * a recording whose channels are out of phase.
+ * Read the frequencies `argv[3]` on into `freqs`: those after a `/` into
+ * the second list, the others into the first, counting each list's in
+ * `n_notes`. Returns the lists read, 1 or 2, or 0 having said why the
+ * arguments are refused.
  */
-int main(int argc, char **argv)
+static int parse_freqs(int argc, char **argv, double freqs[2][MAX_NOTES], int *n_notes)
 {
-    struct wav w;
-    FILE *f;
-    double freqs[2][MAX_NOTES];
-    int n_notes[2] = {0, 0}, lists = 1, i, rc = 0, mixed;
-    unsigned c;
-    long frames;
-    short *samples;
+    int i, lists = 1;
+    double *at;
 
-    mixed = argc > 1 && strcmp(argv[1], "mix") == 0;
-    if (argc < 4 || (!mixed && strcmp(argv[1], "scale") != 0) || (mixed && argc != 5)) {
-        fprintf(stderr, "usage: wavcheck scale|mix FILE FREQ [FREQ ...] [/ FREQ [FREQ ...]]\n");
-        return 2;
-    }
     for (i = 3; i < argc; i++) {
         if (strcmp(argv[i], "/") == 0 && lists == 1) {
             lists = 2;
@@ -416,72 +411,115 @@ int main(int argc, char **argv)
         }
         if (n_notes[lists - 1] == MAX_NOTES) {
             fprintf(stderr, "wavcheck: at most %d frequencies can be checked\n", MAX_NOTES);
-            return 2;
+            return 0;
         }
-        freqs[lists - 1][n_notes[lists - 1]] = atof(argv[i]);
-        if (!(freqs[lists - 1][n_notes[lists - 1]] > 0.0) ||
-            freqs[lists - 1][n_notes[lists - 1]++] > 1000000.0) {
+        at = &freqs[lists - 1][n_notes[lists - 1]++];
+        *at = atof(argv[i]);
+        if (!(*at > 0.0) || *at > 1000000.0) {
             fprintf(stderr, "wavcheck: %s is not a frequency\n", argv[i]);
-            return 2;
+            return 0;
         }
     }
     if (n_notes[0] == 0 || (lists == 2 && n_notes[1] == 0)) {
         fprintf(stderr, "usage: wavcheck scale|mix FILE FREQ [FREQ ...] [/ FREQ [FREQ ...]]\n");
-        return 2;
+        return 0;
     }
-    rc = wav_open(argv[2], &f, &w);
+    return lists;
+}
+
+/**
+ * Read the samples of the WAVE file at `path` into `*r`, whose `samples`
+ * the caller frees.
+ *
+ * QEMU writes the data length only when it closes the file, which a machine
+ * its case stops does not let it do, so a zero length or one past the end
+ * of the file means that the samples run to the end. Returns 0, 1 when the
+ * recording is too short to measure, or 2 when it cannot be read; on a
+ * failure nothing is left to free.
+ */
+static int read_recording(const char *path, struct recording *r)
+{
+    struct wav w;
+    FILE *f;
+    long i, file_end;
+    unsigned c;
+    int rc = wav_open(path, &f, &w);
+
     if (rc != 0) {
         return rc;
     }
-
     fseek(f, 0, SEEK_END);
-    {
-        long file_end = ftell(f);
-
-        if (w.data_len <= 0 || w.data_at + w.data_len > file_end) {
-            w.data_len = file_end - w.data_at;
-        }
+    file_end = ftell(f);
+    if (w.data_len <= 0 || w.data_at + w.data_len > file_end) {
+        w.data_len = file_end - w.data_at;
     }
     fseek(f, w.data_at, SEEK_SET);
-    frames = w.data_len / (long)(2 * w.channels);
-    if (frames < (long)w.rate / 10) {
-        fprintf(stderr, "wavcheck: %s holds %ld frames, too few to measure\n", argv[2], frames);
+    r->frames = w.data_len / (long)(2 * w.channels);
+    r->channels = w.channels;
+    r->rate = w.rate;
+    if (r->frames < (long)w.rate / 10) {
+        fprintf(stderr, "wavcheck: %s holds %ld frames, too few to measure\n", path, r->frames);
         fclose(f);
         return 1;
     }
-    if (lists == 2 && w.channels < 2) {
-        printf("wavcheck: %s has one channel, and two were asked for\n", argv[2]);
-        fclose(f);
-        return 1;
-    }
-    samples = (short *)malloc((size_t)frames * w.channels * sizeof(short));
-    if (samples == NULL) {
+    r->samples = (short *)malloc((size_t)r->frames * w.channels * sizeof(short));
+    if (r->samples == NULL) {
         fclose(f);
         return 2;
     }
-    for (i = 0; i < frames; i++) {
+    for (i = 0; i < r->frames; i++) {
         unsigned char frame[16];
 
         if (fread(frame, 1, 2 * w.channels, f) != 2 * w.channels) {
-            frames = i;
+            r->frames = i;
             break;
         }
         for (c = 0; c < w.channels; c++) {
-            samples[(long)i * w.channels + c] = (short)(int)(short)rd16(frame + 2 * c);
+            r->samples[i * (long)w.channels + (long)c] = (short)(int)(short)rd16(frame + 2 * c);
         }
     }
     fclose(f);
+    return 0;
+}
 
-    for (c = 0; c < (lists == 2 ? 2u : w.channels); c++) {
+/**
+ * Check the recording against the frequencies, as the file's comment says.
+ * Each channel is judged on its own, never mixed with another, since mixing
+ * would cancel a tone in a recording whose channels are out of phase.
+ */
+int main(int argc, char **argv)
+{
+    struct recording r;
+    double freqs[2][MAX_NOTES];
+    int n_notes[2] = {0, 0}, lists, rc, mixed;
+    unsigned c;
+
+    mixed = argc > 1 && strcmp(argv[1], "mix") == 0;
+    if (argc < 4 || (!mixed && strcmp(argv[1], "scale") != 0) || (mixed && argc != 5)) {
+        fprintf(stderr, "usage: wavcheck scale|mix FILE FREQ [FREQ ...] [/ FREQ [FREQ ...]]\n");
+        return 2;
+    }
+    lists = parse_freqs(argc, argv, freqs, n_notes);
+    if (lists == 0) {
+        return 2;
+    }
+    rc = read_recording(argv[2], &r);
+    if (rc != 0) {
+        return rc;
+    }
+    if (lists == 2 && r.channels < 2) {
+        printf("wavcheck: %s has one channel, and two were asked for\n", argv[2]);
+        free(r.samples);
+        return 1;
+    }
+    for (c = 0; c < (lists == 2 ? 2u : r.channels); c++) {
         int list = lists == 2 ? (int)c : 0;
-        int one = mixed ? judge_mix(samples, frames, w.channels, c, w.rate, freqs[0])
-                        : judge(samples, frames, w.channels, c, (double)w.rate, freqs[list],
-                                n_notes[list]);
+        int one = mixed ? judge_mix(&r, c, freqs[0]) : judge(&r, c, freqs[list], n_notes[list]);
 
         if (one > rc) {
             rc = one;
         }
     }
-    free(samples);
+    free(r.samples);
     return rc;
 }
