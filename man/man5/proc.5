@@ -743,6 +743,13 @@ Boot time as seconds since the epoch.
 Setting the clock moves it by the size of the step.
 .It Li processes
 Processes created since boot.
+.It Li process_pid_steps , process_uid_steps , process_timer_steps
+Entries examined by the process pid index, real-user counts and active timer
+list since boot, modulo 2^32.
+Untimed blocked threads are absent from the timer list.
+.It Li vm_gap_steps
+Candidate gaps examined by the virtual memory free-range search since boot,
+modulo 2^32.
 .It Li sleeps_interrupted
 Sleeps in
 .Xr nanosleep 2

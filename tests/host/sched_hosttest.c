@@ -35,6 +35,12 @@ static int failures;
         }                                                        \
     } while (0)
 
+/** Timer list membership is checked by process_timer_hosttest. */
+void proc_timer_update(process_t *p)
+{
+    (void)p;
+}
+
 /** Clear the model's interrupt flag and return what it was. */
 uint32_t kirq_save(void)
 {

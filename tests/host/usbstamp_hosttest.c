@@ -65,6 +65,12 @@ uint32_t timer_now_us(void)
     return clock_us;
 }
 
+/** Timer list membership is checked by process_timer_hosttest. */
+void proc_timer_update(process_t *p)
+{
+    (void)p;
+}
+
 /** Model interrupt masking around the diagnostic snapshot. */
 uint32_t kirq_save(void)
 {

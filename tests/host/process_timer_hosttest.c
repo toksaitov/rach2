@@ -44,6 +44,10 @@ struct tgroup;
 static struct tgroup *tgroup_new(struct process *leader);
 static void tgroup_put(struct tgroup *tg);
 static void proc_cpu_time(const struct process *p, uint32_t *user, uint32_t *sys);
+static void proc_exchange_pids(struct process *a, struct process *b);
+static int proc_set_ruid(struct process *p, uint32_t uid);
+static uint32_t proc_user_records(const struct process *p);
+static uint32_t proc_work_count(unsigned int index);
 #include "proc/process.c"
 #include "ns_first.h"
 
@@ -52,8 +56,21 @@ volatile uint32_t kernel_ticks;
 extern int printf(const char *format, ...);
 extern int dprintf(int fd, const char *format, ...);
 
+/** The single-threaded timer model has no hardware interrupts. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+/** Restore the model's unchanged interrupt state. */
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
 static int failures;
-static process_t sleeper, runner;
+static process_t sleeper, runner, follower;
+static int remove_runner, follower_posts;
 static int sleeper_posts, runner_posts;
 
 #define CHECK(c, detail)                                          \
@@ -75,6 +92,14 @@ void signal_post(process_t *target, int signo)
 {
     if (signo == SIGALRM && target == &sleeper) {
         sleeper_posts++;
+        if (remove_runner) {
+            runner.state = PROC_READY;
+            runner.wakeup_tick = 0;
+            proc_timer_update(&runner);
+        }
+    }
+    if (signo == SIGALRM && target == &follower) {
+        follower_posts++;
     }
     if (signo == SIGALRM && target == &runner) {
         runner_posts++;
@@ -93,9 +118,13 @@ int main(void)
     runner.state = PROC_RUNNING;
     runner.alarm_tick = 1004;
     runner.alarm_interval = 25;
+    proc_timer_update(&sleeper);
+    proc_timer_update(&runner);
     proc_wake_sleepers(1003);
     CHECK(sleeper_posts == 0 && runner_posts == 0 && runner.alarm_tick == 1004,
           "a timer not yet due posts nothing");
+    proc_timer_update(&sleeper);
+    proc_timer_update(&runner);
     proc_wake_sleepers(1004);
     CHECK(runner_posts == 1, "a due timer posts SIGALRM to a process that is running");
     CHECK(sleeper_posts == 1, "and to one that is asleep");
@@ -105,24 +134,36 @@ int main(void)
     runner.alarm_tick = 1100;
     runner.alarm_interval = 0;
     sleeper.alarm_tick = 0;
+    proc_timer_update(&sleeper);
+    proc_timer_update(&runner);
     proc_wake_sleepers(1100);
     CHECK(runner_posts == 2 && runner.alarm_tick == 0,
           "a single alarm posts once and leaves the timer disarmed");
+    proc_timer_update(&sleeper);
+    proc_timer_update(&runner);
     proc_wake_sleepers(1101);
     CHECK(runner_posts == 2, "and posts nothing after");
 
+    proc_timer_update(&sleeper);
+    proc_timer_update(&runner);
     proc_wake_sleepers(1199);
     CHECK(sleeper.state == PROC_BLOCKED && sleeper.wakeup_tick == 1200,
           "a sleeper is not woken before its deadline");
+    proc_timer_update(&sleeper);
+    proc_timer_update(&runner);
     proc_wake_sleepers(1200);
     CHECK(sleeper.state == PROC_READY && sleeper.wakeup_tick == 0,
           "and is made runnable at its deadline tick");
 
     sleeper.state = PROC_BLOCKED;
     sleeper.wakeup_tick = 0;
+    proc_timer_update(&sleeper);
+    proc_timer_update(&runner);
     proc_wake_sleepers(1300);
     CHECK(sleeper.state == PROC_BLOCKED, "a blocked process with no deadline is not made runnable");
     runner.wakeup_tick = 1300;
+    proc_timer_update(&sleeper);
+    proc_timer_update(&runner);
     proc_wake_sleepers(1300);
     CHECK(runner.state == PROC_RUNNING && runner.wakeup_tick == 1300,
           "a running process is left as it is whatever its wakeup tick says");
@@ -133,6 +174,8 @@ int main(void)
     sleeper.alarm_interval = 1;
     runner.alarm_tick = 1400;
     runner.alarm_interval = 0;
+    proc_timer_update(&sleeper);
+    proc_timer_update(&runner);
     proc_wake_sleepers(1400);
     CHECK(sleeper.state == PROC_READY && sleeper_posts == 2 && runner_posts == 3,
           "a tick that wakes a sleeper still posts its alarm and a later process's");
@@ -143,17 +186,40 @@ int main(void)
     sleeper.alarm_tick = 0;
     runner.alarm_tick = 0xFFFFFFFEu;
     runner.alarm_interval = 2;
+    proc_timer_update(&sleeper);
+    proc_timer_update(&runner);
     proc_wake_sleepers(0xFFFFFFFEu);
     CHECK(runner_posts == 4 && runner.alarm_tick == 1,
           "a timer armed again onto tick 0 across the wrap is due at 1");
+    proc_timer_update(&sleeper);
+    proc_timer_update(&runner);
     proc_wake_sleepers(0xFFFFFFFFu);
     CHECK(runner_posts == 4 && sleeper.state == PROC_BLOCKED,
           "a timer and a sleeper due past the wrap wait for it");
+    proc_timer_update(&sleeper);
+    proc_timer_update(&runner);
     proc_wake_sleepers(5);
     CHECK(runner_posts == 5 && sleeper.state == PROC_READY, "and are served after it");
 
     CHECK(proc_alarm_at(1000, 25) == 1025, "an alarm 25 ticks after tick 1000 is due at 1025");
     CHECK(proc_alarm_at(0xFFFFFFFFu, 1) == 1, "an alarm that wraps to 0 is due at 1");
+    runner.alarm_tick = 0;
+    proc_timer_update(&runner);
+    follower.state = PROC_RUNNING;
+    follower.alarm_tick = 1500;
+    proc_timer_update(&follower);
+    runner.state = PROC_BLOCKED;
+    runner.wakeup_tick = 1600;
+    proc_timer_update(&runner);
+    sleeper.state = PROC_RUNNING;
+    sleeper.alarm_tick = 1500;
+    proc_timer_update(&sleeper);
+    remove_runner = 1;
+    proc_wake_sleepers(1500);
+    CHECK(runner.state == PROC_READY && !runner.timer_linked,
+          "a signal wake removes the next timed waiter during the tick");
+    CHECK(follower_posts == 1 && !follower.timer_linked,
+          "the tick still visits the timer after the removed waiter");
     if (failures) {
         return 1;
     }

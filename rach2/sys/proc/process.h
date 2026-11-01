@@ -386,6 +386,12 @@ struct process {
     int cpu;
     uint64_t affinity;
     int bkl_depth;
+    /* Index links, owned by process.c under the big kernel lock. */
+    struct process *pid_next;
+    struct proc_user_count *user_count;
+    /* Active timed waits and real alarms only; timer_linked marks membership. */
+    struct process *timer_prev, *timer_next;
+    int timer_linked;
 };
 
 typedef struct process process_t;
@@ -454,6 +460,28 @@ void free_process(process_t *proc);
 /** The record whose `pid` is `pid`, a thread's id in the kernel's
  * numbering, that of the first PID namespace; NULL for none. */
 process_t *get_process(uint32_t pid);
+
+/** Exchange two indexed thread ids at exec, under the big kernel lock. */
+void proc_exchange_pids(process_t *a, process_t *b);
+
+/** Change the real uid and its record count, under the big kernel lock.
+ * Return 0, or -1 without a change if a new user's count cannot be allocated.
+ * Every allocated record counts until free_process, including a fork in build.
+ */
+int proc_set_ruid(process_t *p, uint32_t uid);
+
+/** Records charged to p's real uid, under the big kernel lock. */
+uint32_t proc_user_records(const process_t *p);
+
+/** Refresh membership after changing a deadline, alarm or state.
+ * Hold the big kernel lock; this masks local interrupts while changing links.
+ */
+void proc_timer_update(process_t *p);
+
+/** Work since boot: pid bucket entries, uid bucket entries, timer entries.
+ * The index is 0, 1 or 2; counters wrap modulo 2^32. Hold the big kernel lock.
+ */
+uint32_t proc_work_count(unsigned int index);
 
 /** The user-mode registers of the thread `t`, which is not running in user
  * mode: the frame its entry to the kernel saved at the top of its kernel

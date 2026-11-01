@@ -1557,10 +1557,12 @@ static void itimer_set(int32_t which, uint32_t value, uint32_t interval)
     if (value == 0) {
         p->alarm_tick = 0;
         p->alarm_interval = 0;
+        proc_timer_update(p);
         return;
     }
     p->alarm_tick = proc_alarm_at(kernel_ticks, value + 1u);
     p->alarm_interval = interval;
+    proc_timer_update(p);
 }
 
 /**

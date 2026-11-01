@@ -114,6 +114,9 @@ typedef struct vm_space {
     uintptr_t brk;         /* current program break (top of the heap VMA)  */
     uintptr_t stack_limit; /* lowest address the stack VMA may grow down to */
     uintptr_t mmap_base;   /* a mapping without a hint goes below it */
+    /* Gap search proof: above gap_top, no hole fits gap_len in [gap_lo,gap_hi).
+     * A zero gap_len is invalid; removing coverage clears it. */
+    uintptr_t gap_top, gap_len, gap_lo, gap_hi;
 } vm_space_t;
 
 /* kernel.randomize_va_space, read at each exec (`exec_layout`): 0 places a
@@ -123,6 +126,9 @@ typedef struct vm_space {
  * architecture draws offsets and at 0 where it draws none (ASLR_MMAP_PAGES
  * 0), and there a value written changes no address. */
 extern int randomize_va_space;
+
+/** Gap candidates examined since boot, modulo 2^32, under the big lock. */
+uint32_t vm_gap_steps(void);
 
 /** Reset an address space to empty, dropping the files its regions map;
  * the array it has, if any, is kept, and the heap's start, the break, the
@@ -202,7 +208,7 @@ int vm_reserve(vm_space_t *vm, uint32_t n);
 
 /** The start of the highest free range of `len` bytes inside [lo, hi), or 0
  * when there is none. */
-uintptr_t vm_find_free(const vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t hi);
+uintptr_t vm_find_free(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t hi);
 
 /** Bytes of [start, end) that regions cover. */
 uintptr_t vm_covered(const vm_space_t *vm, uintptr_t start, uintptr_t end);

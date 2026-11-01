@@ -73,6 +73,8 @@ The file system provides what `mm.c` and `filemap.c` call back: `fs_exe_open`, `
 
 ## Design
 
+The top-down gap search remembers an upper bound above which no gap fitted its last requested length and bounds. A later search with the same bounds and at least that length starts there. Adding or splitting coverage cannot enlarge a gap; removing coverage clears the bound. Smaller requests and changed bounds start from the top again. `vm_gap_steps` in `/proc/stat` counts candidate gaps examined since boot, modulo 2^32.
+
 A file named alone is in `sys/mm/`; other paths start at `rach2/`.
 
 ### The boot

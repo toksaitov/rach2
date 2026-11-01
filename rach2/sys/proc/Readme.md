@@ -10,7 +10,7 @@ A file named without a directory is in `rach2/sys/proc/`; other paths are from t
 
 | File | What it has |
 | --- | --- |
-| `process.h`, `process.c` | The thread's record, `struct process`, the list of records, process ids, the reparenting of children |
+| `process.h`, `process.c` | The thread's record, `struct process`, the list and pid index of records, per-user counts, active timers and the reparenting of children |
 | `tgroup.h` | The thread group: what the threads of one process share |
 | `percpu.h` | Each processor's record, `struct percpu`, and `current_proc` |
 | `smp.h`, `smp.c` | The big lock, the requests one processor leaves another, the start of the other processors |
@@ -70,9 +70,11 @@ The rest of the kernel reaches processes through these headers:
 
 ## Design
 
+`proc_timer_update` keeps records with a real alarm or a blocked timed wait on an intrusive list. Blocking in `schedule`, a wake in `sched_make_ready`, alarm changes and record deletion refresh membership under the big lock with local interrupts masked. The tick visits only this list; untimed blocked threads add no timer work. Its cursor follows removals made by signal wakeups during the same tick. `/proc/stat` reports the pid, uid and timer entries examined as `process_pid_steps`, `process_uid_steps` and `process_timer_steps`, modulo 2^32.
+
 ### The records
 
-Each thread has a record, `struct process` (`process.h`), from the kernel heap (`alloc_process`). The records are on one list, `proc_list`, in the order they were made; `get_process` finds one by its id, and the run queues are the same list (below). A record is in one of six states: `PROC_READY`, `PROC_RUNNING`, `PROC_BLOCKED`, `PROC_STOPPED`, `PROC_ZOMBIE`, and `PROC_UNUSED`, which marks a record that `fork` is still building or that a reaper has taken and is freeing, so that no wait, signal or selection takes it. A new record takes the id after the last one given, passing over any id a live record has; after 1,999,999,999 the ids start again from 1. The boot's self-tests take ids before the first program, and `proc_reclaim_boot_pids` then starts the numbering again at 1, so that init is process 1.
+Each thread has a record, `struct process` (`process.h`), from the kernel heap (`alloc_process`). The records are on one list, `proc_list`, in the order they were made; `get_process` finds one in a pid hash that doubles before its load exceeds one record per bucket, and the run queues are the process list (below). A record is in one of six states: `PROC_READY`, `PROC_RUNNING`, `PROC_BLOCKED`, `PROC_STOPPED`, `PROC_ZOMBIE`, and `PROC_UNUSED`, which marks a record that `fork` is still building or that a reaper has taken and is freeing, so that no wait, signal or selection takes it. A new record takes the id after the last one given, passing over any id a live record has; after 1,999,999,999 the ids start again from 1. The boot's self-tests take ids before the first program, and `proc_reclaim_boot_pids` then starts the numbering again at 1, so that init is process 1.
 
 A process is a thread group, `struct tgroup` (`tgroup.h`). Each thread is a record of its own, with its id, registers, kernel stack, thread pointer, blocked mask, pending signals and CPU time. The group has what the threads share: the signal dispositions and the signals sent to the process, a stop in effect, the POSIX timers and the interval timers of processor time, the CPU time of the threads that have ended and of the children reaped, the most memory an address space of the process had in use, the OOM score adjustment, and the process's end: `exiting` and the status the process ends with after `exit_group` or a fatal signal, `exec_task` while an `execve` ends the other threads, and `core_dumping` while a core is written. The thread whose id is the process id is the group's `leader`. Every record's `tgid` is that id, which `getpid` reports, and its `pid` is the thread's own, which `gettid` reports. `live` counts the threads that have not ended, and `refs` the records that point at the group.
 
@@ -86,7 +88,7 @@ Process 0, `proc_idle`, is the kernel's own. `kernel_main` (`rach2/kernel.c`) ma
 
 `fork`, `vfork`, `clone` and `clone3` all reach `do_fork` (`rach2/sys/syscall_proc.c`) with a `struct fork_req`: the clone flags, the child's stack pointer, and the addresses of the ids the call stores. `clone_with` refuses a flag it does not know with `EINVAL`, and accepts zero or `SIGCHLD` as the exit signal of a new process; `CLONE_THREAD` needs `CLONE_SIGHAND`, which needs `CLONE_VM`. `do_fork` works in this order, and a failure at any step returns to the parent with what was built for the child given back:
 
-1. It lets the caches give back memory (`mem_balance`), and refuses with `EAGAIN` a caller whose real user already has `RLIMIT_NPROC` records, each thread and each zombie counted (`fork_nproc`).
+1. It lets the caches give back memory (`mem_balance`), and refuses with `EAGAIN` a caller whose real user already has `RLIMIT_NPROC` records, each thread and each zombie counted (`fork_nproc`). A count for each real uid is kept from allocation until the record is freed, and a change of real uid transfers that charge. A child being built reserves its place before any building step can sleep.
 2. It takes a record and marks it `PROC_UNUSED` while the child is built, since the building may sleep.
 3. It gives the child its address space, the parent's own with one more user under `CLONE_VM` and a copy-on-write copy otherwise (`fork_mm`), and a kernel stack (`kstack_alloc`), whose guard page [the architectures' Readme](../arch/Readme.md) describes.
 4. The child's parent is the caller's process, or the caller's parent under `CLONE_THREAD` and `CLONE_PARENT`. `fork_ids` copies the credentials, the limits, the session and process group, the nice value and I/O priority, the persona, `no_new_privs`, the capability flag, the seccomp mode and filters, the OOM score adjustment and the program name, and `ns_fork` gives the child its namespaces and its numbers in its PID namespaces ([namespaces](ns.Readme.md)).

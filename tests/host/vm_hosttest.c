@@ -415,6 +415,27 @@ int main(void)
         vm_free(&f);
     }
 
+    {
+        vm_space_t f = {0};
+        uint32_t i, before = vm_gap_steps();
+        uintptr_t at;
+
+        for (i = 0; i < 64; i++) {
+            at = vm_find_free(&f, 2 * PG, 0x10000, 0x100000);
+            CHECK(at != 0);
+            CHECK(vm_insert(&f, at, at + PG, VM_PROT_READ, VM_ANON) == 0);
+            CHECK(vm_insert(&f, at + PG, at + 2 * PG, 0, VM_ANON) == 0);
+        }
+        CHECK((uint32_t)(vm_gap_steps() - before) <= 4 * 64);
+        CHECK(vm_remove(&f, 0xFC000, 0x100000) == 0);
+        CHECK(vm_find_free(&f, 2 * PG, 0x10000, 0x100000) == 0xFE000);
+        CHECK(vm_insert(&f, 0xFD000, 0xFF000, 0, VM_ANON) == 0);
+        CHECK(vm_find_free(&f, 2 * PG, 0x10000, 0x100000) < 0xFC000);
+        CHECK(vm_find_free(&f, PG, 0x10000, 0x100000) == 0xFF000);
+        CHECK(vm_find_free(&f, PG, 0x10000, 0xFD000) == 0xFC000);
+        vm_free(&f);
+    }
+
     nowrite_rows();
     file_rows();
     reap_rows();
