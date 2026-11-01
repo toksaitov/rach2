@@ -452,9 +452,14 @@ static int fd_table_grow(fd_table_t *table, int want)
     return fd_table_resize(table, cap);
 }
 
+/** A table already shared has every sharer's map as wide as itself, since
+ * each share and each growth of a shared table widened them, so only its
+ * first share walks the processes, for the owner's map that a growth of the
+ * unshared table left as it was. */
 int fd_table_share(fd_table_t *table, struct process *child)
 {
-    if (sharers_fit(table, table->cap) != 0 || held_fit(child, table->cap) != 0) {
+    if ((table->refs == 1 && sharers_fit(table, table->cap) != 0) ||
+        held_fit(child, table->cap) != 0) {
         return -1;
     }
     table->refs++;

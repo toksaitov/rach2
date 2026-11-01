@@ -257,9 +257,9 @@ fd_table_t *fd_table_dup(const fd_table_t *src);
 void fd_table_delete(fd_table_t *table);
 
 /** Take another reference to `table` for the CLONE_FILES child `child`,
- * first giving `child` and every sharer a map of the descriptors its calls
- * hold as wide as the table (`fd_held` in `process.h`); 0, or -1 when the
- * heap has no room for them. */
+ * first giving `child`, and on the table's first share its owner, a map of
+ * the descriptors its calls hold as wide as the table (`fd_held` in
+ * `process.h`); 0, or -1 when the heap has no room for them. */
 int fd_table_share(fd_table_t *table, struct process *child);
 
 /** Grow the array of `table` to at least `cap` entries, whatever the
