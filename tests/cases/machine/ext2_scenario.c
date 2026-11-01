@@ -1,8 +1,8 @@
 /*
  * ext2_scenario.c: the scenario of machine.ext2, the ext2 driver booted.
  * Cases `probe-NAME` run a probe as init on an ext2 root staged from the test
- * manifest; `links`, `cost` and `names` run ext2probe's rows on the fixture
- * volume the host's mke2fs wrote; `rewrite`, `append`, `setid`, `lchown`,
+ * manifest; `links`, `cost`, `names` and `lookup` run ext2probe's rows on
+ * the fixture volume the host's mke2fs wrote; `rewrite`, `append`, `setid`, `lchown`,
  * `dirent`, `zombie` and `busy` each boot os-real on a fresh copy of its ext2
  * root; and `repair` takes one copy of that root through a kill, the mount's
  * check, a lost block, a fault, recovery's e2fsck and a clean boot.
@@ -629,8 +629,8 @@ static void print_lines(const char *w, const char *key)
 }
 
 /**
- * Run case `links`, `cost` or `names`: ext2probe's rows of `mode` on the
- * fixture volume, mounted from the IDE disk beside the test image.
+ * Run case `links`, `cost`, `names` or `lookup`: ext2probe's rows of `mode`
+ * on the fixture volume, mounted from the IDE disk beside the test image.
  * Assertions `exit`, `said-ok` and, for `links`, `mounted`.
  */
 static void fixture(struct lc *l, const char *mode)
@@ -652,6 +652,8 @@ static void fixture(struct lc *l, const char *mode)
             seen(l, w, "mounted", "ext2: mounted: ");
         else if (strcmp(mode, "cost") == 0)
             print_lines(w, "ext2-cost: result: ");
+        else if (strcmp(mode, "lookup") == 0)
+            print_lines(w, "ext2-lookup: result: ");
         else
             print_lines(w, "ext2-names: result: ");
         free(w);
@@ -1034,7 +1036,8 @@ int etude_scenario(struct etude_case *c)
             }
         return 1;
     }
-    if (strcmp(name, "links") == 0 || strcmp(name, "cost") == 0 || strcmp(name, "names") == 0) {
+    if (strcmp(name, "links") == 0 || strcmp(name, "cost") == 0 || strcmp(name, "names") == 0 ||
+        strcmp(name, "lookup") == 0) {
         lc_begin(&l, c, strcmp(name, "links") == 0 ? links_ids : cost_ids);
         fixture(&l, name);
         return lc_finish(&l);

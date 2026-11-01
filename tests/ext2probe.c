@@ -28,6 +28,15 @@
  * user who may not search its directory; and an unmount forgets the
  * volume's names. The counts are the machine's, so no native run has it.
  *
+ * `ext2probe lookup` fills the buffer cache to its limit from the fixture
+ * and from copies of it on loop devices, then makes a thousand files in a
+ * directory of the fixture and looks each up once, a lookup the name cache
+ * passes to ext2 with its blocks in the buffer cache. It judges by the
+ * counts of /proc/disk and /proc/stat that the cache is full and its index
+ * has a bucket for each buffer, that a get at the cap and a get of a lookup
+ * read few buffers, and that a lookup reads few of ext2's nodes in memory.
+ * The counts are the machine's, so no native run has it.
+ *
  * A native run gives the fixture as a loop device (probe_args.h): the first
  * device that `loops=DEVICE,...` names is mounted in place of /dev/disk0p1,
  * and `cost` counts that device's own writes and syncs, from /proc/loop, in
@@ -1003,6 +1012,332 @@ static void names_rows(void)
     names_clean();
 }
 
+/*
+ * The rows of `ext2probe lookup`.
+ *
+ * The buffer cache is filled to its limit first, from the fixture and from
+ * LOOKUP_COPIES copies of it on loop devices, each a device of its own whose
+ * blocks the cache keys apart, since the fixture alone has fewer blocks than
+ * the cache of a machine of some memory holds. Then LOOKUP_FILES files are
+ * made in one directory and each is looked up once: a lookup the name cache
+ * passes to ext2, with its directory and inode blocks in the buffer cache.
+ * The kernel's counts judge what each search read: the buffers of the
+ * cache's walks for each get, and ext2's nodes in memory for each lookup,
+ * which the name cache holds one of for every name it keeps.
+ */
+
+#define LOOKUP_COPIES        3    /* loop devices over copies of the fixture */
+#define LOOKUP_FILES         1000 /* files made and looked up */
+#define LOOKUP_SPARE         192  /* blocks the fill leaves free for the files */
+/* The buckets of the buffer cache's first index, which a full cache of this
+ * case's machine must outgrow. */
+#define LOOKUP_FIRST_BUCKETS 4096u
+/* The most buffers the cache's walks may read for each get on average, in
+ * tenths: of a read at the cap, where each miss takes a victim, and of a
+ * lookup. A read at the cap reads some 2.5 with an index of a bucket for
+ * each buffer and 4 with the first index's 4096 buckets. */
+#define LOOKUP_FILL_TENTHS   35
+#define LOOKUP_WARM_TENTHS   30
+/* The most nodes ext2's searches may read for each lookup on average. */
+#define LOOKUP_NODE_VISITS   2
+
+/* The counts of /proc/disk and /proc/stat the rows judge. */
+struct cache_counts {
+    unsigned hits, fills, visits;
+    unsigned buffers, limit, buckets;
+    unsigned nodes, misses;
+};
+
+/** The buffer cache's and ext2's counts now. */
+static struct cache_counts cache_counts(void)
+{
+    static char text[8192];
+    struct cache_counts c;
+    int n = read_all("/proc/disk", text, sizeof(text) - 1);
+
+    if (n <= 0 || n == (int)sizeof(text) - 1) {
+        fail("reading /proc/disk");
+    }
+    text[n] = '\0';
+    c.hits = text_counter(text, "cache-hits");
+    c.fills = text_counter(text, "cache-fills");
+    c.visits = text_counter(text, "cache-visits");
+    c.buffers = text_counter(text, "cache-buffers");
+    c.limit = text_counter(text, "cache-limit");
+    c.buckets = text_counter(text, "cache-buckets");
+    n = read_all("/proc/stat", text, sizeof(text) - 1);
+    if (n <= 0 || n == (int)sizeof(text) - 1) {
+        fail("reading /proc/stat");
+    }
+    text[n] = '\0';
+    c.nodes = text_counter(text, "ext2_node_visits");
+    c.misses = text_counter(text, "namecache_misses");
+    return c;
+}
+
+/** Print "ext2-lookup: result: " and `what`, then `value`, for a person. */
+static void lookup_report(const char *what, unsigned value)
+{
+    syscall3(SYS_WRITE, 1, (long)"ext2-lookup: result: ", 21);
+    syscall3(SYS_WRITE, 1, (long)what, (int)strlen(what));
+    cost_number(value);
+    puts("");
+}
+
+/** The free blocks of the fixture, which statfs reports. */
+static unsigned free_blocks(void)
+{
+    static unsigned char fs[KSTATFS_SIZE];
+    int at = KSTATFS_FILES - 16; /* f_bfree, two 64-bit words before f_files */
+
+    if (probe_statfs("/e2", fs) != 0) {
+        fail("statfs of the fixture");
+    }
+    return (unsigned)(fs[at] | (fs[at + 1] << 8) | (fs[at + 2] << 16) |
+                      ((unsigned)fs[at + 3] << 24));
+}
+
+/** Write /e2/lk-fill until the fixture has LOOKUP_SPARE blocks free, and
+ * sync it. */
+static void lookup_fill_file(void)
+{
+    int fd = syscall3(SYS_OPEN, (long)"/e2/lk-fill", O_WRONLY | O_CREAT | O_EXCL, 0644);
+    unsigned i;
+
+    if (fd < 0) {
+        fail_with("creating the fill file", fd);
+    }
+    for (i = 0; i < sizeof(cost_block); i++) {
+        cost_block[i] = (unsigned char)i;
+    }
+    while (free_blocks() > LOOKUP_SPARE) {
+        if (syscall3(SYS_WRITE, fd, (long)cost_block, sizeof(cost_block)) !=
+            (int)sizeof(cost_block)) {
+            fail("writing the fill file");
+        }
+    }
+    if (syscall1(SYS_FSYNC, fd) != 0 || syscall1(SYS_CLOSE, fd) != 0) {
+        fail("syncing the fill file");
+    }
+}
+
+/** Read the file `path` to its end. */
+static void read_through(const char *path)
+{
+    static unsigned char chunk[65536];
+    int fd = syscall3(SYS_OPEN, (long)path, O_RDONLY, 0);
+    int n;
+
+    if (fd < 0) {
+        fail_with("opening a fill file", fd);
+    }
+    while ((n = syscall3(SYS_READ, fd, (long)chunk, sizeof(chunk))) > 0) {
+    }
+    if (n < 0) {
+        fail_with("reading a fill file", n);
+    }
+    syscall1(SYS_CLOSE, fd);
+}
+
+/** Copy the fixture's partition to the file `to` through its device node,
+ * whose reads pass the buffer cache by. */
+static void copy_fixture(const char *to)
+{
+    static unsigned char chunk[65536];
+    int in = syscall3(SYS_OPEN, (long)node, O_RDONLY, 0);
+    int out = syscall3(SYS_OPEN, (long)to, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    int n;
+
+    if (in < 0 || out < 0) {
+        fail("opening the fixture and its copy");
+    }
+    while ((n = syscall3(SYS_READ, in, (long)chunk, sizeof(chunk))) > 0) {
+        if (syscall3(SYS_WRITE, out, (long)chunk, n) != n) {
+            fail("writing a copy of the fixture");
+        }
+    }
+    if (n < 0) {
+        fail_with("reading the fixture's device", n);
+    }
+    syscall1(SYS_CLOSE, in);
+    syscall1(SYS_CLOSE, out);
+}
+
+/** One command to /dev/loop-control, or fail `what`. */
+static void loop_control(const char *line, const char *what)
+{
+    int fd = syscall3(SYS_OPEN, (long)"/dev/loop-control", O_WRONLY, 0);
+    int rc;
+
+    if (fd < 0) {
+        fail_with("opening /dev/loop-control", fd);
+    }
+    rc = syscall3(SYS_WRITE, fd, (long)line, (int)strlen(line));
+    syscall1(SYS_CLOSE, fd);
+    if (rc < 0) {
+        fail_with(what, rc);
+    }
+}
+
+/* The copies' files, loop devices, mount points and commands, by index. */
+static char copy_path[] = "/lk/v0";
+static char loop_path[] = "/dev/loop0";
+static char loop_dir[] = "/l0";
+static char loop_file[] = "/l0/lk-fill";
+static char attach_line[] = "attach ro 0 /lk/v0";
+static char detach_line[] = "detach 0";
+
+/** Point the copy's names at index `i`. */
+static void copy_names(int i)
+{
+    char digit = (char)('0' + i);
+
+    copy_path[5] = digit;
+    loop_path[9] = digit;
+    loop_dir[2] = digit;
+    loop_file[2] = digit;
+    attach_line[10] = digit;
+    attach_line[17] = digit;
+    detach_line[7] = digit;
+}
+
+/**
+ * Fill the buffer cache to its limit: the fill file on the fixture, the
+ * fixture unmounted and copied LOOKUP_COPIES times to a tmpfs, each copy on a
+ * loop device mounted read-only, and every copy's fill file read. The last
+ * read is at the cap, where each miss takes a victim, and the walks of its
+ * gets are judged. The cache must then be full, larger than its first
+ * index, and its index must have a bucket for each buffer it may hold.
+ */
+static void lookup_fill(void)
+{
+    struct cache_counts before, after;
+    int i;
+
+    lookup_fill_file();
+    expect_ok(syscall2(SYS_UMOUNT2, (long)"/e2", 0), "unmounting the fixture to copy it");
+    syscall2(SYS_MKDIR, (long)"/lk", 0755);
+    expect_ok(syscall5(SYS_MOUNT, (long)"tmpfs", (long)"/lk", (long)"tmpfs", 0, 0),
+              "mounting a tmpfs for the copies");
+    for (i = 0; i < LOOKUP_COPIES; i++) {
+        copy_names(i);
+        copy_fixture(copy_path);
+        loop_control(attach_line, "attaching a copy of the fixture");
+        syscall2(SYS_MKDIR, (long)loop_dir, 0755);
+        expect_ok(syscall5(SYS_MOUNT, (long)loop_path, (long)loop_dir, (long)"ext2", MS_RDONLY, 0),
+                  "mounting a copy of the fixture");
+    }
+    expect_ok(syscall5(SYS_MOUNT, (long)node, (long)"/e2", (long)"ext2", 0, 0),
+              "mounting the fixture again");
+    read_through("/e2/lk-fill");
+    for (i = 0; i < LOOKUP_COPIES - 1; i++) {
+        copy_names(i);
+        read_through(loop_file);
+    }
+    copy_names(LOOKUP_COPIES - 1);
+    before = cache_counts();
+    read_through(loop_file);
+    after = cache_counts();
+    lookup_report("buffers=", after.buffers);
+    lookup_report("limit=", after.limit);
+    lookup_report("buckets=", after.buckets);
+    lookup_report("cap fills=", after.fills - before.fills);
+    lookup_report("cap gets=", (after.hits - before.hits) + (after.fills - before.fills));
+    lookup_report("cap visits=", after.visits - before.visits);
+    if (before.buffers != before.limit) {
+        fail_with("the cache is full before the last read", (int)before.buffers);
+    }
+    if (after.buffers != after.limit) {
+        fail_with("the cache is full", (int)after.buffers);
+    }
+    if (after.limit <= LOOKUP_FIRST_BUCKETS) {
+        fail_with("the cache's limit is past its first index", (int)after.limit);
+    }
+    if (after.buckets < after.limit) {
+        fail_with("the cache's index has a bucket for each buffer", (int)after.buckets);
+    }
+    if (after.fills - before.fills < after.limit / 8) {
+        fail_with("the read at the cap fills buffers", (int)(after.fills - before.fills));
+    }
+    if ((after.visits - before.visits) * 10 >
+        LOOKUP_FILL_TENTHS * ((after.hits - before.hits) + (after.fills - before.fills))) {
+        fail_with("a get at the cap reads few buffers", (int)(after.visits - before.visits));
+    }
+}
+
+/**
+ * Make LOOKUP_FILES files in /e2/lk, then look each up once with stat: each
+ * a lookup the name cache passes to ext2, since a name made is not cached,
+ * whose blocks are in the buffer cache, so that no block is read. The
+ * buffers each get reads and the nodes each lookup reads are judged.
+ */
+static void lookup_rows(void)
+{
+    static char path[] = "/e2/lk/f0000";
+    struct cache_counts before, after;
+    unsigned gets, lookups;
+    int i;
+
+    expect_ok(syscall2(SYS_MKDIR, (long)"/e2/lk", 0755), "making the lookup directory");
+    for (i = 0; i < LOOKUP_FILES; i++) {
+        path[8] = (char)('0' + i / 1000);
+        path[9] = (char)('0' + i / 100 % 10);
+        path[10] = (char)('0' + i / 10 % 10);
+        path[11] = (char)('0' + i % 10);
+        make_file(path, "making a file to look up");
+    }
+    before = cache_counts();
+    for (i = 0; i < LOOKUP_FILES; i++) {
+        path[8] = (char)('0' + i / 1000);
+        path[9] = (char)('0' + i / 100 % 10);
+        path[10] = (char)('0' + i / 10 % 10);
+        path[11] = (char)('0' + i % 10);
+        expect_stat(path, 0, "a lookup of a file made");
+    }
+    after = cache_counts();
+    gets = (after.hits - before.hits) + (after.fills - before.fills);
+    lookups = after.misses - before.misses;
+    lookup_report("lookups=", lookups);
+    lookup_report("gets=", gets);
+    lookup_report("fills=", after.fills - before.fills);
+    lookup_report("buffer visits=", after.visits - before.visits);
+    lookup_report("node visits=", after.nodes - before.nodes);
+    lookup_report("buffers=", after.buffers);
+    if (lookups < LOOKUP_FILES) {
+        fail_with("each lookup reaches ext2", (int)lookups);
+    }
+    if (gets < LOOKUP_FILES) {
+        fail_with("each lookup gets its blocks from the cache", (int)gets);
+    }
+    if (after.fills != before.fills) {
+        fail_with("a lookup with its blocks cached reads none", (int)(after.fills - before.fills));
+    }
+    if (after.buffers != after.limit) {
+        fail_with("the cache is full through the lookups", (int)after.buffers);
+    }
+    if ((after.visits - before.visits) * 10 > LOOKUP_WARM_TENTHS * gets) {
+        fail_with("a lookup's get reads few buffers", (int)(after.visits - before.visits));
+    }
+    if (after.nodes - before.nodes > LOOKUP_NODE_VISITS * lookups) {
+        fail_with("a lookup reads few of ext2's nodes", (int)(after.nodes - before.nodes));
+    }
+}
+
+/** Undo what the fill made: the copies' mounts, devices and files, and the
+ * tmpfs. The fixture's files go with the disk's copy. */
+static void lookup_clean(void)
+{
+    int i;
+
+    for (i = 0; i < LOOKUP_COPIES; i++) {
+        copy_names(i);
+        expect_ok(syscall2(SYS_UMOUNT2, (long)loop_dir, 0), "unmounting a copy");
+        loop_control(detach_line, "detaching a copy");
+        expect_ok(syscall1(SYS_UNLINK, (long)copy_path), "removing a copy");
+    }
+    expect_ok(syscall2(SYS_UMOUNT2, (long)"/lk", 0), "unmounting the copies' tmpfs");
+}
+
 /** Take the fixture's node from the first device of `loops=`, when it is
  * given, and its last component as `loop_name`. */
 static void take_loop(void)
@@ -1042,7 +1377,7 @@ void probe_main(unsigned long *sp)
 
     probe_args((int)sp[0], (char **)(sp + 1));
     mode = probe_word(1) != 0 ? probe_word(1) : "links";
-    writable = streq(mode, "cost") || streq(mode, "names");
+    writable = streq(mode, "cost") || streq(mode, "names") || streq(mode, "lookup");
     take_loop();
     syscall2(SYS_MKDIR, (long)"/e2", 0755);
     if (syscall5(SYS_MOUNT, (long)node, (long)"/e2", (long)"ext2",
@@ -1058,6 +1393,10 @@ void probe_main(unsigned long *sp)
         cost_rows();
     } else if (streq(mode, "names")) {
         names_rows();
+    } else if (streq(mode, "lookup")) {
+        lookup_fill();
+        lookup_rows();
+        lookup_clean();
     } else {
         fail("unknown mode");
     }
