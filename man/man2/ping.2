@@ -52,8 +52,10 @@ For example, 0x0a000202 denotes 10.0.2.2.
 An address in 127/8 is answered by this machine through the loopback ring.
 .Pp
 Operation 0x1001 takes three words: the address, the bytes of data the
-request carries, from 0 to 1472, each byte its offset in the data, as
+request carries, from 0 to 65507, each byte its offset in the data, as
 iputils fills them, and the hop limit, from 1 to 255.
+A request past 1472 bytes of data leaves in fragments, and its reply is
+reassembled.
 Operation 0x1000 sends no data with the hop limit 64.
 .Pp
 Operation 0x1002 sends an ICMPv6 echo request and takes four words: a
@@ -135,15 +137,14 @@ The hop limit of operation 0x1001 or 0x1002 is not 1 to 255, or a
 link-local IPv6 address names no interface on a machine with more than
 one card.
 .It Bq Er EMSGSIZE
-The data of operation 0x1001 is more than 1472 bytes, or that of
+The data of operation 0x1001 is more than 65507 bytes, or that of
 operation 0x1002 more than 65527.
 .It Bq Er ENETUNREACH
 No interface reaches the IPv6 address.
 .It Bq Er ENODEV
 The interface index of operation 0x1002 names no interface.
 .It Bq Er ENOMEM
-The kernel had no memory for a request of operation 0x1002 of more than
-1472 bytes of data.
+The kernel had no memory for a request of more than 1472 bytes of data.
 .It Bq Er ETIMEDOUT
 No matching reply arrived during the four attempts.
 Transmit errors are not returned separately by this operation.

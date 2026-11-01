@@ -36,12 +36,12 @@
 #include "netdb.h"    /* resolve_host */
 #include "pingcall.h" /* SYS_PINGCALL, SC_PING_DATA */
 
-/* The most data one request carries: over IPv4, a datagram of the 1500-byte
- * MTU less the 20-byte IPv4 header and the 8-byte ICMP header, since that
- * stack does not fragment; over IPv6, the largest payload less the ICMPv6
- * header, sent in fragments past one datagram. The kernel's limits are the
- * same (`ICMP_PING_DATA_MAX` and `ICMP6_PING_DATA_MAX`). */
-#define DATA_MAX  1472
+/* The most data one request carries: over IPv4, the largest datagram less
+ * the 20-byte IPv4 header and the 8-byte ICMP header; over IPv6, the largest
+ * payload less the ICMPv6 header. Either is sent in fragments past one
+ * datagram. The kernel's limits are the same (`ICMP_PING_DATA_MAX` and
+ * `ICMP6_PING_DATA_MAX`). */
+#define DATA_MAX  65507
 #define DATA_MAX6 65527
 
 #define USAGE                                                                                     \
@@ -461,9 +461,7 @@ int main(int argc, char **argv)
         return rc;
     }
     if (o.size > (to.v6 ? DATA_MAX6 : DATA_MAX)) {
-        fprintf(stderr,
-                "ping: local error: message too long, mtu=1500: this stack "
-                "does not fragment, so -s is at most %d\n",
+        fprintf(stderr, "ping: invalid packet size: -s is at most %d\n",
                 to.v6 ? DATA_MAX6 : DATA_MAX);
         return 2;
     }
