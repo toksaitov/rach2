@@ -40,6 +40,35 @@ What is left of the miss is no single bug. On the trial, clones with no new mapp
 
 `sleep(0.001)` met its bound with no room: the sleep ends at the first tick at or after its deadline (`sleep_for`, `syscall.c`), and a sleep that starts just after a tick, as each in a loop does, ends at the second tick after it. Going below 2 ms needs a one-shot timer.
 
+### Thread creation (task 30)
+
+Measured on 2026-11-02 at 01:43-01:49 (UTC+6) in QEMU 11.1.3 on the Mac, with TCG, one processor, `-cpu max` and 1024 MiB. Both architectures booted os-real, logged in, created and joined all 2,000 threads without an error, and powered off. The program is 23a's `thread_scaling.c` with every create and join checked, a report after each 500 creations, and an explicit stack size: 8 MiB on x86-64, as GNU libc uses on the Lenovo, and 256 KiB on i686, whose address space cannot hold 2,000 stacks of 8 MiB. It was linked statically against the ported musl, rebuilt with the milestone's condition-variable wake fallback. The first boots used an older libc and stopped in broadcast; their incomplete runs were stopped and excluded.
+
+The x86-64 comparison alternated three boots of the old kernel at `a9fd8db03` (SHA-256 `9960a016cfc74f72baa9cf757a32cb516291d33fd4f6ad9fa9b4f8c62c92aa84`) with three of task 30's implementation at `288895958` (`be81c9a71f882c993276801daf981644da6c6f32e60bb4cdc3017cc29e62700f`). No hardware was written.
+
+| 2,000 creations | Old kernel | Regions in a tree, cheaper clone |
+|---|---|---|
+| QEMU run 1 | 1.146106 s | 0.579632 s |
+| QEMU run 2 | 1.176432 s | 0.457495 s |
+| QEMU run 3 | 1.069933 s | 0.544135 s |
+| Median | 1.146106 s | 0.544135 s |
+| Last 500 creations, median | 0.371874 s | 0.115873 s |
+
+The new median is 0.475 of the old. Applying that ratio to 23a's Lenovo figure, 0.192 s, predicts 0.091 s for 2,000 creations. This is an estimate from emulation and a different C library, not a measurement on the Lenovo. The first and last 500 in the new runs have similar costs; the old runs grow with the regions already present. The i686 boot, kernel SHA-256 `4fe14139b7b5d55ee93e13cd41784cea759ba3023abe676c3d41a8313dda1597`, created all 2,000 in 0.535078 s and joined them in 0.718645 s.
+
+Two further x86-64 boots instrumented `do_fork` with `arch_cycles` at its stages. The averages after 2,000 clones were as follows; the counts include preemption and are a profile of the emulator, not hardware cycles on the Lenovo. Allocation includes reclaim, the user limit check, record allocation and the old clone's deletion of its initial stdio. The old profile's kernel hash is `5d1f1d521e326e031f02281736794205ad55ca503ba29fd91386eb35ab990492`, the new one's `a81333565b8dee3914c6b9bec5d4dd0763a66382e5831a5c6ce113edf9439764`; the instrumentation was removed after these boots.
+
+| Clone stage | Old counts per clone | New counts per clone |
+|---|---|---|
+| Record allocation and initial state | 102245 | 22170 |
+| Address-space reference and kernel stack | 28139 | 22864 |
+| Credentials, namespaces, TLS and FPU | 18260 | 5317 |
+| Shared files, directories and TID stores | 24361 | 9290 |
+| Signal state and return frame | 19903 | 3198 |
+| Trace handling and ready queue | 10135 | 5922 |
+
+The old allocation stage accounts for half of the measured clone cost. `alloc_process_fork` now starts without stdio and directly references the group and directories that a thread shares. Region insertion, removal and lookup use an AVL tree; ordered readers use iterators, and the covered byte count is maintained at each change instead of summed for each address-space limit check. Whole-region `mprotect` needs no spare node at the mapping limit. The VM host test passed with AddressSanitizer and UndefinedBehaviorSanitizer on the testing host for both architecture selections, including its new balance, stable-node, split, merge, limit and allocation-failure rows.
+
 ## IPv6 (task 23b)
 
 On 2026-11-02 between 00:24 and 00:40 (UTC+6) the x86-64 kernel of milestone/67-agents at d11e3ca53, `build/x86_64/rach2/kernel` of 2,318,312 bytes with SHA-256 `48ed7a65...`, was put in the candidate slot with `bootctl kernel` and booted once. The root was the installed release's, milestone 66's at 2dd8dd1b7 with the GNU system, whose kernel is `8b9611b2...`. That root writes no IPv6 stable secret at start-up and its BusyBox `ping` has no `-6`, so the steps used the GNU programs and Python's raw socket, and the secret was written by hand for the last step.

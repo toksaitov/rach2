@@ -431,14 +431,19 @@ mappings cover: 1 for a page in memory and 0 for one not yet brought in.
 The soft
 .Dv RLIMIT_AS
 limits the total bytes described by the process's VMAs.
-The VMA array grows as needed to at most
+The regions are kept in a balanced tree, with a default limit of
 .Dv VMA_LIMIT
-(65536) entries, including the program, heap and stack areas.
+(65536), including the program, heap and stack areas.
+The limit is read and written through
+.Pa /proc/sys/vm/max_map_count .
+Lowering it leaves existing regions in place, and a fork may copy them.
 Splitting an area for
 .Fn munmap
 can require an additional entry, and
 .Fn mprotect
 up to two.
+A protection change that cuts neither end of a region needs no additional
+entry and can succeed at or above the limit.
 .Pp
 On x86-64 the call is
 .Nm mmap
