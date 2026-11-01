@@ -63,7 +63,7 @@ Other values that differ:
 
 * `paging.h`: frames (`alloc_frame`, `alloc_user_frame`, `alloc_kernel_frame` for the DMA pool, `frame_ref`, `frame_unref`, `frame_free_count`), kernel mappings (`map_mmio`, `map_kernel_frame`, `premap_kernel_window`, `kmap_temp`), and user pages (`map_user_frame`, `unmap_user_range`, `paging_protect_range`, `paging_fork_copy`, `vm_prefault_range`, `paging_access`). [The architectures' Readme](../arch/Readme.md) lists what each `mmu.c` defines under this header.
 * `kheap.h`: `kmalloc`, `kzalloc` and `kfree`; `kalloc_pages`, `kalloc_cache_page` and `kfree_pages` for whole pages; `kalloc_guarded` and `kfree_guarded`.
-* `usercopy.h`: `copy_from_user`, `copy_to_user`, `strncpy_from_user`, `strnlen_user`, `get_user_u32` and `cmpxchg_user_u32`, through which a system call reaches a pointer marked `__user` (`sys/lib/kuser.h`).
+* `usercopy.h`: `copy_from_user`, `copy_to_user`, `strncpy_from_user`, `strnlen_user`, `get_user_u32` and `cmpxchg_user_u32`, through which a system call reaches a pointer marked `__user` (`sys/lib/kuser.h`), and `user_window_open` and `user_window_close`.
 * `mm.h` and `vm.h`: the address space, `struct mm`, and its regions, `vm_space_t`.
 * `filemap.h` and `shmem.h`: the files `mmap` maps, the calls a file's descriptors make so that the file and its shared mappings agree, and a file's bytes kept in frames.
 * `pressure.h`: `mem_balance`, `mem_reclaim`, `mem_may_take`, and the interrupt depth.
@@ -192,6 +192,8 @@ A file on ext2 that shared mappings map has a `struct dshare` with its pages in 
 ### Checked user access
 
 `copy_from_user` and `copy_to_user` (`usercopy.c`) check the range against the user range without overflow, then bring every page in with `vm_prefault_range` (`paging.c`), which resolves each page as a fault would and answers 0 for a page in no region or in one that does not allow the access; the call then returns EFAULT, and the kernel never faults on a bad user pointer. A resolution may sleep while another thread unmaps or protects a page already brought in, so once every page is in the range is checked again with nothing that sleeps, and brought in again when a page went. `strncpy_from_user` and `strnlen_user` bring pages in one at a time, since a string may end before a page that is legitimately unmapped. `get_user_u32` and `cmpxchg_user_u32`, which `sys/proc/futex.c` uses, make one load or one compare-and-exchange of an aligned word.
+
+A thread may open one window of kernel memory to these checks (`user_window_open`, closed by `user_window_close`): its base and length are in the thread's record (`uwin_base` and `uwin_len` in `proc/process.h`), and `user_range_ok` and `vm_prefault_range` take a range inside it as present user memory (`proc_window_covers`). The copies between descriptors open one on their buffer so that the read and write paths, which check every buffer as a user's, take it; Linux's `set_fs(KERNEL_DS)` once let `kernel_read` and `kernel_write` do the same for every kernel address. The window covers only that buffer, so a user pointer the same thread passes is checked as before.
 
 ### Memory pressure
 

@@ -30,6 +30,8 @@ A read wakes the write end's queue for room after each transfer, a write wakes t
 * The read end is readable (`POLLIN`) while data is buffered, and reports `POLLHUP` once no writer is left, whatever events were asked for. An empty pipe with no writer, whose read returns 0, reports `POLLHUP` alone; `select` counts it as readable. A FIFO reader opened with `O_NONBLOCK` and no writer reports no hangup until a writer has opened since that read open. Its description saves `write_opens`, so a new read open starts that wait again while older readers still report hangup.
 * The write end is writable (`POLLOUT`) while space is free or no reader is left, and reports `POLLERR` once no reader is left, whatever events were asked for.
 
+`splice`, `tee` and `sendfile` ([splice(2)](../../../man/man2/splice.2), [the file system layer](../fs/Readme.md#copies-between-descriptors)) use five more operations of a pipe end. `pipe_splice_write` is the write with the wait for room chosen by `SPLICE_F_NONBLOCK` as well as by the description, and `pipe_splice_room` waits for room before a copy reads its source. `pipe_splice_peek` copies buffered bytes into a kernel buffer without taking them, and `pipe_splice_consume` takes as many as were written, less any another reader took meanwhile, which it tells from `head`. `pipe_tee` copies from one ring to another, for `tee`, or moves, for a `splice` between pipes, with no sleep between the check of both rings and the copy.
+
 A poller waits on its end's queue; a FIFO opened for reading and writing is both ends, and its pollers wait on `rdwr_wq`, which every change of either end wakes (`pipe_wake`). `FIONREAD` reports the bytes buffered, `ioctl`'s common layer answers `FIONBIO`, and other requests are `ENOTTY`. `lseek` and `_llseek` fail with `ESPIPE`. `fstat` reports `S_IFIFO`, mode 0666, and an inode number that is nonzero and differs from every other live pipe's (`pipe_next_inode`), which `/proc/PID/fd` shows as `pipe:[inode]`.
 
 ### FIFOs
@@ -69,7 +71,8 @@ The `mqueue` file system (`vfs_mqueue_type`) lists the queues of the IPC namespa
 ## Limits
 
 * A pipe write is not atomic at any size: a blocking write copies what fits and then waits, so concurrent writers can interleave even writes of at most `PIPE_BUF` bytes (4096 in musl's `limits.h`), which POSIX requires to be atomic.
-* `F_SETPIPE_SZ` is `EINVAL`, and `pipe2` refuses `O_DIRECT`, Linux's packet mode. `splice` and `tee` fail with `EINVAL` ([splice(2)](../../../man/man2/splice.2)), and `vmsplice` is not registered.
+* `F_SETPIPE_SZ` is `EINVAL`, and `pipe2` refuses `O_DIRECT`, Linux's packet mode. `splice` copies bytes where Linux moves pages, and reads no socket; `vmsplice` is not registered.
+* A `splice` from a pipe that another reader drains while the splice's write sleeps writes bytes that reader also takes, so a byte can go out twice; none is lost.
 * Nothing collects descriptors in flight, so a socket sent over itself and never received is not reclaimed. `MSG_OOB` is `EOPNOTSUPP`.
 * The 64 places of each System V table are shared by every IPC namespace. `msgrcv` with `MSG_COPY` is `ENOSYS`, and `SHM_LOCK` and `SHM_UNLOCK` do nothing.
 * `mq_notify` refuses `SIGEV_THREAD`. An `open` with `O_CREAT` in the `mqueue` file system makes no queue, and a queue's owner and mode do not change through its file.

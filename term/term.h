@@ -126,7 +126,7 @@ struct term_pty {
  * /bin/login when `login` is set, or else the shell SHELL names, /bin/sh
  * when it is unset. The master is close-on-exec and nonblocking.
  *
- * A master reads end of file while no slave is open, so the call returns
+ * A master reads end of file until a slave first opens, so the call returns
  * only once the child has opened its slave and executed the program; it
  * returns the program's exec error, negated, when that failed, having
  * reaped the child. On any error `pty` holds no descriptor and no child.
