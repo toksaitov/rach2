@@ -1,11 +1,12 @@
-.Dd October 1, 2026
+.Dd November 1, 2026
 .Dt SPLICE 2
 .Os
 .Sh NAME
 .Nm splice ,
 .Nm tee ,
-.Nm sendfile
-.Nd copy between descriptors, which this kernel leaves to read and write
+.Nm sendfile ,
+.Nm copy_file_range
+.Nd copy between descriptors in the kernel
 .Sh SYNOPSIS
 .In fcntl.h
 .Ft ssize_t
@@ -15,67 +16,186 @@
 .In sys/sendfile.h
 .Ft ssize_t
 .Fn sendfile "int out_fd" "int in_fd" "off_t *offset" "size_t count"
+.In unistd.h
+.Ft ssize_t
+.Fn copy_file_range "int fd_in" "off_t *off_in" "int fd_out" "off_t *off_out" "size_t len" "unsigned int flags"
 .Sh DESCRIPTION
-On Linux these move data from one descriptor to another without copying it
-through the caller.
-This kernel moves no data between two descriptors itself: once both
-descriptors are open, each call fails with
-.Er EINVAL ,
-as Linux fails for descriptors it cannot splice or send from, and the
-caller copies through
+These calls move bytes from one descriptor to another without copying
+them through the caller.
+Linux moves pages; this kernel copies through a buffer of its own, 32 KiB
+at a time, by the same paths
 .Xr read 2
 and
 .Xr write 2
-instead.
-GNU grep, for one, drains a pipe it has read enough of with
+take, so a destination behaves as it does for a write: a file's offset,
+size limit and set-ID bits, a socket's
+.Dv O_NONBLOCK ,
+a pipe's readers.
+A call that has moved a byte stops at a signal and returns the count.
+Each count is at most 2147479552 bytes, as for
+.Xr read 2 .
+.Pp
 .Fn splice
-when its output is
-.Pa /dev/null ,
-and reads the pipe after an
+moves up to
+.Fa len
+bytes between two descriptors of which at least one is a pipe.
+From a pipe to a pipe the bytes go from ring to ring.
+From a pipe to anything else they are written as
+.Xr write 2
+writes them, and only the bytes written leave the pipe, so a short or
+failed write leaves the rest there.
+From a regular file to a pipe it reads what fits in the pipe.
+For the side that is a regular file, a non-null
+.Fa off_in
+or
+.Fa off_out
+gives the offset to read or write at, which the call moves past the bytes
+and which leaves the description's offset alone; a null one uses the
+description's offset and moves it.
+A pipe end waits for bytes or for room, before the first byte only,
+unless
+.Dv SPLICE_F_NONBLOCK
+is given or its description has
+.Dv O_NONBLOCK ;
+the call then fails with
+.Er EAGAIN
+instead.
+.Dv SPLICE_F_MOVE ,
+.Dv SPLICE_F_MORE
+and
+.Dv SPLICE_F_GIFT
+are taken and change nothing.
+A source other than a pipe or a regular file, a socket among them, is
 .Er EINVAL ,
-which it takes for a descriptor of the wrong kind, where any other error
-would be its read's.
+where Linux reads a socket.
+.Pp
+.Fn tee
+copies up to
+.Fa len
+bytes from one pipe to another and leaves them in the first, waiting as
+.Fn splice
+does.
+.Pp
+.Fn sendfile
+copies up to
+.Fa count
+bytes of the regular file open on
+.Fa in_fd
+to
+.Fa out_fd ,
+which may be any descriptor open for writing: a socket, a file, a pipe or
+a terminal.
+A non-null
+.Fa offset
+gives the offset to read at and is moved past the bytes sent; a null one
+uses the input's offset and moves it.
+A pipe takes what fits in it.
+.Pp
+.Fn copy_file_range
+copies up to
+.Fa len
+bytes from one regular file to another, with offsets as
+.Fn splice
+has them for a file, and stops at the end of the input.
+.Fa flags
+must be 0.
+No file system here shares extents between files, so every copy is the
+generic one Linux falls back to, between any two mounts.
 .Pp
 The i386 system call numbers are 313 for
 .Fn splice ,
-with the descriptors in EBX and EDX, 315 for
+315 for
 .Fn tee ,
-and 187 for
+187 for
 .Fn sendfile
-and 239 for
-.Fn sendfile64 ,
-with the output descriptor in EBX and the input in ECX.
-.Pp
-On x86-64
-.Nm sendfile
-(40) takes a 64-bit offset, and there is no
+with a 32-bit offset and 239 for
+.Fn sendfile64
+with a 64-bit one, and 377 for
+.Fn copy_file_range .
+musl's
+.Fn sendfile
+uses 239.
+On x86-64 they are 275, 276, 40 and 326, every offset is 64 bits, and
+there is no
 .Nm sendfile64 .
 .Sh RETURN VALUES
-Each call returns -1 with
+Each call returns the bytes moved, 0 for a length of 0, for an empty pipe
+with no writer left and for an input offset at or past the end of a
+file, or -1 with
 .Va errno
 set; the kernel returns the negative error number.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/musl/callsmusl.c
-calls
-.Fn splice
-from a pipe to
-.Pa /dev/null ,
+moves a pipe's bytes to
+.Pa /dev/null
+and a file's bytes from an offset into a pipe with
+.Fn splice ,
+copies a pipe's bytes to another with
 .Fn tee
-and
+and finds them still in the first, sends a file to an
+.Dv AF_UNIX
+socket and to a file with
 .Fn sendfile ,
-and requires
-.Er EINVAL
-of each and
-.Er EBADF
-of a closed descriptor.
+and copies a file's bytes into another with
+.Fn copy_file_range .
 .Sh ERRORS
-.Bl -tag -width "[EINVAL]"
+.Bl -tag -width "[EOVERFLOW]"
+.It Bq Er EAGAIN
+A pipe end would wait, with
+.Dv SPLICE_F_NONBLOCK
+or
+.Dv O_NONBLOCK ,
+or a socket output has
+.Dv O_NONBLOCK
+and no room.
 .It Bq Er EBADF
-One of the descriptors is not open.
+A descriptor is not open, was opened with
+.Dv O_PATH ,
+or is not open for its direction; for
+.Fn copy_file_range ,
+also an output with
+.Dv O_APPEND .
+.It Bq Er EFAULT
+An offset cannot be read or written.
+.It Bq Er EINTR
+A signal came before a byte moved.
 .It Bq Er EINVAL
-Both descriptors are open; the kernel copies between none.
+A flag is unknown, neither
+.Fn splice
+descriptor is a pipe, both are one pipe, a
+.Fn tee
+descriptor is no pipe, a source is not a regular file or a pipe, an
+offset is below 0 or is given for an output that does not seek, or an
+output of
+.Fn splice
+or
+.Fn sendfile
+has
+.Dv O_APPEND ;
+for
+.Fn copy_file_range ,
+also ranges of one file that overlap.
+.It Bq Er EISDIR
+A
+.Fn copy_file_range
+descriptor is a directory.
+.It Bq Er ENOMEM
+The kernel has no room for the buffer.
+.It Bq Er EOVERFLOW
+The 32-bit offset of i386's
+.Fn sendfile
+is at 2147483647, or a
+.Fn copy_file_range
+range passes the largest offset.
+.It Bq Er EPIPE
+A pipe output has no reader left;
+.Dv SIGPIPE
+is sent too.
+.It Bq Er ESPIPE
+An offset is given for a pipe.
 .El
 .Sh SEE ALSO
+.Xr pipe 2 ,
 .Xr read 2 ,
 .Xr write 2
