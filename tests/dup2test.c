@@ -346,7 +346,7 @@ static void invalid_rows(void)
         failed++;
     }
 
-    /* Test 5: dup2 onto a number past the table's limit of 1024 fails */
+    /* Test 5: dup2 onto a number past the soft limit of 1024 fails */
     begin_row();
     print_stderr("Test 5: dup2(1, 2000) with invalid newfd... ");
     result = sys_dup2(STDOUT_FILENO, 2000);
