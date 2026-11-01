@@ -584,6 +584,7 @@ struct vchan_reader {
     struct vchan_reader *next;
     int running;
     uint32_t phase;  /* output rate accumulated against the input rate */
+    uint32_t skip;   /* frames in flight before this reader joined */
     uint32_t at;     /* input position when this reader started */
     uint32_t frames; /* frames handed to this reader since its start */
     uint32_t used;   /* bytes staged, less than its period */
@@ -597,6 +598,7 @@ static struct {
     audio_driver_t *hw;
     int running;
     int loopback;
+    uint32_t frames; /* hardware input frames already handed to the readers */
     struct spinlock lock;
 } input;
 
@@ -647,7 +649,9 @@ static void vchan_capture_feed(audio_stream_t *s, uint8_t *buf, size_t size)
     for (r = input.list; r; r = r->next) {
         if (!r->running)
             continue;
-        for (i = 0; i < n; i++) {
+        i = r->skip < n ? r->skip : n;
+        r->skip -= i;
+        for (; i < n; i++) {
             vchan_frame(s, buf + i * frame, sample);
             r->phase += r->s->rate;
             while (r->phase >= s->rate) {
@@ -670,6 +674,7 @@ static void vchan_capture_feed(audio_stream_t *s, uint8_t *buf, size_t size)
             }
         }
     }
+    input.frames += n;
     spin_unlock_irqrestore(&input.lock, flags);
 }
 
@@ -788,10 +793,14 @@ static int vchan_capture_start(audio_stream_t *s)
         return -EIO;
     r->at = input.running && !input.loopback ? input.hw->stream_position(&input.stream) : 0;
     flags = spin_lock_irqsave(&input.lock);
+    if (input.running && !input.loopback && (int32_t)(input.frames - r->at) > 0)
+        r->at = input.frames;
+    r->skip = input.running && !input.loopback ? r->at - input.frames : 0;
     r->running = 1;
     r->phase = r->frames = r->used = 0;
     spin_unlock_irqrestore(&input.lock, flags);
     if (!input.running) {
+        input.frames = 0;
         input.running = 1;
         rc = input.loopback ? vchan_start(&input.clock) : input.hw->stream_start(&input.stream);
         if (rc != 0) {
