@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "family_id": "machine.termconsole",
-  "summary": "term as the console session of a GRUB disk whose menu carries rach2.console=term, under UEFI and under BIOS on a framebuffer: the login typed at term's screen, term's answers to the agents' probes, Doom inside term, and the kernel console's login after term is killed, under tests/cases/machine/termconsole_scenario.c",
+  "summary": "term as the console session of a GRUB disk whose menu carries rach2.console=term, under UEFI and under BIOS on a framebuffer: the login typed at term's screen, term's answers to the agents' probes, the colors after the alternate screen, Doom inside term, and the kernel console's login after term is killed, under tests/cases/machine/termconsole_scenario.c",
   "cases": [
     {
       "case_id": "machine.termconsole.uefi",
-      "behavior": "OVMF boots the disk, init starts term -l on the firmware's framebuffer, which draws the login prompt in libtsm's colors and not the kernel console's; root logs in with keys pressed through QMP; a child of the shell sends DA1, XTVERSION, DECRQM 2026 and the Kitty query and writes term's replies to /dev/console; Doom started inside term takes the screen and gives it back to term when killed; term killed with SIGKILL gives the console back to the kernel, whose login init starts at once",
+      "behavior": "OVMF boots the disk, init starts term -l on the firmware's framebuffer, which draws the login prompt in libtsm's colors and not the kernel console's; root logs in with keys pressed through QMP; a child of the shell sends DA1, XTVERSION, DECRQM 2026 and the Kitty query and writes term's replies to /dev/console; a clear after leaving the alternate screen with a color scheme's SGR still set erases in libtsm's default colors; Doom started inside term takes the screen and gives it back to term when killed; term killed with SIGKILL gives the console back to the kernel, whose login init starts at once",
       "units": ["init", "term", "libtsm", "fbdev", "kd", "doom"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -22,6 +22,8 @@
          "does": "boot the disk through OVMF, wait for init's start of term on COM1, dump the screen through QMP until term's grid shows the login prompt, and log in as root by keys pressed through QMP, each prompt read off the screen"},
         {"step_id": "probes", "stage": "execute", "machine": "uefi",
          "does": "type the line that sends the four probes in raw mode, reads the replies up to DA1's and writes them to /dev/console with ESC as E, and read them on COM1"},
+        {"step_id": "colors", "stage": "execute", "machine": "uefi",
+         "does": "type the line that enters the alternate screen, sets the foreground and background vim's blue color scheme sets, leaves the alternate screen with them set, homes the cursor, clears the screen and echoes a mark, and dump the screen until term's grid shows the mark"},
         {"step_id": "doom", "stage": "execute", "machine": "uefi",
          "does": "type the line that starts Doom in the background, says on COM1 when its first frame is drawn and waits for a key read from /dev/console; dump the screen, press space, wait for the game to be gone, and dump the screen until term has drawn it again"},
         {"step_id": "fallback", "stage": "execute", "machine": "uefi",
@@ -41,6 +43,7 @@
         {"assertion_id": "decrqm", "checks": "COM1 shows term's DECRQM reply for mode 2026, CSI ? 2026 ; a state $ y", "source": "scenario"},
         {"assertion_id": "kitty", "checks": "COM1 shows term's reply to the Kitty query, CSI ? flags u", "source": "scenario"},
         {"assertion_id": "da1", "checks": "COM1 shows term's DA1 reply, CSI ? 62 ; 22 c, last of the four", "source": "scenario"},
+        {"assertion_id": "colors", "checks": "once the mark is on term's grid, the screen dump has libtsm's default foreground, 229,229,229, and its middle pixel, a blank cell's, has libtsm's default background, 0,0,0, and not color 18's 0,0,135, which the line left set: mode 1049's reset restored the attributes its set saved", "source": "scenario"},
         {"assertion_id": "wad", "checks": "the game reported its first frame, so the disk has /demo/doom1.wad, which its root stages from ports/doom/doom1.wad", "source": "scenario"},
         {"assertion_id": "doom", "checks": "the screen dumped once the game has reported its first frame has the framebuffer's size and more than 64 colors, so the game took the screen from term", "source": "scenario"},
         {"assertion_id": "doom-back", "checks": "once the game has gone, a screen dump has the framebuffer's size, at most 64 colors and libtsm's default foreground, so term drew its screen again", "source": "scenario"},
@@ -50,7 +53,7 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
       ],
       "bounds": {
         "case": {"floor_us": 5000000, "initial_us": 1200000000, "ceiling_us": 3600000000},
@@ -74,7 +77,7 @@
     },
     {
       "case_id": "machine.termconsole.bios",
-      "behavior": "SeaBIOS boots the same disk, GRUB sets the mode the video BIOS prefers, init starts term -l on that framebuffer, root logs in by keys at term's screen, term answers the four probes, and term killed with SIGKILL gives the console back to the kernel, whose login init starts at once",
+      "behavior": "SeaBIOS boots the same disk, GRUB sets the mode the video BIOS prefers, init starts term -l on that framebuffer, root logs in by keys at term's screen, term answers the four probes, a clear after the alternate screen erases in libtsm's default colors, and term killed with SIGKILL gives the console back to the kernel, whose login init starts at once",
       "units": ["init", "term", "libtsm", "fbdev", "kd", "grub"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -91,6 +94,8 @@
          "does": "boot the disk through SeaBIOS and GRUB's default entry, wait for init's start of term on COM1, dump the screen through QMP until term's grid shows the login prompt, and log in as root by keys pressed through QMP, each prompt read off the screen"},
         {"step_id": "probes", "stage": "execute", "machine": "bios",
          "does": "type the line that sends the four probes in raw mode, reads the replies up to DA1's and writes them to /dev/console with ESC as E, and read them on COM1"},
+        {"step_id": "colors", "stage": "execute", "machine": "bios",
+         "does": "type the line that enters the alternate screen, sets the foreground and background vim's blue color scheme sets, leaves the alternate screen with them set, homes the cursor, clears the screen and echoes a mark, and dump the screen until term's grid shows the mark"},
         {"step_id": "fallback", "stage": "execute", "machine": "bios",
          "does": "type killall -KILL term, wait for init's report of the signal, dump the screen until the kernel console shows its login prompt, log in as root on COM1 and power off"}
       ],
@@ -108,13 +113,14 @@
         {"assertion_id": "decrqm", "checks": "COM1 shows term's DECRQM reply for mode 2026, CSI ? 2026 ; a state $ y", "source": "scenario"},
         {"assertion_id": "kitty", "checks": "COM1 shows term's reply to the Kitty query, CSI ? flags u", "source": "scenario"},
         {"assertion_id": "da1", "checks": "COM1 shows term's DA1 reply, CSI ? 62 ; 22 c, last of the four", "source": "scenario"},
+        {"assertion_id": "colors", "checks": "once the mark is on term's grid, the screen dump has libtsm's default foreground, 229,229,229, and its middle pixel, a blank cell's, has libtsm's default background, 0,0,0, and not color 18's 0,0,135, which the line left set: mode 1049's reset restored the attributes its set saved", "source": "scenario"},
         {"assertion_id": "killed", "checks": "init says on COM1 that term was killed by signal 9 and that the login is on the kernel console", "source": "scenario"},
         {"assertion_id": "console-login", "checks": "a screen dump shows the kernel console's grid, as screentext reads it, with a line that begins rach2 login:, and root logs in on COM1", "source": "scenario"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
       ],
       "bounds": {
         "case": {"floor_us": 5000000, "initial_us": 1200000000, "ceiling_us": 3600000000},
