@@ -71,7 +71,7 @@ static unsigned long now_ms(void)
 static void usage(void)
 {
     fprintf(stderr, "usage: wsimrelay [-d device] [-b address] [-l port] [-n number] [-s dbm] "
-                    "[-t ms] peer port\n");
+                    "[-t ms] peer peer-port\n");
     exit(2);
 }
 

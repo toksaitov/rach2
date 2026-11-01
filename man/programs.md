@@ -47,6 +47,7 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `wpa_cli` | [wpa_cli(8)](man8/wpa_cli.8) | hostap |  | yes |
 | `wpa_passphrase` | [wpa_passphrase(8)](man8/wpa_passphrase.8) | hostap |  | yes |
 | `wpa_supplicant` | [wpa_supplicant(8)](man8/wpa_supplicant.8) | hostap |  | yes |
+| `wsimrelay` | [wsimrelay(8)](man8/wsimrelay.8) | in-house |  |  |
 | `zzz` | [zzz(8)](man8/zzz.8) | in-house |  | yes |
 
 os-real stages `doom` only when the build has made it.

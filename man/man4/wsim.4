@@ -1,0 +1,108 @@
+.Dd November 2, 2026
+.Dt WSIM 4
+.Os
+.Sh NAME
+.Nm wsim
+.Nd the software Wi-Fi radio and its medium
+.Sh SYNOPSIS
+.Pa /dev/wsim
+.Pp
+.Cd rach2.wsim=N
+.Sh DESCRIPTION
+A software radio is a 2.4 GHz Wi-Fi radio that the kernel's station layer
+drives as it drives a chip, as Linux's
+.Sy mac80211_hwsim
+is for mac80211.
+It sends and receives whole 802.11 frames, with no FCS, and has no key
+slots, so that the station encrypts and decrypts in software.
+Its medium is a program that opens
+.Pa /dev/wsim ,
+reads the frames the radio sends and writes the frames it receives, such as
+.Xr wsimrelay 8 .
+.Pp
+Each open of
+.Pa /dev/wsim
+gives the descriptor one radio, wsim
+.Ar N ,
+which the station layer registers as a phy with a wlan interface: the
+lowest-numbered
+radio the boot line made that no descriptor carries, or else a new one,
+removed again at the descriptor's last close.
+.Cd rach2.wsim=N ,
+.Ar N
+from 1 to 4, makes radios wsim0 to wsim
+.Ar N Ns \-1
+at boot, which stay when their descriptors close and refuse frames while
+none carries them.
+A machine has at most four radios, the registry's four interfaces.
+Radio
+.Ar N
+has the address 02:77:73:00:00:
+.Ar N ,
+channels 1 to 14 before the regulatory rules, the legacy rates from 1 to
+54 Mbit/s, and HT MCS 0 to 7 at 20 MHz with a short guard interval.
+.Ss Records
+A
+.Xr read 2
+gives one frame the radio sent, and a
+.Xr write 2
+takes one record, each a record of version 1 of the relay format, which
+the wireless Readme defines: a 40-byte header of big-endian fields, then
+the frame.
+.Pp
+A frame the radio sent has its radio number, the flag TX, NO_ACK when no
+acknowledgement was asked or the frame is group addressed, the channel's
+frequency in MHz, the first rate of its series, as 100 kbit/s or an MCS
+index with the MCS flag, and a nonzero cookie of the radio's own.
+A read waits for one unless the descriptor is non-blocking.
+.Pp
+A frame written is received by the radio if it is running and tuned to
+the record's frequency, and its filters pass it: a unicast frame only for
+its own address and a control frame only when the station asks for them,
+unless the radio is promiscuous.
+Its signal is the record's, in dBm, and its TSF the record's, or the
+radio's own when the record gives 0.
+The write returns the record's length for a frame received, and 0 for one
+the radio did not receive, whether stopped, elsewhere, filtered, or with
+its receive queue full: that is the medium losing a frame, not an error.
+.Pp
+A transmit status written completes the frame of its cookie once, with
+one outcome: ACKED, NO_ACK or FAILED, and the attempts made, 0 when
+unknown.
+A frame that waits for its status when the radio stops, or when its
+descriptor closes, fails.
+.Pp
+.Xr poll 2
+reports the device readable while a frame waits, and always writable.
+.Ss Requests
+.Bl -tag -width WSIM_IOC_INFO
+.It Dv WSIM_IOC_INFO
+0x80107701, fills a
+.Vt struct wsim_info
+of sixteen bytes in the host's order: the radio number and the frequency
+it is tuned to, 0 before the first, as two 16-bit integers; its six-byte
+address; a byte that is 1 while the station runs it; a byte of its
+receive filters; and four zero bytes.
+.El
+.Pp
+The device is root's to open, mode 0600.
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EAGAIN
+A non-blocking read with no frame waiting.
+.It Bq Er EINVAL
+A read into a buffer smaller than the next record, which stays; a written
+record that the format refuses, names another radio, or has a frequency,
+rate or MCS the radio lacks.
+.It Bq Er ENODEV
+An open before the station layer is up.
+.It Bq Er ENOENT
+A status whose cookie names no frame that waits.
+.It Bq Er ENOSPC
+An open while four radios are carried.
+.It Bq Er ENOTTY
+Another ioctl.
+.El
+.Sh SEE ALSO
+.Xr ioctl 2 ,
+.Xr wsimrelay 8

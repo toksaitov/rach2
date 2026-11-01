@@ -20,6 +20,7 @@ A program's options and behavior are in its manual page, linked below. This sect
 
 * [ndwatch(8)](../man/man8/ndwatch.8) follows an interface's routers for the DNS servers their RDNSS and DNSSL options give, which it hands to the resolver merge, `krffs/resolv.script`, and for the M and O flags, for which it starts BusyBox's `udhcpc6`. `init-metal` and `init-recovery` run it for `eth0` and `wlan0`; the images that run them stage it.
 * [wifi(1)](../man/man1/wifi.1) scans for Wi-Fi networks and joins, lists and forgets them through wpa_supplicant's control socket, and pins an enterprise network's server certificate on the first connection, after showing its fingerprint and before any password is sent.
+* [wsimrelay(8)](../man/man8/wsimrelay.8) carries a software radio's frames between `/dev/wsim` and a peer over UDP, so that the radio shares a medium with another machine's radios or the Linux guest's access points, which is how the Wi-Fi tests run without a chip. os-real and the GNU root stage it.
 
 `dhcpc` and `netup` are os-simple's counterparts of BusyBox's `udhcpc` and `ifup`, so one description of a network serves both images.
 
@@ -80,7 +81,7 @@ The manifests in `krffs/manifests/` choose. They give the i686 paths under `buil
 
 ### Two output directories
 
-`utils/Makefile` builds the programs of `UTILITIES` into `build/utils/` and those of `SBIN_PROGS` into `build/utils/sbin/`; for x86-64 the directories are `build/x86_64/utils/` and `build/x86_64/utils/sbin/`. os-simple stages the first with one `exec-dir` line, which takes the executable regular files directly in the directory and none below it (`stage_exec_dir` in `krffs/stageimage.krffs.c`). The second has the four inits, the account programs and `bootctl`, so each reaches an image only by a `file` line of its own. The set-id guard, `tools/inspect/setidcheck.c`, checks each set-id file, each trusted file and the staged init of a manifest against its entry in `tools/inspect/setid.allow`. Before it builds, the Makefile deletes every file in either directory that is neither a listed program nor its `.d` file, so a program dropped from the lists or renamed is not staged from an old binary.
+`utils/Makefile` builds the programs of `UTILITIES` into `build/utils/` and those of `SBIN_PROGS` into `build/utils/sbin/`; for x86-64 the directories are `build/x86_64/utils/` and `build/x86_64/utils/sbin/`. os-simple stages the first with one `exec-dir` line, which takes the executable regular files directly in the directory and none below it (`stage_exec_dir` in `krffs/stageimage.krffs.c`). The second has the four inits, the account programs, `bootctl` and `wsimrelay`, so each reaches an image only by a `file` line of its own. The set-id guard, `tools/inspect/setidcheck.c`, checks each set-id file, each trusted file and the staged init of a manifest against its entry in `tools/inspect/setid.allow`. Before it builds, the Makefile deletes every file in either directory that is neither a listed program nor its `.d` file, so a program dropped from the lists or renamed is not staged from an old binary.
 
 ### One source, several programs
 
@@ -108,8 +109,9 @@ The manifests in `krffs/manifests/` choose. They give the i686 paths under `buil
 | `grubslot.c` | `bootctl` | lays out the GRUB core window and replaces the image in it |
 | `sectorcopy.c` | `reflash` | copies a declared length from a stream onto whole sectors |
 | `sha256.c` | `reflash` | SHA-256, for `reflash --verify` |
+| `wsimmedium.c` | `wsimrelay` | checks and rewrites the relay format's records between a software radio and its peer, answers the peer's frames and fails sent frames whose status does not come |
 
-Each is a file of its own, apart from the program's `main`, so that a host test can compile it alone and give it what a disk, a server or a person does not produce on request: a damaged FAT, a malformed lease, a stream that stops early. `bootslot.c`, `grubslot.c` and `sectorcopy.c` do their I/O through callbacks the caller supplies, which the programs bind to a device and the host tests to an image in memory, where a write can be dropped, torn or stopped. The contract of each is in its header. The credential transaction's is in `pwauth.h`, and the lock as an administrator meets it is in [passwd(5)](../man/man5/passwd.5).
+Each is a file of its own, apart from the program's `main`, so that a host test can compile it alone and give it what a disk, a server or a person does not produce on request: a damaged FAT, a malformed lease, a stream that stops early, a peer that never answers. `bootslot.c`, `grubslot.c` and `sectorcopy.c` do their I/O through callbacks the caller supplies, which the programs bind to a device and the host tests to an image in memory, where a write can be dropped, torn or stopped. The contract of each is in its header. The credential transaction's is in `pwauth.h`, and the lock as an administrator meets it is in [passwd(5)](../man/man5/passwd.5).
 
 Programs outside `utils/` use these sources too. `tools/inspect/growset.c` includes `growset.c`, so the plan made on the host and the grow on the recovery system compute one set of sectors. `tools/image/grubembed.c` links `grubslot.c` to lay out the GRUB window of the disks the build makes. The guest probe `tests/dnstest.c` links `resolv.c`, and six programs in `tests/musl/` link `pwauth.c`.
 
@@ -164,7 +166,7 @@ make -C utils -f Makefile.linux
 
 A suite below runs as `tests/run NAME`.
 
-* `host` builds 27 host tests from these sources under AddressSanitizer and UndefinedBehaviorSanitizer, each `tests/host/NAME_hosttest.c`: `accounttools`, `bootctl`, `bootslot`, `bootverb`, `dhcpc`, `dhcpmsg`, `diskctl`, `file_read`, `gptdisk`, `growroot`, `grubembed`, `grubslot`, `httpd`, `initpolicy`, `ncport`, `ncwrite`, `netcfg`, `netcfg_io`, `netup`, `pwauth`, `pwauthatexit`, `pwauthfault`, `resolv`, `rm`, `sectorcopy`, `sha256` and `wifi`. Several include a program's whole source and replace the calls that reach the kernel, such as the ioctls of `dhcpc` and `diskctl`.
+* `host` builds 28 host tests from these sources under AddressSanitizer and UndefinedBehaviorSanitizer, each `tests/host/NAME_hosttest.c`: `accounttools`, `bootctl`, `bootslot`, `bootverb`, `dhcpc`, `dhcpmsg`, `diskctl`, `file_read`, `gptdisk`, `growroot`, `grubembed`, `grubslot`, `httpd`, `initpolicy`, `ncport`, `ncwrite`, `netcfg`, `netcfg_io`, `netup`, `pwauth`, `pwauthatexit`, `pwauthfault`, `resolv`, `rm`, `sectorcopy`, `sha256`, `wifi` and `wsim`. Several include a program's whole source and replace the calls that reach the kernel, such as the ioctls of `dhcpc` and `diskctl`.
 * `default` runs the test image's probes of `sudo` (`tests/sudoprobe.c`) and of `su`, `passwd`, `adduser`, `adduser-crash` and `login` (`tests/musl/pwauthmusl.c`, `passwdmusl.c`, `addusermusl.c` and `loginmusl.c`), and of `ndwatch` (`tests/musl/ndwatchmusl.c`), which requires it to refuse an advertisement whose hop limit is not 255 and to go on after its netlink socket overflows.
 * `login` requires `init-login` on an image without `/bin/login` to refuse the console, and `init-shell` to give a root shell.
 * `account` logs in at os-simple's console with `login`, makes an account with `adduser`, becomes it with `su` and changes a password with `passwd`.

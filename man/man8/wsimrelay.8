@@ -1,0 +1,97 @@
+.Dd November 2, 2026
+.Dt WSIMRELAY 8
+.Os
+.Sh NAME
+.Nm wsimrelay
+.Nd carry a software radio's frames to a peer over UDP
+.Sh SYNOPSIS
+.Nm
+.Op Fl d Ar device
+.Op Fl b Ar address
+.Op Fl l Ar port
+.Op Fl n Ar number
+.Op Fl s Ar dbm
+.Op Fl t Ar ms
+.Ar peer
+.Ar peer-port
+.Sh DESCRIPTION
+.Nm
+opens
+.Pa /dev/wsim ,
+which gives it a software radio
+.Pq Xr wsim 4 ,
+and joins that radio to the radios of a peer in one medium: another
+.Nm ,
+on this machine or another, or the relay of a Linux guest whose
+.Sy mac80211_hwsim
+radios run hostapd.
+It runs in the foreground until
+.Dv SIGTERM
+or
+.Dv SIGINT ,
+and then prints what it carried.
+.Pp
+Each frame the radio sends goes to
+.Ar peer
+at
+.Ar peer-port
+in one UDP datagram of version 1 of the relay format, which the kernel's
+wireless Readme defines, and the peer's transmit status of it comes back
+to the radio.
+A frame with no status within the timeout fails, as one lost on the air
+does.
+Each frame from the peer goes to the radio, which receives it if it is
+running, tuned to the frame's channel and its filters pass it, with the
+signal
+.Fl s
+gives.
+.Nm
+answers the peer with the frame's status: no acknowledgement when none was
+asked or the frame is group addressed, acknowledged when the radio
+received a frame addressed to it, and failed otherwise.
+Datagrams from any address and port but the peer's are ignored.
+.Pp
+Two relays on one machine join two of its radios, for checks that need
+no Linux guest:
+.Bd -literal -offset indent
+wsimrelay -l 5550 127.0.0.1 5551 &
+wsimrelay -l 5551 127.0.0.1 5550 &
+.Ed
+.Pp
+The options:
+.Bl -tag -width Ds
+.It Fl d Ar device
+The device, by default
+.Pa /dev/wsim .
+.It Fl b Ar address
+The IPv4 address to bind, by default every address.
+Between machines it is the address of a second card that
+.Pa /etc/network/interfaces
+and ifplugd leave alone, so that the medium outlasts a cable pulled
+from eth0.
+.It Fl l Ar port
+The UDP port to bind, by default 5550.
+.It Fl n Ar number
+The number the peer knows the radio by, by default 0.
+.It Fl s Ar dbm
+The signal of frames from the peer, from \-100 to \-1 dBm, by default
+\-50, as
+.Sy mac80211_hwsim
+reports.
+.It Fl t Ar ms
+How long a frame waits for the peer's status, from 1 to 60000
+milliseconds, by default 1000.
+.El
+.Sh EXIT STATUS
+0 after a signal, 1 when the device, the socket or the radio fails, and 2
+for a usage error.
+.Sh DIAGNOSTICS
+At the start
+.Nm
+prints the radio's name and address, the peer and the port it bound, as
+.Ql wsimrelay: wsim0 02:77:73:00:00:00: relaying to 127.0.0.1:5551 from 0.0.0.0:5550 ;
+at the end the frames sent, the peer's frames received, the frames failed
+for want of a status and the records refused.
+.Sh SEE ALSO
+.Xr wsim 4 ,
+.Xr wpa_supplicant 8
