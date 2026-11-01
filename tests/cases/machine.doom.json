@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.doom",
-  "summary": "The Doom port runs on a disk root: it refuses without its WAD, draws, plays a demo to its end and records one",
+  "summary": "The Doom port runs on a disk root: it refuses without its WAD, draws, plays a demo to its end and records one, and plays its sound through /dev/dsp on HDA and on the SB16",
   "cases": [
     {
       "case_id": "machine.doom.game",
@@ -56,6 +56,96 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "image", "reason": "the case boots a disk root of its own whose shell is root's on the console, and moves the game's WAD away"}
+    },
+    {
+      "case_id": "machine.doom.sound-hda",
+      "behavior": "on an Intel HDA controller the Doom port plays demo1 to its end with its effects and music on /dev/dsp, whose queue after each update of the game's sound stays within six periods, the driver's buffer and the port's two",
+      "units": ["doom", "audio"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"card": "hda", "demo": "demo1", "most_periods": 6}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "doom_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["doom-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the copy to its root shell and look for the WAD"},
+        {"step_id": "sound", "stage": "execute", "does": "play demo1 to its end, read the queue of /dev/dsp from the game's last report, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["doom-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.fsdisk"], "audio": "hda", "audio_backend": "none"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "wad", "checks": "the disk has /demo/doom1.wad, which its image stages from ports/doom/doom1.wad", "source": "scenario"},
+        {"assertion_id": "demo-exit", "checks": "demo1 played to its end quits with status 0", "source": "scenario"},
+        {"assertion_id": "dsp", "checks": "the game's last report has the queue of /dev/dsp, so the game played its sound there, with samples queued after its last update", "source": "scenario"},
+        {"assertion_id": "queue", "checks": "the most samples the report counts queued after an update are at most six of its periods, the driver's buffer and the port's two", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 3600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1200000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "doom-disk", "node": "images/doom-test.disk", "per_architecture": true},
+        {"name": "doom_scenario", "node": "tests/cases/machine/doom_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case boots a disk root of its own whose shell is root's on the console, on a sound card that QEMU gives"}
+    },
+    {
+      "case_id": "machine.doom.sound-sb16",
+      "behavior": "on a Sound Blaster 16 the Doom port plays demo1 to its end with its effects and music on /dev/dsp, whose queue after each update of the game's sound stays within six periods, the driver's buffer and the port's two",
+      "units": ["doom", "audio"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"card": "sb16", "demo": "demo1", "most_periods": 6}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "doom_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["doom-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "execute", "machine": "fixture", "does": "boot the copy to its root shell and look for the WAD"},
+        {"step_id": "sound", "stage": "execute", "does": "play demo1 to its end, read the queue of /dev/dsp from the game's last report, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["doom-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.fsdisk", "rach2.nonet"], "audio": "sb16", "audio_backend": "none"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "wad", "checks": "the disk has /demo/doom1.wad, which its image stages from ports/doom/doom1.wad", "source": "scenario"},
+        {"assertion_id": "demo-exit", "checks": "demo1 played to its end quits with status 0", "source": "scenario"},
+        {"assertion_id": "dsp", "checks": "the game's last report has the queue of /dev/dsp, so the game played its sound there, with samples queued after its last update", "source": "scenario"},
+        {"assertion_id": "queue", "checks": "the most samples the report counts queued after an update are at most six of its periods, the driver's buffer and the port's two", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 900000000, "ceiling_us": 3600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 600000000, "ceiling_us": 1200000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 134217728, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "doom-disk", "node": "images/doom-test.disk", "per_architecture": true},
+        {"name": "doom_scenario", "node": "tests/cases/machine/doom_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "image", "reason": "the case boots a disk root of its own whose shell is root's on the console, on a sound card that QEMU gives"}
     }
   ]
 }

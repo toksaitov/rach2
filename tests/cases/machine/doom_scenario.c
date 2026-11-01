@@ -2,8 +2,10 @@
  * doom_scenario.c: the scenario of machine.doom, in which a root shell on a
  * disk root runs the Doom port: without its WAD, in the background until it
  * has drawn its first frame, playing a demo to its end, and recording a
- * demo until its buffer fills. The game's own report of its frames and the
- * demo's end are the witnesses that it drew and went on drawing.
+ * demo until its buffer fills; and of machine.doom.sound-hda and -sb16, in
+ * which the game plays a demo with its sound on /dev/dsp. The game's own
+ * report of its frames, its sound queue and the demo's end are the witnesses
+ * that it drew, went on drawing and kept its sound near the present.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -44,8 +46,21 @@ static const char record_line[] =
     " echo REC\"\"MODE=$(stat -c %a /tmp/rec.lmp 2>/dev/null || echo none);"
     " echo REC\"\"DONE\r";
 
+/* The demo with sound: the queue of /dev/dsp in the game's last report, as
+ * the samples after the last update, the most after any, and the period. */
+static const char sound_line[] =
+    "cd /tmp && doom -playdemo demo1 > /tmp/sound.txt 2>&1; echo DEMO\"\"EXIT=$?;"
+    " echo Q\"\"UEUE=$(sed -n 's/.*; dsp queue \\([0-9]*\\) samples, the most"
+    " \\([0-9]*\\), period \\([0-9]*\\)$/\\1,\\2,\\3/p' /tmp/sound.txt | tail -n 1);"
+    " echo SOUND\"\"DONE\r";
+
 /* The least zone the game may take from a machine of 128 MiB, in bytes. */
 #define LEAST_ZONE (10L * 1024 * 1024)
+
+/* The most periods the queue of /dev/dsp may hold after an update: the
+ * driver's own, at most four on HDA and on the SB16, and the two the game
+ * keeps in the device's buffer. */
+#define MOST_PERIODS 6
 
 /**
  * Type `line` at the shell and wait for its marker `mark`; `*from` is set
@@ -215,6 +230,53 @@ static void record(struct lc *l, struct etude_case_machine *m, uint64_t *at)
     lc_quit(l, m, NULL);
 }
 
+/**
+ * Play the first demo with sound, and judge the queue of /dev/dsp in the
+ * game's last report.
+ */
+static void sound(struct lc *l, struct etude_case_machine *m, uint64_t *at)
+{
+    static const char *const ids[] = {"demo-exit", "dsp", "queue", NULL};
+    uint64_t from;
+    long last = -1, most = -1, period = -1;
+    char detail[200];
+
+    if (!lc_step(l, "sound"))
+        return;
+    if (!run(l, m, at, &from, sound_line, "SOUNDDONE")) {
+        missed(l, ids);
+        return;
+    }
+    expect(l, "demo-exit", "DEMOEXIT=", from, "0", "the demo played to its end exited");
+    if (!lc_text(l, console, "QUEUE=", from, detail, sizeof(detail)) ||
+        sscanf(detail, "%ld,%ld,%ld", &last, &most, &period) != 3)
+        last = most = period = -1;
+    snprintf(detail, sizeof(detail),
+             "the game's last report has %ld samples queued on /dev/dsp after its last update,"
+             " of periods of %ld",
+             last, period);
+    lc_assert(l, "dsp", last > 0 && period > 0, detail);
+    snprintf(detail, sizeof(detail),
+             "the most samples queued after an update are %ld, where %d periods of %ld are %ld",
+             most, MOST_PERIODS, period, MOST_PERIODS * period);
+    lc_assert(l, "queue", period > 0 && most >= last && most <= MOST_PERIODS * period, detail);
+    lc_quit(l, m, NULL);
+}
+
+/** The scenario of the cases of sound, machine.doom.sound-hda and -sb16. */
+static int sound_scenario(struct etude_case *c)
+{
+    static const char *const ids[] = {"wad", "demo-exit", "dsp", "queue", NULL};
+    struct etude_case_machine *m;
+    uint64_t at = 0;
+    struct lc l;
+
+    lc_begin(&l, c, ids);
+    if ((m = boot(&l, &at)) != NULL)
+        sound(&l, m, &at);
+    return lc_finish(&l);
+}
+
 int etude_scenario(struct etude_case *c)
 {
     static const char *const ids[] = {
@@ -224,6 +286,9 @@ int etude_scenario(struct etude_case *c)
     uint64_t at = 0;
     struct lc l;
 
+    if (strcmp(etude_case_id(c), "machine.doom.sound-hda") == 0 ||
+        strcmp(etude_case_id(c), "machine.doom.sound-sb16") == 0)
+        return sound_scenario(c);
     if (strcmp(etude_case_id(c), "machine.doom.game") != 0)
         return 1;
     lc_begin(&l, c, ids);
