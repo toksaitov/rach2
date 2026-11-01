@@ -437,14 +437,37 @@ typedef char ar9300_eeprom_size_is_1088[sizeof(struct ar9300_eeprom) == 1088 ? 1
 
 /* Transmit: the four access categories' queues, each a ring of frames of
  * which at most ATH9K_TX_FIFO_DEPTH are in the chip's FIFO at once
- * (ath9k's ATH_TXFIFO_DEPTH), the status ring's entries
- * (ATH_TXSTATUS_RING_SIZE) and the attempts a frame gets over its four
- * series (ATH_TXMAXTRY). */
+ * (ath9k's ATH_TXFIFO_DEPTH), and the attempts a frame gets over its four
+ * series (ATH_TXMAXTRY). The chip writes one status per frame, so at most
+ * ATH9K_TX_QUEUES * ATH9K_TX_FIFO_DEPTH are unread at once; the status ring
+ * holds twice that in one page, where ath9k's ATH_TXSTATUS_RING_SIZE of 512
+ * would need five contiguous ones. A frame's copy, with its padding, IV and
+ * MIC, takes half a page. */
 #define ATH9K_TX_QUEUES     4
 #define ATH9K_TX_RING       64
 #define ATH9K_TX_FIFO_DEPTH 8
-#define ATH9K_TXS_RING      512
+#define ATH9K_TXS_RING      64
 #define ATH9K_TX_MAX_TRIES  13
+#define ATH9K_TX_BUF_LEN    2048
+
+/* The DMA memory the driver asks for, a page at a time. */
+#define ATH9K_DMA_PAGE 4096
+
+/* The receive filter's bits, which AR_RX_FILTER takes (mac.h's
+ * enum ath9k_rx_filter). */
+#define ATH9K_RX_FILTER_UCAST           0x00000001
+#define ATH9K_RX_FILTER_MCAST           0x00000002
+#define ATH9K_RX_FILTER_BCAST           0x00000004
+#define ATH9K_RX_FILTER_CONTROL         0x00000008
+#define ATH9K_RX_FILTER_BEACON          0x00000010
+#define ATH9K_RX_FILTER_PROM            0x00000020
+#define ATH9K_RX_FILTER_PROBEREQ        0x00000080
+#define ATH9K_RX_FILTER_PHYERR          0x00000100
+#define ATH9K_RX_FILTER_MYBEACON        0x00000200
+#define ATH9K_RX_FILTER_COMP_BAR        0x00000400
+#define ATH9K_RX_FILTER_PSPOLL          0x00004000
+#define ATH9K_RX_FILTER_MCAST_BCAST_ALL 0x00008000
+#define ATH9K_RX_FILTER_CONTROL_WRAPPER 0x00080000
 
 /* The noise floor's history (calib.h's NUM_NF_READINGS, the control and
  * extension readings of three chains, and ATH9K_NF_CAL_HIST_MAX). */
@@ -695,7 +718,7 @@ struct ath9k_ani {
 
 /* One receive FIFO's buffers, in the order pushed to the chip. */
 struct ath9k_rx_fifo {
-    uint8_t *buf[ATH9K_RX_LP_DEPTH]; /* ATH9K_RX_BUF_LEN bytes each */
+    uint8_t *buf[ATH9K_RX_LP_DEPTH]; /* a page each, ATH9K_RX_BUF_LEN used */
     uint32_t bus[ATH9K_RX_LP_DEPTH]; /* their bus addresses */
     unsigned depth;                  /* ATH9K_RX_HP_DEPTH or _LP_DEPTH */
     unsigned head;                   /* the oldest buffer the chip holds */
@@ -705,17 +728,21 @@ struct ath9k_rx_fifo {
 /* recv.c's: the high- and low-priority FIFOs (ath9k's ath_rx_edma). */
 struct ath9k_rx {
     struct ath9k_rx_fifo fifo[2]; /* [0] high priority, [1] low */
-    unsigned filters;             /* the WLAN_FILTER_* in force */
+    unsigned filters;             /* the WLAN_FILTER_* asked for, kept while stopped */
+    uint32_t hw_filter;           /* the ATH9K_RX_FILTER_* those make */
     uint8_t running;
+    uint8_t discard[2]; /* dropping the rest of a frame that spans buffers */
+    uint32_t tsf_high;  /* the TSF's upper half at the last service */
+    uint32_t tsf_low;   /* and its lower half, to extend a status's stamp */
 };
 
 /* A frame given to a queue, from its acceptance to its status. */
 struct ath9k_tx_slot {
     struct ar9003_txc *desc; /* its descriptor */
     uint32_t desc_bus;
-    uint8_t *buf; /* a copy of the frame, with room for IV and MIC */
+    uint8_t *buf; /* ATH9K_TX_BUF_LEN bytes: the frame, padded after its header */
     uint32_t buf_bus;
-    unsigned len;
+    unsigned len; /* the frame's length as the station gave it */
     struct wlan_tx_info info;
 };
 
@@ -723,10 +750,11 @@ struct ath9k_tx_slot {
 struct ath9k_txq {
     struct ath9k_tx_slot slot[ATH9K_TX_RING];
     unsigned qnum;
-    unsigned head;   /* the oldest frame not yet completed */
-    unsigned count;  /* frames accepted and not completed */
-    unsigned queued; /* of those, frames pushed to the chip's FIFO */
-    uint64_t oldest; /* worker tick at which the head was pushed */
+    unsigned head;    /* the oldest frame not yet completed */
+    unsigned count;   /* frames accepted and not completed */
+    unsigned queued;  /* of those, frames pushed to the chip's FIFO */
+    uint8_t inflight; /* the last hang check saw frames pushed (ath9k's
+                       * axq_tx_inprogress); a status clears it */
 };
 
 /* xmit.c's: the queues and the status ring. */
@@ -735,38 +763,54 @@ struct ath9k_tx {
     struct ar9003_txs *status;           /* ATH9K_TXS_RING entries */
     uint32_t status_bus;
     unsigned status_index; /* the next entry the chip will write */
+    uint8_t running;       /* frames are pushed to the chip */
 };
 
 /* mac.c's: the interrupt mask and the PCU's settings. */
 struct ath9k_mac {
-    uint32_t imask; /* AR_IMR bits enabled */
+    uint32_t imask;  /* AR_IMR bits enabled */
+    uint32_t imask2; /* AR_IMR_S2 bits enabled */
     uint8_t bssid[6];
-    uint16_t aid;
-    uint8_t slot_time; /* microseconds */
+    uint16_t aid;             /* 0 while not associated */
+    uint16_t beacon_interval; /* TU; 0 while the beacon timers are off */
+    uint8_t dtim_period;
+    uint8_t msi;      /* the card sends messages; AR_PCIE_MSI is set */
+    uint32_t msi_reg; /* AR_PCIE_MSI as read before it is enabled */
 };
 
 /* A key the cache holds, kept to write back after a reset. */
 struct ath9k_key {
-    uint8_t used;
+    uint8_t used; /* ATH9K_KEY_* */
     uint8_t type; /* AR_KEYTABLE_TYPE_* */
     uint8_t peer[6];
     uint8_t key[16];
-    uint8_t mic[16]; /* TKIP's transmit and receive MIC keys */
+    uint8_t mic[16]; /* TKIP: the receive MIC key, then the transmit one */
 };
 
-/* key.c's: the cache's 128 entries (AR_KEY_CACHE_SIZE). */
+#define ATH9K_KEY_FREE 0
+#define ATH9K_KEY_USED 1
+#define ATH9K_KEY_MIC  2 /* the MIC half of the TKIP key at this index - 64 */
+
+/* key.c's: the cache's 128 entries (AR_KEY_CACHE_SIZE). The first
+ * AR_RSVD_KEYTABLE_ENTRIES are the group keys by key index, as ath9k
+ * keeps them in a station; a TKIP key at index i has its MIC keys at i + 64. */
 struct ath9k_keys {
     struct ath9k_key entry[AR_KEY_CACHE_SIZE];
 };
 
-/* recover.c's: what the hang checks compare between runs. */
+/* recover.c's: what the hang checks compare between runs, and the reset
+ * the interrupt handler asks the worker for. */
 struct ath9k_recover {
-    uint64_t last_rx;      /* worker tick of the last frame received */
-    uint32_t rx_frames;    /* frames received at the last check */
-    uint32_t bb_state;     /* the baseband's state at the last check */
-    uint8_t bb_same;       /* checks in a row that found it unchanged */
+    uint64_t window;       /* the tick the receive window began */
+    uint32_t rx_active;    /* services that found receive work in it */
+    uint32_t bb_status;    /* AR_PHY_WATCHDOG_STATUS at the last watchdog */
     uint8_t resetting;     /* a reset is running; interrupts are ignored */
+    uint8_t failures;      /* resets in a row that failed */
+    uint8_t running;       /* the hang check is queued */
+    uint8_t pending;       /* reset_work is queued for `reason` */
+    uint8_t reason;        /* enum ath9k_reset_reason */
     struct wlan_work work; /* the periodic hang check */
+    struct wlan_work reset_work;
 };
 
 /* antenna.c's: LNA combining and diversity (ath9k.h's ath_ant_comb). */
@@ -819,6 +863,8 @@ struct ath9k_stats {
     uint32_t rx_decrypt;
     uint32_t rx_mic;
     uint32_t rx_overrun;
+    uint32_t rx_dropped; /* good frames the station could not take */
+    uint32_t tick_work;  /* services the tick found work for */
     uint32_t tx_frames;
     uint32_t tx_failed;
     uint32_t tx_retries;
@@ -1056,8 +1102,23 @@ void ath9k_ani_monitor(struct ath9k *ah);
 
 /* mac.c */
 
-/** Set up the QCU and DCU of each data queue, and the status ring. Worker,
- * within a reset. */
+/**
+ * One zeroed page of memory the card reaches by DMA, ATH9K_DMA_PAGE bytes,
+ * page-aligned and below 4 GiB, with its bus address in *bus; NULL when
+ * none is free. Attach. The kernel's is mac.c's; a host test, which builds
+ * mac.c with RACH2_HOSTTEST, gives its own that the model's dma hook maps.
+ */
+void *ath9k_dma_alloc(struct ath9k *ah, uint32_t *bus);
+
+/** Give back a page of ath9k_dma_alloc. */
+void ath9k_dma_free(struct ath9k *ah, void *page);
+
+/**
+ * Set up the DMA engines, the QCU and DCU of each data queue, the status
+ * ring and the interrupt masks, as ath9k's ath9k_hw_set_dma,
+ * ath9k_hw_resettxqueue and ath9k_hw_init_interrupt_masks do. Worker,
+ * within a reset, after the chip is reset and before receive starts.
+ */
 void ath9k_mac_init_queues(struct ath9k *ah);
 
 /** Push the descriptor chain at `bus` to queue `qnum`'s FIFO and start it.
@@ -1092,6 +1153,19 @@ void ath9k_mac_set_bssid(struct ath9k *ah, const uint8_t bssid[6], unsigned aid)
 void ath9k_mac_intr_enable(struct ath9k *ah);
 void ath9k_mac_intr_disable(struct ath9k *ah);
 
+/** The TSF, read as ath9k_hw_gettsf64 does: the upper half on both sides
+ * of the lower, until they agree. */
+uint64_t ath9k_mac_get_tsf(struct ath9k *ah);
+
+/**
+ * Start the station's beacon timers for a beacon every `interval` TU and a
+ * DTIM every `dtim_period` beacons, as ath9k_cmn_beacon_config_sta and
+ * ath9k_hw_set_sta_beacon_timers do, with the beacon-miss interrupt after
+ * ten missed beacons; an interval of 0 stops them. Worker, while
+ * associated; a reset starts them again from mac.beacon_interval.
+ */
+void ath9k_mac_set_beacon_timers(struct ath9k *ah, unsigned interval, unsigned dtim_period);
+
 /* recv.c */
 
 /** Allocate the receive buffers. Attach. -ENOMEM. */
@@ -1105,6 +1179,10 @@ int ath9k_rx_stop(struct ath9k *ah);
 /** Hand each completed buffer of FIFO `hp` to wlan_radio_rx and give it
  * back to the chip. Interrupt. Returns the frames delivered. */
 unsigned ath9k_rx_service(struct ath9k *ah, int hp);
+
+/** The length of the 802.11 header of a frame whose frame control is
+ * `fc`, after which the chip pads to 4 bytes both ways. */
+unsigned ath9k_header_len(unsigned fc);
 
 /* xmit.c */
 
@@ -1120,8 +1198,13 @@ int ath9k_tx(struct ath9k *ah, const uint8_t *frame, unsigned len, const struct 
 unsigned ath9k_tx_service(struct ath9k *ah);
 
 /** Report every accepted frame as failed and empty the queues, after the
- * DMA is stopped. Worker. */
+ * DMA is stopped; refuse frames until ath9k_mac_init_queues. Worker. */
 void ath9k_tx_drain(struct ath9k *ah);
+
+/** The radio.band.rates index of the chip's rate code `code`, or its MCS
+ * index with WLAN_RATE_MCS in *flags, and WLAN_RATE_SHORT_PREAMBLE for a
+ * CCK rate with a short preamble; -1 for a rate the band lacks. */
+int ath9k_rate_index(const struct ath9k *ah, unsigned code, uint8_t *flags);
 
 /* key.c */
 
@@ -1138,14 +1221,21 @@ void ath9k_key_restore(struct ath9k *ah);
 
 /* intr.c */
 
-/** Take a vector and enable MSI, or fall back to the tick. Attach. */
+/** Take a vector and enable MSI, or leave the card to the tick, which
+ * bus.vector 0 records. Attach, after bus.dev is set. Returns 0 either way. */
 int ath9k_intr_attach(struct ath9k *ah);
+
+/** Disable MSI and give the vector back. Process context, after the radio
+ * is stopped. */
+void ath9k_intr_detach(struct ath9k *ah);
 
 /** Serve the chip's interrupt causes: receive, transmit, beacon miss, and
  * the fatal causes, which ask recover.c for a reset. Interrupt. */
 void ath9k_intr(struct ath9k *ah);
 
-/** The tick's service of the rings when no message arrives. Interrupt. */
+/** The tick's service: the whole handler on a card without messages,
+ * and the rings alone, counted in stats.tick_work when they held work, on
+ * one with them. pci.c calls it from the timer tick. Interrupt. */
 void ath9k_tick(struct ath9k *ah);
 
 /* recover.c */
@@ -1157,9 +1247,21 @@ int ath9k_reset(struct ath9k *ah, enum ath9k_reset_reason why);
 /** Ask the worker for a reset, from interrupt context. */
 void ath9k_reset_schedule(struct ath9k *ah, enum ath9k_reset_reason why);
 
-/** Start the periodic hang check; stop it. Worker. */
+/** Start the periodic hang check; stop it and any reset asked for.
+ * Worker, after radio.wlan is set; ath9k_recover_stop may sleep and is
+ * not called from the check itself. */
 void ath9k_recover_start(struct ath9k *ah);
 void ath9k_recover_stop(struct ath9k *ah);
+
+/** Arm the baseband watchdog's interrupt, as ar9003_hw_bb_watchdog_config
+ * does; the end of every ath9k_hw_reset calls it, since the reset's tables
+ * clear it. Worker. */
+void ath9k_recover_watchdog(struct ath9k *ah);
+
+/** Run the hang checks once, as the periodic work does: a hung MAC, a
+ * queue with no status since the last check, and a receive path silent
+ * for a window. Returns the reason of the reset it did, or -1. Worker. */
+int ath9k_hang_check(struct ath9k *ah);
 
 /* antenna.c */
 
