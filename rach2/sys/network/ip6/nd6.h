@@ -108,7 +108,9 @@ int nd6_conf_get(int which, int key, int32_t *value);
  * write changes happens at once: disabling IPv6 takes every address of the
  * interface away, `lo`'s ::1 among them, and enabling it again gives back
  * ::1 or a card's link-local address and solicits routers; forwarding on
- * stops the solicitations and joins ff02::2. Takes net_lock.
+ * stops the solicitations and joins ff02::2. Writing forwarding,
+ * disable_ipv6 or use_tempaddr of `all` writes it of `default` and of every
+ * interface too. Takes net_lock.
  */
 int nd6_conf_set(int which, int key, int32_t value);
 

@@ -368,7 +368,8 @@ int nd6_conf_set(int which, int key, int32_t value)
         return 0;
     }
     c->v[key] = value;
-    if (which == ND6_CONF_ALL && (key == ND6_FORWARDING || key == ND6_DISABLE_IPV6)) {
+    if (which == ND6_CONF_ALL &&
+        (key == ND6_FORWARDING || key == ND6_DISABLE_IPV6 || key == ND6_USE_TEMPADDR)) {
         conf_default.v[key] = value;
         for (i = 0; i < netdev_listed() && i < NETDEV_MAX + 1; i++) {
             if_set(netdev_at(i), key, value);
