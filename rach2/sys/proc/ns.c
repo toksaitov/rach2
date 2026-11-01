@@ -43,6 +43,9 @@
 #define CLONE_THREAD  0x00010000u
 #define CLONE_SYSVSEM 0x00040000u
 
+int ns_overflowuid = NS_OVERFLOW_ID;
+int ns_overflowgid = NS_OVERFLOW_ID;
+
 struct userns init_userns = {
     {1, 0xEFFFFFFDu, NS_USER, NULL}, NULL, 0, 0, 0, {{0, 0, 0xFFFFFFFFu}}, 1,
     {{0, 0, 0xFFFFFFFFu}},           1,    0};
@@ -211,7 +214,7 @@ uint32_t ns_uid_from_kernel(const struct userns *ns, uint32_t kid)
             return ns->uid_map[i].first + (kid - ns->uid_map[i].lower);
         }
     }
-    return NS_OVERFLOW_ID;
+    return (uint32_t)ns_overflowuid;
 }
 
 uint32_t ns_gid_from_kernel(const struct userns *ns, uint32_t kid)
@@ -226,7 +229,7 @@ uint32_t ns_gid_from_kernel(const struct userns *ns, uint32_t kid)
             return ns->gid_map[i].first + (kid - ns->gid_map[i].lower);
         }
     }
-    return NS_OVERFLOW_ID;
+    return (uint32_t)ns_overflowgid;
 }
 
 /** Whether one of the `n` extents of `map` covers the kernel's id `kid`. */

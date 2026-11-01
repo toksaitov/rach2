@@ -184,10 +184,13 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * reader's UTS namespace, whose texts procfs reads when the file is opened;
  * the limits of System V IPC (ipc/sysv.c), which util-linux's ipcs reads;
  * IPv4 forwarding, which this stack does not do; the limits of POSIX message
- * queues (ipc/mqueue.c); and the swap's weight and the overcommit policy at
+ * queues (ipc/mqueue.c); the swap's weight and the overcommit policy at
  * Linux's defaults, 60 and 0, which scripts read and nothing here acts on,
- * there being no swap. A new entry goes at the end, so that the indices
- * SYNTH_SYS_ names stay the same. */
+ * there being no swap; the regions a process may map (mm/vm.h); the ids an
+ * unmapped id reads as (proc/ns.h); and the boot's UUID and a new one for
+ * each open. An entry whose text is empty is procfs's, which reads its
+ * value when the file is opened. A new entry goes at the end, so that the
+ * indices SYNTH_SYS_ names stay the same. */
 static const struct {
     int parent;
     const char *name;
@@ -195,9 +198,9 @@ static const struct {
 } sysents[] = {{-1, "sys", 0},
                {0, "fs", 0},
                {1, "inotify", 0},
-               {2, "max_queued_events", "16384\n"},
-               {2, "max_user_instances", "128\n"},
-               {2, "max_user_watches", "8192\n"},
+               {2, "max_queued_events", ""},
+               {2, "max_user_instances", ""},
+               {2, "max_user_watches", ""},
                {0, "kernel", 0},
                {6, "ostype", "Linux\n"},
                {6, "osrelease", "6.18.0-rach2\n"},
@@ -223,7 +226,13 @@ static const struct {
                {23, "queues_max", "256\n"},
                {0, "vm", 0},
                {29, "overcommit_memory", "0\n"},
-               {29, "swappiness", "60\n"}};
+               {29, "swappiness", "60\n"},
+               {29, "max_map_count", ""},
+               {6, "overflowgid", ""},
+               {6, "overflowuid", ""},
+               {6, "random", 0},
+               {35, "boot_id", ""},
+               {35, "uuid", ""}};
 
 int synth_sys_count(void)
 {
@@ -233,7 +242,9 @@ int synth_sys_count(void)
 int synth_sys_writable(int entry)
 {
     return entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME ||
-           entry == SYNTH_SYS_IP_FORWARD;
+           entry == SYNTH_SYS_IP_FORWARD ||
+           (entry >= SYNTH_SYS_INOTIFY_QUEUED && entry <= SYNTH_SYS_INOTIFY_WATCHES) ||
+           (entry >= SYNTH_SYS_MAX_MAP_COUNT && entry <= SYNTH_SYS_OVERFLOWUID);
 }
 
 /* The files of /proc/net after the first four, by origin and name. */

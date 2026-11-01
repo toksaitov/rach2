@@ -218,20 +218,32 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap);
 
 /*
  * /proc/sys: a few of Linux's sysctl files, in a table of entries, of which
- * kernel/hostname, kernel/domainname and net/ipv4/ip_forward take a write.
- * Entry 0 is /proc/sys itself; every other entry has its directory as a
- * `parent` entry, and a file has its text. Each accessor answers NULL or -1
- * for an index past the table.
+ * those `synth_sys_writable` names take a write. Entry 0 is /proc/sys
+ * itself; every other entry has its directory as a `parent` entry, and a
+ * file has its text, empty for one whose value procfs reads. Each accessor
+ * answers NULL or -1 for an index past the table.
  */
 
 /** The number of entries of the table. */
 int synth_sys_count(void);
 /* The entries of kernel/hostname and domainname, whose texts are the names
  * of the moment, which procfs reads, and not the table's. */
-#define SYNTH_SYS_HOSTNAME   11
-#define SYNTH_SYS_DOMAINNAME 12
+#define SYNTH_SYS_HOSTNAME          11
+#define SYNTH_SYS_DOMAINNAME        12
 /* The entry of net/ipv4/ip_forward, which takes a write of 0. */
-#define SYNTH_SYS_IP_FORWARD 22
+#define SYNTH_SYS_IP_FORWARD        22
+/* The entries of fs/inotify's max_queued_events, max_user_instances and
+ * max_user_watches, of vm/max_map_count, of kernel/overflowgid and
+ * overflowuid, and of kernel/random's boot_id and uuid, whose values procfs
+ * reads from the variables of their owners or makes. */
+#define SYNTH_SYS_INOTIFY_QUEUED    3
+#define SYNTH_SYS_INOTIFY_INSTANCES 4
+#define SYNTH_SYS_INOTIFY_WATCHES   5
+#define SYNTH_SYS_MAX_MAP_COUNT     32
+#define SYNTH_SYS_OVERFLOWGID       33
+#define SYNTH_SYS_OVERFLOWUID       34
+#define SYNTH_SYS_BOOT_ID           36
+#define SYNTH_SYS_UUID              37
 /** Whether a privileged caller may write the file entry `entry`. */
 int synth_sys_writable(int entry);
 

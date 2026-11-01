@@ -20,16 +20,15 @@
 #include "../lib/kint.h"
 #include "../lib/kdef.h"
 
-/* Policy: the regions a process may hold at most. A process's regions are an
- * array in the heap that starts at VMA_FIRST entries and doubles as it
- * fills; at the limit a further mapping answers ENOMEM, the bound Linux
- * keeps as max_map_count. An entry is 24 bytes, so a process at the limit
- * holds a megabyte and a half of them. A program starts with a region or
- * two per loaded segment, its file's pages and the anonymous rest, and one
- * for its stack, and the heap's comes with its first brk; the rest are
- * anonymous mmaps, which is what a C library's allocator reaches for, one
- * per large allocation. `tests/musl/vmamusl.c` takes three hundred of them,
- * past the sixteen the array starts with. */
+/* Policy: the regions a process may hold at most, by default. A process's
+ * regions are an array in the heap that starts at VMA_FIRST entries and
+ * doubles as it fills; at the limit, `vm_max_map_count`, a further mapping
+ * answers ENOMEM, as Linux's max_map_count bounds it. An entry is 24 bytes, so a process at the
+ * limit holds a megabyte and a half of them. A program starts with a region or two per loaded
+ * segment, its file's pages and the anonymous rest, and one for its stack, and the heap's comes
+ * with its first brk; the rest are anonymous mmaps, which is what a C library's allocator reaches
+ * for, one per large allocation. `tests/musl/vmamusl.c` takes three hundred of them, past the
+ * sixteen the array starts with. */
 #define VMA_LIMIT 65536
 #define VMA_FIRST 16
 
@@ -129,6 +128,11 @@ extern int randomize_va_space;
 
 /** Gap candidates examined since boot, modulo 2^32, under the big lock. */
 uint32_t vm_gap_steps(void);
+
+/* vm.max_map_count: the regions a process may hold, VMA_LIMIT at boot. A
+ * change that would take a process past it fails, as one past VMA_LIMIT
+ * did; a process already past a value written keeps what it has. */
+extern int vm_max_map_count;
 
 /** Reset an address space to empty, dropping the files its regions map;
  * the array it has, if any, is kept, and the heap's start, the break, the

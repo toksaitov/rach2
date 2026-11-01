@@ -55,6 +55,14 @@ struct open_file;
 /* How many watches the machine has; every hook does nothing while it is 0. */
 extern int inotify_watches;
 
+/* fs.inotify, at Linux's defaults: the instances and the watches one user
+ * may have, and the events an instance may queue before the next one is
+ * lost and an IN_Q_OVERFLOW takes its place. A value written below what a
+ * user or a queue holds takes nothing away; it refuses the next. */
+extern int inotify_max_user_instances;
+extern int inotify_max_user_watches;
+extern int inotify_max_queued_events;
+
 /** An event of the file `ino` of `mnt` itself, to its own watches: IN_ISDIR
  * is added for a watch of a directory. */
 void inotify_file(struct vfs_mount *mnt, uint64_t ino, uint32_t mask);
@@ -98,7 +106,7 @@ int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, ui
 
 /** inotify_init1(2) takes the flags IN_NONBLOCK and IN_CLOEXEC, and
  * inotify_init(2) none. Returns the descriptor of a new instance, -EINVAL
- * for another flag, -EMFILE past the user's 128 instances or the
+ * for another flag, -EMFILE past the user's instances, fs.inotify.max_user_instances, or the
  * descriptors a process may have, or -ENOMEM. */
 long sys_inotify_init(struct isr_params *params);
 long sys_inotify_init1(struct isr_params *params);

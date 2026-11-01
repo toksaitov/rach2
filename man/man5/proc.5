@@ -641,14 +641,16 @@ and
 .Xr msgget 2 .
 .It Pa /proc/sys
 A few of Linux's sysctl files, each a value and a newline, read-only but
-for the three the end of this entry describes:
+for those this entry says a write sets:
 .Pa fs/inotify/max_queued_events ,
 16384,
 .Pa fs/inotify/max_user_instances ,
 128, and
 .Pa fs/inotify/max_user_watches ,
 8192, the limits of
-.Xr inotify_init 2 ;
+.Xr inotify_init 2 ,
+which a write sets for the next instance, watch or event; a value below
+what a user or a queue holds takes nothing away;
 .Pa fs/mqueue/msg_default
 and
 .Pa msg_max ,
@@ -701,6 +703,20 @@ the host and domain names of the reader's UTS namespace, as
 reports them, read when the file is opened, and set by a write of a caller
 privileged over the namespace to the text before its first newline, at
 most 64 bytes;
+.Pa kernel/overflowuid
+and
+.Pa kernel/overflowgid ,
+65534, the ids an id that a user namespace's map does not cover reads
+as, which a write from 0 to 65535 sets;
+.Pa kernel/random/boot_id ,
+a random UUID drawn at its first read that stays for the boot, and
+.Pa kernel/random/uuid ,
+a new one at each open;
+.Pa vm/max_map_count ,
+65536, the regions of memory a process may map, as
+.Xr mmap 2
+counts them, which a write sets for the next mapping; a process already
+past a value written keeps what it has;
 .Pa vm/swappiness ,
 60, and
 .Pa vm/overcommit_memory ,
@@ -710,7 +726,12 @@ most 64 bytes;
 caller's write of 0 succeeds, and of any other number fails with
 .Er EINVAL ,
 where Linux would begin to forward.
-The three writable files have mode 0644, and an open of one for writing
+A write to a file of a number takes it as
+.Xr strtol 3
+with base 0 does, and one out of the file's range, which is from 0 up
+unless this entry says otherwise, fails with
+.Er EINVAL .
+The writable files have mode 0644, and an open of one for writing
 by a caller without privilege fails with
 .Er EACCES .
 .It Pa /proc/stat

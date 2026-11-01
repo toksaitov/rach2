@@ -5692,7 +5692,7 @@ static void vma_exhausted(const char *what)
     }
     current_proc->vma_reported = 1;
     klog(KLOG_WARN, "vm", "%s: pid %d (%s) has used all %d of its mappings", what,
-         (int)current_proc->pid, current_proc->comm, VMA_LIMIT);
+         (int)current_proc->pid, current_proc->comm, vm_max_map_count);
 }
 
 /** The VMA protection of an mmap or mprotect `prot`. Write and execute each

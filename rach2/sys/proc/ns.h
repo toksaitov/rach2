@@ -32,7 +32,7 @@
  * takes them before Linux 4.15. */
 #define NS_EXTENTS 5
 
-/* The id a map does not cover reads as, Linux's overflowuid and gid. */
+/* The id a map does not cover reads as at boot, Linux's overflowuid and gid. */
 #define NS_OVERFLOW_ID 65534u
 
 /* What every namespace has: its references, its inode number in nsfs, its
@@ -154,8 +154,13 @@ int ns_owner_privileged(const process_t *p, const struct ns_common *c);
 int64_t ns_uid_to_kernel(const struct userns *ns, uint32_t id);
 int64_t ns_gid_to_kernel(const struct userns *ns, uint32_t id);
 
-/** The id in `ns` of the kernel's id `kid`, NS_OVERFLOW_ID when its map
- * does not cover it. */
+/* kernel.overflowuid and overflowgid: the user and group ids an id a map
+ * does not cover reads as, NS_OVERFLOW_ID at boot, from 0 to 65535. */
+extern int ns_overflowuid;
+extern int ns_overflowgid;
+
+/** The id in `ns` of the kernel's id `kid`, `ns_overflowuid` or
+ * `ns_overflowgid` when its map does not cover it. */
 uint32_t ns_uid_from_kernel(const struct userns *ns, uint32_t kid);
 uint32_t ns_gid_from_kernel(const struct userns *ns, uint32_t kid);
 

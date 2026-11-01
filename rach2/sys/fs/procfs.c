@@ -70,6 +70,9 @@
 #include "../proc/sched.h"
 #include "../mm/paging.h"
 #include "../io/anon.h"
+#include "../io/inotify.h"
+#include "../lib/krandom.h"
+#include "../mm/vm.h"
 #include "../ipc/unix.h"
 #include "../acpicall.h"
 #include "../display/backlight.h"
@@ -5242,11 +5245,86 @@ static int procfs_open_oom(const struct vpath *vp, int pid, int flags)
     return fd;
 }
 
-/** The text a read of the /proc/sys file `entry` gives, appended to `t`. */
+/* The /proc/sys files whose values are their owners' variables, and the
+ * range a write must fall in, as Linux's `proc_dointvec_minmax` takes one. */
+static const struct {
+    int entry;
+    int *var;
+    int min;
+    int max;
+} sysctl_ints[] = {{SYNTH_SYS_INOTIFY_QUEUED, &inotify_max_queued_events, 0, 0x7FFFFFFF},
+                   {SYNTH_SYS_INOTIFY_INSTANCES, &inotify_max_user_instances, 0, 0x7FFFFFFF},
+                   {SYNTH_SYS_INOTIFY_WATCHES, &inotify_max_user_watches, 0, 0x7FFFFFFF},
+                   {SYNTH_SYS_MAX_MAP_COUNT, &vm_max_map_count, 0, 0x7FFFFFFF},
+                   {SYNTH_SYS_OVERFLOWGID, &ns_overflowgid, 0, 65535},
+                   {SYNTH_SYS_OVERFLOWUID, &ns_overflowuid, 0, 65535}};
+
+/** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
+static int sysctl_int(int entry)
+{
+    int i;
+
+    for (i = 0; i < (int)(sizeof(sysctl_ints) / sizeof(sysctl_ints[0])); i++) {
+        if (sysctl_ints[i].entry == entry) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/** Append a random UUID of version 4 as Linux's kernel/random files give
+ * one: 36 characters in five groups of hexadecimal digits. */
+static void ap_uuid(struct procfs_text *t, const uint8_t *b)
+{
+    static const char digits[] = "0123456789abcdef";
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        uint8_t v = b[i];
+
+        if (i == 6) {
+            v = (uint8_t)((v & 0x0Fu) | 0x40u);
+        } else if (i == 8) {
+            v = (uint8_t)((v & 0x3Fu) | 0x80u);
+        }
+        if (i == 4 || i == 6 || i == 8 || i == 10) {
+            ap_ch(t, '-');
+        }
+        ap_ch(t, digits[v >> 4]);
+        ap_ch(t, digits[v & 15u]);
+    }
+}
+
+/**
+ * The text a read of the /proc/sys file `entry` gives, appended to `t`.
+ *
+ * kernel/random/boot_id is drawn once, at its first read, and stays for the
+ * boot; kernel/random/uuid is drawn anew for each open, as Linux draws it
+ * for each read. Both come from the kernel's generator, whatever its seed,
+ * since neither is a key.
+ */
 static void procfs_sysctl_text(struct procfs_text *t, int entry)
 {
+    static uint8_t boot_id[16];
+    static int boot_id_drawn;
+    uint8_t uuid[16];
+    int i = sysctl_int(entry);
+
     if (entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME) {
         ap_str(t, entry == SYNTH_SYS_HOSTNAME ? uts_hostname() : uts_domainname());
+        ap_ch(t, '\n');
+    } else if (i >= 0) {
+        ap_int(t, *sysctl_ints[i].var);
+        ap_ch(t, '\n');
+    } else if (entry == SYNTH_SYS_BOOT_ID || entry == SYNTH_SYS_UUID) {
+        if (entry == SYNTH_SYS_BOOT_ID && !boot_id_drawn) {
+            krandom_bytes(boot_id, sizeof(boot_id));
+            boot_id_drawn = 1;
+        }
+        if (entry == SYNTH_SYS_UUID) {
+            krandom_bytes(uuid, sizeof(uuid));
+        }
+        ap_uuid(t, entry == SYNTH_SYS_BOOT_ID ? boot_id : uuid);
         ap_ch(t, '\n');
     } else {
         ap_str(t, synth_sys_text(entry));
@@ -5285,11 +5363,13 @@ static int32_t procfs_sysctl_read(fd_entry_t *e, char __user *buf, uint32_t coun
  *
  * kernel/hostname and kernel/domainname become the text up to its first
  * newline, at most 64 bytes, as sethostname(2) and setdomainname(2) would
- * set them; the whole count is taken. A write to net/ipv4/ip_forward is an
- * integer, read as `oom_parse` reads one, and 0, its value, is taken; any
- * other value is -EINVAL, since the stack forwards nothing between
- * interfaces, where Linux would begin to. -EFAULT for a buffer the caller
- * cannot read.
+ * set them; the whole count is taken. A write to another file is an
+ * integer, read as `oom_parse` reads one. A file of `sysctl_ints` stores it
+ * in its owner's variable, which the owner reads at its next use, and a
+ * value out of the file's range is -EINVAL. To net/ipv4/ip_forward 0, its
+ * value, is taken, and any other value is -EINVAL, since the stack forwards
+ * nothing between interfaces, where Linux would begin to. -EFAULT for a
+ * buffer the caller cannot read.
  */
 static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -5299,6 +5379,7 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
     uint32_t len = 0;
     int32_t v;
     int rc;
+    int i;
 
     k_memset(text, 0, sizeof(text));
     if (copy_from_user(text, buf, n) != 0) {
@@ -5319,6 +5400,14 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
     rc = oom_parse(text, &v);
     if (rc != 0) {
         return rc;
+    }
+    i = sysctl_int(f->origin_pid);
+    if (i >= 0) {
+        if (v < sysctl_ints[i].min || v > sysctl_ints[i].max) {
+            return -EINVAL;
+        }
+        *sysctl_ints[i].var = (int)v;
+        return (int32_t)count;
     }
     return v == 0 ? (int32_t)count : -EINVAL;
 }

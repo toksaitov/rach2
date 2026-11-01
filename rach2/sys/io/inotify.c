@@ -23,12 +23,9 @@
 #define POLLIN   0x001
 #define FIONREAD 0x541B
 
-/* Linux's defaults of fs.inotify: the instances and the watches one user
- * may have, and the events an instance may queue before the next one is
- * lost and an IN_Q_OVERFLOW takes its place. */
-#define MAX_USER_INSTANCES 128
-#define MAX_USER_WATCHES   8192
-#define MAX_QUEUED_EVENTS  16384
+int inotify_max_user_instances = 128;
+int inotify_max_user_watches = 8192;
+int inotify_max_queued_events = 16384;
 
 /* A record as a read returns it: the watch descriptor, the mask, the cookie
  * and the length of the name, then the name, padded with NULs to a multiple
@@ -133,7 +130,7 @@ static void queue_event(struct inotify *in, int32_t wd, uint32_t mask, uint32_t 
         last->len == len && (len == 0 || same_name((const char *)(last + 1), name))) {
         return;
     }
-    if (in->queued >= MAX_QUEUED_EVENTS) {
+    if ((int32_t)in->queued >= inotify_max_queued_events) {
         queue_overflow(in);
         return;
     }
@@ -446,7 +443,7 @@ int32_t inotify_watch(int fd, struct vfs_mount *mnt, uint64_t ino, int isdir, ui
             return w->wd;
         }
     }
-    if (user_watches(in->uid) >= MAX_USER_WATCHES) {
+    if ((int32_t)user_watches(in->uid) >= inotify_max_user_watches) {
         return -ENOSPC;
     }
     w = kzalloc(sizeof(*w));
@@ -502,7 +499,7 @@ static int32_t inotify_open(uint32_t flags)
     for (in = instances; in; in = in->next) {
         mine += in->uid == current_proc->ruid;
     }
-    if (mine >= MAX_USER_INSTANCES) {
+    if ((int32_t)mine >= inotify_max_user_instances) {
         return -EMFILE;
     }
     in = kzalloc(sizeof(*in));
