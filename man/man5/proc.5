@@ -984,6 +984,11 @@ Only ext2's names are kept.
 Names the cache keeps now, at most 8192.
 .It Li namecache_negative
 Of those, the names recorded as absent.
+.It Li ext2_node_visits
+The inodes in memory that ext2's searches for an inode by its number have
+read, since boot.
+Each mount keeps them in a hash with a bucket for each, so a lookup the
+name cache passes to ext2 reads one or two.
 .It Li procs_running , procs_blocked
 The processes runnable now, and those asleep in a wait no signal ends, in
 the state
