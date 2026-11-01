@@ -17,8 +17,9 @@ struct vfs_mount;
  * The cache answers only for the resolver, after the resolver has checked
  * the caller's search permission on the directory, so a cached entry lets
  * nobody through who could not search there. Each mutator of vfs.c forgets
- * the names it changes, and an unmount forgets the mount's entries, before
- * the type lets the mount go. A lookup that sleeps while a mutator runs
+ * the names it changes, one that removes a name before the type's call as
+ * well as after it, and an unmount forgets the mount's entries before the
+ * type lets the mount go. A lookup that sleeps while a mutator runs
  * keeps its answer out of the cache (`dcache_lookup`).
  *
  * Every function runs under the big kernel lock; the cache's lists change
@@ -54,18 +55,21 @@ int dcache_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **nod
 void dcache_forget(struct vfs_mount *mnt, void *dir, const char *name);
 
 /**
- * The node `name` of `dir` names on `mnt`, a mount's base, held, for a
- * mutator that may remove a directory: NULL when the type keeps no cache
- * or there is no such entry. The caller gives it to `dcache_forget_dir`.
+ * Before a mutator that removes or replaces `name` of `dir` on `mnt`, a
+ * mount's base: forget the name's entry and every entry in the directory it
+ * names, so that the type finds none of the cache's holds on what it
+ * removes and frees it at once. Returns the node the name named, as a key
+ * for `dcache_forget_dir` and never held, or NULL. May sleep.
  */
-void *dcache_victim(struct vfs_mount *mnt, void *dir, const char *name);
+void *dcache_forget_victim(struct vfs_mount *mnt, void *dir, const char *name);
 
 /**
- * Forget every entry in the directory `victim` of `mnt` when `removed`, so
- * that a removed directory is freed at once, and put the hold
- * `dcache_victim` took. `victim` NULL does nothing. May sleep.
+ * After that mutator removed the name: forget again the entries in the
+ * directory `key` names, which a lookup may have made while the mutator
+ * slept. A key whose node was freed meanwhile matches nothing that is not
+ * safe to forget. May sleep.
  */
-void dcache_forget_dir(struct vfs_mount *mnt, void *victim, int removed);
+void dcache_forget_dir(struct vfs_mount *mnt, void *key);
 
 /** Forget every entry of `mnt`, a mount's base, for its unmount. May
  * sleep. */

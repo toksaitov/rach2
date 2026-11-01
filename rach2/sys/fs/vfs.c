@@ -1899,6 +1899,7 @@ int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
     }
     watched = inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
               watched_node(mnt, dir, &parent) == 0;
+    dcache_forget(mount_base(mnt), dir, name);
     rc = mnt->type->ops->unlink(mount_base(mnt), dir, name);
     dcache_forget(mount_base(mnt), dir, name);
     if (rc == 0) {
@@ -1946,10 +1947,10 @@ int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     }
     watched = inotify_watches && watched_entry(mnt, dir, name, &was) == 0 &&
               watched_node(mnt, dir, &parent) == 0;
-    victim = dcache_victim(mount_base(mnt), dir, name);
+    victim = dcache_forget_victim(mount_base(mnt), dir, name);
     rc = mnt->type->ops->rmdir(mount_base(mnt), dir, name);
     dcache_forget(mount_base(mnt), dir, name);
-    dcache_forget_dir(mount_base(mnt), victim, rc == 0);
+    dcache_forget_dir(mount_base(mnt), victim);
     if (rc == 0 && watched) {
         watch_removed(mnt, parent.ino, name, &was);
     }
@@ -2001,11 +2002,12 @@ int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *n
             watched_entry(mnt, newdir, newname, &replaced) == 0 && replaced.ino != moved.ino;
     }
     same = vfs_name_same(mnt, olddir, oldname, newdir, newname);
-    victim = dcache_victim(mount_base(mnt), newdir, newname);
+    dcache_forget(mount_base(mnt), olddir, oldname);
+    victim = dcache_forget_victim(mount_base(mnt), newdir, newname);
     rc = mnt->type->ops->rename(mount_base(mnt), olddir, oldname, newdir, newname);
     dcache_forget(mount_base(mnt), olddir, oldname);
     dcache_forget(mount_base(mnt), newdir, newname);
-    dcache_forget_dir(mount_base(mnt), victim, rc == 0);
+    dcache_forget_dir(mount_base(mnt), victim);
     if (rc == 0 && !same) {
         vfs_name_rename(mnt, olddir, oldname, newdir, newname);
     }

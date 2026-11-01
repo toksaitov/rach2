@@ -296,29 +296,6 @@ void dcache_forget(struct vfs_mount *mnt, void *dir, const char *name)
     }
 }
 
-void *dcache_victim(struct vfs_mount *mnt, void *dir, const char *name)
-{
-    struct dentry *e;
-    uint32_t len, h;
-    void *node;
-
-    if (!cacheable(mnt) || dot_name(name)) {
-        return 0;
-    }
-    if (!dir) {
-        dir = mnt->root;
-    }
-    h = hash_of(dir, name, &len);
-    e = find(mnt, dir, name, len, h);
-    if (e) {
-        if (e->node) {
-            mnt->type->ops->hold(mnt, e->node);
-        }
-        return e->node;
-    }
-    return mnt->type->ops->lookup(mnt, dir, name, &node) == 0 ? node : 0;
-}
-
 /** Take every entry of `mnt` for which `dir` is NULL or the directory out
  * of the cache, and put them. May sleep. */
 static void forget_where(struct vfs_mount *mnt, const void *dir)
@@ -341,15 +318,44 @@ static void forget_where(struct vfs_mount *mnt, const void *dir)
     }
 }
 
-void dcache_forget_dir(struct vfs_mount *mnt, void *victim, int removed)
+void *dcache_forget_victim(struct vfs_mount *mnt, void *dir, const char *name)
 {
-    if (!victim) {
-        return;
+    const struct vfs_ops *ops = mnt->type->ops;
+    struct dentry *e;
+    uint32_t len, h;
+    void *node = 0;
+
+    generation++;
+    if (!cacheable(mnt) || entries == 0 || dot_name(name)) {
+        return 0;
     }
-    if (removed && entries > 0) {
-        forget_where(mnt, victim);
+    if (!dir) {
+        dir = mnt->root;
     }
-    mnt->type->ops->put(mnt, victim);
+    h = hash_of(dir, name, &len);
+    e = find(mnt, dir, name, len, h);
+    if (e) {
+        take_out(e);
+        node = e->node;
+    } else if (ops->lookup(mnt, dir, name, &node) == 0) {
+        ops->put(mnt, node);
+    } else {
+        node = 0;
+    }
+    if (node && entries > 0) {
+        forget_where(mnt, node);
+    }
+    if (e) {
+        release(e);
+    }
+    return node;
+}
+
+void dcache_forget_dir(struct vfs_mount *mnt, void *key)
+{
+    if (key && entries > 0 && cacheable(mnt)) {
+        forget_where(mnt, key);
+    }
 }
 
 void dcache_forget_mount(struct vfs_mount *mnt)
