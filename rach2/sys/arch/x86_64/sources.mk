@@ -14,7 +14,8 @@ ARCH_TCC_LDFLAGS = -Wl,-T,sys/arch/x86_64/link.ld -Wl,-section-alignment=0x1000
 ARCH_ASM_SRC = sys/arch/x86_64/loader.s \
     sys/arch/x86_64/isr_handler.s \
     sys/arch/x86_64/switch.s \
-    sys/arch/x86_64/trampoline.s
+    sys/arch/x86_64/trampoline.s \
+    sys/arch/x86_64/vdsocode.s
 
 ARCH_C_SRC = sys/arch/x86_64/mmu.c \
     sys/arch/x86_64/context.c \
@@ -25,4 +26,6 @@ ARCH_C_SRC = sys/arch/x86_64/mmu.c \
     sys/arch/x86_64/tls.c \
     sys/arch/x86_64/ptrace.c \
     sys/arch/x86_64/systab.c \
+    sys/arch/x86_64/vclock.c \
+    sys/arch/x86_64/vdso.c \
     $(PC_C_SRC)

@@ -33,6 +33,7 @@
 #include "lib/kirq.h"
 #include "lib/ksignal.h"
 #include "timer.h"
+#include "vdso.h"
 #include "fs/fd.h"
 #include "fs/file.h"
 #include "ipc/pipe.h"
@@ -303,6 +304,15 @@ int32_t raw_seek_resolve(uint64_t cur, uint64_t size, long long delta, int whenc
     return 0;
 }
 
+/* The clock calls made, `clock_calls`; a count that wraps, kept without
+ * a lock, since a test reads it while nothing else reads the clock. */
+static volatile uint32_t clock_call_count;
+
+uint32_t clock_calls(void)
+{
+    return clock_call_count;
+}
+
 /*
  * The timeval of gettimeofday and settimeofday.
  */
@@ -324,6 +334,7 @@ long sys_gettimeofday(isr_params_t *params)
     int64_t seconds;
     int64_t nanoseconds;
 
+    clock_call_count++;
     if (!tv) {
         return 0;
     }
@@ -348,6 +359,7 @@ long sys_time(isr_params_t *params)
     int64_t nanoseconds;
     long t;
 
+    clock_call_count++;
     get_current_time(&seconds, &nanoseconds);
     t = (long)seconds;
     if (tloc && copy_to_user(tloc, &t, sizeof(t)) != 0) {
@@ -489,20 +501,21 @@ struct kernel_timespec64 {
  * the tick added; its coarse form stops at the last tick. Time since boot is
  * the uptime seconds and the ticks within the second, with the timer's place
  * added as well (`rtc_monotonic`), read with interrupts masked, so no torn
- * second can make it step back; its coarse form stops at the tick. No clock is
- * slewed: the machine reads the CMOS once and then keeps its own time, which
- * only a setting of the real time steps, and it is never suspended, which is
- * why CLOCK_MONOTONIC, CLOCK_MONOTONIC_RAW and CLOCK_BOOTTIME read the same. A
- * CPU clock is the ticks the timer charged. The seconds are 64 bits; the 32-bit
- * timespec of i386's clock_gettime cuts them, which ends in 2038 for real time,
- * as Linux's does.
+ * second can make it step back; its coarse form stops at the tick. Where the
+ * clock runs from the TSC (vdso.h), both are that clock's, which the vDSO
+ * reads too, so that a call here and a reading there agree. No clock
+ * follows an outside time: the machine reads the CMOS once and then
+ * keeps its own time, which only a setting of the real time steps, and it
+ * is never suspended, which is why CLOCK_MONOTONIC, CLOCK_MONOTONIC_RAW and
+ * CLOCK_BOOTTIME read the same. A CPU clock is the ticks the timer charged. The seconds are 64
+ * bits; the 32-bit timespec of i386's clock_gettime cuts them, which ends in 2038 for real time, as
+ * Linux's does.
  */
 static void clock_read(const struct kclock *c, struct kernel_timespec64 *out)
 {
     int64_t seconds;
     int64_t nanoseconds;
-    uint32_t seconds32, ticks32, rest;
-    uint64_t ticks;
+    uint32_t rest;
 
     switch (c->kind) {
     case KCLOCK_REAL:
@@ -521,9 +534,9 @@ static void clock_read(const struct kclock *c, struct kernel_timespec64 *out)
         out->tv_nsec = nanoseconds;
         break;
     case KCLOCK_MONO_COARSE:
-        tick_now(&seconds32, &ticks32, &ticks);
-        out->tv_sec = seconds32;
-        out->tv_nsec = ticks32 * TICK_NS;
+        rtc_coarse_monotonic(&seconds, &nanoseconds);
+        out->tv_sec = seconds;
+        out->tv_nsec = nanoseconds;
         break;
     case KCLOCK_CPU:
     default:
@@ -538,8 +551,10 @@ static void clock_read(const struct kclock *c, struct kernel_timespec64 *out)
  * to (`timer_resolution_ns`), and the tick for the rest. */
 static int32_t clock_res_ns(const struct kclock *c)
 {
-    return c->kind == KCLOCK_REAL || c->kind == KCLOCK_MONO ? (int32_t)timer_resolution_ns()
-                                                            : (int32_t)TICK_NS;
+    if (c->kind != KCLOCK_REAL && c->kind != KCLOCK_MONO) {
+        return (int32_t)TICK_NS;
+    }
+    return (int32_t)(vclock_running() ? vclock_resolution_ns() : timer_resolution_ns());
 }
 
 int32_t clock_cpu_target(int32_t clk, struct tgroup **tg, uint32_t *tid, int *user_only)
@@ -587,6 +602,7 @@ long sys_clock_gettime(isr_params_t *params)
     struct kclock c;
     int32_t rc = clock_resolve((int32_t)SC_ARG(params, 0), &c);
 
+    clock_call_count++;
     if (rc != 0) {
         return rc;
     }
@@ -611,6 +627,7 @@ long sys_clock_gettime64(isr_params_t *params)
     int32_t nsec;
     int32_t rc = clock_now((int32_t)SC_ARG(params, 0), &sec, &nsec);
 
+    clock_call_count++;
     if (rc != 0) {
         return rc;
     }

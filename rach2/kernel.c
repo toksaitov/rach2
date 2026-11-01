@@ -71,6 +71,7 @@
 #include "sys/network/ip6/ip6.h"
 #include "sys/lib/kint.h"
 #include "sys/lib/kstring.h"
+#include "sys/vdso.h"
 
 /* The boot stack and the guard page below it, from the architecture's
  * loader.s. */
@@ -240,7 +241,8 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
  * accounts it and preempts. The boot processor's tick also advances the tick
  * count and the uptime by the ticks the clock says this interrupt counts
  * (`timer_tick_clock`), none for one delivered again and more than one for
- * one that came late, and runs the periodic work of the kernel: the sleepers
+ * one that came late, carries the vDSO's clock on to the tick
+ * (`vclock_tick`), and runs the periodic work of the kernel: the sleepers
  * and timerfds whose time has come, the HDA tick for a controller whose
  * interrupts do not arrive, the network device that is polled, the TCP
  * timers, IPv6 neighbour discovery's and MLD's timers, the loopback
@@ -289,6 +291,7 @@ static void timer_handler(isr_params_t *params)
         }
     }
     tick_write_end();
+    vclock_tick();
     latency_tick();
 
     sched_account_tick(FRAME_USER(params) != 0);
@@ -1185,17 +1188,17 @@ static void boot_exec_done(void)
  * its path, the environment `envp` and the `argc` strings of `argv`, laid
  * down as execve lays them (`proc/uimage.c`) under the default stack limit,
  * and keep in `mm` where the strings are and the auxiliary vector, for
- * /proc.
+ * /proc. `ehdr` is where the vDSO's image goes, AT_SYSINFO_EHDR, or 0.
  *
  * @return the entry stack pointer, with the lowest page the stack took in
  *         `*bottom`; 0 when the strings do not fit or the pages or their
  *         mappings could not be had.
  */
 static uintptr_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
-                            const elf_image_t *img, uintptr_t *bottom)
+                            const elf_image_t *img, uintptr_t ehdr, uintptr_t *bottom)
 {
     struct uimage u;
-    static const struct uimage_aux root = {0, 0, 0, 0, 0, 0};
+    struct uimage_aux root = {0, 0, 0, 0, 0, 0, 0};
     uint8_t random16[16];
     uint32_t envc = 0;
     uintptr_t sp = 0;
@@ -1219,6 +1222,7 @@ static uintptr_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
         rc = uimage_place(&u, (uint32_t)argc, envc);
     }
     krandom_bytes(random16, 16);
+    root.sysinfo_ehdr = ehdr;
     if (rc == 0 && uimage_write(&u, (uint32_t)argc, envc, img, random16, &root) == 0 &&
         uimage_map(&u, mm->dir) == 0) {
         sp = u.sp;
@@ -1325,7 +1329,8 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
  * the address space (`boot_keep_exe`). The initial stack is the one execve
  * builds (`boot_stack`), with the auxiliary vector and its 16 random bytes.
  * The segments are mapped as they are loaded; the regions made after them
- * let the fault handler serve the heap, the stack and later mappings.
+ * let the fault handler serve the heap, the stack, the vDSO at the top of
+ * the mmap range, as execve places it, and later mappings.
  *
  * Enters user mode through `enter_program` and does not return. A setup
  * failure prints a diagnostic and returns to the caller.
@@ -1338,6 +1343,7 @@ static void exec_program(int argc, char *argv[])
     struct mm *mm;
     uintptr_t user_sp;
     uintptr_t stack_bottom = USER_STACK_BASE;
+    uintptr_t vdso_at = USER_MMAP_BASE - vdso_span();
     struct exec_krffs_ctx kctx;
     static char env_path[] = "PATH=/bin:/usr/bin:/";
     static char env_home[] = "HOME=/";
@@ -1394,7 +1400,8 @@ static void exec_program(int argc, char *argv[])
     boot_exec_done();
     entry_point = img.entry;
 
-    user_sp = boot_stack(mm, argc, argv, default_envp, &img, &stack_bottom);
+    user_sp = boot_stack(mm, argc, argv, default_envp, &img, vdso_span() ? vdso_at + PAGE_SIZE : 0,
+                         &stack_bottom);
     if (user_sp == 0) {
         mm_put(mm);
         console_puts("exec: the initial stack could not be built");
@@ -1402,7 +1409,8 @@ static void exec_program(int argc, char *argv[])
     }
 
     if (elf_setup_vmas(&mm->vm, &img, img.image_end, USER_STACK_BASE, VM_STACK_MAX_GROWTH,
-                       USER_MMAP_BASE) != 0 ||
+                       vdso_at) != 0 ||
+        vdso_map(&mm->vm, vdso_at) < 0 ||
         (stack_bottom < USER_STACK_BASE && !vm_grow_stack(&mm->vm, stack_bottom, RLIM_INFINITY))) {
         mm_put(mm);
         console_puts("exec: no memory for the program's regions");
@@ -3905,6 +3913,7 @@ void kernel_main(const struct boot_info *boot)
     }
 
     smp_start();
+    vclock_start();
 
     rescue_mode = kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue");
 

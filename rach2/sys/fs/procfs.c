@@ -46,6 +46,7 @@
 #include "../cmdline.h"
 #include "../block/diskinfo.h"
 #include "../timer.h"
+#include "../vdso.h"
 #include "vfs.h"
 #include "name.h"
 #include "lock.h"
@@ -1225,6 +1226,7 @@ static void ap_xlow(struct procfs_text *t, unsigned long v, int width)
 }
 
 /** The path /proc/<pid>/maps gives region `r` of `mm`: the file it maps,
+ * which for the vDSO's two regions is [vvar] or [vdso] (`vdso_map`),
  * [heap], [stack], the program for the segments of its image, which lie
  * below the heap, the dynamic linker for the segments of its own, above it,
  * or none. */
@@ -1285,7 +1287,7 @@ static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t
     ap_ch(t, (r->prot & VM_PROT_READ) ? 'r' : '-');
     ap_ch(t, (r->prot & VM_PROT_WRITE) ? 'w' : '-');
     ap_ch(t, (r->prot & VM_PROT_EXEC) ? 'x' : '-');
-    ap_ch(t, r->type == VM_SHARED ? 's' : 'p');
+    ap_ch(t, r->type == VM_SHARED && !vdso_region_name(r->file) ? 's' : 'p');
     ap_ch(t, ' ');
     ap_xlow(t, r->file ? r->pgoff * PAGE_SIZE : 0u, 8);
     ap_ch(t, ' ');
@@ -1302,7 +1304,8 @@ static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t
 
 /**
  * /proc/<pid>/maps: a line for each region, in Linux's form: the range, the
- * rights with p or s for private or shared, the offset in the file, the
+ * rights with p or s for private or shared, p for the vDSO's two regions as
+ * on Linux though every process shares their pages, the offset in the file, the
  * file's device and inode, 0 for a region of no file, a space, and the path
  * from column 73. A region with no path ends at that space, as on Linux, where
  * BusyBox's pmap counts on it to find the end of the fields. GNU libc's
@@ -2645,6 +2648,10 @@ static void ap_cpu_ticks(struct procfs_text *t, uint64_t user, uint64_t busy, ui
  * cut short (`process_sleeps_cut_short`), the longest delays since boot
  * (latency.h), and the loopback ring's.
  *
+ * `clock_calls` is the clock's system calls made since boot (vdso.h), and
+ * `vdso_tsc` is 1 when the vDSO reads the clock from the TSC and those
+ * calls are not needed, 0 when its functions make them.
+ *
  * `loopback_dropped` is the datagrams the loopback ring had no room for, which
  * the ring logs once and counts thereafter, and `loopback_peak` is the most it
  * has held at once, which says how much room it has over what one system
@@ -2722,6 +2729,10 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_u32(t, sched_work_count(1));
     ap_str(t, "\nvm_gap_steps ");
     ap_u32(t, vm_gap_steps());
+    ap_str(t, "\nclock_calls ");
+    ap_u32(t, clock_calls());
+    ap_str(t, "\nvdso_tsc ");
+    ap_u32(t, (uint32_t)vclock_running());
     ap_ch(t, '\n');
     ap_str(t, "latency_timer_us ");
     ap_u32(t, latency_max(LAT_TIMER));

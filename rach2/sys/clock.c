@@ -8,6 +8,7 @@
 
 #include "rtc.h"
 #include "timer.h"
+#include "vdso.h"
 
 #include "arch/arch.h"
 #include "lib/kirq.h"
@@ -148,9 +149,33 @@ static struct spinlock rtc_realtime_lock;
 
 void rtc_anchor(int64_t seconds, uint32_t uptime)
 {
+    int64_t sec;
+    int32_t nsec;
+
     rtc_anchor_seconds = seconds;
     rtc_anchor_uptime = uptime;
     rtc_anchored = 1;
+    rtc_offset(&sec, &nsec);
+    vclock_set_offset(sec, nsec);
+}
+
+/** Real time less the monotonic clock, with the real-time lock held: the
+ * anchor less its uptime, and the step. */
+static void rtc_offset_locked(int64_t *seconds, int32_t *nanoseconds)
+{
+    *seconds = rtc_step_seconds;
+    if (rtc_anchored) {
+        *seconds += rtc_anchor_seconds - (int64_t)rtc_anchor_uptime;
+    }
+    *nanoseconds = rtc_step_nanoseconds;
+}
+
+void rtc_offset(int64_t *seconds, int32_t *nanoseconds)
+{
+    uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
+
+    rtc_offset_locked(seconds, nanoseconds);
+    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
 }
 
 void rtc_week_and_year_day(const rtc_time_t *t, int32_t *weekday, int32_t *yearday)
@@ -211,13 +236,10 @@ int rtc_is_anchored(void)
  */
 int64_t rtc_boot_epoch(void)
 {
-    uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
-    int64_t seconds = rtc_step_seconds;
+    int64_t seconds;
+    int32_t nanoseconds;
 
-    if (rtc_anchored) {
-        seconds += rtc_anchor_seconds - (int64_t)rtc_anchor_uptime;
-    }
-    spin_unlock_irqrestore(&rtc_realtime_lock, flags);
+    rtc_offset(&seconds, &nanoseconds);
     return seconds;
 }
 
@@ -281,12 +303,19 @@ uint64_t rtc_ticks_now(void)
     return ticks;
 }
 
-/** The time the anchor keeps now, to the timer's place within the tick, with
- * nanoseconds that may pass a second; the caller has interrupts off. */
+/** The time the anchor keeps now, to the timer's place within the tick, or
+ * by the clock from the TSC while it runs, with nanoseconds that may pass a
+ * second; the caller has interrupts off. */
 static void rtc_kept_time(int64_t *seconds, int64_t *nanoseconds)
 {
     uint32_t uptime, ticks, phase_ns;
 
+    if (vclock_read(0, 0, seconds, nanoseconds)) {
+        if (rtc_anchored) {
+            *seconds += rtc_anchor_seconds - (int64_t)rtc_anchor_uptime;
+        }
+        return;
+    }
     rtc_since_boot(&uptime, &ticks, &phase_ns);
     rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, uptime, ticks, seconds,
                          nanoseconds);
@@ -327,9 +356,11 @@ void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
     uint32_t flags = kirq_save();
     uint32_t uptime, ticks, phase_ns;
 
-    rtc_since_boot(&uptime, &ticks, &phase_ns);
-    *seconds = uptime;
-    *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK + phase_ns;
+    if (!vclock_read(0, 0, seconds, nanoseconds)) {
+        rtc_since_boot(&uptime, &ticks, &phase_ns);
+        *seconds = uptime;
+        *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK + phase_ns;
+    }
     spin_lock(&rtc_mono_lock);
     if (*seconds < rtc_mono_seconds ||
         (*seconds == rtc_mono_seconds && *nanoseconds < rtc_mono_nanoseconds)) {
@@ -344,15 +375,32 @@ void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
 
 void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
-    uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
+    uint32_t flags;
     uint32_t uptime, ticks;
     uint64_t total;
 
+    if (vclock_read(1, 1, seconds, nanoseconds)) {
+        return;
+    }
+    flags = spin_lock_irqsave(&rtc_realtime_lock);
     tick_now(&uptime, &ticks, &total);
     rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, uptime, ticks, seconds,
                          nanoseconds);
     rtc_add_step(seconds, nanoseconds);
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
+}
+
+void rtc_coarse_monotonic(int64_t *seconds, int64_t *nanoseconds)
+{
+    uint32_t uptime, ticks;
+    uint64_t total;
+
+    if (vclock_read(0, 1, seconds, nanoseconds)) {
+        return;
+    }
+    tick_now(&uptime, &ticks, &total);
+    *seconds = uptime;
+    *nanoseconds = (int64_t)ticks * RTC_NANOSECONDS_PER_TICK;
 }
 
 /**
@@ -382,5 +430,7 @@ void rtc_set_realtime(int64_t seconds, int32_t nanoseconds)
     }
     rtc_last_seconds = seconds;
     rtc_last_nanoseconds = nanoseconds;
+    rtc_offset_locked(&kept_seconds, &nanoseconds);
+    vclock_set_offset(kept_seconds, nanoseconds);
     spin_unlock_irqrestore(&rtc_realtime_lock, flags);
 }

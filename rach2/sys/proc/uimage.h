@@ -11,8 +11,9 @@
 
 struct page_dir;
 
-/* The auxiliary vector's entries, AT_NULL included. */
-#define UIMAGE_AUXV 16u
+/* The auxiliary vector's entries, AT_NULL included; an image without a
+ * vDSO has a second AT_NULL in place of AT_SYSINFO_EHDR. */
+#define UIMAGE_AUXV 17u
 
 /* Linux's limits on the strings of an execve (fs/exec.c): one string, its
  * NUL included, is at most 32 pages; the strings with their pointers take a
@@ -115,10 +116,12 @@ void uimage_move(struct uimage *u, uintptr_t top, uint32_t pad);
 int uimage_place(struct uimage *u, uint32_t argc, uint32_t envc);
 
 /* What the auxiliary vector says beside the program's image: where the
- * interpreter was loaded (AT_BASE, 0 without one), the ids the image runs
- * with, and AT_SECURE. */
+ * interpreter was loaded (AT_BASE, 0 without one), where the vDSO's image
+ * is (AT_SYSINFO_EHDR, 0 without one, and then no entry), the ids the image
+ * runs with, and AT_SECURE. */
 struct uimage_aux {
     uintptr_t base;
+    uintptr_t sysinfo_ehdr;
     uint32_t uid;
     uint32_t euid;
     uint32_t gid;
@@ -132,7 +135,8 @@ struct uimage_aux {
  * strings of argv and then the `envc` of the environment, each array ending
  * in NULL, and the auxiliary vector (AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY,
  * AT_PAGESZ, AT_CLKTCK 100, AT_SECURE, AT_RANDOM, AT_BASE, AT_UID, AT_EUID,
- * AT_GID, AT_EGID, AT_EXECFN, AT_MINSIGSTKSZ and AT_NULL), which a dynamic
+ * AT_GID, AT_EGID, AT_EXECFN, AT_MINSIGSTKSZ, AT_SYSINFO_EHDR where there
+ * is a vDSO, and AT_NULL, which fills the vector's rest), which a dynamic
  * linker reads to find itself and the program it loads. The vector and the
  * bounds of the strings are kept in `u` too. 0, or -1 when no temporary
  * mapping was free.

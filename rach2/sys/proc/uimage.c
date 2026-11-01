@@ -342,8 +342,10 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
     aux[27] = u->execfn;
     aux[28] = AT_MINSIGSTKSZ;
     aux[29] = sigframe_stack_bytes();
-    aux[30] = AT_NULL;
-    aux[31] = 0;
+    aux[30] = ids->sysinfo_ehdr ? AT_SYSINFO_EHDR : AT_NULL;
+    aux[31] = ids->sysinfo_ehdr;
+    aux[32] = AT_NULL;
+    aux[33] = 0;
 
     uwin_open(&out, u);
     uwin_open(&in, u);
