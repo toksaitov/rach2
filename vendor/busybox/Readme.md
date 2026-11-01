@@ -21,6 +21,7 @@ The tarball is not edited. The build applies the patches under `patches/` and co
 * `0005-acpid-reap-actions.patch` makes `acpid` reap the actions it has spawned each time `poll` wakes it. acpid ignores `SIGCHLD` and never waits, which leaves no zombies on Linux, but Rach2's kernel keeps a child's end until its parent waits ([`signal.Readme.md`](../../rach2/sys/proc/signal.Readme.md)), so without the patch each key acpid acted on would hold a slot of the process table for as long as acpid runs.
 * `0006-udhcpc6-build-against-musl.patch` removes the include of `linux/filter.h` from `networking/udhcp/d6_dhcpc.c`, which musl does not install and which only a block upstream keeps under `#if 0` would need, as in `dhcpc.c`.
 * `0007-ifplugd-define-linux-interfaces.patch` adds `include/rach2_linux_net.h`, with the netlink, MII, ethtool and wireless definitions `networking/ifplugd.c` and the netlink socket of `libbb/xconnect.c` use, as Linux 6.18.54 defines them, and includes it in place of the seven `linux/` headers the ported musl does not install, as the `mkfs_vfat` patch does for its two requests.
+* `0008-rfkill-define-linux-interface.patch` replaces the include of `linux/rfkill.h` in `miscutils/rfkill.c`, which the ported musl does not install, with the switch types, the operations, `struct rfkill_event` and `RFKILL_EVENT_SIZE_V1`, as Linux 6.18.54 defines them.
 
 ### Configurations
 
@@ -35,6 +36,7 @@ The main configuration is static, with 64-bit file offsets. `/bin/sh` is ash wit
 * `adduser`, `deluser`, `addgroup`, `delgroup` and `chpasswd` are on, and they are the account programs of the BusyBox images.
 * `cryptpw`, `mkpasswd` and `httpd` with `-m` are on, with SHA-512 as the default password hash.
 * `mount`, `df`, `free`, `uptime`, `mkfs.vfat` and `mkdosfs` are on.
+* `rfkill` is on, with the patch above: it lists the radio switches of `/dev/rfkill` and blocks and unblocks them ([rfkill(8)](../../man/man8/rfkill.8)).
 * SHA-1 and SHA-256 hardware acceleration are off.
 
 The set-id configuration has `login`, `passwd` and `su` and nothing else: no shell (`SH_IS_NONE`), no installer, no individual applet binaries, and no `FEATURE_PREFER_APPLETS`. It turns off `FEATURE_SUID_CONFIG`, the parser of `/etc/busybox.conf`. In this release `check_suid` in `libbb/appletlib.c` frees the parsed list without clearing the global `suid_config`, so a later dispatch in the same process walks freed memory; with the feature off that code is not compiled. The main binary is not set-id, and no manifest stages `/etc/busybox.conf`.

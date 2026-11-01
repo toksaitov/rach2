@@ -1,0 +1,83 @@
+.Dd November 2, 2026
+.Dt RFKILL 8
+.Os
+.Sh NAME
+.Nm rfkill
+.Nd list, block and unblock radio switches
+.Sh SYNOPSIS
+.Nm
+.Cm list
+.Op Ar index Ns | Ns Ar type
+.Nm
+.Cm block
+.Ar index Ns | Ns Ar type
+.Nm
+.Cm unblock
+.Ar index Ns | Ns Ar type
+.Sh DESCRIPTION
+.Nm
+is BusyBox's applet for the kernel's radio switches.
+Each radio has a switch, numbered from 0, with a type, a soft block that
+software sets and clears, and a hard block that a key or a switch of the
+machine sets.
+A radio transmits only while neither is set.
+.Pp
+.Cm list
+prints each switch, or those of the
+.Ar index
+or
+.Ar type
+given, as its index, name and type, and whether it is soft and hard
+blocked.
+.Cm block
+sets the soft block of the switches named, and
+.Cm unblock
+clears it; a hard block stays until the machine clears it.
+.Pp
+A
+.Ar type
+is
+.Cm all ,
+.Cm wlan
+or
+.Cm wifi ,
+.Cm bluetooth ,
+.Cm uwb
+or
+.Cm ultrawideband ,
+.Cm wimax ,
+.Cm wwan ,
+.Cm gps
+or
+.Cm fm .
+Anything else is taken as an
+.Ar index .
+.Pp
+.Cm block
+and
+.Cm unblock
+need write access to
+.Pa /dev/rfkill ,
+which root has.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /dev/rfkill
+The device the switches are read and changed through.
+.It Pa /sys/class/rfkill/rfkill Ns Ar N Ns Pa /uevent
+The name and type of switch
+.Ar N ,
+which
+.Cm list
+prints.
+.El
+.Sh EXIT STATUS
+.Ex -std
+.Sh EXAMPLES
+Stop and restart every Wi-Fi radio:
+.Bd -literal -offset indent
+rfkill block wifi
+rfkill unblock wifi
+.Ed
+.Sh SEE ALSO
+.Xr iw 8 ,
+.Xr wpa_supplicant 8

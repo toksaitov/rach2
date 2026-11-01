@@ -1,0 +1,46 @@
+Rach2: build rfkill against the ported musl.
+
+`miscutils/rfkill.c` includes <linux/rfkill.h>, which the ported musl does
+not install. The patch defines in its place the two enumerations, the
+event and RFKILL_EVENT_SIZE_V1 the applet uses, as Linux 6.18.54 defines
+them.
+
+diff -ruN a/miscutils/rfkill.c b/miscutils/rfkill.c
+--- a/miscutils/rfkill.c	2026-11-02 02:52:41.743596209 +0500
++++ b/miscutils/rfkill.c	2026-11-02 02:52:41.751594923 +0500
+@@ -35,7 +35,34 @@
+ //usage:     "\n		wimax, wwan, gps, fm"
+ 
+ #include "libbb.h"
+-#include <linux/rfkill.h>
++/* Rach2: <linux/rfkill.h>, which the ported musl does not install; the
++ * numbers and the layout are Linux's user ABI, as Linux 6.18.54 defines
++ * them. */
++enum rfkill_type {
++	RFKILL_TYPE_ALL = 0,
++	RFKILL_TYPE_WLAN,
++	RFKILL_TYPE_BLUETOOTH,
++	RFKILL_TYPE_UWB,
++	RFKILL_TYPE_WIMAX,
++	RFKILL_TYPE_WWAN,
++	RFKILL_TYPE_GPS,
++	RFKILL_TYPE_FM,
++	RFKILL_TYPE_NFC,
++};
++enum rfkill_operation {
++	RFKILL_OP_ADD = 0,
++	RFKILL_OP_DEL,
++	RFKILL_OP_CHANGE,
++	RFKILL_OP_CHANGE_ALL,
++};
++struct rfkill_event {
++	uint32_t idx;
++	uint8_t type;
++	uint8_t op;
++	uint8_t soft;
++	uint8_t hard;
++} __attribute__((packed));
++#define RFKILL_EVENT_SIZE_V1 sizeof(struct rfkill_event)
+ 
+ enum {
+ 	OPT_b = (1 << 0), /* must be = 1 */
