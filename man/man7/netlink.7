@@ -512,7 +512,7 @@ with sequence number and port id 0:
 .Bl -tag -width "RTNLGRP_IPV4_IFADDR"
 .It Dv RTNLGRP_LINK No (1)
 .Dv RTM_NEWLINK
-when an interface goes up or down, or its card's link does.
+when an interface goes up or down, its card's link does, or its MTU changes.
 No interface is ever removed, so
 .Dv RTM_DELLINK
 is never sent.

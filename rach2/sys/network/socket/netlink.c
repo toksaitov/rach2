@@ -963,8 +963,8 @@ static void route6_dump(struct nl_build *b)
  * from, each interface's flags and link, its IPv4 and IPv6 addresses and the
  * two route tables, is compared with what it was at the last comparison,
  * ten times a second (`netlink_tick`) and after each change a request makes,
- * and each difference goes to its group: a link whose flags or link state
- * changed, an address or route that went or came, and an IPv6 address whose
+ * and each difference goes to its group: a link whose flags, link state or
+ * MTU changed, an address or route that went or came, and an IPv6 address whose
  * state or lifetimes changed, as Linux announces one when its duplicate
  * detection ends, it is deprecated or a router renews it. Comparing the
  * state, rather than calling out from each place that changes it, catches
@@ -982,6 +982,7 @@ static void route6_dump(struct nl_build *b)
 struct watch_link {
     int index;
     uint8_t up, running;
+    uint32_t mtu;
 };
 
 struct watch_addr4 {
@@ -1046,6 +1047,7 @@ static void watch_take(struct watch_state *w)
         l->index = nd->index;
         l->up = (uint8_t)(nd->up != 0);
         l->running = (uint8_t)(nd->up && netdev_running(nd));
+        l->mtu = nd->mtu;
         for (j = -1; j < nd->naddr2; j++) {
             struct watch_addr4 *a = &w->addr4[w->naddr4];
 
@@ -1072,7 +1074,7 @@ static void watch_take(struct watch_state *w)
 
 static int same_link(const struct watch_link *a, const struct watch_link *b)
 {
-    return a->index == b->index && a->up == b->up && a->running == b->running;
+    return a->index == b->index && a->up == b->up && a->running == b->running && a->mtu == b->mtu;
 }
 
 static int same_addr4(const struct watch_addr4 *a, const struct watch_addr4 *b)

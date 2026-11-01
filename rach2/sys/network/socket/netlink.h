@@ -35,8 +35,8 @@ struct socket;
  * A socket joins multicast groups by its bind's `nl_groups`, groups 1 to
  * 32, and by NETLINK_ADD_MEMBERSHIP, and hears of the first namespace's
  * changes as Linux tells them, each in a datagram of its own with sequence
- * number 0: RTM_NEWLINK in RTNLGRP_LINK when an interface's flags or link
- * change; RTM_NEWADDR and RTM_DELADDR in RTNLGRP_IPV4_IFADDR and
+ * number 0: RTM_NEWLINK in RTNLGRP_LINK when an interface's flags, link or
+ * MTU change; RTM_NEWADDR and RTM_DELADDR in RTNLGRP_IPV4_IFADDR and
  * RTNLGRP_IPV6_IFADDR, an IPv6 address's again when its state or lifetimes
  * change; RTM_NEWROUTE and RTM_DELROUTE in RTNLGRP_IPV4_ROUTE and
  * RTNLGRP_IPV6_ROUTE; and RTM_NEWNDUSEROPT in RTNLGRP_ND_USEROPT with each
