@@ -100,6 +100,9 @@ The close drops what was recorded and not read.
 .Pp
 A change of format, channels, rate or fragments stops the device and empties
 the buffers.
+A request that only asks, a rate or channel count of 0, or
+.Dv AFMT_QUERY
+or a format the device lacks, changes nothing and empties nothing.
 The requests:
 .Bl -tag -width SNDCTL_DSP_SETFRAGMENT
 .It Dv SNDCTL_DSP_SETFMT , SNDCTL_DSP_SAMPLESIZE

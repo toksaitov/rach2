@@ -2,11 +2,11 @@
  * /dev/dsp (audio/dsp.c) and its virtual channels (audio/vchan.c) over a
  * model driver: each ioctl's answer, blocking and interrupted writes and
  * reads, partial frames, drain against reset, the trigger, a reader that
- * falls behind, playback and capture on one open, the negotiation sequences
- * of sox_ng's, FFmpeg's and cmus's OSS outputs and of sox_ng's and FFmpeg's
- * OSS inputs, and several opens playing at once: their mix, its clipping,
- * the conversion of each open's format and rate, and one player closing
- * while another plays.
+ * falls behind, playback and capture on one open and its queries, the
+ * negotiation sequences of sox_ng's, FFmpeg's and cmus's OSS outputs and of
+ * sox_ng's and FFmpeg's OSS inputs, and several opens playing at once: their
+ * mix, its clipping, the conversion of each open's format and rate, and one
+ * player closing while another plays.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
@@ -1087,6 +1087,41 @@ static void row_duplex(void)
     close_dsp();
 }
 
+/**
+ * The queries on a duplex open whose capture was granted another rate than
+ * playback's: SPEED and CHANNELS of 0 and SETFMT of AFMT_QUERY or a format
+ * the device lacks answer playback's values and reconfigure nothing, so
+ * both streams keep running and keep their buffered data.
+ */
+static void row_duplex_query(void)
+{
+    int queued, held;
+
+    begin("duplex query");
+    m.rate_max = 44100;
+    check(open_dsp(2) == 0, "an open for reading and writing succeeds");
+    check(ask(DSP_SETFMT, AFMT_S16_LE) == AFMT_S16_LE && ask(DSP_CHANNELS, 2) == 2 &&
+              ask(DSP_SPEED, 48000) == 48000,
+          "playback is granted S16_LE stereo at 48000 Hz");
+    check(cap.s->rate == 44100, "capture is granted the device's 44100 Hz");
+    check(call(DSP_SETFRAGMENT, &(int){0x0004000A}) == 0, "SETFRAGMENT succeeds");
+    check(put(0, 4096) == 4096 && take(1024) == 1024, "a write and a read start both");
+    model_tick();
+    queued = odelay();
+    held = ispace().bytes;
+    check(queued > 0 && held > 0 && m.running && cap.running,
+          "both directions run with data buffered");
+    check(ask(DSP_SPEED, 0) == 48000, "SPEED 0 answers playback's rate");
+    check(ask(DSP_CHANNELS, 0) == 2, "CHANNELS 0 answers its channels");
+    check(ask(DSP_SETFMT, AFMT_QUERY) == AFMT_S16_LE, "AFMT_QUERY answers its format");
+    check(ask(DSP_SETFMT, AFMT_S32_LE) == AFMT_S16_LE, "a format the device lacks keeps it");
+    check(odelay() == queued && ispace().bytes == held && m.running && cap.running &&
+              m.stops == 0 && cap.stops == 0,
+          "the queries stop nothing and keep both directions' data");
+    check(take(1024) == 1024 && recorded(0, 0, 1024), "capture goes on");
+    close_dsp();
+}
+
 /** sox_ng's `rec`: RESET, GETFMTS, SETFMT, STEREO, SPEED, GETBLKSIZE for
  * its buffer, SYNC, then reads of a buffer each. */
 static void row_sox_rec(void)
@@ -1574,6 +1609,7 @@ int main(void)
     row_read_interrupted();
     row_read_trigger();
     row_duplex();
+    row_duplex_query();
     row_sox_rec();
     row_ffmpeg_in();
     row_mixing();

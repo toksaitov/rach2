@@ -718,15 +718,23 @@ static int afmt(const audio_stream_t *s)
     return s->format == AUDIO_S16LE ? AFMT_S16_LE : AFMT_U8;
 }
 
-/** The ioctls that set the format, channels and rate: each asks for its
- * value in every direction and reads back what `main_chan` was granted. */
+/**
+ * The ioctls that set the format, channels and rate: each asks for its
+ * value in every direction and reads back what `main_chan` was granted.
+ *
+ * A query, SPEED or CHANNELS of 0 or less and SETFMT of AFMT_QUERY or a
+ * format it lacks, which keeps the one set as FreeBSD's does, answers from
+ * `main_chan` and configures nothing: on a duplex open capture's grant can
+ * differ from playback's, and asking for playback's values in both
+ * directions would reset the streams and drop their buffered data.
+ */
 static int32_t dsp_set(struct dsp *d, uint32_t request, uintptr_t arg)
 {
     audio_stream_t *s = &main_chan(d)->stream;
     audio_format_t format = s->format;
     int channels = s->channels;
     uint32_t rate = s->rate;
-    int value;
+    int value, query = 0;
     int32_t rc;
 
     rc = int_in(arg, &value);
@@ -735,27 +743,22 @@ static int32_t dsp_set(struct dsp *d, uint32_t request, uintptr_t arg)
     }
     switch (request) {
     case DSP_SPEED:
-        if (value > 0) {
-            rate = clamp((uint32_t)value, DSP_RATE_MIN, DSP_RATE_MAX);
-        }
+        query = value <= 0;
+        rate = query ? rate : clamp((uint32_t)value, DSP_RATE_MIN, DSP_RATE_MAX);
         break;
     case DSP_STEREO:
         channels = value ? 2 : 1;
         break;
     case DSP_CHANNELS:
-        if (value > 0) {
-            channels = value > 1 ? 2 : 1;
-        }
+        query = value <= 0;
+        channels = query ? channels : value > 1 ? 2 : 1;
         break;
-    default: /* DSP_SETFMT; another format keeps the one set, as FreeBSD's */
-        if (value == AFMT_U8) {
-            format = AUDIO_U8;
-        } else if (value == AFMT_S16_LE) {
-            format = AUDIO_S16LE;
-        }
+    default: /* DSP_SETFMT */
+        query = value != AFMT_U8 && value != AFMT_S16_LE;
+        format = query ? format : value == AFMT_U8 ? AUDIO_U8 : AUDIO_S16LE;
         break;
     }
-    rc = dsp_configure(d, format, channels, rate);
+    rc = query ? 0 : dsp_configure(d, format, channels, rate);
     if (rc != 0) {
         return rc;
     }
