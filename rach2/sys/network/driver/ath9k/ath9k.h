@@ -583,8 +583,9 @@ struct ath9k_bus {
     uintptr_t mmio;         /* the mapped window, 0 before mapping */
     uint16_t subsys_vendor; /* the subsystem IDs, 17aa:NNNN on the G50-70 */
     uint16_t subsys_device;
-    unsigned flags; /* ATH9K_PCI_* */
-    uint8_t vector; /* the MSI vector, 0 when the tick serves the card */
+    unsigned flags;  /* ATH9K_PCI_* */
+    uint8_t vector;  /* the MSI vector, 0 when the tick serves the card */
+    uint8_t started; /* the radio's start succeeded and no stop followed */
 };
 
 /* hw.c's: the chip's identity, its power, and the tables its row's ops
