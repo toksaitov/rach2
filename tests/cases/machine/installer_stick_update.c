@@ -1,7 +1,7 @@
 /*
  * installer_stick_update.c: the scenario of machine.installer.stick-update:
  * the product's install stick, its volume checked on the host and then
- * booted three times beside a copy of the sealed disk.
+ * booted beside a copy of the sealed disk, whose changed menu also boots.
  *
  * The volume must have the root image byte for byte and a manifest that
  * describes the sealed disk. The first boot, by USB, finds the stick as an
@@ -9,9 +9,11 @@
  * their lengths. The second, by IDE, saves the disk's boot and recovery
  * partitions to the volume, updates the disk's root from the stick with
  * `rach2-install --update`, which must keep the machine's groups, replace
- * its files and arm the candidate for the next boot, and then zeroes both
- * partitions. The third writes the saved copies back. Both partitions must
- * then be as they were, the saved copies the same, and the volume clean.
+ * its files and arm the candidate. Two more updates with --console term
+ * change the installed root's menu once and keep the recovery lines. The
+ * disk boots that menu and starts term. A later stick boot zeroes the two
+ * saved partitions, and another writes them back. Both must then be as they
+ * were, the saved copies the same, and the volume clean.
  * A command that fails prints `STICKFAIL` and powers the machine off.
  */
 #include <fcntl.h>
@@ -199,16 +201,15 @@ static int boot_usb(struct etude_case *c, struct state *s)
 }
 
 /**
- * Boot by IDE: save both partitions to the volume, change the root, update
- * it from the stick, read what the update kept and armed, and zero both
- * partitions; then compare them on the host with the sealed disk's.
+ * Save the partitions and update the root without changing its menu, then
+ * update twice with term requested, keeping the recovery lines and leaving
+ * one token on each installed-root line and no change on the second run.
  */
 static int boot_update(struct etude_case *c, struct state *s)
 {
-    const char *disk = etude_private_copy(c, "sealed");
-    char why[200], now[65];
+    char why[200];
     struct drive d;
-    int saved, updated, armed, i, damaged = 1;
+    int saved, updated, armed, menu, i;
 
     drive_boot(&d, c, "ide", NULL);
     if (!s->ready)
@@ -238,6 +239,10 @@ static int boot_update(struct etude_case *c, struct state *s)
                    "&& echo old-root > /old/stick-before && umount /old && echo ROOT\"\"CHANGED || "
                    "{ echo STICK\"\"FAIL: root setup; poweroff -f; }");
     drive_expect(&d, "ROOTCHANGED");
+    drive_send(&d, "mkdir -p /bootcheck && mount -t vfat /dev/disk0p1 /bootcheck && "
+                   "cp /bootcheck/boot/grub/grub.cfg /tmp/menu.before && "
+                   "umount /bootcheck && echo MENU\"\"SAVED");
+    drive_expect(&d, "MENUSAVED");
     if (!d.failed)
         etude_progress(c, "update", 0);
     drive_send(&d, "rach2-install --update /stick/" ROOT_NAME " /dev/disk0 && echo UPDATE\"\"OK || "
@@ -254,13 +259,54 @@ static int boot_update(struct etude_case *c, struct state *s)
     drive_expect(&d, "saved_entry: recovery");
     drive_expect(&d, "next_entry: candidate");
     armed = !d.failed;
+    drive_send(&d, "mount -t vfat /dev/disk0p1 /bootcheck && "
+                   "cmp /tmp/menu.before /bootcheck/boot/grub/grub.cfg && "
+                   "cp /tmp/menu.before /tmp/menu.old && umount /bootcheck && echo MENU\"\"KEPT");
+    drive_expect(&d, "MENUKEPT");
+    menu = !d.failed;
+    /* A menu from before term existed, with a repeated token on one line. */
+    drive_send(&d, "mount -t vfat /dev/disk0p1 /bootcheck && "
+                   "sed '/rach2.slot=recovery/!s/ rach2.console=[^ ]*//g' "
+                   "/tmp/menu.old > /bootcheck/boot/grub/grub.cfg && echo MENU\"\"OLD");
+    drive_expect(&d, "MENUOLD");
     drive_send(&d,
-               "dd if=/dev/zero of=/dev/disk0 bs=1M seek=%" PRIu64
-               " count=64 conv=notrunc && dd if=/dev/zero of=/dev/disk0 bs=1M seek=%" PRIu64
-               " count=64 conv=notrunc && sync && umount /stick && echo DAMAGE\"\"DONE || "
-               "{ echo STICK\"\"FAIL: damage; poweroff -f; }",
-               s->at[0], s->at[1]);
-    drive_expect(&d, "DAMAGEDONE");
+               "sed -i '/rach2.slot=fallback/s/$/ rach2.console=term rach2.console=term/' "
+               "/bootcheck/boot/grub/grub.cfg && sync && umount /bootcheck && echo MENU\"\"READY");
+    drive_expect(&d, "MENUREADY");
+    drive_send(&d, "echo '/rach2.slot=(candidate|fallback)( |$)/ {r++; n=0; "
+                   "for(i=1;i<=NF;i++) if($i==\"rach2.console=term\") n++; if(n!=1) bad=1}' "
+                   "> /tmp/menu.awk; echo AWK\"\"ROOT");
+    drive_expect(&d, "AWKROOT");
+    drive_send(&d, "echo 'END {if(r!=3 || bad) exit 1}' >> /tmp/menu.awk; echo AWK\"\"DONE");
+    drive_expect(&d, "AWKDONE");
+    for (i = 0; i < 2; i++) {
+        drive_send(&d, "rach2-install --console term --update /stick/" ROOT_NAME
+                       " /dev/disk0 && echo CONSOLE\"\"UPDATED || "
+                       "{ echo STICK\"\"FAIL: console update; poweroff -f; }");
+        drive_expect(&d, "CONSOLEUPDATED");
+        if (!d.failed)
+            etude_progress(c, "update", (uint64_t)i + 2);
+        drive_send(&d, "mount -t vfat /dev/disk0p1 /bootcheck && "
+                       "awk -f /tmp/menu.awk /bootcheck/boot/grub/grub.cfg && echo TOKENS\"\"OK || "
+                       "{ echo STICK\"\"FAIL: tokens; poweroff -f; }");
+        drive_expect(&d, "TOKENSOK");
+        drive_send(&d,
+                   "grep rach2.slot=recovery /tmp/menu.old > /tmp/recovery.old; "
+                   "grep rach2.slot=recovery /bootcheck/boot/grub/grub.cfg > /tmp/recovery.new; "
+                   "cmp /tmp/recovery.old /tmp/recovery.new && echo RECOVERY\"\"KEPT");
+        drive_expect(&d, "RECOVERYKEPT");
+        if (i == 0) {
+            drive_send(&d, "cp /bootcheck/boot/grub/grub.cfg /tmp/menu.once && echo MENU\"\"ONCE");
+            drive_expect(&d, "MENUONCE");
+        } else {
+            drive_send(&d, "cmp /tmp/menu.once /bootcheck/boot/grub/grub.cfg && echo MENU\"\"SAME");
+            drive_expect(&d, "MENUSAME");
+        }
+        drive_send(&d, "umount /bootcheck && echo MENU\"\"CLOSED");
+        drive_expect(&d, "MENUCLOSED");
+    }
+    drive_send(&d, "umount /stick && echo UPDATE\"\"DONE");
+    drive_expect(&d, "UPDATEDONE");
     stick_failure(&d, why, sizeof(why));
     drive_stop(&d);
     if (drive_halted())
@@ -268,6 +314,47 @@ static int boot_update(struct etude_case *c, struct state *s)
     inst_assert(c, "saved", saved, why);
     inst_assert(c, "update", updated, why);
     inst_assert(c, "armed", armed, why);
+    inst_assert(c, "menu-kept", menu, why);
+    inst_assert(c, "console-menu", !d.failed, why);
+    return 0;
+}
+
+/** Boot the updated disk's candidate through its changed GRUB menu. */
+static int boot_console(struct etude_case *c)
+{
+    struct drive d;
+
+    drive_boot(&d, c, "installed", NULL);
+    drive_expect(&d, "init: console: starting term");
+    drive_stop(&d);
+    if (drive_halted())
+        return 1;
+    inst_assert(c, "console-boot", !d.failed, d.why);
+    return 0;
+}
+
+/** Zero the saved partitions from the stick, then judge their bytes. */
+static int boot_damage(struct etude_case *c, struct state *s)
+{
+    const char *disk = etude_private_copy(c, "sealed");
+    char why[200], now[65];
+    struct drive d;
+    int i, damaged = 1;
+
+    drive_boot(&d, c, "ide", NULL);
+    drive_expect(&d, "recovery image");
+    drive_expect(&d, "# ");
+    drive_send(&d,
+               "dd if=/dev/zero of=/dev/disk0 bs=1M seek=%" PRIu64
+               " count=64 conv=notrunc && dd if=/dev/zero of=/dev/disk0 bs=1M seek=%" PRIu64
+               " count=64 conv=notrunc && sync && echo DAMAGE\"\"DONE || "
+               "{ echo STICK\"\"FAIL: damage; poweroff -f; }",
+               s->at[0], s->at[1]);
+    drive_expect(&d, "DAMAGEDONE");
+    stick_failure(&d, why, sizeof(why));
+    drive_stop(&d);
+    if (drive_halted())
+        return 1;
     for (i = 0; i < 2; i++)
         if (d.failed || file_digest(disk, s->at[i] * MIB, PART_BYTES, now) != 0 ||
             strcmp(now, s->before[i]) == 0)
@@ -350,6 +437,10 @@ int etude_scenario(struct etude_case *c)
     if (etude_step(c, "usb") != ETUDE_OK || boot_usb(c, &s) != 0)
         return 1;
     if (etude_step(c, "update") != ETUDE_OK || boot_update(c, &s) != 0)
+        return 1;
+    if (etude_step(c, "console") != ETUDE_OK || boot_console(c) != 0)
+        return 1;
+    if (etude_step(c, "damage") != ETUDE_OK || boot_damage(c, &s) != 0)
         return 1;
     if (etude_step(c, "restore") != ETUDE_OK || boot_restore(c, &s) != 0)
         return 1;

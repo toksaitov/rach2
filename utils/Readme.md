@@ -52,7 +52,7 @@ The BusyBox images take `su`, `passwd` and `login` from BusyBox's set-id build i
 * [growroot(8)](../man/man8/growroot.8) grows an ext2 partition and its file system into the free space after it, from the recovery system.
 * [growset(8)](../man/man8/growset.8) computes the sectors such a grow writes, so that they can be saved before it and checked after it.
 * [growboot(8)](../man/man8/growboot.8) writes, from a backup of a boot partition, a GRUB environment block that boots the recovery entry.
-* [rach2-install(8)](../man/man8/rach2-install.8) installs the system onto a disk from the install stick, or writes a new root into an installed machine.
+* [rach2-install(8)](../man/man8/rach2-install.8) installs the system onto a disk from the install stick, or writes a new root into an installed machine. An update with `--console term` gives the installed root's candidate, fallback and text boot lines one `rach2.console=term` token, publishing the menu by sync and rename before arming the trial and checking the boot partition with `bootctl status`. Recovery lines keep their bytes. Without the option, the menu keeps every byte.
 
 ### Other programs
 
@@ -166,7 +166,7 @@ A suite below runs as `tests/run NAME`.
 * `termconsole` boots a disk whose menu carries `rach2.console=term` under OVMF and SeaBIOS, logs in at `term`'s screen with keys pressed through QMP, reads `term`'s replies to DA1, XTVERSION, DECRQM and the Kitty query, runs Doom inside `term` under OVMF, and kills `term` to see `init` report it and start the kernel console's login.
 * `metal` reaches `init-metal`'s SSH server with nobody at the console, and again after it is killed; `servicelog` checks init's service log; `shutdown` stops the machine through `init-shell`'s SIGUSR1, SIGUSR2 and SIGTERM, and requires a `halt` run through `su` as an ordinary account to be refused.
 * `install`, `menu` and `grub` drive `bootctl`'s kernel, menu and GRUB verbs. `grow` runs `growroot` and `diskctl shrink` on the recovery system and checks its writes with the host build of `growset`, and runs `growboot` on the host.
-* `installer`, `sealed`, `drill` and `uefi` install and repair disks with `rach2-install`, `reflash`, `diskctl` and `init-recovery`.
+* `installer`, `sealed`, `drill` and `uefi` install and repair disks with `rach2-install`, `reflash`, `diskctl` and `init-recovery`. The installer's stick-update case checks that an ordinary update keeps the menu, applies `--console term` twice, checks each installed-root line and the recovery lines, then boots the changed menu and sees init start `term`.
 * `selfbuild` builds this directory on Rach2 with `guest.mk` and runs the `httpd` and `nc` it built.
 * `acpid` presses the volume keys on os-real and reads `mixer`, and powers the machine off through acpid and init.
 * No suite runs `audiotest`.
