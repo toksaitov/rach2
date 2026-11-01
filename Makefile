@@ -71,6 +71,10 @@ DROPBEAR_STAMP = $(ARCH_VENDOR)/dropbear/.stamp
 TCC_STAMP      = $(ARCH_VENDOR)/tcc/.stamp
 PDPMAKE_STAMP  = $(ARCH_VENDOR)/pdpmake/.stamp
 SOX_NG_STAMP = $(ARCH_BUILD)/vendor-work/sox_ng/.stamp
+OPENSSL_STAMP = $(ARCH_BUILD)/vendor-work/openssl/.stamp
+LIBNL_STAMP = $(ARCH_BUILD)/vendor-work/libnl/.stamp
+HOSTAP_STAMP = $(ARCH_BUILD)/vendor-work/hostap/.stamp
+IW_STAMP = $(ARCH_BUILD)/vendor-work/iw/.stamp
 KBD_STAMP = $(ARCH_BUILD)/vendor-work/kbd/.stamp
 E2FSPROGS_STAMP = $(ARCH_VENDOR)/e2fsprogs/.stamp
 LIBTSM_STAMP   = $(ARCH_VENDOR)/libtsm/.stamp
@@ -97,6 +101,16 @@ DROPBEAR_STAGE = $(VENDOR_STAGE)/dropbear
 PDPMAKE_STAGE = $(VENDOR_STAGE)/pdpmake
 SOX_NG_STAGE = $(VENDOR_STAGE)/sox_ng
 SOX_NG_OUTPUTS = $(addprefix $(SOX_NG_STAGE)/,sox mode sh COPYING)
+# The libraries the Wi-Fi tools link, and the tools.
+OPENSSL_STAGE = $(VENDOR_STAGE)/openssl
+OPENSSL_OUTPUTS = $(addprefix $(OPENSSL_STAGE)/,lib/libcrypto.a lib/libssl.a LICENSE.txt)
+LIBNL_STAGE = $(VENDOR_STAGE)/libnl
+LIBNL_OUTPUTS = $(addprefix $(LIBNL_STAGE)/,lib/libnl-3.a lib/libnl-genl-3.a COPYING)
+HOSTAP_STAGE = $(VENDOR_STAGE)/hostap
+HOSTAP_PROGRAMS = wpa_supplicant wpa_cli wpa_passphrase hostapd hostapd_cli
+HOSTAP_OUTPUTS = $(addprefix $(HOSTAP_STAGE)/,$(HOSTAP_PROGRAMS) COPYING)
+IW_STAGE = $(VENDOR_STAGE)/iw
+IW_OUTPUTS = $(addprefix $(IW_STAGE)/,iw COPYING)
 KBD_STAGE = $(VENDOR_STAGE)/kbd
 KBD_PROGRAMS = loadkeys dumpkeys setleds kbdrate showkey kbd_mode
 KBD_BINS = $(addprefix $(KBD_STAGE)/,$(KBD_PROGRAMS))
@@ -126,6 +140,13 @@ LIBTSM_HOST_A = $(LIBTSM_HOST_STAGE)/lib/libtsm.a
 # a deleted tarball from the prerequisites and leave its stamp up to date; and
 # `distclean` derives the extracted source directories from them.
 SOX_NG_TARBALL = vendor/sox_ng/sox_ng-14.8.1.tar.gz
+# OpenSSL's tarball is the GNU layer's download, which build_openssl.sh pins.
+LIBNL_TARBALL = vendor/libnl/libnl-3.12.0.tar.gz
+LIBNL_UAPI = $(addprefix vendor/libnl/linux-uapi/,asm/byteorder.h asm/errno.h asm/swab.h \
+             asm-generic/errno.h asm-generic/errno-base.h linux/bpf_common.h \
+             linux/errqueue.h linux/filter.h linux/time_types.h)
+HOSTAP_TARBALLS = vendor/hostap/wpa_supplicant-2.12.tar.gz vendor/hostap/hostapd-2.12.tar.gz
+IW_TARBALL = vendor/iw/iw-6.17.tar.xz
 KBD_TARBALL = vendor/kbd/kbd-2.10.0.tar.xz
 KBD_PATCHES = vendor/kbd/patches/series $(wildcard vendor/kbd/patches/*.patch)
 LIBC_TARBALL     = vendor/musl/musl-1.2.5.tar.gz
@@ -193,7 +214,8 @@ STEP_INPUTS     = $(foreach f,$(filter-out gnu-in-copy,$^),$(if $(filter %.stamp
         isos test-iso os-simple-iso os-real-iso rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
         check-pdpmake check-e2fsck \
-        musl busybox dropbear sox_ng tcc pdpmake kbd e2fsprogs libtsm libtsm-host $(BASE_DIRS) $(FULL_DIRS)
+        musl busybox dropbear sox_ng openssl libnl hostap iw tcc pdpmake kbd e2fsprogs libtsm \
+        libtsm-host $(BASE_DIRS) $(FULL_DIRS)
 
 # The default goal: the images, which bring in the kernel, the guest programs,
 # the vendored userland and Doom through their prerequisites, and the host
@@ -213,13 +235,18 @@ preflight:
 
 all images $(BASE_DIRS) $(FULL_DIRS): | preflight
 $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP) \
-    $(E2FSPROGS_STAMP) $(LIBTSM_STAMP) $(SOX_NG_STAMP): | preflight
+    $(E2FSPROGS_STAMP) $(LIBTSM_STAMP) $(SOX_NG_STAMP) $(OPENSSL_STAMP) $(LIBNL_STAMP) \
+    $(HOSTAP_STAMP) $(IW_STAMP): | preflight
 
 # A name for each vendored project's stamp.
 musl: $(LIBC_STAMP)
 busybox: $(BUSYBOX_STAMP)
 dropbear: $(DROPBEAR_STAMP)
 sox_ng: $(SOX_NG_STAMP)
+openssl: $(OPENSSL_STAMP)
+libnl: $(LIBNL_STAMP)
+hostap: $(HOSTAP_STAMP)
+iw: $(IW_STAMP)
 tcc: $(TCC_STAMP)
 pdpmake: $(PDPMAKE_STAMP)
 kbd: $(KBD_STAMP)
@@ -387,6 +414,28 @@ $(SOX_NG_STAMP): vendor/sox_ng/build_sox_ng.sh $(VENDOR_COMMON) $(SOX_NG_TARBALL
 
 _ := $(shell [ ! -f $(SOX_NG_STAMP) ] || \
         for f in $(SOX_NG_OUTPUTS); do [ -s "$$f" ] || { rm -f $(SOX_NG_STAMP); break; }; done)
+
+# The Wi-Fi tools: OpenSSL and libnl, static libraries, then wpa_supplicant
+# and hostapd, which link both, and iw, which links libnl. Each rule is
+# sox_ng's with its own name, outputs and inputs.
+define WIFI_STEP
+$$($(1)_STAMP): vendor/$(2)/build_$(2).sh $$(VENDOR_COMMON) $(3) $$(LIBC_STAMP) | $$(SHA256TOOL) $$(ETUDE)
+	@rm -f $$@ $$($(1)_OUTPUTS)
+	+@if [ -n "$$(DRY_RUN)" ]; then echo "$$@: dry run"; else t0=$$$$(date +%s); \
+	    $$(STEP) -n $(2) -t $$@ -c $$(CROSS_PREFIX)gcc -c cc $$(STEP_INPUTS) -o $$($(1)_STAGE) \
+	        -- sh -c 'RACH2_ARCH=$$(ARCH) ./vendor/$(2)/build_$(2).sh && for f in $$($(1)_OUTPUTS); do test -s "$$$$f" || exit 1; done' && \
+	    echo "$(2): result: done in $$$$(($$$$(date +%s)-t0))s"; fi
+	@for f in $$($(1)_OUTPUTS); do test -s "$$$$f" || { echo "$(2): missing output: $$$$f" >&2; exit 1; }; done
+
+$$($(1)_OUTPUTS): $$($(1)_STAMP)
+_ := $$(shell [ ! -f $$($(1)_STAMP) ] || \
+        for f in $$($(1)_OUTPUTS); do [ -s "$$$$f" ] || { rm -f $$($(1)_STAMP); break; }; done)
+endef
+$(eval $(call WIFI_STEP,OPENSSL,openssl,))
+$(eval $(call WIFI_STEP,LIBNL,libnl,$(LIBNL_TARBALL) $(LIBNL_UAPI)))
+$(eval $(call WIFI_STEP,HOSTAP,hostap,$(HOSTAP_TARBALLS) vendor/hostap/wpa_supplicant.config \
+    vendor/hostap/hostapd.config $(OPENSSL_STAMP) $(LIBNL_STAMP)))
+$(eval $(call WIFI_STEP,IW,iw,$(IW_TARBALL) $(LIBNL_STAMP)))
 
 _ := $(shell [ ! -f $(KBD_STAMP) ] || { for f in $(KBD_BINS); do [ -s "$$f" ] || { rm -f $(KBD_STAMP); break; }; done; })
 
@@ -1816,12 +1865,15 @@ include tests/native/native.mk
 # the step taken as done.
 STEP_STAMPS = $(LIBC_STAMP) $(BUSYBOX_STAMP) $(DROPBEAR_STAMP) $(TCC_STAMP) $(PDPMAKE_STAMP) \
               $(E2FSPROGS_STAMP) $(KBD_STAMP) $(LIBTSM_STAMP) $(LIBTSM_HOST_STAMP) $(MTOOLS_STAMP) \
-              $(GNU_STEP_STAMPS)
+              $(OPENSSL_STAMP) $(LIBNL_STAMP) $(HOSTAP_STAMP) $(IW_STAMP) $(GNU_STEP_STAMPS)
 STEP_PRODUCTS = $(LIBC_STAMP):$(LIBC_A) $(BUSYBOX_STAMP):$(BUSYBOX_BIN) \
                 $(DROPBEAR_STAMP):$(DROPBEAR_BIN) $(TCC_STAMP):$(TCC_BIN) \
                 $(PDPMAKE_STAMP):$(PDPMAKE_BIN) $(E2FSPROGS_STAMP):$(E2FSCK_BIN) \
                 $(LIBTSM_STAMP):$(LIBTSM_A) $(LIBTSM_HOST_STAMP):$(LIBTSM_HOST_A) \
-                $(KBD_STAMP):$(KBD_STAGE)/loadkeys $(MTOOLS_STAMP):$(MTOOLS_BIN)
+                $(KBD_STAMP):$(KBD_STAGE)/loadkeys $(MTOOLS_STAMP):$(MTOOLS_BIN) \
+                $(OPENSSL_STAMP):$(OPENSSL_STAGE)/lib/libcrypto.a \
+                $(LIBNL_STAMP):$(LIBNL_STAGE)/lib/libnl-3.a \
+                $(HOSTAP_STAMP):$(HOSTAP_STAGE)/wpa_supplicant $(IW_STAMP):$(IW_STAGE)/iw
 ifeq ($(DRY_RUN),)
 _ := $(shell $(foreach p,$(STEP_PRODUCTS),[ -s "$(lastword $(subst :, ,$(p)))" ] || \
         rm -f "$(firstword $(subst :, ,$(p)))";) :)
