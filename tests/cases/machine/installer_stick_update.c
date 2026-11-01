@@ -8,8 +8,9 @@
  * MBR disk of three partitions, mounts the volume and sees both images at
  * their lengths. The second, by IDE, saves the disk's boot and recovery
  * partitions to the volume, updates the disk's root from the stick with
- * `rach2-install --update`, which must keep the machine's groups, replace
- * its files and arm the candidate. Two more updates with --console term
+ * `rach2-install --update`, which must keep the machine's groups, a login
+ * in root's home with its mode and the console's keymap file, replace its
+ * files and arm the candidate. Two more updates with --console term
  * change the installed root's menu once and keep the recovery lines. The
  * disk boots that menu and starts term. A later stick boot zeroes the two
  * saved partitions, and another writes them back. Both must then be as they
@@ -290,6 +291,16 @@ static int boot_update(struct etude_case *c, struct state *s)
                    "&& echo old-root > /old/stick-before && umount /old && echo ROOT\"\"CHANGED || "
                    "{ echo STICK\"\"FAIL: root setup; poweroff -f; }");
     drive_expect(&d, "ROOTCHANGED");
+    drive_send(
+        &d,
+        "mount -t ext2 /dev/disk0p3 /old && mkdir -p /old/root && "
+        "echo stick-login > /old/root/.stick-login && chmod 600 /old/root/.stick-login "
+        "&& umount /old && echo LOGIN\"\"PLACED || { echo STICK\"\"FAIL: login; poweroff -f; }");
+    drive_expect(&d, "LOGINPLACED");
+    drive_send(&d, "mount -t ext2 /dev/disk0p3 /old && printf 'KEYMAP=us\\n# stickproof\\n' > "
+                   "/old/etc/vconsole.conf && umount /old && echo KEYMAP\"\"PLACED || "
+                   "{ echo STICK\"\"FAIL: keymap; poweroff -f; }");
+    drive_expect(&d, "KEYMAPPLACED");
     drive_send(&d, "mkdir -p /bootcheck && mount -t vfat /dev/disk0p1 /bootcheck && "
                    "cp /bootcheck/boot/grub/grub.cfg /tmp/menu.before && "
                    "umount /bootcheck && echo MENU\"\"SAVED");
@@ -305,6 +316,11 @@ static int boot_update(struct etude_case *c, struct state *s)
                    "grep -qx stickproof:x:1234: /old/etc/group && umount /old && "
                    "echo ROOT\"\"CHECKED || { echo STICK\"\"FAIL: root check; poweroff -f; }");
     drive_expect(&d, "ROOTCHECKED");
+    drive_send(&d, "mount -t ext2 /dev/disk0p3 /old && grep -qx stick-login /old/root/.stick-login "
+                   "&& test $(stat -c %%a /old/root/.stick-login) = 600 && "
+                   "grep -qx '# stickproof' /old/etc/vconsole.conf && umount /old && "
+                   "echo LOGIN\"\"KEPT || { echo STICK\"\"FAIL: login check; poweroff -f; }");
+    drive_expect(&d, "LOGINKEPT");
     updated = !d.failed;
     drive_send(&d, "bootctl --target /dev/disk0p1 status");
     drive_expect(&d, "saved_entry: recovery");
