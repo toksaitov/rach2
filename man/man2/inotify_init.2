@@ -144,10 +144,11 @@ says.
 .Pp
 Where Linux differs: a file is gone for its watches when its last link
 is removed, where Linux waits for its last close; the events of a file
-reach the watch of its directory only through a descriptor opened by a
-name in that directory while a watch existed, so a change of a file's
-mode or owner by path, and a file opened before any watch existed, are
-reported to the file's own watches alone; and a watch is found by the
+reach the watch of its directory through the name a call gave, and
+through a descriptor only when it was opened by a name in that directory
+while a watch existed, so a file opened before any watch existed, and a
+file named through a symbolic link, are reported to the file's own
+watches alone; and a watch is found by the
 file's inode number, which a rename changes on a FAT volume, so a watch
 of a file there does not follow it.
 .Sh RETURN VALUES
