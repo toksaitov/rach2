@@ -168,6 +168,16 @@ file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
 # The script udhcpc6 runs for a DHCPv6 lease, which turns it into an address
 # and resolvers (busybox-networking(1)).
 file 0755 /usr/share/udhcpc/default6.script krffs/udhcpc6-default.script
+# The resolver merge the lease scripts and ndwatch give their servers to,
+# which writes /etc/resolv.conf from all of them (ndwatch(8)).
+file 0755 /usr/share/udhcpc/resolv.script krffs/resolv.script
+# What init runs where the boot line hands the network to userland (init(8)):
+# BusyBox's ifplugd, which runs this action when eth0's link comes or goes,
+# so a cable moved to another network gives that network's lease at once,
+# and ndwatch, which follows the routers' DNS servers and DHCPv6 flags.
+dir 0755 /etc/ifplugd
+file 0755 /etc/ifplugd/ifplugd.action krffs/ifplugd.action
+file 0755 /sbin/ndwatch build/utils/ndwatch
 # The one keymap init loads here, `us` and the two files it includes: this
 # root has no /etc/vconsole.conf, so init loads `us` (init(8)), and its 5 MiB
 # must keep 512 KiB free, which the other layouts' 150 KiB would take

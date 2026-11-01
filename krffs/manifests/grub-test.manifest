@@ -197,6 +197,9 @@ file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
 # The script udhcpc6 runs for a DHCPv6 lease, which turns it into an address
 # and resolvers (busybox-networking(1)).
 file 0755 /usr/share/udhcpc/default6.script krffs/udhcpc6-default.script
+# The resolver merge the lease scripts and ndwatch give their servers to,
+# which writes /etc/resolv.conf from all of them (ndwatch(8)).
+file 0755 /usr/share/udhcpc/resolv.script krffs/resolv.script
 # The keymaps, which loadkeys finds by name, as in `loadkeys -u kg alt-shift`
 # (vendor/keymaps/Readme.md).
 tree 0644 /usr/share/kbd/keymaps/xkb vendor/keymaps/xkb

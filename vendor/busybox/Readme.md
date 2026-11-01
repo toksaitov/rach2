@@ -31,7 +31,7 @@ The main configuration is static, with 64-bit file offsets. `/bin/sh` is ash wit
 * `login`, `passwd` and `su` are off; the set-id binary has them.
 * `ping`, `ping6` and `traceroute6` are off. `/bin/ping` is the project's unprivileged program ([ping(1)](../../man/man1/ping.1)), which reaches IPv6 addresses too. `arping` and `traceroute` are on and need root.
 * `dmesg` is off; the image's `/bin/dmesg` is the project's ([dmesg(1)](../../man/man1/dmesg.1)).
-* `ifconfig`, `route`, `ifup`, `ifdown`, `udhcpc` and `udhcpc6` are on, with `FEATURE_IFUPDOWN_IP` off, so ifupdown uses `ifconfig` and `route`, for IPv6 too through `ifconfig add` and `route -A inet6`. `udhcpc6` has no ifupdown method; its script is [`krffs/udhcpc6-default.script`](../../krffs/udhcpc6-default.script).
+* `ifconfig`, `route`, `ifup`, `ifdown`, `udhcpc` and `udhcpc6` are on, with `FEATURE_IFUPDOWN_IP` off, so ifupdown uses `ifconfig` and `route`, for IPv6 too through `ifconfig add` and `route -A inet6`. `udhcpc6` has no ifupdown method; [ndwatch(8)](../../man/man8/ndwatch.8) starts it for a router's M or O flag, and its script is [`krffs/udhcpc6-default.script`](../../krffs/udhcpc6-default.script). `ifplugd` is on, with the patch above, and init runs it as [busybox-networking(1)](../../man/man1/busybox-networking.1) says.
 * `adduser`, `deluser`, `addgroup`, `delgroup` and `chpasswd` are on, and they are the account programs of the BusyBox images.
 * `cryptpw`, `mkpasswd` and `httpd` with `-m` are on, with SHA-512 as the default password hash.
 * `mount`, `df`, `free`, `uptime`, `mkfs.vfat` and `mkdosfs` are on.

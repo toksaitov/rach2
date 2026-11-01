@@ -178,6 +178,7 @@ hwclock 1 busybox-util-linux
 id 1 busybox-coreutils
 ifconfig 1 busybox-networking
 ifdown 1 busybox-networking
+ifplugd 1 busybox-networking
 ifup 1 busybox-networking
 inetd 1 busybox-networking
 insmod 8 busybox-modutils

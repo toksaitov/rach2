@@ -1,0 +1,31 @@
+#!/bin/sh
+#
+# The script BusyBox's ifplugd runs when the link of an interface comes or
+# goes: `ifplugd.action IFACE up` or `ifplugd.action IFACE down`.
+#
+# A link that goes down may come back on another network, as when a cable is
+# moved to another switch, so its loss takes the interface down with
+# `ifdown`, which stops its DHCP client and so gives up the lease, its
+# address, default route and servers, and takes the card down, which forgets
+# its IPv6 addresses and routes. A link that comes up is brought up with
+# `ifup`, as /etc/network/interfaces says, so a `dhcp` stanza asks the new
+# network for a lease at once instead of waiting for the old one to fail. An
+# interface `ifup` has already brought up is brought down first, so the lease
+# is always the new network's.
+#
+# ifplugd brings the card up again after `ifdown`, since it reads the link
+# only on a card that is up; ndwatch(8) follows the routers' side.
+
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+export PATH
+
+case "$2" in
+	up)
+		/bin/busybox ifdown "$1" 2>/dev/null
+		exec /bin/busybox ifup "$1"
+		;;
+	down)
+		exec /bin/busybox ifdown "$1"
+		;;
+esac
+exit 0

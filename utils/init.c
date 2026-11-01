@@ -8,16 +8,17 @@
  * session when it exits, so the console is never left without one, and
  * continue a child that is stopped, since nothing else can. Beside that it
  * clears `/var/run`, writes the boot's utmp record, sets the resource limits,
- * keeps each backlight's level across a reboot, and keeps `/bin/update`
- * running and, on an image with its configuration, BusyBox's acpid, which
- * acts on the power, volume and brightness keys. It never exits; if it did,
+ * applies /etc/sysctl.conf, keeps each backlight's level across a reboot,
+ * and keeps `/bin/update` running and, on an image with its configuration,
+ * BusyBox's acpid, which acts on the power, volume and brightness keys. It never exits; if it did,
  * the kernel would have no reaper, so the kernel panics if init dies.
  *
  * Four artifacts are built from this one source, and none of them is named
  * plain `init`: `init-shell` runs a shell on the console, `init-login` puts
  * that console behind `/bin/login`, `init-metal` is `init-login` plus the
- * network, a supervised SSH server, the system log, BusyBox's NTP daemon
- * where /etc/ntp.conf names a server and, on the GNU system's root, D-Bus's
+ * network, ifplugd and ndwatch, which follow its link and its routers, a
+ * supervised SSH server, the system log, BusyBox's NTP daemon where
+ * /etc/ntp.conf names a server and, on the GNU system's root, D-Bus's
  * system bus and the cron daemon, and `init-recovery` is the
  * recovery system's, a shell on the console with the metal build's network,
  * services and file system check beside it. The metal build exists because
@@ -53,6 +54,7 @@
 #include <pwd.h>
 #include <sys/stat.h>
 #include <sys/utsname.h>
+#include <net/if.h>
 #ifdef INIT_RECOVERY
 #include "gptdisk.h"
 #endif
@@ -169,10 +171,22 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  * log.
  */
 #define NTP_CONF "/etc/ntp.conf"
+
+/*
+ * The interface whose link and routers init has followed where the boot line
+ * hands the network to userland (`boot_wants_userland_network`): BusyBox's
+ * ifplugd takes it down and up with its link through `IFPLUGD_ACTION`, so a
+ * cable moved to another network gives the new network's lease at once, and
+ * ndwatch(8) follows its routers' DNS servers and DHCPv6 flags. Each runs on
+ * an image that has its program and while the interface exists.
+ */
+#define NETWORK_IFACE   "eth0"
+#define IFPLUGD_ACTION  "/etc/ifplugd/ifplugd.action"
+#define NDWATCH_PROGRAM "/sbin/ndwatch"
 #endif
 
 /* BusyBox, whose applets init runs by the name in argv[0]: the system log,
- * ntpd and acpid. */
+ * ntpd, acpid, ifplugd and sysctl. */
 #define BUSYBOX_PROGRAM "/bin/busybox"
 
 /*
@@ -185,6 +199,14 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  */
 #define ACPID_CONF  "/etc/acpid.conf"
 #define ACPID_INPUT "/dev/input/event0"
+
+/*
+ * The kernel settings an image keeps, lines of `NAME = VALUE` as Linux's
+ * sysctl.conf(5) has them, which init applies at boot with BusyBox's
+ * `sysctl -p` (`apply_sysctl`). The installed systems set IPv6's temporary
+ * addresses there.
+ */
+#define SYSCTL_CONF "/etc/sysctl.conf"
 
 /*
  * Each backlight's level is kept across a reboot, as systemd-backlight keeps
@@ -2070,6 +2092,92 @@ static pid_t spawn_ntpd(void)
 }
 
 /**
+ * Fork the program `path` with `argv`, which stays in the foreground, and
+ * return its pid (-1 on failure), its messages on the service log, with the
+ * shutdown signals blocked across the fork as for the SSH server
+ * (`spawn_sshd`).
+ */
+static pid_t spawn_service(const char *path, char *const argv[])
+{
+    sigset_t saved;
+    pid_t pid;
+
+    if (shutdown_block(&saved) != 0) {
+        return -1;
+    }
+    pid = fork();
+    if (pid != 0) {
+        (void)sigprocmask(SIG_SETMASK, &saved, NULL);
+        return pid;
+    }
+    if (shutdown_defaults(&saved) != 0) {
+        _exit(126);
+    }
+    service_output();
+    execve(path, argv, environ);
+    fprintf(stderr, "init: cannot exec %s %s: %s\n", path, argv[0], strerror(errno));
+    _exit(127);
+    return -1; /* unreachable; quiets the compiler */
+}
+
+/**
+ * Whether to follow `NETWORK_IFACE` with the program `path`: the boot line
+ * hands the network to userland, the image has the program and the
+ * interface exists. Asked on each turn that finds the program not running.
+ */
+static int follow_wanted(const char *path)
+{
+    return boot_wants_userland_network() && access(path, X_OK) == 0 &&
+           if_nametoindex(NETWORK_IFACE) != 0;
+}
+
+/**
+ * Start BusyBox's ifplugd for `NETWORK_IFACE` when `follow_wanted`: in the
+ * foreground (`-n`), writing to the service log rather than the system log
+ * (`-s`), told of the link's changes by netlink (`-M`) and reading the link
+ * from `IFF_RUNNING` (`-m iff`). It runs `IFPLUGD_ACTION` at once on each
+ * change (`-u 0 -d 0`), since a link down for a moment may come back on
+ * another network, goes on when the action fails (`-I`), and runs nothing
+ * when it starts (`-p`), since `ifup -a` has brought the interface up.
+ */
+static void start_ifplugd(struct service *s)
+{
+    static char *const argv[] = {(char *)"ifplugd",
+                                 (char *)"-n",
+                                 (char *)"-s",
+                                 (char *)"-I",
+                                 (char *)"-M",
+                                 (char *)"-p",
+                                 (char *)"-i",
+                                 (char *)NETWORK_IFACE,
+                                 (char *)"-r",
+                                 (char *)IFPLUGD_ACTION,
+                                 (char *)"-m",
+                                 (char *)"iff",
+                                 (char *)"-u",
+                                 (char *)"0",
+                                 (char *)"-d",
+                                 (char *)"0",
+                                 0};
+
+    if (s->pid < 0 && access(BUSYBOX_PROGRAM, X_OK) == 0 && follow_wanted(IFPLUGD_ACTION)) {
+        s->pid = spawn_service(BUSYBOX_PROGRAM, argv);
+        s->spawned = time(0);
+    }
+}
+
+/** Start ndwatch(8) for `NETWORK_IFACE` when `follow_wanted`. */
+static void start_ndwatch(struct service *s)
+{
+    static char *const argv[] = {(char *)"ndwatch", (char *)NETWORK_IFACE, 0};
+
+    if (s->pid < 0 && follow_wanted(NDWATCH_PROGRAM)) {
+        s->pid = spawn_service(NDWATCH_PROGRAM, argv);
+        s->spawned = time(0);
+    }
+}
+
+/**
  * Whether this image runs D-Bus's system bus: when it has `DBUS_PROGRAM`
  * and the user `DBUS_USER`, whose ids go in `bus_uid` and `bus_gid`. An
  * image with the program and not the user is reported once.
@@ -2094,7 +2202,7 @@ static int bus_user(void)
 /* The services, and whether the image has the bus and the cron daemon,
  * which `services_found` decides at boot. */
 struct services {
-    struct service log, sshd, bus, cron, ntp;
+    struct service log, sshd, bus, cron, ntp, plug, nd;
     int bus_wanted, cron_wanted;
 };
 
@@ -2107,6 +2215,7 @@ static void services_found(struct services *s)
 {
     memset(s, 0, sizeof(*s));
     s->log.pid = s->sshd.pid = s->bus.pid = s->cron.pid = s->ntp.pid = -1;
+    s->plug.pid = s->nd.pid = -1;
     s->bus_wanted = bus_user();
     s->cron_wanted = access(CRON_PROGRAM, X_OK) == 0;
 }
@@ -2114,8 +2223,9 @@ static void services_found(struct services *s)
 /**
  * Start each service that is not running: the system log, the SSH server
  * where `anyone_to_let_in` allows one, reported on the console, D-Bus's
- * system bus and the cron daemon where the image has them, and ntpd while
- * `NTP_CONF` names a server. A failed fork is left for the next turn.
+ * system bus and the cron daemon where the image has them, ntpd while
+ * `NTP_CONF` names a server, and ifplugd and ndwatch where init follows
+ * `NETWORK_IFACE`. A failed fork is left for the next turn.
  *
  * The NTP configuration is read again on each turn that finds ntpd not
  * running, so a server an administrator writes into the file is used within
@@ -2147,6 +2257,8 @@ static void start_services(struct services *s)
         s->ntp.pid = spawn_ntpd();
         s->ntp.spawned = time(0);
     }
+    start_ifplugd(&s->plug);
+    start_ndwatch(&s->nd);
 }
 
 /** Whether `reaped` is the pid of one of the services `*s`, as for
@@ -2155,7 +2267,8 @@ static int services_ended(struct services *s, pid_t reaped)
 {
     return service_ended(&s->log, reaped) || service_ended(&s->sshd, reaped) ||
            service_ended(&s->bus, reaped) || service_ended(&s->cron, reaped) ||
-           service_ended(&s->ntp, reaped);
+           service_ended(&s->ntp, reaped) || service_ended(&s->plug, reaped) ||
+           service_ended(&s->nd, reaped);
 }
 
 #endif
@@ -2428,12 +2541,54 @@ static void apply_limits(void)
 }
 
 /**
+ * Apply `SYSCTL_CONF`, where the image has one, with BusyBox's `sysctl -q -p`,
+ * and wait for it. sysctl reports a line it cannot apply on standard error
+ * and goes on with the rest, and init reports that it failed and goes on too.
+ */
+static void apply_sysctl(void)
+{
+    char *argv[5];
+    int status;
+    pid_t pid;
+
+    if (access(SYSCTL_CONF, R_OK) != 0) {
+        return;
+    }
+    pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "init: sysctl: cannot fork\n");
+        return;
+    }
+    if (pid == 0) {
+        argv[0] = (char *)"sysctl";
+        argv[1] = (char *)"-q";
+        argv[2] = (char *)"-p";
+        argv[3] = (char *)SYSCTL_CONF;
+        argv[4] = 0;
+        execve(BUSYBOX_PROGRAM, argv, environ);
+        _exit(127);
+    }
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            return;
+        }
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fprintf(stderr, "init: sysctl: %s was not applied whole (status 0x%x)\n", SYSCTL_CONF,
+                (unsigned)status);
+    }
+}
+
+/**
  * Set the machine up before the first child: empty `/var/run` and give it a
  * `utmp` with only this boot's record, set the limits, open the service log
- * and write the backlights' kept levels back (`keep_backlights`), and put
- * IPv6's stable secret, kept in /var/lib, in force (`ip6secret_keep`), so
- * that the addresses the routers' prefixes give stay the same from one boot
- * to the next, whoever configures the network. The recovery build takes the key the installer put
+ * and write the backlights' kept levels back (`keep_backlights`), apply the
+ * image's kernel settings (`apply_sysctl`), and put IPv6's stable secret,
+ * kept in /var/lib, in force (`ip6secret_keep`), so that the addresses the
+ * routers' prefixes give stay the same from one boot to the next, whoever
+ * configures the network. The settings come first, since a card that took a
+ * prefix before init is restarted with the secret, and so makes its
+ * addresses again under them. The recovery build takes the key the installer put
  * on the recovery partition it booted from, says on the console whether a key was built into its
  * image and whether the partition's turned SSH on, since the two kinds of image look identical from
  * outside, and names each disk whose GUID table was read from its backup. A metal boot whose line
@@ -2446,6 +2601,7 @@ static void set_up(void)
     apply_limits();
     open_service_log();
     keep_backlights();
+    apply_sysctl();
     (void)ip6secret_keep("init: ipv6");
 #ifdef INIT_RECOVERY
     report_recovery_keys();

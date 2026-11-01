@@ -106,6 +106,27 @@ it runs BusyBox's
 .Ql ifup -a
 to configure the network; see
 .Xr ifup 1 .
+Then, where the image has
+.Pa /etc/ifplugd/ifplugd.action
+and
+.Ql eth0
+exists, it supervises BusyBox's
+.Xr ifplugd 1 ,
+run as
+.Ql ifplugd -n -s -I -M -p -i eth0 -r /etc/ifplugd/ifplugd.action -m iff -u 0 -d 0 ,
+whose action takes the interface down with
+.Ic ifdown
+when its link goes and up with
+.Ic ifup
+when it comes, so a cable moved to another network gives that network's
+lease at once; and where the image has
+.Pa /sbin/ndwatch ,
+it supervises
+.Xr ndwatch 8
+for
+.Ql eth0 ,
+which follows the routers' DNS servers and starts DHCPv6 when they ask
+for it.
 .It Sy init-recovery
 Provides the network and service functions of the metal build
 and the recovery duties.
@@ -262,6 +283,23 @@ When it stops the machine, it saves each backlight's level there, under a
 temporary name renamed into place.
 It keeps at most four backlights, those present at boot.
 .Pp
+Every build applies the kernel settings of
+.Pa /etc/sysctl.conf ,
+where the image has one, with BusyBox's
+.Ql sysctl -q -p ,
+before the stable secret below, so a card restarted for the secret makes
+its addresses under them; a line sysctl cannot apply is reported and the
+rest applied.
+The installed systems set
+.Va use_tempaddr
+to 2 there, for
+.Ql all
+and
+.Ql default ,
+so an outgoing IPv6 connection takes a temporary address while the stable
+one still answers; see
+.Xr ipv6 7 .
+.Pp
 Every build keeps IPv6's stable secret across a reboot, so that the
 addresses a router's prefix gives the machine stay the same from one boot
 to the next, as Linux's do under systemd.
@@ -362,6 +400,12 @@ IPv6's stable secret, an address's text, mode 0600, made at the first
 boot.
 .It Pa /etc/rach2/limits
 Initial resource limits.
+.It Pa /etc/sysctl.conf
+Kernel settings applied at boot.
+.It Pa /etc/ifplugd/ifplugd.action
+The action of
+.Xr ifplugd 1 ,
+whose presence starts it on a boot that hands the network to userland.
 .It Pa /etc/rach2/sshd.conf
 SSH server policy.
 .It Pa /etc/ssh
@@ -441,6 +485,7 @@ init: ipv6: CARD: cannot restart IPv6 with the stable secret: ERROR
 .Xr recovery 7 ,
 .Xr dropbear 8 ,
 .Xr halt 8 ,
+.Xr ndwatch 8 ,
 .Xr netup 8 ,
 .Xr sshd 8 ,
 .Xr update 8

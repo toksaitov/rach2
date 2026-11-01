@@ -15,6 +15,7 @@
 .Nm httpd ,
 .Nm ifconfig ,
 .Nm ifdown ,
+.Nm ifplugd ,
 .Nm ifup ,
 .Nm inetd ,
 .Nm ipcalc ,
@@ -125,6 +126,15 @@
 .Op Fl nmvf
 .Op Fl i Ar FILE
 .Fl a | Ar IFACE ...
+.Nm ifplugd
+.Op Fl nsfFaMApqlkI
+.Op Fl i Ar IFACE
+.Op Fl r Ar PROG
+.Op Fl x Ar ARG
+.Op Fl t Ar SECS
+.Op Fl u Ar SECS
+.Op Fl d Ar SECS
+.Op Fl m Ar MODE
 .Nm ifup
 .Op Fl nmvf
 .Op Fl i Ar FILE
@@ -348,6 +358,25 @@ reports, the cards and then
 which holds 127.0.0.1 and takes no change but being up.
 .It Nm ifdown
 Deconfigure network interfaces.
+.It Nm ifplugd
+Watch an interface's link and run
+.Ar PROG ,
+by default
+.Pa /etc/ifplugd/ifplugd.action ,
+with the interface and
+.Ql up
+or
+.Ql down
+when it changes.
+.Xr init 8
+runs it for
+.Ql eth0
+where the boot line hands the network to userland, and its action runs
+.Nm ifdown
+when the link goes and
+.Nm ifup
+when it comes, so that a cable moved to another network gives that
+network's lease, address, routes and servers within seconds.
 .It Nm ifup
 Configure network interfaces.
 .It Nm inetd
@@ -438,21 +467,32 @@ Trace the route to
 .It Nm udhcpc
 Obtain an address through DHCP.
 This is how os-real takes its address; the DHCP event script is
-.Pa /usr/share/udhcpc/default.script .
+.Pa /usr/share/udhcpc/default.script ,
+which gives the lease's name servers to the resolver merge,
+.Pa /usr/share/udhcpc/resolv.script ,
+described in
+.Xr ndwatch 8 .
 .It Nm udhcpc6
 Obtain an IPv6 address through DHCPv6, on a network whose routers tell
 their hosts to ask a server; most IPv6 networks need none, since the
 kernel makes the addresses the routers advertise.
-No ifupdown method starts it: it is run by hand or from an
+No ifupdown method starts it:
+.Xr ndwatch 8
+starts it when a router's advertisement sets the M flag, and with
+.Fl l
+when it sets O alone, and it can be run by hand or from an
 .Ic up
-line of a stanza.
+line of an
+.Ic inet6
+stanza.
 The event script is
 .Pa /usr/share/udhcpc/default6.script ,
 which gives the interface the lease's address as a /128, the on-link
 prefix and the default route being the routers', takes away the address
-of a lease that ended, and adds the lease's name servers to
-.Pa /etc/resolv.conf
-after its IPv4 ones.
+of a lease that ended, and gives the lease's name servers to the resolver
+merge that writes
+.Pa /etc/resolv.conf ,
+after the IPv4 lease's and before the routers'.
 .It Nm udpsvd
 Bind a UDP socket to
 .Ar IP : Ns Ar PORT
@@ -734,6 +774,74 @@ Do not run mappings.
 Print each action before performing it.
 .It Fl f
 Force the operation.
+.El
+.Ss ifplugd
+.Bl -tag -width "-r PROG"
+.It Fl n
+Run in the foreground.
+.It Fl s
+Log to standard error instead of the system log.
+.It Fl i Ar IFACE
+Watch
+.Ar IFACE ,
+.Ql eth0
+by default.
+.It Fl f , Fl F
+Take a failure to read the link as down, or as up, instead of exiting.
+.It Fl a
+Do not bring the interface up to read its link.
+.It Fl M
+Watch netlink for the interface's changes, and wait for one that does
+not exist yet.
+.It Fl A
+Do not bring up an interface that appears.
+.It Fl r Ar PROG
+Run
+.Ar PROG
+on a change.
+.It Fl x Ar ARG
+Give
+.Ar PROG
+.Ar ARG
+as a third argument.
+.It Fl I
+Go on when
+.Ar PROG
+fails.
+.It Fl p
+Run nothing for a link that is up when it starts.
+.It Fl q
+Run nothing when it exits.
+.It Fl l
+Run
+.Ar PROG
+when it starts, whatever the link.
+.It Fl t Ar SECS
+Read the link every
+.Ar SECS
+seconds, 1 by default.
+.It Fl u Ar SECS , Fl d Ar SECS
+Wait
+.Ar SECS
+after the link comes, 0 by default, or goes, 5 by default, before
+running
+.Ar PROG .
+.It Fl m Ar MODE
+Read the link by
+.Cm ethtool ,
+.Cm mii ,
+.Cm priv ,
+.Cm wlan ,
+.Cm iff ,
+the interface's
+.Dv IFF_RUNNING ,
+or
+.Cm auto ,
+the first of them that answers.
+Rach2 answers
+.Cm iff .
+.It Fl k
+Stop the running daemon of the interface.
 .El
 .Ss inetd
 .Bl -tag -width "-q N"
@@ -1127,7 +1235,9 @@ It also gives these commands:
 .Xr nc 1 ,
 .Xr ping 1 ,
 .Xr socketcall 2 ,
-.Xr httpd 8
+.Xr httpd 8 ,
+.Xr init 8 ,
+.Xr ndwatch 8
 .Sh HISTORY
 The applet descriptions are adapted from BusyBox 1.36.1 documentation,
 licensed under GPL-2.0.
