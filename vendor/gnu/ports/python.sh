@@ -3,12 +3,14 @@
 # libraries: zlib, bz2 and lzma, ssl and hashlib with OpenSSL, ctypes with
 # libffi, sqlite3, readline, curses, and uuid with util-linux's libuuid;
 # pyexpat has its own copy of expat. dbm.gnu and tkinter are left out,
-# since GDBM and Tk are not ported, and neither pip nor the test suite is
-# installed, as Debian's python3 has neither. A cross build runs a Python
+# since GDBM and Tk are not ported. ensurepip installs the bundled pip wheel
+# without a network; the test suite is left out. A cross build runs a Python
 # of the same version on the build host, to generate code and to compile
 # the byte code it installs, so the recipe builds one from the same source
 # first, with the build host's own pkg-config search path, since the root's
-# libraries do not link on the build host. configure cannot look at the
+# libraries do not link on the build host. Its zlib is built statically
+# from the pinned source so ensurepip can read its compressed wheel even
+# when the build host has no zlib headers. configure cannot look at the
 # target's /dev/ptmx and /dev/ptc, so CACHE says the first exists, nor run
 # its test of getaddrinfo, which glibc's passes. OpenSSL 4 has no SSLv3
 # and no methods of one protocol version, SSLv3_method and TLSv1_method to
@@ -21,18 +23,26 @@
 VERSION=3.14.8
 SOURCE_DIR=Python-3.14.8
 DEPENDS="zlib bzip2 xz openssl libffi sqlite readline ncurses util-linux"
-CONFIGURE_ARGS="--enable-shared --with-ensurepip=no --disable-test-modules"
+CONFIGURE_ARGS="--enable-shared --with-ensurepip=install --disable-test-modules"
 CACHE="ac_cv_file__dev_ptmx=yes ac_cv_file__dev_ptc=no ac_cv_buggy_getaddrinfo=no"
 NO_METHODS="-DOPENSSL_NO_SSL3 -DOPENSSL_NO_SSL3_METHOD -DOPENSSL_NO_TLS1_METHOD"
 NO_METHODS="$NO_METHODS -DOPENSSL_NO_TLS1_1_METHOD -DOPENSSL_NO_TLS1_2_METHOD"
 
 port_build()
 {
-    mkdir host
+    mkdir -p host/zlib
+    tar -xf "$("$DIR/fetch.sh" --path zlib)" -C host/zlib --strip-components=1
+    (
+        cd host/zlib || exit
+        CC=cc CFLAGS="-O2 -fPIC" ./configure --static --prefix="$WORK/host"
+        make
+        make install
+    )
     (
         cd host || exit
         unset PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR PKG_CONFIG_PATH
-        CC=cc "$SRC/configure" --without-ensurepip
+        CC=cc CPPFLAGS="-I$WORK/host/include" LDFLAGS="-L$WORK/host/lib" \
+            "$SRC/configure" --without-ensurepip
         make
     )
     configure_autoconf --with-build-python="$WORK/host/python" CPPFLAGS="$NO_METHODS"
