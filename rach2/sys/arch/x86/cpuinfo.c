@@ -8,7 +8,7 @@
 #include "kcpu.h"
 #include "smpboot.h"
 #include "../../lib/kstring.h"
-#include "../../proc/smp.h"
+#include "../../proc/percpu.h"
 
 /* Linux's names of the feature bits (arch/x86/include/asm/cpufeatures.h),
  * one table for each register, in bit order; a bit Linux does not show is
@@ -248,6 +248,158 @@ static uint32_t cache_kb(uint32_t max, uint32_t ext_max, int intel)
     return 0;
 }
 
+/** The bits needed to number `n` things, 0 for one: Linux's
+ * get_count_order. */
+static uint32_t count_order(uint32_t n)
+{
+    uint32_t bits = 0;
+
+    while (bits < 31 && (1u << bits) < n) {
+        bits++;
+    }
+    return bits;
+}
+
+/**
+ * The widths in an APIC ID of the thread's field, into `*smt`, and of the
+ * thread's and core's together, into `*pkg`; the package's number is above
+ * them. Leaf 0xB gives both when it has levels: the SMT level's shift and
+ * the last level's. Otherwise leaf 1, when it has the HTT bit, gives the
+ * logical processors of a package, which leaf 4 on Intel divides into
+ * cores, and leaf 0x80000008 with 0x8000001E on AMD; without the bit a
+ * package has one core of one thread.
+ */
+static void topology_widths(uint32_t *smt, uint32_t *pkg)
+{
+    uint32_t max, ext_max, a, b, c, d, sub, logical, cores;
+    int levels = 0;
+    char vendor[13];
+
+    *smt = 0;
+    *pkg = 0;
+    kcpu_id(0, &max, &b, &c, &d);
+    k_memcpy(vendor, &b, 4);
+    k_memcpy(vendor + 4, &d, 4);
+    k_memcpy(vendor + 8, &c, 4);
+    vendor[12] = '\0';
+    if (max >= 0xBu) {
+        for (sub = 0; sub < 8; sub++) {
+            uint32_t type;
+
+            kcpu_id_sub(0xBu, sub, &a, &b, &c, &d);
+            type = (c >> 8) & 0xFFu;
+            if (type == 0 || (b & 0xFFFFu) == 0) {
+                break;
+            }
+            if (type == 1) {
+                *smt = a & 0x1Fu;
+            }
+            *pkg = a & 0x1Fu;
+            levels++;
+        }
+        if (levels > 0 && *smt <= *pkg) {
+            return;
+        }
+        *smt = 0;
+        *pkg = 0;
+    }
+    kcpu_id(1, &a, &b, &c, &d);
+    if (!(d & (1u << 28))) {
+        return;
+    }
+    logical = (b >> 16) & 0xFFu;
+    kcpu_id(0x80000000u, &ext_max, 0, 0, 0);
+    if (ext_max < 0x80000000u || ext_max > 0x8000FFFFu) {
+        ext_max = 0;
+    }
+    if (same(vendor, "GenuineIntel") && max >= 4) {
+        kcpu_id_sub(4, 0, &a, 0, 0, 0);
+        cores = ((a >> 26) & 0x3Fu) + 1;
+        *pkg = count_order(logical);
+        *smt = count_order(logical / cores);
+    } else if (ext_max >= 0x80000008u) {
+        uint32_t topoext;
+
+        kcpu_id(0x80000001u, 0, 0, &topoext, 0);
+        kcpu_id(0x80000008u, 0, 0, &c, 0);
+        *pkg = ((c >> 12) & 0xFu) ? (c >> 12) & 0xFu : count_order((c & 0xFFu) + 1);
+        if ((topoext & (1u << 22)) && ext_max >= 0x8000001Eu) {
+            kcpu_id(0x8000001Eu, 0, &b, 0, 0);
+            *smt = count_order(((b >> 8) & 0xFFu) + 1);
+        }
+    } else {
+        *pkg = count_order(logical);
+    }
+    if (*smt > *pkg) {
+        *smt = *pkg;
+    }
+}
+
+/** The place of the processor whose APIC ID is `apic`, at the widths
+ * `topology_widths` gave. */
+static void place_at(uint32_t apic, uint32_t smt, uint32_t pkg, struct cpu_place *p)
+{
+    p->thread = apic & ((1u << smt) - 1u);
+    p->core = (apic >> smt) & ((1u << (pkg - smt)) - 1u);
+    p->package = pkg >= 32 ? 0 : apic >> pkg;
+}
+
+void cpuinfo_place(int cpu, struct cpu_place *p)
+{
+    uint32_t smt, pkg;
+
+    topology_widths(&smt, &pkg);
+    place_at(smpboot_apic_id(cpu), smt, pkg, p);
+}
+
+uint64_t cpuinfo_siblings(int cpu, int level)
+{
+    struct cpu_place me, other;
+    uint32_t smt, pkg;
+    uint64_t mask = 0;
+    int c;
+
+    topology_widths(&smt, &pkg);
+    place_at(smpboot_apic_id(cpu), smt, pkg, &me);
+    for (c = 0; c < NR_CPUS; c++) {
+        if (!cpu_table[c].online) {
+            continue;
+        }
+        place_at(smpboot_apic_id(c), smt, pkg, &other);
+        if (other.package == me.package && (level == CPUINFO_PACKAGE || other.core == me.core)) {
+            mask |= (uint64_t)1 << c;
+        }
+    }
+    return mask;
+}
+
+/** The number of bits set in `mask`. */
+static uint32_t bit_count(uint64_t mask)
+{
+    uint32_t n = 0;
+
+    for (; mask; mask &= mask - 1) {
+        n++;
+    }
+    return n;
+}
+
+/** The number of cores of `cpu`'s package that have a processor started. */
+static uint32_t package_cores(int cpu)
+{
+    uint64_t left = cpuinfo_siblings(cpu, CPUINFO_PACKAGE);
+    uint32_t n = 0;
+    int c;
+
+    for (c = 0; c < NR_CPUS && left; c++) {
+        if ((left >> c) & 1u) {
+            left &= ~cpuinfo_siblings(c, CPUINFO_CORE);
+            n++;
+        }
+    }
+    return n;
+}
+
 /**
  * The family and model are the displayed ones of the processor manuals: the
  * extended family is added to a family of 15, and the extended model is put
@@ -262,6 +414,7 @@ uint32_t cpuinfo_text(char *out, uint32_t cap, int cpu)
     uint32_t e1c = 0, e1d = 0, l7b = 0, l7c = 0, cache;
     char vendor[13];
     char brand[49];
+    struct cpu_place place;
 
     if (cap == 0) {
         return 0;
@@ -306,10 +459,11 @@ uint32_t cpuinfo_text(char *out, uint32_t cap, int cpu)
         put_u32(&t, cache);
         put(&t, " KB\n");
     }
-    put_field(&t, "physical id\t: ", 0);
-    put_field(&t, "siblings\t: ", (uint32_t)smp_cpu_count());
-    put_field(&t, "core id\t\t: ", (uint32_t)cpu);
-    put_field(&t, "cpu cores\t: ", (uint32_t)smp_cpu_count());
+    cpuinfo_place(cpu, &place);
+    put_field(&t, "physical id\t: ", place.package);
+    put_field(&t, "siblings\t: ", bit_count(cpuinfo_siblings(cpu, CPUINFO_PACKAGE)));
+    put_field(&t, "core id\t\t: ", place.core);
+    put_field(&t, "cpu cores\t: ", package_cores(cpu));
     put_field(&t, "apicid\t\t: ", smpboot_apic_id(cpu));
     put_field(&t, "initial apicid\t: ", smpboot_apic_id(cpu));
     put(&t,

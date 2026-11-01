@@ -4091,7 +4091,10 @@ uint32_t sysfs_ino(int node, int key, int file)
                ((uint32_t)key & 0xFFFFu) << 8 | (uint32_t)file;
     }
     if (node == SYSFS_CPUN) {
-        return SYSFS_INO_CPU | ((uint32_t)key & 0xFFFFu) << 8 | ((uint32_t)file & 0xFFu);
+        return SYSFS_INO_CPU | ((uint32_t)key & 0xFFFFu) << 8 | ((uint32_t)file & 0x7Fu);
+    }
+    if (node == SYSFS_CPU_TOPOLOGY) {
+        return SYSFS_INO_CPU | ((uint32_t)key & 0xFFFFu) << 8 | 0x80u | ((uint32_t)file & 0x7Fu);
     }
     if (node == SYSFS_BACKLIGHT) {
         return SYSFS_INO_BACKLIGHT | ((uint32_t)key & 0xFFFFu) << 8 | ((uint32_t)file & 0xFFu);
@@ -4420,7 +4423,7 @@ int sysfs_device_exists(int node, int key)
     if (node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
         return sysfs_netdev(key) != NULL;
     }
-    if (node == SYSFS_CPUN) {
+    if (node == SYSFS_CPUN || node == SYSFS_CPU_TOPOLOGY) {
         return key >= 0 && key < NR_CPUS && cpu_table[key].online;
     }
     if (node == SYSFS_BACKLIGHT) {
@@ -4749,10 +4752,66 @@ static int procfs_gen_backlight(struct procfs_text *t, int key, int attr)
 }
 
 /**
+ * Render the attribute `attr` of processor `cpu`'s topology directory, in
+ * the order `sysfs_attr` lists them: Linux's masks and lists of the
+ * processors that share its core or package, and its ids. A cluster is a
+ * core here and a die is a package, as on a processor whose cores keep
+ * their own L2 and whose package has one die. -ENOENT for a processor not
+ * started.
+ */
+static int procfs_gen_topology(struct procfs_text *t, int cpu, int attr)
+{
+    struct cpu_place place;
+    uint64_t set;
+
+    if (cpu < 0 || cpu >= NR_CPUS || !cpu_table[cpu].online ||
+        !sysfs_attr(SYSFS_CPU_TOPOLOGY, attr)) {
+        return -ENOENT;
+    }
+    cpuinfo_place(cpu, &place);
+    if (attr == 2 || attr == 5) {
+        ap_u32(t, place.core);
+    } else if (attr == 10) {
+        ap_u32(t, 0);
+    } else if (attr == 13) {
+        ap_u32(t, place.package);
+    } else {
+        /* Of each pair of mask and list, the list is the second. */
+        static const signed char level[] = {CPUINFO_CORE,
+                                            CPUINFO_CORE,
+                                            -1,
+                                            CPUINFO_CORE,
+                                            CPUINFO_CORE,
+                                            -1,
+                                            CPUINFO_PACKAGE,
+                                            CPUINFO_PACKAGE,
+                                            CPUINFO_PACKAGE,
+                                            CPUINFO_PACKAGE,
+                                            -1,
+                                            CPUINFO_PACKAGE,
+                                            CPUINFO_PACKAGE,
+                                            -1,
+                                            CPUINFO_CORE,
+                                            CPUINFO_CORE};
+        static const char list[] = {0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1};
+
+        set = cpuinfo_siblings(cpu, level[attr]);
+        if (list[attr]) {
+            ap_cpu_set(t, set);
+        } else {
+            ap_cpu_mask(t, set);
+        }
+    }
+    ap_ch(t, '\n');
+    return t->len;
+}
+
+/**
  * Render the /sys file at the path `vp`: an attribute of a backlight, of a
- * disk node, of an interface or of a fixed directory, or a device's uevent.
- * `*key` gets the backlight, the disk node, the interface or the device the
- * file is for, which its descriptor keeps.
+ * disk node, of an interface, of a processor's topology or of a fixed
+ * directory, or a device's uevent. `*key` gets the backlight, the disk
+ * node, the interface, the processor or the device the file is for, which
+ * its descriptor keeps.
  */
 static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int *key)
 {
@@ -4767,6 +4826,10 @@ static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int
     if (vp->sysent == SYSFS_NET_IF || vp->sysent == SYSFS_NET_STATS) {
         *key = vp->syskey;
         return procfs_gen_netattr(t, vp->sysent, vp->syskey, vp->procfile);
+    }
+    if (vp->sysent == SYSFS_CPU_TOPOLOGY) {
+        *key = vp->syskey;
+        return procfs_gen_topology(t, vp->syskey, vp->procfile);
     }
     if (sysfs_attr(vp->sysent, vp->procfile)) {
         return procfs_gen_sysattr(t, vp->sysent, vp->procfile);

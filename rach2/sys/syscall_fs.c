@@ -13024,8 +13024,8 @@ static int synth_sys_cpu_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype
  * name, inode and type, and 1, or 0 past the last. The fixed directories
  * hold the next ones down, a bus's `devices` a link for each device, the
  * directory the links lead to a directory for each, a device's directory
- * its uevent, /sys/class/net its interfaces and /sys/class/backlight its
- * backlights, each with its attributes.
+ * its uevent, a processor's its `topology`, /sys/class/net its interfaces
+ * and /sys/class/backlight its backlights, each with its attributes.
  */
 static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino, uint8_t *dtype)
 {
@@ -13080,6 +13080,14 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
     }
     if (node == SYSFS_CPU) {
         return synth_sys_cpu_dirent(n, name, ino, dtype);
+    }
+    if (node == SYSFS_CPUN) {
+        return synth_entry(n == 0 ? "topology" : NULL, sysfs_ino(SYSFS_CPU_TOPOLOGY, key, 0),
+                           DT_DIR, name, ino, dtype);
+    }
+    if (node == SYSFS_CPU_TOPOLOGY) {
+        return synth_entry(sysfs_attr(node, n), sysfs_ino(node, key, 1 + n), DT_REG, name, ino,
+                           dtype);
     }
     if (node == SYSFS_RTC0 || node == SYSFS_RTC_POWER || node == SYSFS_POWER ||
         node == SYSFS_MEMORY || node == SYSFS_MEMORY0) {

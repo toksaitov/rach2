@@ -139,14 +139,18 @@ and its local APIC's in
 .Li apicid ;
 the processors are taken to be alike, so
 .Ql cpuid
-on the running one answers for the others, and each is a core of one
-package, with
-.Li core id
-its number and
-.Li siblings
+on the running one answers for the others.
+.Li physical id
 and
+.Li core id
+are the processor's package and its core in the package, which its APIC ID
+holds at the widths
+.Ql cpuid
+gives;
+.Li siblings
+counts the processors started in the package, and
 .Li cpu cores
-the count.
+its cores that have one.
 It has no
 .Li cpu MHz
 or
