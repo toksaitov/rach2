@@ -436,14 +436,68 @@ static bool settle(struct host *h)
     return true;
 }
 
+/** `send TEXT`: write TEXT, with its escapes, to the child. */
+static void cmd_send(struct host *h, char *args)
+{
+    long n = unescape(args);
+    int r;
+
+    if (n < 0) {
+        puts("error send: bad escape");
+        return;
+    }
+    r = term_pty_write(&h->pty, args, (size_t)n);
+    if (r < 0)
+        printf("error send: %s\n", strerror(-r));
+    else
+        puts("ok");
+}
+
+/** `wait TEXT`: answer when TEXT shows on the screen (settle). */
+static void cmd_wait(struct host *h, char *args)
+{
+    long n = unescape(args);
+
+    if (n <= 0 || (size_t)n != strlen(args)) {
+        puts("error wait: needs text, with no NUL");
+    } else if ((size_t)n >= sizeof(h->wait_text)) {
+        puts("error wait: text too long");
+    } else {
+        strcpy(h->wait_text, args);
+        h->block = BLOCK_WAIT;
+        settle(h);
+    }
+}
+
+/** `resize COLS ROWS`: resize the screen and the pty. */
+static void cmd_resize(struct host *h, const char *args)
+{
+    unsigned cols;
+    unsigned rows;
+    int r;
+
+    if (sscanf(args, "%u %u", &cols, &rows) != 2 || cols == 0 || rows == 0 || cols > 1000 ||
+        rows > 1000)
+        puts("error resize: needs columns and rows from 1 to 1000");
+    else if ((r = term_screen_resize(&h->screen, cols, rows)) < 0 ||
+             (r = term_pty_resize(&h->pty, cols, rows)) < 0)
+        printf("error resize: %s\n", strerror(-r));
+    else
+        puts("ok");
+}
+
+/** `clipboard`: answer with what OSC 52 last set, escaped. */
+static void cmd_clipboard(struct host *h)
+{
+    fputs("clipboard ", stdout);
+    print_escaped(h->screen.clipboard ? h->screen.clipboard : "", h->screen.clipboard_len);
+    putchar('\n');
+}
+
 /** Run one command line, `line`, without its newline. */
 static void command(struct host *h, char *line)
 {
     char *args = strchr(line, ' ');
-    unsigned cols;
-    unsigned rows;
-    long n;
-    int r;
 
     if (args)
         *args++ = '\0';
@@ -451,41 +505,15 @@ static void command(struct host *h, char *line)
         args = line + strlen(line);
 
     if (strcmp(line, "send") == 0) {
-        n = unescape(args);
-        if (n < 0) {
-            puts("error send: bad escape");
-        } else {
-            r = term_pty_write(&h->pty, args, (size_t)n);
-            if (r < 0)
-                printf("error send: %s\n", strerror(-r));
-            else
-                puts("ok");
-        }
+        cmd_send(h, args);
     } else if (strcmp(line, "wait") == 0) {
-        n = unescape(args);
-        if (n <= 0 || (size_t)n != strlen(args)) {
-            puts("error wait: needs text, with no NUL");
-        } else if ((size_t)n >= sizeof(h->wait_text)) {
-            puts("error wait: text too long");
-        } else {
-            strcpy(h->wait_text, args);
-            h->block = BLOCK_WAIT;
-            settle(h);
-            return;
-        }
+        cmd_wait(h, args);
     } else if (strcmp(line, "dump") == 0) {
         cmd_dump(h);
     } else if (strcmp(line, "cell") == 0) {
         cmd_cell(h, args);
     } else if (strcmp(line, "resize") == 0) {
-        if (sscanf(args, "%u %u", &cols, &rows) != 2 || cols == 0 || rows == 0 || cols > 1000 ||
-            rows > 1000)
-            puts("error resize: needs columns and rows from 1 to 1000");
-        else if ((r = term_screen_resize(&h->screen, cols, rows)) < 0 ||
-                 (r = term_pty_resize(&h->pty, cols, rows)) < 0)
-            printf("error resize: %s\n", strerror(-r));
-        else
-            puts("ok");
+        cmd_resize(h, args);
     } else if (strcmp(line, "key") == 0) {
         cmd_key(h, args);
     } else if (strcmp(line, "keymap") == 0) {
@@ -495,13 +523,10 @@ static void command(struct host *h, char *line)
     } else if (strcmp(line, "locks") == 0) {
         cmd_locks(h, args);
     } else if (strcmp(line, "clipboard") == 0) {
-        fputs("clipboard ", stdout);
-        print_escaped(h->screen.clipboard ? h->screen.clipboard : "", h->screen.clipboard_len);
-        putchar('\n');
+        cmd_clipboard(h);
     } else if (strcmp(line, "exit") == 0) {
         h->block = BLOCK_EXIT;
         settle(h);
-        return;
     } else {
         printf("error %s: unknown command\n", line);
     }
@@ -582,12 +607,51 @@ static void read_output(struct host *h)
     }
 }
 
-int term_host_run(const struct term_options *o, const struct term_conf *conf)
+/**
+ * Wait for a signal, a command on standard input or the child's output, and
+ * handle what came. Returns 0, or -1 when a quit signal came, poll failed or
+ * standard input did, which ends term -H at once.
+ */
+static int step(struct host *h, int sigfd)
 {
     enum { P_SIG, P_IN, P_MASTER, P_COUNT };
     struct pollfd p[P_COUNT];
-    struct host *h;
     unsigned bits;
+    int i;
+
+    p[P_SIG].fd = sigfd;
+    p[P_SIG].events = POLLIN;
+    p[P_IN].fd = h->in_eof || h->block != BLOCK_NONE ? -1 : 0;
+    p[P_IN].events = POLLIN;
+    p[P_MASTER].fd = h->output_ended ? -1 : h->pty.master;
+    p[P_MASTER].events = (short)(POLLIN | (h->pty.queued ? POLLOUT : 0));
+    for (i = 0; i < P_COUNT; i++)
+        p[i].revents = 0;
+    if (poll(p, P_COUNT, -1) < 0 && errno != EINTR) {
+        perror("term: poll");
+        return -1;
+    }
+
+    bits = term_signals_take();
+    if (bits & TERM_SIG_QUIT)
+        return -1;
+    if ((bits & TERM_SIG_CHILD) && term_pty_reap(&h->pty, &h->status) > 0)
+        h->child_done = true;
+    if (p[P_MASTER].revents & POLLOUT)
+        term_pty_flush(&h->pty);
+    if (p[P_MASTER].revents & (POLLIN | POLLHUP | POLLERR))
+        read_output(h);
+    if (p[P_IN].revents & (POLLIN | POLLHUP | POLLERR) && read_input(h) < 0) {
+        fprintf(stderr, "term: -H: standard input: unreadable or a line too long\n");
+        return -1;
+    }
+    settle(h);
+    return 0;
+}
+
+int term_host_run(const struct term_options *o, const struct term_conf *conf)
+{
+    struct host *h;
     int sigfd;
     int ret = 1;
     int r;
@@ -620,34 +684,8 @@ int term_host_run(const struct term_options *o, const struct term_conf *conf)
         run_commands(h);
         if (h->block == BLOCK_NONE && h->in_eof && h->in_len == 0)
             break;
-
-        p[P_SIG].fd = sigfd;
-        p[P_SIG].events = POLLIN;
-        p[P_IN].fd = h->in_eof || h->block != BLOCK_NONE ? -1 : 0;
-        p[P_IN].events = POLLIN;
-        p[P_MASTER].fd = h->output_ended ? -1 : h->pty.master;
-        p[P_MASTER].events = (short)(POLLIN | (h->pty.queued ? POLLOUT : 0));
-        for (r = 0; r < P_COUNT; r++)
-            p[r].revents = 0;
-        if (poll(p, P_COUNT, -1) < 0 && errno != EINTR) {
-            perror("term: poll");
+        if (step(h, sigfd) < 0)
             goto out_pty;
-        }
-
-        bits = term_signals_take();
-        if (bits & TERM_SIG_QUIT)
-            goto out_pty;
-        if ((bits & TERM_SIG_CHILD) && term_pty_reap(&h->pty, &h->status) > 0)
-            h->child_done = true;
-        if (p[P_MASTER].revents & POLLOUT)
-            term_pty_flush(&h->pty);
-        if (p[P_MASTER].revents & (POLLIN | POLLHUP | POLLERR))
-            read_output(h);
-        if (p[P_IN].revents & (POLLIN | POLLHUP | POLLERR) && read_input(h) < 0) {
-            fprintf(stderr, "term: -H: standard input: unreadable or a line too long\n");
-            goto out_pty;
-        }
-        settle(h);
     }
 
     /* Standard input has ended: hang the child up and reap it. */
