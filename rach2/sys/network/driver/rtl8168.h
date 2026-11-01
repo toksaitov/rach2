@@ -151,7 +151,7 @@ struct r8168_counters {
 #define R8168_CSIAR_BYTE_ENABLE 0x0000f000u
 
 /* The descriptor rings. 64 entries each, where the reference has 256: the
- * kernel's directly mapped window is 32 MiB (HARD_MEMORY_LIMIT), and 64
+ * kernel's directly mapped window is 64 MiB (HARD_MEMORY_LIMIT), and 64
  * receive buffers of the reference's size are already a megabyte. It is the
  * one number of the driver not taken from the reference, and the host
  * model sends bursts against it. */

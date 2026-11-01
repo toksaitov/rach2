@@ -1012,7 +1012,7 @@ static void test_preempt(void)
  * values to the same virtual address through different page directories;
  * isolation holds if each reads back its own value.
  *
- * The address is 0xD00000 (13 MiB), inside the 32 MiB the i686 kernel maps
+ * The address is 0xD00000 (13 MiB), inside the 64 MiB the i686 kernel maps
  * by identity. A private mapping there still gives each process its own page
  * table: `mmu_user_table` copies a table the kernel directory shares before a
  * user page goes into it, so the two processes do not write through one.

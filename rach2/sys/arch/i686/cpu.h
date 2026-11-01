@@ -101,13 +101,13 @@ typedef uint32_t pte_t;
 #define PTE_FLAGS         0xFFFu
 #define PTE_ADDR(e)       ((e) & ~(pte_t)PTE_FLAGS)
 
-/* Top of the identity-mapped physical window (32 MiB): the kernel image,
+/* Top of the identity-mapped physical window (64 MiB): the kernel image,
  * the boot data, the page tables the boot carves and the DMA buffers that a
  * device is given a physical address of live below it, where the virtual
  * address equals the physical one. Nothing above it is reached through its
  * physical address; a frame there is mapped into the kernel's layout first,
  * and the modules and the page tables made later are reached that way. */
-#define HARD_MEMORY_LIMIT 0x2000000
+#define HARD_MEMORY_LIMIT 0x4000000
 
 /* The identity window both ways (arch.h): a physical address below
  * HARD_MEMORY_LIMIT is its own kernel address, and so is the kernel image's,
@@ -169,9 +169,9 @@ typedef uint32_t pte_t;
 /* `rep movs` and `rep stos` move the words of k_memcpy and k_memset. */
 #define ARCH_STRING_WORDS 1
 
-/* User space: from 32 MiB, below which the kernel's identity window lies,
+/* User space: from 64 MiB, below which the kernel's identity window lies,
  * to 3 GiB, where the kernel's own layout begins. */
-#define USER_ADDR_MIN 0x02000000UL
+#define USER_ADDR_MIN 0x04000000UL
 #define USER_ADDR_MAX 0xC0000000UL
 
 /* A new image's layout: a position-independent program's base, the top

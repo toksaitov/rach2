@@ -30,11 +30,12 @@
 #include "../lib/kint.h"
 
 #define FRAME_PAGE_SIZE        0x1000u
-/* The top of the boot's window, HARD_MEMORY_LIMIT in each architecture's
- * cpu.h, given again here so that frame.c needs no architecture's header;
- * init_paging panics if the two differ. A frame above it is reached through
- * a mapping in the kernel's layout, never through its physical address. */
-#define FRAME_DIRECT_MAP_LIMIT 0x2000000u
+/* The top of the boot's window, 64 MiB, HARD_MEMORY_LIMIT in i686's and
+ * x86-64's cpu.h, given again here so that frame.c needs no architecture's
+ * header; init_paging panics if the two differ. A frame above it is reached
+ * through a mapping in the kernel's layout, never through its physical
+ * address. */
+#define FRAME_DIRECT_MAP_LIMIT 0x4000000u
 /* The reach of a 32-bit physical address. */
 #define FRAME_REACH_32         0x100000000ULL
 /* The type of a usable range in the boot record's map (boot.h). */

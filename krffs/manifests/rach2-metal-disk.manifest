@@ -11,7 +11,7 @@
 # * /etc/resolv.conf and /etc/hosts have no address of QEMU's.
 # * /root is 0755.
 # * /bin/term and its font, which take 3.8 MiB: os-real's RAM image would
-#   outgrow the room the kernel's 32 MiB window leaves it.
+#   outgrow its size, OS_REAL_MIB in the Makefile.
 #
 # tools/inspect/setidcheck.c checks its set-id entries against setid.allow
 # as it does os-real's.

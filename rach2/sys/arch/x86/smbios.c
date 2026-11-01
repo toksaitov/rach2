@@ -16,7 +16,7 @@
  *
  * The region below a megabyte is inside the identity-mapped window. What
  * UEFI's tables and the anchors point at need not be: a machine with more
- * than 32 MiB usually publishes them near the top of its memory, so each is
+ * than 64 MiB usually publishes them near the top of its memory, so each is
  * reached through `table_at`, which maps what lies above the window.
  *
  * A firmware's table is data this kernel did not write, and every field read
@@ -227,7 +227,7 @@ static int table_of(const uint8_t *anchor, uint64_t *at, uint32_t *len)
  * An address this kernel can read the `len` bytes at physical `at` through.
  *
  * A table inside the identity-mapped window is read where it is. One above it
- * is mapped first: on a machine with more than 32 MiB the firmware usually
+ * is mapped first: on a machine with more than 64 MiB the firmware usually
  * publishes its table near the top of memory, and reading that through its
  * physical address would fault. The mapping lasts for the life of the kernel,
  * which costs a few pages once, since the vendor is read once. On x86-64 the

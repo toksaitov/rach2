@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 1, 2026
 .Dt MEMORY 7
 .Os
 .Sh NAME
@@ -12,7 +12,7 @@ It manages the usable memory below its reach: 4 GiB on i686, whose
 physical addresses are 32 bits, and on x86-64 all of the memory, up to the
 64 TiB its direct map covers, or 64 GiB on a processor without 1 GiB pages,
 whose direct map is built of 2 MiB pages in tables the boot carves below
-32 MiB.
+64 MiB.
 On i686 its virtual address space occupies the gigabyte starting at
 .Li 0xC0000000 ,
 with 256 page tables shared by every page directory; on x86-64 it is the
@@ -20,7 +20,7 @@ upper half of the address space, where all of physical memory is mapped
 from
 .Li 0xFFFF800000000000 .
 .Pp
-The first 32 MiB of physical memory is the DMA pool, below 4 GiB on both,
+The first 64 MiB of physical memory is the DMA pool, below 4 GiB on both,
 and on i686 it is identity-mapped: virtual and physical addresses there
 are equal.
 The frame allocators used for user pages search above it first.

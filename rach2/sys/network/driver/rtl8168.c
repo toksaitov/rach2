@@ -157,7 +157,7 @@ static uint32_t r8168_tick_work; /* frames the tick handled with messages on */
 
 /*
  * The rings and their buffers, in .bss, which this kernel's image places
- * below the 32 MiB window's top and so below 4 GiB: what goes into a
+ * below the 64 MiB window's top and so below 4 GiB: what goes into a
  * descriptor is the physical address of the array, `virt_to_phys` of it,
  * with the high half 0. The rings are 256-byte aligned as the reference
  * requires.
