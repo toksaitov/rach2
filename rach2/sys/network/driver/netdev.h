@@ -121,6 +121,13 @@ struct netdev_counters {
  * `counters` fills `*out` with what the card counts and returns 1, or
  * returns 0 when the card did not answer. A driver whose card keeps no
  * such counts leaves it NULL.
+ *
+ * `set_up` is told that the interface is being brought up (`up` nonzero) or
+ * down, before `nd->up` changes, in process context without `net_lock`; it
+ * may sleep. It returns 0, or a negative errno that refuses the change and
+ * leaves the interface as it was. A card that runs from `init` to `stop`
+ * whatever the interface's flags leaves it NULL; a radio starts here, and
+ * leaves its network and stops here on the way down.
  */
 struct netdev_ops {
     const char *name;
@@ -132,6 +139,7 @@ struct netdev_ops {
     const char *(*error)(void);
     void (*print_info)(void *dev);
     int (*counters)(void *dev, struct netdev_counters *out);
+    int (*set_up)(void *dev, int up);
 };
 
 /* The addresses an interface may have after its first. */

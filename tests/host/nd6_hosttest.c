@@ -137,10 +137,11 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
 }
 
 /** Cards are not brought up again in this model. */
-void netconf_set_up(struct netdev *nd, int up)
+int netconf_set_up(struct netdev *nd, int up)
 {
     (void)nd;
     (void)up;
+    return 0;
 }
 
 /** Frames are dropped. */

@@ -275,7 +275,7 @@ static int rtl8139_link(void *dev, struct netdev_link *out)
 /* The card's entry in the driver table. `poll` is NULL: this one interrupts. */
 const struct netdev_ops rtl8139_netdev = {
     "RTL8139",    rtl8139_init,  rtl8139_tx,         0, rtl8139_stop,
-    rtl8139_link, rtl8139_error, rtl8139_print_info, 0};
+    rtl8139_link, rtl8139_error, rtl8139_print_info, 0, 0};
 
 /**
  * A short frame is padded with zeroes to the 60-byte minimum, so that no

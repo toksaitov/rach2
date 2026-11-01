@@ -240,9 +240,11 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr);
  * it already or has IPv6 disabled, and starts neighbour discovery
  * (`nd6_if_up`); one that goes down forgets what it learned from its
  * routers and neighbours (`nd6_if_down`). A caller refuses to take `lo`
- * down. Called with interrupts on, or off at boot.
+ * down. A change of state is first offered to the driver's `set_up`, whose
+ * refusal is returned with nothing changed; otherwise returns 0. Called with
+ * interrupts on, or off at boot for a card whose driver has no `set_up`.
  */
-void netconf_set_up(struct netdev *nd, int up);
+int netconf_set_up(struct netdev *nd, int up);
 
 /** Format `ip` as `A.B.C.D` into `out`, which needs 16 bytes. */
 void netconf_format(uint32_t ip, char *out);

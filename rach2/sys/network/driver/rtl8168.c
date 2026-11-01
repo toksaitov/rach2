@@ -1704,6 +1704,6 @@ static void rtl8168_stop(void *dev)
     r8168_up = 0;
 }
 
-const struct netdev_ops rtl8168_netdev = {"RTL8168GU",   rtl8168_init,       rtl8168_tx,
-                                          rtl8168_poll,  rtl8168_stop,       rtl8168_link,
-                                          rtl8168_error, rtl8168_print_info, rtl8168_counters};
+const struct netdev_ops rtl8168_netdev = {
+    "RTL8168GU",  rtl8168_init,  rtl8168_tx,         rtl8168_poll,     rtl8168_stop,
+    rtl8168_link, rtl8168_error, rtl8168_print_info, rtl8168_counters, 0};

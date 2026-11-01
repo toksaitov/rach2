@@ -62,9 +62,9 @@ static int absent(struct netdev *nd, int nth)
     return NETDEV_ABSENT;
 }
 
-const struct netdev_ops rtl8139_netdev = {"rtl8139", absent, 0, 0, 0, 0, 0, 0, 0};
-const struct netdev_ops e1000_netdev = {"e1000", absent, 0, 0, 0, 0, 0, 0, 0};
-const struct netdev_ops rtl8168_netdev = {"rtl8168", absent, 0, 0, 0, 0, 0, 0, 0};
+const struct netdev_ops rtl8139_netdev = {"rtl8139", absent, 0, 0, 0, 0, 0, 0, 0, 0};
+const struct netdev_ops e1000_netdev = {"e1000", absent, 0, 0, 0, 0, 0, 0, 0, 0};
+const struct netdev_ops rtl8168_netdev = {"rtl8168", absent, 0, 0, 0, 0, 0, 0, 0, 0};
 
 /** The model has no boot options. */
 int kcmdline_value(const char *key, char *out, unsigned int cap)
@@ -260,9 +260,10 @@ int wlan_scan_abort(struct wlan_scan *scan)
 }
 
 /** Model administrative state without the separate IPv6 state machine. */
-void netconf_set_up(struct netdev *nd, int up)
+int netconf_set_up(struct netdev *nd, int up)
 {
     nd->up = up;
+    return 0;
 }
 
 /** Clear the model address at unregister. */

@@ -1775,7 +1775,11 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
         if (!net_ns_seen()) {
             netif_ns_lo_set_up(nd, up);
         } else {
-            netconf_set_up(nd, up);
+            int rc = netconf_set_up(nd, up);
+
+            if (rc) {
+                return rc;
+            }
         }
     }
     if (policy) {

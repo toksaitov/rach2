@@ -895,17 +895,26 @@ static void link_local_up(struct netdev *nd)
     }
 }
 
-/** Neighbour discovery starts on a card that comes up and forgets what it
- * learned on one that goes down. */
-void netconf_set_up(struct netdev *nd, int up)
+/** The driver hears of the change first and may refuse it; neighbour
+ * discovery then starts on a card that comes up and forgets what it learned
+ * on one that goes down. */
+int netconf_set_up(struct netdev *nd, int up)
 {
-    int was = nd->up;
+    int was = nd->up, rc;
 
-    nd->up = up ? 1 : 0;
+    up = up ? 1 : 0;
+    if (up != was && nd->ops && nd->ops->set_up) {
+        rc = nd->ops->set_up(nd->dev, up);
+        if (rc) {
+            return rc;
+        }
+    }
+    nd->up = up;
     if (nd->up && !nd->loopback) {
         link_local_up(nd);
         nd6_if_up(nd);
     } else if (was && !nd->loopback) {
         nd6_if_down(nd);
     }
+    return 0;
 }

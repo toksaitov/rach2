@@ -81,9 +81,10 @@ int netdev_set_mtu(struct netdev *nd, uint32_t mtu)
     return 0;
 }
 /** Store administrative state without altering carrier. */
-void netconf_set_up(struct netdev *nd, int up)
+int netconf_set_up(struct netdev *nd, int up)
 {
     nd->up = up;
+    return 0;
 }
 /** Count a socket or registry wake by its kind. */
 void wq_wake(wait_queue_t *wq, uint32_t kinds)

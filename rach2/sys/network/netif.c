@@ -372,8 +372,7 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
         uint16_t flags =
             (uint16_t)((uint16_t)ifr[IFREQ_UNION] | ((uint16_t)ifr[IFREQ_UNION + 1] << 8));
 
-        netconf_set_up(nd, (flags & IFF_UP) != 0);
-        return 0;
+        return netconf_set_up(nd, (flags & IFF_UP) != 0);
     }
     case SIOCSIFADDR:
         return netconf_set_address(nd, be32(ifr + IFREQ_SA_ADDR), 0);

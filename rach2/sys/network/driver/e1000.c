@@ -1006,6 +1006,6 @@ static void e1000_op_print_info(void *dev)
 /* The card's entry in the driver table. `poll` is NULL: this one
  * interrupts. `counters` is NULL too: the driver reads none of the card's
  * statistics registers. */
-const struct netdev_ops e1000_netdev = {"e1000",     e1000_init,          e1000_op_tx,
-                                        0,           e1000_op_stop,       e1000_op_link,
-                                        e1000_error, e1000_op_print_info, 0};
+const struct netdev_ops e1000_netdev = {
+    "e1000",       e1000_init,  e1000_op_tx,         0, e1000_op_stop,
+    e1000_op_link, e1000_error, e1000_op_print_info, 0, 0};

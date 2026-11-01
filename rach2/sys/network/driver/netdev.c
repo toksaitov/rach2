@@ -73,7 +73,7 @@ static int loopback_tx(void *dev, const uint8_t *data, uint16_t len)
     return NETDEV_TX_DROPPED;
 }
 
-static const struct netdev_ops loopback_ops = {"loopback", 0, loopback_tx, 0, 0, 0, 0, 0, 0};
+static const struct netdev_ops loopback_ops = {"loopback", 0, loopback_tx, 0, 0, 0, 0, 0, 0, 0};
 
 void netdev_loopback_init(struct netdev *nd, int index)
 {
