@@ -2440,7 +2440,7 @@ enum etude_status etude_qmp(struct etude_case_machine *m, const char *execute,
     return st;
 }
 
-/** Give the WAV path of this boot, or NULL without an audio card on the `wav` backend. */
+/** Give the WAV path of this boot, or NULL without an audio card on `wav`. */
 const char *etude_audio(const struct etude_case_machine *m)
 {
     return mres(m)->audio_path;

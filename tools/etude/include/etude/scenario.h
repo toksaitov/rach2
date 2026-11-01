@@ -332,8 +332,9 @@ enum etude_status etude_fault(struct etude_case_machine *m, enum etude_end end);
 
 /**
  * Give the WAV path of this boot, or NULL when its profile selects no audio
- * card on the `wav` backend. The library owns the path and keeps the file as attempt evidence. Read
- * it after etude_wait_end, when QEMU has finished its WAV header and samples.
+ * card on the `wav` backend. The library owns the path and keeps the file as
+ * attempt evidence. Read it after etude_wait_end, when QEMU has finished its
+ * WAV header and samples.
  */
 const char *etude_audio(const struct etude_case_machine *m);
 
