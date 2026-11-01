@@ -31,7 +31,7 @@
 #include "../probe_args.h"
 
 /* The last report read, terminated. */
-static char text[8192];
+static char text[32768];
 
 /**
  * Print "HDAPROBE FAIL: `row`" and exit with status 1 unless `ok` is true.
