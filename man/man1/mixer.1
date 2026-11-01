@@ -3,46 +3,89 @@
 .Os
 .Sh NAME
 .Nm mixer
-.Nd read or set the volume
+.Nd read or set the volume, the input levels and the record source
 .Sh SYNOPSIS
 .Nm
 .Nm
-.Cm vol
+.Ar name
+.Nm
+.Ar name
 .Ar N | L : Ns Ar R | Cm + Ns Ar N | Cm - Ns Ar N
+.Nm
+.Cm =rec
+.Ar source
 .Nm
 .Cm mute | unmute
 .Sh DESCRIPTION
 .Nm
-reads and sets the master volume of the audio driver in use, Intel HDA or
-the Sound Blaster 16, through
+reads and sets the levels of the audio driver in use, Intel HDA or the
+Sound Blaster 16, and the source it records, through
 .Pa /dev/mixer ,
 OSS's mixer device; see
 .Xr mixer 4 .
-A level is a percentage for each of the left and the right channel.
+A level is a percentage for each of the left and the right channel; the
+device keeps one level for both, the louder of the two.
+.Pp
+A channel is named as OSS names it:
+.Cm vol ,
+the volume;
+.Cm pcm ,
+which scales it;
+.Cm mic ,
+.Cm monitor
+and
+.Cm line ,
+the microphone jack, the internal microphone and the line in;
+.Cm rec ,
+the record level, which scales each of the three; and
+.Cm igain ,
+the boost of the microphones' pins.
+The device has only the channels its hardware has; the Sound Blaster 16
+has
+.Cm vol
+and
+.Cm pcm
+alone.
 .Pp
 With no argument,
 .Nm
-prints the level as
-.Ql vol Ar L : Ns Ar R ,
+prints each channel as
+.Ql Ar name Ar L : Ns Ar R ,
 followed by
 .Ql \ muted
-while the volume is muted.
-.Bl -tag -width "vol L:R"
-.It Cm vol Ar N
+after the volume while it is muted and
+.Ql \ rec
+after the source recorded.
+With a
+.Ar name
+alone it prints that channel.
+.Bl -tag -width "=rec source"
+.It Ar name Ar N
 Set both channels to
 .Ar N ,
 0 through 100.
-.It Cm vol Ar L : Ns Ar R
+.It Ar name Ar L : Ns Ar R
 Set the left channel to
 .Ar L
 and the right to
 .Ar R .
-.It Cm vol + Ns Ar N , Cm vol - Ns Ar N
+.It Ar name Cm + Ns Ar N , Ar name Cm - Ns Ar N
 Move both channels up or down by
 .Ar N ,
 keeping each between 0 and 100.
+.It Cm =rec Ar source
+Record from
+.Ar source ,
+one of
+.Cm mic ,
+.Cm monitor
+and
+.Cm line
+that the device has, as FreeBSD's
+.Xr mixer 8
+spells it.
 .It Cm mute
-Record the level in
+Record the volume's level in
 .Pa /var/run/mixer.mute
 and set it to 0.
 Muting a muted volume changes nothing.
@@ -60,9 +103,9 @@ later
 .Cm mute
 records the new level.
 .Pp
-The level set is kept across a halt, a power-off or a reboot, which
+The levels set are kept across a halt, a power-off or a reboot, which
 .Xr init 8
-saves it at, and lost to a power cut.
+saves them at, and lost to a power cut; the record source is not kept.
 .Pp
 acpid's volume actions run
 .Nm
@@ -85,12 +128,15 @@ halt is still muted after it.
 .Sh EXIT STATUS
 .Nm
 exits 0 on success, 1 when the device or the record cannot be used, and
-2 for a wrong usage or a level that is not one.
+2 for a wrong usage, a channel the device lacks, a level that is not one
+or a source that is not one.
 .Sh EXAMPLES
 .Bd -literal -offset indent
 mixer vol 50
 mixer vol +5
 mixer mute
+mixer =rec mic
+mixer mic 80
 mixer
 .Ed
 .Sh SEE ALSO

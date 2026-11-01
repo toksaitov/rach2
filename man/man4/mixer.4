@@ -3,46 +3,102 @@
 .Os
 .Sh NAME
 .Nm mixer
-.Nd the master volume, as OSS's mixer
+.Nd the volume, the record source and the input levels, as OSS's mixer
 .Sh SYNOPSIS
 .In sys/soundcard.h
 .Pp
 .Pa /dev/mixer
 .Sh DESCRIPTION
-The device reads and sets the master volume of the audio driver in use,
-Intel HD Audio or the Sound Blaster 16, through OSS's ioctls with Linux's
-numbers: major 14, minor 0.
+The device reads and sets the levels of the audio driver in use, Intel HD
+Audio or the Sound Blaster 16, through OSS's ioctls with Linux's numbers:
+major 14, minor 0.
 It is there only while one of those two drivers is; the PC speaker has no
 volume.
 The node is mode 0666, so that the console's user sets the volume.
 .Pp
-The mixer has one channel, the volume, which the driver applies to every
-amplifier of its output path.
 A level is OSS's int: the left side's percentage, 0 to 100, in the low byte
 and the right's in the next.
-The driver keeps the level set and applies it again each time a stream
-starts, and the console's own
+Each channel is one level, so a write sets the louder of the two sides
+and gives back the level set, and a read gives the level on both.
+The channels, by OSS's names, are these; the device mask has those the
+driver can set.
+.Bl -tag -width SOUND_MIXER_MONITOR
+.It Dv SOUND_MIXER_VOLUME , SOUND_MIXER_PCM
+The volume and PCM, whose product is the driver's master volume, which it
+applies to every amplifier of its output path.
+Both are 100 when the driver starts.
+The driver keeps the level and applies it again each time a stream
+starts.
+The console's own
 .Dv AUDIO_SET_VOLUME
-request sets the same level.
-It is 100 when the driver starts;
+request sets the driver's level directly; the volume then reads that level
+and PCM returns to 100.
+A master volume of 0 mutes HD Audio's amplifiers.
+.It Dv SOUND_MIXER_MIC , SOUND_MIXER_MONITOR , SOUND_MIXER_LINE
+The levels of the microphone jack, the internal microphone and the line
+in, as FreeBSD names them, each scaled by the record level for the gain of
+the converter's input amplifier on the source's connection.
+Each is 100 when the driver starts.
+.It Dv SOUND_MIXER_RECLEV
+The record level, which scales every source's level.
+It starts at the converter's 0 dB step, 93 on the Lenovo G50-70 and 100
+on QEMU's duplex codec.
+.It Dv SOUND_MIXER_IGAIN
+The boost of each source's pin, its input amplifier before the converter:
+four steps of 12 dB on the G50-70, so that 33 is +12 dB.
+It starts at the pin's 0 dB step.
+.El
+.Pp
+On HD Audio a percentage is that share of an amplifier's steps, from its
+first step at 0 to its last at 100, rounded to the nearest; 0 mutes an
+amplifier that can mute.
+A source has a channel only when the converter has an input amplifier,
+and IGAIN is there only when a source's pin has one.
+.Pp
+The driver records one source at a time: the internal microphone, else
+the microphone jack, else the line in, when it starts.
+A change of a level or of the source takes effect at once while a stream
+records, and at the next start otherwise.
+.Pp
 .Xr init 8
-then sets the level kept from the last halt, power-off or reboot, if
-there is one.
+sets each channel of the device mask to the level kept from the last
+halt, power-off or reboot, if there is one.
 The device keeps no level itself, so one set and then lost to a power cut
 is not kept.
-A level of 0 mutes HD Audio's amplifiers.
-.Bl -tag -width SOUND_MIXER_WRITE_VOLUME
-.It Dv SOUND_MIXER_READ_VOLUME
-The level, the same on both sides.
-.It Dv SOUND_MIXER_WRITE_VOLUME
-Set the level to the louder of the two sides, and give back the level set.
+.Bl -tag -width SOUND_MIXER_READ_STEREODEVS
+.It Dv SOUND_MIXER_READ_ Ns Ar CHANNEL
+The channel's level, the same on both sides.
+.It Dv SOUND_MIXER_WRITE_ Ns Ar CHANNEL
+Set the channel to the louder of the two sides, at most 100, and give
+back the level set.
 .It Dv SOUND_MIXER_READ_DEVMASK
+The channels, a mask of
+.Dv SOUND_MASK_ Ns Ar CHANNEL :
 .Dv SOUND_MASK_VOLUME
-alone.
-.It Dv SOUND_MIXER_READ_RECMASK , SOUND_MIXER_READ_RECSRC
-0: the mixer records nothing.
-.It Dv SOUND_MIXER_READ_STEREODEVS , SOUND_MIXER_READ_CAPS
-0: the volume is one channel.
+and
+.Dv SOUND_MASK_PCM ,
+and on a driver that records the sources' channels,
+.Dv SOUND_MASK_RECLEV
+and
+.Dv SOUND_MASK_IGAIN
+as the hardware has them.
+.It Dv SOUND_MIXER_READ_RECMASK
+The sources the driver can record, by their channels' masks; 0 on the
+Sound Blaster 16, which records nothing.
+.It Dv SOUND_MIXER_READ_RECSRC
+The source recorded, by its channel's mask, or 0.
+.It Dv SOUND_MIXER_WRITE_RECSRC
+Record one of the sources of the mask given: of two or more, one that is
+not recorded now, so that a program that adds a source to the mask it
+read switches to it.
+A mask with no source the driver has changes nothing.
+The answer is the source recorded after.
+.It Dv SOUND_MIXER_READ_CAPS
+.Dv SOUND_CAP_EXCL_INPUT
+when the driver records, since it records one source at a time; 0
+otherwise.
+.It Dv SOUND_MIXER_READ_STEREODEVS
+0: each channel is one level.
 .It Dv SOUND_MIXER_INFO
 A
 .Vt mixer_info :
@@ -50,21 +106,25 @@ the id,
 .Dq HDA
 or
 .Dq SB16 ,
-the driver's name, and the count of the volume's writes since boot.
+the driver's name, and the count of the writes of levels and of the
+record source since boot.
 .It Dv OSS_GETVERSION
 0x030802, the version Linux gives.
 .El
 .Sh ERRORS
 .Bl -tag -width Er
 .It Bq Er EINVAL
-A read or write of another of OSS's channels, such as
-.Dv SOUND_MIXER_PCM .
+A read or write of a channel the device mask lacks, such as
+.Dv SOUND_MIXER_BASS .
+.It Bq Er EFAULT
+The argument is not a valid address.
 .It Bq Er ENOTTY
 Another ioctl.
 .It Bq Er ENODEV
 No driver with a volume is in use.
 .El
 .Sh SEE ALSO
+.Xr mixer 1 ,
 .Xr console 4 ,
 .Xr dsp 4 ,
 .Xr input 4 ,

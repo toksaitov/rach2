@@ -61,7 +61,7 @@ The BusyBox images take `su`, `passwd` and `login` from BusyBox's set-id build i
 * [halt(8)](../man/man8/halt.8) powers the machine off or restarts it. On the BusyBox images the shell runs BusyBox's `halt`, `poweroff` and `reboot` applets instead.
 * [loopctl(8)](../man/man8/loopctl.8) attaches a file to a loop device, so that a file system in a file can be mounted, detaches one, or lists them.
 * [audiotest(1)](../man/man1/audiotest.1) plays a test tone through the console's audio interface, on HDA or SB16, or a scale through `/dev/dsp`.
-* [mixer(1)](../man/man1/mixer.1) reads and sets the volume through `/dev/mixer`, and mutes and unmutes it; acpid's volume actions run it for the volume keys.
+* [mixer(1)](../man/man1/mixer.1) reads and sets the levels of `/dev/mixer`, the volume and PCM, the input levels and the record source, and mutes and unmutes the volume; acpid's volume actions run it for the volume keys.
 
 ### Which images stage them
 
@@ -171,6 +171,6 @@ A suite below runs as `tests/run NAME`.
 * `install`, `menu` and `grub` drive `bootctl`'s kernel, menu and GRUB verbs. `grow` runs `growroot` and `diskctl shrink` on the recovery system and checks its writes with the host build of `growset`, and runs `growboot` on the host.
 * `installer`, `sealed`, `drill` and `uefi` install and repair disks with `rach2-install`, `reflash`, `diskctl` and `init-recovery`. The installer's stick-update case checks that an ordinary update keeps the menu, applies `--console term` twice, checks each installed-root line and the recovery lines, then boots the changed menu and sees init start `term`.
 * `selfbuild` builds this directory on Rach2 with `guest.mk` and runs the `httpd` and `nc` it built.
-* `acpid` presses the volume keys on os-real and reads `mixer`, and powers the machine off through acpid and init.
+* `acpid` presses the volume keys on os-real and reads `mixer vol`, and powers the machine off through acpid and init.
 * `audio`'s case `kept` sets `mixer vol 5`, reboots and reads `vol 5:5` back from init's kept levels, then reboots past init with the file removed and reads the driver's level.
 * `audio` runs `audiotest -s` on HDA and `audiotest -d` on HDA and the SB16; no suite runs its tone.
