@@ -93,6 +93,16 @@ static void loopback_up(void)
     lo_ready = 1;
 }
 
+/** Copy the IPv6 address at `from` to `to`. */
+static void copy6(uint8_t *to, const uint8_t *from)
+{
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        to[i] = from[i];
+    }
+}
+
 /** Whether the IPv6 addresses at `a` and `b` are the same. */
 static int same6(const uint8_t *a, const uint8_t *b)
 {
@@ -168,7 +178,7 @@ int netdev_join6(struct netdev *nd, const uint8_t *group)
     if (nd->ngroup6 == NETDEV_GROUPS6) {
         return -ENOSPC;
     }
-    k_memcpy(nd->group6[nd->ngroup6], group, 16);
+    copy6(nd->group6[nd->ngroup6], group);
     nd->group6_refs[nd->ngroup6] = 1;
     nd->ngroup6++;
     return 0;
@@ -185,7 +195,7 @@ void netdev_leave6(struct netdev *nd, const uint8_t *group)
     }
     nd->ngroup6--;
     if (i != nd->ngroup6) {
-        k_memcpy(nd->group6[i], nd->group6[nd->ngroup6], 16);
+        copy6(nd->group6[i], nd->group6[nd->ngroup6]);
         nd->group6_refs[i] = nd->group6_refs[nd->ngroup6];
     }
 }

@@ -122,6 +122,9 @@ int ip6_scope(const uint8_t *a);
 /** Whether the first `prefix` bits of `a` and `b` agree. */
 int ip6_prefix_match(const uint8_t *a, const uint8_t *b, int prefix);
 
+/** How many leading bits `a` and `b` share, 0 to 128. */
+int ip6_common_prefix(const uint8_t *a, const uint8_t *b);
+
 /** Write to `out` the solicited-node group of `a`, ff02::1:ff00:0/104 with
  * the low 24 bits of `a` (RFC 4291, 2.7.1). */
 void ip6_solicited_node(const uint8_t *a, uint8_t *out);
