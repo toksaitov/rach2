@@ -39,7 +39,7 @@ extern int printf(const char *fmt, ...);
 
 /* ---- the clock, the key, and the layers above and below ---- */
 
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
 
 /** Return the microsecond clock TCP times its round trips by, for `ss -i`:
  * 10000 to a tick. */

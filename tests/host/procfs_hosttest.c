@@ -7,6 +7,7 @@
  *
  * host-deps: rach2/sys/fs/name.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/tick.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
  * The test includes the source whole, with its exports declared static
@@ -195,7 +196,7 @@ unsigned long mm_resident(const struct mm *mm)
 }
 
 /** The whole process's time, its two threads' together. */
-void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys)
+void proc_cpu_time(const process_t *p, uint64_t *user, uint64_t *sys)
 {
     (void)p;
     *user = process.utime + thread.utime;
@@ -632,6 +633,14 @@ uint64_t sched_idle_ticks(void)
     return idle_sum;
 }
 
+/** Processor `c`'s user, busy and idle ticks, from the model's `cpu_table`. */
+void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle)
+{
+    *user = cpu_table[c].user_ticks;
+    *busy = cpu_table[c].busy_ticks;
+    *idle = cpu_table[c].idle_ticks;
+}
+
 /** `v` in decimal into `out` of `cap` bytes, as `diskinfo_u64_dec` writes
  *  it, by the host's divide; diskinfo_hosttest.c tests that function.
  *  Returns the length, or 0 when `cap` does not hold the digits. */
@@ -655,20 +664,21 @@ int diskinfo_u64_dec(char *out, int cap, uint64_t v)
 }
 
 /** /proc/uptime gives the idle sum in seconds at its full 64 bits, and a
- * sum under a second with its leading zero. */
+ * sum under a second with its leading zero. A hundredth of a second is
+ * TICK_HZ / 100 ticks. */
 static void uptime_rows(void)
 {
     struct procfs_text text;
 
-    cpu_table[0].idle_ticks = 100;
-    cpu_table[0].busy_ticks = 50;
-    idle_sum = 8589934560ull;
+    cpu_table[0].idle_ticks = TICK_HZ;
+    cpu_table[0].busy_ticks = TICK_HZ / 2u;
+    idle_sum = 8589934560ull * (TICK_HZ / 100u);
     procfs_text_init(&text);
     check(procfs_gen_uptime(&text) == 17 &&
               __builtin_memcmp(text.buf, "1.50 85899345.60\n", 17) == 0,
           "the idle seconds past 32 bits of ticks are whole");
     kfree(text.buf);
-    idle_sum = 7;
+    idle_sum = 7u * (TICK_HZ / 100u);
     procfs_text_init(&text);
     check(procfs_gen_uptime(&text) == 10 && __builtin_memcmp(text.buf, "1.50 0.07\n", 10) == 0,
           "and a sum under a second has its leading zero");
@@ -678,7 +688,7 @@ static void uptime_rows(void)
 }
 
 /** A process's stat has the time of all its threads, and a thread's under
- * the process's task directory has its own. */
+ * the process's task directory has its own, each in USER_HZ's clock_t. */
 static void thread_times(void)
 {
     struct procfs_text text;
@@ -686,10 +696,10 @@ static void thread_times(void)
     thread.state = PROC_READY;
     thread.tg = &group;
     k_memcpy(thread.comm, "test", 5);
-    process.utime = 5;
-    process.stime = 6;
-    thread.utime = 30;
-    thread.stime = 40;
+    process.utime = 5u * (TICK_HZ / USER_HZ);
+    process.stime = 6u * (TICK_HZ / USER_HZ);
+    thread.utime = 30u * (TICK_HZ / USER_HZ);
+    thread.stime = 40u * (TICK_HZ / USER_HZ);
     procfs_text_init(&text);
     check(procfs_gen_stat(&text, 7, 1) > 0 && stat_times(text.buf, 35, 46),
           "a process's stat has every thread's time");

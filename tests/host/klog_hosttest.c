@@ -4,6 +4,7 @@
  *
  * host-deps: rach2/sys/lib/kfmt.c rach2/sys/lib/kstd.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/tick.c
  *
  * klog.c is included rather than linked, so each case can put the ring and the
  * recorders back to their initial state; the kernel has one boot per run and
@@ -193,7 +194,7 @@ void kirq_restore(unsigned int flags)
     }
 }
 
-volatile unsigned int kernel_ticks;
+volatile uint64_t kernel_ticks;
 
 #include "../../rach2/sys/klog.c"
 

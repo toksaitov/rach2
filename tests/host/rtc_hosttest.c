@@ -22,6 +22,9 @@
  * reference counter the test keeps drives the ticks each interrupt counts and
  * the clocks it keeps, on the boot processor and on another.
  *
+ * The answers are for a tick of 1000 Hz: a reload of 1193, sweeps of 499 us
+ * and a reference tick of 1000 counts of the 1 MHz counter.
+ *
  * Returns the failed-check count (0 == all passed), capped so it cannot wrap
  * to a false 0.
  */
@@ -29,6 +32,10 @@
 #include "rtc.h"
 #include "pit.h"
 #include "cmos.h"
+
+#if TICK_HZ != 1000
+#error "the literal answers are for TICK_HZ 1000"
+#endif
 
 extern int printf(const char *fmt, ...);
 
@@ -44,7 +51,7 @@ static int fails;
         }                                                             \
     } while (0)
 
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
 volatile uint32_t kernel_uptime_seconds;
 volatile uint32_t kernel_second_ticks;
 /* The PIT: its count and the status byte of the latch, the byte of the latch
@@ -240,18 +247,18 @@ static void subtick_rows(void)
     status = 0;
     count = 2;
     rtc_realtime(&sec, &ns);
-    CHECK(sec == 10 && ns == 9997000);
+    CHECK(sec == 10 && ns == 998000);
     pending = 1;
     status = 0x80;
     count = pit_reload - 100u;
     rtc_realtime(&sec, &ns);
-    CHECK(sec == 10 && ns == 10041000);
+    CHECK(sec == 10 && ns == 1041000);
     pending = 0;
     kernel_second_ticks = 1;
     count -= 100u;
     rtc_realtime(&sec, &ns);
-    CHECK(sec == 10 && ns == 10083000);
-    kernel_second_ticks = 99;
+    CHECK(sec == 10 && ns == 1083000);
+    kernel_second_ticks = 999;
     status = 0;
     count = 2;
     wrap_on_pending = 2;
@@ -270,15 +277,15 @@ static void subtick_rows(void)
     count = 2;
     status = 0;
     rtc_realtime(&sec, &ns);
-    CHECK(sec == 11 && ns == 19997000);
+    CHECK(sec == 11 && ns == 1998000);
     count = pit_reload - 100u;
     status = 0x80;
     rtc_realtime(&sec, &ns);
-    CHECK(sec == 11 && ns == 19997000);
+    CHECK(sec == 11 && ns == 1998000);
     pending = 0;
     kernel_second_ticks = 2;
     rtc_realtime(&sec, &ns);
-    CHECK(sec == 11 && ns == 20041000);
+    CHECK(sec == 11 && ns == 2041000);
     CHECK(!irq_disabled);
     kernel_second_ticks = 0;
     kernel_uptime_seconds = 42949672u;
@@ -309,9 +316,9 @@ static void set_rows(void)
     CHECK(sec == 1790000000LL && ns == 500000000);
     kernel_second_ticks = 1;
     rtc_realtime(&sec, &ns);
-    CHECK(sec == 1790000000LL && ns == 510000000);
+    CHECK(sec == 1790000000LL && ns == 501000000);
     rtc_coarse_realtime(&sec, &ns);
-    CHECK(sec == 1790000000LL && ns == 509959000);
+    CHECK(sec == 1790000000LL && ns == 500959000);
     rtc_set_realtime(1000, 0);
     rtc_realtime(&sec, &ns);
     CHECK(sec == 1000 && ns == 0);
@@ -342,9 +349,9 @@ static void monotonic_rows(void)
     pending = 1;
     count = pit_reload - 100u;
     rtc_monotonic(&sec, &ns);
-    CHECK(sec == 50 && ns == 10041000);
+    CHECK(sec == 50 && ns == 1041000);
     pending = 0;
-    kernel_second_ticks = 99;
+    kernel_second_ticks = 999;
     status = 0;
     count = 2;
     wrap_on_pending = 2;
@@ -352,7 +359,7 @@ static void monotonic_rows(void)
     CHECK(sec == 51 && ns == 41000);
     pending = 0;
     kernel_uptime_seconds = 50;
-    kernel_second_ticks = 99;
+    kernel_second_ticks = 999;
     status = 0x80;
     count = pit_reload - 100u;
     rtc_monotonic(&sec, &ns);
@@ -361,24 +368,24 @@ static void monotonic_rows(void)
     kernel_second_ticks = 1;
     rtc_set_realtime(1000, 0);
     rtc_monotonic(&sec, &ns);
-    CHECK(sec == 51 && ns == 10041000);
+    CHECK(sec == 51 && ns == 1041000);
     CHECK(!irq_disabled);
 }
 
 /**
  * The clock once the test's reference counter, 1 MHz and 32 bits, keeps it,
- * from a tick at 41 us into the PIT's period with the counter 64 Ki counts
+ * from a tick at 41 us into the PIT's period with the counter 4 Ki counts
  * short of its wrap: the microsecond clock goes on from the PIT's reading; an
  * interrupt on time counts one tick, the same one delivered again none, and
  * one seven and a half ticks late, past the counter's wrap, seven. Another
- * processor then three ticks and 100 us on reads three ticks pending and its
+ * processor then three ticks and 10 us on reads three ticks pending and its
  * place, as the microsecond clock and the time since boot, to a second's
  * turn; the boot processor reads no earlier; and an interrupt seventy
  * seconds late counts a minute's ticks, the next the rest.
  */
 static void reference_rows(void)
 {
-    const uint32_t start = 0xFFFF0000u;
+    const uint32_t start = 0xFFFFF000u;
     uint32_t base, phase_ns;
     int64_t sec, ns;
     int due;
@@ -392,27 +399,27 @@ static void reference_rows(void)
     CHECK(timer_tick_clock() == 1u);
     base = timer_now_us();
     CHECK(base == pit_period_us() + 41u);
-    ref_now = start + 10000u;
+    ref_now = start + 1000u;
     CHECK(timer_tick_clock() == 1u);
-    ref_now = start + 10100u;
+    ref_now = start + 1010u;
     CHECK(timer_tick_clock() == 0u);
-    ref_now = start + 80100u;
+    ref_now = start + 8010u;
     CHECK(timer_tick_clock() == 7u);
-    CHECK(timer_now_us() == base + 80100u);
+    CHECK(timer_now_us() == base + 8010u);
     host_cpu = 1;
-    ref_now = start + 105100u;
+    ref_now = start + 10510u;
     timer_phase(&due, &phase_ns);
-    CHECK(due == 3 && phase_ns == 100000u);
-    CHECK(timer_now_us() == base + 105100u);
+    CHECK(due == 3 && phase_ns == 10000u);
+    CHECK(timer_now_us() == base + 10510u);
     kernel_uptime_seconds = 60;
-    kernel_second_ticks = 98;
+    kernel_second_ticks = 998;
     rtc_monotonic(&sec, &ns);
-    CHECK(sec == 61 && ns == 10100000);
+    CHECK(sec == 61 && ns == 1010000);
     host_cpu = 0;
-    CHECK(timer_now_us() == base + 105100u);
+    CHECK(timer_now_us() == base + 10510u);
     ref_now += 70000000u;
-    CHECK(timer_tick_clock() == 6000u);
-    CHECK(timer_tick_clock() == 1003u);
+    CHECK(timer_tick_clock() == 60000u);
+    CHECK(timer_tick_clock() == 10003u);
     CHECK(!irq_disabled);
     ref_on = 0;
 }
@@ -475,12 +482,11 @@ static void bcd_sample(rtc_snapshot_t *raw, int year, int month, int day, int ho
  * here, and on a booted machine that error is under a second, which is why
  * it is stated as arithmetic, not left to a tolerance.
  *
- * Part of a second survives as nanoseconds: 55 ticks is 550 ms. No anchor
+ * Part of a second survives as nanoseconds: 550 ticks is 550 ms. No anchor
  * at all is time since boot, which is what a machine with no readable clock
- * reports. An uptime of a whole tick cycle is why the anchor counts
- * seconds: 2^32 ticks after the anchor a difference of ticks is zero again,
- * and real time would jump back 497 days. And the seconds counter's own
- * wrap, 136 years out, still reads as elapsed time, not as a jump back.
+ * reports. An uptime of 42949672 seconds, past 2^32 ticks, adds whole. And
+ * the seconds counter's own wrap, 136 years out, still reads as elapsed
+ * time, not as a jump back.
  */
 static void anchor_rows(void)
 {
@@ -491,11 +497,11 @@ static void anchor_rows(void)
     CHECK(sec == 1002LL);
     CHECK(nsec == 0LL);
 
-    rtc_time_from_anchor(1000LL, 5u, 7u, 55u, &sec, &nsec);
+    rtc_time_from_anchor(1000LL, 5u, 7u, 550u, &sec, &nsec);
     CHECK(sec == 1002LL);
     CHECK(nsec == 550000000LL);
 
-    rtc_time_from_anchor(0LL, 0u, 2u, 50u, &sec, &nsec);
+    rtc_time_from_anchor(0LL, 0u, 2u, 500u, &sec, &nsec);
     CHECK(sec == 2LL);
     CHECK(nsec == 500000000LL);
 

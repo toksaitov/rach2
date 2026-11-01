@@ -18,7 +18,11 @@ extern int dprintf(int fd, const char *format, ...);
 process_t *proc_list;
 struct percpu cpu_table[NR_CPUS];
 process_t *proc_idle;
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
+
+/** A spin's pause, which the host does not need. */
+void arch_relax(void)
+{}
 static process_t procs[7];
 /* Each process's floating-point area, which the stand-ins tell apart. */
 static uint8_t areas[7][16];
@@ -380,7 +384,7 @@ static void accounting(void)
 {
     struct percpu *cpu = this_cpu();
     process_t *saved = cpu->current;
-    uint32_t idle = cpu->idle_ticks, busy = cpu->busy_ticks, user = cpu->user_ticks;
+    uint64_t idle = cpu->idle_ticks, busy = cpu->busy_ticks, user = cpu->user_ticks;
 
     cpu->current = NULL;
     cpu->idle_wait = 1;

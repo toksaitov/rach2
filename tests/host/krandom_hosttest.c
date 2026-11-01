@@ -46,7 +46,7 @@ static struct source_model rand_model; /* RDRAND */
 
 static uint64_t cycles_now;
 static int64_t boot_seconds;
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
 
 /** One attempt at a word of the source `m`, as `arch_random` makes it. */
 static int model_draw(struct source_model *m, uint32_t *out)
@@ -329,7 +329,7 @@ static void check_seed_sources(void)
     lo = (uint32_t)cycles_now;
     hi = (uint32_t)(cycles_now >> 32);
     sec = (uint32_t)boot_seconds;
-    ticks = kernel_ticks;
+    ticks = (uint32_t)kernel_ticks;
     krandom_reseed(lo ^ sec, hi, ticks ^ (sec << 16), lo ^ hi ^ ticks ^ sec);
     for (i = 0; i < 8; i++) {
         want[i] = krandom_u32();

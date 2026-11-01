@@ -20,10 +20,10 @@
  * before, a blocked process with no deadline is never made runnable by the
  * tick, and a running process is left as it is whatever its wakeup tick says.
  * A tick that wakes a sleeper still posts the sleeper's alarm and a later
- * process's. Across the count's wrap, a timer armed again onto tick 0 is due
- * at 1, the tick before 0 serves nothing due after it, and tick 5 posts that
- * timer and wakes the sleeper, whose deadline is 5. `proc_alarm_at` moves a
- * tick that wraps to 0, the value of a disarmed timer, to 1.
+ * process's. The count is 64 bits wide: a timer armed again across 2^32 ticks
+ * is due at 2^32, the tick before serves nothing due after it, and tick
+ * 2^32 + 5 posts that timer and wakes the sleeper, whose deadline it is.
+ * `proc_alarm_at` gives a tick past 2^32 whole.
  */
 #include "lib/kint.h"
 struct process;
@@ -43,7 +43,7 @@ static void setup_process_stack(struct process *proc, void (*entry_point)(void))
 struct tgroup;
 static struct tgroup *tgroup_new(struct process *leader);
 static void tgroup_put(struct tgroup *tg);
-static void proc_cpu_time(const struct process *p, uint32_t *user, uint32_t *sys);
+static void proc_cpu_time(const struct process *p, uint64_t *user, uint64_t *sys);
 static void proc_exchange_pids(struct process *a, struct process *b);
 static int proc_set_ruid(struct process *p, uint32_t uid);
 static uint32_t proc_user_records(const struct process *p);
@@ -51,7 +51,7 @@ static uint32_t proc_work_count(unsigned int index);
 #include "proc/process.c"
 #include "ns_first.h"
 
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
 
 extern int printf(const char *format, ...);
 extern int dprintf(int fd, const char *format, ...);
@@ -182,27 +182,27 @@ int main(void)
     CHECK(sleeper.alarm_tick == 1401, "an interval of one tick is armed again");
 
     sleeper.state = PROC_BLOCKED;
-    sleeper.wakeup_tick = 5;
+    sleeper.wakeup_tick = 0x100000005ull;
     sleeper.alarm_tick = 0;
     runner.alarm_tick = 0xFFFFFFFEu;
     runner.alarm_interval = 2;
     proc_timer_update(&sleeper);
     proc_timer_update(&runner);
     proc_wake_sleepers(0xFFFFFFFEu);
-    CHECK(runner_posts == 4 && runner.alarm_tick == 1,
-          "a timer armed again onto tick 0 across the wrap is due at 1");
+    CHECK(runner_posts == 4 && runner.alarm_tick == 0x100000000ull,
+          "a timer armed again across 2^32 ticks is due at 2^32");
     proc_timer_update(&sleeper);
     proc_timer_update(&runner);
     proc_wake_sleepers(0xFFFFFFFFu);
     CHECK(runner_posts == 4 && sleeper.state == PROC_BLOCKED,
-          "a timer and a sleeper due past the wrap wait for it");
+          "a timer and a sleeper due past 2^32 ticks wait for them");
     proc_timer_update(&sleeper);
     proc_timer_update(&runner);
-    proc_wake_sleepers(5);
-    CHECK(runner_posts == 5 && sleeper.state == PROC_READY, "and are served after it");
+    proc_wake_sleepers(0x100000005ull);
+    CHECK(runner_posts == 5 && sleeper.state == PROC_READY, "and are served after");
 
     CHECK(proc_alarm_at(1000, 25) == 1025, "an alarm 25 ticks after tick 1000 is due at 1025");
-    CHECK(proc_alarm_at(0xFFFFFFFFu, 1) == 1, "an alarm that wraps to 0 is due at 1");
+    CHECK(proc_alarm_at(0xFFFFFFFFu, 1) == 0x100000000ull, "an alarm past 2^32 ticks is due whole");
     runner.alarm_tick = 0;
     proc_timer_update(&runner);
     follower.state = PROC_RUNNING;

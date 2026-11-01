@@ -59,7 +59,13 @@ static const char *serial_bytes;
 static void (*scheduled_action)(void);
 static const char *wake_detail;
 static char bytes[512];
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
+
+/** The tick count as the kernel reads it whole: the model's `kernel_ticks`. */
+uint64_t tick_count(void)
+{
+    return kernel_ticks;
+}
 
 #define CHECK(condition, detail)                        \
     do {                                                \
@@ -220,7 +226,7 @@ uint32_t timer_now_us(void)
 }
 
 /** The model's tick, which the rows set. */
-uint32_t rtc_ticks_now(void)
+uint64_t rtc_ticks_now(void)
 {
     return kernel_ticks;
 }
@@ -745,8 +751,10 @@ static void copy_refit(void)
           "the second newline follows the master's read");
 }
 
-/* The tick at which a timed row's read begins. */
+/* The tick at which a timed row's read begins, and the ticks of a tenth of
+ * a second, VTIME's unit. */
 #define T0 1000u
+#define V  TTY_TICKS_PER_VTIME
 
 /* A step of a timed row, run while the reader waits: the tick it runs at,
  * the bytes that arrive then, or NULL for the timer's wake, and the deadline
@@ -788,7 +796,7 @@ static void timed_action(void)
     } else if (s->input) {
         CHECK(ptm_write(&master, s->input, (uint32_t)length(s->input)) == length(s->input),
               "the master writes a timed row's input");
-    } else if (consumer.wakeup_tick != 0 && (int32_t)(kernel_ticks - consumer.wakeup_tick) >= 0) {
+    } else if (consumer.wakeup_tick != 0 && kernel_ticks >= consumer.wakeup_tick) {
         consumer.wakeup_tick = 0;
         consumer.state = PROC_READY;
     }
@@ -842,12 +850,12 @@ static void timed_reads(void)
 {
     static const struct timed_step min_only[] = {{T0 + 5, "ab", 0}, {T0 + 500, "c", 0}};
     static const struct timed_step one_byte[] = {{T0 + 5, "a", 0}};
-    static const struct timed_step expire[] = {{T0 + 20, NULL, T0 + 20}};
-    static const struct timed_step early[] = {{T0 + 5, "a", T0 + 20}};
+    static const struct timed_step expire[] = {{T0 + 2 * V, NULL, T0 + 2 * V}};
+    static const struct timed_step early[] = {{T0 + 5, "a", T0 + 2 * V}};
     static const struct timed_step inter[] = {
-        {T0 + 50, "a", 0}, {T0 + 57, "b", T0 + 60}, {T0 + 67, NULL, T0 + 67}};
-    static const struct timed_step full[] = {{T0 + 5, "a", 0}, {T0 + 8, "b", T0 + 15}};
-    static const struct timed_step serial[] = {{T0 + 3, "k", 0}, {T0 + 13, NULL, T0 + 13}};
+        {T0 + 50, "a", 0}, {T0 + 57, "b", T0 + 50 + V}, {T0 + 57 + V, NULL, T0 + 57 + V}};
+    static const struct timed_step full[] = {{T0 + 5, "a", 0}, {T0 + 8, "b", T0 + 5 + V}};
+    static const struct timed_step serial[] = {{T0 + 3, "k", 0}, {T0 + 3 + V, NULL, T0 + 3 + V}};
     char out[32];
 
     CHECK(timed_read(0, 0, 0, out, 8, NULL, 0) == 0, "VMIN 0 and VTIME 0 return at once");
@@ -856,15 +864,16 @@ static void timed_reads(void)
     CHECK(timed_read(0, 3, 0, out, 1, one_byte, 1) == 1 && out[0] == 'a',
           "a read for fewer bytes than VMIN returns with as many");
     CHECK(timed_read(0, 0, 2, out, 8, expire, 1) == 0,
-          "VMIN 0 and VTIME 2 return none twenty ticks after the read began");
+          "VMIN 0 and VTIME 2 return none two tenths of a second after the read began");
     CHECK(timed_read(0, 0, 2, out, 8, early, 1) == 1 && out[0] == 'a',
           "VMIN 0 and VTIME 2 return the first byte before the deadline");
     CHECK(timed_read(0, 18, 1, out, 18, inter, 3) == 2 && out[0] == 'a' && out[1] == 'b',
-          "VMIN 18 and VTIME 1 wait for a first byte and return short ten ticks after the last");
+          "VMIN 18 and VTIME 1 wait for a first byte and return short a tenth of a second after "
+          "the last");
     CHECK(timed_read(0, 2, 1, out, 8, full, 2) == 2,
           "VMIN 2 and VTIME 1 return once two bytes are there");
     CHECK(timed_read(1, 18, 1, out, 18, serial, 2) == 1 && out[0] == 'k',
-          "the console's VMIN 18 and VTIME 1 return a serial byte ten ticks after it");
+          "the console's VMIN 18 and VTIME 1 return a serial byte a tenth of a second after it");
 }
 
 /** Close the master while the slave reader waits. */

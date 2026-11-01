@@ -3,6 +3,7 @@
  *
  * host-deps: tests/host/compat/spinlock_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
+ * host-deps: rach2/sys/tick.c
  *
  * The timerfd code is the kernel's, included whole to reach its static read
  * and arm. The test owns the tick count and calls `timerfd_tick` as the
@@ -14,23 +15,29 @@
  * Linux.
  *
  * A timer armed while a tick is pending counts from that tick. A timer of
- * 200 days, longer than one wait of ticks can span, reports 200 days, does
- * not expire a tick early and expires at its tick; an interval of 200 days
- * is reported and waited whole; and a time past the most seconds a setting
- * keeps is taken as that most.
+ * 200 days, past 2^32 ticks, reports 200 days, does not expire a tick early
+ * and expires at its tick; an interval of 200 days is reported and waited
+ * whole; and a time past the most seconds a setting keeps is taken as that
+ * most.
  */
 #include "io/timerfd.c"
 
 extern int printf(const char *format, ...);
 
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
+
+/** The tick count as the kernel reads it whole: the model's `kernel_ticks`. */
+uint64_t tick_count(void)
+{
+    return kernel_ticks;
+}
 /* A tick the timer has raised and the boot processor has not yet counted,
  * which the pending row sets. */
 static uint32_t tick_pending;
 
 /** The tick count as the clocks count it: `kernel_ticks` and a pending
  * tick. */
-uint32_t rtc_ticks_now(void)
+uint64_t rtc_ticks_now(void)
 {
     return kernel_ticks + tick_pending;
 }
@@ -278,8 +285,8 @@ static void pending_rows(void)
     CHECK(timer.count == 1, "it expires at 1003");
 }
 
-/** A timer of 200 days, past the most one wait of ticks can span, and one
- * past the most seconds a setting keeps. */
+/** A timer of 200 days, past 2^32 ticks, and one past the most seconds a
+ * setting keeps. */
 static void long_rows(void)
 {
     struct setting days = {0, 0, 17280000, 0};
@@ -292,14 +299,14 @@ static void long_rows(void)
     current_setting(&timer, &got);
     CHECK(got.vsec == 17280000 && got.vnsec == NS_PER_TICK,
           "a timer of 200 days reports 200 days and the tick in progress");
-    timerfd_tick(1000u + 1728000000u);
+    timerfd_tick(1000u + 17280000ull * TICK_HZ);
     CHECK(timer.count == 0 && timer.armed, "a timer of 200 days does not expire early");
-    timerfd_tick(1000u + 1728000001u);
+    timerfd_tick(1001u + 17280000ull * TICK_HZ);
     CHECK(timer.count == 1 && !timer.armed, "a timer of 200 days expires at its tick");
 
     reset();
     CHECK(arm(&timer, 0, &every) == 0, "a timer every 200 days arms");
-    kernel_ticks += 101;
+    kernel_ticks += TICK_HZ + 1u;
     timerfd_tick(kernel_ticks);
     CHECK(timer.count == 1, "its first expiration comes after a second");
     current_setting(&timer, &got);

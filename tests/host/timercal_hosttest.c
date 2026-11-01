@@ -322,7 +322,7 @@ static uint32_t calibrate(int path)
         tsc_invariant = 1;
         return timer_calibrate();
     }
-    counts = apic_timer_calibrate(100u, &against);
+    counts = apic_timer_calibrate(TICK_HZ, &against);
     CHECK(strcmp(against, path == APIC_BY_PM ? "pm timer" : "pit") == 0,
           "the calibration names its reference");
     return counts;
@@ -409,16 +409,16 @@ int main(void)
      * 16; a PM timer that wraps during the measurement. */
     pm_base = 0xFFF000u;
     apic_khz = 1000000u;
-    stop_rows(APIC_BY_PM, 10000000u);
-    stop_rows(APIC_BY_PIT, 10000000u);
+    stop_rows(APIC_BY_PM, (uint32_t)(apic_khz * 1000u / TICK_HZ));
+    stop_rows(APIC_BY_PIT, (uint32_t)(apic_khz * 1000u / TICK_HZ));
     apic_khz = 133337u / 16u;
-    stop_rows(APIC_BY_PM, 83330u);
-    stop_rows(APIC_BY_PIT, 83330u);
+    stop_rows(APIC_BY_PM, (uint32_t)(apic_khz * 1000u / TICK_HZ));
+    stop_rows(APIC_BY_PIT, (uint32_t)(apic_khz * 1000u / TICK_HZ));
 
     /* A TSC of 2.893417 GHz whose low half wraps during the measurement. */
     tsc_base = 0xFFF00000u;
     tsc_khz = 2893417u;
-    stop_rows(TSC_BY_PIT, 28934170u);
+    stop_rows(TSC_BY_PIT, (uint32_t)((uint64_t)tsc_khz * 1000u / TICK_HZ));
 
     /* A rate past 32 bits, which a stop longer than the reference's wrap can
      * give, is no measurement, and no division fault on i686. */
@@ -435,7 +435,7 @@ int main(void)
     {
         const char *against;
 
-        counts = apic_timer_calibrate(100u, &against);
+        counts = apic_timer_calibrate(TICK_HZ, &against);
     }
     CHECK(counts == 0, "a reference that stops gives no calibration");
 

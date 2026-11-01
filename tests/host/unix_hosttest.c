@@ -4,6 +4,7 @@
  *
  * host-deps: tests/host/compat/park_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
+ * host-deps: rach2/sys/tick.c
  *
  * `ipc/unix.c`, `ipc/pipe.c` and the checked user copy are the kernel's,
  * included whole to reach their static state. The descriptor table the
@@ -93,10 +94,16 @@ struct sockfile {
 
 static process_t self;
 struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
+
+/** The tick count as the kernel reads it whole: the model's `kernel_ticks`. */
+uint64_t tick_count(void)
+{
+    return kernel_ticks;
+}
 
 /** The tick count as the clocks count it, with no tick pending here. */
-uint32_t rtc_ticks_now(void)
+uint64_t rtc_ticks_now(void)
 {
     return kernel_ticks;
 }

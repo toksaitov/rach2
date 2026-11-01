@@ -24,7 +24,7 @@ static int fails;
         }                                           \
     } while (0)
 
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
 
 /** No interrupts to mask on the host: nothing to save. */
 uint32_t kirq_save(void)

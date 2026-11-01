@@ -4,6 +4,7 @@
  * interrupted calls are restarted.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/tick.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
  * The source is included whole, to reach its lists of waiters. User memory
@@ -40,7 +41,13 @@ extern int printf(const char *format, ...);
 
 static process_t self;
 struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
+
+/** The tick count as the kernel reads it whole: the model's `kernel_ticks`. */
+uint64_t tick_count(void)
+{
+    return kernel_ticks;
+}
 volatile uint32_t kernel_uptime_seconds;
 volatile uint32_t kernel_second_ticks;
 static uint8_t user[1024];
@@ -51,14 +58,14 @@ static uint32_t tick_pending;
 
 /** The tick count as the clocks count it: `kernel_ticks` and a pending
  * tick. */
-uint32_t rtc_ticks_now(void)
+uint64_t rtc_ticks_now(void)
 {
     return kernel_ticks + tick_pending;
 }
 
 /** The tick's counts as one reading, with interrupts off as the kernel's
  * reads them, which on the host's one thread is all one reading needs. */
-void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks)
+void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint64_t *ticks)
 {
     uint32_t flags = kirq_save();
 
@@ -75,7 +82,8 @@ static process_t *ends_at_copy;
 static uint32_t waiters_at;
 /* The address whose next fault takes `slow_ticks` ticks, and the tick the
  * last wait was armed for. */
-static uint32_t slow_at, slow_ticks, armed;
+static uint32_t slow_at, slow_ticks;
+static uint64_t armed;
 static struct futex_q waiter;
 static int masked, failures, wakes, waits, cmpxchgs;
 /* The word a thread on another processor sets FUTEX_WAITERS in, once, between
@@ -459,19 +467,19 @@ static int32_t timed_wait(uint32_t now, int32_t sec, int32_t nsec, uint32_t faul
 /**
  * A wait's deadline is fixed when the call begins: a wait of one tick whose
  * page takes 50 ticks to come in has passed its deadline and ends without
- * sleeping, and a wait of a second from tick 2000 sleeps until 2101 whatever
- * the fault took.
+ * sleeping, and a wait of a second from tick 2000 sleeps until a second and
+ * a tick later, 2001 + TICK_HZ, whatever the fault took.
  */
 static void deadline_fixed(void)
 {
-    CHECK(timed_wait(1000, 0, 10000000, 50) == -ETIMEDOUT && waits == 0,
+    CHECK(timed_wait(1000, 0, (int32_t)TICK_NS, 50) == -ETIMEDOUT && waits == 0,
           "a deadline a fault outlasted ends the wait without a sleep");
-    CHECK(timed_wait(2000, 1, 0, 50) == -ETIMEDOUT && waits == 1 && armed == 2101,
-          "a wait of a second from tick 2000 sleeps until 2101");
+    CHECK(timed_wait(2000, 1, 0, 50) == -ETIMEDOUT && waits == 1 && armed == 2001u + TICK_HZ,
+          "a wait of a second from tick 2000 sleeps until a second and a tick later");
     tick_pending = 1;
-    CHECK(timed_wait(2000, 1, 0, 0) == -ETIMEDOUT && waits == 1 && armed == 2102,
-          "a wait of a second begun while tick 2001 is pending sleeps until 2102, a second "
-          "and a tick past the clock's 2001");
+    CHECK(timed_wait(2000, 1, 0, 0) == -ETIMEDOUT && waits == 1 && armed == 2002u + TICK_HZ,
+          "a wait of a second begun while tick 2001 is pending sleeps until a second and a "
+          "tick past the clock's 2001");
     tick_pending = 0;
 }
 

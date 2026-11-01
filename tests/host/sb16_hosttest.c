@@ -30,7 +30,7 @@ static int device_stopped;           /* the model's device takes no more frames 
 static int scale_captured;           /* the primed halves are in scale_stream */
 static int16_t scale_stream[120000]; /* the scale's left channel, in DMA order */
 static long scale_length;
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
 audio_driver_t *audio = &sb16_driver;
 
 #define CHECK(c, s)                             \
@@ -442,7 +442,7 @@ static void row_scale(void)
     CHECK(scale_length >= at, "device plays the whole scale");
     run_scale(1);
     CHECK(scale_done == 0 && scale_stalled == 1, "stopped device makes scale report a stall");
-    CHECK(kernel_ticks >= 4 * (5 * (17640 + 1536) / 441) + 100,
+    CHECK(kernel_ticks >= 4 * (5 * (17640 + 1536) / (44100 / TICK_HZ)) + TICK_HZ,
           "stall is reported after four lengths and a second");
 }
 

@@ -24,7 +24,11 @@ extern char *strstr(const char *text, const char *part);
 process_t *proc_list;
 struct percpu cpu_table[NR_CPUS];
 process_t *proc_idle;
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
+
+/** A spin's pause, which the host does not need. */
+void arch_relax(void)
+{}
 /* pid 10, running, and pid 11, the console reader. */
 static process_t processes[2];
 /* The time `timer_now_us` returns, in microseconds; the modelled EFLAGS, with

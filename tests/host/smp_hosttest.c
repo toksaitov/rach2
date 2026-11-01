@@ -231,7 +231,7 @@ void arch_tlb_flush_page(uintptr_t va)
 }
 
 /* The global tick a started processor's accounting begins from. */
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
 
 /** 0: the host has no interrupt flag. */
 uint32_t kirq_save(void)
