@@ -200,6 +200,7 @@
 #define NL80211_RATE_INFO_BITRATE32           5
 #define NL80211_STA_BSS_PARAM_SHORT_PREAMBLE  2
 #define NL80211_STA_BSS_PARAM_SHORT_SLOT      3
+#define NL80211_STA_BSS_PARAM_DTIM_PERIOD     4
 #define NL80211_STA_BSS_PARAM_BEACON_INTERVAL 5
 #define NL80211_STA_FLAG_AUTHORIZED           1
 #define NL80211_STA_FLAG_WME                  3
@@ -2080,6 +2081,24 @@ static void put_rate(struct genl_msg *msg, unsigned attr, unsigned rate)
     nla_nest_end(msg, nest);
 }
 
+/**
+ * Give the DTIM period of BSS `b` from the TIM element of its last beacon,
+ * or 1 when it has none, as from a probe response alone; Linux reports at
+ * least 1 too.
+ */
+static uint8_t dtim_period(const struct wlan_bss *b)
+{
+    unsigned at = 0;
+
+    while (at + 2 <= b->ies_len && at + 2u + b->ies[at + 1] <= b->ies_len) {
+        if (b->ies[at] == WLAN_EID_TIM && b->ies[at + 1] >= 2 && b->ies[at + 3]) {
+            return b->ies[at + 3];
+        }
+        at += 2u + b->ies[at + 1];
+    }
+    return 1;
+}
+
 /** Append a NEW_STATION message for the AP of st. */
 static void put_station(struct genl_msg *msg, struct sta *s, const struct nl80211_status *st,
                         uint32_t seq)
@@ -2128,6 +2147,8 @@ static void put_station(struct genl_msg *msg, struct sta *s, const struct nl8021
         if (b->capability & WLAN_CAPABILITY_SHORT_SLOT_TIME) {
             nla_put_flag(msg, NL80211_STA_BSS_PARAM_SHORT_SLOT);
         }
+        /* iw reads both of these from every BSS_PARAM. */
+        nla_put_u8(msg, NL80211_STA_BSS_PARAM_DTIM_PERIOD, dtim_period(b));
         nla_put_u16(msg, NL80211_STA_BSS_PARAM_BEACON_INTERVAL, b->beacon_interval);
         nla_nest_end(msg, nest);
     }
