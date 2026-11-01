@@ -19,7 +19,13 @@
 #include <stdarg.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include "pwauth.h"
+
+/* Linux's number on every architecture; macOS has no close_range. */
+#ifndef SYS_close_range
+#define SYS_close_range 436
+#endif
 
 /*
  * `Open_fds` is 1 for each descriptor the model holds open. `Drop_calls`
@@ -163,6 +169,30 @@ static int account_setresgid(gid_t a, gid_t b, gid_t c)
     return drop_identity();
 }
 
+/**
+ * Close descriptors `first` to `last` in the model, as close_range(2) with no
+ * flags does, and leave the host's own alone; any other call fails with
+ * ENOSYS. `su` and `sudo` make this call before they change identity.
+ */
+static long account_syscall(long number, ...)
+{
+    va_list ap;
+    unsigned int first, last, i;
+
+    if (number != SYS_close_range) {
+        errno = ENOSYS;
+        return -1;
+    }
+    va_start(ap, number);
+    first = va_arg(ap, unsigned int);
+    last = va_arg(ap, unsigned int);
+    va_end(ap);
+    for (i = first; i <= last && i < 1024; i++) {
+        Open_fds[i] = 0;
+    }
+    return 0;
+}
+
 /** Return root's entry, with `/test-shell` as its shell, for any name. */
 static struct passwd *account_getpwnam(const char *name)
 {
@@ -233,6 +263,7 @@ int pwauth_check(const char *stored, const char *password)
 #define setresgid account_setresgid
 #define execve    account_execve
 #define execle    account_execle
+#define syscall   account_syscall
 #define main      login_main
 #include "login.c"
 #undef main

@@ -194,17 +194,31 @@ static int policy_execve(const char *path, char *const argv[], char *const envp[
     _exit(3);
 }
 
+/**
+ * init's sigtimedwait, which macOS lacks: fail with EAGAIN, as a wait that
+ * timed out. Its one caller is init's supervising loop, which no row runs.
+ */
+static int policy_sigtimedwait(const sigset_t *set, siginfo_t *info, const struct timespec *timeout)
+{
+    (void)set;
+    (void)info;
+    (void)timeout;
+    errno = EAGAIN;
+    return -1;
+}
+
 #define INIT_METAL
 #define INIT_CONSOLE_LOGIN
-#define fopen   policy_fopen
-#define dup2    policy_dup2
-#define unlink  policy_unlink
-#define execv   policy_execv
-#define execve  policy_execve
-#define fork    policy_fork
-#define waitpid policy_waitpid
-#define reboot  policy_reboot
-#define main    init_main
+#define fopen        policy_fopen
+#define dup2         policy_dup2
+#define unlink       policy_unlink
+#define execv        policy_execv
+#define execve       policy_execve
+#define fork         policy_fork
+#define waitpid      policy_waitpid
+#define reboot       policy_reboot
+#define sigtimedwait policy_sigtimedwait
+#define main         init_main
 #include "init.c"
 #undef main
 #undef fopen
