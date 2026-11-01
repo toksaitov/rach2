@@ -172,7 +172,9 @@ prints, as
 .El
 .Pp
 If the installer finds a recovery partition, it archives the three account
-files and the SSH policy under
+files, the SSH policy and
+.Pa /etc/vconsole.conf ,
+where the root has one, under
 .Pa rach2-config-a/etc .
 Dropbear's host keys go in
 .Pa rach2-config-a/etc/dropbear ,
@@ -245,9 +247,13 @@ and accepts only
 .Cm term .
 .Pp
 Before replacing a readable root, the installer copies its account files,
-SSH policy, server host keys, account keys, including root's keys, and the
+SSH policy,
+.Pa /etc/vconsole.conf ,
+server host keys, account keys, including root's keys, the
 home directories under
-.Pa /home ,
+.Pa /home
+and root's home,
+.Pa /root ,
 which it keeps in
 .Pa /dev/shm ,
 the recovery system's tmpfs of half the machine's memory; an update whose
@@ -258,8 +264,9 @@ and an update of the same disk run again in the same boot takes it in place
 of the root and the archive, so that the homes are kept; an update of
 another disk is refused while the copy is there.
 A reboot loses the copy.
-These are restored after the write, preserving passwords changed since
-installation, and the image's system accounts the restored files lack are
+These are restored after the write, in place of the image's, preserving
+passwords changed since installation, the console's keymap and the logins
+kept in the homes, and the image's system accounts the restored files lack are
 appended to them, as for an install.
 The absence of account keys is preserved too.
 If the root cannot be read, the account files, policy and keys are taken

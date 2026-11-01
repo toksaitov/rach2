@@ -27,9 +27,11 @@
 #
 # `--update` writes a root file system image into the root partition of a
 # machine that is already installed, without moving its partitions. The account
-# files, the SSH policy, the server's host keys and the accounts' own keys are
-# copied off the root first and written back afterwards, so a password changed
-# after the install is still the machine's password. The root is grown again
+# files, the SSH policy, the console's keymap, the server's host keys, the
+# accounts' own keys and the home directories, root's among them, are copied
+# off the root first and written back afterwards, so a password changed after
+# the install is still the machine's password and an agent signed in there is
+# still signed in. The root is grown again
 # into its partition. The machine is saved to its recovery system for the whole
 # of the write and the new root is armed for one trial boot, so an update cut
 # off by a power cut, or one that does not come up, costs a reboot into recovery
@@ -54,7 +56,9 @@ MNT=/mnt/install-source
 TARGET_MNT=/mnt/install-root
 RECOVERY_MNT=/mnt/install-recovery
 BOOT_MNT=/mnt/install-boot
-CONFIG_FILES="etc/passwd etc/group etc/shadow etc/rach2/sshd.conf"
+# The machine's own files an update keeps and the archive holds: the accounts,
+# the SSH policy and the console's keymap, which init reads.
+CONFIG_FILES="etc/passwd etc/group etc/shadow etc/rach2/sshd.conf etc/vconsole.conf"
 ARCHIVE_NEEDS="etc/passwd etc/group etc/shadow"
 # The recovery system's key, on the recovery partition, where its init reads it.
 RECOVERY_KEYS_FILE=boot/recovery_authorized_keys
@@ -984,6 +988,11 @@ whole configuration archived on its recovery partition; its accounts are not the
     if [ -d "$TARGET_MNT/home" ] && [ -n "$mounted_root" ]; then
         cp -a "$TARGET_MNT/home" "$keep/home" || die "the home directories could not be kept"
     fi
+    # Root's home is kept whole, as the homes under /home are, apart from the
+    # keys, which the loop below keeps in "$keep/root" for the archive.
+    if [ -d "$TARGET_MNT/root" ] && [ -n "$mounted_root" ]; then
+        cp -a "$TARGET_MNT/root" "$keep/root-home" || die "root's home directory could not be kept"
+    fi
     if [ -n "$mounted_root" ]; then
         while IFS=: read -r _name _password _uid _gid _gecos home _shell; do
             case "$home" in /home | /home/*) continue ;; /*) ;; *) continue ;; esac
@@ -1091,7 +1100,7 @@ whole configuration archived on its recovery partition; its accounts are not the
     say "writing the accounts, the policy and the keys back"
     keep_image_accounts "$TARGET_MNT" "$keep" ||
         die "the image's system accounts could not be kept beside the machine's"
-    for f in etc/passwd etc/group etc/shadow etc/rach2/sshd.conf; do
+    for f in $CONFIG_FILES; do
         if [ -f "$keep/$f" ]; then
             mkdir -p "$TARGET_MNT/$(dirname "$f")"
             cp "$keep/$f" "$TARGET_MNT/$f" || die "$f could not be put back"
@@ -1122,6 +1131,12 @@ whole configuration archived on its recovery partition; its accounts are not the
             { mkdir -p "$TARGET_MNT$home" && chmod 700 "$TARGET_MNT$home" &&
                 chown "$uid:$gid" "$TARGET_MNT$home"; } || die "$home could not be made"
         done
+    fi
+    # Root's home is the machine's where it was kept; its keys are put back
+    # with the other homes' below.
+    if [ -d "$keep/root-home" ]; then
+        rm -rf "${TARGET_MNT:?}/root" || die "the image's home for root could not be removed"
+        cp -a "$keep/root-home" "$TARGET_MNT/root" || die "root's home directory could not be put back"
     fi
     # The image's keys go from every home outside /home, kept keys or not.
     rm -rf "$TARGET_MNT/root/.ssh" || die "the image's keys for root could not be removed"
