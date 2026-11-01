@@ -531,8 +531,7 @@ static bool pad_key(struct term_key *key, unsigned v, unsigned mods)
  * of `before`, the state before the key. When `live`, as when the selection
  * mode is off, writes a function string that is neither the built-in one
  * nor xterm's sequence of a key, and an accent that composed nothing,
- * straight to the child. Returns false
- * when the key sends nothing more.
+ * straight to the child. Returns false when the key sends nothing more.
  */
 static bool make_key(struct term_keys *k, struct term_screen *s, const struct keymap_state *before,
                      unsigned code, const struct keymap_result *res, bool live,
