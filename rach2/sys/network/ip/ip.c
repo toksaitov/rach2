@@ -174,14 +174,20 @@ static uint16_t ip_id_counter = 0;
 /* The datagram, or the fragment, being sent: one frame's payload. */
 static uint8_t ip_tx_buf[ETH_MTU];
 
+/* The fragment being sent of a held datagram whose hop's address came. */
+static uint8_t ip_hold_frag_buf[ETH_MTU];
+
 /* Datagrams that wait for their next hop's hardware address, as Linux's
  * neighbour queue keeps them, so that the first datagram to a host not yet in
  * the ARP cache leaves when the reply comes and is not lost: a ping's first
- * request, a connect's SYN, and every fragment of a datagram past the MTU,
- * 45 of the largest. A slot is free when its length is 0, or once its
- * datagram has waited longer than any reply takes, IP_HOLD_TICKS, three
- * seconds; `since` is the tick the datagram was put in. A held datagram is
- * a copy on the heap, freed when it leaves or is dropped. */
+ * request, a connect's SYN. A datagram past the MTU is held whole, before
+ * fragmentation, and cut into fragments of `mtu` bytes when it leaves, so
+ * that the 119 fragments of the largest at 576 bytes take one slot and no
+ * fragment of it can put out another. A slot is free when its length is 0,
+ * or once its datagram has waited longer than any reply takes,
+ * IP_HOLD_TICKS, three seconds; `since` is the tick the datagram was put in.
+ * A held datagram is a copy on the heap, its header included, freed when it
+ * leaves or is dropped. */
 #define IP_HOLD_SLOTS 64
 #define IP_HOLD_TICKS MS_TO_TICKS(3000)
 static struct ip_hold {
@@ -189,8 +195,12 @@ static struct ip_hold {
     uint32_t hop;
     uint32_t since;
     uint16_t len;
+    uint32_t mtu; /* the MTU its fragments are cut to, 0 to leave whole */
     uint8_t *datagram;
 } ip_hold[IP_HOLD_SLOTS];
+
+static int ip_fragment_to(struct netdev *out, const uint8_t *mac, const uint8_t *hdr,
+                          const uint8_t *payload, uint16_t plen, uint32_t mtu, uint8_t *buf);
 
 /** Free the datagram held in `h` and free the slot. */
 static void ip_hold_free(struct ip_hold *h)
@@ -201,14 +211,18 @@ static void ip_hold_free(struct ip_hold *h)
 }
 
 /**
- * Keep the datagram of `len` bytes in `ip_tx_buf` for `hop` on `out`, in a
- * free slot, or in place of the one held longest when none is free. A
- * datagram put out of its slot counts in `arp_stats`: as `res_failed` when
- * it was past its wait, as `unres_discards` when it was not. A datagram no
- * memory holds is dropped, as a send promises no delivery.
+ * Keep the datagram of the IP header `hdr` and `plen` bytes at `payload`
+ * for `hop` on `out`, in a free slot, or in place of the one held longest
+ * when none is free; `mtu` is the MTU its fragments are cut to when it
+ * leaves, or 0 for one that leaves whole. A datagram put out of its slot
+ * counts in `arp_stats`: as `res_failed` when it was past its wait, as
+ * `unres_discards` when it was not. A datagram no memory holds is dropped,
+ * as a send promises no delivery.
  */
-static void ip_hold_put(struct netdev *out, uint32_t hop, uint16_t len)
+static void ip_hold_put(struct netdev *out, uint32_t hop, const uint8_t *hdr,
+                        const uint8_t *payload, uint16_t plen, uint32_t mtu)
 {
+    uint16_t len = (uint16_t)(IP_HDR_SIZE + plen);
     uint8_t *copy = kmalloc(len);
 
     struct ip_hold *h = &ip_hold[0];
@@ -235,11 +249,13 @@ static void ip_hold_put(struct netdev *out, uint32_t hop, uint16_t len)
         net_mib.ip_out_discards++;
         return;
     }
-    k_memcpy(copy, ip_tx_buf, len);
+    k_memcpy(copy, hdr, IP_HDR_SIZE);
+    k_memcpy(copy + IP_HDR_SIZE, payload, plen);
     h->out = out;
     h->hop = hop;
     h->since = (uint32_t)kernel_ticks;
     h->len = len;
+    h->mtu = mtu;
     h->datagram = copy;
 }
 
@@ -251,7 +267,12 @@ void ip_hold_resolved(struct netdev *nd, uint32_t hop, const uint8_t *mac)
         struct ip_hold *h = &ip_hold[i];
 
         if (h->len != 0 && h->out == nd && h->hop == hop) {
-            if (((uint32_t)kernel_ticks - h->since) <= IP_HOLD_TICKS) {
+            if (((uint32_t)kernel_ticks - h->since) > IP_HOLD_TICKS) {
+                /* past its wait: dropped */
+            } else if (h->mtu) {
+                ip_fragment_to(nd, mac, h->datagram, h->datagram + IP_HDR_SIZE,
+                               (uint16_t)(h->len - IP_HDR_SIZE), h->mtu, ip_hold_frag_buf);
+            } else {
                 ethernet_tx(nd, mac, ETH_TYPE_IP, h->datagram, h->len);
             }
             ip_hold_free(h);
@@ -469,12 +490,11 @@ static void ip_header(uint8_t *buf, uint16_t total_len, uint16_t id, uint16_t fr
 /**
  * Hand the datagram of `len` bytes in `ip_tx_buf` to `out`, toward
  * `route_ip`: to the all-ones station address for a broadcast to `dst_ip`,
- * else to the next hop's from ARP. On a miss the datagram is held, and an
- * ARP request goes out when `ask` is set, which a fragment after the first
- * leaves to the first's. Returns 0, -EMSGSIZE or -ENOBUFS, as `ip_tx_opts`
+ * else to the next hop's from ARP. On a miss the datagram is held and an
+ * ARP request goes out. Returns 0, -EMSGSIZE or -ENOBUFS, as `ip_tx_opts`
  * says.
  */
-static int ip_emit(struct netdev *out, uint32_t route_ip, uint32_t dst_ip, uint16_t len, int ask)
+static int ip_emit(struct netdev *out, uint32_t route_ip, uint32_t dst_ip, uint16_t len)
 {
     static const uint8_t all_ones[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
     uint8_t dst_mac[6];
@@ -484,10 +504,9 @@ static int ip_emit(struct netdev *out, uint32_t route_ip, uint32_t dst_ip, uint1
     if (netconf_is_broadcast(dst_ip)) {
         to = all_ones;
     } else if (!arp_lookup(out, route_ip, dst_mac)) {
-        ip_hold_put(out, route_ip, len);
-        if (ask) {
-            arp_request(out, route_ip);
-        }
+        ip_hold_put(out, route_ip, ip_tx_buf, ip_tx_buf + IP_HDR_SIZE,
+                    (uint16_t)(len - IP_HDR_SIZE), 0);
+        arp_request(out, route_ip);
         return 0;
     }
     sent = ethernet_tx(out, to, ETH_TYPE_IP, ip_tx_buf, len);
@@ -502,19 +521,20 @@ static int ip_emit(struct netdev *out, uint32_t route_ip, uint32_t dst_ip, uint1
 }
 
 /**
- * Send the `plen` bytes at `payload` in fragments of at most `mtu` bytes
- * each by `out`, as `ip_tx_opts` says: the most payload `mtu` leaves room
- * for, a multiple of 8, 1480 bytes at 1500, each with MF but the last. The
- * first fragment that cannot leave ends the send, counted in FragFails.
+ * Send the `plen` bytes at `payload` by `out` to the station address `mac`
+ * in fragments of at most `mtu` bytes each, built in `buf`: the most payload
+ * `mtu` leaves room for, a multiple of 8, 1480 bytes at 1500, each with MF
+ * but the last. Each fragment's header is `hdr`'s, the 20 bytes of a
+ * header without options, with its own length and offset. The first
+ * fragment that cannot leave ends the send, counted in FragFails. Returns
+ * 0, -EMSGSIZE or -ENOBUFS, as `ip_tx_opts` says.
  */
-static int ip_fragment(struct netdev *out, uint32_t route_ip, uint32_t src, uint32_t dst_ip,
-                       uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl,
-                       uint32_t mtu)
+static int ip_fragment_to(struct netdev *out, const uint8_t *mac, const uint8_t *hdr,
+                          const uint8_t *payload, uint16_t plen, uint32_t mtu, uint8_t *buf)
 {
     uint32_t unit = (mtu - IP_HDR_SIZE) & ~7u;
-    uint16_t id = ip_id_counter++;
     uint32_t off;
-    int r;
+    int sent;
 
     for (off = 0; off < plen; off += unit) {
         uint32_t n = plen - off < unit ? plen - off : unit;
@@ -523,17 +543,47 @@ static int ip_fragment(struct netdev *out, uint32_t route_ip, uint32_t src, uint
         if (off + n < plen) {
             frag |= IP_MF;
         }
-        ip_header(ip_tx_buf, (uint16_t)(IP_HDR_SIZE + n), id, frag, ttl, proto, src, dst_ip);
-        k_memcpy(ip_tx_buf + IP_HDR_SIZE, payload + off, n);
-        r = ip_emit(out, route_ip, dst_ip, (uint16_t)(IP_HDR_SIZE + n), off == 0);
-        if (r != 0) {
+        ip_header(buf, (uint16_t)(IP_HDR_SIZE + n), read16be(hdr + 4), frag, hdr[8], hdr[9],
+                  read32be(hdr + 12), read32be(hdr + 16));
+        k_memcpy(buf + IP_HDR_SIZE, payload + off, n);
+        sent = ethernet_tx(out, mac, ETH_TYPE_IP, buf, (uint16_t)(IP_HDR_SIZE + n));
+        if (sent != NETDEV_TX_OK) {
             net_mib.ip_frag_fails++;
-            return r;
+            if (sent == ETHERNET_TX_TOOLONG) {
+                return -EMSGSIZE;
+            }
+            net_mib.ip_out_discards++;
+            return -ENOBUFS;
         }
         net_mib.ip_frag_creates++;
     }
     net_mib.ip_frag_oks++;
     return 0;
+}
+
+/**
+ * Send the `plen` bytes at `payload` in fragments of at most `mtu` bytes
+ * each by `out`, as `ip_tx_opts` says, to the all-ones station address for
+ * a broadcast, else to the next hop's from ARP. On a miss the datagram is
+ * held whole and an ARP request goes out.
+ */
+static int ip_fragment(struct netdev *out, uint32_t route_ip, uint32_t src, uint32_t dst_ip,
+                       uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl,
+                       uint32_t mtu)
+{
+    static const uint8_t all_ones[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    uint8_t hdr[IP_HDR_SIZE], mac[6];
+
+    ip_header(hdr, (uint16_t)(IP_HDR_SIZE + plen), ip_id_counter++, 0, ttl, proto, src, dst_ip);
+    if (netconf_is_broadcast(dst_ip)) {
+        return ip_fragment_to(out, all_ones, hdr, payload, plen, mtu, ip_tx_buf);
+    }
+    if (!arp_lookup(out, route_ip, mac)) {
+        ip_hold_put(out, route_ip, hdr, payload, plen, mtu);
+        arp_request(out, route_ip);
+        return 0;
+    }
+    return ip_fragment_to(out, mac, hdr, payload, plen, mtu, ip_tx_buf);
 }
 
 /**
@@ -627,7 +677,7 @@ int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
         return loop_put(ip_tx_buf, payload, plen);
     }
     k_memcpy(ip_tx_buf + IP_HDR_SIZE, payload, plen);
-    return ip_emit(out, route_ip, dst_ip, (uint16_t)total_len, 1);
+    return ip_emit(out, route_ip, dst_ip, (uint16_t)total_len);
 }
 
 uint32_t ip_loop_dropped(void)

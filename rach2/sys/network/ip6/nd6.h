@@ -12,7 +12,8 @@
  * A neighbour's station address is asked for by a solicitation to its
  * solicited-node group and kept in a cache of ND6_CACHE_SIZE entries in
  * the states of RFC 4861, 7.3.2, which Linux's NUD_ numbers name. The
- * datagrams that wait for an answer are kept in a queue of ND6_HOLD_SLOTS;
+ * datagrams that wait for an answer are kept in a queue of ND6_HOLD_SLOTS,
+ * one past the path MTU whole in one slot and fragmented when it leaves;
  * when no answer comes after three solicitations a second apart, each is
  * answered with an ICMPv6 address unreachable from this machine, which is
  * how its sender learns of the failure.
@@ -158,6 +159,19 @@ void nd6_rx(struct netdev *nd, const uint8_t *src, const uint8_t *dst, uint8_t h
  * `ip6_tx` with interrupts off.
  */
 int nd6_output(struct netdev *out, const uint8_t *hop, const uint8_t *dgram, uint16_t len);
+
+/**
+ * Hold whole the datagram of fixed header `hdr` and `plen` bytes of payload
+ * at `payload`, which is past the path MTU `mtu`, when `hop` on `out` has no
+ * station address yet: the datagram takes one slot of the queue and is cut
+ * into fragments of `mtu` bytes (`frag6_output`) once the answer comes, so
+ * that its own fragments cannot put each other out of a queue of a few
+ * slots. Sets `*held` to 0 and returns 0, holding nothing, when the address
+ * is known and the caller is to fragment at once; else sets it to 1 and
+ * returns as `nd6_output` does. Called with interrupts off.
+ */
+int nd6_output_whole(struct netdev *out, const uint8_t *hop, const uint8_t *hdr,
+                     const uint8_t *payload, uint16_t plen, uint32_t mtu, int *held);
 
 /** Mark the neighbour `addr` on `nd` reachable, for an upper layer that
  * saw it answer (RFC 4861, 7.3.1); nothing for one not cached. */

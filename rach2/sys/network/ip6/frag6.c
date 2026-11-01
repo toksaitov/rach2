@@ -11,6 +11,8 @@
 #include "ip6.h"
 #include "icmp6.h"
 #include "frag6.h"
+#include "nd6.h"
+#include "../driver/netdev.h"
 #include "../core/byteorder.h"
 
 /* A fragment held: its place in the fragmentable part, in bytes, and its
@@ -360,6 +362,8 @@ void frag6_input(struct netdev *nd, const uint8_t *dg, uint32_t len, uint32_t of
  * fragment header and the most payload, in 8-byte units, that `mtu` leaves
  * room for, 1232 bytes at the least MTU. A fragment for the loopback ring,
  * whose MTU is past this file's buffer, is built in a block of the heap.
+ * A datagram for a unicast hop whose station address is not known is held
+ * whole by the neighbour cache, which calls here again once it is.
  */
 int frag6_output(struct netdev *out, const uint8_t *via, const uint8_t *src, const uint8_t *dst,
                  uint8_t nh, const uint8_t *payload, uint16_t plen, uint8_t hlim, uint8_t tclass,
@@ -368,8 +372,18 @@ int frag6_output(struct netdev *out, const uint8_t *via, const uint8_t *src, con
     uint32_t unit = (mtu - IP6_HDR_SIZE - IP6_FRAG_HDR_SIZE) & ~7u;
     uint32_t id = krandom_u32(), off;
     uint8_t *buf = frag6_tx_buf;
-    int r = 0;
+    int r = 0, held;
 
+    if (!out->loopback && !ip6_is_multicast(via)) {
+        uint8_t hdr[IP6_HDR_SIZE];
+
+        ip6_header(hdr, src, dst, nh, plen, hlim);
+        ip6_set_class(hdr, tclass);
+        r = nd6_output_whole(out, via, hdr, payload, plen, mtu, &held);
+        if (held) {
+            return r;
+        }
+    }
     if (mtu > sizeof(frag6_tx_buf)) {
         buf = kmalloc(mtu);
         if (!buf) {

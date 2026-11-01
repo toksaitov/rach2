@@ -8,12 +8,14 @@
 #include "../../lib/kstring.h"
 #include "../../lib/krandom.h"
 #include "../../lib/ksha256.h"
+#include "../../mm/kheap.h"
 #include "../../klog.h"
 #include "../../timer.h"
 #include "nd6.h"
 #include "mld6.h"
 #include "ip6.h"
 #include "icmp6.h"
+#include "frag6.h"
 #include "route6.h"
 #include "../net.h"
 #include "../netconf.h"
@@ -94,13 +96,15 @@ struct nd6_entry {
     uint32_t used;  /* the tick it was last used or learned, for replacement */
 };
 
-/* A datagram that waits for its next hop's station address; free when
- * `len` is 0. */
+/* A datagram that waits for its next hop's station address, a copy on the
+ * heap; free when `len` is 0. One past the path MTU is held whole, before
+ * fragmentation, so that no fragment of it can put out another. */
 struct nd6_hold {
     struct netdev *out;
     uint8_t hop[IP6_ADDR_LEN];
-    uint16_t len;
-    uint8_t data[IP6_MTU];
+    uint32_t len; /* bytes at `data`, the fixed header included */
+    uint32_t mtu; /* the MTU its fragments are cut to, 0 to leave whole */
+    uint8_t *data;
 };
 
 struct nd6_conf {
@@ -129,6 +133,14 @@ static struct nd6_entry cache6[ND6_CACHE_SIZE];
 static struct nd6_hold hold6[ND6_HOLD_SLOTS];
 static struct nd6_if ifs6[NETDEV_MAX + 1];
 static struct nd6_conf conf_all, conf_default;
+
+/** Free the datagram held in `h` and the slot. */
+static void hold_free(struct nd6_hold *h)
+{
+    kfree(h->data);
+    h->data = 0;
+    h->len = 0;
+}
 
 /* The key of the random numbers, and the count that makes each draw. */
 static uint8_t rand_key[32];
@@ -563,7 +575,7 @@ static struct nd6_entry *alloc(struct netdev *nd, const uint8_t *addr)
     if (e->nd) {
         for (i = 0; i < ND6_HOLD_SLOTS; i++) {
             if (hold6[i].len && hold6[i].out == e->nd && ip6_equal(hold6[i].hop, e->addr)) {
-                hold6[i].len = 0;
+                hold_free(&hold6[i]);
             }
         }
     }
@@ -595,8 +607,16 @@ static void release(struct nd6_entry *e)
         struct nd6_hold *h = &hold6[i];
 
         if (h->len && h->out == e->nd && ip6_equal(h->hop, e->addr)) {
-            xmit(h->out, e->mac, h->data, h->len);
-            h->len = 0;
+            const uint8_t *d = h->data;
+
+            if (h->mtu) {
+                frag6_output(h->out, h->hop, d + 8, d + 24, d[6], d + IP6_HDR_SIZE,
+                             (uint16_t)(h->len - IP6_HDR_SIZE), d[7],
+                             (uint8_t)(((d[0] & 0x0f) << 4) | (d[1] >> 4)), h->mtu);
+            } else {
+                xmit(h->out, e->mac, d, (uint16_t)h->len);
+            }
+            hold_free(h);
         }
     }
 }
@@ -613,17 +633,21 @@ static void fail(struct nd6_entry *e)
         struct nd6_hold *h = &hold6[i];
 
         if (h->len && h->out == e->nd && ip6_equal(h->hop, e->addr)) {
-            uint16_t len = h->len;
+            uint16_t len = h->len > 0xffffu ? 0xffffu : (uint16_t)h->len;
 
-            h->len = 0;
             icmp6_unreach_local(h->data, len);
+            hold_free(h);
         }
     }
 }
 
-/** Keep the datagram at `dgram` for `hop` on `out`, in a free slot, or in
- * place of the first one found when none is. */
-static void hold(struct netdev *out, const uint8_t *hop, const uint8_t *dgram, uint16_t len)
+/**
+ * Keep the datagram of `len` bytes at `data`, a block of the heap the queue
+ * now owns, for `hop` on `out`, in a free slot, or in place of the one put
+ * in longest ago when none is. `mtu` is the MTU its fragments are cut to
+ * when it leaves, or 0 for one that leaves whole.
+ */
+static void hold(struct netdev *out, const uint8_t *hop, uint8_t *data, uint32_t len, uint32_t mtu)
 {
     struct nd6_hold *h = &hold6[0];
     static uint32_t victim;
@@ -637,11 +661,13 @@ static void hold(struct netdev *out, const uint8_t *hop, const uint8_t *dgram, u
     }
     if (i == ND6_HOLD_SLOTS) {
         h = &hold6[victim++ % ND6_HOLD_SLOTS];
+        hold_free(h);
     }
     h->out = out;
     k_memcpy(h->hop, hop, IP6_ADDR_LEN);
     h->len = len;
-    k_memcpy(h->data, dgram, len);
+    h->mtu = mtu;
+    h->data = data;
 }
 
 /** Solicit `e`'s address by multicast, from the held datagram's source
@@ -658,28 +684,34 @@ static void resolve(struct nd6_entry *e, const uint8_t *src)
     send_ns(e->nd, e->addr, from, 0);
 }
 
-int nd6_output(struct netdev *out, const uint8_t *hop, const uint8_t *dgram, uint16_t len)
+/** Whether `e` has a station address a datagram may leave for at once. */
+static int usable(const struct nd6_entry *e)
 {
-    struct nd6_entry *e = find(out, hop);
+    return e && (e->state & (ND6_REACHABLE | ND6_STALE | ND6_DELAY | ND6_PROBE | ND6_PERMANENT));
+}
+
+/**
+ * Hold the datagram of `len` bytes at `data`, a block of the heap the queue
+ * takes, for `hop` on `out`, whose station address is not known, and ask
+ * for it unless a solicitation is out already. `mtu` is as `hold` says.
+ * Returns 0, or -ENOBUFS when the cache has no entry to give the hop, the
+ * block freed.
+ */
+static int miss(struct netdev *out, const uint8_t *hop, struct nd6_entry *e, uint8_t *data,
+                uint32_t len, uint32_t mtu)
+{
     uint8_t src[IP6_ADDR_LEN];
 
-    if (e && (e->state & (ND6_REACHABLE | ND6_STALE | ND6_DELAY | ND6_PROBE | ND6_PERMANENT))) {
-        if (e->state == ND6_STALE) {
-            e->state = ND6_DELAY;
-            e->timer = NOW + DELAY_FIRST_PROBE_TICKS;
-        }
-        e->used = NOW;
-        return xmit(out, e->mac, dgram, len);
-    }
     if (!e) {
         e = alloc(out, hop);
         if (!e) {
+            kfree(data);
             net_mib6.ip6_out_discards++;
             return -ENOBUFS;
         }
     }
-    k_memcpy(src, dgram + 8, IP6_ADDR_LEN);
-    hold(out, hop, dgram, len);
+    k_memcpy(src, data + 8, IP6_ADDR_LEN);
+    hold(out, hop, data, len, mtu);
     e->used = NOW;
     if (e->state != ND6_INCOMPLETE) {
         e->state = ND6_INCOMPLETE;
@@ -688,6 +720,50 @@ int nd6_output(struct netdev *out, const uint8_t *hop, const uint8_t *dgram, uin
         resolve(e, src);
     }
     return 0;
+}
+
+int nd6_output(struct netdev *out, const uint8_t *hop, const uint8_t *dgram, uint16_t len)
+{
+    struct nd6_entry *e = find(out, hop);
+    uint8_t *copy;
+
+    if (usable(e)) {
+        if (e->state == ND6_STALE) {
+            e->state = ND6_DELAY;
+            e->timer = NOW + DELAY_FIRST_PROBE_TICKS;
+        }
+        e->used = NOW;
+        return xmit(out, e->mac, dgram, len);
+    }
+    copy = kmalloc(len);
+    if (!copy) {
+        net_mib6.ip6_out_discards++;
+        return -ENOBUFS;
+    }
+    k_memcpy(copy, dgram, len);
+    return miss(out, hop, e, copy, len, 0);
+}
+
+int nd6_output_whole(struct netdev *out, const uint8_t *hop, const uint8_t *hdr,
+                     const uint8_t *payload, uint16_t plen, uint32_t mtu, int *held)
+{
+    struct nd6_entry *e = find(out, hop);
+    uint32_t len = (uint32_t)IP6_HDR_SIZE + plen;
+    uint8_t *copy;
+
+    *held = 0;
+    if (usable(e)) {
+        return 0;
+    }
+    *held = 1;
+    copy = kmalloc(len);
+    if (!copy) {
+        net_mib6.ip6_out_discards++;
+        return -ENOBUFS;
+    }
+    k_memcpy(copy, hdr, IP6_HDR_SIZE);
+    k_memcpy(copy + IP6_HDR_SIZE, payload, plen);
+    return miss(out, hop, e, copy, len, mtu);
 }
 
 /**
@@ -1358,7 +1434,7 @@ static void forget_if(struct netdev *nd, int stop)
 
     for (i = 0; i < ND6_HOLD_SLOTS; i++) {
         if (hold6[i].out == nd) {
-            hold6[i].len = 0;
+            hold_free(&hold6[i]);
         }
     }
     for (i = 0; i < ND6_CACHE_SIZE; i++) {
@@ -1612,7 +1688,7 @@ int nd6_forget(struct netdev *nd, const uint8_t *addr)
     if (e) {
         for (i = 0; i < ND6_HOLD_SLOTS; i++) {
             if (hold6[i].len && hold6[i].out == e->nd && ip6_equal(hold6[i].hop, e->addr)) {
-                hold6[i].len = 0;
+                hold_free(&hold6[i]);
             }
         }
         e->nd = 0;
