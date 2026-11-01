@@ -1,12 +1,12 @@
-.Dd October 3, 2026
+.Dd November 1, 2026
 .Dt PING 1
 .Os
 .Sh NAME
 .Nm ping
-.Nd send ICMP echo requests
+.Nd send ICMP and ICMPv6 echo requests
 .Sh SYNOPSIS
 .Nm
-.Op Fl nq4
+.Op Fl nq46
 .Op Fl c Ar count
 .Op Fl i Ar interval
 .Op Fl s Ar size
@@ -29,7 +29,13 @@ prints the statistics, in the form Linux's iputils
 prints them.
 Root privilege is not required.
 .Pp
-The host may be an IPv4 address or a name.
+The host may be an IPv4 address, a name, or an IPv6 address.
+A link-local IPv6 address, or a group of link scope, may be followed by
+.Ql %
+and the name or index of the interface it is reached by, as in
+.Ql fe80::1%eth0 ,
+which a machine with more than one card requires.
+Names resolve only to IPv4 addresses.
 Names are looked up in
 .Pa /etc/hosts ,
 or
@@ -50,7 +56,10 @@ Each request uses the kernel's private socket operation 0x1001,
 .Dv SC_PING_DATA ,
 described in
 .Xr ping 2 ,
-which takes the destination, the data size and the hop limit.
+which takes the destination, the data size and the hop limit, or for an
+IPv6 address operation 0x1002,
+.Dv SC_PING6 ,
+which takes the interface as well.
 musl has no wrapper for it, so
 .Nm
 issues it through a direct
@@ -80,8 +89,9 @@ seconds, which may have a fraction, instead of every second.
 .It Fl s Ar size
 Send
 .Ar size
-bytes of data in each request, from 0 to 1472: the stack does not
-fragment, so a request is at most one datagram of the 1500-byte MTU.
+bytes of data in each request, from 0 to 1472, or 1452 for IPv6: the
+stack does not fragment, so a request is at most one datagram of the
+1500-byte MTU.
 .It Fl t Ar ttl
 Send each request with the hop limit
 .Ar ttl ,
@@ -96,10 +106,19 @@ Stop when
 seconds have passed since the first request.
 .It Fl q
 Print only the first line and the statistics.
+.It Fl 6
+Require an IPv6 address.
 .It Fl n , Fl 4
-Accepted and ignored: replies are printed by address, and the requests are
-IPv4.
+Accepted and ignored: replies are printed by address, and a request is
+IPv4 unless its address is IPv6.
 .El
+.Pp
+For IPv6 the first line has the form iputils gives it,
+.Ql PING ::1(::1) 56 data bytes .
+The kernel resolves no IPv6 neighbour yet, so only ::1, this machine's
+own addresses and groups answer; a unicast address on another host
+fails with
+.Ql ping: sendmsg: Host is unreachable .
 .Pp
 The kernel permits only one request in flight for the whole machine.
 If another request is in flight, the operation fails with
@@ -130,18 +149,31 @@ when
 .Ar count
 replies arrived.
 It returns 1 when they did not, and 2 for an option it does not take, a
-count or a time that is not a number, a host it cannot resolve, and
-another request in flight.
+count or a time that is not a number, a host it cannot resolve, a
+request the kernel cannot send, and another request in flight.
 .Sh EXAMPLES
 .Dl ping -c 3 192.168.0.1
 .Dl ping -c 2 -W 1 github.com
 .Dl ping -q -w 5 1.1.1.1
+.Dl ping -6 -c 2 ::1
+.Dl ping -c 2 ff02::1%eth0
 .Sh DIAGNOSTICS
 .Bl -tag -width Ds
 .It Ql ping: another ping is in flight on this machine
 Another ICMP echo request is in progress.
 .It Ql ping: HOST: cannot resolve the name
 The host is neither an address nor a name the files or DNS answer for.
+.It Ql ping: HOST: not an IPv6 address
+.Fl 6
+was given with a host that is not an IPv6 address.
+.It Ql ping: NAME: no such interface
+The interface after
+.Ql %
+is neither an index nor the name of an interface.
+.It Ql ping: sendmsg: MESSAGE
+The kernel could not send the first IPv6 request, for the reason
+.Xr strerror 3
+gives.
 .El
 .Sh SEE ALSO
 .Xr busybox-networking 1 ,

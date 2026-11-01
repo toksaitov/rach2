@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 1, 2026
 .Dt BIND 2
 .Os
 .Sh NAME
@@ -66,6 +66,12 @@ an address in
 .Ql 127/8 .
 Another address gives
 .Er EADDRNOTAVAIL .
+A raw ICMPv6 socket takes a
+.Vt sockaddr_in6
+of at least 24 bytes, whose address is ::, ::1 or an address an
+interface holds, and gives
+.Er EADDRNOTAVAIL
+for another.
 The raw socket used only for interface queries rejects binding.
 .Ss Packet sockets
 An

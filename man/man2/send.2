@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 1, 2026
 .Dt SEND 2
 .Os
 .Sh NAME
@@ -171,6 +171,23 @@ Larger messages return
 before routing or queueing, including on loopback.
 An ioctl-only raw socket cannot send.
 .Pp
+A raw ICMPv6 send takes a
+.Vt sockaddr_in6
+of at least 24 bytes, whose scope id names the interface a link-local
+address or a group of link scope is reached by; with one card, 0 names
+it.
+The kernel computes the message's checksum over the IPv6 pseudo-header,
+whatever the caller wrote, as Linux does, and sends it with the hop
+limit 1 to a group, or the socket's
+.Dv IP_TTL
+to another address.
+The message may contain at most 1460 bytes, and no fewer than the four
+of its header.
+A unicast destination other than ::1 and this machine's own addresses
+gives
+.Er EHOSTUNREACH ,
+since the kernel resolves no IPv6 neighbour yet.
+.Pp
 An
 .Dv AF_PACKET
 datagram send requires a 20-byte
@@ -228,7 +245,12 @@ A UDP broadcast was attempted without
 .Dv SO_BROADCAST .
 .It Bq Er EAFNOSUPPORT
 A raw ICMP destination has an address family other than
-.Dv AF_INET .
+.Dv AF_INET ,
+or a raw ICMPv6 one other than
+.Dv AF_INET6 .
+.It Bq Er EADDRNOTAVAIL
+The interface a raw ICMPv6 datagram leaves by has no IPv6 address to
+send from.
 .It Bq Er EAGAIN
 A nonblocking stream send found no buffer space, or an ephemeral UDP
 port could not be assigned.
@@ -249,26 +271,33 @@ The payload or required address cannot be read, the length exceeds
 the signed 32-bit range, or the
 .Fn socketcall
 argument array cannot be read.
+.It Bq Er EHOSTUNREACH
+A raw ICMPv6 datagram is for a unicast address on another host, whose
+station address the kernel cannot resolve.
 .It Bq Er EINTR
 A signal interrupted a stream send waiting for buffer space.
 .It Bq Er EINVAL
 A supplied UDP address is shorter than eight bytes, a packet address
 is shorter than 20 bytes, its hardware-address length is not six, or
-its effective protocol is neither IPv4 nor ARP; or a UDP socket bound to
-an address in 127/8 sends to an address that is not the machine's.
+its effective protocol is none of IPv4, ARP and IPv6; a raw ICMPv6
+address is shorter than 24 bytes, or its message shorter than four; a
+link-local IPv6 destination names no interface on a machine with more
+than one card; or a UDP socket bound to an address in 127/8 sends to an
+address that is not the machine's.
 .It Bq Er EMSGSIZE
 A UDP payload exceeds 1472 bytes, a raw ICMP message exceeds 1480 bytes,
-or a packet payload is empty or exceeds 1500 bytes.
+a raw ICMPv6 message exceeds 1460 bytes, or a packet payload is empty or
+exceeds 1500 bytes.
 .It Bq Er ENETDOWN
 A packet send has no interface through which to transmit.
 .It Bq Er ENETRESET
 A pending TCP error reports that a local address change ended the
 connection.
 .It Bq Er ENETUNREACH
-No route exists for an IPv4 datagram.
+No route exists for an IPv4 or IPv6 datagram.
 .It Bq Er ENOBUFS
-The local IPv4 delivery queue is full or the link layer cannot accept
-an IPv4 datagram.
+The local delivery queue is full or the link layer cannot accept an
+IPv4 or IPv6 datagram.
 .It Bq Er ENODEV
 A packet destination specifies an unregistered interface index.
 .It Bq Er ENOTSOCK
