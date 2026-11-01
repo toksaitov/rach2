@@ -6,6 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 
 #include "../probe_report.h"
@@ -51,9 +54,8 @@ static char *command(const char *id, const char *command)
         if (end != NULL) {
             *end = '\0';
         }
-        if ((strstr(p, "can't open") != NULL || strstr(p, "No such file") != NULL ||
-             strstr(p, "not found") != NULL) &&
-            strstr(p, "tcp6") == NULL) {
+        if (strstr(p, "can't open") != NULL || strstr(p, "No such file") != NULL ||
+            strstr(p, "not found") != NULL) {
             clean = 0;
         }
         if (end != NULL) {
@@ -205,14 +207,100 @@ static void socket_rows(void)
         }
     }
     check("netstat-peer", found, "netstat did not show the held host connection as established");
-    check("netstat-ipv6", strstr(text, "tcp6") != NULL,
-          "netstat did not report the absent IPv6 file");
     text = command("arp-status", "arp -n");
     p = strstr(text, "(10.0.2.");
     check("arp-neighbour", p != NULL && strstr(p, " at ") != NULL && strstr(p, ":") != NULL,
           "arp had no resolved neighbour on the actual subnet");
     text = command("ifconfig-status", "ifconfig eth0");
     check("link-running", strstr(text, "RUNNING") != NULL, "the working interface is not RUNNING");
+}
+
+/** Bind `fd` to ::1 and return the port it has, or -1. */
+static int bind_loopback6(int fd)
+{
+    struct sockaddr_in6 a;
+    socklen_t n = sizeof(a);
+
+    memset(&a, 0, sizeof(a));
+    a.sin6_family = AF_INET6;
+    a.sin6_addr = in6addr_loopback;
+    if (fd < 0 || bind(fd, (struct sockaddr *)&a, sizeof(a)) != 0 ||
+        getsockname(fd, (struct sockaddr *)&a, &n) != 0) {
+        return -1;
+    }
+    return ntohs(a.sin6_port);
+}
+
+/** Connect `fd` to ::1 at `port`: 0, or -1. */
+static int connect_loopback6(int fd, int port)
+{
+    struct sockaddr_in6 a;
+
+    memset(&a, 0, sizeof(a));
+    a.sin6_family = AF_INET6;
+    a.sin6_addr = in6addr_loopback;
+    a.sin6_port = htons((unsigned short)port);
+    return fd < 0 ? -1 : connect(fd, (struct sockaddr *)&a, sizeof(a));
+}
+
+/**
+ * Open on ::1 a TCP listener and a connection to it, a bound UDP socket and
+ * one connected to it, and a raw ICMPv6 socket, and check that netstat
+ * lists each from /proc/net/tcp6, udp6 and raw6. A raw socket here cannot
+ * connect.
+ */
+static void ipv6_rows(void)
+{
+    int fd[5], tcp, udp, i;
+    char *text, *p;
+    char tcp_at[32], udp_at[32];
+    int listening = 0, connected = 0, bound = 0, peered = 0, raw = 0;
+
+    fd[0] = socket(AF_INET6, SOCK_STREAM, 0);
+    fd[1] = socket(AF_INET6, SOCK_STREAM, 0);
+    fd[2] = socket(AF_INET6, SOCK_DGRAM, 0);
+    fd[3] = socket(AF_INET6, SOCK_DGRAM, 0);
+    fd[4] = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
+    tcp = bind_loopback6(fd[0]);
+    udp = bind_loopback6(fd[2]);
+    check("ipv6-sockets",
+          tcp > 0 && udp > 0 && listen(fd[0], 1) == 0 && connect_loopback6(fd[1], tcp) == 0 &&
+              connect_loopback6(fd[3], udp) == 0 && bind_loopback6(fd[4]) >= 0,
+          "the IPv6 sockets on ::1 could not be opened, bound or connected");
+    snprintf(tcp_at, sizeof(tcp_at), "::1:%d", tcp);
+    snprintf(udp_at, sizeof(udp_at), "::1:%d", udp);
+    text = command("netstat6-status", "netstat -tuwan");
+    for (p = text; p != NULL && *p != '\0'; p = strchr(p, '\n'), p = p == NULL ? NULL : p + 1) {
+        char proto[16], local[64], remote[64], state[32];
+        unsigned long a, b;
+        int n = sscanf(p, "%15s %lu %lu %63s %63s %31s", proto, &a, &b, local, remote, state);
+
+        if (n < 5) {
+            continue;
+        }
+        if (n == 5) {
+            state[0] = '\0';
+        }
+        if (strcmp(proto, "tcp") == 0) {
+            listening |= strcmp(local, tcp_at) == 0 && strcmp(state, "LISTEN") == 0;
+            connected |= strcmp(remote, tcp_at) == 0 && strcmp(state, "ESTABLISHED") == 0;
+        } else if (strcmp(proto, "udp") == 0) {
+            bound |= strcmp(local, udp_at) == 0 && strcmp(remote, ":::*") == 0;
+            peered |= strcmp(remote, udp_at) == 0 && strcmp(state, "ESTABLISHED") == 0;
+        } else if (strcmp(proto, "raw") == 0) {
+            raw |= strcmp(local, "::1:58") == 0;
+        }
+    }
+    check("netstat-tcp6", listening && connected,
+          "netstat did not list the IPv6 listener and its connection");
+    check("netstat-udp6", bound && peered,
+          "netstat did not list the bound and the connected IPv6 UDP socket");
+    check("netstat-raw6", raw, "netstat did not list the raw ICMPv6 socket");
+    for (i = 0; i < 5; i++) {
+        if (fd[i] >= 0) {
+            close(fd[i]);
+        }
+    }
 }
 
 /** Check the network table field count and traffic counters. */
@@ -289,6 +377,7 @@ int main(int argc, char **argv)
     log_rows();
     route_rows();
     socket_rows();
+    ipv6_rows();
     netdev_rows();
     interrupt_rows();
     report_end();
