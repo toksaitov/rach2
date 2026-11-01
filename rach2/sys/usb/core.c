@@ -420,46 +420,38 @@ static void setup_fill(uint8_t *setup, int type, int request, int value, int ind
     setup[7] = (uint8_t)((length >> 8) & 0xFF);
 }
 
-/** Queue a standard IN request on `d`'s control endpoint, `length` bytes into
- * `d->buffer`; 0 when it was queued. */
-static int control_in(struct usb_device_state *d, int request, int value, int index, int length)
+/**
+ * Queue on `d`'s control endpoint the request whose setup packet `d->setup`
+ * holds, with a data stage of `length` bytes at `data` in `direction`, or
+ * none when `length` is 0. `data` is in `d`'s record, so the controller can
+ * be given its address. Returns 0 when it was queued.
+ */
+static int control(struct usb_device_state *d, int direction, uint8_t *data, int length)
 {
     struct usb_transfer transfer;
 
-    setup_fill(d->setup, 0x80, request, value, index, length);
     transfer.setup = d->setup;
-    transfer.buffer = d->buffer;
+    transfer.buffer = length != 0 ? data : 0;
     transfer.length = (uint32_t)length;
-    transfer.direction = USB_DIR_IN;
+    transfer.direction = direction;
     transfer.generation = 0;
     return xhci_submit(d->hc, d->slot, 1, &transfer);
 }
 
-/**
- * Queue a request on `d`'s control endpoint whose data stage sends `length`
- * bytes at `data` to the device, or with no data stage when `length` is 0.
- * `data` is in `d`'s record, so the controller can be given its address.
- * Returns 0 when it was queued.
- */
-static int control_write(struct usb_device_state *d, int type, int request, int value, int index,
-                         uint8_t *data, int length)
+/** Queue a standard IN request on `d`'s control endpoint, `length` bytes into
+ * `d->buffer`; 0 when it was queued. */
+static int control_in(struct usb_device_state *d, int request, int value, int index, int length)
 {
-    struct usb_transfer transfer;
-
-    setup_fill(d->setup, type, request, value, index, length);
-    transfer.setup = d->setup;
-    transfer.buffer = length != 0 ? data : 0;
-    transfer.length = (uint32_t)length;
-    transfer.direction = USB_DIR_OUT;
-    transfer.generation = 0;
-    return xhci_submit(d->hc, d->slot, 1, &transfer);
+    setup_fill(d->setup, 0x80, request, value, index, length);
+    return control(d, USB_DIR_IN, d->buffer, length);
 }
 
 /** Queue a request with no data stage on `d`'s control endpoint; 0 when it
  * was queued. */
 static int control_out(struct usb_device_state *d, int type, int request, int value, int index)
 {
-    return control_write(d, type, request, value, index, 0, 0);
+    setup_fill(d->setup, type, request, value, index, 0);
+    return control(d, USB_DIR_OUT, 0, 0);
 }
 
 /** Give `d`'s next step STEP_MS from now. */
@@ -978,8 +970,8 @@ static void leds_step(struct usb_device_state *d)
         return;
     }
     d->leds[0] = (uint8_t)report;
-    if (control_write(d, TYPE_TO_INTERFACE, REQ_SET_REPORT, REPORT_OUTPUT, d->interface.number,
-                      d->leds, 1) == 0) {
+    setup_fill(d->setup, TYPE_TO_INTERFACE, REQ_SET_REPORT, REPORT_OUTPUT, d->interface.number, 1);
+    if (control(d, USB_DIR_OUT, d->leds, 1) == 0) {
         d->leds_out = 1;
         d->leds_deadline = core_ms + STEP_MS;
     }
