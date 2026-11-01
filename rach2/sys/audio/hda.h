@@ -293,7 +293,16 @@ const hda_report_t *hda_get_report(void);
  * verb, so it is safe from any context. */
 void hda_read_queue(void);
 
-/** Refill the stream's next period if the engine has moved on. The timer
+/**
+ * The frames a sample written now waits behind, at the rate the stream was
+ * started with: the write ring's and the DMA buffer's ahead of the position,
+ * the latter converted from the programmed rate. At most three periods of
+ * about 23 ms in the DMA buffer and, on the write path, three in the ring; 0
+ * when no stream plays. Safe from any context; it sends no verb.
+ */
+uint32_t hda_delay_frames(void);
+
+/** Refill the periods the stream has played since the last refill. The timer
  * tick calls this on every tick, with interrupts off, so playback goes on
  * where the controller's interrupt does not arrive. */
 void hda_tick(void);
