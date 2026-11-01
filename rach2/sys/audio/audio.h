@@ -77,6 +77,21 @@ typedef struct audio_stream {
     void *owner; /* the caller's, for `transfer` and `period` */
 } audio_stream_t;
 
+/* The sources a device can record, for the mixer's record source. */
+typedef enum {
+    AUDIO_SRC_MIC,     /* the microphone jack: OSS's MIC */
+    AUDIO_SRC_INT_MIC, /* the internal microphone: OSS's MONITOR, as FreeBSD
+                          names it */
+    AUDIO_SRC_LINE,    /* the line in: OSS's LINE */
+    AUDIO_SOURCES
+} audio_source_t;
+
+/* The input amplifiers of one source. */
+typedef enum {
+    AUDIO_IN_GAIN, /* the converter's level on the source's connection */
+    AUDIO_IN_BOOST /* the gain of the source's own pin, before the converter */
+} audio_input_ctl_t;
+
 /* Audio driver interface; each hardware backend supplies these ops. */
 typedef struct audio_driver {
     const char *name;
@@ -161,6 +176,28 @@ typedef struct audio_driver {
      * With `s` NULL, the same for the `write` path's queue. */
     uint32_t (*delay)(audio_stream_t *s);
 
+    /*
+     * The input controls, which /dev/mixer reaches: all three, or all NULL
+     * in a driver that records nothing. Each runs in process context and
+     * sends the device what it changes at once, so that it takes effect
+     * while a stream runs; the driver keeps it for the next start.
+     */
+
+    /* The sources the device can record, a mask of 1 << audio_source_t,
+     * and in `*controls` those of audio_input_ctl_t it has an amplifier
+     * for on any source, a mask of 1 << the control. */
+    unsigned (*input_caps)(unsigned *controls);
+
+    /* Record `source` from now on, and return the source recorded after:
+     * `source`, or for one the device cannot record, or a negative one,
+     * the source it recorded before. */
+    int (*input_select)(int source);
+
+    /* Set control `ctl` of `source` to `level`, 0 to 100, where 0 mutes an
+     * amplifier that can mute; with `level` negative only read it. The
+     * level the control has after, in percent of its steps, or -EINVAL for
+     * a source or control the device lacks. */
+    int (*input_level)(int ctl, int source, int level);
 } audio_driver_t;
 
 /*

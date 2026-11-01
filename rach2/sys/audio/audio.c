@@ -78,8 +78,8 @@ static void speaker_set_volume(int volume)
 
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
-   set_volume, get_volume, then the seven stream operations; the speaker has
-   no volume and no streams. */
+   set_volume, get_volume, the seven stream operations, then the three
+   input controls; the speaker has no volume, no streams and no input. */
 audio_driver_t speaker_driver = {"PC Speaker",
                                  AUDIO_DRIVER_SPEAKER,
                                  speaker_init,
@@ -90,6 +90,9 @@ audio_driver_t speaker_driver = {"PC Speaker",
                                  speaker_set_callback,
                                  speaker_write,
                                  speaker_set_volume,
+                                 NULL,
+                                 NULL,
+                                 NULL,
                                  NULL,
                                  NULL,
                                  NULL,
