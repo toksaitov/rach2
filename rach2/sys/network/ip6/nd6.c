@@ -425,7 +425,7 @@ uint32_t nd6_link_mtu(const struct netdev *nd)
 {
     const struct nd6_if *ni = if_of(nd);
 
-    return ni && ni->mtu ? ni->mtu : IP6_MTU;
+    return ni && ni->mtu && ni->mtu < nd->mtu ? ni->mtu : nd->mtu;
 }
 
 /* ---- Sending ---- */
@@ -1239,7 +1239,7 @@ static void rx_ra(struct netdev *nd, struct nd6_if *ni, const uint8_t *src, cons
     if (o.mtu) {
         uint32_t mtu = read32be(o.mtu);
 
-        if (mtu >= IP6_MTU_MIN && mtu <= IP6_MTU) {
+        if (mtu >= IP6_MTU_MIN && mtu <= nd->mtu) {
             ni->mtu = mtu;
         }
     }

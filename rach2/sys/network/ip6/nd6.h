@@ -170,8 +170,9 @@ int nd6_router_usable(struct netdev *nd, const uint8_t *addr);
 uint8_t nd6_hop_limit(const struct netdev *nd);
 
 /** The MTU of `nd`'s link: the last router advertisement's, when it gave
- * one of at least 1280 bytes and no more than the card's, else the
- * card's, 1500. */
+ * one of at least 1280 bytes and no more than the interface's MTU at the
+ * time, and the interface's MTU (`nd->mtu`) when that is smaller or there
+ * is none. */
 uint32_t nd6_link_mtu(const struct netdev *nd);
 
 /**

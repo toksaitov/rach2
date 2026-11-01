@@ -353,6 +353,10 @@ int packet_send(struct socket *sock, int ifindex, const uint8_t *dst_mac, uint16
         net_unlock(flags);
         return -ENETDOWN;
     }
+    if (len > nd->mtu) {
+        net_unlock(flags);
+        return -EMSGSIZE;
+    }
     ethernet_tx(nd, dst_mac, ethertype, data, len);
     net_unlock(flags);
     return (int)len;

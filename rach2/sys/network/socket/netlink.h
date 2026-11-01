@@ -23,11 +23,11 @@ struct socket;
  * RTM_GETQDISC (`noqueue` on each interface) and RTM_GETNETCONF; and, for
  * one object, RTM_GETLINK by an interface's index or name, RTM_GETROUTE for
  * a destination (`ip route get`) and RTM_GETNETCONF by an index. The changes
- * RTM_NEWLINK and RTM_SETLINK (an interface up or down), RTM_NEWADDR,
+ * RTM_NEWLINK and RTM_SETLINK (an interface up or down, its MTU), RTM_NEWADDR,
  * RTM_DELADDR, RTM_NEWROUTE, RTM_DELROUTE, RTM_NEWNEIGH and RTM_DELNEIGH are
  * made for a privileged caller through the operations the ioctls use, and
- * refused with EPERM for any other; what an interface here cannot hold, an
- * MTU other than its own or a new name, is refused with EOPNOTSUPP. Another
+ * refused with EPERM for any other; an MTU out of the interface's range is
+ * EINVAL, and a new name, which an interface here cannot take, EOPNOTSUPP. Another
  * request is answered with an NLMSG_ERROR of EOPNOTSUPP. In a network
  * namespace other than the first, a dump is empty and any other request
  * finds no interface.

@@ -22,7 +22,7 @@
 /* Ethernet header: destination MAC, source MAC, EtherType. */
 #define ETH_HDR_SIZE 14
 
-/* The largest payload a frame carries, every card's MTU. */
+/* The largest payload a frame carries, the largest MTU a card may have. */
 #define ETH_MTU 1500
 
 /* EtherType values. */
@@ -47,7 +47,8 @@ struct netdev;
  */
 void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
 
-/* ethernet_tx's answer for a payload past the 1500 bytes of a frame, kept
+/* ethernet_tx's answer for a payload past the 1500 bytes of a frame or
+ * past the interface's MTU, kept
  * apart from the driver's two: `ip_tx_from` turns it into EMSGSIZE, which no
  * later attempt passes, where a driver's refusal is ENOBUFS, for which TCP
  * keeps its segment to send again. */
@@ -59,14 +60,12 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
  * in host byte order (e.g. ETH_TYPE_IP) and is written big-endian.
  *
  * Returns `NETDEV_TX_OK` once the driver took the frame, which counts as
- * sent; `ETHERNET_TX_TOOLONG` for a payload past 1500 bytes, which is
- * refused and not cut short; or `NETDEV_TX_DROPPED` when the frame was not
- * sent, which a sender may keep and send again later. That is the answer
- * for an IPv4, IPv6 or ARP frame on an interface an administrator took
- * down, any
- * frame while the card reports its link down (`netdev_running`), and a
- * frame the driver refused. Each refusal counts as a transmit drop on
- * `out`; a NULL `out` is `NETDEV_TX_DROPPED` and counts nowhere.
+ * sent; `ETHERNET_TX_TOOLONG` for a payload past 1500 bytes, or an IPv4,
+ * IPv6 or ARP payload past `out->mtu`, which is refused and not cut short; or `NETDEV_TX_DROPPED`
+ * when the frame was not sent, which a sender may keep and send again later. That is the answer for
+ * an IPv4, IPv6 or ARP frame on an interface an administrator took down, any frame while the card
+ * reports its link down (`netdev_running`), and a frame the driver refused. Each refusal counts as
+ * a transmit drop on `out`; a NULL `out` is `NETDEV_TX_DROPPED` and counts nowhere.
  *
  * The frame is built in a buffer of this file's, so the caller has
  * interrupts off (`net_lock` in a system call).

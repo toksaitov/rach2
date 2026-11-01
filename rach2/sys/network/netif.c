@@ -210,9 +210,10 @@ static int32_t loopback_set(uint32_t request, const uint8_t *ifr, const struct n
  *
  * The setters return without copying the request back, since they only read
  * it and a failed copy would report a refusal for a change already made.
- * SIOCSIFFLAGS sets only whether the interface is up. `lo` takes no change
- * but its own address and mask again and being up, EOPNOTSUPP, and reports
- * Linux's loopback type, MTU and flags. SIOCSIFADDR gives
+ * SIOCSIFFLAGS sets only whether the interface is up, and SIOCSIFMTU sets
+ * the MTU within the interface's range (`netdev_set_mtu`), EINVAL outside
+ * it. `lo` takes no other change but its own address and mask again and
+ * being up, EOPNOTSUPP, and reports Linux's loopback type, MTU and flags. SIOCSIFADDR gives
  * `netconf_set_address` no mask: the mask that goes with the address is the
  * classful one until SIOCSIFNETMASK arrives, never the one left from the
  * address before, and `ifconfig` issues the two in that order. A subnet's
@@ -263,9 +264,16 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
     }
 
     setter = (request == SIOCSIFADDR || request == SIOCSIFNETMASK || request == SIOCSIFBRDADDR ||
-              request == SIOCSIFFLAGS);
+              request == SIOCSIFFLAGS || request == SIOCSIFMTU);
     if (setter && (!current_proc || !proc_privileged(current_proc))) {
         return -EPERM;
+    }
+    if (request == SIOCSIFMTU) {
+        uint32_t mtu = (uint32_t)ifr[IFREQ_UNION] | ((uint32_t)ifr[IFREQ_UNION + 1] << 8) |
+                       ((uint32_t)ifr[IFREQ_UNION + 2] << 16) |
+                       ((uint32_t)ifr[IFREQ_UNION + 3] << 24);
+
+        return netdev_set_mtu(nd, mtu);
     }
 
     if (setter && nd->loopback) {
@@ -290,7 +298,7 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
         set_sa(ifr, if_broadcast(nd));
         break;
     case SIOCGIFMTU:
-        set_word(ifr, nd->loopback ? NETDEV_LOOPBACK_MTU : 1500u);
+        set_word(ifr, nd->mtu);
         break;
     case SIOCGIFFLAGS:
         set_word(ifr, if_flags(nd));
@@ -660,6 +668,7 @@ int32_t netif_ioctl(uint32_t request, uintptr_t arg, int family, int *handled)
     case SIOCGIFNETMASK:
     case SIOCSIFNETMASK:
     case SIOCGIFMTU:
+    case SIOCSIFMTU:
     case SIOCGIFHWADDR:
     case SIOCGIFINDEX:
         return ifreq_ioctl(request, arg);

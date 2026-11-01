@@ -609,7 +609,7 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
     msg_attr(msg, IFLA_IFNAME, nd->name, (uint16_t)(k_strlen(nd->name) + 1));
     msg_attr(msg, IFLA_ADDRESS, nd->mac, 6);
     msg_attr(msg, IFLA_BROADCAST, nd->loopback ? nd->mac : broadcast, 6);
-    msg_attr32(msg, IFLA_MTU, nd->loopback ? NETDEV_LOOPBACK_MTU : 1500);
+    msg_attr32(msg, IFLA_MTU, nd->mtu);
     msg_attr(msg, IFLA_OPERSTATE, &oper, 1);
     k_memset(stats, 0, sizeof(stats));
     put32(stats + 0, nd->rx_packets);
@@ -1357,9 +1357,8 @@ static void qdisc_dump(struct nl_build *b)
  * the operations the interface ioctls use (netif.c, netconf.c, arp.c): each
  * answers 0 or a negative errno, which `change_answer` acknowledges. What an
  * interface here cannot hold is refused with EOPNOTSUPP rather than accepted
- * and dropped: an MTU other than the interface's own and a rename, and on
- * `lo` being taken down and any change of its addresses, routes or
- * neighbours.
+ * and dropped: a rename, and on `lo` being taken down, an MTU but its own
+ * and any change of its addresses, routes or neighbours.
  */
 
 /** The payload of attribute `type` in the request `req` of `body` bytes past
@@ -1413,32 +1412,38 @@ static struct netdev *dev_of_index(uint32_t index)
     return 0;
 }
 
-/** RTM_NEWLINK and RTM_SETLINK: up or down by IFF_UP in the change mask, and
- * an MTU or a name only as they are. Returns 0, -ENODEV for no such
- * interface, or -EOPNOTSUPP for another MTU or name or for `lo` taken down,
- * since it is always up. */
+/** RTM_NEWLINK and RTM_SETLINK: up or down by IFF_UP in the change mask, an
+ * MTU by IFLA_MTU (`netdev_set_mtu`), and a name only as it is. The request
+ * is checked whole before anything changes. Returns 0, -ENODEV for no such
+ * interface, -EINVAL for an MTU out of the interface's range or an
+ * IFLA_MTU not four bytes long, or -EOPNOTSUPP for another name or for `lo`
+ * taken down, since it is always up. */
 static int32_t link_change(const uint8_t *req, uint32_t body)
 {
     struct netdev *nd = body >= 16 ? link_asked(req, body) : 0;
     uint16_t len;
-    const uint8_t *a;
+    const uint8_t *a, *mtu;
 
     if (!nd) {
         return -ENODEV;
     }
-    a = req_attr(req, body, 16, IFLA_MTU, &len);
-    if (a && (len != 4 || get32(a) != (nd->loopback ? NETDEV_LOOPBACK_MTU : 1500u))) {
-        return -EOPNOTSUPP;
+    mtu = req_attr(req, body, 16, IFLA_MTU, &len);
+    if (mtu && (len != 4 || !netdev_mtu_ok(nd, get32(mtu)))) {
+        return -EINVAL;
     }
     a = req_attr(req, body, 16, IFLA_IFNAME, &len);
     if (a && get32(req + NLMSG_HDRLEN + 4) != 0 &&
         !same_name(nd->name, sizeof(nd->name), (const char *)a, len)) {
         return -EOPNOTSUPP;
     }
+    if ((get32(req + NLMSG_HDRLEN + 12) & IFF_UP) && nd->loopback &&
+        !(get32(req + NLMSG_HDRLEN + 8) & IFF_UP)) {
+        return -EOPNOTSUPP;
+    }
+    if (mtu) {
+        netdev_set_mtu(nd, get32(mtu));
+    }
     if (get32(req + NLMSG_HDRLEN + 12) & IFF_UP) {
-        if (nd->loopback && !(get32(req + NLMSG_HDRLEN + 8) & IFF_UP)) {
-            return -EOPNOTSUPP;
-        }
         netconf_set_up(nd, (get32(req + NLMSG_HDRLEN + 8) & IFF_UP) != 0);
     }
     return 0;

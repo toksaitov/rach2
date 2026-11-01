@@ -164,7 +164,7 @@ int packet_last_addr(struct socket *sock, uint8_t *sll);
  * There is no address to route on here, since the caller gave a MAC.
  *
  * Returns the bytes sent; -EMSGSIZE for an empty payload or one past the
- * interface's MTU, ETH_MTU, -EINVAL for an EtherType other than IPv4, ARP and IPv6, -ENODEV
+ * interface's MTU, `nd->mtu`, -EINVAL for an EtherType other than IPv4, ARP and IPv6, -ENODEV
  * for an index no interface has, or -ENETDOWN with no interface. Takes `net_lock`
  * itself, since the Ethernet transmit buffer is shared with the receive
  * interrupt.

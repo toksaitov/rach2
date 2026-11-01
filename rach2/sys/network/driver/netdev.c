@@ -91,6 +91,7 @@ static void loopback_up(void)
     nd->up = 1;
     nd->pci_key = -1;
     nd->loopback = 1;
+    nd->mtu = NETDEV_LOOPBACK_MTU;
     lo_ready = 1;
 }
 
@@ -371,6 +372,7 @@ int netdev_probe(void)
             nd->ops = drivers[i];
             nd->index = niface + 1;
             nd->pci_key = -1;
+            nd->mtu = NETDEV_ETH_MTU_MAX;
             name_iface(nd, niface);
             verdict = drivers[i]->init(nd, nth);
 
@@ -406,6 +408,24 @@ int netdev_probe(void)
     }
     loopback_up();
     return niface > 0;
+}
+
+int netdev_mtu_ok(const struct netdev *nd, uint32_t mtu)
+{
+    return nd->loopback ? mtu == NETDEV_LOOPBACK_MTU
+                        : mtu >= NETDEV_ETH_MTU_MIN && mtu <= NETDEV_ETH_MTU_MAX;
+}
+
+int netdev_set_mtu(struct netdev *nd, uint32_t mtu)
+{
+    if (!netdev_mtu_ok(nd, mtu)) {
+        return -EINVAL;
+    }
+    if (mtu != nd->mtu) {
+        klog(KLOG_INFO, "net", "%s: mtu: %d", nd->name, (int)mtu);
+    }
+    nd->mtu = mtu;
+    return 0;
 }
 
 int netdev_tx(struct netdev *nd, const uint8_t *data, uint16_t len)

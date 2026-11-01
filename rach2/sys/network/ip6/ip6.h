@@ -57,8 +57,9 @@
 #define IP6_MTU_MIN 1280
 
 /* The largest datagram, header included, that leaves a card whole: one
- * Ethernet payload. A larger one leaves in fragments. The loopback ring's
- * MTU is `lo`'s, NETDEV_LOOPBACK_MTU. */
+ * Ethernet payload, a card's largest MTU. The link's own MTU, at most this,
+ * is `nd6_link_mtu`, and a larger datagram leaves in fragments. The
+ * loopback ring's MTU is `lo`'s, NETDEV_LOOPBACK_MTU. */
 #define IP6_MTU 1500u
 
 struct netdev;

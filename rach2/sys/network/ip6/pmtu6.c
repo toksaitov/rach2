@@ -1,6 +1,6 @@
 /*
- * pmtu6.c: the IPv6 path MTU, as ip6.h describes it: the link's MTU, which
- * a router may advertise below 1500 bytes (`nd6_link_mtu`), lowered for a
+ * pmtu6.c: the IPv6 path MTU, as ip6.h describes it: the link's MTU, the
+ * interface's or a router's lower one (`nd6_link_mtu`), lowered for a
  * destination by the Packet Too Big messages that come back from it
  * (RFC 8201).
  */

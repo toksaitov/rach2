@@ -267,6 +267,11 @@ struct netdev {
     /* Nonzero for `lo`, which no card stands behind (`netdev_loopback`). */
     int loopback;
 
+    /* The MTU: the largest IP datagram, header included, that the interface
+     * sends in one frame. NETDEV_ETH_MTU_MIN to NETDEV_ETH_MTU_MAX on a
+     * card, 1500 from the probe; NETDEV_LOOPBACK_MTU on `lo`. */
+    uint32_t mtu;
+
     /* The `naddr6` IPv6 addresses, kept in the order they were given; `lo`
      * has ::1 and a card its link-local address from the time it comes up
      * (netconf.c). */
@@ -286,6 +291,25 @@ struct netdev {
  * address, all zeros, and its MTU. */
 #define NETDEV_LOOPBACK_TYPE 772
 #define NETDEV_LOOPBACK_MTU  65536
+
+/* The MTUs a card's interface may have, Linux's for Ethernet: the least
+ * every IPv4 host must carry (RFC 791) and the most a frame without jumbo
+ * support holds. */
+#define NETDEV_ETH_MTU_MIN 68
+#define NETDEV_ETH_MTU_MAX 1500
+
+/** Whether `nd` may take the MTU `mtu`: within NETDEV_ETH_MTU_MIN to
+ * NETDEV_ETH_MTU_MAX on a card, and only NETDEV_LOOPBACK_MTU on `lo`. */
+int netdev_mtu_ok(const struct netdev *nd, uint32_t mtu);
+
+/**
+ * Set `nd`'s MTU to `mtu`, as SIOCSIFMTU and netlink's IFLA_MTU ask, when
+ * `netdev_mtu_ok` allows it. What leaves the interface afterwards obeys
+ * it: IPv4 fragments and refuses by it, IPv6 takes it as the link's, and
+ * TCP offers and sends segments that fit it. Returns 0, or -EINVAL for an
+ * MTU out of range.
+ */
+int netdev_set_mtu(struct netdev *nd, uint32_t mtu);
 
 /** The number of cards the last probe brought up, `lo` not counted. The
  * stack, which routes only through cards and also runs in interrupts,

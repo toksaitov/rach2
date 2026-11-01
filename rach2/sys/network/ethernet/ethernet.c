@@ -66,9 +66,10 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 }
 
 /**
- * An interface an administrator took down sends no IPv4, IPv6 or ARP, but a
- * frame of another EtherType, such as netconsole's, still leaves: the log of
- * a machine whose network was just configured wrong is the one most worth
+ * An interface an administrator took down sends no IPv4, IPv6 or ARP, and
+ * none past its MTU, but a frame of another EtherType, such as
+ * netconsole's, still leaves, up to the 1500 bytes of a frame: the log of a
+ * machine whose network was just configured wrong is the one most worth
  * having. A card that says its link is down is given nothing, as Linux
  * gives a card nothing while its carrier is off: the frame could not leave,
  * and a card such as the RTL8168 counts each one it is given as a transmit
@@ -78,18 +79,18 @@ int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
                 const uint8_t *payload, uint16_t plen)
 {
     uint16_t total;
+    int inet = ethertype == ETH_TYPE_IP || ethertype == ETH_TYPE_ARP || ethertype == ETH_TYPE_IPV6;
 
     if (!out) {
         return NETDEV_TX_DROPPED;
     }
 
-    if (plen > ETH_MTU) {
+    if (plen > ETH_MTU || (inet && plen > out->mtu)) {
         klog(KLOG_WARN, "eth", "tx: payload of %d bytes is too large, dropped", (int)plen);
         out->tx_dropped++;
         return ETHERNET_TX_TOOLONG;
     }
-    if (!out->up &&
-        (ethertype == ETH_TYPE_IP || ethertype == ETH_TYPE_ARP || ethertype == ETH_TYPE_IPV6)) {
+    if (!out->up && inet) {
         out->tx_dropped++;
         return NETDEV_TX_DROPPED;
     }

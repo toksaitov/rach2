@@ -691,6 +691,7 @@ int main(void)
         k_memcpy(cards[i].mac, net_mac, 6);
         cards[i].mac[5] += (uint8_t)i;
         cards[i].ip = i ? 0x0a000305u : net_ip_addr;
+        cards[i].mtu = 1500;
     }
     entry.type = FD_TYPE_SOCKET;
     entry.sock = &sock;

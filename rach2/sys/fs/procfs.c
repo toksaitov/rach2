@@ -4860,7 +4860,7 @@ static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int at
         ap_u32(t, (uint32_t)nd->index);
         break;
     case 9:
-        ap_u32(t, nd->loopback ? NETDEV_LOOPBACK_MTU : 1500u);
+        ap_u32(t, nd->mtu);
         break;
     case 10:
         ap_str(t, !nd->up ? "down" : !known ? "unknown" : link.up ? "up" : "down");
