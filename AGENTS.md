@@ -50,7 +50,7 @@ The rules are kept short on purpose; their history is in commit messages and `de
 * During a milestone nothing else is checked: no suites, no host tests, no style or document checks and no CI. A worker builds and boots the whole system only to see behaviour that reading the code cannot settle: in QEMU, and on the Lenovo through the owner's accounts.
 * Wait for a long command in the foreground, or in the background with the tool's own notice. Never by polling the process table.
 * The manager reads every account's state at least every half hour, with `sh tools/flow/status.sh`. When an account runs out of its limit or stalls, the manager stops its loop, commits its unfinished work to the task branch, pushes it, and gives the task to a free account; the closed subtasks show where to go on. It restarts a stopped loop, folds the owner's new requests into tasks, and keeps every account busy.
-* At the end of a milestone the manager rebases its branch onto master if master moved, builds it after `make clean`, which keeps the vendor and GNU builds, and runs `tests/run style` and the host tests on both architectures, while Codex reviews the whole diff. The failures and findings go in one list, fixed in one batch; then only the failed checks run again. The suites wait for the release, which runs each of them once.
+* At the end of a milestone the manager rebases its branch onto master if master moved and runs `tools/flow/release.sh -p M SHA`, which builds the head in a new copy, runs `tests/run style` and the host tests on both architectures there, and makes each machine's release preparation as the release does, while Codex reviews the whole diff. The failures and findings go in one list, fixed in one batch; then only the failed checks run again. The suites wait for the release, which runs each of them once.
 * `tools/flow/release.sh M SHA` then runs every suite on Ubuntu in WSL, and every suite but style on Windows and on the Mac, installs SHA on the Lenovo and runs its native cases and acceptance on a trial boot. On a pass it moves master to SHA, closes the milestone and archives its cards; `-r` runs again only the last release's failures. The Lenovo's installed system takes no commit that has not passed everywhere; a worker tries its own build there only on a trial boot, as the `machine` skill says.
 * If the owner's limit runs out, the chat, the manager and its worker sessions stop together and start again when it is back.
 
@@ -65,7 +65,7 @@ The rules are kept short on purpose; their history is in commit messages and `de
 
 ## Testing
 
-* Style and the host tests run at the end of a milestone, on the testing host, in the owner's copy that `tools/dev/testing.sh` syncs. The suites run in the release, on Ubuntu in WSL, on Windows and on the Mac. The `testing` skill describes the machines.
+* Style and the host tests run at the end of a milestone, on the testing host, in a new copy that `release.sh -p` makes with `tools/dev/testing.sh`. The suites run in the release, on Ubuntu in WSL, on Windows and on the Mac. The `testing` skill describes the machines.
 * Whoever stops a run on the testing host confirms that its claim has left the admission ledger, `/var/lib/rach2-etude/ledger/claims`, before going on.
 * A suite judges what the kernel counts, never the clock, and sets no time limit of its own.
 * A test removes what it makes on every exit path, from an exit trap installed first, unless its output names a directory it keeps as evidence. Scratch goes under `TMPDIR`, which `tests/run` sets to `build/tmp`.

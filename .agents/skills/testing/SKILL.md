@@ -15,6 +15,7 @@ description: Run suites, full sets or analyses on the testing host, or write a s
 
 ## Running
 
+* At the end of a milestone the manager runs style, the host tests and each machine's release preparation at once with `sh tools/flow/release.sh -p M SHA` on the Mac, before the release starts. Its style and host tests run in a new copy on the testing host, `build/worktrees/prepare` of the owner's, which it removes when it ends, so a fault that only a clean tree shows is found there and not in the release.
 * Run the suites a step needs as one `tests/run A B C`, which pools them across the host's threads; one `tests/run` per suite leaves the host idle.
 * Never build while a run is in flight: the suites read the kernel and images from `build/`, so a build part way through voids the run. Check with `ps` before `make`.
 * Start a long run detached with `setsid nohup`, as `build/runs/NAME.sh`, writing its result lines, each beginning `NAME: `, to `build/runs/NAME.out`, and watch it as a background command. Act on the first failing line; do not sleep until the run ends. A turn never ends while a run has no watch on it.
