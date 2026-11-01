@@ -174,6 +174,11 @@ void ip6_mcast_mac(const uint8_t *group, uint8_t *out);
  * groups as `::`, into `out`, which needs 40 bytes. */
 void ip6_format(const uint8_t *a, char *out);
 
+/** Read the `len` bytes at `s`, which need no terminator, as an IPv6
+ * address in the text of RFC 4291, 2.2, into `out`: 0, or -1 for a text
+ * that is not one. */
+int ip6_parse(const char *s, uint32_t len, uint8_t *out);
+
 /**
  * The Internet checksum of an upper-layer message of `len` bytes at `data`
  * with next header `nh` from `src` to `dst`, over the pseudo-header of RFC
