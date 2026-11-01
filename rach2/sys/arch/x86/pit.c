@@ -379,15 +379,13 @@ static uint32_t tsc_against_reference(void)
         a0 = tsc_now();
         r0 = refclock_read();
         b0 = tsc_now();
-        for (spins = 0; spins < (1u << 26); spins++) {
+        spins = 0;
+        do {
             a1 = tsc_now();
             r1 = refclock_read();
             b1 = tsc_now();
             seen = (r1 - r0) & mask;
-            if (seen >= want) {
-                break;
-            }
-        }
+        } while (seen < want && ++spins < (1u << 26));
         if (seen < want) {
             return 0;
         }
