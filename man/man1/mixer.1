@@ -30,7 +30,9 @@ A channel is named as OSS names it:
 .Cm vol ,
 the volume;
 .Cm pcm ,
-which scales it;
+the level of the calling program's own playback, which for
+.Nm
+itself, playing nothing, reads 100 and does not change;
 .Cm mic ,
 .Cm monitor
 and

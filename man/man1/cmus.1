@@ -22,9 +22,10 @@ It plays through OSS: it writes
 .Pa /dev/dsp
 and sets the PCM channel of
 .Pa /dev/mixer ,
-so that its volume is the system's PCM level, which
+which scales only the sound cmus itself plays, mixed with that of every
+other program.
 .Xr mixer 1
-shows.
+reads its own PCM level and cannot show cmus's.
 It reads WAV itself, and MP3, FLAC, Ogg Vorbis, Opus, AAC and the other
 types its FFmpeg input lists through FFmpeg's libraries; CUE sheets name
 tracks in another file.

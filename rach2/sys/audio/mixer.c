@@ -53,8 +53,10 @@ struct mixer_info {
 
 /*
  * The levels, 0 to 100, as last set; each is one level for both sides.
- * The driver's master volume is VOLUME times PCM, so that both reach the
- * same amplifiers; a level set in the driver by another path, the console's
+ * Over vchan_driver VOLUME is the device's master volume and PCM the
+ * caller's own channels' level, which vchan_pcm keeps; over another driver
+ * the master volume is VOLUME times PCM, so that both reach the same
+ * amplifiers. A level set in the driver by another path, the console's
  * AUDIO_SET_VOLUME, becomes VOLUME's, and PCM returns to 100. The input
  * gain of each source is its own level times RECLEV, and IGAIN is the boost
  * of every source that has one. `ready` is 0 until the first request reads
@@ -117,7 +119,8 @@ static void apply_gain(int src)
     audio->input_level(AUDIO_IN_GAIN, src, scale(mx.source[src], mx.reclev));
 }
 
-/** Give the driver the master volume, VOLUME times PCM. */
+/** Give the driver the master volume: VOLUME, or VOLUME times PCM without
+ * the mix. */
 static void apply_volume(void)
 {
     audio->set_volume(audio == &vchan_driver ? mx.volume : scale(mx.volume, mx.pcm));

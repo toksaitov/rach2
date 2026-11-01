@@ -430,28 +430,32 @@ Read three 32-bit unsigned fields through
 .Fa arg :
 sample rate in samples per second, format (0 unsigned 8-bit, 1 signed
 16-bit little-endian), and channels (1 mono, 2 stereo).
-Pass them to the active driver's start operation.
-HDA accepts a nonzero input rate through 384000 Hz and resamples queued
-writes to a codec-supported signed 16-bit stereo format, keeping a stereo
-input's two channels.
-It selects the closest supported rate at or below the request, or the
-lowest supported rate when all are higher.
-A codec with no usable PCM rate or sample width is refused.
-Read
+On HD Audio and the Sound Blaster 16 the console plays on a channel of its
+own in the mix that every
+.Pa /dev/dsp
+open plays in, as
+.Xr dsp 4
+describes, so neither waits for the other.
+A start replaces the console's channel if it plays.
+The channel takes a rate from 1 through 192000 Hz, held to at least 1000
+and at most four times the mix's rate, and converts it to the mix's.
 .Pa /proc/audio
-for the requested and programmed rates and format readbacks.
+shows the device's stream.
 .It Dv AUDIO_STOP No (0x4103)
-Stop the active driver.
+Stop the console's channel; every
+.Pa /dev/dsp
+open plays on.
 .It Dv AUDIO_WRITE No (0x4104)
 Read a structure containing a sample-buffer pointer followed by a
 32-bit unsigned byte count through
 .Fa arg .
 Validate the buffer and pass it to the active driver.
-The return value is the byte count queued, which may be less than requested
-or zero when the playback ring is full.
+The return value is the byte count queued in the console channel's ring of
+three periods, which may be less than requested or zero when the ring is
+full.
 The caller must retry bytes that were not accepted.
-HDA emits silence on underrun and preserves fractional resampling phase.
-Earlier silence does not discard newly queued frames.
+The channel plays silence while the ring is empty, and the frames queued
+after it play in order.
 .It Dv AUDIO_SET_VOLUME No (0x4105)
 Pass the integer argument to the active driver as a percentage from
 0 through 100.
@@ -683,12 +687,6 @@ is invalid or was opened with
 .It Bq Er EBUSY
 .Dv BLKRRPART
 found another descriptor open on the disk or a claim on its partitions.
-.Dv AUDIO_START
-or
-.Dv AUDIO_WRITE
-on HDA while
-.Pa /dev/dsp
-is open.
 A framebuffer request belongs to another process, or a request other
 than
 .Dv FB_MODE_13H
@@ -706,12 +704,11 @@ gateway is invalid.
 Adding a default route with gateway zero is invalid.
 The audio driver refused the arguments of
 .Dv AUDIO_START :
-HDA refuses a rate of 0 or above 384000, an unknown format, a channel
-count other than 1 or 2, and a format its codec cannot play;
-Sound Blaster 16 refuses only a rate outside 5000 through 44100;
+on HD Audio and the Sound Blaster 16, a rate of 0 or above 192000, an
+unknown format, or a channel count other than 1 or 2;
 the PC speaker refuses nothing.
 .Dv AUDIO_WRITE
-was given a zero size, or no stream is playing.
+was given a zero size, or the console's channel is not playing.
 A keyboard request's mode, flag, keymap entry, string or accent count is
 out of range.
 .It Bq Er EIO
@@ -730,6 +727,9 @@ or
 found no framebuffer, or
 .Dv FB_MODE_NATIVE
 a framebuffer without a native mode.
+.It Bq Er ENOMEM
+The kernel had no memory for the console's channel of
+.Dv AUDIO_START .
 .It Bq Er ENOPKG
 A bridge or VLAN request was made.
 .It Bq Er ENOTTY
