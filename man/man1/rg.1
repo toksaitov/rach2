@@ -1,0 +1,124 @@
+.Dd November 1, 2026
+.Dt RG 1
+.Os
+.Sh NAME
+.Nm rg
+.Nd search files for lines that match a regular expression
+.Sh SYNOPSIS
+.Nm
+.Op Ar options
+.Ar pattern
+.Op Ar path ...
+.Nm
+.Op Ar options
+.Fl -files
+.Op Ar path ...
+.Sh DESCRIPTION
+.Nm ,
+ripgrep, searches each
+.Ar path ,
+or the current directory, recursively, for lines that match
+.Ar pattern ,
+a regular expression, and prints each with the name of its file.
+It skips the files and directories that
+.Pa .gitignore ,
+.Pa .ignore
+and
+.Pa .rgignore
+files name, hidden files and directories, and binary files;
+.Fl u
+searches the ignored files as well,
+.Fl uu
+the hidden ones too, and
+.Fl uuu
+binary files besides.
+Its own regular expressions run in time linear in the input and have no
+back-references or look-around;
+.Fl P
+uses PCRE2 instead, which has both.
+.Ql rg --files
+lists the files it would search.
+.Ql rg -h
+gives a summary of the options and
+.Ql rg --help
+describes each.
+.Pp
+The x86-64 GNU root has
+.Nm
+when it is built with the agents layer:
+.Ql make ARCH=x86_64 GNU_AGENTS=ripgrep os-real-gnu-ext2 ,
+or
+.Ql GNU_AGENTS=all ,
+which the release to the installed machine uses.
+The program is the author's own build of version 15.2.0, a static Rust
+executable for musl with PCRE2 built in, installed unmodified as the release
+has it.
+.Pa /opt/ripgrep/rg
+is the program, and
+.Pa /usr/bin/rg
+and
+.Pa /bin/rg
+link to it.
+ripgrep is under the MIT license or the Unlicense, at the user's choice:
+.Pa /opt/ripgrep/COPYING
+says so, beside
+.Pa LICENSE-MIT
+and
+.Pa UNLICENSE .
+The release's own manual page,
+.Pa /opt/ripgrep/doc/rg.1 ,
+has the same text as
+.Ql rg --help ;
+.Xr man 1
+does not read it.
+Completions for bash, fish and zsh are in
+.Pa /opt/ripgrep/complete ,
+and no shell loads them.
+.Pp
+.Nm
+reads no configuration file unless
+.Ev RIPGREP_CONFIG_PATH
+names one: a file with one argument on each line, which comes before those
+of the command line.
+It chooses how many threads to search with from the number of processors
+it may run on, unless
+.Fl j
+gives the number.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev RIPGREP_CONFIG_PATH
+the configuration file
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /opt/ripgrep/rg
+the program
+.It Pa /opt/ripgrep/COPYING
+its license, with
+.Pa LICENSE-MIT
+and
+.Pa UNLICENSE
+.El
+.Sh EXIT STATUS
+0 when a line matched and no error occurred, 1 when no line matched, and 2
+on an error, unless
+.Fl q
+was given and a line matched.
+.Sh EXAMPLES
+Print, with their line numbers, the lines of the C sources under the
+current directory that have the word
+.Ql main :
+.Bd -literal -offset indent
+$ rg -n -w -t c main
+.Ed
+.Pp
+List the shell scripts of a tree, the ignored ones too:
+.Bd -literal -offset indent
+$ rg -u --files -g '*.sh'
+.Ed
+.Sh SEE ALSO
+.Xr find 1 ,
+.Xr git 1 ,
+.Xr grep 1
+.Pp
+.Lk https://github.com/BurntSushi/ripgrep/blob/15.2.0/GUIDE.md "The ripgrep user guide"
