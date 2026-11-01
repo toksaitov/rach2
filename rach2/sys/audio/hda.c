@@ -1452,9 +1452,9 @@ static void hda_capture_widgets(void)
 
 /**
  * Read Get Pin Sense into the report for every pin with presence detect,
- * first executing the sense on a pin that needs a trigger. hda_launch calls
- * it once the path is powered; the word of a pin without presence detect,
- * or whose verb failed, stays 0, and `sensed` false.
+ * first executing the sense on a pin that needs a trigger. hda_jacks_sense
+ * calls it once the path is powered; the word of a pin without presence
+ * detect, or whose verb failed, stays 0, and `sensed` false.
  */
 static void hda_sense_pins(void)
 {
@@ -1647,30 +1647,16 @@ static uint8_t hda_source_pin(int src)
 }
 
 /**
- * Choose the input path from the widgets in the report: the pins, the ADC
- * and the capture level. hda_find_output calls it once the report has every
- * widget.
- *
- * A pin is an input when its pin caps say it can take input (bit 5) and its
- * configuration default says something is connected. The internal mic is the
- * first fixed microphone pin, the jack mic the first microphone in a jack;
- * the pin recorded is the internal mic, else the jack mic, else the first
- * line in. The ADC is the first, in node order, that reaches that pin, and
- * of those it prefers one that reaches the other microphone too, so that a
- * later switch between the two needs only its connection select. Each
- * source's gain starts at the ADC's 0 dB step, the offset of its input
- * amplifier, and its boost at its pin's. On a machine of
- * hda_inv_dmic_machines the internal mic is marked inverted.
+ * Find the input pins in the report: a pin is an input when its pin caps say
+ * it can take input (bit 5) and its configuration default says something is
+ * connected. The internal mic is the first fixed microphone pin, the jack
+ * mic the first microphone in a jack, the line in the first line in.
  */
-static void hda_find_input(void)
+static void hda_find_input_pins(void)
 {
-    hda_input_report_t *in = &hda_report.input;
-    uint8_t line_in = 0, pin, other;
-    int i, best = -1;
+    int i;
 
-    adc_nid = in_pin_nid = in_conn_idx = in_mid_nid = in_mid_idx = 0;
     int_mic_nid = jack_mic_nid = line_in_nid = 0;
-    in_src = -1;
     for (i = 0; i < hda_report.widget_count; i++) {
         const hda_widget_report_t *w = &hda_report.widgets[i];
         uint8_t port = (uint8_t)HDA_PIN_DEF_PORT(w->config);
@@ -1683,12 +1669,21 @@ static void hda_find_input(void)
             int_mic_nid = w->nid;
         else if (dev == HDA_DEF_DEV_MIC_IN && port != HDA_PORT_CONN_FIXED && !jack_mic_nid)
             jack_mic_nid = w->nid;
-        else if (dev == HDA_DEF_DEV_LINE_IN && !line_in)
-            line_in = w->nid;
+        else if (dev == HDA_DEF_DEV_LINE_IN && !line_in_nid)
+            line_in_nid = w->nid;
     }
-    line_in_nid = line_in;
-    pin = int_mic_nid ? int_mic_nid : jack_mic_nid ? jack_mic_nid : line_in;
-    other = pin == int_mic_nid ? jack_mic_nid : int_mic_nid;
+}
+
+/**
+ * The ADC that records pin `pin`: the first, in node order, that reaches
+ * it, and of those the first that reaches pin `other` too, when `other` is
+ * not 0. 0 when no ADC reaches `pin`.
+ */
+static uint8_t hda_choose_adc(uint8_t pin, uint8_t other)
+{
+    uint8_t adc = 0;
+    int i, best = -1;
+
     for (i = 0; pin && i < hda_report.widget_count; i++) {
         const hda_widget_report_t *w = &hda_report.widgets[i];
         uint8_t index, mid, mid_index;
@@ -1700,9 +1695,37 @@ static void hda_find_input(void)
         score = other && hda_input_route(w->nid, other, &index, &mid, &mid_index) ? 1 : 0;
         if (score > best) {
             best = score;
-            adc_nid = w->nid;
+            adc = w->nid;
         }
     }
+    return adc;
+}
+
+/**
+ * Choose the input path from the widgets in the report: the pins, the ADC
+ * and the capture level. hda_find_output calls it once the report has every
+ * widget.
+ *
+ * The pin recorded is the internal mic, else the jack mic, else the line in
+ * (hda_find_input_pins). The ADC is the first, in node order, that reaches
+ * that pin, and of those it prefers one that reaches the other microphone
+ * too, so that a later switch between the two needs only its connection
+ * select. Each source's gain starts at the ADC's 0 dB step, the offset of
+ * its input amplifier, and its boost at its pin's. On a machine of
+ * hda_inv_dmic_machines the internal mic is marked inverted.
+ */
+static void hda_find_input(void)
+{
+    hda_input_report_t *in = &hda_report.input;
+    uint8_t pin, other;
+    int i;
+
+    adc_nid = in_pin_nid = in_conn_idx = in_mid_nid = in_mid_idx = 0;
+    in_src = -1;
+    hda_find_input_pins();
+    pin = int_mic_nid ? int_mic_nid : jack_mic_nid ? jack_mic_nid : line_in_nid;
+    other = pin == int_mic_nid ? jack_mic_nid : int_mic_nid;
+    adc_nid = hda_choose_adc(pin, other);
     if (adc_nid) {
         in_pin_nid = pin;
         hda_input_route(adc_nid, pin, &in_conn_idx, &in_mid_nid, &in_mid_idx);
@@ -2250,36 +2273,21 @@ static void hda_msi_start(void)
 }
 
 /**
- * Find, power on, reset, and enumerate the HDA controller.
- *
- * Locates a non-HDMI PCI audio controller (falling back to the first audio
- * function if all are HDMI), maps its BAR0 MMIO, enables bus mastering and
- * forces D0, resets the controller, reads the stream counts from GCAP, brings
- * up CORB/RIRB and the DMA position buffer, discovers the output path, and
- * registers the IRQ handler. Returns 0 on success, -1 on any failure.
- *
- * Any other audio controller the machine has is logged and not driven. This
- * kernel takes one, and a person looking at a machine with two needs to see
- * that the other was found and passed over rather than missed.
- *
- * The handler is registered on the controller's legacy IRQ line, when it is
- * below 16, and also on a message vector where the machine has an APIC and
- * the controller a capability for it (`hda_msi_start`). The timer tick
- * services the stream as well, so a machine whose messages do not arrive
- * still plays, and the handler first reads INTSTS for the stream's bit, so
- * being called twice for one event costs a register read.
+ * Choose the controller to drive into hda_pci: the first PCI audio function
+ * that is not an HDMI controller, else the first audio function. Log every
+ * other audio function as not driven, since this kernel drives one, and a
+ * person looking at a machine with two needs to see that the other was
+ * found and passed over rather than missed. Return false when the machine
+ * has no audio function.
  */
-static int hda_init(void)
+static bool hda_find_controller(void)
 {
-    uint16_t gcap;
-    uint64_t bar0;
-    uintptr_t mapped;
     pci_device_t *skip_dev = NULL;
     pci_device_t temp_pci;
     bool found_controller = false;
-
-    k_strncpy(hda_boot_status, "Intel HD Audio", sizeof(hda_boot_status) - 1);
-    hda_boot_status[sizeof(hda_boot_status) - 1] = '\0';
+    pci_device_t other;
+    pci_device_t seen;
+    pci_device_t *from = 0;
 
     while (pci_find_device_skip(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, skip_dev, &temp_pci)) {
         if (is_hdmi_controller(temp_pci.vendor_id, temp_pci.device_id)) {
@@ -2295,24 +2303,49 @@ static int hda_init(void)
 
     if (!found_controller) {
         if (!pci_find_device(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, &hda_pci)) {
-            return -1;
+            return false;
         }
     }
 
-    {
-        pci_device_t other;
-        pci_device_t seen;
-        pci_device_t *from = 0;
-
-        while (pci_find_device_skip(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, from, &other)) {
-            if (other.bus != hda_pci.bus || other.device != hda_pci.device ||
-                other.function != hda_pci.function) {
-                klog(KLOG_INFO, "audio", "not driven: %x:%x at %02x:%02x.%d", (int)other.vendor_id,
-                     (int)other.device_id, (int)other.bus, (int)other.device, (int)other.function);
-            }
-            seen = other;
-            from = &seen;
+    while (pci_find_device_skip(PCI_CLASS_MULTIMEDIA, PCI_SUBCLASS_AUDIO, from, &other)) {
+        if (other.bus != hda_pci.bus || other.device != hda_pci.device ||
+            other.function != hda_pci.function) {
+            klog(KLOG_INFO, "audio", "not driven: %x:%x at %02x:%02x.%d", (int)other.vendor_id,
+                 (int)other.device_id, (int)other.bus, (int)other.device, (int)other.function);
         }
+        seen = other;
+        from = &seen;
+    }
+    return true;
+}
+
+/**
+ * Find, power on, reset, and enumerate the HDA controller.
+ *
+ * Chooses the controller (hda_find_controller), maps its BAR0 MMIO,
+ * enables bus mastering and forces D0, resets the controller, reads the
+ * stream counts from GCAP, brings up CORB/RIRB and the DMA position buffer,
+ * discovers the output path, and registers the IRQ handler. Returns 0 on
+ * success, -1 on any failure.
+ *
+ * The handler is registered on the controller's legacy IRQ line, when it is
+ * below 16, and also on a message vector where the machine has an APIC and
+ * the controller a capability for it (`hda_msi_start`). The timer tick
+ * services the stream as well, so a machine whose messages do not arrive
+ * still plays, and the handler first reads INTSTS for the stream's bit, so
+ * being called twice for one event costs a register read.
+ */
+static int hda_init(void)
+{
+    uint16_t gcap;
+    uint64_t bar0;
+    uintptr_t mapped;
+
+    k_strncpy(hda_boot_status, "Intel HD Audio", sizeof(hda_boot_status) - 1);
+    hda_boot_status[sizeof(hda_boot_status) - 1] = '\0';
+
+    if (!hda_find_controller()) {
+        return -1;
     }
 
     bar0 = pci_bar_address64(&hda_pci, 0);
@@ -3255,48 +3288,10 @@ static void hda_poll_jacks(void)
     kirq_restore(flags);
 }
 
-/**
- * Set up the output stream for the format already chosen and begin playback.
- *
- * `fmt` is the stream format word of the programmed rate, format and
- * channels, which the caller has stored with the requested ones and the
- * resampler's step. Reset the stream, fill its DMA buffers, program the
- * discovered codec path and start DMA. Cache the requested and programmed
- * rates with controller and converter format readbacks for procfs. Return 0,
- * or -EIO when the stream does not reset.
- *
- * The session's counters start again; total_bytes_written goes on. The
- * first fill takes from the stream of audio.h when one has the output, else
- * from the callback; the write path's starts silent. The codec
- * path is set up in order: the function group's power, the DAC, the mixer,
- * the pin, the headphone pin, then EAPD. The headphone DAC gets the same
- * format and stream even when the headphones stay off, since on many laptops
- * the firmware or codec moves a speaker pin between DACs with the jack's
- * state. A mixer has the amplifier of every input unmuted and a selector
- * that of its selected one; the pin's input amplifier is unmuted too, since
- * some codecs mute the output through it. The speaker pin gets EAPD and BTL,
- * another pin EAPD where it has it.
- *
- * Every pin's sense is then read (hda_sense_pins), the jacks take their
- * states from it, and the output pins are turned on or off for the output
- * mode (hda_route_output): with the headphones alone the primary pin's
- * output is off; with them off, the headphone pin's output is off, so the
- * codec neither mutes the speaker for it nor routes sound to it. A change of
- * the microphone jack moves capture (hda_follow_mic). The tick polls no jack
- * meanwhile.
- *
- * The first start after the controller was set up then waits 20 ms in
- * hda_check_dma to choose where the stream's position is read; later starts
- * keep that choice and do not wait.
- */
-static int hda_launch(uint16_t fmt)
+/** Start the output session: zero its counters and read the wall clock.
+ * total_bytes_written goes on. */
+static void hda_session_reset(void)
 {
-    uint64_t buf_addr;
-    int i;
-    int stream = output_stream_index;
-    uint32_t wcap;
-    uint32_t hw_rate = current_hw_sample_rate;
-
     irq_count = 0;
     underrun_count = 0;
     underrun_samples = 0;
@@ -3309,12 +3304,23 @@ static int hda_launch(uint16_t fmt)
     walclk_end = walclk_start;
     out_min_s16 = 32767;
     out_max_s16 = (int16_t)-32768;
+}
 
-    if (!hda_stream_reset(stream)) {
-        return -EIO;
-    }
+/**
+ * Size the period and the ring for the programmed rate, lay the descriptor
+ * list over the DMA buffer with an interrupt at each period, fill the
+ * buffer, and program output stream `stream` for format word `fmt` short of
+ * running it.
+ *
+ * The first fill takes from the stream of audio.h when one has the output,
+ * else from the callback; the write path's starts silent.
+ */
+static void hda_out_buffers(int stream, uint16_t fmt)
+{
+    uint64_t buf_addr;
+    int i;
 
-    period_bytes = hda_period_bytes(hw_rate, hda_out_frame());
+    period_bytes = hda_period_bytes(current_hw_sample_rate, hda_out_frame());
     ring_size = HDA_RING_MAX;
     if (!user_callback && !play_stream) {
         uint32_t frames = hda_frames_in(period_bytes / hda_out_frame(), true);
@@ -3360,137 +3366,136 @@ static int hda_launch(uint16_t fmt)
     hda_sd_write16(stream, HDA_SD_FORMAT, fmt);
 
     hda_sd_write32(stream, HDA_SD_CTL, (stream_tag << 20) | HDA_SD_CTL_IOCE);
+}
 
-    hda_jack_hold();
-    hda_send_verb(codec_addr, audio_fg_nid, HDA_VERB_SET_POWER | 0x00);
-    hda_delay(50);
+/** The step that sets full gain on an amplifier whose top step is `max`:
+ * `max`, or 0x7F when the amplifier reports none. */
+static uint8_t hda_full_gain(uint8_t max)
+{
+    return max != 0 ? max : 0x7F;
+}
 
-    hda_send_verb(codec_addr, dac_nid, HDA_VERB_SET_POWER | 0x00);
-    hda_delay(50);
+/**
+ * Power DAC `nid`, wait `settle` (hda_delay's count), give it format word
+ * `fmt` and the output stream's tag, and set its output amplifier, where it
+ * has one, unmuted at full gain.
+ */
+static void hda_dac_program(uint8_t nid, uint16_t fmt, int settle)
+{
+    hda_send_verb(codec_addr, nid, HDA_VERB_SET_POWER | 0x00);
+    hda_delay(settle);
+    hda_send_verb(codec_addr, nid, HDA_VERB_SET_CONV_FMT | fmt);
+    hda_send_verb(codec_addr, nid, HDA_VERB_SET_CHANNEL | (stream_tag << 4));
+    /* 0xB000: set the output amplifier, both channels. */
+    if (hda_get_param(nid, HDA_PARAM_AUDIO_CAPS) & 0x04) /* AC_WCAP_OUT_AMP */
+        hda_send_verb(codec_addr, nid,
+                      HDA_VERB_SET_AMP_GAIN | 0xB000 | hda_full_gain(hda_get_out_amp_max(nid)));
+}
 
-    hda_send_verb(codec_addr, dac_nid, HDA_VERB_SET_CONV_FMT | fmt);
+/**
+ * Power the output path's mixer or selector and pass the DAC through it at
+ * full gain: a mixer has the amplifier of every input unmuted, a selector
+ * selects its connection and unmutes that one's, and the output amplifier is
+ * unmuted too. Does nothing when the path has none.
+ */
+static void hda_out_mixer_program(void)
+{
+    uint32_t mix_wcap;
+    uint8_t mix_type;
+    uint8_t mix_conn_sel = mixer_conn_sel_idx;
+    int i;
 
-    hda_send_verb(codec_addr, dac_nid, HDA_VERB_SET_CHANNEL | (stream_tag << 4));
+    if (mixer_nid == 0)
+        return;
+    hda_send_verb(codec_addr, mixer_nid, HDA_VERB_SET_POWER | 0x00);
+    hda_delay(20);
 
-    /* Unmute DAC output amp: 0xB000 = set, output, both L/R; plus gain. */
-    wcap = hda_get_param(dac_nid, HDA_PARAM_AUDIO_CAPS);
+    mix_wcap = hda_get_param(mixer_nid, HDA_PARAM_AUDIO_CAPS);
+    mix_type = (mix_wcap >> 20) & 0xF;
+
+    if (mix_type == HDA_WIDGET_AUDIO_SEL)
+        hda_send_verb(codec_addr, mixer_nid, HDA_VERB_SET_CONN_SEL | mix_conn_sel);
+
+    if (mix_wcap & 0x02) { /* AC_WCAP_IN_AMP */
+        uint16_t mix_conn[HDA_MAX_CONNECTIONS];
+        int mix_num = hda_get_connections(mixer_nid, mix_conn, HDA_MAX_CONNECTIONS);
+        int start = (mix_type == HDA_WIDGET_AUDIO_MIX) ? 0 : (int)mix_conn_sel;
+        int end = (mix_type == HDA_WIDGET_AUDIO_MIX) ? mix_num : (start + 1);
+        uint8_t gain_in = hda_full_gain(hda_get_in_amp_max(mixer_nid));
+
+        /* Amplifier input indices are four bits. */
+        for (i = start; i < end && i < 16; i++) {
+            hda_send_verb(codec_addr, mixer_nid,
+                          HDA_VERB_SET_AMP_GAIN | 0x7000 | ((uint32_t)i << 8) | gain_in);
+        }
+    }
+    if (mix_wcap & 0x04) /* AC_WCAP_OUT_AMP */
+        hda_send_verb(codec_addr, mixer_nid,
+                      HDA_VERB_SET_AMP_GAIN | 0xB000 |
+                          hda_full_gain(hda_get_out_amp_max(mixer_nid)));
+}
+
+/**
+ * Set the amplifiers of output pin `nid`, whose audio caps are `wcap` and
+ * whose connection is `conn_sel`, unmuted at full gain: its input amplifier
+ * on that connection, since some codecs mute the output through it, and its
+ * output amplifier.
+ */
+static void hda_out_pin_amps(uint8_t nid, uint32_t wcap, uint8_t conn_sel)
+{
+    if (wcap & 0x02) /* AC_WCAP_IN_AMP */
+        hda_send_verb(codec_addr, nid,
+                      HDA_VERB_SET_AMP_GAIN | 0x7000 | ((uint32_t)conn_sel << 8) |
+                          hda_full_gain(hda_get_in_amp_max(nid)));
     if (wcap & 0x04) { /* AC_WCAP_OUT_AMP */
-        uint8_t max_gain = hda_get_out_amp_max(dac_nid);
-        uint8_t gain = (max_gain != 0) ? max_gain : 0x7F;
-        hda_send_verb(codec_addr, dac_nid, HDA_VERB_SET_AMP_GAIN | 0xB000 | gain);
+        uint32_t amp = 0xB000 | hda_full_gain(hda_get_out_amp_max(nid));
+
+        /* A Conexant codec takes an index on the pin's output amplifier. */
+        if (((codec_vendor_id >> 16) & 0xFFFF) == 0x14f1)
+            amp |= ((uint32_t)conn_sel << 8);
+        hda_send_verb(codec_addr, nid, HDA_VERB_SET_AMP_GAIN | amp);
     }
+}
 
-    if (hp_dac_nid != 0 && hp_dac_nid != dac_nid) {
-        uint32_t hp_wcap;
-
-        hda_send_verb(codec_addr, hp_dac_nid, HDA_VERB_SET_POWER | 0x00);
-        hda_delay(20);
-        hda_send_verb(codec_addr, hp_dac_nid, HDA_VERB_SET_CONV_FMT | fmt);
-        hda_send_verb(codec_addr, hp_dac_nid, HDA_VERB_SET_CHANNEL | (stream_tag << 4));
-        hp_wcap = hda_get_param(hp_dac_nid, HDA_PARAM_AUDIO_CAPS);
-        if (hp_wcap & 0x04) { /* AC_WCAP_OUT_AMP */
-            uint8_t max_gain_out = hda_get_out_amp_max(hp_dac_nid);
-            uint8_t gain_out = (max_gain_out != 0) ? max_gain_out : 0x7F;
-            hda_send_verb(codec_addr, hp_dac_nid, HDA_VERB_SET_AMP_GAIN | 0xB000 | gain_out);
-        }
-    }
-
-    if (mixer_nid != 0) {
-        uint32_t mix_wcap;
-        uint8_t mix_type;
-        uint8_t mix_conn_sel = mixer_conn_sel_idx;
-
-        hda_send_verb(codec_addr, mixer_nid, HDA_VERB_SET_POWER | 0x00);
-        hda_delay(20);
-
-        mix_wcap = hda_get_param(mixer_nid, HDA_PARAM_AUDIO_CAPS);
-        mix_type = (mix_wcap >> 20) & 0xF;
-
-        if (mix_type == HDA_WIDGET_AUDIO_SEL)
-            hda_send_verb(codec_addr, mixer_nid, HDA_VERB_SET_CONN_SEL | mix_conn_sel);
-
-        if (mix_wcap & 0x02) { /* AC_WCAP_IN_AMP */
-            uint16_t mix_conn[HDA_MAX_CONNECTIONS];
-            int mix_num = hda_get_connections(mixer_nid, mix_conn, HDA_MAX_CONNECTIONS);
-            int start = (mix_type == HDA_WIDGET_AUDIO_MIX) ? 0 : (int)mix_conn_sel;
-            int end = (mix_type == HDA_WIDGET_AUDIO_MIX) ? mix_num : (start + 1);
-            uint8_t max_gain_in = hda_get_in_amp_max(mixer_nid);
-            uint8_t gain_in = (max_gain_in != 0) ? max_gain_in : 0x7F;
-            /* Amplifier input indices are four bits. */
-            for (i = start; i < end && i < 16; i++) {
-                hda_send_verb(codec_addr, mixer_nid,
-                              HDA_VERB_SET_AMP_GAIN | 0x7000 | ((uint32_t)i << 8) | gain_in);
-            }
-        }
-        if (mix_wcap & 0x04) { /* AC_WCAP_OUT_AMP */
-            uint8_t max_gain_out = hda_get_out_amp_max(mixer_nid);
-            uint8_t gain_out = (max_gain_out != 0) ? max_gain_out : 0x7F;
-            hda_send_verb(codec_addr, mixer_nid, HDA_VERB_SET_AMP_GAIN | 0xB000 | gain_out);
-        }
-    }
-
+/**
+ * Power the output pin and the headphone pin, select their connections, set
+ * their amplifiers (hda_out_pin_amps), and turn on their external
+ * amplifiers: the speaker pin gets EAPD and BTL, another pin EAPD where it
+ * has it, and the headphone pin EAPD. The headphone pin is set up only when
+ * it is another pin with a DAC of its own path.
+ */
+static void hda_out_pins_program(void)
+{
     if (pin_nid) {
         uint32_t pin_caps = hda_get_param(pin_nid, HDA_PARAM_PIN_CAPS);
-        uint8_t pin_conn_sel = pin_conn_sel_idx;
-        uint32_t pin_wcap;
 
         hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_POWER | 0x00);
         hda_delay(20);
-
-        hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_CONN_SEL | pin_conn_sel);
-
-        pin_wcap = hda_get_param(pin_nid, HDA_PARAM_AUDIO_CAPS);
-        if (pin_wcap & 0x02) { /* AC_WCAP_IN_AMP */
-            uint8_t max_gain_in = hda_get_in_amp_max(pin_nid);
-            uint8_t gain_in = (max_gain_in != 0) ? max_gain_in : 0x7F;
-            hda_send_verb(codec_addr, pin_nid,
-                          HDA_VERB_SET_AMP_GAIN | 0x7000 | ((uint32_t)pin_conn_sel << 8) | gain_in);
-        }
-        if (pin_wcap & 0x04) { /* AC_WCAP_OUT_AMP */
-            uint8_t max_gain_out = hda_get_out_amp_max(pin_nid);
-            uint8_t gain_out = (max_gain_out != 0) ? max_gain_out : 0x7F;
-            uint32_t amp = 0xB000 | gain_out;
-            /* A Conexant codec takes an index on the pin's output amplifier. */
-            if (((codec_vendor_id >> 16) & 0xFFFF) == 0x14f1) {
-                amp |= ((uint32_t)pin_conn_sel << 8);
-            }
-            hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_AMP_GAIN | amp);
-        }
-
-        if (pin_nid == speaker_pin_nid) {
+        hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_CONN_SEL | pin_conn_sel_idx);
+        hda_out_pin_amps(pin_nid, hda_get_param(pin_nid, HDA_PARAM_AUDIO_CAPS), pin_conn_sel_idx);
+        if (pin_nid == speaker_pin_nid)
             hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_EAPD | 0x03);
-        } else {
-            if (pin_caps & 0x10000) {
-                hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_EAPD | 0x02);
-            }
-        }
+        else if (pin_caps & 0x10000)
+            hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_EAPD | 0x02);
     }
 
     if (hp_pin_nid != 0 && hp_pin_nid != pin_nid && hp_dac_nid != 0) {
         uint32_t hp_wcap = hda_get_param(hp_pin_nid, HDA_PARAM_AUDIO_CAPS);
-        uint8_t hp_conn_sel = hp_conn_sel_idx;
 
         /* Some codecs sense a jack only on a powered pin. */
         hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_POWER | 0x00);
         hda_delay(5);
-        hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_CONN_SEL | hp_conn_sel);
-        if (hp_wcap & 0x02) { /* AC_WCAP_IN_AMP */
-            uint8_t max_gain_in = hda_get_in_amp_max(hp_pin_nid);
-            uint8_t gain_in = (max_gain_in != 0) ? max_gain_in : 0x7F;
-            hda_send_verb(codec_addr, hp_pin_nid,
-                          HDA_VERB_SET_AMP_GAIN | 0x7000 | ((uint32_t)hp_conn_sel << 8) | gain_in);
-        }
-        if (hp_wcap & 0x04) { /* AC_WCAP_OUT_AMP */
-            uint8_t max_gain_out = hda_get_out_amp_max(hp_pin_nid);
-            uint8_t gain_out = (max_gain_out != 0) ? max_gain_out : 0x7F;
-            uint32_t amp = 0xB000 | gain_out;
-            if (((codec_vendor_id >> 16) & 0xFFFF) == 0x14f1) {
-                amp |= ((uint32_t)hp_conn_sel << 8);
-            }
-            hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_AMP_GAIN | amp);
-        }
+        hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_CONN_SEL | hp_conn_sel_idx);
+        hda_out_pin_amps(hp_pin_nid, hp_wcap, hp_conn_sel_idx);
         hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_EAPD | 0x02);
     }
+}
+
+/** Read every pin's sense (hda_sense_pins) and give each jack its state
+ * from it, counting a poll for each jack and a failure for each unsensed. */
+static void hda_jacks_sense(void)
+{
+    int i;
 
     hda_sense_pins();
     for (i = 0; i < HDA_JACKS; i++) {
@@ -3504,6 +3509,34 @@ static int hda_launch(uint16_t fmt)
         else
             hda_report.jacks[i].failed++;
     }
+}
+
+/**
+ * Program the discovered codec path for format word `fmt`, in order: the
+ * function group's power, the DAC, the headphone DAC, the mixer, the pin,
+ * the headphone pin, then EAPD. The headphone DAC gets the same format and
+ * stream even when the headphones stay off, since on many laptops the
+ * firmware or codec moves a speaker pin between DACs with the jack's state.
+ *
+ * Every pin's sense is then read, the jacks take their states from it
+ * (hda_jacks_sense), and the output pins are turned on or off for the
+ * output mode (hda_route_output): with the headphones alone the primary
+ * pin's output is off; with them off, the headphone pin's output is off, so
+ * the codec neither mutes the speaker for it nor routes sound to it. A
+ * change of the microphone jack moves capture (hda_follow_mic). The caller
+ * holds the jacks (hda_jack_hold).
+ */
+static void hda_out_codec(uint16_t fmt)
+{
+    hda_send_verb(codec_addr, audio_fg_nid, HDA_VERB_SET_POWER | 0x00);
+    hda_delay(50);
+    hda_dac_program(dac_nid, fmt, 50);
+    if (hp_dac_nid != 0 && hp_dac_nid != dac_nid)
+        hda_dac_program(hp_dac_nid, fmt, 20);
+    hda_out_mixer_program();
+    hda_out_pins_program();
+
+    hda_jacks_sense();
     hda_route_output(HDA_VERB_WAIT);
     hda_follow_mic(HDA_VERB_WAIT);
 
@@ -3516,6 +3549,39 @@ static int hda_launch(uint16_t fmt)
     /* Re-enable GPIO after all configuration (some codecs reset GPIO state). */
     hda_enable_gpio();
     hda_set_eapd(true);
+}
+
+/**
+ * Set up the output stream for the format already chosen and begin playback.
+ *
+ * `fmt` is the stream format word of the programmed rate, format and
+ * channels, which the caller has stored with the requested ones and the
+ * resampler's step. Reset the stream, fill its DMA buffers
+ * (hda_out_buffers), program the discovered codec path (hda_out_codec) and
+ * start DMA. Cache the requested and programmed rates with controller and
+ * converter format readbacks for procfs. Return 0, or -EIO when the stream
+ * does not reset.
+ *
+ * The session's counters start again (hda_session_reset). The tick polls no
+ * jack while the path is programmed.
+ *
+ * The first start after the controller was set up then waits 20 ms in
+ * hda_check_dma to choose where the stream's position is read; later starts
+ * keep that choice and do not wait.
+ */
+static int hda_launch(uint16_t fmt)
+{
+    int stream = output_stream_index;
+    uint32_t ctl;
+
+    hda_session_reset();
+    if (!hda_stream_reset(stream)) {
+        return -EIO;
+    }
+    hda_out_buffers(stream, fmt);
+
+    hda_jack_hold();
+    hda_out_codec(fmt);
 
     /* Flush caches so the controller sees BDL/buffers on real hardware */
     arch_dma_flush_all();
@@ -3531,16 +3597,13 @@ static int hda_launch(uint16_t fmt)
     hw_period_last = 0;
     playing = true;
 
-    {
-        uint32_t ctl = hda_sd_read32(stream, HDA_SD_CTL);
-        ctl |= HDA_SD_CTL_RUN;
-        walclk_last = hda_read32(HDA_WALCLK);
-        hda_sd_write32(stream, HDA_SD_CTL, ctl);
-    }
+    ctl = hda_sd_read32(stream, HDA_SD_CTL) | HDA_SD_CTL_RUN;
+    walclk_last = hda_read32(HDA_WALCLK);
+    hda_sd_write32(stream, HDA_SD_CTL, ctl);
     stream_started = true;
     hda_report.playing = true;
     hda_report.requested_rate = current_sample_rate;
-    hda_report.programmed_rate = hw_rate;
+    hda_report.programmed_rate = current_hw_sample_rate;
     hda_report.stream_format = hda_read16(hda_sd_offset(stream) + HDA_SD_FORMAT);
     hda_report.dac_format = (uint16_t)hda_send_verb(codec_addr, dac_nid, 0xA0000);
     hda_report.hp_format =
