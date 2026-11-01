@@ -48,6 +48,8 @@ After the cards comes `lo`, with the next index: 127.0.0.1/8 and ::1/128, Linux'
 
 `driver/rtl8168.c` drives one RTL8168, PCI 10ec:8168, whose `TxConfig` revision is of the GU family, the Lenovo G50-70's chip, which QEMU does not emulate. It is a port of Linux v6.16, commit `038d61fd642278bab63ee8ef722c50d10ab01e8f`, `r8169_main.c` and `r8169_phy_config.c`, for `RTL_GIGA_MAC_VER_42`, without the firmware patch, and each register sequence's comment gives the Linux function it follows. It has 64-descriptor rings and 16383-byte receive buffers. Completions and link changes arrive as message-signalled interrupts where the machine can route them, and a card whose MSI enable fails gives its vector back, with the handler. The handler masks the card's sources, acknowledges, services the rings at most twice and unmasks, which arms the next message. The tick services the rings too, and alone where messages cannot be routed or after a storm: 16 messages in a row that find a source the acknowledgement does not clear, with the rings empty, leave the sources masked. It advertises 10 and 100 Mbit in both duplexes, 1000 full duplex and pause, and resets the card's tally counters, which a warm restart keeps.
 
+`driver/ar9565/` is the driver of the G50-70's Wi-Fi card, a QCA9565, a radio under the wireless station rather than an Ethernet card; [its Readme](driver/ar9565/Readme.md) describes it.
+
 The e1000 and RTL8168 `stop` first waits up to 10 ms for the frames given to the card, so the last log line before shutdown reaches the wire.
 
 ### Receive
