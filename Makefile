@@ -844,6 +844,7 @@ LIFECYCLE_SCENARIOS = build/tests/cases/machine/acpi_scenario \
                       build/tests/cases/machine/mount_scenario \
                       build/tests/cases/machine/parts_scenario \
                       build/tests/cases/machine/reset_scenario \
+                      build/tests/cases/machine/sb16dsp_scenario \
                       build/tests/cases/machine/screen_scenario \
                       build/tests/cases/machine/selfbuild_scenario \
                       build/tests/cases/machine/servicelog_scenario \
