@@ -424,6 +424,8 @@ typedef char ar9300_eeprom_size_is_1088[sizeof(struct ar9300_eeprom) == 1088 ? 1
 #define ATH9K_CHIP_JUPITER  0x0008 /* of the AR9462's design */
 #define ATH9K_CHIP_ANT_COMB 0x0010 /* LNA combining and antenna diversity */
 #define ATH9K_CHIP_MCI      0x0020 /* Bluetooth coexistence through MCI */
+#define ATH9K_CHIP_SPUR_AB  0x0040 /* OFDM spur masks A and B, no CCK spur filter */
+#define ATH9K_CHIP_IQ_BOUND 0x0080 /* no RX IQ correction at its bound (6f37ff96d3bd) */
 
 /* Receive: the two EDMA FIFOs' depths (hw.h's ATH9K_HW_RX_HP_QDEPTH and
  * _LP_QDEPTH), and a buffer's length, ath9k's: the largest MPDU, 3840
@@ -448,6 +450,11 @@ typedef char ar9300_eeprom_size_is_1088[sizeof(struct ar9300_eeprom) == 1088 ? 1
  * extension readings of three chains, and ATH9K_NF_CAL_HIST_MAX). */
 #define ATH9K_NF_READINGS 6
 #define ATH9K_NF_HISTORY  5
+
+/* The TX IQ calibration's gains per chain and the carrier-leak table's
+ * entries per chain (hw.h's MAX_IQCAL_MEASUREMENT and MAX_CL_TAB_ENTRY). */
+#define ATH9K_IQCAL_GAINS 8
+#define ATH9K_CL_ENTRIES  16
 
 /* The periods of the worker's jobs, in milliseconds (ath9k.h): the short
  * and long calibrations, the noise-immunity check, the hang check, and
@@ -580,9 +587,12 @@ struct ath9k_eeprom {
 
 /* phy.c's: the channel the radio is on and its transmit power. */
 struct ath9k_phy {
-    struct wlan_channel channel;    /* frequency 0 until the first tune */
-    int16_t power_limit;            /* the regulatory cap, in half dB */
-    uint8_t target[ar9300RateSize]; /* the power set per rate, in half dB */
+    struct wlan_channel channel;       /* frequency 0 until the first tune */
+    int16_t power_limit;               /* the cap set_txpower was given, half dB */
+    uint8_t target[ar9300RateSize];    /* the power set per rate, in half dB */
+    int16_t nf_cal[AR9300_MAX_CHAINS]; /* the EEPROM's noise floor at this
+                                        * channel per chain, dBm; 0 when the
+                                        * EEPROM has none */
 };
 
 /* One reading's history of noise-floor results (calib.h's
@@ -590,36 +600,97 @@ struct ath9k_phy {
 struct ath9k_nf_hist {
     int16_t buf[ATH9K_NF_HISTORY];
     uint8_t index;
-    uint8_t invalid_count;
-    int16_t private_nf; /* the median of buf, which is loaded back */
+    uint8_t invalid_count; /* results still taken whole, not by the median */
+    int16_t private_nf;    /* the median of buf, which is loaded back */
 };
 
-/* calib.c's: what the reset-time and periodic calibrations keep. */
+/* calib.c's cal.flags (hw.h's enum ath9k_cal_flags). */
+#define ATH9K_CAL_TXIQ_DONE  0x01 /* tx_corr holds this channel's TX IQ result */
+#define ATH9K_CAL_TXCL_DONE  0x02 /* tx_clcal holds its carrier-leak table */
+#define ATH9K_CAL_NF_PENDING 0x04 /* a noise-floor measurement is running */
+#define ATH9K_CAL_NF_INTF    0x08 /* interference: the floor is not capped */
+
+/* The calibrations a chip runs, in cal.enabled (hw.h's enabled_cals). */
+#define ATH9K_CAL_ENABLE_TXIQ        0x01
+#define ATH9K_CAL_ENABLE_TXCL        0x02
+#define ATH9K_CAL_ENABLE_TXIQ_ON_AGC 0x04
+
+/* The periodic RX IQ mismatch calibration's states (calib.h's CAL_*). */
+enum ath9k_cal_state { ATH9K_CAL_INACTIVE, ATH9K_CAL_WAITING, ATH9K_CAL_RUNNING, ATH9K_CAL_DONE };
+
+/* A record of the calibration's periodic work. A record cannot be queued
+ * while its callback runs, so each run queues the other of two. */
+struct ath9k_cal_work {
+    struct wlan_work work;
+    struct ath9k *ah;
+};
+
+/* calib.c's: what the calibrations keep for the channel the radio is on,
+ * ath9k's ath9k_hw_cal_data, forgotten when the channel changes, and the
+ * periodic calibration's state. */
 struct ath9k_cal {
+    uint16_t freq;   /* the channel this data is for, MHz; 0 for none */
+    uint8_t flags;   /* ATH9K_CAL_* */
+    uint8_t enabled; /* ATH9K_CAL_ENABLE_* */
+
     struct ath9k_nf_hist nf[ATH9K_NF_READINGS];
-    int16_t noise_floor; /* the channel's noise floor, in dBm */
-    uint8_t nf_pending;  /* a noise-floor measurement is running */
-    uint8_t iq_valid;    /* the IQ correction below is in use */
-    int32_t iq_coeff[2]; /* the transmit IQ correction last applied */
-    uint32_t clcal[8];   /* the carrier-leak table, one chain */
-    uint8_t temp;        /* the temperature at the last compensation */
-    uint64_t last_short; /* worker ticks of the last calibrations */
+    int16_t noise_floor; /* the channel's noise floor, in dBm; 0 for none */
+    int16_t noise;       /* the noise level a received frame reports, dBm */
+
+    /* The TX IQ correction of each gain per chain, and how many gains the
+     * chip calibrated; the carrier-leak table per chain. */
+    uint16_t tx_corr[ATH9K_IQCAL_GAINS][AR9300_MAX_CHAINS];
+    uint8_t num_measures[AR9300_MAX_CHAINS];
+    uint32_t tx_clcal[AR9300_MAX_CHAINS][ATH9K_CL_ENTRIES];
+
+    /* The RX IQ mismatch calibration: its state, whether its result is
+     * this channel's, the samples taken and their sums per chain. */
+    uint8_t iq_state; /* enum ath9k_cal_state */
+    uint8_t iq_valid;
+    uint8_t samples;
+    uint32_t meas_i[AR9300_MAX_CHAINS];
+    uint32_t meas_q[AR9300_MAX_CHAINS];
+    int32_t meas_iq[AR9300_MAX_CHAINS];
+
+    /* The periodic work: whether the short calibrations are done, and the
+     * worker ticks (milliseconds) at which each job last ran. */
+    uint8_t done;
+    uint8_t running; /* between ath9k_cal_start and ath9k_cal_stop */
+    uint8_t temp;    /* the thermometer's latest reading */
+    uint64_t last_short;
     uint64_t last_long;
-    uint64_t last_full;
-    struct wlan_work work; /* the periodic calibration and ANI */
+    uint64_t last_ani;
+    uint64_t last_full; /* when the short calibrations last restarted */
+    struct ath9k_cal_work work[2];
+    uint8_t next_work; /* the record the next run is queued on */
 };
 
-/* ani.c's: adaptive noise immunity (ani.h's ar5416AniState). */
+/* ani.c's: adaptive noise immunity (ani.h's ar5416AniState and the trigger
+ * levels of ath9k_hw_config). */
 struct ath9k_ani {
-    uint8_t ofdm_level; /* the OFDM and CCK immunity levels, 0 to 8 */
-    uint8_t cck_level;
-    uint8_t mrc_cck;
-    uint8_t spur_level;
-    uint8_t firstep_level;
+    uint8_t ready;         /* the levels below have been set once */
+    uint8_t ofdm_level;    /* OFDM noise immunity, 0 to 9, 3 the default */
+    uint8_t cck_level;     /* CCK noise immunity, 0 to 8, 2 the default */
+    uint8_t spur_level;    /* spur immunity, 0 to 7, as the chip has it */
+    uint8_t firstep_level; /* FIR step, 0 to 8, as the chip has it */
     uint8_t ofdm_weak_signal;
-    uint32_t listen_time; /* milliseconds counted since the last check */
-    uint32_t ofdm_errors; /* phy errors counted since the last check */
+    uint8_t mrc_cck;
+    uint8_t ofdms_turn;      /* lower OFDM immunity next, not CCK */
+    uint16_t ofdm_trig_high; /* phy errors per second that raise or lower */
+    uint16_t ofdm_trig_low;
+    uint16_t cck_trig_high;
+    uint16_t cck_trig_low;
+    int beacon_rssi;      /* the BSS's beacons' average RSSI, which
+                           * recv.c keeps; 0 until it does */
+    uint32_t listen_time; /* milliseconds counted since the last restart */
+    uint32_t ofdm_errors; /* phy errors counted since the last restart */
     uint32_t cck_errors;
+    /* The tables' values of the fields ANI moves, read after each reset
+     * (ani.h's ath9k_ani_default). */
+    uint8_t m1_thresh, m2_thresh, m2_count_thr;
+    uint8_t m1_thresh_low, m2_thresh_low, m2_count_thr_low;
+    uint8_t m1_thresh_ext, m2_thresh_ext, m1_thresh_low_ext, m2_thresh_low_ext;
+    uint8_t firstep, firstep_low, cycpwr_thr1, cycpwr_thr1_ext;
 };
 
 /* One receive FIFO's buffers, in the order pushed to the chip. */
@@ -875,42 +946,106 @@ void ath9k_eeprom_set_board_values(struct ath9k *ah, const struct wlan_channel *
 
 /* phy.c */
 
-/** Write the mode, band and gain tables for `chan`, as
- * ar9003_hw_process_ini does. Worker, within a reset. */
+/** Write the mode, band and gain tables for `chan`, override what the
+ * driver sets itself, configure the channel's registers and chains and set
+ * the transmit power at phy.power_limit, as ar9003_hw_process_ini does.
+ * Worker, within a reset. */
 void ath9k_phy_process_ini(struct ath9k *ah, const struct wlan_channel *chan);
 
 /** Program the synthesizer for `chan`, HT20, as ar9003_hw_set_channel
- * does, and record it in phy.channel. Worker. */
+ * does, and record it in phy.channel. Worker. -EINVAL for a frequency the
+ * chip's band does not hold, which leaves the synthesizer alone. */
 int ath9k_phy_set_channel(struct ath9k *ah, const struct wlan_channel *chan);
 
 /** Set the per-rate transmit power for `chan` from the EEPROM, capped at
- * `limit` half dB and by the conformance limits. Worker. */
+ * `limit` half dB, at the channel's own limit and by the conformance
+ * limits, and the power control and temperature compensation of its
+ * calibration piers, as ath9k_hw_apply_txpower does. A `limit` of 0 or
+ * less sets no cap of its own. Worker. */
 void ath9k_phy_set_txpower(struct ath9k *ah, const struct wlan_channel *chan, int limit);
+
+/** Steps of ath9k_hw_reset, in its order there: mark the baseband
+ * inactive before the chip's reset; after the tables, the RF mode, the
+ * delta slope and the spur mitigation; and activate the baseband once the
+ * synthesizer is set, waiting for it to settle. Worker, within a reset. */
+void ath9k_phy_mark_inactive(struct ath9k *ah);
+void ath9k_phy_set_rfmode(struct ath9k *ah, const struct wlan_channel *chan);
+void ath9k_phy_set_delta_slope(struct ath9k *ah, const struct wlan_channel *chan);
+void ath9k_phy_spur_mitigate(struct ath9k *ah, const struct wlan_channel *chan);
+void ath9k_phy_init_bb(struct ath9k *ah, const struct wlan_channel *chan);
+
+/** Take the radio bus from the baseband for a retune, -ETIMEDOUT when it
+ * is not granted; give it back once the synthesizer has settled. */
+int ath9k_phy_rfbus_req(struct ath9k *ah);
+void ath9k_phy_rfbus_done(struct ath9k *ah);
+
+/**
+ * Move a running chip to `chan` without a reset, as ath9k_hw_do_fastcc and
+ * ath9k_hw_channel_change do for a channel of the same band and mode: take
+ * the radio bus, retune, set the power, delta slope and spur mitigation,
+ * give the bus back, and load and restart the noise floor, the calibration
+ * data forgotten when the channel is new. Worker, with receive stopped.
+ * Returns 0, or -EBUSY while a queue holds frames, -ETIMEDOUT when the
+ * bus is not granted or -EINVAL for a channel outside the band, after any
+ * of which the channel and its calibration data are as they were and the
+ * caller resets the chip.
+ */
+int ath9k_phy_channel_change(struct ath9k *ah, const struct wlan_channel *chan);
 
 /* calib.c */
 
-/** Run the reset-time calibrations on `chan`, as ar9003_hw_init_cal does.
- * Worker, within a reset. Returns 0 or -EIO, which asks for a reset. */
+/** Read the noise floor measured on the channel the chip was on into its
+ * history, before a reset leaves it, as ath9k_hw_reset's ath9k_hw_getnf
+ * does. Returns 1 when a result was read, 0 while it runs. */
+int ath9k_nf_read(struct ath9k *ah);
+
+/** Forget the calibration data unless it is `chan`'s, as ath9k_hw_reset
+ * does when the channel changes, the noise floor's history going back to
+ * its nominal values. */
+void ath9k_cal_set_channel(struct ath9k *ah, const struct wlan_channel *chan);
+
+/** Run the reset-time calibrations on `chan`, as ar9003_hw_init_cal does,
+ * after ath9k_cal_set_channel. Worker, within a reset, after
+ * ath9k_phy_init_bb. Returns 0 or -EIO, which asks for a reset. */
 int ath9k_cal_init(struct ath9k *ah, const struct wlan_channel *chan);
 
-/** Clear the noise-floor history to the EEPROM's nominal values. */
+/** Clear the noise-floor history to the nominal values. */
 void ath9k_nf_init(struct ath9k *ah);
 
-/** Start a noise-floor measurement. */
+/** Load the history's medians into the baseband, as ath9k_hw_loadnf does.
+ * Returns 0, or -ETIMEDOUT when the chip did not take them. */
+int ath9k_nf_load(struct ath9k *ah);
+
+/** Start a noise-floor measurement whose result the baseband takes itself,
+ * as at the end of a reset (ath9k_hw_start_nfcal with update). */
 void ath9k_nf_start(struct ath9k *ah);
 
-/** Read a finished measurement into the history and load the median back.
- * Returns 1 when one was read, 0 while it runs, or -EIO when the chip
- * refused the load, which asks for a reset. */
+/** Read a finished measurement into the history, load the medians back
+ * and start the next measurement. Returns 1 when one was read, 0 while it
+ * runs, or -EIO when the chip refused the load, which asks for a reset
+ * (ath9k 7b8aaead958e). */
 int ath9k_nf_update(struct ath9k *ah);
 
-/** Start the periodic calibration's work; stop it. Worker. */
+/** React to stuck beacons, the likeliest sign of interference: measure
+ * the noise floor again and stop capping it at its maximum until a
+ * measurement finds it normal, as ath9k_hw_bstuck_nfcal does. Interrupt
+ * or worker. */
+void ath9k_nf_bstuck(struct ath9k *ah);
+
+/** Start the periodic calibration's work: the short calibrations every
+ * second until they are done, the noise floor every 30 seconds, ANI every
+ * second, the short calibrations again every 20 minutes. A failed load of
+ * the noise floor asks recover.c for a reset. Stop it, waiting for a run
+ * in progress. Worker, not from the work itself. */
 void ath9k_cal_start(struct ath9k *ah);
 void ath9k_cal_stop(struct ath9k *ah);
 
 /* ani.c */
 
-/** Set noise immunity to the defaults; again at each channel change. */
+/** Read the tables' values of the fields ANI moves and set the immunity
+ * levels again, the defaults the first time, as ath9k_hw_ani_init,
+ * ar9003_hw_ani_cache_ini_regs and ath9k_ani_reset do; and restart the
+ * error counts. Worker, within a reset, after ath9k_phy_process_ini. */
 void ath9k_ani_reset(struct ath9k *ah);
 
 /** Read the MIB's phy error counts and raise or lower immunity. Worker,

@@ -24,7 +24,8 @@
  *   revisions and GPIO count are its row's, in chips.c.
  * - AR_SWITCH_TABLE_COM_ALL is AR_SWITCH_TABLE_COM_AR9462_ALL, the
  *   24-bit field the AR9565 shares. The reg_mci.h section keeps the
- *   coexistence controls used to leave Bluetooth unused.
+ *   coexistence controls used to leave Bluetooth unused; reg_mci.h's
+ *   regulator mode is among the GLB registers.
  * - ath9k's enum of AR_INTR_SYNC_* bits is written as macros, since C89
  *   holds an enumeration constant to an int. C++ comments became C
  *   comments, and tabs spaces.
@@ -2948,6 +2949,11 @@
 #define AR_PHY_GLB_CONTROL  (AR_GLB_BASE + 0x44)
 #define AR_GLB_SCRATCH      (AR_GLB_BASE + (0x50))
 #define AR_GLB_STATUS       (AR_GLB_BASE + 0x48)
+
+/* The switching regulator's mode for WLAN and Bluetooth together, from
+ * ath9k's reg_mci.h, which ath9k sets on the AR9462's design. */
+#define AR_GLB_SWREG_DISCONT_MODE       0x2002c
+#define AR_GLB_SWREG_DISCONT_EN_BT_WLAN 0x3
 
 /*
  * Misc helper defines
