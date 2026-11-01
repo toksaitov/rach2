@@ -85,11 +85,11 @@ struct nl80211_status {
  * The station's half, in the shape of Linux's cfg80211_ops. The softMAC
  * station of sta.c is its implementation for a radio of radio.h; a radio
  * that runs its own MLME, as a fullMAC chip does, would supply another.
- * Every call but status runs on the wireless worker, with the kernel lock and no
- * net_lock, may sleep, borrows its arguments until it returns and returns 0
- * or a negative errno. nl80211 moves a request onto the worker and waits for
- * the answer, so the station sees no other caller. An outcome that comes
- * later, such as the AP's answer, comes back through wlan_event.
+ * Every call but status runs on the wireless worker, with the kernel lock
+ * and no net_lock, may sleep, borrows its arguments until it returns and
+ * returns 0 or a negative errno. nl80211 moves a request onto the worker and
+ * waits for the answer, so the station sees no other caller. An outcome that
+ * comes later, such as the AP's answer, comes back through wlan_event.
  */
 struct nl80211_ops {
     /** Start a scan, as wlan_scan_start does, with the request's cookie. */

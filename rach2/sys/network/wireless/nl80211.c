@@ -260,7 +260,8 @@
 #define MAX_REGS     32 /* frame registrations of one interface */
 #define MAX_MATCH    64 /* bytes of a registration's match */
 #define MSG_BUF      8192
-#define WIPHY_PARTS  4 /* messages of a split GET_WIPHY: basics, band, commands, frames */
+/* Messages of a split GET_WIPHY: basics, band, commands, frame types. */
+#define WIPHY_PARTS  4
 #define ETH_P_PAE    0x888e
 #define FRAME_MGMT   (IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE)
 
