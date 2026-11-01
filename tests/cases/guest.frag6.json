@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.frag6",
+  "summary": "IPv6 fragments, extension headers and the path MTU over ::1, run as a process on Rach2",
+  "cases": [
+    {
+      "case_id": "guest.frag6.frag6probe",
+      "behavior": "An echo past one datagram over ::1 leaves in fragments and comes back whole, extension headers are skipped or refused as RFC 8200 says, overlapping fragments are dropped with the rest of their datagram, and a Packet Too Big lowers the path MTU of the destination it names",
+      "units": ["frag6", "frag6probe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {
+        "host_api": "c", "tools": [], "features": {},
+        "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1,
+                 "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": []}
+      },
+      "execution": {
+        "program": "frag6probe", "stdin": null, "role": "ordinary", "privileges": "root, which raw sockets need",
+        "isolation": [], "children": "none",
+        "cleanup": "its sockets close at exit; the path MTU of ::1 stays lowered to 1280 bytes for ten minutes of the boot"
+      },
+      "assertions": [
+        {"assertion_id": "snmp6", "checks": "/proc/net/snmp6 reads with the fragment, reassembly and Packet Too Big counts", "source": "program"},
+        {"assertion_id": "fragmented-echo", "checks": "the kernel's echo of 3000 bytes of data to ::1 is answered with the 3008 bytes of ICMPv6 sent", "source": "program"},
+        {"assertion_id": "fragments-counted", "checks": "the echo and its reply were each sent in three fragments and each reassembled: Ip6FragOKs grew by 2, Ip6FragCreates by 6 and Ip6ReasmOKs by 2", "source": "program"},
+        {"assertion_id": "raw-open", "checks": "a raw ICMPv6 socket and an IPv6 raw socket of IPPROTO_RAW open", "source": "program"},
+        {"assertion_id": "options-skipped", "checks": "an echo request behind a destination options header of padding alone is answered", "source": "program"},
+        {"assertion_id": "option-refused", "checks": "an echo request behind a destination option of type 0x80 is not answered, and a parameter problem of code 2 pointing at byte 42 comes back", "source": "program"},
+        {"assertion_id": "routing-refused", "checks": "an echo request behind a routing header of type 0 with a segment left is not answered, and a parameter problem of code 0 pointing at byte 42 comes back", "source": "program"},
+        {"assertion_id": "overlap-dropped", "checks": "of an echo request in fragments at offsets 0 and 8 that share bytes, and a third at 16 that would complete it with the first, none is answered, and Ip6ReasmFails grows by 1", "source": "program"},
+        {"assertion_id": "unfragmented", "checks": "the kernel's echo of 1300 bytes of data to ::1 is answered and leaves whole: Ip6FragOKs does not change", "source": "program"},
+        {"assertion_id": "too-big-taken", "checks": "a Packet Too Big of 1280 bytes about a datagram from ::1 to ::1 reaches the raw socket and is counted in Icmp6InPktTooBigs", "source": "program"},
+        {"assertion_id": "too-big-lowers", "checks": "the same echo is answered and now leaves in fragments each way: Ip6FragOKs grows by 2", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {
+        "case": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000},
+        "gap": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000},
+        "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "frag6probe", "node": "tests/frag6probe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "system", "reason": "the Packet Too Big lowers the path MTU of ::1 for ten minutes, which a running machine's other programs would share"}
+    }
+  ]
+}
