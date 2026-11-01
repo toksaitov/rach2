@@ -13,12 +13,12 @@
 # fast-forward. Each -c N names another open milestone whose branch SHA
 # contains, released with M: the record says `also N`, and the close closes N
 # and archives its cards after M's, so that milestones whose branches were
-# joined at their end take one release. The manager starts the script detached in the tmux session
-# `rach2-release`, and starts it again with the same arguments when it ended
-# without finishing; it then resumes from its record. It runs on the owner's
-# computer, which reaches the testing host as `ssh testing` and the Lenovo on
-# its network. A release has these steps, each of which the record below
-# lists once it is done:
+# joined at their end take one release. The manager starts the script
+# detached in the tmux session `rach2-release`, and starts it again with the
+# same arguments when it ended without finishing; it then resumes from its
+# record. It runs on the owner's computer, which reaches the testing host as
+# `ssh testing` and the Lenovo on its network. A release has these steps,
+# each of which the record below lists once it is done:
 #
 # * full: `full.yml` of M's branch runs every suite on both architectures
 #   from clean at SHA, on a runner of the one machine that SHA's
