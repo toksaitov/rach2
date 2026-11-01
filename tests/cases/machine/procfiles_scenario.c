@@ -3,8 +3,7 @@
  * the host.
  */
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <sys/stat.h>
 
 #include "netcase.h"
 #include "console_report.h"
@@ -19,9 +18,10 @@ int etude_scenario(struct etude_case *c)
     struct net_boot b;
     struct etude_case_service *peer;
     struct etude_termination end;
-    char password[128], port[16];
+    char password[128], port[16], probe[48];
     char *args[] = {"flood", port, "1", NULL};
-    const char *arch = getenv("ARCH");
+    const char *image = etude_artifact(c, "real");
+    struct stat st;
     uint64_t at;
 
     net_case(&u, c);
@@ -36,9 +36,13 @@ int etude_scenario(struct etude_case *c)
                        etude_service_wait(peer, "sshpeer: answered 1", 0, &at) != ETUDE_OK))
         net_fail(&u, "the guest did not accept the host connection");
     net_assert(&u, "peer-ready", 1, "the host's peer did not reach the SSH server");
-    /* os-real's size in KiB, OS_REAL_MIB in the Makefile. */
-    net_line(&b, arch != NULL && strcmp(arch, "x86_64") == 0 ? "/procfilesmusl 22528"
-                                                             : "/procfilesmusl 20480");
+    /* The image file is exactly the root's size, OS_REAL_MIB in the Makefile. */
+    if (image == NULL || stat(image, &st) != 0) {
+        net_fail(&u, "the root image's size cannot be read");
+        st.st_size = 0;
+    }
+    snprintf(probe, sizeof(probe), "/procfilesmusl %lu", (unsigned long)(st.st_size / 1024));
+    net_line(&b, probe);
     if (net_ok(&u) && console_report(c, b.m, "fixture", 1, b.at, &b.at) != ETUDE_OK)
         net_fail(&u, "the applet probe did not finish its report");
     return net_end(&u);
