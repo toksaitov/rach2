@@ -398,8 +398,10 @@ static void sockaddr_in6_out(uint8_t *sa, const uint8_t *addr, int ifindex)
     sa[SOCKADDR_IN6_SCOPE + 3] = (uint8_t)(scope >> 24);
 }
 
-/** Read an Internet endpoint and normalize mapped addresses.
- * Returns zero or a negative errno; checks the socket's family and V6ONLY. */
+/** Read an Internet endpoint and normalize mapped addresses. A link-scoped
+ * IPv6 address with no scope id takes the socket's bound interface, and a
+ * group with neither IPV6_MULTICAST_IF's, as on Linux. Returns zero or a
+ * negative errno; checks the socket's family and V6ONLY. */
 static int inet_endpoint_in(const struct socket *sock, uintptr_t ptr, int len, net_addr_t *addr,
                             uint16_t *port)
 {
@@ -426,6 +428,8 @@ static int inet_endpoint_in(const struct socket *sock, uintptr_t ptr, int len, n
     if (addr->family == AF_INET6 && ip6_link_scoped(addr->v6)) {
         if (!addr->scope)
             addr->scope = (uint32_t)sock->bound_device;
+        if (!addr->scope && ip6_is_multicast(addr->v6))
+            addr->scope = (uint32_t)sock->mif6; /* IPV6_MULTICAST_IF */
         if (!addr->scope)
             return -EINVAL;
         if (!netdev_at((int)(addr->scope - 1u)))
@@ -2400,8 +2404,9 @@ static int inet6_rx_control(const struct socket *sock)
  * `data` at offset `*used` of the caller's control buffer of `controllen`
  * bytes at `control`, and move `*used` past it and its padding, as far as
  * the buffer goes, as Linux's `put_cmsg` counts it. A message that does not
- * fit whole is not written and sets MSG_CTRUNC in `*mflags`. Returns 0, or
- * -EFAULT.
+ * fit whole is not written and sets MSG_CTRUNC in `*mflags`, after which no
+ * other is, so that what was written is a prefix of what was asked for.
+ * Returns 0, or -EFAULT.
  */
 static int32_t put_cmsg(uintptr_t control, uint32_t controllen, uint32_t *used, int level, int type,
                         const void *data, uint32_t len, unsigned int *mflags)
@@ -2409,7 +2414,7 @@ static int32_t put_cmsg(uintptr_t control, uint32_t controllen, uint32_t *used, 
     struct kernel_cmsghdr hdr;
     uint32_t need = (uint32_t)CMSG_HDR + len;
 
-    if (!control || controllen < *used || controllen - *used < need) {
+    if ((*mflags & MSG_CTRUNC) || !control || controllen < *used || controllen - *used < need) {
         *mflags |= MSG_CTRUNC;
         return 0;
     }
@@ -2566,7 +2571,8 @@ static int32_t get_tx_control(uintptr_t control, uint32_t controllen, struct net
  * declared capacity would fail a call whose address fits.
  *
  * Returns the bytes taken, or with MSG_TRUNC the datagram's whole length, or
- * -errno: -EOPNOTSUPP on a socket that is not a datagram socket, -EINVAL for
+ * -errno: -EOPNOTSUPP on a socket that is neither a datagram nor a raw
+ * socket, or on the raw descriptor that takes only ioctls, -EINVAL for
  * more than IOV_MAX_LOCAL buffers, -EFAULT, or the error of the receive.
  */
 static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
@@ -2590,7 +2596,8 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
     }
-    if (entry->sock->type != SOCK_DGRAM) {
+    if ((entry->sock->type != SOCK_DGRAM && entry->sock->type != SOCK_RAW) ||
+        sock_is_query(entry->sock)) {
         return -EOPNOTSUPP;
     }
 
