@@ -606,6 +606,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "nl80211",
+          "checks": "tests/host/nl80211_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "nvme",
           "checks": "tests/host/nvme_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
