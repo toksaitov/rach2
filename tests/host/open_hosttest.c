@@ -3149,3 +3149,39 @@ int main(void)
     }
     return failures != 0;
 }
+
+/** The file model has no watches to notify. */
+void inotify_file(struct vfs_mount *mnt, uint64_t ino, uint32_t mask)
+{
+    (void)mnt;
+    (void)ino;
+    (void)mask;
+}
+
+/** The file model has no parent watches to notify. */
+void inotify_child(struct vfs_mount *mnt, uint64_t ino, const char *name, uint32_t mask,
+                   uint32_t cookie)
+{
+    (void)mnt;
+    (void)ino;
+    (void)name;
+    (void)mask;
+    (void)cookie;
+}
+
+/** Map changed attributes to the events the syscall layer reports. */
+uint32_t vfs_setattr_events(int what)
+{
+    uint32_t mask = 0;
+    if (what & (VFS_SET_MODE | VFS_SET_UID | VFS_SET_GID))
+        mask |= IN_ATTRIB;
+    if (what & VFS_SET_SIZE)
+        mask |= IN_MODIFY;
+    if ((what & (VFS_SET_ATIME | VFS_SET_MTIME)) == (VFS_SET_ATIME | VFS_SET_MTIME))
+        mask |= IN_ATTRIB;
+    else if (what & VFS_SET_ATIME)
+        mask |= IN_ACCESS;
+    else if (what & VFS_SET_MTIME)
+        mask |= IN_MODIFY;
+    return mask;
+}
