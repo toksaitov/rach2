@@ -428,22 +428,6 @@ int ath9k_hw_attach(struct ath9k *ah)
 /* Reset onto a channel.                                               */
 /* ------------------------------------------------------------------ */
 
-/** Read the TSF, both halves of one moment (ath9k_hw_gettsf64). */
-static uint64_t get_tsf(struct ath9k *ah)
-{
-    uint32_t upper = REG_READ(ah, AR_TSF_U32), lower = 0, again;
-    unsigned i;
-
-    for (i = 0; i < 10; i++) {
-        lower = REG_READ(ah, AR_TSF_L32);
-        again = REG_READ(ah, AR_TSF_U32);
-        if (again == upper)
-            break;
-        upper = again;
-    }
-    return (uint64_t)upper << 32 | lower;
-}
-
 /** Reset the chip for a channel, cold when it slept or its DMA ran, and set
  * its PLL (ath9k_hw_chip_reset). */
 static int chip_reset(struct ath9k *ah)
@@ -475,26 +459,6 @@ static void reset_opmode(struct ath9k *ah, uint32_t sta_id1, uint32_t def_antenn
     REG_RMW(ah, AR_STA_ID1, AR_STA_ID1_KSRCH_MODE, AR_STA_ID1_STA_AP | AR_STA_ID1_ADHOC);
 }
 
-/** Set the interrupt registers to ath9k's starting masks with mitigation
- * on, leaving AR_IER to mac.c (ath9k_hw_init_interrupt_masks). */
-static void init_interrupt_masks(struct ath9k *ah)
-{
-    uint32_t imr = AR_IMR_TXERR | AR_IMR_TXURN | AR_IMR_RXERR | AR_IMR_RXORN | AR_IMR_BCNMISC |
-                   AR_IMR_RXOK_HP | AR_IMR_RXINTM | AR_IMR_RXMINTR | AR_IMR_TXOK;
-
-    REG_WRITE(ah, AR_IMR, imr);
-    REG_WRITE(ah, AR_IMR_S2, AR_IMR_S2_GTT);
-    if (ah->bus.vector)
-        REG_WRITE(ah, AR_INTCFG, AR_INTCFG_MSI_RXINTM | AR_INTCFG_MSI_RXMINTR | AR_INTCFG_MSI_TXOK);
-    REG_WRITE(ah, AR_INTR_SYNC_CAUSE, 0xffffffffu);
-    REG_WRITE(ah, AR_INTR_SYNC_ENABLE, AR_INTR_SYNC_DEFAULT);
-    REG_WRITE(ah, AR_INTR_SYNC_MASK, 0);
-    REG_WRITE(ah, AR_INTR_PRIO_ASYNC_ENABLE, 0);
-    REG_WRITE(ah, AR_INTR_PRIO_ASYNC_MASK, 0);
-    REG_WRITE(ah, AR_INTR_PRIO_SYNC_ENABLE, 0);
-    REG_WRITE(ah, AR_INTR_PRIO_SYNC_MASK, 0);
-}
-
 /** Set the QoS fields the MAC reads from frames (ath9k_hw_init_qos). */
 static void init_qos(struct ath9k *ah)
 {
@@ -512,14 +476,15 @@ static void init_qos(struct ath9k *ah)
 
 /**
  * Set the PCU's interframe spaces and timeouts for a full-rate 2.4 GHz
- * channel, as ath9k_hw_init_global_settings does: SIFS 10, the slot
- * mac.c keeps (9 microseconds until it sets one), the ACK and CTS timeouts
- * at the 64 and 48 microseconds ath9k pads them to whatever the slot, and
- * EIFS and the latencies as the initial values left them.
+ * channel, as ath9k_hw_init_global_settings does: SIFS 10; the short
+ * slot of 9 microseconds, since radio.h gives the driver no slot time
+ * (ath9k takes 20 from mac80211 in a BSS without short slots); the ACK and
+ * CTS timeouts at the 64 and 48 microseconds ath9k pads them to whatever
+ * the slot; and EIFS and the latencies as the initial values left them.
  */
 static void init_global_settings(struct ath9k *ah)
 {
-    unsigned clk = ah->hw.clockrate, sifs = 10, slot = ah->mac.slot_time ? ah->mac.slot_time : 9;
+    unsigned clk = ah->hw.clockrate, sifs = 10, slot = 9;
     unsigned ack = 64, cts = 48;
     uint32_t eifs = REG_READ(ah, AR_D_GBL_IFS_EIFS) / clk, usec = REG_READ(ah, AR_USEC);
 
@@ -534,29 +499,16 @@ static void init_global_settings(struct ath9k *ah)
             AR_USEC_TX_LAT | AR_USEC_RX_LAT | AR_USEC_USEC);
 }
 
-/** Set the DMA engines' burst sizes and the receive buffer's length
- * (ath9k_hw_set_dma, and ar9003_hw_set_rx_bufsize for the EDMA). */
-static void set_dma(struct ath9k *ah)
-{
-    REG_RMW(ah, AR_TXCFG, AR_TXCFG_DMASZ_128B, AR_TXCFG_DMASZ_MASK);
-    REG_RMW(ah, AR_RXCFG, AR_RXCFG_DMASZ_128B, AR_RXCFG_DMASZ_MASK);
-    REG_WRITE(ah, AR_RXFIFO_CFG, 0x200);
-    REG_RMW_FIELD(ah, AR_RXBP_THRESH, AR_RXBP_THRESH_HP, 0x1);
-    REG_RMW_FIELD(ah, AR_RXBP_THRESH, AR_RXBP_THRESH_LP, 0x1);
-    REG_WRITE(ah, AR_DATABUF_SIZE,
-              (ATH9K_RX_BUF_LEN - sizeof(struct ar9003_rxs)) & AR_DATABUF_SIZE_MASK);
-    REG_WRITE(ah, AR_PCU_TXBUF_CTRL, AR_PCU_TXBUF_CTRL_USABLE_SIZE);
-}
-
 /**
  * Reset the chip onto `chan` in ath9k_hw_reset's order, with coexistence
  * off and no fast channel change: read the last noise floor, keep the TSF,
  * the default antenna, the 11b base rate bit and the LED's mode across a
  * full reset; write the tables, the radio's settings, the board's and the
- * antenna's settings and the station's identity; tune; set up queues,
- * interrupts, noise immunity, QoS, timings and DMA; turn the baseband on,
- * calibrate, load the noise floor and start a measurement. Interrupts and
- * receive stay off. Worker. Returns 0 or the failing step's errno.
+ * antenna's settings and the station's identity; tune; set up the queues,
+ * interrupts and DMA (mac.c), noise immunity, QoS and timings; turn the
+ * baseband on, calibrate, load the noise floor and start a measurement.
+ * Interrupts and receive stay off. Worker. Returns 0 or the failing step's
+ * errno.
  */
 int ath9k_hw_reset(struct ath9k *ah, const struct wlan_channel *chan)
 {
@@ -573,7 +525,7 @@ int ath9k_hw_reset(struct ath9k *ah, const struct wlan_channel *chan)
     if (def_antenna == 0)
         def_antenna = 1;
     sta_id1 = REG_READ(ah, AR_STA_ID1) & AR_STA_ID1_BASE_RATE_11B;
-    tsf = get_tsf(ah);
+    tsf = ath9k_mac_get_tsf(ah);
     led = REG_READ(ah, AR_CFG_LED) & (AR_CFG_LED_ASSOC_CTL | AR_CFG_LED_MODE_SEL |
                                       AR_CFG_LED_BLINK_THRESH_SEL | AR_CFG_LED_BLINK_SLOW);
     ath9k_phy_mark_inactive(ah);
@@ -595,12 +547,10 @@ int ath9k_hw_reset(struct ath9k *ah, const struct wlan_channel *chan)
         return rc;
     ah->hw.clockrate = CLOCK_RATE;
     ath9k_mac_init_queues(ah);
-    init_interrupt_masks(ah);
     ath9k_ani_reset(ah);
     init_qos(ah);
     init_global_settings(ah);
     REG_SET_BIT(ah, AR_STA_ID1, AR_STA_ID1_PRESERVE_SEQNUM);
-    set_dma(ah);
     REG_WRITE(ah, AR_OBS, 8);
     REG_RMW_FIELD(ah, AR_RIMT, AR_RIMT_LAST, 500);
     REG_RMW_FIELD(ah, AR_RIMT, AR_RIMT_FIRST, 2000);

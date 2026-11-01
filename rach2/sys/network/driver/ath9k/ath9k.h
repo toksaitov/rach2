@@ -950,6 +950,10 @@ extern const struct wlan_radio_ops ath9k_radio_ops;
  */
 int ath9k_probe(void);
 
+/** The timer tick's call: serve the registered card, as ath9k_tick does.
+ * Interrupt. */
+void ath9k_poll(void);
+
 /* hw.c */
 
 /**

@@ -34,6 +34,7 @@
 
 static struct ath9k card;
 static struct wlan_minstrel card_minstrel;
+static int card_registered; /* the probe registered the card's radio */
 
 /** io.h's read for the kernel: a load from the window. */
 static uint32_t mmio_read(void *ctx, uint32_t reg)
@@ -221,27 +222,15 @@ static int radio_ampdu_action(struct wlan_radio *radio, enum wlan_ampdu_action a
     return ath9k_ampdu_action(radio->priv, action, peer, tid, ssn, window);
 }
 
-/** radio.h's get_tsf: both halves of one moment, the high half read again
- * until it holds. */
+/** radio.h's get_tsf. */
 static int radio_get_tsf(struct wlan_radio *radio, uint64_t *tsf)
 {
     struct ath9k *ah = radio->priv;
-    uint32_t upper, lower, again;
-    unsigned i;
 
     if (!ah->bus.started)
         return -ENETDOWN;
-    upper = REG_READ(ah, AR_TSF_U32);
-    for (i = 0; i < 10; i++) {
-        lower = REG_READ(ah, AR_TSF_L32);
-        again = REG_READ(ah, AR_TSF_U32);
-        if (again == upper) {
-            *tsf = (uint64_t)upper << 32 | lower;
-            return 0;
-        }
-        upper = again;
-    }
-    return -EIO;
+    *tsf = ath9k_mac_get_tsf(ah);
+    return 0;
 }
 
 /* Scanning is the station layer's, in software. */
@@ -372,6 +361,8 @@ static int probe_card(struct ath9k *ah, const struct ath9k_chip *chip, const pci
     rc = wlan_register_radio(&ah->radio, &wlan);
     if (rc != 0) {
         klog(KLOG_ERR, "ath9k", "probe: failed: register: %d", rc);
+        ath9k_intr_detach(ah);
+        ath9k_hw_disable(ah);
         return rc;
     }
     ah->bus.rfkill_work[0].wlan = ah->bus.rfkill_work[1].wlan = wlan;
@@ -390,8 +381,23 @@ int ath9k_probe(void)
 {
     pci_device_t dev;
     const struct ath9k_chip *chip = find_card(&dev);
+    int rc;
 
     if (!chip)
         return -ENODEV;
-    return probe_card(&card, chip, &dev);
+    rc = probe_card(&card, chip, &dev);
+    card_registered = rc == 0;
+    return rc;
+}
+
+/**
+ * The timer tick's service of the card, as intr.c's ath9k_tick gives it:
+ * the whole handler on a card without messages, the rings alone on one
+ * with them. Nothing before the probe has registered the card. Interrupt,
+ * from the tick.
+ */
+void ath9k_poll(void)
+{
+    if (card_registered)
+        ath9k_tick(&card);
 }

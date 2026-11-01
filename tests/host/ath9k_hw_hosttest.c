@@ -434,6 +434,24 @@ int ath9k_nf_load(struct ath9k *ah)
     return 0;
 }
 
+uint64_t ath9k_mac_get_tsf(struct ath9k *ah)
+{
+    (void)ah;
+    return 0x123456789ull;
+}
+
+void ath9k_intr_detach(struct ath9k *ah)
+{
+    (void)ah;
+    note("intr_detach");
+}
+
+void ath9k_tick(struct ath9k *ah)
+{
+    (void)ah;
+    note("tick");
+}
+
 void ath9k_rfkill_poll(struct ath9k *ah)
 {
     (void)ah;
@@ -838,6 +856,8 @@ static void test_recorded(void)
     lenovo_model(1);
     model.log_reads = 1;
     bus_ready();
+    ath9k_poll(); /* no card yet: nothing */
+    CHECK(n_calls == 0);
     build_trace();
     CHECK(trace_len == 1628);
     rc = ath9k_probe();
@@ -867,6 +887,12 @@ static void test_recorded(void)
     CHECK(streq(card.radio.name, "ath9k"));
     CHECK(minstrel_calls == 1);
     CHECK(calls_are(order));
+    notes_clear();
+    ath9k_poll();
+    {
+        static const char *const tick[] = {"tick", NULL};
+        CHECK(calls_are(tick));
+    }
     CHECK(card.bus.flags == (ATH9K_PCI_2ANT | ATH9K_PCI_BT_ANT_DIV));
     CHECK(card.bus.subsys_vendor == 0x17aa && card.bus.subsys_device == 0x4026);
     CHECK(mapped_at == 0xc0400000u && mapped_len == 0x20000);
@@ -1021,7 +1047,7 @@ static void test_radio(void)
     CHECK(ops->sta_state(radio, NULL, WLAN_STA_ASSOCIATED, WLAN_STA_NONE) == 0);
     CHECK(bssid_set[0] == 0 && bssid_set[5] == 0);
     CHECK(ops->ampdu_action(radio, WLAN_AMPDU_TX_START, frame, 0, 0, 64) == 0);
-    CHECK(ops->get_tsf(radio, &tsf) == 0);
+    CHECK(ops->get_tsf(radio, &tsf) == 0 && tsf == 0x123456789ull);
     {
         static const char *const misc[] = {
             "tx", "key_set", "key_clear", "mac_set_bssid", "mac_set_bssid", "ampdu_action", NULL};
@@ -1126,6 +1152,19 @@ static void test_refusals(void)
     CHECK(logged_prefix("ath9k: reset: failed: AR_RTC_STATUS (0x7044) reads 0x"));
     CHECK(logged("ath9k: probe: failed: 02:00.0: attach: -5"));
     CHECK(registered == NULL);
+
+    /* A refused registration gives the interrupt back, leaves the chip
+     * asleep and the tick idle. */
+    lenovo_model(1);
+    bus_ready();
+    register_rc = -ENOSPC;
+    CHECK(ath9k_probe() == -ENOSPC);
+    CHECK(logged("ath9k: probe: failed: register: -28"));
+    CHECK(call_index("intr_detach") != ~0u);
+    CHECK(card.hw.power == ATH9K_PM_FULL_SLEEP);
+    notes_clear();
+    ath9k_poll();
+    CHECK(n_calls == 0);
 
     /* A part that fails after attach leaves the chip asleep. */
     lenovo_model(1);
