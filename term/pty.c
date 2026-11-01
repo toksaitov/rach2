@@ -35,17 +35,23 @@ static int fd_set_flag(int fd, int flag)
 
 /**
  * The child's side of term_pty_open(): become a session leader with the
- * slave `name` as its terminal on descriptors 0 to 2 and run the program.
+ * slave `name` as its terminal on descriptors 0 to 2, sized `cols` by
+ * `rows`, and run the program.
+ *
+ * The size is set on the slave because macOS refuses TIOCSWINSZ on a
+ * master whose slave has never been opened, with ENOTTY.
  *
  * Writes the errno of the step that failed to `report`, which is
  * close-on-exec, so that the parent reads end of file when the exec
  * succeeds. Never returns.
  */
-static void child_start(const char *name, int report, char *const *argv, bool login)
+static void child_start(const char *name, unsigned cols, unsigned rows, int report,
+                        char *const *argv, bool login)
 {
     static const int sigs[] = {SIGCHLD, SIGTERM, SIGHUP, SIGINT, SIGQUIT, SIGPIPE};
     char *const login_argv[] = {"login", NULL};
     char *shell_argv[2];
+    struct winsize ws;
     const char *path;
     sigset_t none;
     size_t i;
@@ -63,6 +69,11 @@ static void child_start(const char *name, int report, char *const *argv, bool lo
     if (slave < 0)
         goto fail;
     if (ioctl(slave, TIOCSCTTY, 0) < 0)
+        goto fail;
+    memset(&ws, 0, sizeof(ws));
+    ws.ws_col = (unsigned short)cols;
+    ws.ws_row = (unsigned short)rows;
+    if (ioctl(slave, TIOCSWINSZ, &ws) < 0)
         goto fail;
     if (dup2(slave, 0) < 0 || dup2(slave, 1) < 0 || dup2(slave, 2) < 0)
         goto fail;
@@ -91,7 +102,6 @@ fail:
 
 int term_pty_open(struct term_pty *pty, unsigned cols, unsigned rows, char *const *argv, bool login)
 {
-    struct winsize ws;
     char name[128];
     const char *n;
     int report[2];
@@ -121,13 +131,6 @@ int term_pty_open(struct term_pty *pty, unsigned cols, unsigned rows, char *cons
         goto fail;
     }
     strcpy(name, n);
-    memset(&ws, 0, sizeof(ws));
-    ws.ws_col = (unsigned short)cols;
-    ws.ws_row = (unsigned short)rows;
-    if (ioctl(pty->master, TIOCSWINSZ, &ws) < 0) {
-        r = -errno;
-        goto fail;
-    }
 
     if (pipe(report) < 0) {
         r = -errno;
@@ -148,7 +151,7 @@ int term_pty_open(struct term_pty *pty, unsigned cols, unsigned rows, char *cons
     }
     if (pty->child == 0) {
         close(report[0]);
-        child_start(name, report[1], argv, login);
+        child_start(name, cols, rows, report[1], argv, login);
     }
     close(report[1]);
     do
