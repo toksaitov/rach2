@@ -19,6 +19,15 @@
  * the batching saves commands on the ordered write-through of a `sync`
  * mount. Both counts include fsync, and both files are reopened and checked.
  *
+ * `ext2probe names` mounts the fixture for writing and judges the name
+ * cache by its counts in /proc/stat: warm walks of the deep paths of the
+ * report's fs_thread_scaling.c, fstatat in a directory descriptor and
+ * processes walking at once read no directory; each mutator that makes or
+ * takes away a name is seen though the cache had the name's answer; removed
+ * files and directories give back their inodes; a cached name is EACCES to a
+ * user who may not search its directory; and an unmount forgets the
+ * volume's names. The counts are the machine's, so no native run has it.
+ *
  * A native run gives the fixture as a loop device (probe_args.h): the first
  * device that `loops=DEVICE,...` names is mounted in place of /dev/disk0p1,
  * and `cost` counts that device's own writes and syncs, from /proc/loop, in
@@ -43,11 +52,14 @@
 #define O_EXCL     0200
 #define O_NOFOLLOW 0400000
 
+#define S_IFIFO 0010000
+
 #define MS_RDONLY      1
 #define MS_SYNCHRONOUS 16
 
 #define EPERM  1
 #define ENOENT 2
+#define EACCES 13
 #define EEXIST 17
 #define EXDEV  18
 #define EINVAL 22
@@ -354,10 +366,10 @@ static char loop_name[16];
 
 static unsigned char cost_block[4096];
 
-/** The unsigned counter on the line `key` of the /proc/disk text `text`,
- * "key value"; a counter that is absent, empty, too large or followed by
- * other text fails the probe. */
-static unsigned disk_counter(const char *text, const char *key)
+/** The unsigned counter on the line `key` of the text `text` of /proc/disk
+ * or /proc/stat, "key value"; a counter that is absent, empty, too large or
+ * followed by other text fails the probe. */
+static unsigned text_counter(const char *text, const char *key)
 {
     const char *p = text;
     size_t len = strlen(key);
@@ -373,18 +385,18 @@ static unsigned disk_counter(const char *text, const char *key)
 
             p += i + 1;
             if (*p < '0' || *p > '9') {
-                fail("a disk counter has no value");
+                fail("a counter has no value");
             }
             while (*p >= '0' && *p <= '9') {
                 unsigned digit = (unsigned)(*p++ - '0');
 
                 if (value > (0xFFFFFFFFu - digit) / 10) {
-                    fail("a disk counter overflows");
+                    fail("a counter overflows");
                 }
                 value = value * 10 + digit;
             }
             if (*p != '\n' && *p != '\0') {
-                fail("a disk counter has trailing text");
+                fail("a counter has trailing text");
             }
             return value;
         }
@@ -395,7 +407,7 @@ static unsigned disk_counter(const char *text, const char *key)
             p++;
         }
     }
-    fail("a disk counter is absent");
+    fail("a counter is absent");
 }
 
 /** The unsigned number after the word `key` and a space on the line that
@@ -470,8 +482,8 @@ static struct disk_counts disk_counts(void)
         fail("reading the disk counters");
     }
     text[n] = '\0';
-    counts.commands = disk_counter(text, "disk-commands");
-    counts.flushes = disk_counter(text, "disk-flushes");
+    counts.commands = text_counter(text, "disk-commands");
+    counts.flushes = text_counter(text, "disk-flushes");
     return counts;
 }
 
@@ -624,6 +636,373 @@ static void cost_rows(void)
     cost_verify("/e2/cost-append", 64, 3);
 }
 
+/* The rows of `ext2probe names`. */
+
+#define NAMES_ROUNDS   200 /* warm walks of each path */
+#define NAMES_CHILDREN 4   /* processes that walk together */
+
+/* The name cache's counts of /proc/stat: lookups it answered, and those it
+ * passed to ext2, each a read of a directory. */
+struct name_counts {
+    unsigned hits;
+    unsigned misses;
+};
+
+/** The name cache's counts now. */
+static struct name_counts name_counts(void)
+{
+    static char text[8192];
+    struct name_counts counts;
+    int n = read_all("/proc/stat", text, sizeof(text) - 1);
+
+    if (n <= 0 || n == (int)sizeof(text) - 1) {
+        fail("reading /proc/stat");
+    }
+    text[n] = '\0';
+    counts.hits = text_counter(text, "namecache_hits");
+    counts.misses = text_counter(text, "namecache_misses");
+    return counts;
+}
+
+/** stat of `path` into the stat buffer: 0, or the negated errno. */
+static int stat_rc(const char *path)
+{
+    return syscall2(SYS_STAT, (long)path, (long)st);
+}
+
+/** The free inodes of the fixture, which statfs reports. */
+static unsigned free_inodes(void)
+{
+    static unsigned char fs[KSTATFS_SIZE];
+
+    if (probe_statfs("/e2", fs) != 0) {
+        fail("statfs of the fixture");
+    }
+    return (unsigned)(fs[KSTATFS_FFREE] | (fs[KSTATFS_FFREE + 1] << 8) |
+                      (fs[KSTATFS_FFREE + 2] << 16) | ((unsigned)fs[KSTATFS_FFREE + 3] << 24));
+}
+
+/** Fail `what` unless stat of `path` answers `want`, 0 or an errno, twice,
+ * the second time without reading a directory: the answer is the cache's. */
+static void expect_cached(const char *path, int want, const char *what)
+{
+    struct name_counts before, after;
+    int rc = stat_rc(path);
+
+    if (rc != -want) {
+        fail_with(what, rc);
+    }
+    before = name_counts();
+    rc = stat_rc(path);
+    after = name_counts();
+    if (rc != -want) {
+        fail_with(what, rc);
+    }
+    if (after.misses != before.misses || after.hits == before.hits) {
+        fail_with(what, (int)(after.misses - before.misses));
+    }
+}
+
+/** Fail `what` unless stat of `path` answers `want`, 0 or an errno. */
+static void expect_stat(const char *path, int want, const char *what)
+{
+    int rc = stat_rc(path);
+
+    if (rc != -want) {
+        fail_with(what, rc);
+    }
+}
+
+/** Fail `what` unless the call's result `rc` is 0. */
+static void expect_ok(int rc, const char *what)
+{
+    if (rc != 0) {
+        fail_with(what, rc);
+    }
+}
+
+/** Make the empty file `path`, or fail `what`. */
+static void make_file(const char *path, const char *what)
+{
+    int fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_CREAT | O_EXCL, 0644);
+
+    if (fd < 0) {
+        fail_with(what, fd);
+    }
+    syscall1(SYS_CLOSE, fd);
+}
+
+/** Wait for the child `pid` and fail `what` unless it exited with 0. */
+static void expect_child(int pid, const char *what)
+{
+    int status = -1;
+
+    if (pid < 0) {
+        fail_with("fork", pid);
+    }
+    if (syscall4(SYS_WAIT4, pid, (long)&status, 0, 0) != pid || status != 0) {
+        fail_with(what, status);
+    }
+}
+
+/* The report's paths, from fs_thread_scaling.c, and the names on ext2 of
+ * each: /e2 is a mount over a KRFFS directory, whose lookup is not ext2's. */
+static const char *const deep_paths[] = {"/e2/nc/deep/f", "/e2/nc/deep/1/2/3/f",
+                                         "/e2/nc/deep/1/2/3/4/5/6/7/f"};
+static const unsigned deep_names[] = {3, 6, 10};
+static const char *const deep_dirs[] = {"/e2/nc",
+                                        "/e2/nc/deep",
+                                        "/e2/nc/deep/1",
+                                        "/e2/nc/deep/1/2",
+                                        "/e2/nc/deep/1/2/3",
+                                        "/e2/nc/deep/1/2/3/4",
+                                        "/e2/nc/deep/1/2/3/4/5",
+                                        "/e2/nc/deep/1/2/3/4/5/6",
+                                        "/e2/nc/deep/1/2/3/4/5/6/7"};
+
+#define DEEP_PATHS 3
+#define DEEP_DIRS  9
+
+/**
+ * The report's walks, warm: stat of each deep path, fstatat of a name in a
+ * directory descriptor, and NAMES_CHILDREN processes walking one path at
+ * once, NAMES_ROUNDS times each, read no directory by the kernel's count,
+ * and the cache answers each name of each walk.
+ */
+static void warm_rows(void)
+{
+    struct name_counts before, after;
+    unsigned want = 0;
+    int i, r, fd, pid[NAMES_CHILDREN];
+
+    for (i = 0; i < DEEP_DIRS; i++) {
+        expect_ok(syscall2(SYS_MKDIR, (long)deep_dirs[i], 0755), "making the deep directories");
+        expect_ok(syscall2(SYS_CHMOD, (long)deep_dirs[i], 0755), "opening the deep directories");
+    }
+    for (i = 0; i < DEEP_PATHS; i++) {
+        make_file(deep_paths[i], "making the deep files");
+        expect_stat(deep_paths[i], 0, "a cold walk of a deep path");
+    }
+    fd = syscall3(SYS_OPEN, (long)"/e2/nc/deep", O_RDONLY, 0);
+    if (fd < 0) {
+        fail_with("opening the deep directory", fd);
+    }
+    before = name_counts();
+    for (r = 0; r < NAMES_ROUNDS; r++) {
+        for (i = 0; i < DEEP_PATHS; i++) {
+            expect_stat(deep_paths[i], 0, "a warm walk of a deep path");
+            want += deep_names[i];
+        }
+        if (syscall4(SYS_FSTATAT, fd, (long)"f", (long)st, 0) != 0) {
+            fail("fstatat of a name in the deep directory");
+        }
+        want++;
+    }
+    for (i = 0; i < NAMES_CHILDREN; i++) {
+        pid[i] = syscall0(SYS_FORK);
+        if (pid[i] == 0) {
+            for (r = 0; r < NAMES_ROUNDS; r++) {
+                if (stat_rc(deep_paths[1]) != 0) {
+                    sys_exit(1);
+                }
+            }
+            sys_exit(0);
+        }
+        want += NAMES_ROUNDS * deep_names[1];
+    }
+    for (i = 0; i < NAMES_CHILDREN; i++) {
+        expect_child(pid[i], "a process walking with others");
+    }
+    after = name_counts();
+    syscall1(SYS_CLOSE, fd);
+    syscall3(SYS_WRITE, 1, (long)"ext2-names: result: warm names=", 31);
+    cost_number(after.hits - before.hits);
+    syscall3(SYS_WRITE, 1, (long)" directory reads=", 17);
+    cost_number(after.misses - before.misses);
+    puts("");
+    if (after.misses != before.misses) {
+        fail_with("warm walks read no directory", (int)(after.misses - before.misses));
+    }
+    if (after.hits - before.hits < want) {
+        fail_with("the cache answers each name of a warm walk", (int)(after.hits - before.hits));
+    }
+}
+
+/**
+ * Each mutator that makes a name, then each that takes one away, with the
+ * name's answer in the cache before it: creat, mkdir, symlink, mknod, link
+ * and rename onto a name the cache had as missing find it; unlink, rmdir
+ * and rename away from a name the cache had find it gone. A removed file and
+ * a removed directory with a negative entry in it give back their inodes,
+ * and a file a rename replaces gives back its own.
+ */
+static void mutator_rows(void)
+{
+    unsigned free0, ino;
+
+    expect_cached("/e2/nc/m-creat", ENOENT, "a missing name is cached before creat");
+    make_file("/e2/nc/m-creat", "creat");
+    expect_stat("/e2/nc/m-creat", 0, "creat makes a name the cache had as missing");
+
+    expect_cached("/e2/nc/m-dir", ENOENT, "a missing name is cached before mkdir");
+    expect_ok(syscall2(SYS_MKDIR, (long)"/e2/nc/m-dir", 0755), "mkdir");
+    expect_stat("/e2/nc/m-dir", 0, "mkdir makes a name the cache had as missing");
+
+    expect_cached("/e2/nc/m-sym", ENOENT, "a missing name is cached before symlink");
+    expect_ok(syscall2(SYS_SYMLINK, (long)"m-creat", (long)"/e2/nc/m-sym"), "symlink");
+    expect_stat("/e2/nc/m-sym", 0, "symlink makes a name the cache had as missing");
+
+    expect_cached("/e2/nc/m-fifo", ENOENT, "a missing name is cached before mknod");
+    expect_ok(syscall3(SYS_MKNOD, (long)"/e2/nc/m-fifo", S_IFIFO | 0644, 0), "mknod of a FIFO");
+    expect_stat("/e2/nc/m-fifo", 0, "mknod makes a name the cache had as missing");
+
+    expect_cached("/e2/nc/m-link", ENOENT, "a missing name is cached before link");
+    expect_ok(syscall2(SYS_LINK, (long)"/e2/nc/m-creat", (long)"/e2/nc/m-link"), "link");
+    expect_stat("/e2/nc/m-link", 0, "link makes a name the cache had as missing");
+
+    expect_cached("/e2/nc/m-to", ENOENT, "a missing name is cached before a rename onto it");
+    expect_cached("/e2/nc/m-link", 0, "a name is cached before a rename away from it");
+    expect_ok(syscall2(SYS_RENAME, (long)"/e2/nc/m-link", (long)"/e2/nc/m-to"), "rename");
+    expect_stat("/e2/nc/m-to", 0, "rename makes a name the cache had as missing");
+    expect_stat("/e2/nc/m-link", ENOENT, "rename takes away a name the cache had");
+
+    expect_cached("/e2/nc/m-to", 0, "a name is cached before unlink");
+    expect_ok(syscall1(SYS_UNLINK, (long)"/e2/nc/m-to"), "unlink of a second link");
+    expect_stat("/e2/nc/m-to", ENOENT, "unlink takes away a name the cache had");
+
+    free0 = free_inodes();
+    make_file("/e2/nc/m-file", "creat of a file to unlink");
+    expect_cached("/e2/nc/m-file", 0, "a file is cached before unlink");
+    expect_ok(syscall1(SYS_UNLINK, (long)"/e2/nc/m-file"), "unlink of a last link");
+    expect_stat("/e2/nc/m-file", ENOENT, "unlink takes away a file the cache had");
+    if (free_inodes() != free0) {
+        fail_with("an unlinked file the cache had gives back its inode", (int)free_inodes());
+    }
+
+    free0 = free_inodes();
+    expect_ok(syscall2(SYS_MKDIR, (long)"/e2/nc/m-gone", 0755), "mkdir of a directory to remove");
+    expect_cached("/e2/nc/m-gone/none", ENOENT, "a missing name in a directory is cached");
+    expect_cached("/e2/nc/m-gone", 0, "a directory is cached before rmdir");
+    expect_ok(syscall1(SYS_RMDIR, (long)"/e2/nc/m-gone"), "rmdir");
+    expect_stat("/e2/nc/m-gone", ENOENT, "rmdir takes away a name the cache had");
+    if (free_inodes() != free0) {
+        fail_with("a removed directory with a cached entry gives back its inode",
+                  (int)free_inodes());
+    }
+
+    free0 = free_inodes();
+    make_file("/e2/nc/m-a", "creat of a file to rename");
+    make_file("/e2/nc/m-b", "creat of a file to replace");
+    expect_stat("/e2/nc/m-a", 0, "stat of the file to rename");
+    ino = (unsigned)st_word(KSTAT_INO);
+    expect_cached("/e2/nc/m-a", 0, "a file is cached before a rename away from it");
+    expect_cached("/e2/nc/m-b", 0, "a file is cached before a rename replaces it");
+    expect_ok(syscall2(SYS_RENAME, (long)"/e2/nc/m-a", (long)"/e2/nc/m-b"), "rename over a file");
+    expect_stat("/e2/nc/m-b", 0, "the name a rename replaced");
+    if ((unsigned)st_word(KSTAT_INO) != ino) {
+        fail("the name a rename replaced names the file renamed");
+    }
+    expect_stat("/e2/nc/m-a", ENOENT, "a rename over a file takes its old name away");
+    if (free_inodes() != free0 - 1) {
+        fail_with("the file a rename replaced gives back its inode", (int)free_inodes());
+    }
+
+    expect_ok(syscall2(SYS_MKDIR, (long)"/e2/nc/m-tree", 0755), "mkdir of a directory to move");
+    make_file("/e2/nc/m-tree/f", "creat in a directory to move");
+    expect_cached("/e2/nc/m-tree/f", 0, "a name in a directory is cached before it moves");
+    expect_ok(syscall2(SYS_RENAME, (long)"/e2/nc/m-tree", (long)"/e2/nc/m-moved"),
+              "rename of a directory");
+    expect_stat("/e2/nc/m-tree/f", ENOENT, "a moved directory's old path is gone");
+    expect_stat("/e2/nc/m-moved/f", 0, "a moved directory's names go with it");
+}
+
+/**
+ * A name in a directory only root may search, and a missing name there,
+ * both in the cache from root's walks, are EACCES to a process of uid 1000,
+ * which may still walk the deep path.
+ */
+static void denied_rows(void)
+{
+    int pid;
+
+    expect_ok(syscall2(SYS_MKDIR, (long)"/e2/nc/priv", 0700), "mkdir of a private directory");
+    expect_ok(syscall2(SYS_CHMOD, (long)"/e2/nc/priv", 0700), "closing the private directory");
+    make_file("/e2/nc/priv/f", "creat in the private directory");
+    expect_cached("/e2/nc/priv/f", 0, "root's walk into the private directory is cached");
+    expect_cached("/e2/nc/priv/none", ENOENT, "root's missing name there is cached");
+    pid = syscall0(SYS_FORK);
+    if (pid == 0) {
+        if (syscall2(SYS_SETGROUPS, 0, 0) != 0 || syscall1(SYS_SETGID, 1000) != 0 ||
+            syscall1(SYS_SETUID, 1000) != 0) {
+            sys_exit(1);
+        }
+        if (stat_rc(deep_paths[0]) != 0) {
+            sys_exit(2);
+        }
+        if (stat_rc("/e2/nc/priv/f") != -EACCES) {
+            sys_exit(3);
+        }
+        if (stat_rc("/e2/nc/priv/none") != -EACCES) {
+            sys_exit(4);
+        }
+        sys_exit(0);
+    }
+    expect_child(pid, "a cached name in a directory uid 1000 may not search is EACCES to it");
+}
+
+/**
+ * The volume unmounted with its entries in the cache and mounted again: the
+ * first walk of a deep path reads each of its three directories again.
+ */
+static void remount_rows(void)
+{
+    struct name_counts before, after;
+
+    expect_cached(deep_paths[0], 0, "a deep path is cached before the unmount");
+    expect_ok(syscall2(SYS_UMOUNT2, (long)"/e2", 0), "unmount with names in the cache");
+    expect_ok(syscall5(SYS_MOUNT, (long)node, (long)"/e2", (long)"ext2", 0, 0), "mounting again");
+    before = name_counts();
+    expect_stat(deep_paths[0], 0, "a deep path after the volume is mounted again");
+    after = name_counts();
+    if (after.misses - before.misses < deep_names[0]) {
+        fail_with("a volume mounted again reads its directories again",
+                  (int)(after.misses - before.misses));
+    }
+}
+
+/** Remove what the rows made, deepest first. */
+static void names_clean(void)
+{
+    static const char *const files[] = {"/e2/nc/priv/f", "/e2/nc/m-moved/f", "/e2/nc/m-b",
+                                        "/e2/nc/m-fifo", "/e2/nc/m-sym",     "/e2/nc/m-creat"};
+    static const char *const dirs[] = {"/e2/nc/priv", "/e2/nc/m-moved", "/e2/nc/m-dir"};
+    int i;
+
+    for (i = 0; i < (int)(sizeof(files) / sizeof(files[0])); i++) {
+        expect_ok(syscall1(SYS_UNLINK, (long)files[i]), "removing a file the rows made");
+    }
+    for (i = 0; i < DEEP_PATHS; i++) {
+        expect_ok(syscall1(SYS_UNLINK, (long)deep_paths[i]), "removing a deep file");
+    }
+    for (i = 0; i < (int)(sizeof(dirs) / sizeof(dirs[0])); i++) {
+        expect_ok(syscall1(SYS_RMDIR, (long)dirs[i]), "removing a directory the rows made");
+    }
+    for (i = DEEP_DIRS - 1; i >= 0; i--) {
+        expect_ok(syscall1(SYS_RMDIR, (long)deep_dirs[i]), "removing a deep directory");
+    }
+}
+
+/** The rows of `ext2probe names`, on the fixture mounted for writing on /e2;
+ * fails the probe at the first row that fails. */
+static void names_rows(void)
+{
+    warm_rows();
+    mutator_rows();
+    denied_rows();
+    remount_rows();
+    names_clean();
+}
+
 /** Take the fixture's node from the first device of `loops=`, when it is
  * given, and its last component as `loop_name`. */
 static void take_loop(void)
@@ -655,7 +1034,7 @@ PROBE_SP_ENTRY;
 
 /** The probe's entry, given the initial stack `sp`: the mode from the first
  * positional argument, `links` by default, run on the fixture mounted on
- * /e2. */
+ * /e2, read-only for `links`, with MS_SYNCHRONOUS for `cost`. */
 void probe_main(unsigned long *sp)
 {
     const char *mode;
@@ -663,17 +1042,22 @@ void probe_main(unsigned long *sp)
 
     probe_args((int)sp[0], (char **)(sp + 1));
     mode = probe_word(1) != 0 ? probe_word(1) : "links";
-    writable = streq(mode, "cost");
+    writable = streq(mode, "cost") || streq(mode, "names");
     take_loop();
     syscall2(SYS_MKDIR, (long)"/e2", 0755);
     if (syscall5(SYS_MOUNT, (long)node, (long)"/e2", (long)"ext2",
-                 writable ? MS_SYNCHRONOUS : MS_RDONLY, 0) != 0) {
+                 streq(mode, "cost") ? MS_SYNCHRONOUS
+                 : writable          ? 0
+                                     : MS_RDONLY,
+                 0) != 0) {
         fail("mounting the fixture");
     }
     if (streq(mode, "links")) {
         links_rows();
-    } else if (writable) {
+    } else if (streq(mode, "cost")) {
         cost_rows();
+    } else if (streq(mode, "names")) {
+        names_rows();
     } else {
         fail("unknown mode");
     }
