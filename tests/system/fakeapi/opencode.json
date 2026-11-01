@@ -1,0 +1,32 @@
+{
+  "protocol": "responses",
+  "steps": [
+    {"refuse": 426},
+    {"turn": {
+      "request": {"model": "gpt-5.5", "store": false},
+      "input": [{"role": "user", "text": "Read notes.txt and do what it says."}],
+      "output": [{"call": "read", "id": "call_read", "arguments": {"path": "notes.txt"}}]}},
+    {"turn": {
+      "input": [{"output_of": "call_read",
+                 "text": ["Read file notes.txt",
+                          "1: Change the greeting in greeting.txt to: hello, rach2"]}],
+      "output": [{"call": "grep", "id": "call_grep", "arguments": {"pattern": "hello, world"}}]}},
+    {"turn": {
+      "input": [{"output_of": "call_grep",
+                 "text": ["Found 1 matches", "@REPO@/greeting.txt:", "Line 1: hello, world"]}],
+      "output": [{"call": "shell", "id": "call_check", "arguments": {"command": "sh check.sh"}}]}},
+    {"turn": {
+      "input": [{"output_of": "call_check",
+                 "text": ["check: FAIL: greeting.txt says hello, world", "Exited with code 1"]}],
+      "output": [{"call": "patch", "id": "call_patch",
+                  "arguments": {"patchText": "*** Begin Patch\n*** Update File: greeting.txt\n@@\n-hello, world\n+hello, rach2\n*** End Patch"}}]}},
+    {"turn": {
+      "input": [{"output_of": "call_patch",
+                 "text": ["Success. Updated the following files:", "M greeting.txt"]}],
+      "output": [{"call": "shell", "id": "call_commit",
+                  "arguments": {"command": "sh check.sh && git commit -q -am 'Greet Rach2' && git log --format=%s -1"}}]}},
+    {"turn": {
+      "input": [{"output_of": "call_commit", "text": ["check: ok", "Greet Rach2"]}],
+      "output": [{"message": "greeting.txt says hello, rach2, check.sh passes, and the change is committed."}]}}
+  ]
+}

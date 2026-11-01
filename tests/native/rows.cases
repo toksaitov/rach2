@@ -78,7 +78,8 @@ case gnu/chromium -- system/gnu_rows.sh chromium x86_64 work=work home=home stag
 
 # Left out, as each row says: what needs the fake API server or QEMU's
 # restricted network. The sessions of agy-print, claude-print, codex-exec
-# play against the fake server (`machine`); interactive sessions use agentsaccept.
+# and opencode-run play against the fake server (`machine`); interactive
+# sessions use agentsaccept.
 case agents/agy ids:1000 file:tests/system/agents/agy.sh -- \
     system/agents_rows.sh agy @agents:agy work=work home=home stage=. machine=native
 case agents/claude ids:1000 file:tests/system/agents/claude.sh -- \
@@ -89,6 +90,8 @@ case agents/gh ids:1000 ports:4433 file:tests/system/agents/gh.sh -- \
     system/agents_rows.sh gh @agents:gh work=work home=home stage=. machine=native
 case agents/muse ids:1000 file:tests/system/agents/muse.sh -- \
     system/agents_rows.sh muse @agents:muse work=work home=home stage=. machine=native
+case agents/opencode ids:1000 file:tests/system/agents/opencode.sh -- \
+    system/agents_rows.sh opencode @agents:opencode work=work home=home stage=. machine=native
 
 case tccbuild.pass -- native/tccbuild.sh pass
 case tccbuild.fail end:exit:1 -- native/tccbuild.sh fail
