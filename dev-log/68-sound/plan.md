@@ -167,7 +167,7 @@ Any OSS program opens `/dev/dsp`; the driver behind it is a stream interface.
 
 ### 4. Jack detection
 
-* Presence polled on the headphone and microphone pins from `hda_tick` every quarter second, counted by `TICK_HZ`, through 1a's safe verb path; pins whose caps require a trigger (bit 3) get the trigger first; a failed read is unknown, not unplugged. Output moves between speaker and headphones, input between the internal and the jack mic while capture runs, on a change seen twice. EAPD off and the pins disabled at `stop`, on again at `start`.
+* Presence polled on the headphone and microphone pins from `hda_tick` every quarter second, counted by `TICK_HZ`, through 1a's safe verb path; pins whose caps require a trigger (bit 1) get the trigger first; a failed read is unknown, not unplugged. Output moves between speaker and headphones, input between the internal and the jack mic while capture runs, on a change seen twice. EAPD off and the pins disabled at `stop`, on again at `start`.
 * The report's jack fields; `proc.5`; the Readme's "Jacks".
 * Tests: host rows over a model codec for switching, debounce, failed reads and switching during capture.
 * Done: the rows pass. The plug on the Lenovo is task 8's.
