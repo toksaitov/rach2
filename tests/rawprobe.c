@@ -13,10 +13,11 @@
  * * `IP_TTL`, the one option traceroute sets, is kept and read back, and the
  *   time-exceeded message a hop limit of one draws arrives on both sockets;
  * * `IP_HDRINCL` is refused rather than accepted and ignored;
- * * a message past the MTU is refused, and one for an address whose hardware
- *   address is not known yet is accepted, since the request has gone and a
- *   datagram promises no delivery;
- * * the queue is eight deep, so of nine replies eight are queued, read once
+ * * a message past the largest datagram's 65515 bytes of payload is refused,
+ *   and one for an address whose hardware address is not known yet is
+ *   accepted, since the request has gone and a datagram promises no delivery;
+ * * the queue holds what SO_RCVBUF allows: at its least, 2304 bytes, three
+ *   replies of 1000 bytes of data of nine are queued, read once
  *   /proc/net/snmp has counted nine ICMP messages received since the queue
  *   was emptied, and 30 seconds of waiting end a wait for replies lost;
  * * eight more raw sockets open at once, and while two children hold full
@@ -73,6 +74,8 @@ typedef unsigned char uint8_t;
 #define IPPROTO_RAW  255
 
 #define SOL_IP     0
+#define SOL_SOCKET 1
+#define SO_RCVBUF  8
 #define IP_TTL     2
 #define IP_HDRINCL 3
 
@@ -477,7 +480,7 @@ static int booted_without_a_route(void)
 
 static uint8_t frame_a[1600];
 static uint8_t frame_b[1600];
-static uint8_t icmp[1600];
+static uint8_t icmp[65516];
 static uint8_t sa[16];
 
 /**
@@ -648,9 +651,9 @@ static void plan_rows(char **envp, int routeless)
     report_plan("echo-both");
     report_plan("ttl-exceeded");
     report_plan("hdrincl-refused");
-    report_plan("mtu-refused");
+    report_plan("size-refused");
     report_plan("unresolved-accepted");
-    report_plan("queue-eight");
+    report_plan("queue-budget");
     if (!probe_native()) {
         report_plan("wire-sends");
     }
@@ -843,15 +846,16 @@ void probe_main(unsigned long *sp)
     check(socketcall(SC_SETSOCKOPT, args) == -ENOPROTOOPT, "IP_HDRINCL is refused");
     row_end();
 
-    /* A message past the MTU is refused by the send itself. */
+    /* A message past the largest datagram is refused by the send itself. */
     sockaddr_for(sa, gateway_ip, 0);
     args[0] = (uint32_t)fd_a;
     args[1] = (unsigned long)icmp;
-    args[2] = 1501;
+    args[2] = sizeof(icmp);
     args[3] = 0;
     args[4] = (unsigned long)sa;
     args[5] = 16;
-    check(socketcall(SC_SENDTO, args) == -EMSGSIZE, "a message past the MTU is refused");
+    check(socketcall(SC_SENDTO, args) == -EMSGSIZE,
+          "a message past the largest datagram is refused");
     row_end();
 
     /* A send to a neighbour whose address is not resolved is accepted. */
@@ -878,18 +882,34 @@ void probe_main(unsigned long *sp)
     check(socketcall(SC_SENDTO, args) == 8, "a send to an unresolved neighbour is not an error");
     row_end();
 
-    /* Nine replies to a queue eight deep: eight are kept. */
+    /*
+     * Nine replies of 1028 bytes to a queue of 2304: each is charged its
+     * bytes and its record's, so three are kept, the third taken while the
+     * two before it hold less than the budget.
+     */
     {
-        int got = 0;
+        int got = 0, len = 0;
         uint32_t base;
 
         sys_close(fd_b);
+        val = 0;
+        args[0] = (uint32_t)fd_a;
+        args[1] = SOL_SOCKET;
+        args[2] = SO_RCVBUF;
+        args[3] = (unsigned long)&val;
+        args[4] = sizeof(int);
+        check(socketcall(SC_SETSOCKOPT, args) == 0, "SO_RCVBUF is set");
+        val = 0;
+        len = sizeof(int);
+        args[4] = (unsigned long)&len;
+        check(socketcall(SC_GETSOCKOPT, args) == 0 && val == 2304,
+              "SO_RCVBUF of 0 reads back as its least, 2304");
         base = drained(args, fd_a);
         check(base != 0xFFFFFFFFu, "/proc/net/snmp has the Icmp counts");
         for (i = 0; i < 9; i++) {
             uint16_t csum;
 
-            for (n = 0; n < 8; n++) {
+            for (n = 0; n < 1008; n++) {
                 icmp[n] = 0;
             }
             icmp[0] = ICMP_ECHO_REQUEST;
@@ -897,17 +917,17 @@ void probe_main(unsigned long *sp)
             icmp[5] = 0x50;
             icmp[6] = 0;
             icmp[7] = (uint8_t)(i + 1);
-            csum = icmp_checksum(icmp, 8);
+            csum = icmp_checksum(icmp, 1008);
             icmp[2] = (uint8_t)(csum >> 8);
             icmp[3] = (uint8_t)(csum & 0xff);
             sockaddr_for(sa, gateway_ip, 0);
             args[0] = (uint32_t)fd_a;
             args[1] = (unsigned long)icmp;
-            args[2] = 8;
+            args[2] = 1008;
             args[3] = 0;
             args[4] = (unsigned long)sa;
             args[5] = 16;
-            check(socketcall(SC_SENDTO, args) == 8, "an echo request leaves");
+            check(socketcall(SC_SENDTO, args) == 1008, "an echo request leaves");
         }
         check(icmp_arrived(base, 9), "nine ICMP messages reach the socket's queue");
         for (i = 0; i < 12; i++) {
@@ -917,7 +937,7 @@ void probe_main(unsigned long *sp)
             }
             got++;
         }
-        check_n(got == 8, "a queue eight deep keeps eight and no more", got);
+        check_n(got == 3, "a queue of 2304 bytes keeps three replies of 1028 and no more", got);
     }
     row_end();
 

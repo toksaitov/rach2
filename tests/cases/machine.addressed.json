@@ -46,7 +46,7 @@
         {"assertion_id": "child-etimedout", "checks": "the child's ping returned ETIMEDOUT", "source": "scenario"},
         {"assertion_id": "wait-floor", "checks": "the child's call lasted at least 3990 ms, four seconds of the kernel's ticks", "source": "scenario"},
         {"assertion_id": "release", "checks": "after the reap the parent's loopback ping returns a round-trip time of 0 or more", "source": "scenario"},
-        {"assertion_id": "data-size", "checks": "a data ping of 1473 bytes, and on x86-64 one of a size past 32 bits, is refused with EMSGSIZE", "source": "scenario"},
+        {"assertion_id": "data-size", "checks": "a data ping of 65508 bytes, and on x86-64 one of a size past 32 bits, is refused with EMSGSIZE", "source": "scenario"},
         {"assertion_id": "powered-off", "checks": "the machine powers off at the debug shell's command after pingtest, so that the capture is whole", "source": "scenario"},
         {"assertion_id": "sent-as-address", "checks": "pcapcheck bcast finds in the capture of the card a packet sent from 10.0.2.77 and an ARP request sent as 10.0.2.77", "source": "scenario"}
       ],

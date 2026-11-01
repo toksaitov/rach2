@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "guest.ping.pingtest",
-      "behavior": "The kernel's ICMP echo gets the gateway's replies, times out at an address nobody answers, sleeps in a wait that holds its one slot, and refuses a data ping past 1472 bytes",
+      "behavior": "The kernel's ICMP echo gets the gateway's replies, times out at an address nobody answers, sleeps in a wait that holds its one slot, and refuses a data ping past 65507 bytes",
       "units": ["ping", "pingtest"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -30,7 +30,7 @@
         {"assertion_id": "child-etimedout", "checks": "the child's ping returned ETIMEDOUT", "source": "program"},
         {"assertion_id": "wait-floor", "checks": "the child's call lasted at least 3990 ms, four seconds of the kernel's ticks", "source": "program"},
         {"assertion_id": "release", "checks": "after the reap the parent's loopback ping returns a round-trip time of 0 or more", "source": "program"},
-        {"assertion_id": "data-size", "checks": "a data ping of 1473 bytes, and on x86-64 one of a size past 32 bits, is refused with EMSGSIZE", "source": "program"}
+        {"assertion_id": "data-size", "checks": "a data ping of 65508 bytes, and on x86-64 one of a size past 32 bits, is refused with EMSGSIZE", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

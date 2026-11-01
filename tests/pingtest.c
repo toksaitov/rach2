@@ -29,7 +29,7 @@
  * round-trip time of 0 or more, which shows that the slot came back, and is
  * the one row in which the loopback echo answers.
  *
- * Last, the data ping (SC_PING_DATA) refuses 1473 bytes of data with
+ * Last, the data ping (SC_PING_DATA) refuses 65508 bytes of data with
  * EMSGSIZE, and on x86-64 a size past 32 bits too, whose low word would be a
  * size it takes.
  *
@@ -440,7 +440,7 @@ static void dead_ping_child(int ready[2])
     sys_exit(rtt == PING_ETIMEDOUT ? 0 : 3);
 }
 
-/** Test 4: a data ping of 1473 bytes, and on x86-64 one of a size past 32
+/** Test 4: a data ping of 65508 bytes, and on x86-64 one of a size past 32
  * bits, is refused with EMSGSIZE. Prints the verdict and returns 1 when the
  * test passed. */
 static int data_ping_refused(void)
@@ -449,7 +449,7 @@ static int data_ping_refused(void)
     int r1, r2 = -EMSGSIZE;
 
     args[0] = gateway_ip;
-    args[1] = 1473;
+    args[1] = 65508;
     args[2] = 64;
     r1 = socketcall(SC_PING_DATA, args);
 #if defined __x86_64__
@@ -466,7 +466,7 @@ static int data_ping_refused(void)
     print(", ");
     print_num(r2);
     puts(")");
-    report_fail("data-size", "a data ping past 1472 bytes was not refused with EMSGSIZE");
+    report_fail("data-size", "a data ping past 65507 bytes was not refused with EMSGSIZE");
     return 0;
 }
 
@@ -617,8 +617,8 @@ void probe_main(unsigned long *sp)
         report_wait_rows();
     }
 
-    /* Test 4: a data ping past its 1472 bytes is refused before it is sent. */
-    print("Test 4: a data ping past 1472 bytes is refused... ");
+    /* Test 4: a data ping past its 65507 bytes is refused before it is sent. */
+    print("Test 4: a data ping past 65507 bytes is refused... ");
     if (data_ping_refused()) {
         passed++;
     } else {
