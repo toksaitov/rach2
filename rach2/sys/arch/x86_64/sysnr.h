@@ -271,8 +271,11 @@
 #define SYS_MLOCK2                 325
 #define SYS_COPY_FILE_RANGE        326
 #define SYS_STATX                  332
+#define SYS_PIDFD_SEND_SIGNAL      424
+#define SYS_PIDFD_OPEN             434
 #define SYS_CLONE3                 435
 #define SYS_CLOSE_RANGE            436
+#define SYS_PIDFD_GETFD            438
 #define SYS_FACCESSAT2             439
 #define SYS_EPOLL_PWAIT2           441
 

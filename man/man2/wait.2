@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 1, 2026
 .Dt WAIT 2
 .Os
 .Sh NAME
@@ -144,7 +144,19 @@ for the children in process group
 .Fa id ,
 the caller's when
 .Fa id
-is 0.
+is 0, and
+.Dv P_PIDFD
+.Pq 3
+for the child the pidfd
+.Fa id
+names, as
+.Xr pidfd_open 2
+describes.
+A pidfd that is non-blocking waits as
+.Dv WNOHANG
+does, and the call fails with
+.Er EAGAIN
+when the child has no event, as on Linux.
 .Fa options
 must have at least one of the events it waits for:
 .Dv WEXITED
@@ -248,12 +260,6 @@ use the
 .Nm wait4
 system call.
 .Ss Differences from Linux
-A pidfd names no child here, since no descriptor is one:
-.Dv P_PIDFD
-.Pq 3
-fails with
-.Er EBADF ,
-as Linux's does for a descriptor that is not a pidfd.
 A wait whose status, siginfo or resource usage pointer cannot be written
 fails with the child's event left in place, before the wait or after it;
 Linux reaps the child and then fails.
@@ -312,19 +318,22 @@ and
 leave, the selection by process ID and process group, and the refusals.
 .Sh ERRORS
 .Bl -tag -width "[ECHILD]"
+.It Bq Er EAGAIN
+.Fn waitid
+was given a non-blocking pidfd whose child has no event.
 .It Bq Er EBADF
 .Fn waitid
 was given
 .Dv P_PIDFD
-with a nonnegative
-.Fa id .
+with a descriptor that is not a pidfd.
 .It Bq Er ECHILD
 No child matches
 .Fa pid ,
 or
 .Fa idtype
 and
-.Fa id .
+.Fa id ;
+a pidfd of a process already reaped matches none.
 .It Bq Er EFAULT
 A nonnull status, siginfo or resource usage pointer does not refer to
 writable user memory; the child's event is left for a later wait.

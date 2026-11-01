@@ -650,6 +650,8 @@ long sys_rt_sigqueueinfo(isr_params_t *params);
 
 long sys_rt_tgsigqueueinfo(isr_params_t *params);
 
+long sys_pidfd_send_signal(isr_params_t *params);
+
 long sys_signalfd(isr_params_t *params);
 
 long sys_signalfd4(isr_params_t *params);

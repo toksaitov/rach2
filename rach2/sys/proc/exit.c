@@ -37,9 +37,10 @@
  * adjustments, detaches its tracees, ends the rest of a PID namespace whose
  * init it is, gives the children to init, and gives the process its
  * status, the group's when exit_group or a fatal signal ended it and the
- * leader's own otherwise. It then tells the parent; or, when a process
- * other than the parent traces the leader, the tracer, whose wait reports
- * the end first and then tells the parent (`ptrace_exit_release`).
+ * leader's own otherwise. It wakes the pidfds polled for the process's
+ * end, and then tells the parent; or, when a process other than the parent
+ * traces the leader, the tracer, whose wait reports the end first and then
+ * tells the parent (`ptrace_exit_release`).
  */
 int proc_exit_cleanup(int32_t status)
 {
@@ -77,6 +78,7 @@ int proc_exit_cleanup(int32_t status)
         wq_wake_all(&tg->gone);
         return 0;
     }
+    wq_wake_all(&tg->exited);
     if ((leader->ptrace & PT_TRACED) && leader->tracer != leader->parent_pid) {
         if (leader != self) {
             ptrace_exit_notify(leader);

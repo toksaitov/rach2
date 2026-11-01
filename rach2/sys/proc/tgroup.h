@@ -93,6 +93,10 @@ struct tgroup {
      * rather than to init (`reparent_children`). A fork starts at 0 and an
      * exec keeps it, as on Linux. */
     uint32_t child_subreaper;
+    /* The pidfds polled for the process's end, which the last thread's end
+     * wakes (`pidfd.h`). A pidfd holds a reference to the group, so the
+     * queue outlives the process's record. */
+    wait_queue_t exited;
 };
 
 /** A new group with `leader` as its one thread; NULL when the heap has no
