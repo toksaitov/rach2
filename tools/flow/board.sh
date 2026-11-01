@@ -17,6 +17,7 @@
 #        board.sh check [HELD...]
 #        board.sh archive M
 #        board.sh milestones
+#        board.sh watch [FILE]
 #
 # A milestone is a GitHub milestone, and its description names its branch on
 # its first line that begins `Branch:`, as `Branch: NAME`; backquotes and
@@ -121,6 +122,23 @@
 # The closed tasks it counts are those on the board, which keeps them until
 # the release archives them, so that it reads no closed issue that the board
 # does not hold.
+#
+# `watch [FILE]` runs until it is stopped and prints a line for each event on
+# an issue the board holds, one in an open milestone or labelled `owner`,
+# `owner-only` or `bug`, as it reads them: `#N: comment: LOGIN: LINE` for a
+# new comment, LINE being its first line that is not blank, and `#N: EVENT:
+# LOGIN: TITLE` for EVENT `closed`, `reopened`, `labeled owner`, `unlabeled
+# owner`, the same two for `owner-only`, and `handed back`, an account's
+# removal of itself from an open issue whose Status it set since it was
+# assigned, as `release` does; a `take` that loses its race sets none.
+# LOGIN is the account that made the event. It reads the repository's issue
+# events and comments every BOARD_POLL seconds, thirty unless it is set and
+# never fewer, and starts from the newest of each, so that it prints nothing
+# that came before it. FILE, when given, keeps the ids of the last event and
+# comment read, so that a watch started again with it goes on where the last
+# one stopped; its directory is made when it is missing. A read that fails
+# is said on stderr and made again at the next poll, which reads from the
+# same place.
 #
 # The repository and the board's owner and number are below. The board's
 # owner is the owner's account, the one that may take an issue labelled
@@ -643,6 +661,136 @@ milestones()
         }'
 }
 
+# US is the ASCII unit separator, which parts the fields of `news`; a tab
+# would not do, since `read` joins tabs around an empty field.
+US=$(printf '\037')
+
+# BOARDED is the jq filter that is true when the issue `.` is on the board: not
+# a pull request, and in an open milestone or labelled `owner`, `owner-only`
+# or `bug`.
+BOARDED='(.pull_request == null and ((.milestone.state // "") == "open" or
+    any(.labels[]; .name == "owner" or .name == "owner-only" or .name == "bug")))'
+
+# newest: print the ids of the repository's newest issue event and newest
+# issue comment, or fail.
+newest()
+{
+    newest_e=$(gh api "repos/$REPO/issues/events?per_page=1" --jq '.[0].id // 0') &&
+        newest_c=$(gh api "repos/$REPO/issues/comments?sort=created&direction=desc&per_page=1" \
+            --jq '.[0].id // 0') &&
+        [ -n "$newest_e" ] && [ -n "$newest_c" ] &&
+        echo "$newest_e $newest_c"
+}
+
+# news E C: print, oldest first, each issue event with an id above E and each
+# issue comment with an id above C, as fields parted by US: the time in
+# seconds, `e` or `c`, the id, the event, the actor, the issue's number, a
+# flag that is 1 when the issue is on the board (always 1 for a comment, which
+# carries no issue), the issue's state, the label or the assignee the event
+# names, and the issue's title or the comment's first line. Both lists come
+# newest first, so pages are read until one holds an id at or below the mark,
+# ten at most. Fail when a page cannot be read.
+news()
+{
+    news_e=$1 news_c=$2 news_p=1 news_out=
+    while [ "$news_p" -le 10 ]; do
+        news_got=$(gh api "repos/$REPO/issues/events?per_page=100&page=$news_p" --jq '
+            .[] | select(.id > '"$news_e"') |
+            [(.created_at | fromdateiso8601 | tostring), "e", (.id | tostring),
+             .event, (.actor.login // "ghost"), (.issue.number | tostring),
+             (if (.issue | '"$BOARDED"') or
+                 ((.label.name // "") | test("^owner(-only)?$")) then "1" else "0" end), .issue.state,
+             (.label.name // .assignee.login // ""), .issue.title] |
+            map(gsub("[\u001f\n\r]"; " ")) | join("\u001f")') || return 1
+        news_out=$news_out${news_got:+$news_got
+}
+        [ "$(printf '%s\n' "$news_got" | grep -c .)" -eq 100 ] || break
+        news_p=$((news_p + 1))
+    done
+    news_p=1
+    while [ "$news_p" -le 10 ]; do
+        news_got=$(gh api "repos/$REPO/issues/comments?sort=created&direction=desc&per_page=100&page=$news_p" --jq '
+            .[] | select(.id > '"$news_c"') |
+            [(.created_at | fromdateiso8601 | tostring), "c", (.id | tostring),
+             "comment", (.user.login // "ghost"),
+             (.issue_url | split("/") | last), "1", "", "",
+             ((.body // "") | gsub("\r"; "") | split("\n") | map(select(test("\\S"))) |
+                 first // "")] |
+            map(gsub("[\u001f\n\r]"; " ")) | join("\u001f")') || return 1
+        news_out=$news_out${news_got:+$news_got
+}
+        [ "$(printf '%s\n' "$news_got" | grep -c .)" -eq 100 ] || break
+        news_p=$((news_p + 1))
+    done
+    printf '%s' "$news_out" | sort -t "$US" -k 1,1n -k 3,3n
+}
+
+# handed N LOGIN ID: succeed when LOGIN, between its latest assignment to N
+# before the event ID and that event, set N's Status, as `release` does
+# before it unassigns and `take` does once it has won N. A `take` that loses
+# the race for N unassigns its account without setting a Status. A timeline
+# that cannot be read counts as a hand-back, so that none is missed.
+handed()
+{
+    handed_ev=$(gh api --paginate "repos/$REPO/issues/$1/events?per_page=100" --jq '
+        .[] | select(.actor.login == "'"$2"'" and .id < '"$3"') |
+        if .event == "assigned" and .assignee.login == "'"$2"'" then "a \(.id)"
+        elif .event == "project_v2_item_status_changed" then "s \(.id)"
+        else empty end') || return 0
+    printf '%s\n' "$handed_ev" | awk '
+        $1 == "a" && $2 > a { a = $2 }
+        $1 == "s" && $2 > s { s = $2 }
+        END { exit !(s > a) }'
+}
+
+# say N EVENT LOGIN TEXT: print the line `#N: EVENT: LOGIN: TEXT`.
+say()
+{
+    printf '#%s: %s: %s: %s\n' "$1" "$2" "$3" "$4"
+}
+
+watch()
+{
+    poll=${BOARD_POLL:-30}
+    [ "$poll" -ge 30 ] 2> /dev/null || poll=30
+    marks=
+    [ -z "$1" ] || mkdir -p "$(dirname "$1")"
+    [ -z "$1" ] || [ ! -s "$1" ] || marks=$(cat "$1")
+    until [ -n "$marks" ] || marks=$(newest); do
+        echo "board: watch: cannot read the newest events; trying again" >&2
+        sleep "$poll"
+    done
+    [ -z "$1" ] || echo "$marks" > "$1"
+    while :; do
+        sleep "$poll"
+        set -- "$1" $marks
+        if ! got=$(news "$2" "$3"); then
+            echo "board: watch: cannot read the events; trying again" >&2
+            continue
+        fi
+        e=$2 c=$3
+        while IFS=$US read -r at kind id event who n boarded state what text; do
+            [ -n "$id" ] || continue
+            case $kind in e) e=$id ;; c) c=$id ;; esac
+            [ "$kind" = e ] && [ "$boarded" != 1 ] && continue
+            [ "$kind" = c ] && { gh api "repos/$REPO/issues/$n" --jq "$BOARDED" 2> /dev/null |
+                grep -qx false; } && continue
+            case $event in
+                comment|closed|reopened) say "$n" "$event" "$who" "$text" ;;
+                labeled|unlabeled)
+                    case $what in owner|owner-only) say "$n" "$event $what" "$who" "$text" ;; esac ;;
+                unassigned)
+                    [ "$who" = "$what" ] && [ "$state" = open ] && handed "$n" "$who" "$id" &&
+                        say "$n" "handed back" "$who" "$text" ;;
+            esac
+        done <<END
+$got
+END
+        marks="$e $c"
+        [ -z "$1" ] || echo "$marks" > "$1"
+    done
+}
+
 case "$1" in
     next) next ;;
     take) [ -n "$2" ] || exit 2; board_ids=$(ids); take "$2" ;;
@@ -661,5 +809,6 @@ case "$1" in
     check) shift; check "$@" ;;
     archive) [ -n "$2" ] || exit 2; archive "$2" ;;
     milestones) milestones ;;
+    watch) watch "$2" ;;
     *) sed -n 's/^# Usage: /usage: /p; s/^#        /       /p' "$0" >&2; exit 2 ;;
 esac
