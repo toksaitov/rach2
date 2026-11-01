@@ -7,14 +7,23 @@
 # GPL version 3, so there is no READLINE address, as on Debian. configure
 # runs test programs, which a cross build cannot run; CACHE gives glibc's
 # answers on x86: C99's snprintf, printf's Z modifier, and the bit offsets of
-# the masks CRDLY, TABDLY and CSIZE in a termios flag word. make install
-# copies the release's three scripts from the build directory, so
+# the masks CRDLY, TABDLY and CSIZE in a termios flag word. socat and procan
+# print the date they were built, which port_build sets to the date of the
+# release's VERSION file, so that two builds of the root are alike. make
+# install copies the release's three scripts from the build directory, so
 # port_install puts them there first.
 VERSION=1.8.1.3
 DEBIAN=socat-debian
 DEPENDS=openssl
 CACHE="ac_cv_have_c99_snprintf=yes ac_cv_have_z_modifier=yes sc_cv_sys_crdly_shift=9 sc_cv_sys_tabdly_shift=11 sc_cv_sys_csize_shift=4"
 CONFIGURE_ARGS="--disable-readline --disable-libwrap"
+
+port_build()
+{
+    CACHE="$CACHE SOURCE_DATE_EPOCH=$(date -u -r "$SRC/VERSION" +%s)"
+    configure_autoconf
+    make
+}
 
 port_install()
 {
