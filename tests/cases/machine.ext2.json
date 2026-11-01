@@ -664,7 +664,7 @@
         {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
       ],
       "timing": [
-        {"kind": "injected_delay", "where": "rach2/sys/block/lag.c:222-223", "assumes": "the lag device answers each request of disk 0's partitions three kernel ticks late as the stimulus, so that a writer's sync holds the root's lock while it sleeps and the others wait in its line; the case judges the records of the shutdown, never elapsed time", "uncertainty_us": null}
+        {"kind": "injected_delay", "where": "rach2/sys/block/lag.c:228-229", "assumes": "the lag device answers each request of disk 0's partitions three hundredths of a second late as the stimulus, so that a writer's sync holds the root's lock while it sleeps and the others wait in its line; the case judges the records of the shutdown, never elapsed time", "uncertainty_us": null}
       ],
       "native": {"plan": "none", "class": "boot", "reason": "the lag device over disk 0 is set on the kernel's boot line, and the case stops the machine"}
     },

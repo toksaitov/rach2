@@ -413,11 +413,11 @@ static int in_order(const struct stat64 *a, const struct stat64 *b)
     return probe_native() || time_not_before(a, b);
 }
 
-/** Whether the modification time has a part below the 10 ms tick of at
+/** Whether the modification time has a part below the 1 ms tick of at
  * least a microsecond. */
 static int below_tick(const struct stat64 *s)
 {
-    return s->st_mtime_nsec % 10000000u >= 1000u;
+    return s->st_mtime_nsec % 1000000u >= 1000u;
 }
 
 /* The assertions of the time rows, in the order of their checks. */
@@ -447,7 +447,7 @@ static void report_time(int stage)
                                       "the second write's modification time is before the first's",
                                       "a utimensat stamp or the stat after it failed",
                                       "a stamp's modification time is before the one before it",
-                                      "no modification time has a part below the 10 ms tick",
+                                      "no modification time has a part below the 1 ms tick",
                                       "explicit times did not keep their fractions"};
     int i;
 
@@ -492,7 +492,7 @@ static int stamp_rows(const char *const paths[2], struct stat64 *previous, int *
 /**
  * The time rows; 1 when they passed. KRFFS keeps nanoseconds and the clock
  * adds the timer's place within the tick, so stamps taken back to back never
- * go back and carry a part below the 10 ms tick, which a clock of whole
+ * go back and carry a part below the 1 ms tick, which a clock of whole
  * ticks never gives. They may repeat: a reading that would fall back, as
  * after interrupts were off for longer than a timer period, is given as the
  * last reading again (`rtc_realtime`). No delay separates the first two

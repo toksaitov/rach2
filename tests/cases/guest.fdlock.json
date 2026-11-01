@@ -1180,8 +1180,8 @@
       "timing": [
         {
           "kind": "injected_delay",
-          "where": "rach2/sys/block/lag.c:222-223",
-          "assumes": "the lag device postpones completions by ten kernel ticks as the stimulus; the probe witnesses pending requests and judges their offsets, never elapsed time",
+          "where": "rach2/sys/block/lag.c:228-229",
+          "assumes": "the lag device postpones completions by a tenth of a second as the stimulus; the probe witnesses pending requests and judges their offsets, never elapsed time",
           "uncertainty_us": null
         }
       ],

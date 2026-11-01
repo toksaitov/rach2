@@ -3,10 +3,11 @@
  *
  * `lagprobe sleep`, under `rach2.blocklag=N`: a child counts time in 10 ms
  * steps and feeds a pipe while the parent reads 64 KiB from `/dev/disk0p1`,
- * which the lag device answers N ticks late per request. The read succeeding
- * proves the path; the bytes in the pipe prove the parent slept while the
- * child ran; the lag device's count of sixteen late answers proves the lag
- * was taken on each page, and the elapsed time is printed.
+ * which the lag device answers N hundredths of a second late per request.
+ * The read succeeding proves the path; the bytes in the pipe prove the
+ * parent slept while the child ran; the lag device's count of sixteen late
+ * answers proves the lag was taken on each page, and the elapsed time is
+ * printed.
  *
  * `lagprobe write`, under the lag: a sector written to /dev/bootpart and
  * read back, each through the lag.
@@ -247,10 +248,11 @@ static void run_sleep(void)
     puts("LAGPROBE OK");
 }
 
-#define DEADLINE_TICKS 500
+/* The deadline's five seconds in the kernel's ticks, at 1000 Hz. */
+#define DEADLINE_TICKS 5000
 
 /**
- * The deadline row. The lag is 700 ticks, the deadline 500: each read must
+ * The deadline row. The lag is seven seconds, the deadline five: each read must
  * fail with EIO because the deadline quarantined its request, which the
  * block layer counts, and not because the lag answered, which would have
  * returned the sector; and each request must have been in flight for the
@@ -259,8 +261,8 @@ static void run_sleep(void)
  * least one quarantine and one release must be the read's own; the boot's
  * own lagged requests and their late answers may land inside the window
  * too, so an exact count would depend on the timing. The second read comes
- * after the late completion has freed the quarantined slot, 200 ticks after
- * the deadline.
+ * after the late completion has freed the quarantined slot, two seconds
+ * after the deadline.
  */
 static void run_deadline(void)
 {

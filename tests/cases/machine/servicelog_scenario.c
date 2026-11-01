@@ -18,8 +18,9 @@
 static const char shell_up[] = "servicelog: shell up";
 
 /* The orphans timed, and how many of them init must reap within REAP_TICKS
- * of the tick they were first seen dead in; the rest allow for a tick the
- * host delivered late, which the kernel counts as several. */
+ * hundredths of a second, /proc/uptime's unit, of the reading they were
+ * first seen dead in; the rest allow for a tick the host delivered late,
+ * which the kernel counts as several. */
 #define ORPHANS    10
 #define REAP_TICKS 2
 #define REAP_FAST  8
@@ -51,14 +52,14 @@ static int command(struct lc *l, struct etude_case_machine *m, uint64_t *at, con
 }
 
 /**
- * Time init's reaping of ORPHANS orphans by the kernel's tick, which
- * /proc/uptime shows in hundredths of a second. Each is a `sleep 1` whose
+ * Time init's reaping of ORPHANS orphans by /proc/uptime, in hundredths of
+ * a second. Each is a `sleep 1` whose
  * subshell has ended; the shell reads its stat file without forking until
  * it is gone, noting the uptime when it is first seen a zombie and when it
  * is gone, and prints the pairs after `REAPS=`. An orphan never seen a
  * zombie was reaped as it ended. Init reaps on SIGCHLD, so the two readings
- * are a tick or so apart; an init that looked for its children once a
- * second would leave most of them some fifty ticks apart.
+ * are a hundredth or so apart; an init that looked for its children once a
+ * second would leave most of them some fifty hundredths apart.
  */
 static void reap(struct lc *l, struct etude_case_machine *m, uint64_t *at)
 {
@@ -94,11 +95,11 @@ static void reap(struct lc *l, struct etude_case_machine *m, uint64_t *at)
         if (ticks > worst)
             worst = ticks;
     }
-    printf("servicelog: init reaped %d of %d orphans within %d ticks, the slowest in %d\n", fast,
-           timed, REAP_TICKS, worst);
+    printf("servicelog: init reaped %d of %d orphans within %d hundredths, the slowest in %d\n",
+           fast, timed, REAP_TICKS, worst);
     snprintf(detail, sizeof(detail),
-             "init reaped %d of %d orphans within %d ticks of their end, the slowest in %d", fast,
-             timed, REAP_TICKS, worst);
+             "init reaped %d of %d orphans within %d hundredths of their end, the slowest in %d",
+             fast, timed, REAP_TICKS, worst);
     lc_assert(l, "reaped", timed == ORPHANS && fast >= REAP_FAST, detail);
 }
 
