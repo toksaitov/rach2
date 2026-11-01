@@ -1370,7 +1370,7 @@ static void row_capture_overrun(void)
     move_input(4096 * 2 + 100);
     clock_value += 24000 * 44;
     hda_tick();
-    check(got_transfers == 2 && in->overruns == 0, "a service on time");
+    check(got_transfers == 2 && in->overruns == 0 && s.lost == 0, "a service on time");
     move_input(4096 * 3);
     clock_value += 24000 * (21 + 341);
     hda_tick();
@@ -1379,16 +1379,19 @@ static void row_capture_overrun(void)
           "every period but the one being written is handed over");
     check(hda_driver.stream_position(&s) == 3 * 1024 + 16 * 1024,
           "the position counts the revolution");
+    check(s.lost == 2 * 1024, "the two periods neither handed over nor written are lost");
     move_input(4096 * 3 + 2000);
     clock_value += 24000 * 10;
     hda_tick();
-    check(got_transfers == 17 && in->overruns == 1, "a service within a period hands over none");
+    check(got_transfers == 17 && in->overruns == 1 && s.lost == 2 * 1024,
+          "a service within a period hands over none and loses none");
     /* 64036 bytes on, 16009 frames: 334 ms, less than a revolution. */
     move_input(4096 * 3 + 500);
     clock_value += 24000 * 334;
     hda_tick();
     check(in->overruns == 2, "the device come round to the next period is an overrun");
     check(got_transfers == 17 + 15, "and the newest revolution is handed over");
+    check(s.lost == 3 * 1024, "the period it overwrote is lost");
     hda_driver.stream_close(&s);
     clock_stopped = 0;
 }

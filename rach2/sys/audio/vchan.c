@@ -600,6 +600,9 @@ static struct {
     int running;
     int loopback;
     uint32_t frames; /* hardware input frames already handed to the readers */
+    uint32_t lost;   /* the input's `lost` the feed has taken into account;
+                        `frames` plus `lost` is where on the device's
+                        timeline the frames handed over end */
     struct spinlock lock;
 } input;
 
@@ -628,28 +631,56 @@ static void vchan_clock_period(audio_stream_t *s)
     (void)s;
 }
 
+/** Stage the input frame `sample`, left and right, in reader `r`'s format,
+ * and hand its period over and announce it when the frame completes it.
+ * The caller holds input.lock. */
+static void vchan_capture_put(struct vchan_reader *r, const int16_t *sample)
+{
+    int value, ch;
+
+    for (ch = 0; ch < r->s->channels; ch++) {
+        value = r->s->channels == 1 ? ((int)sample[0] + sample[1]) / 2 : sample[ch];
+        if (r->s->format == AUDIO_U8) {
+            r->buffer[r->used++] = (uint8_t)((value + 32768) / 256);
+        } else {
+            r->buffer[r->used++] = (uint8_t)((uint16_t)value & 255u);
+            r->buffer[r->used++] = (uint8_t)((uint16_t)value >> 8);
+        }
+    }
+    r->frames++;
+    if (r->used == r->s->period_bytes) {
+        r->s->transfer(r->s, r->buffer, r->used);
+        r->used = 0;
+        r->s->period(r->s);
+    }
+}
+
 /**
  * Convert the input frames at `buf` into each running reader's format and
  * rate. Each input frame is repeated or omitted by the reader's rational
  * phase, and each complete reader period is handed over and announced.
+ * Frames the device lost since the last call were among those a reader
+ * that joined meanwhile was to skip, so they count against its skip.
  * Loopback feeds the clipped playback mix; a real input calls this from
  * its interrupt. No caller may call the driver back from either callback.
  */
 static void vchan_capture_feed(audio_stream_t *s, uint8_t *buf, size_t size)
 {
     struct vchan_reader *r;
-    uint32_t flags, i, n, frame;
+    uint32_t flags, i, n, frame, lost;
     int16_t sample[2];
-    int value, ch;
 
     if (!input.running || (input.loopback ? s != &mix.stream : s != &input.stream))
         return;
     flags = spin_lock_irqsave(&input.lock);
     frame = vchan_frame_bytes(s);
     n = (uint32_t)size / frame;
+    lost = input.loopback ? 0 : s->lost - input.lost;
+    input.lost += lost;
     for (r = input.list; r; r = r->next) {
         if (!r->running)
             continue;
+        r->skip -= r->skip < lost ? r->skip : lost;
         i = r->skip < n ? r->skip : n;
         r->skip -= i;
         for (; i < n; i++) {
@@ -657,21 +688,7 @@ static void vchan_capture_feed(audio_stream_t *s, uint8_t *buf, size_t size)
             r->phase += r->s->rate;
             while (r->phase >= s->rate) {
                 r->phase -= s->rate;
-                for (ch = 0; ch < r->s->channels; ch++) {
-                    value = r->s->channels == 1 ? ((int)sample[0] + sample[1]) / 2 : sample[ch];
-                    if (r->s->format == AUDIO_U8) {
-                        r->buffer[r->used++] = (uint8_t)((value + 32768) / 256);
-                    } else {
-                        r->buffer[r->used++] = (uint8_t)((uint16_t)value & 255u);
-                        r->buffer[r->used++] = (uint8_t)((uint16_t)value >> 8);
-                    }
-                }
-                r->frames++;
-                if (r->used == r->s->period_bytes) {
-                    r->s->transfer(r->s, r->buffer, r->used);
-                    r->used = 0;
-                    r->s->period(r->s);
-                }
+                vchan_capture_put(r, sample);
             }
         }
     }
@@ -782,21 +799,29 @@ static int vchan_capture_setup(audio_stream_t *s)
     return 0;
 }
 
-/** Start reader `s`, starting the shared input only for its first running
- * reader. 0, -EIO, or the device's error. */
+/**
+ * Start reader `s`, starting the shared input only for its first running
+ * reader. 0, -EIO, or the device's error.
+ *
+ * A reader that joins a running input skips the frames the device recorded
+ * before it joined and has not handed over yet: those from where the frames
+ * handed over end on the device's timeline, past the ones an overrun lost,
+ * to the device's position.
+ */
 static int vchan_capture_start(audio_stream_t *s)
 {
     struct vchan_reader *r = vchan_reader_find(s);
-    uint32_t flags, frames, n;
+    uint32_t flags, frames, n, handed;
     int rc = 0;
 
     if (!r)
         return -EIO;
     r->at = input.running && !input.loopback ? input.hw->stream_position(&input.stream) : 0;
     flags = spin_lock_irqsave(&input.lock);
-    if (input.running && !input.loopback && (int32_t)(input.frames - r->at) > 0)
-        r->at = input.frames;
-    r->skip = input.running && !input.loopback ? r->at - input.frames : 0;
+    handed = input.frames + input.lost;
+    if (input.running && !input.loopback && (int32_t)(handed - r->at) > 0)
+        r->at = handed;
+    r->skip = input.running && !input.loopback ? r->at - handed : 0;
     r->running = 1;
     r->phase = r->frames = r->used = 0;
     frames = input.running ? (input.loopback ? input.frames : r->at) % input.stream.rate : 0;
@@ -809,6 +834,8 @@ static int vchan_capture_start(audio_stream_t *s)
     spin_unlock_irqrestore(&input.lock, flags);
     if (!input.running) {
         input.frames = 0;
+        input.lost = 0;
+        input.stream.lost = 0;
         input.running = 1;
         rc = input.loopback ? vchan_start(&input.clock) : input.hw->stream_start(&input.stream);
         if (rc != 0) {

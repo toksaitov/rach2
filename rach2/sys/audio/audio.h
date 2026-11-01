@@ -72,6 +72,9 @@ typedef struct audio_stream {
     uint32_t period_bytes;   /* bytes of one period, a whole number of frames */
     uint32_t periods;        /* periods in the caller's buffer, at least 2 */
     uint32_t device_periods; /* periods in the driver's buffer, at least 1 */
+    uint32_t lost;           /* capture: frames recorded since the start that
+                                an overrun dropped before they were handed
+                                over, set before the next `transfer` */
     void (*transfer)(struct audio_stream *s, uint8_t *buf, size_t size);
     void (*period)(struct audio_stream *s);
     void *owner; /* the caller's, for `transfer` and `period` */

@@ -4071,6 +4071,9 @@ static void hda_service_capture(void)
     cap_recorded += (moved + laps * buf) / cap_frame;
     cap_pos = pos;
     cap_clock = now;
+    /* The frames up to period `cur` that are neither handed nor to be. */
+    s->lost = cap_recorded - pos % cap_period / cap_frame - cap_handed -
+              (cur + cap_periods - cap_next) % cap_periods * (cap_period / cap_frame);
     while (cap_next != cur) {
         const uint8_t *src = cap_buffer + cap_next * cap_period;
 
@@ -4307,6 +4310,7 @@ static int hda_capture_start(audio_stream_t *s)
     cap_pos = 0;
     cap_recorded = 0;
     cap_handed = 0;
+    s->lost = 0;
     cap_clock = hda_read32(HDA_WALCLK);
     cap_running = true;
     hda_report.input.running = true;

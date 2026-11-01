@@ -427,6 +427,16 @@ static int32_t open_other(void)
     return dspdev_open(&other, 1);
 }
 
+/** Open /dev/dsp for reading on `other`. */
+static int32_t open_other_reader(void)
+{
+    k_memset(&other, 0, sizeof(other));
+    k_memset(&other_description, 0, sizeof(other_description));
+    other.ofd = &other_description;
+    other_description.refcount = 1;
+    return dspdev_open(&other, 0);
+}
+
 /** Swap `entry` and `other`, so that the helpers reach the other open. */
 static void swap_opens(void)
 {
@@ -1461,6 +1471,61 @@ static void row_two_readers(void)
     check(cap.stops == 1 && cap.closes == 1, "last reader releases the input");
 }
 
+/**
+ * A reader that joins after an overrun skips only what the device recorded
+ * before it joined and had not handed over: the frames the overrun lost lie
+ * behind it on the device's timeline, so it reads the next period recorded.
+ * One that joins while a period is in flight, which a later overrun loses,
+ * reads the period after it, which it was not to skip.
+ */
+static void row_reader_after_overrun(void)
+{
+    uint8_t second[1024];
+    struct wait_queue *wq;
+    uint32_t n, pf, fresh;
+
+    begin("reader after overrun");
+    check(open_dsp(0) == 0, "first reader");
+    cd_quality();
+    check(take(1024) == 1024, "the first reader's first period");
+    n = cap.s->period_bytes;
+    pf = n / frame_bytes(cap.s);
+    check(n == sizeof(second), "the input's period is a reader's");
+    cap.at += 3 * n; /* an overrun loses three periods */
+    cap.position += 3 * pf;
+    cap.s->lost += 3 * pf;
+    cap.position += pf; /* and the device records one it has not handed over */
+    check(open_other_reader() == 0, "second reader");
+    swap_opens();
+    cd_quality();
+    check(dspdev_poll(&entry, POLLIN, &wq) == 0, "the second reader starts");
+    swap_opens();
+    cap.position -= pf;
+    cap_tick();
+    fresh = cap.at;
+    cap_tick();
+    check(dspdev_read(&other, (char __user *)second, n) == (int32_t)n &&
+              memcmp(second, pattern + fresh, n) == 0,
+          "it skips the period in flight and reads the next one recorded");
+    dspdev_close(&other);
+
+    cap.position += pf; /* a period in flight */
+    check(open_other_reader() == 0, "a third reader");
+    swap_opens();
+    cd_quality();
+    check(dspdev_poll(&entry, POLLIN, &wq) == 0, "the third reader starts");
+    swap_opens();
+    cap.at += n; /* which an overrun loses */
+    cap.s->lost += pf;
+    fresh = cap.at;
+    cap_tick();
+    check(dspdev_read(&other, (char __user *)second, n) == (int32_t)n &&
+              memcmp(second, pattern + fresh, n) == 0,
+          "the lost period counts against its skip, and it reads the next");
+    dspdev_close(&other);
+    close_dsp();
+}
+
 /** A second reader converts stereo input to mono at half the rate without
  * changing the first reader's setup or samples. */
 static void row_reader_conversion(void)
@@ -1617,6 +1682,7 @@ int main(void)
     row_resampling();
     row_close_while_playing();
     row_two_readers();
+    row_reader_after_overrun();
     row_reader_conversion();
     row_process_pcm();
     row_console_client();
