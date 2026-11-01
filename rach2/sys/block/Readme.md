@@ -95,7 +95,7 @@ A transfer uses the controller's bus master when it has one (programming interfa
 
 A channel takes one command at a time. A caller that can sleep owns the channel from its first register write to its last and sleeps on the channel's queue while another owns it. A page fault with interrupts off cannot wait for an owner that cannot run; it waits for the drive to be idle and uses the data port, which touches none of the bus master's registers. For the same reason the owner issues its DMA command and starts the engine with interrupts off, and every data-port sequence runs with interrupts off, so no caller finds a command not yet started or a transfer in its data phase.
 
-A wait reads the status 8 times, then sleeps when it can (interrupts on, inside a system call, the scheduler running), woken by the channel's interrupt and by `ata_tick`, and fails with `EIO` after `ATA_WAIT_TICKS`, 3000 ticks, 30 seconds. Where it cannot sleep no tick bounds it, so it counts: 256 plain reads, then up to 200,000 rounds of 10,000 `pause` instructions and a read. Under a hypervisor each status read takes the emulator's lock, and the pause leaves it free to complete the command.
+A wait reads the status 8 times, then sleeps when it can (interrupts on, inside a system call, the scheduler running), woken by the channel's interrupt and by `ata_tick`, and fails with `EIO` after `ATA_WAIT_TICKS`, 30 seconds of ticks. Where it cannot sleep no tick bounds it, so it counts: 256 plain reads, then up to 200,000 rounds of 10,000 `pause` instructions and a read. Under a hypervisor each status read takes the emulator's lock, and the pause leaves it free to complete the command.
 
 ### AHCI
 
