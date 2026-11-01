@@ -257,6 +257,9 @@ void ip_hold_forget(struct netdev *nd)
 #define LOOP_RING_SLOTS 64u
 static uint8_t loop_ring[LOOP_RING_SLOTS][IP_HDR_SIZE + 1500];
 static uint16_t loop_ring_len[LOOP_RING_SLOTS];
+/* The card an IPv6 datagram is delivered as received by, or 0 for `lo`
+ * (`ip_loop_put_on`). */
+static int loop_ring_if[LOOP_RING_SLOTS];
 
 /* Datagrams the ring had no room for. Only the first drop is logged, as
  * `loop_drop_logged` records: a line for each would wrap the kernel log and
@@ -303,11 +306,16 @@ static struct netdev *ip_broadcast_iface(uint32_t dst)
     return netdev_first();
 }
 
+int ip_loop_put(const uint8_t *dgram, uint16_t total_len)
+{
+    return ip_loop_put_on(dgram, total_len, 0);
+}
+
 /**
  * The ring's slots hold an IPv4 datagram of the largest size `ip_tx_from`
  * sends, which also holds every IPv6 datagram `ip6_tx` sends.
  */
-int ip_loop_put(const uint8_t *dgram, uint16_t total_len)
+int ip_loop_put_on(const uint8_t *dgram, uint16_t total_len, int ifindex)
 {
     uint32_t slot;
 
@@ -325,6 +333,7 @@ int ip_loop_put(const uint8_t *dgram, uint16_t total_len)
     slot = loop_head % LOOP_RING_SLOTS;
     k_memcpy(loop_ring[slot], dgram, total_len);
     loop_ring_len[slot] = total_len;
+    loop_ring_if[slot] = ifindex;
     loop_head++;
     if (netdev_loopback()) {
         netdev_loopback()->tx_packets++;
@@ -550,7 +559,7 @@ void ip_loop_drain_from(int from)
             netdev_loopback()->rx_bytes += loop_ring_len[slot];
         }
         if ((loop_ring[slot][0] >> 4) == 6) {
-            ip6_rx(0, loop_ring[slot], loop_ring_len[slot]);
+            ip6_loop_rx(loop_ring_if[slot], loop_ring[slot], loop_ring_len[slot]);
         } else {
             ip_rx(loop_ring[slot], loop_ring_len[slot], 1);
         }

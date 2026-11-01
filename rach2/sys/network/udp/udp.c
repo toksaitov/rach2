@@ -13,6 +13,7 @@
 #include "../socket/socket.h"
 #include "../ip/ip.h"
 #include "../ip6/ip6.h"
+#include "../driver/netdev.h"
 #include "../core/byteorder.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
@@ -153,7 +154,8 @@ void udp_unbind(struct socket *sock)
  * socket that is merely listening. The payload goes to `socket_udp_deliver`
  * with the sender's address and port.
  */
-static int udp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *data, uint16_t len)
+static int udp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *data, uint16_t len,
+                       const struct net_rxinfo *info)
 {
     uint16_t dst_port, udp_len, payload_len;
 
@@ -185,7 +187,8 @@ static int udp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *data
             if (cand->connected) {
                 if (net_addr_equal(cand->remote_ip, src_ip) && cand->remote_port == src_port) {
                     net_mib.udp_in_datagrams++;
-                    socket_udp_deliver(cand, src_ip, src_port, data + UDP_HDR_SIZE, payload_len);
+                    socket_udp_deliver_info(cand, src_ip, src_port, data + UDP_HDR_SIZE,
+                                            payload_len, info);
                     return 0;
                 }
                 continue;
@@ -199,7 +202,7 @@ static int udp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *data
             return -1;
         }
         net_mib.udp_in_datagrams++;
-        socket_udp_deliver(listener, src_ip, src_port, data + UDP_HDR_SIZE, payload_len);
+        socket_udp_deliver_info(listener, src_ip, src_port, data + UDP_HDR_SIZE, payload_len, info);
     }
     return 0;
 }
@@ -220,12 +223,43 @@ void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
 }
 
 /**
+ * Choose the interface and source of a datagram from `sock` to the IPv6
+ * `dst` under the control messages `opt`, into `*dst` and `*from`, as
+ * `udp_tx` says. Returns 0 or a negative errno. The caller holds net_lock.
+ */
+static int udp_route6(const struct socket *sock, net_addr_t *dst, const struct net_txopt *opt,
+                      net_addr_t *from)
+{
+    if (opt && opt->ifindex) {
+        if (dst->scope && dst->scope != (uint32_t)opt->ifindex) {
+            return -EINVAL;
+        }
+        if (!netdev_at(opt->ifindex - 1)) {
+            return -ENODEV;
+        }
+        dst->scope = (uint32_t)opt->ifindex;
+    } else if (!dst->scope && ip6_is_multicast(dst->v6) && sock->mif6) {
+        dst->scope = (uint32_t)sock->mif6;
+    }
+    if (opt && opt->src.family == AF_INET6 && !net_addr_any(opt->src)) {
+        net_addr_t src = opt->src;
+
+        src.scope = 0;
+        if (!net_addr_local(src)) {
+            return -EINVAL;
+        }
+        return net_addr_source(src, *dst, from);
+    }
+    return net_addr_source(sock->local_ip, *dst, from);
+}
+
+/**
  * The largest payload is 1472 bytes, the 1500-byte MTU less the IPv4 and UDP
  * headers. The shared transmit buffer is filled and sent under `net_lock`,
  * since a sender in an interrupt must not enter it at the same time (net.h).
  */
 int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, const uint8_t *payload,
-           uint16_t plen)
+           uint16_t plen, const struct net_txopt *opt)
 {
     uint16_t udp_len;
     uint32_t flags;
@@ -241,7 +275,11 @@ int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, cons
 
     flags = net_lock();
 
-    r = net_addr_source(sock->local_ip, dst_ip, &from);
+    if (dst_ip.family == AF_INET6) {
+        r = udp_route6(sock, &dst_ip, opt, &from);
+    } else {
+        r = net_addr_source(sock->local_ip, dst_ip, &from);
+    }
     if (r < 0) {
         net_unlock(flags);
         return r;
@@ -254,9 +292,13 @@ int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, cons
 
     if (dst_ip.family == AF_INET6) {
         uint16_t sum = ip6_checksum(from.v6, dst_ip.v6, IP6_NH_UDP, udp_tx_buf, udp_len);
+        int tclass = opt && opt->tclass >= 0 ? opt->tclass : sock->tclass6;
+        uint8_t hlim = opt && opt->hlim >= 0 ? (uint8_t)opt->hlim
+                                             : socket_hops6(sock, dst_ip.v6, (int)dst_ip.scope);
+
         write16be(udp_tx_buf + 6, sum ? sum : 0xffff);
-        r = ip6_tx(from.v6, dst_ip.v6, (int)dst_ip.scope, IP6_NH_UDP, udp_tx_buf, udp_len,
-                   sock->ip_ttl);
+        r = ip6_tx_opts(from.v6, dst_ip.v6, (int)dst_ip.scope, IP6_NH_UDP, udp_tx_buf, udp_len,
+                        hlim, IP6_TXF_TCLASS(tclass) | (sock->mloop6 ? IP6_TXF_LOOP : 0));
     } else {
         r = ip_tx_from(from.v4, dst_ip.v4, IP_PROTO_UDP, udp_tx_buf, udp_len, sock->ip_ttl);
     }
@@ -271,13 +313,22 @@ int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, cons
 /** Deliver an IPv4 datagram through the common address-aware binding list. */
 int udp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
 {
-    return udp_rx_addr(net_addr4(src), net_addr4(dst), data, len);
+    struct net_rxinfo info;
+
+    info.dst = net_addr4(dst);
+    info.ifindex = 0;
+    info.hlim = -1;
+    info.tclass = -1;
+    return udp_rx_addr(net_addr4(src), net_addr4(dst), data, len, &info);
 }
 
 /** Verify IPv6's mandatory UDP checksum before looking up a binding. */
-int udp6_rx(int ifindex, const uint8_t *src, const uint8_t *dst, const uint8_t *data, uint16_t len)
+int udp6_rx(int ifindex, const uint8_t *ip6h, const uint8_t *data, uint16_t len)
 {
+    const uint8_t *src = ip6h + 8, *dst = ip6h + 24;
+    struct net_rxinfo info;
     uint16_t size;
+
     if (len < UDP_HDR_SIZE)
         return 0;
     size = read16be(data + 4);
@@ -286,6 +337,10 @@ int udp6_rx(int ifindex, const uint8_t *src, const uint8_t *dst, const uint8_t *
         net_mib.udp_in_errors++;
         return 0;
     }
+    info.dst = net_addr6(dst, (uint32_t)ifindex);
+    info.ifindex = (uint32_t)ifindex;
+    info.hlim = (int16_t)ip6h[7];
+    info.tclass = (int16_t)(((ip6h[0] & 0x0f) << 4) | (ip6h[1] >> 4));
     return udp_rx_addr(net_addr6(src, (uint32_t)ifindex), net_addr6(dst, (uint32_t)ifindex), data,
-                       size);
+                       size, &info);
 }

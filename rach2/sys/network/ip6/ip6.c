@@ -193,13 +193,37 @@ static int destined_here(struct netdev *nd, const uint8_t *dst)
 }
 
 /**
+ * Check a datagram received on `nd`, NULL for the loopback ring; `looped`
+ * is set for a copy of this machine's own datagram to a group, which
+ * `ip6_loop_rx` gives as the card's, and whose source is this machine's by
+ * design.
+ */
+static void ip6_input(struct netdev *nd, const uint8_t *data, uint16_t len, int looped);
+
+void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
+{
+    ip6_input(nd, data, len, 0);
+}
+
+void ip6_loop_rx(int ifindex, const uint8_t *data, uint16_t len)
+{
+    struct netdev *nd = ifindex > 0 ? netdev_at(ifindex - 1) : 0;
+
+    if (nd && ip6_is_multicast(data + 24)) {
+        ip6_input(nd, data, len, 1);
+    } else {
+        ip6_input(0, data, len, 0);
+    }
+}
+
+/**
  * A datagram from the wire with this machine's source, or with ::1 at
  * either end, is a spoof no peer sends, and is dropped before any answer
  * could go to it, as `ip_rx` drops IPv4's martians. A group is no sender.
  * What lies past the payload length, an Ethernet frame's padding, is not
  * the datagram's.
  */
-void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
+static void ip6_input(struct netdev *nd, const uint8_t *data, uint16_t len, int looped)
 {
     const uint8_t *src = data + 8;
     const uint8_t *dst = data + 24;
@@ -219,7 +243,7 @@ void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
         return;
     }
     if (ip6_is_multicast(src) ||
-        (nd && (ip6_is_loopback(src) || ip6_is_loopback(dst) || netdev_owner6(src)))) {
+        (nd && !looped && (ip6_is_loopback(src) || ip6_is_loopback(dst) || netdev_owner6(src)))) {
         net_mib6.ip6_in_addr_errors++;
         return;
     }
@@ -312,11 +336,11 @@ void ip6_walk(struct netdev *nd, const uint8_t *dg, uint32_t len, uint32_t off, 
                 ifindex = netdev_loopback() ? netdev_loopback()->index : 0;
             }
             net_mib6.ip6_in_delivers++;
-            raw6_rx(ifindex, dg + 8, nh, dg + off, (uint16_t)(len - off));
+            raw6_rx(ifindex, dg, nh, dg + off, (uint16_t)(len - off));
             if (nh == IP6_NH_TCP) {
                 tcp6_rx(ifindex, dg + 8, dst, dg + off, (uint16_t)(len - off));
             } else if (nh == IP6_NH_UDP) {
-                if (udp6_rx(ifindex, dg + 8, dst, dg + off, (uint16_t)(len - off)) < 0) {
+                if (udp6_rx(ifindex, dg, dg + off, (uint16_t)(len - off)) < 0) {
                     uint16_t quote = (uint16_t)(len > 1280 ? 1280 : len);
                     icmp6_error(nd, dg, quote, ICMP6_DST_UNREACH, 4, 0);
                 }
@@ -344,6 +368,12 @@ void ip6_header(uint8_t *buf, const uint8_t *src, const uint8_t *dst, uint8_t nh
     buf[7] = hlim;
     k_memcpy(buf + 8, src, IP6_ADDR_LEN);
     k_memcpy(buf + 24, dst, IP6_ADDR_LEN);
+}
+
+void ip6_set_class(uint8_t *buf, uint8_t tclass)
+{
+    buf[0] = (uint8_t)(0x60 | (tclass >> 4));
+    buf[1] = (uint8_t)(((tclass & 0x0f) << 4) | (buf[1] & 0x0f));
 }
 
 int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_t len)
@@ -458,9 +488,11 @@ int ip6_tx_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh,
         if (ext) {
             return -EMSGSIZE;
         }
-        return frag6_output(out, via, from, dst, nh, payload, plen, hlim, mtu);
+        return frag6_output(out, via, from, dst, nh, payload, plen, hlim, IP6_TXF_CLASS_OF(opts),
+                            mtu);
     }
     ip6_header(ip6_tx_buf, from, dst, ext ? IP6_NH_HOPOPTS : nh, (uint16_t)(ext + plen), hlim);
+    ip6_set_class(ip6_tx_buf, IP6_TXF_CLASS_OF(opts));
     if (ext) {
         static const uint8_t alert[IP6_RTALERT_LEN] = {0, 0, 5, 2, 0, 0, 1, 0};
 
@@ -468,6 +500,14 @@ int ip6_tx_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh,
         ip6_tx_buf[IP6_HDR_SIZE] = nh;
     }
     k_memcpy(ip6_tx_buf + IP6_HDR_SIZE + ext, payload, plen);
+    if ((opts & IP6_TXF_LOOP) && !out->loopback && ip6_is_multicast(dst) &&
+        netdev_member6(out, dst)) {
+        /* The copy is this machine's to receive whether or not the wire
+         * takes the original, as Linux loops it back before the card. */
+        if (ip_loop_put_on(ip6_tx_buf, (uint16_t)total, out->index) != 0) {
+            net_mib6.ip6_out_discards++;
+        }
+    }
     return ip6_emit(out, via, ip6_tx_buf, total);
 }
 

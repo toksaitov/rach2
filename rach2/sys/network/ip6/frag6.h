@@ -42,9 +42,12 @@ void ip6_walk(struct netdev *nd, const uint8_t *dg, uint32_t len, uint32_t off, 
 
 /** Write the fixed header of a datagram of `plen` bytes of payload and
  * next header `nh` from `src` to `dst` with the hop limit `hlim` into the
- * first 40 bytes of `buf`. */
+ * first 40 bytes of `buf`, with traffic class 0 and flow label 0. */
 void ip6_header(uint8_t *buf, const uint8_t *src, const uint8_t *dst, uint8_t nh, uint16_t plen,
                 uint8_t hlim);
+
+/** Set the traffic class of the fixed header at `buf` to `tclass`. */
+void ip6_set_class(uint8_t *buf, uint8_t tclass);
 
 /**
  * Hand the whole datagram of `len` bytes at `buf` to `out`, toward the next
@@ -72,7 +75,8 @@ void frag6_input(struct netdev *nd, const uint8_t *dg, uint32_t len, uint32_t of
 
 /**
  * Send the `plen` bytes at `payload`, of next header `nh`, from `src` to
- * `dst` with the hop limit `hlim`, in fragments of at most `mtu` bytes by
+ * `dst` with the hop limit `hlim` and traffic class `tclass`, in fragments
+ * of at most `mtu` bytes by
  * `out` toward `via`. Every fragment but the last carries a multiple of 8
  * bytes of payload; all carry one identification, drawn at random, as RFC
  * 7739 advises. Returns 0, or the error of `ip6_emit` for the first
@@ -80,7 +84,8 @@ void frag6_input(struct netdev *nd, const uint8_t *dg, uint32_t len, uint32_t of
  * interrupts off, from `ip6_tx`.
  */
 int frag6_output(struct netdev *out, const uint8_t *via, const uint8_t *src, const uint8_t *dst,
-                 uint8_t nh, const uint8_t *payload, uint16_t plen, uint8_t hlim, uint32_t mtu);
+                 uint8_t nh, const uint8_t *payload, uint16_t plen, uint8_t hlim, uint8_t tclass,
+                 uint32_t mtu);
 
 /**
  * Give up the reassemblies whose time is out, each counted as a timeout and

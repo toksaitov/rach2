@@ -178,6 +178,9 @@ struct kernel_mmsghdr {
  * size and the hop limit, for ping's -6. */
 #define SC_PING6     0x1002
 
+static int32_t dgram_send_opt(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port,
+                              const uint8_t *buf, uint16_t len, const struct net_txopt *opt);
+
 /**
  * Send the `len` bytes at `buf` as one UDP datagram from `sock` to `dst_ip`
  * and `dst_port`, checking the destination first, and binding the socket to
@@ -191,10 +194,18 @@ struct kernel_mmsghdr {
  * program that broadcasts by accident wakes the whole network. 1472 bytes is
  * one IPv4 datagram over Ethernet, 1500 bytes of frame less the twenty of the
  * IP header and the eight of UDP's. The hop limit is the socket's, which
- * IP_TTL sets and traceroute counts up.
+ * IP_TTL sets and traceroute counts up, or over IPv6 IPV6_UNICAST_HOPS.
  */
 int32_t dgram_send(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, const uint8_t *buf,
                    uint16_t len)
+{
+    return dgram_send_opt(sock, dst_ip, dst_port, buf, len, 0);
+}
+
+/** `dgram_send` with sendmsg's control messages `opt`, NULL for none,
+ * which `udp_tx` applies to an IPv6 datagram. */
+static int32_t dgram_send_opt(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port,
+                              const uint8_t *buf, uint16_t len, const struct net_txopt *opt)
 {
     int r = socket_dgram_error(sock);
 
@@ -210,7 +221,7 @@ int32_t dgram_send(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, co
     if (sock->local_port == 0 && udp_bind_ephemeral(sock) == 0) {
         return -EAGAIN;
     }
-    r = udp_tx(sock, dst_ip, dst_port, buf, len);
+    r = udp_tx(sock, dst_ip, dst_port, buf, len, opt);
     if (r < 0) {
         return r;
     }
@@ -262,6 +273,36 @@ static int32_t not_a_socket(const fd_entry_t *entry)
  * packets, of which it keeps none. */
 #define SOL_IPV6    41
 #define IPV6_V6ONLY 26
+
+/* The IPv6 options of RFC 3493 and RFC 3542, by Linux's numbers, which an
+ * AF_INET6 socket keeps (socket.h), and the control message types a
+ * receive answers with and a send takes: IPV6_PKTINFO, IPV6_HOPLIMIT and
+ * IPV6_TCLASS. */
+#define IPV6_UNICAST_HOPS   16
+#define IPV6_MULTICAST_IF   17
+#define IPV6_MULTICAST_HOPS 18
+#define IPV6_MULTICAST_LOOP 19
+#define IPV6_JOIN_GROUP     20
+#define IPV6_LEAVE_GROUP    21
+#define IPV6_RECVPKTINFO    49
+#define IPV6_PKTINFO        50
+#define IPV6_RECVHOPLIMIT   51
+#define IPV6_HOPLIMIT       52
+#define IPV6_RECVTCLASS     66
+#define IPV6_TCLASS         67
+
+/* struct ipv6_mreq: the group (16 bytes) and an interface index (4); and
+ * struct in6_pktinfo: an address (16) and an interface index (4). */
+#define IPV6_MREQ_LEN   20
+#define IN6_PKTINFO_LEN 20
+
+/* The ICMPv6 level and its one option, the filter of a raw ICMPv6 socket
+ * (RFC 3542, 3.2). */
+#define SOL_ICMPV6   58
+#define ICMP6_FILTER 1
+
+/* msg_flags: the control messages did not all fit the caller's buffer. */
+#define MSG_CTRUNC 0x8
 
 #define SOL_IP 0
 
@@ -829,32 +870,62 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
  * Send the ICMPv6 message of `len` bytes at `buf_ptr` from the raw socket
  * `sock` to the sockaddr_in6 at `sa_ptr`, in the scope of its scope id.
  * The kernel sums the message, as Linux does for ICMPv6 whatever the
- * caller wrote, since the pseudo-header holds the source it chooses. A
- * group is sent to with the hop limit 1, Linux's default for multicast, and
- * any other address with the socket's. A message past the path MTU leaves
- * in fragments. A socket of IPPROTO_RAW sends instead the datagram at
- * `buf_ptr` whole, toward the address, as `ip6_tx_whole` says.
+ * caller wrote, since the pseudo-header holds the source it chooses. The
+ * socket's IPv6 options apply as they do to UDP (`udp_tx`): a group is sent
+ * to with IPV6_MULTICAST_HOPS, 1 unless set, by IPV6_MULTICAST_IF when its
+ * address has no scope, and any other address with IPV6_UNICAST_HOPS; the
+ * class is IPV6_TCLASS; and sendmsg's control messages `opt`, NULL for
+ * none, go before them. A message past the path MTU leaves in fragments.
+ * A socket of IPPROTO_RAW sends instead the datagram at `buf_ptr` whole,
+ * toward the address, as `ip6_tx_whole` says, whatever the options.
  *
  * Returns `len`, the error of `sockaddr_in6_in`, `icmp6_send` or
- * `ip6_tx_whole`, -EINVAL for a message too short to hold its checksum,
+ * `ip6_tx_whole`, -EINVAL for a message too short to hold its checksum, a
+ * source in `opt` that is not this machine's or an interface that
+ * disagrees with the address's scope,
  * -EMSGSIZE past the largest payload, 65535 bytes, or past one 1500-byte
  * datagram for IPPROTO_RAW, -ENOMEM when no block holds a message past
  * `raw_send_buf`, or -EFAULT. The copy runs with interrupts on, and the
  * send under the network lock, as an IPv4 raw send does.
  */
 static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uintptr_t sa_ptr,
-                           int addrlen)
+                           int addrlen, const struct net_txopt *opt)
 {
-    uint8_t dst[16];
+    uint8_t dst[16], src[16];
     uint8_t *buf = raw_send_buf;
     uint32_t netflags;
     int whole = sock->protocol == IPPROTO_RAW;
-    int scope, r;
+    int scope, r, tclass;
 
     r = sockaddr_in6_in(sa_ptr, addrlen, dst, &scope);
     if (r != 0) {
         return r;
     }
+    if (!scope && ip6_link_scoped(dst)) {
+        scope = sock->bound_device;
+    }
+    if (opt && opt->ifindex) {
+        if (scope && scope != opt->ifindex) {
+            return -EINVAL;
+        }
+        scope = opt->ifindex;
+    } else if (!scope && ip6_is_multicast(dst)) {
+        scope = sock->mif6;
+    }
+    net_addr_to6(sock->local_ip, src);
+    if (sock->local_ip.family != AF_INET6) {
+        k_memset(src, 0, sizeof(src));
+    }
+    if (opt && opt->src.family == AF_INET6 && !net_addr_any(opt->src)) {
+        net_addr_t from = opt->src;
+
+        from.scope = 0;
+        if (!net_addr_local(from)) {
+            return -EINVAL;
+        }
+        k_memcpy(src, opt->src.v6, sizeof(src));
+    }
+    tclass = opt && opt->tclass >= 0 ? opt->tclass : sock->tclass6;
     if (len < 4) {
         return -EINVAL;
     }
@@ -874,8 +945,11 @@ static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uint
         if (whole) {
             r = ip6_tx_whole(buf, (uint32_t)len, dst, scope);
         } else {
-            r = icmp6_send(sock->local_ip.v6, dst, scope, buf, (uint16_t)len,
-                           ip6_is_multicast(dst) ? IP6_HOP_LIMIT_MCAST : sock->ip_ttl);
+            uint8_t hlim =
+                opt && opt->hlim >= 0 ? (uint8_t)opt->hlim : socket_hops6(sock, dst, scope);
+
+            r = icmp6_send_opts(src, dst, scope, buf, (uint16_t)len, hlim,
+                                IP6_TXF_TCLASS(tclass) | (sock->mloop6 ? IP6_TXF_LOOP : 0));
         }
         net_unlock(netflags);
     }
@@ -891,12 +965,13 @@ static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uint
  * it is connected to. One send path, so the broadcast permission and the
  * ephemeral bind are the same for sendto, sendmsg and a write to a connected
  * socket. A connected datagram socket needs no destination: `send` is
- * `sendto` with none, which is what musl's send() issues. Returns what
+ * `sendto` with none, which is what musl's send() issues. `opt` is
+ * sendmsg's control messages, or NULL. Returns what
  * `dgram_send` returns, -EDESTADDRREQ with no destination on a socket that is
  * not connected, -EINVAL for a sockaddr shorter than 8 bytes, or -EFAULT.
  */
 static int32_t udp_sendto(fd_entry_t *entry, const uint8_t *buf, int len, uintptr_t sa_ptr,
-                          int addrlen)
+                          int addrlen, const struct net_txopt *opt)
 {
     net_addr_t dst;
     uint16_t port;
@@ -911,7 +986,7 @@ static int32_t udp_sendto(fd_entry_t *entry, const uint8_t *buf, int len, uintpt
         if (rc)
             return rc;
     }
-    return dgram_send(entry->sock, dst, port, buf, (uint16_t)len);
+    return dgram_send_opt(entry->sock, dst, port, buf, (uint16_t)len, opt);
 }
 
 /** The length of the sockaddr a receive on `sock` reports its sender in. */
@@ -1001,9 +1076,11 @@ static int32_t netlink_addr_to_user(const uint8_t *nl, uintptr_t sa_ptr, uintptr
  * interface index there is the one the frame leaves by, and 0 leaves the
  * choice to the bind. The stream, packet and UDP paths read the payload where
  * it lies, in the range `user_buffer_ok` checked, as `__force` casts mark.
+ * `opt` is the control messages of a sendmsg(2) with one buffer, NULL for
+ * none, which a UDP or raw IPv6 send applies.
  */
-static int32_t do_sendto(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_t sa_ptr,
-                         int addrlen)
+static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_t sa_ptr,
+                             int addrlen, const struct net_txopt *opt)
 {
     fd_entry_t *entry;
 
@@ -1036,7 +1113,7 @@ static int32_t do_sendto(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_
             return -EDESTADDRREQ;
         }
         if (entry->sock->family == AF_INET6) {
-            return raw6_sendto(entry->sock, buf_ptr, len, sa_ptr, addrlen);
+            return raw6_sendto(entry->sock, buf_ptr, len, sa_ptr, addrlen, opt);
         }
         k_memset(raw_sa, 0, sizeof(raw_sa));
         if (copy_from_user(raw_sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
@@ -1107,7 +1184,14 @@ static int32_t do_sendto(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_
     }
 
     return udp_sendto(entry, (const uint8_t __force *)(const void __user *)buf_ptr, len, sa_ptr,
-                      addrlen);
+                      addrlen, opt);
+}
+
+/** sendto(2): `do_sendto_opt` with no control messages. */
+static int32_t do_sendto(int fd, uintptr_t buf_ptr, int len, int flags, uintptr_t sa_ptr,
+                         int addrlen)
+{
+    return do_sendto_opt(fd, buf_ptr, len, flags, sa_ptr, addrlen, 0);
 }
 
 /**
@@ -1806,6 +1890,272 @@ static int32_t do_shutdown(int fd, int how)
 
 #define TCP_NODELAY 1
 
+/** The interface of index `ifindex`, or NULL for one that does not
+ * exist, 0 and negative indexes among them. */
+static struct netdev *iface_of(int ifindex)
+{
+    return ifindex > 0 ? netdev_at(ifindex - 1) : 0;
+}
+
+/**
+ * Join or leave, as `join` says, the group of the struct ipv6_mreq of
+ * `optlen` bytes at `optval_ptr` for the AF_INET6 socket `sock`
+ * (IPV6_JOIN_GROUP, IPV6_LEAVE_GROUP). A join names its interface, or with
+ * index 0 takes the one the group's route takes; a leave with index 0 takes
+ * the first membership of the group on any interface. Returns 0, -EINVAL
+ * for a value shorter than the structure or an address that is no group,
+ * -EPROTO on a stream socket, -EFAULT, -ENODEV for an interface that does
+ * not exist or no route, -EADDRINUSE for a group the socket has joined
+ * there, -EADDRNOTAVAIL for a leave of one it has not, or -ENOBUFS past
+ * SOCK_GROUPS6 memberships or the interface's groups.
+ */
+static int32_t group6_change(struct socket *sock, int join, uintptr_t optval_ptr, int optlen)
+{
+    uint8_t mreq[IPV6_MREQ_LEN], via[16];
+    struct netdev *nd;
+    uint32_t flags;
+    int ifindex, i, r = 0;
+
+    if (optlen < IPV6_MREQ_LEN) {
+        return -EINVAL;
+    }
+    if (sock->type == SOCK_STREAM) {
+        return -EPROTO;
+    }
+    if (!optval_ptr || copy_from_user(mreq, (const void __user *)optval_ptr, sizeof(mreq)) != 0) {
+        return -EFAULT;
+    }
+    if (!ip6_is_multicast(mreq)) {
+        return -EINVAL;
+    }
+    ifindex = (int)SC_LE32(mreq + 16);
+    flags = net_lock();
+    for (i = 0; i < sock->ngroups6; i++) {
+        if (ip6_equal(sock->groups6[i].group, mreq) &&
+            (ifindex == 0 || sock->groups6[i].ifindex == ifindex)) {
+            break;
+        }
+    }
+    if (!join) {
+        if (i == sock->ngroups6) {
+            r = -EADDRNOTAVAIL;
+        } else {
+            nd = iface_of(sock->groups6[i].ifindex);
+            if (nd) {
+                netdev_leave6(nd, mreq);
+            }
+            sock->groups6[i] = sock->groups6[--sock->ngroups6];
+        }
+    } else if (i < sock->ngroups6) {
+        r = -EADDRINUSE;
+    } else if (sock->ngroups6 == SOCK_GROUPS6) {
+        r = -ENOBUFS;
+    } else {
+        nd = ifindex ? iface_of(ifindex) : ip6_route_find(mreq, 0, via);
+        r = nd ? netdev_join6(nd, mreq) : -ENODEV;
+        if (r == 0) {
+            k_memcpy(sock->groups6[sock->ngroups6].group, mreq, 16);
+            sock->groups6[sock->ngroups6].ifindex = nd->index;
+            sock->ngroups6++;
+        } else if (r == -ENOSPC) {
+            r = -ENOBUFS;
+        }
+    }
+    net_unlock(flags);
+    return r;
+}
+
+/** Whether `optname` is an option of SOL_IPV6 that `ipv6_set` keeps. */
+static int ipv6_option_known(int optname)
+{
+    switch (optname) {
+    case IPV6_UNICAST_HOPS:
+    case IPV6_MULTICAST_IF:
+    case IPV6_MULTICAST_HOPS:
+    case IPV6_MULTICAST_LOOP:
+    case IPV6_JOIN_GROUP:
+    case IPV6_LEAVE_GROUP:
+    case IPV6_RECVPKTINFO:
+    case IPV6_RECVHOPLIMIT:
+    case IPV6_RECVTCLASS:
+    case IPV6_TCLASS:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+/** The SOCK_RX_* bit of the IPV6_RECV* option `optname`, or 0. */
+static uint8_t ipv6_rx_bit(int optname)
+{
+    switch (optname) {
+    case IPV6_RECVPKTINFO:
+        return SOCK_RX_PKTINFO;
+    case IPV6_RECVHOPLIMIT:
+        return SOCK_RX_HOPLIMIT;
+    case IPV6_RECVTCLASS:
+        return SOCK_RX_TCLASS;
+    default:
+        return 0;
+    }
+}
+
+/**
+ * setsockopt at SOL_IPV6 of an option `ipv6_option_known` names, on the
+ * AF_INET6 socket `sock`, with `val` the int at `optval_ptr` when `optlen`
+ * holds one. The hop limits and the class take -1 to 255, -1 for the
+ * default (64 or the routers', 1, and 0); the loop 0 or 1; the multicast
+ * interface an index that exists, or 0, and when the socket is bound to an
+ * interface, that one. Returns 0, -EINVAL for a value shorter than an int
+ * or out of range, -ENODEV for an interface that does not exist, or the
+ * errors of `group6_change`.
+ */
+static int32_t ipv6_set(struct socket *sock, int optname, uintptr_t optval_ptr, int optlen, int val)
+{
+    int whole = optlen >= (int)sizeof(int);
+
+    if (optname == IPV6_JOIN_GROUP || optname == IPV6_LEAVE_GROUP) {
+        return group6_change(sock, optname == IPV6_JOIN_GROUP, optval_ptr, optlen);
+    }
+    if (!whole) {
+        return -EINVAL;
+    }
+    switch (optname) {
+    case IPV6_UNICAST_HOPS:
+    case IPV6_MULTICAST_HOPS:
+    case IPV6_TCLASS:
+        if (val < -1 || val > 255) {
+            return -EINVAL;
+        }
+        if (optname == IPV6_UNICAST_HOPS) {
+            sock->hops6 = (int16_t)val;
+        } else if (optname == IPV6_MULTICAST_HOPS) {
+            sock->mhops6 = (int16_t)(val < 0 ? 1 : val);
+        } else {
+            sock->tclass6 = (int16_t)(val < 0 ? 0 : val);
+        }
+        return 0;
+    case IPV6_MULTICAST_LOOP:
+        if (val != 0 && val != 1) {
+            return -EINVAL;
+        }
+        sock->mloop6 = (uint8_t)val;
+        return 0;
+    case IPV6_MULTICAST_IF:
+        if (val != 0 && !iface_of(val)) {
+            return -ENODEV;
+        }
+        if (val != 0 && sock->bound_device && val != sock->bound_device) {
+            return -EINVAL;
+        }
+        sock->mif6 = val;
+        return 0;
+    default:
+        if (val) {
+            sock->rxopt6 |= ipv6_rx_bit(optname);
+        } else {
+            sock->rxopt6 &= (uint8_t)~ipv6_rx_bit(optname);
+        }
+        return 0;
+    }
+}
+
+/** The value getsockopt reports for the option `optname` of SOL_IPV6,
+ * which `ipv6_option_known` names, on the AF_INET6 socket `sock`, into
+ * `*val`. Returns 0, or -ENOPROTOOPT for a join or a leave, which are set
+ * and not read. */
+static int32_t ipv6_get(const struct socket *sock, int optname, int *val)
+{
+    switch (optname) {
+    case IPV6_UNICAST_HOPS:
+        *val = sock->hops6 >= 0 ? sock->hops6 : IP6_HOP_LIMIT_DEFAULT;
+        return 0;
+    case IPV6_MULTICAST_HOPS:
+        *val = sock->mhops6;
+        return 0;
+    case IPV6_TCLASS:
+        *val = sock->tclass6;
+        return 0;
+    case IPV6_MULTICAST_LOOP:
+        *val = sock->mloop6;
+        return 0;
+    case IPV6_MULTICAST_IF:
+        *val = sock->mif6;
+        return 0;
+    case IPV6_RECVPKTINFO:
+    case IPV6_RECVHOPLIMIT:
+    case IPV6_RECVTCLASS:
+        *val = (sock->rxopt6 & ipv6_rx_bit(optname)) != 0;
+        return 0;
+    default:
+        return -ENOPROTOOPT;
+    }
+}
+
+/**
+ * setsockopt(SOL_ICMPV6, ICMP6_FILTER) on `sock`: the first `optlen` bytes
+ * of the 32 of a struct icmp6_filter at `optval_ptr` replace the filter's,
+ * as `raw_set_filter6` says. Returns 0, -ENOPROTOOPT on a socket that is
+ * not an AF_INET6 raw one, -EOPNOTSUPP on one of IPPROTO_RAW, -EINVAL for
+ * a negative length, or -EFAULT.
+ */
+static int32_t icmp6_filter_set(struct socket *sock, uintptr_t optval_ptr, int optlen)
+{
+    uint8_t filter[RAW_FILTER6_LEN];
+    uint32_t take;
+
+    if (sock->type != SOCK_RAW || sock->family != AF_INET6) {
+        return -ENOPROTOOPT;
+    }
+    if (sock->protocol != IPPROTO_ICMPV6) {
+        return -EOPNOTSUPP;
+    }
+    if (optlen < 0) {
+        return -EINVAL;
+    }
+    take = (uint32_t)optlen < sizeof(filter) ? (uint32_t)optlen : (uint32_t)sizeof(filter);
+    if (take > 0 &&
+        (!optval_ptr || copy_from_user(filter, (const void __user *)optval_ptr, take) != 0)) {
+        return -EFAULT;
+    }
+    return raw_set_filter6(sock, filter, take) == 0 ? 0 : -ENOPROTOOPT;
+}
+
+/** getsockopt(SOL_ICMPV6, ICMP6_FILTER): the filter, cut to the caller's
+ * length, which is written back. Returns 0, the errors of
+ * `icmp6_filter_set` but -EFAULT for a null pointer, or -EINVAL for a
+ * negative length. */
+static int32_t icmp6_filter_get(struct socket *sock, uintptr_t optval_ptr, uintptr_t optlen_ptr)
+{
+    uint8_t filter[RAW_FILTER6_LEN];
+    int32_t olen;
+
+    if (sock->type != SOCK_RAW || sock->family != AF_INET6) {
+        return -ENOPROTOOPT;
+    }
+    if (sock->protocol != IPPROTO_ICMPV6) {
+        return -EOPNOTSUPP;
+    }
+    if (!optval_ptr || !optlen_ptr ||
+        copy_from_user(&olen, (const void __user *)optlen_ptr, sizeof(olen)) != 0) {
+        return -EFAULT;
+    }
+    if (olen < 0) {
+        return -EINVAL;
+    }
+    if (olen > RAW_FILTER6_LEN) {
+        olen = RAW_FILTER6_LEN;
+    }
+    if (raw_get_filter6(sock, filter) != 0) {
+        return -ENOPROTOOPT;
+    }
+    if ((olen > 0 && copy_to_user((void __user *)optval_ptr, filter, (uint32_t)olen) != 0) ||
+        copy_to_user((void __user *)optlen_ptr, &olen, sizeof(olen)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
 /**
  * setsockopt: keep SO_BROADCAST and SO_REUSEADDR, the hop limit IP_TTL (1 to
  * 255) and SO_BINDTODEVICE, an interface by name or none for an empty name,
@@ -1833,6 +2183,11 @@ static int32_t do_shutdown(int fd, int how)
  * A flag whose value is too short to read is -EINVAL rather than a flag set
  * to zero, and an int-sized value at a null pointer is -EFAULT rather than
  * accepted.
+ *
+ * An AF_INET6 socket keeps the IPv6 options `ipv6_set` takes, which its
+ * UDP and raw datagrams honour, and a raw ICMPv6 one its filter
+ * (`icmp6_filter_set`); either level's option on a socket of another
+ * family is -ENOPROTOOPT.
  */
 static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_ptr, int optlen)
 {
@@ -1881,6 +2236,15 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
         }
     }
 
+    if (level == SOL_IPV6 && ipv6_option_known(optname)) {
+        if (entry->sock->family != AF_INET6) {
+            return -ENOPROTOOPT;
+        }
+        return ipv6_set(entry->sock, optname, optval_ptr, optlen, val);
+    }
+    if (level == SOL_ICMPV6 && optname == ICMP6_FILTER) {
+        return icmp6_filter_set(entry->sock, optval_ptr, optlen);
+    }
     if (level == SOL_IPV6 && optname == IPV6_V6ONLY) {
         if (entry->sock->family != AF_INET6)
             return -ENOPROTOOPT;
@@ -1925,8 +2289,10 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
  * reports any. A result is truncated to the caller's capacity, and the length
  * written is what was copied, less than an int for a caller that offered less.
  * SO_ERROR is read and cleared under the network lock, so the interrupt that
- * sets it cannot come between. Returns 0, -ENOPROTOOPT for IP_HDRINCL, or
- * -EFAULT. */
+ * sets it cannot come between. The IPv6 options read back as `ipv6_get`
+ * reports them, and a raw ICMPv6 socket's filter as `icmp6_filter_get`
+ * does. Returns 0, -ENOPROTOOPT for IP_HDRINCL, for an IPv6 option of a
+ * socket of another family or a join or leave, or -EFAULT. */
 static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_ptr,
                              uintptr_t optlen_ptr)
 {
@@ -1941,6 +2307,18 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
         if (entry->sock->family != AF_INET6)
             return -ENOPROTOOPT;
         val = entry->sock->v6only;
+    } else if (level == SOL_IPV6 && ipv6_option_known(optname)) {
+        int32_t r;
+
+        if (entry->sock->family != AF_INET6) {
+            return -ENOPROTOOPT;
+        }
+        r = ipv6_get(entry->sock, optname, &val);
+        if (r != 0) {
+            return r;
+        }
+    } else if (level == SOL_ICMPV6 && optname == ICMP6_FILTER) {
+        return icmp6_filter_get(entry->sock, optval_ptr, optlen_ptr);
     } else if (level == SOL_SOCKET && optname == SO_TYPE) {
         val = entry->sock->type;
     } else if (level == SOL_SOCKET && optname == SO_ERROR) {
@@ -2010,6 +2388,148 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
     return 0;
 }
 
+/** Whether a receive on `sock` answers with control messages: an AF_INET6
+ * UDP or raw socket that asked for one (IPV6_RECV*). */
+static int inet6_rx_control(const struct socket *sock)
+{
+    return sock->family == AF_INET6 && sock->type != SOCK_STREAM && sock->rxopt6 != 0;
+}
+
+/**
+ * Write one control message of `level` and `type` with the `len` bytes at
+ * `data` at offset `*used` of the caller's control buffer of `controllen`
+ * bytes at `control`, and move `*used` past it and its padding, as far as
+ * the buffer goes, as Linux's `put_cmsg` counts it. A message that does not
+ * fit whole is not written and sets MSG_CTRUNC in `*mflags`. Returns 0, or
+ * -EFAULT.
+ */
+static int32_t put_cmsg(uintptr_t control, uint32_t controllen, uint32_t *used, int level, int type,
+                        const void *data, uint32_t len, unsigned int *mflags)
+{
+    struct kernel_cmsghdr hdr;
+    uint32_t need = (uint32_t)CMSG_HDR + len;
+
+    if (!control || controllen < *used || controllen - *used < need) {
+        *mflags |= MSG_CTRUNC;
+        return 0;
+    }
+    k_memset(&hdr, 0, sizeof(hdr));
+    hdr.cmsg_len = need;
+    hdr.cmsg_level = level;
+    hdr.cmsg_type = type;
+    if (copy_to_user((void __user *)(control + *used), &hdr, sizeof(hdr)) != 0 ||
+        copy_to_user((void __user *)(control + *used + CMSG_HDR), data, len) != 0) {
+        return -EFAULT;
+    }
+    *used += (uint32_t)CMSG_ALIGN(need);
+    if (*used > controllen) {
+        *used = controllen;
+    }
+    return 0;
+}
+
+/**
+ * Write the control messages the AF_INET6 socket `sock` asked for
+ * (`rxopt6`) about the datagram a receive took, which `rx_last` describes,
+ * in the order Linux writes them: IPV6_PKTINFO, its destination and the
+ * interface it came in on, an IPv4 one's destination mapped; IPV6_HOPLIMIT
+ * and IPV6_TCLASS, each an int, when the datagram's are known. Sets
+ * `*used` to the bytes of the buffer used. Returns 0, or -EFAULT.
+ */
+static int32_t put_rx_control(const struct socket *sock, uintptr_t control, uint32_t controllen,
+                              uint32_t *used, unsigned int *mflags)
+{
+    const struct net_rxinfo *info = &sock->rx_last;
+    int32_t r = 0;
+    int v;
+
+    *used = 0;
+    if (sock->rxopt6 & SOCK_RX_PKTINFO) {
+        uint8_t pi[IN6_PKTINFO_LEN];
+
+        net_addr_to6(info->dst, pi);
+        SC_WLE32(pi + 16, info->ifindex);
+        r = put_cmsg(control, controllen, used, SOL_IPV6, IPV6_PKTINFO, pi, sizeof(pi), mflags);
+    }
+    if (r == 0 && (sock->rxopt6 & SOCK_RX_HOPLIMIT) && info->hlim >= 0) {
+        v = info->hlim;
+        r = put_cmsg(control, controllen, used, SOL_IPV6, IPV6_HOPLIMIT, &v, sizeof(v), mflags);
+    }
+    if (r == 0 && (sock->rxopt6 & SOCK_RX_TCLASS) && info->tclass >= 0) {
+        v = info->tclass;
+        r = put_cmsg(control, controllen, used, SOL_IPV6, IPV6_TCLASS, &v, sizeof(v), mflags);
+    }
+    return r;
+}
+
+/**
+ * Read the control messages of a sendmsg on an AF_INET6 socket, the
+ * `controllen` bytes at `control`, into `opt`: IPV6_PKTINFO, a source
+ * address, :: for none, and an interface, 0 for none; IPV6_HOPLIMIT and
+ * IPV6_TCLASS, each an int from -1 to 255, -1 for the socket's. Messages
+ * of another level are passed over, as they were before any was read.
+ * Returns 0, -EINVAL for a header whose length is short or runs past the
+ * buffer, a message of SOL_IPV6 of another type or the wrong size, a value
+ * out of range or an interface that does not exist, or -EFAULT.
+ */
+static int32_t get_tx_control(uintptr_t control, uint32_t controllen, struct net_txopt *opt)
+{
+    uint32_t off = 0;
+
+    k_memset(opt, 0, sizeof(*opt));
+    opt->src = net_addr4(0);
+    opt->hlim = -1;
+    opt->tclass = -1;
+    while (control && controllen - off >= (uint32_t)CMSG_HDR) {
+        struct kernel_cmsghdr hdr;
+        uint32_t dlen;
+        uint8_t data[IN6_PKTINFO_LEN];
+        int v;
+
+        if (copy_from_user(&hdr, (const void __user *)(control + off), sizeof(hdr)) != 0) {
+            return -EFAULT;
+        }
+        if (hdr.cmsg_len < CMSG_HDR || hdr.cmsg_len > controllen - off) {
+            return -EINVAL;
+        }
+        dlen = (uint32_t)(hdr.cmsg_len - CMSG_HDR);
+        if (hdr.cmsg_level == SOL_IPV6) {
+            uint32_t want = hdr.cmsg_type == IPV6_PKTINFO ? IN6_PKTINFO_LEN : (uint32_t)sizeof(int);
+
+            if ((hdr.cmsg_type != IPV6_PKTINFO && hdr.cmsg_type != IPV6_HOPLIMIT &&
+                 hdr.cmsg_type != IPV6_TCLASS) ||
+                dlen < want) {
+                return -EINVAL;
+            }
+            if (copy_from_user(data, (const void __user *)(control + off + CMSG_HDR), want) != 0) {
+                return -EFAULT;
+            }
+            if (hdr.cmsg_type == IPV6_PKTINFO) {
+                opt->ifindex = (int)SC_LE32(data + 16);
+                if (opt->ifindex != 0 && !iface_of(opt->ifindex)) {
+                    return -ENODEV;
+                }
+                opt->src = net_addr6(data, 0);
+            } else {
+                k_memcpy(&v, data, sizeof(v));
+                if (v < -1 || v > 255) {
+                    return -EINVAL;
+                }
+                if (hdr.cmsg_type == IPV6_HOPLIMIT) {
+                    opt->hlim = (int16_t)v;
+                } else {
+                    opt->tclass = (int16_t)v;
+                }
+            }
+        }
+        if ((uint32_t)CMSG_ALIGN(hdr.cmsg_len) >= controllen - off) {
+            break;
+        }
+        off += (uint32_t)CMSG_ALIGN(hdr.cmsg_len);
+    }
+    return 0;
+}
+
 /**
  * Receive one datagram into a scatter list (recvmsg, socketcall 17).
  *
@@ -2017,8 +2537,10 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
  * `recvmsg`, not `read` so that it can look for `PACKET_AUXDATA` in the
  * control data, and finding none it verifies the UDP checksum itself. So the
  * scatter half is the whole of the work here. The control buffer is answered
- * with a length of zero, which is the true answer: this stack attaches no
- * ancillary data to anything.
+ * with a length of zero, the true answer, but on an AF_INET6 UDP or raw
+ * socket that asked for IPV6_PKTINFO, IPV6_HOPLIMIT or IPV6_TCLASS
+ * (`put_rx_control`); a message that does not fit sets MSG_CTRUNC, and the
+ * buffer is checked with the others before the datagram is taken.
  *
  * A datagram longer than the buffers is cut, and `msg_flags` says so with
  * MSG_TRUNC; with MSG_TRUNC in `flags` the call answers the datagram's whole
@@ -2083,6 +2605,11 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     if (!user_buffer_ok(msg_ptr, sizeof(hdr), 1)) {
         return -EFAULT;
     }
+    if (inet6_rx_control(entry->sock) && hdr.msg_control && hdr.msg_controllen > 0 &&
+        (hdr.msg_controllen > 0x7FFFFFFFu ||
+         !user_buffer_ok(hdr.msg_control, (uint32_t)hdr.msg_controllen, 1))) {
+        return -EFAULT;
+    }
     addr_len = sockaddr_len_of(entry->sock);
     addr_give = namelen < addr_len ? namelen : addr_len;
     if (name_ptr && addr_give > 0 && !user_buffer_ok(name_ptr, addr_give, 1)) {
@@ -2132,8 +2659,18 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
         }
     }
     hdr.msg_namelen = name_ptr ? (int)addr_len : 0;
-    hdr.msg_controllen = 0;
     hdr.msg_flags = whole > taken ? (unsigned int)MSG_TRUNC : 0u;
+    if (inet6_rx_control(entry->sock)) {
+        uint32_t used;
+
+        if (put_rx_control(entry->sock, hdr.msg_control, (uint32_t)hdr.msg_controllen, &used,
+                           &hdr.msg_flags) != 0) {
+            return -EFAULT;
+        }
+        hdr.msg_controllen = used;
+    } else {
+        hdr.msg_controllen = 0;
+    }
     if (copy_to_user((void __user *)msg_ptr, &hdr, sizeof(hdr)) != 0) {
         return -EFAULT;
     }
@@ -2145,14 +2682,19 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
  * order, as one send. A stream sends them one after another and stops at the
  * first that goes short; a UDP or netlink socket gathers at most eight into
  * one datagram, of at most 1500 bytes or `NETLINK_SEND_MAX`; a raw or packet
- * socket takes one buffer. Control messages carry nothing here and are
- * ignored. Returns the bytes sent, a stream's count before a failure, or
- * -errno: -EMSGSIZE for too many buffers or bytes, -EOPNOTSUPP for more than
- * one buffer on a raw or packet socket.
+ * socket takes one buffer. On an AF_INET6 UDP or raw socket the control
+ * messages IPV6_PKTINFO, IPV6_HOPLIMIT and IPV6_TCLASS apply to this send
+ * alone (`get_tx_control`); elsewhere control messages carry nothing and
+ * are ignored. Returns the bytes sent, a stream's count before a failure,
+ * or -errno: -EMSGSIZE for too many buffers or bytes, -EOPNOTSUPP for more
+ * than one buffer on a raw or packet socket, or an error of
+ * `get_tx_control`.
  */
 static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
 {
     struct kernel_msghdr hdr;
+    struct net_txopt txopt;
+    const struct net_txopt *opt = 0;
     struct kernel_iovec iov[8];
     uint8_t *gathered;
     fd_entry_t *entry;
@@ -2176,6 +2718,17 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
     iovlen = (uint32_t)hdr.msg_iovlen;
     if (socket_outside(entry->sock)) {
         return -ENETUNREACH;
+    }
+    if (entry->sock->family == AF_INET6 && entry->sock->type != SOCK_STREAM && hdr.msg_control &&
+        hdr.msg_controllen > 0) {
+        if (hdr.msg_controllen > 0x7FFFFFFFu) {
+            return -EINVAL;
+        }
+        rc = get_tx_control(hdr.msg_control, (uint32_t)hdr.msg_controllen, &txopt);
+        if (rc != 0) {
+            return rc;
+        }
+        opt = &txopt;
     }
     if (entry->sock->type == SOCK_STREAM) {
         for (i = 0; i < iovlen; i++) {
@@ -2211,9 +2764,9 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
         if (iovlen > 1) {
             return -EOPNOTSUPP;
         }
-        return do_sendto(fd, iovlen ? iov[0].iov_base : 0u,
-                         iovlen ? (int)USER_RW_LEN(iov[0].iov_len) : 0, flags, name_ptr,
-                         (int)namelen);
+        return do_sendto_opt(fd, iovlen ? iov[0].iov_base : 0u,
+                             iovlen ? (int)USER_RW_LEN(iov[0].iov_len) : 0, flags, name_ptr,
+                             (int)namelen, opt);
     }
     for (i = 0; i < iovlen; i++) {
         uint32_t most = entry->sock->family == AF_NETLINK ? NETLINK_SEND_MAX : 1500u;
@@ -2239,7 +2792,7 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
     if (entry->sock->family == AF_NETLINK) {
         rc = netlink_send(entry->sock, gathered, total);
     } else {
-        rc = udp_sendto(entry, gathered, (int)total, name_ptr, (int)namelen);
+        rc = udp_sendto(entry, gathered, (int)total, name_ptr, (int)namelen, opt);
     }
     kfree(gathered);
     return rc;

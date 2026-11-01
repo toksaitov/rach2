@@ -15,6 +15,7 @@
 #define UDP_HDR_SIZE 8
 
 struct socket;
+struct net_txopt;
 
 /**
  * Give the UDP datagram of `len` bytes at `data`, header included, sent from
@@ -42,14 +43,24 @@ void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port);
  * `dst_ip`:`dst_port`: from its bound address, or the one `ip_source`
  * chooses for a socket bound to any, and its port, with its hop limit.
  *
- * Returns what `ip_tx_from` returned: 0 when the datagram left, went onto
- * the loopback ring or waits for ARP, and a negative errno for what the
- * caller must hear about. A payload past 1472 bytes is -EMSGSIZE: one past
- * 1500, this layer's buffer, is refused here, and a smaller one by IP. Takes
- * `net_lock` itself.
+ * Over IPv6 the socket's options apply (socket.h): the hop limit is
+ * IPV6_MULTICAST_HOPS for a group and IPV6_UNICAST_HOPS otherwise, or with
+ * that at -1 the one routers advertise; a group with no scope in its address
+ * leaves by IPV6_MULTICAST_IF, and comes back to this machine as
+ * IPV6_MULTICAST_LOOP says; the class is IPV6_TCLASS. `opt`, when not NULL,
+ * is sendmsg's control messages, which go before the socket's: a source,
+ * which must be an address of this machine, an interface, which must agree
+ * with the address's scope, a hop limit and a class.
+ *
+ * Returns what `ip_tx_from` or `ip6_tx_opts` returned: 0 when the datagram
+ * left, went onto the loopback ring or waits for ARP, and a negative errno
+ * for what the caller must hear about, -EINVAL among them for a source of
+ * `opt` that is not this machine's or an interface that disagrees. A
+ * payload past 1472 bytes is -EMSGSIZE: one past 1500, this layer's buffer,
+ * is refused here, and a smaller one by IP. Takes `net_lock` itself.
  */
 int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, const uint8_t *payload,
-           uint16_t plen);
+           uint16_t plen, const struct net_txopt *opt);
 
 /** Bind `sock` to `port` at its `local_ip`, under the caller's effective
  * uid; 0 on success, -1 on conflict, -ENOMEM on allocation failure. Two
@@ -67,8 +78,12 @@ uint16_t udp_bind_ephemeral(struct socket *sock);
  * Takes `net_lock` itself. */
 void udp_unbind(struct socket *sock);
 
-/** Deliver an IPv6 UDP message after verifying its mandatory checksum.
+/** Deliver the UDP message of `len` bytes at `data`, of the IPv6 datagram
+ * whose fixed header is at `ip6h`, received on the interface of index
+ * `ifindex`, after verifying its mandatory checksum, with the datagram's
+ * destination, hop limit and class kept for the receive's ancillary data.
  * Returns -1 for no binding, zero for delivery or a malformed message.
  * The caller holds net_lock. */
-int udp6_rx(int ifindex, const uint8_t *src, const uint8_t *dst, const uint8_t *data, uint16_t len);
+int udp6_rx(int ifindex, const uint8_t *ip6h, const uint8_t *data, uint16_t len);
+
 #endif /* _UDP_H_ */

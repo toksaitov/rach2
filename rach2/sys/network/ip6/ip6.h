@@ -196,6 +196,15 @@ uint16_t ip6_checksum(const uint8_t *src, const uint8_t *dst, uint8_t nh, const 
 int ip6_source(const struct netdev *out, const uint8_t *dst, uint8_t *src);
 
 /**
+ * Give the IPv6 datagram of `len` bytes at `data`, taken from the loopback
+ * ring, to `ip6_rx`: as `lo`'s when `ifindex` is 0, and as received by the
+ * card of index `ifindex` when it is a copy of a datagram this machine sent
+ * to a group that card is a member of (IP6_TXF_LOOP), which is not judged a
+ * spoof for its own source. Called with interrupts off, from the drain.
+ */
+void ip6_loop_rx(int ifindex, const uint8_t *data, uint16_t len);
+
+/**
  * Check the IPv6 datagram of `len` bytes at `data`, received on `nd`, and
  * give it to its protocol. `nd` is NULL for a datagram from the loopback
  * ring, which is `lo`'s.
@@ -257,17 +266,25 @@ int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, cons
 
 /* What `ip6_tx_opts` may add to a send: the source is :: as given, not
  * one chosen, for duplicate address detection (RFC 4862, 5.4.2); a
- * hop-by-hop header with the router alert of MLD (RFC 3810, 5); and the
+ * hop-by-hop header with the router alert of MLD (RFC 3810, 5); the
  * destination is on the link of the interface `ifindex` names, whatever
- * the routes say, for neighbour discovery's answers and probes. */
-#define IP6_TXF_UNSPEC  0x1
-#define IP6_TXF_RTALERT 0x2
-#define IP6_TXF_ONLINK  0x4
+ * the routes say, for neighbour discovery's answers and probes; a datagram
+ * to a group the card it leaves by is a member of also comes back to this
+ * machine, as IPV6_MULTICAST_LOOP asks; and the traffic class, bits 8 to
+ * 15, 0 unless given. */
+#define IP6_TXF_UNSPEC         0x1
+#define IP6_TXF_RTALERT        0x2
+#define IP6_TXF_ONLINK         0x4
+#define IP6_TXF_LOOP           0x8
+#define IP6_TXF_TCLASS(c)      (((int)(c) & 0xff) << 8)
+#define IP6_TXF_CLASS_OF(opts) ((uint8_t)(((opts) >> 8) & 0xff))
 
 /**
  * `ip6_tx` with the IP6_TXF_* of `opts`. IP6_TXF_UNSPEC sends from ::
  * whatever `src` is, and only by a card; IP6_TXF_ONLINK needs a card that
- * is up in `ifindex`, -ENETUNREACH otherwise.
+ * is up in `ifindex`, -ENETUNREACH otherwise. IP6_TXF_LOOP puts a copy of a
+ * datagram to a group on the loopback ring as received by the card it left
+ * by, when the card is a member, unless it left in fragments.
  */
 int ip6_tx_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh,
                 const uint8_t *payload, uint16_t plen, uint8_t hlim, int opts);
@@ -301,6 +318,10 @@ int ip6_tx_whole(const uint8_t *dg, uint32_t len, const uint8_t *dst, int ifinde
  *         there is one.
  */
 struct netdev *ip6_route(const uint8_t *dst, int ifindex, uint8_t *via);
+
+/** `ip6_route` without the count, for a caller that only asks which
+ * interface a later send would take. */
+struct netdev *ip6_route_find(const uint8_t *dst, int ifindex, uint8_t *via);
 
 /**
  * The most bytes, IPv6 header included, a datagram to `dst` by `out` may
