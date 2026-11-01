@@ -62,6 +62,21 @@ static int number_valid(const char *s, unsigned min, unsigned max)
     return value >= min;
 }
 
+/** Parse NUMLOCK's value into `conf`: yes or 1, no or 0, or empty to keep
+ * the default; -1 for any other. */
+static int numlock(const char *value, struct vconsole *conf)
+{
+    if (!strcmp(value, "yes") || !strcmp(value, "1"))
+        conf->numlock = 1;
+    else if (!strcmp(value, "no") || !strcmp(value, "0"))
+        conf->numlock = 0;
+    else if (!*value)
+        conf->numlock = -1;
+    else
+        return -1;
+    return 0;
+}
+
 /** Parse one assignment; unknown keys are ignored for file-format
  * compatibility. */
 static int assignment(char *line, struct vconsole *conf)
@@ -101,15 +116,7 @@ static int assignment(char *line, struct vconsole *conf)
         dest = conf->rate;
         size = sizeof(conf->rate);
     } else if (!strcmp(key, "NUMLOCK")) {
-        if (!strcmp(value, "yes") || !strcmp(value, "1"))
-            conf->numlock = 1;
-        else if (!strcmp(value, "no") || !strcmp(value, "0"))
-            conf->numlock = 0;
-        else if (!*value)
-            conf->numlock = -1;
-        else
-            return -1;
-        return 0;
+        return numlock(value, conf);
     } else
         return 0;
     if (dest == conf->keymap || dest == conf->toggle || dest == conf->options) {

@@ -2148,6 +2148,15 @@ static void start_services(struct services *s)
     }
 }
 
+/** Whether `reaped` is the pid of one of the services `*s`, as for
+ * `service_ended`. */
+static int services_ended(struct services *s, pid_t reaped)
+{
+    return service_ended(&s->log, reaped) || service_ended(&s->sshd, reaped) ||
+           service_ended(&s->bus, reaped) || service_ended(&s->cron, reaped) ||
+           service_ended(&s->ntp, reaped);
+}
+
 #endif
 
 /**
@@ -2563,9 +2572,7 @@ int main(void)
             continue;
         }
 #ifdef INIT_METAL
-        if (service_ended(&services.log, reaped) || service_ended(&services.sshd, reaped) ||
-            service_ended(&services.bus, reaped) || service_ended(&services.cron, reaped) ||
-            service_ended(&services.ntp, reaped)) {
+        if (services_ended(&services, reaped)) {
             continue;
         }
 #endif
