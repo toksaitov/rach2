@@ -300,6 +300,61 @@ static void follow_size(struct term *t)
 }
 
 /**
+ * The poll's timeout in milliseconds, or -1 for none: drawing's, the bell's
+ * end or the hold's bound, and while a held frame waits, TERM_HOLD_POLL_MS
+ * at most. No frame is drawn while a descendant has the screen.
+ */
+static int poll_timeout(struct term *t)
+{
+    int timeout;
+
+    if (t->suspended)
+        return -1;
+    timeout = term_draw_timeout(&t->draw);
+    if (t->dirty && term_screen_held(&t->screen) && (timeout < 0 || timeout > TERM_HOLD_POLL_MS))
+        timeout = TERM_HOLD_POLL_MS;
+    return timeout;
+}
+
+/**
+ * Read the keys the console has, and follow a change of the font's scale
+ * that one asked for. Returns 0, or -1 when the console failed.
+ */
+static int read_keys(struct term *t)
+{
+    int r = term_keys_read(&t->keys, &t->screen, &t->sel);
+
+    if (r < 0 && r != -EAGAIN && r != -EINTR) {
+        fprintf(stderr, "term: keys: %s\n", strerror(-r));
+        return -1;
+    }
+    /* The scrollback and the selection change what is shown. */
+    t->dirty = true;
+    if (t->keys.scale) {
+        term_draw_rescale(&t->draw, t->keys.scale, t->conf);
+        t->keys.scale = 0;
+    }
+    return 0;
+}
+
+/**
+ * Show what the round changed: the new size, the visible bell, and a frame
+ * when the screen changed or the bell's end or the hold's bound came.
+ */
+static void present(struct term *t)
+{
+    follow_size(t);
+    if (t->screen.bell) {
+        term_draw_bell(&t->draw);
+        t->screen.bell = false;
+    }
+    if (t->dirty || term_draw_timeout(&t->draw) == 0) {
+        term_draw_frame(&t->draw, &t->screen);
+        t->dirty = term_screen_held(&t->screen);
+    }
+}
+
+/**
  * The loop: poll the signal pipe, the master, the console and /fb, and
  * serve each, until the child exits or a signal ends term.
  *
@@ -316,7 +371,6 @@ static int loop(struct term *t, int sigfd)
     struct pollfd p[P_COUNT];
     unsigned bits;
     int status;
-    int timeout;
     int r;
 
     for (;;) {
@@ -328,15 +382,10 @@ static int loop(struct term *t, int sigfd)
         p[P_KEYS].events = POLLIN;
         p[P_FB].fd = t->draw.fd;
         p[P_FB].events = POLLIN;
-        /* Drawing's timeout is the bell's end or the hold's bound. */
-        timeout = t->suspended ? -1 : term_draw_timeout(&t->draw);
-        if (t->dirty && !t->suspended && term_screen_held(&t->screen) &&
-            (timeout < 0 || timeout > TERM_HOLD_POLL_MS))
-            timeout = TERM_HOLD_POLL_MS;
         for (r = 0; r < P_COUNT; r++)
             p[r].revents = 0;
 
-        r = poll(p, P_COUNT, timeout);
+        r = poll(p, P_COUNT, poll_timeout(t));
         if (r < 0 && errno != EINTR) {
             perror("term: poll");
             return 1;
@@ -356,19 +405,8 @@ static int loop(struct term *t, int sigfd)
         if (p[P_FB].revents & POLLIN)
             read_fb_event(t);
         /* Keys polled before the screen was lost are the descendant's. */
-        if (!t->suspended && (p[P_KEYS].revents & (POLLIN | POLLHUP | POLLERR))) {
-            r = term_keys_read(&t->keys, &t->screen, &t->sel);
-            if (r < 0 && r != -EAGAIN && r != -EINTR) {
-                fprintf(stderr, "term: keys: %s\n", strerror(-r));
-                return 1;
-            }
-            /* The scrollback and the selection change what is shown. */
-            t->dirty = true;
-            if (t->keys.scale) {
-                term_draw_rescale(&t->draw, t->keys.scale, t->conf);
-                t->keys.scale = 0;
-            }
-        }
+        if (!t->suspended && (p[P_KEYS].revents & (POLLIN | POLLHUP | POLLERR)) && read_keys(t) < 0)
+            return 1;
         if (p[P_MASTER].revents & POLLOUT)
             term_pty_flush(&t->pty);
         if (p[P_MASTER].revents & (POLLIN | POLLHUP | POLLERR)) {
@@ -379,17 +417,8 @@ static int loop(struct term *t, int sigfd)
             }
         }
 
-        if (t->suspended)
-            continue;
-        follow_size(t);
-        if (t->screen.bell) {
-            term_draw_bell(&t->draw);
-            t->screen.bell = false;
-        }
-        if (t->dirty || term_draw_timeout(&t->draw) == 0) {
-            term_draw_frame(&t->draw, &t->screen);
-            t->dirty = term_screen_held(&t->screen);
-        }
+        if (!t->suspended)
+            present(t);
     }
 }
 
