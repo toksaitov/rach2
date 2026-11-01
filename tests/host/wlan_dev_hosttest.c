@@ -1,5 +1,7 @@
-/* Check radio registration, station Ethernet conversion and the EAPOL gate.
+/* Check radio registration, station Ethernet conversion, the EAPOL gate and
+ * the radio's rfkill switch.
  * host-deps: rach2/sys/network/wireless/wiphy.c
+ * host-deps: rach2/sys/rfkill.c tests/host/compat/spinlock_host.c
  * host-deps: rach2/sys/network/wireless/wlan.c
  * host-deps: rach2/sys/network/wireless/reg.c
  * host-deps: rach2/sys/network/driver/netdev.c
@@ -32,10 +34,13 @@
 #include "lib/kstring.h"
 
 extern int printf(const char *format, ...);
+extern int memcmp(const void *a, const void *b, unsigned long n);
 extern unsigned long kheap_host_largest;
 static unsigned failures, ip_received, wakes, lock_depth;
 static int start_error, state_error;
-static unsigned starts, stops, transmissions;
+static unsigned starts, stops, transmissions, aborts;
+static struct wlan_work *work_queue[4]; /* the model worker's queue, in order */
+static unsigned work_count;
 static uint8_t sent[IEEE80211_MAX_FRAME_LEN], queued[ETH_HDR_SIZE + ETH_MTU];
 static unsigned sent_len, queued_len;
 uint8_t net_mac[6];
@@ -154,6 +159,103 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
     (void)wq;
     (void)kinds;
     ++wakes;
+}
+
+/** No reader of /dev/rfkill waits in this model. */
+int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    return cond(arg) ? 0 : -EINTR;
+}
+
+/** The model has no user memory; no row reaches a copy. */
+int copy_to_user(void __user *dst, const void *src, size_t len)
+{
+    (void)dst;
+    (void)src;
+    (void)len;
+    return -EFAULT;
+}
+
+int copy_from_user(void *dst, const void __user *src, size_t len)
+{
+    (void)dst;
+    (void)src;
+    (void)len;
+    return -EFAULT;
+}
+
+/** The spinlocks need no interrupt state on the host. */
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
+/** Queue work in the model worker, refusing a record already queued. */
+int wlan_queue_work(struct wlan_work *work, uint64_t due)
+{
+    (void)due;
+    if (work->pending)
+        return -EBUSY;
+    CHECK(work_count < sizeof(work_queue) / sizeof(work_queue[0]));
+    if (work_count >= sizeof(work_queue) / sizeof(work_queue[0]))
+        return -EBUSY;
+    work->pending = 1;
+    work_queue[work_count++] = work;
+    return 0;
+}
+
+/** Take a queued record off the model queue. */
+void wlan_cancel_work(struct wlan_work *work)
+{
+    unsigned i, j;
+
+    for (i = 0; i < work_count; ++i) {
+        if (work_queue[i] == work) {
+            for (j = i + 1; j < work_count; ++j)
+                work_queue[j - 1] = work_queue[j];
+            --work_count;
+            work->pending = 0;
+            return;
+        }
+    }
+}
+
+/** Run the model worker's queue until it is empty; returns the runs. */
+static unsigned run_work(void)
+{
+    struct wlan_work *work;
+    unsigned ran = 0, i;
+
+    while (work_count) {
+        work = work_queue[0];
+        for (i = 1; i < work_count; ++i)
+            work_queue[i - 1] = work_queue[i];
+        --work_count;
+        work->pending = 0;
+        work->run(work);
+        ++ran;
+    }
+    return ran;
+}
+
+/** A scan runs while the model scan is not idle. */
+int wlan_scan_running(const struct wlan_scan *scan)
+{
+    return scan->state != WLAN_SCAN_IDLE;
+}
+
+/** Abort the model scan at once. */
+int wlan_scan_abort(struct wlan_scan *scan)
+{
+    scan->state = WLAN_SCAN_IDLE;
+    ++aborts;
+    return 0;
 }
 
 /** Model administrative state without the separate IPv6 state machine. */
@@ -507,6 +609,73 @@ static void station(void)
     CHECK(netdev_count() == 0 && netdev_listed() == 1);
 }
 
+/** Whether attribute `attr` of switch `index` reads as `text`. */
+static int shows(int index, int attr, const char *text)
+{
+    char out[160];
+    int len = rfkill_show(index, attr, out, (int)sizeof(out));
+
+    return len == (int)k_strlen(text) && memcmp(out, text, (unsigned long)len) == 0;
+}
+
+/** The radio's switch: a soft block stops it and its release starts it, a
+ * hard block the driver reports does the same, and a radio stopped or
+ * never started stays down when the block lifts. */
+static void blocking(void)
+{
+    struct wlan_radio radio;
+    struct wlan *wlan = 0;
+    int index;
+    unsigned before_starts = starts, before_stops = stops;
+
+    setup(&radio, 3);
+    CHECK(wlan_register_radio(&radio, &wlan) == 0 && wlan && wlan->rfkill);
+    if (!wlan)
+        return;
+    index = (int)rfkill_index(wlan->rfkill);
+    CHECK(rfkill_present(index) && rfkill_phy(index) == (int)radio.index);
+    CHECK(shows(index, RFKILL_ATTR_NAME, "phy2\n") && shows(index, RFKILL_ATTR_TYPE, "wlan\n"));
+    CHECK(!wlan->blocked && wlan_start(wlan) == 0 && starts == before_starts + 1);
+    /* The soft block stops the radio on the worker, aborting a scan. */
+    wlan->scan.state = WLAN_SCAN_SOFTWARE;
+    CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "1", 1) == 0);
+    CHECK(wlan->started && !wlan->blocked && work_count == 1);
+    CHECK(run_work() == 1 && !wlan->started && wlan->blocked && aborts == 1);
+    CHECK(stops == before_stops + 1 && shows(index, RFKILL_ATTR_STATE, "0\n"));
+    CHECK(wlan_start(wlan) == -ERFKILL && starts == before_starts + 1);
+    /* The hard block holds the radio off after the soft one is released. */
+    wlan_radio_rfkill(&radio, 1);
+    CHECK(run_work() == 1 && wlan->blocked && shows(index, RFKILL_ATTR_STATE, "2\n"));
+    CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "0", 1) == 0 && run_work() == 1);
+    CHECK(wlan->blocked && !wlan->started && starts == before_starts + 1);
+    wlan_radio_rfkill(&radio, 0);
+    CHECK(run_work() == 1 && !wlan->blocked && wlan->started && starts == before_starts + 2);
+    CHECK(shows(index, RFKILL_ATTR_STATE, "1\n"));
+    /* A report while the first record waits queues the second; both run,
+     * and the second finds nothing left to do. */
+    wlan_radio_rfkill(&radio, 1);
+    wlan_radio_rfkill(&radio, 0);
+    CHECK(work_count == 2 && run_work() == 2 && wlan->started && !wlan->blocked);
+    CHECK(stops == before_stops + 1 && starts == before_starts + 2);
+    /* A stopped radio stays stopped across a block. */
+    wlan_stop(wlan);
+    CHECK(rfkill_store(index, RFKILL_ATTR_STATE, "0", 1) == 0 && run_work() == 1);
+    CHECK(rfkill_store(index, RFKILL_ATTR_STATE, "1", 1) == 0 && run_work() == 1);
+    CHECK(!wlan->started && !wlan->blocked && starts == before_starts + 2);
+    /* A start refused while blocked happens when the block lifts. */
+    CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "1", 1) == 0 && run_work() == 1);
+    CHECK(wlan_start(wlan) == -ERFKILL && !wlan->started);
+    CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "0", 1) == 0 && run_work() == 1);
+    CHECK(wlan->started && starts == before_starts + 3);
+    /* Removal withdraws the switch and its queued work. */
+    wlan_radio_rfkill(&radio, 1);
+    CHECK(work_count == 1);
+    wlan_unregister_radio(wlan);
+    CHECK(work_count == 0 && !rfkill_present(index) && rfkill_nth(0) == -1);
+    wlan_radio_rfkill(&radio, 0);
+    CHECK(work_count == 0);
+}
+
 /** Check bridge-tunnel, RFC 1042 exceptions and QoS header bounds. */
 static void conversion(void)
 {
@@ -606,6 +775,7 @@ static void regulatory(void)
 int main(void)
 {
     station();
+    blocking();
     conversion();
     regulatory();
     return failures ? 1 : 0;

@@ -105,12 +105,80 @@ static void wireless_stop(void *dev)
 static const struct netdev_ops wireless_ops = {"wireless",    0, wireless_tx, 0, wireless_stop,
                                                wireless_link, 0, 0,           0};
 
+/**
+ * Apply on the worker the block the switch and the driver ask for. A block
+ * aborts a scan, which then reports its abort, and stops the radio,
+ * remembering whether it ran or was asked to start; the release starts it
+ * again. Loops until the block applied is the one asked for, since either
+ * may change while the driver's stop or start sleeps.
+ */
+static void wlan_rfkill_apply(struct wlan_work *work)
+{
+    struct wlan *wlan = work->wlan;
+    unsigned want, resume;
+
+    for (;;) {
+        want = wlan->soft_blocked || wlan->hw_blocked;
+        if (wlan->removing || want == wlan->blocked)
+            return;
+        if (want) {
+            resume = wlan->started || wlan->resume;
+            if (wlan_scan_running(&wlan->scan))
+                (void)wlan_scan_abort(&wlan->scan);
+            wlan_stop(wlan);
+            wlan->blocked = 1;
+            wlan->resume = resume;
+        } else {
+            resume = wlan->resume;
+            wlan->blocked = 0;
+            wlan->resume = 0;
+            if (resume)
+                (void)wlan_start(wlan);
+        }
+    }
+}
+
+/** Queue the block's application: the first record, or the second when the
+ * first is pending or running, so that a change the running one has passed
+ * is not lost. IRQ-safe under the kernel lock. */
+static void wlan_rfkill_queue(struct wlan *wlan)
+{
+    if (wlan_queue_work(&wlan->rfkill_work[0], 0) == -EBUSY)
+        (void)wlan_queue_work(&wlan->rfkill_work[1], 0);
+}
+
+/** The switch's soft block, from /dev/rfkill or sysfs; the worker applies
+ * it. Process context under the kernel lock. */
+static int wlan_rfkill_set_block(void *data, int blocked)
+{
+    struct wlan *wlan = data;
+
+    wlan->soft_blocked = blocked ? 1u : 0u;
+    wlan_rfkill_queue(wlan);
+    return 0;
+}
+
+static const struct rfkill_ops wlan_rfkill_ops = {wlan_rfkill_set_block};
+
+/** Record the driver's hard block on the switch and queue its application. */
+void wlan_radio_rfkill(struct wlan_radio *radio, int blocked)
+{
+    struct wlan *wlan = radio ? radio->wlan : 0;
+
+    if (!wlan || wlan->removing)
+        return;
+    wlan->hw_blocked = blocked ? 1u : 0u;
+    (void)rfkill_set_hw_state(wlan->rfkill, blocked);
+    wlan_rfkill_queue(wlan);
+}
+
 /** Validate and register a borrowed radio, leaving it down on success. */
 int wlan_register_radio(struct wlan_radio *radio, struct wlan **out)
 {
     struct wlan *wlan;
     unsigned i, j, slot;
     int rc;
+    char phy[8];
 
     if (!out)
         return -EINVAL;
@@ -158,16 +226,32 @@ int wlan_register_radio(struct wlan_radio *radio, struct wlan **out)
         kfree(wlan);
         return rc;
     }
+    k_memcpy(phy, "phy", 3);
+    k_itoa((int)next_phy, phy + 3, 4, 10, 0);
+    rc = rfkill_register(phy, RFKILL_TYPE_WLAN, (int)next_phy, &wlan_rfkill_ops, wlan,
+                         &wlan->rfkill);
+    if (rc < 0) {
+        kfree(wlan);
+        return rc;
+    }
+    for (i = 0; i < 2; ++i) {
+        wlan->rfkill_work[i].wlan = wlan;
+        wlan->rfkill_work[i].run = wlan_rfkill_apply;
+    }
+    wlan->soft_blocked = (unsigned)rfkill_soft_blocked(wlan->rfkill);
+    wlan->blocked = wlan->soft_blocked;
     wlan_bss_init(&wlan->bss_table);
     wlan_scan_attach(&wlan->scan, wlan, wlan_event, radio, &wlan->band, &wlan->bss_table);
     rc = wlan_data_attach(wlan, wlan_event);
     if (rc < 0) {
+        rfkill_unregister(wlan->rfkill);
         kfree(wlan);
         return rc;
     }
     rc = netdev_register(&wlan->netdev);
     if (rc < 0) {
         wlan_data_detach(wlan);
+        rfkill_unregister(wlan->rfkill);
         kfree(wlan);
         return rc;
     }
@@ -185,8 +269,10 @@ int wlan_start(struct wlan *wlan)
 
     if (!wlan || wlan->removing)
         return -ENODEV;
-    if (wlan->blocked)
+    if (wlan->blocked) {
+        wlan->resume = 1;
         return -ERFKILL;
+    }
     if (wlan->started)
         return 0;
     rc = wlan->radio->ops->start(wlan->radio);
@@ -223,6 +309,7 @@ void wlan_stop(struct wlan *wlan)
 {
     if (!wlan)
         return;
+    wlan->resume = 0;
     wlan->state = WLAN_STA_NONE;
     wlan->bss = 0;
     wlan_data_disconnect(wlan_data_of(wlan));
@@ -246,6 +333,9 @@ void wlan_unregister_radio(struct wlan *wlan)
     if (!wlan || wlan->removing)
         return;
     wlan->removing = 1;
+    rfkill_unregister(wlan->rfkill);
+    wlan_cancel_work(&wlan->rfkill_work[0]);
+    wlan_cancel_work(&wlan->rfkill_work[1]);
     if (wlan->scan.state == WLAN_SCAN_HARDWARE && wlan->radio->ops->scan_cancel)
         wlan->radio->ops->scan_cancel(wlan->radio);
     wlan_stop(wlan);

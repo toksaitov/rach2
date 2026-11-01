@@ -5,6 +5,7 @@
 #include "wireless.h"
 #include "work.h"
 #include "../driver/netdev.h"
+#include "../../rfkill.h"
 
 #define WLAN_MAX_RADIOS NETDEV_MAX
 #define WLAN_ETH_P_PAE  0x888e
@@ -19,8 +20,16 @@ struct wlan {
     struct wlan_bss_table bss_table;
     struct wlan_scan scan;
     uint16_t frequency; /* MHz, zero before configuration */
-    /* Radio running, rfkill block, and unregister in progress. */
+    /* Radio running, rfkill block applied, and unregister in progress. */
     unsigned started, blocked, removing;
+    /* The radio's switch, phyN, and the block it asks for: the soft one
+     * from the switch and the hard one the driver reports, which the
+     * worker applies through two records, so that a report while one runs
+     * queues the other. `resume` restarts the radio when the block lifts. */
+    struct rfkill *rfkill;
+    struct wlan_work rfkill_work[2];
+    unsigned soft_blocked, resume;
+    volatile unsigned hw_blocked;
     /* Each private pointer is owned by the named component. */
     void *work_priv, *scan_priv, *mlme_priv, *data_priv;
     /** Copy and enqueue Ethernet data; called with net_lock, never sleep.
@@ -44,9 +53,11 @@ struct wlan *wlan_from_netdev(const struct netdev *nd);
 /** Return the nth registered station, or NULL; kernel lock held. */
 struct wlan *wlan_at(unsigned n);
 /** Start or stop a radio in process context without net_lock; start returns
- * 0 or a driver error. Stop clears association and closes the control port. */
+ * 0 or a driver error, or -ERFKILL while blocked, when the radio starts once
+ * the block lifts. Stop clears association and closes the control port. */
 int wlan_start(struct wlan *wlan);
-/** Stop and close the port; process context without net_lock, safe twice. */
+/** Stop and close the port; process context without net_lock, safe twice.
+ * A blocked radio stays stopped when the block lifts. */
 void wlan_stop(struct wlan *wlan);
 /** Commit a station state and BSS after the driver accepts it; worker only,
  * no net_lock. Return 0, -EINVAL or a driver error, preserving old state;
