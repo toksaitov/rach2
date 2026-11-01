@@ -777,12 +777,12 @@ $(KRFFSMOUNT_DISKS): $(KRFFSVOLS)
 $(call together,$(KRFFSMOUNT_DISKS)): tests/system/krffsvol.sh $(MKMBR)
 	sh tests/system/krffsvol.sh disks $(CASE_DIR)/krffsmount
 
-# `tests/run ext2`: the ext2 driver booted: the probes as init on an ext2
-# root, ext2probe's link, cost, name-cache and lookup rows on a fixture volume
-# the host's mke2fs wrote, and os-real on its ext2 root, written, killed,
-# checked, damaged and repaired by recovery's e2fsck. They are the machine cases of
-# tests/cases/machine.ext2.json, which etude runs, and have no target here.
-# The cases boot private copies of the three disks below.
+# `tests/run ext2`: the ext2 driver booted: the probes as init on an ext2 root,
+# ext2probe's link, cost, name-cache and lookup rows on a fixture volume the
+# host's mke2fs wrote, and os-real on its ext2 root, written, killed, checked,
+# damaged and repaired by recovery's e2fsck. They are the machine cases of
+# tests/cases/machine.ext2.json, which etude runs, and have no target here. The
+# cases boot private copies of the three disks below.
 #
 # The probes' disk: the test manifest as an ext2 volume of 16 MiB, the first
 # MBR partition at sector 2048.

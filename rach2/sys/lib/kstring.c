@@ -100,14 +100,15 @@ void *k_memcpy(void *dest, const void *src, size_t n)
 }
 
 /**
- * When the destination starts inside the source, a forward copy would
- * overwrite source bytes before they are read, so the copy runs backward
- * from the last byte: the bytes past the last whole word, then the words by
- * `arch_copy_words_down` where the architecture has it. A process's regions
- * are one sorted array, and each mapping placed below the others moves it
- * all up, so a thread's stack and guard page move every region. Every other arrangement copies
- * forward through `k_memcpy`, which is safe with the destination below the source or apart from it,
- * in words as in bytes: each word is read before the word at or below it is written.
+ * When the destination starts inside the source, a forward copy would overwrite
+ * source bytes before they are read, so the copy runs backward from the last
+ * byte: the bytes past the last whole word, then the words by
+ * `arch_copy_words_down` where the architecture has it. A process's regions are
+ * one sorted array, and each mapping placed below the others moves it all up,
+ * so a thread's stack and guard page move every region. Every other arrangement
+ * copies forward through `k_memcpy`, which is safe with the destination below
+ * the source or apart from it, in words as in bytes: each word is read before
+ * the word at or below it is written.
  *
  * The overlap test compares addresses as integers, not as pointers: a
  * relational compare of pointers into two different objects is undefined in

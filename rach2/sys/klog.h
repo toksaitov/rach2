@@ -11,9 +11,9 @@
  *
  * The angle brackets hold the level with the kernel facility implied, which is
  * the form BusyBox's `klogd` parses. The brackets hold uptime in seconds and
- * microseconds, as Linux's do, counted in whole ticks. The subsystem and the `event: detail` text
- * after it are the shape `AGENTS.md` requires of every message; the call writes the subsystem and
- * its colon itself.
+ * microseconds, as Linux's do, counted in whole ticks. The subsystem and the
+ * `event: detail` text after it are the shape `AGENTS.md` requires of every
+ * message; the call writes the subsystem and its colon itself.
  *
  * The debug shell's menus, prompts and command output are not diagnostics.
  * They go through `console_putc`, `console_puts` and `console_printf`, which

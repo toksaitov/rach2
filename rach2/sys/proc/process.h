@@ -416,7 +416,8 @@ struct process {
     /* Index links, owned by process.c under the big kernel lock. */
     struct process *pid_next;
     struct proc_user_count *user_count;
-    /* Active timed waits and real alarms only; timer_linked marks membership. */
+    /* Active timed waits and real alarms only; timer_linked marks
+     * membership. */
     struct process *timer_prev, *timer_next;
     int timer_linked;
 };

@@ -1394,8 +1394,8 @@ static int synth_classify_sysvipc(const struct comp *c, int n, struct vpath *vp)
     return vp->kind;
 }
 
-/** Classify the components `c` of `n` from "dev": the directory, the
- * terminals of /dev/pts and its ptmx, the event devices of /dev/input, the descriptor
+/** Classify the components `c` of `n` from "dev": the directory, the terminals
+ * of /dev/pts and its ptmx, the event devices of /dev/input, the descriptor
  * links and the devices of /dev, whose presence devfs decides. */
 static int synth_classify_dev(const struct comp *c, int n, struct vpath *vp)
 {

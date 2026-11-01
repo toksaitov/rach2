@@ -1,9 +1,10 @@
 /*
  * ip.c: the IPv4 layer, as ip.h describes it: the checks of a received
  * datagram, the transmit, its choice of interface and its fragments, the
- * datagrams held for ARP, and the loopback ring; ipfrag.c reassembles. The 20-byte header has the
- * source and destination addresses, the protocol number, a TTL, and a one's complement checksum
- * over the header, its multi-byte fields big-endian.
+ * datagrams held for ARP, and the loopback ring; ipfrag.c reassembles. The
+ * 20-byte header has the source and destination addresses, the protocol number,
+ * a TTL, and a one's complement checksum over the header, its multi-byte fields
+ * big-endian.
  */
 
 #include "../../klog.h"

@@ -559,7 +559,8 @@ static int col_write(const char *path, const void *bytes, size_t size)
     return fclose(file) || rc ? -1 : 0;
 }
 
-/** Copy the job's outputs to the paths the request named; return `status` or 2. */
+/** Copy the job's outputs to the paths the request named; return `status`
+ * or 2. */
 static int col_copy_back(struct col_job *job, int status)
 {
     int rc = status;

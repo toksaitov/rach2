@@ -1959,14 +1959,14 @@ static void inode_encode(const struct ext2_mount *em, const struct ext2_node *n,
 }
 
 /**
- * Write inode `n` in the way `how` says, over the bytes its slot has, or
- * over zeros when `fresh`, for an inode just allocated: a freed inode's
- * slot keeps what it had, and the encoder writes only the fields this
- * driver keeps. A fresh inode is written over its whole slot, so that a
- * large slot loses the attributes a freed inode kept in it; any other
- * store writes the part of the slot the encoder covers. Inside a batch the write is left for the
- * batch's end. A regular file of 2 GiB or more sets `large_file` first. A store while the
- * file-write batch holds inodes is a panic, since it must come after their
+ * Write inode `n` in the way `how` says, over the bytes its slot has, or over
+ * zeros when `fresh`, for an inode just allocated: a freed inode's slot keeps
+ * what it had, and the encoder writes only the fields this driver keeps. A
+ * fresh inode is written over its whole slot, so that a large slot loses the
+ * attributes a freed inode kept in it; any other store writes the part of the
+ * slot the encoder covers. Inside a batch the write is left for the batch's
+ * end. A regular file of 2 GiB or more sets `large_file` first. A store while
+ * the file-write batch holds inodes is a panic, since it must come after their
  * drain. 0, or -errno.
  */
 static int inode_write(struct ext2_mount *em, const struct ext2_node *n, int fresh, int how)

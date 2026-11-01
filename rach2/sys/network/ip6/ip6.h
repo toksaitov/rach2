@@ -335,12 +335,11 @@ struct netdev *ip6_route(const uint8_t *dst, int ifindex, uint8_t *via);
 struct netdev *ip6_route_find(const uint8_t *dst, int ifindex, uint8_t *via);
 
 /**
- * The most bytes, IPv6 header included, a datagram to `dst` by `out` may
- * have without being fragmented: the link's MTU, `nd6_link_mtu` for a card
- * and NETDEV_LOOPBACK_MTU for the loopback ring, or less when a Packet Too Big has
- * lowered the destination's within the last ten minutes
- * (`ip6_pmtu_lower`); 0 for a NULL `out`. A link-scoped destination is
- * told apart by `out`.
+ * The most bytes, IPv6 header included, a datagram to `dst` by `out` may have
+ * without being fragmented: the link's MTU, `nd6_link_mtu` for a card and
+ * NETDEV_LOOPBACK_MTU for the loopback ring, or less when a Packet Too Big has
+ * lowered the destination's within the last ten minutes (`ip6_pmtu_lower`); 0
+ * for a NULL `out`. A link-scoped destination is told apart by `out`.
  */
 uint32_t ip6_path_mtu(const struct netdev *out, const uint8_t *dst);
 

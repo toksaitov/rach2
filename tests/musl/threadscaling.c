@@ -1,4 +1,5 @@
-/* threadscaling: count process, VMA and selection work beside blocked threads. */
+/* threadscaling: count process, VMA and selection work beside blocked
+ * threads. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <pthread.h>

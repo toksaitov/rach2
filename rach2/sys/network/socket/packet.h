@@ -94,8 +94,8 @@ struct packet_row {
  */
 int packet_snapshot(struct packet_row **rows);
 
-/** Remove a socket from the delivery table and free what it has queued, when its last
- * reference goes (`socket_unref`). Takes `net_lock` itself. */
+/** Remove a socket from the delivery table and free what it has queued, when
+ * its last reference goes (`socket_unref`). Takes `net_lock` itself. */
 void packet_unbind(struct socket *sock);
 
 /**
@@ -164,10 +164,10 @@ int packet_last_addr(struct socket *sock, uint8_t *sll);
  * There is no address to route on here, since the caller gave a MAC.
  *
  * Returns the bytes sent; -EMSGSIZE for an empty payload or one past the
- * interface's MTU, `nd->mtu`, -EINVAL for an EtherType other than IPv4, ARP and IPv6, -ENODEV
- * for an index no interface has, or -ENETDOWN with no interface. Takes `net_lock`
- * itself, since the Ethernet transmit buffer is shared with the receive
- * interrupt.
+ * interface's MTU, `nd->mtu`, -EINVAL for an EtherType other than IPv4, ARP and
+ * IPv6, -ENODEV for an index no interface has, or -ENETDOWN with no interface.
+ * Takes `net_lock` itself, since the Ethernet transmit buffer is shared with
+ * the receive interrupt.
  */
 int packet_send(struct socket *sock, int ifindex, const uint8_t *dst_mac, uint16_t ethertype,
                 const uint8_t *data, uint16_t len);

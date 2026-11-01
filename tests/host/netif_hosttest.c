@@ -1,8 +1,9 @@
 /**
  * Exercise the socket address and option handlers with two interfaces, a
- * stream's keepalive options, the creation flags of socket and accept4, an accept the heap has no
- * room to give a descriptor, a recvfrom given an address and no length pointer, and the descriptor
- * accept reserves while it copies the peer's address.
+ * stream's keepalive options, the creation flags of socket and accept4, an
+ * accept the heap has no room to give a descriptor, a recvfrom given an address
+ * and no length pointer, and the descriptor accept reserves while it copies the
+ * peer's address.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/network/socket/address.c

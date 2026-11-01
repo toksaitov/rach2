@@ -1566,10 +1566,10 @@ static void exec_layout(struct exec_state *s)
 /**
  * Load the interpreter the program's PT_INTERP names into the new address
  * space, as Linux's `load_elf_interp` loads it: a position-independent one,
- * which every dynamic linker is, at the top of the range mmap places
- * mappings in, just below the image's mmap base, and one with fixed
- * addresses at those. Its own PT_INTERP is ignored. The new image starts at its entry,
- * and `*base`, AT_BASE, is the distance it was moved by.
+ * which every dynamic linker is, at the top of the range mmap places mappings
+ * in, just below the image's mmap base, and one with fixed addresses at those.
+ * Its own PT_INTERP is ignored. The new image starts at its entry, and `*base`,
+ * AT_BASE, is the distance it was moved by.
  *
  * The path is held to the rule execve's own is (`canonicalize_named`), in
  * the one walk of the open: one that names a directory by its end must
@@ -1620,18 +1620,18 @@ static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
 /**
  * Build the new image in `s`'s address space of its own while the caller's
  * still runs, as Linux's `load_elf_binary` builds one, in the layout
- * `exec_layout` chose: the program, at its base when it is
- * position-independent and linked below ELF_ET_DYN_BASE; the interpreter
- * its PT_INTERP names; the vDSO, one free page above the range mmap places
- * mappings in, so that no mapping there ends against it (`vdso_map`); the
- * regions; and the stack, with the pointers and the auxiliary vector below
- * its strings. Each of the program and the interpreter maps its segments from its file where it
- * can, and the reference to the file's mapping goes from the open file to the image, which keeps it
- * until `exec_release`. The stack may grow to the soft RLIMIT_STACK, lowered to 8 MiB for an image
- * that runs with ids its caller lacks, and the regions may cover no more than RLIMIT_AS. The
- * caller's image is untouched, so every failure is an error execve
- * returns. 0, -ENOEXEC, -ENOMEM, -EIO, or an error of `exec_interp` or of a
- * mount's read.
+ * `exec_layout` chose: the program, at its base when it is position-independent
+ * and linked below ELF_ET_DYN_BASE; the interpreter its PT_INTERP names; the
+ * vDSO, one free page above the range mmap places mappings in, so that no
+ * mapping there ends against it (`vdso_map`); the regions; and the stack, with
+ * the pointers and the auxiliary vector below its strings. Each of the program
+ * and the interpreter maps its segments from its file where it can, and the
+ * reference to the file's mapping goes from the open file to the image, which
+ * keeps it until `exec_release`. The stack may grow to the soft RLIMIT_STACK,
+ * lowered to 8 MiB for an image that runs with ids its caller lacks, and the
+ * regions may cover no more than RLIMIT_AS. The caller's image is untouched, so
+ * every failure is an error execve returns. 0, -ENOEXEC, -ENOMEM, -EIO, or an
+ * error of `exec_interp` or of a mount's read.
  */
 static int32_t exec_build(struct exec_state *s)
 {
@@ -2414,20 +2414,21 @@ static void fork_frame(process_t *child, const isr_params_t *params, const struc
  * kernel has.
  *
  * The child's record takes its parts from the parent's (`fork_ids`,
- * `fork_shares`, `fork_signals`), and its address space is a
- * copy-on-write copy, or under CLONE_VM the parent's own. The child is set
- * up to return from fork with value 0 (`fork_frame`); the parent gets the
- * child's PID, after the child has called execve or ended when `req` has
- * CLONE_VFORK. Returns -errno on failure. `req` has the stack pointer the
- * child starts with and the addresses of the ids clone stores: the parent's
- * CLONE_PARENT_SETTID word, stored before the child runs, and the child's
- * CLONE_CHILD_SETTID word and the CLONE_CHILD_CLEARTID address its thread end
- * clears; and the address CLONE_PIDFD stores a pidfd of the child at, made
- * before the child runs (`fork_pidfd`). The child has the parent's TLS base, since its frame keeps
- * the parent's %gs selector and its address space has the same addresses, unless CLONE_SETTLS names
- * another, and the floating-point registers as they are now, since the parent's record has only
- * what they were at its last switch away. The parent gets the child's PID in the parent's PID
- * namespace; the vfork wait names the child by the kernel's.
+ * `fork_shares`, `fork_signals`), and its address space is a copy-on-write
+ * copy, or under CLONE_VM the parent's own. The child is set up to return from
+ * fork with value 0 (`fork_frame`); the parent gets the child's PID, after the
+ * child has called execve or ended when `req` has CLONE_VFORK. Returns -errno
+ * on failure. `req` has the stack pointer the child starts with and the
+ * addresses of the ids clone stores: the parent's CLONE_PARENT_SETTID word,
+ * stored before the child runs, and the child's CLONE_CHILD_SETTID word and the
+ * CLONE_CHILD_CLEARTID address its thread end clears; and the address
+ * CLONE_PIDFD stores a pidfd of the child at, made before the child runs
+ * (`fork_pidfd`). The child has the parent's TLS base, since its frame keeps
+ * the parent's %gs selector and its address space has the same addresses,
+ * unless CLONE_SETTLS names another, and the floating-point registers as they
+ * are now, since the parent's record has only what they were at its last switch
+ * away. The parent gets the child's PID in the parent's PID namespace; the
+ * vfork wait names the child by the kernel's.
  *
  * The child is PROC_UNUSED while it is built, neither runnable nor seen by
  * the other calls, since the building may sleep and a switch to it before

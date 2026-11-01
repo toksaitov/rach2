@@ -20,9 +20,10 @@
 /* An echo to the destination, an IPv4 address as an integer whose high byte
  * is the first octet. Returns the round trip in kernel ticks. */
 #define SC_PING      0x1000
-/* An echo to the destination with the data size, at most 65507 bytes, sent
- * in fragments past 1472, and the hop limit, 1 to 255. Returns the reply's ICMP length in the low
- * 16 bits and the hop limit it arrived with in the 8 bits above them. */
+/* An echo to the destination with the data size, at most 65507 bytes, sent in
+ * fragments past 1472, and the hop limit, 1 to 255. Returns the reply's ICMP
+ * length in the low 16 bits and the hop limit it arrived with in the 8 bits
+ * above them. */
 #define SC_PING_DATA 0x1001
 /* An ICMPv6 echo: the address of the destination's 16 bytes in network
  * order, the index of the interface a link-local destination is reached by

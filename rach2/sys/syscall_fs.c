@@ -2696,13 +2696,13 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
 }
 
 /**
- * The FIFO half of `open_special`: the descriptor `fd` the open reserved,
- * whose description holds the file and its mount, as a regular file's does,
- * made an end of the file's pipe. The walk's lock goes before
- * `fifo_attach`, which may wait for the other end, with the slot still a
- * reservation, and finds the entry again after the wait (`fd_entry_now`),
- * since the open's sleeps let another sharer grow the table. Returns the descriptor or a negative
- * errno, with `ref` released and the reservation installed or freed either way.
+ * The FIFO half of `open_special`: the descriptor `fd` the open reserved, whose
+ * description holds the file and its mount, as a regular file's does, made an
+ * end of the file's pipe. The walk's lock goes before `fifo_attach`, which may
+ * wait for the other end, with the slot still a reservation, and finds the
+ * entry again after the wait (`fd_entry_now`), since the open's sleeps let
+ * another sharer grow the table. Returns the descriptor or a negative errno,
+ * with `ref` released and the reservation installed or freed either way.
  */
 static int32_t open_fifo(struct vfs_ref *ref, int fd, uint64_t ino, int flags)
 {

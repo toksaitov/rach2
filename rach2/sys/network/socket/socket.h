@@ -8,11 +8,11 @@
 
 /*
  * socket: the kernel object behind a descriptor of type FD_TYPE_SOCKET, for
- * AF_INET and AF_INET6 stream, datagram and raw sockets and for AF_PACKET and AF_NETLINK
- * ones. A socket is allocated from the heap and kept on a list of the live
- * sockets. Its reference count has one for each descriptor that refers to it,
- * which fork, dup and a descriptor passed over a local socket add to, and
- * the socket is torn down when the last goes.
+ * AF_INET and AF_INET6 stream, datagram and raw sockets and for AF_PACKET and
+ * AF_NETLINK ones. A socket is allocated from the heap and kept on a list of
+ * the live sockets. Its reference count has one for each descriptor that refers
+ * to it, which fork, dup and a descriptor passed over a local socket add to,
+ * and the socket is torn down when the last goes.
  */
 
 #define SOCK_STREAM         1 /* TCP */

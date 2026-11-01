@@ -511,8 +511,8 @@ void tcb_free(struct tcb *tcb)
 
 /**
  * The checksum of the segment of `seg_len` bytes at `seg`, computed over a
- * 12-byte IPv4 or 40-byte IPv6 pseudo-header and the segment; 0 for a segment received
- * whose checksum is right.
+ * 12-byte IPv4 or 40-byte IPv6 pseudo-header and the segment; 0 for a segment
+ * received whose checksum is right.
  */
 static uint16_t tcp_checksum(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *seg,
                              uint16_t seg_len)

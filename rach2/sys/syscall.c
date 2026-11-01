@@ -502,14 +502,14 @@ struct kernel_timespec64 {
  * the uptime seconds and the ticks within the second, with the timer's place
  * added as well (`rtc_monotonic`), read with interrupts masked, so no torn
  * second can make it step back; its coarse form stops at the tick. Where the
- * clock runs from the TSC (vdso.h), both are that clock's, which the vDSO
- * reads too, so that a call here and a reading there agree. No clock
- * follows an outside time: the machine reads the CMOS once and then
- * keeps its own time, which only a setting of the real time steps, and it
- * is never suspended, which is why CLOCK_MONOTONIC, CLOCK_MONOTONIC_RAW and
- * CLOCK_BOOTTIME read the same. A CPU clock is the ticks the timer charged. The seconds are 64
- * bits; the 32-bit timespec of i386's clock_gettime cuts them, which ends in 2038 for real time, as
- * Linux's does.
+ * clock runs from the TSC (vdso.h), both are that clock's, which the vDSO reads
+ * too, so that a call here and a reading there agree. No clock follows an
+ * outside time: the machine reads the CMOS once and then keeps its own time,
+ * which only a setting of the real time steps, and it is never suspended, which
+ * is why CLOCK_MONOTONIC, CLOCK_MONOTONIC_RAW and CLOCK_BOOTTIME read the same.
+ * A CPU clock is the ticks the timer charged. The seconds are 64 bits; the
+ * 32-bit timespec of i386's clock_gettime cuts them, which ends in 2038 for
+ * real time, as Linux's does.
  */
 static void clock_read(const struct kclock *c, struct kernel_timespec64 *out)
 {

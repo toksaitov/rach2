@@ -50,13 +50,13 @@
  * link-local address is tentative for a second after boot, and the first
  * send to the group waits for it, polling without a time limit of its own.
  *
- * It prints "IP6OPTMUSL OK" and exits 0 on success, or prints "IP6OPTMUSL
- * FAIL (detail)" and exits 1 at the first failure. etude's report
- * (probe_report.h), for the case ETUDE_CASE names, has an assertion for each
- * row in order: `defaults`, `option-errors`, `options-kept`, `ancillary`,
- * `sendmsg-control`, `ctrunc`, `no-control`, `filter`, `join`,
- * `multicast-loop`, `no-loop`, `leave`, `pktinfo-scope` and `namespace-join`. The first failure
- * fails its assertion and leaves the rest not run.
+ * It prints "IP6OPTMUSL OK" and exits 0 on success, or prints "IP6OPTMUSL FAIL
+ * (detail)" and exits 1 at the first failure. etude's report (probe_report.h),
+ * for the case ETUDE_CASE names, has an assertion for each row in order:
+ * `defaults`, `option-errors`, `options-kept`, `ancillary`, `sendmsg-control`,
+ * `ctrunc`, `no-control`, `filter`, `join`, `multicast-loop`, `no-loop`,
+ * `leave`, `pktinfo-scope` and `namespace-join`. The first failure fails its
+ * assertion and leaves the rest not run.
  */
 
 #define _GNU_SOURCE
@@ -557,8 +557,10 @@ static int group(void)
     }
     report_held();
 
-    if (setsockopt(rx, IPPROTO_IPV6, IPV6_LEAVE_GROUP, &mreq, sizeof(mreq)) != 0 ||
-        setsockopt(rx, IPPROTO_IPV6, IPV6_LEAVE_GROUP, &mreq, sizeof(mreq)) == 0 ||
+    if (setsockopt(rx, IPPROTO_IPV6, IPV6_LEAVE_GROUP, &mreq, sizeof(mreq)) != 0) {
+        return fail("leave");
+    }
+    if (setsockopt(rx, IPPROTO_IPV6, IPV6_LEAVE_GROUP, &mreq, sizeof(mreq)) == 0 ||
         errno != EADDRNOTAVAIL) {
         return fail("leave");
     }

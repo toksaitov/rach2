@@ -37,13 +37,13 @@ struct netdev;
  * Take the frame of `len` bytes at `data`, header included, received on
  * `nd`.
  *
- * A frame shorter than the header is dropped, and so is every frame while
- * an administrator has `nd` down; each counts as a receive drop. The rest
- * count as received. An ARP, IPv4 or IPv6 frame is offered whole to the
- * packet sockets (`packet_rx`) and its payload given to `arp_rx`, `ip_rx`
- * or `ip6_rx`; a frame of another EtherType is counted and goes nowhere. Called with
- * interrupts off, from a driver's interrupt handler or, for a card the tick
- * pumps, from the tick.
+ * A frame shorter than the header is dropped, and so is every frame while an
+ * administrator has `nd` down; each counts as a receive drop. The rest count as
+ * received. An ARP, IPv4 or IPv6 frame is offered whole to the packet sockets
+ * (`packet_rx`) and its payload given to `arp_rx`, `ip_rx` or `ip6_rx`; a frame
+ * of another EtherType is counted and goes nowhere. Called with interrupts off,
+ * from a driver's interrupt handler or, for a card the tick pumps, from the
+ * tick.
  */
 void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
 
@@ -59,13 +59,15 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len);
  * `plen` bytes at `payload` and hand it to `out`'s driver. `ethertype` is
  * in host byte order (e.g. ETH_TYPE_IP) and is written big-endian.
  *
- * Returns `NETDEV_TX_OK` once the driver took the frame, which counts as
- * sent; `ETHERNET_TX_TOOLONG` for a payload past 1500 bytes, or an IPv4,
- * IPv6 or ARP payload past `out->mtu`, which is refused and not cut short; or `NETDEV_TX_DROPPED`
- * when the frame was not sent, which a sender may keep and send again later. That is the answer for
- * an IPv4, IPv6 or ARP frame on an interface an administrator took down, any frame while the card
- * reports its link down (`netdev_running`), and a frame the driver refused. Each refusal counts as
- * a transmit drop on `out`; a NULL `out` is `NETDEV_TX_DROPPED` and counts nowhere.
+ * Returns `NETDEV_TX_OK` once the driver took the frame, which counts as sent;
+ * `ETHERNET_TX_TOOLONG` for a payload past 1500 bytes, or an IPv4, IPv6 or ARP
+ * payload past `out->mtu`, which is refused and not cut short; or
+ * `NETDEV_TX_DROPPED` when the frame was not sent, which a sender may keep and
+ * send again later. That is the answer for an IPv4, IPv6 or ARP frame on an
+ * interface an administrator took down, any frame while the card reports its
+ * link down (`netdev_running`), and a frame the driver refused. Each refusal
+ * counts as a transmit drop on `out`; a NULL `out` is `NETDEV_TX_DROPPED` and
+ * counts nowhere.
  *
  * The frame is built in a buffer of this file's, so the caller has
  * interrupts off (`net_lock` in a system call).

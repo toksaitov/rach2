@@ -1,7 +1,8 @@
 # shellcheck shell=bash
-# opencode-run: OpenCode plays the exchange of tests/system/fakeapi/opencode.json
-# with `opencode run --standalone --auto`, as the test account, in a fresh
-# home and a clone of the shared fixture, with FFF, its file finder, on.
+# opencode-run: OpenCode plays the exchange of
+# tests/system/fakeapi/opencode.json with `opencode run --standalone --auto`,
+# as the test account, in a fresh home and a clone of the shared fixture, with
+# FFF, its file finder, on.
 # Asked to, it reads notes.txt, searches the tree with its grep tool, which
 # runs ripgrep, runs check.sh, edits greeting.txt with its patch tool, and
 # runs check.sh again and commits; the fake server checks each tool result

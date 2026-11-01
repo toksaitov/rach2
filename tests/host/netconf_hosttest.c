@@ -2,7 +2,8 @@
  * netconf_hosttest.c: parse and judge the address the boot command line
  * gives, and the setters of netconf.c that change it while the machine runs.
  *
- * host-deps: rach2/sys/network/netconf.c rach2/sys/cmdline.c rach2/sys/network/ip6/addr6.c
+ * host-deps: rach2/sys/network/netconf.c rach2/sys/cmdline.c
+ * host-deps: rach2/sys/network/ip6/addr6.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * A wrong address here is not a crash; it is a machine that comes up on a

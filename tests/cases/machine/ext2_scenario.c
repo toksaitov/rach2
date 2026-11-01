@@ -1,11 +1,11 @@
 /*
- * ext2_scenario.c: the scenario of machine.ext2, the ext2 driver booted.
- * Cases `probe-NAME` run a probe as init on an ext2 root staged from the test
- * manifest; `links`, `cost`, `names` and `lookup` run ext2probe's rows on
- * the fixture volume the host's mke2fs wrote; `rewrite`, `append`, `setid`, `lchown`,
- * `dirent`, `zombie` and `busy` each boot os-real on a fresh copy of its ext2
- * root; and `repair` takes one copy of that root through a kill, the mount's
- * check, a lost block, a fault, recovery's e2fsck and a clean boot.
+ * ext2_scenario.c: the scenario of machine.ext2, the ext2 driver booted. Cases
+ * `probe-NAME` run a probe as init on an ext2 root staged from the test
+ * manifest; `links`, `cost`, `names` and `lookup` run ext2probe's rows on the
+ * fixture volume the host's mke2fs wrote; `rewrite`, `append`, `setid`,
+ * `lchown`, `dirent`, `zombie` and `busy` each boot os-real on a fresh copy of
+ * its ext2 root; and `repair` takes one copy of that root through a kill, the
+ * mount's check, a lost block, a fault, recovery's e2fsck and a clean boot.
  */
 #include <stdio.h>
 #include <stdlib.h>

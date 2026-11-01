@@ -776,7 +776,8 @@ static int api_setup(struct row *s, int refusal)
     unsigned i;
     const char *files[] = {"check.sh", "greeting.txt", "notes.txt"};
     const struct agent *a = agent_of(s->name);
-    /* The API cases are Codex's and Muse's; another agent has no settings here. */
+    /* The API cases are Codex's and Muse's; another agent has no settings
+     * here. */
     if (!a || (strcmp(a->prefix, "codex") && strcmp(a->prefix, "muse")))
         return 0;
     if (!run(s,

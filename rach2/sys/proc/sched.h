@@ -87,8 +87,8 @@ void sched_service_point(void);
 /** Remove `p` from its ready list before it is freed; the big lock is held. */
 void sched_forget(process_t *p);
 
-/** Read selection attempts (index 0) or ready entries examined (1), modulo 2^32.
- * Other indices return zero. The caller holds the big lock. */
+/** Read selection attempts (index 0) or ready entries examined (1), modulo
+ * 2^32. Other indices return zero. The caller holds the big lock. */
 uint32_t sched_work_count(unsigned int index);
 
 /*

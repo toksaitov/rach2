@@ -3,7 +3,8 @@
  * station address is not yet known, held by nd6.c and fragmented by frag6.c.
  *
  * host-deps: rach2/sys/network/ip6/frag6.c rach2/sys/network/ip6/addr6.c
- * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c rach2/sys/lib/ksha256.c
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/ksha256.c
  * host-deps: tests/host/compat/kheap_host.c
  *
  * The neighbour cache holds a few datagrams while it solicits a hop's
