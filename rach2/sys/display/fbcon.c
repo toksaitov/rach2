@@ -74,10 +74,9 @@ static struct boot_framebuffer fb_desc;
  * The program that holds /fb (vga_gfx.c) has the screen to itself while
  * `gfx_on`: at the native mode, which it writes itself, while `native_on`,
  * and otherwise as the 320x200 picture this file draws. For the picture:
- * each of its 256 colors as one of the screen's pixels, the whole number its
- * pixels are drawn at, the place of its top left corner, and one of its
- * lines drawn at that size, which is copied to the screen as many times as
- * the size.
+ * each of its 256 colors as one of the screen's pixels, its size and the
+ * place of its top left corner on the screen, and one of its lines drawn at
+ * that width, which is copied to each row of the screen it covers.
  */
 #define GFX_WIDTH      320u
 #define GFX_HEIGHT     200u
@@ -86,7 +85,8 @@ static int gfx_on;
 static int native_on;
 static int blank_on; /* the console is blank: no cell is drawn */
 static uint32_t gfx_pixel[256];
-static uint32_t gfx_scale;
+static uint32_t gfx_width;  /* the picture's pixels on the screen, across */
+static uint32_t gfx_height; /* and down, at 320:200 */
 static uint32_t gfx_left;
 static uint32_t gfx_top;
 static uint8_t gfx_line[GFX_LINE_BYTES];
@@ -373,13 +373,19 @@ void fbcon_gfx_begin(void)
     if (!fbcon_active || base == NULL) {
         return;
     }
-    gfx_scale = fb_width / GFX_WIDTH < fb_height / GFX_HEIGHT ? fb_width / GFX_WIDTH
-                                                              : fb_height / GFX_HEIGHT;
-    while (gfx_scale > 1 && GFX_WIDTH * gfx_scale * fb_bytes > GFX_LINE_BYTES) {
-        gfx_scale--;
+    if (fb_width * GFX_HEIGHT >= fb_height * GFX_WIDTH) {
+        gfx_height = fb_height;
+        gfx_width = gfx_height * GFX_WIDTH / GFX_HEIGHT;
+    } else {
+        gfx_width = fb_width;
+        gfx_height = gfx_width * GFX_HEIGHT / GFX_WIDTH;
     }
-    gfx_left = (fb_width - GFX_WIDTH * gfx_scale) / 2;
-    gfx_top = (fb_height - GFX_HEIGHT * gfx_scale) / 2;
+    if (gfx_width * fb_bytes > GFX_LINE_BYTES) {
+        gfx_width = GFX_LINE_BYTES / fb_bytes;
+        gfx_height = gfx_width * GFX_HEIGHT / GFX_WIDTH;
+    }
+    gfx_left = (fb_width - gfx_width) / 2;
+    gfx_top = (fb_height - gfx_height) / 2;
     for (i = 0; i < 256; i++) {
         gfx_pixel[i] = pixel[i < 16 ? i : 0];
     }
@@ -438,25 +444,31 @@ void fbcon_gfx_palette(const uint8_t *rgb)
 void fbcon_gfx_frame(const uint8_t *pixels)
 {
     volatile uint8_t *base = fbcon_window();
-    uint32_t line, col, t, n = GFX_WIDTH * gfx_scale * fb_bytes;
+    uint32_t line, col, row = 0, n = gfx_width * fb_bytes;
 
     if (!gfx_on || native_on || base == NULL) {
         return;
     }
     for (line = 0; line < GFX_HEIGHT; line++) {
+        /* The picture's row `row` on the screen shows line row * 200 / height. */
+        uint32_t end = ((line + 1) * gfx_height + GFX_HEIGHT - 1) / GFX_HEIGHT;
+        const uint8_t *src = pixels + line * GFX_WIDTH;
         uint8_t *q = gfx_line;
-        volatile uint8_t *row =
-            base + (gfx_top + line * gfx_scale) * fb_pitch + gfx_left * fb_bytes;
+        uint32_t c = 0, r = 0;
 
-        for (col = 0; col < GFX_WIDTH; col++) {
-            uint32_t v = gfx_pixel[pixels[line * GFX_WIDTH + col]];
-
-            for (t = 0; t < gfx_scale; t++, q += fb_bytes) {
-                put_pixel(q, v);
+        if (row >= end) {
+            continue;
+        }
+        /* Its column `col` shows c = col * 320 / width; r is the remainder. */
+        for (col = 0; col < gfx_width; col++, q += fb_bytes) {
+            put_pixel(q, gfx_pixel[src[c]]);
+            for (r += GFX_WIDTH; r >= gfx_width; r -= gfx_width) {
+                c++;
             }
         }
-        for (t = 0; t < gfx_scale; t++, row += fb_pitch) {
-            k_memcpy((void *)(uintptr_t)row, gfx_line, n);
+        for (; row < end; row++) {
+            k_memcpy((void *)(uintptr_t)(base + (gfx_top + row) * fb_pitch + gfx_left * fb_bytes),
+                     gfx_line, n);
         }
     }
 }

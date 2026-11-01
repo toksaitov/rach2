@@ -6,9 +6,10 @@
  * When the console is on a framebuffer (fbcon.c) the display may be no VGA
  * at all, as on a machine booted by UEFI, so entering and leaving the mode
  * and loading its palette leave the hardware alone: the picture is kept in
- * memory (`gfx_shadow`), and the console draws it on the framebuffer, scaled
- * by a whole number, with the palette loaded (`fbcon_gfx_frame`). There the
- * native mode gives the program the framebuffer itself (`fb_enter_native`).
+ * memory (`gfx_shadow`), and the console draws it on the framebuffer, as
+ * tall as the screen, with the palette loaded (`fbcon_gfx_frame`). There
+ * the native mode gives the program the framebuffer itself
+ * (`fb_enter_native`).
  */
 
 #include "../arch/arch.h"

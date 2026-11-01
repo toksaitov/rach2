@@ -270,8 +270,8 @@ A game that wants the keyboard's scan codes puts the keyboard in
 .Dv K_RAW
 and the terminal in raw mode, as below, and reads them from the console.
 The open enters mode 13h, 320 by 200 pixels of a byte each through a
-palette of 256 colors, which a framebuffer shows scaled by a whole number
-and the VGA shows itself.
+palette of 256 colors, which a framebuffer shows as tall as the screen at
+the picture's own 320:200, centered, and the VGA shows itself.
 On a framebuffer that is RGB at 15, 16, 24 or 32 bits a pixel, the
 request
 .Dv FB_MODE_NATIVE

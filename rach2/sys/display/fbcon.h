@@ -64,11 +64,12 @@ void fbcon_set_cursor(uint32_t cell);
 /**
  * Give the screen to the 320x200 picture of Mode 13h a program draws
  * through /fb (vga_gfx.c), the screen painted black: the cells are not drawn
- * while the picture has it. The picture is drawn at the largest whole
- * number of the screen's pixels to one of its own that fits, three on a
- * 1366x768 screen, in the middle, so that each of its pixels is a sharp
- * square; its colors are the VGA's sixteen until `fbcon_gfx_palette`. From
- * the native mode it goes straight to the picture.
+ * while the picture has it. The picture fills the screen's height, or its
+ * width on a screen narrower than 16:10, at its own 320:200, in the middle:
+ * 1228x768 from (69, 0) on a 1366x768 screen. Each of its pixels covers a
+ * whole number of the screen's, which differs by one from pixel to pixel,
+ * three or four on that screen. Its colors are the VGA's sixteen until
+ * `fbcon_gfx_palette`. From the native mode it goes straight to the picture.
  */
 void fbcon_gfx_begin(void);
 
