@@ -240,6 +240,26 @@ void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = (int64_t)kernel_second_ticks * TICK_NS;
 }
 
+/** Coarse time since boot as the clock keeps it: the uptime at the tick. */
+void rtc_coarse_monotonic(int64_t *seconds, int64_t *nanoseconds)
+{
+    *seconds = (int64_t)kernel_uptime_seconds;
+    *nanoseconds = (int64_t)kernel_second_ticks * TICK_NS;
+}
+
+/** Report that the model has no vDSO clock, so the timer's resolution
+ * stands. */
+int vclock_running(void)
+{
+    return 0;
+}
+
+/** The vDSO clock's resolution: unused, since `vclock_running` reports none. */
+uint32_t vclock_resolution_ns(void)
+{
+    return 1u;
+}
+
 /* The timer's place within the tick, which the model's time since boot adds;
  * and, when not 0, the reading in nanoseconds the clock keeps after a lost
  * tick put the tick count behind it, which it reads until the count passes. */
