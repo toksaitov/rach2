@@ -1122,18 +1122,20 @@ krffs: build/krffs/mkfs.krffs
 # the pinned tarball; without this edge a tree with no build (a fresh clone,
 # or after make distclean) builds krffs first and cannot find the file. The
 # edges are the inputs the components share: krffs compiles the extracted
-# crypt source, and tests and utils link the installed musl. The kernel, ish,
-# Doom and the KRFFS tools share no input, so `make -j` builds them together.
+# crypt source, tests and utils link the installed musl, and Doom compiles
+# with its <sys/soundcard.h>. The kernel, ish and the KRFFS tools share no
+# input, so `make -j` builds them together.
 krffs: check-libc
 
 # The components that compile or stage musl's installed files list them as
 # prerequisites, so a deleted header, library or crypt source is rebuilt by the
 # rules above before a sub-make would fail on it.
 ifneq ($(MUSL_OUTPUTS),)
-krffs tests utils tools/etude/guest: $(MUSL_OUTPUTS)
+krffs tests utils tools/etude/guest ports/doom: $(MUSL_OUTPUTS)
 endif
 tests: $(LIBC_STAMP)
 utils: $(LIBC_STAMP)
+ports/doom: $(LIBC_STAMP)
 tools/etude/guest: $(LIBC_STAMP)
 
 # --- The RAM-disk images. Each is a file target staged from its manifest
