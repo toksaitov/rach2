@@ -63,13 +63,11 @@ rach2/sys/audio/hda.c:ring_render_to_hw_buffer lines 103 a hardware sequence, th
 rach2/sys/block/ahci.c:ahci_build_command params 7 the parameters are the fields of one command; a struct for them would be filled and unpacked once
 rach2/sys/block/ahci.c:ahci_run_command params 7 the parameters are the fields of one command; a struct for them would be filled and unpacked once
 
-
 rach2/sys/block/gpt.c:gpt_parse_entries params 7 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 
 rach2/sys/block/loop.c:loop_attach lines 123 one device operation, its steps in the order the layer requires and each undone on the failure of the next
 
 rach2/sys/block/partition.c:follow_logical params 7 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
-
 
 rach2/sys/arch/x86/board.c:board_init lines 101 a hardware sequence, the registers written in the order the datasheet requires
 
@@ -79,7 +77,6 @@ rach2/sys/fs/bcache.c:bcache_shrink complexity 28 one file system operation over
 rach2/sys/fs/bcache.c:sync_batches nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/bcache.c:get complexity 35 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/bcache.c:get lines 101 one file system operation over the on-disk format, each step a rule of the format
-
 
 rach2/sys/fs/exfat.c:chain_at params 7 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/exfat.c:check_dir complexity 44 one file system operation over the on-disk format, each step a rule of the format
@@ -159,10 +156,8 @@ rach2/sys/ipc/unix.c:send_conn params 7 the parameters are the fields of one mes
 rach2/sys/ipc/unix.c:send_core params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
 rach2/sys/ipc/unix.c:send_dgram params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
 
-
 rach2/sys/lib/kfmt.c:k_vprintf nesting 5 a parser over an external format, one check per field in the format's order
 rach2/sys/lib/kfmt.c:k_vprintf lines 112 a parser over an external format, one check per field in the format's order
-
 
 rach2/sys/mm/vm.c:vm_insert_file params 7 the parameters are the fields of one region; a struct for them would be filled and unpacked once
 
@@ -251,6 +246,10 @@ rach2/sys/usb/xhci.c:xhci_own nesting 5 a hardware sequence, the registers writt
 rach2/sys/usb/xhci.c:xhci_submit complexity 37 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/usb/xhci.c:xhci_submit lines 161 a hardware sequence, the registers written in the order the datasheet requires
 
+term/draw.c:draw_cb params 10 the parameters are those of libtsm's tsm_screen_draw_cb, which the library calls
+
+term/screen.c:snapshot_cell params 10 the parameters are those of libtsm's tsm_screen_draw_cb, which the library calls
+
 tests/auxvprobe.c:probe_main lines 121 a probe, one sequence of steps in the order the log records them
 
 tests/bigfileprobe.c:write_mode lines 116 a probe, one sequence of steps in the order the log records them
@@ -281,10 +280,7 @@ tests/credprobe.c:child_main lines 105 a probe, one sequence of steps in the ord
 tests/dgramprobe.c:probe_main complexity 80 a probe, one sequence of steps in the order the log records them
 tests/dgramprobe.c:probe_main lines 522 a probe, one sequence of steps in the order the log records them
 
-
-
 tests/dnstest.c:main complexity 30 a probe, one sequence of steps in the order the log records them
-
 
 tests/ext2probe.c:links_rows complexity 48 a probe, one sequence of steps in the order the log records them
 tests/ext2probe.c:links_rows lines 134 a probe, one sequence of steps in the order the log records them
@@ -302,7 +298,6 @@ tests/host/ata_hosttest.c:main lines 129 a test's rows, each a case, read as one
 
 tests/host/bcache_hosttest.c:main complexity 115 a test's rows, each a case, read as one table
 tests/host/bcache_hosttest.c:main lines 595 a test's rows, each a case, read as one table
-
 
 tests/host/bootctl_hosttest.c:main complexity 43 a test's rows, each a case, read as one table
 tests/host/bootctl_hosttest.c:main lines 454 a test's rows, each a case, read as one table
@@ -349,16 +344,21 @@ tests/host/fat32_hosttest.c:write_rows lines 200 a test's rows, each a case, rea
 tests/host/fatname_hosttest.c:main complexity 59 a test's rows, each a case, read as one table
 tests/host/fatname_hosttest.c:main lines 122 a test's rows, each a case, read as one table
 
+tests/host/fbdev_hosttest.c:owners lines 102 a test's rows, each a case, read as one table
+tests/host/fbdev_hosttest.c:requests complexity 27 a test's rows, each a case, read as one table
+
 tests/host/gpt_hosttest.c:main lines 168 a test's rows, each a case, read as one table
 
 tests/host/grubslot_hosttest.c:main lines 153 a test's rows, each a case, read as one table
 
-tests/host/hid_hosttest.c:main lines 124 a test's rows, each a case, read as one table
+tests/host/hid_hosttest.c:main lines 134 a test's rows, each a case, read as one table
 
 tests/host/hub_hosttest.c:main complexity 86 a test's rows, each a case, read as one table
 tests/host/hub_hosttest.c:main lines 583 a test's rows, each a case, read as one table
 tests/host/hub_hosttest.c:xhci_submit complexity 104 a test's rows, each a case, read as one table
 tests/host/hub_hosttest.c:xhci_submit lines 296 a test's rows, each a case, read as one table
+
+tests/host/kd_hosttest.c:translating lines 101 a test's rows, each a case, read as one table
 
 tests/host/kheap_hosttest.c:main lines 114 a test's rows, each a case, read as one table
 
@@ -376,6 +376,12 @@ tests/host/kstring_hosttest.c:main lines 154 a test's rows, each a case, read as
 tests/host/kstring_hosttest.c:main nesting 6 a test's rows, each a case, read as one table
 
 tests/host/lapic_hosttest.c:main lines 131 a test's rows, each a case, read as one table
+
+tests/host/libtsm_keys_hosttest.c:kkey params 8 the parameters are the arguments of one call the test makes, passed through
+
+tests/host/libtsm_probes_hosttest.c:on_draw params 10 the parameters are those of libtsm's tsm_screen_draw_cb, which the library calls
+
+tests/host/libtsm_width_hosttest.c:draw_cell params 10 the parameters are those of libtsm's tsm_screen_draw_cb, which the library calls
 
 tests/host/lock_hosttest.c:as params 7 the parameters are the arguments of one call the test makes, passed through
 tests/host/lock_hosttest.c:as_on params 8 the parameters are the arguments of one call the test makes, passed through
@@ -415,8 +421,8 @@ tests/host/msc_hosttest.c:main lines 1110 a test's rows, each a case, read as on
 tests/host/msc_hosttest.c:xhci_submit complexity 37 a test's rows, each a case, read as one table
 tests/host/msc_hosttest.c:xhci_submit lines 128 a test's rows, each a case, read as one table
 
-tests/host/n_tty_hosttest.c:main complexity 63 a test's rows, each a case, read as one table
-tests/host/n_tty_hosttest.c:main lines 353 a test's rows, each a case, read as one table
+tests/host/n_tty_hosttest.c:main complexity 68 a test's rows, each a case, read as one table
+tests/host/n_tty_hosttest.c:main lines 403 a test's rows, each a case, read as one table
 
 tests/host/netconf_hosttest.c:main complexity 57 a test's rows, each a case, read as one table
 tests/host/netconf_hosttest.c:main lines 309 a test's rows, each a case, read as one table
@@ -426,7 +432,6 @@ tests/host/netconsole_hosttest.c:main lines 125 a test's rows, each a case, read
 tests/host/netdev_hosttest.c:main lines 131 a test's rows, each a case, read as one table
 
 tests/host/packet_hosttest.c:main lines 132 a test's rows, each a case, read as one table
-
 
 tests/host/partition_hosttest.c:main complexity 41 a test's rows, each a case, read as one table
 tests/host/partition_hosttest.c:main lines 165 a test's rows, each a case, read as one table
@@ -459,7 +464,6 @@ tests/host/rtc_hosttest.c:main lines 169 a test's rows, each a case, read as one
 tests/host/rtl8168_hosttest.c:main complexity 99 a test's rows, each a case, read as one table
 tests/host/rtl8168_hosttest.c:main lines 692 a test's rows, each a case, read as one table
 
-
 tests/host/synthfs_hosttest.c:main complexity 41 a test's rows, each a case, read as one table
 
 tests/host/syscall_hosttest.c:clock_ids complexity 32 a test's rows, each a case, read as one table
@@ -472,12 +476,18 @@ tests/host/tcp_hosttest.c:main lines 689 a test's rows, each a case, read as one
 tests/host/tcp_hosttest.c:main nesting 5 a test's rows, each a case, read as one table
 tests/host/tcp_hosttest.c:rx params 8 a test's rows, each a case, read as one table
 
+tests/host/term_draw_hosttest.c:shows params 8 the parameters are the place, glyph and colors of one expected cell, which each row gives
+
+tests/host/tty_hosttest.c:timed_read params 7 the parameters are one case's settings, buffer and steps, which each row gives
+
 tests/host/usb_hosttest.c:hub_attach params 8 a test's rows, each a case, read as one table
-tests/host/usb_hosttest.c:main lines 135 a test's rows, each a case, read as one table
+tests/host/usb_hosttest.c:main lines 136 a test's rows, each a case, read as one table
 tests/host/usb_hosttest.c:quiesce_rows complexity 48 a test's rows, each a case, read as one table
 tests/host/usb_hosttest.c:quiesce_rows lines 256 a test's rows, each a case, read as one table
 
 tests/host/usbdisk_hosttest.c:main complexity 35 a test's rows, each a case, read as one table
+
+tests/host/vga_text_hosttest.c:row_widths complexity 30 a test's rows, each a case, read as one table
 
 tests/host/vm_hosttest.c:main complexity 49 a test's rows, each a case, read as one table
 tests/host/vm_hosttest.c:main lines 213 a test's rows, each a case, read as one table
@@ -510,9 +520,7 @@ tests/loopprobe.c:tcp_ports complexity 27 a probe, one sequence of steps in the 
 tests/loopprobe.c:tcp_ports lines 169 a probe, one sequence of steps in the order the log records them
 tests/loopprobe.c:udp_loop lines 108 a probe, one sequence of steps in the order the log records them
 
-
 tests/memprobe.c:probe_main complexity 31 a probe, one sequence of steps in the order the log records them
-
 
 tests/mountprobe.c:rows_lifetime complexity 30 a probe, one sequence of steps in the order the log records them
 tests/mountprobe.c:rows_lifetime lines 128 a probe, one sequence of steps in the order the log records them
@@ -525,7 +533,6 @@ tests/musl/addusermusl.c:check_refusals complexity 27 a test's rows, each a case
 
 tests/musl/authmusl.c:main complexity 34 a test's rows, each a case, read as one table
 
-
 tests/musl/catfile.c:main complexity 30 a test's rows, each a case, read as one table
 tests/musl/catfile.c:main lines 130 a test's rows, each a case, read as one table
 
@@ -535,7 +542,6 @@ tests/musl/clonemusl.c:raw params 7 the parameters are the arguments of one call
 
 tests/musl/devtest.c:main complexity 30 a test's rows, each a case, read as one table
 tests/musl/devtest.c:main lines 151 a test's rows, each a case, read as one table
-
 
 tests/musl/epollmusl.c:nested_forked complexity 29 a probe, one sequence of steps in the order the log records them
 tests/musl/epollmusl.c:sets complexity 49 a test's rows, each a case, read as one table
@@ -590,11 +596,9 @@ tests/musl/vforkmusl.c:main complexity 27 a test's rows, each a case, read as on
 
 tests/musl/waitidmusl.c:selections complexity 29 a test's rows, each a case, read as one table
 
-
 tests/netifprobe.c:netif_main complexity 132 a probe, one sequence of steps in the order the log records them
 tests/netifprobe.c:netif_main lines 577 a probe, one sequence of steps in the order the log records them
 tests/netifprobe.c:packet_on_second lines 148 a probe, one sequence of steps in the order the log records them
-
 
 tests/packetprobe.c:probe_main complexity 134 a probe, one sequence of steps in the order the log records them
 tests/packetprobe.c:probe_main lines 608 a probe, one sequence of steps in the order the log records them
@@ -606,13 +610,8 @@ tests/pingtest.c:probe_main complexity 28 a probe, one sequence of steps in the 
 tests/pingtest.c:probe_main lines 162 a probe, one sequence of steps in the order the log records them
 tests/pingtest.c:probe_main nesting 5 a probe, one sequence of steps in the order the log records them
 
-
-
-
 tests/rawprobe.c:probe_main complexity 30 a probe, one sequence of steps in the order the log records them
 tests/rawprobe.c:probe_main lines 370 a probe, one sequence of steps in the order the log records them
-
-
 
 tests/stdintest.c:_start lines 115 a probe, one sequence of steps in the order the log records them
 
@@ -624,20 +623,13 @@ tests/system/checkers/pcapcheck.c:cmd_netconsole complexity 48 an inspector's ch
 tests/system/checkers/pcapcheck.c:cmd_netconsole lines 158 an inspector's check, one walk over the format it reads
 tests/system/checkers/pcapcheck.c:cmd_rawwire complexity 26 an inspector's check, one walk over the format it reads
 
-
-
 tests/system/fixtures/vfs_unmount.c:main complexity 39 a fixture builder, the volume written in on-disk order
 tests/system/fixtures/vfs_unmount.c:resolve_path params 7 a fixture builder, the volume written in on-disk order
-
 
 tests/system/runner/ptydrive.c:main complexity 47 a parser over an external format, one check per field in the format's order
 tests/system/runner/ptydrive.c:main lines 160 a parser over an external format, one check per field in the format's order
 
-
-
-
 tests/udptest.c:probe_main lines 134 a probe, one sequence of steps in the order the log records them
-
 
 tests/usbdiskprobe.c:part_hold complexity 43 a probe, one sequence of steps in the order the log records them
 tests/usbdiskprobe.c:part_hold lines 118 a probe, one sequence of steps in the order the log records them
