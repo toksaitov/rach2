@@ -249,7 +249,7 @@ The [agents layer](../vendor/gnu/agents/Readme.md) installs vendors' published b
 
 ## The vendored projects
 
-The third-party code of the repository, each with the version the build pins, its upstream license and the document that describes it. The repository declares no license for its own code.
+The third-party code of the repository, each with the version the build pins, its upstream license and the document that describes it. Rach2's own code is under the GNU General Public License, version 2 only ([COPYING](../COPYING)).
 
 | Project | Version | License | Readme |
 | --- | --- | --- | --- |

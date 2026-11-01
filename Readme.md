@@ -60,4 +60,4 @@ For x86-64, install the `x86_64-elf` toolchain, build with `make ARCH=x86_64`, a
 | [`tools/`](tools/Readme.md) | machine setup, image builders, style checks |
 | [`mk/`](mk/Readme.md) | shared Make rules |
 
-The manual, 170 pages that the os-real image installs, is in [`man/`](man/Readme.md). [`dev-log/`](dev-log/Readme.md) records how each milestone was planned and built. [`AGENTS.md`](AGENTS.md) is the policy every change follows. Rach2's own code declares no license; each third-party project keeps its upstream license, which [the list of vendored projects](man/programs.md#the-vendored-projects) gives.
+The manual, 170 pages that the os-real image installs, is in [`man/`](man/Readme.md). [`dev-log/`](dev-log/Readme.md) records how each milestone was planned and built. [`AGENTS.md`](AGENTS.md) is the policy every change follows. Rach2's own code is under the GNU General Public License, version 2 only, which [`COPYING`](COPYING) gives with the note that a program using the kernel's system calls is not a derived work of it; each third-party project keeps its upstream license, which [the list of vendored projects](man/programs.md#the-vendored-projects) gives.
