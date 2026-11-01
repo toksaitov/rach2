@@ -1,5 +1,5 @@
-/* flow_release.c: resume records, reruns of failures, acceptance order and
- * the preparation of -p. */
+/* flow_release.c: resume records, reruns of failures, the trial boot's command
+ * line, acceptance order and the preparation of -p. */
 #define _POSIX_C_SOURCE 200809L
 #include "flow_check.h"
 #include <dirent.h>
@@ -93,6 +93,10 @@ static int sh_mock(int argc, char **argv)
             return 0;
         puts("testing: the host did not answer");
         return 1;
+    }
+    if (!strcmp(name, "machine_identity.sh")) {
+        call("identity ", argc, argv, 2);
+        return 0;
     }
     if (!strcmp(name, "metal_accept.sh")) {
         call("accept ", argc, argv, 2);
@@ -303,8 +307,9 @@ static int ssh_mock(int argc, char **argv)
         append(ev("RELEASE_TEST_CALLS"), "machine read\n");
         if (!strcmp(ev("RELEASE_TEST_LENOVO"), "off"))
             return 255;
-        puts("28:d2:44:7e:e0:af\nroot=/dev/disk0p3 rach2.slot=candidate\n5000.00 9000.00\nidentity "
-             "0 nvme S6P2NX0T381638Z");
+        printf("28:d2:44:7e:e0:af\n%s\n5000.00 9000.00\nidentity 0 nvme S6P2NX0T381638Z\n",
+               *ev("RELEASE_TEST_CMDLINE") ? ev("RELEASE_TEST_CMDLINE")
+                                           : "root=/dev/disk0p3 rach2.slot=candidate");
         return 0;
     }
     if (!strncmp(command, "test -f ", 8)) {
@@ -452,7 +457,8 @@ struct release {
 };
 struct release_row {
     const char *record, *sha, *writes, *runs, *git, *accept, *machines, *windows, *native,
-        *failures, *milestone, *ancestor, *master, *push, *lenovo, *prepare, *hold, *testing;
+        *failures, *milestone, *ancestor, *master, *push, *lenovo, *prepare, *hold, *testing,
+        *cmdline;
     const char *again; /* the machine of -a, or NULL for a release */
     int rerun, preparing;
 };
@@ -535,6 +541,7 @@ static void run(struct release *r, const struct release_row *spec)
     fx_env("RELEASE_TEST_PREPARE", spec->prepare ? spec->prepare : "");
     fx_env("RELEASE_TEST_HOLD", spec->hold ? spec->hold : "");
     fx_env("RELEASE_TEST_TESTING", spec->testing ? spec->testing : "");
+    fx_env("RELEASE_TEST_CMDLINE", spec->cmdline ? spec->cmdline : "");
     if (spec->native) {
         flow_put(f, "state/wt/build/tools/dev/native-hostpeer", "");
         fx_copy(f->self, flow_path(f, "state/wt/build/tools/dev/native-deploy"));
@@ -978,6 +985,42 @@ static int build_rows(struct release *r)
                      called(r, "^ +sh ports/doom/fetch_wad.sh && ARCH=x86_64 make clean && "
                                "ARCH=x86_64 make machine GNU_AGENTS=all && "),
                  "machine build takes the host's WAD and starts clean");
+}
+/** The trial boot goes on only with the slot and the console it was given. */
+static int trial_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    char installed[6000];
+    int ok = 1;
+    snprintf(installed, sizeof(installed), "%sinstall done %s root r\n", r->installing, T);
+    run(r, &(struct release_row){.record = installed,
+                                 .git = "yes",
+                                 .writes = "yes",
+                                 .accept = "pass",
+                                 .cmdline = "root=/dev/disk0p3 rach2.slot=candidate "
+                                            "rach2.console=term"});
+    ok = check(r,
+               !f->status && archived(r, "7-11111111-") &&
+                   count(r->retired, "^trial done .* the new kernel runs from the candidate slot "
+                                     "with term as its console$") == 1 &&
+                   before(r, "identity ", "accept 192.168.0.106\n") &&
+                   before(r, "accept 192.168.0.106\n", "machine write bootctl commit\n"),
+               "a trial boot with the candidate slot and term goes on to its commit") &&
+         ok;
+    run(r, &(struct release_row){.record = installed,
+                                 .git = "yes",
+                                 .writes = "yes",
+                                 .accept = "pass",
+                                 .cmdline = "root=/dev/disk0p3 rach2.slot=candidate"});
+    ok = check(r,
+               f->status == 1 &&
+                   last_is(record(r), "failed trial: the trial boot's command line lacks "
+                                      "rach2.slot=candidate or rach2.console=term: "
+                                      "root=/dev/disk0p3 rach2.slot=candidate") &&
+                   !called(r, "^(identity|accept|machine write)") && !called(r, " push "),
+               "a trial boot without rach2.console=term fails trial and is not committed") &&
+         ok;
+    return ok;
 }
 static int acceptance_rows(struct release *r)
 {
@@ -1507,6 +1550,7 @@ int flow_release(struct fixture *f)
     ok = rerun_rows(&r) && ok;
     ok = machine_rerun_rows(&r) && ok;
     ok = build_rows(&r) && ok;
+    ok = trial_rows(&r) && ok;
     ok = acceptance_rows(&r) && ok;
     ok = windows_rows(&r) && ok;
     ok = lenovo_off_row(&r) && ok;

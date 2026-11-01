@@ -150,8 +150,12 @@
 #   While the record has its `install started` line and no `install done`,
 #   every later start of the script stops before it changes anything; the
 #   person checks the machine's root by hand and then deletes that line.
-# * trial: the machine boots the trial, and machine_identity.sh must find the
-#   new kernel running from the candidate slot.
+# * trial: the machine boots the trial, its /proc/cmdline must have
+#   rach2.slot=candidate and rach2.console=term, which the install's
+#   `--console term` puts in the menu, and machine_identity.sh must find the
+#   new kernel running from the candidate slot. A line without either fails
+#   the step, naming the line, and commits nothing, so the next boot falls
+#   back to the release the machine had.
 # * accept: `tests/system/accept/metal_accept.sh` must pass on the trial
 #   boot, before the native cases, since it reads the boot's records out of
 #   /dev/bootlog, a ring that their messages overwrite.
@@ -462,12 +466,13 @@ lenovo()
 }
 
 # where: ask the machine what it runs, and set `now` to `system SLOT` or
-# `recovery`, `disk` to the number of the disk with the serial, and `up` to the
-# seconds since it booted; set `now` empty when it does not answer. Fail, with
-# the reason on stderr, when it answers as another machine.
+# `recovery`, `cmdline` to its /proc/cmdline, `disk` to the number of the disk
+# with the serial, and `up` to the seconds since it booted; set `now` empty
+# when it does not answer. Fail, with the reason on stderr, when it answers as
+# another machine.
 where()
 {
-    now='' disk='' up=''
+    now='' cmdline='' disk='' up=''
     facts=$(lenovo 'cat /sys/class/net/eth0/address; cat /proc/cmdline; cat /proc/uptime; cat /proc/disk' 2> /dev/null) ||
         return 0
     [ "$(printf '%s\n' "$facts" | sed -n 1p)" = "$mac" ] || {
@@ -480,7 +485,8 @@ where()
         return 1
     }
     up=$(printf '%s\n' "$facts" | sed -n 3p | cut -d . -f 1)
-    slot=$(printf '%s\n' "$facts" | sed -n 2p | tr ' ' '\n' | sed -n 's/^rach2\.slot=//p')
+    cmdline=$(printf '%s\n' "$facts" | sed -n 2p)
+    slot=$(printf '%s\n' "$cmdline" | tr ' ' '\n' | sed -n 's/^rach2\.slot=//p')
     case $slot in
         recovery) now=recovery ;;
         *) now="system $slot" ;;
@@ -1995,14 +2001,16 @@ main()
             "system candidate") ;;
             *) fail trial "the machine runs ${now:-nothing that answers} after the install" ;;
         esac
-        where && [ "$now" = "system candidate" ] ||
-            fail trial "the trial boot is not from the candidate slot"
+        where || fail trial "the machine answered as another machine"
+        printf '%s\n' "$cmdline" | tr ' ' '\n' | grep -qx 'rach2\.slot=candidate' &&
+            printf '%s\n' "$cmdline" | tr ' ' '\n' | grep -qx 'rach2\.console=term' ||
+            fail trial "the trial boot's command line lacks rach2.slot=candidate or rach2.console=term: ${cmdline:-none read}"
         RACH2_MEASURE_SLOT=candidate RACH2_MEASURE_KERNEL=$files/../rach2/kernel \
             sh tools/dev/machine_identity.sh "$state/identity" ssh -i "$repo/krffs/rach2_demo_ed25519" \
             -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR -o UserKnownHostsFile=/dev/null \
             -o StrictHostKeyChecking=no "root@$address" > /dev/null 2>&1 ||
             fail trial "the machine does not run the new kernel from the candidate slot: $(tail -n 3 "$state/identity" | tr '\n' ' ')"
-        mark trial "the new kernel runs from the candidate slot"
+        mark trial "the new kernel runs from the candidate slot with term as its console"
     fi
 
     # Acceptance reads the boot's own records out of /dev/bootlog, a ring
