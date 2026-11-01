@@ -71,11 +71,13 @@
 #define SB16_MODE_STEREO 0x20 /* Stereo */
 
 /*
- * A DMA period, each half of the double buffer, is SB16_PERIOD_FRAMES frames
- * for each 11025 Hz of the rate or part of it: 11.6 ms at 11025, 22050 and
+ * For console playback a DMA period, each half of the double buffer, is
+ * SB16_PERIOD_FRAMES frames for each 11025 Hz of the rate or part of it:
+ * 11.6 ms at 11025, 22050 and
  * 44100 Hz, and at most 25.6 ms, at 5000 Hz. Its bytes are at most
  * SB16_PERIOD_MAX, 512 frames of 16-bit stereo at 44100 Hz, so the whole
  * buffer is one page and lies inside one ISA DMA page (dma_address_valid).
+ * A stream asks for its own period, clamped to SB16_PERIOD_MAX bytes.
  */
 #define SB16_PERIOD_FRAMES 128
 #define SB16_PERIOD_MAX    2048

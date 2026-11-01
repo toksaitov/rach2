@@ -34,6 +34,14 @@ static bool is_16bit = false;
 static bool playing = false;
 static audio_callback_t user_callback = NULL;
 
+static audio_stream_t *play_stream = NULL; /* the playback direction's owner */
+static bool stream_configured = false;
+static uint32_t stream_frames = 0; /* frames played since stream_start, wrapping */
+static uint32_t stream_last = 0;   /* last DMA position, in frames */
+static uint32_t stream_given = 0;  /* position after the last frame in DMA */
+
+static void sb16_halt(void);
+
 /*
  * DMA double-buffer: one contiguous region split into two halves of
  * period_bytes each. ISA DMA requires the buffer to lie below 16MB and not
@@ -350,6 +358,45 @@ static int sb16_playing_half(void)
 }
 
 /**
+ * Read and accumulate the stream's DMA position in frames; interrupts off.
+ * The count cannot reveal a whole revolution between readings.
+ */
+static uint32_t sb16_stream_progress(void)
+{
+    uint32_t frame = (is_16bit ? 2u : 1u) * (current_channels == 2 ? 2u : 1u);
+    uint32_t unit = is_16bit ? 2u : 1u;
+    uint32_t total = period_bytes * 2u / frame;
+    uint32_t pos;
+    int left = dma_remaining(is_16bit ? SB16_DMA_16BIT : SB16_DMA_8BIT);
+
+    if (left < 1 || (uint32_t)left > period_bytes * 2u / unit)
+        return stream_frames;
+    pos = (period_bytes * 2u - (uint32_t)left * unit) / frame;
+    stream_frames += pos >= stream_last ? pos - stream_last : total - stream_last + pos;
+    stream_last = pos;
+    return stream_frames;
+}
+
+/**
+ * Fill one DMA half from its owner; callbacks run with interrupts off.
+ * A stream's caller fills every byte, using silence when it has no data.
+ */
+static void sb16_fill(uint8_t *buffer)
+{
+    uint32_t flags = kirq_save();
+
+    if (play_stream) {
+        play_stream->transfer(play_stream, buffer, period_bytes);
+        stream_given += period_bytes / ((is_16bit ? 2u : 1u) * (current_channels == 2 ? 2u : 1u));
+    } else if (user_callback) {
+        user_callback(buffer, period_bytes);
+    } else {
+        ring_read_to_buffer(buffer, period_bytes);
+    }
+    kirq_restore(flags);
+}
+
+/**
  * Service the SB16 half-buffer interrupt: refill the half the DMA is not
  * reading.
  *
@@ -385,12 +432,21 @@ static void sb16_irq_handler(isr_params_t *params)
 
     irq_count++;
 
-    fill_buffer = dma_buffer + (uint32_t)(1 - sb16_playing_half()) * period_bytes;
+    if (play_stream) {
+        uint32_t frames = period_bytes / ((is_16bit ? 2u : 1u) * (current_channels == 2 ? 2u : 1u));
 
-    if (user_callback) {
-        user_callback(fill_buffer, period_bytes);
+        sb16_stream_progress();
+        fill_buffer = dma_buffer + (1u - stream_last / frames) * period_bytes;
     } else {
-        ring_read_to_buffer(fill_buffer, period_bytes);
+        fill_buffer = dma_buffer + (uint32_t)(1 - sb16_playing_half()) * period_bytes;
+    }
+    sb16_fill(fill_buffer);
+    if (play_stream) {
+        uint32_t frames = period_bytes / ((is_16bit ? 2u : 1u) * (current_channels == 2 ? 2u : 1u));
+
+        stream_given = stream_frames + 2u * frames - stream_last % frames;
+        if (play_stream->period)
+            play_stream->period(play_stream);
     }
 }
 
@@ -465,7 +521,7 @@ static int sb16_init(void)
 static void sb16_shutdown(void)
 {
     if (playing) {
-        sb16_driver.stop();
+        sb16_halt();
     }
 
     dsp_write(DSP_SPEAKER_OFF);
@@ -481,14 +537,16 @@ static void sb16_shutdown(void)
  * data if one is set), then arms the DSP.
  * The DSP 4.xx sample-rate command must precede the transfer command, so the
  * rate is programmed before sb16_start_auto_init() issues 0xC6/0xB6.
+ * `requested_period` is a stream's granted bytes, or 0 for console playback.
  *
  * @return 0 on success, -EINVAL for a rate outside 5000 through 44100, or
  * -EIO when the DSP or DMA setup fails.
  */
-static int sb16_start(uint32_t sample_rate, audio_format_t format, int channels)
+static int sb16_begin(uint32_t sample_rate, audio_format_t format, int channels,
+                      uint32_t requested_period)
 {
     if (playing) {
-        sb16_driver.stop();
+        sb16_halt();
     }
 
     current_sample_rate = sample_rate;
@@ -503,6 +561,8 @@ static int sb16_start(uint32_t sample_rate, audio_format_t format, int channels)
 
     period_bytes = SB16_PERIOD_FRAMES * ((sample_rate + 11024) / 11025) * (is_16bit ? 2u : 1u) *
                    (channels == 2 ? 2u : 1u);
+    if (requested_period)
+        period_bytes = requested_period;
     ring_size = period_bytes * 8;
     ring_read_ptr = 0;
     ring_write_ptr = 0;
@@ -516,9 +576,10 @@ static int sb16_start(uint32_t sample_rate, audio_format_t format, int channels)
     /* Silence both halves: 0 for 16-bit signed, 128 for 8-bit unsigned. */
     k_memset(dma_buffer, is_16bit ? 0 : 128, period_bytes * 2);
 
-    if (user_callback) {
-        user_callback(dma_buffer, period_bytes);
-        user_callback(dma_buffer + period_bytes, period_bytes);
+    stream_frames = stream_last = stream_given = 0;
+    if (play_stream || user_callback) {
+        sb16_fill(dma_buffer);
+        sb16_fill(dma_buffer + period_bytes);
     }
 
     irq_count = 0;
@@ -544,7 +605,7 @@ fail:
  * the current block and an immediate-pause command (0xD0/0xD5); the DMA
  * channel is then masked and the speaker turned off.
  */
-static void sb16_stop(void)
+static void sb16_halt(void)
 {
     if (!playing) {
         return;
@@ -566,6 +627,19 @@ static void sb16_stop(void)
 
     underrun_count = 0;
     underrun_samples = 0;
+}
+
+/** Start console playback, or -EBUSY while a stream owns the device. */
+static int sb16_start(uint32_t rate, audio_format_t format, int channels)
+{
+    return play_stream ? -EBUSY : sb16_begin(rate, format, channels, 0);
+}
+
+/** Stop console playback; a stream keeps its direction until close. */
+static void sb16_stop(void)
+{
+    if (!play_stream)
+        sb16_halt();
 }
 
 uint32_t sb16_delay_frames(void)
@@ -600,7 +674,8 @@ static bool sb16_is_playing(void)
  * plays from the ring buffer. */
 static void sb16_set_callback(audio_callback_t fn)
 {
-    user_callback = fn;
+    if (!play_stream)
+        user_callback = fn;
 }
 
 /**
@@ -617,6 +692,8 @@ static int sb16_write(const uint8_t *buffer, size_t size)
 {
     uint32_t written;
 
+    if (play_stream)
+        return -EBUSY;
     if (!buffer || size == 0 || !playing) {
         return -EINVAL;
     }
@@ -661,25 +738,119 @@ static int sb16_get_volume(void)
     return sb16_volume;
 }
 
+/**
+ * Reserve playback for `s`, which remains the caller's until close.
+ * Return -ENODEV for capture, -EBUSY while playback is owned or running.
+ */
+static int sb16_stream_open(audio_stream_t *s)
+{
+    if (s->dir != AUDIO_PLAYBACK)
+        return -ENODEV;
+    if (play_stream || playing)
+        return -EBUSY;
+    play_stream = s;
+    stream_configured = false;
+    stream_frames = stream_last = stream_given = 0;
+    return 0;
+}
+
+/**
+ * Grant a stopped stream U8 or S16, mono or stereo, at 5000..44100 Hz.
+ * Clamp its period to the static DMA half and round down to whole frames.
+ * Return -EINVAL without changing the setup for invalid parameters.
+ */
+static int sb16_stream_setup(audio_stream_t *s)
+{
+    uint32_t frame, bytes;
+
+    if (s != play_stream || playing || !s->transfer ||
+        (s->format != AUDIO_U8 && s->format != AUDIO_S16LE) ||
+        (s->channels != 1 && s->channels != 2))
+        return -EINVAL;
+    frame = (s->format == AUDIO_S16LE ? 2u : 1u) * (uint32_t)s->channels;
+    bytes = s->period_bytes < SB16_PERIOD_MAX ? s->period_bytes : SB16_PERIOD_MAX;
+    bytes -= bytes % frame;
+    if (bytes == 0)
+        return -EINVAL;
+    s->rate = s->rate < 5000 ? 5000 : s->rate > 44100 ? 44100 : s->rate;
+    s->period_bytes = bytes;
+    if (s->periods < 2)
+        s->periods = 2;
+    s->device_periods = 2;
+    stream_configured = true;
+    return 0;
+}
+
+/** Start the configured stream, priming both halves, or return -EIO. */
+static int sb16_stream_start(audio_stream_t *s)
+{
+    if (s != play_stream || !stream_configured)
+        return -EIO;
+    if (playing)
+        return 0;
+    return sb16_begin(s->rate, s->format, s->channels, s->period_bytes);
+}
+
+/** Stop `s` and keep its final position; no callback follows this return. */
+static void sb16_stream_stop(audio_stream_t *s)
+{
+    uint32_t flags = kirq_save();
+
+    if (s == play_stream && playing) {
+        sb16_stream_progress();
+        sb16_halt();
+    }
+    kirq_restore(flags);
+}
+
+/** Stop `s` and give playback back; a different caller changes nothing. */
+static void sb16_stream_close(audio_stream_t *s)
+{
+    if (s != play_stream)
+        return;
+    sb16_stream_stop(s);
+    play_stream = NULL;
+    stream_configured = false;
+}
+
+/** Read the owner's frames played, moving within a period; safe in a wait. */
+static uint32_t sb16_stream_position(audio_stream_t *s)
+{
+    uint32_t flags = kirq_save();
+    uint32_t frames = 0;
+
+    if (s && s == play_stream)
+        frames = playing ? sb16_stream_progress() : stream_frames;
+    kirq_restore(flags);
+    return frames;
+}
+
+/**
+ * Read the frames transferred but not played, or the console queue for NULL.
+ * Stopped streams and streams belonging to another caller have no delay.
+ */
+static uint32_t sb16_stream_delay(audio_stream_t *s)
+{
+    uint32_t flags, frames = 0, pos;
+
+    if (!s)
+        return sb16_delay_frames();
+    flags = kirq_save();
+    if (s == play_stream && playing) {
+        pos = sb16_stream_progress();
+        if ((int32_t)(stream_given - pos) > 0)
+            frames = stream_given - pos;
+    }
+    kirq_restore(flags);
+    return frames;
+}
+
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
-   set_volume, get_volume, then the seven stream operations, which this
-   driver lacks. */
-audio_driver_t sb16_driver = {"Sound Blaster 16",
-                              AUDIO_DRIVER_SB16,
-                              sb16_init,
-                              sb16_shutdown,
-                              sb16_start,
-                              sb16_stop,
-                              sb16_is_playing,
-                              sb16_set_callback,
-                              sb16_write,
-                              sb16_set_volume,
-                              sb16_get_volume,
-                              NULL,
-                              NULL,
-                              NULL,
-                              NULL,
-                              NULL,
-                              NULL,
-                              NULL};
+   set_volume, get_volume, then the seven stream operations. */
+audio_driver_t sb16_driver = {"Sound Blaster 16", AUDIO_DRIVER_SB16,    sb16_init,
+                              sb16_shutdown,      sb16_start,           sb16_stop,
+                              sb16_is_playing,    sb16_set_callback,    sb16_write,
+                              sb16_set_volume,    sb16_get_volume,      sb16_stream_open,
+                              sb16_stream_setup,  sb16_stream_start,    sb16_stream_stop,
+                              sb16_stream_close,  sb16_stream_position, sb16_stream_delay};
