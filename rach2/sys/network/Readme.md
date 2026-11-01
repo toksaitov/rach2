@@ -58,7 +58,7 @@ A driver gives each frame to `ethernet_rx` (`ethernet/ethernet.c`) from its inte
 
 * To 127/8 or an address an interface has: onto the loopback ring.
 * To a broadcast address: UDP only, to the all-ones hardware address, by the interface on that subnet, or the first card for 255.255.255.255.
-* Otherwise by the route `netdev_route` chooses, to the next hop's hardware address from ARP, or `ENETUNREACH` with no route. On a miss an ARP request goes out and the datagram waits in one of `IP_HOLD_SLOTS` (4) slots, for at most 300 ticks, until the reply sends it, so the first ping or SYN to an uncached host is not lost.
+* Otherwise by the route `netdev_route` chooses, to the next hop's hardware address from ARP, or `ENETUNREACH` with no route. On a miss an ARP request goes out and the datagram waits in one of `IP_HOLD_SLOTS` (4) slots, for at most three seconds, until the reply sends it, so the first ping or SYN to an uncached host is not lost.
 
 The routing table (`route.c`) is the routes the interfaces imply, each address's subnet on the link and each gateway as its interface's default route, and up to `NETDEV_ROUTES` (32) added by `SIOCADDRT` or `RTM_NEWROUTE`. A lookup takes, among the routes of interfaces that are up whose prefix covers the destination, the longest prefix, then the lowest metric, then the first found, so an implied route comes before an added one, as on Linux. The source is the connection's or socket's bound address, 127.0.0.1 for 127/8, and otherwise the outgoing interface's address on the next hop's subnet, or its first (`netdev_source`).
 
@@ -94,7 +94,7 @@ An IPv6 socket defaults to dual stack. A listener bound to :: accepts both nativ
 
 `ip/icmp.c` answers an echo request from the address it was sent to. A report that a TCP segment in flight was too big goes to `tcp_path_mtu`, and a port unreachable to `udp_refused`, which gives the UDP socket connected to that peer `ECONNREFUSED`. An error this machine sends quotes as much of the datagram as fits 576 bytes, goes to no source of 0.0.0.0, broadcast or multicast, and, unless it goes to this machine, is limited to one a second after a burst of six.
 
-The kernel's ping ([ping(2)](../../../man/man2/ping.2)), to an IPv4 or IPv6 address, makes at most four attempts, each with a deadline 100 ticks from the current tick, including ticks whose interrupts are still pending. The timer handler's count ends the wait. The returned round-trip count also includes ticks whose interrupts are pending.
+The kernel's ping ([ping(2)](../../../man/man2/ping.2)), to an IPv4 or IPv6 address, makes at most four attempts, each with a deadline a second of ticks from the current tick, including ticks whose interrupts are still pending. The timer handler's count ends the wait. The returned round-trip count also includes ticks whose interrupts are pending.
 
 `udp/udp.c` keeps one list of bindings, a record from the heap for each bound socket, with the effective user ID that bound it; [bind(2)](../../../man/man2/bind.2) gives the rules for sharing a port. IPv6 UDP sends and verifies the mandatory pseudo-header checksum; a missing or bad checksum is dropped. A datagram goes to the socket connected to its sender, else to one bound to its destination address, else to one bound to any. A socket's record queues up to `SOCK_DGRAM_SLOTS` (8) datagrams of up to 1500 bytes, and one that finds the queue full is dropped.
 
