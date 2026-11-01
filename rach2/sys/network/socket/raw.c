@@ -163,13 +163,17 @@ static int raw_filtered6(const struct raw_binding *b, const uint8_t *msg, uint16
     return len < 1 || (b->filter6[msg[0] >> 3] & (1u << (msg[0] & 7))) != 0;
 }
 
-/** As `raw_rx`, from `ip6_rx`; what is queued is the message alone, as an
+/**
+ * As `raw_rx`, from `ip6_rx`; what is queued is the message alone, as an
  * AF_INET6 raw socket receives it on Linux. The filter is judged before the
- * message is queued, so that a message blocked costs no room and no drop. */
+ * message is queued, so that a message blocked costs no room and no drop,
+ * and the ICMPv6 checksum is computed only once a socket would take it.
+ */
 void raw6_rx(int ifindex, const uint8_t *ip6h, uint8_t nh, const uint8_t *msg, uint16_t len)
 {
     struct sock_dgram meta;
     struct raw_binding *b;
+    int sum_ok = -1; /* the ICMPv6 checksum's verdict, -1 until it is needed */
 
     k_memset(&meta, 0, sizeof(meta));
     meta.src = net_addr6(ip6h + 8, (uint32_t)ifindex);
@@ -179,9 +183,16 @@ void raw6_rx(int ifindex, const uint8_t *ip6h, uint8_t nh, const uint8_t *msg, u
     meta.info.tclass = (int16_t)(((ip6h[0] & 0x0f) << 4) | (ip6h[1] >> 4));
 
     for (b = raws; b; b = b->next) {
-        if (b->v6 && b->proto == nh && b->sock->ns == ip_ns && !raw_filtered6(b, msg, len)) {
-            raw_queue(b, &meta, msg, len);
+        if (!b->v6 || b->proto != nh || b->sock->ns != ip_ns || raw_filtered6(b, msg, len)) {
+            continue;
         }
+        if (nh == IP6_NH_ICMP6 && sum_ok < 0) {
+            sum_ok = len >= 4 && ip6_checksum(ip6h + 8, ip6h + 24, IP6_NH_ICMP6, msg, len) == 0;
+        }
+        if (nh == IP6_NH_ICMP6 && !sum_ok) {
+            return;
+        }
+        raw_queue(b, &meta, msg, len);
     }
 }
 
