@@ -84,6 +84,13 @@ static void vfs_kill_setid(struct vfs_mount *mnt, void *node);
 static int mnt_is_root(const struct vfs_mount *mnt);
 static int32_t cred_access_ref(const struct vfs_ref *r, int want, int use_real);
 static int32_t cred_access_node(const krffs_node_t *node, int want, int use_real);
+static long sys_pivot_root(isr_params_t *params);
+static long sys_faccessat2(isr_params_t *params);
+static long sys_splice(isr_params_t *params);
+static long sys_tee(isr_params_t *params);
+static long sys_sendfile(isr_params_t *params);
+static long sys_sendfile32(isr_params_t *params);
+static long sys_copy_file_range(isr_params_t *params);
 static long sys_mount(isr_params_t *params);
 static long sys_umount2(isr_params_t *params);
 static long sys_open(isr_params_t *params);
@@ -2287,7 +2294,7 @@ static void stats_after_move(void)
         } else if (round == 2) {
             rc = fstatat_path("/f", 1, &filled);
         } else {
-            rc = do_access("f", R_OK, 0);
+            rc = do_access("f", R_OK, 0, 0);
         }
         check(rc == 0, "a stat or an access of a file a write moves");
         check(ns_depth == 0 && !waiting, "the node is read with the mount's lock, then given back");
