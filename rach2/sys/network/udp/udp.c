@@ -239,7 +239,7 @@ static int udp_route6(const struct socket *sock, net_addr_t *dst, const struct n
         }
         dst->scope = (uint32_t)opt->ifindex;
     } else if (!dst->scope && ip6_is_multicast(dst->v6) && sock->mif6) {
-        dst->scope = (uint32_t)sock->mif6;
+        dst->scope = (uint32_t)sock->mif6; /* a group of wider scope */
     }
     if (opt && opt->src.family == AF_INET6 && !net_addr_any(opt->src)) {
         net_addr_t src = opt->src;
