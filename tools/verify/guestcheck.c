@@ -53,8 +53,8 @@
 #include <unistd.h>
 
 /* The descriptors a compile may hold, FD_RESERVED of them besides the
-   include chain: FD_TABLE_LIMIT of rach2/sys/fs/fd.h, which is also the
-   default soft RLIMIT_NOFILE. */
+   include chain: the soft RLIMIT_NOFILE every process starts with,
+   FD_TABLE_LIMIT of rach2/sys/fs/fd.h. */
 #define FD_LIMIT    1024
 #define FD_RESERVED 4 /* stdin, stdout, stderr, and the output file */
 
