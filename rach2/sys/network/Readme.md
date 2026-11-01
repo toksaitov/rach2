@@ -20,7 +20,7 @@ With no address option the first interface takes QEMU's user network, SLIRP: 10.
 ### Inside the kernel
 
 * `init_network` (`net.h`) brings the stack up at boot, after PCI enumeration and interrupts, unless the boot line has `rach2.nonet`, and returns 1 when a card came up; boot then calls `netconsole_enable` for `rach2.netconsole`.
-* The boot processor's timer tick, 100 times a second, calls `netdev_poll`, `tcp_tick`, `ip6_tick` and `ip_loop_drain`, in that order (`kernel.c`). A system call's exit and the idle wait also drain the loopback ring.
+* The boot processor's timer tick, 1000 times a second, calls `netdev_poll`, `tcp_tick`, `ip6_tick` and `ip_loop_drain`, in that order (`kernel.c`). A system call's exit and the idle wait also drain the loopback ring.
 * `kernel_shutdown` stops every card after its last log record, and `klog` gives every record to `netconsole_putc`.
 * `poll`, `ioctl` and `procfs` reach the stack through `socket_poll`, `netif_ioctl`, and copies made under the lock such as `tcp_snapshot`.
 
