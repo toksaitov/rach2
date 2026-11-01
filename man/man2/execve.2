@@ -80,11 +80,20 @@ the address of the path as the caller passed it, and
 the least alternate signal stack a frame fits on this processor, whose
 XSAVE state can make it larger than
 .Dv MINSIGSTKSZ .
-There is no vDSO, so there is no
-.Dv AT_SYSINFO
-or
+On x86-64 it also has
 .Dv AT_SYSINFO_EHDR ,
-and a C library makes its system calls with
+the address of the vDSO, a library of the clock calls that the kernel maps
+into each new image, with its data page below it, one free page above the
+range
+.Xr mmap 2
+places mappings in, as
+.Xr vdso 7
+describes.
+The i686 kernel maps no vDSO and gives neither
+.Dv AT_SYSINFO
+nor
+.Dv AT_SYSINFO_EHDR .
+A C library makes its other system calls with
 .Li int $0x80
 on i686 and
 .Li syscall
@@ -564,4 +573,5 @@ duplicate or inherited descriptor or one marked close-on-exec.
 .Xr fork 2 ,
 .Xr personality 2 ,
 .Xr prlimit64 2 ,
-.Xr wait 2
+.Xr wait 2 ,
+.Xr vdso 7

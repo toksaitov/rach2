@@ -44,9 +44,9 @@ as seconds and microseconds.
 The
 .Fa tz
 argument is ignored.
-Real time is the CMOS clock reading taken at boot plus the time since,
-counted in timer ticks with the PIT counter's place within the current tick
-added, to the microsecond.
+Real time is the CMOS clock reading taken at boot plus
+.Dv CLOCK_MONOTONIC ,
+the time since, to the microsecond.
 If the clock could not be read, the result is time since boot.
 The hardware clock is read once; no service corrects the clock afterward.
 .Fn time
@@ -91,8 +91,13 @@ The same real time reported by
 .Fn gettimeofday .
 .It Dv CLOCK_MONOTONIC
 ID 1.
-Time since boot, read from uptime seconds, the ticks within the current
-second and the PIT counter's place within the tick, as real time reads it.
+Time since boot: the 1 ms ticks counted, with the place within the current
+tick added from the reference that keeps the clock, the HPET, the PM timer,
+the TSC or the 8254.
+Where the kernel keeps the clock from the TSC, as
+.Xr vdso 7
+describes, it is the TSC's count at the rate the kernel measured, steered
+toward the ticks.
 A reading is never earlier than the one before it, and setting the real
 time does not move it.
 .It Dv CLOCK_PROCESS_CPUTIME_ID
@@ -112,10 +117,10 @@ The same time since boot as
 no service adjusts the clock's rate, and the machine is never suspended.
 .It Dv CLOCK_MONOTONIC_COARSE
 ID 6.
-Time since boot at the last tick, without the PIT counter's place within it.
+Time since boot at the last tick, without the place within it.
 .It Dv CLOCK_REALTIME_COARSE
 ID 5.
-Real time at the last tick, without the PIT counter's place within it, so
+Real time at the last tick, without the place within it, so
 never later than
 .Dv CLOCK_REALTIME
 read at the same moment.
@@ -134,14 +139,32 @@ process ID; a thread clock may name any thread of the caller's process.
 .Fn clock_getres
 stores a clock's resolution in
 .Fa res
-unless it is null: 1 microsecond for
+unless it is null: for
 .Dv CLOCK_REALTIME ,
 .Dv CLOCK_MONOTONIC ,
 .Dv CLOCK_MONOTONIC_RAW
 and
 .Dv CLOCK_BOOTTIME ,
-and the 1 ms tick for every other clock, the coarse and CPU clocks.
+one count of the reference, rounded up to a nanosecond, and 1 microsecond
+with the 8254; and the 1 ms tick for every other clock, the coarse and CPU
+clocks.
 Each clock advances in steps of its resolution.
+.Pp
+On x86-64, musl and glibc call
+.Fn clock_gettime ,
+.Fn gettimeofday ,
+.Fn time
+and
+.Fn clock_getres
+through the vDSO, which answers the six clocks above that are not CPU
+clocks without entering the kernel where it keeps the clock from the TSC,
+and makes the system call otherwise
+.Pq Xr vdso 7 .
+The line
+.Li clock_calls
+of
+.Pa /proc/stat
+counts the system calls of the clock.
 .Pp
 .Fn times
 returns the monotonic tick count in units of 1/100 second, as a signed
@@ -505,4 +528,5 @@ operation.
 .Sh SEE ALSO
 .Xr nanosleep 2 ,
 .Xr stat 2 ,
-.Xr wait 2
+.Xr wait 2 ,
+.Xr vdso 7

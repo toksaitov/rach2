@@ -22,6 +22,7 @@
 | First code of another processor | `trampoline.s` | `trampoline.s` |
 | The debug shell's ring-3 payload | `usertest.c` | `usertest.c` |
 | Constants and types, user structures | `cpu.h`, `uabi.h` | `cpu.h`, `uabi.h` |
+| The vDSO and the clock it reads | `vdso.c`, which answers that there is none | `vdso.c`, `vdsocode.s`, `vdsoimg.h`, `vclock.c` |
 
 `x86/` has the PC platform and what both x86 processors share: the primitives of `arch.h` (`cpu.c`), the interrupt routers (`isr.c`), the debug registers (`debugreg.c`), the floating-point state (`fpu.c`), and `k_main` (`boot.c`), the C entry both `loader.s` call. `arm/` and `arm64/` have `cpu.h` and `uabi.h` and no code.
 
@@ -63,6 +64,7 @@ These headers belong to their subsystems, and the architecture defines what they
 | `user_regs_struct` (`ARCH_GREGS`) | 17 words | 27 words |
 | Programs (`ELF_CLASS`, `ELF_MACHINE`) | ELFCLASS32, `EM_386` | ELFCLASS64, `EM_X86_64` |
 | Double fault | task gate to a TSS of its own | interrupt stack 1 |
+| vDSO ([vdso(7)](../../../man/man7/vdso.7)) | none | a page of code and its data page |
 
 The kernel's layout and the range of user addresses on each are in [memory's tables](../mm/Readme.md).
 
@@ -150,6 +152,16 @@ On i686 the debug exception, vector 1, has an ordinary interrupt gate. On x86-64
 
 `trampoline.s` is the first code of a processor the boot processor starts, copied to physical address 0x8000. It goes from real mode to protected mode and paging on i686, and to long mode on x86-64, and calls `x86_ap_entry` on the stack it was given; `arch_ap_tables` (`i686/gdt.c`, `x86_64/percpu.c`) gives the processor its GDT, its TSS and the IDT, and on x86-64 the kernel's PML4, its GS base and `syscall`. [The PC platform](x86/Readme.md) describes the start.
 
+### The vDSO on x86-64
+
+The vDSO is one page of code that every new image maps and calls for the clock, and the page of data below it that the kernel writes; `../vdso.h` declares both halves, and [vdso(7)](../../../man/man7/vdso.7) has the contract.
+
+`vdso.c` builds the image at boot in a frame of its own, as a linker would lay out a shared object of base address 0: the ELF header, a `PT_LOAD` of the whole page, read and execute, and a read-only `PT_DYNAMIC`, then a SysV `DT_HASH` table, the dynamic symbols, their strings, `DT_VERSYM` and `DT_VERDEF` with the versions `linux-vdso.so.1` and `LINUX_2.6`, the dynamic section, and from `VDSO_TEXT_OFFSET`, 0x800, the code that `vdsocode.s` assembles into the kernel between `vdso_text_start` and `vdso_text_end`, copied in; then section headers, which gdb and readelf read. Each of the five functions has a global `__vdso_` symbol and a weak one of the plain name. The code reaches the data page at `vdso_text_start - 0x1800(%rip)`, one page and `VDSO_TEXT_OFFSET` back, which holds wherever the two are mapped, and its only other references are to itself, so the copy runs at any address. It reads the page as a sequence lock: `seq`, then `lfence; rdtsc; lfence` and the fields, then `seq` again, and again from the start when `seq` was odd or moved. Every function makes the system call when the page's `mode` is not `VCLOCK_TSC`.
+
+`vclock.c` keeps the clock behind the page. `vclock_start`, run once every processor has started, turns it on where `timer_calibrate` measured the TSC and `tsc_synced` found no processor behind the boot processor ([the PC platform](x86/Readme.md)); it chooses `mult` and `shift` so that `mult` / 2^`shift` is the nanoseconds of one count. `vclock_tick`, at each of the boot processor's ticks with interrupts off, moves the page's times to the TSC's count now and compares them with the reference's, the ticks counted and the place within the tick: it steers `mult` toward the reference by a proportional term of at most one part in 2000, moves a clock more than a tick behind forward at once, and never moves one back. The writer makes `seq` odd, then `mfence`, then reads the TSC, so that no reader takes the old base with a later count. `clock.c`'s monotonic and real clocks read the same clock through `vclock_read` while it runs, so a system call and the vDSO agree; real time is the monotonic clock plus the offset `clock.c` gives at each anchor and step (`vclock_set_offset`).
+
+`proc/vdso.c` maps the two pages into each new image, one free page above the range `mmap` places mappings in (`vdso_map`), as regions of `VM_SHARED` whose file hands out the kernel's frames, with `VM_PROT_NOWRITE` so that neither can be made writable; a fork shares them. `/proc/PID/maps` names them `[vvar]` and `[vdso]`.
+
 ### The rules of the shared code
 
 `make -C rach2 check-arch` runs `tools/verify/archcheck.sh` over the shared files and fails on any of three findings:
@@ -180,7 +192,8 @@ The shared code is written to pass them: an address is a `uintptr_t`, a length a
 * No ARM kernel links: `arm/` and `arm64/` have headers alone.
 * The i686 kernel uses no PAE: it reaches the first 4 GiB of physical memory, and every page it maps is executable.
 * On i686 a program makes a system call by `int 0x80` alone; the kernel has no `sysenter`. On x86-64 it makes one by `syscall` alone: the kernel has no gate at 0x80, so `int $0x80` is a general-protection fault and a `SIGSEGV`, has no 32-bit code segment, and loads only ELFCLASS64 `EM_X86_64` programs.
-* Neither kernel has a vDSO: every call, `clock_gettime` among them, enters the kernel.
+* The i686 kernel has no vDSO: every call, `clock_gettime` among them, enters the kernel.
+* The x86-64 vDSO has no unwind tables, and a tracer cannot write into its pages, so no breakpoint can be set there; its clock calls enter the kernel on a machine whose TSC does not run at one rate unless `rach2.tscreliable` is given.
 
 ## Tests
 
@@ -189,5 +202,6 @@ The shared code is written to pass them: an address is a `uintptr_t`, a length a
 * `tests/run default` runs every guest probe, `sigprobe`, `musl/sigframemusl` and `musl/ptracemusl` among them, which go through the signal frames, the register sets and the debug exception after `MOV SS` and a system call.
 * `tests/run memory` boots with `rach2.stackoverrun=fork` and with `rach2.stackoverrun=boot`, the cases `machine.memory.stackoverrun-fork` and `stackoverrun-boot` of `tests/cases/machine.memory.json`, and requires the record with the pid of the thread that descended and the panic `a kernel stack ran out`.
 * `tests/run smp` starts the other processors, runs the debug shell's `usermode` payload, and raises an NMI on two processors, the case `machine.smp.nmi` of `tests/cases/machine.smp.json`, which must stop the machine with one report of the fault and one panic, both processors halted.
+* `tests/run vdso` runs `musl/vdsomusl` on two processors under `rach2.tscreliable` and under `rach2.notsc`, the cases of `tests/cases/guest.vdso.json`: the image's place, its symbols and versions, its clocks between two system calls' and in order across the processors, `getcpu`, and the count of the clock's system calls. The case `machine.gnu.gdb` of `tests/run gnu` has gdb name `__vdso_clock_gettime` as the system-supplied DSO's.
 
 Every suite in `tests/registry` runs on both architectures unless its row says otherwise; `ARCH=x86_64 tests/run NAME` runs it on x86-64.
