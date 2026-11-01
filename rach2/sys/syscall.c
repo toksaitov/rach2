@@ -2196,7 +2196,8 @@ long sys_ioctl(isr_params_t *params)
 
     if ((entry->type == FD_TYPE_SOCKET && entry->sock) || entry->type == FD_TYPE_UNIX) {
         int handled;
-        int32_t r = netif_ioctl(request, arg, &handled);
+        int32_t r = netif_ioctl(
+            request, arg, entry->type == FD_TYPE_SOCKET ? (int)entry->sock->family : 1, &handled);
 
         if (handled) {
             return r;

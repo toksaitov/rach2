@@ -14,6 +14,9 @@
 #include "netconf.h"
 #include "driver/netdev.h"
 #include "arp/arp.h"
+#include "ip6/ip6.h"
+#include "ip6/route6.h"
+#include "socket/socket.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../mm/usercopy.h"
@@ -519,9 +522,131 @@ static int32_t ifconf_ioctl(uintptr_t arg)
     return copy_to_user((void __user *)arg, &ifc.len, sizeof(ifc.len)) == 0 ? 0 : -EFAULT;
 }
 
-int32_t netif_ioctl(uint32_t request, uintptr_t arg, int *handled)
+/* Linux's struct in6_ifreq: the address, the prefix's length and the
+ * interface's index; and its struct in6_rtmsg, whose `info` is a long. */
+struct in6_ifreq_shape {
+    uint8_t addr[16];
+    uint32_t prefixlen;
+    int ifindex;
+};
+
+struct in6_rtmsg_shape {
+    uint8_t dst[16];
+    uint8_t src[16];
+    uint8_t gateway[16];
+    uint32_t type;
+    uint16_t dst_len;
+    uint16_t src_len;
+    uint32_t metric;
+    unsigned long info;
+    uint32_t flags;
+    int ifindex;
+};
+
+/** The interface of index `index` the caller sees, or NULL. */
+static struct netdev *of_index(int index)
+{
+    int i;
+
+    for (i = 0; i < netdev_seen_count(); i++) {
+        if (netdev_at(i) && netdev_at(i)->index == index) {
+            return netdev_at(i);
+        }
+    }
+    return 0;
+}
+
+/**
+ * SIOCSIFADDR and SIOCDIFADDR on an AF_INET6 socket: give the interface of
+ * the caller's `in6_ifreq` its address and prefix, permanent, as Linux's
+ * `addrconf_add_ifaddr` does, or take it away; root only. Returns the
+ * result of `netconf_add_address6` or `netconf_del_address6`, -ENODEV for
+ * an index no interface has, or -EINVAL for a prefix past 128.
+ */
+static int32_t in6_addr_ioctl(uint32_t request, uintptr_t arg)
+{
+    struct in6_ifreq_shape r;
+    struct netdev *nd;
+
+    if (!current_proc || !proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    if (copy_from_user(&r, (const void __user *)arg, sizeof(r)) != 0) {
+        return -EFAULT;
+    }
+    nd = of_index(r.ifindex);
+    if (!nd) {
+        return -ENODEV;
+    }
+    if (r.prefixlen > 128) {
+        return -EINVAL;
+    }
+    if (request == SIOCDIFADDR) {
+        return netconf_del_address6(nd, r.addr);
+    }
+    return netconf_add_address6(nd, r.addr, (int)r.prefixlen, NETDEV_A6_PERMANENT,
+                                NETDEV_LIFETIME_FOREVER, NETDEV_LIFETIME_FOREVER);
+}
+
+/**
+ * SIOCADDRT and SIOCDELRT on an AF_INET6 socket: add the route of the
+ * caller's `in6_rtmsg` to the IPv6 table (`route6_add`), through its
+ * gateway when RTF_GATEWAY is set, by the interface of its index, or with
+ * none by the one its gateway is reached by, at its metric, 1024 for 0 as
+ * on Linux; or remove the table's route of that prefix by that interface,
+ * or any, through that gateway, or any (`route6_del`). Root only. -ENODEV
+ * for an index no interface has or a route no interface carries,
+ * -EOPNOTSUPP on `lo`, and -EINVAL for a prefix past 128.
+ */
+static int32_t in6_route_ioctl(uint32_t request, uintptr_t arg)
+{
+    struct in6_rtmsg_shape r;
+    uint8_t via[IP6_ADDR_LEN];
+    const uint8_t *gw;
+    struct netdev *nd = 0;
+    uint32_t lock;
+
+    if (!current_proc || !proc_privileged(current_proc)) {
+        return -EPERM;
+    }
+    if (copy_from_user(&r, (const void __user *)arg, sizeof(r)) != 0) {
+        return -EFAULT;
+    }
+    if (r.dst_len > 128) {
+        return -EINVAL;
+    }
+    gw = (r.flags & RTF_GATEWAY) ? r.gateway : 0;
+    if (r.ifindex != 0) {
+        nd = of_index(r.ifindex);
+        if (!nd) {
+            return -ENODEV;
+        }
+    } else if (gw && request == SIOCADDRT) {
+        lock = net_lock();
+        nd = ip6_route(gw, 0, via);
+        net_unlock(lock);
+    }
+    if (nd && nd->loopback) {
+        return -EOPNOTSUPP;
+    }
+    if (request == SIOCDELRT) {
+        return route6_del(nd, r.dst, r.dst_len, gw);
+    }
+    if (!nd) {
+        return -ENODEV;
+    }
+    return route6_add(nd, r.dst, r.dst_len, gw, r.metric != 0 ? r.metric : 1024, ROUTE6_PROTO_BOOT);
+}
+
+int32_t netif_ioctl(uint32_t request, uintptr_t arg, int family, int *handled)
 {
     *handled = 1;
+    if (family == AF_INET6 && (request == SIOCSIFADDR || request == SIOCDIFADDR)) {
+        return in6_addr_ioctl(request, arg);
+    }
+    if (family == AF_INET6 && (request == SIOCADDRT || request == SIOCDELRT)) {
+        return in6_route_ioctl(request, arg);
+    }
     switch (request) {
     case SIOCGIFCONF:
         return ifconf_ioctl(arg);
