@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.audio",
-  "summary": "What the machine plays reaches its sound card as the notes it was asked for, and the mixer's level outlasts a reboot",
+  "summary": "What the machine plays reaches its sound card as the notes it was asked for, what the card records reaches a program whole, and the mixer's level outlasts a reboot",
   "cases": [
     {
       "case_id": "machine.audio.hda",
@@ -139,6 +139,95 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "QEMU", "reason": "the case reads the queue of QEMU's emulated controller; the Lenovo's figure is the proof's"}
+    },
+    {
+      "case_id": "machine.audio.record",
+      "behavior": "a program that reads 48 periods of 16-bit mono at 48000 Hz from /dev/dsp on an Intel HDA controller reads every frame the input stream recorded, by the counts /proc/audio gives",
+      "units": ["audio"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"card": "hda", "rate": 48000, "periods": 48}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "audio_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine"},
+      "steps": [
+        {"step_id": "record", "stage": "execute", "machine": "fixture", "does": "boot to the debug shell, run audiotest -r 48000 48, which reads 48 periods through /dev/dsp, turns input off and compares its counts with /proc/audio's, and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"], "audio": "hda", "audio_backend": "none"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "counted", "checks": "audiotest -r says audiotest: result: complete; the frames read match the kernel's count before the shell's prompt comes back: it read 48 whole periods at the rate /proc/audio gives, the frames it read and those left in the buffer are the frames the input stream handed over, GETIPTR counts at least as many recorded, and there was no overrun", "source": "scenario"},
+        {"assertion_id": "no-stall", "checks": "the console never says audio: stalled", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 1}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "audio_scenario", "node": "tests/cases/machine/audio_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the case reads the counts of QEMU's emulated controller recording silence; the Lenovo's microphones are the proof's"}
+    },
+    {
+      "case_id": "machine.audio.tone",
+      "behavior": "the notes QEMU feeds an Intel HDA controller's input are the notes a program reads from /dev/dsp",
+      "units": ["audio"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"card": "hda", "rate": 16000, "periods": 32, "notes": "250 400 500"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "audio_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes the recording rebuilt from what the program read, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "record", "stage": "execute", "machine": "fixture", "does": "boot to the debug shell with QEMU's sdl backend feeding the codec's input the three notes of tones.raw, run audiotest -R 16000 32, which reads two seconds through /dev/dsp, checks its counts and prints the samples, and end the machine with QMP's quit"},
+        {"step_id": "judge", "stage": "execute", "does": "rebuild the samples printed as a WAVE file and run wavcheck on it"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"], "audio": "hda", "audio_backend": "sdl", "audio_input": "tones"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "counted", "checks": "audiotest -R says audiotest: result: complete; the frames read match the kernel's count before the shell's prompt comes back", "source": "scenario"},
+        {"assertion_id": "no-stall", "checks": "the console never says audio: stalled", "source": "scenario"},
+        {"assertion_id": "notes", "checks": "wavcheck finds 250, 400 and 500 Hz in what the program read, in that order, and no other tone", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2},
+        {"witness_id": "wavcheck", "kind": "quiet", "means": "wavcheck has ended", "limit": null, "bound": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "tones", "node": "tests/system/tones.raw", "per_architecture": false},
+        {"name": "wavcheck", "node": "tests/system/wavcheck", "per_architecture": false},
+        {"name": "audio_scenario", "node": "tests/cases/machine/audio_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the case feeds QEMU's emulated codec a file through SDL's disk driver; the Lenovo's microphones are the proof's"}
     },
     {
       "case_id": "machine.audio.kept",

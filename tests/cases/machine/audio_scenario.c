@@ -2,8 +2,10 @@
  * audio_scenario.c: the scenario of machine.audio, in which the kernel's
  * debug shell plays `audio test scale` on an emulated sound card and
  * wavcheck measures the notes in what QEMU recorded the machine playing,
- * runs `audiotest -s`, which measures the queue across a writer's stall, or
- * runs `audiotest -d`, whose scales through /dev/dsp wavcheck measures.
+ * runs `audiotest -s`, which measures the queue across a writer's stall,
+ * runs `audiotest -d`, whose scales through /dev/dsp wavcheck measures, or
+ * runs `audiotest -r` or `-R`, which record through /dev/dsp, and for `-R`
+ * wavcheck measures the notes QEMU fed the machine in what it read.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +18,13 @@ static const char console[] = "fixture.1.console";
 
 /* The debug shell's prompt, after the line that ends the command before. */
 static const char prompt[] = "\n> ";
+
+/* What `audiotest -r` and `-R` say when the frames they read match the
+ * kernel's count, and the lines in which `-R` prints the samples. */
+static const char counted[] =
+    "audiotest: result: complete; the frames read match the kernel's count";
+static const char data_line[] = "audiotest: data: ";
+static const char rate_key[] = "16-bit mono at ";
 
 /** Give the last part of the attempt's case identity. */
 static const char *case_name(struct etude_case *c)
@@ -241,6 +250,192 @@ static void dsp(struct lc *l)
     wavcheck(l, m, argv, path, sizeof(path));
 }
 
+/**
+ * Run `command`, an `audiotest -r` or `-R`, from the debug shell of the
+ * case's one machine, booted, and report `counted` once the shell is back.
+ *
+ * @return the machine, or NULL when the scenario cannot go on; the console's
+ *         offsets before the command and after the prompt that ends it are
+ *         in `*from` and `*at`.
+ */
+static struct etude_case_machine *run_record(struct lc *l, const char *command, uint64_t *from,
+                                             uint64_t *at)
+{
+    struct etude_case_machine *m;
+
+    *at = 0;
+    if (!lc_step(l, "record") || (m = lc_boot(l, "fixture")) == NULL ||
+        !lc_wait(l, m, "Type 'help'", at, NULL) || !lc_wait(l, m, prompt, at, NULL))
+        return NULL;
+    *from = *at;
+    if (lc_type(l, m, command) && lc_wait(l, m, prompt, at, NULL)) {
+        lc_find(l, m, "counted", counted, *from, 1);
+        return m;
+    }
+    if (!l->stopped)
+        lc_assert(l, "counted", 0, l->why);
+    return NULL;
+}
+
+/**
+ * Run the record case: `audiotest -r` reads a second of 16-bit mono at
+ * 48000 Hz through /dev/dsp on HDA, under QEMU's `none` backend, which
+ * records silence, and says that the frames it read and those left in the
+ * buffer are the frames /proc/audio says the input stream handed over.
+ */
+static void record(struct lc *l)
+{
+    struct etude_case_machine *m;
+    uint64_t from, at;
+
+    m = run_record(l, "exec /bin/audiotest -r 48000 48\r", &from, &at);
+    if (m == NULL || !lc_quit(l, m, NULL))
+        return;
+    lc_find(l, m, "no-stall", "audio: stalled", 0, 0);
+}
+
+/** The value of hexadecimal digit `c`, or -1. */
+static int hex_digit(int c)
+{
+    if (c >= '0' && c <= '9')
+        return c - '0';
+    if (c >= 'a' && c <= 'f')
+        return c - 'a' + 10;
+    return -1;
+}
+
+/** Store the 32-bit `v` at `p`, little-endian. */
+static void put32(unsigned char *p, unsigned long v)
+{
+    p[0] = (unsigned char)v;
+    p[1] = (unsigned char)(v >> 8);
+    p[2] = (unsigned char)(v >> 16);
+    p[3] = (unsigned char)(v >> 24);
+}
+
+/**
+ * Rebuild the samples `audiotest -R` printed in `text` as a WAVE file of
+ * one 16-bit channel at the rate it said it recorded at, at `path`. Each
+ * line that begins with `data_line` holds bytes in hexadecimal; a kernel
+ * record's prefix before it is skipped.
+ *
+ * @return the bytes of samples written, or -1 having put why in `why`.
+ */
+static long rebuild(const char *text, const char *path, char *why, size_t size)
+{
+    static const unsigned char fmt[] = {'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0};
+    unsigned char header[44];
+    const char *at = strstr(text, rate_key), *line;
+    unsigned long rate, bytes = 0;
+    size_t len = strlen(text);
+    FILE *f;
+
+    if (at == NULL || (rate = strtoul(at + strlen(rate_key), NULL, 10)) == 0) {
+        snprintf(why, size, "audiotest printed no rate");
+        return -1;
+    }
+    f = fopen(path, "wb");
+    if (f == NULL) {
+        snprintf(why, size, "the recording's evidence cannot be written");
+        return -1;
+    }
+    memset(header, 0, sizeof(header));
+    fwrite(header, 1, sizeof(header), f);
+    for (line = text; line < text + len;) {
+        const char *end = strchr(line, '\n'), *p;
+        size_t start = lc_past_prefix(text, len, (size_t)(line - text));
+
+        if (end == NULL)
+            end = text + len;
+        p = text + start;
+        if ((size_t)(end - p) > strlen(data_line) && strncmp(p, data_line, strlen(data_line)) == 0)
+            for (p += strlen(data_line);
+                 p + 1 < end && hex_digit(p[0]) >= 0 && hex_digit(p[1]) >= 0; p += 2) {
+                fputc(hex_digit(p[0]) * 16 + hex_digit(p[1]), f);
+                bytes++;
+            }
+        line = end + 1;
+    }
+    memcpy(header, "RIFF", 4);
+    put32(header + 4, 36 + bytes);
+    memcpy(header + 8, "WAVE", 4);
+    memcpy(header + 12, fmt, sizeof(fmt));
+    put32(header + 24, rate);
+    put32(header + 28, rate * 2);
+    header[32] = 2;
+    header[34] = 16;
+    memcpy(header + 36, "data", 4);
+    put32(header + 40, bytes);
+    if (fseek(f, 0, SEEK_SET) != 0 || fwrite(header, 1, sizeof(header), f) != sizeof(header) ||
+        fclose(f) != 0) {
+        snprintf(why, size, "the recording's evidence cannot be written");
+        return -1;
+    }
+    return (long)bytes;
+}
+
+/**
+ * Run the tone case: under QEMU's `sdl` backend, whose disk driver feeds the
+ * codec's input three notes from the case's input file, `audiotest -R`
+ * records two seconds through /dev/dsp and prints the samples; the
+ * scenario rebuilds them as a WAVE file and wavcheck must find the three
+ * notes in it, in order.
+ */
+static void tone(struct lc *l)
+{
+    char name[] = "wavcheck", scale[] = "scale", n1[] = "250", n2[] = "400", n3[] = "500",
+         path[1024], detail[200];
+    char *argv[] = {name, scale, path, n1, n2, n3, NULL};
+    struct etude_case_machine *m;
+    struct etude_termination end;
+    enum etude_status st;
+    const char *wav;
+    uint64_t from, at;
+    char *text;
+    long bytes;
+
+    m = run_record(l, "exec /bin/audiotest -R 16000 32\r", &from, &at);
+    if (m == NULL)
+        return;
+    text = lc_console(l, "fixture", from, at);
+    if (text == NULL || !lc_quit(l, m, NULL)) {
+        free(text);
+        return;
+    }
+    lc_find(l, m, "no-stall", "audio: stalled", 0, 0);
+    if (!lc_step(l, "judge")) {
+        free(text);
+        return;
+    }
+    wav = etude_evidence(l->c, "recorded.wav");
+    if (wav == NULL || strlen(wav) >= sizeof(path)) {
+        free(text);
+        lc_halt(l, ETUDE_REFUSED, "the recording's evidence");
+        return;
+    }
+    snprintf(path, sizeof(path), "%s", wav);
+    bytes = rebuild(text, path, detail, sizeof(detail));
+    free(text);
+    if (bytes < 0) {
+        lc_assert(l, "notes", 0, detail);
+        return;
+    }
+    etude_progress(l->c, "wavcheck", 0);
+    st = etude_host(l->c, argv, "wavcheck", &end);
+    if (st != ETUDE_OK) {
+        lc_halt(l, st, "wavcheck");
+        return;
+    }
+    etude_progress(l->c, "wavcheck", 1);
+    if (end.end == ETUDE_END_EXITED)
+        snprintf(detail, sizeof(detail),
+                 "wavcheck exited %d on the %ld bytes read; its evidence wavcheck says why",
+                 end.value, bytes);
+    else
+        snprintf(detail, sizeof(detail), "wavcheck did not exit");
+    lc_assert(l, "notes", end.end == ETUDE_END_EXITED && end.value == 0, detail);
+}
+
 int etude_scenario(struct etude_case *c)
 {
     static const char *const hdas[] = {"probe-before", "played", "probe-after", "messages",
@@ -249,6 +444,8 @@ int etude_scenario(struct etude_case *c)
     static const char *const queues[] = {"bounded", "no-stall", NULL};
     static const char *const dsps[] = {"stereo",   "played-stereo", "defaults", "played-defaults",
                                        "no-stall", "notes",         NULL};
+    static const char *const records[] = {"counted", "no-stall", NULL};
+    static const char *const tones[] = {"counted", "no-stall", "notes", NULL};
     const char *name = case_name(c);
     struct lc l;
 
@@ -264,6 +461,12 @@ int etude_scenario(struct etude_case *c)
     } else if (strcmp(name, "dsp") == 0) {
         lc_begin(&l, c, dsps);
         dsp(&l);
+    } else if (strcmp(name, "record") == 0) {
+        lc_begin(&l, c, records);
+        record(&l);
+    } else if (strcmp(name, "tone") == 0) {
+        lc_begin(&l, c, tones);
+        tone(&l);
     } else {
         return 1;
     }
