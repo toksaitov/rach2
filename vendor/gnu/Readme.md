@@ -1,6 +1,6 @@
 # The GNU layer
 
-The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 74 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. On x86-64 the root can also have the [agents layer](agents/Readme.md), vendors' published builds of coding agents and their tools, such as Anthropic's Claude Code and GitHub's `gh`. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host; on any other host, such as a Mac, its root images are built in etude's tooling machine, a Linux in QEMU. It is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
+The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 75 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. On x86-64 the root can also have the [agents layer](agents/Readme.md), vendors' published builds of coding agents and their tools, such as Anthropic's Claude Code and GitHub's `gh`. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host; on any other host, such as a Mac, its root images are built in etude's tooling machine, a Linux in QEMU. It is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
 
 ## Use
 
@@ -42,7 +42,7 @@ The path finds a GNU program in `/usr/bin` before a file of `/bin`. `make` is GN
 
 [`sources.txt`](sources.txt) pins each tarball of the toolchain and the ports, and [`sources-extra.txt`](sources-extra.txt) the sources of the three subdirectories, the Debian archive keys and the CA bundle. A line gives a name, version, URL and SHA-256, and each file's header says which upstream key verified each digest. `fetch.sh` downloads a file once, into `downloads/`, which Git ignores, trying up to three times, and checks its digest every time a script uses it; a file with another digest is removed and refused. Nothing fetched is committed. The separate `gnu-fstools` step builds the exfatprogs pin in [`fstools/sources.txt`](fstools/sources.txt) against the existing cross compiler and sysroot. It publishes only the independent helper tools under `fstools/`, without changing the GNU port list, shared source pins or root. The package links a private positional-write adapter for recovery block nodes: partial sectors use read/modify/write, aligned writes and regular files retain their normal behavior. The single-threaded tools open writable devices exclusively; no libc or kernel write policy changes. GNU test image assembly copies its formatter and checker beside dosfstools' existing FAT checker. The GNU test image requires these programs and the compiled `/host-products/fstool` dispatcher before publication; machine cases execute them over the framed guest channel. The test image also stages the prepared compressed source archive at `/host-products/scripts-assets.tar`. Its Make dependency and tooling input list include that archive; the native scenarios check its digest against their declared artifact before extracting private source trees.
 
-Each port keeps its upstream license, which its tarball has. The scripts, the recipes, `rach2.ti` and the files in `etc/` are in-house.
+Each port keeps its upstream license, which its tarball has. FFmpeg is LGPL 2.1 or later, built with GPL, nonfree and version-3 components disabled and no external codec libraries. The scripts, the recipes, `rach2.ti` and the files in `etc/` are in-house.
 
 ## Local changes
 
@@ -88,6 +88,12 @@ Every other port depends on `runtime` and `pkgconf`. [`ports/runtime.sh`](ports/
 `--all` builds every recipe into an empty root, which takes minutes on the build host and many hours in the tooling machine under TCG. So that a stopped build keeps the ports it finished, `--all` run by make writes the key that `etude build` gives the step, as `ETUDE_STEP_KEY`, to `work/ports.done`, and adds each port's name there once the port is in the root. The next `--all` with that key, which make runs when the stamp is gone and nothing it depends on has changed, makes the root again from the stages of those ports, in the order they were built, and goes on from the next port, so that it ends with the root a build that never stopped makes. Any other run of the script, and an `--all` that finishes, removes the list. With the store, a stopped step's entry is removed, as for every step, and the next build begins again from an empty root.
 
 A port installs into `stage/NAME`. There the target's `strip --strip-debug` runs on its ELF files, and its libtool archives and Info index are removed. Files the port's previous list had and the new one lacks are removed from the root, and the stage is copied in. Programs link with the shared glibc; `GNU_LINK=static` gives an autoconf port `LDFLAGS=-static`, and `-all-static` where it uses libtool.
+
+FFmpeg provides `ffmpeg` and `ffprobe`, OSS input and output through `/dev/dsp`, WAV and raw PCM output, and built-in MP3, FLAC, Vorbis, Opus, AAC and PCM decoders. Its shared libraries and headers serve cmus. Only the file and pipe protocols are enabled; `aresample`, `aformat` and `volume` are among its audio filters. [`ffmpeg(1)`](../../man/man1/ffmpeg.1) and [`ffprobe(1)`](../../man/man1/ffprobe.1) describe the installed build.
+
+| Port | Version | License |
+| --- | --- | --- |
+| [FFmpeg](ports/ffmpeg.sh) | 9.0.2 | LGPL 2.1 or later |
 
 ### The root image
 

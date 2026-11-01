@@ -168,6 +168,7 @@ Each port is a recipe of [`vendor/gnu/ports/`](../vendor/gnu/ports), with the ve
 | [curl](../vendor/gnu/ports/curl.sh) | 8.22.0 | curl and libcurl, with OpenSSL for TLS and zlib for compressed transfers. |
 | [diffutils](../vendor/gnu/ports/diffutils.sh) | 3.12 | GNU diffutils: diff, cmp, diff3 and sdiff. |
 | [dosfstools](../vendor/gnu/ports/dosfstools.sh) | 4.2 | dosfstools, the FAT tools Debian has: mkfs.fat, fsck.fat and fatlabel, with the names mkfs.vfat, mkdosfs, fsck.vfat, dosfsck and dosfslabel that Debian links to them. |
+| [ffmpeg](../vendor/gnu/ports/ffmpeg.sh) | 9.0.2 | FFmpeg and ffprobe, with OSS input and output and the built-in audio decoders for WAV, MP3, FLAC, Ogg Vorbis, Opus and AAC. |
 | [file](../vendor/gnu/ports/file.sh) | 5.48 | file, which names what a file holds, and libmagic, through which it reads the compiled magic database. |
 | [findutils](../vendor/gnu/ports/findutils.sh) | 4.11.0 | GNU findutils: find, xargs, locate and updatedb. |
 | [flex](../vendor/gnu/ports/flex.sh) | 2.6.4 | flex, the scanner generator, which runs m4 at /usr/bin/m4. |

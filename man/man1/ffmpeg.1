@@ -1,0 +1,91 @@
+.Dd November 1, 2026
+.Dt FFMPEG 1
+.Os
+.Sh NAME
+.Nm ffmpeg
+.Nd convert, play and record audio
+.Sh SYNOPSIS
+.Nm
+.Op Ar global-options
+.Op Ar input-options
+.Fl i Ar input
+.Op Ar output-options
+.Ar output
+.Sh DESCRIPTION
+.Nm
+converts audio files and reads or writes the OSS sound device.
+It is installed in the GNU root with shared libraries and built-in audio
+codecs, under LGPL 2.1 or later.
+GPL and nonfree components and external codec libraries are disabled.
+.Pp
+The input formats are WAV, MP3, FLAC, Ogg, AAC, MOV and raw S16LE PCM.
+Decoders include MP3, FLAC, Vorbis, Opus, AAC and PCM.
+Output is WAV or raw PCM, or the OSS device.
+The file and pipe protocols are enabled; network protocols are disabled.
+The filters include
+.Cm aresample ,
+.Cm aformat
+and
+.Cm volume .
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl i Ar input
+Read an input file or device.
+Input options precede the corresponding
+.Fl i .
+.It Fl f Ar format
+Select the format of the following input or output.
+Use
+.Cm oss
+for the sound device.
+.It Fl ar Ar rate
+Set the sample rate in Hz.
+.It Fl ac Ar channels
+Set the channel count.
+.It Fl c:a Ar codec
+Select the audio encoder, such as
+.Cm pcm_s16le .
+.It Fl t Ar seconds
+Limit the output duration.
+.It Fl af Ar filters
+Apply audio filters, such as
+.Cm volume=0.5 .
+.It Fl y
+Replace an existing output file.
+.It Fl devices , Fl decoders , Fl encoders , Fl formats , Fl filters
+List the features of this build.
+.It Fl L
+Print the license.
+.It Fl h
+Print the command's help.
+.El
+.Sh FILES
+.Bl -tag -width /dev/dsp
+.It Pa /dev/dsp
+OSS playback and capture device.
+.El
+.Sh EXAMPLES
+Convert an MP3 to signed 16-bit WAV:
+.Bd -literal -offset indent
+ffmpeg -i music.mp3 -c:a pcm_s16le music.wav
+.Ed
+.Pp
+Play a file:
+.Bd -literal -offset indent
+ffmpeg -i music.flac -ar 48000 -ac 2 -f oss /dev/dsp
+.Ed
+.Pp
+Record five seconds of stereo audio:
+.Bd -literal -offset indent
+ffmpeg -f oss -ar 48000 -ac 2 -i /dev/dsp -t 5 take.wav
+.Ed
+.Sh EXIT STATUS
+.Ex -std
+.Sh SEE ALSO
+.Xr ffprobe 1 ,
+.Xr mixer 1 ,
+.Xr dsp 4
+.Sh LIMITS
+This build has no video decoders or encoders.
+The sound driver determines the rates, channels and formats available
+through OSS.
