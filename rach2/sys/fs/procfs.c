@@ -5452,16 +5452,26 @@ static int procfs_open_mem(const struct vpath *vp, int pid, int flags)
     return fd;
 }
 
-/** Render /proc/audio, whose text `audio_proc_text` writes: its length, or
- * -1 with `nomem` set when the heap has no room. */
+/**
+ * Render /proc/audio, whose text `audio_proc_text` writes from one snapshot:
+ * its length, or -1 with `nomem` set when the heap has no room. The text
+ * published is as long as the pass that wrote it said, and a pass that
+ * needed more room than the snapshot's first measure runs again with it.
+ */
 static int procfs_gen_audio(struct procfs_text *t)
 {
     int n = audio_proc_text(NULL, 0);
+    int m;
 
-    if (procfs_text_room(t, t->len + n) < 0)
-        return -1;
-    audio_proc_text(t->buf + t->len, n);
-    t->len += n;
+    for (;;) {
+        if (procfs_text_room(t, t->len + n) < 0)
+            return -1;
+        m = audio_proc_text(t->buf + t->len, n);
+        if (m <= n)
+            break;
+        n = m;
+    }
+    t->len += m;
     return t->len;
 }
 

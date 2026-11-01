@@ -580,6 +580,36 @@ static void row_report(void)
 }
 
 /**
+ * A /proc/audio read whose capture counter wraps between its two passes:
+ * the second renders the first's snapshot, so the length it measured is
+ * the length it writes, and the text has the counter as the first pass read
+ * it.
+ */
+static void row_report_wrap(void)
+{
+    char text[4096];
+    int len;
+
+    row = "proc-audio-wrap";
+    reset_model();
+    model_adc();
+    check(hda_find_output(), "wrap enumeration");
+    hda_report.input.frames = 0xFFFFFFFFu;
+    len = audio_proc_text(NULL, 0);
+    hda_report.input.frames = 3;
+    check(len < (int)sizeof(text) && audio_proc_text(text, len) == len,
+          "a pass after the counter wrapped writes the length measured before");
+    text[len] = 0;
+    check(strstr(text, " frames 4294967295 overruns ") != NULL,
+          "the text has the counter the snapshot took");
+    len = audio_proc_text(NULL, 0);
+    check(audio_proc_text(text, len) == len, "a new snapshot measures its own length");
+    text[len] = 0;
+    check(strstr(text, " frames 3 overruns ") != NULL, "and has the counter as it is now");
+    hda_report.input.frames = 0;
+}
+
+/**
  * A verb from the tick gives up at once when another holds the interface,
  * and one that the codec never answers gives up after 1 ms, polling with the
  * caller's interrupts between reads; the lock is free after either.
@@ -1714,6 +1744,7 @@ int main(void)
     row_volume();
     row_hdmi();
     row_report();
+    row_report_wrap();
     row_verbs();
     row_dma_check();
     row_periods();

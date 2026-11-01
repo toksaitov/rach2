@@ -9,6 +9,8 @@
 #include "audio.h"
 #include "hda.h"
 
+#include "../lib/kirq.h"
+
 /* A text written into a caller's buffer: what fits is stored, and `len`
  * counts every byte, so a caller learns the size a short buffer lacked. */
 struct audio_text {
@@ -16,6 +18,11 @@ struct audio_text {
     int cap;
     int len;
 };
+
+/* The report and output mode as the last call without a buffer read them,
+ * which every call renders, so that a length and its text agree. */
+static hda_report_t snap;
+static int snap_mode;
 
 /** Append the byte `c` to `t`. */
 static void put_ch(struct audio_text *t, char c)
@@ -192,15 +199,18 @@ static void put_input(struct audio_text *t, const hda_input_report_t *in)
  * Write /proc/audio's text into `buf`, of `cap` bytes, with no terminator:
  * the audio driver's name and the HDA driver's report (`hda_get_report`),
  * the codec and the widgets it chose, the output routing mode, the jacks
- * and their states, the rates and formats of the last stream it programmed, the converters'
- * capabilities and the connection lists it read; the input path, the ADC's capabilities and the
- * input stream's counters; then the output stream's queue, and every widget of the codec's function
- * group with its ADCs. It sends no verb.
+ * and their states, the rates and formats of the last stream it programmed,
+ * the converters' capabilities and the connection lists it read; the input
+ * path, the ADC's capabilities and the input stream's counters; then the
+ * output stream's queue, and every widget of the codec's function group with
+ * its ADCs. It sends no verb.
  *
- * With `buf` NULL it first reads the queue again (`hda_read_queue`); with a
- * buffer it writes the reading the last call without one took. procfs asks
- * for the length with NULL and then writes the text, so the two calls agree
- * however the counters move between them.
+ * With `buf` NULL it reads the queue again (`hda_read_queue`) and copies the
+ * report and the output mode with interrupts off, one snapshot of both
+ * directions, which the capture service cannot change halfway; every call
+ * renders the last such copy. procfs asks for the length with NULL and then
+ * writes the text, so the two calls agree however the counters move between
+ * them.
  *
  * Return the text's whole length; when that is more than `cap`, only the
  * first `cap` bytes were stored, and the caller asks again with more room.
@@ -208,13 +218,18 @@ static void put_input(struct audio_text *t, const hda_input_report_t *in)
 int audio_proc_text(char *buf, int cap)
 {
     static const char *const modes[] = {"auto", "primary", "hp", "both"};
-    const hda_report_t *r;
+    const hda_report_t *r = &snap;
     struct audio_text text, *t = &text;
+    uint32_t flags;
     int i, j;
 
-    if (!buf)
+    if (!buf) {
+        flags = kirq_save();
         hda_read_queue();
-    r = hda_get_report();
+        snap = *hda_get_report();
+        snap_mode = hda_get_output_mode();
+        kirq_restore(flags);
+    }
     t->buf = buf;
     t->cap = cap;
     t->len = 0;
@@ -237,7 +252,7 @@ int audio_proc_text(char *buf, int cap)
     put_field(t, " dac ", r->hp_dac);
     put_field(t, " enabled ", r->hp_enabled);
     put_str(t, " mode ");
-    put_str(t, modes[hda_get_output_mode() & 3]);
+    put_str(t, modes[snap_mode & 3]);
     put_ch(t, '\n');
     put_jacks(t, r);
     put_field(t, "stream requested ", r->requested_rate);
