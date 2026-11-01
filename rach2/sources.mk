@@ -109,6 +109,7 @@ C_SRC_SHARED = kernel.c \
     sys/tty/pty.c \
     sys/proc/elf.c \
     sys/proc/uimage.c \
+    sys/proc/vdso.c \
     sys/fs/krffs.c \
     sys/fs/krffsmount.c \
     sys/fs/fd.c \

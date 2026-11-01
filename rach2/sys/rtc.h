@@ -67,22 +67,37 @@ int rtc_is_anchored(void);
  * made added; the step alone with no anchor. */
 int64_t rtc_boot_epoch(void);
 
+/** Real time less the monotonic clock, in `*seconds` and `*nanoseconds`,
+ * which is 0 to 10^9 - 1: the anchor less the uptime it was read at, and
+ * the step `rtc_set_realtime` made. The vDSO's data page keeps a copy
+ * (vdso.h's `vclock_set_offset`), which the two change together. */
+void rtc_offset(int64_t *seconds, int32_t *nanoseconds);
+
 /**
  * The real time now, in seconds since 1970 and nanoseconds within the
  * second: the anchor's time, the time since it to the timer's place within
- * the tick, and the step `rtc_set_realtime` made. No reading is earlier than
- * the one before it until the clock is set again. Interrupts are off while it
- * reads.
+ * the tick, and the step `rtc_set_realtime` made. While the clock runs from
+ * the TSC (vdso.h's `vclock_read`) the time since the anchor is that
+ * clock's, so a reading here and the vDSO's agree. No reading is earlier
+ * than the one before it until the clock is set again. Interrupts are off
+ * while it reads.
  */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds);
 
 /** The real time to the last tick, without the timer's place within it and
- * without `rtc_realtime`'s floor: the coarse clock, which reads no timer. */
+ * without `rtc_realtime`'s floor: the coarse clock, which reads no timer;
+ * the TSC's clock as of its last tick while that one runs. */
 void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds);
 
-/** The time since boot, to the timer's place within the tick, never earlier
- * than the reading before it. Setting the clock does not move it. */
+/** The time since boot, to the timer's place within the tick, or by the
+ * TSC's clock while it runs, never earlier than the reading before it.
+ * Setting the clock does not move it. */
 void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds);
+
+/** The time since boot to the last tick, without the timer's place within
+ * it: the coarse monotonic clock, which reads no timer; the TSC's clock as
+ * of its last tick while that one runs. */
+void rtc_coarse_monotonic(int64_t *seconds, int64_t *nanoseconds);
 
 /** The tick count, with the ticks that have passed and the handler has not
  * counted (`timer_phase`), and how far into the next tick the timer is, in

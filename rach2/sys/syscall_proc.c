@@ -80,6 +80,7 @@
 #include "fs/tmpfs.h"
 #include "fs/devfs.h"
 #include "timer.h"
+#include "vdso.h"
 #include "syscall_internal.h"
 
 /* The boot stack, from loader.s, which process 0, the first program and the
@@ -1621,8 +1622,9 @@ static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
  * still runs, as Linux's `load_elf_binary` builds one, in the layout
  * `exec_layout` chose: the program, at its base when it is
  * position-independent and linked below ELF_ET_DYN_BASE; the interpreter
- * its PT_INTERP names; the regions; and the stack, with the pointers and
- * the auxiliary vector below its strings. Each of the program and the
+ * its PT_INTERP names, below the vDSO, which takes the top of the range
+ * mmap places mappings in (`vdso_map`); the regions; and the stack, with
+ * the pointers and the auxiliary vector below its strings. Each of the program and the
  * interpreter maps its segments from its file where it can, and the
  * reference to the file's mapping goes from the open file to the image,
  * which keeps it until `exec_release`. The stack may grow to the soft
@@ -1637,10 +1639,13 @@ static int32_t exec_build(struct exec_state *s)
     struct uimage_aux aux;
     uintptr_t bias = 0;
     uintptr_t bottom = uimage_bottom(&s->args);
+    uintptr_t vdso_at = s->mmap_base - vdso_span();
     unsigned long limit = current_proc->rlim[RLIM_STACK].cur;
     uint8_t random16[16];
+    intptr_t ehdr = 0;
     int32_t rc;
 
+    s->mmap_base = vdso_at;
     rc = elf_read_layout(exec_file_read, &s->prog, 1, &s->layout);
     if (rc != 0) {
         return exec_load_err(&s->prog, rc, -ENOEXEC);
@@ -1670,10 +1675,12 @@ static int32_t exec_build(struct exec_state *s)
                        s->stack_top - PAGE_SIZE, exec_stack_window(s, bottom, limit),
                        s->mmap_base) != 0 ||
         (s->layout.interp[0] != '\0' && elf_add_vmas(&s->mm->vm, &s->iimg) != 0) ||
+        (ehdr = vdso_map(&s->mm->vm, vdso_at)) < 0 ||
         (bottom < s->stack_top - PAGE_SIZE && !vm_grow_stack(&s->mm->vm, bottom, RLIM_INFINITY)) ||
         vm_total(&s->mm->vm) > current_proc->rlim[RLIM_AS].cur) {
         return -ENOMEM;
     }
+    aux.sysinfo_ehdr = (uintptr_t)ehdr;
     aux.uid = current_proc->ruid;
     aux.euid = s->euid;
     aux.gid = current_proc->rgid;
