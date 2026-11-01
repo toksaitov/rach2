@@ -1,7 +1,7 @@
 /*
- * route6.c: the IPv6 route and path MTU lookups, as ip6.h describes them:
- * this machine's addresses by `lo`, and the destinations of one link by the
- * interface the caller names.
+ * route6.c: the IPv6 route lookup, as ip6.h describes it: this machine's
+ * addresses by `lo`, and the destinations of one link by the interface the
+ * caller names. The path MTU is in pmtu6.c.
  */
 
 #include "ip6.h"
@@ -49,10 +49,4 @@ struct netdev *ip6_route(const uint8_t *dst, int ifindex, uint8_t *via)
     }
     k_memcpy(via, dst, IP6_ADDR_LEN);
     return nd;
-}
-
-uint32_t ip6_path_mtu(const struct netdev *out, const uint8_t *dst)
-{
-    (void)dst;
-    return out ? IP6_MTU : 0u;
 }

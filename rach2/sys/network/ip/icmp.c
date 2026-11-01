@@ -47,8 +47,11 @@
 #include "../../timer.h"
 #include "../ip6/ip6.h"
 #include "../ip6/icmp6.h"
+#include "../../mm/kheap.h"
 
-/* The echo reply being sent, sized for a full datagram, and the request. */
+/* The echo reply being sent, sized for a full datagram, and the request,
+ * sized for IPv4's largest; an IPv6 request past it is built in a block of
+ * the heap. */
 static uint8_t icmp_reply_buf[1500];
 static uint8_t icmp_echo_buf[8 + ICMP_PING_DATA_MAX];
 
@@ -292,9 +295,8 @@ static void ping_release(void)
 }
 
 /**
- * The echo of `icmp_ping_data` and `icmp_ping6_data`: to the IPv4 address
- * `dst_ip`, or with `dst6` not NULL to that IPv6 address in the scope of
- * `ifindex`.
+ * The attempts of `ping_run`, each request built in `echo`, which holds
+ * 8 + `size` bytes.
  *
  * The slot is claimed for the whole call and released as its last act on
  * every path, so a killed pinger cannot strand it: the signal makes the
@@ -306,17 +308,13 @@ static void ping_release(void)
  * reply came is read from `ping_replied`, since a wait that returns does not
  * say whether the reply or the deadline ended it.
  */
-static int ping_run(uint32_t dst_ip, const uint8_t *dst6, int ifindex, uint32_t size, uint8_t ttl,
-                    uint16_t *got, uint8_t *got_ttl)
+static int ping_attempts(uint32_t dst_ip, const uint8_t *dst6, int ifindex, uint32_t size,
+                         uint8_t ttl, uint16_t *got, uint8_t *got_ttl, uint8_t *echo)
 {
     uint32_t start, flags, i;
     uint16_t seq;
     int attempt;
     int rc = -ETIMEDOUT;
-
-    if (size > (dst6 ? ICMP6_PING_DATA_MAX : ICMP_PING_DATA_MAX)) {
-        return -EMSGSIZE;
-    }
 
     if (!ping_wq_ready) {
         wait_queue_init(&ping_wq);
@@ -342,16 +340,16 @@ static int ping_run(uint32_t dst_ip, const uint8_t *dst6, int ifindex, uint32_t 
 
         flags = net_lock();
 
-        icmp_echo_buf[0] = dst6 ? ICMP6_ECHO_REQUEST : ICMP_ECHO_REQUEST;
-        icmp_echo_buf[1] = 0;
-        write16be(icmp_echo_buf + 2, 0x0000);
-        write16be(icmp_echo_buf + 4, ICMP_PING_ID);
-        write16be(icmp_echo_buf + 6, seq);
+        echo[0] = dst6 ? ICMP6_ECHO_REQUEST : ICMP_ECHO_REQUEST;
+        echo[1] = 0;
+        write16be(echo + 2, 0x0000);
+        write16be(echo + 4, ICMP_PING_ID);
+        write16be(echo + 6, seq);
         for (i = 0; i < size; i++) {
-            icmp_echo_buf[8 + i] = (uint8_t)i;
+            echo[8 + i] = (uint8_t)i;
         }
         if (!dst6) {
-            write16be(icmp_echo_buf + 2, ip_checksum(icmp_echo_buf, (uint16_t)(8 + size)));
+            write16be(echo + 2, ip_checksum(echo, (uint16_t)(8 + size)));
         }
 
         ping_peer_ip = dst_ip;
@@ -364,14 +362,14 @@ static int ping_run(uint32_t dst_ip, const uint8_t *dst6, int ifindex, uint32_t 
         }
 
         if (dst6) {
-            int sent = icmp6_send(0, dst6, ifindex, icmp_echo_buf, (uint16_t)(8 + size), ttl);
+            int sent = icmp6_send(0, dst6, ifindex, echo, (uint16_t)(8 + size), ttl);
 
             if (sent < 0 && attempt == 0) {
                 net_unlock(flags);
                 ping_release();
                 return sent;
             }
-        } else if (ip_tx(dst_ip, IP_PROTO_ICMP, icmp_echo_buf, (uint16_t)(8 + size), ttl) == 0) {
+        } else if (ip_tx(dst_ip, IP_PROTO_ICMP, echo, (uint16_t)(8 + size), ttl) == 0) {
             icmp_count_out(ICMP_ECHO_REQUEST);
         }
 
@@ -409,6 +407,34 @@ static int ping_run(uint32_t dst_ip, const uint8_t *dst6, int ifindex, uint32_t 
     ping_release();
     klog(KLOG_INFO, "icmp", "ping: no reply before the timeout");
 
+    return rc;
+}
+
+/**
+ * The echo of `icmp_ping_data` and `icmp_ping6_data`: to the IPv4 address
+ * `dst_ip`, or with `dst6` not NULL to that IPv6 address in the scope of
+ * `ifindex`. Returns as they do, and -ENOMEM when an IPv6 request past
+ * `echo` finds no block for it. Called with interrupts on.
+ */
+static int ping_run(uint32_t dst_ip, const uint8_t *dst6, int ifindex, uint32_t size, uint8_t ttl,
+                    uint16_t *got, uint8_t *got_ttl)
+{
+    uint8_t *echo = icmp_echo_buf;
+    int rc;
+
+    if (size > (dst6 ? ICMP6_PING_DATA_MAX : ICMP_PING_DATA_MAX)) {
+        return -EMSGSIZE;
+    }
+    if (8 + size > sizeof(icmp_echo_buf)) {
+        echo = kmalloc(8 + size);
+        if (!echo) {
+            return -ENOMEM;
+        }
+    }
+    rc = ping_attempts(dst_ip, dst6, ifindex, size, ttl, got, got_ttl, echo);
+    if (echo != icmp_echo_buf) {
+        kfree(echo);
+    }
     return rc;
 }
 

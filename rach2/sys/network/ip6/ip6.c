@@ -1,13 +1,15 @@
 /*
  * ip6.c: the IPv6 layer, as ip6.h describes it: the choice of a source
- * address, the checks of a received datagram and the transmit. The address
- * helpers and the checksum are in addr6.c.
+ * address, the checks of a received datagram and of its extension headers,
+ * and the transmit. The address helpers and the checksum are in addr6.c,
+ * fragments in frag6.c and the path MTU in pmtu6.c.
  */
 
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "ip6.h"
 #include "icmp6.h"
+#include "frag6.h"
 #include "../ip/ip.h"
 #include "../core/byteorder.h"
 #include "../ethernet/ethernet.h"
@@ -94,13 +96,68 @@ int ip6_source(const struct netdev *out, const uint8_t *dst, uint8_t *src)
     return 0;
 }
 
-/** Whether `nh` is an extension header (RFC 8200, section 4, and RFC 7045):
- * hop-by-hop and destination options, routing, fragment, mobility, HIP and
- * shim6. */
-static int extension_header(uint8_t nh)
+/* The option types every node knows (RFC 8200, 4.2): one byte of padding,
+ * and N bytes. */
+#define IP6_OPT_PAD1 0
+#define IP6_OPT_PADN 1
+
+/** The datagram `dg` of `len` bytes as `icmp6_error` takes it, its length
+ * held to 16 bits: an error quotes no more than 1232 bytes of it. */
+static void ip6_param_problem(struct netdev *nd, const uint8_t *dg, uint32_t len, uint8_t code,
+                              uint32_t pointer)
 {
-    return nh == IP6_NH_HOPOPTS || nh == IP6_NH_ROUTING || nh == IP6_NH_FRAGMENT ||
-           nh == IP6_NH_DSTOPTS || nh == 135 || nh == 139 || nh == 140;
+    icmp6_error(nd, dg, (uint16_t)(len > 0xffffu ? 0xffffu : len), ICMP6_PARAM_PROB, code, pointer);
+}
+
+/**
+ * Process the options of the hop-by-hop or destination options header of
+ * `hlen` bytes at offset `off` of `dg`. Padding is skipped; an option of
+ * another type is one this machine does not know, and the top two bits of
+ * its type say what to do (RFC 8200, 4.2): 00 skip it, 01 drop the
+ * datagram, 10 drop it and send a parameter problem of code 2 pointing at
+ * the type, and 11 do so only when the datagram was not sent to a group.
+ * Router Alert, which multicast listener reports carry, is of the first
+ * kind. Returns 0 to go on, or -1 when the datagram is dropped; an option
+ * that runs past the header counts as a header error.
+ */
+static int ip6_options(struct netdev *nd, const uint8_t *dg, uint32_t len, uint32_t off,
+                       uint32_t hlen)
+{
+    uint32_t p = off + 2, end = off + hlen;
+
+    while (p < end) {
+        uint8_t type = dg[p];
+
+        if (type == IP6_OPT_PAD1) {
+            p++;
+            continue;
+        }
+        if (end - p < 2 || (uint32_t)dg[p + 1] + 2 > end - p) {
+            net_mib6.ip6_in_hdr_errors++;
+            return -1;
+        }
+        if (type != IP6_OPT_PADN) {
+            switch (type >> 6) {
+            case 0:
+                break;
+            case 1:
+                net_mib6.ip6_in_hdr_errors++;
+                return -1;
+            case 3:
+                if (ip6_is_multicast(dg + 24)) {
+                    net_mib6.ip6_in_hdr_errors++;
+                    return -1;
+                }
+                /* fall through */
+            default:
+                net_mib6.ip6_in_hdr_errors++;
+                ip6_param_problem(nd, dg, len, ICMP6_PARAM_OPTION, p);
+                return -1;
+            }
+        }
+        p += (uint32_t)dg[p + 1] + 2;
+    }
+    return 0;
 }
 
 /**
@@ -130,16 +187,14 @@ static int destined_here(struct netdev *nd, const uint8_t *dst)
  * A datagram from the wire with this machine's source, or with ::1 at
  * either end, is a spoof no peer sends, and is dropped before any answer
  * could go to it, as `ip_rx` drops IPv4's martians. A group is no sender.
- * The interface a raw socket reports a datagram arrived on is the card's,
- * or for the loopback ring the one that holds the destination, else `lo`.
+ * What lies past the payload length, an Ethernet frame's padding, is not
+ * the datagram's.
  */
 void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {
     const uint8_t *src = data + 8;
     const uint8_t *dst = data + 24;
     uint16_t plen;
-    uint8_t nh;
-    int ifindex;
 
     net_mib6.ip6_in_receives++;
     if (len < IP6_HDR_SIZE || (data[0] >> 4) != 6) {
@@ -166,28 +221,140 @@ void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
         return;
     }
 
-    if (nd) {
-        ifindex = nd->index;
-    } else if (netdev_owner6(dst)) {
-        ifindex = netdev_owner6(dst)->index;
-    } else {
-        ifindex = netdev_loopback() ? netdev_loopback()->index : 0;
-    }
+    ip6_walk(nd, data, (uint32_t)IP6_HDR_SIZE + plen, IP6_HDR_SIZE, data[6], 6, 0);
+}
 
-    nh = data[6];
-    if (nh == IP6_NH_ICMP6) {
-        net_mib6.ip6_in_delivers++;
-        raw6_rx(ifindex, src, nh, data + IP6_HDR_SIZE, plen);
-        icmp6_rx(nd, src, dst, data[7], data + IP6_HDR_SIZE, plen);
-    } else if (nh == IP6_NH_NONE) {
-        net_mib6.ip6_in_delivers++;
-    } else if (extension_header(nh)) {
-        net_mib6.ip6_in_discards++;
-    } else {
-        net_mib6.ip6_in_unknown_protos++;
-        icmp6_error(nd, data, (uint16_t)(IP6_HDR_SIZE + plen), ICMP6_PARAM_PROB,
-                    ICMP6_PARAM_NEXTHEADER, 6);
+/**
+ * The headers come one after another, each naming the next, until an
+ * upper layer's or the end of the chain. Every extension header is a
+ * multiple of 8 bytes and at least 8 long, so the walk moves forward at
+ * each step and ends within the datagram. The interface a raw socket
+ * reports a message arrived on is the card's, or for the loopback ring the
+ * one that holds the destination, else `lo`.
+ */
+void ip6_walk(struct netdev *nd, const uint8_t *dg, uint32_t len, uint32_t off, uint8_t nh,
+              uint32_t nhoff, int reassembled)
+{
+    const uint8_t *dst = dg + 24;
+    uint32_t hlen;
+    int ifindex;
+
+    for (;;) {
+        switch (nh) {
+        case IP6_NH_HOPOPTS:
+            if (off != IP6_HDR_SIZE) {
+                net_mib6.ip6_in_unknown_protos++;
+                ip6_param_problem(nd, dg, len, ICMP6_PARAM_NEXTHEADER, nhoff);
+                return;
+            }
+            /* fall through */
+        case IP6_NH_DSTOPTS:
+        case IP6_NH_ROUTING:
+            if (len - off < 8 || (hlen = ((uint32_t)dg[off + 1] + 1) * 8) > len - off) {
+                net_mib6.ip6_in_hdr_errors++;
+                return;
+            }
+            if (nh != IP6_NH_ROUTING) {
+                if (ip6_options(nd, dg, len, off, hlen) != 0) {
+                    return;
+                }
+            } else if (dg[off + 3] != 0) {
+                /* Segments left: this machine forwards nothing, so no
+                 * routing type is one it can act on (RFC 5095 for type 0). */
+                net_mib6.ip6_in_hdr_errors++;
+                ip6_param_problem(nd, dg, len, ICMP6_PARAM_HEADER, off + 2);
+                return;
+            }
+            nhoff = off;
+            nh = dg[off];
+            off += hlen;
+            break;
+        case IP6_NH_FRAGMENT:
+            if (len - off < IP6_FRAG_HDR_SIZE || reassembled) {
+                net_mib6.ip6_in_hdr_errors++;
+                return;
+            }
+            if ((read16be(dg + off + 2) & (IP6_FRAG_OFFSET | IP6_FRAG_MORE)) != 0) {
+                frag6_input(nd, dg, len, off, nhoff);
+                return;
+            }
+            /* An atomic fragment, at offset 0 with no more to come, is the
+             * whole datagram, and needs no queue (RFC 6946). */
+            net_mib6.ip6_reasm_reqds++;
+            net_mib6.ip6_reasm_oks++;
+            nhoff = off;
+            nh = dg[off];
+            off += IP6_FRAG_HDR_SIZE;
+            break;
+        case IP6_NH_NONE:
+            net_mib6.ip6_in_delivers++;
+            return;
+        case IP6_NH_ICMP6:
+            if (nd) {
+                ifindex = nd->index;
+            } else if (netdev_owner6(dst)) {
+                ifindex = netdev_owner6(dst)->index;
+            } else {
+                ifindex = netdev_loopback() ? netdev_loopback()->index : 0;
+            }
+            net_mib6.ip6_in_delivers++;
+            raw6_rx(ifindex, dg + 8, nh, dg + off, (uint16_t)(len - off));
+            icmp6_rx(nd, dg + 8, dst, dg[7], dg + off, (uint16_t)(len - off));
+            return;
+        default:
+            net_mib6.ip6_in_unknown_protos++;
+            ip6_param_problem(nd, dg, len, ICMP6_PARAM_NEXTHEADER, nhoff);
+            return;
+        }
     }
+}
+
+void ip6_header(uint8_t *buf, const uint8_t *src, const uint8_t *dst, uint8_t nh, uint16_t plen,
+                uint8_t hlim)
+{
+    buf[0] = 0x60; /* version 6, traffic class 0 */
+    buf[1] = 0;
+    buf[2] = 0; /* flow label 0 */
+    buf[3] = 0;
+    write16be(buf + 4, plen);
+    buf[6] = nh;
+    buf[7] = hlim;
+    k_memcpy(buf + 8, src, IP6_ADDR_LEN);
+    k_memcpy(buf + 24, dst, IP6_ADDR_LEN);
+}
+
+int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_t len)
+{
+    uint8_t mac[6];
+    int sent;
+
+    if (out->loopback) {
+        if (ip_loop_put(buf, (uint16_t)len) != 0) {
+            net_mib6.ip6_out_discards++;
+            return -ENOBUFS;
+        }
+        return 0;
+    }
+    if (!ip6_is_multicast(via)) {
+        /* No neighbour cache: no unicast next hop's station address is known. */
+        return -EHOSTUNREACH;
+    }
+    net_mib6.ip6_out_mcast_pkts++;
+    ip6_mcast_mac(via, mac);
+    sent = ethernet_tx(out, mac, ETH_TYPE_IPV6, buf, (uint16_t)len);
+    if (sent == ETHERNET_TX_TOOLONG) {
+        return -EMSGSIZE;
+    }
+    if (sent != NETDEV_TX_OK) {
+        net_mib6.ip6_out_discards++;
+        return -ENOBUFS;
+    }
+    return 0;
+}
+
+void ip6_tick(void)
+{
+    frag6_tick();
 }
 
 /* The datagram being sent. */
@@ -203,10 +370,10 @@ static uint8_t ip6_tx_buf[IP6_MTU];
 int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, const uint8_t *payload,
            uint16_t plen, uint8_t hlim)
 {
-    uint8_t via[IP6_ADDR_LEN], from[IP6_ADDR_LEN], mac[6];
+    uint8_t via[IP6_ADDR_LEN], from[IP6_ADDR_LEN];
     uint32_t total = (uint32_t)IP6_HDR_SIZE + plen;
+    uint32_t mtu;
     struct netdev *out;
-    int sent;
 
     net_mib6.ip6_out_requests++;
     if (ip6_is_unspecified(dst) || ip6_is_v4mapped(dst)) {
@@ -218,9 +385,6 @@ int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, cons
             return -EINVAL;
         }
         return -ENETUNREACH;
-    }
-    if (total > ip6_path_mtu(out, dst)) {
-        return -EMSGSIZE;
     }
     if (!src || ip6_is_unspecified(src)) {
         int r = ip6_source(out, dst, from);
@@ -238,37 +402,11 @@ int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, cons
         k_memcpy(from, src, IP6_ADDR_LEN);
     }
 
-    ip6_tx_buf[0] = 0x60; /* version 6, traffic class 0 */
-    ip6_tx_buf[1] = 0;
-    ip6_tx_buf[2] = 0; /* flow label 0 */
-    ip6_tx_buf[3] = 0;
-    write16be(ip6_tx_buf + 4, plen);
-    ip6_tx_buf[6] = nh;
-    ip6_tx_buf[7] = hlim;
-    k_memcpy(ip6_tx_buf + 8, from, IP6_ADDR_LEN);
-    k_memcpy(ip6_tx_buf + 24, dst, IP6_ADDR_LEN);
+    mtu = ip6_path_mtu(out, dst);
+    if (total > mtu) {
+        return frag6_output(out, via, from, dst, nh, payload, plen, hlim, mtu);
+    }
+    ip6_header(ip6_tx_buf, from, dst, nh, plen, hlim);
     k_memcpy(ip6_tx_buf + IP6_HDR_SIZE, payload, plen);
-
-    if (out->loopback) {
-        if (ip_loop_put(ip6_tx_buf, (uint16_t)total) != 0) {
-            net_mib6.ip6_out_discards++;
-            return -ENOBUFS;
-        }
-        return 0;
-    }
-    if (!ip6_is_multicast(via)) {
-        /* No neighbour cache: no unicast next hop's station address is known. */
-        return -EHOSTUNREACH;
-    }
-    net_mib6.ip6_out_mcast_pkts++;
-    ip6_mcast_mac(via, mac);
-    sent = ethernet_tx(out, mac, ETH_TYPE_IPV6, ip6_tx_buf, (uint16_t)total);
-    if (sent == ETHERNET_TX_TOOLONG) {
-        return -EMSGSIZE;
-    }
-    if (sent != NETDEV_TX_OK) {
-        net_mib6.ip6_out_discards++;
-        return -ENOBUFS;
-    }
-    return 0;
+    return ip6_emit(out, via, ip6_tx_buf, total);
 }

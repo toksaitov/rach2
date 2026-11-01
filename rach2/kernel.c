@@ -67,6 +67,7 @@
 #include "sys/network/ip/icmp.h"
 #include "sys/network/ip/ip.h"
 #include "sys/network/tcp/tcp.h"
+#include "sys/network/ip6/ip6.h"
 #include "sys/lib/kint.h"
 #include "sys/lib/kstring.h"
 
@@ -300,6 +301,7 @@ static void timer_handler(isr_params_t *params)
     hda_tick();
     netdev_poll();
     tcp_tick();
+    ip6_tick();
     ip_loop_drain();
     usb_poll();
     input_tick();
