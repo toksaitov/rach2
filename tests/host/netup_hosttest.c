@@ -114,6 +114,13 @@ static pid_t model_waitpid(pid_t pid, int *status, int options)
 #undef fork
 #undef waitpid
 
+/** Keep no stable secret: netup_main, which calls it, is not run here. */
+int ip6secret_keep(const char *prog)
+{
+    (void)prog;
+    return 0;
+}
+
 /**
  * Run run_dhcp for eth0 with `status` as the client's wait status, and copy
  * what it writes to stderr into `text`, of `size` bytes, terminated.
