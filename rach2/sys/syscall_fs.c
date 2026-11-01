@@ -4136,6 +4136,61 @@ int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *
     return vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, VFS_SET_FLAGS, &st);
 }
 
+/* The requests of cp --reflink and of other programs that share a file's
+   extents: _IOW of 0x94, 9, an int, and 13, struct file_clone_range, whose
+   first member is the source descriptor as a 64-bit integer. */
+#define FICLONE      0x40049409u
+#define FICLONERANGE 0x4020940Du
+
+static int32_t copy_regular(fd_entry_t *e);
+
+/** What stands for the file system of what `e` is open on, as Linux's
+ * superblock does in the clone checks: a file's or a directory's mount's
+ * base, and otherwise its operations, which two pipes share. */
+static const void *clone_fs(const fd_entry_t *e)
+{
+    if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) && !e->ops && e->ofd && e->ofd->vmnt) {
+        return vfs_mount_base(e->ofd->vmnt);
+    }
+    return e->ops;
+}
+
+int32_t fs_clone_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *handled)
+{
+    fd_entry_t *src;
+    long long srcfd;
+    int32_t rc;
+
+    *handled = request == FICLONE || request == FICLONERANGE;
+    if (!*handled) {
+        return 0;
+    }
+    if (request == FICLONE) {
+        srcfd = (int)arg;
+    } else if (copy_from_user(&srcfd, (const void __user *)arg, sizeof(srcfd)) != 0) {
+        return -EFAULT;
+    }
+    src = srcfd < 0 || srcfd > 0x7FFFFFFF ? NULL : fd_get(current_proc->fds, (int)srcfd);
+    if (!src) {
+        return -EBADF;
+    }
+    if (clone_fs(src) != clone_fs(entry)) {
+        return -EXDEV;
+    }
+    rc = copy_regular(src);
+    if (rc == 0) {
+        rc = copy_regular(entry);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    if (!(src->flags & FD_FLAG_READ) || !(entry->flags & FD_FLAG_WRITE) ||
+        (entry->ofd->status_flags & OFD_APPEND)) {
+        return -EBADF;
+    }
+    return -EOPNOTSUPP;
+}
+
 #define XATTR_FOLLOW 0 /* a path, a final symbolic link followed */
 #define XATTR_LINK   1 /* a path, the link itself */
 #define XATTR_FD     2 /* a descriptor */
@@ -7819,10 +7874,9 @@ static int32_t do_access(const char *name, int mode, int dir, int flags)
     if (mode & ~(R_OK | W_OK | X_OK)) {
         return -EINVAL;
     }
-    werr = resolve_named(name,
-                         (real ? VFS_WALK_REAL_IDS : 0) | VFS_WALK_LOCK |
-                             (follow ? 0 : VFS_WALK_NOFOLLOW),
-                         dir, &ref);
+    werr = resolve_named(
+        name, (real ? VFS_WALK_REAL_IDS : 0) | VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW),
+        dir, &ref);
     if (werr != 0) {
         return werr;
     }

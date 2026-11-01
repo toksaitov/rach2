@@ -2167,7 +2167,8 @@ static int32_t console_ioctl(uint32_t request, uintptr_t arg)
  * request, `ioctl(-1, TCGETS)` included, and an O_PATH one is -EBADF to every
  * request, as on Linux. The requests then go, in order, to: FIONBIO, which
  * every descriptor answers (`fd_ioctl_nbio`); FS_IOC_GETFLAGS and the other
- * file attribute requests (`fs_flags_ioctl`); the interface requests of
+ * file attribute requests (`fs_flags_ioctl`); FICLONE and FICLONERANGE
+ * (`fs_clone_ioctl`); the interface requests of
  * `netif_ioctl` on a socket of any family, as on Linux, where glibc's
  * if_nametoindex uses an AF_UNIX one and a DHCP client sets the machine's
  * address; the termios and session requests of `tty_common_ioctl` on the
@@ -2200,6 +2201,9 @@ long sys_ioctl(isr_params_t *params)
         int handled;
         int32_t r = fs_flags_ioctl(entry, request, arg, &handled);
 
+        if (!handled) {
+            r = fs_clone_ioctl(entry, request, arg, &handled);
+        }
         if (handled) {
             return r;
         }

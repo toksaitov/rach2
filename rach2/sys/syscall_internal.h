@@ -355,6 +355,20 @@ long sys_readahead(isr_params_t *params);
  */
 int32_t fs_flags_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *handled);
 
+/**
+ * The clone requests of ioctl(2), FICLONE, whose `arg` is the source
+ * descriptor, and FICLONERANGE, whose `arg` is the user address of a struct
+ * file_clone_range, on the destination descriptor `entry`. `*handled` is set
+ * for either, and the return is then a negative errno in Linux's order:
+ * -EFAULT, -EBADF for a source not open, -EXDEV for two file systems,
+ * -EISDIR for a directory, -EINVAL for anything else not a regular file,
+ * -EBADF for a source not open for reading or a destination not open for
+ * writing or with O_APPEND, and otherwise -EOPNOTSUPP, since no file system
+ * here shares extents. cp --reflink=auto copies the bytes after that.
+ * Otherwise `*handled` is clear and the return 0.
+ */
+int32_t fs_clone_ioctl(fd_entry_t *entry, uint32_t request, uintptr_t arg, int *handled);
+
 long sys_fadvise64(isr_params_t *params);
 
 long sys_setxattr(isr_params_t *params);
