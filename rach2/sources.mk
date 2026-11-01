@@ -129,6 +129,7 @@ C_SRC_SHARED = kernel.c \
     sys/usb/msc.c \
     sys/usb/hub.c \
     sys/network/wireless/elems.c \
+    sys/network/wireless/crypto/aes.c \
     sys/network/netconf.c \
     sys/network/netif.c \
     sys/network/route.c \
