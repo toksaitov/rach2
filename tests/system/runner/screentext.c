@@ -21,6 +21,8 @@
  * cells as fit, within the same 240 by 64. term draws Unifont, whose ASCII
  * glyphs are the kernel font's. With --colors it prints instead how many
  * colours the screen has, which tells a picture from the console's sixteen.
+ * Lines end in a bare newline on every host, Windows too, so that a caller
+ * that looks at the end of a line reads the same bytes everywhere.
  * Exits 0, or
  * 1 with a diagnostic for a usage error, a file that is no such dump or is
  * too small for the grid, or no memory to count the colours.
@@ -28,6 +30,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 /* The console's fewest and most columns and rows, its font's cell, and the
  * two rows of the cell it draws the cursor in, as fbcon.c and textcon.h
@@ -219,6 +226,10 @@ int main(int argc, char **argv)
     if (read_dump(path) != 0) {
         return 1;
     }
+#ifdef _WIN32
+    /* Text mode would write each newline as CR LF. */
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     if (count) {
         unsigned long n = colours();
 
