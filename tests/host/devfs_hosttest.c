@@ -375,7 +375,14 @@ int mixer_present(void)
     return 0;
 }
 
-/** The operations of an event device and the mixer, which no row opens. */
+/** No audio driver offers streams. */
+int dspdev_present(void)
+{
+    return 0;
+}
+
+/** The operations of an event device, the mixer and dsp, which no row
+ * opens. */
 int32_t evdev_open(fd_entry_t *e, int n)
 {
     (void)e;
@@ -419,6 +426,43 @@ int32_t mixer_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     (void)request;
     (void)arg;
     return unexpected();
+}
+
+int32_t dspdev_open(fd_entry_t *e, int flags)
+{
+    (void)e;
+    (void)flags;
+    return unexpected();
+}
+
+int32_t dspdev_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    (void)e;
+    (void)buf;
+    (void)count;
+    return unexpected();
+}
+
+short dspdev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
+{
+    (void)e;
+    (void)events;
+    (void)wq;
+    return (short)unexpected();
+}
+
+int32_t dspdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
+{
+    (void)e;
+    (void)request;
+    (void)arg;
+    return unexpected();
+}
+
+void dspdev_close(fd_entry_t *e)
+{
+    (void)e;
+    unexpected();
 }
 
 /** The transfer limit of a block device, which no row reads. */
