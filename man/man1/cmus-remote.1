@@ -1,0 +1,106 @@
+.Dd November 1, 2026
+.Dt CMUS-REMOTE 1
+.Os
+.Sh NAME
+.Nm cmus-remote
+.Nd control a running cmus
+.Sh SYNOPSIS
+.Nm
+.Op Fl \-server Ar socket
+.Op Fl lPqc
+.Op Ar file ...
+.Nm
+.Op Fl \-server Ar socket
+.Fl C Ar command ...
+.Nm
+.Op Fl \-server Ar socket
+.Op Fl pusnrQ
+.Op Fl v Ar volume
+.Op Fl k Ar seek
+.Op Fl f Ar file
+.Sh DESCRIPTION
+.Nm
+sends commands to a running
+.Xr cmus 1
+through its socket and prints the answers.
+It is installed in the GNU root.
+With files, it adds them to the playlist, the library or the queue; with
+.Fl C ,
+each argument is a command as typed after a colon in
+.Xr cmus 1 ;
+with no arguments and no files, it reads commands from standard input, one
+a line.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl \-server Ar socket
+Connect to
+.Ar socket
+instead of the default, which
+.Xr cmus 1
+describes.
+.It Fl p , Fl \-play
+Start playing.
+.It Fl u , Fl \-pause
+Pause, or play again.
+.It Fl s , Fl \-stop
+Stop.
+.It Fl n , Fl \-next
+Play the next track.
+.It Fl r , Fl \-prev
+Play the track before.
+.It Fl v , Fl \-volume Ar volume
+Set the volume, as
+.Ql 40% ,
+or change it, as
+.Ql +10% .
+.It Fl k , Fl \-seek Ar seek
+Seek to a time, as
+.Ql 1:30 ,
+or by an amount, as
+.Ql +10 .
+.It Fl f , Fl \-file Ar file
+Play
+.Ar file .
+.It Fl Q
+Print the status: whether a track plays, its file, its length and the
+position in seconds, and every setting.
+.It Fl l , Fl \-library
+Add the files to the library.
+.It Fl P , Fl \-playlist
+Add the files to the playlist, as without an option.
+.It Fl q , Fl \-queue
+Add the files to the play queue.
+.It Fl c , Fl \-clear
+Empty the playlist, the library with
+.Fl l ,
+or the queue with
+.Fl q ,
+before adding.
+.It Fl C , Fl \-raw
+Send the arguments as commands.
+.El
+.Sh EXIT STATUS
+.Ex -std
+It fails when no
+.Xr cmus 1
+answers on the socket.
+.Sh EXAMPLES
+Run
+.Xr cmus 1
+in a
+.Xr tmux 1
+session of its own, play a file and read where it is:
+.Bd -literal -offset indent
+tmux new-session -d -s music cmus
+cmus-remote -f ~/music/tone.flac
+cmus-remote -Q | grep -E '^(status|position|duration)'
+.Ed
+.Pp
+Set the volume, which is the PCM channel of
+.Pa /dev/mixer :
+.Bd -literal -offset indent
+cmus-remote -v 60%
+.Ed
+.Sh SEE ALSO
+.Xr cmus 1 ,
+.Xr mixer 1
