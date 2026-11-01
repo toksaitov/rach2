@@ -1156,6 +1156,17 @@ static void row_capture_path(void)
               "the left is recorded in both channels");
     }
     hda_driver.stream_close(&s);
+}
+
+/**
+ * Capture on the model ADC: a jack mic alone is recorded and biased at
+ * VREF 80%; an ADC that reaches the mic through a selector selects both
+ * connections; and a codec with no ADC has no capture.
+ */
+static void row_capture_routes(void)
+{
+    audio_stream_t s;
+    const hda_input_report_t *in = &hda_get_report()->input;
 
     row = "capture-jack-mic";
     reset_model();
@@ -1712,6 +1723,7 @@ int main(void)
     row_missed();
     row_shutdown();
     row_capture_path();
+    row_capture_routes();
     row_capture_stream();
     row_capture_duplex();
     row_capture_overrun();
