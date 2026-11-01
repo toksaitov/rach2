@@ -27,6 +27,9 @@ file 0755 /bin/sh build/ish/ish
 # ISH has only `cd` and `exit` as builtins, so a command that prints has to
 # be a program.
 file 0755 /bin/echo build/utils/echo
+# The tone and queue program, whose stall mode machine.audio's queue case
+# runs from the debug shell.
+file 0755 /bin/audiotest build/utils/audiotest
 # Dropbear's program, at os-real's path, whose key generator keygennoent
 # runs on a processor without hardware entropy.
 file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
