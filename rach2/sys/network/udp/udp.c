@@ -30,7 +30,25 @@ typedef struct udp_binding {
 
 static udp_binding_t *bindings;
 
+/* The datagram being sent when it fits one frame; a larger one is built in
+ * a block of the heap. */
 static uint8_t udp_tx_buf[UDP_HDR_SIZE + 1500];
+
+/**
+ * The checksum of the UDP datagram of `len` bytes at `data` from `src` to
+ * `dst` over IPv4, with its pseudo-header (RFC 768): the two addresses, the
+ * protocol and the length. A datagram whose checksum field is right gives 0.
+ */
+static uint16_t udp4_checksum(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
+{
+    uint32_t sum = (uint16_t)~ip_checksum(data, len);
+
+    sum += (src >> 16) + (src & 0xFFFFu) + (dst >> 16) + (dst & 0xFFFFu) + IP_PROTO_UDP + len;
+    while (sum >> 16) {
+        sum = (sum & 0xFFFFu) + (sum >> 16);
+    }
+    return (uint16_t)~sum;
+}
 
 /* Next ephemeral port to try (kept inside the 49152-65535 range). */
 static uint16_t udp_next_ephemeral = 49152;
@@ -262,24 +280,31 @@ static int udp_route6(const struct socket *sock, net_addr_t *dst, const struct n
 }
 
 /**
- * The largest payload is 1472 bytes, the 1500-byte MTU less the IPv4 and UDP
- * headers. The shared transmit buffer is filled and sent under `net_lock`,
- * since a sender in an interrupt must not enter it at the same time (net.h).
+ * The shared transmit buffer is filled and sent under `net_lock`, since a
+ * sender in an interrupt must not enter it at the same time (net.h); a
+ * datagram past it is built in a block of the caller's own, which IP
+ * fragments.
  */
 int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, const uint8_t *payload,
            uint16_t plen, const struct net_txopt *opt)
 {
     uint16_t udp_len;
     uint32_t flags;
+    uint8_t *buf = udp_tx_buf;
     int r;
     net_addr_t from;
 
-    if (plen > 1500) {
-        klog(KLOG_WARN, "udp", "tx: payload of %d bytes is too large, refused", (int)plen);
+    if (plen > (dst_ip.family == AF_INET6 ? UDP6_PAYLOAD_MAX : UDP_PAYLOAD_MAX)) {
         return -EMSGSIZE;
     }
 
     udp_len = (uint16_t)(UDP_HDR_SIZE + plen);
+    if (udp_len > sizeof(udp_tx_buf)) {
+        buf = kmalloc(udp_len);
+        if (!buf) {
+            return -ENOMEM;
+        }
+    }
 
     flags = net_lock();
 
@@ -290,25 +315,36 @@ int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, cons
     }
     if (r < 0) {
         net_unlock(flags);
+        if (buf != udp_tx_buf) {
+            kfree(buf);
+        }
         return r;
     }
-    write16be(udp_tx_buf + 0, sock->local_port);
-    write16be(udp_tx_buf + 2, dst_port);
-    write16be(udp_tx_buf + 4, udp_len);
-    write16be(udp_tx_buf + 6, 0x0000); /* checksum disabled */
-    k_memcpy(udp_tx_buf + UDP_HDR_SIZE, payload, plen);
+    write16be(buf + 0, sock->local_port);
+    write16be(buf + 2, dst_port);
+    write16be(buf + 4, udp_len);
+    write16be(buf + 6, 0x0000);
+    k_memcpy(buf + UDP_HDR_SIZE, payload, plen);
 
     if (dst_ip.family == AF_INET6) {
-        uint16_t sum = ip6_checksum(from.v6, dst_ip.v6, IP6_NH_UDP, udp_tx_buf, udp_len);
+        uint16_t sum = ip6_checksum(from.v6, dst_ip.v6, IP6_NH_UDP, buf, udp_len);
         int tclass = opt && opt->tclass >= 0 ? opt->tclass : sock->tclass6;
         uint8_t hlim = opt && opt->hlim >= 0 ? (uint8_t)opt->hlim
                                              : socket_hops6(sock, dst_ip.v6, (int)dst_ip.scope);
 
-        write16be(udp_tx_buf + 6, sum ? sum : 0xffff);
-        r = ip6_tx_opts(from.v6, dst_ip.v6, (int)dst_ip.scope, IP6_NH_UDP, udp_tx_buf, udp_len,
-                        hlim, IP6_TXF_TCLASS(tclass) | (sock->mloop6 ? IP6_TXF_LOOP : 0));
+        write16be(buf + 6, sum ? sum : 0xffff);
+        r = ip6_tx_opts(from.v6, dst_ip.v6, (int)dst_ip.scope, IP6_NH_UDP, buf, udp_len, hlim,
+                        IP6_TXF_TCLASS(tclass) | (sock->mloop6 ? IP6_TXF_LOOP : 0));
     } else {
-        r = ip_tx_from(from.v4, dst_ip.v4, IP_PROTO_UDP, udp_tx_buf, udp_len, sock->ip_ttl);
+        /* A source ip_tx_opts keeps is summed; one it chooses, for a
+         * machine with no address, leaves 0, which says "no checksum". */
+        if (from.v4 != 0 && ip_is_local(from.v4)) {
+            uint16_t sum = udp4_checksum(from.v4, dst_ip.v4, buf, udp_len);
+
+            write16be(buf + 6, sum ? sum : 0xffff);
+        }
+        r = ip_tx_opts(from.v4, dst_ip.v4, IP_PROTO_UDP, buf, udp_len, sock->ip_ttl,
+                       sock->pmtudisc);
     }
     if (r == 0 && dst_ip.family == AF_INET6) {
         net_mib6.udp6_out_datagrams++;
@@ -317,13 +353,24 @@ int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, cons
     }
 
     net_unlock(flags);
+    if (buf != udp_tx_buf) {
+        kfree(buf);
+    }
     return r;
 }
 
-/** Deliver an IPv4 datagram through the common address-aware binding list. */
+/** Deliver an IPv4 datagram through the common address-aware binding list,
+ * after checking its checksum when the sender gave one; 0 says it gave
+ * none, which IPv4 allows. */
 int udp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
 {
     struct net_rxinfo info;
+
+    if (len >= UDP_HDR_SIZE && read16be(data + 6) != 0 && read16be(data + 4) >= UDP_HDR_SIZE &&
+        read16be(data + 4) <= len && udp4_checksum(src, dst, data, read16be(data + 4)) != 0) {
+        net_mib.udp_in_errors++;
+        return 0;
+    }
 
     info.dst = net_addr4(dst);
     info.ifindex = 0;

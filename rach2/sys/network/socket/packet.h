@@ -60,8 +60,8 @@ int packet_ifindex(struct socket *sock);
 /**
  * Bind a packet socket to an interface index.
  *
- * Binding is what puts the socket in the delivery table, with a queue from
- * the heap; an unbound one receives nothing, and rebinding moves it, dropping
+ * Binding is what puts the socket in the delivery table; an unbound one
+ * receives nothing, and rebinding moves it, dropping
  * what was queued when the interface changes. An index must be one this
  * machine has; 0 is every interface, which is what a socket that named none
  * asked for. A socket bound to one interface is offered that interface's
@@ -94,7 +94,7 @@ struct packet_row {
  */
 int packet_snapshot(struct packet_row **rows);
 
-/** Remove a socket from the delivery table and free its queue, when its last
+/** Remove a socket from the delivery table and free what it has queued, when its last
  * reference goes (`socket_unref`). Takes `net_lock` itself. */
 void packet_unbind(struct socket *sock);
 
@@ -105,37 +105,22 @@ void packet_unbind(struct socket *sock);
  * frame arrived on, its EtherType (host order) and the whole frame, header
  * included, before the kernel's own handler for that type runs: before
  * `ip_rx` judges the destination address, and before `arp_rx` answers and
- * fills the cache. What is queued is the payload, cut to 1500 bytes; the
- * header is read for the sender's address and for who the frame was
- * addressed to, which a reader is given with it, along with the interface it
- * came in on.
+ * fills the cache. What is queued is the payload, whole, up to the
+ * interface's MTU; the header is read for the sender's address and for who
+ * the frame was addressed to, which a reader is given with it, along with
+ * the interface it came in on.
  *
- * Each socket has a queue of eight datagrams. Everything the machine
- * receives arrives here, not just what is addressed to it, so on a busy
- * network the reply a client is waiting for is followed by other people's
- * traffic within the same batch of frames one interrupt drains, and the
- * queue keeps the reply until the client reads it. A full queue drops the
- * newest, counts it, and logs the first drop.
+ * Each socket queues within its receive budget (`sock_dgq`). Everything the
+ * machine receives arrives here, not just what is addressed to it, so on a
+ * busy network the reply a client is waiting for is followed by other
+ * people's traffic within the same batch of frames one interrupt drains, and
+ * the queue keeps the reply until the client reads it. A frame past the
+ * budget is dropped, the newest, counted, and the first drop logged.
  */
 void packet_rx(struct netdev *nd, uint16_t ethertype, const uint8_t *frame, uint16_t frame_len);
 
-/*
- * The receive queue, as the three steps `socket_dgram_*` are made of. A packet
- * socket's datagrams come from here instead of from the socket's own slot;
- * `socket.c` branches on the family and calls these, so every caller above it
- * keeps one API.
- */
-
-/** Whether a datagram is waiting; the wait predicate. */
-int packet_ready(struct socket *sock);
-
-/** Bytes in the waiting datagram, or -1 when the queue is empty. */
-int packet_pending(struct socket *sock);
-
-/** Copy up to `len` bytes of the waiting datagram, from `offset` bytes into
- * it, leaving it in place: the count copied, 0 at or past its end or for a
- * negative `len`, or -1 when the queue is empty. */
-int packet_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len);
+/* The receive queue is the socket's own (`rq`), which the three steps
+ * `socket_dgram_*` read; these keep the link address a receive reports. */
 
 /** Drop the waiting datagram, keeping the address it came from. */
 void packet_consume(struct socket *sock);
@@ -178,8 +163,8 @@ int packet_last_addr(struct socket *sock, uint8_t *sll);
  * leaves by that one, or by the one the socket is bound to, or by the first.
  * There is no address to route on here, since the caller gave a MAC.
  *
- * Returns the bytes sent; -EMSGSIZE for an empty payload or one past 1500
- * bytes, -EINVAL for an EtherType other than IPv4, ARP and IPv6, -ENODEV
+ * Returns the bytes sent; -EMSGSIZE for an empty payload or one past the
+ * interface's MTU, ETH_MTU, -EINVAL for an EtherType other than IPv4, ARP and IPv6, -ENODEV
  * for an index no interface has, or -ENETDOWN with no interface. Takes `net_lock`
  * itself, since the Ethernet transmit buffer is shared with the receive
  * interrupt.

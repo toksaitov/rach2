@@ -22,6 +22,9 @@
 /* Ethernet header: destination MAC, source MAC, EtherType. */
 #define ETH_HDR_SIZE 14
 
+/* The largest payload a frame carries, every card's MTU. */
+#define ETH_MTU 1500
+
 /* EtherType values. */
 #define ETH_TYPE_IP   0x0800
 #define ETH_TYPE_ARP  0x0806

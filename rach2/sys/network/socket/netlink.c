@@ -156,14 +156,17 @@
 #define DIAG_CLOSE             7
 #define DIAG_LISTEN            10
 
-/* An answer datagram is at most SOCK_RECV_BUF_SIZE bytes, since a read
- * copies one datagram through a kernel buffer of that size (`readv_dgram`),
- * and a longer one would arrive cut in the middle of a message; every
- * reader's buffer holds it: Chromium reads with 4096 bytes and BusyBox with
- * 8192. A message is at most 512 bytes, a link's with its two sets of
- * counters among them, so a datagram holds two at least. */
-#define NL_DGRAM_MAX SOCK_RECV_BUF_SIZE
-#define NL_MSG_MAX   512u
+/* An answer datagram packs messages as Linux's dump does: up to
+ * NL_DGRAM_GOOD bytes, Linux's NLMSG_GOODSIZE of a page less its buffer's
+ * overhead, or, once the socket has read with a larger buffer, up to that
+ * read's size and at most NL_DGRAM_MAX, Linux's 32 KB less the same
+ * overhead. So a reader is never handed a datagram longer than its buffers
+ * after the first: Chromium reads with 4096 bytes, BusyBox with 8192 and
+ * iproute2 with 32768. A message is at most 512 bytes, a link's with its two
+ * sets of counters among them, so a datagram holds seven at least. */
+#define NL_DGRAM_GOOD 3776u
+#define NL_DGRAM_MAX  (32768u - 320u)
+#define NL_MSG_MAX    512u
 
 /* One queued datagram; its bytes follow the record. */
 struct nl_dgram {
@@ -179,6 +182,7 @@ struct netlink_state {
     uint32_t pid;
     uint32_t groups;
     int bound;
+    uint32_t max_recv;            /* the largest read so far, in bytes */
     struct nl_dgram *head, *tail; /* the answers queued, oldest first */
 };
 
@@ -190,6 +194,7 @@ static struct netlink_state *states;
 struct nl_build {
     struct socket *sock;
     uint8_t buf[NL_DGRAM_MAX];
+    uint32_t cap; /* the most bytes a datagram of this answer holds */
     uint32_t len;
     uint32_t seq;
     uint32_t pid;
@@ -416,7 +421,7 @@ static void nl_append(struct nl_build *b, const uint8_t *msg)
 {
     uint32_t len = get32(msg);
 
-    if (b->len + len > NL_DGRAM_MAX) {
+    if (b->len + len > b->cap) {
         nl_flush(b);
     }
     if (b->failed) {
@@ -1957,6 +1962,10 @@ int32_t netlink_send(struct socket *sock, const uint8_t *buf, uint32_t len)
     b->len = 0;
     b->failed = 0;
     b->pid = st->pid;
+    b->cap = st->max_recv > NL_DGRAM_GOOD ? st->max_recv : NL_DGRAM_GOOD;
+    if (b->cap > NL_DGRAM_MAX) {
+        b->cap = NL_DGRAM_MAX;
+    }
     while (at + NLMSG_HDRLEN <= len) {
         uint32_t mlen = get32(buf + at);
 
@@ -2024,4 +2033,13 @@ int netlink_ready(struct socket *sock)
     struct netlink_state *st = state_of(sock);
 
     return st && st->head != 0;
+}
+
+void netlink_note_recv(struct socket *sock, uint32_t len)
+{
+    struct netlink_state *st = state_of(sock);
+
+    if (st && len > st->max_recv) {
+        st->max_recv = len;
+    }
 }

@@ -59,11 +59,18 @@ struct net_mib {
     uint32_t ip_in_hdr_errors;     /* a bad version, length or header checksum */
     uint32_t ip_in_addr_errors;    /* for another host, not a group, or a spoofed source */
     uint32_t ip_in_unknown_protos; /* a protocol other than ICMP, UDP and TCP */
-    uint32_t ip_in_discards;       /* a fragment, or a broadcast that is not UDP */
+    uint32_t ip_in_discards;       /* a broadcast that is not UDP, or no memory */
     uint32_t ip_in_delivers;       /* handed to ICMP, UDP or TCP */
     uint32_t ip_out_requests;      /* every datagram the protocols gave IP to send */
     uint32_t ip_out_discards;      /* refused by a full card or loopback ring */
     uint32_t ip_out_no_routes;     /* no interface reaches the destination */
+    uint32_t ip_reasm_timeout;     /* datagrams whose fragments did not all come in time */
+    uint32_t ip_reasm_reqds;       /* fragments received */
+    uint32_t ip_reasm_oks;         /* datagrams reassembled */
+    uint32_t ip_reasm_fails;       /* datagrams given up: overlap, timeout, limits */
+    uint32_t ip_frag_oks;          /* datagrams sent in fragments */
+    uint32_t ip_frag_fails;   /* datagrams refused for DF, or a fragment that could not leave */
+    uint32_t ip_frag_creates; /* fragments made */
     uint32_t icmp_in_msgs;
     uint32_t icmp_in_errors; /* shorter than an ICMP header */
     uint32_t icmp_in_dest_unreachs;
@@ -86,6 +93,7 @@ struct net_mib {
     uint32_t udp_no_ports; /* no socket has the port */
     uint32_t udp_in_errors;
     uint32_t udp_out_datagrams;
+    uint32_t udp_rcvbuf_errors; /* dropped for a receive queue's budget */
 };
 
 extern struct net_mib net_mib;

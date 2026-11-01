@@ -186,14 +186,14 @@ static int32_t dgram_send_opt(struct socket *sock, net_addr_t dst_ip, uint16_t d
  * and `dst_port`, checking the destination first, and binding the socket to
  * an ephemeral port when it has none. Returns `len`, or the socket's pending
  * error, -EACCES for a broadcast address without `SO_BROADCAST`, -EMSGSIZE
- * past 1472 IPv4 or 1452 IPv6 bytes, -EAGAIN when no ephemeral port is free, or the error of
- * `udp_tx`, which is reported rather than counted as bytes sent.
+ * past 65,507 IPv4 or 65,527 IPv6 bytes (`UDP_PAYLOAD_MAX`), -EAGAIN when
+ * no ephemeral port is free, or the error of `udp_tx`, which is reported
+ * rather than counted as bytes sent.
  *
  * A datagram to a broadcast address reaches every machine on the wire, so a
  * program must set `SO_BROADCAST` on the socket before it can send one: a
- * program that broadcasts by accident wakes the whole network. 1472 bytes is
- * one IPv4 datagram over Ethernet, 1500 bytes of frame less the twenty of the
- * IP header and the eight of UDP's. The hop limit is the socket's, which
+ * program that broadcasts by accident wakes the whole network. A datagram
+ * past one frame leaves in fragments. The hop limit is the socket's, which
  * IP_TTL sets and traceroute counts up, or over IPv6 IPV6_UNICAST_HOPS.
  */
 int32_t dgram_send(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, const uint8_t *buf,
@@ -215,7 +215,7 @@ static int32_t dgram_send_opt(struct socket *sock, net_addr_t dst_ip, uint16_t d
     if (dst_ip.family != AF_INET6 && !sock->broadcast && netconf_is_broadcast(dst_ip.v4)) {
         return -EACCES;
     }
-    if (len > (dst_ip.family == AF_INET6 ? 1452 : 1472)) {
+    if (len > (dst_ip.family == AF_INET6 ? UDP6_PAYLOAD_MAX : UDP_PAYLOAD_MAX)) {
         return -EMSGSIZE;
     }
     if (sock->local_port == 0 && udp_bind_ephemeral(sock) == 0) {
@@ -228,25 +228,26 @@ static int32_t dgram_send_opt(struct socket *sock, net_addr_t dst_ip, uint16_t d
     return (int32_t)len;
 }
 
-/* The raw send buffer: one MTU, filled from the caller's memory in a system
- * call. Only a raw send touches it, under the big lock that admits one
- * processor to the kernel at a time, and nothing sleeps between the copy into
- * it and the send, so it needs no lock of its own; what needs the network
- * lock is the send, which goes through the transmit buffers an interrupt also
- * builds in. */
+/* The raw send buffer: one frame, filled from the caller's memory in a
+ * system call; a larger message is copied to a block of the heap. Only a raw
+ * send touches it, under the big lock that admits one processor to the
+ * kernel at a time, and nothing sleeps between the copy into it and the
+ * send, so it needs no lock of its own; what needs the network lock is the
+ * send, which goes through the transmit buffers an interrupt also builds
+ * in. */
 static uint8_t raw_send_buf[1500];
 
-/** Count the ICMP message of `len` bytes in `raw_send_buf` that a raw socket
- * sent, when IP took it (`r` is 0), as Linux counts one. */
-static void raw_count_sent(const struct socket *sock, int r, int len)
+/** Count the ICMP message of `len` bytes at `msg` that a raw socket sent,
+ * when IP took it (`r` is 0), as Linux counts one. */
+static void raw_count_sent(const struct socket *sock, int r, const uint8_t *msg, int len)
 {
     if (r == 0 && sock->protocol == IP_PROTO_ICMP && len > 0) {
-        icmp_count_out(raw_send_buf[0]);
+        icmp_count_out(msg[0]);
     }
 }
 
 /* recv flags honored: MSG_PEEK leaves what it copies for the next receive,
- * MSG_TRUNC has recvmsg on a datagram socket answer the datagram's whole
+ * MSG_TRUNC has a receive on a datagram socket answer the datagram's whole
  * length, and MSG_DONTWAIT does not wait. */
 #define MSG_PEEK     0x2
 #define MSG_TRUNC    0x20
@@ -311,6 +312,13 @@ static int32_t not_a_socket(const fd_entry_t *entry)
 #define IP_HDRINCL 3
 
 #define IP_OPTIONS 4
+
+/* IP_MTU_DISCOVER: the IP_PMTUDISC_* of the socket's IPv4 datagrams
+ * (ip.h). */
+#define IP_MTU_DISCOVER 10
+
+/* SO_RCVBUF: the bytes a datagram socket's receive queue may hold. */
+#define SO_RCVBUF 8
 
 /* setsockopt levels and the one packet option that is answered. */
 #define SOL_PACKET 263
@@ -1064,14 +1072,16 @@ static int32_t netlink_addr_to_user(const uint8_t *nl, uintptr_t sa_ptr, uintptr
  * the only destination it has. A connected stream socket sends to its peer
  * whatever the destination, or with none, which is the path musl's send()
  * takes: sendto with a null address. A datagram socket's payload must fit
- * one UDP packet, since this stack does not fragment: a larger one is
+ * one UDP datagram, sent in fragments past one frame: a larger one is
  * -EMSGSIZE before its length is cut to the 16 bits `udp_sendto` passes on.
  *
  * A raw socket sends the ICMP message the caller built, checksum included:
  * this layer supplies the IPv4 header and rewrites nothing, since a program
- * sending a wrong checksum on purpose is testing something. An AF_INET6 one
- * sends as `raw6_sendto` says. The copy into
- * `raw_send_buf` runs with interrupts on, since bringing in the caller's
+ * sending a wrong checksum on purpose is testing something. A message past
+ * one frame leaves in fragments under the socket's IP_MTU_DISCOVER, up to
+ * the largest IPv4 payload. An AF_INET6 one sends as `raw6_sendto` says.
+ * The copy into
+ * `raw_send_buf`, or a block of the heap, runs with interrupts on, since bringing in the caller's
  * pages may sleep; the send then holds the network lock against a receive
  * interrupt that would build a datagram in the same transmit buffers, the
  * rule of net.h, which `udp_tx` keeps for the same reason. A packet socket
@@ -1110,6 +1120,7 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
 
     if (entry->sock->type == SOCK_RAW) {
         uint8_t raw_sa[SOCKADDR_IN_LEN];
+        uint8_t *msg;
         uint32_t raw_dst;
         int r;
 
@@ -1126,19 +1137,28 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
         if ((uint16_t)((uint16_t)raw_sa[0] | ((uint16_t)raw_sa[1] << 8)) != AF_INET) {
             return -EAFNOSUPPORT;
         }
-        if (len > (int)sizeof(raw_send_buf)) {
+        if (len > IP_PAYLOAD_MAX) {
             return -EMSGSIZE;
         }
         raw_dst = SC_BE32(raw_sa + 4);
-        if (copy_from_user(raw_send_buf, (const void __user *)buf_ptr, (uint32_t)len) != 0) {
-            return -EFAULT;
+        msg = raw_send_buf;
+        if (len > (int)sizeof(raw_send_buf)) {
+            msg = kmalloc((size_t)len);
+            if (!msg) {
+                return -ENOMEM;
+            }
         }
-        {
+        if (copy_from_user(msg, (const void __user *)buf_ptr, (uint32_t)len) != 0) {
+            r = -EFAULT;
+        } else {
             uint32_t netflags = net_lock();
-            r = ip_tx(raw_dst, (uint8_t)entry->sock->protocol, raw_send_buf, (uint16_t)len,
-                      entry->sock->ip_ttl);
-            raw_count_sent(entry->sock, r, len);
+            r = ip_tx_opts(0, raw_dst, (uint8_t)entry->sock->protocol, msg, (uint16_t)len,
+                           entry->sock->ip_ttl, entry->sock->pmtudisc);
+            raw_count_sent(entry->sock, r, msg, len);
             net_unlock(netflags);
+        }
+        if (msg != raw_send_buf) {
+            kfree(msg);
         }
         if (r < 0) {
             return r;
@@ -1158,7 +1178,7 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
         uint16_t proto;
         int32_t ifindex;
 
-        if (len > 1500) {
+        if (len > ETH_MTU) {
             return -EMSGSIZE;
         }
         if (addrlen < SOCKADDR_LL_LEN) {
@@ -1183,7 +1203,7 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
                                     (uint16_t)len);
     }
 
-    if (len > 1500) {
+    if (len > 0xFFFF) {
         return -EMSGSIZE;
     }
 
@@ -1240,6 +1260,7 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
     int bytes;
     int nonblock;
     int peek = (flags & MSG_PEEK) != 0;
+    int how = (peek ? SOCK_RECV_PEEK : 0) | ((flags & MSG_TRUNC) ? SOCK_RECV_TRUNC : 0);
 
     if (len < 0 || !user_buffer_ok(buf_ptr, (uint32_t)len, 1)) {
         return -EFAULT;
@@ -1280,10 +1301,10 @@ static int32_t do_recvfrom(int fd, uintptr_t buf_ptr, int len, int flags, uintpt
 
     if (nonblock) {
         bytes = socket_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len,
-                                &src_ip, &src_port, peek);
+                                &src_ip, &src_port, how);
     } else {
         bytes = socket_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len, &src_ip,
-                            &src_port, peek);
+                            &src_port, how);
     }
 
     if (bytes < 0) {
@@ -1657,8 +1678,9 @@ static int32_t do_send(int fd, uintptr_t buf_ptr, int len, int flags)
 
 /**
  * recv(2): read from a connected stream socket, or one message from a
- * datagram socket. Honors MSG_PEEK, MSG_DONTWAIT and O_NONBLOCK. Returns the
- * bytes received or -errno, -EOPNOTSUPP for a raw socket.
+ * datagram socket. Honors MSG_PEEK, MSG_DONTWAIT and O_NONBLOCK, and on a
+ * datagram socket MSG_TRUNC, which answers the datagram's whole length.
+ * Returns the bytes received or -errno, -EOPNOTSUPP for a raw socket.
  *
  * A datagram socket reads one message with no sender reported, which is what
  * `recv` is: `recvfrom` without the address. Failing it here would leave one
@@ -1686,12 +1708,14 @@ static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
     nonblock = (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
 
     if (entry->sock->type == SOCK_DGRAM) {
+        int how = (peek ? SOCK_RECV_PEEK : 0) | ((flags & MSG_TRUNC) ? SOCK_RECV_TRUNC : 0);
+
         if (nonblock) {
             return (int32_t)socket_try_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr,
-                                            len, 0, 0, peek);
+                                            len, 0, 0, how);
         }
         return (int32_t)socket_recv(entry->sock, (uint8_t __force *)(void __user *)buf_ptr, len, 0,
-                                    0, peek);
+                                    0, how);
     }
     if (entry->sock->type != SOCK_STREAM) {
         return -EOPNOTSUPP;
@@ -2162,12 +2186,15 @@ static int32_t icmp6_filter_get(struct socket *sock, uintptr_t optval_ptr, uintp
 
 /**
  * setsockopt: keep SO_BROADCAST and SO_REUSEADDR, the hop limit IP_TTL (1 to
- * 255) and SO_BINDTODEVICE, an interface by name or none for an empty name,
- * and accept every other option with no effect, so that the setup of a
+ * 255), SO_BINDTODEVICE, an interface by name or none for an empty name,
+ * SO_RCVBUF, which Linux doubles and bounds by SOCK_RCVBUF_MAX and
+ * SOCK_RCVBUF_MIN, and IP_MTU_DISCOVER, an IP_PMTUDISC_* value, and accept
+ * every other option with no effect, so that the setup of a
  * forking server that sets TCP_NODELAY or SO_KEEPALIVE succeeds; failing
  * them would stop programs that set options a small stack has no use for.
  * Returns 0, or -EINVAL for a flag or hop limit shorter than an int, a hop
- * limit out of range or a SO_BINDTODEVICE value of no bytes, -ENODEV for an
+ * limit or IP_MTU_DISCOVER out of range or a SO_BINDTODEVICE value of no
+ * bytes, -ENODEV for an
  * unknown interface, -EFAULT, or -ENOPROTOOPT for the two options below.
  *
  * Two options fail with -ENOPROTOOPT. A DHCP client sets PACKET_AUXDATA on a
@@ -2271,6 +2298,30 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
     if (level == SOL_IP && optname == IP_HDRINCL) {
         return -ENOPROTOOPT;
     }
+    if (level == SOL_IP && optname == IP_MTU_DISCOVER) {
+        if (optlen < (int)sizeof(int)) {
+            return -EINVAL;
+        }
+        if (val < IP_PMTUDISC_DONT || val > IP_PMTUDISC_OMIT) {
+            return -EINVAL;
+        }
+        entry->sock->pmtudisc = (uint8_t)val;
+        return 0;
+    }
+    if (level == SOL_SOCKET && optname == SO_RCVBUF) {
+        uint32_t flags;
+
+        if (optlen < (int)sizeof(int)) {
+            return -EINVAL;
+        }
+        if (val < 0 || val > SOCK_RCVBUF_MAX) {
+            val = SOCK_RCVBUF_MAX;
+        }
+        flags = net_lock();
+        entry->sock->rcvbuf = val * 2 < SOCK_RCVBUF_MIN ? SOCK_RCVBUF_MIN : val * 2;
+        net_unlock(flags);
+        return 0;
+    }
 
     if (level == SOL_SOCKET && (optname == SO_BROADCAST || optname == SO_REUSEADDR)) {
         if (optlen < (int)sizeof(int)) {
@@ -2287,12 +2338,11 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
 
 /** getsockopt: report the options programs read at setup: SO_ERROR (the
  * pending connection error, cleared by the read), SO_TYPE (the real socket
- * type), SO_REUSEADDR and SO_BROADCAST as stored, SO_BINDTODEVICE as the
- * interface name, and IP_OPTIONS as empty, a result of width 0, since no
- * socket keeps IP options: OpenSSH's server ends a connection whose socket
- * reports any. A result is truncated to the caller's capacity, and the length
- * written is what was copied, less than an int for a caller that offered less.
- * SO_ERROR is read and cleared under the network lock, so the interrupt that
+ * type), SO_REUSEADDR, SO_BROADCAST, SO_RCVBUF and IP_MTU_DISCOVER as stored, SO_BINDTODEVICE as
+ * the interface name, and IP_OPTIONS as empty, a result of width 0, since no socket keeps IP
+ * options: OpenSSH's server ends a connection whose socket reports any. A result is truncated to
+ * the caller's capacity, and the length written is what was copied, less than an int for a caller
+ * that offered less. SO_ERROR is read and cleared under the network lock, so the interrupt that
  * sets it cannot come between. The IPv6 options read back as `ipv6_get`
  * reports them, and a raw ICMPv6 socket's filter as `icmp6_filter_get`
  * does. Returns 0, -ENOPROTOOPT for IP_HDRINCL, for an IPv6 option of a
@@ -2367,6 +2417,10 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
         return -ENOPROTOOPT;
     } else if (level == SOL_IP && optname == IP_OPTIONS) {
         width = 0;
+    } else if (level == SOL_IP && optname == IP_MTU_DISCOVER) {
+        val = entry->sock->pmtudisc;
+    } else if (level == SOL_SOCKET && optname == SO_RCVBUF) {
+        val = entry->sock->rcvbuf;
     } else if (level == SOL_SOCKET && optname == SO_BROADCAST) {
         val = entry->sock->broadcast;
     } else if (level == SOL_SOCKET && optname == SO_REUSEADDR) {
@@ -2688,7 +2742,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
  * sendmsg(2) on an AF_INET, packet or netlink socket: the caller's buffers in
  * order, as one send. A stream sends them one after another and stops at the
  * first that goes short; a UDP or netlink socket gathers at most eight into
- * one datagram, of at most 1500 bytes or `NETLINK_SEND_MAX`; a raw or packet
+ * one datagram, of at most 65535 bytes or `NETLINK_SEND_MAX`; a raw or packet
  * socket takes one buffer. On an AF_INET6 UDP or raw socket the control
  * messages IPV6_PKTINFO, IPV6_HOPLIMIT and IPV6_TCLASS apply to this send
  * alone (`get_tx_control`); elsewhere control messages carry nothing and
@@ -2776,7 +2830,7 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
                              (int)namelen, opt);
     }
     for (i = 0; i < iovlen; i++) {
-        uint32_t most = entry->sock->family == AF_NETLINK ? NETLINK_SEND_MAX : 1500u;
+        uint32_t most = entry->sock->family == AF_NETLINK ? NETLINK_SEND_MAX : 0xFFFFu;
 
         if (iov[i].iov_len > most - total) {
             return -EMSGSIZE;

@@ -358,7 +358,8 @@ void frag6_input(struct netdev *nd, const uint8_t *dg, uint32_t len, uint32_t of
  * The fragmentable part is the whole payload, since this layer sends no
  * extension header of its own: each fragment is the fixed header, a
  * fragment header and the most payload, in 8-byte units, that `mtu` leaves
- * room for, 1232 bytes at the least MTU.
+ * room for, 1232 bytes at the least MTU. A fragment for the loopback ring,
+ * whose MTU is past this file's buffer, is built in a block of the heap.
  */
 int frag6_output(struct netdev *out, const uint8_t *via, const uint8_t *src, const uint8_t *dst,
                  uint8_t nh, const uint8_t *payload, uint16_t plen, uint8_t hlim, uint8_t tclass,
@@ -366,29 +367,41 @@ int frag6_output(struct netdev *out, const uint8_t *via, const uint8_t *src, con
 {
     uint32_t unit = (mtu - IP6_HDR_SIZE - IP6_FRAG_HDR_SIZE) & ~7u;
     uint32_t id = krandom_u32(), off;
-    int r;
+    uint8_t *buf = frag6_tx_buf;
+    int r = 0;
 
+    if (mtu > sizeof(frag6_tx_buf)) {
+        buf = kmalloc(mtu);
+        if (!buf) {
+            net_mib6.ip6_frag_fails++;
+            return -ENOBUFS;
+        }
+    }
     for (off = 0; off < plen; off += unit) {
         uint32_t n = plen - off < unit ? plen - off : unit;
         int last = off + n == plen;
 
-        ip6_header(frag6_tx_buf, src, dst, IP6_NH_FRAGMENT, (uint16_t)(IP6_FRAG_HDR_SIZE + n),
-                   hlim);
-        ip6_set_class(frag6_tx_buf, tclass);
-        frag6_tx_buf[IP6_HDR_SIZE] = nh;
-        frag6_tx_buf[IP6_HDR_SIZE + 1] = 0;
-        write16be(frag6_tx_buf + IP6_HDR_SIZE + 2, (uint16_t)(off | (last ? 0u : IP6_FRAG_MORE)));
-        write32be(frag6_tx_buf + IP6_HDR_SIZE + 4, id);
-        k_memcpy(frag6_tx_buf + IP6_HDR_SIZE + IP6_FRAG_HDR_SIZE, payload + off, n);
-        r = ip6_emit(out, via, frag6_tx_buf, IP6_HDR_SIZE + IP6_FRAG_HDR_SIZE + n);
+        ip6_header(buf, src, dst, IP6_NH_FRAGMENT, (uint16_t)(IP6_FRAG_HDR_SIZE + n), hlim);
+        ip6_set_class(buf, tclass);
+        buf[IP6_HDR_SIZE] = nh;
+        buf[IP6_HDR_SIZE + 1] = 0;
+        write16be(buf + IP6_HDR_SIZE + 2, (uint16_t)(off | (last ? 0u : IP6_FRAG_MORE)));
+        write32be(buf + IP6_HDR_SIZE + 4, id);
+        k_memcpy(buf + IP6_HDR_SIZE + IP6_FRAG_HDR_SIZE, payload + off, n);
+        r = ip6_emit(out, via, buf, IP6_HDR_SIZE + IP6_FRAG_HDR_SIZE + n);
         if (r != 0) {
             net_mib6.ip6_frag_fails++;
-            return r;
+            break;
         }
         net_mib6.ip6_frag_creates++;
     }
-    net_mib6.ip6_frag_oks++;
-    return 0;
+    if (buf != frag6_tx_buf) {
+        kfree(buf);
+    }
+    if (r == 0) {
+        net_mib6.ip6_frag_oks++;
+    }
+    return r;
 }
 
 void frag6_tick(void)

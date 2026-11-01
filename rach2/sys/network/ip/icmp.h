@@ -17,14 +17,18 @@
  * the gateway 10.0.2.2, for one).
  */
 
-#define ICMP_ECHO_REQUEST 8
-#define ICMP_ECHO_REPLY   0
+#define ICMP_ECHO_REQUEST  8
+#define ICMP_ECHO_REPLY    0
 /* Destination unreachable, and two of its codes: port unreachable, and
  * fragmentation needed, for a datagram with DF set too big for a link on the
  * way, whose bytes 6 and 7 give the link's MTU (RFC 1191). */
-#define ICMP_UNREACHABLE  3
-#define ICMP_PORT_UNREACH 3
-#define ICMP_FRAG_NEEDED  4
+#define ICMP_UNREACHABLE   3
+#define ICMP_PORT_UNREACH  3
+#define ICMP_FRAG_NEEDED   4
+/* Time exceeded, and its code for a datagram whose fragments did not all
+ * come before the reassembly's time ran out. */
+#define ICMP_TIME_EXCEEDED 11
+#define ICMP_TIME_REASM    1
 
 /**
  * Take the ICMP message of `len` bytes at `data`, the payload of a datagram
@@ -61,9 +65,15 @@ void icmp_count_out(uint8_t type);
  */
 void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code);
 
-/* The most data an echo request carries: an unfragmented datagram of the
- * 1500-byte MTU less the IP and ICMP headers. */
-#define ICMP_PING_DATA_MAX 1472u
+/** Answer the datagram `dgram` of `len` bytes with a time exceeded of code
+ * `code` to its source, under the rules of `icmp_unreachable`: the
+ * quote's header and first 8 bytes of a datagram whose fragments did not
+ * all come (`ip_frag_tick`). Called with interrupts off. */
+void icmp_time_exceeded(const uint8_t *dgram, uint16_t len, uint8_t code);
+
+/* The most data an echo request carries: the largest datagram less the IP
+ * and ICMP headers, sent in fragments past one frame. */
+#define ICMP_PING_DATA_MAX (65535u - 20u - 8u)
 
 /** `icmp_ping_data` with no data and the hop limit `IP_TTL_DEFAULT`. */
 int icmp_ping(uint32_t dst_ip);
@@ -71,8 +81,9 @@ int icmp_ping(uint32_t dst_ip);
 /**
  * Send echo requests to `dst_ip` and wait for an answer: the round trip in
  * ticks, or -ETIMEDOUT when no request was answered, -EBUSY when another
- * ping is in flight, -EMSGSIZE for a `size` past `ICMP_PING_DATA_MAX`, or
- * -EINTR when a signal ended the wait.
+ * ping is in flight, -EMSGSIZE for a `size` past `ICMP_PING_DATA_MAX`,
+ * -ENOMEM when no block holds a request past one frame, or -EINTR when a
+ * signal ended the wait.
  *
  * Up to four requests go, a second apart, each with its own sequence number.
  * Deadlines are measured from the current tick, including ticks whose
@@ -98,7 +109,7 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, u
  * the path MTU leaves in fragments. A reply from `dst`, or from any host
  * when `dst` is a group, ends the wait. Returns as `icmp_ping_data` does,
  * and also the error of `icmp6_send` when the first request cannot be sent,
- * or -ENOMEM when no block holds a request past `ICMP_PING_DATA_MAX`.
+ * or -ENOMEM when no block holds a request past one frame.
  * Shares the one ping in flight with IPv4's.
  */
 int icmp_ping6_data(const uint8_t *dst, int ifindex, uint32_t size, uint8_t hlim, uint16_t *got,

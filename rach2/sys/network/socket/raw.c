@@ -16,42 +16,28 @@
 #include "../../serial.h"
 #include "../../proc/wait_queue.h"
 
-/* Policy: each socket's queue is eight datagrams of one MTU, twelve
- * kilobytes from the heap for the life of the registration, enough to hold
- * a reply behind a burst of other people's datagrams while the reader is
- * being scheduled. */
-#define RAW_QUEUE_SLOTS 8
-#define RAW_SLOT_SIZE   1500
-
-/* Each entry has a canonical source and its receiving interface;
- * `last_` describes the entry most recently taken. */
-struct raw_queue {
-    uint8_t buf[RAW_QUEUE_SLOTS][RAW_SLOT_SIZE];
-    uint16_t len[RAW_QUEUE_SLOTS];
-    net_addr_t src[RAW_QUEUE_SLOTS];
-    uint32_t ifindex[RAW_QUEUE_SLOTS]; /* ingress, including global addresses */
-    /* The rest of what the network layer saw, for recvmsg's ancillary
-     * data: the ingress is `ifindex` above. */
-    struct net_rxinfo info[RAW_QUEUE_SLOTS];
-    int head;  /* the next datagram to be read */
-    int count; /* how many are waiting */
+/* What a registration keeps of the datagrams its socket took: whether the
+ * queue's budget has dropped one, which is logged once, and what the
+ * network layer saw of the datagram most recently taken. The queue itself is
+ * the socket's (`sock_dgq`). */
+struct raw_last {
     int dropped;
     int reported; /* whether a drop has been logged */
-    net_addr_t last_src;
-    uint32_t last_ifindex;
-    struct net_rxinfo last_info;
+    net_addr_t src;
+    uint32_t ifindex; /* ingress, including global addresses */
+    struct net_rxinfo info;
 };
 
 /* A registered socket: the socket, its registered protocol, whether it is
- * an AF_INET6 one, its ICMPv6 filter, and its queue, one record from the
- * heap per registration, on a list the receive path walks. */
+ * an AF_INET6 one, its ICMPv6 filter, and what it took last, one record
+ * from the heap per registration, on a list the receive path walks. */
 struct raw_binding {
     struct raw_binding *next;
     struct socket *sock;
     uint8_t proto;
     int v6;
     uint8_t filter6[RAW_FILTER6_LEN]; /* bit t of byte t / 8 blocks type t */
-    struct raw_queue q;
+    struct raw_last last;
 };
 
 static struct raw_binding *raws;
@@ -69,12 +55,12 @@ static struct raw_binding *binding_of(struct socket *sock)
     return NULL;
 }
 
-/** The queue belonging to `sock`, or NULL if it is not registered. */
-static struct raw_queue *queue_of(struct socket *sock)
+/** What `sock` took last, or NULL if it is not registered. */
+static struct raw_last *last_of(struct socket *sock)
 {
     struct raw_binding *b = binding_of(sock);
 
-    return b ? &b->q : NULL;
+    return b ? &b->last : NULL;
 }
 
 int raw_register(struct socket *sock, uint8_t proto)
@@ -114,6 +100,7 @@ void raw_unregister(struct socket *sock)
             struct raw_binding *b = *link;
 
             *link = b->next;
+            sock_dgq_flush(&sock->rq);
             kfree(b);
             break;
         }
@@ -122,57 +109,46 @@ void raw_unregister(struct socket *sock)
 }
 
 /**
- * The slot of `b`'s queue the next datagram goes in, or -1 when the queue
- * is full, which drops the newest and keeps the unread ones in order; the
- * first drop is logged.
+ * Queue the `len` bytes at `data` on `b`'s socket, whole, with `meta`, and
+ * wake its readers. A datagram past the queue's budget is dropped, the
+ * newest, keeping the unread ones in order; the first drop is logged.
  */
-static int raw_slot(struct raw_binding *b)
+static void raw_queue(struct raw_binding *b, const struct sock_dgram *meta, const uint8_t *data,
+                      uint32_t len)
 {
-    struct raw_queue *q = &b->q;
-
-    if (q->count == RAW_QUEUE_SLOTS) {
-        q->dropped++;
-        if (!q->reported) {
-            q->reported = 1;
+    if (!sock_dgq_put(&b->sock->rq, b->sock->rcvbuf, meta, data, len)) {
+        b->last.dropped++;
+        if (!b->last.reported) {
+            b->last.reported = 1;
             klog(KLOG_WARN, "raw", "rx: the queue is full, dropping datagrams");
         }
-        return -1;
+        return;
     }
-    return (q->head + q->count) % RAW_QUEUE_SLOTS;
+    wq_wake(&b->sock->waiters, WQ_DATA);
 }
 
 /** `ip_rx` runs with interrupts off, so the list and the queues are touched
  * without taking `net_lock`. */
 void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
 {
-    uint16_t copy_len = total_len > RAW_SLOT_SIZE ? RAW_SLOT_SIZE : total_len;
-    uint32_t src;
+    struct sock_dgram meta;
     struct raw_binding *b;
 
     if (total_len < IP_HDR_SIZE) {
         return;
     }
-    src = ((uint32_t)data[12] << 24) | ((uint32_t)data[13] << 16) | ((uint32_t)data[14] << 8) |
-          (uint32_t)data[15];
+    k_memset(&meta, 0, sizeof(meta));
+    meta.src = net_addr4(((uint32_t)data[12] << 24) | ((uint32_t)data[13] << 16) |
+                         ((uint32_t)data[14] << 8) | (uint32_t)data[15]);
+    meta.info.dst = net_addr4(((uint32_t)data[16] << 24) | ((uint32_t)data[17] << 16) |
+                              ((uint32_t)data[18] << 8) | (uint32_t)data[19]);
+    meta.info.hlim = (int16_t)data[8];
+    meta.info.tclass = (int16_t)data[1];
 
     for (b = raws; b; b = b->next) {
-        struct raw_queue *q = &b->q;
-        int slot;
-
-        if (b->v6 || b->proto != proto || (slot = raw_slot(b)) < 0) {
-            continue;
+        if (!b->v6 && b->proto == proto) {
+            raw_queue(b, &meta, data, total_len);
         }
-        k_memcpy(q->buf[slot], data, copy_len);
-        q->len[slot] = copy_len;
-        q->src[slot] = net_addr4(src);
-        q->ifindex[slot] = 0;
-        q->info[slot].dst = net_addr4(((uint32_t)data[16] << 24) | ((uint32_t)data[17] << 16) |
-                                      ((uint32_t)data[18] << 8) | (uint32_t)data[19]);
-        q->info[slot].ifindex = 0;
-        q->info[slot].hlim = (int16_t)data[8];
-        q->info[slot].tclass = (int16_t)data[1];
-        q->count++;
-        wq_wake(&b->sock->waiters, WQ_DATA);
     }
 }
 
@@ -187,134 +163,76 @@ static int raw_filtered6(const struct raw_binding *b, const uint8_t *msg, uint16
 }
 
 /** As `raw_rx`, from `ip6_rx`; what is queued is the message alone, as an
- * AF_INET6 raw socket receives it on Linux. The filter is judged before a
- * slot is taken, so that a message blocked costs no place and no drop. */
+ * AF_INET6 raw socket receives it on Linux. The filter is judged before the
+ * message is queued, so that a message blocked costs no room and no drop. */
 void raw6_rx(int ifindex, const uint8_t *ip6h, uint8_t nh, const uint8_t *msg, uint16_t len)
 {
-    uint16_t copy_len = len > RAW_SLOT_SIZE ? RAW_SLOT_SIZE : len;
+    struct sock_dgram meta;
     struct raw_binding *b;
 
+    k_memset(&meta, 0, sizeof(meta));
+    meta.src = net_addr6(ip6h + 8, (uint32_t)ifindex);
+    meta.info.dst = net_addr6(ip6h + 24, (uint32_t)ifindex);
+    meta.info.ifindex = (uint32_t)ifindex;
+    meta.info.hlim = (int16_t)ip6h[7];
+    meta.info.tclass = (int16_t)(((ip6h[0] & 0x0f) << 4) | (ip6h[1] >> 4));
+
     for (b = raws; b; b = b->next) {
-        struct raw_queue *q = &b->q;
-        int slot;
-
-        if (!b->v6 || b->proto != nh || raw_filtered6(b, msg, len) || (slot = raw_slot(b)) < 0) {
-            continue;
+        if (b->v6 && b->proto == nh && !raw_filtered6(b, msg, len)) {
+            raw_queue(b, &meta, msg, len);
         }
-        k_memcpy(q->buf[slot], msg, copy_len);
-        q->len[slot] = copy_len;
-        q->src[slot] = net_addr6(ip6h + 8, (uint32_t)ifindex);
-        q->ifindex[slot] = (uint32_t)ifindex;
-        q->info[slot].dst = net_addr6(ip6h + 24, (uint32_t)ifindex);
-        q->info[slot].ifindex = (uint32_t)ifindex;
-        q->info[slot].hlim = (int16_t)ip6h[7];
-        q->info[slot].tclass = (int16_t)(((ip6h[0] & 0x0f) << 4) | (ip6h[1] >> 4));
-        q->count++;
-        wq_wake(&b->sock->waiters, WQ_DATA);
     }
-}
-
-int raw_ready(struct socket *sock)
-{
-    struct raw_queue *q = queue_of(sock);
-
-    return q && q->count > 0;
-}
-
-int raw_pending(struct socket *sock)
-{
-    struct raw_queue *q;
-    uint32_t flags;
-    int pending;
-
-    flags = net_lock();
-    q = queue_of(sock);
-    pending = (q && q->count > 0) ? (int)q->len[q->head] : -1;
-    net_unlock(flags);
-    return pending;
-}
-
-int raw_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
-{
-    struct raw_queue *q;
-    uint32_t flags;
-    int copy_len;
-
-    if (len < 0) {
-        return 0;
-    }
-
-    flags = net_lock();
-    q = queue_of(sock);
-    if (!q || q->count == 0) {
-        net_unlock(flags);
-        return -1;
-    }
-    if (offset >= (uint32_t)q->len[q->head]) {
-        net_unlock(flags);
-        return 0;
-    }
-    copy_len = (int)((uint32_t)q->len[q->head] - offset);
-    if (copy_len > len) {
-        copy_len = len;
-    }
-    k_memcpy(buf, q->buf[q->head] + offset, (uint32_t)copy_len);
-    net_unlock(flags);
-    return copy_len;
 }
 
 void raw_consume(struct socket *sock)
 {
-    struct raw_queue *q;
+    struct raw_last *l;
+    struct sock_dgram *d;
     uint32_t flags;
 
     flags = net_lock();
-    q = queue_of(sock);
-    if (q && q->count > 0) {
-        q->last_src = q->src[q->head];
-        q->last_ifindex = q->ifindex[q->head];
-        q->last_info = q->info[q->head];
-        q->head = (q->head + 1) % RAW_QUEUE_SLOTS;
-        q->count--;
+    l = last_of(sock);
+    d = l ? sock_dgq_pop(&sock->rq) : NULL;
+    if (d) {
+        l->src = d->src;
+        l->ifindex = d->info.ifindex;
+        l->info = d->info;
     }
     net_unlock(flags);
+    kfree(d);
 }
 
 uint32_t raw_head_src(struct socket *sock)
 {
-    struct raw_queue *q;
     uint32_t flags, src;
 
     flags = net_lock();
-    q = queue_of(sock);
-    src = q && q->count > 0 ? q->src[q->head].v4 : 0u;
+    src = sock->rq.head ? sock->rq.head->src.v4 : 0u;
     net_unlock(flags);
     return src;
 }
 
 uint32_t raw_last_src(struct socket *sock)
 {
-    struct raw_queue *q;
+    struct raw_last *l;
     uint32_t flags, src;
 
     flags = net_lock();
-    q = queue_of(sock);
-    src = q ? q->last_src.v4 : 0u;
+    l = last_of(sock);
+    src = l ? l->src.v4 : 0u;
     net_unlock(flags);
     return src;
 }
 
 int raw_head_src6(struct socket *sock, uint8_t *src)
 {
-    struct raw_queue *q;
     uint32_t flags;
     int ifindex = -1;
 
     flags = net_lock();
-    q = queue_of(sock);
-    if (q && q->count > 0) {
-        net_addr_to6(q->src[q->head], src);
-        ifindex = (int)q->ifindex[q->head];
+    if (sock->rq.head) {
+        net_addr_to6(sock->rq.head->src, src);
+        ifindex = (int)sock->rq.head->info.ifindex;
     }
     net_unlock(flags);
     return ifindex;
@@ -322,18 +240,18 @@ int raw_head_src6(struct socket *sock, uint8_t *src)
 
 int raw_last_src6(struct socket *sock, uint8_t *src)
 {
-    struct raw_queue *q;
+    struct raw_last *l;
     uint32_t flags;
     int ifindex = -1;
 
     flags = net_lock();
-    q = queue_of(sock);
-    if (q) {
-        if (q->last_src.family == AF_INET6)
-            net_addr_to6(q->last_src, src);
+    l = last_of(sock);
+    if (l) {
+        if (l->src.family == AF_INET6)
+            net_addr_to6(l->src, src);
         else
             k_memset(src, 0, 16);
-        ifindex = (int)q->last_ifindex;
+        ifindex = (int)l->ifindex;
     }
     net_unlock(flags);
     return ifindex;
@@ -342,15 +260,14 @@ int raw_last_src6(struct socket *sock, uint8_t *src)
 /** Copy the canonical address of the oldest message, or unspecified. */
 void raw_head_address(struct socket *sock, net_addr_t *src)
 {
-    struct raw_queue *q = queue_of(sock);
-    *src = q && q->count ? q->src[q->head] : net_addr4(0);
+    *src = sock->rq.head ? sock->rq.head->src : net_addr4(0);
 }
 
 /** Copy the canonical address of the message most recently consumed. */
 void raw_last_address(struct socket *sock, net_addr_t *src)
 {
-    struct raw_queue *q = queue_of(sock);
-    *src = q ? q->last_src : net_addr4(0);
+    struct raw_last *l = last_of(sock);
+    *src = l ? l->src : net_addr4(0);
 }
 
 int raw_set_filter6(struct socket *sock, const uint8_t *filter, uint32_t len)
@@ -381,10 +298,8 @@ int raw_get_filter6(struct socket *sock, uint8_t *filter)
 
 void raw_head_info(struct socket *sock, struct net_rxinfo *info)
 {
-    struct raw_queue *q = queue_of(sock);
-
-    if (q && q->count) {
-        *info = q->info[q->head];
+    if (sock->rq.head) {
+        *info = sock->rq.head->info;
         return;
     }
     k_memset(info, 0, sizeof(*info));
@@ -395,10 +310,10 @@ void raw_head_info(struct socket *sock, struct net_rxinfo *info)
 
 void raw_last_info(struct socket *sock, struct net_rxinfo *info)
 {
-    struct raw_queue *q = queue_of(sock);
+    struct raw_last *l = last_of(sock);
 
-    if (q) {
-        *info = q->last_info;
+    if (l) {
+        *info = l->info;
         return;
     }
     raw_head_info(sock, info);

@@ -17,7 +17,7 @@
 #include "../../lib/kstring.h"
 
 /* TX assembly buffer at file scope: the kernel keeps no large stack frames. */
-static uint8_t eth_tx_frame[ETH_HDR_SIZE + 1500];
+static uint8_t eth_tx_frame[ETH_HDR_SIZE + ETH_MTU];
 
 /**
  * The EtherType is the big-endian 16-bit field at bytes 12 and 13 of the
@@ -83,7 +83,7 @@ int ethernet_tx(struct netdev *out, const uint8_t *dst_mac, uint16_t ethertype,
         return NETDEV_TX_DROPPED;
     }
 
-    if (plen > 1500) {
+    if (plen > ETH_MTU) {
         klog(KLOG_WARN, "eth", "tx: payload of %d bytes is too large, dropped", (int)plen);
         out->tx_dropped++;
         return ETHERNET_TX_TOOLONG;

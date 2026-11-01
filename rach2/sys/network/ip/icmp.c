@@ -49,11 +49,11 @@
 #include "../ip6/icmp6.h"
 #include "../../mm/kheap.h"
 
-/* The echo reply being sent, sized for a full datagram, and the request,
- * sized for IPv4's largest; an IPv6 request past it is built in a block of
- * the heap. */
-static uint8_t icmp_reply_buf[1500];
-static uint8_t icmp_echo_buf[8 + ICMP_PING_DATA_MAX];
+/* The echo reply being sent and the kernel's request, each sized for one
+ * frame's datagram; a larger one is built in a block of the heap. */
+#define ICMP_FRAME_MAX (1500 - 20)
+static uint8_t icmp_reply_buf[ICMP_FRAME_MAX];
+static uint8_t icmp_echo_buf[ICMP_FRAME_MAX];
 
 /* An error quotes as much of the datagram it answers as fits a datagram of
  * 576 bytes (RFC 1812, 4.3.2.3), as Linux's does. */
@@ -172,7 +172,9 @@ static int icmp_error_allowed(void)
     return 1;
 }
 
-void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code)
+/** Send the error of `type` and `code` about `dgram`, `len` bytes, to its
+ * source, as `icmp_unreachable` says. */
+static void icmp_error(uint8_t type, uint8_t code, const uint8_t *dgram, uint16_t len)
 {
     uint32_t src = read32be(dgram + 12);
     uint16_t quote = len < ICMP_QUOTE_MAX ? len : ICMP_QUOTE_MAX;
@@ -181,22 +183,33 @@ void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code)
         (!ip_is_local(src) && !icmp_error_allowed())) {
         return;
     }
-    icmp_error_buf[0] = ICMP_UNREACHABLE;
+    icmp_error_buf[0] = type;
     icmp_error_buf[1] = code;
     write16be(icmp_error_buf + 2, 0);
     write32be(icmp_error_buf + 4, 0);
     k_memcpy(icmp_error_buf + 8, dgram, quote);
     write16be(icmp_error_buf + 2, ip_checksum(icmp_error_buf, (uint16_t)(8 + quote)));
     if (ip_tx(src, IP_PROTO_ICMP, icmp_error_buf, (uint16_t)(8 + quote), IP_TTL_DEFAULT) == 0) {
-        icmp_count_out(ICMP_UNREACHABLE);
+        icmp_count_out(type);
     }
+}
+
+void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code)
+{
+    icmp_error(ICMP_UNREACHABLE, code, dgram, len);
+}
+
+void icmp_time_exceeded(const uint8_t *dgram, uint16_t len, uint8_t code)
+{
+    icmp_error(ICMP_TIME_EXCEEDED, code, dgram, len);
 }
 
 /**
  * An echo request is copied whole, its type changed to reply and its
- * checksum recomputed. A fragmentation-needed report shorter than 36 bytes,
- * the ICMP header, a 20-byte IP header and eight bytes of the segment, is
- * ignored.
+ * checksum recomputed; one past a frame, which came in fragments, is
+ * answered from a block of the heap, and in fragments, or not at all with
+ * no memory. A fragmentation-needed report shorter than 36 bytes, the ICMP
+ * header, a 20-byte IP header and eight bytes of the segment, is ignored.
  */
 void icmp_rx(uint32_t src_ip, uint32_t dst_ip, uint8_t ttl, const uint8_t *data, uint16_t len)
 {
@@ -210,17 +223,22 @@ void icmp_rx(uint32_t src_ip, uint32_t dst_ip, uint8_t ttl, const uint8_t *data,
         net_mib.icmp_in_dest_unreachs++;
     }
     if (data[0] == ICMP_ECHO_REQUEST) {
+        uint8_t *reply = len > sizeof(icmp_reply_buf) ? kmalloc(len) : icmp_reply_buf;
+
         net_mib.icmp_in_echos++;
-        if (len > 1500) {
-            len = 1500;
+        if (!reply) {
+            return;
         }
-        k_memcpy(icmp_reply_buf, data, len);
-        icmp_reply_buf[0] = ICMP_ECHO_REPLY;
-        icmp_reply_buf[1] = 0;
-        write16be(icmp_reply_buf + 2, 0x0000);
-        write16be(icmp_reply_buf + 2, ip_checksum(icmp_reply_buf, len));
-        if (ip_tx_from(dst_ip, src_ip, IP_PROTO_ICMP, icmp_reply_buf, len, IP_TTL_DEFAULT) == 0) {
+        k_memcpy(reply, data, len);
+        reply[0] = ICMP_ECHO_REPLY;
+        reply[1] = 0;
+        write16be(reply + 2, 0x0000);
+        write16be(reply + 2, ip_checksum(reply, len));
+        if (ip_tx_from(dst_ip, src_ip, IP_PROTO_ICMP, reply, len, IP_TTL_DEFAULT) == 0) {
             icmp_count_out(ICMP_ECHO_REPLY);
+        }
+        if (reply != icmp_reply_buf) {
+            kfree(reply);
         }
     } else if (data[0] == ICMP_UNREACHABLE && data[1] == ICMP_FRAG_NEEDED && len >= 36) {
         icmp_too_big(data, len);

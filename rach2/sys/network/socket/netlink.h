@@ -99,4 +99,9 @@ void netlink_consume(struct socket *sock);
 /** Whether a datagram is queued. */
 int netlink_ready(struct socket *sock);
 
+/** Note a read of `len` bytes on `sock`: the largest read so far sizes the
+ * answers built after it, as Linux sizes a dump's buffers by its reader's
+ * (NL_DGRAM_MAX in netlink.c). Called under `net_lock`. */
+void netlink_note_recv(struct socket *sock, uint32_t len);
+
 #endif /* _NETLINK_H_ */

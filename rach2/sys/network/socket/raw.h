@@ -47,24 +47,25 @@ struct net_rxinfo;
 
 /**
  * Register `sock` to receive protocol `proto` of IPv4, or of IPv6 when
- * `sock` is an AF_INET6 socket, with a queue from the heap, or change the
+ * `sock` is an AF_INET6 socket, or change the
  * protocol of a registration it has. Returns 0, or -ENOBUFS with no memory.
  * Called when the socket is created, since a raw socket's protocol is
  * chosen there and not by a later bind. Takes `net_lock` itself.
  */
 int raw_register(struct socket *sock, uint8_t proto);
 
-/** Remove a socket's registration and free its queue, when its last
- * reference goes (`socket_unref`). Takes `net_lock` itself. */
+/** Remove a socket's registration and free the datagrams it has queued,
+ * when its last reference goes (`socket_unref`). Takes `net_lock` itself. */
 void raw_unregister(struct socket *sock);
 
 /**
  * Offer one received datagram to every raw socket of its protocol.
  *
- * `data` is the whole datagram, header included, and `total_len` its length;
- * one shorter than an IP header is ignored, and one past RAW_SLOT_SIZE, 1500
- * bytes, is cut to that size. A socket whose queue of eight is full drops
- * it, the newest, and the first such drop is logged. Called with interrupts
+ * `data` is the whole datagram, header included, reassembled if it came in
+ * fragments, and `total_len` its length; one shorter than an IP header is
+ * ignored. Each socket queues it whole on its own queue (`sock_dgq`), and
+ * one whose budget is spent drops it, the newest, the first such drop
+ * logged. Called with interrupts
  * off, from `ip_rx`, after the datagram has been accepted for this machine
  * and before the kernel's own handler for the protocol.
  */
@@ -102,25 +103,9 @@ void raw_head_info(struct socket *sock, struct net_rxinfo *info);
 /** What the network layer saw of the datagram most recently taken. */
 void raw_last_info(struct socket *sock, struct net_rxinfo *info);
 
-/* The receive queue, as the three steps `socket_dgram_*` are made of, the same
- * shape the packet socket uses. */
-
-/**
- * Whether a datagram is waiting; the wait predicate.
- *
- * Read without the network lock, as the packet socket's is: `wq_wait_event`
- * evaluates a predicate with interrupts already off, which is what serializes
- * this against the receive interrupt that fills the queue.
- */
-int raw_ready(struct socket *sock);
-
-/** Bytes in the waiting datagram, or -1 when the queue is empty. */
-int raw_pending(struct socket *sock);
-
-/** Copy up to `len` bytes of the waiting datagram, from `offset` bytes into
- * it, leaving it in place: the count copied, 0 at or past its end or for a
- * negative `len`, or -1 when the queue is empty. */
-int raw_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len);
+/* The receive queue is the socket's own (`rq`), which the three steps
+ * `socket_dgram_*` read; these keep what a receive reports of a raw
+ * datagram. */
 
 /** Drop the waiting datagram, keeping the address it came from. */
 void raw_consume(struct socket *sock);

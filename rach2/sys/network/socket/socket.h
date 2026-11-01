@@ -25,13 +25,13 @@
 #define SOCK_RAW            3
 #define AF_INET             2  /* IPv4 address family */
 #define AF_INET6            10 /* IPv6 address family */
-/* Format: one datagram of the Ethernet MTU is the most UDP can carry here. */
-#define SOCK_RECV_BUF_SIZE  1500
-/* Policy: a UDP socket queues eight datagrams, twelve kilobytes of its
- * record: room for the answers to the two questions a resolver asks at
- * once, A and AAAA, which arrive together, and for a burst of others while
- * the reader is being scheduled. */
-#define SOCK_DGRAM_SLOTS    8
+/* Linux's default and largest receive budget of a datagram socket, its
+ * `net.core.rmem_default` and `rmem_max`, and the least SO_RCVBUF leaves
+ * it, SOCK_MIN_RCVBUF. SO_RCVBUF doubles what it is given, as Linux does, to
+ * cover each datagram's record; a socket's budget is `rcvbuf`. */
+#define SOCK_RCVBUF_DEFAULT 212992
+#define SOCK_RCVBUF_MAX     212992
+#define SOCK_RCVBUF_MIN     2304
 /* Policy: a listener holds fifteen accepted connections not yet taken by
  * `accept`, a ring of sixteen in the socket record with one place left
  * empty to tell full from empty; a power of two, since the ring's indexes
@@ -76,6 +76,63 @@ struct net_txopt {
     int16_t hlim;   /* the hop limit, or -1 for the socket's */
     int16_t tclass; /* the traffic class, or -1 for the socket's */
 };
+
+/*
+ * One received datagram, from the heap, with what a receive reports of it;
+ * its `len` bytes follow the record. A UDP datagram keeps its sender in
+ * `src` and `port`; a raw one its IP source in `src`; a packet socket's its
+ * link address in `lladdr`, `pkttype` and `llproto`, and its interface in
+ * `info.ifindex`. A datagram of no bytes is a datagram.
+ */
+struct sock_dgram {
+    struct sock_dgram *next;
+    uint32_t len;
+    net_addr_t src;
+    uint16_t port;
+    struct net_rxinfo info;
+    uint8_t lladdr[6];
+    uint8_t pkttype;
+    uint16_t llproto;
+};
+
+/*
+ * A queue of received datagrams in arrival order, whole, within a budget
+ * of bytes: a datagram is taken while the bytes held, each datagram's
+ * record counted with it, are within the socket's `rcvbuf`, and dropped
+ * otherwise, as Linux drops one that finds the receive buffer full. So an
+ * empty queue takes any datagram, however long.
+ */
+struct sock_dgq {
+    struct sock_dgram *head, *tail;
+    uint32_t count; /* datagrams queued */
+    uint32_t bytes; /* their payloads' bytes */
+    uint32_t held;  /* the heap they hold, records included */
+};
+
+/**
+ * Append a copy of the `len` bytes at `data` to `q`, with the record
+ * `meta`'s fields beside it, under the budget `rcvbuf`. Returns the record
+ * queued, or NULL when the budget is spent or there is no memory, which
+ * drops the datagram. Called with interrupts off.
+ */
+struct sock_dgram *sock_dgq_put(struct sock_dgq *q, int rcvbuf, const struct sock_dgram *meta,
+                                const uint8_t *data, uint32_t len);
+
+/** The bytes of the datagram `d`. */
+#define SOCK_DGRAM_DATA(d) ((uint8_t *)((d) + 1))
+
+/** Unlink the oldest datagram of `q` and return it for the caller to free
+ * with `kfree`, or NULL when `q` is empty. Called under `net_lock`. */
+struct sock_dgram *sock_dgq_pop(struct sock_dgq *q);
+
+/** Free every datagram of `q` and leave it empty. Called under
+ * `net_lock`. */
+void sock_dgq_flush(struct sock_dgq *q);
+
+/** Copy up to `len` bytes of the oldest datagram of `q`, from `offset`
+ * bytes into it: the count copied, 0 at or past its end or for a negative
+ * `len`, or -1 when `q` is empty. Called under `net_lock`. */
+int sock_dgq_peek(const struct sock_dgq *q, uint32_t offset, uint8_t *buf, int len);
 
 struct tcb; /* defined in tcp/tcp.h */
 
@@ -187,20 +244,16 @@ typedef struct socket {
     uint32_t inode;
     uint32_t uid;
 
-    /* UDP receive queue: the datagrams in arrival order, each with its
-     * length and its sender, which recvfrom returns; `recv_head` is the
-     * oldest and `recv_count` how many wait. A datagram that finds the queue
-     * full is dropped, as Linux drops one that finds the receive buffer full.
-     * Occupancy is the count and not a length, because a datagram of no bytes
-     * is a datagram: a read of this socket may return 0, which is a datagram
-     * and not end of input. */
-    uint8_t recv_buf[SOCK_DGRAM_SLOTS][SOCK_RECV_BUF_SIZE];
-    uint16_t recv_len[SOCK_DGRAM_SLOTS];
-    net_addr_t recv_src_ip[SOCK_DGRAM_SLOTS];
-    uint16_t recv_src_port[SOCK_DGRAM_SLOTS];
-    struct net_rxinfo recv_info[SOCK_DGRAM_SLOTS];
-    int recv_head;
-    int recv_count;
+    /* The UDP receive queue (`sock_dgq`); a raw or packet socket keeps its
+     * own beside its registration, under the same budget. `rcvbuf` is
+     * SO_RCVBUF, the bytes a datagram socket's queue may hold. */
+    struct sock_dgq rq;
+    int rcvbuf;
+
+    /* IP_MTU_DISCOVER, an IP_PMTUDISC_* value: whether an IPv4 datagram
+     * past its route's MTU leaves in fragments or is refused, and whether
+     * one within it carries DF (`ip_tx_opts`). */
+    uint8_t pmtudisc;
 
     /* What the network layer saw of the UDP or raw datagram most recently
      * taken or peeked (`socket_dgram_consume`, `socket_dgram_sender`), for
@@ -320,10 +373,9 @@ void socket_unref(struct socket *sock);
 
 /**
  * Queue the UDP payload of `len` bytes at `data`, from `src_ip`:`src_port`,
- * on `sock` and wake its readers. A payload past SOCK_RECV_BUF_SIZE bytes is
- * cut to that size. A datagram that finds all SOCK_DGRAM_SLOTS slots full,
- * or that comes from other than the peer of a connected socket, is dropped.
- * Called with interrupts off, from `udp_rx`.
+ * whole, on `sock` and wake its readers. A datagram that finds the queue's
+ * budget spent (`sock_dgq`), or that comes from other than the peer of a
+ * connected socket, is dropped. Called with interrupts off, from `udp_rx`.
  */
 void socket_udp_deliver(struct socket *sock, net_addr_t src_ip, uint16_t src_port,
                         const uint8_t *data, uint16_t len);
@@ -333,24 +385,32 @@ void socket_udp_deliver(struct socket *sock, net_addr_t src_ip, uint16_t src_por
 void socket_udp_deliver_info(struct socket *sock, net_addr_t src_ip, uint16_t src_port,
                              const uint8_t *data, uint16_t len, const struct net_rxinfo *info);
 
+/* What a datagram receive is asked for, the bits of `socket_recv`'s
+ * `how`: leave the datagram queued (MSG_PEEK), and answer its whole length
+ * rather than the bytes copied (MSG_TRUNC). */
+#define SOCK_RECV_PEEK  0x1
+#define SOCK_RECV_TRUNC 0x2
+
 /**
  * Wait for a datagram on a UDP, raw, packet or netlink socket, copy up to
  * `len` bytes of it to `buf`, and report its sender through `src_ip` and
  * `src_port` when they are not NULL, as `socket_dgram_consume` reports it.
  * The rest of a longer datagram is discarded, since the datagram is the
- * unit; with `peek` the datagram stays queued, whole, for the next receive
- * (MSG_PEEK). Returns the bytes copied, -EINTR, -EFAULT, or the socket's
- * pending error, which this takes. The copy runs with interrupts off, so
- * `buf`, a user buffer, is brought in again after the wait, and the call is
- * -EFAULT, with the datagram left queued, when it no longer can be.
+ * unit; with SOCK_RECV_PEEK in `how` the datagram stays queued, whole, for
+ * the next receive. Returns the bytes copied, or with SOCK_RECV_TRUNC the
+ * datagram's whole length, as Linux answers MSG_TRUNC; -EINTR, -EFAULT, or
+ * the socket's pending error, which this takes. The copy runs with
+ * interrupts off, so `buf`, a user buffer, is brought in again after the
+ * wait, and the call is -EFAULT, with the datagram left queued, when it no
+ * longer can be.
  */
 int socket_recv(struct socket *sock, uint8_t *buf, int len, net_addr_t *src_ip, uint16_t *src_port,
-                int peek);
+                int how);
 
 /** `socket_recv` without the wait: the pending error first, then
  * SOCK_EAGAIN when no datagram is waiting. */
 int socket_try_recv(struct socket *sock, uint8_t *buf, int len, net_addr_t *src_ip,
-                    uint16_t *src_port, int peek);
+                    uint16_t *src_port, int how);
 
 /*
  * The same receive in three steps, wait, copy and consume, for a caller with

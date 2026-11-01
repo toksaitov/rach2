@@ -62,6 +62,7 @@
 #include "speaker.h"
 #include "audio/audio.h"
 #include "network/socket/socket.h"
+#include "network/socket/netlink.h"
 #include "network/socket/packet.h"
 #include "network/socket/raw.h"
 #include "network/ethernet/ethernet.h"
@@ -668,7 +669,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
  * socket's send copies from the user buffer itself and sleeps for room in
  * its ring unless the description is non-blocking. A datagram socket sends
  * to the peer it connected to, -EDESTADDRREQ without one, and a datagram
- * past 1500 bytes is -EMSGSIZE; a socket of another type is -EOPNOTSUPP.
+ * past 65535 bytes is -EMSGSIZE; a socket of another type is -EOPNOTSUPP.
  * A file of a mount or of the KRFFS root is `file_write`'s. The framebuffer
  * has operations of its own (display/fbdev.c).
  *
@@ -716,7 +717,7 @@ static int32_t write_fd(int fd, const char __user *buf, uint32_t count)
             if (!user_buffer_ok((__force uintptr_t)buf, count, 0)) {
                 return -EFAULT;
             }
-            if (count > 1500) {
+            if (count > 0xFFFFu) {
                 return -EMSGSIZE;
             }
             return dgram_send(entry->sock, entry->sock->remote_ip, entry->sock->remote_port,
@@ -5014,6 +5015,10 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
     return read_fd(fd, buf, count);
 }
 
+/* The datagram bytes `readv_dgram` copies on its stack; a larger copy is
+ * made in a block of the heap. */
+#define READV_DGRAM_STACK 1024
+
 /**
  * The datagram at the head of the queue is copied into a kernel buffer, its
  * sender read and the datagram consumed under one hold of `net_lock`, as net.h
@@ -5027,28 +5032,46 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
  * datagram's. A datagram gone between the wait and the hold counts as one of
  * no bytes.
  *
+ * The buffers' lengths are summed before the hold, and only as much of the
+ * datagram as they take is copied: into READV_DGRAM_STACK bytes on the
+ * kernel stack, or past that into a block of the heap, without which the
+ * call is -ENOMEM with the datagram left queued. The rest of a longer
+ * datagram is dropped, and `whole` gets its whole length, so that the caller
+ * reports it truncated. A netlink socket notes the sum as the size of a
+ * read, which sizes its answers (`netlink_note_recv`).
+ *
  * The spread runs with interrupts on, through `copy_to_user`, and reads each
  * iovec from user memory as it goes, so a buffer may point at the caller's own
  * iovec array and the datagram rewrite the destinations after it, which the
  * check made before the read never saw. `copy_to_user` fails on an address it
  * cannot fault in, so such a caller writes only its own memory; the copy stops
- * at the first iovec it cannot read or buffer it cannot write. The kernel
- * buffer is one datagram, SOCK_RECV_BUF_SIZE bytes, on the 16 KB kernel stack;
- * a longer datagram's tail is dropped, and `whole` gets its whole length, so
- * that the caller reports it truncated as one cut by the user's buffers is.
+ * at the first iovec it cannot read or buffer it cannot write.
  */
 int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_t *src_ip,
                     uint16_t *src_port, int peek, int32_t *whole)
 {
-    uint8_t message[SOCK_RECV_BUF_SIZE];
+    uint8_t small[READV_DGRAM_STACK];
+    uint8_t *message = small;
     struct kernel_iovec iov;
-    uint32_t offset = 0;
+    uint32_t offset = 0, want = 0;
     int32_t total = 0;
     uint32_t held;
     int nonblock;
     int taken;
     int length;
     int i;
+
+    for (i = 0; i < iovcnt; i++) {
+        uint32_t n;
+
+        if (copy_from_user(
+                &iov, (const void __user *)(iov_user + (uint32_t)i * sizeof(struct kernel_iovec)),
+                sizeof(iov)) != 0) {
+            break;
+        }
+        n = USER_LEN32(iov.iov_len);
+        want = n > 0x7FFFFFFFu - want ? 0x7FFFFFFFu : want + n;
+    }
 
     nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
     if (nonblock) {
@@ -5066,12 +5089,25 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
 
     held = net_lock();
     length = socket_dgram_pending(entry->sock);
-    taken = socket_dgram_peek(entry->sock, 0, message, (int)sizeof(message));
+    if ((uint32_t)(length < 0 ? 0 : length) < want) {
+        want = (uint32_t)(length < 0 ? 0 : length);
+    }
+    if (want > sizeof(small)) {
+        message = kmalloc(want);
+        if (!message) {
+            net_unlock(held);
+            return -ENOMEM;
+        }
+    }
+    taken = socket_dgram_peek(entry->sock, 0, message, (int)want);
     if (taken < 0) {
         taken = 0;
     }
     if (length < taken) {
         length = taken;
+    }
+    if (entry->sock->family == AF_NETLINK) {
+        netlink_note_recv(entry->sock, want);
     }
     if (peek) {
         socket_dgram_sender(entry->sock, src_ip, src_port);
@@ -5106,6 +5142,9 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_
         if (chunk < iov.iov_len) {
             break;
         }
+    }
+    if (message != small) {
+        kfree(message);
     }
 
     return total;

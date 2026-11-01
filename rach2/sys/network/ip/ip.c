@@ -1,9 +1,9 @@
 /*
  * ip.c: the IPv4 layer, as ip.h describes it: the checks of a received
- * datagram, the transmit and its choice of interface, the datagrams held for
- * ARP, and the loopback ring. The 20-byte header has the source and
- * destination addresses, the protocol number, a TTL, and a one's complement
- * checksum over the header, its multi-byte fields big-endian.
+ * datagram, the transmit, its choice of interface and its fragments, the
+ * datagrams held for ARP, and the loopback ring; ipfrag.c reassembles. The 20-byte header has the
+ * source and destination addresses, the protocol number, a TTL, and a one's complement checksum
+ * over the header, its multi-byte fields big-endian.
  */
 
 #include "../../klog.h"
@@ -22,6 +22,7 @@
 #include "../netconf.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
+#include "../../mm/kheap.h"
 #include "../../timer.h"
 
 /**
@@ -65,12 +66,13 @@ uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
  * datagram on the loopback ring has this machine's source by design, so the
  * check depends on the path the datagram came by and not on its source. One
  * from the wire to 127/8 is dropped too, so that a socket bound to 127.0.0.1
- * is reachable from this machine alone.
+ * is reachable from this machine alone. A fragment is judged by the same
+ * checks as a whole datagram, each by its own header, before it is kept.
  */
 void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
 {
     uint8_t ihl, proto;
-    uint16_t total_len, hdr_len, frag;
+    uint16_t total_len, hdr_len;
     uint32_t src_ip, dst_ip;
     int to_broadcast;
 
@@ -96,13 +98,6 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
     total_len = read16be(data + 2);
     if (total_len > len || total_len < hdr_len) {
         net_mib.ip_in_hdr_errors++;
-        return;
-    }
-
-    /* MF is bit 13 of the field, 0x2000, and the fragment offset bits 12-0. */
-    frag = read16be(data + 6);
-    if (frag & 0x3FFF) {
-        net_mib.ip_in_discards++;
         return;
     }
 
@@ -134,6 +129,20 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
         return;
     }
 
+    if (read16be(data + 6) & (IP_MF | IP_FRAG_OFFSET)) {
+        ip_frag_input(data, total_len, hdr_len, to_broadcast);
+        return;
+    }
+    ip_deliver(data, total_len, to_broadcast);
+}
+
+void ip_deliver(const uint8_t *data, uint16_t total_len, int to_broadcast)
+{
+    uint16_t hdr_len = (uint16_t)((data[0] & 0x0F) * 4);
+    uint32_t src_ip = read32be(data + 12);
+    uint32_t dst_ip = read32be(data + 16);
+    uint8_t proto = data[9];
+
     raw_rx(proto, data, total_len);
 
     switch (proto) {
@@ -161,33 +170,46 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback)
 /* The identification field of the next datagram sent. */
 static uint16_t ip_id_counter = 0;
 
-/* TX assembly buffer at file scope. */
-static uint8_t ip_tx_buf[IP_HDR_SIZE + 1500];
+/* The datagram, or the fragment, being sent: one frame's payload. */
+static uint8_t ip_tx_buf[ETH_MTU];
 
 /* Datagrams that wait for their next hop's hardware address, as Linux's
  * neighbour queue keeps them, so that the first datagram to a host not yet in
  * the ARP cache leaves when the reply comes and is not lost: a ping's first
- * request, a connect's SYN. A slot is free when its length is 0, or once its
+ * request, a connect's SYN, and every fragment of a datagram past the MTU,
+ * 45 of the largest. A slot is free when its length is 0, or once its
  * datagram has waited longer than any reply takes, IP_HOLD_TICKS, three
- * seconds; `since` is the tick the datagram was put in. */
-#define IP_HOLD_SLOTS 4
+ * seconds; `since` is the tick the datagram was put in. A held datagram is
+ * a copy on the heap, freed when it leaves or is dropped. */
+#define IP_HOLD_SLOTS 64
 #define IP_HOLD_TICKS MS_TO_TICKS(3000)
 static struct ip_hold {
     struct netdev *out;
     uint32_t hop;
     uint32_t since;
     uint16_t len;
-    uint8_t datagram[1500];
+    uint8_t *datagram;
 } ip_hold[IP_HOLD_SLOTS];
+
+/** Free the datagram held in `h` and free the slot. */
+static void ip_hold_free(struct ip_hold *h)
+{
+    kfree(h->datagram);
+    h->datagram = 0;
+    h->len = 0;
+}
 
 /**
  * Keep the datagram of `len` bytes in `ip_tx_buf` for `hop` on `out`, in a
  * free slot, or in place of the one held longest when none is free. A
  * datagram put out of its slot counts in `arp_stats`: as `res_failed` when
- * it was past its wait, as `unres_discards` when it was not.
+ * it was past its wait, as `unres_discards` when it was not. A datagram no
+ * memory holds is dropped, as a send promises no delivery.
  */
 static void ip_hold_put(struct netdev *out, uint32_t hop, uint16_t len)
 {
+    uint8_t *copy = kmalloc(len);
+
     struct ip_hold *h = &ip_hold[0];
     int i;
 
@@ -207,11 +229,17 @@ static void ip_hold_put(struct netdev *out, uint32_t hop, uint16_t len)
     } else if (h->len != 0) {
         arp_stats.unres_discards++;
     }
+    ip_hold_free(h);
+    if (!copy) {
+        net_mib.ip_out_discards++;
+        return;
+    }
+    k_memcpy(copy, ip_tx_buf, len);
     h->out = out;
     h->hop = hop;
     h->since = (uint32_t)kernel_ticks;
     h->len = len;
-    k_memcpy(h->datagram, ip_tx_buf, len);
+    h->datagram = copy;
 }
 
 void ip_hold_resolved(struct netdev *nd, uint32_t hop, const uint8_t *mac)
@@ -225,7 +253,7 @@ void ip_hold_resolved(struct netdev *nd, uint32_t hop, const uint8_t *mac)
             if (((uint32_t)kernel_ticks - h->since) <= IP_HOLD_TICKS) {
                 ethernet_tx(nd, mac, ETH_TYPE_IP, h->datagram, h->len);
             }
-            h->len = 0;
+            ip_hold_free(h);
         }
     }
 }
@@ -236,7 +264,7 @@ void ip_hold_forget(struct netdev *nd)
 
     for (i = 0; i < IP_HOLD_SLOTS; i++) {
         if (!nd || ip_hold[i].out == nd) {
-            ip_hold[i].len = 0;
+            ip_hold_free(&ip_hold[i]);
         }
     }
 }
@@ -253,10 +281,13 @@ void ip_hold_forget(struct netdev *nd)
  * loses frames and delivers others twice without refusing anything. 64 is
  * more than the 45 full segments of a send window, which a local TCP
  * connection puts in the ring in one system call, before the first
- * acknowledgement can come back. */
+ * acknowledgement can come back. A slot holds a datagram of one frame; a
+ * larger one, up to `lo`'s MTU, is kept on the heap, in `loop_ring_big`,
+ * until it is delivered. */
 #define LOOP_RING_SLOTS 64u
-static uint8_t loop_ring[LOOP_RING_SLOTS][IP_HDR_SIZE + 1500];
-static uint16_t loop_ring_len[LOOP_RING_SLOTS];
+static uint8_t loop_ring[LOOP_RING_SLOTS][ETH_MTU];
+static uint8_t *loop_ring_big[LOOP_RING_SLOTS];
+static uint32_t loop_ring_len[LOOP_RING_SLOTS];
 /* The card an IPv6 datagram is delivered as received by, or 0 for `lo`
  * (`ip_loop_put_on`). */
 static int loop_ring_if[LOOP_RING_SLOTS];
@@ -306,32 +337,52 @@ static struct netdev *ip_broadcast_iface(uint32_t dst)
     return netdev_first();
 }
 
-int ip_loop_put(const uint8_t *dgram, uint16_t total_len)
+int ip_loop_put(const uint8_t *dgram, uint32_t total_len)
 {
-    return ip_loop_put_on(dgram, total_len, 0);
+    return ip_loop_put_parts(dgram, total_len, 0, 0, 0);
 }
 
-/**
- * The ring's slots hold an IPv4 datagram of the largest size `ip_tx_from`
- * sends, which also holds every IPv6 datagram `ip6_tx` sends.
- */
-int ip_loop_put_on(const uint8_t *dgram, uint16_t total_len, int ifindex)
+int ip_loop_put_on(const uint8_t *dgram, uint32_t total_len, int ifindex)
 {
-    uint32_t slot;
+    return ip_loop_put_parts(dgram, total_len, 0, 0, ifindex);
+}
 
-    if (total_len > sizeof(loop_ring[0])) {
+/** Count a datagram the ring had no room for, logging the first. */
+static int loop_drop(void)
+{
+    loop_dropped++;
+    if (!loop_drop_logged) {
+        loop_drop_logged = 1;
+        klog(KLOG_WARN, "ip", "loopback: the ring is full, dropped; further drops are counted");
+    }
+    return -ENOBUFS;
+}
+
+int ip_loop_put_parts(const uint8_t *hdr, uint32_t hlen, const uint8_t *payload, uint32_t plen,
+                      int ifindex)
+{
+    uint32_t slot, total_len = hlen + plen;
+    uint8_t *at;
+
+    if (total_len > NETDEV_LOOPBACK_MTU) {
         return -EMSGSIZE;
     }
     if (loop_head - loop_tail == LOOP_RING_SLOTS) {
-        loop_dropped++;
-        if (!loop_drop_logged) {
-            loop_drop_logged = 1;
-            klog(KLOG_WARN, "ip", "loopback: the ring is full, dropped; further drops are counted");
-        }
-        return -ENOBUFS;
+        return loop_drop();
     }
     slot = loop_head % LOOP_RING_SLOTS;
-    k_memcpy(loop_ring[slot], dgram, total_len);
+    at = loop_ring[slot];
+    if (total_len > sizeof(loop_ring[0])) {
+        at = kmalloc(total_len);
+        if (!at) {
+            return loop_drop();
+        }
+    }
+    loop_ring_big[slot] = at != loop_ring[slot] ? at : 0;
+    k_memcpy(at, hdr, hlen);
+    if (plen) {
+        k_memcpy(at + hlen, payload, plen);
+    }
     loop_ring_len[slot] = total_len;
     loop_ring_if[slot] = ifindex;
     loop_head++;
@@ -345,11 +396,12 @@ int ip_loop_put_on(const uint8_t *dgram, uint16_t total_len, int ifindex)
     return 0;
 }
 
-/** Put the datagram of `total_len` bytes in `ip_tx_buf` on the loopback
- * ring, counting a refusal in `net_mib`. */
-static int loop_put(uint16_t total_len)
+/** Put the datagram whose header is in `hdr` and whose `plen` bytes of
+ * payload are at `payload` on the loopback ring, counting a refusal in
+ * `net_mib`. */
+static int loop_put(const uint8_t *hdr, const uint8_t *payload, uint16_t plen)
 {
-    int r = ip_loop_put(ip_tx_buf, total_len);
+    int r = ip_loop_put_parts(hdr, IP_HDR_SIZE, payload, plen, 0);
 
     if (r != 0) {
         net_mib.ip_out_discards++;
@@ -376,7 +428,101 @@ uint32_t ip_source(uint32_t dst)
 
 int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl)
 {
-    return ip_tx_from(0, dst_ip, proto, payload, plen, ttl);
+    return ip_tx_opts(0, dst_ip, proto, payload, plen, ttl, IP_PMTUDISC_WANT);
+}
+
+int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
+               uint8_t ttl)
+{
+    return ip_tx_opts(src, dst_ip, proto, payload, plen, ttl, IP_PMTUDISC_WANT);
+}
+
+/** Write a 20-byte header into `buf`: a datagram of `total_len` bytes with
+ * the identification `id`, the flags and offset field `frag`, the hop limit
+ * `ttl` and protocol `proto`, from `src` to `dst`, and its checksum. */
+static void ip_header(uint8_t *buf, uint16_t total_len, uint16_t id, uint16_t frag, uint8_t ttl,
+                      uint8_t proto, uint32_t src, uint32_t dst)
+{
+    buf[0] = 0x45; /* version 4, IHL 5 */
+    buf[1] = 0x00; /* DSCP/ECN */
+    write16be(buf + 2, total_len);
+    write16be(buf + 4, id);
+    write16be(buf + 6, frag);
+    buf[8] = ttl;
+    buf[9] = proto;
+    write16be(buf + 10, 0x0000);
+    write32be(buf + 12, src);
+    write32be(buf + 16, dst);
+    write16be(buf + 10, ip_checksum(buf, IP_HDR_SIZE));
+}
+
+/**
+ * Hand the datagram of `len` bytes in `ip_tx_buf` to `out`, toward
+ * `route_ip`: to the all-ones station address for a broadcast to `dst_ip`,
+ * else to the next hop's from ARP. On a miss the datagram is held, and an
+ * ARP request goes out when `ask` is set, which a fragment after the first
+ * leaves to the first's. Returns 0, -EMSGSIZE or -ENOBUFS, as `ip_tx_opts`
+ * says.
+ */
+static int ip_emit(struct netdev *out, uint32_t route_ip, uint32_t dst_ip, uint16_t len, int ask)
+{
+    static const uint8_t all_ones[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    uint8_t dst_mac[6];
+    const uint8_t *to = dst_mac;
+    int sent;
+
+    if (netconf_is_broadcast(dst_ip)) {
+        to = all_ones;
+    } else if (!arp_lookup(out, route_ip, dst_mac)) {
+        ip_hold_put(out, route_ip, len);
+        if (ask) {
+            arp_request(out, route_ip);
+        }
+        return 0;
+    }
+    sent = ethernet_tx(out, to, ETH_TYPE_IP, ip_tx_buf, len);
+    if (sent == ETHERNET_TX_TOOLONG) {
+        return -EMSGSIZE;
+    }
+    if (sent != NETDEV_TX_OK) {
+        net_mib.ip_out_discards++;
+        return -ENOBUFS;
+    }
+    return 0;
+}
+
+/**
+ * Send the `plen` bytes at `payload` in fragments of one frame each by
+ * `out`, as `ip_tx_opts` says: 1480 bytes of payload a fragment, a multiple
+ * of 8, each with MF but the last. The first fragment that cannot leave
+ * ends the send, counted in FragFails.
+ */
+static int ip_fragment(struct netdev *out, uint32_t route_ip, uint32_t src, uint32_t dst_ip,
+                       uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl)
+{
+    uint32_t unit = (ETH_MTU - IP_HDR_SIZE) & ~7u;
+    uint16_t id = ip_id_counter++;
+    uint32_t off;
+    int r;
+
+    for (off = 0; off < plen; off += unit) {
+        uint32_t n = plen - off < unit ? plen - off : unit;
+        uint16_t frag = (uint16_t)(off >> 3);
+
+        if (off + n < plen) {
+            frag |= IP_MF;
+        }
+        ip_header(ip_tx_buf, (uint16_t)(IP_HDR_SIZE + n), id, frag, ttl, proto, src, dst_ip);
+        k_memcpy(ip_tx_buf + IP_HDR_SIZE, payload + off, n);
+        r = ip_emit(out, route_ip, dst_ip, (uint16_t)(IP_HDR_SIZE + n), off == 0);
+        if (r != 0) {
+            net_mib.ip_frag_fails++;
+            return r;
+        }
+        net_mib.ip_frag_creates++;
+    }
+    net_mib.ip_frag_oks++;
+    return 0;
 }
 
 /**
@@ -398,20 +544,20 @@ int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
  * EMSGSIZE, which no retry passes, and a frame the driver refused is
  * ENOBUFS.
  */
-int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
-               uint8_t ttl)
+int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
+               uint8_t ttl, int pmtudisc)
 {
-    uint16_t total_len;
-    uint8_t dst_mac[6];
-    uint32_t route_ip;
+    uint32_t total_len = (uint32_t)IP_HDR_SIZE + plen;
+    uint32_t route_ip, mtu;
+    uint16_t df;
     struct netdev *out;
+    int local;
 
-    if (plen > 1500 - IP_HDR_SIZE) {
+    if (plen > IP_PAYLOAD_MAX) {
         klog(KLOG_WARN, "ip", "tx: payload of %d bytes is too large, refused", (int)plen);
         return -EMSGSIZE;
     }
 
-    total_len = (uint16_t)(IP_HDR_SIZE + plen);
     net_mib.ip_out_requests++;
 
     if (IP_IS_LOOPBACK(dst_ip)) {
@@ -430,62 +576,33 @@ int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
             return -ENETUNREACH;
         }
     }
-
-    ip_tx_buf[0] = 0x45; /* version 4, IHL 5 */
-    ip_tx_buf[1] = 0x00; /* DSCP/ECN */
-    write16be(ip_tx_buf + 2, total_len);
-    write16be(ip_tx_buf + 4, ip_id_counter++);
-    write16be(ip_tx_buf + 6, 0x4000); /* DF set, no fragments */
-    ip_tx_buf[8] = ttl;               /* hop limit */
-    ip_tx_buf[9] = proto;
-    write16be(ip_tx_buf + 10, 0x0000); /* checksum, filled below */
     if (src == 0 || !ip_is_local(src)) {
         src = IP_IS_LOOPBACK(dst_ip) ? IP_LOOPBACK_ADDR
               : out                  ? netdev_source(out, route_ip)
                                      : net_ip_addr;
     }
-    write32be(ip_tx_buf + 12, src);
-    write32be(ip_tx_buf + 16, dst_ip);
-    write16be(ip_tx_buf + 10, ip_checksum(ip_tx_buf, IP_HDR_SIZE));
-
-    k_memcpy(ip_tx_buf + IP_HDR_SIZE, payload, plen);
-
-    if (IP_IS_LOOPBACK(dst_ip) || netdev_owns(dst_ip)) {
-        return loop_put(total_len);
+    local = IP_IS_LOOPBACK(dst_ip) || netdev_owns(dst_ip);
+    if (!local && netconf_is_broadcast(dst_ip) && proto != IP_PROTO_UDP) {
+        klog(KLOG_WARN, "ip", "tx: refused to broadcast a datagram that is not UDP");
+        return -EOPNOTSUPP;
     }
 
-    if (netconf_is_broadcast(dst_ip)) {
-        static const uint8_t all_ones[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-
-        if (proto != IP_PROTO_UDP) {
-            klog(KLOG_WARN, "ip", "tx: refused to broadcast a datagram that is not UDP");
-            return -EOPNOTSUPP;
-        }
-        if (ethernet_tx(out, all_ones, ETH_TYPE_IP, ip_tx_buf, total_len) != NETDEV_TX_OK) {
-            net_mib.ip_out_discards++;
-            return -ENOBUFS;
-        }
-        return 0;
-    }
-
-    if (!arp_lookup(out, route_ip, dst_mac)) {
-        ip_hold_put(out, route_ip, total_len);
-        arp_request(out, route_ip);
-        return 0;
-    }
-
-    {
-        int sent = ethernet_tx(out, dst_mac, ETH_TYPE_IP, ip_tx_buf, total_len);
-
-        if (sent == ETHERNET_TX_TOOLONG) {
+    mtu = local ? (uint32_t)NETDEV_LOOPBACK_MTU : (uint32_t)ETH_MTU;
+    if (total_len > mtu) {
+        if (pmtudisc == IP_PMTUDISC_DO || pmtudisc == IP_PMTUDISC_PROBE) {
+            net_mib.ip_frag_fails++;
             return -EMSGSIZE;
         }
-        if (sent != NETDEV_TX_OK) {
-            net_mib.ip_out_discards++;
-            return -ENOBUFS;
-        }
+        return ip_fragment(out, route_ip, src, dst_ip, proto, payload, plen, ttl);
     }
-    return 0;
+
+    df = pmtudisc == IP_PMTUDISC_DONT || pmtudisc == IP_PMTUDISC_OMIT ? 0 : IP_DF;
+    ip_header(ip_tx_buf, (uint16_t)total_len, ip_id_counter++, df, ttl, proto, src, dst_ip);
+    if (local) {
+        return loop_put(ip_tx_buf, payload, plen);
+    }
+    k_memcpy(ip_tx_buf + IP_HDR_SIZE, payload, plen);
+    return ip_emit(out, route_ip, dst_ip, (uint16_t)total_len, 1);
 }
 
 uint32_t ip_loop_dropped(void)
@@ -554,15 +671,19 @@ void ip_loop_drain_from(int from)
     while (loop_tail != loop_head && budget--) {
         uint32_t slot = loop_tail % LOOP_RING_SLOTS;
 
+        const uint8_t *dg = loop_ring_big[slot] ? loop_ring_big[slot] : loop_ring[slot];
+
         if (netdev_loopback()) {
             netdev_loopback()->rx_packets++;
             netdev_loopback()->rx_bytes += loop_ring_len[slot];
         }
-        if ((loop_ring[slot][0] >> 4) == 6) {
-            ip6_loop_rx(loop_ring_if[slot], loop_ring[slot], loop_ring_len[slot]);
-        } else {
-            ip_rx(loop_ring[slot], loop_ring_len[slot], 1);
+        if ((dg[0] >> 4) == 6) {
+            ip6_loop_rx(loop_ring_if[slot], dg, loop_ring_len[slot]);
+        } else if (loop_ring_len[slot] <= 0xFFFFu) {
+            ip_rx(dg, (uint16_t)loop_ring_len[slot], 1);
         }
+        kfree(loop_ring_big[slot]);
+        loop_ring_big[slot] = 0;
         loop_tail++;
         if (from >= 0 && from < 3) {
             loop_delivered[from]++;

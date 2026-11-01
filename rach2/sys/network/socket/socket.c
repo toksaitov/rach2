@@ -13,6 +13,7 @@
 #include "raw.h"
 #include "../net.h"
 #include "../ip/ip.h"
+#include "../ip6/ip6.h"
 #include "../udp/udp.h"
 #include "../tcp/tcp.h"
 #include "../../io/poll.h"
@@ -92,6 +93,8 @@ struct socket *socket_alloc(int type)
     sock->hops6 = -1;
     sock->mhops6 = 1;
     sock->mloop6 = 1;
+    sock->rcvbuf = SOCK_RCVBUF_DEFAULT;
+    sock->pmtudisc = IP_PMTUDISC_WANT;
     sock->local_ip = sock->remote_ip = net_addr4(0);
     wait_queue_init(&sock->waiters);
 
@@ -170,7 +173,7 @@ int socket_snapshot(int family, int type, struct socket_row **rows)
     const socket_t *s;
     struct socket_row *out;
     uint32_t flags;
-    int n, room, i;
+    int n, room;
 
     *rows = NULL;
     room = socket_count_in(family, type);
@@ -193,10 +196,7 @@ int socket_snapshot(int family, int type, struct socket_row **rows)
         out[n].remote_ip = s->remote_ip;
         out[n].remote_port = s->remote_port;
         out[n].connected = s->connected;
-        out[n].rxq = 0;
-        for (i = 0; i < s->recv_count; i++) {
-            out[n].rxq += s->recv_len[(s->recv_head + i) % SOCK_DGRAM_SLOTS];
-        }
+        out[n].rxq = s->rq.bytes;
         out[n].uid = s->uid;
         out[n].inode = s->inode;
         n++;
@@ -273,6 +273,7 @@ void socket_unref(struct socket *sock)
         }
     }
     sock->in_use = 0;
+    sock_dgq_flush(&sock->rq);
     net_unlock(flags);
     kfree(sock);
 }
@@ -297,41 +298,114 @@ void socket_udp_deliver(struct socket *sock, net_addr_t src_ip, uint16_t src_por
     socket_udp_deliver_info(sock, src_ip, src_port, data, len, NULL);
 }
 
+/**
+ * The record is charged with its datagram, so that many small datagrams
+ * spend the budget by the heap they hold and not by their bytes alone, as
+ * Linux charges a buffer's true size.
+ */
+struct sock_dgram *sock_dgq_put(struct sock_dgq *q, int rcvbuf, const struct sock_dgram *meta,
+                                const uint8_t *data, uint32_t len)
+{
+    struct sock_dgram *d;
+
+    if (q->held > (uint32_t)rcvbuf) {
+        return NULL;
+    }
+    d = kmalloc(sizeof(*d) + len);
+    if (!d) {
+        return NULL;
+    }
+    *d = *meta;
+    d->next = NULL;
+    d->len = len;
+    k_memcpy(SOCK_DGRAM_DATA(d), data, len);
+    if (q->tail) {
+        q->tail->next = d;
+    } else {
+        q->head = d;
+    }
+    q->tail = d;
+    q->count++;
+    q->bytes += len;
+    q->held += (uint32_t)sizeof(*d) + len;
+    return d;
+}
+
+struct sock_dgram *sock_dgq_pop(struct sock_dgq *q)
+{
+    struct sock_dgram *d = q->head;
+
+    if (!d) {
+        return NULL;
+    }
+    q->head = d->next;
+    if (!q->head) {
+        q->tail = NULL;
+    }
+    q->count--;
+    q->bytes -= d->len;
+    q->held -= (uint32_t)sizeof(*d) + d->len;
+    return d;
+}
+
+void sock_dgq_flush(struct sock_dgq *q)
+{
+    struct sock_dgram *d;
+
+    while ((d = sock_dgq_pop(q)) != NULL) {
+        kfree(d);
+    }
+}
+
+int sock_dgq_peek(const struct sock_dgq *q, uint32_t offset, uint8_t *buf, int len)
+{
+    const struct sock_dgram *d = q->head;
+    uint32_t n;
+
+    if (!d) {
+        return -1;
+    }
+    if (len <= 0 || offset >= d->len) {
+        return 0;
+    }
+    n = d->len - offset;
+    if (n > (uint32_t)len) {
+        n = (uint32_t)len;
+    }
+    k_memcpy(buf, (const uint8_t *)(d + 1) + offset, n);
+    return (int)n;
+}
+
 /** A connected socket takes datagrams from its peer and from nobody else,
  * which is what `connect` means for UDP. */
 void socket_udp_deliver_info(struct socket *sock, net_addr_t src_ip, uint16_t src_port,
                              const uint8_t *data, uint16_t len, const struct net_rxinfo *info)
 {
-    uint16_t copy_len = len;
-    int slot;
+    struct sock_dgram meta;
 
     if (sock->connected &&
         (!net_addr_equal(src_ip, sock->remote_ip) || src_port != sock->remote_port)) {
         return;
     }
-    if (sock->recv_count == SOCK_DGRAM_SLOTS) {
+    k_memset(&meta, 0, sizeof(meta));
+    meta.src = src_ip;
+    meta.port = src_port;
+    if (info) {
+        meta.info = *info;
+    } else {
+        meta.info.dst = net_addr4(0);
+        meta.info.hlim = -1;
+        meta.info.tclass = -1;
+    }
+    if (!sock_dgq_put(&sock->rq, sock->rcvbuf, &meta, data, len)) {
+        if (src_ip.family == AF_INET6) {
+            net_mib6.udp6_in_errors++;
+        } else {
+            net_mib.udp_in_errors++;
+            net_mib.udp_rcvbuf_errors++;
+        }
         return;
     }
-
-    if (copy_len > SOCK_RECV_BUF_SIZE) {
-        copy_len = SOCK_RECV_BUF_SIZE;
-    }
-
-    slot = (sock->recv_head + sock->recv_count) % SOCK_DGRAM_SLOTS;
-    k_memcpy(sock->recv_buf[slot], data, copy_len);
-    sock->recv_len[slot] = copy_len;
-    sock->recv_src_ip[slot] = src_ip;
-    sock->recv_src_port[slot] = src_port;
-    if (info) {
-        sock->recv_info[slot] = *info;
-    } else {
-        k_memset(&sock->recv_info[slot], 0, sizeof(sock->recv_info[slot]));
-        sock->recv_info[slot].dst = net_addr4(0);
-        sock->recv_info[slot].hlim = -1;
-        sock->recv_info[slot].tclass = -1;
-    }
-    sock->recv_count++;
-
     wq_wake(&sock->waiters, WQ_DATA);
 }
 
@@ -344,13 +418,7 @@ static int udp_recv_ready(void *arg)
     if (sock->family == AF_NETLINK) {
         return netlink_ready(sock);
     }
-    if (sock->family == AF_PACKET) {
-        return packet_ready(sock);
-    }
-    if (sock->type == SOCK_RAW) {
-        return raw_ready(sock);
-    }
-    return sock->recv_count != 0 || sock->so_error != 0;
+    return sock->rq.count != 0 || sock->so_error != 0;
 }
 
 /** The wait predicate of a stream receive: bytes are buffered, the FIN
@@ -401,9 +469,9 @@ int socket_dgram_wait(struct socket *sock)
     return rc;
 }
 
-/** Occupancy is `recv_count` and not a length, since a datagram of no bytes
- * is a datagram; a caller that read 0 as emptiness would block forever on
- * one. */
+/** Occupancy is the queue's count and not a length, since a datagram of no
+ * bytes is a datagram; a caller that read 0 as emptiness would block forever
+ * on one. */
 int socket_dgram_pending(struct socket *sock)
 {
     int pending;
@@ -412,15 +480,8 @@ int socket_dgram_pending(struct socket *sock)
     if (sock->family == AF_NETLINK) {
         return netlink_pending(sock);
     }
-    if (sock->family == AF_PACKET) {
-        return packet_pending(sock);
-    }
-    if (sock->type == SOCK_RAW) {
-        return raw_pending(sock);
-    }
-
     flags = net_lock();
-    pending = sock->recv_count ? (int)sock->recv_len[sock->recv_head] : -1;
+    pending = sock->rq.head ? (int)sock->rq.head->len : -1;
     net_unlock(flags);
 
     return pending;
@@ -433,7 +494,6 @@ int socket_dgram_pending(struct socket *sock)
 int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
 {
     int copy_len;
-    int head;
     uint32_t flags;
 
     if (len < 0) {
@@ -442,30 +502,8 @@ int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int le
     if (sock->family == AF_NETLINK) {
         return netlink_peek(sock, offset, buf, len);
     }
-    if (sock->family == AF_PACKET) {
-        return packet_peek(sock, offset, buf, len);
-    }
-    if (sock->type == SOCK_RAW) {
-        return raw_peek(sock, offset, buf, len);
-    }
-
     flags = net_lock();
-    if (!sock->recv_count) {
-        net_unlock(flags);
-
-        return -1;
-    }
-    head = sock->recv_head;
-    if (offset >= (uint32_t)sock->recv_len[head]) {
-        net_unlock(flags);
-
-        return 0;
-    }
-    copy_len = (int)((uint32_t)sock->recv_len[head] - offset);
-    if (copy_len > len) {
-        copy_len = len;
-    }
-    k_memcpy(buf, sock->recv_buf[head] + offset, (uint32_t)copy_len);
+    copy_len = sock_dgq_peek(&sock->rq, offset, buf, len);
     net_unlock(flags);
 
     return copy_len;
@@ -473,6 +511,7 @@ int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int le
 
 void socket_dgram_consume(struct socket *sock, net_addr_t *src_ip, uint16_t *src_port)
 {
+    struct sock_dgram *d;
     uint32_t flags;
 
     if (sock->family == AF_PACKET || sock->family == AF_NETLINK) {
@@ -502,20 +541,20 @@ void socket_dgram_consume(struct socket *sock, net_addr_t *src_ip, uint16_t *src
     }
 
     flags = net_lock();
-    if (sock->recv_count == 0) {
+    d = sock_dgq_pop(&sock->rq);
+    if (!d) {
         net_unlock(flags);
         return;
     }
     if (src_ip) {
-        *src_ip = sock->recv_src_ip[sock->recv_head];
+        *src_ip = d->src;
     }
     if (src_port) {
-        *src_port = sock->recv_src_port[sock->recv_head];
+        *src_port = d->port;
     }
-    sock->rx_last = sock->recv_info[sock->recv_head];
-    sock->recv_head = (sock->recv_head + 1) % SOCK_DGRAM_SLOTS;
-    sock->recv_count--;
+    sock->rx_last = d->info;
     net_unlock(flags);
+    kfree(d);
 }
 
 void socket_dgram_sender(struct socket *sock, net_addr_t *src_ip, uint16_t *src_port)
@@ -532,10 +571,10 @@ void socket_dgram_sender(struct socket *sock, net_addr_t *src_ip, uint16_t *src_
             raw_head_info(sock, &sock->rx_last);
         } else {
             flags = net_lock();
-            if (sock->recv_count) {
-                ip = sock->recv_src_ip[sock->recv_head];
-                port = sock->recv_src_port[sock->recv_head];
-                sock->rx_last = sock->recv_info[sock->recv_head];
+            if (sock->rq.head) {
+                ip = sock->rq.head->src;
+                port = sock->rq.head->port;
+                sock->rx_last = sock->rq.head->info;
             }
             net_unlock(flags);
         }
@@ -548,15 +587,24 @@ void socket_dgram_sender(struct socket *sock, net_addr_t *src_ip, uint16_t *src_
     }
 }
 
-/** Take the datagram `socket_dgram_peek` copied, or with `peek` leave it
- * waiting, and report its sender either way. */
-static void socket_dgram_take(struct socket *sock, net_addr_t *src_ip, uint16_t *src_port, int peek)
+/** Take the datagram `socket_dgram_peek` copied, or with SOCK_RECV_PEEK in
+ * `how` leave it waiting, and report its sender either way. Returns what
+ * the receive answers: `copied`, or with SOCK_RECV_TRUNC the datagram's
+ * whole length. The caller holds `net_lock`. */
+static int socket_dgram_take(struct socket *sock, net_addr_t *src_ip, uint16_t *src_port, int how,
+                             int copied)
 {
-    if (peek) {
+    if ((how & SOCK_RECV_TRUNC) && sock->family == AF_NETLINK) {
+        copied = netlink_pending(sock);
+    } else if (how & SOCK_RECV_TRUNC) {
+        copied = sock->rq.head ? (int)sock->rq.head->len : copied;
+    }
+    if (how & SOCK_RECV_PEEK) {
         socket_dgram_sender(sock, src_ip, src_port);
     } else {
         socket_dgram_consume(sock, src_ip, src_port);
     }
+    return copied;
 }
 
 /** The copy and the take run under one hold of `net_lock`, as socket.h
@@ -566,7 +614,7 @@ static void socket_dgram_take(struct socket *sock, net_addr_t *src_ip, uint16_t 
  * sleep too; a datagram another reader took meanwhile sends this one back to
  * wait for the next. */
 int socket_recv(struct socket *sock, uint8_t *buf, int len, net_addr_t *src_ip, uint16_t *src_port,
-                int peek)
+                int how)
 {
     int copy_len;
     int rc;
@@ -587,14 +635,17 @@ int socket_recv(struct socket *sock, uint8_t *buf, int len, net_addr_t *src_ip, 
         }
         net_unlock(flags);
     }
-    socket_dgram_take(sock, src_ip, src_port, peek);
+    if (sock->family == AF_NETLINK) {
+        netlink_note_recv(sock, (uint32_t)len);
+    }
+    copy_len = socket_dgram_take(sock, src_ip, src_port, how, copy_len);
     net_unlock(flags);
 
     return copy_len;
 }
 
 int socket_try_recv(struct socket *sock, uint8_t *buf, int len, net_addr_t *src_ip,
-                    uint16_t *src_port, int peek)
+                    uint16_t *src_port, int how)
 {
     int copy_len;
     uint32_t flags;
@@ -610,7 +661,10 @@ int socket_try_recv(struct socket *sock, uint8_t *buf, int len, net_addr_t *src_
 
         return SOCK_EAGAIN;
     }
-    socket_dgram_take(sock, src_ip, src_port, peek);
+    if (sock->family == AF_NETLINK) {
+        netlink_note_recv(sock, (uint32_t)len);
+    }
+    copy_len = socket_dgram_take(sock, src_ip, src_port, how, copy_len);
     net_unlock(flags);
 
     return copy_len;
@@ -949,10 +1003,7 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
     }
 
     if (sock->type == SOCK_DGRAM || sock->type == SOCK_RAW) {
-        if (sock->family == AF_NETLINK  ? netlink_ready(sock)
-            : sock->family == AF_PACKET ? packet_ready(sock)
-            : sock->type == SOCK_RAW    ? raw_ready(sock)
-                                        : sock->recv_count != 0) {
+        if (sock->family == AF_NETLINK ? netlink_ready(sock) : sock->rq.count != 0) {
             revents |= (short)(events & POLLIN);
         }
         revents |= (short)(events & POLLOUT);

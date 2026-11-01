@@ -57,7 +57,7 @@ uint32_t ip6_path_mtu(const struct netdev *out, const uint8_t *dst)
     if (!out) {
         return 0u;
     }
-    link = out->loopback ? IP6_MTU : nd6_link_mtu(out);
+    link = out->loopback ? (uint32_t)NETDEV_LOOPBACK_MTU : nd6_link_mtu(out);
     e = pmtu6_find(dst, ip6_link_scoped(dst) ? out->index : 0);
     return e && e->mtu < link ? e->mtu : link;
 }

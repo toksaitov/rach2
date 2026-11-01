@@ -56,9 +56,9 @@
 /* The smallest MTU a link carrying IPv6 may have (RFC 8200, section 5). */
 #define IP6_MTU_MIN 1280
 
-/* The largest datagram, header included, that leaves whole: one Ethernet
- * payload, which is also what a slot of the loopback ring holds. A larger
- * one leaves in fragments. */
+/* The largest datagram, header included, that leaves a card whole: one
+ * Ethernet payload. A larger one leaves in fragments. The loopback ring's
+ * MTU is `lo`'s, NETDEV_LOOPBACK_MTU. */
 #define IP6_MTU 1500u
 
 struct netdev;
@@ -212,7 +212,7 @@ int ip6_source(const struct netdev *out, const uint8_t *dst, uint8_t *src);
  * to a group that card is a member of (IP6_TXF_LOOP), which is not judged a
  * spoof for its own source. Called with interrupts off, from the drain.
  */
-void ip6_loop_rx(int ifindex, const uint8_t *data, uint16_t len);
+void ip6_loop_rx(int ifindex, const uint8_t *data, uint32_t len);
 
 /**
  * Check the IPv6 datagram of `len` bytes at `data`, received on `nd`, and
@@ -336,7 +336,7 @@ struct netdev *ip6_route_find(const uint8_t *dst, int ifindex, uint8_t *via);
 /**
  * The most bytes, IPv6 header included, a datagram to `dst` by `out` may
  * have without being fragmented: the link's MTU, `nd6_link_mtu` for a card
- * and 1500 bytes for the loopback ring, or less when a Packet Too Big has
+ * and NETDEV_LOOPBACK_MTU for the loopback ring, or less when a Packet Too Big has
  * lowered the destination's within the last ten minutes
  * (`ip6_pmtu_lower`); 0 for a NULL `out`. A link-scoped destination is
  * told apart by `out`.

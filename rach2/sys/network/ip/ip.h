@@ -5,11 +5,13 @@
 
 /*
  * ip: the IPv4 layer, which every ICMP, UDP and TCP message travels in. A
- * received datagram is checked and given to its protocol. A datagram sent
- * has a 20-byte header with no options and DF set, and leaves by its
- * route, by broadcast, or round the loopback ring when it is addressed to
- * this machine. A fragment is dropped, since there is no reassembly, and
- * none is made. Addresses are host-order uint32_t values (10.0.2.15 is
+ * received datagram is checked, reassembled when it came in fragments
+ * (ipfrag.c), and given to its protocol. A datagram sent has a 20-byte
+ * header with no options, and leaves by its route, by broadcast, or round
+ * the loopback ring when it is addressed to this machine. One within its
+ * route's MTU carries DF, as Linux's path MTU discovery sends it; a larger
+ * one leaves in fragments, unless its socket asked for DF with
+ * IP_MTU_DISCOVER. Addresses are host-order uint32_t values (10.0.2.15 is
  * 0x0A00020F), converted at the header.
  */
 
@@ -20,6 +22,27 @@
 
 /* Fixed IPv4 header size (IHL = 5 words). */
 #define IP_HDR_SIZE 20
+
+/* The largest payload a datagram's 16-bit total length leaves room for
+ * after the header. */
+#define IP_PAYLOAD_MAX (65535 - IP_HDR_SIZE)
+
+/* The flags and offset field: DF, MF, and the offset in 8-byte units. */
+#define IP_DF          0x4000u
+#define IP_MF          0x2000u
+#define IP_FRAG_OFFSET 0x1FFFu
+
+/* IP_MTU_DISCOVER's values, Linux's: never set DF; set it on a datagram
+ * within the route's MTU and fragment a larger one, the default; refuse a
+ * larger one with EMSGSIZE (DO and PROBE); fragment by the interface's MTU;
+ * and fragment with DF never set. With one MTU for each route, INTERFACE is
+ * WANT here. */
+#define IP_PMTUDISC_DONT      0
+#define IP_PMTUDISC_WANT      1
+#define IP_PMTUDISC_DO        2
+#define IP_PMTUDISC_PROBE     3
+#define IP_PMTUDISC_INTERFACE 4
+#define IP_PMTUDISC_OMIT      5
 
 /* The loopback network, 127/8, and the address a datagram to it leaves
  * from. Its datagrams never reach a card: they go round the loopback ring,
@@ -43,16 +66,13 @@ uint32_t ip_source(uint32_t dst);
  * ring.
  *
  * A datagram with a bad version, header length, total length or header
- * checksum is dropped, and so is every fragment and one addressed to
- * neither an address of an interface nor a broadcast; an interface with no
- * address holds none, so 0.0.0.0 is nobody's. Options are skipped. A
- * datagram from the wire is also dropped when it is addressed to 127/8, as
- * Linux drops it, or its source is an address of this machine or in 127/8.
- * A broadcast is given to UDP alone. An accepted datagram is offered whole
- * to the raw sockets of its protocol (`raw_rx`), and its payload, to the
- * datagram's total length, given to `icmp_rx`, `udp_rx` or `tcp_rx`; a
- * unicast UDP datagram for a port no socket has is answered with a port
- * unreachable (`icmp_unreachable`).
+ * checksum is dropped, and so is one addressed to neither an address of an
+ * interface nor a broadcast; an interface with no address holds none, so
+ * 0.0.0.0 is nobody's. Options are skipped. A datagram from the wire is
+ * also dropped when it is addressed to 127/8, as Linux drops it, or its
+ * source is an address of this machine or in 127/8. A broadcast is given to
+ * UDP alone. A fragment goes to `ip_frag_input`, which gives the datagram it
+ * completes to `ip_deliver`, as an accepted whole datagram is given.
  *
  * Each datagram counts in `net_mib` as received, and a dropped one by its
  * reason; a multicast datagram, for a group no socket here can join, counts
@@ -61,6 +81,54 @@ uint32_t ip_source(uint32_t dst);
  */
 void ip_rx(const uint8_t *data, uint16_t len, int from_loopback);
 
+/**
+ * Give the accepted, whole datagram of `total_len` bytes at `data` to its
+ * protocol: offered whole to the raw sockets of its protocol (`raw_rx`),
+ * and its payload given to `icmp_rx`, `udp_rx` or `tcp_rx`; a unicast UDP
+ * datagram for a port no socket has, one not sent to a broadcast as
+ * `to_broadcast` says, is answered with a port unreachable
+ * (`icmp_unreachable`). Called with interrupts off, from `ip_rx` and
+ * `ip_frag_input`.
+ */
+void ip_deliver(const uint8_t *data, uint16_t total_len, int to_broadcast);
+
+/*
+ * Reassembly (ipfrag.c), as RFC 791 has it and Linux keeps it. A fragment
+ * is kept in its datagram's queue, keyed by its source, destination,
+ * protocol and identification, until every byte of the datagram has come,
+ * when the datagram, its header the first fragment's with the total length
+ * set and the fragment fields cleared, goes to `ip_deliver`. A datagram is
+ * given up when two fragments overlap, as Linux gives one up, when its
+ * fragments disagree about its end or it would pass 65535 bytes, past
+ * IP_FRAG_PIECES fragments, and IP_FRAG_TIMEOUT_SECONDS after its first
+ * fragment came; an exact duplicate is dropped alone. At most IP_FRAG_QUEUES
+ * datagrams are reassembled at once, in at most IP_FRAG_MEM_MAX bytes of
+ * the heap, Linux's `ipfrag_high_thresh`; a new one takes the place of the
+ * one that would time out first. Each fragment counts in ReasmReqds, each
+ * datagram made in ReasmOKs, and each given up in ReasmFails.
+ */
+#define IP_FRAG_QUEUES          16
+#define IP_FRAG_PIECES          192
+#define IP_FRAG_MEM_MAX         (4u * 1024u * 1024u)
+#define IP_FRAG_TIMEOUT_SECONDS 30u
+
+/**
+ * Take the fragment of `len` bytes at `data`, whose header of `hdr_len`
+ * bytes ip_rx has checked, sent to a broadcast when `to_broadcast` is set.
+ * A fragment other than the last whose data is not a multiple of 8 bytes,
+ * or one that reaches past 65535 bytes, is dropped as a header error.
+ * Called with interrupts off, from `ip_rx`.
+ */
+void ip_frag_input(const uint8_t *data, uint16_t len, uint16_t hdr_len, int to_broadcast);
+
+/**
+ * Give up the reassemblies whose time is out, each counted in ReasmTimeout
+ * and ReasmFails; one whose first fragment came is answered with a time
+ * exceeded of code 1 (`icmp_time_exceeded`), as Linux answers it. Called
+ * once a tick, with interrupts off, from the timer interrupt.
+ */
+void ip_frag_tick(void);
+
 /* The hop limit a datagram leaves with unless the sender asked for another.
  * A socket may set its own with IP_TTL, which is what traceroute is. */
 #define IP_TTL_DEFAULT 64
@@ -68,37 +136,45 @@ void ip_rx(const uint8_t *data, uint16_t len, int from_loopback);
 /** `ip_tx_from` from the source `ip_source` chooses. */
 int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl);
 
+/** `ip_tx_opts` under IP_PMTUDISC_WANT, Linux's default. */
+int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
+               uint8_t ttl);
+
 /**
  * Send the `plen` bytes at `payload` as a datagram of protocol `proto` from
- * `src` to `dst_ip`, with the hop limit `ttl`. `src` is one of this
- * machine's addresses, which a connection or a bound socket keeps; 0, or an
- * address that is not this machine's (`ip_is_local`), takes the one
- * `ip_source` chooses.
+ * `src` to `dst_ip`, with the hop limit `ttl`, under `pmtudisc`, an
+ * IP_PMTUDISC_* value. `src` is one of this machine's addresses, which a
+ * connection or a bound socket keeps; 0, or an address that is not this
+ * machine's (`ip_is_local`), takes the one `ip_source` chooses.
  *
  * A datagram to 127/8 or to an address an interface holds goes onto the
- * loopback ring, which `ip_loop_drain_from` delivers later. A broadcast, to
+ * loopback ring, whose MTU is `lo`'s, 65536 bytes, so that it never needs
+ * fragments; `ip_loop_drain_from` delivers it later. A broadcast, to
  * 255.255.255.255 or a subnet's broadcast address, goes to the all-ones
  * station address by the card on that subnet, or the first card for
  * 255.255.255.255. Any other datagram leaves by the route `netdev_route`
  * chooses, to the next hop's station address from ARP; on a miss an ARP
- * request goes out and the datagram waits for the reply in one of four
- * slots, for at most three seconds (`IP_HOLD_SLOTS` and `IP_HOLD_TICKS` in
- * ip.c).
+ * request goes out and the datagram waits for the reply in one of
+ * IP_HOLD_SLOTS slots, for at most three seconds (ip.c). A datagram past a
+ * card's MTU, ETH_MTU, leaves in fragments, each a multiple of 8 bytes of
+ * the payload but the last, all with one identification and none with DF,
+ * counted in FragOKs and FragCreates.
  *
  * Returns 0 when the datagram left, went onto the loopback ring, or waits
  * for ARP: a datagram send promises no delivery. Returns a negative errno
- * for what the caller must hear about: -EMSGSIZE for a payload above 1480
- * bytes (1500 less the IPv4 header), -ENETUNREACH for a destination with no
- * route, -ENOBUFS when the loopback ring is full or the driver did not take
- * the frame, -EOPNOTSUPP for a broadcast of anything but UDP, and -EINVAL
- * for a datagram from 127/8 to an address that is not this machine's, which
- * no card may carry.
+ * for what the caller must hear about: -EMSGSIZE for a payload past
+ * IP_PAYLOAD_MAX, or past the MTU under IP_PMTUDISC_DO or PROBE, counted
+ * in FragFails; -ENETUNREACH for a destination with no route, -ENOBUFS when
+ * the loopback ring is full, no memory holds a datagram past one slot of
+ * it, or the driver did not take a frame; -EOPNOTSUPP for a broadcast of
+ * anything but UDP; and -EINVAL for a datagram from 127/8 to an address
+ * that is not this machine's, which no card may carry.
  *
- * The datagram is built in a buffer of this file's, so the caller has
+ * A datagram is built in a buffer of this file's, so the caller has
  * interrupts off (`net_lock` in a system call).
  */
-int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
-               uint8_t ttl);
+int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
+               uint8_t ttl, int pmtudisc);
 
 /* The interface a held datagram leaves by. */
 struct netdev;
@@ -118,16 +194,23 @@ void ip_hold_forget(struct netdev *nd);
 
 /**
  * Put the datagram of `total_len` bytes at `dgram`, IPv4 or IPv6, on the
- * loopback ring, counted as `lo`'s traffic, as Linux counts it. Returns 0,
- * -EMSGSIZE past the 1520 bytes of a slot, or -ENOBUFS when the ring is
- * full, which is counted in `ip_loop_dropped` and logged once. Called with
- * interrupts off.
+ * loopback ring, counted as `lo`'s traffic, as Linux counts it. A datagram
+ * past a slot's 1520 bytes is copied to the heap. Returns 0, -EMSGSIZE past
+ * `lo`'s MTU, NETDEV_LOOPBACK_MTU, or -ENOBUFS when the ring is full or no
+ * memory holds the datagram, which is counted in `ip_loop_dropped` and
+ * logged once. Called with interrupts off.
  */
-int ip_loop_put(const uint8_t *dgram, uint16_t total_len);
+int ip_loop_put(const uint8_t *dgram, uint32_t total_len);
 
 /** `ip_loop_put` of an IPv6 datagram that the drain gives `ip6_loop_rx` as
  * received by the card of index `ifindex`, or as `lo`'s for 0. */
-int ip_loop_put_on(const uint8_t *dgram, uint16_t total_len, int ifindex);
+int ip_loop_put_on(const uint8_t *dgram, uint32_t total_len, int ifindex);
+
+/** `ip_loop_put_on` of the datagram whose first `hlen` bytes, its headers,
+ * are at `hdr` and the rest, `plen` bytes, at `payload`, so that a sender
+ * need not gather a datagram past its own buffer first. */
+int ip_loop_put_parts(const uint8_t *hdr, uint32_t hlen, const uint8_t *payload, uint32_t plen,
+                      int ifindex);
 
 /** `ip_loop_drain_from` for the tick, which calls it once a tick from the
  * timer interrupt. */

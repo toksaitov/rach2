@@ -306,6 +306,7 @@ static void timer_handler(isr_params_t *params)
     hda_tick();
     netdev_poll();
     tcp_tick();
+    ip_frag_tick();
     ip6_tick();
     ip_loop_drain();
     usb_poll();

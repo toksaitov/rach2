@@ -198,14 +198,14 @@ static int destined_here(struct netdev *nd, const uint8_t *dst)
  * `ip6_loop_rx` gives as the card's, and whose source is this machine's by
  * design.
  */
-static void ip6_input(struct netdev *nd, const uint8_t *data, uint16_t len, int looped);
+static void ip6_input(struct netdev *nd, const uint8_t *data, uint32_t len, int looped);
 
 void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {
     ip6_input(nd, data, len, 0);
 }
 
-void ip6_loop_rx(int ifindex, const uint8_t *data, uint16_t len)
+void ip6_loop_rx(int ifindex, const uint8_t *data, uint32_t len)
 {
     struct netdev *nd = ifindex > 0 ? netdev_at(ifindex - 1) : 0;
 
@@ -223,7 +223,7 @@ void ip6_loop_rx(int ifindex, const uint8_t *data, uint16_t len)
  * What lies past the payload length, an Ethernet frame's padding, is not
  * the datagram's.
  */
-static void ip6_input(struct netdev *nd, const uint8_t *data, uint16_t len, int looped)
+static void ip6_input(struct netdev *nd, const uint8_t *data, uint32_t len, int looped)
 {
     const uint8_t *src = data + 8;
     const uint8_t *dst = data + 24;
@@ -382,7 +382,7 @@ int ip6_emit(struct netdev *out, const uint8_t *via, const uint8_t *buf, uint32_
     int sent;
 
     if (out->loopback) {
-        if (ip_loop_put(buf, (uint16_t)len) != 0) {
+        if (ip_loop_put(buf, len) != 0) {
             net_mib6.ip6_out_discards++;
             return -ENOBUFS;
         }
@@ -432,7 +432,9 @@ int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, cons
  * reach only this machine, which no card may carry. A unicast next hop is
  * the neighbour cache's (`nd6_output`), which may hold the datagram while
  * it asks. A datagram with a router alert is MLD's, small enough never to
- * be fragmented.
+ * be fragmented. A datagram past this file's buffer can only be one for
+ * the loopback ring, whose MTU is `lo`'s, and goes onto the ring in two
+ * parts, the header from the buffer and the payload where it lies.
  */
 int ip6_tx_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh,
                 const uint8_t *payload, uint16_t plen, uint8_t hlim, int opts)
@@ -493,6 +495,16 @@ int ip6_tx_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh,
     }
     ip6_header(ip6_tx_buf, from, dst, ext ? IP6_NH_HOPOPTS : nh, (uint16_t)(ext + plen), hlim);
     ip6_set_class(ip6_tx_buf, IP6_TXF_CLASS_OF(opts));
+    if (total > sizeof(ip6_tx_buf)) {
+        if (ext || !out->loopback) {
+            return -EMSGSIZE;
+        }
+        if (ip_loop_put_parts(ip6_tx_buf, IP6_HDR_SIZE, payload, plen, 0) != 0) {
+            net_mib6.ip6_out_discards++;
+            return -ENOBUFS;
+        }
+        return 0;
+    }
     if (ext) {
         static const uint8_t alert[IP6_RTALERT_LEN] = {0, 0, 5, 2, 0, 0, 1, 0};
 
@@ -504,7 +516,7 @@ int ip6_tx_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh,
         netdev_member6(out, dst)) {
         /* The copy is this machine's to receive whether or not the wire
          * takes the original, as Linux loops it back before the card. */
-        if (ip_loop_put_on(ip6_tx_buf, (uint16_t)total, out->index) != 0) {
+        if (ip_loop_put_on(ip6_tx_buf, total, out->index) != 0) {
             net_mib6.ip6_out_discards++;
         }
     }

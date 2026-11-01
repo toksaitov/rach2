@@ -15,33 +15,14 @@
 #include "../../serial.h"
 #include "../../proc/wait_queue.h"
 
-/* Policy: each socket's queue is eight datagrams of one MTU, twelve
-   kilobytes from the heap for the life of the binding, enough to hold a
-   reply behind a burst of other people's frames while the client is being
-   scheduled. */
-#define PACKET_QUEUE_SLOTS 8
-#define PACKET_SLOT_SIZE   1500
-
-struct packet_queue {
-    uint8_t buf[PACKET_QUEUE_SLOTS][PACKET_SLOT_SIZE];
-    uint16_t len[PACKET_QUEUE_SLOTS];
-    /* The link address each datagram came from, kept beside it: the sender's
-       MAC, and whether the frame was addressed to this machine, to everyone,
-       or to a group. A reader is given this with the datagram, which is what
-       `arping` decides on. */
-    uint8_t src[PACKET_QUEUE_SLOTS][6];
-    uint8_t pkttype[PACKET_QUEUE_SLOTS];
-    uint16_t proto[PACKET_QUEUE_SLOTS];
-    /* The interface each datagram arrived on. A socket bound to no particular
-       one is offered them all, and a reader is told which. */
-    uint8_t ifindex[PACKET_QUEUE_SLOTS];
-    int head;  /* the next datagram to be read */
-    int count; /* how many are waiting */
+/* What a binding keeps beside its socket's queue (`sock_dgq`): whether the
+   budget has dropped a frame, which is logged once, and the link address of
+   the datagram most recently taken or peeked at, since a receive reports
+   the sender after the datagram it belongs to has gone; `have_last` is 0
+   until there is one. */
+struct packet_last {
     int dropped;
-    int reported; /* whether a drop has been logged */
-    /* The address of the datagram most recently taken or peeked at, since a
-       receive reports the sender after the datagram it belongs to has gone;
-       `have_last` is 0 until there is one. */
+    int reported;
     uint8_t last_src[6];
     uint8_t last_pkttype;
     uint16_t last_proto;
@@ -49,8 +30,8 @@ struct packet_queue {
     int have_last;
 };
 
-/* A bound socket and its queue, one record from the heap per binding, on
-   a list the receive path walks. */
+/* A bound socket and what it took last, one record from the heap per
+   binding, on a list the receive path walks. */
 struct packet_binding {
     struct packet_binding *next;
     struct socket *sock;
@@ -58,7 +39,7 @@ struct packet_binding {
        machine with two cards is on two networks, and a client watching for a
        lease on one must not be handed the other's traffic. */
     int ifindex;
-    struct packet_queue q;
+    struct packet_last q;
 };
 
 static struct packet_binding *packets;
@@ -76,8 +57,8 @@ static struct packet_binding *binding_of(struct socket *sock)
     return NULL;
 }
 
-/** The queue belonging to `sock`, or NULL if it is not bound. */
-static struct packet_queue *queue_of(struct socket *sock)
+/** What the binding of `sock` keeps, or NULL if it is not bound. */
+static struct packet_last *queue_of(struct socket *sock)
 {
     struct packet_binding *b = binding_of(sock);
 
@@ -107,8 +88,7 @@ int packet_bind(struct socket *sock, int ifindex)
     b = binding_of(sock);
     if (b) {
         if (b->ifindex != ifindex) {
-            b->q.count = 0;
-            b->q.head = 0;
+            sock_dgq_flush(&sock->rq);
             b->q.have_last = 0;
         }
         b->ifindex = ifindex;
@@ -139,6 +119,7 @@ void packet_unbind(struct socket *sock)
             struct packet_binding *b = *link;
 
             *link = b->next;
+            sock_dgq_flush(&sock->rq);
             kfree(b);
             break;
         }
@@ -151,7 +132,7 @@ int packet_snapshot(struct packet_row **rows)
     const struct packet_binding *b;
     struct packet_row *out;
     uint32_t flags;
-    int n, room, i;
+    int n, room;
 
     *rows = NULL;
     if (!net_ns_seen()) {
@@ -176,10 +157,7 @@ int packet_snapshot(struct packet_row **rows)
         out[n].refs = b->sock->refcount;
         out[n].protocol = b->sock->protocol;
         out[n].ifindex = b->ifindex;
-        out[n].rmem = 0;
-        for (i = 0; i < b->q.count; i++) {
-            out[n].rmem += b->q.len[(b->q.head + i) % PACKET_QUEUE_SLOTS];
-        }
+        out[n].rmem = b->sock->rq.bytes;
         out[n].uid = b->sock->uid;
         out[n].inode = b->sock->inode;
         n++;
@@ -222,158 +200,106 @@ static uint8_t packet_type_of(const struct netdev *nd, const uint8_t *dst)
 
 void packet_flush(struct socket *sock)
 {
-    struct packet_queue *q;
+    struct packet_last *q;
     uint32_t flags;
 
     flags = net_lock();
     q = queue_of(sock);
     if (q) {
-        q->count = 0;
-        q->head = 0;
+        sock_dgq_flush(&sock->rq);
         q->have_last = 0;
     }
     net_unlock(flags);
 }
 
 /** The receive path runs with interrupts off, so the list and the queues
- * are touched without taking `net_lock`. A full queue drops the
- * newest frame and keeps the unread ones in order. */
+ * are touched without taking `net_lock`. A frame past the queue's budget is
+ * dropped, the newest, keeping the unread ones in order. */
 void packet_rx(struct netdev *nd, uint16_t ethertype, const uint8_t *frame, uint16_t frame_len)
 {
-    const uint8_t *payload;
-    uint16_t len, copy_len;
+    struct sock_dgram meta;
     struct packet_binding *b;
     int arrived_on = nd ? nd->index : 0;
 
     if (frame_len < ETH_HDR_SIZE) {
         return;
     }
-    payload = frame + ETH_HDR_SIZE;
-    len = (uint16_t)(frame_len - ETH_HDR_SIZE);
-    copy_len = len > PACKET_SLOT_SIZE ? PACKET_SLOT_SIZE : len;
+    k_memset(&meta, 0, sizeof(meta));
+    meta.src = net_addr4(0);
+    meta.info.dst = net_addr4(0);
+    meta.info.ifindex = (uint32_t)arrived_on;
+    meta.info.hlim = -1;
+    meta.info.tclass = -1;
+    k_memcpy(meta.lladdr, frame + 6, 6);
+    meta.pkttype = packet_type_of(nd, frame);
+    meta.llproto = ethertype;
 
     for (b = packets; b; b = b->next) {
-        struct packet_queue *q = &b->q;
-        int slot;
-
         if (b->sock->protocol != ethertype) {
             continue;
         }
         if (b->ifindex != 0 && b->ifindex != arrived_on) {
             continue;
         }
-        if (q->count == PACKET_QUEUE_SLOTS) {
-            q->dropped++;
-            if (!q->reported) {
-                q->reported = 1;
+        if (!sock_dgq_put(&b->sock->rq, b->sock->rcvbuf, &meta, frame + ETH_HDR_SIZE,
+                          (uint32_t)(frame_len - ETH_HDR_SIZE))) {
+            b->q.dropped++;
+            if (!b->q.reported) {
+                b->q.reported = 1;
                 klog(KLOG_WARN, "packet",
                      "rx: the queue is full, dropping frames on a bound socket");
             }
             continue;
         }
-        slot = (q->head + q->count) % PACKET_QUEUE_SLOTS;
-        k_memcpy(q->buf[slot], payload, copy_len);
-        q->len[slot] = copy_len;
-        k_memcpy(q->src[slot], frame + 6, 6);
-        q->pkttype[slot] = packet_type_of(nd, frame);
-        q->proto[slot] = ethertype;
-        q->ifindex[slot] = (uint8_t)arrived_on;
-        q->count++;
         wq_wake(&b->sock->waiters, WQ_DATA);
     }
 }
 
-int packet_ready(struct socket *sock)
+/** Keep the datagram `d`'s address as the one `packet_last_addr` reports;
+ * the caller holds `net_lock`. */
+static void keep_addr(struct packet_last *q, const struct sock_dgram *d)
 {
-    struct packet_queue *q = queue_of(sock);
-
-    return q && q->count > 0;
-}
-
-int packet_pending(struct socket *sock)
-{
-    struct packet_queue *q;
-    uint32_t flags;
-    int pending;
-
-    flags = net_lock();
-    q = queue_of(sock);
-    pending = (q && q->count > 0) ? (int)q->len[q->head] : -1;
-    net_unlock(flags);
-    return pending;
-}
-
-int packet_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
-{
-    struct packet_queue *q;
-    uint32_t flags;
-    int copy_len;
-
-    if (len < 0) {
-        return 0;
-    }
-
-    flags = net_lock();
-    q = queue_of(sock);
-    if (!q || q->count == 0) {
-        net_unlock(flags);
-        return -1;
-    }
-    if (offset >= (uint32_t)q->len[q->head]) {
-        net_unlock(flags);
-        return 0;
-    }
-    copy_len = (int)((uint32_t)q->len[q->head] - offset);
-    if (copy_len > len) {
-        copy_len = len;
-    }
-    k_memcpy(buf, q->buf[q->head] + offset, (uint32_t)copy_len);
-    net_unlock(flags);
-    return copy_len;
-}
-
-/** Keep the waiting datagram's address as the one `packet_last_addr`
- * reports; the caller holds `net_lock` and has found a datagram waiting. */
-static void keep_head_addr(struct packet_queue *q)
-{
-    k_memcpy(q->last_src, q->src[q->head], 6);
-    q->last_pkttype = q->pkttype[q->head];
-    q->last_proto = q->proto[q->head];
-    q->last_ifindex = q->ifindex[q->head];
+    k_memcpy(q->last_src, d->lladdr, 6);
+    q->last_pkttype = d->pkttype;
+    q->last_proto = d->llproto;
+    q->last_ifindex = (uint8_t)d->info.ifindex;
     q->have_last = 1;
 }
 
 void packet_consume(struct socket *sock)
 {
-    struct packet_queue *q;
+    struct packet_last *q;
+    struct sock_dgram *d = NULL;
     uint32_t flags;
 
     flags = net_lock();
     q = queue_of(sock);
-    if (q && q->count > 0) {
-        keep_head_addr(q);
-        q->head = (q->head + 1) % PACKET_QUEUE_SLOTS;
-        q->count--;
+    if (q) {
+        d = sock_dgq_pop(&sock->rq);
+        if (d) {
+            keep_addr(q, d);
+        }
     }
     net_unlock(flags);
+    kfree(d);
 }
 
 void packet_note_head(struct socket *sock)
 {
-    struct packet_queue *q;
+    struct packet_last *q;
     uint32_t flags;
 
     flags = net_lock();
     q = queue_of(sock);
-    if (q && q->count > 0) {
-        keep_head_addr(q);
+    if (q && sock->rq.head) {
+        keep_addr(q, sock->rq.head);
     }
     net_unlock(flags);
 }
 
 int packet_last_addr(struct socket *sock, uint8_t *sll)
 {
-    struct packet_queue *q;
+    struct packet_last *q;
     uint32_t flags;
     int i;
 
@@ -408,7 +334,7 @@ int packet_send(struct socket *sock, int ifindex, const uint8_t *dst_mac, uint16
     struct packet_binding *b;
     struct netdev *nd;
 
-    if (len == 0 || len > 1500) {
+    if (len == 0 || len > ETH_MTU) {
         return -EMSGSIZE;
     }
     if (ethertype != ETH_TYPE_IP && ethertype != ETH_TYPE_ARP && ethertype != ETH_TYPE_IPV6) {

@@ -6,13 +6,18 @@
 
 /*
  * udp: the User Datagram Protocol. A datagram sent gets an 8-byte header and
- * goes to `ip_tx_from`; one received comes from `ip_rx` and is given to the
- * socket bound to its address and destination port. IPv4 sends checksum 0
- * and does not check one received; IPv6 sends and verifies its mandatory
- * pseudo-header checksum.
+ * goes to `ip_tx_opts`; one received comes from `ip_rx` and is given to the
+ * socket bound to its address and destination port. Both families send the
+ * pseudo-header checksum; IPv4 checks one received unless it is 0, which
+ * says the sender gave none, and IPv6 requires it.
  */
 
 #define UDP_HDR_SIZE 8
+
+/* The largest payload over each family: the largest IPv4 datagram less its
+ * header and UDP's, and the largest IPv6 payload less UDP's header. */
+#define UDP_PAYLOAD_MAX  (65535 - 20 - UDP_HDR_SIZE)
+#define UDP6_PAYLOAD_MAX (65535 - UDP_HDR_SIZE)
 
 struct socket;
 struct net_txopt;
@@ -52,12 +57,16 @@ void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port);
  * which must be an address of this machine, an interface, which must agree
  * with the address's scope, a hop limit and a class.
  *
- * Returns what `ip_tx_from` or `ip6_tx_opts` returned: 0 when the datagram
+ * Over IPv4 the datagram leaves under the socket's IP_MTU_DISCOVER
+ * (`pmtudisc`): in fragments past the route's MTU, or refused.
+ *
+ * Returns what `ip_tx_opts` or `ip6_tx_opts` returned: 0 when the datagram
  * left, went onto the loopback ring or waits for ARP, and a negative errno
  * for what the caller must hear about, -EINVAL among them for a source of
  * `opt` that is not this machine's or an interface that disagrees. A
- * payload past 1472 bytes is -EMSGSIZE: one past 1500, this layer's buffer,
- * is refused here, and a smaller one by IP. Takes `net_lock` itself.
+ * payload past UDP_PAYLOAD_MAX, or UDP6_PAYLOAD_MAX over IPv6, is
+ * -EMSGSIZE, and -ENOMEM is one past a frame that no block holds. Takes
+ * `net_lock` itself.
  */
 int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, const uint8_t *payload,
            uint16_t plen, const struct net_txopt *opt);

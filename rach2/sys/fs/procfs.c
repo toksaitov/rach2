@@ -3859,7 +3859,8 @@ static int procfs_gen_netsnmp(struct procfs_text *t)
 
     tcp_count(&tc);
     ap_str(t, "Ip: Forwarding DefaultTTL InReceives InHdrErrors InAddrErrors InUnknownProtos"
-              " InDiscards InDelivers OutRequests OutDiscards OutNoRoutes\nIp: 2");
+              " InDiscards InDelivers OutRequests OutDiscards OutNoRoutes ReasmTimeout ReasmReqds"
+              " ReasmOKs ReasmFails FragOKs FragFails FragCreates\nIp: 2");
     ap_mib(t, IP_TTL_DEFAULT);
     ap_mib(t, m->ip_in_receives);
     ap_mib(t, m->ip_in_hdr_errors);
@@ -3870,6 +3871,13 @@ static int procfs_gen_netsnmp(struct procfs_text *t)
     ap_mib(t, m->ip_out_requests);
     ap_mib(t, m->ip_out_discards);
     ap_mib(t, m->ip_out_no_routes);
+    ap_mib(t, m->ip_reasm_timeout);
+    ap_mib(t, m->ip_reasm_reqds);
+    ap_mib(t, m->ip_reasm_oks);
+    ap_mib(t, m->ip_reasm_fails);
+    ap_mib(t, m->ip_frag_oks);
+    ap_mib(t, m->ip_frag_fails);
+    ap_mib(t, m->ip_frag_creates);
     ap_str(t, "\nIcmp: InMsgs InErrors InDestUnreachs InEchos InEchoReps OutMsgs"
               " OutDestUnreachs OutEchos OutEchoReps\nIcmp:");
     ap_mib(t, m->icmp_in_msgs);
@@ -3896,11 +3904,12 @@ static int procfs_gen_netsnmp(struct procfs_text *t)
     ap_mib(t, m->tcp_retrans_segs);
     ap_mib(t, m->tcp_in_errs);
     ap_mib(t, m->tcp_out_rsts);
-    ap_str(t, "\nUdp: InDatagrams NoPorts InErrors OutDatagrams\nUdp:");
+    ap_str(t, "\nUdp: InDatagrams NoPorts InErrors OutDatagrams RcvbufErrors\nUdp:");
     ap_mib(t, m->udp_in_datagrams);
     ap_mib(t, m->udp_no_ports);
     ap_mib(t, m->udp_in_errors);
     ap_mib(t, m->udp_out_datagrams);
+    ap_mib(t, m->udp_rcvbuf_errors);
     ap_ch(t, '\n');
     return t->len;
 }
