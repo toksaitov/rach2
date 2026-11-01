@@ -445,15 +445,29 @@ uint64_t ath9k_mac_get_tsf(struct ath9k *ah)
     return (uint64_t)upper << 32 | lower;
 }
 
+/**
+ * `n` modulo `d`, which is not 0, a bit at a time, since the freestanding
+ * kernel has no `__umoddi3` and tick_div takes no divisor past 65535.
+ */
+static uint32_t mod64(uint64_t n, uint32_t d)
+{
+    uint64_t r = 0;
+    int i;
+
+    for (i = 63; i >= 0; i--) {
+        r = r << 1 | ((n >> i) & 1);
+        if (r >= d)
+            r -= d;
+    }
+    return (uint32_t)r;
+}
+
 /** The TSF's next multiple of `period` microseconds after `tsf` and a slop
  * of two TU, as ath9k_get_next_tbtt computes it. */
 static uint32_t next_tbtt(uint64_t tsf, uint32_t period)
 {
-    uint32_t offset;
-
     tsf += NEXT_TBTT_SLOP * 1024;
-    offset = (uint32_t)(tsf % period);
-    return (uint32_t)tsf + period - offset;
+    return (uint32_t)tsf + period - mod64(tsf, period);
 }
 
 /**
