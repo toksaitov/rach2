@@ -44,9 +44,10 @@ static volatile int _tone_channels = 2;
  * for them. Each note lasts _scale_note_frames and a rest of
  * _scale_rest_frames follows it: three periods of the driver, the frames its
  * first call asks for. A refill that comes late leaves the device to play
- * what its buffer already has, the last two periods written and the rest of
- * the one being overwritten, so the buffer never has two notes at once and
- * they are heard in their order however late the refills come. The callback
+ * what its buffer already has, the periods written last, two on the SB16 and
+ * three on HDA, and the rest of the one being overwritten, so the buffer
+ * never has two notes at once and they are heard in their order however late
+ * the refills come. The callback
  * runs in interrupt context while the shell command reads the counts, so they
  * are volatile; _scale_rest_frames is 0 until the first call.
  */
