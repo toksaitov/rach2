@@ -465,6 +465,8 @@ static void command(struct host *h, char *line)
         n = unescape(args);
         if (n <= 0 || (size_t)n != strlen(args)) {
             puts("error wait: needs text, with no NUL");
+        } else if ((size_t)n >= sizeof(h->wait_text)) {
+            puts("error wait: text too long");
         } else {
             strcpy(h->wait_text, args);
             h->block = BLOCK_WAIT;
