@@ -436,7 +436,11 @@ read-only, and the
 .Ql mqueue
 mount at
 .Pa /dev/mqueue
-precede mounts made by programs.
+precede mounts made by programs, which follow in the order they were made,
+so that a mount over another's root comes after it.
+A mount outside the reader's root is left out, and the target is the
+mount's path from the reader's root, as after
+.Xr pivot_root 2 .
 The source, target, type, and options describe the mounted file system;
 a bind mount has the source of the mount it shows.
 Options are comma-separated:
@@ -1442,7 +1446,7 @@ a mount was made from, a partition or a loop device, and the place plus
 is the root of the mount within its file system:
 .Pa /
 for a mount of a file system, and for a bind the path of its source
-directory within the file system it shows.
+directory or file within the file system it shows.
 .Ar OPTIONS
 are those of
 .Pa /proc/mounts ,
@@ -1624,6 +1628,10 @@ after which
 fails with
 .Er EPERM
 in it and below it.
+A namespace below one that denies it reads
+.Ql deny
+from the start, and its group map may then be written by a process
+without privilege in the parent, as Linux allows.
 .It Pa /proc/PID/environ
 The environment strings of the initial stack, each ended by a NUL, at
 most their first 128 KiB, cut as

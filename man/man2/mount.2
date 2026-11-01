@@ -36,8 +36,14 @@ The supported types are
 .Ql ext2 ,
 .Ql krffs ,
 .Ql tmpfs ,
+.Ql mqueue ,
 and
-.Ql mqueue .
+.Ql devpts ,
+which shows the system's own
+.Pa /dev/pts
+wherever it is mounted, since Linux's option
+.Ql newinstance
+is not honoured.
 .Dv MS_RDONLY ,
 .Dv MS_NOSUID ,
 .Dv MS_NOEXEC ,
@@ -103,9 +109,9 @@ Other bits, including
 are refused.
 .Pp
 .Dv MS_BIND
-shows the directory
+shows the directory or file
 .Fa source
-names, a path, at the directory
+names, a path, at the directory or file
 .Fa target
 names, with the flags of the mount the source is on;
 .Fa filesystemtype
@@ -123,15 +129,19 @@ of its own, so a bind of
 .Pa /dev
 has
 .Pa /dev/shm .
-The source must be a directory,
+The target must be a directory for a directory and a file for a file,
 .Er ENOTDIR ,
-and not inside
+and the source not inside
 .Pa /dev ,
 .Pa /proc
 or
 .Pa /sys ,
-whose roots may be bound,
+whose roots and the device files of
+.Pa /dev
+may be bound,
 .Er EINVAL .
+Both are recorded by the paths they resolve to, so that a bind over a
+symbolic link covers the file the link names.
 A bind of a directory of KRFFS, whose files move as they grow, moves with
 them, and the directory a bind shows is busy to
 .Xr rmdir 2 ,
@@ -250,7 +260,7 @@ Resolve and hold the target, returning any path-resolution error.
 .It
 Finish a mount of type
 .Ql proc :
-over a directory of
+over a directory of the system's
 .Pa /proc
 it succeeds and changes nothing, since every
 .Pa /proc
@@ -261,11 +271,12 @@ Over any other directory it places a mount of the one proc file system,
 as a sandbox mounts it in the root it builds, and that mount too shows
 its reader's PID namespace.
 .It
-Require the absolute target path to fit 63 bytes, excluding the null
+Require the absolute target path to fit 255 bytes, excluding the null
 byte, or return
 .Er ENAMETOOLONG .
 .It
-Reject the root directory and a directory of the synthetic
+Reject the root of the mount table and a directory of the system's
+synthetic
 .Pa /dev ,
 .Pa /proc
 or
@@ -274,10 +285,13 @@ themselves with
 .Er EINVAL ;
 a directory of the tmpfs
 .Pa /dev/shm
-below them is a target like any other.
+below them is a target like any other, and so is the root of a bind of
+one of them, as a sandbox mounts a tmpfs over its own
+.Pa /dev .
 .It
-Reject the root of an already placed mount with
-.Er EBUSY .
+Take the root of a mount already placed as a target like any other
+directory: the new mount stacks on it, as on Linux, and a path through
+the target reaches the mount placed last.
 .It
 Read the target's attributes and require a directory, or return
 .Er ENOTDIR .
@@ -285,7 +299,7 @@ Read the target's attributes and require a directory, or return
 Rebuild the target's path from the root of the mount table, the path
 the mount table records whatever path named the target, a root set by
 .Xr chroot 2
-included, within the same 63-byte limit, or return
+included, within the same 255-byte limit, or return
 .Er ENAMETOOLONG .
 .It
 Under the parent directory's namespace lock, reject a covered or
@@ -511,7 +525,7 @@ or unmount writeback or device flushing failed.
 Target resolution would follow more than 40 symbolic links.
 .It Bq Er ENAMETOOLONG
 A copied string or joined path exceeds its buffer, the mount target
-exceeds 63 bytes, or a path component or symbolic-link expansion is
+exceeds 255 bytes, or a path component or symbolic-link expansion is
 too long.
 .It Bq Er ENODEV
 The file-system type is unknown.
@@ -543,15 +557,26 @@ The caller's effective user ID is not 0, and it is not privileged over its
 own mount namespace, or is and mounts a type other than
 .Ql proc ,
 .Ql sysfs ,
-.Ql tmpfs
+.Ql tmpfs ,
+.Ql mqueue
 and
-.Ql mqueue ,
-or remounts.
+.Ql devpts ,
+or remounts a file system.
 A caller privileged over its own mount namespace may also make a bind,
 change propagation and unmount; its mount of
 .Ql sysfs
 passes this check and fails with
 .Er ENODEV .
+Such a caller may remount with
+.Dv MS_BIND
+only a mount that no other live mount namespace sees, and only to add
+.Dv MS_RDONLY ,
+.Dv MS_NOSUID ,
+.Dv MS_NODEV
+and
+.Dv MS_NOEXEC ,
+never to clear one the mount has, as Linux locks the flags of the mounts
+a user namespace inherits.
 .It Bq Er EROFS
 A remount tried to make writable a file system whose device refuses
 writes or has failed a write, or a bind whose file system is read-only.

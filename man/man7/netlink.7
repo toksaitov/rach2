@@ -477,6 +477,19 @@ sends one for each.
 .Pp
 A caller without privilege is refused each with
 .Er EPERM .
+In a network namespace other than the first, whose one interface is its own
+.Ql lo
+of index 1, privilege in the user namespace that owns it is enough, a dump
+lists that
+.Ql lo
+alone, and a change is to it alone:
+.Dv RTM_NEWLINK
+takes it up, giving it 127.0.0.1/8 when it has no address, or down, and
+.Dv RTM_NEWADDR
+and
+.Dv RTM_DELADDR
+add and take away 127.0.0.1/8, its only address; any other change is
+.Er EOPNOTSUPP .
 A request of a type the kernel does not know is answered with an
 .Dv NLMSG_ERROR
 of
@@ -549,6 +562,10 @@ times a second, and after each change a request makes, so a change is
 heard within a tenth of a second, and one undone within that time is not
 heard.
 Neighbours are not announced.
+Only sockets of the first network namespace are sent these, and they are
+about its interfaces alone: a change to another namespace's
+.Ql lo
+is not announced.
 A socket with 64 KiB of notifications queued misses the next, and its next
 receive fails with
 .Er ENOBUFS ,

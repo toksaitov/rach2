@@ -80,6 +80,8 @@ The ARP cache (`arp/arp.c`) has `ARP_CACHE_SIZE` (16) entries, each with the int
 
 A datagram to this machine never reaches a card. `ip_tx_opts` copies it onto a ring of `LOOP_RING_SLOTS` (64), each slot a frame's 1500 bytes, with a datagram past that copied to the heap until it is delivered, and `ip_loop_drain_from` delivers the ring through `ip_rx` from the tick, the idle wait, and a system call's exit once 3 or more wait (`LOOP_DRAIN_AT`). Delivery waits so that a send never runs the receive path, and TCP, inside the sender's own call; the threshold leaves a pair to the timer, since a simultaneous open's two SYNs cross only while neither has been delivered. A full ring refuses with `ENOBUFS` and counts the refusal in `/proc/stat`. The tick also counts there, as `loopback_left_idle`, the datagrams it finds on the ring while every processor is halted in an idle wait: the idle wait of a blocked process (`idle_wait_irq_off`) delivers the ring before it halts, so each of them waited for the timer with nothing running.
 
+A network namespace other than the first sends on the same ring. Each slot keeps the namespace its datagram was sent in, `ip_ns` while it was put there, and the drain sets `ip_ns` to it around the delivery, so that TCP's lookups, UDP's and the raw sockets match only that namespace's sockets and connections, and a reply goes back into the namespace. A sender sets `ip_ns` from its socket or connection around its call to `ip_tx_opts`, which then reaches only 127/8, while the namespace's `lo` is up with its address; `ip6_tx_opts` reaches nothing. A namespace's own `lo` counts its traffic.
+
 ### IPv6
 
 An interface holds up to `NETDEV_ADDRS6` (8) IPv6 addresses, `struct netdev_addr6` (`driver/netdev.h`), each with its prefix length, scope, Linux's `IFA_F_` flags, its maker in Linux's `IFAPROT_` numbers and lifetimes, and is a member of up to `NETDEV_GROUPS6` (16) groups, counted by reference. `netconf_add_address6` (`netconf.c`) joins an address's solicited-node group as it adds it, and a card's address is tentative, neither accepted nor used as a source, until duplicate address detection passes. A card brought up, at boot or by `SIOCSIFFLAGS` or netlink (`netconf_set_up`), joins ff02::1, takes the link-local address fe80::/64 with the modified EUI-64 of its station address, and starts neighbour discovery; `lo` holds ::1. An address whose lifetimes end is deprecated, then removed, and a removed address aborts the TCP connections opened from it (`tcp_local_addr_changed`).
@@ -130,7 +132,7 @@ A listener's completed connections wait in a ring of `SOCK_ACCEPT_BACKLOG` (16) 
 
 ### Sockets
 
-A socket, `struct socket` (`socket/socket.h`), is allocated from the heap when it is opened, or for an incoming SYN in interrupt context, which the heap allows since it masks interrupts and never sleeps, and is freed when its last reference goes. A descriptor of type `FD_TYPE_SOCKET` refers to it, and `dup` and `fork` share it. An accepted connection's socket takes its owner from the listener. A socket made in a network namespace other than the first reaches no interface ([`../proc/ns.Readme.md`](../proc/ns.Readme.md)).
+A socket, `struct socket` (`socket/socket.h`), is allocated from the heap when it is opened, or for an incoming SYN in interrupt context, which the heap allows since it masks interrupts and never sleeps, and is freed when its last reference goes. A descriptor of type `FD_TYPE_SOCKET` refers to it, and `dup` and `fork` share it. An accepted connection's socket takes its owner from the listener. A socket made in a network namespace other than the first reaches only that namespace's own `lo` ([`../proc/ns.Readme.md`](../proc/ns.Readme.md)).
 
 Blocked callers and pollers share the socket's wait queue, and each wake gives its kind for an edge-triggered `epoll`: a datagram on a UDP, raw, packet or netlink socket, and TCP data the receive ring took, are data; an acknowledgement that frees send space is room; a connection that completes or ends, a FIN, and a connection queued on a listener are every kind. Data that comes to a socket watched for output alone is no edge, as in Linux.
 
@@ -169,6 +171,7 @@ Every entry to the kernel takes the big lock ([`../proc/smp.h`](../proc/smp.h)),
 * The ICMP error limit is the machine's, shared by all peers, and one ping runs at a time.
 * One RTL8139, up to four e1000 and one RTL8168GU, four cards in all. The RTL8139 driver does not wait for a transmit to complete, since QEMU completes it as it starts. The RTL8139 and e1000 need a legacy interrupt line from 0 to 15 and have no polled fallback. On i686 an e1000 or RTL8168 whose memory window is above 4 GiB does not start. No driver has offloads, VLAN tags, Wake-on-LAN, MSI-X or runtime power management.
 * Netlink announces no neighbours, and a change undone within a tenth of a second is not announced. Netconsole uses the first interface only, unacknowledged.
+* A network namespace other than the first has its own `lo` alone, with IPv4 alone; `/proc/net` and `/sys/class/net` do not list it, and netlink announces nothing to its sockets or about its `lo`.
 
 ## Tests
 

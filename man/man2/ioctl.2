@@ -499,6 +499,12 @@ A card takes an MTU from 68 to 1500 and
 .Li lo
 only 65536; any other is
 .Er EINVAL .
+In a network namespace other than the first, whose one interface is its
+own
+.Ql lo ,
+privilege in the user namespace that owns it is enough, and they take
+.Ql lo
+up or down, the address 127.0.0.1 and the netmask 255.0.0.0 alone.
 Other flag bits are ignored by the setter.
 An address set without its mask uses a provisional classful mask until
 the separate netmask request.
@@ -732,7 +738,10 @@ was given to the PC speaker, which cannot play samples.
 .It Bq Er EPERM
 A controlling-terminal claim is forbidden, the proposed foreground group
 is outside the terminal's session, a network setter or route change
-was requested without effective user ID 0, or
+was requested without effective user ID 0, or without privilege over the
+caller's network namespace for its
+.Ql lo ,
+or
 .Dv FS_IOC_SETFLAGS
 came from a caller that neither owns the file nor is privileged, or
 asked an unprivileged caller's change of the immutable or append-only
