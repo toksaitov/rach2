@@ -545,7 +545,7 @@ BEGIN {
     version["Multiboot header"] = "none given"
     print "## The vendored projects"
     print ""
-    print "The third-party code of the repository, each with the version the build pins, its upstream license and the document that describes it. The repository declares no license for its own code."
+    print "The third-party code of the repository, each with the version the build pins, its upstream license and the document that describes it. Rach2'"'"'s own code is under the GNU General Public License, version 2 only ([COPYING](../COPYING))."
     print ""
     print "| Project | Version | License | Readme |"
     print "| --- | --- | --- | --- |"
