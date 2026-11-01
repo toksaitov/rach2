@@ -9,8 +9,8 @@
  * sequence and data; `icmp_ping` sends the kernel's own request and waits
  * for the matching reply. A UDP datagram for a port no socket has is
  * answered with a port unreachable. Of the errors that come in, a port
- * unreachable is given to UDP, and a report that a segment was too big for a
- * link to TCP.
+ * unreachable is given to UDP, and a report that a datagram was too big for
+ * a link lowers its destination's path MTU and is given to TCP.
  *
  * QEMU's SLIRP does not pass ICMP from the host to the guest, but it answers
  * the guest's echo requests, so pings are tested from the guest outward (to
@@ -37,7 +37,8 @@
  * An echo request is answered from `dst_ip` with the same identifier,
  * sequence and data. An echo reply from the peer of the ping in flight, with
  * its identifier and sequence, ends the ping's wait. A fragmentation-needed
- * report about a TCP segment goes to `tcp_path_mtu`, and a port unreachable
+ * report lowers the quoted destination's path MTU (`ip_pmtu_lower`) and, about
+ * a TCP segment, goes to `tcp_path_mtu`; a port unreachable
  * about a UDP datagram to `udp_refused`. A message shorter than its 8-byte
  * header is dropped, and anything else is counted and ignored. Called with
  * interrupts off, from `ip_rx`.

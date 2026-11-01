@@ -98,10 +98,12 @@ static int ping_wq_ready = 0;
 /**
  * Take a router's report that a datagram from this machine was too big for
  * a link, whose MTU is at bytes 6 and 7. The report quotes the datagram's IP
- * header and at least its first eight bytes (RFC 792): for a TCP segment,
- * the connection's ports and the segment's sequence number, which
- * `tcp_path_mtu` finds the connection by. A quote too short for them, or of
- * another protocol, is ignored.
+ * header and at least its first eight bytes (RFC 792). The quoted
+ * destination's path MTU falls to the link's (`ip_pmtu_lower`), whatever
+ * the protocol, when the quoted source is this machine's. For a TCP
+ * segment the quote also gives the connection's ports and the segment's
+ * sequence number, which `tcp_path_mtu` finds the connection by. A quote
+ * too short for its header is ignored.
  */
 static void icmp_too_big(const uint8_t *data, uint16_t len)
 {
@@ -109,7 +111,11 @@ static void icmp_too_big(const uint8_t *data, uint16_t len)
     uint16_t ihl = (uint16_t)((ip[0] & 0x0Fu) * 4u);
     const uint8_t *tcp = ip + ihl;
 
-    if (ihl < 20 || 8u + ihl + 8u > len || ip[9] != IP_PROTO_TCP) {
+    if (ihl < 20 || 8u + ihl > len || !netdev_owns(read32be(ip + 12))) {
+        return;
+    }
+    ip_pmtu_lower(read32be(ip + 16), read16be(data + 6));
+    if (8u + ihl + 8u > len || ip[9] != IP_PROTO_TCP) {
         return;
     }
     tcp_path_mtu(read32be(ip + 12), read32be(ip + 16), read16be(tcp), read16be(tcp + 2),

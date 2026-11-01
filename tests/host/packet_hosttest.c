@@ -384,6 +384,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
 #include "../../rach2/sys/network/ethernet/ethernet.c"
 #include "../../rach2/sys/network/ip/ip.c"
 #include "../../rach2/sys/network/ip/ipfrag.c"
+#include "../../rach2/sys/network/ip/pmtu.c"
 
 /* The counters /proc/net/snmp reports, which net_core.c defines. */
 struct net_mib net_mib;
@@ -419,6 +420,7 @@ static void deliver(const uint8_t *bytes, unsigned len)
 static void reset(void)
 {
     the_iface.up = 1;
+    the_iface.mtu = 1500;
     to_arp = to_icmp = to_udp = to_tcp = to_raw = to_packet = to_ip6 = 0;
 }
 

@@ -492,15 +492,16 @@ static int ip_emit(struct netdev *out, uint32_t route_ip, uint32_t dst_ip, uint1
 }
 
 /**
- * Send the `plen` bytes at `payload` in fragments of one frame each by
- * `out`, as `ip_tx_opts` says: 1480 bytes of payload a fragment, a multiple
- * of 8, each with MF but the last. The first fragment that cannot leave
- * ends the send, counted in FragFails.
+ * Send the `plen` bytes at `payload` in fragments of at most `mtu` bytes
+ * each by `out`, as `ip_tx_opts` says: the most payload `mtu` leaves room
+ * for, a multiple of 8, 1480 bytes at 1500, each with MF but the last. The
+ * first fragment that cannot leave ends the send, counted in FragFails.
  */
 static int ip_fragment(struct netdev *out, uint32_t route_ip, uint32_t src, uint32_t dst_ip,
-                       uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl)
+                       uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl,
+                       uint32_t mtu)
 {
-    uint32_t unit = (ETH_MTU - IP_HDR_SIZE) & ~7u;
+    uint32_t unit = (mtu - IP_HDR_SIZE) & ~7u;
     uint16_t id = ip_id_counter++;
     uint32_t off;
     int r;
@@ -587,13 +588,19 @@ int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
         return -EOPNOTSUPP;
     }
 
-    mtu = local ? (uint32_t)NETDEV_LOOPBACK_MTU : (uint32_t)ETH_MTU;
+    if (local) {
+        mtu = NETDEV_LOOPBACK_MTU;
+    } else if (pmtudisc == IP_PMTUDISC_INTERFACE || pmtudisc == IP_PMTUDISC_OMIT) {
+        mtu = out->mtu;
+    } else {
+        mtu = ip_path_mtu(out, dst_ip);
+    }
     if (total_len > mtu) {
         if (pmtudisc == IP_PMTUDISC_DO || pmtudisc == IP_PMTUDISC_PROBE) {
             net_mib.ip_frag_fails++;
             return -EMSGSIZE;
         }
-        return ip_fragment(out, route_ip, src, dst_ip, proto, payload, plen, ttl);
+        return ip_fragment(out, route_ip, src, dst_ip, proto, payload, plen, ttl, mtu);
     }
 
     df = pmtudisc == IP_PMTUDISC_DONT || pmtudisc == IP_PMTUDISC_OMIT ? 0 : IP_DF;

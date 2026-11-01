@@ -152,6 +152,22 @@ int ip_is_local(uint32_t ip)
     return 0;
 }
 
+/** No row reports a datagram too big, which asks whose source it was. */
+int netdev_owns(uint32_t ip)
+{
+    (void)ip;
+    CHECK(0, "no fragmentation-needed report");
+    return 0;
+}
+
+/** No row lowers a path MTU. */
+void ip_pmtu_lower(uint32_t dst, uint32_t mtu)
+{
+    (void)dst;
+    (void)mtu;
+    CHECK(0, "no path MTU lowered");
+}
+
 /** No row tests local or broadcast addresses. */
 int netdev_is_broadcast(uint32_t ip)
 {

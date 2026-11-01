@@ -9,9 +9,11 @@
  * (ipfrag.c), and given to its protocol. A datagram sent has a 20-byte
  * header with no options, and leaves by its route, by broadcast, or round
  * the loopback ring when it is addressed to this machine. One within its
- * route's MTU carries DF, as Linux's path MTU discovery sends it; a larger
+ * path MTU carries DF, as Linux's path MTU discovery sends it; a larger
  * one leaves in fragments, unless its socket asked for DF with
- * IP_MTU_DISCOVER. Addresses are host-order uint32_t values (10.0.2.15 is
+ * IP_MTU_DISCOVER. The path MTU is the interface's MTU, lowered for a
+ * destination by the fragmentation-needed reports that come back (pmtu.c).
+ * Addresses are host-order uint32_t values (10.0.2.15 is
  * 0x0A00020F), converted at the header.
  */
 
@@ -33,16 +35,21 @@
 #define IP_FRAG_OFFSET 0x1FFFu
 
 /* IP_MTU_DISCOVER's values, Linux's: never set DF; set it on a datagram
- * within the route's MTU and fragment a larger one, the default; refuse a
- * larger one with EMSGSIZE (DO and PROBE); fragment by the interface's MTU;
- * and fragment with DF never set. With one MTU for each route, INTERFACE is
- * WANT here. */
+ * within the path MTU and fragment a larger one, the default; refuse a
+ * larger one with EMSGSIZE (DO and PROBE); fragment by the interface's MTU,
+ * whatever the path's; and fragment by the interface's MTU with DF never
+ * set. */
 #define IP_PMTUDISC_DONT      0
 #define IP_PMTUDISC_WANT      1
 #define IP_PMTUDISC_DO        2
 #define IP_PMTUDISC_PROBE     3
 #define IP_PMTUDISC_INTERFACE 4
 #define IP_PMTUDISC_OMIT      5
+
+/* The least path MTU a report may set, Linux's `ip_rt_min_pmtu`: 512
+ * bytes of payload behind the IPv4 and TCP headers. A smaller one counts as
+ * this. */
+#define IP_PMTU_MIN 552
 
 /* The loopback network, 127/8, and the address a datagram to it leaves
  * from. Its datagrams never reach a card: they go round the loopback ring,
@@ -155,10 +162,11 @@ int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
  * 255.255.255.255. Any other datagram leaves by the route `netdev_route`
  * chooses, to the next hop's station address from ARP; on a miss an ARP
  * request goes out and the datagram waits for the reply in one of
- * IP_HOLD_SLOTS slots, for at most three seconds (ip.c). A datagram past a
- * card's MTU, ETH_MTU, leaves in fragments, each a multiple of 8 bytes of
- * the payload but the last, all with one identification and none with DF,
- * counted in FragOKs and FragCreates.
+ * IP_HOLD_SLOTS slots, for at most three seconds (ip.c). A datagram past
+ * the path MTU (`ip_path_mtu`), or the interface's under
+ * IP_PMTUDISC_INTERFACE and OMIT, leaves in fragments, each a multiple of 8
+ * bytes of the payload but the last, all with one identification and none
+ * with DF, counted in FragOKs and FragCreates.
  *
  * Returns 0 when the datagram left, went onto the loopback ring, or waits
  * for ARP: a datagram send promises no delivery. Returns a negative errno
@@ -178,6 +186,24 @@ int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
 
 /* The interface a held datagram leaves by. */
 struct netdev;
+
+/**
+ * The largest datagram, header included, that may leave by `out` for `dst`
+ * without being fragmented: `out`'s MTU, or less when a
+ * fragmentation-needed report has lowered the path's estimate for `dst`
+ * within the last ten minutes (`ip_pmtu_lower`); NETDEV_LOOPBACK_MTU for a
+ * NULL `out`, the loopback ring. Called with interrupts off.
+ */
+uint32_t ip_path_mtu(const struct netdev *out, uint32_t dst);
+
+/**
+ * Take the MTU `mtu` a fragmentation-needed report gave for the path to
+ * `dst` (RFC 1191). An MTU below IP_PMTU_MIN counts as IP_PMTU_MIN, and the
+ * path's estimate only falls, never rises, until it ages out ten minutes
+ * after it last fell. The table holds 16 destinations, and a new one takes
+ * the place of the one nearest its end. Called with interrupts off.
+ */
+void ip_pmtu_lower(uint32_t dst, uint32_t mtu);
 
 /**
  * Send the datagrams held for the next hop `hop` on `nd`, whose station
