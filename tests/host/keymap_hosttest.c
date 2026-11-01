@@ -411,11 +411,11 @@ static void foreign(void)
     event(56, 1);
     tap(59);
     CHECK(result.kind == KM_RESULT_FUNC && result.func == 0);
-    bytes(0, "\033[1;3P", 8);
+    bytes(0, "\033[1;3P", 6);
     tap(105);
-    bytes(0, "\033[1;3D", 8);
+    bytes(0, "\033[1;3D", 6);
     tap(103);
-    bytes(0, "\033[1;3A", 8);
+    bytes(0, "\033[1;3A", 6);
     CHECK(event(84, 1) == KM_RESULT_NONE);
     event(84, 0);
     event(56, 0);
