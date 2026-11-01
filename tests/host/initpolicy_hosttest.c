@@ -229,6 +229,13 @@ static int policy_sigtimedwait(const sigset_t *set, siginfo_t *info, const struc
 #undef waitpid
 #undef reboot
 
+/** Keep no stable secret: init_main, whose set-up calls it, is not run here. */
+int ip6secret_keep(const char *prog)
+{
+    (void)prog;
+    return 0;
+}
+
 /** Count and print a failure when `ok` is false. */
 static void check(int ok, const char *name)
 {

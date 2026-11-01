@@ -288,6 +288,22 @@ struct netup_in6_ifreq {
     int ifindex;
 };
 
+/* Linux's struct in6_rtmsg, the argument of SIOCADDRT on an AF_INET6
+ * socket, declared here so that the host tests' models of the C library's
+ * headers need not have it. */
+struct netup_in6_rtmsg {
+    struct in6_addr dst;
+    struct in6_addr src;
+    struct in6_addr gateway;
+    unsigned int type;
+    unsigned short dst_len;
+    unsigned short src_len;
+    unsigned int metric;
+    unsigned long info;
+    unsigned int flags;
+    int ifindex;
+};
+
 /** Write `value` to the IPv6 setting `key` of the interface `name` under
  * /proc/sys/net/ipv6/conf: 0, or -1 with errno. */
 static int set_conf6(const char *name, const char *key, const char *value)
@@ -319,8 +335,8 @@ static int set_conf6(const char *name, const char *key, const char *value)
 static int apply_inet6(const struct netcfg_iface *s)
 {
     struct netup_in6_ifreq ifr6;
-    struct in6_rtmsg rt;
-    unsigned int index;
+    struct netup_in6_rtmsg rt;
+    struct ifreq ifr;
     char err[96];
     int fd;
 
@@ -340,20 +356,22 @@ static int apply_inet6(const struct netcfg_iface *s)
         fprintf(stderr, "netup: %s: %s\n", s->name, err);
         return -1;
     }
-    index = if_nametoindex(s->name);
-    if (index == 0) {
-        fprintf(stderr, "netup: %s: no such interface\n", s->name);
-        return -1;
-    }
     fd = socket(AF_INET6, SOCK_DGRAM, 0);
     if (fd < 0) {
         fprintf(stderr, "netup: %s: no IPv6 socket: %s\n", s->name, strerror(errno));
         return -1;
     }
+    memset(&ifr, 0, sizeof(ifr));
+    set_ifr_name(&ifr, s->name);
+    if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) {
+        fprintf(stderr, "netup: %s: no such interface: %s\n", s->name, strerror(errno));
+        close(fd);
+        return -1;
+    }
     memset(&ifr6, 0, sizeof(ifr6));
     memcpy(&ifr6.addr, s->address6, sizeof(ifr6.addr));
     ifr6.prefixlen = (unsigned int)s->prefix6;
-    ifr6.ifindex = (int)index;
+    ifr6.ifindex = ifr.ifr_ifindex;
     if (ioctl(fd, SIOCSIFADDR, &ifr6) < 0 && errno != EEXIST) {
         fprintf(stderr, "netup: %s: cannot add the IPv6 address: %s\n", s->name, strerror(errno));
         close(fd);
@@ -361,10 +379,10 @@ static int apply_inet6(const struct netcfg_iface *s)
     }
     if (s->gateway6[0] != 0 || memcmp(s->gateway6, s->gateway6 + 1, 15) != 0) {
         memset(&rt, 0, sizeof(rt));
-        memcpy(&rt.rtmsg_gateway, s->gateway6, sizeof(rt.rtmsg_gateway));
-        rt.rtmsg_flags = RTF_UP | RTF_GATEWAY;
-        rt.rtmsg_metric = 1024;
-        rt.rtmsg_ifindex = (int)index;
+        memcpy(&rt.gateway, s->gateway6, sizeof(rt.gateway));
+        rt.flags = RTF_UP | RTF_GATEWAY;
+        rt.metric = 1024;
+        rt.ifindex = ifr.ifr_ifindex;
         if (ioctl(fd, SIOCADDRT, &rt) < 0 && errno != EEXIST) {
             fprintf(stderr, "netup: %s: cannot set the IPv6 default route: %s\n", s->name,
                     strerror(errno));
