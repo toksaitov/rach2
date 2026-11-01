@@ -1,9 +1,9 @@
 /*
  * servicelog_scenario.c: the scenario of the servicelog case
  * (../machine.servicelog.json). Two boots of one copy of an ext2 root whose
- * init is init-shell: the first fills init's service log past its cap and
- * makes orphans until init empties it, fills it again and powers off; the
- * second finds the full log removed.
+ * init is init-shell: the first times init's reaping of ten orphans, fills
+ * init's service log past its cap and makes orphans until init empties it,
+ * fills it again and powers off; the second finds the full log removed.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,6 +16,13 @@
 
 /* The line /etc/profile of the root prints when the login shell starts. */
 static const char shell_up[] = "servicelog: shell up";
+
+/* The orphans timed, and how many of them init must reap within REAP_TICKS
+ * of the tick they were first seen dead in; the rest allow for a tick the
+ * host delivered late, which the kernel counts as several. */
+#define ORPHANS    10
+#define REAP_TICKS 2
+#define REAP_FAST  8
 
 /** Read `NAME=` and the number after it from boot `boot`'s console after
  * `from`; give -1 when there is none. */
@@ -41,6 +48,58 @@ static int command(struct lc *l, struct etude_case_machine *m, uint64_t *at, con
                    const char *marker)
 {
     return lc_type(l, m, command) && lc_wait(l, m, marker, at, NULL);
+}
+
+/**
+ * Time init's reaping of ORPHANS orphans by the kernel's tick, which
+ * /proc/uptime shows in hundredths of a second. Each is a `sleep 1` whose
+ * subshell has ended; the shell reads its stat file without forking until
+ * it is gone, noting the uptime when it is first seen a zombie and when it
+ * is gone, and prints the pairs after `REAPS=`. An orphan never seen a
+ * zombie was reaped as it ended. Init reaps on SIGCHLD, so the two readings
+ * are a tick or so apart; an init that looked for its children once a
+ * second would leave most of them some fifty ticks apart.
+ */
+static void reap(struct lc *l, struct etude_case_machine *m, uint64_t *at)
+{
+    static const char define[] =
+        "o(){ p=$( (sleep 1 >/dev/null 2>&1 & echo $!) );z=;"
+        "while read a b c r </proc/$p/stat;do [ \"$c\" = Z ]&&[ -z \"$z\" ]&&"
+        "read z x </proc/uptime;done 2>/dev/null;read g x </proc/uptime;"
+        "echo -n \" ${z:-$g},$g\";};echo DEFINED\"\"=1\r";
+    char run[128], line[512], detail[160], *s, *end;
+    double dead, gone;
+    int timed = 0, fast = 0, worst = 0, ticks;
+    uint64_t from = *at;
+
+    snprintf(run, sizeof(run),
+             "echo -n REAPS\"\"=;i=0;while [ $i -lt %d ];do o;i=$((i+1));done;"
+             "echo;echo TIMED\"\"=1\r",
+             ORPHANS);
+    if (!command(l, m, at, define, "DEFINED=") || !command(l, m, at, run, "TIMED=") ||
+        !lc_text(l, "fixture.1.console", "REAPS=", from, line, sizeof(line)))
+        return;
+    for (s = line; timed < ORPHANS; timed++) {
+        dead = strtod(s, &end);
+        if (end == s || *end != ',')
+            break;
+        s = end + 1;
+        gone = strtod(s, &end);
+        if (end == s)
+            break;
+        s = end;
+        ticks = (int)((gone - dead) * 100.0 + 0.5);
+        if (ticks <= REAP_TICKS)
+            fast++;
+        if (ticks > worst)
+            worst = ticks;
+    }
+    printf("servicelog: init reaped %d of %d orphans within %d ticks, the slowest in %d\n", fast,
+           timed, REAP_TICKS, worst);
+    snprintf(detail, sizeof(detail),
+             "init reaped %d of %d orphans within %d ticks of their end, the slowest in %d", fast,
+             timed, REAP_TICKS, worst);
+    lc_assert(l, "reaped", timed == ORPHANS && fast >= REAP_FAST, detail);
 }
 
 /**
@@ -70,7 +129,10 @@ static void first(struct lc *l)
     char detail[120];
 
     if (!lc_step(l, "boot") || (m = lc_boot(l, "fixture")) == NULL ||
-        !lc_wait(l, m, shell_up, &at, NULL) || !lc_step(l, "fill"))
+        !lc_wait(l, m, shell_up, &at, NULL) || !lc_step(l, "reap"))
+        return;
+    reap(l, m, &at);
+    if (!lc_step(l, "fill"))
         return;
     from = at;
     if (!command(l, m, &at, fill, "FILLED=") || !lc_wait(l, m, "\n", &at, NULL))
@@ -129,8 +191,8 @@ static void second(struct lc *l)
 
 int etude_scenario(struct etude_case *c)
 {
-    static const char *const ids[] = {"filled",    "emptied", "refilled", "powered-off",
-                                      "unmounted", "removed", NULL};
+    static const char *const ids[] = {"reaped",      "filled",    "emptied", "refilled",
+                                      "powered-off", "unmounted", "removed", NULL};
     struct lc l;
 
     lc_begin(&l, c, ids);
