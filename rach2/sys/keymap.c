@@ -1341,6 +1341,40 @@ void keymap_state_init(struct keymap_state *st, unsigned int ledflags)
     st->npad_on = 0;
 }
 
+/** Rebuild the held modifiers from the keys down; keymap.h has the contract. */
+void keymap_state_held(struct keymap_state *st, const struct keymap *map, const unsigned char *held)
+{
+    unsigned int i, entry, type, v;
+
+    for (i = 0; i < KM_NR_SHIFT; i++) {
+        st->down[i] = 0;
+    }
+    st->shift = 0;
+    st->npad = 0;
+    st->npad_on = 0;
+    for (i = 0; i < KM_NR_KEYS; i++) {
+        st->key_shift[i] = 0;
+        if (held[i >> 3] & (1U << (i & 7))) {
+            st->pressed[i >> 3] |= (unsigned char)(1U << (i & 7));
+        } else {
+            st->pressed[i >> 3] &= (unsigned char)~(1U << (i & 7));
+            continue;
+        }
+        entry = map && map->entry ? map->entry(map->ctx, 0, i) : KM_HOLE;
+        type = KM_TYPE(entry);
+        v = KM_VALUE(entry);
+        if ((type != KM_T_SHIFT && type != KM_T_SLOCK) || v >= KM_NR_SHIFT) {
+            continue;
+        }
+        if (v == KM_G_CAPSSHIFT) {
+            v = KM_G_SHIFT;
+        }
+        st->key_shift[i] = (unsigned char)(v + 1);
+        st->down[v]++;
+        st->shift |= 1U << v;
+    }
+}
+
 /** Compose a character or emit the pending accent and character separately. */
 static void character(struct keymap_state *st, const struct keymap *map, unsigned long c,
                       struct keymap_result *res)

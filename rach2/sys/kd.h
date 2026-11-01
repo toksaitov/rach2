@@ -113,8 +113,11 @@ struct kbd_repeat {
  * Take one key event for the console: `keycode` is Linux's KEY_* code and
  * `value` KD_KEY_RELEASE, KD_KEY_PRESS or KD_KEY_REPEAT, a repeat made by the
  * input layer's software repeat. `device` names the keyboard the key is on,
- * the same pointer for as long as the keyboard is connected, so the state of
- * each keyboard stays apart.
+ * the same pointer for as long as the keyboard is connected. The console
+ * counts the keyboards that hold each key, in every mode, and translates a
+ * release only from the last of them, so that a Shift released on one
+ * keyboard leaves Shift held on another; on leaving K_RAW, K_MEDIUMRAW or
+ * K_OFF it rebuilds the held modifiers from those counts.
  *
  * In K_XLATE and K_UNICODE the key goes through the keymap's translator
  * (keymap.h) with the console's locks, and its bytes, as `keymap_encode`

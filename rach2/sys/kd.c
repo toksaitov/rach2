@@ -74,6 +74,11 @@ static char *funcs_mine[KM_MAX_FUNC];
 static struct keymap_diacr diacrs[KM_MAX_DIACR];
 static unsigned int ndiacr;
 
+/* The keyboards holding each key, by key code, counted in every mode: a
+ * release reaches the translator only from the last of them, and the held
+ * modifiers are rebuilt from the counts when translation resumes. */
+static unsigned char kd_holders[KM_NR_KEYS];
+
 static int kd_ready;
 
 /** Fill the keymap, strings and accents from keymap.c's built-in ones, and
@@ -147,15 +152,61 @@ static int32_t put_int(uintptr_t arg, int v)
     return copy_to_user((void __user *)arg, &v, sizeof(v)) != 0 ? -EFAULT : 0;
 }
 
+/** The keymap's entry of key `keycode` in table `table`, for the
+ * translator: KM_NOSUCHMAP for a table that does not exist and KM_HOLE for a
+ * key past the tables. Called with `kd_lock` held. */
+static unsigned int kd_entry(const void *ctx, unsigned int table, unsigned int keycode)
+{
+    (void)ctx;
+    if (keycode >= KM_NR_KEYS) {
+        return KM_HOLE;
+    }
+    if (table >= KM_MAX_TABLES || tables[table] == NULL) {
+        return KM_NOSUCHMAP;
+    }
+    return tables[table][keycode];
+}
+
+/** Whether the keyboard's mode `mode` translates keys. */
+static int kd_mode_translates(int mode)
+{
+    return mode == K_XLATE || mode == K_UNICODE;
+}
+
 /** Put the keyboard in mode `mode`, K_*, for KDSKBMODE and a restore: stop
  * a held key's repeat and discard the console's unread input, as Linux does
- * after the request. -EINVAL for a mode that is none of the five. */
+ * after the request. Leaving a mode that does not translate rebuilds the
+ * translator's held modifiers from the keys down now, since it saw none of
+ * their presses and releases meanwhile. -EINVAL for a mode that is none of
+ * the five. */
 static int32_t kd_set_mode(int mode)
 {
+    unsigned char held[KM_NR_KEYS / 8];
+    struct keymap map;
+    unsigned int i;
+    uint32_t flags;
+
     if (mode < K_RAW || mode > K_OFF) {
         return -EINVAL;
     }
+    kd_init();
+    map.entry = kd_entry;
+    map.ctx = NULL;
+    map.func = funcs;
+    map.diacr = diacrs;
+    map.ndiacr = 0;
+    flags = spin_lock_irqsave(&kd_lock);
+    if (kd_mode_translates(mode) && !kd_mode_translates(kd_mode)) {
+        k_memset(held, 0, sizeof(held));
+        for (i = 0; i < KM_NR_KEYS; i++) {
+            if (kd_holders[i] != 0) {
+                held[i >> 3] |= (unsigned char)(1U << (i & 7));
+            }
+        }
+        keymap_state_held(&kd_kb, &map, held);
+    }
     kd_mode = mode;
+    spin_unlock_irqrestore(&kd_lock, flags);
     input_cancel_repeat();
     tty_flush_input(&console_tty);
     return 0;
@@ -534,7 +585,7 @@ int32_t kd_ioctl(uint32_t request, uintptr_t arg)
 
 int kd_translates(void)
 {
-    return kd_mode == K_XLATE || kd_mode == K_UNICODE;
+    return kd_mode_translates(kd_mode);
 }
 
 void kd_raw_code(uint8_t code)
@@ -542,21 +593,6 @@ void kd_raw_code(uint8_t code)
     if (kd_mode == K_RAW) {
         tty_input_char(&console_tty, code);
     }
-}
-
-/** The keymap's entry of key `keycode` in table `table`, for the
- * translator: KM_NOSUCHMAP for a table that does not exist and KM_HOLE for a
- * key past the tables. Called with `kd_lock` held. */
-static unsigned int kd_entry(const void *ctx, unsigned int table, unsigned int keycode)
-{
-    (void)ctx;
-    if (keycode >= KM_NR_KEYS) {
-        return KM_HOLE;
-    }
-    if (table >= KM_MAX_TABLES || tables[table] == NULL) {
-        return KM_NOSUCHMAP;
-    }
-    return tables[table][keycode];
 }
 
 /** Whether the console's terminal takes the keys: a reader is parked on it
@@ -711,9 +747,18 @@ void kd_key_event(const void *device, unsigned int keycode, int value)
     unsigned int n = 0;
     unsigned int old_leds;
     uint32_t flags;
-    int mode = kd_mode;
+    int mode;
+    int still_held = 0;
 
     (void)device;
+    flags = spin_lock_irqsave(&kd_lock);
+    mode = kd_mode;
+    if (keycode < KM_NR_KEYS && value == KD_KEY_PRESS && kd_holders[keycode] < 0xFFu) {
+        kd_holders[keycode]++;
+    } else if (keycode < KM_NR_KEYS && value == KD_KEY_RELEASE && kd_holders[keycode] != 0) {
+        still_held = --kd_holders[keycode] != 0;
+    }
+    spin_unlock_irqrestore(&kd_lock, flags);
     if (mode == K_MEDIUMRAW) {
         if (keycode > 0x3FFFu) {
             return;
@@ -728,7 +773,7 @@ void kd_key_event(const void *device, unsigned int keycode, int value)
         tty_input_char(&console_tty, (unsigned char)(keycode | 0x80u));
         return;
     }
-    if (mode != K_XLATE && mode != K_UNICODE) {
+    if (!kd_mode_translates(mode) || still_held) {
         return;
     }
     kd_init();

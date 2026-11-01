@@ -176,6 +176,19 @@ int keymap_key(struct keymap_state *st, const struct keymap *map, unsigned int k
                struct keymap_result *res);
 
 /**
+ * Rebuild the held keys and modifiers of `st` from `held`, a bit for each of
+ * the KM_NR_KEYS key codes that is down now, for a translator that has
+ * missed presses and releases, such as the console's while the keyboard was
+ * in a raw mode. A held key whose entry in table 0 of `map` is a KM_T_SHIFT
+ * or KM_T_SLOCK modifier holds that modifier again, as Linux's
+ * compute_shiftstate does; the locks, the LEDs and a pending accent stay,
+ * and a code typed on the keypad with Alt is dropped. The caller serializes
+ * access to `st`, as for `keymap_key`.
+ */
+void keymap_state_held(struct keymap_state *st, const struct keymap *map,
+                       const unsigned char *held);
+
+/**
  * Write the bytes a terminal sends for `res` into `buf`, of `size` bytes, as
  * xterm sends them, under `modes`, KM_MODE_*: text in UTF-8 with ESC before
  * it for Alt, a function string from `map`, the cursor and editing keys and
