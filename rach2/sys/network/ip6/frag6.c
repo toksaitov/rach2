@@ -135,7 +135,7 @@ static struct frag6_queue *frag6_queue_of(struct netdev *nd, const uint8_t *src,
     q->nd = nd;
     k_memcpy(q->src, src, IP6_ADDR_LEN);
     k_memcpy(q->dst, dst, IP6_ADDR_LEN);
-    q->expires = kernel_ticks + FRAG6_TIMEOUT_SECONDS * TICK_HZ;
+    q->expires = (uint32_t)kernel_ticks + FRAG6_TIMEOUT_SECONDS * TICK_HZ;
     q->total = 0;
     return q;
 }
@@ -397,7 +397,7 @@ void frag6_tick(void)
         struct frag6_queue *q = &frag6_queues[i];
         uint32_t n;
 
-        if (!q->used || (int32_t)(kernel_ticks - q->expires) < 0) {
+        if (!q->used || (int32_t)((uint32_t)kernel_ticks - q->expires) < 0) {
             continue;
         }
         if (!q->dead) {

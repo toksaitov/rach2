@@ -193,7 +193,7 @@ struct netdev *netdev_at(int n)
 }
 
 /* The tick an IPv6 address's lifetimes count from. */
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
 
 /** No row gives an IPv6 address. */
 struct netdev_addr6 *netdev_addr6_of(struct netdev *nd, const uint8_t *addr)

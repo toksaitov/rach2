@@ -588,7 +588,7 @@ static void test_tx_mtu(void)
     loop_head = loop_tail = 0;
 }
 
-volatile uint64_t kernel_ticks; /* the clock, 100 ticks to a second */
+volatile uint64_t kernel_ticks; /* the clock, TICK_HZ ticks to a second */
 
 /** A datagram sent while its next hop is missing from the ARP cache waits,
  * and leaves when the mapping is learned, once; one held past three seconds
