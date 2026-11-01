@@ -8,6 +8,7 @@
  *
  * host-deps:
  * host-cflags: -I ports/doom/src -DNORMALUNIX -DCMAP256
+ * host-cflags: -I rach2/include
  */
 
 #include <stdio.h>
