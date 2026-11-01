@@ -1,4 +1,3 @@
-[ -z "$prepare" ] || { mkdir -p "$state/prepare"; log=$state/prepare/log; }
 #!/bin/sh
 #
 # release.sh: release milestone M at commit SHA: test SHA with a full run on
@@ -1505,7 +1504,7 @@ main()
     mkdir -p "$state"
     state=$(cd "$state" && pwd)
     log=$state/log
-    [ -z "$prepare" ] || log=$state/prepare/log
+    [ -z "$prepare" ] || { mkdir -p "$state/prepare"; log=$state/prepare/log; }
     files=$state/wt/$ARCH_DIR/images
     macdir=$repo/build/machines/mac
     tree=$macdir/tree site=$macdir/site runs=$macdir/runs
