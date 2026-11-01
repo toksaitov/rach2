@@ -7,11 +7,12 @@
 
 /*
  * A program takes the screen by opening /fb, which enters mode 13h, and is
- * then its owner: the console draws nothing until the last owner leaves
- * the mode, closes its open descriptions or exits. A descendant may open
- * /fb to suspend the current owner and take the screen in turn. Every
- * request but FB_MODE_13H, which may take a screen nobody owns, and every write are refused with
- * EBUSY to any process but the owner, a child that inherited the descriptor among them.
+ * then its owner: the console draws nothing until the last owner leaves the
+ * mode, closes its open descriptions or exits. A descendant may open /fb to
+ * suspend the current owner and take the screen in turn. Every request but
+ * FB_MODE_13H, which may take a screen nobody owns, and every write are
+ * refused with EBUSY to any process but the owner, a child that inherited the
+ * descriptor among them.
  *
  * Mode 13h is 320 by 200 pixels of one byte, an index into a palette of 256
  * colors, written whole with write(2) at 64000 bytes; there the offset does
@@ -21,7 +22,7 @@
  * with lseek(2) and write(2), which moves the offset as on a file. A write
  * stops at the mode's end, `pitch` times `height` bytes; one that starts past
  * it is refused with EFBIG, and one at it with ENOSPC. A mode request that
- * changes the mode puts the offset back at 0.
+ * changes the mode, or takes the screen back, puts the offset back at 0.
  *
  * The header uses no type of a C library, so that the kernel and Doom's
  * freestanding port include it too: an unsigned int has 32 bits on i686 and

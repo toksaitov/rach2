@@ -352,7 +352,9 @@ A console on the VGA's text mode, and a framebuffer that is not RGB at
 .Er ENODEV .
 .El
 .Pp
-A request that changes the mode puts the descriptor's offset back at 0.
+A request that changes the mode, or takes the screen back with
+.Dv FB_MODE_13H ,
+puts the descriptor's offset back at 0.
 .Pp
 On a machine whose console is on a framebuffer, as one booted by UEFI is,
 there is no VGA to put in mode 13h.

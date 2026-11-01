@@ -404,17 +404,18 @@ static void fb_rewind(fd_entry_t *e)
  * FB_GETINFO on the VGA's text mode and for FB_MODE_NATIVE there and on a
  * framebuffer that is not RGB at 15, 16, 24 or 32 bits a pixel.
  *
- * A mode request from the mode it names changes nothing; one that changes
- * the mode puts the description's offset back at 0. FB_MODE_TEXT gives the
- * display up to the previous owner or, last, the console. FB_SETPALETTE
- * reads mode 13h's 768 bytes, 256 colors of 8-bit red, green and blue, in either mode.
- * FB_GETINFO reports the framebuffer whatever the mode, in a struct
- * fb_screen.
+ * A mode request from the mode it names changes nothing; one that changes the
+ * mode, or takes the screen back, puts the description's offset at 0.
+ * FB_MODE_TEXT gives the display up to the previous owner or, last, the
+ * console. FB_SETPALETTE reads mode 13h's 768 bytes, 256 colors of 8-bit red,
+ * green and blue, in either mode. FB_GETINFO reports the framebuffer whatever
+ * the mode, in a struct fb_screen.
  */
 static int32_t fb_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     uint32_t flags;
     uint32_t epoch = fb_epoch;
+    int32_t rc;
 
     if (request != FB_MODE_13H && request != FB_MODE_TEXT && request != FB_SETPALETTE &&
         request != FB_GETINFO && request != FB_MODE_NATIVE) {
@@ -426,7 +427,11 @@ static int32_t fb_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     switch (request) {
     case FB_MODE_13H:
         if (!fb_owned(e)) {
-            return fb_take(e);
+            rc = fb_take(e);
+            if (rc == 0) {
+                fb_rewind(e);
+            }
+            return rc;
         }
         if (gfx_current.mode != GFX_MODE_VGA_13H) {
             console_unblank_now();
