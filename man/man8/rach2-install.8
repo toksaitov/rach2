@@ -1,4 +1,4 @@
-.Dd October 4, 2026
+.Dd November 1, 2026
 .Dt RACH2-INSTALL 8
 .Os
 .Sh NAME
@@ -8,6 +8,7 @@
 .Nm
 .Op Fl -source Ar DIR
 .Nm
+.Op Fl -console Cm term
 .Fl -update Ar IMAGE DISK
 .Sh DESCRIPTION
 The
@@ -223,6 +224,26 @@ The disk must have a first partition that
 can read as a boot partition and an installed root containing
 .Pa /etc/rach2 .
 .Pp
+The optional
+.Fl -console Cm term
+sets the installed root's candidate, fallback and text boot lines in
+.Pa /boot/grub/grub.cfg
+on partition 1 to carry
+.Ql rach2.console=term
+exactly once, replacing any previous console setting on those lines.
+Recovery lines are unchanged.
+The new menu is written beside the old one, synced and renamed over it,
+then the partition is unmounted and checked with
+.Ql bootctl --target DISKp1 status
+before the trial is armed.
+A failed write or check stops the update.
+Repeating the option leaves the same menu; without it the update leaves
+the menu byte for byte as it was.
+The option requires
+.Fl -update
+and accepts only
+.Cm term .
+.Pp
 Before replacing a readable root, the installer copies its account files,
 SSH policy, server host keys, account keys, including root's keys, and the
 home directories under
@@ -397,7 +418,7 @@ and use its separate root image:
 .Bd -literal -offset indent
 mkdir -p /stick
 mount -t exfat /dev/disk1p2 /stick
-rach2-install --update /stick/rach2-metal-disk.ext2 /dev/disk0
+rach2-install --console term --update /stick/rach2-metal-disk.ext2 /dev/disk0
 umount /stick
 .Ed
 Save the sectors the procedure will overwrite before running the update.

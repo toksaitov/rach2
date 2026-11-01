@@ -20,7 +20,7 @@
 # to know which one was passed over and for what.
 #
 # Usage: rach2-install [--source DIR]
-#        rach2-install --update IMAGE DISK
+#        rach2-install [--console term] --update IMAGE DISK
 #
 # `--source DIR` takes the image and its manifest from a directory already
 # mounted, which is how the tests drive it without a stick.
@@ -37,6 +37,10 @@
 # grown to it. An MBR disk is converted on the way to boot by
 # UEFI as well, when GRUB's EFI image is beside IMAGE: it keeps its MBR, and its
 # boot partition becomes the EFI system partition.
+#
+# `--console term` gives the installed root's candidate, fallback and text
+# entries one rach2.console=term token. Recovery entries are left as they are;
+# without this option the update leaves the menu unchanged.
 #
 # A new install writes the image's table, a GUID table on the images this
 # system builds, and moves its backup to the disk's last sectors, where a
@@ -80,6 +84,7 @@ mounted_source=""
 mounted_root=""
 mounted_recovery=""
 mounted_boot=""
+console_new=""
 key_dir=""
 echo_off=""
 screen_level=""
@@ -107,6 +112,7 @@ cleanup() {
     [ -n "$echo_off" ] && stty echo 2>/dev/null
     [ -n "$mounted_root" ] && umount "$mounted_root" 2>/dev/null
     [ -n "$mounted_recovery" ] && umount "$mounted_recovery" 2>/dev/null
+    [ -n "$console_new" ] && rm -f "$console_new"
     [ -n "$mounted_boot" ] && umount "$mounted_boot" 2>/dev/null
     [ -n "$mounted_source" ] && umount "$mounted_source" 2>/dev/null
     [ -n "$key_dir" ] && rm -rf "$key_dir"
@@ -137,11 +143,18 @@ greet() {
 source_dir=""
 update_image=""
 update_disk=""
+update_console=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --source)
             [ $# -ge 2 ] || die "--source takes a directory"
             source_dir=$2
+            shift 2
+            ;;
+        --console)
+            [ $# -ge 2 ] || die "--console takes term"
+            [ "$2" = term ] || die "--console takes only term"
+            update_console=$2
             shift 2
             ;;
         --update)
@@ -151,10 +164,12 @@ while [ $# -gt 0 ]; do
             shift 3
             ;;
         *)
-            die "usage: $ME [--source DIR] | $ME --update IMAGE DISK"
+            die "usage: $ME [--source DIR] | $ME [--console term] --update IMAGE DISK"
             ;;
     esac
 done
+[ -z "$update_console" ] || [ -n "$update_image" ] ||
+    die "--console requires --update"
 
 # ---- the disks this machine has ----
 #
@@ -711,6 +726,41 @@ grow_slots() { # grow_slots BOOT
         die "$1, its slots grown, is not a boot partition bootctl reads"
 }
 
+# Give the installed root's boot lines one console token on BOOT. Write
+# beside the menu, sync and rename it, then unmount and let bootctl read the
+# partition before the caller arms a trial. Recovery lines keep their bytes.
+set_update_console() { # set_update_console BOOT
+    mkdir -p "$BOOT_MNT" || die "the boot mount directory could not be made"
+    mount -t vfat "$1" "$BOOT_MNT" || die "$1 would not mount to set its console"
+    mounted_boot=$BOOT_MNT
+    console_menu="$BOOT_MNT/boot/grub/grub.cfg"
+    console_new="$console_menu.new"
+    awk '
+        /^[ \t]*(multiboot|multiboot2)[ \t]/ &&
+        /[ \t]rach2.slot=(candidate|fallback)([ \t]|$)/ {
+            while (match($0, /[ \t]rach2.console=[^ \t]+/))
+                $0 = substr($0, 1, RSTART - 1) substr($0, RSTART + RLENGTH)
+            sub(/[ \t]+$/, "")
+            $0 = $0 " rach2.console=term"
+            roots++
+        }
+        { print }
+        END { if (roots == 0) exit 1 }
+    ' "$console_menu" > "$console_new" || die "the installed root's menu could not be written"
+    if cmp -s "$console_menu" "$console_new"; then
+        rm -f "$console_new" || die "the spare menu could not be removed"
+    else
+        { sync && mv -f "$console_new" "$console_menu" && sync; } ||
+            die "the console menu could not be put in place"
+    fi
+    console_new=""
+    umount "$BOOT_MNT" || die "$1 would not unmount after setting its console"
+    mounted_boot=""
+    bootctl --target "$1" status > /dev/null ||
+        die "$1, its console set, is not a boot partition bootctl reads"
+    say "console: $1 boots the installed root with term"
+}
+
 # Convert the MBR disk being updated, $update_disk, to boot by UEFI as well,
 # with the bootx64.efi beside $update_image; a bootx64.efi.sha256 beside that
 # must agree with it. A disk that cannot be converted is left to boot by BIOS
@@ -1107,6 +1157,10 @@ root is written and its archive still says an update is in progress; run the upd
         say "the configuration is archived on ${update_disk}p${recovery_entry}"
     fi
     rm -rf "$keep"
+
+    if [ -n "$update_console" ]; then
+        set_update_console "${update_disk}p1"
+    fi
 
     # One trial boot of the new root. The saved default is still recovery, so a
     # root that does not come up costs a reboot and the machine lands in the
