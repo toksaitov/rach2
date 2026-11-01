@@ -91,6 +91,12 @@ $(PCAPCHECK): tests/system/checkers/pcapcheck.c
 $(MKFIXTURE): tests/system/fixtures/mkfixture.c tools/image/host_io.h
 	@mkdir -p $(dir $@)
 	$(HOST_LINK)
+# The input machine.audio's tone case gives QEMU's sdl backend: three notes
+# of square waves, raw 16-bit stereo at 48000 Hz (mkfixture tones).
+AUDIO_TONES = build/tests/system/tones.raw
+$(AUDIO_TONES): $(MKFIXTURE)
+	@mkdir -p $(dir $@)
+	$(MKFIXTURE) tones $@.tmp && mv $@.tmp $@ || { rm -f $@.tmp; exit 1; }
 # The FAT32 fixture builder and its volume check (tests/host/mkfatfixture.c):
 # the suites walk a volume the kernel wrote with `--check`.
 MKFATFIXTURE = build/tests/host/mkfatfixture
@@ -234,13 +240,15 @@ $(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE)
 # volume of the HDA and the SB16 driver, which a stream's start keeps. They
 # are the cases of tests/cases/machine.input.json, which etude runs, each in a
 # boot of its own that tests/cases/machine/input_scenario.c drives.
-# `tests/run audio`: what the machine actually played. Its cases
+# `tests/run audio`: what the machine actually played and recorded. Its cases
 # (tests/cases/machine.audio.json) play the debug shell's scale on an Intel
 # HDA controller and on a Sound Blaster 16, and wavcheck measures the notes in
 # QEMU's recording of each; the SB16 also plays through /dev/dsp in signed
-# stereo and at OSS's defaults, judged in both recorded channels; another
-# reboots a copy of the shutdown disk and reads the mixer's level that init
-# kept.
+# stereo and at OSS's defaults, judged in both recorded channels; two read
+# /dev/dsp on HDA, one counting the frames against /proc/audio and one finding
+# the notes of $(AUDIO_TONES), which QEMU feeds the codec, in what was read;
+# another reboots a copy of the shutdown disk and reads the mixer's level that
+# init kept.
 # `tests/run diskfull`: a file system with no room left. The probe writes until
 # the write is refused, requires `ENOSPC` rather than `EIO`, removes the file
 # and writes again. It is the case of tests/cases/guest.diskfull.json, which
