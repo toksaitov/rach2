@@ -11,7 +11,12 @@
  * square waves, such as the debug shell's `audio test scale` plays, in short
  * windows, measures the frequency in each, and requires each measurement to
  * be one of the named frequencies and the measurements to visit every one of
- * them, in the order they were named. More than 16 frequencies are refused.
+ * them, in the order they were named, in every channel of the recording.
+ * `wavcheck scale FILE FREQ [FREQ ...] / FREQ [FREQ ...]` requires the
+ * frequencies before the slash of the first channel and those after it of
+ * the second, so that two lists with no frequency in common prove the
+ * channels distinct: a recording of one channel, or of a device that mixed
+ * the two, fails. More than 16 frequencies in a list are refused.
  *
  * Exit 0 when every note sounds in its turn, 1 when one does not, another
  * tone sounds, or the recording is too short, and 2 when the file cannot be
@@ -199,10 +204,12 @@ static int note_of(double hz, const double *freqs, int n_notes)
  * the labels must visit every note in the order named, with no note before
  * its predecessor. A window of less sound, which the edges of a note give,
  * belongs to no note; a window of sound at no named frequency is a wrong tone.
+ * Each message begins with `who`, which names the channel swept or is empty.
  * Returns 0 when the notes are right, 1 when they are not, and 2 when memory
  * runs out.
  */
-static int sweep(const short *s, long frames, double rate, const double *freqs, int n_notes)
+static int sweep(const short *s, long frames, double rate, const double *freqs, int n_notes,
+                 const char *who)
 {
     long win = (long)rate / 20; /* 50 ms */
     long at, *runs;
@@ -225,7 +232,7 @@ static int sweep(const short *s, long frames, double rate, const double *freqs, 
         }
         note = note_of(hz, freqs, n_notes);
         if (note < 0) {
-            printf("wavcheck: a tone of %.0f Hz sounds where %.0f Hz was asked for\n", hz,
+            printf("wavcheck: %sa tone of %.0f Hz sounds where %.0f Hz was asked for\n", who, hz,
                    freqs[want]);
             bad++;
             break;
@@ -234,7 +241,7 @@ static int sweep(const short *s, long frames, double rate, const double *freqs, 
         if (note == want + 1) {
             want++;
         } else if (note > want + 1 || note < want) {
-            printf("wavcheck: %.0f Hz sounds where %.0f Hz was asked for\n", freqs[note],
+            printf("wavcheck: %s%.0f Hz sounds where %.0f Hz was asked for\n", who, freqs[note],
                    freqs[want]);
             bad++;
             break;
@@ -242,20 +249,73 @@ static int sweep(const short *s, long frames, double rate, const double *freqs, 
     }
     free(runs);
     if (bad != 0) {
-        printf("wavcheck: the notes are not what was asked for\n");
+        printf("wavcheck: %sthe notes are not what was asked for\n", who);
         return 1;
     }
     for (i = 0; i < n_notes; i++) {
         if (!seen[i]) {
-            printf("wavcheck: %.0f Hz never sounds\n", freqs[i]);
+            printf("wavcheck: %s%.0f Hz never sounds\n", who, freqs[i]);
             bad++;
         }
     }
     if (bad != 0) {
-        printf("wavcheck: %d of %d notes are not what was asked for\n", bad, n_notes);
+        printf("wavcheck: %s%d of %d notes are not what was asked for\n", who, bad, n_notes);
         return 1;
     }
     return 0;
+}
+
+/**
+ * Judge channel `c` of the `frames` frames of `channels` channels at
+ * `samples`, recorded at `rate`, against the `n_notes` frequencies of
+ * `freqs`. The silence is trimmed from both ends of the channel when at
+ * least a quarter of a second is left, since QEMU writes from when the
+ * machine opens the device until it is stopped, and what is left is swept.
+ * Messages name the channel when the recording has more than one. Returns
+ * sweep's status, or 1 when the channel is too short for the notes.
+ */
+static int judge(const short *samples, long frames, unsigned channels, unsigned c, double rate,
+                 const double *freqs, int n_notes)
+{
+    char who[32];
+    short *s;
+    long i, lo = 0, hi = frames;
+    int rc;
+
+    who[0] = '\0';
+    if (channels > 1) {
+        sprintf(who, "channel %u: ", c + 1);
+    }
+    s = (short *)malloc((size_t)frames * sizeof(short));
+    if (s == NULL) {
+        return 2;
+    }
+    for (i = 0; i < frames; i++) {
+        s[i] = samples[i * (long)channels + (long)c];
+    }
+    while (lo < frames && s[lo] > -QUIET && s[lo] < QUIET) {
+        lo++;
+    }
+    while (hi > lo && s[hi - 1] > -QUIET && s[hi - 1] < QUIET) {
+        hi--;
+    }
+    if (hi - lo < (long)rate / 4) {
+        lo = 0;
+        hi = frames;
+    }
+    if ((hi - lo) / n_notes < (long)rate / 20) {
+        fprintf(stderr, "wavcheck: %s%ld frames for %d notes is too few\n", who, hi - lo, n_notes);
+        free(s);
+        return 1;
+    }
+    rc = sweep(s + lo, hi - lo, rate, freqs, n_notes, who);
+    free(s);
+    if (rc == 0) {
+        printf("wavcheck: ok: %s%d notes over %ld frames, each sounding in its turn and in the "
+               "order asked for\n",
+               who, n_notes, hi - lo);
+    }
+    return rc;
 }
 
 /**
@@ -263,36 +323,42 @@ static int sweep(const short *s, long frames, double rate, const double *freqs, 
  *
  * QEMU writes the data length only when it closes the file, which a machine
  * its case stops does not let it do, so a zero length or one past the end
- * of the file means that the samples run to the end. Only the first channel
- * is read: a tone is in every channel, and mixing them would cancel it in a
- * recording whose channels are out of phase. QEMU writes from when the
- * machine opens the device until it is stopped, so the silence is trimmed
- * from both ends when at least a quarter of a second is left, and what is
- * left is swept.
+ * of the file means that the samples run to the end. Each channel is judged
+ * on its own, never mixed with another, since mixing would cancel a tone in
+ * a recording whose channels are out of phase.
  */
 int main(int argc, char **argv)
 {
     struct wav w;
     FILE *f;
-    double freqs[MAX_NOTES];
-    int n_notes = 0, i, rc;
-    long frames, per_note, first = 0;
+    double freqs[2][MAX_NOTES];
+    int n_notes[2] = {0, 0}, lists = 1, i, rc = 0;
+    unsigned c;
+    long frames;
     short *samples;
 
     if (argc < 4 || strcmp(argv[1], "scale") != 0) {
-        fprintf(stderr, "usage: wavcheck scale FILE FREQ [FREQ ...]\n");
-        return 2;
-    }
-    if (argc - 3 > MAX_NOTES) {
-        fprintf(stderr, "wavcheck: at most %d frequencies can be checked\n", MAX_NOTES);
+        fprintf(stderr, "usage: wavcheck scale FILE FREQ [FREQ ...] [/ FREQ [FREQ ...]]\n");
         return 2;
     }
     for (i = 3; i < argc; i++) {
-        freqs[n_notes++] = atof(argv[i]);
-        if (freqs[n_notes - 1] <= 0.0) {
+        if (strcmp(argv[i], "/") == 0 && lists == 1) {
+            lists = 2;
+            continue;
+        }
+        if (n_notes[lists - 1] == MAX_NOTES) {
+            fprintf(stderr, "wavcheck: at most %d frequencies can be checked\n", MAX_NOTES);
+            return 2;
+        }
+        freqs[lists - 1][n_notes[lists - 1]] = atof(argv[i]);
+        if (freqs[lists - 1][n_notes[lists - 1]++] <= 0.0) {
             fprintf(stderr, "wavcheck: %s is not a frequency\n", argv[i]);
             return 2;
         }
+    }
+    if (n_notes[0] == 0 || (lists == 2 && n_notes[1] == 0)) {
+        fprintf(stderr, "usage: wavcheck scale FILE FREQ [FREQ ...] [/ FREQ [FREQ ...]]\n");
+        return 2;
     }
     rc = wav_open(argv[2], &f, &w);
     if (rc != 0) {
@@ -314,7 +380,12 @@ int main(int argc, char **argv)
         fclose(f);
         return 1;
     }
-    samples = (short *)malloc((size_t)frames * sizeof(short));
+    if (lists == 2 && w.channels < 2) {
+        printf("wavcheck: %s has one channel, and two were asked for\n", argv[2]);
+        fclose(f);
+        return 1;
+    }
+    samples = (short *)malloc((size_t)frames * w.channels * sizeof(short));
     if (samples == NULL) {
         fclose(f);
         return 2;
@@ -326,38 +397,20 @@ int main(int argc, char **argv)
             frames = i;
             break;
         }
-        samples[i] = (short)(int)(short)rd16(frame);
+        for (c = 0; c < w.channels; c++) {
+            samples[(long)i * w.channels + c] = (short)(int)(short)rd16(frame + 2 * c);
+        }
     }
     fclose(f);
 
-    {
-        long lo = 0, hi = frames;
+    for (c = 0; c < (lists == 2 ? 2u : w.channels); c++) {
+        int list = lists == 2 ? (int)c : 0;
+        int one = judge(samples, frames, w.channels, c, (double)w.rate, freqs[list], n_notes[list]);
 
-        while (lo < frames && samples[lo] > -QUIET && samples[lo] < QUIET) {
-            lo++;
-        }
-        while (hi > lo && samples[hi - 1] > -QUIET && samples[hi - 1] < QUIET) {
-            hi--;
-        }
-        if (hi - lo >= (long)w.rate / 4) {
-            first = lo;
-            frames = hi - lo;
+        if (one > rc) {
+            rc = one;
         }
     }
-    per_note = frames / n_notes;
-    if (per_note < (long)w.rate / 20) {
-        fprintf(stderr, "wavcheck: %ld frames for %d notes is too few\n", frames, n_notes);
-        free(samples);
-        return 1;
-    }
-
-    rc = sweep(samples + first, frames, (double)w.rate, freqs, n_notes);
     free(samples);
-    if (rc != 0) {
-        return rc;
-    }
-    printf("wavcheck: ok: %d notes over %ld frames, each sounding in its turn and in the "
-           "order asked for\n",
-           n_notes, frames);
-    return 0;
+    return rc;
 }
