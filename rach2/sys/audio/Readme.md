@@ -33,7 +33,7 @@ After `get_volume` come the stream operations, all seven or none: `stream_open`,
 
 A program also drives audio with `ioctl` on a console descriptor: `KIOCSOUND` and `KDMKTONE` sound the speaker, and `AUDIO_GET_INFO`, `AUDIO_START`, `AUDIO_STOP`, `AUDIO_WRITE` and `AUDIO_SET_VOLUME` call `audio` (`sys_ioctl` in `sys/syscall.c`). [ioctl(2)](../../../man/man2/ioctl.2) has their arguments and errors. `AUDIO_WRITE` is the write path above; no ioctl sets a callback. `/dev/mixer` ([mixer(4)](../../../man/man4/mixer.4)), in `mixer.c`, is OSS's mixer over `set_volume` and `get_volume`, there while the driver has a `get_volume`: its one channel, the volume, reads as the level on both sides, and a write sets the louder side. `KIOCSOUND` and `KDMKTONE` drive the speaker directly, whichever driver is active and under `rach2.noaudio` too.
 
-[audiotest(1)](../../../man/man1/audiotest.1) plays a square wave through these ioctls. It opens `/dev/console` itself, so it works from an SSH session, whose standard descriptors are a pty and not the console. Doom's sound is described in [its Readme](../../../ports/doom/Readme.md).
+[audiotest(1)](../../../man/man1/audiotest.1) plays a square wave through these ioctls, or with `-d` a scale through `/dev/dsp`. It opens `/dev/console` itself, so it works from an SSH session, whose standard descriptors are a pty and not the console. Doom's sound is described in [its Readme](../../../ports/doom/Readme.md).
 
 ### /proc/audio
 

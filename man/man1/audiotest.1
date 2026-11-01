@@ -3,13 +3,16 @@
 .Os
 .Sh NAME
 .Nm audiotest
-.Nd play a PCM test tone
+.Nd play a PCM test tone or scale
 .Sh SYNOPSIS
 .Nm
 .Op Ar rate Op Ar seconds Op Ar frequency
 .Nm
 .Fl s
 .Op Ar rate
+.Nm
+.Fl d
+.Op Ar rate bits channels
 .Sh DESCRIPTION
 .Nm
 plays a square wave as signed 16-bit stereo PCM.
@@ -57,6 +60,27 @@ It prints the largest delay it read and its bound, six periods of the frame
 count nearest 23 ms at the programmed rate, which is what the driver queues
 at most, and fails when the delay passed the bound.
 .Pp
+With
+.Fl d ,
+.Nm
+plays a scale through
+.Pa /dev/dsp
+instead.
+It sets the format,
+.Ar bits
+8 for unsigned 8-bit or 16 for signed 16-bit, then
+.Ar channels ,
+1 or 2, then
+.Ar rate ,
+1000 through 192000, with OSS's requests, or with no arguments sets
+nothing and plays at OSS's defaults, unsigned 8-bit mono at 8000 Hz.
+It prints the values the driver granted and plays the scale in them: five
+square-wave notes of 400 ms each, in stereo 262, 294, 330, 349 and 392 Hz
+in the first channel and the octave above in the second, and in mono 80,
+100, 125, 160 and 200 Hz.
+.Dv SNDCTL_DSP_SYNC
+then waits until the device has played them.
+.Pp
 The metal RAM image, metal disk root, os-real and the test image stage this
 program.
 .Sh EXIT STATUS
@@ -66,7 +90,10 @@ program.
 audiotest 32000 2 440
 cat /proc/audio
 audiotest -s 48000
+audiotest -d 48000 16 2
+audiotest -d
 .Ed
 .Sh SEE ALSO
 .Xr ioctl 2 ,
+.Xr dsp 4 ,
 .Xr proc 5
