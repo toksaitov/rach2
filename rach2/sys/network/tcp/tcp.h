@@ -360,6 +360,16 @@ void tcp_path_mtu(uint32_t local_ip, uint32_t remote_ip, uint16_t local_port, ui
                   uint32_t seq, uint16_t mtu);
 
 /**
+ * Whether the sequence number `seq` was sent and is unacknowledged on a
+ * connection from `local_ip`:`local_port` to `remote_ip`:`remote_port`,
+ * established or later: the check an ICMP report quoting a TCP segment must
+ * pass before it may change anything, the shared path MTU among it, since
+ * any host can forge one (RFC 5927, 4.1). Called with interrupts off.
+ */
+int tcp_in_flight(net_addr_t local_ip, uint16_t local_port, net_addr_t remote_ip,
+                  uint16_t remote_port, uint32_t seq);
+
+/**
  * Drive every connection's timers, once a tick, from the timer interrupt:
  * free a TIME_WAIT or FIN_WAIT_2 block with no socket whose time is up, send
  * again an acknowledgement the driver refused, retransmit when the

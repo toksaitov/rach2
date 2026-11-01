@@ -11,6 +11,7 @@
 #include "nd6.h"
 #include "mld6.h"
 #include "../ip/icmp.h"
+#include "../tcp/tcp.h"
 #include "../core/byteorder.h"
 #include "../driver/netdev.h"
 #include "../../mm/kheap.h"
@@ -165,7 +166,9 @@ void icmp6_error(struct netdev *nd, const uint8_t *dgram, uint16_t len, uint8_t 
  * follows. Only a datagram this machine sent, from ::1 or an address of its
  * own, has a path whose MTU it may lower. A destination link-scoped is
  * taken in the scope of the interface the message came by, or for the
- * loopback ring the one that holds the quoted source.
+ * loopback ring the one that holds the quoted source. A quoted TCP segment
+ * lowers it only when its sequence is in flight on its connection
+ * (`tcp_in_flight`), and a quote too short to give the sequence not at all.
  */
 static void icmp6_too_big(struct netdev *nd, const uint8_t *msg, uint16_t len)
 {
@@ -188,6 +191,15 @@ static void icmp6_too_big(struct netdev *nd, const uint8_t *msg, uint16_t len)
         ifindex = nd->index;
     } else if (holder) {
         ifindex = holder->index;
+    }
+    if (q[6] == IP6_NH_TCP) {
+        const uint8_t *t = q + IP6_HDR_SIZE;
+
+        if (len < 8 + IP6_HDR_SIZE + 8 ||
+            !tcp_in_flight(net_addr6(qsrc, (uint32_t)ifindex), read16be(t),
+                           net_addr6(qdst, (uint32_t)ifindex), read16be(t + 2), read32be(t + 4))) {
+            return;
+        }
     }
     ip6_pmtu_lower(qdst, ifindex, read32be(msg + 4));
 }

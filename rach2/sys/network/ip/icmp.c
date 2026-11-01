@@ -102,8 +102,10 @@ static int ping_wq_ready = 0;
  * destination's path MTU falls to the link's (`ip_pmtu_lower`), whatever
  * the protocol, when the quoted source is this machine's. For a TCP
  * segment the quote also gives the connection's ports and the segment's
- * sequence number, which `tcp_path_mtu` finds the connection by. A quote
- * too short for its header is ignored.
+ * sequence number, and the report changes nothing unless that sequence is
+ * in flight on the connection (`tcp_in_flight`); then it also goes to
+ * `tcp_path_mtu`. A quote too short for its header, or for a TCP segment's
+ * first eight bytes, is ignored.
  */
 static void icmp_too_big(const uint8_t *data, uint16_t len)
 {
@@ -114,8 +116,14 @@ static void icmp_too_big(const uint8_t *data, uint16_t len)
     if (ihl < 20 || 8u + ihl > len || !netdev_owns(read32be(ip + 12))) {
         return;
     }
+    if (ip[9] == IP_PROTO_TCP &&
+        (8u + ihl + 8u > len ||
+         !tcp_in_flight(net_addr4(read32be(ip + 12)), read16be(tcp), net_addr4(read32be(ip + 16)),
+                        read16be(tcp + 2), read32be(tcp + 4)))) {
+        return;
+    }
     ip_pmtu_lower(read32be(ip + 16), read16be(data + 6));
-    if (8u + ihl + 8u > len || ip[9] != IP_PROTO_TCP) {
+    if (ip[9] != IP_PROTO_TCP) {
         return;
     }
     tcp_path_mtu(read32be(ip + 12), read32be(ip + 16), read16be(tcp), read16be(tcp + 2),

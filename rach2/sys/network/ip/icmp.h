@@ -37,9 +37,10 @@
  * An echo request is answered from `dst_ip` with the same identifier,
  * sequence and data. An echo reply from the peer of the ping in flight, with
  * its identifier and sequence, ends the ping's wait. A fragmentation-needed
- * report lowers the quoted destination's path MTU (`ip_pmtu_lower`) and, about
- * a TCP segment, goes to `tcp_path_mtu`; a port unreachable
- * about a UDP datagram to `udp_refused`. A message shorter than its 8-byte
+ * report lowers the quoted destination's path MTU (`ip_pmtu_lower`), about a
+ * TCP segment only when it is in flight (`tcp_in_flight`), and then also goes
+ * to `tcp_path_mtu`; a port unreachable about a UDP datagram goes to
+ * `udp_refused`. A message shorter than its 8-byte
  * header is dropped, and anything else is counted and ignored. Called with
  * interrupts off, from `ip_rx`.
  */

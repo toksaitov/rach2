@@ -1098,14 +1098,34 @@ static void tcp_enter_fast_recovery(struct tcb *tcb)
     tcb->cwnd = new_ss + TCP_DUP_ACKS * tcb->snd_mss;
 }
 
-void tcp_path_mtu(uint32_t local_ip, uint32_t remote_ip, uint16_t local_port, uint16_t remote_port,
-                  uint32_t seq, uint16_t mtu)
+/** The connection `seq` is in flight on, from `local_ip`:`local_port` to
+ * `remote_ip`:`remote_port`, or NULL as `tcp_in_flight` says. */
+static struct tcb *tcp_flight(net_addr_t local_ip, uint16_t local_port, net_addr_t remote_ip,
+                              uint16_t remote_port, uint32_t seq)
 {
-    struct tcb *tcb = tcp_find(net_addr4(local_ip), local_port, net_addr4(remote_ip), remote_port);
-    uint32_t mss = mtu > 40u ? mtu - 40u : 0;
+    struct tcb *tcb = tcp_find(local_ip, local_port, remote_ip, remote_port);
 
     if (!tcb || tcb->state < TCP_ESTABLISHED || (int32_t)(seq - tcb->snd_una) < 0 ||
         (int32_t)(seq - tcb->snd_nxt) >= 0) {
+        return NULL;
+    }
+    return tcb;
+}
+
+int tcp_in_flight(net_addr_t local_ip, uint16_t local_port, net_addr_t remote_ip,
+                  uint16_t remote_port, uint32_t seq)
+{
+    return tcp_flight(local_ip, local_port, remote_ip, remote_port, seq) != NULL;
+}
+
+void tcp_path_mtu(uint32_t local_ip, uint32_t remote_ip, uint16_t local_port, uint16_t remote_port,
+                  uint32_t seq, uint16_t mtu)
+{
+    struct tcb *tcb =
+        tcp_flight(net_addr4(local_ip), local_port, net_addr4(remote_ip), remote_port, seq);
+    uint32_t mss = mtu > 40u ? mtu - 40u : 0;
+
+    if (!tcb) {
         return;
     }
     if (mss < TCP_MSS_DEFAULT) {
