@@ -201,6 +201,17 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
 #define WPA_ACTION             "/etc/wpa_supplicant/wpa_action"
 #define WPA_CTRL_DIR           "/var/run/wpa_supplicant"
 #define WPA_CTRL               WPA_CTRL_DIR "/" WIFI_IFACE
+
+/*
+ * The metric of the IPv6 default route each router gives an interface,
+ * written to its `ra_defrtr_metric` once the interface is there: 100 for
+ * `NETWORK_IFACE` and 600 for `WIFI_IFACE`, as NetworkManager sets them and
+ * as the lease script sets IPv4's, so that IPv6 too leaves by the cable
+ * while it is plugged in and by Wi-Fi when it is not.
+ */
+#define RA_METRIC_PATH    "/proc/sys/net/ipv6/conf/%s/ra_defrtr_metric"
+#define NETWORK_RA_METRIC "100"
+#define WIFI_RA_METRIC    "600"
 #endif
 
 /* BusyBox, whose applets init runs by the name in argv[0]: the system log,
@@ -2466,6 +2477,34 @@ static void start_wpa_cli(struct service *s, const struct service *supplicant)
     }
 }
 
+/**
+ * Write `metric` to the `ra_defrtr_metric` of the interface `name` once for
+ * each time it appears: `*written` keeps the index of the interface last
+ * written, so a value an administrator writes later stands, and a radio
+ * that comes back as a new interface is written again. A failed write is
+ * reported once and not tried again for that interface.
+ */
+static void set_ra_metric(const char *name, const char *metric, unsigned *written)
+{
+    unsigned index = if_nametoindex(name);
+    char path[64];
+    int fd, ok;
+
+    if (index == 0 || index == *written) {
+        return;
+    }
+    *written = index;
+    snprintf(path, sizeof(path), RA_METRIC_PATH, name);
+    fd = open(path, O_WRONLY | O_CLOEXEC);
+    ok = fd >= 0 && write(fd, metric, strlen(metric)) == (ssize_t)strlen(metric);
+    if (!ok) {
+        fprintf(stderr, "init: %s: cannot set ra_defrtr_metric: %s\n", name, strerror(errno));
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+}
+
 /** Start ndwatch(8) for `WIFI_IFACE` when `wifi_wanted` and the image has
  * ndwatch. */
 static void start_wifi_ndwatch(struct service *s)
@@ -2505,6 +2544,7 @@ static int bus_user(void)
 struct services {
     struct service log, sshd, bus, cron, ntp, plug, nd, wpa, wcli, wnd;
     int bus_wanted, cron_wanted;
+    unsigned wired_metric, wifi_metric; /* the indices `set_ra_metric` wrote */
 };
 
 /**
@@ -2527,7 +2567,8 @@ static void services_found(struct services *s)
  * system bus and the cron daemon where the image has them, ntpd while
  * `NTP_CONF` names a server, ifplugd and ndwatch where init follows
  * `NETWORK_IFACE`, and wpa_supplicant, wpa_cli and ndwatch where it follows
- * `WIFI_IFACE`. A failed fork is left for the next turn.
+ * `WIFI_IFACE`; and give each of the two the metric of its routers' IPv6
+ * default routes (`set_ra_metric`). A failed fork is left for the next turn.
  *
  * The NTP configuration is read again on each turn that finds ntpd not
  * running, so a server an administrator writes into the file is used within
@@ -2559,6 +2600,8 @@ static void start_services(struct services *s)
         s->ntp.pid = spawn_ntpd();
         s->ntp.spawned = time(0);
     }
+    set_ra_metric(NETWORK_IFACE, NETWORK_RA_METRIC, &s->wired_metric);
+    set_ra_metric(WIFI_IFACE, WIFI_RA_METRIC, &s->wifi_metric);
     start_ifplugd(&s->plug);
     start_ndwatch(&s->nd);
     start_wpa_supplicant(&s->wpa);
