@@ -1390,7 +1390,7 @@ static int check_term(void)
         fail("mk/term.mk does not include term/sources.mk, so the host build "
              "no longer reads the shared source list");
     if (!file_has_line("vendor/libtsm/build_libtsm.sh",
-                       "SOURCES=\"$(sed -n 's/^LIBTSM_SRC = //p' sources.mk | "
+                       "SOURCES=\"$(sed -n 's|^LIBTSM_SRC = ||p' sources.mk | "
                        "sed 's|\\$(LIBTSM)/||g')\""))
         fail("vendor/libtsm/build_libtsm.sh does not read its sources from "
              "vendor/libtsm/sources.mk");

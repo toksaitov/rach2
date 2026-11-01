@@ -135,7 +135,7 @@ CFLAGS="-std=gnu99 -O2 -Wall -ffast-math -fno-strict-aliasing -D_GNU_SOURCE \
 -I$SRC/src/tsm -I$SRC/src/shared -I$SRC/external -I$SRC/external/wcwidth"
 # The files compiled, from sources.mk, which term's guest build reads too.
 # shellcheck disable=SC2016 # $(LIBTSM) is make's, matched literally
-SOURCES="$(sed -n 's/^LIBTSM_SRC = //p' sources.mk | sed 's|\$(LIBTSM)/||g')"
+SOURCES="$(sed -n 's|^LIBTSM_SRC = ||p' sources.mk | sed 's|\$(LIBTSM)/||g')"
 if [ -z "$SOURCES" ]; then
     echo "libtsm: sources.mk has no LIBTSM_SRC line" >&2
     exit 1
