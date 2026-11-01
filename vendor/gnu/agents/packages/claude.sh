@@ -11,7 +11,8 @@
 # SHA-512 the npm registry lists. The binary is installed unmodified as
 # /opt/claude/bin/claude, with the license beside it and a link in
 # /usr/bin, and the managed settings in /etc/claude-code turn its updates
-# and its sandbox off.
+# off. Its sandbox is left as shipped: off until a person's settings turn
+# it on, when it runs commands under the root's bwrap and socat.
 VERSION=2.1.296
 LICENSE=Proprietary
 FINGERPRINT=31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE
@@ -60,9 +61,6 @@ package_stage()
 {
   "env": {
     "DISABLE_UPDATES": "1"
-  },
-  "sandbox": {
-    "enabled": false
   }
 }
 EOF

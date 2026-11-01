@@ -98,12 +98,12 @@ followed by
 By default
 .Nm
 asks before a command with side effects and runs each shell command in a
-sandbox, which on Linux is a copy of bubblewrap built into the program.
-Bubblewrap needs parts of Linux that Rach2 does not have yet, among them
-.Fn pivot_root ,
-and Meta documents that
-.Nm
-refuses a shell command when it cannot run it in the sandbox.
+sandbox, which on Linux is a copy of bubblewrap built into the program, in
+which the files outside the workspace are read-only.
+.Fl -sandbox-network
+says whether the command reaches the network: through
+.Nm Ns 's
+proxy, the default, not at all, or freely.
 .Fl -disable-sandbox
 runs commands without it, and
 .Fl -yolo
@@ -135,11 +135,11 @@ the sessions, their index and the logs
 .Ql muse exec
 with no credential, and 2 for an option it does not know.
 .Sh EXAMPLES
-Sign in, then work in a repository without the sandbox:
+Sign in, then work in a repository:
 .Bd -literal -offset indent
 $ muse login
 $ cd project
-$ muse --disable-sandbox
+$ muse
 .Ed
 .Sh SEE ALSO
 .Xr gh 1 ,

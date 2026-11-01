@@ -13,7 +13,8 @@
 # licenses of ripgrep, bubblewrap and zsh, which the package does not have,
 # taken from the sources that the tag's build scripts name. /usr/bin/codex
 # links to the program, and /etc/codex/config.toml turns off the update
-# check, the background server and the sandbox.
+# check and the background server. The sandbox is left as shipped, the
+# bundled bubblewrap.
 VERSION=0.162.1
 LICENSE=Apache-2.0
 COSIGN_VERSION=3.1.3
@@ -71,7 +72,6 @@ package_stage()
 # /etc/codex/config.toml: Rach2's settings for Codex, which a person's
 # ~/.codex/config.toml overrides; codex(1) says why each is set.
 check_for_update_on_startup = false
-sandbox_mode = "danger-full-access"
 
 [features]
 daemon_auto_start = false

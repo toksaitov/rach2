@@ -146,12 +146,25 @@ Anthropic's catalog of plugins, which
 .Ev CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL
 set to 1 stops.
 .Pp
-The sandbox that
+The sandbox is off, as Anthropic ships it, and a shell command
 .Nm
-can run shell commands in needs bubblewrap, which this release does not
-provide.
-The managed settings turn it off, so the commands it runs have the user's
-own rights, within what the permission mode of the session allows.
+runs has the user's own rights, within what the permission mode of the
+session allows.
+A user's settings turn it on:
+.Bd -literal -offset indent
+{"sandbox": {"enabled": true}}
+.Ed
+.Pp
+Then each shell command runs under
+.Pa /usr/bin/bwrap ,
+in a network namespace of its own, with the files outside the working
+directory read-only and a seccomp filter of its own.
+The command's only way out of its namespace is
+.Nm Ns 's
+proxy, which
+.Pa /usr/bin/socat
+joins to the namespace's loopback interface and which allows only the
+hosts the settings list.
 .Sh ENVIRONMENT
 .Bl -tag -width Ds
 .It Ev ANTHROPIC_API_KEY
@@ -184,7 +197,7 @@ the program
 .It Pa /opt/claude/LICENSE.md
 Anthropic's notice
 .It Pa /etc/claude-code/managed-settings.json
-the settings that turn updates and the sandbox off
+the settings that turn updates off
 .It Pa ~/.claude/.credentials.json
 the sign-in
 .It Pa ~/.claude.json

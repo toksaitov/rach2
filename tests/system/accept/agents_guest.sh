@@ -103,8 +103,8 @@ command_line() {
         claude.start) echo 'claude --permission-mode bypassPermissions' ;;
         claude.resume) echo 'claude --permission-mode bypassPermissions --continue' ;;
         claude.once) echo "claude -p '$ONCE_PROMPT'" ;;
-        codex.start) echo 'codex --ask-for-approval never' ;;
-        codex.resume) echo 'codex resume --last --ask-for-approval never' ;;
+        codex.start) echo 'codex --ask-for-approval never --sandbox danger-full-access' ;;
+        codex.resume) echo 'codex resume --last --ask-for-approval never --sandbox danger-full-access' ;;
         codex.once) echo "codex exec '$ONCE_PROMPT' < /dev/null" ;;
         agy.start) echo 'agy --dangerously-skip-permissions' ;;
         agy.resume) echo 'agy --dangerously-skip-permissions --continue' ;;

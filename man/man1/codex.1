@@ -121,7 +121,7 @@ whose settings take the place of the first's, and then from
 on the command line.
 Rach2's
 .Pa /etc/codex/config.toml
-makes three settings:
+makes two settings:
 .Bl -tag -width Ds
 .It Ql check_for_update_on_startup = false
 .Nm
@@ -144,17 +144,25 @@ server that runs the sessions, and an updater that installs OpenAI's newer
 releases in that directory.
 .Ql codex agents ,
 which lists the sessions of that server, needs it.
-.It Ql sandbox_mode = \(dqdanger-full-access\(dq
-The commands that the model asks for run without Codex's sandbox.
-On Linux the sandbox runs each command under the bundled bubblewrap, which
-needs kernel features that Rach2 does not have yet, so a command run in it
-fails.
-Without it a command has every right of the user who runs
-.Nm ,
-so run
-.Nm
-as an ordinary user, on files that the work can afford to change.
 .El
+.Ss The sandbox
+.Nm
+runs the commands that the model asks for under the bundled bubblewrap,
+with a seccomp filter that refuses them the network.
+.Ql sandbox_mode ,
+or
+.Fl -sandbox
+for one run, chooses how much they may write:
+.Ql read-only ,
+the default of
+.Ql codex exec ,
+nothing;
+.Ql workspace-write
+the working directory and the temporary directories;
+.Ql danger-full-access
+everything the user may, with no sandbox.
+.Ql codex sandbox Ar command
+runs a command as the model's would run.
 .Sh FILES
 .Bl -tag -width Ds
 .It Pa /opt/codex/bin/codex

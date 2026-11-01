@@ -7,11 +7,12 @@
 # commits with git. The fake server checks each tool result before it answers.
 # Codex reaches the server through a model provider of the home's
 # ~/.codex/config.toml, trusts the test authority by CODEX_CA_CERTIFICATE and
-# signs in with a dummy key; its sandbox is off by /etc/codex/config.toml,
-# which the row does not override. Every name Codex reaches as shipped is the
-# fake server's too, so a request to any of them that the script does not have
-# fails the row; the home's settings turn off Codex's plugins, which would
-# fetch their catalog from chatgpt.com and api.github.com. The row first logs
+# signs in with a dummy key. The home's settings turn its sandbox off, whose
+# default for `codex exec`, read-only, would refuse the edit and the commit.
+# Every name Codex reaches as shipped is the fake server's too, so a request
+# to any of them that the script does not have fails the row; the home's
+# settings turn off Codex's plugins, which would fetch their catalog from
+# chatgpt.com and api.github.com. The row first logs
 # in as a person does, in a login shell, whose profile starts the user's D-Bus
 # session bus, and gives Codex the bus's address, as a program run from that
 # login has it; the login shell Codex runs to learn the environment then finds
@@ -49,6 +50,7 @@ session_start() {
 model = "gpt-5.5"
 model_provider = "fakeapi"
 approval_policy = "never"
+sandbox_mode = "danger-full-access"
 
 [features]
 plugins = false
