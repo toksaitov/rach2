@@ -198,7 +198,7 @@ int wlan_set_state(struct wlan *wlan, enum wlan_sta_state state, struct wlan_bss
         return -EINVAL;
     if (wlan->radio->ops->sta_state) {
         rc = wlan->radio->ops->sta_state(wlan->radio, bss, wlan->state, state);
-        if (rc)
+        if (rc && state != WLAN_STA_NONE)
             return rc;
     }
     wlan->bss = bss;

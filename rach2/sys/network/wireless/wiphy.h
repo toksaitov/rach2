@@ -49,7 +49,8 @@ int wlan_start(struct wlan *wlan);
 /** Stop and close the port; process context without net_lock, safe twice. */
 void wlan_stop(struct wlan *wlan);
 /** Commit a station state and BSS after the driver accepts it; worker only,
- * no net_lock. Return 0, -EINVAL or a driver error, preserving old state. */
+ * no net_lock. Return 0, -EINVAL or a driver error, preserving old state;
+ * a move to NONE commits whatever the driver answers. */
 int wlan_set_state(struct wlan *wlan, enum wlan_sta_state state, struct wlan_bss *bss);
 /** Restrict advertised channels by world and EEPROM rules; no allocation.
  * Unknown countries allow only channels 1 to 11, with 12 and 13 passive. */
