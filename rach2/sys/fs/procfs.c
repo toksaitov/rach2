@@ -16,6 +16,7 @@
 
 #include "../latency.h"
 #include "../network/ip/ip.h"
+#include "../network/ip6/ip6.h"
 #include "../mm/filecache.h"
 #include "../mm/filemap.h"
 #include "../mm/kheap.h"
@@ -3986,6 +3987,63 @@ static int procfs_gen_netpacket(struct procfs_text *t)
     return t->len;
 }
 
+/** Append the /proc/net/snmp6 line of the counter `name` of value `v`:
+ * the name left-aligned in 32 columns, a tab and the value, as Linux
+ * writes it. */
+static void ap_mib6(struct procfs_text *t, const char *name, uint32_t v)
+{
+    ap_left(t, name, 32);
+    ap_ch(t, '\t');
+    ap_u32(t, v);
+    ap_ch(t, '\n');
+}
+
+/**
+ * Render /proc/net/snmp6: of the IPv6 and ICMPv6 counters Linux keeps, the
+ * ones this stack has (`net_mib6`), a line each, in Linux's order, which
+ * `nstat` reads by name. Ip6OutForwDatagrams is 0, since this machine
+ * forwards nothing.
+ */
+static int procfs_gen_netsnmp6(struct procfs_text *t)
+{
+    const struct net_mib6 *m = &net_mib6;
+
+    ap_mib6(t, "Ip6InReceives", m->ip6_in_receives);
+    ap_mib6(t, "Ip6InHdrErrors", m->ip6_in_hdr_errors);
+    ap_mib6(t, "Ip6InAddrErrors", m->ip6_in_addr_errors);
+    ap_mib6(t, "Ip6InUnknownProtos", m->ip6_in_unknown_protos);
+    ap_mib6(t, "Ip6InDiscards", m->ip6_in_discards);
+    ap_mib6(t, "Ip6InDelivers", m->ip6_in_delivers);
+    ap_mib6(t, "Ip6OutForwDatagrams", 0);
+    ap_mib6(t, "Ip6OutRequests", m->ip6_out_requests);
+    ap_mib6(t, "Ip6OutDiscards", m->ip6_out_discards);
+    ap_mib6(t, "Ip6OutNoRoutes", m->ip6_out_no_routes);
+    ap_mib6(t, "Ip6ReasmTimeout", m->ip6_reasm_timeout);
+    ap_mib6(t, "Ip6ReasmReqds", m->ip6_reasm_reqds);
+    ap_mib6(t, "Ip6ReasmOKs", m->ip6_reasm_oks);
+    ap_mib6(t, "Ip6ReasmFails", m->ip6_reasm_fails);
+    ap_mib6(t, "Ip6FragOKs", m->ip6_frag_oks);
+    ap_mib6(t, "Ip6FragFails", m->ip6_frag_fails);
+    ap_mib6(t, "Ip6FragCreates", m->ip6_frag_creates);
+    ap_mib6(t, "Ip6InMcastPkts", m->ip6_in_mcast_pkts);
+    ap_mib6(t, "Ip6OutMcastPkts", m->ip6_out_mcast_pkts);
+    ap_mib6(t, "Icmp6InMsgs", m->icmp6_in_msgs);
+    ap_mib6(t, "Icmp6InErrors", m->icmp6_in_errors);
+    ap_mib6(t, "Icmp6OutMsgs", m->icmp6_out_msgs);
+    ap_mib6(t, "Icmp6InDestUnreachs", m->icmp6_in_dest_unreachs);
+    ap_mib6(t, "Icmp6InPktTooBigs", m->icmp6_in_pkt_too_bigs);
+    ap_mib6(t, "Icmp6InTimeExcds", m->icmp6_in_time_excds);
+    ap_mib6(t, "Icmp6InParmProblems", m->icmp6_in_parm_problems);
+    ap_mib6(t, "Icmp6InEchos", m->icmp6_in_echos);
+    ap_mib6(t, "Icmp6InEchoReplies", m->icmp6_in_echo_replies);
+    ap_mib6(t, "Icmp6OutDestUnreachs", m->icmp6_out_dest_unreachs);
+    ap_mib6(t, "Icmp6OutTimeExcds", m->icmp6_out_time_excds);
+    ap_mib6(t, "Icmp6OutParmProblems", m->icmp6_out_parm_problems);
+    ap_mib6(t, "Icmp6OutEchos", m->icmp6_out_echos);
+    ap_mib6(t, "Icmp6OutEchoReplies", m->icmp6_out_echo_replies);
+    return t->len;
+}
+
 /** Render the /proc/net file of origin `origin`, one with a name from
  * `synth_net_name`: those `synth_net_file` gives and the two files of
  * /proc/net/stat. */
@@ -3994,6 +4052,8 @@ static int procfs_gen_net(struct procfs_text *t, int origin)
     switch (origin) {
     case SYNTH_PROC_NETPACKET:
         return procfs_gen_netpacket(t);
+    case SYNTH_PROC_NETSNMP6:
+        return procfs_gen_netsnmp6(t);
     case SYNTH_PROC_NETSTAT_RT:
     case SYNTH_PROC_NETSTAT_ARP:
         return procfs_gen_netstat(t, origin);

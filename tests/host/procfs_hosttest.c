@@ -65,8 +65,10 @@ static int sysfs_block_loop(int key);
 #include "arch/i686/mmu.h"
 #include "ns_first.h"
 
-/* The counters /proc/net/snmp reports, which net_core.c defines. */
+/* The counters /proc/net/snmp reports, which net_core.c defines, and those
+ * /proc/net/snmp6 reports, which ip6.c defines. */
 struct net_mib net_mib;
+struct net_mib6 net_mib6;
 
 /** No interface is up here, so /sys/class/net is empty. */
 int netdev_count(void)

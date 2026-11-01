@@ -115,8 +115,8 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_PIDMOUNTS   29
 #define SYNTH_PROC_LOADAVG     30
 /* The files of /proc/net after the first four, SYNTH_PROC_NETUDP to
- * SYNTH_PROC_NETSNMP and SYNTH_PROC_NETPACKET, in the order they are listed
- * (`synth_net_file`). */
+ * SYNTH_PROC_NETSNMP, SYNTH_PROC_NETPACKET and SYNTH_PROC_NETSNMP6, in the
+ * order they are listed (`synth_net_file`). */
 #define SYNTH_PROC_NETUDP      31
 #define SYNTH_PROC_NETRAW      32
 #define SYNTH_PROC_NETUNIX     33
@@ -149,6 +149,7 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_NETPACKET   56
 /* /proc/acpi/call, read and written as the ACPI method calls it makes. */
 #define SYNTH_PROC_ACPI_CALL   57
+#define SYNTH_PROC_NETSNMP6    58
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */

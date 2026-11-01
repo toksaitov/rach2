@@ -257,11 +257,12 @@ static const struct {
                 {SYNTH_PROC_NETSOCKSTAT, "sockstat"},
                 {SYNTH_PROC_NETSNMP, "snmp"},
                 {SYNTH_PROC_NETPACKET, "packet"},
+                {SYNTH_PROC_NETSNMP6, "snmp6"},
                 {SYNTH_PROC_NETSTAT_RT, "stat/rt_cache"},
                 {SYNTH_PROC_NETSTAT_ARP, "stat/arp_cache"}};
 
 /* The files of `netfiles` directly in /proc/net, the ones before stat's. */
-#define SYNTH_NET_FILES 6
+#define SYNTH_NET_FILES 7
 
 const char *synth_net_name(int origin)
 {
