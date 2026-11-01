@@ -5,16 +5,24 @@
  * A child in a mount namespace of its own builds a root as bubblewrap does:
  * a tmpfs at /tmp/sbx, a bind of its newroot over itself, and pivot_root to
  * the tmpfs with the old root at oldroot, where the probe's own file then is.
- * It mounts proc at /newroot/proc, which shows its own status. umount2 of
+ * It mounts proc at /newroot/proc, which shows its own status, and binds
+ * /newroot/proc/sys read-only over itself, as bubblewrap does as root when
+ * that directory can be written, and then binds /oldroot/proc/sys over it
+ * read-only, as `--ro-bind /proc/sys /proc/sys` does: through each, a file
+ * of /proc/sys reads and an open of it for writing fails with EROFS, as
+ * access(2) of the directory for writing does. umount2 of
  * /oldroot with MNT_DETACH takes the old root away: the probe's file is gone
  * from under it and no line of mountinfo names it. Then, through a
  * descriptor of the tmpfs root opened first, it pivots to newroot with "."
  * and ".", enters the old root by fchdir, where getcwd fails with ENOENT, and
  * lets go of it by umount2 of "." with MNT_DETACH. In the new root /proc
- * works, /newroot and /oldroot are gone, a file made at /tmp/sbx.out stays
- * inside, and the probe's own directory cannot be written, since it is not
- * there. Outside, /tmp/sbx.out does not exist and no mount of the namespace
- * shows in mountinfo.
+ * works and /proc/sys stays read-only, /newroot and /oldroot are gone, a
+ * file made at /tmp/sbx.out stays inside, and the probe's own directory
+ * cannot be written, since it is not there. Outside, /tmp/sbx.out does not
+ * exist and no mount of the namespace shows in mountinfo, and /proc/sys
+ * can be written. User 1000, in a user and a mount namespace of its own
+ * that map its own ids, as bubblewrap makes them, binds /proc/sys
+ * read-only over itself, and it reads and refuses a write with EROFS.
  *
  * In the probe's own namespace a tmpfs at /tmp/sbxd with a file open for
  * writing is detached at once by MNT_DETACH: its file is gone from the path,
@@ -87,13 +95,19 @@ struct cap_data {
 
 /* The assertions, in the order the rows check them. */
 static const char *const rows[] = {
-    "pivot-setup",       "pivot-put-old", "proc-anywhere",    "detach-put-old",  "pivot-stacked",
-    "pivot-new-root",    "write-outside", "namespace-unseen", "detach-refusals", "detach-busy",
-    "detach-every-view", "detach-reaped", "bset-read",        "bset-drop-eperm", "bset-drop",
-    "bset-fork",         "bset-exec",     "capset-single",    "capset-chown",    "ambient",
+    "pivot-setup",    "pivot-put-old",   "proc-anywhere",  "proc-sys-cover",    "proc-sys-rebind",
+    "detach-put-old", "pivot-stacked",   "pivot-new-root", "write-outside",     "namespace-unseen",
+    "proc-sys-user",  "detach-refusals", "detach-busy",    "detach-every-view", "detach-reaped",
+    "bset-read",      "bset-drop-eperm", "bset-drop",      "bset-fork",         "bset-exec",
+    "capset-single",  "capset-chown",    "ambient",
 };
 
 #define NROWS ((int)(sizeof(rows) / sizeof(rows[0])))
+
+/* The steps of `sandbox`, rows 0 to SANDBOX_STEPS - 1, and the first row of
+ * the bounding set's. */
+#define SANDBOX_STEPS 9
+#define CAP_ROW       15
 
 /* The probe's own file, read from /proc/self/exe before any pivot. */
 static char exe[256];
@@ -117,6 +131,20 @@ static int child_status(pid_t pid)
         return -1;
     }
     return WIFEXITED(st) ? WEXITSTATUS(st) : 128 + WTERMSIG(st);
+}
+
+/** Write `text` to the file `path`, as to /proc/self/uid_map; 0 or -1. */
+static int put(const char *path, const char *text)
+{
+    int fd = open(path, O_WRONLY);
+    ssize_t n;
+
+    if (fd < 0) {
+        return -1;
+    }
+    n = write(fd, text, strlen(text));
+    close(fd);
+    return n == (ssize_t)strlen(text) ? 0 : -1;
 }
 
 /** Whether `path` names nothing, which stat answers with ENOENT. */
@@ -211,6 +239,38 @@ static int refused(long rc, int err)
     return rc == -1 && errno == err;
 }
 
+/** Bind `src` over `dst` with the mounts below it, and make the bind
+ * read-only, nosuid and nodev, as bubblewrap's `--ro-bind` does; 0 or -1. */
+static int ro_bind(const char *src, const char *dst)
+{
+    return mount(src, dst, NULL, MS_BIND | MS_REC, NULL) != 0 ||
+                   mount("none", dst, NULL, MS_BIND | MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV,
+                         NULL) != 0
+               ? -1
+               : 0;
+}
+
+/** Whether the /proc/sys at `dir` is read-only: its kernel/overflowuid reads
+ * 65534, and an open of it for writing and access(2) of `dir` for writing
+ * fail with EROFS. */
+static int sys_read_only(const char *dir)
+{
+    char path[128], buf[16];
+    ssize_t n;
+    int fd;
+
+    snprintf(path, sizeof(path), "%s/kernel/overflowuid", dir);
+    fd = open(path, O_RDONLY);
+    n = fd < 0 ? -1 : read(fd, buf, sizeof(buf) - 1);
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (n != 6 || memcmp(buf, "65534\n", 6) != 0) {
+        return 0;
+    }
+    return refused(open(path, O_WRONLY), EROFS) && refused(access(dir, W_OK), EROFS);
+}
+
 /** Whether a mount of a tmpfs at /tmp fails with EPERM, as for a thread
  * without privilege. */
 static int mount_refused(void)
@@ -221,7 +281,7 @@ static int mount_refused(void)
 /**
  * Build the sandbox as bubblewrap does and check each step, in a child in a
  * mount namespace of its own: the exit code is the number of the step that
- * failed, 1 to 7, or 0.
+ * failed, 1 to SANDBOX_STEPS, or 0.
  */
 static int sandbox(void)
 {
@@ -245,34 +305,62 @@ static int sandbox(void)
         !status_is_mine("/newroot/proc/self/status")) {
         return 3;
     }
+    if (access("/newroot/proc/sys", W_OK) != 0 ||
+        ro_bind("/newroot/proc/sys", "/newroot/proc/sys") != 0 ||
+        !sys_read_only("/newroot/proc/sys") ||
+        !has_line("/proc/self/mountinfo", " /newroot/proc/sys ")) {
+        return 4;
+    }
+    if (ro_bind("/oldroot/proc/sys", "/newroot/proc/sys") != 0 ||
+        !sys_read_only("/newroot/proc/sys")) {
+        return 5;
+    }
     if (umount2("/oldroot", MNT_DETACH) != 0 || !absent(path) ||
         has_line("/proc/self/mountinfo", "/oldroot")) {
-        return 4;
+        return 6;
     }
     oldroot = open("/", O_RDONLY | O_DIRECTORY);
     if (oldroot < 0 || chdir("/newroot") != 0 || syscall(SYS_pivot_root, ".", ".") != 0 ||
         fchdir(oldroot) != 0 || getcwd(path, sizeof(path)) != NULL || errno != ENOENT ||
         umount2(".", MNT_DETACH) != 0 || chdir("/") != 0 || close(oldroot) != 0) {
-        return 5;
+        return 7;
     }
-    if (!status_is_mine("/proc/self/status") || !absent("/newroot") || !absent("/oldroot") ||
-        getcwd(path, sizeof(path)) == NULL || strcmp(path, "/") != 0) {
-        return 6;
+    if (!status_is_mine("/proc/self/status") || !sys_read_only("/proc/sys") ||
+        !absent("/newroot") || !absent("/oldroot") || getcwd(path, sizeof(path)) == NULL ||
+        strcmp(path, "/") != 0) {
+        return 8;
     }
     snprintf(path, sizeof(path), "%s.out", exe);
     if (!refused(open(path, O_WRONLY | O_CREAT, 0644), ENOENT) ||
         !refused(open(OUTFILE, O_WRONLY | O_CREAT, 0644), ENOENT) || mkdir("/tmp", 01777) != 0) {
-        return 7;
+        return 9;
     }
     fd = open("/../../tmp/sbx.out", O_WRONLY | O_CREAT | O_EXCL, 0644);
     if (fd < 0 || write(fd, "in\n", 3) != 3 || close(fd) != 0 || access(OUTFILE, R_OK) != 0) {
-        return 7;
+        return 9;
     }
     return 0;
 }
 
-/** Run the sandbox's steps, rows 0 to 7. Returns 0, or 1 after the failure
- * is reported. */
+/** As user 1000, in a user and a mount namespace of its own that map its own
+ * ids: bind /proc/sys read-only over itself, as bubblewrap's `--ro-bind
+ * /proc/sys /proc/sys` does for a user. The exit code is 0 or 1. */
+static int user_sys_bind(void)
+{
+    char map[32];
+
+    snprintf(map, sizeof(map), "%ld %ld 1\n", probe_id(1000), probe_id(1000));
+    if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0 ||
+        prctl(PR_SET_DUMPABLE, 1) != 0 || unshare(CLONE_NEWUSER | CLONE_NEWNS) != 0 ||
+        put("/proc/self/uid_map", map) != 0 || put("/proc/self/setgroups", "deny") != 0 ||
+        put("/proc/self/gid_map", map) != 0) {
+        return 1;
+    }
+    return ro_bind("/proc/sys", "/proc/sys") == 0 && sys_read_only("/proc/sys") ? 0 : 1;
+}
+
+/** Run the sandbox's steps, rows 0 to SANDBOX_STEPS, and the user's bind of
+ * /proc/sys. Returns 0, or 1 after the failure is reported. */
 static int sandbox_rows(void)
 {
     pid_t pid;
@@ -286,20 +374,32 @@ static int sandbox_rows(void)
         _exit(sandbox());
     }
     st = child_status(pid);
-    if (st < 0 || st > 7) {
+    if (st < 0 || st > SANDBOX_STEPS) {
         return fail("the sandbox's child ended");
     }
-    for (i = 1; i <= 7; i++) {
+    for (i = 1; i <= SANDBOX_STEPS; i++) {
         if (st == i) {
             return fail(rows[i - 1]);
         }
         report_held();
     }
-    if (!absent(OUTFILE) || !absent(BASE "/newroot") || has_line("/proc/self/mountinfo", BASE)) {
+    if (!absent(OUTFILE) || !absent(BASE "/newroot") || has_line("/proc/self/mountinfo", BASE) ||
+        has_line("/proc/self/mountinfo", "/proc/sys") || access("/proc/sys", W_OK) != 0) {
         return fail("the sandbox's mounts or its file seen outside");
     }
     report_held();
-    return rmdir(BASE) == 0 ? 0 : fail("rmdir " BASE);
+    if (rmdir(BASE) != 0) {
+        return fail("rmdir " BASE);
+    }
+    pid = fork();
+    if (pid == 0) {
+        _exit(user_sys_bind());
+    }
+    if (child_status(pid) != 0) {
+        return fail(rows[SANDBOX_STEPS + 1]);
+    }
+    report_held();
+    return 0;
 }
 
 /** In a child: whether DETACHED/f is gone, with a new mount namespace too.
@@ -315,7 +415,7 @@ static int gone_for_child(void)
     return 0;
 }
 
-/** Run the rows of MNT_DETACH in the probe's own namespace, 8 to 11.
+/** Run the rows of MNT_DETACH in the probe's own namespace, 11 to 14.
  * Returns 0, or 1 after the failure is reported. */
 static int detach_rows(void)
 {
@@ -468,7 +568,7 @@ static int in_child(int (*fn)(void))
     return child_status(pid);
 }
 
-/** Run the rows of the bounding set, capset and the ambient set, 12 to 19.
+/** Run the rows of the bounding set, capset and the ambient set, 15 to 22.
  * Returns 0, or 1 after the failure is reported. */
 static int cap_rows(void)
 {
@@ -476,38 +576,38 @@ static int cap_rows(void)
 
     if (prctl(PR_CAPBSET_READ, CAP_SYS_ADMIN, 0, 0, 0) != 1 ||
         !refused(prctl(PR_CAPBSET_READ, 41, 0, 0, 0), EINVAL)) {
-        return fail(rows[12]);
+        return fail(rows[CAP_ROW]);
     }
     report_held();
     if (in_child(drop_as_user) != 0) {
-        return fail(rows[13]);
+        return fail(rows[CAP_ROW + 1]);
     }
     report_held();
     st = in_child(drop_and_exec);
     if (st == 1) {
-        return fail(rows[14]);
+        return fail(rows[CAP_ROW + 2]);
     }
     report_held();
     if (st == 2) {
-        return fail(rows[15]);
+        return fail(rows[CAP_ROW + 3]);
     }
     report_held();
     if (st != 0) {
-        return fail(rows[16]);
+        return fail(rows[CAP_ROW + 4]);
     }
     report_held();
     if (in_child(keep_admin) != 0) {
-        return fail(rows[17]);
+        return fail(rows[CAP_ROW + 5]);
     }
     report_held();
     if (in_child(keep_chown) != 0) {
-        return fail(rows[18]);
+        return fail(rows[CAP_ROW + 6]);
     }
     report_held();
     if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, CAP_CHOWN, 0, 0) != 0 ||
         !refused(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_CHOWN, 0, 0), EPERM) ||
         prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, 0, 0, 0) != 0) {
-        return fail(rows[19]);
+        return fail(rows[CAP_ROW + 7]);
     }
     report_held();
     return 0;
