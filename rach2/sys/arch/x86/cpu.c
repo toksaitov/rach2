@@ -94,6 +94,24 @@ void arch_copy_words(void *dst, const void *src, size_t words)
 #endif
 }
 
+/* The direction flag is set only with interrupts masked: the i686 entry does
+ * not clear it, and a handler's compiled string instructions assume it clear.
+ * popf puts both flags back. */
+void arch_copy_words_down(void *dst, const void *src, size_t words)
+{
+#if defined(__x86_64__)
+    __asm__ __volatile__("pushfq; cli; std; rep movsq; popfq"
+                         : "+S"(src), "+D"(dst), "+c"(words)
+                         :
+                         : "memory", "cc");
+#else
+    __asm__ __volatile__("pushfl; cli; std; rep movsl; popfl"
+                         : "+S"(src), "+D"(dst), "+c"(words)
+                         :
+                         : "memory", "cc");
+#endif
+}
+
 void arch_fill_words(void *dst, unsigned long fill, size_t words)
 {
 #if defined(__x86_64__)

@@ -41,9 +41,10 @@ void k_strtoupper(char *str)
 }
 
 /*
- * `k_memcpy` and `k_memset` move a machine word at a time where the
- * architecture has string instructions for it: its cpu.h defines
- * ARCH_STRING_WORDS, and `arch_copy_words` and `arch_fill_words` use them
+ * `k_memcpy`, `k_memset` and `k_memmove` move a machine word at a time where
+ * the architecture has string instructions for it: its cpu.h defines
+ * ARCH_STRING_WORDS, and `arch_copy_words`, `arch_copy_words_down` and
+ * `arch_fill_words` use them
  * (on an x86, `rep movs` and `rep stos` with the direction flag cleared,
  * since a user program may leave it set at a system call). The kernel is
  * built without optimisation, so a byte loop costs a load, a store and a
@@ -101,10 +102,12 @@ void *k_memcpy(void *dest, const void *src, size_t n)
 /**
  * When the destination starts inside the source, a forward copy would
  * overwrite source bytes before they are read, so the copy runs backward
- * from the last byte. Every other arrangement copies forward through
- * `k_memcpy`, which is safe with the destination below the source or apart
- * from it, in words as in bytes: each word is read before the word at or
- * below it is written.
+ * from the last byte: the bytes past the last whole word, then the words by
+ * `arch_copy_words_down` where the architecture has it. A process's regions
+ * are one sorted array, and each mapping placed below the others moves it
+ * all up, so a thread's stack and guard page move every region. Every other arrangement copies
+ * forward through `k_memcpy`, which is safe with the destination below the source or apart from it,
+ * in words as in bytes: each word is read before the word at or below it is written.
  *
  * The overlap test compares addresses as integers, not as pointers: a
  * relational compare of pointers into two different objects is undefined in
@@ -119,11 +122,25 @@ void *k_memmove(void *dest, const void *src, size_t n)
     uintptr_t su = (uintptr_t)src;
 
     if (du > su && du - su < n) {
+#ifdef KSTRING_WORDS
+        size_t words = n / sizeof(unsigned long);
+
+        n %= sizeof(unsigned long);
+#endif
         d += n;
         s += n;
+#ifdef KSTRING_WORDS
+        d += words * sizeof(unsigned long);
+        s += words * sizeof(unsigned long);
+#endif
         while (n--) {
             *--d = *--s;
         }
+#ifdef KSTRING_WORDS
+        if (words) {
+            arch_copy_words_down(d - sizeof(unsigned long), s - sizeof(unsigned long), words);
+        }
+#endif
         return dest;
     }
     return k_memcpy(dest, src, n);

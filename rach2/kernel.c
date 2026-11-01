@@ -2697,7 +2697,8 @@ static void check_timing(void)
  * `k_memcpy` and `k_memset` move whole words with the architecture's string
  * instructions (`arch_copy_words` and `arch_fill_words`, `rep movs` and `rep
  * stos` on an x86) and the last bytes with a loop, and `k_memmove` copies
- * forward through `k_memcpy` (sys/lib/kstring.c). The host test beside them
+ * forward through `k_memcpy`, or backward through `arch_copy_words_down`
+ * (sys/lib/kstring.c). The host test beside them
  * (tests/host/kstring_hosttest.c) builds the byte loops alone, so it never
  * runs the instructions the machine runs. Every boot uses these routines
  * constantly, which finds a broken one at once and says nothing about the

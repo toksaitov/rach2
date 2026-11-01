@@ -298,6 +298,12 @@ int arch_random(uint32_t *out, int seed);
  * ARCH_STRING_WORDS, for k_memcpy. */
 void arch_copy_words(void *dst, const void *src, size_t words);
 
+/** Copy `words` machine words downward, from the word at `src` to the word
+ * at `dst` and on to lower addresses, for k_memmove when the destination
+ * starts inside the source; `dst` and `src` address the last word of each
+ * range. */
+void arch_copy_words_down(void *dst, const void *src, size_t words);
+
 /** Store `fill` in `words` machine words from `dst`, for k_memset. */
 void arch_fill_words(void *dst, unsigned long fill, size_t words);
 
