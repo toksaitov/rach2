@@ -20,6 +20,7 @@ tlsprobe set_thread_area and %gs of the i686 kernel
 ttyprobe lines and keys typed at the console, and its own window and screen
 usbdiskprobe sticks pulled and plugged through QEMU's monitor
 usbprobe QEMU's USB keyboard, mouse and hub models, and rach2.nousb and rach2.hubtree
+musl/audioclientsmusl rach2.audio.loopback on the boot line, and QEMU's recording of its sound for wavcheck
 musl/clockloadmusl the emulator stopped by the host and the clocks compared with its time
 musl/creddisk three boots of one disk image after _exit
 musl/keygennoent a processor without RDSEED and RDRAND, by QEMU's -cpu qemu64
