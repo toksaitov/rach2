@@ -25,7 +25,7 @@ check-mtools: $(MTOOLS_BIN) $(ELFCHECK)
 	$(ELFCHECK) --arch $(ARCH) $(MTOOLS_BIN)
 	@test $$(wc -c < $(MTOOLS_BIN)) -le 1048576
 
-# The direct Multiboot module must leave the boot allocator below 32 MiB.
+# The direct Multiboot module must leave the boot allocator below 64 MiB.
 # Check cached images too, but restage only changed inputs or an old size.
 $(ETUDE_IMAGE): krffs/manifests/etude-image.manifest mk/etude-image.mk \
                  etude-image-force $(MTOOLS_BIN) $(DEBUGFS_BIN) \
