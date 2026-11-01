@@ -109,11 +109,14 @@ marks a rejected list; its raw entries stop where decoding failed.
 .Pp
 The
 .Ql input
-line gives the input path chosen at discovery: the ADC and its connection
-index toward the pin, a mixer or selector between them and its index, or 0,
-the pin recorded, the internal and jack microphone pins, whether the
-internal mic is the inverted stereo pair whose right channel is muted, the
-ADC's input gain in steps, and the pin widget control the last capture set.
+line gives the input path chosen at discovery, or by the mixer's record
+source since: the ADC and its connection index toward the pin, a mixer or
+selector between them and its index, or 0, the pin recorded, the internal
+and jack microphone pins, whether the internal mic is the inverted stereo
+pair whose right channel is muted, the ADC's input gain on the pin recorded
+in steps, as
+.Xr mixer 4
+last set it, and the pin widget control the last capture set.
 The
 .Ql caps adc
 line gives the ADC's capabilities as a
