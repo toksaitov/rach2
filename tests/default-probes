@@ -137,6 +137,9 @@ musl/inotifymusl
 # AF_UNIX: pairs, descriptors and credentials in messages, and names in the
 # file system and the abstract namespace.
 musl/unixmusl
+# The IPv6 socket options, their control messages, raw ICMPv6's filter, and a
+# group joined on the card.
+musl/ip6optmusl
 # File mappings, shared memory, mremap and madvise.
 musl/mapmusl
 # System V shared memory, semaphores and message queues, and POSIX message

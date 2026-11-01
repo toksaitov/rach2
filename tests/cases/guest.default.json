@@ -4296,6 +4296,43 @@
       "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
     },
     {
+      "case_id": "guest.default.ip6optmusl",
+      "behavior": "An AF_INET6 socket keeps the hop limits, the multicast interface and loop and the traffic class it is given and refuses values out of range; a receive gives the IPV6_PKTINFO, IPV6_HOPLIMIT and IPV6_TCLASS control messages it asked for, and a sendmsg's own go before the socket's; a raw ICMPv6 socket's filter passes only the types it allows; and a group joined on eth0 receives the datagrams this machine sends it while the loop is on, and none once left.",
+      "units": ["default", "musl/ip6optmusl"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "ip6optmusl", "stdin": null, "role": "ordinary", "privileges": "root, which raw sockets need", "isolation": [], "children": "none", "cleanup": "its sockets close at exit, which leaves the group"},
+      "assertions": [
+        {"assertion_id": "defaults", "checks": "A new AF_INET6 UDP socket reads IPV6_UNICAST_HOPS 64, IPV6_MULTICAST_HOPS 1, IPV6_MULTICAST_LOOP 1, IPV6_MULTICAST_IF 0, IPV6_TCLASS 0 and IPV6_RECVPKTINFO 0.", "source": "program"},
+        {"assertion_id": "option-errors", "checks": "A hop limit or class of 256 or -2 and a loop of 2 are EINVAL, a multicast interface of index 999 ENODEV, IPV6_UNICAST_HOPS on an AF_INET socket ENOPROTOOPT, and a join of ::1 EINVAL.", "source": "program"},
+        {"assertion_id": "options-kept", "checks": "IPV6_UNICAST_HOPS 7 and IPV6_TCLASS 0x28 read back, and -1 gives back 64 and 0.", "source": "program"},
+        {"assertion_id": "ancillary", "checks": "Over ::1 a datagram from a sender with hop limit 7 and class 0x28 comes with IPV6_PKTINFO (::1 and lo's index), IPV6_HOPLIMIT 7 and IPV6_TCLASS 0x28, in that order, and no MSG_CTRUNC.", "source": "program"},
+        {"assertion_id": "sendmsg-control", "checks": "A sendmsg with IPV6_HOPLIMIT 9 and IPV6_TCLASS 0x10 arrives with them, and the next send with the socket's 7 and 0x28.", "source": "program"},
+        {"assertion_id": "ctrunc", "checks": "A control buffer with room for one int gives MSG_CTRUNC and a control length no longer than the buffer.", "source": "program"},
+        {"assertion_id": "no-control", "checks": "A socket that asked for no control message receives a control length of 0.", "source": "program"},
+        {"assertion_id": "filter", "checks": "A raw ICMPv6 socket's filter reads back all passing, then as set; of an echo request to ::1 sent with hop limit 5 and its reply, the socket passing requests alone sees the request with IPV6_HOPLIMIT 5, the one passing replies alone the reply with 64, and neither more; ICMP6_FILTER on a UDP socket is ENOPROTOOPT.", "source": "program"},
+        {"assertion_id": "join", "checks": "A UDP socket joins ff02::114 on eth0, and a second join is EADDRINUSE.", "source": "program"},
+        {"assertion_id": "multicast-loop", "checks": "A datagram to ff02::114 sent with IPV6_MULTICAST_IF eth0 and IPV6_MULTICAST_HOPS 3, once eth0's link-local address is no longer tentative, comes back with IPV6_PKTINFO ff02::114 on eth0 and IPV6_HOPLIMIT 3.", "source": "program"},
+        {"assertion_id": "no-loop", "checks": "A datagram sent with IPV6_MULTICAST_LOOP 0 does not come back: the next one received is a later one sent with the loop on.", "source": "program"},
+        {"assertion_id": "leave", "checks": "After IPV6_LEAVE_GROUP a second leave is EADDRNOTAVAIL, and a datagram to the group is not received: one to ::1 sent after it comes first.", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "ip6optmusl", "node": "tests/musl/ip6optmusl", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "network", "reason": "the probe binds fixed UDP ports and joins and sends to a group on a card named eth0, which a running machine's other programs and its link would share; the Lenovo's IPv6 is proved by its own task, 23b"}
+    },
+    {
       "case_id": "guest.default.prctlmusl",
       "behavior": "The attributes prctl sets and reads, the program name, the dumpable flag, the parent-death signal, no_new_privs and the child subreaper mark, behave as Linux's, and /proc/self/exe reaches the program's file.",
       "units": ["default", "musl/prctlmusl"],
