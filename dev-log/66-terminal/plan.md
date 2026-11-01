@@ -591,3 +591,19 @@ Batch 4, the host tests (#1779), found by `tests/run -a both host` on c1d6caeda,
 
 * `tests/host/fixtures/krffs_open.c:255,262` declares `open_framebuffer` and `open_mouse` with no arguments, and `syscall_open.inc:57` now passes `flags`.
 * `hub_hosttest` links `rach2/sys/usb/core.c`, which now calls `hid_led_sent` and `hid_led_report`, and the test defines neither. The batch builds every host test with `make -k` to find any more.
+
+The second run, `tests/run -a both style host` on b7afbdd6e after the four batches, was again refused at preparation by style, so the host tests have still not run. Its findings:
+
+Batch 5, function sizes (#1780). `sizecheck` finds, over its limits and not in its reasons file:
+
+* `rach2/sys/keymap.c`: `keymap_key` (171 lines, complexity 91) and `keymap_encode` (complexity 30); `rach2/sys/syscall_fs.c`: `sys__llseek` (121 lines, past the 118 allowed); `rach2/sys/usb/core.c`: `control_write` (7 parameters).
+* `term/draw.c`: `draw_cell` (8 parameters) and `draw_cb` (10, complexity 28); `term/host.c`: `command` (26) and `term_host_run` (32); `term/keys.c`: `xterm_key` (30) and `make_key` (7 parameters, complexity 26); `term/main.c`: `loop` (31); `term/screen.c`: `snapshot_cell` (10 parameters).
+* `tests/cases/host/esctest2.c`: `results` (30); `tests/cases/machine/installer_stick_update.c`: `boot_update` (110 lines); `seabios_scenario.c`: `play` and `termconsole_scenario.c`: `screen` (7 parameters each); `tests/host/fbdev_hosttest.c`: `requests` (27).
+
+Batch 6, the other checks (#1781):
+
+* registry: `tests/system/suites.md` is not what `tests/run inventory` prints, and the `seabios` suite has no `tests/run NAME` sentence in `suites.mk`.
+* conventions: `tests/cases/machine/installer_stick_update.c:269` has `//` inside a sed string, which the line-comment rule takes for a comment.
+* waits: `tests/lagprobe.c:369` and `tests/musl/clockmusl.c:122` declare a timing assumption at a line with no sleep and no bound, after batch 3 gave them reasons.
+* text: textcheck reads the extracted libtsm tree, `vendor/libtsm/libtsm-4.8.0/`, which `.gitignore` names and which the first run did not report.
+* text: `tools/flow/board.sh:105` was 101 columns; fixed on master in 03c21c78d.
