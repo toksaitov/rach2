@@ -36,8 +36,8 @@
 
 /* IP_MTU_DISCOVER's values, Linux's: never set DF; set it on a datagram
  * within the path MTU and fragment a larger one, the default; refuse a
- * larger one with EMSGSIZE (DO and PROBE); fragment by the interface's MTU,
- * whatever the path's; and fragment by the interface's MTU with DF never
+ * larger one with EMSGSIZE (DO and PROBE); and, for INTERFACE and OMIT,
+ * fragment by the interface's MTU, whatever the path's, with DF never
  * set. */
 #define IP_PMTUDISC_DONT      0
 #define IP_PMTUDISC_WANT      1

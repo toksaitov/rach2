@@ -603,7 +603,10 @@ int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
         return ip_fragment(out, route_ip, src, dst_ip, proto, payload, plen, ttl, mtu);
     }
 
-    df = pmtudisc == IP_PMTUDISC_DONT || pmtudisc == IP_PMTUDISC_OMIT ? 0 : IP_DF;
+    df = pmtudisc == IP_PMTUDISC_DONT || pmtudisc == IP_PMTUDISC_OMIT ||
+                 pmtudisc == IP_PMTUDISC_INTERFACE
+             ? 0
+             : IP_DF;
     ip_header(ip_tx_buf, (uint16_t)total_len, ip_id_counter++, df, ttl, proto, src, dst_ip);
     if (local) {
         return loop_put(ip_tx_buf, payload, plen);
