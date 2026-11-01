@@ -1,4 +1,7 @@
 /* IPv4 route and socket models used by the two TCP state machine tests. */
+#ifndef RACH2_HOST_TCP_NET_H
+#define RACH2_HOST_TCP_NET_H
+
 #include "network/ip6/ip6.h"
 #include "network/driver/netdev.h"
 
@@ -119,3 +122,5 @@ int ip6_tx(const uint8_t *src, const uint8_t *dst, int scope, uint8_t nh, const 
     (void)hops;
     return -ENETUNREACH;
 }
+
+#endif
