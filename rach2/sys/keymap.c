@@ -1375,6 +1375,39 @@ void keymap_state_held(struct keymap_state *st, const struct keymap *map, const 
     }
 }
 
+/**
+ * Whether `entry` is an action of Linux's console that Rach2's has not: a
+ * switch of virtual console, or a KM_T_SPEC action such as Boot or
+ * KeyboardSignal. The shipped layouts put them on Alt with F1 to F12 and the
+ * arrows, and on Ctrl+Alt+Delete.
+ */
+static int foreign_action(unsigned int entry)
+{
+    if (KM_TYPE(entry) == KM_T_CONS) {
+        return 1;
+    }
+    if (KM_TYPE(entry) != KM_T_SPEC) {
+        return 0;
+    }
+    switch (entry) {
+    case KM_HOLE:
+    case KM_ENTER:
+    case KM_BREAK:
+    case KM_CAPS:
+    case KM_NUM:
+    case KM_HOLD:
+    case KM_SCROLLFORW:
+    case KM_SCROLLBACK:
+    case KM_CAPSON:
+    case KM_COMPOSE:
+    case KM_BARENUMLOCK:
+    case KM_NOSUCHMAP:
+        return 0;
+    default:
+        return 1;
+    }
+}
+
 /** Compose a character or emit the pending accent and character separately. */
 static void character(struct keymap_state *st, const struct keymap *map, unsigned long c,
                       struct keymap_result *res)
@@ -1473,6 +1506,11 @@ int keymap_key(struct keymap_state *st, const struct keymap *map, unsigned int k
             return res->kind;
         }
         entry = base;
+    }
+    if (foreign_action(entry)) {
+        base = map->entry(map->ctx, 0, keycode);
+        type = KM_TYPE(base);
+        entry = type == KM_T_SHIFT || type == KM_T_SLOCK || type == KM_T_LOCK ? KM_HOLE : base;
     }
     type = KM_TYPE(entry);
     v = KM_VALUE(entry);

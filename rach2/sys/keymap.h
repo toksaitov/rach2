@@ -170,7 +170,10 @@ void keymap_state_init(struct keymap_state *st, unsigned int ledflags);
  * uses the modifier recorded at press, even after a map or lock change.
  * Escape cancels Compose or an accent and sends ESC; Backspace cancels
  * either without sending. Other failed compositions send both code points.
- * Caps Lock inverts Shift for KT_LETTER and Unicode simple case pairs.
+ * Caps Lock inverts Shift for KT_LETTER and Unicode simple case pairs. An
+ * action Rach2's console has not, a KM_T_CONS entry or a KM_T_SPEC one such
+ * as Boot or KeyboardSignal, gives the key's entry in table 0 instead, with
+ * the modifiers held: Alt+F1, Console_1 in kbd's maps, sends F1 with Alt.
  */
 int keymap_key(struct keymap_state *st, const struct keymap *map, unsigned int keycode, int value,
                struct keymap_result *res);

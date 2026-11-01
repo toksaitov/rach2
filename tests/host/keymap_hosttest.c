@@ -400,6 +400,40 @@ static void state_changes(void)
     CHECK(state.ledflags == 7 && !state.compose);
 }
 
+/** Check that Linux's console switches send the plain key with Alt, and
+ * that the held modifiers are rebuilt from the keys down. */
+static void foreign(void)
+{
+    static unsigned char held[KM_NR_KEYS / 8];
+
+    reset();
+    load("8 59 0500\n8 105 0210\n8 103 0212\n0 84 0206\n8 84 0206\n");
+    event(56, 1);
+    tap(59);
+    CHECK(result.kind == KM_RESULT_FUNC && result.func == 0);
+    bytes(0, "\033[1;3P", 8);
+    tap(105);
+    bytes(0, "\033[1;3D", 8);
+    tap(103);
+    bytes(0, "\033[1;3A", 8);
+    CHECK(event(84, 1) == KM_RESULT_NONE);
+    event(84, 0);
+    event(56, 0);
+    reset();
+    event(42, 1);
+    keymap_state_held(&state, &map, held);
+    CHECK(state.shift == 0);
+    tap(30);
+    point('a');
+    held[29 >> 3] |= 1U << (29 & 7);
+    keymap_state_held(&state, &map, held);
+    CHECK(state.shift == 1U << KM_G_CTRL);
+    event(29, 2);
+    CHECK(result.kind == KM_RESULT_NONE);
+    event(29, 0);
+    CHECK(state.shift == 0);
+}
+
 /** Check literal functions, terminal modes, modifiers, UTF-8 and bounds. */
 static void encoding(void)
 {
@@ -555,6 +589,7 @@ int main(void)
     compose();
     caps();
     state_changes();
+    foreign();
     encoding();
     pad();
     printf("keymap-test: result: %d failures\n", fails);
