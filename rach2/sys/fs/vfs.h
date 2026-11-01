@@ -693,10 +693,12 @@ int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *
  * below the new one too, as MS_REC asks. The mount whose file system the
  * bind shows cannot be unmounted while the bind exists. Returns 0 or a
  * negative errno: the resolver's errors; ENOTDIR for a source or target
- * that is not a directory; EINVAL for a source inside a synthetic type but
- * not at its root; ENAMETOOLONG for a source whose path within its file
- * system would not fit; the errors `vfs_do_mount` gives for its target;
- * EBUSY for a target covered already; and ENOMEM.
+ * that is not a directory; EINVAL for a source that is /proc/PID/fd/N, or
+ * whose path names some other place of its synthetic type, and for a target
+ * in a synthetic type deeper than a name in a mount's root directory;
+ * ENAMETOOLONG for a source whose path within its file system would not
+ * fit; the errors `vfs_do_mount` gives for its target; EBUSY for a target
+ * covered already; and ENOMEM.
  */
 int vfs_do_bind(const char *source, const char *target, int rec);
 

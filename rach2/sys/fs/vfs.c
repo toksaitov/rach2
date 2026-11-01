@@ -2804,32 +2804,89 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
     return synth_take(&vp, node);
 }
 
-/** The `lookup_rest` of /dev: `synth_rest` under "dev", or under "dev/pts"
- * for a devpts mount, whose root is that directory; ENOTDIR at a bind of a
- * device, which has nothing below it. */
-static int devfs_rest(struct vfs_mount *mnt, const char *rest, uint32_t len, void **node,
-                      const char **left)
-{
-    int kind = ((struct synth_node *)mnt->root)->vp.kind;
+static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st);
 
-    if (kind != VNODE_DEV_DIR && kind != VNODE_PTS_DIR) {
+/** The path of the root directory of the synthetic file system `mnt` shows,
+ * as `synth_classify` takes it: "dev", "dev/pts" for a devpts mount, whose
+ * root is that directory, "proc" or "sys". */
+static const char *synth_base(struct vfs_mount *mnt)
+{
+    struct vfs_mount *base = mount_base(mnt);
+
+    if (base->type == &vfs_procfs_type) {
+        return "proc";
+    }
+    if (base->type == &vfs_sysfs_type) {
+        return "sys";
+    }
+    return ((struct synth_node *)base->root)->vp.kind == VNODE_PTS_DIR ? "dev/pts" : "dev";
+}
+
+/**
+ * Put in `out`, of `cap` bytes, the path `synth_classify` takes of the place
+ * `inner` within the synthetic file system of `mnt`, a path as a bind keeps
+ * it: `synth_base` and `inner` after it, "/" being nothing. 0, or
+ * -ENAMETOOLONG.
+ */
+static int synth_place(struct vfs_mount *mnt, const char *inner, char *out, uint32_t cap)
+{
+    const char *base = synth_base(mnt);
+    uint32_t bl = (uint32_t)k_strlen(base);
+
+    if (inner[0] == '/' && inner[1] == '\0') {
+        inner = "";
+    }
+    if (bl + k_strlen(inner) + 1 > cap) {
+        return -ENAMETOOLONG;
+    }
+    k_memcpy(out, base, bl);
+    k_strncpy(out + bl, inner, cap - bl);
+    return 0;
+}
+
+/**
+ * Whether the place `inner` within the synthetic file system of `mnt`, as
+ * `synth_place` takes it, is classified as the node `node` of that file
+ * system is. The walk's record of a place reached through a link to an
+ * object, such as /proc/PID/root, names some other place.
+ */
+static int synth_names(struct vfs_mount *mnt, const void *node, const char *inner)
+{
+    const struct vpath *a = &((const struct synth_node *)node)->vp;
+    char path[256];
+    struct vpath b;
+
+    if (synth_place(mnt, inner, path, sizeof(path)) != 0) {
+        return 0;
+    }
+    synth_classify(path, &b);
+    return a->kind == b.kind && a->pid == b.pid && a->tid == b.tid && a->procfd == b.procfd &&
+           a->procfile == b.procfile && a->pts_index == b.pts_index && a->sysent == b.sysent &&
+           a->syskey == b.syskey && streq(a->name, b.name);
+}
+
+/**
+ * The `lookup_rest` of the synthetic types: `synth_rest` below the root of
+ * the mount `mnt`, under the root directory of its file system, or, for a
+ * bind of a directory inside it, such as /proc/sys, under the directory the
+ * bind shows, at its `bind_root` (`synth_place`). ENOTDIR below a bind of a
+ * file, a device of /dev among them, which has nothing below it;
+ * ENAMETOOLONG for a directory whose path leaves no room in a classified
+ * path.
+ */
+static int synth_lookup_rest(struct vfs_mount *mnt, const char *rest, uint32_t len, void **node,
+                             const char **left)
+{
+    char prefix[256];
+    struct vfs_stat st;
+    int rc;
+
+    synth_getattr(mnt, mnt->root, &st);
+    if (!VFS_IS_DIR(st.mode)) {
         return -ENOTDIR;
     }
-    return synth_rest(mnt, kind == VNODE_PTS_DIR ? "dev/pts" : "dev", rest, len, node, left);
-}
-
-/** The `lookup_rest` of /proc: `synth_rest` under "proc". */
-static int procfs_rest(struct vfs_mount *mnt, const char *rest, uint32_t len, void **node,
-                       const char **left)
-{
-    return synth_rest(mnt, "proc", rest, len, node, left);
-}
-
-/** The `lookup_rest` of /sys: `synth_rest` under "sys". */
-static int sysfs_rest(struct vfs_mount *mnt, const char *rest, uint32_t len, void **node,
-                      const char **left)
-{
-    return synth_rest(mnt, "sys", rest, len, node, left);
+    rc = synth_place(mnt, mnt->bind_of ? mnt->bind_root : "", prefix, sizeof(prefix));
+    return rc != 0 ? rc : synth_rest(mnt, prefix, rest, len, node, left);
 }
 
 /** The `getattr` of the synthetic types, what the resolver needs of a node:
@@ -2995,36 +3052,108 @@ static int walk_object(struct vfs_ref *cur, void *found, const char *rest, char 
 }
 
 static const struct vfs_ops devfs_vops = {
-    0, devfs_rest, synth_hold, synth_put, synth_getattr,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0,          0,          0,         synth_readlink, 0, 0, 0, 0, 0, 0, /* abort_unmount */
-    0,                                                                      /* symlink */
-    0,                                                                      /* mknod */
-    0,                                                                      /* pin */
-    0,                                                                      /* unpin */
-    0,                                                                      /* remount */
-    0,                                                                      /* fallocate */
+    0,
+    synth_lookup_rest,
+    synth_hold,
+    synth_put,
+    synth_getattr,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    synth_readlink,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0, /* abort_unmount */
+    0, /* symlink */
+    0, /* mknod */
+    0, /* pin */
+    0, /* unpin */
+    0, /* remount */
+    0, /* fallocate */
 };
 
 static const struct vfs_ops procfs_vops = {
-    0, procfs_rest, synth_hold, synth_put, synth_getattr,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0,           0,          0,         synth_readlink, 0, 0, 0, 0, 0, 0, /* abort_unmount */
-    0,                                                                       /* symlink */
-    0,                                                                       /* mknod */
-    0,                                                                       /* pin */
-    0,                                                                       /* unpin */
-    0,                                                                       /* remount */
-    0,                                                                       /* fallocate */
+    0,
+    synth_lookup_rest,
+    synth_hold,
+    synth_put,
+    synth_getattr,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    synth_readlink,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0, /* abort_unmount */
+    0, /* symlink */
+    0, /* mknod */
+    0, /* pin */
+    0, /* unpin */
+    0, /* remount */
+    0, /* fallocate */
 };
 
 static const struct vfs_ops sysfs_vops = {
-    0, sysfs_rest, synth_hold, synth_put, synth_getattr,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0,          0,          0,         synth_readlink, 0, 0, 0, 0, 0, 0, /* abort_unmount */
-    0,                                                                      /* symlink */
-    0,                                                                      /* mknod */
-    0,                                                                      /* pin */
-    0,                                                                      /* unpin */
-    0,                                                                      /* remount */
-    0,                                                                      /* fallocate */
+    0,
+    synth_lookup_rest,
+    synth_hold,
+    synth_put,
+    synth_getattr,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    synth_readlink,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0, /* abort_unmount */
+    0, /* symlink */
+    0, /* mknod */
+    0, /* pin */
+    0, /* unpin */
+    0, /* remount */
+    0, /* fallocate */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the
@@ -3370,31 +3499,85 @@ static int mount_source(const struct vfs_type *t, const char *source, block_devi
     return 0;
 }
 
+/** The length of a mount's recorded path that a path below it starts with:
+ * 0 for the root's "/", whose children's paths start with their own "/". */
+static uint32_t path_below(const struct vfs_mount *m)
+{
+    return (m->covered_path[0] == '/' && m->covered_path[1] == '\0')
+               ? 0
+               : (uint32_t)k_strlen(m->covered_path);
+}
+
+/**
+ * Whether the place `real`, a path from the root of the mount table, is a
+ * name in the root directory of the synthetic mount `mnt` that names its
+ * node `node` (`synth_names`): a place a nameless mount may be entered by.
+ */
+static int synth_root_child(struct vfs_mount *mnt, const void *node, const char *real)
+{
+    const char *in = mnt->bind_of ? mnt->bind_root : "";
+    uint32_t ml = path_below(mnt), il;
+    char inner[VFS_COVERED_PATH_MAX];
+    const char *name, *c;
+
+    if (!real || (ml > 0 && !path_under(real, mnt->covered_path, ml)) || real[ml] != '/') {
+        return 0;
+    }
+    name = real + ml + 1;
+    for (c = name; *c && *c != '/'; c++) {
+    }
+    if (name[0] == '\0' || *c || c - name > VFS_NAME_MAX) {
+        return 0;
+    }
+    if (in[0] == '/' && in[1] == '\0') {
+        in = "";
+    }
+    il = (uint32_t)k_strlen(in);
+    if (il + 1 + k_strlen(name) + 1 > sizeof(inner)) {
+        return 0;
+    }
+    k_memcpy(inner, in, il);
+    inner[il] = '/';
+    k_strncpy(inner + il + 1, name, sizeof(inner) - il - 1);
+    return synth_names(mnt, node, inner);
+}
+
 /**
  * Check that the node `tref` holds, which `target` named, may take a mount,
  * and put its path from the root of the mount table in `canon`: a name of
  * at most VFS_COVERED_PATH_MAX - 1 bytes, ENAMETOOLONG; not the root of
- * the mount table, and not in a type that takes the rest of a path in one
- * call but at the root of a mount of one that is not permanent, such as the
- * bind of /dev a sandbox makes, EINVAL; a
- * directory when `dir`, and otherwise not one, ENOTDIR, as Linux answers
- * a bind of a file over a directory or the other way round. The root
- * of a placed mount may take one, which goes over it, as on Linux. A file's
- * path is `real`, its path from the root of the mount table as the walk
- * that found it took it (`table_path`), since a type gives the path of a
- * directory only; a file with none, NULL, is ENOTDIR. On an error `tref` is
- * released.
+ * the mount table, EINVAL; a directory when `dir`, and otherwise not one,
+ * ENOTDIR, as Linux answers a bind of a file over a directory or the other
+ * way round. The root of a placed mount may take one, which goes over it,
+ * as on Linux. A file's path is `real`, its path from the root of the mount
+ * table as the walk that found it took it (`table_path`), since a type gives
+ * the path of a directory only; a file with none, NULL, is ENOTDIR. On an
+ * error `tref` is released.
+ *
+ * In a type that takes the rest of a path in one call, whose nodes are
+ * classifications that no lookup finds again, the root of a mount that is
+ * not permanent may take a mount, such as the bind of /dev a sandbox makes,
+ * and so may a name in the root directory of any mount of one, which `real`
+ * gives (`synth_root_child`), as /proc/sys takes the read-only bind that
+ * bubblewrap makes of it. The mount over such a name is nameless, and the
+ * walk enters it by that name (`named_in_rest`), and `*nameless` is set.
+ * A place deeper than that would be passed over by the type's lookup of the
+ * rest, and is EINVAL, as is the root of a permanent mount.
  */
 static int target_check(struct vfs_ref *tref, const char *target, char *canon, int dir,
-                        const char *real)
+                        const char *real, int *nameless)
 {
     int at_root = tref->node == tref->mnt->root;
+    int synth = tref->mnt->type->ops->lookup_rest != 0;
     struct vfs_stat st;
     int rc = 0;
 
+    *nameless = 0;
     if (k_strlen(target) >= VFS_COVERED_PATH_MAX) {
         rc = -ENAMETOOLONG;
-    } else if ((tref->mnt->type->ops->lookup_rest && !(at_root && !mount_permanent(tref->mnt))) ||
+    } else if ((synth && at_root && mount_permanent(tref->mnt)) ||
+               (synth && !at_root &&
+                !(*nameless = synth_root_child(tref->mnt, tref->node, real))) ||
                (tref->mnt == mounts[0] && at_root)) {
         rc = -EINVAL;
     } else if ((rc = vfs_getattr(tref->mnt, tref->node, &st)) == 0 &&
@@ -3403,7 +3586,7 @@ static int target_check(struct vfs_ref *tref, const char *target, char *canon, i
     }
     if (rc == 0 && at_root) {
         k_strncpy(canon, tref->mnt->covered_path, VFS_COVERED_PATH_MAX);
-    } else if (rc == 0 && !dir) {
+    } else if (rc == 0 && (!dir || *nameless)) {
         rc = !real ? -ENOTDIR : k_strlen(real) >= VFS_COVERED_PATH_MAX ? -ENAMETOOLONG : 0;
         if (rc == 0) {
             k_strncpy(canon, real, VFS_COVERED_PATH_MAX);
@@ -3502,7 +3685,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     struct vfs_mount *m = 0;
     block_device_t *dev;
     char canon[VFS_COVERED_PATH_MAX];
-    int claim;
+    int claim, nameless;
     int rc;
 
     if (!t) {
@@ -3519,7 +3702,7 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
         vfs_ref_release(&tref);
         return 0;
     }
-    rc = target_check(&tref, target, canon, 1, NULL);
+    rc = target_check(&tref, target, canon, 1, NULL, &nameless);
     if (rc != 0) {
         return rc;
     }
@@ -3579,31 +3762,32 @@ static int mount_within(const struct vfs_mount *c, const struct vfs_mount *top)
     return 0;
 }
 
-/** The length of a mount's recorded path that a path below it starts with:
- * 0 for the root's "/", whose children's paths start with their own "/". */
-static uint32_t path_below(const struct vfs_mount *m)
-{
-    return (m->covered_path[0] == '/' && m->covered_path[1] == '\0')
-               ? 0
-               : (uint32_t)k_strlen(m->covered_path);
-}
-
 /**
  * Whether the node `sref` holds may be a bind's root, with its path from
  * the root of the mount table in `full` and its path within its file system
  * in `inner`, and set `*dir` to whether it is a directory. A file's path is
- * `real`, as `target_check` takes it; a file with none, NULL, is ENOTDIR.
- * 0, or the error of `getattr`, ENOTDIR, EINVAL for a place inside a type
- * that takes the rest of a path in one call, or ENAMETOOLONG. A device of
- * /dev, such as /dev/null, may be one, since no path is looked up below
- * it (`devfs_rest`). A bind of KRFFS, whose nodes move, is moved with them by
- * `vfs_repoint`.
+ * `real`, as `target_check` takes it, and so is the path of a place inside
+ * a type that takes the rest of a path in one call, which gives no path of
+ * a node; a node with none, NULL, is ENOTDIR or EINVAL. 0, or the error of
+ * `getattr`, ENOTDIR, EINVAL for /proc/PID/fd/N, a link the walk stops at,
+ * or ENAMETOOLONG.
+ *
+ * A place inside a synthetic type, such as /proc/sys, which bubblewrap
+ * binds read-only over itself, may be one as on Linux: its nodes are
+ * classifications of a path, so a lookup below the bind is the type's own
+ * of the rest under the bind's `inner` (`synth_lookup_rest`), which is the
+ * walk's record of the place with its `.` and `..` resolved; a record that
+ * names some other place, as one through /proc/PID/root does, is EINVAL
+ * (`synth_names`). A mount below the bind is entered only by name from its
+ * root (`target_check`). A bind of KRFFS, whose nodes move, is moved with
+ * them by `vfs_repoint`.
  */
 static int bind_source(const struct vfs_ref *sref, char *full, char *inner, const char *real,
                        int *dir)
 {
     const struct vfs_mount *base = vfs_mount_base(sref->mnt);
     const char *prefix = sref->mnt->bind_of ? sref->mnt->bind_root : "";
+    const struct vpath *vp;
     const char *rest;
     struct vfs_stat st;
     int rc = vfs_getattr(sref->mnt, sref->node, &st);
@@ -3612,15 +3796,15 @@ static int bind_source(const struct vfs_ref *sref, char *full, char *inner, cons
         return rc;
     }
     *dir = VFS_IS_DIR(st.mode);
-    if (base->type->ops->lookup_rest && sref->node != sref->mnt->root &&
-        (*dir || base->type != &vfs_devfs_type)) {
+    vp = vfs_synth_vpath(sref->mnt, sref->node);
+    if (vp && vp->kind == VNODE_PROC_FD_LINK) {
         return -EINVAL;
     }
     if (sref->node == sref->mnt->root) {
         k_strncpy(full, sref->mnt->covered_path, VFS_COVERED_PATH_MAX);
-    } else if (!*dir) {
+    } else if (!*dir || base->type->ops->lookup_rest) {
         if (!real) {
-            return -ENOTDIR;
+            return *dir ? -EINVAL : -ENOTDIR;
         }
         if (k_strlen(real) >= VFS_COVERED_PATH_MAX) {
             return -ENAMETOOLONG;
@@ -3644,6 +3828,9 @@ static int bind_source(const struct vfs_ref *sref, char *full, char *inner, cons
     if (inner[0] == '\0') {
         inner[0] = '/';
         inner[1] = '\0';
+    }
+    if (vp && sref->node != sref->mnt->root && !synth_names(sref->mnt, sref->node, inner)) {
+        return -EINVAL;
     }
     return 0;
 }
@@ -3769,21 +3956,22 @@ static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char
  * naming it, both walks' references taken over: the mounts below the
  * source too with `rec`, but for `skip` and those below it (`bind_below`).
  * Once the bind is placed, the walks' counts of operations in progress are
- * given back; the hold on the covered node stays with the slot, and the
- * hold on the source's node with the bind, as its root. On an error both
- * references are released. 0, or the errors `vfs_do_bind` lists.
+ * given back; the hold on the covered node stays with the slot, or is put
+ * back for a nameless bind, which covers no node (`target_check`), and the
+ * hold on the source's node stays with the bind, as its root. On an error
+ * both references are released. 0, or the errors `vfs_do_bind` lists.
  */
 static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *target, int rec,
                      const struct vfs_mount *skip, const char *sreal, const char *treal)
 {
     struct vfs_mount *m;
     char full[VFS_COVERED_PATH_MAX], inner[VFS_COVERED_PATH_MAX], canon[VFS_COVERED_PATH_MAX];
-    int dir = 1;
+    int dir = 1, nameless = 0, busy;
     int rc;
 
     rc = bind_source(sref, full, inner, sreal, &dir);
     if (rc == 0) {
-        rc = target_check(tref, target, canon, dir, treal);
+        rc = target_check(tref, target, canon, dir, treal, &nameless);
     } else {
         vfs_ref_release(tref);
     }
@@ -3792,10 +3980,12 @@ static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *tar
         return rc;
     }
     vfs_ns_lock(tref->mnt);
-    m = covered_already(tref) ? NULL
-                              : mount_place(tref->mnt, tref->node, sref->mnt->type, canon,
-                                            vfs_mount_base(sref->mnt)->source, sref->mnt->flags);
-    rc = m ? 0 : covered_already(tref) ? -EBUSY : -ENOMEM;
+    busy = nameless ? mount_named(tref->mnt, tref->mnt->root, path_last(canon)) != 0
+                    : covered_already(tref);
+    m = busy ? NULL
+             : mount_place(tref->mnt, nameless ? NULL : tref->node, sref->mnt->type, canon,
+                           vfs_mount_base(sref->mnt)->source, sref->mnt->flags);
+    rc = m ? 0 : busy ? -EBUSY : -ENOMEM;
     if (m) {
         bind_fill(m, sref->mnt, sref->node, inner);
         m->state = VFS_ACTIVE;
@@ -3805,6 +3995,9 @@ static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *tar
         vfs_ref_release(tref);
         vfs_ref_release(sref);
         return rc;
+    }
+    if (nameless) {
+        node_put(tref->mnt, tref->node);
     }
     vfs_leave(tref->mnt);
     vfs_leave(sref->mnt);
