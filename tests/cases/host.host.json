@@ -741,6 +741,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "rfkill",
+          "checks": "tests/host/rfkill_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "rm",
           "checks": "tests/host/rm_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
