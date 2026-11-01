@@ -410,3 +410,29 @@ int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, cons
     k_memcpy(ip6_tx_buf + IP6_HDR_SIZE, payload, plen);
     return ip6_emit(out, via, ip6_tx_buf, total);
 }
+
+/** No source is chosen and nothing in the header is checked against this
+ * machine's addresses: the caller is privileged, and a datagram that names
+ * another source on purpose is the point of such a socket. */
+int ip6_tx_whole(const uint8_t *dg, uint32_t len, const uint8_t *dst, int ifindex)
+{
+    uint8_t via[IP6_ADDR_LEN];
+    struct netdev *out;
+
+    if (len < IP6_HDR_SIZE || (dg[0] >> 4) != 6 ||
+        (uint32_t)read16be(dg + 4) + IP6_HDR_SIZE != len) {
+        return -EINVAL;
+    }
+    net_mib6.ip6_out_requests++;
+    if (ip6_is_unspecified(dst) || ip6_is_v4mapped(dst)) {
+        return -EINVAL;
+    }
+    out = ip6_route(dst, ifindex, via);
+    if (!out) {
+        return ifindex == 0 && ip6_link_scoped(dst) && netdev_count() > 1 ? -EINVAL : -ENETUNREACH;
+    }
+    if (len > ip6_path_mtu(out, dst)) {
+        return -EMSGSIZE;
+    }
+    return ip6_emit(out, via, dg, len);
+}

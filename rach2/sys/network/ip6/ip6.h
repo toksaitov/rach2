@@ -241,6 +241,18 @@ int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, cons
            uint16_t plen, uint8_t hlim);
 
 /**
+ * Send the datagram of `len` bytes at `dg`, header included, which the
+ * caller built whole, toward `dst` in the scope `ifindex`, as a raw socket
+ * of IPPROTO_RAW sends it: the route is that of `dst`, and the datagram
+ * leaves as it is, whatever its header says. Returns 0, -EINVAL for a
+ * datagram shorter than its header, not of version 6, or whose payload
+ * length disagrees with `len`, -EMSGSIZE for one past the path MTU, which
+ * is not fragmented, or an error of `ip6_tx` for the route and the emit.
+ * Called with interrupts off.
+ */
+int ip6_tx_whole(const uint8_t *dg, uint32_t len, const uint8_t *dst, int ifindex);
+
+/**
  * The interface a datagram to `dst` leaves by, with the next hop in `via`,
  * for the scope `ifindex`, the interface index a caller gave with the
  * address or 0. ::1 and an address an interface holds are `lo`'s. A
