@@ -5455,7 +5455,9 @@ static const struct {
                    {SYNTH_SYS_INOTIFY_WATCHES, &inotify_max_user_watches, 0, 0x7FFFFFFF},
                    {SYNTH_SYS_MAX_MAP_COUNT, &vm_max_map_count, 0, 0x7FFFFFFF},
                    {SYNTH_SYS_OVERFLOWGID, &ns_overflowgid, 0, 65535},
-                   {SYNTH_SYS_OVERFLOWUID, &ns_overflowuid, 0, 65535}};
+                   {SYNTH_SYS_OVERFLOWUID, &ns_overflowuid, 0, 65535},
+                   {SYNTH_SYS_NR_OPEN, &fd_nr_open, FD_NR_OPEN_MIN, FD_NR_OPEN_MAX},
+                   {SYNTH_SYS_RANDOMIZE_VA_SPACE, &randomize_va_space, 0, 2}};
 
 /** The index in `sysctl_ints` of the /proc/sys file `entry`, or -1. */
 static int sysctl_int(int entry)
@@ -5496,7 +5498,9 @@ static void ap_uuid(struct procfs_text *t, const uint8_t *b)
 /**
  * The text a read of the /proc/sys file `entry` gives, appended to `t`.
  *
- * kernel/random/boot_id is drawn once, at its first read, and stays for the
+ * fs/file-nr is Linux's three figures: the open file descriptions, 0 for
+ * the freed ones Linux keeps, and fs/file-max. kernel/random/boot_id is
+ * drawn once, at its first read, and stays for the
  * boot; kernel/random/uuid is drawn anew for each open, as Linux draws it
  * for each read. Both come from the kernel's generator, whatever its seed,
  * since neither is a key.
@@ -5513,6 +5517,14 @@ static void procfs_sysctl_text(struct procfs_text *t, int entry)
         ap_ch(t, '\n');
     } else if (i >= 0) {
         ap_int(t, *sysctl_ints[i].var);
+        ap_ch(t, '\n');
+    } else if (entry == SYNTH_SYS_FILE_MAX) {
+        ap_ulong(t, fd_file_max);
+        ap_ch(t, '\n');
+    } else if (entry == SYNTH_SYS_FILE_NR) {
+        ap_ulong(t, fd_files_open());
+        ap_str(t, "\t0\t");
+        ap_ulong(t, fd_file_max);
         ap_ch(t, '\n');
     } else if (entry == SYNTH_SYS_BOOT_ID || entry == SYNTH_SYS_UUID) {
         if (entry == SYNTH_SYS_BOOT_ID && !boot_id_drawn) {
@@ -5557,11 +5569,54 @@ static int32_t procfs_sysctl_read(fd_entry_t *e, char __user *buf, uint32_t coun
 }
 
 /**
+ * Store the number of the NUL-ended text `s` in `*v`, as Linux's
+ * `proc_doulongvec_minmax` takes a write to fs/file-max: spaces stripped at
+ * both ends, an optional `+`, then a number in base 0, as `oom_parse` reads
+ * one, from 0 to LONG_MAX. 0, or -EINVAL for a sign, text that is no
+ * number, or a number out of range, which leaves `*v` as it was.
+ */
+static int sysctl_parse_ulong(const char *s, unsigned long *v)
+{
+    const char *end = s + k_strlen(s);
+    unsigned long base = 10, mag = 0, limit = ~0ul >> 1, d;
+    int digits = 0;
+
+    while (oom_space(*s)) {
+        s++;
+    }
+    while (end > s && oom_space(end[-1])) {
+        end--;
+    }
+    if (*s == '+') {
+        s++;
+    }
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X') && oom_digit(s[2]) < 16u) {
+        base = 16;
+        s += 2;
+    } else if (s[0] == '0') {
+        base = 8;
+    }
+    for (; s < end; s++, digits++) {
+        d = oom_digit(*s);
+        if (d >= base || mag > (limit - d) / base) {
+            return -EINVAL;
+        }
+        mag = mag * base + d;
+    }
+    if (digits == 0) {
+        return -EINVAL;
+    }
+    *v = mag;
+    return 0;
+}
+
+/**
  * Write a /proc/sys file, as Linux's sysctl handlers take one.
  *
  * kernel/hostname and kernel/domainname become the text up to its first
  * newline, at most 64 bytes, as sethostname(2) and setdomainname(2) would
- * set them; the whole count is taken. A write to another file is an
+ * set them; the whole count is taken. fs/file-max takes an unsigned long
+ * up to LONG_MAX (`sysctl_parse_ulong`). A write to another file is an
  * integer, read as `oom_parse` reads one. A file of `sysctl_ints` stores it
  * in its owner's variable, which the owner reads at its next use, and a
  * value out of the file's range is -EINVAL. To net/ipv4/ip_forward 0, its
@@ -5593,6 +5648,10 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
             uts_set_domainname(text, len);
         }
         return (int32_t)count;
+    }
+    if (f->origin_pid == SYNTH_SYS_FILE_MAX) {
+        rc = sysctl_parse_ulong(text, &fd_file_max);
+        return rc != 0 ? rc : (int32_t)count;
     }
     text[12] = '\0';
     rc = oom_parse(text, &v);
