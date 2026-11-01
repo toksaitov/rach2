@@ -67,10 +67,11 @@ pick() {
 
 # Find in-house files under the source roots; the arguments are the name
 # filter and -print. The extracted vendor trees and their built output
-# (vendor/musl/install and the extracted musl, busybox, dropbear, tcc, pdpmake
-# e2fsprogs and mtools trees) are pruned, as are Doom's upstream sources:
-# ports/doom/src and the Chocolate Doom and Nuked OPL3 files beside the
-# platform layer. build/ and dev-log/ are not roots, so they are not searched.
+# (vendor/musl/install and the extracted musl, busybox, dropbear, tcc,
+# pdpmake, e2fsprogs, mtools and libtsm trees) are pruned, as are Doom's
+# upstream sources: ports/doom/src and the Chocolate Doom and Nuked OPL3 files
+# beside the platform layer. build/ and dev-log/ are not roots, so they are not
+# searched.
 prune_find() {
     find rach2 ish utils tests krffs tools mk vendor ports \
         -path 'ports/doom/src' -prune -o \
@@ -85,6 +86,7 @@ prune_find() {
         -path 'vendor/dropbear/dropbear-*' -prune -o \
         -path 'vendor/e2fsprogs/e2fsprogs-*' -prune -o \
         -path 'vendor/mtools/mtools-*' -prune -o \
+        -path 'vendor/libtsm/libtsm-*' -prune -o \
         "$@" 2>/dev/null
 }
 
