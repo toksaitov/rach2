@@ -30,6 +30,7 @@ int net_addr_source(net_addr_t bound, net_addr_t dst, net_addr_t *src)
 {
     struct netdev *nd;
     uint8_t via[16], from[16];
+    uint32_t via4;
     int rc;
     if (!net_addr_any(bound) && bound.family != dst.family)
         return -ENETUNREACH;
@@ -51,7 +52,7 @@ int net_addr_source(net_addr_t bound, net_addr_t dst, net_addr_t *src)
         *src = net_addr6(from, nd->loopback ? dst.scope : (uint32_t)nd->index);
         return 0;
     }
-    if (!ip_is_local(dst.v4) && !netdev_route(dst.v4, 0))
+    if (!ip_is_local(dst.v4) && !netdev_route(dst.v4, &via4))
         return -ENETUNREACH;
     *src = net_addr_any(bound) ? net_addr4(ip_source(dst.v4)) : bound;
     if (!net_addr_local(*src))
