@@ -2456,6 +2456,36 @@ static void set_up(void)
 }
 
 /**
+ * Reap a child that has ended or stopped, waiting for one at most a second.
+ * Returns what `waitpid` returned, with its status in `*status`: a pid, 0
+ * when no child changed within the second, or -1 with errno set.
+ *
+ * SIGCHLD is blocked from before the first `waitpid` until after the
+ * `sigtimedwait`, so a child that changes between the two leaves its signal
+ * pending and the wait returns at once. The mask is put back before the
+ * return, and init forks with SIGCHLD unblocked, so no child inherits it
+ * blocked. A SIGCHLD that is still pending then is discarded, its default
+ * action being to ignore it.
+ */
+static pid_t child_wait(int *status)
+{
+    static const struct timespec turn = {1, 0};
+    sigset_t child, saved;
+    pid_t reaped;
+
+    sigemptyset(&child);
+    sigaddset(&child, SIGCHLD);
+    (void)sigprocmask(SIG_BLOCK, &child, &saved);
+    reaped = waitpid(-1, status, WUNTRACED | WNOHANG);
+    if (reaped == 0) {
+        (void)sigtimedwait(&child, NULL, &turn);
+        reaped = waitpid(-1, status, WUNTRACED | WNOHANG);
+    }
+    (void)sigprocmask(SIG_SETMASK, &saved, NULL);
+    return reaped;
+}
+
+/**
  * Set the machine up, then reap, respawn and supervise for as long as it runs.
  *
  * The three shutdown handlers go in before the first child, so a request that
@@ -2475,14 +2505,13 @@ static void set_up(void)
  * of `update` is left for the next turn, so the loop keeps reaping the
  * orphans that filled the process table.
  *
- * The wait is a poll, `waitpid` with `WNOHANG` and a second's sleep when no
- * child has changed, because init must also bound the service log while its
- * children live, which a poll does without a timer. A death is noticed within
- * that second. The log is looked at every `SERVICE_LOG_CHECK_TURNS` turns,
- * busy or idle, since a machine whose children keep dying never takes the idle
- * path. `WUNTRACED` reports a stopped child, and init continues it at once:
- * `^Z` at the console prompt stops the session, and there is no shell above it
- * to type `fg`.
+ * The wait is `child_wait`, which reaps a child as soon as its SIGCHLD comes
+ * and otherwise ends the turn after a second, because init must also bound
+ * the service log while its children live. The log is looked at every
+ * `SERVICE_LOG_CHECK_TURNS` turns, busy or idle, since a machine whose
+ * children keep dying never takes the idle path. `WUNTRACED` reports a
+ * stopped child, and init continues it at once: `^Z` at the console prompt
+ * stops the session, and there is no shell above it to type `fg`.
  *
  * A console session or a service that dies within two seconds of its start
  * is taken to have a permanent reason (a missing or crashing binary, no
@@ -2551,9 +2580,8 @@ int main(void)
             turns = 0;
             bound_service_log();
         }
-        reaped = waitpid(-1, &status, WUNTRACED | WNOHANG);
+        reaped = child_wait(&status);
         if (reaped == 0) {
-            sleep(1);
             continue;
         }
         if (reaped < 0 && errno == EINTR) {
