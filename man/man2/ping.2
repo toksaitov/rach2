@@ -59,8 +59,10 @@ Operation 0x1000 sends no data with the hop limit 64.
 Operation 0x1002 sends an ICMPv6 echo request and takes four words: a
 pointer to the 16-byte IPv6 address in network byte order, the index of
 the interface a link-local address or a group of link scope is reached
-by, or 0 when there is one card, the bytes of data, from 0 to 1452, and
+by, or 0 when there is one card, the bytes of data, from 0 to 65527, and
 the hop limit, from 1 to 255.
+A request past the path MTU, 1500 bytes or less after a Packet Too Big,
+leaves in fragments.
 ::1 and this machine's own addresses are answered through the loopback
 ring, and a group by its members on the link.
 A unicast address on another host fails at once with
@@ -135,11 +137,14 @@ link-local IPv6 address names no interface on a machine with more than
 one card.
 .It Bq Er EMSGSIZE
 The data of operation 0x1001 is more than 1472 bytes, or that of
-operation 0x1002 more than 1452.
+operation 0x1002 more than 65527.
 .It Bq Er ENETUNREACH
 No interface reaches the IPv6 address.
 .It Bq Er ENODEV
 The interface index of operation 0x1002 names no interface.
+.It Bq Er ENOMEM
+The kernel had no memory for a request of operation 0x1002 of more than
+1472 bytes of data.
 .It Bq Er ETIMEDOUT
 No matching reply arrived during the four attempts.
 Transmit errors are not returned separately by this operation.

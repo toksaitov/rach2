@@ -151,7 +151,7 @@ interface's address as its source; the limited broadcast,
 255.255.255.255, leaves by the first interface.
 Flags do not affect datagram sends.
 .Pp
-The stack does not fragment outgoing datagrams.
+The IPv4 stack does not fragment outgoing datagrams.
 A datagram to a next hop whose hardware address is not in the ARP cache
 causes an ARP request and waits for the reply in one of four slots kept
 for the whole machine, for at most 300 ticks; it is sent when the reply
@@ -181,8 +181,15 @@ whatever the caller wrote, as Linux does, and sends it with the hop
 limit 1 to a group, or the socket's
 .Dv IP_TTL
 to another address.
-The message may contain at most 1460 bytes, and no fewer than the four
-of its header.
+The message may contain at most 65535 bytes, and no fewer than the four
+of its header; one past the path MTU, 1500 bytes or less after a Packet
+Too Big, leaves in fragments.
+A socket of
+.Dv IPPROTO_RAW
+sends instead the IPv6 datagram the caller built, header included, of at
+most 1500 bytes, by the route of the
+.Vt sockaddr_in6
+and unchanged; its payload length must agree with the send's.
 A unicast destination other than ::1 and this machine's own addresses
 gives
 .Er EHOSTUNREACH ,
@@ -286,7 +293,8 @@ than one card; or a UDP socket bound to an address in 127/8 sends to an
 address that is not the machine's.
 .It Bq Er EMSGSIZE
 A UDP payload exceeds 1472 bytes, a raw ICMP message exceeds 1480 bytes,
-a raw ICMPv6 message exceeds 1460 bytes, or a packet payload is empty or
+a raw ICMPv6 message exceeds 65535 bytes, an IPv6 datagram sent whole
+exceeds 1500 bytes or its path MTU, or a packet payload is empty or
 exceeds 1500 bytes.
 .It Bq Er ENETDOWN
 A packet send has no interface through which to transmit.

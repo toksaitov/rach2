@@ -44,15 +44,18 @@ data operations return
 Other raw protocols are refused.
 Effective user ID 0 is required for either raw form.
 .It Dv AF_INET6 , SOCK_RAW
-A raw ICMPv6 socket;
+A raw ICMPv6 socket when
 .Fa protocol
-must be
+is
 .Dv IPPROTO_ICMPV6
 (58).
 It receives each ICMPv6 message addressed to this machine without its
 IPv6 header, and the kernel computes the checksum of each message it
 sends, as Linux does.
-Effective user ID 0 is required.
+.Dv IPPROTO_RAW
+(255) creates a socket that sends IPv6 datagrams the caller built whole,
+header included, and receives nothing, as on Linux.
+Effective user ID 0 is required for either.
 .It Dv AF_PACKET , SOCK_DGRAM
 A packet socket.
 Effective user ID 0 is required.
@@ -211,8 +214,10 @@ An IPv4 raw protocol is neither
 .Dv IPPROTO_RAW
 nor
 .Dv IPPROTO_ICMP ,
-an IPv6 raw protocol is not
-.Dv IPPROTO_ICMPV6 ,
+an IPv6 raw protocol is neither
+.Dv IPPROTO_ICMPV6
+nor
+.Dv IPPROTO_RAW ,
 an
 .Dv AF_UNIX
 protocol is neither 0 nor

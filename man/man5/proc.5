@@ -633,6 +633,19 @@ malformed ones and those sent.
 A broadcast for a port no socket has counts as NoPorts, where Linux counts
 it in a field of its own, IgnoredMulti.
 The counters start at zero at boot and wrap at 2^32.
+.It Pa /proc/net/snmp6
+A line for each IPv6 and ICMPv6 counter this kernel keeps, its name in
+32 columns, a tab and its value, in Linux's order, which
+.Xr nstat 8
+reads by name: the datagrams received, dropped for a bad header, for
+another host's address and for an unknown protocol, dropped for want of
+memory, delivered, forwarded, always 0, sent, refused by a full card and
+sent to no route; the reassemblies timed out, the fragments received, the
+datagrams reassembled and given up, the datagrams sent in fragments and
+those of which a fragment could not leave, and the fragments made; the
+multicast datagrams each way; and the ICMPv6 messages received, the
+malformed ones, the messages sent, and those received and sent by type.
+The counters start at zero at boot and wrap at 2^32.
 .It Pa /proc/sysvipc/shm , /proc/sysvipc/sem , /proc/sysvipc/msg
 A heading and a line for each System V segment, set or queue, in Linux's
 columns: the key and the id, the permission bits in octal, a segment's
