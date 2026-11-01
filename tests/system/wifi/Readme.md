@@ -39,8 +39,8 @@ The kernel's command line sets the guest: `wifiap.profile=PROFILE`, `wifiap.run=
 | wlan2 | 11 | 02:00:00:00:02:00 | B, `rach2-other`, WPA2 always |
 | wlan3 | | 02:00:00:00:03:00 | the guest's own station, for the check and the traces |
 
-* Network A: passphrase or SAE password `rach2-net-psk`; 192.168.71.1/24 and fd71::1/64 on br0; DHCP from 192.168.71.50, so a single station holds .50.
-* Network B: passphrase `rach2-other-psk`; 192.168.72.1/24 and fd72::1/64; DHCP from 192.168.72.50.
+* Network A: passphrase or SAE password `rach2-net-psk`; 192.168.71.1/24 and fd71::1/64 on br0; DHCP from 192.168.71.50 upward in order, so the first station holds .50.
+* Network B: passphrase `rach2-other-psk`; 192.168.72.1/24 and fd72::1/64; DHCP from 192.168.72.50 likewise.
 * Enterprise: phase 1 identity `student`, `anonymous@university.test` (eduroam's outer identity) or `client@wifi.test` for EAP-TLS with `client.pem` and `client.key`; phase 2 user `student`, password `rach2-wifi`, under PEAP's MSCHAPv2 or GTC or TTLS's PAP or MSCHAPv2. Both server certificates have the subject `/C=KG/O=Rach2 University/CN=radius.university.test`; their SHA-256 fingerprints are `d3df4010...16f564` for `server.pem` and `aca3e0d9...77bf0c` for `server2.pem`, as `mkcerts.sh` prints them.
 * DNS: dnsmasq answers `endpoint.wifi.test` with 10.0.2.2, which is the host, `ap.wifi.test` and `ap-other.wifi.test`, and forwards the rest to QEMU's 10.0.2.3. Router advertisements give each network's prefix for SLAAC.
 * eth0, on QEMU's 10.0.2.0/24, masquerades the stations' traffic, so a station reaches the host's 10.0.2.2, the suite's traffic endpoint; its ports 2222 and 2223, the host's BASE+2 and BASE+3, reach port 22 of 192.168.71.50 and 192.168.72.50.
