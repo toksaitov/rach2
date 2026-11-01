@@ -1,0 +1,47 @@
+.Dd November 1, 2026
+.Dt FFPROBE 1
+.Os
+.Sh NAME
+.Nm ffprobe
+.Nd report the streams and format of an audio file
+.Sh SYNOPSIS
+.Nm
+.Op Ar options
+.Ar input
+.Sh DESCRIPTION
+.Nm
+reads an audio file and reports its container and streams.
+It is installed with FFmpeg in the GNU root and uses the same built-in
+formats and decoders; see
+.Xr ffmpeg 1 .
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl show_format
+Print the container's properties, such as duration and bit rate.
+.It Fl show_streams
+Print each stream's codec, sample rate and channel count.
+.It Fl show_entries Ar entries
+Select the properties to print.
+.It Fl of Ar format
+Select an output format, such as
+.Cm json
+or
+.Cm default .
+.It Fl v Ar level
+Set the logging level.
+Use
+.Cm error
+to omit routine diagnostics.
+.It Fl h
+Print the command's help.
+.El
+.Sh EXAMPLES
+Print the audio stream's codec, rate and channels as JSON:
+.Bd -literal -offset indent
+ffprobe -v error -show_entries stream=codec_name,sample_rate,channels \
+    -of json music.flac
+.Ed
+.Sh EXIT STATUS
+.Ex -std
+.Sh SEE ALSO
+.Xr ffmpeg 1
