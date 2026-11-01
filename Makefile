@@ -1358,7 +1358,7 @@ $(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_
 # has a shell, dropbear, the account files and the keys, and leaves out the
 # compiler, /src, Doom and bootctl, which a machine with no writable disk
 # cannot use. 4 MiB: the binaries come to about 1.4 MiB, and the rest is room
-# under the kernel's 32 MiB window.
+# under the kernel's 64 MiB window.
 #
 # The metal kernel: the same sources built read-only at the disk, into its own
 # object tree so the two kernels never share one. The switch is a build switch
