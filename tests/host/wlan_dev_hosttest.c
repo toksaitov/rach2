@@ -198,6 +198,49 @@ int nd6_forget(struct netdev *nd, const uint8_t *addr)
     return -ENOENT;
 }
 
+/** The model drains data explicitly and needs no worker thread. */
+int wlan_work_start(void)
+{
+    return 0;
+}
+
+/** Keep the same per-radio scan attachments as the real scan layer. */
+void wlan_scan_attach(struct wlan_scan *scan, struct wlan *wlan, wlan_event_fn event,
+                      struct wlan_radio *radio, const struct wlan_band *band,
+                      struct wlan_bss_table *table)
+{
+    scan->wlan = wlan;
+    scan->event = event;
+    scan->radio = radio;
+    scan->band = band;
+    scan->table = table;
+}
+
+/** No scan work is queued by the model data worker. */
+void wlan_scan_detach(struct wlan_scan *scan)
+{
+    (void)scan;
+}
+
+/** Record a hardware scan completion in the model scan. */
+void wlan_scan_hw_done(struct wlan_scan *scan, int aborted)
+{
+    scan->hw_done = 1;
+    scan->hw_aborted = aborted;
+}
+
+/** Initialize the model's empty BSS table. */
+void wlan_bss_init(struct wlan_bss_table *table)
+{
+    k_memset(table, 0, sizeof(*table));
+}
+
+/** The model table owns no allocated BSS entries. */
+void wlan_bss_destroy(struct wlan_bss_table *table)
+{
+    CHECK(table->count == 0);
+}
+
 /** Start only outside net_lock, optionally failing before any state changes. */
 static int radio_start(struct wlan_radio *radio)
 {
@@ -331,6 +374,10 @@ static void station(void)
     if (!wlan)
         return;
     CHECK(wlan_by_index(radio.index) == wlan && wlan_at(0) == wlan);
+    CHECK(wlan->scan.radio == &radio && wlan->scan.band == &wlan->band &&
+          wlan->scan.table == &wlan->bss_table);
+    wlan_radio_scan_done(&radio, 1);
+    CHECK(wlan->scan.hw_done && wlan->scan.hw_aborted);
     CHECK(netdev_by_name("wlan0") == &wlan->netdev);
     CHECK(netdev_loopback()->index == lo_index);
     index = wlan->netdev.index;

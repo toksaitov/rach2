@@ -14,6 +14,27 @@
 
 static struct wlan *radios[WLAN_MAX_RADIOS];
 static unsigned next_phy;
+static wlan_event_fn event_handler;
+
+/** Install the server's event consumer under the kernel lock. */
+void wlan_set_event_handler(wlan_event_fn handler)
+{
+    event_handler = handler;
+}
+
+/** Dispatch a worker event while borrowing the event and its frame. */
+void wlan_event(struct wlan *wlan, const struct wlan_event *event)
+{
+    if (event_handler && wlan && !wlan->removing)
+        event_handler(wlan, event);
+}
+
+/** Route an IRQ hardware-scan completion to this radio's worker record. */
+void wlan_radio_scan_done(struct wlan_radio *radio, int aborted)
+{
+    if (radio && radio->wlan)
+        wlan_scan_hw_done(&radio->wlan->scan, aborted);
+}
 
 /** Return the nth registered station under the kernel lock. */
 struct wlan *wlan_at(unsigned n)
@@ -21,7 +42,7 @@ struct wlan *wlan_at(unsigned n)
     unsigned i;
 
     for (i = 0; i < WLAN_MAX_RADIOS; ++i)
-        if (radios[i] && n-- == 0)
+        if (radios[i] && !radios[i]->removing && n-- == 0)
             return radios[i];
     return 0;
 }
@@ -32,7 +53,7 @@ struct wlan *wlan_by_index(unsigned index)
     unsigned i;
 
     for (i = 0; i < WLAN_MAX_RADIOS; ++i)
-        if (radios[i] && radios[i]->radio->index == index)
+        if (radios[i] && !radios[i]->removing && radios[i]->radio->index == index)
             return radios[i];
     return 0;
 }
@@ -43,7 +64,7 @@ struct wlan *wlan_from_netdev(const struct netdev *nd)
     unsigned i;
 
     for (i = 0; i < WLAN_MAX_RADIOS; ++i)
-        if (radios[i] && &radios[i]->netdev == nd)
+        if (radios[i] && !radios[i]->removing && &radios[i]->netdev == nd)
             return radios[i];
     return 0;
 }
@@ -131,6 +152,13 @@ int wlan_register_radio(struct wlan_radio *radio, struct wlan **out)
     k_memcpy(wlan->netdev.mac, radio->mac, 6);
     k_memcpy(wlan->netdev.name, "wlan", 4);
     k_itoa((int)next_phy, wlan->netdev.name + 4, 4, 10, 0);
+    rc = wlan_work_start();
+    if (rc < 0) {
+        kfree(wlan);
+        return rc;
+    }
+    wlan_bss_init(&wlan->bss_table);
+    wlan_scan_attach(&wlan->scan, wlan, wlan_event, radio, &wlan->band, &wlan->bss_table);
     rc = netdev_register(&wlan->netdev);
     if (rc < 0) {
         kfree(wlan);
@@ -205,7 +233,10 @@ void wlan_unregister_radio(struct wlan *wlan)
     if (!wlan || wlan->removing)
         return;
     wlan->removing = 1;
+    if (wlan->scan.state == WLAN_SCAN_HARDWARE && wlan->radio->ops->scan_cancel)
+        wlan->radio->ops->scan_cancel(wlan->radio);
     wlan_stop(wlan);
+    wlan_scan_detach(&wlan->scan);
     if (wlan->quiesce)
         wlan->quiesce(wlan);
     flags = net_lock();
@@ -234,6 +265,7 @@ void wlan_unregister_radio(struct wlan *wlan)
         if (radios[i] == wlan)
             radios[i] = 0;
     wlan->radio->wlan = 0;
+    wlan_bss_destroy(&wlan->bss_table);
     kfree(wlan);
 }
 

@@ -3,6 +3,7 @@
 #define _WLAN_WIPHY_H_
 
 #include "wireless.h"
+#include "work.h"
 #include "../driver/netdev.h"
 
 #define WLAN_MAX_RADIOS NETDEV_MAX
@@ -15,6 +16,8 @@ struct wlan {
     enum wlan_sta_state state;
     struct wlan_bss *bss; /* held by the management layer while associated */
     struct wlan_counters counters;
+    struct wlan_bss_table bss_table;
+    struct wlan_scan scan;
     uint16_t frequency; /* MHz, zero before configuration */
     /* Radio running, rfkill block, and unregister in progress. */
     unsigned started, blocked, removing;
@@ -28,6 +31,11 @@ struct wlan {
      * Process context without net_lock; may sleep. */
     void (*quiesce)(struct wlan *wlan);
 };
+
+/** Install the nl80211 event consumer, or NULL to detach it.
+ * Process context under the kernel lock; events borrow their buffers only
+ * during the callback. One consumer serves existing and later radios. */
+void wlan_set_event_handler(wlan_event_fn handler);
 
 /** Return registered phy index, or NULL; kernel lock held, borrowed result. */
 struct wlan *wlan_by_index(unsigned index);
