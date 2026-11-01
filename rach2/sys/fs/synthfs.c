@@ -317,22 +317,32 @@ static const struct {
                 {SYNTH_PROC_NETSNMP6, "snmp6"},
                 {SYNTH_PROC_NETIFINET6, "if_inet6"},
                 {SYNTH_PROC_NETIPV6RT, "ipv6_route"},
+                {SYNTH_PROC_NETTCP6, "tcp6"},
+                {SYNTH_PROC_NETUDP6, "udp6"},
+                {SYNTH_PROC_NETRAW6, "raw6"},
                 {SYNTH_PROC_NETSTAT_RT, "stat/rt_cache"},
                 {SYNTH_PROC_NETSTAT_ARP, "stat/arp_cache"}};
 
 /* The files of `netfiles` directly in /proc/net, the ones before stat's. */
-#define SYNTH_NET_FILES 9
+#define SYNTH_NET_FILES 12
+
+int synth_net_slot(int origin)
+{
+    int i;
+
+    for (i = 0; i < (int)(sizeof(netfiles) / sizeof(netfiles[0])); i++) {
+        if (netfiles[i].origin == origin) {
+            return i;
+        }
+    }
+    return -1;
+}
 
 const char *synth_net_name(int origin)
 {
-    unsigned i;
+    int i = synth_net_slot(origin);
 
-    for (i = 0; i < sizeof(netfiles) / sizeof(netfiles[0]); i++) {
-        if (netfiles[i].origin == origin) {
-            return netfiles[i].name;
-        }
-    }
-    return 0;
+    return i < 0 ? 0 : netfiles[i].name;
 }
 
 int synth_net_file(int n)

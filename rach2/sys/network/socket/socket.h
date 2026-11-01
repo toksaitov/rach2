@@ -255,8 +255,9 @@ int socket_outside(const struct socket *s);
  */
 int socket_port_bound(uint16_t port);
 
-/* One datagram or raw socket, copied out for /proc/net/udp and
- * /proc/net/raw. A raw socket's `local_port` is its protocol, 0 for the
+/* One datagram or raw socket, copied out for /proc/net/udp, raw and their
+ * IPv6 files and for inet_diag. An AF_INET6 socket's addresses may be IPv4,
+ * which it shows mapped. A raw socket's `local_port` is its protocol, 0 for the
  * descriptor that only takes configuration ioctls. */
 struct socket_row {
     net_addr_t local_ip;
@@ -270,13 +271,14 @@ struct socket_row {
 };
 
 /**
- * Copy the AF_INET sockets of `type`, SOCK_DGRAM or SOCK_RAW, in the calling
- * process's network namespace into an array from the heap at `*rows`, and
- * return the row count. With no socket of the type, `*rows` is NULL and the
- * count 0; otherwise the caller frees the array, even with no rows. Returns
- * -1 when the array cannot be allocated. Takes `net_lock` itself.
+ * Copy the sockets of `family`, AF_INET or AF_INET6, and `type`, SOCK_DGRAM
+ * or SOCK_RAW, in the calling process's network namespace into an array
+ * from the heap at `*rows`, and return the row count. With no socket of the
+ * kind, `*rows` is NULL and the count 0; otherwise the caller frees the
+ * array, even with no rows. Returns -1 when the array cannot be allocated.
+ * Takes `net_lock` itself.
  */
-int socket_snapshot(int type, struct socket_row **rows);
+int socket_snapshot(int family, int type, struct socket_row **rows);
 
 /** How many live sockets there are of `type` in AF_INET, or of every type
  * and family with `type` 0, in every network namespace. */
