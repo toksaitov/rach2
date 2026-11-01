@@ -3,6 +3,8 @@
 #include "data.h"
 #include "sta.h"
 #include "wsim.h"
+#include "nl80211.h"
+#include "../../klog.h"
 #include "../ethernet/ethernet.h"
 #include "../net.h"
 #include "../netconf.h"
@@ -457,7 +459,12 @@ void wlan_get_counters(const struct wlan *wlan, struct wlan_counters *out)
 static const struct wsim_station wsim_calls = {wlan_register_radio, wlan_unregister_radio,
                                                wlan_radio_rx, wlan_radio_tx_status};
 
-int wlan_attach_wsim(void)
+int wlan_init(void)
 {
+    int rc = nl80211_init();
+
+    if (rc) {
+        klog(KLOG_ERR, "wlan", "nl80211: not registered: error %d", rc);
+    }
     return wsim_attach(&wsim_calls);
 }

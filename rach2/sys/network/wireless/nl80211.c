@@ -2765,6 +2765,23 @@ static void fill_policy(struct nla_policy *table, const struct policy_row *rows,
     }
 }
 
+int nl80211_init(void)
+{
+    int rc;
+
+    if (family.id) {
+        return 0;
+    }
+    fill_policy(policy, policy_rows, sizeof(policy_rows) / sizeof(policy_rows[0]));
+    fill_policy(key_policy, key_rows, sizeof(key_rows) / sizeof(key_rows[0]));
+    rc = genl_register_family(&family);
+    if (rc) {
+        return rc;
+    }
+    wlan_set_event_handler(nl_event);
+    return 0;
+}
+
 int nl80211_attach(struct wlan *wlan, struct wlan_radio *radio, const struct wlan_band *band,
                    struct netdev *netdev, struct wlan_bss_table *table,
                    const struct nl80211_ops *ops)
@@ -2787,14 +2804,9 @@ int nl80211_attach(struct wlan *wlan, struct wlan_radio *radio, const struct wla
     if (slot == MAX_STATIONS) {
         return -ENOSPC;
     }
-    if (!family.id) {
-        fill_policy(policy, policy_rows, sizeof(policy_rows) / sizeof(policy_rows[0]));
-        fill_policy(key_policy, key_rows, sizeof(key_rows) / sizeof(key_rows[0]));
-        rc = genl_register_family(&family);
-        if (rc) {
-            return rc;
-        }
-        wlan_set_event_handler(nl_event);
+    rc = nl80211_init();
+    if (rc) {
+        return rc;
     }
     s = kzalloc(sizeof(*s));
     if (!s) {

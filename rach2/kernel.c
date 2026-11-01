@@ -3907,7 +3907,7 @@ void kernel_main(const struct boot_info *boot)
             klog(KLOG_WARN, "net", "absent: %s", net_error());
         }
         {
-            int radios = wlan_attach_wsim();
+            int radios = wlan_init();
 
             if (radios > 0) {
                 klog(KLOG_INFO, "wsim", "ready: %d radios", radios);

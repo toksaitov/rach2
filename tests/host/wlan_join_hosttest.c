@@ -660,7 +660,7 @@ static void row_register(void)
     struct wsim_info info;
 
     CHECK(wsim_open(&dev) == -ENODEV);
-    CHECK(wlan_attach_wsim() == 0);
+    CHECK(wlan_init() == 0);
     dev_file.status_flags = OFD_NONBLOCK;
     dev.ofd = &dev_file;
     CHECK(wsim_open(&dev) == 0);

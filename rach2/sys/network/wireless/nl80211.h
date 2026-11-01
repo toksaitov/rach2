@@ -135,8 +135,17 @@ struct nl80211_ops {
 };
 
 /**
- * Make wlan's interface reachable through nl80211: register the family on
- * the first attachment, and give the station its radio, whose index is the
+ * Register the generic-netlink family `nl80211` and take the registry's
+ * events, as cfg80211 does when it loads, so that iw and wpa_supplicant
+ * find the family before any radio registers. Process context under the
+ * kernel lock. Returns 0, at once when already registered, or the family's
+ * registration error.
+ */
+int nl80211_init(void);
+
+/**
+ * Make wlan's interface reachable through nl80211: register the family
+ * unless nl80211_init has, and give the station its radio, whose index is the
  * wiphy's number, its band after the regulatory rules, its interface, its
  * BSS table and its operations. Every pointer stays valid until
  * nl80211_detach returns. Process context under the kernel lock, no

@@ -385,6 +385,12 @@ void wlan_sta_leave(struct wlan *wlan, int tell_ap)
     (void)tell_ap;
 }
 
+/** nl80211 is not under test here. */
+int nl80211_init(void)
+{
+    return 0;
+}
+
 /** The software radio is not under test here. */
 int wsim_attach(const struct wsim_station *station)
 {
