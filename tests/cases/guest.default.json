@@ -3354,7 +3354,7 @@
     },
     {
       "case_id": "guest.default.clonemusl",
-      "behavior": "clone in the form glibc's fork uses stores the child's id where each side reads it, set_tid_address returns the pid, and futex waits, wakes and times out as Linux's does in one address space.",
+      "behavior": "clone in the form glibc's fork uses stores the child's id where each side reads it, set_tid_address returns the pid, and futex waits, wakes and times out as Linux's does in one address space, a wake of one waking one thread.",
       "units": ["default", "musl/clonemusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -3386,7 +3386,10 @@
         {"assertion_id": "unaligned", "checks": "FUTEX_WAKE on an unaligned address fails with EINVAL", "source": "program"},
         {"assertion_id": "requeue-enosys", "checks": "FUTEX_REQUEUE fails with ENOSYS", "source": "program"},
         {"assertion_id": "realtime-wait-enosys", "checks": "FUTEX_WAIT with FUTEX_CLOCK_REALTIME fails with ENOSYS", "source": "program"},
-        {"assertion_id": "eintr", "checks": "a timed wait interrupted by a handler installed with SA_RESTART ends with EINTR and is not restarted", "source": "program"}
+        {"assertion_id": "eintr", "checks": "a timed wait interrupted by a handler installed with SA_RESTART ends with EINTR and is not restarted", "source": "program"},
+        {"assertion_id": "wake-one-asleep", "checks": "sixteen threads are seen asleep in FUTEX_WAIT on one word", "source": "program"},
+        {"assertion_id": "wake-one-count", "checks": "each of eight FUTEX_WAKE calls for one waiter returns 1, and the thread it woke takes the count it was given", "source": "program"},
+        {"assertion_id": "wake-one-sleepers", "checks": "the threads still waiting show no voluntary context switch in /proc/self/task/TID/status across the eight wakes", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
