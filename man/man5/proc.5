@@ -783,6 +783,17 @@ Datagrams a timer tick found on the loopback ring while every processor was
 halted in an idle wait.
 The idle wait of a blocked process delivers the ring before it halts, so
 these are datagrams that waited for the timer with nothing running.
+.It Li namecache_hits
+Lookups of one name in one directory that the name cache answered, since
+boot.
+.It Li namecache_misses
+Lookups the name cache passed to the file system, each a read of the
+directory, since boot.
+Only ext2's names are kept.
+.It Li namecache_entries
+Names the cache keeps now, at most 8192.
+.It Li namecache_negative
+Of those, the names recorded as absent.
 .It Li procs_running , procs_blocked
 The processes runnable now, and those asleep in a wait no signal ends, in
 the state
