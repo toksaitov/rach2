@@ -55,11 +55,11 @@ static uint32_t period_bytes = SB16_PERIOD_FRAMES; /* set by sb16_start */
 static volatile uint32_t irq_count = 0;
 
 /*
- * Ring buffer that decouples the producer (Doom via AUDIO_WRITE) from the
- * consumer (DMA via IRQ), absorbing timing jitter between Doom's frame rate
- * and the fixed DMA consumption rate. It holds ring_size bytes, eight DMA
- * periods (93 ms at 11025 Hz, about three Doom frames), of an array large
- * enough for eight of the largest.
+ * Ring buffer that decouples the producer (a writer of the console's
+ * AUDIO_WRITE) from the consumer (DMA via IRQ), absorbing timing jitter
+ * between the writer's pace and the fixed DMA consumption rate. It holds
+ * ring_size bytes, eight DMA periods (93 ms at 11025 Hz, about three tics of
+ * Doom's), of an array large enough for eight of the largest.
  */
 #define RING_BUFFER_SIZE (SB16_PERIOD_MAX * 8)
 
@@ -688,8 +688,8 @@ static void sb16_set_callback(audio_callback_t fn)
  * Queue audio samples for playback.
  *
  * Samples are appended to the ring buffer and later drained by the IRQ handler
- * as DMA halves need refilling, decoupling Doom's frame-paced writes from the
- * fixed DMA rate. Overflow beyond the ring's free space is dropped.
+ * as DMA halves need refilling, decoupling the writer's pace from the fixed
+ * DMA rate. Overflow beyond the ring's free space is dropped.
  *
  * @return the number of bytes queued, or -EINVAL if not playing or given no
  * data.
@@ -850,10 +850,24 @@ static uint32_t sb16_stream_delay(audio_stream_t *s)
    type, init, shutdown, start, stop, is_playing, set_callback, write,
    set_volume, get_volume, the seven stream operations, then the three
    input controls, which this driver lacks. */
-audio_driver_t sb16_driver = {"Sound Blaster 16", AUDIO_DRIVER_SB16,    sb16_init,
-                              sb16_shutdown,      sb16_start,           sb16_stop,
-                              sb16_is_playing,    sb16_set_callback,    sb16_write,
-                              sb16_set_volume,    sb16_get_volume,      sb16_stream_open,
-                              sb16_stream_setup,  sb16_stream_start,    sb16_stream_stop,
-                              sb16_stream_close,  sb16_stream_position, sb16_stream_delay,
-                              NULL,               NULL,                 NULL};
+audio_driver_t sb16_driver = {"Sound Blaster 16",
+                              AUDIO_DRIVER_SB16,
+                              sb16_init,
+                              sb16_shutdown,
+                              sb16_start,
+                              sb16_stop,
+                              sb16_is_playing,
+                              sb16_set_callback,
+                              sb16_write,
+                              sb16_set_volume,
+                              sb16_get_volume,
+                              sb16_stream_open,
+                              sb16_stream_setup,
+                              sb16_stream_start,
+                              sb16_stream_stop,
+                              sb16_stream_close,
+                              sb16_stream_position,
+                              sb16_stream_delay,
+                              NULL,
+                              NULL,
+                              NULL};
