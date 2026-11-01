@@ -864,7 +864,7 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
         if (nd->loopback && !(get32(req + NLMSG_HDRLEN + 8) & IFF_UP)) {
             return -EOPNOTSUPP;
         }
-        nd->up = (get32(req + NLMSG_HDRLEN + 8) & IFF_UP) ? 1 : 0;
+        netconf_set_up(nd, (get32(req + NLMSG_HDRLEN + 8) & IFF_UP) != 0);
     }
     return 0;
 }

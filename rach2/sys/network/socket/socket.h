@@ -16,12 +16,14 @@
 
 #define SOCK_STREAM         1 /* TCP */
 #define SOCK_DGRAM          2 /* UDP */
-/* An AF_INET raw socket of IPPROTO_ICMP (raw.h). One opened with
+/* An AF_INET raw socket of IPPROTO_ICMP, or an AF_INET6 one of
+ * IPPROTO_ICMPV6 (raw.h). An AF_INET one opened with
  * IPPROTO_RAW has protocol 0 and accepts the interface ioctls and nothing
  * else: a DHCP client opens one to ask this machine about itself (busybox's
  * `udhcp_read_interface`), and every other operation on it is refused. */
 #define SOCK_RAW            3
-#define AF_INET             2 /* IPv4 address family */
+#define AF_INET             2  /* IPv4 address family */
+#define AF_INET6            10 /* IPv6 address family */
 /* Format: one datagram of the Ethernet MTU is the most UDP can carry here. */
 #define SOCK_RECV_BUF_SIZE  1500
 /* Policy: a UDP socket queues eight datagrams, twelve kilobytes of its

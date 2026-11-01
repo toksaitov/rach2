@@ -17,6 +17,7 @@
 #include "../ethernet/ethernet.h"
 #include "../driver/netdev.h"
 #include "../socket/raw.h"
+#include "../ip6/ip6.h"
 #include "../net.h"
 #include "../netconf.h"
 #include "../../serial.h"
@@ -303,16 +304,17 @@ static struct netdev *ip_broadcast_iface(uint32_t dst)
 }
 
 /**
- * Put the datagram of `total_len` bytes in `ip_tx_buf` on the loopback ring,
- * counted as `lo`'s traffic, as Linux counts it: 0, or -ENOBUFS when the
- * ring is full, which is counted and logged once.
+ * The ring's slots hold an IPv4 datagram of the largest size `ip_tx_from`
+ * sends, which also holds every IPv6 datagram `ip6_tx` sends.
  */
-static int loop_put(uint16_t total_len)
+int ip_loop_put(const uint8_t *dgram, uint16_t total_len)
 {
     uint32_t slot;
 
+    if (total_len > sizeof(loop_ring[0])) {
+        return -EMSGSIZE;
+    }
     if (loop_head - loop_tail == LOOP_RING_SLOTS) {
-        net_mib.ip_out_discards++;
         loop_dropped++;
         if (!loop_drop_logged) {
             loop_drop_logged = 1;
@@ -321,7 +323,7 @@ static int loop_put(uint16_t total_len)
         return -ENOBUFS;
     }
     slot = loop_head % LOOP_RING_SLOTS;
-    k_memcpy(loop_ring[slot], ip_tx_buf, total_len);
+    k_memcpy(loop_ring[slot], dgram, total_len);
     loop_ring_len[slot] = total_len;
     loop_head++;
     if (netdev_loopback()) {
@@ -332,6 +334,18 @@ static int loop_put(uint16_t total_len)
         loop_peak = loop_head - loop_tail;
     }
     return 0;
+}
+
+/** Put the datagram of `total_len` bytes in `ip_tx_buf` on the loopback
+ * ring, counting a refusal in `net_mib`. */
+static int loop_put(uint16_t total_len)
+{
+    int r = ip_loop_put(ip_tx_buf, total_len);
+
+    if (r != 0) {
+        net_mib.ip_out_discards++;
+    }
+    return r;
 }
 
 int ip_is_local(uint32_t ip)
@@ -535,7 +549,11 @@ void ip_loop_drain_from(int from)
             netdev_loopback()->rx_packets++;
             netdev_loopback()->rx_bytes += loop_ring_len[slot];
         }
-        ip_rx(loop_ring[slot], loop_ring_len[slot], 1);
+        if ((loop_ring[slot][0] >> 4) == 6) {
+            ip6_rx(0, loop_ring[slot], loop_ring_len[slot]);
+        } else {
+            ip_rx(loop_ring[slot], loop_ring_len[slot], 1);
+        }
         loop_tail++;
         if (from >= 0 && from < 3) {
             loop_delivered[from]++;

@@ -296,7 +296,7 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
         uint16_t flags =
             (uint16_t)((uint16_t)ifr[IFREQ_UNION] | ((uint16_t)ifr[IFREQ_UNION + 1] << 8));
 
-        nd->up = (flags & IFF_UP) ? 1 : 0;
+        netconf_set_up(nd, (flags & IFF_UP) != 0);
         return 0;
     }
     case SIOCSIFADDR:

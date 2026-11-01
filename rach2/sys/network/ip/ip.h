@@ -116,6 +116,15 @@ void ip_hold_resolved(struct netdev *nd, uint32_t hop, const uint8_t *mac);
  * off, from `arp_flush` and `arp_forget_dev`. */
 void ip_hold_forget(struct netdev *nd);
 
+/**
+ * Put the datagram of `total_len` bytes at `dgram`, IPv4 or IPv6, on the
+ * loopback ring, counted as `lo`'s traffic, as Linux counts it. Returns 0,
+ * -EMSGSIZE past the 1520 bytes of a slot, or -ENOBUFS when the ring is
+ * full, which is counted in `ip_loop_dropped` and logged once. Called with
+ * interrupts off.
+ */
+int ip_loop_put(const uint8_t *dgram, uint16_t total_len);
+
 /** `ip_loop_drain_from` for the tick, which calls it once a tick from the
  * timer interrupt. */
 void ip_loop_drain(void);
@@ -127,9 +136,9 @@ void ip_loop_drain(void);
 #define IP_LOOP_FROM_CALL 2
 
 /**
- * Deliver the datagrams on the loopback ring through `ip_rx`, at most four
- * times the ring's slots in one call, and count them under `from`, an
- * `IP_LOOP_FROM_*` value.
+ * Deliver the datagrams on the loopback ring through `ip_rx`, or `ip6_rx`
+ * for an IPv6 datagram, at most four times the ring's slots in one call,
+ * and count them under `from`, an `IP_LOOP_FROM_*` value.
  *
  * Called with interrupts off, after the caller has finished with the stack
  * (`ip_loop_crowded`): from the tick, the idle wait and a system call's

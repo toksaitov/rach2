@@ -51,10 +51,13 @@ void write32be(uint8_t *p, uint32_t value)
  * driver table's (`netdev_probe`). The boot line's address was read before
  * there was an interface to put it on, so it is published once the probe
  * has brought one up (`netconf_publish`), and the `rach2.ifaddr=` entries
- * are applied after it (`netconf_apply_by_mac`).
+ * are applied after it (`netconf_apply_by_mac`). Each card the probe left
+ * up then takes its IPv6 link-local address (`netconf_set_up`).
  */
 int init_network(void)
 {
+    int i;
+
     tcp_init();
     socket_init();
 
@@ -63,6 +66,9 @@ int init_network(void)
     }
     netconf_publish();
     netconf_apply_by_mac();
+    for (i = 0; i < netdev_count(); i++) {
+        netconf_set_up(netdev_at(i), 1);
+    }
 
     return 1;
 }

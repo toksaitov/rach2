@@ -137,6 +137,48 @@ struct netdev_ops {
 /* The addresses an interface may have after its first. */
 #define NETDEV_ADDRS 7
 
+/* The IPv6 addresses an interface may hold, and the IPv6 multicast groups
+ * it may be a member of at once. */
+#define NETDEV_ADDRS6  8
+#define NETDEV_GROUPS6 16
+
+/* An IPv6 address's scope, in Linux's numbers for `ifa_scope`: the machine
+ * alone for ::1, the link for fe80::/10, the deprecated site for fec0::/10,
+ * which QEMU's user network still uses, and everywhere for the rest. */
+#define NETDEV_SCOPE_GLOBAL 0
+#define NETDEV_SCOPE_SITE   200
+#define NETDEV_SCOPE_LINK   253
+#define NETDEV_SCOPE_HOST   254
+
+/* An IPv6 address's state, in Linux's `IFA_F_` bits, so that netlink can
+ * report them as they are: no duplicate detection is to be done, the
+ * detection failed, the preferred lifetime has ended, the detection is
+ * still running, and the address was given by hand and never expires. */
+#define NETDEV_A6_NODAD      0x02
+#define NETDEV_A6_DADFAILED  0x08
+#define NETDEV_A6_DEPRECATED 0x20
+#define NETDEV_A6_TENTATIVE  0x40
+#define NETDEV_A6_PERMANENT  0x80
+
+/* A lifetime that never ends, as RFC 4862 writes infinity. */
+#define NETDEV_LIFETIME_FOREVER 0xFFFFFFFFu
+
+/**
+ * One IPv6 address of an interface. An address with `NETDEV_A6_TENTATIVE`
+ * set is not yet the interface's: it is neither accepted as a destination
+ * nor chosen as a source. The lifetimes count in seconds from the tick
+ * `since`, when the address was given or its lifetimes last renewed.
+ */
+struct netdev_addr6 {
+    uint8_t addr[16];
+    uint8_t prefix;     /* the on-link prefix's length, 0 to 128 */
+    uint8_t scope;      /* NETDEV_SCOPE_* */
+    uint8_t flags;      /* NETDEV_A6_* */
+    uint32_t valid;     /* seconds, or NETDEV_LIFETIME_FOREVER */
+    uint32_t preferred; /* seconds, at most `valid` */
+    uint32_t since;
+};
+
 /**
  * One interface: the driver that drives it and that driver's record for the
  * card, with the name and index the rest of the kernel knows it by, the
@@ -202,6 +244,20 @@ struct netdev {
 
     /* Nonzero for `lo`, which no card stands behind (`netdev_loopback`). */
     int loopback;
+
+    /* The `naddr6` IPv6 addresses, kept in the order they were given; `lo`
+     * has ::1 and a card its link-local address from the time it comes up
+     * (netconf.c). */
+    struct netdev_addr6 addr6[NETDEV_ADDRS6];
+    int naddr6;
+
+    /* The `ngroup6` IPv6 multicast groups the interface is a member of,
+     * each with the count of the joins that hold it. A datagram to a group
+     * is accepted on an interface that is a member; the cards themselves
+     * pass every multicast frame. */
+    uint8_t group6[NETDEV_GROUPS6][16];
+    uint8_t group6_refs[NETDEV_GROUPS6];
+    int ngroup6;
 };
 
 /* What Linux gives its loopback interface: the hardware type of its
@@ -321,6 +377,34 @@ int netdev_owns(uint32_t ip);
 /** Whether `ip` is 255.255.255.255 or the broadcast address of a subnet
  * one of the cards' interfaces is on. */
 int netdev_is_broadcast(uint32_t ip);
+
+/** The address entry of `nd` that is `addr`, tentative or not, or NULL;
+ * NULL for a NULL `nd`. */
+struct netdev_addr6 *netdev_addr6_of(struct netdev *nd, const uint8_t *addr);
+
+/** Whether `addr` is an IPv6 address of `nd` that is no longer tentative,
+ * and so a destination `nd` accepts and a source it may send from. */
+int netdev_holds6(struct netdev *nd, const uint8_t *addr);
+
+/** The interface, a card's or `lo`, that holds `addr` as `netdev_holds6`
+ * judges, or NULL. */
+struct netdev *netdev_owner6(const uint8_t *addr);
+
+/**
+ * Make `nd` a member of the IPv6 multicast group `group`, or count one more
+ * join of a group it is a member of. Returns 0, -EINVAL for an address that
+ * is no group or a NULL `nd`, or -ENOSPC with `NETDEV_GROUPS6` groups
+ * joined. Call under net_lock.
+ */
+int netdev_join6(struct netdev *nd, const uint8_t *group);
+
+/** Take back one join of `group` on `nd`, which stops being a member when
+ * the last goes; nothing for a group it is not a member of. Call under
+ * net_lock. */
+void netdev_leave6(struct netdev *nd, const uint8_t *group);
+
+/** Whether `nd` is a member of the IPv6 multicast group `group`. */
+int netdev_member6(const struct netdev *nd, const uint8_t *group);
 
 /** The first card's interface, `eth0`, or NULL when no card came up. */
 struct netdev *netdev_first(void);
