@@ -24,23 +24,25 @@
 #   agents    the packages of the agents layer that GNU_AGENTS lists, each as
 #             fetch_agents.sh staged it, on x86-64 only
 #
-# Then it links /bin/bash, /bin/sh, /bin/apropos, /bin/whatis, /usr/bin/cc,
-# /usr/bin/vi, /bin/mkfs.ext2, /sbin/fsck.ext2, /sbin/e2label, /etc/mtab and
-# /run, links each BusyBox applet that no file of the path provides, gives
-# each program of /bin and /usr/bin its name in the other, and of /sbin and
-# /usr/sbin, puts the CA bundle in /etc/ssl, puts /etc/services,
+# Then it makes /usr/local and its directories, links
+# /usr/bin/chromium-headless-shell, in place of Debian's script, to the
+# browser, and links /bin/bash, /bin/sh, /bin/apropos, /bin/whatis,
+# /usr/bin/cc, /usr/bin/vi, /bin/mkfs.ext2, /sbin/fsck.ext2, /sbin/e2label,
+# /etc/mtab and /run, links each BusyBox applet that no file of the path
+# provides, gives each program of /bin and /usr/bin its name in the other, and
+# of /sbin and /usr/sbin, puts the CA bundle in /etc/ssl, puts /etc/services,
 # /etc/protocols, /etc/networks, /etc/localtime and /etc/timezone in place,
 # compiles the console's terminfo entry, rach2.ti, checks that ncurses's
-# database has term's xterm-256color, renders the ports' manual
-# pages with render_man.sh, gives every node its owner's write permission,
-# takes the set-id bit off OpenSSH's ssh-keysign, sets the modes of the ports
-# that are narrower than the store keeps, gives /etc/shadow a locked line for
-# each system account of /etc/passwd, and has the root's own ldconfig write
+# database has term's xterm-256color, renders the ports' manual pages with
+# render_man.sh, gives every node its owner's write permission, takes the
+# set-id bit off OpenSSH's ssh-keysign, sets the modes of the ports that are
+# narrower than the store keeps, gives /etc/shadow a locked line for each
+# system account of /etc/passwd, and has the root's own ldconfig write
 # /etc/ld.so.cache from the /etc/ld.so.conf the manifest staged. A file the
 # tree already has is refused rather than replaced, so that what the manifest
-# staged is what the image has; the one file replaced and the one added to are
-# named where they are, and /bin/sh, which the manifest does not stage, is a
-# name of bash's file.
+# staged is what the image has; the two files replaced and the one added to
+# are named where they are, and /bin/sh, which the manifest does not stage, is
+# a name of bash's file.
 #
 
 set -e
@@ -219,6 +221,20 @@ tar -xpf "$WORK/debian.tar" -C "$TREE"
 writable
 echo "gnu: install: chromium: $(wc -l < "$WORK/new" | tr -d ' ') files"
 
+# Debian's /usr/bin/chromium-headless-shell is a shell script that runs the
+# browser as its child, so a signal to the process a caller started reaches
+# only the shell, and the browser is left running. A link starts the browser
+# as that process; the browser finds its data beside /proc/self/exe, which
+# names the file in /usr/lib/chromium.
+if [ ! -x "$TREE/usr/lib/chromium/chromium-headless-shell" ] ||
+    ! grep -q '^/usr/lib/chromium/chromium-headless-shell "\$@"$' \
+        "$TREE/usr/bin/chromium-headless-shell"; then
+    echo "gnu: install: refused: /usr/bin/chromium-headless-shell is not the launcher this script replaces" >&2
+    exit 1
+fi
+rm "$TREE/usr/bin/chromium-headless-shell"
+ln -s ../lib/chromium/chromium-headless-shell "$TREE/usr/bin/chromium-headless-shell"
+
 for name in ${GNU_AGENTS:-}; do
     install_part "agents/$name"
 done
@@ -231,6 +247,13 @@ done
 # suite would get BusyBox's sed where they name GNU's.
 ln -s ../usr/bin/bash "$TREE/bin/bash"
 ln "$TREE/usr/bin/bash" "$TREE/bin/sh"
+
+# /usr/local, which the path searches first, for what a person installs
+# beside the system's packages, laid out as Debian's base-files makes it.
+for d in bin etc include lib sbin share src; do
+    mkdir -p "$TREE/usr/local/$d"
+done
+chmod 0755 "$TREE/usr/local" "$TREE/usr/local"/*
 
 # apropos and whatis are names of the system's man, which searches as each
 # does when it is run by that name, as man-db's are.

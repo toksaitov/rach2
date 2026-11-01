@@ -8,6 +8,10 @@ The packages come from Debian 13 (trixie) and its security suite, which has the 
 
 Chromium is under the BSD 3-clause license, with its third-party code under their own licenses. Each package installs its terms as `/usr/share/doc/PACKAGE/copyright`.
 
+## Local changes
+
+`install_root.sh` replaces Debian's `/usr/bin/chromium-headless-shell`, a shell script that runs the browser as its child, with a link to the browser, so that a signal to the process a caller starts, as Puppeteer and Playwright stop the browser, reaches the browser and not a shell.
+
 ## Building
 
 `fetch_chromium.sh` has five steps, and runs all of them from nothing when none is named. Each writes a log, `log/chromium-STEP.log`.
