@@ -1,6 +1,7 @@
 /**
- * audiotest: play a square-wave PCM tone through the console audio ioctls, or
- * measure the queue across a stall of the writer.
+ * audiotest: play a square-wave PCM tone through the console audio ioctls,
+ * measure the queue across a stall of the writer, or play a scale through
+ * OSS's /dev/dsp.
  */
 #define _DEFAULT_SOURCE
 #include <errno.h>
@@ -33,6 +34,26 @@ struct audio_write_params {
     const uint8_t *buffer;
     uint32_t size; /* bytes */
 };
+
+/* OSS's requests on /dev/dsp, with Linux's numbers (<linux/soundcard.h>). */
+#define SNDCTL_DSP_SYNC     0x00005001u
+#define SNDCTL_DSP_SPEED    0xC0045002u
+#define SNDCTL_DSP_SETFMT   0xC0045005u
+#define SNDCTL_DSP_CHANNELS 0xC0045006u
+#define AFMT_QUERY          0x00
+#define AFMT_U8             0x08
+#define AFMT_S16_LE         0x10
+
+/* The scales `audiotest -d` plays, five notes of DSP_NOTE_MS each: in stereo
+ * one in each channel, an octave apart, and in mono one whose half periods
+ * are whole samples at OSS's default 8000 Hz. No note of one is within 3% of
+ * a note of another, so that wavcheck tells them apart. */
+#define DSP_NOTES   5
+#define DSP_NOTE_MS 400u
+static const unsigned dsp_left[DSP_NOTES] = {262, 294, 330, 349, 392};
+static const unsigned dsp_right[DSP_NOTES] = {523, 587, 659, 698, 784};
+static const unsigned dsp_mono[DSP_NOTES] = {80, 100, 125, 160, 200};
+
 static volatile sig_atomic_t interrupted;
 
 /**
@@ -270,12 +291,165 @@ static int stall(int fd, unsigned rate)
 }
 
 /**
+ * Ask /dev/dsp, open as `fd`, for `request` with `*value`, and leave in it
+ * the value the driver granted. Returns 0, or -1 with the failure reported
+ * on standard error.
+ */
+static int dsp_set(int fd, unsigned long request, int *value, const char *name)
+{
+    if (ioctl(fd, request, value) < 0) {
+        fprintf(stderr, "audiotest: %s: %s\n", name, strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+/**
+ * Write the `size` bytes at `data` to /dev/dsp, open as `fd`, whose writes
+ * block until there is room. Returns 0, or -1 on a failed write or a signal.
+ */
+static int dsp_write(int fd, const uint8_t *data, size_t size)
+{
+    while (size && !interrupted) {
+        ssize_t n = write(fd, data, size);
+
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n <= 0) {
+            perror("audiotest: write");
+            return -1;
+        }
+        data += n;
+        size -= (size_t)n;
+    }
+    return interrupted ? -1 : 0;
+}
+
+/**
+ * Play a scale through /dev/dsp: the format, channels and rate of `want`, in
+ * that order as OSS asks, or with `want` NULL those the open set, OSS's
+ * defaults. The values granted are read back and printed, and the scale is
+ * played in them: a note of `dsp_left` in the first channel and one of
+ * `dsp_right` in the second together, or of `dsp_mono` in one channel, each
+ * a square wave for DSP_NOTE_MS. SNDCTL_DSP_SYNC then waits until the device
+ * has played it. Returns 0, or -1 on a failure, which is reported on
+ * standard error, or a signal.
+ */
+static int dsp_scale(const int *want)
+{
+    static uint8_t buf[4096];
+    int format = AFMT_QUERY, channels = 0, rate = 0;
+    unsigned note, frame, frames, phase[2], i, n, at;
+    int fd = open("/dev/dsp", O_WRONLY);
+
+    if (fd < 0) {
+        perror("audiotest: /dev/dsp");
+        return -1;
+    }
+    if (want) {
+        format = want[1] == 8 ? AFMT_U8 : AFMT_S16_LE;
+        channels = want[2];
+        rate = want[0];
+    }
+    if (dsp_set(fd, SNDCTL_DSP_SETFMT, &format, "SNDCTL_DSP_SETFMT") < 0 ||
+        dsp_set(fd, SNDCTL_DSP_CHANNELS, &channels, "SNDCTL_DSP_CHANNELS") < 0 ||
+        dsp_set(fd, SNDCTL_DSP_SPEED, &rate, "SNDCTL_DSP_SPEED") < 0) {
+        close(fd);
+        return -1;
+    }
+    if ((format != AFMT_U8 && format != AFMT_S16_LE) || channels < 1 || channels > 2 ||
+        rate < 1000) {
+        fprintf(stderr,
+                "audiotest: dsp: granted format %d, %d channels, %d hz, which it cannot play\n",
+                format, channels, rate);
+        close(fd);
+        return -1;
+    }
+    printf("audiotest: dsp: granted %d hz, %d-bit, %d channels\n", rate, format == AFMT_U8 ? 8 : 16,
+           channels);
+    frame = (unsigned)channels * (format == AFMT_U8 ? 1u : 2u);
+    for (note = 0; note < DSP_NOTES && !interrupted; note++) {
+        frames = (unsigned)rate * DSP_NOTE_MS / 1000u;
+        phase[0] = phase[1] = 0;
+        while (frames && !interrupted) {
+            n = frames < sizeof(buf) / frame ? frames : sizeof(buf) / frame;
+            for (i = 0, at = 0; i < n; i++) {
+                unsigned c;
+
+                for (c = 0; c < (unsigned)channels; c++) {
+                    unsigned hz = channels == 1 ? dsp_mono[note]
+                                  : c           ? dsp_right[note]
+                                                : dsp_left[note];
+                    int high = phase[c] < (unsigned)rate / 2;
+
+                    phase[c] = (phase[c] + hz) % (unsigned)rate;
+                    if (format == AFMT_U8) {
+                        buf[at++] = (uint8_t)(high ? 128 + 24 : 128 - 24);
+                    } else {
+                        int16_t v = high ? 6000 : -6000;
+
+                        buf[at++] = (uint8_t)((uint16_t)v & 0xFF);
+                        buf[at++] = (uint8_t)((uint16_t)v >> 8);
+                    }
+                }
+            }
+            if (dsp_write(fd, buf, at) < 0) {
+                close(fd);
+                return -1;
+            }
+            frames -= n;
+        }
+    }
+    if (!interrupted && ioctl(fd, SNDCTL_DSP_SYNC, 0) < 0 && errno != EINTR) {
+        perror("audiotest: SNDCTL_DSP_SYNC");
+        close(fd);
+        return -1;
+    }
+    close(fd);
+    return interrupted ? -1 : 0;
+}
+
+/**
+ * `audiotest -d [rate bits channels]`: play dsp_scale's scale through
+ * /dev/dsp, in `bits` of 8 or 16, one or two `channels` and a `rate` from
+ * 1000 to 192000, or with no arguments at OSS's defaults. The status is 0
+ * when the scale played to its end, and 1 on a usage error, a failure or a
+ * signal.
+ */
+static int dsp_main(int argc, char **argv)
+{
+    int want[3];
+
+    if (argc != 0 && argc != 3) {
+        fprintf(stderr, "audiotest: usage: audiotest -d [rate bits channels]\n");
+        return 1;
+    }
+    if (argc == 3) {
+        want[0] = (int)number(argv[0], 1000, 192000);
+        want[1] = (int)number(argv[1], 8, 16);
+        want[2] = (int)number(argv[2], 1, 2);
+        if (!want[0] || (want[1] != 8 && want[1] != 16) || !want[2]) {
+            fprintf(stderr, "audiotest: usage: audiotest -d [rate bits channels]\n");
+            return 1;
+        }
+    }
+    signal(SIGINT, interrupt_tone);
+    signal(SIGTERM, interrupt_tone);
+    signal(SIGHUP, interrupt_tone);
+    if (dsp_scale(argc == 3 ? want : NULL) < 0)
+        return 1;
+    puts("audiotest: result: complete; the scale played through /dev/dsp");
+    return 0;
+}
+
+/**
  * `audiotest [rate [seconds [frequency]]]`: play a tone of `frequency` hertz,
  * 440 by default and from 20 to half the rate, for `seconds`, 2 by default
  * and at most 60, at `rate` samples per second, 48000 by default and from
  * 8000 to 384000. `audiotest -s [rate]` instead writes numbered blocks
  * across a stall, as `stall` says, and fails when the queued delay passed six
- * periods.
+ * periods, and `audiotest -d` plays a scale through /dev/dsp, as `dsp_main`
+ * says.
  *
  * The kernel takes the audio requests only on a descriptor of the console, so
  * the program opens `/dev/console` rather than using its standard output,
@@ -291,6 +465,8 @@ int main(int argc, char **argv)
     unsigned rate = 48000, seconds = 2, frequency = 440;
     int fd, result, stalled = argc > 1 && strcmp(argv[1], "-s") == 0;
 
+    if (argc > 1 && strcmp(argv[1], "-d") == 0)
+        return dsp_main(argc - 2, argv + 2);
     if (stalled) {
         argv++;
         argc--;
@@ -303,7 +479,8 @@ int main(int argc, char **argv)
         frequency = number(argv[3], 20, rate / 2);
     if (argc > (stalled ? 2 : 4) || !rate || !seconds || !frequency) {
         fprintf(stderr, "audiotest: usage: audiotest [rate [seconds [frequency]]]\n"
-                        "       audiotest -s [rate]\n");
+                        "       audiotest -s [rate]\n"
+                        "       audiotest -d [rate bits channels]\n");
         return 1;
     }
     signal(SIGINT, interrupt_tone);
