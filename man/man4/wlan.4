@@ -14,6 +14,10 @@ It uses the ordinary IP, ARP, DHCP and packet-socket paths.
 Association gives carrier; authorization opens the control port.
 Before authorization only EAPOL, EtherType 0x888e, passes in either direction.
 A stopped, blocked or unassociated radio passes no data.
+Each radio has a switch of
+.Xr rfkill 4 ,
+.Li phyN ,
+whose block stops it.
 .Pp
 The station converts Ethernet II frames to three-address 802.11 data frames
 with LLC/SNAP headers.
@@ -51,7 +55,8 @@ A link to the radio.
 A link whose final component is the registered radio driver name.
 .El
 .Sh SEE ALSO
-.Xr socket 2 ,
 .Xr ioctl 2 ,
+.Xr socket 2 ,
+.Xr rfkill 4 ,
 .Xr proc 5 ,
 .Xr sysfs 5

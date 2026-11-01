@@ -1,0 +1,189 @@
+.Dd November 2, 2026
+.Dt RFKILL 4
+.Os
+.Sh NAME
+.Nm rfkill
+.Nd the switches that keep radios off
+.Sh SYNOPSIS
+.Pa /dev/rfkill
+.Pp
+.Pa /sys/class/rfkill/rfkillN/
+.Sh DESCRIPTION
+A switch keeps a radio from transmitting.
+Each Wi-Fi radio has one, named after the radio,
+.Pa phyN ,
+and numbered
+.Ar N
+from 0 in the order the switches come; a number is not given again after
+its switch goes.
+A switch has two blocks: the soft block, which software sets and clears,
+and the hard block, which a key or a switch of the machine sets and only
+the machine clears.
+The radio runs while neither is set.
+.Pp
+A block stops the radio: a scan in progress is aborted, the station leaves
+its network and the interface loses its carrier.
+When the last block is lifted, a radio that ran, or that was asked to start
+while blocked, starts again.
+A radio stopped before the block stays stopped.
+.Pp
+The interface is that of Linux, so that
+.Xr rfkill 8 ,
+util-linux's
+.Nm rfkill
+and
+.Xr wpa_supplicant 8
+work unchanged.
+.Ss /dev/rfkill
+The device, at Linux's numbers 10, 242, has mode 0644: anyone reads the
+switches, and root changes them.
+Each read gives one event, Linux's
+.Vt struct rfkill_event :
+.Bd -literal -offset indent
+struct rfkill_event {
+	uint32_t idx;	/* the switch's N */
+	uint8_t type;	/* RFKILL_TYPE_WLAN is 1 */
+	uint8_t op;	/* ADD 0, DEL 1, CHANGE 2 */
+	uint8_t soft;	/* 1 while soft blocked */
+	uint8_t hard;	/* 1 while hard blocked */
+};
+.Ed
+.Pp
+An open is first given an
+.Dv RFKILL_OP_ADD
+for each switch, in the order of their numbers, then one event for each
+switch that comes, goes or changes a block.
+A read takes one event, cut to the count asked for; an open that has none
+waits for one, or fails with
+.Er EAGAIN
+under
+.Dv O_NONBLOCK ,
+and
+.Xr poll 2
+reports it readable while it has one.
+An open keeps the last 32 events it has not read.
+.Pp
+A write of at least 7 bytes is one event:
+.Dv RFKILL_OP_CHANGE
+sets the soft block of switch
+.Va idx
+to
+.Va soft
+when its type is
+.Va type
+or
+.Va type
+is
+.Dv RFKILL_TYPE_ALL ,
+0, and
+.Dv RFKILL_OP_CHANGE_ALL
+sets it on every switch of
+.Va type ,
+or on every switch for
+.Dv RFKILL_TYPE_ALL ;
+a switch that comes later starts with the block
+.Dv RFKILL_OP_CHANGE_ALL
+last gave its type.
+.Va hard
+is ignored.
+The write returns the bytes it took.
+.Pp
+.Dv RFKILL_IOCTL_MAX_SIZE ,
+.Fn _IOW 'R' 2 __u32 ,
+sets the size of this open's events, from 8 to 255 bytes; above 8 an event
+is the extended form,
+.Vt struct rfkill_event_ext ,
+whose ninth byte,
+.Va hard_block_reasons ,
+is
+.Dv RFKILL_HARD_BLOCK_SIGNAL ,
+1, while the machine holds the hard block.
+.Dv RFKILL_IOCTL_NOINPUT ,
+.Fn _IO 'R' 1 ,
+is accepted and does nothing, since no key here changes a switch by
+itself.
+.Ss /sys/class/rfkill/rfkillN
+Each switch has a directory with these files:
+.Bl -tag -width hard_block_reasons
+.It Pa name
+The switch's name, as
+.Ql phy0 .
+.It Pa type
+.Ql wlan ,
+.Ql bluetooth ,
+.Ql ultrawideband ,
+.Ql wimax ,
+.Ql wwan ,
+.Ql gps ,
+.Ql fm
+or
+.Ql nfc .
+.It Pa index
+.Ar N .
+.It Pa soft
+1 while soft blocked; root writes 0 or 1.
+.It Pa hard
+1 while hard blocked.
+.It Pa state
+2 while hard blocked, else 0 while soft blocked, else 1; root writes 0 to
+set the soft block and 1 to clear it.
+.It Pa hard_block_reasons
+.Ql 0x1
+while hard blocked, else
+.Ql 0x0 .
+.It Pa persistent
+0: no block outlasts a reboot.
+.It Pa uevent
+.Ev RFKILL_NAME ,
+.Ev RFKILL_TYPE ,
+.Ev RFKILL_STATE
+and
+.Ev RFKILL_HW_BLOCK_REASON ,
+one to a line, as Linux writes them.
+.It Pa device
+For a radio's switch, a link to the radio,
+.Pa /sys/class/ieee80211/phyN ,
+the directory
+.Pa /sys/class/net/wlanN/phy80211
+leads to as well.
+.El
+.Sh EXAMPLES
+Block every Wi-Fi radio, then lift the block:
+.Bd -literal -offset indent
+rfkill block wifi
+rfkill unblock wifi
+.Ed
+.Pp
+The same through the switch's own files:
+.Bd -literal -offset indent
+echo 1 > /sys/class/rfkill/rfkill0/soft
+echo 0 > /sys/class/rfkill/rfkill0/soft
+.Ed
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EAGAIN
+A read under
+.Dv O_NONBLOCK
+found no event.
+.It Bq Er EINTR
+A signal came while a read waited.
+.It Bq Er EINVAL
+A write of fewer than 7 bytes, of an unknown type or of an operation other
+than the two above; a size outside 8 to 255; a value other than 0 or 1
+written to
+.Pa soft
+or
+.Pa state .
+.It Bq Er EFAULT
+A buffer outside the caller's memory.
+A read that faults loses its event, as on Linux.
+.It Bq Er ENOTTY
+Another request.
+.El
+.Sh SEE ALSO
+.Xr wlan 4 ,
+.Xr iw 8 ,
+.Xr rfkill 8 ,
+.Xr wpa_supplicant 8
+.Sh HISTORY
+The device and the class are Linux's, from Linux 2.6.31.
