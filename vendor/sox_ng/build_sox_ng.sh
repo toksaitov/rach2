@@ -25,7 +25,8 @@ BUILD_TRIPLE=$(sh "$SRC/config.guess")
 (
     cd "$SRC"
     CC="$WRAP" AR="${CROSS}ar" RANLIB="${CROSS}ranlib" STRIP="${CROSS}strip" \
-        PKG_CONFIG=false CFLAGS=-O2 LDFLAGS="-static -Wl,-z,noexecstack" \
+        PKG_CONFIG=false CFLAGS="-Os -ffunction-sections -fdata-sections" \
+        LDFLAGS="-static -Wl,--gc-sections -Wl,-z,noexecstack" \
         ./configure --build="$BUILD_TRIPLE" --host="$HOST_TRIPLE" \
         --prefix=/usr --disable-shared --enable-static --disable-symlinks \
         --disable-stack-protector --disable-openmp --without-libltdl \
@@ -45,5 +46,8 @@ make -C "$SRC/src" sox_ng
 "${CROSS}strip" "$SRC/src/sox_ng" -o "$STAGE/sox"
 "$WRAP" -O2 -Wall -Wextra -Werror -ansi -Wl,-z,noexecstack "$SCRIPT_DIR/mode.c" -o "$WORK/mode"
 "${CROSS}strip" "$WORK/mode" -o "$STAGE/mode"
+"$WRAP" -Os -Wall -Wextra -Werror -ansi -Wl,-z,noexecstack \
+    -DMULTICALL_PATH='"/bin/busybox"' "$SCRIPT_DIR/mode.c" -o "$WORK/sh"
+"${CROSS}strip" "$WORK/sh" -o "$STAGE/sh"
 cp "$SRC/COPYING" "$STAGE/COPYING"
 printf 'sox_ng: result: built %s for %s\n' "$VERSION" "$RACH2_ARCH"

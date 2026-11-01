@@ -96,7 +96,7 @@ TCC_STAGE    = $(VENDOR_STAGE)/tcc
 DROPBEAR_STAGE = $(VENDOR_STAGE)/dropbear
 PDPMAKE_STAGE = $(VENDOR_STAGE)/pdpmake
 SOX_NG_STAGE = $(VENDOR_STAGE)/sox_ng
-SOX_NG_OUTPUTS = $(addprefix $(SOX_NG_STAGE)/,sox mode COPYING)
+SOX_NG_OUTPUTS = $(addprefix $(SOX_NG_STAGE)/,sox mode sh COPYING)
 KBD_STAGE = $(VENDOR_STAGE)/kbd
 KBD_PROGRAMS = loadkeys dumpkeys setleds kbdrate showkey kbd_mode
 KBD_BINS = $(addprefix $(KBD_STAGE)/,$(KBD_PROGRAMS))
@@ -1336,7 +1336,8 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # client, TinyCC and pdpmake, sox_ng, Doom, the manual, the sources under /src,
 # and an /etc and /root tree. The image is 24 MiB on i686 and 25 on x86-64, of
 # which the tree with Doom's WAD takes 20.8 MiB and 21.5 MiB, since x86-64's
-# programs are larger.
+# programs are larger; the small /bin/sh launcher keeps one copy of BusyBox
+# beside sox_ng.
 # ACPICA's core is staged as an archive of 0.45 MiB to keep the tree small
 # (vendor/acpica/build_acpica.sh).
 # The image is the root the running system writes, /tmp among it, so the build

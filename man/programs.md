@@ -35,7 +35,7 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `play` | [play(1)](man1/play.1) | sox_ng (`mode`) |  |  |
 | `rec` | [rec(1)](man1/rec.1) | sox_ng (`mode`) |  |  |
 | `setleds` | [setleds(1)](man1/setleds.1) | kbd |  | yes |
-| `sh` | [sh(1)](man1/sh.1) | BusyBox (`busybox`) | in-house (`ish`) | yes |
+| `sh` | [sh(1)](man1/sh.1) | BusyBox | in-house (`ish`) | BusyBox (`busybox`) |
 | `showkey` | [showkey(1)](man1/showkey.1) | kbd |  |  |
 | `sox` | [sox(1)](man1/sox.1) | sox_ng |  |  |
 | `soxi` | [soxi(1)](man1/soxi.1) | sox_ng (`mode`) |  |  |

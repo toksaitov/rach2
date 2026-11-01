@@ -97,6 +97,7 @@ function project(host) {
     if (host ~ /^build\/vendor\/busybox\//) return "BusyBox"
     if (host ~ /^build\/vendor\/kbd\//) return "kbd"
     if (host ~ /^build\/vendor\/dropbear\//) return "Dropbear"
+    if (host == "build/vendor/sox_ng/sh") return "BusyBox"
     if (host ~ /^build\/vendor\/sox_ng\//) return "sox_ng"
     if (host ~ /^build\/vendor\/tcc\//) return "TinyCC"
     if (host ~ /^build\/vendor\/pdpmake\//) return "pdpmake"
