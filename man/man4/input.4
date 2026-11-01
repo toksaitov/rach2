@@ -31,9 +31,12 @@ The ACPI devices of
 .Xr acpi 4
 are nodes too:
 .Dq Power Button ,
-.Dq Sleep Button
-and
-.Dq Video Bus ,
+.Dq Sleep Button ,
+.Dq Video Bus
+and, on an IdeaPad,
+.Dq Ideapad extra buttons
+of
+.Xr ideapad 4 ,
 on the host's bus,
 .Dv BUS_HOST .
 Each reports a key pressed and then released at once, in two packets, with
@@ -226,4 +229,5 @@ Another ioctl.
 .Xr poll 2 ,
 .Xr acpi 4 ,
 .Xr console 4 ,
+.Xr ideapad 4 ,
 .Xr mixer 4

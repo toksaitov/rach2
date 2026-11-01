@@ -16,6 +16,11 @@ and numbered
 .Ar N
 from 0 in the order the switches come; a number is not given again after
 its switch goes.
+On an IdeaPad,
+.Xr ideapad 4
+adds the switch
+.Ql ideapad_wlan ,
+the firmware's Wi-Fi bit, which belongs to no radio.
 A switch has two blocks: the soft block, which software sets and clears,
 and the hard block, which a key or a switch of the machine sets and only
 the machine clears.
@@ -181,6 +186,7 @@ A read that faults loses its event, as on Linux.
 Another request.
 .El
 .Sh SEE ALSO
+.Xr ideapad 4 ,
 .Xr wlan 4 ,
 .Xr iw 8 ,
 .Xr rfkill 8 ,

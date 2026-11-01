@@ -1,0 +1,134 @@
+.Dd November 2, 2026
+.Dt IDEAPAD 4
+.Os
+.Sh NAME
+.Nm ideapad
+.Nd the Lenovo IdeaPad's keys and Wi-Fi switch
+.Sh SYNOPSIS
+.Pa /dev/input/eventN ,
+.Dq Ideapad extra buttons
+.Pp
+.Pa /sys/class/rfkill/rfkillN ,
+.Ql ideapad_wlan
+.Sh DESCRIPTION
+Lenovo's IdeaPad laptops, the G50-70 among them, report some of their keys,
+the airplane key among them, through the ACPI device
+.Ql VPC2004 ,
+under the embedded controller, and not through the keyboard.
+The kernel drives the first present
+.Ql VPC2004
+as Linux's
+.Nm ideapad-laptop
+does, through the device's methods
+.Ql VPCR
+and
+.Ql VPCW ,
+which read and write the controller's command and data registers.
+A command is written, the controller clears the command register once it
+has taken it, and the data register then holds the answer; a command the
+controller has not taken within 200 ms fails.
+One command runs at a time.
+.Pp
+At boot the kernel evaluates the device's
+.Ql _CFG
+for the machine's radios, registers the event device
+.Dq Ideapad extra buttons ,
+and turns the controller's radio switch on, so that the controller blocks
+no radio of its own accord.
+When
+.Ql _CFG
+says the machine has Wi-Fi, bit 18, it registers the rfkill switch
+.Ql ideapad_wlan ,
+of type
+.Ql wlan ,
+which belongs to no radio: its soft block is written to the controller's
+Wi-Fi bit, 0 blocking and 1 not, and nothing is written at boot.
+.Pp
+On each Notify the kernel reads the event bits, the controller's byte
+.Ql VPC1
+and above it its byte
+.Ql VPC2 ,
+which the reads clear, and reports the keys of the bits
+that are set, each pressed and released at once, as
+.Xr acpi 4 Ns 's
+other devices report theirs:
+.Bl -column "bit 13" "KEY_SWITCHVIDEOMODE" -offset indent
+.It bit 6 Ta Dv KEY_SWITCHVIDEOMODE
+.It bit 7 Ta Dv KEY_CAMERA
+.It bit 8 Ta Dv KEY_MICMUTE
+.It bit 11 Ta Dv KEY_F16
+.It bit 13 Ta Dv KEY_WLAN , No the airplane key
+.El
+.Pp
+Bit 9 reads the controller's radio switch again.
+On the machines with a radio switch of their own, which Linux lists by
+name, Linux makes the controller's switch the hard block of
+.Ql ideapad_wlan ;
+the kernel lists none, so the switch is only logged and no hard block is
+set.
+The other bits, such as bit 4 of the brightness keys, which the video bus
+reports, give no key.
+.Pp
+.Dv KEY_WLAN
+does not change a switch by itself.
+.Xr acpid 1
+runs
+.Pa /etc/acpi/wifi
+for it, which blocks every Wi-Fi switch when one has its soft block clear,
+and unblocks every one otherwise; see
+.Xr init 8 .
+.Sh FILES
+.Bl -tag -width /etc/acpi/wifi
+.It Pa /etc/acpi.map
+.Dv KEY_WLAN
+as the event
+.Ql button/wlan WLAN
+.It Pa /etc/acpi/wifi
+the airplane key's action
+.El
+.Sh DIAGNOSTICS
+The lines are at the debug level, which the serial port and the log keep
+and the screen does not show, but for the warnings.
+.Bl -tag -width Ds
+.It Ql acpi: ideapad: PATH: cfg 0xC, wifi W, ideapad_wlan
+The device at PATH was taken; C is what
+.Ql _CFG
+returned, W the controller's Wi-Fi bit, and
+.Ql ideapad_wlan
+is there when the switch was registered.
+.It Ql acpi: ideapad: radio switch N
+The controller's radio switch, 1 when it lets the radios run.
+.It Ql acpi: event: ideapad: notify 0xV
+A Notify of value V on the device.
+.It Ql acpi: event: ideapad: bits 0xB
+The events the Notify read.
+.It Ql acpi: event: ideapad: bit N: key K
+Event bit N reported as key K.
+.It Ql acpi: ideapad: read 0xC: error E
+The controller did not answer command C, with -110 for a timeout.
+.Ql write
+is the same of a command that writes.
+.It Ql acpi: ideapad: refused: PATH: _CFG: EXCEPTION
+The device's
+.Ql _CFG
+failed, and the device is not taken.
+.El
+.Sh SEE ALSO
+.Xr acpid 1 ,
+.Xr acpi 4 ,
+.Xr input 4 ,
+.Xr rfkill 4 ,
+.Xr init 8 ,
+.Xr rfkill 8
+.Sh HISTORY
+The driver follows Linux's
+.Nm ideapad-laptop .
+.Sh BUGS
+Which event bit the G50-70's airplane key sets is not yet measured; bit 13
+is Linux's, and the controller's queries
+.Ql _Q1C
+and
+.Ql _Q44
+are the candidates.
+The novo button, the touchpad's switch, the camera's and Bluetooth's
+switches and the keyboard's Fn lock are not driven.
