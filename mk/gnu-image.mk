@@ -32,6 +32,20 @@ GNU_IMAGE_DEPS = $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_D
                  tools/image/mkext2.sh vendor/gnu/install_root.sh vendor/gnu/fetch.sh \
                  tests/system/fakeapi/native/wsclient.c tests/cases/host/products.mk \
                  vendor/gnu/sources-extra.txt $(GNU_IMAGE_STAMPS) $(IMAGE_TOOLS) $(MAN_ALL)
+# LOGINS names a directory of logins laid out from the machine's root, as
+# tools/dev/machine_logins.sh pull writes one, such as
+# ~/Desktop/rach2-agent-creds: os-real-gnu.ext2, the machine's root, and no
+# test image, has its root/ staged in /root by tools/image/stage_logins.sh.
+# The stamp holds that script's digest of what it stages, `none` without
+# LOGINS, and is rewritten only when it changes, so that a root staged with
+# other logins, or with none, is made again.
+LOGINS ?=
+GNU_LOGINS_STAMP = $(IMAGES_DIR)/os-real-gnu.logins
+GNU_STAGE_LOGINS = $(if $(LOGINS),sh tools/image/stage_logins.sh $@ "$(LOGINS)")
+$(GNU_LOGINS_STAMP): FORCE
+	@mkdir -p $(@D)
+	@sh tools/image/stage_logins.sh --digest "$(LOGINS)" > $@.new
+	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
 GNU_IMAGE_ORDER = kbd preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid \
                   check-e2fsck tools/etude/guest ports/doom term unifont
 
@@ -53,9 +67,11 @@ $(GNU_TEST_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) \
 	    sh tools/image/mkext2.sh --overlay vendor/gnu/install_root.sh \
 	    krffs/manifests/os-real-gnu.manifest $@ 12288
 
-$(OS_REAL_GNU_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) | $(GNU_IMAGE_ORDER)
+$(OS_REAL_GNU_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_STAMPS) $(GNU_LOGINS_STAMP) \
+                     tools/image/stage_logins.sh | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" sh tools/image/mkext2.sh \
 	    --overlay vendor/gnu/install_root.sh krffs/manifests/os-real-gnu.manifest $@ 4096
+	$(GNU_STAGE_LOGINS)
 
 $(OS_REAL_GNU_AGENTS_EXT2): $(GNU_IMAGE_DEPS) $(GNU_AGENTS_ALL_LIST) $(GNU_AGENTS_ALL_STAMPS) | $(GNU_IMAGE_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ALL)" sh tools/image/mkext2.sh \
@@ -80,9 +96,11 @@ $(GNU_TEST_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
 	    sh vendor/gnu/tooling_image.sh $@ 12288
 
 $(OS_REAL_GNU_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_LIST) $(GNU_AGENTS_RECIPES) \
-                     $(if $(GNU_AGENTS_RECIPES),$(GNU_AGENTS_SOURCES)) | $(GNU_TOOLING_ORDER)
+                     $(if $(GNU_AGENTS_RECIPES),$(GNU_AGENTS_SOURCES)) $(GNU_LOGINS_STAMP) \
+                     tools/image/stage_logins.sh | $(GNU_TOOLING_ORDER)
 	RACH2_ARCH=$(ARCH) GNU_AGENTS="$(GNU_AGENTS_ON)" GNU_LINK="$(GNU_LINK)" \
 	    MUSL_CRYPT_SRC=$(MUSL_CRYPT_SRC) sh vendor/gnu/tooling_image.sh $@ 4096
+	$(GNU_STAGE_LOGINS)
 
 $(OS_REAL_GNU_AGENTS_EXT2): $(GNU_TOOLING_DEPS) $(GNU_AGENTS_ALL_LIST) $(GNU_AGENTS_ALL_RECIPES) \
                             $(GNU_AGENTS_SOURCES) | $(GNU_TOOLING_ORDER)
@@ -97,7 +115,7 @@ endif
 # products could have a recovery system older than its kernel. The key is
 # minted by a make of its own, because make reads the recovery image's name,
 # which says whether it has a key, when it starts. The GNU root is built as
-# the rules above say.
+# the rules above say, with LOGINS staged in it when given.
 .PHONY: machine
 machine:
 	$(MAKE) --no-print-directory recovery-key
