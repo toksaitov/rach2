@@ -10,6 +10,7 @@
 
 #include "kcpu.h"
 #include "../arch.h"
+#include "../../cmdline.h"
 #include "../../lib/kirq.h"
 #include "../../lib/spinlock.h"
 
@@ -173,8 +174,10 @@ static volatile uint32_t ref_raw;
 static volatile uint64_t ref_total;
 static volatile uint32_t ref_us_base;
 
-/* The TSC's counts in a tick, from `timer_calibrate`; 0 for none. */
+/* The TSC's counts in a tick, from `timer_calibrate`, 0 for none; and
+ * whether it has measured. */
 static uint32_t tsc_per_tick;
+static int tsc_measured;
 
 /* The waits on the 8254 that `timer_calibrate` measures the TSC over, and
  * the 8254's counts in each, 20 ms. */
@@ -298,50 +301,131 @@ static int ref_start(void)
     return 1;
 }
 
-/**
- * The TSC's fewest counts in a tick of TSC_WINDOWS waits of 20 ms on the
- * 8254, each measured in the 8254's counts (`pit_wait_counts`). A stop of
- * the processor during a wait can hide sweeps of the 8254's counter, which
- * makes the TSC's counts too many for the wait and never too few. The
- * TSC's difference is taken in 64 bits, so that a long one is not taken
- * for a short one.
- */
-uint32_t timer_calibrate(void)
+/** The TSC's counts now as one 64-bit number. */
+static uint64_t tsc_now(void)
 {
-    uint32_t a, b, c, d, lo0, hi0, lo1, hi1, flags, seen, counts, least = 0, i;
-    uint64_t gone;
+    uint32_t lo, hi;
 
-    if (ref_kind != REF_NONE || refclock_name() || tsc_per_tick) {
-        return tsc_per_tick;
-    }
+    tsc_read(&lo, &hi);
+    return ((uint64_t)hi << 32) | lo;
+}
+
+/** Whether `cpuid` says the TSC runs at one rate whatever the processor's
+ * clock does (leaf 0x80000007, EDX bit 8), as on a PC it does. */
+static int tsc_one_rate(void)
+{
+    uint32_t a, b, c, d;
+
     kcpu_id(0x80000000u, &a, &b, &c, &d);
     if (a < 0x80000007u) {
         return 0;
     }
     kcpu_id(0x80000007u, &a, &b, &c, &d);
-    if (!(d & (1u << 8))) {
-        return 0; /* no invariant TSC: its rate follows the processor's */
+    return (d & (1u << 8)) != 0;
+}
+
+/** `gone` TSC counts over `seen` counts of a reference of `ref_hz` as the
+ * TSC's counts in a tick, from a quarter of the counts a second; 0 when the
+ * quotient does not fit. */
+static uint32_t tsc_per_tick_of(uint64_t gone, uint32_t seen, uint32_t ref_hz)
+{
+    uint32_t counts;
+
+    if (seen == 0 || (gone >> 32) != 0) {
+        return 0; /* 20 ms is under 2^32 counts below a 200 GHz clock */
     }
-    flags = kirq_save();
+    counts = refclock_scale((uint32_t)gone, ref_hz / 4u, seen);
+    return counts == 0xFFFFFFFFu ? 0 : counts / (TICKS_PER_SECOND / 4u);
+}
+
+/**
+ * The TSC's fewest counts in a tick of TSC_WINDOWS waits of 20 ms on the
+ * 8254, each measured in the 8254's counts (`pit_wait_counts`). A stop of
+ * the processor during a wait can hide sweeps of the 8254's counter, which
+ * makes the TSC's counts too many for the wait and never too few.
+ */
+static uint32_t tsc_against_pit(void)
+{
+    uint32_t seen, counts, least = 0, i;
+    uint64_t t0;
+
     for (i = 0; i < TSC_WINDOWS; i++) {
-        tsc_read(&lo0, &hi0);
+        t0 = tsc_now();
         seen = pit_wait_counts(TSC_WAIT_COUNTS);
-        tsc_read(&lo1, &hi1);
-        gone = (((uint64_t)hi1 << 32) | lo1) - (((uint64_t)hi0 << 32) | lo0);
-        if (seen == 0 || (gone >> 32) != 0) {
-            continue; /* 20 ms is under 2^32 counts below a 200 GHz clock */
+        counts = tsc_per_tick_of(tsc_now() - t0, seen, PIT_COUNTS_PER_SEC);
+        if (counts != 0 && (least == 0 || counts < least)) {
+            least = counts;
         }
-        /* A quarter of the counts a second, then a quarter of a tick's. */
-        counts = refclock_scale((uint32_t)gone, PIT_COUNTS_PER_SEC / 4u, seen);
-        if (counts != 0xFFFFFFFFu) {
-            counts /= TICKS_PER_SECOND / 4u;
-            if (least == 0 || counts < least) {
-                least = counts;
+    }
+    return least;
+}
+
+/**
+ * The TSC's counts in a tick over the window of TSC_WINDOWS whose readings
+ * of the platform's counter were closest to the TSC's, each window 20 ms of
+ * that counter. Each end reads the TSC on both sides of the counter's read
+ * and takes the middle, so a read held up, as an emulated device's is, adds
+ * to the spread and not to the count; the counter counts on while the
+ * processor is stopped, so no window needs the least. A counter that does
+ * not move in 2^26 reads gives 0.
+ */
+static uint32_t tsc_against_reference(void)
+{
+    uint32_t hz = refclock_hz(), mask = refclock_mask(), want = hz / 50u;
+    uint32_t r0, r1, seen = 0, spins, best = 0, i;
+    uint64_t a0, b0, a1, b1, spread, best_spread = 0;
+
+    for (i = 0; i < TSC_WINDOWS; i++) {
+        a0 = tsc_now();
+        r0 = refclock_read();
+        b0 = tsc_now();
+        for (spins = 0; spins < (1u << 26); spins++) {
+            a1 = tsc_now();
+            r1 = refclock_read();
+            b1 = tsc_now();
+            seen = (r1 - r0) & mask;
+            if (seen >= want) {
+                break;
             }
         }
+        if (seen < want) {
+            return 0;
+        }
+        spread = (b0 - a0) + (b1 - a1);
+        if (best == 0 || spread < best_spread) {
+            best = tsc_per_tick_of(((a1 + b1) >> 1) - ((a0 + b0) >> 1), seen, hz);
+            best_spread = spread;
+        }
     }
+    return best;
+}
+
+/**
+ * Measure the TSC against the active reference, the HPET or the PM timer,
+ * or against the 8254 on a machine with neither, once, with interrupts off.
+ * It is measured only where `cpuid` says it runs at one rate, and never
+ * with `rach2.notsc` on the command line. The TSC's difference is taken in
+ * 64 bits, so that a long one is not taken for a short one.
+ */
+uint32_t timer_calibrate(void)
+{
+    uint32_t flags;
+
+    if (tsc_measured) {
+        return tsc_per_tick;
+    }
+    tsc_measured = 1;
+    if (kcmdline_has("rach2.notsc") || !tsc_one_rate()) {
+        return 0;
+    }
+    flags = kirq_save();
+    tsc_per_tick = refclock_name() ? tsc_against_reference() : tsc_against_pit();
     kirq_restore(flags);
-    tsc_per_tick = least;
+    return tsc_per_tick;
+}
+
+uint32_t tsc_counts_per_tick(void)
+{
     return tsc_per_tick;
 }
 

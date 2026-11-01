@@ -1,6 +1,6 @@
 /*
  * timercal_hosttest.c: the local APIC timer's calibration against the PM
- * timer and against the 8254, and the TSC's against the 8254, with the
+ * timer and against the 8254, and the TSC's against the same two, with the
  * processor stopped at any point of the measurement.
  *
  * host-deps: tests/host/compat/spinlock_host.c
@@ -21,7 +21,8 @@
  * the measurement and of each read of the APIC timer or the TSC, and every
  * STOP_STRIDE-th elsewhere. Each result must be within TOLERANCE of the
  * rate the row set. A run with two stops is not a row: the calibration
- * against the 8254 is right when one of its three waits had none. Other
+ * against the 8254 is right when one of its three waits had none, and the
+ * TSC's against the PM timer when one of its three windows had none. Other
  * rows check that a scale past 32 bits gives all ones, that a reference
  * that stops gives no calibration, and when the TSC is measured at all.
  */
@@ -205,6 +206,16 @@ void host_tsc_read(uint32_t *lo, uint32_t *hi)
     *hi = (uint32_t)(v >> 32);
 }
 
+/* Whether the command line has `rach2.notsc`, as the row sets it. */
+static int notsc;
+
+/** Whether the command line has `flag`: only `rach2.notsc`, as the row
+ * sets it. */
+int kcmdline_has(const char *flag)
+{
+    return notsc && strcmp(flag, "rach2.notsc") == 0;
+}
+
 /** `cpuid`'s highest extended leaf, 0x80000008, and leaf 0x80000007's
  * invariant TSC bit as the row sets it. */
 void kcpu_id(uint32_t leaf, uint32_t *a, uint32_t *b, uint32_t *c, uint32_t *d)
@@ -283,10 +294,11 @@ int tick_read_retry(uint32_t seq)
 #define APIC_BY_PM  0
 #define APIC_BY_PIT 1
 #define TSC_BY_PIT  2
+#define TSC_BY_PM   3
 
-static const char *const path_names[] = {"the APIC timer against the PM timer",
-                                         "the APIC timer against the 8254",
-                                         "the TSC against the 8254"};
+static const char *const path_names[] = {
+    "the APIC timer against the PM timer", "the APIC timer against the 8254",
+    "the TSC against the 8254", "the TSC against the PM timer"};
 
 /** Take the PM timer as the reference, or none. */
 static void reference(int pm)
@@ -312,12 +324,13 @@ static uint32_t calibrate(int path)
     const char *against = "";
     uint32_t counts;
 
-    reference(path == APIC_BY_PM);
+    reference(path == APIC_BY_PM || path == TSC_BY_PM);
     now_ns = 1000000u;
     accesses = 0;
     irq_on_accesses = 0;
-    if (path == TSC_BY_PIT) {
+    if (path == TSC_BY_PIT || path == TSC_BY_PM) {
         tsc_per_tick = 0;
+        tsc_measured = 0;
         ref_kind = REF_NONE;
         tsc_invariant = 1;
         return timer_calibrate();
@@ -419,6 +432,7 @@ int main(void)
     tsc_base = 0xFFF00000u;
     tsc_khz = 2893417u;
     stop_rows(TSC_BY_PIT, (uint32_t)((uint64_t)tsc_khz * 1000u / TICK_HZ));
+    stop_rows(TSC_BY_PM, (uint32_t)((uint64_t)tsc_khz * 1000u / TICK_HZ));
 
     /* A rate past 32 bits, which a stop longer than the reference's wrap can
      * give, is no measurement, and no division fault on i686. */
@@ -439,17 +453,28 @@ int main(void)
     }
     CHECK(counts == 0, "a reference that stops gives no calibration");
 
-    /* The TSC is measured only where it runs at one rate and no platform
-     * counter is the reference. */
+    /* The TSC is measured only where it runs at one rate and the command
+     * line does not forbid it, and once. */
     reference(0);
     tsc_per_tick = 0;
+    tsc_measured = 0;
     tsc_invariant = 0;
     CHECK(timer_calibrate() == 0, "a TSC whose rate varies is not measured");
     reference(1);
+    tsc_measured = 0;
     tsc_invariant = 1;
+    notsc = 1;
     nmarks = 0;
     marking = 1;
-    CHECK(timer_calibrate() == 0 && nmarks == 0, "nor one beside the PM timer");
+    CHECK(timer_calibrate() == 0 && nmarks == 0, "nor one under rach2.notsc");
+    marking = 0;
+    notsc = 0;
+    tsc_measured = 0;
+    counts = timer_calibrate();
+    nmarks = 0;
+    marking = 1;
+    CHECK(counts != 0 && timer_calibrate() == counts && nmarks == 0,
+          "a second calibration gives the first's counts and reads nothing");
     marking = 0;
 
     if (fails) {
