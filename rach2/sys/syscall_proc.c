@@ -1717,8 +1717,7 @@ static void exec_take_leader(void)
     current_proc->alarm_tick = old->alarm_tick;
     current_proc->alarm_interval = old->alarm_interval;
     current_proc->jc_status = old->jc_status;
-    tg->utime += old->utime;
-    tg->stime += old->stime;
+    proc_thread_fold(old);
     tg->leader = current_proc;
     mm_drop(old);
     kstack_free(old->kernel_stack);
@@ -2690,16 +2689,20 @@ long sys_clone3(isr_params_t *params)
 #define CLD_CONTINUED 6
 
 /* Linux's struct rusage, eighteen longs: the user and system CPU time as
- * two timevals of seconds and microseconds, then maxrss in kilobytes and
- * then ixrss through nivcsw, which this kernel does not count and reports
- * as zero. 72 bytes on i686. */
+ * two timevals of seconds and microseconds, maxrss in kilobytes, ixrss,
+ * idrss and isrss, the minor and major page faults, and then nswap through
+ * nivcsw. The fields this kernel does not count are zero. 72 bytes on
+ * i686. */
 struct kernel_rusage {
     long utime_sec;
     long utime_usec;
     long stime_sec;
     long stime_usec;
     long maxrss;
-    long uncounted[13];
+    long sizes[3];
+    long minflt;
+    long majflt;
+    long uncounted[8];
 };
 
 #define RUSAGE_BYTES sizeof(struct kernel_rusage)
@@ -2718,19 +2721,25 @@ static void rusage_from_ticks(struct kernel_rusage *ru, uint64_t user, uint64_t 
 
 /**
  * What a wait reports of a child's usage, as Linux's `RUSAGE_BOTH` has it:
- * the CPU time of the process `p` is a thread of, every thread's, with that
- * of the children it has reaped, which its thread group keeps. A traced
- * thread that is not the leader reports its whole process's.
+ * the CPU time and the page faults of the process `p` is a thread of, every
+ * thread's, with those of the children it has reaped, which its thread group
+ * keeps. A traced thread that is not the leader reports its whole
+ * process's.
  */
 static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
 {
     uint64_t user;
     uint64_t sys;
+    unsigned long minor;
+    unsigned long major;
 
     proc_cpu_time(p, &user, &sys);
     rusage_from_ticks(ru, user + p->tg->cutime, sys + p->tg->cstime);
     ru->maxrss =
         (long)(p->tg->maxrss_kb > p->tg->cmaxrss_kb ? p->tg->maxrss_kb : p->tg->cmaxrss_kb);
+    proc_faults(p, &minor, &major);
+    ru->minflt = (long)(minor + p->tg->cmin_flt);
+    ru->majflt = (long)(major + p->tg->cmaj_flt);
 }
 
 /* What a wait found: the child, its real uid, the wait status wait4 stores,
@@ -2816,20 +2825,25 @@ static void wait_fill(struct wait_report *r, const process_t *p, int32_t status,
  * Reap zombie `p`, the leader of a process whose threads have all ended,
  * which the wait has taken off the zombies (`wait_hold`), so that no other
  * thread's wait reaps it while the release sleeps: add the process's CPU
- * time, with its reaped children's, to the children's totals of the caller's
- * process, which its thread group keeps, and give back its address space,
- * kernel stack and record (`proc_release`). The zombie no longer runs on its
- * kernel stack, so the stack can go with the record.
+ * time and page faults, with its reaped children's, to the children's totals
+ * of the caller's process, which its thread group keeps, and give back its
+ * address space, kernel stack and record (`proc_release`). The zombie no
+ * longer runs on its kernel stack, so the stack can go with the record.
  */
 static void wait_reap(process_t *p)
 {
     struct tgroup *me = current_proc->tg;
     uint64_t user;
     uint64_t sys;
+    unsigned long minor;
+    unsigned long major;
 
     proc_cpu_time(p, &user, &sys);
     me->cutime += user + p->tg->cutime;
     me->cstime += sys + p->tg->cstime;
+    proc_faults(p, &minor, &major);
+    me->cmin_flt += minor + p->tg->cmin_flt;
+    me->cmaj_flt += major + p->tg->cmaj_flt;
     if (p->tg->maxrss_kb > me->cmaxrss_kb) {
         me->cmaxrss_kb = p->tg->maxrss_kb;
     }
@@ -2921,8 +2935,7 @@ static void wait_take(const struct wait_report *r)
     if (r->take == WAIT_REAP) {
         wait_reap(p);
     } else if (r->take == WAIT_FREE) {
-        p->tg->utime += p->utime;
-        p->tg->stime += p->stime;
+        proc_thread_fold(p);
         proc_release(p);
     } else if (r->take == WAIT_SEEN && get_process(r->pid) == p) {
         ptrace_exit_release(p);
@@ -3297,9 +3310,10 @@ long sys_waitid(isr_params_t *params)
  * `times` reports, as timevals. `ru_maxrss` is the larger of the present
  * address space's resident size and the most any earlier one had when it
  * ended, in kilobytes, or for RUSAGE_CHILDREN the most a reaped child
- * reported. The other counters, through context switches, are not kept and
- * are zero. -EINVAL for any other `who`, Linux's RUSAGE_BOTH among them,
- * -EFAULT for a structure that cannot be written.
+ * reported. `ru_minflt` and `ru_majflt` are the page faults of the same
+ * threads or children (`proc_faults`). The other counters, through context
+ * switches, are not kept and are zero. -EINVAL for any other `who`, Linux's
+ * RUSAGE_BOTH among them, -EFAULT for a structure that cannot be written.
  */
 long sys_getrusage(isr_params_t *params)
 {
@@ -3308,6 +3322,8 @@ long sys_getrusage(isr_params_t *params)
     uint32_t flags;
     uint64_t user;
     uint64_t sys;
+    unsigned long minor;
+    unsigned long major;
 
     if (who != RUSAGE_SELF && who != RUSAGE_CHILDREN && who != RUSAGE_THREAD) {
         return -EINVAL;
@@ -3321,6 +3337,17 @@ long sys_getrusage(isr_params_t *params)
         kirq_restore(flags);
     }
     rusage_from_ticks(&ru, user, sys);
+    if (who == RUSAGE_SELF) {
+        proc_faults(current_proc, &minor, &major);
+        ru.minflt = (long)minor;
+        ru.majflt = (long)major;
+    } else if (who == RUSAGE_THREAD) {
+        ru.minflt = (long)current_proc->min_flt;
+        ru.majflt = (long)current_proc->maj_flt;
+    } else {
+        ru.minflt = (long)current_proc->tg->cmin_flt;
+        ru.majflt = (long)current_proc->tg->cmaj_flt;
+    }
     if (who == RUSAGE_CHILDREN) {
         ru.maxrss = (long)current_proc->tg->cmaxrss_kb;
     } else {
@@ -4353,8 +4380,7 @@ static void reap_threads(void)
         }
         p->state = PROC_UNUSED;
         proc_dead_threads--;
-        p->tg->utime += p->utime;
-        p->tg->stime += p->stime;
+        proc_thread_fold(p);
         proc_release(p);
     }
 }
@@ -5640,6 +5666,12 @@ long sys_prlimit64(isr_params_t *params)
 
 #define MAP_ANONYMOUS 0x20
 
+#define MAP_LOCKED 0x2000
+
+#define MAP_POPULATE 0x8000
+
+#define MAP_NONBLOCK 0x10000 /* turns MAP_POPULATE off, as on Linux */
+
 #define MAP_FIXED_NOREPLACE 0x100000
 
 /* Round 'v' up to the next page boundary. */
@@ -6027,7 +6059,9 @@ static long mmap_install(uintptr_t addr, uintptr_t len, uint32_t flags, struct m
  * thread sharing the address space cannot map the range meanwhile, and
  * MAP_FIXED_NOREPLACE cannot replace what it put there. MAP_FIXED replaces
  * whatever the range held. Pages are backed on first touch: zeroed, read from
- * the file, or the shared page itself.
+ * the file, or the shared page itself; with MAP_POPULATE, unless
+ * MAP_NONBLOCK is given too, or with MAP_LOCKED, they are backed before the
+ * call returns, as far as memory allows (`vm_populate`).
  */
 long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t flags, int fd,
                      unsigned long pgoff)
@@ -6035,6 +6069,7 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
     struct map_source src;
     uintptr_t len;
     int32_t rc;
+    long base;
 
     if (!current_proc || !current_proc->mm) {
         return -ESRCH;
@@ -6065,7 +6100,12 @@ long ksys_mmap_pgoff(uintptr_t addr, uintptr_t length, uint32_t prot, uint32_t f
     if (rc != 0) {
         return rc;
     }
-    return mmap_install(addr, len, flags, &src);
+    base = mmap_install(addr, len, flags, &src);
+    if ((unsigned long)base < (unsigned long)-4095L &&
+        ((flags & MAP_LOCKED) || (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE)) {
+        vm_populate((uintptr_t)base, (uintptr_t)base + len);
+    }
+    return base;
 }
 
 /** mmap2(2), on i686: addr, length, prot, flags, fd and the offset in pages. */

@@ -279,10 +279,24 @@ static int pte_present(page_dir_t *dir, uintptr_t addr)
     return e && (*e & PTE_P) != 0;
 }
 
+/** Count a page fault the current thread took, a major one when `major`
+ * says its page was read through a file system (`process.h`). */
+static void fault_count(int major)
+{
+    if (current_proc) {
+        if (major) {
+            current_proc->maj_flt++;
+        } else {
+            current_proc->min_flt++;
+        }
+    }
+}
+
 /**
  * Back a page of a region that maps a file: a frame filled from the file and
  * mapped once it is full, writable when the region is. The mapping is
- * private: a store changes the frame, never the file.
+ * private: a store changes the frame, never the file. The fault counts as
+ * major when the fill read the page through the file system.
  *
  * The fill may sleep in the disk. The file is held from before the fill, so
  * a thread that unmaps the region meanwhile cannot free it under the read,
@@ -300,13 +314,15 @@ static int file_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr
     uint32_t pgoff = vma->pgoff + (uint32_t)((page - vma->start) / PAGE_SIZE);
     uint32_t prot = vma->prot;
     uintptr_t phys = alloc_user_frame();
+    int filled;
     int rc;
 
     if (phys == 0) {
         return 0;
     }
     vm_file_get(f);
-    rc = f->fill(f, pgoff, phys) == 0 ? 1 : 0;
+    filled = f->fill(f, pgoff, phys);
+    rc = filled >= 0 ? 1 : 0;
     vma = vm_find(vm, page);
     if (!vma || vma->file != f || vma->prot != prot ||
         vma->pgoff + (page - vma->start) / PAGE_SIZE != pgoff || pte_present(dir, page)) {
@@ -316,6 +332,7 @@ static int file_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintptr
     if (rc == 1 && map_user_frame(dir, page, phys,
                                   PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
                                       paging_noexec(prot)) == 0) {
+        fault_count(filled > 0);
         return 1;
     }
     free_frame(phys);
@@ -356,6 +373,7 @@ static int shared_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintp
     if (rc == 1 && map_user_frame(dir, page, phys,
                                   PTE_P | PTE_U | ((prot & VM_PROT_WRITE) ? PTE_W : 0) |
                                       paging_noexec(prot)) == 0) {
+        fault_count(0);
         return 1;
     }
     free_frame(phys);
@@ -381,6 +399,8 @@ static int region_allows(const vma_t *vma, int write)
  * in a writeback; the region is looked up after that, and nothing from the
  * lookup on sleeps but a file's fill, which checks what it found again. A
  * page of a stack grown here is the stack's: writable and never executable.
+ * Each page backed or copied counts as a fault of the current thread
+ * (`fault_count`).
  */
 static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t as_limit)
 {
@@ -405,7 +425,14 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
             return 0;
         }
         if (pte_present(dir, addr)) {
-            return !write || pte_writable(dir, addr) ? 1 : cow_fault(dir, addr);
+            if (!write || pte_writable(dir, addr)) {
+                return 1;
+            }
+            if (!cow_fault(dir, addr)) {
+                return 0;
+            }
+            fault_count(0);
+            return 1;
         }
         if (vma->prot & VM_PROT_IO) {
             return 0;
@@ -428,6 +455,7 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
         free_frame(phys);
         return 0;
     }
+    fault_count(0);
     return 1;
 }
 
@@ -528,6 +556,35 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
         }
     } while (!range_ready(current_proc->mm, addr, end, write));
     return 1;
+}
+
+/**
+ * A region that is private and writable has its pages brought in for a write,
+ * which gives each its own frame now, as Linux's populate breaks the sharing
+ * of copy-on-write pages; any other for a read, so that a shared page is not
+ * made dirty for nothing. A region with no access, or of device memory,
+ * which mmap maps whole, is passed over. Each page brought in counts as a
+ * fault (`fault_count`), as Linux counts its populate's.
+ */
+void vm_populate(uintptr_t start, uintptr_t end)
+{
+    uintptr_t page;
+
+    if (!current_proc || !current_proc->mm) {
+        return;
+    }
+    for (page = start & ~(PAGE_SIZE - 1); page < end; page += PAGE_SIZE) {
+        const vma_t *vma = vm_find(&current_proc->mm->vm, page);
+        int write;
+
+        if (!vma || !(vma->prot & VM_PROT_READ) || (vma->prot & VM_PROT_IO)) {
+            continue;
+        }
+        write = (vma->prot & VM_PROT_WRITE) && vma->type != VM_SHARED;
+        if (!vm_resolve(page, write)) {
+            return;
+        }
+    }
 }
 
 /**

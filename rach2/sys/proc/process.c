@@ -501,6 +501,31 @@ void proc_cpu_time(const process_t *p, uint64_t *user, uint64_t *sys)
     kirq_restore(flags);
 }
 
+void proc_faults(const process_t *p, unsigned long *minor, unsigned long *major)
+{
+    const struct tgroup *tg = p->tg;
+    const process_t *t;
+
+    *minor = tg->min_flt;
+    *major = tg->maj_flt;
+    for (t = proc_list; t; t = t->next) {
+        if (t->tg == tg) {
+            *minor += t->min_flt;
+            *major += t->maj_flt;
+        }
+    }
+}
+
+void proc_thread_fold(const process_t *t)
+{
+    struct tgroup *tg = t->tg;
+
+    tg->utime += t->utime;
+    tg->stime += t->stime;
+    tg->min_flt += t->min_flt;
+    tg->maj_flt += t->maj_flt;
+}
+
 process_t *get_process(uint32_t pid)
 {
     process_t *p;

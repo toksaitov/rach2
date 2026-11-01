@@ -295,6 +295,13 @@ struct process {
      * see the two halves of one count apart, once in 2^32 of its ticks. */
     uint64_t utime;
     uint64_t stime;
+    /* The page faults this thread took, getrusage's ru_minflt and ru_majflt:
+     * each page a fault, or the kernel's own touch of user memory, backed or
+     * copied for it, and of those the pages of a file mapping the file cache
+     * did not hold, which were read through the file system. A fork starts
+     * both at zero; an exec keeps them. */
+    unsigned long min_flt;
+    unsigned long maj_flt;
     /* The tick this thread was made at, which its /proc stat file gives as
      * its start time; an exec keeps it. */
     uint64_t start_ticks;
@@ -530,6 +537,15 @@ isr_params_t *proc_user_frame(const process_t *t);
 /** The CPU time in ticks of the whole process `p` is a thread of: every
  * thread's, those that have ended included, user and system. */
 void proc_cpu_time(const process_t *p, uint64_t *user, uint64_t *sys);
+
+/** The minor and major page faults of the whole process `p` is a thread of,
+ * every thread's, those that have ended included. */
+void proc_faults(const process_t *p, unsigned long *minor, unsigned long *major);
+
+/** Add the CPU time and the page faults of `t`, a thread that has ended and
+ * whose record goes, to its group's, where `proc_cpu_time` and `proc_faults`
+ * find them. */
+void proc_thread_fold(const process_t *t);
 
 /* The number of records of ended threads that are neither leaders nor
  * traced, which no wait reaps; the next return to user mode frees them

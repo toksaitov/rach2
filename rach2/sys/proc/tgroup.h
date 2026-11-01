@@ -56,6 +56,13 @@ struct tgroup {
      * record, whose end a tracer's wait reports, may outlive the leader's. */
     uint64_t cutime;
     uint64_t cstime;
+    /* The page faults of the threads that ended, minor and major, and of the
+     * children the process has reaped, each with the children it reaped, as
+     * `utime` and `cutime` keep the CPU time (`proc_faults`). */
+    unsigned long min_flt;
+    unsigned long maj_flt;
+    unsigned long cmin_flt;
+    unsigned long cmaj_flt;
     /* The most memory, in kilobytes, an address space of the process had in
      * use when it ended, at an exec or at the end of the process, and the
      * most any reaped child reports, which getrusage and wait4 give as

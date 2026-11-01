@@ -241,6 +241,15 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags)
 int vm_prefault_range(uintptr_t addr, uintptr_t len, int write);
 
 /**
+ * Bring in the pages of [start, end) of the current process's regions as
+ * faults would, for mmap's MAP_POPULATE: those of a private writable region
+ * for a write, the others for a read. It stops at the first page that cannot
+ * be had, since a populate that falls short leaves the rest to be faulted in
+ * later, and never fails. It may sleep.
+ */
+void vm_populate(uintptr_t start, uintptr_t end);
+
+/**
  * Drop the reference of every present user page in `dir`'s own tables and
  * clear its entry; a frame goes back to the pool with its last reference.
  * The tables stay, for `free_page_directory`. The last user of an address
