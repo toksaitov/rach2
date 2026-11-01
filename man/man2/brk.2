@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 1, 2026
 .Dt BRK 2
 .Os
 .Sh NAME
@@ -143,7 +143,9 @@ The mapping type in the low four bits must be
 .Dv MAP_PRIVATE
 or
 .Dv MAP_SHARED_VALIDATE .
-Other flag bits are ignored.
+Of the other flag bits, those that place the mapping and those that back
+its pages at once, which this page describes below, are taken, and the
+rest are ignored.
 What is mapped is one of four things.
 .Bl -tag -width Ds
 .It Private anonymous memory
@@ -229,6 +231,17 @@ A writable shared mapping needs a descriptor open for writing.
 A page of a file on a loop device or a USB stick, which the kernel cannot
 read with interrupts off, is read at the first touch as a system call
 reads it, with the faulting thread asleep until the device answers.
+.Pp
+Pages are backed at the first touch, unless the flags have
+.Dv MAP_POPULATE
+without
+.Dv MAP_NONBLOCK ,
+or
+.Dv MAP_LOCKED ,
+as on Linux: then the call backs every page before it returns, those of a
+private writable mapping each with a frame of its own, as a write would,
+and the others as a read would, and stops at the first page no memory can
+be had for, leaving the rest to their first touch.
 .Pp
 Shared memory, anonymous, a file on tmpfs or the pages in memory of a file
 on ext2, has pages up to 16 TiB less a page, the most a file in memory
