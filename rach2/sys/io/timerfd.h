@@ -8,8 +8,8 @@
  * first expiration, relative or absolute on its clock, and an interval; a
  * read of eight bytes returns the expirations since the last read and waits
  * while there are none; poll and epoll report it readable while there are
- * some. The kernel keeps time in 10 ms ticks, so an expiration is rounded up
- * to a tick. The tick handler calls `timerfd_tick`.
+ * some. The kernel keeps time in ticks of TICK_HZ, so an expiration is
+ * rounded up to a tick. The tick handler calls `timerfd_tick`.
  */
 
 struct isr_params;
@@ -103,7 +103,7 @@ void ptimer_delete_all(struct tgroup *tg);
 /** Count the expirations due by the tick `now`, and wake the readers or post
  * the signals; called from the boot processor's timer interrupt, with
  * interrupts off. */
-void timerfd_tick(uint32_t now);
+void timerfd_tick(uint64_t now);
 
 /**
  * The clocks' part, in syscall.c: the time on clock `clk` as clock_gettime

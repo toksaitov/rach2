@@ -16,6 +16,7 @@
 #include "../mm/mm.h"
 #include "../mm/paging.h"
 #include "../mm/vm.h"
+#include "../timer.h"
 
 /* The notes every architecture's core file has; the floating-point notes
  * are the architecture's (`arch_core_fp_notes`). */
@@ -195,11 +196,13 @@ void core_note_put(uint8_t **p, const char *name, uint32_t type, const void *des
     *p = q + core_note_bytes(descsz);
 }
 
-/** Put a time in ticks, 100 a second, as the timeval of an elf_prstatus. */
-static void put_timeval(long *tv, uint32_t ticks)
+/** Put a time in ticks as the timeval of an elf_prstatus. */
+static void put_timeval(long *tv, uint64_t ticks)
 {
-    tv[0] = (long)(ticks / 100u);
-    tv[1] = (long)((ticks % 100u) * 10000u);
+    uint32_t rest;
+
+    tv[0] = (long)tick_div(ticks, TICK_HZ, &rest);
+    tv[1] = (long)(rest * TICK_US);
 }
 
 /**

@@ -20,8 +20,8 @@
  * is decremented by two on each input clock: it sweeps the reload value down
  * to zero twice in each interrupt period. So one count is half an input
  * clock, and the conversion below uses twice the input frequency. An odd
- * reload (11931 here) makes the two half sweeps differ by one count, which is
- * under one part in ten thousand and is ignored.
+ * reload (1193 at 1000 Hz) makes the two half sweeps differ by one count,
+ * which is under one part in a thousand and is ignored.
  */
 
 #include "portio.h"
@@ -36,9 +36,10 @@
  * 1000 leaves it at about 2.4 billion of the 4.29 billion available. Longer
  * waits are made of repeated passes, and nothing is lost between passes
  * because each pass measures its own counts. What must stay short is the
- * interval between two samples: the counter sweeps every 5 ms, and a gap
- * longer than that would hide a whole sweep. The loop below samples every
- * few port reads, so that has orders of magnitude of margin.
+ * interval between two samples: the counter sweeps every half tick, 0.5 ms at
+ * 1000 Hz, and a gap longer than that would hide a whole sweep. The loop
+ * below samples every few port reads, so that has two orders of magnitude of
+ * margin.
  */
 #define PIT_WINDOW_USEC 1000u
 

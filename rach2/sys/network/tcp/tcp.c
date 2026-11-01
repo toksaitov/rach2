@@ -92,8 +92,12 @@ static void tcp_free_half_opens(const struct tcb *listener);
 static uint32_t isn_key[4];
 static int isn_keyed;
 
-/* RFC 6528's timer counts 4-microsecond units, 2500 to a 10 ms tick. */
-#define TCP_ISN_PER_TICK 2500u
+/* RFC 6528's timer counts 4-microsecond units, 250000 a second. */
+#define TCP_ISN_PER_TICK (250000u / TICK_HZ)
+
+/* The low word of the tick count, which TCP's 32-bit stamps and deadlines
+ * are differences against, each shorter than the word's cycle. */
+#define TCP_NOW() ((uint32_t)kernel_ticks)
 
 #define TCP_U64(hi, lo)  (((uint64_t)(hi) << 32) | (uint64_t)(lo))
 #define TCP_ROTL64(x, b) (((x) << (b)) | ((x) >> (64 - (b))))
@@ -201,7 +205,7 @@ static uint32_t tcp_isn_hash(const struct tcb *tcb)
  */
 static uint32_t tcp_isn(const struct tcb *tcb)
 {
-    return kernel_ticks * TCP_ISN_PER_TICK + tcp_isn_hash(tcb);
+    return TCP_NOW() * TCP_ISN_PER_TICK + tcp_isn_hash(tcb);
 }
 
 void tcp_init(void)
@@ -718,7 +722,7 @@ static int tcp_output(struct tcb *tcb)
         if (tcp_ip_tx(tcb->local_ip, tcb->remote_ip, seg_len) == -ENOBUFS) {
             tcb->tx_refused++;
             if (tcb->refused_since == 0) {
-                tcb->refused_since = kernel_ticks + 1;
+                tcb->refused_since = TCP_NOW() + 1;
             }
             return 1;
         }
@@ -732,7 +736,7 @@ static int tcp_output(struct tcb *tcb)
             tcb->rto_timer = tcb->rto;
         }
         if (tcb->rtt_start == 0 && !tcb->recovering) {
-            tcb->rtt_start = kernel_ticks + 1;
+            tcb->rtt_start = TCP_NOW() + 1;
             tcb->rtt_start_us = timer_now_us();
             tcb->rtt_seq = tcb->snd_nxt;
         }
@@ -789,7 +793,7 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
     if (tcp_ip_tx(tcb->local_ip, tcb->remote_ip, seg_len) == -ENOBUFS) {
         tcb->tx_refused++;
         if (tcb->refused_since == 0) {
-            tcb->refused_since = kernel_ticks + 1;
+            tcb->refused_since = TCP_NOW() + 1;
         }
         return -1;
     }
@@ -1285,9 +1289,9 @@ static uint32_t tcp_pump_next;
 static int tcp_tick_pump(struct tcb *tcb)
 {
     if (tcp_send_more(tcb) == 1 && tcb->refused_since != 0 &&
-        kernel_ticks + 1 - tcb->refused_since > TCP_REFUSE_GIVEUP_TICKS) {
+        TCP_NOW() + 1 - tcb->refused_since > TCP_REFUSE_GIVEUP_TICKS) {
         klog(KLOG_WARN, "tcp", "gave up: the driver refused every transmit for %d ms",
-             (int)((kernel_ticks + 1 - tcb->refused_since) * 1000u / TICK_HZ));
+             (int)((TCP_NOW() + 1 - tcb->refused_since) * (1000u / TICK_HZ)));
         tcp_giveup(tcb);
         return 1;
     }
@@ -1335,7 +1339,7 @@ static int tcp_orphan_expired(const struct tcb *tcb)
         tcb->state != TCP_FIN_WAIT_1 && tcb->state != TCP_CLOSING && tcb->state != TCP_LAST_ACK) {
         return 0;
     }
-    return (int32_t)(kernel_ticks - tcb->timewait_until) >= 0;
+    return (int32_t)(TCP_NOW() - tcb->timewait_until) >= 0;
 }
 
 /**
@@ -1414,7 +1418,7 @@ void tcp_tick(void)
         next = tcb->next;
 
         if (tcb->state == TCP_TIME_WAIT) {
-            if (kernel_ticks >= tcb->timewait_until && !tcb->sock) {
+            if ((int32_t)(TCP_NOW() - tcb->timewait_until) >= 0 && !tcb->sock) {
                 tcb_free(tcb);
                 continue;
             }
@@ -1432,7 +1436,7 @@ void tcp_tick(void)
         }
 
         if (tcb->state == TCP_FIN_WAIT_2) {
-            if (kernel_ticks >= tcb->timewait_until && !tcb->sock) {
+            if ((int32_t)(TCP_NOW() - tcb->timewait_until) >= 0 && !tcb->sock) {
                 tcb_free(tcb);
             }
             continue;
@@ -1703,17 +1707,17 @@ void tcp_close(struct socket *sock)
     switch (tcb->state) {
     case TCP_ESTABLISHED:
     case TCP_CLOSE_WAIT:
-        tcb->timewait_until = kernel_ticks + TCP_ORPHAN_TICKS;
+        tcb->timewait_until = TCP_NOW() + TCP_ORPHAN_TICKS;
         tcb->fin_pending = 1;
         tcp_pump(tcb);
         break;
     case TCP_FIN_WAIT_2:
-        tcb->timewait_until = kernel_ticks + TCP_FIN_WAIT2_TICKS;
+        tcb->timewait_until = TCP_NOW() + TCP_FIN_WAIT2_TICKS;
         break;
     case TCP_FIN_WAIT_1:
     case TCP_CLOSING:
     case TCP_LAST_ACK:
-        tcb->timewait_until = kernel_ticks + TCP_ORPHAN_TICKS;
+        tcb->timewait_until = TCP_NOW() + TCP_ORPHAN_TICKS;
         break;
     case TCP_TIME_WAIT:
         break;
@@ -1861,7 +1865,7 @@ static void tcp_take_ack(struct tcb *tcb, uint32_t ack_num, uint32_t window)
     int was_fast = tcb->recovering == TCP_RECOVER_FAST;
 
     if (tcb->rtt_start != 0 && (int32_t)(ack_num - tcb->rtt_seq) >= 0) {
-        uint32_t rtt = kernel_ticks - (tcb->rtt_start - 1);
+        uint32_t rtt = TCP_NOW() - (tcb->rtt_start - 1);
         uint32_t new_rto, delta;
         if (rtt == 0)
             rtt = 1;
@@ -1887,7 +1891,7 @@ static void tcp_take_ack(struct tcb *tcb, uint32_t ack_num, uint32_t window)
     tcb->snd_wnd = window;
     tcb->rto_backoff = 0;
     if (!tcb->sock) {
-        tcb->timewait_until = kernel_ticks + TCP_ORPHAN_TICKS;
+        tcb->timewait_until = TCP_NOW() + TCP_ORPHAN_TICKS;
     }
 
     if (was_fast) {
@@ -2523,7 +2527,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
                 tcb->state = TCP_FIN_WAIT_2;
                 tcb->retx_flags = 0;
                 tcb->rto_timer = 0;
-                tcb->timewait_until = kernel_ticks + TCP_FIN_WAIT2_TICKS;
+                tcb->timewait_until = TCP_NOW() + TCP_FIN_WAIT2_TICKS;
             }
         }
 
@@ -2538,7 +2542,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
                 tcp_take_fin(tcb);
                 tcb->state = (tcb->state == TCP_FIN_WAIT_2) ? TCP_TIME_WAIT : TCP_CLOSING;
                 if (tcb->state == TCP_TIME_WAIT) {
-                    tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
+                    tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
                 }
             }
             needs_ack = 1;
@@ -2565,7 +2569,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
                 tcb->rcv_nxt++;
                 tcp_take_fin(tcb);
                 tcb->state = TCP_TIME_WAIT;
-                tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
+                tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
             }
             needs_ack = 1;
         }
@@ -2581,7 +2585,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
             tcb->retx_flags = 0;
             tcb->rto_timer = 0;
             tcb->state = TCP_TIME_WAIT;
-            tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
+            tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
         } else {
             if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) > 0 &&
                 (int32_t)(ack_num - tcb->snd_nxt) < 0) {
@@ -2625,7 +2629,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
     case TCP_TIME_WAIT:
         if (flags & TCP_FIN) {
             tcp_send_flags(tcb, TCP_ACK);
-            tcb->timewait_until = kernel_ticks + TCP_2MSL_TICKS;
+            tcb->timewait_until = TCP_NOW() + TCP_2MSL_TICKS;
         }
         break;
 
@@ -2707,7 +2711,7 @@ int tcp_snapshot(struct tcp_row **rows)
         out[n].zwp_timer = t->zwp_timer;
         out[n].tx_refused = t->tx_refused;
         out[n].retransmits = t->retransmits;
-        out[n].refused_for = t->refused_since ? kernel_ticks + 1 - t->refused_since : 0;
+        out[n].refused_for = t->refused_since ? TCP_NOW() + 1 - t->refused_since : 0;
         out[n].snd_mss = t->snd_mss;
         out[n].snd_wscale = t->snd_wscale;
         out[n].rcv_wscale = t->rcv_wscale;
@@ -2721,7 +2725,7 @@ int tcp_snapshot(struct tcp_row **rows)
         out[n].rttvar_us = t->rttvar_us;
         out[n].ssthresh = t->ssthresh;
         out[n].timewait_left =
-            (int32_t)(t->timewait_until - kernel_ticks) > 0 ? t->timewait_until - kernel_ticks : 0;
+            (int32_t)(t->timewait_until - TCP_NOW()) > 0 ? t->timewait_until - TCP_NOW() : 0;
         n++;
     }
     net_unlock(flags);

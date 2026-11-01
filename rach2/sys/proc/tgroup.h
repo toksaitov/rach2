@@ -46,16 +46,16 @@ struct tgroup {
     uint32_t exec_generation;
     uint32_t parent_exec_generation;
     /* The user and system CPU time, in ticks, of the threads that ended. */
-    uint32_t utime;
-    uint32_t stime;
+    uint64_t utime;
+    uint64_t stime;
     wait_queue_t chld; /* threads waiting for a child to change state */
     wait_queue_t gone; /* an execve or a core waiting on the other threads */
     /* The CPU time of the children the process has reaped, each with the
      * children it reaped, which a reap adds and wait4, times and getrusage
      * report. The group keeps it, not the leader, since a traced thread's
      * record, whose end a tracer's wait reports, may outlive the leader's. */
-    uint32_t cutime;
-    uint32_t cstime;
+    uint64_t cutime;
+    uint64_t cstime;
     /* The most memory, in kilobytes, an address space of the process had in
      * use when it ended, at an exec or at the end of the process, and the
      * most any reaped child reports, which getrusage and wait4 give as
@@ -68,9 +68,11 @@ struct tgroup {
      * SIGVTALRM, counted in user mode, or SIGPROF, counted in both modes,
      * 0 when disarmed, and the ticks to arm the timer with again, 0 for a
      * single signal. A fork starts with both disarmed and an exec keeps
-     * them, as on Linux. */
-    uint32_t cpu_left[2];
-    uint32_t cpu_interval[2];
+     * them, as on Linux. The tick handler of each processor counts them
+     * down; on the i686 a read on another processor may tear when the low
+     * word wraps, once in 2^32 ticks. */
+    uint64_t cpu_left[2];
+    uint64_t cpu_interval[2];
     /* The OOM score adjustment /proc/<pid>/oom_score_adj reads and writes,
      * -1000 to 1000, and the least value a caller without privilege may
      * write there, which a privileged caller's write sets to what it wrote,

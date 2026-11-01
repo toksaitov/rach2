@@ -13,7 +13,7 @@
 #include "../../lib/kirq.h"
 #include "../../lib/spinlock.h"
 
-uint32_t pit_reload = 1193182 / 100;
+uint32_t pit_reload = 1193182 / TICK_HZ;
 
 /*
  * Microseconds per count as the counter is read in mode 3, where it steps by
@@ -135,9 +135,9 @@ static void pit_clock_tick(struct pit_clock *c, uint32_t phase)
  * read from the reference too, so the count and the place cannot disagree.
  *
  * A count is kept in `mult` units, so that a tick is a whole number of them,
- * `tick`: the PM timer's 3579545 Hz is 35795.45 counts a tick, and 3579545
- * units of a hundredth of a count. Where the tick in progress began is `edge`
- * counts and `frac` units past them, below `mult`.
+ * `tick`: at 1000 Hz the PM timer's 3579545 Hz is 3579.545 counts a tick, and
+ * 3579545 units of a thousandth of a count. Where the tick in progress began
+ * is `edge` counts and `frac` units past them, below `mult`.
  */
 struct ref_clock {
     uint32_t mult;  /* units in a count: TICKS_PER_SECOND, or 1 for the TSC */
@@ -152,12 +152,12 @@ struct ref_clock {
 #define REF_TSC     2
 
 /* The tick's rate, TICK_HZ in timer.h, and its length. */
-#define TICKS_PER_SECOND 100u
-#define US_PER_TICK      10000u
-#define NS_PER_TICK      10000000u
+#define TICKS_PER_SECOND ((uint32_t)TICK_HZ)
+#define US_PER_TICK      ((uint32_t)TICK_US)
+#define NS_PER_TICK      ((uint32_t)TICK_NS)
 
 /* The most ticks one interrupt counts, a minute's; the next counts on. */
-#define REF_DUE_MAX 6000u
+#define REF_DUE_MAX (60u * TICKS_PER_SECOND)
 
 /*
  * The reference, REF_NONE until it starts; its clock; the platform
@@ -375,11 +375,11 @@ static int timer_phase_rows(uint32_t p)
 }
 
 /**
- * The clock rows of `timer_clock_check`, for a period of `p` microseconds:
- * two readings inside one period add no period; a tick with no reading
- * ahead of it adds one; a reading behind the last one counts the wrap and
- * the tick after it adds nothing; and the next tick, with no wrap read
- * before it, adds its period.
+ * The clock rows of `timer_clock_check`, for a period of `p` microseconds,
+ * with phases in thousandths of it: two readings inside one period add no
+ * period; a tick with no reading ahead of it adds one; a reading behind the
+ * last one counts the wrap and the tick after it adds nothing; and the next
+ * tick, with no wrap read before it, adds its period.
  */
 static int timer_count_rows(uint32_t p)
 {
@@ -389,15 +389,15 @@ static int timer_count_rows(uint32_t p)
     c.periods = 0;
     c.last_phase = 0;
     c.wrapped = 0;
-    ok = ok && pit_clock_read(&c, 3000u, p) == 3000u;
-    ok = ok && pit_clock_read(&c, 8000u, p) == 8000u;
-    pit_clock_tick(&c, 100u);
-    ok = ok && pit_clock_read(&c, 500u, p) == p + 500u;
-    ok = ok && pit_clock_read(&c, 50u, p) == 2u * p + 50u;
-    pit_clock_tick(&c, 120u);
-    ok = ok && pit_clock_read(&c, 900u, p) == 2u * p + 900u;
-    pit_clock_tick(&c, 30u);
-    ok = ok && pit_clock_read(&c, 40u, p) == 3u * p + 40u;
+    ok = ok && pit_clock_read(&c, p * 300u / 1000u, p) == p * 300u / 1000u;
+    ok = ok && pit_clock_read(&c, p * 800u / 1000u, p) == p * 800u / 1000u;
+    pit_clock_tick(&c, p * 10u / 1000u);
+    ok = ok && pit_clock_read(&c, p * 50u / 1000u, p) == p + p * 50u / 1000u;
+    ok = ok && pit_clock_read(&c, p * 5u / 1000u, p) == 2u * p + p * 5u / 1000u;
+    pit_clock_tick(&c, p * 12u / 1000u);
+    ok = ok && pit_clock_read(&c, p * 900u / 1000u, p) == 2u * p + p * 900u / 1000u;
+    pit_clock_tick(&c, p * 3u / 1000u);
+    ok = ok && pit_clock_read(&c, p * 4u / 1000u, p) == 3u * p + p * 4u / 1000u;
     return ok;
 }
 
@@ -509,7 +509,7 @@ uint32_t timer_tick_clock(void)
 }
 
 /**
- * The tick alone has 10 ms of resolution, which is coarser than the intervals
+ * The tick alone has its own length's resolution, coarser than the intervals
  * the USB interrupt path is measured over, so this reads the place within the
  * tick as well. Once the reference has started, it is the reference's ticks
  * since it started and its place within the next, on every processor, read
@@ -552,6 +552,19 @@ uint32_t timer_now_us(void)
     spin_unlock(&now_lock);
     kirq_restore(flags);
     return now;
+}
+
+uint32_t timer_resolution_ns(void)
+{
+    if (ref_kind == REF_TSC) {
+        return (NS_PER_TICK + ref.tick - 1u) / ref.tick;
+    }
+    if (ref_kind == REF_COUNTER) {
+        uint32_t hz = refclock_hz();
+
+        return 1000000000u / hz + (1000000000u % hz != 0u);
+    }
+    return 1000u;
 }
 
 uint32_t pit_period_us(void)

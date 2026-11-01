@@ -114,11 +114,11 @@ void usb_report_controllers(void)
 #define USB_SETTLE_MS 100u
 
 /* How long the boot waits for what is already plugged in to be enumerated.
- * The timer steps each device once a tick, every 10 ms, and a device takes a
- * dozen steps and 50 ms of reset recovery, one device at a time, so this is
- * enough for several devices; the wait ends as soon as none is left, and the
- * timer finishes a device still being enumerated after it, and a hub's scan
- * or a stick's units still coming up. */
+ * The timer steps each device once a tick, every millisecond, and a device
+ * takes a dozen steps and 50 ms of reset recovery, one device at a time, so
+ * this is enough for several devices; the wait ends as soon as none is left,
+ * and the timer finishes a device still being enumerated after it, and a
+ * hub's scan or a stick's units still coming up. */
 #define USB_ENUMERATE_MS 1000u
 
 /*
@@ -456,13 +456,12 @@ int usb_init(void)
  * Messages need the local APIC, which is off under `rach2.nomsi` and on a
  * processor without a usable one, a free vector, and an MSI capability the
  * controller can enable. Without them the controller raises its interrupts on
- * the PCI line the firmware routed for it, through the I/O APIC when one is
- * in use and the 8259 otherwise, as under `rach2.nomsi`; a stick moves data
- * many times faster that way than on the timer's pump alone, which finds each
- * completion at the next 10 ms tick. A controller with no line is left to the
- * timer.
- * `rach2.msidrop=N` silences the controllers after N interrupts, which is how
- * a machine that loses its interrupts is staged.
+ * the PCI line the firmware routed for it, through the I/O APIC when one is in
+ * use and the 8259 otherwise, as under `rach2.nomsi`; a stick moves data many
+ * times faster that way than on the timer's pump alone, which finds each
+ * completion at the next tick. A controller with no line is left to the timer.
+ * `rach2.msidrop=N` silences the controllers after N interrupts, which is how a
+ * machine that loses its interrupts is staged.
  *
  * Each controller gets a vector of its own. The handler is the one pump and
  * drains them all, so which vector a message arrived on does not matter, but
@@ -529,7 +528,7 @@ void usb_poll(void)
         return;
     }
     pump_saw_pending = 0;
-    if (usb_pump(10, 0) > 0 && interrupts_started && !pump_saw_pending) {
+    if (usb_pump(1000u / TICK_HZ, 0) > 0 && interrupts_started && !pump_saw_pending) {
         usb_fallback++;
     }
 }

@@ -36,8 +36,8 @@
 #define TTY_PUMP_BUDGET 64
 #define TTY_ECHO_MAX    64
 
-/* The ticks in VTIME's unit, a tenth of a second, at the tick's 100 Hz. */
-#define TTY_TICKS_PER_VTIME 10u
+/* The ticks in VTIME's unit, a tenth of a second. */
+#define TTY_TICKS_PER_VTIME (TICK_HZ / 10u)
 
 /** A sink that discards: tty_init installs it when the caller gives none, so
  * the discipline's echo and output never call through NULL. */
@@ -155,14 +155,14 @@ struct tty_wait {
     struct tty *t;
     int count;            /* the bytes the read asks for */
     unsigned int pending; /* the bytes queued when the timer was last armed */
-    uint32_t deadline;    /* the tick at which the timer runs out, while armed */
+    uint64_t deadline;    /* the tick at which the timer runs out, while armed */
     int armed;            /* the timer runs */
 };
 
 /** Whether the read's VTIME timer has run out. */
 static int tty_wait_expired(const struct tty_wait *w)
 {
-    return w->armed && (int32_t)(kernel_ticks - w->deadline) >= 0;
+    return w->armed && tick_count() >= w->deadline;
 }
 
 /** Whether the read can take its input, or its 0, now. The caller has

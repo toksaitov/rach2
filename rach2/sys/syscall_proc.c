@@ -2689,13 +2689,15 @@ struct kernel_rusage {
 #define RUSAGE_BYTES sizeof(struct kernel_rusage)
 
 /** Fill `ru` with `user` and `sys` ticks of CPU time and zero the rest. */
-static void rusage_from_ticks(struct kernel_rusage *ru, uint32_t user, uint32_t sys)
+static void rusage_from_ticks(struct kernel_rusage *ru, uint64_t user, uint64_t sys)
 {
+    uint32_t rest;
+
     k_memset(ru, 0, sizeof(*ru));
-    ru->utime_sec = (int32_t)(user / 100u);
-    ru->utime_usec = (int32_t)((user % 100u) * 10000u);
-    ru->stime_sec = (int32_t)(sys / 100u);
-    ru->stime_usec = (int32_t)((sys % 100u) * 10000u);
+    ru->utime_sec = (long)tick_div(user, TICK_HZ, &rest);
+    ru->utime_usec = (long)(rest * TICK_US);
+    ru->stime_sec = (long)tick_div(sys, TICK_HZ, &rest);
+    ru->stime_usec = (long)(rest * TICK_US);
 }
 
 /**
@@ -2706,8 +2708,8 @@ static void rusage_from_ticks(struct kernel_rusage *ru, uint32_t user, uint32_t 
  */
 static void rusage_of_child(struct kernel_rusage *ru, const process_t *p)
 {
-    uint32_t user;
-    uint32_t sys;
+    uint64_t user;
+    uint64_t sys;
 
     proc_cpu_time(p, &user, &sys);
     rusage_from_ticks(ru, user + p->tg->cutime, sys + p->tg->cstime);
@@ -2806,8 +2808,8 @@ static void wait_fill(struct wait_report *r, const process_t *p, int32_t status,
 static void wait_reap(process_t *p)
 {
     struct tgroup *me = current_proc->tg;
-    uint32_t user;
-    uint32_t sys;
+    uint64_t user;
+    uint64_t sys;
 
     proc_cpu_time(p, &user, &sys);
     me->cutime += user + p->tg->cutime;
@@ -3288,8 +3290,8 @@ long sys_getrusage(isr_params_t *params)
     int who = (int)SC_ARG(params, 0);
     struct kernel_rusage ru;
     uint32_t flags;
-    uint32_t user;
-    uint32_t sys;
+    uint64_t user;
+    uint64_t sys;
 
     if (who != RUSAGE_SELF && who != RUSAGE_CHILDREN && who != RUSAGE_THREAD) {
         return -EINVAL;
@@ -4574,7 +4576,7 @@ void deliver_signals(isr_params_t *tf)
  * take it, its siginfo into `info`: its number, or -EINTR for another
  * signal the thread acts on, or -EAGAIN at the deadline.
  */
-static int32_t sigwait_take(uint64_t set, int timed, uint32_t deadline, struct k_siginfo *info)
+static int32_t sigwait_take(uint64_t set, int timed, uint64_t deadline, struct k_siginfo *info)
 {
     uint32_t flags = sig_irq_save();
 
@@ -4588,7 +4590,7 @@ static int32_t sigwait_take(uint64_t set, int timed, uint32_t deadline, struct k
             sig_irq_restore(flags);
             return signo;
         }
-        if (signal_pending() || (timed && (int32_t)(kernel_ticks - deadline) >= 0)) {
+        if (signal_pending() || (timed && tick_count() >= deadline)) {
             current_proc->wakeup_tick = 0;
             sig_irq_restore(flags);
             return signal_pending() ? -EINTR : -EAGAIN;
@@ -4607,7 +4609,7 @@ static int32_t sigwait_take(uint64_t set, int timed, uint32_t deadline, struct k
 
 /** `sigwait_take`, with the siginfo copied to `uinfo` unless it is null;
  * -EFAULT when it cannot be. */
-static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __user *uinfo)
+static int32_t sigwait_set(uint64_t set, int timed, uint64_t deadline, void __user *uinfo)
 {
     struct k_siginfo info;
     uint8_t buf[128];
@@ -4635,10 +4637,8 @@ static int32_t sigwait_set(uint64_t set, int timed, uint32_t deadline, void __us
  * process wakes this thread; when it returns the old mask comes back, and a
  * signal of `set` that it blocks and that is still pending for the process is
  * left to another thread (`signal_set_blocked`). The timeout is rounded up to
- * whole 10 ms ticks and cut to 2147483646 of them, as nanosleep's is, so that
- * with the tick in progress added the deadline stays ahead of the present in
- * the signed comparison of ticks `sigwait_take` makes, which would take a
- * longer one for past; one of zero polls. SIGKILL and SIGSTOP cannot be waited
+ * whole ticks (`tick_span`), and the tick in progress added; one of zero
+ * polls. SIGKILL and SIGSTOP cannot be waited
  * for. Returns the signal, -EAGAIN when the timeout passes, -EINTR for another
  * signal the thread acts on, -EINVAL for another sigsetsize or a timeout out
  * of range, -EFAULT.
@@ -4648,7 +4648,7 @@ long sys_rt_sigtimedwait(isr_params_t *params)
     struct kernel_timespec ts;
     uint64_t set;
     uint64_t saved;
-    uint32_t deadline = 0;
+    uint64_t deadline = 0;
     int timed = 0;
     int32_t rc;
 
@@ -4662,7 +4662,7 @@ long sys_rt_sigtimedwait(isr_params_t *params)
         return -EFAULT;
     }
     if (SC_ARG(params, 2)) {
-        uint32_t ticks;
+        uint64_t ticks;
 
         if (copy_from_user(&ts, (const void __user *)SC_ARG(params, 2), sizeof(ts)) != 0) {
             return -EFAULT;
@@ -4670,11 +4670,7 @@ long sys_rt_sigtimedwait(isr_params_t *params)
         if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000) {
             return -EINVAL;
         }
-        ticks = (uint32_t)(ts.tv_sec > 21474836 ? 21474836 : ts.tv_sec) * 100u +
-                ((uint32_t)ts.tv_nsec + 9999999u) / 10000000u;
-        if (ticks > 0x7FFFFFFEu) {
-            ticks = 0x7FFFFFFEu;
-        }
+        ticks = tick_span(ts.tv_sec, (uint32_t)ts.tv_nsec);
         deadline = rtc_ticks_now() + ticks + (ticks != 0 ? 1u : 0u);
         timed = 1;
     }
@@ -7033,7 +7029,7 @@ long sys_sched_get_priority_min(isr_params_t *params)
 
 /**
  * A process's round-robin time slice (sched_rr_get_interval, a timespec of
- * two longs): one tick, 10 ms, since the timer takes the processor from every
+ * two longs): one tick, since the timer takes the processor from every
  * process at each tick. -EINVAL for a negative pid, -ESRCH, -EFAULT.
  */
 long sys_sched_rr_get_interval(isr_params_t *params)
@@ -7048,7 +7044,7 @@ long sys_sched_rr_get_interval(isr_params_t *params)
         return -ESRCH;
     }
     slice.tv_sec = 0;
-    slice.tv_nsec = 10000000;
+    slice.tv_nsec = (long)TICK_NS;
     if (copy_to_user((void __user *)SC_ARG(params, 1), &slice, sizeof(slice)) != 0) {
         return -EFAULT;
     }

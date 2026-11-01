@@ -52,7 +52,7 @@ typedef int (*poll_scan_fn)(void *ctx, struct wait_queue **wqs);
  * count catches up (`deadline_passed` in poll.c). */
 struct poll_deadline {
     int set; /* nonzero for a finite timeout; 0 waits without one */
-    uint32_t tick;
+    uint64_t tick;
     int64_t sec; /* 0, with `nsec` 0, for a timeout ended by its tick alone */
     int64_t nsec;
 };

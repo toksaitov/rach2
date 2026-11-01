@@ -28,8 +28,8 @@ void init_pit(uint32_t frequency);
  * `udelay.c` measures against the same counter and needs to know where it
  * wraps, so it reads the reload here rather than computing the divisor a
  * second time, which a change to the tick rate could leave behind. It has
- * the 100 Hz value before `init_pit` runs, so that a wait during early boot
- * is measured.
+ * the value for TICK_HZ before `init_pit` runs, so that a wait during early
+ * boot is measured.
  */
 extern uint32_t pit_reload;
 

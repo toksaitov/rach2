@@ -507,30 +507,50 @@ void sched_service_point(void)
  * Each processor's idle marker and three tick counters are in its record
  * (percpu.h). They are `volatile` because the timer handler reads the marker
  * from an interrupt that arrives in the middle of the halt it describes. The
- * counters are 32-bit, one aligned store, so a reader never sees half of
- * one; at 100 Hz they wrap after about 497 days, the bound `kernel_ticks`
- * already has. The totals are summed over every record, of which those of
- * processors never started are zero, in 64 bits, since the sum over 64
- * processors would wrap in under eight days.
+ * counters are 64 bits wide, so they do not wrap, and are read whole within
+ * the record's `ticks_seq` (`sched_cpu_ticks`). The totals are summed over
+ * every record, of which those of processors never started are zero.
  */
+void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle)
+{
+    const struct percpu *cpu = &cpu_table[c];
+    uint32_t seq;
+
+    for (;;) {
+        seq = cpu->ticks_seq;
+        if (seq & 1u) {
+            arch_relax();
+            continue;
+        }
+        *user = cpu->user_ticks;
+        *busy = cpu->busy_ticks;
+        *idle = cpu->idle_ticks;
+        if (cpu->ticks_seq == seq) {
+            return;
+        }
+    }
+}
+
 uint64_t sched_idle_ticks(void)
 {
-    uint64_t sum = 0;
+    uint64_t sum = 0, user, busy, idle;
     int i;
 
     for (i = 0; i < NR_CPUS; i++) {
-        sum += cpu_table[i].idle_ticks;
+        sched_cpu_ticks(i, &user, &busy, &idle);
+        sum += idle;
     }
     return sum;
 }
 
 uint64_t sched_busy_ticks(void)
 {
-    uint64_t sum = 0;
+    uint64_t sum = 0, user, busy, idle;
     int i;
 
     for (i = 0; i < NR_CPUS; i++) {
-        sum += cpu_table[i].busy_ticks;
+        sched_cpu_ticks(i, &user, &busy, &idle);
+        sum += busy;
     }
     return sum;
 }
@@ -574,15 +594,19 @@ static void cpu_timer_tick(process_t *p, int k, int counts, int signo)
  */
 static void sched_account_one(struct percpu *cpu, int user)
 {
-    if (cpu->idle_wait) {
+    int idle = cpu->idle_wait;
+
+    cpu->ticks_seq++;
+    if (idle) {
         ++cpu->idle_ticks;
-        return;
+    } else {
+        ++cpu->busy_ticks;
+        if (user) {
+            ++cpu->user_ticks;
+        }
     }
-    ++cpu->busy_ticks;
-    if (user) {
-        ++cpu->user_ticks;
-    }
-    if (current_proc) {
+    cpu->ticks_seq++;
+    if (!idle && current_proc) {
         if (user) {
             ++current_proc->utime;
         } else {
@@ -608,7 +632,7 @@ static void sched_account_one(struct percpu *cpu, int user)
 void sched_account_tick(int user)
 {
     struct percpu *cpu = this_cpu();
-    uint32_t now = kernel_ticks;
+    uint32_t now = (uint32_t)kernel_ticks;
     uint32_t ticks = now - cpu->accounted_tick;
 
     cpu->accounted_tick = now;
@@ -621,7 +645,7 @@ void sched_account_tick(int user)
  * ticks, five seconds and one, and decayed by e^(-5/60), e^(-5/300) and
  * e^(-5/900) at each sample. */
 #define LOAD_ONE  (1u << SCHED_LOAD_SHIFT)
-#define LOAD_FREQ (5u * 100u + 1u)
+#define LOAD_FREQ (5u * TICK_HZ + 1u)
 static const uint32_t load_decay[3] = {1884u, 2014u, 2037u};
 static uint32_t load_avg[3];
 static uint32_t load_wait = LOAD_FREQ;

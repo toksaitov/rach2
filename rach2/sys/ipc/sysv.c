@@ -870,7 +870,7 @@ struct sysv_wait {
     const uint32_t *gen;
     uint32_t from;
     int timed;
-    uint32_t target;
+    uint64_t target;
 };
 
 /** The wait condition of the `struct sysv_wait` at `arg`. */
@@ -878,8 +878,7 @@ static int sysv_wait_done(void *arg)
 {
     const struct sysv_wait *w = arg;
 
-    return *w->gen != w->from || w->perm->removed ||
-           (w->timed && (int32_t)(kernel_ticks - w->target) >= 0);
+    return *w->gen != w->from || w->perm->removed || (w->timed && tick_count() >= w->target);
 }
 
 /**
@@ -952,7 +951,7 @@ static int32_t sem_wait_apply(struct sem_set *set, const struct sembuf *ops, uin
  * write or a wait it may not read, EIDRM when the set is removed meanwhile,
  * ERANGE and ENOMEM as `sem_try` and `sem_undo_of` give them.
  */
-static int32_t sem_op(int32_t id, const void __user *uops, uint32_t n, int timed, uint32_t ticks)
+static int32_t sem_op(int32_t id, const void __user *uops, uint32_t n, int timed, uint64_t ticks)
 {
     struct sysv_wait w;
     struct sembuf *ops;
@@ -1613,7 +1612,7 @@ static int32_t msg_ctl(int32_t id, int cmd, void __user *buf)
 
 /** The ticks of the relative 32-bit timespec at `uts`, the form ipc's
  * semtimedop takes, into `*ticks`; EINVAL for a negative or malformed one. */
-static int32_t sysv_ticks32(const void __user *uts, uint32_t *ticks)
+static int32_t sysv_ticks32(const void __user *uts, uint64_t *ticks)
 {
     int32_t ts[2];
 
@@ -1623,8 +1622,7 @@ static int32_t sysv_ticks32(const void __user *uts, uint32_t *ticks)
     if (ts[0] < 0 || ts[1] < 0 || ts[1] >= 1000000000) {
         return -EINVAL;
     }
-    *ticks = (uint32_t)(ts[0] > 21474836 ? 21474836 : ts[0]) * 100u +
-             ((uint32_t)ts[1] + 9999999u) / 10000000u;
+    *ticks = tick_span(ts[0], (uint32_t)ts[1]);
     return 0;
 }
 
@@ -1632,7 +1630,7 @@ static int32_t sysv_ticks32(const void __user *uts, uint32_t *ticks)
  * timeout at `uts`. */
 static int32_t sem_timed(int32_t id, const void __user *uops, uint32_t n, const void __user *uts)
 {
-    uint32_t ticks = 0;
+    uint64_t ticks = 0;
     int32_t rc = uts ? sysv_ticks32(uts, &ticks) : 0;
 
     return rc != 0 ? rc : sem_op(id, uops, n, uts != NULL, ticks);
@@ -1834,7 +1832,7 @@ long sys_msgctl(struct isr_params *params)
 long sys_semtimedop_time64(struct isr_params *params)
 {
     int64_t ts[2];
-    uint32_t ticks = 0;
+    uint64_t ticks = 0;
 
     if (SC_ARG(params, 3)) {
         if (copy_from_user(ts, (const void __user *)SC_ARG(params, 3), sizeof(ts)) != 0) {
@@ -1843,8 +1841,7 @@ long sys_semtimedop_time64(struct isr_params *params)
         if (ts[0] < 0 || ts[1] < 0 || ts[1] >= 1000000000) {
             return -EINVAL;
         }
-        ticks = (uint32_t)(ts[0] > 21474836 ? 21474836 : ts[0]) * 100u +
-                ((uint32_t)ts[1] + 9999999u) / 10000000u;
+        ticks = tick_span(ts[0], (uint32_t)ts[1]);
     }
     /* A count past 32 bits saturates, past SEMOPM as it is, and is E2BIG. */
     return sem_op((int32_t)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1),

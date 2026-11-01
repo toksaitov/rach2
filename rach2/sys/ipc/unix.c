@@ -166,8 +166,8 @@ struct unix_sock {
     uint32_t acc_len;
     uint32_t sndbuf; /* bytes */
     uint32_t rcvbuf;
-    uint32_t rcvtimeo; /* ticks, 0 for none */
-    uint32_t sndtimeo;
+    uint64_t rcvtimeo; /* ticks, 0 for none */
+    uint64_t sndtimeo;
     wait_queue_t wq;
     /* A bind in progress, which holds the socket across the file system's
      * sleeps (`bind_lock`); a receive, which holds its queue from choosing a
@@ -723,7 +723,7 @@ static void unix_release(struct unix_sock *s, int embryo)
 struct timed_cond {
     wq_cond_fn cond;
     void *arg;
-    uint32_t deadline;
+    uint64_t deadline;
     int timed;
 };
 
@@ -733,7 +733,7 @@ static int timed_ready(void *arg)
 {
     struct timed_cond *t = (struct timed_cond *)arg;
 
-    return t->cond(t->arg) || (t->timed && (int32_t)(t->deadline - kernel_ticks) <= 0);
+    return t->cond(t->arg) || (t->timed && tick_count() >= t->deadline);
 }
 
 /**
@@ -741,7 +741,7 @@ static int timed_ready(void *arg)
  * limit `timeo` in ticks, 0 for none. Returns 0 when the condition holds,
  * -EINTR for a signal, -EAGAIN when the time ran out, as Linux reports it.
  */
-static int unix_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, uint32_t timeo)
+static int unix_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, uint64_t timeo)
 {
     struct timed_cond t;
     int rc;
@@ -1512,20 +1512,15 @@ int32_t unix_shutdown(fd_entry_t *e, int how)
 }
 
 /** A time limit of SO_RCVTIMEO or SO_SNDTIMEO, a struct timeval of two
- * longs, in ticks: 0 for none, at most 0x7FFFFFFE, or 0xFFFFFFFF for a
+ * longs, in ticks into `*ticks`, 0 for none (`tick_span`); -EDOM for a
  * timeval out of range. */
-static uint32_t timeval_ticks(const long tv[2])
+static int32_t timeval_ticks(const long tv[2], uint64_t *ticks)
 {
-    uint32_t ticks;
-
     if (tv[0] < 0 || tv[1] < 0 || tv[1] >= 1000000) {
-        return 0xFFFFFFFFu;
+        return -EDOM;
     }
-    if ((unsigned long)tv[0] > 0x7FFFFFFEu / 100u - 1u) {
-        return 0x7FFFFFFEu;
-    }
-    ticks = (uint32_t)tv[0] * 100u + ((uint32_t)tv[1] + 9999u) / 10000u;
-    return ticks;
+    *ticks = tick_span(tv[0], (uint32_t)tv[1] * 1000u);
+    return 0;
 }
 
 /** A buffer size set by SO_SNDBUF or SO_RCVBUF: twice the value asked, at
@@ -1551,7 +1546,7 @@ int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uint3
     }
     if (name == SO_RCVTIMEO || name == SO_SNDTIMEO) {
         long tv[2];
-        uint32_t ticks;
+        uint64_t ticks;
 
         if (len < sizeof(tv)) {
             return -EINVAL;
@@ -1559,8 +1554,7 @@ int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uint3
         if (copy_from_user(tv, (const void __user *)val, sizeof(tv)) != 0) {
             return -EFAULT;
         }
-        ticks = timeval_ticks(tv);
-        if (ticks == 0xFFFFFFFFu) {
+        if (timeval_ticks(tv, &ticks) != 0) {
             return -EDOM;
         }
         if (name == SO_RCVTIMEO) {

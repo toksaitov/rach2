@@ -141,7 +141,7 @@ struct process {
      * (`arch_context_check`, from `init_proc`). */
     uintptr_t tls_base;   /* The thread pointer (arch_tls_set) */
     struct mm *mm;        /* The address space, shared by CLONE_VM (mm/mm.h) */
-    uint32_t wakeup_tick; /* The tick a timed sleep ends at, 0 for none */
+    uint64_t wakeup_tick; /* The tick a timed sleep ends at, 0 for none */
     /* Signal state: the dispositions, `sigacts[signo]` with index 0 unused,
      * which are the thread group's (`tg->action`), and this thread's 64-bit
      * pending and blocked masks (bit signo-1). */
@@ -246,8 +246,8 @@ struct process {
      * SIGALRM is due at, 0 when it is disarmed, and the ticks between one
      * SIGALRM and the next, 0 for a single one. A fork starts with both
      * zero, since the child inherits no timer; an exec keeps them. */
-    uint32_t alarm_tick;
-    uint32_t alarm_interval;
+    uint64_t alarm_tick;
+    uint64_t alarm_interval;
     /* The user address set_tid_address and CLONE_CHILD_CLEARTID name, whose
      * word is cleared and woken when the thread ends and another thread
      * shares the address space; 0 for none. */
@@ -290,12 +290,14 @@ struct process {
      * when this thread was in user mode and to `stime` when it was in the
      * kernel, and a tick of an idle wait to neither. A fork starts both at
      * zero; an exec keeps them. The reaped children's time is the thread
-     * group's (`tgroup.h`). */
-    uint32_t utime;
-    uint32_t stime;
+     * group's (`tgroup.h`). They are 64 bits wide, so they do not wrap; on
+     * the i686 a reader on another processor than the one counting could
+     * see the two halves of one count apart, once in 2^32 of its ticks. */
+    uint64_t utime;
+    uint64_t stime;
     /* The tick this thread was made at, which its /proc stat file gives as
      * its start time; an exec keeps it. */
-    uint32_t start_ticks;
+    uint64_t start_ticks;
     /* The nice value `setpriority` keeps, -20 to 19; fork passes it on and
      * exec keeps it. The scheduler does not read it. */
     int32_t nice;
@@ -524,7 +526,7 @@ isr_params_t *proc_user_frame(const process_t *t);
 
 /** The CPU time in ticks of the whole process `p` is a thread of: every
  * thread's, those that have ended included, user and system. */
-void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys);
+void proc_cpu_time(const process_t *p, uint64_t *user, uint64_t *sys);
 
 /* The number of records of ended threads that are neither leaders nor
  * traced, which no wait reaps; the next return to user mode frees them
@@ -618,7 +620,7 @@ void proc_set_comm(process_t *p, const char *path);
  * whose real-time timer is due, arming it again for its interval or leaving
  * a single alarm disarmed. The boot processor's timer tick calls it.
  */
-void proc_wake_sleepers(uint32_t now);
+void proc_wake_sleepers(uint64_t now);
 
 /**
  * Post `signo` to the process `target` is a thread of, with a siginfo whose
@@ -672,7 +674,7 @@ int proc_child_signal(process_t *child, const process_t *parent);
  * The tick `ticks` after `now` at which a real-time timer is due, never 0,
  * which `alarm_tick` keeps for a disarmed timer.
  */
-uint32_t proc_alarm_at(uint32_t now, uint32_t ticks);
+uint64_t proc_alarm_at(uint64_t now, uint64_t ticks);
 
 /**
  * Non-zero if the current thread, or its process, has a pending signal that

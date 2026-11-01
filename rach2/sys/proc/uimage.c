@@ -3,6 +3,7 @@
 #include "uimage.h"
 #include "auxv.h"
 #include "sched.h"
+#include "../timer.h"
 #include "sigframe.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -322,7 +323,7 @@ int uimage_write(struct uimage *u, uint32_t argc, uint32_t envc, const elf_image
     aux[8] = AT_PAGESZ;
     aux[9] = PAGE_SIZE;
     aux[10] = AT_CLKTCK;
-    aux[11] = 100;
+    aux[11] = USER_HZ;
     aux[12] = AT_SECURE;
     aux[13] = ids->secure ? 1u : 0u;
     aux[14] = AT_RANDOM;

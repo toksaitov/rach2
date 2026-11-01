@@ -116,10 +116,10 @@ int input_raw_bytes(unsigned int keycode, int value, uint8_t *out);
 unsigned int input_modifiers(void);
 
 /**
- * Make the repeat of the held key due by now, from the boot processor's
- * tick with interrupts off: a repeat goes out as `input_key_event`'s events
- * do, with the value KD_KEY_REPEAT, and the next is due a period after the
- * last was due, not after the tick that sent it, so that the 10 ms tick
+ * Make the repeat of the held key due by now, from the boot processor's tick
+ * with interrupts off: a repeat goes out as `input_key_event`'s events do, with
+ * the value KD_KEY_REPEAT, and the next is due a period after the last was due,
+ * not after the tick that sent it, so that a tick longer than a millisecond
  * keeps a 33 ms period on average. A tick that comes late sends at most four
  * and starts the count again from now.
  */

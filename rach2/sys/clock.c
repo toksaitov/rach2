@@ -49,7 +49,7 @@ int tick_read_retry(uint32_t seq)
     return arch_cpu_id() != 0 && kernel_tick_seq != seq;
 }
 
-void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks)
+void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint64_t *ticks)
 {
     uint32_t flags = kirq_save();
     uint32_t seq;
@@ -63,15 +63,28 @@ void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks)
     kirq_restore(flags);
 }
 
+uint64_t tick_count(void)
+{
+    uint32_t flags = kirq_save();
+    uint32_t seq;
+    uint64_t ticks;
+
+    do {
+        seq = tick_read_begin();
+        ticks = kernel_ticks;
+    } while (tick_read_retry(seq));
+    kirq_restore(flags);
+    return ticks;
+}
+
 #define RTC_SECONDS_PER_DAY    86400
 #define RTC_SECONDS_PER_HOUR   3600
 #define RTC_SECONDS_PER_MINUTE 60
 #define RTC_EPOCH_YEAR         1970
 
-/* The tick's rate, 100 a second (TICK_HZ in timer.h), and its
- * length. */
-#define RTC_TICKS_PER_SECOND     100
-#define RTC_NANOSECONDS_PER_TICK 10000000
+/* The tick's rate (TICK_HZ in timer.h), and its length. */
+#define RTC_TICKS_PER_SECOND     TICK_HZ
+#define RTC_NANOSECONDS_PER_TICK TICK_NS
 
 /** Whether `year` (a full year, not the two-digit register) has a February
  * 29. */
@@ -105,9 +118,9 @@ int32_t rtc_days_in_month(int32_t year, int32_t month)
  * would catch, so `tests/host/rtc_hosttest.c` states the case exactly: a
  * clock read at uptime 5 saying 1000 says 1002 at uptime 7.
  *
- * The difference is of uptime seconds and not of ticks, since the 32-bit
- * tick count wraps after about 497 days and a difference of ticks would jump
- * back a whole cycle at the wrap. The ticks within a second cannot wrap.
+ * The difference is of uptime seconds and not of ticks, which the kernel
+ * would need a 64-bit division to turn into seconds. The ticks within a
+ * second cannot wrap.
  */
 void rtc_time_from_anchor(int64_t anchor_seconds, uint32_t anchor_uptime, uint32_t uptime,
                           uint32_t subsecond_ticks, int64_t *seconds, int64_t *nanoseconds)
@@ -244,7 +257,7 @@ static void rtc_since_boot(uint32_t *uptime, uint32_t *ticks, uint32_t *phase_ns
     *ticks %= RTC_TICKS_PER_SECOND;
 }
 
-void rtc_tick_phase(uint32_t *ticks, uint32_t *phase_ns)
+void rtc_tick_phase(uint64_t *ticks, uint32_t *phase_ns)
 {
     uint32_t flags = kirq_save();
     uint32_t seq;
@@ -259,9 +272,10 @@ void rtc_tick_phase(uint32_t *ticks, uint32_t *phase_ns)
     kirq_restore(flags);
 }
 
-uint32_t rtc_ticks_now(void)
+uint64_t rtc_ticks_now(void)
 {
-    uint32_t ticks, phase_ns;
+    uint64_t ticks;
+    uint32_t phase_ns;
 
     rtc_tick_phase(&ticks, &phase_ns);
     return ticks;
@@ -331,7 +345,8 @@ void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
 void rtc_coarse_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     uint32_t flags = spin_lock_irqsave(&rtc_realtime_lock);
-    uint32_t uptime, ticks, total;
+    uint32_t uptime, ticks;
+    uint64_t total;
 
     tick_now(&uptime, &ticks, &total);
     rtc_time_from_anchor(rtc_anchor_seconds, rtc_anchor_uptime, uptime, ticks, seconds,

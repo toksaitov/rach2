@@ -38,9 +38,10 @@
 #include "timer.h"
 
 /* The microseconds in one tick of `kernel_ticks`, which is read for the
-   timestamp; before the timer starts it is zero, and a record reads
-   `[0.000000]`. */
-#define KLOG_TICK_US (1000000u / TICK_HZ)
+   timestamp without the tick's sequence count, since a record may be made
+   where waiting for it is not allowed; before the timer starts it is zero,
+   and a record reads `[0.000000]`. */
+#define KLOG_TICK_US TICK_US
 
 /* ---- the record ---- */
 
@@ -134,8 +135,9 @@ static void build_u32(uint32_t v)
 static void klog_build(struct klog_record *r, int level, const char *subsystem, const char *format,
                        va_list ap)
 {
-    uint32_t ticks = kernel_ticks;
-    uint32_t us = ticks % TICK_HZ * KLOG_TICK_US;
+    uint32_t rest;
+    uint32_t seconds = (uint32_t)tick_div(kernel_ticks, TICK_HZ, &rest);
+    uint32_t us = rest * KLOG_TICK_US;
     uint32_t place;
 
     build_at = r->text;
@@ -147,7 +149,7 @@ static void klog_build(struct klog_record *r, int level, const char *subsystem, 
     build_u32((uint32_t)level);
     build_putc('>');
     build_putc('[');
-    build_u32(ticks / TICK_HZ);
+    build_u32(seconds);
     build_putc('.');
     for (place = 100000u; place > 0; place /= 10u) {
         build_putc((char)('0' + us / place % 10u));

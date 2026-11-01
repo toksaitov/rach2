@@ -53,9 +53,6 @@ static const char futex_shared_space;
  * the count bounds the walk and not the number of waiters. */
 #define FUTEX_BUCKETS 64
 
-/* The nanoseconds in one tick of the kernel's clock. */
-#define FUTEX_TICK_NS (1000000000u / TICK_HZ)
-
 /* A sleeping waiter, on its own kernel stack while it sleeps. */
 struct futex_q {
     const void *space; /* the address space's page directory, or shared memory */
@@ -63,7 +60,7 @@ struct futex_q {
     uint32_t bitset;   /* a wake's bitset must meet it */
     int woken;         /* a wake marked it and took it off its list */
     int timed;         /* the wait has a deadline */
-    uint32_t target;   /* the tick the sleep ends at, with `timed` */
+    uint64_t target;   /* the tick the sleep ends at, with `timed` */
     wait_queue_t wq;   /* the waiter's own queue, which only it sleeps on */
     struct futex_q *next;
 };
@@ -77,34 +74,23 @@ static uint32_t futex_bucket(const void *space, uintptr_t uaddr)
     return (uint32_t)((((uintptr_t)space >> 4) ^ (uaddr >> 2) ^ (uaddr >> 12)) % FUTEX_BUCKETS);
 }
 
-/* Whole ticks in `sec` seconds and `nsec` nanoseconds, a partial tick
- * counted as one, clamped so a later signed comparison of ticks stays valid. */
-static uint32_t futex_ticks(long sec, long nsec)
-{
-    uint32_t most = 0x7FFFFFFEu / TICK_HZ;
-    uint32_t s = (unsigned long)sec > most ? most : (uint32_t)sec;
-    uint32_t ticks;
-
-    ticks = s * TICK_HZ + ((uint32_t)nsec + (FUTEX_TICK_NS - 1u)) / FUTEX_TICK_NS;
-    return ticks > 0x7FFFFFFEu ? 0x7FFFFFFEu : ticks;
-}
-
 /* The ticks from now until the absolute time `at` on the real-time clock, or
  * on the monotonic clock without `realtime`; 0 when it has passed. */
-static uint32_t futex_ticks_until(const struct kernel_timespec *at, int realtime)
+static uint64_t futex_ticks_until(const struct kernel_timespec *at, int realtime)
 {
     int64_t sec;
     int64_t nsec;
     int64_t dsec;
     int32_t dnsec;
-    uint32_t seconds32, ticks32, total32;
+    uint32_t seconds32, ticks32;
+    uint64_t total;
 
     if (realtime) {
         get_current_time(&sec, &nsec);
     } else {
-        tick_now(&seconds32, &ticks32, &total32);
+        tick_now(&seconds32, &ticks32, &total);
         sec = seconds32;
-        nsec = (int64_t)ticks32 * FUTEX_TICK_NS;
+        nsec = (int64_t)ticks32 * TICK_NS;
     }
     dsec = (int64_t)at->tv_sec - sec;
     dnsec = (int32_t)at->tv_nsec - (int32_t)nsec;
@@ -115,7 +101,7 @@ static uint32_t futex_ticks_until(const struct kernel_timespec *at, int realtime
     if (dsec < 0 || (dsec == 0 && dnsec == 0)) {
         return 0;
     }
-    return futex_ticks(dsec > 0x7FFFFFFF ? 0x7FFFFFFF : (int32_t)dsec, dnsec);
+    return tick_span(dsec, (uint32_t)dnsec);
 }
 
 /**
@@ -152,7 +138,7 @@ static int futex_q_done(void *arg)
 {
     const struct futex_q *q = (const struct futex_q *)arg;
 
-    return q->woken || (q->timed && (int32_t)(q->target - kernel_ticks) <= 0);
+    return q->woken || (q->timed && tick_count() >= q->target);
 }
 
 /* Take q off its bucket's list, when a wake has not already. */
@@ -188,7 +174,8 @@ static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_tim
 {
     struct futex_q q;
     struct kernel_timespec ts;
-    uint32_t bucket, cur, flags, ticks = 0;
+    uint32_t bucket, cur, flags;
+    uint64_t ticks = 0;
     int rc;
 
     q.timed = 0;
@@ -200,7 +187,7 @@ static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_tim
             return -EINVAL;
         }
         ticks = absolute ? futex_ticks_until(&ts, (flags_op & FUTEX_CLOCK_REALTIME) != 0)
-                         : futex_ticks(ts.tv_sec, ts.tv_nsec);
+                         : tick_span(ts.tv_sec, (uint32_t)ts.tv_nsec);
         q.timed = 1;
     }
     q.target = rtc_ticks_now() + ticks + 1u;
@@ -224,7 +211,7 @@ static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_tim
         kirq_restore(flags);
         return -EAGAIN;
     }
-    if (q.timed && (ticks == 0 || (int32_t)(q.target - kernel_ticks) <= 0)) {
+    if (q.timed && (ticks == 0 || tick_count() >= q.target)) {
         kirq_restore(flags);
         return -ETIMEDOUT;
     }

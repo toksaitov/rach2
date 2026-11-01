@@ -44,6 +44,7 @@
 #include "../io/poll.h"
 #include "../cmdline.h"
 #include "../block/diskinfo.h"
+#include "../timer.h"
 #include "vfs.h"
 #include "name.h"
 #include "lock.h"
@@ -605,12 +606,14 @@ static void ap_tty(struct procfs_text *t, const process_t *p)
  * The fields are separated by spaces, as ps and top parse them. comm, field
  * 2, is in parentheses, with each parenthesis in it made '_', so that a
  * parser that scans for the closing ')' finds the right one. The CPU times
- * are in the 100 Hz ticks the fields count: the whole process's, every
+ * are in the `clock_t` of USER_HZ that Linux's fields count, whatever the
+ * tick's rate (`TICKS_TO_CLOCK`): the whole process's, every
  * thread's, for a process's file (`whole`), and the thread's own for a
  * thread's under /proc/<pid>/task, as Linux keeps them apart; the children's
  * are the process's in both. The nice value is the one setpriority keeps.
- * The start time is the tick the process or thread was made at, which ps
- * subtracts from the uptime for its elapsed time, and the virtual size in
+ * The start time is when the process or thread was made, in the same
+ * units, which ps subtracts from the uptime for its elapsed time, and the
+ * virtual size in
  * bytes and the resident pages are the address space's, as statm has them.
  * The fields end at the 24th, rss; the flags, the fault counts and
  * itrealvalue, which the kernel does not keep, are 0.
@@ -619,8 +622,8 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
 {
     process_t *p;
     const struct mm *mm;
-    uint32_t user;
-    uint32_t sys;
+    uint64_t user;
+    uint64_t sys;
     int i;
 
     p = get_process((uint32_t)pid);
@@ -655,13 +658,13 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
         user = p->utime;
         sys = p->stime;
     }
-    ap_u32(t, user);
+    ap_u64(t, TICKS_TO_CLOCK(user));
     ap_ch(t, ' ');
-    ap_u32(t, sys);
+    ap_u64(t, TICKS_TO_CLOCK(sys));
     ap_ch(t, ' ');
-    ap_u32(t, p->tg->cutime);
+    ap_u64(t, TICKS_TO_CLOCK(p->tg->cutime));
     ap_ch(t, ' ');
-    ap_u32(t, p->tg->cstime);
+    ap_u64(t, TICKS_TO_CLOCK(p->tg->cstime));
     /* 18 priority, Linux's nice + 20 without real-time policy; 19 nice */
     ap_ch(t, ' ');
     ap_int(t, 20 + (int)p->nice);
@@ -670,7 +673,7 @@ static int procfs_gen_stat(struct procfs_text *t, int pid, int whole)
     ap_ch(t, ' ');
     ap_u32(t, p->tg->live); /* 20 num_threads */
     ap_str(t, " 0 ");       /* 21 itrealvalue */
-    ap_u32(t, p->start_ticks);
+    ap_u64(t, TICKS_TO_CLOCK(p->start_ticks));
     ap_ch(t, ' ');
     mm = p->mm;
     ap_ulong(t, mm ? vm_total(&mm->vm) : 0);
@@ -2538,33 +2541,16 @@ static int procfs_gen_netdev(struct procfs_text *t)
  */
 
 /** Append a count of ticks as seconds with two decimals, as /proc/uptime
- * has them. Ticks are 100 Hz, so the fraction is the remainder. */
-static void ap_ticks_as_seconds(struct procfs_text *t, uint32_t ticks)
+ * has them, the hundredths cut, not rounded. */
+static void ap_ticks_as_seconds(struct procfs_text *t, uint64_t ticks)
 {
-    ap_u32(t, ticks / 100u);
-    ap_ch(t, '.');
-    ap_ch(t, (char)('0' + (ticks / 10u) % 10u));
-    ap_ch(t, (char)('0' + ticks % 10u));
-}
+    uint32_t rest, hundredths;
 
-/** Append a 64-bit count of 100 Hz ticks as seconds with two decimals, by
- * its decimal digits split before the last two, since i686 has no 64-bit
- * division here. */
-static void ap_ticks64_as_seconds(struct procfs_text *t, uint64_t ticks)
-{
-    char digits[24];
-    int n = diskinfo_u64_dec(digits, (int)sizeof(digits), ticks);
-    int i;
-
-    for (i = 0; i < n - 2; i++) {
-        ap_ch(t, digits[i]);
-    }
-    if (n < 3) {
-        ap_ch(t, '0');
-    }
+    ap_u64(t, tick_div(ticks, TICK_HZ, &rest));
+    hundredths = rest * 100u / TICK_HZ;
     ap_ch(t, '.');
-    ap_ch(t, n < 2 ? '0' : digits[n - 2]);
-    ap_ch(t, digits[n - 1]);
+    ap_ch(t, (char)('0' + hundredths / 10u));
+    ap_ch(t, (char)('0' + hundredths % 10u));
 }
 
 /**
@@ -2577,12 +2563,12 @@ static void ap_ticks64_as_seconds(struct procfs_text *t, uint64_t ticks)
  */
 static int procfs_gen_uptime(struct procfs_text *t)
 {
-    uint32_t up = cpu_table[0].idle_ticks + cpu_table[0].busy_ticks;
-    uint64_t idle = sched_idle_ticks();
+    uint64_t user, busy, idle;
 
-    ap_ticks_as_seconds(t, up);
+    sched_cpu_ticks(0, &user, &busy, &idle);
+    ap_ticks_as_seconds(t, busy + idle);
     ap_ch(t, ' ');
-    ap_ticks64_as_seconds(t, idle);
+    ap_ticks_as_seconds(t, sched_idle_ticks());
     ap_ch(t, '\n');
     return t->len;
 }
@@ -2638,18 +2624,17 @@ static int procfs_gen_cpuinfo(struct procfs_text *t)
     return t->len;
 }
 
-/** Append a /proc/stat processor line's columns after its name: `user`,
- * no nice, `busy` less `user` as system, and `idle`. The columns are 64
- * bits for the `cpu` line's sums: one processor's ticks, each a word, wrap
- * after 497 days at 100 Hz, but their sum over 64 processors after eight. */
+/** Append a /proc/stat processor line's columns after its name, in the
+ * `clock_t` of USER_HZ that Linux's count: `user` ticks, no nice, `busy`
+ * less `user` as system, and `idle`. */
 static void ap_cpu_ticks(struct procfs_text *t, uint64_t user, uint64_t busy, uint64_t idle)
 {
     ap_str(t, " ");
-    ap_u64(t, user);
+    ap_u64(t, TICKS_TO_CLOCK(user));
     ap_str(t, " 0 ");
-    ap_u64(t, busy - user);
+    ap_u64(t, TICKS_TO_CLOCK(busy - user));
     ap_ch(t, ' ');
-    ap_u64(t, idle);
+    ap_u64(t, TICKS_TO_CLOCK(idle));
     ap_str(t, " 0 0 0 0 0 0\n");
 }
 
@@ -2688,16 +2673,17 @@ static void ap_cpu_ticks(struct procfs_text *t, uint64_t user, uint64_t busy, ui
 static int procfs_gen_statsys(struct procfs_text *t)
 {
     struct dcache_counts names;
-    uint64_t user = 0, busy = 0, idle = 0;
+    uint64_t user = 0, busy = 0, idle = 0, cu, cb, ci;
     const process_t *p;
     uint32_t running = 0;
     uint32_t blocked = 0;
     int c;
 
     for (c = 0; c < NR_CPUS; c++) {
-        user += cpu_table[c].user_ticks;
-        busy += cpu_table[c].busy_ticks;
-        idle += cpu_table[c].idle_ticks;
+        sched_cpu_ticks(c, &cu, &cb, &ci);
+        user += cu;
+        busy += cb;
+        idle += ci;
     }
     ap_str(t, "cpu ");
     ap_cpu_ticks(t, user, busy, idle);
@@ -2705,8 +2691,8 @@ static int procfs_gen_statsys(struct procfs_text *t)
         if (cpu_table[c].online) {
             ap_str(t, "cpu");
             ap_u32(t, (uint32_t)c);
-            ap_cpu_ticks(t, cpu_table[c].user_ticks, cpu_table[c].busy_ticks,
-                         cpu_table[c].idle_ticks);
+            sched_cpu_ticks(c, &cu, &cb, &ci);
+            ap_cpu_ticks(t, cu, cb, ci);
         }
     }
     ap_str(t, "intr ");
@@ -3839,7 +3825,7 @@ static int procfs_gen_netsnmp(struct procfs_text *t)
     ap_mib(t, m->icmp_out_echo_reps);
     ap_str(t, "\nTcp: RtoAlgorithm RtoMin RtoMax MaxConn ActiveOpens PassiveOpens AttemptFails"
               " EstabResets CurrEstab InSegs OutSegs RetransSegs InErrs OutRsts\nTcp: 1");
-    ap_mib(t, TCP_RTO_MIN * 10); /* ticks of 10 ms */
+    ap_mib(t, TCP_RTO_MIN * 1000u / TICK_HZ); /* ticks as milliseconds */
     ap_mib(t, TCP_RTO_MAX * 10);
     ap_str(t, " -1");
     ap_mib(t, m->tcp_active_opens);

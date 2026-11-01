@@ -52,10 +52,11 @@ struct percpu {
     const struct page_dir *volatile space_drop; /* a `space` to give up for the kernel's */
     volatile int space_stale;                   /* reload `space`: a shootdown skipped it */
     uint32_t kernel_gen;                        /* the kernel mappings it last flushed for */
-    volatile uint32_t idle_ticks;               /* ticks that found it in an idle wait */
-    volatile uint32_t busy_ticks;               /* ticks that found it running code */
-    volatile uint32_t user_ticks;               /* of those, ticks that found it in user mode */
-    uint32_t accounted_tick;                    /* the global tick its counts reach */
+    volatile uint32_t ticks_seq;                /* odd while its tick changes the counts */
+    volatile uint64_t idle_ticks;               /* ticks that found it in an idle wait */
+    volatile uint64_t busy_ticks;               /* ticks that found it running code */
+    volatile uint64_t user_ticks;               /* of those, ticks that found it in user mode */
+    uint32_t accounted_tick;                    /* low word of the global tick its counts reach */
 };
 
 extern struct percpu cpu_table[NR_CPUS];

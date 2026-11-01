@@ -3992,7 +3992,7 @@ long sys_fsync(isr_params_t *params)
  * whose device failed a write is read-only from then on. Busy slots are
  * retried after a yield and a wait with interrupts enabled, so a write in
  * flight can finish and a page dirtied during that write can be flushed.
- * The retries stop after 3000 ticks (30 seconds) if slots remain busy, so a
+ * The retries stop after 30 seconds of ticks if slots remain busy, so a
  * stuck writer cannot hold this call forever. A write failure alone causes
  * no wait.
  */
@@ -4003,9 +4003,9 @@ long sys_sync(isr_params_t *params)
     (void)params;
     filemap_sync_all();
     vfs_sync_all();
-    start = kernel_ticks;
+    start = (uint32_t)kernel_ticks;
     while (pc_sync() & PC_SYNC_BUSY) {
-        if ((uint32_t)(kernel_ticks - start) >= 3000u) {
+        if ((uint32_t)kernel_ticks - start >= MS_TO_TICKS(30000)) {
             break;
         }
         schedule();

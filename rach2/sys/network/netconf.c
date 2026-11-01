@@ -799,7 +799,7 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
     }
     a->valid = valid;
     a->preferred = preferred;
-    a->since = kernel_ticks;
+    a->since = (uint32_t)kernel_ticks;
     net_unlock(lock);
     ip6_format(addr, text);
     klog(KLOG_INFO, "net", "%s: IPv6 %s/%d added", nd->name, text, prefix);

@@ -11,9 +11,8 @@
 #include "sched.h"
 #include "tgroup.h"
 #include "seccomp.h"
+#include "../timer.h"
 #include "ns.h"
-
-extern volatile uint32_t kernel_ticks;
 
 process_t *proc_list;
 process_t *proc_idle;
@@ -292,7 +291,7 @@ process_t *alloc_process(void)
         return NULL;
     }
     k_memset(p, 0, sizeof(*p));
-    p->start_ticks = kernel_ticks;
+    p->start_ticks = tick_count();
     p->fpu = fpu_area_alloc();
     if (!p->fpu) {
         kfree(p);
@@ -428,11 +427,10 @@ void free_process(process_t *proc)
  * process ready too: a nanosleep it wakes then ends with -EINTR if it runs
  * again before its deadline tick and the process acts on SIGALRM, and
  * returns 0 if it first runs at that tick or later; a wait that goes on
- * arms its deadline again. The `(int32_t)` difference of two ticks is right
- * across the wrap of the count, for deadlines less than 2^31 ticks away,
- * about 248 days at 100 Hz.
+ * arms its deadline again. The tick count is 64 bits wide and does not wrap,
+ * so a deadline is compared with it as it stands.
  */
-void proc_wake_sleepers(uint32_t now)
+void proc_wake_sleepers(uint64_t now)
 {
     process_t *p;
 
@@ -442,12 +440,11 @@ void proc_wake_sleepers(uint32_t now)
         p = timer_cursor;
         timer_cursor = p->timer_next;
         work_count[2]++;
-        if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&
-            (int32_t)(now - p->wakeup_tick) >= 0) {
+        if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 && now >= p->wakeup_tick) {
             p->wakeup_tick = 0;
             sched_make_ready(p);
         }
-        if (p->alarm_tick != 0 && (int32_t)(now - p->alarm_tick) >= 0) {
+        if (p->alarm_tick != 0 && now >= p->alarm_tick) {
             p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;
             signal_post(p, SIGALRM);
         }
@@ -455,9 +452,9 @@ void proc_wake_sleepers(uint32_t now)
     }
 }
 
-uint32_t proc_alarm_at(uint32_t now, uint32_t ticks)
+uint64_t proc_alarm_at(uint64_t now, uint64_t ticks)
 {
-    uint32_t at = now + ticks;
+    uint64_t at = now + ticks;
 
     return at != 0 ? at : 1u;
 }
@@ -483,7 +480,7 @@ void tgroup_put(struct tgroup *tg)
     }
 }
 
-void proc_cpu_time(const process_t *p, uint32_t *user, uint32_t *sys)
+void proc_cpu_time(const process_t *p, uint64_t *user, uint64_t *sys)
 {
     const struct tgroup *tg = p->tg;
     const process_t *t;

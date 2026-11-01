@@ -32,9 +32,6 @@
 #include "mapcache.h"
 #include "osl.h"
 
-/* The kernel's tick, in milliseconds: kernel_ticks counts 10 ms ticks. */
-#define OSL_TICK_MS 10
-
 /* The windows of memory ACPICA may have mapped at once: its tables, the
  * FACS, and the operation regions of the firmware's methods. */
 #define OSL_WINDOWS 256
@@ -323,11 +320,12 @@ static int osl_can_block(void)
            current_proc != proc_idle && current_proc != this_cpu()->idle;
 }
 
-/** The wake tick a sleep to `deadline` arms: the deadline, or 1 when the
- * sum that gave it wrapped to 0, which means no deadline. */
-static uint32_t osl_wake_tick(uint32_t deadline)
+/** The tick a wait of `ms` milliseconds that begins now ends at: the
+ * whole ticks rounded up, and one more for the tick in progress, so it is
+ * never 0, which means no deadline. */
+static uint64_t osl_deadline(uint32_t ms)
 {
-    return deadline != 0 ? deadline : 1u;
+    return tick_count() + tick_span(ms / 1000u, ms % 1000u * 1000000u) + 1u;
 }
 
 /* What a waiter on a semaphore waits for: its units, or its deadline. */
@@ -335,7 +333,7 @@ struct sem_wait {
     struct osl_sem *sem;
     uint32_t units;
     int timed;
-    uint32_t deadline; /* the tick the wait ends at, when `timed` */
+    uint64_t deadline; /* the tick the wait ends at, when `timed` */
 };
 
 /** Whether the wait at `arg` may stop sleeping: its units are free or its
@@ -344,7 +342,7 @@ static int sem_ready(void *arg)
 {
     const struct sem_wait *w = (const struct sem_wait *)arg;
 
-    return w->sem->units >= w->units || (w->timed && (int32_t)(kernel_ticks - w->deadline) >= 0);
+    return w->sem->units >= w->units || (w->timed && tick_count() >= w->deadline);
 }
 
 ACPI_STATUS AcpiOsCreateSemaphore(UINT32 max, UINT32 initial, ACPI_SEMAPHORE *out)
@@ -393,7 +391,7 @@ ACPI_STATUS AcpiOsWaitSemaphore(ACPI_SEMAPHORE handle, UINT32 units, UINT16 time
     w.sem = s;
     w.units = units;
     w.timed = timeout != ACPI_WAIT_FOREVER;
-    w.deadline = kernel_ticks + (timeout + OSL_TICK_MS - 1) / OSL_TICK_MS + 1;
+    w.deadline = osl_deadline(timeout);
     for (;;) {
         flags = spin_lock_irqsave(&sem_lock);
         if (s->units >= units) {
@@ -406,10 +404,10 @@ ACPI_STATUS AcpiOsWaitSemaphore(ACPI_SEMAPHORE handle, UINT32 units, UINT16 time
             return AE_TIME;
         }
         if (osl_can_block()) {
-            if (w.timed && (int32_t)(kernel_ticks - w.deadline) >= 0) {
+            if (w.timed && tick_count() >= w.deadline) {
                 return AE_TIME;
             }
-            current_proc->wakeup_tick = w.timed ? osl_wake_tick(w.deadline) : 0;
+            current_proc->wakeup_tick = w.timed ? w.deadline : 0;
             (void)wq_wait_event_nointr(&s->waiters, sem_ready, &w);
             current_proc->wakeup_tick = 0;
         } else {
@@ -482,7 +480,7 @@ int acpi_os_release_global_lock(volatile unsigned int *lock)
 /** The tick the deadline at `arg` names has come. */
 static int tick_reached(void *arg)
 {
-    return (int32_t)(kernel_ticks - *(const uint32_t *)arg) >= 0;
+    return tick_count() >= *(const uint64_t *)arg;
 }
 
 /**
@@ -495,10 +493,10 @@ void AcpiOsSleep(UINT64 milliseconds)
 
     if (osl_can_block()) {
         wait_queue_t wq;
-        uint32_t target = kernel_ticks + (ms + OSL_TICK_MS - 1) / OSL_TICK_MS + 1;
+        uint64_t target = osl_deadline(ms);
 
         wait_queue_init(&wq);
-        current_proc->wakeup_tick = osl_wake_tick(target);
+        current_proc->wakeup_tick = target;
         (void)wq_wait_event_nointr(&wq, tick_reached, &target);
         current_proc->wakeup_tick = 0;
         return;

@@ -33,6 +33,7 @@
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kirq.h"
+#include "../timer.h"
 #include "../lib/kstring.h"
 #include "core.h"
 #include "hcd.h"
@@ -156,10 +157,10 @@
  * overflow. */
 #define MSC_QUEUE 16
 
-/* How long a request has before the block layer gives up on it, in ticks of
- * the 100 Hz timer. Ten seconds, because a stick may have a controller of its
- * own to wake up. */
-#define MSC_DEADLINE_TICKS 1000u
+/* How long a request has before the block layer gives up on it, in ticks.
+ * Ten seconds, because a stick may have a controller of its own to wake
+ * up. */
+#define MSC_DEADLINE_TICKS MS_TO_TICKS(10000)
 
 struct msc_device;
 

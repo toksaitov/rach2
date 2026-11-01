@@ -267,6 +267,7 @@ void krandom_seed(void)
     hi = (uint32_t)(cycles >> 32);
     sec = (uint32_t)rtc_boot_epoch();
 
-    krandom_reseed(lo ^ sec, hi, kernel_ticks ^ (sec << 16), lo ^ hi ^ kernel_ticks ^ sec);
+    krandom_reseed(lo ^ sec, hi, (uint32_t)kernel_ticks ^ (sec << 16),
+                   lo ^ hi ^ (uint32_t)kernel_ticks ^ sec);
     cc_src = KRANDOM_SRC_JITTER;
 }

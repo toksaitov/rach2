@@ -8,6 +8,7 @@
 #include "anon.h"
 #include "../irq.h"
 #include "../rtc.h"
+#include "../timer.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
 #include "../proc/process.h"
@@ -39,36 +40,28 @@
 #define SIGEV_NONE      1
 #define SIGEV_THREAD_ID 4
 
-/* Format: the kernel's ticks in a second, and nanoseconds in a tick. The
- * kernel has no 64-bit division, so a time is kept as whole seconds and
- * ticks below a second, and never as one count of ticks or nanoseconds. */
-#define TICKS_PER_SEC 100u
-#define NS_PER_TICK   10000000
+/* Format: the kernel's ticks in a second, and nanoseconds in a tick. A
+ * setting is kept as whole seconds and ticks below a second, and a deadline
+ * as a 64-bit tick. */
+#define TICKS_PER_SEC ((uint32_t)TICK_HZ)
+#define NS_PER_TICK   ((int32_t)TICK_NS)
 #define NS_PER_SEC    1000000000
-/*
- * Policy: a span, the most seconds a timer waits in one piece, which keeps
- * the signed comparison of ticks in `timerfd_tick` valid; a longer time is
- * the part below a span, then whole spans. And the most seconds a setting
- * keeps, about 136 years: a longer time is taken as that, as Linux takes
- * one past its own limit, about 292 years.
- */
-#define SPAN_SEC      10737417u
+/* Policy: the most seconds a setting keeps, about 136 years: a longer time
+ * is taken as that, as Linux takes one past its own limit, about 292
+ * years. */
 #define TIME_MAX      0xFFFFFFFFu
-
-extern volatile uint32_t kernel_ticks;
 
 /* A timer: a timerfd's, read through its descriptor (`anon` and `wq`), or a
  * POSIX timer's, which `tg` names and whose expirations post a signal. A
  * POSIX timer on a clock of processor time counts the ticks charged to
  * `cpu_tg`'s threads, or to its thread `cpu_tid` alone, user ticks alone for
- * `cpu_user`: `due` is then the ticks left, and `spans` is unused. */
+ * `cpu_user`: `due` is then the ticks left. */
 struct ktimer {
     struct anon_obj anon;
     struct ktimer *next; /* the list of armed timers the tick walks */
     int clock;
     int armed;
-    uint32_t due;   /* the tick the wait in progress ends */
-    uint32_t spans; /* whole spans to wait after it, before the expiration */
+    uint64_t due;   /* the tick the next expiration is due at */
     uint32_t isec;  /* the interval, 0 and 0 for none: whole seconds, */
     uint32_t isub;  /* and ticks below a second */
     uint64_t count; /* expirations not yet read, or not yet signalled */
@@ -121,13 +114,10 @@ static void disarm(struct ktimer *t)
     t->armed = 0;
 }
 
-/** Set `t` to expire `sec` seconds and `sub` ticks after the tick `from`:
- * the part below a whole span first, then the spans. The caller holds
- * `timer_lock`. */
-static void wait_from(struct ktimer *t, uint32_t from, uint32_t sec, uint32_t sub)
+/** `sec` seconds and `sub` ticks as ticks. */
+static uint64_t ticks_of(uint32_t sec, uint32_t sub)
 {
-    t->spans = sec / SPAN_SEC;
-    t->due = from + (sec % SPAN_SEC) * TICKS_PER_SEC + sub;
+    return (uint64_t)sec * TICKS_PER_SEC + sub;
 }
 
 static void ptimer_fire(struct ktimer *t);
@@ -137,14 +127,13 @@ static void ptimer_free(struct ktimer **link);
  * interval missed since, and the timer armed again by its interval or
  * disarmed; then its readers woken, or its signal posted. The caller holds
  * `timer_lock`. */
-static void expire(struct ktimer *t, uint32_t now)
+static void expire(struct ktimer *t, uint64_t now)
 {
-    if (t->isec >= SPAN_SEC) {
-        t->count++;
-        wait_from(t, t->due, t->isec, t->isub);
-    } else if (t->isec != 0 || t->isub != 0) {
-        uint32_t interval = t->isec * TICKS_PER_SEC + t->isub;
-        uint32_t late = (now - t->due) / interval;
+    if (t->isec != 0 || t->isub != 0) {
+        uint64_t interval = ticks_of(t->isec, t->isub);
+        uint64_t gap = now - t->due;
+        /* the gap is the ticks one interrupt counted, under 2^32 */
+        uint32_t late = interval > gap ? 0u : (uint32_t)gap / (uint32_t)interval;
 
         t->count += 1u + late;
         t->due += (late + 1u) * interval;
@@ -159,16 +148,13 @@ static void expire(struct ktimer *t, uint32_t now)
     }
 }
 
-/** `sec` seconds and `sub` ticks as ticks, at most 0xFFFFFFFF and at least
- * one, so that a timer of processor time armed for no time expires at the
- * next tick charged. */
-static uint32_t cpu_ticks_of(uint32_t sec, uint32_t sub)
+/** `sec` seconds and `sub` ticks as ticks, at least one, so that a timer
+ * of processor time armed for no time expires at the next tick charged. */
+static uint64_t cpu_ticks_of(uint32_t sec, uint32_t sub)
 {
-    if (sec >= 0xFFFFFFFFu / TICKS_PER_SEC) {
-        return 0xFFFFFFFFu;
-    }
-    sec = sec * TICKS_PER_SEC + sub;
-    return sec != 0 ? sec : 1u;
+    uint64_t ticks = ticks_of(sec, sub);
+
+    return ticks != 0 ? ticks : 1u;
 }
 
 void ptimer_cpu_tick(const process_t *p, int user)
@@ -195,7 +181,7 @@ void ptimer_cpu_tick(const process_t *p, int user)
     spin_unlock(&timer_lock);
 }
 
-void timerfd_tick(uint32_t now)
+void timerfd_tick(uint64_t now)
 {
     struct ktimer *t;
 
@@ -204,13 +190,8 @@ void timerfd_tick(uint32_t now)
     while (t) {
         struct ktimer *next = t->next;
 
-        while (t->armed && (int32_t)(now - t->due) >= 0) {
-            if (t->spans != 0) {
-                t->spans--;
-                t->due += SPAN_SEC * TICKS_PER_SEC;
-            } else {
-                expire(t, now);
-            }
+        while (t->armed && now >= t->due) {
+            expire(t, now);
         }
         t = next;
     }
@@ -369,21 +350,21 @@ long sys_timerfd_create(struct isr_params *params)
 static void current_setting(const struct ktimer *t, struct setting *s)
 {
     uint32_t irq = spin_lock_irqsave(&timer_lock);
+    uint32_t rest;
 
     k_memset(s, 0, sizeof(*s));
     if (t->armed && t->cpu_tg) {
-        s->vsec = t->due / TICKS_PER_SEC;
-        s->vnsec = (int32_t)(t->due % TICKS_PER_SEC) * NS_PER_TICK;
+        s->vsec = (int64_t)tick_div(t->due, TICKS_PER_SEC, &rest);
+        s->vnsec = (int32_t)rest * NS_PER_TICK;
         s->isec = t->isec;
         s->insec = (int32_t)t->isub * NS_PER_TICK;
     } else if (t->armed) {
-        int32_t left = (int32_t)(t->due - rtc_ticks_now());
+        uint64_t now = rtc_ticks_now();
 
-        s->vsec = (int64_t)t->spans * SPAN_SEC;
-        if (left > 0) {
-            s->vsec += (uint32_t)left / TICKS_PER_SEC;
-            s->vnsec = (int32_t)((uint32_t)left % TICKS_PER_SEC) * NS_PER_TICK;
-        } else if (s->vsec == 0) {
+        if (t->due > now) {
+            s->vsec = (int64_t)tick_div(t->due - now, TICKS_PER_SEC, &rest);
+            s->vnsec = (int32_t)rest * NS_PER_TICK;
+        } else {
             s->vnsec = 1; /* due now: reported as not yet expired */
         }
         s->isec = t->isec;
@@ -439,7 +420,7 @@ static int32_t arm(struct ktimer *t, int flags, const struct setting *s)
         t->next = cpu_armed;
         cpu_armed = t;
     } else if (on) {
-        wait_from(t, rtc_ticks_now() + 1u, sec, sub);
+        t->due = rtc_ticks_now() + 1u + ticks_of(sec, sub);
         t->isec = isec;
         t->isub = isub;
         t->armed = 1;
