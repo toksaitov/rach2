@@ -1,10 +1,11 @@
 /*
  * i_pcsound.c: the sound and music modules of Doom on Rach2.
  *
- * With a driver that plays samples, the SB16's or the HDA's, the effects are
- * mixed with the music of the OPL3 player into 11,025 Hz unsigned 8-bit mono
- * and written to the console with AUDIO_WRITE. Otherwise the effects play on
- * the PC speaker, one tone at a time, and there is no music.
+ * Where /dev/dsp opens, as it does over the SB16's or the HDA's driver, the
+ * effects are mixed with the music of the OPL3 player into 11,025 Hz unsigned
+ * 8-bit mono and written to it, two periods ahead of what the driver holds.
+ * Otherwise the effects play on the PC speaker of the console, one tone at a
+ * time, and there is no music.
  */
 
 #include "sounds.h"
@@ -17,6 +18,7 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <sys/soundcard.h>
 
 /* The resampling settings src/i_sound.c binds under FEATURE_SOUND. This
  * module does not resample, so they are not read. */
@@ -26,66 +28,36 @@ float libsamplerate_scale = 0.65f;
 /* The system call of crt0.c. */
 extern int ioctl(int fd, unsigned long request, ...);
 
-/* The console's sound requests (rach2/sys/syscall.c). */
+/* The console's request that sounds the PC speaker (rach2/sys/syscall.c). */
 #define KIOCSOUND       0x4B2F  /* PC speaker: the PIT's divisor, 0 = off */
 #define PIT_CLOCK       1193182 /* the PIT's input clock in Hz */
-#define AUDIO_GET_INFO  0x4101  /* Get audio driver info */
-#define AUDIO_START     0x4102  /* Start audio playback */
-#define AUDIO_STOP      0x4103  /* Stop audio playback */
-#define AUDIO_WRITE     0x4104  /* Write audio samples */
-
-/* The driver types AUDIO_GET_INFO gives. */
-#define AUDIO_DRIVER_NONE    0
-#define AUDIO_DRIVER_SPEAKER 1
-#define AUDIO_DRIVER_SB16    2
-#define AUDIO_DRIVER_HDA     3
-
-/* The sample formats AUDIO_START takes. */
-#define AUDIO_U8    0
-#define AUDIO_S16LE 1
-
-/* The argument of AUDIO_GET_INFO. */
-struct audio_info {
-    uint32_t driver_type;
-    uint32_t has_real_audio;
-};
-
-/* The argument of AUDIO_START. */
-struct audio_start_params {
-    uint32_t sample_rate;
-    uint32_t format;
-    uint32_t channels;
-};
-
-/* The argument of AUDIO_WRITE: the samples and their length in bytes. */
-struct audio_write_params {
-    const uint8_t *buffer;
-    uint32_t size;
-};
 
 /* The platform layer's clock and report (doomgeneric_rach2.c). */
 extern uint32_t DG_GetTicksMs(void);
 extern uint32_t DG_NowUs(void);
 extern void DG_TimeSpent(int what, uint32_t us);
+extern void DG_SoundQueue(uint32_t frames, uint32_t period);
 
-static int audio_fd = -1; /* owned /dev/console descriptor, or -1 */
+static int audio_fd = -1; /* owned /dev/console descriptor for the speaker, or -1 */
+static int dsp_fd = -1;   /* owned /dev/dsp descriptor, or -1 */
 static boolean pcsound_initialized = false;
 static int current_sound_channel = -1; /* the speaker effect's, or -1 */
 static uint32_t current_freq = 0;      /* the speaker's tone in Hz, 0 silent */
 
-static boolean use_real_audio = false; /* AUDIO_START succeeded */
+static boolean use_real_audio = false; /* /dev/dsp took Doom's format */
+static boolean dsp_started = false;    /* SNDCTL_DSP_POST has started it */
 static boolean opl_music_initialized = false;
-static uint32_t audio_sample_rate = 11025; /* the output rate in Hz */
 
 /* One chunk of output, unsigned 8-bit mono: 315 samples are 28.6 ms. */
 #define MIX_BUFFER_SIZE 315
 static uint8_t mix_buffer[MIX_BUFFER_SIZE];
 
 /*
- * Output is made by the clock: an update makes as many samples as the time
- * since the last is worth at OUTPUT_SAMPLE_RATE, so that the output keeps
- * pace with the hardware when frames come unevenly. The music player makes
- * stereo 16-bit samples at OPL_SAMPLE_RATE, which the mixer averages down.
+ * Output is paced by the device: an update makes what keeps two periods of
+ * /dev/dsp's buffer queued ahead of the driver's, so that what is heard is
+ * at most the driver's buffer and those two periods behind the game. The
+ * music player makes stereo 16-bit samples at OPL_SAMPLE_RATE, which the
+ * mixer averages down.
  */
 #define OPL_SAMPLE_RATE 49716
 #define OUTPUT_SAMPLE_RATE 11025
@@ -96,15 +68,12 @@ static int16_t opl_buffer[OPL_BUFFER_SAMPLES * 2];  /* stereo pairs */
 #define MUSIC_MIX_GAIN_NUM 6
 #define MUSIC_MIX_GAIN_DEN 1
 
-static uint32_t last_audio_ms = 0;        /* the clock at the last update */
-static uint32_t audio_ms_remainder = 0;   /* output samples, in thousandths */
-static uint32_t opl_sample_remainder = 0; /* player samples, in 11025ths */
+/* The periods of /dev/dsp's buffer an update keeps queued. */
+#define QUEUED_PERIODS 2
 
-/* The most samples one update makes: two tics, 57 ms, since MIX_BUFFER_SIZE
- * is one. A longer frame is a stall, and the time past the two tics is
- * dropped, so that what is queued stays near the present; what the kernel's
- * ring cannot take is dropped as well. */
-#define MAX_CATCHUP_SAMPLES (MIX_BUFFER_SIZE * 2)
+static uint32_t last_audio_ms = 0;        /* the clock at the last update */
+static uint32_t queued_samples = 0;       /* GETODELAY after the last update */
+static uint32_t opl_sample_remainder = 0; /* player samples, in 11025ths */
 
 
 /* The effects that play with sample output, one to a channel. */
@@ -183,27 +152,48 @@ static void stop_tone(void)
 }
 
 /**
- * Open /dev/console for sound, independently of standard input and the
- * keyboard, and ask for its audio driver. When the driver plays samples,
- * start output of 11,025 Hz unsigned 8-bit mono and the music player at
- * 49,716 Hz; otherwise the effects go to the PC speaker. The system volume
- * is left as /dev/mixer holds it. `use_sfx_prefix` is ignored. Returns
- * false when the console cannot be opened, true otherwise. Shutdown closes
- * the descriptor after stopping output.
+ * Open /dev/dsp for writing, nonblocking, and set 11,025 Hz unsigned 8-bit
+ * mono. Returns the descriptor, or -1 when the device does not open or does
+ * not take that format exactly, closed then.
+ */
+static int open_dsp(void)
+{
+    int fd, value;
+
+    fd = open("/dev/dsp", O_WRONLY | O_NONBLOCK);
+    if (fd < 0) {
+        return -1;
+    }
+    value = AFMT_U8;
+    if (ioctl(fd, SNDCTL_DSP_SETFMT, &value) < 0 || value != AFMT_U8) {
+        close(fd);
+        return -1;
+    }
+    value = 1;
+    if (ioctl(fd, SNDCTL_DSP_CHANNELS, &value) < 0 || value != 1) {
+        close(fd);
+        return -1;
+    }
+    value = OUTPUT_SAMPLE_RATE;
+    if (ioctl(fd, SNDCTL_DSP_SPEED, &value) < 0 || value != OUTPUT_SAMPLE_RATE) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+/**
+ * Start sound: on /dev/dsp, with the music player at 49,716 Hz, when it
+ * opens; otherwise on the PC speaker of a /dev/console descriptor of its
+ * own, independent of standard input and the keyboard. The system volume is
+ * left as /dev/mixer holds it. `use_sfx_prefix` is ignored. Returns false
+ * when neither opens, true otherwise. Shutdown closes the descriptor.
  */
 static boolean PCSoundInit(boolean use_sfx_prefix)
 {
-    struct audio_info info;
-    struct audio_start_params params;
     int i;
 
     (void)use_sfx_prefix;
-
-    audio_fd = open("/dev/console", O_RDWR);
-    if (audio_fd < 0) {
-        audio_fd = -1;
-        return false;
-    }
 
     for (i = 0; i < NUM_CHANNELS; i++) {
         channels[i].data = NULL;
@@ -213,18 +203,18 @@ static boolean PCSoundInit(boolean use_sfx_prefix)
         channels[i].active = false;
     }
 
-    if (ioctl(audio_fd, AUDIO_GET_INFO, &info) == 0 && info.has_real_audio) {
-        audio_sample_rate = OUTPUT_SAMPLE_RATE;
-        params.sample_rate = audio_sample_rate;
-        params.format = AUDIO_U8;
-        params.channels = 1;
-
-        if (ioctl(audio_fd, AUDIO_START, &params) == 0) {
-            use_real_audio = true;
-
-            if (OPLMusic_Init(OPL_SAMPLE_RATE)) {
-                opl_music_initialized = true;
-            }
+    dsp_fd = open_dsp();
+    if (dsp_fd >= 0) {
+        use_real_audio = true;
+        dsp_started = false;
+        if (OPLMusic_Init(OPL_SAMPLE_RATE)) {
+            opl_music_initialized = true;
+        }
+    } else {
+        audio_fd = open("/dev/console", O_RDWR);
+        if (audio_fd < 0) {
+            audio_fd = -1;
+            return false;
         }
     }
 
@@ -232,24 +222,26 @@ static boolean PCSoundInit(boolean use_sfx_prefix)
     current_sound_channel = -1;
     dp_state.active = false;
     last_audio_ms = DG_GetTicksMs();
-    audio_ms_remainder = 0;
+    queued_samples = 0;
     opl_sample_remainder = 0;
     return true;
 }
 
-/** Stop the music player, sample output and speaker, and close the console. */
+/** Stop the music player and the speaker, and close the device; the close
+ * of /dev/dsp waits for nothing, the descriptor being nonblocking. */
 static void PCSoundShutdown(void)
 {
     if (opl_music_initialized) {
         OPLMusic_Shutdown();
         opl_music_initialized = false;
     }
-    if (use_real_audio) {
-        ioctl(audio_fd, AUDIO_STOP, 0);
+    if (dsp_fd >= 0) {
+        close(dsp_fd);
+        dsp_fd = -1;
         use_real_audio = false;
     }
-    stop_tone();
     if (audio_fd >= 0) {
+        stop_tone();
         close(audio_fd);
         audio_fd = -1;
     }
@@ -305,157 +297,159 @@ static void skip_channels(uint32_t samples)
 }
 
 /**
- * With sample output, make the samples the time since the last update is
- * worth, no more than MAX_CATCHUP_SAMPLES, dropping a stall's time past them
- * with skip_channels, in chunks of MIX_BUFFER_SIZE. For each chunk take
+ * Mix `chunk` samples, no more than MIX_BUFFER_SIZE, into mix_buffer: take
  * OPL_SAMPLE_RATE / OUTPUT_SAMPLE_RATE times as many stereo samples from the
  * music player, average them to mono and to the output rate, scale them to 8
- * bits with the music's gain, add the channels at their volumes, limit each
- * sum to a byte, and write the chunk with AUDIO_WRITE until a write takes
- * nothing; the rest is dropped.
+ * bits with the music's gain, add the channels at their volumes, and limit
+ * each sum to a byte.
+ */
+static void mix_chunk(uint32_t chunk)
+{
+    uint32_t opl_samples_needed, opl_samples_num, mix_t0;
+    int i, j, k, sample_sum, opl_idx_start, opl_idx_end;
+
+    opl_samples_num = chunk * OPL_SAMPLE_RATE + opl_sample_remainder;
+    opl_samples_needed = opl_samples_num / OUTPUT_SAMPLE_RATE;
+    opl_sample_remainder = opl_samples_num % OUTPUT_SAMPLE_RATE;
+    if (opl_samples_needed > OPL_BUFFER_SAMPLES) {
+        opl_samples_needed = OPL_BUFFER_SAMPLES;
+        opl_sample_remainder = 0;
+    }
+
+    if (opl_music_initialized && opl_samples_needed > 0) {
+        uint32_t t0 = DG_NowUs();
+
+        OPLMusic_GenerateSamples(opl_buffer, opl_samples_needed);
+        DG_TimeSpent(0, DG_NowUs() - t0);
+    } else {
+        opl_samples_needed = 0;
+    }
+
+    mix_t0 = DG_NowUs();
+    for (j = 0; j < (int)chunk; j++) {
+        sample_sum = 0;
+
+        if (opl_samples_needed > 0) {
+            int32_t mono_sum = 0;
+            int count = 0;
+
+            opl_idx_start = (j * (int)opl_samples_needed) / (int)chunk;
+            opl_idx_end = ((j + 1) * (int)opl_samples_needed) / (int)chunk;
+
+            if (opl_idx_end <= opl_idx_start) {
+                opl_idx_end = opl_idx_start + 1;
+            }
+            if (opl_idx_end > (int)opl_samples_needed) {
+                opl_idx_end = (int)opl_samples_needed;
+            }
+
+            for (k = opl_idx_start; k < opl_idx_end; k++) {
+                int32_t left = opl_buffer[k * 2];
+                int32_t right = opl_buffer[k * 2 + 1];
+                mono_sum += (left + right) / 2;
+                count++;
+            }
+
+            if (count > 0) {
+                int32_t mono = mono_sum / count;
+                mono = mono / 256;
+                mono = (mono * MUSIC_MIX_GAIN_NUM) / MUSIC_MIX_GAIN_DEN;
+                if (mono > 127) mono = 127;
+                if (mono < -128) mono = -128;
+                sample_sum += mono;
+            }
+        }
+
+        for (i = 0; i < NUM_CHANNELS; i++) {
+            if (channels[i].active && channels[i].position < channels[i].length) {
+                /* unsigned 8-bit, centered on 128 */
+                int sample = channels[i].data[channels[i].position];
+                sample = ((sample - 128) * channels[i].volume / 255);
+                sample_sum += sample;
+                channels[i].position++;
+            } else if (channels[i].active) {
+                channels[i].active = false;
+            }
+        }
+
+        sample_sum += 128;
+        if (sample_sum < 0) sample_sum = 0;
+        if (sample_sum > 255) sample_sum = 255;
+        mix_buffer[j] = (uint8_t)sample_sum;
+    }
+    DG_TimeSpent(1, DG_NowUs() - mix_t0);
+}
+
+/**
+ * Bring /dev/dsp's buffer up to QUEUED_PERIODS periods. GETODELAY, a sample
+ * to a byte, counts the buffer and the driver's own, which Doom cannot
+ * shorten; GETOSPACE gives the buffer's part. When the time since the last
+ * update is longer than what was queued then, the device played silence for
+ * the rest, and the effects skip it with skip_channels, so that none plays
+ * late. The samples are mixed in chunks of MIX_BUFFER_SIZE, and what a write
+ * does not take is dropped. The first write starts the device with
+ * SNDCTL_DSP_POST, which would otherwise wait for its driver's buffer to
+ * fill. The report gets the delay after the update.
+ */
+static void dsp_update(void)
+{
+    audio_buf_info space;
+    int delay, w;
+    uint32_t now_ms, elapsed, buffered, want, chunk, off;
+
+    if (ioctl(dsp_fd, SNDCTL_DSP_GETODELAY, &delay) < 0 ||
+        ioctl(dsp_fd, SNDCTL_DSP_GETOSPACE, &space) < 0 || delay < 0 ||
+        space.fragsize <= 0) {
+        return;
+    }
+
+    now_ms = DG_GetTicksMs();
+    elapsed = now_ms - last_audio_ms;
+    last_audio_ms = now_ms;
+    elapsed = elapsed / 1000 * OUTPUT_SAMPLE_RATE + elapsed % 1000 * OUTPUT_SAMPLE_RATE / 1000;
+    if (dsp_started && elapsed > queued_samples) {
+        skip_channels(elapsed - queued_samples);
+    }
+
+    buffered = (uint32_t)(space.fragstotal * space.fragsize - space.bytes);
+    want = QUEUED_PERIODS * (uint32_t)space.fragsize;
+    want = buffered < want ? want - buffered : 0;
+    if (want > (uint32_t)space.bytes) {
+        want = (uint32_t)space.bytes;
+    }
+
+    while (want > 0) {
+        chunk = want > MIX_BUFFER_SIZE ? MIX_BUFFER_SIZE : want;
+        mix_chunk(chunk);
+        for (off = 0; off < chunk; off += (uint32_t)w) {
+            w = write(dsp_fd, mix_buffer + off, chunk - off);
+            if (w <= 0) {
+                break; /* the buffer is full, or the device failed */
+            }
+            delay += w;
+        }
+        if (off < chunk) {
+            break;
+        }
+        want -= chunk;
+    }
+
+    if (!dsp_started && delay > 0) {
+        dsp_started = ioctl(dsp_fd, SNDCTL_DSP_POST, 0) == 0;
+    }
+    queued_samples = (uint32_t)delay;
+    DG_SoundQueue(queued_samples, (uint32_t)space.fragsize);
+}
+
+/**
+ * With sample output, keep /dev/dsp fed with dsp_update.
  * On the speaker, step the effect sounding by 7 ms tones, and end it after
  * its last.
  */
 static void PCSoundUpdate(void)
 {
     if (use_real_audio) {
-        struct audio_write_params wp;
-        uint32_t now_ms;
-        uint32_t elapsed_ms;
-        uint32_t out_samples_num;
-        uint32_t out_samples;
-        int i, j;
-        int sample_sum;
-        int active_count;
-        int opl_idx_start, opl_idx_end, k;
-        uint32_t mix_t0;
-
-        now_ms = DG_GetTicksMs();
-        if (last_audio_ms == 0) {
-            last_audio_ms = now_ms;
-            return;
-        }
-
-        elapsed_ms = now_ms - last_audio_ms;
-        if (elapsed_ms == 0) {
-            return;
-        }
-        last_audio_ms = now_ms;
-
-        if (elapsed_ms > 1000) {
-            elapsed_ms = 1000;
-            audio_ms_remainder = 0;
-        }
-
-        out_samples_num = elapsed_ms * OUTPUT_SAMPLE_RATE + audio_ms_remainder;
-        out_samples = out_samples_num / 1000;
-        audio_ms_remainder = out_samples_num % 1000;
-
-        if (out_samples == 0) {
-            return;
-        }
-
-        if (out_samples > MAX_CATCHUP_SAMPLES) {
-            skip_channels(out_samples - MAX_CATCHUP_SAMPLES);
-            out_samples = MAX_CATCHUP_SAMPLES;
-            audio_ms_remainder = 0;
-        }
-
-        while (out_samples > 0) {
-            uint32_t chunk = out_samples > MIX_BUFFER_SIZE ? MIX_BUFFER_SIZE : out_samples;
-            uint32_t opl_samples_needed;
-
-            uint32_t opl_samples_num;
-
-            opl_samples_num = chunk * OPL_SAMPLE_RATE + opl_sample_remainder;
-            opl_samples_needed = opl_samples_num / OUTPUT_SAMPLE_RATE;
-            opl_sample_remainder = opl_samples_num % OUTPUT_SAMPLE_RATE;
-            if (opl_samples_needed > OPL_BUFFER_SAMPLES) {
-                opl_samples_needed = OPL_BUFFER_SAMPLES;
-                opl_sample_remainder = 0;
-            }
-
-            if (opl_music_initialized && opl_samples_needed > 0) {
-                uint32_t t0 = DG_NowUs();
-
-                OPLMusic_GenerateSamples(opl_buffer, opl_samples_needed);
-                DG_TimeSpent(0, DG_NowUs() - t0);
-            } else {
-                opl_samples_needed = 0;
-            }
-
-            mix_t0 = DG_NowUs();
-            for (j = 0; j < (int)chunk; j++) {
-                sample_sum = 0;
-                active_count = 0;
-
-                if (opl_samples_needed > 0) {
-                    int32_t mono_sum = 0;
-                    int count = 0;
-
-                    opl_idx_start = (j * (int)opl_samples_needed) / (int)chunk;
-                    opl_idx_end = ((j + 1) * (int)opl_samples_needed) / (int)chunk;
-
-                    if (opl_idx_end <= opl_idx_start) {
-                        opl_idx_end = opl_idx_start + 1;
-                    }
-                    if (opl_idx_end > (int)opl_samples_needed) {
-                        opl_idx_end = (int)opl_samples_needed;
-                    }
-
-                    for (k = opl_idx_start; k < opl_idx_end; k++) {
-                        int32_t left = opl_buffer[k * 2];
-                        int32_t right = opl_buffer[k * 2 + 1];
-                        mono_sum += (left + right) / 2;
-                        count++;
-                    }
-
-                    if (count > 0) {
-                        int32_t mono = mono_sum / count;
-                        mono = mono / 256;
-                        mono = (mono * MUSIC_MIX_GAIN_NUM) / MUSIC_MIX_GAIN_DEN;
-                        if (mono > 127) mono = 127;
-                        if (mono < -128) mono = -128;
-                        sample_sum += mono;
-                    }
-                }
-
-                for (i = 0; i < NUM_CHANNELS; i++) {
-                    if (channels[i].active && channels[i].position < channels[i].length) {
-                        /* unsigned 8-bit, centered on 128 */
-                        int sample = channels[i].data[channels[i].position];
-                        sample = ((sample - 128) * channels[i].volume / 255);
-                        sample_sum += sample;
-                        active_count++;
-                        channels[i].position++;
-                    } else if (channels[i].active) {
-                        channels[i].active = false;
-                    }
-                }
-
-                sample_sum += 128;
-                if (sample_sum < 0) sample_sum = 0;
-                if (sample_sum > 255) sample_sum = 255;
-                mix_buffer[j] = (uint8_t)sample_sum;
-            }
-
-            {
-                uint32_t off = 0;
-                DG_TimeSpent(1, DG_NowUs() - mix_t0);
-                while (off < chunk) {
-                    int w;
-                    wp.buffer = mix_buffer + off;
-                    wp.size = chunk - off;
-                    w = ioctl(audio_fd, AUDIO_WRITE, &wp);
-                    if (w <= 0) {
-                        break; /* the ring is full, or the driver failed */
-                    }
-                    off += (uint32_t)w;
-                }
-            }
-
-            out_samples -= chunk;
-        }
+        dsp_update();
         return;
     }
 

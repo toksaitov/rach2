@@ -392,19 +392,44 @@ void DG_TimeSpent(int what, uint32_t us)
     }
 }
 
+/* What the sound module has queued on /dev/dsp, in samples: after its last
+ * update, the most after any, and the device's period; all 0 until it
+ * writes there. */
+static uint32_t sound_queued, sound_most, sound_period;
+
+/**
+ * Give the report the samples queued on /dev/dsp after an update of the
+ * sound module, GETODELAY's reading with what the update wrote, and
+ * `period`, the samples of the device's period.
+ */
+void DG_SoundQueue(uint32_t frames, uint32_t period)
+{
+    sound_queued = frames;
+    if (frames > sound_most) {
+        sound_most = frames;
+    }
+    sound_period = period;
+}
+
 /* The clock of the last report, in milliseconds since DG_Init. */
 static uint32_t reported_ms;
 
-/** Print the report on one line on standard output; ports/doom/Readme.md
+/** Print the report on one line on standard output, with the sound queue
+ * once the sound module has written to /dev/dsp; ports/doom/Readme.md
  * describes its fields. */
 static void report(void)
 {
     uint32_t span_ms = last_frame_ms - first_frame_ms;
 
-    printf("doom: %u frames in %u ms, the longest %u ms; music emulator %u ms in %u calls for %u samples after %u events, mixer %u ms; zone %d MiB\n",
+    printf("doom: %u frames in %u ms, the longest %u ms; music emulator %u ms in %u calls for %u samples after %u events, mixer %u ms; zone %d MiB",
            (unsigned)frames, (unsigned)span_ms, (unsigned)longest_frame_ms,
            (unsigned)(spent_us[0] / 1000u), (unsigned)spent_us[2], (unsigned)spent_us[3],
            (unsigned)spent_us[4], (unsigned)(spent_us[1] / 1000u), DG_zone_mib);
+    if (sound_period > 0) {
+        printf("; dsp queue %u samples, the most %u, period %u", (unsigned)sound_queued,
+               (unsigned)sound_most, (unsigned)sound_period);
+    }
+    printf("\n");
 }
 
 /** Count a frame drawn now, keep the longest gap, and print the report

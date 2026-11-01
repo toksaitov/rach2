@@ -20,6 +20,9 @@ CFLAGS = $(ARCH_CFLAGS) -nostdlib -static -ffreestanding -Wl,-Ttext=$(ARCH_USER_
 CFLAGS += -I./include -I$(DOOMGENERIC_DIR) -I.
 # Rach2's own headers for programs, <rach2/fb.h> among them.
 CFLAGS += -I$(TOP)/rach2/include
+# musl's installed headers, after the compiler's own, for <sys/soundcard.h>
+# and the Linux headers it includes; the program links no musl.
+CFLAGS += -idirafter $(TOP)/$(ARCH_MUSL)/include
 CFLAGS += -DNORMALUNIX -DCMAP256 -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200
 CFLAGS += -Os -fomit-frame-pointer -fno-strict-aliasing
 CFLAGS += -Wno-unused-parameter -Wno-sign-compare -Wno-implicit-function-declaration
