@@ -277,7 +277,7 @@ typedef struct {
     bool running;            /* the input stream runs */
     uint8_t level;           /* the ADC's input gain, in steps: the capture level */
     hda_caps_report_t caps;  /* the ADC's */
-    uint32_t requested_rate; /* the rate the last start asked for */
+    uint32_t requested_rate; /* the rate the last setup asked for */
     uint32_t rate;           /* the rate it programmed, one the ADC has */
     uint16_t format;         /* the input stream's format word, read back */
     uint16_t pin_ctl;        /* the pin widget control the last start set */

@@ -1408,6 +1408,7 @@ static struct spinlock cap_lock = SPINLOCK_INIT;
 static audio_stream_t *cap_stream = NULL; /* the open input stream, or NULL */
 static volatile bool cap_running = false;
 static uint16_t cap_format = 0;   /* the stream format word stream_setup chose */
+static uint32_t cap_asked = 0;    /* the rate stream_setup was asked for */
 static uint32_t cap_period = 0;   /* bytes of one DMA period; 0 before a setup */
 static uint32_t cap_periods = 0;  /* periods in the DMA buffer */
 static uint32_t cap_frame = 4;    /* bytes of one frame in the DMA buffer */
@@ -3679,6 +3680,7 @@ static int hda_capture_setup(audio_stream_t *s)
     n = HDA_CAPTURE_BUFFER / (frames * hw_frame);
     if (n > HDA_CAPTURE_ENTRIES)
         n = HDA_CAPTURE_ENTRIES;
+    cap_asked = s->rate;
     s->rate = rate;
     s->period_bytes = frames * frame;
     s->device_periods = n;
@@ -3728,7 +3730,7 @@ static int hda_capture_start(audio_stream_t *s)
     hda_capture_path(cap_format);
     arch_dma_flush_all();
 
-    hda_report.input.requested_rate = s->rate;
+    hda_report.input.requested_rate = cap_asked;
     hda_report.input.rate = s->rate;
     hda_report.input.format = hda_read16(hda_sd_offset(stream) + HDA_SD_FORMAT);
     hda_report.input.period = cap_period;
