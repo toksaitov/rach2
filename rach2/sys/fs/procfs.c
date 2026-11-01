@@ -35,6 +35,7 @@
 #include "krffs.h"
 #include "../usb/core.h"
 #include "../pci.h"
+#include "../arch/x86/pciconf.h"
 #include "../audio/audio_proc.h"
 #include "../speaker.h"
 #include "../usb/usb.h"
@@ -128,8 +129,8 @@
 
 /* Inode namespace for /sys: a fixed directory by its node, with its
  * attribute files 256 apart above it; a PCI function's directory by its
- * key, doubled, with its uevent one more, and its link by its key in a
- * range of its own; a USB device's directory by its key with the top bit
+ * key times four, with its uevent one more and its config three more, and
+ * its link by its key in a range of its own; a USB device's directory by its key with the top bit
  * set, its uevent with the next bit too, and its link with that bit alone;
  * and an interface's, a disk node's and a processor's directory and files
  * each in a range of its own, by the key from bit 8 and the file in the low
@@ -4487,7 +4488,7 @@ uint32_t sysfs_ino(int node, int key, int file)
         return SYSFS_INO_PCI_LINK + (uint32_t)key;
     }
     if (node == SYSFS_PCI_DEVICE) {
-        return SYSFS_INO_PCI + ((uint32_t)key << 1) + (file ? 1u : 0u);
+        return SYSFS_INO_PCI + ((uint32_t)key << 2) + (uint32_t)file;
     }
     if (node == SYSFS_USB_DEVICE && file == 2) {
         return SYSFS_INO_FILE | (uint32_t)key;
@@ -5272,11 +5273,43 @@ static int procfs_gen_phy(struct procfs_text *t, int key, int attr)
 }
 
 /**
+ * Render the configuration space of the PCI function `key` as Linux's
+ * `config` gives it: its 256 bytes, or 4096 when an ECAM window reaches its
+ * extended space, read a dword at a time; only the 64 bytes of the header
+ * to a reader without privilege, since some devices act on a read of their
+ * own registers. -ENOENT for a function that is not there.
+ */
+static int procfs_gen_pciconfig(struct procfs_text *t, int key)
+{
+    uint8_t bus = (uint8_t)(key >> 8), dev = (uint8_t)((key >> 3) & 31), fn = (uint8_t)(key & 7);
+    uint32_t size = 256, off, v;
+
+    if (!sysfs_pci_present(key)) {
+        return -ENOENT;
+    }
+    if (pci_read_config32_ext(bus, dev, fn, 0x100) != 0xFFFFFFFFu) {
+        size = 4096;
+    }
+    if (!proc_privileged(current_proc)) {
+        size = 64;
+    }
+    for (off = 0; off < size; off += 4) {
+        v = off < 256 ? pci_read_config32(bus, dev, fn, (uint8_t)off)
+                      : pci_read_config32_ext(bus, dev, fn, (uint16_t)off);
+        ap_ch(t, (char)(v & 0xFFu));
+        ap_ch(t, (char)((v >> 8) & 0xFFu));
+        ap_ch(t, (char)((v >> 16) & 0xFFu));
+        ap_ch(t, (char)(v >> 24));
+    }
+    return t->len;
+}
+
+/**
  * Render the /sys file at the path `vp`: an attribute of a backlight, of a
  * disk node, of an interface, of a processor's topology or of a fixed
- * directory, or a device's uevent. `*key` gets the backlight, the disk
- * node, the interface, the processor or the device the file is for, which
- * its descriptor keeps.
+ * directory, a device's uevent, or a PCI function's config. `*key` gets the
+ * backlight, the disk node, the interface, the processor or the device the
+ * file is for, which its descriptor keeps.
  */
 static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int *key)
 {
@@ -5308,6 +5341,9 @@ static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int
         return procfs_gen_sysattr(t, vp->sysent, vp->procfile);
     }
     *key = vp->syskey;
+    if (vp->sysent == SYSFS_PCI_DEVICE && vp->procfile == SYSFS_PCI_CONFIG) {
+        return procfs_gen_pciconfig(t, vp->syskey);
+    }
     return procfs_gen_uevent(t, vp->sysent, vp->syskey);
 }
 

@@ -1040,7 +1040,8 @@ void synth_sys_path(int node, int key, char *out, int cap)
 
 /** A device's node, SYSFS_PCI_DEVICE or SYSFS_USB_DEVICE, at `c` of `n`
  * components below its parent `dir`, which is SYSFS_PCI_LINKS or
- * SYSFS_PCI_ROOT or a USB one: the link or directory, or its uevent. */
+ * SYSFS_PCI_ROOT or a USB one: the link or directory, its uevent, or a PCI
+ * function's config. */
 static int synth_classify_sys_device(const struct comp *c, int n, int dir, struct vpath *vp)
 {
     int pci = dir == SYSFS_PCI_LINKS || dir == SYSFS_PCI_ROOT;
@@ -1055,7 +1056,8 @@ static int synth_classify_sys_device(const struct comp *c, int n, int dir, struc
     if (n == 1) {
         vp->kind =
             dir == SYSFS_PCI_LINKS || dir == SYSFS_USB_LINKS ? VNODE_SYS_LINK : VNODE_SYS_DIR;
-    } else if (comp_eq(c[1], "uevent")) {
+    } else if (comp_eq(c[1], "uevent") || (pci && comp_eq(c[1], "config"))) {
+        vp->procfile = comp_eq(c[1], "config") ? SYSFS_PCI_CONFIG : 0;
         vp->kind = n == 2 ? VNODE_SYS_FILE : VNODE_ENOTDIR;
     } else {
         vp->kind = VNODE_ENOENT;
@@ -1110,7 +1112,7 @@ static int synth_classify_phy(const struct comp *c, int n, int phy, struct vpath
  * The node at `c` of `n` components below /sys/class/net: an interface's
  * directory by its name, an attribute file or its statistics directory and
  * theirs, or its `device`, the link to its card, and that card's uevent
- * through the link.
+ * and config through the link.
  */
 static int synth_classify_sys_net(const struct comp *c, int n, struct vpath *vp)
 {
@@ -1140,7 +1142,8 @@ static int synth_classify_sys_net(const struct comp *c, int n, struct vpath *vp)
             vp->kind = VNODE_ENOENT;
         } else if (n == 2) {
             vp->kind = VNODE_SYS_LINK;
-        } else if (comp_eq(c[2], "uevent")) {
+        } else if (comp_eq(c[2], "uevent") || comp_eq(c[2], "config")) {
+            vp->procfile = comp_eq(c[2], "config") ? SYSFS_PCI_CONFIG : 0;
             vp->kind = n == 3 ? VNODE_SYS_FILE : VNODE_ENOTDIR;
         }
         return vp->kind;

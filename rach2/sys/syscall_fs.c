@@ -13323,6 +13323,10 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
         return synth_entry(sysfs_attr(node, n), sysfs_ino(node, 0, 1 + n), DT_REG, name, ino,
                            dtype);
     }
+    if (node == SYSFS_PCI_DEVICE && n == 1) {
+        return synth_entry("config", sysfs_ino(node, key, 1 + SYSFS_PCI_CONFIG), DT_REG, name, ino,
+                           dtype);
+    }
     if (node == SYSFS_PCI_DEVICE || node == SYSFS_USB_DEVICE) {
         return synth_entry(n == 0 ? "uevent" : NULL, sysfs_ino(node, key, 1), DT_REG, name, ino,
                            dtype);

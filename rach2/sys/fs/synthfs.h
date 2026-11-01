@@ -343,6 +343,10 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_USB_ROOT        8  /* /sys/devices/usb */
 #define SYSFS_PCI_DEVICE      9  /* /sys/devices/pci0000:00/0000:BB:DD.F */
 #define SYSFS_USB_DEVICE      10 /* /sys/devices/usb/B-P[.P...] */
+/* The `procfile` of a PCI function's `config`, its configuration space;
+ * its uevent's is 0. The file numbers of sysfs_ino are one more, and 2 is
+ * the function's link. */
+#define SYSFS_PCI_CONFIG      2
 #define SYSFS_CLASS           11 /* /sys/class */
 #define SYSFS_CLASS_NET       12 /* /sys/class/net */
 #define SYSFS_NET_IF          13 /* /sys/class/net/IF, whose key is its index */
