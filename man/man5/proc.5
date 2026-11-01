@@ -1265,8 +1265,11 @@ SigBlk, SigIgn and SigCgt in hexadecimal, the capability sets,
 NoNewPrivs, Seccomp and Seccomp_filters, the thread's seccomp mode and
 the number of its filters
 .Pq see Xr seccomp 2 ,
-and NStgid, NSpid, NSpgid and NSsid, the IDs in each PID namespace from
-the reader's down to the process's own, separated by tabs.
+NStgid, NSpid, NSpgid and NSsid, the IDs in each PID namespace from
+the reader's down to the process's own, separated by tabs, and
+voluntary_ctxt_switches and nonvoluntary_ctxt_switches, the times the
+scheduler switched away from the thread while it slept or was stopped,
+and while it could still run.
 CapPrm and CapEff are full for a thread that is privileged, one whose
 effective user ID is 0 and which kept its capabilities
 .Pq see Xr capget 2 ,

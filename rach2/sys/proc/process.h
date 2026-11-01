@@ -227,6 +227,11 @@ struct process {
      * process once at its next selection, and clears it when it selects the
      * process or the process blocks again. */
     uint32_t woken;
+    /* The switches away from it while it was blocked or stopped, and while
+     * it could still run, counted by `schedule`: /proc's
+     * voluntary_ctxt_switches and nonvoluntary_ctxt_switches. They wrap. */
+    uint32_t nvcsw;
+    uint32_t nivcsw;
     /* Whether its sleep is one no signal ends (`wq_wait_event_nointr`),
      * which /proc reports as the state D and counts as blocked; a kernel
      * thread's idle wait (`wq_wait_event_idle`) is not marked. */
