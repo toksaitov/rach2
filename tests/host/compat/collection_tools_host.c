@@ -547,7 +547,7 @@ static void collection_accel_row(const char *disk)
 {
     static const char expected[] =
         "etude prepare tools: name QEMU's accelerator with RACH2_QEMU_ACCEL\n"
-        "etude prepare tools: the collection request failed\n";
+        "etude prepare tools: the collection request failed at its tooling job\n";
     char *log = collection_path("accel.stderr");
     char *args[] = {"tool", collection_root, "mtype", "-i", (char *)disk, "::/a file"};
     unsetenv("RACH2_QEMU_ACCEL");

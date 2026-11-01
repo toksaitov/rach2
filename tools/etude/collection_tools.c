@@ -37,7 +37,9 @@ extern char **environ;
 #define COL_MAX     64
 #define COL_CAPTURE (16u << 20)
 static volatile sig_atomic_t col_stop;
-static int col_reported; /* a message has given the reason of a refusal */
+static int col_reported;   /* a message has given the reason of a refusal */
+static const char *col_at; /* the step of the request now running */
+static char col_why[512];  /* the cause of the step's failure, or empty */
 static const char *const col_tools[] = {
     "mattrib", "mcopy",  "mdel",     "mdeltree", "mdir",       "mformat",    "minfo",
     "mlabel",  "mmd",    "mmove",    "mrd",      "mren",       "mtype",      "mke2fs",
@@ -52,7 +54,9 @@ struct col_job {
     struct col_list inputs, disks, outputs, back, dest;
     int uncertain;
     unsigned commands;
-    unsigned cpus; /* the processors of the job's machine, and make's jobs in it */
+    unsigned cpus;   /* the processors of the job's machine, and make's jobs in it */
+    int passthrough; /* the job's status is the tool's own, which the caller judges */
+    int passed;      /* the job ran, and its status is the request's */
 };
 
 static int col_error(const char *format, ...)
@@ -65,6 +69,24 @@ static int col_error(const char *format, ...)
     fputc('\n', stderr);
     col_reported = 1;
     return -1;
+}
+
+/** Record the cause of a failure for the request's refusal; return -1. */
+static int col_failed(const char *format, ...)
+{
+    va_list ap;
+    va_start(ap, format);
+    vsnprintf(col_why, sizeof col_why, format, ap);
+    va_end(ap);
+    return -1;
+}
+
+/** Begin step `name` of the request, which its refusal names. */
+static void col_step(const char *name)
+{
+    col_at = name;
+    *col_why = 0;
+    errno = 0;
 }
 
 static char *col_format(const char *format, ...)
@@ -428,7 +450,42 @@ static int col_wait(struct etude_exec *executor, struct etude_proc *process, con
     return output_error;
 }
 
-/* A child must end with confirmed cleanup before its transfers are removed. */
+/**
+ * Judge how child `name` ended, and record the cause when it failed.
+ *
+ * @return the child's exit status, or -1 when it did not exit, its cleanup is
+ *         unconfirmed, or its output was lost or passed the capture's limit.
+ */
+static int col_exec_end(struct col_job *job, const char *name,
+                        const struct etude_exec_result *result, int capture, int output_error)
+{
+    job->uncertain |= result->cleanup != ETUDE_CLEANUP_CONFIRMED;
+    if (job->uncertain)
+        return col_failed("%s ended without a confirmed cleanup", name);
+    if (output_error)
+        return col_failed("cannot pass on the output of %s", name);
+    if (result->end == ETUDE_END_SIGNALED)
+        return col_failed("%s ended on signal %d", name, result->value);
+    if (result->end != ETUDE_END_EXITED)
+        return col_failed("%s was %s", name, result->end == ETUDE_END_STOPPED ? "stopped" : "lost");
+    if (result->output_error)
+        return col_failed("cannot keep the output of %s: %s", name, strerror(result->output_error));
+    if (capture && result->out.total != result->out.kept)
+        return col_failed("the output of %s passed %u MiB", name, COL_CAPTURE >> 20);
+    if (result->value)
+        col_failed("%s exited %d", name, result->value);
+    return result->value;
+}
+
+/**
+ * Run `argv` in the tree and wait for it, passing its output on, or keeping
+ * its standard output in `*capture` when `capture` is not NULL.
+ *
+ * A child must end with confirmed cleanup before its transfers are removed.
+ * A failure leaves its cause in `col_why`.
+ *
+ * @return the child's exit status, or 2 when it could not be run or judged.
+ */
 static int col_exec(struct col_job *job, char *const argv[], char **capture, size_t *length)
 {
     struct etude_exec *executor = etude_exec_new();
@@ -438,11 +495,20 @@ static int col_exec(struct col_job *job, char *const argv[], char **capture, siz
     int rc = 2, output_error = 0;
     char *out_path = col_format("%s/child-%u.stdout", job->work, ++job->commands);
     char *err_path = col_format("%s/child-%u.stderr", job->work, job->commands);
-    if (col_stop || !out_path || !err_path || !executor || col_program(argv[0], program) ||
-        col_add(&args, program))
+    *col_why = 0;
+    if (col_stop || !out_path || !err_path || !executor) {
+        col_failed(col_stop ? "a signal came before %s started" : "out of memory for %s", argv[0]);
         goto done;
-    if (col_arguments(job, argv, &args))
+    }
+    if (col_program(argv[0], program)) {
+        col_failed("cannot find %s", argv[0]);
         goto done;
+    }
+    if (col_add(&args, program) || col_arguments(job, argv, &args)) {
+        if (!*col_why)
+            col_failed("cannot pass the arguments of %s", argv[0]);
+        goto done;
+    }
     struct etude_exec_spec spec = {.attempt_id = "collection-tools",
                                    .argv = args.v,
                                    .envp = environ,
@@ -451,23 +517,25 @@ static int col_exec(struct col_job *job, char *const argv[], char **capture, siz
                                    .grace_us = 1000000,
                                    .stdout_path = capture ? NULL : out_path,
                                    .stderr_path = *job->work ? err_path : NULL};
-    if (etude_exec_start(executor, &spec, &process))
+    if (etude_exec_start(executor, &spec, &process)) {
+        col_failed("cannot start %s: %s", argv[0], strerror(errno));
         goto done;
+    }
     output_error =
         col_wait(executor, process, capture ? NULL : out_path, *job->work ? err_path : NULL);
     const struct etude_exec_result *result = etude_proc_result(process);
-    job->uncertain |= result->cleanup != ETUDE_CLEANUP_CONFIRMED;
-    if (job->uncertain || output_error || result->end != ETUDE_END_EXITED || result->output_error ||
-        (capture && result->out.total != result->out.kept))
+    int value = col_exec_end(job, argv[0], result, capture != NULL, output_error);
+    if (value < 0)
         goto done;
-    rc = result->value;
+    rc = value;
     if (!*job->work && result->err.kept)
         fwrite(result->err.data, 1, result->err.kept, stderr);
     if (!rc && capture) {
         *capture = malloc(result->out.kept + 1);
-        if (!*capture)
+        if (!*capture) {
+            col_failed("out of memory for the output of %s", argv[0]);
             rc = 2;
-        else {
+        } else {
             memcpy(*capture, result->out.data, result->out.kept);
             (*capture)[result->out.kept] = 0;
             *length = result->out.kept;
@@ -491,6 +559,7 @@ static int col_write(const char *path, const void *bytes, size_t size)
     return fclose(file) || rc ? -1 : 0;
 }
 
+/** Copy the job's outputs to the paths the request named; return `status` or 2. */
 static int col_copy_back(struct col_job *job, int status)
 {
     int rc = status;
@@ -499,15 +568,17 @@ static int col_copy_back(struct col_job *job, int status)
             char *source = col_format("%s/out/%s", job->work, job->back.v[i]);
             struct stat st;
             if (!source)
-                rc = 2;
+                rc = col_error("out of memory");
             else if (lstat(source, &st)) {
                 if (errno != ENOENT)
-                    rc = 2;
+                    rc = col_error("cannot read %s: %s", source, strerror(errno));
             } else if (col_copy(source, job->dest.v[i], 0))
-                rc = 2;
+                rc = col_error("cannot copy %s to %s: %s", source, job->dest.v[i], strerror(errno));
             free(source);
         }
-    return rc;
+    if (rc < 0)
+        job->passed = 0;
+    return rc < 0 ? 2 : rc;
 }
 
 static int col_tooling_status(struct col_job *job, int prepare, int status,
@@ -588,6 +659,13 @@ static int col_tooling(struct col_job *job, int prepare, unsigned volume, unsign
     int status = prepare ? etude_tooling_prepare(&site, job->cpus, 0, &result)
                          : etude_tooling_run(&site, &request, &result);
     rc = col_tooling_status(job, prepare, status, &result);
+    if (!prepare && !status && !job->uncertain && result.status) {
+        if (job->passthrough)
+            job->passed = 1;
+        else
+            col_error("the job in the tooling machine exited %d; its output is above",
+                      result.status);
+    }
     etude_tooling_result_free(&result);
     if (!prepare)
         rc = col_copy_back(job, rc);
@@ -824,6 +902,8 @@ static int col_translate(struct col_job *job, const char *tool, int count, char 
     if (!rc)
         rc = which < 13 ? col_mtools(job, tool, count, args, &words)
                         : col_fstools(job, tool, count, args, &words);
+    if (rc && !*col_why)
+        col_failed("cannot pass the operands of %s to the tooling machine", tool);
     if (!rc) {
         jbuf_puts(script, "set +e\n");
         for (size_t i = 0; i < words.n; i++) {
@@ -1006,8 +1086,10 @@ static int col_style_goals(struct col_job *job, const char *arch, const char *id
             }
         }
     const struct json *prepare = json_member(selected, "prepare");
-    if (matches != 1 || !prepare || prepare->type != JSON_ARRAY)
+    if (matches != 1 || !prepare || prepare->type != JSON_ARRAY) {
+        col_failed("%s has %zu cases %s, not one with a prepare list", manifest, matches, case_id);
         goto done;
+    }
     for (size_t i = 0; i < prepare->count; i++) {
         const char *node = json_text(prepare->item[i], "node");
         const struct json *per = json_member(prepare->item[i], "per_architecture");
@@ -1035,10 +1117,12 @@ static int col_style(struct col_job *job, const char *arch, const char *id)
     struct col_list goals = {0};
     struct jbuf script = {0};
     int rc = 2;
+    col_step("style goals");
     if (!disk || !copy || col_style_goals(job, arch, id, &goals))
         goto done;
+    col_step("workspace copy");
     char *args[] = {"qemu-img", "convert", "-f", "raw", "-O", "raw", "-S", "4k", disk, copy, NULL};
-    rc = col_exec(job, args, NULL, NULL);
+    rc = col_exec(job, args, NULL, NULL) ? 2 : 0;
     if (rc)
         goto done;
     if (col_add(&job->disks, copy) || col_add(&job->outputs, "style-evidence")) {
@@ -1054,6 +1138,7 @@ static int col_style(struct col_job *job, const char *arch, const char *id)
     jbuf_puts(&script, "sh tests/cases/host/style.sh ");
     col_quote(&script, id);
     jbuf_puts(&script, "\n");
+    col_step("tooling job");
     rc = col_run(job, &script, 256, 2048, 0);
     if (rc) {
         const char *tmp = getenv("TMPDIR");
@@ -1225,7 +1310,7 @@ static int col_prepare_goals(struct col_list *native, struct col_list *guest, co
     int manual = 0;
     for (int i = 0; i < count; i++) {
         if (!col_relative(args[i]) || strncmp(args[i], "build/", 6))
-            return -1;
+            return col_failed("the goal %s is not a relative path under build/", args[i]);
         int own = etude_collection_native_goal(args[i]);
         manual |= own && strstr(args[i], "/style/manual.json") != NULL;
         if (col_add(own ? native : guest, args[i]))
@@ -1555,61 +1640,97 @@ static int col_preparation_machine(unsigned *cpus, unsigned *memory)
     return 0;
 }
 
+/**
+ * Make the preparation's workspace and products disk, write its job and run
+ * it in the tooling machine. The job's products are left in `products`.
+ *
+ * @return 0, the job's status, or 2 with the cause in `col_why`.
+ */
+static int col_prepare_job(struct col_job *job, const char *arch, const char *kernel,
+                           struct col_list *guest, unsigned memory, const char *products)
+{
+    col_step("source archive");
+    if (col_source(job))
+        return 2;
+    col_step("workspace");
+    char *disk = col_workspace(job, arch);
+    int bad = !disk || col_workspace_ready(job, disk);
+    if (bad && disk && !errno)
+        col_failed("%s is not a file of 96 GiB", disk);
+    if (!bad) {
+        col_step("products disk");
+        bad = col_disk_create(products, 64ull << 30) || col_add(&job->disks, disk) ||
+              col_add(&job->disks, products);
+    }
+    free(disk);
+    if (bad)
+        return 2;
+    struct jbuf script = {0};
+    col_step("job script");
+    bad = col_prepare_script(job, &script, arch, kernel, guest);
+    uint64_t bytes = 0;
+    struct stat st;
+    if (!bad)
+        col_step("job inputs");
+    for (size_t i = 0; !bad && i < job->inputs.n; i++) {
+        bad = stat(job->inputs.v[i], &st) || st.st_size < 0;
+        if (bad)
+            col_failed("cannot read %s: %s", job->inputs.v[i], strerror(errno));
+        else
+            bytes += (uint64_t)st.st_size;
+    }
+    uint64_t volume = (bytes + 1048575) / 1048576 + 64;
+    if (!bad && volume > 65536)
+        bad = col_failed("the inputs come to %llu MiB, over 64 GiB", (unsigned long long)volume);
+    int rc = 2;
+    if (!bad) {
+        col_step("tooling job");
+        rc = col_run(job, &script, volume < 512 ? 512 : (unsigned)volume, memory, 1);
+    }
+    jbuf_free(&script);
+    return rc;
+}
+
 /** Build guest products in the tooling machine and native goals on the host. */
 static int col_prepare(struct col_job *job, const char *arch, const char *kernel, int count,
                        char *const args[])
 {
     struct col_list native = {0}, guest = {0};
-    struct jbuf script = {0};
-    char *disk = NULL, *products = NULL;
+    char *products = NULL;
     unsigned memory = 0;
     int rc = 2;
+    col_step("goals");
     if (strspn(kernel, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") !=
-            strlen(kernel) ||
-        col_prepare_goals(&native, &guest, arch, kernel, count, args) ||
-        col_preparation_machine(&job->cpus, &memory) ||
-        col_native_inputs(job, arch, &native, &guest))
+        strlen(kernel)) {
+        col_failed("the kernel name %s is not made of letters, digits, - and _", kernel);
         goto done;
+    }
+    if (col_prepare_goals(&native, &guest, arch, kernel, count, args))
+        goto done;
+    col_step("machine");
+    if (col_preparation_machine(&job->cpus, &memory))
+        goto done;
+    col_step("native musl inputs");
+    if (col_native_inputs(job, arch, &native, &guest))
+        goto done;
+    col_step("provisioning");
     rc = col_tooling(job, 1, 0, 0, 0);
     if (rc)
         goto done;
-    if (col_source(job))
-        goto error;
-    disk = col_workspace(job, arch);
     products = col_format("%s/products.tar", job->work);
-    struct stat st;
-    if (!disk || !products)
-        goto error;
-    if (col_workspace_ready(job, disk))
-        goto error;
-    if (col_disk_create(products, 64ull << 30) || col_add(&job->disks, disk) ||
-        col_add(&job->disks, products))
-        goto error;
-    if (col_prepare_script(job, &script, arch, kernel, &guest))
-        goto error;
-    uint64_t bytes = 0;
-    for (size_t i = 0; i < job->inputs.n; i++) {
-        if (stat(job->inputs.v[i], &st) || st.st_size < 0)
-            goto error;
-        bytes += (uint64_t)st.st_size;
+    rc = products ? col_prepare_job(job, arch, kernel, &guest, memory, products) : 2;
+    if (!rc) {
+        col_step("products archive");
+        rc = col_products(job, products, &guest) ? 2 : 0;
     }
-    uint64_t volume = (bytes + 1048575) / 1048576 + 64;
-    if (volume > 65536)
-        goto error;
-    rc = col_run(job, &script, volume < 512 ? 512 : (unsigned)volume, memory, 1);
-    if (!rc)
-        rc = col_products(job, products, &guest);
-    if (!rc)
-        rc = col_native_make(job, arch, &native, &guest);
-    goto done;
-error:
-    rc = 2;
+    if (!rc) {
+        col_step("native build");
+        rc = col_native_make(job, arch, &native, &guest) ? 2 : 0;
+    }
 done:
-    free(disk);
     free(products);
     col_free(&native);
     col_free(&guest);
-    jbuf_free(&script);
     return rc;
 }
 
@@ -1618,16 +1739,35 @@ static int col_dispatch(struct col_job *job, int argc, char **argv)
     int rc = 2;
     if (!strcmp(argv[0], "tool") && argc >= 3) {
         struct jbuf script = {0};
-        if (!col_translate(job, argv[2], argc - 3, argv + 3, &script))
+        col_step("tool request");
+        job->passthrough = 1;
+        if (!col_translate(job, argv[2], argc - 3, argv + 3, &script)) {
+            col_step("tooling job");
             rc = col_run(job, &script, 256, 512, 0);
+        }
         jbuf_free(&script);
     } else if (argc >= 4 && (!strcmp(argv[2], "i686") || !strcmp(argv[2], "x86_64"))) {
         if (!strcmp(argv[0], "prepare"))
             rc = col_prepare(job, argv[2], argv[3], argc - 4, argv + 4);
         else if (!strcmp(argv[0], "style") && argc == 4)
             rc = col_style(job, argv[2], argv[3]);
-    }
+        else
+            col_failed("unknown request: %s with %d operands", argv[0], argc - 1);
+    } else
+        col_failed("unknown request: %s with %d operands", argv[0], argc - 1);
     return rc;
+}
+
+/** Say at which step the request failed, and why, when the step recorded it. */
+static void col_refusal(void)
+{
+    if (*col_why)
+        col_error("the collection request failed at its %s: %s", col_at, col_why);
+    else if (col_reported)
+        col_error("the collection request failed at its %s", col_at);
+    else
+        col_error("the collection request failed at its %s: %s", col_at,
+                  errno ? strerror(errno) : "no cause was recorded");
 }
 
 int etude_collection_tools_main(int argc, char **argv)
@@ -1642,31 +1782,45 @@ int etude_collection_tools_main(int argc, char **argv)
         return col_error("usage: etude prepare tools list|tool|prepare|style [TREE ...]"), 2;
     struct col_job job = {.cpus = 1};
     col_reported = 0;
-    errno = 0;
+    col_step("tree");
     char *root = realpath(argv[1], NULL);
     int rc = 2;
-    if (!root || strlen(root) >= sizeof job.root)
+    if (!root || strlen(root) >= sizeof job.root) {
+        col_failed("cannot resolve %s: %s", argv[1],
+                   root ? "the path is too long" : strerror(errno));
         goto done;
+    }
     strcpy(job.root, root);
+    col_step("work directory");
     int n = snprintf(job.work, sizeof job.work, "%s/build/tests/rach2-collection.XXXXXX", root);
-    if (n < 0 || n >= (int)sizeof job.work || col_dirs(job.work, 1) || !mkdtemp(job.work))
+    if (n < 0 || n >= (int)sizeof job.work || col_dirs(job.work, 1) || !mkdtemp(job.work)) {
+        col_failed("cannot make %s: %s", job.work,
+                   errno ? strerror(errno) : "the path is too long");
         goto done;
+    }
     col_stop = 0;
     col_signals();
 #ifdef _WIN32
     setenv("MSYS2_ARG_CONV_EXCL", "*", 1);
     setenv("MSYS_NO_PATHCONV", "1", 1);
 #endif
+    col_step("request");
     rc = col_dispatch(&job, argc, argv);
+    if (rc < 0)
+        rc = 2;
     if (job.uncertain)
         fprintf(stderr, "etude prepare tools: cleanup unconfirmed; evidence: %s\n", job.work);
-    else if (col_remove(job.work))
+    else if (col_remove(job.work)) {
+        int error = errno;
+        if (rc != 2)
+            col_step("cleanup");
+        col_error("cannot remove %s: %s", job.work, strerror(error));
+        job.passed = 0;
         rc = 2;
+    }
 done:
-    if (rc == 2 && (col_reported || !errno))
-        col_error("the collection request failed");
-    else if (rc == 2)
-        col_error("the collection request failed: %s", strerror(errno));
+    if (rc == 2 && !job.passed)
+        col_refusal();
     free(root);
     col_free(&job.inputs);
     col_free(&job.disks);
