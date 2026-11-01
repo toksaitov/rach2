@@ -202,6 +202,39 @@ empty;
 the highest number a processor may have; and a directory
 .Pa cpuN
 for each processor started.
+.It Pa /sys/devices/system/cpu/cpuN/topology
+Where the processor sits, which
+.Xr lscpu 1
+reads:
+.Pa physical_package_id
+and
+.Pa core_id ,
+its package and its core in the package, as
+.Pa /proc/cpuinfo
+gives them;
+.Pa die_id ,
+.Ql 0 ;
+.Pa thread_siblings
+and
+.Pa core_cpus ,
+the processors started on its core, and
+.Pa core_siblings ,
+.Pa package_cpus
+and
+.Pa die_cpus ,
+those in its package, each a hexadecimal mask such as
+.Ql 3 ,
+and the same as a list in the file of each name with
+.Pa _list
+after it.
+A cluster is a core:
+.Pa cluster_id
+is
+.Pa core_id
+and
+.Pa cluster_cpus
+is
+.Pa core_cpus .
 glibc's
 .Xr sysconf 3
 counts the processors that are online from

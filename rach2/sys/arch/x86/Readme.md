@@ -21,7 +21,7 @@ The platform defines what these shared headers declare. Each header states its c
 | `sys/module.h` | the boot modules | `module.c` |
 | `sys/fpu.h` | a process's floating-point save area | `fpu.c` |
 | `sys/pci.h` | configuration space, I/O BAR ports, the MSI message | `pciconf.c` |
-| `sys/fs/cpuinfo.h` | the text of `/proc/cpuinfo` | `cpuinfo.c` |
+| `sys/fs/cpuinfo.h` | the text of `/proc/cpuinfo`, and each processor's package, core and thread | `cpuinfo.c` |
 | `sys/lib/kirq.h` | the interrupt flag saved around a section | `kirq.c` |
 | `sys/arch/arch.h` | the processor primitives and the hardware breakpoints | `cpu.c`, `debugreg.c` |
 
@@ -168,7 +168,7 @@ Both boot reports read and print and configure nothing. `platform_report` runs t
 * `rach2.diag` (`diag.c`) prints the kernel's end, the free frames and each module's range, and identifies a Realtek 10ec:8168 by its `TxConfig` register, since the family shares one device ID. Before the first program it prints them again with the board, the network card, the disk policy and the entropy source, and waits for a key or a byte on COM1, for a machine whose only output is its screen.
 * `rach2.apicdiag` (`apicdiag.c`) prints what the firmware left in the local APIC, and the MSI and MSI-X capabilities of the first xHCI and HDA controllers.
 
-`cpuinfo_text` (`cpuinfo.c`) writes a processor's block of `/proc/cpuinfo` from `cpuid` on the processor that reads it. `debugreg.c` keeps each thread's debug registers, loads them when it runs, and moves a debug exception taken in kernel mode to the thread's return to user mode, as [ptrace](../../proc/ptrace.Readme.md) describes.
+`cpuinfo_text` (`cpuinfo.c`) writes a processor's block of `/proc/cpuinfo` from `cpuid` on the processor that reads it. `cpuinfo_place` cuts a processor's APIC ID into its package, its core and its thread at the widths `topology_widths` reads: the shifts of leaf 0xB's levels, and without them leaf 1's count of logical processors, divided into cores by leaf 4 on Intel and by leaves 0x80000008 and 0x8000001E on AMD. `cpuinfo_siblings` gives the processors started that share a core or a package, from which `/proc/cpuinfo` counts `siblings` and `cpu cores` and `procfs.c` writes `/sys/devices/system/cpu/cpuN/topology`. `debugreg.c` keeps each thread's debug registers, loads them when it runs, and moves a debug exception taken in kernel mode to the thread's return to user mode, as [ptrace](../../proc/ptrace.Readme.md) describes.
 
 ## Limits
 

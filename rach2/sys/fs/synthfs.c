@@ -725,6 +725,24 @@ const char *sysfs_attr(int node, int n)
     static const char *const wakeup[] = {"wakeup", 0};
     static const char *const power[] = {"mem_sleep", "state", 0};
     static const char *const cpu[] = {"kernel_max", "offline", "online", "possible", "present", 0};
+    /* In the order of procfs.c's procfs_gen_topology. */
+    static const char *const topology[] = {"cluster_cpus",
+                                           "cluster_cpus_list",
+                                           "cluster_id",
+                                           "core_cpus",
+                                           "core_cpus_list",
+                                           "core_id",
+                                           "core_siblings",
+                                           "core_siblings_list",
+                                           "die_cpus",
+                                           "die_cpus_list",
+                                           "die_id",
+                                           "package_cpus",
+                                           "package_cpus_list",
+                                           "physical_package_id",
+                                           "thread_siblings",
+                                           "thread_siblings_list",
+                                           0};
     static const char *const memory[] = {"block_size_bytes", 0};
     static const char *const block[] = {"online", "phys_index", "removable", "state", 0};
     static const char *const disk[] = {
@@ -752,21 +770,22 @@ const char *sysfs_attr(int node, int n)
     /* In the order of backlight.h's BACKLIGHT_ attributes. */
     static const char *const backlight[] = {"actual_brightness", "bl_power", "brightness",
                                             "max_brightness",    "type",     0};
-    const char *const *list = node == SYSFS_NET_IF        ? attrs
-                              : node == SYSFS_NET_STATS   ? stats
-                              : node == SYSFS_RTC0        ? rtc
-                              : node == SYSFS_RTC_POWER   ? wakeup
-                              : node == SYSFS_POWER       ? power
-                              : node == SYSFS_CPU         ? cpu
-                              : node == SYSFS_MEMORY      ? memory
-                              : node == SYSFS_MEMORY0     ? block
-                              : node == SYSFS_BLOCK_DISK  ? disk
-                              : node == SYSFS_BLOCK_PART  ? part
-                              : node == SYSFS_BLOCK_QUEUE ? queue
-                              : node == SYSFS_BLOCK_DEV   ? device
-                              : node == SYSFS_BLOCK_LOOP  ? loop
-                              : node == SYSFS_BACKLIGHT   ? backlight
-                                                          : 0;
+    const char *const *list = node == SYSFS_NET_IF         ? attrs
+                              : node == SYSFS_NET_STATS    ? stats
+                              : node == SYSFS_RTC0         ? rtc
+                              : node == SYSFS_RTC_POWER    ? wakeup
+                              : node == SYSFS_POWER        ? power
+                              : node == SYSFS_CPU          ? cpu
+                              : node == SYSFS_CPU_TOPOLOGY ? topology
+                              : node == SYSFS_MEMORY       ? memory
+                              : node == SYSFS_MEMORY0      ? block
+                              : node == SYSFS_BLOCK_DISK   ? disk
+                              : node == SYSFS_BLOCK_PART   ? part
+                              : node == SYSFS_BLOCK_QUEUE  ? queue
+                              : node == SYSFS_BLOCK_DEV    ? device
+                              : node == SYSFS_BLOCK_LOOP   ? loop
+                              : node == SYSFS_BACKLIGHT    ? backlight
+                                                           : 0;
     int i;
 
     for (i = 0; list && list[i] && i < n; i++) {
@@ -845,9 +864,10 @@ void synth_sys_path(int node, int key, char *out, int cap)
         out[pos] = '\0';
         return;
     }
-    if (node == SYSFS_CPUN) {
+    if (node == SYSFS_CPUN || node == SYSFS_CPU_TOPOLOGY) {
         synth_put(out, cap, &pos, "/sys/devices/system/cpu/cpu");
         synth_put_uint(out, cap, &pos, (unsigned int)key);
+        synth_put(out, cap, &pos, node == SYSFS_CPU_TOPOLOGY ? "/topology" : "");
         out[pos] = '\0';
         return;
     }
@@ -1005,7 +1025,8 @@ static int sys_cpu_of(struct comp c)
  * The node at `c` of `n` components below the fixed directory `node`, the
  * clock's class, the sleep states' directory or /sys/devices/system: the
  * directories under it by their names, as `chain` gives them, a processor's
- * by its number, and at the end an attribute file of the last.
+ * by its number and its `topology`, and at the end an attribute file of the
+ * last.
  */
 static int synth_classify_sys_fixed(const struct comp *c, int n, int node, struct vpath *vp)
 {
@@ -1023,6 +1044,11 @@ static int synth_classify_sys_fixed(const struct comp *c, int n, int node, struc
         if (node == SYSFS_CPU && (cpu = sys_cpu_of(c[at])) >= 0) {
             node = SYSFS_CPUN;
             vp->syskey = cpu;
+            at++;
+            continue;
+        }
+        if (node == SYSFS_CPUN && comp_eq(c[at], "topology")) {
+            node = SYSFS_CPU_TOPOLOGY;
             at++;
             continue;
         }

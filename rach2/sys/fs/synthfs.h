@@ -323,14 +323,15 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_BLOCK_LOOP      32 /* /sys/block/loopN/loop, while a file backs it */
 #define SYSFS_CLASS_BACKLIGHT 33 /* /sys/class/backlight */
 #define SYSFS_BACKLIGHT       34 /* /sys/class/backlight/NAME, whose key is its index */
+#define SYSFS_CPU_TOPOLOGY    35 /* /sys/devices/system/cpu/cpuN/topology, whose key is N */
 
 /** Whether the /sys directory `node` is one of a device, an interface, a
  * processor or a disk node, which `syskey` says, and which exists only while
  * that does. */
 #define SYSFS_KEYED(node)                                                                  \
     ((node) == SYSFS_PCI_DEVICE || (node) == SYSFS_USB_DEVICE || (node) == SYSFS_NET_IF || \
-     (node) == SYSFS_NET_STATS || (node) == SYSFS_CPUN || (node) == SYSFS_BACKLIGHT ||     \
-     SYSFS_IS_BLOCK(node))
+     (node) == SYSFS_NET_STATS || (node) == SYSFS_CPUN || (node) == SYSFS_CPU_TOPOLOGY ||  \
+     (node) == SYSFS_BACKLIGHT || SYSFS_IS_BLOCK(node))
 
 /** Whether `node` is a directory of a disk node: its own, its queue's, its
  * device's or a loop device's `loop`. */
