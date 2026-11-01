@@ -586,3 +586,8 @@ Batch 3, the build, the images and the tests (#1778):
 * medium, Codex: os-real's images carry no `term`. Task 28 put `term` in os-real's manifest, and `krffs/manifests/os-real.manifest:100` stages its sources but not `/bin/term` or its font.
 * style: `tests/cases/machine.installer.json:53`, `stick-update`, has a `memory_bytes` that does not reserve QEMU's memory and overhead. Suitecheck finds fixed sleeps that no case declares in `tests/cases/host/build_ports.c:157`, `build_together.c:285`, `flow_status.c:109`, `flow_tooling.c:240`, `host_products_drive.c:140,291,296` and `host_suite_probe.c:137`, and sleeps without a reason in `tests/musl/clockmusl.c:122` and `tests/lagprobe.c:369`. Shellcheck flags `tools/flow/release.sh:1327` (SC2015). Comment lines over 80 columns are in `tools/flow/release.sh:153`, `tools/verify/guestcheck.c:6`, `tests/cases/machine/seabios_scenario.c:9-12`, `usb_scenario.c:341` and `tests/host/etude_artifact_hosttest.c:937`. `vendor/unifont/Readme.md:13` has a heading out of order.
 * low, Codex: `man/programs.md:22` lists `dumpkeys`, `kbd_mode` and `showkey` for recovery, whose manifest leaves them out.
+
+Batch 4, the host tests (#1779), found by `tests/run -a both host` on c1d6caeda, which stopped at preparation:
+
+* `tests/host/fixtures/krffs_open.c:255,262` declares `open_framebuffer` and `open_mouse` with no arguments, and `syscall_open.inc:57` now passes `flags`.
+* `hub_hosttest` links `rach2/sys/usb/core.c`, which now calls `hid_led_sent` and `hid_led_report`, and the test defines neither. The batch builds every host test with `make -k` to find any more.
