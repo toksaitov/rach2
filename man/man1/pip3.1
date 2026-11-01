@@ -1,0 +1,63 @@
+.Dd November 2, 2026
+.Dt PIP3 1
+.Os
+.Sh NAME
+.Nm pip3 ,
+.Nm pip3.14
+.Nd install Python packages
+.Sh SYNOPSIS
+.Nm
+.Ar command
+.Op Ar options ...
+.Nm python3
+.Fl m Cm pip
+.Ar command
+.Op Ar options ...
+.Sh DESCRIPTION
+.Nm
+installs Python packages on the GNU root.
+The Python port installs the pip wheel bundled with its pinned source,
+using
+.Cm ensurepip
+without a network connection.
+.Ql python3 -m pip
+runs pip with that interpreter.
+.Ql pip3 help
+lists its commands, and
+.Ql pip3 help install
+describes the install options.
+.Pp
+Root can install packages outside a virtual environment, under
+.Pa /usr/lib/python3.14/site-packages ,
+with commands in
+.Pa /usr/bin .
+An ordinary user can install with
+.Fl -user
+under
+.Pa ~/.local ,
+or use
+.Ql python3 -m venv DIR
+and
+.Ql DIR/bin/python -m pip .
+The root has no externally managed environment marker.
+.Pp
+A pure-Python wheel needs no compiler.
+A source package or a wheel with native code may need further libraries
+or kernel interfaces.
+.Sh EXAMPLES
+Install a local wheel without consulting a package index:
+.Bd -literal -offset indent
+$ python3 -m pip install --no-index ./example-1.0-py3-none-any.whl
+.Ed
+.Pp
+Show the installed packages:
+.Bd -literal -offset indent
+$ python3 -m pip list
+.Ed
+.Pp
+Remove a package:
+.Bd -literal -offset indent
+$ python3 -m pip uninstall example
+.Ed
+.Sh SEE ALSO
+.Xr python3 1
