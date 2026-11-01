@@ -90,6 +90,7 @@ static hda_report_t hda_report;
 
 /* Stream info */
 static uint16_t output_stream_index = 0; /* Set during init based on GCAP */
+static uint16_t input_stream_index = 0;  /* the descriptor capture uses */
 static uint32_t stream_tag = 1;
 
 /* CORB/RIRB buffers (must be 128-byte aligned, volatile for DMA). These and
@@ -1371,6 +1372,198 @@ const hda_report_t *hda_get_report(void)
     return &hda_report;
 }
 
+/*
+ * The input path: the ADC, the pin it records from and a mixer or selector
+ * between them, which hda_find_input chooses from the report's widgets. The
+ * input stream itself is further on, by the stream operations.
+ */
+static uint8_t adc_nid = 0;       /* ADC the input stream records from */
+static uint8_t in_pin_nid = 0;    /* the pin it records */
+static uint8_t in_conn_idx = 0;   /* the ADC's connection toward the pin */
+static uint8_t in_mid_nid = 0;    /* a mixer or selector between, or 0 */
+static uint8_t in_mid_idx = 0;    /* its connection to the pin */
+static uint8_t int_mic_nid = 0;   /* the internal microphone's pin */
+static uint8_t jack_mic_nid = 0;  /* the microphone jack's pin */
+static uint8_t capture_level = 0; /* the ADC's input gain in steps */
+
+/*
+ * The input stream. Its DMA buffer is `cap_periods` periods of `cap_period`
+ * bytes, which the ADC fills with 16-bit samples in its own channels at a
+ * rate it has; the service converts each finished period to the reader's
+ * format and channels, hands it over with `transfer` and calls `period`.
+ * No rate is converted: stream_setup grants the ADC's rate nearest the one
+ * asked for. The service runs from the interrupt and the tick under
+ * `cap_lock`, with interrupts off; the stream operations take the lock to
+ * change what it reads.
+ */
+#define HDA_CAPTURE_TAG     2      /* the input stream's tag; playback's is 1 */
+#define HDA_CAPTURE_BUFFER  65536u /* bytes of the DMA buffer at most */
+#define HDA_CAPTURE_PERIOD  16384u /* bytes of one DMA period at most */
+#define HDA_CAPTURE_ENTRIES 32u    /* periods in the DMA buffer at most */
+
+static volatile hda_bdl_entry_t cap_bdl[HDA_CAPTURE_ENTRIES] __attribute__((aligned(128)));
+static uint8_t cap_buffer[HDA_CAPTURE_BUFFER] __attribute__((aligned(128)));
+static uint8_t cap_out[HDA_CAPTURE_PERIOD]; /* a period in the reader's format */
+static struct spinlock cap_lock = SPINLOCK_INIT;
+static audio_stream_t *cap_stream = NULL; /* the open input stream, or NULL */
+static volatile bool cap_running = false;
+static uint16_t cap_format = 0;   /* the stream format word stream_setup chose */
+static uint32_t cap_period = 0;   /* bytes of one DMA period; 0 before a setup */
+static uint32_t cap_periods = 0;  /* periods in the DMA buffer */
+static uint32_t cap_frame = 4;    /* bytes of one frame in the DMA buffer */
+static uint32_t cap_next = 0;     /* the period the service hands over next */
+static uint32_t cap_pos = 0;      /* the position at the last service, bytes */
+static uint32_t cap_clock = 0;    /* the wall clock at the last service */
+static uint32_t cap_recorded = 0; /* frames recorded up to `cap_pos` */
+static uint32_t cap_handed = 0;   /* frames handed to the reader */
+
+static void hda_service_capture(void);
+static void hda_capture_stop(audio_stream_t *s);
+
+/* The PCI subsystem, vendor in the high half, which names a machine's
+ * quirks; hda_init reads it. */
+static uint32_t hda_subsystem = 0;
+
+/* Machines whose internal microphone is a stereo pair of digital mics with
+ * the right one inverted, so that the two channels cancel when mixed:
+ * Linux's CXT_FIXUP_STEREO_DMIC. */
+static const uint32_t hda_inv_dmic_machines[] = {
+    0x17AA3978, /* Lenovo G50-70 */
+};
+
+/** The report's entry for widget `nid`, or NULL for a node outside the
+ * function group. */
+static hda_widget_report_t *hda_widget(uint16_t nid)
+{
+    if (nid < afg_widget_start || nid >= (unsigned)afg_widget_start + afg_widget_count ||
+        (int)(nid - afg_widget_start) >= hda_report.widget_count)
+        return NULL;
+    return &hda_report.widgets[nid - afg_widget_start];
+}
+
+/** The index of `nid` in widget `w`'s connection list, or -1. */
+static int hda_conn_index(const hda_widget_report_t *w, uint16_t nid)
+{
+    int i;
+
+    for (i = 0; w && i < w->conn_count; i++)
+        if (w->conns[i] == nid)
+            return i;
+    return -1;
+}
+
+/**
+ * Find how ADC `adc` reaches pin `pin`: directly, or through one mixer or
+ * selector among its connections. Return true and set `*index` to the ADC's
+ * connection, `*mid` to the mixer or selector (0 when direct) and
+ * `*mid_index` to its connection to the pin; false when there is no such
+ * route. Reads only the report, so it sends no verb.
+ */
+static bool hda_input_route(uint8_t adc, uint8_t pin, uint8_t *index, uint8_t *mid,
+                            uint8_t *mid_index)
+{
+    const hda_widget_report_t *a = hda_widget(adc);
+    int i, j;
+
+    if (!a || !pin)
+        return false;
+    if ((i = hda_conn_index(a, pin)) >= 0) {
+        *index = (uint8_t)i;
+        *mid = 0;
+        *mid_index = 0;
+        return true;
+    }
+    for (i = 0; i < a->conn_count; i++) {
+        const hda_widget_report_t *m = hda_widget(a->conns[i]);
+
+        if (!m || (m->type != HDA_WIDGET_AUDIO_MIX && m->type != HDA_WIDGET_AUDIO_SEL))
+            continue;
+        if ((j = hda_conn_index(m, pin)) >= 0) {
+            *index = (uint8_t)i;
+            *mid = m->nid;
+            *mid_index = (uint8_t)j;
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Choose the input path from the widgets in the report: the pins, the ADC
+ * and the capture level. hda_find_output calls it once the report has every
+ * widget.
+ *
+ * A pin is an input when its pin caps say it can take input (bit 5) and its
+ * configuration default says something is connected. The internal mic is the
+ * first fixed microphone pin, the jack mic the first microphone in a jack;
+ * the pin recorded is the internal mic, else the jack mic, else the first
+ * line in. The ADC is the first, in node order, that reaches that pin, and
+ * of those it prefers one that reaches the other microphone too, so that a
+ * later switch between the two needs only its connection select. The
+ * capture level starts at the ADC's 0 dB step, the offset of its input
+ * amplifier. On a machine of hda_inv_dmic_machines the internal mic is
+ * marked inverted.
+ */
+static void hda_find_input(void)
+{
+    hda_input_report_t *in = &hda_report.input;
+    uint8_t line_in = 0, pin, other;
+    int i, best = -1;
+
+    adc_nid = in_pin_nid = in_conn_idx = in_mid_nid = in_mid_idx = 0;
+    int_mic_nid = jack_mic_nid = capture_level = 0;
+    for (i = 0; i < hda_report.widget_count; i++) {
+        const hda_widget_report_t *w = &hda_report.widgets[i];
+        uint8_t port = (uint8_t)HDA_PIN_DEF_PORT(w->config);
+        uint8_t dev = (uint8_t)HDA_PIN_DEF_DEV(w->config);
+
+        if (w->type != HDA_WIDGET_PIN || !(w->pin_caps & (1u << 5)) || /* Input Capable */
+            port == HDA_PORT_CONN_NONE)
+            continue;
+        if (dev == HDA_DEF_DEV_MIC_IN && port == HDA_PORT_CONN_FIXED && !int_mic_nid)
+            int_mic_nid = w->nid;
+        else if (dev == HDA_DEF_DEV_MIC_IN && port != HDA_PORT_CONN_FIXED && !jack_mic_nid)
+            jack_mic_nid = w->nid;
+        else if (dev == HDA_DEF_DEV_LINE_IN && !line_in)
+            line_in = w->nid;
+    }
+    pin = int_mic_nid ? int_mic_nid : jack_mic_nid ? jack_mic_nid : line_in;
+    other = pin == int_mic_nid ? jack_mic_nid : int_mic_nid;
+    for (i = 0; pin && i < hda_report.widget_count; i++) {
+        const hda_widget_report_t *w = &hda_report.widgets[i];
+        uint8_t index, mid, mid_index;
+        int score;
+
+        if (w->type != HDA_WIDGET_AUDIO_IN ||
+            !hda_input_route(w->nid, pin, &index, &mid, &mid_index))
+            continue;
+        score = other && hda_input_route(w->nid, other, &index, &mid, &mid_index) ? 1 : 0;
+        if (score > best) {
+            best = score;
+            adc_nid = w->nid;
+        }
+    }
+    if (adc_nid) {
+        in_pin_nid = pin;
+        hda_input_route(adc_nid, pin, &in_conn_idx, &in_mid_nid, &in_mid_idx);
+        capture_level = (uint8_t)(hda_widget(adc_nid)->amp_in & 0x7F); /* Offset: 0 dB */
+    }
+
+    in->adc = adc_nid;
+    in->pin = in_pin_nid;
+    in->index = in_conn_idx;
+    in->mid = in_mid_nid;
+    in->mid_index = in_mid_idx;
+    in->int_mic = int_mic_nid;
+    in->jack_mic = jack_mic_nid;
+    in->level = capture_level;
+    in->inv_dmic = false;
+    for (i = 0; int_mic_nid && i < (int)(sizeof(hda_inv_dmic_machines) / sizeof(uint32_t)); i++)
+        if (hda_subsystem == hda_inv_dmic_machines[i])
+            in->inv_dmic = true;
+    hda_read_caps(adc_nid, &in->caps);
+}
+
 /**
  * Drive the codec's GPIO pins high to enable external amplifiers.
  *
@@ -1456,7 +1649,8 @@ static bool is_hdmi_codec(uint32_t vendor_id)
  * that is a DAC, else the first DAC in its list.
  *
  * The chosen pin, DAC, optional mixer, and headphone pin/DAC are left in the
- * file-scope routing globals and the report. Returns false if no usable
+ * file-scope routing globals and the report, and hda_find_input then
+ * chooses the input path from the report's widgets. Returns false if no usable
  * codec, function group, pin or DAC is found, or the codec's node counts are
  * out of range.
  */
@@ -1733,6 +1927,7 @@ static bool hda_find_output(void)
     }
 
     hda_capture_report();
+    hda_find_input();
     hda_report.ready = true;
     return true;
 }
@@ -1790,12 +1985,25 @@ static uint16_t hda_calc_format(uint32_t sample_rate, audio_format_t format, int
     return 0xFFFF;
 }
 
+/** INTCTL's value: the global interrupt enable, the output stream's bit,
+ * and the input stream's when the controller has one. */
+static uint32_t hda_intctl(void)
+{
+    uint32_t v = 0x80000000u | (1u << output_stream_index);
+
+    if (num_input_streams > 0)
+        v |= 1u << input_stream_index;
+    return v;
+}
+
 /**
- * HDA interrupt handler: acknowledge the output stream IRQ and refill.
+ * HDA interrupt handler: acknowledge each stream's interrupt and serve it.
  *
- * Returns immediately after shutdown or if INTSTS does not flag the stream. It
- * clears the stream's status register (write-1-to-clear) and services the
- * stream to refill the next DMA period.
+ * Returns immediately after shutdown. For each stream INTSTS flags, the
+ * input stream and then the output stream, it clears the stream's status
+ * register (write-1-to-clear) and services the stream: the input stream
+ * hands its finished periods to the reader, the output stream refills the
+ * next DMA period.
  */
 static void hda_irq_handler(isr_params_t *params)
 {
@@ -1808,6 +2016,11 @@ static void hda_irq_handler(isr_params_t *params)
     }
 
     intsts = hda_read32(HDA_INTSTS);
+    if (num_input_streams > 0 && (intsts & (1u << input_stream_index))) {
+        sd_sts = hda_read8(hda_sd_offset(input_stream_index) + HDA_SD_STS);
+        hda_write8(hda_sd_offset(input_stream_index) + HDA_SD_STS, sd_sts);
+        hda_service_capture();
+    }
     if (!(intsts & (1 << output_stream_index))) {
         return;
     }
@@ -1867,7 +2080,7 @@ static void hda_msi_start(void)
         msi_vector = -1;
         return;
     }
-    hda_write32(HDA_INTCTL, 0x80000000 | (1 << output_stream_index));
+    hda_write32(HDA_INTCTL, hda_intctl());
     klog(KLOG_INFO, "audio", "interrupts: messages on vector %d", msi_vector);
 }
 
@@ -1948,6 +2161,11 @@ static int hda_init(void)
     }
 
     hda_base = mapped;
+    hda_subsystem =
+        ((uint32_t)pci_read_config16(hda_pci.bus, hda_pci.device, hda_pci.function,
+                                     PCI_SUBSYSTEM_VENDOR_ID)
+         << 16) |
+        pci_read_config16(hda_pci.bus, hda_pci.device, hda_pci.function, PCI_SUBSYSTEM_ID);
 
     pci_enable_bus_master(&hda_pci);
     pci_enable_memory_space(&hda_pci);
@@ -1964,8 +2182,10 @@ static int hda_init(void)
     num_output_streams = (gcap >> 12) & 0xF;
     num_input_streams = (gcap >> 8) & 0xF;
 
-    /* Output streams come after input streams in the descriptor array */
+    /* Output streams come after input streams in the descriptor array; the
+     * input stream is the first of them. */
     output_stream_index = num_input_streams;
+    input_stream_index = 0;
 
     if (num_output_streams == 0) {
         return -1;
@@ -1985,8 +2205,7 @@ static int hda_init(void)
     if (hda_pci.irq > 0 && hda_pci.irq < 16) {
         register_isr_handler((uint8_t)IRQ_VECTOR(hda_pci.irq), hda_irq_handler, "hda");
 
-        /* INTCTL: the global interrupt enable plus the output stream's bit. */
-        hda_write32(HDA_INTCTL, 0x80000000 | (1 << output_stream_index));
+        hda_write32(HDA_INTCTL, hda_intctl());
     }
 
     hda_msi_start();
@@ -2006,6 +2225,9 @@ static void hda_shutdown(void)
 
     if (playing) {
         hda_driver.stop();
+    }
+    if (cap_stream) {
+        hda_capture_stop(cap_stream);
     }
 
     hda_write32(HDA_INTCTL, 0); /* disable all interrupts */
@@ -3053,6 +3275,7 @@ void hda_read_queue(void)
 void hda_tick(void)
 {
     hda_service_stream();
+    hda_service_capture();
 }
 
 /** Whether playback is running. */
@@ -3191,25 +3414,461 @@ static int hda_get_volume(void)
     return hda_volume;
 }
 
+/** The input stream's position in its DMA buffer, in bytes, read as the
+ * output stream's is (hda_stream_position). */
+static uint32_t hda_input_position(void)
+{
+    uint32_t idx = (uint32_t)input_stream_index * 2u;
+
+    if (dma_posbuf_use && idx < (uint32_t)(HDA_MAX_STREAMS * 2)) {
+        hda_dma_sync_range(&dma_posbuf[idx], (uint32_t)sizeof(uint32_t));
+        return dma_posbuf[idx];
+    }
+    return hda_sd_read32(input_stream_index, HDA_SD_LPIB);
+}
+
+/**
+ * The rate nearest `rate`, the higher of two as near, among those the ADC
+ * has with 16-bit PCM, with its index in hda_rates in `*index`; 0 when the
+ * ADC has none.
+ */
+static uint32_t hda_input_rate(uint32_t rate, unsigned *index)
+{
+    const hda_caps_report_t *c = &hda_report.input.caps;
+    uint32_t best = 0, best_d = 0;
+    unsigned i;
+
+    if (!(c->formats & 1) || !(c->pcm & (1u << 17)))
+        return 0;
+    for (i = 0; i < sizeof(hda_rates) / sizeof(hda_rates[0]); i++) {
+        uint32_t r = hda_rates[i].rate;
+        uint32_t d = r > rate ? r - rate : rate - r;
+
+        if ((c->pcm & (1u << i)) && (!best || d <= best_d)) {
+            best = r;
+            best_d = d;
+            *index = i;
+        }
+    }
+    return best;
+}
+
+/**
+ * Whole revolutions of the DMA buffer, of `buf` bytes, that the device made
+ * in `ticks` of the wall clock beyond the `moved` bytes the position shows:
+ * the elapsed time in frames less those moved, to the nearest buffer. Counted
+ * in milliseconds, so that no product passes 32 bits; a buffer is longer than
+ * two of them at any rate.
+ */
+static uint32_t hda_capture_laps(uint32_t ticks, uint32_t moved, uint32_t buf)
+{
+    uint32_t ms = ticks / 24000u;
+    uint32_t rate = hda_report.input.rate;
+    uint32_t frames = ms * (rate / 1000u) + ms * (rate % 1000u) / 1000u;
+    uint32_t buf_frames = buf / cap_frame;
+    uint32_t moved_frames = moved / cap_frame;
+
+    if (frames <= moved_frames)
+        return 0;
+    return (frames - moved_frames + buf_frames / 2) / buf_frames;
+}
+
+/**
+ * Convert the DMA period at `src` into cap_out in the format and channels of
+ * `s`; return the bytes. Two channels go to one as their mean. With the
+ * inverted internal mic recorded, the right channel is a copy of the left.
+ */
+static uint32_t hda_capture_convert(const audio_stream_t *s, const uint8_t *src)
+{
+    uint32_t frames = cap_period / cap_frame;
+    bool left_only = hda_report.input.inv_dmic && in_pin_nid == int_mic_nid;
+    uint32_t f, o = 0;
+    int c;
+
+    for (f = 0; f < frames; f++, src += cap_frame) {
+        int16_t v[2];
+
+        v[0] = (int16_t)((uint16_t)src[0] | ((uint16_t)src[1] << 8));
+        v[1] = cap_frame == 4 && !left_only ? (int16_t)((uint16_t)src[2] | ((uint16_t)src[3] << 8))
+                                            : v[0];
+        if (s->channels == 1)
+            v[0] = (int16_t)(((int32_t)v[0] + v[1]) / 2);
+        for (c = 0; c < s->channels; c++) {
+            uint16_t u = (uint16_t)v[c];
+
+            if (s->format == AUDIO_U8) {
+                cap_out[o++] = (uint8_t)((u >> 8) ^ 0x80);
+            } else {
+                cap_out[o++] = (uint8_t)u;
+                cap_out[o++] = (uint8_t)(u >> 8);
+            }
+        }
+    }
+    return o;
+}
+
+/**
+ * Hand the input stream's finished periods to its reader, from the
+ * interrupt and the tick with interrupts off.
+ *
+ * The periods finished are those from `cap_next` to the one the position is
+ * in. The device overruns when it comes round to `cap_next` again before a
+ * service, which the position alone cannot show when it made a whole
+ * revolution, so the wall clock counts those. On an overrun the period the
+ * device writes is lost and the rest, from the one after it, are handed
+ * over: the newest whole revolution, in order. A service already under way
+ * elsewhere is left to finish alone.
+ */
+static void hda_service_capture(void)
+{
+    audio_stream_t *s;
+    uint32_t flags, buf, pos, now, moved, laps, cur;
+
+    if (!cap_running)
+        return;
+    flags = kirq_save();
+    if (!spin_trylock(&cap_lock)) {
+        kirq_restore(flags);
+        return;
+    }
+    if (!cap_running || !hda_base)
+        goto out;
+    s = cap_stream;
+    buf = cap_period * cap_periods;
+    pos = hda_input_position() % buf;
+    now = hda_read32(HDA_WALCLK);
+    moved = (pos + buf - cap_pos) % buf;
+    laps = hda_capture_laps(now - cap_clock, moved, buf);
+    cur = pos / cap_period;
+    if (laps > 0 || moved >= buf - cap_pos % cap_period) {
+        hda_report.input.overruns++;
+        cap_next = (cur + 1) % cap_periods;
+    }
+    cap_recorded += (moved + laps * buf) / cap_frame;
+    cap_pos = pos;
+    cap_clock = now;
+    while (cap_next != cur) {
+        const uint8_t *src = cap_buffer + cap_next * cap_period;
+
+        hda_dma_sync_range(src, cap_period);
+        s->transfer(s, cap_out, hda_capture_convert(s, src));
+        s->period(s);
+        cap_handed += cap_period / cap_frame;
+        cap_next = (cap_next + 1) % cap_periods;
+    }
+    hda_report.input.frames = cap_handed;
+    hda_report.input.lpib = pos;
+out:
+    spin_unlock(&cap_lock);
+    kirq_restore(flags);
+}
+
+/** Set input amplifier `index` of `nid`: `which` is 0x7000 for both
+ * channels, 0x6000 for the left and 0x5000 for the right; `mute` is 0x80 or
+ * 0. */
+static void hda_set_in_amp(uint8_t nid, uint32_t which, uint8_t index, uint8_t mute, uint8_t gain)
+{
+    hda_send_verb(codec_addr, nid,
+                  HDA_VERB_SET_AMP_GAIN | which | ((uint32_t)index << 8) | mute | (gain & 0x7F));
+}
+
+/**
+ * Program the input path for format word `fmt`: power each widget, give the
+ * ADC the format and the input stream's tag and select the pin, and enable
+ * the pin's input.
+ *
+ * The ADC's input amplifier on the pin's connection is the capture level,
+ * unmuted, and its others are muted; with the inverted internal mic its
+ * right channel is muted too. A mixer or selector between passes the pin at
+ * 0 dB. A microphone pin gets its bias, VREF 80% where its caps have it,
+ * else 50%, else 100%; a line in gets none. The pin's own input amplifier,
+ * a boost on most codecs, is at its 0 dB step.
+ */
+static void hda_capture_path(uint16_t fmt)
+{
+    const hda_widget_report_t *a = hda_widget(adc_nid);
+    const hda_widget_report_t *p = hda_widget(in_pin_nid);
+    const hda_widget_report_t *m = in_mid_nid ? hda_widget(in_mid_nid) : NULL;
+    uint32_t vref = (p->pin_caps >> 8) & 0xFF; /* VRef Control: Hi-Z, 50%, ground, -, 80%, 100% */
+    uint16_t pin_ctl = 0x20;                   /* In Enable */
+    uint8_t mute_cap = (a->amp_in & 0x80000000u) ? 0x80 : 0;
+    int i;
+
+    hda_send_verb(codec_addr, audio_fg_nid, HDA_VERB_SET_POWER | 0x00);
+    hda_send_verb(codec_addr, adc_nid, HDA_VERB_SET_POWER | 0x00);
+    hda_send_verb(codec_addr, adc_nid, HDA_VERB_SET_CONV_FMT | fmt);
+    hda_send_verb(codec_addr, adc_nid, HDA_VERB_SET_CHANNEL | (HDA_CAPTURE_TAG << 4));
+    if (a->conn_count > 1)
+        hda_send_verb(codec_addr, adc_nid, HDA_VERB_SET_CONN_SEL | in_conn_idx);
+    if (a->caps & (1u << 1)) { /* In Amp Present */
+        /* Amplifier input indices are four bits. */
+        for (i = 0; i < a->conn_count && i < 16; i++)
+            if (i != in_conn_idx && mute_cap)
+                hda_set_in_amp(adc_nid, 0x7000, (uint8_t)i, 0x80, 0);
+        if (hda_report.input.inv_dmic && in_pin_nid == int_mic_nid) {
+            hda_set_in_amp(adc_nid, 0x6000, in_conn_idx, 0, capture_level);
+            hda_set_in_amp(adc_nid, 0x5000, in_conn_idx, mute_cap, capture_level);
+        } else {
+            hda_set_in_amp(adc_nid, 0x7000, in_conn_idx, 0, capture_level);
+        }
+    }
+    if (m) {
+        hda_send_verb(codec_addr, m->nid, HDA_VERB_SET_POWER | 0x00);
+        if (m->type == HDA_WIDGET_AUDIO_SEL)
+            hda_send_verb(codec_addr, m->nid, HDA_VERB_SET_CONN_SEL | in_mid_idx);
+        if (m->caps & (1u << 1))
+            hda_set_in_amp(m->nid, 0x7000, in_mid_idx, 0, (uint8_t)(m->amp_in & 0x7F));
+        if (m->caps & (1u << 2))
+            hda_send_verb(codec_addr, m->nid, HDA_VERB_SET_AMP_GAIN | 0xB000 | (m->amp_out & 0x7F));
+    }
+    hda_send_verb(codec_addr, in_pin_nid, HDA_VERB_SET_POWER | 0x00);
+    if (HDA_PIN_DEF_DEV(p->config) == HDA_DEF_DEV_MIC_IN) {
+        if (vref & 0x10)
+            pin_ctl |= 4;
+        else if (vref & 0x02)
+            pin_ctl |= 1;
+        else if (vref & 0x20)
+            pin_ctl |= 5;
+    }
+    hda_send_verb(codec_addr, in_pin_nid, HDA_VERB_SET_PIN_CTRL | pin_ctl);
+    if (p->caps & (1u << 1))
+        hda_set_in_amp(in_pin_nid, 0x7000, 0, 0, (uint8_t)(p->amp_in & 0x7F));
+    hda_report.input.pin_ctl = pin_ctl;
+}
+
+/** Take the input stream for `s`: 0, -EBUSY while it is taken, or -ENODEV
+ * when the controller has no input stream or the codec no input path. */
+static int hda_capture_open(audio_stream_t *s)
+{
+    if (!hda_report.ready || !adc_nid || num_input_streams == 0)
+        return -ENODEV;
+    if (cap_stream)
+        return -EBUSY;
+    cap_stream = s;
+    cap_period = 0;
+    return 0;
+}
+
+/**
+ * Grant `s` the ADC's rate nearest its own, its format and channels, and a
+ * period of the frames it asks for or fewer: a whole number of the DMA
+ * descriptors' 128 bytes in the ADC's frames, at most HDA_CAPTURE_PERIOD of
+ * them. The DMA buffer is as many periods as fit in HDA_CAPTURE_BUFFER, at
+ * most HDA_CAPTURE_ENTRIES. 0, or -EINVAL for a format, channel count or
+ * period it cannot grant, or while the stream runs.
+ */
+static int hda_capture_setup(audio_stream_t *s)
+{
+    const hda_widget_report_t *a = hda_widget(adc_nid);
+    uint32_t frame, hw_frame, frames, align, rate, n;
+    unsigned index = 0;
+
+    if (s != cap_stream || cap_running || (s->format != AUDIO_U8 && s->format != AUDIO_S16LE) ||
+        s->channels < 1 || s->channels > 2)
+        return -EINVAL;
+    rate = hda_input_rate(s->rate, &index);
+    hw_frame = (a->caps & 1) ? 4u : 2u; /* Stereo */
+    frame = (uint32_t)s->channels * (s->format == AUDIO_S16LE ? 2u : 1u);
+    align = 128u / hw_frame;
+    frames = s->period_bytes / frame;
+    if (frames > HDA_CAPTURE_PERIOD / hw_frame)
+        frames = HDA_CAPTURE_PERIOD / hw_frame;
+    frames -= frames % align;
+    if (!rate || frames == 0)
+        return -EINVAL;
+    n = HDA_CAPTURE_BUFFER / (frames * hw_frame);
+    if (n > HDA_CAPTURE_ENTRIES)
+        n = HDA_CAPTURE_ENTRIES;
+    s->rate = rate;
+    s->period_bytes = frames * frame;
+    s->device_periods = n;
+    if (s->periods < 2)
+        s->periods = 2;
+    cap_format = (uint16_t)(hda_rates[index].format | HDA_FMT_BITS_16 | (hw_frame / 2 - 1));
+    cap_frame = hw_frame;
+    cap_period = frames * hw_frame;
+    cap_periods = n;
+    return 0;
+}
+
+/**
+ * Start the input stream as stream_setup left it: reset the descriptor, lay
+ * the descriptor list over the DMA buffer with an interrupt at each period,
+ * program the path, and run. The first start after the controller was set
+ * up chooses where positions are read (hda_check_dma), as playback's does.
+ * 0, or -EIO when the stream is not set up, already runs, or will not reset.
+ */
+static int hda_capture_start(audio_stream_t *s)
+{
+    int stream = input_stream_index;
+    uint64_t addr = (uint64_t)virt_to_phys(cap_buffer);
+    uint32_t flags, i;
+
+    if (s != cap_stream || !cap_period || cap_running || !hda_base)
+        return -EIO;
+    if (!hda_stream_reset(stream))
+        return -EIO;
+    for (i = 0; i < cap_periods; i++) {
+        cap_bdl[i].addr_low = (uint32_t)(addr + (uint64_t)i * cap_period);
+        cap_bdl[i].addr_high = hda_hi(addr + (uint64_t)i * cap_period);
+        cap_bdl[i].length = cap_period;
+        cap_bdl[i].ioc = 1;
+    }
+    k_memset(cap_buffer, 0, cap_period * cap_periods);
+    hda_dma_sync_range(cap_buffer, cap_period * cap_periods);
+    hda_dma_sync_range(cap_bdl, (uint32_t)sizeof(cap_bdl));
+    if ((uint32_t)stream * 2u < (uint32_t)(HDA_MAX_STREAMS * 2))
+        dma_posbuf[stream * 2] = 0;
+    hda_sd_write32(stream, HDA_SD_BDPL, (uint32_t)virt_to_phys(cap_bdl));
+    hda_sd_write32(stream, HDA_SD_BDPU, hda_hi(virt_to_phys(cap_bdl)));
+    hda_sd_write32(stream, HDA_SD_CBL, cap_period * cap_periods);
+    hda_sd_write16(stream, HDA_SD_LVI, (uint16_t)(cap_periods - 1));
+    hda_sd_write16(stream, HDA_SD_FORMAT, cap_format);
+    hda_sd_write32(stream, HDA_SD_CTL, ((uint32_t)HDA_CAPTURE_TAG << 20) | HDA_SD_CTL_IOCE);
+    hda_capture_path(cap_format);
+    arch_dma_flush_all();
+
+    hda_report.input.requested_rate = s->rate;
+    hda_report.input.rate = s->rate;
+    hda_report.input.format = hda_read16(hda_sd_offset(stream) + HDA_SD_FORMAT);
+    hda_report.input.period = cap_period;
+    hda_report.input.periods = cap_periods;
+    hda_report.input.frames = 0;
+    hda_report.input.overruns = 0;
+    hda_report.input.lpib = 0;
+
+    flags = kirq_save();
+    spin_lock(&cap_lock);
+    cap_next = 0;
+    cap_pos = 0;
+    cap_recorded = 0;
+    cap_handed = 0;
+    cap_clock = hda_read32(HDA_WALCLK);
+    cap_running = true;
+    hda_report.input.running = true;
+    hda_sd_write32(stream, HDA_SD_CTL, hda_sd_read32(stream, HDA_SD_CTL) | HDA_SD_CTL_RUN);
+    spin_unlock(&cap_lock);
+    kirq_restore(flags);
+
+    if (!dma_checked)
+        hda_check_dma(stream);
+    return 0;
+}
+
+/**
+ * Stop the input stream at once and clear its status; then take the input
+ * stream's tag from the ADC, so that it sends nothing. After this returns no
+ * service hands anything over.
+ */
+static void hda_capture_stop(audio_stream_t *s)
+{
+    int stream = input_stream_index;
+    uint32_t flags;
+    bool was;
+
+    if (s != cap_stream)
+        return;
+    flags = kirq_save();
+    spin_lock(&cap_lock);
+    was = cap_running;
+    cap_running = false;
+    hda_report.input.running = false;
+    if (was && hda_base) {
+        hda_sd_write8(stream, HDA_SD_CTL, 0);
+        hda_write8(hda_sd_offset(stream) + HDA_SD_STS, 0x1C); /* BCIS, FIFOE, DESE */
+    }
+    spin_unlock(&cap_lock);
+    kirq_restore(flags);
+    if (was && hda_base)
+        hda_send_verb(codec_addr, adc_nid, HDA_VERB_SET_CHANNEL | 0);
+}
+
+/** Give the input stream back, stopping it first. */
+static void hda_capture_close(audio_stream_t *s)
+{
+    if (s != cap_stream)
+        return;
+    hda_capture_stop(s);
+    cap_stream = NULL;
+    cap_period = 0;
+}
+
+/** The frames the input stream has recorded since its start: those up to
+ * the last service and those since, read from the position. After a stop it
+ * stays at the frames recorded up to the last service. */
+static uint32_t hda_capture_position(void)
+{
+    uint32_t flags, n;
+
+    flags = kirq_save();
+    spin_lock(&cap_lock);
+    n = cap_recorded;
+    if (cap_running && hda_base) {
+        uint32_t buf = cap_period * cap_periods;
+
+        n += (hda_input_position() % buf + buf - cap_pos) % buf / cap_frame;
+    }
+    spin_unlock(&cap_lock);
+    kirq_restore(flags);
+    return n;
+}
+
+/*
+ * The stream operations. Capture is the input stream above; playback has no
+ * stream here yet, so its open fails with -ENODEV and the rest do nothing.
+ */
+
+/** Open `s`'s direction: the input stream for capture. */
+static int hda_stream_open(audio_stream_t *s)
+{
+    return s->dir == AUDIO_CAPTURE ? hda_capture_open(s) : -ENODEV;
+}
+
+/** Grant `s` its parameters. */
+static int hda_stream_setup(audio_stream_t *s)
+{
+    return s->dir == AUDIO_CAPTURE ? hda_capture_setup(s) : -ENODEV;
+}
+
+/** Start `s`. */
+static int hda_stream_start(audio_stream_t *s)
+{
+    return s->dir == AUDIO_CAPTURE ? hda_capture_start(s) : -EIO;
+}
+
+/** Stop `s`. */
+static void hda_stream_stop(audio_stream_t *s)
+{
+    if (s->dir == AUDIO_CAPTURE)
+        hda_capture_stop(s);
+}
+
+/** Give `s`'s direction back. */
+static void hda_stream_close(audio_stream_t *s)
+{
+    if (s->dir == AUDIO_CAPTURE)
+        hda_capture_close(s);
+}
+
+/** The frames `s` has played or recorded since its start. */
+static uint32_t hda_stream_frames(audio_stream_t *s)
+{
+    return s->dir == AUDIO_CAPTURE && s == cap_stream ? hda_capture_position() : 0;
+}
+
+/** The frames given and not yet played: 0, since no playback stream is
+ * here yet and capture plays nothing. */
+static uint32_t hda_stream_delay(audio_stream_t *s)
+{
+    (void)s;
+    return 0;
+}
+
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
-   set_volume, get_volume, then the seven stream operations, which this
-   driver lacks. */
-audio_driver_t hda_driver = {"Intel HD Audio",
-                             AUDIO_DRIVER_HDA,
-                             hda_init,
-                             hda_shutdown,
-                             hda_start,
-                             hda_stop,
-                             hda_is_playing,
-                             hda_set_callback,
-                             hda_write,
-                             hda_set_volume,
-                             hda_get_volume,
-                             NULL,
-                             NULL,
-                             NULL,
-                             NULL,
-                             NULL,
-                             NULL,
-                             NULL};
+   set_volume, get_volume, then the seven stream operations. */
+audio_driver_t hda_driver = {"Intel HD Audio",  AUDIO_DRIVER_HDA, hda_init,        hda_shutdown,
+                             hda_start,         hda_stop,         hda_is_playing,  hda_set_callback,
+                             hda_write,         hda_set_volume,   hda_get_volume,  hda_stream_open,
+                             hda_stream_setup,  hda_stream_start, hda_stream_stop, hda_stream_close,
+                             hda_stream_frames, hda_stream_delay};
