@@ -3042,15 +3042,17 @@ static int32_t open_synth_node(const struct vpath *vp, int flags)
 }
 
 /**
- * Whether an open with `flags` of the file of /proc that `ref` holds is
- * refused with EROFS: a write-side request through a read-only mount of
- * /proc, such as the bind bubblewrap makes of /proc/sys, as open(2) refuses
- * it on any other read-only mount (`open_mounted_node`). /proc/PID/fd/N
- * opens the file it refers to, whose own mount decides. /sys is mounted
- * read-only though its attributes take writes, and keeps them, as do the
- * devices of /dev; a directory answers EISDIR instead (`synth_open_dir`).
+ * Whether a request with the open flags `flags` of the place of /proc that
+ * `ref` holds is refused with EROFS: a write-side request through a
+ * read-only mount of /proc, such as the bind bubblewrap makes of
+ * /proc/sys, as open(2) and access(2) refuse it on any other read-only
+ * mount (`open_mounted_node`, `do_access`). A directory is refused only
+ * with `dirs`, for access(2), since open(2) answers EISDIR for it
+ * (`synth_open_dir`). /proc/PID/fd/N opens the file it refers to, whose own
+ * mount decides. /sys is mounted read-only though its attributes take
+ * writes, and keeps them, as do the devices of /dev.
  */
-static int proc_read_only(const struct vfs_ref *ref, int flags)
+static int proc_read_only(const struct vfs_ref *ref, int flags, int dirs)
 {
     const struct vpath *vp = vfs_synth_vpath(ref->mnt, ref->node);
     struct vfs_stat st;
@@ -3058,7 +3060,7 @@ static int proc_read_only(const struct vfs_ref *ref, int flags)
     return ((flags & 3) != 0 || (flags & O_TRUNC)) && (ref->mnt->flags & VFS_MS_RDONLY) &&
            vfs_mount_base(ref->mnt)->type == &vfs_procfs_type && vp &&
            vp->kind != VNODE_PROC_FD_LINK && vfs_getattr(ref->mnt, ref->node, &st) == 0 &&
-           (st.mode & 0170000u) != 0040000u;
+           (dirs || (st.mode & 0170000u) != 0040000u);
 }
 
 /**
@@ -3148,7 +3150,7 @@ again:
 
         if (vp) {
             struct vpath vpc = *vp;
-            int ro = proc_read_only(&ref, flags);
+            int ro = proc_read_only(&ref, flags, 0);
 
             vfs_walk_unlock(ref.mnt);
             vfs_ref_release(&ref);
@@ -7974,6 +7976,7 @@ static int32_t do_access(const char *name, int mode, int dir, int flags)
     vp = vfs_synth_vpath(ref.mnt, ref.node);
     if (vp) {
         struct kstat s;
+        int ro = (mode & W_OK) && proc_read_only(&ref, 1, 1);
 
         rc = synth_stat(vp, &s, follow || dir);
         vfs_walk_unlock(ref.mnt);
@@ -7981,8 +7984,9 @@ static int32_t do_access(const char *name, int mode, int dir, int flags)
         if (rc != 0) {
             return rc;
         }
-        return cred_access_bits((uint32_t)s.st_uid, (uint32_t)s.st_gid, s.st_mode & 0777u, mode,
-                                real);
+        rc =
+            cred_access_bits((uint32_t)s.st_uid, (uint32_t)s.st_gid, s.st_mode & 0777u, mode, real);
+        return rc == 0 && ro ? -EROFS : rc;
     }
     if (!mnt_is_root(ref.mnt)) {
         rc = cred_access_ref(&ref, mode, real);
