@@ -182,7 +182,9 @@ UDP and raw ICMP sends use the stored value.
 At level
 .Dv IPPROTO_IP ,
 set or get what an IPv4 UDP or raw send does with a datagram past its
-route's MTU, by Linux's values:
+path MTU, the interface's MTU or less for a destination a
+fragmentation-needed report lowered in the last ten minutes, by Linux's
+values:
 .Dv IP_PMTUDISC_WANT ,
 1, the default, sends it in fragments and one within the MTU with DF;
 .Dv IP_PMTUDISC_DO ,
@@ -191,13 +193,12 @@ route's MTU, by Linux's values:
 3, refuse it with
 .Er EMSGSIZE ;
 .Dv IP_PMTUDISC_DONT ,
-0, and
-.Dv IP_PMTUDISC_OMIT ,
-5, send every datagram without DF; and
+0, sends every datagram without DF; and
 .Dv IP_PMTUDISC_INTERFACE ,
-4, is
-.Dv IP_PMTUDISC_WANT ,
-since each route has its interface's MTU.
+4, and
+.Dv IP_PMTUDISC_OMIT ,
+5, send every datagram without DF, in fragments past the interface's MTU
+whatever the path's.
 .It Dv IP_HDRINCL
 At level
 .Dv IPPROTO_IP ,

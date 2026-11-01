@@ -487,13 +487,18 @@ address, MTU, and flags, respectively.
 .Dv SIOCSIFADDR ,
 .Dv SIOCSIFNETMASK ,
 .Dv SIOCSIFBRDADDR ,
+.Dv SIOCSIFFLAGS ,
 and
-.Dv SIOCSIFFLAGS
+.Dv SIOCSIFMTU
 require effective user ID 0.
 They set the address or netmask, check the derived broadcast address,
-or change the interface's
+change the interface's
 .Dv IFF_UP
-state.
+state, or set its MTU.
+A card takes an MTU from 68 to 1500 and
+.Li lo
+only 65536; any other is
+.Er EINVAL .
 Other flag bits are ignored by the setter.
 An address set without its mask uses a provisional classful mask until
 the separate netmask request.

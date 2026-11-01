@@ -360,13 +360,17 @@ asks for one:
 .It Dv RTM_NEWLINK , RTM_SETLINK
 Take an interface up or down by
 .Dv IFF_UP
-in the change mask.
-An
-.Dv IFLA_MTU
-other than 1500, or an
+in the change mask, and set its MTU to
+.Dv IFLA_MTU ,
+from 68 to 1500 on a card and only 65536 on
+.Li lo .
+Another MTU is
+.Er EINVAL ,
+and an
 .Dv IFLA_IFNAME
-that would rename the interface, is
-.Er EOPNOTSUPP .
+that would rename the interface
+.Er EOPNOTSUPP ;
+either leaves the interface unchanged.
 .It Dv RTM_NEWADDR , RTM_DELADDR
 Give an interface the address in
 .Dv IFA_LOCAL

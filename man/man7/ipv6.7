@@ -186,9 +186,9 @@ made from random bytes at the first boot, so that the machine's addresses
 on a network stay the same.
 .Ss Datagrams
 A datagram longer than its destination's path MTU leaves in fragments,
-the path MTU being the link's 1500 bytes, less when a router advertises
-less or a Packet Too Big lowers it for that destination, and never below
-1280 (RFC 8201); for ::1 and this machine's own addresses it is
+the path MTU being the link's: the interface's MTU, 1500 bytes unless
+set lower, less when a router advertises less or a Packet Too Big lowers
+it for that destination, and never below 1280 for a report (RFC 8201); for ::1 and this machine's own addresses it is
 .Li lo Ns 's
 65536.
 Fragments are reassembled, at most 16 datagrams at once, each within 60
