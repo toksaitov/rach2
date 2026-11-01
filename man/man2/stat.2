@@ -246,7 +246,8 @@ Directories report two links and files one.
 The inode is the node's byte offset plus one; relocation changes it.
 .It ext2
 Owner, group, mode, link count, size, and the three times come from the inode.
-Times have second precision.
+A 256-byte inode keeps times to the nanosecond, from 1901 to 2446;
+a 128-byte one keeps signed 32-bit seconds alone, through January 2038.
 .Fn lstat
 reports a symbolic link's type and target length.
 FIFOs, socket files and device nodes report their types, and a device
