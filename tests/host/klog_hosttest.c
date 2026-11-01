@@ -417,7 +417,7 @@ int main(void)
 
     /* A record: priority, uptime, subsystem, text and one newline. */
     reset();
-    kernel_ticks = 1234;
+    kernel_ticks = 1234u * (TICK_HZ / 100u);
     klog(KLOG_ERR, "ahci", "command: timed out on port %d", 0);
     ring_text(text, sizeof(text));
     CHECK("the record is the whole line",
@@ -444,7 +444,7 @@ int main(void)
 
     /* Microseconds are six digits, so a reader takes them as Linux's. */
     reset();
-    kernel_ticks = 205;
+    kernel_ticks = 205u * (TICK_HZ / 100u);
     klog(KLOG_INFO, "t", "x: y");
     ring_text(text, sizeof(text));
     CHECK("the fraction keeps its leading zero", has(text, "[2.050000] "));
