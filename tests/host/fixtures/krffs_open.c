@@ -324,6 +324,33 @@ static void path_expand_links(char *path)
     (void)path;
 }
 
+/** Reject an unexpected synthetic read-only check; no row opens /proc. */
+static int proc_read_only(const struct vfs_ref *ref, int flags, int dirs)
+{
+    (void)ref;
+    (void)flags;
+    (void)dirs;
+    check(0, "unexpected /proc read-only check");
+    return 0;
+}
+
+/** Reject an unexpected synthetic mount check. */
+static int mount_permanent_at(const struct vfs_mount *mnt)
+{
+    (void)mnt;
+    check(0, "unexpected synthetic mount check");
+    return 0;
+}
+
+/** Reject recording a synthetic directory; every row uses mounted KRFFS. */
+static void synth_dir_record(int fd, int permanent, const char *name)
+{
+    (void)fd;
+    (void)permanent;
+    (void)name;
+    check(0, "unexpected synthetic directory record");
+}
+
 #include "syscall_open.inc"
 
 /** Run the real open path in the second process. */
