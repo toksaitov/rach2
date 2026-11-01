@@ -52,6 +52,10 @@
 
 dir 0755 /bin
 file 0755 /bin/audiotest build/utils/audiotest
+file 0755 /bin/sox build/vendor/sox_ng/sox
+file 0755 /bin/play build/vendor/sox_ng/mode
+file 0755 /bin/rec build/vendor/sox_ng/mode
+file 0755 /bin/soxi build/vendor/sox_ng/mode
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
@@ -119,6 +123,7 @@ dir 0755 /demo
 text 0644 /demo/hello.txt hello, world\n
 
 dir 0755 /etc
+file 0644 /etc/sox.COPYING build/vendor/sox_ng/COPYING
 text 0644 /etc/motd Rach2\n\nThe log of this boot is in /dev/bootlog, for root.\nWhat the services print is in /var/log/services.\nType su to become root.\n\n
 text 0644 /etc/hostname rach2\n
 text 0644 /etc/fstab # The root, by the label every Rach2 root has.\nLABEL=rach2 / ext2 defaults 0 1\n

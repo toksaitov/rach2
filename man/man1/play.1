@@ -1,0 +1,54 @@
+.Dd November 1, 2026
+.Dt PLAY 1
+.Os
+.Sh NAME
+.Nm play
+.Nd play audio through OSS
+.Sh SYNOPSIS
+.Nm
+.Op Ar options
+.Ar file ...
+.Op Ar effect Op Ar arguments ...
+.Sh DESCRIPTION
+.Nm
+runs sox_ng in playback mode.
+It reads audio files and writes to the OSS sound device,
+.Pa /dev/dsp
+by default.
+WAV is built in; external codec libraries are disabled.
+Options and effects are those of
+.Xr sox 1 .
+.Fl S
+shows progress and the level meter;
+.Fl q
+suppresses progress.
+.Pp
+Set the output level with
+.Xr mixer 1 .
+The device determines which rates, sample formats and channel counts
+are available.
+.Sh ENVIRONMENT
+.Bl -tag -width AUDIODEV
+.It Ev AUDIODEV
+OSS device path, in place of
+.Pa /dev/dsp .
+.It Ev AUDIODRIVER
+Set to
+.Cm oss
+to select OSS without probing for a default output first.
+.It Ev SOX_OPTS
+Default options, processed before the command line.
+.El
+.Sh EXAMPLES
+.Bd -literal -offset indent
+play take.wav
+play take.wav trim 0 5 vol 0.5
+.Ed
+.Sh EXIT STATUS
+.Ex -std
+.Sh SEE ALSO
+.Xr mixer 1 ,
+.Xr rec 1 ,
+.Xr sox 1 ,
+.Xr soxi 1 ,
+.Xr dsp 4

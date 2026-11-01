@@ -1,0 +1,53 @@
+.Dd November 1, 2026
+.Dt SOXI 1
+.Os
+.Sh NAME
+.Nm soxi
+.Nd show audio file information
+.Sh SYNOPSIS
+.Nm
+.Op Fl T
+.Op Fl t | r | c | s | d | D | b | B | e | a
+.Ar file ...
+.Sh DESCRIPTION
+.Nm
+runs sox_ng's information mode, also available as
+.Cm sox --i .
+With no option it prints each file's type, channel count, sample rate,
+precision, duration, size, bit rate and encoding, where known.
+Options select one field:
+.Bl -tag -width Ds
+.It Fl t
+File type.
+.It Fl r
+Sample rate in Hz.
+.It Fl c
+Channel count.
+.It Fl s
+Number of samples per channel.
+.It Fl d
+Duration as hours, minutes and seconds.
+.It Fl D
+Duration in seconds.
+.It Fl b
+Bits per sample.
+.It Fl B
+Average bit rate.
+.It Fl e
+Encoding name.
+.It Fl a
+File comments.
+.It Fl T
+With a duration or sample count option, print the total for all files.
+.El
+.Sh EXAMPLES
+.Bd -literal -offset indent
+soxi take.wav
+soxi -D take.wav
+.Ed
+.Sh EXIT STATUS
+.Ex -std
+.Sh SEE ALSO
+.Xr play 1 ,
+.Xr rec 1 ,
+.Xr sox 1

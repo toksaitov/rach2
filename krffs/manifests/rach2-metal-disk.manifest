@@ -17,6 +17,10 @@
 # as it does os-real's.
 dir 0755 /bin
 file 0755 /bin/audiotest build/utils/audiotest
+file 0755 /bin/sox build/vendor/sox_ng/sox
+file 0755 /bin/play build/vendor/sox_ng/mode
+file 0755 /bin/rec build/vendor/sox_ng/mode
+file 0755 /bin/soxi build/vendor/sox_ng/mode
 # This BusyBox has no set-id bit. A set-user-ID BusyBox would run each of
 # its BB_SUID_REQUIRE and BB_SUID_MAYBE applets as root unless a
 # configuration file confined it, so there are two binaries, as BusyBox
@@ -148,6 +152,7 @@ file 0444 /demo/empty.krffs build/images/fs-demo/empty.krffs
 # from every other account; passwd, which all may read, has x in its
 # password fields, which is what the separate shadow file is for.
 dir 0755 /etc
+file 0644 /etc/sox.COPYING build/vendor/sox_ng/COPYING
 dir 0700 /etc/dropbear
 text 0644 /etc/motd Rach2\n\nThe log of this boot is in /dev/bootlog, for root.\nWhat the services print is in /var/log/services.\nType su to become root.\n\n
 text 0644 /etc/hostname rach2\n
