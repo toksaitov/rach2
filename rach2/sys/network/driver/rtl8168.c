@@ -27,6 +27,10 @@
  * All register access goes through an indirection (`io`) so the host test
  * can drive the whole bring-up against a software model of the chip; the
  * kernel's binding is plain MMIO on the mapped window.
+ *
+ * This file derives from the Linux kernel's r8169 driver, r8169_main.c and
+ * r8169_phy_config.c of v6.16, which are under the GNU General Public
+ * License, version 2 only, and it keeps that license (COPYING).
  */
 
 #include "../../klog.h"
