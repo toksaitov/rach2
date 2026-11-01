@@ -69,14 +69,16 @@ static void client_push(struct rfkill_client *c, const struct rfkill *rf, unsign
     c->count++;
 }
 
-/** Queue `op` for `rf` to every open; rfkill_lock held. The caller wakes
- * the readers once the lock is given back. */
-static void broadcast(const struct rfkill *rf, unsigned op)
+/** Queue `op` for `rf` to every open; rfkill_lock held. Returns whether
+ * there was one, for the caller to wake the readers once the lock is given
+ * back. */
+static int broadcast(const struct rfkill *rf, unsigned op)
 {
     struct rfkill_client *c;
 
     for (c = clients; c; c = c->next)
         client_push(c, rf, op);
+    return clients != 0;
 }
 
 /** The registered switch of index `index`, or NULL. */
@@ -97,6 +99,7 @@ int rfkill_register(const char *name, unsigned type, int phy, const struct rfkil
     unsigned i;
     size_t len;
     uint32_t flags;
+    int queued;
 
     if (!out)
         return -EINVAL;
@@ -121,9 +124,10 @@ int rfkill_register(const char *name, unsigned type, int phy, const struct rfkil
     rf->ops = ops;
     rf->data = data;
     rf->used = 1;
-    broadcast(rf, RFKILL_OP_ADD);
+    queued = broadcast(rf, RFKILL_OP_ADD);
     spin_unlock_irqrestore(&rfkill_lock, flags);
-    wq_wake(&rfkill_wq, WQ_DATA);
+    if (queued)
+        wq_wake(&rfkill_wq, WQ_DATA);
     *out = rf;
     return 0;
 }
@@ -131,33 +135,34 @@ int rfkill_register(const char *name, unsigned type, int phy, const struct rfkil
 void rfkill_unregister(struct rfkill *rf)
 {
     uint32_t flags;
+    int queued;
 
     if (!rf || !rf->used)
         return;
     flags = spin_lock_irqsave(&rfkill_lock);
-    broadcast(rf, RFKILL_OP_DEL);
+    queued = broadcast(rf, RFKILL_OP_DEL);
     rf->used = 0;
     spin_unlock_irqrestore(&rfkill_lock, flags);
-    wq_wake(&rfkill_wq, WQ_DATA);
+    if (queued)
+        wq_wake(&rfkill_wq, WQ_DATA);
 }
 
 int rfkill_set_hw_state(struct rfkill *rf, int blocked)
 {
     uint32_t flags;
     unsigned hard = blocked ? 1u : 0u;
-    int changed = 0, now;
+    int queued = 0, now;
 
     if (!rf)
         return 0;
     flags = spin_lock_irqsave(&rfkill_lock);
     if (rf->used && rf->hard != hard) {
         rf->hard = hard;
-        broadcast(rf, RFKILL_OP_CHANGE);
-        changed = 1;
+        queued = broadcast(rf, RFKILL_OP_CHANGE);
     }
     now = rf->soft || rf->hard;
     spin_unlock_irqrestore(&rfkill_lock, flags);
-    if (changed)
+    if (queued)
         wq_wake(&rfkill_wq, WQ_DATA);
     return now;
 }
@@ -178,7 +183,7 @@ unsigned rfkill_index(const struct rfkill *rf)
 static int set_soft(struct rfkill *rf, unsigned blocked)
 {
     uint32_t flags;
-    int rc;
+    int rc, queued = 0;
 
     if (!rf->used || rf->soft == blocked)
         return 0;
@@ -188,10 +193,11 @@ static int set_soft(struct rfkill *rf, unsigned blocked)
     flags = spin_lock_irqsave(&rfkill_lock);
     if (rf->used && rf->soft != blocked) {
         rf->soft = blocked;
-        broadcast(rf, RFKILL_OP_CHANGE);
+        queued = broadcast(rf, RFKILL_OP_CHANGE);
     }
     spin_unlock_irqrestore(&rfkill_lock, flags);
-    wq_wake(&rfkill_wq, WQ_DATA);
+    if (queued)
+        wq_wake(&rfkill_wq, WQ_DATA);
     return 0;
 }
 
