@@ -116,7 +116,7 @@ server() {
 maps() {
     unmodified "$1" "$2" /opt/opencode/bin/opencode \
         /lib64/ld-linux-x86-64.so.2 /lib/libc.so.6 /lib/libm.so.6 /lib/libpthread.so.0 \
-        /lib/libdl.so.2 /lib/librt.so.1 /lib/libgcc_s.so.1 /usr/lib/libstdc++.so.6 \
+        /lib/libdl.so.2 /lib/librt.so.1 /lib/libgcc_s.so.1 "/usr/lib/libstdc++.so.6*" \
         "$SESSION/tmp/.bun-$(id -u)-*" "$SESSION/home/.local/share/opencode/opencode.db-shm"
 }
 
