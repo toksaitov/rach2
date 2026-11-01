@@ -1434,16 +1434,19 @@ static int prepare_rows(struct release *r)
          ok;
     return ok;
 }
-/** Succeed once `path` holds `text`, which a run that -a started detached
- * writes; the case's bound ends a run that never does. */
+/** Succeed once `path` holds `text`, waiting up to ten seconds for a run that
+ * -a started detached. */
 static int waited(const char *path, const char *text)
 {
     struct timespec pause = {0, 50000000};
-    while (!fx_has(path, text)) {
+    unsigned i;
+    for (i = 0; i < 200; i++) {
+        if (fx_has(path, text))
+            return 1;
         /* interval: poll the detached run's result every 50 ms */
         nanosleep(&pause, NULL);
     }
-    return 1;
+    return 0;
 }
 /** -a refuses a run that passed and a commit off the branch. */
 static int restart_refusal_rows(struct release *r)

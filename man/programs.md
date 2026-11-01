@@ -253,7 +253,7 @@ The [agents layer](../vendor/gnu/agents/Readme.md) installs vendors' published b
 | [node](../vendor/gnu/agents/packages/node.sh) | 26.13.0 | MIT AND Artistic-2.0 AND bundled licenses | node, Node.js, the JavaScript runtime with npm and npx. |
 | [opencode](../vendor/gnu/agents/packages/opencode.sh) | 2.2.5 | MIT | opencode, OpenCode, a coding agent for the terminal. |
 | [ripgrep](../vendor/gnu/agents/packages/ripgrep.sh) | 15.2.0 | Unlicense OR MIT | rg, ripgrep, which searches a tree of files for lines that match a regular expression and skips what .gitignore names. |
-| [shellcheck](../vendor/gnu/agents/packages/shellcheck.sh) | 0.11.0 | GPL-3.0-or-later | shellcheck, a static analyzer for shell scripts. |
+| [shellcheck](../vendor/gnu/agents/packages/shellcheck.sh) | 0.11.0 | GPL-3.0-or-later | ShellCheck, a static analyzer for shell scripts. |
 
 ## The vendored projects
 
