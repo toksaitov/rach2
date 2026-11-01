@@ -37,12 +37,15 @@ is implemented; the individual pages describe each call.
 .Pp
 Where a page says that a call needs effective user ID 0, it means a
 privileged thread: one whose effective user ID is 0 and which has not
-given up its capabilities with
+given up
+.Dv CAP_SYS_ADMIN
+with
 .Xr capset 2 .
-Linux asks for a capability in each such place, and this kernel keeps
-every capability or none.
+Linux asks for a capability in each such place, and this kernel asks for
+.Dv CAP_SYS_ADMIN
+in every one.
 .Ss System call numbers
-On i686 the kernel registers the following 305 calls, the operations of
+On i686 the kernel registers the following 306 calls, the operations of
 .Xr socketcall 2
 among them.
 .Bl -column "Number" "System call" -compact
@@ -210,6 +213,7 @@ among them.
 .It 212 Ta Xr chown32 2
 .It 213 Ta Xr setuid32 2
 .It 214 Ta Xr setgid32 2
+.It 217 Ta Xr pivot_root 2
 .It 218 Ta Xr mincore 2
 .It 219 Ta Xr madvise 2
 .It 220 Ta Xr getdents64 2
@@ -360,7 +364,7 @@ The following operation numbers select calls through system call 102,
 .It 0x1000 Ta Xr ping 2
 .El
 .Pp
-On x86-64 it registers the following 261 calls.
+On x86-64 it registers the following 262 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 0 Ta Xr read 2
@@ -509,6 +513,7 @@ On x86-64 it registers the following 261 calls.
 .It 150 Ta Xr munlock 2
 .It 151 Ta Xr mlockall 2
 .It 152 Ta Xr munlockall 2
+.It 155 Ta Xr pivot_root 2
 .It 157 Ta Xr prctl 2
 .It 158 Ta Xr arch_prctl 2
 .It 159 Ta Xr adjtimex 2

@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 1, 2026
 .Dt CHROOT 2
 .Os
 .Sh NAME
@@ -42,13 +42,15 @@ One outside the new root moves to the new root.
 On Linux it stays where it was, and relative paths then reach the tree
 outside the root.
 A descriptor of a directory outside the root, opened before the call, is
-refused with
-.Er ENOENT
-by
+made the working directory by
 .Xr fchdir 2 ,
-where Linux makes it the working directory; the
+as on Linux, where
+.Xr getcwd 2
+fails with
+.Er ENOENT ;
+it and the
 .Fn *at
-calls walk a relative path from that directory, as on Linux, with
+calls walk a relative path from that directory, with
 .Ql ..
 and absolute symbolic links still going by the caller's root.
 .Pp
@@ -105,7 +107,12 @@ and that a child of
 .Xr fork 2
 and a program run by
 .Xr execve 2
-keep the root.
+keep the root, and that
+.Xr fchdir 2
+enters a directory outside it, where
+.Xr getcwd 2
+fails with
+.Er ENOENT .
 It also checks that
 .Xr rmdir 2
 and
@@ -161,4 +168,5 @@ The errors above come first, as on Linux.
 .Xr fork 2 ,
 .Xr mknod 2 ,
 .Xr mount 2 ,
+.Xr pivot_root 2 ,
 .Xr rmdir 2

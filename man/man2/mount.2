@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 1, 2026
 .Dt MOUNT 2
 .Os
 .Sh NAME
@@ -256,8 +256,10 @@ it succeeds and changes nothing, since every
 .Pa /proc
 shows the processes of its reader's PID namespace, as
 .Ql unshare --mount-proc
-would have it; one anywhere else fails with
-.Er ENODEV .
+would have it.
+Over any other directory it places a mount of the one proc file system,
+as a sandbox mounts it in the root it builds, and that mount too shows
+its reader's PID namespace.
 .It
 Require the absolute target path to fit 63 bytes, excluding the null
 byte, or return
@@ -397,14 +399,32 @@ must reach a directory, so a file named with a trailing slash returns
 as on Linux, where the same file named without one returns
 .Er EINVAL .
 .Fa flags
-must be zero;
+must be zero or
+.Dv MNT_DETACH ;
 .Dv MNT_FORCE ,
-.Dv MNT_DETACH ,
 .Dv UMOUNT_NOFOLLOW ,
-and all other nonzero values return
+and all other values return
 .Er EINVAL .
-The seven permanent mounts return
+Without
+.Dv MNT_DETACH
+the seven permanent mounts return
 .Er EBUSY .
+.Pp
+.Dv MNT_DETACH
+takes the mount, and every mount below it, from the caller's mount
+namespace at once, however busy they are: no path of the namespace
+reaches them, and they leave
+.Pa /proc/self/mountinfo ,
+while a descriptor or a working directory on one of them still works.
+The caller's root and the mounts below it stay, so that after
+.Xr pivot_root 2
+the old root can be let go of while the new one, which was below it, is
+in use.
+A mount no live mount namespace sees any more is unmounted, as below,
+once nothing holds it.
+A permanent mount may be taken from the view and stays mounted; the root
+of the mount table returns
+.Er EINVAL .
 .Pp
 The mount stops accepting new operations and waits for operations
 already in progress to finish.
@@ -469,7 +489,9 @@ The target is covered, reserved, or in a mount undergoing a transition;
 the source overlaps a claimed range or an open raw writer;
 the source device is already mounted; or an unmount is prevented by
 references or cache buffers still held or dirty.
-Unmounting a permanent mount also returns this error.
+Unmounting a permanent mount without
+.Dv MNT_DETACH
+also returns this error.
 .It Bq Er EFAULT
 A required string pointer is null or a string cannot be read from
 user memory.
@@ -478,7 +500,8 @@ A KRFFS source device exceeds the size the file system can address.
 .It Bq Er EINVAL
 A flag is unsupported, the mount target is the root or in a synthetic
 namespace, the source of a type with a device is not a supported block
-device, or the unmount target is not a mount root.
+device, the unmount target is not a mount root, or a lazy unmount names
+the root of the mount table.
 A constructor also returns this error for invalid options or volume
 structure it cannot accept.
 .It Bq Er EIO
@@ -491,10 +514,7 @@ A copied string or joined path exceeds its buffer, the mount target
 exceeds 63 bytes, or a path component or symbolic-link expansion is
 too long.
 .It Bq Er ENODEV
-The file-system type is unknown, or a mount of type
-.Ql proc
-is outside
-.Pa /proc .
+The file-system type is unknown.
 The type
 .Ql sysfs
 is unknown to
@@ -543,6 +563,7 @@ There is no current process.
 .Xr mkdir 2 ,
 .Xr mq_open 2 ,
 .Xr open 2 ,
+.Xr pivot_root 2 ,
 .Xr loop 4 ,
 .Xr proc 5 ,
 .Xr mount 8

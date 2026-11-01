@@ -1,0 +1,154 @@
+.Dd November 1, 2026
+.Dt PIVOT_ROOT 2
+.Os
+.Sh NAME
+.Nm pivot_root
+.Nd change the root mount
+.Sh SYNOPSIS
+.In sys/syscall.h
+.In unistd.h
+.Ft int
+.Fn syscall SYS_pivot_root "const char *new_root" "const char *put_old"
+.Sh DESCRIPTION
+.Fn pivot_root
+makes the root of the mount
+.Fa new_root
+names the root directory of the calling process, and shows the old root
+at
+.Fa put_old ,
+a directory at or below
+.Fa new_root .
+Both paths are resolved from the caller's root and working directory
+before the call changes anything.
+.Pp
+The old root is shown at
+.Fa put_old
+by a bind of it with the mounts below it, all but
+.Fa new_root
+and those below that, and the original mounts are taken from the
+caller's mount namespace, as Linux moves them; the new root and the
+mounts it is below stay, so that a descriptor opened on one of them before
+the call still reaches it.
+.Xr umount2 2
+of
+.Fa put_old
+with
+.Dv MNT_DETACH
+then lets go of the old root; see
+.Xr mount 2 .
+Other mount namespaces see no change.
+.Pp
+When
+.Fa put_old
+names
+.Fa new_root
+itself, as bubblewrap, runc and LXC call it with
+.Ql \&.
+and
+.Ql \&. ,
+the old root is shown nowhere and no mount is taken.
+On Linux it is stacked over the new root; the caller lets go of it by
+.Xr fchdir 2
+to a descriptor of the old root opened before, and
+.Xr umount2 2
+of
+.Ql \&.
+with
+.Dv MNT_DETACH ,
+which here takes the mounts below the old root but the caller's new root
+and those below it.
+.Pp
+Every process of the caller's mount namespace whose root was the old root
+has the new root after the call, the caller among them.
+A working directory keeps its place: its path is then given from the new
+root, or, for one outside the new root, it is outside the root, as after
+.Xr fchdir 2
+to such a directory, and
+.Xr getcwd 2
+fails with
+.Er ENOENT .
+.Pp
+The i386 system call number is 217, with
+.Fa new_root
+in EBX and
+.Fa put_old
+in ECX.
+On x86-64 the number is 155, with the arguments in RDI and RSI.
+Musl has no wrapper, and a program calls
+.Xr syscall 2 .
+.Sh RETURN VALUES
+.Fn pivot_root
+returns 0 on success, or -1 on failure and sets
+.Va errno .
+The kernel interface returns the negative error number.
+.Sh EXAMPLES
+.Pa tests/musl/sandboxmusl.c
+builds a root as bubblewrap does, in a mount namespace of its own: a
+tmpfs, a bind of its
+.Pa newroot
+over itself,
+.Fn pivot_root
+to the tmpfs with the old root at
+.Pa oldroot ,
+a lazy unmount of
+.Pa oldroot ,
+and
+.Fn pivot_root
+of
+.Ql \&.
+and
+.Ql \&.
+in
+.Pa newroot .
+It checks that the probe's own directory cannot be written from the new
+root, that a file made there is not seen outside, and that a program
+without
+.Dv CAP_SYS_ADMIN
+is refused the call.
+.Sh ERRORS
+.Bl -tag -width "[ENAMETOOLONG]"
+.It Bq Er EBUSY
+.Fa new_root
+or
+.Fa put_old
+is on the mount of the caller's root.
+.It Bq Er EFAULT
+A path is outside the caller's memory.
+.It Bq Er EINVAL
+.Fa new_root
+is not the root of a mount, is a permanent mount or one of the synthetic
+.Pa /dev ,
+.Pa /proc
+or
+.Pa /sys ;
+the caller's root is not the root of a mount, as after
+.Xr chroot 2
+to a directory; or
+.Fa put_old
+is not at or below
+.Fa new_root .
+.It Bq Er ENAMETOOLONG
+A path is too long, or the path of
+.Fa put_old
+exceeds the 63 bytes of a mount's target.
+.It Bq Er ENOENT
+A directory of a path does not exist.
+.It Bq Er ENOMEM
+The kernel had no memory for the paths or the bind.
+.It Bq Er ENOTDIR
+.Fa put_old ,
+or a component of a path, is not a directory.
+.It Bq Er EPERM
+The caller is not privileged over its mount namespace: it lacks
+.Dv CAP_SYS_ADMIN
+in the user namespace that owns it; see
+.Xr unshare 2
+and
+.Xr capget 2 .
+.El
+.Sh SEE ALSO
+.Xr capget 2 ,
+.Xr chroot 2 ,
+.Xr mount 2 ,
+.Xr prctl 2 ,
+.Xr unshare 2

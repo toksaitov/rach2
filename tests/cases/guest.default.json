@@ -4393,7 +4393,7 @@
     },
     {
       "case_id": "guest.default.capmusl",
-      "behavior": "capget and capset keep every capability or none: root has all, the header's version answers as Linux's, a partial set is EINVAL, a process that gave them up has none and is refused what they grant against a parent that has them, PTRACE_TRACEME toward a parent without them is EPERM, and an exec gives them back, undumpable, except under no_new_privs or with shared directories. It writes /tmp/capmusl.secret and re-executes itself through /proc/self/exe, so it needs no argument.",
+      "behavior": "capget and capset: root has every capability, the header's version answers as Linux's, an inheritable capability is EINVAL, a process that gave them up has none and is refused what they grant against a parent that has them, PTRACE_TRACEME toward a parent without them is EPERM, and an exec gives them back, undumpable, except under no_new_privs or with shared directories. It writes /tmp/capmusl.secret and re-executes itself through /proc/self/exe, so it needs no argument.",
       "units": ["default", "musl/capmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],

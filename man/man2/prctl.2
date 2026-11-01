@@ -1,4 +1,4 @@
-.Dd October 20, 2026
+.Dd November 1, 2026
 .Dt PRCTL 2
 .Os
 .Sh NAME
@@ -53,6 +53,16 @@ Set the strict mode for a second argument of 1, or add the filter at the
 third argument for 2, as
 .Xr seccomp 2
 does.
+.It Dv PR_CAPBSET_READ No (23)
+Return 1 when the capability the second argument names, 0 to 40, is in the
+caller's bounding set, and 0 when it is not; see
+.Xr capget 2 .
+.It Dv PR_CAPBSET_DROP No (24)
+Take the capability the second argument names out of the caller's
+bounding set, for good: no exec gives it again.
+The caller needs
+.Dv CAP_SETPCAP .
+A thread that holds the capability keeps it.
 .It Dv PR_SET_CHILD_SUBREAPER No (36)
 Make the caller's process a child subreaper when the second argument is
 not 0, and clear the mark when it is 0.
@@ -79,6 +89,19 @@ bit.
 It cannot be cleared.
 .It Dv PR_GET_NO_NEW_PRIVS No (39)
 With every other argument 0, return the no_new_privs bit.
+.It Dv PR_CAP_AMBIENT No (47)
+The ambient set, which on Linux keeps capabilities across an exec of a
+program by a thread that is not root, is always empty here.
+With the second argument
+.Dv PR_CAP_AMBIENT_IS_SET
+(1) or
+.Dv PR_CAP_AMBIENT_LOWER
+(3) and a capability of 0 to 40 as the third, the call returns 0;
+.Dv PR_CAP_AMBIENT_RAISE
+(2) fails with
+.Er EPERM ;
+.Dv PR_CAP_AMBIENT_CLEAR_ALL
+(4), with the third argument 0, returns 0.
 .El
 .Pp
 The attributes follow the process as on Linux.
@@ -149,6 +172,7 @@ EBX contains
 and ECX through EDI the second through fifth arguments.
 .Sh RETURN VALUES
 .Dv PR_GET_DUMPABLE ,
+.Dv PR_CAPBSET_READ ,
 .Dv PR_GET_SECCOMP
 and
 .Dv PR_GET_NO_NEW_PRIVS
@@ -171,6 +195,9 @@ grandchild come to it, the one that had ended and the one that had not,
 that its wait reaps them and counts the CPU time of the second, and that
 its children file lists each child while it is one; and that with the
 mark cleared they go to init instead.
+.Pa tests/musl/sandboxmusl.c
+reads and drops capabilities of the bounding set and checks the ambient
+operations.
 .Sh ERRORS
 .Bl -tag -width "[EFAULT]"
 .It Bq Er EFAULT
@@ -180,11 +207,19 @@ written at the second argument.
 .Fa option
 is none of those above, the signal is past 64, the dumpable value is
 neither 0 nor 1, or the arguments of the no_new_privs options are not as
-above.
+above, or a capability is past 40, or the ambient operation is none of the
+four.
 Every option Linux has and this kernel does not is refused this way, as
 Linux refuses an option it does not know.
+.It Bq Er EPERM
+.Dv PR_CAPBSET_DROP
+by a thread without
+.Dv CAP_SETPCAP ,
+or
+.Dv PR_CAP_AMBIENT_RAISE .
 .El
 .Sh SEE ALSO
+.Xr capget 2 ,
 .Xr execve 2 ,
 .Xr fork 2 ,
 .Xr seccomp 2 ,
