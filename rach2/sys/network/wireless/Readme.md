@@ -99,6 +99,10 @@ A receiver refuses a wrong magic, version, type or header length, nonzero reserv
 
 ## Design
 
+### Drivers
+
+A driver plugs in at one of two levels. A softMAC chip, whose host runs the MLME, as `wsim` and [`driver/ath9k/`](../driver/ath9k/Readme.md) do, fills a `wlan_radio` with its `wlan_radio_ops` and registers it; registration attaches the softMAC station of `sta.c`, which gives `nl80211_attach` its `nl80211_ops`. A fullMAC chip, which runs its own MLME, would give `nl80211_attach` `nl80211_ops` of its own in place of `sta.c`'s, with `connect` and `disconnect` since it joins by itself; no driver does yet, and registration attaches `sta.c` to every radio. Above either level lie the parts a driver reuses rather than writes: the BSS table, the key records, the software ciphers of `crypto/`, rate control through `wlan_rate_ops`, the radio's rfkill switch and the regulatory rules. A new chip supplies only its hardware's calls.
+
 ### Registry and regulatory rules
 
 `radio.h` is the driver boundary. The registry, Ethernet adaptation and world regulatory rules implement it above the radio. A driver advertises its capabilities once; regulatory rules narrow the channel set rather than expanding it.
