@@ -120,8 +120,8 @@ static void test_sample(void)
     CHECK(data != 0, "the sample packs");
     if (!data)
         return;
-    CHECK(size == UNIFONT_HEADER + 9 * UNIFONT_RUN + 11 * 16 + 4 * 32,
-          "the sample's font has 9 runs, 11 narrow glyphs and 4 wide ones");
+    CHECK(size == UNIFONT_HEADER + 9 * UNIFONT_RUN + 10 * 16 + 5 * 32,
+          "the sample's font has 9 runs, 10 narrow glyphs and 5 wide ones");
     CHECK(unifont_open(&font, data, size) == 0, "the sample's font opens");
     CHECK(font.runs == 9 && font.glyphs == 15, "9 runs of 15 glyphs");
     expect_glyph(&font, 0x41, latin_a, 8, "U+0041 LATIN CAPITAL LETTER A");
