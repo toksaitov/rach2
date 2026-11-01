@@ -397,7 +397,7 @@
         },
         {
           "assertion_id": "mixer",
-          "checks": "evprobe mixer HDA reads 100 at boot, sets 50 and then the louder of 80 and 32, finds the masks, the missing PCM channel and SOUND_MIXER_INFO as OSS gives them, reads 80 after a stream's start and 70 after the console's AUDIO_SET_VOLUME, prints `EVPROBE OK` and exits 0",
+          "checks": "evprobe mixer HDA reads 100 at boot, sets 50 and then the louder of 80 and 32, finds the volume and PCM in the masks, PCM a level beside the volume, a missing channel and SOUND_MIXER_INFO as OSS gives them, reads 80 after a stream's start and 70 after the console's AUDIO_SET_VOLUME, prints `EVPROBE OK` and exits 0",
           "source": "scenario"
         }
       ],
@@ -549,7 +549,7 @@
         },
         {
           "assertion_id": "mixer",
-          "checks": "evprobe mixer SB16 reads 100 at boot, sets 50 and then the louder of 80 and 32, finds the masks, the missing PCM channel and SOUND_MIXER_INFO as OSS gives them, reads 80 after a stream's start and 70 after the console's AUDIO_SET_VOLUME, prints `EVPROBE OK` and exits 0",
+          "checks": "evprobe mixer SB16 reads 100 at boot, sets 50 and then the louder of 80 and 32, finds the volume and PCM in the masks, PCM a level beside the volume, a missing channel and SOUND_MIXER_INFO as OSS gives them, reads 80 after a stream's start and 70 after the console's AUDIO_SET_VOLUME, prints `EVPROBE OK` and exits 0",
           "source": "scenario"
         }
       ],

@@ -14,9 +14,9 @@
  * record, poll, and EVIOCGRAB's two exclusions are checked on the way.
  *
  * `evprobe mixer HDA` and `evprobe mixer SB16` read and set the master
- * volume through OSS's ioctls, check the masks and SOUND_MIXER_INFO, and
- * require the level to stay set across a stream's start and to follow the
- * console's own AUDIO_SET_VOLUME.
+ * volume and PCM through OSS's ioctls, check the masks and
+ * SOUND_MIXER_INFO, and require the level to stay set across a stream's
+ * start and to follow the console's own AUDIO_SET_VOLUME.
  *
  * `evprobe button` finds the ACPI power button's event device, the FADT's
  * fixed button, prints "EVPROBE: press the button", and must read
@@ -78,7 +78,9 @@
  * (rach2/sys/syscall.c). */
 #define MIXER_READ_VOLUME     0x80044D00L
 #define MIXER_WRITE_VOLUME    0xC0044D00L
+#define MIXER_READ_BASS       0x80044D01L
 #define MIXER_READ_PCM        0x80044D04L
+#define MIXER_WRITE_PCM       0xC0044D04L
 #define MIXER_READ_DEVMASK    0x80044DFEL
 #define MIXER_READ_STEREODEVS 0x80044DFBL
 #define MIXER_INFO            0x805C4D65L
@@ -548,21 +550,35 @@ static void check_levels(int fd)
     }
 }
 
-/** Check the masks of `fd`, a channel it lacks, and that SOUND_MIXER_INFO
- * names the driver `id` and counts the writes. */
+/** Check the masks of `fd`, which have the volume and PCM, and the SB16's
+ * nothing else; that PCM is a level of its own beside the volume, and a
+ * channel it lacks; and that SOUND_MIXER_INFO names the driver `id` and
+ * counts the writes. */
 static void check_info(int fd, const char *id)
 {
     struct mixer_info info;
     int v;
     long rc;
 
-    if (ioctl(fd, MIXER_READ_DEVMASK, (long)&v) != 0 || v != 1) {
-        fail_with("SOUND_MIXER_READ_DEVMASK is not the volume alone", 1, v);
+    if (ioctl(fd, MIXER_READ_DEVMASK, (long)&v) != 0 || (v & 0x11) != 0x11 ||
+        (begins(id, "SB16") && v != 0x11)) {
+        fail_with("SOUND_MIXER_READ_DEVMASK lacks the volume and PCM", 1, v);
     }
     if (ioctl(fd, MIXER_READ_STEREODEVS, (long)&v) != 0 || v != 0) {
         fail_with("SOUND_MIXER_READ_STEREODEVS is not none", 1, v);
     }
-    if ((rc = ioctl(fd, MIXER_READ_PCM, (long)&v)) != -EINVAL) {
+    if (ioctl(fd, MIXER_READ_PCM, (long)&v) != 0 || v != 0x6464) {
+        fail_with("PCM at boot is not 100 on both sides", 1, v);
+    }
+    v = 0x3232;
+    if (ioctl(fd, MIXER_WRITE_PCM, (long)&v) != 0 || v != 0x3232 || volume(fd) != 0x5050) {
+        fail_with("PCM set to 50 moves the volume", 1, v);
+    }
+    v = 0x6464;
+    if (ioctl(fd, MIXER_WRITE_PCM, (long)&v) != 0 || v != 0x6464) {
+        fail_with("PCM set back to 100 did not give 100 back", 1, v);
+    }
+    if ((rc = ioctl(fd, MIXER_READ_BASS, (long)&v)) != -EINVAL) {
         fail_with("a channel the mixer lacks is not EINVAL", 1, rc);
     }
     if (ioctl(fd, MIXER_INFO, (long)&info) != 0) {

@@ -85,8 +85,8 @@ static int press(struct guest *g, const char *qcode, const char *before, const c
     }
     /* interval: poll mixer's reading every second */
     snprintf(command, sizeof(command),
-             "while [ \"$(mixer)\" = '%s' ]; do sleep 1; done; "
-             "flock /var/run/acpi.lock true; echo VOL\"\"=$(mixer)\r",
+             "while [ \"$(mixer vol)\" = '%s' ]; do sleep 1; done; "
+             "flock /var/run/acpi.lock true; echo VOL\"\"=$(mixer vol)\r",
              before);
     if (!ask(g, command, "VOL", got, sizeof(got)))
         return 0;
@@ -120,7 +120,7 @@ static void real(struct lc *l)
         return;
     snprintf(detail, sizeof(detail), "%s acpid processes run, not one", got);
     lc_assert(l, "running", strcmp(got, "1") == 0, detail);
-    if (!ask(&g, "mixer vol 50; echo VOL\"\"=$(mixer)\r", "VOL", got, sizeof(got)))
+    if (!ask(&g, "mixer vol 50; echo VOL\"\"=$(mixer vol)\r", "VOL", got, sizeof(got)))
         return;
     snprintf(detail, sizeof(detail), "mixer vol 50 reads '%s'", got);
     lc_assert(l, "set", strcmp(got, "vol 50:50") == 0, detail);
