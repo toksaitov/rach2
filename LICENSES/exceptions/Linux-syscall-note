@@ -1,0 +1,12 @@
+   NOTE! This copyright does *not* cover user programs that use kernel
+ services by normal system calls - this is merely considered normal use
+ of the kernel, and does *not* fall under the heading of "derived work".
+ Also note that the GPL in COPYING is copyrighted by the Free Software
+ Foundation, but the instance of code that it refers to (the Rach2
+ operating system) is copyrighted by the people who actually wrote it.
+
+ Also note that the only valid version of the GPL as far as Rach2's own
+ code is concerned is _this_ particular version of the license (ie v2,
+ not v2.2 or v3.x or whatever), unless explicitly otherwise stated.
+
+ This note follows the words of the Linux kernel's Linux-syscall-note.
