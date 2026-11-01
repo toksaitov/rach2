@@ -1345,11 +1345,14 @@ reports them, as a mask in words of 32 bits and as a list of ranges, and
 voluntary_ctxt_switches and nonvoluntary_ctxt_switches, the times the
 scheduler switched away from the thread while it slept or was stopped,
 and while it could still run.
-CapPrm and CapEff are full for a thread that is privileged, one whose
-effective user ID is 0 and which kept its capabilities
-.Pq see Xr capget 2 ,
-and empty otherwise;
-CapBnd is full, and CapInh and CapAmb are empty, for every process.
+CapPrm and CapEff are the capabilities the thread holds, those it has not
+given up when its effective user ID is 0, and none otherwise
+.Pq see Xr capget 2 ;
+CapBnd is the bounding set, which
+.Dv PR_CAPBSET_DROP
+of
+.Xr prctl 2
+narrows; CapInh and CapAmb are empty for every process.
 .It Pa /proc/PID/statm
 Seven sizes in pages: total, resident, shared, text, library, data with
 stack, and dirty; the third, fifth and seventh read 0.

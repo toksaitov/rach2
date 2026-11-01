@@ -1,4 +1,4 @@
-.Dd September 28, 2026
+.Dd November 1, 2026
 .Dt CHDIR 2
 .Os
 .Sh NAME
@@ -67,11 +67,20 @@ Entering takes search permission on the directory, as
 does, and a directory opened with
 .Dv O_PATH
 serves as well as one opened for reading, as on Linux.
-A directory outside the root
+A directory outside the root that
 .Xr chroot 2
-gave the process returns
+or
+.Xr pivot_root 2
+gave the process is entered, as on Linux, as a sandbox enters its old
+root to let go of it: relative paths and the
+.Li *at
+calls then walk from there, with
+.Ql ..
+and absolute symbolic links still going by the root, and
+.Fn getcwd
+fails with
 .Er ENOENT ,
-where Linux enters it.
+as Linux's fails for a directory it cannot name from the root.
 A synthetic directory under
 .Pa /dev ,
 .Pa /proc
@@ -113,6 +122,8 @@ The path is the one from the process's root directory, which
 may have moved.
 .Fa size
 is the buffer capacity in bytes and must include room for that byte.
+A working directory outside the root gives
+.Er ENOENT .
 With a non-null buffer, size zero gives
 .Er EINVAL
 and an insufficient size gives
@@ -193,7 +204,9 @@ The path is empty or a component or synthetic process directory is missing.
 A symbolic link has an empty target.
 The directory
 .Fn fchdir
-names is outside the process's root, or ext2 or tmpfs removed it.
+names was removed by ext2 or tmpfs, or the working directory
+.Fn getcwd
+names is outside the process's root.
 .It Er ENOMEM
 Path lookup cannot allocate a file-system node, a mounted KRFFS volume
 cannot allocate the open record that keeps the directory during the
@@ -213,5 +226,7 @@ call has no current process.
 .El
 .Sh SEE ALSO
 .Xr access 2 ,
+.Xr chroot 2 ,
 .Xr mount 2 ,
+.Xr pivot_root 2 ,
 .Xr open 2
