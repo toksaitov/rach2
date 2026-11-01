@@ -165,7 +165,10 @@ static int send_echo(int fd, unsigned seq, int bad)
     return sendto(fd, msg, 48, 0, (struct sockaddr *)&to, sizeof(to)) == 48 ? 0 : -1;
 }
 
-/** A raw ICMPv6 socket whose filter passes `type` alone, or -1. */
+/** A raw ICMPv6 socket whose filter passes `type` alone, or -1. A new
+ * socket passes every type until the filter is set, and the card's own
+ * neighbour discovery and MLD come back to it early in the boot, so what
+ * it took before is read away. */
 static int raw_passing(int type)
 {
     struct icmp6_filter f;
@@ -175,6 +178,8 @@ static int raw_passing(int type)
     ICMP6_FILTER_SETPASS(type, &f);
     if (fd < 0 || setsockopt(fd, IPPROTO_ICMPV6, ICMP6_FILTER, &f, sizeof(f)) != 0) {
         return -1;
+    }
+    while (recv(fd, msg, sizeof(msg), MSG_DONTWAIT) >= 0) {
     }
     return fd;
 }
@@ -194,7 +199,11 @@ static int checksum(void)
     }
     n = (int)recv(rx, msg, sizeof(msg), 0);
     if (n != 8 || msg[0] != ICMP6_ECHO_REQUEST || (msg[4] << 8 | msg[5]) != ECHO_ID) {
-        return fail("checksum: no echo request came");
+        char why[80];
+
+        snprintf(why, sizeof(why), "checksum: %d bytes of type %d came, not the echo request", n,
+                 n > 0 ? msg[0] : -1);
+        return fail(why);
     }
     if (msg[7] != 2) {
         return fail("checksum: the request with a bad checksum came");
