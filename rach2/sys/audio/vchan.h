@@ -7,8 +7,9 @@
 
 #include "audio.h"
 
-/* The mix asks the device for this rate, which every HD Audio codec has;
- * the SB16 grants 44100 Hz in its place. */
+/* The mix asks the device for this rate, which HD Audio codecs have and the
+ * HDA driver converts on one that lacks it; the SB16 grants 44100 Hz in its
+ * place. */
 #define VCHAN_RATE 48000u
 
 /*

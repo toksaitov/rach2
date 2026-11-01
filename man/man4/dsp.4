@@ -15,11 +15,24 @@ a program reads from it, through OSS's interface with Linux's numbers: major
 It is there only while the audio driver in use has streams.
 The node is mode 0666, so that the console's user plays sound.
 .Pp
-One descriptor at a time has the device.
+Any number of descriptors play at once, and one at a time records.
 An open for writing plays, one for reading records, and one for both does
 both at once, full duplex, with one format, channel count, rate and fragment
 size for the two.
-An open sets OSS's defaults, unsigned 8-bit mono at 8000 Hz.
+An open sets OSS's defaults, unsigned 8-bit mono at 8000 Hz, and each has
+its own settings, buffer and delay.
+.Pp
+The kernel mixes what every descriptor plays into one stream of the device:
+signed 16-bit stereo at 48000 Hz, or at 44100 Hz on the Sound Blaster 16.
+Each descriptor's samples are widened to 16-bit stereo and converted to that
+rate by linear interpolation, and the sum is held within 16 bits.
+A descriptor that starts while others play joins the mix after what the
+driver's buffer already holds.
+When a descriptor stops, by
+.Dv SNDCTL_DSP_RESET ,
+a trigger turned off or a nonblocking close, what the mix took from it and
+the device has not played is not taken back: it plays out with the others,
+or is dropped when no other descriptor plays.
 .Pp
 What is written is queued in a buffer of periods, the fragments of OSS.
 Without
@@ -108,20 +121,23 @@ Set one channel, or two for any larger count, and give back the count in use;
 Set stereo for a nonzero value and mono for 0, and give back 1 or 0.
 .It Dv SNDCTL_DSP_SPEED
 Set the rate nearest the one asked for, between 1000 and 192000 Hz and within
-what the driver plays or records, and give back the rate set; 0 asks for it.
-HDA plays a rate its codec has exactly, 44100 and 48000 Hz among them, and
-converts another to one it has, up to four times that rate.
-It records at the rate its converter has nearest the one asked for, and
+what the device plays or records, and give back the rate set; 0 asks for it.
+Playback takes any rate up to four times the mix's, which it converts to the
+mix's.
+HDA records at the rate its converter has nearest the one asked for, and
 converts none.
 In an open for both, the rate given back is playback's, and recording's may
-differ where the device has different rates in each direction.
+differ where the device's converter has other rates.
 .It Dv SNDCTL_DSP_SETFRAGMENT
 Ask for periods of 2 to the power of the low 16 bits bytes and for the
 number of them in the high 16 bits.
-A period is from 128 to 16384 bytes, the driver may make it smaller, and
-there are at least two and as many as 64 KiB hold.
-On the Sound Blaster 16 a period is at most 2048 bytes, and the rate is
-from 5000 through 44100 Hz; requests outside these bounds are clamped.
+A period is from 128 to 16384 bytes, and there are at least two and as many
+as 64 KiB hold.
+A playback period is at most the frames, at the rate set, that one period of
+the mix plays: 1024 frames of the mix on HD Audio, and 512 on the Sound
+Blaster 16.
+The buffer holds at least the periods the mix takes at its start.
+A recording period may be made smaller by the driver.
 .It Dv SNDCTL_DSP_GETBLKSIZE
 The bytes of a period.
 .It Dv SNDCTL_DSP_GETOSPACE
@@ -136,7 +152,7 @@ the whole periods recorded and not read, the periods of the buffer, the bytes
 of a period and the bytes ready to read.
 .It Dv SNDCTL_DSP_GETODELAY
 The bytes queued ahead of the next one written, in the buffer and in the
-driver: how long, at the rate set, before what is written next is heard.
+mix: how long, at the rate set, before what is written next is heard.
 .It Dv SNDCTL_DSP_GETOPTR
 A
 .Vt count_info :
@@ -163,8 +179,8 @@ Nothing, in an open for both, where the device is full duplex already.
 and
 .Dv PCM_ENABLE_INPUT ,
 each of the open's directions on at open.
-Turning output off stops playback, dropping what the driver's buffer holds
-and keeping the rest; turning it on starts playback if anything is queued.
+Turning output off stops playback, dropping what the mix has taken and
+keeping the rest; turning it on starts playback if anything is queued.
 Turning input off stops recording, keeping what was recorded for the reads;
 turning it on starts recording.
 .It Dv SNDCTL_DSP_POST
@@ -186,7 +202,10 @@ on the descriptor.
 .Bl -tag -width Er
 .It Bq Er EBUSY
 .Xr open 2 :
-another descriptor has the device, or one of the driver's streams it needs is in use.
+for an open for reading, another descriptor records; for any open, the
+console's audio
+.Xr ioctl 2
+calls are playing.
 .It Bq Er ENODEV
 .Xr open 2 :
 the driver has no streams, or none for a direction asked for: the Sound
