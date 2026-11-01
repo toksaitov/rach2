@@ -78,7 +78,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `e1000` (core tier; needs qemu; 128 MiB): the network path on the other emulated card, and the probe order that decides which card a machine with more than one of them gets, the cases of tests/cases/machine.e1000.json, each a boot of its own.
 * `grub` (core tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the machine replacing its own boot loader.
 * `disk-q35` (full tier; needs qemu; 128 MiB): blockprobe's page-cache integrity check on the q35 machine, whose AHCI controller is built in at 0:31.2, function 2 of the multi-function device 31.
-* `doom` (full tier; needs qemu; 128 MiB): the Doom port on a disk root, refused without its WAD, drawing with a zone sized from the machine's free memory, playing a demo to its end and recording one through fopen.
+* `doom` (full tier; needs qemu; 128 MiB): the Doom port on a disk root, refused without its WAD, drawing with a zone sized from the machine's free memory, playing a demo to its end and recording one through fopen, and playing a demo with its sound on /dev/dsp on HDA and on the SB16.
 * `diskpolicy` (full tier; needs qemu; 128 MiB): the read-only kernel does not write the disk, shown on the bytes rather than on a return value.
 * `console` (core tier; needs qemu; 128 MiB): the two probes that read from the console, which the shared probe boot cannot run because they block until something is typed.
 * `screen` (core tier; needs qemu; 128 MiB): the console blanked and shown again, by TIOCLINUX, by the escape that sets the blank time and by consoleblank=.
@@ -88,7 +88,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `bootorder` (full tier; needs qemu, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the GRUB disk on the second AHCI port behind a disk holding nothing, booted by the firmware, its root found as disk 1.
 * `reset` (core tier; needs qemu; 128 MiB): each reset mechanism on its own.
 * `netconsole-e1000` (full tier; needs qemu; 128 MiB): the netconsole suite's power-off on the e1000 card, whose stop sends the frames it was given before it silences the card, the case of tests/cases/machine.netconsole-e1000.json.
-* `audio` (core tier; needs qemu; 128 MiB): what the machine actually played.
+* `audio` (core tier; needs qemu; 128 MiB): what the machine actually played and recorded.
 * `input` (core tier; needs qemu; 128 MiB): the keyboards' event devices and OSS's mixer.
 * `netconsole` (core tier; needs qemu; 128 MiB): the kernel log on the wire, the cases of tests/cases/machine.netconsole.json.
 * `crash` (core tier; needs qemu; 128 MiB): the dirty-mount flag, a spare mode bit of the root node, untouched by dirtyprobe's clears of the set-id bits and still set after the unclean stop that follows.

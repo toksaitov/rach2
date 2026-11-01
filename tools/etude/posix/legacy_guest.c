@@ -84,7 +84,7 @@ struct legacy_guest {
     struct etude_qemu_device devices[DEVICES_MAX + 1];
     const char *properties[PROPERTIES_MAX];
     const char *options[OPTIONS_MAX + 1];
-    char kernel[PATH_LEN], initrd[PATH_LEN];
+    char kernel[PATH_LEN], initrd[PATH_LEN], audio_input[PATH_LEN];
     char qemu_i686[PATH_LEN], qemu_x86_64[PATH_LEN];
     struct etude_qemu_site site;
     struct etude_machine_spec mspec;
@@ -291,6 +291,7 @@ static int make_profile(struct legacy_guest *g)
     const struct json *q = g->k->qemu, *disks = json_member(q, "disks");
     const struct json *opts = json_member(q, "boot_options"), *i8042 = json_member(q, "i8042");
     const char *firmware = json_text(q, "firmware"), *initrd = json_text(q, "initrd");
+    const char *audio_input = json_text(q, "audio_input");
     struct etude_qemu_profile *p = &g->profile;
     char hex[65], dir[PATH_LEN];
     uint64_t n;
@@ -311,7 +312,8 @@ static int make_profile(struct legacy_guest *g)
     for (i = 0; opts != NULL && i < opts->count; i++)
         g->options[i] = opts->item[i]->string;
     if (make_devices(g, q) != 0 || stock(g, json_text(q, "kernel"), hex, g->kernel, &n) != 0 ||
-        (initrd != NULL && stock(g, initrd, hex, g->initrd, &n) != 0))
+        (initrd != NULL && stock(g, initrd, hex, g->initrd, &n) != 0) ||
+        (audio_input != NULL && stock(g, audio_input, hex, g->audio_input, &n) != 0))
         return -1;
     p->architecture = g->spec.arch;
     p->kernel = g->kernel;
@@ -323,6 +325,7 @@ static int make_profile(struct legacy_guest *g)
     p->memory_profile = json_text(q, "memory_profile");
     p->audio = json_text(q, "audio");
     p->audio_backend = json_text(q, "audio_backend");
+    p->audio_input = audio_input != NULL ? g->audio_input : NULL;
     p->firmware = firmware != NULL && strcmp(firmware, "seabios") == 0 ? ETUDE_FIRMWARE_SEABIOS
                                                                        : ETUDE_FIRMWARE_DIRECT;
     p->devices = g->devices;
