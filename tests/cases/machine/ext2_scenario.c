@@ -1,11 +1,11 @@
 /*
  * ext2_scenario.c: the scenario of machine.ext2, the ext2 driver booted.
  * Cases `probe-NAME` run a probe as init on an ext2 root staged from the test
- * manifest; `links` and `cost` run ext2probe's rows on the fixture volume the
- * host's mke2fs wrote; `rewrite`, `append`, `setid`, `lchown`, `dirent`,
- * `zombie` and `busy` each boot os-real on a fresh copy of its ext2 root; and
- * `repair` takes one copy of that root through a kill, the mount's check, a
- * lost block, a fault, recovery's e2fsck and a clean boot.
+ * manifest; `links`, `cost` and `names` run ext2probe's rows on the fixture
+ * volume the host's mke2fs wrote; `rewrite`, `append`, `setid`, `lchown`,
+ * `dirent`, `zombie` and `busy` each boot os-real on a fresh copy of its ext2
+ * root; and `repair` takes one copy of that root through a kill, the mount's
+ * check, a lost block, a fault, recovery's e2fsck and a clean boot.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -629,9 +629,9 @@ static void print_lines(const char *w, const char *key)
 }
 
 /**
- * Run case `links` or `cost`: ext2probe's rows of `mode` on the fixture
- * volume, mounted from the IDE disk beside the test image. Assertions
- * `exit`, `said-ok` and, for `links`, `mounted`.
+ * Run case `links`, `cost` or `names`: ext2probe's rows of `mode` on the
+ * fixture volume, mounted from the IDE disk beside the test image.
+ * Assertions `exit`, `said-ok` and, for `links`, `mounted`.
  */
 static void fixture(struct lc *l, const char *mode)
 {
@@ -650,8 +650,10 @@ static void fixture(struct lc *l, const char *mode)
         lc_assert(l, "said-ok", strstr(w, ok) != NULL && strstr(w, "EXT2PROBE FAIL") == NULL, why);
         if (strcmp(mode, "links") == 0)
             seen(l, w, "mounted", "ext2: mounted: ");
-        else
+        else if (strcmp(mode, "cost") == 0)
             print_lines(w, "ext2-cost: result: ");
+        else
+            print_lines(w, "ext2-names: result: ");
         free(w);
     }
     lc_quit(l, m, NULL);
@@ -1032,7 +1034,7 @@ int etude_scenario(struct etude_case *c)
             }
         return 1;
     }
-    if (strcmp(name, "links") == 0 || strcmp(name, "cost") == 0) {
+    if (strcmp(name, "links") == 0 || strcmp(name, "cost") == 0 || strcmp(name, "names") == 0) {
         lc_begin(&l, c, strcmp(name, "links") == 0 ? links_ids : cost_ids);
         fixture(&l, name);
         return lc_finish(&l);
