@@ -35,6 +35,15 @@
  * a second leave is EADDRNOTAVAIL and a datagram to the group is not
  * received: a datagram to ::1 sent after it comes first.
  *
+ * A UDP datagram to fe80::1 with no scope id is EINVAL, but with an
+ * IPV6_PKTINFO naming eth0 it is sent, and goes out eth0: the neighbour
+ * solicitation for fe80::1 that it starts raises eth0's transmitted packets
+ * in /proc/net/dev and Icmp6OutNeighborSolicits in /proc/net/snmp6.
+ *
+ * Last, in a network namespace of its own, whose `lo` carries no IPv6, a
+ * UDP socket's join of ff02::114 naming eth0's index, or index 0, and an
+ * IPV6_MULTICAST_IF of eth0's index are ENODEV.
+ *
  * Datagrams over ::1 and the copies of a group's datagrams go round the
  * loopback ring in the order they were sent, so an absence is judged by the
  * datagram that arrives in its place, never by a wait. The card's
@@ -46,8 +55,8 @@
  * (probe_report.h), for the case ETUDE_CASE names, has an assertion for each
  * row in order: `defaults`, `option-errors`, `options-kept`, `ancillary`,
  * `sendmsg-control`, `ctrunc`, `no-control`, `filter`, `join`,
- * `multicast-loop`, `no-loop` and `leave`. The first failure fails its
- * assertion and leaves the rest not run.
+ * `multicast-loop`, `no-loop`, `leave`, `pktinfo-scope` and `namespace-join`. The first failure
+ * fails its assertion and leaves the rest not run.
  */
 
 #define _GNU_SOURCE
@@ -56,7 +65,9 @@
 #include <net/if.h>
 #include <netinet/icmp6.h>
 #include <netinet/in.h>
+#include <sched.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -108,6 +119,60 @@ static void address(struct sockaddr_in6 *sa, const struct in6_addr *addr, int po
     sa->sin6_port = htons((unsigned short)port);
     sa->sin6_addr = *addr;
     sa->sin6_scope_id = (unsigned)scope;
+}
+
+/** The `col`th count, from 1, of interface `name`'s line of /proc/net/dev,
+ * or -1 when it has none. */
+static long dev_count(const char *name, int col)
+{
+    char line[256];
+    size_t n = strlen(name);
+    FILE *f = fopen("/proc/net/dev", "r");
+    long v = -1;
+
+    while (f && fgets(line, sizeof(line), f)) {
+        char *p = line + strspn(line, " ");
+        int i;
+
+        if (strncmp(p, name, n) != 0 || p[n] != ':') {
+            continue;
+        }
+        p += n + 1;
+        for (i = 0; i < col; i++) {
+            char *end;
+
+            v = strtol(p, &end, 10);
+            if (end == p) {
+                v = -1;
+                break;
+            }
+            p = end;
+        }
+        break;
+    }
+    if (f) {
+        fclose(f);
+    }
+    return v;
+}
+
+/** The counter `name` of /proc/net/snmp6, or -1 when it has none. */
+static long snmp6(const char *name)
+{
+    char key[64];
+    long v;
+    FILE *f = fopen("/proc/net/snmp6", "r");
+
+    while (f && fscanf(f, "%63s %ld", key, &v) == 2) {
+        if (strcmp(key, name) == 0) {
+            fclose(f);
+            return v;
+        }
+    }
+    if (f) {
+        fclose(f);
+    }
+    return -1;
 }
 
 /** A UDP socket bound to `addr` and `port`, or -1. */
@@ -224,6 +289,37 @@ static int send_tag(int fd, const struct sockaddr_in6 *to, unsigned char tag, in
         }
         m.msg_controllen = used;
     }
+    return sendmsg(fd, &m, 0) == 1 ? 0 : errno;
+}
+
+/** Send the byte `tag` from `fd` to `to` with the control message
+ * IPV6_PKTINFO naming no source and the interface `ifindex`. Returns 0 or
+ * the errno. */
+static int send_via(int fd, const struct sockaddr_in6 *to, unsigned char tag, int ifindex)
+{
+    unsigned long buf[(CMSG_SPACE(sizeof(struct in6_pktinfo)) + sizeof(long) - 1) / sizeof(long)];
+    struct in6_pktinfo pi;
+    struct msghdr m;
+    struct iovec iov;
+    struct cmsghdr *c;
+
+    memset(&m, 0, sizeof(m));
+    memset(buf, 0, sizeof(buf));
+    memset(&pi, 0, sizeof(pi));
+    pi.ipi6_ifindex = (unsigned)ifindex;
+    iov.iov_base = &tag;
+    iov.iov_len = 1;
+    m.msg_name = (void *)to;
+    m.msg_namelen = sizeof(*to);
+    m.msg_iov = &iov;
+    m.msg_iovlen = 1;
+    m.msg_control = buf;
+    m.msg_controllen = CMSG_SPACE(sizeof(pi));
+    c = CMSG_FIRSTHDR(&m);
+    c->cmsg_level = IPPROTO_IPV6;
+    c->cmsg_type = IPV6_PKTINFO;
+    c->cmsg_len = CMSG_LEN(sizeof(pi));
+    memcpy(CMSG_DATA(c), &pi, sizeof(pi));
     return sendmsg(fd, &m, 0) == 1 ? 0 : errno;
 }
 
@@ -476,14 +572,87 @@ static int group(void)
     return 0;
 }
 
+/** A datagram to fe80::1 with no scope id, sent by eth0 as IPV6_PKTINFO
+ * says. Runs after `group`, once eth0's link-local address is no longer
+ * tentative, so that the send has a source. */
+static int pktinfo_scope(void)
+{
+    struct sockaddr_in6 to;
+    struct in6_addr peer;
+    int eth = (int)if_nametoindex("eth0");
+    int fd = socket(AF_INET6, SOCK_DGRAM, 0);
+    long tx, ns;
+    char why[80];
+    int r;
+
+    inet_pton(AF_INET6, "fe80::1", &peer);
+    address(&to, &peer, PORT_GROUP, 0);
+    if (eth <= 0 || fd < 0) {
+        return fail("pktinfo-scope: setup");
+    }
+    if (send_tag(fd, &to, 6, -1, -1) != EINVAL) {
+        return fail("pktinfo-scope: sent with no interface");
+    }
+    tx = dev_count("eth0", 10);
+    ns = snmp6("Icmp6OutNeighborSolicits");
+    if (tx < 0 || ns < 0) {
+        return fail("pktinfo-scope: counters");
+    }
+    if ((r = send_via(fd, &to, 7, eth)) != 0) {
+        snprintf(why, sizeof(why), "pktinfo-scope: send: %s", strerror(r));
+        return fail(why);
+    }
+    if (dev_count("eth0", 10) <= tx || snmp6("Icmp6OutNeighborSolicits") <= ns) {
+        return fail("pktinfo-scope: nothing went out eth0");
+    }
+    report_held();
+    close(fd);
+    return 0;
+}
+
+/** Joins and a multicast interface naming eth0 from a network namespace
+ * of the probe's own, which it enters for good, so this runs last. */
+static int namespace_join(void)
+{
+    struct ipv6_mreq mreq;
+    int eth = (int)if_nametoindex("eth0");
+    int fd;
+
+    if (eth <= 0 || unshare(CLONE_NEWNET) != 0) {
+        return fail("namespace-join: unshare");
+    }
+    fd = socket(AF_INET6, SOCK_DGRAM, 0);
+    if (fd < 0) {
+        return fail("namespace-join: socket");
+    }
+    memset(&mreq, 0, sizeof(mreq));
+    inet_pton(AF_INET6, "ff02::114", &mreq.ipv6mr_multiaddr);
+    mreq.ipv6mr_interface = (unsigned)eth;
+    if (setsockopt(fd, IPPROTO_IPV6, IPV6_JOIN_GROUP, &mreq, sizeof(mreq)) == 0 ||
+        errno != ENODEV) {
+        return fail("namespace-join: eth0's index");
+    }
+    mreq.ipv6mr_interface = 0;
+    if (setsockopt(fd, IPPROTO_IPV6, IPV6_JOIN_GROUP, &mreq, sizeof(mreq)) == 0 ||
+        errno != ENODEV) {
+        return fail("namespace-join: index 0");
+    }
+    if (set6(fd, IPV6_MULTICAST_IF, eth) != ENODEV) {
+        return fail("namespace-join: IPV6_MULTICAST_IF");
+    }
+    report_held();
+    close(fd);
+    return 0;
+}
+
 /** Begin the report and plan its assertions, in the order they are
  * checked. */
 static void plan(void)
 {
-    static const char *const ids[] = {"defaults",       "option-errors",   "options-kept",
-                                      "ancillary",      "sendmsg-control", "ctrunc",
-                                      "no-control",     "filter",          "join",
-                                      "multicast-loop", "no-loop",         "leave"};
+    static const char *const ids[] = {
+        "defaults", "option-errors", "options-kept",  "ancillary",     "sendmsg-control",
+        "ctrunc",   "no-control",    "filter",        "join",          "multicast-loop",
+        "no-loop",  "leave",         "pktinfo-scope", "namespace-join"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.ip6optmusl"));
@@ -495,7 +664,8 @@ static void plan(void)
 int main(void)
 {
     plan();
-    if (options() != 0 || ancillary() != 0 || filter() != 0 || group() != 0) {
+    if (options() != 0 || ancillary() != 0 || filter() != 0 || group() != 0 ||
+        pktinfo_scope() != 0 || namespace_join() != 0) {
         return 1;
     }
     report_end();

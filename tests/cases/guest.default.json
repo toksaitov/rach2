@@ -4303,13 +4303,13 @@
     },
     {
       "case_id": "guest.default.ip6optmusl",
-      "behavior": "An AF_INET6 socket keeps the hop limits, the multicast interface and loop and the traffic class it is given and refuses values out of range; a receive gives the IPV6_PKTINFO, IPV6_HOPLIMIT and IPV6_TCLASS control messages it asked for, and a sendmsg's own go before the socket's; a raw ICMPv6 socket's filter passes only the types it allows; and a group joined on eth0 receives the datagrams this machine sends it while the loop is on, and none once left.",
+      "behavior": "An AF_INET6 socket keeps the hop limits, the multicast interface and loop and the traffic class it is given and refuses values out of range; a receive gives the IPV6_PKTINFO, IPV6_HOPLIMIT and IPV6_TCLASS control messages it asked for, and a sendmsg's own go before the socket's; a raw ICMPv6 socket's filter passes only the types it allows; a group joined on eth0 receives the datagrams this machine sends it while the loop is on, and none once left; a sendmsg's IPV6_PKTINFO interface scopes a link-local destination with no scope id; and a socket of another network namespace names no interface of the machine's.",
       "units": ["default", "musl/ip6optmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
       "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
-      "execution": {"program": "ip6optmusl", "stdin": null, "role": "ordinary", "privileges": "root, which raw sockets need", "isolation": [], "children": "none", "cleanup": "its sockets close at exit, which leaves the group"},
+      "execution": {"program": "ip6optmusl", "stdin": null, "role": "ordinary", "privileges": "root, which raw sockets need", "isolation": [], "children": "none", "cleanup": "its sockets close at exit, which leaves the group, and its network namespace ends with it"},
       "assertions": [
         {"assertion_id": "defaults", "checks": "A new AF_INET6 UDP socket reads IPV6_UNICAST_HOPS 64, IPV6_MULTICAST_HOPS 1, IPV6_MULTICAST_LOOP 1, IPV6_MULTICAST_IF 0, IPV6_TCLASS 0 and IPV6_RECVPKTINFO 0.", "source": "program"},
         {"assertion_id": "option-errors", "checks": "A hop limit or class of 256 or -2 and a loop of 2 are EINVAL, a multicast interface of index 999 ENODEV, IPV6_UNICAST_HOPS on an AF_INET socket ENOPROTOOPT, and a join of ::1 EINVAL.", "source": "program"},
@@ -4322,7 +4322,9 @@
         {"assertion_id": "join", "checks": "A UDP socket joins ff02::114 on eth0, and a second join is EADDRINUSE.", "source": "program"},
         {"assertion_id": "multicast-loop", "checks": "A datagram to ff02::114 sent with IPV6_MULTICAST_IF eth0 and IPV6_MULTICAST_HOPS 3, once eth0's link-local address is no longer tentative, comes back with IPV6_PKTINFO ff02::114 on eth0 and IPV6_HOPLIMIT 3.", "source": "program"},
         {"assertion_id": "no-loop", "checks": "A datagram sent with IPV6_MULTICAST_LOOP 0 does not come back: the next one received is a later one sent with the loop on.", "source": "program"},
-        {"assertion_id": "leave", "checks": "After IPV6_LEAVE_GROUP a second leave is EADDRNOTAVAIL, and a datagram to the group is not received: one to ::1 sent after it comes first.", "source": "program"}
+        {"assertion_id": "leave", "checks": "After IPV6_LEAVE_GROUP a second leave is EADDRNOTAVAIL, and a datagram to the group is not received: one to ::1 sent after it comes first.", "source": "program"},
+        {"assertion_id": "pktinfo-scope", "checks": "A UDP datagram to fe80::1 with scope id 0 is EINVAL, but with IPV6_PKTINFO naming eth0 it is sent and goes out eth0: eth0's transmitted packets in /proc/net/dev and Icmp6OutNeighborSolicits in /proc/net/snmp6 rise.", "source": "program"},
+        {"assertion_id": "namespace-join", "checks": "In a network namespace of the probe's own, a join of ff02::114 naming eth0's index or index 0, and IPV6_MULTICAST_IF naming eth0's index, are ENODEV.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

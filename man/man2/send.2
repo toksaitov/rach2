@@ -61,7 +61,8 @@ a
 .Vt struct in6_pktinfo
 of the source, which must be an address of this machine, or :: for the
 usual one, and the index of the interface to leave by, or 0, which must
-agree with the destination's scope id;
+agree with the destination's scope id and gives a link-scoped destination
+with none its interface;
 .Dv IPV6_HOPLIMIT
 and
 .Dv IPV6_TCLASS ,
@@ -165,8 +166,9 @@ gets
 An unbound socket is first assigned an ephemeral source port.
 An IPv4 datagram may contain at most 65507 bytes; an empty datagram is
 valid.
-IPv6 UDP takes a sockaddr_in6 with a scope id for a link-scoped destination
-and allows at most 65527 bytes.
+IPv6 UDP takes a sockaddr_in6 with a scope id, or an
+.Dv IPV6_PKTINFO
+interface, for a link-scoped destination and allows at most 65527 bytes.
 Both families compute the UDP checksum.
 A dual-stack socket sends to mapped IPv4 destinations through IPv4.
 sendmsg gathers the iovecs into one datagram for either family.
@@ -362,8 +364,10 @@ IPv4 or IPv6 datagram.
 .It Bq Er ENODEV
 A packet destination, or the
 .Dv IPV6_PKTINFO
-control message of an IPv6 send, specifies an unregistered interface
-index.
+control message or the scope id of an IPv6 send, specifies an unregistered
+interface index, or any index from an IPv6 socket of a network namespace
+other than the first
+.Pq Xr unshare 2 .
 .It Bq Er ENOTSOCK
 .Fa fd
 does not refer to a socket.

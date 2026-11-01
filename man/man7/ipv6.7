@@ -27,10 +27,14 @@ of 28 bytes: the family, the port, the flow information, which is not
 read, the address in network order, and the scope id, an interface's
 index.
 A caller may give the 24 bytes of RFC 2133, without the scope id.
-A link-local address, fe80::/10, needs a scope id, or the index the socket
+A link-local address, fe80::/10, needs a scope id, the index the socket
 is bound to by
-.Dv SO_BINDTODEVICE ;
-with neither it is
+.Dv SO_BINDTODEVICE ,
+or for a UDP send the interface of an
+.Dv IPV6_PKTINFO
+control message
+.Pq Xr send 2 ;
+with none it is
 .Er EINVAL .
 .Pp
 A socket of

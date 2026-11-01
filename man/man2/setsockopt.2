@@ -326,7 +326,9 @@ A nonempty
 .Dv SO_BINDTODEVICE
 name does not identify a registered interface, an interface index of
 .Dv IPV6_MULTICAST_IF
-or a join does not exist, or a join with index 0 finds no route.
+or a join does not exist, or a join with index 0 finds no route; an IPv6
+socket of a network namespace other than the first names no interface
+.Pq Xr unshare 2 .
 .It Bq Er ENOPROTOOPT
 .Dv IP_HDRINCL
 was requested,

@@ -63,6 +63,12 @@ Its TCP and UDP sockets then reach 127/8 within the namespace alone, and any
 other address, IPv6 included, fails with
 .Er ENETUNREACH ,
 as does a raw socket's send.
+An IPv6 socket there names no interface: a group join,
+.Dv IPV6_MULTICAST_IF ,
+an
+.Dv IPV6_PKTINFO
+interface and a scope id fail with
+.Er ENODEV .
 .Pa /proc/net
 and
 .Pa /sys/class/net
