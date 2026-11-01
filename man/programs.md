@@ -159,6 +159,7 @@ Each port is a recipe of [`vendor/gnu/ports/`](../vendor/gnu/ports), with the ve
 | [bind9](../vendor/gnu/ports/bind9.sh) | 9.20.4 | BIND 9's tools for asking a name server: dig, host, nslookup, delv and nsupdate, with the libraries they share, on libuv, Userspace RCU, OpenSSL and libcap. |
 | [bison](../vendor/gnu/ports/bison.sh) | 3.8.2 | GNU Bison, the parser generator, which runs m4 at /usr/bin/m4. |
 | [brotli](../vendor/gnu/ports/brotli.sh) | 1.2.0 | brotli: the libraries libbrotlicommon, libbrotlidec and libbrotlienc, which Chawan links to read compressed pages, and the brotli program, with the headers and pkg-config files. |
+| [bubblewrap](../vendor/gnu/ports/bubblewrap.sh) | 0.8.0 | bubblewrap, whose bwrap runs a program in new namespaces as a sandbox, as Claude Code's sandboxed shell runs its commands. |
 | [bzip2](../vendor/gnu/ports/bzip2.sh) | 1.0.8 | bzip2 and libbz2, which Python's bz2 module, unzip and tar -j use. |
 | [chawan](../vendor/gnu/ports/chawan.sh) | 0.5~dev1 | Chawan, cha, a web browser for the terminal with an HTML and CSS engine of its own, with flow, table and flex layout, and JavaScript in QuickJS, which its configuration turns on. |
 | [cmake](../vendor/gnu/ports/cmake.sh) | 4.3.4 | CMake, the build system generator, with ccmake on the root's ncurses and the libraries its release carries, curl among them over the root's OpenSSL. |
@@ -211,6 +212,7 @@ Each port is a recipe of [`vendor/gnu/ports/`](../vendor/gnu/ports), with the ve
 | [screen](../vendor/gnu/ports/screen.sh) | 5.0.2 | GNU screen, the terminal multiplexer, without PAM, which the root does not have, and not set-id: a user's sessions are sockets in ~/.screen, as screen keeps them when it is not installed set-id root. |
 | [sed](../vendor/gnu/ports/sed.sh) | 4.10 | GNU sed. |
 | [shadow](../vendor/gnu/ports/shadow.sh) | 4.20.2 | shadow, the account tools Debian has from it that BusyBox has not: useradd, usermod and userdel, groupadd, groupmod and groupdel, gpasswd, chsh, chfn and chage, chgpasswd, newusers, vipw and vigr, pwck and grpck, faillog, and the conversions to and from the shadow files, with /etc/login.defs. |
+| [socat](../vendor/gnu/ports/socat.sh) | 1.8.1.3 | socat, the relay between two byte streams of almost any kind, which Claude Code's sandbox runs to carry its network proxy into the sandbox, with OpenSSL for its TLS addresses, and its filan and procan. |
 | [sqlite](../vendor/gnu/ports/sqlite.sh) | 3.53.4 | SQLite: the library, which Python's sqlite3 module and GnuPG's keyboxd link, and the sqlite3 shell with readline, from the amalgamation's release, with the full-text, R-tree, session and statistics extensions Debian's has. |
 | [strace](../vendor/gnu/ports/strace.sh) | 7.2 | strace, the system call tracer. |
 | [sudo](../vendor/gnu/ports/sudo.sh) | 1.9.17p2 | sudo, which runs a command as another user by the rules of /etc/sudoers, checked against the shadow file, since the root has no PAM, and without its log server and the mail it would send. |
