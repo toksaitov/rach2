@@ -1,0 +1,61 @@
+.Dd November 2, 2026
+.Dt FD 1
+.Os
+.Sh NAME
+.Nm fd
+.Nd find files by name
+.Sh SYNOPSIS
+.Nm
+.Op Ar options
+.Op Ar pattern
+.Op Ar path ...
+.Sh DESCRIPTION
+.Nm
+searches a tree for names that match a regular expression.
+It searches the current directory when no path is given, and skips hidden
+files and names excluded by ignore files, including
+.Pa .gitignore
+and
+.Pa .fdignore .
+.Fl H
+includes hidden files,
+.Fl I
+includes ignored files, and
+.Fl F
+matches a literal string instead of a regular expression.
+.Fl t f
+selects regular files;
+.Fl e Ar extension
+selects a file extension.
+.Ql fd --help
+describes the other options.
+.Pp
+The x86-64 GNU root installs the author's static musl build, version 10.5.0,
+under
+.Pa /opt/fd
+when built with
+.Ql GNU_AGENTS=fd
+or
+.Ql GNU_AGENTS=all .
+.Pa /usr/bin/fd
+and
+.Pa /bin/fd
+link to it.
+The package includes
+.Pa LICENSE-MIT
+and
+.Pa LICENSE-APACHE ;
+either license may be chosen.
+Its upstream manual and shell completions stay under
+.Pa /opt/fd ;
+the shells do not load them automatically.
+.Sh EXAMPLES
+Find C source files, including hidden and ignored paths:
+.Bd -literal -offset indent
+$ fd -H -I -t f -e c
+.Ed
+.Sh SEE ALSO
+.Xr find 1 ,
+.Xr rg 1
+.Pp
+.Lk https://github.com/sharkdp/fd/tree/v10.5.0 "The fd manual"

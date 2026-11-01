@@ -1,0 +1,57 @@
+.Dd November 2, 2026
+.Dt SHELLCHECK 1
+.Os
+.Sh NAME
+.Nm shellcheck
+.Nd find errors in shell scripts
+.Sh SYNOPSIS
+.Nm
+.Op Ar options
+.Ar file ...
+.Sh DESCRIPTION
+.Nm
+reads shell scripts and reports syntax errors, common mistakes and
+portability problems without executing them.
+.Fl s Ar shell
+chooses the shell dialect;
+.Fl x
+follows sourced files;
+.Fl f Ar format
+chooses the output format, such as tty, gcc or json.
+A file named
+.Ql -
+is read from standard input.
+.Ql shellcheck --help
+describes the other options.
+.Pp
+The x86-64 GNU root installs the project's static Linux build, version
+0.11.0, under
+.Pa /opt/shellcheck
+when built with
+.Ql GNU_AGENTS=shellcheck
+or
+.Ql GNU_AGENTS=all .
+.Pa /usr/bin/shellcheck
+and
+.Pa /bin/shellcheck
+link to it.
+The GPL version 3 or later is in
+.Pa /opt/shellcheck/LICENSE .
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa .shellcheckrc
+settings read from the script's directory or a parent
+.It Pa ~/.shellcheckrc
+user settings when no nearer file is found
+.El
+.Sh EXIT STATUS
+0 for no findings, 1 for findings, 2 when a file could not be processed,
+3 for a bad invocation, and 4 for a bad option.
+.Sh EXAMPLES
+.Bd -literal -offset indent
+$ shellcheck -s sh script.sh
+.Ed
+.Sh SEE ALSO
+.Xr sh 1
+.Pp
+.Lk https://www.shellcheck.net/wiki/ "The ShellCheck diagnostics"
