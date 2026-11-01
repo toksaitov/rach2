@@ -15,6 +15,7 @@ and
 read, each PCI function and each running USB device and what it says of
 itself in its
 .Pa uevent ,
+a PCI function's configuration space,
 the network interfaces under
 .Pa /sys/class/net ,
 which scripts read for an interface's address, state and counters, the
@@ -50,6 +51,15 @@ the directory's name; and
 .Ql MODALIAS ,
 as Linux writes it.
 The subsystem is 0000:0000 for a bridge.
+.It Pa /sys/devices/pci0000:00/0000:BB:DD.F/config
+The function's configuration space, read-only, as Linux gives it: 4096
+bytes when the ECAM window of the MCFG reaches the function's extended
+space, else 256, each dword read as the function answers it at the time
+of the read; to a process without privilege only the first 64, the
+header, since a few devices act on a read of their other registers.
+Its size in
+.Xr stat 2
+is 4096, as every file here has.
 .It Pa /sys/bus/usb/devices/B-P[.P...]
 A symbolic link for each running USB device, named by its bus, the number
 of its controller from 1, and its port on the controller and on each hub
