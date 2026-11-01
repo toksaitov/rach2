@@ -88,4 +88,13 @@
  */
 bool sb16_probe(uint16_t base);
 
+/**
+ * The frames a sample written now waits behind: the ring's and the double
+ * buffer's from the DMA controller's position to the end of the half the
+ * interrupt refilled last, which is the other half's end when the second half
+ * plays and the buffer's end when the first does. 0 when nothing plays. Safe
+ * from any context.
+ */
+uint32_t sb16_delay_frames(void);
+
 #endif /* _SB16_H_ */
