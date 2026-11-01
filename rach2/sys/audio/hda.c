@@ -127,10 +127,10 @@ static uint32_t period_bytes = HDA_PERIOD_MAX; /* set by hda_start */
  * The write path's ring, which `hda_start` sizes to HDA_RING_PERIODS periods
  * of the caller's frames, so that a write waits at most that long in it and
  * HDA_PERIODS more in the DMA buffer: 139 ms at 44.1 kHz. Three periods take
- * a writer's burst of up to one period beside the period the service takes at
- * once; Doom writes one tic, 28.6 ms, at a time. ring_size is one more than
- * the bytes it holds, since one slot stays empty, and at most HDA_RING_MAX,
- * which caps the ring under three periods only above 96 kHz stereo.
+ * a writer's burst of up to one period, such as a tic of Doom's, 28.6 ms,
+ * beside the period the service takes at once. ring_size is one more than the
+ * bytes it holds, since one slot stays empty, and at most HDA_RING_MAX, which
+ * caps the ring under three periods only above 96 kHz stereo.
  */
 #define HDA_RING_PERIODS 3
 #define HDA_RING_MAX     32768
@@ -393,7 +393,7 @@ const char *hda_get_boot_status(void)
  * Render `out_frames` frames of ring audio into one DMA period at `dest`.
  *
  * Converts from the format, rate and channel count AUDIO_START requested
- * (Doom's is 11025 Hz U8 mono) to the stream's, signed 16-bit stereo at
+ * (11025 Hz U8 mono, say) to the stream's, signed 16-bit stereo at
  * the rate hda_select_hw_rate chose, with a 16.16 fixed-point sample-and-hold
  * resampler: each output frame repeats the current input frame, and the
  * fraction advances by resample_step_fp, taking the next input frame each
