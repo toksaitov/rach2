@@ -74,6 +74,8 @@ Set stereo for a nonzero value and mono for 0, and give back 1 or 0.
 .It Dv SNDCTL_DSP_SPEED
 Set the rate nearest the one asked for, between 1000 and 192000 Hz and within
 what the driver plays, and give back the rate set; 0 asks for it.
+HDA plays a rate its codec has exactly, 44100 and 48000 Hz among them, and
+converts another to one it has, up to four times that rate.
 .It Dv SNDCTL_DSP_SETFRAGMENT
 Ask for periods of 2 to the power of the low 16 bits bytes and for the
 number of them in the high 16 bits.
@@ -133,8 +135,7 @@ another descriptor has the device, or the driver's stream is in use.
 for reading.
 .It Bq Er ENODEV
 .Xr open 2 :
-the driver has no streams, or no playback stream, as HD Audio's driver
-has none yet.
+the driver has no playback stream.
 .It Bq Er EINTR
 A signal ended a write that took nothing, or the wait of
 .Dv SNDCTL_DSP_SYNC ,
