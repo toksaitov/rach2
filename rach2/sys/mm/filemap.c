@@ -112,9 +112,9 @@ static int32_t filemap_read(struct filemap *m, uint8_t *page, uint32_t pgoff)
     return got;
 }
 
-/** A page of a private mapping: the copy the file cache has of it, or the
- * page read from the file (`filemap_read`), which the cache then keeps a
- * copy of. */
+/** A page of a private mapping: the copy the file cache has of it, 0, or
+ * the page read from the file (`filemap_read`), which the cache then keeps
+ * a copy of, 1; -1 when the read fails. */
 static int filemap_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
 {
     struct filemap *m = (struct filemap *)f;
@@ -138,7 +138,7 @@ static int filemap_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
         return -1;
     }
     filecache_store(&m->entry, pgoff, phys, epoch);
-    return 0;
+    return 1;
 }
 
 /** A page of a shared mapping of memory: shared anonymous memory has every
@@ -344,7 +344,7 @@ static uintptr_t filemap_share_disk(struct vm_file *f, uint32_t pgoff)
     if (phys == 0) {
         return 0;
     }
-    if (filemap_fill(f, pgoff, phys) != 0) {
+    if (filemap_fill(f, pgoff, phys) < 0) {
         free_frame(phys);
         return 0;
     }
