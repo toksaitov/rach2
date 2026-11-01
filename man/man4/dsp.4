@@ -1,0 +1,151 @@
+.Dd November 1, 2026
+.Dt DSP 4
+.Os
+.Sh NAME
+.Nm dsp
+.Nd OSS's audio device, for playback
+.Sh SYNOPSIS
+.In sys/soundcard.h
+.Pp
+.Pa /dev/dsp
+.Sh DESCRIPTION
+The device plays the samples a program writes to it, through OSS's
+interface with Linux's numbers: major 14, minor 3.
+It is there only while the audio driver in use has streams.
+The node is mode 0666, so that the console's user plays sound.
+.Pp
+One descriptor at a time has the device, and it must be opened for writing
+alone: the device does not record.
+An open sets OSS's defaults, unsigned 8-bit mono at 8000 Hz.
+.Pp
+What is written is queued in a buffer of periods, the fragments of OSS.
+Without
+.Dv SNDCTL_DSP_SETFRAGMENT
+a period is the power of two of bytes nearest a 43rd of a second, about
+23 ms, at least 128 bytes, and the buffer has four of them.
+The device starts playing once enough is queued to fill the periods of the
+driver's own buffer, or at
+.Dv SNDCTL_DSP_POST ,
+.Dv SNDCTL_DSP_SYNC
+or the last
+.Xr close 2 .
+When the program falls behind, the device plays silence and goes on.
+.Pp
+.Xr write 2
+takes whole or partial frames; a partial frame waits for the write that
+completes it.
+While the buffer is full a write waits for room.
+A signal ends the wait: the write returns the bytes it took, or fails with
+.Er EINTR
+when it took none.
+With
+.Dv O_NONBLOCK
+the write takes what fits and fails with
+.Er EAGAIN
+when nothing does.
+.Xr poll 2
+reports
+.Dv POLLOUT
+while a whole period of the buffer is free.
+The last close waits for what is queued to play, unless the descriptor is
+nonblocking or a signal comes, and then stops the device.
+.Pp
+A change of format, channels, rate or fragments stops the device and empties
+the buffer.
+The requests:
+.Bl -tag -width SNDCTL_DSP_SETFRAGMENT
+.It Dv SNDCTL_DSP_SETFMT , SNDCTL_DSP_SAMPLESIZE
+Set
+.Dv AFMT_U8
+or
+.Dv AFMT_S16_LE ,
+and give back the format in use; another format, or
+.Dv AFMT_QUERY ,
+leaves the format as it is.
+.It Dv SNDCTL_DSP_GETFMTS
+.Dv AFMT_U8
+and
+.Dv AFMT_S16_LE .
+.It Dv SNDCTL_DSP_CHANNELS
+Set one channel, or two for any larger count, and give back the count in use;
+0 asks for it.
+.It Dv SNDCTL_DSP_STEREO
+Set stereo for a nonzero value and mono for 0, and give back 1 or 0.
+.It Dv SNDCTL_DSP_SPEED
+Set the rate nearest the one asked for, between 1000 and 192000 Hz and within
+what the driver plays, and give back the rate set; 0 asks for it.
+.It Dv SNDCTL_DSP_SETFRAGMENT
+Ask for periods of 2 to the power of the low 16 bits bytes and for the
+number of them in the high 16 bits.
+A period is from 128 to 16384 bytes, the driver may make it smaller, and
+there are at least two and as many as 64 KiB hold.
+.It Dv SNDCTL_DSP_GETBLKSIZE
+The bytes of a period.
+.It Dv SNDCTL_DSP_GETOSPACE
+An
+.Vt audio_buf_info :
+the whole periods free, the periods of the buffer, the bytes of a period and
+the bytes free.
+.It Dv SNDCTL_DSP_GETODELAY
+The bytes queued ahead of the next one written, in the buffer and in the
+driver: how long, at the rate set, before what is written next is heard.
+.It Dv SNDCTL_DSP_GETOPTR
+A
+.Vt count_info :
+the bytes played since the open, silence among them, wrapping; the periods
+played since the last
+.Dv SNDCTL_DSP_GETOPTR ;
+and the play position's offset in the buffer.
+.It Dv SNDCTL_DSP_GETCAPS
+.Dv DSP_CAP_REALTIME
+and
+.Dv DSP_CAP_TRIGGER ,
+revision 1.
+.It Dv SNDCTL_DSP_GETTRIGGER , SNDCTL_DSP_SETTRIGGER
+.Dv PCM_ENABLE_OUTPUT ,
+on at open.
+Turning it off stops the device, dropping what the driver's buffer holds and
+keeping the rest; turning it on starts it if anything is queued.
+.It Dv SNDCTL_DSP_POST
+Start the device if anything is queued, however little.
+.It Dv SNDCTL_DSP_SYNC
+Start the device, wait for what is queued to play, then stop it and drop a
+partial frame left over.
+With the trigger off it returns at once.
+.It Dv SNDCTL_DSP_RESET
+Stop the device at once and empty the buffer.
+.It Dv SNDCTL_DSP_NONBLOCK
+Set
+.Dv O_NONBLOCK
+on the descriptor.
+.It Dv OSS_GETVERSION
+0x030802, the version Linux gives.
+.El
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EBUSY
+.Xr open 2 :
+another descriptor has the device, or the driver's stream is in use.
+.It Bq Er ENXIO
+.Xr open 2
+for reading.
+.It Bq Er ENODEV
+.Xr open 2 :
+the driver has no streams.
+.It Bq Er EINTR
+A signal ended a write that took nothing, or the wait of
+.Dv SNDCTL_DSP_SYNC ,
+which leaves the device playing.
+.It Bq Er EAGAIN
+A nonblocking write found no room.
+.It Bq Er EIO
+The device failed to start.
+.It Bq Er EINVAL
+Another of OSS's requests, such as
+.Dv SNDCTL_DSP_GETISPACE .
+.It Bq Er ENOTTY
+Another request.
+.El
+.Sh SEE ALSO
+.Xr audiotest 1 ,
+.Xr mixer 4
