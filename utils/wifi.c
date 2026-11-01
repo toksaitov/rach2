@@ -188,9 +188,8 @@ static int ctrl_socket(const char *server, char *path, size_t size, int n)
     return fd;
 }
 
-/** Close the sockets of `c`, detaching the monitor, and remove their
- * paths. */
-static void ctrl_close(struct ctrl *c)
+/** Close the event socket of `c`, detached first, and remove its path. */
+static void monitor_close(struct ctrl *c)
 {
     if (c->mon >= 0) {
         if (c->attached) {
@@ -198,17 +197,27 @@ static void ctrl_close(struct ctrl *c)
         }
         close(c->mon);
     }
-    if (c->cmd >= 0) {
-        close(c->cmd);
-    }
     if (c->mon_path[0] != '\0') {
         (void)unlink(c->mon_path);
+    }
+    c->mon = -1;
+    c->attached = 0;
+    c->mon_path[0] = '\0';
+}
+
+/** Close the sockets of `c`, detaching the monitor, and remove their
+ * paths. */
+static void ctrl_close(struct ctrl *c)
+{
+    monitor_close(c);
+    if (c->cmd >= 0) {
+        close(c->cmd);
     }
     if (c->cmd_path[0] != '\0') {
         (void)unlink(c->cmd_path);
     }
-    c->cmd = c->mon = -1;
-    c->cmd_path[0] = c->mon_path[0] = '\0';
+    c->cmd = -1;
+    c->cmd_path[0] = '\0';
 }
 
 /**
@@ -309,6 +318,31 @@ static int ctrl_ok(struct ctrl *c, const char *fmt, ...)
 }
 
 /**
+ * Open the event socket of `c` and attach it, so that wpa_supplicant sends
+ * it each event from now on. Returns 0, or -1 after a diagnostic.
+ */
+static int monitor_open(struct ctrl *c)
+{
+    char server[sizeof(((struct sockaddr_un *)0)->sun_path)];
+    char reply[64];
+
+    snprintf(server, sizeof(server), "%s/%s", WIFI_CTRL_DIR, WIFI_IFACE);
+    c->mon = ctrl_socket(server, c->mon_path, sizeof(c->mon_path), 1);
+    if (c->mon < 0) {
+        return -1;
+    }
+    if (send(c->mon, "ATTACH", 6, 0) < 0 ||
+        ctrl_read(c->mon, reply, sizeof(reply), now() + REPLY_WAIT) <= 0 ||
+        strncmp(reply, "OK", 2) != 0) {
+        complain("wpa_supplicant did not take the event monitor");
+        monitor_close(c);
+        return -1;
+    }
+    c->attached = 1;
+    return 0;
+}
+
+/**
  * Open the request socket to wpa_supplicant's socket for `WIFI_IFACE` and,
  * when `events`, the event socket, attached. Returns 0, or -1 after a
  * diagnostic with `c` closed.
@@ -316,7 +350,6 @@ static int ctrl_ok(struct ctrl *c, const char *fmt, ...)
 static int ctrl_open(struct ctrl *c, int events)
 {
     char server[sizeof(((struct sockaddr_un *)0)->sun_path)];
-    char reply[64];
 
     c->cmd = c->mon = -1;
     c->attached = 0;
@@ -326,22 +359,10 @@ static int ctrl_open(struct ctrl *c, int events)
     if (c->cmd < 0) {
         return -1;
     }
-    if (!events) {
-        return 0;
-    }
-    c->mon = ctrl_socket(server, c->mon_path, sizeof(c->mon_path), 1);
-    if (c->mon < 0) {
+    if (events && monitor_open(c) != 0) {
         ctrl_close(c);
         return -1;
     }
-    if (send(c->mon, "ATTACH", 6, 0) < 0 ||
-        ctrl_read(c->mon, reply, sizeof(reply), now() + REPLY_WAIT) <= 0 ||
-        strncmp(reply, "OK", 2) != 0) {
-        complain("wpa_supplicant did not take the event monitor");
-        ctrl_close(c);
-        return -1;
-    }
-    c->attached = 1;
     return 0;
 }
 
@@ -1138,22 +1159,30 @@ static int select_wait(struct ctrl *c, int id, int probe, struct cert *cert, cha
         copy(why, size, "wpa_supplicant refused the network");
         return -1;
     }
-    while (got < 0 && (rc = ctrl_event(c, ev, sizeof(ev), deadline)) > 0) {
+    while ((rc = ctrl_event(c, ev, sizeof(ev), deadline)) > 0) {
+        if (got == 0 && strncmp(ev, "CTRL-EVENT-EAP-PEER-", 20) != 0) {
+            break; /* the certificate's events are over */
+        }
         if (probe && strncmp(ev, "CTRL-EVENT-EAP-PEER-ALT depth=0 ", 32) == 0) {
-            copy(cert->alt, sizeof(cert->alt), ev + 32);
-        } else if (probe && strncmp(ev, "CTRL-EVENT-EAP-PEER-CERT depth=0 ", 33) == 0 &&
+            if (cert->alt[0] == '\0') {
+                copy(cert->alt, sizeof(cert->alt), ev + 32);
+            }
+        } else if (probe && got < 0 && strncmp(ev, "CTRL-EVENT-EAP-PEER-CERT depth=0 ", 33) == 0 &&
                    word_field(ev, " hash=", cert->hash, sizeof(cert->hash)) == 0) {
             if (quoted_field(ev, "subject='", "' hash=", cert->subject, sizeof(cert->subject)) !=
                 0) {
                 cert->subject[0] = '\0';
             }
-            got = strlen(cert->hash) == 64 ? 0 : -1;
-            if (got != 0) {
+            if (strlen(cert->hash) != 64) {
                 copy(why, size, "the network's certificate came without its SHA-256");
                 break;
             }
+            /* its names come in the events after it, at once */
+            got = 0;
+            deadline = now() + 1;
         } else if (!probe && strncmp(ev, "CTRL-EVENT-CONNECTED", 20) == 0 && event_id(ev) == id) {
             got = 0;
+            break;
         } else if (!probe && failure_of(ev, why, size)) {
             /* a refused association is tried again, at another access
              * point or later; the others end the wait */
@@ -1391,6 +1420,10 @@ static int cmd_connect(struct ctrl *c, const char *name, const char *methods, co
             drop(c, id);
             return 1;
         }
+        /* The events of the probe, and those that would fill the socket's
+         * queue while the user reads, are dropped with the socket; a new
+         * one sees only what comes after the answer. */
+        monitor_close(c);
         if (!trust(name, &cert)) {
             printf("wifi: %s is not trusted, and is not kept\n", name);
             memset(&a, 0, sizeof(a));
@@ -1400,7 +1433,7 @@ static int cmd_connect(struct ctrl *c, const char *name, const char *methods, co
         if (ctrl_ok(c, "SET_NETWORK %d ca_cert \"hash://server/sha256/%s\"", id, cert.hash) != 0 ||
             set_text(c, id, "password", a.password) != 0 ||
             (a.domain[0] != '\0' && set_text(c, id, "domain_suffix_match", a.domain) != 0) ||
-            ctrl_ok(c, "ENABLE_NETWORK %d no-connect", id) != 0) {
+            ctrl_ok(c, "ENABLE_NETWORK %d no-connect", id) != 0 || monitor_open(c) != 0) {
             memset(&a, 0, sizeof(a));
             drop(c, id);
             return 1;
