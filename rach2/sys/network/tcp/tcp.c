@@ -1193,7 +1193,9 @@ void tcp_local_addr_changed(void)
  * SO_ERROR and POLLERR report, and wake any blocked call. A passive block in
  * SYN_RCVD, whose handshake the peer never finished, has no descriptor and no
  * place on an accept queue, so it is freed here with its socket; any other
- * block is freed only when it has no socket.
+ * block is freed only when it has no socket. Nothing is logged: a timeout is
+ * an ordinary event of a network, which the program sees in its error and
+ * `nstat` in TcpEstabResets or TcpAttemptFails.
  */
 static void tcp_giveup(struct tcb *tcb)
 {
@@ -1201,14 +1203,12 @@ static void tcp_giveup(struct tcb *tcb)
     if (tcb->passive && tcb->state == TCP_SYN_RCVD && tcb->sock) {
         struct socket *sock = tcb->sock;
 
-        klog(KLOG_INFO, "tcp", "accept: a handshake timed out, giving up");
         tcb->sock = NULL;
         sock->tcb = NULL;
         tcb_free(tcb);
         socket_unref(sock);
         return;
     }
-    klog(KLOG_INFO, "tcp", "connect: timed out, giving up");
     tcb->state = TCP_CLOSED;
     tcb->so_error = ETIMEDOUT;
     tcb->retx_flags = 0;
@@ -1239,8 +1239,8 @@ static int tcp_tick_pump(struct tcb *tcb)
 {
     if (tcp_send_more(tcb) == 1 && tcb->refused_since != 0 &&
         kernel_ticks + 1 - tcb->refused_since > TCP_REFUSE_GIVEUP_TICKS) {
-        klog(KLOG_WARN, "tcp", "gave up: the driver refused every transmit for %d ticks",
-             (int)(kernel_ticks + 1 - tcb->refused_since));
+        klog(KLOG_WARN, "tcp", "gave up: the driver refused every transmit for %d ms",
+             (int)((kernel_ticks + 1 - tcb->refused_since) * 1000u / TICK_HZ));
         tcp_giveup(tcb);
         return 1;
     }
@@ -1268,6 +1268,27 @@ static int tcp_pumpable(const struct tcb *tcb)
     }
     return (tcb->state == TCP_ESTABLISHED || tcb->state == TCP_CLOSE_WAIT) &&
            tcb->send_tail != tcb->send_head;
+}
+
+/**
+ * Whether `tcb` is a detached block that still has data or a FIN to deliver,
+ * in ESTABLISHED, CLOSE_WAIT, FIN_WAIT_1, CLOSING or LAST_ACK, whose peer has
+ * acknowledged nothing since its limit (`timewait_until`) was set, at the
+ * close or at the last acknowledgement of new data. No program waits on such
+ * a block, so a peer that has gone, or a path that drops its segments, would
+ * otherwise hold it for the minutes TCP_MAX_RETX doublings of the timeout
+ * take.
+ */
+static int tcp_orphan_expired(const struct tcb *tcb)
+{
+    if (tcb->sock) {
+        return 0;
+    }
+    if (tcb->state != TCP_ESTABLISHED && tcb->state != TCP_CLOSE_WAIT &&
+        tcb->state != TCP_FIN_WAIT_1 && tcb->state != TCP_CLOSING && tcb->state != TCP_LAST_ACK) {
+        return 0;
+    }
+    return (int32_t)(kernel_ticks - tcb->timewait_until) >= 0;
 }
 
 /**
@@ -1314,7 +1335,9 @@ static void tcp_tick_pumps(void)
 /**
  * The FIN_WAIT_2 limit, TCP_FIN_WAIT2_TICKS, frees a detached block whose
  * peer went away with neither a FIN nor a reset, and which would otherwise
- * never be freed (cf. Linux tcp_fin_timeout).
+ * never be freed (cf. Linux tcp_fin_timeout). Any other detached block that
+ * still sends is given up once its peer has acknowledged nothing for
+ * TCP_ORPHAN_TICKS (`tcp_orphan_expired`).
  *
  * An acknowledgement the interface refused (`ack_owed`) is sent again as a
  * fresh one, carrying the receive state as it now stands, in any state but
@@ -1367,6 +1390,11 @@ void tcp_tick(void)
             continue;
         }
 
+        if (tcp_orphan_expired(tcb)) {
+            tcp_giveup(tcb);
+            continue;
+        }
+
         if (tcb->rto_timer > 0) {
             tcb->rto_timer--;
             if (tcb->rto_timer == 0) {
@@ -1379,9 +1407,6 @@ void tcp_tick(void)
                 tcb->rto <<= 1;
                 if (tcb->rto > TCP_RTO_MAX)
                     tcb->rto = TCP_RTO_MAX;
-
-                klog(KLOG_DEBUG, "tcp", "retransmit: rto %d, try %d", (unsigned)tcb->rto,
-                     (int)tcb->rto_backoff);
 
                 if (tcb->send_head != tcb->send_ack) {
                     tcp_enter_rto_recovery(tcb);
@@ -1600,8 +1625,10 @@ void tcp_shutdown_send(struct socket *sock)
 /**
  * FIN_WAIT_1, CLOSING, LAST_ACK and TIME_WAIT follow a shutdown: the FIN
  * went, and the block finishes the close without its socket, as it does
- * after a close. A shutdown may also leave the socket's descriptors open, so
- * the caller, and not this, decides when the socket goes.
+ * after a close. A detached block that still sends starts its limit,
+ * TCP_ORPHAN_TICKS, here. A shutdown may also leave the socket's
+ * descriptors open, so the caller, and not this, decides when the socket
+ * goes.
  */
 void tcp_close(struct socket *sock)
 {
@@ -1623,6 +1650,7 @@ void tcp_close(struct socket *sock)
     switch (tcb->state) {
     case TCP_ESTABLISHED:
     case TCP_CLOSE_WAIT:
+        tcb->timewait_until = kernel_ticks + TCP_ORPHAN_TICKS;
         tcb->fin_pending = 1;
         tcp_pump(tcb);
         break;
@@ -1632,6 +1660,8 @@ void tcp_close(struct socket *sock)
     case TCP_FIN_WAIT_1:
     case TCP_CLOSING:
     case TCP_LAST_ACK:
+        tcb->timewait_until = kernel_ticks + TCP_ORPHAN_TICKS;
+        break;
     case TCP_TIME_WAIT:
         break;
     case TCP_CLOSED:
@@ -1765,10 +1795,10 @@ static void tcp_rtt_us(struct tcb *tcb, uint32_t us)
  * Take an acknowledgement of new data, in any state where sent data awaits
  * one: the round-trip sample it ends, the ring and the sequence space, the
  * peer's window, the congestion window's growth or the recovery's next step,
- * the timer, and then whatever can be sent. In a fast recovery that the
- * acknowledgement does not end, the next hole is sent at once and the
- * congestion window is deflated by the bytes acknowledged, plus one segment
- * (RFC 6582). The caller has checked that the acknowledgement is inside
+ * the timer, a detached block's limit, and then whatever can be sent. In a
+ * fast recovery that the acknowledgement does not end, the next hole is sent
+ * at once and the congestion window is deflated by the bytes acknowledged,
+ * plus one segment (RFC 6582). The caller has checked that the acknowledgement is inside
  * (snd_una, snd_nxt]. The writers of the socket are woken, since the ring
  * has room.
  */
@@ -1803,6 +1833,9 @@ static void tcp_take_ack(struct tcb *tcb, uint32_t ack_num, uint32_t window)
     tcp_ack_data(tcb, ack_num);
     tcb->snd_wnd = window;
     tcb->rto_backoff = 0;
+    if (!tcb->sock) {
+        tcb->timewait_until = kernel_ticks + TCP_ORPHAN_TICKS;
+    }
 
     if (was_fast) {
         if (tcb->recovering) {
@@ -2089,7 +2122,6 @@ static void tcp_rx_reset(struct tcb *tcb, uint32_t seq, uint32_t ack_num, uint8_
         tcp_free_half_open(tcb);
         return;
     }
-    klog(KLOG_INFO, "tcp", "rx: reset, the connection is closed");
     tcb->so_error =
         (tcb->state == TCP_SYN_SENT || tcb->state == TCP_SYN_RCVD) ? ECONNREFUSED : ECONNRESET;
     tcb->state = TCP_CLOSED;
@@ -2201,8 +2233,10 @@ static uint16_t tcp_seg_check(uint32_t src_ip, uint32_t dst_ip, const uint8_t *d
  * FIN_WAIT_2; a duplicate or early one is acknowledged again. CLOSING and
  * LAST_ACK end when this side's FIN is acknowledged, take an acknowledgement
  * of the data before it, and acknowledge a retransmitted FIN. CLOSE_WAIT
- * takes acknowledgements and window updates as ESTABLISHED does and goes on
- * sending queued data and a pending FIN. TIME_WAIT acknowledges a FIN the
+ * takes acknowledgements and window updates as ESTABLISHED does, goes on
+ * sending queued data and a pending FIN, and acknowledges a FIN the peer sent
+ * again because its acknowledgement was lost, which would otherwise hold the
+ * peer in FIN_WAIT_1 until this side's FIN. TIME_WAIT acknowledges a FIN the
  * peer sent again because its acknowledgement was lost, and restarts its
  * 2MSL wait.
  */
@@ -2515,6 +2549,9 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         break;
 
     case TCP_CLOSE_WAIT:
+        if (flags & TCP_FIN) {
+            tcp_send_flags(tcb, TCP_ACK);
+        }
         if ((flags & TCP_ACK) && (int32_t)(ack_num - tcb->snd_una) > 0 &&
             (int32_t)(ack_num - tcb->snd_nxt) <= 0) {
             tcp_take_ack(tcb, ack_num, window);

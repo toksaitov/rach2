@@ -65,6 +65,8 @@ this includes a control block left closed after failure.
 Close the descriptor and create a new socket for another attempt.
 .Pp
 The initial retransmission timeout is one second.
+Once a round trip is measured it is the smoothed round trip plus four
+deviations, at least 200 milliseconds.
 It doubles on timeout to a maximum of 60 seconds.
 Seven successive expiries permit retransmission; the eighth ends the
 connection.

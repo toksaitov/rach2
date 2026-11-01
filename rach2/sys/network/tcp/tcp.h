@@ -2,6 +2,7 @@
 #define _TCP_H_
 
 #include "../../lib/kint.h"
+#include "../../timer.h"
 
 /*
  * tcp: the Transmission Control Protocol. Each connection, and each
@@ -22,15 +23,15 @@
 
 /* The header without options, and the largest segment either side sends,
  * which this side's SYN asks for: a 1500-byte MTU less 40 bytes of headers. */
-#define TCP_HDR_SIZE            20
-#define TCP_MSS                 1460
-#define TCP_INIT_SEGS           4 /* initial congestion window, in segments (RFC 6928) */
-#define TCP_INIT_CWND           (TCP_INIT_SEGS * TCP_MSS)
+#define TCP_HDR_SIZE        20
+#define TCP_MSS             1460
+#define TCP_INIT_SEGS       4 /* initial congestion window, in segments (RFC 6928) */
+#define TCP_INIT_CWND       (TCP_INIT_SEGS * TCP_MSS)
 /* The segment size a peer gets when its SYN has no MSS option (RFC 9293),
  * and the least one may ask for: Linux's floor against a peer that asks
  * for tiny segments to make a sender do more work per byte. */
-#define TCP_MSS_DEFAULT         536
-#define TCP_MSS_MIN             48
+#define TCP_MSS_DEFAULT     536
+#define TCP_MSS_MIN         48
 /* The window field's largest value, and the send ring's size: 64 KiB, in
  * the control block, a power of two, since the ring's indexes wrap by a
  * mask, and one byte more than the largest unscaled window, so that a
@@ -38,40 +39,55 @@
  * offered is the receive ring's free space clamped to what the field can
  * carry at the connection's scale (`tcp_rcv_window`), so that an empty ring
  * of 64 KiB does not offer 0. */
-#define TCP_WINDOW_SIZE         65535
-#define TCP_RING_SIZE           65536
+#define TCP_WINDOW_SIZE     65535
+#define TCP_RING_SIZE       65536
 /* Policy: a connection's receive ring, a heap allocation apart from the
  * control block, is 64 KiB, as the send ring is, or 512 KiB when the
  * machine has more than TCP_BIG_RING_FRAMES frames free as the connection
  * opens, offered through the window scale option (RFC 7323): a window is
  * what a round trip carries, and a round trip of 67 ms moves 7.8 MB/s in
  * 512 KiB and 978 KB/s in 64 KiB. */
-#define TCP_RECV_RING_SMALL     65536u
-#define TCP_RECV_RING_LARGE     524288u
-#define TCP_BIG_RING_FRAMES     32768u
-/* How long queued bytes may wait from the first transmit the driver
- * refused to the last, with no segment sent between, before the connection
- * is given up, in ticks: 30 s, within the retransmission give-up. */
-#define TCP_REFUSE_GIVEUP_TICKS 3000
+#define TCP_RECV_RING_SMALL 65536u
+#define TCP_RECV_RING_LARGE 524288u
+#define TCP_BIG_RING_FRAMES 32768u
 /* How many connections with queued bytes the tick pumps, in rotation, so
  * that a full card does not hold the tick for every blocked connection's
  * wait and no connection waits behind the others for ever. */
-#define TCP_TICK_PUMPS          4
+#define TCP_TICK_PUMPS      4
 /* Policy: a connection keeps data that arrived past a hole in up to eight
  * ranges of sequence numbers, which covers the losses of one window of a
  * path that loses a few segments of it. */
-#define TCP_OOO_RANGES          8
+#define TCP_OOO_RANGES      8
 /* The SACK blocks an acknowledgement names at most: four, 36 bytes of
  * options, when a segment has no timestamps (RFC 2018). */
-#define TCP_SACK_BLOCKS         4
+#define TCP_SACK_BLOCKS     4
 
-/* Reliability constants (100 Hz clock). */
-#define TCP_RTO_INIT        100  /* initial RTO  = 1 s (RFC 6298) */
-#define TCP_RTO_MIN         100  /* minimum RTO  = 1 s   */
-#define TCP_RTO_MAX         6000 /* maximum RTO  = 60 s  */
-#define TCP_2MSL_TICKS      200  /* TIME_WAIT    = 2 s (short: local network) */
-#define TCP_FIN_WAIT2_TICKS 1000 /* FIN_WAIT_2  = 10 s, for a peer with no FIN */
-#define TCP_MAX_RETX        7    /* give up after this many retransmissions */
+/* The timers are written in milliseconds and kept in ticks of the kernel's
+ * clock; TCP_MS rounds up, so that no timer is shorter than asked or 0. */
+#define TCP_MS(ms)              (((uint32_t)(ms) * TICK_HZ + 999u) / 1000u)
+/* The retransmission timeout: 1 s before a round trip is measured (RFC
+ * 6298), then the smoothed round trip plus four deviations, at least 200 ms,
+ * Linux's floor, which covers a peer's delayed acknowledgement, and at most
+ * 60 s after doubling. */
+#define TCP_RTO_INIT            TCP_MS(1000)
+#define TCP_RTO_MIN             TCP_MS(200)
+#define TCP_RTO_MAX             TCP_MS(60000)
+/* Policy: TIME_WAIT lasts 2 s, short for a local network, and a detached
+ * block in FIN_WAIT_2, whose peer may go with neither a FIN nor a reset,
+ * 10 s (cf. Linux's tcp_fin_timeout). */
+#define TCP_2MSL_TICKS          TCP_MS(2000)
+#define TCP_FIN_WAIT2_TICKS     TCP_MS(10000)
+/* Policy: a detached block that still has data or a FIN to deliver, in
+ * ESTABLISHED, CLOSE_WAIT, FIN_WAIT_1, CLOSING or LAST_ACK, is given up when
+ * its peer has acknowledged nothing for 30 s, rather than after the minutes
+ * TCP_MAX_RETX doublings can take, since no program waits on it (cf. Linux's
+ * tcp_orphan_retries). */
+#define TCP_ORPHAN_TICKS        TCP_MS(30000)
+/* How long queued bytes may wait from the first transmit the driver refused
+ * to the last, with no segment sent between, before the connection is given
+ * up: 30 s, within the retransmission give-up. */
+#define TCP_REFUSE_GIVEUP_TICKS TCP_MS(30000)
+#define TCP_MAX_RETX            7 /* give up after this many retransmissions */
 
 /* Loss recovery (RFC 5681, RFC 6582). The third duplicate acknowledgement
  * in a row means a segment was lost and the ones after it arrived. After a
@@ -181,7 +197,9 @@ struct tcb {
     uint32_t cwnd;       /* congestion window (bytes)              */
     uint32_t ssthresh;   /* slow-start threshold (bytes)           */
     uint32_t send_ack;   /* send ring position of acknowledged data */
-    /* The tick TIME_WAIT ends at, or the limit of FIN_WAIT_2. */
+    /* The tick TIME_WAIT ends at, the limit of a detached FIN_WAIT_2, or
+     * the limit of any other detached block, which each acknowledgement of
+     * new data moves TCP_ORPHAN_TICKS ahead. */
     uint32_t timewait_until;
     uint32_t zwp_timer;     /* zero-window probe countdown; 0 = off   */
     uint32_t tx_refused;    /* transmits the driver refused, a count */
@@ -246,8 +264,9 @@ void tcp_path_mtu(uint32_t local_ip, uint32_t remote_ip, uint16_t local_port, ui
  * free a TIME_WAIT or FIN_WAIT_2 block with no socket whose time is up, send
  * again an acknowledgement the driver refused, retransmit when the
  * retransmission timer runs out and give up with ETIMEDOUT after
- * TCP_MAX_RETX of them, probe a closed window, and send what refused
- * transmits left in the send rings.
+ * TCP_MAX_RETX of them, give up a detached block whose peer acknowledged
+ * nothing for TCP_ORPHAN_TICKS, probe a closed window, and send what
+ * refused transmits left in the send rings.
  */
 void tcp_tick(void);
 
