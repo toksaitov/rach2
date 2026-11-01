@@ -100,6 +100,8 @@ KBD_BINS = $(addprefix $(KBD_STAGE)/,$(KBD_PROGRAMS))
 E2FSPROGS_STAGE = $(VENDOR_STAGE)/e2fsprogs
 LIBTSM_STAGE = $(VENDOR_STAGE)/libtsm
 LIBTSM_HOST_STAGE = build/host/vendor/libtsm
+# The patched tree the host build extracts, which the host tests compile.
+LIBTSM_HOST_TREE = build/host/vendor-work/libtsm/libtsm-4.8.0
 BUSYBOX_BIN  = $(BUSYBOX_STAGE)/busybox
 BUSYBOX_SUID_BIN = $(BUSYBOX_STAGE)/busybox-suid
 DROPBEAR_BIN = $(VENDOR_STAGE)/dropbear/dropbearmulti
@@ -348,7 +350,7 @@ $(LIBTSM_HOST_STAMP): $(LIBTSM_INPUTS) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@ $(LIBTSM_HOST_A)
 	+@if [ -n "$(DRY_RUN)" ]; then echo "$@: dry run"; else t0=$$(date +%s); \
 	    $(ETUDE) build -s '$(RACH2_STORE)' -a host -n libtsm-host -t $@ -c $(HOSTCC) \
-	        $(STEP_INPUTS) -o $(LIBTSM_HOST_STAGE) \
+	        $(STEP_INPUTS) -o $(LIBTSM_HOST_STAGE) -o $(LIBTSM_HOST_TREE) \
 	        -- sh -c 'HOSTCC=$(HOSTCC) ./vendor/libtsm/build_libtsm.sh --host && test -s $(LIBTSM_HOST_A)' && \
 	    echo "libtsm-host: result: done in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(LIBTSM_HOST_A) || { echo "libtsm-host: build produced no $(LIBTSM_HOST_A)" >&2; exit 1; }
@@ -698,6 +700,12 @@ build/tests/host-suite/sanitizer/tools.json: host-sanitizer-force | $(ETUDE)
 
 build/tests/host-suite/scripts.inventory.json: build/tests/system/fakeapi_test
 build/tests/host-suite/etude.inventory.json: $(ETUDE) build/tests/cases/host/host
+
+# The libtsm and term host tests, and the compilation database that lists
+# them, compile the host build's patched libtsm tree.
+build/tests/host-suite/tests.inventory.json \
+build/x86_64/tests/host-suite/tests.inventory.json \
+build/tests/style/sources.json build/x86_64/tests/style/sources.json: $(LIBTSM_HOST_STAMP)
 
 # The native exFAT check uses one architecture-independent prepared volume.
 # Windows runs that check in the GNU helper, whose image builds it separately.

@@ -41,17 +41,18 @@ for prefix in ('vendor', 'build/x86_64/vendor-work'):
             output = tree / source.relative_to(repo)
             output.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, output)
-    library = Path(prefix) / 'libtsm/libtsm-4.8.0'
-    if not (repo / library / 'src/tsm/tsm-screen.c').is_file():
-        raise ValueError(f'host inventory: missing patched libtsm sources: {library}')
-    for subtree in ('src', 'external'):
-        for source in (repo / library / subtree).rglob('*'):
-            if source.is_symlink():
-                raise ValueError(f'host inventory: extracted source must be regular: {source}')
-            if source.is_file() and source.suffix in ('.c', '.h'):
-                output = tree / source.relative_to(repo)
-                output.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, output)
+# The libtsm and term checks compile the host build's patched libtsm tree.
+library = Path('build/host/vendor-work/libtsm/libtsm-4.8.0')
+if not (repo / library / 'src/tsm/tsm-screen.c').is_file():
+    raise ValueError(f'host inventory: missing patched libtsm sources: {library}')
+for subtree in ('src', 'external'):
+    for source in (repo / library / subtree).rglob('*'):
+        if source.is_symlink():
+            raise ValueError(f'host inventory: extracted source must be regular: {source}')
+        if source.is_file() and source.suffix in ('.c', '.h'):
+            output = tree / source.relative_to(repo)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, output)
 PY
 for name in CLAUDE.md AGENTS.md Readme.md; do
     [ -f "$TREE/$name" ] || { echo "host inventory: missing root input $name" >&2; exit 1; }

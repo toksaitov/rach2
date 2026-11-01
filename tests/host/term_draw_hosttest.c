@@ -4,7 +4,7 @@
  * pwrite(2) as /fb is, and read back pixel by pixel.
  *
  * host-deps: term/unifont.c
- * host-cflags: -I vendor/libtsm/libtsm-4.8.0/src/tsm -I rach2/include
+ * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm -I rach2/include
  *
  * Both files are included whole. The test packs six glyphs of Unifont
  * 18.0.01 with tools/font/mkunifont.c, also included, and loads them with
@@ -19,6 +19,8 @@
  * Every pixel is checked against a value worked out here from the format,
  * for RGB at 32, 24, 16 and 15 bits a pixel.
  */
+/* macOS declares mkdtemp(3) in <unistd.h> only with its own extensions. */
+#define _DARWIN_C_SOURCE
 #include "../../term/draw.c"
 #include "../../term/font.c"
 

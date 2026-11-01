@@ -1,17 +1,17 @@
 /* Wide glyph wrapping and combining symbols through libtsm's screen and VTE.
- * host-deps: vendor/libtsm/libtsm-4.8.0/src/tsm/tsm-screen.c
- * host-deps: vendor/libtsm/libtsm-4.8.0/src/tsm/tsm-render.c
- * host-deps: vendor/libtsm/libtsm-4.8.0/src/tsm/tsm-selection.c
- * host-deps: vendor/libtsm/libtsm-4.8.0/src/tsm/tsm-unicode.c
- * host-deps: vendor/libtsm/libtsm-4.8.0/src/tsm/tsm-vte.c
- * host-deps: vendor/libtsm/libtsm-4.8.0/src/tsm/tsm-vte-charsets.c
- * host-deps: vendor/libtsm/libtsm-4.8.0/src/shared/shl-htable.c
- * host-deps: vendor/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.c
- * host-cflags: -I vendor/libtsm/libtsm-4.8.0/src/tsm
- * host-cflags: -I vendor/libtsm/libtsm-4.8.0/src/shared
- * host-cflags: -I vendor/libtsm/libtsm-4.8.0/external
- * host-cflags: -I vendor/libtsm/libtsm-4.8.0/external/wcwidth
- * host-cflags: -include vendor/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.h
+ * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-screen.c
+ * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-render.c
+ * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-selection.c
+ * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-unicode.c
+ * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-vte.c
+ * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-vte-charsets.c
+ * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/shared/shl-htable.c
+ * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.c
+ * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm
+ * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/src/shared
+ * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/external
+ * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/external/wcwidth
+ * host-cflags: -include build/host/vendor-work/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.h
  * host-cflags: -std=gnu99 -D_GNU_SOURCE -Dwcwidth=tsm_wcwidth
  * host-cflags: -include tests/host/compat/libtsm_width_alloc.h
  */
