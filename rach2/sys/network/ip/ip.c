@@ -194,7 +194,7 @@ static void ip_hold_put(struct netdev *out, uint32_t hop, uint16_t len)
     for (i = 0; i < IP_HOLD_SLOTS; i++) {
         struct ip_hold *c = &ip_hold[i];
 
-        if (c->len == 0 || (uint32_t)(kernel_ticks - c->since) > IP_HOLD_TICKS) {
+        if (c->len == 0 || ((uint32_t)kernel_ticks - c->since) > IP_HOLD_TICKS) {
             h = c;
             break;
         }
@@ -202,14 +202,14 @@ static void ip_hold_put(struct netdev *out, uint32_t hop, uint16_t len)
             h = c;
         }
     }
-    if (h->len != 0 && (uint32_t)(kernel_ticks - h->since) > IP_HOLD_TICKS) {
+    if (h->len != 0 && ((uint32_t)kernel_ticks - h->since) > IP_HOLD_TICKS) {
         arp_stats.res_failed++;
     } else if (h->len != 0) {
         arp_stats.unres_discards++;
     }
     h->out = out;
     h->hop = hop;
-    h->since = kernel_ticks;
+    h->since = (uint32_t)kernel_ticks;
     h->len = len;
     k_memcpy(h->datagram, ip_tx_buf, len);
 }
@@ -222,7 +222,7 @@ void ip_hold_resolved(struct netdev *nd, uint32_t hop, const uint8_t *mac)
         struct ip_hold *h = &ip_hold[i];
 
         if (h->len != 0 && h->out == nd && h->hop == hop) {
-            if ((uint32_t)(kernel_ticks - h->since) <= IP_HOLD_TICKS) {
+            if (((uint32_t)kernel_ticks - h->since) <= IP_HOLD_TICKS) {
                 ethernet_tx(nd, mac, ETH_TYPE_IP, h->datagram, h->len);
             }
             h->len = 0;

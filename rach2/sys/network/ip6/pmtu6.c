@@ -36,7 +36,7 @@ static struct pmtu6 *pmtu6_find(const uint8_t *dst, int ifindex)
         if (e->mtu == 0) {
             continue;
         }
-        if ((int32_t)(kernel_ticks - e->expires) >= 0) {
+        if ((int32_t)((uint32_t)kernel_ticks - e->expires) >= 0) {
             e->mtu = 0;
             continue;
         }
@@ -77,7 +77,7 @@ void ip6_pmtu_lower(const uint8_t *dst, int ifindex, uint32_t mtu)
     if (e) {
         if (mtu < e->mtu) {
             e->mtu = mtu;
-            e->expires = kernel_ticks + PMTU6_AGE;
+            e->expires = (uint32_t)kernel_ticks + PMTU6_AGE;
         }
         return;
     }
@@ -98,5 +98,5 @@ void ip6_pmtu_lower(const uint8_t *dst, int ifindex, uint32_t mtu)
     k_memcpy(e->dst, dst, IP6_ADDR_LEN);
     e->ifindex = ifindex;
     e->mtu = mtu;
-    e->expires = kernel_ticks + PMTU6_AGE;
+    e->expires = (uint32_t)kernel_ticks + PMTU6_AGE;
 }
