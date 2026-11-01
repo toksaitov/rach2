@@ -5,6 +5,7 @@
  * clamps and checks of arguments.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
  * The system calls no row makes are declared static before the sources are
@@ -40,7 +41,7 @@ static long sys_clock_getres(isr_params_t *params);
 static long sys_clock_nanosleep(isr_params_t *params);
 static long sys_setitimer(isr_params_t *params);
 static long sys_getitimer(isr_params_t *params);
-static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
+static int32_t dgram_send(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port,
                           const uint8_t *buf, uint16_t len);
 static int32_t clock_now(int32_t clk, int64_t *sec, int32_t *nsec);
 static long sys_accept4(isr_params_t *params);
@@ -310,7 +311,7 @@ uint16_t udp_bind_ephemeral(struct socket *s)
 
 /** Give `s` the test's control block, in the state `completion` at once
  * when `immediate` is set and SYN_SENT otherwise; 0. */
-int tcp_connect(struct socket *s, uint32_t ip, uint16_t port)
+int tcp_connect(struct socket *s, net_addr_t ip, uint16_t port)
 {
     (void)ip;
     (void)port;
@@ -1342,5 +1343,20 @@ int main(void)
     if (failures)
         return 1;
     printf("syscall-test: pass: connect, clocks, sleeps and timer\n");
+    return 0;
+}
+
+/** Supply an IPv4 source for the fixture's immediate handshake. */
+int net_addr_source(net_addr_t bound, net_addr_t dst, net_addr_t *src)
+{
+    (void)dst;
+    *src = bound;
+    return 0;
+}
+
+/** The syscall fixture has no interfaces or IPv6 link-scoped endpoints. */
+struct netdev *netdev_at(int n)
+{
+    (void)n;
     return 0;
 }

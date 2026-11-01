@@ -89,6 +89,7 @@ struct socket *socket_alloc(int type)
     sock->type = type;
     sock->family = AF_INET;
     sock->ip_ttl = IP_TTL_DEFAULT;
+    sock->local_ip = sock->remote_ip = net_addr4(0);
     wait_queue_init(&sock->waiters);
 
     flags = net_lock();
@@ -126,7 +127,8 @@ int socket_port_bound(uint16_t port)
     const socket_t *s;
 
     for (s = sockets; s; s = s->next) {
-        if (s->type == SOCK_STREAM && s->family == AF_INET && s->local_port == port) {
+        if (s->type == SOCK_STREAM && (s->family == AF_INET || s->family == AF_INET6) &&
+            s->local_port == port) {
             return 1;
         }
     }
@@ -266,13 +268,14 @@ void socket_unref(struct socket *sock)
 
 /** A connected socket takes datagrams from its peer and from nobody else,
  * which is what `connect` means for UDP. */
-void socket_udp_deliver(struct socket *sock, uint32_t src_ip, uint16_t src_port,
+void socket_udp_deliver(struct socket *sock, net_addr_t src_ip, uint16_t src_port,
                         const uint8_t *data, uint16_t len)
 {
     uint16_t copy_len = len;
     int slot;
 
-    if (sock->connected && (src_ip != sock->remote_ip || src_port != sock->remote_port)) {
+    if (sock->connected &&
+        (!net_addr_equal(src_ip, sock->remote_ip) || src_port != sock->remote_port)) {
         return;
     }
     if (sock->recv_count == SOCK_DGRAM_SLOTS) {
@@ -429,13 +432,13 @@ int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int le
     return copy_len;
 }
 
-void socket_dgram_consume(struct socket *sock, uint32_t *src_ip, uint16_t *src_port)
+void socket_dgram_consume(struct socket *sock, net_addr_t *src_ip, uint16_t *src_port)
 {
     uint32_t flags;
 
     if (sock->family == AF_PACKET || sock->family == AF_NETLINK) {
         if (src_ip) {
-            *src_ip = 0;
+            *src_ip = net_addr4(0);
         }
         if (src_port) {
             *src_port = 0;
@@ -450,7 +453,7 @@ void socket_dgram_consume(struct socket *sock, uint32_t *src_ip, uint16_t *src_p
     if (sock->type == SOCK_RAW) {
         raw_consume(sock);
         if (src_ip) {
-            *src_ip = raw_last_src(sock);
+            raw_last_address(sock, src_ip);
         }
         if (src_port) {
             *src_port = 0;
@@ -474,16 +477,17 @@ void socket_dgram_consume(struct socket *sock, uint32_t *src_ip, uint16_t *src_p
     net_unlock(flags);
 }
 
-void socket_dgram_sender(struct socket *sock, uint32_t *src_ip, uint16_t *src_port)
+void socket_dgram_sender(struct socket *sock, net_addr_t *src_ip, uint16_t *src_port)
 {
-    uint32_t ip = 0, flags;
+    net_addr_t ip = net_addr4(0);
+    uint32_t flags;
     uint16_t port = 0;
 
     if (sock->family == AF_PACKET) {
         packet_note_head(sock);
     } else if (sock->family != AF_NETLINK) {
         if (sock->type == SOCK_RAW) {
-            ip = raw_head_src(sock);
+            raw_head_address(sock, &ip);
         } else {
             flags = net_lock();
             if (sock->recv_count) {
@@ -503,7 +507,7 @@ void socket_dgram_sender(struct socket *sock, uint32_t *src_ip, uint16_t *src_po
 
 /** Take the datagram `socket_dgram_peek` copied, or with `peek` leave it
  * waiting, and report its sender either way. */
-static void socket_dgram_take(struct socket *sock, uint32_t *src_ip, uint16_t *src_port, int peek)
+static void socket_dgram_take(struct socket *sock, net_addr_t *src_ip, uint16_t *src_port, int peek)
 {
     if (peek) {
         socket_dgram_sender(sock, src_ip, src_port);
@@ -518,7 +522,7 @@ static void socket_dgram_take(struct socket *sock, uint32_t *src_ip, uint16_t *s
  * thread's munmap may have outlasted, and before the lock, since that can
  * sleep too; a datagram another reader took meanwhile sends this one back to
  * wait for the next. */
-int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port,
+int socket_recv(struct socket *sock, uint8_t *buf, int len, net_addr_t *src_ip, uint16_t *src_port,
                 int peek)
 {
     int copy_len;
@@ -546,7 +550,7 @@ int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, ui
     return copy_len;
 }
 
-int socket_try_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip,
+int socket_try_recv(struct socket *sock, uint8_t *buf, int len, net_addr_t *src_ip,
                     uint16_t *src_port, int peek)
 {
     int copy_len;
@@ -943,4 +947,47 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
         }
     }
     return revents;
+}
+
+/** Match a canonical destination against a socket's bound address. */
+int socket_address_matches(const struct socket *sock, net_addr_t dst)
+{
+    if (socket_outside(sock))
+        return 0;
+    if (dst.family == AF_INET6 && sock->family != AF_INET6)
+        return 0;
+    if (dst.family == AF_INET && sock->family == AF_INET6 && sock->v6only)
+        return 0;
+    if (net_addr_equal(sock->local_ip, dst))
+        return 1;
+    if (!net_addr_any(sock->local_ip))
+        return 0;
+    return sock->local_ip.family == dst.family ||
+           (sock->family == AF_INET6 && !sock->v6only && sock->local_ip.family == AF_INET6);
+}
+
+/** Test overlap in the address sets of two bindings, including dual stack. */
+int socket_bind_conflict(const struct socket *a, const struct socket *b)
+{
+    if (a->ns != b->ns)
+        return 0;
+    if (a->local_ip.family == b->local_ip.family)
+        return net_addr_any(a->local_ip) || net_addr_any(b->local_ip) ||
+               net_addr_equal(a->local_ip, b->local_ip);
+    return (a->family == AF_INET6 && !a->v6only && a->local_ip.family == AF_INET6 &&
+            net_addr_any(a->local_ip)) ||
+           (b->family == AF_INET6 && !b->v6only && b->local_ip.family == AF_INET6 &&
+            net_addr_any(b->local_ip));
+}
+
+/** Check every live bound stream, including one not yet listening. */
+int socket_stream_conflict(const struct socket *sock, uint16_t port)
+{
+    const struct socket *s;
+    for (s = sockets; s; s = s->next) {
+        if (s != sock && s->type == SOCK_STREAM && s->family != sock->family &&
+            s->local_port == port && socket_bind_conflict(sock, s))
+            return 1;
+    }
+    return 0;
 }

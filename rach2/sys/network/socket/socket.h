@@ -2,12 +2,13 @@
 #define _SOCKET_H_
 
 #include "../../lib/kint.h"
+#include "address.h"
 #include "../../proc/process.h"
 #include "../../proc/wait_queue.h"
 
 /*
  * socket: the kernel object behind a descriptor of type FD_TYPE_SOCKET, for
- * AF_INET stream, datagram and raw sockets and for AF_PACKET and AF_NETLINK
+ * AF_INET and AF_INET6 stream, datagram and raw sockets and for AF_PACKET and AF_NETLINK
  * ones. A socket is allocated from the heap and kept on a list of the live
  * sockets. Its reference count has one for each descriptor that refers to it,
  * which fork, dup and a descriptor passed over a local socket add to, and
@@ -56,11 +57,10 @@ typedef struct socket {
     uint16_t family;
     uint16_t local_port;
 
-    /* The address `bind` gave: one of this machine's, 127/8 among them, or 0
-     * for any. A stream or datagram socket bound to one is reached at that
-     * address alone, so a server bound to 127.0.0.1 answers this machine and
-     * nobody on the wire. */
-    uint32_t local_ip;
+    /* The canonical address bind gave, including an IPv6 link's scope.
+     * Unspecified means any address in the binding's family; :: also
+     * accepts IPv4 unless v6only is set. */
+    net_addr_t local_ip;
 
     /* For AF_PACKET, the EtherType this socket sends and receives, in host
      * order, or 0 for none. Linux takes it in network order at `socket` and
@@ -80,9 +80,10 @@ typedef struct socket {
      * connected to. A connected datagram socket sends there without being told
      * again, and receives from nobody else, which is what `connect` means for
      * UDP and what a DHCP client's renewal uses. */
-    uint32_t remote_ip;
+    net_addr_t remote_ip;
     uint16_t remote_port;
     int connected;
+    int v6only; /* IPV6_V6ONLY; zero permits mapped IPv4 peers */
 
     /* The error an ICMP message reported for a connected datagram socket's
      * peer, ECONNREFUSED for a port unreachable, or 0: the next receive,
@@ -95,7 +96,7 @@ typedef struct socket {
      * broadcasts by accident reaches every machine on the wire. `reuseaddr`,
      * SO_REUSEADDR, lets UDP sockets share a port (`udp_bind`).
      * `bound_device`, SO_BINDTODEVICE, is an interface's index, or 0 for
-     * none, and is only reported back by getsockopt. */
+     * none, also used as the scope of an IPv6 endpoint with no scope id. */
     int broadcast;
     int reuseaddr;
     int bound_device;
@@ -137,7 +138,7 @@ typedef struct socket {
      * and not end of input. */
     uint8_t recv_buf[SOCK_DGRAM_SLOTS][SOCK_RECV_BUF_SIZE];
     uint16_t recv_len[SOCK_DGRAM_SLOTS];
-    uint32_t recv_src_ip[SOCK_DGRAM_SLOTS];
+    net_addr_t recv_src_ip[SOCK_DGRAM_SLOTS];
     uint16_t recv_src_port[SOCK_DGRAM_SLOTS];
     int recv_head;
     int recv_count;
@@ -155,6 +156,14 @@ typedef struct socket {
      * netlink socket; `net_gone` in socket.c once its namespace has ended. */
     const struct netns *ns;
 } socket_t;
+
+/** Whether a bound socket accepts a datagram at the canonical address. */
+int socket_address_matches(const struct socket *sock, net_addr_t dst);
+/** Whether the bindings of two sockets cover any common local address. */
+int socket_bind_conflict(const struct socket *a, const struct socket *b);
+/** Whether another bound stream socket conflicts with sock at port.
+ * The caller holds net_lock; sock is excluded. */
+int socket_stream_conflict(const struct socket *sock, uint16_t port);
 
 /** Start with no sockets; called once from init_network. */
 void socket_init(void);
@@ -186,9 +195,9 @@ int socket_port_bound(uint16_t port);
  * /proc/net/raw. A raw socket's `local_port` is its protocol, 0 for the
  * descriptor that only takes configuration ioctls. */
 struct socket_row {
-    uint32_t local_ip;
+    net_addr_t local_ip;
     uint16_t local_port;
-    uint32_t remote_ip;
+    net_addr_t remote_ip;
     uint16_t remote_port;
     int connected;
     uint32_t rxq; /* bytes queued to read */
@@ -235,7 +244,7 @@ void socket_unref(struct socket *sock);
  * or that comes from other than the peer of a connected socket, is dropped.
  * Called with interrupts off, from `udp_rx`.
  */
-void socket_udp_deliver(struct socket *sock, uint32_t src_ip, uint16_t src_port,
+void socket_udp_deliver(struct socket *sock, net_addr_t src_ip, uint16_t src_port,
                         const uint8_t *data, uint16_t len);
 
 /**
@@ -249,12 +258,12 @@ void socket_udp_deliver(struct socket *sock, uint32_t src_ip, uint16_t src_port,
  * `buf`, a user buffer, is brought in again after the wait, and the call is
  * -EFAULT, with the datagram left queued, when it no longer can be.
  */
-int socket_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port,
+int socket_recv(struct socket *sock, uint8_t *buf, int len, net_addr_t *src_ip, uint16_t *src_port,
                 int peek);
 
 /** `socket_recv` without the wait: the pending error first, then
  * SOCK_EAGAIN when no datagram is waiting. */
-int socket_try_recv(struct socket *sock, uint8_t *buf, int len, uint32_t *src_ip,
+int socket_try_recv(struct socket *sock, uint8_t *buf, int len, net_addr_t *src_ip,
                     uint16_t *src_port, int peek);
 
 /*
@@ -304,12 +313,12 @@ int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int le
  * whose link address `packet_last_addr` reports. With no datagram waiting, a
  * UDP socket reports nothing.
  */
-void socket_dgram_consume(struct socket *sock, uint32_t *src_ip, uint16_t *src_port);
+void socket_dgram_consume(struct socket *sock, net_addr_t *src_ip, uint16_t *src_port);
 
 /** Report the oldest waiting datagram's sender as `socket_dgram_consume`
  * does, 0 for both with none waiting, and leave the datagram in place. A
  * packet socket keeps its link address for `packet_last_addr`. */
-void socket_dgram_sender(struct socket *sock, uint32_t *src_ip, uint16_t *src_port);
+void socket_dgram_sender(struct socket *sock, net_addr_t *src_ip, uint16_t *src_port);
 
 /*
  * The stream side. The TCP layer calls `socket_tcp_accept`,

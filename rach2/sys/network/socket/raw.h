@@ -2,6 +2,7 @@
 #define _RAW_H_
 
 #include "../../lib/kint.h"
+#include "address.h"
 
 struct socket;
 
@@ -114,4 +115,8 @@ int raw_head_src6(struct socket *sock, uint8_t *src);
  * no registration. */
 int raw_last_src6(struct socket *sock, uint8_t *src);
 
+/** Copy the head source under the caller's net_lock, or unspecified. */
+void raw_head_address(struct socket *sock, net_addr_t *src);
+/** Copy the last consumed source under the caller's net_lock. */
+void raw_last_address(struct socket *sock, net_addr_t *src);
 #endif /* _RAW_H_ */

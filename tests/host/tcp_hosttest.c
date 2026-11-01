@@ -3,6 +3,7 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/network/tcp/rcvwnd.c
+ * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/pressure_host.c
  *
@@ -342,6 +343,8 @@ uint32_t krandom_u32(void)
     return 0x52414348u;
 }
 
+#include "compat/tcp_net.h"
+
 #include "../../rach2/sys/network/tcp/tcp.c"
 
 /* The counters /proc/net/snmp reports, which net_core.c defines. */
@@ -445,7 +448,8 @@ static void rx(uint16_t sport, uint16_t dport, uint32_t seq, uint32_t ack, uint8
     for (i = 0; i < plen; i++) {
         seg[hdr + i] = (uint8_t)payload[i];
     }
-    write16be(seg + 16, tcp_checksum(PEER, net_ip_addr, seg, (uint16_t)(hdr + plen)));
+    write16be(seg + 16,
+              tcp_checksum(net_addr4(PEER), net_addr4(net_ip_addr), seg, (uint16_t)(hdr + plen)));
     tcp_rx(PEER, net_ip_addr, seg, (uint16_t)(hdr + plen));
 }
 
@@ -474,7 +478,7 @@ static struct tcb *open_conn(struct socket *sock, uint16_t port, uint32_t *peer_
 
     k_memset(sock, 0, sizeof(*sock));
     n_segs = 0;
-    CHECK("a connection can be opened", tcp_connect(sock, PEER, port) == 0);
+    CHECK("a connection can be opened", tcp_connect(sock, net_addr4(PEER), port) == 0);
     conn = sock->tcb;
     iss = read32be(segs[0].data + 4);
     *lport = read16be(segs[0].data + 0);
@@ -644,7 +648,7 @@ static void peer_mss_row(void)
     reset_all();
     k_memset(&sock, 0, sizeof(sock));
     CHECK("a connection to a peer of a smaller MSS can be opened",
-          tcp_connect(&sock, PEER, 87) == 0);
+          tcp_connect(&sock, net_addr4(PEER), 87) == 0);
     iss = read32be(segs[0].data + 4);
     lport = read16be(segs[0].data + 0);
     peer_mss = 1400;
@@ -676,7 +680,8 @@ static void path_mtu_row(void)
 
     reset_all();
     k_memset(&sock, 0, sizeof(sock));
-    CHECK("a connection for the path MTU can be opened", tcp_connect(&sock, PEER, 89) == 0);
+    CHECK("a connection for the path MTU can be opened",
+          tcp_connect(&sock, net_addr4(PEER), 89) == 0);
     iss = read32be(segs[0].data + 4);
     lport = read16be(segs[0].data + 0);
     rx((uint16_t)89, lport, 5000, iss + 1, (uint8_t)(F_SYN | F_ACK), 65535, (const char *)0, 0);
@@ -713,7 +718,7 @@ static void window_scale_rows(void)
         reset_all();
         k_memset(&sock, 0, sizeof(sock));
         CHECK("a connection that scales its window can be opened",
-              tcp_connect(&sock, PEER, 88) == 0);
+              tcp_connect(&sock, net_addr4(PEER), 88) == 0);
         CHECK("and its SYN offers the scale its 512 KiB ring needs",
               segs[0].len == 32 && segs[0].data[25] == 3 && segs[0].data[27] == 4 &&
                   read16be(segs[0].data + 14) == 65535);
@@ -816,7 +821,7 @@ static void sack_rows(void)
         reset_all();
         k_memset(&sock, 0, sizeof(sock));
         CHECK("a connection to try selective acknowledgements can be opened",
-              tcp_connect(&sock, PEER, 89) == 0);
+              tcp_connect(&sock, net_addr4(PEER), 89) == 0);
         CHECK("and its SYN permits them", sent_option(segs[0].data, segs[0].len, 4) != 0);
         iss = read32be(segs[0].data + 4);
         lport = read16be(segs[0].data + 0);
@@ -1046,7 +1051,7 @@ int main(void)
 
         reset_all();
         k_memset(&sock, 0, sizeof(sock));
-        CHECK("a connection can be opened", tcp_connect(&sock, PEER, 80) == 0);
+        CHECK("a connection can be opened", tcp_connect(&sock, net_addr4(PEER), 80) == 0);
         conn = sock.tcb;
         CHECK("and it took a control block", conn != 0);
         CHECK("which sent a SYN", n_segs == 1 && (last_flags() & F_SYN) != 0);
@@ -1109,7 +1114,8 @@ int main(void)
         for (j = 0; j < sizeof(big); j++) {
             big[j] = (uint8_t)j;
         }
-        CHECK("a connection for a large transfer can be opened", tcp_connect(&sock, PEER, 82) == 0);
+        CHECK("a connection for a large transfer can be opened",
+              tcp_connect(&sock, net_addr4(PEER), 82) == 0);
         conn = sock.tcb;
         iss = read32be(segs[0].data + 4);
         lport = read16be(segs[0].data + 0);
@@ -1248,7 +1254,7 @@ int main(void)
             k_memset(&socks[c], 0, sizeof(socks[c]));
             n_segs = 0;
             CHECK("a connection of six can be opened",
-                  tcp_connect(&socks[c], PEER, (uint16_t)(90 + c)) == 0);
+                  tcp_connect(&socks[c], net_addr4(PEER), (uint16_t)(90 + c)) == 0);
             conns[c] = socks[c].tcb;
             iss6[c] = read32be(segs[0].data + 4);
             lports[c] = read16be(segs[0].data + 0);
@@ -1665,7 +1671,7 @@ int main(void)
 
         reset_all();
         k_memset(&sock, 0, sizeof(sock));
-        CHECK("a second connection can be opened", tcp_connect(&sock, PEER, 81) == 0);
+        CHECK("a second connection can be opened", tcp_connect(&sock, net_addr4(PEER), 81) == 0);
         conn = sock.tcb;
         n_segs = 0;
         {

@@ -5,6 +5,7 @@
  * the descriptor accept reserves while it copies the peer's address.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/network/socket/address.c
  * host-deps: tests/host/compat/kheap_host.c rach2/sys/network/ip6/addr6.c
  * host-cflags: -Wno-int-to-pointer-cast
  *
@@ -15,7 +16,7 @@
 #include "syscall.h"
 #include "network/socket/socket.h"
 static long sys_socketcall(isr_params_t *params);
-static int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port,
+static int32_t dgram_send(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port,
                           const uint8_t *buf, uint16_t len);
 static long sys_accept4(isr_params_t *params);
 static long sys_bind(isr_params_t *params);
@@ -192,20 +193,20 @@ int sock_is_query(const struct socket *s)
 
 /** Receive one byte from the first interface's address, port 7, and count
  * the receive unless it is a peek. */
-int socket_recv(struct socket *s, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port,
+int socket_recv(struct socket *s, uint8_t *buf, int len, net_addr_t *src_ip, uint16_t *src_port,
                 int peek)
 {
     (void)s;
     (void)buf;
     (void)len;
-    *src_ip = net_ip_addr;
+    *src_ip = net_addr4(net_ip_addr);
     *src_port = 7;
     takes += peek ? 0 : 1;
     return 1;
 }
 
 /** Receive without waiting, as socket_recv does. */
-int socket_try_recv(struct socket *s, uint8_t *buf, int len, uint32_t *src_ip, uint16_t *src_port,
+int socket_try_recv(struct socket *s, uint8_t *buf, int len, net_addr_t *src_ip, uint16_t *src_port,
                     int peek)
 {
     return socket_recv(s, buf, len, src_ip, src_port, peek);
@@ -437,7 +438,7 @@ static void inet_names(void)
     sock.type = SOCK_STREAM;
     sock.local_port = 7400;
     sock.tcb = &control;
-    control.local_ip = cards[1].ip;
+    control.local_ip = net_addr4(cards[1].ip);
     SC_WLE32(user + 8, 16);
     CHECK(do_getsockname(3, 32, 8) == 0, "tcp getsockname");
     CHECK(SC_BE32(user + 36) == cards[1].ip, "tcp local address");
@@ -446,11 +447,11 @@ static void inet_names(void)
     SC_WLE32(user + 8, 16);
     CHECK(do_getsockname(3, 32, 8) == 0 && SC_BE32(user + 36) == 0,
           "an unbound socket without a control block reports any address");
-    sock.local_ip = cards[1].ip;
+    sock.local_ip = net_addr4(cards[1].ip);
     SC_WLE32(user + 8, 16);
     CHECK(do_getsockname(3, 32, 8) == 0 && SC_BE32(user + 36) == cards[1].ip,
           "and a bound one the address it bound");
-    sock.local_ip = 0;
+    sock.local_ip = net_addr4(0);
 }
 
 /** Check that accept fails a datagram, unlistening or raw socket, and an
@@ -659,4 +660,11 @@ int main(void)
         printf("netif-test: pass: socket interface contracts\n");
     }
     return failures ? 1 : 0;
+}
+
+/** Use the first model interface for an unbound IPv4 datagram socket. */
+int net_addr_source(net_addr_t bound, net_addr_t dst, net_addr_t *src)
+{
+    *src = net_addr_any(bound) ? net_addr4(ip_source(dst.v4)) : bound;
+    return 0;
 }

@@ -1,6 +1,8 @@
 #ifndef _SYSCALL_INTERNAL_H_
 #define _SYSCALL_INTERNAL_H_
 
+#include "network/socket/address.h"
+
 /*
  * What the files of the system call layer (syscall.c, syscall_fs.c,
  * syscall_proc.c and syscall_net.c) share with each other and with the
@@ -424,7 +426,7 @@ long sys_pwritev(isr_params_t *params);
  * NULL, are given the datagram's sender, and `whole` its length, which is more
  * than the bytes copied when the buffers took less, for MSG_TRUNC.
  */
-int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t *src_ip,
+int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, net_addr_t *src_ip,
                     uint16_t *src_port, int peek, int32_t *whole);
 
 long sys_readv(isr_params_t *params);
@@ -672,7 +674,7 @@ int user_access_ok(uintptr_t addr, size_t len);
 
 int user_buffer_ok(uintptr_t addr, size_t len, int write);
 
-int32_t dgram_send(struct socket *sock, uint32_t dst_ip, uint16_t dst_port, const uint8_t *buf,
+int32_t dgram_send(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, const uint8_t *buf,
                    uint16_t len);
 
 /* The query-only raw descriptor a DHCP client asks the interface through. */

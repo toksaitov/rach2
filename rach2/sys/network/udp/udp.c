@@ -12,6 +12,7 @@
 #include "../net.h"
 #include "../socket/socket.h"
 #include "../ip/ip.h"
+#include "../ip6/ip6.h"
 #include "../core/byteorder.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
@@ -52,16 +53,13 @@ int udp_bind(uint16_t port, struct socket *sock)
 {
     udp_binding_t *b;
     uint32_t flags;
-    uint32_t ip = sock ? sock->local_ip : 0;
     uint32_t uid = current_proc ? current_proc->euid : 0;
     int met = 0, shared = sock && sock->reuseaddr;
 
     flags = net_lock();
 
     for (b = bindings; b; b = b->next) {
-        uint32_t held = b->sock ? b->sock->local_ip : 0;
-
-        if (b->port == port && (held == 0 || ip == 0 || held == ip)) {
+        if (b->port == port && (!b->sock || socket_bind_conflict(b->sock, sock))) {
             met = 1;
             if (!b->sock || !b->sock->reuseaddr || b->owner != uid) {
                 shared = 0;
@@ -155,7 +153,7 @@ void udp_unbind(struct socket *sock)
  * socket that is merely listening. The payload goes to `socket_udp_deliver`
  * with the sender's address and port.
  */
-int udp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
+static int udp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *data, uint16_t len)
 {
     uint16_t dst_port, udp_len, payload_len;
 
@@ -181,18 +179,18 @@ int udp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         for (b = bindings; b; b = b->next) {
             struct socket *cand = b->sock;
 
-            if (b->port != dst_port || !cand || (cand->local_ip != 0 && cand->local_ip != dst_ip)) {
+            if (b->port != dst_port || !cand || !socket_address_matches(cand, dst_ip)) {
                 continue;
             }
             if (cand->connected) {
-                if (cand->remote_ip == src_ip && cand->remote_port == src_port) {
+                if (net_addr_equal(cand->remote_ip, src_ip) && cand->remote_port == src_port) {
                     net_mib.udp_in_datagrams++;
                     socket_udp_deliver(cand, src_ip, src_port, data + UDP_HDR_SIZE, payload_len);
                     return 0;
                 }
                 continue;
             }
-            if (!listener || (listener->local_ip == 0 && cand->local_ip != 0)) {
+            if (!listener || (net_addr_any(listener->local_ip) && !net_addr_any(cand->local_ip))) {
                 listener = cand;
             }
         }
@@ -213,8 +211,8 @@ void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
     for (b = bindings; b; b = b->next) {
         struct socket *s = b->sock;
 
-        if (b->port == local_port && s && s->connected && s->remote_ip == remote_ip &&
-            s->remote_port == remote_port) {
+        if (b->port == local_port && s && s->connected &&
+            net_addr_equal(s->remote_ip, net_addr4(remote_ip)) && s->remote_port == remote_port) {
             s->so_error = ECONNREFUSED;
             wq_wake(&s->waiters, WQ_DATA);
         }
@@ -226,12 +224,13 @@ void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
  * headers. The shared transmit buffer is filled and sent under `net_lock`,
  * since a sender in an interrupt must not enter it at the same time (net.h).
  */
-int udp_tx(const struct socket *sock, uint32_t dst_ip, uint16_t dst_port, const uint8_t *payload,
+int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, const uint8_t *payload,
            uint16_t plen)
 {
     uint16_t udp_len;
     uint32_t flags;
     int r;
+    net_addr_t from;
 
     if (plen > 1500) {
         klog(KLOG_WARN, "udp", "tx: payload of %d bytes is too large, refused", (int)plen);
@@ -242,17 +241,51 @@ int udp_tx(const struct socket *sock, uint32_t dst_ip, uint16_t dst_port, const 
 
     flags = net_lock();
 
+    r = net_addr_source(sock->local_ip, dst_ip, &from);
+    if (r < 0) {
+        net_unlock(flags);
+        return r;
+    }
     write16be(udp_tx_buf + 0, sock->local_port);
     write16be(udp_tx_buf + 2, dst_port);
     write16be(udp_tx_buf + 4, udp_len);
     write16be(udp_tx_buf + 6, 0x0000); /* checksum disabled */
     k_memcpy(udp_tx_buf + UDP_HDR_SIZE, payload, plen);
 
-    r = ip_tx_from(sock->local_ip, dst_ip, IP_PROTO_UDP, udp_tx_buf, udp_len, sock->ip_ttl);
+    if (dst_ip.family == AF_INET6) {
+        uint16_t sum = ip6_checksum(from.v6, dst_ip.v6, IP6_NH_UDP, udp_tx_buf, udp_len);
+        write16be(udp_tx_buf + 6, sum ? sum : 0xffff);
+        r = ip6_tx(from.v6, dst_ip.v6, (int)dst_ip.scope, IP6_NH_UDP, udp_tx_buf, udp_len,
+                   sock->ip_ttl);
+    } else {
+        r = ip_tx_from(from.v4, dst_ip.v4, IP_PROTO_UDP, udp_tx_buf, udp_len, sock->ip_ttl);
+    }
     if (r == 0) {
         net_mib.udp_out_datagrams++;
     }
 
     net_unlock(flags);
     return r;
+}
+
+/** Deliver an IPv4 datagram through the common address-aware binding list. */
+int udp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
+{
+    return udp_rx_addr(net_addr4(src), net_addr4(dst), data, len);
+}
+
+/** Verify IPv6's mandatory UDP checksum before looking up a binding. */
+int udp6_rx(int ifindex, const uint8_t *src, const uint8_t *dst, const uint8_t *data, uint16_t len)
+{
+    uint16_t size;
+    if (len < UDP_HDR_SIZE)
+        return 0;
+    size = read16be(data + 4);
+    if (size < UDP_HDR_SIZE || size != len || !read16be(data + 6) ||
+        ip6_checksum(src, dst, IP6_NH_UDP, data, size) != 0) {
+        net_mib.udp_in_errors++;
+        return 0;
+    }
+    return udp_rx_addr(net_addr6(src, (uint32_t)ifindex), net_addr6(dst, (uint32_t)ifindex), data,
+                       size);
 }

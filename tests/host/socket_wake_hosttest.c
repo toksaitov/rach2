@@ -3,6 +3,7 @@
  * the kind of change each wake names.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
  * host-deps: tests/host/compat/kheap_host.c
  *
  * A datagram delivered to a UDP socket, and data delivered to a TCP
@@ -282,7 +283,7 @@ int main(void)
     static const uint8_t bytes[4] = {1, 2, 3, 4};
 
     reset();
-    socket_udp_deliver(&udp, 0x0A000002u, 7, bytes, sizeof(bytes));
+    socket_udp_deliver(&udp, net_addr4(0x0A000002u), 7, bytes, sizeof(bytes));
     CHECK(udp.recv_count == 1 && woken == &udp.waiters && woken_kinds == WQ_DATA,
           "a datagram wakes a UDP socket for data alone");
 
@@ -316,4 +317,17 @@ int main(void)
           "a connection queued on a listener wakes it for every kind");
     printf("socket-wake-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
+}
+
+/** No raw message is queued in the wake fixture. */
+void raw_head_address(struct socket *sock, net_addr_t *src)
+{
+    (void)sock;
+    *src = net_addr4(0);
+}
+
+/** No raw message was consumed in the wake fixture. */
+void raw_last_address(struct socket *sock, net_addr_t *src)
+{
+    raw_head_address(sock, src);
 }

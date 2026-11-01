@@ -3,6 +3,7 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/network/tcp/rcvwnd.c
+ * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/pressure_host.c
  *
@@ -273,6 +274,8 @@ int ip_tx_from(uint32_t src, uint32_t dst, uint8_t proto, const uint8_t *payload
     return ip_tx(dst, proto, payload, len, ttl);
 }
 
+#include "compat/tcp_net.h"
+
 #include "../../rach2/sys/network/tcp/tcp.c"
 
 /* The counters /proc/net/snmp reports, which net_core.c defines. */
@@ -320,7 +323,7 @@ static void rx(uint16_t dport, uint32_t seq, uint32_t ack, uint8_t flags)
     write16be(seg + 14, 65535);
     write16be(seg + 16, 0);
     write16be(seg + 18, 0);
-    write16be(seg + 16, tcp_checksum(PEER, net_ip_addr, seg, 20));
+    write16be(seg + 16, tcp_checksum(net_addr4(PEER), net_addr4(net_ip_addr), seg, 20));
     tcp_rx(PEER, net_ip_addr, seg, 20);
 }
 
@@ -331,7 +334,7 @@ static struct tcb *open_conn(struct socket *sock, uint32_t peer_seq)
     sock->type = SOCK_STREAM;
     sock->local_port = SELF_PORT;
     n_segs = 0;
-    CHECK("a connection can be opened", tcp_connect(sock, PEER, PEER_PORT) == 0);
+    CHECK("a connection can be opened", tcp_connect(sock, net_addr4(PEER), PEER_PORT) == 0);
     rx(SELF_PORT, peer_seq, segs[0].seq + 1, (uint8_t)(F_SYN | F_ACK));
     n_segs = 0;
     return sock->tcb;
@@ -391,7 +394,7 @@ static void test_syn_sent(void)
     k_memset(&sock, 0, sizeof(sock));
     sock.type = SOCK_STREAM;
     sock.local_port = SELF_PORT;
-    CHECK("an open can be started", tcp_connect(&sock, PEER, PEER_PORT) == 0);
+    CHECK("an open can be started", tcp_connect(&sock, net_addr4(PEER), PEER_PORT) == 0);
     conn = sock.tcb;
     iss = segs[0].seq;
     n_segs = 0;
@@ -483,14 +486,14 @@ static void test_isn(void)
     sock.local_port = SELF_PORT;
     kernel_ticks = 123456;
     want = 123456u * 2500u + SIP_LOW32;
-    CHECK("an open can be started", tcp_connect(&sock, PEER, PEER_PORT) == 0);
+    CHECK("an open can be started", tcp_connect(&sock, net_addr4(PEER), PEER_PORT) == 0);
     CHECK("the first open draws the four words of the key", key_draws == 4);
     CHECK("an active open starts at the clock plus the keyed hash of its addresses and ports",
           n_segs == 1 && segs[0].seq == want && sock.tcb && sock.tcb->iss == want);
 
     k_memset(&other, 0, sizeof(other));
     other.type = SOCK_STREAM;
-    CHECK("a second open can be started", tcp_connect(&other, PEER, 80) == 0);
+    CHECK("a second open can be started", tcp_connect(&other, net_addr4(PEER), 80) == 0);
     k_memset(&lsock, 0, sizeof(lsock));
     lsock.type = SOCK_STREAM;
     CHECK("a listener can be opened", tcp_listen(&lsock, 81) == 0);
@@ -513,7 +516,8 @@ static void test_isn(void)
     tcp_init();
     k_memset(&sock, 0, sizeof(sock));
     sock.type = SOCK_STREAM;
-    CHECK("an open after tcp_init can be started", tcp_connect(&sock, PEER, PEER_PORT) == 0);
+    CHECK("an open after tcp_init can be started",
+          tcp_connect(&sock, net_addr4(PEER), PEER_PORT) == 0);
     CHECK("tcp_init makes the next open draw a new key", key_draws == 8);
     tcp_close(&sock);
     reset_all();

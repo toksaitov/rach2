@@ -30,6 +30,7 @@
 #include "rcvwnd.h"
 #include "../socket/socket.h"
 #include "../ip/ip.h"
+#include "../ip6/ip6.h"
 #include "../core/byteorder.h"
 #include "../net.h"
 #include "../netconf.h"
@@ -72,7 +73,7 @@ static uint8_t tcp_cksum_buf[12 + TCP_HDR_SIZE + 4 + TCP_MSS];
 /* The next port `ephemeral_port` tries, from 49152 to 65535. */
 static uint16_t next_ephemeral = 49152;
 
-static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg,
+static uint16_t tcp_checksum(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *seg,
                              uint16_t seg_len);
 static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq);
 static void tcp_send_flags(struct tcb *tcb, uint8_t flags);
@@ -82,10 +83,9 @@ static int tcp_recover_send(struct tcb *tcb);
 static void tcp_ack_grow(struct tcb *tcb);
 static void tcp_pump(struct tcb *tcb);
 static void tcp_giveup(struct tcb *tcb);
-static struct tcb *tcp_find(uint32_t local_ip, uint16_t local_port, uint32_t remote_ip,
+static struct tcb *tcp_find(net_addr_t local_ip, uint16_t local_port, net_addr_t remote_ip,
                             uint16_t remote_port);
-static struct socket *tcp_find_listen_sock(uint32_t local_ip, uint16_t local_port);
-static void tcp_free_half_opens(uint16_t port);
+static void tcp_free_half_opens(const struct tcb *listener);
 
 /* The key the initial sequence numbers are hashed under, and whether it has
  * been drawn; `tcp_isn_key` draws it. */
@@ -139,8 +139,8 @@ static void tcp_isn_key(void)
 }
 
 /**
- * SipHash-2-4 under `isn_key` of the 12 bytes of `tcb`'s local address, remote
- * address, local port and remote port, each little-endian; the low 32 bits.
+ * SipHash-2-4 under `isn_key` of the local and remote addresses and ports;
+ * IPv6 includes both scopes. Returns the low 32 bits.
  */
 static uint32_t tcp_isn_hash(const struct tcb *tcb)
 {
@@ -150,13 +150,33 @@ static uint32_t tcp_isn_hash(const struct tcb *tcb)
     uint64_t v1 = k1 ^ TCP_U64(0x646f7261u, 0x6e646f6du);
     uint64_t v2 = k0 ^ TCP_U64(0x6c796765u, 0x6e657261u);
     uint64_t v3 = k1 ^ TCP_U64(0x74656462u, 0x79746573u);
-    uint64_t m = TCP_U64(tcb->remote_ip, tcb->local_ip);
+    uint64_t m = TCP_U64(tcb->remote_ip.v4, tcb->local_ip.v4);
     uint64_t last = TCP_U64(12u << 24, ((uint32_t)tcb->remote_port << 16) | tcb->local_port);
+    int i;
 
-    v3 ^= m;
-    TCP_SIPROUND(v0, v1, v2, v3);
-    TCP_SIPROUND(v0, v1, v2, v3);
-    v0 ^= m;
+    if (tcb->local_ip.family == AF_INET6) {
+        uint8_t tuple[40];
+        k_memcpy(tuple, tcb->local_ip.v6, 16);
+        k_memcpy(tuple + 16, tcb->remote_ip.v6, 16);
+        write32be(tuple + 32, tcb->local_ip.scope);
+        write32be(tuple + 36, tcb->remote_ip.scope);
+        for (i = 0; i < 40; i += 8) {
+            m = TCP_U64(read32be(tuple + i), read32be(tuple + i + 4));
+            v3 ^= m;
+            TCP_SIPROUND(v0, v1, v2, v3);
+            TCP_SIPROUND(v0, v1, v2, v3);
+            v0 ^= m;
+        }
+        m = TCP_U64(44u << 24, ((uint32_t)tcb->remote_port << 16) | tcb->local_port);
+        last = m;
+    }
+
+    if (tcb->local_ip.family != AF_INET6) {
+        v3 ^= m;
+        TCP_SIPROUND(v0, v1, v2, v3);
+        TCP_SIPROUND(v0, v1, v2, v3);
+        v0 ^= m;
+    }
     v3 ^= last;
     TCP_SIPROUND(v0, v1, v2, v3);
     TCP_SIPROUND(v0, v1, v2, v3);
@@ -259,6 +279,24 @@ static void tcb_init(struct tcb *tcb)
     tcb->sack_offer = 1;
 }
 
+/** The payload limit of the current path, excluding IP and TCP headers.
+ * A missing route retains the minimum IPv6 MTU for retransmission. */
+static uint16_t tcp_payload_limit(const struct tcb *tcb)
+{
+    uint8_t via[16];
+    struct netdev *nd;
+    uint32_t mtu;
+    if (tcb->remote_ip.family != AF_INET6)
+        return TCP_MSS;
+    nd = ip6_route(tcb->remote_ip.v6, (int)tcb->remote_ip.scope, via);
+    mtu = nd ? ip6_path_mtu(nd, tcb->remote_ip.v6) : IP6_MTU_MIN;
+    if (mtu < IP6_MTU_MIN)
+        mtu = IP6_MTU_MIN;
+    if (mtu > IP6_MTU)
+        mtu = IP6_MTU;
+    return (uint16_t)(mtu - IP6_HDR_SIZE - TCP_HDR_SIZE);
+}
+
 /**
  * Take the peer's options from its SYN, `data` with a header of `hdr_len`
  * bytes.
@@ -284,7 +322,7 @@ static void tcb_init(struct tcb *tcb)
 static void tcp_take_options(struct tcb *tcb, const uint8_t *data, uint16_t hdr_len)
 {
     uint16_t i = TCP_HDR_SIZE;
-    uint16_t mss = TCP_MSS_DEFAULT;
+    uint16_t mss = tcb->remote_ip.family == AF_INET6 ? 1220 : TCP_MSS_DEFAULT;
     int scaled = 0;
     int sack = 0;
     uint8_t shift = 0;
@@ -312,6 +350,8 @@ static void tcp_take_options(struct tcb *tcb, const uint8_t *data, uint16_t hdr_
     }
     tcb->sack_ok = (uint8_t)(sack && tcb->sack_offer);
     tcb->sack_offer = tcb->sack_ok;
+    if (mss > tcp_payload_limit(tcb))
+        mss = tcp_payload_limit(tcb);
     tcb->snd_mss = mss;
     tcb->cwnd = (uint32_t)TCP_INIT_SEGS * mss;
     if (scaled && tcb->ws_offer) {
@@ -361,14 +401,17 @@ void tcb_free(struct tcb *tcb)
 
 /**
  * The checksum of the segment of `seg_len` bytes at `seg`, computed over a
- * 12-byte pseudo-header (source address, destination address, zero,
- * protocol 6, segment length) and the segment; 0 for a segment received
+ * 12-byte IPv4 or 40-byte IPv6 pseudo-header and the segment; 0 for a segment received
  * whose checksum is right.
  */
-static uint16_t tcp_checksum(uint32_t src_ip, uint32_t dst_ip, const uint8_t *seg, uint16_t seg_len)
+static uint16_t tcp_checksum(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *seg,
+                             uint16_t seg_len)
 {
-    write32be(tcp_cksum_buf + 0, src_ip);
-    write32be(tcp_cksum_buf + 4, dst_ip);
+    if (src_ip.family == AF_INET6) {
+        return ip6_checksum(src_ip.v6, dst_ip.v6, IP6_NH_TCP, seg, seg_len);
+    }
+    write32be(tcp_cksum_buf + 0, src_ip.v4);
+    write32be(tcp_cksum_buf + 4, dst_ip.v4);
     tcp_cksum_buf[8] = 0;
     tcp_cksum_buf[9] = 6;
     write16be(tcp_cksum_buf + 10, seg_len);
@@ -429,9 +472,16 @@ static uint8_t tcp_sack_option(const struct tcb *tcb, uint8_t *opt)
  * `remote_ip`, counting it in `net_mib` when IP takes it, and a reset among
  * the resets. Returns what `ip_tx_from` returned.
  */
-static int tcp_ip_tx(uint32_t local_ip, uint32_t remote_ip, uint16_t seg_len)
+static int tcp_ip_tx(net_addr_t local_ip, net_addr_t remote_ip, uint16_t seg_len)
 {
-    int rc = ip_tx_from(local_ip, remote_ip, IP_PROTO_TCP, tcp_tx_buf, seg_len, IP_TTL_DEFAULT);
+    int rc;
+    if (remote_ip.family == AF_INET6) {
+        rc = ip6_tx(local_ip.v6, remote_ip.v6, (int)remote_ip.scope, IP6_NH_TCP, tcp_tx_buf,
+                    seg_len, IP6_HOP_LIMIT_DEFAULT);
+    } else {
+        rc = ip_tx_from(local_ip.v4, remote_ip.v4, IP_PROTO_TCP, tcp_tx_buf, seg_len,
+                        IP_TTL_DEFAULT);
+    }
 
     if (rc == 0) {
         net_mib.tcp_out_segs++;
@@ -488,7 +538,7 @@ static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
     if (flags & TCP_SYN) {
         tcp_tx_buf[20] = TCP_OPT_MSS;
         tcp_tx_buf[21] = 4;
-        write16be(tcp_tx_buf + 22, TCP_MSS);
+        write16be(tcp_tx_buf + 22, tcp_payload_limit(tcb));
     }
     if ((flags & TCP_SYN) && tcb->ws_offer) {
         tcp_tx_buf[24] = TCP_OPT_NOP;
@@ -623,6 +673,8 @@ static int tcp_output(struct tcb *tcb)
     uint32_t avail, in_flight, window, usable, send_len;
     uint16_t seg_len;
 
+    if (tcb->snd_mss > tcp_payload_limit(tcb))
+        tcb->snd_mss = tcp_payload_limit(tcb);
     for (;;) {
         avail = tcb->send_tail - tcb->send_head;
         if (avail == 0) {
@@ -710,6 +762,8 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
     if ((int32_t)(sent_end - seq) <= 0 || most == 0) {
         return 0;
     }
+    if (tcb->snd_mss > tcp_payload_limit(tcb))
+        tcb->snd_mss = tcp_payload_limit(tcb);
     send_len = sent_end - seq;
     if (send_len > tcb->snd_mss)
         send_len = tcb->snd_mss;
@@ -838,7 +892,7 @@ static void tcp_enter_fast_recovery(struct tcb *tcb)
 void tcp_path_mtu(uint32_t local_ip, uint32_t remote_ip, uint16_t local_port, uint16_t remote_port,
                   uint32_t seq, uint16_t mtu)
 {
-    struct tcb *tcb = tcp_find(local_ip, local_port, remote_ip, remote_port);
+    struct tcb *tcb = tcp_find(net_addr4(local_ip), local_port, net_addr4(remote_ip), remote_port);
     uint32_t mss = mtu > 40u ? mtu - 40u : 0;
 
     if (!tcb || tcb->state < TCP_ESTABLISHED || (int32_t)(seq - tcb->snd_una) < 0 ||
@@ -981,13 +1035,13 @@ uint16_t tcp_bind_ephemeral(void)
  * A block in another state does not keep a new listener off its local port,
  * and `SO_REUSEADDR` changes nothing here.
  */
-static int tcp_port_has_listener(uint32_t ip, uint16_t port)
+static int tcp_port_has_listener(const struct socket *sock, uint16_t port)
 {
     const struct tcb *t;
 
     for (t = tcbs; t; t = t->next) {
         if (t->state == TCP_LISTEN && t->local_port == port &&
-            (t->local_ip == 0 || ip == 0 || t->local_ip == ip)) {
+            (t->sock && socket_bind_conflict(t->sock, sock))) {
             return 1;
         }
     }
@@ -1003,13 +1057,13 @@ static int tcp_port_has_listener(uint32_t ip, uint16_t port)
  * connection to another peer may share the local port: `tcp_find` takes the
  * connection that matches and falls back to a listener only when none does.
  */
-static int tcp_pair_in_use(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
+static int tcp_pair_in_use(uint16_t local_port, net_addr_t remote_ip, uint16_t remote_port)
 {
     const struct tcb *t;
 
     for (t = tcbs; t; t = t->next) {
-        if (t->state != TCP_LISTEN && t->local_port == local_port && t->remote_ip == remote_ip &&
-            t->remote_port == remote_port) {
+        if (t->state != TCP_LISTEN && t->local_port == local_port &&
+            net_addr_equal(t->remote_ip, remote_ip) && t->remote_port == remote_port) {
             return 1;
         }
     }
@@ -1029,7 +1083,7 @@ static int tcp_pair_in_use(uint16_t local_port, uint32_t remote_ip, uint16_t rem
  * The same reset answers a SYN to a full backlog or one the machine has no
  * memory for, and a handshake that completes after its listener closed.
  */
-static void tcp_send_rst_unmatched(uint32_t local_ip, uint32_t remote_ip, uint16_t local_port,
+static void tcp_send_rst_unmatched(net_addr_t local_ip, net_addr_t remote_ip, uint16_t local_port,
                                    uint16_t remote_port, uint8_t seg_flags, uint32_t seg_seq,
                                    uint32_t seg_ack, uint32_t seg_occupied)
 {
@@ -1063,7 +1117,7 @@ static void tcp_send_rst_unmatched(uint32_t local_ip, uint32_t remote_ip, uint16
  * The LISTEN block for a segment to `local_ip`:`local_port`: the one bound to
  * that address, else the one bound to any, else NULL.
  */
-static struct tcb *tcp_find_listener(uint32_t local_ip, uint16_t local_port)
+static struct tcb *tcp_find_listener(net_addr_t local_ip, uint16_t local_port)
 {
     struct tcb *t;
     struct tcb *any = NULL;
@@ -1071,9 +1125,9 @@ static struct tcb *tcp_find_listener(uint32_t local_ip, uint16_t local_port)
     for (t = tcbs; t; t = t->next) {
         if (t->state != TCP_LISTEN || t->local_port != local_port)
             continue;
-        if (t->local_ip == local_ip)
+        if (net_addr_equal(t->local_ip, local_ip))
             return t;
-        if (t->local_ip == 0)
+        if (t->sock && socket_address_matches(t->sock, local_ip))
             any = t;
     }
     return any;
@@ -1084,26 +1138,19 @@ static struct tcb *tcp_find_listener(uint32_t local_ip, uint16_t local_port)
  * the same local address and port, remote address and remote port, else the
  * listener for its local address and port.
  */
-static struct tcb *tcp_find(uint32_t local_ip, uint16_t local_port, uint32_t remote_ip,
+static struct tcb *tcp_find(net_addr_t local_ip, uint16_t local_port, net_addr_t remote_ip,
                             uint16_t remote_port)
 {
     struct tcb *t;
 
     for (t = tcbs; t; t = t->next) {
-        if (t->state != TCP_LISTEN && t->local_port == local_port && t->local_ip == local_ip &&
-            t->remote_ip == remote_ip && t->remote_port == remote_port) {
+        if (t->state != TCP_LISTEN && t->local_port == local_port &&
+            net_addr_equal(t->local_ip, local_ip) && net_addr_equal(t->remote_ip, remote_ip) &&
+            t->remote_port == remote_port) {
             return t;
         }
     }
     return tcp_find_listener(local_ip, local_port);
-}
-
-/** The socket of the listener `tcp_find_listener` finds, or NULL. */
-static struct socket *tcp_find_listen_sock(uint32_t local_ip, uint16_t local_port)
-{
-    const struct tcb *t = tcp_find_listener(local_ip, local_port);
-
-    return t ? t->sock : NULL;
 }
 
 /**
@@ -1159,7 +1206,7 @@ void tcp_local_addr_changed(void)
 
     for (tcb = tcbs; tcb; tcb = next) {
         next = tcb->next;
-        if (ip_is_local(tcb->local_ip) || tcb->state == TCP_CLOSED || tcb->state == TCP_LISTEN) {
+        if (net_addr_local(tcb->local_ip) || tcb->state == TCP_CLOSED || tcb->state == TCP_LISTEN) {
             continue;
         }
         klog(KLOG_INFO, "tcp", "address changed: aborting a connection opened from the old one");
@@ -1362,6 +1409,7 @@ void tcp_tick(void)
 {
     struct tcb *tcb, *next;
 
+    tcp_local_addr_changed();
     for (tcb = tcbs; tcb; tcb = next) {
         next = tcb->next;
 
@@ -1436,10 +1484,10 @@ void tcp_tick(void)
  * `bind` reports the collision where a server expects to hear of it. The
  * check is advisory: `tcp_listen` is what keeps one listener to a port.
  */
-int tcp_port_listening(uint32_t ip, uint16_t port)
+int tcp_port_listening(const struct socket *sock, uint16_t port)
 {
     uint32_t flags = net_lock();
-    int held = tcp_port_has_listener(ip, port);
+    int held = tcp_port_has_listener(sock, port);
 
     net_unlock(flags);
 
@@ -1456,7 +1504,7 @@ static int backlog_refusal_logged;
  * separate system calls with any user code between them: `bind(A, P)`,
  * `bind(B, P)`, `listen(A)`, `listen(B)` passes any check that only `bind`
  * makes, and leaves two LISTEN blocks on one port for `tcp_find` and
- * `tcp_find_listen_sock` to disagree about. So the search and the new block
+ * the passive handshake to disagree about. So the search and the new block
  * are one `net_lock` region, and the check `bind` still makes is advisory.
  *
  * A socket that never bound a port listens on the next ephemeral one, as a
@@ -1473,7 +1521,7 @@ int tcp_listen(struct socket *sock, uint16_t port)
     if (port == 0) {
         port = ephemeral_port();
     }
-    if (port == 0 || tcp_port_has_listener(sock->local_ip, port)) {
+    if (port == 0 || tcp_port_has_listener(sock, port) || socket_stream_conflict(sock, port)) {
         net_unlock(flags);
         return -EADDRINUSE;
     }
@@ -1518,17 +1566,20 @@ int tcp_listen(struct socket *sock, uint16_t port)
  * can come back to. An address in 127/8 to a peer that is not this machine
  * is refused, since no card may send from one.
  */
-int tcp_connect(struct socket *sock, uint32_t dst_ip, uint16_t dst_port)
+int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
 {
     struct tcb *tcb;
     uint32_t flags;
     uint16_t local;
-    uint32_t from = sock->local_ip ? sock->local_ip : ip_source(dst_ip);
+    net_addr_t from;
+    int rc;
 
-    if (IP_IS_LOOPBACK(from) && !ip_is_local(dst_ip)) {
-        return -EINVAL;
-    }
     flags = net_lock();
+    rc = net_addr_source(sock->local_ip, dst_ip, &from);
+    if (rc < 0) {
+        net_unlock(flags);
+        return rc;
+    }
     tcp_isn_key();
 
     if (sock->local_port != 0) {
@@ -1644,7 +1695,7 @@ void tcp_close(struct socket *sock)
     sock->tcb = NULL;
     tcb->sock = NULL;
     if (tcb->state == TCP_LISTEN) {
-        tcp_free_half_opens(tcb->local_port);
+        tcp_free_half_opens(tcb);
     }
 
     switch (tcb->state) {
@@ -2028,8 +2079,7 @@ static void tcp_free_half_open(struct tcb *tcb)
 }
 
 /**
- * Free the passive blocks still in their handshake on `port`, whose listener
- * is closing, with their sockets.
+ * Free the passive handshakes made by `listener`, with their sockets.
  *
  * Nobody is left to accept them, and a listener opened on the port later
  * must not take a connection that began under this one, with this one's
@@ -2037,14 +2087,14 @@ static void tcp_free_half_open(struct tcb *tcb)
  * finds no block: with no listener on the port it is answered with a reset,
  * and a listener opened since ignores a segment that is not a SYN.
  */
-static void tcp_free_half_opens(uint16_t port)
+static void tcp_free_half_opens(const struct tcb *listener)
 {
     struct tcb *t;
     struct tcb *next;
 
     for (t = tcbs; t; t = next) {
         next = t->next;
-        if (t->passive && t->state == TCP_SYN_RCVD && t->local_port == port) {
+        if (t->passive && t->state == TCP_SYN_RCVD && t->listener == listener) {
             tcp_free_half_open(t);
         }
     }
@@ -2143,7 +2193,8 @@ static void tcp_rx_reset(struct tcb *tcb, uint32_t seq, uint32_t ack_num, uint8_
  * it in `net_mib`, a malformed one among the errors: its header length, or 0
  * for a segment to drop.
  */
-static uint16_t tcp_seg_check(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
+static uint16_t tcp_seg_check(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *data,
+                              uint16_t len)
 {
     uint16_t hdr_len;
 
@@ -2240,7 +2291,7 @@ static uint16_t tcp_seg_check(uint32_t src_ip, uint32_t dst_ip, const uint8_t *d
  * peer sent again because its acknowledgement was lost, and restarts its
  * 2MSL wait.
  */
-void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
+static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *data, uint16_t len)
 {
     uint16_t src_port, dst_port;
     uint32_t seq, ack_num;
@@ -2327,6 +2378,7 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         conn_sock->uid = tcb->sock ? tcb->sock->uid : tcb->uid;
 
         conn_tcb->passive = 1;
+        conn_tcb->listener = tcb;
         conn_tcb->local_ip = dst_ip;
         conn_tcb->local_port = tcb->local_port;
         conn_tcb->remote_ip = src_ip;
@@ -2343,6 +2395,9 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         conn_tcb->uid = conn_sock->uid;
         conn_tcb->inode = conn_sock->inode;
 
+        conn_sock->family = tcb->sock ? tcb->sock->family : dst_ip.family;
+        conn_sock->v6only = tcb->sock ? tcb->sock->v6only : 0;
+        conn_sock->local_ip = dst_ip;
         conn_sock->tcb = conn_tcb;
         conn_sock->local_port = conn_tcb->local_port;
         conn_sock->remote_ip = src_ip;
@@ -2366,7 +2421,8 @@ void tcp_rx(uint32_t src_ip, uint32_t dst_ip, const uint8_t *data, uint16_t len)
         tcb->rto_timer = 0;
 
         if (tcb->passive) {
-            listen_sock = tcp_find_listen_sock(tcb->local_ip, tcb->local_port);
+            listen_sock = tcb->listener ? tcb->listener->sock : NULL;
+            tcb->listener = NULL;
             if (listen_sock) {
                 socket_tcp_accept(listen_sock, tcb->sock);
             }
@@ -2697,4 +2753,16 @@ int tcp_state_to_linux(int state)
     default:
         return 7;
     }
+}
+
+/** Deliver an IPv4 segment to the common TCP state machine. */
+void tcp_rx(uint32_t src, uint32_t dst, const uint8_t *data, uint16_t len)
+{
+    tcp_rx_addr(net_addr4(src), net_addr4(dst), data, len);
+}
+
+/** Deliver an IPv6 segment with the receiving link's scope. */
+void tcp6_rx(int ifindex, const uint8_t *src, const uint8_t *dst, const uint8_t *data, uint16_t len)
+{
+    tcp_rx_addr(net_addr6(src, (uint32_t)ifindex), net_addr6(dst, (uint32_t)ifindex), data, len);
 }

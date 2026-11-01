@@ -3,6 +3,7 @@
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
  *
  * A datagram of the protocol a socket registered is queued, whole, with its
  * source, and wakes the socket's queue for data alone, so an edge-triggered
