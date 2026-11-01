@@ -1,5 +1,5 @@
 # shellcheck shell=sh disable=SC2034 # fetch_agents.sh reads the variables
-# shellcheck, a static analyzer for shell scripts; the project's static
+# ShellCheck, a static analyzer for shell scripts; the project's static
 # Linux build, pinned by the SHA-256 of the release asset in GitHub's API.
 # The archive has no license, so the GPL-3.0-or-later text comes from the
 # release's source tag, pinned by its SHA-256, and is installed beside it.
