@@ -359,6 +359,7 @@ static void test_kitty(const char *conf)
     ask(&r, "key 126", "sent ");
     ask(&r, "key 46", "sent \\xd1\\x81");
     ask(&r, "key +29 46 -29", "sent \\x1b[1089;5u");
+    ask(&r, "key 126", "sent ");
     ask(&r, "key +30", "sent a");
     ask(&r, "key -30", "sent ");
     CHECK(finish(&r) == 129, "the flag 1 child ends by its hang-up");
