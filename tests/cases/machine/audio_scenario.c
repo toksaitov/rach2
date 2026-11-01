@@ -219,8 +219,8 @@ static void dsp(struct lc *l)
 {
     char name[] = "wavcheck", scale[] = "scale", slash[] = "/", path[1024];
     char l1[] = "262", l2[] = "294", l3[] = "330", l4[] = "349", l5[] = "392";
-    char r1[] = "523", r2[] = "587", r3[] = "659", r4[] = "698", r5[] = "784";
-    char m1[] = "80", m2[] = "100", m3[] = "125", m4[] = "160", m5[] = "200";
+    char r1[] = "131", r2[] = "147", r3[] = "165", r4[] = "175", r5[] = "196";
+    char m1[] = "80", m2[] = "100", m3[] = "111", m4[] = "222", m5[] = "444";
     char *argv[] = {name,  scale, path, l1, l2, l3, l4, l5, m1, m2, m3, m4,  m5,
                     slash, r1,    r2,   r3, r4, r5, m1, m2, m3, m4, m5, NULL};
     struct etude_case_machine *m;

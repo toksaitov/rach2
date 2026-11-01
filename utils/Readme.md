@@ -173,4 +173,4 @@ A suite below runs as `tests/run NAME`.
 * `selfbuild` builds this directory on Rach2 with `guest.mk` and runs the `httpd` and `nc` it built.
 * `acpid` presses the volume keys on os-real and reads `mixer`, and powers the machine off through acpid and init.
 * `audio`'s case `kept` sets `mixer vol 5`, reboots and reads `vol 5:5` back from init's kept levels, then reboots past init with the file removed and reads the driver's level.
-* No suite runs `audiotest`.
+* `audio` runs `audiotest -s` on HDA and `audiotest -d` on HDA and the SB16; no suite runs its tone.
