@@ -3969,7 +3969,7 @@ static int procfs_gen_netsnmp(struct procfs_text *t)
     ap_str(t, "\nTcp: RtoAlgorithm RtoMin RtoMax MaxConn ActiveOpens PassiveOpens AttemptFails"
               " EstabResets CurrEstab InSegs OutSegs RetransSegs InErrs OutRsts\nTcp: 1");
     ap_mib(t, TCP_RTO_MIN * 1000u / TICK_HZ); /* ticks as milliseconds */
-    ap_mib(t, TCP_RTO_MAX * 10);
+    ap_mib(t, TCP_RTO_MAX * 1000u / TICK_HZ);
     ap_str(t, " -1");
     ap_mib(t, m->tcp_active_opens);
     ap_mib(t, m->tcp_passive_opens);
