@@ -799,9 +799,13 @@ display connected sockets.
 .It Fl t , u , w , x
 Select TCP, UDP, raw, or Unix sockets, respectively.
 Without these options, select all socket types.
-Rach2 has no IPv6, so each IPv6 listing reports that its file, such as
+IPv6 sockets are read from
 .Pa /proc/net/tcp6 ,
-does not exist, as it does on a Linux built without IPv6.
+.Pa udp6
+and
+.Pa raw6
+and listed under the same names, with addresses such as
+.Ql ::1:22 .
 .It Fl e
 Display additional information.
 .It Fl n

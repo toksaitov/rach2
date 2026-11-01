@@ -209,7 +209,15 @@ The addresses.
 .It Pa /proc/net/ipv6_route
 The routes.
 .It Pa /proc/net/snmp6
-The counters of IPv6 and ICMPv6.
+The counters of IPv6, ICMPv6 and UDP over IPv6.
+.It Pa /proc/net/tcp6 , /proc/net/udp6 , /proc/net/raw6
+The IPv6 sockets, which
+.Ic netstat
+reads;
+.Xr ss 8
+asks
+.Dv NETLINK_SOCK_DIAG
+for them instead.
 .It Pa /proc/sys/net/ipv6/conf
 The settings.
 .It Pa /var/lib/ipv6-stable-secret
