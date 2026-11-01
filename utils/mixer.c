@@ -31,8 +31,8 @@
 
 #define MIXER_DEVICE "/dev/mixer"
 
-/* The level before a mute, as `L:R` and a newline. /var/run is emptied at
- * each boot, as the kernel's level is reset. */
+/* The level before a mute, as `L:R` and a newline. init keeps it across a
+ * reboot with the level (init(8)). */
 #define MUTE_RECORD "/var/run/mixer.mute"
 
 /** Pack the channels `left` and `right`, each 0 to 100, as OSS's level. */

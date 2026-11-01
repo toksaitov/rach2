@@ -24,7 +24,7 @@ A program's options and behavior are in its manual page, linked below. This sect
 
 ### init
 
-[init(8)](../man/man8/init.8) is process 1: it reaps orphans, keeps a console session running, and keeps [update(8)](../man/man8/update.8) running, the program that calls sync(2) every thirty seconds. On an image that has `/etc/acpid.conf` it keeps BusyBox's `acpid` running, which runs the actions under `/etc/acpi` for the power, volume and brightness keys, and it keeps each backlight's level across a reboot in `/var/lib/backlight` and IPv6's stable secret in `/var/lib/ipv6-stable-secret`. `init.c` builds four programs, and an image stages one of them as `/sbin/init`:
+[init(8)](../man/man8/init.8) is process 1: it reaps orphans, keeps a console session running, and keeps [update(8)](../man/man8/update.8) running, the program that calls sync(2) every thirty seconds. On an image that has `/etc/acpid.conf` it keeps BusyBox's `acpid` running, which runs the actions under `/etc/acpi` for the power, volume and brightness keys. It keeps each backlight's level across a reboot in `/var/lib/backlight`, and the mixer's levels, every channel in `/dev/mixer`'s device mask, in `/var/lib/mixer`, with mixer(1)'s record of a mute in `/var/lib/mixer.mute`: it saves them when it stops the machine and sets them back at boot, before acpid or any session starts, so a level lost to a power cut is not kept. It keeps IPv6's stable secret in `/var/lib/ipv6-stable-secret`. `init.c` builds four programs, and an image stages one of them as `/sbin/init`:
 
 * `init-shell` starts a shell on the console with no login. Only test images stage it.
 * `init-login` starts `/bin/login` and nothing else. os-simple and os-real use it.
