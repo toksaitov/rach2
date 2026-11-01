@@ -34,7 +34,7 @@ static int digits(const char *p, const char **end)
 
 /**
  * Say whether some line of `w` is the kernel's record `pattern` whole: the
- * prefix `<L>[S.CC] `, then the pattern, in which each `#` is a run of
+ * prefix `<L>[S.U] `, then the pattern, in which each `#` is a run of
  * digits, and then the line's end. The probe runner matches the whole line,
  * so a record renamed at either end would stop being scored.
  */

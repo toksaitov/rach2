@@ -275,7 +275,7 @@ static int has(const char *hay, const char *needle)
  * described; its length. `cap` is not read: a record fits 128 bytes. */
 static unsigned render_fill(char *out, unsigned cap, int n)
 {
-    const char *head = "<7>[0.00] fill: record: ";
+    const char *head = "<7>[0.000000] fill: record: ";
     const char *tail = " of two thousand\n";
     char digits[12];
     unsigned len = 0, i;
@@ -339,7 +339,7 @@ static void console_write_rows(void)
     klog(KLOG_WARN, "block", "completion dropped: stale generation");
     ring_text(text, sizeof(text));
     CHECK("the ring takes the record where it is raised, inside the write",
-          streq(text, "<4>[0.00] block: completion dropped: stale generation\n"));
+          streq(text, "<4>[0.000000] block: completion dropped: stale generation\n"));
     CHECK("and the port has only the write's first byte so far",
           serial_len == 1 && serial[0] == 'A');
     console_putc_raw('B');
@@ -348,7 +348,7 @@ static void console_write_rows(void)
     console_write_end();
     serial[serial_len] = '\0';
     CHECK("the write's bytes reach the port together and the record after them",
-          streq(serial, "AB\r\n<4>[0.00] block: completion dropped: stale generation\r\n"));
+          streq(serial, "AB\r\n<4>[0.000000] block: completion dropped: stale generation\r\n"));
     CHECK("and nothing waits or is held once the write has ended",
           pending_count == 0 && klog_delivering == 0 && console_writing == 0);
 
@@ -359,7 +359,7 @@ static void console_write_rows(void)
     serial[serial_len] = '\0';
     CHECK("a record raised inside a line of the shell follows the line on the port",
           streq(serial, "Type 'help' for available commands.\r\n"
-                        "<6>[0.00] usbdisk: ready: device 4: lun 0\r\n"));
+                        "<6>[0.000000] usbdisk: ready: device 4: lun 0\r\n"));
     screen[screen_len] = '\0';
     CHECK("and on the screen", streq(screen, "Type 'help' for available commands.\n"
                                              "usbdisk: ready: device 4: lun 0\n"));
@@ -371,7 +371,7 @@ static void console_write_rows(void)
     serial[serial_len] = '\0';
     CHECK("a record raised inside a formatted line of the shell follows it",
           streq(serial, "USBDISKPROBE 5\r\n"
-                        "<6>[0.00] usbdisk: ready: device 4: lun 0\r\n"));
+                        "<6>[0.000000] usbdisk: ready: device 4: lun 0\r\n"));
     CHECK("and nothing waits or is held once the formatted line is out",
           pending_count == 0 && klog_delivering == 0 && console_writing == 0);
 }
@@ -420,14 +420,14 @@ int main(void)
     klog(KLOG_ERR, "ahci", "command: timed out on port %d", 0);
     ring_text(text, sizeof(text));
     CHECK("the record is the whole line",
-          streq(text, "<3>[12.34] ahci: command: timed out on port 0\n"));
+          streq(text, "<3>[12.340000] ahci: command: timed out on port 0\n"));
 
     /* Every conversion the kernel's formatter has. */
     reset();
     klog(KLOG_INFO, "fmt", "%d %b %o %x %X %s %c %%", -5, 5, 8, 255, 255, "text", 'z');
     ring_text(text, sizeof(text));
     CHECK("the conversions are the kernel's own",
-          streq(text, "<6>[0.00] fmt: -5 101 10 ff FF text z %\n"));
+          streq(text, "<6>[0.000000] fmt: -5 101 10 ff FF text z %\n"));
 
     /* A null string is the formatter's, not a fault. */
     reset();
@@ -439,24 +439,25 @@ int main(void)
     reset();
     klog(KLOG_INFO, "boot", "early: no clock yet");
     ring_text(text, sizeof(text));
-    CHECK("a record before the first tick reads zero", has(text, "<6>[0.00] boot: "));
+    CHECK("a record before the first tick reads zero", has(text, "<6>[0.000000] boot: "));
 
-    /* Hundredths are two digits, so a reader can subtract them. */
+    /* Microseconds are six digits, so a reader takes them as Linux's. */
     reset();
     kernel_ticks = 205;
     klog(KLOG_INFO, "t", "x: y");
     ring_text(text, sizeof(text));
-    CHECK("the fraction keeps its leading zero", has(text, "[2.05] "));
+    CHECK("the fraction keeps its leading zero", has(text, "[2.050000] "));
 
     /* One newline, however the format ended. */
     reset();
     klog(KLOG_INFO, "n", "a: b\n");
     ring_text(text, sizeof(text));
-    CHECK("a format that ends in a newline still gives one", streq(text, "<6>[0.00] n: a: b\n"));
+    CHECK("a format that ends in a newline still gives one",
+          streq(text, "<6>[0.000000] n: a: b\n"));
     reset();
     klog(KLOG_INFO, "n", "a: b\n\n\n");
     ring_text(text, sizeof(text));
-    CHECK("and one that ends in three gives one", streq(text, "<6>[0.00] n: a: b\n"));
+    CHECK("and one that ends in three gives one", streq(text, "<6>[0.000000] n: a: b\n"));
 
     /* Truncation is marked, and the record still ends in one newline. */
     reset();
@@ -476,14 +477,14 @@ int main(void)
     klog(KLOG_INFO, "nl", "text: %s", "first\nsecond");
     ring_text(text, sizeof(text));
     CHECK("a newline inside the text does not end the record", count_lines(text) == 1);
-    CHECK("and is kept as a space", streq(text, "<6>[0.00] nl: text: first second\n"));
+    CHECK("and is kept as a space", streq(text, "<6>[0.000000] nl: text: first second\n"));
 
     /* A format that ends on its own percent sign. */
     reset();
     klog(KLOG_INFO, "pct", "text: 100%");
     ring_text(text, sizeof(text));
     CHECK("a format ending in a percent sign stops there",
-          streq(text, "<6>[0.00] pct: text: 100%\n"));
+          streq(text, "<6>[0.000000] pct: text: 100%\n"));
 
     /* A level out of range is clamped. */
     reset();
@@ -512,13 +513,13 @@ int main(void)
     klog(KLOG_DEBUG, "d", "detail: for the log");
     serial[serial_len] = '\0';
     CHECK("debug detail reaches the serial port whole",
-          streq(serial, "<7>[0.00] d: detail: for the log\r\n"));
+          streq(serial, "<7>[0.000000] d: detail: for the log\r\n"));
     CHECK("and not the wire while netconsole is off", net_len == 0);
     reset();
     net_on = 1;
     klog(KLOG_INFO, "i", "event: happened");
     net[net_len] = '\0';
-    CHECK("netconsole gets the whole record", streq(net, "<6>[0.00] i: event: happened\n"));
+    CHECK("netconsole gets the whole record", streq(net, "<6>[0.000000] i: event: happened\n"));
     /* netconsole is given records before it has a device. */
     reset();
     net_on = 0;
@@ -625,9 +626,9 @@ int main(void)
     ring_text(text, sizeof(text));
     CHECK("both records are in the ring", count_lines(text) == 2);
     CHECK("the one raised from inside is whole",
-          has(text, "<3>[0.00] irq: landed: in the middle of another record\n"));
+          has(text, "<3>[0.000000] irq: landed: in the middle of another record\n"));
     CHECK("and so is the one it interrupted",
-          has(text, "<6>[0.00] outer: began: before the interrupt\n"));
+          has(text, "<6>[0.000000] outer: began: before the interrupt\n"));
     /* The one raised from inside waits for the line it landed in. */
     screen[screen_len] = '\0';
     CHECK("the screen has the record that was interrupted, then the one that "
@@ -636,12 +637,12 @@ int main(void)
                         "irq: landed: in the middle of another record\n"));
     serial[serial_len] = '\0';
     CHECK("and so does the serial port",
-          streq(serial, "<6>[0.00] outer: began: before the interrupt\r\n"
-                        "<3>[0.00] irq: landed: in the middle of another record\r\n"));
+          streq(serial, "<6>[0.000000] outer: began: before the interrupt\r\n"
+                        "<3>[0.000000] irq: landed: in the middle of another record\r\n"));
     net[net_len] = '\0';
     CHECK("and so does the wire",
-          streq(net, "<6>[0.00] outer: began: before the interrupt\n"
-                     "<3>[0.00] irq: landed: in the middle of another record\n"));
+          streq(net, "<6>[0.000000] outer: began: before the interrupt\n"
+                     "<3>[0.000000] irq: landed: in the middle of another record\n"));
 
     /* More records raised from inside one delivery than the queue holds. */
     reset();
@@ -652,7 +653,7 @@ int main(void)
     CHECK("the ring has the record, the burst raised inside it, and the count",
           count_lines(text) == KLOG_PENDING_MAX + 3);
     CHECK("and the count says how many were dropped",
-          has(text, "<4>[0.00] klog: dropped: 1 record(s) the queue could not hold\n"));
+          has(text, "<4>[0.000000] klog: dropped: 1 record(s) the queue could not hold\n"));
     screen[screen_len] = '\0';
     CHECK("the screen has the record, all of the burst the queue holds, and the count",
           count_lines(screen) == KLOG_PENDING_MAX + 2);
