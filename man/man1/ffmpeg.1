@@ -64,6 +64,8 @@ Print the command's help.
 .It Pa /dev/dsp
 OSS playback and capture device.
 .El
+.Sh EXIT STATUS
+.Ex -std
 .Sh EXAMPLES
 Convert an MP3 to signed 16-bit WAV:
 .Bd -literal -offset indent
@@ -79,8 +81,6 @@ Record five seconds of stereo audio:
 .Bd -literal -offset indent
 ffmpeg -f oss -ar 48000 -ac 2 -i /dev/dsp -t 5 take.wav
 .Ed
-.Sh EXIT STATUS
-.Ex -std
 .Sh SEE ALSO
 .Xr ffprobe 1 ,
 .Xr mixer 1 ,

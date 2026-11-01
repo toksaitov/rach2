@@ -47,14 +47,14 @@ to select OSS without probing for a default output first.
 .It Ev SOX_OPTS
 Default options, processed before the command line.
 .El
+.Sh EXIT STATUS
+.Ex -std
 .Sh EXAMPLES
 Record five seconds of signed 16-bit stereo WAV at 48000 Hz,
 showing the level:
 .Bd -literal -offset indent
 rec -S -r 48000 -c 2 -b 16 take.wav trim 0 5
 .Ed
-.Sh EXIT STATUS
-.Ex -std
 .Sh SEE ALSO
 .Xr mixer 1 ,
 .Xr play 1 ,

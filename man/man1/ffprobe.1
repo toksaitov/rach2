@@ -35,13 +35,13 @@ to omit routine diagnostics.
 .It Fl h
 Print the command's help.
 .El
+.Sh EXIT STATUS
+.Ex -std
 .Sh EXAMPLES
 Print the audio stream's codec, rate and channels as JSON:
 .Bd -literal -offset indent
 ffprobe -v error -show_entries stream=codec_name,sample_rate,channels \
     -of json music.flac
 .Ed
-.Sh EXIT STATUS
-.Ex -std
 .Sh SEE ALSO
 .Xr ffmpeg 1
