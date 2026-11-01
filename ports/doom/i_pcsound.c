@@ -101,9 +101,11 @@ static uint32_t last_audio_ms = 0;        /* the clock at the last update */
 static uint32_t audio_ms_remainder = 0;   /* output samples, in thousandths */
 static uint32_t opl_sample_remainder = 0; /* player samples, in 11025ths */
 
-/* The most samples one update makes, some 457 ms, so that a long frame
- * leaves no gap; what the kernel's ring cannot take is dropped. */
-#define MAX_CATCHUP_SAMPLES (MIX_BUFFER_SIZE * 16)
+/* The most samples one update makes: two tics, 57 ms, since MIX_BUFFER_SIZE
+ * is one. A longer frame is a stall, and the time past the two tics is
+ * dropped, so that what is queued stays near the present; what the kernel's
+ * ring cannot take is dropped as well. */
+#define MAX_CATCHUP_SAMPLES (MIX_BUFFER_SIZE * 2)
 
 
 /* The effects that play with sample output, one to a channel. */
@@ -284,13 +286,35 @@ static int PCSoundGetSfxLumpNum(sfxinfo_t *sfxinfo)
 }
 
 /**
+ * Advance every effect playing by `samples`, the time a stall dropped, so
+ * that the part of an effect that fell in it is not played late; an effect
+ * that ends in it ends. The music goes on from where it was.
+ */
+static void skip_channels(uint32_t samples)
+{
+    int i;
+
+    for (i = 0; i < NUM_CHANNELS; i++) {
+        if (!channels[i].active)
+            continue;
+        if (channels[i].length - channels[i].position <= samples) {
+            channels[i].position = channels[i].length;
+            channels[i].active = false;
+        } else {
+            channels[i].position += samples;
+        }
+    }
+}
+
+/**
  * With sample output, make the samples the time since the last update is
- * worth, no more than a second's and MAX_CATCHUP_SAMPLES, in chunks of
- * MIX_BUFFER_SIZE. For each chunk take OPL_SAMPLE_RATE / OUTPUT_SAMPLE_RATE
- * times as many stereo samples from the music player, average them to mono
- * and to the output rate, scale them to 8 bits with the music's gain, add
- * the channels at their volumes, limit each sum to a byte, and write the
- * chunk with AUDIO_WRITE until a write takes nothing; the rest is dropped.
+ * worth, no more than MAX_CATCHUP_SAMPLES, dropping a stall's time past them
+ * with skip_channels, in chunks of MIX_BUFFER_SIZE. For each chunk take
+ * OPL_SAMPLE_RATE / OUTPUT_SAMPLE_RATE times as many stereo samples from the
+ * music player, average them to mono and to the output rate, scale them to 8
+ * bits with the music's gain, add the channels at their volumes, limit each
+ * sum to a byte, and write the chunk with AUDIO_WRITE until a write takes
+ * nothing; the rest is dropped.
  * On the speaker, step the effect sounding by 7 ms tones, and end it after
  * its last.
  */
@@ -334,6 +358,7 @@ static void PCSoundUpdate(void)
         }
 
         if (out_samples > MAX_CATCHUP_SAMPLES) {
+            skip_channels(out_samples - MAX_CATCHUP_SAMPLES);
             out_samples = MAX_CATCHUP_SAMPLES;
             audio_ms_remainder = 0;
         }
