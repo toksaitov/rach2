@@ -215,8 +215,9 @@ static void socket_rows(void)
     check("link-running", strstr(text, "RUNNING") != NULL, "the working interface is not RUNNING");
 }
 
-/** Bind `fd` to ::1 and return the port it has, or -1. */
-static int bind_loopback6(int fd)
+/** Bind `fd` to ::1 and return the port it has, or with `named` 0 return 0
+ * without asking, since a raw socket has no name to give; -1 on failure. */
+static int bind_loopback6(int fd, int named)
 {
     struct sockaddr_in6 a;
     socklen_t n = sizeof(a);
@@ -224,11 +225,23 @@ static int bind_loopback6(int fd)
     memset(&a, 0, sizeof(a));
     a.sin6_family = AF_INET6;
     a.sin6_addr = in6addr_loopback;
-    if (fd < 0 || bind(fd, (struct sockaddr *)&a, sizeof(a)) != 0 ||
-        getsockname(fd, (struct sockaddr *)&a, &n) != 0) {
+    if (fd < 0 || bind(fd, (struct sockaddr *)&a, sizeof(a)) != 0) {
         return -1;
     }
-    return ntohs(a.sin6_port);
+    if (!named) {
+        return 0;
+    }
+    return getsockname(fd, (struct sockaddr *)&a, &n) == 0 ? ntohs(a.sin6_port) : -1;
+}
+
+/** Whether netstat's endpoint `at` is ::1 at `port`, with or without the
+ * scope BusyBox prints for a raw row, whose scope id it leaves unset. */
+static int loopback6_at(const char *at, const char *port)
+{
+    const char *colon = strrchr(at, ':');
+
+    return strncmp(at, "::1", 3) == 0 && (at[3] == ':' || at[3] == '%') && colon != NULL &&
+           strcmp(colon + 1, port) == 0;
 }
 
 /** Connect `fd` to ::1 at `port`: 0, or -1. */
@@ -247,7 +260,7 @@ static int connect_loopback6(int fd, int port)
  * Open on ::1 a TCP listener and a connection to it, a bound UDP socket and
  * one connected to it, and a raw ICMPv6 socket, and check that netstat
  * lists each from /proc/net/tcp6, udp6 and raw6. A raw socket here cannot
- * connect.
+ * connect, and getsockname refuses it.
  */
 static void ipv6_rows(void)
 {
@@ -261,11 +274,11 @@ static void ipv6_rows(void)
     fd[2] = socket(AF_INET6, SOCK_DGRAM, 0);
     fd[3] = socket(AF_INET6, SOCK_DGRAM, 0);
     fd[4] = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
-    tcp = bind_loopback6(fd[0]);
-    udp = bind_loopback6(fd[2]);
+    tcp = bind_loopback6(fd[0], 1);
+    udp = bind_loopback6(fd[2], 1);
     check("ipv6-sockets",
           tcp > 0 && udp > 0 && listen(fd[0], 1) == 0 && connect_loopback6(fd[1], tcp) == 0 &&
-              connect_loopback6(fd[3], udp) == 0 && bind_loopback6(fd[4]) >= 0,
+              connect_loopback6(fd[3], udp) == 0 && bind_loopback6(fd[4], 0) == 0,
           "the IPv6 sockets on ::1 could not be opened, bound or connected");
     snprintf(tcp_at, sizeof(tcp_at), "::1:%d", tcp);
     snprintf(udp_at, sizeof(udp_at), "::1:%d", udp);
@@ -288,7 +301,7 @@ static void ipv6_rows(void)
             bound |= strcmp(local, udp_at) == 0 && strcmp(remote, ":::*") == 0;
             peered |= strcmp(remote, udp_at) == 0 && strcmp(state, "ESTABLISHED") == 0;
         } else if (strcmp(proto, "raw") == 0) {
-            raw |= strcmp(local, "::1:58") == 0;
+            raw |= loopback6_at(local, "58");
         }
     }
     check("netstat-tcp6", listening && connected,

@@ -589,7 +589,7 @@
         },
         {
           "assertion_id": "netstat-raw6",
-          "checks": "netstat -tuwan lists the raw ICMPv6 socket bound to ::1 with protocol 58",
+          "checks": "netstat -tuwan lists the raw ICMPv6 socket bound to ::1 with protocol 58, with or without the scope id BusyBox leaves unset on a raw row",
           "source": "scenario"
         },
         {
