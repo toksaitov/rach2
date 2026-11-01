@@ -10,7 +10,8 @@
  * frame the peer sends goes to the radio, which receives it if it is
  * running and tuned to its channel, and the relay answers the peer with
  * its status: acknowledged when the radio received a frame addressed to it.
- * Datagrams from any address but the peer's are ignored.
+ * Datagrams from any address but the peer's are ignored, whatever their
+ * port, since a forward of QEMU's user network sends from a port of its own.
  *
  * The peer is another wsimrelay, whose radio is then on the same medium,
  * or the Linux guest's hwsimrelay. The address bound is meant to be on a
@@ -226,8 +227,9 @@ int main(int argc, char **argv)
         }
         if (fds[1].revents & POLLIN) {
             n = recvfrom(sock, buf, sizeof(buf), 0, (struct sockaddr *)&from, &from_len);
+            /* The address alone: QEMU's user network gives a forwarded
+             * datagram a source port of its own. */
             if (n > 0 && from.sin_addr.s_addr == peer.sin_addr.s_addr &&
-                from.sin_port == peer.sin_port &&
                 medium_from_peer(&m, buf, (unsigned)n, &reply) == MEDIUM_TO_RADIO) {
                 if (reply.valid) {
                     medium_answer(&m, &reply, write(dev, buf, (size_t)n) == n, status);

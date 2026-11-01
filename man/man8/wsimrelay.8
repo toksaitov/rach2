@@ -49,7 +49,9 @@ gives.
 answers the peer with the frame's status: no acknowledgement when none was
 asked or the frame is group addressed, acknowledged when the radio
 received a frame addressed to it, and failed otherwise.
-Datagrams from any address and port but the peer's are ignored.
+Datagrams from any address but the peer's are ignored, whatever their
+source port, since a forward of QEMU's user network sends from a port of
+its own.
 .Pp
 Two relays on one machine join two of its radios, for checks that need
 no Linux guest:
@@ -68,7 +70,8 @@ The IPv4 address to bind, by default every address.
 Between machines it is the address of a second card that
 .Pa /etc/network/interfaces
 and ifplugd leave alone, so that the medium outlasts a cable pulled
-from eth0.
+from eth0; beside the Linux AP guest that card is eth1 on 10.0.4.0/24,
+and the peer 10.0.4.2 at the port the guest's script forwards.
 .It Fl l Ar port
 The UDP port to bind, by default 5550.
 .It Fl n Ar number
