@@ -951,6 +951,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "wlan_data",
+          "checks": "tests/host/wlan_data_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "wlan_dev",
           "checks": "tests/host/wlan_dev_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
