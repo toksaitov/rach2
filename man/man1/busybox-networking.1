@@ -806,6 +806,9 @@ and
 .Pa raw6
 and listed under the same names, with addresses such as
 .Ql ::1:22 .
+A raw IPv6 row may show a meaningless scope, as in
+.Ql ::1%135147035:58 ,
+since BusyBox leaves its scope id unset.
 .It Fl e
 Display additional information.
 .It Fl n
