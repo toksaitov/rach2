@@ -3,6 +3,7 @@
  * the temporary mappings, and of the panic for a supervisor fault in a
  * kernel stack's guard page, on i686.
  *
+ * host-deps: tests/host/compat/vm_iter_host.c
  * host-deps: rach2/sys/mm/frame.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c

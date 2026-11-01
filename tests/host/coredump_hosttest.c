@@ -2,6 +2,7 @@
  * coredump_hosttest.c: the core file's regions, the wait for a process's
  * other threads to park, a thread's parking, and extended numbering.
  *
+ * host-deps: tests/host/compat/vm_iter_host.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/tick.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
@@ -42,18 +43,6 @@ static process_t sibling;
 static struct tgroup group;
 static struct mm space;
 static vma_t *model_regions;
-
-/** The first region of the model's ordered list. */
-vma_t *vm_first(const vm_space_t *vm)
-{
-    return vm->first;
-}
-
-/** The next region of the model's ordered list. */
-vma_t *vm_next(const vma_t *r)
-{
-    return r->next;
-}
 
 /** Link the model's current allocation in address order. */
 static void regions_link(void)

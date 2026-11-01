@@ -5,6 +5,7 @@
  * paths of /proc/PID/maps, a read of a process's arguments while the process
  * is reaped, and oom_score_adj.
  *
+ * host-deps: tests/host/compat/vm_iter_host.c
  * host-deps: rach2/sys/fs/name.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/tick.c
