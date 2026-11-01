@@ -10,6 +10,8 @@
 #   Automake, Bison and screen): the GNU keyring,
 #   ftp.gnu.org/gnu/gnu-keyring.gpg.
 # * Linux: the kernel.org release keys.
+# * FFmpeg: the release signing key published at ffmpeg.org/ffmpeg-devel.asc,
+#   FCF986EA15E6E293A5644F10B4322F04D67658D8.
 # * Git and its manual pages: Junio C Hamano's key,
 #   96E07AF25771955980DAD10020D04E5A713660A7, which signs the uncompressed tar.
 # * libxcrypt: its maintainer's key.
@@ -115,6 +117,7 @@ mpc 1.3.1 https://ftp.gnu.org/gnu/mpc/mpc-1.3.1.tar.gz ab642492f5cf882b74aa0cb73
 glibc 2.44 https://ftp.gnu.org/gnu/glibc/glibc-2.44.tar.xz 37f600f2bef3c5e8300147059568b2a2e40a7ad6ccc65ce942556d49429cc667
 linux 6.18.54 https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.18.54.tar.xz 9df30b02dd8102bbd0be52556288ef6889ddbe7f1ddb96fbf847d0becf3eacac
 libxcrypt 4.5.2 https://github.com/besser82/libxcrypt/releases/download/v4.5.2/libxcrypt-4.5.2.tar.xz 71513a31c01a428bccd5367a32fd95f115d6dac50fb5b60c779d5c7942aec071
+ffmpeg 9.0.2 https://ffmpeg.org/releases/ffmpeg-9.0.2.tar.xz 8c3850283eb25fa026482078a04051e0be17347b09ef81a0849bec15a96e002e
 coreutils 9.12 https://ftp.gnu.org/gnu/coreutils/coreutils-9.12.tar.xz a480198559733e9b3da999e90543ac6f888a2caa544d8d664c5a1f17e528e210
 make 4.4.1 https://ftp.gnu.org/gnu/make/make-4.4.1.tar.gz dd16fb1d67bfab79a72f5e8390735c49e3e8e70b4945a15ab1f81ddb78658fb3
 bash 5.3 https://ftp.gnu.org/gnu/bash/bash-5.3.tar.gz 0d5cd86965f869a26cf64f4b71be7b96f90a3ba8b3d74e27e8e9d9d5550f31ba
