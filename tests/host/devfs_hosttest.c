@@ -420,6 +420,51 @@ void evdev_close(fd_entry_t *e)
     unexpected();
 }
 
+/** The operations of /dev/wsim, which no row opens. */
+int32_t wsim_open(fd_entry_t *e)
+{
+    (void)e;
+    return unexpected();
+}
+
+int32_t wsim_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    (void)e;
+    (void)buf;
+    (void)count;
+    return unexpected();
+}
+
+int32_t wsim_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    (void)e;
+    (void)buf;
+    (void)count;
+    return unexpected();
+}
+
+short wsim_poll(fd_entry_t *e, short events, struct wait_queue **wq)
+{
+    (void)e;
+    (void)events;
+    (void)wq;
+    return (short)unexpected();
+}
+
+int32_t wsim_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
+{
+    (void)e;
+    (void)request;
+    (void)arg;
+    return unexpected();
+}
+
+void wsim_close(fd_entry_t *e)
+{
+    (void)e;
+    unexpected();
+}
+
 /** The operations of /dev/rfkill, which no row opens. */
 int32_t rfkill_open(fd_entry_t *e)
 {
