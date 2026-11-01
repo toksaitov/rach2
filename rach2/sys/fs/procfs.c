@@ -16,6 +16,7 @@
 #include "../latency.h"
 #include "../network/ip/ip.h"
 #include "../mm/filecache.h"
+#include "../mm/filemap.h"
 #include "../mm/kheap.h"
 #include "../mm/pagecache.h"
 #include "bcache.h"
@@ -1230,6 +1231,33 @@ static const char *maps_path(const struct mm *mm, const vma_t *r)
     return NULL;
 }
 
+/** Append the device and inode of the file region `r` maps, as stat gives
+ * them (`vfs_fill_stat64`): the major and minor numbers in hex, a space and
+ * the inode in decimal, or "00:00 0" for a region that maps no file. */
+static void ap_maps_identity(struct procfs_text *t, const vma_t *r)
+{
+    const struct open_file *ofd = filemap_ofd(r->file);
+    const struct vfs_mount *base;
+    uint32_t dev = 0;
+    int i;
+
+    if (!ofd || !ofd->vmnt) {
+        ap_str(t, "00:00 0");
+        return;
+    }
+    base = vfs_mount_base(ofd->vmnt);
+    for (i = 0; i < vfs_mount_slots(); i++) {
+        if (vfs_mount_at(i) == base) {
+            dev = procfs_mount_dev(i, base);
+        }
+    }
+    ap_xlow(t, (dev >> 8) & 0xfffu, 2);
+    ap_ch(t, ':');
+    ap_xlow(t, (dev & 0xffu) | ((dev >> 12) & 0xfff00u), 2);
+    ap_ch(t, ' ');
+    ap_u64(t, ofd->ino);
+}
+
 /** Append region `r` of `mm` as its line of /proc/<pid>/maps. */
 static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t *r)
 {
@@ -1246,7 +1274,9 @@ static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t
     ap_ch(t, r->type == VM_SHARED ? 's' : 'p');
     ap_ch(t, ' ');
     ap_xlow(t, r->file ? r->pgoff * PAGE_SIZE : 0u, 8);
-    ap_str(t, " 00:00 0 ");
+    ap_ch(t, ' ');
+    ap_maps_identity(t, r);
+    ap_ch(t, ' ');
     if (path) {
         do {
             ap_ch(t, ' ');
@@ -1258,9 +1288,9 @@ static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t
 
 /**
  * /proc/<pid>/maps: a line for each region, in Linux's form: the range, the
- * rights with p or s for private or shared, the offset in the file, a device
- * and inode of 0, which the kernel does not keep, a space, and the path from
- * column 73. A region with no path ends at that space, as on Linux, where
+ * rights with p or s for private or shared, the offset in the file, the
+ * file's device and inode, 0 for a region of no file, a space, and the path
+ * from column 73. A region with no path ends at that space, as on Linux, where
  * BusyBox's pmap counts on it to find the end of the fields. GNU libc's
  * pthread_getattr_np finds the stack by its [stack] line. -EACCES for a
  * caller `procfs_may_read_mem` refuses, as Linux refuses another user.
