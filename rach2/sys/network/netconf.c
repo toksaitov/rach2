@@ -20,8 +20,7 @@
 #include "../klog.h"
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
-
-extern volatile uint32_t kernel_ticks;
+#include "../timer.h"
 
 /* The first interface's configuration, the SLIRP network until the boot line
  * or a program gives another. */
