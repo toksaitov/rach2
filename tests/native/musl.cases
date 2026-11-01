@@ -89,6 +89,7 @@ case musl/suidmusl root:ext2-dir ids:1000 -- musl/suidmusl
 case musl/tcpsendrecv peer:echo -- musl/tcpsendrecv
 case musl/textbusymusl root:krffs stage:musl/statushelper -- musl/textbusymusl helper=/statushelper
 # Left out: the framebuffer's row, which the case that follows runs alone.
+case musl/threadscaling ids:1000 alone -- musl/threadscaling
 case musl/threadmusl ports:7480,7481 -- musl/threadmusl machine=native
 case musl/threadmusl.framebuffer console -- musl/threadmusl row=framebuffer
 case musl/timerfdmusl -- musl/timerfdmusl

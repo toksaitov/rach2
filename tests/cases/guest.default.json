@@ -6225,6 +6225,139 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "boot", "reason": "the record is the kernel's own, printed once at boot, before any program runs"}
+    },
+    {
+      "case_id": "guest.default.threadscaling",
+      "behavior": "Creating held threads has bounded process-index work per creation; untimed blocked threads add no timer scan work. VMA gap candidates per creation stay bounded.",
+      "units": [
+        "default",
+        "musl/threadscaling"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": []
+        }
+      },
+      "execution": {
+        "program": "threadscaling",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "the program releases and joins every thread it made"
+      },
+      "assertions": [
+        {
+          "assertion_id": "identity",
+          "checks": "the caller uses a non-root real uid",
+          "source": "program"
+        },
+        {
+          "assertion_id": "threads-16",
+          "checks": "all 16 threads are created and joined, within the process work, VMA gap and active timer bounds",
+          "source": "program"
+        },
+        {
+          "assertion_id": "threads-64",
+          "checks": "all 64 threads are created and joined, within the process work, VMA gap and active timer bounds",
+          "source": "program"
+        },
+        {
+          "assertion_id": "threads-256",
+          "checks": "all 256 threads are created and joined, within the process work, VMA gap and active timer bounds",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "threadscaling",
+          "node": "tests/musl/threadscaling",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
     }
   ]
 }

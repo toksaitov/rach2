@@ -31,12 +31,12 @@ struct proc_user_count {
 static struct proc_user_count *user_table[USER_BUCKETS];
 static process_t *timers;
 static process_t *timer_cursor; /* the next entry of a tick already in progress */
-static uint32_t work_count[3];
+static uint32_t work_count[4];
 
 /** Read one process-index work counter. */
 uint32_t proc_work_count(unsigned int index)
 {
-    return index < 3 ? work_count[index] : 0;
+    return index < 4 ? work_count[index] : 0;
 }
 
 /** Remove an indexed record before changing its pid or freeing it. */
@@ -436,6 +436,7 @@ void proc_wake_sleepers(uint32_t now)
 {
     process_t *p;
 
+    work_count[3]++;
     timer_cursor = timers;
     while (timer_cursor) {
         p = timer_cursor;
