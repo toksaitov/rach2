@@ -335,12 +335,13 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
 }
 
 static int64_t clock_seconds = 1000000000;
+static int64_t clock_nanos;
 
 /** The time selected by the row, 10^9 seconds after the epoch by default. */
 void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
 {
     *seconds = clock_seconds;
-    *nanoseconds = 0;
+    *nanoseconds = clock_nanos;
 }
 
 static block_device_t dev = {512, 0, BLOCK_FAULT_SAFE, 0, 0, 0, img_read, img_write, 0, 0, 0};
@@ -606,6 +607,11 @@ static void against_reader(const char *img)
 #define PROFILE                                                                        \
     "sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal," \
     "^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize"
+
+/* The profile tools/image/mkext2.sh makes, with 256-byte inodes. */
+#define PROFILE_LARGE                                                                  \
+    "sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal," \
+    "^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,extra_isize"
 
 /**
  * Stage the tree in the fixture directory: files, links, a sparse file and a
@@ -1366,29 +1372,39 @@ static int e2fsck_clean(const char *img)
 }
 
 /**
- * Signed seconds and both range limits, set on a file and read again after
- * each remount. The clock supplies the same cases for the change time.
+ * Signed seconds and both range limits, set on a file with nanoseconds and
+ * read again after each remount, on a volume of `inode`-byte inodes with
+ * `features`. A 128-byte inode keeps 32 signed bits of seconds and no
+ * nanoseconds; a 256-byte one keeps the nanoseconds and the two epoch bits,
+ * which reach 2446. The clock supplies the same cases for the change time.
  */
-static void time_row(void)
+static void time_row(int inode, const char *features)
 {
     static const struct {
         int64_t requested;
-        int64_t stored;
-    } cases[] = {{-(int64_t)2147483647 - 2, -2147483647 - 1},
-                 {-2147483647 - 1, -2147483647 - 1},
-                 {-31536000, -31536000},
-                 {0, 0},
-                 {2147483647, 2147483647},
-                 {(int64_t)2147483647 + 1, 2147483647},
-                 {(int64_t)4294967295u + 2, 2147483647}};
-    const char *img = fix_path("times.ext2");
+        int64_t small; /* stored in a 128-byte inode */
+        int64_t large; /* and in a 256-byte one */
+    } cases[] = {
+        {-(int64_t)2147483647 - 2, -2147483647 - 1, -2147483647 - 1},
+        {-2147483647 - 1, -2147483647 - 1, -2147483647 - 1},
+        {-31536000, -31536000, -31536000},
+        {0, 0, 0},
+        {2147483647, 2147483647, 2147483647},
+        {(int64_t)2147483647 + 1, 2147483647, (int64_t)2147483647 + 1},
+        {(int64_t)4294967295u + 2, 2147483647, (int64_t)4294967295u + 2},
+        {2208988800, 2147483647, 2208988800}, /* 2040-01-01 */
+        {((int64_t)3 << 32) + 2147483647, 2147483647, ((int64_t)3 << 32) + 2147483647},
+        {((int64_t)3 << 32) + 2147483647 + 1, 2147483647, ((int64_t)3 << 32) + 2147483647}};
+    const char *img = fix_path(inode == 128 ? "times.ext2" : "times256.ext2");
+    int large = inode > 128;
     uint64_t bytes;
     struct vfs_stat set, got;
     unsigned i, j, count = sizeof(cases) / sizeof(cases[0]);
+    int64_t a, m, c, an, mn, cn;
     void *node;
     int rc;
 
-    bytes = build_image(img, 4096, 128, PROFILE, 16, "tree");
+    bytes = build_image(img, 4096, inode, features, 16, "tree");
     use_image(img, bytes);
     check(mount_rw() == 0, "the timestamp volume mounts writable");
     node = make_file(mnt.root, "times", &rc);
@@ -1401,14 +1417,26 @@ static void time_row(void)
         j = count - i - 1;
         memset(&set, 0, sizeof(set));
         set.atime_sec = cases[i].requested;
+        set.atime_nsec = 123456789;
         set.mtime_sec = cases[j].requested;
+        set.mtime_nsec = 999999999;
         clock_seconds = cases[i].requested;
+        clock_nanos = 500000001;
+        a = large ? cases[i].large : cases[i].small;
+        m = large ? cases[j].large : cases[j].small;
+        c = a;
+        an = large ? 123456789 : 0;
+        mn = large ? 999999999 : 0;
+        cn = large ? 500000001 : 0;
         check(OPS->setattr(&mnt, node, VFS_SET_ATIME | VFS_SET_MTIME, &set) == 0,
               "ext2 accepts signed and out-of-range timestamp seconds");
-        check(OPS->getattr(&mnt, node, &got) == 0 && got.atime_sec == cases[i].stored &&
-                  got.mtime_sec == cases[j].stored && got.ctime_sec == cases[i].stored,
-              "ext2 reports signed timestamp seconds clamped at both limits");
+        check(OPS->getattr(&mnt, node, &got) == 0 && got.atime_sec == a && got.mtime_sec == m &&
+                  got.ctime_sec == c && got.atime_nsec == an && got.mtime_nsec == mn &&
+                  got.ctime_nsec == cn,
+              large ? "ext2 reports the times a 256-byte inode keeps, clamped at both limits"
+                    : "ext2 reports signed timestamp seconds clamped at both limits");
         clock_seconds = 1000000000;
+        clock_nanos = 0;
         OPS->put(&mnt, node);
         check(unmount_rw() == 0, "the timestamp volume unmounts");
         use_image(img, bytes);
@@ -1419,9 +1447,11 @@ static void time_row(void)
             unmount_rw();
             return;
         }
-        check(OPS->getattr(&mnt, node, &got) == 0 && got.atime_sec == cases[i].stored &&
-                  got.mtime_sec == cases[j].stored && got.ctime_sec == cases[i].stored,
-              "ext2 preserves signed and clamped timestamps on disk");
+        check(OPS->getattr(&mnt, node, &got) == 0 && got.atime_sec == a && got.mtime_sec == m &&
+                  got.ctime_sec == c && got.atime_nsec == an && got.mtime_nsec == mn &&
+                  got.ctime_nsec == cn,
+              large ? "ext2 keeps a 256-byte inode's seconds and nanoseconds on disk"
+                    : "ext2 preserves signed and clamped timestamps on disk");
     }
     OPS->put(&mnt, node);
     check(unmount_rw() == 0 && e2fsck_clean(img), "the timestamp volume is clean");
@@ -4415,7 +4445,8 @@ int main(int argc, char **argv)
     }
 
     if (argc == 2 && streq(argv[1], "--times-only")) {
-        time_row();
+        time_row(128, PROFILE);
+        time_row(256, PROFILE_LARGE);
         goto finish;
     }
 
@@ -4430,7 +4461,8 @@ int main(int argc, char **argv)
     refusal_rows();
     executable_path_row();
     write_rows();
-    time_row();
+    time_row(128, PROFILE);
+    time_row(256, PROFILE_LARGE);
     order_row();
     refusal_write_rows();
     dirty_rows();
