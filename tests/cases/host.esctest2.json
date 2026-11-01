@@ -63,7 +63,7 @@
         {
           "witness_id": "measurements",
           "kind": "counter",
-          "means": "a requested screen measurement or driver registration finished",
+          "means": "sixteen more requested screen measurements or driver registrations finished",
           "limit": 10000000
         }
       ],

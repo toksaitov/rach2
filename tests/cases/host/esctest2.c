@@ -227,7 +227,9 @@ static int measurement(char *request)
 
 /**
  * Serve inspection until the driver exits. Terminal output outside a
- * requested answer is a protocol error.
+ * requested answer is a protocol error. Progress is reported every sixteenth
+ * measurement, since etude takes at most 4096 records and a run makes over
+ * 5000 measurements.
  */
 static int serve(void)
 {
@@ -278,7 +280,8 @@ static int serve(void)
         if (measurement(request))
             return -1;
         used = 0;
-        printf("@etude 1 progress measurements %u\n", ++measurements);
+        if (++measurements % 16 == 0)
+            printf("@etude 1 progress measurements %u\n", measurements);
     }
 }
 
