@@ -121,10 +121,10 @@ int diskinfo_format_disks(char *buf, int cap);
 #define DISKINFO_DISKS_BYTES (DISK_MAX * (DISKINFO_DISK_LINE + PART_MAX * DISKINFO_PART_LINE))
 
 /* The widest record `diskinfo_format` writes before the disks: the state,
- * driver and policy lines, the fourteen counters at their widest, and a present
- * disk's port, model, firmware and four partitions. /proc/disk gives the
- * formatter this much and the host test proves the widest record fits. */
-#define DISKINFO_RECORD_BYTES 1024
+ * driver and policy lines, the eighteen counters at their widest, and a
+ * present disk's port, model, firmware and four partitions. /proc/disk gives
+ * the formatter this much and the host test proves the widest record fits. */
+#define DISKINFO_RECORD_BYTES 1280
 
 /**
  * Find a disk, read disk 0's first sector, and publish `/dev/diskN` for
