@@ -1,8 +1,9 @@
 /**
  * udptest: the UDP socket calls socket, bind, sendto and recvfrom, made as a
  * client of a host echo server at the SLIRP gateway 10.0.2.2:7777, or at the
- * port its argument names. It exits 0 when the five tests pass and 1
- * otherwise.
+ * port its argument names, and datagrams past one frame: to the server, and
+ * of the largest sizes over 127.0.0.1 and ::1, whole or cut to a short
+ * buffer. It exits 0 when the ten tests pass and 1 otherwise.
  *
  * Beside its own lines it writes etude's report records (probe_report.h),
  * one assertion for each test, for the case ETUDE_CASE names or
@@ -32,11 +33,38 @@ typedef unsigned char uint8_t;
 #define STDOUT_FILENO 1
 
 #define AF_INET      2
+#define AF_INET6     10
 #define SOCK_DGRAM   2
 #define MSG_DONTWAIT 0x40
 #define MSG_PEEK     0x02
+#define MSG_TRUNC    0x20
 #define EAGAIN       (-11)
 #define EFAULT       (-14)
+#define EMSGSIZE     (-90)
+
+/* The data of the datagram to the echo server, past one frame and so sent
+ * in fragments each way. A host's own limits decide the most it can echo:
+ * macOS sends no UDP datagram past 9216 bytes by default, QEMU's from
+ * among them. */
+#define BIG_ECHO 8192
+/* The most data a UDP datagram holds over IPv4 and over IPv6. */
+#define UDP_MAX  65507
+#define UDP6_MAX 65527
+
+/* A message header for SC_RECVMSG, laid out as the kernel's. */
+struct iovec_probe {
+    void *base;
+    unsigned long len;
+};
+struct msghdr_probe {
+    void *name;
+    unsigned int namelen;
+    struct iovec_probe *iov;
+    unsigned long iovlen;
+    void *control;
+    unsigned long controllen;
+    int flags;
+};
 
 /* Test target: host echo server on the SLIRP gateway. */
 #define DST_IP_0   10
@@ -71,6 +99,24 @@ static void sys_exit(int status)
 {
     syscall1(SYS_EXIT, (long)status);
     __builtin_unreachable();
+}
+
+/** Open `path` to read: a descriptor, or a negated errno. */
+static int sys_open_ro(const char *path)
+{
+    return syscall3(SYS_OPEN, (long)path, 0L, 0L);
+}
+
+/** Read up to `n` bytes of `fd`: the count read, or a negated errno. */
+static int sys_read(int fd, void *buf, int n)
+{
+    return syscall3(SYS_READ, (long)fd, (long)buf, (long)n);
+}
+
+/** Close `fd`. */
+static void sys_close(int fd)
+{
+    syscall1(SYS_CLOSE, (long)fd);
 }
 
 /** The poll call, with `timeout` in milliseconds: the count of ready
@@ -154,6 +200,255 @@ static void make_sockaddr(uint8_t *sa, uint16_t port, uint8_t a, uint8_t b, uint
     sa[5] = b;
     sa[6] = c;
     sa[7] = d;
+}
+
+/* /proc/net/snmp, read by `snmp_ip`. */
+static char snmp[2048];
+
+/** Non-zero when the `n` bytes at `a` are the string `b`'s first `n`. */
+static int str_eq(const char *a, const char *b, int n)
+{
+    int i;
+
+    for (i = 0; i < n; i++) {
+        if (a[i] != b[i])
+            return 0;
+    }
+    return 1;
+}
+
+/**
+ * The value of the column `name` of the Ip lines of /proc/net/snmp, a line
+ * of names followed by one of values, or 0xFFFFFFFF when the file or the
+ * column cannot be read.
+ */
+static uint32_t snmp_ip(const char *name)
+{
+    int fd, n = 0, r, i, col = 0, want = -1, len = (int)strlen(name);
+    uint32_t v = 0;
+
+    fd = sys_open_ro("/proc/net/snmp");
+    if (fd < 0)
+        return 0xFFFFFFFFu;
+    while (n < (int)sizeof(snmp) - 1 && (r = sys_read(fd, snmp + n, (int)sizeof(snmp) - 1 - n)) > 0)
+        n += r;
+    sys_close(fd);
+    snmp[n] = 0;
+    if (n < 4 || !str_eq(snmp, "Ip: ", 4))
+        return 0xFFFFFFFFu;
+    for (i = 4; i < n && snmp[i] != '\n'; i++) {
+        if (snmp[i - 1] == ' ' && str_eq(snmp + i, name, len) &&
+            (snmp[i + len] == ' ' || snmp[i + len] == '\n'))
+            want = col;
+        if (snmp[i] == ' ')
+            col++;
+    }
+    if (want < 0 || i + 5 >= n || !str_eq(snmp + i + 1, "Ip: ", 4))
+        return 0xFFFFFFFFu;
+    for (i += 5, col = 0; i < n && col < want; i++) {
+        if (snmp[i] == ' ')
+            col++;
+    }
+    for (; i < n && snmp[i] >= '0' && snmp[i] <= '9'; i++)
+        v = v * 10 + (uint32_t)(snmp[i] - '0');
+    return v;
+}
+
+/* The datagrams these rows send and receive, the largest of 65527 bytes. */
+static uint8_t big_out[65536], big_in[65536];
+
+/** Fill `big_out` with a pattern of period 251, so that a datagram cut or
+ * shifted by any whole count of fragments does not compare equal. */
+static void fill_big(void)
+{
+    unsigned int i;
+
+    for (i = 0; i < sizeof(big_out); i++)
+        big_out[i] = (uint8_t)(i % 251u);
+}
+
+/** Send `len` bytes of `big_out` from `fd` to the `salen`-byte address `sa`:
+ * the count sent, or a negated errno. */
+static int send_big(int fd, int len, const uint8_t *sa, int salen)
+{
+    unsigned long args[6];
+
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)big_out;
+    args[2] = (uint32_t)len;
+    args[3] = 0;
+    args[4] = (unsigned long)sa;
+    args[5] = (uint32_t)salen;
+    return socketcall(SC_SENDTO, args);
+}
+
+/** Receive one datagram on `fd` into `big_in`, of `cap` bytes, with the
+ * receive flags `flags`: what recvfrom returns. */
+static int recv_big(int fd, int cap, int flags)
+{
+    unsigned long args[6];
+
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)big_in;
+    args[2] = (uint32_t)cap;
+    args[3] = (uint32_t)flags;
+    args[4] = 0;
+    args[5] = 0;
+    return socketcall(SC_RECVFROM, args);
+}
+
+/**
+ * A socket of `family` bound to its loopback address at a port the kernel
+ * picks, with that address and port in the `salen`-byte `sa`, so that a
+ * datagram sent to `sa` comes back to it: the descriptor, or -1.
+ */
+static int loop_socket(int family, uint8_t *sa, int salen)
+{
+    unsigned long args[3], len = (unsigned long)salen;
+    int fd, i;
+
+    args[0] = (uint32_t)family;
+    args[1] = SOCK_DGRAM;
+    args[2] = 0;
+    fd = socketcall(SC_SOCKET, args);
+    if (fd < 0)
+        return -1;
+    for (i = 0; i < salen; i++)
+        sa[i] = 0;
+    sa[0] = (uint8_t)family;
+    if (family == AF_INET) {
+        sa[4] = 127;
+        sa[7] = 1;
+    } else {
+        sa[8 + 15] = 1;
+    }
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)sa;
+    args[2] = (uint32_t)salen;
+    if (socketcall(SC_BIND, args) != 0)
+        return -1;
+    args[2] = (unsigned long)&len;
+    if (socketcall(SC_GETSOCKNAME, args) != 0 || (sa[2] == 0 && sa[3] == 0))
+        return -1;
+    return fd;
+}
+
+/** Print the outcome of the test `id` and report it: `ok` passes, else
+ * `why` is the failure, with the number `got` printed beside it. */
+static int verdict(const char *id, int ok, const char *why, int got)
+{
+    if (ok) {
+        puts("OK");
+        report_pass(id);
+        return 1;
+    }
+    print("FAILED (got ");
+    print_num(got);
+    puts(")");
+    report_fail(id, why);
+    return 0;
+}
+
+/**
+ * Test 6: a datagram of BIG_ECHO bytes to the echo server comes back whole,
+ * sent again each RESEND_MS until it does. The echoes of test 4 may still
+ * arrive, and are read and passed over. Outside a native run, where other
+ * traffic moves the machine's counts, the reply's fragments must have been
+ * reassembled here: ReasmOKs grows.
+ */
+static int big_echo(int fd, const uint8_t *dst_sa)
+{
+    struct pollfd_probe pfd;
+    uint32_t oks = snmp_ip("ReasmOKs");
+    int n = 0;
+
+    print("Test 6: an echo of 8192 bytes comes back whole... ");
+    while (n != BIG_ECHO) {
+        if (send_big(fd, BIG_ECHO, dst_sa, 16) != BIG_ECHO)
+            return verdict("big-echo", 0, "the send of 8192 bytes failed", n);
+        pfd.fd = fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        if (sys_poll(&pfd, 1, RESEND_MS) <= 0)
+            continue;
+        while ((n = recv_big(fd, (int)sizeof(big_in), MSG_DONTWAIT)) >= 0 && n != BIG_ECHO) {
+        }
+    }
+    if (!mem_eq(big_in, big_out, BIG_ECHO))
+        return verdict("big-echo", 0, "the echo of 8192 bytes is not the bytes sent", n);
+    return verdict("big-echo",
+                   probe_native() || (oks != 0xFFFFFFFFu && snmp_ip("ReasmOKs") - oks >= 1),
+                   "the echo's fragments were not counted as reassembled", (int)oks);
+}
+
+/**
+ * Tests 7 to 10, over the loopback interface, whose MTU of 65536 carries
+ * the largest IPv4 UDP datagram whole: 65507 bytes to 127.0.0.1 arrive
+ * whole and 65508 are refused; a 100-byte buffer takes the first 100 bytes
+ * with MSG_TRUNC in msg_flags, and MSG_TRUNC in the flags returns the whole
+ * length, each taking the datagram; and 65527 bytes to ::1, sent in two
+ * fragments, arrive whole and 65528 are refused.
+ */
+static int loopback_rows(void)
+{
+    struct msghdr_probe msg;
+    struct iovec_probe iov;
+    unsigned long args[3];
+    uint8_t sa[16], sa6[28];
+    int fd, fd6, n, ok, passed = 0;
+
+    print("Test 7: 65507 bytes over 127.0.0.1 arrive whole... ");
+    fd = loop_socket(AF_INET, sa, (int)sizeof(sa));
+    n = fd < 0 ? -1 : send_big(fd, UDP_MAX, sa, (int)sizeof(sa));
+    if (n == UDP_MAX)
+        n = recv_big(fd, (int)sizeof(big_in), 0);
+    passed += verdict("loopback-whole", n == UDP_MAX && mem_eq(big_in, big_out, UDP_MAX),
+                      "the datagram of 65507 bytes did not arrive whole", n);
+
+    print("Test 8: 65508 bytes over IPv4 are refused... ");
+    n = fd < 0 ? -1 : send_big(fd, UDP_MAX + 1, sa, (int)sizeof(sa));
+    passed += verdict("size-refused", n == EMSGSIZE, "the send was not refused with EMSGSIZE", n);
+
+    print("Test 9: a short buffer gets the start, with MSG_TRUNC... ");
+    n = fd < 0 ? -1 : send_big(fd, UDP_MAX, sa, (int)sizeof(sa));
+    msg.name = 0;
+    msg.namelen = 0;
+    msg.iov = &iov;
+    msg.iovlen = 1;
+    msg.control = 0;
+    msg.controllen = 0;
+    msg.flags = 0;
+    iov.base = big_in;
+    iov.len = 100;
+    if (n == UDP_MAX) {
+        args[0] = (uint32_t)fd;
+        args[1] = (unsigned long)&msg;
+        args[2] = 0;
+        n = socketcall(SC_RECVMSG, args);
+    }
+    ok = n == 100 && (msg.flags & MSG_TRUNC) && mem_eq(big_in, big_out, 100);
+    n = ok ? send_big(fd, UDP_MAX, sa, (int)sizeof(sa)) : n;
+    if (ok && n == UDP_MAX)
+        n = recv_big(fd, 100, MSG_TRUNC);
+    ok = ok && n == UDP_MAX && recv_big(fd, 100, MSG_DONTWAIT) == EAGAIN;
+    passed +=
+        verdict("truncated", ok,
+                "the cut datagram was not 100 bytes with MSG_TRUNC, then its whole length", n);
+    if (fd >= 0)
+        sys_close(fd);
+
+    print("Test 10: 65527 bytes over ::1 arrive whole... ");
+    fd6 = loop_socket(AF_INET6, sa6, (int)sizeof(sa6));
+    n = fd6 < 0 ? -1 : send_big(fd6, UDP6_MAX, sa6, (int)sizeof(sa6));
+    if (n == UDP6_MAX)
+        n = recv_big(fd6, (int)sizeof(big_in), 0);
+    ok = n == UDP6_MAX && mem_eq(big_in, big_out, UDP6_MAX);
+    n = ok ? send_big(fd6, UDP6_MAX + 1, sa6, (int)sizeof(sa6)) : n;
+    passed += verdict("loopback6-whole", ok && n == EMSGSIZE,
+                      "65527 bytes over ::1 did not arrive whole, or 65528 were not refused", n);
+    if (fd6 >= 0)
+        sys_close(fd6);
+    return passed;
 }
 
 /* The echo server's host, the gateway unless `peer` names another. */
@@ -244,7 +539,7 @@ void probe_main(unsigned long *sp);
 PROBE_SP_ENTRY;
 
 /**
- * The probe, entered with `sp` at argc: the five tests in order. A failed
+ * The probe, entered with `sp` at argc: the ten tests in order. A failed
  * socket in test 1 ends it at once with status 1.
  *
  * Test 4 sends the message and waits in poll for the echo, sending the
@@ -288,6 +583,11 @@ void probe_main(unsigned long *sp)
         report_notrun("empty-eagain", "no socket opened");
         report_notrun("echo", "no socket opened");
         report_notrun("kernel-pointer", "no socket opened");
+        report_notrun("big-echo", "no socket opened");
+        report_notrun("loopback-whole", "no socket opened");
+        report_notrun("size-refused", "no socket opened");
+        report_notrun("truncated", "no socket opened");
+        report_notrun("loopback6-whole", "no socket opened");
         report_end();
         failed++;
         sys_exit(1);
@@ -375,6 +675,16 @@ void probe_main(unsigned long *sp)
     } else {
         failed++;
     }
+
+    fill_big();
+    if (big_echo(fd, dst_sa)) {
+        passed++;
+    } else {
+        failed++;
+    }
+    n = loopback_rows();
+    passed += n;
+    failed += 4 - n;
 
     report_end();
     puts("");

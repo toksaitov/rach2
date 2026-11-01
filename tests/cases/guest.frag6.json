@@ -22,8 +22,8 @@
       },
       "assertions": [
         {"assertion_id": "snmp6", "checks": "/proc/net/snmp6 reads with the fragment, reassembly and Packet Too Big counts", "source": "program"},
-        {"assertion_id": "fragmented-echo", "checks": "the kernel's echo of 3000 bytes of data to ::1 is answered with the 3008 bytes of ICMPv6 sent", "source": "program"},
-        {"assertion_id": "fragments-counted", "checks": "the echo and its reply were each sent in three fragments and each reassembled: Ip6FragOKs grew by 2, Ip6FragCreates by 6 and Ip6ReasmOKs by 2", "source": "program"},
+        {"assertion_id": "fragmented-echo", "checks": "the kernel's echo of 65527 bytes of data to ::1, past lo's MTU of 65536 with its headers, is answered with the 65535 bytes of ICMPv6 sent", "source": "program"},
+        {"assertion_id": "fragments-counted", "checks": "the echo and its reply were each sent in two fragments and each reassembled: Ip6FragOKs grew by 2, Ip6FragCreates by 4 and Ip6ReasmOKs by 2", "source": "program"},
         {"assertion_id": "raw-open", "checks": "a raw ICMPv6 socket and an IPv6 raw socket of IPPROTO_RAW open", "source": "program"},
         {"assertion_id": "options-skipped", "checks": "an echo request behind a destination options header of padding alone is answered", "source": "program"},
         {"assertion_id": "option-refused", "checks": "an echo request behind a destination option of type 0x80 is not answered, and a parameter problem of code 2 pointing at byte 42 comes back", "source": "program"},

@@ -256,7 +256,7 @@ static int echo(long port, long seconds)
     fflush(stdout);
 
     while (seconds == 0 || now() < deadline) {
-        char buf[2048];
+        static char buf[65536]; /* the largest UDP datagram, whole */
         struct timeval tv;
         fd_set rfds;
         ssize_t n;

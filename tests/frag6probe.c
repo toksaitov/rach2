@@ -48,9 +48,10 @@ typedef unsigned char uint8_t;
 #define ID_OVERLAP  0x6604
 #define ID_SENTINEL 0x6605
 
-/* The data of the large echo, past one 1500-byte datagram; of the echo that
- * fits one but not a 1280-byte path; and the MTU the Packet Too Big gives. */
-#define BIG_DATA    3000
+/* The data of the large echo, past one datagram of lo's 65536 bytes; of
+ * the echo that fits one but not a 1280-byte path; and the MTU the Packet
+ * Too Big gives. */
+#define BIG_DATA    65527
 #define MID_DATA    1300
 #define TOO_BIG_MTU 1280
 
@@ -382,9 +383,10 @@ PROBE_SP_ENTRY;
  * The probe, in the order of `path_rows`; it fails at the first wrong
  * answer.
  *
- * An echo of 3000 bytes of data leaves in three fragments each way, since
- * the loopback ring carries 1500-byte datagrams, and must come back whole:
- * two datagrams fragmented, six fragments made and two reassembled.
+ * An echo of 65527 bytes of data, the most an IPv6 datagram holds, leaves
+ * in two fragments each way, since with its headers it is 39 bytes past lo's
+ * MTU of 65536, and must come back whole: two datagrams fragmented, four
+ * fragments made and two reassembled.
  *
  * A destination options header holding only PadN is skipped, and the echo
  * behind it answered. One holding an option of type 0x80, unknown and of
@@ -399,7 +401,7 @@ PROBE_SP_ENTRY;
  * make the datagram whole, must bring no reply either; the reassembly is
  * counted as failed.
  *
- * The path MTU: an echo of 1300 bytes of data fits one 1500-byte datagram
+ * The path MTU: an echo of 1300 bytes of data fits one datagram of lo's MTU
  * and leaves whole. A Packet Too Big to ::1 that quotes a datagram from ::1
  * to ::1 and reports 1280 bytes lowers the path to ::1, so the same echo
  * then leaves in fragments each way. The lowered path stays ten minutes,
@@ -432,12 +434,12 @@ void probe_main(unsigned long *sp)
 
     r = ping6(BIG_DATA);
     if (r != 8 + BIG_DATA) {
-        fail("an echo of 3000 bytes over ::1 did not come back whole");
+        fail("an echo of 65527 bytes over ::1 did not come back whole");
     }
     report_held();
-    if (snmp6("Ip6FragOKs") != frag_oks + 2 || snmp6("Ip6FragCreates") != frag_creates + 6 ||
+    if (snmp6("Ip6FragOKs") != frag_oks + 2 || snmp6("Ip6FragCreates") != frag_creates + 4 ||
         snmp6("Ip6ReasmOKs") != reasm_oks + 2) {
-        fail("the echo was not sent as two datagrams of three fragments, each reassembled");
+        fail("the echo was not sent as two datagrams of two fragments, each reassembled");
     }
     report_held();
 
@@ -482,7 +484,7 @@ void probe_main(unsigned long *sp)
 
     frag_oks = snmp6("Ip6FragOKs");
     if (ping6(MID_DATA) != 8 + MID_DATA || snmp6("Ip6FragOKs") != frag_oks) {
-        fail("an echo of 1300 bytes did not leave whole on a 1500-byte path");
+        fail("an echo of 1300 bytes did not leave whole on lo's 65536-byte path");
     }
     report_held();
 
