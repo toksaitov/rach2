@@ -9,8 +9,12 @@ HOST_CHECK_LINK_OUTPUT ?= $(HOST_CHECK_OUTPUT)
 HOST_CHECK_OBJECTS = $(addprefix $(HOST_CHECK_WORK)/,$(addsuffix .o,$(HOST_CHECK_SOURCES)))
 HOST_CHECK_SCANS = $(addprefix $(HOST_CHECK_SCAN_WORK)/,$(addsuffix .scan,$(HOST_CHECK_SOURCES)))
 HOST_CHECK_PREPROCESSED = $(addprefix $(HOST_CHECK_SCAN_WORK)/,$(addsuffix .i,$(HOST_CHECK_SOURCES)))
-HOST_CHECK_COMPILE = $(filter-out -l% -L% -Wl%,$(HOST_CHECK_FLAGS))
-HOST_CHECK_LINK = $(filter -fsanitize=% -g -pthread -static -municode -L% -Wl%,$(HOST_CHECK_FLAGS))
+# libtsm's quoted wcwidth.h must precede the kernel's quoted include paths.
+HOST_CHECK_LIBTSM = $(patsubst %/src/tsm/tsm-unicode.c,%/external/wcwidth,$(filter %/src/tsm/tsm-unicode.c,$(HOST_CHECK_SOURCES)))
+# Forced headers can include features.h before pty.c sets _XOPEN_SOURCE.
+HOST_CHECK_OPTIONS = $(addprefix -iquote ,$(HOST_CHECK_LIBTSM)) $(if $(filter term/pty.c,$(HOST_CHECK_SOURCES)),-D_GNU_SOURCE) $(HOST_CHECK_FLAGS)
+HOST_CHECK_COMPILE = $(filter-out -l% -L% -Wl%,$(HOST_CHECK_OPTIONS))
+HOST_CHECK_LINK = $(filter -fsanitize=% -g -pthread -static -municode -L% -Wl%,$(HOST_CHECK_OPTIONS))
 HOST_CHECK_LIBS = $(filter -l%,$(HOST_CHECK_FLAGS)) $(HOST_CHECK_LIBRARIES)
 HOST_CHECK_FORCED = $(if $(HOST_CHECK_FORCE),host-check-build)
 
@@ -38,7 +42,7 @@ $(HOST_CHECK_OUTPUT): $(HOST_CHECK_OBJECTS) $(HOST_CHECK_FORCED)
 else
 $(HOST_CHECK_OUTPUT): $(HOST_CHECK_SOURCES) $(HOST_CHECK_FORCED)
 	@mkdir -p $(@D)
-	$(HOSTCC) $(HOST_CHECK_FLAGS) -o $(HOST_CHECK_LINK_OUTPUT) $(HOST_CHECK_SOURCES) $(HOST_CHECK_LIBRARIES)
+	$(HOSTCC) $(HOST_CHECK_OPTIONS) -o $(HOST_CHECK_LINK_OUTPUT) $(HOST_CHECK_SOURCES) $(HOST_CHECK_LIBRARIES)
 endif
 ifeq ($(OS),Windows_NT)
 	@if test -f $(HOST_CHECK_LINK_OUTPUT).exe; then mv $(HOST_CHECK_LINK_OUTPUT).exe $(HOST_CHECK_LINK_OUTPUT); fi
