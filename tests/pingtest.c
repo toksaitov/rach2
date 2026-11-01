@@ -11,7 +11,7 @@
  * must span some time. A wait that spun with sti and hlt inside the system call
  * would give the parent no processor for the child's whole call. The child
  * measures its own call and reports the milliseconds through the pipe, and
- * the call may not return before the kernel's four hundred ticks.
+ * the call may not return before four seconds of the kernel's ticks.
  *
  * Serialization. The child writes a byte just before its ping; the parent
  * reads it, waits until /proc shows the child asleep, which after the byte
@@ -73,7 +73,7 @@ static uint32_t gateway_ip, silent_ip;
 #define PING_ETIMEDOUT (-110)
 
 /* A ping at a dead address costs ICMP_PING_ATTEMPTS * ICMP_PING_WAIT (icmp.c),
- * four hundred ticks of the kernel's clock on every machine: the call, which
+ * four seconds of the kernel's ticks on every machine: the call, which
  * the child measures, may not return before them, less the tick a reading of
  * the clock may lose. How much longer it took depends on the machine and is
  * printed; a call that never returns is ended by its case's watchdog. */
@@ -593,7 +593,7 @@ void probe_main(unsigned long *sp)
                 if (ok && child_ms < PING_MIN_MS) {
                     ok = 0;
                     why = wait_fails(ROW_FLOOR,
-                                     "the wait ended before the kernel's four hundred ticks");
+                                     "the wait ended before four seconds of the kernel's ticks");
                 }
                 if (ok) {
                     /* The release: the slot is free again. */
