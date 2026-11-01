@@ -12,6 +12,7 @@
 #include "lapic.h"
 #include "pat.h"
 #include "refclock.h"
+#include "tsc.h"
 
 #include "../arch.h"
 
@@ -205,6 +206,7 @@ int platform_cpu_count(int limit)
  * starts with the boot processor's CR0 and CR4, and on x86-64 its EFER. A
  * processor that does not reach its entry in time is sent INIT again, which
  * holds it, so that it cannot start late on a mailbox meant for the next.
+ * One that does checks its TSC against this one's (`tsc_sync_source`).
  */
 int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
 {
@@ -247,15 +249,18 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
         lapic_send_init(apic);
         return -1;
     }
+    tsc_sync_source(cpu);
     return 0;
 }
 
 /**
  * The order: the boot processor's page attribute table (`pat_setup`), the
  * processor's own tables, the floating-point format the boot processor chose
- * (`fpu_cpu_setup`), its APIC with the MADT's NMI inputs, and the boot
- * processor's tick; then `ap_alive` releases the boot processor, and the
- * shared start (`smp_cpu_main`) runs. The first tick waits for the
+ * (`fpu_cpu_setup`), its APIC with the MADT's NMI inputs, the boot
+ * processor's tick, and the number `rdtscp` gives (`tsc_cpu_setup`); then
+ * `ap_alive` releases the boot processor, the two check that their TSCs
+ * agree (`tsc_sync_target`), and the shared start (`smp_cpu_main`) runs.
+ * The first tick waits for the
  * interrupts the idle loop allows. Nothing here logs, since the big lock is
  * not yet this processor's.
  */
@@ -267,7 +272,9 @@ void x86_ap_entry(int cpu)
     lapic_init_ap();
     apic_lint_init(acpi_get());
     apic_timer_start(x86_tick_counts(), platform_timer_hz());
+    tsc_cpu_setup(cpu);
     ap_alive = 1;
+    tsc_sync_target(cpu);
     ap_main(cpu);
 }
 
