@@ -2206,9 +2206,6 @@ static int fork_fs(process_t *child, process_t *parent, uint32_t flags)
         if (parent->fs->in_exec != 0) {
             return -EAGAIN;
         }
-        proc_fs_put(child);
-        child->fs = parent->fs;
-        parent->fs->refs++;
         return 0;
     }
     child->fs->umask = parent->fs->umask;
@@ -2253,8 +2250,10 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->pgid = parent->pgid;
     child->nice = parent->nice;
     child->ioprio = parent->ioprio;
-    child->tg->oom_score_adj = parent->tg->oom_score_adj;
-    child->tg->oom_score_adj_min = parent->tg->oom_score_adj_min;
+    if (child->tg != parent->tg) {
+        child->tg->oom_score_adj = parent->tg->oom_score_adj;
+        child->tg->oom_score_adj_min = parent->tg->oom_score_adj_min;
+    }
     child->persona = parent->persona;
     child->no_new_privs = parent->no_new_privs;
     child->bset_lost[0] = parent->bset_lost[0];
@@ -2283,9 +2282,6 @@ static void fork_ids(process_t *child, const process_t *parent)
 static void fork_signals(process_t *child, const process_t *parent, uint32_t flags)
 {
     if (flags & CLONE_THREAD) {
-        tgroup_put(child->tg);
-        child->tg = parent->tg;
-        child->tg->refs++;
         child->tg->live++;
         child->tgid = parent->tgid;
         child->sigacts = child->tg->action;
@@ -2436,10 +2432,9 @@ static void fork_frame(process_t *child, const isr_params_t *params, const struc
  * The child is PROC_UNUSED while it is built, neither runnable nor seen by
  * the other calls, since the building may sleep and a switch to it before
  * its frame is laid out would run nothing; it becomes ready at the end. The
- * table `alloc_process` gave it, with stdio descriptions of its own, goes
- * first, before any failure path, since the child takes a copy of the
- * parent's table or the table itself. The result is -EINTR when a SIGKILL
- * is pending for the caller, which an exit_group or an exec by another
+ * record starts without a descriptor table, since the child takes a copy
+ * of the parent's table or the table itself. The result is -EINTR when a
+ * SIGKILL is pending for the caller, which an exit_group or an exec by another
  * thread sends, or its process is ending or in another thread's exec, since
  * a child made then would outlive its process's end; nothing between that
  * test and the child's start sleeps. A failure gives back everything built
@@ -2464,17 +2459,11 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     if (rc != 0) {
         return rc;
     }
-    child = alloc_process();
+    child =
+        alloc_process_fork(parent, (req->flags & CLONE_THREAD) != 0, (req->flags & CLONE_FS) != 0);
     if (!child) {
-        return -ENOMEM; /* a record the heap could not give */
-    }
-    child->state = PROC_UNUSED;
-    if (proc_set_ruid(child, parent->ruid) != 0) {
-        free_process(child);
         return -ENOMEM;
     }
-
-    proc_files_put(child);
 
     child->mm = fork_mm(parent->mm, req->flags);
     if (!child->mm) {
@@ -6363,14 +6352,13 @@ int32_t munmap_shm(uintptr_t addr, const struct shmem *sh, size_t size)
 uint32_t shm_attaches(const struct shmem *sh)
 {
     const process_t *p, *q;
-    uint32_t i, n = 0;
+    uint32_t n = 0;
+    const vma_t *r;
 
     for (p = proc_list; p; p = p->next) {
         for (q = proc_list; p->mm && q != p && q->mm != p->mm; q = q->next) {
         }
-        for (i = 0; p->mm && q == p && i < p->mm->vm.count; i++) {
-            const vma_t *r = &p->mm->vm.vmas[i];
-
+        for (r = p->mm && q == p ? vm_first(&p->mm->vm) : NULL; r; r = vm_next(r)) {
             n += r->pgoff == 0 && filemap_shmem(r->file) == sh;
         }
     }

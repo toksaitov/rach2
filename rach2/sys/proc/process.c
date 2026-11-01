@@ -274,14 +274,17 @@ void process_count_fork(void)
     ++_forks_since_boot;
 }
 
-/**
+/** Allocate a standalone record or an unfinished child of parent.
+ * thread and share_fs reuse the parent's group and directories. The child
+ * has no files yet; a standalone record has stdio. NULL on allocation
+ * failure, with no record published. The caller holds the big kernel lock.
  * The pid is kept in the positive int range, since the /proc path layer has
  * a pid as an int, and a pid still in use is skipped, so that the pids in
  * use stay unique; the wrap comes only after two thousand million records,
  * and the pid is otherwise `next_pid`. fork gives the child the parent's
  * session and process group in place of its own.
  */
-process_t *alloc_process(void)
+static process_t *process_alloc(const process_t *parent, int thread, int share_fs)
 {
     process_t *p = kmalloc(sizeof(*p));
     uint32_t candidate;
@@ -297,7 +300,10 @@ process_t *alloc_process(void)
         kfree(p);
         return NULL;
     }
-    p->tg = tgroup_new(p);
+    p->tg = thread ? parent->tg : tgroup_new(p);
+    if (thread) {
+        p->tg->refs++;
+    }
     if (!p->tg) {
         fpu_area_free(p->fpu);
         kfree(p);
@@ -312,8 +318,8 @@ process_t *alloc_process(void)
     } while (get_process(candidate) != NULL);
     last_pid = candidate;
     p->pid = candidate;
-    p->tgid = candidate;
-    p->state = PROC_READY;
+    p->tgid = thread ? parent->tgid : candidate;
+    p->state = parent ? PROC_UNUSED : PROC_READY;
     p->sid = candidate;
     p->pgid = candidate;
     p->rlim[RLIM_NPROC].cur = p->rlim[RLIM_NPROC].max = PROC_COUNT_POLICY;
@@ -329,43 +335,29 @@ process_t *alloc_process(void)
     p->cpu = (int)arch_cpu_id();
     p->affinity = ~(uint64_t)0;
 
-    p->fs = kzalloc(sizeof(*p->fs));
+    p->fs = share_fs ? parent->fs : kzalloc(sizeof(*p->fs));
+    if (share_fs) {
+        p->fs->refs++;
+    }
     if (!p->fs) {
         tgroup_put(p->tg);
         fpu_area_free(p->fpu);
         kfree(p);
         return NULL;
     }
-    p->fs->refs = 1;
-    p->fs->cwd[0] = '/';
-    p->fs->umask = 022;
-    p->fds = fd_table_new();
-    if (!p->fds) {
-        kfree(p->fs);
-        tgroup_put(p->tg);
-        fpu_area_free(p->fpu);
-        kfree(p);
-        return NULL;
+    if (!share_fs) {
+        p->fs->refs = 1;
+        p->fs->cwd[0] = '/';
+        p->fs->umask = 022;
     }
-    if (fd_init_stdio(p->fds) != 0) {
-        fd_table_delete(p->fds);
-        kfree(p->fs);
-        tgroup_put(p->tg);
-        fpu_area_free(p->fpu);
-        kfree(p);
-        return NULL;
-    }
-
-    if (pid_reserve() != 0 || proc_set_ruid(p, 0) != 0) {
-        for (fd = FD_STDIN; fd <= FD_STDERR; fd++) {
-            fd_free(p->fds, fd);
+    if (!parent) {
+        p->fds = fd_table_new();
+        if (!p->fds || fd_init_stdio(p->fds) != 0) {
+            goto fail_parts;
         }
-        fd_table_delete(p->fds);
-        kfree(p->fs);
-        tgroup_put(p->tg);
-        fpu_area_free(p->fpu);
-        kfree(p);
-        return NULL;
+    }
+    if (pid_reserve() != 0 || proc_set_ruid(p, parent ? parent->ruid : 0) != 0) {
+        goto fail_parts;
     }
     p->prev = proc_tail;
     p->next = NULL;
@@ -380,6 +372,33 @@ process_t *alloc_process(void)
     pid_records++;
     process_count_fork();
     return p;
+
+fail_parts:
+    if (p->fds) {
+        for (fd = FD_STDIN; fd <= FD_STDERR; fd++) {
+            fd_free(p->fds, fd);
+        }
+        fd_table_delete(p->fds);
+    }
+    if (--p->fs->refs == 0) {
+        kfree(p->fs);
+    }
+    tgroup_put(p->tg);
+    fpu_area_free(p->fpu);
+    kfree(p);
+    return NULL;
+}
+
+/** Allocate a standalone record with its own group, directories and stdio. */
+process_t *alloc_process(void)
+{
+    return process_alloc(NULL, 0, 0);
+}
+
+/** Allocate an unfinished child, sharing the parts its flags select. */
+process_t *alloc_process_fork(const process_t *parent, int thread, int share_fs)
+{
+    return process_alloc(parent, thread, share_fs);
 }
 
 void free_process(process_t *proc)

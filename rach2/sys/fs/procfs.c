@@ -1328,7 +1328,7 @@ static int procfs_gen_maps(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
     const struct mm *mm;
-    uint32_t i;
+    const vma_t *r;
 
     if (!p) {
         return -ENOENT;
@@ -1337,8 +1337,8 @@ static int procfs_gen_maps(struct procfs_text *t, int pid)
         return -EACCES;
     }
     mm = p->mm;
-    for (i = 0; mm && i < mm->vm.count; i++) {
-        ap_maps_line(t, mm, &mm->vm.vmas[i]);
+    for (r = mm ? vm_first(&mm->vm) : NULL; r; r = vm_next(r)) {
+        ap_maps_line(t, mm, r);
     }
     return t->len;
 }
@@ -1387,7 +1387,7 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
     const struct mm *mm;
-    uint32_t i;
+    const vma_t *r;
 
     if (!p) {
         return -ENOENT;
@@ -1396,8 +1396,7 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         return -EACCES;
     }
     mm = p->mm;
-    for (i = 0; mm && i < mm->vm.count; i++) {
-        const vma_t *r = &mm->vm.vmas[i];
+    for (r = mm ? vm_first(&mm->vm) : NULL; r; r = vm_next(r)) {
         unsigned long present, clean, dirty;
         int shared = r->type == VM_SHARED;
         int of_file = r->file || r->type == VM_CODE || r->type == VM_DATA;
@@ -1435,11 +1434,11 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
 static unsigned long mm_bytes(const struct mm *mm, vm_type_t type)
 {
     unsigned long n = 0;
-    uint32_t i;
+    const vma_t *r;
 
-    for (i = 0; i < mm->vm.count; i++) {
-        if (mm->vm.vmas[i].type == type) {
-            n += mm->vm.vmas[i].end - mm->vm.vmas[i].start;
+    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
+        if (r->type == type) {
+            n += r->end - r->start;
         }
     }
     return n;

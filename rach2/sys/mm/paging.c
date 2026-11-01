@@ -1596,10 +1596,9 @@ static int fork_copy_page(page_dir_t *child_dir, pte_t *e, uintptr_t va, vm_type
 int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
 {
     page_dir_t *parent_dir = from->dir;
-    uint32_t r;
+    const vma_t *region;
 
-    for (r = 0; r < from->vm.count; r++) {
-        const vma_t *region = &from->vm.vmas[r];
+    for (region = vm_first(&from->vm); region; region = vm_next(region)) {
         uintptr_t va, next;
 
         for (va = region->start; va < region->end; va = next) {

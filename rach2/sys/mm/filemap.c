@@ -596,13 +596,12 @@ struct vm_file *filemap_anon_shared(void)
 void filemap_shmem_cut(struct shmem *sh, uint32_t first)
 {
     process_t *p;
-    uint32_t i;
+    const vma_t *r;
 
     for (p = proc_list; p; p = p->next) {
         const vm_space_t *vm = p->mm ? &p->mm->vm : NULL;
 
-        for (i = 0; vm && i < vm->count; i++) {
-            const vma_t *r = &vm->vmas[i];
+        for (r = vm ? vm_first(vm) : NULL; r; r = vm_next(r)) {
             uintptr_t pages = (r->end - r->start) / PAGE_SIZE;
             uintptr_t from;
 

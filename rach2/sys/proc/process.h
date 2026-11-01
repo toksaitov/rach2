@@ -463,6 +463,15 @@ void proc_reclaim_boot_pids(void);
  * in `process_forks_since_boot`. */
 process_t *alloc_process(void);
 
+/** Allocate a child being built, with no descriptor table or stdio.
+ * parent supplies the real uid, its group when thread is nonzero, and its
+ * directories when share_fs is nonzero. A shared group gains a reference
+ * but no live thread until fork_signals commits the child. The caller
+ * installs shared or copied files and completes its context before making
+ * it ready; free_process unwinds an unfinished record. NULL on allocation
+ * failure. The caller holds the big kernel lock. */
+process_t *alloc_process_fork(const process_t *parent, int thread, int share_fs);
+
 /* The bytes of a kernel stack: a process's, an idle task's, and the boot
  * stack loader.s reserves, which is as large. */
 #define KERNEL_STACK_SIZE 0x4000

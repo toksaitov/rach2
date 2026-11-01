@@ -7,7 +7,7 @@
  * The rows check an insert, which fails for an empty, unaligned or
  * overlapping range; the search by address and the test of overlap; the
  * four cases of munmap (full cover, left trim, right trim, middle split);
- * the growth of a stack; the array's growth past what it starts with; the
+ * the growth of a stack; node allocation past what it starts with; the
  * merging of neighbours; mprotect's splits and merges, and its failure for
  * a gap and for write to a region that may never be written, which keeps
  * that mark; the search for a free range; the bytes a range covers; and the
@@ -22,10 +22,17 @@
  * again. */
 void *malloc(unsigned long n);
 void free(void *p);
+static int fail_after = -1;
 
 /** The host's malloc. */
 void *kmalloc(size_t n)
 {
+    if (fail_after == 0) {
+        return NULL;
+    }
+    if (fail_after > 0) {
+        fail_after--;
+    }
     return malloc(n);
 }
 
@@ -93,6 +100,17 @@ static void count_release(struct vm_file *f)
         }              \
     } while (0)
 
+/** Select an existing region by address order for a fixture assertion. */
+static vma_t *region_at(const vm_space_t *vm, unsigned int i)
+{
+    vma_t *r = vm_first(vm);
+
+    while (i-- && r) {
+        r = vm_next(r);
+    }
+    return r;
+}
+
 #define PG 0x1000u
 
 /** A region that may never be written keeps VM_PROT_NOWRITE through
@@ -107,14 +125,15 @@ static void nowrite_rows(void)
     CHECK(vm_insert(&p, 0x60000, 0x62000, VM_PROT_READ | VM_PROT_WRITE, VM_ANON) == 0);
     CHECK(vm_insert(&p, 0x62000, 0x66000, VM_PROT_READ | VM_PROT_NOWRITE, VM_SHARED) == 0);
     CHECK(vm_protect(&p, 0x60000, 0x64000, VM_PROT_READ | VM_PROT_WRITE) == -3);
-    CHECK(p.count == 2 && p.vmas[0].prot == (VM_PROT_READ | VM_PROT_WRITE) &&
-          p.vmas[1].start == 0x62000 && p.vmas[1].prot == (VM_PROT_READ | VM_PROT_NOWRITE));
+    CHECK(p.count == 2 && region_at(&p, 0)->prot == (VM_PROT_READ | VM_PROT_WRITE) &&
+          region_at(&p, 1)->start == 0x62000 &&
+          region_at(&p, 1)->prot == (VM_PROT_READ | VM_PROT_NOWRITE));
     CHECK(vm_protect(&p, 0x63000, 0x64000, 0) == 0 && p.count == 4);
     r = vm_find(&p, 0x63000);
     CHECK(r != NULL && r->start == 0x63000 && r->end == 0x64000 && r->prot == VM_PROT_NOWRITE);
     CHECK(vm_protect(&p, 0x63000, 0x64000, VM_PROT_READ) == 0);
-    CHECK(p.count == 2 && p.vmas[1].start == 0x62000 && p.vmas[1].end == 0x66000 &&
-          p.vmas[1].prot == (VM_PROT_READ | VM_PROT_NOWRITE));
+    CHECK(p.count == 2 && region_at(&p, 1)->start == 0x62000 && region_at(&p, 1)->end == 0x66000 &&
+          region_at(&p, 1)->prot == (VM_PROT_READ | VM_PROT_NOWRITE));
     vm_free(&p);
 }
 
@@ -141,7 +160,7 @@ static void file_rows(void)
     hi = vm_find(&m, 0x44000);
     CHECK(lo != NULL && lo->pgoff == 5 && hi != NULL && hi->pgoff == 7);
     CHECK(vm_protect(&m, 0x42000, 0x44000, VM_PROT_READ) == 0);
-    CHECK(m.count == 1 && file.refs == 2 && m.vmas[0].pgoff == 3);
+    CHECK(m.count == 1 && file.refs == 2 && region_at(&m, 0)->pgoff == 3);
     CHECK(vm_remove(&m, 0x41000, 0x42000) == 0);
     CHECK(m.count == 2 && file.refs == 3);
     hi = vm_find(&m, 0x42000);
@@ -151,11 +170,11 @@ static void file_rows(void)
     CHECK(hi != NULL && hi->pgoff == 6);
     /* Page 4 at 0x41000 does not join the region above, at page 6. */
     CHECK(vm_insert_file(&m, 0x41000, 0x42000, VM_PROT_READ, VM_DATA, &file, 4) == 0);
-    CHECK(m.count == 2 && m.vmas[0].end == 0x42000);
+    CHECK(m.count == 2 && region_at(&m, 0)->end == 0x42000);
     /* Page 9 at 0x42000 continues neither neighbour and stays apart. */
     CHECK(vm_insert_file(&m, 0x42000, 0x43000, VM_PROT_READ, VM_DATA, &file, 9) == 0);
-    CHECK(m.count == 3 && m.vmas[1].start == 0x42000 && m.vmas[1].end == 0x43000 &&
-          m.vmas[1].pgoff == 9 && file.refs == 4);
+    CHECK(m.count == 3 && region_at(&m, 1)->start == 0x42000 && region_at(&m, 1)->end == 0x43000 &&
+          region_at(&m, 1)->pgoff == 9 && file.refs == 4);
     CHECK(vm_remove(&m, 0x42000, 0x43000) == 0 && m.count == 2 && file.refs == 3);
     CHECK(vm_copy(&c, &m) == 0 && file.refs == 5);
     vm_free(&c);
@@ -188,6 +207,142 @@ static void reap_rows(void)
     vm_file_reap();
     CHECK(released == 2);
     vm_free(&m);
+}
+
+/** Check the tree's ordering, parent links and AVL heights recursively. */
+static unsigned int tree_height(const vma_t *r, const vma_t *parent)
+{
+    unsigned int l, h;
+
+    if (!r) {
+        return 0;
+    }
+    CHECK(r->parent == parent);
+    CHECK(!r->left || r->left->end <= r->start);
+    CHECK(!r->right || r->right->start >= r->end);
+    l = tree_height(r->left, r);
+    h = tree_height(r->right, r);
+    CHECK(l <= h + 1 && h <= l + 1);
+    CHECK(r->height == 1 + (l > h ? l : h));
+    return 1 + (l > h ? l : h);
+}
+
+/** Check ordered links, the cached byte count and a logarithmic tree height. */
+static void tree_check(vm_space_t *vm)
+{
+    const vma_t *r, *prev = NULL;
+    uintptr_t total = 0;
+    uint32_t count = 0, n = vm->count;
+    unsigned int bound = 0;
+
+    for (r = vm_first(vm); r; r = vm_next(r)) {
+        CHECK(r->prev == prev);
+        CHECK(!prev || prev->end <= r->start);
+        CHECK(vm_find(vm, r->start) == r);
+        CHECK(vm_find(vm, r->end - 1) == r);
+        total += r->end - r->start;
+        count++;
+        prev = r;
+    }
+    while (n) {
+        bound += 2;
+        n >>= 1;
+    }
+    CHECK(tree_height(vm->root, NULL) <= bound);
+    CHECK(count == vm->count && total == vm_total(vm) && prev == vm->last);
+}
+
+/** Insert in descending and permuted order, split and merge the middle,
+ * then remove in a permutation that exercises all deletion shapes. Nodes
+ * outside each change must keep their addresses through allocation and
+ * rotations. The small page model checks every boundary and gap. */
+static void tree_rows(void)
+{
+    vm_space_t vm = {0};
+    vma_t *saved[256];
+    unsigned char present[256] = {0};
+    uint32_t i, j, n;
+    uintptr_t at;
+
+    for (i = 256; i > 0; i--) {
+        j = i - 1;
+        at = 0x100000u + j * 4 * PG;
+        CHECK(vm_insert(&vm, at, at + 3 * PG, VM_PROT_READ, VM_ANON) == 0);
+        saved[j] = vm_find(&vm, at);
+        present[j] = 1;
+        tree_check(&vm);
+    }
+    for (i = 0; i < 256; i++) {
+        j = (i * 157) % 256;
+        at = 0x100000u + j * 4 * PG;
+        CHECK(vm_protect(&vm, at + PG, at + 2 * PG, VM_PROT_WRITE) == 0);
+        CHECK(vm.count == 258 && vm_total(&vm) == 256 * 3 * PG);
+        tree_check(&vm);
+        CHECK(vm_protect(&vm, at + PG, at + 2 * PG, VM_PROT_READ) == 0);
+        CHECK(vm.count == 256 && vm_find(&vm, at) == saved[j]);
+        CHECK(vm_remove(&vm, at + PG, at + 2 * PG) == 0);
+        CHECK(vm_find(&vm, at + PG) == NULL);
+        tree_check(&vm);
+        CHECK(vm_insert(&vm, at + PG, at + 2 * PG, VM_PROT_READ, VM_ANON) == 0);
+        tree_check(&vm);
+    }
+    for (i = 0; i < 256; i++) {
+        j = (i * 157) % 256;
+        at = 0x100000u + j * 4 * PG;
+        CHECK(vm_remove(&vm, at, at + 3 * PG) == 0);
+        present[j] = 0;
+        tree_check(&vm);
+        for (n = 0; n < 256; n++) {
+            at = 0x100000u + n * 4 * PG;
+            CHECK(vm_find(&vm, at) == (present[n] ? saved[n] : NULL));
+            CHECK(vm_find(&vm, at + 3 * PG - 1) == (present[n] ? saved[n] : NULL));
+            CHECK(vm_find(&vm, at + 3 * PG) == NULL);
+        }
+    }
+    for (i = 0; i < 256; i++) {
+        j = (i * 157) % 256;
+        at = 0x100000u + j * 2 * PG;
+        CHECK(vm_insert(&vm, at, at + PG, VM_PROT_READ, VM_ANON) == 0);
+        tree_check(&vm);
+    }
+    vm_free(&vm);
+}
+
+/** Limit and allocator refusals leave ranges, file holds and totals intact.
+ * Protecting a whole region needs no spare node, even at a lowered limit;
+ * fork may copy the regions already held above that limit. */
+static void limit_rows(void)
+{
+    vm_space_t vm = {0}, copy = {0};
+    uint32_t i;
+    int limit = vm_max_map_count;
+    uintptr_t at;
+
+    vm_max_map_count = VMA_FIRST;
+    for (i = 0; i < VMA_FIRST; i++) {
+        at = 0x100000u + i * 4 * PG;
+        CHECK(vm_insert(&vm, at, at + 3 * PG, VM_PROT_READ, VM_ANON) == 0);
+    }
+    CHECK(vm_insert(&vm, 0x200000u, 0x201000u, VM_PROT_READ, VM_ANON) == -1);
+    CHECK(vm_remove(&vm, 0x101000u, 0x102000u) == -1);
+    CHECK(vm_protect(&vm, 0x101000u, 0x102000u, VM_PROT_WRITE) == -2);
+    CHECK(vm.count == VMA_FIRST && vm_total(&vm) == VMA_FIRST * 3 * PG);
+    CHECK(vm_protect(&vm, 0x100000u, 0x103000u, VM_PROT_WRITE) == 0);
+    vm_max_map_count = VMA_FIRST - 1;
+    CHECK(vm_copy(&copy, &vm) == 0 && copy.count == vm.count);
+    tree_check(&copy);
+    vm_free(&copy);
+    vm_max_map_count = limit;
+    fail_after = 0;
+    CHECK(vm_remove(&vm, 0x101000u, 0x102000u) == -1);
+    CHECK(vm_protect(&vm, 0x101000u, 0x102000u, VM_PROT_READ) == -2);
+    CHECK(vm_copy(&copy, &vm) == -1 && !vm_first(&copy) && copy.cap == 0);
+    CHECK(vm.count == VMA_FIRST && vm_total(&vm) == VMA_FIRST * 3 * PG);
+    tree_check(&vm);
+    fail_after = -1;
+    CHECK(vm_remove(&vm, 0x101000u, 0x102000u) == 0);
+    tree_check(&vm);
+    vm_free(&vm);
 }
 
 /**
@@ -325,7 +480,7 @@ int main(void)
         vm_free(&s);
     }
 
-    /* The array grows to three times its first size; a copy has its own. */
+    /* The node pool grows to three times its first size; a copy has its own. */
     {
         vm_space_t g = {0};
         vm_space_t c = {0};
@@ -342,7 +497,7 @@ int main(void)
             CHECK(vm_find(&g, 0x10000000u + i * 2 * PG + PG) == NULL);
         }
         CHECK(vm_copy(&c, &g) == 0);
-        CHECK(c.count == g.count && c.vmas != g.vmas);
+        CHECK(c.count == g.count && vm_first(&c) != vm_first(&g));
         CHECK(vm_find(&c, 0x10000000u + 40 * 2 * PG) != NULL);
         /* A removal from the copy leaves the original. */
         CHECK(vm_remove(&c, 0x10000000u, 0x10000000u + PG) == 0);
@@ -352,7 +507,7 @@ int main(void)
     }
     vm_free(&vm);
 
-    /* Neighbours of one kind and protection merge; the array stays sorted. */
+    /* Neighbours of one kind and protection merge; iteration stays sorted. */
     {
         vm_space_t m = {0};
 
@@ -360,10 +515,12 @@ int main(void)
         CHECK(vm_insert(&m, 0x30000, 0x31000, VM_PROT_READ, VM_ANON) == 0);
         CHECK(vm_insert(&m, 0x32000, 0x33000, VM_PROT_READ, VM_ANON) == 0);
         CHECK(vm_insert(&m, 0x31000, 0x32000, VM_PROT_READ, VM_ANON) == 0);
-        CHECK(m.count == 1 && m.vmas[0].start == 0x30000 && m.vmas[0].end == 0x33000);
+        CHECK(m.count == 1 && region_at(&m, 0)->start == 0x30000 &&
+              region_at(&m, 0)->end == 0x33000);
         CHECK(vm_insert(&m, 0x33000, 0x34000, VM_PROT_READ | VM_PROT_WRITE, VM_ANON) == 0);
         CHECK(vm_insert(&m, 0x20000, 0x21000, VM_PROT_READ, VM_HEAP) == 0);
-        CHECK(m.count == 3 && m.vmas[0].start == 0x20000 && m.vmas[2].start == 0x33000);
+        CHECK(m.count == 3 && region_at(&m, 0)->start == 0x20000 &&
+              region_at(&m, 2)->start == 0x33000);
         vm_free(&m);
     }
 
@@ -381,7 +538,8 @@ int main(void)
         r = vm_find(&p, 0x54000);
         CHECK(r != NULL && r->start == 0x54000 && r->prot == (VM_PROT_READ | VM_PROT_WRITE));
         CHECK(vm_protect(&p, 0x52000, 0x54000, VM_PROT_READ | VM_PROT_WRITE) == 0);
-        CHECK(p.count == 1 && p.vmas[0].start == 0x50000 && p.vmas[0].end == 0x58000);
+        CHECK(p.count == 1 && region_at(&p, 0)->start == 0x50000 &&
+              region_at(&p, 0)->end == 0x58000);
         CHECK(vm_protect(&p, 0x57000, 0x58000, 0) == 0);
         CHECK(vm_insert(&p, 0x58000, 0x5A000, VM_PROT_READ, VM_ANON) == 0);
         CHECK(vm_protect(&p, 0x56000, 0x59000, VM_PROT_READ) == 0);
@@ -439,5 +597,7 @@ int main(void)
     nowrite_rows();
     file_rows();
     reap_rows();
+    tree_rows();
+    limit_rows();
     return (fails > 100) ? 100 : fails;
 }

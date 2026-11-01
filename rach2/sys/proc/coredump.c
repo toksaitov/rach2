@@ -410,16 +410,17 @@ static void region_write(struct core_out *o, struct mm *mm, const struct core_re
 static struct core_region *regions_take(const vm_space_t *vm, uint32_t *count)
 {
     struct core_region *regions = kmalloc((vm->count + 1u) * sizeof(*regions));
-    uint32_t i;
+    uint32_t i = 0;
+    const vma_t *r;
 
     if (!regions) {
         return NULL;
     }
-    for (i = 0; i < vm->count; i++) {
-        regions[i].start = vm->vmas[i].start;
-        regions[i].end = vm->vmas[i].end;
-        regions[i].prot = vm->vmas[i].prot;
-        regions[i].of_file = vm->vmas[i].file != NULL;
+    for (r = vm_first(vm); r; r = vm_next(r), i++) {
+        regions[i].start = r->start;
+        regions[i].end = r->end;
+        regions[i].prot = r->prot;
+        regions[i].of_file = r->file != NULL;
     }
     *count = vm->count;
     return regions;

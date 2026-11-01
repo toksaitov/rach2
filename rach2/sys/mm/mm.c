@@ -215,10 +215,10 @@ void mm_copy_info(struct mm *to, const struct mm *from)
 unsigned long mm_resident(const struct mm *mm)
 {
     unsigned long n = 0, present, dirty;
-    uint32_t i;
+    const vma_t *r;
 
-    for (i = 0; i < mm->vm.count; i++) {
-        paging_user_count(mm->dir, mm->vm.vmas[i].start, mm->vm.vmas[i].end, &present, &dirty);
+    for (r = vm_first(&mm->vm); r; r = vm_next(r)) {
+        paging_user_count(mm->dir, r->start, r->end, &present, &dirty);
         n += present;
     }
     return n;

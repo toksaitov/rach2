@@ -1,35 +1,12 @@
-/*
- * The regions of an address space: its virtual memory areas (VMAs), each a
- * half-open page-aligned range with a protection and a kind. Linux keeps the
- * same record as vm_area_struct and BSD as vm_map_entry, both in a tree;
- * here the regions are an array in the heap that grows. The page fault
- * handler reads them to decide whether a fault is a page to back, a stack to
- * grow, or a segfault. See Readme.md.
- *
- * The array is kept sorted by address and neighbours of the same kind and
- * protection are merged, so a lookup is a binary search and the free ranges
- * are the gaps between consecutive entries.
- *
- * vm.c calls nothing of the kernel but kmalloc and kfree, so
- * tests/host/vm_hosttest.c compiles it with the host's allocator in their
- * place and drives its operations directly.
- */
+/* The regions of an address space, in an AVL tree ordered by address. */
 #ifndef _VM_H_
 #define _VM_H_
 
 #include "../lib/kint.h"
 #include "../lib/kdef.h"
 
-/* Policy: the regions a process may hold at most, by default. A process's
- * regions are an array in the heap that starts at VMA_FIRST entries and
- * doubles as it fills; at the limit, `vm_max_map_count`, a further mapping
- * answers ENOMEM, as Linux's max_map_count bounds it. An entry is 24 bytes,
- * so a process at this limit holds a megabyte and a half of them. A program
- * starts with a region or two per loaded segment, its file's pages and the
- * anonymous rest, and one for its stack, and the heap's comes with its first
- * brk; the rest are anonymous mmaps, which is what a C library's allocator
- * reaches for, one per large allocation. `tests/musl/vmamusl.c` takes three
- * hundred of them, past the sixteen the array starts with. */
+/* The default region limit and the number of stable nodes per allocation.
+ * vm_max_map_count bounds live regions, not spare nodes. */
 #define VMA_LIMIT 65536
 #define VMA_FIRST 16
 
@@ -104,14 +81,23 @@ typedef struct vma {
     vm_type_t type;
     struct vm_file *file;
     uint32_t pgoff;
+    struct vma *left, *right, *parent; /* AVL tree links */
+    struct vma *prev, *next;           /* address order; next also links spare nodes */
+    unsigned int height;               /* subtree height, a leaf's is 1 */
 } vma_t;
+
+struct vm_chunk;
 
 /* The regions of an address space, with its break, its stack's limit and
  * its mmap base, which exec chooses and a fork's child keeps. */
 typedef struct vm_space {
-    vma_t *vmas; /* `cap` entries in the heap, `count` of them in use */
-    uint32_t cap;
+    vma_t *root;
+    vma_t *first, *last;
+    vma_t *spare;            /* unoccupied nodes, through next */
+    struct vm_chunk *chunks; /* allocations owned by this space */
+    uint32_t cap;            /* allocated nodes, including spares */
     uint32_t count;
+    uintptr_t total;       /* bytes covered by all regions */
     uintptr_t heap_start;  /* initial program break (base of the heap VMA) */
     uintptr_t brk;         /* current program break (top of the heap VMA)  */
     uintptr_t stack_limit; /* lowest address the stack VMA may grow down to */
@@ -138,21 +124,32 @@ uint32_t vm_gap_steps(void);
 extern int vm_max_map_count;
 
 /** Reset an address space to empty, dropping the files its regions map;
- * the array it has, if any, is kept, and the heap's start, the break, the
+ * the nodes it has, if any, are kept, and the heap's start, the break, the
  * stack's limit and the mmap base go to 0. */
 void vm_init(vm_space_t *vm);
 
-/** Drop the files the regions map and give the array back; the space is
+/** Drop the files the regions map and give the nodes back; the space is
  * empty after. */
 void vm_free(vm_space_t *vm);
 
-/** Make `dst`, which has no array, a copy of `src`, whose regions take a
+/** Make `dst`, which owns no nodes, a copy of `src`, whose regions take a
  * reference each to the files they map; 0, or -1 with no memory, with `dst`
  * left empty. */
 int vm_copy(vm_space_t *dst, const vm_space_t *src);
 
 /** The region that holds `addr` (`start <= addr < end`), or NULL. */
 vma_t *vm_find(vm_space_t *vm, uintptr_t addr);
+
+/** The first region in address order, or NULL for an empty space. */
+vma_t *vm_first(const vm_space_t *vm);
+
+/** The next region in address order, or NULL after the last one.
+ * A region stays at its address until removed or merged into its neighbour.
+ * Callers hold the big kernel lock and must not keep it across a sleep. */
+vma_t *vm_next(const vma_t *r);
+
+/** The first region whose end is above addr, or NULL. */
+vma_t *vm_lower(const vm_space_t *vm, uintptr_t addr);
 
 /** 1 if any region meets [start, end), else 0. */
 int vm_overlaps(const vm_space_t *vm, uintptr_t start, uintptr_t end);
@@ -164,7 +161,7 @@ int vm_overlaps(const vm_space_t *vm, uintptr_t start, uintptr_t end);
  * of every region. The region is merged with a neighbour it touches that
  * has the same kind and protection and maps no file, or the same file
  * without a gap. Returns 0, or -1, with nothing changed, for a range that
- * breaks those rules, at vm_max_map_count, or when the array cannot grow.
+ * breaks those rules, at vm_max_map_count, or when no node can be allocated.
  */
 int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type);
 

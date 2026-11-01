@@ -7,11 +7,11 @@
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
  * `proc/coredump.c` is included whole. The writer keeps the file in memory,
- * holes as zeros. On a chosen call it replaces the address space's array of
- * regions with a longer one and frees the old, as another process sharing
- * the address space can with an mmap while the writer sleeps: the program
+ * holes as zeros. On a chosen call it replaces the model's region nodes and
+ * frees the old ones, as another thread sharing the address space can
+ * remove and replace mappings while the writer sleeps: the program
  * headers must still describe the regions as they were taken, each once,
- * and nothing may be read from the freed array, which AddressSanitizer
+ * and nothing may be read from the freed nodes, which AddressSanitizer
  * judges.
  *
  * The wait for the other threads is a model that parks them. The notes must
@@ -41,6 +41,30 @@ static process_t self;
 static process_t sibling;
 static struct tgroup group;
 static struct mm space;
+static vma_t *model_regions;
+
+/** The first region of the model's ordered list. */
+vma_t *vm_first(const vm_space_t *vm)
+{
+    return vm->first;
+}
+
+/** The next region of the model's ordered list. */
+vma_t *vm_next(const vma_t *r)
+{
+    return r->next;
+}
+
+/** Link the model's current allocation in address order. */
+static void regions_link(void)
+{
+    uint32_t i;
+
+    space.vm.first = space.vm.count ? model_regions : NULL;
+    for (i = 0; i < space.vm.count; i++) {
+        model_regions[i].next = i + 1 < space.vm.count ? &model_regions[i + 1] : NULL;
+    }
+}
 struct percpu cpu_table[NR_CPUS] = {{.current = &self}};
 process_t *proc_list = &self;
 /** The core file `put` has written, `file_len` bytes in `file_cap`. */
@@ -117,8 +141,8 @@ uintptr_t paging_user_phys(page_dir_t *dir, uintptr_t addr)
 
     (void)dir;
     for (i = 0; i < space.vm.count; i++) {
-        if (addr >= space.vm.vmas[i].start && addr < space.vm.vmas[i].end) {
-            return addr - space.vm.vmas[i].start == PAGE_SIZE ? 0 : 0x100000u;
+        if (addr >= model_regions[i].start && addr < model_regions[i].end) {
+            return addr - model_regions[i].start == PAGE_SIZE ? 0 : 0x100000u;
         }
     }
     return 0;
@@ -135,40 +159,42 @@ int paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, int wr
 
 /** Put `count` regions of a page each, readable and writable, from
  * 0x08048000 a page apart, the third of two pages and the fourth
- * inaccessible, in the address space's array. */
+ * inaccessible, in the model's node allocation. */
 static void regions_set(uint32_t count)
 {
     uint32_t i;
     uint32_t at = 0x08048000u;
 
-    free(space.vm.vmas);
-    space.vm.vmas = calloc(count + 1u, sizeof(vma_t));
+    free(model_regions);
+    model_regions = calloc(count + 1u, sizeof(vma_t));
     space.vm.cap = count + 1u;
     space.vm.count = count;
     for (i = 0; i < count; i++) {
-        space.vm.vmas[i].start = at;
-        space.vm.vmas[i].end = at + (i == 2 ? 2u : 1u) * PAGE_SIZE;
-        space.vm.vmas[i].prot = i == 3 ? 0u : VM_PROT_READ | VM_PROT_WRITE;
-        space.vm.vmas[i].type = VM_ANON;
-        at = space.vm.vmas[i].end + PAGE_SIZE;
+        model_regions[i].start = at;
+        model_regions[i].end = at + (i == 2 ? 2u : 1u) * PAGE_SIZE;
+        model_regions[i].prot = i == 3 ? 0u : VM_PROT_READ | VM_PROT_WRITE;
+        model_regions[i].type = VM_ANON;
+        at = model_regions[i].end + PAGE_SIZE;
     }
+    regions_link();
 }
 
-/** Grow the array by one region, into a new array, freeing the old one. */
+/** Replace the nodes with a larger allocation, freeing the old one. */
 static void regions_grow(void)
 {
     uint32_t count = space.vm.count;
     vma_t *more = calloc(count + 2u, sizeof(vma_t));
 
-    k_memcpy(more, space.vm.vmas, count * sizeof(vma_t));
+    k_memcpy(more, model_regions, count * sizeof(vma_t));
     more[count].start = 0x70000000u;
     more[count].end = 0x70001000u;
     more[count].prot = VM_PROT_READ;
     more[count].type = VM_ANON;
-    free(space.vm.vmas);
-    space.vm.vmas = more;
+    free(model_regions);
+    model_regions = more;
     space.vm.cap = count + 2u;
     space.vm.count = count + 1u;
+    regions_link();
 }
 
 /** The writer: append `len` bytes of `buf` to `file`, or zeros for a hole
@@ -311,7 +337,7 @@ static void file_pages_read(void)
     static struct vm_file mapped;
 
     regions_set(4);
-    space.vm.vmas[2].file = &mapped;
+    model_regions[2].file = &mapped;
     CHECK(dump(0) == 0, "the file of a region of a mapped file is written");
     CHECK(file[16384] == 0x4D && file[20479] == 0x4D,
           "a page of a mapped file the process never touched is read from the file");
@@ -379,15 +405,16 @@ static void regions_none(uint32_t count)
 {
     uint32_t i;
 
-    free(space.vm.vmas);
-    space.vm.vmas = calloc(count, sizeof(vma_t));
+    free(model_regions);
+    model_regions = calloc(count, sizeof(vma_t));
     space.vm.cap = count;
     space.vm.count = count;
     for (i = 0; i < count; i++) {
-        space.vm.vmas[i].start = 0x08048000u + 2u * PAGE_SIZE * i;
-        space.vm.vmas[i].end = space.vm.vmas[i].start + PAGE_SIZE;
-        space.vm.vmas[i].type = VM_ANON;
+        model_regions[i].start = 0x08048000u + 2u * PAGE_SIZE * i;
+        model_regions[i].end = model_regions[i].start + PAGE_SIZE;
+        model_regions[i].type = VM_ANON;
     }
+    regions_link();
 }
 
 /**
@@ -434,7 +461,7 @@ int main(void)
     numbering(65534);
     numbering(65535);
     free(file);
-    free(space.vm.vmas);
+    free(model_regions);
     if (failures) {
         return 1;
     }

@@ -367,6 +367,44 @@ static void process_allocations(void)
     check(!proc_list && !proc_tail && !allocations, "process cleanup releases all storage");
 }
 
+/** A thread allocation shares the records it keeps and makes no stdio.
+ * Failures before publication leave the parent's references and live-thread
+ * count unchanged; freeing an unfinished child releases only its reference. */
+static void child_allocations(void)
+{
+    process_t *parent = alloc_process();
+    process_t *child;
+    int before = allocations, fail;
+    uint32_t forks = process_forks_since_boot();
+
+    check(parent != NULL, "parent for child allocation");
+    if (!parent) {
+        return;
+    }
+    for (fail = 0; fail < 2; fail++) {
+        fail_after = fail;
+        child = alloc_process_fork(parent, 1, 1);
+        fail_after = -1;
+        check(!child && allocations == before, "failed child frees its allocations");
+        check(parent->tg->refs == 1 && parent->tg->live == 1 && parent->fs->refs == 1,
+              "failed child keeps parent reference counts");
+        check(process_forks_since_boot() == forks, "failed child is not counted");
+    }
+    child = alloc_process_fork(parent, 1, 1);
+    check(child != NULL, "child allocation");
+    if (child) {
+        check(child->state == PROC_UNUSED && !child->fds, "child starts unfinished without stdio");
+        check(child->tg == parent->tg && child->tgid == parent->tgid && child->fs == parent->fs,
+              "thread directly shares its group and directories");
+        check(allocations == before + 2 && parent->tg->refs == 2 && parent->tg->live == 1,
+              "only the record and floating-point area are allocated");
+        free_process(child);
+        check(allocations == before && parent->tg->refs == 1 && parent->fs->refs == 1,
+              "unfinished thread releases its references");
+    }
+    close_process(parent);
+}
+
 /**
  * Two processes that share one table, as clone with CLONE_FILES makes them,
  * the second with a soft RLIMIT_NOFILE of 4: the second is held to 4 when it
@@ -590,6 +628,7 @@ int main(void)
 
     stdio_allocations();
     process_allocations();
+    child_allocations();
     shared_limits();
     table_copies();
     allocation_errors();
