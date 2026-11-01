@@ -229,7 +229,8 @@ typedef struct {
 typedef struct {
     uint8_t nid;
     uint8_t type;                            /* HDA_WIDGET_*: bits 23:20 of `caps` */
-    bool sensed;                             /* `sense` was read at the last start */
+    bool sensed;                             /* `sense` was read, and its verb
+                                                answered, at the last start */
     uint32_t caps;                           /* audio widget capabilities, parameter 0x09 */
     uint32_t amp_in;                         /* input amplifier capabilities, parameter 0x0D */
     uint32_t amp_out;                        /* output amplifier capabilities, parameter 0x12 */
@@ -290,6 +291,31 @@ typedef struct {
                                 the last service */
 } hda_input_report_t;
 
+/* A jack's state: a plug in it, none, or not known yet, since no reading of
+ * its sense has succeeded. */
+#define HDA_JACK_UNKNOWN (-1)
+#define HDA_JACK_OUT     0
+#define HDA_JACK_IN      1
+
+/* The jacks the driver watches, by index in the report's `jacks`. */
+#define HDA_JACK_HP  0 /* the headphone pin */
+#define HDA_JACK_MIC 1 /* the microphone jack's pin */
+#define HDA_JACKS    2
+
+/*
+ * A jack the tick polls (hda_tick): a pin in a jack with presence detect.
+ * `state` changes when a reading that differs from it is seen twice in a
+ * row, or by one reading at a start. A reading that fails changes nothing.
+ */
+typedef struct {
+    uint8_t pin;      /* its pin; 0 when there is none to watch */
+    int8_t state;     /* HDA_JACK_IN, HDA_JACK_OUT or HDA_JACK_UNKNOWN */
+    uint32_t polls;   /* readings of its sense, from the tick and at starts */
+    uint32_t failed;  /* readings whose verbs failed or found the
+                         interface busy */
+    uint32_t changes; /* changes of `state` */
+} hda_jack_report_t;
+
 /*
  * What enumeration found and the last stream setup, for /proc/audio. The node
  * IDs are 0 where there is none; the indices are the connections chosen on
@@ -297,8 +323,10 @@ typedef struct {
  * the stream descriptor and the two DACs. caps[] is the DAC and the headphone
  * DAC; connections[] the pin, the mixer and the headphone pin. widgets[] has
  * every widget of the function group, in node order, read at discovery,
- * `queue` the stream's counters as hda_read_queue last read them, and
- * `input` the input path and stream.
+ * `queue` the stream's counters as hda_read_queue last read them, `input`
+ * the input path and stream, and `jacks` the headphone and microphone jacks.
+ * primary_enabled and hp_enabled are the output pins as the last start or
+ * jack change left them.
  */
 typedef struct {
     uint32_t vendor;
@@ -315,6 +343,7 @@ typedef struct {
     hda_widget_report_t widgets[HDA_MAX_WIDGETS];
     hda_queue_report_t queue;
     hda_input_report_t input;
+    hda_jack_report_t jacks[HDA_JACKS];
 } hda_report_t;
 
 /** Return cached enumeration and the last stream setup; sends no verbs. */
@@ -334,9 +363,11 @@ void hda_read_queue(void);
  */
 uint32_t hda_delay_frames(void);
 
-/** Refill the periods the stream has played since the last refill. The timer
- * tick calls this on every tick, with interrupts off, so playback goes on
- * where the controller's interrupt does not arrive. */
+/** Refill the periods the stream has played since the last refill, hand the
+ * input stream's finished periods over, and every quarter second poll the
+ * jacks, moving the output and the microphone recorded as a plug goes in or
+ * out. The timer tick calls this on every tick, with interrupts off, so
+ * playback goes on where the controller's interrupt does not arrive. */
 void hda_tick(void);
 
 /*
@@ -362,9 +393,9 @@ void hda_debug_dump_stats(void);
 
 /**
  * Set the output routing the next start uses: 0 automatic (the headphone pin
- * when its jack senses a plug, else the primary pin), 1 the primary pin, 2 the
- * headphone pin, 3 both. Another value is ignored. Enumeration sets 1 for a
- * Conexant codec and 0 for the others.
+ * while its jack has a plug, else the primary pin, following the jack as it
+ * changes), 1 the primary pin, 2 the headphone pin, 3 both. Another value is
+ * ignored. Enumeration sets 0.
  */
 void hda_set_output_mode(int mode);
 
