@@ -175,7 +175,12 @@ static const char *vclock_refusal(void)
         return "no tsc at one rate was measured";
     }
     if (!tsc_synced(&cpu, &behind)) {
-        klog(KLOG_WARN, "vdso", "tsc: cpu%d behind cpu0 by %lu counts", cpu, (unsigned long)behind);
+        if (behind != 0) {
+            klog(KLOG_WARN, "vdso", "tsc: cpu%d behind cpu0 by %lu counts", cpu,
+                 (unsigned long)behind);
+        } else {
+            klog(KLOG_WARN, "vdso", "tsc: cpu%d: its check timed out", cpu);
+        }
         return "the processors' tscs disagree";
     }
     return 0;

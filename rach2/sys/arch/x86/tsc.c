@@ -59,103 +59,147 @@ void tsc_cpu_setup(int cpu)
 }
 
 /*
- * The check's shared state: the processors that have arrived and that have
- * finished, the last reading either stored, and the lock they take turns
- * under. One processor starts at a time, so one copy serves each in turn.
- * The verdict is kept across processors.
+ * The check's shared state. `sync_state` holds the round, the number of the
+ * processor being started, above SYNC_ROUND_SHIFT and the round's flags below
+ * it; each processor changes it by compare-and-exchange against the round it
+ * belongs to, so one left over from an earlier round changes nothing. The
+ * last reading either stored and the round's worst shortfall are kept under
+ * `sync_lock`. The verdict is kept across rounds.
  */
-static volatile unsigned int sync_arrived;
-static volatile unsigned int sync_done;
+#define SYNC_SOURCE      1u /* the boot processor has arrived */
+#define SYNC_TARGET      2u /* the starting processor has arrived */
+#define SYNC_TARGET_DONE 4u /* the starting processor has taken its turns */
+#define SYNC_ABORT       8u /* a wait timed out; both leave */
+#define SYNC_ROUND_SHIFT 4
+
+static volatile unsigned int sync_state;
 static volatile uint64_t sync_last;
+static volatile uint64_t sync_round_behind;
 static struct spinlock sync_lock;
 static volatile int sync_failed_cpu;
 static volatile uint64_t sync_behind;
 
-/** Add one to `*count`, which both processors change. */
-static void sync_count(volatile unsigned int *count)
+/** Whether `state` is round `cpu`'s and not aborted. */
+static int sync_live(unsigned int state, int cpu)
+{
+    return state >> SYNC_ROUND_SHIFT == (unsigned int)cpu && !(state & SYNC_ABORT);
+}
+
+/** Set `flag` in round `cpu`'s state; 0, with nothing set, when the round is
+ * over or aborted. */
+static int sync_mark(int cpu, unsigned int flag)
 {
     unsigned int old;
 
     do {
-        old = *count;
-    } while (arch_atomic_cmpxchg(count, old, old + 1u) != old);
-}
-
-/** Take turns with the other processor for `window` counts of this one's
- * counter, and record against the starting processor `cpu` the worst a
- * reading fell below the last one stored. */
-static void sync_turns(int cpu, uint64_t window)
-{
-    uint64_t start = tsc_ordered(), now, prev;
-
-    do {
-        spin_lock(&sync_lock);
-        prev = sync_last;
-        now = tsc_ordered();
-        sync_last = now;
-        if (now < prev && prev - now > sync_behind) {
-            sync_behind = prev - now;
-            if (sync_failed_cpu == 0) {
-                sync_failed_cpu = cpu;
-            }
-        }
-        spin_unlock(&sync_lock);
-    } while (now - start < window);
-}
-
-/** Arrive at the meeting and wait for the other processor, at most
- * SYNC_MEET_TICKS ticks; 1 when both are there. */
-static int sync_meet(void)
-{
-    uint64_t start = tsc_ordered();
-    uint64_t limit = SYNC_MEET_TICKS * (uint64_t)tsc_counts_per_tick();
-
-    sync_count(&sync_arrived);
-    while (sync_arrived < 2u) {
-        if (tsc_ordered() - start >= limit) {
+        old = sync_state;
+        if (!sync_live(old, cpu)) {
             return 0;
         }
-        arch_relax();
-    }
+    } while (arch_atomic_cmpxchg(&sync_state, old, old | flag) != old);
     return 1;
 }
 
-void tsc_sync_source(int cpu)
+/** Wait for the other processor to set `flag` in round `cpu`'s state, at
+ * most SYNC_MEET_TICKS ticks; 1 once it has. On a timeout this one aborts
+ * the round, so that the other, whenever it next looks, leaves too; 0 then,
+ * and when the other aborted first. */
+static int sync_wait(int cpu, unsigned int flag)
 {
-    uint64_t window = 2u * (uint64_t)tsc_counts_per_tick();
+    uint64_t start = tsc_ordered();
+    uint64_t limit = SYNC_MEET_TICKS * (uint64_t)tsc_counts_per_tick();
+    unsigned int old;
 
-    if (window == 0) {
-        return;
-    }
-    sync_last = 0;
-    sync_done = 0;
-    if (!sync_meet()) {
-        if (sync_failed_cpu == 0) {
-            sync_failed_cpu = cpu;
+    for (;;) {
+        old = sync_state;
+        if (!sync_live(old, cpu)) {
+            return 0;
         }
-        sync_arrived = 0;
-        return;
-    }
-    sync_turns(cpu, window);
-    sync_count(&sync_done);
-    while (sync_done < 2u) {
+        if (old & flag) {
+            return 1;
+        }
+        if (tsc_ordered() - start >= limit) {
+            if (arch_atomic_cmpxchg(&sync_state, old, old | SYNC_ABORT) == old) {
+                return 0;
+            }
+            continue;
+        }
         arch_relax();
     }
-    sync_arrived = 0;
+}
+
+/** Take turns with the other processor for `window` counts of this one's
+ * counter, or until round `cpu` is aborted, and record the worst a reading
+ * fell below the last one stored. */
+static void sync_turns(int cpu, uint64_t window)
+{
+    uint64_t start = tsc_ordered(), now, prev;
+    int live;
+
+    do {
+        spin_lock(&sync_lock);
+        live = sync_live(sync_state, cpu);
+        now = tsc_ordered();
+        if (live) {
+            prev = sync_last;
+            sync_last = now;
+            if (now < prev && prev - now > sync_round_behind) {
+                sync_round_behind = prev - now;
+            }
+        }
+        spin_unlock(&sync_lock);
+    } while (live && now - start < window);
+}
+
+void tsc_sync_open(int cpu)
+{
+    spin_lock(&sync_lock);
+    sync_state = (unsigned int)cpu << SYNC_ROUND_SHIFT;
+    sync_last = 0;
+    sync_round_behind = 0;
+    spin_unlock(&sync_lock);
+}
+
+int tsc_sync_source(int cpu, uint64_t *behind)
+{
+    uint64_t window = 2u * (uint64_t)tsc_counts_per_tick();
+    int done, verdict;
+
+    *behind = 0;
+    if (window == 0) {
+        return TSC_SYNC_NONE;
+    }
+    done = sync_mark(cpu, SYNC_SOURCE) && sync_wait(cpu, SYNC_TARGET);
+    if (done) {
+        sync_turns(cpu, window);
+        done = sync_wait(cpu, SYNC_TARGET_DONE);
+    }
+    spin_lock(&sync_lock);
+    *behind = sync_round_behind;
+    spin_unlock(&sync_lock);
+    if (!done) {
+        verdict = TSC_SYNC_UNFINISHED;
+    } else if (*behind != 0) {
+        verdict = TSC_SYNC_BEHIND;
+    } else {
+        return TSC_SYNC_AGREE;
+    }
+    if (sync_failed_cpu == 0) {
+        sync_failed_cpu = cpu;
+        sync_behind = *behind;
+    }
+    return verdict;
 }
 
 void tsc_sync_target(int cpu)
 {
     uint64_t window = 2u * (uint64_t)tsc_counts_per_tick();
 
-    if (window == 0) {
-        return;
-    }
-    if (!sync_meet()) {
+    if (window == 0 || !sync_mark(cpu, SYNC_TARGET) || !sync_wait(cpu, SYNC_SOURCE)) {
         return;
     }
     sync_turns(cpu, window);
-    sync_count(&sync_done);
+    sync_mark(cpu, SYNC_TARGET_DONE);
 }
 
 int tsc_synced(int *cpu, uint64_t *behind)

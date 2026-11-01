@@ -206,7 +206,8 @@ int platform_cpu_count(int limit)
  * starts with the boot processor's CR0 and CR4, and on x86-64 its EFER. A
  * processor that does not reach its entry in time is sent INIT again, which
  * holds it, so that it cannot start late on a mailbox meant for the next.
- * One that does checks its TSC against this one's (`tsc_sync_source`).
+ * One that does checks its TSC against this one's (`tsc_sync_source`), in a
+ * round opened before its INIT, and the log says what the check found.
  */
 int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
 {
@@ -214,6 +215,7 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
     uint32_t apic = cpu_apic[cpu];
     struct ap_mailbox *mb;
     uint32_t lo = 0, hi = 0;
+    uint64_t behind;
     int waited;
 
     k_memcpy(page, ap_trampoline,
@@ -235,6 +237,7 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
     ap_stack = stack_top;
     ap_alive = 0;
 
+    tsc_sync_open(cpu);
     lapic_send_init(apic);
     k_udelay(10000);
     lapic_send_startup(apic, TRAMPOLINE_PHYS >> 12);
@@ -249,7 +252,20 @@ int platform_cpu_start(int cpu, uintptr_t stack_top, void (*entry)(int cpu))
         lapic_send_init(apic);
         return -1;
     }
-    tsc_sync_source(cpu);
+    switch (tsc_sync_source(cpu, &behind)) {
+    case TSC_SYNC_AGREE:
+        klog(KLOG_INFO, "smp", "cpu%d: tsc: synchronized with cpu0", cpu);
+        break;
+    case TSC_SYNC_BEHIND:
+        klog(KLOG_WARN, "smp", "cpu%d: tsc: behind cpu0 by %lu counts", cpu, (unsigned long)behind);
+        break;
+    case TSC_SYNC_UNFINISHED:
+        klog(KLOG_WARN, "smp", "cpu%d: tsc: not synchronized: the check timed out", cpu);
+        break;
+    default:
+        klog(KLOG_INFO, "smp", "cpu%d: tsc: not checked: no rate was measured", cpu);
+        break;
+    }
     return 0;
 }
 
