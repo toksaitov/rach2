@@ -134,14 +134,12 @@ struct ipcns *proc_ipcns(const process_t *p);
 
 /**
  * Whether `p` has privilege in the user namespace `ns`, NULL for the first,
- * as Linux's `cap_capable` answers for a process that keeps every
- * capability or none. `p` has it when `ns` is its own user namespace or one
- * below it and `p` is privileged in its own; or when `ns` is below `p`'s own
- * and the namespace on the way up from `ns` whose parent is `p`'s own was
- * made by a process of `p`'s effective uid. In its own namespace `p` is
- * privileged as effective uid 0 in the first, and in another while it has
- * capabilities there or as effective uid 0 there; in neither after it gave
- * them up (`nocaps`). A namespace that is not `p`'s own or below it gives 0.
+ * as Linux's `cap_capable` answers for CAP_SYS_ADMIN. `p` has it when `ns`
+ * is its own user namespace or one below it and `p` is privileged in its
+ * own; or when `ns` is below `p`'s own and the namespace on the way up from
+ * `ns` whose parent is `p`'s own was made by a process of `p`'s effective
+ * uid. In its own namespace `p` is privileged while it holds CAP_SYS_ADMIN
+ * there (`cap_word`). A namespace that is not `p`'s own or below it gives 0.
  */
 int ns_privileged(const process_t *p, const struct userns *ns);
 
@@ -245,15 +243,34 @@ void ns_release(process_t *p);
  * new effective uid, as Linux gives an image its capabilities. */
 void ns_exec(process_t *p);
 
-/* The capabilities Linux names above 31, in the second word of a set. */
-#define NS_CAPS_HIGH 0x1FFu
+/* The capabilities Linux names, 0 to CAP_LAST_CAP, in two words: the second
+ * has the nine above 31. Two are told apart from the rest: CAP_SETPCAP,
+ * which PR_CAPBSET_DROP needs, and CAP_SYS_ADMIN, without which a thread is
+ * not privileged (`nocaps` in process.h). */
+#define CAP_LAST_CAP  40
+#define CAP_HIGH_WORD 0x1FFu
+#define CAP_SETPCAP   8
+#define CAP_SYS_ADMIN 21
 
-/** Give `p` every capability in its user namespace, as making or joining
- * one does; and whether it holds any there. A process privileged in its
- * namespace holds all of them in effect: the sets capset narrows are
- * reported, and only their emptiness changes what the process may do. */
+/**
+ * Word `i` of the capabilities `p` holds, its effective and permitted sets
+ * alike: those it has not lost (`cap_lost`) when its effective uid is 0 in
+ * its user namespace, or when it made or joined that namespace and has not
+ * since run an exec or changed its effective uid (`ns_granted`); none
+ * otherwise.
+ */
+uint32_t cap_word(const process_t *p, uint32_t i);
+
+/** Whether `p` holds the capability `cap`, 0 to CAP_LAST_CAP. */
+int cap_holds(const process_t *p, uint32_t cap);
+
+/** Make `lost0` and `lost1` the capabilities `p` has lost, `cap_lost`, and
+ * set `nocaps` by whether CAP_SYS_ADMIN is among them. */
+void cap_store(process_t *p, uint32_t lost0, uint32_t lost1);
+
+/** Give `p` every capability in its user namespace, whatever its ids there,
+ * and a full bounding set, as making or joining one does on Linux. */
 void ns_caps_fill(process_t *p);
-int ns_caps_held(const process_t *p);
 
 /**
  * unshare(2) takes the flags. CLONE_NEWUSER gives the caller, which must be

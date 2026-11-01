@@ -502,20 +502,11 @@ int ns_setgroups_denied(const process_t *p)
 
 /* ---- privilege ---- */
 
-/** Whether `p` has privilege in its own user namespace: in the first, an
- * effective uid of 0; in another, the capabilities it was given there, or
- * an effective uid that is 0 there; in both, unless it gave them up. */
+/** Whether `p` has privilege in its own user namespace: whether it holds
+ * CAP_SYS_ADMIN there (`cap_word`). */
 static int own_privileged(const process_t *p)
 {
-    const struct userns *ns = proc_userns(p);
-
-    if (p->nocaps) {
-        return 0;
-    }
-    if (ns == &init_userns) {
-        return p->euid == 0;
-    }
-    return ns_caps_held(p) || ns_uid_from_kernel(ns, p->euid) == 0;
+    return cap_holds(p, CAP_SYS_ADMIN);
 }
 
 int ns_privileged(const process_t *p, const struct userns *ns)
@@ -861,8 +852,7 @@ int32_t ns_fork(process_t *child, const process_t *parent, uint32_t flags)
     if ((flags & CLONE_THREAD) && set->pid_children != proc_pidns(parent)) {
         return -EINVAL;
     }
-    child->ns_caps[0] = parent->ns_caps[0];
-    child->ns_caps[1] = parent->ns_caps[1];
+    child->ns_granted = parent->ns_granted;
     if (flags & CLONE_NEWUSER) {
         uns = userns_new(uns, parent, &err);
         if (!uns) {
@@ -908,18 +898,42 @@ void ns_release(process_t *p)
 
 void ns_exec(process_t *p)
 {
-    p->ns_caps[0] = p->ns_caps[1] = 0;
+    p->ns_granted = 0;
+}
+
+uint32_t cap_word(const process_t *p, uint32_t i)
+{
+    uint32_t full = i == 0 ? 0xFFFFFFFFu : CAP_HIGH_WORD;
+    int ids;
+
+    if (i > 1) {
+        return 0;
+    }
+    if (!p->userns) {
+        ids = p->euid == 0;
+    } else {
+        ids = p->ns_granted || ns_uid_from_kernel(p->userns, p->euid) == 0;
+    }
+    return ids ? full & ~p->cap_lost[i] : 0u;
+}
+
+int cap_holds(const process_t *p, uint32_t cap)
+{
+    return cap <= CAP_LAST_CAP && (cap_word(p, cap >> 5) & (1u << (cap & 31u))) != 0;
+}
+
+void cap_store(process_t *p, uint32_t lost0, uint32_t lost1)
+{
+    p->cap_lost[0] = lost0;
+    p->cap_lost[1] = lost1 & CAP_HIGH_WORD;
+    p->nocaps = (lost0 & (1u << CAP_SYS_ADMIN)) != 0;
 }
 
 void ns_caps_fill(process_t *p)
 {
-    p->ns_caps[0] = 0xFFFFFFFFu;
-    p->ns_caps[1] = NS_CAPS_HIGH;
-}
-
-int ns_caps_held(const process_t *p)
-{
-    return (p->ns_caps[0] | p->ns_caps[1]) != 0;
+    p->ns_granted = 1;
+    p->bset_lost[0] = p->bset_lost[1] = 0;
+    cap_store(p, 0, 0);
 }
 
 /* ---- unshare and setns ---- */
