@@ -8,9 +8,9 @@
  * weakest signals but stops being deafened by the noise. Few errors lower
  * the levels again, one kind a turn. Each level is a row of ath9k's
  * tables, written relative to the initial-value tables' own settings,
- * which the driver reads after each reset. The boot option behind
- * ATH9K_OPT_NO_ANI leaves the levels at the tables' defaults, since a rate
- * stuck at 1 Mbit/s has been reported with ANI on.
+ * which the driver reads after each reset. rach2.ath9k_noani on the boot
+ * line leaves the levels at the tables' defaults, since a rate stuck at 1
+ * Mbit/s has been reported with ANI on.
  *
  * The functions follow ath9k's ani.c, ar9003_phy.c (ar9003_hw_ani_control
  * and ar9003_hw_ani_cache_ini_regs) and ath/hw.c (the cycle counters),
@@ -32,6 +32,7 @@
  */
 
 #include "ath9k.h"
+#include "../../../cmdline.h"
 
 /* The trigger levels in phy errors per second (ani.h): OFDM's when its
  * level is at the default or above, and below it. */
@@ -311,8 +312,9 @@ static void enable_mib_counters(struct ath9k *ah)
  * Set the levels again after a reset, as ath9k_ani_reset does for a
  * station: the default levels the first time, as ath9k_hw_ani_init sets
  * them, and the higher of the default and the level held after it; the
- * tables' settings read first, and the counts restarted. Under
- * ATH9K_OPT_NO_ANI no level ever leaves its default.
+ * tables' settings read first, and the counts restarted. The first call
+ * sets ATH9K_OPT_NO_ANI when rach2.ath9k_noani is on the boot line; under
+ * it no level ever leaves its default.
  */
 void ath9k_ani_reset(struct ath9k *ah)
 {
@@ -320,6 +322,8 @@ void ath9k_ani_reset(struct ath9k *ah)
     unsigned ofdm, cck;
 
     if (!a->ready) {
+        if (kcmdline_has("rach2.ath9k_noani"))
+            ah->options |= ATH9K_OPT_NO_ANI;
         a->ofdm_trig_high = OFDM_TRIG_HIGH;
         a->ofdm_trig_low = OFDM_TRIG_LOW;
         a->cck_trig_high = CCK_TRIG_HIGH;

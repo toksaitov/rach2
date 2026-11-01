@@ -1045,7 +1045,9 @@ void ath9k_cal_stop(struct ath9k *ah);
 /** Read the tables' values of the fields ANI moves and set the immunity
  * levels again, the defaults the first time, as ath9k_hw_ani_init,
  * ar9003_hw_ani_cache_ini_regs and ath9k_ani_reset do; and restart the
- * error counts. Worker, within a reset, after ath9k_phy_process_ini. */
+ * error counts. The first call takes ATH9K_OPT_NO_ANI from the boot
+ * line's rach2.ath9k_noani. Worker, within a reset, after
+ * ath9k_phy_process_ini. */
 void ath9k_ani_reset(struct ath9k *ah);
 
 /** Read the MIB's phy error counts and raise or lower immunity. Worker,

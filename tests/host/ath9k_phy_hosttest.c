@@ -9,11 +9,12 @@
  * host-deps: rach2/sys/network/driver/ath9k/calib.c
  * host-deps: rach2/sys/network/driver/ath9k/ani.c
  * host-deps: rach2/sys/network/wireless/work.c
- * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
  */
 #include "ath9k_model.h"
 #include "network/wireless/work.h"
+#include "cmdline.h"
 #include "lib/kerrno.h"
 #include "lib/kirq.h"
 #include "lib/kstring.h"
@@ -878,6 +879,17 @@ static void test_ani(void)
     ath9k_ani_monitor(&ah);
     CHECK(model.log_count == 0);
     model.log_reads = 0;
+
+    /* The boot line turns it off at the first reset. */
+    card();
+    CHECK(kcmdline_capture("rach2.ath9k_noani") == 0);
+    ath9k_phy_process_ini(&ah, &c);
+    ath9k_ani_reset(&ah);
+    CHECK(ah.options & ATH9K_OPT_NO_ANI);
+    mib(400, 3000, 0);
+    ath9k_ani_monitor(&ah);
+    CHECK(ah.ani.ofdm_level == 3);
+    CHECK(kcmdline_capture(0) == 0);
 }
 
 /* ---- a channel change ---- */
@@ -937,6 +949,7 @@ static void test_channel_change(void)
 
 int main(void)
 {
+    (void)kcmdline_capture(0);
     test_synth();
     test_tables();
     test_spur();
