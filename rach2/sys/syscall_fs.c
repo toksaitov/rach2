@@ -4489,13 +4489,30 @@ static int seek_framebuffer(fd_entry_t *entry, long long off, int whence, uint64
 }
 
 /**
+ * SEEK_DATA and SEEK_HOLE, `whence` 3 and 4, from `off` in a file of `size`
+ * bytes, into `*at`, as Linux answers them for a file system that keeps no
+ * map of its holes: the whole file is data, and its one hole is its end.
+ * SEEK_DATA lands at `off` and SEEK_HOLE at the end; an `off` below 0 or at
+ * or past the end is -ENXIO. Returns 0 or -ENXIO.
+ */
+static int seek_data_hole(uint64_t size, long long off, int whence, long long *at)
+{
+    if (off < 0 || (uint64_t)off >= size) {
+        return -ENXIO;
+    }
+    *at = whence == 3 ? off : (long long)size;
+    return 0;
+}
+
+/**
  * lseek(2): move the offset of the descriptor in argument 0 by the offset
  * in argument 1, a signed register's worth, and the whence in argument 2;
  * the new offset, or a negative errno with the offset unchanged.
  *
  * A file of the KRFFS root or of a mounted type takes SEEK_SET, SEEK_CUR
- * and SEEK_END, the last from the size its getattr gives; any other whence,
- * and a place before 0, is -EINVAL. The description's lock is held from the
+ * and SEEK_END, the last from the size its getattr gives, and SEEK_DATA and
+ * SEEK_HOLE (`seek_data_hole`); any other whence, and a place before 0, is
+ * -EINVAL. The description's lock is held from the
  * getattr to the store, so a seek through a shared description waits for a
  * transfer that holds it. A raw disk window, /dev/mem and a loop device seek
  * by `raw_lseek`, /dev/bootlog by `seek_bootlog`, /fb by `seek_framebuffer`,
@@ -4584,6 +4601,10 @@ long sys_lseek(isr_params_t *params)
         break;
     case 2: /* SEEK_END */
         seek_rc = seek_add(file_size, offset, &at);
+        break;
+    case 3: /* SEEK_DATA */
+    case 4: /* SEEK_HOLE */
+        seek_rc = seek_data_hole(file_size, offset, whence, &at);
         break;
     default:
         at = -1;
@@ -9413,7 +9434,8 @@ static int file_size_now(fd_entry_t *entry, uint64_t *out)
  * for a descriptor that is not open or is an O_PATH one; -ESPIPE for any
  * other descriptor that does not seek, among them a pipe, a socket, a
  * terminal, the mouse and a device; -ENXIO for a disk window whose size
- * cannot be read; -EINVAL for a bad `whence` or a place before 0;
+ * cannot be read; -EINVAL for a bad `whence` or a place before 0; -ENXIO
+ * for SEEK_DATA or SEEK_HOLE at or past the end of a file;
  * -EOVERFLOW for a place past the largest offset; -EFAULT for a NULL or bad
  * `result`.
  *
@@ -9425,8 +9447,9 @@ static int file_size_now(fd_entry_t *entry, uint64_t *out)
  * from the current place that read it outside the lock would start from a
  * place another process had already left. SEEK_END reads the size again
  * inside the lock, since another process on the description may extend the
- * file while this call waits for it. A NULL `result` is -EFAULT for a file;
- * musl always passes one.
+ * file while this call waits for it, and so do SEEK_DATA and SEEK_HOLE
+ * (`seek_data_hole`). A NULL `result` is -EFAULT for a file; musl always
+ * passes one.
  */
 long sys__llseek(isr_params_t *params)
 {
@@ -9484,7 +9507,7 @@ long sys__llseek(isr_params_t *params)
     }
     off = (long long)(((uint64_t)offset_high << 32) | (uint64_t)offset_low);
     fd_ofd_lock(entry->ofd);
-    if (whence == 2) {
+    if (whence >= 2) {
         seek_rc = file_size_now(entry, &size);
         if (seek_rc != 0) {
             fd_ofd_unlock(entry->ofd);
@@ -9501,6 +9524,10 @@ long sys__llseek(isr_params_t *params)
         break;
     case 2: /* SEEK_END */
         seek_rc = seek_add(size, off, &new_off);
+        break;
+    case 3: /* SEEK_DATA */
+    case 4: /* SEEK_HOLE */
+        seek_rc = seek_data_hole(size, off, whence, &new_off);
         break;
     default:
         fd_ofd_unlock(entry->ofd);
