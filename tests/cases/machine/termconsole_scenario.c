@@ -71,6 +71,24 @@
 #define DOOM_FRAME "DOOMFRAME"
 #define DOOM_GONE  "DOOMGONE"
 
+/*
+ * The line that leaves the alternate screen as vim does with a color scheme
+ * in use, its SGR still set at mode 1049's reset, and clears the screen as
+ * the shell's Ctrl+L does; then a mark on term's grid. Mode 1049 restores
+ * the attributes saved on entering, so the clear erases in libtsm's default
+ * background and the mark is drawn in its default foreground; the bytes
+ * are those term received from vim's :colorscheme blue and :q.
+ */
+#define COLOR_LINE                                                                            \
+    "printf '\\033[?1049h\\033[38;5;220m\\033[48;5;18m\\033[2J\\033[?1049l\\033[H\\033[2J'; " \
+    "echo COLOR''DONE"
+#define COLOR_DONE "COLORDONE"
+
+/* libtsm's default background, and the background the line sets, color 18
+ * of the 256, which a clear after mode 1049's reset erased in. */
+#define TERM_BG   0x000000UL
+#define SCHEME_BG 0x000087UL
+
 #define KILL_LINE "killall -KILL term"
 
 /* The characters typed at once: with Shift a character is some ten events
@@ -84,12 +102,13 @@ struct tc {
     unsigned long width, height; /* the framebuffer the kernel named */
 };
 
-/* A screen dump: its size, its colors up to PICTURE_COLORS + 1, and whether
- * it has term's foreground. */
+/* A screen dump: its size, its colors up to PICTURE_COLORS + 1, whether it
+ * has term's foreground, and the color of its middle pixel as 0xRRGGBB. */
 struct dump {
     unsigned long width, height;
     unsigned colors;
     int term_fg;
+    unsigned long middle;
 };
 
 /** Judge the binary PPM at `path` into `d`; 0 when it is not one. */
@@ -117,6 +136,8 @@ static int judge(const char *path, struct dump *d)
             if (px[0] == TERM_FG_R && px[1] == TERM_FG_G && px[2] == TERM_FG_B)
                 d->term_fg = 1;
             c = (unsigned long)px[0] << 16 | (unsigned long)px[1] << 8 | px[2];
+            if (i == d->height / 2 * d->width + d->width / 2)
+                d->middle = c;
             for (k = 0; k < d->colors && seen[k] != c; k++) {
             }
             if (k == d->colors && d->colors <= PICTURE_COLORS)
@@ -194,7 +215,7 @@ static int line_ends(const char *text, char c)
 }
 
 /* What a wait for the screen waits for. */
-enum shown { TERM_LOGIN, TERM_PASSWORD, TERM_SHELL, TERM_BACK, CONSOLE_LOGIN };
+enum shown { TERM_LOGIN, TERM_PASSWORD, TERM_SHELL, TERM_BACK, TERM_COLOR, CONSOLE_LOGIN };
 
 /** Say whether dump `d`, whose grid read `text`, shows `want`. */
 static int shows(const struct tc *s, enum shown want, const struct dump *d,
@@ -213,6 +234,8 @@ static int shows(const struct tc *s, enum shown want, const struct dump *d,
         return d->term_fg && line_ends(t, '#');
     case TERM_BACK:
         return d->term_fg && d->colors <= PICTURE_COLORS;
+    case TERM_COLOR:
+        return line_begins(t, COLOR_DONE);
     default:
         return !d->term_fg && line_begins(t, LOGIN);
     }
@@ -487,6 +510,27 @@ static void doom(struct tc *s, struct net_boot *b)
 }
 
 /**
+ * Step `colors`: the clear after the alternate screen erases in libtsm's
+ * default colors, not in those the program left set.
+ */
+static void colors(struct tc *s, struct net_boot *b)
+{
+    struct dump d;
+    int done = 0;
+
+    memset(&d, 0, sizeof(d));
+    if (net_step(&s->u, "colors") == ETUDE_OK) {
+        type_line(s, b, COLOR_LINE);
+        done = await(s, b, "colors.ppm", TERM_COLOR, &d);
+    }
+    net_assert(&s->u, "colors", done && d.term_fg && d.middle == TERM_BG,
+               "after the alternate screen and a clear, term's grid %s a line that began %s,"
+               " the screen %s libtsm's foreground and its middle was %06lx, not %06lx%s",
+               done ? "had" : "never had", COLOR_DONE, d.term_fg ? "had" : "lacked", d.middle,
+               TERM_BG, d.middle == SCHEME_BG ? ", the background the program left set" : "");
+}
+
+/**
  * Step `fallback`: term killed, init's report, the kernel console's login
  * on the screen and on COM1, and the machine powered off.
  */
@@ -528,6 +572,7 @@ int etude_scenario(struct etude_case *c)
     net_secret(&s.u, "demo-password", s.password, sizeof(s.password));
     term(&s, &b, uefi ? "uefi" : "bios");
     probes(&s, &b);
+    colors(&s, &b);
     if (uefi)
         doom(&s, &b);
     fallback(&s, &b);
