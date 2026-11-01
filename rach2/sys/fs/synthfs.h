@@ -150,6 +150,9 @@ const char *synth_ns_name(int kind);
 /* /proc/acpi/call, read and written as the ACPI method calls it makes. */
 #define SYNTH_PROC_ACPI_CALL   57
 #define SYNTH_PROC_NETSNMP6    58
+/* /proc/net/if_inet6 and ipv6_route, two more of `synth_net_file`'s. */
+#define SYNTH_PROC_NETIFINET6  59
+#define SYNTH_PROC_NETIPV6RT   60
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */
@@ -252,6 +255,27 @@ int synth_sys_count(void);
 #define SYNTH_SYS_FILE_MAX           39
 #define SYNTH_SYS_FILE_NR            40
 #define SYNTH_SYS_RANDOMIZE_VA_SPACE 41
+/* net/ipv6/conf, the directory of IPv6's settings, which holds those of
+ * all interfaces, of the default for a new one, and of each of `lo` and
+ * the cards' interfaces, eth0 to eth3 (NETDEV_MAX); and the files of each,
+ * in this order, which procfs reads and writes through nd6.h. */
+#define SYNTH_SYS_IPV6_CONF          43
+#define SYNTH_IPV6_DIRS              7
+#define SYNTH_IPV6_ACCEPT_RA         0
+#define SYNTH_IPV6_AUTOCONF          1
+#define SYNTH_IPV6_DISABLE           2
+#define SYNTH_IPV6_FORWARDING        3
+#define SYNTH_IPV6_STABLE_SECRET     4
+#define SYNTH_IPV6_USE_TEMPADDR      5
+#define SYNTH_IPV6_KEYS              6
+/**
+ * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
+ * in `*dir`, `all`, `default` or an interface's, and in `*key` the
+ * SYNTH_IPV6_* of its file, or -1 for the directory itself; 0 for any
+ * other entry. A directory of an interface the caller does not see has no
+ * parent, and so is not found or listed.
+ */
+int synth_sys_ipv6(int entry, const char **dir, int *key);
 /** Whether a privileged caller may write the file entry `entry`. */
 int synth_sys_writable(int entry);
 

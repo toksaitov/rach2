@@ -17,6 +17,8 @@
 #include "../latency.h"
 #include "../network/ip/ip.h"
 #include "../network/ip6/ip6.h"
+#include "../network/ip6/route6.h"
+#include "../network/ip6/nd6.h"
 #include "../mm/filecache.h"
 #include "../mm/filemap.h"
 #include "../mm/kheap.h"
@@ -4054,6 +4056,154 @@ static int procfs_gen_netsnmp6(struct procfs_text *t)
     return t->len;
 }
 
+/** Append the IPv6 address `a` as /proc/net's IPv6 files write one: its
+ * sixteen bytes as 32 lowercase hex digits, in network order. */
+static void ap_ip6_hex(struct procfs_text *t, const uint8_t *a)
+{
+    static const char digits[] = "0123456789abcdef";
+    int i;
+
+    for (i = 0; i < IP6_ADDR_LEN; i++) {
+        ap_ch(t, digits[a[i] >> 4]);
+        ap_ch(t, digits[a[i] & 0xFu]);
+    }
+}
+
+/** Append `v` as `width` lowercase hex digits and a space, as Linux's
+ * IPv6 files write their numbers. */
+static void ap_hex_fixed(struct procfs_text *t, uint32_t v, int width)
+{
+    static const char digits[] = "0123456789abcdef";
+    int i;
+
+    for (i = width - 1; i >= 0; i--) {
+        ap_ch(t, digits[(v >> (i * 4)) & 0xFu]);
+    }
+    ap_ch(t, ' ');
+}
+
+/** Append `v` as two lowercase hex digits and a space. */
+static void ap_hex2_lower(struct procfs_text *t, uint32_t v)
+{
+    ap_hex_fixed(t, v, 2);
+}
+
+/** Append the name of the interface of index `index` right-aligned in
+ * eight columns, as Linux's `%8s`, and the line's end. */
+static void ap_ifname8(struct procfs_text *t, int index)
+{
+    const char *name = "";
+    int i;
+
+    for (i = 0; i < netdev_seen_count(); i++) {
+        if (netdev_at(i) && netdev_at(i)->index == index) {
+            name = netdev_at(i)->name;
+        }
+    }
+    for (i = (int)k_strlen(name); i < 8; i++) {
+        ap_ch(t, ' ');
+    }
+    ap_str(t, name);
+    ap_ch(t, '\n');
+}
+
+/**
+ * Render /proc/net/if_inet6: an interface's IPv6 address a line, from a
+ * copy taken under net_lock, in Linux's columns, which BusyBox's ifconfig
+ * and net-tools read: the address, then in hex the interface's index, the
+ * prefix's length, the scope as Linux's IPV6_ADDR_ bits (0x10 for ::1,
+ * 0x20 link-local, 0x40 site-local and 0 global) and the IFA_F_ state,
+ * then the interface's name.
+ */
+static int procfs_gen_netifinet6(struct procfs_text *t)
+{
+    struct netdev_addr6 addrs[NETDEV_ADDRS6];
+    int i, k, n;
+
+    for (i = 0; i < netdev_seen_count(); i++) {
+        struct netdev *nd = netdev_at(i);
+        uint32_t flags;
+
+        if (!nd) {
+            continue;
+        }
+        flags = net_lock();
+        n = nd->naddr6;
+        k_memcpy(addrs, nd->addr6, (uint32_t)n * sizeof(addrs[0]));
+        net_unlock(flags);
+        for (k = 0; k < n; k++) {
+            uint8_t scope = addrs[k].scope;
+
+            ap_ip6_hex(t, addrs[k].addr);
+            ap_ch(t, ' ');
+            ap_hex2_lower(t, (uint32_t)nd->index);
+            ap_hex2_lower(t, addrs[k].prefix);
+            ap_hex2_lower(t, scope == NETDEV_SCOPE_HOST   ? 0x10u
+                             : scope == NETDEV_SCOPE_LINK ? 0x20u
+                             : scope == NETDEV_SCOPE_SITE ? 0x40u
+                                                          : 0u);
+            ap_hex2_lower(t, addrs[k].flags);
+            ap_ifname8(t, nd->index);
+        }
+    }
+    return t->len;
+}
+
+/* The route flags of /proc/net/ipv6_route, Linux's RTF_ bits: up, through
+ * a gateway, a default router's, learned from a router advertisement, and
+ * with a lifetime. */
+#define PROCFS_RTF_UP       0x00000001u
+#define PROCFS_RTF_GATEWAY  0x00000002u
+#define PROCFS_RTF_DEFAULT  0x00010000u
+#define PROCFS_RTF_ADDRCONF 0x00040000u
+#define PROCFS_RTF_EXPIRES  0x00400000u
+
+/**
+ * Render /proc/net/ipv6_route: the IPv6 routes, each copied out under
+ * net_lock (`route6_at`), a line each in Linux's columns, which BusyBox's
+ * `route -A inet6` reads: the destination and its prefix's length, the
+ * source and its length, which are always :: and 0, the next hop, :: for
+ * on the link, then in eight hex digits the metric, the reference and use
+ * counts, kept as 0, and the flags, then the interface's name.
+ */
+static int procfs_gen_netipv6route(struct procfs_text *t)
+{
+    struct route6_row r;
+    uint32_t flags, rtf;
+    int i, more;
+
+    for (i = 0; net_ns_seen(); i++) {
+        flags = net_lock();
+        more = route6_at(i, &r);
+        net_unlock(flags);
+        if (!more) {
+            break;
+        }
+        rtf = PROCFS_RTF_UP;
+        if (!ip6_is_unspecified(r.gw)) {
+            rtf |= PROCFS_RTF_GATEWAY;
+        }
+        if (r.proto == ROUTE6_PROTO_RA) {
+            rtf |= PROCFS_RTF_ADDRCONF | (r.plen == 0 ? PROCFS_RTF_DEFAULT : 0u);
+        }
+        if (r.expires != 0) {
+            rtf |= PROCFS_RTF_EXPIRES;
+        }
+        ap_ip6_hex(t, r.dst);
+        ap_ch(t, ' ');
+        ap_hex2_lower(t, r.plen);
+        ap_ip6_hex(t, ip6_any);
+        ap_str(t, " 00 ");
+        ap_ip6_hex(t, r.gw);
+        ap_ch(t, ' ');
+        ap_hex_fixed(t, r.metric, 8);
+        ap_str(t, "00000000 00000000 ");
+        ap_hex_fixed(t, rtf, 8);
+        ap_ifname8(t, r.ifindex);
+    }
+    return t->len;
+}
+
 /** Render the /proc/net file of origin `origin`, one with a name from
  * `synth_net_name`: those `synth_net_file` gives and the two files of
  * /proc/net/stat. */
@@ -4064,6 +4214,10 @@ static int procfs_gen_net(struct procfs_text *t, int origin)
         return procfs_gen_netpacket(t);
     case SYNTH_PROC_NETSNMP6:
         return procfs_gen_netsnmp6(t);
+    case SYNTH_PROC_NETIFINET6:
+        return procfs_gen_netifinet6(t);
+    case SYNTH_PROC_NETIPV6RT:
+        return procfs_gen_netipv6route(t);
     case SYNTH_PROC_NETSTAT_RT:
     case SYNTH_PROC_NETSTAT_ARP:
         return procfs_gen_netstat(t, origin);
@@ -5579,6 +5733,61 @@ static void ap_uuid(struct procfs_text *t, const uint8_t *b)
     }
 }
 
+/** The `which` of nd6.h for the net/ipv6/conf directory `dir`, a name
+ * `synth_sys_ipv6` gave: `all`, `default`, or the index of the interface
+ * of that name, -ENODEV when there is none. */
+static int sysctl_ipv6_which(const char *dir)
+{
+    int len = (int)k_strlen(dir), index;
+
+    if (len == 3 && dir[0] == 'a') {
+        return ND6_CONF_ALL;
+    }
+    if (len == 7 && dir[0] == 'd') {
+        return ND6_CONF_DEFAULT;
+    }
+    index = sysfs_net_index(dir, len);
+    return index > 0 ? index : -ENODEV;
+}
+
+/* The ND6_ setting of each SYNTH_IPV6_ file but stable_secret. */
+static const int sysctl_ipv6_keys[SYNTH_IPV6_KEYS] = {
+    ND6_ACCEPT_RA, ND6_AUTOCONF, ND6_DISABLE_IPV6, ND6_FORWARDING, -1, ND6_USE_TEMPADDR};
+
+/**
+ * The text of the net/ipv6/conf file `key` of the directory `dir`,
+ * appended to `t`: the setting, or the stable secret as an IPv6 address.
+ * Returns 0, -EIO for a secret not written, as Linux reads one, or -ENODEV
+ * for an interface gone.
+ */
+static int sysctl_ipv6_text(struct procfs_text *t, const char *dir, int key)
+{
+    int which = sysctl_ipv6_which(dir);
+    uint8_t secret[IP6_ADDR_LEN];
+    char text[40];
+    int32_t v;
+    int rc;
+
+    if (which == -ENODEV) {
+        return which;
+    }
+    if (key == SYNTH_IPV6_STABLE_SECRET) {
+        rc = nd6_secret_get(which, secret);
+        if (rc == 0) {
+            ip6_format(secret, text);
+            ap_str(t, text);
+            ap_ch(t, '\n');
+        }
+        return rc;
+    }
+    rc = nd6_conf_get(which, sysctl_ipv6_keys[key], &v);
+    if (rc == 0) {
+        ap_int(t, (int)v);
+        ap_ch(t, '\n');
+    }
+    return rc;
+}
+
 /**
  * The text a read of the /proc/sys file `entry` gives, appended to `t`.
  *
@@ -5587,15 +5796,22 @@ static void ap_uuid(struct procfs_text *t, const uint8_t *b)
  * drawn once, at its first read, and stays for the
  * boot; kernel/random/uuid is drawn anew for each open, as Linux draws it
  * for each read. Both come from the kernel's generator, whatever its seed,
- * since neither is a key.
+ * since neither is a key. A file of net/ipv6/conf is `sysctl_ipv6_text`'s.
+ *
+ * Returns 0, or a negative errno: -EIO for a stable secret not written.
  */
-static void procfs_sysctl_text(struct procfs_text *t, int entry)
+static int procfs_sysctl_text(struct procfs_text *t, int entry)
 {
     static uint8_t boot_id[16];
     static int boot_id_drawn;
     uint8_t uuid[16];
     int i = sysctl_int(entry);
+    const char *dir;
+    int key;
 
+    if (synth_sys_ipv6(entry, &dir, &key) && key >= 0) {
+        return sysctl_ipv6_text(t, dir, key);
+    }
     if (entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME) {
         ap_str(t, entry == SYNTH_SYS_HOSTNAME ? uts_hostname() : uts_domainname());
         ap_ch(t, '\n');
@@ -5623,6 +5839,7 @@ static void procfs_sysctl_text(struct procfs_text *t, int entry)
     } else {
         ap_str(t, synth_sys_text(entry));
     }
+    return 0;
 }
 
 /** Read a /proc/sys file opened for writing as well: its value at this
@@ -5633,12 +5850,13 @@ static int32_t procfs_sysctl_read(fd_entry_t *e, char __user *buf, uint32_t coun
     uint32_t off = e->ofd->offset > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)e->ofd->offset;
     struct procfs_text t;
     uint32_t n = 0;
+    int rc;
 
     procfs_text_init(&t);
-    procfs_sysctl_text(&t, f->origin_pid);
-    if (t.nomem) {
+    rc = procfs_sysctl_text(&t, f->origin_pid);
+    if (rc != 0 || t.nomem) {
         kfree(t.buf);
-        return -ENOMEM;
+        return rc != 0 ? rc : -ENOMEM;
     }
     if (off < (uint32_t)t.len) {
         n = (uint32_t)t.len - off < count ? (uint32_t)t.len - off : count;
@@ -5705,8 +5923,11 @@ static int sysctl_parse_ulong(const char *s, unsigned long *v)
  * in its owner's variable, which the owner reads at its next use, and a
  * value out of the file's range is -EINVAL. To net/ipv4/ip_forward 0, its
  * value, is taken, and any other value is -EINVAL, since the stack forwards
- * nothing between interfaces, where Linux would begin to. -EFAULT for a
- * buffer the caller cannot read.
+ * nothing between interfaces, where Linux would begin to. A file of
+ * net/ipv6/conf is `nd6_conf_set`'s, with its checks, and stable_secret
+ * takes an IPv6 address up to the first space or newline
+ * (`nd6_secret_set`), -EINVAL for text that is none. -EFAULT for a buffer
+ * the caller cannot read.
  */
 static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -5717,6 +5938,8 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
     int32_t v;
     int rc;
     int i;
+    const char *dir;
+    int key;
 
     k_memset(text, 0, sizeof(text));
     if (copy_from_user(text, buf, n) != 0) {
@@ -5737,10 +5960,32 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
         rc = sysctl_parse_ulong(text, &fd_file_max);
         return rc != 0 ? rc : (int32_t)count;
     }
+    if (synth_sys_ipv6(f->origin_pid, &dir, &key) && key == SYNTH_IPV6_STABLE_SECRET) {
+        uint8_t secret[IP6_ADDR_LEN];
+        int which = sysctl_ipv6_which(dir);
+
+        while (len < n && text[len] != '\n' && text[len] != ' ' && text[len] != '\0') {
+            len++;
+        }
+        if (which == -ENODEV) {
+            return which;
+        }
+        if (ip6_parse(text, len, secret) != 0) {
+            return -EINVAL;
+        }
+        rc = nd6_secret_set(which, secret);
+        return rc != 0 ? rc : (int32_t)count;
+    }
     text[12] = '\0';
     rc = oom_parse(text, &v);
     if (rc != 0) {
         return rc;
+    }
+    if (synth_sys_ipv6(f->origin_pid, &dir, &key)) {
+        int which = sysctl_ipv6_which(dir);
+
+        rc = which == -ENODEV ? which : nd6_conf_set(which, sysctl_ipv6_keys[key], v);
+        return rc != 0 ? rc : (int32_t)count;
     }
     i = sysctl_int(f->origin_pid);
     if (i >= 0) {
@@ -6220,8 +6465,8 @@ static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pi
     } else if (vp->kind == VNODE_PROC_CPUINFO) {
         len = procfs_gen_cpuinfo(t);
     } else if (vp->kind == VNODE_PROC_SYS_FILE) {
-        procfs_sysctl_text(t, vp->sysent);
-        len = t->len;
+        len = procfs_sysctl_text(t, vp->sysent);
+        len = len < 0 ? len : t->len;
         *key = vp->sysent;
     } else if (vp->kind == VNODE_PROC_MOUNTS) {
         len = procfs_gen_mounts(t);
