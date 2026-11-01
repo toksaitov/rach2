@@ -78,8 +78,8 @@ uint32_t uimage_budget(unsigned long stack_limit)
 /**
  * An empty argv has a pointer set aside too, since execve gives such a
  * program an empty argv[0]. The array of frames is sized for the budget,
- * with four pages to spare for the information block below the strings,
- * and is the only kernel memory the stack takes.
+ * with four pages to spare for the pad and the information block below the
+ * strings, and is the only kernel memory the stack takes.
  */
 int uimage_start(struct uimage *u, uintptr_t top, unsigned long stack_limit, uint32_t argc,
                  uint32_t envc)
@@ -235,12 +235,21 @@ int uimage_drop_first(struct uimage *u)
     return 0;
 }
 
-/** Where the 16 bytes AT_RANDOM points at go: below the strings, aligned
- * down to 16 bytes as Linux aligns them, so no word of them crosses a
- * page. */
+void uimage_move(struct uimage *u, uintptr_t top, uint32_t pad)
+{
+    if (u->execfn != 0) {
+        u->execfn = u->execfn - u->top + top;
+    }
+    u->top = top;
+    u->pad = pad;
+}
+
+/** Where the 16 bytes AT_RANDOM points at go: below the strings and the
+ * pad, aligned down to 16 bytes as Linux aligns them, so no word of them
+ * crosses a page. */
 static uintptr_t uimage_random_at(const struct uimage *u)
 {
-    return (u->top - u->used - 16u) & ~(uintptr_t)15u;
+    return (u->top - u->used - u->pad - 16u) & ~(uintptr_t)15u;
 }
 
 int uimage_place(struct uimage *u, uint32_t argc, uint32_t envc)

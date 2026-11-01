@@ -765,6 +765,15 @@ struct exec_state {
     int secure;      /* AT_SECURE */
     int unreadable;  /* an image loaded is one the caller may not read */
     uintptr_t entry; /* where the new image starts */
+    /* The new image's layout (`exec_layout`): the address just past its
+     * stack, its mmap base, a position-independent program's base, and how
+     * far above the program's end its heap starts; and the persona it runs
+     * with. */
+    uintptr_t stack_top;
+    uintptr_t mmap_base;
+    uintptr_t dyn_base;
+    uintptr_t heap_shift;
+    uint32_t persona;
     elf_layout_t layout;
     elf_layout_t ilayout; /* the interpreter's */
     elf_image_t img;
@@ -998,26 +1007,27 @@ static void exec_privileges(struct mm *mm, int secure, int unreadable, uint32_t 
 }
 
 /**
- * How far below its top page the stack of a new image may grow, when the
- * pages its arguments took start at `bottom`: to `limit`, the soft
+ * How far below its top page the stack of the new image in `s` may grow,
+ * when the pages its arguments took start at `bottom`: to `limit`, the soft
  * RLIMIT_STACK in force at the exec, in whole pages, which bounds the whole
- * stack as Linux's does, but never into the range below USER_MMAP_BASE where
- * anonymous mappings are placed, and always as far as `bottom`. A limit
- * changed later applies at the next exec.
+ * stack as Linux's does, but never into the range below the image's mmap
+ * base where anonymous mappings are placed, and always as far as `bottom`.
+ * A limit changed later applies at the next exec.
  */
-static uintptr_t exec_stack_window(uintptr_t bottom, unsigned long limit)
+static uintptr_t exec_stack_window(const struct exec_state *s, uintptr_t bottom,
+                                   unsigned long limit)
 {
     uintptr_t size = limit & ~(unsigned long)(PAGE_SIZE - 1);
     uintptr_t floor;
 
-    if (size > USER_ADDR_MAX - USER_MMAP_BASE) {
-        size = USER_ADDR_MAX - USER_MMAP_BASE;
+    if (size > s->stack_top - s->mmap_base) {
+        size = s->stack_top - s->mmap_base;
     }
-    floor = USER_ADDR_MAX - size;
+    floor = s->stack_top - size;
     if (floor > bottom) {
         floor = bottom;
     }
-    return USER_STACK_BASE - floor;
+    return s->stack_top - PAGE_SIZE - floor;
 }
 
 /**
@@ -1478,12 +1488,73 @@ static void exec_ids(struct exec_state *s)
     s->secure = s->euid != current_proc->ruid || s->egid != current_proc->rgid;
 }
 
+/* personality(2)'s flag that turns randomization off, which GDB and
+ * `setarch -R` set, and the flags Linux's PER_CLEAR_ON_SETID clears for an
+ * image that runs with authority its caller lacks: READ_IMPLIES_EXEC,
+ * ADDR_NO_RANDOMIZE, ADDR_COMPAT_LAYOUT and MMAP_PAGE_ZERO. */
+#define ADDR_NO_RANDOMIZE  0x0040000u
+#define PER_CLEAR_ON_SETID 0x0740000u
+
+/** A random whole number of pages below `pages`, a power of two of at most
+ * 2^32, as an offset in bytes; 0 when `pages` is 0. */
+static uintptr_t aslr_pages(uintptr_t pages)
+{
+    if (pages == 0) {
+        return 0;
+    }
+    return ((uintptr_t)krandom_u32() & (pages - 1u)) * PAGE_SIZE;
+}
+
+/**
+ * Choose the new image's layout and its persona into `s`, as Linux's
+ * `load_elf_binary` chooses them, and move its stack, whose strings are
+ * copied, to the top chosen. Called once `exec_ids` has set the ids.
+ *
+ * The persona is the caller's, less ADDR_NO_RANDOMIZE and the other flags
+ * of PER_CLEAR_ON_SETID when the image runs with ids its caller lacks or
+ * has capabilities given back, so that no caller fixes the addresses of a
+ * set-user-ID program. When kernel.randomize_va_space is 0 or the persona
+ * has ADDR_NO_RANDOMIZE, the image is at the fixed addresses of cpu.h: its
+ * stack ends at USER_ADDR_MAX, its mmap base is USER_MMAP_BASE, a
+ * position-independent program goes at ELF_ET_DYN_BASE and the heap starts
+ * at the program's end. Otherwise each offset is drawn on its own, under
+ * the architecture's ASLR_ bounds: the stack's top is lowered by a random
+ * number of pages and the entry stack pointer by a random multiple of 16
+ * bytes, the mmap base is lowered and the program's base raised by random
+ * numbers of pages, and at 2 the heap's start is raised by one.
+ */
+static void exec_layout(struct exec_state *s)
+{
+    uint32_t pad = 0;
+
+    s->persona = current_proc->persona;
+    if (s->secure || (current_proc->nocaps && !s->nocaps)) {
+        s->persona &= ~PER_CLEAR_ON_SETID;
+    }
+    s->stack_top = USER_ADDR_MAX;
+    s->mmap_base = USER_MMAP_BASE;
+    s->dyn_base = ELF_ET_DYN_BASE;
+    s->heap_shift = 0;
+    if (randomize_va_space != 0 && !(s->persona & ADDR_NO_RANDOMIZE)) {
+        s->stack_top -= aslr_pages(ASLR_STACK_PAGES);
+        if (ASLR_SP_BYTES != 0) {
+            pad = krandom_u32() & (uint32_t)(ASLR_SP_BYTES - 1u) & ~15u;
+        }
+        s->mmap_base -= aslr_pages(ASLR_MMAP_PAGES);
+        s->dyn_base += aslr_pages(ASLR_MMAP_PAGES);
+        if (randomize_va_space >= 2) {
+            s->heap_shift = aslr_pages(ASLR_BRK_PAGES);
+        }
+    }
+    uimage_move(&s->args, s->stack_top, pad);
+}
+
 /**
  * Load the interpreter the program's PT_INTERP names into the new address
  * space, as Linux's `load_elf_interp` loads it: a position-independent one,
  * which every dynamic linker is, at the top of the range mmap places
- * mappings in, just below USER_MMAP_BASE, and one with fixed addresses at
- * those. Its own PT_INTERP is ignored. The new image starts at its entry,
+ * mappings in, just below the image's mmap base, and one with fixed
+ * addresses at those. Its own PT_INTERP is ignored. The new image starts at its entry,
  * and `*base`, AT_BASE, is the distance it was moved by.
  *
  * The path is held to the rule execve's own is (`canonicalize_named`), in
@@ -1516,7 +1587,7 @@ static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
         return exec_load_err(&s->prog, rc, -ELIBBAD);
     }
     if (s->ilayout.type == ET_DYN) {
-        bias = USER_MMAP_BASE - (s->ilayout.hi - s->ilayout.lo) - s->ilayout.lo;
+        bias = s->mmap_base - (s->ilayout.hi - s->ilayout.lo) - s->ilayout.lo;
     }
     if (s->ilayout.lo + bias < s->img.image_end && s->ilayout.hi + bias > s->img.segs[0].start) {
         return -ENOMEM;
@@ -1534,10 +1605,11 @@ static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
 
 /**
  * Build the new image in `s`'s address space of its own while the caller's
- * still runs, as Linux's `load_elf_binary` builds one: the program, at
- * ELF_ET_DYN_BASE when it is position-independent; the interpreter its
- * PT_INTERP names; the regions; and the stack, with the pointers and the
- * auxiliary vector below its strings. Each of the program and the
+ * still runs, as Linux's `load_elf_binary` builds one, in the layout
+ * `exec_layout` chose: the program, at its base when it is
+ * position-independent and linked below ELF_ET_DYN_BASE; the interpreter
+ * its PT_INTERP names; the regions; and the stack, with the pointers and
+ * the auxiliary vector below its strings. Each of the program and the
  * interpreter maps its segments from its file where it can, and the
  * reference to the file's mapping goes from the open file to the image,
  * which keeps it until `exec_release`. The stack may grow to the soft
@@ -1561,7 +1633,7 @@ static int32_t exec_build(struct exec_state *s)
         return exec_load_err(&s->prog, rc, -ENOEXEC);
     }
     if (s->layout.type == ET_DYN && s->layout.lo < ELF_ET_DYN_BASE) {
-        bias = ELF_ET_DYN_BASE - s->layout.lo;
+        bias = s->dyn_base - s->layout.lo;
     }
     rc = elf_load_image_at(exec_file_read, &s->prog, s->mm->dir, bias, s->prog.map, &s->img);
     s->prog.map = NULL;
@@ -1581,10 +1653,11 @@ static int32_t exec_build(struct exec_state *s)
     if (s->secure && limit > RLIM_STACK_DEFAULT) {
         limit = RLIM_STACK_DEFAULT;
     }
-    if (elf_setup_vmas(&s->mm->vm, &s->img, USER_STACK_BASE, exec_stack_window(bottom, limit)) !=
-            0 ||
+    if (elf_setup_vmas(&s->mm->vm, &s->img, s->img.image_end + s->heap_shift,
+                       s->stack_top - PAGE_SIZE, exec_stack_window(s, bottom, limit),
+                       s->mmap_base) != 0 ||
         (s->layout.interp[0] != '\0' && elf_add_vmas(&s->mm->vm, &s->iimg) != 0) ||
-        (bottom < USER_STACK_BASE && !vm_grow_stack(&s->mm->vm, bottom, RLIM_INFINITY)) ||
+        (bottom < s->stack_top - PAGE_SIZE && !vm_grow_stack(&s->mm->vm, bottom, RLIM_INFINITY)) ||
         vm_total(&s->mm->vm) > current_proc->rlim[RLIM_AS].cur) {
         return -ENOMEM;
     }
@@ -1767,6 +1840,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
     current_proc->suid = s->euid;
     current_proc->sgid = s->egid;
     current_proc->nocaps = s->nocaps;
+    current_proc->persona = s->persona;
     ns_exec(current_proc);
     exec_privileges(s->mm, s->secure, s->unreadable, old_euid, old_egid, was_privileged);
     proc_set_comm(current_proc, s->path);
@@ -1939,10 +2013,11 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
         rc = exec_script(s);
     }
     if (rc == 0) {
+        exec_ids(s);
+        exec_layout(s);
         rc = uimage_place(&s->args, s->argc, s->envc);
     }
     if (rc == 0) {
-        exec_ids(s);
         rc = exec_build(s);
     }
     if (rc == 0) {
@@ -5836,8 +5911,8 @@ static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_so
  * MAP_FIXED or MAP_FIXED_NOREPLACE, which fails with EEXIST for a range in
  * use; otherwise a page-aligned hint whose range is free below the
  * stack's growth window, and without one the highest free range below
- * USER_MMAP_BASE and above the heap's top, so the ranges munmap frees are used
- * again. RLIMIT_AS counts the range, less what a fixed mapping replaces.
+ * the mmap base and above the heap's top, so the ranges munmap frees are
+ * used again. RLIMIT_AS counts the range, less what a fixed mapping replaces.
  * 0, -ENOMEM or -EEXIST. Nothing here sleeps, so the range is still as it
  * was found when the caller inserts the region straight after.
  */
@@ -5863,7 +5938,7 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
         *base = addr;
     }
     if (*base == 0) {
-        *base = vm_find_free(vm, len, PAGE_UP(vm->brk), USER_MMAP_BASE);
+        *base = vm_find_free(vm, len, PAGE_UP(vm->brk), vm->mmap_base);
     }
     return *base == 0 || vm_total(vm) + len > limit ? -ENOMEM : 0;
 }
@@ -6323,7 +6398,7 @@ long sys_mremap(isr_params_t *params)
     if (!(flags & MREMAP_MAYMOVE)) {
         return -ENOMEM;
     }
-    to = vm_find_free(vm, new_len, PAGE_UP(vm->brk), USER_MMAP_BASE);
+    to = vm_find_free(vm, new_len, PAGE_UP(vm->brk), vm->mmap_base);
     if (to == 0) {
         return -ENOMEM;
     }
@@ -7126,9 +7201,9 @@ long sys_getcpu(isr_params_t *params)
  * personality, the execution domain, takes the new value, or 0xFFFFFFFF to read
  * it, and the old value is returned. The domain, the low byte, must be
  * PER_LINUX (0) or PER_LINUX32 (8), the domains of Linux programs on x86, else
- * -EINVAL; the flag bits above it are kept and change nothing. This kernel
- * does not randomize addresses, so ADDR_NO_RANDOMIZE, which GDB sets, has
- * nothing to turn off.
+ * -EINVAL. The flag bits above it are kept, and the next exec reads one:
+ * ADDR_NO_RANDOMIZE, which GDB and `setarch -R` set, places the new image
+ * at fixed addresses (`exec_layout`). The others change nothing.
  */
 long sys_personality(isr_params_t *params)
 {

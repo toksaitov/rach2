@@ -1394,7 +1394,8 @@ static void exec_program(int argc, char *argv[])
         return;
     }
 
-    if (elf_setup_vmas(&mm->vm, &img, USER_STACK_BASE, VM_STACK_MAX_GROWTH) != 0 ||
+    if (elf_setup_vmas(&mm->vm, &img, img.image_end, USER_STACK_BASE, VM_STACK_MAX_GROWTH,
+                       USER_MMAP_BASE) != 0 ||
         (stack_bottom < USER_STACK_BASE && !vm_grow_stack(&mm->vm, stack_bottom, RLIM_INFINITY))) {
         mm_put(mm);
         console_puts("exec: no memory for the program's regions");

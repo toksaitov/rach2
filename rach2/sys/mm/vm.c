@@ -2,6 +2,7 @@
 
 #include "vm.h"
 
+#include "../arch/arch.h"
 #include "../lib/kdef.h"
 #include "../lib/kstring.h"
 #include "kheap.h"
@@ -9,6 +10,8 @@
 /* A VMA boundary must be page-aligned (4 KB). */
 #define VM_PAGE_MASK  0xFFFu
 #define VM_PAGE_SHIFT 12
+
+int randomize_va_space = ASLR_MMAP_PAGES != 0 ? 2 : 0;
 
 /* The files whose last reference went, waiting for `vm_file_reap`. */
 static struct vm_file *vm_dead;
@@ -74,6 +77,7 @@ void vm_init(vm_space_t *vm)
     vm->heap_start = 0;
     vm->brk = 0;
     vm->stack_limit = 0;
+    vm->mmap_base = 0;
 }
 
 void vm_free(vm_space_t *vm)

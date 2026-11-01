@@ -192,6 +192,17 @@ phys_addr_t mmu_virt_to_phys(const volatile void *v);
 #define USER_STACK_BASE 0x00007FFFFFFFE000UL
 #define USER_MMAP_BASE  0x00007F0000000000UL
 
+/* The bounds of the offsets a new image's layout moves by when addresses
+ * are randomized (`exec_layout`), each a power of two, in pages but for the
+ * last, as Linux x86-64 draws them: the stack's top down by less than
+ * 16 GiB, the mmap base down and a position-independent program up by less
+ * than 1 TiB each, the heap's start up by less than 32 MiB, and the entry
+ * stack pointer down by less than 8 KiB. */
+#define ASLR_STACK_PAGES 0x00400000UL
+#define ASLR_MMAP_PAGES  0x10000000UL
+#define ASLR_BRK_PAGES   0x00002000UL
+#define ASLR_SP_BYTES    8192UL
+
 #define ELF_CLASS   2u          /* ELFCLASS64 */
 #define ELF_MACHINE 62u         /* EM_X86_64 */
 #define AUDIT_ARCH  0xC000003Eu /* AUDIT_ARCH_X86_64 */

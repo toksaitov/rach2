@@ -50,6 +50,7 @@ struct uimage {
     uintptr_t env_end;
     unsigned long auxv[2 * UIMAGE_AUXV];
     uint32_t room; /* bytes the strings may take */
+    uint32_t pad;  /* bytes left between the strings and AT_RANDOM's */
     uintptr_t sp;  /* the entry stack pointer, once placed */
 };
 
@@ -93,8 +94,18 @@ int uimage_push(struct uimage *u, const char *s);
 int uimage_drop_first(struct uimage *u);
 
 /**
+ * Move the stack `u`, whose strings are all copied and whose information
+ * block is not yet placed, so that its top is `top`, a page boundary, and
+ * leave `pad` bytes, a multiple of 16 below 8 KiB, between the strings and
+ * the information block, as Linux's `arch_align_stack` leaves them when it
+ * randomizes the stack. The strings keep their offsets within their pages,
+ * so the frames that hold them hold them still.
+ */
+void uimage_move(struct uimage *u, uintptr_t top, uint32_t pad);
+
+/**
  * Place the information block of `argc` and `envc` strings below the
- * strings, and take the frames it needs. Below the strings go the 16 bytes
+ * strings and the pad, and take the frames it needs. Below them go the 16 bytes
  * AT_RANDOM points at, and below them argc, the argv pointers and their
  * NULL, the envp pointers and theirs, and the auxiliary vector, each a word
  * of a pointer's width. Their start, the entry stack pointer, is aligned

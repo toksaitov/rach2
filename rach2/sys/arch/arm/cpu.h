@@ -115,6 +115,14 @@ void mmio_write32(uintptr_t a, uint32_t v);
 #define USER_STACK_BASE 0xBEFFF000UL
 #define USER_MMAP_BASE  0xB0000000UL
 
+/* The bounds of the offsets a new image's layout moves by when addresses
+ * are randomized (`exec_layout`): 0, since no image runs on this
+ * architecture. */
+#define ASLR_STACK_PAGES 0UL
+#define ASLR_MMAP_PAGES  0UL
+#define ASLR_BRK_PAGES   0UL
+#define ASLR_SP_BYTES    0UL
+
 #define ELF_CLASS   1u          /* ELFCLASS32 */
 #define ELF_MACHINE 40u         /* EM_ARM */
 #define AUDIT_ARCH  0x40000028u /* AUDIT_ARCH_ARM */

@@ -347,12 +347,13 @@ int elf_add_vmas(struct vm_space *vm, const elf_image_t *img);
 
 /**
  * Start the regions of a new address space `vm` from a loaded image: the
- * segments' (`elf_add_vmas`), an empty heap at the image's end, which brk
- * grows, and a stack region of one page at `stack_top` that may grow down
- * to `stack_top - stack_growth`. 0, or -1 when a region could not be
+ * segments' (`elf_add_vmas`), an empty heap at `heap_start`, at or above the
+ * image's end, which brk grows, a stack region of one page at `stack_top`
+ * that may grow down to `stack_top - stack_growth`, and `mmap_base`, below
+ * which a mapping without a hint goes. 0, or -1 when a region could not be
  * recorded (`vm_insert`).
  */
-int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uintptr_t stack_top,
-                   uintptr_t stack_growth);
+int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uintptr_t heap_start,
+                   uintptr_t stack_top, uintptr_t stack_growth, uintptr_t mmap_base);
 
 #endif /* _ELF_H_ */
