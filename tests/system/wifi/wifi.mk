@@ -1,8 +1,9 @@
 # wifi.mk: the Linux AP guest of the Wi-Fi suite (tests/system/wifi), built
 # by `make wifi-guest` alone and by the suite that boots it, never by `all`,
-# since its packages are a download of some 160 MiB. WIFI_HWSIMRELAY names
-# the guest's relay (tests/system/wifi/hwsimrelay.c) once it is built for the
-# guest; the guest is made without it until then.
+# since its packages are a download of some 160 MiB. The relay is always
+# built for the x86-64 Linux guest, whatever ARCH selects for Rach2.
+
+include tests/system/wifi/hwsimrelay.mk
 
 WIFI_GUEST_DIR = build/wifi/guest
 WIFI_MKCPIO = build/tools/wifi/mkcpio

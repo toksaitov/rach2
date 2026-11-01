@@ -54,7 +54,7 @@ A request handler emits replies through `genl_reply`; dispatch owns ACK and erro
 
 ### Software-medium datagrams
 
-The `/dev/wsim` endpoint and both relay programs use version 1 of this format. The constants and offsets are in `wireless.h`. A UDP datagram is exactly one 40-byte header followed by `frame_len` bytes. All multi-byte integers are big endian, including cookie and TSF. Signed signal is a 16-bit two's-complement dBm value. No C structure, pointer, padding or host-endian integer is sent directly.
+The `/dev/wsim` endpoint and both relay programs use version 1 of this format. The constants and offsets are in `relay.h`, which `wireless.h` includes. A UDP datagram is exactly one 40-byte header followed by `frame_len` bytes. All multi-byte integers are big endian, including cookie and TSF. Signed signal is a 16-bit two's-complement dBm value. No C structure, pointer, padding or host-endian integer is sent directly.
 
 | Offset | Bytes | Field |
 | --- | --- | --- |
