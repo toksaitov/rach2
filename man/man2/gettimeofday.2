@@ -178,8 +178,9 @@ is allowed.
 .Fn utimensat
 sets the access and modification times of
 .Fa path .
-On ext2, seconds are clamped to the signed 32-bit range and fractional
-seconds are discarded.
+On ext2, a 256-byte inode keeps the nanoseconds and clamps seconds to
+1901-12-13 through 2446-05-10; a 128-byte inode clamps them to the
+signed 32-bit range, through 2038-01-19, and discards fractional seconds.
 An absolute path ignores
 .Fa dirfd .
 A relative path is resolved against the current working directory when
