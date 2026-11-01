@@ -325,10 +325,20 @@ static void locks_out(struct term_keys *k)
 
 /* ---- Translation ---- */
 
-/** libtsm's modifier bits for the translator's KM_MOD_* bits. */
-static unsigned tsm_mods(unsigned km)
+/**
+ * libtsm's modifier bits for the translator's KM_MOD_* bits `km` and its
+ * locks `leds`, KM_LED_*. The Kitty protocol reports Caps Lock and Num Lock
+ * on every key, and libtsm's legacy encoding reads only Num Lock, on the
+ * keypad.
+ */
+static unsigned tsm_mods(unsigned km, unsigned leds)
 {
     unsigned m = 0;
+
+    if (leds & KM_LED_CAPS)
+        m |= TSM_LOCK_MASK;
+    if (leds & KM_LED_NUM)
+        m |= TSM_NUM_LOCK_MASK;
 
     if (km & KM_MOD_SHIFT)
         m |= TSM_SHIFT_MASK;
@@ -388,20 +398,83 @@ static const uint32_t func_keysyms[] = {
     SYM_INSERT,  SYM_DELETE,  SYM_END,     SYM_PAGE_UP, SYM_PAGE_DOWN};
 
 /**
+ * The key and modifiers, libtsm's, of `str` when it is xterm's sequence of
+ * a function or editing key, as the maps' `xterm-strings` give Shift+F1 as
+ * F13's `ESC [ 1 ; 2 P`: `ESC O` or `ESC [ 1 ;` m with P to S, or `ESC [`
+ * n, `;` m and `~`, or `ESC [ H` and `ESC [ F`, where m is 1 and the
+ * modifier bits. Returns false for any other string.
+ */
+static bool xterm_key(const char *str, uint32_t *keysym, unsigned *mods)
+{
+    /* The numbers of `ESC [ n ~`: F5 to F12, then the editing keys. */
+    static const unsigned tilde[] = {15, 17, 18, 19, 20, 21, 23, 24, 2, 3, 5, 6};
+    static const uint32_t tilde_syms[] = {SYM_F1 + 4, SYM_F1 + 5, SYM_F1 + 6,  SYM_F1 + 7,
+                                          SYM_F1 + 8, SYM_F1 + 9, SYM_F1 + 10, SYM_F1 + 11,
+                                          SYM_INSERT, SYM_DELETE, SYM_PAGE_UP, SYM_PAGE_DOWN};
+    unsigned long n = 1;
+    unsigned long m = 1;
+    unsigned i;
+    char *end;
+
+    if (str[0] != '\033')
+        return false;
+    if (str[1] == 'O' && str[2] >= 'P' && str[2] <= 'S' && str[3] == '\0') {
+        *keysym = SYM_F1 + (uint32_t)(str[2] - 'P');
+        *mods = 0;
+        return true;
+    }
+    if (str[1] != '[')
+        return false;
+    str += 2;
+    if (*str >= '0' && *str <= '9') {
+        n = strtoul(str, &end, 10);
+        str = end;
+        if (*str == ';') {
+            m = strtoul(str + 1, &end, 10);
+            if (end == str + 1 || m < 1 || m > 16)
+                return false;
+            str = end;
+        }
+    }
+    if (str[0] == '\0' || str[1] != '\0')
+        return false;
+    if (*str == '~') {
+        for (i = 0; i < sizeof(tilde) / sizeof(tilde[0]) && tilde[i] != n; i++)
+            ;
+        if (i == sizeof(tilde) / sizeof(tilde[0]))
+            return false;
+        *keysym = tilde_syms[i];
+    } else if (n != 1) {
+        return false;
+    } else if (*str >= 'P' && *str <= 'S' && m > 1) {
+        *keysym = SYM_F1 + (uint32_t)(*str - 'P');
+    } else if (*str == 'H' || *str == 'F') {
+        *keysym = *str == 'H' ? SYM_HOME : SYM_END;
+    } else {
+        return false;
+    }
+    m -= 1;
+    *mods = ((m & 1) ? TSM_SHIFT_MASK : 0) | ((m & 2) ? TSM_ALT_MASK : 0) |
+            ((m & 4) ? TSM_CONTROL_MASK : 0) | ((m & 8) ? TSM_LOGO_MASK : 0);
+    return true;
+}
+
+/**
  * A keypad key, KM_T_PAD value `v`, into `key`. With Num Lock on, which
  * Shift reverses, the digits and the point give their characters; with it
  * off they are the cursor and editing keys they are marked with. libtsm
- * sees Num Lock itself, which keeps the keypad numeric in application mode.
- * Returns false for a value with no key.
+ * sees Num Lock itself in `mods`, which keeps the keypad numeric in
+ * application mode. Returns false for a value with no key.
  */
-static bool pad_key(struct term_key *key, unsigned v, unsigned mods, bool num)
+static bool pad_key(struct term_key *key, unsigned v, unsigned mods)
 {
     static const uint32_t nav[10] = {SYM_KP_INSERT, SYM_KP_END,    SYM_KP_DOWN,  SYM_KP_PAGE_DOWN,
                                      SYM_KP_LEFT,   SYM_KP_BEGIN,  SYM_KP_RIGHT, SYM_KP_HOME,
                                      SYM_KP_UP,     SYM_KP_PAGE_UP};
+    bool num = (mods & TSM_NUM_LOCK_MASK) != 0;
     bool digits = num != ((mods & TSM_SHIFT_MASK) != 0);
 
-    key->mods = mods | (num ? TSM_NUM_LOCK_MASK : 0);
+    key->mods = mods;
     key->ascii = SYM_NONE;
     key->unicode = TSM_VTE_INVALID;
     if (v <= 9) {
@@ -456,15 +529,16 @@ static bool pad_key(struct term_key *key, unsigned v, unsigned mods, bool num)
  * Turn the translator's result `res` for key `code` into `key`, with the
  * characters before Ctrl and Alt and without modifiers read through views
  * of `before`, the state before the key. When `live`, as when the selection
- * mode is off, writes a function string that is not the built-in one, and
- * an accent that composed nothing, straight to the child. Returns false
+ * mode is off, writes a function string that is neither the built-in one
+ * nor xterm's sequence of a key, and an accent that composed nothing,
+ * straight to the child. Returns false
  * when the key sends nothing more.
  */
 static bool make_key(struct term_keys *k, struct term_screen *s, const struct keymap_state *before,
                      unsigned code, const struct keymap_result *res, bool live,
                      struct term_key *key)
 {
-    unsigned mods = tsm_mods(res->mods);
+    unsigned mods = tsm_mods(res->mods, res->ledflags);
     unsigned type = KM_TYPE(res->key);
     unsigned v = KM_VALUE(res->key);
     char str[KM_FUNC_BYTES];
@@ -511,6 +585,10 @@ static bool make_key(struct term_keys *k, struct term_screen *s, const struct ke
             key->keysym = func_keysyms[res->func];
             return true;
         }
+        if (xterm_key(str, &key->keysym, &key->mods)) {
+            key->mods |= mods;
+            return true;
+        }
         if (live && n > 0)
             term_screen_send(s, str, n);
         return false;
@@ -527,7 +605,7 @@ static bool make_key(struct term_keys *k, struct term_screen *s, const struct ke
         return true;
     }
     if (type == KM_T_PAD)
-        return pad_key(key, v, mods, (res->ledflags & KM_LED_NUM) != 0);
+        return pad_key(key, v, mods);
     return false;
 }
 
@@ -551,7 +629,7 @@ static bool scroll_key(struct term_keys *k, struct term_screen *s, const struct 
     if (term_screen_alternate(s)) {
         key->keysym = up ? SYM_PAGE_UP : SYM_PAGE_DOWN;
         key->ascii = SYM_NONE;
-        key->mods = tsm_mods(res->mods);
+        key->mods = tsm_mods(res->mods, res->ledflags);
         key->unicode = key->unshifted = key->base = TSM_VTE_INVALID;
         return false;
     }
