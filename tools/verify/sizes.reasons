@@ -204,13 +204,9 @@ rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one 
 rach2/sys/syscall_fs.c:synth_dirent_at complexity 31 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_dirent_at lines 134 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_stat lines 261 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:sys__llseek complexity 35 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:sys__llseek lines 118 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:sys_fcntl64 lines 111 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:sys_readv complexity 29 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:utimes_node complexity 42 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:write_fd complexity 41 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_fs.c:write_fd lines 101 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:synth_stat complexity 32 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:synth_sys_dirent complexity 30 a dispatcher, one arm per command, read as a table
 

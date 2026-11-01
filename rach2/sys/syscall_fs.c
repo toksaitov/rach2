@@ -8879,6 +8879,57 @@ static long long off_from(uint32_t high, uint32_t low)
 }
 
 /**
+ * `_llseek` on a raw disk window, by `raw_seek_resolve`'s rules, under the
+ * description's lock: -ENXIO when the window's size cannot be read,
+ * -EOVERFLOW for a place past the largest offset and -EFAULT with the offset
+ * unchanged when `result` is NULL, and with it moved when the copy fails.
+ * Returns 0 or a negative errno.
+ */
+static int32_t llseek_raw(fd_entry_t *entry, long long off, int whence, long long __user *result)
+{
+    uint64_t raw_size, resolved;
+    long long new_off = 0;
+    int32_t rc;
+
+    fd_ofd_lock(entry->ofd);
+    if (!devfs_fd_raw_size(entry, &raw_size)) {
+        fd_ofd_unlock(entry->ofd);
+        return -ENXIO;
+    }
+    rc = raw_seek_resolve(entry->ofd->raw_offset, raw_size, off, whence, &resolved);
+    if (rc == 0 && resolved > (uint64_t)0x7FFFFFFFFFFFFFFFull) {
+        rc = -EOVERFLOW;
+    }
+    if (rc == 0 && !result) {
+        rc = -EFAULT;
+    }
+    if (rc == 0) {
+        new_off = (long long)resolved;
+        entry->ofd->raw_offset = resolved;
+    }
+    fd_ofd_unlock(entry->ofd);
+    if (rc != 0) {
+        return rc;
+    }
+    return copy_to_user(result, &new_off, sizeof(new_off)) != 0 ? -EFAULT : 0;
+}
+
+/**
+ * `_llseek` on /dev/null, /dev/zero or /dev/full, which land at 0 whatever
+ * the displacement. A NULL `result` is allowed; a bad one is -EFAULT.
+ */
+static int32_t llseek_zero(fd_entry_t *entry, long long __user *result)
+{
+    long long zero = 0;
+
+    entry->ofd->offset = 0;
+    if (result && copy_to_user(result, &zero, sizeof(zero)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/**
  * `_llseek` on `/dev/bootlog`, by `seek_bootlog`'s rules, with the new offset
  * written to the caller's `result`: -EFAULT with the offset unchanged when
  * `result` is NULL, and -EFAULT with it moved when the copy fails. Returns 0
@@ -8987,11 +9038,10 @@ static int file_size_now(fd_entry_t *entry, uint64_t *out)
  * -EOVERFLOW for a place past the largest offset; -EFAULT for a NULL or bad
  * `result`.
  *
- * A raw disk window moves its own offset (`raw_seek_resolve`), the log seeks
- * by `llseek_bootlog`, /fb by `llseek_framebuffer`, a directory or a /proc
- * file by `llseek_listing`, and
- * /dev/null, /dev/zero and /dev/full land at 0 and take a NULL `result`. A
- * file's offset moves under the description's lock, as read and write move
+ * A raw disk window seeks by `llseek_raw`, the log by `llseek_bootlog`, /fb
+ * by `llseek_framebuffer`, a directory or a /proc file by `llseek_listing`,
+ * and /dev/null, /dev/zero and /dev/full land at 0 and take a NULL `result`.
+ * A file's offset moves under the description's lock, as read and write move
  * it: every descriptor a dup or a fork made shares the offset, and a seek
  * from the current place that read it outside the lock would start from a
  * place another process had already left. SEEK_END reads the size again
@@ -9022,45 +9072,14 @@ long sys__llseek(isr_params_t *params)
         return -ESPIPE; /* a pipe is not seekable (POSIX) */
     }
     if (entry->type == FD_TYPE_DEVICE) {
-        uint64_t raw_size;
-
         if (devfs_fd_is_raw(entry)) {
-            uint64_t resolved;
-            int32_t rc;
-
-            fd_ofd_lock(entry->ofd);
-            if (!devfs_fd_raw_size(entry, &raw_size)) {
-                fd_ofd_unlock(entry->ofd);
-                return -ENXIO;
-            }
-            off = (long long)(((uint64_t)offset_high << 32) | (uint64_t)offset_low);
-            rc = raw_seek_resolve(entry->ofd->raw_offset, raw_size, off, whence, &resolved);
-            if (rc == 0 && resolved > (uint64_t)0x7FFFFFFFFFFFFFFFull) {
-                rc = -EOVERFLOW;
-            }
-            if (rc == 0 && !result) {
-                rc = -EFAULT;
-            }
-            if (rc == 0) {
-                new_off = (long long)resolved;
-                entry->ofd->raw_offset = resolved;
-            }
-            fd_ofd_unlock(entry->ofd);
-            if (rc != 0) {
-                return rc;
-            }
-            return copy_to_user(result, &new_off, sizeof(new_off)) != 0 ? -EFAULT : 0;
+            return llseek_raw(entry, off_from(offset_high, offset_low), whence, result);
         }
         if (devfs_fd_log_size(entry, NULL)) {
             return llseek_bootlog(entry, off_from(offset_high, offset_low), whence, result);
         }
         if (devfs_lseek_zero(entry)) {
-            long long zero = 0;
-            entry->ofd->offset = 0;
-            if (result && copy_to_user(result, &zero, sizeof(zero)) != 0) {
-                return -EFAULT;
-            }
-            return 0;
+            return llseek_zero(entry, result);
         }
         return -ESPIPE;
     }
