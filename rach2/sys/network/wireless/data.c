@@ -246,8 +246,8 @@ int wlan_data_mlme_tx(struct wlan *wlan, const uint8_t *frame, unsigned len, uns
     return wlan_data_tx_mgmt(d, d->mbuf, len, sizeof(d->mbuf), wlan->frequency, flags & 1, 0);
 }
 
-void wlan_data_mlme_state(struct wlan *wlan, const struct wlan_bss *bss,
-                          enum wlan_sta_state old_state, enum wlan_sta_state new_state)
+void wlan_data_state(struct wlan *wlan, const struct wlan_bss *bss, enum wlan_sta_state old_state,
+                     enum wlan_sta_state new_state)
 {
     struct wlan_data *d = wlan_data_of(wlan);
     struct ieee80211_elems elems;
@@ -255,7 +255,8 @@ void wlan_data_mlme_state(struct wlan *wlan, const struct wlan_bss *bss,
 
     if (!d)
         return;
-    if (new_state >= WLAN_STA_ASSOCIATED && old_state < WLAN_STA_ASSOCIATED && bss) {
+    if (new_state >= WLAN_STA_ASSOCIATED && bss &&
+        (old_state < WLAN_STA_ASSOCIATED || !d->connected || d->bss != bss)) {
         if (ieee80211_parse_elems(bss->ies, bss->ies_len, &elems) == 0)
             qos = elems.wmm_param != 0;
         (void)wlan_data_connect(d, bss, qos, (bss->capability & WLAN_CAPABILITY_PRIVACY) != 0, 0);

@@ -195,9 +195,11 @@ int wlan_start(struct wlan *wlan)
     return rc;
 }
 
-/** Commit a state and borrowed BSS after the driver accepts the change. */
+/** Commit a state and borrowed BSS after the driver accepts the change, and
+ * let the data path follow it. */
 int wlan_set_state(struct wlan *wlan, enum wlan_sta_state state, struct wlan_bss *bss)
 {
+    enum wlan_sta_state old;
     int rc;
 
     if (!wlan || state < WLAN_STA_NONE || state > WLAN_STA_AUTHORIZED ||
@@ -208,8 +210,10 @@ int wlan_set_state(struct wlan *wlan, enum wlan_sta_state state, struct wlan_bss
         if (rc && state != WLAN_STA_NONE)
             return rc;
     }
+    old = wlan->state;
     wlan->bss = bss;
     wlan->state = state;
+    wlan_data_state(wlan, bss, old, state);
     return 0;
 }
 

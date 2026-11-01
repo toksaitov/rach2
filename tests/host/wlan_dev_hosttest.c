@@ -251,6 +251,16 @@ struct wlan_data *wlan_data_of(const struct wlan *wlan)
     return 0;
 }
 
+/** wlan_set_state tells the data path of each committed state. */
+void wlan_data_state(struct wlan *wlan, const struct wlan_bss *bss, enum wlan_sta_state old_state,
+                     enum wlan_sta_state new_state)
+{
+    (void)wlan;
+    (void)bss;
+    (void)old_state;
+    (void)new_state;
+}
+
 /** wlan_stop passes the missing record along. */
 void wlan_data_disconnect(struct wlan_data *d)
 {

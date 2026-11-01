@@ -208,13 +208,14 @@ struct wlan_data *wlan_data_of(const struct wlan *wlan);
 int wlan_data_mlme_tx(struct wlan *wlan, const uint8_t *frame, unsigned len, unsigned flags);
 
 /**
- * Follow the MLME's committed station states: its ops state. Reaching
- * association connects the data path to `bss`, with QoS when the BSS sends
- * WMM parameters and privacy when its capability says so; leaving it
- * disconnects, which removes the keys. Worker only.
+ * Follow a committed station state; the registry's wlan_set_state calls it.
+ * Reaching association, or moving it to another BSS, connects the data path
+ * to `bss`, with QoS when the BSS sends WMM parameters and privacy when its
+ * capability says so; leaving it disconnects, which removes the keys.
+ * Worker only.
  */
-void wlan_data_mlme_state(struct wlan *wlan, const struct wlan_bss *bss,
-                          enum wlan_sta_state old_state, enum wlan_sta_state new_state);
+void wlan_data_state(struct wlan *wlan, const struct wlan_bss *bss, enum wlan_sta_state old_state,
+                     enum wlan_sta_state new_state);
 
 /** Take what the worker drained from the radio's queues: a data or control
  * frame to wlan_data_rx; a management frame to wlan_data_rx_mgmt, then to
