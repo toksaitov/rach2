@@ -17,17 +17,17 @@ SRC_nc = nc.c resolv.c
 HDR_nc = netdb.h
 SRC_dhcpc = dhcpc.c dhcpmsg.c ipcheck.c
 HDR_dhcpc = dhcpmsg.h ipcheck.h
-SRC_netup = netup.c netcfg.c ipcheck.c
-HDR_netup = netcfg.h ipcheck.h
+SRC_netup = netup.c netcfg.c ipcheck.c ip6secret.c
+HDR_netup = netcfg.h ipcheck.h ip6secret.h
 SRC_reflash = reflash.c sectorcopy.c sha256.c
 HDR_reflash = sectorcopy.h sha256.h
-HDR_init_shell = vconsole.h
-SRC_init_shell = init.c vconsole.c
-HDR_init_login = vconsole.h
-SRC_init_login = init.c vconsole.c
+HDR_init_shell = vconsole.h ip6secret.h
+SRC_init_shell = init.c vconsole.c ip6secret.c
+HDR_init_login = vconsole.h ip6secret.h
+SRC_init_login = init.c vconsole.c ip6secret.c
 DEF_init_login = -DINIT_CONSOLE_LOGIN
-HDR_init_metal = vconsole.h
-SRC_init_metal = init.c vconsole.c
+HDR_init_metal = vconsole.h ip6secret.h
+SRC_init_metal = init.c vconsole.c ip6secret.c
 DEF_init_metal = -DINIT_CONSOLE_LOGIN -DINIT_METAL
 # The recovery system's init: a shell at the console, and the rest of the metal
 # init beside it, which is the network and the optional SSH server. Neither of
@@ -35,8 +35,8 @@ DEF_init_metal = -DINIT_CONSOLE_LOGIN -DINIT_METAL
 # `init-metal` supervises everything and demands a login that a system with no
 # passwords cannot answer, so with it nobody could enter the recovery system
 # by any route.
-SRC_init_recovery = init.c vconsole.c gptdisk.c
-HDR_init_recovery = gptdisk.h vconsole.h
+SRC_init_recovery = init.c vconsole.c gptdisk.c ip6secret.c
+HDR_init_recovery = gptdisk.h vconsole.h ip6secret.h
 DEF_init_recovery = -DINIT_METAL -DINIT_RECOVERY
 SRC_login = login.c pwauth.c
 HDR_login = pwauth.h
