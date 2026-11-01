@@ -1,4 +1,4 @@
-.Dd October 20, 2026
+.Dd November 1, 2026
 .Dt DOOM 1
 .Os
 .Sh NAME
@@ -48,6 +48,13 @@ Time is read with
 Sleep is a busy wait.
 The port provides PCM sound, PC speaker sound, and music synthesized
 with Nuked OPL3.
+Sound uses a separate
+.Pa /dev/console
+descriptor, so it plays on the machine from the kernel console,
+.Ic term ,
+an SSH session or with standard input from
+.Pa /dev/null .
+If the console cannot be opened, the game runs without sound.
 .Pp
 A WAD game-data file is required.
 Without one the engine prints
@@ -96,6 +103,8 @@ Static game executable.
 Framebuffer device.
 .It Pa /mouse
 Optional mouse device.
+.It Pa /dev/console
+Sound output and, for a foreground game with terminal input, keyboard input.
 .It Pa /demo/doom1.wad
 Game data, supplied separately.
 .El

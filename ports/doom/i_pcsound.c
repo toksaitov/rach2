@@ -14,7 +14,9 @@
 #include "doomtype.h"
 #include "i_oplmusic.h"
 
+#include <fcntl.h>
 #include <stdint.h>
+#include <unistd.h>
 
 /* The resampling settings src/i_sound.c binds under FEATURE_SOUND. This
  * module does not resample, so they are not read. */
@@ -66,6 +68,7 @@ extern uint32_t DG_GetTicksMs(void);
 extern uint32_t DG_NowUs(void);
 extern void DG_TimeSpent(int what, uint32_t us);
 
+static int audio_fd = -1; /* owned /dev/console descriptor, or -1 */
 static boolean pcsound_initialized = false;
 static int current_sound_channel = -1; /* the speaker effect's, or -1 */
 static uint32_t current_freq = 0;      /* the speaker's tone in Hz, 0 silent */
@@ -164,7 +167,7 @@ static struct {
 static void play_tone(uint32_t freq)
 {
     current_freq = freq;
-    ioctl(0, KIOCSOUND, freq);
+    ioctl(audio_fd, KIOCSOUND, freq);
 }
 
 /** Silence the PC speaker, unless it is silent already. */
@@ -172,16 +175,18 @@ static void stop_tone(void)
 {
     if (current_freq != 0) {
         current_freq = 0;
-        ioctl(0, KIOCSOUND, 0);
+        ioctl(audio_fd, KIOCSOUND, 0);
     }
 }
 
 /**
- * Ask the console for its audio driver. When the driver plays samples,
+ * Open /dev/console for sound, independently of standard input and the
+ * keyboard, and ask for its audio driver. When the driver plays samples,
  * start output of 11,025 Hz unsigned 8-bit mono, set the volume to 80 of
  * 100, since an HDA codec may start muted, and start the music player at
  * 49,716 Hz; otherwise the effects go to the PC speaker. `use_sfx_prefix`
- * is ignored. Returns true either way.
+ * is ignored. Returns false when the console cannot be opened, true
+ * otherwise. Shutdown closes the descriptor after stopping output.
  */
 static boolean PCSoundInit(boolean use_sfx_prefix)
 {
@@ -191,6 +196,12 @@ static boolean PCSoundInit(boolean use_sfx_prefix)
 
     (void)use_sfx_prefix;
 
+    audio_fd = open("/dev/console", O_RDWR);
+    if (audio_fd < 0) {
+        audio_fd = -1;
+        return false;
+    }
+
     for (i = 0; i < NUM_CHANNELS; i++) {
         channels[i].data = NULL;
         channels[i].length = 0;
@@ -199,15 +210,15 @@ static boolean PCSoundInit(boolean use_sfx_prefix)
         channels[i].active = false;
     }
 
-    if (ioctl(0, AUDIO_GET_INFO, &info) == 0 && info.has_real_audio) {
+    if (ioctl(audio_fd, AUDIO_GET_INFO, &info) == 0 && info.has_real_audio) {
         audio_sample_rate = OUTPUT_SAMPLE_RATE;
         params.sample_rate = audio_sample_rate;
         params.format = AUDIO_U8;
         params.channels = 1;
 
-        if (ioctl(0, AUDIO_START, &params) == 0) {
+        if (ioctl(audio_fd, AUDIO_START, &params) == 0) {
             use_real_audio = true;
-            ioctl(0, AUDIO_SET_VOLUME, 80);
+            ioctl(audio_fd, AUDIO_SET_VOLUME, 80);
 
             if (OPLMusic_Init(OPL_SAMPLE_RATE)) {
                 opl_music_initialized = true;
@@ -224,7 +235,7 @@ static boolean PCSoundInit(boolean use_sfx_prefix)
     return true;
 }
 
-/** Stop the music player, the sample output and the speaker. */
+/** Stop the music player, sample output and speaker, and close the console. */
 static void PCSoundShutdown(void)
 {
     if (opl_music_initialized) {
@@ -232,10 +243,14 @@ static void PCSoundShutdown(void)
         opl_music_initialized = false;
     }
     if (use_real_audio) {
-        ioctl(0, AUDIO_STOP, 0);
+        ioctl(audio_fd, AUDIO_STOP, 0);
         use_real_audio = false;
     }
     stop_tone();
+    if (audio_fd >= 0) {
+        close(audio_fd);
+        audio_fd = -1;
+    }
     pcsound_initialized = false;
 }
 
@@ -406,7 +421,7 @@ static void PCSoundUpdate(void)
                     int w;
                     wp.buffer = mix_buffer + off;
                     wp.size = chunk - off;
-                    w = ioctl(0, AUDIO_WRITE, &wp);
+                    w = ioctl(audio_fd, AUDIO_WRITE, &wp);
                     if (w <= 0) {
                         break; /* the ring is full, or the driver failed */
                     }
