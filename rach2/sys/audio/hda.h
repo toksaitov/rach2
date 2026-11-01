@@ -208,10 +208,10 @@ typedef struct {
     uint16_t nodes[HDA_MAX_CONNECTIONS];   /* the node IDs, ranges expanded */
 } hda_connection_report_t;
 
-/* A DAC's format capabilities. */
+/* A converter's format capabilities, a DAC's or an ADC's. */
 typedef struct {
     uint8_t nid;
-    uint8_t source;   /* the node read: the DAC under Format Override, else the AFG */
+    uint8_t source;   /* the node read: the converter under Format Override, else the AFG */
     uint32_t pcm;     /* its PCM sizes and rates parameter (0x0A) */
     uint32_t formats; /* its stream formats parameter (0x0B) */
 } hda_caps_report_t;
@@ -261,13 +261,44 @@ typedef struct {
 } hda_queue_report_t;
 
 /*
+ * The input path enumeration chose and the input stream's last setup and
+ * counters. The node IDs are 0 where there is none. The ADC reads the pin
+ * through its connection `index`, which is the pin itself or, when `mid` is
+ * not 0, a mixer or selector that reads the pin through `mid_index`. The
+ * counters start again at each start; the service updates them as it runs.
+ */
+typedef struct {
+    uint8_t adc, pin, index, mid, mid_index;
+    uint8_t int_mic;         /* the internal microphone's pin */
+    uint8_t jack_mic;        /* the microphone jack's pin */
+    bool inv_dmic;           /* the internal mic's right channel is its left
+                                inverted: it is muted, and the left recorded
+                                in both channels */
+    bool running;            /* the input stream runs */
+    uint8_t level;           /* the ADC's input gain, in steps: the capture level */
+    hda_caps_report_t caps;  /* the ADC's */
+    uint32_t requested_rate; /* the rate the last start asked for */
+    uint32_t rate;           /* the rate it programmed, one the ADC has */
+    uint16_t format;         /* the input stream's format word, read back */
+    uint16_t pin_ctl;        /* the pin widget control the last start set */
+    uint32_t period;         /* bytes of one DMA period */
+    uint32_t periods;        /* periods in the DMA buffer */
+    uint32_t frames;         /* frames handed to the reader */
+    uint32_t overruns;       /* services that found a period overwritten
+                                before it was handed over */
+    uint32_t lpib;           /* the position in the DMA buffer, in bytes, at
+                                the last service */
+} hda_input_report_t;
+
+/*
  * What enumeration found and the last stream setup, for /proc/audio. The node
  * IDs are 0 where there is none; the indices are the connections chosen on
  * the pin, the mixer and the headphone pin. The formats are read back from
  * the stream descriptor and the two DACs. caps[] is the DAC and the headphone
  * DAC; connections[] the pin, the mixer and the headphone pin. widgets[] has
- * every widget of the function group, in node order, read at discovery, and
- * `queue` the stream's counters as hda_read_queue last read them.
+ * every widget of the function group, in node order, read at discovery,
+ * `queue` the stream's counters as hda_read_queue last read them, and
+ * `input` the input path and stream.
  */
 typedef struct {
     uint32_t vendor;
@@ -283,6 +314,7 @@ typedef struct {
     int widget_count;
     hda_widget_report_t widgets[HDA_MAX_WIDGETS];
     hda_queue_report_t queue;
+    hda_input_report_t input;
 } hda_report_t;
 
 /** Return cached enumeration and the last stream setup; sends no verbs. */
