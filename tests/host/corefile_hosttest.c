@@ -159,6 +159,8 @@ extern void free(void *ptr);
 /* The dumping process and the process that shares its descriptor table,
  * each the only thread of its process. */
 static process_t self, sharer;
+/* The hold maps of the two, as wide as the model's table grows. */
+static uint32_t self_held[FD_TABLE_LIMIT / 32], sharer_held[FD_TABLE_LIMIT / 32];
 static struct tgroup group, sharer_group;
 static struct fs_struct dirs;
 static fd_table_t files;
@@ -1369,9 +1371,9 @@ static void row_end(void)
     check(opens == releases && ns_depth == 0,
           "the file's description is closed and no namespace lock is held");
     fd_table_free(&files);
-    k_memset(self.fd_held, 0, sizeof(self.fd_held));
+    k_memset(self_held, 0, sizeof(self_held));
     self.fd_holding = 0;
-    k_memset(sharer.fd_held, 0, sizeof(sharer.fd_held));
+    k_memset(sharer_held, 0, sizeof(sharer_held));
     sharer.fd_holding = 0;
 }
 
@@ -1458,6 +1460,10 @@ void signal_post_thread(process_t *t, int signo, const struct k_siginfo *info)
 int main(void)
 {
     self.pid = self.tgid = 3;
+    self.fd_held = self_held;
+    self.fd_held_words = FD_TABLE_LIMIT / 32;
+    sharer.fd_held = sharer_held;
+    sharer.fd_held_words = FD_TABLE_LIMIT / 32;
     self.tg = &group;
     self.fs = &dirs;
     self.state = PROC_RUNNING;

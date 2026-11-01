@@ -203,6 +203,30 @@ void park(void);
 
 static process_t proc, other, third;
 static fd_table_t files;
+/* The hold maps of the three threads, as wide as the model's tables grow. */
+static uint32_t proc_held[FD_TABLE_LIMIT / 32], other_held[FD_TABLE_LIMIT / 32],
+    third_held[FD_TABLE_LIMIT / 32];
+
+/** Give the three threads their hold maps, which a reset of a record
+ * clears. */
+static void give_maps(void)
+{
+    proc.fd_held = proc_held;
+    proc.fd_held_words = FD_TABLE_LIMIT / 32;
+    other.fd_held = other_held;
+    other.fd_held_words = FD_TABLE_LIMIT / 32;
+    third.fd_held = third_held;
+    third.fd_held_words = FD_TABLE_LIMIT / 32;
+}
+
+/** Mark `fd` held by a call of `t`, as `fd_get` marks it. */
+static void hold_fd(process_t *t, int fd)
+{
+    t->fd_held[fd / 32] |= 1u << (fd % 32);
+    if (t->fd_holding <= fd / 32) {
+        t->fd_holding = fd / 32 + 1;
+    }
+}
 struct percpu cpu_table[NR_CPUS] = {{.current = &proc}};
 process_t *proc_list;
 volatile uint32_t fb_owner_pid;
@@ -1768,7 +1792,10 @@ static void row_end(void)
           "every path page given back");
     k_memset(&other, 0, sizeof(other));
     k_memset(&third, 0, sizeof(third));
-    k_memset(proc.fd_held, 0, sizeof(proc.fd_held));
+    k_memset(proc_held, 0, sizeof(proc_held));
+    k_memset(other_held, 0, sizeof(other_held));
+    k_memset(third_held, 0, sizeof(third_held));
+    give_maps();
     proc.fd_holding = 0;
     proc.next = 0;
     proc_list = 0;
@@ -2475,8 +2502,7 @@ static void third_call_ends(void)
     process_t *self = current_proc;
 
     current_proc = &third;
-    third.fd_held[releasing / 32] |= 1u << (releasing % 32);
-    third.fd_holding = 1;
+    hold_fd(&third, releasing);
     fd_holds_release();
     current_proc = self;
     check(proc.fds->entries[releasing].type == FD_TYPE_FILE && proc.fds->entries[releasing].ofd,
@@ -2499,8 +2525,7 @@ static void deferred_release(void)
     fd = model_open();
     check(fd >= 0, "open a descriptor two calls hold");
     if (fd >= 0) {
-        other.fd_held[fd / 32] |= 1u << (fd % 32);
-        other.fd_holding = 1;
+        hold_fd(&other, fd);
         check(close_fd(fd) == 0 && (proc.fds->entries[fd].flags & FD_FLAG_CLOSING) && refs == 1,
               "a close of a descriptor another call holds leaves it to that call");
         check(lock_closes == 1 && lock_closer == &proc,
@@ -2961,8 +2986,7 @@ static void orphan_table_end(void)
  * leaves the release to that call's end (`fd_holds_release`). */
 static void orphan_held_close(void)
 {
-    other.fd_held[orphan_fd / 32] |= 1u << (orphan_fd % 32);
-    other.fd_holding = 1;
+    hold_fd(&other, orphan_fd);
     check(close_fd(orphan_fd) == 0 && proc.fds->entries[orphan_fd].type != FD_TYPE_NONE,
           "a close of the orphan's descriptor another call holds leaves it to that call");
     fd_holds_release();
@@ -3127,6 +3151,7 @@ int block_depth(block_device_t *device)
 int main(void)
 {
     mount.type = &mounted_type;
+    give_maps();
     truncation();
     close_sleeping();
     deferred_release();

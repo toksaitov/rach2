@@ -413,16 +413,15 @@ static int fd_table_resize(fd_table_t *table, int cap)
     if (table->refs > 1 && sharers_fit(table, cap) != 0) {
         return -ENOMEM;
     }
-    grown = kzalloc(sizeof(fd_entry_t) * (size_t)cap);
-    if (!grown) {
+    if (table->entries && (old = kmalloc(sizeof(*old))) == NULL) {
         return -ENOMEM;
     }
-    if (table->entries) {
-        old = kmalloc(sizeof(*old));
-        if (!old) {
-            kfree(grown);
-            return -ENOMEM;
-        }
+    grown = kzalloc(sizeof(fd_entry_t) * (size_t)cap);
+    if (!grown) {
+        kfree(old);
+        return -ENOMEM;
+    }
+    if (old) {
         k_memcpy(grown, table->entries, sizeof(fd_entry_t) * (size_t)table->cap);
         old->entries = table->entries;
         old->cap = table->cap;
