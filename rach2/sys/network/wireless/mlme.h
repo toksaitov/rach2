@@ -4,7 +4,7 @@
 #ifndef _WLAN_MLME_H_
 #define _WLAN_MLME_H_
 
-#include "wireless.h"
+#include "work.h"
 
 /* A request frame: header, fixed fields, SAE data and elements. */
 #define WLAN_MLME_FRAME_MAX 2048
@@ -25,7 +25,7 @@
 #define WLAN_MLME_RX_PROTECTED 0x01 /* decrypted by CCMP, or BIP's MMIE checked */
 #define WLAN_MLME_ASSOC_NO_HT  0x01 /* leave HT out, as a TKIP pairwise cipher needs */
 
-/* Calls the MLME makes into the interface that embeds it. Both run on the
+/* Calls the MLME makes into the interface that embeds it. Each runs on the
  * wireless worker with the kernel lock and no net_lock, and may not call
  * back into the MLME. */
 struct wlan_mlme_ops {
@@ -39,6 +39,9 @@ struct wlan_mlme_ops {
      * the AP of the change, borrowed until return. */
     void (*state)(struct wlan *wlan, const struct wlan_bss *bss, enum wlan_sta_state old_state,
                   enum wlan_sta_state new_state);
+    /** Report an event; the registry passes wlan_event, which keeps mlme.c
+     * free of a link-time dependence on nl80211, as scan.c is. */
+    wlan_event_fn event;
 };
 
 /* nl80211's AUTHENTICATE. data is AUTH_DATA: for SAE the transaction number
@@ -64,7 +67,8 @@ struct wlan_mlme_assoc {
     unsigned flags;            /* WLAN_MLME_ASSOC_* */
 };
 
-/* Private to mlme.c but for its first member, which work.c sees. */
+/* Private to mlme.c but for its first member, which work.c sees. Two
+ * alternate, as the scan's steps do, since a callback cannot queue its own. */
 struct wlan_mlme_timer {
     struct wlan_work work;
     struct wlan_mlme *mlme;
@@ -77,15 +81,17 @@ struct wlan_mlme_timer {
 struct wlan_mlme {
     struct wlan *wlan;
     struct wlan_radio *radio;
+    struct wlan_scan *scan; /* NULL when nothing scans */
     const struct wlan_mlme_ops *ops;
     enum wlan_sta_state state;
-    struct wlan_bss *bss; /* referenced while the state is not NONE */
-    unsigned algorithm;   /* of the authentication under way */
-    unsigned sae_trans;   /* transaction of the last SAE frame sent */
-    int peer_confirmed;   /* the AP's SAE confirm came before ours */
-    int waiting;          /* for user space's next SAE frame */
-    unsigned tries;       /* of the request in frame */
-    int mfp;              /* association asked for 802.11w */
+    struct wlan_bss *bss;               /* held while the state is not NONE */
+    const struct wlan_channel *channel; /* the AP's, and the scan's home */
+    unsigned algorithm;                 /* of the authentication under way */
+    unsigned sae_trans;                 /* transaction of the last SAE frame sent */
+    int peer_confirmed;                 /* the AP's SAE confirm came before ours */
+    int waiting;                        /* for user space's next SAE frame */
+    unsigned tries;                     /* of the request in frame */
+    int mfp;                            /* association asked for 802.11w */
     unsigned assoc_flags;
     uint16_t aid;                       /* association ID, 1 to 2007 */
     uint16_t capability;                /* the AP's, from the association response */
@@ -106,17 +112,18 @@ struct wlan_mlme {
 
 /*
  * Every call below runs on the wireless worker with the kernel lock and no
- * net_lock, except wlan_mlme_stop. Events go to wlan_event: AUTHENTICATE
+ * net_lock, except wlan_mlme_stop. Events go to ops->event: AUTHENTICATE
  * and ASSOCIATE with the AP's answer, or with no frame when the request
  * timed out; DEAUTHENTICATE and DISASSOCIATE with the frame received, or
  * with the frame sent or built here and locally_generated set;
  * UNPROT_DEAUTHENTICATE and UNPROT_DISASSOCIATE with the frame dropped.
  */
 
-/** Prepare m for wlan on radio, in state NONE; ops is borrowed until
- * wlan_mlme_stop returns. */
+/** Prepare m for wlan on radio, in state NONE. While a BSS is in use the
+ * MLME holds it and makes its channel the home of scan, which may be NULL.
+ * scan and ops are borrowed until wlan_mlme_stop returns. */
 void wlan_mlme_init(struct wlan_mlme *m, struct wlan *wlan, struct wlan_radio *radio,
-                    const struct wlan_mlme_ops *ops);
+                    struct wlan_scan *scan, const struct wlan_mlme_ops *ops);
 
 /** Drop to NONE without frames or events and cancel the timers; for an
  * interface going down or a radio unregistered. Process context, not the

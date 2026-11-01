@@ -174,9 +174,12 @@ static void drop(struct wlan_mlme *m)
 {
     arm(m, 0);
     set_state(m, WLAN_STA_NONE);
-    if (m->bss && m->bss->refs)
-        --m->bss->refs;
+    if (m->bss)
+        wlan_bss_put(m->bss);
     m->bss = 0;
+    m->channel = 0;
+    if (m->scan)
+        wlan_scan_set_home(m->scan, 0, 0);
     m->waiting = 0;
     m->peer_confirmed = 0;
     m->tries = 0;
@@ -200,7 +203,7 @@ static void fail(struct wlan_mlme *m, enum wlan_event_type type, const uint8_t *
     ev.frame_len = f ? len : 0;
     ev.status = (uint16_t)status;
     drop(m);
-    wlan_event(m->wlan, &ev);
+    m->ops->event(m->wlan, &ev);
 }
 
 /**
@@ -223,7 +226,7 @@ static void disconnect(struct wlan_mlme *m, unsigned stype, unsigned reason, int
     ev.reason = (uint16_t)reason;
     ev.locally_generated = 1;
     drop(m);
-    wlan_event(m->wlan, &ev);
+    m->ops->event(m->wlan, &ev);
 }
 
 /** Send the request in m->frame and wait timeout ms for its answer. */
@@ -308,7 +311,10 @@ static int auth_begin(struct wlan_mlme *m, const struct wlan_mlme_auth *req)
     if (err)
         return err;
     m->bss = req->bss;
-    ++m->bss->refs;
+    wlan_bss_hold(m->bss);
+    m->channel = ch;
+    if (m->scan)
+        wlan_scan_set_home(m->scan, ch, 0);
     m->algorithm = req->algorithm;
     m->sae_trans = 0;
     m->peer_confirmed = 0;
@@ -373,7 +379,7 @@ static void rx_auth_open(struct wlan_mlme *m, const uint8_t *f, unsigned len, un
     ev_init(m, &ev, WLAN_EVENT_AUTHENTICATE);
     ev.frame = f;
     ev.frame_len = len;
-    wlan_event(m->wlan, &ev);
+    m->ops->event(m->wlan, &ev);
 }
 
 /**
@@ -409,7 +415,7 @@ static void rx_auth_sae(struct wlan_mlme *m, const uint8_t *f, unsigned len, uns
     ev.frame = f;
     ev.frame_len = len;
     ev.status = (uint16_t)status;
-    wlan_event(m->wlan, &ev);
+    m->ops->event(m->wlan, &ev);
 }
 
 /** Take an authentication frame from the AP being authenticated with. */
@@ -693,7 +699,7 @@ static int rx_assoc(struct wlan_mlme *m, const uint8_t *f, unsigned len)
     ev_init(m, &ev, WLAN_EVENT_ASSOCIATE);
     ev.frame = f;
     ev.frame_len = len;
-    wlan_event(m->wlan, &ev);
+    m->ops->event(m->wlan, &ev);
     return 1;
 }
 
@@ -825,7 +831,7 @@ static int rx_disconnect(struct wlan_mlme *m, const uint8_t *f, unsigned len, un
     ev.frame_len = len;
     ev.reason = (uint16_t)get16(f + HDR);
     drop(m);
-    wlan_event(m->wlan, &ev);
+    m->ops->event(m->wlan, &ev);
     return 1;
 }
 
@@ -868,7 +874,7 @@ static int rx_unprotected(struct wlan_mlme *m, const uint8_t *f, unsigned len, u
     ev.frame = f;
     ev.frame_len = len;
     ev.reason = (uint16_t)get16(f + HDR);
-    wlan_event(m->wlan, &ev);
+    m->ops->event(m->wlan, &ev);
     return 1;
 }
 
@@ -929,13 +935,14 @@ int wlan_mlme_rx(struct wlan_mlme *m, const uint8_t *f, unsigned len, unsigned f
 }
 
 void wlan_mlme_init(struct wlan_mlme *m, struct wlan *wlan, struct wlan_radio *radio,
-                    const struct wlan_mlme_ops *ops)
+                    struct wlan_scan *scan, const struct wlan_mlme_ops *ops)
 {
     unsigned i;
 
     k_memset(m, 0, sizeof(*m));
     m->wlan = wlan;
     m->radio = radio;
+    m->scan = scan;
     m->ops = ops;
     m->state = WLAN_STA_NONE;
     for (i = 0; i < 2; ++i) {

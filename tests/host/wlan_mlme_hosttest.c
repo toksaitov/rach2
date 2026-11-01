@@ -50,6 +50,7 @@ static unsigned configured;   /* MHz of the last channel the radio took */
 
 static struct wlan_radio radio;
 static struct wlan_mlme mlme;
+static struct wlan_scan scan;
 static struct wlan_bss bss_a, bss_b;
 static const uint8_t sta[6] = {2, 0, 0, 0, 0, 1};
 static const uint8_t ap_a[6] = {2, 0, 0, 0, 0xa, 1};
@@ -93,8 +94,29 @@ void wlan_cancel_work(struct wlan_work *work)
             works[i] = 0;
 }
 
+/** Hold a BSS, as bss.c does. */
+void wlan_bss_hold(struct wlan_bss *bss)
+{
+    bss->refs++;
+}
+
+/** Drop a hold, as bss.c does. */
+void wlan_bss_put(struct wlan_bss *bss)
+{
+    CHECK(bss->refs != 0);
+    if (bss->refs)
+        bss->refs--;
+}
+
+/** Keep the scan's home channel, which the MLME sets. */
+void wlan_scan_set_home(struct wlan_scan *s, const struct wlan_channel *channel, unsigned filters)
+{
+    CHECK(filters == 0);
+    s->home = channel;
+}
+
 /** Keep the event and a copy of its borrowed frame. */
-void wlan_event(struct wlan *wlan, const struct wlan_event *event)
+static void iface_event(struct wlan *wlan, const struct wlan_event *event)
 {
     struct seen *s;
 
@@ -218,7 +240,7 @@ static void iface_state(struct wlan *wlan, const struct wlan_bss *bss,
         states[n_states++] = new_state;
 }
 
-static const struct wlan_mlme_ops iface_ops = {iface_tx, iface_state};
+static const struct wlan_mlme_ops iface_ops = {iface_tx, iface_state, iface_event};
 
 /** Compare n bytes. */
 static int equal(const uint8_t *a, const uint8_t *b, unsigned n)
@@ -338,7 +360,8 @@ static void reset(void)
     make_radio();
     make_bss(&bss_a, ap_a, 2412);
     make_bss(&bss_b, ap_b, 2437);
-    wlan_mlme_init(&mlme, 0, &radio, &iface_ops);
+    k_memset(&scan, 0, sizeof(scan));
+    wlan_mlme_init(&mlme, 0, &radio, &scan, &iface_ops);
 }
 
 /** Give the station a frame from the AP, unprotected unless flags say. */
@@ -522,6 +545,7 @@ static void open_association(void)
     reset();
     CHECK(open_auth(&bss_a) == 0);
     CHECK(configured == 2412 && bss_a.refs == 1);
+    CHECK(scan.home == mlme.channel && mlme.channel->frequency == 2412);
     CHECK(mlme.state == WLAN_STA_AUTHENTICATING && n_sent == 1);
     CHECK(sent_is(&sent[0], IEEE80211_STYPE_AUTH, ap_a) && sent[0].len == HDR + 6);
     CHECK(get16(sent[0].f + HDR) == 0 && get16(sent[0].f + HDR + 2) == 1);
@@ -684,6 +708,7 @@ static void reassociation(void)
     CHECK(get16(seen[0].f) == (IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_DEAUTH));
     CHECK(n_sent == 1 && sent_is(&sent[0], IEEE80211_STYPE_AUTH, ap_b));
     CHECK(bss_a.refs == 0 && bss_b.refs == 1 && configured == 2437);
+    CHECK(scan.home && scan.home->frequency == 2437);
     CHECK(ap_auth(ap_b, WLAN_AUTH_OPEN, 2, WLAN_STATUS_SUCCESS, 0) == 1);
     CHECK(assoc(&bss_b, ap_a, 0) == 0);
     CHECK(sent_is(&sent[1], IEEE80211_STYPE_REASSOC_REQ, ap_b));
@@ -729,6 +754,7 @@ static void vanishing_ap(void)
     CHECK(seen[0].ev.type == WLAN_EVENT_DEAUTHENTICATE && seen[0].ev.locally_generated);
     CHECK(seen[0].ev.reason == WLAN_REASON_DISASSOC_DUE_TO_INACTIVITY && seen[0].has_frame);
     CHECK(bss_a.refs == 0 && queued() == 0 && states[n_states - 1] == WLAN_STA_NONE);
+    CHECK(!scan.home && !mlme.channel);
 }
 
 /** Under 802.11w: unprotected deauthentication and disassociation dropped
