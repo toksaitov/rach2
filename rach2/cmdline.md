@@ -37,8 +37,8 @@ These options exist for the suites, which use them to bring about a fault or a b
 
 | Option | Effect |
 | --- | --- |
-| `rach2.blocklag=N` | Answer disk 0's requests `N` ticks late, 1 to 1000000, through a wrapper that sleeps. Its partition nodes, and `/dev/bootpart` when the boot partition is on disk 0, are on the wrapper; the root's window and every other disk keep their own devices. |
-| `rach2.lagdeadline=T`, `rach2.lagperiods=N` | With `rach2.blocklag`: the wrapper's deadline period in ticks and the periods a request waits before it fails, each 1 to 1000000, in place of 500 ticks and one period. |
+| `rach2.blocklag=N` | Answer disk 0's requests `N` hundredths of a second late, 1 to 1000000, through a wrapper that sleeps. Its partition nodes, and `/dev/bootpart` when the boot partition is on disk 0, are on the wrapper; the root's window and every other disk keep their own devices. |
+| `rach2.lagdeadline=T`, `rach2.lagperiods=N` | With `rach2.blocklag`: the wrapper's deadline period in hundredths of a second and the periods a request waits before it fails, each 1 to 1000000, in place of five seconds and one period. |
 | `rach2.blockfail=N` | With `rach2.blocklag`: the `N`th write through the wrapper fails with `EIO`, `N` from 1 to 1000000. |
 | `rach2.blockdead=P` | With `rach2.blocklag`: MBR partition `P` is built over a second device that takes every request and answers none. |
 | `rach2.blockpool=N` | Allow `N` block requests in flight, 1 to 16, in place of 16. |
