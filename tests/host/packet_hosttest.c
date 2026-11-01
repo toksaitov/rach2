@@ -40,7 +40,7 @@ extern void *memcpy(void *d, const void *s, unsigned long n);
 /* ---- what the layers under the parsers record ---- */
 
 /* The frames or datagrams each layer above was given. */
-static unsigned to_arp, to_icmp, to_udp, to_tcp, to_raw, to_packet;
+static unsigned to_arp, to_icmp, to_udp, to_tcp, to_raw, to_packet, to_ip6;
 
 uint8_t net_mac[6] = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56};
 uint32_t net_ip_addr = 0x0A00020Fu; /* 10.0.2.15 */
@@ -63,6 +63,15 @@ void packet_rx(struct netdev *nd, uint16_t etype, const uint8_t *data, uint16_t 
     (void)data;
     (void)len;
     to_packet++;
+}
+
+/** Count an IPv6 datagram received. */
+void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
+{
+    (void)nd;
+    (void)data;
+    (void)len;
+    to_ip6++;
 }
 
 /** Count an ICMP message received. */
@@ -391,7 +400,7 @@ static void deliver(const uint8_t *bytes, unsigned len)
 static void reset(void)
 {
     the_iface.up = 1;
-    to_arp = to_icmp = to_udp = to_tcp = to_raw = to_packet = 0;
+    to_arp = to_icmp = to_udp = to_tcp = to_raw = to_packet = to_ip6 = 0;
 }
 
 /**
@@ -918,7 +927,12 @@ int main(void)
     n = build_eth(f, 0x88B5);
     deliver(f, n + 20);
     CHECK("an unknown ethertype reaches no parser",
-          to_udp == 0 && to_tcp == 0 && to_icmp == 0 && to_arp == 0);
+          to_udp == 0 && to_tcp == 0 && to_icmp == 0 && to_arp == 0 && to_ip6 == 0);
+
+    reset();
+    n = build_eth(f, 0x86DD);
+    deliver(f, n + 40);
+    CHECK("IPv6 reaches the IPv6 layer and the packet sockets", to_ip6 == 1 && to_packet == 1);
 
     reset();
     n = build_eth(f, 0x0806);

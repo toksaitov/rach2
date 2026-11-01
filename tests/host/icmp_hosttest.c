@@ -1,6 +1,6 @@
 /*
  * Exercise ping deadlines with timer interrupts still pending at each send.
- * host-deps: rach2/sys/network/ip/icmp.c
+ * host-deps: rach2/sys/network/ip/icmp.c rach2/sys/network/ip6/addr6.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
 #include "network/ip/icmp.h"
@@ -121,6 +121,20 @@ int ip_tx_from(uint32_t src, uint32_t dst, uint8_t proto, const uint8_t *buf, ui
     (void)len;
     (void)ttl;
     CHECK(0, "no unsolicited transmission");
+    return 0;
+}
+
+/** No row pings over IPv6. */
+int icmp6_send(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t *msg, uint16_t len,
+               uint8_t hlim)
+{
+    (void)src;
+    (void)dst;
+    (void)ifindex;
+    (void)msg;
+    (void)len;
+    (void)hlim;
+    CHECK(0, "no IPv6 echo request");
     return 0;
 }
 

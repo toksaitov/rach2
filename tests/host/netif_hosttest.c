@@ -5,7 +5,7 @@
  * the descriptor accept reserves while it copies the peer's address.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
- * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: tests/host/compat/kheap_host.c rach2/sys/network/ip6/addr6.c
  * host-cflags: -Wno-int-to-pointer-cast
  *
  * User pointers are offsets in an arena, preserving the 32-bit syscall ABI
@@ -138,6 +138,24 @@ int raw_register(struct socket *s, uint8_t proto)
     (void)proto;
     CHECK(0, "no row registers a raw socket");
     return -ENOBUFS;
+}
+
+/** No row makes an IPv6 raw socket, which alone has an IPv6 source. */
+int raw_head_src6(struct socket *s, uint8_t *src)
+{
+    (void)s;
+    (void)src;
+    CHECK(0, "no row receives on an IPv6 raw socket");
+    return -1;
+}
+
+/** No row makes an IPv6 raw socket, which alone has an IPv6 source. */
+int raw_last_src6(struct socket *s, uint8_t *src)
+{
+    (void)s;
+    (void)src;
+    CHECK(0, "no row receives on an IPv6 raw socket");
+    return -1;
 }
 
 /** Fail the row: only accept's error path frees a descriptor here, and no
