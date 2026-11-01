@@ -219,11 +219,13 @@ static void check_entry_regs(void)
 }
 
 /**
- * Check that AT_RANDOM, at `random_ptr`, gives 16 bytes in the page of the
- * initial stack pointer `sp`, not all zero, and print them. The page's check
- * comes between the two of `random`, which is reported once both have run.
+ * Check that AT_RANDOM, at `random_ptr`, gives 16 bytes just above `end`,
+ * the end of the auxiliary vector, or 0 without its AT_NULL, where the
+ * kernel puts them below the strings, and not all zero, and print them. The
+ * place's check comes between the two of `random`, which is reported once
+ * both have run.
  */
-static void check_random(const u8 *random_ptr, const unsigned long *sp)
+static void check_random(const u8 *random_ptr, const u8 *end)
 {
     int present = random_ptr != 0;
     u32 acc = 1;
@@ -233,8 +235,8 @@ static void check_random(const u8 *random_ptr, const unsigned long *sp)
         puts_("FAIL: no AT_RANDOM\n");
         fails++;
     }
-    check(((unsigned long)random_ptr & ~0xFFFul) == ((unsigned long)sp & ~0xFFFul), "random-page",
-          "AT_RANDOM not in the initial stack page");
+    check(end != 0 && random_ptr >= end && random_ptr < end + 64, "random-page",
+          "AT_RANDOM not just above the auxiliary vector");
     if (random_ptr) {
         const u8 *r = random_ptr;
 
@@ -276,6 +278,7 @@ void probe_main(unsigned long *sp)
     int saw_null = 0;
     int saw_secure = 0;
     u8 *random_ptr = 0;
+    const u8 *auxv_end = 0;
     unsigned long pagesz = 0;
     unsigned long phnum = 0;
     unsigned long phent = 0;
@@ -325,6 +328,7 @@ void probe_main(unsigned long *sp)
 
         if (type == AT_NULL) {
             saw_null = 1;
+            auxv_end = (const u8 *)&auxv[i + 2];
             break;
         }
         if (type == AT_RANDOM) {
@@ -366,7 +370,7 @@ void probe_main(unsigned long *sp)
     check(entry != 0, "entry", "AT_ENTRY == 0");
     check(minsigstksz > 512, "minsigstksz", "AT_MINSIGSTKSZ missing or smaller than a frame");
 
-    check_random(random_ptr, sp);
+    check_random(random_ptr, auxv_end);
 
     report_finish();
     if (fails == 0) {

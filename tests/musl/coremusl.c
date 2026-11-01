@@ -54,6 +54,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/auxv.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
@@ -77,8 +78,7 @@ static char dir_path[256], core_path[272], target_path[272];
  * A core file's layout on each architecture: its ELF class and machine, and
  * the offsets of what the rows read in the notes, NT_PRSTATUS's signal and
  * pid and NT_PRPSINFO's program name, whose structs Linux lays out with
- * longs; NT_AUXV is pairs of longs. STACK_TOP is the end of the stack, the
- * kernel at 3 GiB on i386 and the last page of the lower half on x86-64.
+ * longs; NT_AUXV is pairs of longs.
  */
 #if defined __x86_64__
 typedef Elf64_Ehdr Ehdr;
@@ -90,7 +90,6 @@ typedef Elf64_Nhdr Nhdr;
 #define PR_PID        32
 #define PRPSINFO_SIZE 136
 #define PR_FNAME      40
-#define STACK_TOP     0x00007FFFFFFFF000ul
 /* r12, the fourth register of pr_reg, which starts at 112. */
 #define PR_SPIN_REG   136
 #define SPIN_LOOP     "xorl %%r12d, %%r12d\n1:\tincq %%r12\n\tmovq %%r12, %0\n\tjmp 1b"
@@ -105,7 +104,6 @@ typedef Elf32_Nhdr Nhdr;
 #define PR_PID        24
 #define PRPSINFO_SIZE 124
 #define PR_FNAME      28
-#define STACK_TOP     0xC0000000u
 /* esi, the fourth register of pr_reg, which starts at 72. */
 #define PR_SPIN_REG   84
 #define SPIN_LOOP     "xorl %%esi, %%esi\n1:\tincl %%esi\n\tmovl %%esi, %0\n\tjmp 1b"
@@ -115,10 +113,14 @@ typedef Elf32_Nhdr Nhdr;
 
 /* The pages `hole_dump` maps over the top of the stack: two readable ones,
  * the first marked and the second never touched, and the top page, where
- * the arguments are, with no access, so that the dump reads nothing there. */
-#define HOLE_BASE  (STACK_TOP - 3u * 4096u)
+ * the arguments are, with no access, so that the dump reads nothing there.
+ * `stack_top` is the end of the stack, which a kernel that randomizes the
+ * layout moves at each exec: the end of the page AT_EXECFN's string, the
+ * highest, ends in. */
+static uintptr_t stack_top;
+#define HOLE_BASE  (stack_top - 3u * 4096u)
 #define HOLE_FILL  0xA5
-#define ARGS_FLOOR (STACK_TOP - 4096u)
+#define ARGS_FLOOR (stack_top - 4096u)
 
 /* The word an aborting child stores MARK in, for its core to have. */
 static volatile uint32_t marker;
@@ -808,6 +810,8 @@ int main(int argc, char **argv)
     pid_t child;
 
     first_arg = argc > 0 ? (uintptr_t)argv[0] : 0;
+    stack_top = getauxval(AT_EXECFN);
+    stack_top = (stack_top + strlen((const char *)stack_top) + 4096u) & ~(uintptr_t)4095u;
     probe_args(argc, argv);
     report_begin(report_case(environ, "guest.default.coremusl"));
     if (!set_paths()) {
