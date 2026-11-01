@@ -110,7 +110,7 @@ as iproute2's
 .Xr ip 8
 sends one.
 The answers are queued on the socket as datagrams of messages, each at
-most 4096 bytes, which
+most 1500 bytes, which
 .Xr recv 2
 reads one at a time; a receive reports the kernel's address, a
 .Vt struct sockaddr_nl

@@ -4694,7 +4694,9 @@ static int32_t read_ready(fd_entry_t *entry, int fd, char __user *buf, uint32_t 
  * check made before the read never saw. `copy_to_user` fails on an address it
  * cannot fault in, so such a caller writes only its own memory; the copy stops
  * at the first iovec it cannot read or buffer it cannot write. The kernel
- * buffer is one datagram, SOCK_RECV_BUF_SIZE bytes, on the 16 KB kernel stack.
+ * buffer is one datagram, SOCK_RECV_BUF_SIZE bytes, on the 16 KB kernel stack;
+ * a longer datagram's tail is dropped, and `whole` gets its whole length, so
+ * that the caller reports it truncated as one cut by the user's buffers is.
  */
 int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t *src_ip,
                     uint16_t *src_port, int peek, int32_t *whole)
@@ -4706,6 +4708,7 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t 
     uint32_t held;
     int nonblock;
     int taken;
+    int length;
     int i;
 
     nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
@@ -4723,9 +4726,13 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t 
     }
 
     held = net_lock();
+    length = socket_dgram_pending(entry->sock);
     taken = socket_dgram_peek(entry->sock, 0, message, (int)sizeof(message));
     if (taken < 0) {
         taken = 0;
+    }
+    if (length < taken) {
+        length = taken;
     }
     if (peek) {
         socket_dgram_sender(entry->sock, src_ip, src_port);
@@ -4734,7 +4741,7 @@ int32_t readv_dgram(fd_entry_t *entry, uintptr_t iov_user, int iovcnt, uint32_t 
     }
     net_unlock(held);
     if (whole) {
-        *whole = taken;
+        *whole = length;
     }
 
     for (i = 0; i < iovcnt && (int)offset < taken; i++) {
