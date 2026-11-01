@@ -1,0 +1,80 @@
+.Dd November 2, 2026
+.Dt ICMP6 7
+.Os
+.Sh NAME
+.Nm icmp6
+.Nd ICMPv6, IPv6's control messages
+.Sh SYNOPSIS
+.In sys/socket.h
+.In netinet/in.h
+.In netinet/icmp6.h
+.Ft int
+.Fn socket "AF_INET6" "SOCK_RAW" "IPPROTO_ICMPV6"
+.Sh DESCRIPTION
+ICMPv6, RFC 4443, carries IPv6's errors, its echo requests and replies,
+neighbour discovery and MLD
+.Pq Xr ipv6 7 .
+The kernel checks each message's checksum over the pseudo-header and
+drops one that fails.
+.Pp
+It answers an echo request from the address it was sent to, or, sent to
+a group, from its own address on the link it came by, with the request's
+identifier, sequence and data, up to 65527 bytes, in fragments past the
+path MTU.
+An echo reply goes to the kernel's own ping
+.Pq Xr ping 2 ,
+which
+.Xr ping 1
+uses for an IPv6 address.
+A Packet Too Big that quotes a datagram this machine sent lowers the path
+MTU of its destination, never below 1280 bytes, for ten minutes.
+A destination unreachable, a time exceeded or a parameter problem is
+counted and given to the raw sockets alone.
+Router and neighbour solicitations and advertisements are neighbour
+discovery's, and MLD's queries and reports MLD's; a redirect is counted
+and ignored.
+.Pp
+The errors the kernel sends are a port unreachable for a UDP datagram no
+socket takes, an address unreachable for a datagram whose next hop never
+answered, a parameter problem for a header it cannot take, and a time
+exceeded for a reassembly not finished in 60 seconds.
+None answers an error or a datagram to a group, but a parameter problem
+about an unknown option whose type asks for one; each quotes as much of
+the datagram as keeps it within 1280 bytes; and those to another host
+leave at most one a second after a burst of six.
+.Pp
+A raw socket of
+.Dv IPPROTO_ICMPV6 ,
+which only effective user ID 0 may open, receives a copy of every ICMPv6
+message the machine accepts, without its IPv6 header, and its sender, as
+a
+.Vt struct sockaddr_in6
+whose scope id is the interface it came in on for a link-local sender.
+A message sent on it goes with the checksum the kernel computes, under
+the socket's IPv6 options, in fragments past the path MTU.
+Its queue holds eight messages of up to 1500 bytes and drops the newest
+when full.
+Its
+.Dv ICMP6_FILTER ,
+at level
+.Dv IPPROTO_ICMPV6 ,
+blocks the types whose bits are set, before a message takes a place in
+the queue; a new socket passes every type
+.Pq Xr setsockopt 2 .
+.Pp
+.Pa /proc/net/snmp6
+counts the messages received and sent, by type, and the malformed ones
+.Pq Xr proc 5 .
+.Sh SEE ALSO
+.Xr ping 1 ,
+.Xr ping 2 ,
+.Xr recv 2 ,
+.Xr setsockopt 2 ,
+.Xr socket 2 ,
+.Xr proc 5 ,
+.Xr ipv6 7
+.Sh STANDARDS
+RFC 4443, ICMPv6;
+RFC 4861, neighbour discovery;
+RFC 3810, MLDv2;
+RFC 8201, path MTU discovery.

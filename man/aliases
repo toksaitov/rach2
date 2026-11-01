@@ -456,6 +456,7 @@ tsort 1 busybox-coreutils
 tty 1 busybox-coreutils
 ttysize 1 busybox-miscutils
 udhcpc 1 busybox-networking
+udhcpc6 1 busybox-networking
 udpsvd 1 busybox-networking
 ugetrlimit 2 prlimit64
 umount2 2 mount

@@ -1,4 +1,4 @@
-.Dd September 24, 2026
+.Dd November 2, 2026
 .Dt NETUP 8
 .Os
 .Sh NAME
@@ -50,13 +50,56 @@ and
 entries; a
 .Ic gateway
 entry is optional.
+.It Ic iface Ar name Ic inet6 auto
+Turn on
+.Va accept_ra
+and
+.Va autoconf
+of the interface in
+.Pa /proc/sys/net/ipv6/conf ,
+so that it takes the addresses and routes its routers advertise.
+They are on unless a program turned them off: IPv6 needs no stanza.
+.It Ic iface Ar name Ic inet6 static
+Add the address of an
+.Ic address
+entry, written
+.Ar ADDR Ns / Ns Ar LEN
+or with its length in a
+.Ic netmask
+entry, and, with a
+.Ic gateway
+entry, a default route through that router at metric 1024, beside what
+the routers advertise.
+An address or route the interface has already is taken as done.
+.It Ic iface Ar name Ic inet6 manual
+Do nothing, as does
+.Ic inet6 loopback .
 .El
+.Pp
+An interface may have an
+.Ic inet
+stanza, an
+.Ic inet6
+stanza or both, each applied on its own; another
+.Ic inet6
+method, or an entry whose address does not parse, is reported and that
+stanza alone is skipped.
 .Pp
 A static stanza is validated in full before any
 .Xr ioctl 2
 changes the interface.
 Static configuration fails if the DHCP client's PID file identifies a
 running process, contains no valid positive process ID, or cannot be read.
+.Pp
+Before any interface,
+.Nm
+puts IPv6's stable secret in force as
+.Xr init 8
+does, from
+.Pa /var/lib/ipv6-stable-secret ,
+making it on the first run that finds none, so that the addresses a
+router's prefix gives stay the same from one boot to the next.
+This image has no DHCPv6 client.
 .Pp
 On a boot with
 .Ql rach2.ip=none ,
@@ -68,6 +111,8 @@ performs this job.
 .Bl -tag -width /etc/network/interfaces
 .It Pa /etc/network/interfaces
 Interface declarations and DHCP or static stanzas.
+.It Pa /var/lib/ipv6-stable-secret
+IPv6's stable secret, an address's text, mode 0600.
 .El
 .Sh EXAMPLES
 .Dl netup -a
@@ -82,7 +127,16 @@ A DHCP client that stops before it reaches the background produces
 or
 .Ql "netup: INTERFACE: dhcpc was killed by signal N before reaching the background" ;
 such a client may have left its address on the interface.
+An
+.Ic inet6 static
+stanza with no address or no prefix length, or with an address or
+gateway that is ::, ::1, a group or a mapped IPv4 address, produces
+.Ql "netup: INTERFACE: REASON"
+and changes nothing.
 .Sh SEE ALSO
 .Xr busybox-networking 1 ,
+.Xr proc 5 ,
+.Xr ipv6 7 ,
 .Xr recovery 7 ,
-.Xr dhcpc 8
+.Xr dhcpc 8 ,
+.Xr init 8

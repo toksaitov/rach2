@@ -16,13 +16,13 @@ A program's options and behavior are in its manual page, linked below. This sect
 * [nc(1)](../man/man1/nc.1) is a TCP client.
 * [httpd(8)](../man/man8/httpd.8) answers every request with an HTTP/1.0 status page that shows the request as the network stack decoded it.
 * [dhcpc(8)](../man/man8/dhcpc.8) takes a DHCP lease and keeps it for as long as it runs.
-* [netup(8)](../man/man8/netup.8) brings interfaces up from `/etc/network/interfaces`, the file BusyBox's `ifup` reads, and runs `dhcpc -b` for a `dhcp` stanza.
+* [netup(8)](../man/man8/netup.8) brings interfaces up from `/etc/network/interfaces`, the file BusyBox's `ifup` reads, runs `dhcpc -b` for a `dhcp` stanza, and applies `inet6` stanzas.
 
 `dhcpc` and `netup` are os-simple's counterparts of BusyBox's `udhcpc` and `ifup`, so one description of a network serves both images.
 
 ### init
 
-[init(8)](../man/man8/init.8) is process 1: it reaps orphans, keeps a console session running, and keeps [update(8)](../man/man8/update.8) running, the program that calls sync(2) every thirty seconds. On an image that has `/etc/acpid.conf` it keeps BusyBox's `acpid` running, which runs the actions under `/etc/acpi` for the power, volume and brightness keys, and it keeps each backlight's level across a reboot in `/var/lib/backlight`. `init.c` builds four programs, and an image stages one of them as `/sbin/init`:
+[init(8)](../man/man8/init.8) is process 1: it reaps orphans, keeps a console session running, and keeps [update(8)](../man/man8/update.8) running, the program that calls sync(2) every thirty seconds. On an image that has `/etc/acpid.conf` it keeps BusyBox's `acpid` running, which runs the actions under `/etc/acpi` for the power, volume and brightness keys, and it keeps each backlight's level across a reboot in `/var/lib/backlight` and IPv6's stable secret in `/var/lib/ipv6-stable-secret`. `init.c` builds four programs, and an image stages one of them as `/sbin/init`:
 
 * `init-shell` starts a shell on the console with no login. Only test images stage it.
 * `init-login` starts `/bin/login` and nothing else. os-simple and os-real use it.
@@ -98,6 +98,7 @@ The manifests in `krffs/manifests/` choose. They give the i686 paths under `buil
 | `dhcpmsg.c` | `dhcpc` | builds and checks DHCP messages |
 | `netcfg.c` | `netup` | reads and checks `/etc/network/interfaces` |
 | `ipcheck.c` | `dhcpc`, `netup` | decides whether an address, mask and gateway can be applied |
+| `ip6secret.c` | `netup`, the four inits | keeps IPv6's stable secret in `/var/lib` and puts it in force |
 | `gptdisk.c` | `diskctl`, `growroot`, `init-recovery` | reads a disk's identity and GUID table, and writes the table with its backup in the disk's last sectors |
 | `bootslot.c` | `bootctl`, `growboot` | checks the boot partition's FAT32 volume, and reads and writes its kernel and menu files and its GRUB environment block |
 | `bootverb.c` | `bootctl` | turns the command line into one verb |

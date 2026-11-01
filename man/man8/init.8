@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 2, 2026
 .Dt INIT 8
 .Os
 .Sh NAME
@@ -262,6 +262,20 @@ When it stops the machine, it saves each backlight's level there, under a
 temporary name renamed into place.
 It keeps at most four backlights, those present at boot.
 .Pp
+Every build keeps IPv6's stable secret across a reboot, so that the
+addresses a router's prefix gives the machine stay the same from one boot
+to the next, as Linux's do under systemd.
+At boot, before the first session, it writes the secret kept in
+.Pa /var/lib/ipv6-stable-secret
+to
+.Pa /proc/sys/net/ipv6/conf/default/stable_secret ,
+which
+.Xr proc 5
+describes, making the file from 16 random bytes when it is missing or
+does not hold an address, and turns IPv6 off and on again on each card
+that already took an address from a router's prefix, which makes it
+again with the secret.
+.Pp
 Services receive
 .Pa /dev/null
 as standard input.
@@ -343,6 +357,9 @@ The lock the volume and brightness actions hold while they run.
 .It Pa /var/lib/backlight
 Each backlight's level, saved when the machine stops and written back at
 boot.
+.It Pa /var/lib/ipv6-stable-secret
+IPv6's stable secret, an address's text, mode 0600, made at the first
+boot.
 .It Pa /etc/rach2/limits
 Initial resource limits.
 .It Pa /etc/rach2/sshd.conf
@@ -403,6 +420,13 @@ init: console: term: killed by signal N; login on the kernel console
 init: console: term: ended at its start; login on the kernel console
 init: console: /fb: ERROR; login on the kernel console
 .Ed
+.Pp
+A secret that cannot be kept or put in force is reported as:
+.Bd -literal -offset indent
+init: ipv6: cannot keep IPv6's stable secret in /var/lib/ipv6-stable-secret, so it is this boot's: ERROR
+init: ipv6: cannot set IPv6's stable secret: ERROR
+init: ipv6: CARD: cannot restart IPv6 with the stable secret: ERROR
+.Ed
 .Sh SEE ALSO
 .Xr acpid 1 ,
 .Xr login 1 ,
@@ -410,6 +434,7 @@ init: console: /fb: ERROR; login on the kernel console
 .Xr ntpd 1 ,
 .Xr term 1 ,
 .Xr bootlog 4 ,
+.Xr proc 5 ,
 .Xr sshd.conf 5 ,
 .Xr sysfs 5 ,
 .Xr limits 7 ,
