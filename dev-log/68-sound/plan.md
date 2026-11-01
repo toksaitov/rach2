@@ -61,6 +61,7 @@ The Lenovo is one machine: 1b and 8 take it by the `machine` skill's lock, and w
 | 7 sox_ng | 1d | `vendor/sox_ng/`, its build rule and Readme, the manifests' lines, `sox.1`, `rec.1`, `play.1`, `soxi.1` | 30-45 min |
 | 8 The proof on the Lenovo (owner-only, linux-host) | 2d, 4, 5b, 6b, 9 | the Lenovo steps; the root it installs; `dev-log/68-sound/proof.md` | 60-105 min with the owner |
 | 9 Fixtures | none | `tests/fixtures/audio/`: one short file of each of the five formats, made by FFmpeg on the build host, and their digests | 15-30 min |
+| 10 The mixer's levels kept across a reboot | none | `utils/init.c` beside the backlights' keeping; `init.8`, `mixer.4`, `mixer.1`, `utils/Readme.md`'s init entry; a QEMU machine case | 30-45 min |
 
 Sizes, from the research and the diagnoses (14 to 21 loop-hours in all): about 300 kernel lines in 1a and 1c together, 100 in Doom; 1,200 to 1,500 in 2a to 2c and 600 of host test; 1,000 to 1,300 in 3a to 3c, `mixer.c` being an extension, and 500 of test; 300 to 400 in 4; 900 to 1,200 in 5 and 500 of test; two GNU-root recipes of 40 to 90 lines each with their own configure; one vendored build for sox_ng.
 
@@ -226,6 +227,14 @@ The owner uses the sound on the Lenovo and the counters agree. Owner-only; the L
 
 * Five short files, WAV, FLAC, Ogg Vorbis, Opus and MP3, each a two-second tone, made once by FFmpeg on the build host, with their digests; small enough to commit.
 * Done: the files and digests are in `tests/fixtures/audio/`, with a Readme line saying how they were made.
+
+### 10. The mixer's levels kept across a reboot
+
+Added at the owner's request after the plan was approved (#2032): the level set with `mixer` survives a reboot, as alsactl store and restore keep it on Linux.
+
+* init restores every channel in `/dev/mixer`'s `SOUND_MIXER_READ_DEVMASK` from `/var/lib/mixer` at boot, before acpid and any session, and saves them when it stops the machine, as it keeps the backlights; reading the mask keeps 3c's channels without a change here. A missing or malformed file changes nothing.
+* `utils/mixer.c` stays 3c's; a change lost to a power cut, not a halt, is not kept.
+* Done: in QEMU with HDA, `mixer vol 5`, `reboot`, and `mixer` prints `vol 5:5`; without the file, the driver's default.
 
 ## The reviews
 
