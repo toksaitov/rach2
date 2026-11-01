@@ -1,5 +1,6 @@
 /* The station's management state machine: authentication, association,
- * connection monitoring, deauthentication and SA Query, after mac80211's mlme.c. */
+ * connection monitoring, deauthentication and SA Query, after mac80211's
+ * mlme.c. */
 #ifndef _WLAN_MLME_H_
 #define _WLAN_MLME_H_
 
