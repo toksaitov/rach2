@@ -131,7 +131,8 @@ another descriptor has the device, or the driver's stream is in use.
 for reading.
 .It Bq Er ENODEV
 .Xr open 2 :
-the driver has no streams.
+the driver has no streams, or no playback stream, as HD Audio's driver
+has none yet.
 .It Bq Er EINTR
 A signal ended a write that took nothing, or the wait of
 .Dv SNDCTL_DSP_SYNC ,
