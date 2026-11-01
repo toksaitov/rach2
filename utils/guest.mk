@@ -147,6 +147,9 @@ adduser-crash: $(SRC_adduser_crash) $(HDR_adduser_crash)
 bootctl: $(SRC_bootctl) $(HDR_bootctl)
 	$(UCC) $(UFLAGS) -o bootctl.new $(SRC_bootctl)
 	mv bootctl.new bootctl
+wsimrelay: $(SRC_wsimrelay) $(HDR_wsimrelay)
+	$(UCC) $(UFLAGS) -o wsimrelay.new $(SRC_wsimrelay)
+	mv wsimrelay.new wsimrelay
 
 clean:
 	rm -f $(UTILITIES) $(SBIN_PROGS) $(UTILITIES:=.new) $(SBIN_PROGS:=.new)

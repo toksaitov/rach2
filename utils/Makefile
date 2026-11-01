@@ -225,6 +225,12 @@ $(BUILD)/sbin/bootctl: $(SRC_bootctl) $(HDR_bootctl)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/bootctl.d -o $@ $(LINK_PRE) $(SRC_bootctl) $(LINK_POST)
 
+# wsimrelay links the medium (wsimmedium.c), which does no I/O, so that its
+# host test drives it beside the kernel's software radio.
+$(BUILD)/sbin/wsimrelay: $(SRC_wsimrelay) $(HDR_wsimrelay)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -MF $(BUILD)/sbin/wsimrelay.d -o $@ $(LINK_PRE) $(SRC_wsimrelay) $(LINK_POST)
+
 $(BUILD)/sbin/adduser-crash: $(SRC_adduser_crash) $(HDR_adduser_crash)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(DEF_adduser_crash) -MF $(BUILD)/sbin/adduser-crash.d -o $@ \

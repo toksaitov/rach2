@@ -10,7 +10,7 @@ UTILITIES = true false echo yes cat pwd touch mkdir rm mv cp ls ping nc \
             wifi
 
 SBIN_PROGS = init-shell init-login init-metal init-recovery login su sudo passwd adduser \
-             adduser-crash bootctl
+             adduser-crash bootctl wsimrelay
 
 SRC_ping = ping.c resolv.c
 HDR_ping = netdb.h pingcall.h
@@ -52,6 +52,8 @@ HDR_adduser_crash = pwauth.h
 DEF_adduser_crash = -DADDUSER_CRASH_POINT
 SRC_bootctl = bootctl.c bootslot.c bootverb.c grubslot.c
 HDR_bootctl = bootslot.h bootverb.h grubslot.h
+SRC_wsimrelay = wsimrelay.c wsimmedium.c
+HDR_wsimrelay = wsimmedium.h
 
 SRC_growboot = growboot.c bootslot.c
 HDR_growboot = bootslot.h
