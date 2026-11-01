@@ -1,12 +1,14 @@
 /*
  * dsp.c: /dev/dsp (dsp.h), OSS's audio device: for each direction an open
- * has, a buffer of periods between the program and the driver's stream, and
- * OSS's ioctls.
+ * has, a buffer of periods between the program and a stream, and OSS's
+ * ioctls. Each open plays on a virtual channel of its own (vchan.h), so
+ * that several play at once, and records on the device's stream.
  */
 
 #include "dsp.h"
 
 #include "audio.h"
+#include "vchan.h"
 
 #include "../io/poll.h"
 #include "../lib/kerrno.h"
@@ -94,6 +96,7 @@ struct dsp_count_info {
  */
 struct dsp_chan {
     audio_stream_t stream; /* the driver's view of the direction */
+    audio_driver_t *drv;   /* the driver of the stream */
     uint8_t *ring;
     uint32_t size;
     uint32_t head;
@@ -115,7 +118,6 @@ struct dsp_chan {
 struct dsp {
     struct dsp_chan play;
     struct dsp_chan rec;
-    audio_driver_t *drv; /* the driver it was opened on */
     struct spinlock lock;
     wait_queue_t wq;   /* readers, writers, pollers and a drain */
     int trigger;       /* PCM_ENABLE_INPUT and PCM_ENABLE_OUTPUT */
@@ -124,9 +126,6 @@ struct dsp {
     uint32_t given;
     uint32_t data_end;
 };
-
-/* The open that has the device, or NULL. There is one open at a time. */
-static struct dsp *dsp_owner;
 
 int dspdev_present(void)
 {
@@ -288,7 +287,7 @@ static int dsp_layout(struct dsp *d, struct dsp_chan *c)
     bytes = clamp(bytes, DSP_PERIOD_MIN, DSP_PERIOD_MAX);
     s->period_bytes = bytes;
     s->periods = clamp(count, 2, DSP_BUFFER_MAX / bytes);
-    rc = d->drv->stream_setup(s);
+    rc = c->drv->stream_setup(s);
     frame = frame_bytes(s);
     if (rc == 0 && (s->period_bytes == 0 || s->period_bytes > bytes ||
                     s->period_bytes % frame != 0 || s->device_periods == 0 ||
@@ -349,7 +348,7 @@ static int dsp_start(struct dsp *d)
     d->given = 0;
     d->data_end = 0;
     c->running = 1;
-    rc = d->drv->stream_start(&c->stream);
+    rc = c->drv->stream_start(&c->stream);
     if (rc != 0) {
         c->running = 0;
     }
@@ -367,7 +366,7 @@ static int dsp_record_start(struct dsp *d)
         return 0;
     }
     c->running = 1;
-    rc = d->drv->stream_start(&c->stream);
+    rc = c->drv->stream_start(&c->stream);
     if (rc != 0) {
         c->running = 0;
     }
@@ -382,8 +381,8 @@ static void dsp_halt(struct dsp *d, struct dsp_chan *c)
     if (!c->running) {
         return;
     }
-    c->bytes += d->drv->stream_position(&c->stream) * frame_bytes(&c->stream);
-    d->drv->stream_stop(&c->stream);
+    c->bytes += c->drv->stream_position(&c->stream) * frame_bytes(&c->stream);
+    c->drv->stream_stop(&c->stream);
     c->running = 0;
     wq_wake(&d->wq, c == &d->rec ? WQ_DATA : WQ_ROOM);
 }
@@ -437,7 +436,7 @@ static int dsp_drained(void *arg)
     if (c->used >= frame_bytes(&c->stream)) {
         return 0;
     }
-    return (int32_t)(d->drv->stream_position(&c->stream) - d->data_end) >= 0;
+    return (int32_t)(c->drv->stream_position(&c->stream) - d->data_end) >= 0;
 }
 
 /**
@@ -501,9 +500,11 @@ static int dsp_configure(struct dsp *d, audio_format_t format, int channels, uin
 }
 
 /** Set direction `c` of the new open `d` up as `dir`, at OSS's defaults,
- * over the buffer `ring`. */
+ * over the buffer `ring`: playback on a virtual channel of the mix, and
+ * capture on the device's stream. */
 static void dsp_chan_init(struct dsp *d, struct dsp_chan *c, audio_dir_t dir, uint8_t *ring)
 {
+    c->drv = dir == AUDIO_CAPTURE ? audio : &vchan_driver;
     c->ring = ring;
     c->stream.dir = dir;
     c->stream.format = AUDIO_U8;
@@ -521,11 +522,11 @@ static int dsp_take(struct dsp *d)
     int rc = 0;
 
     if (d->play.ring) {
-        rc = d->drv->stream_open(&d->play.stream);
+        rc = d->play.drv->stream_open(&d->play.stream);
         if (rc == 0) {
             rc = dsp_layout(d, &d->play);
             if (rc != 0) {
-                d->drv->stream_close(&d->play.stream);
+                d->play.drv->stream_close(&d->play.stream);
             }
         }
         if (rc != 0) {
@@ -533,15 +534,15 @@ static int dsp_take(struct dsp *d)
         }
     }
     if (d->rec.ring) {
-        rc = d->drv->stream_open(&d->rec.stream);
+        rc = d->rec.drv->stream_open(&d->rec.stream);
         if (rc == 0) {
             rc = dsp_layout(d, &d->rec);
             if (rc != 0) {
-                d->drv->stream_close(&d->rec.stream);
+                d->rec.drv->stream_close(&d->rec.stream);
             }
         }
         if (rc != 0 && d->play.ring) {
-            d->drv->stream_close(&d->play.stream);
+            d->play.drv->stream_close(&d->play.stream);
         }
     }
     return rc;
@@ -560,9 +561,6 @@ int32_t dspdev_open(fd_entry_t *e, int flags)
     if (mode == 3) {
         return -EINVAL;
     }
-    if (dsp_owner) {
-        return -EBUSY;
-    }
     d = (struct dsp *)kzalloc(sizeof(*d));
     if (mode != 0) {
         out = (uint8_t *)kmalloc(DSP_BUFFER_MAX);
@@ -570,15 +568,12 @@ int32_t dspdev_open(fd_entry_t *e, int flags)
     if (mode != 1) {
         in = (uint8_t *)kmalloc(DSP_BUFFER_MAX);
     }
-    rc = !d || (mode != 0 && !out) || (mode != 1 && !in) ? -ENOMEM : dsp_owner ? -EBUSY : 0;
-    if (rc != 0) {
+    if (!d || (mode != 0 && !out) || (mode != 1 && !in)) {
         kfree(out);
         kfree(in);
         kfree(d);
-        return rc;
+        return -ENOMEM;
     }
-    dsp_owner = d;
-    d->drv = audio;
     wait_queue_init(&d->wq);
     d->trigger = PCM_ENABLE_INPUT | PCM_ENABLE_OUTPUT;
     if (out) {
@@ -589,7 +584,6 @@ int32_t dspdev_open(fd_entry_t *e, int flags)
     }
     rc = dsp_take(d);
     if (rc != 0) {
-        dsp_owner = NULL;
         kfree(out);
         kfree(in);
         kfree(d);
@@ -827,7 +821,7 @@ static int32_t dsp_ptr(struct dsp *d, struct dsp_chan *c, uintptr_t arg)
     }
     frame = frame_bytes(&c->stream);
     if (c->running) {
-        pos = d->drv->stream_position(&c->stream);
+        pos = c->drv->stream_position(&c->stream);
     }
     flags = spin_lock_irqsave(&d->lock);
     info.blocks = (int)c->blocks;
@@ -849,7 +843,7 @@ static int32_t dsp_odelay(struct dsp *d, uintptr_t arg)
         return -EINVAL;
     }
     if (c->running) {
-        bytes += d->drv->delay(&c->stream) * frame_bytes(&c->stream);
+        bytes += c->drv->delay(&c->stream) * frame_bytes(&c->stream);
     }
     return int_out(arg, (int)bytes);
 }
@@ -958,13 +952,12 @@ void dspdev_close(fd_entry_t *e)
     dsp_halt(d, &d->play);
     dsp_halt(d, &d->rec);
     if (d->play.ring) {
-        d->drv->stream_close(&d->play.stream);
+        d->play.drv->stream_close(&d->play.stream);
     }
     if (d->rec.ring) {
-        d->drv->stream_close(&d->rec.stream);
+        d->rec.drv->stream_close(&d->rec.stream);
     }
     e->priv = NULL;
-    dsp_owner = NULL;
     kfree(d->play.ring);
     kfree(d->rec.ring);
     kfree(d);
