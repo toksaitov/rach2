@@ -22,6 +22,11 @@ void spin_lock(struct spinlock *lock)
     }
 }
 
+int spin_trylock(struct spinlock *lock)
+{
+    return arch_atomic_xchg(&lock->locked, 1u) == 0;
+}
+
 void spin_unlock(struct spinlock *lock)
 {
     (void)arch_atomic_xchg(&lock->locked, 0u);

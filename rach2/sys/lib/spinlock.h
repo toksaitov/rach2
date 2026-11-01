@@ -25,6 +25,13 @@ struct spinlock {
 /** Take `lock`, with interrupts already off. */
 void spin_lock(struct spinlock *lock);
 
+/** Take `lock` if it is free, with interrupts already off: 1 when this
+ * call took it, 0 when it was held, in which case nothing changed. A
+ * caller that an interrupt may have stopped in the middle of the holder's
+ * region, on the same processor, takes the lock this way, since spinning
+ * there would never end. */
+int spin_trylock(struct spinlock *lock);
+
 /** Give `lock` back, leaving interrupts as they are. */
 void spin_unlock(struct spinlock *lock);
 
