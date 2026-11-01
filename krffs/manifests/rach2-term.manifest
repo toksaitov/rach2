@@ -62,7 +62,7 @@ text 0644 /etc/rach2/limits # The limits every session starts with: a name, the 
 # since a router need not answer queries itself. utils/resolv.c reads the
 # first `nameserver` line, and musl's resolver up to three.
 text 0644 /etc/resolv.conf nameserver 1.1.1.1\nnameserver 1.0.0.1\n
-text 0644 /etc/hosts 127.0.0.1 localhost\n
+text 0644 /etc/hosts 127.0.0.1 localhost\n::1       localhost ip6-localhost ip6-loopback\n
 text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
 
 # The network configuration `ifup -a` reads, in the file where Debian keeps
@@ -111,6 +111,9 @@ dir 0755 /usr/share/udhcpc
 # The script udhcpc runs when a lease arrives or ends, which turns the lease
 # into an address, a route and a resolver.
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
+# The script udhcpc6 runs for a DHCPv6 lease, which turns it into an address
+# and resolvers (busybox-networking(1)).
+file 0755 /usr/share/udhcpc/default6.script krffs/udhcpc6-default.script
 # The keymaps, which loadkeys finds by name, as in `loadkeys -u kg alt-shift`
 # (vendor/keymaps/Readme.md).
 tree 0644 /usr/share/kbd/keymaps/xkb vendor/keymaps/xkb

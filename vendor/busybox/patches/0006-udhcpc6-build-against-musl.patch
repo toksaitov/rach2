@@ -1,0 +1,19 @@
+Rach2: make udhcpc6 build against the ported musl.
+
+`networking/udhcp/d6_dhcpc.c` includes `<linux/filter.h>`, which the ported
+musl does not have, for a BPF block upstream keeps inside `#if 0`, as
+`0001-udhcpc-build-against-musl.patch` says of `dhcpc.c`. The include goes;
+the rest of the file needs nothing musl lacks.
+
+--- a/networking/udhcp/d6_dhcpc.c
++++ b/networking/udhcp/d6_dhcpc.c
+@@ -61,7 +61,8 @@
+ 
+ #include <netinet/if_ether.h>
+ #include <netpacket/packet.h>
+-#include <linux/filter.h>
++/* Rach2: the ported musl has no <linux/filter.h>, which only the BPF block
++ * below, inside #if 0 upstream, would need. */
+ 
+ /* "struct client_data_t client_data" is in bb_common_bufsiz1 */
+ 

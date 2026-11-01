@@ -148,7 +148,7 @@ dir 0755 /etc/rach2
 text 0644 /etc/rach2/limits # The limits every session starts with: a name, the soft value and the\n# hard one; unlimited for none. Root may raise them.\nnproc 256 512\nnofile 1024 524288\nas unlimited unlimited\n
 text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
 text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
-text 0644 /etc/hosts 127.0.0.1   localhost\n10.0.2.2    gateway\n10.0.2.3    dns\n10.0.2.15   rach2\n
+text 0644 /etc/hosts 127.0.0.1   localhost\n::1         localhost ip6-localhost ip6-loopback\n10.0.2.2    gateway\n10.0.2.3    dns\n10.0.2.15   rach2\n
 
 # The network configuration `ifup -a` reads, in the file where Debian keeps
 # it and BusyBox's ifup reads it. `dhcp` brings the machine up on whatever
@@ -196,6 +196,9 @@ dir 0755 /usr/share/udhcpc
 # The script udhcpc runs when a lease arrives or ends, which turns the lease
 # into an address, a route and a resolver.
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
+# The script udhcpc6 runs for a DHCPv6 lease, which turns it into an address
+# and resolvers (busybox-networking(1)).
+file 0755 /usr/share/udhcpc/default6.script krffs/udhcpc6-default.script
 # The keymaps, which loadkeys finds by name, as in `loadkeys -u kg alt-shift`
 # (vendor/keymaps/Readme.md).
 tree 0644 /usr/share/kbd/keymaps/xkb vendor/keymaps/xkb

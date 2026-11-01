@@ -165,7 +165,7 @@ text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\n
 # and this machine's own name, which a program on it resolving `rach2` asks
 # for.
 text 0644 /etc/resolv.conf # written by udhcpc when a lease arrives\n
-text 0644 /etc/hosts 127.0.0.1   localhost\n127.0.1.1   rach2\n
+text 0644 /etc/hosts 127.0.0.1   localhost\n::1         localhost ip6-localhost ip6-loopback\n127.0.1.1   rach2\n
 
 # The network configuration `ifup -a` reads, in the file where Debian keeps
 # it and BusyBox's ifup reads it. `dhcp` brings the machine up on whatever
@@ -207,6 +207,9 @@ dir 0755 /usr/share/udhcpc
 # The script udhcpc runs when a lease arrives or ends, which turns the lease
 # into an address, a route and a resolver.
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
+# The script udhcpc6 runs for a DHCPv6 lease, which turns it into an address
+# and resolvers (busybox-networking(1)).
+file 0755 /usr/share/udhcpc/default6.script krffs/udhcpc6-default.script
 # The keymaps, which loadkeys finds by name, as in `loadkeys -u kg alt-shift`
 # (vendor/keymaps/Readme.md).
 tree 0644 /usr/share/kbd/keymaps/xkb vendor/keymaps/xkb

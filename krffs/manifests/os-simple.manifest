@@ -48,7 +48,7 @@ file 0600 /etc/shadow krffs/shadow
 text 0644 /etc/group root:x:0:\ntest:x:1000:\n
 text 0644 /etc/shells /bin/ish\n/bin/sh\n
 text 0644 /etc/resolv.conf nameserver 10.0.2.3\n
-text 0644 /etc/hosts 127.0.0.1   localhost\n10.0.2.2    gateway\n10.0.2.3    dns\n10.0.2.15   rach2\n
+text 0644 /etc/hosts 127.0.0.1   localhost\n::1         localhost ip6-localhost ip6-loopback\n10.0.2.2    gateway\n10.0.2.3    dns\n10.0.2.15   rach2\n
 
 # The network, in the file and the format os-real reads, so one description
 # serves both systems. This image has no BusyBox, so `netup` reads it and
