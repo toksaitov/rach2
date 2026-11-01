@@ -36,7 +36,7 @@ int etude_scenario(struct etude_case *c)
                        etude_service_wait(peer, "sshpeer: answered 1", 0, &at) != ETUDE_OK))
         net_fail(&u, "the guest did not accept the host connection");
     net_assert(&u, "peer-ready", 1, "the host's peer did not reach the SSH server");
-    /* The image file is exactly the root's size, OS_REAL_MIB in the Makefile. */
+    /* The image's size is the root's OS_REAL_MIB from the Makefile. */
     if (image == NULL || stat(image, &st) != 0) {
         net_fail(&u, "the root image's size cannot be read");
         st.st_size = 0;

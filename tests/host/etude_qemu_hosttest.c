@@ -300,6 +300,18 @@ static const char *fake_socket(int argc, char **argv, const char *id)
     return endpoint;
 }
 
+/** Give the shutdown reason for `mode`, or NULL for an unknown mode. */
+static const char *fake_reason(const char *mode)
+{
+    if (strcmp(mode, "shutdown") == 0 || strcmp(mode, "old") == 0 || strcmp(mode, "linger") == 0)
+        return "guest-shutdown";
+    if (strcmp(mode, "reset") == 0)
+        return "guest-reset";
+    if (strcmp(mode, "panic") == 0)
+        return "guest-panic";
+    return strcmp(mode, "host") == 0 ? "host-signal" : NULL;
+}
+
 /**
  * Be QEMU, as ETUDE_FAKE_QEMU's `mode` says: connect to the console and
  * QMP, answer QMP's start, write to the console, and end. With
@@ -307,8 +319,8 @@ static const char *fake_socket(int argc, char **argv, const char *id)
  */
 static int fake_qemu(const char *mode, int argc, char **argv)
 {
-    const char *accel = NULL, *reason = NULL;
-    int i, guest = 1, stopped = 0, kept = 0;
+    const char *accel = NULL, *reason;
+    int i, guest, stopped = 0, kept = 0;
     host_socket con, qmp;
     const char *audio = NULL, *input = getenv("SDL_DISKAUDIOFILEIN");
     const char *driver = getenv("SDL_AUDIODRIVER");
@@ -363,18 +375,10 @@ static int fake_qemu(const char *mode, int argc, char **argv)
         put(con, "fake: deaf\r\n");
         host_wait_forever();
     }
-    if (strcmp(mode, "shutdown") == 0 || strcmp(mode, "old") == 0 || strcmp(mode, "linger") == 0)
-        reason = "guest-shutdown";
-    else if (strcmp(mode, "reset") == 0)
-        reason = "guest-reset";
-    else if (strcmp(mode, "panic") == 0)
-        reason = "guest-panic";
-    else if (strcmp(mode, "host") == 0) {
-        reason = "host-signal";
-        guest = 0;
-    } else {
+    reason = fake_reason(mode);
+    guest = strcmp(mode, "host") != 0;
+    if (reason == NULL)
         return 126;
-    }
     fake_wait_go(con);
     put(con, "fake: got go\r\n");
     fake_shutdown(qmp, guest, reason);

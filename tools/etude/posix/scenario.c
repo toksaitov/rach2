@@ -164,7 +164,6 @@ struct etude_case_machine {
     const char *dump_cards[DEVICES_MAX + 1];          /* the profile's captures */
     struct etude_qemu_capture dumps[DEVICES_MAX + 1]; /* and their files */
     struct etude_qemu_profile profile;
-    struct etude_machine_spec spec;
     unsigned boot;               /* the machine's boot, counted from 1 */
     struct etude_serial *serial; /* etude-guest's session, for a helper */
     uint64_t commands;
@@ -2198,14 +2197,54 @@ int etude_has_machine(const struct etude_case *c, const char *name)
     return 0;
 }
 
+/** Start boot `m` with its console, captures and reserved memory `share`.
+ * The caller frees `m` and its captures on failure; a launcher failure also
+ * sets `end` to QEMU's exit. */
+static enum etude_status launch_boot(struct etude_case_machine *m, uint64_t share,
+                                     struct etude_termination *end)
+{
+    struct etude_case *c = m->c;
+    struct machine_decl *d = m->decl;
+    struct etude_machine_spec spec = {0};
+    enum etude_status st;
+    char name[200], audio[4096];
+    const char *console;
+
+    st = make_dumps(m);
+    if (st != ETUDE_OK)
+        return st;
+    snprintf(m->attempt_id, sizeof(m->attempt_id), "%s.%s.%u", c->attempt_id, d->id, d->boots);
+    if (m->profile.audio != NULL &&
+        (m->profile.audio_backend == NULL || strcmp(m->profile.audio_backend, "wav") == 0)) {
+        snprintf(name, sizeof(name), "%s.%u.wav", d->id, d->boots);
+        if (scratch_path(c, "evidence", name, audio, sizeof(audio)) != 0)
+            return ETUDE_FAILED;
+        spec.audio_path = audio;
+    }
+    snprintf(name, sizeof(name), "%s.%u.console", d->id, d->boots);
+    console = etude_evidence(c, name);
+    spec.attempt_id = m->attempt_id;
+    spec.profile = &m->profile;
+    spec.site = &c->site;
+    spec.envp = environ;
+    spec.console_path = console;
+    spec.console_max = (size_t)c->console_max;
+    spec.grace_us = c->grace_us;
+    spec.memory_reserved_bytes = share;
+    if (console == NULL || etude_qemu_start(c->q, &spec, &m->m) != 0) {
+        diag("machine %s: QEMU did not start: %s", d->id, strerror(errno));
+        end->end = ETUDE_END_QEMU_EXITED;
+        return ETUDE_FAILED;
+    }
+    return ETUDE_OK;
+}
+
 enum etude_status etude_boot(struct etude_case *c, const char *machine, const char *const disks[],
                              struct etude_case_machine **mp, struct etude_termination *end)
 {
     struct machine_decl *d = find_decl(c, machine);
     struct etude_case_machine *m;
     enum etude_status st;
-    char name[200], audio[4096];
-    const char *console;
     uint64_t share;
 
     *mp = NULL;
@@ -2236,48 +2275,15 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
     m->c = c;
     m->decl = d;
     st = make_profile(m, disks);
-    if (st != ETUDE_OK) {
-        free(m);
-        c->faults++;
-        return st;
+    if (st == ETUDE_OK) {
+        m->boot = ++d->boots;
+        st = launch_boot(m, share, end);
     }
-    m->boot = ++d->boots;
-    st = make_dumps(m);
     if (st != ETUDE_OK) {
         free_dumps(m);
         free(m);
         c->faults++;
         return st;
-    }
-    snprintf(m->attempt_id, sizeof(m->attempt_id), "%s.%s.%u", c->attempt_id, d->id, d->boots);
-    if (m->profile.audio != NULL &&
-        (m->profile.audio_backend == NULL || strcmp(m->profile.audio_backend, "wav") == 0)) {
-        snprintf(name, sizeof(name), "%s.%u.wav", d->id, d->boots);
-        if (scratch_path(c, "evidence", name, audio, sizeof(audio)) != 0) {
-            free_dumps(m);
-            free(m);
-            c->faults++;
-            return ETUDE_FAILED;
-        }
-        m->spec.audio_path = audio;
-    }
-    snprintf(name, sizeof(name), "%s.%u.console", d->id, d->boots);
-    console = etude_evidence(c, name);
-    m->spec.attempt_id = m->attempt_id;
-    m->spec.profile = &m->profile;
-    m->spec.site = &c->site;
-    m->spec.envp = environ;
-    m->spec.console_path = console;
-    m->spec.console_max = (size_t)c->console_max;
-    m->spec.grace_us = c->grace_us;
-    m->spec.memory_reserved_bytes = share;
-    if (console == NULL || etude_qemu_start(c->q, &m->spec, &m->m) != 0) {
-        diag("machine %s: QEMU did not start: %s", machine, strerror(errno));
-        free_dumps(m);
-        free(m);
-        c->faults++;
-        end->end = ETUDE_END_QEMU_EXITED;
-        return ETUDE_FAILED;
     }
     keep_made(c, "evidence");
     if (mres(m)->audio_path != NULL)

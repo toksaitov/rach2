@@ -195,25 +195,30 @@ static void queue(struct lc *l)
     lc_find(l, m, "no-stall", "audio: stalled", 0, 0);
 }
 
-/**
- * Run `audiotest -d` with `args` from the debug shell, and once the shell is
- * back report assertion `id`, that the program printed `granted`, and
- * `played`, that it said the scale played.
- */
-static void dsp_play(struct lc *l, struct etude_case_machine *m, uint64_t *at, const char *args,
-                     const char *id, const char *granted, const char *played)
+/** An audiotest invocation and the assertions its output must satisfy. */
+struct dsp_playback {
+    const char *args;
+    const char *id;
+    const char *granted;
+    const char *played;
+};
+
+/** Run `audiotest -d` from the debug shell and check `p`'s granted format
+ * and completed scale, advancing the console offset `at`. */
+static void dsp_play(struct lc *l, struct etude_case_machine *m, uint64_t *at,
+                     const struct dsp_playback *p)
 {
     char line[96];
     uint64_t from = *at;
 
-    snprintf(line, sizeof(line), "exec /bin/audiotest -d%s\r", args);
+    snprintf(line, sizeof(line), "exec /bin/audiotest -d%s\r", p->args);
     if (!lc_type(l, m, line) || !lc_wait(l, m, prompt, at, NULL)) {
         if (!l->stopped)
-            lc_assert(l, id, 0, l->why);
+            lc_assert(l, p->id, 0, l->why);
         return;
     }
-    lc_find(l, m, id, granted, from, 1);
-    lc_find(l, m, played, "audiotest: result: complete; the scale played through /dev/dsp", from,
+    lc_find(l, m, p->id, p->granted, from, 1);
+    lc_find(l, m, p->played, "audiotest: result: complete; the scale played through /dev/dsp", from,
             1);
 }
 
@@ -226,6 +231,11 @@ static void dsp_play(struct lc *l, struct etude_case_machine *m, uint64_t *at, c
  */
 static void dsp(struct lc *l)
 {
+    static const struct dsp_playback stereo = {" 48000 16 2", "stereo",
+                                               "audiotest: dsp: granted 48000 hz, 16-bit stereo",
+                                               "played-stereo"};
+    static const struct dsp_playback defaults = {
+        "", "defaults", "audiotest: dsp: granted 8000 hz, 8-bit mono", "played-defaults"};
     char name[] = "wavcheck", scale[] = "scale", slash[] = "/", path[1024];
     char l1[] = "262", l2[] = "294", l3[] = "330", l4[] = "349", l5[] = "392";
     char r1[] = "131", r2[] = "147", r3[] = "165", r4[] = "175", r5[] = "196";
@@ -238,12 +248,10 @@ static void dsp(struct lc *l)
     if (!lc_step(l, "play") || (m = lc_boot(l, "fixture")) == NULL ||
         !lc_wait(l, m, "Type 'help'", &at, NULL) || !lc_wait(l, m, prompt, &at, NULL))
         return;
-    dsp_play(l, m, &at, " 48000 16 2", "stereo", "audiotest: dsp: granted 48000 hz, 16-bit stereo",
-             "played-stereo");
+    dsp_play(l, m, &at, &stereo);
     if (!lc_ok(l))
         return;
-    dsp_play(l, m, &at, "", "defaults", "audiotest: dsp: granted 8000 hz, 8-bit mono",
-             "played-defaults");
+    dsp_play(l, m, &at, &defaults);
     if (!lc_ok(l) || !lc_quit(l, m, NULL))
         return;
     lc_find(l, m, "no-stall", "audio: stalled", 0, 0);
