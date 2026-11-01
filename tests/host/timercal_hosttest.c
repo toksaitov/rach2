@@ -206,14 +206,13 @@ void host_tsc_read(uint32_t *lo, uint32_t *hi)
     *hi = (uint32_t)(v >> 32);
 }
 
-/* Whether the command line has `rach2.notsc`, as the row sets it. */
-static int notsc;
+/* The one flag the row puts on the command line, or NULL for none. */
+static const char *cmdline_flag;
 
-/** Whether the command line has `flag`: only `rach2.notsc`, as the row
- * sets it. */
+/** Whether the command line has `flag`: only the row's `cmdline_flag`. */
 int kcmdline_has(const char *flag)
 {
-    return notsc && strcmp(flag, "rach2.notsc") == 0;
+    return cmdline_flag != NULL && strcmp(flag, cmdline_flag) == 0;
 }
 
 /** `cpuid`'s highest extended leaf, 0x80000008, and leaf 0x80000007's
@@ -460,15 +459,20 @@ int main(void)
     tsc_measured = 0;
     tsc_invariant = 0;
     CHECK(timer_calibrate() == 0, "a TSC whose rate varies is not measured");
+    tsc_measured = 0;
+    cmdline_flag = "rach2.tscreliable";
+    CHECK(timer_calibrate() != 0, "unless rach2.tscreliable vouches for it");
+    cmdline_flag = NULL;
+    tsc_per_tick = 0;
     reference(1);
     tsc_measured = 0;
     tsc_invariant = 1;
-    notsc = 1;
+    cmdline_flag = "rach2.notsc";
     nmarks = 0;
     marking = 1;
     CHECK(timer_calibrate() == 0 && nmarks == 0, "nor one under rach2.notsc");
     marking = 0;
-    notsc = 0;
+    cmdline_flag = NULL;
     tsc_measured = 0;
     counts = timer_calibrate();
     nmarks = 0;
