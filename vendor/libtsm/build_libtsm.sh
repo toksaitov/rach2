@@ -23,10 +23,11 @@
 # `patch -F 0 --forward`, as vendor/pdpmake's is, so that a patch whose
 # context moved fails instead of applying in the wrong place.
 #
-# A Rach2 build extracts into vendor/libtsm/, or build/x86_64/vendor-work/libtsm/
-# for x86-64 (mk/arch.sh), compiles with the musl wrapper and stages under
-# build/vendor/libtsm/ or build/x86_64/vendor/libtsm/, with the archive of the
-# patched sources that term's guest build compiles. A host build extracts
+# A Rach2 build extracts into vendor/libtsm/, or
+# build/x86_64/vendor-work/libtsm/ for x86-64 (mk/arch.sh), compiles with the
+# musl wrapper and stages under build/vendor/libtsm/ or
+# build/x86_64/vendor/libtsm/, with the archive of the patched sources that
+# term's guest build compiles. A host build extracts
 # into build/host/vendor-work/libtsm/, compiles with HOSTCC, cc unless set,
 # and stages under build/host/vendor/libtsm/. Each stage has lib/libtsm.a and
 # include/libtsm.h.
@@ -133,6 +134,7 @@ CFLAGS="-std=gnu99 -O2 -Wall -ffast-math -fno-strict-aliasing -D_GNU_SOURCE \
 -D_POSIX_C_SOURCE=200809L -Dwcwidth=tsm_wcwidth \
 -I$SRC/src/tsm -I$SRC/src/shared -I$SRC/external -I$SRC/external/wcwidth"
 # The files compiled, from sources.mk, which term's guest build reads too.
+# shellcheck disable=SC2016 # $(LIBTSM) is make's, matched literally
 SOURCES="$(sed -n 's/^LIBTSM_SRC = //p' sources.mk | sed 's|\$(LIBTSM)/||g')"
 if [ -z "$SOURCES" ]; then
     echo "libtsm: sources.mk has no LIBTSM_SRC line" >&2
@@ -160,6 +162,7 @@ cp "$SRC/src/tsm/libtsm.h" "$STAGE/include/libtsm.h"
 # include from, and the two license files, in name order.
 if [ "$WHAT" != host ]; then
     (cd "$SRC" && {
+        # shellcheck disable=SC2086 # SOURCES is a list of paths without spaces
         printf '%s\n' $SOURCES COPYING external/wcwidth/LICENSE.txt
         find src/tsm src/shared external/wcwidth external/xkbcommon -name '*.h'
     } | LC_ALL=C sort -u) > "$OBJ/list"
