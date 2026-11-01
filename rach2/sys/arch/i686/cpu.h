@@ -181,6 +181,15 @@ typedef uint32_t pte_t;
 #define USER_STACK_BASE 0xBFFFF000UL
 #define USER_MMAP_BASE  0xB0000000UL
 
+/* The bounds of the offsets a new image's layout moves by when addresses
+ * are randomized (`exec_layout`): 0, since i686's 3 GiB of user space is
+ * kept whole for the heap and the mappings, and every image is at fixed
+ * addresses. */
+#define ASLR_STACK_PAGES 0UL
+#define ASLR_MMAP_PAGES  0UL
+#define ASLR_BRK_PAGES   0UL
+#define ASLR_SP_BYTES    0UL
+
 #define ELF_CLASS   1u          /* ELFCLASS32 */
 #define ELF_MACHINE 3u          /* EM_386 */
 #define AUDIT_ARCH  0x40000003u /* AUDIT_ARCH_I386 */

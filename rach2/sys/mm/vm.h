@@ -104,7 +104,8 @@ typedef struct vma {
     uint32_t pgoff;
 } vma_t;
 
-/* The regions of an address space, with its break and its stack's limit. */
+/* The regions of an address space, with its break, its stack's limit and
+ * its mmap base, which exec chooses and a fork's child keeps. */
 typedef struct vm_space {
     vma_t *vmas; /* `cap` entries in the heap, `count` of them in use */
     uint32_t cap;
@@ -112,11 +113,20 @@ typedef struct vm_space {
     uintptr_t heap_start;  /* initial program break (base of the heap VMA) */
     uintptr_t brk;         /* current program break (top of the heap VMA)  */
     uintptr_t stack_limit; /* lowest address the stack VMA may grow down to */
+    uintptr_t mmap_base;   /* a mapping without a hint goes below it */
 } vm_space_t;
 
+/* kernel.randomize_va_space, read at each exec (`exec_layout`): 0 places a
+ * new image at the fixed addresses of the architecture's cpu.h; 1 moves its
+ * stack, its mmap base and a position-independent program by random
+ * offsets; 2 moves its heap's start as well. It starts at 2 where the
+ * architecture draws offsets and at 0 where it draws none (ASLR_MMAP_PAGES
+ * 0), and there a value written changes no address. */
+extern int randomize_va_space;
+
 /** Reset an address space to empty, dropping the files its regions map;
- * the array it has, if any, is kept, and the heap's start, the break and the
- * stack's limit go to 0. */
+ * the array it has, if any, is kept, and the heap's start, the break, the
+ * stack's limit and the mmap base go to 0. */
 void vm_init(vm_space_t *vm);
 
 /** Drop the files the regions map and give the array back; the space is

@@ -464,17 +464,18 @@ int elf_add_vmas(struct vm_space *vm, const elf_image_t *img)
     return 0;
 }
 
-int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uintptr_t stack_top,
-                   uintptr_t stack_growth)
+int elf_setup_vmas(struct vm_space *vm, const elf_image_t *img, uintptr_t heap_start,
+                   uintptr_t stack_top, uintptr_t stack_growth, uintptr_t mmap_base)
 {
     vm_init(vm);
     if (elf_add_vmas(vm, img) != 0) {
         return -1;
     }
 
-    vm->heap_start = img->image_end;
-    vm->brk = img->image_end;
+    vm->heap_start = heap_start;
+    vm->brk = heap_start;
 
     vm->stack_limit = stack_top - stack_growth;
+    vm->mmap_base = mmap_base;
     return vm_insert(vm, stack_top, stack_top + PAGE_SIZE, VM_PROT_READ | VM_PROT_WRITE, VM_STACK);
 }

@@ -38,6 +38,10 @@
  *   PAGE_SIZE, PAGE_SHIFT  the page the kernel maps
  *   USER_ADDR_MIN, USER_ADDR_MAX  the range a program may map
  *   ELF_CLASS, ELF_MACHINE the programs the kernel loads
+ *   ELF_ET_DYN_BASE, USER_STACK_BASE, USER_MMAP_BASE  a new image's layout
+ *   ASLR_STACK_PAGES, ASLR_MMAP_PAGES, ASLR_BRK_PAGES, ASLR_SP_BYTES  the
+ *                          bounds of its random offsets, 0 where none is
+ *                          drawn
  *   ARCH_GREGS             the words of Linux's `user_regs_struct`
  *   SYSCALL_TABLE_SIZE     one more than the highest system call number
  *   SC_CLONE_TLS, SC_CLONE_CTID  clone's arguments, whose order differs
