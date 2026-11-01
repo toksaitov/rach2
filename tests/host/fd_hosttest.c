@@ -387,7 +387,7 @@ static void shared_limits(void)
         fd_free(second->fds, i);
     }
     fd_table_delete(second->fds);
-    check(fd_table_share(first->fds) == 0, "the table is shared");
+    check(fd_table_share(first->fds, second) == 0, "the table is shared");
     second->fds = first->fds;
     second->rlim[RLIM_NOFILE].cur = 4;
     current_proc = second;
@@ -472,19 +472,19 @@ static void allocation_errors(void)
     fail_after = -1;
     check(fd == -ENOMEM && fd_table_cap(&table) == FD_TABLE_FIRST,
           "a table the heap has no room to grow is ENOMEM");
-    fail_after = 1;
+    fail_after = 2; /* the replaced array's record and the new array */
     fd = fd_alloc(&table);
     fail_after = -1;
     check(fd == -ENOMEM && fd_table_cap(&table) == 2 * FD_TABLE_FIRST &&
               !table.entries[FD_TABLE_FIRST].ofd && fd_alloc(&table) == FD_TABLE_FIRST,
           "a description the heap has no room for in a grown table is ENOMEM");
-    check(fd_alloc_from(&table, FD_TABLE_LIMIT) == -EMFILE, "a minimum at the limit is EMFILE");
+    check(fd_alloc_from(&table, fd_nr_open) == -EMFILE, "a minimum at the limit is EMFILE");
     fail_after = 0;
     fd = fd_table_reach(&table, FD_TABLE_LIMIT - 1);
     fail_after = -1;
     check(fd == -ENOMEM && fd_table_cap(&table) == 2 * FD_TABLE_FIRST,
           "a dup2 past the end of a table the heap cannot grow is ENOMEM");
-    check(fd_table_reach(&table, FD_TABLE_LIMIT) == -EBADF && fd_table_reach(&table, -1) == -EBADF,
+    check(fd_table_reach(&table, fd_nr_open) == -EBADF && fd_table_reach(&table, -1) == -EBADF,
           "a dup2 destination outside the limit is EBADF");
     for (i = 0; i <= FD_TABLE_FIRST; i++) {
         fd_free(&table, i);
