@@ -120,6 +120,7 @@ static int batch(unsigned int n)
             failed = 1;
         }
         do {
+            /* interval: the held threads sleep through 20 ms of ticks */
             rc = nanosleep(&pause, &pause);
         } while (rc != 0 && errno == EINTR);
         if (rc != 0) {

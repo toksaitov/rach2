@@ -79,3 +79,10 @@ tools/etude/host_prepare_io.c: observe preparation stop requests every 100 ms
 tests/host/etude_repeat_hosttest.c: the ledger is read again every 100 ms
 tests/musl/clockmusl.c: a two-second sleep must advance the real-time clock
 tests/lagprobe.c: pause between syncs and before a competing mount
+tests/musl/clonemusl.c: a sleeper's state is looked at again every 10 ms
+tests/musl/clonemusl.c: the count of woken sleepers is read every 1 ms
+tests/musl/ndwatchmusl.c: the tentative address is tried again every 100 ms
+tests/musl/ip6optmusl.c: the tentative address is tried again every 100 ms
+tests/musl/threadscaling.c: the held threads sleep through 20 ms of ticks
+tests/limitprobe.c: the clone is given 100 ms to fall asleep in its read
+tests/cases/host/flow_release.c: poll the detached run's result every 50 ms

@@ -500,6 +500,7 @@ static int send_ready(int fd, const struct sockaddr_in6 *to, unsigned char tag)
     int r;
 
     while ((r = send_tag(fd, to, tag, -1, -1)) == EADDRNOTAVAIL) {
+        /* interval: the tentative address is tried again every 100 ms */
         usleep(100000);
     }
     return r;

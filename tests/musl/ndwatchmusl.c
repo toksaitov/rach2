@@ -363,6 +363,7 @@ static int link_local_ready(int eth)
             r = errno;
             break;
         }
+        /* interval: the tentative address is tried again every 100 ms */
         usleep(100000);
     }
     close(fd);

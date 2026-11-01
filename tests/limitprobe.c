@@ -390,7 +390,8 @@ static int body_shared(void)
         return 4;
     }
     ts[0] = 0;
-    ts[1] = 100000000; /* the clone goes to sleep in its read */
+    ts[1] = 100000000;
+    /* interval: the clone is given 100 ms to fall asleep in its read */
     syscall2(SYS_NANOSLEEP, (long)ts, 0);
     for (i = 0; i < 3000; i++) {
         if (syscall1(SYS_DUP, 0) != 7 + i) {
