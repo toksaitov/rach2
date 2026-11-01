@@ -247,11 +247,11 @@ if [ "$command" = pull ]; then
     remote | machine "sh -s -- pull $user $scratch" > "$work/list" || fail "the machine could not copy them"
     machine "tar -C $scratch/tree -cf - ." > "$work/pull.tar" ||
         fail "the copy did not arrive"
-    mkdir "$work/new" && tar -xpf "$work/pull.tar" -C "$work/new" ||
+    { mkdir "$work/new" && tar -xpf "$work/pull.tar" -C "$work/new"; } ||
         fail "the copy could not be unpacked"
     n=$(check "$work/list" "$work/new") || exit 1
     [ "$n" -gt 0 ] || fail "the machine has none of $user's login files; $here is as it was"
-    mkdir -p "$here" && chmod 700 "$dir" || fail "$here could not be made"
+    { mkdir -p "$here" && chmod 700 "$dir"; } || fail "$here could not be made"
     tar -xpf "$work/pull.tar" -C "$here" || fail "the copy could not be written to $here"
     sed -n 's|^[0-9a-f]*  \./|machine-logins: pulled: |p' "$work/list"
     sed -n 's|^missing |machine-logins: not on the machine: |p' "$work/list"

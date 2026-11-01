@@ -171,7 +171,7 @@ row() {
 
     limit=$(cat /proc/sys/fs/inotify/max_user_watches)
     for i in $(seq 0 $((limit / 80))); do
-        mkdir -p "$WORK"/big/d$i/e{0..79} && touch "$WORK"/big/d$i/e{0..79}/f ||
+        { mkdir -p "$WORK/big/d$i"/e{0..79} && touch "$WORK/big/d$i"/e{0..79}/f; } ||
             { fail "the tree of $limit directories"; return; }
     done
     echo needle > "$WORK/big/d0/e0/needle.txt"
