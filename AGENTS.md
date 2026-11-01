@@ -1,6 +1,6 @@
 # AGENTS.md
 
-The project policy for Rach2, for every coding agent. Codex reads this file directly; Claude Code reads it through `CLAUDE.md`, which adds what Claude Code alone needs. Procedures needed only for some work are skills in `.agents/skills/`, which Codex runs as `$name` and Claude Code as `/name`:
+The project policy for Rach2, for every coding agent. Codex and Muse Code read this file directly; Claude Code reads it through `CLAUDE.md`, which adds what Claude Code alone needs. Procedures needed only for some work are skills in `.agents/skills/`, which Codex runs as `$name` and Claude Code as `/name`:
 
 * `milestone`: the manager's procedure, from a milestone's plan to its release.
 * `testing`: the runs at the end of a milestone and in its release, and writing a test.
@@ -27,6 +27,7 @@ The rules are kept short on purpose; their history is in commit messages and `de
 * The manager is a Claude Code session on the Mac that the chat starts. It plans each milestone, watches the workers, writes its share of the code through up to three worker loops of its own, and integrates, tests and releases. It reports to the chat by message.
 * The workers are the worker loops, `tools/flow/worker.sh`: one in each of the five research assistants' accounts on the testing host, and on the Mac the owner's Codex loop and the manager's own. They take tasks from the board by themselves.
 * Codex and a Claude Fable subagent review each milestone's plan; Codex reviews the whole milestone at its end.
+* agy (Gemini 4 Argon) and Muse Code (Muse Wonder Full) are signed in only in the owner's accounts on the Mac, on basic plans with low limits. An agent there asks one of them when it is stuck or a hard question needs a second opinion, sparingly, and checks the answer against the code.
 
 ## Milestones
 
