@@ -58,7 +58,7 @@ The BusyBox images take `su`, `passwd` and `login` from BusyBox's set-id build i
 
 * [halt(8)](../man/man8/halt.8) powers the machine off or restarts it. On the BusyBox images the shell runs BusyBox's `halt`, `poweroff` and `reboot` applets instead.
 * [loopctl(8)](../man/man8/loopctl.8) attaches a file to a loop device, so that a file system in a file can be mounted, detaches one, or lists them.
-* [audiotest(1)](../man/man1/audiotest.1) plays a test tone through the console's audio interface, on HDA or SB16, or a scale through `/dev/dsp`.
+* [audiotest(1)](../man/man1/audiotest.1) plays a test tone through the console's audio interface, on HDA or SB16, or a scale through `/dev/dsp`, and records through `/dev/dsp`.
 * [mixer(1)](../man/man1/mixer.1) reads and sets the levels of `/dev/mixer`, the volume and PCM, the input levels and the record source, and mutes and unmutes the volume; acpid's volume actions run it for the volume keys.
 
 ### Which images stage them
@@ -171,4 +171,4 @@ A suite below runs as `tests/run NAME`.
 * `selfbuild` builds this directory on Rach2 with `guest.mk` and runs the `httpd` and `nc` it built.
 * `acpid` presses the volume keys on os-real and reads `mixer vol`, and powers the machine off through acpid and init.
 * `audio`'s case `kept` sets `mixer vol 5`, reboots and reads `vol 5:5` back from init's kept levels, then reboots past init with the file removed and reads the driver's level.
-* `audio` runs `audiotest -s` on HDA and `audiotest -d` on HDA and the SB16; no suite runs its tone.
+* `audio` runs `audiotest -s` on HDA, `audiotest -d` on HDA and the SB16, `audiotest -r`, which counts what it reads from `/dev/dsp` against `/proc/audio`, and `audiotest -R`, whose printed samples `wavcheck` measures; no suite runs its tone.

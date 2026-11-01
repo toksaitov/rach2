@@ -3,7 +3,7 @@
 .Os
 .Sh NAME
 .Nm audiotest
-.Nd play a PCM test tone or scale
+.Nd play a PCM test tone or scale, or record one
 .Sh SYNOPSIS
 .Nm
 .Op Ar rate Op Ar seconds Op Ar frequency
@@ -13,6 +13,9 @@
 .Nm
 .Fl d
 .Op Ar rate bits channels
+.Nm
+.Fl r | R
+.Op Ar rate Op Ar periods
 .Sh DESCRIPTION
 .Nm
 plays a square wave as signed 16-bit stereo PCM.
@@ -81,6 +84,37 @@ in the first channel and the octave below in the second, and in mono 80,
 .Dv SNDCTL_DSP_SYNC
 then waits until the device has played them.
 .Pp
+With
+.Fl r ,
+.Nm
+records through
+.Pa /dev/dsp
+instead, as signed 16-bit mono at the rate the device has nearest
+.Ar rate ,
+48000 by default and 8000 through 192000.
+It asks for sixteen periods of 2048 bytes, reads
+.Ar periods
+of them, 50 by default and at most 1000, one blocking read at a time, then
+turns input off with
+.Dv SNDCTL_DSP_SETTRIGGER ,
+which stops the device.
+It prints what it read and what was left in the buffer, the rate granted,
+and the
+.Cm capture
+line's rate, frames and overruns from
+.Pa /proc/audio .
+It fails unless it read every period, the rate granted is
+.Pa /proc/audio Ns 's ,
+the frames read and left are the frames the input stream handed over, so
+that none was dropped,
+.Dv SNDCTL_DSP_GETIPTR
+counts at least as many recorded, and there was no overrun.
+.Fl R
+does the same and then prints the samples it read, 64 bytes to a line, each
+line
+.Ql audiotest: data:
+and the bytes in hexadecimal, for a host that reads the console.
+.Pp
 The metal RAM image, metal disk root, os-real and the test image stage this
 program.
 .Sh EXIT STATUS
@@ -92,6 +126,7 @@ cat /proc/audio
 audiotest -s 48000
 audiotest -d 48000 16 2
 audiotest -d
+audiotest -r 48000 100
 .Ed
 .Sh SEE ALSO
 .Xr ioctl 2 ,
