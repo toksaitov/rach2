@@ -13125,9 +13125,7 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
  * Entry `n` of /proc/net, or with `stat` of /proc/net/stat: 1 with its name,
  * inode and type, or 0 past the last. /proc/net has dev, route, arp and tcp,
  * then the files `synth_net_file` gives, then the directory `stat`, which
- * has rt_cache and arp_cache. There is no tcp6: the kernel has no IPv6, and
- * a file that existed and was empty would tell netstat the family is
- * present with nothing on it.
+ * has rt_cache and arp_cache.
  */
 static int synth_net_dirent(int stat, int n, char *name, uint64_t *ino, uint8_t *dtype)
 {

@@ -601,6 +601,13 @@ const char *synth_net_name(int origin)
     return NULL;
 }
 
+/** No file of /proc/net is opened here, so none has a place: -1. */
+int synth_net_slot(int origin)
+{
+    (void)origin;
+    return -1;
+}
+
 /** No device of /sys is opened here. */
 void synth_sys_path(int node, int key, char *out, int cap)
 {

@@ -120,7 +120,7 @@
 #define PROCFS_INO_SLABINFO    0x11Du
 #define PROCFS_INO_SWAPS       0x11Eu
 #define PROCFS_INO_LOCKS       0x11Fu
-#define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it */
+#define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it, by slot */
 #define PROCFS_INO_ACPI        0x1F0u /* /proc/acpi */
 #define PROCFS_INO_ACPI_CALL   0x1F1u
 
@@ -218,6 +218,15 @@ static const struct procfs_global *procfs_global_find(int kind, int origin)
 #define PROCFS_NETUDP_HEADER                         \
     "   sl  local_address rem_address   st tx_queue" \
     " rx_queue tr tm->when retrnsmt   uid  timeout"  \
+    " inode ref pointer drops\n"
+/* The IPv6 files' headers, whose address columns are 37 wide. */
+#define PROCFS_NETTCP6_HEADER                                                \
+    "  sl  local_address                         remote_address            " \
+    "            st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout"   \
+    " inode\n"
+#define PROCFS_NETUDP6_HEADER                                                \
+    "  sl  local_address                         remote_address            " \
+    "            st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout"   \
     " inode ref pointer drops\n"
 #define PROCFS_NETUNIX_HEADER "Num       RefCount Protocol Flags    Type St Inode Path\n"
 
@@ -2310,7 +2319,7 @@ uint32_t procfs_ino_nettcp(void)
 
 uint32_t procfs_ino_net(int origin)
 {
-    return PROCFS_INO_NET + (uint32_t)(origin - SYNTH_PROC_NETUDP);
+    return PROCFS_INO_NET + (uint32_t)synth_net_slot(origin);
 }
 
 uint32_t procfs_ino_netstatdir(void)
@@ -3486,6 +3495,33 @@ static void ap_ip_hex(struct procfs_text *t, uint32_t ip)
            8);
 }
 
+/**
+ * Append the endpoint `a`, `port` of a socket of `family` as /proc/net's
+ * socket files write one: for AF_INET the address as `ap_ip_hex` writes it,
+ * and for AF_INET6 its four 32-bit words each as a little-endian x86 reads
+ * it, so ::1 is 00000000000000000000000001000000, an IPv4 address in its
+ * mapped form; then a colon and the port in four hex digits.
+ */
+static void ap_endpoint(struct procfs_text *t, int family, net_addr_t a, uint16_t port)
+{
+    uint8_t b[16];
+    int w;
+
+    if (family == AF_INET6) {
+        net_addr_to6(a, b);
+        for (w = 0; w < 16; w += 4) {
+            ap_hex(t,
+                   (uint32_t)b[w + 3] << 24 | (uint32_t)b[w + 2] << 16 | (uint32_t)b[w + 1] << 8 |
+                       b[w],
+                   8);
+        }
+    } else {
+        ap_ip_hex(t, a.v4);
+    }
+    ap_ch(t, ':');
+    ap_hex(t, port, 4);
+}
+
 /** Append the address `ip`, in host order, as dotted decimal, which
  * /proc/net/arp uses in place of hex. */
 static void ap_ip_dotted(struct procfs_text *t, uint32_t ip)
@@ -3590,9 +3626,11 @@ static int procfs_gen_netarp(struct procfs_text *t)
 }
 
 /**
- * Render /proc/net/tcp: the connections, in the columns netstat parses, or
+ * Render /proc/net/tcp, or with `family` AF_INET6 /proc/net/tcp6: the
+ * connections of sockets of that family, in the columns netstat parses, or
  * none for a caller outside the first network namespace; -ENOMEM when the
- * heap has no room for the snapshot of the connections.
+ * heap has no room for the snapshot of the connections. An AF_INET6
+ * socket's connection with an IPv4 peer is in tcp6, its addresses mapped.
  *
  * The state numbers are Linux's, which this stack's own enumeration does not
  * match, so they are mapped (`tcp_state_to_linux`): a reader prints the name
@@ -3604,11 +3642,11 @@ static int procfs_gen_netarp(struct procfs_text *t)
  * congestion window, the bytes in flight and unsent, the two timers, and the
  * transmits the driver refused and for how long.
  */
-static int procfs_gen_nettcp(struct procfs_text *t)
+static int procfs_gen_nettcp(struct procfs_text *t, int family)
 {
     struct tcp_row *rows;
     int n = tcp_snapshot(&rows);
-    int i;
+    int i, sl = 0;
 
     if (n < 0) {
         return -ENOMEM;
@@ -3616,23 +3654,19 @@ static int procfs_gen_nettcp(struct procfs_text *t)
     if (!net_ns_seen()) {
         n = 0;
     }
-    ap_str(t, PROCFS_NETTCP_HEADER);
+    ap_str(t, family == AF_INET6 ? PROCFS_NETTCP6_HEADER : PROCFS_NETTCP_HEADER);
     for (i = 0; i < n; i++) {
         struct tcp_row row = rows[i];
 
-        if (row.family == AF_INET6)
+        if ((row.family == AF_INET6) != (family == AF_INET6)) {
             continue;
-
-        ap_str(t, "   ");
-        ap_u32(t, (uint32_t)i);
+        }
+        ap_str(t, sl < 10 ? "   " : sl < 100 ? "  " : sl < 1000 ? " " : "");
+        ap_u32(t, (uint32_t)sl++);
         ap_str(t, ": ");
-        ap_ip_hex(t, row.local_ip.v4);
-        ap_ch(t, ':');
-        ap_hex(t, row.local_port, 4);
+        ap_endpoint(t, family, row.local_ip, row.local_port);
         ap_ch(t, ' ');
-        ap_ip_hex(t, row.remote_ip.v4);
-        ap_ch(t, ':');
-        ap_hex(t, row.remote_port, 4);
+        ap_endpoint(t, family, row.remote_ip, row.remote_port);
         ap_ch(t, ' ');
         ap_hex(t, (uint32_t)tcp_state_to_linux(row.state), 2);
         ap_ch(t, ' ');
@@ -3668,24 +3702,25 @@ static int procfs_gen_nettcp(struct procfs_text *t)
 }
 
 /**
- * Render /proc/net/udp or, for `type` SOCK_RAW, /proc/net/raw: the sockets in
- * the columns of /proc/net/tcp, which netstat and ss parse the same way.
+ * Render /proc/net/udp or, for `type` SOCK_RAW, /proc/net/raw, or with
+ * `family` AF_INET6 udp6 or raw6: the sockets of that family in the columns
+ * of /proc/net/tcp, which netstat and ss parse the same way.
  *
- * The local address is the one the socket bound, 0.0.0.0 for one bound to
- * INADDR_ANY or not bound at all. The state is Linux's: 1, its
- * TCP_ESTABLISHED, for a connected socket and 7, TCP_CLOSE, for the rest. A
- * raw socket's port is its protocol.
+ * The local address is the one the socket bound, 0.0.0.0 or :: for one
+ * bound to the unspecified address or not bound at all. The state is
+ * Linux's: 1, its TCP_ESTABLISHED, for a connected socket and 7, TCP_CLOSE,
+ * for the rest. A raw socket's port is its protocol.
  */
-static int procfs_gen_netdgram(struct procfs_text *t, int type)
+static int procfs_gen_netdgram(struct procfs_text *t, int family, int type)
 {
     struct socket_row *rows;
-    int n = socket_snapshot(type, &rows);
+    int n = socket_snapshot(family, type, &rows);
     int i;
 
     if (n < 0) {
         return -ENOMEM;
     }
-    ap_str(t, PROCFS_NETUDP_HEADER);
+    ap_str(t, family == AF_INET6 ? PROCFS_NETUDP6_HEADER : PROCFS_NETUDP_HEADER);
     for (i = 0; i < n; i++) {
         uint16_t port = rows[i].local_port;
 
@@ -3695,13 +3730,10 @@ static int procfs_gen_netdgram(struct procfs_text *t, int type)
         ap_str(t, i < 10 ? "    " : i < 100 ? "   " : i < 1000 ? "  " : " ");
         ap_u32(t, (uint32_t)i);
         ap_str(t, ": ");
-        ap_ip_hex(t, rows[i].local_ip.v4);
-        ap_ch(t, ':');
-        ap_hex(t, port, 4);
+        ap_endpoint(t, family, rows[i].local_ip, port);
         ap_ch(t, ' ');
-        ap_ip_hex(t, rows[i].connected ? rows[i].remote_ip.v4 : 0);
-        ap_ch(t, ':');
-        ap_hex(t, rows[i].connected ? rows[i].remote_port : 0, 4);
+        ap_endpoint(t, family, rows[i].connected ? rows[i].remote_ip : net_addr4(0),
+                    (uint16_t)(rows[i].connected ? rows[i].remote_port : 0));
         ap_str(t, rows[i].connected ? " 01 00000000:" : " 07 00000000:");
         ap_hex(t, rows[i].rxq, 8);
         ap_str(t, " 00:00000000 00000000 ");
@@ -3770,7 +3802,7 @@ static int procfs_gen_netsockstat(struct procfs_text *t)
 {
     struct tcp_counts tc;
     struct socket_row *rows;
-    int udp = socket_snapshot(SOCK_DGRAM, &rows);
+    int udp = socket_snapshot(AF_INET, SOCK_DGRAM, &rows);
     uint32_t queued = 0;
     int i;
 
@@ -4225,9 +4257,15 @@ static int procfs_gen_net(struct procfs_text *t, int origin)
     case SYNTH_PROC_NETSTAT_ARP:
         return procfs_gen_netstat(t, origin);
     case SYNTH_PROC_NETUDP:
-        return procfs_gen_netdgram(t, SOCK_DGRAM);
+        return procfs_gen_netdgram(t, AF_INET, SOCK_DGRAM);
     case SYNTH_PROC_NETRAW:
-        return procfs_gen_netdgram(t, SOCK_RAW);
+        return procfs_gen_netdgram(t, AF_INET, SOCK_RAW);
+    case SYNTH_PROC_NETTCP6:
+        return procfs_gen_nettcp(t, AF_INET6);
+    case SYNTH_PROC_NETUDP6:
+        return procfs_gen_netdgram(t, AF_INET6, SOCK_DGRAM);
+    case SYNTH_PROC_NETRAW6:
+        return procfs_gen_netdgram(t, AF_INET6, SOCK_RAW);
     case SYNTH_PROC_NETUNIX:
         return procfs_gen_netunix(t);
     case SYNTH_PROC_NETSOCKSTAT:
@@ -6490,7 +6528,7 @@ static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pi
     } else if (vp->kind == VNODE_PROC_NET_ARP) {
         len = procfs_gen_netarp(t);
     } else if (vp->kind == VNODE_PROC_NET_TCP) {
-        len = procfs_gen_nettcp(t);
+        len = procfs_gen_nettcp(t, AF_INET);
     } else if (vp->kind == VNODE_PROC_NET_FILE) {
         len = procfs_gen_net(t, vp->procfile);
     } else if (vp->kind == VNODE_PROC_SYSVIPC) {

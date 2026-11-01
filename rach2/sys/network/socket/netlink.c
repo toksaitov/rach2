@@ -1627,14 +1627,16 @@ static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16
     end_msg(b, 0, 0);
 }
 
-/* An AF_INET socket as `inet_diag_msg_of` writes it, in the host's order:
- * with a timer, its kind and the milliseconds left. */
+/* An AF_INET or AF_INET6 socket as `inet_diag_msg_of` writes it, in the
+ * host's order: with a timer, its kind and the milliseconds left. An
+ * AF_INET6 socket's IPv4 addresses are written mapped. */
 struct diag_inet {
+    uint8_t family;
     uint8_t state;
     uint8_t retrans;
     uint8_t timer;
     uint16_t sport, dport;
-    uint32_t src, dst;
+    net_addr_t src, dst;
     uint32_t expires;
     uint32_t rqueue, wqueue, uid, inode;
 };
@@ -1654,23 +1656,30 @@ static void put_be32(uint8_t *p, uint32_t v)
 }
 
 /** Write `d` into `msg` as an inet_diag_msg, the ports and addresses in
- * network order and the cookie its inode; with `protocol` not -1, a raw
- * socket's, the INET_DIAG_PROTOCOL attribute too. Returns `msg`, for the
- * caller to add attributes to and append. */
+ * network order, the interface a link-local address is scoped to, and the
+ * cookie its inode; with `protocol` not -1, a raw socket's, the
+ * INET_DIAG_PROTOCOL attribute too. Returns `msg`, for the caller to add
+ * attributes to and append. */
 static uint8_t *inet_diag_msg_of(const struct nl_build *b, uint8_t *msg, const struct diag_inet *d,
                                  int protocol)
 {
     uint8_t *body = msg_start(b, msg, SOCK_DIAG_BY_FAMILY, NLM_F_MULTI, DIAG_INET_MSG_LEN);
     uint8_t proto = (uint8_t)protocol;
 
-    body[0] = AF_INET;
+    body[0] = d->family;
     body[1] = d->state;
     body[2] = d->timer;
     body[3] = d->retrans;
     put_be16(body + 4, d->sport);
     put_be16(body + 6, d->dport);
-    put_be32(body + 8, d->src);
-    put_be32(body + 24, d->dst);
+    if (d->family == AF_INET6) {
+        net_addr_to6(d->src, body + 8);
+        net_addr_to6(d->dst, body + 24);
+        put32(body + 40, d->src.family == AF_INET6 ? d->src.scope : 0);
+    } else {
+        put_be32(body + 8, d->src.v4);
+        put_be32(body + 24, d->dst.v4);
+    }
     put32(body + 44, d->inode);
     put32(body + 52, d->expires);
     put32(body + 56, d->rqueue);
@@ -1734,11 +1743,11 @@ static void tcp_timer_of(const struct tcp_row *r, struct diag_inet *d)
     }
 }
 
-/** Append the TCP connections whose states are in the mask `wanted`, with
- * the TCP information and the congestion control's name when the mask `ext`
- * of extensions asks for them; 0, or -ENOMEM when they could not be
- * copied. */
-static int diag_tcp(struct nl_build *b, uint32_t wanted, uint8_t ext)
+/** Append the TCP connections of sockets of `family` whose states are in
+ * the mask `wanted`, with the TCP information and the congestion control's
+ * name when the mask `ext` of extensions asks for them; 0, or -ENOMEM when
+ * they could not be copied. */
+static int diag_tcp(struct nl_build *b, int family, uint32_t wanted, uint8_t ext)
 {
     struct tcp_row *rows;
     struct diag_inet d;
@@ -1746,18 +1755,18 @@ static int diag_tcp(struct nl_build *b, uint32_t wanted, uint8_t ext)
     uint8_t info[TCP_INFO_LEN];
     int i, n = tcp_snapshot(&rows);
 
+    k_memset(&d, 0, sizeof(d));
+    d.family = (uint8_t)family;
     for (i = 0; i < n; i++) {
         d.state = (uint8_t)tcp_state_to_linux(rows[i].state);
-        if (!(wanted & (1u << d.state))) {
+        if (!(wanted & (1u << d.state)) || (rows[i].family == AF_INET6) != (family == AF_INET6)) {
             continue;
         }
         d.retrans = (uint8_t)(rows[i].retransmits > 255 ? 255 : rows[i].retransmits);
         d.sport = rows[i].local_port;
         d.dport = rows[i].remote_port;
-        if (rows[i].family == AF_INET6)
-            continue;
-        d.src = rows[i].local_ip.v4;
-        d.dst = rows[i].remote_ip.v4;
+        d.src = rows[i].local_ip;
+        d.dst = rows[i].remote_ip;
         d.rqueue = rows[i].rxq;
         d.wqueue = d.state == DIAG_LISTEN ? rows[i].backlog : rows[i].txq;
         d.uid = rows[i].uid;
@@ -1780,18 +1789,19 @@ static int diag_tcp(struct nl_build *b, uint32_t wanted, uint8_t ext)
     return 0;
 }
 
-/** Append the UDP sockets, or with `type` SOCK_RAW the raw ones, whose
- * states are in the mask `wanted`: 1 for a connected socket and 7 for the
- * rest. A raw socket's port is its protocol, IPPROTO_RAW for the ioctl
+/** Append the UDP sockets of `family`, or with `type` SOCK_RAW the raw ones,
+ * whose states are in the mask `wanted`: 1 for a connected socket and 7 for
+ * the rest. A raw socket's port is its protocol, IPPROTO_RAW for the ioctl
  * descriptor, which is opened with it. Returns 0, or -ENOMEM. */
-static int diag_dgram(struct nl_build *b, int type, uint32_t wanted)
+static int diag_dgram(struct nl_build *b, int family, int type, uint32_t wanted)
 {
     struct socket_row *rows;
     struct diag_inet d;
     uint8_t msg[NL_MSG_MAX];
-    int i, n = socket_snapshot(type, &rows);
+    int i, n = socket_snapshot(family, type, &rows);
 
     k_memset(&d, 0, sizeof(d));
+    d.family = (uint8_t)family;
     for (i = 0; i < n; i++) {
         d.state = rows[i].connected ? DIAG_ESTABLISHED : DIAG_CLOSE;
         if (!(wanted & (1u << d.state))) {
@@ -1801,9 +1811,9 @@ static int diag_dgram(struct nl_build *b, int type, uint32_t wanted)
         if (type == SOCK_RAW && d.sport == 0) {
             d.sport = IPPROTO_RAW;
         }
-        d.src = rows[i].local_ip.v4;
+        d.src = rows[i].local_ip;
         d.dport = rows[i].connected ? rows[i].remote_port : 0;
-        d.dst = rows[i].connected ? rows[i].remote_ip.v4 : 0;
+        d.dst = rows[i].connected ? rows[i].remote_ip : net_addr4(0);
         d.rqueue = rows[i].rxq;
         d.uid = rows[i].uid;
         d.inode = rows[i].inode;
@@ -1864,7 +1874,7 @@ static int diag_unix(struct nl_build *b, uint32_t wanted, uint32_t show)
     return 0;
 }
 
-/** The protocol of an AF_INET request `r` of `body` bytes: the byte in the
+/** The protocol of an inet request `r` of `body` bytes: the byte in the
  * request, or the INET_DIAG_REQ_PROTOCOL attribute after it, which a
  * protocol numbered past 255 is asked by. */
 static uint32_t diag_protocol(const uint8_t *r, uint32_t body)
@@ -1911,19 +1921,17 @@ static void diag_answer(struct nl_build *b, const uint8_t *req, uint16_t type, u
         end_msg(b, req, -EOPNOTSUPP);
         return;
     }
-    if (r[0] == AF_INET && body >= DIAG_INET_REQ_LEN) {
+    if ((r[0] == AF_INET || r[0] == AF_INET6) && body >= DIAG_INET_REQ_LEN) {
         protocol = diag_protocol(r, body);
         if (protocol == IP_PROTO_TCP) {
-            rc = diag_tcp(b, get32(r + 4), r[2]);
+            rc = diag_tcp(b, r[0], get32(r + 4), r[2]);
         } else if (protocol == IP_PROTO_UDP) {
-            rc = diag_dgram(b, SOCK_DGRAM, get32(r + 4));
+            rc = diag_dgram(b, r[0], SOCK_DGRAM, get32(r + 4));
         } else if (protocol == IPPROTO_RAW) {
-            rc = diag_dgram(b, SOCK_RAW, get32(r + 4));
+            rc = diag_dgram(b, r[0], SOCK_RAW, get32(r + 4));
         }
     } else if (r[0] == AF_UNIX && body >= DIAG_UNIX_REQ_LEN) {
         rc = diag_unix(b, get32(r + 4), get32(r + 12));
-    } else if (r[0] == AF_INET6) {
-        rc = 0;
     }
     end_msg(b, rc != 0 ? req : 0, rc);
 }

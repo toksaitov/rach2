@@ -50,7 +50,7 @@ enum vnode_kind {
     VNODE_PROC_SYS_DIR,      /* /proc/sys and a directory of its tree */
     VNODE_PROC_SYS_FILE,     /* a file of /proc/sys: a limit or a name */
     VNODE_PROC_LOADAVG,      /* /proc/loadavg: the load averages and task counts */
-    VNODE_PROC_NET_FILE,     /* /proc/net/{udp,raw,unix,sockstat,snmp}, by `procfile` */
+    VNODE_PROC_NET_FILE,     /* /proc/net's other files, by `procfile` */
     VNODE_SYS_DIR,           /* /sys and a directory of its tree, by `sysent` and `syskey` */
     VNODE_SYS_LINK,          /* /sys/bus/{pci,usb}/devices/NAME, a link to the device */
     VNODE_SYS_FILE,          /* a device's uevent, by `sysent` and `syskey` */
@@ -153,6 +153,10 @@ const char *synth_ns_name(int kind);
 /* /proc/net/if_inet6 and ipv6_route, two more of `synth_net_file`'s. */
 #define SYNTH_PROC_NETIFINET6  59
 #define SYNTH_PROC_NETIPV6RT   60
+/* /proc/net/tcp6, udp6 and raw6, three more of `synth_net_file`'s. */
+#define SYNTH_PROC_NETTCP6     61
+#define SYNTH_PROC_NETUDP6     62
+#define SYNTH_PROC_NETRAW6     63
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */
@@ -295,6 +299,9 @@ const char *synth_net_name(int origin);
 /** The origin of file `n`, from 0, of /proc/net after the first four, or 0
  * past the last. */
 int synth_net_file(int n);
+/** The place, from 0, of the file of origin `origin` among those
+ * `synth_net_name` names, the two under stat last; -1 for another. */
+int synth_net_slot(int origin);
 /** The name of the /proc/sysvipc file of origin `origin`, or NULL. */
 const char *synth_sysvipc_name(int origin);
 

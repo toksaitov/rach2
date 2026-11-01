@@ -138,27 +138,34 @@ int socket_port_bound(uint16_t port)
     return 0;
 }
 
-/** Whether `s` is one of the sockets `type` asks for, as `socket_count` takes
- * it. */
-static int socket_counted(const socket_t *s, int type)
+/** Whether `s` is one of the sockets of `family` and `type` asked for, or
+ * with `type` 0 a socket of any family and type. */
+static int socket_counted(const socket_t *s, int family, int type)
 {
-    return type == 0 || (s->type == type && s->family == AF_INET);
+    return type == 0 || (s->type == type && s->family == family);
 }
 
-int socket_count(int type)
+/** How many sockets of `family` and `type` there are, as `socket_counted`
+ * takes them. */
+static int socket_count_in(int family, int type)
 {
     const socket_t *s;
     uint32_t flags = net_lock();
     int n = 0;
 
     for (s = sockets; s; s = s->next) {
-        n += socket_counted(s, type);
+        n += socket_counted(s, family, type);
     }
     net_unlock(flags);
     return n;
 }
 
-int socket_snapshot(int type, struct socket_row **rows)
+int socket_count(int type)
+{
+    return socket_count_in(AF_INET, type);
+}
+
+int socket_snapshot(int family, int type, struct socket_row **rows)
 {
     const socket_t *s;
     struct socket_row *out;
@@ -166,7 +173,7 @@ int socket_snapshot(int type, struct socket_row **rows)
     int n, room, i;
 
     *rows = NULL;
-    room = socket_count(type);
+    room = socket_count_in(family, type);
     if (room == 0) {
         return 0;
     }
@@ -177,7 +184,7 @@ int socket_snapshot(int type, struct socket_row **rows)
     n = 0;
     flags = net_lock();
     for (s = sockets; s && n < room; s = s->next) {
-        if (!socket_counted(s, type) ||
+        if (!socket_counted(s, family, type) ||
             s->ns != (net_ns_seen() ? NULL : (const struct netns *)proc_netns(current_proc))) {
             continue;
         }
