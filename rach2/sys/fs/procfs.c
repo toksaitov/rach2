@@ -1559,7 +1559,11 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_str(t, "\nSeccomp_filters:\t");
     ap_u32(t, seccomp_filter_count(p));
     ap_str(t, "\nCpus_allowed:\t1\nCpus_allowed_list:\t0\n");
-    ap_str(t, "voluntary_ctxt_switches:\t0\nnonvoluntary_ctxt_switches:\t0\n");
+    ap_str(t, "voluntary_ctxt_switches:\t");
+    ap_u32(t, p->nvcsw);
+    ap_str(t, "\nnonvoluntary_ctxt_switches:\t");
+    ap_u32(t, p->nivcsw);
+    ap_ch(t, '\n');
     return t->len;
 }
 

@@ -356,6 +356,13 @@ void schedule(void)
     if (old->state == PROC_RUNNING && old != cpu->idle) {
         old->state = PROC_READY;
     }
+    if (old != cpu->idle) {
+        if (old->state == PROC_READY) {
+            old->nivcsw++;
+        } else {
+            old->nvcsw++;
+        }
+    }
 
     next->state = PROC_RUNNING;
     next->cpu = me;
