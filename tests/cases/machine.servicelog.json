@@ -1,19 +1,20 @@
 {
   "schema_version": 1,
   "family_id": "machine.servicelog",
-  "summary": "The log init's services write to is bounded within a boot, and a log a boot left full is removed at the next; the scenario is machine/servicelog_scenario.c and the log's bound is in utils/init.c",
+  "summary": "Init reaps an orphan on its SIGCHLD, the log init's services write to is bounded within a boot, and a log a boot left full is removed at the next; the scenario is machine/servicelog_scenario.c and the log's bound is in utils/init.c",
   "cases": [
     {
       "case_id": "machine.servicelog.bound",
-      "behavior": "on an ext2 root with init-shell as its init, a service log filled past its cap of 256 KiB is emptied within the boot to the one line init writes, once orphans have turned init's loop; filled again and left by a power-off, it is removed at the next boot",
+      "behavior": "on an ext2 root with init-shell as its init, init reaps each of ten orphans within two ticks of its end, by /proc/uptime, in at least eight of the ten; a service log filled past its cap of 256 KiB is emptied within the boot to the one line init writes, once orphans have turned init's loop; filled again and left by a power-off, it is removed at the next boot",
       "units": ["servicelog", "init-shell"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"fill_kib": 300, "cap_bytes": 262144, "most_orphans": 1000}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"timed_orphans": 10, "reap_ticks": 2, "fast_orphans": 8, "fill_kib": 300, "cap_bytes": 262144, "most_orphans": 1000}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "servicelog_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
       "steps": [
         {"step_id": "boot", "stage": "boot", "machine": "fixture", "does": "boot the copy of the root to its root shell"},
+        {"step_id": "reap", "stage": "execute", "machine": "fixture", "does": "make ten orphans, each a sleep of a second, and note the uptime when each is first seen a zombie and when it is gone"},
         {"step_id": "fill", "stage": "execute", "machine": "fixture", "does": "fill the log past its cap, make orphans until init empties it, fill it again and power off"},
         {"step_id": "reboot", "stage": "boot", "machine": "fixture", "does": "boot the same copy again to its root shell"},
         {"step_id": "check", "stage": "execute", "machine": "fixture", "does": "read the log's size and its lines saying it was emptied, and end the machine with QMP's quit"}
@@ -22,6 +23,7 @@
         {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
+        {"assertion_id": "reaped", "checks": "of ten orphans, at least eight are gone within two ticks of the tick each was first seen a zombie in, as /proc/uptime counts them", "source": "scenario"},
         {"assertion_id": "filled", "checks": "the first boot fills the log past its cap", "source": "scenario"},
         {"assertion_id": "emptied", "checks": "init empties the log within the boot, leaving less than 4 KiB and one line saying that it reached its limit", "source": "scenario"},
         {"assertion_id": "refilled", "checks": "the log is filled past its cap again", "source": "scenario"},
@@ -32,7 +34,7 @@
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 4}
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
       ],
       "bounds": {"case": {"floor_us": 5000000, "initial_us": 600000000, "ceiling_us": 1800000000}, "gap": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 33554432, "locks": [], "ports": 0, "loop_devices": 0},
