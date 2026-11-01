@@ -1659,7 +1659,7 @@
         },
         {
           "assertion_id": "session",
-          "checks": "the agent starts its packaged executable, commits the requested change with a clean tree, cancels a running command, follows a resized terminal, survives a lost SSH client and reopens its conversation",
+          "checks": "the agent starts its packaged executable, commits the requested change with a clean tree, cancels a running command, follows a resized terminal, survives a lost SSH client, reopens its conversation and leaves no process of its program once it ends",
           "source": "scenario"
         },
         {

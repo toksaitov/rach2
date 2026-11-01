@@ -21,6 +21,9 @@
 #                     and the SHA-256 of its program; AGENT may also be gh.
 #   pid AGENT         print the process of the agent in its tmux session.
 #   exe AGENT         print the program that process runs.
+#   left AGENT        print each process of the account that runs the
+#                     agent's program, /opt/AGENT/bin/AGENT, in or out of its
+#                     session.
 #   sleeps AGENT      print each process in the session that runs `sleep 600`.
 #   watch AGENT       start in the background a watcher that reads `sleeps
 #                     AGENT` four times a second and records what it first
@@ -383,6 +386,12 @@ main() {
         exe)
             pid=$(bash "$0" pid "$2")
             [ -z "$pid" ] || readlink "/proc/$pid/exe"
+            ;;
+        left)
+            for proc in /proc/[0-9]*; do
+                [ "$(readlink "$proc/exe" 2> /dev/null)" != "/opt/$2/bin/$2" ] ||
+                    printf '%s\n' "${proc#/proc/}"
+            done | sort -n
             ;;
         sleeps)
             root=$(pane_pid "$2") || exit 0

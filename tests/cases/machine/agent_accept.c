@@ -18,6 +18,7 @@ struct acceptance {
     const char *again;   /* the screen's request for a second Escape, or "" */
     char assets[4096], key[4096], root_key[4096], port[20], log[4096], target[100];
     char *screen;
+    char *left; /* the processes of OpenCode's program before it started */
     unsigned output;
     int model_selected, window, terminal_service;
 };
@@ -550,6 +551,16 @@ static int session_start(struct acceptance *s)
     free(text);
     if (!attach(s) || !attached(s))
         return 0;
+    if (!strcmp(s->agent, "opencode")) {
+        s->left = guest(s, "left", NULL);
+        if (!s->left)
+            return 0;
+        {
+            size_t n = strlen(s->left);
+            while (n && s->left[n - 1] == '\n')
+                s->left[--n] = 0;
+        }
+    }
     snprintf(command, sizeof(command), "bash ~/rach2-accept/guest.sh run %s start", s->agent);
     if (!keys(s, 1, command) || !keys(s, 0, "Enter") || !idle(s))
         return 0;
@@ -773,6 +784,12 @@ static int session_resume(struct acceptance *s)
     said(s, "reopened the conversation with its cancelled request");
     if (!quit(s))
         return 0;
+    /* OpenCode runs with a private server, which must end with it. */
+    if (s->left) {
+        if (!wait_guest(s, "left", s->left, 0))
+            return 0;
+        said(s, "left no process of its program");
+    }
     if (!tmux(s, (const char *const[]){"kill-window", "-t", s->target, NULL}))
         return 0;
     if (!remote_ok(s, 0, "tmux -L rach2-accept kill-server", NULL))
@@ -1035,6 +1052,8 @@ static int finish(struct acceptance *s)
     ok = remote_ok(s, 0, "rm -rf ~/rach2-accept && test ! -e ~/rach2-accept", NULL) && ok;
     free(s->screen);
     s->screen = NULL;
+    free(s->left);
+    s->left = NULL;
     return ok;
 }
 int agent_accept_action(struct net_case *u, const char *work, const char *agent, const char *verb,

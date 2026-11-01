@@ -29,6 +29,9 @@
 # agent's terminal must follow; kills its SSH client, after which the session
 # must lose its client and the agent go on, and attaches again; and ends the
 # agent and reopens its conversation, which must show the cancelled request.
+# OpenCode, which runs with a private server, must then leave the account the
+# processes of its program that it had before it started, such as a
+# background service of the account's own.
 # While the agent runs, its process must run the program of the agents layer,
 # /opt/AGENT/bin/AGENT.
 #
@@ -575,6 +578,7 @@ step_session() {
     guest prepare "$agent" > /dev/null || { bad "$agent: the repository"; return 1; }
     attach
     attached "the client attached" || return 1
+    left=$(guest left "$agent")
     keys -l "bash ~/rach2-accept/guest.sh run $agent start" && keys Enter
     idle "the first prompt" || return 1
     record "$agent: the first prompt" "$SCREEN"
@@ -653,7 +657,11 @@ step_session() {
         # interval: the reopened conversation is read every two seconds
         sleep 2
     done
-    quit
+    quit || return 1
+    if [ "$agent" = opencode ]; then
+        until_guest "the processes of the program as they were before" "$left" left "$agent" &&
+            say "$agent: left no process of its program: OK"
+    fi
 }
 
 # quit: end the agent with its command, and require its end to come with
