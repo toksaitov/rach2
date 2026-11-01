@@ -12,17 +12,20 @@
  * place. */
 #define VCHAN_RATE 48000u
 
-/*
- * The virtual channels, a driver with the seven stream operations and no
- * others. Each playback stream opened on it is a channel of its own, with
- * its own format, channels, rate and period; the channels that run are
- * mixed into one stream of the device's driver, `audio_hw`, which plays
- * 16-bit stereo at the rate it grants for VCHAN_RATE. The device's stream is
- * taken at the first channel's open and given back at the last one's close,
- * and it runs while a channel runs. A channel started while it runs joins
- * at the next frame of the mix not yet made, after what the device holds.
- * Capture streams are not taken: stream_open gives -ENODEV for them.
- */
+/** Playback channels mixed into one device stream, capture channels fed
+ * from one input, and the console's private playback channel. Hardware
+ * identity and controls pass through to audio_hw. */
 extern audio_driver_t vchan_driver;
+
+/** Install the dispatch driver after audio_hw is chosen, if it has streams. */
+void vchan_dispatch(void);
+
+/** Select capture of the clipped mix at boot, before any stream is open. */
+void vchan_set_loopback(int enabled);
+
+/** Read the calling process's PCM level, or set all the playback opens it
+ * owns to `level` (0 to 100). Negative only reads; no open reads as 100.
+ * A new open takes the level of that process's existing opens, else 100. */
+int vchan_pcm(int level);
 
 #endif /* _VCHAN_H_ */

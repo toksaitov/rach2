@@ -101,6 +101,17 @@ static audio_driver_t output = {.name = "output",
                                 .get_volume = m_get_volume};
 
 audio_driver_t *audio;
+audio_driver_t vchan_driver;
+static int process_pcm[2] = {100, 100};
+static int process_index;
+
+/** Model the process levels supplied by the virtual channel driver. */
+int vchan_pcm(int level)
+{
+    if (level >= 0)
+        process_pcm[process_index] = level;
+    return process_pcm[process_index];
+}
 
 /** Copy from the caller; a NULL source is a bad pointer. */
 int copy_from_user(void *dst, const void __user *src, size_t len)
@@ -281,6 +292,26 @@ static void row_requests(void)
     check(get(READ(CH_VOLUME)) == -1000 - ENODEV && !mixer_present(), "no driver");
 }
 
+/** Dispatch PCM is private to its caller; master and input controls still
+ * reach the hardware driver. */
+static void row_private_pcm(void)
+{
+    begin("private PCM", &recording);
+    vchan_driver = recording;
+    audio = &vchan_driver;
+    process_pcm[0] = process_pcm[1] = 100;
+    process_index = 0;
+    check(put(WRITE(CH_PCM), LEVEL(30)) == LEVEL(30) && md.volume == 100,
+          "PCM changes no hardware amplifier");
+    process_index = 1;
+    check(get(READ(CH_PCM)) == LEVEL(100), "other process at full PCM");
+    check(put(WRITE(CH_PCM), LEVEL(70)) == LEVEL(70), "other process sets PCM");
+    check(put(WRITE(CH_VOLUME), LEVEL(50)) == LEVEL(50) && md.volume == 50,
+          "master level independent of both PCM levels");
+    process_index = 0;
+    check(get(READ(CH_PCM)) == LEVEL(30), "first process level retained");
+}
+
 int main(void)
 {
     row_output();
@@ -288,6 +319,7 @@ int main(void)
     row_input();
     row_recsrc();
     row_requests();
+    row_private_pcm();
     printf("mixer-hosttest: result: %s\n", failures ? "fail" : "pass");
     return failures ? 1 : 0;
 }

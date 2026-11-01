@@ -24,13 +24,12 @@ int mixer_present(void);
  * next; the device, record and stereo masks, the capabilities and the
  * record source, read and written; SOUND_MIXER_INFO and OSS_GETVERSION.
  *
- * The channels are VOLUME and PCM, whose product is the driver's master
- * volume, and, on a driver with input controls (audio.h), MIC, MONITOR and
- * LINE, the levels of the microphone jack, the internal microphone and the
- * line in, RECLEV, by which each source's level is scaled for the
- * converter's gain, and IGAIN, the boost of each source's pin. Each channel
- * is one level, so a write sets the louder of the two sides and a read
- * gives the level on both. The record source is one source at a time
+ * The channels are VOLUME, the hardware master, and PCM, the calling
+ * process's playback channels before they are summed, and, on a driver with input controls
+ * (audio.h), MIC, MONITOR and LINE, the levels of the microphone jack, the internal microphone and
+ * the line in, RECLEV, by which each source's level is scaled for the converter's gain, and IGAIN,
+ * the boost of each source's pin. Each channel is one level, so a write sets the louder of the two
+ * sides and a read gives the level on both. The record source is one source at a time
  * (SOUND_CAP_EXCL_INPUT); a write of a mask of several takes one that is
  * not recorded now. -EINVAL for a channel the mask lacks, -ENOTTY for
  * another request, -EFAULT for a bad pointer, -ENODEV when no driver with a

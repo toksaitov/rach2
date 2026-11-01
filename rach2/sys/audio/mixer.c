@@ -6,6 +6,7 @@
 #include "mixer.h"
 
 #include "audio.h"
+#include "vchan.h"
 
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -119,7 +120,7 @@ static void apply_gain(int src)
 /** Give the driver the master volume, VOLUME times PCM. */
 static void apply_volume(void)
 {
-    audio->set_volume(scale(mx.volume, mx.pcm));
+    audio->set_volume(audio == &vchan_driver ? mx.volume : scale(mx.volume, mx.pcm));
     mx.applied = audio->get_volume();
 }
 
@@ -201,7 +202,7 @@ static int get_level(int ch)
     if (ch == CH_VOLUME)
         return mx.volume;
     if (ch == CH_PCM)
-        return mx.pcm;
+        return audio == &vchan_driver ? vchan_pcm(-1) : mx.pcm;
     if (ch == CH_RECLEV)
         return mx.reclev;
     if (ch == CH_IGAIN)
@@ -219,7 +220,9 @@ static void set_level(int ch, int level)
     unsigned controls, sources = input_caps(&controls);
     int i;
 
-    if (ch == CH_VOLUME || ch == CH_PCM) {
+    if (ch == CH_PCM && audio == &vchan_driver) {
+        (void)vchan_pcm(level);
+    } else if (ch == CH_VOLUME || ch == CH_PCM) {
         *(ch == CH_VOLUME ? &mx.volume : &mx.pcm) = level;
         apply_volume();
     } else if (ch == CH_RECLEV) {

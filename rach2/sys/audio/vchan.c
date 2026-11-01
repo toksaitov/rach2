@@ -59,7 +59,9 @@ struct vchan {
     uint32_t at;
     uint32_t played;
     uint32_t frac;
-    uint32_t mark; /* `played` at the end of its last period */
+    uint32_t process; /* the process that opened it, unchanged across fork */
+    int volume;       /* its process PCM level, 0 to 100 */
+    uint32_t mark;    /* `played` at the end of its last period */
 };
 
 /*
@@ -70,6 +72,8 @@ struct vchan {
  * the channels' state and the counts between process context and the
  * device's interrupt.
  */
+static void vchan_capture_feed(audio_stream_t *s, uint8_t *buf, size_t size);
+
 static struct {
     audio_driver_t *hw; /* the device's driver; NULL while no channel is open */
     audio_stream_t stream;
@@ -212,8 +216,8 @@ static void vchan_mix(struct vchan *c, uint32_t n)
                 right += (c->nxt[1] - right) * (int32_t)w / (1 << VCHAN_WEIGHT);
             }
         }
-        sum[2 * i] += left;
-        sum[2 * i + 1] += right;
+        sum[2 * i] += left * c->volume / 100;
+        sum[2 * i + 1] += right * c->volume / 100;
         c->phase += rate;
     }
 }
@@ -227,6 +231,7 @@ static void vchan_render(audio_stream_t *s, uint8_t *buf, size_t size)
 {
     uint32_t frames = (uint32_t)(size / 4u);
     uint32_t flags, n, i;
+    uint8_t *block;
     struct vchan *c;
     int32_t v;
 
@@ -240,12 +245,14 @@ static void vchan_render(audio_stream_t *s, uint8_t *buf, size_t size)
                 vchan_mix(c, n);
             }
         }
+        block = buf;
         for (i = 0; i < 2 * n; i++) {
             v = mix.sum[i] < -32768 ? -32768 : mix.sum[i] > 32767 ? 32767 : mix.sum[i];
             buf[0] = (uint8_t)((uint16_t)v & 0xFFu);
             buf[1] = (uint8_t)((uint16_t)v >> 8);
             buf += 2;
         }
+        vchan_capture_feed(s, block, n * 4u);
         mix.made += n;
         frames -= n;
     }
@@ -320,6 +327,13 @@ static int vchan_take(audio_driver_t *hw)
     return 0;
 }
 
+static int vchan_capture_open(audio_stream_t *s);
+static int vchan_capture_setup(audio_stream_t *s);
+static int vchan_capture_start(audio_stream_t *s);
+static void vchan_capture_stop(audio_stream_t *s);
+static void vchan_capture_close(audio_stream_t *s);
+static uint32_t vchan_capture_position(audio_stream_t *s);
+
 /** Open a channel for playback stream `s`; the first takes the device's
  * stream (vchan_take). 0, -ENODEV for capture or a device with no streams,
  * -ENOMEM, or vchan_take's error. */
@@ -330,7 +344,10 @@ static int vchan_open(audio_stream_t *s)
     uint32_t flags;
     int rc;
 
-    if (s->dir != AUDIO_PLAYBACK || !hw || !hw->stream_open) {
+    if (s->dir == AUDIO_CAPTURE) {
+        return vchan_capture_open(s);
+    }
+    if (!hw || !hw->stream_open) {
         return -ENODEV;
     }
     if (vchan_find(s)) {
@@ -348,6 +365,8 @@ static int vchan_open(audio_stream_t *s)
         }
     }
     c->s = s;
+    c->process = audio_process_id();
+    c->volume = vchan_pcm(-1);
     c->frame = vchan_frame_bytes(s);
     flags = spin_lock_irqsave(&mix.lock);
     c->next = mix.list;
@@ -371,6 +390,9 @@ static int vchan_setup(audio_stream_t *s)
     struct vchan *c = vchan_find(s);
     uint32_t top, rate, frame, max, want, first = 1, frac = 0, dev, cap;
 
+    if (s->dir == AUDIO_CAPTURE) {
+        return vchan_capture_setup(s);
+    }
     if (!c || c->running || s->rate == 0 || (s->format != AUDIO_U8 && s->format != AUDIO_S16LE) ||
         s->channels < 1 || s->channels > 2) {
         return -EINVAL;
@@ -414,6 +436,9 @@ static int vchan_start(audio_stream_t *s)
     struct vchan *c = vchan_find(s);
     uint32_t flags;
 
+    if (s->dir == AUDIO_CAPTURE) {
+        return vchan_capture_start(s);
+    }
     if (!c) {
         return -EIO;
     }
@@ -452,6 +477,10 @@ static void vchan_stop(audio_stream_t *s)
     uint32_t flags;
     int others = 0;
 
+    if (s->dir == AUDIO_CAPTURE) {
+        vchan_capture_stop(s);
+        return;
+    }
     if (!c || !c->running) {
         return;
     }
@@ -475,6 +504,10 @@ static void vchan_close(audio_stream_t *s)
     struct vchan **p;
     uint32_t flags;
 
+    if (s->dir == AUDIO_CAPTURE) {
+        vchan_capture_close(s);
+        return;
+    }
     if (!c) {
         return;
     }
@@ -520,6 +553,9 @@ static uint32_t vchan_position(audio_stream_t *s)
     struct vchan *c = vchan_find(s);
     uint32_t played = 0, taken;
 
+    if (s->dir == AUDIO_CAPTURE) {
+        return vchan_capture_position(s);
+    }
     if (c) {
         vchan_counts(c, &played, &taken);
     }
@@ -541,28 +577,541 @@ static uint32_t vchan_delay(audio_stream_t *s)
     return taken - played;
 }
 
-/* The audio_driver_t fields, in the order audio.h declares them: name,
-   type, init, shutdown, start, stop, is_playing, set_callback, write,
-   set_volume, get_volume, the seven stream operations, then the three
-   input controls; the channels have the stream operations alone. */
+/* Each reader owns its conversion phase and staging period. The input
+ * stream stays at its first reader's settings once another reader opens. */
+struct vchan_reader {
+    audio_stream_t *s;
+    struct vchan_reader *next;
+    int running;
+    uint32_t phase;  /* output rate accumulated against the input rate */
+    uint32_t at;     /* input position when this reader started */
+    uint32_t frames; /* frames handed to this reader since its start */
+    uint32_t used;   /* bytes staged, less than its period */
+    uint8_t *buffer; /* one period, at most VCHAN_START_MAX bytes */
+};
+
+static struct {
+    struct vchan_reader *list;
+    audio_stream_t stream;
+    audio_stream_t clock; /* silent playback channel clocks loopback */
+    audio_driver_t *hw;
+    int running;
+    int loopback;
+    struct spinlock lock;
+} input;
+
+/** The reader of `s`, or NULL; calls in process context are serialized by
+ * the kernel lock, and the interrupt's walks hold input.lock. */
+static struct vchan_reader *vchan_reader_find(audio_stream_t *s)
+{
+    struct vchan_reader *r;
+
+    for (r = input.list; r; r = r->next)
+        if (r->s == s)
+            return r;
+    return NULL;
+}
+
+/** Fill the loopback clock's playback with silence; it owns no samples. */
+static void vchan_silence(audio_stream_t *s, uint8_t *buf, size_t size)
+{
+    (void)s;
+    k_memset(buf, 0, size);
+}
+
+/** The clock has no caller to wake at a period. */
+static void vchan_clock_period(audio_stream_t *s)
+{
+    (void)s;
+}
+
+/**
+ * Convert the input frames at `buf` into each running reader's format and
+ * rate. Each input frame is repeated or omitted by the reader's rational
+ * phase, and each complete reader period is handed over and announced.
+ * Loopback feeds the clipped playback mix; a real input calls this from
+ * its interrupt. No caller may call the driver back from either callback.
+ */
+static void vchan_capture_feed(audio_stream_t *s, uint8_t *buf, size_t size)
+{
+    struct vchan_reader *r;
+    uint32_t flags, i, n, frame;
+    int16_t sample[2];
+    int value, ch;
+
+    if (!input.running || (input.loopback ? s != &mix.stream : s != &input.stream))
+        return;
+    flags = spin_lock_irqsave(&input.lock);
+    frame = vchan_frame_bytes(s);
+    n = (uint32_t)size / frame;
+    for (r = input.list; r; r = r->next) {
+        if (!r->running)
+            continue;
+        for (i = 0; i < n; i++) {
+            vchan_frame(s, buf + i * frame, sample);
+            r->phase += r->s->rate;
+            while (r->phase >= s->rate) {
+                r->phase -= s->rate;
+                for (ch = 0; ch < r->s->channels; ch++) {
+                    value = r->s->channels == 1 ? ((int)sample[0] + sample[1]) / 2 : sample[ch];
+                    if (r->s->format == AUDIO_U8) {
+                        r->buffer[r->used++] = (uint8_t)((value + 32768) / 256);
+                    } else {
+                        r->buffer[r->used++] = (uint8_t)((uint16_t)value & 255u);
+                        r->buffer[r->used++] = (uint8_t)((uint16_t)value >> 8);
+                    }
+                }
+                r->frames++;
+                if (r->used == r->s->period_bytes) {
+                    r->s->transfer(r->s, r->buffer, r->used);
+                    r->used = 0;
+                    r->s->period(r->s);
+                }
+            }
+        }
+    }
+    spin_unlock_irqrestore(&input.lock, flags);
+}
+
+/** Open a reader, taking the device's input at the first open; in loopback
+ * a silent playback channel takes its place. 0, -ENOMEM, or the device's
+ * error. A failed open gives back everything it took. */
+static int vchan_capture_open(audio_stream_t *s)
+{
+    struct vchan_reader *r;
+    audio_stream_t *m = &input.stream;
+    uint32_t flags;
+    int rc;
+
+    if (vchan_reader_find(s))
+        return -EBUSY;
+    r = (struct vchan_reader *)kzalloc(sizeof(*r));
+    if (!r)
+        return -ENOMEM;
+    r->buffer = (uint8_t *)kmalloc(VCHAN_START_MAX);
+    if (!r->buffer) {
+        kfree(r);
+        return -ENOMEM;
+    }
+    if (!input.list) {
+        if (input.loopback) {
+            k_memset(&input.clock, 0, sizeof(input.clock));
+            input.clock.dir = AUDIO_PLAYBACK;
+            input.clock.rate = VCHAN_RATE;
+            input.clock.format = AUDIO_S16LE;
+            input.clock.channels = 2;
+            input.clock.transfer = vchan_silence;
+            input.clock.period = vchan_clock_period;
+            rc = vchan_open(&input.clock);
+            if (rc == 0) {
+                input.clock.period_bytes = mix.stream.period_bytes;
+                input.clock.periods = 2;
+                rc = vchan_setup(&input.clock);
+                if (rc != 0)
+                    vchan_close(&input.clock);
+            }
+            if (rc == 0)
+                *m = mix.stream;
+        } else {
+            *m = *s;
+            m->transfer = vchan_capture_feed;
+            m->period = vchan_clock_period;
+            input.hw = audio_hw;
+            rc = input.hw->stream_open(m);
+        }
+        if (rc != 0) {
+            kfree(r->buffer);
+            kfree(r);
+            return rc;
+        }
+    }
+    r->s = s;
+    flags = spin_lock_irqsave(&input.lock);
+    r->next = input.list;
+    input.list = r;
+    spin_unlock_irqrestore(&input.lock, flags);
+    return 0;
+}
+
+/** Grant a stopped reader its format and rate. The only reader may set a
+ * stopped device's parameters; several readers convert independently from
+ * the fixed input. 0, -EINVAL, or the device's setup error. */
+static int vchan_capture_setup(audio_stream_t *s)
+{
+    struct vchan_reader *r = vchan_reader_find(s);
+    audio_stream_t old = input.stream;
+    audio_stream_t *m = &input.stream;
+    uint32_t frame, max;
+    int rc;
+
+    if (!r || r->running || !s->rate || s->rate > VCHAN_RATE_MAX ||
+        (s->format != AUDIO_U8 && s->format != AUDIO_S16LE) || s->channels < 1 || s->channels > 2 ||
+        s->period_bytes > VCHAN_START_MAX)
+        return -EINVAL;
+    if (!input.loopback && !input.running && input.list == r && !r->next) {
+        *m = *s;
+        m->transfer = vchan_capture_feed;
+        m->period = vchan_clock_period;
+        rc = input.hw->stream_setup(m);
+        if (rc != 0) {
+            *m = old;
+            return rc;
+        }
+        s->rate = m->rate;
+        s->format = m->format;
+        s->channels = m->channels;
+        s->period_bytes = m->period_bytes;
+    }
+    if (!m->rate || m->rate > VCHAN_RATE_MAX)
+        return -EIO;
+    frame = vchan_frame_bytes(s);
+    max = (m->period_bytes / vchan_frame_bytes(m)) * s->rate / m->rate;
+    if (s->period_bytes / frame > max)
+        s->period_bytes = max * frame;
+    s->period_bytes -= s->period_bytes % frame;
+    if (!s->period_bytes)
+        return -EINVAL;
+    s->device_periods = m->device_periods;
+    r->used = 0;
+    return 0;
+}
+
+/** Start reader `s`, starting the shared input only for its first running
+ * reader. 0, -EIO, or the device's error. */
+static int vchan_capture_start(audio_stream_t *s)
+{
+    struct vchan_reader *r = vchan_reader_find(s);
+    uint32_t flags;
+    int rc = 0;
+
+    if (!r)
+        return -EIO;
+    r->at = input.running && !input.loopback ? input.hw->stream_position(&input.stream) : 0;
+    flags = spin_lock_irqsave(&input.lock);
+    r->running = 1;
+    r->phase = r->frames = r->used = 0;
+    spin_unlock_irqrestore(&input.lock, flags);
+    if (!input.running) {
+        input.running = 1;
+        rc = input.loopback ? vchan_start(&input.clock) : input.hw->stream_start(&input.stream);
+        if (rc != 0) {
+            input.running = 0;
+            r->running = 0;
+        }
+    }
+    return rc;
+}
+
+/** Stop reader `s`; the last running reader stops the shared input without
+ * touching another reader's buffer or any playback channel. */
+static void vchan_capture_stop(audio_stream_t *s)
+{
+    struct vchan_reader *r = vchan_reader_find(s), *other;
+    uint32_t flags;
+    int running = 0;
+
+    if (!r || !r->running)
+        return;
+    flags = spin_lock_irqsave(&input.lock);
+    r->running = 0;
+    for (other = input.list; other; other = other->next)
+        running |= other->running;
+    spin_unlock_irqrestore(&input.lock, flags);
+    if (!running && input.running) {
+        input.running = 0;
+        if (input.loopback)
+            vchan_stop(&input.clock);
+        else
+            input.hw->stream_stop(&input.stream);
+    }
+}
+
+/** Close reader `s`; the last close releases the shared input. */
+static void vchan_capture_close(audio_stream_t *s)
+{
+    struct vchan_reader *r = vchan_reader_find(s), **p;
+    uint32_t flags;
+
+    if (!r)
+        return;
+    vchan_capture_stop(s);
+    flags = spin_lock_irqsave(&input.lock);
+    for (p = &input.list; *p != r; p = &(*p)->next) {
+    }
+    *p = r->next;
+    spin_unlock_irqrestore(&input.lock, flags);
+    kfree(r->buffer);
+    kfree(r);
+    if (!input.list) {
+        if (input.loopback)
+            vchan_close(&input.clock);
+        else
+            input.hw->stream_close(&input.stream);
+        input.hw = NULL;
+    }
+}
+
+/** The reader's frames captured since its start, including frames its
+ * caller dropped and those staged for its next period. */
+static uint32_t vchan_capture_position(audio_stream_t *s)
+{
+    struct vchan_reader *r = vchan_reader_find(s);
+    uint32_t flags, frames = 0, delta, n, frac = 0, position = 0;
+
+    if (r && r->running && !input.loopback)
+        position = input.hw->stream_position(&input.stream);
+    flags = spin_lock_irqsave(&input.lock);
+    if (r && r->running) {
+        frames = r->frames;
+        if (!input.loopback) {
+            delta = position - r->at;
+            frames = 0;
+            while (delta) {
+                n = delta < VCHAN_CHUNK ? delta : VCHAN_CHUNK;
+                frac += n * s->rate;
+                frames += frac / input.stream.rate;
+                frac %= input.stream.rate;
+                delta -= n;
+            }
+        }
+    }
+    spin_unlock_irqrestore(&input.lock, flags);
+    return frames;
+}
+
+/** Select loopback at boot, before any stream opens. */
+void vchan_set_loopback(int enabled)
+{
+    input.loopback = enabled;
+}
+
+/** Read the calling process's PCM level, or set every playback channel it
+ * opened when `level` is nonnegative. With no channels it reads 100. The
+ * opener's process identity stays with a channel across fork and exec. */
+int vchan_pcm(int level)
+{
+    struct vchan *c;
+    uint32_t process = audio_process_id(), flags;
+    int value = 100;
+
+    flags = spin_lock_irqsave(&mix.lock);
+    for (c = mix.list; c; c = c->next) {
+        if (c->process != process || c->s == &input.clock)
+            continue;
+        if (level >= 0)
+            c->volume = level > 100 ? 100 : level;
+        value = c->volume;
+    }
+    spin_unlock_irqrestore(&mix.lock, flags);
+    return value;
+}
+
+/* The console's AUDIO_* interface has one channel of its own. Its write
+ * ring and callback are independent of every /dev/dsp open. */
+static struct {
+    audio_stream_t stream;
+    audio_callback_t callback;
+    uint8_t *ring;
+    uint32_t head, used;
+    uint32_t capacity; /* three periods of the console caller's frames */
+    int opened;
+    struct spinlock lock;
+} console_audio;
+
+/** Fill the console channel from its callback or write ring; missing whole
+ * frames become silence. Called with the mix locked and interrupts off. */
+static void vchan_console_transfer(audio_stream_t *s, uint8_t *buf, size_t size)
+{
+    uint32_t flags, n, first, frame = vchan_frame_bytes(s);
+
+    if (console_audio.callback) {
+        console_audio.callback(buf, size);
+        return;
+    }
+    flags = spin_lock_irqsave(&console_audio.lock);
+    n = console_audio.used - console_audio.used % frame;
+    if (n > size)
+        n = (uint32_t)size;
+    first = n < console_audio.capacity - console_audio.head
+                ? n
+                : console_audio.capacity - console_audio.head;
+    k_memcpy(buf, console_audio.ring + console_audio.head, first);
+    k_memcpy(buf + first, console_audio.ring, n - first);
+    console_audio.head = (console_audio.head + n) % console_audio.capacity;
+    console_audio.used -= n;
+    spin_unlock_irqrestore(&console_audio.lock, flags);
+    k_memset(buf + n, s->format == AUDIO_U8 ? 128 : 0, size - n);
+}
+
+/** Stop and release only the console's playback channel. */
+static void vchan_console_stop(void)
+{
+    if (!console_audio.opened)
+        return;
+    vchan_close(&console_audio.stream);
+    console_audio.opened = 0;
+    kfree(console_audio.ring);
+    console_audio.ring = NULL;
+    console_audio.head = console_audio.used = 0;
+}
+
+/** Start the console's own channel at the requested parameters; 0, or the
+ * stream's error. A refused format leaves any running channel alone. */
+static int vchan_console_start(uint32_t rate, audio_format_t format, int channels)
+{
+    audio_stream_t *s = &console_audio.stream;
+    int rc;
+
+    if (!rate || rate > VCHAN_RATE_MAX || (format != AUDIO_U8 && format != AUDIO_S16LE) ||
+        channels < 1 || channels > 2)
+        return -EINVAL;
+    vchan_console_stop();
+    console_audio.ring = (uint8_t *)kmalloc(VCHAN_START_MAX);
+    if (!console_audio.ring)
+        return -ENOMEM;
+    k_memset(s, 0, sizeof(*s));
+    s->rate = rate;
+    s->format = format;
+    s->channels = channels;
+    s->period_bytes = VCHAN_PERIOD;
+    s->periods = 2;
+    s->transfer = vchan_console_transfer;
+    s->period = vchan_clock_period;
+    rc = vchan_open(s);
+    if (rc == 0) {
+        console_audio.opened = 1;
+        rc = vchan_setup(s);
+        if (rc == 0) {
+            console_audio.capacity = 3u * s->period_bytes;
+            if (console_audio.capacity > VCHAN_START_MAX)
+                console_audio.capacity = VCHAN_START_MAX;
+            rc = vchan_start(s);
+        }
+    }
+    if (rc != 0) {
+        if (console_audio.opened)
+            vchan_console_stop();
+        else {
+            kfree(console_audio.ring);
+            console_audio.ring = NULL;
+        }
+    }
+    return rc;
+}
+
+/** Whether the console's channel is running. */
+static bool vchan_console_playing(void)
+{
+    return console_audio.opened != 0;
+}
+
+/** Select the console channel's callback, or NULL for its write ring. */
+static void vchan_console_callback(audio_callback_t fn)
+{
+    console_audio.callback = fn;
+}
+
+/** Queue at most the room in the console channel's ring; the bytes taken,
+ * or -EINVAL while stopped or for an empty write. */
+static int vchan_console_write(const uint8_t *buf, size_t size)
+{
+    uint32_t flags, n, tail, first;
+
+    if (!console_audio.opened || !buf || !size)
+        return -EINVAL;
+    flags = spin_lock_irqsave(&console_audio.lock);
+    n = console_audio.capacity - console_audio.used;
+    if (n > size)
+        n = (uint32_t)size;
+    tail = (console_audio.head + console_audio.used) % console_audio.capacity;
+    first = n < console_audio.capacity - tail ? n : console_audio.capacity - tail;
+    k_memcpy(console_audio.ring + tail, buf, first);
+    k_memcpy(console_audio.ring, buf + first, n - first);
+    console_audio.used += n;
+    spin_unlock_irqrestore(&console_audio.lock, flags);
+    return (int)n;
+}
+
+/** Set the hardware's master level; PCM is each process's channel level. */
+static void vchan_volume(int level)
+{
+    audio_hw->set_volume(level);
+}
+
+/** The hardware's master level. */
+static int vchan_get_volume(void)
+{
+    return audio_hw->get_volume();
+}
+
+/** The hardware's input capabilities, or none. */
+static unsigned vchan_input_caps(unsigned *controls)
+{
+    *controls = 0;
+    return audio_hw->input_caps ? audio_hw->input_caps(controls) : 0;
+}
+
+/** Select or read the hardware's input source; -1 when it has none. */
+static int vchan_input_select(int source)
+{
+    return audio_hw->input_select ? audio_hw->input_select(source) : -1;
+}
+
+/** Read or set the hardware's input amplifier; -EINVAL when absent. */
+static int vchan_input_level(int ctl, int source, int level)
+{
+    return audio_hw->input_level ? audio_hw->input_level(ctl, source, level) : -EINVAL;
+}
+
+/** The channel's delay, or the console's queue and channel for NULL. */
+static uint32_t vchan_dispatch_delay(audio_stream_t *s)
+{
+    if (s)
+        return vchan_delay(s);
+    if (!console_audio.opened)
+        return 0;
+    return console_audio.used / vchan_frame_bytes(&console_audio.stream) +
+           vchan_delay(&console_audio.stream);
+}
+
+/** Shut down the console channel and then the hardware at machine exit. */
+static void vchan_shutdown(void)
+{
+    vchan_console_stop();
+    if (audio_hw->shutdown)
+        audio_hw->shutdown();
+}
+
+/* Hardware identity is filled by vchan_dispatch at boot. */
 audio_driver_t vchan_driver = {"Virtual channels",
                                AUDIO_DRIVER_NONE,
                                NULL,
-                               NULL,
-                               NULL,
-                               NULL,
-                               NULL,
-                               NULL,
-                               NULL,
-                               NULL,
-                               NULL,
+                               vchan_shutdown,
+                               vchan_console_start,
+                               vchan_console_stop,
+                               vchan_console_playing,
+                               vchan_console_callback,
+                               vchan_console_write,
+                               vchan_volume,
+                               vchan_get_volume,
                                vchan_open,
                                vchan_setup,
                                vchan_start,
                                vchan_stop,
                                vchan_close,
                                vchan_position,
-                               vchan_delay,
-                               NULL,
-                               NULL,
-                               NULL};
+                               vchan_dispatch_delay,
+                               vchan_input_caps,
+                               vchan_input_select,
+                               vchan_input_level};
+
+/** Install the mix over hardware that has streams; the speaker stays
+ * directly accessible, since it cannot play PCM samples. */
+void vchan_dispatch(void)
+{
+    if (!audio_hw || !audio_hw->stream_open)
+        return;
+    vchan_driver.name = audio_hw->name;
+    vchan_driver.type = audio_hw->type;
+    audio_set_dispatch(&vchan_driver);
+}

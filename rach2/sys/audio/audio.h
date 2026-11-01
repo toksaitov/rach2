@@ -232,6 +232,10 @@ void init_audio(void);
  */
 void audio_set_dispatch(audio_driver_t *d);
 
+/** The calling process identity in the kernel namespace, or 0 at boot.
+ * Channels keep it at open, so an inherited open stays its opener's. */
+uint32_t audio_process_id(void);
+
 /** Name of the active driver, or "None" when none is active. */
 const char *audio_get_driver_name(void);
 

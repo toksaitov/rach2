@@ -2,7 +2,7 @@
  * dsp.c: /dev/dsp (dsp.h), OSS's audio device: for each direction an open
  * has, a buffer of periods between the program and a stream, and OSS's
  * ioctls. Each open plays on a virtual channel of its own (vchan.h), so
- * that several play at once, and records on the device's stream.
+ * that several play at once, and records on a virtual reader of the shared input.
  */
 
 #include "dsp.h"
@@ -501,10 +501,10 @@ static int dsp_configure(struct dsp *d, audio_format_t format, int channels, uin
 
 /** Set direction `c` of the new open `d` up as `dir`, at OSS's defaults,
  * over the buffer `ring`: playback on a virtual channel of the mix, and
- * capture on the device's stream. */
+ * capture on a virtual reader of the shared input. */
 static void dsp_chan_init(struct dsp *d, struct dsp_chan *c, audio_dir_t dir, uint8_t *ring)
 {
-    c->drv = dir == AUDIO_CAPTURE ? audio : &vchan_driver;
+    c->drv = &vchan_driver;
     c->ring = ring;
     c->stream.dir = dir;
     c->stream.format = AUDIO_U8;
