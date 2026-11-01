@@ -2589,6 +2589,7 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     underrun_count = 0;
     underrun_samples = 0;
     hw_fill_count = 0;
+    missed_revolutions = 0;
     session_bytes_written = 0;
     session_bytes_dropped = 0;
     ring_high_water = 0;

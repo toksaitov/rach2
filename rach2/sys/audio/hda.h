@@ -244,7 +244,7 @@ typedef struct {
 
 /* The output stream's queue, read live by hda_read_queue with no verb. The
  * byte counts are of the ring, in the format the stream was started with;
- * all but `lpib` and `missed` start again at each start. */
+ * all but `lpib` start again at each start. */
 typedef struct {
     uint32_t fill;      /* bytes queued in the write ring */
     uint32_t high;      /* the most bytes the ring has held */
