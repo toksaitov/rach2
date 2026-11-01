@@ -172,6 +172,15 @@ for a cable and 600 for Wi-Fi, and the resolver's file lists the cable's
 servers first, so a machine on both sends by the cable while it is
 plugged in, by Wi-Fi once it is pulled, and by the cable again when it
 returns.
+init gives IPv6 the same order: once each of
+.Ql eth0
+and
+.Ql wlan0
+is there, it writes 100 and 600 to its
+.Pa /proc/sys/net/ipv6/conf/ Ns Ar NAME Ns Pa /ra_defrtr_metric ,
+the metric of the default routes its routers advertise, which
+.Xr proc 5
+describes.
 .It Sy init-recovery
 Provides the network and service functions of the metal build
 and the recovery duties.

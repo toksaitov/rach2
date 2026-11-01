@@ -156,7 +156,6 @@ make -C utils -f Makefile.linux
 * Every program is linked statically.
 * The file programs are much smaller than POSIX's; [busybox-coreutils(1)](../man/man1/busybox-coreutils.1) says what each does.
 * The network programs but ndwatch, and the resolver, use IPv4 only.
-* The lease script gives the cable's IPv4 default route metric 100 and Wi-Fi's 600, but the IPv6 default routes the routers advertise have the kernel's metric, 1024, on every interface, as on Linux without NetworkManager, so a machine on both may send IPv6 by either.
 * `wifi` adds no hidden network, and no enterprise network that wants a client certificate.
 * `sudo` and `adduser-crash` are staged only in the test image.
 * init empties its service log, `/var/log/services`, in place when it is full and does not rotate it, so what the services wrote before that is lost ([init(8)](../man/man8/init.8)).

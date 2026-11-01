@@ -1024,6 +1024,10 @@ IPv6, and set to 0 again starts it from its link-local address, making
 its addresses again;
 .Pa forwarding ,
 0, which at 1 makes the interface answer as a router and solicit none;
+.Pa ra_defrtr_metric ,
+1024, the metric of the default route each router's advertisement gives,
+from 1 up, which a write sets on the routes already learned as well as on
+the next, where Linux waits for the next advertisement;
 .Pa use_tempaddr ,
 0, which above 0 makes a temporary address beside each made from a
 router's prefix and at 2 prefers it as a source; and

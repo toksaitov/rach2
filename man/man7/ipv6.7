@@ -131,8 +131,10 @@ the prefix of each of the cards' addresses, on the link, at metric 256;
 the prefixes routers advertise, on the link, at 256, for as long as the
 advertisement says;
 .It
-each router that advertises itself, as a default route at 1024, for its
-router lifetime, a router known to be unreachable losing to another;
+each router that advertises itself, as a default route at the card's
+.Va ra_defrtr_metric ,
+1024 unless written, for its router lifetime, a router known to be
+unreachable losing to another;
 .It
 and the routes a program adds, with
 .Ql route -A inet6 add
@@ -173,6 +175,7 @@ describes:
 .Va autoconf ,
 .Va disable_ipv6 ,
 .Va forwarding ,
+.Va ra_defrtr_metric ,
 .Va stable_secret
 and
 .Va use_tempaddr ,
