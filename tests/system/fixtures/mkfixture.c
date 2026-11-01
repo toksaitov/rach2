@@ -63,8 +63,8 @@
 #define AUTH_PART_LBA     2048
 #define AUTH_PART_SECTORS 2048
 
-#define TONE_RATE  48000
-#define TONE_MS    400
+#define TONE_RATE  48000u
+#define TONE_MS    400u
 #define TONE_LEVEL 8000
 static const unsigned tone_hz[] = {250, 400, 500};
 
