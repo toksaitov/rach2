@@ -27,9 +27,10 @@
 # build/x86_64/vendor-work/libtsm/ for x86-64 (mk/arch.sh), compiles with the
 # musl wrapper and stages under build/vendor/libtsm/ or
 # build/x86_64/vendor/libtsm/, with the archive of the patched sources that
-# term's guest build compiles. A host build extracts
-# into build/host/vendor-work/libtsm/, compiles with HOSTCC, cc unless set,
-# and stages under build/host/vendor/libtsm/. Each stage has lib/libtsm.a and
+# term's guest build compiles. A host build extracts into build/host/,
+# where the host tests compile its tree, builds in
+# build/host/vendor-work/libtsm/ with HOSTCC, cc unless set, and stages under
+# build/host/vendor/libtsm/. Each stage has lib/libtsm.a and
 # include/libtsm.h.
 #
 # Usage: RACH2_ARCH=i686|x86_64 ./build_libtsm.sh
@@ -50,6 +51,8 @@ TARBALL_SHA256="50811e9e94fc798eb5dcbaff20f81067c942ec47f329f91bbe4caeb35a61ff05
 
 if [ "${1-}" = "--host" ]; then
     WORK="$REPO/build/host/vendor-work/libtsm"
+    # The host tests compile this tree, so its path is short.
+    TREE="$REPO/build/host"
     STAGE="$REPO/build/host/vendor/libtsm"
     CC="${HOSTCC:-cc}"
     AR="ar"
@@ -57,6 +60,7 @@ if [ "${1-}" = "--host" ]; then
 else
     . "$REPO/mk/arch.sh"
     WORK="$ARCH_VENDOR/libtsm"
+    TREE="$WORK"
     STAGE="$ARCH_BUILD/vendor/libtsm"
     CC="$SCRIPT_DIR/../musl/muslgcc"
     AR="${CROSS}ar"
@@ -66,7 +70,7 @@ else
         exit 1
     fi
 fi
-SRC="$WORK/libtsm-${VERSION}"
+SRC="$TREE/libtsm-${VERSION}"
 OBJ="$WORK/obj"
 cd "$SCRIPT_DIR"
 
@@ -90,10 +94,10 @@ if [ "$GOT" != "$TARBALL_SHA256" ]; then
     exit 1
 fi
 
-echo "libtsm: extracting into $WORK"
+echo "libtsm: extracting into $TREE"
 rm -rf "$SRC" "$OBJ"
-mkdir -p "$WORK" "$OBJ"
-tar xzf "$TARBALL" -C "$WORK"
+mkdir -p "$TREE" "$OBJ"
+tar xzf "$TARBALL" -C "$TREE"
 
 echo "libtsm: replacing the LGPL hash table with Rach2's"
 rm -f "$SRC/LICENSE_htable" "$SRC/src/shared/shl-htable.c" "$SRC/src/shared/shl-htable.h"

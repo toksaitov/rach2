@@ -1,19 +1,19 @@
 /* Unicode cells and recorded agent output through term's real screen layer.
  * host-deps: term/screen.c term/pty.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-screen.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-render.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-selection.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-unicode.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-vte.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-vte-charsets.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/shared/shl-htable.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-screen.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-render.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-selection.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-unicode.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-vte.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-vte-charsets.c
+ * host-deps: build/host/libtsm-4.8.0/src/shared/shl-htable.c
+ * host-deps: build/host/libtsm-4.8.0/external/wcwidth/wcwidth.c
  * host-inputs: tests/fixtures/agents/claude-xterm-256color.typescript
- * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm
- * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/src/shared
- * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/external
- * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/external/wcwidth -I rach2/include
- * host-cflags: -include build/host/vendor-work/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.h
+ * host-cflags: -I build/host/libtsm-4.8.0/src/tsm
+ * host-cflags: -I build/host/libtsm-4.8.0/src/shared
+ * host-cflags: -I build/host/libtsm-4.8.0/external
+ * host-cflags: -I build/host/libtsm-4.8.0/external/wcwidth -I rach2/include
+ * host-cflags: -include build/host/libtsm-4.8.0/external/wcwidth/wcwidth.h
  * host-cflags: -std=gnu99 -D_GNU_SOURCE -Dwcwidth=tsm_wcwidth
  */
 #include <stdio.h>

@@ -3,20 +3,20 @@
  * 0018- patches of vendor/libtsm/patches: the CSI collector's < and =, SCOSC
  * and SCORC, xterm's legacy key encoding, and the Kitty keyboard protocol.
  *
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-vte.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-screen.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-unicode.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-vte-charsets.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-selection.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-render.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/shared/shl-htable.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-vte.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-screen.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-unicode.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-vte-charsets.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-selection.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-render.c
+ * host-deps: build/host/libtsm-4.8.0/src/shared/shl-htable.c
+ * host-deps: build/host/libtsm-4.8.0/external/wcwidth/wcwidth.c
  * host-cflags: -std=gnu99 -D_GNU_SOURCE -Dwcwidth=tsm_wcwidth
- * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm
- * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/src/shared
- * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/external
- * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/external/wcwidth
- * host-cflags: -include build/host/vendor-work/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.h
+ * host-cflags: -I build/host/libtsm-4.8.0/src/tsm
+ * host-cflags: -I build/host/libtsm-4.8.0/src/shared
+ * host-cflags: -I build/host/libtsm-4.8.0/external
+ * host-cflags: -I build/host/libtsm-4.8.0/external/wcwidth
+ * host-cflags: -include build/host/libtsm-4.8.0/external/wcwidth/wcwidth.h
  *
  * Each row writes sequences to a vte over a 80x24 screen, or gives it a key,
  * and compares the bytes the vte sends back with the bytes expected. The

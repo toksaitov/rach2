@@ -42,7 +42,7 @@ for prefix in ('vendor', 'build/x86_64/vendor-work'):
             output.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, output)
 # The libtsm and term checks compile the host build's patched libtsm tree.
-library = Path('build/host/vendor-work/libtsm/libtsm-4.8.0')
+library = Path('build/host/libtsm-4.8.0')
 if not (repo / library / 'src/tsm/tsm-screen.c').is_file():
     raise ValueError(f'host inventory: missing patched libtsm sources: {library}')
 for subtree in ('src', 'external'):

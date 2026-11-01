@@ -6,19 +6,19 @@
  * host-deps: term/pty.c term/screen.c term/host.c term/draw.c term/font.c
  * host-deps: term/unifont.c term/keys.c term/keymap.c term/select.c
  * host-deps: tests/host/keytable.c tests/host/compat/fixdir_host.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-render.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-screen.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-selection.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-unicode.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-vte-charsets.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm/tsm-vte.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/src/shared/shl-htable.c
- * host-deps: build/host/vendor-work/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.c
- * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm
- * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/src/shared
- * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/external -I rach2/include
- * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/external/wcwidth
- * host-cflags: -include build/host/vendor-work/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.h
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-render.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-screen.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-selection.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-unicode.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-vte-charsets.c
+ * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-vte.c
+ * host-deps: build/host/libtsm-4.8.0/src/shared/shl-htable.c
+ * host-deps: build/host/libtsm-4.8.0/external/wcwidth/wcwidth.c
+ * host-cflags: -I build/host/libtsm-4.8.0/src/tsm
+ * host-cflags: -I build/host/libtsm-4.8.0/src/shared
+ * host-cflags: -I build/host/libtsm-4.8.0/external -I rach2/include
+ * host-cflags: -I build/host/libtsm-4.8.0/external/wcwidth
+ * host-cflags: -include build/host/libtsm-4.8.0/external/wcwidth/wcwidth.h
  * host-cflags: -Dwcwidth=tsm_wcwidth -Dtypeof=__typeof__
  * host-inputs: tests/host/keytable.txt
  *

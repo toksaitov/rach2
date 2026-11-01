@@ -4,7 +4,7 @@
  * pwrite(2) as /fb is, and read back pixel by pixel.
  *
  * host-deps: term/unifont.c
- * host-cflags: -I build/host/vendor-work/libtsm/libtsm-4.8.0/src/tsm -I rach2/include
+ * host-cflags: -I build/host/libtsm-4.8.0/src/tsm -I rach2/include
  *
  * Both files are included whole. The test packs six glyphs of Unifont
  * 18.0.01 with tools/font/mkunifont.c, also included, and loads them with

@@ -101,7 +101,7 @@ E2FSPROGS_STAGE = $(VENDOR_STAGE)/e2fsprogs
 LIBTSM_STAGE = $(VENDOR_STAGE)/libtsm
 LIBTSM_HOST_STAGE = build/host/vendor/libtsm
 # The patched tree the host build extracts, which the host tests compile.
-LIBTSM_HOST_TREE = build/host/vendor-work/libtsm/libtsm-4.8.0
+LIBTSM_HOST_TREE = build/host/libtsm-4.8.0
 BUSYBOX_BIN  = $(BUSYBOX_STAGE)/busybox
 BUSYBOX_SUID_BIN = $(BUSYBOX_STAGE)/busybox-suid
 DROPBEAR_BIN = $(VENDOR_STAGE)/dropbear/dropbearmulti
