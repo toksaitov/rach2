@@ -13,7 +13,10 @@
  * compares, times out on both clocks no sooner than asked, and returns EINVAL
  * or ENOSYS for what it does not take. A
  * timed wait that a handler with SA_RESTART interrupts ends with EINTR, as
- * Linux ends one, and is not restarted with its whole timeout again.
+ * Linux ends one, and is not restarted with its whole timeout again. Of
+ * sixteen threads asleep on one word, each wake of one wakes one, and the
+ * threads not woken are not switched to: their voluntary_ctxt_switches in
+ * /proc/self/task/TID/status do not move.
  *
  * The futex call (240, or 202 on x86-64) takes the kernel's timespec, whose
  * fields are a long's width: on i386 that is not musl's, whose seconds are 64
@@ -28,10 +31,13 @@
 
 #define _GNU_SOURCE
 #include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <sched.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/syscall.h>
 #include <sys/time.h>
@@ -75,7 +81,10 @@ static const char *const assertion_id[] = {"set-tid-address",
                                            "unaligned",
                                            "requeue-enosys",
                                            "realtime-wait-enosys",
-                                           "eintr"};
+                                           "eintr",
+                                           "wake-one-asleep",
+                                           "wake-one-count",
+                                           "wake-one-sleepers"};
 
 /** Begin the report and plan its assertions. */
 static void report_start(void)
@@ -197,6 +206,192 @@ static long interrupted_wait(volatile uint32_t *word)
     return r;
 }
 
+/* The threads asleep on one word, and the wakes of one among them. */
+#define SLEEPERS 16
+#define WAKES    8
+
+/* The waiters' semaphore: a waiter takes one count, and sleeps while there
+ * is none. A waiter that took one sleeps on `parked` until it is 1. */
+static volatile uint32_t tokens;
+static volatile uint32_t parked;
+
+/* Each sleeper's thread id, whether it is about to wait for a count, and
+ * whether it took one; the sleepers that took one, and in what order. */
+static volatile pid_t sleeper_tid[SLEEPERS];
+static volatile int sleeper_ready[SLEEPERS];
+static volatile int sleeper_took[SLEEPERS];
+static volatile int took_count;
+
+/** A sleeper, given its index: take a count from `tokens`, sleeping while
+ * there is none, then sleep until `parked` is 1. */
+static void *sleeper(void *arg)
+{
+    int i = (int)(intptr_t)arg;
+    uint32_t t;
+
+    sleeper_tid[i] = (pid_t)syscall(SYS_gettid);
+    sleeper_ready[i] = 1;
+    for (;;) {
+        t = tokens;
+        if (t > 0) {
+            if (__sync_bool_compare_and_swap(&tokens, t, t - 1)) {
+                break;
+            }
+            continue;
+        }
+        futex(&tokens, FUTEX_WAIT | FUTEX_PRIVATE_FLAG, 0, NULL, 0);
+    }
+    sleeper_took[i] = 1;
+    __sync_fetch_and_add(&took_count, 1);
+    while (parked == 0) {
+        futex(&parked, FUTEX_WAIT | FUTEX_PRIVATE_FLAG, 0, NULL, 0);
+    }
+    return NULL;
+}
+
+/**
+ * Read thread `t`'s state letter and voluntary switches from
+ * /proc/self/task/<t>/status into `*state` and `*switches`. Returns 0, or
+ * -1 when the file cannot be read or lacks either line.
+ */
+static int task_status(pid_t t, int *state, unsigned long *switches)
+{
+    char path[64], text[4096], *at;
+    int fd, n;
+
+    snprintf(path, sizeof(path), "/proc/self/task/%d/status", (int)t);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return -1;
+    }
+    n = (int)read(fd, text, sizeof(text) - 1);
+    close(fd);
+    if (n <= 0) {
+        return -1;
+    }
+    text[n] = '\0';
+    at = strstr(text, "\nState:\t");
+    if (at == NULL) {
+        return -1;
+    }
+    *state = at[8];
+    at = strstr(text, "\nvoluntary_ctxt_switches:\t");
+    if (at == NULL) {
+        return -1;
+    }
+    *switches = strtoul(at + 26, NULL, 10);
+    return 0;
+}
+
+/**
+ * Wait until sleeper `i` has stored its id and is asleep, looking every
+ * 10 ms, with its readiness `ready` as the sign that the sleep is its wait
+ * on the word; `*switches` is then its voluntary switches. Returns 0, or -1
+ * when its status cannot be read.
+ */
+static int sleeper_asleep(int i, volatile int *ready, unsigned long *switches)
+{
+    int state;
+
+    for (;;) {
+        if (*ready && sleeper_tid[i] != 0) {
+            if (task_status(sleeper_tid[i], &state, switches) != 0) {
+                return -1;
+            }
+            if (state == 'S') {
+                return 0;
+            }
+        }
+        /* interval: a sleeper's state is looked at again every 10 ms */
+        usleep(10000);
+    }
+}
+
+/**
+ * Put SLEEPERS threads to sleep on `tokens`, then give WAKES counts one at a
+ * time, each with a wake of one, waiting each time for the one woken to
+ * park. A wake of one must return 1, and the sleepers still waiting must
+ * not have been switched to meanwhile, as their voluntary switches show: a
+ * kernel that woke every sleeper of the word, or of its hash bucket, would
+ * add one for each of them at each wake. The threads are let go and joined
+ * at the end. Returns 0, or 1 from `fail`.
+ */
+static int wake_one_rows(void)
+{
+    pthread_t threads[SLEEPERS];
+    unsigned long before[SLEEPERS], after;
+    unsigned long again = 0;
+    int i, r, made = 0, rc = 0;
+    char detail[96];
+    long woke;
+
+    tokens = 0;
+    parked = 0;
+    took_count = 0;
+    for (i = 0; i < SLEEPERS; i++) {
+        if (pthread_create(&threads[i], NULL, sleeper, (void *)(intptr_t)i) != 0) {
+            break;
+        }
+        made++;
+    }
+    for (i = 0; i < made && rc == 0; i++) {
+        if (sleeper_asleep(i, &sleeper_ready[i], &before[i]) != 0) {
+            rc = 1;
+        }
+    }
+    if (made != SLEEPERS || rc != 0) {
+        rc = fail("the sleepers on one word were not all seen asleep");
+        goto out;
+    }
+    report_held();
+    for (r = 0; r < WAKES; r++) {
+        __sync_fetch_and_add(&tokens, 1);
+        woke = futex(&tokens, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1, NULL, 0);
+        if (woke != 1) {
+            snprintf(detail, sizeof(detail), "a wake of one woke %ld", woke);
+            rc = fail(detail);
+            goto out;
+        }
+        while (took_count != r + 1) {
+            /* interval: the count of woken sleepers is read every 1 ms */
+            usleep(1000);
+        }
+        for (i = 0; i < SLEEPERS; i++) {
+            if (sleeper_took[i] && sleeper_asleep(i, &sleeper_took[i], &after) != 0) {
+                rc = fail("a woken sleeper's status could not be read");
+                goto out;
+            }
+        }
+    }
+    report_held();
+    for (i = 0; i < SLEEPERS; i++) {
+        if (sleeper_took[i]) {
+            continue;
+        }
+        if (sleeper_asleep(i, &sleeper_ready[i], &after) != 0) {
+            rc = fail("a sleeper's status could not be read");
+            goto out;
+        }
+        again += after - before[i];
+    }
+    if (again != 0) {
+        snprintf(detail, sizeof(detail), "%d wakes of one switched to the other sleepers %lu times",
+                 WAKES, again);
+        rc = fail(detail);
+        goto out;
+    }
+    report_held();
+out:
+    parked = 1;
+    futex(&parked, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, SLEEPERS, NULL, 0);
+    __sync_fetch_and_add(&tokens, SLEEPERS);
+    futex(&tokens, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, SLEEPERS, NULL, 0);
+    for (i = 0; i < made; i++) {
+        pthread_join(threads[i], NULL);
+    }
+    return rc;
+}
+
 /**
  * The futex rows on `word`, which holds 7: a wake with no waiter, a wait on
  * another value, the timeouts on both clocks, the refusals, and a wait that
@@ -262,6 +457,9 @@ static int futex_rows(volatile uint32_t *word)
         return fail("a timed wait a handler with SA_RESTART interrupted did not end with EINTR");
     }
     report_held();
+    if (wake_one_rows() != 0) {
+        return 1;
+    }
     report_end();
     return 0;
 }
