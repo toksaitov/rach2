@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 2, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -484,6 +484,46 @@ Receive drops include frames missed by the card.
 The frame, multicast, transmit error, FIFO, collision, and carrier
 counts come from the card when its driver supplies them; otherwise
 they are zero.
+.It Pa /proc/net/if_inet6
+One line for each IPv6 address of each interface, with no header, as
+Linux writes it and BusyBox's
+.Ic ifconfig
+reads it:
+.Bd -literal -offset indent
+fe80000000000000505400fffe123456 01 40 20 80     eth0
+.Ed
+.Pp
+The address in 32 hexadecimal digits, the interface's index, the prefix
+length, the scope
+.Ql ( 00
+global,
+.Ql 10
+host,
+.Ql 20
+link,
+.Ql 40
+site) and Linux's
+.Dv IFA_F_
+flags, each two hexadecimal digits, and the interface's name, right
+aligned in eight columns.
+.It Pa /proc/net/ipv6_route
+One line for each route of IPv6's table, with no header: the
+destination and its prefix length, the source and its, always :: and 0,
+the next hop, :: on the link, then the metric, reference count, use and
+flags in eight hexadecimal digits each, and the interface's name.
+The flags are Linux's:
+.Ql 00000001
+up,
+.Ql 00000002
+through a gateway,
+.Ql 00010000
+a router's default route,
+.Ql 00040000
+made from a router's advertisement and
+.Ql 00400000
+with a lifetime that ends.
+.Ic route -A inet6
+prints this file.
 .It Pa /proc/net/route
 A header followed by each interface's default route, when it has one,
 and the subnets of its addresses, then the routes programs added.
@@ -788,6 +828,56 @@ past a value written keeps what it has;
 caller's write of 0 succeeds, and of any other number fails with
 .Er EINVAL ,
 where Linux would begin to forward.
+.Pa net/ipv6/conf/ Ns Ar NAME ,
+for
+.Ar NAME
+.Ql all ,
+.Ql default
+and each interface, holds IPv6's settings of that interface, which
+.Ql default
+gives an interface when it comes up, and which a privileged caller's
+write sets at once:
+.Pa accept_ra ,
+1, 0 to ignore routers' advertisements, 1 to take them unless
+forwarding and 2 always;
+.Pa autoconf ,
+1, whether a router's prefix makes an address;
+.Pa disable_ipv6 ,
+0, which at 1 takes every address of the interface away and stops its
+IPv6, and set to 0 again starts it from its link-local address, making
+its addresses again;
+.Pa forwarding ,
+0, which at 1 makes the interface answer as a router and solicit none;
+.Pa use_tempaddr ,
+0, which above 0 makes a temporary address beside each made from a
+router's prefix and at 2 prefers it as a source; and
+.Pa stable_secret ,
+an IPv6 address's text, the key from which the addresses made from a
+router's prefix take their identifiers (RFC 7217), the interface's or,
+when it has none,
+.Ql default Ns 's ,
+which a read fails with
+.Er EIO
+while none is written, and always for
+.Ql all ;
+with none, the identifier is made from the station address.
+A boolean takes 0 or 1 and
+.Pa accept_ra
+0 to 2, and a write to
+.Pa forwarding
+or
+.Pa disable_ipv6
+of
+.Ql all
+writes it of every interface and of
+.Ql default .
+.Xr init 8
+and
+.Xr netup 8
+write
+.Ql default Ns 's
+secret at start-up, from
+.Pa /var/lib/ipv6-stable-secret .
 A write to a file of a number takes it as
 .Xr strtol 3
 with base 0 does, and one out of the file's range, which is from 0 up

@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 2, 2026
 .Dt NETLINK 7
 .Os
 .Sh NAME
@@ -15,8 +15,8 @@ An
 .Dv AF_NETLINK
 socket of protocol
 .Dv NETLINK_ROUTE
-(0) is how a program asks the kernel what network interfaces, IPv4
-addresses and routes it has, as on Linux.
+(0) is how a program asks the kernel what network interfaces, IPv4 and
+IPv6 addresses, routes and neighbours it has, as on Linux.
 .Fa type
 is
 .Dv SOCK_RAW
@@ -126,6 +126,18 @@ sizes its buffer.
 Each answer repeats the request's sequence number and the socket's port
 id.
 .Pp
+A request's family, the first byte of its body, chooses the tables:
+.Dv AF_INET
+IPv4's,
+.Dv AF_INET6
+IPv6's, and
+.Dv AF_UNSPEC
+(0) both, IPv4's first, as
+.Ql ip addr
+asks and
+.Ql ip -6 addr
+does not.
+.Pp
 The requests answered are:
 .Bl -tag -width "RTM_GETQDISC"
 .It Dv RTM_GETLINK
@@ -179,7 +191,28 @@ the attributes
 .Dv IFA_LOCAL ,
 .Dv IFA_BROADCAST
 and
-.Dv IFA_LABEL .
+.Dv IFA_LABEL ;
+and for each IPv6 address, the interface's in the order it took them,
+its prefix length, its scope
+.Dv ( RT_SCOPE_LINK
+for fe80::/10,
+.Dv RT_SCOPE_HOST
+for ::1), its flags, among them
+.Dv IFA_F_PERMANENT ,
+.Dv IFA_F_TENTATIVE ,
+.Dv IFA_F_DEPRECATED
+and
+.Dv IFA_F_TEMPORARY ,
+and the attributes
+.Dv IFA_ADDRESS ,
+.Dv IFA_CACHEINFO ,
+the preferred and valid seconds left, 0xffffffff for ever, and the
+hundredths of a second since boot at which it was made or renewed,
+.Dv IFA_FLAGS
+and
+.Dv IFA_PROTO ,
+its maker: 1 for ::1, 2 for a router's prefix, 3 for the link-local
+address, none for one made by hand.
 .It Dv RTM_GETROUTE
 With
 .Dv NLM_F_DUMP ,
@@ -189,7 +222,19 @@ message for each route of the main table: each interface's subnets,
 reached on the link, its default route through its gateway when it has
 one, and the routes programs added, with
 .Dv RTA_PRIORITY
-for a metric.
+for a metric; and each route of IPv6's table: the prefixes of the
+interfaces' addresses at metric 256, the prefixes routers advertise at 256
+and the routers themselves as default routes at 1024, with
+.Dv RTA_CACHEINFO
+giving the hundredths of a second left, and the routes programs added,
+each with its
+.Dv RTA_TABLE ,
+.Dv RTA_OIF ,
+.Dv RTA_GATEWAY
+for a router, and the protocol that made it: 2 for an address's prefix,
+9 for a router's, 3 for one added by
+.Xr ioctl 2
+or netlink without one.
 Without
 .Dv NLM_F_DUMP ,
 as
@@ -204,12 +249,22 @@ address and gateway, marked
 .Dv RTM_F_CLONED
 as Linux marks a route it looked up; an address nothing reaches is
 .Er ENETUNREACH .
+An IPv6 destination, as
+.Ql ip -6 route get
+asks, is answered the same way: ::1 and the machine's own addresses by a
+local route through
+.Ql lo ,
+another by the card, router and source address a datagram to it would
+take, a request's
+.Dv RTA_OIF
+choosing the card for a link-local one.
 .It Dv RTM_GETRULE
 With
 .Dv NLM_F_DUMP ,
 the three rules every Linux machine starts with, which are what a route
 lookup here amounts to: the local table at priority 0, the main table at
-32766 and the default table at 32767.
+32766 and the default table at 32767; and for IPv6 the two of Linux's,
+the local table at 0 and the main at 32766.
 .It Dv RTM_GETQDISC
 With
 .Dv NLM_F_DUMP ,
@@ -227,10 +282,18 @@ and of the default, index -2, as
 .Ql ip netconf
 prints it: forwarding, the reverse-path filter, multicast forwarding,
 proxy ARP and the routes through a link that is down, all off, since the
-stack does none of them; another family has none.
+stack does none of them; with
+.Dv AF_INET6
+or none, the same for IPv6, without the reverse-path filter, whose
+forwarding is
+.Va net.ipv6.conf.*.forwarding
+in
+.Xr proc 5 .
 Without it, the configuration its
 .Dv NETCONFA_IFINDEX
-attribute names, or
+attribute names, of IPv6 for
+.Dv AF_INET6
+and of IPv4 otherwise, or
 .Er EINVAL
 with none and
 .Er ENODEV
@@ -252,8 +315,24 @@ for one set by hand as permanent; only those of one interface when the
 .Vt struct ndmsg
 or an
 .Dv NDA_IFINDEX
-attribute names it, and none for a family other than IPv4 or any, or for
-the proxy table, which this kernel does not have.
+attribute names it, and none for the proxy table, which this kernel does
+not have.
+For
+.Dv AF_INET6
+or any, each entry of IPv6's neighbour cache, with its
+.Dv NDA_LLADDR
+once known, in its state of RFC 4861 by Linux's numbers
+.Dv ( NUD_INCOMPLETE ,
+.Dv NUD_REACHABLE ,
+.Dv NUD_STALE ,
+.Dv NUD_DELAY ,
+.Dv NUD_PROBE ,
+.Dv NUD_FAILED
+or
+.Dv NUD_PERMANENT ) ,
+and
+.Dv NTF_ROUTER
+for a neighbour that said it is a router.
 .El
 .Pp
 A dump ends with an
@@ -291,6 +370,22 @@ or take one away; when the first goes, the next takes its place, as
 Linux's
 .Va promote_secondaries
 has it.
+For
+.Dv AF_INET6 ,
+the address in
+.Dv IFA_LOCAL
+or
+.Dv IFA_ADDRESS ,
+of any interface,
+.Ql lo
+among them, one of at most eight: it is tentative until duplicate address
+detection passes, unless the request's flags or
+.Dv IFA_FLAGS
+have
+.Dv IFA_F_NODAD ,
+lives for the preferred and valid seconds of an
+.Dv IFA_CACHEINFO ,
+and is permanent without one; its prefix becomes a route of metric 256.
 Adding an address it has is
 .Er EEXIST
 under
@@ -331,6 +426,23 @@ and a full table
 Removing a route that is not there is
 .Er ESRCH .
 A lookup takes the longest prefix, then the lowest metric.
+For
+.Dv AF_INET6 ,
+a route of IPv6's table, of at most 32, by the card
+.Dv RTA_OIF
+names, else the one the gateway is reached by, else the first, at the
+metric of
+.Dv RTA_PRIORITY
+or 1024: one there already is acknowledged unless
+.Dv NLM_F_EXCL
+makes it
+.Er EEXIST ,
+.Dv NLM_F_REPLACE
+takes the card's route of the prefix away first,
+.Ql lo
+is
+.Er EOPNOTSUPP ,
+and a route an address implies cannot be removed.
 .It Dv RTM_NEWNEIGH , RTM_DELNEIGH
 Store the ARP mapping of
 .Dv NDA_DST
@@ -343,7 +455,11 @@ names, permanent when its state has
 which no packet changes and no full cache or address change drops; or
 forget one, or
 .Er ENOENT
-when there is none;
+when there is none; for
+.Dv AF_INET6 ,
+the same of IPv6's neighbour cache, a mapping not permanent being
+.Dv NUD_STALE
+until it is confirmed;
 .Ql ip neigh flush
 sends one for each.
 .El
@@ -378,4 +494,6 @@ reports the kernel.
 .Xr ioctl 2 ,
 .Xr recv 2 ,
 .Xr send 2 ,
-.Xr socket 2
+.Xr socket 2 ,
+.Xr proc 5 ,
+.Xr ipv6 7

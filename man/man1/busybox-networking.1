@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 2, 2026
 .Dt BUSYBOX-NETWORKING 1
 .Os
 .Sh NAME
@@ -32,6 +32,7 @@
 .Nm tftpd ,
 .Nm traceroute ,
 .Nm udhcpc ,
+.Nm udhcpc6 ,
 .Nm udpsvd ,
 .Nm vconfig ,
 .Nm wget ,
@@ -241,6 +242,20 @@
 .Ar ...
 .Op Fl O Ar OPT
 .Ar ...
+.Nm udhcpc6
+.Op Fl fbqR
+.Op Fl t Ar N
+.Op Fl T Ar SEC
+.Op Fl A Ar SEC | Fl n
+.Op Fl i Ar IFACE
+.Op Fl s Ar PROG
+.Op Fl p Ar PIDFILE
+.Op Fl ldo
+.Op Fl r Ar IPv6
+.Op Fl x Ar OPT:VAL
+.Ar ...
+.Op Fl O Ar OPT
+.Ar ...
 .Nm udpsvd
 .Op Fl hEv
 .Op Fl c Ar N
@@ -424,6 +439,20 @@ Trace the route to
 Obtain an address through DHCP.
 This is how os-real takes its address; the DHCP event script is
 .Pa /usr/share/udhcpc/default.script .
+.It Nm udhcpc6
+Obtain an IPv6 address through DHCPv6, on a network whose routers tell
+their hosts to ask a server; most IPv6 networks need none, since the
+kernel makes the addresses the routers advertise.
+No ifupdown method starts it: it is run by hand or from an
+.Ic up
+line of a stanza.
+The event script is
+.Pa /usr/share/udhcpc/default6.script ,
+which gives the interface the lease's address as a /128, the on-link
+prefix and the default route being the routers', takes away the address
+of a lease that ended, and adds the lease's name servers to
+.Pa /etc/resolv.conf
+after its IPv4 ones.
 .It Nm udpsvd
 Bind a UDP socket to
 .Ar IP : Ns Ar PORT
@@ -995,6 +1024,25 @@ Do not send the MAC address as the client identifier.
 .El
 .Pp
 USR1 renews the lease; USR2 releases it.
+.Ss udhcpc6
+The options
+.Fl i , s , p , t , T , A , b , n , q , R , f , S , o , O
+and
+.Fl x
+are those of
+.Nm udhcpc ,
+the script's default being
+.Pa /usr/share/udhcpc/default6.script .
+.Bl -tag -width "-r IPv6"
+.It Fl l
+Send an information request instead of a solicit, for a server that
+gives options but no address.
+.It Fl r Ar IPv6
+Request this address, or none for
+.Ql no .
+.It Fl d
+Request a prefix.
+.El
 .Ss udpsvd
 .Bl -tag -width "-u USER[:GRP]"
 .It Fl u Ar USER Ns Op : Ns Ar GRP

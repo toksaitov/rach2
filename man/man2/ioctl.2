@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 2, 2026
 .Dt IOCTL 2
 .Os
 .Sh NAME
@@ -543,6 +543,62 @@ a route already there
 .Er EEXIST ,
 and removing one that is not there
 .Er ESRCH .
+.Pp
+On an
+.Dv AF_INET6
+socket the four setters are IPv6's, as BusyBox's
+.Ql ifconfig eth0 add ADDR/LEN
+and
+.Ql route -A inet6
+send them, and require effective user ID 0.
+.Dv SIOCSIFADDR
+and
+.Dv SIOCDIFADDR
+(0x8936) take a 24-byte
+.Vt "struct in6_ifreq" ,
+an address, a prefix length and an interface index, and give the
+interface that address, permanent, one of at most eight, or take it away;
+an index no interface has is
+.Er ENODEV ,
+a prefix past 128
+.Er EINVAL ,
+as is a group, :: or ::1 on a card, an address it has already
+.Er EEXIST ,
+one past the eight
+.Er ENOSPC ,
+any on an interface whose
+.Va disable_ipv6
+is 1
+.Er EACCES ,
+and removing one it does not have
+.Er EADDRNOTAVAIL .
+.Dv SIOCADDRT
+and
+.Dv SIOCDELRT
+take a
+.Vt "struct in6_rtmsg" ,
+72 bytes on i386 and 80 on x86-64, and add a route to IPv6's table of
+32, through
+.Va rtmsg_gateway
+when
+.Va rtmsg_flags
+has
+.Dv RTF_GATEWAY ,
+by the interface of
+.Va rtmsg_ifindex
+or, for 0, the one the gateway is reached by, at
+.Va rtmsg_metric
+or 1024 for 0; or remove the route of that prefix, through that gateway
+and by that interface when they are given.
+.Ql lo
+is
+.Er EOPNOTSUPP ,
+a route no interface carries
+.Er ENODEV ,
+and removing one that is not there
+.Er ESRCH .
+See
+.Xr ipv6 7 .
 .Pp
 .Dv SIOCDARP
 takes a 68-byte

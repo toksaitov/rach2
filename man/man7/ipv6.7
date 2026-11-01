@@ -1,0 +1,248 @@
+.Dd November 2, 2026
+.Dt IPV6 7
+.Os
+.Sh NAME
+.Nm ipv6
+.Nd the IPv6 protocol: addresses, routes and neighbours
+.Sh SYNOPSIS
+.In sys/socket.h
+.In netinet/in.h
+.Ft int
+.Fn socket "AF_INET6" "SOCK_STREAM" "0"
+.Ft int
+.Fn socket "AF_INET6" "SOCK_DGRAM" "0"
+.Ft int
+.Fn socket "AF_INET6" "SOCK_RAW" "IPPROTO_ICMPV6"
+.Sh DESCRIPTION
+The kernel speaks IPv6 beside IPv4 on every card and on
+.Ql lo ,
+as RFC 8200 has it, with TCP, UDP and ICMPv6
+.Pq Xr icmp6 7
+over it.
+A socket of
+.Dv AF_INET6
+names its peers by a
+.Vt struct sockaddr_in6
+of 28 bytes: the family, the port, the flow information, which is not
+read, the address in network order, and the scope id, an interface's
+index.
+A caller may give the 24 bytes of RFC 2133, without the scope id.
+A link-local address, fe80::/10, needs a scope id, or the index the socket
+is bound to by
+.Dv SO_BINDTODEVICE ;
+with neither it is
+.Er EINVAL .
+.Pp
+A socket of
+.Dv AF_INET6
+reaches IPv4 peers too, by their mapped addresses, ::ffff:A.B.C.D, unless
+.Dv IPV6_V6ONLY ,
+set before it is bound, keeps it to IPv6
+.Pq Xr setsockopt 2 .
+A listener bound to :: accepts both, and every address a call returns is
+a
+.Vt struct sockaddr_in6 .
+A connect to a destination no route reaches fails at once with
+.Er ENETUNREACH ,
+so that a program can try the next address it was given.
+.Ss Addresses
+An interface holds at most eight IPv6 addresses, each with its prefix
+length, scope, flags and lifetimes:
+.Bl -bullet
+.It
+.Ql lo
+holds ::1/128.
+.It
+A card brought up takes fe80::/64 with the modified EUI-64 of its station
+address, joins ff02::1 and starts neighbour discovery.
+.It
+A card takes from each router advertisement the prefixes it advertises:
+an on-link route of each and, for an autonomous /64 while
+.Va autoconf
+is on, an address of RFC 7217, whose identifier is made from the prefix,
+the station address and
+.Va stable_secret ,
+the same for each boot while the secret is, or the modified EUI-64 while
+no secret is written.
+With
+.Va use_tempaddr
+above 0 a temporary address of RFC 8981, with a random identifier, is made
+beside it.
+.It
+A program adds an address with
+.Ql ifconfig eth0 add ADDR/LEN
+or
+.Ql ip -6 addr add ADDR/LEN dev eth0 ,
+which goes by
+.Xr ioctl 2
+or
+.Xr netlink 7 ,
+and an
+.Ic inet6 static
+stanza of
+.Pa /etc/network/interfaces
+does the same at boot.
+.El
+.Pp
+A card's new address is tentative, neither accepted nor used as a source,
+for about a second, until duplicate address detection finds no other node
+with it; a duplicate is marked
+.Dv IFA_F_DADFAILED
+and never used.
+An address whose preferred lifetime ends is deprecated, used only by the
+connections it has, and one whose valid lifetime ends goes, ending those
+connections.
+A source is chosen for each destination by RFC 6724's rules: an address
+of the destination's scope, not deprecated, of the interface the datagram
+leaves by, and with the longest prefix in common, a temporary address
+first only when
+.Va use_tempaddr
+is 2.
+.Pp
+.Ql ifconfig ,
+.Ql ip -6 addr
+and
+.Pa /proc/net/if_inet6
+show them.
+.Ss Routes
+A datagram to ::1 or to one of the machine's own addresses goes by
+.Ql lo .
+A link-local destination or a group of link scope leaves by the interface
+its scope id names.
+Another destination takes the route with the longest prefix, then the
+lowest metric, from these:
+.Bl -bullet
+.It
+the prefix of each of the cards' addresses, on the link, at metric 256;
+.It
+the prefixes routers advertise, on the link, at 256, for as long as the
+advertisement says;
+.It
+each router that advertises itself, as a default route at 1024, for its
+router lifetime, a router known to be unreachable losing to another;
+.It
+and the routes a program adds, with
+.Ql route -A inet6 add
+or
+.Ql ip -6 route add ,
+at 1024 unless a metric is given, at most 32 of these and the routers'
+together.
+.El
+.Pp
+.Ql route -A inet6 ,
+.Ql ip -6 route
+and
+.Pa /proc/net/ipv6_route
+show them, and
+.Ql ip -6 route get ADDR
+shows the interface, router and source a datagram to
+.Ar ADDR
+would take.
+.Ss Neighbours
+The station address of a next hop on the link is found by neighbour
+discovery, RFC 4861, and kept in a cache of 32 entries, each in its
+state: incomplete while it is asked for, reachable for about 30 seconds
+after an answer, stale after that until it is used, then probed.
+A neighbour three solicitations do not answer fails, and each datagram
+waiting for it is answered with an ICMPv6 address unreachable from the
+machine itself, which the raw ICMPv6 sockets receive.
+.Ql ip -6 neigh
+shows the cache, and
+.Ql ip -6 neigh add ADDR lladdr MAC dev eth0 nud permanent
+adds an entry that nothing changes.
+.Ss Settings
+Each interface has the settings of
+.Pa /proc/sys/net/ipv6/conf/ Ns Ar NAME ,
+which
+.Xr proc 5
+describes:
+.Va accept_ra ,
+.Va autoconf ,
+.Va disable_ipv6 ,
+.Va forwarding ,
+.Va stable_secret
+and
+.Va use_tempaddr ,
+with
+.Ql default
+for the interfaces to come and
+.Ql all
+for every one.
+.Xr init 8
+writes
+.Ql default Ns 's
+secret at boot from
+.Pa /var/lib/ipv6-stable-secret ,
+made from random bytes at the first boot, so that the machine's addresses
+on a network stay the same.
+.Ss Datagrams
+A datagram longer than its destination's path MTU leaves in fragments,
+the path MTU being the link's 1500 bytes, less when a router advertises
+less or a Packet Too Big lowers it for that destination, and never below
+1280 (RFC 8201).
+Fragments are reassembled, at most 16 datagrams at once, each within 60
+seconds of its first fragment.
+Hop-by-hop options, routing headers with no segment left and the
+fragment header are read; another extension header, AH and ESP among
+them, is answered with a parameter problem.
+The hop limit is 64, or the routers' advertised one, and 1 to a group,
+unless the socket's
+.Dv IPV6_UNICAST_HOPS
+or
+.Dv IPV6_MULTICAST_HOPS
+sets another
+.Pq Xr setsockopt 2 .
+The machine forwards nothing.
+.Ss Multicast
+A card joins ff02::1 and the solicited-node group of each of its
+addresses, with ff02::2 while
+.Va forwarding
+is on, and reports them to the link's routers by MLD, RFC 3810, or MLDv1
+where a querier speaks it.
+A datagram or raw socket joins a group with
+.Dv IPV6_JOIN_GROUP ,
+which the card then reports too.
+.Sh FILES
+.Bl -tag -width /var/lib/ipv6-stable-secret -compact
+.It Pa /proc/net/if_inet6
+The addresses.
+.It Pa /proc/net/ipv6_route
+The routes.
+.It Pa /proc/net/snmp6
+The counters of IPv6 and ICMPv6.
+.It Pa /proc/sys/net/ipv6/conf
+The settings.
+.It Pa /var/lib/ipv6-stable-secret
+The stable secret kept across boots.
+.It Pa /usr/share/udhcpc/default6.script
+The script of BusyBox's DHCPv6 client,
+.Ic udhcpc6 ,
+for a network whose routers send their hosts to a server.
+.El
+.Sh EXAMPLES
+On QEMU's user network a guest has its link-local address and one from
+the prefix fec0::/64 that QEMU's router advertises:
+.Bd -literal -offset indent
+# ip -6 addr
+# route -A inet6
+# cat /proc/net/if_inet6
+.Ed
+.Sh SEE ALSO
+.Xr ping 1 ,
+.Xr ioctl 2 ,
+.Xr setsockopt 2 ,
+.Xr socket 2 ,
+.Xr proc 5 ,
+.Xr icmp6 7 ,
+.Xr netlink 7 ,
+.Xr init 8 ,
+.Xr netup 8
+.Sh STANDARDS
+RFC 8200, IPv6;
+RFC 4861, neighbour discovery;
+RFC 4862, address autoconfiguration;
+RFC 7217, stable addresses;
+RFC 8981, temporary addresses;
+RFC 6724, address selection;
+RFC 8201, path MTU discovery;
+RFC 3810, MLDv2.

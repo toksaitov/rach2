@@ -19,6 +19,7 @@ The tarball is not edited. The build applies the patches under `patches/` and co
 * `0003-mkfs-vfat-define-linux-requests.patch` replaces the includes of `linux/hdreg.h` and `linux/fd.h` in `util-linux/mkfs_vfat.c` with the two requests the applet makes, `HDIO_GETGEO` with `struct hd_geometry` and `FDGETPRM` with `struct floppy_struct`, as the i386 Linux headers define them. The applet takes its defaults when either request fails.
 * `0004-shell-keep-line-on-sigchld.patch` is upstream commit `93e0898c663a`, which 1.37.0 has (BusyBox bug 15256). Without it, a background job that ends while a line is being typed interrupts the line editor's `poll` with `SIGCHLD`, the editor drops what was typed so far, and the shell runs the rest of the line alone as a new command. With it, the editor gives up a line only for a signal whose handler sets `bb_got_signal`, which `SIGCHLD` does only when it has a trap.
 * `0005-acpid-reap-actions.patch` makes `acpid` reap the actions it has spawned each time `poll` wakes it. acpid ignores `SIGCHLD` and never waits, which leaves no zombies on Linux, but Rach2's kernel keeps a child's end until its parent waits ([`signal.Readme.md`](../../rach2/sys/proc/signal.Readme.md)), so without the patch each key acpid acted on would hold a slot of the process table for as long as acpid runs.
+* `0006-udhcpc6-build-against-musl.patch` removes the include of `linux/filter.h` from `networking/udhcp/d6_dhcpc.c`, which musl does not install and which only a block upstream keeps under `#if 0` would need, as in `dhcpc.c`.
 
 ### Configurations
 
@@ -27,9 +28,9 @@ The tarball is not edited. The build applies the patches under `patches/` and co
 The main configuration is static, with 64-bit file offsets. `/bin/sh` is ash with job control, built standalone (`FEATURE_SH_STANDALONE`) with applets preferred, so ash finds an applet before it searches `PATH` and needs no file per applet; where it must execute one, it executes `/bin/busybox`, the `BUSYBOX_EXEC_PATH`. Its choices that differ from a desktop BusyBox:
 
 * `login`, `passwd` and `su` are off; the set-id binary has them.
-* `ping`, `ping6` and `traceroute6` are off. `/bin/ping` is the project's unprivileged program ([ping(1)](../../man/man1/ping.1)), and Rach2 has no IPv6 stack. `arping` and `traceroute` are on and need root.
+* `ping`, `ping6` and `traceroute6` are off. `/bin/ping` is the project's unprivileged program ([ping(1)](../../man/man1/ping.1)), which reaches IPv6 addresses too. `arping` and `traceroute` are on and need root.
 * `dmesg` is off; the image's `/bin/dmesg` is the project's ([dmesg(1)](../../man/man1/dmesg.1)).
-* `ifconfig`, `route`, `ifup`, `ifdown` and `udhcpc` are on, with `FEATURE_IFUPDOWN_IP` off, so ifupdown uses `ifconfig` and `route`.
+* `ifconfig`, `route`, `ifup`, `ifdown`, `udhcpc` and `udhcpc6` are on, with `FEATURE_IFUPDOWN_IP` off, so ifupdown uses `ifconfig` and `route`, for IPv6 too through `ifconfig add` and `route -A inet6`. `udhcpc6` has no ifupdown method; its script is [`krffs/udhcpc6-default.script`](../../krffs/udhcpc6-default.script).
 * `adduser`, `deluser`, `addgroup`, `delgroup` and `chpasswd` are on, and they are the account programs of the BusyBox images.
 * `cryptpw`, `mkpasswd` and `httpd` with `-m` are on, with SHA-512 as the default password hash.
 * `mount`, `df`, `free`, `uptime`, `mkfs.vfat` and `mkdosfs` are on.
