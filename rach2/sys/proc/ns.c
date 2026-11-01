@@ -273,6 +273,19 @@ int64_t gid_named(uint32_t id)
 
 /* ---- /proc/PID/uid_map, gid_map and setgroups ---- */
 
+/** Whether setgroups is denied in `ns`: by a write of "deny" to it or to an
+ * ancestor, since a namespace made below one that denies it denies it too,
+ * as on Linux, where bubblewrap's second namespace counts on that. */
+static int userns_denies_setgroups(const struct userns *ns)
+{
+    for (; ns && ns != &init_userns; ns = ns->parent) {
+        if (ns->setgroups_denied) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** Append `v` right-aligned in ten columns to `out` at `*at`, stopping
  * short of `out[cap - 1]`, the NUL's place. */
 static void put_col(char *out, int cap, int *at, uint32_t v)
@@ -304,7 +317,7 @@ int ns_map_text(const struct userns *ns, int which, const process_t *reader, cha
         own = ns->parent;
     }
     if (which == NS_MAP_SETGROUPS) {
-        const char *word = ns->setgroups_denied ? "deny\n" : "allow\n";
+        const char *word = userns_denies_setgroups(ns) ? "deny\n" : "allow\n";
 
         while (*word && at < cap - 1) {
             out[at++] = *word++;
@@ -445,7 +458,7 @@ static int32_t setgroups_write(struct userns *ns, const char *text, uint32_t len
         return (int32_t)len;
     }
     if (text_begins(text, len, "allow")) {
-        return ns->setgroups_denied ? -EPERM : (int32_t)len;
+        return userns_denies_setgroups(ns) ? -EPERM : (int32_t)len;
     }
     return -EINVAL;
 }
@@ -475,7 +488,7 @@ int32_t ns_map_write(struct userns *ns, int which, const char *text, uint32_t le
     }
     if (!ns_privileged(writer, ns->parent) &&
         (n != 1 || map[0].count != 1 || map[0].lower != (gid ? writer->egid : writer->euid) ||
-         (gid && !ns->setgroups_denied))) {
+         (gid && !userns_denies_setgroups(ns)))) {
         return -EPERM;
     }
     if (gid) {
@@ -490,14 +503,7 @@ int32_t ns_map_write(struct userns *ns, int which, const char *text, uint32_t le
 
 int ns_setgroups_denied(const process_t *p)
 {
-    const struct userns *ns;
-
-    for (ns = proc_userns(p); ns != &init_userns; ns = ns->parent) {
-        if (ns->setgroups_denied) {
-            return 1;
-        }
-    }
-    return 0;
+    return userns_denies_setgroups(proc_userns(p));
 }
 
 /* ---- privilege ---- */

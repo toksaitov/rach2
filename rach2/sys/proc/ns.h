@@ -66,7 +66,8 @@ struct userns {
     struct ns_extent gid_map[NS_EXTENTS];
     uint32_t gid_extents;
     /* Whether setgroups is denied, as /proc/PID/setgroups's "deny" sets it,
-     * which an unprivileged writer of gid_map must do first. */
+     * which an unprivileged writer of gid_map must do first; a namespace
+     * below one that denies it denies it too, whatever this says. */
     uint32_t setgroups_denied;
 };
 
