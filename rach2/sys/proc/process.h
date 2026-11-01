@@ -366,11 +366,14 @@ struct process {
     /* The execution domain and its flags personality(2) keeps; fork passes
      * it on and exec keeps it. */
     uint32_t persona;
-    /* The descriptors of its shared table the current call has looked up,
-     * one bit each, which a close by another sharer leaves in place until
-     * the call ends (`fd_holds_release`); `fd_holding` says whether any bit
-     * is set. */
-    uint32_t fd_held[FD_TABLE_LIMIT / 32];
+    /* The descriptors of its shared table the current call has looked up
+     * or reserved, one bit each, which a close by another sharer leaves in
+     * place until the call ends (`fd_holds_release`): `fd_held_words`
+     * words from the heap, NULL until the thread first shares a table, and
+     * as wide as the table, which grows every sharer's map before it grows
+     * (fs/fd.c). `fd_holding` says whether any bit is set. */
+    uint32_t *fd_held;
+    int fd_held_words;
     int fd_holding;
     /* The system call filters seccomp(2) installed, newest first, which the
      * thread shares with the threads and children that inherit them, and

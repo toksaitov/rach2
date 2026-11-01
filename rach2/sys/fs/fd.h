@@ -16,13 +16,39 @@
 #include "../lib/kdef.h"
 
 /*
- * Policy: the descriptors a process may hold at most, which is the width of
- * a select fd_set, so no descriptor is one select cannot name. A table
- * starts with FD_TABLE_FIRST entries and doubles as it fills, up to the
- * limit; the entries are in the heap and freed with the process.
+ * A table starts with FD_TABLE_FIRST entries and doubles as it fills, up to
+ * the caller's limit; the entries are one array in the heap, freed with the
+ * table. FD_TABLE_LIMIT is the width of a select fd_set, the soft
+ * RLIMIT_NOFILE every process starts with, so that a program that selects
+ * names every descriptor it is given unless it raises the limit.
  */
 #define FD_TABLE_LIMIT 1024
 #define FD_TABLE_FIRST 16
+
+/*
+ * Policy: the hard RLIMIT_NOFILE a process starts with, which init's
+ * children inherit, and the most root may set, `fd_nr_open`, which
+ * fs.nr_open reads and root may set between FD_NR_OPEN_MIN and
+ * FD_NR_OPEN_MAX, as Linux's sysctl_nr_open. A table of FD_NR_OPEN_MAX
+ * entries takes nearly 1 GiB of heap on x86-64.
+ */
+#define FD_NOFILE_HARD 524288
+#define FD_NR_OPEN     1048576
+#define FD_NR_OPEN_MIN 64
+#define FD_NR_OPEN_MAX 16777216
+
+/* fs.nr_open: the most descriptors a process may be allowed, and the bound
+ * of a table's growth whatever the caller's limit says. */
+extern int fd_nr_open;
+
+/* fs.file-max: the open file descriptions the machine may have, past which
+ * a caller that is not privileged is given ENFILE; LONG_MAX by default, as
+ * a Linux system with systemd sets it. */
+extern unsigned long fd_file_max;
+
+/** How many open file descriptions there are: the first figure of
+ * fs.file-nr. */
+unsigned long fd_files_open(void);
 
 #define FD_STDIN  0
 #define FD_STDOUT 1
@@ -178,18 +204,30 @@ typedef struct fd_entry {
  * File descriptor table, which each process's record points to: `cap`
  * entries in the heap, every one FD_TYPE_NONE unless open. Threads and the
  * processes clone makes with CLONE_FILES share one table, `refs` counting
- * them. A shared table has all FD_TABLE_LIMIT entries, so an entry stays
- * where it is while a call of one sharer sleeps with it and another opens
- * files. The table has no limit of its own below FD_TABLE_LIMIT: each
- * sharer is held to its own RLIMIT_NOFILE (`fd_limit`). The table is the
- * owner of its sharers' POSIX record locks (`lock.h`), which its release
- * drops as it closes the descriptors.
+ * them. A table grows by moving its entries to a larger array, with no sleep
+ * between, so a lookup by number always finds the entry where it is now. A
+ * call of one sharer may sleep with the address of an entry while another
+ * grows the table; the old array then stays on `retired`, unchanged, until
+ * no sharer's call holds a descriptor (`fd_table_reap`), so such an address
+ * reads what it read before. What a call writes into an entry it writes by
+ * number after its last sleep. The table has no limit of its own below
+ * `fd_nr_open`: each sharer is held to its own RLIMIT_NOFILE (`fd_limit`).
+ * The table is the owner of its sharers' POSIX record locks (`lock.h`),
+ * which its release drops as it closes the descriptors.
  */
+struct fd_retired;
+
 typedef struct fd_table {
     fd_entry_t *entries;
     int cap;
     int refs;
+    /* No slot below it is free: where a search for the lowest free
+     * descriptor begins, as Linux's `next_fd`. */
+    int next_free;
+    struct fd_retired *retired; /* Arrays a growth replaced, newest first */
 } fd_table_t;
+
+struct process;
 
 /** Release every descriptor of `table`, its object and then its slot, when
  * the last process that shares the table lets it go; a second call finds
@@ -217,10 +255,21 @@ fd_table_t *fd_table_dup(const fd_table_t *src);
  * the descriptors must have been released first. */
 void fd_table_delete(fd_table_t *table);
 
-/** Take another reference to `table` for a CLONE_FILES child, first growing
- * it to FD_TABLE_LIMIT entries if it has fewer; 0, or -1 when the heap has
- * no room for them. */
-int fd_table_share(fd_table_t *table);
+/** Take another reference to `table` for the CLONE_FILES child `child`,
+ * first giving `child` and every sharer a map of the descriptors its calls
+ * hold as wide as the table (`fd_held` in `process.h`); 0, or -1 when the
+ * heap has no room for them. */
+int fd_table_share(fd_table_t *table, struct process *child);
+
+/** Grow the array of `table` to at least `cap` entries, whatever the
+ * limits, for an exec's staged copy of a shared table that grew since it
+ * was made; 0, or -ENOMEM. */
+int fd_table_fit(fd_table_t *table, int cap);
+
+/** Free the arrays a growth of `table` replaced, unless a call of a sharer
+ * other than the caller holds a descriptor and may have the address of an
+ * entry in one; the dispatcher calls it as each call ends. */
+void fd_table_reap(fd_table_t *table);
 
 /** How many entries the table has now: the bound of a walk over it. */
 int fd_table_cap(const fd_table_t *table);
@@ -230,7 +279,8 @@ int fd_table_cap(const fd_table_t *table);
  * the calling process's soft RLIMIT_NOFILE when the table is its own, which
  * a process that shares the table under CLONE_FILES keeps apart, as Linux
  * applies the caller's limit at each allocation; FD_TABLE_LIMIT for any
- * other table, which the kernel fills for nobody's call.
+ * other table, which the kernel fills for nobody's call. Never more than
+ * `fd_nr_open`.
  */
 int fd_limit(const fd_table_t *table);
 
@@ -255,11 +305,13 @@ int fd_init_stdio(fd_table_t *table);
 /**
  * Reserve the lowest free descriptor, growing the table up to the caller's
  * limit. The slot gets a new description and stays FD_TYPE_NONE until the
- * caller sets its type and object; `fd_free` returns it. Returns the
- * descriptor; -EMFILE when no slot is free below the limit; or -ENOMEM, with
- * the slot left free, when the heap has no room for the growth or the
- * description. The calls that make a descriptor return what they get, so
- * that EMFILE means the limit and ENOMEM the heap, as on Linux.
+ * caller sets its type and object; `fd_free` returns it. In a shared table
+ * the slot is held by the call, as `fd_get` holds one. Returns the
+ * descriptor; -EMFILE when no slot is free below the limit; -ENFILE when the
+ * machine has `fd_file_max` descriptions and the caller is not privileged;
+ * or -ENOMEM, with the slot left free, when the heap has no room for the
+ * growth or the description. The calls that make a descriptor return what
+ * they get, so that EMFILE means the limit and ENOMEM the heap, as on Linux.
  */
 int fd_alloc(fd_table_t *table);
 
@@ -343,10 +395,26 @@ int fd_ofd_holders(const struct vfs_mount *mnt, const void *node, const struct o
 int fd_is_valid(fd_table_t *table, int fd);
 
 /**
- * Whether `e` is one of `table`'s entries, and not a copy of one that a file
- * mapping or a message in flight keeps: a close of a descriptor of the table
- * drops the table's record locks, and the release of such a copy does not.
+ * Whether `e` is one of `table`'s entries, in its array or in one a growth
+ * replaced, and not a copy of one that a file mapping or a message in
+ * flight keeps: a close of a descriptor of the table drops the table's
+ * record locks, and the release of such a copy does not.
  */
 int fd_in_table(const fd_table_t *table, const fd_entry_t *e);
+
+/**
+ * The entry `e` is now: the same slot in `table`'s array when `e` is the
+ * address of an entry in an array a growth replaced, else `e` itself, which
+ * may be a copy no table has. A call that took the address of an entry and
+ * then slept, and so may have let another sharer grow the table, reads it
+ * again through this before it writes the entry, reads what another thread
+ * may have changed in it, or compares it by address.
+ */
+fd_entry_t *fd_entry_now(fd_table_t *table, fd_entry_t *e);
+
+/** Repoint the `node` of every entry of `table` that names `from` at `to`,
+ * in its array and in those a growth replaced, after a growing write moved
+ * a KRFFS node (`vfs_repoint`). */
+void fd_table_repoint(fd_table_t *table, const void *from, void *to);
 
 #endif /* _FD_H_ */

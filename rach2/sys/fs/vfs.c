@@ -1502,18 +1502,11 @@ static void repoint_one(struct vfs_mount *mnt, const void *from, void *to)
 void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
     process_t *pr;
-    int i, j;
+    int i;
 
     for (pr = proc_list; pr; pr = pr->next) {
-        if (mnt == mounts[0]) {
-            for (j = 0; j < fd_table_cap(pr->fds); j++) {
-                fd_entry_t *e = &pr->fds->entries[j];
-
-                if ((e->type == FD_TYPE_FILE || e->type == FD_TYPE_DIR) &&
-                    (void *)e->node == from) {
-                    e->node = to;
-                }
-            }
+        if (mnt == mounts[0] && pr->fds) {
+            fd_table_repoint(pr->fds, from, to);
         }
     }
     for (i = 0; i < mount_slots; i++) {

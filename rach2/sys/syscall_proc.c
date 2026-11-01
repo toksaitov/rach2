@@ -1767,11 +1767,11 @@ static int32_t exec_one_thread(void)
 /**
  * Set aside for a caller that shares its descriptor table the storage of
  * the table of its own the new image gets, which `exec_files` fills at the
- * commit, so that the allocation fails while the exec can still return. A
- * shared table has all FD_TABLE_LIMIT entries (fs/fd.h) and never shrinks,
- * so the storage has room for the table as it will be then; the entries
- * copied into it now name descriptions it holds no references to, and the
- * commit writes over them. 0, or -ENOMEM.
+ * commit, so that the allocation fails while the exec can still return.
+ * The entries copied into it now name descriptions it holds no references
+ * to, and the commit writes over them. A table never shrinks, but another
+ * sharer may grow it while the exec sleeps, so `exec_files_fit` widens the
+ * storage again after the last sleep. 0, or -ENOMEM.
  */
 static int32_t exec_files_stage(struct exec_state *s)
 {
@@ -1780,6 +1780,18 @@ static int32_t exec_files_stage(struct exec_state *s)
     }
     s->files = fd_table_dup(current_proc->fds);
     return s->files != NULL ? 0 : -ENOMEM;
+}
+
+/** Widen the storage `exec_files_stage` set aside to the shared table as it
+ * is now, after `exec_one_thread`, the exec's last sleep; nothing between
+ * here and the commit sleeps, so no sharer grows the table again. 0, or
+ * -ENOMEM. */
+static int32_t exec_files_fit(struct exec_state *s)
+{
+    if (s->files == NULL || current_proc->fds->refs == 1) {
+        return 0;
+    }
+    return fd_table_fit(s->files, current_proc->fds->cap);
 }
 
 /**
@@ -1800,6 +1812,7 @@ static void exec_files(struct exec_state *s)
         return;
     }
     k_memcpy(own->entries, shared->entries, sizeof(fd_entry_t) * (size_t)shared->cap);
+    own->next_free = 0;
     files_take(own);
     s->files = NULL;
     proc_files_put(current_proc);
@@ -2038,6 +2051,9 @@ static int32_t exec_run(isr_params_t *params, struct exec_state *s)
     }
     if (rc == 0) {
         rc = exec_one_thread();
+    }
+    if (rc == 0) {
+        rc = exec_files_fit(s);
     }
     if (rc == 0) {
         uint32_t tid = current_proc->pid;
@@ -2283,7 +2299,7 @@ static void fork_signals(process_t *child, const process_t *parent, uint32_t fla
 static int32_t fork_files(process_t *child, process_t *parent, uint32_t flags)
 {
     if (flags & CLONE_FILES) {
-        if (fd_table_share(parent->fds) != 0) {
+        if (fd_table_share(parent->fds, child) != 0) {
             return -ENOMEM;
         }
         child->fds = parent->fds;
@@ -5448,7 +5464,8 @@ static void rlimit_for(const process_t *p, uint32_t resource, unsigned long *cur
 /**
  * Set a kept limit of `p`'s process, in the record of each of its threads:
  * the soft value at most the hard, the hard raised by root only and lowered
- * by anyone, and RLIMIT_NOFILE never above FD_TABLE_LIMIT. A limit that is
+ * by anyone, and RLIMIT_NOFILE never above `fd_nr_open`, fs.nr_open, as
+ * Linux refuses it with EPERM even to root. A limit that is
  * not kept is accepted and not changed. RLIMIT_NOFILE is the process's own
  * even when it shares its descriptor table with another under CLONE_FILES,
  * since each allocation reads the caller's (`fd_limit`). 0, or -EINVAL and
@@ -5468,7 +5485,7 @@ static int rlimit_set(process_t *p, uint32_t resource, unsigned long cur, unsign
     if (max > p->rlim[slot].max && !proc_privileged(current_proc)) {
         return -EPERM;
     }
-    if (slot == RLIM_NOFILE && max > FD_TABLE_LIMIT) {
+    if (slot == RLIM_NOFILE && max > (unsigned long)fd_nr_open) {
         return -EPERM;
     }
     for (t = proc_list; t; t = t->next) {
