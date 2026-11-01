@@ -1388,7 +1388,7 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # client, TinyCC and pdpmake, sox_ng, the Wi-Fi station and iw, Doom, the
 # manual, the sources under /src, and an /etc and /root tree. The image is
 # 27 MiB on i686 and 29 on x86-64, of which the tree with Doom's WAD takes
-# 24.6 MiB and 26.4 MiB, since x86-64's programs are larger; wpa_supplicant
+# 24.9 MiB and 26.8 MiB, since x86-64's programs are larger; wpa_supplicant
 # and its tools take 3.3 MiB and 4.4 of that, and the small /bin/sh launcher
 # keeps one copy of BusyBox beside sox_ng.
 # ACPICA's core is staged as an archive of 0.45 MiB to keep the tree small
@@ -1516,7 +1516,7 @@ endif
 RECOVERY_IMAGE = $(IMAGES_DIR)/$(RECOVERY_NAME).krffs
 RECOVERY_ISO = $(IMAGES_DIR)/$(RECOVERY_NAME).iso
 # The recovery system's root is 10 MiB of RAM: its programs take 7.7 MiB on
-# i686 and 8.8 on x86-64, 3.3 and 4.4 of them the Wi-Fi station and iw, and
+# i686 and 8.9 on x86-64, 3.3 and 4.4 of them the Wi-Fi station and iw, and
 # the rest is where the system writes, the plan of a machine's grow in /tmp
 # among it, so the build refuses an image with less than 512 KiB free. The
 # suites' disks give it and its kernel a recovery partition of 16 MiB, and an
