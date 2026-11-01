@@ -478,8 +478,9 @@ uint32_t proc_user_records(const process_t *p);
  */
 void proc_timer_update(process_t *p);
 
-/** Work since boot: pid bucket entries, uid bucket entries, timer entries.
- * The index is 0, 1 or 2; counters wrap modulo 2^32. Hold the big kernel lock.
+/** Work since boot: pid bucket entries, uid bucket entries, timer entries
+ * and timer passes. The index is 0, 1, 2 or 3; counters wrap modulo 2^32.
+ * Hold the big kernel lock.
  */
 uint32_t proc_work_count(unsigned int index);
 

@@ -70,7 +70,7 @@ The rest of the kernel reaches processes through these headers:
 
 ## Design
 
-`proc_timer_update` keeps records with a real alarm or a blocked timed wait on an intrusive list. Blocking in `schedule`, a wake in `sched_make_ready`, alarm changes and record deletion refresh membership under the big lock with local interrupts masked. The tick visits only this list; untimed blocked threads add no timer work. Its cursor follows removals made by signal wakeups during the same tick. `/proc/stat` reports the pid, uid and timer entries examined as `process_pid_steps`, `process_uid_steps` and `process_timer_steps`, modulo 2^32.
+`proc_timer_update` keeps records with a real alarm or a blocked timed wait on an intrusive list. Blocking in `schedule`, a wake in `sched_make_ready`, alarm changes and record deletion refresh membership under the big lock with local interrupts masked. The tick visits only this list; untimed blocked threads add no timer work. Its cursor follows removals made by signal wakeups during the same tick. `/proc/stat` reports the pid, uid and timer entries examined as `process_pid_steps`, `process_uid_steps` and `process_timer_steps`, and timer passes as `process_timer_passes`, modulo 2^32.
 
 ### The records
 
