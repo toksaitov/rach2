@@ -361,7 +361,8 @@ void frag6_input(struct netdev *nd, const uint8_t *dg, uint32_t len, uint32_t of
  * room for, 1232 bytes at the least MTU.
  */
 int frag6_output(struct netdev *out, const uint8_t *via, const uint8_t *src, const uint8_t *dst,
-                 uint8_t nh, const uint8_t *payload, uint16_t plen, uint8_t hlim, uint32_t mtu)
+                 uint8_t nh, const uint8_t *payload, uint16_t plen, uint8_t hlim, uint8_t tclass,
+                 uint32_t mtu)
 {
     uint32_t unit = (mtu - IP6_HDR_SIZE - IP6_FRAG_HDR_SIZE) & ~7u;
     uint32_t id = krandom_u32(), off;
@@ -373,6 +374,7 @@ int frag6_output(struct netdev *out, const uint8_t *via, const uint8_t *src, con
 
         ip6_header(frag6_tx_buf, src, dst, IP6_NH_FRAGMENT, (uint16_t)(IP6_FRAG_HDR_SIZE + n),
                    hlim);
+        ip6_set_class(frag6_tx_buf, tclass);
         frag6_tx_buf[IP6_HDR_SIZE] = nh;
         frag6_tx_buf[IP6_HDR_SIZE + 1] = 0;
         write16be(frag6_tx_buf + IP6_HDR_SIZE + 2, (uint16_t)(off | (last ? 0u : IP6_FRAG_MORE)));

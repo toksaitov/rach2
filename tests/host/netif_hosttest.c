@@ -159,6 +159,52 @@ int raw_last_src6(struct socket *s, uint8_t *src)
     return -1;
 }
 
+/** No row makes an IPv6 raw socket, which alone has an ICMPv6 filter. */
+int raw_set_filter6(struct socket *s, const uint8_t *filter, uint32_t len)
+{
+    (void)s;
+    (void)filter;
+    (void)len;
+    CHECK(0, "no row sets an ICMPv6 filter");
+    return -1;
+}
+
+/** No row makes an IPv6 raw socket, which alone has an ICMPv6 filter. */
+int raw_get_filter6(struct socket *s, uint8_t *filter)
+{
+    (void)s;
+    (void)filter;
+    CHECK(0, "no row reads an ICMPv6 filter");
+    return -1;
+}
+
+/** No row joins an IPv6 group, which alone asks for the group's route. */
+struct netdev *ip6_route_find(const uint8_t *dst, int ifindex, uint8_t *via)
+{
+    (void)dst;
+    (void)ifindex;
+    (void)via;
+    CHECK(0, "no row routes an IPv6 group");
+    return NULL;
+}
+
+/** No row joins an IPv6 group. */
+int netdev_join6(struct netdev *nd, const uint8_t *group)
+{
+    (void)nd;
+    (void)group;
+    CHECK(0, "no row joins an IPv6 group");
+    return -EINVAL;
+}
+
+/** No row leaves an IPv6 group. */
+void netdev_leave6(struct netdev *nd, const uint8_t *group)
+{
+    (void)nd;
+    (void)group;
+    CHECK(0, "no row leaves an IPv6 group");
+}
+
 /** Fail the row: only accept's error path frees a descriptor here, and no
  * row reaches it. */
 int fd_free(fd_table_t *table, int fd)

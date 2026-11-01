@@ -125,6 +125,10 @@ void ip_hold_forget(struct netdev *nd);
  */
 int ip_loop_put(const uint8_t *dgram, uint16_t total_len);
 
+/** `ip_loop_put` of an IPv6 datagram that the drain gives `ip6_loop_rx` as
+ * received by the card of index `ifindex`, or as `lo`'s for 0. */
+int ip_loop_put_on(const uint8_t *dgram, uint16_t total_len, int ifindex);
+
 /** `ip_loop_drain_from` for the tick, which calls it once a tick from the
  * timer interrupt. */
 void ip_loop_drain(void);

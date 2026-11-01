@@ -5,6 +5,11 @@
 #include "address.h"
 
 struct socket;
+struct net_rxinfo;
+
+/* struct icmp6_filter: 256 bits, one for each ICMPv6 type, a set bit
+ * blocking the type (RFC 3542, 3.2). */
+#define RAW_FILTER6_LEN 32
 
 /*
  * raw: AF_INET SOCK_RAW sockets of IPPROTO_ICMP, what `ping` and
@@ -66,13 +71,36 @@ void raw_unregister(struct socket *sock);
 void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len);
 
 /**
- * Offer the message of `len` bytes at `msg`, the payload of an IPv6
- * datagram of next header `nh` from `src` that came in on the interface of
- * index `ifindex`, to every AF_INET6 raw socket of that protocol, under the
- * rules of `raw_rx`. Called with interrupts off, from `ip6_rx`, before the
- * kernel's own handler.
+ * Offer the message of `len` bytes at `msg`, the payload of the IPv6
+ * datagram whose fixed header is at `ip6h`, of next header `nh`, that came
+ * in on the interface of index `ifindex`, to every AF_INET6 raw socket of
+ * that protocol, under the rules of `raw_rx`. A socket of IPPROTO_ICMPV6
+ * takes no message of a type its filter blocks (`raw_set_filter6`), nor one
+ * too short to have a type. Each message keeps its source, destination, hop
+ * limit and traffic class. Called with interrupts off, from `ip6_rx`,
+ * before the kernel's own handler.
  */
-void raw6_rx(int ifindex, const uint8_t *src, uint8_t nh, const uint8_t *msg, uint16_t len);
+void raw6_rx(int ifindex, const uint8_t *ip6h, uint8_t nh, const uint8_t *msg, uint16_t len);
+
+/**
+ * Set the ICMPv6 filter of the raw socket `sock` from the `len` bytes at
+ * `filter`, at most RAW_FILTER6_LEN; the bits past them are left as they
+ * were, as Linux leaves them. A new socket passes every type. Returns 0, or
+ * -1 for a socket with no registration. Takes `net_lock` itself.
+ */
+int raw_set_filter6(struct socket *sock, const uint8_t *filter, uint32_t len);
+
+/** Copy the RAW_FILTER6_LEN bytes of the ICMPv6 filter of `sock` to
+ * `filter`. Returns 0, or -1 for a socket with no registration. */
+int raw_get_filter6(struct socket *sock, uint8_t *filter);
+
+/** What the network layer saw of the oldest waiting datagram, into
+ * `info`; a destination of 0.0.0.0 and nothing else known when none
+ * waits. Called under the caller's `net_lock`. */
+void raw_head_info(struct socket *sock, struct net_rxinfo *info);
+
+/** What the network layer saw of the datagram most recently taken. */
+void raw_last_info(struct socket *sock, struct net_rxinfo *info);
 
 /* The receive queue, as the three steps `socket_dgram_*` are made of, the same
  * shape the packet socket uses. */

@@ -89,6 +89,9 @@ struct socket *socket_alloc(int type)
     sock->type = type;
     sock->family = AF_INET;
     sock->ip_ttl = IP_TTL_DEFAULT;
+    sock->hops6 = -1;
+    sock->mhops6 = 1;
+    sock->mloop6 = 1;
     sock->local_ip = sock->remote_ip = net_addr4(0);
     wait_queue_init(&sock->waiters);
 
@@ -231,6 +234,7 @@ void socket_unref(struct socket *sock)
         return;
     }
 
+    socket_leave_groups6(sock);
     if (sock->family == AF_NETLINK) {
         netlink_close(sock);
     } else if (sock->family == AF_PACKET) {
@@ -266,10 +270,30 @@ void socket_unref(struct socket *sock)
     kfree(sock);
 }
 
-/** A connected socket takes datagrams from its peer and from nobody else,
- * which is what `connect` means for UDP. */
+void socket_leave_groups6(struct socket *sock)
+{
+    int i;
+
+    for (i = 0; i < sock->ngroups6; i++) {
+        struct netdev *nd = netdev_at(sock->groups6[i].ifindex - 1);
+
+        if (nd) {
+            netdev_leave6(nd, sock->groups6[i].group);
+        }
+    }
+    sock->ngroups6 = 0;
+}
+
 void socket_udp_deliver(struct socket *sock, net_addr_t src_ip, uint16_t src_port,
                         const uint8_t *data, uint16_t len)
+{
+    socket_udp_deliver_info(sock, src_ip, src_port, data, len, NULL);
+}
+
+/** A connected socket takes datagrams from its peer and from nobody else,
+ * which is what `connect` means for UDP. */
+void socket_udp_deliver_info(struct socket *sock, net_addr_t src_ip, uint16_t src_port,
+                             const uint8_t *data, uint16_t len, const struct net_rxinfo *info)
 {
     uint16_t copy_len = len;
     int slot;
@@ -291,6 +315,14 @@ void socket_udp_deliver(struct socket *sock, net_addr_t src_ip, uint16_t src_por
     sock->recv_len[slot] = copy_len;
     sock->recv_src_ip[slot] = src_ip;
     sock->recv_src_port[slot] = src_port;
+    if (info) {
+        sock->recv_info[slot] = *info;
+    } else {
+        k_memset(&sock->recv_info[slot], 0, sizeof(sock->recv_info[slot]));
+        sock->recv_info[slot].dst = net_addr4(0);
+        sock->recv_info[slot].hlim = -1;
+        sock->recv_info[slot].tclass = -1;
+    }
     sock->recv_count++;
 
     wq_wake(&sock->waiters, WQ_DATA);
@@ -452,6 +484,7 @@ void socket_dgram_consume(struct socket *sock, net_addr_t *src_ip, uint16_t *src
     }
     if (sock->type == SOCK_RAW) {
         raw_consume(sock);
+        raw_last_info(sock, &sock->rx_last);
         if (src_ip) {
             raw_last_address(sock, src_ip);
         }
@@ -472,6 +505,7 @@ void socket_dgram_consume(struct socket *sock, net_addr_t *src_ip, uint16_t *src
     if (src_port) {
         *src_port = sock->recv_src_port[sock->recv_head];
     }
+    sock->rx_last = sock->recv_info[sock->recv_head];
     sock->recv_head = (sock->recv_head + 1) % SOCK_DGRAM_SLOTS;
     sock->recv_count--;
     net_unlock(flags);
@@ -488,11 +522,13 @@ void socket_dgram_sender(struct socket *sock, net_addr_t *src_ip, uint16_t *src_
     } else if (sock->family != AF_NETLINK) {
         if (sock->type == SOCK_RAW) {
             raw_head_address(sock, &ip);
+            raw_head_info(sock, &sock->rx_last);
         } else {
             flags = net_lock();
             if (sock->recv_count) {
                 ip = sock->recv_src_ip[sock->recv_head];
                 port = sock->recv_src_port[sock->recv_head];
+                sock->rx_last = sock->recv_info[sock->recv_head];
             }
             net_unlock(flags);
         }

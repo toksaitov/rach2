@@ -3,6 +3,7 @@
 #include "socket.h"
 #include "../ip/ip.h"
 #include "../ip6/ip6.h"
+#include "../ip6/nd6.h"
 #include "../driver/netdev.h"
 #include "../../lib/kstring.h"
 #include "../../lib/kerrno.h"
@@ -60,4 +61,20 @@ int net_addr_source(net_addr_t bound, net_addr_t dst, net_addr_t *src)
     if (IP_IS_LOOPBACK(src->v4) && !ip_is_local(dst.v4))
         return -EINVAL;
     return 0;
+}
+
+/** A card's hop limit is the routers'; `lo` has none advertised. */
+uint8_t socket_hops6(const struct socket *sock, const uint8_t *dst, int ifindex)
+{
+    uint8_t via[16];
+    struct netdev *out;
+
+    if (ip6_is_multicast(dst)) {
+        return (uint8_t)sock->mhops6;
+    }
+    if (sock->hops6 >= 0) {
+        return (uint8_t)sock->hops6;
+    }
+    out = ip6_route_find(dst, ifindex, via);
+    return out && !out->loopback ? nd6_hop_limit(out) : IP6_HOP_LIMIT_DEFAULT;
 }

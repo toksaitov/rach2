@@ -43,6 +43,40 @@
  * have to wait: EAGAIN, negated. */
 #define SOCK_EAGAIN (-11)
 
+/* Policy: an AF_INET6 socket holds at most eight multicast memberships
+ * (IPV6_JOIN_GROUP), each a group on one interface. */
+#define SOCK_GROUPS6 8
+
+/* The ancillary data an AF_INET6 socket asks a receive for, the bits of
+ * `rxopt6`: IPV6_RECVPKTINFO, IPV6_RECVHOPLIMIT and IPV6_RECVTCLASS. */
+#define SOCK_RX_PKTINFO  0x1
+#define SOCK_RX_HOPLIMIT 0x2
+#define SOCK_RX_TCLASS   0x4
+
+/*
+ * What the network layer saw of a datagram it delivered to a UDP or raw
+ * socket, kept beside the datagram for the ancillary data of `recvmsg`.
+ * UDP over IPv4 keeps the destination alone: `udp_rx` is not given the
+ * interface, the TTL or the type of service, so they are 0, -1 and -1.
+ */
+struct net_rxinfo {
+    net_addr_t dst;   /* the destination the datagram was sent to */
+    uint32_t ifindex; /* the interface it came in on, 0 when not known */
+    int16_t hlim;     /* its hop limit, or -1 when not known */
+    int16_t tclass;   /* its traffic class, or -1 when not known */
+};
+
+/*
+ * What one send asks beyond the socket's options: the IPV6_PKTINFO,
+ * IPV6_HOPLIMIT and IPV6_TCLASS control messages of `sendmsg`.
+ */
+struct net_txopt {
+    net_addr_t src; /* the source to send from; unspecified for the usual */
+    int ifindex;    /* the interface to leave by, or 0 */
+    int16_t hlim;   /* the hop limit, or -1 for the socket's */
+    int16_t tclass; /* the traffic class, or -1 for the socket's */
+};
+
 struct tcb; /* defined in tcp/tcp.h */
 
 typedef struct socket {
@@ -84,6 +118,30 @@ typedef struct socket {
     uint16_t remote_port;
     int connected;
     int v6only; /* IPV6_V6ONLY; zero permits mapped IPv4 peers */
+
+    /*
+     * The IPv6 options of an AF_INET6 socket, which its UDP and raw sends
+     * and its receives honour (syscall_net.c). `hops6` is IPV6_UNICAST_HOPS,
+     * -1 for the default of 64; `mhops6` IPV6_MULTICAST_HOPS, 1 unless set;
+     * `tclass6` IPV6_TCLASS, 0 to 255; `mif6` IPV6_MULTICAST_IF, the index of
+     * the interface a datagram to a group leaves by when its address names
+     * none, or 0; `mloop6` IPV6_MULTICAST_LOOP, whether such a datagram also
+     * comes back to this machine's members of the group; `rxopt6` the
+     * SOCK_RX_* the receives answer with. `groups6` are the `ngroups6`
+     * groups IPV6_JOIN_GROUP made the socket a member of, each holding one
+     * join of the interface, which the socket's end gives back.
+     */
+    int16_t hops6;
+    int16_t mhops6;
+    int16_t tclass6;
+    uint8_t mloop6;
+    uint8_t rxopt6;
+    int mif6;
+    struct {
+        uint8_t group[16];
+        int ifindex;
+    } groups6[SOCK_GROUPS6];
+    int ngroups6;
 
     /* The error an ICMP message reported for a connected datagram socket's
      * peer, ECONNREFUSED for a port unreachable, or 0: the next receive,
@@ -140,8 +198,14 @@ typedef struct socket {
     uint16_t recv_len[SOCK_DGRAM_SLOTS];
     net_addr_t recv_src_ip[SOCK_DGRAM_SLOTS];
     uint16_t recv_src_port[SOCK_DGRAM_SLOTS];
+    struct net_rxinfo recv_info[SOCK_DGRAM_SLOTS];
     int recv_head;
     int recv_count;
+
+    /* What the network layer saw of the UDP or raw datagram most recently
+     * taken or peeked (`socket_dgram_consume`, `socket_dgram_sender`), for
+     * recvmsg's ancillary data. */
+    struct net_rxinfo rx_last;
 
     /* The processes and pollers waiting for data, room, a connection or an
      * accept. A wake from the receive path wakes every one; each checks its
@@ -228,7 +292,22 @@ uint32_t socket_inode_next(void);
 void socket_ref(struct socket *sock);
 
 /**
- * Drop a reference, and at the last tear the socket down: free a netlink
+ * The hop limit of a datagram from the AF_INET6 socket `sock` to `dst`,
+ * leaving in the scope `ifindex`: IPV6_MULTICAST_HOPS for a group, else
+ * IPV6_UNICAST_HOPS, or with that at -1 the hop limit routers advertised
+ * for the interface the route takes (`nd6_hop_limit`), 64 without one. The
+ * caller holds `net_lock`.
+ */
+uint8_t socket_hops6(const struct socket *sock, const uint8_t *dst, int ifindex);
+
+/** Give back every multicast membership `sock` holds (IPV6_JOIN_GROUP),
+ * one join of its interface each, as the socket's end does. The caller
+ * holds `net_lock`. */
+void socket_leave_groups6(struct socket *sock);
+
+/**
+ * Drop a reference, and at the last tear the socket down: give back its
+ * multicast memberships, free a netlink
  * socket's state, remove a packet, raw or UDP socket's binding, or close a
  * stream's connection (`tcp_close`, after which the block finishes the close
  * on its own); release a listener's connections not yet accepted; and take
@@ -246,6 +325,11 @@ void socket_unref(struct socket *sock);
  */
 void socket_udp_deliver(struct socket *sock, net_addr_t src_ip, uint16_t src_port,
                         const uint8_t *data, uint16_t len);
+
+/** `socket_udp_deliver` with what the network layer saw of the datagram,
+ * kept for the ancillary data of a receive; `info` NULL knows nothing. */
+void socket_udp_deliver_info(struct socket *sock, net_addr_t src_ip, uint16_t src_port,
+                             const uint8_t *data, uint16_t len, const struct net_rxinfo *info);
 
 /**
  * Wait for a datagram on a UDP, raw, packet or netlink socket, copy up to
@@ -311,13 +395,15 @@ int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int le
  * NULL: for UDP its address and port; for a raw socket the source address of
  * its IP header and port 0; and 0 for both for a packet or netlink socket,
  * whose link address `packet_last_addr` reports. With no datagram waiting, a
- * UDP socket reports nothing.
+ * UDP socket reports nothing. A UDP or raw socket keeps in `rx_last` what
+ * the network layer saw of the datagram.
  */
 void socket_dgram_consume(struct socket *sock, net_addr_t *src_ip, uint16_t *src_port);
 
 /** Report the oldest waiting datagram's sender as `socket_dgram_consume`
  * does, 0 for both with none waiting, and leave the datagram in place. A
- * packet socket keeps its link address for `packet_last_addr`. */
+ * packet socket keeps its link address for `packet_last_addr`, and a UDP or
+ * raw socket what the network layer saw in `rx_last`. */
 void socket_dgram_sender(struct socket *sock, net_addr_t *src_ip, uint16_t *src_port);
 
 /*

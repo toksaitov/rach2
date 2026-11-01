@@ -319,6 +319,35 @@ int main(void)
     return failures ? 1 : 0;
 }
 
+/** No interface exists in the wake fixture. */
+struct netdev *netdev_at(int n)
+{
+    (void)n;
+    return NULL;
+}
+
+/** No socket of the wake fixture joins a group. */
+void netdev_leave6(struct netdev *nd, const uint8_t *group)
+{
+    (void)nd;
+    (void)group;
+}
+
+/** No raw message is queued in the wake fixture, so nothing is known. */
+void raw_head_info(struct socket *sock, struct net_rxinfo *info)
+{
+    (void)sock;
+    k_memset(info, 0, sizeof(*info));
+    info->hlim = -1;
+    info->tclass = -1;
+}
+
+/** No raw message was consumed in the wake fixture. */
+void raw_last_info(struct socket *sock, struct net_rxinfo *info)
+{
+    raw_head_info(sock, info);
+}
+
 /** No raw message is queued in the wake fixture. */
 void raw_head_address(struct socket *sock, net_addr_t *src)
 {

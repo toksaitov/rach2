@@ -9,6 +9,7 @@
 #include "socket.h"
 #include "../net.h"
 #include "../ip/ip.h"
+#include "../ip6/ip6.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
@@ -29,22 +30,27 @@ struct raw_queue {
     uint16_t len[RAW_QUEUE_SLOTS];
     net_addr_t src[RAW_QUEUE_SLOTS];
     uint32_t ifindex[RAW_QUEUE_SLOTS]; /* ingress, including global addresses */
-    int head;                          /* the next datagram to be read */
-    int count;                         /* how many are waiting */
+    /* The rest of what the network layer saw, for recvmsg's ancillary
+     * data: the ingress is `ifindex` above. */
+    struct net_rxinfo info[RAW_QUEUE_SLOTS];
+    int head;  /* the next datagram to be read */
+    int count; /* how many are waiting */
     int dropped;
     int reported; /* whether a drop has been logged */
     net_addr_t last_src;
     uint32_t last_ifindex;
+    struct net_rxinfo last_info;
 };
 
 /* A registered socket: the socket, its registered protocol, whether it is
- * an AF_INET6 one, and its queue, one record from the heap per
- * registration, on a list the receive path walks. */
+ * an AF_INET6 one, its ICMPv6 filter, and its queue, one record from the
+ * heap per registration, on a list the receive path walks. */
 struct raw_binding {
     struct raw_binding *next;
     struct socket *sock;
     uint8_t proto;
     int v6;
+    uint8_t filter6[RAW_FILTER6_LEN]; /* bit t of byte t / 8 blocks type t */
     struct raw_queue q;
 };
 
@@ -159,14 +165,31 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
         k_memcpy(q->buf[slot], data, copy_len);
         q->len[slot] = copy_len;
         q->src[slot] = net_addr4(src);
+        q->ifindex[slot] = 0;
+        q->info[slot].dst = net_addr4(((uint32_t)data[16] << 24) | ((uint32_t)data[17] << 16) |
+                                      ((uint32_t)data[18] << 8) | (uint32_t)data[19]);
+        q->info[slot].ifindex = 0;
+        q->info[slot].hlim = (int16_t)data[8];
+        q->info[slot].tclass = (int16_t)data[1];
         q->count++;
         wq_wake(&b->sock->waiters, WQ_DATA);
     }
 }
 
+/** Whether `b`'s ICMPv6 filter blocks the message of `len` bytes at `msg`:
+ * a set bit for its type, or no type at all. Other protocols pass. */
+static int raw_filtered6(const struct raw_binding *b, const uint8_t *msg, uint16_t len)
+{
+    if (b->proto != IP6_NH_ICMP6) {
+        return 0;
+    }
+    return len < 1 || (b->filter6[msg[0] >> 3] & (1u << (msg[0] & 7))) != 0;
+}
+
 /** As `raw_rx`, from `ip6_rx`; what is queued is the message alone, as an
- * AF_INET6 raw socket receives it on Linux. */
-void raw6_rx(int ifindex, const uint8_t *src, uint8_t nh, const uint8_t *msg, uint16_t len)
+ * AF_INET6 raw socket receives it on Linux. The filter is judged before a
+ * slot is taken, so that a message blocked costs no place and no drop. */
+void raw6_rx(int ifindex, const uint8_t *ip6h, uint8_t nh, const uint8_t *msg, uint16_t len)
 {
     uint16_t copy_len = len > RAW_SLOT_SIZE ? RAW_SLOT_SIZE : len;
     struct raw_binding *b;
@@ -175,13 +198,17 @@ void raw6_rx(int ifindex, const uint8_t *src, uint8_t nh, const uint8_t *msg, ui
         struct raw_queue *q = &b->q;
         int slot;
 
-        if (!b->v6 || b->proto != nh || (slot = raw_slot(b)) < 0) {
+        if (!b->v6 || b->proto != nh || raw_filtered6(b, msg, len) || (slot = raw_slot(b)) < 0) {
             continue;
         }
         k_memcpy(q->buf[slot], msg, copy_len);
         q->len[slot] = copy_len;
-        q->src[slot] = net_addr6(src, (uint32_t)ifindex);
+        q->src[slot] = net_addr6(ip6h + 8, (uint32_t)ifindex);
         q->ifindex[slot] = (uint32_t)ifindex;
+        q->info[slot].dst = net_addr6(ip6h + 24, (uint32_t)ifindex);
+        q->info[slot].ifindex = (uint32_t)ifindex;
+        q->info[slot].hlim = (int16_t)ip6h[7];
+        q->info[slot].tclass = (int16_t)(((ip6h[0] & 0x0f) << 4) | (ip6h[1] >> 4));
         q->count++;
         wq_wake(&b->sock->waiters, WQ_DATA);
     }
@@ -246,6 +273,7 @@ void raw_consume(struct socket *sock)
     if (q && q->count > 0) {
         q->last_src = q->src[q->head];
         q->last_ifindex = q->ifindex[q->head];
+        q->last_info = q->info[q->head];
         q->head = (q->head + 1) % RAW_QUEUE_SLOTS;
         q->count--;
     }
@@ -323,4 +351,55 @@ void raw_last_address(struct socket *sock, net_addr_t *src)
 {
     struct raw_queue *q = queue_of(sock);
     *src = q ? q->last_src : net_addr4(0);
+}
+
+int raw_set_filter6(struct socket *sock, const uint8_t *filter, uint32_t len)
+{
+    struct raw_binding *b;
+    uint32_t flags = net_lock();
+
+    b = binding_of(sock);
+    if (b) {
+        k_memcpy(b->filter6, filter, len < RAW_FILTER6_LEN ? len : RAW_FILTER6_LEN);
+    }
+    net_unlock(flags);
+    return b ? 0 : -1;
+}
+
+int raw_get_filter6(struct socket *sock, uint8_t *filter)
+{
+    struct raw_binding *b;
+    uint32_t flags = net_lock();
+
+    b = binding_of(sock);
+    if (b) {
+        k_memcpy(filter, b->filter6, RAW_FILTER6_LEN);
+    }
+    net_unlock(flags);
+    return b ? 0 : -1;
+}
+
+void raw_head_info(struct socket *sock, struct net_rxinfo *info)
+{
+    struct raw_queue *q = queue_of(sock);
+
+    if (q && q->count) {
+        *info = q->info[q->head];
+        return;
+    }
+    k_memset(info, 0, sizeof(*info));
+    info->dst = net_addr4(0);
+    info->hlim = -1;
+    info->tclass = -1;
+}
+
+void raw_last_info(struct socket *sock, struct net_rxinfo *info)
+{
+    struct raw_queue *q = queue_of(sock);
+
+    if (q) {
+        *info = q->last_info;
+        return;
+    }
+    raw_head_info(sock, info);
 }

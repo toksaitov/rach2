@@ -334,6 +334,16 @@ static struct netdev *by_index(int ifindex)
  */
 struct netdev *ip6_route(const uint8_t *dst, int ifindex, uint8_t *via)
 {
+    struct netdev *nd = ip6_route_find(dst, ifindex, via);
+
+    if (!nd) {
+        net_mib6.ip6_out_no_routes++;
+    }
+    return nd;
+}
+
+struct netdev *ip6_route_find(const uint8_t *dst, int ifindex, uint8_t *via)
+{
     struct netdev *nd = 0;
 
     if (ip6_is_loopback(dst) || (!ip6_is_multicast(dst) && netdev_owner6(dst))) {
@@ -361,7 +371,6 @@ struct netdev *ip6_route(const uint8_t *dst, int ifindex, uint8_t *via)
         nd = 0;
     }
     if (!nd) {
-        net_mib6.ip6_out_no_routes++;
         return 0;
     }
     k_memcpy(via, dst, IP6_ADDR_LEN);

@@ -74,6 +74,13 @@ void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
     to_ip6++;
 }
 
+/** Count an IPv6 datagram the loopback ring delivers. */
+void ip6_loop_rx(int ifindex, const uint8_t *data, uint16_t len)
+{
+    (void)ifindex;
+    ip6_rx(0, data, len);
+}
+
 /** Count an ICMP message received. */
 void icmp_rx(uint32_t src, uint32_t dst, uint8_t ttl, const uint8_t *data, uint16_t len)
 {
