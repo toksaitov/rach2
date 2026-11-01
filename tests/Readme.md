@@ -114,6 +114,8 @@ The `default` suite boots the test image afresh for each program. Most run as gu
 
 The order of `default-probes` is the order in which the `selfbuild` cases run the programs in one boot of the test image, sharing its state: the credential probes that rewrite the account files run after the ones that read them, and `searchprobe`, which changes the modes of a staged tree, and `stickyprobe`, which makes and removes fixtures beside staged ones, run last.
 
+`musl/audioclientsmusl` belongs to the audio suite. It coordinates two OSS players by pipes, reads loopback through two capture opens, and runs sox_ng's `play` and `rec` on a generated WAV. Its exit handler reaps children and removes its private scratch directory. The audio machine cases judge its output with `wavcheck`.
+
 ## Adding tests
 
 A probe is a C file at this directory's top, added to `PROGS` in `tests/Makefile`; one that tests only calls that i386 alone has goes in `I686_ONLY` as well, and, if the `default` suite runs it, has `i686` after its name in `default-probes` and a case that lists i686 alone. A musl program is a C file in `musl/`, which `build.sh` finds without a list. The manifest's `exec-dir` lines stage both; add a manifest line only for a fixture, a mode or an owner. A line a suite looks for, such as `KRFFSPROBE OK (write)`, is written with one write(2), as `probe_line` in `probe.h` writes it: a kernel record raised between two writes begins a line of its own on the console, and the suite then does not find the line.
