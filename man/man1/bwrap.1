@@ -59,7 +59,12 @@ shows the release's own page, which describes every option.
 .Ss Rach2's limits
 .Bl -bullet
 .It
-There are no cgroup and time namespaces, so no option makes one.
+There are no cgroup and time namespaces:
+.Fl -unshare-cgroup
+fails, and
+.Fl -unshare-all ,
+which makes a cgroup namespace only where the kernel has one, goes on
+without it.
 .It
 A network namespace that
 .Fl -unshare-net
