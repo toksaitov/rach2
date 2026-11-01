@@ -10400,9 +10400,10 @@ static int32_t copy_from_file(fd_entry_t *in, uint64_t *pos, fd_entry_t *out, in
  * Copy up to `count` bytes from the pipe of the read end `in` to `out`,
  * the caller's descriptor `out_fd` and not a pipe, at `*out_at` when that is
  * not NULL, which moves past what was written, through `buf` as
- * `copy_from_file` does. Each chunk is copied out of the ring, written, and
- * only then taken from the ring (`pipe_splice_consume`), so a short or
- * failed write leaves the rest in the pipe. The pipe's bytes are waited for
+ * `copy_from_file` does. Each chunk is copied out of the ring and held,
+ * written, and only then taken from the ring (`pipe_splice_consume`), so a
+ * short or failed write leaves the rest in the pipe, and no other reader
+ * takes the held bytes while the write sleeps. The pipe's bytes are waited for
  * before the first chunk unless `nonblock`. Returns the bytes copied, 0 for
  * an empty pipe with no writer, or the first error when none were.
  */
@@ -10413,21 +10414,20 @@ static int32_t copy_from_pipe(fd_entry_t *in, fd_entry_t *out, int out_fd, uint6
 
     while (done < count) {
         uint32_t want = count - done;
-        uint32_t mark = 0;
         int32_t got, put;
 
         if (want > COPY_CHUNK) {
             want = COPY_CHUNK;
         }
-        got = pipe_splice_peek(in, (uint8_t *)buf, want, nonblock || done > 0, &mark);
+        got = pipe_splice_peek(in, (uint8_t *)buf, want, nonblock || done > 0);
         if (got <= 0) {
             return done > 0 ? (int32_t)done : got;
         }
         put = copy_put(out, out_fd, buf, (uint32_t)got, out_at);
+        pipe_splice_consume(in, put > 0 ? (uint32_t)put : 0);
         if (put < 0) {
             return done > 0 ? (int32_t)done : put;
         }
-        pipe_splice_consume(in, (uint32_t)put, mark);
         if (out_at) {
             *out_at += (uint64_t)put;
         }
@@ -10692,6 +10692,21 @@ long sys_sendfile32(isr_params_t *params)
 }
 
 /**
+ * Whether the descriptors `a` and `b`, each open on a file of a mounted
+ * type, reach one file: the key their locks are found by (`fd_lock_key`),
+ * which names a file by the mount whose file system it is on, so that two
+ * bind views of one file, whose mounts differ, are one file.
+ */
+static int copy_same_file(const fd_entry_t *a, const fd_entry_t *b)
+{
+    struct lock_key ka, kb;
+
+    fd_lock_key(a, &ka);
+    fd_lock_key(b, &kb);
+    return ka.mnt == kb.mnt && ka.ino == kb.ino;
+}
+
+/**
  * copy_file_range(2): copy up to the length in argument 4 from the regular
  * file open on the descriptor in argument 0 to the one in argument 2, with
  * the offsets at the user's addresses in arguments 1 and 3, each moving
@@ -10765,8 +10780,7 @@ long sys_copy_file_range(isr_params_t *params)
     } else if (len > st.size - pos_in) {
         len = (uint32_t)(st.size - pos_in);
     }
-    if (in->ofd->vmnt == out->ofd->vmnt && in->ofd->vnode == out->ofd->vnode &&
-        pos_out < pos_in + len && pos_in < pos_out + len) {
+    if (copy_same_file(in, out) && pos_out < pos_in + len && pos_in < pos_out + len) {
         return -EINVAL;
     }
     if (len == 0) {
