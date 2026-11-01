@@ -112,7 +112,8 @@ This write path does not generate
 for a socket.
 .Pp
 A datagram socket must have a connected peer.
-Each write sends one datagram, with at most 1472 payload bytes.
+Each write sends one datagram, with at most 65507 payload bytes over IPv4
+or 65527 over IPv6.
 A broadcast destination requires
 .Dv SO_BROADCAST .
 Other socket types return
@@ -331,7 +332,7 @@ is blocked or ignored.
 A loop-control attachment would exceed the permitted device nesting,
 or its path has too many symbolic links.
 .It Er EMSGSIZE
-A datagram payload exceeds 1472 bytes.
+A datagram payload exceeds 65507 bytes over IPv4 or 65527 over IPv6.
 .It Er ENAMETOOLONG
 A path in a loop-control command exceeds a resolver limit.
 .It Er ENETRESET

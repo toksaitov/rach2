@@ -689,8 +689,12 @@ reads by name.
 .Ql Ip:
 has Forwarding, 2, not a router, DefaultTTL, 64, and the datagrams
 received, dropped for a bad header, for another host's address, for an
-unknown protocol and as fragments or broadcasts other than UDP, delivered,
-sent, refused by a full card and sent to no route.
+unknown protocol and as broadcasts other than UDP or for want of memory,
+delivered, sent, refused by a full card and sent to no route; then
+ReasmTimeout, ReasmReqds, ReasmOKs and ReasmFails, the reassemblies that
+ran out of time, the fragments received, the datagrams reassembled and
+those given up, and FragOKs, FragFails and FragCreates, the datagrams sent
+in fragments, those refused or cut short, and the fragments made.
 .Ql Icmp:
 counts the messages received and the short ones, the destination
 unreachables, the echo requests and replies each way, and the messages
@@ -703,7 +707,9 @@ ESTABLISHED or in CLOSE_WAIT, and the segments received, sent, retransmitted
 and dropped as malformed, and the resets sent.
 .Ql Udp:
 counts the IPv4 datagrams delivered, those for a port no socket has, the
-malformed ones and those sent.
+malformed ones, those with a bad checksum and those a full queue dropped
+among them, and those sent, then RcvbufErrors, the datagrams a receive
+queue's budget dropped.
 A broadcast for a port no socket has counts as NoPorts, where Linux counts
 it in a field of its own, IgnoredMulti.
 The counters start at zero at boot and wrap at 2^32.

@@ -54,22 +54,37 @@ A signal may interrupt a wait with
 copies what the receive would take and leaves it for the next receive:
 the bytes at the front of a stream, which do not change the window the
 connection offers, or the waiting datagram whole, with its sender.
-On a datagram socket,
+A datagram is received whole, up to the largest a socket of its kind
+takes: 65507 bytes of UDP over IPv4, 65527 over IPv6, a whole IP datagram
+on a raw socket and a frame's payload on a packet socket.
+A datagram longer than the buffer is cut, and the rest of it dropped;
 .Fn recvmsg
-with
+says so with
 .Dv MSG_TRUNC
-returns the datagram's whole length, even when its buffers took less, as
-Linux does; netlink's programs ask it with
+in
+.Fa msg_flags .
+On a datagram socket,
+.Dv MSG_TRUNC
+in
+.Fa flags
+makes the call return the datagram's whole length, even when its buffers
+took less, as Linux does; netlink's programs ask it with
 .Dv MSG_PEEK
 and no buffer to learn how large a buffer to give.
 Other flag bits are ignored:
 .Dv MSG_WAITALL
-does not wait to fill the buffer, and
-.Fn recv
-and
-.Fn recvfrom
-do not take
-.Dv MSG_TRUNC .
+does not wait to fill the buffer.
+.Pp
+A datagram socket queues what it receives within its receive budget,
+.Dv SO_RCVBUF ,
+212992 bytes unless set, each datagram's own record counted with it; a
+datagram that arrives with the budget spent is dropped, as Linux drops
+it, and counted in RcvbufErrors of
+.Pa /proc/net/snmp
+for UDP over IPv4.
+A netlink socket's answers come in datagrams of at most 3776 bytes, or
+once it has read with a larger buffer, as large as that buffer and at most
+32448 bytes, as Linux packs a dump.
 On an
 .Dv AF_UNIX
 socket these flags behave as in Linux, and
@@ -129,8 +144,8 @@ A packet socket returns a 20-byte
 with the sender's hardware address, protocol, interface, hardware type,
 and packet type.
 Packet-socket data omits the Ethernet header.
-A raw ICMP receive includes the IPv4 header; the receive queue keeps at
-most 1500 bytes of a datagram.
+A raw ICMP receive includes the IPv4 header, of the datagram reassembled
+when it came in fragments.
 A raw ICMPv6 socket returns a 28-byte
 .Vt sockaddr_in6
 with the sender's address and, for a link-local sender, the index of the

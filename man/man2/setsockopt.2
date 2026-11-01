@@ -77,6 +77,12 @@ Getting it returns that interface's name when set, or an empty string
 when clear, including the terminating
 null byte if space permits.
 The setting does not restrict socket traffic to an interface.
+.It Dv SO_RCVBUF
+Set the bytes a datagram socket's receive queue may hold, as Linux does:
+the value, at most 212992, is doubled to cover each datagram's record, and
+is at least 2304.
+Getting it returns the doubled value; the default is 212992.
+A datagram that arrives with the budget spent is dropped.
 .It Dv SO_KEEPALIVE
 Accepted without effect; reads as integer zero.
 .It Dv SO_RCVTIMEO
@@ -172,6 +178,26 @@ At level
 set or get the IPv4 hop limit.
 Setting it requires an integer from 1 through 255.
 UDP and raw ICMP sends use the stored value.
+.It Dv IP_MTU_DISCOVER
+At level
+.Dv IPPROTO_IP ,
+set or get what an IPv4 UDP or raw send does with a datagram past its
+route's MTU, by Linux's values:
+.Dv IP_PMTUDISC_WANT ,
+1, the default, sends it in fragments and one within the MTU with DF;
+.Dv IP_PMTUDISC_DO ,
+2, and
+.Dv IP_PMTUDISC_PROBE ,
+3, refuse it with
+.Er EMSGSIZE ;
+.Dv IP_PMTUDISC_DONT ,
+0, and
+.Dv IP_PMTUDISC_OMIT ,
+5, send every datagram without DF; and
+.Dv IP_PMTUDISC_INTERFACE ,
+4, is
+.Dv IP_PMTUDISC_WANT ,
+since each route has its interface's MTU.
 .It Dv IP_HDRINCL
 At level
 .Dv IPPROTO_IP ,
@@ -248,9 +274,14 @@ is nonpositive as a signed 32-bit value;
 an
 .Dv SO_REUSEADDR ,
 .Dv SO_BROADCAST ,
+.Dv SO_RCVBUF ,
+.Dv IP_MTU_DISCOVER
 or
 .Dv IP_TTL
-value is shorter than an integer; or the hop limit is outside 1 through 255.
+value is shorter than an integer; the hop limit is outside 1 through 255;
+or
+.Dv IP_MTU_DISCOVER
+is outside 0 through 5.
 An IPv6 option's value is shorter than an integer, or a
 .Vt struct ipv6_mreq ;
 a hop limit or class is outside \-1 through 255, or a loop other than 0 or

@@ -179,7 +179,9 @@ on a network stay the same.
 A datagram longer than its destination's path MTU leaves in fragments,
 the path MTU being the link's 1500 bytes, less when a router advertises
 less or a Packet Too Big lowers it for that destination, and never below
-1280 (RFC 8201).
+1280 (RFC 8201); for ::1 and this machine's own addresses it is
+.Li lo Ns 's
+65536.
 Fragments are reassembled, at most 16 datagrams at once, each within 60
 seconds of its first fragment.
 Hop-by-hop options, routing headers with no segment left and the
