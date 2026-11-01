@@ -4,6 +4,7 @@
  * net/wireless/sme.c; the code is Rach2's. The numbers are those of Linux's
  * include/uapi/linux/nl80211.h, which is the ABI the programs are built to. */
 #include "nl80211.h"
+#include "wiphy.h"
 #include "../socket/genetlink.h"
 #include "../driver/netdev.h"
 #include "../../timer.h"
@@ -1652,11 +1653,35 @@ static int connect_hop(struct sta *s, void *arg)
     return rc;
 }
 
+/** Hand a CONNECT to a station that joins by itself, keeping the elements
+ * for the events. */
+static int connect_direct_hop(struct sta *s, void *arg)
+{
+    const struct conn *c = arg;
+    struct nl80211_connect req;
+    int rc;
+
+    if (s->connected) {
+        return -EALREADY;
+    }
+    req.ssid = c->ssid;
+    req.bssid = c->want_bssid ? c->want : 0;
+    req.frequency = c->want_freq;
+    req.assoc = &c->assoc;
+    rc = s->ops->connect(s->wlan, &req);
+    if (!rc) {
+        k_memcpy(s->req_ie, c->assoc.ies, c->assoc.ies_len);
+        s->req_ie_len = c->assoc.ies_len;
+    }
+    return rc;
+}
+
 /**
  * CONNECT: join the SSID, at BSSID and on WIPHY_FREQ when they are given,
  * with Open System authentication and the association's elements and
- * suites. The steps run here, on the worker, as their outcomes come; the
- * CONNECT event says how it ended. SAE needs AUTHENTICATE.
+ * suites. The steps run here, on the worker, as their outcomes come, unless
+ * the station joins by itself through its connect call; the CONNECT event
+ * says how it ended. SAE needs AUTHENTICATE.
  */
 static int nl_connect(const struct genl_info *info)
 {
@@ -1712,6 +1737,11 @@ static int nl_connect(const struct genl_info *info)
     }
     k_memcpy(c->ies, c->assoc.ies, c->assoc.ies_len);
     c->assoc.ies = c->ies;
+    if (s->ops->connect) {
+        rc = on_worker(s, connect_direct_hop, c);
+        kfree(c);
+        return rc;
+    }
     c->step = CONN_AUTH;
     rc = on_worker(s, connect_hop, c);
     if (rc) {
@@ -1720,13 +1750,17 @@ static int nl_connect(const struct genl_info *info)
     return rc;
 }
 
-/** Leave on the worker: end a CONNECT under way, or deauthenticate from
- * the AP of the connection. */
+/** Leave on the worker: through the station's disconnect call when it has
+ * one, else end a CONNECT under way or deauthenticate from the AP of the
+ * connection. */
 static int disconnect_hop(struct sta *s, void *arg)
 {
     unsigned reason = *(const unsigned *)arg;
     struct conn *c = s->conn;
 
+    if (s->ops->disconnect) {
+        return s->ops->disconnect(s->wlan, reason);
+    }
     if (c) {
         s->conn = 0;
         wlan_cancel_work(&s->conn_work);
@@ -2656,7 +2690,9 @@ static void reg_event(struct sta *s)
     notify(&msg, buf, GROUP_REG);
 }
 
-void wlan_event(struct wlan *wlan, const struct wlan_event *ev)
+/** Take a station's event, which the registry's wlan_event passes on once
+ * nl80211_attach has installed this as its handler. */
+static void nl_event(struct wlan *wlan, const struct wlan_event *ev)
 {
     struct sta *s = sta_of_wlan(wlan);
 
@@ -2757,6 +2793,7 @@ int nl80211_attach(struct wlan *wlan, struct wlan_radio *radio, const struct wla
         if (rc) {
             return rc;
         }
+        wlan_set_event_handler(nl_event);
     }
     s = kzalloc(sizeof(*s));
     if (!s) {

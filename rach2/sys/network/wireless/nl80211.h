@@ -55,6 +55,15 @@ struct nl80211_assoc {
     unsigned wpa_versions; /* NL80211_WPA_VERSION_* bits, zero when open */
 };
 
+/* A CONNECT, for a station that joins by itself. assoc carries the elements
+ * and suites; its bssid, frequency, ssid and reassociation are unused. */
+struct nl80211_connect {
+    struct wlan_ssid ssid;
+    const uint8_t *bssid; /* only this BSS will do, or NULL for any */
+    uint16_t frequency;   /* MHz, zero for any channel */
+    const struct nl80211_assoc *assoc;
+};
+
 /* A snapshot of the station, for GET_INTERFACE, GET_STATION, GET_SURVEY and
  * the BSS status of GET_SCAN. */
 struct nl80211_status {
@@ -73,8 +82,10 @@ struct nl80211_status {
 };
 
 /*
- * The station's half, which the registry fills for each interface. Every
- * call but status runs on the wireless worker, with the kernel lock and no
+ * The station's half, in the shape of Linux's cfg80211_ops. The softMAC
+ * station of sta.c is its implementation for a radio of radio.h; a radio
+ * that runs its own MLME, as a fullMAC chip does, would supply another.
+ * Every call but status runs on the wireless worker, with the kernel lock and no
  * net_lock, may sleep, borrows its arguments until it returns and returns 0
  * or a negative errno. nl80211 moves a request onto the worker and waits for
  * the answer, so the station sees no other caller. An outcome that comes
@@ -112,6 +123,15 @@ struct nl80211_ops {
     /** Fill out with the station's state. Process context or the worker,
      * under the kernel lock; must not sleep. */
     void (*status)(struct wlan *wlan, struct nl80211_status *out);
+    /** Optional: join as req asks, reporting the outcome as
+     * WLAN_EVENT_ASSOCIATE with the AP's response, or with no frame when
+     * none came, and a later loss as WLAN_EVENT_DEAUTHENTICATE. NULL makes
+     * nl80211 join through scan, authenticate and associate, as cfg80211's
+     * sme.c does for mac80211. */
+    int (*connect)(struct wlan *wlan, const struct nl80211_connect *req);
+    /** Optional, with connect: leave or stop joining, with reason;
+     * -ENOTCONN when neither is under way. */
+    int (*disconnect)(struct wlan *wlan, unsigned reason);
 };
 
 /**

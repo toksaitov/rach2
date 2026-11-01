@@ -83,11 +83,28 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
-static struct wlan_station_storage {
-    char byte;
-} wlan_one, wlan_two;
-#define WLAN1 ((struct wlan *)(void *)&wlan_one)
-#define WLAN2 ((struct wlan *)(void *)&wlan_two)
+/* The station records nl80211 is given; it only compares their addresses. */
+static struct wlan wlan_one, wlan_two, wlan_three;
+#define WLAN1 (&wlan_one)
+#define WLAN2 (&wlan_two)
+#define WLAN3 (&wlan_three)
+
+static wlan_event_fn handler;
+
+/** The registry's: nl80211_attach installs its event consumer here. */
+void wlan_set_event_handler(wlan_event_fn fn)
+{
+    handler = fn;
+}
+
+/** The registry's wlan_event, which passes a station's event to nl80211. */
+void wlan_event(struct wlan *wlan, const struct wlan_event *event)
+{
+    CHECK(handler != 0);
+    if (handler) {
+        handler(wlan, event);
+    }
+}
 
 /** Stand in for the sleep of a handler waiting on the worker: run the
  * worker until the condition holds. A row may detach the second station
@@ -513,9 +530,9 @@ static void st_status(struct wlan *wlan, struct nl80211_status *out)
     *out = status_now;
 }
 
-static const struct nl80211_ops station_ops = {st_scan,    st_abort,       st_auth,      st_assoc,
-                                               st_deauth,  st_disassoc,    st_authorize, st_add_key,
-                                               st_del_key, st_default_key, st_tx,        st_status};
+static const struct nl80211_ops station_ops = {
+    st_scan,    st_abort,   st_auth,        st_assoc, st_deauth, st_disassoc, st_authorize,
+    st_add_key, st_del_key, st_default_key, st_tx,    st_status, 0,           0};
 
 /* ---- the radio, its interface and the BSS table ---- */
 
@@ -1973,6 +1990,97 @@ static void attachment(void)
     wlan_bss_destroy(&table2);
 }
 
+static struct {
+    int connects, disconnects;
+    struct nl80211_connect req;
+    struct wlan_ssid ssid;
+    uint8_t bssid[6];
+    int any_bssid;
+    unsigned reason, ies_len;
+} full;
+
+static int fm_connect(struct wlan *wlan, const struct nl80211_connect *req)
+{
+    CHECK(wlan == WLAN3);
+    ++full.connects;
+    full.req = *req;
+    full.ssid = req->ssid;
+    full.any_bssid = req->bssid == 0;
+    if (req->bssid) {
+        k_memcpy(full.bssid, req->bssid, 6);
+    }
+    full.ies_len = req->assoc->ies_len;
+    return 0;
+}
+
+static int fm_disconnect(struct wlan *wlan, unsigned reason)
+{
+    CHECK(wlan == WLAN3);
+    ++full.disconnects;
+    full.reason = reason;
+    return 0;
+}
+
+/** A station that joins by itself, as a fullMAC chip does: CONNECT and
+ * DISCONNECT go to its own calls, and its ASSOCIATE event ends the CONNECT. */
+static void fullmac(void)
+{
+    static struct nl80211_ops ops;
+    static struct wlan_radio radio3;
+    static struct netdev nd3;
+    static struct wlan_bss_table table3;
+    struct wlan_event ev;
+    uint8_t frame[64];
+    unsigned len;
+
+    ops = station_ops;
+    ops.connect = fm_connect;
+    ops.disconnect = fm_disconnect;
+    k_memset(&radio3, 0, sizeof(radio3));
+    radio3.index = 2;
+    radio3.country[0] = radio3.country[1] = '0';
+    k_memset(&nd3, 0, sizeof(nd3));
+    k_memcpy(nd3.name, "wlan2", 6);
+    nd3.index = 4;
+    wlan_bss_init(&table3);
+    CHECK(nl80211_attach(WLAN3, &radio3, &band, &nd3, &table3, &ops) == 0);
+
+    n_calls = 0;
+    rq_begin(NL80211_CMD_CONNECT, 0);
+    rq_u32(NL80211_ATTR_IFINDEX, 4);
+    rq_put(NL80211_ATTR_SSID, "lab", 3);
+    rq_u32(NL80211_ATTR_WIPHY_FREQ, 2437);
+    rq_put(NL80211_ATTR_IE, rsn, sizeof(rsn));
+    CHECK(rq_send() == 0);
+    CHECK(full.connects == 1 && n_calls == 0);
+    CHECK(full.ssid.len == 3 && same(full.ssid.data, "lab", 3) && full.any_bssid);
+    CHECK(full.req.frequency == 2437 && full.ies_len == sizeof(rsn));
+
+    clear_events();
+    k_memset(&ev, 0, sizeof(ev));
+    ev.type = WLAN_EVENT_ASSOCIATE;
+    k_memcpy(ev.peer, ap1, 6);
+    len = assoc_resp(frame, 0);
+    ev.frame = frame;
+    ev.frame_len = len;
+    wlan_event(WLAN3, &ev);
+    CHECK(find_event(GROUP_MLME, NL80211_CMD_CONNECT) != 0);
+    CHECK(u32_of(tb[NL80211_ATTR_IFINDEX]) == 4 && u16_of(tb[NL80211_ATTR_STATUS_CODE]) == 0);
+    CHECK(has_bytes(tb[NL80211_ATTR_REQ_IE], rsn, sizeof(rsn)));
+
+    rq_begin(NL80211_CMD_CONNECT, 0);
+    rq_u32(NL80211_ATTR_IFINDEX, 4);
+    rq_put(NL80211_ATTR_SSID, "lab", 3);
+    CHECK(rq_send() == -EALREADY && full.connects == 1);
+    rq_begin(NL80211_CMD_DISCONNECT, 0);
+    rq_u32(NL80211_ATTR_IFINDEX, 4);
+    rq_u16(NL80211_ATTR_REASON_CODE, 8);
+    CHECK(rq_send() == 0 && full.disconnects == 1 && full.reason == 8 && n_calls == 0);
+
+    nl80211_detach(WLAN3);
+    wlan_bss_destroy(&table3);
+}
+
 int main(void)
 {
     setup();
@@ -1991,6 +2099,7 @@ int main(void)
     frames();
     reg_mic_power();
     attachment();
+    fullmac();
     nl80211_detach(WLAN1);
     wlan_bss_destroy(&table);
     CHECK(wlan_work_next_due() == 0);
