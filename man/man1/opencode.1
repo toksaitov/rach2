@@ -1,0 +1,226 @@
+.Dd November 1, 2026
+.Dt OPENCODE 1
+.Os
+.Sh NAME
+.Nm opencode
+.Nd OpenCode, a coding agent for the terminal
+.Sh SYNOPSIS
+.Nm
+.Op Fl -standalone
+.Op Fl -auto
+.Op Ar directory
+.Nm
+.Cm run
+.Op Fl -standalone
+.Op Fl -auto
+.Op Fl m Ar provider/model
+.Op Ar message ...
+.Nm
+.Cm auth login
+.Op Fl -method Ar id
+.Op Ar integration
+.Nm
+.Cm service
+.Cm start | stop | status
+.Sh DESCRIPTION
+.Nm
+is OpenCode: an agent that reads and changes the files of a directory and
+runs commands there, at the request of a person or of a model it talks to
+on a provider's service, such as OpenAI, Anthropic or OpenCode's own.
+With no command it draws its screen and takes requests one after another;
+.Cm run
+sends one message without the screen and prints the answer.
+.Ql opencode --help
+lists the commands, and
+.Ql opencode Ar command Fl -help
+describes one.
+.Pp
+The x86-64 GNU root has
+.Nm
+when it is built with the agents layer:
+.Ql make ARCH=x86_64 GNU_AGENTS=opencode os-real-gnu-ext2 ,
+or
+.Ql GNU_AGENTS=all ,
+which the release to the installed machine uses.
+The program is the project's own build of version 2.2.5 for
+linux-x64-baseline, one executable of 253 MB that holds Bun, a JavaScript
+runtime, with its scripts and native libraries, installed unmodified as
+.Pa /opt/opencode/bin/opencode .
+.Pa /usr/bin/opencode
+and
+.Pa /bin/opencode
+link to it.
+Its license, MIT, is
+.Pa /opt/opencode/LICENSE .
+.Ss Signing in over SSH
+.Ql opencode auth login
+asks which integration to connect and by which method, unless the command
+line names them.
+Each of the methods below works from an SSH session, with no browser on
+this machine.
+.Bl -tag -width Ds
+.It ChatGPT, by a device code
+.Ql opencode auth login openai --method chatgpt-headless ,
+which the menu calls
+.Dq Codex device code ,
+prints the address
+.Lk https://auth.openai.com/codex/device
+and a one-time code.
+Enter the code at that address on any other computer, signed in to a
+ChatGPT account whose security settings allow sign-in by a device code.
+The method the menu calls
+.Dq Sign in with ChatGPT
+instead waits for a web browser to return to a server that
+.Nm
+runs on this machine's loopback interface, which a browser on another
+computer cannot reach.
+.It OpenCode's console, by a device code
+.Ql opencode auth login opencode --method device
+prints a one-time code and an address at
+.Lk https://opencode.ai/console/device
+that carries it; open the address on any other computer, sign in there and
+approve the request.
+.It An API key
+.Ql opencode auth login anthropic ,
+or another provider's name, asks for the provider's key on the terminal
+and stores it.
+A key in the provider's environment variable, such as
+.Ev ANTHROPIC_API_KEY
+or
+.Ev OPENAI_API_KEY ,
+is used without being stored.
+.El
+.Pp
+.Ql opencode auth list
+lists the integrations signed in,
+.Ql opencode auth logout
+removes one, and
+.Ql opencode models
+lists the models they offer.
+OpenCode's own provider offers a few free models with no sign-in.
+.Ss Where the credentials live
+.Nm
+keeps every credential, API keys and the tokens of a sign-in alike, in
+plain text in its database,
+.Pa ~/.local/share/opencode/opencode.db ,
+a SQLite database with mode 0600 in WAL mode, which holds its sessions as
+well; treat the file, with its
+.Pa -wal
+and
+.Pa -shm
+files beside it, as a password.
+.Ev XDG_DATA_HOME
+names another directory in place of
+.Pa ~/.local/share ,
+and
+.Ev OPENCODE_DB
+another database.
+.Ql opencode auth export
+prints the stored credentials, secrets included, as JSON, and
+.Ql opencode auth import
+reads them back, on this machine or another.
+.Ss The background service
+As shipped,
+.Nm
+runs its sessions in a server shared by every client of the user: the
+screen,
+.Cm run ,
+.Cm auth
+and the other commands that need a session connect to it, and start it as
+.Ql opencode serve --service
+when it is not running.
+The service listens on a port of the loopback interface, 127.0.0.1, which
+it names in
+.Pa ~/.local/state/opencode/service.json ,
+takes the password it keeps in
+.Pa ~/.config/opencode/service.json ,
+mode 0600, and outlives the client that started it, until
+.Ql opencode service stop
+ends it.
+.Ql opencode service status
+prints its address, or
+.Ql stopped .
+.Pp
+.Fl -standalone
+runs a private server for one client instead, as a child that ends with
+it, and leaves no process behind.
+.Fl -server Ar url
+connects to another server.
+.Ss Permissions and the sandbox
+.Nm
+has no sandbox: the commands the model asks for, and its edits, run with
+every right of the user who runs it.
+Its permission settings decide which tools it asks about before using;
+.Fl -auto
+approves every request that the settings do not deny.
+Run
+.Nm
+as an ordinary user, on files that the work can afford to change.
+.Ss Updates
+.Pa /etc/profile.d/opencode.sh
+sets
+.Ev OPENCODE_DISABLE_AUTOUPDATE
+to 1 in every login shell, which keeps
+.Nm
+from asking
+.Lk https://opencode.ai
+for a newer release at its start; a command that
+.Xr ssh 1
+runs without a login shell does not have it.
+.Ql opencode upgrade
+fails here, since it finds none of the installers it knows in
+.Pa /opt/opencode ;
+a new version comes with a new build of the root.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev OPENCODE_DISABLE_AUTOUPDATE
+1 or true turns off the check for a newer release.
+.It Ev OPENCODE_DB
+the database in place of
+.Pa ~/.local/share/opencode/opencode.db .
+.It Ev OPENCODE_DISABLE_MODELS_FETCH
+1 or true keeps the catalog of models from being fetched.
+.It Ev TMPDIR
+where Bun unpacks the native libraries of the program at each start, or
+.Pa /tmp .
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /opt/opencode/bin/opencode
+the program
+.It Pa /opt/opencode/LICENSE
+its license
+.It Pa /etc/profile.d/opencode.sh
+turns off the update check
+.It Pa ~/.local/share/opencode/opencode.db
+the credentials and the sessions
+.It Pa ~/.local/share/opencode/log/
+the logs of each start
+.It Pa ~/.config/opencode/
+a person's settings and the service's password
+.It Pa ~/.local/state/opencode/service.json
+the running service's address and process
+.El
+.Sh EXIT STATUS
+.Nm
+exits 0 on success and 1 on an error.
+.Sh EXAMPLES
+Sign in to ChatGPT from an SSH session, then ask for one change in the
+current directory without the screen and with no service left behind:
+.Bd -literal -offset indent
+$ opencode auth login openai --method chatgpt-headless
+$ opencode run --standalone "Fix the failing test in tests/parse.sh"
+.Ed
+.Pp
+End the background service that the screen started:
+.Bd -literal -offset indent
+$ opencode service stop
+.Ed
+.Sh SEE ALSO
+.Xr claude 1 ,
+.Xr codex 1 ,
+.Xr git 1 ,
+.Xr ssh 1 ,
+.Xr tmux 1
+.Pp
+.Lk https://opencode.ai/docs "The OpenCode documentation"
