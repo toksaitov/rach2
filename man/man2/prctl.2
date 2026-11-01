@@ -121,15 +121,26 @@ The domain, the low byte, must be
 .Dv PER_LINUX32
 (8), else the call fails with
 .Er EINVAL .
-The flag bits above it are kept and change nothing: there is no address
-randomization for
-.Dv ADDR_NO_RANDOMIZE ,
-which GDB sets, to turn off.
+The flag bits above it are kept.
+.Dv ADDR_NO_RANDOMIZE
+(0x0040000), which GDB and
+.Ql setarch -R
+set, makes the next
+.Xr execve 2
+place the new image at fixed addresses on x86-64, where they are otherwise
+randomized; the other flags change nothing.
 A child of
 .Xr fork 2
 inherits the value, and
 .Xr execve 2
-keeps it.
+keeps it, except for an image that runs with IDs its caller lacks, or
+with capabilities given back, which loses
+.Dv ADDR_NO_RANDOMIZE ,
+.Dv READ_IMPLIES_EXEC ,
+.Dv ADDR_COMPAT_LAYOUT
+and
+.Dv MMAP_PAGE_ZERO ,
+as on Linux.
 .Ss System call interface
 The i386 system call number is 172, and the x86-64 one 157, where the five
 arguments are in RDI, RSI, RDX, R10 and R8.
