@@ -36,6 +36,7 @@
 #include "../evdev.h"
 #include "../audio/dsp.h"
 #include "../audio/mixer.h"
+#include "../network/wireless/wsim.h"
 
 /* The open flags `devfs_open` acts on, at Linux's values. */
 #define DEVFS_O_CLOEXEC   02000000
@@ -1499,6 +1500,8 @@ static const struct file_ops rtc_ops = {dev_rtc_read, dev_rtc_write, dev_rtc_pol
 /* The event devices' operations are evdev.c's, the mixer's mixer.c's and the
    audio device's dsp.c's. */
 static const struct file_ops evdev_ops = {evdev_read, NULL, evdev_poll, evdev_ioctl, evdev_close};
+/* /dev/wsim: the medium of a software radio (wsim(4)). */
+static const struct file_ops wsim_ops = {wsim_read, wsim_write, wsim_poll, wsim_ioctl, wsim_close};
 static const struct file_ops mixer_ops = {NULL, NULL, dev_poll, mixer_ioctl, NULL};
 static const struct file_ops dsp_ops = {dspdev_read, dspdev_write, dspdev_poll, dspdev_ioctl,
                                         dspdev_close};
@@ -1602,6 +1605,7 @@ static const struct devfs_entry dev_table[] = {{"mem", 1, 1, 0, 0640, &mem_ops},
                                                {"loop-control", 240, 36, 0, 0600, &loopctl_ops},
                                                {"framefail", 240, 37, 0, 0600, &framefail_ops},
                                                {"screenlog", 240, 38, 0, 0600, &screenlog_ops},
+                                               {"wsim", 240, 39, 0, 0600, &wsim_ops},
                                                {"rtc0", 254, 0, 0, 0600, &rtc_ops},
                                                {"mixer", 14, 0, 0, 0666, &mixer_ops},
                                                {"dsp", 14, 3, 0, 0666, &dsp_ops},
@@ -2179,9 +2183,10 @@ int devfs_open(const char *name, int flags)
     e->node = NULL;
     e->sock = NULL;
     e->ofd->offset = 0;
-    if (dev->ops == &evdev_ops || dev->ops == &dsp_ops) {
-        int32_t rc = dev->ops == &dsp_ops ? dspdev_open(e, flags)
-                                          : evdev_open(e, dev->minor - EVDEV_MINOR_BASE);
+    if (dev->ops == &evdev_ops || dev->ops == &dsp_ops || dev->ops == &wsim_ops) {
+        int32_t rc = dev->ops == &dsp_ops    ? dspdev_open(e, flags)
+                     : dev->ops == &wsim_ops ? wsim_open(e)
+                                             : evdev_open(e, dev->minor - EVDEV_MINOR_BASE);
 
         if (rc != 0) {
             fd_free(current_proc->fds, fd);

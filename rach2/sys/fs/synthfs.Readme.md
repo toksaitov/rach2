@@ -20,6 +20,7 @@ The manual pages give what each file contains and what each call on it returns:
 * [console(4)](../../../man/man4/console.4) (`console`, `tty`, `ptmx`, `pts/N`) and [bootlog(4)](../../../man/man4/bootlog.4) (`bootlog`, `screenlog`, `framefail`).
 * [disk(4)](../../../man/man4/disk.4) (`diskN`, `diskNpM`, `bootpart`, `grubcore`), [loop(4)](../../../man/man4/loop.4) (`loop0` to `loop3`, `loop-control`) and [rtc(4)](../../../man/man4/rtc.4) (`rtc0`); their block requests are in [ioctl(2)](../../../man/man2/ioctl.2).
 * [input(4)](../../../man/man4/input.4) (`input/eventN`), [mixer(4)](../../../man/man4/mixer.4) (`mixer`) and [dsp(4)](../../../man/man4/dsp.4) (`dsp`), whose operations are those of [`../evdev.h`](../evdev.h), [`../audio/mixer.h`](../audio/mixer.h) and [`../audio/dsp.h`](../audio/dsp.h).
+* [wsim(4)](../../../man/man4/wsim.4) (`wsim`), the medium of a software radio, whose operations are those of [`../network/wireless/wsim.h`](../network/wireless/wsim.h).
 * [busybox-sysklogd(8)](../../../man/man8/busybox-sysklogd.8): `/dev/log`, a link to `/var/run/log` (`SYNTH_DEV_LOG_TARGET`), where `syslogd` makes its socket.
 * [proc(5)](../../../man/man5/proc.5): every file of `/proc`, and `/dev/fd`, `/dev/fd/N`, `/dev/stdin`, `/dev/stdout` and `/dev/stderr`, which are the caller's `/proc/self/fd` and its links.
 * [sysfs(5)](../../../man/man5/sysfs.5): every file of `/sys`.
@@ -67,7 +68,7 @@ The system-call layer reads the classification back (`vfs_synth_vpath`) and does
 
 ### devfs
 
-`dev_table` in `devfs.c` is the registry: 53 entries, each a leaf name, a major and a minor number, a permission mode, whether a seek goes to offset 0, and the `file_ops` an open binds. Every entry is root's, and `synth_open` checks the access asked for against its mode as for a file (`cred_access_bits`). The memory devices, the terminals, the loop devices, `mixer` (14, 0) and the event devices (13, 64 + N) have Linux's majors; the others use 240 and 254, which Linux reserves for local and experimental use.
+`dev_table` in `devfs.c` is the registry: 55 entries, each a leaf name, a major and a minor number, a permission mode, whether a seek goes to offset 0, and the `file_ops` an open binds. Every entry is root's, and `synth_open` checks the access asked for against its mode as for a file (`cred_access_bits`). The memory devices, the terminals, the loop devices, `mixer` (14, 0) and the event devices (13, 64 + N) have Linux's majors; the others use 240 and 254, which Linux reserves for local and experimental use.
 
 A disk node is a `struct disk_node` whose first member is a `devfs_entry`, so a pointer to the entry is a pointer to the node; `disk_node_of` tells a node from a fixed entry by its operations, `diskwin_ops`. `devfs_disk_nodes` takes 16 of the 128 records (8 disks, `DISK_MAX`, of `DISK_PARTS` + 1 windows) the first time a disk record is registered, one for the whole disk and 15 for partitions, and a released record keeps them. `devfs_disk_part_nodes` names the partition nodes after each scan of the table, from the numbers of its entries.
 
