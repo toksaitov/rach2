@@ -57,10 +57,13 @@ static const char sound_line[] =
 /* The least zone the game may take from a machine of 128 MiB, in bytes. */
 #define LEAST_ZONE (10L * 1024 * 1024)
 
-/* The most periods the queue of /dev/dsp may hold after an update: the
- * driver's own, at most four on HDA and on the SB16, and the two the game
- * keeps in the device's buffer. */
-#define MOST_PERIODS 6
+/* The queue of /dev/dsp after an update holds at most a tic of samples at
+ * 11025 Hz and MOST_PERIODS periods: what the kernel's mix and driver hold,
+ * under five periods on HDA, which are four of its DMA's and a block of the
+ * mix, and under three on the SB16; the game's own level, at most a tic and
+ * a period; and a period that may pass between the game's two readings. */
+#define TIC_SAMPLES  315
+#define MOST_PERIODS 7
 
 /**
  * Type `line` at the shell and wait for its marker `mark`; `*from` is set
@@ -257,9 +260,11 @@ static void sound(struct lc *l, struct etude_case_machine *m, uint64_t *at)
              last, period);
     lc_assert(l, "dsp", last > 0 && period > 0, detail);
     snprintf(detail, sizeof(detail),
-             "the most samples queued after an update are %ld, where %d periods of %ld are %ld",
-             most, MOST_PERIODS, period, MOST_PERIODS * period);
-    lc_assert(l, "queue", period > 0 && most >= last && most <= MOST_PERIODS * period, detail);
+             "the most samples queued after an update are %ld, where a tic and %d periods of %ld"
+             " are %ld",
+             most, MOST_PERIODS, period, TIC_SAMPLES + MOST_PERIODS * period);
+    lc_assert(l, "queue", period > 0 && most >= last && most <= TIC_SAMPLES + MOST_PERIODS * period,
+              detail);
     lc_quit(l, m, NULL);
 }
 
