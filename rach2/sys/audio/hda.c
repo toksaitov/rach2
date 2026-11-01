@@ -3072,7 +3072,23 @@ static int hda_get_volume(void)
 
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
-   set_volume, get_volume. */
-audio_driver_t hda_driver = {"Intel HD Audio", AUDIO_DRIVER_HDA, hda_init,       hda_shutdown,
-                             hda_start,        hda_stop,         hda_is_playing, hda_set_callback,
-                             hda_write,        hda_set_volume,   hda_get_volume};
+   set_volume, get_volume, then the seven stream operations, which this
+   driver lacks. */
+audio_driver_t hda_driver = {"Intel HD Audio",
+                             AUDIO_DRIVER_HDA,
+                             hda_init,
+                             hda_shutdown,
+                             hda_start,
+                             hda_stop,
+                             hda_is_playing,
+                             hda_set_callback,
+                             hda_write,
+                             hda_set_volume,
+                             hda_get_volume,
+                             NULL,
+                             NULL,
+                             NULL,
+                             NULL,
+                             NULL,
+                             NULL,
+                             NULL};

@@ -12,6 +12,7 @@
 #include "../lib/kerrno.h"
 
 audio_driver_t *audio = NULL;
+audio_driver_t *audio_hw = NULL;
 static const char *audio_boot_status = "Not initialized";
 
 static bool speaker_playing = false;
@@ -77,19 +78,41 @@ static void speaker_set_volume(int volume)
 
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
-   set_volume, get_volume. */
-audio_driver_t speaker_driver = {
-    "PC Speaker", AUDIO_DRIVER_SPEAKER, speaker_init,         speaker_shutdown, speaker_start,
-    speaker_stop, speaker_is_playing,   speaker_set_callback, speaker_write,    speaker_set_volume,
-    NULL};
+   set_volume, get_volume, then the seven stream operations; the speaker has
+   no volume and no streams. */
+audio_driver_t speaker_driver = {"PC Speaker",
+                                 AUDIO_DRIVER_SPEAKER,
+                                 speaker_init,
+                                 speaker_shutdown,
+                                 speaker_start,
+                                 speaker_stop,
+                                 speaker_is_playing,
+                                 speaker_set_callback,
+                                 speaker_write,
+                                 speaker_set_volume,
+                                 NULL,
+                                 NULL,
+                                 NULL,
+                                 NULL,
+                                 NULL,
+                                 NULL,
+                                 NULL,
+                                 NULL};
+
+/** Make `d` the device's driver, which programs reach directly. */
+static void audio_choose(audio_driver_t *d)
+{
+    audio_hw = d;
+    audio = d;
+}
 
 void init_audio(void)
 {
-    audio = NULL;
+    audio_choose(NULL);
     audio_boot_status = "No audio";
 
     if (hda_driver.init && hda_driver.init() == 0) {
-        audio = &hda_driver;
+        audio_choose(&hda_driver);
         audio_boot_status = hda_get_boot_status();
         return;
     }
@@ -99,26 +122,31 @@ void init_audio(void)
         struct audio_driver *own = platform_audio_driver(&name);
 
         if (own && own->init && own->init() == 0) {
-            audio = own;
+            audio_choose(own);
             audio_boot_status = name;
             return;
         }
     }
 
     if (speaker_driver.init() == 0) {
-        audio = &speaker_driver;
+        audio_choose(&speaker_driver);
         audio_boot_status = "PC Speaker fallback";
         return;
     }
 
-    audio = NULL;
+    audio_choose(NULL);
     audio_boot_status = "No audio";
+}
+
+void audio_set_dispatch(audio_driver_t *d)
+{
+    audio = d ? d : audio_hw;
 }
 
 const char *audio_get_driver_name(void)
 {
-    if (audio) {
-        return audio->name;
+    if (audio_hw) {
+        return audio_hw->name;
     }
     return "None";
 }
@@ -130,7 +158,7 @@ const char *audio_get_boot_status(void)
 
 bool audio_has_real_output(void)
 {
-    if (!audio)
+    if (!audio_hw)
         return false;
-    return (audio->type == AUDIO_DRIVER_SB16 || audio->type == AUDIO_DRIVER_HDA);
+    return (audio_hw->type == AUDIO_DRIVER_SB16 || audio_hw->type == AUDIO_DRIVER_HDA);
 }
