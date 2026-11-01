@@ -169,15 +169,15 @@ static const uint32_t *render(struct term_draw *d, const uint32_t *ch, size_t le
 }
 
 /**
- * Draw one cell at column `x` and row `y`, `cells` wide, into the back
- * buffer, with `attr`'s colors, and mark it changed. `cursor` is the cursor's
- * shape over it, an enum tsm_screen_cursor_style, or -1 when it has none.
+ * Draw the cell `c` into the back buffer, with its attributes' colors, mark
+ * it changed and set its `drawn`. `cursor` is the cursor's shape over it, an
+ * enum tsm_screen_cursor_style, or -1 when it has none.
  */
-static void draw_cell(struct term_draw *d, const uint32_t *ch, size_t len, unsigned cells,
-                      unsigned x, unsigned y, const struct tsm_screen_attr *attr, int cursor)
+static void draw_cell(struct term_draw *d, struct term_draw_cell *c, int cursor)
 {
+    const struct tsm_screen_attr *attr = &c->attr;
     unsigned s = d->font->scale, cw = d->font->cell_width, chh = d->font->cell_height;
-    unsigned px, py, x0 = x * cw, y0 = y * chh, w, bar = 2 * s, i;
+    unsigned px, py, x0 = c->x * cw, y0 = c->y * chh, w, bar = 2 * s, i, cells = c->width;
     unsigned fr = attr->fr, fg = attr->fg, fb = attr->fb;
     unsigned br = attr->br, bg = attr->bg, bb = attr->bb, t;
     bool inverse = attr->inverse;
@@ -188,8 +188,8 @@ static void draw_cell(struct term_draw *d, const uint32_t *ch, size_t len, unsig
 
     if (cells == 0)
         cells = 1;
-    if (x + cells > d->cols)
-        cells = d->cols - x;
+    if (c->x + cells > d->cols)
+        cells = d->cols - c->x;
     w = cells * cw;
     if (cursor == TSM_SCREEN_CURSOR_DEFAULT || cursor == TSM_SCREEN_CURSOR_BLOCK_BLINK ||
         cursor == TSM_SCREEN_CURSOR_BLOCK_STEADY)
@@ -209,7 +209,7 @@ static void draw_cell(struct term_draw *d, const uint32_t *ch, size_t len, unsig
     }
     fgp = pixel(d, fr, fg, fb);
     bgp = pixel(d, br, bg, bb);
-    rows = render(d, ch, len, cells, attr, &spare);
+    rows = render(d, c->ch, c->len, cells, attr, &spare);
 
     for (py = 0; py < chh; py++) {
         p = d->back + (size_t)(y0 + py) * d->info.pitch + (size_t)x0 * d->bytes;
@@ -238,17 +238,20 @@ static void draw_cell(struct term_draw *d, const uint32_t *ch, size_t len, unsig
             fill(p + (size_t)px * d->bytes, i, d->bytes, on ? fgp : bgp);
         }
     }
-    damage(d, y, x0, x0 + w);
+    damage(d, c->y, x0, x0 + w);
+    c->drawn = true;
 }
 
 /**
- * Draw the cell `c` that tsm_screen_draw() reported, with the cursor's shape
- * `cursor`.
+ * Whether the cell at column `x` and row `y`, of libtsm's age `age`, is drawn
+ * in this frame: when it changed since the last frame, when the cursor is on
+ * it (`here`) or was, or when every cell is drawn.
  */
-static void draw_saved(struct term_draw *d, struct term_draw_cell *c, int cursor)
+static bool redrawn(const struct term_draw *d, unsigned x, unsigned y, tsm_age_t age, bool here)
 {
-    draw_cell(d, c->ch, c->len, c->width, c->x, c->y, &c->attr, cursor);
-    c->drawn = true;
+    bool was = d->cursor_shown && x == d->cursor_x && y == d->cursor_y;
+
+    return d->full || !age || !d->age || age > d->age || here || was;
 }
 
 /**
@@ -269,7 +272,7 @@ static int draw_cb(struct tsm_screen *con, uint64_t id, const uint32_t *ch, size
 {
     struct term_draw *d = data;
     struct term_draw_cell *prev = &d->prev, cur;
-    bool here, was, changed, covered;
+    bool here, changed, covered;
     int cursor = -1;
 
     (void)con;
@@ -279,38 +282,35 @@ static int draw_cb(struct tsm_screen *con, uint64_t id, const uint32_t *ch, size
     cur.valid = true;
     cur.drawn = false;
     cur.ch = ch;
-    cur.len = len;
+    cur.len = width ? len : 0;
     cur.width = width;
     cur.x = posx;
     cur.y = posy;
     cur.attr = *attr;
 
     here = d->frame_cursor && posx == d->frame_x && posy == d->frame_y;
-    was = d->cursor_shown && posx == d->cursor_x && posy == d->cursor_y;
     if (here) {
         /* libtsm marks the cursor by inverting its cell; drawing draws it. */
         cur.attr.inverse = !cur.attr.inverse;
         cursor = d->cursor_style;
     }
-    changed = d->full || !age || !d->age || age > d->age || here || was;
+    changed = redrawn(d, posx, posy, age, here);
     covered = prev->valid && prev->y == posy && prev->width >= 2 && prev->x + prev->width > posx;
 
     if (width == 0 && covered) {
         /* The cursor on the second half is drawn over the whole glyph. */
         if (here)
-            draw_saved(d, prev, cursor);
+            draw_cell(d, prev, cursor);
         else if (changed && !prev->drawn)
-            draw_saved(d, prev, -1);
+            draw_cell(d, prev, -1);
         return 0;
     }
     /* Drawn over a wide glyph's right half, or the orphan of a wide
      * character that a narrow one replaced, whose age libtsm leaves. */
     if (prev->valid && prev->y == posy && prev->drawn && (covered || width == 0))
         changed = true;
-    if (changed) {
-        draw_cell(d, ch, width ? len : 0, width, posx, posy, &cur.attr, cursor);
-        cur.drawn = true;
-    }
+    if (changed)
+        draw_cell(d, &cur, cursor);
     *prev = cur;
     return 0;
 }
