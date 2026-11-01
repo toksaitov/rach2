@@ -107,6 +107,7 @@ struct nd6_conf {
 /* What neighbour discovery keeps for one interface, by its index less 1. */
 struct nd6_if {
     struct nd6_conf conf;
+    uint8_t started;       /* whether discovery runs, from up until down or disable */
     uint8_t running;       /* the link state the tick saw last */
     uint8_t rs_left;       /* router solicitations still to send */
     uint32_t rs_at;        /* the tick the next may leave */
@@ -1310,10 +1311,11 @@ void nd6_if_up(struct netdev *nd)
     struct nd6_if *ni = if_of(nd);
     uint32_t lock;
 
-    if (!ni || nd->loopback) {
+    if (!ni || nd->loopback || ni->started) {
         return;
     }
     lock = net_lock();
+    ni->started = 1;
     redetect(nd, 1);
     ni->running = (uint8_t)netdev_running(nd);
     if (ni->conf.v[ND6_FORWARDING] && !netdev_member6(nd, all_routers)) {
@@ -1346,6 +1348,7 @@ static void forget_if(struct netdev *nd, int addresses)
     }
     route6_forget(nd, ROUTE6_PROTO_RA);
     if (ni) {
+        ni->started = 0;
         ni->rs_left = 0;
         if_defaults(ni);
     }
