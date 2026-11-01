@@ -11,6 +11,7 @@ Milestone 68 makes Rach2's sound hardware fully usable. A user who signs in to t
 * FFmpeg is in, the owner's addition of 2026-11-01 ("ffmpeg would be great to have"): a GNU-root port with its OSS input and output (`-f oss`), LGPL as FFmpeg is by default, with no `--enable-gpl` and no GPL or nonfree parts.
 * The check program is an existing tool, not an in-house recorder: sox_ng, static in the musl images. OSS 4's `ossrecord` and `ossplay` were the fallback; sox_ng builds, so they are not needed.
 * Headphones work: jack detection follows the plug.
+* The headphone checks are dropped from the Lenovo's proof for now, the owner's order of 2026-11-02 ("I don't have headphones, drop that requirement for now"): cmus plays on the speaker only, and capture uses the internal mic only. Jack detection and the headset mic are proved by the host test's model of the G50-70's codec alone; the audio Readme's Limits says so.
 
 ## Measured
 
@@ -171,7 +172,7 @@ Any OSS program opens `/dev/dsp`; the driver behind it is a stream interface.
 * Presence polled on the headphone and microphone pins from `hda_tick` every quarter second, counted by `TICK_HZ`, through 1a's safe verb path; pins whose caps require a trigger (bit 1) get the trigger first; a failed read is unknown, not unplugged. Output moves between speaker and headphones, input between the internal and the jack mic while capture runs, on a change seen twice. EAPD off and the pins disabled at `stop`, on again at `start`.
 * The report's jack fields; `proc.5`; the Readme's "Jacks".
 * Tests: host rows over a model codec for switching, debounce, failed reads and switching during capture.
-* Done: the rows pass. The plug on the Lenovo is task 8's.
+* Done: the rows pass. A plug on the Lenovo is not part of task 8's proof, by the owner's order of 2026-11-02.
 
 ### 5a. Mixing playback
 
@@ -218,8 +219,8 @@ The owner uses the sound on the Lenovo and the counters agree. Owner-only; the L
 
 * Its loop builds the milestone's x86-64 GNU root on the testing host and installs the head through the recovery system as `release.sh` does, since cmus and FFmpeg are in the root; afterwards it puts back the release's root as well as its kernel in both slots, since both slots boot the one root (`rach2-install:1050`).
 * Doom's `-timedemo demo1` with music, `/proc/audio` read as in 1b: the queued delay against 1b's figure, and Doom played by hand, the shot heard with the flash.
-* cmus plays one of each format on the speaker and on headphones, switching at the plug; `ffmpeg -f oss` records and plays; Doom plays while cmus plays.
-* `rec -S` shows the internal mic, then the headset mic when it is plugged; each channel of the internal mic is tried, since a wrong channel muted gives a near-silent mic; a recording plays back.
+* cmus plays one of each format on the speaker; `ffmpeg -f oss` records and plays; Doom plays while cmus plays.
+* `rec -S` shows the internal mic; each channel of the internal mic is tried, since a wrong channel muted gives a near-silent mic; a recording plays back.
 * Record each in `dev-log/68-sound/proof.md`.
 * Done: each step passes in the owner's words and the counters are recorded.
 
