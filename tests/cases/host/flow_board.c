@@ -467,8 +467,8 @@ int flow_board_mock(int argc, char **argv)
 
 /* Milestones 1 and 2 are open with a branch, 3 open with none, and 4
  * closed, as milestone_table says. The tasks a worker may take are 30, 31,
- * 33 and 36, in the board's order whatever their milestones: 40, 30, 31, 33
- * and 36. */
+ * 33, 36 and, on Linux, 55, in the board's order whatever their milestones:
+ * 40, 30, 31, 33, 36 and 55. */
 static const char board_main[] = "40|OPEN|Ready|bug|-|0|-|2|second milestone, first\n"
                                  "30|OPEN|Ready|bug|-|0|-|1|first milestone, first\n"
                                  "41|OPEN|Ready|bug|-|0|30|1|subtask of 30\n"
@@ -488,7 +488,8 @@ static const char board_main[] = "40|OPEN|Ready|bug|-|0|-|2|second milestone, fi
                                  "36|OPEN|Ready|bug|-|0|-|1|first milestone, third\n"
                                  "53|CLOSED|Done|bug|-|0|-|2|closed task of two\n"
                                  "54|CLOSED|Done|bug|-|0|60|-|closed subtask of a task of four\n"
-                                 "60|CLOSED|Done|bug|-|0|-|4|closed task of four\n";
+                                 "60|CLOSED|Done|bug|-|0|-|4|closed task of four\n"
+                                 "55|OPEN|Ready|bug,linux-host|-|0|-|1|builds the GNU layer\n";
 
 static int use(struct fixture *f, const char *data)
 {
@@ -587,11 +588,11 @@ static int next_rows(struct fixture *f)
 {
     static const struct {
         const char *name, *me, *setup, *words;
-    } rows[] = {{"next-order", "alpha", "", "40 30 31 33 36"},
-                {"next-owner", "toksaitov", "", "40 30 31 47 33 36"},
-                {"next-flaky", "alpha", "flaky", "40 30 31 33 36"},
+    } rows[] = {{"next-order", "alpha", "", "40 30 31 33 36 55"},
+                {"next-owner", "toksaitov", "", "40 30 31 47 33 36 55"},
+                {"next-flaky", "alpha", "flaky", "40 30 31 33 36 55"},
                 {"next-lost", "alpha", "board", NULL},
-                {"next-unlisted", "alpha", "unlisted", "40 30 33 36 31"},
+                {"next-unlisted", "alpha", "unlisted", "40 30 33 36 55 31"},
                 {"next-unlisted-lost", "alpha", "repo", NULL}};
     unsigned i;
     int ok = 1, held;
@@ -802,7 +803,7 @@ static int milestones_rows(struct fixture *f)
                   !f->status &&
                       !strcmp(f->out, "milestone 1: First\n"
                                       "  branch: milestone/01-a\n"
-                                      "  tasks: 9 open, 1 closed\n"
+                                      "  tasks: 10 open, 1 closed\n"
                                       "  #49 In progress: alpha: In progress\n"
                                       "milestone 2: Second\n"
                                       "  branch: milestone/02-b\n"
@@ -904,6 +905,8 @@ int flow_board(struct fixture *f)
     fx_env("BOARD_TEST_WORK", flow_path(f, "state"));
     fx_env("BOARD_TEST_DATA", flow_path(f, "data"));
     fx_env("BOARD_WAIT", "0");
+    /* A copy on the testing host lets this account take #55 on any system. */
+    fx_env("RACH2_TESTING_COPY", "copy");
     if (!flow_copy(f, "tools/flow/board.sh", "board.sh") || !fx_mock(f, "gh") ||
         !fx_mkdir(flow_path(f, "state")))
         return 0;

@@ -28,7 +28,10 @@
 # subtask is closed by the worker of its task and is never taken by itself.
 # An issue labelled `owner-only` has work that only the owner's accounts can
 # do, such as a step on the Lenovo, which only the owner's computer reaches;
-# `next` and `take` offer it only to the account OWNER below.
+# `next` and `take` offer it only to the account OWNER below. An issue
+# labelled `linux-host` builds the GNU layer, which builds on an x86-64 Linux
+# host only (vendor/gnu/Readme.md); they offer it only to an account on Linux
+# or one whose loop names a copy on the testing host in RACH2_TESTING_COPY.
 # Each subcommand that reads the board fails, with a diagnostic on stderr and
 # nothing on stdout, when a page of the answer is lost five times, as `ask`
 # below says, so that a caller does not take a part of the board for the
@@ -40,7 +43,8 @@
 # `next` prints the tasks a worker may take, one line each with the number, a
 # tab and the title. Each is open, Ready, unassigned, in an open milestone
 # whose description names a branch, with no parent and no open blocker, not
-# labelled `owner`, and labelled `owner-only` only when this account is OWNER.
+# labelled `owner`, labelled `owner-only` only when this account is OWNER,
+# and labelled `linux-host` only when this account can build the GNU layer.
 # They are in the board's order, whatever their milestones, so that the tasks
 # of every open milestone are one queue whose order the manager sets.
 # `gh project item-list` does not return that order, so the query asks for
@@ -51,7 +55,8 @@
 # progress. Before it assigns anything, it also refuses an issue that is not
 # on the board, a subtask, an issue in no open milestone or in one that names
 # no branch, one with an open blocker, one labelled `owner`, one labelled
-# `owner-only` when this account is not OWNER, and one whose Status is
+# `owner-only` when this account is not OWNER, one labelled `linux-host` when
+# this account cannot build the GNU layer, and one whose Status is
 # neither Ready nor In progress. Otherwise it assigns N to this account and
 # reads the issue's timeline. Of the accounts assigned now, the one whose
 # latest assignment is the earliest keeps the issue. When that is another
@@ -153,6 +158,13 @@ set -e
 REPO=toksaitov/rach2
 OWNER=toksaitov
 BOARD=6
+
+# host is 1 when this account can build the GNU layer: on Linux, or with a
+# copy on the testing host.
+case $(uname -s) in
+Linux) host=1 ;;
+*) host=${RACH2_TESTING_COPY:+1} ;;
+esac
 
 # The awk function has(L, X) is true when the comma-joined list L has X.
 LIB='function has(l, x) { return index("," l ",", "," x ",") > 0 }'
@@ -335,10 +347,11 @@ next()
 {
     login
     read_board
-    printf '%s\n' "$board" | awk -F '\t' -v me="$me" -v owner="$OWNER" "$LIB"'
+    printf '%s\n' "$board" | awk -F '\t' -v me="$me" -v owner="$OWNER" -v host="$host" "$LIB"'
         $4 != "OPEN" || $2 != "Ready" || $6 != "" || $7 > 0 || $8 != "" { next }
         $10 != "OPEN" || $11 == "" || has($5, "owner") { next }
         has($5, "owner-only") && me != owner { next }
+        has($5, "linux-host") && host != 1 { next }
         { print $9 "\t" NR "\t" $3 "\t" $12 }' |
         sort -n -k 2,2 | cut -f 3-
 }
@@ -410,7 +423,7 @@ refuse()
 # `me` being this account; print nothing when nothing does.
 kind()
 {
-    printf '%s\n' "$board" | awk -F '\t' -v n="$1" -v me="$me" -v owner="$OWNER" "$LIB"'
+    printf '%s\n' "$board" | awk -F '\t' -v n="$1" -v me="$me" -v owner="$OWNER" -v host="$host" "$LIB"'
         $3 != n { next }
         { found = 1 }
         $8 != "" { print "it is a subtask of #" $8 "; take its task"; exit }
@@ -420,6 +433,8 @@ kind()
         has($5, "owner") { print "it waits for the owner"; exit }
         has($5, "owner-only") && me != owner {
             print "only the owner'"'"'s accounts can do its work"; exit }
+        has($5, "linux-host") && host != 1 {
+            print "it builds the GNU layer, which needs a Linux host"; exit }
         $2 != "Ready" && $2 != "In progress" {
             print "its Status is " ($2 == "" ? "empty" : $2) ", not Ready"; exit }
         END { if (!found) print "it is not on the board" }'

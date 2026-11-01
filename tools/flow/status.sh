@@ -23,7 +23,9 @@
 # A loop on another host is read over ssh; one whose host is `-` runs on this
 # machine. The release's part is the last line of `build/flow/release/record`
 # and whether its tmux session `rach2-release` runs on the default tmux
-# server, whichever server the caller is in.
+# server, whichever server the caller is in. The Lenovo's line says who holds
+# the lock the `machine` skill describes, `build/flow/lenovo` of the main
+# working tree, and since when in UTC, or that it is free.
 #
 # The resources are the free space of this machine's disk, of the testing
 # host's WSL root and /tmp, whose tmpfs is the host's memory, and of its
@@ -204,6 +206,12 @@ if [ -f "$r" ]; then
     echo "record: $(tail -n 1 "$r")"
 else
     echo "no release record"
+fi
+l=$here/build/flow/lenovo
+if [ -d "$l" ]; then
+    echo "lenovo: held by #$(cat "$l/issue" 2> /dev/null || echo '?') since $(date -u -r "$l" '+%Y-%m-%d %H:%M')"
+else
+    echo "lenovo: free"
 fi
 echo "== resources"
 resources

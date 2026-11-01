@@ -45,7 +45,7 @@ The rules are kept short on purpose; their history is in commit messages and `de
 
 ## Work
 
-* A worker loop takes the top Ready task with `sh tools/flow/board.sh next` and `take`, which keep one writer on each task. An issue labelled `owner-only` needs the owner's accounts, such as a step on the Lenovo, and goes to them alone.
+* A worker loop takes the top Ready task with `sh tools/flow/board.sh next` and `take`, which keep one writer on each task. An issue labelled `owner-only` needs the owner's accounts, such as a step on the Lenovo, and goes to them alone; one labelled `linux-host` builds the GNU layer and goes only to a loop that can build it on Linux.
 * The worker writes the whole task on its task branch, compiles what it changed and commits; the commit hook formats the code. It pushes the task branch as it goes, merging in what reaches the milestone branch meanwhile so that the task branch only grows, closes each subtask when it is done, and fixes a bug it meets on the spot, naming it in the commit message instead of filing it.
 * When the task is done, the worker rebases it onto the milestone branch, compiles, pushes with `git push origin HEAD:milestone/NN-name` (rebasing again if the branch moved), closes the task and deletes its branch; the rebased task goes only to the milestone branch. A task that needs another task's code is marked on GitHub as blocked by that task, and `next` offers it once the blocker is closed.
 * During a milestone nothing else is checked: no suites, no host tests, no style or document checks and no CI. A worker builds and boots the whole system only to see behaviour that reading the code cannot settle: in QEMU, and on the Lenovo through the owner's accounts.
