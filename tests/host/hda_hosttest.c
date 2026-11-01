@@ -32,6 +32,7 @@ static uint32_t sense[128]; /* each pin's Get Pin Sense word */
 static uint16_t in_amp[128][16][2];
 static uint8_t pin_ctl[128];
 static uint8_t channel[128];
+static uint16_t eapd[128]; /* each pin's EAPD/BTL payload, with 0x100 once set */
 static unsigned conn_reads, verbs, bad_offsets, sense_triggers;
 static int codec_silent;  /* the codec takes commands and never answers */
 static int clock_stopped; /* the wall clock does not advance */
@@ -110,6 +111,8 @@ static uint32_t model_verb(uint32_t command)
         pin_ctl[nid] = (uint8_t)offset;
     if ((verb & 0xFFF00) == HDA_VERB_SET_CHANNEL)
         channel[nid] = (uint8_t)offset;
+    if ((verb & 0xFFF00) == HDA_VERB_SET_EAPD)
+        eapd[nid] = (uint16_t)(0x100 | offset);
     if (verb == 0xA0000)
         return converter_format[nid];
     return 0;
@@ -170,6 +173,7 @@ static void reset_model(void)
     k_memset(in_amp, 0, sizeof(in_amp));
     k_memset(pin_ctl, 0, sizeof(pin_ctl));
     k_memset(channel, 0, sizeof(channel));
+    k_memset(eapd, 0, sizeof(eapd));
     conn_reads = verbs = bad_offsets = sense_triggers = 0;
     cap_stream = NULL;
     cap_running = false;
@@ -545,6 +549,9 @@ static void row_report(void)
                        "pin-caps 0x00000010 config 0x00100000 conn 2\n") != NULL,
           "a pin without presence detect has no sense");
     check(strstr(text, "\nadcs 3\n") != NULL, "report lists the adcs");
+    check(strstr(text, "enabled 0 mode auto\njack headphone pin 0 state unknown polls 0 failed 0 "
+                       "changes 0\njack mic pin 4 state in polls 1 failed 0 changes 1\n") != NULL,
+          "report exposes the mode and the jacks, the mic as the start read it");
     check(strstr(text, "input adc 3 index 0 mid 0 index 0 pin 4 int-mic 0 jack-mic 4 inv-dmic 0 "
                        "level 0 pin-ctl 0x00\n") != NULL,
           "report exposes the input path");
@@ -1334,6 +1341,240 @@ static void row_capture_overrun(void)
     clock_stopped = 0;
 }
 
+/** Run the ticks of `n` jack polls, a quarter second each. */
+static void poll_jacks(unsigned n)
+{
+    unsigned i;
+
+    for (i = 0; i < n * HDA_JACK_TICKS; i++)
+        hda_tick();
+}
+
+/** Enumerate the G50-70's codec and start playback on it at 48 kHz; the wall
+ * clock stops, so that the ticks refill nothing. */
+static void lenovo_playing(void)
+{
+    reset_model();
+    model_lenovo();
+    check(hda_find_output(), "enumeration succeeds");
+    dma_checked = true;
+    clock_stopped = 1;
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0, "playback starts");
+}
+
+/**
+ * On the G50-70's codec the headphone pin 22 and the jack mic 25 are
+ * watched, and a Conexant codec starts in the automatic mode. A start takes
+ * the headphone jack's state from its reading; the tick polls every quarter
+ * second, takes a plug seen twice and moves the output to the headphones,
+ * the speaker 23 off, and back on an unplug. Another mode keeps its pins.
+ */
+static void row_jack_switch(void)
+{
+    const hda_report_t *r = hda_get_report();
+    const hda_jack_report_t *hp = &r->jacks[HDA_JACK_HP];
+    unsigned i, n;
+
+    row = "jack-switch";
+    reset_model();
+    model_lenovo();
+    check(hda_find_output(), "enumeration succeeds");
+    check(hda_get_output_mode() == 0, "a conexant codec starts in the automatic mode");
+    check(hp->pin == 22 && r->jacks[HDA_JACK_MIC].pin == 25 && hp->state == HDA_JACK_UNKNOWN &&
+              r->jacks[HDA_JACK_MIC].state == HDA_JACK_UNKNOWN,
+          "the headphone and mic jacks are watched, their states unknown");
+    dma_checked = true;
+    clock_stopped = 1;
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0, "playback starts");
+    check(hp->state == HDA_JACK_OUT && hp->polls == 1 && hp->changes == 1,
+          "the start reads the headphone jack");
+    check(pin_ctl[23] == 0x40 && pin_ctl[22] == 0 && r->primary_enabled && !r->hp_enabled,
+          "the speaker plays without headphones");
+    sense[22] = 0x80000000;
+    n = verbs;
+    for (i = 0; i + 1 < HDA_JACK_TICKS; i++)
+        hda_tick();
+    check(verbs == n, "no poll before a quarter second");
+    hda_tick();
+    check(verbs == n + 2 && hp->polls == 2 && hp->state == HDA_JACK_OUT && pin_ctl[22] == 0,
+          "a plug seen once moves nothing");
+    poll_jacks(1);
+    check(hp->state == HDA_JACK_IN && hp->changes == 2, "a plug seen twice is taken");
+    check(pin_ctl[22] == 0xC0 && pin_ctl[23] == 0 && r->hp_enabled && !r->primary_enabled,
+          "the headphones play and the speaker is off");
+    n = verbs;
+    poll_jacks(1);
+    check(verbs == n + 2 && pin_ctl[22] == 0xC0, "a steady plug is read and sets nothing");
+    sense[22] = 0;
+    poll_jacks(2);
+    check(hp->state == HDA_JACK_OUT && hp->changes == 3 && pin_ctl[23] == 0x40 && pin_ctl[22] == 0,
+          "an unplug seen twice gives the speaker back");
+    hda_set_output_mode(1);
+    sense[22] = 0x80000000;
+    poll_jacks(2);
+    check(hp->state == HDA_JACK_IN && pin_ctl[22] == 0 && pin_ctl[23] == 0x40,
+          "the primary mode keeps the speaker whatever the jack");
+    hda_set_output_mode(0);
+    poll_jacks(1);
+    check(pin_ctl[22] == 0xC0 && pin_ctl[23] == 0, "the automatic mode follows the jack again");
+    hda_stop();
+    clock_stopped = 0;
+}
+
+/**
+ * A plug that bounces at each poll moves nothing. A reading whose verb times
+ * out, or finds the interface or the verb lock busy, is unknown and leaves
+ * the headphones playing; the unplug is taken once the codec answers. The
+ * tick polls nothing while code outside it holds the jacks.
+ */
+static void row_jack_reads(void)
+{
+    const hda_jack_report_t *hp = &hda_get_report()->jacks[HDA_JACK_HP];
+    unsigned i, n;
+
+    row = "jack-debounce";
+    lenovo_playing();
+    for (i = 0; i < 6; i++) {
+        sense[22] = i % 2 ? 0 : 0x80000000;
+        poll_jacks(1);
+    }
+    check(hp->state == HDA_JACK_OUT && hp->changes == 1 && pin_ctl[23] == 0x40 && pin_ctl[22] == 0,
+          "a plug that bounces at each poll moves nothing");
+    hda_stop();
+    clock_stopped = 0;
+
+    row = "jack-failed-read";
+    lenovo_playing();
+    sense[22] = 0x80000000;
+    poll_jacks(2);
+    check(pin_ctl[22] == 0xC0 && hp->polls == 3 && hp->failed == 0, "the headphones play");
+    sense[22] = 0;
+    codec_silent = 1;
+    poll_jacks(2);
+    check(hp->state == HDA_JACK_IN && hp->polls == 5 && hp->failed == 2,
+          "a read that times out, then one behind it, are unknown");
+    check(pin_ctl[22] == 0xC0 && pin_ctl[23] == 0, "and not an unplug");
+    mmio[HDA_ICS] = 0;
+    codec_silent = 0;
+    verb_lock.locked = 1;
+    poll_jacks(2);
+    check(hp->state == HDA_JACK_IN && hp->failed == 4 && irqs_on,
+          "a poll that finds the verb lock held reads nothing");
+    verb_lock.locked = 0;
+    poll_jacks(2);
+    check(hp->state == HDA_JACK_OUT && pin_ctl[23] == 0x40 && pin_ctl[22] == 0,
+          "the unplug is taken once the codec answers");
+
+    row = "jack-hold";
+    sense[22] = 0x80000000;
+    jack_holds = 1;
+    n = verbs;
+    poll_jacks(2);
+    check(verbs == n && hp->state == HDA_JACK_OUT,
+          "the tick polls nothing while the jacks are held");
+    jack_holds = 0;
+    poll_jacks(2);
+    check(hp->state == HDA_JACK_IN && pin_ctl[22] == 0xC0, "it polls again once they are not");
+    hda_stop();
+    clock_stopped = 0;
+}
+
+/**
+ * A start turns EAPD on, with BTL on the speaker, and a stop turns it and
+ * the output pins off. A plug while nothing plays turns no pin on, and the
+ * next start plays on the headphones at once.
+ */
+static void row_jack_stop(void)
+{
+    const hda_report_t *r = hda_get_report();
+
+    row = "jack-stop";
+    reset_model();
+    model_lenovo();
+    params[22][HDA_PARAM_PIN_CAPS] |= 0x10000; /* EAPD */
+    params[23][HDA_PARAM_PIN_CAPS] |= 0x10000;
+    check(hda_find_output(), "enumeration succeeds");
+    dma_checked = true;
+    clock_stopped = 1;
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0, "playback starts");
+    check(eapd[23] == (0x100 | 3) && eapd[22] == (0x100 | 2),
+          "a start turns EAPD on, with BTL on the speaker");
+    hda_stop();
+    check(eapd[23] == 0x100 && eapd[22] == 0x100, "a stop turns EAPD off");
+    check(pin_ctl[23] == 0 && pin_ctl[22] == 0 && !r->primary_enabled && !r->hp_enabled,
+          "and the output pins");
+    sense[22] = 0x80000000;
+    poll_jacks(2);
+    check(r->jacks[HDA_JACK_HP].state == HDA_JACK_IN && pin_ctl[22] == 0 && pin_ctl[23] == 0,
+          "a plug while stopped turns no pin on");
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0 && pin_ctl[22] == 0xC0 && pin_ctl[23] == 0 &&
+              eapd[23] == (0x100 | 3),
+          "the next start plays on the headphones");
+    hda_stop();
+    clock_stopped = 0;
+}
+
+/**
+ * While capture runs on the G50-70's internal mic 26, a headset's plug seen
+ * twice moves it to the jack mic 25: ADC 19 selects its connection 2 at
+ * 0 dB and mutes the internal mic's, the jack mic is biased at VREF 80% and
+ * the internal mic's input is off. An unplug moves it back. The mixer may
+ * choose the internal mic with the plug in, which a steady jack leaves. A
+ * plug while capture is stopped chooses the jack mic, and the next start
+ * records it.
+ */
+static void row_jack_capture(void)
+{
+    audio_stream_t s;
+    const hda_report_t *r = hda_get_report();
+    const hda_input_report_t *in = &r->input;
+
+    row = "jack-capture";
+    reset_model();
+    model_lenovo();
+    check(hda_find_output(), "enumeration succeeds");
+    clock_stopped = 1;
+    check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0 && hda_driver.stream_start(&s) == 0,
+          "capture starts");
+    check(in->pin == 26 && selected[19] == 1 && pin_ctl[26] == 0x20,
+          "the internal mic is recorded");
+    sense[25] = 0x80000000;
+    poll_jacks(1);
+    check(in->pin == 26 && selected[19] == 1, "a plug seen once moves nothing");
+    poll_jacks(1);
+    check(r->jacks[HDA_JACK_MIC].state == HDA_JACK_IN && in->pin == 25 && in->index == 2 &&
+              selected[19] == 2,
+          "a plug seen twice moves capture to the jack mic");
+    check(pin_ctl[25] == 0x24 && pin_ctl[26] == 0, "the jack mic is biased, the internal mic off");
+    check(in_amp[19][2][0] == (0x100 | 74) && in_amp[19][1][0] == 0x180,
+          "the jack's connection is at 0 dB and the internal mic's muted");
+    check(in->running && cap_running, "capture runs on");
+    sense[25] = 0;
+    poll_jacks(2);
+    check(in->pin == 26 && selected[19] == 1 && pin_ctl[26] == 0x20 && pin_ctl[25] == 0,
+          "an unplug moves capture back to the internal mic");
+    sense[25] = 0x80000000;
+    poll_jacks(2);
+    check(in->pin == 25, "a plug again");
+    check(hda_driver.input_select(AUDIO_SRC_INT_MIC) == AUDIO_SRC_INT_MIC && selected[19] == 1 &&
+              pin_ctl[25] == 0 && pin_ctl[26] == 0x20,
+          "the mixer chooses the internal mic with the plug in");
+    poll_jacks(2);
+    check(in->pin == 26, "and a steady jack leaves its choice");
+    hda_driver.stream_stop(&s);
+    check(pin_ctl[26] == 0, "a stop turns the pin's input off");
+    sense[25] = 0;
+    poll_jacks(2);
+    sense[25] = 0x80000000;
+    poll_jacks(2);
+    check(in->pin == 25 && selected[19] == 1 && pin_ctl[25] == 0,
+          "a plug while stopped chooses the jack mic and programs nothing");
+    check(hda_driver.stream_start(&s) == 0 && selected[19] == 2 && pin_ctl[25] == 0x24,
+          "the next start records it");
+    hda_driver.stream_close(&s);
+    clock_stopped = 0;
+}
+
 /** Run codec and controller rows: 0 when every check passes, 1 otherwise. */
 /**
  * The input controls over the G50-70's codec: the two mics are the
@@ -1419,6 +1660,10 @@ int main(void)
     row_capture_duplex();
     row_capture_overrun();
     row_input_controls();
+    row_jack_switch();
+    row_jack_reads();
+    row_jack_stop();
+    row_jack_capture();
     printf("hda-test: result: %s\n", failures ? "fail" : "pass");
     return failures ? 1 : 0;
 }
