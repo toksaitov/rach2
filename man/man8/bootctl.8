@@ -77,6 +77,11 @@ Report the installed files, saved default, next boot, and current boot.
 Sector extents for the candidate, fallback, environment block, and menu
 are reported in this field order:
 .Dl bootctl: NAME: first sector N, N sectors in N clusters, N bytes
+A file whose clusters are not one run, as
+.Cm fallback
+can leave the fallback slot, has a second line giving each run's first
+sector and length in sectors, in file order:
+.Dl bootctl: NAME: runs: N+N N+N ...
 The names are
 .Ql candidate ,
 .Ql fallback ,

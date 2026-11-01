@@ -193,16 +193,40 @@ static int open_slot(void)
     return 0;
 }
 
-/** Print the extent line of file `f`, under `name`; its field order is a
- *  test contract. */
+/**
+ * Print the extent line of file `f`, under `name`; its field order is a
+ * test contract.
+ *
+ * A file whose clusters are not one run, as `bootctl fallback` can leave the
+ * fallback, also gets a `runs:` line of each run's first sector and length,
+ * since the first sector and the total alone would name other bytes.
+ */
 static void print_extent(const char *name, const struct bootslot_file *f, uint32_t cluster_sectors,
                          uint32_t data_start)
 {
     uint32_t first = data_start + (f->chain[0] - 2) * cluster_sectors;
+    uint32_t i, start, runs = 1;
 
+    for (i = 1; i < f->chain_len; i++) {
+        if (f->chain[i] != f->chain[i - 1] + 1) {
+            runs++;
+        }
+    }
     printf("bootctl: %s: first sector %u, %u sectors in %u clusters, "
            "%u bytes\n",
            name, first, f->chain_len * cluster_sectors, f->chain_len, f->size);
+    if (runs == 1) {
+        return;
+    }
+    printf("bootctl: %s: runs:", name);
+    for (start = 0, i = 1; i <= f->chain_len; i++) {
+        if (i == f->chain_len || f->chain[i] != f->chain[i - 1] + 1) {
+            printf(" %u+%u", data_start + (f->chain[start] - 2) * cluster_sectors,
+                   (i - start) * cluster_sectors);
+            start = i;
+        }
+    }
+    printf("\n");
 }
 
 /**

@@ -15,9 +15,10 @@
 # `bootctl status` reports as `booted`. The kernel is the SHA-256 of that
 # slot's first bytes, as many as the named file holds, read from
 # /dev/bootpart at the extent `bootctl status` prints; the slot is padded
-# past the kernel, so the padding is left out. The read takes the slot's
-# sectors as one run, which is how the image tools write a slot; a slot
-# whose clusters are scattered reads as another kernel and is refused.
+# past the kernel, so the padding is left out. The image tools write a slot
+# as one run; a slot whose clusters are scattered, as `bootctl fallback` can
+# leave the fallback, is read run by run from the `runs:` line that
+# `bootctl status` adds for it.
 #
 # A trial armed in the boot environment is refused too: `bootctl kernel`
 # arms one when it writes the candidate slot, and the slot then holds a
@@ -81,10 +82,13 @@ slot=$(sed -n 's/.*rach2\.slot=\([a-z]*\).*/\1/p' /proc/cmdline)
 echo "machine-identity: booted: ${slot:-none}"
 status=$(bootctl status) || exit 1
 printf '%s\n' "$status"
-extent=$(printf '%s\n' "$status" | awk -v s="$slot:" '$2 == s && $3 == "first" { sub(",", "", $5); print $5, $6 }')
-set -- $extent
-if [ -n "$slot" ] && [ "$#" = 2 ]; then
-    dd if=/dev/bootpart bs=512 skip="$1" count="$2" 2>/dev/null | head -c @SIZE@ | sha256sum | sed 's/ .*//; s/^/machine-identity: sha256: /'
+extent=$(printf '%s\n' "$status" | awk -v s="$slot:" '$2 == s && $3 == "runs:" { for (i = 4; i <= NF; i++) { sub("[+]", " ", $i); print $i } exit }')
+[ -n "$extent" ] ||
+    extent=$(printf '%s\n' "$status" | awk -v s="$slot:" '$2 == s && $3 == "first" { sub(",", "", $5); print $5, $6 }')
+if [ -n "$slot" ] && [ -n "$extent" ]; then
+    printf '%s\n' "$extent" | while read -r first count; do
+        dd if=/dev/bootpart bs=512 skip="$first" count="$count" 2>/dev/null
+    done | head -c @SIZE@ | sha256sum | sed 's/ .*//; s/^/machine-identity: sha256: /'
 fi
 EOF
 )
