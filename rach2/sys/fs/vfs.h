@@ -50,7 +50,7 @@
 #include "../block/block.h"
 #include "../proc/wait_queue.h"
 
-#define VFS_COVERED_PATH_MAX 64  /* NUL included; ENAMETOOLONG past it */
+#define VFS_COVERED_PATH_MAX 256 /* NUL included; ENAMETOOLONG past it */
 #define VFS_NAME_MAX         255 /* one component, NUL not counted */
 
 /* Mount states. An operation enters only an active mount (`vfs_enter`); a
@@ -342,6 +342,9 @@ struct vfs_mount {
      * private state and lock, and its own root, flags and place. */
     struct vfs_mount *bind_of;
     char bind_root[VFS_COVERED_PATH_MAX];
+    /* The order the mounts were made in, which /proc/PID/mountinfo lists
+     * them by, so that a mount over another's root comes after it. */
+    uint32_t seq;
 };
 
 /* A held place: one node on one mount. Whoever receives one from the
@@ -461,6 +464,10 @@ struct vfs_mount *vfs_mount_at(int idx);
 
 /** Whether the caller's mount namespace sees the mount `m`. */
 int vfs_mount_seen(const struct vfs_mount *m);
+
+/** Whether a live mount namespace other than the caller's sees the mount
+ * `m`, which a change made only for the caller's must then leave alone. */
+int vfs_mount_shared(const struct vfs_mount *m);
 
 /** Entry zero, the root of the mount table. */
 struct vfs_mount *vfs_root_mount(void);
@@ -594,8 +601,9 @@ void vfs_walk_unlock(struct vfs_mount *mnt);
  * flag not listed above; the
  * resolver's errors for the target; ENAMETOOLONG for a target path of
  * VFS_COVERED_PATH_MAX bytes or more; EINVAL for a target in a synthetic
- * type or at the root of the mount table; EBUSY for a target that is a
- * mount's root, is covered or is reserved by a mount being made; ENOTDIR
+ * type, but at the root of a bind of one, or at the root of the mount
+ * table; EBUSY for a target that is covered or is reserved by a mount
+ * being made; ENOTDIR
  * for a target that is no directory; the source's errors (`devfs_window_of`)
  * and EBUSY for a claimed range or a device with a mount already; ENOMEM;
  * and the constructor's error.

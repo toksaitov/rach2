@@ -1387,7 +1387,7 @@ static int synth_classify_sysvipc(const struct comp *c, int n, struct vpath *vp)
 }
 
 /** Classify the components `c` of `n` from "dev": the directory, the
- * terminals of /dev/pts, the event devices of /dev/input, the descriptor
+ * terminals of /dev/pts and its ptmx, the event devices of /dev/input, the descriptor
  * links and the devices of /dev, whose presence devfs decides. */
 static int synth_classify_dev(const struct comp *c, int n, struct vpath *vp)
 {
@@ -1398,6 +1398,11 @@ static int synth_classify_dev(const struct comp *c, int n, struct vpath *vp)
     if (comp_eq(c[1], "pts")) {
         if (n == 2) {
             vp->kind = VNODE_PTS_DIR;
+        } else if (comp_eq(c[2], "ptmx")) {
+            /* The multiplexer, as a devpts mount has it beside its
+             * terminals: the device /dev/ptmx is. */
+            vp->kind = n == 3 ? VNODE_DEV : VNODE_ENOTDIR;
+            synth_copy_name(vp, c[2]);
         } else {
             vp->pts_index = comp_uint(c[2]);
             vp->kind = vp->pts_index < 0 ? VNODE_ENOENT : n == 3 ? VNODE_PTS : VNODE_ENOTDIR;

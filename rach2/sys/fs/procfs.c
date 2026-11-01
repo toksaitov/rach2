@@ -2957,6 +2957,74 @@ static int procfs_mount_listed(int i, const struct vfs_mount *m)
     return m && m->state == VFS_ACTIVE && !vfs_mount_gone(m) && m->parent && vfs_mount_seen(m);
 }
 
+/** The path of the reader's root from the root of the mount table into
+ * `prefix`, of VFS_COVERED_PATH_MAX bytes, as an empty string for the root
+ * of the mount table, or when the path cannot be had, so that the table is
+ * shown whole. */
+static void mount_reader_root(char *prefix)
+{
+    struct vfs_ref root;
+    int rc = -ENOENT;
+
+    prefix[0] = '\0';
+    if (!current_proc || !current_proc->fs || !current_proc->fs->root_mnt) {
+        return;
+    }
+    root.mnt = current_proc->fs->root_mnt;
+    root.node = current_proc->fs->root_node;
+    if (root.node == root.mnt->root) {
+        k_strncpy(prefix, root.mnt->covered_path, VFS_COVERED_PATH_MAX);
+        rc = 0;
+    } else if (vfs_enter(root.mnt) == 0) {
+        vfs_ref_hold(&root);
+        vfs_ns_lock(root.mnt);
+        rc = vfs_node_path(root.mnt, root.node, prefix, VFS_COVERED_PATH_MAX);
+        vfs_ns_unlock(root.mnt);
+        vfs_ref_release(&root);
+    }
+    if (rc != 0 || (prefix[0] == '/' && prefix[1] == '\0')) {
+        prefix[0] = '\0';
+    }
+}
+
+/** The mount point of `m` as a reader whose root's path is `prefix`
+ * (`mount_reader_root`) sees it, or NULL for a mount outside that root,
+ * which the reader cannot reach and the tables leave out, as Linux does. */
+static const char *mount_point_seen(const struct vfs_mount *m, const char *prefix)
+{
+    uint32_t n = 0;
+
+    if (prefix[0] == '\0') {
+        return m->covered_path;
+    }
+    while (prefix[n] && m->covered_path[n] == prefix[n]) {
+        n++;
+    }
+    if (prefix[n] || (m->covered_path[n] != '/' && m->covered_path[n] != '\0')) {
+        return NULL;
+    }
+    return m->covered_path[n] ? m->covered_path + n : "/";
+}
+
+/** The index of the listed mount made next after the one whose `seq` is
+ * `after`, as `procfs_mount_listed` lists them, or -1 when none is; with
+ * `first`, the one made first. The tables list the mounts in the order
+ * they were made, so that a mount over another's root follows it. */
+static int mount_next_made(uint32_t after, int first)
+{
+    int i, best = -1;
+
+    for (i = 0; i < vfs_mount_slots(); i++) {
+        struct vfs_mount *m = vfs_mount_at(i);
+
+        if (procfs_mount_listed(i, m) && (first || m->seq > after) &&
+            (best < 0 || m->seq < vfs_mount_at(best)->seq)) {
+            best = i;
+        }
+    }
+    return best;
+}
+
 /** The source of entry `i`, `m`, as /proc/mounts names it; a bind's is that
  * of the mount it shows. */
 static const char *procfs_mount_source(int i, const struct vfs_mount *m)
@@ -3012,23 +3080,27 @@ static void ap_mount_options(struct procfs_text *t, int i, const struct vfs_moun
 /**
  * Render /proc/mounts in the six-field fstab shape `df` and `mount` parse:
  * the root, then /dev and /proc, which are real mounts to every program
- * that walks this file, then every other mount in table order, each with
- * its source as the caller gave it, its mount point, its type and its
- * options.
+ * that walks this file, then every other mount in the order they were made,
+ * each with its source as the caller gave it, its mount point from the
+ * reader's root, its type and its options. A mount outside the reader's
+ * root is left out.
  */
 static int procfs_gen_mounts(struct procfs_text *t)
 {
+    char prefix[VFS_COVERED_PATH_MAX];
     int i;
 
-    for (i = 0; i < vfs_mount_slots(); i++) {
+    mount_reader_root(prefix);
+    for (i = mount_next_made(0, 1); i >= 0; i = mount_next_made(vfs_mount_at(i)->seq, 0)) {
         struct vfs_mount *m = vfs_mount_at(i);
+        const char *point = mount_point_seen(m, prefix);
 
-        if (!procfs_mount_listed(i, m)) {
+        if (!point) {
             continue;
         }
         ap_str(t, procfs_mount_source(i, m));
         ap_ch(t, ' ');
-        ap_str(t, m->covered_path);
+        ap_str(t, point);
         ap_ch(t, ' ');
         ap_str(t, m->type->name);
         ap_ch(t, ' ');
@@ -3062,7 +3134,9 @@ uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
 
 /**
  * Render /proc/<pid>/mountinfo, the table util-linux's libmount reads, one
- * line for each mount of /proc/mounts in its order: the mount's id, its
+ * line for each mount of /proc/mounts in its order, which bubblewrap reads
+ * to find the mount it has just made at the path a descriptor of it gives,
+ * and so a mount point is a path from the reader's root: the mount's id, its
  * parent's, the major and minor numbers of the device stat gives its files,
  * the root of the mount within its file system, its mount point, its
  * options, a hyphen where Linux puts its propagation fields, its type, its
@@ -3074,14 +3148,17 @@ uint32_t procfs_mount_dev(int i, const struct vfs_mount *m)
  */
 static int procfs_gen_mountinfo(struct procfs_text *t)
 {
+    char prefix[VFS_COVERED_PATH_MAX];
     int i, j;
 
-    for (i = 0; i < vfs_mount_slots(); i++) {
+    mount_reader_root(prefix);
+    for (i = mount_next_made(0, 1); i >= 0; i = mount_next_made(vfs_mount_at(i)->seq, 0)) {
         struct vfs_mount *m = vfs_mount_at(i);
+        const char *point = mount_point_seen(m, prefix);
         uint32_t dev;
         int parent = 1, base = i;
 
-        if (!procfs_mount_listed(i, m)) {
+        if (!point) {
             continue;
         }
         for (j = 0; j < vfs_mount_slots(); j++) {
@@ -3103,7 +3180,7 @@ static int procfs_gen_mountinfo(struct procfs_text *t)
         ap_ch(t, ' ');
         ap_str(t, m->bind_of ? m->bind_root : "/");
         ap_ch(t, ' ');
-        ap_str(t, m->covered_path);
+        ap_str(t, point);
         ap_ch(t, ' ');
         ap_mount_options(t, i, m);
         ap_str(t, " - ");

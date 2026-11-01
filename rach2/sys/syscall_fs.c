@@ -3186,7 +3186,7 @@ static int type_is(const char *type, const char *name)
  * Whether the caller may mount or unmount a file system of type `type`
  * (NULL for an unmount or a change of propagation): privileged, or
  * privileged over its mount namespace, where the types a user namespace
- * may mount on Linux are proc, sysfs, tmpfs and mqueue.
+ * may mount on Linux are proc, sysfs, tmpfs, mqueue and devpts.
  */
 static int mount_privileged(const char *type)
 {
@@ -3199,8 +3199,11 @@ static int mount_privileged(const char *type)
         return 0;
     }
     return !type || type_is(type, "proc") || type_is(type, "sysfs") || type_is(type, "tmpfs") ||
-           type_is(type, "mqueue");
+           type_is(type, "mqueue") || type_is(type, "devpts");
 }
+
+/* The flags a remount without privilege may set but not clear. */
+#define REMOUNT_LOCKED (VFS_MS_RDONLY | VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC)
 
 /**
  * mount(2) with MS_REMOUNT: the mount whose root `path` names takes the
@@ -3209,7 +3212,9 @@ static int mount_privileged(const char *type)
  * system it shows, through every mount that shows it, with the options of
  * `data` (`vfs_remount`). A mount made read-only must have no descriptor
  * open for writing through what the change makes read-only, -EBUSY, as on
- * Linux.
+ * Linux. A caller without privilege, which `sys_mount` let through as
+ * privileged over its mount namespace, may change only a bind that no other
+ * live namespace sees, and may not clear REMOUNT_LOCKED there, -EPERM.
  */
 static int32_t remount_at(const char *path, uint32_t flags, int bind, const char *data)
 {
@@ -3226,6 +3231,11 @@ static int32_t remount_at(const char *path, uint32_t flags, int bind, const char
         return -EINVAL;
     }
     m = bind || !ref.mnt->bind_of ? ref.mnt : ref.mnt->bind_of;
+    if (!cred_privileged() &&
+        (!bind || vfs_mount_shared(m) || (m->flags & REMOUNT_LOCKED & ~flags))) {
+        vfs_ref_release(&ref);
+        return -EPERM;
+    }
     if ((flags & VFS_MS_RDONLY) && !(m->flags & VFS_MS_RDONLY)) {
         for (pr = proc_list; pr && rc == 0; pr = pr->next) {
             for (i = 0; pr->fds && i < fd_table_cap(pr->fds); i++) {
@@ -3292,8 +3302,12 @@ static int32_t bind_at(uintptr_t source, const char *target, uint32_t flags)
  * negative errno.
  *
  * The caller must have privilege, or privilege over its mount namespace for
- * a bind and for proc, sysfs, tmpfs and mqueue (`mount_privileged`), or the
- * call is -EPERM; a remount needs the privilege itself. The strings are
+ * a bind, for proc, sysfs, tmpfs, mqueue and devpts (`mount_privileged`),
+ * and for a remount of a bind's flags that only its namespace sees and that
+ * clears none of read-only, nosuid, nodev and noexec (`remount_at`), or the
+ * call is -EPERM; a remount of a file system needs the privilege itself, as
+ * on Linux, where those four flags of a mount a user namespace was given
+ * cannot be cleared there. The strings are
  * copied here, the target made an absolute canonical path, a relative one
  * joined to the working directory as every call that takes a path joins it;
  * the order of work and every other refusal are the VFS's (vfs_do_mount).
@@ -3322,7 +3336,9 @@ long sys_mount(isr_params_t *params)
           ~(MS_REC | MS_PRIVATE | MS_SLAVE | MS_SHARED | MS_UNBINDABLE | VFS_MS_SILENT))) {
         return mount_privileged(NULL) ? 0 : -EPERM;
     }
-    if ((SC_ARG(params, 3) & MS_REMOUNT) ? !cred_privileged() : !mount_privileged(NULL)) {
+    if ((SC_ARG(params, 3) & MS_REMOUNT) && !(SC_ARG(params, 3) & MS_BIND)
+            ? !cred_privileged()
+            : !mount_privileged(NULL)) {
         return -EPERM;
     }
     if (SC_ARG(params, 3) & MS_REMOUNT) {
