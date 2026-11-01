@@ -4287,7 +4287,7 @@
       "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
       "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
-        {"name": "waitidmusl", "node": "tests/musl/pidfdmusl", "per_architecture": true},
+        {"name": "pidfdmusl", "node": "tests/musl/pidfdmusl", "per_architecture": true},
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
         {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
