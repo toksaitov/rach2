@@ -1494,6 +1494,11 @@ int flow_release(struct fixture *f)
     int ok = 1;
     if (!setup(&r, f))
         return 0;
+    ok = check(&r,
+               fx_has(r.script, "setsid sh -c 'rach2-install --console term --update "
+                                "/dev/shm/root.ext2 /dev/disk$disk"),
+               "the release requests term when it updates the installed root") &&
+         ok;
     ok = finished_rows(&r) && ok;
     ok = closing_rows(&r) && ok;
     ok = argument_rows(&r) && ok;

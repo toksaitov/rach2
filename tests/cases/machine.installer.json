@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.installer.stick-update",
-      "behavior": "the product's install stick has three partitions, the root image and a manifest of the sealed disk on its volume, boots by USB and by IDE beside a copy of the sealed disk, saves the disk's boot and recovery partitions to its volume, updates the disk's root and arms the candidate, and writes the saved partitions back whole",
+      "behavior": "the product's install stick has three partitions, the root image and a manifest of the sealed disk on its volume, boots by USB and by IDE beside a copy of the sealed disk, saves the disk's boot and recovery partitions to its volume, updates the disk's root, requests term twice, boots the changed menu, and writes the saved partitions back whole",
       "units": ["installer", "`tests/system/install_stick_test.sh`, the stick's volume, its boots by USB and by IDE with the update and the saves, the write back, and the checks after them"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -15,13 +15,16 @@
       "steps": [
         {"step_id": "volume", "stage": "execute", "does": "read the stick's volume on the host: the root image, the manifest, and the sealed disk's two partitions"},
         {"step_id": "usb", "stage": "execute", "machine": "usb", "does": "boot the stick by USB and find both images on its volume"},
-        {"step_id": "update", "stage": "execute", "machine": "ide", "does": "boot the stick by IDE, save the disk's boot and recovery partitions to the volume, update the disk's root, read what the update kept and armed, and zero both partitions"},
+        {"step_id": "update", "stage": "execute", "machine": "ide", "does": "boot the stick by IDE, save the disk's boot and recovery partitions to the volume, update the disk's root without changing the menu, request term twice and read what the updates kept and armed"},
+        {"step_id": "console", "stage": "execute", "machine": "installed", "does": "boot the updated candidate through its changed menu and see init start term"},
+        {"step_id": "damage", "stage": "execute", "machine": "ide", "does": "boot the stick and zero the saved boot and recovery partitions"},
         {"step_id": "restore", "stage": "execute", "machine": "ide", "does": "boot the stick by IDE again and write the saved partitions back"},
         {"step_id": "judge", "stage": "execute", "does": "compare the partitions and the saved copies with the sealed disk's, and check the volume"}
       ],
       "machines": [
         {"machine_id": "usb", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "sealed"}, {"name": "stick", "bus": "device", "id": "stick"}], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
-        {"machine_id": "ide", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "sealed"}, {"name": "stick", "boot": true}], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "ide", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "sealed"}, {"name": "stick", "boot": true}], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "installed", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "sealed", "boot": true}], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "root-on-volume", "checks": "the stick's volume checks clean and has the root image, byte for byte", "source": "scenario"},
@@ -31,17 +34,20 @@
         {"assertion_id": "saved", "checks": "the stick boots by IDE, its volume has room for both partitions, and each is saved to it whole", "source": "scenario"},
         {"assertion_id": "update", "checks": "`rach2-install --update` from the stick keeps the group the root had and removes the file the image lacks", "source": "scenario"},
         {"assertion_id": "armed", "checks": "the update leaves recovery as the saved entry and the candidate as the next", "source": "scenario"},
+        {"assertion_id": "menu-kept", "checks": "an update without --console keeps grub.cfg byte for byte", "source": "scenario"},
+        {"assertion_id": "console-menu", "checks": "two --console term updates give each installed-root line one token, keep recovery lines byte for byte, and leave the same menu after the second update", "source": "scenario"},
+        {"assertion_id": "console-boot", "checks": "the changed menu boots the candidate and init starts term", "source": "scenario"},
         {"assertion_id": "damaged", "checks": "both partitions were zeroed on the disk", "source": "scenario"},
-        {"assertion_id": "restore", "checks": "the third boot writes both saved partitions back with reflash", "source": "scenario"},
+        {"assertion_id": "restore", "checks": "the last stick boot writes both saved partitions back with reflash", "source": "scenario"},
         {"assertion_id": "restored", "checks": "both partitions are again the sealed disk's, byte for byte", "source": "scenario"},
         {"assertion_id": "saves", "checks": "the copies saved on the volume are the sealed disk's partitions, byte for byte", "source": "scenario"},
-        {"assertion_id": "volume-clean", "checks": "the stick's volume checks clean after the three boots", "source": "scenario"}
+        {"assertion_id": "volume-clean", "checks": "the stick's volume checks clean after all boots", "source": "scenario"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
       "progress": [
-        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5},
-        {"witness_id": "update", "kind": "quiet", "means": "`rach2-install --update` has written the root from the stick", "limit": 1, "bound": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 7200000000}}
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 7},
+        {"witness_id": "update", "kind": "quiet", "means": "`rach2-install --update` has written the root from the stick", "limit": 3, "bound": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 7200000000}}
       ],
       "bounds": {"case": {"floor_us": 5000000, "initial_us": 7200000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 600000000, "ceiling_us": 1800000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}}},
       "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1476395008, "disk_bytes": 6442450944, "locks": [], "ports": 0, "loop_devices": 0},

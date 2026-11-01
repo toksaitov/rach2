@@ -139,8 +139,9 @@
 # * transfer: the kernel and the root go to the recovery system's /dev/shm,
 #   the root decompressed on the way, and each is checked by SHA-256.
 # * kernel and install: `bootctl kernel` writes the kernel to the candidate
-#   slot, and `rach2-install --update` writes the root, keeping the machine's
-#   accounts and keys, and arms the candidate for one trial boot. The
+#   slot, and `rach2-install --console term --update` writes the root, keeps
+#   the accounts and keys, sets term as its console and arms the candidate
+#   for one trial boot. The
 #   installer runs detached on the machine, with its log and its status in
 #   /dev/shm, so that a lost connection does not stop it; it is started once,
 #   and a release started again finds it by its log and waits for it. An
@@ -810,7 +811,7 @@ install()
         later "the machine does not answer"
     started=$(printf '%s\n' "$started" | sed '$d')
     if grep -q '^install started ' "$state/record" && [ -z "$started" ]; then
-        fail install "the installer was started and its log is gone, so a reboot interrupted it; run rach2-install --update by hand from recovery"
+        fail install "the installer was started and its log is gone, so a reboot interrupted it; run rach2-install --console term --update by hand from recovery"
     fi
     root=$(digest images/os-real-gnu.ext2)
     if [ -z "$started" ] && { ! done_ transfer ||
@@ -841,10 +842,10 @@ install()
         fi
         step=install
         note "install started $(date -u '+%FT%TZ')"
-        lenovo "setsid sh -c 'rach2-install --update /dev/shm/root.ext2 /dev/disk$disk \
+        lenovo "setsid sh -c 'rach2-install --console term --update /dev/shm/root.ext2 /dev/disk$disk \
             > /dev/shm/install.log 2>&1; echo \$? > /dev/shm/install.status' \
             > /dev/null 2>&1 < /dev/null &" || fail install "the installer could not be started"
-        say "install: rach2-install --update runs on the machine"
+        say "install: rach2-install --console term --update runs on the machine"
     fi
     i=0
     while :; do
