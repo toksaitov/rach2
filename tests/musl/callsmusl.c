@@ -50,7 +50,11 @@
  * copies a file's bytes into another at both offsets and stops at the end,
  * SEEK_DATA finds data at the offset and SEEK_HOLE the hole at the end,
  * FICLONE is EOPNOTSUPP, faccessat2 takes AT_EACCESS, AT_SYMLINK_NOFOLLOW and
- * AT_EMPTY_PATH, splice from a closed descriptor is EBADF, and a pty master
+ * AT_EMPTY_PATH, and splice from a closed descriptor is EBADF.
+ * copy_file_range of 100 KiB between ranges of one file that overlap, opened
+ * through a directory and a bind of it, is EINVAL and leaves the file as it
+ * was. Two readers of a pipe, one splicing it into a full socket and one
+ * reading it, never both get a byte. A pty master
  * reads the slave's last output and then EIO once the slave has closed.
  * posix_fallocate gives a file in /dev/shm its pages, the size and the blocks
  * of the range, and answers EOPNOTSUPP for a file of KRFFS or of /proc open for
@@ -91,7 +95,8 @@
  * `close-range-einval-flag`, `close-range-backward`, `close-range-end`,
  * `splice-pipe-null`, `splice-file-pipe`, `tee-pipes`, `sendfile-socket`,
  * `sendfile-file`, `copy-file-range`, `seek-data-hole`, `ficlone-eopnotsupp`,
- * `faccessat2`, `splice-ebadf`, `pty-hangup-eio`,
+ * `faccessat2`, `splice-ebadf`, `copy-file-range-bind-overlap`,
+ * `splice-readers-once`, `pty-hangup-eio`,
  * `fallocate-krffs`, `fallocate-ebadf`, `fallocate-einval`, `fallocate-espipe`,
  * `fallocate-mode`, `fallocate-proc`, `fallocate-shm`, `adjtimex`,
  * `clock-adjtime`, `listxattr`, `getxattr`, `lsetxattr-enoent`,
@@ -128,6 +133,7 @@
 #include <sys/ioctl.h>
 #include <sys/klog.h>
 #include <sys/mman.h>
+#include <sys/mount.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/sendfile.h>
@@ -1205,6 +1211,212 @@ static int copies(void)
     return 0;
 }
 
+/* The directory, the bind of it, and the bytes of the file of
+ * `bind_overlap`: more than three of a copy's 32 KiB chunks, so that a
+ * forward copy over itself would overwrite input its later chunks read. */
+#define OVERLAP_SRC  "/tmp/callsmusl.src"
+#define OVERLAP_DST  "/tmp/callsmusl.dst"
+#define OVERLAP_SIZE (100 * 1024)
+
+/* The bytes `spliced_once` puts in its pipe. */
+#define SPLICED_SIZE 4096
+
+/** The byte at `i` of the files and pipes of `overlaps`. */
+static char pattern_byte(unsigned i)
+{
+    return (char)('a' + (i * 7 + i / 26) % 26);
+}
+
+/** Remove what `bind_overlap` made, whatever of it there is. */
+static void bind_overlap_clean(void)
+{
+    umount(OVERLAP_DST);
+    unlink(OVERLAP_SRC "/f");
+    rmdir(OVERLAP_DST);
+    rmdir(OVERLAP_SRC);
+}
+
+/**
+ * Check that copy_file_range from one name of a file to another, through a
+ * directory of the KRFFS root and a bind of it, whose mounts differ, of
+ * ranges that overlap is EINVAL, as Linux answers for one inode, and leaves
+ * the file as it was. Returns 0, or 1 after the failure is printed.
+ */
+static int bind_overlap(void)
+{
+    static char data[OVERLAP_SIZE];
+    off_t at = 0, to = 4096;
+    unsigned i;
+    int in, out, wrong;
+
+    for (i = 0; i < OVERLAP_SIZE; i++) {
+        data[i] = pattern_byte(i);
+    }
+    bind_overlap_clean();
+    in = -1;
+    out = -1;
+    if (mkdir(OVERLAP_SRC, 0755) != 0 || mkdir(OVERLAP_DST, 0755) != 0 ||
+        mount(OVERLAP_SRC, OVERLAP_DST, NULL, MS_BIND, NULL) != 0 ||
+        (in = open(OVERLAP_SRC "/f", O_CREAT | O_RDWR | O_TRUNC, 0600)) < 0 ||
+        write(in, data, OVERLAP_SIZE) != OVERLAP_SIZE ||
+        (out = open(OVERLAP_DST "/f", O_WRONLY)) < 0) {
+        if (in >= 0) {
+            close(in);
+        }
+        bind_overlap_clean();
+        return fail("a file of 100 KiB under a directory and a bind of it");
+    }
+    errno = 0;
+    wrong = copy_file_range(in, &at, out, &to, OVERLAP_SIZE - 4096, 0) != -1 || errno != EINVAL;
+    for (i = 0; !wrong && i < OVERLAP_SIZE; i += 4096) {
+        char got[4096];
+
+        wrong = pread(in, got, sizeof got, (off_t)i) != (ssize_t)sizeof got ||
+                memcmp(got, data + i, sizeof got) != 0;
+    }
+    close(in);
+    close(out);
+    bind_overlap_clean();
+    if (wrong) {
+        return fail(
+            "copy_file_range over itself through a bind was not EINVAL or changed the file");
+    }
+    held();
+    return 0;
+}
+
+/**
+ * The splicing child of `spliced_once`: splice the pipe's read end `from`
+ * into the socket `to` and write the count it returned, an int, to `res`.
+ * Never returns.
+ */
+static void splice_child(int from, int to, int res)
+{
+    int n = (int)splice(from, NULL, to, NULL, SPLICED_SIZE, 0);
+
+    _exit(write(res, &n, sizeof n) == (ssize_t)sizeof n ? 0 : 1);
+}
+
+/**
+ * The reading child of `spliced_once`: read the pipe's read end `from` to
+ * its end and write the count, an int, and the bytes to `res`. Never
+ * returns.
+ */
+static void read_child(int from, int res)
+{
+    char got[SPLICED_SIZE + 1];
+    int n = 0;
+    ssize_t r;
+
+    while (n < (int)sizeof got && (r = read(from, got + n, sizeof got - (size_t)n)) > 0) {
+        n += (int)r;
+    }
+    _exit(write(res, &n, sizeof n) == (ssize_t)sizeof n && write(res, got, (size_t)n) == (ssize_t)n
+              ? 0
+              : 1);
+}
+
+/** Wait for the child `pid` and return whether it exited with status 0. */
+static int reaped_ok(pid_t pid)
+{
+    int status;
+
+    return waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+/**
+ * Check that a byte of a pipe goes to one reader. A child splices
+ * SPLICED_SIZE bytes from the pipe into a socket that is full, and is seen
+ * asleep with them in hand; a second child then reads the pipe to its end,
+ * and once it has ended or is seen asleep the caller empties the socket. The
+ * bytes the socket carries and those the reader got must be the pipe's,
+ * each once, in order. Returns 0, or 1 after the failure is printed.
+ */
+static int spliced_once(void)
+{
+    char data[SPLICED_SIZE], fill[4096], got[SPLICED_SIZE + 1];
+    int p[2], sv[2], res[2], spliced = -1, read_n = -1;
+    size_t filled = 0, left;
+    ssize_t r;
+    pid_t splicer, reader;
+    unsigned i;
+    int ok;
+
+    for (i = 0; i < SPLICED_SIZE; i++) {
+        data[i] = pattern_byte(i);
+    }
+    memset(fill, '#', sizeof fill);
+    if (pipe(p) != 0 || pipe(res) != 0 || socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
+        write(p[1], data, SPLICED_SIZE) != SPLICED_SIZE || fcntl(sv[0], F_SETFL, O_NONBLOCK) != 0) {
+        return fail("a pipe and a socket pair to splice it into");
+    }
+    close(p[1]);
+    while ((r = write(sv[0], fill, sizeof fill)) > 0) {
+        filled += (size_t)r;
+    }
+    if (errno != EAGAIN || fcntl(sv[0], F_SETFL, 0) != 0) {
+        return fail("filling the socket");
+    }
+    splicer = fork();
+    if (splicer == 0) {
+        splice_child(p[0], sv[0], res[1]);
+    }
+    if (splicer < 0 || !seen_asleep(splicer)) {
+        return fail("the splice into a full socket did not sleep");
+    }
+    reader = fork();
+    if (reader == 0) {
+        read_child(p[0], res[1]);
+    }
+    if (reader < 0) {
+        return fail("fork of the reader");
+    }
+    seen_asleep(reader);
+    for (left = filled; left > 0; left -= (size_t)r) {
+        r = read(sv[1], got, left < sizeof got ? left : sizeof got);
+        if (r <= 0) {
+            return fail("reading back the socket's filling");
+        }
+    }
+    ok = reaped_ok(splicer) && reaped_ok(reader);
+    close(sv[0]);
+    close(p[0]);
+    close(res[1]);
+    if (!ok || read(res[0], &spliced, sizeof spliced) != (ssize_t)sizeof spliced ||
+        read(res[0], &read_n, sizeof read_n) != (ssize_t)sizeof read_n || spliced < 0 ||
+        read_n < 0 || spliced + read_n > SPLICED_SIZE + 1) {
+        return fail("the splicer's and the reader's counts");
+    }
+    ok = spliced + read_n == SPLICED_SIZE && read(res[0], got, (size_t)read_n) == (ssize_t)read_n &&
+         memcmp(got, data + spliced, (size_t)read_n) == 0;
+    for (left = (size_t)spliced; ok && left > 0; left -= (size_t)r) {
+        r = read(sv[1], got, left);
+        ok = r > 0 && memcmp(got, data + (spliced - (int)left), (size_t)r) == 0;
+    }
+    close(sv[1]);
+    close(res[0]);
+    if (!ok) {
+        char why[96];
+
+        snprintf(why, sizeof why, "the splice gave %d bytes and the reader %d of %d", spliced,
+                 read_n, SPLICED_SIZE);
+        return fail(why);
+    }
+    held();
+    return 0;
+}
+
+/**
+ * Check the copies that a second name of a file or a second reader of a
+ * pipe could turn wrong: copy_file_range through a bind, and a splice from
+ * a pipe that another process reads. Returns 0, or 1 after the failure is
+ * printed.
+ */
+static int overlaps(void)
+{
+    return bind_overlap() || spliced_once();
+}
+
 /**
  * Check that a pty master reads the slave's last output and then EIO once
  * the slave has closed, as Linux's does. Returns 0, or 1 after the failure
@@ -1827,6 +2039,8 @@ static void plan(void)
                                          "ficlone-eopnotsupp",
                                          "faccessat2",
                                          "splice-ebadf",
+                                         "copy-file-range-bind-overlap",
+                                         "splice-readers-once",
                                          "pty-hangup-eio",
                                          "fallocate-krffs",
                                          "fallocate-ebadf",
@@ -1881,9 +2095,9 @@ int main(int argc, char **argv)
     probe_args(argc, argv);
     plan();
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
-        hangups() || reserves() || adjusts() || advises() || terminals() || peaks() || refusals() ||
-        setgids() || privacies() || timers() || queues() || flows() || signalfds() || cputimers() ||
-        devmems() || klogs() || rtcs()) {
+        overlaps() || hangups() || reserves() || adjusts() || advises() || terminals() || peaks() ||
+        refusals() || setgids() || privacies() || timers() || queues() || flows() || signalfds() ||
+        cputimers() || devmems() || klogs() || rtcs()) {
         return 1;
     }
     report_end();

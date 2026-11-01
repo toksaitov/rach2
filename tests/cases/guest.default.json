@@ -5937,6 +5937,8 @@
         {"assertion_id": "ficlone-eopnotsupp", "checks": "FICLONE between two files of one mount is EOPNOTSUPP.", "source": "program"},
         {"assertion_id": "faccessat2", "checks": "faccessat2 takes AT_EACCESS, AT_SYMLINK_NOFOLLOW for a dangling link and AT_EMPTY_PATH, and a dangling link followed is ENOENT.", "source": "program"},
         {"assertion_id": "splice-ebadf", "checks": "splice from a closed descriptor is EBADF.", "source": "program"},
+        {"assertion_id": "copy-file-range-bind-overlap", "checks": "copy_file_range of 100 KiB between overlapping ranges of one file, opened through a directory and a bind of it, is EINVAL and leaves the file as it was.", "source": "program"},
+        {"assertion_id": "splice-readers-once", "checks": "Of two readers of a pipe, one splicing it into a full socket and one reading it, no two get the same byte, and together they get every byte in order.", "source": "program"},
         {"assertion_id": "pty-hangup-eio", "checks": "A pty master reads the slave's last output and then EIO once the slave has closed.", "source": "program"},
         {"assertion_id": "fallocate-krffs", "checks": "posix_fallocate of a KRFFS file open for writing is EOPNOTSUPP.", "source": "program"},
         {"assertion_id": "fallocate-ebadf", "checks": "posix_fallocate of a file open only for reading is EBADF.", "source": "program"},
