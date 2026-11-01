@@ -1,4 +1,4 @@
-.Dd October 30, 2026
+.Dd November 1, 2026
 .Dt MIXER 4
 .Os
 .Sh NAME
@@ -24,7 +24,12 @@ The driver keeps the level set and applies it again each time a stream
 starts, and the console's own
 .Dv AUDIO_SET_VOLUME
 request sets the same level.
-It is 100 at boot.
+It is 100 when the driver starts;
+.Xr init 8
+then sets the level kept from the last halt, power-off or reboot, if
+there is one.
+The device keeps no level itself, so one set and then lost to a power cut
+is not kept.
 A level of 0 mutes HD Audio's amplifiers.
 .Bl -tag -width SOUND_MIXER_WRITE_VOLUME
 .It Dv SOUND_MIXER_READ_VOLUME
@@ -62,4 +67,5 @@ No driver with a volume is in use.
 .Sh SEE ALSO
 .Xr console 4 ,
 .Xr dsp 4 ,
-.Xr input 4
+.Xr input 4 ,
+.Xr init 8

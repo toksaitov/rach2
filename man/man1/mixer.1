@@ -1,4 +1,4 @@
-.Dd October 30, 2026
+.Dd November 1, 2026
 .Dt MIXER 1
 .Os
 .Sh NAME
@@ -60,6 +60,10 @@ later
 .Cm mute
 records the new level.
 .Pp
+The level set is kept across a halt, a power-off or a reboot, which
+.Xr init 8
+saves it at, and lost to a power cut.
+.Pp
 acpid's volume actions run
 .Nm
 for the volume keys and the mute key; see
@@ -74,7 +78,9 @@ The mixer device, present while an audio driver with a volume is in use.
 .It Pa /var/run/mixer.mute
 The level before a mute, as
 .Ar L : Ns Ar R .
-It is removed at boot, when the driver's level is set afresh.
+.Xr init 8
+keeps it across a reboot with the level, so that a volume muted at the
+halt is still muted after it.
 .El
 .Sh EXIT STATUS
 .Nm

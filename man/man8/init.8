@@ -262,6 +262,45 @@ When it stops the machine, it saves each backlight's level there, under a
 temporary name renamed into place.
 It keeps at most four backlights, those present at boot.
 .Pp
+Every build keeps the mixer's levels across a reboot, as alsactl store and
+restore keep them on Linux.
+At boot, after it empties
+.Pa /var/run
+and before it starts acpid or any session, it reads the channels of
+.Pa /dev/mixer
+from its
+.Dv SOUND_MIXER_READ_DEVMASK
+and sets each one that
+.Pa /var/lib/mixer
+names to the level kept there, with
+.Dv MIXER_WRITE ;
+the file has one line a channel,
+.Ql NAME L:R ,
+NAME being OSS's name of the channel, such as
+.Ql vol .
+A missing file leaves the driver's levels alone, and so does a malformed
+one, after the diagnostic below; a machine with no mixer keeps nothing.
+It puts
+.Xr mixer 1 Ns 's
+record of a mute back from
+.Pa /var/lib/mixer.mute
+to
+.Pa /var/run/mixer.mute ,
+so that a volume muted at the halt is still muted, and can be unmuted,
+after it.
+When it stops the machine, it saves each channel's level and the record
+there, under temporary names renamed into place, or removes the kept record
+when there is none.
+.Nm
+saves only when it stops the machine and
+.Xr mixer 1
+writes nothing there itself, so a level set and then lost to a power cut,
+or to a
+.Fl f
+that stops the machine without signalling
+.Nm ,
+is not kept, as on Linux without a running daemon.
+.Pp
 Every build keeps IPv6's stable secret across a reboot, so that the
 addresses a router's prefix gives the machine stay the same from one boot
 to the next, as Linux's do under systemd.
@@ -331,7 +370,7 @@ Each start of either server is reported on the console as
 .Pp
 .Nm
 handles the signals sent by the BusyBox shutdown applets, each by saving
-the backlights' levels and stopping the machine:
+the backlights' and the mixer's levels and stopping the machine:
 .Bl -tag -width SIGUSR1
 .It Dv SIGUSR1
 Halt the machine.
@@ -360,6 +399,9 @@ boot.
 .It Pa /var/lib/ipv6-stable-secret
 IPv6's stable secret, an address's text, mode 0600, made at the first
 boot.
+.It Pa /var/lib/mixer , Pa /var/lib/mixer.mute
+The mixer's levels and its record of a mute, saved when the machine stops
+and written back at boot.
 .It Pa /etc/rach2/limits
 Initial resource limits.
 .It Pa /etc/rach2/sshd.conf
@@ -405,6 +447,11 @@ the second with 0600, and keeps what they have, adding the boot's record
 to the first.
 .El
 .Sh DIAGNOSTICS
+A kept mixer file that is not lines of
+.Ql NAME L:R
+leaves the levels alone, with:
+.Dl init: mixer: /var/lib/mixer: malformed; levels left alone
+.Pp
 The recovery file system check reports its status as:
 .Dl init: e2fsck: /dev/diskNpM: status S
 .Pp
