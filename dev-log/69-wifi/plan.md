@@ -177,6 +177,7 @@ Owns `wireless/nl80211.c`, `tests/host/nl80211_hosttest.c` and `man/man7/nl80211
 * 10e. `NEW_KEY`, `SET_KEY` (default, default-management), `DEL_KEY`, `SET_STATION` (authorized), `GET_STATION` with the signal, which `bgscan` reads; `GET_REG`, `REGISTER_FRAME` and `FRAME` for action frames; the rest answered `EOPNOTSUPP` as the study lists.
 * 10f. The host test against stubs of the station layer, replaying the requests of task 14's trace and comparing the answers' attributes; until the trace exists, the study's list. The commands of the trace that are missing are added or named in the Readme's Limits.
 * Done: the host test passes.
+* 10h. One cfg ops struct in the shape of `cfg80211_ops` between nl80211 and the station layer (scan, authenticate, associate, connect, disconnect, the keys, the station and `get_station`), whose one implementation is the softMAC station layer over `wlan_radio_ops`, so that a fullMAC driver can later plug in at that level. The owner, 2026-11-02: "Ensure, the driver abstractions are in place to add drivers easily for more chipsets and to be able to reuse common structures."
 
 ### 11. The software radio
 
