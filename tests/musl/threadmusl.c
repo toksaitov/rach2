@@ -32,9 +32,9 @@
  * when it calls execve is released, and its next locker gets EOWNERDEAD. A
  * thread that calls exit ends them all. A thread other than the first empties
  * the console's queue of lines, opens the framebuffer, sets its palette, writes
- * a pixel, reads the console as the display's owner reads it, raw scancodes, of
- * which it finds none, where the line discipline would answer EAGAIN, and
- * closes it, which gives the display back for another process to open: the
+ * a pixel, sets K_RAW and raw termios with VMIN and VTIME zero, reads the
+ * console's empty queue without waiting, and closes /fb, which gives the
+ * display back for another process to open: the
  * display belongs to the process, whichever thread opened it.
  *
  * It prints "THREADMUSL OK" and exits 0 on success, or prints "THREADMUSL
@@ -65,6 +65,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <linux/kd.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -73,10 +74,12 @@
 #include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
+#include <termios.h>
 #include <unistd.h>
 
 #include "../probe_args.h"
 #include "../probe_report.h"
+#include "../../rach2/include/rach2/fb.h"
 
 #define THREADS 4
 #define ROUNDS  10000
@@ -84,9 +87,6 @@
 /* The loopback ports of the socket rows, on which no other probe listens. */
 #define LOST_TCP_PORT ((unsigned short)probe_port(7480))
 #define LOST_UDP_PORT ((unsigned short)probe_port(7481))
-
-/* The framebuffer's requests, as the kernel numbers them. */
-#define FB_SETPALETTE 0x4603
 
 /* The counting threads' mutex and count, the condition row's value, each
  * counting thread's thread-local value and thread id, the thread that ran
@@ -243,7 +243,7 @@ static const struct {
     {"fb-open", "a thread's open of the framebuffer"},
     {"fb-palette", "a thread's palette on the framebuffer it opened"},
     {"fb-pixel", "a thread's pixel on the framebuffer it opened"},
-    {"fb-scancodes", "a thread that owns the framebuffer reads raw scancodes"},
+    {"fb-scancodes", "a thread configures raw keyboard input through the console"},
     {"fb-close", "a thread's close of the framebuffer"},
     {"fb-given-back", "the display a thread's close gave back"},
     {"signal-pending", "a process signal all threads block was not pending with no handler run"},
@@ -1224,18 +1224,54 @@ static int console_emptied(void)
 }
 
 /**
+ * Set K_RAW and raw termios, then read the empty console without waiting.
+ * The caller owns /fb; its last close restores the console's saved settings.
+ * Returns 0, or -1 with errno from a failed call or EIO for a wrong result.
+ */
+static int console_scancodes(void)
+{
+    struct termios raw;
+    unsigned char keys[16];
+    int mode = -1;
+    ssize_t n;
+
+    if (tcgetattr(0, &raw) != 0) {
+        return -1;
+    }
+    cfmakeraw(&raw);
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 0;
+    if (tcsetattr(0, TCSANOW, &raw) != 0 || ioctl(0, KDSKBMODE, K_RAW) != 0 ||
+        ioctl(0, KDGKBMODE, &mode) != 0) {
+        return -1;
+    }
+    if (mode != K_RAW) {
+        errno = EIO;
+        return -1;
+    }
+    n = read(0, keys, sizeof(keys));
+    if (n < 0) {
+        return -1;
+    }
+    if (n != 0) {
+        errno = EIO;
+        return -1;
+    }
+    return 0;
+}
+
+/**
  * The thread of `framebuffer_row`, which is not the first. With O_NONBLOCK
  * on the console, empty its queue of lines while no process owns the
  * display; then open the framebuffer, set its palette, write a pixel, and
- * read the console, which for the display's owner reads raw scancodes and,
- * none typed, answers 0, where the line discipline, its queue empty, answers
- * EAGAIN; and close it. Returns 0, or the number of the step that failed,
- * with its errno in `fb_errno`.
+ * set K_RAW and raw termios and read the console, which with VMIN and VTIME
+ * zero and no keys typed answers 0; and close /fb to restore the console.
+ * Returns 0, or the number of the step that failed, with its errno in
+ * `fb_errno`.
  */
 static void *use_framebuffer(void *arg)
 {
     static unsigned char palette[768];
-    unsigned char keys[16];
     long step = 0;
     int fd = -1;
     int flags = fcntl(0, F_GETFL);
@@ -1249,7 +1285,7 @@ static void *use_framebuffer(void *arg)
         step = 3;
     } else if (write(fd, "\017", 1) != 1) {
         step = 4;
-    } else if (read(0, keys, sizeof(keys)) != 0) {
+    } else if (console_scancodes() != 0) {
         step = 5;
     }
     if (step != 0) {
@@ -1268,8 +1304,8 @@ static void *use_framebuffer(void *arg)
 /**
  * Check the framebuffer, opened, used and closed by a thread that is not the
  * first: the display is the process's, so the thread's palette and pixel are
- * taken, its read of the console is the owner's, and its close gives the
- * display back, which a child process then opens. Returns 0, or 1 after the
+ * taken. It sets raw keyboard input on the console, and its close gives the
+ * display back, which a child process then opens. Returns 0, or 1 after a
  * failure is printed.
  */
 static int framebuffer_row(void)

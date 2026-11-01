@@ -26,11 +26,13 @@
 
 #include "probe.h"
 #include "probe_args.h"
+#include "../rach2/include/rach2/fb.h"
 
 #define O_RDONLY    0
 #define O_WRONLY    1
 #define O_RDWR      2
 #define O_NOCTTY    0400
+#define O_NONBLOCK  04000
 #define O_DIRECTORY 0200000
 
 /* A linux_dirent64 record has its 64-bit d_ino first, its length at 16 and
@@ -38,14 +40,11 @@
 #define D_RECLEN 16
 #define D_NAME   19
 
-#define ENOENT        2
-#define ENOTDIR       20
-#define ENOSPC        28
-#define EBUSY         16
-#define FB_MODE_13H   0x4601
-#define FB_MODE_TEXT  0x4602
-#define FB_SETPALETTE 0x4603
-#define TIOCGPTN      0x80045430
+#define ENOENT   2
+#define ENOTDIR  20
+#define ENOSPC   28
+#define EBUSY    16
+#define TIOCGPTN 0x80045430
 
 /** End the process with `status`; it does not return. */
 static void sys_exit(int status)
@@ -275,24 +274,25 @@ static void past_a_file(void)
 
 /**
  * The ownership of the framebuffer, /fb. The owner leaves graphics mode and
- * enters it again, and can still write. While it owns the display, a second
- * open and a text-mode request on a forked child's inherited descriptor are
- * -EBUSY, and the owner can still write. Once the owner releases the display
- * by entering text mode, the child opens it, and the first owner's
- * descriptor can then neither release nor take the display nor set its
- * palette, a new open is -EBUSY, and the child can still write. The child
+ * enters it again, and can still write. A forked child cannot use its
+ * inherited descriptor, but its own open takes the display until it closes
+ * it. The parent reads LOST and REGAINED and can write again. Once it
+ * releases the display by entering text mode, the child opens it, and the
+ * first owner's descriptor can neither release nor take the display nor set
+ * its palette, a new open is -EBUSY, and the child can still write. The child
  * reports its own failures by exiting 1.
  */
 static void framebuffer(void)
 {
     int ready[2], next[2];
     int fd, child, other, status = 0;
+    struct fb_event event;
     char one = 1;
     static char palette[768];
 
     check(syscall1(SYS_PIPE, (long)ready) == 0, "framebuffer ready pipe");
     check(syscall1(SYS_PIPE, (long)next) == 0, "framebuffer command pipe");
-    fd = do_open("/fb", O_WRONLY);
+    fd = do_open("/fb", O_RDWR | O_NONBLOCK);
     check(fd >= 0, "open framebuffer");
     check(syscall3(SYS_IOCTL, fd, FB_MODE_TEXT, 0) == 0, "framebuffer text mode");
     check(syscall3(SYS_IOCTL, fd, FB_MODE_13H, 0) == 0, "framebuffer graphics reentry");
@@ -307,9 +307,17 @@ static void framebuffer(void)
     if (child == 0) {
         syscall1(SYS_CLOSE, ready[0]);
         syscall1(SYS_CLOSE, next[1]);
-        check(do_open("/fb", O_WRONLY) == -EBUSY, "second opener cannot take owned display");
         check(syscall3(SYS_IOCTL, fd, FB_MODE_TEXT, 0) == -EBUSY,
               "inherited descriptor cannot release parent's display");
+        check(syscall3(SYS_WRITE, fd, (long)&one, 1) == -EBUSY,
+              "inherited descriptor cannot draw on parent's display");
+        other = do_open("/fb", O_WRONLY);
+        check(other >= 0, "descendant takes owned display through its own open");
+        if (other >= 0) {
+            check(syscall3(SYS_WRITE, other, (long)&one, 1) == 1,
+                  "descendant draws on display it took");
+            check(syscall1(SYS_CLOSE, other) == 0, "descendant gives display back");
+        }
         syscall3(SYS_WRITE, ready[1], (long)&one, 1);
         check(do_read(next[0], &one, 1) == 1, "wait for display release");
         other = do_open("/fb", O_WRONLY);
@@ -324,9 +332,15 @@ static void framebuffer(void)
     }
     syscall1(SYS_CLOSE, ready[1]);
     syscall1(SYS_CLOSE, next[0]);
-    check(do_read(ready[0], &one, 1) == 1, "wait for inherited descriptor check");
+    check(do_read(ready[0], &one, 1) == 1, "wait for descendant to give display back");
+    check(do_read(fd, (char *)&event, sizeof(event)) == sizeof(event) &&
+              event.type == FB_EVENT_LOST,
+          "first owner receives display lost event");
+    check(do_read(fd, (char *)&event, sizeof(event)) == sizeof(event) &&
+              event.type == FB_EVENT_REGAINED,
+          "first owner receives display regained event");
     check(syscall3(SYS_WRITE, fd, (long)&one, 1) == 1,
-          "second opener preserves first owner's graphics mode");
+          "descendant's close restores first owner's graphics mode");
     check(syscall3(SYS_IOCTL, fd, FB_MODE_TEXT, 0) == 0, "first owner releases display");
     syscall3(SYS_WRITE, next[1], (long)&one, 1);
     check(do_read(ready[0], &one, 1) == 1, "wait for second owner");
