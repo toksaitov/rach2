@@ -189,10 +189,11 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * there being no swap; the regions a process may map (mm/vm.h); the ids an
  * unmapped id reads as (proc/ns.h); the boot's UUID and a new one for
  * each open; the bounds of descriptors and open files and the count of
- * those open (fs/fd.h); and whether exec randomizes a new image's layout
- * (mm/vm.h). An entry whose text is empty is procfs's, which reads its
- * value when the file is opened. A new entry goes at the end, so that the
- * indices SYNTH_SYS_ names stay the same. */
+ * those open (fs/fd.h); whether exec randomizes a new image's layout
+ * (mm/vm.h); and net/ipv6/conf, whose entries follow the table's
+ * (`synth_sys_ipv6`). An entry whose text is empty is procfs's, which
+ * reads its value when the file is opened. A new entry goes at the end, so
+ * that the indices SYNTH_SYS_ names stay the same. */
 static const struct {
     int parent;
     const char *name;
@@ -238,15 +239,63 @@ static const struct {
                {1, "nr_open", ""},
                {1, "file-max", ""},
                {1, "file-nr", ""},
-               {6, "randomize_va_space", ""}};
+               {6, "randomize_va_space", ""},
+               {20, "ipv6", 0},
+               {42, "conf", 0}};
+
+/* The entries of the table. */
+#define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
+
+/* net/ipv6/conf's directories, `all`, `default`, `lo` and the cards'
+ * interfaces, and the files of each, in the order of SYNTH_IPV6_*. Each
+ * directory is an entry after the table's, followed by an entry for each
+ * of its files. */
+static const char *const ipv6_dirs[SYNTH_IPV6_DIRS] = {"all",  "default", "lo",  "eth0",
+                                                       "eth1", "eth2",    "eth3"};
+static const char *const ipv6_files[SYNTH_IPV6_KEYS] = {
+    "accept_ra", "autoconf", "disable_ipv6", "forwarding", "stable_secret", "use_tempaddr"};
 
 int synth_sys_count(void)
 {
-    return (int)(sizeof(sysents) / sizeof(sysents[0]));
+    return SYNTH_SYS_TABLE + SYNTH_IPV6_DIRS * (1 + SYNTH_IPV6_KEYS);
+}
+
+int synth_sys_ipv6(int entry, const char **dir, int *key)
+{
+    int at = entry - SYNTH_SYS_TABLE;
+
+    if (at < 0 || entry >= synth_sys_count()) {
+        return 0;
+    }
+    *dir = ipv6_dirs[at / (1 + SYNTH_IPV6_KEYS)];
+    *key = at % (1 + SYNTH_IPV6_KEYS) - 1;
+    return 1;
+}
+
+/** Whether the net/ipv6/conf directory `name` is there: `all` and
+ * `default` always, and an interface's while the caller sees it
+ * (`sysfs_net_index`). */
+static int ipv6_dir_present(const char *name)
+{
+    int len = 0;
+
+    if (name == ipv6_dirs[0] || name == ipv6_dirs[1]) {
+        return 1;
+    }
+    while (name[len] != '\0') {
+        len++;
+    }
+    return sysfs_net_index(name, len) >= 0;
 }
 
 int synth_sys_writable(int entry)
 {
+    const char *dir;
+    int key;
+
+    if (synth_sys_ipv6(entry, &dir, &key)) {
+        return key >= 0;
+    }
     return entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME ||
            entry == SYNTH_SYS_IP_FORWARD ||
            (entry >= SYNTH_SYS_INOTIFY_QUEUED && entry <= SYNTH_SYS_INOTIFY_WATCHES) ||
@@ -266,11 +315,13 @@ static const struct {
                 {SYNTH_PROC_NETSNMP, "snmp"},
                 {SYNTH_PROC_NETPACKET, "packet"},
                 {SYNTH_PROC_NETSNMP6, "snmp6"},
+                {SYNTH_PROC_NETIFINET6, "if_inet6"},
+                {SYNTH_PROC_NETIPV6RT, "ipv6_route"},
                 {SYNTH_PROC_NETSTAT_RT, "stat/rt_cache"},
                 {SYNTH_PROC_NETSTAT_ARP, "stat/arp_cache"}};
 
 /* The files of `netfiles` directly in /proc/net, the ones before stat's. */
-#define SYNTH_NET_FILES 7
+#define SYNTH_NET_FILES 9
 
 const char *synth_net_name(int origin)
 {
@@ -291,17 +342,35 @@ int synth_net_file(int n)
 
 const char *synth_sys_name(int entry)
 {
-    return entry >= 0 && entry < synth_sys_count() ? sysents[entry].name : 0;
+    const char *dir;
+    int key;
+
+    if (synth_sys_ipv6(entry, &dir, &key)) {
+        return key < 0 ? dir : ipv6_files[key];
+    }
+    return entry >= 0 && entry < SYNTH_SYS_TABLE ? sysents[entry].name : 0;
 }
 
 int synth_sys_parent(int entry)
 {
-    return entry >= 0 && entry < synth_sys_count() ? sysents[entry].parent : -1;
+    const char *dir;
+    int key;
+
+    if (synth_sys_ipv6(entry, &dir, &key)) {
+        return key >= 0 ? entry - 1 - key : ipv6_dir_present(dir) ? SYNTH_SYS_IPV6_CONF : -1;
+    }
+    return entry >= 0 && entry < SYNTH_SYS_TABLE ? sysents[entry].parent : -1;
 }
 
 const char *synth_sys_text(int entry)
 {
-    return entry >= 0 && entry < synth_sys_count() ? sysents[entry].text : 0;
+    const char *dir;
+    int key;
+
+    if (synth_sys_ipv6(entry, &dir, &key)) {
+        return key < 0 ? 0 : "";
+    }
+    return entry >= 0 && entry < SYNTH_SYS_TABLE ? sysents[entry].text : 0;
 }
 
 /** Append the path of the /proc/sys entry `entry`, or /proc/sys for an
@@ -312,13 +381,13 @@ static void synth_put_sys(char *out, int cap, int *pos, int entry)
         synth_put(out, cap, pos, "/proc/sys");
         return;
     }
-    if (sysents[entry].parent < 0) {
+    if (synth_sys_parent(entry) < 0) {
         synth_put(out, cap, pos, "/proc");
     } else {
-        synth_put_sys(out, cap, pos, sysents[entry].parent);
+        synth_put_sys(out, cap, pos, synth_sys_parent(entry));
     }
     synth_put(out, cap, pos, "/");
-    synth_put(out, cap, pos, sysents[entry].name);
+    synth_put(out, cap, pos, synth_sys_name(entry));
 }
 
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
@@ -529,12 +598,12 @@ static int synth_classify_sys(const struct comp *c, int n, struct vpath *vp)
     int at = 0, i, k;
 
     for (k = 0; k < n; k++) {
-        if (sysents[at].text) {
+        if (synth_sys_text(at)) {
             vp->kind = VNODE_ENOTDIR;
             return vp->kind;
         }
-        for (i = 1;
-             i < synth_sys_count() && !(sysents[i].parent == at && comp_eq(c[k], sysents[i].name));
+        for (i = 1; i < synth_sys_count() &&
+                    !(synth_sys_parent(i) == at && comp_eq(c[k], synth_sys_name(i)));
              i++) {
         }
         if (i == synth_sys_count()) {
@@ -544,7 +613,7 @@ static int synth_classify_sys(const struct comp *c, int n, struct vpath *vp)
         at = i;
     }
     vp->sysent = at;
-    vp->kind = sysents[at].text ? VNODE_PROC_SYS_FILE : VNODE_PROC_SYS_DIR;
+    vp->kind = synth_sys_text(at) ? VNODE_PROC_SYS_FILE : VNODE_PROC_SYS_DIR;
     return vp->kind;
 }
 
