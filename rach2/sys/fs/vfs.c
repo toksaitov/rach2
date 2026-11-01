@@ -1445,6 +1445,8 @@ void vfs_desc_open(struct vfs_mount *mnt)
     mnt->refs++;
 }
 
+static void reap_if_detached(const struct vfs_mount *mnt);
+
 void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
 {
     struct vfs_ref r;
@@ -1459,6 +1461,7 @@ void vfs_desc_close(struct vfs_mount *mnt, void *node, void *handle)
         k_panic("vfs: a description closed on a mount that had none");
     }
     mnt->refs--;
+    reap_if_detached(mnt);
 }
 
 /* Repointing, for a KRFFS relocation. */
@@ -3429,9 +3432,10 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
  * itself is what a second mount of it collides with (`mount_source`). A
  * read-only device, a write-protected stick or a loop device attached
  * read-only, makes the mount read-only, and the type learns it from the
- * flags. A mount of type proc changes nothing, since every /proc shows the
- * processes of its reader's PID namespace, as `unshare --mount-proc` would
- * have it.
+ * flags. A mount of type proc over a directory of /proc changes nothing,
+ * since every /proc shows the processes of its reader's PID namespace, as
+ * `unshare --mount-proc` would have it; over any other directory it places
+ * a mount of the same files there, as a sandbox's new root needs.
  */
 int vfs_do_mount(const char *source, const char *target, const char *type, uint32_t flags,
                  const char *options)
@@ -3454,10 +3458,9 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     if (rc != 0) {
         return rc;
     }
-    if (t == &vfs_procfs_type) {
-        rc = tref.mnt->type == &vfs_procfs_type ? 0 : -ENODEV;
+    if (t == &vfs_procfs_type && tref.mnt->type == &vfs_procfs_type) {
         vfs_ref_release(&tref);
-        return rc;
+        return 0;
     }
     rc = target_check(&tref, target, canon);
     if (rc != 0) {
@@ -3505,6 +3508,17 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     m->state = VFS_ACTIVE;
     klog(KLOG_INFO, "vfs", "mounted: %s on %s (%s%s)", source, m->covered_path, t->name,
          (flags & VFS_MS_RDONLY) ? ", read-only" : "");
+    return 0;
+}
+
+/** Whether the mount `c` is `top` or below it, by the chain of parents. */
+static int mount_within(const struct vfs_mount *c, const struct vfs_mount *top)
+{
+    for (; c; c = c->parent) {
+        if (c == top) {
+            return 1;
+        }
+    }
     return 0;
 }
 
@@ -3629,9 +3643,12 @@ static struct vfs_mount *bind_parent(struct vfs_mount *c, struct vfs_mount **ori
  * as a bind under the bind of its parent (`bind_child`). A mount whose new
  * path would not fit, a KRFFS volume, and a mount whose parent is not shown
  * are left out, with a record in the kernel log, and when the heap has no
- * room for the two arrays nothing is shown below `top`.
+ * room for the two arrays nothing is shown below `top`. The mount `skip`
+ * and those below it, NULL for none, are left out without a record, as
+ * pivot_root leaves out the new root (`vfs_pivot_mounts`).
  */
-static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char *full)
+static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char *full,
+                       const struct vfs_mount *skip)
 {
     uint32_t flen = (uint32_t)k_strlen(full), depth;
     int n = mount_slots, i;
@@ -3646,7 +3663,8 @@ static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char
         struct vfs_mount *c = mounts[i];
 
         if (c && c != top && c->state == VFS_ACTIVE && c->parent && vfs_mount_seen(c) &&
-            (flen == 1 || path_under(c->covered_path, full, flen))) {
+            (flen == 1 || path_under(c->covered_path, full, flen)) &&
+            !(skip && mount_within(c, skip))) {
             orig[i] = c;
         }
     }
@@ -3675,14 +3693,60 @@ static void bind_below(struct vfs_mount *top, struct vfs_mount *from, const char
     kfree(orig);
 }
 
-/** Once the bind is placed, the walks' counts of operations in progress are
- * given back; the hold on the covered node stays with the slot, and the hold
- * on the source's node with the bind, as its root. */
+/**
+ * Place a bind of the place `sref` holds over the one `tref` holds, `target`
+ * naming it, both walks' references taken over: the mounts below the
+ * source too with `rec`, but for `skip` and those below it (`bind_below`).
+ * Once the bind is placed, the walks' counts of operations in progress are
+ * given back; the hold on the covered node stays with the slot, and the
+ * hold on the source's node with the bind, as its root. On an error both
+ * references are released. 0, or the errors `vfs_do_bind` lists.
+ */
+static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *target, int rec,
+                     const struct vfs_mount *skip)
+{
+    struct vfs_mount *m;
+    char full[VFS_COVERED_PATH_MAX], inner[VFS_COVERED_PATH_MAX], canon[VFS_COVERED_PATH_MAX];
+    int rc;
+
+    rc = bind_source(sref, full, inner);
+    if (rc == 0) {
+        rc = target_check(tref, target, canon);
+    } else {
+        vfs_ref_release(tref);
+    }
+    if (rc != 0) {
+        vfs_ref_release(sref);
+        return rc;
+    }
+    vfs_ns_lock(tref->mnt);
+    m = covered_already(tref) ? NULL
+                              : mount_place(tref->mnt, tref->node, sref->mnt->type, canon,
+                                            vfs_mount_base(sref->mnt)->source, sref->mnt->flags);
+    rc = m ? 0 : covered_already(tref) ? -EBUSY : -ENOMEM;
+    if (m) {
+        bind_fill(m, sref->mnt, sref->node, inner);
+        m->state = VFS_ACTIVE;
+    }
+    vfs_ns_unlock(tref->mnt);
+    if (rc != 0) {
+        vfs_ref_release(tref);
+        vfs_ref_release(sref);
+        return rc;
+    }
+    vfs_leave(tref->mnt);
+    vfs_leave(sref->mnt);
+    if (rec) {
+        bind_below(m, sref->mnt, full, skip);
+    }
+    klog(KLOG_INFO, "vfs", "bound: %s on %s", full, m->covered_path);
+    return 0;
+}
+
 int vfs_do_bind(const char *source, const char *target, int rec)
 {
     struct vfs_ref sref, tref;
-    struct vfs_mount *m;
-    char full[VFS_COVERED_PATH_MAX], inner[VFS_COVERED_PATH_MAX], canon[VFS_COVERED_PATH_MAX];
+    char full[VFS_COVERED_PATH_MAX], inner[VFS_COVERED_PATH_MAX];
     int rc;
 
     rc = vfs_resolve(0, source, 0, &sref, 0, 0);
@@ -3692,36 +3756,12 @@ int vfs_do_bind(const char *source, const char *target, int rec)
     rc = bind_source(&sref, full, inner);
     if (rc == 0) {
         rc = vfs_resolve(0, target, 0, &tref, 0, 0);
-        if (rc == 0) {
-            rc = target_check(&tref, target, canon);
-        }
     }
     if (rc != 0) {
         vfs_ref_release(&sref);
         return rc;
     }
-    vfs_ns_lock(tref.mnt);
-    m = covered_already(&tref) ? NULL
-                               : mount_place(tref.mnt, tref.node, sref.mnt->type, canon,
-                                             vfs_mount_base(sref.mnt)->source, sref.mnt->flags);
-    rc = m ? 0 : covered_already(&tref) ? -EBUSY : -ENOMEM;
-    if (m) {
-        bind_fill(m, sref.mnt, sref.node, inner);
-        m->state = VFS_ACTIVE;
-    }
-    vfs_ns_unlock(tref.mnt);
-    if (rc != 0) {
-        vfs_ref_release(&tref);
-        vfs_ref_release(&sref);
-        return rc;
-    }
-    vfs_leave(tref.mnt);
-    vfs_leave(sref.mnt);
-    if (rec) {
-        bind_below(m, sref.mnt, full);
-    }
-    klog(KLOG_INFO, "vfs", "bound: %s on %s", full, m->covered_path);
-    return 0;
+    return bind_refs(&sref, &tref, target, rec, NULL);
 }
 
 int vfs_remount_bind(struct vfs_mount *m, uint32_t flags)
@@ -3911,6 +3951,194 @@ int vfs_do_umount(const char *target, int dir)
     return unmount_mount(m);
 }
 
+/** The mount the calling process's root is on: the root of the mount table
+ * for a process chroot has not moved. */
+static struct vfs_mount *root_mount_of_caller(void)
+{
+    return current_proc && current_proc->fs->root_mnt ? current_proc->fs->root_mnt : mounts[0];
+}
+
+/**
+ * Whether a lazy unmount of `m` takes `c` from the caller's view: whether
+ * `c` is `m` or below it, by the chain of parents, and that chain meets `m`
+ * before it meets `root`, the mount of the caller's root. The root and what
+ * is below it stay, as after pivot_root they are no longer below the old
+ * root that is detached.
+ */
+static int detached_by(const struct vfs_mount *c, const struct vfs_mount *m,
+                       const struct vfs_mount *root)
+{
+    for (; c; c = c->parent) {
+        if (c == root) {
+            return 0;
+        }
+        if (c == m) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int vfs_do_detach(const char *target, int dir)
+{
+    struct vfs_ref tref;
+    struct vfs_mount *m, *root = root_mount_of_caller();
+    uint32_t bit = ns_bit();
+    int i, rc;
+
+    rc = resolve_path(0, target, WALK_UNMOUNT, &tref, 0, 0, 0);
+    m = rc == -EIO ? unmount_below_gone(target) : NULL;
+    if (rc != 0 && !m) {
+        return rc;
+    }
+    if (rc == 0) {
+        rc = unmount_found(&tref, dir, &m);
+        if (rc == -EBUSY && m != mounts[0]) {
+            rc = 0;
+        }
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    if (m == mounts[0] || m == vfs_memfd_mount()) {
+        return -EINVAL;
+    }
+    if (m->state != VFS_ACTIVE) {
+        return -EBUSY;
+    }
+    for (i = 0; i < mount_slots; i++) {
+        struct vfs_mount *c = mounts[i];
+
+        if (c && c->state == VFS_ACTIVE && !(c->ns_hidden & bit) && detached_by(c, m, root)) {
+            c->ns_hidden |= bit;
+        }
+    }
+    klog(KLOG_INFO, "vfs", "detached: %s", m->covered_path);
+    vfs_reap_detached();
+    return 0;
+}
+
+void vfs_reap_detached(void)
+{
+    uint32_t live = mntns_live_bits();
+    int i, progress = 1;
+
+    while (progress) {
+        progress = 0;
+        for (i = VFS_PERMANENT; i < mount_slots; i++) {
+            struct vfs_mount *m = mounts[i];
+
+            if (m && m->state == VFS_ACTIVE && (~m->ns_hidden & live) == 0 && m->refs == 0 &&
+                m->inprogress == 0 && unmount_mount(m) == 0) {
+                progress = 1;
+            }
+        }
+    }
+}
+
+/** Reap the detached mounts when `mnt`, which a hold or a description just
+ * let go of, is one no live namespace sees and nothing holds any more. */
+static void reap_if_detached(const struct vfs_mount *mnt)
+{
+    if (mnt->refs == 0 && !mount_permanent(mnt) && mnt->state == VFS_ACTIVE &&
+        (~mnt->ns_hidden & mntns_live_bits()) == 0) {
+        vfs_reap_detached();
+    }
+}
+
+/**
+ * The checks of pivot_root on the new root `nref`, the place `oref` the old
+ * root goes to, and the caller's root, the root of `rmnt` at `rnode`, in
+ * Linux's order; `*same` says whether `oref` is the new root itself. 0,
+ * -EINVAL, -ENOTDIR, -EBUSY or the error of `vfs_node_path`.
+ */
+static int pivot_check(const struct vfs_ref *nref, const struct vfs_ref *oref,
+                       const struct vfs_mount *rmnt, const void *rnode, int *same)
+{
+    struct vfs_stat st;
+    char opath[VFS_COVERED_PATH_MAX];
+    int rc = vfs_getattr(oref->mnt, oref->node, &st);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if (!VFS_IS_DIR(st.mode)) {
+        return -ENOTDIR;
+    }
+    if (nref->node != nref->mnt->root || nref->mnt->type->ops->lookup_rest ||
+        mount_permanent(nref->mnt) || rnode != rmnt->root) {
+        return -EINVAL;
+    }
+    if (nref->mnt == rmnt || oref->mnt == rmnt) {
+        return -EBUSY;
+    }
+    *same = oref->mnt == nref->mnt && oref->node == nref->node;
+    if (*same) {
+        return 0;
+    }
+    rc = vfs_node_path(oref->mnt, oref->node, opath, sizeof(opath));
+    if (rc != 0) {
+        return rc;
+    }
+    return path_under(opath, nref->mnt->covered_path, (uint32_t)k_strlen(nref->mnt->covered_path))
+               ? 0
+               : -EINVAL;
+}
+
+int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *out)
+{
+    struct vfs_ref nref, oref, sref;
+    struct vfs_mount *rmnt = root_mount_of_caller();
+    void *rnode =
+        current_proc && current_proc->fs->root_mnt ? current_proc->fs->root_node : mounts[0]->root;
+    uint32_t bit = ns_bit();
+    int i, rc, same = 0;
+
+    rc = vfs_resolve(0, new_root, 0, &nref, 0, 0);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = vfs_resolve(0, put_old, 0, &oref, 0, 0);
+    if (rc != 0) {
+        vfs_ref_release(&nref);
+        return rc;
+    }
+    rc = pivot_check(&nref, &oref, rmnt, rnode, &same);
+    if (rc == 0 && !same) {
+        sref.mnt = rmnt;
+        sref.node = rnode;
+        rc = vfs_enter(rmnt);
+        if (rc == 0) {
+            vfs_ref_hold(&sref);
+            rc = bind_refs(&sref, &oref, put_old, 1, nref.mnt);
+        } else {
+            vfs_ref_release(&oref);
+        }
+        if (rc != 0) {
+            vfs_ref_release(&nref);
+            return rc;
+        }
+        for (i = VFS_PERMANENT; i < mount_slots; i++) {
+            struct vfs_mount *c = mounts[i];
+
+            if (c && c->state == VFS_ACTIVE && !(c->ns_hidden & bit) && mount_within(c, rmnt) &&
+                !mount_within(c, nref.mnt)) {
+                c->ns_hidden |= bit;
+            }
+        }
+    } else {
+        vfs_ref_release(&oref);
+    }
+    if (rc != 0) {
+        vfs_ref_release(&nref);
+        return rc;
+    }
+    klog(KLOG_INFO, "vfs", "pivoted: %s", nref.mnt->covered_path);
+    *out = nref;
+    vfs_reap_detached();
+    return 0;
+}
+
 /**
  * The end of a bind's unmount, after its operations drained and nothing
  * holds it: its root and covered node are put back and its parent and base
@@ -4017,7 +4245,9 @@ static int unmount_mount(struct vfs_mount *m)
     }
     inotify_unmount(m);
     filecache_forget_mount(m);
-    m->type->ops->unmount(m);
+    if (m->type->ops->unmount) {
+        m->type->ops->unmount(m);
+    }
     vfs_ns_unlock(m);
     cov.mnt = m->parent;
     cov.node = m->covered;
@@ -4049,7 +4279,8 @@ void vfs_mntns_copy(uint32_t from, uint32_t to)
  * The end of the mount namespace `bit`: each active mount no other live
  * namespace sees is unmounted, a child before its parent, and every mount
  * is hidden from the bit, which a namespace made later takes afresh. A
- * mount still busy stays, hidden from every namespace.
+ * mount still busy stays, hidden from every namespace, until the reaper
+ * finds it free (`vfs_reap_detached`).
  */
 void vfs_mntns_gone(uint32_t bit)
 {
@@ -4072,6 +4303,7 @@ void vfs_mntns_gone(uint32_t bit)
             mounts[i]->ns_hidden |= 1u << bit;
         }
     }
+    vfs_reap_detached();
 }
 
 /* The working directory's and the root's holds. */
@@ -4092,6 +4324,7 @@ static void hold_release(struct vfs_mount *mnt, void *node)
     r.node = node;
     vfs_ref_put(&r);
     mnt->refs--;
+    reap_if_detached(mnt);
 }
 
 /**

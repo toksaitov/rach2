@@ -278,6 +278,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_SETTIMEOFDAY] = sys_settimeofday;
     table[SYS_MOUNT] = sys_mount;
     table[SYS_UMOUNT2] = sys_umount2;
+    table[SYS_PIVOT_ROOT] = sys_pivot_root;
     table[SYS_REBOOT] = sys_reboot;
     table[SYS_SETHOSTNAME] = sys_sethostname;
     table[SYS_SETDOMAINNAME] = sys_setdomainname;

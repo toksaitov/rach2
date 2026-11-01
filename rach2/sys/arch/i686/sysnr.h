@@ -30,6 +30,7 @@
 #define SYS_LSEEK         19
 #define SYS_MOUNT         21
 #define SYS_UMOUNT2       52
+#define SYS_PIVOT_ROOT    217
 #define SYS_TRUNCATE      92
 #define SYS_TRUNCATE64    193
 #define SYS_FTRUNCATE     93
