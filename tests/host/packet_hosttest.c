@@ -225,24 +225,8 @@ void write32be(uint8_t *p, uint32_t v)
 /* The interface the cases run on, with the machine's own address so that a
  * datagram addressed to it is taken, and a second card on another network,
  * present only while `ifaces` is 2; `test_broadcast_iface` fills it in. */
-static struct netdev the_iface = {0,
-                                  0,
-                                  {'e', 't', 'h', '0', 0, 0, 0, 0},
-                                  1,
-                                  {0, 0, 0, 0, 0, 0},
-                                  0x0A00020Fu,
-                                  0xFFFFFF00u,
-                                  0x0A000202u,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  0,
-                                  1};
+static struct netdev the_iface = {
+    .name = "eth0", .index = 1, .ip = 0x0A00020Fu, .mask = 0xFFFFFF00u, .gateway = 0x0A000202u};
 static struct netdev second_iface;
 static int ifaces = 1;
 

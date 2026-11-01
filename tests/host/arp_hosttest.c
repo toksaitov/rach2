@@ -62,14 +62,11 @@ struct netdev;
 
 /* The interface these cases run on, with the machine's own address, since
  * that is what a reply answers for and what a neighbour is judged against. */
-static struct netdev the_iface = {0,
-                                  0,
-                                  {'e', 't', 'h', '0', 0, 0, 0, 0},
-                                  1,
-                                  {0x52, 0x54, 0x00, 0x12, 0x34, 0x56},
-                                  0xC0A80005u,
-                                  0xFFFFFF00u,
-                                  0};
+static struct netdev the_iface = {.name = "eth0",
+                                  .index = 1,
+                                  .mac = {0x52, 0x54, 0x00, 0x12, 0x34, 0x56},
+                                  .ip = 0xC0A80005u,
+                                  .mask = 0xFFFFFF00u};
 
 /** Return the primary interface. */
 struct netdev *netdev_first(void)
