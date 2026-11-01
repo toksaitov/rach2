@@ -330,7 +330,12 @@ static int boot_update(struct etude_case *c, struct state *s)
     return 0;
 }
 
-/** Boot the updated disk's candidate through its changed GRUB menu. */
+/**
+ * Boot the updated disk's candidate through its changed GRUB menu. The
+ * machine has a VGA, whose VBE modes give GRUB a framebuffer: without one
+ * the kernel boots on the text mode, /fb refuses, and init starts the
+ * kernel console's login and prints no line about term.
+ */
 static int boot_console(struct etude_case *c)
 {
     struct drive d;

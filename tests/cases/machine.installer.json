@@ -24,7 +24,7 @@
       "machines": [
         {"machine_id": "usb", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "sealed"}, {"name": "stick", "bus": "device", "id": "stick"}], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
         {"machine_id": "ide", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "sealed"}, {"name": "stick", "boot": true}], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
-        {"machine_id": "installed", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "sealed", "boot": true}], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "installed", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "sealed", "boot": true}], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [{"model": "vga"}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "root-on-volume", "checks": "the stick's volume checks clean and has the root image, byte for byte", "source": "scenario"},
