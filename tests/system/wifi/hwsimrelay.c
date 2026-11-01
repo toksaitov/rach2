@@ -573,7 +573,7 @@ static int distribute(const struct packet *p, int source, int slot)
 /** Translate a kernel transmit request, retaining everything its status needs. */
 static int kernel_frame(const unsigned char **a, const size_t *sizes)
 {
-    struct pending *p;
+    struct pending *p, overflow;
     unsigned flags;
     uint16_t rf = 0;
     uint32_t freq;
@@ -587,17 +587,17 @@ static int kernel_frame(const unsigned char **a, const size_t *sizes)
     if (r < 0)
         return -1;
     slot = allocate();
-    if (slot < 0) {
-        fprintf(stderr, "hwsimrelay: transmit table full\n");
-        return -1;
-    }
-    p = &pending[slot];
+    p = slot < 0 ? &overflow : &pending[slot];
+    if (slot < 0)
+        memset(p, 0, sizeof(*p));
     p->source = r;
     memcpy(&p->kernel_flags, a[A_FLAGS], 4);
     memcpy(&p->kernel_cookie, a[A_COOKIE], 8);
     memcpy(p->rates, a[A_TX_INFO], 8);
     if (sizes[A_RATE_FLAGS])
         memcpy(p->rate_flags, a[A_RATE_FLAGS], 12);
+    if (slot < 0)
+        return local_status(p);
     memcpy(&freq, a[A_FREQ], 4);
     if (sizes[A_RATE_FLAGS])
         memcpy(&rf, a[A_RATE_FLAGS] + 1, 2);
@@ -752,8 +752,13 @@ static int udp_input(void)
         }
     }
     slot = allocate();
-    if (slot < 0)
-        return -1;
+    if (slot < 0) {
+        p.type = WLAN_RELAY_TX_STATUS;
+        p.len = 0;
+        p.flags = (p.flags & (W_MCS | W_GI | W_PRE)) | W_TX | W_FAIL;
+        (void)send_packet(&p);
+        return 0;
+    }
     pending[slot].remote = 1;
     pending[slot].peer_done = 1;
     pending[slot].packet = p;
@@ -851,8 +856,11 @@ int main(int argc, char **argv)
     fds[1].events = POLLIN;
     while (!stopped) {
         result = poll(fds, 2, 100);
-        if (result < 0 && errno != EINTR)
+        if (result < 0) {
+            if (errno == EINTR)
+                continue;
             goto out;
+        }
         if (fds[0].revents & (POLLERR | POLLHUP | POLLNVAL)) {
             fprintf(stderr, "hwsimrelay: netlink transport lost\n");
             goto close_out;

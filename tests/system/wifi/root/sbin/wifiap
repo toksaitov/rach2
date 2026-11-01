@@ -340,8 +340,24 @@ relay()
         say "boot: wifiap.peer=$port, but this guest has no hwsimrelay"
         return 1
     fi
-    hwsimrelay 5550 10.0.3.2 "$port" > "$RUN/hwsimrelay.log" 2>&1 &
-    echo $! > "$RUN/hwsimrelay.pid"
+    ready="$RUN/hwsimrelay.ready"
+    mkfifo "$ready" || return 1
+    hwsimrelay 5550 10.0.3.2 "$port" > "$ready" 2> "$RUN/hwsimrelay.log" &
+    relay_pid=$!
+    echo "$relay_pid" > "$RUN/hwsimrelay.pid"
+    line=
+    read -r line < "$ready" || true
+    rm -f "$ready"
+    case $line in
+        'hwsimrelay: ready: '*) ;;
+        *)
+            kill "$relay_pid" 2> /dev/null || true
+            wait "$relay_pid" 2> /dev/null || true
+            cat "$RUN/hwsimrelay.log" >&2
+            say "boot: relay registration failed"
+            return 1
+            ;;
+    esac
     say "boot: relay to port $port"
 }
 
