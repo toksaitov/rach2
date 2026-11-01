@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 1, 2026
 .Dt GETRUSAGE 2
 .Os
 .Sh NAME
@@ -47,9 +47,25 @@ it is the process's.
 Linux records the peak at each page fault; this kernel measures an
 address space when it is asked and when it ends, so a process that freed
 memory before either reports less than Linux would.
-The kernel keeps no other resource count, so the thirteen counters after
-.Va ru_maxrss
-are zero.
+.Pp
+.Va ru_minflt
+and
+.Va ru_majflt
+count the page faults: each page a fault, or the kernel's own touch of the
+process's memory, gave a frame or a copy-on-write copy, and each page
+.Xr mmap 2 Ns 's
+.Dv MAP_POPULATE
+brought in, as Linux counts them.
+A major fault is a page of a private file mapping that the file cache did
+not hold, read through the file system, which may have found it in its
+own cache without the disk; Linux counts a fault major only when it waits
+for the disk.
+.Xr wait4 2
+reports a child's, with those of the children it reaped, and
+.Pa /usr/bin/time
+prints them.
+The kernel keeps no other resource count, so the other eleven counters are
+zero.
 .Ss System call interface
 The i386 system call number is 77.
 EBX contains
