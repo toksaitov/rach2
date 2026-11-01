@@ -1,0 +1,88 @@
+Rach2 discovery report — from Claude Code 2.1.296 (official binary), 2026-11-01
+Kernel: Linux 6.18.0-rach2 #1 Rach2 1.0.0 x86_64, 4 CPUs, 16 GB, root on ext2
+
+SUMMARY
+Claude Code starts and runs normally: 14 threads, ~330 MB RSS, HTTPS to the API,
+Bash/ripgrep/file tools all working. Of ~70 syscall and userland probes, the
+items below are the only ones that diverge from Linux. Nothing here blocks me.
+Sorted roughly by how likely each is to bite real software.
+
+----------------------------------------------------------------------------
+1. sendfile(2) returns EINVAL for regular file -> socket and file -> file
+   Linux has supported both since 2.6.33. Servers (nginx, Python http.server,
+   Node static servers) use file->socket as their fast path. Python's shutil and
+   libuv fall back to read/write, which hides the problem. Other programs won't.
+   Repro (python3):
+     import os,socket; a,b=socket.socketpair(); f=os.open("/etc/passwd",os.O_RDONLY)
+     os.sendfile(a.fileno(), f, 0, 100)        # -> OSError EINVAL
+   splice(2) from a regular file into a pipe also returns EINVAL:
+     r,w=os.pipe(); os.splice(f, w, 1)         # -> EINVAL
+
+2. Sleep and timer resolution is about 10 ms (looks like a HZ=100 tick), but
+   clock_getres(CLOCK_MONOTONIC) reports 1 us.
+     time.sleep(0.001) -> 7.2 .. 10.0 ms measured
+     time.sleep(0.010) -> ~22 ms measured
+   Event loops, animations, benchmarks and anything tuned for latency see this.
+   Fix either by using hrtimer-style wakeups, or by making clock_getres report
+   the real granularity.
+
+3. No IPv6: socket(AF_INET6, ...) -> EAFNOSUPPORT
+   Some software assumes ::1 works. Resolvers that return AAAA records first
+   also cause trouble, and some Node and Chrome code paths try IPv6 loopback
+   first. Even a loopback-only AF_INET6 would help.
+
+4. copy_file_range(2) -> ENOSYS
+   coreutils cp, Python and libuv fall back, so this is low impact.
+
+5. O_TMPFILE on ext2 -> EISDIR
+   Linux returns EOPNOTSUPP on filesystems without tmpfile support (ext2 has had
+   it since 3.15). EISDIR is what kernels from before O_TMPFILE return, so libc
+   and applications may read it as the wrong failure.
+
+6. xattrs on ext2 -> EOPNOTSUPP (setxattr user.*)
+   OK if that's intended. Some tools (rsync -X, git-annex, Chrome download
+   metadata) warn about it.
+
+7. PTY master read after the slave closes returns 0 (EOF) instead of EIO
+   Linux returns EIO when the last slave fd closes. Most code accepts either,
+   but some (expect, older node-pty, `script`) checks specifically for EIO.
+
+8. procfs and sysfs gaps found during the probe:
+   - /proc/<pid>/cgroup, io, oom_score, wchan, sched, personality missing
+   - /proc/sys/kernel/random/{uuid,boot_id,entropy_avail} missing
+   - /proc/sys/fs/file-max missing; /proc/sys/net/ is empty
+   (Not everything here needs implementing. systemd-ish tools, lsof, htop
+    and container detection read these.)
+
+9. Unimplemented newer syscalls (all return ENOSYS; callers seem to fall back):
+   io_uring_setup, pidfd_open, rseq, membarrier, landlock_create_ruleset.
+   rseq and membarrier are the ones most likely to come up next. glibc
+   registers rseq at every thread start, and some JITs/GCs (.NET, some JVMs)
+   want membarrier.
+
+10. Cosmetic: `ps -o pcpu` shows 100% for a freshly started, sleeping process
+    (`sleep 1 & ps -o pcpu -p $!`). Long-running processes look right
+    (starttime ticks match uptime). Probably the elapsed==0 edge case, or how
+    utime/stime is sampled for new tasks.
+
+11. Minor: RLIMIT_NOFILE hard limit is 1024. Linux's default hard limit is much
+    higher (524288 on systemd distros). Chrome, Node and language servers
+    raise their soft limit at startup.
+
+Not a kernel issue, just a note: bwrap and socat are not installed, so
+Claude Code's optional Bash sandbox can't be enabled. Unprivileged user
+namespaces do work, so packaging bubblewrap may be all it takes.
+
+----------------------------------------------------------------------------
+VERIFIED WORKING (no action needed)
+fork/wait, posix_spawn, vfork-style subprocess, setsid/killpg, threads with
+heavy atomics (16x100k correct), signals + setitimer, signalfd, epoll, poll,
+select, eventfd, timerfd, memfd_create, inotify, mmap (anon, file, MAP_SHARED
+across fork), unix sockets + SCM_RIGHTS, TCP/UDP loopback, DNS, outbound HTTPS,
+ICMP ping, flock + fcntl locks, symlink/hardlink/rename, statx, close_range,
+clone3 arg validation, seccomp strict mode (correctly SIGKILLs exit_group!),
+unshare(CLONE_NEWUSER), POSIX mqueue, SysV shm, prctl(PR_SET_NAME), PTYs with
+TIOCSWINSZ + SIGWINCH delivery, getrandom, sched_getaffinity, nanosecond
+mtimes on tmpfs, /proc/<pid>/{exe,cwd,fd,maps,stat,status}, multiprocessing
+(fork and spawn), gcc 16 build+run, git, python 3.14, perl 5.44, ripgrep,
+curl. Throughput: pipe ~270 MB/s, ext2 write+fsync ~109 MB/s, ~350 fork+exec/s.

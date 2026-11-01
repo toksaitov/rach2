@@ -1,0 +1,174 @@
+================================================================================
+Rach2 Kernel & OS Discovery Report — Antigravity CLI (Gemini 4 Argon)
+Date: 2026-11-01
+Binary under test: /opt/agy/bin/agy (unmodified official Linux x86_64 build)
+Kernel: Rach2 1.0.0 (reporting as Linux 6.18.0-rach2 x86_64)
+Hardware: Lenovo G50-70 (Intel Core i3-4030U @ 1.90GHz, 4 threads, 16 GiB RAM,
+          Samsung SSD 870 EVO on AHCI /dev/disk0p3 ext2, Realtek RTL8168GU NIC)
+================================================================================
+
+1. OVERVIEW: WHAT WORKS OUT OF THE BOX
+--------------------------------------------------------------------------------
+Antigravity CLI (`/opt/agy/bin/agy`, PID 19624, a ~220 MB Go + C++/cgo binary)
+runs natively on Rach2 without binary modification or LD_PRELOAD shims:
+
+- Startup & Local Language Server:
+  - Boots in ~949 ms (`cli-20261101_093354.log`).
+  - Spawns local loopback HTTPS/gRPC and HTTP servers (`127.0.0.1:49432`,
+    `127.0.0.1:49433`) using `epoll_create1`, `epoll_ctl`, `epoll_pwait`,
+    `eventfd2`, and non-blocking sockets.
+- Persistence & Memory Management:
+  - SQLite databases (`conversations/*.db`) work in WAL mode (`.db-wal`,
+    `.db-shm`) using `mmap(..., MAP_SHARED)` (32 KB shm regions) and file locks.
+  - Anonymous memory mappings, `madvise`, `mprotect`, `clone` threads (23
+    OS threads in `agy`), `futex`, and `sigaltstack` all work cleanly.
+- File Watching, PTYs & Subprocesses:
+  - 6 active `inotify` instances (`inotify_init1`, `inotify_add_watch`) track
+    config and workspace changes without errors.
+  - PTY allocation (`/dev/ptmx` -> `/dev/pts/N`), job control, pipes (`pipe2`),
+    and background task management work reliably.
+- Outbound Networking:
+  - DNS resolution (`192.168.0.1`), TLS 1.3 (BoringSSL using `getrandom` backed
+    by hardware `RDRAND`), and streaming HTTP/2 over TCP (`eth0` via `r8169`)
+    connect to Google Cloud APIs and stream responses in real time.
+
+
+2. KERNEL BUGS, DIVERGENCES & ISSUES FOUND
+--------------------------------------------------------------------------------
+
+[Issue 1] `/proc/<pid>/status` hardcodes `Cpus_allowed: 1` / `Cpus_allowed_list: 0`
+  Location: `/src/rach2/sys/fs/procfs.c:1561` (`procfs_gen_status()`)
+  Severity: Medium (misleads runtimes/libraries that parse `/proc/self/status`)
+
+  Details:
+  - All 4 logical CPUs are online (`/sys/devices/system/cpu/online` is `0-3`)
+    and `sched_getaffinity(0)` returns `{0, 1, 2, 3}` (mask `0xf`, return `8`).
+  - However, `procfs_gen_status()` in `/src/rach2/sys/fs/procfs.c:1561` contains
+    a hardcoded string:
+      `"\nCpus_allowed:\t1\nCpus_allowed_list:\t0\n"`
+    instead of formatting `p->cpu_affinity` (or `smp_num_cpus()`).
+  - Impact: Any runtime, thread pool, or test runner that reads
+    `Cpus_allowed_list` from `/proc/self/status` believes it is pinned to a
+    single core (CPU 0) and sizes its worker pool to 1 thread.
+
+  Suggested Fix:
+  - Format the actual affinity mask from `p->cpu_affinity` (masked against
+    online CPUs, e.g., `0xf` and `0-3` on a 4-CPU machine) in
+    `procfs_gen_status()`.
+
+
+[Issue 2] `/proc` snapshot-on-open never refreshes on `lseek(0)` / `pread(0)`
+          and pins kernel `kmalloc` buffers for long-lived open FDs
+  Location: `/src/rach2/sys/fs/procfs.c:4-7`, `procfs_open()` (`procfs.c:2847`),
+            `procfs_read()` (`procfs.c:2902`)
+  Severity: Medium (affects `agy` C++/tcmalloc & crash handler FDs directly)
+
+  Details:
+  - `agy` (via its C++ runtime / `tcmalloc` / crash reporter) opens `/proc/self`
+    (`fd 3`), `/proc/self/smaps` (`fd 6`, via `openat(3, "smaps", O_RDONLY)`),
+    and `/proc/self/maps` (`fd 24`) at startup and keeps those file descriptors
+    open for the lifetime of the process so it can later `lseek(fd, 0, SEEK_SET)`
+    or `pread(fd, ..., 0)` to inspect memory mappings without calling `open()`
+    from restricted contexts (signal handlers / allocator hooks).
+  - In Rach2, `procfs_open()` generates the entire file into a `kmalloc` buffer
+    once at `open()` time and never regenerates it until the file description is
+    closed.
+  - Impact:
+    1. Re-reading an already-open `/proc/self/maps`, `/proc/self/smaps`, or
+       `/proc/stat` after `lseek(fd, 0, SEEK_SET)` or `pread(..., 0)` returns a
+       stale snapshot from when `open()` was called (for `agy`, `/proc/19624/fdinfo/6`
+        sits at `pos: 51171` from startup).
+    2. Keeping `/proc/<pid>/smaps` open pins ~51 KB of kernel heap (`kmalloc`)
+       per open file description indefinitely (and because `fd 3` and `fd 6`
+       were opened without `O_CLOEXEC`, every child `bash` process inherits a
+       reference to that open file description).
+
+  Suggested Fix:
+  - When a caller reads from offset `0` after previously reading past `0` (i.e.
+    after `lseek(fd, 0, SEEK_SET)` or `pread(fd, buf, count, 0)`), regenerate
+    the `proc_snap` buffer in `procfs_read()` so long-lived `/proc` FDs observe
+    fresh process/system state.
+
+
+[Issue 3] Zero-copy I/O syscalls (`sendfile`, `splice`, `tee`, `copy_file_range`)
+          fail on valid file descriptors
+  Location: `/src/rach2/sys/syscall_fs.c:9670-9718` (`no_copy()`) and
+            `/src/rach2/sys/arch/x86_64/systab.c:331` (`copy_file_range`)
+  Severity: Medium (breaks programs that don't have a `-EINVAL` / `-ENOSYS`
+            read+write fallback)
+
+  Details:
+  - `sys_sendfile` (#40), `sys_splice` (#275), and `sys_tee` (#276) all call
+    `no_copy()`, which validates the two FDs and then unconditionally returns
+    `-EINVAL` (`Errno 22`).
+  - `copy_file_range` (#326) is unimplemented in `systab.c` and returns
+    `-ENOSYS` (`Errno 38`).
+  - Impact: While `grep` and Go's `io.Copy` fall back to `read()`/`write()` on
+    `-EINVAL`/`-ENOSYS`, custom HTTP servers, static file handlers, or C/Rust/Python
+    callers using `os.sendfile()` or `os.splice()` directly fail with `EINVAL`.
+
+  Suggested Fix:
+  - Implement a simple in-kernel bounce-buffer loop (`vfs_read` -> `vfs_write`)
+    for `sendfile`, `splice`, and `copy_file_range` so they succeed functionally
+    even without page-cache splice plumbing.
+
+
+[Issue 4] TCP retransmissions, connection timeouts, and `LAST_ACK` stalls
+  Location: `/dev/bootlog` (114 `tcp:` messages) and `/proc/net/tcp`
+  Severity: Medium (causes occasional connection latency spikes and lingering
+            closed sockets)
+
+  Details:
+  - `/dev/bootlog` shows recurring TCP retransmission bursts and timeouts:
+      `tcp: retransmit: rto 277..17728, try 1..7`
+      `tcp: connect: timed out, giving up`
+      `tcp: rx: reset, the connection is closed`
+  - `/proc/net/tcp` shows closed outbound HTTPS sockets (`192.168.0.106:63580`
+    and `:63581` -> `172.64.155.209:443`) stuck in state `0x09` (`TCP_LAST_ACK`)
+    with `retrnsmt` counts of 5–7 and elevated RTOs.
+  - Worth checking FIN/ACK sequence/ack number validation in `TCP_LAST_ACK` /
+    `TCP_FIN_WAIT2` and SYN retransmit timer handling in the network stack.
+
+
+[Issue 5] `clock_getres()` advertises `1 us` (`1000 ns`) resolution, but sleep/poll
+          timers tick at `10 ms` (100 Hz)
+  Location: `/src/rach2/sys/syscall.c` (`sys_clock_getres` / timer subsystem)
+  Severity: Low-Medium
+
+  Details:
+  - `clock_getres(CLOCK_MONOTONIC)` and `clock_getres(CLOCK_REALTIME)` return
+    `tv_sec = 0, tv_nsec = 1000` (1 microsecond), which matches the HPET
+    `clock_gettime()` read resolution.
+  - However, `clock_nanosleep()`, `nanosleep()`, `epoll_pwait()`, and `poll()`
+    wakeups are quantized to the 100 Hz kernel tick (`10 ms`: sleeping for `1 ms`
+    takes `~14.9 ms`).
+  - Furthermore, `sys_times()` in `/src/rach2/sys/syscall.c:2299` returns
+    `(int32_t)kernel_ticks`, which truncates the 64-bit tick counter to signed
+    32-bit `int32_t` (and will sign-extend to a negative error return if
+    `kernel_ticks` reaches `0x80000000`).
+
+
+[Issue 6] Missing Newer Linux Syscalls & `AF_INET6` / `prctl` Gaps
+  Location: `/src/rach2/sys/arch/x86_64/systab.c`, `/src/rach2/sys/syscall_net.c`,
+            `/src/rach2/sys/syscall_proc.c`
+  Severity: Low-Medium (glibc/Go mostly fall back, but modern tools notice)
+
+  Details:
+  - Unimplemented syscalls returning `-ENOSYS` (`Errno 38`):
+    - `faccessat2` (#439): glibc's `faccessat(..., AT_EACCESS)` tries `faccessat2`
+      first before falling back; direct callers fail with `ENOSYS`.
+    - `openat2` (#437): used by modern container/sandboxing and path-resolution
+      libraries (`RESOLVE_BENEATH`, `RESOLVE_IN_ROOT`).
+    - `pidfd_open` (#434), `pidfd_send_signal` (#424), `pidfd_getfd` (#438):
+      used by modern process supervisors (and newer Go `os.Process` codepaths).
+    - `rseq` (#334): glibc attempts restartable sequences registration on thread
+      startup.
+    - `io_uring_setup` (#425): fails with `ENOSYS` (libuv/tokio/Go fall back to
+      `epoll`).
+  - `socket(AF_INET6, ...)` returns `-EAFNOSUPPORT` (`Errno 97`):
+    - Programs or tests that bind/connect to `::1` without an IPv4 fallback fail.
+  - `prctl(PR_CAPBSET_READ, ...)` returns `-EINVAL` (`Errno 22`):
+    - Returning `1` (or `0` for unknown capabilities above `CAP_LAST_CAP`) avoids
+      errors in tools like `capsh`, `systemd`/container helpers, and security
+      libraries probing the capability bounding set.
+================================================================================

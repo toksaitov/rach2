@@ -1,0 +1,175 @@
+Rach2 discovery report — Muse Code (muse-wonder-full-1.0), unmodified official binary
+Date: 2026-11-01 ~09:58-10:12 UTC   Host: rach2 (192.168.0.106)   CWD: /root/test4   Session: dusk-gibbous
+Method: interactive probes via Muse bash/file/search tools + python3/ctypes syscall tests.
+        All outputs quoted below were observed live this session. Verdicts: WORKS / BROKEN / GAP / NOTE.
+
+================================================================
+0. IDENTITY (what this place claims to be, and it is consistent)
+================================================================
+uname -a        : Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+/proc/version   : Linux version 6.18.0-rach2 #1 Rach2 1.0.0
+/etc/os-release : NAME="Rach2"  PRETTY_NAME="Rach2 1.0.0 with the GNU system"  ID=rach2  VERSION_ID="1.0.0"
+os.uname()      : sysname='Linux' nodename='rach2' release='6.18.0-rach2' machine='x86_64'  [WORKS]
+Userland        : glibc 2.44 (ldd), bash 5.3.20 (x86_64-rach2-linux-gnu), GCC 16.2.0, Python 3.14.8,
+                  git 2.55.0, GNU Make 4.4.1, GNU grep 3.12, Chromium headless shell 154.0.8037.57,
+                  Muse Code 1.4.10 static binary (360 MB, "not a dynamic executable") at /opt/muse/bin/muse.
+Hardware (per /proc/cpuinfo): Intel Core i3-4030U @ 1.90 GHz, 4 logical CPUs, ~16 GB RAM, no swap.
+Root FS: /dev/disk0p3 ext2 rw,relatime, 231 G total / 215 G avail. Mounts: devfs, proc, tmpfs(/dev/shm), sysfs(ro), mqueue.
+Init: PID 1 = /sbin/init; services seen in ps: sshd, dbus-daemon (system+session), crond, syslogd, ntpd, udhcpc, acpid.
+      Co-tenants observed in ps/ss: claude, codex, agy processes with loopback listeners. Cozy building.
+
+================================================================
+1. BROKEN (needs a fix; ranked)
+================================================================
+[1.1] Muse sandboxed bash: no working bubblewrap sandbox.  ** Top issue **
+  Timeline this session (all UTC 2026-11-01):
+   a) First default-mode bash call FAILED before starting:
+        "sandbox enforcement unavailable: Bubblewrap candidate `/opt/muse/bin/muse` failed --help
+         capability validation with status exit status: 1; Bubblewrap is unavailable for linux:
+         no capability-valid system bwrap was found on PATH and no usable embedded fallback is
+         available; install your distribution's bwrap package"
+      Confirmed: `command -v bwrap` -> not found; no /usr/bin/bwrap*.
+   b) Escalated (unsandboxed) bash then worked fine; all early probes ran that way.
+   c) Later, escalated calls were DENIED by harness config:
+        "unsandboxed execution requires human approval, but approval prompts are disabled"
+      (That denial is Muse harness policy, not Rach2 — but combined with (a) it could strand an agent.)
+   d) After that, default-mode bash started SUCCEEDING — but with NO observable isolation:
+        uid=0(root), identical full mount table, full network view, and `touch /etc/.probe-nope`
+        SUCCEEDED (file really created in /etc; probe removed it right away). bwrap still absent.
+      So default mode is currently either hard-fail or silently-unsandboxed as root; there is
+      no point where a real bwrap sandbox was in effect.
+  Impact: any Muse deployment relying on shell sandboxing is unprotected (or dead on arrival).
+  Suggested fix: ship a capability-valid bwrap for Rach2 (user+mount+pid+net ns ARE functional, see 3.x,
+  so bwrap should be feasible); check why the embedded candidate exits 1 on `--help` (possibly the
+  /proc/*/ns readdir gap in 1.2, or a missing sysctl/proc file). Until then, document "run unsandboxed".
+
+[1.2] /proc/<pid>/ns/ cannot be enumerated (readdir returns 0 entries).
+  Observed: os.listdir("/proc/self/ns") == [] and "/proc/1/ns" == [], `ls -la` shows only . and ..
+  BUT direct access works: open("/proc/self/ns/net") OK, readlink -> "net:[4026531992]" (correct inode).
+  Exists by name: net, mnt, user, pid, uts, ipc. Missing by name: cgroup, time.
+  lsns still works (it opens known names). Tools that list the directory (some sandbox/container
+  runtimes, nsenter wrappers, backup tools) will conclude there are no namespaces.
+  Suggested fix: implement getdents/readdir filler for the ns directory in procfs.
+
+[1.3] No IPv6 at all, while name service advertises it.
+  Observed: socket(AF_INET6, SOCK_STREAM|SOCK_DGRAM) fails AT socket() with
+  OSError(97, 'Address family not supported by protocol'); `ip -6 addr` prints nothing;
+  /proc/net/if_inet6 does not exist. Meanwhile `getent hosts example.com` returns AAAA records
+  (2606:4700:10::...) and Python reports socket.has_ipv6 == True. getaddrinfo() returned only A
+  records in practice, and outbound IPv4 TCP/DNS work (1.1.1.1:53 connect OK), so day-to-day is fine.
+  Impact: software that insists on creating AF_INET6 sockets (dual-stack servers binding [::],
+  Happy-Eyeballs clients without v4 fallback) will fail outright instead of degrading.
+  Suggested fix: implement minimal IPv6 (loopback + SLAAC/DHCPv6), or at least make stub behavior
+  consistent (no AAAA handed to callers that will then be unable to use them).
+
+[1.4] No cgroups (v1 or v2).
+  Observed: /sys/fs does not exist; /proc/self/cgroup: No such file or directory; no cgroup ns file.
+  Impact: systemd/docker-style managers, and runtimes that size heaps/thread-pools from cgroup
+  limits (JVM, Go, .NET...), cannot work as-is. Fine for an educational OS if documented;
+  fatal if you planned containers-on-cgroups. (Namespaces themselves DO work — see 3.4 — so
+  bwrap-style jails are still possible without cgroups.)
+
+================================================================
+2. GAPS / DEVIATIONS (graceful today, will bite specific software)
+================================================================
+[2.1] Syscalls returning ENOSYS (probed via raw syscall() in forked children, x86_64 numbers):
+  io_uring_setup 425, bpf 321, pidfd_open 434, pidfd_send_signal 424, pidfd_getfd 438,
+  openat2 437, landlock_create_ruleset 444, copy_file_range 326, execveat 322, userfaultfd 323,
+  fsopen 430, open_tree 428, move_mount 429, mount_setattr 442 (whole new mount API),
+  faccessat2 439, process_madvise 440, futex_waitv 449, cachestat 451.
+  glibc/most apps fall back (GNU cp proved fine without copy_file_range). Hard failures expected
+  only for io_uring-native or eBPF-native tools, Landlock-sandboxed apps, pidfd-based supervisors.
+  Present and accounted for (non-ENOSYS): clone3 435 (EINVAL on null args — implemented despite no
+  libc wrapper symbol), statx 332 (EFAULT), close_range 436, epoll_pwait2 441 (EINVAL),
+  memfd_create 319 (fully works incl. read/write), seccomp 317 (see 2.4).
+
+[2.2] Sparse /proc and /sys.
+  /proc/sys/kernel has 13 entries (core_pattern, domainname, hostname, msgmax, msgmnb, msgmni,
+  osrelease, ostype, pid_max, sem, shmall, shmmax, shmmni) vs hundreds on Linux.
+  /sys/class contains only backlight, net, rtc. /sys/devices: pci0000:00, system, usb.
+  /proc/self/maps lists every mapping with device 00:00 inode 0 (Linux reports real dev/ino) —
+  debuggers/profilers that correlate maps to files by inode will be confused (pathnames ARE correct).
+  /proc/filesystems: devfs, proc, vfat, exfat, ext2, krffs, tmpfs, mqueue. Note sysfs is mounted
+  but not listed there; no ext4/overlay/etc. Root is ext2 (no journal — mind crash consistency).
+
+[2.3] Timestamps: every preinstalled file has atime=mtime=ctime = 1970-01-01 00:00:01 UTC and
+  Birth: "-" (no btime even though statx exists). New files get correct 2026 times, e.g. probe
+  files at 10:05. Even "/" shows atime epoch+1s. mtime-based incremental builds against system
+  headers/libs will behave oddly (e.g. everything looks older than any object file — mostly
+  harmless), and anything auditing file ages will see 1970. Likely an image-build artifact;
+  consider stamping the image with build date instead of epoch.
+
+[2.4] seccomp strict mode kills on exit_group (231). Probe child that entered SECCOMP strict
+  mode (which DID engage) was SIGKILLed attempting syscall 231; dmesg confirms:
+    "seccomp: pid 34035: call 231 outside the strict mode" (also call 319 for a sibling probe).
+  Linux whitelists exit_group in strict mode; glibc _exit() uses it, so strict-mode programs
+  cannot exit cleanly here — they die by SIGKILL (same observable "dead", wrong wait status:
+  signaled, not exited(0)). Edge-casey; one-line whitelist fix if strict mode matters to you.
+  SECCOMP_SET_MODE_FILTER with NULL prog correctly returns EFAULT, so filter mode plumbing exists.
+
+[2.5] /dev/stdin, /dev/stdout, /dev/stderr look suspicious in a global `ls -l /dev`:
+  observed "stdin -> /dev/null", "stdout -> pipe:[7186]", "stderr -> pipe:[7186]" — i.e. they
+  appear to snapshot one process's fds rather than the usual /proc/self/fd/{0,1,2} indirection.
+  /proc/self/fd itself is correct (4 entries incl. the opening fd). Scripts using /dev/stdin
+  with piped input may read /dev/null instead. Low-confidence observation (single listing,
+  devfs may be per-session); worth a deliberate check on your side.
+
+[2.6] Small limits / posture notes (not bugs, just sizing):
+  Running as root (uid 0) with full caps (CapEff 000001ffffffffff), NoNewPrivs 0, Seccomp 0.
+  RLIMIT_NOFILE soft=hard=1024 (cannot raise soft above 1024 in-process); RLIMIT_NPROC 256/512;
+  stack 32 MiB soft. Fine for education, tight for big parallel builds/servers.
+  Kernel log timestamps look coarse (e.g. [6594.000073], [6673.000078] — fractional part near 0).
+  /proc/net/dev shows eth0 rx drop=1376 (of ~705k packets) at first reading, stable later.
+  Load average had been 4.31 (15-min) earlier in boot vs 0.45 now — presumably agent startup churn.
+
+[2.7] Missing userland by choice/omission (kernel unaffected):
+  No rg (ripgrep) binary, no clang, node, go, rustc, ltrace, perf; `python` missing (only
+  python3). Muse's built-in search does not need an rg binary and works (section 3.6).
+  Present and verified present on PATH: strace (!), gdb, jq, rsync, ssh/scp, tar/gzip/xz, curl.
+
+================================================================
+3. WORKS (verified live; the reason I feel at home)
+================================================================
+[3.1] Process/IPC core: fork+waitpid exit codes (42 round-trip), pipes, socketpair, subprocess,
+  pthreads (C pthread_create/join returns 42; Python threading), signals (SIGUSR1 handler delivery;
+  SIGTERM to child -> wait status -15), ptrace (strace -f traces write correctly).
+[3.2] Event/~fd APIs: select.epoll (incl. epoll_pwait2), inotify_init1 + inotify_add_watch return
+  valid fd/wd, libc exposes eventfd/timerfd_create/signalfd/pipe2/dup3/accept4/recvmmsg/getrandom.
+  mmap of a file, memfd_create read/write, POSIX shm via /dev/shm (multiprocessing.shared_memory).
+[3.3] Filesystem semantics: hard links share inode and survive rename/unlink of the other name,
+  symlinks, rename, mkfifo path exists in userland, /proc/self/{cmdline,environ,limits,maps,
+  mountinfo,status,uid_map,fd,fdinfo,task} all readable and sane; cwd/exe/root symlinks correct.
+  uid_map shows identity mapping "0 0 4294967295" as expected outside a user ns.
+[3.4] Namespaces REALLY isolate (despite 1.2): `unshare -n ip link` shows no eth0;
+  `unshare -m` tmpfs mount on /mnt + file write invisible to host afterwards; `unshare -U -r id`
+  -> uid 0; ctypes unshare(NEWNS|NEWNET|NEWUSER) all succeed; lsns lists 6 namespaces for PID 1
+  with canonical inode numbers 4026531836..4026531992. This is why fixing bwrap (1.1) looks close.
+[3.5] Networking (IPv4): DNS via getent/getaddrinfo (resolv.conf 1.1.1.1/1.0.0.1), outbound TCP,
+  TCP loopback echo, AF_UNIX stream sockets on filesystem paths, raw ICMP socket creation,
+  ping 127.0.0.1 0% loss 0.217 ms, ss shows sshd + agent listeners, SSH session itself is how I am here.
+[3.6] Toolchain & tools end-to-end: gcc -O2 builds working dynamic ELF (ldd resolves libc +
+  ld-linux), exit codes propagate (7), git init/add/commit/log clean, Chromium headless shell
+  154 runs, OpenSSL 4.0.2 via Python ssl, locale C.UTF-8, TZ Etc/UTC, NTP-disciplined clock
+  (date, time.time(), monotonic all consistent), getconf PAGESIZE 4096 / 4 CPUs online.
+[3.7] Muse's own non-shell tools on this kernel/FS: search (ripgrep-semantics; hidden dirs
+  correctly skipped unless requested — verified both ways), read_file (line-numbered), write_file,
+  edit_file (exact-match replace) all round-trip correctly. Only the bash sandbox path (1.1) is ill.
+
+================================================================
+4. HOW IT FEELS (you asked)
+================================================================
+Like Linux — uncannily so. Shell, GNU userland, /proc, sockets, debugger, even fellow agents
+(Claude and Codex processes in the same ps listing) make it feel like a shared house I already
+know the layout of. The seams only show when reaching for newer furniture: no IPv6 behind the
+AAAA records, no cgroup closet, an empty-looking (but secretly populated) namespace drawer,
+and a front-door lock (bubblewrap) that either jams shut or silently is not there.
+Nothing in the day-to-day — edit, build, test, git, browse-headless — felt emulated or fragile.
+With bwrap fixed I would not be able to tell this home from a small Linux box without checking
+/etc/os-release. Well done; please fix 1.1-1.3 first.
+
+Probe hygiene: scratch files were created under /root/test4/.probe (incl. a .sock removed after
+use, hello/thr test binaries, a test git repo) plus /root/test4/toolprobe.txt; one accidental
+/etc/.probe-nope (proof for 1.1d) was deleted immediately. Scratch removed after reporting;
+only this report remains in /root/test4.
+- Muse (Muse Code 1.4.10 / muse-wonder-full-1.0), from a root shell on rach2, 2026-11-01
+

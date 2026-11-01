@@ -1,0 +1,57 @@
+Rach2 discovery run — 2026-11-01
+Directory: /root/test2
+
+RESULT
+No failures observed in this short discovery run. All 14 automated probes
+passed, as did the additional shell, terminal, tracing, and HTTPS checks.
+This is a small smoke test, not a full Linux ABI conformance test.
+
+ENVIRONMENT OBSERVED
+/etc/os-release: Rach2 1.0.0 with the GNU system
+uname -a: Linux rach2 6.18.0-rach2 #1 Rach2 1.0.0 x86_64 GNU/Linux
+The Linux name above is the compatibility identity reported by uname;
+it is not a conclusion that the underlying kernel is Linux.
+Running as uid=0(root), gid=0(root).
+glibc 2.44; Python 3.14.8; GCC 16.2.0; Git 2.55.0.
+Root and /tmp were reported on /dev/disk0p3, with about 216 GiB available.
+
+AUTOMATED PROBES — ALL PASSED
+1. Filesystem: write/read, fsync, hard links, symlinks, rename, directory fsync.
+2. File-backed mmap: modify, flush, and read back.
+3. Python threads: four workers synchronize through a barrier.
+4. Processes/signals: shell pipeline, child startup, SIGTERM, wait status.
+5. epoll: pipe readiness and data delivery.
+6. Unix-domain sockets: bind, connect, accept, data delivery.
+7. TCP loopback: ephemeral port, connect, accept, data delivery.
+8. File locking: another process fails to acquire an already-held flock.
+9. SQLite: WAL mode, transaction commit, second connection, checkpoint.
+10. Randomness/clocks: nonblocking getrandom and monotonic sleep timing.
+11. memfd/eventfd: basic creation, writes, reads, and counter value.
+12. PTY: allocation, terminal attributes, and newline translation.
+13. GCC: compile with warnings treated as errors, run and join a C pthread.
+14. Git: initialize a disposable repo, add, commit, show, fsck, clean status.
+
+ADDITIONAL CHECKS
+- Shell commands, rg, process listing, /proc reads, and df worked.
+- The execution tool's PTY was recognized as a terminal; stty reported 24x80.
+- timeout 8s strace -f -e trace=execve,write /usr/bin/printf 'trace-ok\n'
+  reported successful execve/write calls and exit status 0.
+- curl --head --silent --show-error --connect-timeout 5 --max-time 10 https://example.com/
+  returned HTTP/1.1 200 OK with exit status 0, without disabling TLS verification.
+- The file editing tool successfully created the probe script and this report.
+
+REPRODUCTION
+Run all 14 probes:
+  cd /root/test2
+  timeout 90s python3 rach2_discovery.py
+Run one probe, for example:
+  python3 rach2_discovery.py sqlite_wal
+Original per-probe output and timings: rach2_discovery_results.txt
+The probe script uses temporary directories, removes its test data, and makes
+no persistent Git configuration changes. No packages were installed.
+
+NOT TESTED / TOOL DISCOVERY NOTES
+node, npm, chromium, chromium-browser, and google-chrome were not on PATH.
+No Chrome/Chromium executable was found in the limited conventional-directory
+search, so Chrome was not exercised. These observations are not kernel bugs.
+No GUI, stress, crash-recovery, privileged subsystem, or full ABI tests were run.
