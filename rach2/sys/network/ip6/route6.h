@@ -87,6 +87,13 @@ void route6_learn(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t
  * -1. Interrupts off. */
 void route6_forget(struct netdev *nd, int proto);
 
+/**
+ * Move the default routes routers advertised by `nd` to `metric`, each
+ * keeping its time left; one whose router already has a route at `metric`
+ * is merged into it, which keeps the later end. Interrupts off.
+ */
+void route6_ra_metric(struct netdev *nd, uint32_t metric);
+
 /** Remove the learned routes whose time has run out. Called from
  * `nd6_tick`. */
 void route6_tick(void);

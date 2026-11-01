@@ -263,18 +263,20 @@ int synth_sys_count(void);
 #define SYNTH_SYS_FILE_NR            40
 #define SYNTH_SYS_RANDOMIZE_VA_SPACE 41
 /* net/ipv6/conf, the directory of IPv6's settings, which holds those of
- * all interfaces, of the default for a new one, and of each of `lo` and
- * the cards' interfaces, eth0 to eth3 (NETDEV_MAX); and the files of each,
- * in this order, which procfs reads and writes through nd6.h. */
+ * all interfaces, of the default for a new one, and of each of `lo`, the
+ * cards' interfaces, eth0 to eth3 (NETDEV_MAX), and the radios', wlan0 to
+ * wlan3 (WLAN_MAX_RADIOS); and the files of each, in this order, which
+ * procfs reads and writes through nd6.h. */
 #define SYNTH_SYS_IPV6_CONF          43
-#define SYNTH_IPV6_DIRS              7
+#define SYNTH_IPV6_DIRS              11
 #define SYNTH_IPV6_ACCEPT_RA         0
 #define SYNTH_IPV6_AUTOCONF          1
 #define SYNTH_IPV6_DISABLE           2
 #define SYNTH_IPV6_FORWARDING        3
-#define SYNTH_IPV6_STABLE_SECRET     4
-#define SYNTH_IPV6_USE_TEMPADDR      5
-#define SYNTH_IPV6_KEYS              6
+#define SYNTH_IPV6_RA_DEFRTR_METRIC  4
+#define SYNTH_IPV6_STABLE_SECRET     5
+#define SYNTH_IPV6_USE_TEMPADDR      6
+#define SYNTH_IPV6_KEYS              7
 /* The entries of net/ipv4's tcp_keepalive_time, tcp_keepalive_intvl,
  * tcp_keepalive_probes, tcp_mtu_probing and tcp_retries2, in that order,
  * whose values procfs reads from tcp.h's variables. */

@@ -239,6 +239,7 @@ static void conf_defaults(struct nd6_conf *c)
     k_memset(c, 0, sizeof(*c));
     c->v[ND6_ACCEPT_RA] = 1;
     c->v[ND6_AUTOCONF] = 1;
+    c->v[ND6_RA_DEFRTR_METRIC] = ROUTE6_METRIC_DEFAULT;
 }
 
 void nd6_init(void)
@@ -359,6 +360,10 @@ static void if_set(struct netdev *nd, int key, int32_t value)
             solicit_routers(nd, ni);
         }
         net_unlock(lock);
+    } else if (key == ND6_RA_DEFRTR_METRIC) {
+        lock = net_lock();
+        route6_ra_metric(nd, (uint32_t)value);
+        net_unlock(lock);
     }
 }
 
@@ -379,7 +384,8 @@ int nd6_conf_set(int which, int key, int32_t value)
         value != 1) {
         return -EINVAL;
     }
-    if (key == ND6_ACCEPT_RA && (value < 0 || value > 2)) {
+    if ((key == ND6_ACCEPT_RA && (value < 0 || value > 2)) ||
+        (key == ND6_RA_DEFRTR_METRIC && value < 1)) {
         return -EINVAL;
     }
     if (which >= 1) {
@@ -1267,18 +1273,18 @@ static void rx_na(struct netdev *nd, struct nd6_if *ni, const uint8_t *dst, cons
         e->state = ND6_STALE;
     }
     if (e->router && !(flags & NA_ROUTER)) {
-        route6_learn(nd, ip6_any, 0, target, ROUTE6_METRIC_DEFAULT, 0);
+        route6_learn(nd, ip6_any, 0, target, (uint32_t)if_of(nd)->conf.v[ND6_RA_DEFRTR_METRIC], 0);
     }
     e->router = (flags & NA_ROUTER) != 0;
 }
 
 /**
  * A router advertisement (RFC 4861, 6.3.4): its sender becomes a default
- * route for its router lifetime, its hop limit, timers and MTU are taken,
- * its on-link prefixes become routes, and its autonomous /64 prefixes make
- * addresses (`slaac`). It ends the card's solicitations. Its RDNSS and
- * DNSSL options go to netlink for a program to take the name servers from,
- * on an interface that ignores advertisements too, as Linux sends them.
+ * route for its router lifetime, at the card's `ra_defrtr_metric`, its hop limit, timers and MTU
+ * are taken, its on-link prefixes become routes, and its autonomous /64 prefixes make addresses
+ * (`slaac`). It ends the card's solicitations. Its RDNSS and DNSSL options go to netlink for a
+ * program to take the name servers from, on an interface that ignores advertisements too, as Linux
+ * sends them.
  */
 static void rx_ra(struct netdev *nd, struct nd6_if *ni, const uint8_t *src, const uint8_t *msg,
                   uint16_t len)
@@ -1319,7 +1325,8 @@ static void rx_ra(struct netdev *nd, struct nd6_if *ni, const uint8_t *src, cons
     } else if (find(nd, src)) {
         find(nd, src)->router = 1;
     }
-    route6_learn(nd, ip6_any, 0, src, ROUTE6_METRIC_DEFAULT, read16be(msg + 6));
+    route6_learn(nd, ip6_any, 0, src, (uint32_t)ni->conf.v[ND6_RA_DEFRTR_METRIC],
+                 read16be(msg + 6));
     if (o.mtu) {
         uint32_t mtu = read32be(o.mtu);
 

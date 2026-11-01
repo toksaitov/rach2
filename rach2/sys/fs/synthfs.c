@@ -257,10 +257,11 @@ static const struct {
  * interfaces, and the files of each, in the order of SYNTH_IPV6_*. Each
  * directory is an entry after the table's, followed by an entry for each
  * of its files. */
-static const char *const ipv6_dirs[SYNTH_IPV6_DIRS] = {"all",  "default", "lo",  "eth0",
-                                                       "eth1", "eth2",    "eth3"};
+static const char *const ipv6_dirs[SYNTH_IPV6_DIRS] = {
+    "all", "default", "lo", "eth0", "eth1", "eth2", "eth3", "wlan0", "wlan1", "wlan2", "wlan3"};
 static const char *const ipv6_files[SYNTH_IPV6_KEYS] = {
-    "accept_ra", "autoconf", "disable_ipv6", "forwarding", "stable_secret", "use_tempaddr"};
+    "accept_ra",        "autoconf",      "disable_ipv6", "forwarding",
+    "ra_defrtr_metric", "stable_secret", "use_tempaddr"};
 
 int synth_sys_count(void)
 {

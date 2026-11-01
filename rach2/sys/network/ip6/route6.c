@@ -305,6 +305,29 @@ void route6_forget(struct netdev *nd, int proto)
     }
 }
 
+void route6_ra_metric(struct netdev *nd, uint32_t metric)
+{
+    int i, j;
+
+    for (i = 0; i < ROUTE6_MAX; i++) {
+        struct route6 *r = &table6[i];
+
+        if (r->nd != nd || r->proto != ROUTE6_PROTO_RA || r->plen != 0 || r->metric == metric) {
+            continue;
+        }
+        j = find(nd, r->dst, 0, r->gw, metric);
+        if (j < 0) {
+            r->metric = metric;
+            continue;
+        }
+        if (table6[j].proto == ROUTE6_PROTO_RA && table6[j].expires != 0 &&
+            (r->expires == 0 || r->expires > table6[j].expires)) {
+            table6[j].expires = r->expires;
+        }
+        r->nd = 0;
+    }
+}
+
 void route6_tick(void)
 {
     int i;

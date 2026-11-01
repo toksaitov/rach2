@@ -6061,7 +6061,8 @@ static int sysctl_ipv6_which(const char *dir)
 
 /* The ND6_ setting of each SYNTH_IPV6_ file but stable_secret. */
 static const int sysctl_ipv6_keys[SYNTH_IPV6_KEYS] = {
-    ND6_ACCEPT_RA, ND6_AUTOCONF, ND6_DISABLE_IPV6, ND6_FORWARDING, -1, ND6_USE_TEMPADDR};
+    ND6_ACCEPT_RA,        ND6_AUTOCONF, ND6_DISABLE_IPV6, ND6_FORWARDING,
+    ND6_RA_DEFRTR_METRIC, -1,           ND6_USE_TEMPADDR};
 
 /**
  * The text of the net/ipv6/conf file `key` of the directory `dir`,

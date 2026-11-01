@@ -90,12 +90,13 @@ struct nd6_row {
 #define ND6_CONF_ALL     (-1) /* `which` for `all` */
 #define ND6_CONF_DEFAULT 0    /* `which` for `default`; an ifindex otherwise */
 
-#define ND6_DISABLE_IPV6 0 /* 1: no IPv6 on the interface, its addresses gone */
-#define ND6_ACCEPT_RA    1 /* 0 ignore, 1 when not forwarding, 2 always */
-#define ND6_AUTOCONF     2 /* 1: SLAAC addresses from prefixes advertised */
-#define ND6_FORWARDING   3 /* 1: a router: no solicitations, R set in answers */
-#define ND6_USE_TEMPADDR 4 /* <= 0 none, 1 make temporary addresses, 2 prefer them */
-#define ND6_CONF_KEYS    5
+#define ND6_DISABLE_IPV6     0 /* 1: no IPv6 on the interface, its addresses gone */
+#define ND6_ACCEPT_RA        1 /* 0 ignore, 1 when not forwarding, 2 always */
+#define ND6_AUTOCONF         2 /* 1: SLAAC addresses from prefixes advertised */
+#define ND6_FORWARDING       3 /* 1: a router: no solicitations, R set in answers */
+#define ND6_USE_TEMPADDR     4 /* <= 0 none, 1 make temporary addresses, 2 prefer them */
+#define ND6_RA_DEFRTR_METRIC 5 /* the metric of a router's default route, 1024 */
+#define ND6_CONF_KEYS        6
 
 /**
  * Read the setting `key` of `which` into `*value`. Returns 0, or -EINVAL
@@ -105,11 +106,14 @@ int nd6_conf_get(int which, int key, int32_t *value);
 
 /**
  * Write the setting `key` of `which`. The booleans take 0 or 1, accept_ra
- * 0 to 2 and use_tempaddr any value; -EINVAL otherwise, or -ENODEV. What a
- * write changes happens at once: disabling IPv6 takes every address of the
- * interface away, `lo`'s ::1 among them, and enabling it again gives back
- * ::1 or a card's link-local address and solicits routers; forwarding on
- * stops the solicitations and joins ff02::2. Writing forwarding,
+ * 0 to 2, ra_defrtr_metric 1 or more and use_tempaddr any value; -EINVAL
+ * otherwise, or -ENODEV. What a write changes happens at once: disabling
+ * IPv6 takes every address of the interface away, `lo`'s ::1 among them,
+ * and enabling it again gives back ::1 or a card's link-local address and
+ * solicits routers; forwarding on stops the solicitations and joins
+ * ff02::2; a new ra_defrtr_metric moves the interface's default routes
+ * already learned as well as setting the next advertisement's, where Linux
+ * waits for the next, so that start-up need not race the first router. Writing forwarding,
  * disable_ipv6 or use_tempaddr of `all` writes it of `default` and of every
  * interface too. Takes net_lock.
  */
