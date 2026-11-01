@@ -3042,6 +3042,23 @@ static int32_t open_synth_node(const struct vpath *vp, int flags)
 }
 
 /**
+ * Whether an open with `flags` of the file of /proc that `ref` holds is
+ * refused with EROFS: a write-side request through a read-only mount of
+ * /proc, such as the bind bubblewrap makes of /proc/sys, as open(2) refuses
+ * it on any other read-only mount (`open_mounted_node`). /sys is mounted
+ * read-only though its attributes take writes, and keeps them, as do the
+ * devices of /dev; a directory answers EISDIR instead (`synth_open_dir`).
+ */
+static int proc_read_only(const struct vfs_ref *ref, int flags)
+{
+    struct vfs_stat st;
+
+    return ((flags & 3) != 0 || (flags & O_TRUNC)) && (ref->mnt->flags & VFS_MS_RDONLY) &&
+           vfs_mount_base(ref->mnt)->type == &vfs_procfs_type &&
+           vfs_getattr(ref->mnt, ref->node, &st) == 0 && (st.mode & 0170000u) != 0040000u;
+}
+
+/**
  * Open core shared by open and openat.
  *
  * `name` is a kernel-space path with any leading '/' already stripped; `flags`
@@ -3128,12 +3145,13 @@ again:
 
         if (vp) {
             struct vpath vpc = *vp;
+            int ro = proc_read_only(&ref, flags);
 
             vfs_walk_unlock(ref.mnt);
             vfs_ref_release(&ref);
             fd_free(current_proc->fds, fd);
             fd = -1;
-            rc = open_synth_node(&vpc, flags);
+            rc = ro ? -EROFS : open_synth_node(&vpc, flags);
             goto out;
         }
         if (open_special(&ref, fd, flags, &rc)) {
