@@ -64,13 +64,32 @@ static int pad(struct archive *a)
  */
 static int header(struct archive *a, const char *name, unsigned long mode, unsigned long size)
 {
-    char head[111];
+    static const char digits[] = "0123456789ABCDEF";
+    unsigned long field[13];
+    char head[110];
     unsigned long namesize = (unsigned long)strlen(name) + 1;
+    int i, j;
 
-    sprintf(head, "070701%08lX%08lX%08lX%08lX%08lX%08lX%08lX%08lX%08lX%08lX%08lX%08lX%08lX",
-            a->ino++, mode, 0UL, 0UL, (mode & S_DIR) == S_DIR ? 2UL : 1UL, a->time, size, 0UL, 0UL,
-            0UL, 0UL, namesize, 0UL);
-    if (put(a, head, 110) < 0 || put(a, name, namesize) < 0)
+    if (size > 0xffffffffUL || a->time > 0xffffffffUL || a->ino > 0xffffffffUL) {
+        fprintf(stderr, "mkcpio: %s: a field does not fit in 32 bits\n", name);
+        return -1;
+    }
+    field[0] = a->ino++;
+    field[1] = mode;
+    field[2] = 0;                                       /* uid */
+    field[3] = 0;                                       /* gid */
+    field[4] = (mode & 0170000UL) == S_DIR ? 2UL : 1UL; /* nlink */
+    field[5] = a->time;                                 /* mtime */
+    field[6] = size;                                    /* filesize */
+    field[7] = field[8] = field[9] = field[10] = 0;     /* devices */
+    field[11] = namesize;                               /* namesize */
+    field[12] = 0;                                      /* check */
+    memcpy(head, "070701", 6);
+    for (i = 0; i < 13; i++) {
+        for (j = 0; j < 8; j++)
+            head[6 + 8 * i + j] = digits[(field[i] >> (28 - 4 * j)) & 0xf];
+    }
+    if (put(a, head, sizeof(head)) < 0 || put(a, name, namesize) < 0)
         return -1;
     return pad(a);
 }
