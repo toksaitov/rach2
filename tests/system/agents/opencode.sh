@@ -12,11 +12,14 @@
 # one. A server started in a tree of more directories than the account may
 # watch, fs.inotify.max_user_watches, still searches it, and once it has
 # ended the account holds no watch: a new instance adds as many as the limit
-# allows. Last, the client's and the private server's memory and time to
-# start are sampled, `--standalone` leaves no process, and a command run
-# without it leaves the background service, one process, which
-# `opencode service stop` ends. The row prints what it sampled; nothing of
-# it is a pass criterion.
+# allows. Last, the memory and time to start of the client of
+# `opencode session list --standalone` and of its private server are sampled,
+# `--standalone` leaves no process, and the same command run without it leaves
+# the background service, one process, which `opencode service stop` ends.
+# The row lists sessions, not models: the server answers the list of models
+# only once its plugins are active and gives up after 5 seconds, less than
+# they take to start under QEMU without acceleration. The row prints what it
+# sampled; nothing of it is a pass criterion.
 
 # The libraries OpenCode 2.2.5 writes into TMPDIR as .bun-UID-NAME: NAME, its
 # length and its offset in /opt/opencode/bin/opencode. 99cf65a7ec1d243c.so is
@@ -104,7 +107,7 @@ libraries() {
     local name length offset file found=0
     unmodified "opencode serve" "$1" /opt/opencode/bin/opencode \
         /lib64/ld-linux-x86-64.so.2 /lib/libc.so.6 /lib/libm.so.6 /lib/libpthread.so.0 \
-        /lib/libdl.so.2 /lib/librt.so.1 /lib/libgcc_s.so.1 /usr/lib/libstdc++.so.6 \
+        /lib/libdl.so.2 /lib/librt.so.1 /lib/libgcc_s.so.1 "/usr/lib/libstdc++.so.6*" \
         "$WORK/tmp/.bun-$(id -u)-*" "$WORK/home/.local/share/opencode/opencode.db-shm"
     while read -r name length offset; do
         file=$WORK/tmp/.bun-$(id -u)-$name
@@ -153,9 +156,9 @@ row() {
     serve A "$WORK/tree" && serve B "$WORK/tree" || return
     echo "opencode: serve: listening after $A_START s, then $B_START s beside it;" \
         "VmRSS $(rss "$A_PID") and $(rss "$B_PID") KiB"
-    libraries "$A_PID"
     find_in A "$WORK/tree" greet greeting.txt
     find_in B "$WORK/tree" notes notes.txt
+    libraries "$A_PID"
     kill -9 "$A_PID"
     wait "$A_PID" 2> /dev/null
     find_in B "$WORK/tree" check check.sh
@@ -194,7 +197,7 @@ row() {
     began=$(date +%s)
     (cd "$WORK/tree" && exec env -i PATH=/usr/bin:/bin HOME="$WORK/home" TMPDIR="$WORK/tmp" \
         LANG=C.UTF-8 TERM=dumb OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_MODELS_FETCH=1 \
-        opencode models --standalone < /dev/null > "$WORK/models.log" 2>&1) &
+        opencode session list --standalone < /dev/null > "$WORK/sessions.log" 2>&1) &
     pid=$!
     server=
     while kill -0 "$pid" 2> /dev/null; do
@@ -208,17 +211,17 @@ row() {
     done
     wait "$pid"
     status=$?
-    same "opencode models --standalone: status" "$status" 0
-    has "opencode models --standalone" "$(cat "$WORK/models.log")" "openai/"
-    echo "opencode: models --standalone: $(($(date +%s) - began)) s, its server started" \
+    same "opencode session list --standalone: status" "$status" 0
+    same "opencode session list --standalone" "$(cat "$WORK/sessions.log")" ""
+    echo "opencode: session list --standalone: $(($(date +%s) - began)) s, its server started" \
         "after ${now:+$((now - began))} s; VmRSS at most $peak_client KiB," \
         "and $peak_server KiB in its server"
-    exited "opencode models --standalone: the processes left" left
+    exited "opencode session list --standalone: the processes left" left
 
-    status "opencode models" 0 oc "$WORK/home" "$WORK/tmp" models
-    has "opencode models" "$OUT" "openai/"
+    output "opencode session list" oc "$WORK/home" "$WORK/tmp" session list
+    same "opencode session list" "$OUT" ""
     got=$(left)
-    same "the processes left by opencode models" "$(printf '%s\n' "$got" | wc -l)" 1
+    same "the processes left by opencode session list" "$(printf '%s\n' "$got" | wc -l)" 1
     has "the background service" "$got" " serve --service"
     has "the service's record" "$(cat "$WORK/home/.local/state/opencode/service.json" 2>&1)" \
         "\"pid\":${got%% *},"
