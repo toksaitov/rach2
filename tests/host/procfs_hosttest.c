@@ -63,6 +63,8 @@ static int sysfs_block_devno(const char *name, int len);
 static void sysfs_block_name(int key, char *out, int cap);
 static int sysfs_block_whole(int key);
 static int sysfs_block_loop(int key);
+static int sysfs_net_wiphy(int index);
+static const char *sysfs_wlan_driver(int index);
 #include "fs/procfs.c"
 #include "arch/i686/mmu.h"
 #include "ns_first.h"
