@@ -74,15 +74,15 @@ static int mfp_active(const struct wlan_mlme *m)
     return m->mfp && m->state >= WLAN_STA_ASSOCIATED;
 }
 
-/** The radio's channel at frequency MHz, or NULL when it has none usable. */
-static const struct wlan_channel *find_channel(const struct wlan_radio *r, unsigned frequency)
+/** The band's channel at frequency MHz, or NULL when it has none usable. */
+static const struct wlan_channel *find_channel(const struct wlan_band *band, unsigned frequency)
 {
     unsigned i;
 
-    for (i = 0; i < r->band.n_channels && i < WLAN_RADIO_MAX_CHANNELS; ++i)
-        if (r->band.channels[i].frequency == frequency &&
-            !(r->band.channels[i].flags & WLAN_CHANNEL_DISABLED))
-            return &r->band.channels[i];
+    for (i = 0; i < band->n_channels && i < WLAN_RADIO_MAX_CHANNELS; ++i)
+        if (band->channels[i].frequency == frequency &&
+            !(band->channels[i].flags & WLAN_CHANNEL_DISABLED))
+            return &band->channels[i];
     return 0;
 }
 
@@ -135,26 +135,18 @@ static void arm_in(struct wlan_mlme *m, unsigned ms)
     arm(m, tick_count() + ms);
 }
 
-/**
- * Move to state s: the radio may refuse a step up, never one down to NONE;
- * then the interface learns the change. Returns 0 or the radio's error.
- */
+/** Move to state s through the interface, which asks the radio first; a
+ * refusal keeps the old state, but a move to NONE always happens. */
 static int set_state(struct wlan_mlme *m, enum wlan_sta_state s)
 {
-    enum wlan_sta_state old;
     int err;
 
-    old = m->state;
-    if (old == s)
+    if (m->state == s)
         return 0;
-    if (m->radio->ops->sta_state) {
-        err = m->radio->ops->sta_state(m->radio, m->bss, old, s);
-        if (err && s != WLAN_STA_NONE)
-            return err;
-    }
+    err = m->ops->state(m->wlan, s, s == WLAN_STA_NONE ? 0 : m->bss);
+    if (err && s != WLAN_STA_NONE)
+        return err;
     m->state = s;
-    if (m->ops->state)
-        m->ops->state(m->wlan, m->bss, old, s);
     return 0;
 }
 
@@ -300,7 +292,7 @@ static int auth_begin(struct wlan_mlme *m, const struct wlan_mlme_auth *req)
     const struct wlan_channel *ch;
     int err;
 
-    ch = find_channel(m->radio, req->bss->frequency);
+    ch = find_channel(m->band, req->bss->frequency);
     if (!ch)
         return -EINVAL;
     if (m->state >= WLAN_STA_ASSOCIATED)
@@ -468,7 +460,7 @@ static unsigned assoc_rates(const struct wlan_mlme *m, const struct ieee80211_el
     uint8_t theirs[IEEE80211_MAX_RATES];
     unsigned n, k, i, j, rate;
 
-    band = &m->radio->band;
+    band = m->band;
     k = elem_rates(ap, theirs);
     n = 0;
     for (i = 0; i < band->n_rates && i < WLAN_RADIO_MAX_RATES; ++i) {
@@ -495,7 +487,7 @@ static void ht_cap_payload(const struct wlan_band *band, uint8_t *out)
 /** Whether HT is used with an AP whose elements are e. */
 static int ht_usable(const struct wlan_mlme *m, const struct ieee80211_elems *e, unsigned flags)
 {
-    return m->radio->band.ht_supported && !(flags & WLAN_MLME_ASSOC_NO_HT) &&
+    return m->band->ht_supported && !(flags & WLAN_MLME_ASSOC_NO_HT) &&
            e->data[WLAN_EID_HT_CAPABILITY] && e->data[WLAN_EID_HT_OPERATION];
 }
 
@@ -553,7 +545,7 @@ static int assoc_elems(struct wlan_mlme *m, const struct wlan_mlme_assoc *req,
     p.rates = rates;
     p.rates_len = assoc_rates(m, ap, rates);
     if (ht_usable(m, ap, req->flags)) {
-        ht_cap_payload(&m->radio->band, ht);
+        ht_cap_payload(m->band, ht);
         p.ht_cap = ht;
     }
     elem_payload(user.data[WLAN_EID_RSN], &p.rsn, &p.rsn_len);
@@ -712,8 +704,8 @@ static void send_probe(struct wlan_mlme *m)
     unsigned i, used;
 
     mgmt_hdr(f, IEEE80211_STYPE_PROBE_REQ, m->bss->bssid, m->radio->mac, m->bss->bssid);
-    for (i = 0; i < m->radio->band.n_rates && i < WLAN_RADIO_MAX_RATES; ++i)
-        rates[i] = (uint8_t)(m->radio->band.rates[i] / 5);
+    for (i = 0; i < m->band->n_rates && i < WLAN_RADIO_MAX_RATES; ++i)
+        rates[i] = (uint8_t)(m->band->rates[i] / 5);
     k_memset(&p, 0, sizeof(p));
     p.ssid = m->bss->ssid;
     p.ssid_len = m->bss->ssid_len;
@@ -935,13 +927,15 @@ int wlan_mlme_rx(struct wlan_mlme *m, const uint8_t *f, unsigned len, unsigned f
 }
 
 void wlan_mlme_init(struct wlan_mlme *m, struct wlan *wlan, struct wlan_radio *radio,
-                    struct wlan_scan *scan, const struct wlan_mlme_ops *ops)
+                    const struct wlan_band *band, struct wlan_scan *scan,
+                    const struct wlan_mlme_ops *ops)
 {
     unsigned i;
 
     k_memset(m, 0, sizeof(*m));
     m->wlan = wlan;
     m->radio = radio;
+    m->band = band;
     m->scan = scan;
     m->ops = ops;
     m->state = WLAN_STA_NONE;

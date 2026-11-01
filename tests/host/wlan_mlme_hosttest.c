@@ -203,18 +203,8 @@ static int radio_tx(struct wlan_radio *r, const uint8_t *f, unsigned len,
     return -EIO;
 }
 
-/** Refuse refuse_state when asked to enter it. */
-static int radio_sta_state(struct wlan_radio *r, const struct wlan_bss *bss,
-                           enum wlan_sta_state old_state, enum wlan_sta_state new_state)
-{
-    (void)r;
-    (void)old_state;
-    CHECK(bss != 0);
-    return (int)new_state == refuse_state ? -EIO : 0;
-}
-
 static const struct wlan_radio_ops radio_ops = {
-    radio_start, radio_stop, radio_config, radio_tx, 0, radio_sta_state, 0, 0, 0, 0};
+    radio_start, radio_stop, radio_config, radio_tx, 0, 0, 0, 0, 0, 0};
 
 /** Keep a copy of the frame the station sends. */
 static int iface_tx(struct wlan *wlan, const uint8_t *f, unsigned len, unsigned flags)
@@ -230,14 +220,17 @@ static int iface_tx(struct wlan *wlan, const uint8_t *f, unsigned len, unsigned 
     return 0;
 }
 
-/** Record each committed state, with the AP it belongs to. */
-static void iface_state(struct wlan *wlan, const struct wlan_bss *bss,
-                        enum wlan_sta_state old_state, enum wlan_sta_state new_state)
+/** Commit a state as wlan_set_state does: refuse refuse_state, and
+ * record the rest with a BSS but for NONE. */
+static int iface_state(struct wlan *wlan, enum wlan_sta_state state, struct wlan_bss *bss)
 {
     (void)wlan;
-    CHECK(bss != 0 && old_state != new_state);
+    CHECK((state == WLAN_STA_NONE) == (bss == 0));
+    if ((int)state == refuse_state)
+        return -EIO;
     if (n_states < sizeof(states) / sizeof(states[0]))
-        states[n_states++] = new_state;
+        states[n_states++] = state;
+    return 0;
 }
 
 static const struct wlan_mlme_ops iface_ops = {iface_tx, iface_state, iface_event};
@@ -361,7 +354,7 @@ static void reset(void)
     make_bss(&bss_a, ap_a, 2412);
     make_bss(&bss_b, ap_b, 2437);
     k_memset(&scan, 0, sizeof(scan));
-    wlan_mlme_init(&mlme, 0, &radio, &scan, &iface_ops);
+    wlan_mlme_init(&mlme, 0, &radio, &radio.band, &scan, &iface_ops);
 }
 
 /** Give the station a frame from the AP, unprotected unless flags say. */
@@ -617,6 +610,9 @@ static void refusals(void)
     req.ies_len = WLAN_MLME_FRAME_MAX - HDR - 6 + 4;
     vendor_fill(big, req.ies_len);
     CHECK(wlan_mlme_authenticate(&mlme, &req) == -EMSGSIZE);
+    radio.band.channels[12].flags = WLAN_CHANNEL_DISABLED;
+    make_bss(&bss_b, ap_b, 2472);
+    CHECK(open_auth(&bss_b) == -EINVAL && bss_b.refs == 0);
     CHECK(assoc(&bss_a, 0, 0) == -ENOLINK);
     CHECK(wlan_mlme_deauthenticate(&mlme, ap_a, 3, 0) == -ENOTCONN);
     CHECK(wlan_mlme_disassociate(&mlme, ap_a, 3, 0) == -ENOTCONN);

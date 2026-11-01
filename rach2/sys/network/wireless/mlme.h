@@ -34,11 +34,12 @@ struct wlan_mlme_ops {
      * encrypts with the pairwise key once one is installed; it also assigns
      * the sequence number and the duration. */
     int (*tx)(struct wlan *wlan, const uint8_t *frame, unsigned len, unsigned flags);
-    /** Learn a committed state change: carrier with association, the
-     * control port with authorization, keys removed on the way down. bss is
-     * the AP of the change, borrowed until return. */
-    void (*state)(struct wlan *wlan, const struct wlan_bss *bss, enum wlan_sta_state old_state,
-                  enum wlan_sta_state new_state);
+    /** Commit a station state with its BSS, NULL with WLAN_STA_NONE, once
+     * the radio's sta_state accepts it: carrier follows association and the
+     * control port authorization. The registry passes wlan_set_state.
+     * Returns 0 or the radio's error, which keeps the old state; a move to
+     * NONE always commits. */
+    int (*state)(struct wlan *wlan, enum wlan_sta_state state, struct wlan_bss *bss);
     /** Report an event; the registry passes wlan_event, which keeps mlme.c
      * free of a link-time dependence on nl80211, as scan.c is. */
     wlan_event_fn event;
@@ -81,7 +82,8 @@ struct wlan_mlme_timer {
 struct wlan_mlme {
     struct wlan *wlan;
     struct wlan_radio *radio;
-    struct wlan_scan *scan; /* NULL when nothing scans */
+    const struct wlan_band *band; /* the radio's, after the regulatory rules */
+    struct wlan_scan *scan;       /* NULL when nothing scans */
     const struct wlan_mlme_ops *ops;
     enum wlan_sta_state state;
     struct wlan_bss *bss;               /* held while the state is not NONE */
@@ -119,11 +121,13 @@ struct wlan_mlme {
  * UNPROT_DEAUTHENTICATE and UNPROT_DISASSOCIATE with the frame dropped.
  */
 
-/** Prepare m for wlan on radio, in state NONE. While a BSS is in use the
- * MLME holds it and makes its channel the home of scan, which may be NULL.
- * scan and ops are borrowed until wlan_mlme_stop returns. */
+/** Prepare m for wlan on radio, in state NONE, with the channels, rates
+ * and HT of band. While a BSS is in use the MLME holds it and makes its
+ * channel the home of scan, which may be NULL. band, scan and ops are
+ * borrowed until wlan_mlme_stop returns. */
 void wlan_mlme_init(struct wlan_mlme *m, struct wlan *wlan, struct wlan_radio *radio,
-                    struct wlan_scan *scan, const struct wlan_mlme_ops *ops);
+                    const struct wlan_band *band, struct wlan_scan *scan,
+                    const struct wlan_mlme_ops *ops);
 
 /** Drop to NONE without frames or events and cancel the timers; for an
  * interface going down or a radio unregistered. Process context, not the
