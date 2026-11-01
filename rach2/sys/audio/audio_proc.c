@@ -79,6 +79,31 @@ static const char *widget_type(uint8_t type)
     return type == 0xF ? "vendor" : "other";
 }
 
+/** Append a line for each jack the driver watches to `t`: its pin, 0 for
+ * none, its state, `in`, `out` or `unknown`, and its readings, the failed
+ * ones and its changes. */
+static void put_jacks(struct audio_text *t, const hda_report_t *r)
+{
+    static const char *const names[HDA_JACKS] = {"headphone", "mic"};
+    int j;
+
+    for (j = 0; j < HDA_JACKS; j++) {
+        const hda_jack_report_t *k = &r->jacks[j];
+
+        put_str(t, "jack ");
+        put_str(t, names[j]);
+        put_field(t, " pin ", k->pin);
+        put_str(t, !k->pin                    ? " state unknown"
+                   : k->state == HDA_JACK_IN  ? " state in"
+                   : k->state == HDA_JACK_OUT ? " state out"
+                                              : " state unknown");
+        put_field(t, " polls ", k->polls);
+        put_field(t, " failed ", k->failed);
+        put_field(t, " changes ", k->changes);
+        put_ch(t, '\n');
+    }
+}
+
 /** Append the stream's queue, the GPIO count, a line for each widget of the
  * function group and the list of its ADCs to `t`. */
 static void put_codec(struct audio_text *t, const hda_report_t *r)
@@ -166,11 +191,11 @@ static void put_input(struct audio_text *t, const hda_input_report_t *in)
 /**
  * Write /proc/audio's text into `buf`, of `cap` bytes, with no terminator:
  * the audio driver's name and the HDA driver's report (`hda_get_report`),
- * the codec and the widgets it chose, the rates and formats of the last
- * stream it programmed, the converters' capabilities and the connection
- * lists it read; the input path, the ADC's capabilities and the input
- * stream's counters; then the output stream's queue, and every widget of the
- * codec's function group with its ADCs. It sends no verb.
+ * the codec and the widgets it chose, the output routing mode, the jacks
+ * and their states, the rates and formats of the last stream it programmed, the converters'
+ * capabilities and the connection lists it read; the input path, the ADC's capabilities and the
+ * input stream's counters; then the output stream's queue, and every widget of the codec's function
+ * group with its ADCs. It sends no verb.
  *
  * With `buf` NULL it first reads the queue again (`hda_read_queue`); with a
  * buffer it writes the reading the last call without one took. procfs asks
@@ -182,6 +207,7 @@ static void put_input(struct audio_text *t, const hda_input_report_t *in)
  */
 int audio_proc_text(char *buf, int cap)
 {
+    static const char *const modes[] = {"auto", "primary", "hp", "both"};
     const hda_report_t *r;
     struct audio_text text, *t = &text;
     int i, j;
@@ -210,7 +236,11 @@ int audio_proc_text(char *buf, int cap)
     put_field(t, " index ", r->hp_index);
     put_field(t, " dac ", r->hp_dac);
     put_field(t, " enabled ", r->hp_enabled);
-    put_field(t, "\nstream requested ", r->requested_rate);
+    put_str(t, " mode ");
+    put_str(t, modes[hda_get_output_mode() & 3]);
+    put_ch(t, '\n');
+    put_jacks(t, r);
+    put_field(t, "stream requested ", r->requested_rate);
     put_field(t, " programmed ", r->programmed_rate);
     put_str(t, " format 0x");
     put_hex(t, r->stream_format, 4);
