@@ -30,4 +30,9 @@
  */
 extern const struct vfs_type vfs_ext2_type;
 
+/** The nodes in memory that every ext2 mount's search for an inode by its
+ * number has read since boot, for /proc/stat: one or two for each search
+ * while the mounts' hashes keep their chains short. */
+uint32_t ext2_node_visits(void);
+
 #endif /* _EXT2_H_ */
