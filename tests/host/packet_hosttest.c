@@ -2,11 +2,12 @@
  * packet_hosttest.c: the receive parsers against frames no peer would send.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/kheap_host.c
  *
  * A machine on a real network is handed whatever arrives, and what arrives is
  * not always well formed: a header cut short by a bad cable, a length field
  * that claims more than the frame holds, an options field that runs past the
- * end, a fragment. The kernel's answer to all of those is to drop the frame,
+ * end. The kernel's answer to all of those is to drop the frame,
  * and the way to be sure it does is to hand it one and see that it neither
  * reads past the buffer nor passes the frame on.
  *
@@ -23,8 +24,10 @@
  * the sanitizer says what was touched.
  *
  * The send rows run `ip_tx` against the same recorders: the MTU on every
- * path, a driver's refusal, the loopback ring filled past its last slot, and
- * the interface a broadcast leaves by on a machine with two cards.
+ * path, with the fragments of a datagram past it, a driver's refusal, the
+ * loopback ring filled past its last slot, and the interface a broadcast
+ * leaves by on a machine with two cards. `ipfrag.c` is compiled in too, and
+ * the receive rows reassemble a datagram from its fragments.
  */
 
 extern int printf(const char *fmt, ...);
@@ -75,10 +78,10 @@ void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 }
 
 /** Count an IPv6 datagram the loopback ring delivers. */
-void ip6_loop_rx(int ifindex, const uint8_t *data, uint16_t len)
+void ip6_loop_rx(int ifindex, const uint8_t *data, uint32_t len)
 {
     (void)ifindex;
-    ip6_rx(0, data, len);
+    ip6_rx(0, data, (uint16_t)len);
 }
 
 /** Count an ICMP message received. */
@@ -94,6 +97,14 @@ void icmp_rx(uint32_t src, uint32_t dst, uint8_t ttl, const uint8_t *data, uint1
 
 /** Send no ICMP destination-unreachable message. */
 void icmp_unreachable(const uint8_t *dgram, uint16_t len, uint8_t code)
+{
+    (void)dgram;
+    (void)len;
+    (void)code;
+}
+
+/** Send no ICMP time exceeded. */
+void icmp_time_exceeded(const uint8_t *dgram, uint16_t len, uint8_t code)
 {
     (void)dgram;
     (void)len;
@@ -372,6 +383,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
 
 #include "../../rach2/sys/network/ethernet/ethernet.c"
 #include "../../rach2/sys/network/ip/ip.c"
+#include "../../rach2/sys/network/ip/ipfrag.c"
 
 /* The counters /proc/net/snmp reports, which net_core.c defines. */
 struct net_mib net_mib;
@@ -480,25 +492,58 @@ static unsigned build_ip(uint8_t *f, uint8_t proto, unsigned payload_len)
     return 20;
 }
 
+/** Empty the loopback ring without delivering it, freeing what a datagram
+ * past one slot holds on the heap. */
+static void loop_reset(void)
+{
+    unsigned i;
+
+    for (i = 0; i < LOOP_RING_SLOTS; i++) {
+        kfree(loop_ring_big[i]);
+        loop_ring_big[i] = 0;
+    }
+    loop_head = loop_tail = loop_dropped = loop_peak = 0;
+}
+
+/* The fragments `len` bytes of payload leave in by a card: one within the
+ * 1480 bytes a frame leaves after the header, else one for each 1480. */
+#define FRAGMENTS(len) ((len) <= 1480u ? 1u : ((len) + 1479u) / 1480u)
+
 /**
  * Check a datagram of `len` bytes of payload that ip_tx took, where path `path`
- * puts it: 0 the loopback ring, 1 an ARP request and no data frame, any other
- * the driver.
+ * puts it: 0 the loopback ring, whole and with DF, however long; 1 an ARP
+ * request and no data frame, its fragments held; any other the driver, one
+ * frame with DF within the MTU, else its fragments, of which the last is in
+ * `ip_tx_buf`.
  */
 static void check_tx_path(unsigned path, uint16_t len)
 {
+    unsigned frags = FRAGMENTS(len);
+
     if (path == 0) {
+        const uint8_t *dg = loop_ring_big[0] ? loop_ring_big[0] : loop_ring[0];
+
         CHECK("loopback queues the complete IP datagram",
-              loop_head == 1 && loop_ring_len[0] == 20 + len &&
-                  read16be(loop_ring[0] + 2) == 20 + len && read16be(loop_ring[0] + 6) == 0x4000 &&
-                  ip_checksum(loop_ring[0], 20) == 0 && tx_frames == 0 && arp_queries == 0);
+              loop_head == 1 && loop_ring_len[0] == 20u + len && read16be(dg + 2) == 20 + len &&
+                  read16be(dg + 6) == 0x4000 && ip_checksum(dg, 20) == 0 && tx_frames == 0 &&
+                  arp_queries == 0);
     } else if (path == 1) {
-        CHECK("ARP miss requests resolution without a data frame",
-              arp_queries == 1 && arp_requests == 1 && tx_frames == 0);
-    } else {
+        CHECK("ARP miss requests resolution once without a data frame",
+              arp_queries == frags && arp_requests == 1 && tx_frames == 0);
+    } else if (frags == 1) {
         CHECK("wire datagram includes both headers within the MTU",
               tx_frames == 1 && tx_len == 14 + 20 + len && read16be(ip_tx_buf + 2) == 20 + len &&
                   read16be(ip_tx_buf + 6) == 0x4000 && ip_checksum(ip_tx_buf, 20) == 0 &&
+                  arp_requests == 0);
+    } else {
+        uint16_t last = (uint16_t)(len - (frags - 1) * 1480u);
+
+        CHECK("a datagram past the MTU leaves in fragments of 1480 bytes, the last without MF "
+              "and none with DF",
+              tx_frames == frags && tx_len == 14u + 20u + last &&
+                  read16be(ip_tx_buf + 2) == 20 + last &&
+                  read16be(ip_tx_buf + 6) == (uint16_t)((frags - 1) * 1480u / 8u) &&
+                  read16be(ip_tx_buf + 4) == 0 && ip_checksum(ip_tx_buf, 20) == 0 &&
                   arp_requests == 0);
     }
 }
@@ -507,10 +552,10 @@ static void check_tx_path(unsigned path, uint16_t len)
  * Send `len` bytes of protocol `proto` to `dst` by path `path`, and check the
  * result. The paths are 0 this machine, 1 a next hop missing from the ARP
  * cache, 2 one in it, 3 the limited broadcast and 4 a destination with no
- * route. A payload past 1480 bytes is -EMSGSIZE before any route lookup, ARP,
- * queueing or transmission; with no route the send is -ENETUNREACH; an ICMP
- * broadcast is -EOPNOTSUPP; and anything else is taken, as check_tx_path
- * checks.
+ * route. A payload past 65515 bytes, the largest datagram's, is -EMSGSIZE
+ * before any route lookup, ARP, queueing or transmission; with no route the
+ * send is -ENETUNREACH; an ICMP broadcast is -EOPNOTSUPP; and anything else
+ * is taken, as check_tx_path checks.
  */
 static void test_tx_size(unsigned path, uint32_t dst, uint8_t proto, uint16_t len)
 {
@@ -522,11 +567,12 @@ static void test_tx_size(unsigned path, uint32_t dst, uint8_t proto, uint16_t le
     route_queries = arp_queries = arp_requests = tx_frames = 0;
     tx_answer = NETDEV_TX_OK;
     tx_len = 0;
-    loop_head = loop_tail = loop_dropped = loop_peak = 0;
+    loop_reset();
+    ip_hold_forget(0);
     ip_id_counter = 0;
     the_iface.tx_dropped = 0;
     rc = ip_tx(dst, proto, payload, len, IP_TTL_DEFAULT);
-    if (len > 1480) {
+    if (len > IP_PAYLOAD_MAX) {
         CHECK("oversize IP payload returns -EMSGSIZE on every path", rc == -EMSGSIZE);
         CHECK("oversize IP payload has no routing or transmit side effects",
               route_queries == 0 && arp_queries == 0 && arp_requests == 0 && tx_frames == 0 &&
@@ -579,7 +625,7 @@ static void test_tx_mtu(void)
 {
     static const uint32_t destinations[] = {0x0A00020Fu, 0x0A000202u, 0x0A000202u, 0xFFFFFFFFu,
                                             0xC0000201u};
-    static const uint16_t lengths[] = {0, 1480, 1481, 1500, 65535};
+    static const uint16_t lengths[] = {0, 1480, 1481, 1500, 20000, 65515, 65516, 65535};
     static const uint8_t protocols[] = {IP_PROTO_ICMP, IP_PROTO_UDP};
     unsigned path, n, p;
 
@@ -592,7 +638,8 @@ static void test_tx_mtu(void)
         }
     }
     route_available = 1;
-    loop_head = loop_tail = 0;
+    loop_reset();
+    ip_hold_forget(0);
 }
 
 volatile uint64_t kernel_ticks; /* the clock, TICK_HZ ticks to a second */
@@ -628,7 +675,8 @@ static void test_tx_hold(void)
 /**
  * Check that a send the driver takes is reported sent, that one it does not
  * take is -ENOBUFS, to be kept and sent again, and that a payload past the
- * frame's 1500 bytes is -EMSGSIZE and reaches no driver.
+ * frame's 1500 bytes leaves in fragments, but under IP_PMTUDISC_DO is
+ * -EMSGSIZE and reaches no driver.
  */
 static void test_tx_errors(void)
 {
@@ -645,9 +693,17 @@ static void test_tx_errors(void)
           ip_tx(0x0A000202u, IP_PROTO_ICMP, big, 100, IP_TTL_DEFAULT) == -ENOBUFS &&
               tx_frames == 2);
     tx_answer = NETDEV_TX_OK;
-    CHECK("a payload that would pass the frame's 1500 bytes with its header is -EMSGSIZE",
-          ip_tx(0x0A000202u, IP_PROTO_ICMP, big, 1490, IP_TTL_DEFAULT) == -EMSGSIZE);
-    CHECK("and reaches no driver", tx_frames == 2);
+    CHECK("a payload that would pass the frame's 1500 bytes with its header leaves in two "
+          "fragments",
+          ip_tx(0x0A000202u, IP_PROTO_ICMP, big, 1490, IP_TTL_DEFAULT) == 0 && tx_frames == 4);
+    CHECK("but under IP_PMTUDISC_DO it is -EMSGSIZE",
+          ip_tx_opts(0, 0x0A000202u, IP_PROTO_ICMP, big, 1490, IP_TTL_DEFAULT, IP_PMTUDISC_DO) ==
+              -EMSGSIZE);
+    CHECK("and reaches no driver", tx_frames == 4);
+    CHECK("under IP_PMTUDISC_DONT a datagram within the MTU leaves without DF",
+          ip_tx_opts(0, 0x0A000202u, IP_PROTO_ICMP, big, 100, IP_TTL_DEFAULT, IP_PMTUDISC_DONT) ==
+                  0 &&
+              tx_frames == 5 && read16be(ip_tx_buf + 6) == 0);
     arp_known = 0;
 }
 
@@ -707,7 +763,7 @@ static void test_loop_full(void)
     CHECK("the drained ring takes datagrams again and refuses past its end",
           again == 1 && ip_loop_dropped() == 3 * LOOP_RING_SLOTS + 1);
     CHECK("and the later refusal writes no second line", loop_lines == 1);
-    loop_head = loop_tail = 0;
+    loop_reset();
 }
 
 /**
@@ -735,7 +791,29 @@ static void test_loop_left_idle(void)
     ip_loop_count_idle();
     CHECK("and a tick after the ring was delivered counts none more",
           ip_loop_left_idle() == 2 && !ip_loop_pending());
-    loop_head = loop_tail = 0;
+    loop_reset();
+}
+
+/**
+ * A datagram past one slot of the loopback ring, up to `lo`'s MTU, goes
+ * round the ring whole and is delivered whole, and its block of the heap is
+ * freed once it is.
+ */
+static void test_loop_big(void)
+{
+    static uint8_t payload[65507 + 8];
+
+    reset();
+    loop_reset();
+    write16be(payload, 0xBEEF);
+    CHECK("the largest UDP datagram to this machine goes onto the ring whole",
+          ip_tx(net_ip_addr, IP_PROTO_UDP, payload, sizeof(payload), IP_TTL_DEFAULT) == 0 &&
+              loop_head == 1 && loop_ring_big[0] != 0 && loop_ring_len[0] == 65535u);
+    ip_loop_drain_from(IP_LOOP_FROM_TICK);
+    CHECK("and is delivered whole",
+          to_udp == 1 && udp_seen[0].number == 0xBEEF && udp_seen[0].len == sizeof(payload));
+    CHECK("and its block is freed", loop_ring_big[0] == 0 && !ip_loop_pending());
+    loop_reset();
 }
 
 /**
@@ -805,8 +883,9 @@ static void test_broadcast_iface(void)
  *   * an IPv4 header with a version other than 4, a header length below the
  *     minimum or past the frame, a total length past the frame or below the
  *     header, or a checksum that does not sum is dropped;
- *   * a fragment is not delivered as a whole datagram, since this stack does
- *     not reassemble, and a datagram addressed elsewhere is not delivered;
+ *   * a fragment is held until its datagram is whole, which is then delivered
+ *     once, with the reassembly counted; fragments that overlap give the
+ *     datagram up; a datagram addressed elsewhere is not delivered;
  *   * ICMP and TCP reach their own parsers and the raw layer; an EtherType with
  *     no parser reaches none; and ARP reaches the ARP parser.
  *
@@ -816,6 +895,7 @@ int main(void)
 {
     uint8_t f[256];
     unsigned n;
+    int i;
 
     test_tx_mtu();
     test_tx_link_down();
@@ -823,6 +903,7 @@ int main(void)
     test_tx_hold();
     test_loop_full();
     test_loop_left_idle();
+    test_loop_big();
     test_broadcast_iface();
 
     reset();
@@ -902,12 +983,46 @@ int main(void)
     CHECK("a header whose checksum does not sum is dropped", to_udp == 0);
 
     reset();
+    net_mib.ip_reasm_reqds = net_mib.ip_reasm_oks = net_mib.ip_reasm_fails = 0;
+    net_mib.ip_reasm_timeout = 0;
     n = build_eth(f, 0x0800);
     build_ip(f + n, 17, 8);
+    f[n + 4] = 0x12; /* identification 0x1234 */
+    f[n + 5] = 0x34;
     f[n + 6] = 0x20; /* more fragments */
     restamp(f + n);
     deliver(f, n + 28);
-    CHECK("a fragment is not delivered as a whole datagram", to_udp == 0);
+    CHECK("a fragment is not delivered as a whole datagram", to_udp == 0 && to_raw == 0);
+    build_ip(f + n, 17, 8);
+    f[n + 4] = 0x12;
+    f[n + 5] = 0x34;
+    f[n + 7] = 1; /* offset 8 bytes, the last fragment */
+    restamp(f + n);
+    deliver(f, n + 28);
+    CHECK("the fragment that completes it delivers the datagram, whole, once",
+          to_udp == 1 && to_raw == 1 && udp_seen[0].len == 16 && net_mib.ip_reasm_oks == 1 &&
+              net_mib.ip_reasm_reqds == 2);
+
+    reset();
+    n = build_eth(f, 0x0800);
+    build_ip(f + n, 17, 16);
+    f[n + 4] = 0x56; /* identification 0x5678 */
+    f[n + 6] = 0x20;
+    restamp(f + n);
+    deliver(f, n + 36);
+    build_ip(f + n, 17, 16);
+    f[n + 4] = 0x56;
+    f[n + 7] = 1; /* offset 8, over the first fragment's last 8 bytes */
+    restamp(f + n);
+    deliver(f, n + 36);
+    CHECK("fragments that overlap give the datagram up",
+          to_udp == 0 && net_mib.ip_reasm_fails == 1);
+    kernel_ticks += (uint64_t)IP_FRAG_TIMEOUT_SECONDS * TICK_HZ + 1u;
+    ip_frag_tick();
+    for (i = 0; i < IP_FRAG_QUEUES && !ip_frag_queues[i].used; i++) {
+    }
+    CHECK("and its queue is freed, uncounted, when its time is out",
+          ip_frag_mem == 0 && i == IP_FRAG_QUEUES && net_mib.ip_reasm_timeout == 0);
 
     reset();
     n = build_eth(f, 0x0800);

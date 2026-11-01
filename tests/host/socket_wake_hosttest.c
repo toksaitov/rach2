@@ -5,6 +5,7 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
  * host-deps: tests/host/compat/kheap_host.c
+ * host-deps: rach2/sys/network/socket/dgq.c
  *
  * A datagram delivered to a UDP socket, and data delivered to a TCP
  * connection, wake the socket's queue for data alone, and data a full TCP
@@ -101,30 +102,6 @@ void packet_unbind(struct socket *sock)
     (void)sock;
 }
 
-/** Report that no datagram is queued for a packet socket. */
-int packet_ready(struct socket *sock)
-{
-    (void)sock;
-    return 0;
-}
-
-/** Report an empty packet socket queue: -1. */
-int packet_pending(struct socket *sock)
-{
-    (void)sock;
-    return -1;
-}
-
-/** Copy nothing from a packet socket's queue and return -1. */
-int packet_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
-{
-    (void)sock;
-    (void)offset;
-    (void)buf;
-    (void)len;
-    return -1;
-}
-
 /** Drop a packet socket's head datagram: a no-op. */
 void packet_consume(struct socket *sock)
 {
@@ -141,30 +118,6 @@ void packet_note_head(struct socket *sock)
 void raw_unregister(struct socket *sock)
 {
     (void)sock;
-}
-
-/** Report that no datagram is queued for a raw socket. */
-int raw_ready(struct socket *sock)
-{
-    (void)sock;
-    return 0;
-}
-
-/** Report an empty raw socket queue: -1. */
-int raw_pending(struct socket *sock)
-{
-    (void)sock;
-    return -1;
-}
-
-/** Copy nothing from a raw socket's queue and return -1. */
-int raw_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
-{
-    (void)sock;
-    (void)offset;
-    (void)buf;
-    (void)len;
-    return -1;
 }
 
 /** Drop a raw socket's head datagram: a no-op. */
@@ -267,6 +220,17 @@ void netlink_consume(struct socket *sock)
     (void)sock;
 }
 
+/** Note a netlink read's size: a no-op, since no row reads one. */
+void netlink_note_recv(struct socket *sock, uint32_t len)
+{
+    (void)sock;
+    (void)len;
+}
+
+/* The counters socket.c keeps for a datagram its queue drops. */
+struct net_mib net_mib;
+struct net_mib6 net_mib6;
+
 /** Report that no message is queued for a netlink socket. */
 int netlink_ready(struct socket *sock)
 {
@@ -282,9 +246,10 @@ int main(void)
     static uint8_t ring[TCP_RECV_RING_SMALL];
     static const uint8_t bytes[4] = {1, 2, 3, 4};
 
+    udp.rcvbuf = SOCK_RCVBUF_DEFAULT;
     reset();
     socket_udp_deliver(&udp, net_addr4(0x0A000002u), 7, bytes, sizeof(bytes));
-    CHECK(udp.recv_count == 1 && woken == &udp.waiters && woken_kinds == WQ_DATA,
+    CHECK(udp.rq.count == 1 && woken == &udp.waiters && woken_kinds == WQ_DATA,
           "a datagram wakes a UDP socket for data alone");
 
     tcp.tcb = &block;

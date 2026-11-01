@@ -4,11 +4,15 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
+ * host-deps: rach2/sys/network/socket/dgq.c
  *
  * A datagram of the protocol a socket registered is queued, whole, with its
- * source, and wakes the socket's queue for data alone, so an edge-triggered
- * epoll registration for output, which a raw socket always has, is not told
- * of it. A datagram of another protocol is not queued and wakes nothing.
+ * source, on the socket's own queue, and wakes the socket for data alone, so
+ * an edge-triggered epoll registration for output, which a raw socket always
+ * has, is not told of it. A datagram of another protocol is not queued and
+ * wakes nothing. A datagram past one frame, as a reassembled one is, is
+ * queued whole too, and once the queue holds more than the socket's budget
+ * the next is dropped and logged.
  */
 #include "network/socket/raw.c"
 
@@ -38,13 +42,15 @@ void net_unlock(uint32_t flags)
     (void)flags;
 }
 
-/** Fail the row: raw.c logs only when a queue is full, and no row fills one. */
+static int logged; /* the lines raw.c logged: one, for a full queue */
+
+/** Count a line raw.c logs, which it does only when a queue is full. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
     (void)level;
     (void)subsystem;
     (void)format;
-    CHECK(0, "no row fills a queue");
+    logged++;
 }
 
 /** Record the queue a receive wakes and the kinds of change it names; no
@@ -59,9 +65,10 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
 int main(void)
 {
     static struct socket sock;
-    static uint8_t datagram[28], copy[28];
+    static uint8_t datagram[28], copy[28], big[20000];
     uint32_t i;
 
+    sock.rcvbuf = SOCK_RCVBUF_MIN;
     datagram[0] = 0x45;
     datagram[9] = 1;
     datagram[12] = 10;
@@ -71,11 +78,11 @@ int main(void)
     }
     CHECK(raw_register(&sock, 1) == 0, "a socket registers for ICMP");
     raw_rx(17, datagram, sizeof(datagram));
-    CHECK(!raw_ready(&sock) && woken == NULL, "a datagram of another protocol wakes nothing");
+    CHECK(sock.rq.count == 0 && woken == NULL, "a datagram of another protocol wakes nothing");
     raw_rx(1, datagram, sizeof(datagram));
-    CHECK(raw_ready(&sock) && raw_pending(&sock) == (int)sizeof(datagram),
+    CHECK(sock.rq.count == 1 && sock.rq.head->len == sizeof(datagram),
           "a datagram of the registered protocol is queued whole");
-    CHECK(raw_peek(&sock, 0, copy, (int)sizeof(copy)) == (int)sizeof(copy),
+    CHECK(sock_dgq_peek(&sock.rq, 0, copy, (int)sizeof(copy)) == (int)sizeof(copy),
           "a peek gives the whole datagram");
     for (i = 0; i < sizeof(copy) && copy[i] == datagram[i]; i++) {
     }
@@ -84,7 +91,16 @@ int main(void)
     CHECK(raw_last_src(&sock) == 0x0A000002u, "the datagram's source is kept");
     CHECK(woken == &sock.waiters && woken_kinds == WQ_DATA,
           "a datagram wakes its raw socket for data alone");
+    big[0] = 0x45;
+    big[9] = 1;
+    raw_rx(1, big, sizeof(big));
+    CHECK(sock.rq.count == 1 && sock.rq.head->len == sizeof(big) && logged == 0,
+          "a datagram past one frame is queued whole");
+    raw_rx(1, datagram, sizeof(datagram));
+    CHECK(sock.rq.count == 1 && logged == 1,
+          "a datagram that finds the budget spent is dropped, and the drop logged");
     raw_unregister(&sock);
+    CHECK(sock.rq.count == 0 && sock.rq.head == NULL, "unregistering frees what was queued");
     printf("raw-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }

@@ -7,6 +7,7 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/network/socket/address.c
  * host-deps: tests/host/compat/kheap_host.c rach2/sys/network/ip6/addr6.c
+ * host-deps: rach2/sys/network/socket/dgq.c
  * host-cflags: -Wno-int-to-pointer-cast
  *
  * User pointers are offsets in an arena, preserving the 32-bit syscall ABI
@@ -467,10 +468,12 @@ static void packet_wake(void)
     sock.family = AF_PACKET;
     sock.protocol = ETH_TYPE_ARP;
     CHECK(packet_bind(&sock, 0) == 0, "packet bind for a frame");
+    sock.rcvbuf = SOCK_RCVBUF_DEFAULT;
     woken = NULL;
     woken_kinds = 0;
     packet_rx(&cards[0], ETH_TYPE_ARP, frame, sizeof(frame));
-    CHECK(packet_ready(&sock), "a frame for a bound packet socket is queued");
+    CHECK(sock.rq.count == 1 && sock.rq.head->len == sizeof(frame) - ETH_HDR_SIZE,
+          "a frame for a bound packet socket is queued, its payload whole");
     CHECK(woken == &sock.waiters && woken_kinds == WQ_DATA,
           "a frame wakes its packet socket for data alone");
     packet_unbind(&sock);

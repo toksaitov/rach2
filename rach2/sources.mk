@@ -152,6 +152,7 @@ C_SRC_SHARED = kernel.c \
     sys/network/tcp/tcp.c \
     sys/network/tcp/rcvwnd.c \
     sys/network/socket/socket.c \
+    sys/network/socket/dgq.c \
     sys/network/socket/address.c \
     sys/network/socket/address_route.c \
     sys/network/socket/netlink.c \
