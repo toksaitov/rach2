@@ -119,7 +119,7 @@ static void put_hex(char *buf, int *n, int cap, uint32_t v, int width)
  * Append the counters of /proc/disk at `*n`: the drivers' totals first, then
  * the cache's: reads served from a buffer, reads that filled one, waits for a
  * buffer another process held, and the buffers its walks of its own lists
- * read.
+ * read; then its buffers, the most it makes, and the buckets of its index.
  */
 static void put_counters(char *buf, int *n, int cap)
 {
@@ -153,6 +153,12 @@ static void put_counters(char *buf, int *n, int cap)
     put_dec(buf, n, cap, bcache_stat_waits());
     put(buf, n, cap, "\ncache-visits ");
     put_dec(buf, n, cap, bcache_stat_visits());
+    put(buf, n, cap, "\ncache-buffers ");
+    put_dec(buf, n, cap, bcache_resident());
+    put(buf, n, cap, "\ncache-limit ");
+    put_dec(buf, n, cap, bcache_capacity());
+    put(buf, n, cap, "\ncache-buckets ");
+    put_dec(buf, n, cap, bcache_buckets());
     put(buf, n, cap, "\n");
 }
 

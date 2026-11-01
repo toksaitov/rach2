@@ -178,6 +178,21 @@ uint64_t bcache_stat_visits(void)
 {
     return 0;
 }
+/** The buffer cache's buffers, 0. */
+uint32_t bcache_resident(void)
+{
+    return 0;
+}
+/** The most buffers the cache makes, 0. */
+uint32_t bcache_capacity(void)
+{
+    return 0;
+}
+/** The buckets of the cache's index, 0. */
+uint32_t bcache_buckets(void)
+{
+    return 0;
+}
 
 /* The build policy diskinfo_format prints; the rows set both values. */
 static int policy_now = DISKCMD_READ_WRITE;
@@ -318,7 +333,7 @@ int main(void)
                  "disk-flushes 0\ndisk-polls 0\ndisk-wait-ticks 0\ndisk-in-flight 0\ndisk-overlaps "
                  "0\ndisk-drains 0\ndisk-quarantines 0\ndisk-releases 0\n"
                  "disk-release-tick 0\nlag-completions 0\ncache-hits 0\ncache-fills 0\ncache-waits "
-                 "0\ncache-visits 0\n") == 0,
+                 "0\ncache-visits 0\ncache-buffers 0\ncache-limit 0\ncache-buckets 0\n") == 0,
           "a kernel that was never asked says so and stops there");
 
     d.state = DISKINFO_NO_DEVICE;
@@ -328,7 +343,7 @@ int main(void)
                  "disk-flushes 0\ndisk-polls 0\ndisk-wait-ticks 0\ndisk-in-flight 0\ndisk-overlaps "
                  "0\ndisk-drains 0\ndisk-quarantines 0\ndisk-releases 0\n"
                  "disk-release-tick 0\nlag-completions 0\ncache-hits 0\ncache-fills 0\ncache-waits "
-                 "0\ncache-visits 0\n") == 0,
+                 "0\ncache-visits 0\ncache-buffers 0\ncache-limit 0\ncache-buckets 0\n") == 0,
           "a kernel that asked and got nothing says a different thing");
 
     policy_now = DISKCMD_READ_ONLY;
@@ -338,7 +353,7 @@ int main(void)
                  "disk-flushes 0\ndisk-polls 0\ndisk-wait-ticks 0\ndisk-in-flight 0\ndisk-overlaps "
                  "0\ndisk-drains 0\ndisk-quarantines 0\ndisk-releases 0\n"
                  "disk-release-tick 0\nlag-completions 0\ncache-hits 0\ncache-fills 0\ncache-waits "
-                 "0\ncache-visits 0\n") == 0,
+                 "0\ncache-visits 0\ncache-buffers 0\ncache-limit 0\ncache-buckets 0\n") == 0,
           "the file names the build policy the kernel is running");
     policy_now = DISKCMD_READ_WRITE;
 
@@ -382,6 +397,7 @@ int main(void)
                                      "driver ahci\n",
                                      "policy read-write\ndisk-commands 0\ndisk-flushes 0\n",
                                      "cache-hits 0\ncache-fills 0\ncache-waits 0\ncache-visits 0\n",
+                                     "cache-buffers 0\ncache-limit 0\ncache-buckets 0\n",
                                      "port 0\n",
                                      "mounted 0\n",
                                      "sector-size 512\n",
