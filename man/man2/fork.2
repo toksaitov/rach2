@@ -50,6 +50,7 @@ The soft
 limit bounds the number of threads with the parent's real user ID, the
 parent's included: each thread of a process counts, as on Linux, and one
 that has ended counts until it is reaped.
+A child being built reserves its count before any building step can sleep.
 It bounds a new thread as it bounds a new process.
 A parent with real user ID 0 is exempt.
 .Pp

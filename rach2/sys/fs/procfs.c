@@ -2594,6 +2594,15 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_str(t, "\nsleeps_interrupted ");
     ap_u32(t, process_sleeps_cut_short());
     ap_ch(t, '\n');
+    ap_str(t, "process_pid_steps ");
+    ap_u32(t, proc_work_count(0));
+    ap_str(t, "\nprocess_uid_steps ");
+    ap_u32(t, proc_work_count(1));
+    ap_str(t, "\nprocess_timer_steps ");
+    ap_u32(t, proc_work_count(2));
+    ap_str(t, "\nvm_gap_steps ");
+    ap_u32(t, vm_gap_steps());
+    ap_ch(t, '\n');
     ap_str(t, "latency_timer_us ");
     ap_u32(t, latency_max(LAT_TIMER));
     ap_str(t, "\nlatency_disk_us ");

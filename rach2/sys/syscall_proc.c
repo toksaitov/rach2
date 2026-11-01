@@ -1701,7 +1701,7 @@ static void exec_take_leader(void)
     struct tgroup *tg = current_proc->tg;
     process_t *old = tg->leader;
 
-    current_proc->pid = old->pid;
+    proc_exchange_pids(current_proc, old);
     current_proc->alarm_tick = old->alarm_tick;
     current_proc->alarm_interval = old->alarm_interval;
     current_proc->jc_status = old->jc_status;
@@ -1711,6 +1711,7 @@ static void exec_take_leader(void)
     mm_drop(old);
     kstack_free(old->kernel_stack);
     free_process(old);
+    proc_timer_update(current_proc);
 }
 
 /**
@@ -2182,23 +2183,15 @@ static int fork_fs(process_t *child, process_t *parent, uint32_t flags)
  * record counts, as Linux counts every task: each thread of a process, and
  * one that has ended until it is reaped. Counted by the real uid at the
  * time, so a thread that took a new identity with setuid counts for that
- * user, and counted after the reclaim that may sleep, so two forks cannot
- * both see the last place. 0, or -EAGAIN.
+ * user. The check follows reclaim, which may sleep, and the new record
+ * reserves its count before another building step can sleep. 0, or -EAGAIN.
  */
 static int32_t fork_nproc(const process_t *parent)
 {
-    const process_t *q;
-    uint32_t mine = 0;
-
     if (parent->ruid == 0 || parent->rlim[RLIM_NPROC].cur == RLIM_INFINITY) {
         return 0;
     }
-    for (q = proc_list; q; q = q->next) {
-        if (q->ruid == parent->ruid && q->state != PROC_UNUSED) {
-            mine++;
-        }
-    }
-    return mine >= parent->rlim[RLIM_NPROC].cur ? -EAGAIN : 0;
+    return proc_user_records(parent) >= parent->rlim[RLIM_NPROC].cur ? -EAGAIN : 0;
 }
 
 /**
@@ -2227,7 +2220,6 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->nocaps = parent->nocaps;
     seccomp_inherit(child, parent);
     k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));
-    child->ruid = parent->ruid;
     child->euid = parent->euid;
     child->suid = parent->suid;
     child->rgid = parent->rgid;
@@ -2387,6 +2379,10 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
         return -ENOMEM; /* a record the heap could not give */
     }
     child->state = PROC_UNUSED;
+    if (proc_set_ruid(child, parent->ruid) != 0) {
+        free_process(child);
+        return -ENOMEM;
+    }
 
     proc_files_put(child);
 
@@ -5089,7 +5085,9 @@ long sys_setuid(isr_params_t *params)
         return -EINVAL;
     }
     if (id_privileged()) {
-        p->ruid = uid;
+        if (proc_set_ruid(p, uid) != 0) {
+            return -ENOMEM;
+        }
         p->euid = uid;
         p->suid = uid;
         cred_moved(p, old_euid, p->egid);
@@ -5160,10 +5158,13 @@ long sys_setreuid(isr_params_t *params)
             return -EPERM;
         }
     }
-    if (r != SC_ID_KEEP || (e != SC_ID_KEEP && new_e != p->ruid)) {
+    r = p->ruid;
+    if (proc_set_ruid(p, new_r) != 0) {
+        return -ENOMEM;
+    }
+    if (v[0] != SC_ID_KEEP || (e != SC_ID_KEEP && new_e != r)) {
         p->suid = new_e;
     }
-    p->ruid = new_r;
     p->euid = new_e;
     cred_moved(p, old_euid, p->egid);
     return 0;
@@ -5234,8 +5235,8 @@ long sys_setresuid(isr_params_t *params)
             }
         }
     }
-    if (r != SC_ID_KEEP) {
-        p->ruid = r;
+    if (r != SC_ID_KEEP && proc_set_ruid(p, r) != 0) {
+        return -ENOMEM;
     }
     if (e != SC_ID_KEEP) {
         p->euid = e;

@@ -188,6 +188,9 @@ An entry of the supplementary group list cannot be read.
 .Fa size
 exceeds eight.
 This check precedes the privilege check.
+.It Bq Er ENOMEM
+The kernel could not allocate the record count for a new real user ID.
+The caller keeps its previous IDs.
 .It Bq Er EPERM
 An unprivileged caller requested an ID change outside the permitted
 values, or called

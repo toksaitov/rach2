@@ -206,6 +206,7 @@ void sched_make_ready(process_t *p)
     int kick;
 
     p->state = PROC_READY;
+    proc_timer_update(p);
     target = sched_place(p);
     p->cpu = target;
     kick = sched_cpu_idle(target) || cpu_table[target].current == p;
@@ -305,6 +306,7 @@ void schedule(void)
     me = (int)arch_cpu_id();
     cpu = &cpu_table[me];
     old = cpu->current;
+    proc_timer_update(old);
     if (old->state != PROC_READY) {
         old->woken = 0;
     }

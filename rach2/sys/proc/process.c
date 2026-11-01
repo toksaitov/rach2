@@ -1,6 +1,5 @@
 /*
- * process.c: the process list, the making and freeing of records, and the
- * parts of a process's end and of the timer tick that walk the list.
+ * process.c: indexed process records, user counts, active timers and reparenting.
  */
 #include "process.h"
 #include "../lib/kstring.h"
@@ -19,6 +18,186 @@ extern volatile uint32_t kernel_ticks;
 process_t *proc_list;
 process_t *proc_idle;
 static process_t *proc_tail; /* the last record of proc_list */
+
+/* The pid hash doubles before its load exceeds one record per bucket. */
+static process_t **pid_table;
+static uint32_t pid_capacity, pid_records;
+#define USER_BUCKETS 256
+struct proc_user_count {
+    uint32_t uid;
+    uint32_t records; /* allocated records, including forks in build and zombies */
+    struct proc_user_count *next;
+};
+static struct proc_user_count *user_table[USER_BUCKETS];
+static process_t *timers;
+static process_t *timer_cursor; /* the next entry of a tick already in progress */
+static uint32_t work_count[3];
+
+/** Read one process-index work counter. */
+uint32_t proc_work_count(unsigned int index)
+{
+    return index < 3 ? work_count[index] : 0;
+}
+
+/** Remove an indexed record before changing its pid or freeing it. */
+static void pid_remove(process_t *p)
+{
+    process_t **link = &pid_table[p->pid & (pid_capacity - 1)];
+
+    while (*link != p) {
+        work_count[0]++;
+        link = &(*link)->pid_next;
+    }
+    work_count[0]++;
+    *link = p->pid_next;
+}
+
+/** Insert a record in an allocated pid bucket. */
+static void pid_insert(process_t *p)
+{
+    uint32_t slot = p->pid & (pid_capacity - 1);
+
+    p->pid_next = pid_table[slot];
+    pid_table[slot] = p;
+}
+
+/** Grow the pid index for one more record; -1 leaves the old index intact. */
+static int pid_reserve(void)
+{
+    process_t **table, **old;
+    process_t *p;
+    uint32_t flags;
+    uint32_t capacity = pid_capacity != 0 ? pid_capacity * 2 : 64;
+
+    if (pid_records < pid_capacity) {
+        return 0;
+    }
+    if (capacity <= pid_capacity || capacity > (uint32_t)(~(size_t)0 / sizeof(*table))) {
+        return -1;
+    }
+    table = kzalloc(capacity * sizeof(*table));
+    if (!table) {
+        return -1;
+    }
+    flags = kirq_save();
+    old = pid_table;
+    pid_table = table;
+    pid_capacity = capacity;
+    for (p = proc_list; p; p = p->next) {
+        work_count[0]++;
+        pid_insert(p);
+    }
+    kirq_restore(flags);
+    kfree(old);
+    return 0;
+}
+
+/** Exchange indexed thread ids without exposing a partial exchange. */
+void proc_exchange_pids(process_t *a, process_t *b)
+{
+    uint32_t pid = a->pid;
+    uint32_t flags = kirq_save();
+
+    pid_remove(a);
+    pid_remove(b);
+    a->pid = b->pid;
+    b->pid = pid;
+    pid_insert(a);
+    pid_insert(b);
+    kirq_restore(flags);
+}
+
+/** Release one user's count, deleting its bucket entry at the last record. */
+static void user_put(struct proc_user_count *u)
+{
+    struct proc_user_count **link;
+
+    if (!u || --u->records != 0) {
+        return;
+    }
+    link = &user_table[u->uid & (USER_BUCKETS - 1)];
+    while (*link != u) {
+        work_count[1]++;
+        link = &(*link)->next;
+    }
+    work_count[1]++;
+    *link = u->next;
+    kfree(u);
+}
+
+/** Move a record to the new real user, allocating its count if needed. */
+int proc_set_ruid(process_t *p, uint32_t uid)
+{
+    struct proc_user_count *u;
+    uint32_t slot = uid & (USER_BUCKETS - 1);
+
+    if (p->user_count && p->ruid == uid) {
+        return 0;
+    }
+    for (u = user_table[slot]; u; u = u->next) {
+        work_count[1]++;
+        if (u->uid == uid) {
+            break;
+        }
+    }
+    if (!u) {
+        u = kzalloc(sizeof(*u));
+        if (!u) {
+            return -1;
+        }
+        u->uid = uid;
+        u->next = user_table[slot];
+        user_table[slot] = u;
+    }
+    u->records++;
+    user_put(p->user_count);
+    p->user_count = u;
+    p->ruid = uid;
+    return 0;
+}
+
+/** Read the number of records charged to this record's real user. */
+uint32_t proc_user_records(const process_t *p)
+{
+    work_count[1]++;
+    return p->user_count ? p->user_count->records : 0;
+}
+
+/** Keep only records with active timed waits or real alarms on the timer list. */
+void proc_timer_update(process_t *p)
+{
+    uint32_t flags = kirq_save();
+    int active =
+        p->state != PROC_UNUSED && (p->alarm_tick || (p->state == PROC_BLOCKED && p->wakeup_tick));
+
+    if (active == p->timer_linked) {
+        kirq_restore(flags);
+        return;
+    }
+    if (active) {
+        p->timer_next = timers;
+        p->timer_prev = NULL;
+        if (timers) {
+            timers->timer_prev = p;
+        }
+        timers = p;
+    } else {
+        if (timer_cursor == p) {
+            timer_cursor = p->timer_next;
+        }
+        if (p->timer_prev) {
+            p->timer_prev->timer_next = p->timer_next;
+        } else {
+            timers = p->timer_next;
+        }
+        if (p->timer_next) {
+            p->timer_next->timer_prev = p->timer_prev;
+        }
+        p->timer_next = p->timer_prev = NULL;
+    }
+    p->timer_linked = active;
+    kirq_restore(flags);
+}
 
 struct percpu cpu_table[NR_CPUS];
 
@@ -107,6 +286,7 @@ process_t *alloc_process(void)
 {
     process_t *p = kmalloc(sizeof(*p));
     uint32_t candidate;
+    int fd;
 
     if (!p) {
         return NULL;
@@ -176,6 +356,17 @@ process_t *alloc_process(void)
         return NULL;
     }
 
+    if (pid_reserve() != 0 || proc_set_ruid(p, 0) != 0) {
+        for (fd = FD_STDIN; fd <= FD_STDERR; fd++) {
+            fd_free(p->fds, fd);
+        }
+        fd_table_delete(p->fds);
+        kfree(p->fs);
+        tgroup_put(p->tg);
+        fpu_area_free(p->fpu);
+        kfree(p);
+        return NULL;
+    }
     p->prev = proc_tail;
     p->next = NULL;
     if (proc_tail) {
@@ -185,6 +376,8 @@ process_t *alloc_process(void)
     }
     proc_tail = p;
 
+    pid_insert(p);
+    pid_records++;
     process_count_fork();
     return p;
 }
@@ -195,6 +388,10 @@ void free_process(process_t *proc)
         return;
     }
     proc->state = PROC_UNUSED;
+    proc_timer_update(proc);
+    pid_remove(proc);
+    pid_records--;
+    user_put(proc->user_count);
     sched_forget(proc);
     if (proc->prev) {
         proc->prev->next = proc->next;
@@ -239,7 +436,11 @@ void proc_wake_sleepers(uint32_t now)
 {
     process_t *p;
 
-    for (p = proc_list; p; p = p->next) {
+    timer_cursor = timers;
+    while (timer_cursor) {
+        p = timer_cursor;
+        timer_cursor = p->timer_next;
+        work_count[2]++;
         if (p->state == PROC_BLOCKED && p->wakeup_tick != 0 &&
             (int32_t)(now - p->wakeup_tick) >= 0) {
             p->wakeup_tick = 0;
@@ -249,6 +450,7 @@ void proc_wake_sleepers(uint32_t now)
             p->alarm_tick = p->alarm_interval != 0 ? proc_alarm_at(now, p->alarm_interval) : 0;
             signal_post(p, SIGALRM);
         }
+        proc_timer_update(p);
     }
 }
 
@@ -301,7 +503,11 @@ process_t *get_process(uint32_t pid)
 {
     process_t *p;
 
-    for (p = proc_list; p; p = p->next) {
+    if (!pid_capacity) {
+        return NULL;
+    }
+    for (p = pid_table[pid & (pid_capacity - 1)]; p; p = p->pid_next) {
+        work_count[0]++;
         if (p->pid == pid) {
             return p;
         }

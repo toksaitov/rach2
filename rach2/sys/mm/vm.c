@@ -15,6 +15,13 @@ int randomize_va_space = ASLR_MMAP_PAGES != 0 ? 2 : 0;
 
 /* The files whose last reference went, waiting for `vm_file_reap`. */
 static struct vm_file *vm_dead;
+static uint32_t gap_steps;
+
+/** Read the number of gap candidates examined since boot. */
+uint32_t vm_gap_steps(void)
+{
+    return gap_steps;
+}
 
 void vm_file_get(struct vm_file *f)
 {
@@ -74,6 +81,7 @@ void vm_init(vm_space_t *vm)
 {
     vm_drop_files(vm);
     vm->count = 0;
+    vm->gap_len = 0;
     vm->heap_start = 0;
     vm->brk = 0;
     vm->stack_limit = 0;
@@ -87,6 +95,7 @@ void vm_free(vm_space_t *vm)
     vm->vmas = NULL;
     vm->cap = 0;
     vm->count = 0;
+    vm->gap_len = 0;
 }
 
 int vm_copy(vm_space_t *dst, const vm_space_t *src)
@@ -267,6 +276,7 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end)
 {
     uint32_t i;
 
+    vm->gap_len = 0;
     if (start >= end) {
         return 0;
     }
@@ -359,7 +369,7 @@ int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot)
     return 0;
 }
 
-uintptr_t vm_find_free(const vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t hi)
+uintptr_t vm_find_free(vm_space_t *vm, uintptr_t len, uintptr_t lo, uintptr_t hi)
 {
     uint32_t i;
     uintptr_t top, bottom;
@@ -367,24 +377,34 @@ uintptr_t vm_find_free(const vm_space_t *vm, uintptr_t len, uintptr_t lo, uintpt
     if (len == 0 || hi <= lo || hi - lo < len) {
         return 0;
     }
-    i = vm_lower(vm, hi);
     top = hi;
+    if (vm->gap_len && len >= vm->gap_len && lo == vm->gap_lo && hi == vm->gap_hi) {
+        top = vm->gap_top;
+    }
+    vm->gap_lo = lo;
+    vm->gap_hi = hi;
+    vm->gap_len = len;
+    i = vm_lower(vm, top);
     if (i < vm->count && vm->vmas[i].start < top) {
         top = vm->vmas[i].start;
     }
     for (;;) {
+        gap_steps++;
         bottom = lo;
         if (i > 0 && vm->vmas[i - 1].end > bottom) {
             bottom = vm->vmas[i - 1].end;
         }
         if (top > bottom && top - bottom >= len) {
+            vm->gap_top = top;
             return top - len;
         }
         if (i == 0) {
+            vm->gap_top = lo;
             return 0;
         }
         i--;
         if (vm->vmas[i].start <= lo) {
+            vm->gap_top = lo;
             return 0;
         }
         top = vm->vmas[i].start;

@@ -143,6 +143,12 @@ int copy_from_user(void *dst, const void __user *src, size_t len)
 
 static void tick(void);
 
+/** Timer list membership is checked by process_timer_hosttest. */
+void proc_timer_update(process_t *p)
+{
+    (void)p;
+}
+
 /**
  * Take the interrupt mask, as the clock read, the sleep and the timer do. With
  * `tick_at_save` armed, a tick comes in the moment before the mask, as the
