@@ -66,3 +66,22 @@ build/tests/cases/machine/codex.sha256: vendor/gnu/agents/packages/codex.sh \
 	    fi; \
 	    digest=$$($(SHA256TOOL) "$$work/$$name"); \
 	    printf '%s\n' "$${digest%% *}" > $@.tmp; mv $@.tmp $@
+
+# The same for OpenCode, whose tarball must list one regular file, opencode,
+# the program the recipe installs as /opt/opencode/bin/opencode.
+build/tests/cases/machine/opencode.sha256: vendor/gnu/agents/packages/opencode.sh \
+    $(GNU_AGENTS_SOURCES) | $(SHA256TOOL)
+	@set -e; . vendor/gnu/agents/packages/opencode.sh; \
+	    archive=$$(RACH2_ARCH=x86_64 sh vendor/gnu/agents/fetch_agents.sh -f opencode \
+	        "opencode-$$VERSION-linux-x64-baseline.tar.gz"); \
+	    listed=$$(tar -tvzf "$$archive" | awk '$$NF == "opencode" || $$NF == "./opencode"'); \
+	    name=$${listed##* }; work=; \
+	    trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f $@.tmp' EXIT; \
+	    mkdir -p build/tests $(@D); work=$$(mktemp -d build/tests/rach2-opencode-digest.XXXXXX); \
+	    if [ "$$(printf '%s\n' "$$listed" | wc -l)" -ne 1 ] || [ "$${listed%"$${listed#?}"}" != - ] || \
+	        ! tar -xzf "$$archive" -C "$$work" "$$name" || [ -h "$$work/$$name" ] || \
+	        [ ! -f "$$work/$$name" ] || [ ! -s "$$work/$$name" ]; then \
+	        echo "opencode digest: $$archive must have one regular opencode" >&2; exit 1; \
+	    fi; \
+	    digest=$$($(SHA256TOOL) "$$work/$$name"); \
+	    printf '%s\n' "$${digest%% *}" > $@.tmp; mv $@.tmp $@
