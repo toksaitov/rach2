@@ -427,6 +427,11 @@ typedef char ar9300_eeprom_size_is_1088[sizeof(struct ar9300_eeprom) == 1088 ? 1
 #define ATH9K_CHIP_SPUR_AB  0x0040 /* OFDM spur masks A and B, no CCK spur filter */
 #define ATH9K_CHIP_IQ_BOUND 0x0080 /* no RX IQ correction at its bound (6f37ff96d3bd) */
 
+/* The quirks ath9k's hw.c gives one chip by name, without a reason. */
+#define ATH9K_CHIP_BB_DPLL   0x0100 /* the baseband PLL is set in AR_CH0_BB_DPLL1 to 3 */
+#define ATH9K_CHIP_WA_BIT22  0x0200 /* AR_WA's bit 22 is set after power-on */
+#define ATH9K_CHIP_PLL_BIT18 0x0400 /* AR_RTC_PLL_CONTROL's bit 18 is set */
+
 /* Receive: the two EDMA FIFOs' depths (hw.h's ATH9K_HW_RX_HP_QDEPTH and
  * _LP_QDEPTH), and a buffer's length, ath9k's: the largest MPDU, 3840
  * bytes and the FCS, IV, key ID and ICV, after the 48-byte status, rounded
@@ -590,6 +595,10 @@ struct ath9k_hw {
     uint32_t mac_version;             /* what AR_SREV read */
     uint32_t mac_rev;
     enum ath9k_power_mode power;
+    uint32_t wa;            /* AR_WA's value, which cannot be read in sleep */
+    uint8_t reset_power_on; /* a power-on reset has run since attach */
+    uint8_t full_sleep;     /* the chip was in full sleep; reset it cold */
+    uint8_t clockrate;      /* the MAC's clock, MHz, for the PCU's timings */
     struct ath9k_ini mac[ATH9K_INI_STAGES];
     struct ath9k_ini bb[ATH9K_INI_STAGES];
     struct ath9k_ini radio[ATH9K_INI_STAGES];
