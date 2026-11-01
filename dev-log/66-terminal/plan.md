@@ -610,7 +610,7 @@ Batch 6, the other checks (#1781):
 
 The third run, after batches 5 and 6, passed style on both architectures, and the host groups `host.host.scripts` and `host.host.scripts_build`. The group `host.host.tests` reports only its first failing check, so it ran again after each fix until it passed, on bafd8557d:
 
-* Task 39 (#1782): the kd and `term_keys` host tests, and the host scripts' source archive, which lacked `term/`.
+* Task 39 (#1782): the kd and `term_keys` host tests, `release_resume`, whose rows had not followed the release's new build command, and the `together` fixture, whose source archive lacked `term/`.
 * A kernel bug: `rach2/sys/keymap.c` sent the Down arrow's sequence for Left and Left's for Down, since its cursor table read `DBCA` for Linux's `KT_CUR` order of Down, Left, Right and Up. It now reads `BDCA`, and `keymap_keytable_hosttest` passes all 12730 cases.
 * `tests/host/keymap_hosttest.c` gave three six-byte sequences a length of 8 and read past them under ASan.
 * `tests/host/unifont_hosttest.c` counted U+1100, a wide glyph, among the narrow ones.
