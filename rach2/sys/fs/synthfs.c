@@ -187,8 +187,10 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * queues (ipc/mqueue.c); the swap's weight and the overcommit policy at
  * Linux's defaults, 60 and 0, which scripts read and nothing here acts on,
  * there being no swap; the regions a process may map (mm/vm.h); the ids an
- * unmapped id reads as (proc/ns.h); and the boot's UUID and a new one for
- * each open. An entry whose text is empty is procfs's, which reads its
+ * unmapped id reads as (proc/ns.h); the boot's UUID and a new one for
+ * each open; the bounds of descriptors and open files and the count of
+ * those open (fs/fd.h); and whether exec randomizes a new image's layout
+ * (mm/vm.h). An entry whose text is empty is procfs's, which reads its
  * value when the file is opened. A new entry goes at the end, so that the
  * indices SYNTH_SYS_ names stay the same. */
 static const struct {
@@ -232,7 +234,11 @@ static const struct {
                {6, "overflowuid", ""},
                {6, "random", 0},
                {35, "boot_id", ""},
-               {35, "uuid", ""}};
+               {35, "uuid", ""},
+               {1, "nr_open", ""},
+               {1, "file-max", ""},
+               {1, "file-nr", ""},
+               {6, "randomize_va_space", ""}};
 
 int synth_sys_count(void)
 {
@@ -244,7 +250,9 @@ int synth_sys_writable(int entry)
     return entry == SYNTH_SYS_HOSTNAME || entry == SYNTH_SYS_DOMAINNAME ||
            entry == SYNTH_SYS_IP_FORWARD ||
            (entry >= SYNTH_SYS_INOTIFY_QUEUED && entry <= SYNTH_SYS_INOTIFY_WATCHES) ||
-           (entry >= SYNTH_SYS_MAX_MAP_COUNT && entry <= SYNTH_SYS_OVERFLOWUID);
+           (entry >= SYNTH_SYS_MAX_MAP_COUNT && entry <= SYNTH_SYS_OVERFLOWUID) ||
+           entry == SYNTH_SYS_NR_OPEN || entry == SYNTH_SYS_FILE_MAX ||
+           entry == SYNTH_SYS_RANDOMIZE_VA_SPACE;
 }
 
 /* The files of /proc/net after the first four, by origin and name. */
