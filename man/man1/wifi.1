@@ -1,0 +1,241 @@
+.Dd November 2, 2026
+.Dt WIFI 1
+.Os
+.Sh NAME
+.Nm wifi
+.Nd scan for Wi-Fi networks and join, list and forget them
+.Sh SYNOPSIS
+.Nm
+.Cm scan
+.Nm
+.Cm list
+.Nm
+.Cm connect
+.Op Fl e Cm peap | ttls | ttls-pap
+.Ar name
+.Nm
+.Cm forget
+.Ar name
+.Nm
+.Cm status
+.Sh DESCRIPTION
+.Nm
+asks
+.Xr wpa_supplicant 8 ,
+which
+.Xr init 8
+runs on
+.Ql wlan0 ,
+through its control socket
+.Pa /var/run/wpa_supplicant/wlan0 ,
+which only root may use.
+wpa_supplicant keeps the known networks in
+.Pa /etc/wpa_supplicant/wlan0.conf
+and joins the best of them in range by itself, at boot and after the
+station loses its network.
+.Bl -tag -width Ds
+.It Cm scan
+Scan, and list each network in range once, at its strongest access
+point, the strongest first: its name, its signal in dBm, its channel, its
+protection
+.Po
+.Ql open ,
+.Ql WPA ,
+.Ql WPA2 ,
+.Ql WPA3 ,
+.Ql WPA2/WPA3
+or
+.Ql enterprise
+.Pc ,
+and
+.Ql known
+for a network already known.
+A name is shown as wpa_supplicant prints it, a byte that is not
+printable as
+.Ql \ex Ns Ar NN ,
+and
+.Cm connect
+takes it in the same form.
+.It Cm list
+List the known networks, with
+.Ql in use
+for the one the station is joined to,
+.Ql disabled
+and
+.Ql failing
+for one wpa_supplicant has stopped trying for a while, and the SHA-256
+fingerprint of the server certificate pinned for an enterprise network.
+.It Cm connect Ar name
+Join
+.Ar name .
+A known network is selected.
+A new one is looked for in the last scan, or in a new scan when it is not
+there, and added as its protection asks: an open network as it is, a
+personal network with the passphrase
+.Nm
+asks for, without echo, and an enterprise network with the identity, the
+password, an anonymous identity and a server domain it asks for.
+A passphrase has 8 to 63 printable characters, or is a key of 64 hex
+digits.
+.Pp
+While it connects, the other known networks are disabled, and they are
+enabled again when it ends.
+Once the station is joined,
+.Nm
+has wpa_supplicant save its networks, and prints
+.Ql wifi: connected to Ar name .
+A new network that cannot be joined, for a wrong passphrase or no answer
+in a minute, is not kept.
+.Pp
+Every network is added with
+.Ql bgscan="simple:30:-65:300" :
+wpa_supplicant scans every 30 seconds while the signal is below -65 dBm
+and every 300 seconds otherwise, moves to a stronger access point of the
+same network, and to a stronger known network.
+A personal network may be WPA with TKIP, WPA2 or WPA3 with SAE: the
+network is added for each, with management frames protected where the
+access point offers it, and wpa_supplicant uses the strongest the access
+point has.
+WEP is not supported.
+.It Cm forget Ar name
+Remove the known network
+.Ar name
+and save the networks.
+.It Cm status
+Print the network the station is joined to, its access point, channel,
+signal, protection and address, or that it is not joined, in
+wpa_supplicant's state, and why, as the events it logged in
+.Pa /var/log/services
+since it last joined a network say: a refused passphrase, identity,
+password or server certificate.
+.El
+.Ss Enterprise networks
+An enterprise network, WPA2-Enterprise such as eduroam, proves itself to
+the station with a server certificate, often one no public authority has
+signed.
+The first
+.Cm connect
+pins that certificate, as a phone does: the network is added with
+.Ql ca_cert="probe://"
+and no password, so that the TLS handshake stops once the server has sent
+its certificate, and nothing secret has left the machine.
+.Nm
+prints the certificate's subject, its name, and its SHA-256 fingerprint,
+and asks whether to trust it.
+On yes, the network gets
+.Ql ca_cert="hash://server/sha256/ Ns Ar fingerprint Ns \&"
+and the password, and is joined; on no, it is removed.
+Compare the fingerprint with the one the network's administrators publish,
+or with the one another device that has joined the network shows.
+.Pp
+Later connections take no other certificate.
+One that does not match is refused, and
+.Cm status
+prints the certificate presented.
+If the administrators changed it,
+.Cm forget
+and
+.Cm connect
+the network to trust the new one.
+.Pp
+The anonymous identity is the outer identity, which goes unencrypted
+before the TLS handshake; eduroam asks for
+.Ql anonymous@ Ns Ar realm ,
+where
+.Ar realm
+is the part of the identity after its
+.Ql @ .
+The server domain, when given, is
+.Ql domain_suffix_match :
+the certificate's name must end in it.
+Both may be left empty.
+.Pp
+The methods are PEAP and TTLS, each with MSCHAPv2 inside, as most
+networks use them;
+.Fl e
+chooses one:
+.Bl -tag -width ttls-pap
+.It Cm peap
+PEAP with MSCHAPv2.
+.It Cm ttls
+TTLS with MSCHAPv2.
+.It Cm ttls-pap
+TTLS with PAP, whose password the TLS tunnel carries.
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /etc/wpa_supplicant/wlan0.conf
+The known networks, with their passphrases and passwords; only root reads
+it.
+.It Pa /var/run/wpa_supplicant/wlan0
+wpa_supplicant's control socket.
+.It Pa /var/log/services
+The log wpa_supplicant's events go to.
+.It Pa /tmp/wifi- Ns Ar pid Ns Pa - Ns Ar n
+The two sockets
+.Nm
+receives wpa_supplicant's replies and events on, removed when it ends.
+.El
+.Sh EXIT STATUS
+0 when the command did what it says, 1 when it failed, 2 for a wrong
+argument, and 130 when it was interrupted.
+A failed or interrupted
+.Cm connect
+leaves the other networks enabled as they were.
+.Sh EXAMPLES
+Join a home network:
+.Bd -literal -offset indent
+# wifi scan
+NAME                              SIGNAL CHANNEL  SECURITY
+home                             -41 dBm       6  WPA2/WPA3
+# wifi connect home
+Passphrase:
+wifi: connected to home
+.Ed
+.Pp
+Join a university's network, whose server certificate is self-signed:
+.Bd -literal -offset indent
+# wifi connect UNI-WIFI
+Identity: student42
+Password:
+Anonymous identity (empty for none; eduroam's is anonymous@REALM):
+Server domain to check (empty for none): radius.uni.edu
+UNI-WIFI presents this server certificate:
+  subject: /C=KG/O=University/CN=radius.uni.edu
+  SHA-256: 5A:1B:C1:29:62:05:E6:FD:BE:39:79:72:8E:FE:39:20
+           79:88:85:C1:C4:59:0B:5F:90:F4:32:22:D2:39:CA:6A
+Compare the fingerprint with the one the network's administrators publish.
+Trust it for this network? [y/N] y
+wifi: connected to UNI-WIFI
+.Ed
+.Pp
+Join eduroam with an identity of one's institution:
+.Bd -literal -offset indent
+# wifi connect eduroam
+Identity: jdoe@example.edu
+Password:
+Anonymous identity (empty for none; eduroam's is anonymous@REALM): anonymous@example.edu
+Server domain to check (empty for none): example.edu
+.Ed
+.Pp
+and answer the certificate's question as above.
+.Sh DIAGNOSTICS
+Messages go to standard error as
+.Ql wifi: Ar detail ,
+such as
+.Ql wifi: cannot reach wpa_supplicant at /var/run/wpa_supplicant/wlan0
+when wpa_supplicant does not run or the caller is not root, and
+.Ql wifi: Ar name : the network refused the passphrase .
+.Sh SEE ALSO
+.Xr wpa_supplicant.conf 5 ,
+.Xr init 8 ,
+.Xr ndwatch 8 ,
+.Xr wpa_cli 8 ,
+.Xr wpa_supplicant 8 ,
+.Xr zzz 8
+.Sh BUGS
+A hidden network, which does not give its name in its beacons, cannot be
+added.
+Enterprise networks that want a client certificate (EAP-TLS) are added by
+hand in
+.Pa /etc/wpa_supplicant/wlan0.conf .
