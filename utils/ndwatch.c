@@ -561,7 +561,7 @@ static void take_advert(const unsigned char *ra, ssize_t len, const struct socka
 }
 
 /** Send a router solicitation to the routers of the link, by the raw
- * ICMPv6 socket `raw`; the kernel fills in the checksum. */
+ * ICMPv6 socket `raw`; the kernel fills in the checksum and the source. */
 static void solicit(int raw)
 {
     struct sockaddr_in6 to;
@@ -573,7 +573,10 @@ static void solicit(int raw)
     to.sin6_family = AF_INET6;
     inet_pton(AF_INET6, "ff02::2", &to.sin6_addr);
     to.sin6_scope_id = (uint32_t)ifindex;
-    if (sendto(raw, rs, sizeof(rs), 0, (struct sockaddr *)&to, sizeof(to)) < 0) {
+    /* EADDRNOTAVAIL: the link-local address is still tentative, and the
+       kernel solicits the routers itself once it is usable. */
+    if (sendto(raw, rs, sizeof(rs), 0, (struct sockaddr *)&to, sizeof(to)) < 0 &&
+        errno != EADDRNOTAVAIL) {
         fprintf(stderr, "ndwatch: %s: router solicitation: %s\n", iface, strerror(errno));
     }
 }
