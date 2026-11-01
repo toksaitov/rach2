@@ -31,6 +31,7 @@
 #include "../socket/socket.h"
 #include "../ip/ip.h"
 #include "../ip6/ip6.h"
+#include "../ip6/nd6.h"
 #include "../core/byteorder.h"
 #include "../net.h"
 #include "../netconf.h"
@@ -283,22 +284,77 @@ static void tcb_init(struct tcb *tcb)
     tcb->sack_offer = 1;
 }
 
-/** The payload limit of the current path, excluding IP and TCP headers.
- * A missing route retains the minimum IPv6 MTU for retransmission. */
+/**
+ * The MTUs of the path `tcb` takes, IP header included: the path's, which a
+ * fragmentation-needed report or a Packet Too Big may have lowered below
+ * the interface's (`ip_path_mtu`, `ip6_path_mtu`), and in `*link` the
+ * interface's, for IPv6 the link's (`nd6_link_mtu`). A datagram to this
+ * machine goes round the loopback ring, whose MTU is `lo`'s. With no route
+ * an IPv6 path counts as the least MTU, which keeps a retransmission small
+ * enough for any path, and an IPv4 path as a card's largest, 1500.
+ */
+static uint32_t tcp_mtus(const struct tcb *tcb, uint32_t *link)
+{
+    uint32_t dst = tcb->remote_ip.v4, via;
+    uint8_t via6[16];
+    struct netdev *nd;
+
+    if (tcb->remote_ip.family == AF_INET6) {
+        nd = ip6_route_find(tcb->remote_ip.v6, (int)tcb->remote_ip.scope, via6);
+        if (!nd) {
+            *link = IP6_MTU_MIN;
+            return IP6_MTU_MIN;
+        }
+        *link = nd->loopback ? (uint32_t)NETDEV_LOOPBACK_MTU : nd6_link_mtu(nd);
+        return ip6_path_mtu(nd, tcb->remote_ip.v6);
+    }
+    if (IP_IS_LOOPBACK(dst) || netdev_owns(dst)) {
+        *link = NETDEV_LOOPBACK_MTU;
+        return NETDEV_LOOPBACK_MTU;
+    }
+    nd = netdev_route(dst, &via);
+    if (!nd) {
+        *link = NETDEV_ETH_MTU_MAX;
+        return NETDEV_ETH_MTU_MAX;
+    }
+    *link = nd->mtu;
+    return ip_path_mtu(nd, dst);
+}
+
+/** The segment size an MTU of `mtu` bytes leaves room for on `tcb`'s
+ * family, past 40 bytes of IPv4 and TCP headers or 60 of IPv6 and TCP: at
+ * most TCP_MSS, which this file's buffers hold, and at least TCP_MSS_MIN. */
+static uint16_t tcp_mtu_to_mss(const struct tcb *tcb, uint32_t mtu)
+{
+    uint32_t hdrs = (tcb->remote_ip.family == AF_INET6 ? IP6_HDR_SIZE : IP_HDR_SIZE) + TCP_HDR_SIZE;
+
+    if (mtu > (uint32_t)TCP_MSS + hdrs) {
+        return TCP_MSS;
+    }
+    if (mtu < (uint32_t)TCP_MSS_MIN + hdrs) {
+        return TCP_MSS_MIN;
+    }
+    return (uint16_t)(mtu - hdrs);
+}
+
+/** The largest segment `tcb` may send on its path now, as `tcp_mtus` gives
+ * the path's MTU. */
 static uint16_t tcp_payload_limit(const struct tcb *tcb)
 {
-    uint8_t via[16];
-    struct netdev *nd;
-    uint32_t mtu;
-    if (tcb->remote_ip.family != AF_INET6)
-        return TCP_MSS;
-    nd = ip6_route(tcb->remote_ip.v6, (int)tcb->remote_ip.scope, via);
-    mtu = nd ? ip6_path_mtu(nd, tcb->remote_ip.v6) : IP6_MTU_MIN;
-    if (mtu < IP6_MTU_MIN)
-        mtu = IP6_MTU_MIN;
-    if (mtu > IP6_MTU)
-        mtu = IP6_MTU;
-    return (uint16_t)(mtu - IP6_HDR_SIZE - TCP_HDR_SIZE);
+    uint32_t link;
+
+    return tcp_mtu_to_mss(tcb, tcp_mtus(tcb, &link));
+}
+
+/** The MSS a SYN of `tcb` offers: the interface's MTU less the headers, as
+ * Linux offers it, whatever a report has lowered the path to, since the
+ * offer says what this end of the path receives. */
+static uint16_t tcp_offer_mss(const struct tcb *tcb)
+{
+    uint32_t link;
+
+    tcp_mtus(tcb, &link);
+    return tcp_mtu_to_mss(tcb, link);
 }
 
 /**
@@ -542,7 +598,7 @@ static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
     if (flags & TCP_SYN) {
         tcp_tx_buf[20] = TCP_OPT_MSS;
         tcp_tx_buf[21] = 4;
-        write16be(tcp_tx_buf + 22, tcp_payload_limit(tcb));
+        write16be(tcp_tx_buf + 22, tcp_offer_mss(tcb));
     }
     if ((flags & TCP_SYN) && tcb->ws_offer) {
         tcp_tx_buf[24] = TCP_OPT_NOP;

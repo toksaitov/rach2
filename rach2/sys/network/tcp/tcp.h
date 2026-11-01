@@ -22,8 +22,10 @@
 #define TCP_ACK 0x10
 #define TCP_URG 0x20
 
-/* The header without options, and the largest segment either side sends,
- * which IPv4 SYNs ask for: a 1500-byte MTU less 40 bytes of headers. */
+/* The header without options, and the largest segment either side sends:
+ * a card's largest MTU, 1500 bytes, less 40 bytes of IPv4 and TCP headers.
+ * A SYN offers its interface's MTU less the headers, at most this, and a
+ * segment sent fits the path's MTU. */
 #define TCP_HDR_SIZE        20
 #define TCP_MSS             1460
 #define TCP_INIT_SEGS       4 /* initial congestion window, in segments (RFC 6928) */

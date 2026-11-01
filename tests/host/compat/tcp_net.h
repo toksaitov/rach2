@@ -1,5 +1,6 @@
 /* IPv4 route and socket models used by the two TCP state machine tests. */
 #include "network/ip6/ip6.h"
+#include "network/driver/netdev.h"
 
 /** Resolve every model peer through the fixture's one IPv4 interface. */
 int net_addr_source(net_addr_t bound, net_addr_t dst, net_addr_t *src)
@@ -42,6 +43,49 @@ struct netdev *ip6_route(const uint8_t *dst, int scope, uint8_t *via)
     (void)scope;
     (void)via;
     return 0;
+}
+
+/** No IPv6 route exists for the segment size either. */
+struct netdev *ip6_route_find(const uint8_t *dst, int ifindex, uint8_t *via)
+{
+    (void)dst;
+    (void)ifindex;
+    (void)via;
+    return 0;
+}
+
+/** Report Ethernet's MTU for the unused IPv6 link. */
+uint32_t nd6_link_mtu(const struct netdev *nd)
+{
+    (void)nd;
+    return 1500;
+}
+
+/* The one card every IPv4 peer of the fixtures is reached by, with
+ * Ethernet's MTU. */
+static struct netdev model_card;
+
+/** Route every IPv4 destination by the model card, to itself. */
+struct netdev *netdev_route(uint32_t dst, uint32_t *via)
+{
+    model_card.mtu = 1500;
+    *via = dst;
+    return &model_card;
+}
+
+/** Report no card address as this machine's beyond what `ip_is_local`
+ * already takes. */
+int netdev_owns(uint32_t ip)
+{
+    (void)ip;
+    return 0;
+}
+
+/** Report the card's MTU, which no fragmentation-needed report lowers. */
+uint32_t ip_path_mtu(const struct netdev *out, uint32_t dst)
+{
+    (void)dst;
+    return out->mtu;
 }
 
 /** Report Ethernet's MTU for the unused IPv6 output path. */
