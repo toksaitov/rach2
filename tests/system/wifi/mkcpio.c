@@ -310,6 +310,14 @@ static char *tar_record(FILE *in, unsigned long len, const char *archive)
     return buf;
 }
 
+/** The length of the string in a tar header's field of LEN bytes at F. */
+static size_t field_len(const unsigned char *f, size_t len)
+{
+    const unsigned char *nul = memchr(f, '\0', len);
+
+    return nul != NULL ? (size_t)(nul - f) : len;
+}
+
 /** Skip LEN bytes of IN. Returns 0, or -1 when it ended first. */
 static int skip(FILE *in, unsigned long len)
 {
@@ -388,13 +396,14 @@ static int tar_entries(struct archive *a, const char *archive)
             continue;
         }
         if (!have_name) {
-            name[0] = '\0';
+            len = 0;
             if (memcmp(h + 257, "ustar", 5) == 0 && h[345] != '\0') {
-                memcpy(name, h + 345, 155);
-                name[155] = '\0';
-                strcat(name, "/");
+                len = field_len(h + 345, 155);
+                memcpy(name, h + 345, len);
+                name[len++] = '/';
             }
-            strncat(name, (const char *)h, 100);
+            memcpy(name + len, h, field_len(h, 100));
+            name[len + field_len(h, 100)] = '\0';
         }
         if (!have_target) {
             memcpy(target, h + 157, 100);
