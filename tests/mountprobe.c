@@ -795,28 +795,38 @@ static void rows_lifetime(void)
 }
 
 /** A target too long for the mount's record (VFS_COVERED_PATH_MAX in
- * rach2/sys/fs/vfs.h, 64 bytes with the NUL) claims nothing: a name of 69
- * bytes at the root, or in a native run's workspace, is ENAMETOOLONG, and
- * the source then mounts elsewhere. */
+ * rach2/sys/fs/vfs.h, 256 bytes with the NUL) claims nothing: a path of
+ * three 99-byte names, 300 bytes from the root or longer from a native
+ * run's workspace, is ENAMETOOLONG, and the source then mounts elsewhere.
+ * No one name may pass 255 bytes, so the path is three directories deep. */
 static void row_long_target(void)
 {
-    static char longname[80];
+    static char longname[310];
     const char *target;
-    int i;
+    int i, level;
 
-    longname[0] = '/';
-    for (i = 1; i < 70; i++) {
-        longname[i] = 'n';
+    for (level = 0; level < 3; level++) {
+        longname[level * 100] = '/';
+        for (i = 1; i < 100; i++) {
+            longname[level * 100 + i] = 'n';
+        }
     }
-    longname[70] = 0;
     target = probe_native() ? longname + 1 : longname;
-    if (syscall2(SYS_MKDIR, (long)target, 0755) != 0) {
-        fail("mkdir of the long target");
+    for (level = 1; level <= 3; level++) {
+        longname[level * 100] = 0;
+        if (syscall2(SYS_MKDIR, (long)target, 0755) != 0) {
+            fail("mkdir of the long target");
+        }
+        longname[level * 100] = '/';
     }
+    longname[300] = 0;
     if (do_mount(src, target, MS_RDONLY, 0) != -ENAMETOOLONG) {
         fail("a long target is ENAMETOOLONG");
     }
-    syscall1(SYS_RMDIR, (long)target);
+    for (level = 3; level >= 1; level--) {
+        longname[level * 100] = 0;
+        syscall1(SYS_RMDIR, (long)target);
+    }
     if (do_mount(src, mnt2, MS_RDONLY, 0) != 0 || syscall2(SYS_UMOUNT2, (long)mnt2, 0) != 0) {
         fail("the source mounts after the refused long target");
     }

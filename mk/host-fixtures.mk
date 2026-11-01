@@ -37,7 +37,7 @@ endif
 
 $(HOST_FIXTURE_PREFIX)/krffs_open-sources/vfs_open.inc: rach2/sys/fs/vfs.c $(HOST_EXTRACT)
 	@mkdir -p $(@D)
-	$(HOST_EXTRACT) $@ -f rach2/sys/fs/vfs.c vfs_mount_gone mount_base mount_rdonly vfs_ref_hold vfs_ref_put vfs_enter vfs_leave ns_my_turn vfs_ns_lock vfs_ns_unlock in_groups may_search toward_cwd mount_covering path_last mount_named_at mount_named named_in_rest climbs node_put walk_lock walk_unlock vfs_walk_unlock ref_move_node walk_move walk_root root_current dotdot_stays walk_leaf walk_pages walk_splice walk_link walk_last_comp walk_is_link walk_rest_len walk_name_root walk_name_add walk_name_text walk_name_end 'struct walk_record' walk_record_entry walk_record_clear walk_record_move walk_release walk_finish resolve_path vfs_resolve_entry vfs_resolve vfs_ref_release vfs_desc_open vfs_desc_close vfs_getattr vfs_open_node vfs_release vfs_truncate vfs_create
+	$(HOST_EXTRACT) $@ -f rach2/sys/fs/vfs.c vfs_mount_gone mount_base mount_rdonly vfs_ref_hold vfs_ref_put vfs_enter vfs_leave ns_my_turn vfs_ns_lock vfs_ns_unlock in_groups may_search toward_cwd mount_covering path_last mount_named_at mount_named named_in_rest climbs node_put walk_lock walk_unlock vfs_walk_unlock ref_move_node walk_move walk_cross walk_root root_current dotdot_stays walk_leaf walk_pages walk_splice walk_link walk_last_comp walk_is_link walk_rest_len walk_name_root walk_name_add walk_name_text walk_name_end 'struct walk_record' walk_record_entry walk_record_clear walk_record_move walk_release walk_finish resolve_path vfs_resolve_entry vfs_resolve vfs_ref_release vfs_desc_open vfs_desc_close vfs_getattr vfs_open_node vfs_release vfs_truncate vfs_create
 
 $(HOST_FIXTURE_PREFIX)/krffs_open-sources/syscall_open.inc: rach2/sys/syscall_fs.c rach2/sys/syscall_internal.h rach2/sys/syscall_fs.c $(HOST_EXTRACT)
 	@mkdir -p $(@D)
@@ -133,7 +133,7 @@ endif
 
 $(HOST_VFS_PREFIX)/vfs_unmount-sources/unmount.inc: rach2/sys/fs/vfs.c $(HOST_EXTRACT)
 	@mkdir -p $(@D)
-	$(HOST_EXTRACT) $@ -f rach2/sys/fs/vfs.c streq vfs_mount_gone mount_base mount_permanent unmount_abandoned unmount_target unmount_below_gone unmount_found vfs_do_umount unmount_bind unmount_mount
+	$(HOST_EXTRACT) $@ -f rach2/sys/fs/vfs.c streq vfs_mount_gone mount_base mount_permanent vfs_mount_shared unmount_abandoned unmount_target unmount_below_gone unmount_found vfs_do_umount unmount_bind unmount_mount
 
 $(HOST_VFS_PREFIX)/vfs_unmount: tests/system/fixtures/vfs_unmount.c $(HOST_VFS_PREFIX)/vfs_unmount-sources/unmount.inc $(HOST_EXTRACT) rach2/sys/fs/vfs.c $(HOST_KERNEL_FIXTURE_INPUTS)
 	@mkdir -p $(HOST_VFS_PREFIX)/vfs_unmount-sources

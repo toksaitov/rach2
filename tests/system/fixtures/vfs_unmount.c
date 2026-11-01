@@ -21,7 +21,7 @@
 
 #define VFS_ACTIVE           2
 #define VFS_UNMOUNTING       3
-#define VFS_COVERED_PATH_MAX 64
+#define VFS_COVERED_PATH_MAX 256
 #define BLOCK_GONE           1
 #define KLOG_INFO            0
 #define klog(...)            ((void)0)
@@ -292,6 +292,7 @@ static uint32_t mntns_live_bits(void)
 }
 
 static int unmount_mount(struct vfs_mount *m);
+int vfs_mount_shared(const struct vfs_mount *m);
 
 #include "unmount.inc"
 
