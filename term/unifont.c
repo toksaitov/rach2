@@ -6,8 +6,8 @@
 /** The 32-bit little-endian number at `p`. */
 static unsigned long get32(const unsigned char *p)
 {
-    return (unsigned long)p[0] | (unsigned long)p[1] << 8 |
-           (unsigned long)p[2] << 16 | (unsigned long)p[3] << 24;
+    return (unsigned long)p[0] | (unsigned long)p[1] << 8 | (unsigned long)p[2] << 16 |
+           (unsigned long)p[3] << 24;
 }
 
 /** The 16-bit little-endian number at `p`. */
@@ -25,8 +25,7 @@ static unsigned long get16(const unsigned char *p)
  * order or above UNIFONT_LAST, or glyphs that lie outside the file or over
  * its header and runs.
  */
-static unsigned long check_run(const struct unifont *font, unsigned long i,
-                               unsigned long *next)
+static unsigned long check_run(const struct unifont *font, unsigned long i, unsigned long *next)
 {
     const unsigned char *r = font->data + UNIFONT_HEADER + i * UNIFONT_RUN;
     unsigned long first = get32(r), offset = get32(r + 4);
@@ -34,12 +33,11 @@ static unsigned long check_run(const struct unifont *font, unsigned long i,
 
     if (count == 0 || (r[10] != 8 && r[10] != 16) || r[11] != 0)
         return 0;
-    if (first < *next || first > UNIFONT_LAST ||
-        count - 1 > UNIFONT_LAST - first)
+    if (first < *next || first > UNIFONT_LAST || count - 1 > UNIFONT_LAST - first)
         return 0;
     bytes = count * (r[10] / 8UL) * UNIFONT_HEIGHT;
-    if (offset < UNIFONT_HEADER + font->runs * UNIFONT_RUN ||
-        offset > font->size || bytes > font->size - offset)
+    if (offset < UNIFONT_HEADER + font->runs * UNIFONT_RUN || offset > font->size ||
+        bytes > font->size - offset)
         return 0;
     *next = first + count;
     return count;
@@ -53,8 +51,7 @@ static unsigned long check_run(const struct unifont *font, unsigned long i,
  * is used. Returns 0, or -1 when the bytes are not such a font, with `font`
  * then undefined.
  */
-int unifont_open(struct unifont *font, const unsigned char *data,
-                 unsigned long size)
+int unifont_open(struct unifont *font, const unsigned char *data, unsigned long size)
 {
     unsigned long i, n, next = 0, total = 0;
     const char *magic = UNIFONT_MAGIC;
@@ -86,8 +83,7 @@ int unifont_open(struct unifont *font, const unsigned char *data,
  * *width set to 8 or 16; or a null pointer, with *width untouched, when the
  * font has no glyph for `code`. A binary search over the runs.
  */
-const unsigned char *unifont_glyph(const struct unifont *font,
-                                   unsigned long code, int *width)
+const unsigned char *unifont_glyph(const struct unifont *font, unsigned long code, int *width)
 {
     unsigned long lo = 0, hi = font->runs, mid, first;
     const unsigned char *r;
@@ -102,8 +98,7 @@ const unsigned char *unifont_glyph(const struct unifont *font,
             lo = mid + 1;
         } else {
             *width = r[10];
-            return font->data + get32(r + 4) +
-                   (code - first) * (r[10] / 8UL) * UNIFONT_HEIGHT;
+            return font->data + get32(r + 4) + (code - first) * (r[10] / 8UL) * UNIFONT_HEIGHT;
         }
     }
     return 0;

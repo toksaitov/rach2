@@ -32,12 +32,12 @@
  * .hex text. Runs do not overlap and each begins above the last code point
  * of the run before it; a code point in no run has no glyph.
  */
-#define UNIFONT_MAGIC "R2UFONT1"
-#define UNIFONT_HEADER 16      /* bytes before the first run */
-#define UNIFONT_RUN 12         /* bytes of a run */
-#define UNIFONT_HEIGHT 16      /* rows of every glyph */
+#define UNIFONT_MAGIC      "R2UFONT1"
+#define UNIFONT_HEADER     16 /* bytes before the first run */
+#define UNIFONT_RUN        12 /* bytes of a run */
+#define UNIFONT_HEIGHT     16 /* rows of every glyph */
 #define UNIFONT_RUN_GLYPHS 65535UL
-#define UNIFONT_LAST 0x10FFFFUL /* the last code point Unicode has */
+#define UNIFONT_LAST       0x10FFFFUL /* the last code point Unicode has */
 
 /** A packed font checked by unifont_open; the bytes stay the caller's. */
 struct unifont {
@@ -47,9 +47,7 @@ struct unifont {
     unsigned long glyphs;      /* the number of glyphs */
 };
 
-int unifont_open(struct unifont *font, const unsigned char *data,
-                 unsigned long size);
-const unsigned char *unifont_glyph(const struct unifont *font,
-                                   unsigned long code, int *width);
+int unifont_open(struct unifont *font, const unsigned char *data, unsigned long size);
+const unsigned char *unifont_glyph(const struct unifont *font, unsigned long code, int *width);
 
 #endif
