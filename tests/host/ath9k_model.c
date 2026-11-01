@@ -1,9 +1,9 @@
 /*
- * ar9565_model.c: the software AR9565 of ar9565_model.h, which the QCA9565
+ * ath9k_model.c: the software chip of ath9k_model.h, which the ath9k
  * driver's host tests link through their host-deps lines.
  */
 
-#include "ar9565_model.h"
+#include "ath9k_model.h"
 
 /* The ranges a reset leaves alone: the host interface and the RTC. */
 #define HOST_IF_FIRST 0x4000
@@ -17,11 +17,11 @@
 #define DS_INFO_TX     (DS_INFO_VENDOR | AR_TxRxDesc | AR_CtrlStat)
 
 /** Append an access to the log, or count it as lost when the log is full. */
-static void log_access(struct ar9565_model *m, unsigned op, uint32_t reg, uint32_t value)
+static void log_access(struct ath9k_model *m, unsigned op, uint32_t reg, uint32_t value)
 {
-    struct ar9565_model_access *a;
+    struct ath9k_model_access *a;
 
-    if (m->log_count == AR9565_MODEL_LOG) {
+    if (m->log_count == ATH9K_MODEL_LOG) {
         m->log_lost++;
         return;
     }
@@ -34,11 +34,11 @@ static void log_access(struct ar9565_model *m, unsigned op, uint32_t reg, uint32
 /** Whether `reg` is a word of the window. */
 static int in_window(uint32_t reg)
 {
-    return reg < AR9565_MODEL_WINDOW && (reg & 3) == 0;
+    return reg < ATH9K_MODEL_WINDOW && (reg & 3) == 0;
 }
 
 /** Empty `f`, which holds at most `depth` addresses. */
-static void fifo_reset(struct ar9565_model_fifo *f, unsigned depth)
+static void fifo_reset(struct ath9k_model_fifo *f, unsigned depth)
 {
     f->depth = depth;
     f->head = 0;
@@ -46,7 +46,7 @@ static void fifo_reset(struct ar9565_model_fifo *f, unsigned depth)
 }
 
 /** Push `bus` on `f`, counting an overrun when it is full. */
-static void fifo_push(struct ar9565_model *m, struct ar9565_model_fifo *f, uint32_t bus)
+static void fifo_push(struct ath9k_model *m, struct ath9k_model_fifo *f, uint32_t bus)
 {
     if (f->count == f->depth) {
         m->overruns++;
@@ -57,7 +57,7 @@ static void fifo_push(struct ar9565_model *m, struct ar9565_model_fifo *f, uint3
 }
 
 /** Pop the oldest address of `f`, or return 0 when it is empty. */
-static uint32_t fifo_pop(struct ar9565_model_fifo *f)
+static uint32_t fifo_pop(struct ath9k_model_fifo *f)
 {
     uint32_t bus;
 
@@ -70,24 +70,24 @@ static uint32_t fifo_pop(struct ar9565_model_fifo *f)
 }
 
 /** Forget every pushed buffer and chain, as a reset of the chip does. */
-static void fifos_reset(struct ar9565_model *m)
+static void fifos_reset(struct ath9k_model *m)
 {
     unsigned q;
 
-    fifo_reset(&m->rx[0], AR9565_RX_HP_DEPTH);
-    fifo_reset(&m->rx[1], AR9565_RX_LP_DEPTH);
+    fifo_reset(&m->rx[0], ATH9K_RX_HP_DEPTH);
+    fifo_reset(&m->rx[1], ATH9K_RX_LP_DEPTH);
     for (q = 0; q < AR_NUM_QCU; q++)
-        fifo_reset(&m->tx[q], AR9565_TX_FIFO_DEPTH);
+        fifo_reset(&m->tx[q], ATH9K_TX_FIFO_DEPTH);
     m->rxe = 0;
 }
 
 /** Reset the chip by `kind`: clear the registers outside the host
  * interface and the RTC, forget the FIFOs and call the reset hook. */
-static void chip_reset(struct ar9565_model *m, unsigned kind)
+static void chip_reset(struct ath9k_model *m, unsigned kind)
 {
     uint32_t off;
 
-    for (off = 0; off < AR9565_MODEL_WINDOW; off += 4)
+    for (off = 0; off < ATH9K_MODEL_WINDOW; off += 4)
         if ((off < HOST_IF_FIRST || off > HOST_IF_LAST) && (off < RTC_FIRST || off > RTC_LAST))
             m->reg[off / 4] = 0;
     fifos_reset(m);
@@ -96,7 +96,7 @@ static void chip_reset(struct ar9565_model *m, unsigned kind)
 }
 
 /** The RTC's state from AR_RTC_RESET and AR_RTC_FORCE_WAKE. */
-static uint32_t rtc_status(const struct ar9565_model *m)
+static uint32_t rtc_status(const struct ath9k_model *m)
 {
     if (!(m->reg[AR_RTC_RESET / 4] & AR_RTC_RESET_EN))
         return AR_RTC_STATUS_SHUTDOWN;
@@ -106,7 +106,7 @@ static uint32_t rtc_status(const struct ar9565_model *m)
 }
 
 /** The queues that hold a chain, as AR_Q_TXE reads. */
-static uint32_t tx_enabled(const struct ar9565_model *m)
+static uint32_t tx_enabled(const struct ath9k_model *m)
 {
     uint32_t bits = 0;
     unsigned q;
@@ -118,11 +118,11 @@ static uint32_t tx_enabled(const struct ar9565_model *m)
 }
 
 /** Answer a read the model gives behaviour to; return 0 for a plain one. */
-static int special_read(struct ar9565_model *m, uint32_t reg, uint32_t *value)
+static int special_read(struct ath9k_model *m, uint32_t reg, uint32_t *value)
 {
     uint32_t isr = m->reg[AR_ISR / 4];
 
-    if (reg >= AR9300_OTP_BASE && reg < AR9300_OTP_BASE + AR9565_MODEL_NVRAM) {
+    if (reg >= AR9300_OTP_BASE && reg < AR9300_OTP_BASE + ATH9K_MODEL_NVRAM) {
         uint32_t at = reg - AR9300_OTP_BASE, word = 0;
         unsigned i;
 
@@ -133,7 +133,7 @@ static int special_read(struct ar9565_model *m, uint32_t reg, uint32_t *value)
         *value = word;
         return 1;
     }
-    if (reg >= AR5416_EEPROM_OFFSET && reg < AR_EEPROM_WORD(AR9565_MODEL_NVRAM / 2)) {
+    if (reg >= AR5416_EEPROM_OFFSET && reg < AR_EEPROM_WORD(ATH9K_MODEL_NVRAM / 2)) {
         uint32_t n = (reg - AR5416_EEPROM_OFFSET) >> AR5416_EEPROM_S;
         uint32_t word = n < m->eeprom_words ? m->eeprom[n] : 0xffff;
 
@@ -192,20 +192,20 @@ static int special_read(struct ar9565_model *m, uint32_t reg, uint32_t *value)
 }
 
 /** Apply a write the model gives behaviour to, after it is stored. */
-static void special_write(struct ar9565_model *m, uint32_t reg, uint32_t value, uint32_t old)
+static void special_write(struct ath9k_model *m, uint32_t reg, uint32_t value, uint32_t old)
 {
     unsigned q;
 
     switch (reg) {
     case AR_RTC_RESET:
         if ((old & AR_RTC_RESET_EN) && !(value & AR_RTC_RESET_EN))
-            chip_reset(m, AR9565_MODEL_RESET_POWER_ON);
+            chip_reset(m, ATH9K_MODEL_RESET_POWER_ON);
         return;
     case AR_RTC_RC:
         if (value & AR_RTC_RC_MAC_COLD & ~old)
-            chip_reset(m, AR9565_MODEL_RESET_COLD);
+            chip_reset(m, ATH9K_MODEL_RESET_COLD);
         else if (value & AR_RTC_RC_MAC_WARM & ~old)
-            chip_reset(m, AR9565_MODEL_RESET_WARM);
+            chip_reset(m, ATH9K_MODEL_RESET_WARM);
         return;
     case AR_ISR:
         m->reg[reg / 4] = old & ~value;
@@ -226,7 +226,7 @@ static void special_write(struct ar9565_model *m, uint32_t reg, uint32_t value, 
         if (!m->stuck_tx_dma)
             for (q = 0; q < AR_NUM_QCU; q++)
                 if (value & (1u << q))
-                    fifo_reset(&m->tx[q], AR9565_TX_FIFO_DEPTH);
+                    fifo_reset(&m->tx[q], ATH9K_TX_FIFO_DEPTH);
         return;
     case AR_Q_STATUS_RING_START:
         m->txs_start = value;
@@ -245,28 +245,28 @@ static void special_write(struct ar9565_model *m, uint32_t reg, uint32_t value, 
 /** io.h's read: the hook, the model's behaviour, or the register file. */
 static uint32_t model_read(void *ctx, uint32_t reg)
 {
-    struct ar9565_model *m = ctx;
+    struct ath9k_model *m = ctx;
     uint32_t value;
 
     if (m->dead)
         value = 0xffffffffu;
     else if (!in_window(reg)) {
         m->unmapped++;
-        value = AR9565_MODEL_UNMAPPED;
+        value = ATH9K_MODEL_UNMAPPED;
     } else if (!(m->hooks.read && m->hooks.read(m, reg, &value)) && !special_read(m, reg, &value))
         value = m->reg[reg / 4];
     if (m->log_reads)
-        log_access(m, AR9565_MODEL_READ, reg, value);
+        log_access(m, ATH9K_MODEL_READ, reg, value);
     return value;
 }
 
 /** io.h's write: store, apply the model's behaviour, then the hook. */
 static void model_write(void *ctx, uint32_t reg, uint32_t value)
 {
-    struct ar9565_model *m = ctx;
+    struct ath9k_model *m = ctx;
     uint32_t old;
 
-    log_access(m, AR9565_MODEL_WRITE, reg, value);
+    log_access(m, ATH9K_MODEL_WRITE, reg, value);
     if (m->dead)
         return;
     if (!in_window(reg)) {
@@ -283,86 +283,86 @@ static void model_write(void *ctx, uint32_t reg, uint32_t value)
 /** io.h's wait: count the time, which the TSF reads. */
 static void model_udelay(void *ctx, uint32_t usec)
 {
-    struct ar9565_model *m = ctx;
+    struct ath9k_model *m = ctx;
 
     m->usec += usec;
-    log_access(m, AR9565_MODEL_DELAY, 0, usec);
+    log_access(m, ATH9K_MODEL_DELAY, 0, usec);
 }
 
-const struct ar9565_io ar9565_model_io = {model_read, model_write, model_udelay};
+const struct ath9k_io ath9k_model_io = {model_read, model_write, model_udelay};
 
-/** Make `m` a powered-off AR9565 of revision `mac_rev`. */
-void ar9565_model_init(struct ar9565_model *m, uint32_t mac_rev)
+/** Make `m` a powered-off `chip` of revision `mac_rev`. */
+void ath9k_model_init(struct ath9k_model *m, const struct ath9k_chip *chip, uint32_t mac_rev)
 {
     unsigned char *p = (unsigned char *)m;
     unsigned long i;
 
     for (i = 0; i < sizeof(*m); i++)
         p[i] = 0;
-    m->srev = ((uint32_t)AR_SREV_VERSION_9565 << AR_SREV_TYPE2_S) |
+    m->srev = ((chip->mac_version << AR_SREV_TYPE2_S) & AR_SREV_VERSION2) |
               ((mac_rev << AR_SREV_REVISION2_S) & AR_SREV_REVISION2) | AR_SREV_ID;
     fifos_reset(m);
 }
 
 /** Point `ah`'s register access at `m`. */
-void ar9565_model_attach(struct ar9565_model *m, struct ar9565 *ah)
+void ath9k_model_attach(struct ath9k_model *m, struct ath9k *ah)
 {
-    ah->io = &ar9565_model_io;
+    ah->io = &ath9k_model_io;
     ah->io_ctx = m;
 }
 
 /** Give the model an EEPROM of `n` words; 0 removes it. */
-void ar9565_model_set_eeprom(struct ar9565_model *m, const uint16_t *words, unsigned n)
+void ath9k_model_set_eeprom(struct ath9k_model *m, const uint16_t *words, unsigned n)
 {
     unsigned i;
 
-    if (n > AR9565_MODEL_NVRAM / 2)
-        n = AR9565_MODEL_NVRAM / 2;
+    if (n > ATH9K_MODEL_NVRAM / 2)
+        n = ATH9K_MODEL_NVRAM / 2;
     for (i = 0; i < n; i++)
         m->eeprom[i] = words[i];
     m->eeprom_words = n;
 }
 
 /** Give the model an OTP of `n` bytes; 0 removes it. */
-void ar9565_model_set_otp(struct ar9565_model *m, const uint8_t *bytes, unsigned n)
+void ath9k_model_set_otp(struct ath9k_model *m, const uint8_t *bytes, unsigned n)
 {
     unsigned i;
 
-    if (n > AR9565_MODEL_NVRAM)
-        n = AR9565_MODEL_NVRAM;
+    if (n > ATH9K_MODEL_NVRAM)
+        n = ATH9K_MODEL_NVRAM;
     for (i = 0; i < n; i++)
         m->otp[i] = bytes[i];
     m->otp_len = n;
 }
 
 /** A register's stored value, without a log entry or a hook. */
-uint32_t ar9565_model_peek(const struct ar9565_model *m, uint32_t reg)
+uint32_t ath9k_model_peek(const struct ath9k_model *m, uint32_t reg)
 {
-    return in_window(reg) ? m->reg[reg / 4] : AR9565_MODEL_UNMAPPED;
+    return in_window(reg) ? m->reg[reg / 4] : ATH9K_MODEL_UNMAPPED;
 }
 
 /** Set a register's stored value, without a log entry or a hook. */
-void ar9565_model_poke(struct ar9565_model *m, uint32_t reg, uint32_t value)
+void ath9k_model_poke(struct ath9k_model *m, uint32_t reg, uint32_t value)
 {
     if (in_window(reg))
         m->reg[reg / 4] = value;
 }
 
 /** Raise interrupt causes `isr`. */
-void ar9565_model_raise(struct ar9565_model *m, uint32_t isr)
+void ath9k_model_raise(struct ath9k_model *m, uint32_t isr)
 {
     m->reg[AR_ISR / 4] |= isr;
 }
 
 /** Empty the log. */
-void ar9565_model_log_clear(struct ar9565_model *m)
+void ath9k_model_log_clear(struct ath9k_model *m)
 {
     m->log_count = 0;
     m->log_lost = 0;
 }
 
 /** The first log entry at or after `from` of kind `op` on `reg`, or -1. */
-int ar9565_model_find(const struct ar9565_model *m, unsigned from, unsigned op, uint32_t reg)
+int ath9k_model_find(const struct ath9k_model *m, unsigned from, unsigned op, uint32_t reg)
 {
     unsigned i;
 
@@ -373,7 +373,7 @@ int ar9565_model_find(const struct ar9565_model *m, unsigned from, unsigned op, 
 }
 
 /** The log entries of kind `op` on `reg`. */
-unsigned ar9565_model_count(const struct ar9565_model *m, unsigned op, uint32_t reg)
+unsigned ath9k_model_count(const struct ath9k_model *m, unsigned op, uint32_t reg)
 {
     unsigned i, n = 0;
 
@@ -384,21 +384,21 @@ unsigned ar9565_model_count(const struct ar9565_model *m, unsigned op, uint32_t 
 }
 
 /** The value of the last logged write to `reg`, or `otherwise`. */
-uint32_t ar9565_model_last_write(const struct ar9565_model *m, uint32_t reg, uint32_t otherwise)
+uint32_t ath9k_model_last_write(const struct ath9k_model *m, uint32_t reg, uint32_t otherwise)
 {
     unsigned i = m->log_count;
 
     while (i-- > 0)
-        if (m->log[i].op == AR9565_MODEL_WRITE && m->log[i].reg == reg)
+        if (m->log[i].op == ATH9K_MODEL_WRITE && m->log[i].reg == reg)
             return m->log[i].value;
     return otherwise;
 }
 
 /** Receive `frame` into the oldest buffer of FIFO `hp`. */
-int ar9565_model_rx(struct ar9565_model *m, int hp, const uint8_t *frame, unsigned len,
-                    const struct ar9003_rxs *status)
+int ath9k_model_rx(struct ath9k_model *m, int hp, const uint8_t *frame, unsigned len,
+                   const struct ar9003_rxs *status)
 {
-    struct ar9565_model_fifo *f = &m->rx[hp ? 0 : 1];
+    struct ath9k_model_fifo *f = &m->rx[hp ? 0 : 1];
     struct ar9003_rxs rxs = {0};
     unsigned char *buf, *src;
     unsigned i;
@@ -406,10 +406,10 @@ int ar9565_model_rx(struct ar9565_model *m, int hp, const uint8_t *frame, unsign
 
     if (f->count == 0)
         return -1;
-    if (sizeof(rxs) + len > AR9565_RX_BUF_LEN || len > AR_DataLen)
+    if (sizeof(rxs) + len > ATH9K_RX_BUF_LEN || len > AR_DataLen)
         return -2;
     bus = fifo_pop(f);
-    if (!m->hooks.dma || !(buf = m->hooks.dma(m, bus, AR9565_RX_BUF_LEN))) {
+    if (!m->hooks.dma || !(buf = m->hooks.dma(m, bus, ATH9K_RX_BUF_LEN))) {
         m->dma_faults++;
         return -2;
     }
@@ -423,13 +423,12 @@ int ar9565_model_rx(struct ar9565_model *m, int hp, const uint8_t *frame, unsign
         buf[i] = src[i];
     for (i = 0; i < len; i++)
         buf[sizeof(rxs) + i] = frame[i];
-    ar9565_model_raise(m, hp ? AR_ISR_HP_RXOK : AR_ISR_LP_RXOK);
+    ath9k_model_raise(m, hp ? AR_ISR_HP_RXOK : AR_ISR_LP_RXOK);
     return 0;
 }
 
 /** Finish the oldest descriptor chain of queue `q`. */
-uint32_t ar9565_model_tx_complete(struct ar9565_model *m, unsigned q,
-                                  const struct ar9003_txs *status)
+uint32_t ath9k_model_tx_complete(struct ath9k_model *m, unsigned q, const struct ar9003_txs *status)
 {
     struct ar9003_txs txs = {0};
     unsigned char *ring, *src;
@@ -454,7 +453,7 @@ uint32_t ar9565_model_tx_complete(struct ar9565_model *m, unsigned q,
     m->txs_next += sizeof(txs);
     if (m->txs_next >= m->txs_end)
         m->txs_next = m->txs_start;
-    ar9565_model_raise(m, (txs.status3 & (AR_ExcessiveRetries | AR_Filtered)) ? AR_ISR_TXERR
-                                                                              : AR_ISR_TXOK);
+    ath9k_model_raise(m, (txs.status3 & (AR_ExcessiveRetries | AR_Filtered)) ? AR_ISR_TXERR
+                                                                             : AR_ISR_TXOK);
     return bus;
 }

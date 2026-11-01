@@ -160,7 +160,8 @@ C_SRC_SHARED = kernel.c \
     sys/network/driver/e1000.c \
     sys/network/driver/rtl8139.c \
     sys/network/driver/rtl8168.c \
-    sys/network/driver/ar9565/io.c \
+    sys/network/driver/ath9k/io.c \
+    sys/network/driver/ath9k/chips.c \
     sys/network/ethernet/ethernet.c \
     sys/network/arp/arp.c \
     sys/network/ip/ip.c \

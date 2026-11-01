@@ -1,18 +1,21 @@
 /*
- * ar9565.h: the QCA9565 driver's state, the calls between its parts, and
- * the layout of the card's EEPROM.
+ * ath9k.h: the state of the driver of Atheros' AR9003 family, the table
+ * of its chips, the calls between its parts, and the layout of the EEPROM.
  *
- * The driver is one card's: the Qualcomm Atheros QCA9565 (AR9565, PCI
- * 168c:0036) of the Lenovo G50-70, a 2.4 GHz 1x1 802.11b/g/n chip with no
- * firmware, so the driver does the radio itself. It follows ath9k of Linux
- * v6.16 (commit 038d61fd642278bab63ee8ef722c50d10ab01e8f), and its parts
- * are ath9k's split: the bus (pci.c), the chip's power and reset (hw.c),
- * the EEPROM (eeprom.c), the radio (phy.c), calibration (calib.c) and
+ * The driver serves one card of the family, whose chips have no firmware,
+ * so the driver does the radio itself. A chip is a row of chips.c's table:
+ * its PCI ID, its revisions and their initial-value tables, what it has,
+ * and the steps it does its own way; the rest of the driver is the
+ * family's and names no chip. The AR9565 (QCA9565) of the Lenovo G50-70 is
+ * the one row now. The driver follows ath9k of Linux v6.16 (commit
+ * 038d61fd642278bab63ee8ef722c50d10ab01e8f), and its parts are ath9k's
+ * split: the table (chips.c), the bus (pci.c), the chip's power and reset
+ * (hw.c), the EEPROM (eeprom.c), the radio (phy.c), calibration (calib.c) and
  * noise immunity (ani.c), the queues and DMA engines (mac.c), receive
  * (recv.c), transmit (xmit.c), the key cache (key.c), interrupts (intr.c),
  * recovery (recover.c), the antennas (antenna.c), power and the radio
  * switch (power.c) and transmit aggregation (ampdu.c). Each part owns the
- * member of `struct ar9565` named after it and the calls declared under
+ * member of `struct ath9k` named after it and the calls declared under
  * its name below, and reaches the chip only through io.h.
  *
  * Every call below runs with the kernel lock held. "Worker" means the
@@ -38,8 +41,8 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-#ifndef _AR9565_H_
-#define _AR9565_H_
+#ifndef _ATH9K_H_
+#define _ATH9K_H_
 
 #include "../../../lib/kint.h"
 #include "../../../pci.h"
@@ -342,8 +345,8 @@ struct ar9300_BaseExtension_2 {
 } __attribute__((packed));
 
 /* The whole image, 1088 bytes, as it is after the compressed blocks are
- * laid over the template the image names. The 5 GHz half is unused on the
- * AR9565 and kept so that a block's offsets land where the card's do. */
+ * laid over the template the image names. The 5 GHz half, unused on a
+ * 2.4 GHz chip, is kept so that a block's offsets land where the card's do. */
 struct ar9300_eeprom {
     uint8_t eepromVersion;
     uint8_t templateVersion;
@@ -392,12 +395,13 @@ typedef char ar9300_eeprom_size_is_1088[sizeof(struct ar9300_eeprom) == 1088 ? 1
 /* The driver's constants.                                             */
 /* ------------------------------------------------------------------ */
 
-#define AR9565_VENDOR_ID 0x168c
-#define AR9565_DEVICE_ID 0x0036
+/* Atheros' PCI vendor ID, every chip's (hw.h's ATHEROS_VENDOR_ID). */
+#define ATH9K_VENDOR_ID 0x168c
 
-/* ath9k's per-card flags (ath9k.h), which pci.c takes from the subsystem
- * IDs as ath9k's pci.c table gives them: 17aa:3026 and 17aa:4026, the
- * G50-70's, are AR9565_2ANT | BT_ANT_DIV. */
+/* ath9k's per-card flags (ath9k.h), which a row gives a card by its
+ * subsystem IDs as ath9k's pci.c table does. ATH9K_PCI_1ANT and _2ANT are
+ * ath9k's ATH9K_PCI_AR9565_1ANT and _2ANT: a card wired with one antenna,
+ * or two for LNA combining. */
 #define ATH9K_PCI_CUS198         0x0001
 #define ATH9K_PCI_CUS230         0x0002
 #define ATH9K_PCI_CUS217         0x0004
@@ -405,73 +409,125 @@ typedef char ar9300_eeprom_size_is_1088[sizeof(struct ar9300_eeprom) == 1088 ? 1
 #define ATH9K_PCI_WOW            0x0010
 #define ATH9K_PCI_BT_ANT_DIV     0x0020
 #define ATH9K_PCI_D3_L1_WAR      0x0040
-#define ATH9K_PCI_AR9565_1ANT    0x0080
-#define ATH9K_PCI_AR9565_2ANT    0x0100
+#define ATH9K_PCI_1ANT           0x0080
+#define ATH9K_PCI_2ANT           0x0100
 #define ATH9K_PCI_NO_PLL_PWRSAVE 0x0200
 #define ATH9K_PCI_KILLER         0x0400
 #define ATH9K_PCI_LED_ACT_HI     0x0800
+
+/* What a chip has, in its row's caps. ATH9K_CHIP_JUPITER is a chip of the
+ * AR9462's design, which ath9k tests as AR_SREV_9462 || AR_SREV_9565, and
+ * ATH9K_CHIP_PCOEM one of ath9k's AR_SREV_9003_PCOEM. */
+#define ATH9K_CHIP_2GHZ     0x0001 /* the 2.4 GHz band */
+#define ATH9K_CHIP_5GHZ     0x0002 /* the 5 GHz band */
+#define ATH9K_CHIP_PCOEM    0x0004 /* a part made for PC makers */
+#define ATH9K_CHIP_JUPITER  0x0008 /* of the AR9462's design */
+#define ATH9K_CHIP_ANT_COMB 0x0010 /* LNA combining and antenna diversity */
+#define ATH9K_CHIP_MCI      0x0020 /* Bluetooth coexistence through MCI */
 
 /* Receive: the two EDMA FIFOs' depths (hw.h's ATH9K_HW_RX_HP_QDEPTH and
  * _LP_QDEPTH), and a buffer's length, ath9k's: the largest MPDU, 3840
  * bytes and the FCS, IV, key ID and ICV, after the 48-byte status, rounded
  * up to 64 bytes. */
-#define AR9565_RX_HP_DEPTH 16
-#define AR9565_RX_LP_DEPTH 128
-#define AR9565_RX_BUF_LEN  3904
+#define ATH9K_RX_HP_DEPTH 16
+#define ATH9K_RX_LP_DEPTH 128
+#define ATH9K_RX_BUF_LEN  3904
 
 /* Transmit: the four access categories' queues, each a ring of frames of
- * which at most AR9565_TX_FIFO_DEPTH are in the chip's FIFO at once
+ * which at most ATH9K_TX_FIFO_DEPTH are in the chip's FIFO at once
  * (ath9k's ATH_TXFIFO_DEPTH), the status ring's entries
  * (ATH_TXSTATUS_RING_SIZE) and the attempts a frame gets over its four
  * series (ATH_TXMAXTRY). */
-#define AR9565_TX_QUEUES     4
-#define AR9565_TX_RING       64
-#define AR9565_TX_FIFO_DEPTH 8
-#define AR9565_TXS_RING      512
-#define AR9565_TX_MAX_TRIES  13
+#define ATH9K_TX_QUEUES     4
+#define ATH9K_TX_RING       64
+#define ATH9K_TX_FIFO_DEPTH 8
+#define ATH9K_TXS_RING      512
+#define ATH9K_TX_MAX_TRIES  13
 
 /* The noise floor's history (calib.h's NUM_NF_READINGS, the control and
  * extension readings of three chains, and ATH9K_NF_CAL_HIST_MAX). */
-#define AR9565_NF_READINGS 6
-#define AR9565_NF_HISTORY  5
+#define ATH9K_NF_READINGS 6
+#define ATH9K_NF_HISTORY  5
 
 /* The periods of the worker's jobs, in milliseconds (ath9k.h): the short
  * and long calibrations, the noise-immunity check, the hang check, and
  * the full calibration again after 20 minutes. */
-#define AR9565_SHORT_CAL_MS   1000
-#define AR9565_LONG_CAL_MS    30000
-#define AR9565_ANI_MS         1000
-#define AR9565_HANG_MS        1000
-#define AR9565_RESTART_CAL_MS 1200000
+#define ATH9K_SHORT_CAL_MS   1000
+#define ATH9K_LONG_CAL_MS    30000
+#define ATH9K_ANI_MS         1000
+#define ATH9K_HANG_MS        1000
+#define ATH9K_RESTART_CAL_MS 1200000
 
 /* The `options` bits, set from the kernel command line before the probe. */
-#define AR9565_OPT_NO_ANI   0x01 /* leave noise immunity at its defaults */
-#define AR9565_OPT_NO_ASPM  0x02 /* turn L0s and L1 off on the link */
-#define AR9565_OPT_NO_AMPDU 0x04 /* send single frames only */
+#define ATH9K_OPT_NO_ANI   0x01 /* leave noise immunity at its defaults */
+#define ATH9K_OPT_NO_ASPM  0x02 /* turn L0s and L1 off on the link */
+#define ATH9K_OPT_NO_AMPDU 0x04 /* send single frames only */
 
 /* The column of a five-column ini table for 2.4 GHz HT20 (ath9k's
  * ar9003_hw_process_ini: 5G HT20, 5G HT40, 2G HT40, 2G HT20). */
-#define AR9565_INI_2G_HT20 4
+#define ATH9K_INI_2G_HT20 4
 
-enum ar9565_ini_stage { AR9565_INI_PRE, AR9565_INI_CORE, AR9565_INI_POST, AR9565_INI_STAGES };
+enum ath9k_ini_stage { ATH9K_INI_PRE, ATH9K_INI_CORE, ATH9K_INI_POST, ATH9K_INI_STAGES };
 
 /* The chip's power states (hw.h's enum ath9k_power_mode). */
-enum ar9565_power { AR9565_AWAKE, AR9565_FULL_SLEEP, AR9565_NETWORK_SLEEP };
+enum ath9k_power_mode { ATH9K_PM_AWAKE, ATH9K_PM_FULL_SLEEP, ATH9K_PM_NETWORK_SLEEP };
 
 /* The resets of hw.c (hw.h's ATH9K_RESET_*): the RTC's power-on reset, and
  * the warm and cold resets of the MAC and baseband through AR_RTC_RC. */
-enum ar9565_reset_type { AR9565_RESET_POWER_ON, AR9565_RESET_WARM, AR9565_RESET_COLD };
+enum ath9k_reset_type { ATH9K_RESET_POWER_ON, ATH9K_RESET_WARM, ATH9K_RESET_COLD };
 
-/* Why recover.c reset the chip, counted in `struct ar9565_stats`. */
-enum ar9565_reset_reason {
-    AR9565_RESET_FATAL,       /* a fatal interrupt: a PCIe error */
-    AR9565_RESET_BB_WATCHDOG, /* the baseband watchdog fired */
-    AR9565_RESET_BB_HANG,     /* the baseband hung (ath9k_hw_check_alive) */
-    AR9565_RESET_MAC_HANG,    /* the MAC's DMA or PCU hung */
-    AR9565_RESET_TX_HANG,     /* a queue held frames past its deadline */
-    AR9565_RESET_RX_STALL,    /* no frame received for too long */
-    AR9565_RESET_CAL,         /* a calibration failed */
-    AR9565_RESET_REASONS
+/* Why recover.c reset the chip, counted in `struct ath9k_stats`. */
+enum ath9k_reset_reason {
+    ATH9K_RESET_FATAL,       /* a fatal interrupt: a PCIe error */
+    ATH9K_RESET_BB_WATCHDOG, /* the baseband watchdog fired */
+    ATH9K_RESET_BB_HANG,     /* the baseband hung (ath9k_hw_check_alive) */
+    ATH9K_RESET_MAC_HANG,    /* the MAC's DMA or PCU hung */
+    ATH9K_RESET_TX_HANG,     /* a queue held frames past its deadline */
+    ATH9K_RESET_RX_STALL,    /* no frame received for too long */
+    ATH9K_RESET_CAL,         /* a calibration failed */
+    ATH9K_RESET_REASONS
+};
+
+/* ------------------------------------------------------------------ */
+/* The chips of the family.                                            */
+/* ------------------------------------------------------------------ */
+
+/* A card's ATH9K_PCI_* flags by its subsystem IDs. */
+struct ath9k_subsys {
+    uint16_t vendor;
+    uint16_t device;
+    unsigned flags;
+};
+
+/* A revision a row knows. */
+struct ath9k_chip_rev {
+    uint32_t mac_rev; /* the AR_SREV_REVISION2 field AR_SREV reads */
+    const char *name; /* "1.0", for the probe's line */
+};
+
+/* The steps a chip does its own way, which hw.c calls. */
+struct ath9k_chip_ops {
+    /** Fill ah->hw's initial-value tables for ah->hw.mac_rev, as ath9k's
+     * ar9003_hw_init_mode_regs does for the chip. Attach. */
+    void (*init_mode_regs)(struct ath9k *ah);
+    /** Choose ah->hw's transmit and receive gain tables for the EEPROM's
+     * gain modes `tx` and `rx`, the high and low nibbles of
+     * baseEepHeader.txrxgain, as ar9003_hw_init_mode_gain_regs does.
+     * Attach, after the EEPROM and init_mode_regs. */
+    void (*init_gain_tables)(struct ath9k *ah, unsigned tx, unsigned rx);
+};
+
+/* A chip of the family: a row of chips.c's table. */
+struct ath9k_chip {
+    const char *name;                  /* "AR9565", for the probe's line */
+    uint16_t device;                   /* its PCI device ID */
+    uint32_t mac_version;              /* the AR_SREV_VERSION2 field it reads */
+    const struct ath9k_chip_rev *revs; /* ending at a NULL name */
+    unsigned caps;                     /* ATH9K_CHIP_* */
+    uint8_t chainmask;                 /* its chains, one bit each */
+    uint8_t num_gpio;                  /* its GPIO lines */
+    const struct ath9k_subsys *subsys; /* ending at vendor 0: any other card */
+    const struct ath9k_chip_ops *ops;
 };
 
 /* ------------------------------------------------------------------ */
@@ -479,7 +535,7 @@ enum ar9565_reset_reason {
 /* ------------------------------------------------------------------ */
 
 /* pci.c's: the device, its window and its interrupt. */
-struct ar9565_bus {
+struct ath9k_bus {
     pci_device_t dev;
     uintptr_t mmio;         /* the mapped window, 0 before mapping */
     uint16_t subsys_vendor; /* the subsystem IDs, 17aa:NNNN on the G50-70 */
@@ -488,31 +544,34 @@ struct ar9565_bus {
     uint8_t vector; /* the MSI vector, 0 when the tick serves the card */
 };
 
-/* hw.c's: the chip's identity, its power, and the tables its revision
- * selects (ath9k's ar9003_hw_init_mode_regs). */
-struct ar9565_hw {
-    uint32_t mac_version; /* AR_SREV_VERSION_9565 once probed */
-    uint32_t mac_rev;     /* AR_SREV_REVISION_9565_10, _101 or _11 */
-    enum ar9565_power power;
-    struct ar9565_ini mac[AR9565_INI_STAGES];
-    struct ar9565_ini bb[AR9565_INI_STAGES];
-    struct ar9565_ini radio[AR9565_INI_STAGES];
-    struct ar9565_ini soc[AR9565_INI_STAGES];
-    struct ar9565_ini rx_gain;
-    struct ar9565_ini tx_gain;
-    struct ar9565_ini pcie;
-    struct ar9565_ini fast_clock;
+/* hw.c's: the chip's identity, its power, and the tables its row's ops
+ * choose for its revision and its EEPROM. */
+struct ath9k_hw {
+    const struct ath9k_chip *chip;    /* the row, from the PCI ID */
+    const struct ath9k_chip_rev *rev; /* the revision AR_SREV read */
+    uint32_t mac_version;             /* what AR_SREV read */
+    uint32_t mac_rev;
+    enum ath9k_power_mode power;
+    struct ath9k_ini mac[ATH9K_INI_STAGES];
+    struct ath9k_ini bb[ATH9K_INI_STAGES];
+    struct ath9k_ini radio[ATH9K_INI_STAGES];
+    struct ath9k_ini soc[ATH9K_INI_STAGES];
+    struct ath9k_ini rx_gain;
+    struct ath9k_ini tx_gain;
+    struct ath9k_ini pcie;       /* the PCIe PHY's, around sleep */
+    struct ath9k_ini fast_clock; /* the 5 GHz fast clock's */
+    struct ath9k_ini japan_2484; /* the CCK filter of channel 14 */
 };
 
 /* eeprom.c's: the image and what the driver reads from it once. */
-struct ar9565_eeprom {
+struct ath9k_eeprom {
     struct ar9300_eeprom image; /* unpacked over its template */
     uint16_t regdomain;         /* baseEepHeader.regDmn[0] */
     uint8_t valid;              /* nonzero once image holds a checked image */
 };
 
 /* phy.c's: the channel the radio is on and its transmit power. */
-struct ar9565_phy {
+struct ath9k_phy {
     struct wlan_channel channel;    /* frequency 0 until the first tune */
     int16_t power_limit;            /* the regulatory cap, in half dB */
     uint8_t target[ar9300RateSize]; /* the power set per rate, in half dB */
@@ -520,16 +579,16 @@ struct ar9565_phy {
 
 /* One reading's history of noise-floor results (calib.h's
  * ath9k_nfcal_hist), in dBm. */
-struct ar9565_nf_hist {
-    int16_t buf[AR9565_NF_HISTORY];
+struct ath9k_nf_hist {
+    int16_t buf[ATH9K_NF_HISTORY];
     uint8_t index;
     uint8_t invalid_count;
     int16_t private_nf; /* the median of buf, which is loaded back */
 };
 
 /* calib.c's: what the reset-time and periodic calibrations keep. */
-struct ar9565_cal {
-    struct ar9565_nf_hist nf[AR9565_NF_READINGS];
+struct ath9k_cal {
+    struct ath9k_nf_hist nf[ATH9K_NF_READINGS];
     int16_t noise_floor; /* the channel's noise floor, in dBm */
     uint8_t nf_pending;  /* a noise-floor measurement is running */
     uint8_t iq_valid;    /* the IQ correction below is in use */
@@ -543,7 +602,7 @@ struct ar9565_cal {
 };
 
 /* ani.c's: adaptive noise immunity (ani.h's ar5416AniState). */
-struct ar9565_ani {
+struct ath9k_ani {
     uint8_t ofdm_level; /* the OFDM and CCK immunity levels, 0 to 8 */
     uint8_t cck_level;
     uint8_t mrc_cck;
@@ -556,23 +615,23 @@ struct ar9565_ani {
 };
 
 /* One receive FIFO's buffers, in the order pushed to the chip. */
-struct ar9565_rx_fifo {
-    uint8_t *buf[AR9565_RX_LP_DEPTH]; /* AR9565_RX_BUF_LEN bytes each */
-    uint32_t bus[AR9565_RX_LP_DEPTH]; /* their bus addresses */
-    unsigned depth;                   /* AR9565_RX_HP_DEPTH or _LP_DEPTH */
-    unsigned head;                    /* the oldest buffer the chip holds */
-    unsigned count;                   /* buffers the chip holds */
+struct ath9k_rx_fifo {
+    uint8_t *buf[ATH9K_RX_LP_DEPTH]; /* ATH9K_RX_BUF_LEN bytes each */
+    uint32_t bus[ATH9K_RX_LP_DEPTH]; /* their bus addresses */
+    unsigned depth;                  /* ATH9K_RX_HP_DEPTH or _LP_DEPTH */
+    unsigned head;                   /* the oldest buffer the chip holds */
+    unsigned count;                  /* buffers the chip holds */
 };
 
 /* recv.c's: the high- and low-priority FIFOs (ath9k's ath_rx_edma). */
-struct ar9565_rx {
-    struct ar9565_rx_fifo fifo[2]; /* [0] high priority, [1] low */
-    unsigned filters;              /* the WLAN_FILTER_* in force */
+struct ath9k_rx {
+    struct ath9k_rx_fifo fifo[2]; /* [0] high priority, [1] low */
+    unsigned filters;             /* the WLAN_FILTER_* in force */
     uint8_t running;
 };
 
 /* A frame given to a queue, from its acceptance to its status. */
-struct ar9565_tx_slot {
+struct ath9k_tx_slot {
     struct ar9003_txc *desc; /* its descriptor */
     uint32_t desc_bus;
     uint8_t *buf; /* a copy of the frame, with room for IV and MIC */
@@ -582,8 +641,8 @@ struct ar9565_tx_slot {
 };
 
 /* One hardware queue, AR_NUM_QCU's numbering, for one access category. */
-struct ar9565_txq {
-    struct ar9565_tx_slot slot[AR9565_TX_RING];
+struct ath9k_txq {
+    struct ath9k_tx_slot slot[ATH9K_TX_RING];
     unsigned qnum;
     unsigned head;   /* the oldest frame not yet completed */
     unsigned count;  /* frames accepted and not completed */
@@ -592,15 +651,15 @@ struct ar9565_txq {
 };
 
 /* xmit.c's: the queues and the status ring. */
-struct ar9565_tx {
-    struct ar9565_txq q[AR9565_TX_QUEUES]; /* indexed by enum wlan_ac */
-    struct ar9003_txs *status;             /* AR9565_TXS_RING entries */
+struct ath9k_tx {
+    struct ath9k_txq q[ATH9K_TX_QUEUES]; /* indexed by enum wlan_ac */
+    struct ar9003_txs *status;           /* ATH9K_TXS_RING entries */
     uint32_t status_bus;
     unsigned status_index; /* the next entry the chip will write */
 };
 
 /* mac.c's: the interrupt mask and the PCU's settings. */
-struct ar9565_mac {
+struct ath9k_mac {
     uint32_t imask; /* AR_IMR bits enabled */
     uint8_t bssid[6];
     uint16_t aid;
@@ -608,7 +667,7 @@ struct ar9565_mac {
 };
 
 /* A key the cache holds, kept to write back after a reset. */
-struct ar9565_key {
+struct ath9k_key {
     uint8_t used;
     uint8_t type; /* AR_KEYTABLE_TYPE_* */
     uint8_t peer[6];
@@ -617,12 +676,12 @@ struct ar9565_key {
 };
 
 /* key.c's: the cache's 128 entries (AR_KEY_CACHE_SIZE). */
-struct ar9565_keys {
-    struct ar9565_key entry[AR_KEY_CACHE_SIZE];
+struct ath9k_keys {
+    struct ath9k_key entry[AR_KEY_CACHE_SIZE];
 };
 
 /* recover.c's: what the hang checks compare between runs. */
-struct ar9565_recover {
+struct ath9k_recover {
     uint64_t last_rx;      /* worker tick of the last frame received */
     uint32_t rx_frames;    /* frames received at the last check */
     uint32_t bb_state;     /* the baseband's state at the last check */
@@ -632,7 +691,7 @@ struct ar9565_recover {
 };
 
 /* antenna.c's: LNA combining and diversity (ath9k.h's ath_ant_comb). */
-struct ar9565_ant {
+struct ath9k_ant {
     uint8_t diversity; /* diversity is on */
     uint8_t main_conf; /* the LNA configurations in use */
     uint8_t alt_conf;
@@ -645,7 +704,7 @@ struct ar9565_ant {
 };
 
 /* power.c's: the link's ASPM and the radio switch. */
-struct ar9565_power_state {
+struct ath9k_power_state {
     uint8_t aspm;        /* the link's ASPM control as the firmware set it */
     uint8_t rfkill_gpio; /* the EEPROM's switch line, when rfkill_enabled */
     uint8_t rfkill_polarity;
@@ -655,19 +714,19 @@ struct ar9565_power_state {
 };
 
 /* One traffic identifier's transmit BlockAck session. */
-struct ar9565_tid {
+struct ath9k_tid {
     uint8_t active;
     uint16_t ssn;    /* the window's first sequence number */
     uint16_t window; /* 1 to 64 MPDUs */
 };
 
 /* ampdu.c's: the sessions by TID. */
-struct ar9565_ampdu {
-    struct ar9565_tid tid[8];
+struct ath9k_ampdu {
+    struct ath9k_tid tid[8];
 };
 
 /* What the driver counts, for the kernel log and the hang checks. */
-struct ar9565_stats {
+struct ath9k_stats {
     uint32_t interrupts;
     uint32_t rx_frames;
     uint32_t rx_crc;
@@ -680,84 +739,99 @@ struct ar9565_stats {
     uint32_t tx_retries;
     uint32_t tx_underrun;
     uint32_t beacon_miss;
-    uint32_t resets[AR9565_RESET_REASONS];
+    uint32_t resets[ATH9K_RESET_REASONS];
 };
 
 /* The card. One exists, pci.c's; a host test makes its own. */
-struct ar9565 {
-    const struct ar9565_io *io; /* io.h's indirection */
+struct ath9k {
+    const struct ath9k_io *io; /* io.h's indirection */
     void *io_ctx;
     struct wlan_radio radio; /* registered with radio.priv pointing here */
-    unsigned options;        /* AR9565_OPT_* */
+    unsigned options;        /* ATH9K_OPT_* */
 
-    struct ar9565_bus bus;
-    struct ar9565_hw hw;
-    struct ar9565_eeprom eeprom;
-    struct ar9565_phy phy;
-    struct ar9565_cal cal;
-    struct ar9565_ani ani;
-    struct ar9565_rx rx;
-    struct ar9565_tx tx;
-    struct ar9565_mac mac;
-    struct ar9565_keys keys;
-    struct ar9565_recover recover;
-    struct ar9565_ant ant;
-    struct ar9565_power_state power;
-    struct ar9565_ampdu ampdu;
-    struct ar9565_stats stats;
+    struct ath9k_bus bus;
+    struct ath9k_hw hw;
+    struct ath9k_eeprom eeprom;
+    struct ath9k_phy phy;
+    struct ath9k_cal cal;
+    struct ath9k_ani ani;
+    struct ath9k_rx rx;
+    struct ath9k_tx tx;
+    struct ath9k_mac mac;
+    struct ath9k_keys keys;
+    struct ath9k_recover recover;
+    struct ath9k_ant ant;
+    struct ath9k_power_state power;
+    struct ath9k_ampdu ampdu;
+    struct ath9k_stats stats;
 };
 
 /* ------------------------------------------------------------------ */
 /* The calls between the parts.                                        */
 /* ------------------------------------------------------------------ */
 
+/* chips.c */
+
+/** The family's chips, ending at NULL. */
+extern const struct ath9k_chip *const ath9k_chips[];
+
+/** The row of PCI device `device` under ATH9K_VENDOR_ID, or NULL. */
+const struct ath9k_chip *ath9k_chip_find(uint16_t device);
+
+/** The revision `mac_rev` of `chip`, or NULL for one its row does not
+ * know. */
+const struct ath9k_chip_rev *ath9k_chip_rev(const struct ath9k_chip *chip, uint32_t mac_rev);
+
+/** The ATH9K_PCI_* flags `chip`'s row gives a card with these subsystem
+ * IDs: those of the first of its subsys entries that names them, or those
+ * of its last entry. */
+unsigned ath9k_chip_flags(const struct ath9k_chip *chip, uint16_t subsys_vendor,
+                          uint16_t subsys_device);
+
 /* pci.c */
 
 /** The kernel's register access: MMIO on bus.mmio and k_udelay. Its
- * context is the `struct ar9565`. */
-extern const struct ar9565_io ar9565_mmio_io;
+ * context is the `struct ath9k`. */
+extern const struct ath9k_io ath9k_mmio_io;
 
 /** The radio operations of radio.h, which call into the parts below. */
-extern const struct wlan_radio_ops ar9565_radio_ops;
+extern const struct wlan_radio_ops ath9k_radio_ops;
 
 /**
- * Find the card, map its window, bring the chip up and register its radio.
- * Boot, process context. Returns 0, -ENODEV when no card is present, or the
- * errno of the step that failed, which it logs.
+ * Find a card of a chip of the table, map its window, bring the chip up and
+ * register its radio. Boot, process context. Returns 0, -ENODEV when no
+ * card is present, or the errno of the step that failed, which it logs.
  */
-int ar9565_probe(void);
-
-/** The ATH9K_PCI_* flags of ath9k's table for an AR9565 with these
- * subsystem IDs, 0 for one the table does not name. */
-unsigned ar9565_pci_flags(uint16_t subsys_vendor, uint16_t subsys_device);
+int ath9k_probe(void);
 
 /* hw.c */
 
 /**
- * Power the chip on, reset it, read its revision, select its tables, read
- * the EEPROM and fill the radio's capabilities, as ath9k_hw_init does.
- * Process context. Returns 0, -ENODEV for a chip that is not an AR9565 or
- * reads all ones, or -EIO.
+ * Power the chip on, reset it, read its revision, have hw.chip's ops choose
+ * its tables, read the EEPROM and fill the radio's capabilities, as
+ * ath9k_hw_init does. Process context. Returns 0, -ENODEV for a chip that
+ * reads all ones or reads a version or revision its row does not know, or
+ * -EIO.
  */
-int ar9565_hw_attach(struct ar9565 *ah);
+int ath9k_hw_attach(struct ath9k *ah);
 
 /**
  * Reset the chip onto `chan`, as ath9k_hw_reset does: stop DMA, reset,
  * write the tables, tune, calibrate and set up the queues and the PCU.
  * Interrupts and receive stay off; the caller starts them. Worker.
  */
-int ar9565_hw_reset(struct ar9565 *ah, const struct wlan_channel *chan);
+int ath9k_hw_reset(struct ath9k *ah, const struct wlan_channel *chan);
 
 /** Reset the chip by `type` through AR_RTC_RESET or AR_RTC_RC. Worker or
  * attach. */
-int ar9565_hw_set_reset(struct ar9565 *ah, enum ar9565_reset_type type);
+int ath9k_hw_set_reset(struct ath9k *ah, enum ath9k_reset_type type);
 
 /** Bring the chip to `mode`, waking it from sleep through
  * AR_RTC_FORCE_WAKE. */
-int ar9565_hw_set_power(struct ar9565 *ah, enum ar9565_power mode);
+int ath9k_hw_set_power(struct ath9k *ah, enum ath9k_power_mode mode);
 
 /** Stop the chip and leave it in full sleep, as ath9k_hw_disable does. */
-void ar9565_hw_disable(struct ar9565 *ah);
+void ath9k_hw_disable(struct ath9k *ah);
 
 /* eeprom.c */
 
@@ -766,211 +840,210 @@ void ar9565_hw_disable(struct ar9565 *ah);
  * over its template and check it; fill eeprom, the radio's MAC address and
  * its country. Attach. Returns 0 or -EIO, which leaves eeprom.valid 0.
  */
-int ar9565_eeprom_init(struct ar9565 *ah);
+int ath9k_eeprom_init(struct ath9k *ah);
 
 /** Read the 16-bit EEPROM word at `offset` into *word. */
-int ar9565_eeprom_read_word(struct ar9565 *ah, unsigned offset, uint16_t *word);
+int ath9k_eeprom_read_word(struct ath9k *ah, unsigned offset, uint16_t *word);
 
 /** Fill `target` with the EEPROM's target power for each ar9300_Rates
  * entry at `freq` MHz, in half dB, interpolated between its piers. */
-void ar9565_eeprom_target_power(const struct ar9565 *ah, unsigned freq,
-                                uint8_t target[ar9300RateSize]);
+void ath9k_eeprom_target_power(const struct ath9k *ah, unsigned freq,
+                               uint8_t target[ar9300RateSize]);
 
 /** The conformance test limit at `freq` MHz for CTL mode `mode`
  * (CTL_11B, CTL_11G or CTL_2GHT20), in half dB. */
-unsigned ar9565_eeprom_ctl_limit(const struct ar9565 *ah, unsigned freq, unsigned mode);
+unsigned ath9k_eeprom_ctl_limit(const struct ath9k *ah, unsigned freq, unsigned mode);
 
 /** Write the board's settings for `chan` (bias, drive strength, regulator,
  * tuning caps, quick drop), as ath9k_hw_ar9300_set_board_values does,
  * leaving the antenna's to antenna.c. Worker, within a reset. */
-void ar9565_eeprom_set_board_values(struct ar9565 *ah, const struct wlan_channel *chan);
+void ath9k_eeprom_set_board_values(struct ath9k *ah, const struct wlan_channel *chan);
 
 /* phy.c */
 
 /** Write the mode, band and gain tables for `chan`, as
  * ar9003_hw_process_ini does. Worker, within a reset. */
-void ar9565_phy_process_ini(struct ar9565 *ah, const struct wlan_channel *chan);
+void ath9k_phy_process_ini(struct ath9k *ah, const struct wlan_channel *chan);
 
 /** Program the synthesizer for `chan`, HT20, as ar9003_hw_set_channel
  * does, and record it in phy.channel. Worker. */
-int ar9565_phy_set_channel(struct ar9565 *ah, const struct wlan_channel *chan);
+int ath9k_phy_set_channel(struct ath9k *ah, const struct wlan_channel *chan);
 
 /** Set the per-rate transmit power for `chan` from the EEPROM, capped at
  * `limit` half dB and by the conformance limits. Worker. */
-void ar9565_phy_set_txpower(struct ar9565 *ah, const struct wlan_channel *chan, int limit);
+void ath9k_phy_set_txpower(struct ath9k *ah, const struct wlan_channel *chan, int limit);
 
 /* calib.c */
 
 /** Run the reset-time calibrations on `chan`, as ar9003_hw_init_cal does.
  * Worker, within a reset. Returns 0 or -EIO, which asks for a reset. */
-int ar9565_cal_init(struct ar9565 *ah, const struct wlan_channel *chan);
+int ath9k_cal_init(struct ath9k *ah, const struct wlan_channel *chan);
 
 /** Clear the noise-floor history to the EEPROM's nominal values. */
-void ar9565_nf_init(struct ar9565 *ah);
+void ath9k_nf_init(struct ath9k *ah);
 
 /** Start a noise-floor measurement. */
-void ar9565_nf_start(struct ar9565 *ah);
+void ath9k_nf_start(struct ath9k *ah);
 
 /** Read a finished measurement into the history and load the median back.
  * Returns 1 when one was read, 0 while it runs, or -EIO when the chip
  * refused the load, which asks for a reset. */
-int ar9565_nf_update(struct ar9565 *ah);
+int ath9k_nf_update(struct ath9k *ah);
 
 /** Start the periodic calibration's work; stop it. Worker. */
-void ar9565_cal_start(struct ar9565 *ah);
-void ar9565_cal_stop(struct ar9565 *ah);
+void ath9k_cal_start(struct ath9k *ah);
+void ath9k_cal_stop(struct ath9k *ah);
 
 /* ani.c */
 
 /** Set noise immunity to the defaults; again at each channel change. */
-void ar9565_ani_reset(struct ar9565 *ah);
+void ath9k_ani_reset(struct ath9k *ah);
 
 /** Read the MIB's phy error counts and raise or lower immunity. Worker,
- * from the calibration's work. Does nothing under AR9565_OPT_NO_ANI. */
-void ar9565_ani_monitor(struct ar9565 *ah);
+ * from the calibration's work. Does nothing under ATH9K_OPT_NO_ANI. */
+void ath9k_ani_monitor(struct ath9k *ah);
 
 /* mac.c */
 
 /** Set up the QCU and DCU of each data queue, and the status ring. Worker,
  * within a reset. */
-void ar9565_mac_init_queues(struct ar9565 *ah);
+void ath9k_mac_init_queues(struct ath9k *ah);
 
 /** Push the descriptor chain at `bus` to queue `qnum`'s FIFO and start it.
  * Interrupt or worker. */
-void ar9565_mac_tx_push(struct ar9565 *ah, unsigned qnum, uint32_t bus);
+void ath9k_mac_tx_push(struct ath9k *ah, unsigned qnum, uint32_t bus);
 
 /** Stop queue `qnum`, waiting for its frames to leave. -ETIMEDOUT on a
  * queue that does not stop. */
-int ar9565_mac_stop_queue(struct ar9565 *ah, unsigned qnum);
+int ath9k_mac_stop_queue(struct ath9k *ah, unsigned qnum);
 
 /** Abort every queue's DMA, as ath9k_hw_abort_tx_dma does. */
-int ar9565_mac_abort_tx(struct ar9565 *ah);
+int ath9k_mac_abort_tx(struct ath9k *ah);
 
 /** Push the buffer at `bus` to receive FIFO `hp` (1 high, 0 low). */
-void ar9565_mac_rx_push(struct ar9565 *ah, int hp, uint32_t bus);
+void ath9k_mac_rx_push(struct ath9k *ah, int hp, uint32_t bus);
 
 /** Start the PCU's receive; stop it and the receive DMA, as
  * ath9k_hw_stopdmarecv does. -ETIMEDOUT when the DMA does not stop. */
-void ar9565_mac_rx_start(struct ar9565 *ah);
-int ar9565_mac_rx_stop(struct ar9565 *ah);
+void ath9k_mac_rx_start(struct ath9k *ah);
+int ath9k_mac_rx_stop(struct ath9k *ah);
 
 /** Set the receive filter from WLAN_FILTER_* bits and the station's state. */
-void ar9565_mac_set_filter(struct ar9565 *ah, unsigned filters);
+void ath9k_mac_set_filter(struct ath9k *ah, unsigned filters);
 
 /** Set the MAC address, and the BSSID and association ID (all zero when
  * not associated). */
-void ar9565_mac_set_address(struct ar9565 *ah);
-void ar9565_mac_set_bssid(struct ar9565 *ah, const uint8_t bssid[6], unsigned aid);
+void ath9k_mac_set_address(struct ath9k *ah);
+void ath9k_mac_set_bssid(struct ath9k *ah, const uint8_t bssid[6], unsigned aid);
 
 /** Enable the interrupts of mac.imask; disable all, waiting for none to be
  * in flight. Interrupt or worker. */
-void ar9565_mac_intr_enable(struct ar9565 *ah);
-void ar9565_mac_intr_disable(struct ar9565 *ah);
+void ath9k_mac_intr_enable(struct ath9k *ah);
+void ath9k_mac_intr_disable(struct ath9k *ah);
 
 /* recv.c */
 
 /** Allocate the receive buffers. Attach. -ENOMEM. */
-int ar9565_rx_init(struct ar9565 *ah);
+int ath9k_rx_init(struct ath9k *ah);
 
 /** Give every buffer to the chip and start receiving; stop, taking the
  * buffers back. Worker. */
-int ar9565_rx_start(struct ar9565 *ah);
-int ar9565_rx_stop(struct ar9565 *ah);
+int ath9k_rx_start(struct ath9k *ah);
+int ath9k_rx_stop(struct ath9k *ah);
 
 /** Hand each completed buffer of FIFO `hp` to wlan_radio_rx and give it
  * back to the chip. Interrupt. Returns the frames delivered. */
-unsigned ar9565_rx_service(struct ar9565 *ah, int hp);
+unsigned ath9k_rx_service(struct ath9k *ah, int hp);
 
 /* xmit.c */
 
 /** Allocate the descriptors, frame buffers and status ring. Attach. */
-int ar9565_tx_init(struct ar9565 *ah);
+int ath9k_tx_init(struct ath9k *ah);
 
 /** The radio's tx operation: copy the frame to a slot of info->ac's queue
  * and push it. -ENOBUFS when the queue is full. Worker. */
-int ar9565_tx(struct ar9565 *ah, const uint8_t *frame, unsigned len,
-              const struct wlan_tx_info *info);
+int ath9k_tx(struct ath9k *ah, const uint8_t *frame, unsigned len, const struct wlan_tx_info *info);
 
 /** Read the status ring and report each finished frame with
  * wlan_radio_tx_status. Interrupt. Returns the frames finished. */
-unsigned ar9565_tx_service(struct ar9565 *ah);
+unsigned ath9k_tx_service(struct ath9k *ah);
 
 /** Report every accepted frame as failed and empty the queues, after the
  * DMA is stopped. Worker. */
-void ar9565_tx_drain(struct ar9565 *ah);
+void ath9k_tx_drain(struct ath9k *ah);
 
 /* key.c */
 
 /** Install `key` for `peer` in a free entry and set *slot, or
  * -EOPNOTSUPP for a cipher the cache does not do. Worker. */
-int ar9565_key_set(struct ar9565 *ah, const uint8_t peer[6], const struct wlan_key *key, int *slot);
+int ath9k_key_set(struct ath9k *ah, const uint8_t peer[6], const struct wlan_key *key, int *slot);
 
 /** Clear entry `slot`. Worker. */
-void ar9565_key_clear(struct ar9565 *ah, int slot);
+void ath9k_key_clear(struct ath9k *ah, int slot);
 
 /** Clear the whole cache, then write back each entry in use. Worker,
  * after a reset. */
-void ar9565_key_restore(struct ar9565 *ah);
+void ath9k_key_restore(struct ath9k *ah);
 
 /* intr.c */
 
 /** Take a vector and enable MSI, or fall back to the tick. Attach. */
-int ar9565_intr_attach(struct ar9565 *ah);
+int ath9k_intr_attach(struct ath9k *ah);
 
 /** Serve the chip's interrupt causes: receive, transmit, beacon miss, and
  * the fatal causes, which ask recover.c for a reset. Interrupt. */
-void ar9565_intr(struct ar9565 *ah);
+void ath9k_intr(struct ath9k *ah);
 
 /** The tick's service of the rings when no message arrives. Interrupt. */
-void ar9565_tick(struct ar9565 *ah);
+void ath9k_tick(struct ath9k *ah);
 
 /* recover.c */
 
 /** Reset the chip on its channel and bring the station's state back: keys,
  * filter, BSSID, queues and receive. Worker. Counts `why`. */
-int ar9565_reset(struct ar9565 *ah, enum ar9565_reset_reason why);
+int ath9k_reset(struct ath9k *ah, enum ath9k_reset_reason why);
 
 /** Ask the worker for a reset, from interrupt context. */
-void ar9565_reset_schedule(struct ar9565 *ah, enum ar9565_reset_reason why);
+void ath9k_reset_schedule(struct ath9k *ah, enum ath9k_reset_reason why);
 
 /** Start the periodic hang check; stop it. Worker. */
-void ar9565_recover_start(struct ar9565 *ah);
-void ar9565_recover_stop(struct ar9565 *ah);
+void ath9k_recover_start(struct ath9k *ah);
+void ath9k_recover_stop(struct ath9k *ah);
 
 /* antenna.c */
 
 /** Choose the antenna configuration from bus.flags and the EEPROM. Attach. */
-void ar9565_ant_init(struct ar9565 *ah);
+void ath9k_ant_init(struct ath9k *ah);
 
 /** Write the antenna switch tables and the LNA configuration, Bluetooth
  * unused. Worker, within a reset. */
-void ar9565_ant_set(struct ar9565 *ah);
+void ath9k_ant_set(struct ath9k *ah);
 
 /** Count a received frame's signal on the main and alternate LNAs, and
  * change the configuration when diversity decides to. Interrupt. */
-void ar9565_ant_rx(struct ar9565 *ah, const struct ar9003_rxs *rxs);
+void ath9k_ant_rx(struct ath9k *ah, const struct ar9003_rxs *rxs);
 
 /* power.c */
 
-/** Read the link's ASPM, turn it off under AR9565_OPT_NO_ASPM, and set up
+/** Read the link's ASPM, turn it off under ATH9K_OPT_NO_ASPM, and set up
  * the radio switch from the EEPROM. Attach. */
-void ar9565_power_init(struct ar9565 *ah);
+void ath9k_power_init(struct ath9k *ah);
 
 /** Read the radio switch and report a change with wlan_radio_rfkill. */
-void ar9565_rfkill_poll(struct ar9565 *ah);
+void ath9k_rfkill_poll(struct ath9k *ah);
 
 /** Stop the radio before suspend to idle; start it after. Worker. */
-void ar9565_suspend(struct ar9565 *ah);
-int ar9565_resume(struct ar9565 *ah);
+void ath9k_suspend(struct ath9k *ah);
+int ath9k_resume(struct ath9k *ah);
 
 /* ampdu.c */
 
 /** The radio's ampdu_action operation. -EOPNOTSUPP for the receive actions,
- * and for every action under AR9565_OPT_NO_AMPDU. Worker. */
-int ar9565_ampdu_action(struct ar9565 *ah, enum wlan_ampdu_action action, const uint8_t peer[6],
-                        unsigned tid, unsigned ssn, unsigned window);
+ * and for every action under ATH9K_OPT_NO_AMPDU. Worker. */
+int ath9k_ampdu_action(struct ath9k *ah, enum wlan_ampdu_action action, const uint8_t peer[6],
+                       unsigned tid, unsigned ssn, unsigned window);
 
 /** Take a finished aggregate's status and BlockAck bitmap. Interrupt. */
-void ar9565_ampdu_status(struct ar9565 *ah, const struct ar9003_txs *ts);
+void ath9k_ampdu_status(struct ath9k *ah, const struct ar9003_txs *ts);
 
 #endif

@@ -1,24 +1,27 @@
 /*
- * reg.h: the AR9565's registers, its descriptors' fields and its EEPROM
- * and OTP windows, for the QCA9565 driver.
+ * reg.h: the registers of Atheros' AR9003 family, its descriptors' fields
+ * and its EEPROM and OTP windows, for the ath9k driver.
  *
- * The AR9565 belongs to Atheros' AR9003 family, and no datasheet of it is
- * public. These definitions are therefore ath9k's, from Linux v6.16
- * (commit 038d61fd642278bab63ee8ef722c50d10ab01e8f): drivers/net/wireless/
+ * No datasheet of the family is public. These definitions are therefore
+ * ath9k's, from Linux v6.16 (commit
+ * 038d61fd642278bab63ee8ef722c50d10ab01e8f): drivers/net/wireless/
  * ath/reg.h, and ath9k's reg.h, ar9003_mac.h, mac.h and ar9003_phy.h, in
  * that order, each section headed by the file it comes from. These changes
  * were made to them, and no value was changed by hand:
  *
  * - ath9k serves many chips and picks some registers at run time with
- *   AR_SREV_*(ah) tests. Each such test is resolved here for the AR9565
- *   (MAC version 0x2C0, of the AR9300 family), and the macro is left a
- *   constant without its `ah` argument: ath9k's AR_CH0_TOP(ah) is AR_CH0_TOP.
- *   No register of the AR9565 depends on its revision.
+ *   AR_SREV_*(ah) tests. Each such test is resolved here for the chips of
+ *   chips.c's table, which is the AR9565 alone, and the macro is left a
+ *   constant without its `ah` argument: ath9k's AR_CH0_TOP(ah) is
+ *   AR_CH0_TOP. No register of the AR9565 depends on its revision. A chip
+ *   added to the table whose register differs, as ath9k's test at the
+ *   macro shows, makes the macro a test of its row again.
  * - Definitions whose name belongs to another chip (AR5416, AR9100, AR9160,
  *   AR9280, AR9285, AR9287, AR9271, AR9330, AR9340, AR9462, AR9485, AR9550,
  *   AR9531, AR9561, AR9580, the AR9002 baseband, and the AR9300's own
  *   revision numbers and its 1.0 and SoC registers) are left out, and so
- *   are the AR5416 descriptor's word aliases.
+ *   are the AR5416 descriptor's word aliases. The AR9565's version,
+ *   revisions and GPIO count are its row's, in chips.c.
  * - ath9k's enum of AR_INTR_SYNC_* bits is written as macros, since C89
  *   holds an enumeration constant to an int. C++ comments became C
  *   comments, and tabs spaces.
@@ -28,9 +31,8 @@
  * AR9003 descriptors of ar9003_mac.h with the kernel's integer types.
  *
  * A field is a mask NAME with its shift NAME_S, which io.h's SM, MS and
- * REG_RMW_FIELD read. Several masks and comments name chips other than the
- * AR9565, as ath9k's do; the register set is the AR9003 family's, of which
- * the driver uses a part.
+ * REG_RMW_FIELD read. Several masks and comments name chips, as ath9k's
+ * do; the driver uses a part of the register set.
  *
  * The ath9k files carry this notice, which their parts here keep:
  *
@@ -48,8 +50,8 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-#ifndef _AR9565_REG_H_
-#define _AR9565_REG_H_
+#ifndef _ATH9K_REG_H_
+#define _ATH9K_REG_H_
 
 #include "../../../lib/kint.h"
 
@@ -848,11 +850,6 @@
 #define AR_SREV_REVISION2       0x00000F00
 #define AR_SREV_REVISION2_S     8
 
-#define AR_SREV_VERSION_9565      0x2C0
-#define AR_SREV_REVISION_9565_10  0
-#define AR_SREV_REVISION_9565_101 1
-#define AR_SREV_REVISION_9565_11  2
-
 #define AR_RADIO_SREV_MAJOR   0xf0
 #define AR_RAD5133_SREV_MAJOR 0xc0
 #define AR_RAD2133_SREV_MAJOR 0xd0
@@ -950,11 +947,9 @@
  */
 #define AR_NUM_GPIO     14
 #define AR9300_NUM_GPIO 16
-#define AR9565_NUM_GPIO 14
 
 #define AR_GPIO_MASK     0x00003FFF
 #define AR9300_GPIO_MASK 0x0000F4FF
-#define AR9565_GPIO_MASK 0x00003FFF
 
 #define AR_GPIO_IN_OUT       (0x4048)
 #define AR_GPIO_IN_VAL       0x0FFFC000

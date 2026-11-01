@@ -1,9 +1,9 @@
 /*
- * io.c: the AR9565 driver's register helpers, written once over io.h's
+ * io.c: the ath9k driver's register helpers, written once over io.h's
  * indirection so that every part and every host test shares them.
  */
 
-#include "ar9565.h"
+#include "ath9k.h"
 #include "../../../lib/kerrno.h"
 
 /**
@@ -12,7 +12,7 @@
  * accesses: a caller that races the interrupt handler on one register
  * holds the kernel lock across both.
  */
-uint32_t ar9565_rmw(struct ar9565 *ah, uint32_t reg, uint32_t set, uint32_t clr)
+uint32_t ath9k_rmw(struct ath9k *ah, uint32_t reg, uint32_t set, uint32_t clr)
 {
     uint32_t value = REG_READ(ah, reg);
 
@@ -24,19 +24,19 @@ uint32_t ar9565_rmw(struct ar9565 *ah, uint32_t reg, uint32_t set, uint32_t clr)
 
 /**
  * Poll `reg` until its bits under `mask` equal `value`, reading it
- * timeout / AR9565_WAIT_QUANTUM times and at least once. Returns 0 or
+ * timeout / ATH9K_WAIT_QUANTUM times and at least once. Returns 0 or
  * -ETIMEDOUT.
  */
-int ar9565_wait(struct ar9565 *ah, uint32_t reg, uint32_t mask, uint32_t value, uint32_t timeout)
+int ath9k_wait(struct ath9k *ah, uint32_t reg, uint32_t mask, uint32_t value, uint32_t timeout)
 {
-    uint32_t i, polls = timeout / AR9565_WAIT_QUANTUM;
+    uint32_t i, polls = timeout / ATH9K_WAIT_QUANTUM;
 
     if (polls == 0)
         polls = 1;
     for (i = 0; i < polls; i++) {
         if ((REG_READ(ah, reg) & mask) == value)
             return 0;
-        AR9565_UDELAY(ah, AR9565_WAIT_QUANTUM);
+        ATH9K_UDELAY(ah, ATH9K_WAIT_QUANTUM);
     }
     return -ETIMEDOUT;
 }
@@ -45,7 +45,7 @@ int ar9565_wait(struct ar9565 *ah, uint32_t reg, uint32_t mask, uint32_t value, 
  * Write column `column` of each row of `ini` to the row's register, and
  * wait a microsecond after every 64th row.
  */
-void ar9565_write_ini(struct ar9565 *ah, const struct ar9565_ini *ini, unsigned column)
+void ath9k_write_ini(struct ath9k *ah, const struct ath9k_ini *ini, unsigned column)
 {
     unsigned r;
 
@@ -56,6 +56,6 @@ void ar9565_write_ini(struct ar9565 *ah, const struct ar9565_ini *ini, unsigned 
 
         REG_WRITE(ah, row[0], row[column]);
         if ((r + 1) % 64 == 0)
-            AR9565_UDELAY(ah, 1);
+            ATH9K_UDELAY(ah, 1);
     }
 }
