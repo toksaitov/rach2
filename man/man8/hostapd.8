@@ -1,0 +1,101 @@
+.Dd November 2, 2026
+.Dt HOSTAPD 8
+.Os
+.Sh NAME
+.Nm hostapd ,
+.Nm hostapd_cli
+.Nd Wi-Fi access point
+.Sh SYNOPSIS
+.Nm hostapd
+.Op Fl hdBKtvqS
+.Op Fl P Ar pidfile
+.Op Fl e Ar entropy
+.Op Fl f Ar logfile
+.Op Fl g Ar global_ctrl
+.Op Fl G Ar group
+.Op Fl i Ar ifname Ns Op , Ns Ar ifname ...
+.Ar config ...
+.Nm hostapd_cli
+.Op Fl i Ar ifname
+.Op Fl p Ar dir
+.Op Ar command
+.Sh DESCRIPTION
+.Nm hostapd
+is hostap's access point, version 2.12.
+It runs the interfaces that each
+.Ar config
+describes as access points through the kernel's nl80211 interface, and
+authenticates the stations that join them.
+.Pp
+Rach2 builds it statically with OpenSSL, beside
+.Xr wpa_supplicant 8 ,
+with SAE for WPA3-Personal, 802.11n, and an integrated EAP server with
+PEAP, TTLS and TLS, and MSCHAPv2, GTC and MD5 inside them, so that it
+offers open networks, WPA, WPA2, WPA3, WPA3's transition mode and
+WPA2-Enterprise.
+No Rach2 image stages it: it is the access point of the Linux guest of the
+Wi-Fi suite.
+.Pp
+.Nm hostapd_cli
+sends a command to a running hostapd through the control interface that
+.Cm ctrl_interface
+names in its configuration, or reads commands from the terminal when none
+is given.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl B
+Run in the background.
+.It Fl d
+Print more of what happens; given twice, more still.
+.It Fl e Ar entropy
+Keep random state across runs in the file
+.Ar entropy .
+.It Fl f Ar logfile
+Append the messages to
+.Ar logfile
+instead of the standard output.
+.It Fl g Ar global_ctrl
+Open a global control interface at
+.Ar global_ctrl .
+.It Fl G Ar group
+The group that owns the control interfaces.
+.It Fl h
+Print the usage and exit.
+.It Fl i Ar ifname
+Use these interfaces instead of the
+.Cm interface
+of the configurations.
+.It Fl K
+Print keys in the messages.
+.It Fl P Ar pidfile
+Write the process number to
+.Ar pidfile .
+.It Fl q
+Print less; given twice, less still.
+.It Fl S
+Start all the interfaces together.
+.It Fl t
+Begin some messages with the time.
+.It Fl v
+Print the version and exit.
+.El
+.Sh EXIT STATUS
+.Ex -std
+.Sh EXAMPLES
+A WPA2 and WPA3 network in transition mode on channel 6:
+.Bd -literal -offset indent
+interface=wlan0
+driver=nl80211
+ctrl_interface=/var/run/hostapd
+ssid=home
+hw_mode=g
+channel=6
+wpa=2
+wpa_key_mgmt=WPA-PSK SAE
+rsn_pairwise=CCMP
+ieee80211w=1
+wpa_passphrase=a long passphrase
+.Ed
+.Sh SEE ALSO
+.Xr iw 8 ,
+.Xr wpa_supplicant 8

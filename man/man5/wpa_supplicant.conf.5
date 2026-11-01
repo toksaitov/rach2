@@ -1,0 +1,183 @@
+.Dd November 2, 2026
+.Dt WPA_SUPPLICANT.CONF 5
+.Os
+.Sh NAME
+.Nm wpa_supplicant.conf
+.Nd the networks and settings of wpa_supplicant
+.Sh DESCRIPTION
+.Xr wpa_supplicant 8
+reads the file that its
+.Fl c
+names.
+Each line is a
+.Ar variable Ns = Ns Ar value
+setting, and a line that begins with
+.Ql #
+is a comment.
+Global settings come first; then each network is a block,
+.Ql network={ ,
+of settings one to a line, closed by
+.Ql } .
+A string value is given in double quotes; a value without them is a
+number, a list of words separated by spaces, or for
+.Cm ssid
+and
+.Cm psk ,
+hexadecimal.
+.Pp
+wpa_supplicant chooses among the networks it finds in a scan by
+.Cm priority ,
+then by security and signal.
+.Ss Global settings
+.Bl -tag -width Ds
+.It Cm ctrl_interface Ns = Ns Ar dir
+Open a control interface for
+.Xr wpa_cli 8
+in
+.Ar dir ,
+usually
+.Pa /var/run/wpa_supplicant .
+.It Cm update_config Ns =1
+Let
+.Cm save_config
+rewrite the file.
+.It Cm country Ns = Ns Ar CC
+The two-letter country code that sets the regulatory domain.
+.It Cm pmf Ns = Ns Ar n
+Management-frame protection for networks that do not set
+.Cm ieee80211w :
+0 none, 1 when the access point offers it, 2 required.
+.It Cm sae_pwe Ns = Ns Ar n
+How SAE derives its password element: 0 by hunting and pecking, 1 by
+hashing to the element alone, 2 either.
+.El
+.Ss Network settings
+.Bl -tag -width Ds
+.It Cm ssid Ns = Ns Qq Ar name
+The network's name.
+.It Cm scan_ssid Ns =1
+Scan for the name directly, for a network that hides it.
+.It Cm bssid Ns = Ns Ar address
+Join only the access point with this address.
+.It Cm priority Ns = Ns Ar n
+A network with a larger
+.Ar n
+is preferred.
+.It Cm key_mgmt Ns = Ns Ar list
+.Cm NONE
+for an open network,
+.Cm WPA-PSK
+for WPA and WPA2 with a passphrase,
+.Cm SAE
+for WPA3-Personal,
+.Cm WPA-PSK SAE
+for a network in WPA3's transition mode, and
+.Cm WPA-EAP
+for 802.1X.
+The default is
+.Cm WPA-PSK WPA-EAP .
+.It Cm proto Ns = Ns Ar list
+.Cm WPA ,
+.Cm RSN
+(WPA2 and WPA3), or both, the default.
+.It Cm pairwise Ns = , Cm group Ns = Ns Ar list
+The ciphers allowed,
+.Cm CCMP
+and
+.Cm TKIP
+among them; both by default.
+.It Cm psk Ns = Ns Qq Ar passphrase
+.It Cm psk Ns = Ns Ar key
+The passphrase, of 8 to 63 characters, or the 64 hexadecimal digits of the
+key that
+.Xr wpa_passphrase 8
+computes.
+SAE uses the passphrase when no
+.Cm sae_password
+is given.
+.It Cm sae_password Ns = Ns Qq Ar password
+The password of WPA3-Personal.
+.It Cm ieee80211w Ns = Ns Ar n
+Management-frame protection for this network, as
+.Cm pmf .
+SAE needs 2, and the transition mode 1.
+.It Cm eap Ns = Ns Ar method
+.Cm PEAP ,
+.Cm TTLS
+or
+.Cm TLS .
+.It Cm identity Ns = Ns Qq Ar user
+.It Cm anonymous_identity Ns = Ns Qq Ar user
+.It Cm password Ns = Ns Qq Ar password
+The user's name, the name sent outside the tunnel, and the password used
+inside it.
+.It Cm phase2 Ns = Ns Qq Ar method
+The method inside the tunnel:
+.Ql auth=MSCHAPV2 ,
+.Ql auth=GTC
+or
+.Ql auth=MD5
+for PEAP and TTLS, which also takes
+.Ql autheap=MSCHAPV2 .
+.It Cm ca_cert Ns = Ns Qq Ar file
+The authorities that may sign the server's certificate.
+.Ql probe://
+reports the server's certificate in a
+.Cm CTRL-EVENT-EAP-PEER-CERT
+event with its subject and SHA-256 hash, and fails before any credential
+is sent;
+.Ql hash://server/sha256/ Ns Ar hash
+accepts only the server whose certificate has that hash.
+.It Cm domain_suffix_match Ns = Ns Qq Ar domain
+Accept only a server certificate for a name in
+.Ar domain .
+.It Cm client_cert Ns = , Cm private_key Ns = , Cm private_key_passwd Ns = Ns Qq Ar value
+The client's certificate, its key and the key's passphrase, for EAP-TLS.
+.It Cm bgscan Ns = Ns Qq Cm simple : Ns Ar short : Ns Ar dbm : Ns Ar long
+Scan every
+.Ar short
+seconds while the signal is below
+.Ar dbm ,
+and every
+.Ar long
+seconds otherwise, and move to a stronger access point of the network.
+.It Cm disabled Ns =1
+Leave the network out until
+.Xr wpa_cli 8
+enables it.
+.El
+.Sh EXAMPLES
+A WPA2 network, a WPA3 network preferred to it, and a WPA2-Enterprise
+network:
+.Bd -literal -offset indent
+ctrl_interface=/var/run/wpa_supplicant
+update_config=1
+
+network={
+	ssid="home"
+	psk="a long passphrase"
+	bgscan="simple:30:-70:3600"
+}
+
+network={
+	ssid="home6"
+	key_mgmt=SAE
+	sae_password="another passphrase"
+	ieee80211w=2
+	priority=5
+}
+
+network={
+	ssid="campus"
+	key_mgmt=WPA-EAP
+	eap=PEAP
+	identity="student"
+	password="secret"
+	phase2="auth=MSCHAPV2"
+	ca_cert="/etc/campus-ca.pem"
+}
+.Ed
+.Sh SEE ALSO
+.Xr wpa_cli 8 ,
+.Xr wpa_passphrase 8 ,
+.Xr wpa_supplicant 8

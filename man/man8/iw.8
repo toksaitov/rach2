@@ -1,0 +1,97 @@
+.Dd November 2, 2026
+.Dt IW 8
+.Os
+.Sh NAME
+.Nm iw
+.Nd show and configure wireless devices
+.Sh SYNOPSIS
+.Nm
+.Op Fl Fl debug
+.Ar command
+.Nm
+.Op Fl Fl debug
+.Cm dev Ar ifname
+.Ar command
+.Nm
+.Op Fl Fl debug
+.Cm phy Ar phyname
+.Ar command
+.Nm
+.Fl Fl version
+.Sh DESCRIPTION
+.Nm
+is Linux's configuration program for wireless devices, version 6.17.
+It speaks to the kernel's nl80211 interface, in which each radio is a
+.Em phy ,
+such as
+.Cm phy0 ,
+and each of its network interfaces, such as
+.Cm wlan0 ,
+has a type: a station, an access point, a monitor or a mesh point.
+A command for an interface follows
+.Cm dev Ar ifname ,
+and one for a radio follows
+.Cm phy Ar phyname ;
+either word may be left out where the name is unambiguous.
+.Pp
+The commands used most are these:
+.Bl -tag -width Ds
+.It Cm dev
+List the interfaces of each radio, with their address, type and channel.
+.It Cm phy , list
+List each radio's bands, channels, rates, ciphers, interface types and
+commands.
+.It Cm dev Ar ifname Cm info
+The interface's radio, address, type and channel.
+.It Cm dev Ar ifname Cm scan Op Cm ssid Ar name ...
+Scan and list the access points found, with their frequency, signal,
+security and name; given names, look for those directly.
+.It Cm dev Ar ifname Cm scan dump
+List the results of the last scan without scanning again.
+.It Cm dev Ar ifname Cm link
+The access point a station is joined to, with the signal and rates.
+.It Cm dev Ar ifname Cm station dump
+The stations the interface knows: the access point of a station, or the
+clients of an access point.
+.It Cm dev Ar ifname Cm connect Ar ssid Op Ar freq
+Join an open network.
+A secured network is joined with
+.Xr wpa_supplicant 8 .
+.It Cm dev Ar ifname Cm disconnect
+Leave the network.
+.It Cm reg get , reg set Ar CC
+Show the regulatory domain, or set it to that of country
+.Ar CC .
+.It Cm phy Ar phyname Cm interface add Ar ifname Cm type Ar type
+Add an interface of
+.Ar type
+.Pq Cm managed , ap , monitor , mesh
+to the radio.
+.It Cm dev Ar ifname Cm del
+Remove the interface.
+.It Cm dev Ar ifname Cm set power_save on|off
+Let the station sleep between beacons, or keep it awake.
+.It Cm help Op Ar command
+List the commands, or those that begin with
+.Ar command .
+.El
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl Fl debug
+Print the netlink messages exchanged with the kernel.
+.It Fl Fl version
+Print the version and exit.
+.El
+.Sh EXIT STATUS
+.Ex -std
+.Sh EXAMPLES
+Find the radio, scan, and see the link once wpa_supplicant has joined:
+.Bd -literal -offset indent
+iw dev
+iw dev wlan0 scan
+iw dev wlan0 link
+.Ed
+.Sh SEE ALSO
+.Xr hostapd 8 ,
+.Xr rfkill 8 ,
+.Xr wpa_supplicant 8

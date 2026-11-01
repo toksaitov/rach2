@@ -1,0 +1,124 @@
+.Dd November 2, 2026
+.Dt WPA_CLI 8
+.Os
+.Sh NAME
+.Nm wpa_cli
+.Nd control a running wpa_supplicant
+.Sh SYNOPSIS
+.Nm
+.Op Fl hrvB
+.Op Fl p Ar dir
+.Op Fl i Ar ifname
+.Op Fl g Ar global_ctrl
+.Op Fl G Ar seconds
+.Op Fl a Ar program
+.Op Fl P Ar pidfile
+.Op Fl s Ar socket
+.Op Ar command Op Ar argument ...
+.Sh DESCRIPTION
+.Nm
+sends commands to
+.Xr wpa_supplicant 8
+through its control interface and prints the answers.
+Given a
+.Ar command ,
+it sends that one and exits; without one, it reads commands from the
+terminal with line editing and history, and prints the events
+wpa_supplicant reports as they come.
+.Pp
+The commands used most are these:
+.Bl -tag -width Ds
+.It Cm status
+The state of the interface, the network joined, its access point and
+the cipher.
+.It Cm scan , scan_results
+Start a scan; list the access points the last one found, with their
+frequency, signal in dBm, security and name.
+.It Cm signal_poll
+The signal, noise and rate of the link.
+.It Cm list_networks
+The networks configured, with their numbers.
+.It Cm add_network
+Add an empty network and print its number.
+.It Cm set_network Ar id variable value
+Set a variable of network
+.Ar id
+as in
+.Xr wpa_supplicant.conf 5 ;
+a string value is given in double quotes.
+.It Cm enable_network , select_network , remove_network Ar id
+Let network
+.Ar id
+be chosen; choose it alone; remove it.
+.It Cm save_config
+Write the networks back to the configuration file, which needs
+.Cm update_config=1
+there.
+.It Cm reconfigure
+Read the configuration file again.
+.It Cm disconnect , reconnect
+Leave the network and stay off; join again.
+.It Cm interface Op Ar ifname
+List the interfaces, or send the next commands to
+.Ar ifname .
+.It Cm terminate
+Stop wpa_supplicant.
+.It Cm help
+List every command.
+.El
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl a Ar program
+Run as a daemon that runs
+.Ar program
+with the interface's name and
+.Cm CONNECTED
+or
+.Cm DISCONNECTED
+when wpa_supplicant joins or leaves a network.
+.It Fl B
+With
+.Fl a ,
+run in the background.
+.It Fl g Ar global_ctrl
+Send the commands to wpa_supplicant's global control interface.
+.It Fl G Ar seconds
+How often to check that wpa_supplicant still answers.
+.It Fl h
+Print the usage and the commands and exit.
+.It Fl i Ar ifname
+The interface to control; the default is the first one found in the
+directory.
+.It Fl p Ar dir
+The control interfaces' directory;
+.Pa /var/run/wpa_supplicant
+by default.
+.It Fl P Ar pidfile
+With
+.Fl a ,
+write the process number to
+.Ar pidfile .
+.It Fl r
+With
+.Fl a ,
+open the control interface again when wpa_supplicant restarts.
+.It Fl s Ar socket
+The path of the client's own socket.
+.It Fl v
+Print the version and exit.
+.El
+.Sh EXIT STATUS
+.Ex -std
+.Sh EXAMPLES
+Add a WPA3 network and join it:
+.Bd -literal -offset indent
+wpa_cli -i wlan0 add_network
+wpa_cli -i wlan0 set_network 0 ssid '"home"'
+wpa_cli -i wlan0 set_network 0 key_mgmt SAE
+wpa_cli -i wlan0 set_network 0 sae_password '"a long passphrase"'
+wpa_cli -i wlan0 set_network 0 ieee80211w 2
+wpa_cli -i wlan0 select_network 0
+.Ed
+.Sh SEE ALSO
+.Xr wpa_supplicant.conf 5 ,
+.Xr wpa_supplicant 8

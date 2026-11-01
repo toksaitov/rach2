@@ -1,6 +1,6 @@
 # The programs of Rach2
 
-Rach2 has two systems. The musl system is the static programs this repository builds. BusyBox, Dropbear, sox_ng, TinyCC, pdpmake, e2fsprogs and the in-house tools other than `ish` are linked against the ported musl libc; `ish`, the in-house shell, and Doom link no C library and have their own startup code and library routines. `make` builds it on every supported host, and every image stages it or a part of it. The GNU system is a dynamically linked root of glibc and the programs ported to it, installed over the musl system in an ext2 image; it builds on an x86-64 Linux host only.
+Rach2 has two systems. The musl system is the static programs this repository builds. BusyBox, Dropbear, sox_ng, wpa_supplicant, iw, TinyCC, pdpmake, e2fsprogs and the in-house tools other than `ish` are linked against the ported musl libc; `ish`, the in-house shell, and Doom link no C library and have their own startup code and library routines. `make` builds it on every supported host, and every image stages it or a part of it. The GNU system is a dynamically linked root of glibc and the programs ported to it, installed over the musl system in an ext2 image; it builds on an x86-64 Linux host only.
 
 `man/programs.sh` writes this file from the image manifests, the recipes and the build scripts, and `tests/run style` fails when the two differ. `make programs-md` writes it again.
 
@@ -21,6 +21,7 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `dropbearmulti` | [dropbear(8)](man8/dropbear.8) | Dropbear |  | yes |
 | `dumpkeys` | [dumpkeys(1)](man1/dumpkeys.1) | kbd |  |  |
 | `init` | [init(8)](man8/init.8) | in-house (`init-login`) | yes | in-house (`init-recovery`) |
+| `iw` | [iw(8)](man8/iw.8) | iw |  | yes |
 | `kbd_mode` | [kbd_mode(1)](man1/kbd_mode.1) | kbd |  |  |
 | `kbdrate` | [kbdrate(8)](man8/kbdrate.8) | kbd |  | yes |
 | `loadkeys` | [loadkeys(1)](man1/loadkeys.1) | kbd |  | yes |
@@ -43,6 +44,9 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `tcc` | [tcc(1)](man1/tcc.1) | TinyCC |  |  |
 | `update` | [update(8)](man8/update.8) | in-house | yes | yes |
 | `wifi` | [wifi(1)](man1/wifi.1) | in-house | yes | yes |
+| `wpa_cli` | [wpa_cli(8)](man8/wpa_cli.8) | hostap |  | yes |
+| `wpa_passphrase` | [wpa_passphrase(8)](man8/wpa_passphrase.8) | hostap |  | yes |
+| `wpa_supplicant` | [wpa_supplicant(8)](man8/wpa_supplicant.8) | hostap |  | yes |
 | `zzz` | [zzz(8)](man8/zzz.8) | in-house |  | yes |
 
 os-real stages `doom` only when the build has made it.
@@ -86,7 +90,7 @@ The programs os-simple or the recovery image stages that os-real does not, with 
 
 ### BusyBox applets
 
-The `/bin/busybox` of os-real, the recovery image and the GNU root has 323 applets. Its ash finds an applet before it searches `PATH`, so a KRFFS image, which has no symbolic links, needs no file for each applet ([BusyBox](../vendor/busybox/Readme.md)); on the GNU root, where `/bin/sh` is bash, each applet that no port provides is a link to `/bin/busybox`. Each row is a page and the applets it covers.
+The `/bin/busybox` of os-real, the recovery image and the GNU root has 324 applets. Its ash finds an applet before it searches `PATH`, so a KRFFS image, which has no symbolic links, needs no file for each applet ([BusyBox](../vendor/busybox/Readme.md)); on the GNU root, where `/bin/sh` is bash, each applet that no port provides is a link to `/bin/busybox`. Each row is a page and the applets it covers.
 
 | Page | Applets |
 | --- | --- |
@@ -116,6 +120,7 @@ The `/bin/busybox` of os-real, the recovery image and the GNU root has 323 apple
 | [init(8)](man8/init.8) | `init` |
 | [mount(8)](man8/mount.8) | `mount`, `umount` |
 | [nc(1)](man1/nc.1) | `nc` |
+| [rfkill(8)](man8/rfkill.8) | `rfkill` |
 | [sh(1)](man1/sh.1) | `busybox`, `sh` |
 
 ## The GNU system
@@ -143,7 +148,7 @@ Besides the ports, [the root's manifest](../krffs/manifests/os-real-gnu.manifest
 | `wall` | `/usr/bin/wall` | on the machine | [util-linux](../vendor/gnu/ports/util-linux.sh) |
 | `write` | `/usr/bin/write` | on the machine | [util-linux](../vendor/gnu/ports/util-linux.sh) |
 
-It does not stage `/bin/dropbearmulti` and `/bin/sh`, which os-real does; and `/sbin/init` is `init-metal`, where os-real has `init-login`.
+It does not stage `/bin/dropbearmulti`, `/bin/iw`, `/bin/sh`, `/bin/wpa_cli`, `/bin/wpa_passphrase` and `/bin/wpa_supplicant`, which os-real does; and `/sbin/init` is `init-metal`, where os-real has `init-login`.
 
 ### Compilers, debugger and browser
 
@@ -188,6 +193,7 @@ Each port is a recipe of [`vendor/gnu/ports/`](../vendor/gnu/ports), with the ve
 | [gzip](../vendor/gnu/ports/gzip.sh) | 1.15 | GNU gzip, with gunzip, zcat and its other scripts. |
 | [htop](../vendor/gnu/ports/htop.sh) | 3.5.3 | htop, the interactive process viewer, with ncurses' wide-character library. |
 | [iproute2](../vendor/gnu/ports/iproute2.sh) | 7.2.0 | iproute2: ip, which shows the machine's interfaces, addresses and routes through the kernel's netlink route socket, and ss, bridge and tc. |
+| [iw](../vendor/gnu/ports/iw.sh) | 6.17 | iw: shows and sets a wireless card's state through nl80211, with libnl's generic netlink. |
 | [jq](../vendor/gnu/ports/jq.sh) | 1.8.2 | jq, the JSON processor, with the Oniguruma its release carries for its regular expressions, and without its documentation's build, whose page the release has made. |
 | [less](../vendor/gnu/ports/less.sh) | 710 | less, the pager. |
 | [libassuan](../vendor/gnu/ports/libassuan.sh) | 3.0.2 | Libassuan, the protocol GnuPG's programs talk to each other and to pinentry in. |
@@ -197,6 +203,7 @@ Each port is a recipe of [`vendor/gnu/ports/`](../vendor/gnu/ports), with the ve
 | [libgcrypt](../vendor/gnu/ports/libgcrypt.sh) | 1.12.4 | Libgcrypt, the cryptography of GnuPG. |
 | [libgpg-error](../vendor/gnu/ports/libgpg-error.sh) | 1.61 | libgpg-error, the error codes and the runtime GnuPG and its libraries share, with gpgrt-config, which the others' configure scripts ask for their flags and which reads the root's files through PKG_CONFIG_SYSROOT_DIR. |
 | [libksba](../vendor/gnu/ports/libksba.sh) | 1.8.1 | Libksba, the X.509 and CMS library of gpgsm, dirmngr and NTBTLS. |
+| [libnl](../vendor/gnu/ports/libnl.sh) | 3.12.0 | libnl: the netlink libraries wpa_supplicant and iw use to speak nl80211, libnl-3, libnl-genl-3 and libnl-route-3 with the rest of the family, shared only. |
 | [libssh2](../vendor/gnu/ports/libssh2.sh) | 1.11.1 | libssh2, the SSH library through which Chawan browses SFTP, with OpenSSL for its cryptography and zlib for compression, and without its examples. |
 | [liburcu](../vendor/gnu/ports/liburcu.sh) | 0.15.7 | Userspace RCU, the library of read-copy-update that BIND's tables use. |
 | [libuv](../vendor/gnu/ports/libuv.sh) | 1.52.1 | libuv, the event loop BIND is built on, built with CMake, since its release has no configure script, and without its tests. |
@@ -233,6 +240,7 @@ Each port is a recipe of [`vendor/gnu/ports/`](../vendor/gnu/ports), with the ve
 | [unzip](../vendor/gnu/ports/unzip.sh) | 6.0 | Info-ZIP's unzip, with funzip, unzipsfx, zipgrep and zipinfo. |
 | [util-linux](../vendor/gnu/ports/util-linux.sh) | 2.42.4 | util-linux: the system's tools a Debian machine has from it, of which BusyBox's applets have fewer options or none: last, lsblk, findmnt, flock, prlimit, ionice, column, script, newgrp, dmesg, fdisk, lscpu and the rest. |
 | [vim](../vendor/gnu/ports/vim.sh) | 9.2.1132 | Vim for the terminal, with its huge feature set and ncurses for the terminal's capabilities. |
+| [wpa_supplicant](../vendor/gnu/ports/wpa_supplicant.sh) | 2.12 | wpa_supplicant, wpa_cli and wpa_passphrase: the station's WPA, WPA2 and WPA3 client, with PEAP, TTLS and TLS for enterprise networks, its control socket and bgscan. |
 | [xz](../vendor/gnu/ports/xz.sh) | 5.8.4 | XZ Utils: xz and liblzma. |
 | [zip](../vendor/gnu/ports/zip.sh) | 3.0 | Info-ZIP's zip, zipcloak, zipnote and zipsplit. |
 | [zlib](../vendor/gnu/ports/zlib.sh) | 1.3.2 | zlib, which OpenSSL, OpenSSH, curl and Git link against. |
@@ -267,6 +275,10 @@ The third-party code of the repository, each with the version the build pins, it
 | BusyBox | 1.36.1 | GPL 2 only | [vendor/busybox/Readme.md](../vendor/busybox/Readme.md) |
 | Dropbear | 2022.83 | MIT-style | [vendor/dropbear/Readme.md](../vendor/dropbear/Readme.md) |
 | sox_ng | 14.8.1 | GPL 2 only | [vendor/sox_ng/Readme.md](../vendor/sox_ng/Readme.md) |
+| hostap | 2.12 | BSD 3-clause | [vendor/hostap/Readme.md](../vendor/hostap/Readme.md) |
+| iw | 6.17 | ISC | [vendor/iw/Readme.md](../vendor/iw/Readme.md) |
+| OpenSSL | 4.0.2 | Apache 2.0 | [vendor/openssl/Readme.md](../vendor/openssl/Readme.md) |
+| libnl | 3.12.0 | LGPL 2.1 | [vendor/libnl/Readme.md](../vendor/libnl/Readme.md) |
 | kbd | 2.10.0 | GPL-2.0-or-later | [vendor/kbd/Readme.md](../vendor/kbd/Readme.md) |
 | TinyCC | 0.9.27 | LGPL 2.1 | [vendor/tcc/Readme.md](../vendor/tcc/Readme.md) |
 | pdpmake | 2.0.4 | public domain | [vendor/pdpmake/Readme.md](../vendor/pdpmake/Readme.md) |

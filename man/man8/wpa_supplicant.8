@@ -1,0 +1,146 @@
+.Dd November 2, 2026
+.Dt WPA_SUPPLICANT 8
+.Os
+.Sh NAME
+.Nm wpa_supplicant
+.Nd join and keep a Wi-Fi network
+.Sh SYNOPSIS
+.Nm
+.Op Fl BdhKLqtvWy
+.Op Fl D Ar driver
+.Op Fl P Ar pidfile
+.Op Fl f Ar logfile
+.Op Fl g Ar global_ctrl
+.Op Fl G Ar group
+.Fl i Ar ifname
+.Fl c Ar config
+.Op Fl C Ar ctrl
+.Op Fl p Ar driver_param
+.Op Fl I Ar config
+.Op Fl N Fl i Ar ifname Fl c Ar config ...
+.Sh DESCRIPTION
+.Nm
+is hostap's Wi-Fi station, version 2.12.
+It reads the networks of
+.Ar config ,
+described in
+.Xr wpa_supplicant.conf 5 ,
+scans for them on the interface
+.Ar ifname ,
+chooses one, associates with it and authenticates, and keeps the link:
+it joins again when the access point drops it and, with
+.Cm bgscan ,
+moves to a stronger access point of the same network.
+It speaks to the radio through the kernel's nl80211 interface and sends
+the authentication frames of 802.1X and the four-way handshake as EAPOL
+packets.
+.Pp
+Rach2 builds it statically with OpenSSL.
+It joins open networks and those of WPA (TKIP), WPA2 (CCMP) and WPA3-Personal
+(SAE, with management-frame protection), with a passphrase or with
+WPA2-Enterprise's 802.1X using EAP-PEAP, EAP-TTLS or EAP-TLS, and MSCHAPv2,
+GTC or MD5 inside the tunnel.
+WPS, Wi-Fi Direct, the access-point and mesh modes, DPP, OWE, Hotspot 2.0
+and D-Bus are not built.
+.Pp
+While it runs,
+.Xr wpa_cli 8
+controls it through the control interface that
+.Cm ctrl_interface
+names in
+.Ar config .
+Run with
+.Fl c
+and neither an interface nor a control interface,
+.Nm
+reads
+.Ar config ,
+reports what it finds wrong and exits.
+.Sh OPTIONS
+.Bl -tag -width Ds
+.It Fl B
+Run in the background once the interfaces are set up.
+.It Fl c Ar config
+Read the networks and settings of the interface from
+.Ar config .
+.It Fl C Ar ctrl
+The control interface's directory, when no
+.Fl c
+gives one.
+.It Fl d
+Print more of what happens; given twice, more still.
+.It Fl D Ar driver
+The driver interface;
+.Cm nl80211 ,
+the default, is the only one built.
+.It Fl f Ar logfile
+Append the messages to
+.Ar logfile
+instead of the standard output.
+.It Fl g Ar global_ctrl
+Open a global control interface at the path
+.Ar global_ctrl ,
+through which interfaces are added and removed while it runs.
+.It Fl G Ar group
+The group that owns the global control interface.
+.It Fl h
+Print the usage and exit.
+.It Fl i Ar ifname
+The wireless interface to manage.
+.It Fl I Ar config
+A second configuration file, read after
+.Fl c .
+.It Fl K
+Print keys and passwords in the messages.
+.It Fl L
+Print the license and exit.
+.It Fl N
+Begin the options of a further interface.
+.It Fl p Ar driver_param
+Parameters for the driver interface.
+.It Fl P Ar pidfile
+Write the process number to
+.Ar pidfile .
+.It Fl q
+Print less; given twice, less still.
+.It Fl t
+Begin each message with the time.
+.It Fl v
+Print the version and exit.
+.It Fl W
+Wait for a monitor to attach to the control interface before starting.
+.It Fl y
+Print the details of parsing the configuration.
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /var/run/wpa_supplicant/ Ns Ar ifname
+The control interface's socket, when the configuration sets
+.Cm ctrl_interface
+to
+.Pa /var/run/wpa_supplicant .
+.It Pa /etc/hostap.COPYING , /etc/openssl.LICENSE , /etc/libnl.COPYING
+The licenses of hostap and of the libraries it links.
+.El
+.Sh EXIT STATUS
+.Ex -std
+.Sh EXAMPLES
+Join a WPA2 network whose passphrase is in the configuration, then show
+the link:
+.Bd -literal -offset indent
+wpa_passphrase home 'a long passphrase' > /etc/wlan0.conf
+wpa_supplicant -B -i wlan0 -c /etc/wlan0.conf
+wpa_cli -i wlan0 status
+.Ed
+.Pp
+Check a configuration file:
+.Dl wpa_supplicant -c /etc/wlan0.conf
+.Sh SEE ALSO
+.Xr wpa_supplicant.conf 5 ,
+.Xr hostapd 8 ,
+.Xr iw 8 ,
+.Xr rfkill 8 ,
+.Xr wpa_cli 8 ,
+.Xr wpa_passphrase 8
+.Sh STANDARDS
+IEEE 802.11-2020 and IEEE 802.1X-2020.

@@ -1,0 +1,48 @@
+.Dd November 2, 2026
+.Dt WPA_PASSPHRASE 8
+.Os
+.Sh NAME
+.Nm wpa_passphrase
+.Nd make a network block with a WPA pre-shared key
+.Sh SYNOPSIS
+.Nm
+.Ar ssid
+.Op Ar passphrase
+.Sh DESCRIPTION
+.Nm
+computes the 256-bit pre-shared key of a WPA or WPA2 network from its name
+.Ar ssid
+and its
+.Ar passphrase ,
+of 8 to 63 printable ASCII characters, by PBKDF2 with HMAC-SHA1 and 4096
+iterations, and prints a
+.Cm network
+block for
+.Xr wpa_supplicant.conf 5
+that holds the key, with the passphrase in a comment.
+Without
+.Ar passphrase ,
+it reads one line from the standard input.
+.Pp
+A WPA3 network with SAE needs the passphrase itself, given as
+.Cm sae_password
+or
+.Cm psk
+in quotes; the key this computes serves only WPA and WPA2.
+.Sh EXIT STATUS
+.Ex -std
+.Sh EXAMPLES
+The test vector of IEEE 802.11:
+.Bd -literal -offset indent
+$ wpa_passphrase IEEE password
+network={
+	ssid="IEEE"
+	#psk="password"
+	psk=f42c6fc52df0ebef9ebb4b90b38a5f902e83fe1b135a70e23aed762e9710a12e
+}
+.Ed
+.Sh SEE ALSO
+.Xr wpa_supplicant.conf 5 ,
+.Xr wpa_supplicant 8
+.Sh STANDARDS
+IEEE 802.11-2020, annex J.4, and RFC 8018.
