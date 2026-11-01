@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 1, 2026
 .Dt RECV 2
 .Os
 .Sh NAME
@@ -128,6 +128,11 @@ and packet type.
 Packet-socket data omits the Ethernet header.
 A raw ICMP receive includes the IPv4 header; the receive queue keeps at
 most 1500 bytes of a datagram.
+A raw ICMPv6 socket returns a 28-byte
+.Vt sockaddr_in6
+with the sender's address and, for a link-local sender, the index of the
+interface it came in on as its scope id; its data is the ICMPv6 message
+without the IPv6 header, as on Linux.
 An ioctl-only raw socket has no receive operation.
 .Ss Scatter receives
 .Fn recvmmsg ,

@@ -1,4 +1,4 @@
-.Dd October 20, 2026
+.Dd November 1, 2026
 .Dt PING 2
 .Os
 .Sh NAME
@@ -21,6 +21,15 @@ data_args[0] = address;
 data_args[1] = size;
 data_args[2] = ttl;
 syscall(SYS_socketcall, 0x1001, data_args);
+
+unsigned char address6[16];
+unsigned long v6_args[4];
+
+v6_args[0] = (unsigned long)address6;
+v6_args[1] = scope;
+v6_args[2] = size;
+v6_args[3] = hop_limit;
+syscall(SYS_socketcall, 0x1002, v6_args);
 .Ed
 .Sh DESCRIPTION
 .Nm
@@ -36,7 +45,7 @@ to an array of one 32-bit word.
 x86-64 has no
 .Xr socketcall 2 ;
 there the kernel takes Rach2's at call 400, which Linux x86-64 leaves
-unassigned, and serves only operations 0x1000 and 0x1001: RAX = 400,
+unassigned, and serves only operations 0x1000 to 0x1002: RAX = 400,
 RDI = 0x1000, and RSI pointing to an array of one 64-bit word.
 That word is the destination IPv4 address in host byte order.
 For example, 0x0a000202 denotes 10.0.2.2.
@@ -46,6 +55,18 @@ Operation 0x1001 takes three words: the address, the bytes of data the
 request carries, from 0 to 1472, each byte its offset in the data, as
 iputils fills them, and the hop limit, from 1 to 255.
 Operation 0x1000 sends no data with the hop limit 64.
+.Pp
+Operation 0x1002 sends an ICMPv6 echo request and takes four words: a
+pointer to the 16-byte IPv6 address in network byte order, the index of
+the interface a link-local address or a group of link scope is reached
+by, or 0 when there is one card, the bytes of data, from 0 to 1452, and
+the hop limit, from 1 to 255.
+::1 and this machine's own addresses are answered through the loopback
+ring, and a group by its members on the link.
+A unicast address on another host fails at once with
+.Er EHOSTUNREACH ,
+since the kernel resolves no IPv6 neighbour yet; so does any other
+error of the first request's send.
 .Pp
 The call sends an ICMP echo request and waits for a reply.
 It makes at most four attempts, each with a deadline of 100 ticks
@@ -65,7 +86,7 @@ a signal.
 .Pp
 On x86-64, which has no
 .Nm socketcall ,
-the two operations are call 400,
+the three operations are call 400,
 .Nm rach2_ping ,
 a number Linux leaves unused there, with the operation in RDI and the
 argument block's pointer in RSI.
@@ -78,6 +99,8 @@ Operation 0x1001 returns the length of the reply's ICMP message, its
 8-byte header and its data, which a peer may make other than the
 request's, in bits 0 to 15, and the hop limit of the reply's IPv4
 header in bits 16 to 23.
+Operation 0x1002 returns the same of the ICMPv6 reply and its IPv6
+header.
 On failure,
 .Fn syscall
 returns -1 and sets
@@ -95,16 +118,28 @@ another process during the wait, and release of the request slot.
 It runs in the separate ping suite, not the default suite.
 .Sh ERRORS
 .Bl -tag -width "[ETIMEDOUT]"
+.It Bq Er EADDRNOTAVAIL
+The interface of operation 0x1002 has no IPv6 address to send from.
 .It Bq Er EBUSY
 Another ping call is in progress.
 .It Bq Er EFAULT
-The argument word cannot be read from user memory.
+The argument words, or the IPv6 address, cannot be read from user
+memory.
+.It Bq Er EHOSTUNREACH
+The IPv6 address is a unicast address on another host.
 .It Bq Er EINTR
 A signal interrupted the wait.
 .It Bq Er EINVAL
-The hop limit of operation 0x1001 is not 1 to 255.
+The hop limit of operation 0x1001 or 0x1002 is not 1 to 255, or a
+link-local IPv6 address names no interface on a machine with more than
+one card.
 .It Bq Er EMSGSIZE
-The data of operation 0x1001 is more than 1472 bytes.
+The data of operation 0x1001 is more than 1472 bytes, or that of
+operation 0x1002 more than 1452.
+.It Bq Er ENETUNREACH
+No interface reaches the IPv6 address.
+.It Bq Er ENODEV
+The interface index of operation 0x1002 names no interface.
 .It Bq Er ETIMEDOUT
 No matching reply arrived during the four attempts.
 Transmit errors are not returned separately by this operation.

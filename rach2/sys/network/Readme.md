@@ -1,12 +1,12 @@
-# `network/`: the IPv4 network stack
+# `network/`: the IPv4 and IPv6 network stack
 
-The network stack connects the machine to Ethernet: drivers for three cards, Ethernet, ARP, IPv4 with a routing table, ICMP, UDP and TCP, the sockets programs open on them, packet, raw and netlink sockets, and netconsole, which broadcasts the kernel log. It exists so that programs written for Linux, Dropbear and the DHCP clients among them, reach QEMU's user network and a real LAN through Linux's socket calls and configuration interfaces. The C is the same on i686 and x86-64; the architectures differ in how a program enters the socket calls and in the layout of the structures it passes. AF_UNIX sockets are in [`ipc/`](../ipc/Readme.md).
+The network stack connects the machine to Ethernet: drivers for three cards, Ethernet, ARP, IPv4 with a routing table, ICMP, UDP and TCP, IPv6 with ICMPv6 on the link, the sockets programs open on them, packet, raw and netlink sockets, and netconsole, which broadcasts the kernel log. It exists so that programs written for Linux, Dropbear and the DHCP clients among them, reach QEMU's user network and a real LAN through Linux's socket calls and configuration interfaces. The C is the same on i686 and x86-64; the architectures differ in how a program enters the socket calls and in the layout of the structures it passes. AF_UNIX sockets are in [`ipc/`](../ipc/Readme.md).
 
 ## Interfaces
 
 ### System calls
 
-A program uses Linux's socket calls, each with its page in the manual: [socket(2)](../../../man/man2/socket.2), which lists the families and types, [bind(2)](../../../man/man2/bind.2), [connect(2)](../../../man/man2/connect.2), [listen(2)](../../../man/man2/listen.2), [accept(2)](../../../man/man2/accept.2), [getsockname(2)](../../../man/man2/getsockname.2), [send(2)](../../../man/man2/send.2), [recv(2)](../../../man/man2/recv.2), [setsockopt(2)](../../../man/man2/setsockopt.2) and [shutdown(2)](../../../man/man2/shutdown.2). Both architectures register the direct calls Linux defines for them. i686 also has `socketcall`, call 102, which takes an operation number and an array of arguments ([socketcall(2)](../../../man/man2/socketcall.2)); x86-64 has none. [syscalls(2)](../../../man/man2/syscalls.2) gives the numbers. [ping(2)](../../../man/man2/ping.2), Rach2's private echo request, is `socketcall` operation 0x1000 or 0x1001 on i686 and call 400, `rach2_ping`, on x86-64. Each call reaches `socket_dispatch` in [`../syscall_net.c`](../syscall_net.c), which passes a call on an AF_UNIX socket to `ipc/unix.c`.
+A program uses Linux's socket calls, each with its page in the manual: [socket(2)](../../../man/man2/socket.2), which lists the families and types, [bind(2)](../../../man/man2/bind.2), [connect(2)](../../../man/man2/connect.2), [listen(2)](../../../man/man2/listen.2), [accept(2)](../../../man/man2/accept.2), [getsockname(2)](../../../man/man2/getsockname.2), [send(2)](../../../man/man2/send.2), [recv(2)](../../../man/man2/recv.2), [setsockopt(2)](../../../man/man2/setsockopt.2) and [shutdown(2)](../../../man/man2/shutdown.2). Both architectures register the direct calls Linux defines for them. i686 also has `socketcall`, call 102, which takes an operation number and an array of arguments ([socketcall(2)](../../../man/man2/socketcall.2)); x86-64 has none. [syscalls(2)](../../../man/man2/syscalls.2) gives the numbers. [ping(2)](../../../man/man2/ping.2), Rach2's private echo request, is `socketcall` operation 0x1000, 0x1001 or 0x1002, for IPv6, on i686 and call 400, `rach2_ping`, on x86-64. Each call reaches `socket_dispatch` in [`../syscall_net.c`](../syscall_net.c), which passes a call on an AF_UNIX socket to `ipc/unix.c`.
 
 ### Configuration
 
@@ -34,13 +34,13 @@ An interface is `struct netdev`: the driver's operations and record for the card
 
 `netdev_probe` (`driver/netdev.c`) asks the drivers in the order of its table, RTL8139, e1000, RTL8168GU, each for its cards until it answers absent, and names the cards that come up `eth0` upward, with indexes from 1; on a machine with an RTL8139 and an e1000, `eth0` is the RTL8139. A card that fails is stopped, since its bring-up may have enabled bus mastering, and its reason is logged as `net: absent: REASON` when no card came up. The probe goes on to the next card and driver, and gives a driver up after `NETDEV_MAX` failures. `rach2.nicfail=N` makes the Nth card that came up, from zero, fail.
 
-After the cards comes `lo`, with the next index: 127.0.0.1/8, Linux's loopback type 772 and MTU 65536, always up. The ioctls, netlink, `/proc/net/dev` and `/sys/class/net` list it, and no route uses it; its counters count the loopback ring, and an address, a route or taking it down is `EOPNOTSUPP`.
+After the cards comes `lo`, with the next index: 127.0.0.1/8 and ::1/128, Linux's loopback type 772 and MTU 65536, always up. The ioctls, netlink, `/proc/net/dev` and `/sys/class/net` list it, and no route uses it; its counters count the loopback ring, and an address, a route or taking it down is `EOPNOTSUPP`.
 
 ### The drivers
 
 `driver/rtl8139.c` drives one RTL8139, QEMU's PCI 10ec:8139, through I/O ports. Receive is an 8192-byte ring with a 2064-byte overhang, so a frame that wraps is contiguous; a ring header with a bad status or a length outside 18 to 1518 bytes resynchronizes the ring, and an overflow is counted as a drop and drained. Transmit takes the four descriptors in turn, each with a 1536-byte buffer.
 
-`driver/e1000.c` drives up to `E1000_MAX` (4) Intel 82540EM, PCI 8086:100e, QEMU's default card, through the memory window, with the I/O window for the reset. Its rings have 32 descriptors each, with 2048-byte receive buffers, in frames below 4 GiB. Receive takes a frame only whole in one descriptor with its error byte clear, and a full transmit ring is waited on for ten 100-microsecond intervals before the frame is dropped as a stall. It is the descriptor-ring design with nothing added, to read before the RTL8168.
+`driver/e1000.c` drives up to `E1000_MAX` (4) Intel 82540EM, PCI 8086:100e, QEMU's default card, through the memory window, with the I/O window for the reset. Its rings have 32 descriptors each, with 2048-byte receive buffers, in frames below 4 GiB. It receives every multicast frame (`RCTL.MPE`), since IPv6 finds its neighbours by groups whose station addresses the card's filter does not hold. Receive takes a frame only whole in one descriptor with its error byte clear, and a full transmit ring is waited on for ten 100-microsecond intervals before the frame is dropped as a stall. It is the descriptor-ring design with nothing added, to read before the RTL8168.
 
 `driver/rtl8168.c` drives one RTL8168, PCI 10ec:8168, whose `TxConfig` revision is of the GU family, the Lenovo G50-70's chip, which QEMU does not emulate. It is a port of Linux v6.16, commit `038d61fd642278bab63ee8ef722c50d10ab01e8f`, `r8169_main.c` and `r8169_phy_config.c`, for `RTL_GIGA_MAC_VER_42`, without the firmware patch, and each register sequence's comment gives the Linux function it follows. It has 64-descriptor rings and 16383-byte receive buffers. Completions and link changes arrive as message-signalled interrupts where the machine can route them, and a card whose MSI enable fails gives its vector back, with the handler. The handler masks the card's sources, acknowledges, services the rings at most twice and unmasks, which arms the next message. The tick services the rings too, and alone where messages cannot be routed or after a storm: 16 messages in a row that find a source the acknowledgement does not clear, with the rings empty, leave the sources masked. It advertises 10 and 100 Mbit in both duplexes, 1000 full duplex and pause, and resets the card's tally counters, which a warm restart keeps.
 
@@ -48,7 +48,7 @@ The e1000 and RTL8168 `stop` first waits up to 10 ms for the frames given to the
 
 ### Receive
 
-A driver gives each frame to `ethernet_rx` (`ethernet/ethernet.c`) from its interrupt handler or, for the RTL8168, also from the tick. It drops a frame shorter than 14 bytes and every frame on an interface that is down, counts the rest, offers each ARP and IPv4 frame to the packet sockets, and gives the payload to `arp_rx` or `ip_rx`.
+A driver gives each frame to `ethernet_rx` (`ethernet/ethernet.c`) from its interrupt handler or, for the RTL8168, also from the tick. It drops a frame shorter than 14 bytes and every frame on an interface that is down, counts the rest, offers each ARP, IPv4 and IPv6 frame (`0x86DD`) to the packet sockets, and gives the payload to `arp_rx`, `ip_rx` or `ip6_rx`.
 
 `ip_rx` (`ip/ip.c`) drops a datagram with a bad version, length or header checksum, and every fragment, and skips options. It accepts one for any address of any interface, whichever card it came in on, for a subnet broadcast or 255.255.255.255, and, from the loopback ring only, for 127/8. It drops one from the wire whose source is this machine's or in 127/8, and gives a broadcast to UDP alone. An accepted datagram is copied to the raw sockets of its protocol, then given to ICMP, UDP or TCP; a unicast UDP datagram for a port no socket has is answered with a port unreachable.
 
@@ -62,7 +62,7 @@ A driver gives each frame to `ethernet_rx` (`ethernet/ethernet.c`) from its inte
 
 The routing table (`route.c`) is the routes the interfaces imply, each address's subnet on the link and each gateway as its interface's default route, and up to `NETDEV_ROUTES` (32) added by `SIOCADDRT` or `RTM_NEWROUTE`. A lookup takes, among the routes of interfaces that are up whose prefix covers the destination, the longest prefix, then the lowest metric, then the first found, so an implied route comes before an added one, as on Linux. The source is the connection's or socket's bound address, 127.0.0.1 for 127/8, and otherwise the outgoing interface's address on the next hop's subnet, or its first (`netdev_source`).
 
-`ethernet_tx` adds the header with the interface's station address, and refuses a payload over 1500 bytes, IP and ARP on an interface that is down, and every frame for a card whose link is down; each refusal counts as a transmit drop. A refusal reaches a UDP or raw sender as `ENOBUFS`, and TCP keeps the segment to send again.
+`ethernet_tx` adds the header with the interface's station address, and refuses a payload over 1500 bytes, IPv4, IPv6 and ARP on an interface that is down, and every frame for a card whose link is down; each refusal counts as a transmit drop. A refusal reaches a UDP or raw sender as `ENOBUFS`, and TCP keeps the segment to send again.
 
 ### Addresses and ARP
 
@@ -74,11 +74,19 @@ The ARP cache (`arp/arp.c`) has `ARP_CACHE_SIZE` (16) entries, each with the int
 
 A datagram to this machine never reaches a card. `ip_tx_from` copies it onto a ring of `LOOP_RING_SLOTS` (64), and `ip_loop_drain_from` delivers the ring through `ip_rx` from the tick, the idle wait, and a system call's exit once 3 or more wait (`LOOP_DRAIN_AT`). Delivery waits so that a send never runs the receive path, and TCP, inside the sender's own call; the threshold leaves a pair to the timer, since a simultaneous open's two SYNs cross only while neither has been delivered. A full ring refuses with `ENOBUFS` and counts the refusal in `/proc/stat`. The tick also counts there, as `loopback_left_idle`, the datagrams it finds on the ring while every processor is halted in an idle wait: the idle wait of a blocked process (`idle_wait_irq_off`) delivers the ring before it halts, so each of them waited for the timer with nothing running.
 
+### IPv6
+
+An interface holds up to `NETDEV_ADDRS6` (8) IPv6 addresses, `struct netdev_addr6` (`driver/netdev.h`), each with its prefix length, scope, Linux's `IFA_F_` flags and lifetimes, and is a member of up to `NETDEV_GROUPS6` (16) groups, counted by reference. `netconf_add_address6` (`netconf.c`) joins an address's solicited-node group as it adds it. A card brought up, at boot or by `SIOCSIFFLAGS` or netlink (`netconf_set_up`), joins ff02::1 and takes the link-local address fe80::/64 with the modified EUI-64 of its station address; `lo` holds ::1.
+
+`ip6_rx` (`ip6/ip6.c`) drops a datagram with a bad version or length, a group as its source, or, from the wire, ::1 at either end or a source of this machine's. It accepts one for an address an interface holds, a link-local one only on its own interface, for ::1 from the loopback ring, and for a group the card is a member of. An extension header, fragments among them, drops the datagram, and a next header of no other protocol it knows is answered with a parameter problem. An ICMPv6 message is copied to the raw ICMPv6 sockets, then given to `icmp6_rx` (`ip6/icmp6.c`), which checks its checksum, answers an echo request from the address it was sent to, or for a group from the link's own address, and gives an echo reply to the kernel's ping. An error this machine sends follows RFC 4443: none about an error or to a group, a quote of at most 1232 bytes, and the IPv4 rate limit.
+
+`ip6_tx` builds a 40-byte header with no extension header. `ip6_route` (`ip6/route6.c`) sends ::1 and an address an interface holds onto the loopback ring, which IPv4 and IPv6 share and whose drain chooses the layer by the version. A link-local address or a group of link scope leaves by the interface its scope names, or by the one card; a wider group by its scope or the first card; a group goes to its station address, 33:33 and its low 32 bits. The source is chosen by RFC 6724's rules 2, 3 and 8 (`ip6_source`), and `ip6_path_mtu` is 1500 bytes. There is no neighbour cache yet, so a datagram for another host's unicast address is refused with `EHOSTUNREACH`.
+
 ### ICMP and UDP
 
 `ip/icmp.c` answers an echo request from the address it was sent to. A report that a TCP segment in flight was too big goes to `tcp_path_mtu`, and a port unreachable to `udp_refused`, which gives the UDP socket connected to that peer `ECONNREFUSED`. An error this machine sends quotes as much of the datagram as fits 576 bytes, goes to no source of 0.0.0.0, broadcast or multicast, and, unless it goes to this machine, is limited to one a second after a burst of six.
 
-The kernel's ping ([ping(2)](../../../man/man2/ping.2)) makes at most four attempts, each with a deadline 100 ticks from the current tick, including ticks whose interrupts are still pending. The timer handler's count ends the wait. The returned round-trip count also includes ticks whose interrupts are pending.
+The kernel's ping ([ping(2)](../../../man/man2/ping.2)), to an IPv4 or IPv6 address, makes at most four attempts, each with a deadline 100 ticks from the current tick, including ticks whose interrupts are still pending. The timer handler's count ends the wait. The returned round-trip count also includes ticks whose interrupts are pending.
 
 `udp/udp.c` keeps one list of bindings, a record from the heap for each bound socket, with the effective user ID that bound it; [bind(2)](../../../man/man2/bind.2) gives the rules for sharing a port. A datagram goes to the socket connected to its sender, else to one bound to its destination address, else to one bound to any. A socket's record queues up to `SOCK_DGRAM_SLOTS` (8) datagrams of up to 1500 bytes, and one that finds the queue full is dropped.
 
@@ -102,9 +110,9 @@ Blocked callers and pollers share the socket's wait queue, and each wake gives i
 
 ### Packet and raw sockets
 
-A packet socket (`socket/packet.c`), `AF_PACKET` with `SOCK_DGRAM`, is how a DHCP client sees an offer, which `ip_rx` drops since it comes before the machine has the address, and what `arping` uses for ARP. It is offered each ARP or IPv4 frame of its protocol before the kernel's handler, which still runs, from every interface when bound to index 0, or from the one it is bound to, which it also sends through. A receive gives the payload and a 20-byte `sockaddr_ll`, whose packet type is judged against the receiving card's station address.
+A packet socket (`socket/packet.c`), `AF_PACKET` with `SOCK_DGRAM`, is how a DHCP client sees an offer, which `ip_rx` drops since it comes before the machine has the address, and what `arping` uses for ARP. It is offered each ARP, IPv4 or IPv6 frame of its protocol before the kernel's handler, which still runs, from every interface when bound to index 0, or from the one it is bound to, which it also sends through. A receive gives the payload and a 20-byte `sockaddr_ll`, whose packet type is judged against the receiving card's station address.
 
-A raw socket (`socket/raw.c`), `AF_INET` with `SOCK_RAW` and `IPPROTO_ICMP`, is what `ping` and `traceroute` use. It receives a copy of every accepted ICMP datagram, header included, and sends the caller's ICMP message and checksum unchanged with the socket's hop limit. `IPPROTO_RAW` gives a descriptor for the interface ioctls alone, which BusyBox's DHCP client opens. Both kinds are root's, and each has a queue of 8 entries of up to 1500 bytes from the heap, which drops the newest when full.
+A raw socket (`socket/raw.c`), `AF_INET` with `SOCK_RAW` and `IPPROTO_ICMP`, is what `ping` and `traceroute` use. It receives a copy of every accepted ICMP datagram, header included, and sends the caller's ICMP message and checksum unchanged with the socket's hop limit. `AF_INET6` with `SOCK_RAW` and `IPPROTO_ICMPV6`, what `ping -6` uses on Linux, receives every accepted ICMPv6 message without the IPv6 header, with the sender and the interface it came in on, and sends the caller's message with the checksum the kernel computes over the pseudo-header. `IPPROTO_RAW` gives a descriptor for the interface ioctls alone, which BusyBox's DHCP client opens. Both kinds are root's, and each has a queue of 8 entries of up to 1500 bytes from the heap, which drops the newest when full.
 
 ### Netlink and netconsole
 
@@ -120,9 +128,9 @@ Every entry to the kernel takes the big lock ([`../proc/smp.h`](../proc/smp.h)),
 
 ## Limits
 
-* IPv4 only; [socket(2)](../../../man/man2/socket.2) refuses `AF_INET6`.
+* IPv6 carries ICMPv6 alone: [socket(2)](../../../man/man2/socket.2) opens `AF_INET6` only as a raw ICMPv6 socket, so there is no IPv6 UDP or TCP. There is no neighbour discovery, router discovery, address autoconfiguration or MLD, so IPv6 reaches only this machine and groups on the link; no extension header is read or sent.
 * No datagram is fragmented or reassembled. The MTU is 1500 bytes on every card: 1480 bytes of IP payload, 1472 of UDP, 1460 of TCP data. There are no jumbo frames.
-* No IP options are sent, no datagram is forwarded between interfaces, and no multicast group can be joined.
+* No IP options are sent, no datagram is forwarded between interfaces, and a program can join no multicast group.
 * UDP checksums are neither sent nor checked.
 * TCP sends no timestamps and reads no SACK blocks.
 * ARP entries do not expire, any host on the link can replace a learned one, and there is no proxy ARP.

@@ -1,4 +1,4 @@
-.Dd October 1, 2026
+.Dd November 1, 2026
 .Dt SOCKET 2
 .Os
 .Sh NAME
@@ -43,13 +43,23 @@ data operations return
 .Er EOPNOTSUPP .
 Other raw protocols are refused.
 Effective user ID 0 is required for either raw form.
+.It Dv AF_INET6 , SOCK_RAW
+A raw ICMPv6 socket;
+.Fa protocol
+must be
+.Dv IPPROTO_ICMPV6
+(58).
+It receives each ICMPv6 message addressed to this machine without its
+IPv6 header, and the kernel computes the checksum of each message it
+sends, as Linux does.
+Effective user ID 0 is required.
 .It Dv AF_PACKET , SOCK_DGRAM
 A packet socket.
 Effective user ID 0 is required.
 The low 16 bits of
 .Fa protocol
 must contain the Ethernet protocol in network byte order:
-IPv4 (0x0800), ARP (0x0806), or zero.
+IPv4 (0x0800), ARP (0x0806), IPv6 (0x86DD), or zero.
 Zero leaves the protocol unspecified until
 .Xr bind 2 .
 .It Dv AF_NETLINK , SOCK_RAW No or Dv SOCK_DGRAM
@@ -74,9 +84,11 @@ is taken as
 as in Linux.
 .El
 .Pp
-Other address families, including
-.Dv AF_INET6 ,
-are not supported.
+Other address families, and
+.Dv AF_INET6
+stream and datagram sockets, are not supported; the
+.Er EAFNOSUPPORT
+they fail with is the answer on which a program falls back to IPv4.
 .Pp
 .Fn socketpair
 makes two
@@ -155,10 +167,17 @@ of an unknown bit.
 .Fa domain
 is none of
 .Dv AF_INET ,
+.Dv AF_INET6 ,
 .Dv AF_NETLINK ,
 .Dv AF_PACKET
 and
-.Dv AF_UNIX .
+.Dv AF_UNIX ,
+or it is
+.Dv AF_INET6
+and
+.Fa type
+is not
+.Dv SOCK_RAW .
 .It Bq Er EFAULT
 The socketcall argument block cannot be read.
 .It Bq Er EINVAL
@@ -167,15 +186,16 @@ has a bit above its low four other than
 .Dv SOCK_CLOEXEC
 and
 .Dv SOCK_NONBLOCK ,
-the socket type is not accepted, or a packet protocol is neither zero,
-IPv4, nor ARP.
+the socket type is not accepted, or a packet protocol is none of zero,
+IPv4, ARP and IPv6.
 An
 .Dv AF_PACKET , SOCK_RAW
 request also returns this error.
 .It Bq Er EMFILE
 The process has no free descriptor below its limit.
 .It Bq Er ENOBUFS
-The raw ICMP registration and receive queue cannot be allocated.
+The raw ICMP or ICMPv6 registration and receive queue cannot be
+allocated.
 .It Bq Er ENOMEM
 The socket object, a larger descriptor table or an open file description
 cannot be allocated.
@@ -184,12 +204,15 @@ cannot be allocated.
 was asked for a domain other than
 .Dv AF_UNIX .
 .It Bq Er EPERM
-A raw IPv4 socket or packet socket was requested without effective user ID 0.
+A raw IPv4 or IPv6 socket or a packet socket was requested without
+effective user ID 0.
 .It Bq Er EPROTONOSUPPORT
 An IPv4 raw protocol is neither
 .Dv IPPROTO_RAW
 nor
 .Dv IPPROTO_ICMP ,
+an IPv6 raw protocol is not
+.Dv IPPROTO_ICMPV6 ,
 an
 .Dv AF_UNIX
 protocol is neither 0 nor
