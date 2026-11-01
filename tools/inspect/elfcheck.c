@@ -36,7 +36,7 @@
  * variant of which must fail for its own rule, as its diagnostic shows.
  *
  * With --initrd, the validated physical image end and module size must
- * leave 8 MiB below the 32 MiB boot allocator limit, after rounding both
+ * leave 8 MiB below the 64 MiB boot allocator limit, after rounding both
  * ends to pages. This is the small direct-boot helper's preparation guard.
  *
  * Each command exits 0 when everything passes and 1 on a finding; a usage
@@ -51,7 +51,7 @@
 #define ELF_MAX_PHNUM 32
 #define ELF_MAX_SEGS  8
 #define PAGE          0x1000u
-#define BOOT_LIMIT    0x2000000u
+#define BOOT_LIMIT    0x4000000u
 #define BOOT_MARGIN   0x800000u
 
 #define MULTIBOOT_MAGIC 0x1BADB002u
@@ -98,7 +98,7 @@ struct user_arch {
 };
 
 static const struct user_arch user_arches[] = {
-    {"i686", 1, 32, EM_386, "EM_386", 52, 32, 0x02000000u, 0xBFFFF000u},
+    {"i686", 1, 32, EM_386, "EM_386", 52, 32, 0x04000000u, 0xBFFFF000u},
     {"x86_64", 2, 64, EM_X86_64, "EM_X86_64", 64, 56, 0x10000u, 0x00007FFFFFFFE000ull},
 };
 static const struct user_arch *const arch_i686 = &user_arches[0];
@@ -794,8 +794,8 @@ static int kernel_check64(const unsigned char *d, size_t n, int tcc, char *detai
 /**
  * QEMU puts the Multiboot module after the physical kernel image. Round up
  * conservatively even for the x86-64 a.out header's unaligned end. The boot
- * allocator cannot pass 32 MiB: 8 MiB leave room for i686's maximum 4 MiB
- * frame table, 264 initial page tables and its directory, with over 2 MiB
+ * allocator cannot pass 64 MiB: 8 MiB leave room for i686's maximum 4 MiB
+ * frame table, 272 initial page tables and its directory, with over 2 MiB
  * left for boot data and low-memory frames. The 256 MiB helper needs less.
  */
 static int kernel_module_check(uint64_t kernel_end, uint64_t bytes, char *detail, size_t size)
@@ -805,13 +805,13 @@ static int kernel_module_check(uint64_t kernel_end, uint64_t bytes, char *detail
     if (bytes == 0)
         return kf("the boot module is empty");
     if (kernel_end > BOOT_LIMIT || bytes > BOOT_LIMIT)
-        return kf("the kernel or boot module passes the 32 MiB boot allocator limit");
+        return kf("the kernel or boot module passes the 64 MiB boot allocator limit");
     start = (kernel_end + PAGE - 1) & ~(uint64_t)(PAGE - 1);
     end = (start + bytes + PAGE - 1) & ~(uint64_t)(PAGE - 1);
     if (end > BOOT_LIMIT - BOOT_MARGIN)
-        return kf("boot module at 0x%llx to 0x%llx leaves less than 8 MiB below 32 MiB",
+        return kf("boot module at 0x%llx to 0x%llx leaves less than 8 MiB below 64 MiB",
                   (unsigned long long)start, (unsigned long long)end);
-    snprintf(detail, size, "boot module: 0x%llx to 0x%llx; %llu bytes below 32 MiB remain",
+    snprintf(detail, size, "boot module: 0x%llx to 0x%llx; %llu bytes below 64 MiB remain",
              (unsigned long long)start, (unsigned long long)end,
              (unsigned long long)(BOOT_LIMIT - end));
     return 0;
@@ -1137,11 +1137,11 @@ static void st_user(void)
         {"a segment inside the page exec leaves out", 0x08048000, 0xBFFFF000, 0x1000, 0},
         {"an entry point at the ceiling", 0xBFFFF000, 0x08048000, 0x1000, 0},
         {"an entry point one byte below it", 0xBFFFEFFF, 0x08048000, 0x1000, 1},
-        {"a segment starting below the floor", 0x08048000, 0x01FFF000, 0x1000, 0},
-        {"a segment starting exactly at the floor", 0x02000000, 0x02000000, 0x1000, 1},
-        {"a segment starting one page below the floor", 0x08048000, 0x01FFF000, 0x2000, 0},
-        {"an entry point exactly at the floor", 0x02000000, 0x02000000, 0x1000, 1},
-        {"an entry point one byte below the floor", 0x01FFFFFF, 0x02000000, 0x1000, 0},
+        {"a segment starting below the floor", 0x08048000, 0x03FFF000, 0x1000, 0},
+        {"a segment starting exactly at the floor", 0x04000000, 0x04000000, 0x1000, 1},
+        {"a segment starting one page below the floor", 0x08048000, 0x03FFF000, 0x2000, 0},
+        {"an entry point exactly at the floor", 0x04000000, 0x04000000, 0x1000, 1},
+        {"an entry point one byte below the floor", 0x03FFFFFF, 0x04000000, 0x1000, 0},
     };
     static const struct {
         const char *name;
@@ -1307,9 +1307,9 @@ static void st_boot_module(void)
         {"run09 i686 with a 16 MiB module", 0x5A2000u, 0x1000000u, 1},
         {"run09 x86-64 with a 16 MiB module", 0x61C0B0u, 0x1000000u, 1},
         {"run09 64 MiB module", 0x61C0B0u, 0x4000000u, 0},
-        {"exactly eight MiB remain", 0x800000u, 0x1000000u, 1},
-        {"kernel alignment consumes the margin", 0x800001u, 0x1000000u, 0},
-        {"module alignment consumes the margin", 0x7FFFFFu, 0x1000001u, 0},
+        {"exactly eight MiB remain", 0x800000u, 0x3000000u, 1},
+        {"kernel alignment consumes the margin", 0x800001u, 0x3000000u, 0},
+        {"module alignment consumes the margin", 0x7FFFFFu, 0x3000001u, 0},
         {"an empty module", 0x61C0B0u, 0, 0},
         {"a kernel beyond the low pool", 0x100000000ull, 0x1000000u, 0},
         {"a module size cannot wrap", 0x61C0B0u, 0x100000000ull, 0},
