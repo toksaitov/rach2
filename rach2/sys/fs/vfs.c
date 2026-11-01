@@ -4145,9 +4145,17 @@ int vfs_do_detach(const char *target, int dir)
     return 0;
 }
 
+/**
+ * The live namespaces are read again for each candidate, since an unmount
+ * may sleep: meanwhile a namespace can be made and a mount made in it,
+ * hidden from every bit but the new one, which a mask read before the sleep
+ * lacks. The read and the test run under the big lock with no sleep between
+ * them, and `unmount_mount` sets VFS_UNMOUNTING before it first sleeps; a
+ * namespace made after that copies its parent's view, from which the mount
+ * is hidden, so nothing comes to see it.
+ */
 void vfs_reap_detached(void)
 {
-    uint32_t live = mntns_live_bits();
     int i, progress = 1;
 
     while (progress) {
@@ -4155,8 +4163,8 @@ void vfs_reap_detached(void)
         for (i = VFS_PERMANENT; i < mount_slots; i++) {
             struct vfs_mount *m = mounts[i];
 
-            if (m && m->state == VFS_ACTIVE && (~m->ns_hidden & live) == 0 && m->refs == 0 &&
-                m->inprogress == 0 && unmount_mount(m) == 0) {
+            if (m && m->state == VFS_ACTIVE && (~m->ns_hidden & mntns_live_bits()) == 0 &&
+                m->refs == 0 && m->inprogress == 0 && unmount_mount(m) == 0) {
                 progress = 1;
             }
         }
@@ -4407,11 +4415,13 @@ void vfs_mntns_copy(uint32_t from, uint32_t to)
  * namespace sees is unmounted, a child before its parent, and every mount
  * is hidden from the bit, which a namespace made later takes afresh. A
  * mount still busy stays, hidden from every namespace, until the reaper
- * finds it free (`vfs_reap_detached`).
+ * finds it free (`vfs_reap_detached`). The bit stays live until this
+ * returns, so no namespace made meanwhile takes it, and the other live
+ * namespaces are read again for each mount, as `vfs_reap_detached` does,
+ * since an unmount may sleep.
  */
 void vfs_mntns_gone(uint32_t bit)
 {
-    uint32_t live = mntns_live_bits() & ~(1u << bit);
     int i, progress = 1;
 
     while (progress) {
@@ -4420,7 +4430,7 @@ void vfs_mntns_gone(uint32_t bit)
             struct vfs_mount *m = mounts[i];
 
             if (m && m->state == VFS_ACTIVE && !(m->ns_hidden & (1u << bit)) &&
-                (~m->ns_hidden & live) == 0 && unmount_mount(m) == 0) {
+                (~m->ns_hidden & mntns_live_bits() & ~(1u << bit)) == 0 && unmount_mount(m) == 0) {
                 progress = 1;
             }
         }
