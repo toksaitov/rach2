@@ -121,7 +121,7 @@ There is no wireless driver, and the stack is IPv4 alone. On i686 an e1000 or RT
 | A USB device with no boot interface | `usb-tablet` | refused | `usb` |
 | Network cards | `rtl8139`, `e1000` | RTL8139, e1000 | `socket`, `e1000` |
 | A card of another model | `e1000e` | refused | `e1000` |
-| Sound | `intel-hda` with `hda-duplex`, `sb16` | HDA, SB16 | `audio` |
+| Sound | `intel-hda` with `hda-output` on the `wav` backend, which records the output, or with `hda-duplex` on `none` or `sdl`, which give an input, silence or a file; `sb16` | HDA, SB16 | `audio` |
 
 ## The Lenovo G50-70
 

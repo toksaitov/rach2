@@ -1992,6 +1992,9 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
     p->memory_bytes = jnum(qp, "memory_bytes");
     p->memory_profile = jtext(qp, "memory_profile");
     p->audio = jtext(qp, "audio");
+    p->audio_backend = jtext(qp, "audio_backend");
+    p->audio_input =
+        jtext(qp, "audio_input") != NULL ? etude_artifact(c, jtext(qp, "audio_input")) : NULL;
     p->devices = m->devices;
     p->boot_options = m->options;
     p->smbios_vendor = jtext(qp, "smbios_vendor");
@@ -2001,8 +2004,10 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
     p->no_i8042 = jbool(qp, "i8042") == 0;
     p->q35 = jtext(qp, "machine") != NULL && strcmp(jtext(qp, "machine"), "q35") == 0;
     if (p->kernel == NULL || (jtext(qp, "initrd") != NULL && p->initrd == NULL) ||
-        (jtext(qp, "acpi_table") != NULL && p->acpi_table == NULL)) {
-        diag("machine %s: its kernel, RAM image or ACPI table is not an artifact that checks",
+        (jtext(qp, "acpi_table") != NULL && p->acpi_table == NULL) ||
+        (jtext(qp, "audio_input") != NULL && p->audio_input == NULL)) {
+        diag("machine %s: its kernel, RAM image, ACPI table or audio input is not an artifact "
+             "that checks",
              m->decl->id);
         return ETUDE_REFUSED;
     }
@@ -2245,7 +2250,8 @@ enum etude_status etude_boot(struct etude_case *c, const char *machine, const ch
         return st;
     }
     snprintf(m->attempt_id, sizeof(m->attempt_id), "%s.%s.%u", c->attempt_id, d->id, d->boots);
-    if (m->profile.audio != NULL) {
+    if (m->profile.audio != NULL &&
+        (m->profile.audio_backend == NULL || strcmp(m->profile.audio_backend, "wav") == 0)) {
         snprintf(name, sizeof(name), "%s.%u.wav", d->id, d->boots);
         if (scratch_path(c, "evidence", name, audio, sizeof(audio)) != 0) {
             free_dumps(m);
@@ -2428,7 +2434,7 @@ enum etude_status etude_qmp(struct etude_case_machine *m, const char *execute,
     return st;
 }
 
-/** Give the WAV path of this boot, or NULL when no audio card was selected. */
+/** Give the WAV path of this boot, or NULL without an audio card on the `wav` backend. */
 const char *etude_audio(const struct etude_case_machine *m)
 {
     return mres(m)->audio_path;

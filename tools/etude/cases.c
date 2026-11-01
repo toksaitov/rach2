@@ -344,6 +344,7 @@ static void prepared_qemu(const struct rule *r, const struct json *qemu)
     prepared(r, json_member(qemu, "kernel"), "the kernel");
     prepared(r, json_member(qemu, "initrd"), "the initial RAM image");
     prepared(r, json_member(qemu, "acpi_table"), "the ACPI table");
+    prepared(r, json_member(qemu, "audio_input"), "the audio input");
     for (i = 0; disks != NULL && i < disks->count; i++) {
         if (json_member(disks->item[i], "base") != NULL) {
             prepared(r, json_member(disks->item[i], "base"), "the overlay's base");
@@ -814,6 +815,45 @@ static void rule_captures(const struct rule *r)
     known_cards(r, json_member(json_member(r->c, "requirements"), "qemu"));
     for (i = 0; machines != NULL && i < machines->count; i++) {
         known_cards(r, json_member(machines->item[i], "qemu"));
+    }
+}
+
+/**
+ * Reports audio of the QEMU profile `qemu` that the launcher refuses: a
+ * backend or an input without a card, an input without the `sdl` backend,
+ * and `sdl` without an input.
+ */
+static void known_audio(const struct rule *r, const struct json *qemu)
+{
+    const char *card = json_text(qemu, "audio");
+    const char *backend = json_text(qemu, "audio_backend");
+    const struct json *input = json_member(qemu, "audio_input");
+    int sdl = same(backend, "sdl");
+
+    if (qemu == NULL) {
+        return;
+    }
+    if (card == NULL && (backend != NULL || input != NULL)) {
+        finding(r->file, qemu->line, "%s: an audio backend or input without an audio card",
+                json_text(r->c, "case_id"));
+    } else if (sdl != (input != NULL)) {
+        finding(r->file, qemu->line, "%s: an audio input needs the sdl backend, and sdl an input",
+                json_text(r->c, "case_id"));
+    }
+}
+
+/**
+ * The audio of each QEMU profile is a card on a backend, and the `sdl`
+ * backend alone has, and needs, an input file.
+ */
+static void rule_audio(const struct rule *r)
+{
+    const struct json *machines = json_member(r->c, "machines");
+    size_t i;
+
+    known_audio(r, json_member(json_member(r->c, "requirements"), "qemu"));
+    for (i = 0; machines != NULL && i < machines->count; i++) {
+        known_audio(r, json_member(machines->item[i], "qemu"));
     }
 }
 
@@ -1549,6 +1589,7 @@ static void check_case(const char *file, const struct json *c, const char *root)
     rule_network(&r);
     rule_attached(&r);
     rule_captures(&r);
+    rule_audio(&r);
     rule_steps(&r);
     rule_helper_architecture(&r);
     rule_suspensions(&r);

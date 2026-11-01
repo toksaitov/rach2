@@ -322,6 +322,7 @@ static int make_profile(struct legacy_guest *g)
     p->memory_bytes = (uint64_t)integer_of(q, "memory_bytes");
     p->memory_profile = json_text(q, "memory_profile");
     p->audio = json_text(q, "audio");
+    p->audio_backend = json_text(q, "audio_backend");
     p->firmware = firmware != NULL && strcmp(firmware, "seabios") == 0 ? ETUDE_FIRMWARE_SEABIOS
                                                                        : ETUDE_FIRMWARE_DIRECT;
     p->devices = g->devices;
