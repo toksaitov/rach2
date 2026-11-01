@@ -109,6 +109,21 @@ void hid_report(int slot, int kind, const uint8_t *report, int length)
     (void)length;
 }
 
+/** Return -1: no row changes a keyboard's LEDs. */
+int hid_led_report(int device)
+{
+    (void)device;
+    return -1;
+}
+
+/** Do nothing: no LED report is pending. */
+void hid_led_sent(int device, int report, int ok)
+{
+    (void)device;
+    (void)report;
+    (void)ok;
+}
+
 /** Record the slot of a keyboard that went. */
 void hid_gone(int slot)
 {

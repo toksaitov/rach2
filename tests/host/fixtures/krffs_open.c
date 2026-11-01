@@ -252,15 +252,17 @@ static int32_t synth_open(const struct vpath *vp, int flags)
 }
 
 /** Reject an unexpected framebuffer open. */
-static int32_t open_framebuffer(void)
+static int32_t open_framebuffer(int flags)
 {
+    (void)flags;
     check(0, "unexpected framebuffer open");
     return -EIO;
 }
 
 /** Reject an unexpected mouse open. */
-static int32_t open_mouse(void)
+static int32_t open_mouse(int flags)
 {
+    (void)flags;
     check(0, "unexpected mouse open");
     return -EIO;
 }
