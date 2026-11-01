@@ -183,6 +183,75 @@ void ip6_format(const uint8_t *a, char *out)
     out[n] = '\0';
 }
 
+/**
+ * Each group is one to four hexadecimal digits, and `::` stands for as many
+ * zero groups as the address needs to make eight, at least one; a text with
+ * no `::` has eight groups. A dotted IPv4 tail is not taken.
+ */
+int ip6_parse(const char *s, uint32_t len, uint8_t *out)
+{
+    unsigned groups[8];
+    int n = 0, gap = -1, i;
+    uint32_t at = 0;
+
+    if (len >= 2 && s[0] == ':' && s[1] == ':') {
+        gap = 0;
+        at = 2;
+    } else if (len >= 1 && s[0] == ':') {
+        return -1;
+    }
+    while (at < len) {
+        unsigned g = 0;
+        int digits = 0;
+
+        while (at < len && digits < 5) {
+            char c = s[at];
+            unsigned d = c >= '0' && c <= '9'   ? (unsigned)(c - '0')
+                         : c >= 'a' && c <= 'f' ? (unsigned)(c - 'a' + 10)
+                         : c >= 'A' && c <= 'F' ? (unsigned)(c - 'A' + 10)
+                                                : 16u;
+
+            if (d == 16u) {
+                break;
+            }
+            g = g << 4 | d;
+            digits++;
+            at++;
+        }
+        if (digits == 0 || digits > 4 || n == 8) {
+            return -1;
+        }
+        groups[n++] = g;
+        if (at == len) {
+            break;
+        }
+        if (s[at] != ':' || at + 1 == len) {
+            return -1;
+        }
+        at++;
+        if (s[at] == ':') {
+            if (gap >= 0) {
+                return -1;
+            }
+            gap = n;
+            at++;
+        }
+    }
+    if (gap < 0 ? n != 8 : n > 7) {
+        return -1;
+    }
+    for (i = 0; i < IP6_ADDR_LEN; i++) {
+        out[i] = 0;
+    }
+    for (i = 0; i < n; i++) {
+        int to = gap >= 0 && i >= gap ? i + 8 - n : i;
+
+        out[2 * to] = (uint8_t)(groups[i] >> 8);
+        out[2 * to + 1] = (uint8_t)groups[i];
+    }
+    return 0;
+}
+
 /** Add the `len` bytes at `p` to the one's complement sum `sum` as 16-bit
  * big-endian words, an odd last byte padded with a zero. */
 static uint32_t sum16(uint32_t sum, const uint8_t *p, uint32_t len)

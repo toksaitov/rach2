@@ -1,7 +1,8 @@
 /*
  * netlink.c: AF_NETLINK sockets, as netlink.h describes them: the reading of
  * requests, the changes they ask for, and the answers, built from the
- * interface records, the route table, the ARP cache and the sockets.
+ * interface records, the IPv4 and IPv6 route tables, the ARP and neighbour
+ * caches and the sockets.
  */
 
 #include "netlink.h"
@@ -12,6 +13,9 @@
 #include "../driver/netdev.h"
 #include "../arp/arp.h"
 #include "../ip/ip.h"
+#include "../ip6/ip6.h"
+#include "../ip6/nd6.h"
+#include "../ip6/route6.h"
 #include "../tcp/tcp.h"
 #include "../../ipc/unix.h"
 #include "../../lib/kerrno.h"
@@ -19,6 +23,7 @@
 #include "../../mm/kheap.h"
 #include "../../proc/process.h"
 #include "../../proc/wait_queue.h"
+#include "../../timer.h"
 
 /* The message header, and the types and flags of Linux's uapi netlink.h and
  * rtnetlink.h that the answers use. */
@@ -65,21 +70,28 @@
 #define IFA_LOCAL      2
 #define IFA_LABEL      3
 #define IFA_BROADCAST  4
+#define IFA_CACHEINFO  6
+#define IFA_FLAGS      8
+#define IFA_PROTO      11
 #define RTA_DST        1
 #define RTA_OIF        4
 #define RTA_GATEWAY    5
 #define RTA_PREFSRC    7
 #define RTA_PRIORITY   6
+#define RTA_CACHEINFO  12
 #define RTA_TABLE      15
+#define RTA_PREF       20
 #define NDA_DST        1
 #define NDA_LLADDR     2
 #define NDA_IFINDEX    8
 #define NTF_PROXY      0x08u
+#define NTF_ROUTER     0x80u
 
 /* Attributes of an interface's configuration, and the indexes Linux gives
  * the configuration of all interfaces and the default for new ones. */
 #define NETCONFA_IFINDEX                     1
 #define NETCONFA_FORWARDING                  2
+#define NETCONFA_RP_FILTER                   3
 #define NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN 6
 #define NETCONFA_IFINDEX_ALL                 0xFFFFFFFFu
 #define NETCONFA_IFINDEX_DEFAULT             0xFFFFFFFEu
@@ -550,22 +562,48 @@ static struct netdev *link_asked(const uint8_t *req, uint32_t body)
     return 0;
 }
 
+/** Append an IPv6 neighbour, the neighbour cache's `row`, in its state
+ * of RFC 4861, which the cache keeps in Linux's NUD_ bits, with NTF_ROUTER
+ * for one that said it is a router; one still asked for, or that failed,
+ * has no station address to report. */
+static void neigh6_msg(struct nl_build *b, const struct nd6_row *row)
+{
+    uint8_t msg[NL_MSG_MAX];
+    uint8_t *ndm = msg_start(b, msg, RTM_NEWNEIGH, NLM_F_MULTI, 12);
+
+    ndm[0] = AF_INET6;
+    put32(ndm + 4, (uint32_t)row->ifindex);
+    put16(ndm + 8, row->state);
+    ndm[10] = row->router ? NTF_ROUTER : 0;
+    ndm[11] = RTN_UNICAST;
+    msg_attr(msg, NDA_DST, row->addr, IP6_ADDR_LEN);
+    if (!(row->state & (ND6_INCOMPLETE | ND6_FAILED))) {
+        msg_attr(msg, NDA_LLADDR, row->mac, 6);
+    }
+    nl_append(b, msg);
+}
+
 /**
- * Append the neighbours a dump request `req` of `body` bytes asks for, from
- * a snapshot of the ARP cache: none for a family other than IPv4 or any, or
- * for the proxy table, which this kernel has none of, and only those of one
- * interface when its `ndmsg` or an NDA_IFINDEX attribute names one.
+ * Append the neighbours a dump request `req` of `body` bytes asks for: of
+ * IPv4 from a snapshot of the ARP cache, and of IPv6 from one of the
+ * neighbour cache, by the family of its `ndmsg`, both for 0; none for
+ * another family, or for the proxy table, which this kernel has none of;
+ * and only those of one interface when its `ndmsg` or an NDA_IFINDEX
+ * attribute names one.
  */
 static void neigh_dump(struct nl_build *b, const uint8_t *req, uint32_t body)
 {
     struct arp_row rows[ARP_CACHE_SIZE];
+    struct nd6_row rows6[ND6_CACHE_SIZE];
     const uint8_t *ndm = req + NLMSG_HDRLEN;
     const uint8_t *attr = ndm + 12;
     const uint8_t *end = ndm + body;
     uint32_t want = body >= 8 ? get32(ndm + 4) : 0;
+    uint8_t family = body >= 1 ? ndm[0] : 0;
     int k, i, m, n = netdev_seen_count();
 
-    if ((body >= 1 && ndm[0] != 0 && ndm[0] != AF_INET) || (body >= 11 && (ndm[10] & NTF_PROXY))) {
+    if ((family != 0 && family != AF_INET && family != AF_INET6) ||
+        (body >= 11 && (ndm[10] & NTF_PROXY))) {
         return;
     }
     while (body >= 12 && attr + 4 <= end) {
@@ -579,7 +617,7 @@ static void neigh_dump(struct nl_build *b, const uint8_t *req, uint32_t body)
         }
         attr += (len + 3u) & ~3u;
     }
-    m = arp_snapshot(rows, ARP_CACHE_SIZE);
+    m = family == AF_INET6 ? 0 : arp_snapshot(rows, ARP_CACHE_SIZE);
     for (k = 0; k < m; k++) {
         for (i = 0; i < n; i++) {
             const struct netdev *nd = netdev_at(i);
@@ -588,6 +626,12 @@ static void neigh_dump(struct nl_build *b, const uint8_t *req, uint32_t body)
                 same_name(nd->name, sizeof(nd->name), rows[k].iface, sizeof(nd->name))) {
                 neigh_msg(b, &rows[k], nd->index);
             }
+        }
+    }
+    m = family == AF_INET ? 0 : nd6_snapshot(rows6, ND6_CACHE_SIZE);
+    for (k = 0; k < m; k++) {
+        if (want == 0 || (uint32_t)rows6[k].ifindex == want) {
+            neigh6_msg(b, &rows6[k]);
         }
     }
 }
@@ -614,7 +658,63 @@ static void addr_msg(struct nl_build *b, const struct netdev *nd, uint32_t ip, u
     nl_append(b, msg);
 }
 
-/** Append every address of `nd`, its first then the others. */
+/** The seconds left of the lifetime `life` of an address given or renewed
+ * `age` seconds ago, NETDEV_LIFETIME_FOREVER for none. */
+static uint32_t life_left(uint32_t life, uint32_t age)
+{
+    return life == NETDEV_LIFETIME_FOREVER ? life : life > age ? life - age : 0;
+}
+
+/**
+ * Append the IPv6 address `a` of `nd`: its prefix, its state in Linux's
+ * IFA_F_ bits, its scope and who made it; and in IFA_CACHEINFO the seconds
+ * left of its preferred and valid lifetimes, 2^32 - 1 for forever, with the
+ * time it was given or renewed in hundredths of a second since boot as both
+ * stamps, which `ip -6 addr` prints as `valid_lft` and `preferred_lft`.
+ */
+static void addr6_msg(struct nl_build *b, const struct netdev *nd, const struct netdev_addr6 *a)
+{
+    uint8_t msg[NL_MSG_MAX];
+    uint8_t *ifa = msg_start(b, msg, RTM_NEWADDR, NLM_F_MULTI, 8);
+    uint8_t ci[16];
+    uint64_t secs = tick_div(tick_count() - a->since, TICK_HZ, 0);
+    uint32_t age = secs < 0xFFFFFFFEu ? (uint32_t)secs : 0xFFFFFFFEu;
+    uint32_t stamp = (uint32_t)TICKS_TO_CLOCK(a->since);
+
+    ifa[0] = AF_INET6;
+    ifa[1] = a->prefix;
+    ifa[2] = a->flags;
+    ifa[3] = a->scope;
+    put32(ifa + 4, (uint32_t)nd->index);
+    msg_attr(msg, IFA_ADDRESS, a->addr, IP6_ADDR_LEN);
+    put32(ci, life_left(a->preferred, age));
+    put32(ci + 4, life_left(a->valid, age));
+    put32(ci + 8, stamp);
+    put32(ci + 12, stamp);
+    msg_attr(msg, IFA_CACHEINFO, ci, sizeof(ci));
+    msg_attr32(msg, IFA_FLAGS, a->flags);
+    if (a->proto != NETDEV_PROTO_UNSPEC) {
+        msg_attr(msg, IFA_PROTO, &a->proto, 1);
+    }
+    nl_append(b, msg);
+}
+
+/** Append every IPv6 address of `nd`, from a copy taken under net_lock,
+ * since a removal moves the ones after it. */
+static void addr6_msgs(struct nl_build *b, const struct netdev *nd)
+{
+    struct netdev_addr6 addrs[NETDEV_ADDRS6];
+    uint32_t flags = net_lock();
+    int i, n = nd->naddr6;
+
+    k_memcpy(addrs, nd->addr6, (uint32_t)n * sizeof(addrs[0]));
+    net_unlock(flags);
+    for (i = 0; i < n; i++) {
+        addr6_msg(b, nd, &addrs[i]);
+    }
+}
+
+/** Append every IPv4 address of `nd`, its first then the others. */
 static void addr_msgs(struct nl_build *b, const struct netdev *nd)
 {
     int i;
@@ -657,6 +757,64 @@ static void route_msg(struct nl_build *b, const struct netdev_rt *r)
     }
     msg_attr32(msg, RTA_OIF, (uint32_t)r->ifindex);
     nl_append(b, msg);
+}
+
+/**
+ * Append the IPv6 route `r` with `flags`: a prefix a card's address
+ * implies, one a router advertised or the router itself, or one a program
+ * added, by who made it, in the main table. Every IPv6 route has the
+ * universe's scope and, as on Linux, a router preference, medium; one that
+ * expires has the time left in RTA_CACHEINFO, in hundredths of a second,
+ * which `ip -6 route` prints as `expires`.
+ */
+static void route6_msg(struct nl_build *b, const struct route6_row *r, uint16_t flags)
+{
+    uint8_t msg[NL_MSG_MAX];
+    uint8_t *rtm = msg_start(b, msg, RTM_NEWROUTE, flags, 12);
+    uint8_t ci[32];
+    uint8_t pref = 0;
+
+    rtm[0] = AF_INET6;
+    rtm[1] = r->plen;
+    rtm[4] = RT_TABLE_MAIN;
+    rtm[5] = r->proto;
+    rtm[6] = RT_SCOPE_UNIVERSE;
+    rtm[7] = RTN_UNICAST;
+    msg_attr32(msg, RTA_TABLE, RT_TABLE_MAIN);
+    if (r->plen != 0) {
+        msg_attr(msg, RTA_DST, r->dst, IP6_ADDR_LEN);
+    }
+    msg_attr32(msg, RTA_PRIORITY, r->metric);
+    if (!ip6_is_unspecified(r->gw)) {
+        msg_attr(msg, RTA_GATEWAY, r->gw, IP6_ADDR_LEN);
+    }
+    msg_attr32(msg, RTA_OIF, (uint32_t)r->ifindex);
+    if (r->expires != 0) {
+        k_memset(ci, 0, sizeof(ci));
+        put32(ci + 8, r->expires < 0x7FFFFFFFu / USER_HZ ? r->expires * USER_HZ : 0x7FFFFFFFu);
+        msg_attr(msg, RTA_CACHEINFO, ci, sizeof(ci));
+    }
+    msg_attr(msg, RTA_PREF, &pref, 1);
+    nl_append(b, msg);
+}
+
+/** Append every IPv6 route, each copied out of the table under net_lock
+ * (`route6_at`). */
+static void route6_dump(struct nl_build *b)
+{
+    struct route6_row r;
+    uint32_t flags;
+    int i, more;
+
+    for (i = 0;; i++) {
+        flags = net_lock();
+        more = route6_at(i, &r);
+        net_unlock(flags);
+        if (!more) {
+            break;
+        }
+        route6_msg(b, &r, NLM_F_MULTI);
+    }
 }
 
 /** The destination of an RTM_GETROUTE request, its RTA_DST, or 0 when it
@@ -729,25 +887,31 @@ static int route_get_msg(struct nl_build *b, uint32_t dst)
     return 0;
 }
 
-/** Append the three rules every Linux machine starts with, which are what
- * route lookups here amount to: the local addresses, then the main table,
- * then the empty default table. */
-static void rule_dump(struct nl_build *b)
+/** Append the rules every Linux machine starts with, which are what route
+ * lookups here amount to: for IPv4, of `family` AF_INET or 0, the local
+ * addresses, then the main table, then the empty default table; for IPv6,
+ * of AF_INET6 or 0, the first two. */
+static void rule_dump(struct nl_build *b, uint8_t family)
 {
     static const uint32_t rules[3][2] = {
         {0, RT_TABLE_LOCAL}, {32766, RT_TABLE_MAIN}, {32767, RT_TABLE_DEFAULT}};
     int i;
 
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < 5; i++) {
         uint8_t msg[NL_MSG_MAX];
-        uint8_t *frh = msg_start(b, msg, RTM_NEWRULE, NLM_F_MULTI, 12);
+        uint8_t *frh;
+        int v6 = i >= 3;
 
-        frh[0] = AF_INET;
-        frh[4] = (uint8_t)rules[i][1];
+        if (v6 ? family != 0 && family != AF_INET6 : family != 0 && family != AF_INET) {
+            continue;
+        }
+        frh = msg_start(b, msg, RTM_NEWRULE, NLM_F_MULTI, 12);
+        frh[0] = v6 ? AF_INET6 : AF_INET;
+        frh[4] = (uint8_t)rules[i % 3][1];
         frh[7] = FR_ACT_TO_TBL;
-        msg_attr32(msg, FRA_TABLE, rules[i][1]);
-        if (rules[i][0] != 0) {
-            msg_attr32(msg, FRA_PRIORITY, rules[i][0]);
+        msg_attr32(msg, FRA_TABLE, rules[i % 3][1]);
+        if (rules[i % 3][0] != 0) {
+            msg_attr32(msg, FRA_PRIORITY, rules[i % 3][0]);
         }
         nl_append(b, msg);
     }
@@ -869,12 +1033,136 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
     return 0;
 }
 
+/** The 16-byte attribute `type` of a request, or NULL when it has none or
+ * one of another length. */
+static const uint8_t *req_ip6(const uint8_t *req, uint32_t body, uint32_t fixed, uint16_t type)
+{
+    uint16_t len;
+    const uint8_t *a = req_attr(req, body, fixed, type, &len);
+
+    return a && len == IP6_ADDR_LEN ? a : 0;
+}
+
+/**
+ * Append the answer to `ip -6 route get`: the route the destination of the
+ * request `req`, its RTA_DST, takes, in the scope of its RTA_OIF, as
+ * `ip6_route` and `ip6_source` choose the card, the next hop and the
+ * source, reported as a route looked up (RTM_F_CLONED); or for ::1 or an
+ * address of this machine a local route on `lo`, from that address.
+ * Returns 0, -EINVAL for a request with no IPv6 destination, -ENETUNREACH
+ * when nothing reaches it, or the error of `ip6_source`.
+ */
+static int route6_get_msg(struct nl_build *b, const uint8_t *req, uint32_t body)
+{
+    uint8_t msg[NL_MSG_MAX];
+    uint8_t via[IP6_ADDR_LEN], src[IP6_ADDR_LEN];
+    const uint8_t *dst = req_ip6(req, body, 12, RTA_DST);
+    uint16_t len;
+    const uint8_t *oif = req_attr(req, body, 12, RTA_OIF, &len);
+    uint8_t *rtm;
+    struct netdev *nd;
+    uint32_t lock;
+    int local, rc = 0;
+
+    if (!dst) {
+        return -EINVAL;
+    }
+    lock = net_lock();
+    local = ip6_is_loopback(dst) || (!ip6_is_multicast(dst) && netdev_owner6(dst) != 0);
+    nd = local ? netdev_loopback() : ip6_route(dst, oif && len == 4 ? (int)get32(oif) : 0, via);
+    if (nd && local) {
+        k_memcpy(src, dst, IP6_ADDR_LEN);
+    } else if (nd) {
+        rc = ip6_source(nd, dst, src);
+    }
+    net_unlock(lock);
+    if (!nd) {
+        return -ENETUNREACH;
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    rtm = msg_start(b, msg, RTM_NEWROUTE, 0, 12);
+    rtm[0] = AF_INET6;
+    rtm[1] = 128;
+    rtm[4] = local ? RT_TABLE_LOCAL : RT_TABLE_MAIN;
+    rtm[6] = RT_SCOPE_UNIVERSE;
+    rtm[7] = local ? RTN_LOCAL : RTN_UNICAST;
+    put32(rtm + 8, RTM_F_CLONED);
+    msg_attr32(msg, RTA_TABLE, local ? RT_TABLE_LOCAL : RT_TABLE_MAIN);
+    msg_attr(msg, RTA_DST, dst, IP6_ADDR_LEN);
+    msg_attr32(msg, RTA_OIF, (uint32_t)nd->index);
+    msg_attr(msg, RTA_PREFSRC, src, IP6_ADDR_LEN);
+    if (!local && !ip6_equal(via, dst)) {
+        msg_attr(msg, RTA_GATEWAY, via, IP6_ADDR_LEN);
+    }
+    nl_append(b, msg);
+    return 0;
+}
+
+/**
+ * RTM_NEWADDR and RTM_DELADDR of AF_INET6: an IPv6 address of an
+ * interface, `lo` among them, with its prefix, by IFA_LOCAL or
+ * IFA_ADDRESS. The state taken is IFA_F_NODAD, from the `ifaddrmsg`'s
+ * flags or IFA_FLAGS; an address with lifetimes in IFA_CACHEINFO, where
+ * the preferred comes before the valid, has them, and one with none or
+ * both forever is permanent, as `ip -6 addr add` makes it. Returns the
+ * result of `netconf_add_address6` or `netconf_del_address6`; -ENODEV for
+ * no such interface, -EINVAL for a request with no address; and to add one
+ * the interface has, 0, or -EEXIST with NLM_F_EXCL.
+ */
+static int32_t addr6_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
+{
+    struct netdev *nd = dev_of_index(get32(req + NLMSG_HDRLEN + 4));
+    const uint8_t *addr = req_ip6(req, body, 8, IFA_LOCAL);
+    uint32_t valid = NETDEV_LIFETIME_FOREVER, preferred = NETDEV_LIFETIME_FOREVER;
+    uint32_t state = req[NLMSG_HDRLEN + 2], lock;
+    uint16_t len;
+    const uint8_t *a;
+    int held;
+
+    if (!addr) {
+        addr = req_ip6(req, body, 8, IFA_ADDRESS);
+    }
+    if (!nd) {
+        return -ENODEV;
+    }
+    if (!addr) {
+        return -EINVAL;
+    }
+    if (type == RTM_DELADDR) {
+        return netconf_del_address6(nd, addr);
+    }
+    a = req_attr(req, body, 8, IFA_FLAGS, &len);
+    if (a && len == 4) {
+        state = get32(a);
+    }
+    a = req_attr(req, body, 8, IFA_CACHEINFO, &len);
+    if (a && len >= 8) {
+        preferred = get32(a);
+        valid = get32(a + 4);
+    }
+    lock = net_lock();
+    held = netdev_addr6_of(nd, addr) != 0;
+    net_unlock(lock);
+    if (held) {
+        return (flags & NLM_F_EXCL) ? -EEXIST : 0;
+    }
+    return netconf_add_address6(
+        nd, addr, req[NLMSG_HDRLEN + 1],
+        (int)(state & NETDEV_A6_NODAD) |
+            (valid == NETDEV_LIFETIME_FOREVER && preferred == NETDEV_LIFETIME_FOREVER
+                 ? NETDEV_A6_PERMANENT
+                 : 0),
+        valid, preferred);
+}
+
 /** RTM_NEWADDR and RTM_DELADDR: an address of an interface and its prefix,
  * its first or another. Returns the result of `netconf_add_address` or
  * `netconf_del_address`; -ENODEV for no such interface; -EINVAL for an
  * address of 0 to add; and to add one the interface has, 0, or -EEXIST
  * with NLM_F_EXCL. On `lo` only that last is answered, and the rest is
- * EOPNOTSUPP. */
+ * EOPNOTSUPP. A request of AF_INET6 is `addr6_change`'s. */
 static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
     struct netdev *nd = body >= 8 ? dev_of_index(get32(req + NLMSG_HDRLEN + 4)) : 0;
@@ -882,6 +1170,9 @@ static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, ui
     uint32_t ip = req_ip(req, body, 8, IFA_LOCAL);
     uint32_t mask = prefix == 0 || prefix > 32 ? 0 : 0xFFFFFFFFu << (32 - prefix);
 
+    if (body >= 8 && req[NLMSG_HDRLEN] == AF_INET6) {
+        return addr6_change(req, type, flags, body);
+    }
     if (ip == 0) {
         ip = req_ip(req, body, 8, IFA_ADDRESS);
     }
@@ -964,11 +1255,73 @@ static int32_t added_route_change(struct netdev *nd, uint16_t type, uint16_t fla
     return rc;
 }
 
+/**
+ * RTM_NEWROUTE and RTM_DELROUTE of AF_INET6: a route of the IPv6 table, by
+ * the card RTA_OIF names, else the one a datagram to the gateway leaves
+ * by, else the first; at the metric RTA_PRIORITY gives, else 1024, as
+ * Linux gives a route a program adds, and made by the `rtmsg`'s protocol,
+ * RTPROT_BOOT when it gives none. NLM_F_REPLACE takes the table's route of
+ * that prefix by that card away first. Returns the result of `route6_add`
+ * or `route6_del`, 0 for a route there already without NLM_F_EXCL,
+ * -ENODEV for no card, -EOPNOTSUPP for `lo`, or -EINVAL for a prefix past
+ * 128. A route an address implies is not the table's, and removing it is
+ * -ESRCH.
+ */
+static int32_t route6_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
+{
+    uint8_t dst[IP6_ADDR_LEN], via[IP6_ADDR_LEN];
+    const uint8_t *a = req_ip6(req, body, 12, RTA_DST);
+    const uint8_t *gw = req_ip6(req, body, 12, RTA_GATEWAY);
+    uint32_t plen = req[NLMSG_HDRLEN + 1], metric = 1024, lock;
+    int proto = req[NLMSG_HDRLEN + 5] != 0 ? req[NLMSG_HDRLEN + 5] : ROUTE6_PROTO_BOOT;
+    struct netdev *nd = 0;
+    uint16_t len;
+    const uint8_t *at;
+    int32_t rc;
+
+    k_memset(dst, 0, sizeof(dst));
+    if (a) {
+        k_memcpy(dst, a, IP6_ADDR_LEN);
+    }
+    at = req_attr(req, body, 12, RTA_PRIORITY, &len);
+    if (at && len == 4) {
+        metric = get32(at);
+    }
+    at = req_attr(req, body, 12, RTA_OIF, &len);
+    if (at) {
+        nd = len == 4 ? dev_of_index(get32(at)) : 0;
+    } else if (gw) {
+        lock = net_lock();
+        nd = ip6_route(gw, 0, via);
+        net_unlock(lock);
+    } else if (type == RTM_NEWROUTE) {
+        nd = netdev_first();
+    }
+    if (plen > 128) {
+        return -EINVAL;
+    }
+    if (type == RTM_DELROUTE) {
+        return nd && nd->loopback ? -EOPNOTSUPP : route6_del(at ? nd : 0, dst, (int)plen, gw);
+    }
+    if (!nd) {
+        return -ENODEV;
+    }
+    if (nd->loopback) {
+        return -EOPNOTSUPP;
+    }
+    if (flags & NLM_F_REPLACE) {
+        (void)route6_del(nd, dst, (int)plen, 0);
+    }
+    rc = route6_add(nd, dst, (int)plen, gw, metric, proto);
+    return rc == -EEXIST && !(flags & NLM_F_EXCL) ? 0 : rc;
+}
+
 /** RTM_NEWROUTE and RTM_DELROUTE: the default route of an interface, which
  * is its gateway, the route a subnet implies, which is there while its
  * address is, and any other route, which goes in the table. Returns 0 or a
  * negative errno: -ENODEV for no interface, -EOPNOTSUPP on `lo`, -EINVAL for
- * a prefix past 32, or that of the change. */
+ * a prefix past 32, or that of the change. A request of AF_INET6 is
+ * `route6_change`'s. */
 static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
     struct route_req r;
@@ -977,6 +1330,9 @@ static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, u
     uint16_t len;
     const uint8_t *prio = req_attr(req, body, 12, RTA_PRIORITY, &len);
 
+    if (body >= 12 && req[NLMSG_HDRLEN] == AF_INET6) {
+        return route6_change(req, type, flags, body);
+    }
     r.gw = req_ip(req, body, 12, RTA_GATEWAY);
     r.dst = req_ip(req, body, 12, RTA_DST);
     r.metric = prio && len == 4 ? get32(prio) : 0;
@@ -1005,31 +1361,35 @@ static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, u
 
 /** RTM_DELNEIGH: forget a mapping, which `ip neigh flush` asks for each;
  * RTM_NEWNEIGH: store one by hand, permanent when its state says so, which
- * `ip neigh add ... nud permanent` asks. Returns the result of `arp_forget`
- * or `arp_set`; -EINVAL for a request without an address, with an index no
- * interface has, or, to store, without an interface or a six-byte MAC; or
- * -EOPNOTSUPP on `lo`. */
+ * `ip neigh add ... nud permanent` asks; of the ARP cache, or of the IPv6
+ * neighbour cache for AF_INET6. Returns the result of `arp_forget` or
+ * `arp_set`, or of `nd6_forget` or `nd6_set`; -EINVAL for a request
+ * without an address of its family, with an index no interface has, or, to
+ * store, without an interface or a six-byte MAC; or -EOPNOTSUPP on `lo`. */
 static int32_t neigh_change(const uint8_t *req, uint16_t type, uint32_t body)
 {
-    uint32_t ip = req_ip(req, body, 12, NDA_DST);
+    int v6 = body >= 12 && req[NLMSG_HDRLEN] == AF_INET6;
+    uint32_t ip = v6 ? 0 : req_ip(req, body, 12, NDA_DST);
+    const uint8_t *ip6 = v6 ? req_ip6(req, body, 12, NDA_DST) : 0;
     uint32_t index = body >= 12 ? get32(req + NLMSG_HDRLEN + 4) : 0;
     struct netdev *nd = index != 0 ? dev_of_index(index) : 0;
     uint16_t len;
     const uint8_t *mac = req_attr(req, body, 12, NDA_LLADDR, &len);
+    int permanent = (get16(req + NLMSG_HDRLEN + 8) & NUD_PERMANENT) != 0;
 
-    if (ip == 0 || (index != 0 && !nd)) {
+    if ((v6 ? !ip6 : ip == 0) || (index != 0 && !nd)) {
         return -EINVAL;
     }
     if (nd && nd->loopback) {
         return -EOPNOTSUPP;
     }
     if (type == RTM_DELNEIGH) {
-        return arp_forget(nd, ip);
+        return v6 ? nd6_forget(nd, ip6) : arp_forget(nd, ip);
     }
     if (!nd || !mac || len != 6) {
         return -EINVAL;
     }
-    return arp_set(nd, ip, mac, (get16(req + NLMSG_HDRLEN + 8) & NUD_PERMANENT) != 0);
+    return v6 ? nd6_set(nd, ip6, mac, permanent) : arp_set(nd, ip, mac, permanent);
 }
 
 /** Whether `type` asks for a change rather than a reading. */
@@ -1094,48 +1454,64 @@ static void change_answer(struct nl_build *b, const uint8_t *req, uint16_t type,
 }
 
 /**
- * Append the IPv4 configuration of the interface of index `index`, or of all
- * and of the default with Linux's -1 and -2, as `ip netconf` reads it:
- * forwarding, the reverse-path filter, multicast forwarding, proxy ARP and
- * the routes through a link that is down, each 0, since this stack does none
- * of them.
+ * Append the configuration of `family` of the interface of index `index`,
+ * or of all and of the default with Linux's -1 and -2, as `ip netconf`
+ * reads it: forwarding, the reverse-path filter, which IPv6 has not,
+ * multicast forwarding, proxy ARP or neighbour discovery, and the routes
+ * through a link that is down. Each is 0, since this stack does none of
+ * them, but IPv6's forwarding, which is `net.ipv6.conf.*.forwarding`
+ * (`nd6_conf_get`).
  */
-static void netconf_msg(struct nl_build *b, uint32_t index, uint16_t flags)
+static void netconf_msg(struct nl_build *b, uint8_t family, uint32_t index, uint16_t flags)
 {
     uint8_t msg[NL_MSG_MAX];
     uint8_t *ncm = msg_start(b, msg, RTM_NEWNETCONF, flags, 4);
+    int32_t forwarding = 0;
     uint16_t a;
 
-    ncm[0] = AF_INET;
+    if (family == AF_INET6) {
+        (void)nd6_conf_get(index == NETCONFA_IFINDEX_ALL       ? ND6_CONF_ALL
+                           : index == NETCONFA_IFINDEX_DEFAULT ? ND6_CONF_DEFAULT
+                                                               : (int)index,
+                           ND6_FORWARDING, &forwarding);
+    }
+    ncm[0] = family;
     msg_attr32(msg, NETCONFA_IFINDEX, index);
     for (a = NETCONFA_FORWARDING; a <= NETCONFA_IGNORE_ROUTES_WITH_LINKDOWN; a++) {
-        msg_attr32(msg, a, 0);
+        if (family != AF_INET6 || a != NETCONFA_RP_FILTER) {
+            msg_attr32(msg, a, a == NETCONFA_FORWARDING ? (uint32_t)forwarding : 0);
+        }
     }
     nl_append(b, msg);
 }
 
 /** RTM_GETNETCONF: with NLM_F_DUMP, a message for each interface, then all
- * and the default, for IPv4 or any family; otherwise the one its
- * NETCONFA_IFINDEX names, EINVAL with none and ENODEV for an index no
+ * and the default, for IPv4, for IPv6, or for both with any family;
+ * otherwise the one its NETCONFA_IFINDEX names, of IPv6 for AF_INET6 and
+ * of IPv4 for any other, EINVAL with none and ENODEV for an index no
  * interface has. */
 static void netconf_answer(struct nl_build *b, const uint8_t *req, uint16_t flags, uint32_t body)
 {
     uint16_t len;
     const uint8_t *at;
     uint32_t index;
+    uint8_t family = body >= 1 ? req[NLMSG_HDRLEN] : 0, f;
     int i;
 
     if ((flags & NLM_F_DUMP) == NLM_F_DUMP) {
-        if (body < 1 || req[NLMSG_HDRLEN] == AF_INET || req[NLMSG_HDRLEN] == 0) {
+        for (f = AF_INET; f <= AF_INET6; f = (uint8_t)(f == AF_INET ? AF_INET6 : 255)) {
+            if (family != 0 && family != f) {
+                continue;
+            }
             for (i = 0; i < netdev_seen_count(); i++) {
                 const struct netdev *nd = netdev_at(i);
 
                 if (nd) {
-                    netconf_msg(b, (uint32_t)nd->index, NLM_F_MULTI);
+                    netconf_msg(b, f, (uint32_t)nd->index, NLM_F_MULTI);
                 }
             }
-            netconf_msg(b, NETCONFA_IFINDEX_ALL, NLM_F_MULTI);
-            netconf_msg(b, NETCONFA_IFINDEX_DEFAULT, NLM_F_MULTI);
+            netconf_msg(b, f, NETCONFA_IFINDEX_ALL, NLM_F_MULTI);
+            netconf_msg(b, f, NETCONFA_IFINDEX_DEFAULT, NLM_F_MULTI);
         }
         end_msg(b, 0, 0);
         return;
@@ -1151,17 +1527,20 @@ static void netconf_answer(struct nl_build *b, const uint8_t *req, uint16_t flag
         end_msg(b, req, -ENODEV);
         return;
     }
-    netconf_msg(b, index, 0);
+    netconf_msg(b, family == AF_INET6 ? AF_INET6 : AF_INET, index, 0);
 }
 
 /** Answer the NETLINK_ROUTE request of `type` and `flags`, whose header is
  * `req` and whose body of `body` bytes follows it. In a network namespace
  * with no interface, a change or a question about one finds none, and a
- * dump is empty. */
+ * dump is empty. A dump of addresses, routes, neighbours, rules or
+ * configurations is of the family the first byte of the request's body
+ * names, AF_INET or AF_INET6, or of both for 0, IPv4 first. */
 static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16_t flags,
                    uint32_t body)
 {
     int i, n = netdev_seen_count();
+    uint8_t family = body >= 1 ? req[NLMSG_HDRLEN] : 0;
 
     if (!net_ns_seen()) {
         if (is_change(type) || (flags & NLM_F_DUMP) != NLM_F_DUMP) {
@@ -1186,7 +1565,9 @@ static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16
         return;
     }
     if (type == RTM_GETROUTE && (flags & NLM_F_DUMP) != NLM_F_DUMP) {
-        int rc = route_get_msg(b, route_asked(req, body));
+        int rc = body >= 12 && req[NLMSG_HDRLEN] == AF_INET6
+                     ? route6_get_msg(b, req, body)
+                     : route_get_msg(b, route_asked(req, body));
 
         if (rc != 0) {
             end_msg(b, req, rc);
@@ -1199,7 +1580,7 @@ static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16
     }
     if ((flags & NLM_F_DUMP) == NLM_F_DUMP && (type == RTM_GETRULE || type == RTM_GETQDISC)) {
         if (type == RTM_GETRULE) {
-            rule_dump(b);
+            rule_dump(b, family);
         } else {
             qdisc_dump(b);
         }
@@ -1219,22 +1600,28 @@ static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16
     if (type == RTM_GETROUTE) {
         struct netdev_rt r;
 
-        for (i = 0; netdev_route_at(i, &r); i++) {
+        for (i = 0; family != AF_INET6 && netdev_route_at(i, &r); i++) {
             route_msg(b, &r);
+        }
+        if (family != AF_INET) {
+            route6_dump(b);
         }
         end_msg(b, 0, 0);
         return;
     }
-    for (i = 0; i < n; i++) {
-        const struct netdev *nd = netdev_at(i);
-
-        if (!nd) {
-            continue;
+    for (i = 0; type == RTM_GETLINK && i < n; i++) {
+        if (netdev_at(i)) {
+            link_msg(b, netdev_at(i), NLM_F_MULTI);
         }
-        if (type == RTM_GETLINK) {
-            link_msg(b, nd, NLM_F_MULTI);
-        } else {
-            addr_msgs(b, nd);
+    }
+    for (i = 0; type == RTM_GETADDR && family != AF_INET6 && i < n; i++) {
+        if (netdev_at(i)) {
+            addr_msgs(b, netdev_at(i));
+        }
+    }
+    for (i = 0; type == RTM_GETADDR && family != AF_INET && i < n; i++) {
+        if (netdev_at(i)) {
+            addr6_msgs(b, netdev_at(i));
         }
     }
     end_msg(b, 0, 0);
