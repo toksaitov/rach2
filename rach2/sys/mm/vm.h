@@ -162,7 +162,7 @@ int vm_overlaps(const vm_space_t *vm, uintptr_t start, uintptr_t end);
  * of every region. The region is merged with a neighbour it touches that
  * has the same kind and protection and maps no file, or the same file
  * without a gap. Returns 0, or -1, with nothing changed, for a range that
- * breaks those rules, at VMA_LIMIT, or when the array cannot grow.
+ * breaks those rules, at vm_max_map_count, or when the array cannot grow.
  */
 int vm_insert(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot, vm_type_t type);
 
