@@ -331,10 +331,10 @@ int nla_parse(const uint8_t *data, unsigned len, const struct nla_policy *policy
             break;
         }
         if (type <= maxattr) {
-            if (table[type] || (policy && !policy_ok(attr, &policy[type]))) {
+            if (policy && !policy_ok(attr, &policy[type])) {
                 break;
             }
-            table[type] = attr;
+            table[type] = attr; /* a repeat replaces, as Linux's __nla_parse */
         }
         at += aligned(size);
     }

@@ -29,8 +29,8 @@ A family's private header follows, padded to four bytes, then its attributes.
 An attribute has a native-endian 16-bit length, including its four-byte
 header, a 16-bit type and its payload, padded to four bytes.
 The type's high bits mark a nest or network byte order.
-Unknown attribute IDs are skipped; a truncated attribute, repeated known
-attribute or value outside its policy is
+Unknown attribute IDs are skipped, and a repeated attribute takes its
+last value; a truncated attribute or a value outside its policy is
 .Er EINVAL .
 .Pp
 Set

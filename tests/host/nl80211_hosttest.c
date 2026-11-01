@@ -1457,8 +1457,8 @@ static void auth_assoc_refused(void)
     CHECK(rq_send() == -EINVAL);
 
     assoc_request();
-    rq_u32(NL80211_ATTR_USE_MFP + 0, 0); /* again: the parser refuses repeats */
-    CHECK(rq_send() == -EINVAL);
+    rq_u32(NL80211_ATTR_USE_MFP, NL80211_MFP_OPTIONAL); /* again: the last one counts */
+    CHECK(rq_send() == -EOPNOTSUPP);
     rq_begin(NL80211_CMD_ASSOCIATE, 0);
     rq_u32(NL80211_ATTR_IFINDEX, 2);
     rq_put(NL80211_ATTR_MAC, ap1, 6);
