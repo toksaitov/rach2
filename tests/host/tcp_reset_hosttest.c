@@ -42,10 +42,10 @@ extern int printf(const char *fmt, ...);
 volatile uint64_t kernel_ticks;
 
 /** Return the microsecond clock TCP times its round trips by, for `ss -i`:
- * 10000 to a tick. */
+ * TICK_US to a tick. */
 uint32_t timer_now_us(void)
 {
-    return kernel_ticks * 10000u;
+    return (uint32_t)(kernel_ticks * TICK_US);
 }
 
 /* This machine and its peer, as little-endian words of the bytes 00 to 07. */
@@ -470,8 +470,8 @@ static void test_listener_gone(void)
 /**
  * The key is drawn at the first open after `tcp_init` and not again until the
  * next `tcp_init`. An active and a passive open on the same addresses and
- * ports start at the clock, 2500 to a tick, plus the keyed hash of those
- * twelve bytes.
+ * ports start at the clock, 250000 four-microsecond units a second, plus the
+ * keyed hash of those twelve bytes.
  */
 static void test_isn(void)
 {
@@ -485,7 +485,7 @@ static void test_isn(void)
     sock.type = SOCK_STREAM;
     sock.local_port = SELF_PORT;
     kernel_ticks = 123456;
-    want = 123456u * 2500u + SIP_LOW32;
+    want = 123456u * (250000u / TICK_HZ) + SIP_LOW32;
     CHECK("an open can be started", tcp_connect(&sock, net_addr4(PEER), PEER_PORT) == 0);
     CHECK("the first open draws the four words of the key", key_draws == 4);
     CHECK("an active open starts at the clock plus the keyed hash of its addresses and ports",
@@ -509,7 +509,7 @@ static void test_isn(void)
     n_segs = 0;
     rx(SELF_PORT, 4242, 0, F_SYN);
     CHECK("a passive open starts at the clock plus the same keyed hash",
-          n_segs == 1 && segs[0].seq == 7u * 2500u + SIP_LOW32);
+          n_segs == 1 && segs[0].seq == 7u * (250000u / TICK_HZ) + SIP_LOW32);
     tcp_close(&lsock);
 
     reset_all();

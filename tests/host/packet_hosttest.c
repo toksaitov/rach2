@@ -613,7 +613,7 @@ static void test_tx_hold(void)
     ip_hold_resolved(&the_iface, 0x0A000202u, mac);
     CHECK("and only once", tx_frames == 1);
     ip_tx(0x0A000202u, IP_PROTO_ICMP, payload, 40, IP_TTL_DEFAULT);
-    kernel_ticks += 301;
+    kernel_ticks += IP_HOLD_TICKS + 1u;
     ip_hold_resolved(&the_iface, 0x0A000202u, mac);
     CHECK("a datagram held for more than three seconds is dropped", tx_frames == 1);
 }

@@ -180,69 +180,72 @@ static int answer_at(uint32_t ticks, uint8_t code)
     return n_data_writes - before;
 }
 
+/* The tick 10 ms * `n` after the boot, the unit the LED rows count in. */
+#define T(n) ((uint32_t)(n) * (TICK_HZ / 100u))
+
 /** The LED command's rows, after the handler's. */
 static void leds_rows(void)
 {
     int k;
 
-    CHECK("no command before kbd_init", tick_at(100) == 0);
+    CHECK("no command before kbd_init", tick_at(T(100)) == 0);
     kbd_init();
 
     /* The first command, at once, with the LEDs dark. */
-    CHECK("first tick writes 0xED", tick_at(100) == 1 && last_write() == 0xED);
-    CHECK("no second byte before the ACK", tick_at(101) == 0);
+    CHECK("first tick writes 0xED", tick_at(T(100)) == 1 && last_write() == 0xED);
+    CHECK("no second byte before the ACK", tick_at(T(101)) == 0);
     keys = 0;
-    CHECK("ACK of 0xED writes the LED byte", answer_at(102, 0xFA) == 1 && last_write() == 0x00);
+    CHECK("ACK of 0xED writes the LED byte", answer_at(T(102), 0xFA) == 1 && last_write() == 0x00);
     CHECK("ACK of 0xED is not a key", keys == 0);
-    CHECK("ACK of the LED byte writes nothing", answer_at(103, 0xFA) == 0);
+    CHECK("ACK of the LED byte writes nothing", answer_at(T(103), 0xFA) == 0);
     CHECK("ACK of the LED byte is not a key", keys == 0);
-    CHECK("nothing more while the LEDs show what is wanted", tick_at(200) == 0);
+    CHECK("nothing more while the LEDs show what is wanted", tick_at(T(200)) == 0);
 
     /* A change: Caps Lock and Num Lock, 50 ms after the last command. */
     CHECK("an ACK with no command waiting is a key",
-          answer_at(201, 0xFA) == 0 && keys == 1 && last_key == 0xFA);
+          answer_at(T(201), 0xFA) == 0 && keys == 1 && last_key == 0xFA);
     wanted_leds = 0x06;
-    CHECK("a change starts a command", tick_at(201) == 1 && last_write() == 0xED);
-    CHECK("its LED byte is the mask", answer_at(202, 0xFA) == 1 && last_write() == 0x06);
+    CHECK("a change starts a command", tick_at(T(201)) == 1 && last_write() == 0xED);
+    CHECK("its LED byte is the mask", answer_at(T(202), 0xFA) == 1 && last_write() == 0x06);
     keys = 0;
-    CHECK("a key while the LED byte is out is a key", answer_at(203, 0x1E) == 0 && keys == 1);
-    CHECK("the ACK still ends the command", answer_at(203, 0xFA) == 0 && keys == 1);
+    CHECK("a key while the LED byte is out is a key", answer_at(T(203), 0x1E) == 0 && keys == 1);
+    CHECK("the ACK still ends the command", answer_at(T(203), 0xFA) == 0 && keys == 1);
     wanted_leds = 0x01;
-    CHECK("no command within 50 ms of the last", tick_at(207) == 0);
-    CHECK("the next 50 ms after", tick_at(208) == 1 && last_write() == 0xED);
+    CHECK("no command within 50 ms of the last", tick_at(T(207)) == 0);
+    CHECK("the next 50 ms after", tick_at(T(208)) == 1 && last_write() == 0xED);
 
     /* RESEND writes the byte again. */
-    CHECK("RESEND of 0xED writes it again", answer_at(209, 0xFE) == 1 && last_write() == 0xED);
+    CHECK("RESEND of 0xED writes it again", answer_at(T(209), 0xFE) == 1 && last_write() == 0xED);
     CHECK("RESEND is not a key", keys == 1);
-    CHECK("then the LED byte", answer_at(210, 0xFA) == 1 && last_write() == 0x01);
+    CHECK("then the LED byte", answer_at(T(210), 0xFA) == 1 && last_write() == 0x01);
     CHECK("RESEND of the LED byte writes it again",
-          answer_at(211, 0xFE) == 1 && last_write() == 0x01);
-    CHECK("the ACK ends it", answer_at(212, 0xFA) == 0 && tick_at(300) == 0);
+          answer_at(T(211), 0xFE) == 1 && last_write() == 0x01);
+    CHECK("the ACK ends it", answer_at(T(212), 0xFA) == 0 && tick_at(T(300)) == 0);
 
     /* No answer: written again after 100 ms, given up after three writes. */
     wanted_leds = 0x07;
-    CHECK("a command with no answer", tick_at(300) == 1 && last_write() == 0xED);
-    CHECK("not written again within 100 ms", tick_at(309) == 0);
-    CHECK("written again at 100 ms", tick_at(310) == 1 && last_write() == 0xED);
-    CHECK("and a third time", tick_at(320) == 1 && last_write() == 0xED);
-    CHECK("then given up, with a warning", tick_at(330) == 0 && warnings == 1);
-    CHECK("not tried again for the same LEDs", tick_at(400) == 0);
+    CHECK("a command with no answer", tick_at(T(300)) == 1 && last_write() == 0xED);
+    CHECK("not written again within 100 ms", tick_at(T(309)) == 0);
+    CHECK("written again at 100 ms", tick_at(T(310)) == 1 && last_write() == 0xED);
+    CHECK("and a third time", tick_at(T(320)) == 1 && last_write() == 0xED);
+    CHECK("then given up, with a warning", tick_at(T(330)) == 0 && warnings == 1);
+    CHECK("not tried again for the same LEDs", tick_at(T(400)) == 0);
 
     /* A full input buffer: nothing written until it empties. */
     wanted_leds = 0x02;
     model_status = PS2_STATUS_INPUT_FULL;
-    kernel_ticks = 400;
+    kernel_ticks = T(400);
     k = n_data_writes;
     ps2kbd_tick();
     CHECK("nothing written into a full buffer", n_data_writes == k);
-    CHECK("written once it empties", tick_at(401) == 1 && last_write() == 0xED);
-    kernel_ticks = 402;
+    CHECK("written once it empties", tick_at(T(401)) == 1 && last_write() == 0xED);
+    kernel_ticks = T(402);
     model_status = KEYBOARD_BYTE | PS2_STATUS_INPUT_FULL;
     model_data = 0xFA;
     kbd_irq(0);
     CHECK("no LED byte into a full buffer after the ACK", n_data_writes == k + 1);
-    CHECK("the LED byte at the next tick", tick_at(403) == 1 && last_write() == 0x02);
-    CHECK("its ACK ends the command", answer_at(404, 0xFA) == 0 && tick_at(500) == 0);
+    CHECK("the LED byte at the next tick", tick_at(T(403)) == 1 && last_write() == 0x02);
+    CHECK("its ACK ends the command", answer_at(T(404), 0xFA) == 0 && tick_at(T(500)) == 0);
     CHECK("one warning in all", warnings == 1);
 }
 

@@ -196,11 +196,24 @@ static int kd_count(int value)
     return n;
 }
 
+/* The tick count `ms` milliseconds past 10 s, where the repeat rows run. */
+#define AT(ms) ((10000u + (ms)) / TICK_MS)
+
 /** Run the tick once at each count from the one after now to `to`. */
 static void tick_to(uint32_t to)
 {
     while (kernel_ticks != to) {
         kernel_ticks++;
+        input_tick();
+    }
+}
+
+/** Run the tick once every 10 ms from now to `to`, as a tick of 100 Hz
+ * would, so that a repeat comes only at those ticks. */
+static void tick_by_10ms(uint32_t to)
+{
+    while (kernel_ticks != to) {
+        kernel_ticks += 10u / TICK_MS;
         input_tick();
     }
 }
@@ -378,16 +391,17 @@ static void test_repeat(struct input_keyboard *kb1, struct input_keyboard *kb2)
     input_get_repeat(&delay, &period);
     CHECK("the repeat starts at Linux's 250 and 33 ms", delay == 250 && period == 33);
 
-    kernel_ticks = 1000;
+    kernel_ticks = AT(0);
     clear();
     key(kb1, KEY_A, 1);
-    tick_to(1024);
+    tick_to(AT(240));
     CHECK("no repeat before the delay", kd_count(KD_KEY_REPEAT) == 0);
-    tick_to(1025);
+    tick_to(AT(250));
     CHECK("the first repeat at 250 ms", kd_count(KD_KEY_REPEAT) == 1);
-    tick_to(1125);
-    /* Due at 250 + 33k ms: 31 by 1250 ms. A deadline taken from the tick
-     * that sent the last repeat would give one every 40 ms, 26. */
+    tick_by_10ms(AT(1250));
+    /* Due at 250 + 33k ms: 31 by 1250 ms, at ticks 10 ms apart. A deadline
+     * taken from the tick that sent the last repeat would give one every
+     * 40 ms, 26. */
     CHECK("the deadlines accumulate: 31 repeats in 1250 ms", kd_count(KD_KEY_REPEAT) == 31);
     CHECK("a repeat reaches the raw view as the make code again",
           n_raw == 32 && raw_bytes[31] == 0x1E);
@@ -397,12 +411,12 @@ static void test_repeat(struct input_keyboard *kb1, struct input_keyboard *kb2)
 
     clear();
     key(kb1, KEY_LEFTSHIFT, 1);
-    tick_to(1135);
+    tick_to(AT(1350));
     CHECK("a modifier pressed keeps the key repeating",
           kd_count(KD_KEY_REPEAT) == 3 && kd_events[n_kd - 1].keycode == KEY_A);
     key(kb1, KEY_LEFTSHIFT, 0);
     key(kb1, KEY_CAPSLOCK, 1);
-    tick_to(1145);
+    tick_to(AT(1450));
     key(kb1, KEY_CAPSLOCK, 0);
     for (i = 0; i < n_kd; i++) {
         CHECK("neither a modifier nor a lock repeats",
@@ -411,38 +425,38 @@ static void test_repeat(struct input_keyboard *kb1, struct input_keyboard *kb2)
 
     clear();
     key(kb2, KEY_B, 1);
-    tick_to(1160);
+    tick_to(AT(1600));
     CHECK("another key's press takes the repeat", kd_count(KD_KEY_REPEAT) == 0 && n_kd == 1);
-    tick_to(1170);
+    tick_to(AT(1700));
     CHECK("and repeats after its own delay", kd_count(KD_KEY_REPEAT) == 1 &&
                                                  kd_events[n_kd - 1].keycode == KEY_B &&
                                                  kd_events[n_kd - 1].device == kb2);
     key(kb1, KEY_A, 0);
     clear();
-    tick_to(1180);
+    tick_to(AT(1800));
     CHECK("a release of another key leaves the repeat", kd_count(KD_KEY_REPEAT) == 3);
     key(kb2, KEY_B, 0);
     clear();
-    tick_to(1300);
+    tick_to(AT(3000));
     CHECK("the release of the repeating key stops it", n_kd == 0);
 
     clear();
     key(kb1, KEY_A, 1);
-    tick_to(1330);
+    tick_to(AT(3300));
     input_cancel_repeat();
-    tick_to(1400);
+    tick_to(AT(4000));
     CHECK("input_cancel_repeat stops it", kd_count(KD_KEY_REPEAT) == 2);
     key(kb1, KEY_A, 0);
 
     clear();
     key(kb1, KEY_A, 1);
-    tick_to(1425);
-    kernel_ticks = 1525;
+    tick_to(AT(4250));
+    kernel_ticks = AT(5250);
     input_tick();
     CHECK("a late tick sends at most four", kd_count(KD_KEY_REPEAT) == 5);
-    tick_to(1528);
+    tick_to(AT(5280));
     CHECK("and counts again from then", kd_count(KD_KEY_REPEAT) == 5);
-    tick_to(1529);
+    tick_to(AT(5290));
     CHECK("a period on", kd_count(KD_KEY_REPEAT) == 6);
     key(kb1, KEY_A, 0);
 
@@ -453,15 +467,15 @@ static void test_repeat(struct input_keyboard *kb1, struct input_keyboard *kb2)
     CHECK("each keyboard's event device is told the times",
           rep_delay[slot_of(kb1->dev)] == 500 && rep_period[slot_of(kb2->dev)] == 33);
     key(kb1, KEY_A, 1);
-    tick_to(1578);
+    tick_to(AT(5780));
     CHECK("the set delay holds", kd_count(KD_KEY_REPEAT) == 0);
-    tick_to(1579);
+    tick_to(AT(5790));
     CHECK("the first repeat comes at the set delay", kd_count(KD_KEY_REPEAT) == 1);
     key(kb1, KEY_A, 0);
     input_set_repeat(250, 0);
     clear();
     key(kb1, KEY_A, 1);
-    tick_to(1800);
+    tick_to(AT(8000));
     CHECK("a period of 0 is no repeat", kd_count(KD_KEY_REPEAT) == 0);
     key(kb1, KEY_A, 0);
     input_set_repeat(250, 33);
@@ -481,7 +495,7 @@ static void test_detach(struct input_keyboard *kb1, struct input_keyboard *kb2)
           n_kd == 4 && kd_count(KD_KEY_RELEASE) == 2 && input_modifiers() == 0);
     CHECK("its event device is taken away", unregistered == 1 && kb2->dev == NULL);
     clear();
-    tick_to(kernel_ticks + 100);
+    tick_to((uint32_t)kernel_ticks + 1000u / TICK_MS);
     CHECK("and its repeat stops", n_kd == 0);
     input_set_leds(LED_NUM);
     CHECK("the LEDs reach the keyboards attached", leds[slot_of(kb1->dev)] == 1u << LED_NUML);

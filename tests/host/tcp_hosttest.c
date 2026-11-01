@@ -39,12 +39,12 @@ extern void *malloc(unsigned long n);
 volatile uint64_t kernel_ticks;
 
 /**
- * Return the microsecond clock TCP times its round trips by, for `ss -i`: 10000
- * to a tick.
+ * Return the microsecond clock TCP times its round trips by, for `ss -i`:
+ * TICK_US to a tick.
  */
 uint32_t timer_now_us(void)
 {
-    return kernel_ticks * 10000u;
+    return (uint32_t)(kernel_ticks * TICK_US);
 }
 
 #define MAX_SEGS 64
