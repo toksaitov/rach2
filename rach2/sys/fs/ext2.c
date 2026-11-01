@@ -33,6 +33,7 @@
 #define EXT2_COMPAT_DIR_INDEX    0x0020u
 #define EXT2_RO_SPARSE_SUPER     0x0001u
 #define EXT2_RO_LARGE_FILE       0x0002u
+#define EXT2_RO_EXTRA_ISIZE      0x0040u
 #define EXT2_INCOMPAT_FILETYPE   0x0002u
 
 #define EXT2_VALID_FS 0x0001u
@@ -57,6 +58,43 @@
 #define PATH_DEPTH         (VFS_PATH_MAX / 2)
 #define BCACHE_BLOCK_SHIFT 12 /* log2 of BCACHE_BLOCK_BYTES */
 
+/*
+ * The fields of a large inode past its first 128 bytes, as offsets from the
+ * start of the slot: `i_extra_isize`, which counts the bytes in use after
+ * the first 128, then the extra words of the change, modification and
+ * access times, and the creation time with its own. An extra word holds the
+ * nanoseconds in its high 30 bits and, in its low two, the epoch: bits 32
+ * and 33 added to the signed 32-bit seconds, which reach 2446. EXT2_LARGE
+ * is the part of the slot this driver reads and writes, and
+ * EXT2_EXTRA_NEW the extra bytes a new inode has, which cover every field.
+ */
+#define EXT2_GOOD_OLD     128u
+#define EXT2_EXTRA_ISIZE  128u
+#define EXT2_CTIME_EXTRA  132u
+#define EXT2_MTIME_EXTRA  136u
+#define EXT2_ATIME_EXTRA  140u
+#define EXT2_CRTIME       144u
+#define EXT2_CRTIME_EXTRA 148u
+#define EXT2_LARGE        160u
+#define EXT2_EXTRA_NEW    32u
+
+/* The range of seconds an inode holds: 32 signed bits alone, and with the
+ * two epoch bits of an extra word. */
+#define EXT2_TIME_MIN       (-2147483647 - 1)
+#define EXT2_TIME_MAX32     2147483647
+#define EXT2_TIME_MAX_EXTRA (((int64_t)3 << 32) + 2147483647)
+
+/* A time of an inode: seconds, and nanoseconds where the inode keeps them. */
+struct ext2_time {
+    int64_t sec;
+    uint32_t nsec;
+};
+
+/* The times `stamp` sets. */
+#define T_ATIME 1
+#define T_MTIME 2
+#define T_CTIME 4
+
 /* An inode in memory, from the heap, on its mount's list. */
 struct ext2_node {
     struct ext2_node *next; /* the mount's list of nodes in memory */
@@ -68,12 +106,14 @@ struct ext2_node {
     uint64_t size;                /* 64 bits for a regular file, 32 for the rest */
     uint32_t blocks;              /* i_blocks, in 512-byte units */
     uint32_t block[EXT2_NBLOCKS]; /* 12 direct, then single, double and triple indirect */
-    uint32_t atime, mtime, ctime;
-    uint32_t flags;      /* i_flags, which the VFS enforces in part */
-    uint32_t generation; /* i_generation, new for each inode made */
-    uint32_t file_acl;   /* i_file_acl: the extended-attribute block, or 0 */
-    uint32_t add_from;   /* a directory's offset of the block where the last entry went */
-    int unlinked;        /* no name left; the inode and its blocks go at the last put */
+    struct ext2_time atime, mtime, ctime;
+    struct ext2_time crtime; /* i_crtime, kept where `extra_isize` covers it */
+    uint32_t extra_isize;    /* i_extra_isize; 0 for a 128-byte inode */
+    uint32_t flags;          /* i_flags, which the VFS enforces in part */
+    uint32_t generation;     /* i_generation, new for each inode made */
+    uint32_t file_acl;       /* i_file_acl: the extended-attribute block, or 0 */
+    uint32_t add_from;       /* a directory's offset of the block where the last entry went */
+    int unlinked;            /* no name left; the inode and its blocks go at the last put */
 };
 
 /* `write_bytes`'s ways to write on a mount with `sync` or `dirsync`
@@ -150,7 +190,8 @@ struct ext2_mount {
     uint32_t reserved_gdt; /* blocks kept after each descriptor table for a grow */
     uint32_t r_blocks;     /* blocks only a privileged caller may take */
     uint32_t compat, incompat, ro_compat;
-    uint32_t state; /* s_state: EXT2_VALID_FS and EXT2_ERROR_FS */
+    uint32_t new_extra; /* the i_extra_isize of an inode made here, 0 on 128-byte inodes */
+    uint32_t state;     /* s_state: EXT2_VALID_FS and EXT2_ERROR_FS */
     /* The generation the next inode made gets, counted from the mount's
      * second, so a number reused for another file has another generation. */
     uint32_t next_generation;
@@ -393,16 +434,43 @@ static int data_block_ok(const struct ext2_mount *em, uint32_t b)
 
 /* ---- inodes ---- */
 
+/** Whether inode `n`'s extra bytes reach `end`, an offset in its slot: the
+ * extra field that ends there is kept. */
+static int extra_has(const struct ext2_node *n, uint32_t end)
+{
+    return EXT2_GOOD_OLD + n->extra_isize >= end;
+}
+
+/** The time whose low word is at `raw + lo` and, where the inode's extra
+ * bytes reach past `extra`, whose extra word is there. */
+static struct ext2_time time_load(const struct ext2_node *n, const uint8_t *raw, uint32_t lo,
+                                  uint32_t extra)
+{
+    struct ext2_time t;
+    uint32_t word;
+
+    t.sec = (int32_t)le32(raw + lo);
+    t.nsec = 0;
+    if (extra_has(n, extra + 4)) {
+        word = le32(raw + extra);
+        t.sec += (int64_t)(word & 3u) << 32;
+        t.nsec = word >> 2;
+    }
+    return t;
+}
+
 /**
  * Load inode `ino` into `n`: its number checked against the count, its
  * table found through its group's descriptor. The first 128 bytes of the
- * slot are read; the owner and group have their high halves at bytes 120
- * and 122, and a regular file's size has its high word at byte 108. 0, or
- * -EIO.
+ * slot are read, and of a larger slot the extra fields up to EXT2_LARGE;
+ * the owner and group have their high halves at bytes 120 and 122, and a
+ * regular file's size has its high word at byte 108. An `i_extra_isize`
+ * that is not a multiple of 4 or passes the slot is -EIO, as on Linux's
+ * ext4. 0, or -EIO.
  */
 static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
 {
-    uint8_t raw[128];
+    uint8_t raw[EXT2_LARGE];
     uint32_t g, index, table;
     uint64_t at;
     int i, rc;
@@ -415,18 +483,32 @@ static int inode_load(struct ext2_mount *em, uint32_t ino, struct ext2_node *n)
     index = (ino - 1) % em->ipg;
     table = le32(em->gd + g * 32 + 8);
     at = (uint64_t)table * em->block_size + (uint64_t)index * em->inode_size;
-    rc = read_bytes(em, at, raw, sizeof(raw));
+    rc = read_bytes(em, at, raw, em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD);
     if (rc != 0) {
         return rc;
     }
     n->ino = ino;
+    n->extra_isize = 0;
+    if (em->inode_size > EXT2_GOOD_OLD) {
+        n->extra_isize = le16(raw + EXT2_EXTRA_ISIZE);
+        if ((n->extra_isize & 3u) || EXT2_GOOD_OLD + n->extra_isize > em->inode_size) {
+            klog(KLOG_WARN, "ext2", "inode %d: extra size %d does not fit its %d bytes", (int)ino,
+                 (int)n->extra_isize, (int)em->inode_size);
+            return -EIO;
+        }
+    }
     n->mode = le16(raw + 0);
     n->uid = le16(raw + 2) | (le16(raw + 120) << 16);
     n->gid = le16(raw + 24) | (le16(raw + 122) << 16);
     n->size = le32(raw + 4);
-    n->atime = le32(raw + 8);
-    n->ctime = le32(raw + 12);
-    n->mtime = le32(raw + 16);
+    n->atime = time_load(n, raw, 8, EXT2_ATIME_EXTRA);
+    n->ctime = time_load(n, raw, 12, EXT2_CTIME_EXTRA);
+    n->mtime = time_load(n, raw, 16, EXT2_MTIME_EXTRA);
+    n->crtime.sec = 0;
+    n->crtime.nsec = 0;
+    if (extra_has(n, EXT2_CRTIME + 4)) {
+        n->crtime = time_load(n, raw, EXT2_CRTIME, EXT2_CRTIME_EXTRA);
+    }
     n->nlink = le16(raw + 26);
     n->blocks = le32(raw + 28);
     n->flags = le32(raw + 32);
@@ -898,9 +980,12 @@ static int ext2_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
         }
         st->rdev = (major << 8) | (minor & 0xFFu) | ((minor & 0xFFF00u) << 12);
     }
-    st->atime_sec = (int32_t)n->atime;
-    st->mtime_sec = (int32_t)n->mtime;
-    st->ctime_sec = (int32_t)n->ctime;
+    st->atime_sec = n->atime.sec;
+    st->atime_nsec = n->atime.nsec;
+    st->mtime_sec = n->mtime.sec;
+    st->mtime_nsec = n->mtime.nsec;
+    st->ctime_sec = n->ctime.sec;
+    st->ctime_nsec = n->ctime.nsec;
     st->blocks = n->blocks;
     st->blocks_known = 1;
     st->flags = n->flags & EXT2_FL_USER_VISIBLE;
@@ -1519,13 +1604,67 @@ static uint32_t time_seconds(int64_t sec)
     return (uint32_t)sec;
 }
 
-/** The real time in seconds, clamped to ext2's signed 32-bit range. */
+/** The real time in seconds, clamped to ext2's signed 32-bit range, for
+ * the deletion time and the generation. */
 static uint32_t now_seconds(void)
 {
     int64_t sec = 0, nsec = 0;
 
     rtc_realtime(&sec, &nsec);
     return time_seconds(sec);
+}
+
+/**
+ * The time `sec` and `nsec` as inode `n` can hold it in the field whose
+ * extra word ends at `extra_end`: with the extra word, seconds from 1901
+ * to 2446 and the nanoseconds; without, ext2's signed 32-bit seconds and
+ * no nanoseconds. Seconds past either end are clamped to it.
+ */
+static struct ext2_time time_fit(const struct ext2_node *n, uint32_t extra_end, int64_t sec,
+                                 int64_t nsec)
+{
+    struct ext2_time t;
+    int64_t max = extra_has(n, extra_end) ? EXT2_TIME_MAX_EXTRA : EXT2_TIME_MAX32;
+
+    t.sec = sec < EXT2_TIME_MIN ? EXT2_TIME_MIN : sec > max ? max : sec;
+    t.nsec = 0;
+    if (extra_has(n, extra_end) && nsec > 0 && nsec < 1000000000) {
+        t.nsec = (uint32_t)nsec;
+    }
+    return t;
+}
+
+/** Set the times of `n` that `which` selects (T_ATIME, T_MTIME, T_CTIME)
+ * to the real time, as finely as the inode keeps each. */
+static void stamp(struct ext2_node *n, int which)
+{
+    int64_t sec = 0, nsec = 0;
+
+    rtc_realtime(&sec, &nsec);
+    if (which & T_ATIME) {
+        n->atime = time_fit(n, EXT2_ATIME_EXTRA + 4, sec, nsec);
+    }
+    if (which & T_MTIME) {
+        n->mtime = time_fit(n, EXT2_MTIME_EXTRA + 4, sec, nsec);
+    }
+    if (which & T_CTIME) {
+        n->ctime = time_fit(n, EXT2_CTIME_EXTRA + 4, sec, nsec);
+    }
+}
+
+/** Put time `t` into the low word at `raw + lo` and, where the extra bytes
+ * of `n` reach past `extra`, the extra word there. `t` is in the range
+ * `time_fit` gives. */
+static void time_put(const struct ext2_node *n, uint8_t *raw, uint32_t lo, uint32_t extra,
+                     struct ext2_time t)
+{
+    uint32_t low = (uint32_t)(uint64_t)t.sec;
+    uint32_t epoch = (uint32_t)((uint64_t)(t.sec - (int32_t)low) >> 32) & 3u;
+
+    LE32_PUT(raw + lo, low);
+    if (extra_has(n, extra + 4)) {
+        LE32_PUT(raw + extra, epoch | (t.nsec << 2));
+    }
 }
 
 /**
@@ -1672,18 +1811,22 @@ static int large_file_flag(struct ext2_mount *em)
     return write_bytes(em, 1024 + 100, raw, 4, 1);
 }
 
-/** Encode the fields of `n` this driver keeps into the 128-byte inode `raw`,
- * leaving its other bytes as they are; the deletion time is cleared. */
-static void inode_encode(const struct ext2_node *n, uint8_t *raw)
+/**
+ * Encode the fields of `n` this driver keeps into the inode `raw`, leaving
+ * its other bytes as they are; the deletion time is cleared. On a volume of
+ * large inodes `raw` has EXT2_LARGE bytes or more, and the extra size and
+ * the extra fields it covers are written too.
+ */
+static void inode_encode(const struct ext2_mount *em, const struct ext2_node *n, uint8_t *raw)
 {
     int i;
 
     LE16_PUT(raw + 0, n->mode);
     LE16_PUT(raw + 2, n->uid & 0xFFFFu);
     LE32_PUT(raw + 4, (uint32_t)n->size);
-    LE32_PUT(raw + 8, n->atime);
-    LE32_PUT(raw + 12, n->ctime);
-    LE32_PUT(raw + 16, n->mtime);
+    time_put(n, raw, 8, EXT2_ATIME_EXTRA, n->atime);
+    time_put(n, raw, 12, EXT2_CTIME_EXTRA, n->ctime);
+    time_put(n, raw, 16, EXT2_MTIME_EXTRA, n->mtime);
     LE32_PUT(raw + 20, 0); /* i_dtime: a live inode has none, whatever it had */
     LE16_PUT(raw + 24, n->gid & 0xFFFFu);
     LE16_PUT(raw + 26, n->nlink);
@@ -1699,35 +1842,45 @@ static void inode_encode(const struct ext2_node *n, uint8_t *raw)
     if ((n->mode & S_IFMT_) == S_IFREG_) {
         LE32_PUT(raw + 108, (uint32_t)(n->size >> 32));
     }
+    if (em->inode_size > EXT2_GOOD_OLD) {
+        LE16_PUT(raw + EXT2_EXTRA_ISIZE, n->extra_isize);
+        if (extra_has(n, EXT2_CRTIME + 4)) {
+            time_put(n, raw, EXT2_CRTIME, EXT2_CRTIME_EXTRA, n->crtime);
+        }
+    }
 }
 
 /**
  * Write inode `n` in the way `how` says, over the bytes its slot has, or
  * over zeros when `fresh`, for an inode just allocated: a freed inode's
  * slot keeps what it had, and the encoder writes only the fields this
- * driver keeps. Inside a batch the write is left for the batch's end. A
- * regular file of 2 GiB or more sets `large_file` first. A store while the
+ * driver keeps. A fresh inode is written over its whole slot, so that a
+ * large slot loses the attributes a freed inode kept in it; any other
+ * store writes the part of the slot the encoder covers. Inside a batch the write is left for the
+ * batch's end. A regular file of 2 GiB or more sets `large_file` first. A store while the
  * file-write batch holds inodes is a panic, since it must come after their
  * drain. 0, or -errno.
  */
 static int inode_write(struct ext2_mount *em, const struct ext2_node *n, int fresh, int how)
 {
-    uint8_t raw[128];
+    uint8_t raw[256];
     uint64_t at = inode_offset(em, n->ino);
+    uint32_t len = em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD;
     int rc;
 
     if (em->wb && em->wb->count) {
         k_panic("ext2: inode store before writeback drain");
     }
     if (fresh) {
-        k_memset(raw, 0, sizeof(raw));
+        len = em->inode_size;
+        k_memset(raw, 0, len);
     } else {
-        rc = read_bytes(em, at, raw, sizeof(raw));
+        rc = read_bytes(em, at, raw, len);
         if (rc != 0) {
             return rc;
         }
     }
-    inode_encode(n, raw);
+    inode_encode(em, n, raw);
     if ((n->mode & S_IFMT_) == S_IFREG_ && n->size >= 0x80000000u &&
         !(em->ro_compat & EXT2_RO_LARGE_FILE)) {
         rc = large_file_flag(em);
@@ -1735,12 +1888,12 @@ static int inode_write(struct ext2_mount *em, const struct ext2_node *n, int fre
             return rc;
         }
     }
-    return write_bytes(em, at, raw, sizeof(raw), em->batch ? 0 : how);
+    return write_bytes(em, at, raw, len, em->batch ? 0 : how);
 }
 
 /** Write inode `n` as `inode_write` does with WRITE_THROUGH: the fields this
- * driver keeps, over the 128 bytes the slot has, so that what it does not
- * keep stays as it was. */
+ * driver keeps, over the bytes the slot has, so that what it does not keep
+ * stays as it was. */
 static int inode_store(struct ext2_mount *em, const struct ext2_node *n)
 {
     return inode_write(em, n, 0, WRITE_THROUGH);
@@ -2794,7 +2947,7 @@ static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_
     if (offset + len > n->size) {
         n->size = offset + len;
     }
-    n->mtime = n->ctime = now_seconds();
+    stamp(n, T_MTIME | T_CTIME);
     plan->table->dirty = 1;
     wb->bytes += len;
 }
@@ -2889,7 +3042,7 @@ static int writeback_drain(struct ext2_mount *em)
         uint64_t at = inode_offset(em, n->ino);
         struct ext2_image *im = writeback_find(em, (uint32_t)(at >> 12));
 
-        inode_encode(n, im->data + ((uint32_t)at & 4095u));
+        inode_encode(em, n, im->data + ((uint32_t)at & 4095u));
     }
     for (; wb->stage <= WB_INODE; wb->stage++) {
         struct ext2_image *images = wb->stage == WB_DATA ? wb->data : wb->meta;
@@ -3223,7 +3376,7 @@ static int dir_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
             return rc;
         }
         d->size += em->block_size;
-        d->mtime = d->ctime = now_seconds();
+        stamp(d, T_MTIME | T_CTIME);
         rc = inode_store(em, d);
         if (rc != 0) {
             return rc;
@@ -3458,10 +3611,14 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
     }
     n->mode = mode;
     n->nlink = (mode & S_IFMT_) == S_IFDIR_ ? 2 : 1;
-    n->atime = n->mtime = n->ctime = now_seconds();
+    n->extra_isize = em->new_extra;
+    stamp(n, T_ATIME | T_MTIME | T_CTIME);
+    if (extra_has(n, EXT2_CRTIME + 4)) {
+        n->crtime = time_fit(n, EXT2_CRTIME_EXTRA + 4, n->ctime.sec, n->ctime.nsec);
+    }
     n->generation = em->next_generation++;
     rc = store ? inode_write(em, n, 1, WRITE_THROUGH)
-               : write_bytes(em, inode_offset(em, ino), 0, 128, WRITE_THROUGH);
+               : write_bytes(em, inode_offset(em, ino), 0, em->inode_size, WRITE_THROUGH);
     if (rc != 0) {
         node_drop(em, n);
         inode_bit_free(em, ino, (mode & S_IFMT_) == S_IFDIR_);
@@ -3502,15 +3659,15 @@ static int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struc
         n->gid = st->gid;
     }
     if (what & VFS_SET_ATIME) {
-        n->atime = time_seconds(st->atime_sec);
+        n->atime = time_fit(n, EXT2_ATIME_EXTRA + 4, st->atime_sec, st->atime_nsec);
     }
     if (what & VFS_SET_MTIME) {
-        n->mtime = time_seconds(st->mtime_sec);
+        n->mtime = time_fit(n, EXT2_MTIME_EXTRA + 4, st->mtime_sec, st->mtime_nsec);
     }
     if (what & VFS_SET_FLAGS) {
         n->flags = (n->flags & ~EXT2_FL_USER_MODIFIABLE) | (st->flags & EXT2_FL_USER_MODIFIABLE);
     }
-    n->ctime = now_seconds();
+    stamp(n, T_CTIME);
     rc = inode_store(em, n);
     vfs_ns_unlock(mnt);
     return rc;
@@ -3568,7 +3725,7 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         uint32_t keep = (uint32_t)((size + em->block_size - 1) >> em->block_shift);
 
         n->size = size;
-        n->mtime = n->ctime = now_seconds();
+        stamp(n, T_MTIME | T_CTIME);
         rc = inode_store(em, n);
         if (rc == 0 && ((uint32_t)size & (em->block_size - 1)) != 0) {
             uint32_t b;
@@ -3590,7 +3747,7 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         rc = em_sync(em);
         if (rc == 0) {
             n->size = size;
-            n->mtime = n->ctime = now_seconds();
+            stamp(n, T_MTIME | T_CTIME);
             rc = inode_store(em, n);
         }
     }
@@ -3949,7 +4106,7 @@ static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint3
         node_drop(em, n);
         return rc;
     }
-    d->mtime = d->ctime = now_seconds();
+    stamp(d, T_MTIME | T_CTIME);
     rc = inode_times_later(em, d);
     if (rc != 0) {
         mark_error(em);
@@ -4021,7 +4178,7 @@ static int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32
         node_drop(em, n);
         return rc;
     }
-    d->mtime = d->ctime = now_seconds();
+    stamp(d, T_MTIME | T_CTIME);
     rc = inode_times_later(em, d);
     if (rc != 0) {
         mark_error(em);
@@ -4076,7 +4233,7 @@ static int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     if (rc != 0) {
         return rc;
     }
-    d->mtime = d->ctime = now_seconds();
+    stamp(d, T_MTIME | T_CTIME);
     rc = inode_times_later(em, d);
     if (rc != 0) {
         return rc;
@@ -4084,7 +4241,7 @@ static int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     if (n->nlink > 0) {
         n->nlink--;
     }
-    n->ctime = now_seconds();
+    stamp(n, T_CTIME);
     if (n->nlink == 0) {
         if (n == &loaded) {
             return release_inode(em, n);
@@ -4162,7 +4319,7 @@ static int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32
     }
     if (rc == 0) {
         d->nlink++;
-        d->mtime = d->ctime = now_seconds();
+        stamp(d, T_MTIME | T_CTIME);
         rc = inode_store(em, d);
     }
     if (rc == 0) {
@@ -4232,7 +4389,7 @@ static int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     if (d->nlink > 2) {
         d->nlink--;
     }
-    d->mtime = d->ctime = now_seconds();
+    stamp(d, T_MTIME | T_CTIME);
     rc = inode_store(em, d);
     if (rc != 0) {
         return rc;
@@ -4240,7 +4397,7 @@ static int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     if (held) {
         held->nlink = 0;
         held->unlinked = 1;
-        held->ctime = now_seconds();
+        stamp(held, T_CTIME);
         return inode_store(em, held);
     }
     loaded.nlink = 0;
@@ -4287,7 +4444,7 @@ static int ext2_link(struct vfs_mount *mnt, void *dir, const char *name, void *n
         return -EEXIST;
     }
     n->nlink++;
-    n->ctime = now_seconds();
+    stamp(n, T_CTIME);
     rc = inode_store(em, n);
     if (rc != 0) {
         n->nlink--;
@@ -4299,7 +4456,7 @@ static int ext2_link(struct vfs_mount *mnt, void *dir, const char *name, void *n
         inode_store(em, n);
         return rc;
     }
-    d->mtime = d->ctime = now_seconds();
+    stamp(d, T_MTIME | T_CTIME);
     return inode_times_later(em, d);
 }
 
@@ -4370,7 +4527,7 @@ static int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, cons
         rc = dir_add(em, d, name, n->ino, 7);
     }
     if (rc == 0) {
-        d->mtime = d->ctime = now_seconds();
+        stamp(d, T_MTIME | T_CTIME);
         rc = inode_times_later(em, d);
     }
     if (rc != 0) {
@@ -4509,7 +4666,7 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
                 rc = release_inode(em, victim);
             } else {
                 victim->unlinked = 1;
-                victim->ctime = now_seconds();
+                stamp(victim, T_CTIME);
                 rc = inode_store(em, victim);
             }
             if (rc != 0) {
@@ -4530,7 +4687,7 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
                 return rc;
             }
             nd->nlink++;
-            nd->mtime = nd->ctime = now_seconds();
+            stamp(nd, T_MTIME | T_CTIME);
             rc = inode_store(em, nd);
             if (rc != 0) {
                 return rc;
@@ -4547,11 +4704,11 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
         if (od != nd && od->nlink > 2) {
             od->nlink--;
         }
-        od->mtime = od->ctime = now_seconds();
+        stamp(od, T_MTIME | T_CTIME);
         return inode_store(em, od);
     }
     n->nlink++;
-    n->ctime = now_seconds();
+    stamp(n, T_CTIME);
     rc = inode_store(em, n);
     if (rc != 0) {
         n->nlink--;
@@ -4577,7 +4734,7 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
         if (victim->nlink > 0) {
             victim->nlink--;
         }
-        victim->ctime = now_seconds();
+        stamp(victim, T_CTIME);
         if (victim->nlink == 0) {
             if (victim == &victim_loaded) {
                 rc = release_inode(em, victim);
@@ -4612,10 +4769,11 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
     if (rc != 0) {
         return rc;
     }
-    od->mtime = od->ctime = now_seconds();
+    stamp(od, T_MTIME | T_CTIME);
     rc = inode_store(em, od);
     if (rc == 0 && od != nd) {
-        nd->mtime = nd->ctime = od->mtime;
+        nd->mtime = time_fit(nd, EXT2_MTIME_EXTRA + 4, od->mtime.sec, od->mtime.nsec);
+        nd->ctime = time_fit(nd, EXT2_CTIME_EXTRA + 4, od->mtime.sec, od->mtime.nsec);
         rc = inode_store(em, nd);
     }
     return rc;
@@ -5525,12 +5683,30 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
         klog(KLOG_WARN, "ext2", "refused: incompatible feature 0x%x", (int)unknown);
         return -EINVAL;
     }
-    unknown = em->ro_compat & ~(EXT2_RO_SPARSE_SUPER | EXT2_RO_LARGE_FILE);
+    /* A new large inode covers every extra field, or more where the
+     * superblock wants more; with `extra_isize` every inode has at least
+     * the superblock's minimum. */
+    if (em->inode_size > EXT2_GOOD_OLD) {
+        uint32_t room = em->inode_size - EXT2_GOOD_OLD;
+        uint32_t min = (em->ro_compat & EXT2_RO_EXTRA_ISIZE) ? le16(sb + 348) : 0;
+        uint32_t want = (em->ro_compat & EXT2_RO_EXTRA_ISIZE) ? le16(sb + 350) : 0;
+
+        em->new_extra = EXT2_EXTRA_NEW;
+        if (want > em->new_extra && !(want & 3u) && want <= room) {
+            em->new_extra = want;
+        }
+        if ((min & 3u) || min > room) {
+            readonly_why = "the minimum extra inode size does not fit the inode";
+        } else if (min > em->new_extra) {
+            em->new_extra = min;
+        }
+    }
+    unknown = em->ro_compat & ~(EXT2_RO_SPARSE_SUPER | EXT2_RO_LARGE_FILE | EXT2_RO_EXTRA_ISIZE);
     if (unknown != 0) {
         readonly_why = "unknown read-only-compatible feature";
-    } else if (em->compat & EXT2_COMPAT_DIR_INDEX) {
+    } else if (!readonly_why && (em->compat & EXT2_COMPAT_DIR_INDEX)) {
         readonly_why = "dir_index would be left stale by this writer";
-    } else if (em->block_size != 4096) {
+    } else if (!readonly_why && em->block_size != 4096) {
         readonly_why = "a block size below 4096 cannot be written in order";
     }
     if (em->groups == 0 || em->groups > 0xFFFFFFFFu / 32 || em->blocks <= em->first_data ||
