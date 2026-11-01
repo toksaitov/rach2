@@ -208,4 +208,10 @@ int nla_nest_end(struct genl_msg *msg, unsigned offset);
 /** Discard a nest and its children, restoring len to offset, retaining error. */
 void nla_nest_cancel(struct genl_msg *msg, unsigned offset);
 
+/** Internal transport entry: dispatch one complete request in process context.
+ * Return 0 once its answer is queued, or a transport error. */
+int genl_dispatch(struct socket *sock, uint32_t portid, const uint8_t *req, unsigned len);
+/** Whether a multicast group is registered; safe under net_lock. */
+int genl_group_exists(uint32_t group);
+
 #endif

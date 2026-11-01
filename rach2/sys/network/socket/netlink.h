@@ -62,6 +62,7 @@ struct socket;
  */
 
 #define AF_NETLINK             16
+#define NETLINK_GENERIC        16
 #define NETLINK_ROUTE          0
 #define NETLINK_SOCK_DIAG      4
 #define NETLINK_KOBJECT_UEVENT 15
@@ -138,5 +139,13 @@ int netlink_ready(struct socket *sock);
  * answers built after it, as Linux sizes a dump's buffers by its reader's
  * (NL_DGRAM_MAX in netlink.c). Called under `net_lock`. */
 void netlink_note_recv(struct socket *sock, uint32_t len);
+
+/** Internal generic transport: copy replies and multicast datagrams.
+ * Each takes net_lock; return 0 or negative errno. */
+int netlink_genl_reply(struct socket *sock, uint32_t portid, const uint8_t *data, unsigned len);
+int netlink_genl_multicast(uint32_t group, const uint8_t *data, unsigned len);
+/** Queue NLMSG_ERROR for a bounded request, honoring CAP_ACK and EXT_ACK. */
+int netlink_ack(struct socket *sock, const uint8_t *req, int error, const char *detail,
+                unsigned bad_offset);
 
 #endif /* _NETLINK_H_ */

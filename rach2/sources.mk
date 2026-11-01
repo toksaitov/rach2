@@ -160,6 +160,7 @@ C_SRC_SHARED = kernel.c \
     sys/network/socket/address.c \
     sys/network/socket/address_route.c \
     sys/network/socket/netlink.c \
+    sys/network/socket/genetlink.c \
     sys/network/socket/packet.c \
     sys/network/socket/raw.c \
     sys/lib/kctypes.c \

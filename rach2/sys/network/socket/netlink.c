@@ -6,6 +6,7 @@
  */
 
 #include "netlink.h"
+#include "genetlink.h"
 #include "socket.h"
 #include "../net.h"
 #include "../netif.h"
@@ -85,6 +86,8 @@
 #define NETLINK_ADD_MEMBERSHIP  1
 #define NETLINK_DROP_MEMBERSHIP 2
 #define NETLINK_NO_ENOBUFS      5
+#define NETLINK_CAP_ACK         10
+#define NETLINK_EXT_ACK         11
 
 /* Attributes of a link, an address and a route. */
 #define IFLA_ADDRESS   1
@@ -93,6 +96,7 @@
 #define IFLA_MTU       4
 #define IFLA_STATS     7
 #define IFLA_OPERSTATE 16
+#define IFLA_LINKMODE  17
 #define IFLA_STATS64   23
 #define IFA_ADDRESS    1
 #define IFA_LOCAL      2
@@ -127,6 +131,7 @@
 #define ARPHRD_ETHER      1
 #define IFF_LOWER_UP      0x10000u
 #define IF_OPER_UP        6
+#define IF_OPER_DORMANT   5
 #define IF_OPER_DOWN      2
 #define IF_OPER_UNKNOWN   0
 #define IFA_F_PERMANENT   0x80u
@@ -213,6 +218,11 @@ struct nl_dgram {
     uint32_t len;
 };
 
+struct nl_group {
+    struct nl_group *next;
+    uint32_t id;
+};
+
 struct netlink_state {
     struct netlink_state *next; /* every netlink socket's, for the port ids */
     struct socket *sock;
@@ -230,6 +240,8 @@ struct netlink_state {
     /* Whether a notification dropped for room is kept from failing the next
      * receive, NETLINK_NO_ENOBUFS. */
     int no_enobufs;
+    int cap_ack, ext_ack;
+    struct nl_group *extra_groups; /* memberships numbered above 32 */
     /* The datagrams queued, oldest first, answers and notifications, and
      * their bytes. The queue changes under net_lock, since the timer tick
      * and the receive path queue notifications. */
@@ -298,7 +310,7 @@ int netlink_open(struct socket *sock, int protocol)
     uint32_t flags;
 
     if (protocol != NETLINK_ROUTE && protocol != NETLINK_SOCK_DIAG &&
-        protocol != NETLINK_KOBJECT_UEVENT) {
+        protocol != NETLINK_KOBJECT_UEVENT && protocol != NETLINK_GENERIC) {
         return -EPROTONOSUPPORT;
     }
     st = kzalloc(sizeof(*st));
@@ -340,6 +352,12 @@ void netlink_close(struct socket *sock)
         st->head = d->next;
         kfree(d);
     }
+    while (st->extra_groups) {
+        struct nl_group *g = st->extra_groups;
+
+        st->extra_groups = g->next;
+        kfree(g);
+    }
     kfree(st);
 }
 
@@ -352,7 +370,7 @@ static int port_taken(const struct netlink_state *self, uint32_t pid)
     const struct netlink_state *o;
 
     for (o = states; o; o = o->next) {
-        if (o != self && o->bound && o->pid == pid) {
+        if (o != self && o->protocol == self->protocol && o->bound && o->pid == pid) {
             return 1;
         }
     }
@@ -364,6 +382,23 @@ int netlink_bind(struct socket *sock, uint32_t pid, uint32_t groups)
     struct netlink_state *st = state_of(sock);
     uint32_t flags = net_lock();
 
+    if (st->protocol == NETLINK_GENERIC) {
+        unsigned i;
+
+        for (i = 1; i <= 32; ++i) {
+            if ((groups & GROUP_BIT(i)) && !genl_group_exists(i)) {
+                net_unlock(flags);
+                return -EINVAL;
+            }
+        }
+    }
+    if (st->bound && pid && st->pid != pid) {
+        net_unlock(flags);
+        return -EINVAL;
+    }
+    if (pid == 0 && st->bound) {
+        pid = st->pid;
+    }
     if (pid == 0) {
         pid = current_proc ? current_proc->tgid : 0;
         while (pid == 0 || port_taken(st, pid)) {
@@ -386,21 +421,51 @@ int32_t netlink_setsockopt(struct socket *sock, int optname, int val, int optlen
     struct netlink_state *st = state_of(sock);
     uint32_t flags;
 
+    struct nl_group **link, *g;
+
     if (optname != NETLINK_ADD_MEMBERSHIP && optname != NETLINK_DROP_MEMBERSHIP &&
-        optname != NETLINK_NO_ENOBUFS) {
+        optname != NETLINK_NO_ENOBUFS && optname != NETLINK_CAP_ACK && optname != NETLINK_EXT_ACK) {
         return 0;
     }
-    if (optlen < 4 || (optname != NETLINK_NO_ENOBUFS && val <= 0)) {
+    if (optlen < 4 ||
+        ((optname == NETLINK_ADD_MEMBERSHIP || optname == NETLINK_DROP_MEMBERSHIP) && val <= 0)) {
         return -EINVAL;
     }
     flags = net_lock();
     if (optname == NETLINK_NO_ENOBUFS) {
         st->no_enobufs = val != 0;
-    } else if (val <= 32 && optname == NETLINK_ADD_MEMBERSHIP) {
-        st->groups |= GROUP_BIT((uint32_t)val);
-        watch_start();
+    } else if (optname == NETLINK_CAP_ACK) {
+        st->cap_ack = val != 0;
+    } else if (optname == NETLINK_EXT_ACK) {
+        st->ext_ack = val != 0;
+    } else if (st->protocol == NETLINK_GENERIC && !genl_group_exists((uint32_t)val)) {
+        net_unlock(flags);
+        return -EINVAL;
     } else if (val <= 32) {
-        st->groups &= ~GROUP_BIT((uint32_t)val);
+        if (optname == NETLINK_ADD_MEMBERSHIP) {
+            st->groups |= GROUP_BIT((uint32_t)val);
+            watch_start();
+        } else {
+            st->groups &= ~GROUP_BIT((uint32_t)val);
+        }
+    } else {
+        for (link = &st->extra_groups; *link && (*link)->id != (uint32_t)val;
+             link = &(*link)->next) {
+        }
+        if (optname == NETLINK_DROP_MEMBERSHIP && *link) {
+            g = *link;
+            *link = g->next;
+            kfree(g);
+        } else if (optname == NETLINK_ADD_MEMBERSHIP && !*link) {
+            g = kmalloc(sizeof(*g));
+            if (!g) {
+                net_unlock(flags);
+                return -ENOMEM;
+            }
+            g->id = (uint32_t)val;
+            g->next = 0;
+            *link = g;
+        }
     }
     net_unlock(flags);
     return 0;
@@ -440,6 +505,102 @@ static int enqueue(struct netlink_state *st, const uint8_t *data, uint32_t len)
     st->queued += len;
     wq_wake(&st->sock->waiters, WQ_DATA);
     return 0;
+}
+
+/** Queue a generic reply for the same socket and port that sent the request.
+ * Copy data under net_lock; return 0 or a negative errno. */
+int netlink_genl_reply(struct socket *sock, uint32_t portid, const uint8_t *data, unsigned len)
+{
+    struct netlink_state *st = state_of(sock);
+    uint32_t flags = net_lock();
+    int rc = -ENOENT;
+
+    if (st && st->protocol == NETLINK_GENERIC && st->pid == portid) {
+        rc = len <= NL_DGRAM_MAX ? enqueue(st, data, len) : -EMSGSIZE;
+    }
+    net_unlock(flags);
+    return rc;
+}
+
+/** Deliver one generic datagram to all members, recording each overrun.
+ * Membership and queue walks run under net_lock; return 0 or -ENOBUFS. */
+int netlink_genl_multicast(uint32_t group, const uint8_t *data, unsigned len)
+{
+    struct netlink_state *st;
+    uint32_t flags;
+    int rc = 0;
+
+    if (!group || len > NL_DGRAM_MAX) {
+        return -EMSGSIZE;
+    }
+    flags = net_lock();
+    for (st = states; st; st = st->next) {
+        struct nl_group *g;
+        int joined = group <= 32 && (st->groups & GROUP_BIT(group));
+
+        if (st->protocol != NETLINK_GENERIC || !st->seen) {
+            continue;
+        }
+        for (g = st->extra_groups; g && !joined; g = g->next) {
+            joined = g->id == group;
+        }
+        if (joined && (st->queued > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - st->queued ||
+                       enqueue(st, data, len) != 0)) {
+            rc = -ENOBUFS;
+            if (!st->no_enobufs) {
+                st->sock->so_error = ENOBUFS;
+                wq_wake(&st->sock->waiters, WQ_DATA);
+            }
+        }
+    }
+    net_unlock(flags);
+    return rc;
+}
+
+/** Build Linux's error envelope, with optional echo and extended attributes.
+ * req contains its complete bounded nlmsg_len bytes. Return delivery status. */
+int netlink_ack(struct socket *sock, const uint8_t *req, int error, const char *detail,
+                unsigned bad_offset)
+{
+    struct netlink_state *st = state_of(sock);
+    struct genl_msg msg;
+    unsigned echo = error && !st->cap_ack ? get32(req) : NLMSG_HDRLEN;
+    unsigned base = (20u + echo + 3u) & ~3u;
+    unsigned cap = base + 512u;
+    uint8_t *buf = kzalloc(cap);
+    int rc;
+
+    if (!buf) {
+        return -ENOMEM;
+    }
+    genl_msg_init(&msg, buf, cap);
+    msg.len = base;
+    put16(buf + 4, NLMSG_ERROR);
+    put16(buf + 6, echo == NLMSG_HDRLEN ? 0x100u : 0);
+    put32(buf + 8, get32(req + 8));
+    put32(buf + 12, st->pid);
+    put32(buf + 16, (uint32_t)error);
+    k_memcpy(buf + 20, req, echo);
+    if (st->ext_ack) {
+        if (detail) {
+            nla_put_string(&msg, 1, detail);
+        }
+        if (bad_offset) {
+            nla_put_u32(&msg, 2, bad_offset);
+        }
+        if (msg.len > base) {
+            put16(buf + 6, (uint16_t)(get16(buf + 6) | 0x200u));
+        }
+    }
+    put32(buf, msg.len);
+    {
+        uint32_t flags = net_lock();
+
+        rc = msg.error ? msg.error : enqueue(st, buf, msg.len);
+        net_unlock(flags);
+    }
+    kfree(buf);
+    return rc;
 }
 
 /** Queue the datagram built so far on the socket, if it has anything, and
@@ -486,7 +647,8 @@ static void notify(uint32_t group, int del, uint8_t *msg)
         if (st->protocol != NETLINK_ROUTE || !st->seen || !(st->groups & GROUP_BIT(group))) {
             continue;
         }
-        if (st->queued + len > NL_NOTIFY_QUEUE_MAX || enqueue(st, msg, len) != 0) {
+        if (st->queued > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - st->queued ||
+            enqueue(st, msg, len) != 0) {
             if (!st->no_enobufs) {
                 st->sock->so_error = ENOBUFS;
                 wq_wake(&st->sock->waiters, WQ_DATA);
@@ -578,6 +740,59 @@ static uint32_t prefix_of(uint32_t mask)
     return n;
 }
 
+/* Userspace's link policy is separate from the driver's carrier state. */
+struct link_policy {
+    const struct netdev *dev;
+    uint8_t mode, authorized, carrier;
+};
+static struct link_policy link_policies[NETDEV_MAX + 1];
+
+/** Find the first namespace's link policy, allocating a slot only on change.
+ * The caller holds net_lock; other namespaces have no userspace link policy. */
+static struct link_policy *policy_of(const struct netdev *nd, int create)
+{
+    unsigned i;
+    struct link_policy *empty = 0;
+
+    for (i = 0; i < NETDEV_MAX + 1; ++i) {
+        if (link_policies[i].dev == nd) {
+            return &link_policies[i];
+        }
+        if (!link_policies[i].dev) {
+            empty = &link_policies[i];
+        }
+    }
+    if (create && empty) {
+        empty->dev = nd;
+        empty->authorized = 1;
+        empty->carrier = (uint8_t)(nd->up && netdev_running(nd));
+        return empty;
+    }
+    return 0;
+}
+
+/** Derive operstate from administrative state, carrier and userspace policy.
+ * A loss of carrier revokes an authorization in userspace link mode. */
+static uint8_t operstate(const struct netdev *nd)
+{
+    struct link_policy *p = policy_of(nd, 0);
+    int running = nd->up && netdev_running(nd);
+
+    if (p) {
+        if (!running && p->carrier && p->mode) {
+            p->authorized = 0;
+        }
+        p->carrier = (uint8_t)running;
+    }
+    if (nd->loopback) {
+        return IF_OPER_UNKNOWN;
+    }
+    if (!running) {
+        return IF_OPER_DOWN;
+    }
+    return p && !p->authorized ? IF_OPER_DORMANT : IF_OPER_UP;
+}
+
 /**
  * Append the message of the link `nd`, with `flags`. IFF_UP is `nd`'s own
  * state, as an administrator left it; IFF_RUNNING, IFF_LOWER_UP and the
@@ -597,8 +812,11 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
     uint8_t *ifi = msg_start(b, msg, RTM_NEWLINK, flags, 16);
     static const uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     int running = nd->up && netdev_running(nd);
-    uint32_t up = (nd->up ? IFF_UP : 0) | (running ? IFF_RUNNING | IFF_LOWER_UP : 0);
-    uint8_t oper = nd->loopback ? IF_OPER_UNKNOWN : running ? IF_OPER_UP : IF_OPER_DOWN;
+    uint8_t oper = operstate(nd);
+    struct link_policy *policy = policy_of(nd, 0);
+    uint8_t mode = policy ? policy->mode : 0;
+    uint32_t up = (nd->up ? IFF_UP : 0) | (running ? IFF_LOWER_UP : 0) |
+                  (running && oper != IF_OPER_DORMANT ? IFF_RUNNING : 0);
     uint8_t stats[96];
     uint8_t stats64[200];
     int i;
@@ -611,6 +829,7 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
     msg_attr(msg, IFLA_BROADCAST, nd->loopback ? nd->mac : broadcast, 6);
     msg_attr32(msg, IFLA_MTU, nd->mtu);
     msg_attr(msg, IFLA_OPERSTATE, &oper, 1);
+    msg_attr(msg, IFLA_LINKMODE, &mode, 1);
     k_memset(stats, 0, sizeof(stats));
     put32(stats + 0, nd->rx_packets);
     put32(stats + 4, nd->tx_packets);
@@ -989,7 +1208,7 @@ static void route6_dump(struct nl_build *b)
 
 struct watch_link {
     int index;
-    uint8_t up, running;
+    uint8_t up, running, oper, mode;
     uint32_t mtu;
 };
 
@@ -1056,6 +1275,12 @@ static void watch_take(struct watch_state *w)
         l->up = (uint8_t)(nd->up != 0);
         l->running = (uint8_t)(nd->up && netdev_running(nd));
         l->mtu = nd->mtu;
+        l->oper = operstate(nd);
+        {
+            struct link_policy *p = policy_of(nd, 0);
+
+            l->mode = p ? p->mode : 0;
+        }
         for (j = -1; j < nd->naddr2; j++) {
             struct watch_addr4 *a = &w->addr4[w->naddr4];
 
@@ -1082,7 +1307,8 @@ static void watch_take(struct watch_state *w)
 
 static int same_link(const struct watch_link *a, const struct watch_link *b)
 {
-    return a->index == b->index && a->up == b->up && a->running == b->running && a->mtu == b->mtu;
+    return a->index == b->index && a->up == b->up && a->running == b->running && a->mtu == b->mtu &&
+           a->oper == b->oper && a->mode == b->mode;
 }
 
 static int same_addr4(const struct watch_addr4 *a, const struct watch_addr4 *b)
@@ -1437,7 +1663,8 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
 {
     struct netdev *nd = body >= 16 ? link_asked(req, body) : 0;
     uint16_t len;
-    const uint8_t *a, *mtu;
+    const uint8_t *a, *mtu, *mode, *oper;
+    struct link_policy *policy = 0;
 
     if (!nd) {
         return -ENODEV;
@@ -1455,6 +1682,23 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
         !(get32(req + NLMSG_HDRLEN + 8) & IFF_UP)) {
         return -EOPNOTSUPP;
     }
+    mode = req_attr(req, body, 16, IFLA_LINKMODE, &len);
+    if (mode && (len != 1 || mode[0] > 1)) {
+        return -EINVAL;
+    }
+    oper = req_attr(req, body, 16, IFLA_OPERSTATE, &len);
+    if (oper && (len != 1 || (oper[0] != IF_OPER_UP && oper[0] != IF_OPER_DORMANT))) {
+        return -EINVAL;
+    }
+    if (mode || oper) {
+        if (!net_ns_seen() || nd->loopback) {
+            return -EOPNOTSUPP;
+        }
+        policy = policy_of(nd, 1);
+        if (!policy) {
+            return -ENOSPC;
+        }
+    }
     if (mtu) {
         netdev_set_mtu(nd, get32(mtu));
     }
@@ -1466,6 +1710,16 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
         } else {
             netconf_set_up(nd, up);
         }
+    }
+    if (policy) {
+        if (mode && policy->mode != mode[0]) {
+            policy->mode = mode[0];
+            policy->authorized = (uint8_t)!mode[0];
+        }
+        if (oper) {
+            policy->authorized = oper[0] == IF_OPER_UP;
+        }
+        (void)operstate(nd);
     }
     return 0;
 }
@@ -2437,6 +2691,24 @@ int32_t netlink_send(struct socket *sock, const uint8_t *buf, uint32_t len)
         (void)netlink_bind(sock, 0, 0);
     }
     if (st->protocol == NETLINK_KOBJECT_UEVENT) {
+        return (int32_t)len;
+    }
+    if (st->protocol == NETLINK_GENERIC) {
+        while (at + NLMSG_HDRLEN <= len) {
+            uint32_t mlen = get32(buf + at);
+            int rc;
+
+            if (mlen < NLMSG_HDRLEN || mlen > len - at) {
+                break;
+            }
+            if (get16(buf + at + 6) & NLM_F_REQUEST) {
+                rc = genl_dispatch(sock, st->pid, buf + at, mlen);
+                if (rc < 0) {
+                    return rc;
+                }
+            }
+            at += (mlen + 3u) & ~3u;
+        }
         return (int32_t)len;
     }
     b = kmalloc(sizeof(*b));
