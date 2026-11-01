@@ -8,10 +8,11 @@
  * session when it exits, so the console is never left without one, and
  * continue a child that is stopped, since nothing else can. Beside that it
  * clears `/var/run`, writes the boot's utmp record, sets the resource limits,
- * applies /etc/sysctl.conf, keeps each backlight's level across a reboot,
- * and keeps `/bin/update` running and, on an image with its configuration,
- * BusyBox's acpid, which acts on the power, volume and brightness keys. It never exits; if it did,
- * the kernel would have no reaper, so the kernel panics if init dies.
+ * applies /etc/sysctl.conf, keeps each backlight's level and the mixer's
+ * across a reboot, and keeps `/bin/update` running and, on an image with its
+ * configuration, BusyBox's acpid, which acts on the power, volume and
+ * brightness keys. It never exits; if it did, the kernel would have no
+ * reaper, so the kernel panics if init dies.
  *
  * Four artifacts are built from this one source, and none of them is named
  * plain `init`: `init-shell` runs a shell on the console, `init-login` puts
@@ -231,6 +232,39 @@ struct backlight {
 
 static struct backlight backlights[BACKLIGHT_MAX];
 static int backlight_count;
+
+/*
+ * The mixer's levels are kept across a reboot, as alsactl store and restore
+ * keep them on Linux: init sets each channel of `/dev/mixer`'s device mask
+ * from `MIXER_KEPT` at boot and saves them there when it stops the machine,
+ * one line `NAME L:R` a channel, NAME being OSS's name of it. mixer(1)'s
+ * record of a mute is kept beside them, in `MIXER_KEPT_MUTE`, so that a
+ * volume muted at the halt is still muted, and can be unmuted, after it.
+ */
+#define MIXER_DEVICE     "/dev/mixer"
+#define MIXER_KEPT       "/var/lib/mixer"
+#define MIXER_FRESH      "/var/lib/mixer.new"
+#define MIXER_MUTE       "/var/run/mixer.mute"
+#define MIXER_KEPT_MUTE  "/var/lib/mixer.mute"
+#define MIXER_FRESH_MUTE "/var/lib/mixer.mute.new"
+
+/* OSS's requests, with Linux's numbers: channel N's level, the left
+ * channel's percentage in the low byte and the right's in the next, and the
+ * mask of the channels the device has. */
+#define MIXER_CHANNELS     25 /* SOUND_MIXER_NRDEVICES */
+#define MIXER_READ(n)      _IOR('M', n, int)
+#define MIXER_WRITE(n)     _IOWR('M', n, int)
+#define MIXER_READ_DEVMASK MIXER_READ(0xFE)
+
+/* OSS's names of its channels, SOUND_DEVICE_NAMES, by number. */
+static const char *const mixer_names[MIXER_CHANNELS] = {
+    "vol",  "bass", "treble", "synth", "pcm",   "speaker", "line",   "mic",   "cd",
+    "mix",  "pcm2", "rec",    "igain", "ogain", "line1",   "line2",  "line3", "dig1",
+    "dig2", "dig3", "phin",   "phout", "video", "radio",   "monitor"};
+
+/* The channels init keeps, read from the device mask at boot: 0 on a
+ * machine with no mixer, which then keeps nothing. */
+static int mixer_mask;
 
 #ifdef INIT_CONSOLE_LOGIN
 /* Whether a session child has already failed to exec the login program in
@@ -489,12 +523,31 @@ static void keep_backlights(void)
 }
 
 /**
- * Save each kept backlight's level to its file under `BACKLIGHT_KEPT`,
- * making the directory when it is missing. Each file is written under a
- * temporary name and renamed into place, so that a power loss leaves the
- * old level or the new one. Called from the shutdown handler, so it makes
- * only system calls a handler may make; a backlight whose level cannot be
- * read or saved keeps the file it had.
+ * Write the `n` bytes of `text` to `fresh`, flush it and rename it to `kept`,
+ * so that a power loss leaves the old file or the new one. A failure leaves
+ * `kept` as it was. Uses only system calls a signal handler may make.
+ */
+static void replace_file(const char *fresh, const char *kept, const char *text, int n)
+{
+    int fd = open(fresh, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int ok;
+
+    if (fd < 0) {
+        return;
+    }
+    ok = write(fd, text, (size_t)n) == n && fsync(fd) == 0;
+    close(fd);
+    if (!ok || rename(fresh, kept) != 0) {
+        (void)unlink(fresh);
+    }
+}
+
+/**
+ * Save each kept backlight's level to its file under `BACKLIGHT_KEPT`
+ * through `replace_file`, making the directory when it is missing. Called
+ * from the shutdown handler, so it makes only system calls a handler may
+ * make; a backlight whose level cannot be read or saved keeps the file it
+ * had.
  */
 static void save_backlights(void)
 {
@@ -509,20 +562,181 @@ static void save_backlights(void)
         const struct backlight *b = &backlights[i];
         char text[24];
         int n = read_text(b->level, text, sizeof(text));
-        int fd, ok;
 
-        if (n <= 0) {
-            continue;
+        if (n > 0) {
+            replace_file(b->fresh, b->kept, text, n);
         }
-        fd = open(b->fresh, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (fd < 0) {
-            continue;
+    }
+}
+
+/**
+ * Parse a percentage, 0 to 100, from the text at `*p`, and move `*p` past
+ * it. Returns it, or -1 when there is none there.
+ */
+static int mixer_percentage(const char **p)
+{
+    const char *s = *p;
+    int v = 0;
+
+    if (*s < '0' || *s > '9') {
+        return -1;
+    }
+    while (*s >= '0' && *s <= '9') {
+        v = v * 10 + (*s++ - '0');
+        if (v > 100) {
+            return -1;
         }
-        ok = write(fd, text, (size_t)n) == n && fsync(fd) == 0;
+    }
+    *p = s;
+    return v;
+}
+
+/**
+ * Parse the levels kept in `text`, lines of `NAME L:R`, into `levels`, a
+ * level in OSS's form for each channel named, -1 for the rest. Returns 0, or
+ * -1 when a line is not one of a channel of OSS's.
+ */
+static int parse_mixer(const char *text, int levels[MIXER_CHANNELS])
+{
+    const char *p = text;
+    int i;
+
+    for (i = 0; i < MIXER_CHANNELS; i++) {
+        levels[i] = -1;
+    }
+    while (*p != '\0') {
+        size_t len = strcspn(p, " ");
+        int left, right;
+
+        for (i = 0; i < MIXER_CHANNELS; i++) {
+            if (strlen(mixer_names[i]) == len && strncmp(p, mixer_names[i], len) == 0) {
+                break;
+            }
+        }
+        if (i == MIXER_CHANNELS || p[len] != ' ') {
+            return -1;
+        }
+        p += len + 1;
+        if ((left = mixer_percentage(&p)) < 0 || *p++ != ':' ||
+            (right = mixer_percentage(&p)) < 0 || *p++ != '\n') {
+            return -1;
+        }
+        levels[i] = left | right << 8;
+    }
+    return 0;
+}
+
+/**
+ * Find the channels of `MIXER_DEVICE` in its device mask, keep them in
+ * `mixer_mask`, and set each one kept in `MIXER_KEPT` to its kept level; then
+ * put mixer(1)'s record of a mute back from `MIXER_KEPT_MUTE`. A machine with
+ * no mixer, or a missing file, leaves the driver's levels alone; so does a
+ * malformed file, after a diagnostic. Called after `/var/run` is emptied,
+ * which removes the record a boot would otherwise inherit.
+ */
+static void keep_mixer(void)
+{
+    char text[MIXER_CHANNELS * sizeof("monitor 100:100\n")];
+    int levels[MIXER_CHANNELS];
+    int fd = open(MIXER_DEVICE, O_RDWR | O_CLOEXEC);
+    int mask, i, n;
+
+    if (fd < 0) {
+        return;
+    }
+    if (ioctl(fd, MIXER_READ_DEVMASK, &mask) != 0 || (mask &= (1 << MIXER_CHANNELS) - 1) == 0) {
         close(fd);
-        if (!ok || rename(b->fresh, b->kept) != 0) {
-            (void)unlink(b->fresh);
+        return;
+    }
+    mixer_mask = mask;
+    n = read_text(MIXER_KEPT, text, sizeof(text));
+    if (n < 0) {
+        close(fd);
+        return;
+    }
+    if (n == (int)sizeof(text) - 1 || parse_mixer(text, levels) != 0) {
+        fprintf(stderr, "init: mixer: " MIXER_KEPT ": malformed; levels left alone\n");
+        close(fd);
+        return;
+    }
+    for (i = 0; i < MIXER_CHANNELS; i++) {
+        int level = levels[i];
+
+        if ((mask & 1 << i) && level >= 0 && ioctl(fd, MIXER_WRITE(i), &level) != 0) {
+            fprintf(stderr, "init: mixer: %s: cannot restore: %s\n", mixer_names[i],
+                    strerror(errno));
         }
+    }
+    close(fd);
+    n = read_text(MIXER_KEPT_MUTE, text, sizeof(text));
+    if (n > 0 && (fd = open(MIXER_MUTE, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644)) >= 0) {
+        if (write(fd, text, (size_t)n) != n) {
+            fprintf(stderr, "init: mixer: " MIXER_MUTE ": cannot restore: %s\n", strerror(errno));
+        }
+        close(fd);
+    }
+}
+
+/**
+ * Write the decimal `v`, 0 to 999, at `p`. Returns the end of what was
+ * written. snprintf is not one of the functions a signal handler may call.
+ */
+static char *put_decimal(char *p, int v)
+{
+    if (v >= 100) {
+        *p++ = (char)('0' + v / 100);
+    }
+    if (v >= 10) {
+        *p++ = (char)('0' + v / 10 % 10);
+    }
+    *p++ = (char)('0' + v % 10);
+    return p;
+}
+
+/**
+ * Save the level of each channel in `mixer_mask` to `MIXER_KEPT`, and
+ * mixer(1)'s record of a mute to `MIXER_KEPT_MUTE`, or remove that file when
+ * there is no record. Called from the shutdown handler, so it makes only
+ * system calls a handler may make; a channel whose level cannot be read is
+ * left out, and a mixer that cannot be read keeps the file it had.
+ */
+static void save_mixer(void)
+{
+    char text[MIXER_CHANNELS * sizeof("monitor 100:100\n")];
+    char *p = text;
+    int fd, i, n;
+
+    if (mixer_mask == 0 || (fd = open(MIXER_DEVICE, O_RDWR)) < 0) {
+        return;
+    }
+    for (i = 0; i < MIXER_CHANNELS; i++) {
+        const char *name = mixer_names[i];
+        int level;
+
+        if (!(mixer_mask & 1 << i) || ioctl(fd, MIXER_READ(i), &level) != 0) {
+            continue;
+        }
+        while (*name != '\0') {
+            *p++ = *name++;
+        }
+        *p++ = ' ';
+        p = put_decimal(p, level & 0xFF);
+        *p++ = ':';
+        p = put_decimal(p, level >> 8 & 0xFF);
+        *p++ = '\n';
+    }
+    close(fd);
+    if (p == text) {
+        return;
+    }
+    (void)mkdir("/var", 0755);
+    (void)mkdir("/var/lib", 0755);
+    replace_file(MIXER_FRESH, MIXER_KEPT, text, (int)(p - text));
+    n = read_text(MIXER_MUTE, text, sizeof(text));
+    if (n > 0) {
+        replace_file(MIXER_FRESH_MUTE, MIXER_KEPT_MUTE, text, n);
+    } else {
+        (void)unlink(MIXER_KEPT_MUTE);
     }
 }
 
@@ -535,13 +749,13 @@ static void save_backlights(void)
  *
  * The work is done in the handler and not left to the loop through a flag, the
  * usual rule for a handler. That rule keeps a handler from doing what the
- * interrupted code was in the middle of; this one saves the backlights'
- * levels (`save_backlights`) with system calls alone and then calls `reboot`,
- * which is async-signal-safe and does not return when it succeeds, so there
- * is nothing to return to. A failed `reboot` falls to `_exit`, and the kernel
- * panics when init dies. The handler is installed with all three signals
- * blocked while it runs, so a second request, such as the second `poweroff`
- * of a power button the firmware reports twice, waits and is never answered.
+ * interrupted code was in the middle of; this one saves the backlights' and
+ * the mixer's levels (`save_backlights`, `save_mixer`) with system calls
+ * alone and then calls `reboot`, which is async-signal-safe and does not
+ * return when it succeeds, so there is nothing to return to. A failed `reboot` falls to `_exit`,
+ * and the kernel panics when init dies. The handler is installed with all three signals blocked
+ * while it runs, so a second request, such as the second `poweroff` of a power button the firmware
+ * reports twice, waits and is never answered.
  *
  * The kernel disables scheduling and writes out the root file system before
  * it stops the machine, and stops it even when that write fails. init does
@@ -557,6 +771,7 @@ static void shutdown_handler(int sig)
         command = RB_POWER_OFF;
     }
     save_backlights();
+    save_mixer();
     reboot(command);
     _exit(1);
 }
@@ -2582,17 +2797,19 @@ static void apply_sysctl(void)
 /**
  * Set the machine up before the first child: empty `/var/run` and give it a
  * `utmp` with only this boot's record, set the limits, open the service log
- * and write the backlights' kept levels back (`keep_backlights`), apply the
- * image's kernel settings (`apply_sysctl`), and put IPv6's stable secret,
- * kept in /var/lib, in force (`ip6secret_keep`), so that the addresses the
- * routers' prefixes give stay the same from one boot to the next, whoever
- * configures the network. The settings come first, since a card that took a
- * prefix before init is restarted with the secret, and so makes its
- * addresses again under them. The recovery build takes the key the installer put
- * on the recovery partition it booted from, says on the console whether a key was built into its
- * image and whether the partition's turned SSH on, since the two kinds of image look identical from
- * outside, and names each disk whose GUID table was read from its backup. A metal boot whose line
- * has `rach2.fsck` then checks its ext2 partitions.
+ * and write the backlights' and the mixer's kept levels back
+ * (`keep_backlights`, `keep_mixer`), apply the image's kernel settings
+ * (`apply_sysctl`), and put IPv6's stable secret, kept in /var/lib, in force
+ * (`ip6secret_keep`), so that the addresses the routers' prefixes give stay
+ * the same from one boot to the next, whoever configures the network. The
+ * settings come first, since a card that took a prefix before init is
+ * restarted with the secret, and so makes its addresses again under them.
+ * The recovery build takes the key the installer put on the recovery
+ * partition it booted from, says on the console whether a key was built into
+ * its image and whether the partition's turned SSH on, since the two kinds of
+ * image look identical from outside, and names each disk whose GUID table was
+ * read from its backup. A metal boot whose line has `rach2.fsck` then checks
+ * its ext2 partitions.
  */
 static void set_up(void)
 {
@@ -2601,6 +2818,7 @@ static void set_up(void)
     apply_limits();
     open_service_log();
     keep_backlights();
+    keep_mixer();
     apply_sysctl();
     (void)ip6secret_keep("init: ipv6");
 #ifdef INIT_RECOVERY
