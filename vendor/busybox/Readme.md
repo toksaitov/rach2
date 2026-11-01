@@ -52,7 +52,7 @@ The set-id configuration has `login`, `passwd` and `su` and nothing else: no she
 
 Both binaries are stripped static executables, ELF32 i386 or ELF64 x86-64. The stamp depends on the script, the tarball, both configurations, `muslgcc`, `mk/arch.sh`, the musl stamp, the `patches` directory and every patch in it, so adding, changing or deleting a patch rebuilds both binaries. `make check-busybox` requires the six staged files to be nonempty. `make check-setid` runs [`setidcheck`](../../tools/inspect/setidcheck.c) twice: over the manifests against [`setid.allow`](../../tools/inspect/setid.allow), and with `--applets` over the staged tables and configurations, where it refuses a main table with `su`, `passwd`, `login`, `vlock`, `wall`, `crontab`, `ping`, `ping6`, `traceroute6` or `dmesg`, and a set-id table other than exactly `login`, `passwd` and `su`. `make clean` keeps the staged files; `make distclean` removes them, the extracted tree and the stamp.
 
-The [manifests](../../krffs/manifests/) stage the main binary at mode 0755 as `/bin/busybox` and `/bin/sh`, and the set-id binary at mode 04755 under each applet's name, since KRFFS has no symbolic links and BusyBox dispatches on `argv[0]`.
+The [manifests](../../krffs/manifests/) stage the main binary at mode 0755 as `/bin/busybox` and the set-id binary at mode 04755 under each applet's name, since KRFFS has no symbolic links and BusyBox dispatches on `argv[0]`. Most also stage a second copy as `/bin/sh`. The os-real, grub-test and metal disk roots instead stage the small launcher built by [sox_ng](../sox_ng/Readme.md), which executes `/bin/busybox` with the caller's argument zero and arguments. This saves room for sox_ng without enlarging the RAM root.
 
 ## Updating
 

@@ -1,6 +1,6 @@
 # sox_ng
 
-sox_ng supplies `sox`, `play`, `rec` and `soxi` in every image that stages `audiotest`, including the musl images. It is the small sound check program: `rec -S` shows the recording level live, `play` plays a WAV, and `soxi` reads its format. The stripped program is 704 KB on i686 and 765 KB on x86-64, less than a fifth of the measured 4.6 MB static FFmpeg build. The GNU root's FFmpeg decodes and converts the compressed formats; sox_ng checks the device and the level, which FFmpeg reports through its filters' log lines.
+sox_ng supplies `sox`, `play`, `rec` and `soxi` in every image that stages `audiotest`, including the musl images. It is the small sound check program: `rec -S` shows the recording level live, `play` plays a WAV, and `soxi` reads its format. The stripped program is less than a fifth of the measured 4.6 MB static FFmpeg build. The GNU root's FFmpeg decodes and converts the compressed formats; sox_ng checks the device and the level, which FFmpeg reports through its filters' log lines.
 
 ## Use
 
@@ -21,13 +21,13 @@ The program is under GPL version 2; individual source files have the compatible 
 
 ## Local changes
 
-There are no source patches. The configure line in `build_sox_ng.sh` uses the ported musl and its OSS headers, static linking, built-in WAV and OSS, and no external libraries or FFmpeg subprocess decoder. OpenMP, shared libraries, dynamic format loading and the stack protector are disabled. `-Wl,-z,noexecstack` keeps the stack nonexecutable.
+There are no source patches. The configure line in `build_sox_ng.sh` uses the ported musl and its OSS headers, static linking, built-in WAV and OSS, and no external libraries or FFmpeg subprocess decoder. OpenMP, shared libraries, dynamic format loading and the stack protector are disabled. `-Os` and linker garbage collection keep the program small; `-Wl,-z,noexecstack` keeps the stack nonexecutable.
 
-`mode.c` is a small launcher staged as `play`, `rec` and `soxi`. It executes `/bin/sox`, preserving the argument zero by which the upstream program selects its mode. KRFFS has no symbolic links; the launcher keeps one copy of the large program on each image and works without a shell, including on the test image.
+`mode.c` is a small launcher staged as `play`, `rec` and `soxi`. It executes `/bin/sox`, preserving the argument zero by which the upstream program selects its mode. KRFFS has no symbolic links; the launcher keeps one copy of the large program on each image and works without a shell, including on the test image. In os-real, grub-test and the metal disk root, the same launcher is built to execute `/bin/busybox` and staged as `/bin/sh`, saving another full copy of BusyBox. This keeps the i686 RAM root at 21 MiB, within the space its boot page tables leave below 32 MiB.
 
 ## Building
 
-`make sox_ng` builds i686; `make sox_ng ARCH=x86_64` builds x86-64. The image rules build it through the same stamp. Both architectures extract under `build/`, into `build/vendor-work/sox_ng/` or `build/x86_64/vendor-work/sox_ng/`, and stage `sox`, the mode launcher and `COPYING` under `build/vendor/sox_ng/` or `build/x86_64/vendor/sox_ng/`. The stamp depends on the tarball, script, launcher source, musl stamp, compiler wrapper and architecture table. A missing or empty staged output invalidates the stamp.
+`make sox_ng` builds i686; `make sox_ng ARCH=x86_64` builds x86-64. The image rules build it through the same stamp. Both architectures extract under `build/`, into `build/vendor-work/sox_ng/` or `build/x86_64/vendor-work/sox_ng/`, and stage `sox`, the mode launcher, the `sh` launcher and `COPYING` under `build/vendor/sox_ng/` or `build/x86_64/vendor/sox_ng/`. The stamp depends on the tarball, script, launcher source, musl stamp, compiler wrapper and architecture table. A missing or empty staged output invalidates the stamp.
 
 ## Updating
 

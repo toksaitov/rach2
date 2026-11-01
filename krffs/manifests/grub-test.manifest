@@ -24,7 +24,8 @@ file 0755 /bin/soxi build/vendor/sox_ng/mode
 # `passwd` and `login` are compiled out of this one, so a bare `su` finds the
 # set-id build staged below and nothing else.
 file 0755 /bin/busybox build/vendor/busybox/busybox
-file 0755 /bin/sh build/vendor/busybox/busybox
+# Preserve sh as argument zero without a second copy of BusyBox.
+file 0755 /bin/sh build/vendor/sox_ng/sh
 # The account programs are BusyBox's, from the second build: one binary with
 # only login, passwd and su, staged under the three names, since KRFFS has no
 # symbolic links and BusyBox chooses the applet by argv[0]. It has the set-id
