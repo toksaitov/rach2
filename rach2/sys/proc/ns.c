@@ -51,7 +51,7 @@ struct userns init_userns = {
     {{0, 0, 0xFFFFFFFFu}},           1,    0};
 struct pidns init_pidns = {{1, 0xEFFFFFFCu, NS_PID, NULL}, NULL, 0, 0, 1};
 struct mntns init_mntns = {{1, 0xF0000000u, NS_MNT, NULL}, 0};
-struct netns init_netns = {{1, 0xF0000098u, NS_NET, NULL}};
+struct netns init_netns = {{1, 0xF0000098u, NS_NET, NULL}, NULL};
 struct utsns init_utsns = {{1, 0xEFFFFFFEu, NS_UTS, NULL}, "rach2", "(none)"};
 struct ipcns init_ipcns = {{1, 0xEFFFFFFFu, NS_IPC, NULL}};
 
@@ -101,6 +101,7 @@ void ns_put(struct ns_common *c)
         break;
     case NS_NET:
         net_ns_gone((struct netns *)c);
+        kfree(((struct netns *)c)->lo);
         break;
     case NS_IPC:
         ipc_ns_gone((struct ipcns *)c);
@@ -773,6 +774,13 @@ static struct nsset *nsset_copy(const struct nsset *from, uint32_t flags, struct
     if (flags & CLONE_NEWNET) {
         struct netns *n = ns_new(sizeof(*n), NS_NET, owner);
 
+        if (n) {
+            n->lo = netif_ns_lo_new();
+            if (!n->lo) {
+                ns_put(&n->c);
+                n = NULL;
+            }
+        }
         if (!n) {
             *err = -ENOMEM;
             goto fail;

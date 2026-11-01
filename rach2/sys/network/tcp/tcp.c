@@ -529,12 +529,17 @@ static uint8_t tcp_sack_option(const struct tcb *tcb, uint8_t *opt)
 
 /**
  * Send the segment of `seg_len` bytes in `tcp_tx_buf` from `local_ip` to
- * `remote_ip`, counting it in `net_mib` when IP takes it, and a reset among
- * the resets. Returns what `ip_tx_from` returned.
+ * `remote_ip` in the network namespace `ns`, counting it in `net_mib` when
+ * IP takes it, and a reset among the resets. Returns what `ip_tx_from`
+ * returned.
  */
-static int tcp_ip_tx(net_addr_t local_ip, net_addr_t remote_ip, uint16_t seg_len)
+static int tcp_ip_tx(const struct netns *ns, net_addr_t local_ip, net_addr_t remote_ip,
+                     uint16_t seg_len)
 {
+    const struct netns *was = ip_ns;
     int rc;
+
+    ip_ns = ns;
     if (remote_ip.family == AF_INET6) {
         rc = ip6_tx(local_ip.v6, remote_ip.v6, (int)remote_ip.scope, IP6_NH_TCP, tcp_tx_buf,
                     seg_len, IP6_HOP_LIMIT_DEFAULT);
@@ -542,6 +547,7 @@ static int tcp_ip_tx(net_addr_t local_ip, net_addr_t remote_ip, uint16_t seg_len
         rc = ip_tx_from(local_ip.v4, remote_ip.v4, IP_PROTO_TCP, tcp_tx_buf, seg_len,
                         IP_TTL_DEFAULT);
     }
+    ip_ns = was;
 
     if (rc == 0) {
         net_mib.tcp_out_segs++;
@@ -617,7 +623,7 @@ static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
 
     seg_len = hdr_len;
     write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    rc = tcp_ip_tx(tcb->local_ip, tcb->remote_ip, seg_len);
+    rc = tcp_ip_tx(tcb->ns, tcb->local_ip, tcb->remote_ip, seg_len);
     if (rc == 0 && (flags & TCP_ACK)) {
         tcb->ack_owed = 0;
     }
@@ -775,7 +781,7 @@ static int tcp_output(struct tcb *tcb)
         seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
         write16be(tcp_tx_buf + 16,
                   tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-        if (tcp_ip_tx(tcb->local_ip, tcb->remote_ip, seg_len) == -ENOBUFS) {
+        if (tcp_ip_tx(tcb->ns, tcb->local_ip, tcb->remote_ip, seg_len) == -ENOBUFS) {
             tcb->tx_refused++;
             if (tcb->refused_since == 0) {
                 tcb->refused_since = TCP_NOW() + 1;
@@ -846,7 +852,7 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
 
     seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
     write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    if (tcp_ip_tx(tcb->local_ip, tcb->remote_ip, seg_len) == -ENOBUFS) {
+    if (tcp_ip_tx(tcb->ns, tcb->local_ip, tcb->remote_ip, seg_len) == -ENOBUFS) {
         tcb->tx_refused++;
         if (tcb->refused_since == 0) {
             tcb->refused_since = TCP_NOW() + 1;
@@ -1109,20 +1115,22 @@ static int tcp_port_has_listener(const struct socket *sock, uint16_t port)
 }
 
 /**
- * Whether a block other than a listener has this local port, remote address
- * and remote port. The caller holds `net_lock`.
+ * Whether a block other than a listener of the network namespace `ns` has
+ * this local port, remote address and remote port. The caller holds
+ * `net_lock`.
  *
  * `tcp_find` matches these and the local address, so a pair this refuses
  * from one local address is refused from every other too. A listener or a
  * connection to another peer may share the local port: `tcp_find` takes the
  * connection that matches and falls back to a listener only when none does.
  */
-static int tcp_pair_in_use(uint16_t local_port, net_addr_t remote_ip, uint16_t remote_port)
+static int tcp_pair_in_use(const struct netns *ns, uint16_t local_port, net_addr_t remote_ip,
+                           uint16_t remote_port)
 {
     const struct tcb *t;
 
     for (t = tcbs; t; t = t->next) {
-        if (t->state != TCP_LISTEN && t->local_port == local_port &&
+        if (t->state != TCP_LISTEN && t->local_port == local_port && t->ns == ns &&
             net_addr_equal(t->remote_ip, remote_ip) && t->remote_port == remote_port) {
             return 1;
         }
@@ -1170,12 +1178,24 @@ static void tcp_send_rst_unmatched(net_addr_t local_ip, net_addr_t remote_ip, ui
     write16be(tcp_tx_buf + 16, 0);
     write16be(tcp_tx_buf + 18, 0);
     write16be(tcp_tx_buf + 16, tcp_checksum(local_ip, remote_ip, tcp_tx_buf, TCP_HDR_SIZE));
-    tcp_ip_tx(local_ip, remote_ip, TCP_HDR_SIZE);
+    tcp_ip_tx(ip_ns, local_ip, remote_ip, TCP_HDR_SIZE);
+}
+
+void tcp_ns_gone(const struct netns *ns, const struct netns *to)
+{
+    struct tcb *t;
+
+    for (t = tcbs; t; t = t->next) {
+        if (t->ns == ns) {
+            t->ns = to;
+        }
+    }
 }
 
 /**
- * The LISTEN block for a segment to `local_ip`:`local_port`: the one bound to
- * that address, else the one bound to any, else NULL.
+ * The LISTEN block for a segment to `local_ip`:`local_port` in the network
+ * namespace `ip_ns`: the one bound to that address, else the one bound to
+ * any, else NULL.
  */
 static struct tcb *tcp_find_listener(net_addr_t local_ip, uint16_t local_port)
 {
@@ -1183,7 +1203,7 @@ static struct tcb *tcp_find_listener(net_addr_t local_ip, uint16_t local_port)
     struct tcb *any = NULL;
 
     for (t = tcbs; t; t = t->next) {
-        if (t->state != TCP_LISTEN || t->local_port != local_port)
+        if (t->state != TCP_LISTEN || t->local_port != local_port || t->ns != ip_ns)
             continue;
         if (net_addr_equal(t->local_ip, local_ip))
             return t;
@@ -1194,9 +1214,10 @@ static struct tcb *tcp_find_listener(net_addr_t local_ip, uint16_t local_port)
 }
 
 /**
- * Find the TCB for an incoming segment: a block in any state but LISTEN with
- * the same local address and port, remote address and remote port, else the
- * listener for its local address and port.
+ * Find the TCB for an incoming segment in the network namespace `ip_ns`: a
+ * block in any state but LISTEN with the same local address and port,
+ * remote address and remote port, else the listener for its local address
+ * and port.
  */
 static struct tcb *tcp_find(net_addr_t local_ip, uint16_t local_port, net_addr_t remote_ip,
                             uint16_t remote_port)
@@ -1204,7 +1225,7 @@ static struct tcb *tcp_find(net_addr_t local_ip, uint16_t local_port, net_addr_t
     struct tcb *t;
 
     for (t = tcbs; t; t = t->next) {
-        if (t->state != TCP_LISTEN && t->local_port == local_port &&
+        if (t->state != TCP_LISTEN && t->local_port == local_port && t->ns == ip_ns &&
             net_addr_equal(t->local_ip, local_ip) && net_addr_equal(t->remote_ip, remote_ip) &&
             t->remote_port == remote_port) {
             return t;
@@ -1241,7 +1262,7 @@ static void tcp_send_zwp(struct tcb *tcb)
     seg_len = TCP_HDR_SIZE + 1;
 
     write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    tcp_ip_tx(tcb->local_ip, tcb->remote_ip, seg_len);
+    tcp_ip_tx(tcb->ns, tcb->local_ip, tcb->remote_ip, seg_len);
 }
 
 /**
@@ -1593,6 +1614,7 @@ int tcp_listen(struct socket *sock, uint16_t port)
     }
 
     tcb->family = sock->family;
+    tcb->ns = sock->ns;
     tcb->local_ip = sock->local_ip;
     tcb->local_port = port;
     tcb->state = TCP_LISTEN;
@@ -1645,7 +1667,7 @@ int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
 
     if (sock->local_port != 0) {
         local = sock->local_port;
-        if (tcp_pair_in_use(local, dst_ip, dst_port)) {
+        if (tcp_pair_in_use(sock->ns, local, dst_ip, dst_port)) {
             net_unlock(flags);
             return -EADDRINUSE;
         }
@@ -1668,6 +1690,7 @@ int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
     }
 
     tcb->family = sock->family;
+    tcb->ns = sock->ns;
     tcb->local_ip = from;
     tcb->local_port = local;
     tcb->remote_ip = dst_ip;
@@ -2440,6 +2463,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         conn_sock->uid = tcb->sock ? tcb->sock->uid : tcb->uid;
 
         conn_tcb->family = tcb->family;
+        conn_tcb->ns = tcb->ns;
         conn_tcb->passive = 1;
         conn_tcb->listener = tcb;
         conn_tcb->local_ip = dst_ip;
@@ -2458,6 +2482,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         conn_tcb->uid = conn_sock->uid;
         conn_tcb->inode = conn_sock->inode;
 
+        conn_sock->ns = tcb->ns;
         conn_sock->family = tcb->sock ? tcb->sock->family : dst_ip.family;
         conn_sock->v6only = tcb->sock ? tcb->sock->v6only : 0;
         conn_sock->local_ip = dst_ip;

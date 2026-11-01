@@ -779,15 +779,26 @@ static int32_t bind_inet(struct socket *sock, net_addr_t ip, uint16_t port)
     return 0;
 }
 
+/** Whether `s` is a raw or packet socket of a network namespace other than
+ * the first, which reaches nothing there: its namespace's `lo` carries only
+ * TCP and UDP. */
+static int cut_off(const struct socket *s)
+{
+    return socket_outside(s) &&
+           (s->type == SOCK_RAW || (s->family != AF_INET && s->family != AF_INET6));
+}
+
 /**
  * bind(2): record the local address and port from the sockaddr; a datagram
  * socket also registers them with UDP (-EADDRINUSE if taken), and a netlink
  * socket takes a port id (`netlink_bind_user`). The address must be any (0),
  * one of 127/8, an interface's, or for a datagram socket a broadcast address;
  * any other is -EADDRNOTAVAIL, as on Linux. A sockaddr shorter than the 8
- * bytes read is -EINVAL, and nothing past what the caller declared is read. A
- * socket of a network namespace with no interface binds, and nothing is
- * delivered to it.
+ * bytes read is -EINVAL, and nothing past what the caller declared is read.
+ * A TCP or UDP socket of a network namespace other than the first binds to
+ * any or to 127/8 while its `lo` has an address (`socket_ns_reaches`), and
+ * any other is -EADDRNOTAVAIL; a raw or packet socket there binds, and
+ * nothing is delivered to it.
  *
  * A packet socket binds to an interface and has no port: the address is a
  * sockaddr_ll, and the bind is what puts the socket in the delivery table. A
@@ -828,8 +839,8 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
     if (entry->sock->family == AF_NETLINK) {
         return netlink_bind_user(entry->sock, sa_ptr, addrlen);
     }
-    if (socket_outside(entry->sock)) {
-        return 0; /* a namespace with no interface: nothing is delivered to it */
+    if (cut_off(entry->sock)) {
+        return 0; /* nothing is delivered to it */
     }
 
     if (entry->sock->family == AF_PACKET) {
@@ -871,6 +882,8 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
             return rc;
         if (sock_is_query(entry->sock))
             return -EOPNOTSUPP;
+        if (!net_addr_any(addr) && !socket_ns_reaches(entry->sock, addr, 0))
+            return -EADDRNOTAVAIL;
         if (entry->sock->type == SOCK_RAW) {
             if (!net_addr_any(addr) && !net_addr_local(addr))
                 return -EADDRNOTAVAIL;
@@ -1117,8 +1130,8 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
     if (entry->sock->family == AF_NETLINK) {
         return netlink_send_user(entry->sock, buf_ptr, len);
     }
-    if (socket_outside(entry->sock)) {
-        return -ENETUNREACH; /* a network namespace with no interface */
+    if (cut_off(entry->sock)) {
+        return -ENETUNREACH;
     }
 
     if (entry->sock->type == SOCK_RAW) {
@@ -1438,6 +1451,10 @@ static int accept_ready(void *arg)
  * from the handshake, not from here, so turning a full pool or a duplicate
  * pairing into -ECONNREFUSED would report a local failure as the peer's
  * answer.
+ *
+ * In a network namespace other than the first, a socket reaches only 127/8,
+ * while the namespace's `lo` is up with its address, and any other peer is
+ * -ENETUNREACH, as is any peer of a raw socket there.
  */
 static int32_t do_connect(int fd, uintptr_t sa_ptr, int addrlen)
 {
@@ -1461,8 +1478,8 @@ static int32_t do_connect(int fd, uintptr_t sa_ptr, int addrlen)
     if (entry->sock->family == AF_PACKET) {
         return -EOPNOTSUPP;
     }
-    if (socket_outside(entry->sock)) {
-        return -ENETUNREACH; /* a network namespace with no interface */
+    if (cut_off(entry->sock)) {
+        return -ENETUNREACH;
     }
 
     k_memset(sa, 0, sizeof(sa));
@@ -1485,6 +1502,8 @@ static int32_t do_connect(int fd, uintptr_t sa_ptr, int addrlen)
     rc = inet_endpoint_in(entry->sock, sa_ptr, addrlen, &dst_ip, &dst_port);
     if (rc)
         return rc;
+    if (!socket_ns_reaches(entry->sock, dst_ip, 1))
+        return -ENETUNREACH;
     if (entry->sock->type == SOCK_DGRAM) {
         net_addr_t from;
         uint32_t held = net_lock();
@@ -1558,11 +1577,6 @@ static int32_t do_listen(int fd, int backlog)
     if (entry->sock->tcb || entry->sock->listening) {
         return -EINVAL; /* already listening or connected: a fresh TCB would leak the old one */
     }
-    if (socket_outside(entry->sock)) {
-        entry->sock->listening = 1; /* nothing reaches it to connect */
-        return 0;
-    }
-
     {
         int rc = tcp_listen(entry->sock, entry->sock->local_port);
         if (rc == 0) {
@@ -1670,10 +1684,6 @@ static int32_t do_send(int fd, uintptr_t buf_ptr, int len, int flags)
     if (entry->sock->type != SOCK_STREAM) {
         return do_sendto(fd, buf_ptr, len, flags, 0, 0);
     }
-    if (socket_outside(entry->sock)) {
-        return -ENETUNREACH;
-    }
-
     nonblock = (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
     return (int32_t)socket_tcp_send(
         entry->sock, (const uint8_t __force *)(const void __user *)buf_ptr, len, nonblock);
@@ -2785,7 +2795,7 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
         return -EMSGSIZE;
     }
     iovlen = (uint32_t)hdr.msg_iovlen;
-    if (socket_outside(entry->sock)) {
+    if (cut_off(entry->sock)) {
         return -ENETUNREACH;
     }
     if (entry->sock->family == AF_INET6 && entry->sock->type != SOCK_STREAM && hdr.msg_control &&

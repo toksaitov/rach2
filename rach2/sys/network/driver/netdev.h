@@ -317,12 +317,29 @@ int netdev_set_mtu(struct netdev *nd, uint32_t mtu);
 int netdev_count(void);
 
 /** Whether the caller is in the first network namespace, whose interfaces
- * and tables are the machine's; another has none (proc/ns.h). */
+ * and tables are the machine's; another has only its own `lo` (proc/ns.h). */
 int net_ns_seen(void);
 
-/** The number of interfaces the caller sees: the cards and `lo` after them
- * in the first network namespace, none in another. The calls that list
- * interfaces to a program count them by this. */
+/**
+ * The caller's network namespace's own `lo`, or NULL in the first, whose
+ * `lo` is `netdev_loopback`. It is the namespace's one interface, of index
+ * 1, which a program finds by its name, by that index and through
+ * NETLINK_ROUTE, and which no listing of the machine's interfaces counts.
+ * It reaches 127/8 while it is up with an address, and nothing else.
+ */
+struct netdev *netif_ns_lo(void);
+
+/** Bring the namespace `lo` `nd` up or down. Up gives it 127.0.0.1/8 when it
+ * has no address, as Linux does; down keeps the address. */
+void netif_ns_lo_set_up(struct netdev *nd, int up);
+
+/** Whether the caller may change its network namespace's interfaces: with
+ * privilege in the user namespace that owns it, as CAP_NET_ADMIN there. */
+int net_admin(void);
+
+/** The number of the machine's interfaces the caller sees: the cards and
+ * `lo` after them in the first network namespace, none in another. The
+ * calls that list interfaces to a program count them by this. */
 int netdev_seen_count(void);
 
 /** Interface `n`, from 0: the cards, then `lo`; NULL for any other `n`. */
@@ -341,6 +358,11 @@ int netdev_listed(void);
  * or taking it down is refused, EOPNOTSUPP.
  */
 struct netdev *netdev_loopback(void);
+
+/** Make `nd` a loopback interface named `lo` of index `index`, down and with
+ * no address: the start of the machine's `lo`, and the whole of a network
+ * namespace's (`netif_ns_lo_new`, proc/ns.h). */
+void netdev_loopback_init(struct netdev *nd, int index);
 
 /** The interface of that name, a card's or `lo`, or NULL. */
 struct netdev *netdev_by_name(const char *name);

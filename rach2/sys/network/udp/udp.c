@@ -240,7 +240,7 @@ void udp_refused(uint16_t local_port, uint32_t remote_ip, uint16_t remote_port)
     for (b = bindings; b; b = b->next) {
         struct socket *s = b->sock;
 
-        if (b->port == local_port && s && s->connected &&
+        if (b->port == local_port && s && s->connected && s->ns == ip_ns &&
             net_addr_equal(s->remote_ip, net_addr4(remote_ip)) && s->remote_port == remote_port) {
             s->so_error = ECONNREFUSED;
             wq_wake(&s->waiters, WQ_DATA);
@@ -283,11 +283,13 @@ static int udp_route6(const struct socket *sock, net_addr_t *dst, const struct n
  * The shared transmit buffer is filled and sent under `net_lock`, since a
  * sender in an interrupt must not enter it at the same time (net.h); a
  * datagram past it is built in a block of the caller's own, which IP
- * fragments.
+ * fragments. The datagram is sent in the socket's network namespace
+ * (`ip_ns`).
  */
 int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, const uint8_t *payload,
            uint16_t plen, const struct net_txopt *opt)
 {
+    const struct netns *was;
     uint16_t udp_len;
     uint32_t flags;
     uint8_t *buf = udp_tx_buf;
@@ -326,6 +328,8 @@ int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, cons
     write16be(buf + 6, 0x0000);
     k_memcpy(buf + UDP_HDR_SIZE, payload, plen);
 
+    was = ip_ns;
+    ip_ns = sock->ns;
     if (dst_ip.family == AF_INET6) {
         uint16_t sum = ip6_checksum(from.v6, dst_ip.v6, IP6_NH_UDP, buf, udp_len);
         int tclass = opt && opt->tclass >= 0 ? opt->tclass : sock->tclass6;
@@ -346,6 +350,7 @@ int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, cons
         r = ip_tx_opts(from.v4, dst_ip.v4, IP_PROTO_UDP, buf, udp_len, sock->ip_ttl,
                        sock->pmtudisc);
     }
+    ip_ns = was;
     if (r == 0 && dst_ip.family == AF_INET6) {
         net_mib6.udp6_out_datagrams++;
     } else if (r == 0) {

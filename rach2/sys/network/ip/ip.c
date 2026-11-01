@@ -20,6 +20,7 @@
 #include "../ip6/ip6.h"
 #include "../net.h"
 #include "../netconf.h"
+#include "../../proc/ns.h"
 #include "../../serial.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
@@ -287,10 +288,16 @@ void ip_hold_forget(struct netdev *nd)
 #define LOOP_RING_SLOTS 64u
 static uint8_t loop_ring[LOOP_RING_SLOTS][ETH_MTU];
 static uint8_t *loop_ring_big[LOOP_RING_SLOTS];
+/* A slot's length, 0 for a datagram dropped on the ring (`ip_loop_ns_gone`). */
 static uint32_t loop_ring_len[LOOP_RING_SLOTS];
 /* The card an IPv6 datagram is delivered as received by, or 0 for `lo`
  * (`ip_loop_put_on`). */
 static int loop_ring_if[LOOP_RING_SLOTS];
+/* The network namespace a slot's datagram is delivered in, `ip_ns` when it
+ * was put there. */
+static const struct netns *loop_ring_ns[LOOP_RING_SLOTS];
+
+const struct netns *ip_ns;
 
 /* Datagrams the ring had no room for. Only the first drop is logged, as
  * `loop_drop_logged` records: a line for each would wrap the kernel log and
@@ -362,6 +369,7 @@ int ip_loop_put_parts(const uint8_t *hdr, uint32_t hlen, const uint8_t *payload,
                       int ifindex)
 {
     uint32_t slot, total_len = hlen + plen;
+    struct netdev *lo;
     uint8_t *at;
 
     if (total_len > NETDEV_LOOPBACK_MTU) {
@@ -385,10 +393,12 @@ int ip_loop_put_parts(const uint8_t *hdr, uint32_t hlen, const uint8_t *payload,
     }
     loop_ring_len[slot] = total_len;
     loop_ring_if[slot] = ifindex;
+    loop_ring_ns[slot] = ip_ns;
     loop_head++;
-    if (netdev_loopback()) {
-        netdev_loopback()->tx_packets++;
-        netdev_loopback()->tx_bytes += total_len;
+    lo = ip_ns ? ip_ns->lo : netdev_loopback();
+    if (lo) {
+        lo->tx_packets++;
+        lo->tx_bytes += total_len;
     }
     if (loop_head - loop_tail > loop_peak) {
         loop_peak = loop_head - loop_tail;
@@ -561,6 +571,11 @@ int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
 
     net_mib.ip_out_requests++;
 
+    if (ip_ns && (!IP_IS_LOOPBACK(dst_ip) || !ip_ns->lo || !ip_ns->lo->up || !ip_ns->lo->ip)) {
+        net_mib.ip_out_no_routes++;
+        return -ENETUNREACH;
+    }
+
     if (IP_IS_LOOPBACK(dst_ip)) {
         out = 0;
         route_ip = dst_ip;
@@ -682,16 +697,22 @@ void ip_loop_drain_from(int from)
         uint32_t slot = loop_tail % LOOP_RING_SLOTS;
 
         const uint8_t *dg = loop_ring_big[slot] ? loop_ring_big[slot] : loop_ring[slot];
+        struct netdev *lo;
 
-        if (netdev_loopback()) {
-            netdev_loopback()->rx_packets++;
-            netdev_loopback()->rx_bytes += loop_ring_len[slot];
+        ip_ns = loop_ring_ns[slot];
+        lo = loop_ring_len[slot] == 0 ? 0 : ip_ns ? ip_ns->lo : netdev_loopback();
+        if (lo) {
+            lo->rx_packets++;
+            lo->rx_bytes += loop_ring_len[slot];
         }
-        if ((dg[0] >> 4) == 6) {
+        if (loop_ring_len[slot] == 0) {
+            /* dropped when its namespace ended */
+        } else if ((dg[0] >> 4) == 6) {
             ip6_loop_rx(loop_ring_if[slot], dg, loop_ring_len[slot]);
         } else if (loop_ring_len[slot] <= 0xFFFFu) {
             ip_rx(dg, (uint16_t)loop_ring_len[slot], 1);
         }
+        ip_ns = 0;
         kfree(loop_ring_big[slot]);
         loop_ring_big[slot] = 0;
         loop_tail++;
@@ -700,6 +721,17 @@ void ip_loop_drain_from(int from)
         }
     }
     loop_draining = 0;
+}
+
+void ip_loop_ns_gone(const struct netns *ns)
+{
+    uint32_t at;
+
+    for (at = loop_tail; at != loop_head; at++) {
+        if (loop_ring_ns[at % LOOP_RING_SLOTS] == ns) {
+            loop_ring_len[at % LOOP_RING_SLOTS] = 0;
+        }
+    }
 }
 
 void ip_loop_drain(void)

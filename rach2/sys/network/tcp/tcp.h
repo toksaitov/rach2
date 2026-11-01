@@ -119,6 +119,8 @@ typedef enum {
 struct socket; /* defined in socket/socket.h */
 
 /* A connection's control block, or a listener's. */
+struct netns;
+
 struct tcb {
     struct tcb *next; /* the list of live control blocks */
     int in_use;
@@ -134,6 +136,9 @@ struct tcb {
     struct tcb *listener; /* borrowed until a passive handshake completes */
 
     uint16_t family; /* socket family, including mapped IPv4 on AF_INET6 */
+    /* The network namespace of its socket, NULL for the first: it sends in
+     * that namespace and takes segments only from it (`ip_ns`). */
+    const struct netns *ns;
     net_addr_t local_ip;
     uint16_t local_port;
     net_addr_t remote_ip;
@@ -384,6 +389,11 @@ void tcp_window_update(struct socket *sock);
  * address changes or goes.
  */
 void tcp_local_addr_changed(void);
+
+/** Move the connections and listeners of the network namespace `ns`, which
+ * has ended, to `to`, a namespace no process is in, as its sockets go
+ * (`net_ns_gone`). The caller holds `net_lock`. */
+void tcp_ns_gone(const struct netns *ns, const struct netns *to);
 
 /* One connection, copied out for a reader of /proc/net/tcp. */
 struct tcp_row {

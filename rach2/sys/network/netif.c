@@ -22,6 +22,7 @@
 #include "../mm/usercopy.h"
 #include "../proc/process.h"
 #include "../proc/ns.h"
+#include "../mm/kheap.h"
 
 /* struct ifreq: name at 0 (16 bytes), then the union, whose widest member is
  * a struct ifmap of two longs: 32 bytes on i686 and 40 on x86-64. Inside the
@@ -112,13 +113,46 @@ int netdev_seen_count(void)
     return net_ns_seen() ? netdev_listed() : 0;
 }
 
+struct netdev *netif_ns_lo(void)
+{
+    return current_proc ? proc_netns(current_proc)->lo : 0;
+}
+
+struct netdev *netif_ns_lo_new(void)
+{
+    struct netdev *nd = kmalloc(sizeof(*nd));
+
+    if (nd) {
+        netdev_loopback_init(nd, 1);
+    }
+    return nd;
+}
+
+void netif_ns_lo_set_up(struct netdev *nd, int up)
+{
+    nd->up = up;
+    if (up && nd->ip == 0) {
+        nd->ip = 0x7F000001u;
+        nd->mask = 0xFF000000u;
+    }
+}
+
+int net_admin(void)
+{
+    if (!current_proc) {
+        return 0;
+    }
+    return net_ns_seen() ? proc_privileged(current_proc)
+                         : ns_owner_privileged(current_proc, &proc_netns(current_proc)->c);
+}
+
 /**
  * The interface a caller named, or NULL when this machine has no such one.
  *
  * The name comes out of a caller's `ifreq`, so it is read only as far as the
  * field goes and only up to its terminator; a name that fills the field
- * without one names nothing, and so does every name in a network namespace
- * other than the first.
+ * without one names nothing. In a network namespace other than the first,
+ * only `lo` names one, the namespace's own.
  */
 static struct netdev *named(const uint8_t *name)
 {
@@ -131,10 +165,13 @@ static struct netdev *named(const uint8_t *name)
             break;
         }
     }
-    if (i == IFREQ_NAMESIZE - 1 || !net_ns_seen()) {
+    if (i == IFREQ_NAMESIZE - 1) {
         return 0;
     }
     want[i] = '\0';
+    if (!net_ns_seen()) {
+        return want[0] == 'l' && want[1] == 'o' && want[2] == '\0' ? netif_ns_lo() : 0;
+    }
     return netdev_by_name(want);
 }
 
@@ -200,20 +237,40 @@ static int32_t loopback_set(uint32_t request, const uint8_t *ifr, const struct n
     return request == SIOCSIFFLAGS && (ifr[IFREQ_UNION] & IFF_UP) ? 0 : -EOPNOTSUPP;
 }
 
+/** A setter for a network namespace's `lo`: up or down, or 127.0.0.1 and
+ * 255.0.0.0, its only address and mask; anything else is EOPNOTSUPP. */
+static int32_t ns_loopback_set(uint32_t request, const uint8_t *ifr, struct netdev *nd)
+{
+    uint32_t v = be32(ifr + IFREQ_SA_ADDR);
+
+    if (request == SIOCSIFFLAGS) {
+        netif_ns_lo_set_up(nd, (ifr[IFREQ_UNION] & IFF_UP) != 0);
+        return 0;
+    }
+    if (request == SIOCSIFADDR && v == 0x7F000001u) {
+        nd->ip = v;
+        nd->mask = 0xFF000000u;
+        return 0;
+    }
+    return request == SIOCSIFNETMASK && nd->ip != 0 && v == nd->mask ? 0 : -EOPNOTSUPP;
+}
+
 /**
  * Handle the requests that read or write an interface.
  *
  * The name is checked first for every one of them but SIOCGIFNAME, which
  * takes an index in the union and answers with a name, so that a request
  * about an interface the caller does not see is ENODEV whatever it asks. The
- * setters are root's.
+ * setters need privilege over the caller's network namespace (`net_admin`).
  *
  * The setters return without copying the request back, since they only read
  * it and a failed copy would report a refusal for a change already made.
  * SIOCSIFFLAGS sets only whether the interface is up, and SIOCSIFMTU sets
  * the MTU within the interface's range (`netdev_set_mtu`), EINVAL outside
- * it. `lo` takes no other change but its own address and mask again and
- * being up, EOPNOTSUPP, and reports Linux's loopback type, MTU and flags. SIOCSIFADDR gives
+ * it. The machine's `lo` takes no other change but its own address and
+ * mask again and being up, EOPNOTSUPP; a namespace's takes what
+ * `ns_loopback_set` says. Both report Linux's loopback type, MTU and
+ * flags. SIOCSIFADDR gives
  * `netconf_set_address` no mask: the mask that goes with the address is the
  * classful one until SIOCSIFNETMASK arrives, never the one left from the
  * address before, and `ifconfig` issues the two in that order. A subnet's
@@ -243,10 +300,13 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
 
         struct netdev *at;
 
-        if (index < 1 || index > netdev_seen_count()) {
+        if (!net_ns_seen()) {
+            at = index == 1 ? netif_ns_lo() : 0;
+        } else if (index < 1 || index > netdev_seen_count()) {
             return -ENODEV;
+        } else {
+            at = netdev_at(index - 1);
         }
-        at = netdev_at(index - 1);
         if (!at || at->index != index) {
             return -ENODEV;
         }
@@ -265,7 +325,7 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
 
     setter = (request == SIOCSIFADDR || request == SIOCSIFNETMASK || request == SIOCSIFBRDADDR ||
               request == SIOCSIFFLAGS || request == SIOCSIFMTU);
-    if (setter && (!current_proc || !proc_privileged(current_proc))) {
+    if (setter && !net_admin()) {
         return -EPERM;
     }
     if (request == SIOCSIFMTU) {
@@ -276,6 +336,9 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
         return netdev_set_mtu(nd, mtu);
     }
 
+    if (setter && !net_ns_seen()) {
+        return ns_loopback_set(request, ifr, nd);
+    }
     if (setter && nd->loopback) {
         return loopback_set(request, ifr, nd);
     }

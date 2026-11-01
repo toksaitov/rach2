@@ -269,12 +269,15 @@ typedef struct socket {
      * (netlink.c). */
     void *netlink;
     /* The network namespace the socket was made in (proc/ns.h): NULL for
-     * the first, whose interfaces alone a socket reaches, and for every
-     * netlink socket; `net_gone` in socket.c once its namespace has ended. */
+     * the first, whose interfaces are the machine's, and for every netlink
+     * socket; `net_gone` in socket.c once its namespace has ended. A socket
+     * of another reaches only its namespace's `lo` (`socket_ns_reaches`). */
     const struct netns *ns;
 } socket_t;
 
-/** Whether a bound socket accepts a datagram at the canonical address. */
+/** Whether a bound socket accepts a datagram at the canonical address: one
+ * of the datagram's network namespace, `ip_ns`, bound to that address or to
+ * any. */
 int socket_address_matches(const struct socket *sock, net_addr_t dst);
 /** Whether the bindings of two sockets cover any common local address. */
 int socket_bind_conflict(const struct socket *a, const struct socket *b);
@@ -296,10 +299,16 @@ void socket_init(void);
  */
 struct socket *socket_alloc(int type);
 
-/** Whether `s` was made in a network namespace other than the first: it
- * reaches no interface, binds to nothing a packet is delivered to, and
- * neither connects nor sends (`do_bind` and the rest in syscall_net.c). */
+/** Whether `s` was made in a network namespace other than the first, whose
+ * one interface is its own `lo`. A raw socket of one takes nothing and
+ * sends nothing; a TCP or UDP socket binds, connects and sends only as
+ * `socket_ns_reaches` allows (`do_bind` and the rest in syscall_net.c). */
 int socket_outside(const struct socket *s);
+
+/** Whether the socket `s` reaches the address `a`: any, for a socket of the
+ * first network namespace; else 127/8 only, while its namespace's `lo` has
+ * its address and, with `up`, is up, as a send needs and a bind does not. */
+int socket_ns_reaches(const struct socket *s, net_addr_t a, int up);
 
 /**
  * Whether a live stream socket has `port` as its local port, bound or

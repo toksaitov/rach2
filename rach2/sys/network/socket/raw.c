@@ -128,7 +128,8 @@ static void raw_queue(struct raw_binding *b, const struct sock_dgram *meta, cons
 }
 
 /** `ip_rx` runs with interrupts off, so the list and the queues are touched
- * without taking `net_lock`. */
+ * without taking `net_lock`. Only the sockets of the datagram's network
+ * namespace, `ip_ns`, take it. */
 void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
 {
     struct sock_dgram meta;
@@ -146,7 +147,7 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
     meta.info.tclass = (int16_t)data[1];
 
     for (b = raws; b; b = b->next) {
-        if (!b->v6 && b->proto == proto) {
+        if (!b->v6 && b->proto == proto && b->sock->ns == ip_ns) {
             raw_queue(b, &meta, data, total_len);
         }
     }
@@ -178,7 +179,7 @@ void raw6_rx(int ifindex, const uint8_t *ip6h, uint8_t nh, const uint8_t *msg, u
     meta.info.tclass = (int16_t)(((ip6h[0] & 0x0f) << 4) | (ip6h[1] >> 4));
 
     for (b = raws; b; b = b->next) {
-        if (b->v6 && b->proto == nh && !raw_filtered6(b, msg, len)) {
+        if (b->v6 && b->proto == nh && b->sock->ns == ip_ns && !raw_filtered6(b, msg, len)) {
             raw_queue(b, &meta, msg, len);
         }
     }

@@ -114,6 +114,16 @@ int socket_outside(const socket_t *s)
     return s->ns != NULL;
 }
 
+int socket_ns_reaches(const socket_t *s, net_addr_t a, int up)
+{
+    const struct netdev *lo = s->ns ? s->ns->lo : NULL;
+
+    if (!s->ns) {
+        return 1;
+    }
+    return lo && lo->ip && (lo->up || !up) && a.family == AF_INET && IP_IS_LOOPBACK(a.v4);
+}
+
 void net_ns_gone(struct netns *ns)
 {
     socket_t *s;
@@ -124,6 +134,8 @@ void net_ns_gone(struct netns *ns)
             s->ns = &net_gone;
         }
     }
+    tcp_ns_gone(ns, &net_gone);
+    ip_loop_ns_gone(ns);
     net_unlock(flags);
     unix_ns_gone(ns);
 }
@@ -968,7 +980,7 @@ short socket_poll(struct socket *sock, short events, struct wait_queue **wq)
 /** Match a canonical destination against a socket's bound address. */
 int socket_address_matches(const struct socket *sock, net_addr_t dst)
 {
-    if (socket_outside(sock))
+    if (sock->ns != ip_ns)
         return 0;
     if (dst.family == AF_INET6 && sock->family != AF_INET6)
         return 0;

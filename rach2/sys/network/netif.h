@@ -13,7 +13,9 @@
  *
  * Reading is anyone's; changing is root's, EPERM otherwise, since a program
  * that could set this machine's address could take another machine's and
- * send from it.
+ * send from it. In a network namespace other than the first, whose one
+ * interface is its own `lo`, changing is for a process with privilege in
+ * the user namespace that owns it.
  */
 
 /* The requests, with Linux's numbers. `ifreq` is 16 bytes of name followed by

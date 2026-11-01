@@ -663,10 +663,19 @@ static int same_name(const char *name, uint32_t cap, const char *text, uint32_t 
     return len == cap || name[len] == '\0';
 }
 
+/** Whether `nd` is the interface of index `index`, or with that 0 of the
+ * name of `name_len` bytes at `name`. */
+static int link_is(const struct netdev *nd, uint32_t index, const char *name, uint32_t name_len)
+{
+    return nd && (index != 0 ? (uint32_t)nd->index == index
+                             : name && same_name(nd->name, sizeof(nd->name), name, name_len));
+}
+
 /**
  * The interface a request for one link names, or NULL: by the index of its
  * `ifinfomsg`, or with that 0, by its IFLA_IFNAME attribute, which is how
  * `ip link show eth0` asks. `body` is the request's length past its header.
+ * In a network namespace other than the first, only its `lo` is found.
  */
 static struct netdev *link_asked(const uint8_t *req, uint32_t body)
 {
@@ -689,14 +698,13 @@ static struct netdev *link_asked(const uint8_t *req, uint32_t body)
         }
         attr += (len + 3u) & ~3u;
     }
+    if (!net_ns_seen()) {
+        return link_is(netif_ns_lo(), index, name, name_len) ? netif_ns_lo() : 0;
+    }
     for (i = 0; i < n; i++) {
         struct netdev *nd = netdev_at(i);
 
-        if (!nd) {
-            continue;
-        }
-        if (index != 0 ? (uint32_t)nd->index == index
-                       : name && same_name(nd->name, sizeof(nd->name), name, name_len)) {
+        if (link_is(nd, index, name, name_len)) {
             return nd;
         }
     }
@@ -1399,11 +1407,15 @@ static uint32_t req_ip(const uint8_t *req, uint32_t body, uint32_t fixed, uint16
                : 0;
 }
 
-/** The interface of index `index`, or NULL. */
+/** The interface of index `index`, or NULL; in a network namespace other
+ * than the first, its `lo` for 1. */
 static struct netdev *dev_of_index(uint32_t index)
 {
     int i, n = netdev_seen_count();
 
+    if (!net_ns_seen()) {
+        return index == 1 ? netif_ns_lo() : 0;
+    }
     for (i = 0; i < n; i++) {
         struct netdev *nd = netdev_at(i);
 
@@ -1418,8 +1430,9 @@ static struct netdev *dev_of_index(uint32_t index)
  * MTU by IFLA_MTU (`netdev_set_mtu`), and a name only as it is. The request
  * is checked whole before anything changes. Returns 0, -ENODEV for no such
  * interface, -EINVAL for an MTU out of the interface's range or an
- * IFLA_MTU not four bytes long, or -EOPNOTSUPP for another name or for `lo`
- * taken down, since it is always up. */
+ * IFLA_MTU not four bytes long, or -EOPNOTSUPP for another name or for the
+ * machine's `lo` taken down, since it is always up. A namespace's `lo` goes
+ * up and down (`netif_ns_lo_set_up`). */
 static int32_t link_change(const uint8_t *req, uint32_t body)
 {
     struct netdev *nd = body >= 16 ? link_asked(req, body) : 0;
@@ -1438,7 +1451,7 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
         !same_name(nd->name, sizeof(nd->name), (const char *)a, len)) {
         return -EOPNOTSUPP;
     }
-    if ((get32(req + NLMSG_HDRLEN + 12) & IFF_UP) && nd->loopback &&
+    if ((get32(req + NLMSG_HDRLEN + 12) & IFF_UP) && nd->loopback && net_ns_seen() &&
         !(get32(req + NLMSG_HDRLEN + 8) & IFF_UP)) {
         return -EOPNOTSUPP;
     }
@@ -1446,7 +1459,13 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
         netdev_set_mtu(nd, get32(mtu));
     }
     if (get32(req + NLMSG_HDRLEN + 12) & IFF_UP) {
-        netconf_set_up(nd, (get32(req + NLMSG_HDRLEN + 8) & IFF_UP) != 0);
+        int up = (get32(req + NLMSG_HDRLEN + 8) & IFF_UP) != 0;
+
+        if (!net_ns_seen()) {
+            netif_ns_lo_set_up(nd, up);
+        } else {
+            netconf_set_up(nd, up);
+        }
     }
     return 0;
 }
@@ -1575,12 +1594,37 @@ static int32_t addr6_change(const uint8_t *req, uint16_t type, uint16_t flags, u
         valid, preferred);
 }
 
+/** RTM_NEWADDR and RTM_DELADDR on a network namespace's `lo` `nd`, whose one
+ * address is 127.0.0.1/8: added, with NLM_F_EXCL -EEXIST when it is there,
+ * or removed, -EADDRNOTAVAIL when it is not. Any other is -EOPNOTSUPP. */
+static int32_t ns_addr_change(struct netdev *nd, uint32_t ip, uint32_t prefix, uint16_t type,
+                              uint16_t flags)
+{
+    if (ip != 0x7F000001u || (type == RTM_NEWADDR && prefix != 8)) {
+        return -EOPNOTSUPP;
+    }
+    if (type == RTM_DELADDR) {
+        if (nd->ip != ip) {
+            return -EADDRNOTAVAIL;
+        }
+        nd->ip = nd->mask = 0;
+        return 0;
+    }
+    if (nd->ip == ip) {
+        return (flags & NLM_F_EXCL) ? -EEXIST : 0;
+    }
+    nd->ip = ip;
+    nd->mask = 0xFF000000u;
+    return 0;
+}
+
 /** RTM_NEWADDR and RTM_DELADDR: an address of an interface and its prefix,
  * its first or another. Returns the result of `netconf_add_address` or
  * `netconf_del_address`; -ENODEV for no such interface; -EINVAL for an
  * address of 0 to add; and to add one the interface has, 0, or -EEXIST
  * with NLM_F_EXCL. On `lo` only that last is answered, and the rest is
- * EOPNOTSUPP. A request of AF_INET6 is `addr6_change`'s. */
+ * EOPNOTSUPP. A request of AF_INET6 is `addr6_change`'s, and EOPNOTSUPP in
+ * a network namespace other than the first. */
 static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
     struct netdev *nd = body >= 8 ? dev_of_index(get32(req + NLMSG_HDRLEN + 4)) : 0;
@@ -1589,13 +1633,16 @@ static int32_t addr_change(const uint8_t *req, uint16_t type, uint16_t flags, ui
     uint32_t mask = prefix == 0 || prefix > 32 ? 0 : 0xFFFFFFFFu << (32 - prefix);
 
     if (body >= 8 && req[NLMSG_HDRLEN] == AF_INET6) {
-        return addr6_change(req, type, flags, body);
+        return net_ns_seen() ? addr6_change(req, type, flags, body) : -EOPNOTSUPP;
     }
     if (ip == 0) {
         ip = req_ip(req, body, 8, IFA_ADDRESS);
     }
     if (!nd) {
         return -ENODEV;
+    }
+    if (!net_ns_seen()) {
+        return ns_addr_change(nd, ip, prefix, type, flags);
     }
     if (nd->loopback) {
         return type == RTM_NEWADDR && netdev_holds(nd, ip) ? ((flags & NLM_F_EXCL) ? -EEXIST : 0)
@@ -1818,12 +1865,17 @@ static int is_change(uint16_t type)
            type == RTM_NEWNEIGH || type == RTM_DELNEIGH;
 }
 
-/** Make the change `req` asks for: -EPERM for a caller without privilege,
- * else its handler's result. */
+/** Make the change `req` asks for: -EPERM for a caller without privilege
+ * over its network namespace, -EOPNOTSUPP for a route or a neighbour in a
+ * namespace other than the first, else its handler's result. */
 static int32_t change(const uint8_t *req, uint16_t type, uint16_t flags, uint32_t body)
 {
-    if (!current_proc || !proc_privileged(current_proc)) {
+    if (!net_admin()) {
         return -EPERM;
+    }
+    if (!net_ns_seen() && type != RTM_NEWLINK && type != RTM_SETLINK && type != RTM_NEWADDR &&
+        type != RTM_DELADDR) {
+        return -EOPNOTSUPP;
     }
     if (type == RTM_NEWLINK || type == RTM_SETLINK) {
         return link_change(req, body);
@@ -1951,19 +2003,33 @@ static void netconf_answer(struct nl_build *b, const uint8_t *req, uint16_t flag
     netconf_msg(b, family == AF_INET6 ? AF_INET6 : AF_INET, index, 0);
 }
 
+/** Append `nd`'s link for RTM_GETLINK, else its addresses. */
+static void link_or_addrs(struct nl_build *b, uint16_t type, const struct netdev *nd)
+{
+    if (type == RTM_GETLINK) {
+        link_msg(b, nd, NLM_F_MULTI);
+    } else {
+        addr_msgs(b, nd);
+    }
+}
+
 /** Answer the NETLINK_ROUTE request of `type` and `flags`, whose header is
  * `req` and whose body of `body` bytes follows it. In a network namespace
- * with no interface, a change or a question about one finds none, and a
- * dump is empty. A dump of addresses, routes, neighbours, rules or
- * configurations is of the family the first byte of the request's body
- * names, AF_INET or AF_INET6, or of both for 0, IPv4 first. */
+ * with no interface but its `lo`, `lo` is listed, asked about and changed
+ * as `link_change` and `ns_addr_change` say; a question about a route or
+ * anything else finds none, and another dump is empty. A dump of
+ * addresses, routes, neighbours, rules or configurations is of the family
+ * the first byte of the request's body names, AF_INET or AF_INET6, or of
+ * both for 0, IPv4 first. */
 static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16_t flags,
                    uint32_t body)
 {
     int i, n = netdev_seen_count();
     uint8_t family = body >= 1 ? req[NLMSG_HDRLEN] : 0;
+    int dump = (flags & NLM_F_DUMP) == NLM_F_DUMP;
 
-    if (!net_ns_seen()) {
+    if (!net_ns_seen() && !is_change(type) && !(type == RTM_GETLINK && (dump || body >= 16)) &&
+        !(type == RTM_GETADDR && dump)) {
         if (is_change(type) || (flags & NLM_F_DUMP) != NLM_F_DUMP) {
             end_msg(b, req, type == RTM_GETROUTE ? -ENETUNREACH : -ENODEV);
         } else {
@@ -2044,6 +2110,9 @@ static void answer(struct nl_build *b, const uint8_t *req, uint16_t type, uint16
         if (netdev_at(i)) {
             addr6_msgs(b, netdev_at(i));
         }
+    }
+    if (!net_ns_seen() && netif_ns_lo() && (type == RTM_GETLINK || family != AF_INET6)) {
+        link_or_addrs(b, type, netif_ns_lo());
     }
     end_msg(b, 0, 0);
 }

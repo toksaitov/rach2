@@ -266,6 +266,10 @@ uint32_t ip_source(uint32_t dst)
     return (dst & 0xFF000000u) == 0x7F000000u ? 0x7F000001u : net_ip_addr;
 }
 
+/* The namespace of the segment being sent or delivered: always the first,
+ * the model's only one. */
+const struct netns *ip_ns;
+
 /** Record a segment sent from `src`, as ip_tx does. */
 int ip_tx_from(uint32_t src, uint32_t dst, uint8_t proto, const uint8_t *payload, uint16_t len,
                uint8_t ttl)

@@ -30,6 +30,10 @@ static int failures;
         }                                                 \
     } while (0)
 
+/* The namespace of the datagram being delivered: always the first, the
+ * model's only one. */
+const struct netns *ip_ns;
+
 /** Take the network lock: a no-op, since no interrupt runs in this model. */
 uint32_t net_lock(void)
 {

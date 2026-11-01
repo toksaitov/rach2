@@ -68,16 +68,24 @@ static int loopback_tx(void *dev, const uint8_t *data, uint16_t len)
 
 static const struct netdev_ops loopback_ops = {"loopback", 0, loopback_tx, 0, 0, 0, 0, 0, 0};
 
+void netdev_loopback_init(struct netdev *nd, int index)
+{
+    k_memset(nd, 0, sizeof(*nd));
+    nd->ops = &loopback_ops;
+    nd->index = index;
+    nd->name[0] = 'l';
+    nd->name[1] = 'o';
+    nd->pci_key = -1;
+    nd->loopback = 1;
+    nd->mtu = NETDEV_LOOPBACK_MTU;
+}
+
 /** Put `lo` after the cards the probe brought up. */
 static void loopback_up(void)
 {
     struct netdev *nd = &ifaces[niface];
 
-    k_memset(nd, 0, sizeof(*nd));
-    nd->ops = &loopback_ops;
-    nd->index = niface + 1;
-    nd->name[0] = 'l';
-    nd->name[1] = 'o';
+    netdev_loopback_init(nd, niface + 1);
     nd->ip = 0x7F000001u;
     nd->mask = 0xFF000000u;
     nd->addr6[0].addr[15] = 1; /* ::1 */
@@ -89,9 +97,6 @@ static void loopback_up(void)
     nd->addr6[0].preferred = NETDEV_LIFETIME_FOREVER;
     nd->naddr6 = 1;
     nd->up = 1;
-    nd->pci_key = -1;
-    nd->loopback = 1;
-    nd->mtu = NETDEV_LOOPBACK_MTU;
     lo_ready = 1;
 }
 

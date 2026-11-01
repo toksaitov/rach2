@@ -34,6 +34,23 @@ void unix_ns_gone(const struct netns *ns)
     (void)ns;
 }
 
+/** Do nothing: no row ends the namespace. */
+void tcp_ns_gone(const struct netns *ns, const struct netns *to)
+{
+    (void)ns;
+    (void)to;
+}
+
+/** Do nothing: no row ends the namespace. */
+void ip_loop_ns_gone(const struct netns *ns)
+{
+    (void)ns;
+}
+
+/* The namespace of the datagram being delivered: always the first, the
+ * model's only one. */
+const struct netns *ip_ns;
+
 static wait_queue_t *woken;  /* the queue wq_wake last named; NULL before */
 static uint32_t woken_kinds; /* the WQ_ kinds of every wake, or-ed together */
 static int failures;

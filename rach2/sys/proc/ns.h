@@ -89,8 +89,13 @@ struct mntns {
     uint32_t bit;
 };
 
+struct netdev;
+
 struct netns {
     struct ns_common c;
+    /* The namespace's own `lo` (netif_ns_lo), from the heap; NULL in the
+     * first, whose interfaces are the machine's. */
+    struct netdev *lo;
 };
 
 struct utsns {
@@ -376,10 +381,16 @@ void vfs_mntns_gone(uint32_t bit);
 /** The bits of the mount namespaces that exist. */
 uint32_t mntns_live_bits(void);
 
-/** The end of the network namespace `ns`: its sockets, which have no
- * reference to it, move to a namespace no process is in, and nothing is
- * closed (network/socket/socket.c). */
+/** The end of the network namespace `ns`: its sockets and connections,
+ * which have no reference to it, move to a namespace no process is in,
+ * nothing is closed, and the datagrams on their way to it are dropped
+ * (network/socket/socket.c). */
 void net_ns_gone(struct netns *ns);
+
+/** A new network namespace's `lo`, down and with no address, as Linux makes
+ * one, from the heap: the namespace frees it with `kfree` when it ends.
+ * NULL when memory is short (network/netif.c). */
+struct netdev *netif_ns_lo_new(void);
 
 /** The end of the IPC namespace `ns`: its semaphore sets and message queues
  * are removed, its shared memory segments are marked for removal, and its

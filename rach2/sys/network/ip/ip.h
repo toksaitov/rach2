@@ -177,6 +177,9 @@ int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
  * it, or the driver did not take a frame; -EOPNOTSUPP for a broadcast of
  * anything but UDP; and -EINVAL for a datagram from 127/8 to an address
  * that is not this machine's, which no card may carry.
+ * In a network namespace other than the first (`ip_ns`), only 127/8 is
+ * reached, and only while the namespace's `lo` is up with its address;
+ * anything else is -ENETUNREACH.
  *
  * A datagram is built in a buffer of this file's, so the caller has
  * interrupts off (`net_lock` in a system call).
@@ -218,13 +221,32 @@ void ip_hold_resolved(struct netdev *nd, uint32_t hop, const uint8_t *mac);
  * off, from `arp_flush` and `arp_forget_dev`. */
 void ip_hold_forget(struct netdev *nd);
 
+struct netns;
+
+/**
+ * The network namespace the datagram being sent or delivered is in: NULL
+ * for the first, whose interfaces are the machine's, else another, whose
+ * one interface is its own `lo` (proc/ns.h). A sender of a namespace's
+ * socket or connection sets it around its call to `ip_tx_from`, and
+ * `ip_loop_drain_from` around each delivery of a datagram one sent, so that
+ * the demultiplexers of TCP and UDP match only that namespace's sockets. It
+ * is set only with interrupts off, and NULL again before they are on.
+ */
+extern const struct netns *ip_ns;
+
+/** Drop the datagrams on the loopback ring of the network namespace `ns`,
+ * which has ended, so that none reaches a namespace made at its address
+ * later. Called with interrupts off. */
+void ip_loop_ns_gone(const struct netns *ns);
+
 /**
  * Put the datagram of `total_len` bytes at `dgram`, IPv4 or IPv6, on the
- * loopback ring, counted as `lo`'s traffic, as Linux counts it. A datagram
- * past a slot's 1520 bytes is copied to the heap. Returns 0, -EMSGSIZE past
- * `lo`'s MTU, NETDEV_LOOPBACK_MTU, or -ENOBUFS when the ring is full or no
- * memory holds the datagram, which is counted in `ip_loop_dropped` and
- * logged once. Called with interrupts off.
+ * loopback ring, counted as `lo`'s traffic, as Linux counts it, and marked
+ * with `ip_ns`, the namespace it is delivered in. A datagram past a slot's
+ * 1520 bytes is copied to the heap. Returns 0, -EMSGSIZE past `lo`'s MTU,
+ * NETDEV_LOOPBACK_MTU, or -ENOBUFS when the ring is full or no memory holds
+ * the datagram, which is counted in `ip_loop_dropped` and logged once.
+ * Called with interrupts off.
  */
 int ip_loop_put(const uint8_t *dgram, uint32_t total_len);
 

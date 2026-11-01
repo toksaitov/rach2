@@ -434,7 +434,9 @@ int ip6_tx(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh, cons
  * it asks. A datagram with a router alert is MLD's, small enough never to
  * be fragmented. A datagram past this file's buffer can only be one for
  * the loopback ring, whose MTU is `lo`'s, and goes onto the ring in two
- * parts, the header from the buffer and the payload where it lies.
+ * parts, the header from the buffer and the payload where it lies. A
+ * datagram of a network namespace other than the first (`ip_ns`) is
+ * -ENETUNREACH, since the namespace's `lo` has no IPv6.
  */
 int ip6_tx_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh,
                 const uint8_t *payload, uint16_t plen, uint8_t hlim, int opts)
@@ -448,6 +450,10 @@ int ip6_tx_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh,
     net_mib6.ip6_out_requests++;
     if (ip6_is_unspecified(dst) || ip6_is_v4mapped(dst)) {
         return -EINVAL;
+    }
+    if (ip_ns) {
+        net_mib6.ip6_out_no_routes++;
+        return -ENETUNREACH;
     }
     if (opts & IP6_TXF_ONLINK) {
         out = ifindex >= 1 && ifindex <= netdev_listed() ? netdev_at(ifindex - 1) : 0;
