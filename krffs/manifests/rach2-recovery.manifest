@@ -110,7 +110,7 @@ text 0644 /etc/shells /bin/sh\n
 # since a router need not answer queries itself. utils/resolv.c reads the
 # first `nameserver` line, and musl's resolver up to three.
 text 0644 /etc/resolv.conf nameserver 1.1.1.1\nnameserver 1.0.0.1\n
-text 0644 /etc/hosts 127.0.0.1 localhost\n
+text 0644 /etc/hosts 127.0.0.1 localhost\n::1       localhost ip6-localhost ip6-loopback\n
 text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
 
 # The network configuration `ifup -a` reads, in the file where Debian keeps
@@ -165,6 +165,9 @@ dir 0755 /usr/share/udhcpc
 # The script udhcpc runs when a lease arrives or ends, which turns the lease
 # into an address, a route and a resolver.
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
+# The script udhcpc6 runs for a DHCPv6 lease, which turns it into an address
+# and resolvers (busybox-networking(1)).
+file 0755 /usr/share/udhcpc/default6.script krffs/udhcpc6-default.script
 # The one keymap init loads here, `us` and the two files it includes: this
 # root has no /etc/vconsole.conf, so init loads `us` (init(8)), and its 5 MiB
 # must keep 512 KiB free, which the other layouts' 150 KiB would take

@@ -1,0 +1,75 @@
+#!/bin/sh
+#
+# The script BusyBox's udhcpc6 runs when a DHCPv6 lease arrives, is renewed,
+# or ends.
+#
+# Most IPv6 networks need no DHCPv6: the kernel makes the addresses the
+# routers advertise by itself (SLAAC). A network whose routers tell their
+# hosts to ask a server instead gives the address here, as a lease, with
+# udhcpc6 started for the interface by hand or by an `up` line of its
+# stanza. A DHCPv6 lease carries no prefix length and no route: the address
+# is a /128, and the on-link prefix and the default route are the routers'.
+#
+# The address of the lease in force is kept in /var/run, so that a lease
+# lost or replaced takes its address away. The resolver gets the lease's
+# servers beside the IPv4 ones /etc/resolv.conf has, which the IPv4 lease
+# script wrote, so that a machine on both keeps both.
+
+# shellcheck disable=SC2154 # udhcpc6 passes the lease in the environment
+RESOLV=/etc/resolv.conf
+KEPT=/var/run/udhcpc6.$interface.address
+
+fail=0
+
+# Take away the address of the lease before this one, if there was one.
+drop_old() {
+	if [ -s "$KEPT" ]; then
+		/bin/busybox ifconfig "$interface" del "$(cat "$KEPT")/128" 2>/dev/null
+		/bin/busybox rm -f "$KEPT"
+	fi
+}
+
+# Build the new resolver: the search list, the IPv4 servers already there,
+# then the lease's, reporting the first write that fails.
+write_resolv() {
+	: > "$RESOLV.new" || return 1
+	if [ -n "$search" ]; then
+		echo "search $search" >> "$RESOLV.new" || return 1
+	fi
+	if [ -f "$RESOLV" ]; then
+		/bin/busybox grep '^nameserver [0-9.]*$' "$RESOLV" >> "$RESOLV.new"
+	fi
+	for s in $dns; do
+		echo "nameserver $s" >> "$RESOLV.new" || return 1
+	done
+	return 0
+}
+
+case "$1" in
+	deconfig)
+		drop_old
+		;;
+
+	bound|renew)
+		if [ -z "$ipv6" ]; then
+			echo "udhcpc6: the lease names no address" >&2
+			exit 1
+		fi
+		if [ "$(cat "$KEPT" 2>/dev/null)" != "$ipv6" ]; then
+			drop_old
+			/bin/busybox ifconfig "$interface" add "$ipv6/128" || fail=1
+			[ $fail = 0 ] && echo "$ipv6" > "$KEPT"
+		fi
+		if [ -n "$dns" ]; then
+			if write_resolv; then
+				/bin/busybox mv "$RESOLV.new" "$RESOLV" || fail=1
+			else
+				echo "udhcpc6: resolver: writing $RESOLV.new failed" >&2
+				/bin/busybox rm -f "$RESOLV.new"
+				fail=1
+			fi
+		fi
+		;;
+esac
+
+exit $fail
