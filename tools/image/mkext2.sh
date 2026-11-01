@@ -27,7 +27,7 @@
 # --overlay runs PROGRAM with the staged directory as its one argument, after
 # the manifest is staged and before the volume is written, for a system that
 # a manifest cannot describe, such as one with links (vendor/gnu's
-# install_root.sh). What it adds is root's, with the fixed staged instant as
+# install_root.sh). What it adds is root's, with the image's instant as
 # its times and the mode it has in the directory less the group's and
 # others' write bits, so that only root may write it. PROGRAM may copy what
 # an earlier build made under that build's umask, and a umask of 002 leaves
@@ -38,6 +38,11 @@
 # manifest staged keeps the owner and mode the manifest gives it, so only
 # the manifest makes a node that others may write, and one the program
 # removed fails the build.
+#
+# Every node's times, and the volume's own, are one instant: the date of the
+# checkout's commit, or SOURCE_DATE_EPOCH when it is set, or 1 outside a
+# checkout. The inodes are 256 bytes, whose extra fields keep nanoseconds
+# and times past 2038; the nanoseconds are zero.
 #
 
 set -e
@@ -118,6 +123,10 @@ trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 WORK=$(mktemp -d "$(dirname "$OUT")/.mkext2.XXXXXX") || exit 1
+STAMP="${SOURCE_DATE_EPOCH:-$(git -C "$REPO" log -1 --format=%ct HEAD 2>/dev/null || true)}"
+case "$STAMP" in
+    '' | *[!0-9]*) STAMP=1 ;;
+esac
 TMP="$WORK/image"
 TREE="$WORK/tree"
 NODES="$WORK/nodes"
@@ -158,20 +167,20 @@ if [ -n "$OVERLAY" ]; then
     find "$TREE" ! -type l \( -perm -020 -o -perm -002 \) -exec chmod go-w {} +
 fi
 
-# The profile: revision 1, 4 KiB blocks, 128-byte inodes, the three
+# The profile: revision 1, 4 KiB blocks, 256-byte inodes, the four
 # features the driver writes and the resize inode that keeps room for the
 # descriptor table a grow needs, with every other feature mke2fs's
 # configuration file might add named and switched off. The times, the
 # identifier and the directory hash seed, which mke2fs draws at random even
 # with dir_index off, are fixed, so that one manifest makes one image.
-PROFILE="sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,^extra_isize"
+PROFILE="sparse_super,large_file,filetype,^dir_index,resize_inode,^ext_attr,^has_journal,^extent,^64bit,^flex_bg,^metadata_csum,^huge_file,^dir_nlink,extra_isize"
 : > "$TMP"
 MKSTATUS=0
-E2FSPROGS_FAKE_TIME=1 mke2fs -q -F -t ext2 -b 4096 -I 128 -O "$PROFILE" "$@" \
+E2FSPROGS_FAKE_TIME="$STAMP" mke2fs -q -F -t ext2 -b 4096 -I 256 -O "$PROFILE" "$@" \
     -E hash_seed=52616368-3200-4578-7432-000000000002 \
     -U 52616368-3200-4578-7432-000000000001 -L rach2 -d "$TREE" "$TMP" "${SIZE}M" \
     > "$MKLOG" 2>&1 || MKSTATUS=$?
-grep -v '128-byte inodes cannot handle dates beyond 2038' "$MKLOG" >&2 || true
+cat "$MKLOG" >&2
 [ "$MKSTATUS" -eq 0 ] || { echo "mkext2: mke2fs failed with status $MKSTATUS" >&2; exit 1; }
 
 # Read the superblock back: the magic, the revision, the block size, the
@@ -188,50 +197,54 @@ if [ -n "$GROUP_BLOCKS" ] && [ "$(sb 32)" != "$GROUP_BLOCKS" ]; then
     exit 1
 fi
 # mke2fs divides the bytes by the ratio, dropping the remainder, and rounds
-# each group's inodes up to whole blocks of the table, 32 inodes of 128 bytes
+# each group's inodes up to whole blocks of the table, 16 inodes of 256 bytes
 # to a 4 KiB block, so the count may pass the quotient by less than a block's
 # worth a group.
 if [ -n "$INODE_BYTES" ] && ! awk -v inodes="$(sb 0)" -v blocks="$(sb 4)" -v bpg="$(sb 32)" \
     -v ratio="$INODE_BYTES" 'BEGIN {
         want = int(blocks * 4096 / ratio)
         groups = int((blocks + bpg - 1) / bpg)
-        exit !(inodes >= want && inodes < want + groups * 32)
+        exit !(inodes >= want && inodes < want + groups * 16)
     }'; then
     echo "mkext2: $(sb 0) inodes in $(sb 4) blocks, not one for each $INODE_BYTES bytes" >&2
     exit 1
 fi
-[ "$(sb16 88)" = "128" ] || { echo "mkext2: inode size $(sb16 88), not 128" >&2; exit 1; }
+[ "$(sb16 88)" = "256" ] || { echo "mkext2: inode size $(sb16 88), not 256" >&2; exit 1; }
 [ "$(sb 92)" = "16" ] || { echo "mkext2: compatible features $(sb 92), not resize_inode alone" >&2; exit 1; }
 [ "$(sb 96)" = "2" ] || { echo "mkext2: incompatible features $(sb 96), not filetype alone" >&2; exit 1; }
-[ "$(sb 100)" = "3" ] || { echo "mkext2: read-only features $(sb 100), not sparse_super and large_file" >&2; exit 1; }
+[ "$(sb 100)" = "67" ] || { echo "mkext2: read-only features $(sb 100), not sparse_super, large_file and extra_isize" >&2; exit 1; }
 
 # The owners, modes and set-id bits from the manifest, one debugfs command
-# each, with the type bits kept: `mode` is the whole i_mode. The change
-# time as well, which mke2fs copies from the staged tree and no builder can
-# set there, so that one manifest makes one image. Where an overlay ran, it
-# may have changed the times of a staged directory by adding to it, so every
-# node has the staged instant as all three times, and what it added is
-# root's.
-awk -v overlay="$OVERLAY" '$1 == "node" {
+# each, with the type bits kept: `mode` is the whole i_mode. Then the four
+# times, which mke2fs copies from the staged tree with their nanoseconds,
+# the change time being one no builder can set there, and the creation
+# time, which mke2fs takes from the clock: every node, the root and
+# lost+found among them, has the image's instant as each, with no
+# nanoseconds, so that one manifest and one commit make one image. What an
+# overlay added is root's.
+awk -v t="$STAMP" -v added="$ADDED" '
+function times(p,   i, f) {
+    split("atime mtime ctime crtime", f, " ");
+    for (i = 1; i <= 4; i++) {
+        printf "set_inode_field %s %s @%s\n", p, f[i], t;
+        printf "set_inode_field %s %s_extra 0\n", p, f[i];
+    }
+}
+$1 == "node" {
     printf "set_inode_field %s mode %s\n", $5, $2;
     printf "set_inode_field %s uid %s\n", $5, $3;
     printf "set_inode_field %s gid %s\n", $5, $4;
-    printf "set_inode_field %s ctime @1\n", $5;
-    if (overlay != "") {
-        printf "set_inode_field %s atime @1\n", $5;
-        printf "set_inode_field %s mtime @1\n", $5;
+    times($5);
+}
+END {
+    while ((getline name < added) > 0) {
+        printf "set_inode_field \"%s\" uid 0\n", name;
+        printf "set_inode_field \"%s\" gid 0\n", name;
+        times("\"" name "\"");
     }
+    times("/");
+    times("/lost+found");
 }' "$NODES" > "$SCRIPT"
-awk '{
-    printf "set_inode_field \"%s\" uid 0\n", $0;
-    printf "set_inode_field \"%s\" gid 0\n", $0;
-    printf "set_inode_field \"%s\" atime @1\n", $0;
-    printf "set_inode_field \"%s\" mtime @1\n", $0;
-    printf "set_inode_field \"%s\" ctime @1\n", $0;
-}' "$ADDED" >> "$SCRIPT"
-if [ -n "$OVERLAY" ]; then
-    printf 'set_inode_field / %s @1\n' atime mtime ctime >> "$SCRIPT"
-fi
 DBSTATUS=0
 debugfs -w -f "$SCRIPT" "$TMP" > "$WORK/debugfs.log" 2>&1 || DBSTATUS=$?
 if [ "$DBSTATUS" -ne 0 ] || grep -v '^debugfs' "$WORK/debugfs.log" | grep -q .; then
