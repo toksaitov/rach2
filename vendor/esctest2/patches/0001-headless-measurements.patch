@@ -3,11 +3,24 @@ Measure a headless terminal through its snapshot channel and report every result
 The upstream driver and test methods still run on the terminal pty. Only
 screen inspection uses the optional channel; direct protocol queries keep
 their original path. DA1 checks the declared VT220/color profile rather than
-xterm build options. A final count detects interrupted or empty runs.
+xterm build options. An erased cell is expected empty, as an unwritten one
+is, since libtsm keeps no blank apart from an empty cell, which xterm's
+checksum does. A final count detects interrupted or empty runs.
 Each test begins by sending CAN and XTVERSION and discarding what the
 terminal sends before XTVERSION's reply, so that a reply or string a failed
 test left behind cannot fail the tests after it.
 
+--- a/esctest/esc.py
++++ b/esctest/esc.py
+@@ -34,6 +34,8 @@
+   return NUL
+ 
+ def blank():
++  if escargs.args.snapshot_socket is not None:
++    return NUL  # libtsm's erased cells are empty, as unwritten ones are.
+   if escargs.args.expected_terminal == "xterm":
+     return ' '
+   return NUL
 --- a/esctest/escargs.py
 +++ b/esctest/escargs.py
 @@ -67,3 +67,8 @@
