@@ -436,6 +436,8 @@ static void leds(void)
  * bounds, entry 0 and freeing, and root's alone to set. */
 static void entries(void)
 {
+    unsigned int was;
+
     be(AS_ROOT);
     CHECK(set_entry(200, 0, KM_NOSUCHMAP) == 0, "K_NOSUCHMAP at key 0 frees a table");
     CHECK(get_entry(200, 0) == KM_NOSUCHMAP, "an absent table's key 0 is K_NOSUCHMAP");
@@ -461,7 +463,10 @@ static void entries(void)
     CHECK(kd_ioctl(KDGKBENT, 0) == -EFAULT, "KDGKBENT on a bad pointer");
     be(AS_ROOT);
     CHECK(kd_ioctl(KDSKBENT, 0) == -EFAULT, "KDSKBENT on a bad pointer");
-    CHECK(set_entry(0, 30, KM_K(KM_T_LATIN, 'a')) == 0, "root sets an entry of table 0");
+    was = get_entry(0, 30);
+    CHECK(set_entry(0, 30, KM_K(KM_T_LATIN, 'a')) == 0 && get_entry(0, 30) == KM_K(KM_T_LATIN, 'a'),
+          "root sets an entry of table 0");
+    CHECK(set_entry(0, 30, was) == 0, "and puts it back");
     CHECK(set_entry(0, 0, KM_NOSUCHMAP) == 0 && get_entry(0, 0) != KM_NOSUCHMAP,
           "table 0 is never freed");
     CHECK(set_entry(200, 0, KM_NOSUCHMAP) == 0 && get_entry(200, 30) == KM_HOLE &&
@@ -782,7 +787,7 @@ static void translating(void)
               shell_line[2] == '\r',
           "the debug shell takes text, DEL as Backspace and CR, and no sequence");
     tap(104);
-    CHECK(scrolls_up == 2 && nshell == 3, "Page Up scrolls the debug shell's screen");
+    CHECK(scrolls_up == 1 && nshell == 3, "Page Up scrolls the debug shell's screen");
     kd_key_event(&caller, 97, KD_KEY_PRESS);
     tap(46);
     shell_on = 0;
