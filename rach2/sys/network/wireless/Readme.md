@@ -73,6 +73,8 @@ A receiver refuses a wrong magic, version, type or header length, nonzero reserv
 
 `crypto/aes.c` takes the S-box circuit, the bit transposition, the key schedule and the rounds of BearSSL's `aes_ct` at tag v0.6 (`src/symcipher/aes_ct.c` and `aes_ct_enc.c`), under the MIT license, whose text the file keeps. The rest of `crypto/` is Rach2's, written from IEEE 802.11-2020 12.5 and checked against Linux's `net/mac80211/wpa.c` and `tkip.c` and hostap's `src/common/ccmp.c`, as each file names.
 
+`scan.c` follows the design of Linux's `net/mac80211/scan.c`, and `bss.c` that of `net/wireless/scan.c`; the code of both is Rach2's.
+
 ## Design
 
 ### Registry and regulatory rules
@@ -81,7 +83,13 @@ A receiver refuses a wrong magic, version, type or header length, nonzero reserv
 
 ### Worker, scan and BSS table
 
-The worker owns queued management work. Scan records contain copied SSIDs and request elements. A current or referenced BSS remains in the table while used; other entries can age out.
+`work.h` declares the worker, the scan and the BSS table; the registry embeds a `struct wlan_scan` and a `struct wlan_bss_table` in its station record.
+
+`work.c` is the worker: one kernel thread, `kwlan`, which `wlan_work_start` makes before the first radio starts. The queue is a list in order of due tick, with work of equal ticks in the order queued and work due at zero first. The thread sleeps in an idle wait whose deadline is the earliest due tick, and wakes when that tick comes or when new work changes the earliest one; it then runs every callback due, under the big lock, including work those callbacks queue for the same tick. `wlan_queue_work` takes a spinlock with interrupts off, so an interrupt handler can queue. The queue compares the running record by pointer only, so its owner may reuse it once the callback returns; `wlan_cancel_work` waits for a running callback outside the worker, and never on it.
+
+`scan.c` scans. `wlan_scan_start` checks and copies the request and queues its start; the worker then tries the radio's `scan_start`, and on `-EOPNOTSUPP` scans in software. A software scan visits the requested channels, or every channel the band allows, skipping disabled ones and repeats. On each it tunes the radio with the home filters and `WLAN_FILTER_OTHER_BSS`. Where the channel is active and the request names SSIDs, it sends a probe request for each SSID and stays 30 ms; otherwise it listens for 110 ms, as Linux's mac80211 does. A probe request goes at the lowest rate with no acknowledgement asked for. It carries the SSID, the rates split after eight, the DS Parameter Set, HT Capabilities when the band has HT, and then the request's elements. Its cookie has `WLAN_SCAN_COOKIE` set, so that the transmit status can be told from the data path's and dropped. Each step queues the next on the other of two work records, since a callback cannot queue its own. The scan reports `SCAN_STARTED` when it begins, and `SCAN_DONE` or `SCAN_ABORTED` last, after the software scan has returned to the home channel the MLME set and stale entries have left the table. A radio that refuses its own scan with another error ends the scan as aborted. An abort cancels the radio's scan through `scan_cancel`, or cancels the pending dwell and finishes at once. The scan takes its event call at attach, `wlan_event` in the kernel, so that `scan.c` links before nl80211 does.
+
+`bss.c` keeps up to `WLAN_MAX_BSS` entries, keyed by BSSID and channel, each allocated when first heard. A beacon or probe response gives an entry its SSID, signal in mBm, TSF, beacon interval, capability and elements. Its channel is the DS Parameter Set's when present, since a 2.4 GHz receiver hears neighbouring channels, and a frame from a channel the regulatory rules disable is dropped. A beacon with a hidden SSID keeps the SSID and elements a probe response gave the entry, as cfg80211 does for hidden networks. The MLME holds the current BSS, which then neither ages out nor is evicted. An entry nobody holds leaves the table 30 s after it was last heard, at the end of each scan and before each dump; when the table is full, the oldest such entry makes room. `generation` changes whenever an entry comes or goes, for nl80211's dumps.
 
 ### Management state machine
 
@@ -115,8 +123,15 @@ The software radio implements the same lower operations as hardware. `/dev/wsim`
 
 A switch belongs to each radio. Soft and hardware block changes are queued to the worker; driver stop and start do not execute in the interrupt handler.
 
+## Limits
+
+* A software scan while associated leaves the operating channel without first sending the AP a null frame with power management set, as mac80211 does, so frames the AP sends meanwhile rely on its retries.
+* A passive channel stays passive for the whole scan: a beacon heard there does not let the scan probe it, as Linux's beacon hints do.
+
 ## Tests
 
 `tests/host/wlan_elems_hosttest.c` checks fixed wire sizes, empty and maximum-length SSIDs, split rates, optional request elements, truncated headers and payloads, invalid known lengths, singleton and extension duplicates, independent WPA and WMM elements, and bounded builders whose errors preserve their outputs. It allocates no files or processes. Its `host-deps` line compiles the real parser; the host collection registers it as `wlan_elems`.
 
 `tests/host/wcrypto_hosttest.c` checks AES on FIPS-197 and SP 800-38A, CMAC on SP 800-38B, whole and in pieces, and the ciphers on IEEE 802.11-2020 Annex J: CCMP's data vector, BIP's broadcast Deauthentication, TKIP's MPDU with its phase 1 and 2 keys, and the Michael vectors. Three CCMP MPDUs of P802.11i/D7.0 add key indexes 1 to 3, masked CF subtypes, Order in a non-QoS frame and a QoS TID; a management frame, whose Annex J output the test cannot quote, is checked against OpenSSL's AES-CCM. RC4 is checked on RFC 6229. Every byte of a CCMP and a BIP frame is flipped in turn: those outside the MIC are skipped and every other one is refused with the frame and outputs unchanged. Refusals for counters, key indexes, frame types, short buffers and a missing Ext IV keep their inputs as well. The host collection registers it as `wcrypto`.
+
+`tests/host/wlan_scan_hosttest.c` runs the real queue, scan and table against a stub radio and four scripted access points, which beacon each 100 ms and answer probe requests 2 ms later while the radio is tuned to their channel: one open, one hidden that answers only a directed probe, one on passive channel 12 and one on disabled channel 14. It checks the queue's order, refusals and cancellation; a wildcard scan of every channel with its timing, probes and the table it leaves; a directed scan that reveals the hidden SSID, which later hidden beacons keep; a passive scan; an abort mid-scan and before the start; refused requests; and the radio's own scan completed, cancelled and refused. The table's checks cover the fields, the DS channel, malformed and oversized frames, allocation failure, aging with a held entry, eviction and a table whose entries are all held. The host collection registers it as `wlan_scan`.
