@@ -1,0 +1,130 @@
+.Dd November 2, 2026
+.Dt SOCAT 1
+.Os
+.Sh NAME
+.Nm socat ,
+.Nm filan ,
+.Nm procan
+.Nd relay bytes between two streams, and list a process's descriptors and parameters
+.Sh SYNOPSIS
+.Nm socat
+.Op Ar options
+.Ar address1
+.Ar address2
+.Nm filan
+.Op Ar options
+.Nm procan
+.Op Ar options
+.Sh DESCRIPTION
+.Nm socat
+opens the two addresses and copies the bytes each gives to the other until
+both have ended.
+An address is a type and its parameters, then options after commas: among
+them
+.Ql TCP: Ns Ar host : Ns Ar port ,
+.Ql TCP-LISTEN: Ns Ar port ,
+.Ql UDP: Ns Ar host : Ns Ar port ,
+.Ql UNIX-CONNECT: Ns Ar path ,
+.Ql OPENSSL: Ns Ar host : Ns Ar port ,
+.Ql EXEC: Ns Ar command ,
+.Ql FILE: Ns Ar path ,
+and
+.Ql -
+for standard input and output.
+.Ql socat -h
+lists the address types and their options.
+.Pp
+.Nm filan
+prints each open descriptor of its own process with what it refers to: the
+type of file, its device and inode, its flags and, for a socket, its family
+and addresses.
+.Nm procan
+prints the parameters of its own process: its ids, its terminal, its
+resource limits and the values
+.Fn sysconf
+gives.
+.Pp
+The GNU root has the three as
+.Pa /usr/bin/socat ,
+.Pa /usr/bin/filan
+and
+.Pa /usr/bin/procan ,
+from the socat 1.8.1.3 port with OpenSSL for the TLS addresses, and with
+the release's scripts
+.Pa socat-broker.sh ,
+.Pa socat-chain.sh
+and
+.Pa socat-mux.sh
+beside them.
+Claude Code's sandbox runs
+.Nm socat
+to join its proxy to the loopback interface of the sandbox's network
+namespace, as
+.Xr claude 1
+says.
+On the GNU root
+.Ql man socat
+shows the release's own page, which describes every address and option.
+.Ss Rach2's limits
+.Bl -bullet
+.It
+There is no
+.Ql READLINE
+address: socat is under the GPL version 2 alone and Readline under
+version 3, so the port leaves it out, as Debian does.
+.It
+The SCTP, DCCP, VSOCK and TUN addresses fail: the kernel has none of
+those sockets and no
+.Pa /dev/net/tun .
+.It
+A raw IPv4 socket carries ICMP alone, and a raw IPv6 socket ICMPv6 or the
+datagrams the caller builds whole, so
+.Ql IP-SENDTO ,
+.Ql IP4-RECV
+and the other raw addresses work only with those protocols, and as root.
+A packet socket is
+.Dv SOCK_DGRAM
+alone, so
+.Ql INTERFACE
+fails.
+.It
+A program can join no IPv4 multicast group:
+.Ql ip-add-membership
+is accepted, and the socket receives no datagram sent to the group.
+.It
+TCP segments leave with hop limit 64 and class 0, whatever the
+.Ql ip-ttl ,
+.Ql ipv6-unicast-hops
+and
+.Ql ipv6-tclass
+options set.
+.It
+A network namespace other than the first has IPv4 alone on its loopback
+interface, so in Claude Code's sandbox
+.Nm socat
+listens and connects on 127.0.0.1 and not on
+.Ql ::1 .
+.El
+.Sh EXIT STATUS
+.Nm socat
+exits 0 when both streams ended or a timeout ended the relay, and 1 on an
+error.
+.Sh EXAMPLES
+Serve one connection on port 7777 by echoing what it sends:
+.Bd -literal -offset indent
+$ socat TCP-LISTEN:7777,reuseaddr EXEC:cat
+.Ed
+.Pp
+Talk to a TLS server from the terminal:
+.Bd -literal -offset indent
+$ socat - OPENSSL:example.org:443
+.Ed
+.Sh SEE ALSO
+.Xr claude 1 ,
+.Xr nc 1 ,
+.Xr socket 2 ,
+.Xr ipv6 7 ,
+.Xr tcp 7 ,
+.Xr unix 7
+.Pp
+.Lk http://www.dest-unreach.org/socat/ "socat"

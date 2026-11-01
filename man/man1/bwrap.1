@@ -1,0 +1,124 @@
+.Dd November 2, 2026
+.Dt BWRAP 1
+.Os
+.Sh NAME
+.Nm bwrap
+.Nd run a program in new namespaces, as a sandbox
+.Sh SYNOPSIS
+.Nm
+.Op Ar options
+.Ar command
+.Op Ar argument ...
+.Sh DESCRIPTION
+.Nm ,
+bubblewrap, makes a mount namespace and the other namespaces its options
+name, builds a new root in it from the mounts the options describe, and runs
+.Ar command
+there.
+.Fl -bind Ar src dest
+and
+.Fl -ro-bind Ar src dest
+show a file or directory of the old root in the new one, writable or
+read-only;
+.Fl -proc Ar dest ,
+.Fl -dev Ar dest
+and
+.Fl -tmpfs Ar dest
+mount a
+.Pa /proc ,
+a small
+.Pa /dev
+and an empty tmpfs;
+.Fl -unshare-user ,
+.Fl -unshare-pid ,
+.Fl -unshare-net ,
+.Fl -unshare-ipc
+and
+.Fl -unshare-uts
+make the namespaces of those kinds, and
+.Fl -unshare-all
+makes all of them.
+It then moves into the new root with
+.Xr pivot_root 2 ,
+lets go of the old one with a lazy unmount, drops its capabilities and runs
+the command.
+.Pp
+The GNU root has
+.Nm
+as
+.Pa /usr/bin/bwrap ,
+from the bubblewrap 0.8.0 port.
+It is not set-uid, so an ordinary user runs it in a user namespace of its
+own, which Rach2 lets every user make.
+Claude Code's sandboxed shell runs its commands under it, as
+.Xr claude 1
+says; Codex and Muse Code have bubblewrap built in and do not run this one.
+On the GNU root
+.Ql man bwrap
+shows the release's own page, which describes every option.
+.Ss Rach2's limits
+.Bl -bullet
+.It
+There are no cgroup and time namespaces, so no option makes one.
+.It
+A network namespace that
+.Fl -unshare-net
+makes has its loopback interface alone, with IPv4 alone: a command in it
+reaches no IPv6 address,
+.Ql ::1
+among them, and no interface can be moved into it.
+.It
+A
+.Ql devpts
+mounted in the sandbox shows the machine's own
+.Pa /dev/pts ,
+not a new set, so a command there sees every terminal of the machine,
+each with its own owner and mode.
+.It
+After
+.Fn pivot_root
+the old root's mounts are hidden, not moved: a descriptor or working
+directory left outside the new root still reaches them by their paths.
+.It
+There is no mount propagation, so
+.Fl -bind
+and the other mounts are private whatever the options ask.
+.It
+User namespaces nest at most 7 deep below the first, and a map of one has
+at most 5 extents.
+.It
+The port has no SELinux, and its shell completions are not installed.
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /proc/sys/kernel/overflowuid , /proc/sys/kernel/overflowgid
+the ids that stand for an id the namespace does not map, which
+.Nm
+reads before it parses its options
+.El
+.Sh EXIT STATUS
+The exit status of
+.Ar command ,
+or 1 when
+.Nm
+cannot build the sandbox.
+.Sh EXAMPLES
+Run a shell that sees the root read-only, its own
+.Pa /proc ,
+.Pa /dev
+and
+.Pa /tmp ,
+and no network:
+.Bd -literal -offset indent
+$ bwrap --unshare-all --ro-bind / / --proc /proc --dev /dev \e
+    --tmpfs /tmp bash
+.Ed
+.Sh SEE ALSO
+.Xr claude 1 ,
+.Xr codex 1 ,
+.Xr clone 2 ,
+.Xr mount 2 ,
+.Xr pivot_root 2 ,
+.Xr unshare 2
+.Pp
+.Lk https://github.com/containers/bubblewrap "bubblewrap"
