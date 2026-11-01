@@ -1426,6 +1426,42 @@ static void row_two_readers(void)
     check(cap.stops == 1 && cap.closes == 1, "last reader releases the input");
 }
 
+/** A second reader converts stereo input to mono at half the rate without
+ * changing the first reader's setup or samples. */
+static void row_reader_conversion(void)
+{
+    struct wait_queue *wq;
+    uint8_t mono[256];
+    uint32_t i;
+
+    begin("reader conversion");
+    check(open_dsp(0) == 0, "first reader");
+    cd_quality();
+    k_memset(&other, 0, sizeof(other));
+    k_memset(&other_description, 0, sizeof(other_description));
+    other.ofd = &other_description;
+    other_description.refcount = 1;
+    check(dspdev_open(&other, 0) == 0, "second reader");
+    swap_opens();
+    check(ask(DSP_SETFMT, AFMT_S16_LE) == AFMT_S16_LE, "second reader signed 16 bit");
+    check(ask(DSP_SPEED, 24000) == 24000, "second reader half rate");
+    check(dspdev_poll(&entry, POLLIN, &wq) == 0, "start second reader");
+    swap_opens();
+    check(take(1024) == 1024 && recorded(0, 0, 1024), "first reader unchanged");
+    check(dspdev_read(&other, (char __user *)mono, sizeof(mono)) == sizeof(mono),
+          "second reader's converted period");
+    for (i = 0; i < 128; i++) {
+        uint32_t at = (2 * i + 1) * 4;
+        int left = (int16_t)(uint16_t)(pattern[at] | pattern[at + 1] << 8);
+        int right = (int16_t)(uint16_t)(pattern[at + 2] | pattern[at + 3] << 8);
+        int value = (int16_t)(uint16_t)(mono[2 * i] | mono[2 * i + 1] << 8);
+
+        check(value == (left + right) / 2, "mono from both channels at half rate");
+    }
+    dspdev_close(&other);
+    close_dsp();
+}
+
 /** Per-process PCM scales only its opener's samples. A new process writing
  * an inherited open cannot take ownership of it by setting its own PCM. */
 static void row_process_pcm(void)
@@ -1545,6 +1581,7 @@ int main(void)
     row_resampling();
     row_close_while_playing();
     row_two_readers();
+    row_reader_conversion();
     row_process_pcm();
     row_console_client();
     row_loopback();
