@@ -23,7 +23,7 @@ The program is under GPL version 2; individual source files have the compatible 
 
 There are no source patches. The configure line in `build_sox_ng.sh` uses the ported musl and its OSS headers, static linking, built-in WAV and OSS, and no external libraries or FFmpeg subprocess decoder. OpenMP, shared libraries, dynamic format loading and the stack protector are disabled. `-Os` and linker garbage collection keep the program small; `-Wl,-z,noexecstack` keeps the stack nonexecutable.
 
-`mode.c` is a small launcher staged as `play`, `rec` and `soxi`. It executes `/bin/sox`, preserving the argument zero by which the upstream program selects its mode. KRFFS has no symbolic links; the launcher keeps one copy of the large program on each image and works without a shell, including on the test image. In os-real, grub-test and the metal disk root, the same launcher is built to execute `/bin/busybox` and staged as `/bin/sh`, saving another full copy of BusyBox. This keeps the i686 RAM root at 21 MiB, within the space its boot page tables leave below 32 MiB.
+`mode.c` is a small launcher staged as `play`, `rec` and `soxi`. It executes `/bin/sox`, preserving the argument zero by which the upstream program selects its mode. KRFFS has no symbolic links; the launcher keeps one copy of the large program on each image and works without a shell, including on the test image. In os-real, grub-test and the metal disk root, the same launcher is built to execute `/bin/busybox` and staged as `/bin/sh`, saving another full copy of BusyBox. This keeps os-real's RAM root at 24 MiB on i686 and 25 on x86-64, within the kernel's 64 MiB window; the root Makefile's comment on the os-real image has the figures.
 
 ## Building
 
