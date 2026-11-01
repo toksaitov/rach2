@@ -176,8 +176,10 @@ uint32_t nd6_link_mtu(const struct netdev *nd);
  */
 void nd6_dad_start(struct netdev_addr6 *a);
 
-/** What a card that came up starts: router solicitation once its link-local
- * address is usable. Called from `netconf_set_up`. */
+/** What a card that came up starts: duplicate detection of each of its
+ * addresses, and router solicitation once its link-local address is
+ * usable. Nothing for a card already started, so that a flag change that
+ * leaves it up restarts nothing. Called from `netconf_set_up`. */
 void nd6_if_up(struct netdev *nd);
 
 /** What a card that went down forgets: its neighbours and the datagrams
