@@ -109,6 +109,11 @@
 #   bookworm package of the release, bubblewrap-man, whose digest the
 #   bookworm index of amd64 packages gives; Debian's patches to the release
 #   do not touch bwrap.xml, from which the page is made.
+# * cmus, which signs nothing, checked the same way against Debian's source
+#   index for unstable of 2026-10-02: Debian's tarball is the git archive of
+#   the tag v2.12.0, which is what cmus releases, and its packaging tarball
+#   is Debian's 2.12.0-3, both from its snapshot archive. 2.13.0 is newer
+#   but not yet in Debian.
 binutils 2.47 https://ftp.gnu.org/gnu/binutils/binutils-2.47.tar.xz 154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff
 gcc 16.2.0 https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e
 gmp 6.3.0 https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
@@ -225,3 +230,5 @@ bubblewrap 0.8.0 https://github.com/containers/bubblewrap/releases/download/v0.8
 bubblewrap-man 0.8.0-2+deb12u1 https://snapshot.debian.org/archive/debian/20261002T000000Z/pool/main/b/bubblewrap/bubblewrap_0.8.0-2+deb12u1_amd64.deb 3cc9134a3286ad01a323dcd924ba123eb634cefaeec82d774257e06308aeaadb
 socat 1.8.1.3 http://www.dest-unreach.org/socat/download/socat-1.8.1.3.tar.bz2 25bc6476292b2e614220989c77b0b6fca87bb2525d9747b31a6639b1fb602418
 socat-debian 1.8.1.3-2 https://snapshot.debian.org/archive/debian/20261101T000000Z/pool/main/s/socat/socat_1.8.1.3-2.debian.tar.xz 8fbf9539d3f3916671e1ce6f7d9bfe0b488ecc5b4c40f8d24d6343e63db3c4e4
+cmus 2.12.0 https://snapshot.debian.org/archive/debian/20261002T000000Z/pool/main/c/cmus/cmus_2.12.0.orig.tar.gz 44b96cd5f84b0d84c33097c48454232d5e6a19cd33b9b6503ba9c13b6686bfc7
+cmus-debian 2.12.0-3 https://snapshot.debian.org/archive/debian/20261002T000000Z/pool/main/c/cmus/cmus_2.12.0-3.debian.tar.xz dcdbda04f42785079be734c3282e8a114a1ee55da01505ac92da56778bd035a4
