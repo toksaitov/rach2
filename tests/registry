@@ -87,7 +87,7 @@ shutdown|qemu|full
 fatwrite|qemu,mformat,mcopy,mdir|core
 ssh|qemu,ssh|core
 exfat|qemu|core
-ext2|qemu,mke2fs,debugfs,e2fsck,mtype|core
+ext2|qemu,mke2fs,debugfs,e2fsck,mtype|core||384
 cred-persist|qemu|full
 addressed|qemu|full
 ping|qemu|full
