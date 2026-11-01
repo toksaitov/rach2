@@ -36,12 +36,13 @@
 #include "netdb.h"    /* resolve_host */
 #include "pingcall.h" /* SYS_PINGCALL, SC_PING_DATA */
 
-/* The most data one request carries: a datagram of the 1500-byte MTU less
- * the 20-byte IPv4 header, or the 40-byte IPv6 one, and the 8-byte ICMP
- * header, since the stack does not fragment. The kernel's limits are the
+/* The most data one request carries: over IPv4, a datagram of the 1500-byte
+ * MTU less the 20-byte IPv4 header and the 8-byte ICMP header, since that
+ * stack does not fragment; over IPv6, the largest payload less the ICMPv6
+ * header, sent in fragments past one datagram. The kernel's limits are the
  * same (`ICMP_PING_DATA_MAX` and `ICMP6_PING_DATA_MAX`). */
 #define DATA_MAX  1472
-#define DATA_MAX6 1452
+#define DATA_MAX6 65527
 
 #define USAGE                                                                                     \
     "usage: ping [-nq46] [-c count] [-i interval] [-s size] [-t ttl] [-W timeout] [-w deadline] " \
