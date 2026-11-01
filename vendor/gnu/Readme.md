@@ -1,6 +1,6 @@
 # The GNU layer
 
-The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 76 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. On x86-64 the root can also have the [agents layer](agents/Readme.md), vendors' published builds of coding agents and their tools, such as Anthropic's Claude Code and GitHub's `gh`. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host; on any other host, such as a Mac, its root images are built in etude's tooling machine, a Linux in QEMU. It is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
+The GNU layer builds a GNU system for Rach2: a cross toolchain with glibc, 79 port recipes built with it, a native GCC and GDB, the SpiderMonkey shell, and Debian's chromium-headless-shell, all installed over the os-real system in an ext2 root that the kernel boots. On x86-64 the root can also have the [agents layer](agents/Readme.md), vendors' published builds of coding agents and their tools, such as Anthropic's Claude Code and GitHub's `gh`. It gives Rach2 the dynamically linked programs a person expects of a Linux machine (bash, coreutils, OpenSSH, Python, Git, GCC), which the static musl system does not have. It builds on an x86-64 Linux host; on any other host, such as a Mac, its root images are built in etude's tooling machine, a Linux in QEMU. It is not part of `make`. The targets are `i686-linux-gnu` and `x86_64-rach2-linux-gnu`, as `ARCH` selects.
 
 ## Use
 
@@ -93,10 +93,15 @@ FFmpeg provides `ffmpeg` and `ffprobe`, OSS input and output through `/dev/dsp`,
 
 cmus plays music in the terminal and `cmus-remote` controls it. Its one output is OSS: it writes `/dev/dsp` and its volume is the PCM channel of `/dev/mixer`, or its own with `softvol`. Its inputs are its own WAV and CUE readers and FFmpeg's libraries, which decode MP3, FLAC, Ogg Vorbis, Opus and AAC, so the root ports none of the decoder libraries cmus's other inputs would need. [`cmus(1)`](../../man/man1/cmus.1) and [`cmus-remote(1)`](../../man/man1/cmus-remote.1) describe the installed build, and the upstream's pages are the ports' pages on the system.
 
+wpa_supplicant joins a Wi-Fi network through the kernel's nl80211: WPA, WPA2 and WPA3 personal networks, PEAP, TTLS and TLS for enterprise ones, the certificate forms `probe://` and `hash://server/sha256/`, its control socket for `wpa_cli`, and `bgscan`. iw shows and sets the card through the same interface, and both reach the kernel through libnl; `rfkill` is util-linux's. wpa_supplicant builds unchanged against the root's OpenSSL 4.0.2. OpenSSL 4.0 deprecates `X509_cmp_current_time`, which it calls to check a certificate's dates, and has no engines, so a network's `engine=1` and a smart card's PKCS#11 keys are not available; MSCHAPv2's MD4 comes from OpenSSL's legacy provider, `/usr/lib/ossl-modules/legacy.so`. On the system, `wpa_supplicant(8)`, `wpa_cli(8)`, `wpa_supplicant.conf(5)` and `iw(8)` are the upstream's pages.
+
 | Port | Version | License |
 | --- | --- | --- |
 | [FFmpeg](ports/ffmpeg.sh) | 9.0.2 | LGPL 2.1 or later |
 | [cmus](ports/cmus.sh) | 2.12.0 | GPL 2 or later |
+| [libnl](ports/libnl.sh) | 3.12.0 | LGPL 2.1 |
+| [wpa_supplicant](ports/wpa_supplicant.sh) | 2.12 | BSD |
+| [iw](ports/iw.sh) | 6.17 | ISC |
 
 ### The root image
 
