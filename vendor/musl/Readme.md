@@ -1,6 +1,6 @@
 # musl
 
-musl is the C library of every hosted Rach2 program: the in-house utilities, the musl test programs, and the ports BusyBox, Dropbear, TinyCC, pdpmake and e2fsprogs. Rach2 builds it as a static library for the architecture of the build, i386 or x86-64, with the kernel's own cross compiler, and stages its headers, `libc.a` and startup objects on the systems that compile programs on themselves. musl makes Linux system calls, and the kernel implements the Linux system call interface of each architecture, so musl runs on Rach2 with one patch.
+musl is the C library of every hosted Rach2 program: the in-house utilities, the musl test programs, and the ports BusyBox, Dropbear, TinyCC, pdpmake and e2fsprogs. Rach2 builds it as a static library for the architecture of the build, i386 or x86-64, with the kernel's own cross compiler, and stages its headers, `libc.a` and startup objects on the systems that compile programs on themselves. musl makes Linux system calls, and the kernel implements the Linux system call interface of each architecture, so musl uses that interface with the local changes below.
 
 ## Interfaces
 
@@ -38,7 +38,7 @@ The source is the release tarball from <https://musl.libc.org/releases/>, kept b
 
 ## Local changes
 
-[`patches/series`](patches/series) names the patches `build_libc.sh` applies, in order. There are three.
+[`patches/series`](patches/series) names the patches `build_libc.sh` applies, in order. There are four.
 
 ### posix_spawn forks
 
@@ -51,6 +51,10 @@ The source is the release tarball from <https://musl.libc.org/releases/>, kept b
 ### Linux's keyboard headers
 
 `0003-linux-keyboard-headers.patch` adds `<linux/kd.h>`, `<linux/keyboard.h>` and `<linux/wait.h>` from Linux 6.18.54's user headers. As `headers_install` does, it removes the kernel-only compiler include and `__user` annotations. kbd uses these numbers and structures to configure the console's keyboard. The headers retain Linux's syscall-note license exception.
+
+### Condition variable wake fallback
+
+`0004-cond-requeue-fallback.patch` wakes the next private condition waiter when both forms of `FUTEX_REQUEUE` return `ENOSYS`. The kernel does not implement requeue; musl's ordinary broadcast otherwise releases its first waiter and leaves the rest blocked on their barriers. The fallback preserves the barrier chain and lets each waiter take the mutex in turn. `threadscaling` exercises it with 16, 64 and 256 waiters.
 
 ## Building
 
