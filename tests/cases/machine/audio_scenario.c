@@ -1,8 +1,9 @@
 /*
  * audio_scenario.c: the scenario of machine.audio, in which the kernel's
  * debug shell plays `audio test scale` on an emulated sound card and
- * wavcheck measures the notes in what QEMU recorded the machine playing, or
- * runs `audiotest -s`, which measures the queue across a writer's stall.
+ * wavcheck measures the notes in what QEMU recorded the machine playing,
+ * runs `audiotest -s`, which measures the queue across a writer's stall, or
+ * runs `audiotest -d`, whose scales through /dev/dsp wavcheck measures.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -67,32 +68,26 @@ static void play(struct lc *l, struct etude_case_machine *m, uint64_t *at)
 }
 
 /**
- * End the machine with QMP's quit, which makes QEMU finish the recording,
- * then report the console's silence about a stall and wavcheck's verdict
- * on the notes.
+ * Run wavcheck, whose arguments `argv` have the recording's path at `path`,
+ * of `size` bytes, on the recording of machine `m`, which has ended, as the
+ * step `judge`, and report its verdict as `notes`.
  */
-static void judge(struct lc *l, struct etude_case_machine *m, int sb16)
+static void wavcheck(struct lc *l, struct etude_case_machine *m, char **argv, char *path,
+                     size_t size)
 {
-    char name[] = "wavcheck", scale[] = "scale", c4[] = "262", d4[] = "294", e4[] = "330",
-         f4[] = "349", g4[] = "392", path[1024], detail[160];
-    char *argv[] = {name, scale, path, c4, d4, e4, f4, g4, NULL};
+    char detail[160];
     struct etude_termination end;
     const char *wav;
     enum etude_status st;
 
-    if (!lc_quit(l, m, NULL))
-        return;
-    lc_find(l, m, "no-stall", "audio: stalled", 0, 0);
-    if (sb16)
-        lc_find(l, m, "started", "AUDIO_START failed.", 0, 0);
     if (!lc_step(l, "judge"))
         return;
     wav = etude_audio(m);
-    if (wav == NULL || strlen(wav) >= sizeof(path)) {
+    if (wav == NULL || strlen(wav) >= size) {
         lc_halt(l, ETUDE_REFUSED, "the machine's recording");
         return;
     }
-    snprintf(path, sizeof(path), "%s", wav);
+    snprintf(path, size, "%s", wav);
     etude_progress(l->c, "wavcheck", 0);
     st = etude_host(l->c, argv, "wavcheck", &end);
     if (st != ETUDE_OK) {
@@ -106,6 +101,25 @@ static void judge(struct lc *l, struct etude_case_machine *m, int sb16)
     else
         snprintf(detail, sizeof(detail), "wavcheck did not exit");
     lc_assert(l, "notes", end.end == ETUDE_END_EXITED && end.value == 0, detail);
+}
+
+/**
+ * End the machine with QMP's quit, which makes QEMU finish the recording,
+ * then report the console's silence about a stall and wavcheck's verdict
+ * on the notes the debug shell's scale plays.
+ */
+static void judge(struct lc *l, struct etude_case_machine *m, int sb16)
+{
+    char name[] = "wavcheck", scale[] = "scale", c4[] = "262", d4[] = "294", e4[] = "330",
+         f4[] = "349", g4[] = "392", path[1024];
+    char *argv[] = {name, scale, path, c4, d4, e4, f4, g4, NULL};
+
+    if (!lc_quit(l, m, NULL))
+        return;
+    lc_find(l, m, "no-stall", "audio: stalled", 0, 0);
+    if (sb16)
+        lc_find(l, m, "started", "AUDIO_START failed.", 0, 0);
+    wavcheck(l, m, argv, path, sizeof(path));
 }
 
 /**
@@ -172,12 +186,69 @@ static void queue(struct lc *l)
     lc_find(l, m, "no-stall", "audio: stalled", 0, 0);
 }
 
+/**
+ * Run `audiotest -d` with `args` from the debug shell, and once the shell is
+ * back report assertion `id`, that the program printed `granted`, and
+ * `played`, that it said the scale played.
+ */
+static void dsp_play(struct lc *l, struct etude_case_machine *m, uint64_t *at, const char *args,
+                     const char *id, const char *granted, const char *played)
+{
+    char line[96];
+    uint64_t from = *at;
+
+    snprintf(line, sizeof(line), "exec /bin/audiotest -d%s\r", args);
+    if (!lc_type(l, m, line) || !lc_wait(l, m, prompt, at, NULL)) {
+        if (!l->stopped)
+            lc_assert(l, id, 0, l->why);
+        return;
+    }
+    lc_find(l, m, id, granted, from, 1);
+    lc_find(l, m, played, "audiotest: result: complete; the scale played through /dev/dsp", from,
+            1);
+}
+
+/**
+ * Run the /dev/dsp case: `audiotest -d` plays its stereo scale as signed
+ * 16-bit at 48000 Hz, then its mono scale at OSS's defaults, unsigned 8-bit
+ * at 8000 Hz, which the driver converts; wavcheck then requires the left
+ * scale and then the mono one in the first channel, and the right scale and
+ * then the mono one in the second.
+ */
+static void dsp(struct lc *l)
+{
+    char name[] = "wavcheck", scale[] = "scale", slash[] = "/", path[1024];
+    char l1[] = "262", l2[] = "294", l3[] = "330", l4[] = "349", l5[] = "392";
+    char r1[] = "523", r2[] = "587", r3[] = "659", r4[] = "698", r5[] = "784";
+    char m1[] = "80", m2[] = "100", m3[] = "125", m4[] = "160", m5[] = "200";
+    char *argv[] = {name,  scale, path, l1, l2, l3, l4, l5, m1, m2, m3, m4,  m5,
+                    slash, r1,    r2,   r3, r4, r5, m1, m2, m3, m4, m5, NULL};
+    struct etude_case_machine *m;
+    uint64_t at = 0;
+
+    if (!lc_step(l, "play") || (m = lc_boot(l, "fixture")) == NULL ||
+        !lc_wait(l, m, "Type 'help'", &at, NULL) || !lc_wait(l, m, prompt, &at, NULL))
+        return;
+    dsp_play(l, m, &at, " 48000 16 2", "stereo", "audiotest: dsp: granted 48000 hz, 16-bit stereo",
+             "played-stereo");
+    if (!lc_ok(l))
+        return;
+    dsp_play(l, m, &at, "", "defaults", "audiotest: dsp: granted 8000 hz, 8-bit mono",
+             "played-defaults");
+    if (!lc_ok(l) || !lc_quit(l, m, NULL))
+        return;
+    lc_find(l, m, "no-stall", "audio: stalled", 0, 0);
+    wavcheck(l, m, argv, path, sizeof(path));
+}
+
 int etude_scenario(struct etude_case *c)
 {
     static const char *const hdas[] = {"probe-before", "played", "probe-after", "messages",
                                        "no-stall",     "notes",  NULL};
     static const char *const sb16s[] = {"played", "no-stall", "started", "notes", NULL};
     static const char *const queues[] = {"bounded", "no-stall", NULL};
+    static const char *const dsps[] = {"stereo",   "played-stereo", "defaults", "played-defaults",
+                                       "no-stall", "notes",         NULL};
     const char *name = case_name(c);
     struct lc l;
 
@@ -190,6 +261,9 @@ int etude_scenario(struct etude_case *c)
     } else if (strcmp(name, "queue") == 0) {
         lc_begin(&l, c, queues);
         queue(&l);
+    } else if (strcmp(name, "dsp") == 0) {
+        lc_begin(&l, c, dsps);
+        dsp(&l);
     } else {
         return 1;
     }

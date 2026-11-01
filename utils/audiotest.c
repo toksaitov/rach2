@@ -365,8 +365,8 @@ static int dsp_scale(const int *want)
         close(fd);
         return -1;
     }
-    printf("audiotest: dsp: granted %d hz, %d-bit, %d channels\n", rate, format == AFMT_U8 ? 8 : 16,
-           channels);
+    printf("audiotest: dsp: granted %d hz, %d-bit %s\n", rate, format == AFMT_U8 ? 8 : 16,
+           channels == 1 ? "mono" : "stereo");
     frame = (unsigned)channels * (format == AFMT_U8 ? 1u : 2u);
     for (note = 0; note < DSP_NOTES && !interrupted; note++) {
         frames = (unsigned)rate * DSP_NOTE_MS / 1000u;

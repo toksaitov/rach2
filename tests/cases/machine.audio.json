@@ -274,6 +274,55 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "QEMU", "reason": "the case judges the recording QEMU's wav backend makes of what the machine played"}
+    },
+    {
+      "case_id": "machine.audio.dsp",
+      "behavior": "a program's scales through /dev/dsp on an Intel HDA controller reach QEMU's recording: 16-bit stereo at 48000 Hz with a different scale in each channel, then unsigned 8-bit mono at OSS's default 8000 Hz, which the driver converts",
+      "units": ["audio"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"card": "hda", "stereo": "48000 16 2", "defaults": "8000 8 1"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "audio_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case ends the machine and removes its recording, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "play", "stage": "execute", "machine": "fixture", "does": "boot to the debug shell, run audiotest -d 48000 16 2 and then audiotest -d, each of which plays its scale through /dev/dsp, and end the machine with QMP's quit"},
+        {"step_id": "judge", "stage": "execute", "does": "run wavcheck on the machine's recording, a list of notes for each channel"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.rescue"], "audio": "hda"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "stereo", "checks": "audiotest -d 48000 16 2 says audiotest: dsp: granted 48000 hz, 16-bit stereo, before the shell's prompt comes back", "source": "scenario"},
+        {"assertion_id": "played-stereo", "checks": "audiotest -d 48000 16 2 says audiotest: result: complete; the scale played through /dev/dsp", "source": "scenario"},
+        {"assertion_id": "defaults", "checks": "audiotest -d says audiotest: dsp: granted 8000 hz, 8-bit mono, OSS's defaults, before the shell's prompt comes back", "source": "scenario"},
+        {"assertion_id": "played-defaults", "checks": "audiotest -d says audiotest: result: complete; the scale played through /dev/dsp", "source": "scenario"},
+        {"assertion_id": "no-stall", "checks": "the console never says audio: stalled", "source": "scenario"},
+        {"assertion_id": "notes", "checks": "wavcheck finds 262, 294, 330, 349 and 392 Hz and then 80, 100, 125, 160 and 200 Hz in the first channel of QEMU's recording, and 523, 587, 659, 698 and 784 Hz and then the same five in the second, each in that order, and no other tone", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2},
+        {"witness_id": "wavcheck", "kind": "quiet", "means": "wavcheck has ended", "limit": null, "bound": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true},
+        {"name": "wavcheck", "node": "tests/system/wavcheck", "per_architecture": false},
+        {"name": "audio_scenario", "node": "tests/cases/machine/audio_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "QEMU", "reason": "the case judges the recording QEMU's wav backend makes of what the machine played through /dev/dsp"}
     }
   ]
 }
