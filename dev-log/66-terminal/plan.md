@@ -556,3 +556,33 @@ The second round, in which each reviewer argued against the revision:
 * Fable: Codex is signed in only in the owner's accounts. Changed: task 12 records Claude Code; task 29 looks at Codex and Gemini CLI.
 * Codex proposed keeping the LEDs inside the devices' task, since their events share one order; the LEDs are an output path through files the devices' task does not touch, so they run beside it.
 * Codex proposed that the translator wait on the key table; with tests run at the end, the translator merges without it, and the table's test joins them.
+
+### The end run
+
+The branch, rebased onto master at 4ba5ba202 as 4e21d9440, built on both architectures after `make clean` in the owner's copy on the testing host. `tests/run -a both style host` was refused at preparation, since style failed there, so the host tests did not run. Codex reviewed 4ba5ba202..4e21d9440. Every finding below was checked against the code, and they are fixed in three batches, each with its own files.
+
+Batch 1, term (#1776):
+
+* high, Codex: an oversized `wait` command overwrites the heap. `term/host.c:469` copies the input line, which grows to 131072 bytes, into `wait_text`, which holds 65536, with no length check.
+* medium, Codex: term reads the descendant's keys after it loses the screen. In `term/main.c:356`, when both are ready, `read_fb_event` handles `FB_EVENT_LOST` and then `term_keys_read` still runs.
+* medium, Codex: Kitty key events omit the lock modifiers. `term/keys.c:467` leaves out Caps Lock, and Num Lock everywhere but the keypad.
+* medium, Codex: function keys bound by a loaded map skip Kitty event reporting. `term/keys.c:509` sends the map's string, such as Shift+F1's `ESC[1;2P`, literally and records no key event.
+* style: `clang-format` changes `term/unifont.c` and `term/unifont.h`. Comment lines over 80 columns are in `tests/host/term_draw_hosttest.c`, `term_hosttest.c`, `term_keys_hosttest.c`, `term_unicode_hosttest.c`, `libtsm_probes_hosttest.c`, `libtsm_width_hosttest.c`, `tests/cases/host/esctest2.c` and `vendor/libtsm/build_libtsm.sh`, and shellcheck flags `vendor/libtsm/build_libtsm.sh` lines 136 and 163.
+
+Batch 2, the kernel's keyboard and display (#1777):
+
+* medium, Codex: releasing a modifier on one keyboard clears it for another that still holds it, since `rach2/sys/kd.c:716` discards the device and the translator keeps one bit for each keycode.
+* medium, Codex: switching to raw mode and back leaves a modifier stuck. `kd_set_mode` (`rach2/sys/kd.c:153`) neither clears nor rebuilds the held state, so a release in `K_RAW` never reaches `keymap_key`.
+* medium, Codex: the shipped layouts' Alt bindings, such as Alt+F1 `Console_1`, Alt+Left `Decr_Console` and Alt+Up `KeyboardSignal` (`vendor/keymaps/xkb/common.inc:62`), emit nothing, since the translator handles none of those actions. The key table's replay covers only the built-in map.
+* medium, Codex: retaking `/fb` keeps an offset that is invalid in the new mode. `rach2/sys/display/fbdev.c:427` calls `fb_take` without rewinding, so a write after a seek past 64000 bytes in native mode, a release and a retake in mode 13h fails with `EFBIG`, although the header promises that a mode change resets the offset.
+* low, Codex: `rach2/sys/display/Readme.md:123` still says that an owner's child cannot open `/fb`.
+* style: cppcheck finds `navigation[v]` and `parameter[v]` past their ends at `rach2/sys/keymap.c:1716` under the test `v >= 15`, and three unused members of `kernel_termios` in `tests/keylatprobe.c:61-64`. `rach2/sys/wcwidth.c` uses "full stop" and an em-dash written as `--` (line 11). Comment lines over 80 columns are in `rach2/include/rach2/fb.h`, `rach2/sys/display/fb.h`, `fbdev.c`, `keymap.c`, `syscall_fs.c`, `rach2/sys/tty/n_tty.h`, `utils/vconsole.c`, `tests/host/kd_hosttest.c`, `keytable.c`, `keytable_hosttest.c`, `tty_hosttest.c`, `vconsole_hosttest.c` and `ps2mouse_hosttest.c`. Shellcheck flags `vendor/keymaps/gen_keymaps.sh`, `regen_keymaps.sh` and `vendor/kbd/build_kbd.sh`.
+
+Batch 3, the build, the images and the tests (#1778):
+
+* medium, style: the build-rules test's clean tree has no `term/`, so `mk/term.mk:12` cannot include `term/sources.mk`, and eight of its rows fail, `clean-without-cross-compiler` first; the compilation database (`dbcheck`) fails with it.
+* medium, Codex: `vendor/gnu/host_checks_files.sh:18` copies no `tests/fixtures/agents`, the recording that `term_unicode_hosttest` declares as a host input, so the GNU host checks' preparation fails.
+* medium, Codex: `tests/cases/host/esctest2.c:389` returns 1 on Windows, and the suite has no platform limit, so the release's Windows run fails it.
+* medium, Codex: os-real's images carry no `term`. Task 28 put `term` in os-real's manifest, and `krffs/manifests/os-real.manifest:100` stages its sources but not `/bin/term` or its font.
+* style: `tests/cases/machine.installer.json:53`, `stick-update`, has a `memory_bytes` that does not reserve QEMU's memory and overhead. Suitecheck finds fixed sleeps that no case declares in `tests/cases/host/build_ports.c:157`, `build_together.c:285`, `flow_status.c:109`, `flow_tooling.c:240`, `host_products_drive.c:140,291,296` and `host_suite_probe.c:137`, and sleeps without a reason in `tests/musl/clockmusl.c:122` and `tests/lagprobe.c:369`. Shellcheck flags `tools/flow/release.sh:1327` (SC2015). Comment lines over 80 columns are in `tools/flow/release.sh:153`, `tools/verify/guestcheck.c:6`, `tests/cases/machine/seabios_scenario.c:9-12`, `usb_scenario.c:341` and `tests/host/etude_artifact_hosttest.c:937`. `vendor/unifont/Readme.md:13` has a heading out of order.
+* low, Codex: `man/programs.md:22` lists `dumpkeys`, `kbd_mode` and `showkey` for recovery, whose manifest leaves them out.
