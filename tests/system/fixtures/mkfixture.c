@@ -1,5 +1,6 @@
 /**
- * mkfixture: build the three disk fixtures the probe suites need.
+ * mkfixture: build the three disk fixtures the probe suites need, and the
+ * sound the audio suite feeds a machine's microphone.
  *
  * `mkfixture boot DISK` rewrites a mkdisk.sh disk into the bootprobe
  * fixture. mkdisk builds an MBR whose entry 1 is the KRFFS partition at
@@ -34,6 +35,14 @@
  * reaches, and requires the sector there to be zero before the write.
  * etude reads the whole artifact to take its digest and to copy it for each
  * case, so it is no larger than the probe needs.
+ *
+ * `mkfixture tones FILE` writes the input of machine.audio's tone case: raw
+ * signed 16-bit little-endian frames of two channels at 48000 Hz, the format
+ * QEMU's sdl backend reads (tools/etude/Readme.md), holding square waves of
+ * TONE_HZ, each TONE_MS long, at TONE_LEVEL, the same in both channels. Each
+ * half period is a whole number of frames at 48000 Hz and at 16000 Hz, the
+ * rate the case records at, so that the notes keep their pitch exactly when
+ * QEMU converts the rate.
  */
 #include "../../../tools/image/host_io.h"
 #include <stdint.h>
@@ -53,6 +62,11 @@
 
 #define AUTH_PART_LBA     2048
 #define AUTH_PART_SECTORS 2048
+
+#define TONE_RATE  48000
+#define TONE_MS    400
+#define TONE_LEVEL 8000
+static const unsigned tone_hz[] = {250, 400, 500};
 
 /** Store `v` at `p`, little-endian. */
 static void w32(unsigned char *p, uint32_t v)
@@ -199,6 +213,42 @@ static int make_auth(const char *path)
     return 0;
 }
 
+/** `mkfixture tones PATH`: write the notes to `path`, replacing it; 0, or 1
+ * having said why. */
+static int make_tones(const char *path)
+{
+    unsigned char frame[4];
+    unsigned i, f, frames = TONE_RATE / 1000 * TONE_MS;
+    FILE *out = fopen(path, "wb");
+
+    if (out == NULL) {
+        perror(path);
+        return 1;
+    }
+    for (i = 0; i < sizeof(tone_hz) / sizeof(tone_hz[0]); i++) {
+        unsigned half = TONE_RATE / tone_hz[i] / 2;
+
+        for (f = 0; f < frames; f++) {
+            int v = (f / half) % 2 ? -TONE_LEVEL : TONE_LEVEL;
+
+            frame[0] = frame[2] = (unsigned char)(v & 0xFF);
+            frame[1] = frame[3] = (unsigned char)((v >> 8) & 0xFF);
+            if (fwrite(frame, 1, 4, out) != 4) {
+                perror(path);
+                fclose(out);
+                return 1;
+            }
+        }
+    }
+    if (fclose(out) != 0) {
+        perror(path);
+        return 1;
+    }
+    printf("mkfixture: tones: %s: 250, 400 and 500 Hz, %u ms each, 16-bit stereo at %u Hz\n", path,
+           TONE_MS, TONE_RATE);
+    return 0;
+}
+
 /** Dispatch on the first argument; 2 for a usage error. */
 int main(int argc, char **argv)
 {
@@ -208,6 +258,8 @@ int main(int argc, char **argv)
         return make_wide(argv[2]);
     if (argc == 3 && strcmp(argv[1], "auth") == 0)
         return make_auth(argv[2]);
-    fprintf(stderr, "usage: mkfixture {boot|wide|auth} <disk-image>\n");
+    if (argc == 3 && strcmp(argv[1], "tones") == 0)
+        return make_tones(argv[2]);
+    fprintf(stderr, "usage: mkfixture {boot|wide|auth|tones} <file>\n");
     return 2;
 }
