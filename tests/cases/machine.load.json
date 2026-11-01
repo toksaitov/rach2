@@ -41,7 +41,7 @@
         {"name": "load-disk", "node": "images/load-test.disk", "per_architecture": true},
         {"name": "load_scenario", "node": "tests/cases/machine/load_scenario", "per_architecture": false}
       ],
-      "timing": [{"kind": "injected_delay", "where": "rach2/sys/block/lag.c:101", "assumes": "rach2.blocklag=1 holds each request of the disk one tick before its answer, and the case judges only that no request was quarantined after it; the disk keeps the guest's flushes from the host, so that the host's disk adds nothing to the deadline", "uncertainty_us": null}],
+      "timing": [{"kind": "injected_delay", "where": "rach2/sys/block/lag.c:107", "assumes": "rach2.blocklag=1 holds each request of the disk a hundredth of a second before its answer, and the case judges only that no request was quarantined after it; the disk keeps the guest's flushes from the host, so that the host's disk adds nothing to the deadline", "uncertainty_us": null}],
       "native": {"plan": "none", "class": "input", "reason": "the case types lines at the console of the machine under load; tests/native/probes.cases runs the probe with its lines on a pseudo-terminal"}
     },
     {

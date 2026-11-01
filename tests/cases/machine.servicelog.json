@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.servicelog.bound",
-      "behavior": "on an ext2 root with init-shell as its init, init reaps each of ten orphans within two ticks of its end, by /proc/uptime, in at least eight of the ten; a service log filled past its cap of 256 KiB is emptied within the boot to the one line init writes, once orphans have turned init's loop; filled again and left by a power-off, it is removed at the next boot",
+      "behavior": "on an ext2 root with init-shell as its init, init reaps each of ten orphans within two hundredths of a second of its end, by /proc/uptime, in at least eight of the ten; a service log filled past its cap of 256 KiB is emptied within the boot to the one line init writes, once orphans have turned init's loop; filled again and left by a power-off, it is removed at the next boot",
       "units": ["servicelog", "init-shell"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -23,7 +23,7 @@
         {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
-        {"assertion_id": "reaped", "checks": "of ten orphans, at least eight are gone within two ticks of the tick each was first seen a zombie in, as /proc/uptime counts them", "source": "scenario"},
+        {"assertion_id": "reaped", "checks": "of ten orphans, at least eight are gone within two hundredths of a second of the reading each was first seen a zombie in, as /proc/uptime counts them", "source": "scenario"},
         {"assertion_id": "filled", "checks": "the first boot fills the log past its cap", "source": "scenario"},
         {"assertion_id": "emptied", "checks": "init empties the log within the boot, leaving less than 4 KiB and one line saying that it reached its limit", "source": "scenario"},
         {"assertion_id": "refilled", "checks": "the log is filled past its cap again", "source": "scenario"},

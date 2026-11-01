@@ -62,7 +62,7 @@
         {"assertion_id": "time-writes-order", "checks": "the second write's modification time is not before the first's", "source": "program"},
         {"assertion_id": "time-stamps", "checks": "fifty utimensat stamps and the stat after each succeed", "source": "program"},
         {"assertion_id": "time-stamps-order", "checks": "no stamp's modification time is before the one before it", "source": "program"},
-        {"assertion_id": "time-below-tick", "checks": "at least one modification time has a part of a microsecond or more below the 10 ms tick", "source": "program"},
+        {"assertion_id": "time-below-tick", "checks": "at least one modification time has a part of a microsecond or more below the 1 ms tick", "source": "program"},
         {"assertion_id": "time-explicit", "checks": "explicit times set by utimensat keep their fractions, 0 ns for the access time and 123456789 ns for the modification time", "source": "program"}
       ],
       "branches": [

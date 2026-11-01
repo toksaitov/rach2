@@ -346,8 +346,8 @@
       "timing": [
         {
           "kind": "injected_delay",
-          "where": "rach2/sys/block/lag.c:222-223",
-          "assumes": "the lag device answers each request of disk 0's partitions three kernel ticks late as the stimulus, so that the requests of the writers and the sync interleave; the case judges the files and the volume they leave, never elapsed time",
+          "where": "rach2/sys/block/lag.c:228-229",
+          "assumes": "the lag device answers each request of disk 0's partitions three hundredths of a second late as the stimulus, so that the requests of the writers and the sync interleave; the case judges the files and the volume they leave, never elapsed time",
           "uncertainty_us": null
         },
         {
@@ -463,8 +463,8 @@
       "timing": [
         {
           "kind": "injected_delay",
-          "where": "rach2/sys/block/lag.c:222-223",
-          "assumes": "the lag device answers each request of disk 0's partitions three kernel ticks late, and fails its 32nd write, as the stimulus; the case judges the mount's state and the disk's flags after the failure, never elapsed time",
+          "where": "rach2/sys/block/lag.c:228-229",
+          "assumes": "the lag device answers each request of disk 0's partitions three hundredths of a second late, and fails its 32nd write, as the stimulus; the case judges the mount's state and the disk's flags after the failure, never elapsed time",
           "uncertainty_us": null
         }
       ],
