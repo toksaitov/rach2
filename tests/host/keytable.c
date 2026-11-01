@@ -99,6 +99,76 @@ static int refuse(struct keytable *t, const char *why, const char *what)
 }
 
 /**
+ * Decode the escape after the backslash at `*s`, leaving `*s` at its last
+ * character. Return the byte, or -1 for a malformed escape, with the reason
+ * in t->error.
+ */
+static int string_escape(struct keytable *t, const char **s)
+{
+    const char *e = *s;
+
+    switch (*e) {
+    case 'e':
+        return 0x1b;
+    case 'r':
+        return '\r';
+    case 'n':
+        return '\n';
+    case 't':
+        return '\t';
+    case 'b':
+        return '\b';
+    case '\\':
+    case '"':
+        return *e;
+    case 'x':
+        if (hexval(e[1]) < 0 || hexval(e[2]) < 0) {
+            return refuse(t, "\\x wants two hexadecimal digits", "");
+        }
+        *s = e + 2;
+        return hexval(e[1]) * 16 + hexval(e[2]);
+    default:
+        return refuse(t, "unknown escape in a string", "");
+    }
+}
+
+/**
+ * Read the quoted string whose opening quote is at `*p` into `tok`, with its
+ * escapes decoded, and leave `*p` past the closing quote. Return 1, or -1
+ * for a malformed string, with the reason in t->error.
+ */
+static int string_token(struct keytable *t, const char **p, struct token *tok)
+{
+    const char *s = *p;
+
+    tok->quoted = 1;
+    tok->text[0] = '\0';
+    for (s++; *s != '"'; s++) {
+        int c = (unsigned char)*s;
+
+        if (c == '\0' || c == '\n') {
+            return refuse(t, "unterminated string", "");
+        }
+        if (c < 0x20 || c > 0x7e) {
+            return refuse(t, "a control or non-ASCII byte in a string", "");
+        }
+        if (c == '\\') {
+            s++;
+            c = string_escape(t, &s);
+            if (c < 0) {
+                return -1;
+            }
+        }
+        if (tok->nbytes >= KEYTABLE_MAX_BYTES) {
+            return refuse(t, "string too long", "");
+        }
+        tok->bytes[tok->nbytes++] = (unsigned char)c;
+    }
+    *p = s + 1;
+    return 1;
+}
+
+/**
  * Read the next token of the line at `*p` into `tok`, past the opening quote's
  * escapes for a quoted one.
  *
@@ -130,56 +200,9 @@ static int next_token(struct keytable *t, const char **p, struct token *tok)
         *p = s;
         return 1;
     }
-    tok->quoted = 1;
-    tok->text[0] = '\0';
-    for (s++; *s != '"'; s++) {
-        int c = (unsigned char)*s;
-
-        if (c == '\0' || c == '\n') {
-            return refuse(t, "unterminated string", "");
-        }
-        if (c < 0x20 || c > 0x7e) {
-            return refuse(t, "a control or non-ASCII byte in a string", "");
-        }
-        if (c == '\\') {
-            s++;
-            switch (*s) {
-            case 'e':
-                c = 0x1b;
-                break;
-            case 'r':
-                c = '\r';
-                break;
-            case 'n':
-                c = '\n';
-                break;
-            case 't':
-                c = '\t';
-                break;
-            case 'b':
-                c = '\b';
-                break;
-            case '\\':
-            case '"':
-                c = *s;
-                break;
-            case 'x':
-                if (hexval(s[1]) < 0 || hexval(s[2]) < 0) {
-                    return refuse(t, "\\x wants two hexadecimal digits", "");
-                }
-                c = hexval(s[1]) * 16 + hexval(s[2]);
-                s += 2;
-                break;
-            default:
-                return refuse(t, "unknown escape in a string", "");
-            }
-        }
-        if (tok->nbytes >= KEYTABLE_MAX_BYTES) {
-            return refuse(t, "string too long", "");
-        }
-        tok->bytes[tok->nbytes++] = (unsigned char)c;
+    if (string_token(t, &s, tok) < 0) {
+        return -1;
     }
-    s++;
     if (*s && *s != ' ' && *s != '\t' && *s != '\r' && *s != '\n') {
         return refuse(t, "text after a closing quote", "");
     }
