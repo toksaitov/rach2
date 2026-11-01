@@ -69,6 +69,7 @@ The programs os-simple or the recovery image stages that os-real does not, with 
 | `mkdir` | [busybox-coreutils(1)](man1/busybox-coreutils.1) | in-house |  |
 | `mv` | [busybox-coreutils(1)](man1/busybox-coreutils.1) | in-house |  |
 | `nc` | [nc(1)](man1/nc.1) | in-house |  |
+| `ndwatch` | [ndwatch(8)](man8/ndwatch.8) | in-house | in-house |
 | `netup` | [netup(8)](man8/netup.8) | in-house |  |
 | `pwd` | [busybox-coreutils(1)](man1/busybox-coreutils.1) | in-house |  |
 | `rach2-install` | [rach2-install(8)](man8/rach2-install.8) |  | in-house |
@@ -83,7 +84,7 @@ The programs os-simple or the recovery image stages that os-real does not, with 
 
 ### BusyBox applets
 
-The `/bin/busybox` of os-real, the recovery image and the GNU root has 321 applets. Its ash finds an applet before it searches `PATH`, so a KRFFS image, which has no symbolic links, needs no file for each applet ([BusyBox](../vendor/busybox/Readme.md)); on the GNU root, where `/bin/sh` is bash, each applet that no port provides is a link to `/bin/busybox`. Each row is a page and the applets it covers.
+The `/bin/busybox` of os-real, the recovery image and the GNU root has 323 applets. Its ash finds an applet before it searches `PATH`, so a KRFFS image, which has no symbolic links, needs no file for each applet ([BusyBox](../vendor/busybox/Readme.md)); on the GNU root, where `/bin/sh` is bash, each applet that no port provides is a link to `/bin/busybox`. Each row is a page and the applets it covers.
 
 | Page | Applets |
 | --- | --- |
@@ -101,7 +102,7 @@ The `/bin/busybox` of os-real, the recovery image and the GNU root has 321 apple
 | [busybox-mailutils(1)](man1/busybox-mailutils.1) | `makemime`, `popmaildir`, `reformime`, `sendmail` |
 | [busybox-miscutils(1)](man1/busybox-miscutils.1) | `adjtimex`, `ascii`, `bc`, `chat`, `crond`, `dc`, `devmem`, `hexedit`, `less`, `lsscsi`, `makedevs`, `microcom`, `mim`, `mt`, `readahead`, `runlevel`, `rx`, `setfattr`, `setserial`, `strings`, `time`, `tree`, `ts`, `ttysize`, `volname` |
 | [busybox-modutils(8)](man8/busybox-modutils.8) | `depmod`, `insmod`, `lsmod`, `modinfo`, `modprobe`, `rmmod` |
-| [busybox-networking(1)](man1/busybox-networking.1) | `arp`, `arping`, `dnsd`, `dnsdomainname`, `fakeidentd`, `ftpd`, `ftpget`, `ftpput`, `hostname`, `ifconfig`, `ifdown`, `ifup`, `inetd`, `ipcalc`, `netstat`, `nslookup`, `ntpd`, `pscan`, `route`, `ssl_client`, `tcpsvd`, `telnet`, `telnetd`, `tftp`, `tftpd`, `traceroute`, `udhcpc`, `udpsvd`, `vconfig`, `wget`, `whois` |
+| [busybox-networking(1)](man1/busybox-networking.1) | `arp`, `arping`, `dnsd`, `dnsdomainname`, `fakeidentd`, `ftpd`, `ftpget`, `ftpput`, `hostname`, `ifconfig`, `ifdown`, `ifplugd`, `ifup`, `inetd`, `ipcalc`, `netstat`, `nslookup`, `ntpd`, `pscan`, `route`, `ssl_client`, `tcpsvd`, `telnet`, `telnetd`, `tftp`, `tftpd`, `traceroute`, `udhcpc`, `udhcpc6`, `udpsvd`, `vconfig`, `wget`, `whois` |
 | [busybox-printutils(1)](man1/busybox-printutils.1) | `lpd`, `lpq`, `lpr` |
 | [busybox-procps(1)](man1/busybox-procps.1) | `free`, `fuser`, `iostat`, `kill`, `killall`, `killall5`, `lsof`, `mpstat`, `nmeter`, `pgrep`, `pidof`, `pkill`, `pmap`, `powertop`, `ps`, `pstree`, `pwdx`, `smemcap`, `sysctl`, `top`, `uptime`, `watch` |
 | [busybox-runit(8)](man8/busybox-runit.8) | `chpst`, `envdir`, `envuidgid`, `runsv`, `runsvdir`, `setuidgid`, `softlimit`, `sv`, `svc`, `svlogd`, `svok` |
@@ -131,6 +132,7 @@ Besides the ports, [the root's manifest](../krffs/manifests/os-real-gnu.manifest
 | `dumpe2fs` | `/sbin/dumpe2fs` | [dumpe2fs(8)](man8/dumpe2fs.8) | e2fsprogs |
 | `e2fsck` | `/sbin/e2fsck` | [e2fsck(8)](man8/e2fsck.8) | e2fsprogs |
 | `gpasswd` | `/usr/bin/gpasswd` | on the machine | [shadow](../vendor/gnu/ports/shadow.sh) |
+| `ndwatch` | `/sbin/ndwatch` | [ndwatch(8)](man8/ndwatch.8) | in-house |
 | `newgrp` | `/usr/bin/newgrp` | on the machine | [util-linux](../vendor/gnu/ports/util-linux.sh) |
 | `resize2fs` | `/sbin/resize2fs` | [resize2fs(8)](man8/resize2fs.8) | e2fsprogs |
 | `sudo` | `/usr/bin/sudo` | on the machine | [sudo](../vendor/gnu/ports/sudo.sh) |
