@@ -55,7 +55,7 @@
       {"results": [{"id": "call_commit", "contains": ["check: ok", "Greet Rach2"]}],
        "reply": [{"functionCall": {"id": "call_sleep", "name": "run_command",
                                    "args": {"CommandLine": "sleep 600", "Cwd": "@REPO@",
-                                            "WaitMsBeforeAsync": 300000,
+                                            "WaitMsBeforeAsync": 10000,
                                             "toolAction": "Waiting", "toolSummary": "Wait"}}}]}
     ]
   },

@@ -22,6 +22,11 @@
 #   pid AGENT         print the process of the agent in its tmux session.
 #   exe AGENT         print the program that process runs.
 #   sleeps AGENT      print each process in the session that runs `sleep 600`.
+#   watch AGENT       start in the background a watcher that reads `sleeps
+#                     AGENT` four times a second and records what it first
+#                     prints in ~/rach2-accept/AGENT.sleeps; it ends then, or
+#                     when the session has gone.
+#   seen AGENT        end the watcher and print what it recorded.
 #   pane AGENT        print the pane's size, its terminal's size by stty, and
 #                     the number of clients attached to the session.
 #   screen AGENT [all]
@@ -52,8 +57,8 @@
 # its runs of 16 or more of the characters a token is written with, and only
 # their count is printed.
 #
-# Every command but setup, secrets and redact, and run with start or resume,
-# prints through `redact`, so that no text read from the machine has a
+# Every command but setup, secrets and redact, run with start or resume, and
+# the watcher that watch starts, prints through `redact`, so that no text read from the machine has a
 # credential when it reaches agents_accept.sh; run with once prints its
 # standard error there too. `redact` reads the credential
 # files of both modes that exist, replaces each of their strings with
@@ -321,6 +326,29 @@ main() {
                 { args = $0; sub(/^ *[0-9]+ +[0-9]+ +[^ ]+ +/, "", args) }
                 args == line { print $1 }'
             ;;
+        watch)
+            rm -f "$DIR/$2.sleeps" "$DIR/$2.watch"
+            setsid bash "$0" watcher "$2" < /dev/null > /dev/null 2>&1 &
+            ;;
+        watcher)
+            echo "$$" > "$DIR/$2.watch"
+            while pane_pid "$2" > /dev/null; do
+                out=$(main sleeps "$2")
+                if [ -n "$out" ]; then
+                    printf '%s\n' "$out" > "$DIR/$2.sleeps"
+                    break
+                fi
+                # interval: the session is read four times a second
+                sleep 0.25
+            done
+            rm -f "$DIR/$2.watch"
+            ;;
+        seen)
+            [ ! -f "$DIR/$2.watch" ] || kill "$(cat "$DIR/$2.watch")" 2> /dev/null
+            rm -f "$DIR/$2.watch"
+            [ ! -f "$DIR/$2.sleeps" ] || cat "$DIR/$2.sleeps"
+            rm -f "$DIR/$2.sleeps"
+            ;;
         pane)
             tmux -L "$SERVER" display-message -p -t "$(session "$2")" \
                 '#{pane_width}x#{pane_height} #{pane_tty} #{session_attached}' 2> /dev/null |
@@ -385,7 +413,7 @@ main() {
 }
 
 case ${1:-}.${3:-} in
-    setup.* | secrets.* | redact.* | run.start | run.resume)
+    setup.* | secrets.* | redact.* | watcher.* | run.start | run.resume)
         main "$@"
         ;;
     run.*)

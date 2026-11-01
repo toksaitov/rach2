@@ -175,9 +175,12 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/rach2-accept.XXXXXX") || exit 1
 # while the agent waits for a request; the text it shows only while it works,
 # and any it shows while it starts, when it may yet ask a question;
 # the mark before the selected answer of a question; how it ends; what more it
-# needs after a cancelled turn; and the menu it shows when nobody is signed in.
+# needs after a cancelled turn; the text it shows while it runs the command it
+# must cancel, for an agent that sends a command to the background after a
+# few seconds; and the menu it shows when nobody is signed in.
 agent_set() {
     LOADING=""
+    RUNNING=""
     case $1 in
         claude)
             READY="bypass permissions on"
@@ -202,6 +205,7 @@ agent_set() {
             MARK=">"
             QUIT=/exit
             AFTER_CANCEL=""
+            RUNNING="Running (sleep 600)"
             SIGNIN="Google OAuth"
             ;;
         muse)
@@ -449,6 +453,37 @@ until_guest() {
     done
 }
 
+# escape_running: press Escape once the host's window shows RUNNING, read
+# from this host's tmux without a round trip to the machine, and a second
+# later, so that the machine's watcher sees the process. Antigravity CLI
+# sends a command to the background at most ten seconds after it starts,
+# and an Escape after that no longer reaches it. Fail when the screen shows
+# neither RUNNING nor BUSY for ten reads in a row.
+escape_running() {
+    say "$agent: waiting: the command"
+    gone=0
+    while SCREEN=$(h capture-pane -p -t "accept:$agent"); do
+        if shows "$RUNNING"; then
+            # interval: the key waits a second for the machine's watcher
+            sleep 1
+            keys Escape
+            return 0
+        elif shows "$BUSY"; then
+            gone=0
+        else
+            gone=$((gone + 1))
+            if [ "$gone" -ge 10 ]; then
+                bad "$agent: the turn ended before the command ran"
+                return 1
+            fi
+        fi
+        # interval: the host's window is read five times a second
+        sleep 0.2
+    done
+    bad "$agent: the host's window has gone"
+    return 1
+}
+
 # attach: start the host's window of the agent, whose SSH client attaches to
 # the agent's session on the machine, made the first time. The client's
 # stderr goes to $work/client.AGENT.
@@ -524,10 +559,19 @@ step_session() {
     done
     say "$agent: read, changed, tested and committed: $(printf '%s\n' "$OUT" | sed -n 's/^subject //p')"
 
-    send "the request" "$CANCEL" "to finish." sleeping || return 1
-    until_guest_some "the command" sleeps "$agent" || return 1
-    keys Escape
-    idle "the cancelled turn" || return 1
+    if [ -n "$RUNNING" ]; then
+        guest watch "$agent" > /dev/null
+        send "the request" "$CANCEL" "to finish." sleeping || return 1
+        escape_running || return 1
+        idle "the cancelled turn" || return 1
+        [ -n "$(guest seen "$agent")" ] ||
+            bad "$agent: the machine saw no process of the command before the cancel"
+    else
+        send "the request" "$CANCEL" "to finish." sleeping || return 1
+        until_guest_some "the command" sleeps "$agent" || return 1
+        keys Escape
+        idle "the cancelled turn" || return 1
+    fi
     if [ -n "$AFTER_CANCEL" ]; then
         send "$AFTER_CANCEL" "$AFTER_CANCEL" "$AFTER_CANCEL" stopped || return 1
         idle "$AFTER_CANCEL" || return 1

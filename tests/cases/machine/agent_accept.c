@@ -14,6 +14,7 @@
 struct acceptance {
     struct net_case *u;
     const char *work, *agent, *ready, *busy, *loading, *mark, *quit, *after_cancel, *signin;
+    const char *running; /* the screen's text while the command runs, or "" */
     char assets[4096], key[4096], root_key[4096], port[20], log[4096], target[100];
     char *screen;
     unsigned output;
@@ -605,12 +606,63 @@ static int session_work(struct acceptance *s)
     said(s, "read, changed, tested and committed");
     return 1;
 }
+/**
+ * Press Escape in the client's window once its screen shows s->running,
+ * from a loop on the client machine, which reads the screen without a
+ * round trip to the agent's machine.
+ *
+ * Return 1 once the key is sent, or 0 when the pane has gone or the screen
+ * has shown neither s->running nor s->busy for ten reads in a row. The key
+ * waits one second after the text first shows, so that the guest's watcher
+ * sees the command's process.
+ */
+static int escape_running(struct acceptance *s)
+{
+    static const char script[] =
+        "idle=0; while screen=$(/usr/bin/tmux -N -L etude-agent-accept capture-pane -p "
+        "-t \"$1\"); do case $screen in *\"$2\"*) sleep 1; exec /usr/bin/tmux -N -L "
+        "etude-agent-accept send-keys -t \"$1\" Escape ;; *\"$3\"*) idle=0 ;; *) "
+        "idle=$((idle + 1)); [ $idle -lt 10 ] || exit 1 ;; esac; sleep 0.2; done; exit 1";
+    const char *args[] = {"/bin/sh", "-c",       script,  "etude-cancel",
+                          s->target, s->running, s->busy, NULL};
+    char *text = client(s, args);
+    int ok = text != NULL;
+    free(text);
+    return ok;
+}
+/**
+ * Ask for `sleep 600` and cancel the turn with Escape once it runs.
+ *
+ * Antigravity CLI sends a command to the background at most ten seconds
+ * after it starts, whatever wait the model asks for, and an Escape after
+ * that no longer reaches it. For such an agent, s->running names the screen
+ * text of the running command: the client presses Escape as soon as it
+ * shows, and a watcher started on the guest before the request proves that
+ * the process ran. Every other agent's command is first found on the guest.
+ */
 static int session_cancel(struct acceptance *s)
 {
-    if (!send_text(s,
-                   "Run the shell command sleep 600 in the foreground and wait for it to finish.",
-                   "to finish.", 1) ||
-        !wait_guest(s, "sleeps", NULL, 1) || !keys(s, 0, "Escape") || !idle(s))
+    const char *request =
+        "Run the shell command sleep 600 in the foreground and wait for it to finish.";
+    if (*s->running) {
+        char *text = guest(s, "watch", NULL);
+        int ran;
+        if (!text)
+            return 0;
+        free(text);
+        if (!send_text(s, request, "to finish.", 1) || !escape_running(s) || !idle(s))
+            return 0;
+        text = guest(s, "seen", NULL);
+        if (!text)
+            return 0;
+        ran = *text != 0;
+        free(text);
+        if (!ran) {
+            net_fail(s->u, "the guest saw no process of the command before the cancel");
+            return 0;
+        }
+    } else if (!send_text(s, request, "to finish.", 1) || !wait_guest(s, "sleeps", NULL, 1) ||
+               !keys(s, 0, "Escape") || !idle(s))
         return 0;
     if (*s->after_cancel && (!send_text(s, s->after_cancel, s->after_cancel, 2) || !idle(s)))
         return 0;
@@ -971,6 +1023,7 @@ int agent_accept_action(struct net_case *u, const char *work, const char *agent,
         s->model_selected = strcmp(agent, "codex") != 0;
         s->loading = "";
         s->after_cancel = "";
+        s->running = !strcmp(agent, "agy") ? "Running (sleep 600)" : "";
         s->ready = !strcmp(agent, "claude") ? "bypass permissions on"
                    : !strcmp(agent, "muse") ? "YOLO"
                                             : "? for shortcuts";
