@@ -946,6 +946,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "wifi",
+          "checks": "tests/host/wifi_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "wlan_elems",
           "checks": "tests/host/wlan_elems_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
