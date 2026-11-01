@@ -1708,6 +1708,15 @@ static void ofd_record_path(struct open_file *ofd, const char *name)
 
 static int32_t synth_open_dir(const struct vpath *vp, int flags);
 
+/** Whether a synthetic directory of `kind` is one of a process's, whose
+ * process must be there and whose record keeps its pid: /proc/<pid> and its
+ * `fd`, `fdinfo`, `task` and `ns`. */
+static int synth_dir_of_proc(int kind)
+{
+    return kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR || kind == VNODE_PROC_FDINFO_DIR ||
+           kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_NS_DIR;
+}
+
 static int32_t open_path(const char *name, int flags);
 
 static int32_t open_named(const char *name, int flags, uint32_t mode, int end);
@@ -2229,14 +2238,14 @@ static int32_t synth_open(const struct vpath *vp, int flags)
 }
 
 /**
- * Open a synthetic directory (/dev, /proc, /proc/<pid>, /proc/<pid>/fd, a
- * thread's under /proc/<pid>/task, a directory of /proc/sys or of /sys) for
- * reading, and return the descriptor or a negative errno. The descriptor
- * keeps a record of its own (`synth_dir_alloc`), freed at the last close,
- * with the process's pid and, for a thread's directory, the thread's id, as
- * the caller's PID namespace numbers them, which is how its listing, its
- * /proc/PID/fd link and the names relative to it read them, so they stay
- * the thread's.
+ * Open a synthetic directory (/dev, /proc, /proc/<pid> and its fd, fdinfo
+ * and ns, a thread's under /proc/<pid>/task, a directory of /proc/sys or of
+ * /sys) for reading, and return the descriptor or a negative errno. The
+ * descriptor keeps a record of its own (`synth_dir_alloc`), freed at the
+ * last close, with the process's pid and, for a thread's directory, the
+ * thread's id, as the caller's PID namespace numbers them, which is how its
+ * listing, its /proc/PID/fd link and the names relative to it read them, so
+ * they stay the thread's.
  *
  * The directory exists, so flags that contradict that fail. O_CREAT with
  * O_EXCL is -EEXIST whatever the access mode, since the usual form of an
@@ -2255,8 +2264,7 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
 
     struct synth_dir *sd;
 
-    if (vp->kind == VNODE_PROC_PID || vp->kind == VNODE_PROC_FD_DIR ||
-        vp->kind == VNODE_PROC_FDINFO_DIR || vp->kind == VNODE_PROC_TASK_DIR) {
+    if (synth_dir_of_proc(vp->kind)) {
         if (procfs_resolve_id(vp) < 0) {
             return -ENOENT;
         }
@@ -5222,8 +5230,7 @@ static int32_t do_chdir(char *path)
         int rpid = 0;
 
         vfs_ref_release(&ref);
-        if (vp.kind == VNODE_PROC_PID || vp.kind == VNODE_PROC_FD_DIR ||
-            vp.kind == VNODE_PROC_FDINFO_DIR || vp.kind == VNODE_PROC_TASK_DIR) {
+        if (synth_dir_of_proc(vp.kind)) {
             if (procfs_resolve_id(&vp) < 0) {
                 return -ENOENT;
             }
