@@ -10,8 +10,9 @@
  * clears `/var/run`, writes the boot's utmp record, sets the resource limits,
  * keeps each backlight's level and the mixer's across a reboot, and keeps
  * `/bin/update` running and, on an image with its configuration, BusyBox's
- * acpid, which acts on the power, volume and brightness keys. It never exits; if it did,
- * the kernel would have no reaper, so the kernel panics if init dies.
+ * acpid, which acts on the power, volume and brightness keys. It never
+ * exits; if it did, the kernel would have no reaper, so the kernel panics if
+ * init dies.
  *
  * Four artifacts are built from this one source, and none of them is named
  * plain `init`: `init-shell` runs a shell on the console, `init-login` puts
@@ -729,10 +730,11 @@ static void save_mixer(void)
  * interrupted code was in the middle of; this one saves the backlights' and
  * the mixer's levels (`save_backlights`, `save_mixer`) with system calls
  * alone and then calls `reboot`, which is async-signal-safe and does not
- * return when it succeeds, so there is nothing to return to. A failed `reboot` falls to `_exit`,
- * and the kernel panics when init dies. The handler is installed with all three signals blocked
- * while it runs, so a second request, such as the second `poweroff` of a power button the firmware
- * reports twice, waits and is never answered.
+ * return when it succeeds, so there is nothing to return to. A failed
+ * `reboot` falls to `_exit`, and the kernel panics when init dies. The
+ * handler is installed with all three signals blocked while it runs, so a
+ * second request, such as the second `poweroff` of a power button the
+ * firmware reports twice, waits and is never answered.
  *
  * The kernel disables scheduling and writes out the root file system before
  * it stops the machine, and stops it even when that write fails. init does
