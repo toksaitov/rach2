@@ -1500,7 +1500,7 @@ static const struct file_ops rtc_ops = {dev_rtc_read, dev_rtc_write, dev_rtc_pol
    audio device's dsp.c's. */
 static const struct file_ops evdev_ops = {evdev_read, NULL, evdev_poll, evdev_ioctl, evdev_close};
 static const struct file_ops mixer_ops = {NULL, NULL, dev_poll, mixer_ioctl, NULL};
-static const struct file_ops dsp_ops = {NULL, dspdev_write, dspdev_poll, dspdev_ioctl,
+static const struct file_ops dsp_ops = {dspdev_read, dspdev_write, dspdev_poll, dspdev_ioctl,
                                         dspdev_close};
 
 static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_write, dev_poll,
