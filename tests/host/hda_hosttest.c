@@ -36,6 +36,14 @@ static int refuse_alloc; /* kmalloc fails */
 extern void *malloc(unsigned long size);
 extern void free(void *ptr);
 static uint32_t clock_value; /* the wall clock, 24000 ticks on at each read */
+/* The model of DMA progress: with dma_model set, the wall clock moves only
+ * with model_play, which advances it and the stream's position together and
+ * keeps the left sample of each frame the DMA passes in `played`. */
+static int dma_model;
+static unsigned long long model_us, model_frames;
+static uint32_t model_pos; /* bytes into the DMA buffer */
+static int16_t played[1 << 17];
+static unsigned played_count;
 static unsigned clock_reads, console_writes;
 static unsigned mmio_reads, mmio_writes;
 
@@ -99,7 +107,7 @@ uint32_t hda_test_read(uint32_t offset, int bits)
     mmio_reads++;
     if (offset == HDA_WALCLK) {
         clock_reads++;
-        return clock_stopped ? clock_value : (clock_value += 24000);
+        return clock_stopped || dma_model ? clock_value : (clock_value += 24000);
     }
     if (offset == HDA_ICS && irqs_on)
         ics_reads_irqs_on++;
@@ -143,7 +151,7 @@ static void reset_model(void)
     k_memset(out_amp, 0, sizeof(out_amp));
     k_memset(sense, 0, sizeof(sense));
     conn_reads = verbs = bad_offsets = sense_triggers = 0;
-    codec_silent = clock_stopped = 0;
+    codec_silent = clock_stopped = dma_model = 0;
     playing = stream_started = false;
     user_callback = NULL;
     hda_base = 1;
@@ -494,9 +502,10 @@ static void row_report(void)
           "report exposes inherited capabilities");
     check(strstr(text, "connections nid 10 long 0 raw 0x02\nexpanded 2\n") != NULL,
           "report exposes codec list");
-    /* 800 frames in the ring at 32 kHz are 25 ms; 28672 bytes of DMA ahead
-     * of position 4096, 7168 frames, are 224 ms. */
-    check(strstr(text, "queue fill 3200 high 3200 delay-ms 249 written 3200 dropped 0 periods 0 "
+    /* 800 frames in the ring at 32 kHz are 25 ms; the 4736 bytes of the
+     * three 2944-byte periods ahead of position 4096, 1184 frames, are 37 ms;
+     * together 1984 frames, 62 ms. */
+    check(strstr(text, "queue fill 3200 high 3200 delay-ms 62 written 3200 dropped 0 periods 0 "
                        "underruns 0 missed 0 lpib 4096\n") != NULL,
           "report exposes the queue");
     check(strstr(text, "gpio count 2 caps 0x40000002\n") != NULL, "report exposes the gpios");
@@ -589,6 +598,279 @@ static void row_verbs(void)
     codec_silent = 0;
 }
 
+/**
+ * Advance the model's DMA by `us` microseconds at the programmed rate, 16-bit
+ * stereo: each frame it passes is read from the driver's buffer into
+ * `played`, the position wraps at the buffer's end, and LPIB and the wall
+ * clock, 24 ticks to a microsecond, follow.
+ */
+static void model_play(uint32_t us)
+{
+    unsigned long long target;
+    uint32_t cbl = period_bytes * HDA_PERIODS;
+
+    model_us += us;
+    target = model_us * current_hw_sample_rate / 1000000u;
+    while (model_frames < target) {
+        if (played_count < sizeof(played) / sizeof(played[0]))
+            played[played_count++] = audio_buffer[model_pos / 2];
+        model_pos = (model_pos + 4) % cbl;
+        model_frames++;
+    }
+    clock_value = (uint32_t)(model_us * 24u);
+    hda_test_write(hda_sd_offset(output_stream_index) + HDA_SD_LPIB, model_pos, 32);
+}
+
+/**
+ * Start the model's DMA on a codec of the rates in `rates`, a mask of the
+ * rate bits, at `rate`, in `format` and `channels`, through the write path;
+ * the position check is taken as made, since the model's clock moves only
+ * when a row moves it.
+ */
+static void model_start(uint32_t rates, uint32_t rate, audio_format_t format, int channels)
+{
+    reset_model();
+    params[1][0x0A] = 0x20000 | rates;
+    check(hda_find_output(), "enumeration succeeds");
+    dma_checked = true;
+    dma_model = 1;
+    model_us = model_frames = 0;
+    model_pos = 0;
+    played_count = 0;
+    clock_value = 0;
+    check(hda_start(rate, format, channels) == 0, "the model's stream starts");
+}
+
+/* A numbered block: 480 frames, 10 ms at 48 kHz, of 16-bit stereo, each
+ * sample the block's number. */
+#define BLOCK_FRAMES 480
+static int16_t block[BLOCK_FRAMES * 2];
+
+/** Write whole blocks, numbered from `*next` on, while the ring has room for
+ * one, and leave `*next` the number of the next. */
+static void write_blocks(unsigned *next)
+{
+    unsigned i;
+
+    while (ring_free() >= sizeof(block)) {
+        for (i = 0; i < BLOCK_FRAMES * 2; i++)
+            block[i] = (int16_t)*next;
+        check(hda_write((const uint8_t *)block, sizeof(block)) == (int)sizeof(block),
+              "a block fits in the ring's room");
+        ++*next;
+    }
+}
+
+/**
+ * Run `ticks` timer ticks 10 ms apart on the model, writing blocks after each
+ * when `next` is not NULL, and check after each that the delay stays within
+ * six periods. Gives the largest delay seen, in frames.
+ */
+static uint32_t run_ticks(unsigned ticks, unsigned *next)
+{
+    uint32_t most = 0, delay;
+
+    while (ticks--) {
+        model_play(10000);
+        hda_tick();
+        if (next)
+            write_blocks(next);
+        delay = hda_delay_frames();
+        if (delay > most)
+            most = delay;
+    }
+    check(most <= 6 * period_bytes / 4, "the delay stays within six periods");
+    return most;
+}
+
+/**
+ * Walk `played` from frame `from`: every frame is silence or a block, the
+ * blocks come in order from `first`, each whole, 480 frames in one run, but
+ * the last, which the log may cut. Gives the last block played, or
+ * `first` - 1 when none was.
+ */
+static unsigned check_blocks(unsigned from, unsigned first)
+{
+    unsigned i, expect = first, run = 0;
+    int ok = 1;
+
+    for (i = from; i < played_count; i++) {
+        if (played[i] == 0) {
+            if (run != 0 && run != BLOCK_FRAMES)
+                ok = 0;
+            if (run != 0)
+                expect++;
+            run = 0;
+            continue;
+        }
+        if (run == BLOCK_FRAMES) {
+            expect++;
+            run = 0;
+        }
+        if ((unsigned)played[i] != expect)
+            ok = 0;
+        run++;
+    }
+    check(ok, "the blocks play in order, each once and whole");
+    return run ? expect : expect - 1;
+}
+
+/**
+ * A period is the frame count nearest 23 ms at the programmed rate, in
+ * bytes of 16-bit stereo rounded to the nearest 128 and at most 16384, in
+ * three descriptors; the ring holds three periods of the caller's frames.
+ */
+static void row_periods(void)
+{
+    static const uint32_t rates[] = {8000,  11025, 16000, 22050,  32000, 44100,
+                                     48000, 88200, 96000, 176400, 192000};
+    static const uint32_t bytes[] = {768,  1024, 1536, 2048,  2944, 4096,
+                                     4480, 8064, 8832, 16256, 16384};
+    unsigned i, sd = hda_sd_offset(0);
+
+    row = "period-by-rate";
+    for (i = 0; i < 11; i++) {
+        reset_model();
+        check(hda_find_output(), "enumeration succeeds");
+        check(hda_start(rates[i], AUDIO_S16LE, 2) == 0 && current_hw_sample_rate == rates[i],
+              "the rate is programmed as asked");
+        check(period_bytes == bytes[i], "the period is the frames nearest 23 ms");
+        check(hda_test_read(sd + HDA_SD_CBL, 32) == 3 * bytes[i], "the buffer is three periods");
+        check(hda_test_read(sd + HDA_SD_LVI, 16) == 2, "the last descriptor is the third");
+        check(bdl[0].length == bytes[i] && bdl[2].length == bytes[i] &&
+                  bdl[2].addr_low - bdl[0].addr_low == 2 * bytes[i],
+              "each descriptor is one period, one after another");
+        if (rates[i] <= 96000)
+            check(ring_size == 3 * bytes[i] + 1, "the ring holds three periods");
+        else
+            check(ring_size == HDA_RING_MAX, "the ring stops at its array");
+        hda_stop();
+    }
+    row = "ring-in-time";
+    reset_model();
+    params[1][0x0A] = 0x20000 | (1u << 5);
+    check(hda_find_output(), "enumeration succeeds");
+    check(hda_start(11025, AUDIO_U8, 1) == 0 && current_hw_sample_rate == 44100,
+          "Doom's 11025 Hz plays at 44100 Hz");
+    check(period_bytes == 4096, "the period is 1024 frames, 23.2 ms");
+    check(ring_size == 3 * 256 + 1, "the ring holds three periods of 256 Doom frames");
+    hda_stop();
+}
+
+/**
+ * The delay is the ring's frames and the DMA's ahead of the position at the
+ * caller's rate. Doom's 11025 Hz U8 mono plays at 44100 Hz, so a frame of
+ * the DMA is a quarter of one of the caller's, rounded down.
+ */
+static void row_delay(void)
+{
+    static const uint8_t doom[300];
+
+    row = "delay";
+    model_start(1u << 5, 11025, AUDIO_U8, 1);
+    check(hda_delay_frames() == 768, "a start queues three periods of silence");
+    check(hda_write(doom, sizeof(doom)) == (int)sizeof(doom), "300 frames written");
+    check(hda_delay_frames() == 768 + 300, "the ring's frames add to the delay");
+    model_play(10000);
+    check(model_pos == 1764, "10 ms are 441 frames");
+    check(hda_delay_frames() == 300 + (12288 - 1764) / 4 / 4, "the DMA's frames ahead count");
+    hda_tick();
+    check(hw_fill_count == 0, "no period has ended");
+    model_play(15000);
+    check(model_pos == 4408, "25 ms are 1102 frames, into the second period");
+    check(hda_delay_frames() == 300 + (12288 - 4408) / 4 / 4, "before the refill");
+    hda_tick();
+    check(hw_fill_count == 1 && ring_available() == 44, "the first period takes 256 frames");
+    check(hda_delay_frames() == 44 + (4096 + 12288 - 4408) / 4 / 4,
+          "after it, the DMA's samples end a revolution after the second period's start");
+    hda_read_queue();
+    check(hda_get_report()->queue.delay_ms == (44 + 2994 / 4) * 1000 / 11025,
+          "/proc/audio gives the delay in milliseconds");
+    hda_stop();
+}
+
+/**
+ * A service that comes late fills every period played since the last, in
+ * order, and a writer that keeps the ring full is heard without a gap: the
+ * start's three periods of silence, then each block once, in order.
+ */
+static void row_fill(void)
+{
+    unsigned next = 1, i;
+    int ok = 1;
+
+    row = "period-fill";
+    model_start(1u << 6, 48000, AUDIO_S16LE, 2);
+    check(period_bytes == 4480 && ring_size == 13441, "48 kHz periods are 1120 frames");
+    write_blocks(&next);
+    check(next == 8, "the ring takes three periods, seven blocks");
+    model_play(50000);
+    hda_tick();
+    check(hw_fill_count == 2 && hw_period_last == 2, "a late service fills both periods played");
+    check(ring_available() == 1120 * 4, "the two periods take 2240 frames");
+    run_ticks(30, &next);
+    for (i = 0; i < played_count; i++)
+        if (played[i] != (i < 3360 ? 0 : (int16_t)(1 + (i - 3360) / BLOCK_FRAMES)))
+            ok = 0;
+    check(ok, "silence for three periods, then every block in order with no gap");
+    check(played_count == 16800 && underrun_count == 0 && missed_revolutions == 0,
+          "350 ms played without an underrun or a missed revolution");
+    hda_stop();
+}
+
+/**
+ * A writer that stops for a second and goes on: the ring empties and the
+ * stream plays silence, the delay stays within six periods throughout, and
+ * the blocks after the stall follow the last one played before it, none
+ * played twice.
+ */
+static void row_writer_stall(void)
+{
+    unsigned next = 1, before, last;
+
+    row = "writer-stall";
+    model_start(1u << 6, 48000, AUDIO_S16LE, 2);
+    write_blocks(&next);
+    run_ticks(20, &next);
+    before = next;
+    run_ticks(100, NULL);
+    check(ring_available() == 0 && underrun_count > 0, "the stall empties the ring");
+    run_ticks(20, &next);
+    last = check_blocks(3360, 1);
+    check(last >= before && last < next, "the blocks after the stall are played");
+    check(missed_revolutions == 0, "the tick went on, so no revolution was missed");
+    hda_stop();
+}
+
+/**
+ * The machine stops for a second with the ring and the DMA full: no service
+ * runs while the DMA goes round 14 times and 960 frames. The next service
+ * counts the 14 revolutions by the wall clock, silences the rest of the
+ * period playing and empties the ring, so that none of the blocks queued at
+ * the stall is played after it, and the blocks written after it follow.
+ */
+static void row_missed(void)
+{
+    unsigned next = 1, queued, from;
+
+    row = "missed-revolution";
+    model_start(1u << 6, 48000, AUDIO_S16LE, 2);
+    write_blocks(&next);
+    run_ticks(20, &next);
+    queued = next - 1;
+    model_play(1000000);
+    check(model_pos == 480 * 4, "the DMA stopped 480 frames into the first period");
+    from = played_count;
+    hda_tick();
+    check(missed_revolutions == 14 && lpib_wraps >= 14, "14 revolutions missed");
+    check(ring_available() == 0 && session_bytes_dropped > 0, "the ring's stale blocks dropped");
+    check(hw_period_last == 0, "the service is in step with the period playing");
+    run_ticks(30, &next);
+    check(played[from] == 0, "the rest of the period playing is silent");
+    check(check_blocks(from, queued + 1) > queued, "blocks after the stall follow, none before");
+    hda_stop();
+}
+
 /** Allocate a procfs snapshot, or inject allocation failure. */
 void *kmalloc(size_t size)
 {
@@ -666,6 +948,11 @@ int main(void)
     row_report();
     row_verbs();
     row_dma_check();
+    row_periods();
+    row_delay();
+    row_fill();
+    row_writer_stall();
+    row_missed();
     row_shutdown();
     printf("hda-test: result: %s\n", failures ? "fail" : "pass");
     return failures ? 1 : 0;
