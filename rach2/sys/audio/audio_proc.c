@@ -59,22 +59,97 @@ static void put_field(struct audio_text *t, const char *name, uint32_t value)
     put_u32(t, value);
 }
 
+/** Append ` name 0x` and `value` in eight hexadecimal digits to `t`. */
+static void put_word(struct audio_text *t, const char *name, uint32_t value)
+{
+    put_ch(t, ' ');
+    put_str(t, name);
+    put_str(t, " 0x");
+    put_hex(t, value, 8);
+}
+
+/** The short name of widget type `type` (HDA_WIDGET_*). */
+static const char *widget_type(uint8_t type)
+{
+    static const char *const names[] = {"out", "in",    "mix",    "sel",
+                                        "pin", "power", "volume", "beep"};
+
+    if (type < sizeof(names) / sizeof(names[0]))
+        return names[type];
+    return type == 0xF ? "vendor" : "other";
+}
+
+/** Append the stream's queue, the GPIO count, a line for each widget of the
+ * function group and the list of its ADCs to `t`. */
+static void put_codec(struct audio_text *t, const hda_report_t *r)
+{
+    const hda_queue_report_t *q = &r->queue;
+    int i, j;
+
+    put_field(t, "queue fill ", q->fill);
+    put_field(t, " high ", q->high);
+    put_field(t, " delay-ms ", q->delay_ms);
+    put_field(t, " written ", q->written);
+    put_field(t, " dropped ", q->dropped);
+    put_field(t, " periods ", q->periods);
+    put_field(t, " underruns ", q->underruns);
+    put_field(t, " missed ", q->missed);
+    put_field(t, " lpib ", q->lpib);
+    put_field(t, "\ngpio count ", r->gpio & 0xFF);
+    put_word(t, "caps", r->gpio);
+    put_ch(t, '\n');
+    for (i = 0; i < r->widget_count; i++) {
+        const hda_widget_report_t *w = &r->widgets[i];
+
+        put_field(t, "widget ", w->nid);
+        put_str(t, " type ");
+        put_str(t, widget_type(w->type));
+        put_word(t, "caps", w->caps);
+        put_word(t, "amp-in", w->amp_in);
+        put_word(t, "amp-out", w->amp_out);
+        if (w->type == HDA_WIDGET_PIN) {
+            put_word(t, "pin-caps", w->pin_caps);
+            put_word(t, "config", w->config);
+            if (w->sensed)
+                put_word(t, "sense", w->sense);
+        }
+        put_str(t, w->conn_count < 0 ? " conn invalid" : " conn");
+        for (j = 0; j < w->conn_count; j++)
+            put_field(t, " ", w->conns[j]);
+        put_ch(t, '\n');
+    }
+    put_str(t, "adcs");
+    for (i = 0; i < r->widget_count; i++)
+        if (r->widgets[i].type == HDA_WIDGET_AUDIO_IN)
+            put_field(t, " ", r->widgets[i].nid);
+    put_ch(t, '\n');
+}
+
 /**
  * Write /proc/audio's text into `buf`, of `cap` bytes, with no terminator:
  * the audio driver's name and the HDA driver's report (`hda_get_report`),
  * the codec and the widgets it chose, the rates and formats of the last
  * stream it programmed, the converters' capabilities and the connection
- * lists it read. It sends no verb.
+ * lists it read, then the stream's queue, and every widget of the codec's
+ * function group with its ADCs. It sends no verb.
+ *
+ * With `buf` NULL it first reads the queue again (`hda_read_queue`); with a
+ * buffer it writes the reading the last call without one took. procfs asks
+ * for the length with NULL and then writes the text, so the two calls agree
+ * however the counters move between them.
  *
  * Return the text's whole length; when that is more than `cap`, only the
  * first `cap` bytes were stored, and the caller asks again with more room.
  */
 int audio_proc_text(char *buf, int cap)
 {
-    const hda_report_t *r = hda_get_report();
+    const hda_report_t *r;
     struct audio_text text, *t = &text;
     int i, j;
 
+    if (!buf)
+        hda_read_queue();
+    r = hda_get_report();
     t->buf = buf;
     t->cap = cap;
     t->len = 0;
@@ -133,5 +208,6 @@ int audio_proc_text(char *buf, int cap)
             put_field(t, " ", c->nodes[j]);
         put_ch(t, '\n');
     }
+    put_codec(t, r);
     return t->len;
 }

@@ -103,6 +103,7 @@
 #define HDA_VERB_GET_CONN_SEL   0xF0100 /* Get Connection Select */
 #define HDA_VERB_GET_CONFIG_DEF 0xF1C00 /* Get Configuration Default */
 #define HDA_VERB_GET_PIN_SENSE  0xF0900 /* Get Pin Sense */
+#define HDA_VERB_SET_PIN_SENSE  0x70900 /* Execute Pin Sense */
 #define HDA_VERB_SET_CONN_SEL   0x70100 /* Set Connection Select */
 #define HDA_VERB_SET_CHANNEL    0x70600 /* Set Converter Stream/Channel (706h) */
 #define HDA_VERB_SET_AMP_GAIN   0x30000 /* Set Amplifier Gain/Mute */
@@ -124,6 +125,7 @@
 #define HDA_PARAM_AUDIO_CAPS  0x09
 #define HDA_PARAM_PIN_CAPS    0x0C
 #define HDA_PARAM_CONN_LIST   0x0E
+#define HDA_PARAM_INPUT_AMP   0x0D
 #define HDA_PARAM_OUTPUT_AMP  0x12
 #define HDA_PARAM_GPIO_COUNT  0x11 /* GPIO count and capabilities */
 
@@ -214,12 +216,58 @@ typedef struct {
     uint32_t formats; /* its stream formats parameter (0x0B) */
 } hda_caps_report_t;
 
+/* The most connections a widget's entry in the report keeps. */
+#define HDA_WIDGET_REPORT_CONNS 32
+
+/* The most widgets a function group has: its node IDs are seven bits, and
+ * node 0 is the root. */
+#define HDA_MAX_WIDGETS 127
+
+/* One widget of the function group, read at discovery. The amplifier
+ * capabilities are the widget's own under Amp Param Override and the
+ * function group's otherwise, and 0 where it has no such amplifier. */
+typedef struct {
+    uint8_t nid;
+    uint8_t type;                            /* HDA_WIDGET_*: bits 23:20 of `caps` */
+    bool sensed;                             /* `sense` was read at the last start */
+    uint32_t caps;                           /* audio widget capabilities, parameter 0x09 */
+    uint32_t amp_in;                         /* input amplifier capabilities, parameter 0x0D */
+    uint32_t amp_out;                        /* output amplifier capabilities, parameter 0x12 */
+    uint32_t pin_caps;                       /* pin capabilities, parameter 0x0C; 0 off a pin */
+    uint32_t config;                         /* configuration default; 0 off a pin */
+    uint32_t sense;                          /* Get Pin Sense's word at the last start, for a pin
+                                                with presence detect; bit 31 is presence */
+    int conn_count;                          /* nodes in `conns`; -1 for a malformed list or one
+                                                longer than HDA_WIDGET_REPORT_CONNS */
+    uint16_t conns[HDA_WIDGET_REPORT_CONNS]; /* expanded, in selector order */
+} hda_widget_report_t;
+
+/* The output stream's queue, read live by hda_read_queue with no verb. The
+ * byte counts are of the ring, in the format the stream was started with;
+ * all but `lpib` and `missed` start again at each start. */
+typedef struct {
+    uint32_t fill;      /* bytes queued in the write ring */
+    uint32_t high;      /* the most bytes the ring has held */
+    uint32_t delay_ms;  /* from a write now to its sound: the ring at the
+                           requested rate and the DMA buffer ahead of the
+                           position at the programmed one */
+    uint32_t written;   /* bytes the ring took */
+    uint32_t dropped;   /* bytes the ring refused, being full */
+    uint32_t periods;   /* DMA periods filled */
+    uint32_t underruns; /* periods the ring could not fill whole */
+    uint32_t missed;    /* whole revolutions of the DMA buffer that passed
+                           between two services */
+    uint32_t lpib;      /* the position in the DMA buffer, in bytes */
+} hda_queue_report_t;
+
 /*
  * What enumeration found and the last stream setup, for /proc/audio. The node
  * IDs are 0 where there is none; the indices are the connections chosen on
  * the pin, the mixer and the headphone pin. The formats are read back from
  * the stream descriptor and the two DACs. caps[] is the DAC and the headphone
- * DAC; connections[] the pin, the mixer and the headphone pin.
+ * DAC; connections[] the pin, the mixer and the headphone pin. widgets[] has
+ * every widget of the function group, in node order, read at discovery, and
+ * `queue` the stream's counters as hda_read_queue last read them.
  */
 typedef struct {
     uint32_t vendor;
@@ -231,10 +279,19 @@ typedef struct {
     uint8_t primary_enabled, hp_enabled;
     hda_caps_report_t caps[2];
     hda_connection_report_t connections[3];
+    uint32_t gpio; /* the GPIO count parameter (0x11); bits 7:0 the count */
+    int widget_count;
+    hda_widget_report_t widgets[HDA_MAX_WIDGETS];
+    hda_queue_report_t queue;
 } hda_report_t;
 
 /** Return cached enumeration and the last stream setup; sends no verbs. */
 const hda_report_t *hda_get_report(void);
+
+/** Read the output stream's counters and position into the report's
+ * `queue`. It reads the position from memory or a register and sends no
+ * verb, so it is safe from any context. */
+void hda_read_queue(void);
 
 /** Refill the stream's next period if the engine has moved on. The timer
  * tick calls this on every tick, with interrupts off, so playback goes on
