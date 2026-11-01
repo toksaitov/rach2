@@ -385,14 +385,14 @@ int socket_snapshot(int family, int type, struct socket_row **rows)
 {
     (void)family;
     (void)type;
-    (void)rows;
+    *rows = 0;
     return 0;
 }
 
 /** Model tcp_snapshot with no addresses, routes or sockets. */
 int tcp_snapshot(struct tcp_row **rows)
 {
-    (void)rows;
+    *rows = 0;
     return 0;
 }
 
@@ -406,7 +406,7 @@ int tcp_state_to_linux(int state)
 /** Model unix_snapshot with no addresses, routes or sockets. */
 int unix_snapshot(struct unix_row **rows)
 {
-    (void)rows;
+    *rows = 0;
     return 0;
 }
 
