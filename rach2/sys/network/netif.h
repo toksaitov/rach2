@@ -32,6 +32,7 @@
 #define SIOCGIFMTU     0x8921
 #define SIOCGIFHWADDR  0x8927
 #define SIOCGIFINDEX   0x8933
+#define SIOCDIFADDR    0x8936
 #define SIOCADDRT      0x890b
 #define SIOCDELRT      0x890c
 #define SIOCDARP       0x8953
@@ -55,7 +56,11 @@
 
 /**
  * Answer one interface ioctl, which `sys_ioctl` passes for a socket of any
- * family: the requests above, with the bridge and VLAN ones ENOPKG.
+ * family: the requests above, with the bridge and VLAN ones ENOPKG. On a
+ * socket of AF_INET6, SIOCSIFADDR and SIOCDIFADDR take Linux's `struct
+ * in6_ifreq` and add or remove an IPv6 address, and SIOCADDRT and SIOCDELRT
+ * take its `struct in6_rtmsg` and add or remove an IPv6 route, which is
+ * how BusyBox's `ifconfig IF add ADDR/LEN` and `route -A inet6` ask.
  *
  * `handled` is set to 0 for a request this does not own, so the caller can go
  * on looking; the return value is then -ENOTTY and means nothing. System
@@ -63,10 +68,11 @@
  *
  * @param request the ioctl number.
  * @param arg     the user pointer to a `struct ifreq`, `struct ifconf`,
- *                `struct rtentry` or `struct arpreq`.
+ *                `struct rtentry` or `struct arpreq`, or of IPv6's.
+ * @param family  the socket's address family, AF_UNIX for a unix one.
  * @return 0 or a negative errno.
  */
-int32_t netif_ioctl(uint32_t request, uintptr_t arg, int *handled);
+int32_t netif_ioctl(uint32_t request, uintptr_t arg, int family, int *handled);
 
 /** Whether `name` is the name of an interface, a card or `lo`
  * (`netdev_by_name`), whatever the caller's network namespace. */
