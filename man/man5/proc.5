@@ -1178,6 +1178,11 @@ and a file of
 as
 .Ql /memfd: Ns Ar NAME Ns Ql " (deleted)" ,
 as Linux names each.
+The directory lists the descriptors in the order of their numbers, and
+the offset after an entry is its number plus 2, as on Linux, so that a
+descriptor closed while the directory is read moves no other: a program
+that reads the directory and closes each descriptor it finds before an
+exec, as Chromium does, closes them all.
 A followed link reports the descriptor's attributes.
 An open of the link follows it: a file or a directory is opened again,
 with the checks of an open by name and a description of its own, even

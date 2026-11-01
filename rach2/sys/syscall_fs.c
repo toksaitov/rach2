@@ -12735,18 +12735,24 @@ static void synth_u32_str(char *out, uint32_t v)
 }
 
 /**
- * The n-th entry, "." and ".." counted off, of a process's directory or of
- * its `task`, `fd`, `fdinfo` or `ns` directory, from the directory
- * descriptor's record `sd`: fills name/ino/dtype and returns 1, or 0 past
- * the end or once the process, or the thread a thread's directory is of, is
- * gone, which leaves the directory with "." and ".." alone. A thread's
+ * The entry at position `*at`, "." and ".." counted off, of a process's
+ * directory or of its `task`, `fd`, `fdinfo` or `ns` directory, from the
+ * directory descriptor's record `sd`: fills name/ino/dtype and returns 1, or
+ * 0 past the end or once the process, or the thread a thread's directory is
+ * of, is gone, which leaves the directory with "." and ".." alone. A thread's
  * directory has the files of the thread with no `task` among them, and its
  * fd directory the thread's descriptors, and `children` takes the place of
  * `task`, the last entry, in a thread's directory. `task` lists the process's
  * threads, the leader first, without a thread that has ended and is not yet
  * reaped unless it is the leader.
+ *
+ * The n-th entry is at position n, but in `fd` and `fdinfo` a descriptor is
+ * at its number: the entry is the lowest open descriptor at `*at` or above,
+ * and `*at` is set to its number. So a descriptor closed between two reads of
+ * the directory moves no other, as a program that closes each descriptor it
+ * reads before an exec needs.
  */
-static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint64_t *ino,
+static int synth_proc_dirent(const struct synth_dir *sd, int *at, char *name, uint64_t *ino,
                              uint8_t *dtype)
 {
     static const struct {
@@ -12761,6 +12767,7 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
         {"exe", DT_LNK},     {"cwd", DT_LNK},       {"root", DT_LNK},   {"task", DT_DIR}};
     struct vpath vp;
     process_t *pp;
+    int n = *at;
     int id, i, c = 0;
 
     synth_dir_vpath(sd, &vp);
@@ -12820,9 +12827,10 @@ static int synth_proc_dirent(const struct synth_dir *sd, int n, char *name, uint
         }
         return 0;
     }
-    for (i = 0; i < fd_table_cap(pp->fds); i++) {
+    for (i = n; i < fd_table_cap(pp->fds); i++) {
         if (pp->fds->entries[i].type != FD_TYPE_NONE &&
-            !(pp->fds->entries[i].flags & FD_FLAG_CLOSING) && c++ == n) {
+            !(pp->fds->entries[i].flags & FD_FLAG_CLOSING)) {
+            *at = i;
             synth_u32_str(name, (uint32_t)i);
             *ino = procfs_ino_pid(id);
             *dtype = sd->kind == VNODE_PROC_FDINFO_DIR ? DT_REG : DT_LNK;
@@ -13246,9 +13254,13 @@ static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
 }
 
 /**
- * The n-th entry of a synthetic directory, from the directory descriptor's
- * record `sd`, its kind, pid and tid: fills name/ino/dtype and returns 1, or
- * 0 past the end. "." and ".." are entries 0 and 1 of every directory.
+ * The entry at position `*pos` of a synthetic directory, from the directory
+ * descriptor's record `sd`, its kind, pid and tid: fills name/ino/dtype and
+ * returns 1, or 0 past the end. "." and ".." are at 0 and 1 of every
+ * directory. The n-th entry is at position n, except in a process's `fd` and
+ * `fdinfo` directories, where a descriptor is at its number plus 2 and the
+ * entry is the first at `*pos` or after it (`synth_proc_dirent`); `*pos` is
+ * set to the position of the entry given.
  *
  * /dev lists first the mounts that stand in it by name, /dev/shm; then
  * `log`, the link to the syslog daemon's socket; then the caller's
@@ -13263,10 +13275,11 @@ static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
  * files, then a directory for each process. The other directories have
  * functions of their own.
  */
-static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64_t *ino,
+static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uint64_t *ino,
                            uint8_t *dtype)
 {
     int kind = sd->kind;
+    int n = *pos;
 
     if (n == 0) {
         name[0] = '.';
@@ -13396,7 +13409,10 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
     }
     if (kind == VNODE_PROC_PID || kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_FD_DIR ||
         kind == VNODE_PROC_NS_DIR || kind == VNODE_PROC_FDINFO_DIR) {
-        return synth_proc_dirent(sd, n, name, ino, dtype);
+        int found = synth_proc_dirent(sd, &n, name, ino, dtype);
+
+        *pos = n + 2;
+        return found;
     }
     return 0;
 }
@@ -13405,22 +13421,22 @@ static int synth_dirent_at(const struct synth_dir *sd, int n, char *name, uint64
  * getdents64 on the synthetic directory descriptor `e`: the records of the
  * entries `synth_dirent_at` gives from the description's offset on, packed
  * into the user buffer `buf` of `count` bytes as `sys_getdents64` packs
- * them, with each record's d_off the index of the entry after it and the
- * offset moved past each record copied. Returns the bytes written, 0 at the
- * end, -EINVAL when the first record does not fit, or -EFAULT when the
- * first copy fails.
+ * them, with each record's d_off the position after its entry's
+ * (`synth_dirent_at`) and the offset moved past each record copied. Returns
+ * the bytes written, 0 at the end, -EINVAL when the first record does not
+ * fit, or -EFAULT when the first copy fails.
  */
 static int32_t synth_getdents(fd_entry_t *e, char *buf, uint32_t count)
 {
     static const struct synth_dir none = {VNODE_ENOENT, 0, 0, 0};
     const struct synth_dir *sd = e->priv ? (const struct synth_dir *)e->priv : &none;
     uint32_t written = 0;
-    uint32_t idx = (uint32_t)e->ofd->offset;
+    int idx = (int)e->ofd->offset;
     char name[32];
     uint64_t ino;
     uint8_t dtype;
 
-    while (synth_dirent_at(sd, (int)idx, name, &ino, &dtype)) {
+    while (synth_dirent_at(sd, &idx, name, &ino, &dtype)) {
         union {
             struct linux_dirent64 rec;
             uint8_t bytes[64];
