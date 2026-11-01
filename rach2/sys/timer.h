@@ -7,13 +7,27 @@
 
 #include "lib/kint.h"
 
-/* The kernel's tick rate, in ticks a second. */
-#define TICK_HZ 100
+/* The kernel's tick rate, in ticks a second, and the tick's length. */
+#define TICK_HZ 1000
+#define TICK_NS (1000000000u / TICK_HZ)
+#define TICK_US (1000000u / TICK_HZ)
+
+/* The rate of the `clock_t` a program sees, Linux's USER_HZ: `times`, the
+ * /proc stat files and AT_CLKTCK count in it, whatever TICK_HZ is. TICK_HZ
+ * is a multiple of it. */
+#define USER_HZ 100
+
+/* Milliseconds as whole ticks, rounded up, for a constant under 2^22 ms. */
+#define MS_TO_TICKS(ms) (((uint32_t)(ms) * TICK_HZ + 999u) / 1000u)
 
 /* The ticks since the timer started, counted by the boot processor's timer
  * handler (kernel.c) at the platform's rate, as many for each interrupt as
- * `timer_tick_clock` says. */
-extern volatile uint32_t kernel_ticks;
+ * `timer_tick_clock` says. It is 64 bits wide, so it does not wrap; the low
+ * 32 bits, which any processor reads in one load, wrap after 2^32 ticks.
+ * On the i686 a reader of the whole count reads it with `tick_count`, since
+ * there the two halves are two loads; one that wants only an interval
+ * shorter than the low half's cycle takes `(uint32_t)kernel_ticks`. */
+extern volatile uint64_t kernel_ticks;
 
 /*
  * The boot processor's tick changes `kernel_ticks`, the uptime's seconds and
@@ -48,7 +62,31 @@ int tick_read_retry(uint32_t seq);
 
 /** The uptime's seconds, the ticks of this second and `kernel_ticks`, as
  * one reading, with interrupts off while it reads. */
-void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks);
+void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint64_t *ticks);
+
+/**
+ * `n` divided by `d`, with the remainder in `*rem` when it is not NULL, for
+ * a divisor from 1 to 65535: a count of ticks as seconds, or as `clock_t`.
+ * The freestanding kernel has no `__udivdi3` for a 64-bit division, so it
+ * divides the high word and then the low word sixteen bits at a time.
+ */
+uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem);
+
+/**
+ * A span of `sec` seconds and `nsec` nanoseconds, neither negative and
+ * `nsec` under a second, as whole ticks, a partial tick counted as one. The
+ * seconds are cut at 2^40, some 34000 years, which a deadline of ticks
+ * waits as long as any later one, so the sum with the tick count cannot
+ * overflow.
+ */
+uint64_t tick_span(int64_t sec, uint32_t nsec);
+
+/** Ticks as the `clock_t` of USER_HZ that a program sees. */
+#define TICKS_TO_CLOCK(t) tick_div((t), TICK_HZ / USER_HZ, (uint32_t *)0)
+
+/** `kernel_ticks` whole, on any processor and in any context, with
+ * interrupts off while it reads. A deadline of ticks is compared with it. */
+uint64_t tick_count(void);
 
 /*
  * The clock under the tick: the ticks each interrupt counts, microseconds
@@ -63,7 +101,7 @@ void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks);
  */
 
 /**
- * Microseconds since the boot, for intervals shorter than the 10 ms tick:
+ * Microseconds since the boot, for intervals shorter than a tick:
  * the latency record, block requests, TCP's round trips and the USB stamps.
  * With a reference, its ticks since it started and its place within the
  * next, on every processor; without one, the periods the boot processor's
@@ -75,6 +113,14 @@ void tick_now(uint32_t *seconds, uint32_t *second_ticks, uint32_t *ticks);
  * its own while it reads, so an interrupt handler may call it.
  */
 uint32_t timer_now_us(void);
+
+/**
+ * The resolution of the place within the tick, in nanoseconds, which the
+ * real-time and monotonic clocks are read to: a period of the reference,
+ * rounded up, or a microsecond while the counter under the tick keeps the
+ * clock, since its place is read in microseconds.
+ */
+uint32_t timer_resolution_ns(void);
 
 /**
  * Where the clock is within the tick, with interrupts off: `*pending` is the

@@ -189,13 +189,11 @@ static int poll_scan(struct pollfd_scan *p, struct wait_queue **wqs)
     return ready;
 }
 
-/**
- * Whether the tick `deadline` has come: it is the count's tick or an earlier
- * one, compared by the signed difference so the count's wrap does not matter.
- */
-static int deadline_reached(uint32_t deadline)
+/** Whether the tick `deadline` has come: it is the count's tick or an
+ * earlier one. */
+static int deadline_reached(uint64_t deadline)
 {
-    return (int32_t)(deadline - kernel_ticks) <= 0;
+    return tick_count() >= deadline;
 }
 
 /**
@@ -207,27 +205,25 @@ static int deadline_reached(uint32_t deadline)
  * (`rtc_monotonic`), and a wait counted in ticks alone would end before the
  * clock showed it had lasted its timeout. The deadline then moves to the
  * first tick at which time since boot, counted in ticks, reaches the end;
- * the tick count and that time are read as one reading (`tick_now`). A
- * deadline further than the signed comparison of ticks allows moves as far
- * as it does, and is checked again there.
+ * the tick count and that time are read as one reading (`tick_now`).
  */
 static int deadline_passed(struct poll_deadline *d)
 {
     int64_t sec, nsec;
-    uint32_t seconds32, ticks32, base;
-    uint64_t now, due;
+    uint32_t seconds32, ticks32;
+    uint64_t now, due, base;
 
     rtc_monotonic(&sec, &nsec);
     if (sec > d->sec || (sec == d->sec && nsec >= d->nsec)) {
         return 1;
     }
     tick_now(&seconds32, &ticks32, &base);
-    now = (uint64_t)seconds32 * 100u + ticks32;
-    due = (uint64_t)d->sec * 100u + ((uint32_t)d->nsec + 9999999u) / 10000000u;
+    now = (uint64_t)seconds32 * TICK_HZ + ticks32;
+    due = tick_span(d->sec, (uint32_t)d->nsec);
     if (due <= now) {
         return 1;
     }
-    d->tick = base + (due - now > 0x7FFFFFFEu ? 0x7FFFFFFEu : (uint32_t)(due - now));
+    d->tick = base + (due - now);
     return 0;
 }
 
@@ -357,36 +353,32 @@ static void deadline_end(struct poll_deadline *d, long sec, long nsec)
 }
 
 /**
- * The tick at which a wait of `ticks` whole ticks and `us` microseconds ends:
- * the first tick at or after its end, measured from where in the tick in
- * progress the call is (`rtc_tick_phase`), so a nonzero wait is never shorter
- * than asked and at most a tick longer, unless a tick is lost. The callers
- * clamp `ticks` at 0x7FFFFFFE, and the deadline is at most 0x7FFFFFFF ticks
- * ahead, so the signed difference `deadline - kernel_ticks` stays valid.
+ * The tick at which a wait of `ticks` whole ticks and `us` microseconds, at
+ * most a second's, ends: the first tick at or after its end, measured from
+ * where in the tick in progress the call is (`rtc_tick_phase`), so a nonzero
+ * wait is never shorter than asked and at most a tick longer, unless a tick
+ * is lost.
  */
-static uint32_t tick_deadline(uint32_t ticks, uint32_t us)
+static uint64_t tick_deadline(uint64_t ticks, uint32_t us)
 {
-    uint32_t now, phase_ns;
+    uint64_t now;
+    uint32_t phase_ns;
 
     rtc_tick_phase(&now, &phase_ns);
     if (ticks == 0 && us == 0) {
         return now;
     }
-    ticks += (phase_ns / 1000u + us + 9999u) / 10000u;
-    return now + (ticks > 0x7FFFFFFFu ? 0x7FFFFFFFu : ticks);
+    return now + ticks + (phase_ns / 1000u + us + (TICK_US - 1u)) / TICK_US;
 }
 
 void poll_ms_deadline(int timeout_ms, struct poll_deadline *d)
 {
-    uint32_t ticks;
-
     d->set = timeout_ms >= 0;
     if (!d->set) {
         return;
     }
     deadline_end(d, timeout_ms / 1000, timeout_ms % 1000 * 1000000L);
-    ticks = (uint32_t)timeout_ms / 10u;
-    d->tick = tick_deadline(ticks, (uint32_t)timeout_ms % 10u * 1000u);
+    d->tick = tick_deadline(tick_span(timeout_ms / 1000, 0), (uint32_t)(timeout_ms % 1000) * 1000u);
 }
 
 /**
@@ -427,31 +419,25 @@ static int tv_to_ms(const struct poll_timeval *tv)
 
 /**
  * In `d`, the deadline of the timespec `ts`: the first tick at or after its
- * end (`tick_deadline`), at most about 248 days ahead, and its end by time
- * since boot; none for a NULL `ts`. A timeout of 21474836 seconds or more
- * ends at its tick alone. The seconds are compared as a long before they
- * are narrowed, since on x86-64 a timeout of 2^32 seconds would read as 0 in
- * 32 bits.
+ * end (`tick_deadline`), and its end by time since boot; none for a NULL
+ * `ts`. A timeout of 2^40 seconds or more, which `tick_span` cuts, ends at
+ * its tick alone.
  */
 static void ts_deadline(const struct poll_timespec *ts, struct poll_deadline *d)
 {
-    uint32_t sec, ticks;
+    int64_t sec;
 
     d->set = ts != NULL;
     if (!d->set) {
         return;
     }
+    sec = ts->tv_sec;
     d->sec = 0;
     d->nsec = 0;
-    if ((unsigned long)ts->tv_sec < 21474836ul) {
+    if (sec < ((int64_t)1 << 40)) {
         deadline_end(d, ts->tv_sec, ts->tv_nsec);
     }
-    sec = (unsigned long)ts->tv_sec > 21474836ul ? 21474836u : (uint32_t)ts->tv_sec;
-    ticks = sec * 100u + (uint32_t)ts->tv_nsec / 10000000u;
-    if (ticks > 0x7FFFFFFEu) {
-        ticks = 0x7FFFFFFEu;
-    }
-    d->tick = tick_deadline(ticks, ((uint32_t)ts->tv_nsec % 10000000u + 999u) / 1000u);
+    d->tick = tick_deadline(tick_span(ts->tv_sec, 0), ((uint32_t)ts->tv_nsec + 999u) / 1000u);
 }
 
 /** The body of poll and ppoll: the `nfds` entries at `ufds` waited on until

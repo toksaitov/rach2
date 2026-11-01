@@ -19,10 +19,10 @@
 #include "../klog.h"
 #include "../timer.h"
 
-/* The ticks of a second, and the longest time kept, which the ticks of an
- * unsigned 32-bit count hold. */
-#define BLANK_HZ       100u
-#define BLANK_MAX_SECS 21474836u
+/* The ticks of a second, and the longest time kept, about 49 days, which
+ * the ticks of an unsigned 32-bit count hold. */
+#define BLANK_HZ       ((uint32_t)TICK_HZ)
+#define BLANK_MAX_SECS (0xFFFFFFFFu / BLANK_HZ)
 
 /* The seconds without input before a blank, 0 for never; the tick of the
  * last poke; whether the console is blank, and whether only
@@ -40,7 +40,7 @@ static unsigned int nunblanks;
 
 void console_poke(void)
 {
-    last_poke = kernel_ticks;
+    last_poke = (uint32_t)kernel_ticks;
     if (blanked && !forced) {
         unblank_why = "by a key or a mouse move";
         unblank_asked = 1;
@@ -129,7 +129,7 @@ void blank_tick(void)
     if (unblank_asked) {
         do_unblank(unblank_why);
     } else if (!blanked && blank_secs != 0 &&
-               kernel_ticks - last_poke >= (uint32_t)blank_secs * BLANK_HZ) {
+               (uint32_t)kernel_ticks - last_poke >= (uint32_t)blank_secs * BLANK_HZ) {
         do_blank(0, "after the time without input");
     }
 }
@@ -137,7 +137,7 @@ void blank_tick(void)
 void console_set_blank_time(unsigned int seconds)
 {
     blank_secs = seconds < BLANK_MAX_SECS ? seconds : BLANK_MAX_SECS;
-    last_poke = kernel_ticks;
+    last_poke = (uint32_t)kernel_ticks;
     if (blanked && !forced) {
         unblank_why = "by the escape";
         unblank_asked = 1;
@@ -151,7 +151,7 @@ void console_blank_now(void)
 
 void console_unblank_now(void)
 {
-    last_poke = kernel_ticks;
+    last_poke = (uint32_t)kernel_ticks;
     do_unblank("on request");
 }
 

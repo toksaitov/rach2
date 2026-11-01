@@ -2,15 +2,16 @@
  * lag.c: the sleeping test device.
  *
  * `rach2.blocklag=N` wraps disk 0 in a device whose requests complete N
- * ticks later, from the timer. It has no polled calls and no cache, so it
- * keeps none of the disk's fault-safe, pollable and write-through flags, and
- * every transfer and sync on it takes a request. Only the partition views
- * and the mounts on them use the wrapper; the whole-disk window keeps the
- * real device. The sleeping path is tested on it with a device that
- * answers and with one that does not: with N above the deadline it is a
- * device that never answers in time, which tests the quarantine with the
- * driver unchanged. `rach2.blockfail=N` makes the Nth write through the
- * wrapper fail with EIO, so a test can see a mount go read-only.
+ * hundredths of a second later, by the timer's ticks. It has no polled
+ * calls and no cache, so it keeps none of the disk's fault-safe, pollable
+ * and write-through flags, and every transfer and sync on it takes a
+ * request. Only the partition views and the mounts on them use the wrapper;
+ * the whole-disk window keeps the real device. The sleeping path is tested
+ * on it with a device that answers and with one that does not: with N above
+ * the deadline it is a device that never answers in time, which tests the
+ * quarantine with the driver unchanged. `rach2.blockfail=N` makes the Nth
+ * write through the wrapper fail with EIO, so a test can see a mount go
+ * read-only.
  * `rach2.blockdead=P` builds the view of MBR partition P, read from the disk
  * when the wrapper is installed, over a second device that accepts every
  * request and answers none, so a device that stalls has a healthy neighbour
@@ -27,10 +28,14 @@
 #include "../lib/kirq.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
+#include "../timer.h"
 
-/* Enough for every slot of the pool and the two-tick duplicate each
- * completion leaves behind. */
+/* Enough for every slot of the pool and the duplicate each completion
+ * leaves behind. */
 #define LAG_QUEUE 48
+
+/* The ticks in the unit of the options' times, a hundredth of a second. */
+#define LAG_UNIT (TICK_HZ / 100u)
 
 struct lag_entry {
     struct block_request *request;
@@ -155,7 +160,7 @@ static void lag_deliver(struct lag_entry *e)
         return;
     }
     e->delivered = 1;
-    e->due = lag_ticks + 2;
+    e->due = lag_ticks + 2u * LAG_UNIT;
     lag_completions++;
     if (e->flush) {
         klog(KLOG_INFO, "block", "lag: flush answered");
@@ -277,7 +282,7 @@ static int lag_knob(const char *name, uint32_t *out)
 
 /**
  * Return the lag wrapper for `backing`, installing it on the first call
- * that finds `rach2.blocklag` set to a tick count.
+ * that finds `rach2.blocklag` set to a count of hundredths of a second.
  *
  * There is one wrapper, over the device of the call that installed it. A
  * later call returns the wrapper when `backing` is that device and `backing`
@@ -285,8 +290,8 @@ static int lag_knob(const char *name, uint32_t *out)
  * option, or with a value `lag_knob` refuses, `backing` is returned.
  * The wrapper's deadline is one period of five seconds, since its tests are
  * of a device that never answers; a test of the deadline's boundary sets the
- * period with `rach2.lagdeadline=T` ticks and the count with
- * `rach2.lagperiods=N`.
+ * period with `rach2.lagdeadline=T` hundredths of a second and the count
+ * with `rach2.lagperiods=N`.
  */
 block_device_t *block_lag_wrap(block_device_t *backing)
 {
@@ -300,7 +305,7 @@ block_device_t *block_lag_wrap(block_device_t *backing)
         return backing;
     }
     lag_backing = backing;
-    lag_delay = n;
+    lag_delay = n * LAG_UNIT;
     if (lag_knob("rach2.blockfail", &fail_write_at)) {
         klog(KLOG_INFO, "block", "lag: write %u fails", (unsigned)fail_write_at);
     }
@@ -322,11 +327,12 @@ block_device_t *block_lag_wrap(block_device_t *backing)
     }
     lag_device = *backing;
     lag_device.flags = backing->flags & BLOCK_READ_ONLY;
-    lag_device.max_sectors = 0;      /* a page, the staging it copies through */
-    lag_device.deadline_ticks = 500; /* five seconds, the lag its rows are set against */
-    lag_device.deadline_limit = 1;   /* one period: its rows test a device that never answers */
+    lag_device.max_sectors = 0; /* a page, the staging it copies through */
+    lag_device.deadline_ticks =
+        500u * LAG_UNIT;           /* five seconds, the lag its rows are set against */
+    lag_device.deadline_limit = 1; /* one period: its rows test a device that never answers */
     if (lag_knob("rach2.lagdeadline", &n)) {
-        lag_device.deadline_ticks = n;
+        lag_device.deadline_ticks = n * LAG_UNIT;
     }
     if (lag_knob("rach2.lagperiods", &n)) {
         lag_device.deadline_limit = n;
@@ -342,6 +348,7 @@ block_device_t *block_lag_wrap(block_device_t *backing)
         dead_device.drvdata = &dead_device;
     }
     lag_device.drvdata = &lag_device;
-    klog(KLOG_INFO, "block", "lag: %d ticks behind the boot disk", (int)lag_delay);
+    klog(KLOG_INFO, "block", "lag: %d hundredths of a second behind the boot disk",
+         (int)(lag_delay / LAG_UNIT));
     return &lag_device;
 }

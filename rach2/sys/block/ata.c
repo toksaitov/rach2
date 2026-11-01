@@ -78,6 +78,7 @@
 
 #include "../lib/kerrno.h"
 #include "../lib/kint.h"
+#include "../timer.h"
 
 /* The most one command moves: 32 KiB, which is also the bounce buffer's
  * size, and which PIO moves a sector at a time through the data port with
@@ -181,11 +182,11 @@ void ata_set_io(const struct ata_io *ops)
    of the wait is the sleep. Each read is an exit under a hypervisor. */
 #define ATA_SPIN_BEFORE_SLEEP 8
 
-/* A sleeping wait's bound in ticks, thirty seconds at 100 Hz, the AHCI and
+/* A sleeping wait's bound in ticks, thirty seconds, the AHCI and
    NVMe drivers' bound with interrupts on and Linux's ATA command timeout:
    an emulator completes a write through its host's file, and on a loaded
    host one write can take longer than five seconds. */
-#define ATA_WAIT_TICKS 3000
+#define ATA_WAIT_TICKS MS_TO_TICKS(30000)
 
 /* The channels' interrupt lines and the vectors the router gives them. */
 #define ATA_IRQ_PRIMARY   14
@@ -402,7 +403,7 @@ static int ata_wait_cond(void *arg)
     }
     if (w->ch->ticks - w->t0 > ATA_WAIT_TICKS) {
         klog(KLOG_WARN, "ata", "%s: no answer in %d ticks: status 0x%X, bus master 0x%X, want %d",
-             w->ch->name, ATA_WAIT_TICKS, (unsigned)ata_io->in8(w->ch->io + ATA_REG_STATUS),
+             w->ch->name, (int)ATA_WAIT_TICKS, (unsigned)ata_io->in8(w->ch->io + ATA_REG_STATUS),
              w->ch->bm ? (unsigned)ata_io->in8(w->ch->bm + ATA_BM_STATUS) : 0u, w->want);
         w->rc = -EIO;
         return 1;

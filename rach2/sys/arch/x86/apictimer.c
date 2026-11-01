@@ -14,6 +14,7 @@
 #include "refclock.h"
 
 #include "../../lib/kirq.h"
+#include "../../timer.h"
 
 #define CALIBRATE_US 20000u
 
@@ -34,7 +35,7 @@
 
 /* The tick rate `apic_timer_start` was given, which the counter's
  * arithmetic divides a second by. */
-static uint32_t tick_hz = 100;
+static uint32_t tick_hz = TICK_HZ;
 
 void apic_lint_init(const struct acpi_info *a)
 {

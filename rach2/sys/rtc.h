@@ -87,14 +87,14 @@ void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds);
 /** The tick count, with the ticks that have passed and the handler has not
  * counted (`timer_phase`), and how far into the next tick the timer is, in
  * nanoseconds, read together with interrupts off. */
-void rtc_tick_phase(uint32_t *ticks, uint32_t *phase_ns);
+void rtc_tick_phase(uint64_t *ticks, uint32_t *phase_ns);
 
 /** The tick count as the clocks count it, with the ticks the handler has
  * not counted yet (`rtc_tick_phase`). A deadline of whole ticks is counted
  * from it, and not from `kernel_ticks`, which takes the tick only when the
  * boot processor's handler runs: a wait begun while the tick is pending
  * would end a tick early by the monotonic clock. */
-uint32_t rtc_ticks_now(void);
+uint64_t rtc_ticks_now(void);
 
 /**
  * Make the real time `seconds` and `nanoseconds` now, as clock_settime,

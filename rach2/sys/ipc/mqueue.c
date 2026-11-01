@@ -515,7 +515,7 @@ struct mq_wait {
     const struct mqueue *q;
     uint32_t from;
     int timed;
-    uint32_t target;
+    uint64_t target;
 };
 
 /** The wait condition of the `struct mq_wait` at `arg`. */
@@ -523,7 +523,7 @@ static int mq_wait_done(void *arg)
 {
     const struct mq_wait *w = arg;
 
-    return w->q->gen != w->from || (w->timed && (int32_t)(kernel_ticks - w->target) >= 0);
+    return w->q->gen != w->from || (w->timed && tick_count() >= w->target);
 }
 
 /** Sleep on `q` for what `w` waits for: 0 for a change, -ETIMEDOUT at the
@@ -583,10 +583,9 @@ static int32_t mq_deadline(const void __user *uts, int wide, struct mq_wait *w)
         dns += 1000000000;
         dsec--;
     }
-    w->target = kernel_ticks;
+    w->target = tick_count();
     if (dsec >= 0) {
-        w->target += (uint32_t)(dsec > 21474836 ? 21474836 : dsec) * 100u +
-                     ((uint32_t)dns + 9999999u) / 10000000u;
+        w->target += tick_span(dsec, (uint32_t)dns);
     }
     return 0;
 }

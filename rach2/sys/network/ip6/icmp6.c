@@ -25,7 +25,7 @@ static uint8_t icmp6_error_buf[8 + ICMP6_QUOTE_MAX];
 
 /* Errors leave at most one a second after a burst of six, as IPv4's do
  * (icmp.c), kept as a credit in ticks. */
-#define ICMP6_ERROR_TICKS 100
+#define ICMP6_ERROR_TICKS TICK_HZ
 #define ICMP6_ERROR_BURST (6 * ICMP6_ERROR_TICKS)
 static uint32_t icmp6_error_credit = ICMP6_ERROR_BURST;
 static uint32_t icmp6_error_last;
@@ -35,12 +35,13 @@ static uint32_t icmp6_error_last;
  * costs a second of it. */
 static int icmp6_error_allowed(void)
 {
-    uint32_t credit = icmp6_error_credit + (kernel_ticks - icmp6_error_last);
+    uint32_t now = (uint32_t)kernel_ticks;
+    uint32_t credit = icmp6_error_credit + (now - icmp6_error_last);
 
     if (credit > ICMP6_ERROR_BURST || credit < icmp6_error_credit) {
         credit = ICMP6_ERROR_BURST;
     }
-    icmp6_error_last = kernel_ticks;
+    icmp6_error_last = now;
     if (credit < ICMP6_ERROR_TICKS) {
         icmp6_error_credit = credit;
         return 0;

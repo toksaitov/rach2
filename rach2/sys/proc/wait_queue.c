@@ -138,7 +138,7 @@ static void wq_dequeue(wait_queue_t *wq, struct wq_waiter *w)
 static int wq_wait(wait_queue_t *wq, wq_cond_fn cond, void *arg, int kind)
 {
     uint32_t flags;
-    uint32_t deadline;
+    uint64_t deadline;
     int rc;
 
     if (!wq || !cond || !current_proc) {

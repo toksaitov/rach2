@@ -135,6 +135,12 @@ int sched_all_idle(void);
 uint64_t sched_idle_ticks(void);
 uint64_t sched_busy_ticks(void);
 
+/** Processor `c`'s ticks in user mode, busy and idle, as one reading. Its
+ * own tick changes them within its `ticks_seq`, which is odd meanwhile, so
+ * a reader on any processor reads them again until the count is even and
+ * has not moved: on the i686 a 64-bit count is two loads. */
+void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle);
+
 /** Count the global ticks this processor has not counted yet as idle or
  * busy, so that its idle and busy ticks add up to the uptime since it
  * started, and charge each busy one to the current process as user time

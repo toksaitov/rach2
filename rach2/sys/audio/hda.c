@@ -103,7 +103,7 @@ static volatile uint16_t rirb_rp = 0;
  * DMA period and buffer size. BDL entry buffer addresses must be 128-byte
  * aligned, so each period is a multiple of 128 bytes in this contiguous
  * multi-buffer. The stream's interrupt may not arrive on a real machine
- * (MSI/IOAPIC routing), so the stream is also serviced from the 100 Hz timer
+ * (MSI/IOAPIC routing), so the stream is also serviced from the timer's
  * tick; the period is long enough that a missed tick does not empty it. 16384
  * bytes is about 85ms at 48kHz 16-bit stereo (4096 frames). The descriptor
  * list is volatile, since the controller reads it.

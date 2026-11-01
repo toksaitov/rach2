@@ -52,7 +52,7 @@
  * says otherwise, and the most the option accepts. The limit is what the
  * stall rules divide between devices; it is not a table. */
 #define REQ_LIMIT             16
-/* The deadline's period, thirty seconds of 100 Hz ticks; how many periods
+/* The deadline's period, thirty seconds of ticks; how many periods
  * in a row a request is waited for before it is given up, two minutes in
  * all; and the most seconds `rach2.blockdeadline=S` may set the period to.
  * The deadline answers a caller whose device has gone and does not judge a
@@ -60,7 +60,7 @@
  * to answer a write. The lag device sets a single period of five seconds of
  * its own, to test a device that never answers; `rach2.blockdeadline`
  * lets a test see a late answer without waiting thirty seconds. */
-#define REQ_DEFAULT_DEADLINE  3000u
+#define REQ_DEFAULT_DEADLINE  MS_TO_TICKS(30000)
 #define REQ_DEFAULT_DEADLINES 4u
 #define REQ_DEADLINE_MAX_S    600u
 static uint32_t default_deadline = REQ_DEFAULT_DEADLINE;
@@ -131,7 +131,7 @@ void block_request_init(void)
             klog(KLOG_WARN, "block", "rach2.blockdeadline: not a count of 1 to %d seconds; ignored",
                  (int)REQ_DEADLINE_MAX_S);
         } else {
-            default_deadline = asked * 100u;
+            default_deadline = asked * TICK_HZ;
             klog(KLOG_INFO, "block", "request deadline: %d s a period", (int)asked);
         }
     }

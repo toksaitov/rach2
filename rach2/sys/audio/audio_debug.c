@@ -12,8 +12,20 @@
 #include "../klog.h"
 #include "../lib/kstring.h"
 #include "../proc/sched.h"
+#include "../timer.h"
 
-extern volatile uint32_t kernel_ticks;
+/** `ms` milliseconds as whole ticks, rounded down. */
+static uint32_t ms_ticks(uint32_t ms)
+{
+    return ms / 1000u * TICK_HZ + ms % 1000u * TICK_HZ / 1000u;
+}
+
+/** The low word of the tick count, which the tests' intervals are measured
+ * against. */
+static uint32_t now_ticks(void)
+{
+    return (uint32_t)kernel_ticks;
+}
 
 /*
  * State for the kernel-side square-wave test tone. The mixer callback runs in
@@ -291,8 +303,8 @@ static void audio_run_scale_test(uint32_t duration_ms)
                    audio_get_driver_name());
 
     total = (uint32_t)SCALE_NOTES * (_scale_note_frames + _scale_rest_frames);
-    limit = kernel_ticks + 4u * (total / (sample_rate / 100)) + 100u;
-    while (_scale_frames < total && kernel_ticks < limit) {
+    limit = now_ticks() + 4u * (total / (sample_rate / TICK_HZ)) + TICK_HZ;
+    while (_scale_frames < total && (int32_t)(now_ticks() - limit) < 0) {
         idle_wait_irq_on();
     }
 
@@ -307,12 +319,12 @@ static void audio_run_scale_test(uint32_t duration_ms)
 /**
  * Play the same scale through the driver's write path instead of the callback.
  *
- * Uses 11025 Hz unsigned-8 mono and synthesizes samples in this thread,
- * pushing them with audio->write(). Each 10 ms timer tick it computes how many
- * frames are due (sample_acc keeps the fractional remainder across ticks so
- * the rate stays exact over time) and writes them in <= sizeof(buf) chunks,
- * halting until the next interrupt while a write takes nothing. Exercises the
- * write side that the callback test bypasses.
+ * Uses 11025 Hz unsigned-8 mono and synthesizes samples in this thread, pushing
+ * them with audio->write(). Each timer tick it computes how many frames are due
+ * (sample_acc keeps the fractional remainder across ticks so the rate stays
+ * exact over time) and writes them in <= sizeof(buf) chunks, halting until the
+ * next interrupt while a write takes nothing. Exercises the write side that the
+ * callback test bypasses.
  */
 static void audio_run_write_test(uint32_t duration_ms)
 {
@@ -353,13 +365,13 @@ static void audio_run_write_test(uint32_t duration_ms)
     console_printf("Playing write-based scale test (%d ms) using %s...\n", duration_ms,
                    audio_get_driver_name());
 
-    start_ticks = kernel_ticks;
-    total_ticks = duration_ms / 10;
+    start_ticks = now_ticks();
+    total_ticks = ms_ticks(duration_ms);
     if (total_ticks == 0) {
         total_ticks = 1;
     }
 
-    tick_last = kernel_ticks;
+    tick_last = now_ticks();
 
     for (n = 0; n < num_notes; ++n) {
         uint32_t period = sample_rate / freqs[n];
@@ -376,17 +388,17 @@ static void audio_run_write_test(uint32_t duration_ms)
         phase = 0;
 
         note_end_ticks = start_ticks + (uint32_t)(((n + 1u) * total_ticks) / num_notes);
-        while (kernel_ticks < note_end_ticks) {
+        while ((int32_t)(now_ticks() - note_end_ticks) < 0) {
             uint32_t to_write;
 
-            while (kernel_ticks == tick_last) {
+            while (now_ticks() == tick_last) {
                 idle_wait_irq_on();
             }
-            tick_last = kernel_ticks;
+            tick_last = now_ticks();
 
             sample_acc += sample_rate;
-            to_write = sample_acc / 100u;
-            sample_acc %= 100u;
+            to_write = sample_acc / TICK_HZ;
+            sample_acc %= TICK_HZ;
 
             while (to_write > 0) {
                 uint32_t chunk =
@@ -503,30 +515,31 @@ static void audio_run_hda_watch(uint32_t freq_hz, uint32_t duration_ms, uint32_t
 
     console_printf("HDA watch: %d Hz, %d ms, interval %d ms\n", freq_hz, duration_ms, interval_ms);
 
-    start_ticks = kernel_ticks;
-    end_ticks = start_ticks + (duration_ms / 10u);
+    start_ticks = now_ticks();
+    end_ticks = start_ticks + ms_ticks(duration_ms);
     next_ticks = start_ticks;
 
-    while (kernel_ticks < end_ticks) {
-        if (kernel_ticks >= next_ticks) {
+    while ((int32_t)(now_ticks() - end_ticks) < 0) {
+        if ((int32_t)(now_ticks() - next_ticks) >= 0) {
             if (hda_debug_get_stream_snapshot(&snapshot)) {
                 if (snapshot.cbl != 0) {
                     uint32_t delta = (snapshot.lpib >= last_lpib)
                                          ? (snapshot.lpib - last_lpib)
                                          : (snapshot.lpib + snapshot.cbl - last_lpib);
                     console_printf("t=%dms lpib=%d (+%d) ctl=0x%x sts=0x%x fmt=0x%x\n",
-                                   (kernel_ticks - start_ticks) * 10u, snapshot.lpib, delta,
-                                   snapshot.ctl, (uint32_t)snapshot.sts, (uint32_t)snapshot.fmt);
+                                   (now_ticks() - start_ticks) * (1000u / TICK_HZ), snapshot.lpib,
+                                   delta, snapshot.ctl, (uint32_t)snapshot.sts,
+                                   (uint32_t)snapshot.fmt);
                 } else {
                     console_printf("t=%dms lpib=%d ctl=0x%x sts=0x%x fmt=0x%x\n",
-                                   (kernel_ticks - start_ticks) * 10u, snapshot.lpib, snapshot.ctl,
-                                   (uint32_t)snapshot.sts, (uint32_t)snapshot.fmt);
+                                   (now_ticks() - start_ticks) * (1000u / TICK_HZ), snapshot.lpib,
+                                   snapshot.ctl, (uint32_t)snapshot.sts, (uint32_t)snapshot.fmt);
                 }
                 last_lpib = snapshot.lpib;
             }
 
-            next_ticks += (interval_ms / 10u);
-            if (interval_ms < 10) {
+            next_ticks += ms_ticks(interval_ms);
+            if (ms_ticks(interval_ms) == 0) {
                 next_ticks += 1;
             }
         }

@@ -1142,7 +1142,7 @@ static uint32_t r8168_tx_reclaim(void)
  * and every netconsole frame would run that wait with interrupts off.
  *
  * A full ring is the one case that waits, briefly. Dropping the moment a
- * burst outruns the chip would lose frames that a 10 ms tick would have
+ * burst outruns the chip would lose frames that a tick would have
  * made room for, so this rings the doorbell and reclaims for
  * R8168_TX_WAIT_STEPS waits first, and counts a stall, and drops the frame,
  * only if the next descriptor is still the chip's after them. A stuck chip

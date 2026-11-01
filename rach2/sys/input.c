@@ -22,8 +22,8 @@
 #include "mouse.h"
 #include "timer.h"
 
-/* The boot processor's tick, 100 a second, in milliseconds. */
-#define TICK_MS 10u
+/* The boot processor's tick, TICK_HZ a second, in milliseconds. */
+#define TICK_MS (1000u / TICK_HZ)
 
 /* Linux's key codes of the modifiers and locks, which do not repeat. */
 #define KEY_LEFTCTRL   29
@@ -71,7 +71,7 @@ static int mouse_present;
 /** The tick's count in milliseconds, which wraps after 49 days. */
 static uint32_t now_ms(void)
 {
-    return kernel_ticks * TICK_MS;
+    return (uint32_t)kernel_ticks * TICK_MS;
 }
 
 /** The evdev LED bits, 1 << LED_*, of `mask`, LED_* of kd.h. */

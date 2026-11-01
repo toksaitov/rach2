@@ -171,7 +171,7 @@ static uint8_t ip_tx_buf[IP_HDR_SIZE + 1500];
  * datagram has waited longer than any reply takes, IP_HOLD_TICKS, three
  * seconds; `since` is the tick the datagram was put in. */
 #define IP_HOLD_SLOTS 4
-#define IP_HOLD_TICKS 300
+#define IP_HOLD_TICKS MS_TO_TICKS(3000)
 static struct ip_hold {
     struct netdev *out;
     uint32_t hop;

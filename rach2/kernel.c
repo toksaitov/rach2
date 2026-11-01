@@ -87,15 +87,14 @@ static volatile size_t cmd_pos = 0;
 static volatile bool cmd_ready = false;
 static volatile bool kernel_shell_active = false;
 
-/* Free-running tick counter, bumped at 100 Hz by the timer IRQ. */
-volatile uint32_t kernel_ticks = 0;
+/* Free-running tick counter, bumped at TICK_HZ by the timer IRQ. */
+volatile uint64_t kernel_ticks = 0;
 
 /*
  * Whole seconds since boot and the ticks into the current second, counted
- * beside the tick so that the clock does not divide a 32-bit tick count that
- * wraps. `kernel_ticks` wraps after about 497 days, and a clock that took the
- * elapsed ticks as `now - anchor` would jump back by a whole cycle at the
- * wrap. The seconds wrap after 136 years.
+ * beside the tick so that the clock divides no 64-bit count, which the
+ * freestanding kernel has no `__udivdi3` for. The seconds wrap after 136
+ * years.
  */
 volatile uint32_t kernel_uptime_seconds = 0;
 volatile uint32_t kernel_second_ticks = 0;
@@ -233,7 +232,8 @@ static void exec_program(int argc, char *argv[]);
 static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uintptr_t sp);
 
 /**
- * Service a processor's 100 Hz tick and preempt its current process.
+ * Service a processor's tick, TICK_HZ a second, and preempt its current
+ * process.
  *
  * Every processor has its own tick; a processor other than the boot one only
  * accounts it and preempts. The boot processor's tick also advances the tick
@@ -281,7 +281,7 @@ static void timer_handler(isr_params_t *params)
     due = timer_tick_clock();
     while (due-- > 0) {
         ++kernel_ticks;
-        if (++kernel_second_ticks >= 100) {
+        if (++kernel_second_ticks >= TICK_HZ) {
             kernel_second_ticks = 0;
             ++kernel_uptime_seconds;
         }
@@ -587,13 +587,13 @@ static bool test_timer(void)
     uint32_t start_ticks;
     uint32_t i;
 
-    start_ticks = kernel_ticks;
+    start_ticks = (uint32_t)kernel_ticks;
 
     for (i = 0; i < 5; ++i) {
         idle_wait_irq_on();
     }
 
-    return kernel_ticks > start_ticks;
+    return (uint32_t)kernel_ticks != start_ticks;
 }
 
 /**
@@ -604,8 +604,9 @@ static bool test_timer(void)
  * the timer that ticks, the local APIC's or the 8254's. The two arrive at a
  * duration by different arithmetic, so a disagreement is an error in one of
  * them, and the device bring-up sequences that ask for microseconds are only
- * as good as the delay. The wait is 200 ms, twenty ticks, so one tick of
- * quantization is five percent of the reading, well inside the band below
+ * as good as the delay. The wait is 200 ms, at least twenty ticks, so one
+ * tick of quantization is five percent of the reading or less, well inside
+ * the band below
  * and short enough not to lengthen the boot noticeably. `*measured_ms`
  * reports what was seen, since a wrong figure says more than a failed
  * comparison.
@@ -624,20 +625,20 @@ static bool test_udelay(uint32_t *measured_ms)
     int attempt;
 
     for (attempt = 0; attempt < 5; attempt++) {
-        uint32_t start = kernel_ticks;
+        uint32_t start = (uint32_t)kernel_ticks;
         uint32_t elapsed;
 
         k_udelay(200000);
-        elapsed = kernel_ticks - start;
+        elapsed = (uint32_t)kernel_ticks - start;
         if (elapsed < best) {
             best = elapsed;
         }
-        if (best >= 15 && best <= 35) {
+        if (best >= 150u * TICK_HZ / 1000u && best <= 350u * TICK_HZ / 1000u) {
             break;
         }
     }
-    *measured_ms = best * 10;
-    return best >= 15 && best <= 35;
+    *measured_ms = best * (1000u / TICK_HZ);
+    return best >= 150u * TICK_HZ / 1000u && best <= 350u * TICK_HZ / 1000u;
 }
 
 /**
@@ -653,14 +654,14 @@ static bool test_udelay(uint32_t *measured_ms)
  * middle of a wait can only add to it, and the machine writes whole lines to
  * a serial port at eighty-seven microseconds a byte.
  *
- * Then fifty milliseconds, five of the tick's periods, are walked in single
- * milliseconds with the clock read at every step. A reading that lost which
- * half of the period it was in, or that did not count a wrap, steps backwards
- * there. A clock that runs fast or slow fails too, because the tick measures
- * the same fifty milliseconds beside it, and a clock that counted a sweep as
- * a period, or counted a period twice, would put twice the time in between;
- * the two must agree within a quarter. `*walk_clock` and `*walk_tick` are
- * the two measures of the last walk that did not step backwards.
+ * Then fifty milliseconds, fifty of the tick's periods at 1000 Hz, are walked
+ * in single milliseconds with the clock read at every step. A reading that lost
+ * which half of the period it was in, or that did not count a wrap, steps
+ * backwards there. A clock that runs fast or slow fails too, because the tick
+ * measures the same fifty milliseconds beside it, and a clock that counted a
+ * sweep as a period, or counted a period twice, would put twice the time in
+ * between; the two must agree within a quarter. `*walk_clock` and `*walk_tick`
+ * are the two measures of the last walk that did not step backwards.
  *
  * The walk is taken up to three times and passes when one agrees with the
  * tick, and a backwards reading ends a walk and not the check. Under an
@@ -699,7 +700,7 @@ static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_c
     }
 
     for (attempt = 0; attempt < 3; attempt++) {
-        uint32_t ticks_before = kernel_ticks;
+        uint32_t ticks_before = (uint32_t)kernel_ticks;
         uint32_t clock_before = timer_now_us();
         uint32_t by_clock, by_tick;
         int stepped_back = 0;
@@ -720,7 +721,7 @@ static bool test_clock(uint32_t *measured_us, const char **why, uint32_t *walk_c
             continue;
         }
         by_clock = timer_now_us() - clock_before;
-        by_tick = (kernel_ticks - ticks_before) * 10000u;
+        by_tick = ((uint32_t)kernel_ticks - ticks_before) * TICK_US;
         *walk_clock = by_clock;
         *walk_tick = by_tick;
         if (by_tick != 0 && by_clock >= by_tick - by_tick / 4u &&
@@ -880,8 +881,8 @@ static volatile int preempt_count_a = 0;
 static volatile int preempt_count_b = 0;
 
 /** Process A of `preempt`: print 'A' in a busy loop until the pair has
- * printed 20. The busy delay must outlast a timer tick (10 ms at 100 Hz) so
- * the preemption is observable. */
+ * printed 20. The busy delay must outlast a timer tick so the preemption is
+ * observable. */
 static void preempt_proc_a(void)
 {
     /* The process starts mid-interrupt, with IRQs masked. */
@@ -2944,7 +2945,7 @@ static void shell_ping(uint32_t ip, bool want_reply)
                    (int)((ip >> 8) & 0xFF), (int)(ip & 0xFF));
     if (rtt >= 0) {
         console_printf("%s in %d ticks (%d ms)\n", want_reply ? "reply" : "unexpected reply", rtt,
-                       rtt * 10);
+                       rtt * (1000 / TICK_HZ));
     } else {
         console_puts(want_reply ? "timeout" : "timeout (expected)");
     }
@@ -3018,7 +3019,7 @@ static void process_command(const char *cmd)
         console_puts("  reboot              - Restart the machine");
     } else if (str_equal(cmd, "info")) {
         console_printf("Memory pointer:  0x%X\n", mem_reserved_ptr);
-        console_printf("Timer ticks:     %d\n", kernel_ticks);
+        console_printf("Timer ticks:     %u\n", (unsigned)kernel_ticks);
         console_printf("Kernel end:      0x%X\n", (uintptr_t)&_end);
         console_printf("Modules loaded:  %d\n", module_count);
     } else if (str_equal(cmd, "modules")) {

@@ -300,10 +300,10 @@ static int tick_arrives(uint32_t before)
 {
     int ms;
 
-    for (ms = 0; ms < 50 && kernel_ticks == before; ms++) {
+    for (ms = 0; ms < 50 && (uint32_t)kernel_ticks == before; ms++) {
         k_udelay(1000);
     }
-    return kernel_ticks != before;
+    return (uint32_t)kernel_ticks != before;
 }
 
 /**
@@ -365,7 +365,7 @@ void platform_timer_start(isr_handler_t tick)
     arch_irq_enable();
 
     if (apic) {
-        if (tick_arrives(kernel_ticks)) {
+        if (tick_arrives((uint32_t)kernel_ticks)) {
             return;
         }
         if (tick_local) {
@@ -377,7 +377,7 @@ void platform_timer_start(isr_handler_t tick)
             isr_lines_to_apic(lines_pci, 0);
             set_isr_handler(IRQ_VECTOR(0), tick, "pit");
             arch_irq_enable();
-            if (tick_arrives(kernel_ticks)) {
+            if (tick_arrives((uint32_t)kernel_ticks)) {
                 return;
             }
         }
@@ -385,10 +385,10 @@ void platform_timer_start(isr_handler_t tick)
         return;
     }
 
-    if (lapic_ready() && !tick_arrives(kernel_ticks)) {
+    if (lapic_ready() && !tick_arrives((uint32_t)kernel_ticks)) {
         klog(KLOG_ERR, "lapic", "timer: no tick in 50 ms; writing lint0 again");
         lapic_repair_lint0();
-        if (!tick_arrives(kernel_ticks)) {
+        if (!tick_arrives((uint32_t)kernel_ticks)) {
             klog(KLOG_ERR, "lapic", "timer: still no tick; the 8259's interrupts are not arriving");
         }
     }

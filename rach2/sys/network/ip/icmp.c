@@ -62,7 +62,7 @@ static uint8_t icmp_error_buf[8 + ICMP_QUOTE_MAX];
 
 /* Errors leave at most one a second after a burst of six, Linux's
  * icmp_ratelimit and XRLIM_BURST_FACTOR, kept here as a credit in ticks. */
-#define ICMP_ERROR_TICKS 100
+#define ICMP_ERROR_TICKS TICK_HZ
 #define ICMP_ERROR_BURST (6 * ICMP_ERROR_TICKS)
 static uint32_t icmp_error_credit = ICMP_ERROR_BURST;
 static uint32_t icmp_error_last;
@@ -71,7 +71,7 @@ static uint32_t icmp_error_last;
 #define ICMP_PING_ID 0x5243 /* 'RC' */
 
 /* The wait for each request's answer, in ticks, and the requests sent. */
-#define ICMP_PING_WAIT     100 /* 1 s at 100 Hz */
+#define ICMP_PING_WAIT     TICK_HZ /* 1 s */
 #define ICMP_PING_ATTEMPTS 4
 
 /* The one ping in flight, which an echo reply is matched against: whether
@@ -87,7 +87,7 @@ static volatile uint16_t ping_seq_wait = 0;
 static volatile uint32_t ping_peer_ip = 0;
 static volatile int ping_v6 = 0;
 static uint8_t ping_peer6[16];
-static volatile uint32_t ping_deadline = 0;
+static volatile uint64_t ping_deadline = 0;
 static uint16_t ping_seq = 0;
 
 /* Where a sleeping pinger waits, and what icmp_rx wakes; initialized by the
@@ -157,12 +157,13 @@ static void icmp_refused(const uint8_t *data, uint16_t len)
  */
 static int icmp_error_allowed(void)
 {
-    uint32_t credit = icmp_error_credit + (kernel_ticks - icmp_error_last);
+    uint32_t now = (uint32_t)kernel_ticks;
+    uint32_t credit = icmp_error_credit + (now - icmp_error_last);
 
     if (credit > ICMP_ERROR_BURST || credit < icmp_error_credit) {
         credit = ICMP_ERROR_BURST;
     }
-    icmp_error_last = kernel_ticks;
+    icmp_error_last = now;
     if (credit < ICMP_ERROR_TICKS) {
         icmp_error_credit = credit;
         return 0;
@@ -271,7 +272,7 @@ static int ping_done(void *arg)
 {
     (void)arg;
 
-    return ping_replied || (int32_t)(kernel_ticks - ping_deadline) >= 0;
+    return ping_replied || tick_count() >= ping_deadline;
 }
 
 /**
@@ -302,16 +303,16 @@ static void ping_release(void)
  * every path, so a killed pinger cannot strand it: the signal makes the
  * blocked process runnable, the wait breaks with -EINTR, and the release
  * runs before the system call returns. Each request is built and sent under
- * `net_lock`, and its deadline is moved off 0, `wakeup_tick`'s "not
- * sleeping" value, as `sys_nanosleep` moves its own: a deadline of 0 would
- * arm nothing, and the sleeper would never be made runnable again. Whether a
+ * `net_lock`, and its deadline, a second's ticks past the count, is never
+ * 0, `wakeup_tick`'s "not sleeping" value. Whether a
  * reply came is read from `ping_replied`, since a wait that returns does not
  * say whether the reply or the deadline ended it.
  */
 static int ping_attempts(uint32_t dst_ip, const uint8_t *dst6, int ifindex, uint32_t size,
                          uint8_t ttl, uint16_t *got, uint8_t *got_ttl, uint8_t *echo)
 {
-    uint32_t start, flags, i;
+    uint64_t start;
+    uint32_t flags, i;
     uint16_t seq;
     int attempt;
     int rc = -ETIMEDOUT;
@@ -357,9 +358,6 @@ static int ping_attempts(uint32_t dst_ip, const uint8_t *dst6, int ifindex, uint
         ping_replied = 0;
         start = rtc_ticks_now();
         ping_deadline = start + ICMP_PING_WAIT;
-        if (ping_deadline == 0) {
-            ping_deadline = 1;
-        }
 
         if (dst6) {
             int sent = icmp6_send(0, dst6, ifindex, echo, (uint16_t)(8 + size), ttl);
@@ -387,7 +385,7 @@ static int ping_attempts(uint32_t dst_ip, const uint8_t *dst6, int ifindex, uint
                 return waited;
             }
         } else {
-            while (!ping_replied && (int32_t)(kernel_ticks - ping_deadline) < 0) {
+            while (!ping_replied && tick_count() < ping_deadline) {
                 idle_wait_irq_on();
             }
         }

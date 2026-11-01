@@ -131,7 +131,7 @@
 #define DIAG_TIMER_RETRANS     1
 #define DIAG_TIMER_TIMEWAIT    3
 #define DIAG_TIMER_PROBE       4
-#define DIAG_TICK_US           10000
+#define DIAG_TICK_US           TICK_US
 #define UNIX_DIAG_NAME         0
 #define UNIX_DIAG_PEER         2
 #define UNIX_DIAG_RQLEN        4
@@ -1302,7 +1302,7 @@ static uint8_t *inet_diag_msg_of(const struct nl_build *b, uint8_t *msg, const s
  * options and window shifts, the retransmission timeout and the round trip
  * in microseconds, the segment size, the segments in flight, the window and
  * threshold in segments, and the segments sent again. The timeout counts in
- * ticks of 10 ms; the round trip and its variance are TCP's own samples
+ * ticks of TICK_HZ; the round trip and its variance are TCP's own samples
  * timed to the microsecond (`tcp_rtt_us`).
  */
 static void tcp_info_of(const struct tcp_row *r, uint8_t *info)

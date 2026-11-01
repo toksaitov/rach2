@@ -26,10 +26,10 @@
 #define KBD_RESEND       0xFE
 
 /* The time from the end of one LED command to the start of the next, and
- * how long a byte's answer may take, in ticks of 10 ms; how many times a
- * byte is written before the command is given up. */
-#define LEDS_GAP_TICKS  5
-#define LEDS_WAIT_TICKS 10
+ * how long a byte's answer may take, in ticks; how many times a byte is
+ * written before the command is given up. */
+#define LEDS_GAP_TICKS  MS_TO_TICKS(50)
+#define LEDS_WAIT_TICKS MS_TO_TICKS(100)
 #define LEDS_TRIES      3
 
 /* Where the LED command is: none in progress, the command byte due or out,
@@ -90,21 +90,21 @@ int input_ps2_reply(uint8_t code)
     leds.out = 0;
     if (code == KBD_RESEND) {
         if (leds.tries < LEDS_TRIES) {
-            leds_write(kernel_ticks);
+            leds_write((uint32_t)kernel_ticks);
         }
     } else if (leds.stage == LEDS_COMMAND) {
         leds.stage = LEDS_VALUE;
         leds.tries = 0;
-        leds_write(kernel_ticks);
+        leds_write((uint32_t)kernel_ticks);
     } else {
-        leds_end(kernel_ticks);
+        leds_end((uint32_t)kernel_ticks);
     }
     return 1;
 }
 
 void ps2kbd_tick(void)
 {
-    uint32_t now = kernel_ticks;
+    uint32_t now = (uint32_t)kernel_ticks;
 
     if (!leds.ready) {
         return;
