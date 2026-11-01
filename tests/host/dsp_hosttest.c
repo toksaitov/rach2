@@ -1,18 +1,24 @@
 /**
- * /dev/dsp (audio/dsp.c) over a model driver: each ioctl's answer, blocking
- * and interrupted writes and reads, partial frames, drain against reset, the
- * trigger, a reader that falls behind, playback and capture on one open, and
- * the negotiation sequences of sox_ng's, FFmpeg's and cmus's OSS outputs and
- * of sox_ng's and FFmpeg's OSS inputs.
+ * /dev/dsp (audio/dsp.c) and its virtual channels (audio/vchan.c) over a
+ * model driver: each ioctl's answer, blocking and interrupted writes and
+ * reads, partial frames, drain against reset, the trigger, a reader that
+ * falls behind, playback and capture on one open, the negotiation sequences
+ * of sox_ng's, FFmpeg's and cmus's OSS outputs and of sox_ng's and FFmpeg's
+ * OSS inputs, and several opens playing at once: their mix, its clipping,
+ * the conversion of each open's format and rate, and one player closing
+ * while another plays.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/spinlock_host.c
  *
- * The test includes dsp.c whole. The model driver's DMA buffer has two
- * periods; a tick plays the one due, appends its bytes to `m.out`, refills it
- * through the stream's `transfer` and calls `period`, as a device's interrupt
- * would. Its capture stream records the pattern in order: a tick hands the
+ * The test includes dsp.c and vchan.c whole. Playback reaches the model
+ * through the mix, which the model plays as 16-bit stereo at 48000 Hz, so a
+ * single open at that rate and format reaches it unchanged. The model
+ * driver's DMA buffer has two periods, of 256 frames unless a row asks for
+ * more; a tick plays the one due, appends its bytes to `m.out`, refills it
+ * through the stream's `transfer` and calls `period`, as a device's
+ * interrupt would. Its capture stream records the pattern in order: a tick hands the
  * next period of it over through `transfer` and calls `period`. A wait runs
  * ticks until its condition holds, or ends with a signal when a row asks for
  * one, so `m.out` is exactly what a listener would hear and `got` exactly
@@ -24,6 +30,7 @@
  * (audio_read_header, audio_read_packet).
  */
 #include "audio/dsp.c"
+#include "audio/vchan.c"
 
 extern int printf(const char *format, ...);
 extern unsigned long kheap_host_largest;
@@ -35,6 +42,7 @@ extern int memcmp(const void *a, const void *b, unsigned long n);
 #define AFMT_S32_LE   0x1000
 
 #define MODEL_PERIOD_MAX 16384u
+#define MODEL_MIX_PERIOD 1024u /* bytes of the mix's period, 256 frames */
 #define MODEL_OUT        (1u << 20)
 #define PATTERN          (1u << 18)
 
@@ -52,7 +60,8 @@ static struct {
     int next;          /* the DMA period played next */
     uint32_t rate_min; /* the rates it grants */
     uint32_t rate_max;
-    uint32_t period_max; /* the largest period it grants */
+    uint32_t period_max; /* the largest capture period it grants */
+    uint32_t play_max;   /* the largest playback period it grants */
     int refuse_open;     /* stream_open's error, or 0 */
     int refuse_start;    /* stream_start's error, or 0 */
     int starts, stops, closes;
@@ -193,7 +202,8 @@ static int model_open(audio_stream_t *s)
 }
 
 /** Grant the rate within the model's range, a period no larger than its
- * limit, and a DMA buffer of two periods for playback, eight for capture. */
+ * limit for the direction, and a DMA buffer of two periods for playback,
+ * eight for capture. */
 static int model_setup(audio_stream_t *s)
 {
     int in = s->dir == AUDIO_CAPTURE;
@@ -203,8 +213,8 @@ static int model_setup(audio_stream_t *s)
     check(s->format == AUDIO_U8 || s->format == AUDIO_S16LE, "a known format");
     check(s->channels == 1 || s->channels == 2, "one or two channels");
     s->rate = clamp(s->rate, m.rate_min, m.rate_max);
-    if (s->period_bytes > m.period_max) {
-        s->period_bytes = m.period_max;
+    if (s->period_bytes > (in ? m.period_max : m.play_max)) {
+        s->period_bytes = in ? m.period_max : m.play_max;
     }
     s->device_periods = in ? 8 : 2;
     return 0;
@@ -298,6 +308,17 @@ static audio_driver_t model = {.name = "model",
 static audio_driver_t streamless = {.name = "streamless", .type = AUDIO_DRIVER_SB16};
 
 audio_driver_t *audio;
+audio_driver_t *audio_hw;
+
+/* A second open, for the rows that play two at once. */
+static fd_entry_t other;
+static struct open_file other_description;
+
+/** The wait queue of the open on `e`. */
+static wait_queue_t *queue_of(fd_entry_t *e)
+{
+    return e->priv ? &((struct dsp *)e->priv)->wq : NULL;
+}
 
 /** Wait as the kernel does, with the model's ticks for the time that
  * passes: 0 once `cond` holds, or -EINTR at the signal a row asked for. */
@@ -305,7 +326,7 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     int n = 0;
 
-    check(wq == &dsp_owner->wq, "a wait on the open's queue");
+    check(wq == queue_of(&entry) || wq == queue_of(&other), "a wait on an open's queue");
     waits++;
     while (!cond(arg)) {
         if (signal_after >= 0 && n >= signal_after) {
@@ -365,7 +386,9 @@ static void begin(const char *name)
     m.rate_min = 4000;
     m.rate_max = 48000;
     m.period_max = MODEL_PERIOD_MAX;
+    m.play_max = MODEL_MIX_PERIOD;
     audio = &model;
+    audio_hw = &model;
     signal_after = -1;
 }
 
@@ -377,6 +400,25 @@ static int32_t open_dsp(int flags)
     entry.ofd = &description;
     description.refcount = 1;
     return dspdev_open(&entry, flags);
+}
+
+/** Open /dev/dsp for writing on `other`. */
+static int32_t open_other(void)
+{
+    k_memset(&other, 0, sizeof(other));
+    k_memset(&other_description, 0, sizeof(other_description));
+    other.ofd = &other_description;
+    other_description.refcount = 1;
+    return dspdev_open(&other, 1);
+}
+
+/** Swap `entry` and `other`, so that the helpers reach the other open. */
+static void swap_opens(void)
+{
+    fd_entry_t e = entry;
+
+    entry = other;
+    other = e;
 }
 
 /** ioctl `request` with the int `value`; the answer is left in `value`. */
@@ -458,13 +500,14 @@ static int silent_from(uint32_t at, audio_format_t format)
     return 1;
 }
 
-/** Set signed 16-bit stereo at 44100 Hz and four periods of 1024 bytes,
- * 256 frames each; the stream starts at 2048 bytes. */
+/** Set signed 16-bit stereo at 48000 Hz, the mix's own, and four periods of
+ * 1024 bytes, 256 frames each; the stream starts at 2048 bytes, the two
+ * periods of the mix the model's start takes. */
 static void cd_quality(void)
 {
     check(ask(DSP_SETFMT, AFMT_S16_LE) == AFMT_S16_LE, "S16_LE granted");
     check(ask(DSP_CHANNELS, 2) == 2, "stereo granted");
-    check(ask(DSP_SPEED, 44100) == 44100, "44100 Hz granted");
+    check(ask(DSP_SPEED, 48000) == 48000, "48000 Hz granted");
     check(call(DSP_SETFRAGMENT, &(int){0x0004000A}) == 0, "SETFRAGMENT succeeds");
     check(ask(DSP_GETBLKSIZE, 0) == 1024, "a period of 1024 bytes");
 }
@@ -473,17 +516,18 @@ static void cd_quality(void)
 static void close_dsp(void)
 {
     dspdev_close(&entry);
-    check(entry.priv == NULL && dsp_owner == NULL, "the device is free after the close");
+    check(entry.priv == NULL && mix.list == NULL, "the device is free after the close");
     check(m.s == NULL && cap.s == NULL, "the streams are closed");
 }
 
-/** OSS's defaults at open, the fixed answers, and one open at a time. */
+/** OSS's defaults at open, the fixed answers, and a second open with
+ * settings of its own. */
 static void row_defaults(void)
 {
-    fd_entry_t first;
     struct dsp_buf_info info;
 
     begin("defaults");
+    m.play_max = 4096;
     check(dspdev_present(), "present over a driver with streams");
     check(open_dsp(1) == 0, "an open for writing succeeds");
     check(ask(DSP_SETFMT, AFMT_QUERY) == AFMT_U8, "U8 at open");
@@ -500,9 +544,13 @@ static void row_defaults(void)
     check(ask(DSP_GETFMTS, 0) == (AFMT_U8 | AFMT_S16_LE), "U8 and S16_LE");
     check(ask(OSS_GETVERSION, 0) == 0x030802, "Linux's OSS version");
     check(odelay() == 0, "nothing queued");
-    first = entry;
-    check(open_dsp(1) == -EBUSY, "a second open is EBUSY");
-    entry = first;
+    check(open_other() == 0, "a second open succeeds");
+    swap_opens();
+    check(ask(DSP_SPEED, 0) == 8000 && ask(DSP_SPEED, 22050) == 22050, "with its own rate");
+    swap_opens();
+    check(ask(DSP_SPEED, 0) == 8000, "the first keeps its own");
+    dspdev_close(&other);
+    check(other.priv == NULL && m.s != NULL, "the first keeps the device after the second's close");
     close_dsp();
     check(m.starts == 0 && m.closes == 1, "a close with nothing queued plays nothing");
 }
@@ -514,14 +562,14 @@ static void row_refusals(void)
     check(open_dsp(3) == -EINVAL, "an access mode of 3 is EINVAL");
     m.refuse_open = -EBUSY;
     check(open_dsp(1) == -EBUSY, "the driver's stream taken is EBUSY");
-    check(dsp_owner == NULL, "a refused open leaves the device free");
+    check(mix.list == NULL && m.s == NULL, "a refused open leaves the device free");
     m.refuse_open = 0;
     kheap_host_largest = 1024;
     check(open_dsp(1) == -ENOMEM, "no room for the buffer is ENOMEM");
     check(open_dsp(0) == -ENOMEM, "nor for a reader's");
     check(open_dsp(2) == -ENOMEM, "nor for both");
     kheap_host_largest = 0;
-    check(dsp_owner == NULL && m.s == NULL, "a failed allocation leaves the device free");
+    check(mix.list == NULL && m.s == NULL, "a failed allocation leaves the device free");
     check(open_dsp(1) == 0, "the next open succeeds");
     close_dsp();
     audio = &streamless;
@@ -539,26 +587,28 @@ static void row_ioctls(void)
     int value;
 
     begin("ioctls");
+    m.play_max = 4096;
     check(open_dsp(1) == 0, "open");
     check(ask(DSP_SETFMT, AFMT_S16_LE) == AFMT_S16_LE, "S16_LE set");
     check(ask(DSP_SETFMT, AFMT_S32_LE) == AFMT_S16_LE, "another format keeps S16_LE");
     check(ask(DSP_CHANNELS, 6) == 2, "six channels give two");
     check(ask(DSP_STEREO, 0) == 0 && ask(DSP_CHANNELS, 0) == 1, "STEREO 0 is mono");
     check(ask(DSP_STEREO, 1) == 1 && ask(DSP_CHANNELS, 0) == 2, "STEREO 1 is stereo");
-    check(ask(DSP_SPEED, 44100) == 44100, "44100 Hz set");
-    /* 176400 bytes a second over 43 is 4102, nearest 4096. */
-    check(ask(DSP_GETBLKSIZE, 0) == 4096, "a period of 4096 bytes at 44100 Hz");
+    check(ask(DSP_SPEED, 48000) == 48000, "48000 Hz set");
+    /* 192000 bytes a second over 43 is 4465, nearest 4096. */
+    check(ask(DSP_GETBLKSIZE, 0) == 4096, "a period of 4096 bytes at 48000 Hz");
     info = ospace();
     check(info.fragments == 4 && info.fragstotal == 4 && info.fragsize == 4096 &&
               info.bytes == 16384,
           "four free periods of 4096 bytes");
-    check(ask(DSP_SPEED, 96000) == 48000, "the driver's highest rate");
-    check(ask(DSP_SPEED, 500) == 4000, "the driver's lowest rate");
-    check(ask(DSP_SPEED, 44100) == 44100, "44100 Hz again");
+    check(ask(DSP_SPEED, 96000) == 96000, "a rate above the device's, which the mix converts");
+    check(ask(DSP_SPEED, 400000) == 192000, "the highest rate, four times the mix's");
+    check(ask(DSP_SPEED, 500) == 1000, "the lowest rate");
+    check(ask(DSP_SPEED, 48000) == 48000, "48000 Hz again");
     check(call(DSP_SETFRAGMENT, &(int){0x0004000A}) == 0, "four periods of 1024 bytes");
     info = ospace();
-    check(ask(DSP_GETBLKSIZE, 0) == 1024 && info.fragstotal == 4 && info.bytes == 4096,
-          "the buffer is four periods of 1024 bytes");
+    check(ask(DSP_GETBLKSIZE, 0) == 1024 && info.fragstotal == 8 && info.bytes == 8192,
+          "the buffer is raised to the eight periods the mix's start takes");
     check(call(DSP_SETFRAGMENT, &(int){0x7FFF0004}) == 0, "the most periods of 16 bytes");
     info = ospace();
     check(ask(DSP_GETBLKSIZE, 0) == (int)DSP_PERIOD_MIN &&
@@ -567,12 +617,12 @@ static void row_ioctls(void)
     check(call(DSP_SETFRAGMENT, &(int){0x0001000C}) == 0, "one period of 4096 bytes");
     check(ospace().fragstotal == 2, "two periods at least");
     check(call(DSP_SETFRAGMENT, &(int){0x0002001F}) == 0, "periods of 2^31 bytes");
-    check(ask(DSP_GETBLKSIZE, 0) == (int)DSP_PERIOD_MAX, "the largest period");
-    m.period_max = 1024;
-    check(call(DSP_SETFRAGMENT, &(int){0x0008000C}) == 0, "eight periods the driver halves");
+    check(ask(DSP_GETBLKSIZE, 0) == 4096, "the frames of one period of the mix");
+    check(ask(DSP_SPEED, 24000) == 24000, "24000 Hz");
+    check(call(DSP_SETFRAGMENT, &(int){0x0008000C}) == 0, "eight periods the mix halves");
     info = ospace();
-    check(ask(DSP_GETBLKSIZE, 0) == 1024 && info.fragstotal == 8, "the driver's period, eight");
-    m.period_max = MODEL_PERIOD_MAX;
+    check(ask(DSP_GETBLKSIZE, 0) == 2048 && info.fragstotal == 8,
+          "half the mix's period, at half its rate, eight");
     value = 0;
     check(call(DSP_SUBDIVIDE, &value) == -EINVAL, "another of OSS's requests is EINVAL");
     check(call(TIOCGWINSZ, &value) == -ENOTTY, "another request is ENOTTY");
@@ -662,7 +712,7 @@ static void row_interrupted(void)
     check(put(0, 8192) == 6144, "a signal returns the bytes taken");
     signal_after = 0;
     check(put(6144, 100) == -EINTR, "a signal before any byte is EINTR");
-    check(dspdev_poll(&entry, POLLOUT, &wq) == 0 && wq == &dsp_owner->wq,
+    check(dspdev_poll(&entry, POLLOUT, &wq) == 0 && wq == queue_of(&entry),
           "no POLLOUT while full, on the open's queue");
     check(ask(DSP_NONBLOCK, 0) == 0, "NONBLOCK");
     check(put(6144, 100) == -EAGAIN, "a nonblocking write to a full buffer is EAGAIN");
@@ -670,7 +720,8 @@ static void row_interrupted(void)
     check(dspdev_poll(&entry, POLLOUT | POLLIN, &wq) == POLLOUT, "POLLOUT with a period free");
     check(put(6144, 2000) == 1024, "a nonblocking write takes the room there is");
     signal_after = 1;
-    check(ask(DSP_SYNC, 0) == -EINTR && m.running, "a signal ends SYNC with the stream running");
+    check(call(DSP_SYNC, &(int){0}) == -EINTR && m.running,
+          "a signal ends SYNC with the stream running");
     len = m.out_len;
     check(ask(DSP_RESET, 0) == 0 && !m.running, "RESET stops the stream");
     check(odelay() == 0 && ospace().bytes == 4096, "RESET empties the buffer");
@@ -752,7 +803,7 @@ static void row_sox(void)
     check(ask(DSP_GETFMTS, 0) & AFMT_S16_LE, "GETFMTS has S16_LE");
     check(ask(DSP_SETFMT, AFMT_S16_LE) == AFMT_S16_LE, "SETFMT gives S16_LE back");
     check(ask(DSP_STEREO, 1) == 1, "STEREO gives 1 back");
-    check(ask(DSP_SPEED, 44100) == 44100, "SPEED gives the rate back");
+    check(ask(DSP_SPEED, 48000) == 48000, "SPEED gives the rate back");
     waits = 0;
     check(ask(DSP_SYNC, 0) == 0 && m.ticks == 0, "SYNC with nothing written returns at once");
     play_blocks(8192 * 8, 8192);
@@ -777,7 +828,9 @@ static void row_ffmpeg(void)
 /** cmus's output: OSS_GETVERSION, RESET, CHANNELS, SAMPLESIZE, SPEED,
  * SETFRAGMENT of 32 periods of a 25th of a second's power of two, halved;
  * writes of whole frames while GETOSPACE gives (fragments - 1) periods of
- * room, waiting otherwise; POST to pause. */
+ * room, waiting otherwise; POST to pause. The rate is the mix's, so that
+ * the record is what was written, over a mix whose period holds the
+ * fragment. */
 static void row_cmus(void)
 {
     struct dsp_buf_info info;
@@ -785,13 +838,14 @@ static void row_cmus(void)
     int space, shift = 0;
 
     begin("cmus");
+    m.play_max = 4096;
     check(open_dsp(1) == 0, "open O_WRONLY");
     check(ask(OSS_GETVERSION, 0) == 0x030802, "OSS_GETVERSION");
     check(ask(DSP_RESET, 0) == 0, "RESET");
     check(ask(DSP_CHANNELS, 2) == 2, "CHANNELS");
     check(ask(DSP_SETFMT, AFMT_S16_LE) == AFMT_S16_LE, "SAMPLESIZE, SETFMT's number");
-    check(ask(DSP_SPEED, 44100) == 44100, "SPEED");
-    while (1 << shift < 44100 * 4 / 25) {
+    check(ask(DSP_SPEED, 48000) == 48000, "SPEED");
+    while (1 << shift < 48000 * 4 / 25) {
         shift++;
     }
     shift--;
@@ -921,7 +975,7 @@ static void row_read_interrupted(void)
     begin("read interrupted");
     check(open_dsp(0) == 0, "open");
     cd_quality();
-    check(dspdev_poll(&entry, POLLIN | POLLOUT, &wq) == 0 && wq == &dsp_owner->wq,
+    check(dspdev_poll(&entry, POLLIN | POLLOUT, &wq) == 0 && wq == queue_of(&entry),
           "nothing ready yet, on the open's queue");
     check(cap.running && cap.starts == 1, "a poll for input starts recording");
     signal_after = 0;
@@ -985,7 +1039,7 @@ static void row_duplex(void)
     check(call(DSP_SETDUPLEX, &value) == 0, "SETDUPLEX succeeds");
     check(ask(DSP_GETTRIGGER, 0) == (PCM_ENABLE_INPUT | PCM_ENABLE_OUTPUT), "both triggers on");
     cd_quality();
-    check(cap.s->format == AUDIO_S16LE && cap.s->channels == 2 && cap.s->rate == 44100 &&
+    check(cap.s->format == AUDIO_S16LE && cap.s->channels == 2 && cap.s->rate == 48000 &&
               cap.s->period_bytes == 1024,
           "capture is set as playback is");
     check(ospace().fragstotal == 4 && ispace().fragstotal == 4, "four periods each way");
@@ -1003,7 +1057,7 @@ static void row_duplex(void)
     begin("duplex refused");
     cap.refuse_open = -ENODEV;
     check(open_dsp(2) == -ENODEV, "no capture stream is ENODEV");
-    check(dsp_owner == NULL && m.s == NULL && m.closes == 1, "playback's stream is given back");
+    check(mix.list == NULL && m.s == NULL && m.closes == 1, "playback's stream is given back");
     check(open_dsp(0) == -ENODEV, "so is an open for reading");
     check(open_dsp(1) == 0, "an open for writing succeeds");
     check(call(DSP_SETDUPLEX, &value) == -EINVAL, "SETDUPLEX is EINVAL");
@@ -1070,6 +1124,256 @@ static void row_ffmpeg_in(void)
     close_dsp();
 }
 
+/* The 16-bit stereo the mixing rows write: two players' samples. */
+#define WAVE 2048u
+static int16_t wave_a[2 * WAVE];
+static int16_t wave_b[2 * WAVE];
+
+/** Write `frames` frames of 16-bit stereo `wave` from frame `at` to the
+ * open on `e`: the bytes taken. */
+static int32_t put_wave(fd_entry_t *e, const int16_t *wave, uint32_t at, uint32_t frames)
+{
+    return dspdev_write(e, (const char __user *)(wave + 2 * at), frames * 4);
+}
+
+/** The frames in `m.out`, 16-bit stereo. */
+static uint32_t out_frames(void)
+{
+    return m.out_len / 4;
+}
+
+/** Sample `ch` of frame `f` of `m.out`. */
+static int out_sample(uint32_t f, int ch)
+{
+    const uint8_t *p = m.out + 4 * f + 2 * (uint32_t)ch;
+
+    return (int16_t)(uint16_t)(p[0] | p[1] << 8);
+}
+
+/** `v` held to 16 bits, as the mix clips. */
+static int clip16(int v)
+{
+    return v < -32768 ? -32768 : v > 32767 ? 32767 : v;
+}
+
+/** Sample `ch` of a player's frame `f` of `wave`, which has `n` frames and
+ * entered the mix at mix frame `join`: 0 outside them. */
+static int player(const int16_t *wave, uint32_t n, uint32_t join, uint32_t f, int ch)
+{
+    return f < join || f - join >= n ? 0 : wave[2 * (f - join) + (uint32_t)ch];
+}
+
+/** Whether every frame of `m.out` is player `a`'s plus player `b`'s,
+ * clipped; `a` leaves the mix at mix frame `a_end`. */
+static int mixed(const int16_t *a, uint32_t a_n, uint32_t a_end, const int16_t *b, uint32_t b_n,
+                 uint32_t b_join)
+{
+    uint32_t f;
+    int ch;
+
+    for (f = 0; f < out_frames(); f++) {
+        for (ch = 0; ch < 2; ch++) {
+            int want =
+                clip16((f < a_end ? player(a, a_n, 0, f, ch) : 0) + player(b, b_n, b_join, f, ch));
+
+            if (out_sample(f, ch) != want) {
+                printf("dsp-hosttest: %s: frame %u channel %d is %d, not %d\n", row, f, ch,
+                       out_sample(f, ch), want);
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+/**
+ * Two players at the mix's rate: A starts the mix with 512 frames, which
+ * the model's start takes; B joins at the next frame of the mix with 600,
+ * and A writes 1024 more. Each has its own delay. A's SYNC drains it while B
+ * plays on, B's finds its frames played, and the mix stops with B's. The
+ * record is their sum, clipped.
+ */
+static void two_players(const char *name)
+{
+    begin(name);
+    check(open_dsp(1) == 0 && open_other() == 0, "two opens");
+    cd_quality();
+    swap_opens();
+    cd_quality();
+    swap_opens();
+    check(put_wave(&entry, wave_a, 0, 512) == 2048 && m.starts == 1, "A starts the mix");
+    check(put_wave(&other, wave_b, 0, 600) == 2400, "B's frames taken");
+    check(m.starts == 1 && mix.made == 512, "B joins the running mix, after A's first 512");
+    check(odelay() == 2048, "A's delay: its frames in the device");
+    swap_opens();
+    check(odelay() == 2400 && ospace().bytes == 4096 - 2400, "B's: its frames in its buffer");
+    swap_opens();
+    check(put_wave(&entry, wave_a, 512, 1024) == 4096, "A fills its buffer");
+    check(ask(DSP_SYNC, 0) == 0 && m.running, "A drains while B plays");
+    swap_opens();
+    check(ask(DSP_SYNC, 0) == 0 && !m.running, "B's frames have played, and the mix stops");
+    check(odelay() == 0, "B has nothing queued");
+    dspdev_close(&entry);
+    swap_opens();
+    close_dsp();
+    check(m.starts == 1 && m.stops == 1, "one start and one stop of the device");
+    check(mixed(wave_a, 1536, 1536, wave_b, 600, 512), "A and B summed");
+}
+
+/** Two players' frames summed, in range: A alone, then A and B, then
+ * silence. */
+static void row_mixing(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < WAVE; i++) {
+        wave_a[2 * i] = (int16_t)((int)(i * 37 % 24000) - 12000);
+        wave_a[2 * i + 1] = (int16_t)(12000 - (int)(i * 53 % 24000));
+        wave_b[2 * i] = (int16_t)((int)(i * 101 % 20000) - 10000);
+        wave_b[2 * i + 1] = (int16_t)((int)(i * 7 % 2000) - 1000);
+    }
+    two_players("mixing");
+}
+
+/** A sum past 16 bits is held at the limit: 30000 and 20000 give 32767,
+ * and their negatives -32768; a sum within range is not changed. */
+static void row_clipping(void)
+{
+    uint32_t i;
+
+    for (i = 0; i < WAVE; i++) {
+        wave_a[2 * i] = (int16_t)(i % 2 ? 30000 : -30000);
+        wave_a[2 * i + 1] = (int16_t)(i % 3 ? -32768 : 32767);
+        wave_b[2 * i] = (int16_t)(i % 2 ? 20000 : -20000);
+        wave_b[2 * i + 1] = (int16_t)(i % 3 ? 100 : -100);
+    }
+    two_players("clipping");
+    check(out_sample(600, 0) == -32768 && out_sample(601, 0) == 32767,
+          "the left held at both ends");
+    check(out_sample(600, 1) == 32767 && out_sample(601, 1) == -32668,
+          "the right held at the top, and within range below it");
+}
+
+/** Frame `i` of the bytes `in`, in `format` with `channels`, as 16-bit
+ * channel `ch`; silence past `n` frames. */
+static int source(const uint8_t *in, uint32_t n, audio_format_t format, int channels, uint32_t i,
+                  int ch)
+{
+    const uint8_t *p;
+
+    if (i >= n) {
+        return 0;
+    }
+    if (channels == 1) {
+        ch = 0;
+    }
+    if (format == AUDIO_U8) {
+        return ((int)in[i * (uint32_t)channels + (uint32_t)ch] - 128) * 256;
+    }
+    p = in + 2 * (i * (uint32_t)channels + (uint32_t)ch);
+    return (int16_t)(uint16_t)(p[0] | p[1] << 8);
+}
+
+/**
+ * One player of `n` frames of the pattern in `format`, `channels` and
+ * `rate`, drained: each frame `k` of the mix is the player's frame at
+ * k * rate / 48000, interpolated between the two around it by the 14-bit
+ * weight of the fraction, as vchan.c's resampler makes it.
+ */
+static void resampled(const char *name, audio_format_t format, int channels, uint32_t rate,
+                      uint32_t n)
+{
+    uint32_t frame = (uint32_t)channels * (format == AUDIO_S16LE ? 2u : 1u);
+    uint32_t k, i, ph, w;
+    unsigned long long t;
+    int ch, a, b, want, bad = 0;
+
+    begin(name);
+    check(open_dsp(1) == 0, "open");
+    check(ask(DSP_SETFMT, format == AUDIO_U8 ? AFMT_U8 : AFMT_S16_LE) ==
+              (format == AUDIO_U8 ? AFMT_U8 : AFMT_S16_LE),
+          "the format granted");
+    check(ask(DSP_CHANNELS, channels) == channels, "the channels granted");
+    check(ask(DSP_SPEED, (int)rate) == (int)rate, "the rate granted");
+    check(put(0, n * frame) == (int32_t)(n * frame), "every frame taken");
+    check(ask(DSP_SYNC, 0) == 0 && !m.running, "SYNC drains and stops the mix");
+    check(odelay() == 0, "nothing queued");
+    close_dsp();
+    check((unsigned long long)out_frames() * rate >= (unsigned long long)n * 48000,
+          "the record covers every frame");
+    for (k = 0; k < out_frames() && !bad; k++) {
+        t = (unsigned long long)k * rate;
+        i = (uint32_t)(t / 48000);
+        ph = (uint32_t)(t % 48000);
+        w = (ph << 14) / 48000;
+        for (ch = 0; ch < 2; ch++) {
+            a = source(pattern, n, format, channels, i, ch);
+            b = source(pattern, n, format, channels, i + 1, ch);
+            want = ph == 0 ? a : a + (b - a) * (int)w / 16384;
+            if (out_sample(k, ch) != want) {
+                printf("dsp-hosttest: %s: frame %u channel %d is %d, not %d\n", row, k, ch,
+                       out_sample(k, ch), want);
+                bad = 1;
+            }
+        }
+    }
+    check(!bad, "each frame of the mix interpolated from the player's");
+}
+
+/** Each format, channel count and rate converted to the mix's: up from
+ * 8000 Hz unsigned 8-bit mono and from 22050 and 44100 Hz, and down from
+ * 96000 and 192000 Hz, four times the mix's. */
+static void row_resampling(void)
+{
+    resampled("resampling 8000 Hz U8 mono", AUDIO_U8, 1, 8000, 3000);
+    resampled("resampling 22050 Hz S16 mono", AUDIO_S16LE, 1, 22050, 3000);
+    resampled("resampling 44100 Hz S16 stereo", AUDIO_S16LE, 2, 44100, 5000);
+    resampled("resampling 96000 Hz U8 stereo", AUDIO_U8, 2, 96000, 9000);
+    resampled("resampling 192000 Hz S16 stereo", AUDIO_S16LE, 2, 192000, 9000);
+}
+
+/**
+ * A player closed while another plays: A's nonblocking close takes it out
+ * of the mix at the next frame made and leaves the device running; B plays
+ * on unbroken, and a new open joins it.
+ */
+static void row_close_while_playing(void)
+{
+    uint32_t a_end;
+
+    for (a_end = 0; a_end < WAVE; a_end++) {
+        wave_a[2 * a_end] = (int16_t)((int)(a_end * 37 % 24000) - 12000);
+        wave_a[2 * a_end + 1] = (int16_t)(12000 - (int)(a_end * 53 % 24000));
+        wave_b[2 * a_end] = (int16_t)((int)(a_end * 101 % 20000) - 10000);
+        wave_b[2 * a_end + 1] = (int16_t)((int)(a_end * 7 % 2000) - 1000);
+    }
+    begin("close while playing");
+    check(open_dsp(1) == 0 && open_other() == 0, "two opens");
+    cd_quality();
+    swap_opens();
+    cd_quality();
+    swap_opens();
+    check(put_wave(&entry, wave_a, 0, 512) == 2048, "A starts the mix");
+    check(put_wave(&other, wave_b, 0, 1024) == 4096, "B joins it");
+    check(put_wave(&entry, wave_a, 512, 1024) == 4096, "A fills its buffer");
+    model_tick();
+    model_tick();
+    a_end = mix.made;
+    check(a_end == 1024, "A and B mixed for two periods");
+    check(ask(DSP_NONBLOCK, 0) == 0, "A nonblocking");
+    dspdev_close(&entry);
+    check(entry.priv == NULL && m.running && m.stops == 0, "A's close leaves the device running");
+    check(open_dsp(1) == 0, "a new open while B plays");
+    check(m.starts == 1 && m.closes == 0, "on the same stream of the device");
+    dspdev_close(&entry);
+    swap_opens();
+    check(ask(DSP_SYNC, 0) == 0 && !m.running, "B drains, and the mix stops");
+    close_dsp();
+    check(m.starts == 1 && m.stops == 1 && m.closes == 1,
+          "one start, stop and close of the device");
+    check(mixed(wave_a, 1536, a_end, wave_b, 1024, 512), "A until its close, B throughout");
+}
+
 int main(void)
 {
     uint32_t i;
@@ -1096,6 +1400,10 @@ int main(void)
     row_duplex();
     row_sox_rec();
     row_ffmpeg_in();
+    row_mixing();
+    row_clipping();
+    row_resampling();
+    row_close_while_playing();
     if (failures) {
         printf("dsp-hosttest: %d failures\n", failures);
         return 1;
