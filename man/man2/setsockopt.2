@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 1, 2026
 .Dt SETSOCKOPT 2
 .Os
 .Sh NAME
@@ -99,6 +99,73 @@ At level IPPROTO_IPV6, set or get whether an AF_INET6 socket excludes IPv4.
 The default is zero, permitting mapped IPv4 peers.
 Set this integer option before binding or opening a TCP control block;
 changing it afterwards fails with EINVAL.
+.It Dv IPV6_UNICAST_HOPS , IPV6_MULTICAST_HOPS , IPV6_TCLASS
+At level
+.Dv IPPROTO_IPV6 ,
+set or get the hop limit of an AF_INET6 socket's unicast and multicast
+datagrams and the traffic class of its datagrams, integers from \-1
+through 255.
+\-1 gives the default: for the unicast hop limit, the one a router
+advertised for the card the route takes, else 64, which is what reads
+back; for the multicast hop limit, 1; for the class, 0.
+UDP and raw ICMPv6 sends use them; TCP does not.
+.It Dv IPV6_MULTICAST_IF
+At level
+.Dv IPPROTO_IPV6 ,
+set or get the index of the interface a datagram to a group leaves by
+when its address has no scope id and the socket is bound to no
+interface, or 0 for none.
+The index must exist, and on a socket bound to an interface be that one.
+.It Dv IPV6_MULTICAST_LOOP
+At level
+.Dv IPPROTO_IPV6 ,
+set or get whether a datagram this socket sends to a group comes back to
+this machine's members of the group on the card it leaves by, 1, the
+default, or 0.
+A datagram that leaves in fragments does not come back.
+.It Dv IPV6_JOIN_GROUP , IPV6_LEAVE_GROUP
+At level
+.Dv IPPROTO_IPV6 ,
+make an AF_INET6 datagram or raw socket a member of a group, or no
+longer one.
+The value is a
+.Vt struct ipv6_mreq :
+the group and an interface index.
+A join with index 0 takes the interface the group's route takes; a leave
+with index 0 takes the socket's first membership of the group.
+A socket holds at most eight memberships, which it gives back when it is
+closed, and the machine reports each group with MLD.
+.Fn getsockopt
+of either fails with
+.Er ENOPROTOOPT .
+.It Dv IPV6_RECVPKTINFO , IPV6_RECVHOPLIMIT , IPV6_RECVTCLASS
+At level
+.Dv IPPROTO_IPV6 ,
+set or get whether a
+.Xr recvmsg 2
+on an AF_INET6 UDP or raw socket gives the control messages
+.Dv IPV6_PKTINFO ,
+.Dv IPV6_HOPLIMIT
+and
+.Dv IPV6_TCLASS
+of each datagram, as
+.Xr recv 2
+describes.
+Zero clears the option and any other value sets it.
+.It Dv ICMP6_FILTER
+At level
+.Dv IPPROTO_ICMPV6 ,
+set or get the filter of a raw ICMPv6 socket, a
+.Vt struct icmp6_filter
+of 256 bits, one for each ICMPv6 type, a set bit blocking the type, as
+.In netinet/icmp6.h
+manipulates it.
+A new socket passes every type.
+.Fn setsockopt
+takes at most the 32 bytes of the structure and leaves the bits past a
+shorter value as they were;
+.Fn getsockopt
+gives at most 32.
 .It Dv IP_TTL
 At level
 .Dv IPPROTO_IP ,
@@ -184,16 +251,44 @@ an
 or
 .Dv IP_TTL
 value is shorter than an integer; or the hop limit is outside 1 through 255.
+An IPv6 option's value is shorter than an integer, or a
+.Vt struct ipv6_mreq ;
+a hop limit or class is outside \-1 through 255, or a loop other than 0 or
+1;
+.Dv IPV6_MULTICAST_IF
+names an interface other than the one the socket is bound to; a join or a
+leave names an address that is no group; or the length of
+.Dv ICMP6_FILTER
+is negative.
+.It Bq Er EADDRINUSE
+The socket has joined the group on that interface already.
+.It Bq Er EADDRNOTAVAIL
+The socket is no member of the group it leaves.
+.It Bq Er ENOBUFS
+The socket holds eight memberships, or the interface its sixteen groups.
 .It Bq Er ENODEV
 A nonempty
 .Dv SO_BINDTODEVICE
-name does not identify a registered interface.
+name does not identify a registered interface, an interface index of
+.Dv IPV6_MULTICAST_IF
+or a join does not exist, or a join with index 0 finds no route.
 .It Bq Er ENOPROTOOPT
 .Dv IP_HDRINCL
-was requested, or
+was requested,
 .Fn setsockopt
 was used for
-.Dv PACKET_AUXDATA .
+.Dv PACKET_AUXDATA ,
+an IPv6 option was given a socket that is not AF_INET6,
+.Fn getsockopt
+was used for a join or a leave, or
+.Dv ICMP6_FILTER
+was given a socket that is not an AF_INET6 raw one.
+.It Bq Er EOPNOTSUPP
+.Dv ICMP6_FILTER
+was given a raw socket of
+.Dv IPPROTO_RAW .
+.It Bq Er EPROTO
+A join or a leave was given a stream socket.
 .It Bq Er ENOTSOCK
 .Fa fd
 does not refer to a socket.
