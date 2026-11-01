@@ -162,7 +162,7 @@ Every entry to the kernel takes the big lock ([`../proc/smp.h`](../proc/smp.h)),
 
 ## Limits
 
-* No extension header is sent but the fragment header and MLD's hop-by-hop router alert, and no IPv6 datagram is forwarded, so a routing header with segments left is refused. No redirect is followed, and no router preference or route information option (RFC 4191) is read; RDNSS and DNSSL options are left to a program, as on Linux.
+* No extension header is sent but the fragment header and MLD's hop-by-hop router alert, and no IPv6 datagram is forwarded, so a routing header with segments left is refused. No redirect is followed, and no router preference or route information option (RFC 4191) is read; RDNSS and DNSSL options are left to a program, as on Linux, which here is [ndwatch(8)](../../../man/man8/ndwatch.8).
 * A card's MTU is at most 1500 bytes: there are no jumbo frames, and no IPv6 jumbograms. IPv6 below an MTU of 1280 still sends, in fragments of the interface's size, where Linux turns IPv6 off on the interface.
 * No IP options are sent and no datagram is forwarded between interfaces. A program can join no IPv4 multicast group, and has no source filter for an IPv6 one (RFC 3678).
 * A UDP datagram goes to one socket, so of two bound to a port that both joined a group, one receives it. A datagram to a group that leaves in fragments does not come back to this machine, and `IPV6_MULTICAST_LOOP` has no copy of it to give.

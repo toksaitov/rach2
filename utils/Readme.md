@@ -1,6 +1,6 @@
 # `utils/`: the in-house programs
 
-This directory contains the user programs written for Rach2: twelve small file programs, five network programs, the four builds of init, the account programs, the programs that manage a disk, its boot partition and its root, and the installer. The installer, `rach2-install`, and the recovery menu, [rach2-recover(8)](../man/man8/rach2-recover.8), are shell scripts; the rest are C programs linked statically against the ported musl. They exist for two reasons. os-simple is built from them and the ISH shell alone, so a reader can compare a small Unix written in this project's code with os-real, which takes the same jobs from BusyBox and Dropbear. And every system image takes its init from here, and a machine is installed, its boot partition managed and its root grown with programs from here.
+This directory contains the user programs written for Rach2: twelve small file programs, six network programs, the four builds of init, the account programs, the programs that manage a disk, its boot partition and its root, and the installer. The installer, `rach2-install`, and the recovery menu, [rach2-recover(8)](../man/man8/rach2-recover.8), are shell scripts; the rest are C programs linked statically against the ported musl. They exist for two reasons. os-simple is built from them and the ISH shell alone, so a reader can compare a small Unix written in this project's code with os-real, which takes the same jobs from BusyBox and Dropbear. And every system image takes its init from here, and a machine is installed, its boot partition managed and its root grown with programs from here.
 
 ## Use
 
@@ -17,6 +17,8 @@ A program's options and behavior are in its manual page, linked below. This sect
 * [httpd(8)](../man/man8/httpd.8) answers every request with an HTTP/1.0 status page that shows the request as the network stack decoded it.
 * [dhcpc(8)](../man/man8/dhcpc.8) takes a DHCP lease and keeps it for as long as it runs.
 * [netup(8)](../man/man8/netup.8) brings interfaces up from `/etc/network/interfaces`, the file BusyBox's `ifup` reads, runs `dhcpc -b` for a `dhcp` stanza, and applies `inet6` stanzas.
+
+* [ndwatch(8)](../man/man8/ndwatch.8) follows an interface's routers for the DNS servers their RDNSS and DNSSL options give, which it hands to the resolver merge, `krffs/resolv.script`, and for the M and O flags, for which it starts BusyBox's `udhcpc6`. `init-metal` and `init-recovery` run it; the images that run them stage it.
 
 `dhcpc` and `netup` are os-simple's counterparts of BusyBox's `udhcpc` and `ifup`, so one description of a network serves both images.
 
@@ -150,10 +152,10 @@ make -C utils -f Makefile.linux
 * Only the twelve file programs build for Linux. The others are built only against the ported musl, and several use interfaces only this kernel has, such as ping(2), the text commands of `/dev/loop-control`, `/dev/bootpart` and `/dev/grubcore`.
 * Every program is linked statically.
 * The file programs are much smaller than POSIX's; [busybox-coreutils(1)](../man/man1/busybox-coreutils.1) says what each does.
-* The network programs and the resolver use IPv4 only.
+* The network programs but ndwatch, and the resolver, use IPv4 only.
 * `sudo` and `adduser-crash` are staged only in the test image.
 * init empties its service log, `/var/log/services`, in place when it is full and does not rotate it, so what the services wrote before that is lost ([init(8)](../man/man8/init.8)).
-* `init-metal` and `init-recovery` bring the network up with `ifup -a` when the boot line has `rach2.ip=none`, and for a `dhcp` stanza BusyBox's `ifup` starts `udhcpc -R -b` (`vendor/busybox/rach2.config`). Once `udhcpc` has a lease it moves to the background and replaces its descriptors with `/dev/null`, so what it prints about renewing or losing the lease reaches neither the service log nor the screen.
+* `init-metal` and `init-recovery` bring the network up with `ifup -a` when the boot line has `rach2.ip=none`, and for a `dhcp` stanza BusyBox's `ifup` starts `udhcpc -R -b` (`vendor/busybox/rach2.config`). They follow only `eth0` with ifplugd and ndwatch, so a second card keeps the lease of the network it was on until its client renews. Once `udhcpc` has a lease it moves to the background and replaces its descriptors with `/dev/null`, so what it prints about renewing or losing the lease reaches neither the service log nor the screen.
 
 ## Tests
 

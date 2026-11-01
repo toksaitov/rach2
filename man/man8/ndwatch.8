@@ -1,0 +1,116 @@
+.Dd November 2, 2026
+.Dt NDWATCH 8
+.Os
+.Sh NAME
+.Nm ndwatch
+.Nd follow the DNS servers and DHCPv6 flags of an interface's routers
+.Sh SYNOPSIS
+.Nm
+.Ar interface
+.Sh DESCRIPTION
+.Nm
+follows the router advertisements of
+.Ar interface
+for what the kernel leaves to a program, and stays in the foreground.
+.Xr init 8
+runs it for
+.Ql eth0
+where the boot line hands the network to userland, and starts it again
+when it ends.
+.Pp
+The kernel passes each RDNSS and DNSSL option of an advertisement
+(RFC 8106) to netlink as
+.Dv RTM_NEWNDUSEROPT
+.Pq Xr rtnetlink 7 .
+.Nm
+keeps up to four servers and six search domains with their lifetimes,
+removes one whose lifetime ends or that an option gives with lifetime 0,
+and gives them to the resolver merge each time they change.
+A link-local server is given with its interface, as
+.Ql fe80::1%eth0 .
+A domain is taken only when it has nothing but letters, digits,
+.Ql -
+and
+.Ql _ .
+.Pp
+It reads the M and O flags from the advertisements themselves, on a raw
+ICMPv6 socket whose filter passes only router advertisements from a
+link-local source.
+The M flag starts
+.Xr udhcpc6 1
+for an address and servers, and the O flag alone starts it with
+.Fl l ,
+for servers alone; a client for servers that an M flag finds is replaced
+by one for an address.
+A client that an
+.Ic up
+line of an
+.Ic inet6
+stanza started, whose pid is in
+.Pa /var/run/udhcpc6. Ns Ar interface Ns Pa .pid ,
+is left alone.
+.Pp
+When the link goes down, or the interface does,
+.Nm
+stops the client it started, which gives back its lease and takes its
+address and servers away, and forgets every server and domain, since the
+network that comes back may be another.
+It sends one router solicitation when it starts, since the kernel's were
+answered before it was listening, and again when a full netlink queue
+lost messages.
+On
+.Dv SIGTERM
+it stops its client and takes its servers out of the resolver's file.
+.Ss The resolver merge
+.Pa /usr/share/udhcpc/resolv.script Ar name
+writes
+.Pa /etc/resolv.conf
+from what each source of servers gives.
+It reads the source's lines,
+.Ql nameserver Ar address
+and
+.Ql search Ar domain ... ,
+on its standard input and keeps them in
+.Pa /var/run/resolv/ Ns Ar name ,
+or removes that file for empty input, then writes the resolver's file
+whole from every file there in the order of their names, each server and
+domain once.
+The IPv4 lease's script gives
+.Ar interface Ns Pa .dhcp ,
+the DHCPv6 lease's
+.Ar interface Ns Pa .dhcp6
+and
+.Nm
+.Ar interface Ns Pa .ra ,
+so the IPv4 servers come first and the routers' last, and no source drops
+another's.
+A source that never gave anything and gives nothing changes nothing, so
+the file the image starts with stands until a source has a server.
+The merge holds
+.Xr flock 2
+on
+.Pa /var/run/resolv/.lock
+and writes through a temporary file beside the resolver's.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /usr/share/udhcpc/resolv.script
+The resolver merge.
+.It Pa /var/run/resolv/
+The servers and domains of each source.
+.It Pa /var/run/udhcpc6. Ns Ar interface Ns Pa .pid
+The pid of the interface's DHCPv6 client.
+.El
+.Sh DIAGNOSTICS
+Messages go to standard error, which init sends to
+.Pa /var/log/services .
+.Nm
+exits 2 for a wrong argument and 1 when the interface does not exist or a
+socket cannot be opened.
+.Sh SEE ALSO
+.Xr busybox-networking 1 ,
+.Xr ipv6 7 ,
+.Xr netlink 7 ,
+.Xr rtnetlink 7 ,
+.Xr init 8
+.Sh STANDARDS
+RFC 4861, neighbour discovery; RFC 8106, the RDNSS and DNSSL options.
