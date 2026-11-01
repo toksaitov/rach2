@@ -31,10 +31,6 @@
 #include "../mm/kheap.h"
 #include "../network/socket/socket.h"
 
-/* At most this many descriptors can be polled at once: the most a process
- * may hold. The per-call arrays come from the heap, sized by the call. */
-#define POLL_MAX_FDS FD_TABLE_LIMIT
-
 /* The timespec of longs ppoll and pselect6 take, 32 bits each on i686 and
  * 64 on x86-64. */
 struct poll_timespec {
@@ -316,10 +312,10 @@ static int scan_pollfds(void *ctx, struct wait_queue **wqs)
     return poll_scan((struct pollfd_scan *)ctx, wqs);
 }
 
-/** The poll core over the `nfds` entries of `fds`, at most POLL_MAX_FDS,
- * with select's rule of readiness when `sel` (`poll_scan`); returns as
- * `poll_wait` does. A wait whose scan found more queues than it had records
- * for begins again with a record for each. */
+/** The poll core over the `nfds` entries of `fds`, with select's rule of
+ * readiness when `sel` (`poll_scan`); returns as `poll_wait` does. A wait
+ * whose scan found more queues than it had records for begins again with a
+ * record for each. */
 static int do_poll(struct kernel_pollfd *fds, uint32_t nfds, struct poll_deadline *d, int sel)
 {
     struct pollfd_scan p;
@@ -442,7 +438,9 @@ static void ts_deadline(const struct poll_timespec *ts, struct poll_deadline *d)
 
 /** The body of poll and ppoll: the `nfds` entries at `ufds` waited on until
  * the deadline `d` when it is set, and their revents copied back. No entries
- * is a sleep until the deadline. Returns as `sys_poll` does. */
+ * is a sleep until the deadline. Linux takes no more entries than the soft
+ * RLIMIT_NOFILE; here 1024 are taken under any limit, so that OpenSSH's
+ * rlimit sandbox, a limit of 0, still polls. Returns as `sys_poll` does. */
 static int32_t poll_common(uintptr_t ufds, uint32_t nfds, struct poll_deadline *d)
 {
     struct kernel_pollfd *fds;
@@ -452,8 +450,8 @@ static int32_t poll_common(uintptr_t ufds, uint32_t nfds, struct poll_deadline *
     if (!current_proc) {
         return -ESRCH;
     }
-    if (nfds > POLL_MAX_FDS) {
-        return -EINVAL; /* more than a process can hold */
+    if (nfds > FD_TABLE_LIMIT && nfds > current_proc->rlim[RLIM_NOFILE].cur) {
+        return -EINVAL; /* more than the process may hold */
     }
     bytes = nfds * (uint32_t)sizeof(struct kernel_pollfd);
     fds = kmalloc(bytes ? bytes : 1);
@@ -556,6 +554,13 @@ long sys_ppoll(struct isr_params *params)
  * deadline `d` when it is set, and the sets the caller gave written back.
  * Returns as `sys__newselect` does.
  *
+ * As on Linux, `nfds` is cut to the size of the caller's table, past which
+ * no descriptor is open, and each set is read and written for the longs
+ * that hold its first `nfds` bits, no more, so that a caller may pass sets
+ * wider than FD_SETSIZE for a descriptor past 1023. A long's bits are the
+ * bits of the 32-bit words the translation reads, on a little-endian
+ * machine. The sets come from the heap, sized by the call.
+ *
  * A set bit whose descriptor is not open fails the call with -EBADF: the
  * scan reports such a descriptor as POLLNVAL, which no fd_set can show, and
  * counts it ready, so the wait ends at once.
@@ -563,73 +568,62 @@ long sys_ppoll(struct isr_params *params)
 static int32_t select_common(int nfds, uintptr_t ur, uintptr_t uw, uintptr_t ue,
                              struct poll_deadline *d)
 {
+    const uint32_t long_bits = 8u * (uint32_t)sizeof(long);
     struct kernel_pollfd *fds;
-    uint32_t rset[FDSET_WORDS], wset[FDSET_WORDS], eset[FDSET_WORDS];
-    uint32_t orset[FDSET_WORDS], owset[FDSET_WORDS], oeset[FDSET_WORDS];
-    uint32_t setbytes;
-    int npoll, ready;
+    uint32_t *sets, *rset, *wset, *eset, *orset, *owset, *oeset;
+    uint32_t setbytes, words;
+    int npoll, ready, i;
 
     if (!current_proc) {
         return -ESRCH;
     }
-    if (nfds < 0 || nfds > FDSET_BITS) {
-        return -EINVAL; /* nfds is bounded by the fd_set width (FD_SETSIZE = 1024) */
+    if (nfds < 0) {
+        return -EINVAL;
     }
-    setbytes = (uint32_t)FDSET_WORDS * (uint32_t)sizeof(uint32_t);
+    if (nfds > fd_table_cap(current_proc->fds)) {
+        nfds = fd_table_cap(current_proc->fds);
+    }
+    setbytes = ((uint32_t)nfds + long_bits - 1) / long_bits * (uint32_t)sizeof(long);
+    words = setbytes / 4;
 
-    k_memset(rset, 0, setbytes);
-    k_memset(wset, 0, setbytes);
-    k_memset(eset, 0, setbytes);
-    if (ur && copy_from_user(rset, (const void __user *)ur, setbytes) != 0) {
-        return -EFAULT;
-    }
-    if (uw && copy_from_user(wset, (const void __user *)uw, setbytes) != 0) {
-        return -EFAULT;
-    }
-    if (ue && copy_from_user(eset, (const void __user *)ue, setbytes) != 0) {
-        return -EFAULT;
-    }
-
-    fds = kmalloc(sizeof(*fds) * (size_t)(nfds ? nfds : 1));
-    if (!fds) {
+    sets = kzalloc(6 * (size_t)setbytes + sizeof(*fds) * (size_t)(nfds ? nfds : 1));
+    if (!sets) {
         return -ENOMEM;
     }
-    npoll = fdsets_to_pollfds((uint32_t)nfds, rset, wset, eset, fds, nfds);
-    if (npoll < 0) {
-        kfree(fds);
-        return -EBADF; /* more selected descriptors than `fds` holds */
+    rset = sets;
+    wset = rset + words;
+    eset = wset + words;
+    orset = eset + words;
+    owset = orset + words;
+    oeset = owset + words;
+    fds = (struct kernel_pollfd *)(oeset + words);
+    ready = 0;
+    if ((ur && copy_from_user(rset, (const void __user *)ur, setbytes) != 0) ||
+        (uw && copy_from_user(wset, (const void __user *)uw, setbytes) != 0) ||
+        (ue && copy_from_user(eset, (const void __user *)ue, setbytes) != 0)) {
+        ready = -EFAULT;
     }
-
-    ready = do_poll(fds, (uint32_t)npoll, d, 1);
-    if (ready < 0) {
-        kfree(fds);
-        return ready;
+    npoll = ready == 0 ? fdsets_to_pollfds((uint32_t)nfds, rset, wset, eset, fds, nfds) : 0;
+    if (ready == 0 && npoll < 0) {
+        ready = -EBADF; /* more selected descriptors than `fds` holds */
     }
-
-    {
-        int i;
-        for (i = 0; i < npoll; i++) {
-            if (fds[i].revents & POLLNVAL) {
-                kfree(fds);
-                return -EBADF;
-            }
+    if (ready == 0) {
+        ready = do_poll(fds, (uint32_t)npoll, d, 1);
+    }
+    for (i = 0; ready >= 0 && i < npoll; i++) {
+        if (fds[i].revents & POLLNVAL) {
+            ready = -EBADF;
         }
     }
-
-    k_memset(orset, 0, setbytes);
-    k_memset(owset, 0, setbytes);
-    k_memset(oeset, 0, setbytes);
-    ready = pollfds_to_fdsets(fds, npoll, orset, owset, oeset);
-    kfree(fds);
-    if (ur && copy_to_user((void __user *)ur, orset, setbytes) != 0) {
-        return -EFAULT;
+    if (ready >= 0) {
+        ready = pollfds_to_fdsets(fds, npoll, orset, owset, oeset);
+        if ((ur && copy_to_user((void __user *)ur, orset, setbytes) != 0) ||
+            (uw && copy_to_user((void __user *)uw, owset, setbytes) != 0) ||
+            (ue && copy_to_user((void __user *)ue, oeset, setbytes) != 0)) {
+            ready = -EFAULT;
+        }
     }
-    if (uw && copy_to_user((void __user *)uw, owset, setbytes) != 0) {
-        return -EFAULT;
-    }
-    if (ue && copy_to_user((void __user *)ue, oeset, setbytes) != 0) {
-        return -EFAULT;
-    }
+    kfree(sets);
     return ready;
 }
 
