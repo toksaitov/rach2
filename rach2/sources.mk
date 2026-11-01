@@ -164,6 +164,10 @@ C_SRC_SHARED = kernel.c \
     sys/network/driver/ath9k/chips.c \
     sys/network/driver/ath9k/antenna.c \
     sys/network/driver/ath9k/power.c \
+    sys/network/driver/ath9k/mac.c \
+    sys/network/driver/ath9k/recv.c \
+    sys/network/driver/ath9k/xmit.c \
+    sys/network/driver/ath9k/key.c \
     sys/network/ethernet/ethernet.c \
     sys/network/arp/arp.c \
     sys/network/ip/ip.c \
