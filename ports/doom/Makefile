@@ -45,7 +45,7 @@ DOOM_SRC = \
 	p_ceilng.c p_doors.c p_enemy.c p_floor.c p_inter.c p_lights.c p_map.c \
 	p_maputl.c p_mobj.c p_plats.c p_pspr.c p_saveg.c p_setup.c p_sight.c \
 	p_spec.c p_switch.c p_telept.c p_tick.c p_user.c r_bsp.c r_data.c \
-	r_draw.c r_main.c r_plane.c r_segs.c r_sky.c r_things.c sha1.c sounds.c \
+	r_draw.c r_main.c r_plane.c r_segs.c r_sky.c r_things.c sounds.c \
 	statdump.c st_lib.c st_stuff.c s_sound.c tables.c v_video.c wi_stuff.c \
 	w_checksum.c w_file.c w_main.c w_wad.c z_zone.c w_file_stdc.c \
 	i_input.c i_video.c doomgeneric.c
@@ -53,8 +53,8 @@ DOOM_SRC = \
 # Object files (under $(BUILD), mirroring the source tree)
 DOOM_OBJS = $(addprefix $(BUILD)/, $(DOOM_SRC:.c=.o))
 
-# The platform layer, the sound modules and the music player.
-LOCAL_SRC = doomgeneric_rach2.c i_pcsound.c opl3.c mus2mid.c midifile.c i_oplmusic.c
+# The platform layer, the sound modules, the music player and SHA-1.
+LOCAL_SRC = doomgeneric_rach2.c i_pcsound.c opl3.c mus2mid.c midifile.c i_oplmusic.c sha1_fips.c
 LOCAL_OBJS = $(addprefix $(BUILD)/, $(LOCAL_SRC:.c=.o))
 
 # All objects
