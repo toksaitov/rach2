@@ -230,6 +230,15 @@ int fd_free(fd_table_t *table, int fd)
     return -1;
 }
 
+/** A failure: no row opens a FIFO, whose attach alone looks an entry up
+ * again. */
+fd_entry_t *fd_entry_now(fd_table_t *table, fd_entry_t *e)
+{
+    (void)table;
+    CHECK(0, "unexpected descriptor lookup");
+    return e;
+}
+
 /** Reset the pipe to two nonblocking ends of an empty ring whose head and
  * tail are `head`, and every model page to writable, with 0x33 in the
  * first pages and 0x22 from `PEER_PAGE`. */

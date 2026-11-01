@@ -451,6 +451,14 @@ int fd_free(fd_table_t *table, int fd)
     return 0;
 }
 
+/** The entry `e` as it is now: where it was, since the model's table never
+ * grows. */
+fd_entry_t *fd_entry_now(fd_table_t *table, fd_entry_t *e)
+{
+    (void)table;
+    return e;
+}
+
 /** The descriptor `fd`, or NULL for a slot that is free, reserved or
  * closing. */
 fd_entry_t *fd_get(fd_table_t *table, int fd)

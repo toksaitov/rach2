@@ -73,6 +73,8 @@ static void (*flush_pause)(void);
 
 process_t proc_a;
 struct percpu cpu_table[NR_CPUS] = {{.current = &proc_a}};
+/* The one thread, which the descriptor table's growth walks. */
+process_t *proc_list = &proc_a;
 
 /** Print the panic's message and exit with status 3. */
 void k_panic(const char *s)
