@@ -18,8 +18,8 @@
  * driver's DMA buffer has two periods, of 256 frames unless a row asks for
  * more; a tick plays the one due, appends its bytes to `m.out`, refills it
  * through the stream's `transfer` and calls `period`, as a device's
- * interrupt would. Its capture stream records the pattern in order: a tick hands the
- * next period of it over through `transfer` and calls `period`. A wait runs
+ * interrupt would. Its capture stream records the pattern in order: a tick
+ * hands the next period over through `transfer` and calls `period`. A wait runs
  * ticks until its condition holds, or ends with a signal when a row asks for
  * one, so `m.out` is exactly what a listener would hear and `got` exactly
  * what a program read.
@@ -1464,7 +1464,9 @@ static void row_two_readers(void)
     swap_opens();
     check(ask(DSP_RESET, 0) == 0 && cap.running && cap.stops == 0,
           "reset of the second leaves the first running");
-    close_dsp();
+    dspdev_close(&entry);
+    check(entry.priv == NULL && other.priv != NULL && cap.running && cap.stops == 0,
+          "the second reader closes without stopping the first");
     swap_opens();
     check(take(1024) == 1024 && recorded(0, 0, got_len), "first reader has no gap");
     close_dsp();
@@ -1593,7 +1595,9 @@ static void row_process_pcm(void)
     check(ask(DSP_SYNC, 0) == 0, "first player drains");
     swap_opens();
     check(ask(DSP_SYNC, 0) == 0, "second player drains");
-    close_dsp();
+    dspdev_close(&entry);
+    check(entry.priv == NULL && other.priv != NULL && m.closes == 0,
+          "the second player closes without releasing the first's stream");
     swap_opens();
     close_dsp();
     for (i = 0; i < out_frames(); i++) {

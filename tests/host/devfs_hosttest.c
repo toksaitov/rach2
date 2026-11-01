@@ -443,6 +443,15 @@ int32_t dspdev_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     return unexpected();
 }
 
+/** Refuse an unexpected DSP read, which no row performs. */
+int32_t dspdev_read(fd_entry_t *e, char __user *buf, uint32_t count)
+{
+    (void)e;
+    (void)buf;
+    (void)count;
+    return unexpected();
+}
+
 short dspdev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     (void)e;
