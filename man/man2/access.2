@@ -57,7 +57,17 @@ to a caller whose real user ID is nonzero.
 After the permission check succeeds,
 .Dv W_OK
 on a read-only mount other than the KRFFS boot root gives
-.Er EROFS .
+.Er EROFS ,
+as a read-only bind of
+.Pa /proc/sys
+does, but not in
+.Pa /dev
+or
+.Pa /sys ,
+whose devices and attributes take writes on a mount marked read-only,
+nor for
+.Pa /proc/PID/fd/N ,
+which leads to a file of another mount.
 .Pp
 Relative paths are resolved from the current working directory.
 .Fn faccessat
