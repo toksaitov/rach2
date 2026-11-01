@@ -312,7 +312,7 @@ Each task rewrites the Readme and pages of every contract it changes. Besides th
 
 ### 20. Logins kept across a reinstall
 
-* `rach2-install --update` keeps `/root` as it keeps `/home`, on the keep side (`rach2-install:984-994`) and the put-back side (`:1113`), and keeps the machine's `/etc/vconsole.conf` (the Lenovo's has `KEYMAP=ru`, `KEYMAP_TOGGLE=alt-shift` since 2026-11-01) as it keeps the accounts.
+* `rach2-install --update` keeps `/root` as it keeps `/home`, on the keep side (`rach2-install:984-994`) and the put-back side (`:1113`), and keeps the machine's `/etc/vconsole.conf` (the Lenovo's has `KEYMAP=ru`, `KEYMAP_TOGGLE=ctrl-shift` since 2026-11-01, Ctrl+Shift switching the layout) as it keeps the accounts.
 * `tools/dev/machine_logins.sh pull|push`: the agents' login files (the five of `agents_guest.sh:140-143` and opencode's store, copied consistently from its SQLite by its backup command) from and to a running Lenovo, modes kept, contents never printed; a failed pull stops a replacement.
 * The machine image (not the test images) stages a login directory named on the command line, such as `~/Desktop/rach2-agent-creds`.
 * Done: in QEMU an `--update` keeps `/root` and `/etc/vconsole.conf`, and the image stages a named directory. The Lenovo's reinstall is 23c's.
