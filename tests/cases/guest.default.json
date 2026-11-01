@@ -5303,7 +5303,7 @@
         {"assertion_id": "pivot-new-root", "checks": "in the new root /proc works and /proc/sys stays read-only, /newroot and /oldroot are gone, and the working directory is /", "source": "program"},
         {"assertion_id": "write-outside", "checks": "a write to the probe's own directory or to /tmp/sbx.out fails with ENOENT, and /tmp/sbx.out made inside stays inside", "source": "program"},
         {"assertion_id": "namespace-unseen", "checks": "outside, /tmp/sbx.out does not exist, mountinfo has none of the namespace's mounts, and /proc/sys can be written", "source": "program"},
-        {"assertion_id": "proc-sys-user", "checks": "user 1000, in a user and a mount namespace that map its own ids, binds /proc/sys read-only over itself; a file of it reads and an open for writing fails with EROFS", "source": "program"},
+        {"assertion_id": "proc-sys-user", "checks": "user 1000, in a user and a mount namespace that map its own ids, binds /proc/sys read-only over itself; a file of it reads, an open for writing fails with EROFS and access of the directory for writing with EACCES", "source": "program"},
         {"assertion_id": "detach-refusals", "checks": "MNT_DETACH of a directory that is no mount and MNT_FORCE are EINVAL", "source": "program"},
         {"assertion_id": "detach-busy", "checks": "a tmpfs with a file open for writing is detached at once: its file is gone from the path and the descriptor still writes", "source": "program"},
         {"assertion_id": "detach-every-view", "checks": "a child and a new mount namespace do not see the detached mount, and mountinfo has no line for it", "source": "program"},

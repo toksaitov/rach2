@@ -22,7 +22,8 @@
  * exist and no mount of the namespace shows in mountinfo, and /proc/sys
  * can be written. User 1000, in a user and a mount namespace of its own
  * that map its own ids, as bubblewrap makes them, binds /proc/sys
- * read-only over itself, and it reads and refuses a write with EROFS.
+ * read-only over itself, and it reads and refuses an open for writing with
+ * EROFS.
  *
  * In the probe's own namespace a tmpfs at /tmp/sbxd with a file open for
  * writing is detached at once by MNT_DETACH: its file is gone from the path,
@@ -251,9 +252,10 @@ static int ro_bind(const char *src, const char *dst)
 }
 
 /** Whether the /proc/sys at `dir` is read-only: its kernel/overflowuid reads
- * 65534, and an open of it for writing and access(2) of `dir` for writing
- * fail with EROFS. */
-static int sys_read_only(const char *dir)
+ * 65534, an open of it for writing fails with EROFS, and access(2) of `dir`
+ * for writing with `err`, EROFS for root and EACCES for a user, whose
+ * permission is judged first, as on Linux. */
+static int sys_read_only(const char *dir, int err)
 {
     char path[128], buf[16];
     ssize_t n;
@@ -268,7 +270,7 @@ static int sys_read_only(const char *dir)
     if (n != 6 || memcmp(buf, "65534\n", 6) != 0) {
         return 0;
     }
-    return refused(open(path, O_WRONLY), EROFS) && refused(access(dir, W_OK), EROFS);
+    return refused(open(path, O_WRONLY), EROFS) && refused(access(dir, W_OK), err);
 }
 
 /** Whether a mount of a tmpfs at /tmp fails with EPERM, as for a thread
@@ -307,12 +309,12 @@ static int sandbox(void)
     }
     if (access("/newroot/proc/sys", W_OK) != 0 ||
         ro_bind("/newroot/proc/sys", "/newroot/proc/sys") != 0 ||
-        !sys_read_only("/newroot/proc/sys") ||
-        !has_line("/proc/self/mountinfo", " /newroot/proc/sys ")) {
+        !sys_read_only("/newroot/proc/sys", EROFS) ||
+        !has_line("/newroot/proc/self/mountinfo", " /newroot/proc/sys ")) {
         return 4;
     }
     if (ro_bind("/oldroot/proc/sys", "/newroot/proc/sys") != 0 ||
-        !sys_read_only("/newroot/proc/sys")) {
+        !sys_read_only("/newroot/proc/sys", EROFS)) {
         return 5;
     }
     if (umount2("/oldroot", MNT_DETACH) != 0 || !absent(path) ||
@@ -325,7 +327,7 @@ static int sandbox(void)
         umount2(".", MNT_DETACH) != 0 || chdir("/") != 0 || close(oldroot) != 0) {
         return 7;
     }
-    if (!status_is_mine("/proc/self/status") || !sys_read_only("/proc/sys") ||
+    if (!status_is_mine("/proc/self/status") || !sys_read_only("/proc/sys", EROFS) ||
         !absent("/newroot") || !absent("/oldroot") || getcwd(path, sizeof(path)) == NULL ||
         strcmp(path, "/") != 0) {
         return 8;
@@ -356,7 +358,7 @@ static int user_sys_bind(void)
         put("/proc/self/gid_map", map) != 0) {
         return 1;
     }
-    return ro_bind("/proc/sys", "/proc/sys") == 0 && sys_read_only("/proc/sys") ? 0 : 1;
+    return ro_bind("/proc/sys", "/proc/sys") == 0 && sys_read_only("/proc/sys", EACCES) ? 0 : 1;
 }
 
 /** Run the sandbox's steps, rows 0 to SANDBOX_STEPS, and the user's bind of
