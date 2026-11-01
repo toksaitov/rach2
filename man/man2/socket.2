@@ -24,13 +24,9 @@ the protocol where the type requires one.
 The supported combinations are:
 .Bl -tag -width "AF_INET, SOCK_STREAM"
 .It Dv AF_INET , SOCK_STREAM
-A TCP stream socket.
-.Fa protocol
-is ignored.
+A TCP stream socket; protocol is zero or IPPROTO_TCP (6).
 .It Dv AF_INET , SOCK_DGRAM
-A UDP datagram socket.
-.Fa protocol
-is ignored.
+A UDP datagram socket; protocol is zero or IPPROTO_UDP (17).
 .It Dv AF_INET , SOCK_RAW
 A raw ICMP socket when
 .Fa protocol
@@ -215,7 +211,11 @@ was asked for a domain other than
 A raw IPv4 or IPv6 socket or a packet socket was requested without
 effective user ID 0.
 .It Bq Er EPROTONOSUPPORT
-An IPv4 raw protocol is neither
+An IPv4 or IPv6 stream protocol is neither zero nor
+.Dv IPPROTO_TCP ,
+a datagram protocol neither zero nor
+.Dv IPPROTO_UDP ,
+an IPv4 raw protocol is neither
 .Dv IPPROTO_RAW
 nor
 .Dv IPPROTO_ICMP ,

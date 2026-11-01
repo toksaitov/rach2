@@ -531,7 +531,7 @@ static void sock_fd_flags(fd_entry_t *entry, uint32_t flags)
 
 /**
  * Check the kind of socket socket(2) is asked to make, `domain`, `*type` and
- * `protocol`: AF_INET with SOCK_STREAM, SOCK_DGRAM or SOCK_RAW (ICMP, or the
+ * `protocol`: AF_INET with TCP, UDP or SOCK_RAW (ICMP, or the
  * ioctl-only descriptor of IPPROTO_RAW), AF_INET6 with TCP, UDP, raw ICMPv6 or raw IPv6,
  * AF_PACKET with SOCK_DGRAM, and
  * AF_NETLINK with SOCK_RAW or SOCK_DGRAM, which are one thing, since the
@@ -593,6 +593,8 @@ static int32_t socket_kind(int domain, int *type, int protocol)
         }
     } else if (*type != SOCK_DGRAM && *type != SOCK_STREAM) {
         return -EINVAL;
+    } else if (domain == AF_INET && protocol != 0 && protocol != (*type == SOCK_STREAM ? 6 : 17)) {
+        return -EPROTONOSUPPORT;
     }
     if (domain == AF_PACKET) {
         if (!current_proc || !proc_privileged(current_proc)) {
