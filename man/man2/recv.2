@@ -121,6 +121,9 @@ An IPv4 socket returns a 16-byte
 .Vt sockaddr_in
 with its sender's address and port in network byte order; a raw ICMP
 receive reports the address with the port zero.
+An IPv6 UDP socket returns a 28-byte sockaddr_in6, with mapped IPv4
+addresses for IPv4 senders and a scope id for link-scoped IPv6 senders.
+recvmsg and recvmmsg preserve the same address and scope across their iovecs.
 A packet socket returns a 20-byte
 .Vt sockaddr_ll
 with the sender's hardware address, protocol, interface, hardware type,

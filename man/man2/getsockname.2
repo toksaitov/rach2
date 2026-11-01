@@ -23,6 +23,9 @@ containing the TCP control block's local IPv4 address when one exists,
 and otherwise the address the socket bound, 0.0.0.0 for any; a connected
 datagram socket bound to any address reports the address its datagrams
 leave from, as Linux does.
+An IPv6 stream or datagram socket reports the same endpoint information
+in a 28-byte sockaddr_in6, with a scope id for a link-scoped address and
+mapped IPv4 addresses for IPv4 connections.
 The port is the socket's bound or ephemeral port.
 An accepted connection reports the address the peer connected to, and a
 connection to 127.0.0.1 reports 127.0.0.1.
@@ -40,7 +43,8 @@ with hardware type and address length zero.
 .Pp
 .Fn getpeername
 returns a connected peer's IPv4 address and port in a
-.Vt sockaddr_in .
+.Vt sockaddr_in ;
+an IPv6 socket reports a sockaddr_in6 under the same mapping and scope rules.
 A stream socket has a peer after the TCP handshake from
 .Xr connect 2
 or

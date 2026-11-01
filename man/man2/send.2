@@ -143,7 +143,11 @@ gets
 .Er EINVAL .
 .Pp
 An unbound socket is first assigned an ephemeral source port.
-A datagram may contain at most 1472 bytes; an empty datagram is valid.
+An IPv4 datagram may contain at most 1472 bytes; an empty datagram is valid.
+IPv6 UDP takes a sockaddr_in6 with a scope id for a link-scoped destination,
+allows at most 1452 bytes and computes the mandatory UDP checksum.
+A dual-stack socket sends to mapped IPv4 destinations through IPv4.
+sendmsg gathers the iovecs into one datagram for either family.
 The limited broadcast and subnet broadcast addresses require
 .Dv SO_BROADCAST .
 A subnet broadcast leaves by the interface on that subnet, with that

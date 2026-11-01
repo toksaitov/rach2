@@ -94,6 +94,11 @@ values must have room for an integer.
 Zero disables the option; any nonzero value enables it.
 .Ss Protocol options
 .Bl -tag -width PACKET_AUXDATA
+.It Dv IPV6_V6ONLY
+At level IPPROTO_IPV6, set or get whether an AF_INET6 socket excludes IPv4.
+The default is zero, permitting mapped IPv4 peers.
+Set this integer option before binding or opening a TCP control block;
+changing it afterwards fails with EINVAL.
 .It Dv IP_TTL
 At level
 .Dv IPPROTO_IP ,
