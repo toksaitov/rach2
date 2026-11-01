@@ -2,3 +2,302 @@
 # The end run establishes the list after its fixes. Later changes only remove
 # entries. A passing listed case is an error. Required terminal features are
 # never exempt; protected-prefixes.txt names their upstream classes.
+APCTests.test_APC_8bit|upstream skip: term reads UTF-8, where bytes 0x80 to 0x9f are not C1 controls
+BSTests.test_BS_AfterNoWrappedInlines|libtsm has no extended reverse wraparound, xterm's mode 1045
+BSTests.test_BS_AfterOneWrappedInline|libtsm has no extended reverse wraparound, xterm's mode 1045
+BSTests.test_BS_ReverseWrapGoesToBottom|libtsm has no reverse wraparound, mode 45
+BSTests.test_BS_ReverseWrapStartingInDoWrapPosition|libtsm has no reverse wraparound, mode 45
+BSTests.test_BS_ReverseWrapWithLeftRight|libtsm has no reverse wraparound, mode 45
+BSTests.test_BS_ReversewrapFromLeftEdgeToRightMargin|libtsm has no reverse wraparound, mode 45
+BSTests.test_BS_StopsAtLeftMargin|libtsm has no left and right margins, DECSLRM
+BSTests.test_BS_WrapsInWraparoundMode|libtsm has no reverse wraparound, mode 45
+CHATests.test_CHA_RespectsOriginMode|libtsm has no left and right margins, DECSLRM
+CHTTests.test_CHT_IgnoresScrollingRegion|libtsm has no left and right margins, DECSLRM
+CNLTests.test_CNL_StopsAtBottomLineWhenBegunBelowScrollRegion|libtsm has no left and right margins, DECSLRM
+CNLTests.test_CNL_StopsAtBottomMarginInScrollRegion|libtsm has no left and right margins, DECSLRM
+CPLTests.test_CPL_StopsAtTopLineWhenBegunAboveScrollRegion|libtsm has no left and right margins, DECSLRM
+CPLTests.test_CPL_StopsAtTopMarginInScrollRegion|libtsm has no left and right margins, DECSLRM
+CRTests.test_CR_MovesToLeftMarginWhenLeftOfLeftMarginInOriginMode|libtsm has no left and right margins, DECSLRM
+CRTests.test_CR_MovesToLeftMarginWhenRightOfLeftMargin|libtsm has no left and right margins, DECSLRM
+CRTests.test_CR_StaysPutWhenAtLeftMargin|libtsm has no left and right margins, DECSLRM
+CUBTests.test_CUB_AfterNoWrappedInlines|libtsm has no extended reverse wraparound, xterm's mode 1045
+CUBTests.test_CUB_AfterOneWrappedInline|libtsm has no extended reverse wraparound, xterm's mode 1045
+CUBTests.test_CUB_StopsAtLeftMarginInScrollRegion|libtsm has no left and right margins, DECSLRM
+CUFTests.test_CUF_StopsAtRightMarginInScrollRegion|libtsm has no left and right margins, DECSLRM
+CUPTests.test_CUP_RespectsOriginMode|libtsm has no left and right margins, DECSLRM
+ChangeColorTests.test_ChangeColor_CIELab|OSC 4 does not change the palette, so its query reports the default color
+ChangeColorTests.test_ChangeColor_CIELuv|OSC 4 does not change the palette, so its query reports the default color
+ChangeColorTests.test_ChangeColor_CIEXYZ|OSC 4 does not change the palette, so its query reports the default color
+ChangeColorTests.test_ChangeColor_CIEuvY|OSC 4 does not change the palette, so its query reports the default color
+ChangeColorTests.test_ChangeColor_CIExyY|OSC 4 does not change the palette, so its query reports the default color
+ChangeColorTests.test_ChangeColor_Hash12|OSC 4 does not change the palette, so its query reports the default color
+ChangeColorTests.test_ChangeColor_Hash3|OSC 4 does not change the palette, so its query reports the default color
+ChangeColorTests.test_ChangeColor_Hash6|OSC 4 does not change the palette, so its query reports the default color
+ChangeColorTests.test_ChangeColor_Hash9|OSC 4 does not change the palette, so its query reports the default color
+ChangeColorTests.test_ChangeColor_Multiple|OSC 4 does not change the palette, so its query reports the default color
+ChangeColorTests.test_ChangeColor_RGB|OSC 4 does not change the palette, so its query reports the default color
+ChangeColorTests.test_ChangeColor_RGBI|OSC 4 does not change the palette, so its query reports the default color
+ChangeColorTests.test_ChangeColor_TekHVC|OSC 4 does not change the palette, so its query reports the default color
+ChangeDynamicColorTests.test_ChangeDynamicColor_CIELab|OSC 10 and 11 answer queries but do not change the colors
+ChangeDynamicColorTests.test_ChangeDynamicColor_CIELuv|OSC 10 and 11 answer queries but do not change the colors
+ChangeDynamicColorTests.test_ChangeDynamicColor_CIEXYZ|OSC 10 and 11 answer queries but do not change the colors
+ChangeDynamicColorTests.test_ChangeDynamicColor_CIEuvY|OSC 10 and 11 answer queries but do not change the colors
+ChangeDynamicColorTests.test_ChangeDynamicColor_CIExyY|OSC 10 and 11 answer queries but do not change the colors
+ChangeDynamicColorTests.test_ChangeDynamicColor_Hash12|OSC 10 and 11 answer queries but do not change the colors
+ChangeDynamicColorTests.test_ChangeDynamicColor_Hash3|OSC 10 and 11 answer queries but do not change the colors
+ChangeDynamicColorTests.test_ChangeDynamicColor_Hash6|OSC 10 and 11 answer queries but do not change the colors
+ChangeDynamicColorTests.test_ChangeDynamicColor_Hash9|OSC 10 and 11 answer queries but do not change the colors
+ChangeDynamicColorTests.test_ChangeDynamicColor_Multiple|OSC 10 and 11 answer only the exact queries 10;? and 11;?, not a list
+ChangeDynamicColorTests.test_ChangeDynamicColor_RGB|OSC 10 and 11 answer queries but do not change the colors
+ChangeDynamicColorTests.test_ChangeDynamicColor_RGBI|OSC 10 and 11 answer queries but do not change the colors
+ChangeDynamicColorTests.test_ChangeDynamicColor_TekHVC|OSC 10 and 11 answer queries but do not change the colors
+ChangeSpecialColorTests.test_ChangeSpecialColor_CIELab|OSC 4 and 5 do not change the special colors, so the query reports the default
+ChangeSpecialColorTests.test_ChangeSpecialColor_CIELuv|OSC 4 and 5 do not change the special colors, so the query reports the default
+ChangeSpecialColorTests.test_ChangeSpecialColor_CIEXYZ|OSC 4 and 5 do not change the special colors, so the query reports the default
+ChangeSpecialColorTests.test_ChangeSpecialColor_CIEuvY|OSC 4 and 5 do not change the special colors, so the query reports the default
+ChangeSpecialColorTests.test_ChangeSpecialColor_CIExyY|OSC 4 and 5 do not change the special colors, so the query reports the default
+ChangeSpecialColorTests.test_ChangeSpecialColor_Hash12|OSC 4 and 5 do not change the special colors, so the query reports the default
+ChangeSpecialColorTests.test_ChangeSpecialColor_Hash3|OSC 4 and 5 do not change the special colors, so the query reports the default
+ChangeSpecialColorTests.test_ChangeSpecialColor_Hash6|OSC 4 and 5 do not change the special colors, so the query reports the default
+ChangeSpecialColorTests.test_ChangeSpecialColor_Hash9|OSC 4 and 5 do not change the special colors, so the query reports the default
+ChangeSpecialColorTests.test_ChangeSpecialColor_Multiple|OSC 4 and 5 do not change the special colors, so the query reports the default
+ChangeSpecialColorTests.test_ChangeSpecialColor_Multiple2|OSC 4 and 5 do not change the special colors, so the query reports the default
+ChangeSpecialColorTests.test_ChangeSpecialColor_RGB|OSC 4 and 5 do not change the special colors, so the query reports the default
+ChangeSpecialColorTests.test_ChangeSpecialColor_RGBI|OSC 4 and 5 do not change the special colors, so the query reports the default
+ChangeSpecialColorTests.test_ChangeSpecialColor_TekHVC|OSC 4 and 5 do not change the special colors, so the query reports the default
+DA2Tests.test_DA2_0|DA2 reports a VT220, 1, where upstream expects xterm's 64 at VT level 5
+DA2Tests.test_DA2_NoParameter|DA2 reports a VT220, 1, where upstream expects xterm's 64 at VT level 5
+DCHTests.test_DCH_DeleteAllWithMargins|libtsm has no left and right margins, DECSLRM
+DCHTests.test_DCH_DoesNothingOutsideLeftRightMargin|libtsm has no left and right margins, DECSLRM
+DCHTests.test_DCH_RespectsMargins|libtsm has no left and right margins, DECSLRM
+DECALNTests.test_DECALN_ClearsMargins|libtsm has no DECALN, the screen alignment pattern
+DECALNTests.test_DECALN_FillsScreen|libtsm has no DECALN, the screen alignment pattern
+DECBITests.test_DECBI_Basic|libtsm has no DECBI, back index
+DECBITests.test_DECBI_LeftOfMargin|libtsm has no DECBI, back index
+DECBITests.test_DECBI_Scrolls|libtsm has no DECBI, back index
+DECBITests.test_DECBI_WholeScreenScrolls|libtsm has no DECBI, back index
+DECCRATests.test_DECCRA_defaultValuesInDest|libtsm has no DECCRA, copy rectangular area
+DECCRATests.test_DECCRA_defaultValuesInSource|libtsm has no DECCRA, copy rectangular area
+DECCRATests.test_DECCRA_destinationPartiallyOffscreen|libtsm has no DECCRA, copy rectangular area
+DECCRATests.test_DECCRA_ignoresMargins|libtsm has no DECCRA, copy rectangular area
+DECCRATests.test_DECCRA_nonOverlappingSourceAndDest|libtsm has no DECCRA, copy rectangular area
+DECCRATests.test_DECCRA_overlappingSourceAndDest|libtsm has no DECCRA, copy rectangular area
+DECCRATests.test_DECCRA_overlyLargeSourceClippedToScreenSize|libtsm has no DECCRA, copy rectangular area
+DECCRATests.test_DECCRA_respectsOriginMode|libtsm has no DECCRA, copy rectangular area
+DECDCTests.test_DECDC_CursorWithinTopBottom|libtsm has no DECDC, delete column
+DECDCTests.test_DECDC_DefaultParam|libtsm has no DECDC, delete column
+DECDCTests.test_DECDC_DeleteAll|libtsm has no DECDC, delete column
+DECDCTests.test_DECDC_DeleteAllWithLeftRightMargins|libtsm has no DECDC, delete column
+DECDCTests.test_DECDC_DeleteWithLeftRightMargins|libtsm has no DECDC, delete column
+DECDCTests.test_DECDC_ExplicitParam|libtsm has no DECDC, delete column
+DECDSRTests.test_DECDSR_DECCKSR|libtsm answers CPR and DECXCPR among the DSR requests, not this one
+DECDSRTests.test_DECDSR_DECMSR|libtsm answers CPR and DECXCPR among the DSR requests, not this one
+DECDSRTests.test_DECDSR_DSRDECLocatorStatus|libtsm answers CPR and DECXCPR among the DSR requests, not this one
+DECDSRTests.test_DECDSR_DSRDataIntegrity|libtsm answers CPR and DECXCPR among the DSR requests, not this one
+DECDSRTests.test_DECDSR_DSRKeyboard|libtsm answers CPR and DECXCPR among the DSR requests, not this one
+DECDSRTests.test_DECDSR_DSRMultipleSessionStatus|libtsm answers CPR and DECXCPR among the DSR requests, not this one
+DECDSRTests.test_DECDSR_DSRPrinterPort|libtsm answers CPR and DECXCPR among the DSR requests, not this one
+DECDSRTests.test_DECDSR_DSRUDKLocked|libtsm answers CPR and DECXCPR among the DSR requests, not this one
+DECDSRTests.test_DECDSR_LocatorType|libtsm answers CPR and DECXCPR among the DSR requests, not this one
+DECERATests.test_DECERA_basic|libtsm has no DECERA, erase rectangular area
+DECERATests.test_DECERA_defaultArgs|libtsm has no DECERA, erase rectangular area
+DECERATests.test_DECERA_ignoresMargins|libtsm has no DECERA, erase rectangular area
+DECERATests.test_DECERA_overlyLargeSourceClippedToScreenSize|libtsm has no DECERA, erase rectangular area
+DECERATests.test_DECERA_respectsOriginMode|libtsm has no DECERA, erase rectangular area
+DECFITests.test_DECFI_Basic|libtsm has no DECFI, forward index
+DECFITests.test_DECFI_RightOfMargin|libtsm has no DECFI, forward index
+DECFITests.test_DECFI_Scrolls|libtsm has no DECFI, forward index
+DECFITests.test_DECFI_WholeScreenScrolls|libtsm has no DECFI, forward index
+DECFRATests.test_DECFRA_basic|libtsm has no DECFRA, fill rectangular area
+DECFRATests.test_DECFRA_defaultArgs|libtsm has no DECFRA, fill rectangular area
+DECFRATests.test_DECFRA_ignoresMargins|libtsm has no DECFRA, fill rectangular area
+DECFRATests.test_DECFRA_overlyLargeSourceClippedToScreenSize|libtsm has no DECFRA, fill rectangular area
+DECFRATests.test_DECFRA_respectsOriginMode|libtsm has no DECFRA, fill rectangular area
+DECICTests.test_DECIC_CursorWithinTopBottom|libtsm has no DECIC, insert column
+DECICTests.test_DECIC_DefaultParam|libtsm has no DECIC, insert column
+DECICTests.test_DECIC_ExplicitParam|libtsm has no DECIC, insert column
+DECICTests.test_DECIC_ScrollEntirelyOffRightEdge|libtsm has no DECIC, insert column
+DECICTests.test_DECIC_ScrollOffRightEdge|libtsm has no DECIC, insert column
+DECICTests.test_DECIC_ScrollOffRightMarginInScrollRegion|libtsm has no DECIC, insert column
+DECIDTests.test_DECID_8bit|upstream skip: term reads UTF-8, where bytes 0x80 to 0x9f are not C1 controls
+DECRQMTests.test_DECRQM_ANSI_EBM|DECRQM reports ANSI mode 19 not recognized, 0, where xterm reports permanently reset, 4
+DECRQMTests.test_DECRQM_ANSI_FEAM|DECRQM reports ANSI mode 13 not recognized, 0, where xterm reports permanently reset, 4
+DECRQMTests.test_DECRQM_ANSI_FETM|DECRQM reports ANSI mode 14 not recognized, 0, where xterm reports permanently reset, 4
+DECRQMTests.test_DECRQM_ANSI_GATM|DECRQM reports ANSI mode 1 not recognized, 0, where xterm reports permanently reset, 4
+DECRQMTests.test_DECRQM_ANSI_HEM|DECRQM reports ANSI mode 10 not recognized, 0, where xterm reports permanently reset, 4
+DECRQMTests.test_DECRQM_ANSI_MATM|DECRQM reports ANSI mode 15 not recognized, 0, where xterm reports permanently reset, 4
+DECRQMTests.test_DECRQM_ANSI_PUM|DECRQM reports ANSI mode 11 not recognized, 0, where xterm reports permanently reset, 4
+DECRQMTests.test_DECRQM_ANSI_SATM|DECRQM reports ANSI mode 17 not recognized, 0, where xterm reports permanently reset, 4
+DECRQMTests.test_DECRQM_ANSI_SRTM|DECRQM reports ANSI mode 5 not recognized, 0, where xterm reports permanently reset, 4
+DECRQMTests.test_DECRQM_ANSI_TSM|DECRQM reports ANSI mode 18 not recognized, 0, where xterm reports permanently reset, 4
+DECRQMTests.test_DECRQM_ANSI_TTM|DECRQM reports ANSI mode 16 not recognized, 0, where xterm reports permanently reset, 4
+DECRQMTests.test_DECRQM_ANSI_VEM|DECRQM reports ANSI mode 7 not recognized, 0, where xterm reports permanently reset, 4
+DECRQMTests.test_DECRQM_DEC_DECAAM|upstream skip: xterm does not support the DEC mode DECAAM
+DECRQMTests.test_DECRQM_DEC_DECARM|DECRQM reports DECARM settable, where upstream marks xterm's permanent reset a known bug, which fails when it passes
+DECRQMTests.test_DECRQM_DEC_DECARSM|upstream skip: xterm does not support the DEC mode DECARSM
+DECRQMTests.test_DECRQM_DEC_DECBKM|DECRQM reports DEC mode 67 not recognized, 0, where xterm reports reset, 2
+DECRQMTests.test_DECRQM_DEC_DECCANSM|upstream skip: xterm does not support the DEC mode DECCANSM
+DECRQMTests.test_DECRQM_DEC_DECCOLM|DECRQM reports DEC mode 3 permanently reset, 4, where xterm reports reset, 2
+DECRQMTests.test_DECRQM_DEC_DECCRTSM|upstream skip: xterm does not support the DEC mode DECCRTSM
+DECRQMTests.test_DECRQM_DEC_DECESKM|upstream skip: xterm does not support the DEC mode DECESKM
+DECRQMTests.test_DECRQM_DEC_DECHCCM|DECRQM reports DEC mode 60 not recognized, 0, where xterm reports permanently reset, 4
+DECRQMTests.test_DECRQM_DEC_DECHDPXM|upstream skip: xterm does not support the DEC mode DECHDPXM
+DECRQMTests.test_DECRQM_DEC_DECHEBM|DECRQM reports DEC mode 35 not recognized, 0, where xterm reports reset, 2
+DECRQMTests.test_DECRQM_DEC_DECHEM|upstream skip: xterm does not support the DEC mode DECHEM
+DECRQMTests.test_DECRQM_DEC_DECKBUM|upstream skip: xterm does not support the DEC mode DECKBUM
+DECRQMTests.test_DECRQM_DEC_DECKPM|upstream skip: xterm does not support the DEC mode DECKPM
+DECRQMTests.test_DECRQM_DEC_DECLRMM|DECRQM reports DEC mode 69 not recognized, 0, where xterm reports reset, 2
+DECRQMTests.test_DECRQM_DEC_DECMCM|upstream skip: xterm does not support the DEC mode DECMCM
+DECRQMTests.test_DECRQM_DEC_DECNAKB|upstream skip: xterm does not support the DEC mode DECNAKB
+DECRQMTests.test_DECRQM_DEC_DECNCSM|upstream skip: needs xterm's window operations
+DECRQMTests.test_DECRQM_DEC_DECNKM|DECRQM reports DEC mode 66 not recognized, 0, where xterm reports reset, 2
+DECRQMTests.test_DECRQM_DEC_DECNULM|upstream skip: xterm does not support the DEC mode DECNULM
+DECRQMTests.test_DECRQM_DEC_DECOSCNM|upstream skip: xterm does not support the DEC mode DECOSCNM
+DECRQMTests.test_DECRQM_DEC_DECPCCM|upstream skip: xterm does not support the DEC mode DECPCCM
+DECRQMTests.test_DECRQM_DEC_DECPEX|DECRQM reports DEC mode 19 permanently reset, 4, where xterm reports reset, 2
+DECRQMTests.test_DECRQM_DEC_DECPFF|DECRQM reports DEC mode 18 permanently reset, 4, where xterm reports reset, 2
+DECRQMTests.test_DECRQM_DEC_DECRLCM|upstream skip: xterm does not support the DEC mode DECRLCM
+DECRQMTests.test_DECRQM_DEC_DECRLM|upstream skip: xterm does not support the DEC mode DECRLM
+DECRQMTests.test_DECRQM_DEC_DECSCLM|DECRQM reports DEC mode 4 permanently reset, 4, where xterm reports reset, 2
+DECRQMTests.test_DECRQM_DEC_DECVCCM|upstream skip: xterm does not support the DEC mode DECVCCM
+DECRQMTests.test_DECRQM_DEC_DECXRLM|upstream skip: xterm does not support the DEC mode DECXRLM
+DECRQSSTests.test_DECRQSS_DECELF|upstream skip: xterm does not implement this DECRQSS setting
+DECRQSSTests.test_DECRQSS_DECLFKC|upstream skip: xterm does not implement this DECRQSS setting
+DECRQSSTests.test_DECRQSS_DECSACE|libtsm does not answer DECRQSS
+DECRQSSTests.test_DECRQSS_DECSASD|libtsm does not answer DECRQSS
+DECRQSSTests.test_DECRQSS_DECSCA|libtsm does not answer DECRQSS
+DECRQSSTests.test_DECRQSS_DECSCL|libtsm does not answer DECRQSS
+DECRQSSTests.test_DECRQSS_DECSCUSR|libtsm does not answer DECRQSS
+DECRQSSTests.test_DECRQSS_DECSLPP|libtsm does not answer DECRQSS
+DECRQSSTests.test_DECRQSS_DECSLRM|libtsm does not answer DECRQSS
+DECRQSSTests.test_DECRQSS_DECSMKR|upstream skip: xterm does not implement this DECRQSS setting
+DECRQSSTests.test_DECRQSS_DECSNLS|libtsm does not answer DECRQSS
+DECRQSSTests.test_DECRQSS_DECSSDT|libtsm does not answer DECRQSS
+DECRQSSTests.test_DECRQSS_DECSTBM|libtsm does not answer DECRQSS
+DECRQSSTests.test_DECRQSS_SGR|libtsm does not answer DECRQSS
+DECSCLTests.test_DECSCL_Level2DoesntSupportDECRQM|DECSCL does not change the conformance level, so DECRQM still answers at level 2
+DECSCLTests.test_DECSCL_Level4_SupportsDECSLRMDoesntSupportDECNCSM|term has no 132-column mode; DECCOLM keeps 80 columns
+DECSCLTests.test_DECSCL_RISOnChange|upstream skip: xterm always turns on 8-bit controls
+DECSEDTests.test_DECSED_0_Protection|DECSED erases as ED does, ignoring DECSCA protection
+DECSEDTests.test_DECSED_0_WithScrollRegion_Protection|DECSED erases as ED does, ignoring DECSCA protection
+DECSEDTests.test_DECSED_1_Protection|DECSED erases as ED does, ignoring DECSCA protection
+DECSEDTests.test_DECSED_1_WithScrollRegion_Protection|DECSED erases as ED does, ignoring DECSCA protection
+DECSEDTests.test_DECSED_2_Protection|DECSED erases as ED does, ignoring DECSCA protection
+DECSEDTests.test_DECSED_2_WithScrollRegion_Protection|DECSED erases as ED does, ignoring DECSCA protection
+DECSEDTests.test_DECSED_DECSCA_2|DECSED erases as ED does, ignoring DECSCA protection
+DECSEDTests.test_DECSED_Default_Protection|DECSED erases as ED does, ignoring DECSCA protection
+DECSEDTests.test_DECSED_doesNotRespectISOProtect|upstream marks xterm's DECSED a known bug, which fails when it passes: libtsm has no protection
+DECSELTests.test_DECSEL_0_Protection|DECSEL erases as EL does, ignoring DECSCA protection
+DECSELTests.test_DECSEL_1_Protection|DECSEL erases as EL does, ignoring DECSCA protection
+DECSELTests.test_DECSEL_2_Protection|DECSEL erases as EL does, ignoring DECSCA protection
+DECSELTests.test_DECSEL_Default_Protection|DECSEL erases as EL does, ignoring DECSCA protection
+DECSELTests.test_DECSEL_IgnoresScrollRegion_Protection|DECSEL erases as EL does, ignoring DECSCA protection
+DECSELTests.test_DECSEL_doesNotRespectISOProtect|upstream marks xterm's DECSEL a known bug, which fails when it passes: libtsm has no protection
+DECSERATests.test_DECSERA_basic|libtsm has no DECSERA, selective erase rectangular area
+DECSERATests.test_DECSERA_defaultArgs|libtsm has no DECSERA, selective erase rectangular area
+DECSERATests.test_DECSERA_doesNotRespectISOProtect|libtsm has no DECSERA, selective erase rectangular area
+DECSERATests.test_DECSERA_ignoresMargins|libtsm has no DECSERA, selective erase rectangular area
+DECSERATests.test_DECSERA_overlyLargeSourceClippedToScreenSize|libtsm has no DECSERA, selective erase rectangular area
+DECSERATests.test_DECSERA_respectsOriginMode|libtsm has no DECSERA, selective erase rectangular area
+DECSETTests.test_DECSET_Allow80To132|term has no 132-column mode; DECCOLM keeps 80 columns
+DECSETTests.test_DECSET_DECAWM_NoLineWrapOnTabWithLeftRightMargin|libtsm has no left and right margins, DECSLRM
+DECSETTests.test_DECSET_DECAWM_OffRespectsLeftRightMargin|libtsm has no left and right margins, DECSLRM
+DECSETTests.test_DECSET_DECAWM_OnRespectsLeftRightMargin|libtsm has no left and right margins, DECSLRM
+DECSETTests.test_DECSET_DECCOLM|term has no 132-column mode; DECCOLM keeps 80 columns
+DECSETTests.test_DECSET_DECLRMM|libtsm has no left and right margins, DECSLRM
+DECSETTests.test_DECSET_DECNCSM|upstream skip: needs xterm's window operations, and term has no 132-column mode
+DECSETTests.test_DECSET_DECOM|libtsm has no left and right margins, DECSLRM
+DECSETTests.test_DECSET_DECOM_DECRQCRA|libtsm has no left and right margins, DECSLRM
+DECSETTests.test_DECSET_MoreFix|libtsm does not implement xterm's mode 41, the fix for more(1)
+DECSETTests.test_DECSET_ReverseWraparoundLastCol_BS|libtsm has no reverse wraparound, mode 45
+DECSETTests.test_DECSET_ReverseWraparound_BS|libtsm has no reverse wraparound, mode 45
+DECSETTests.test_DECSET_ReverseWraparound_Multi|libtsm has no reverse wraparound, mode 45
+DECSETTiteInhibitTests.test_SaveRestoreCursor_AltVsMain|mode 1048 keeps one saved cursor for both screens
+DECSETTiteInhibitTests.test_SaveRestoreCursor_Reset|DECSTR does not clear the cursor that mode 1048 saved
+DECSETTiteInhibitTests.test_SaveRestoreCursor_ResetsOriginMode|libtsm has no left and right margins, DECSLRM
+DECSTBMTests.test_DECSTBM_CursorBelowRegionAtBottomTriesToScroll|a line feed on the last line, below the scrolling region, scrolls the region
+DECSTBMTests.test_DECSTBM_MovsCursorToOrigin|DECSTBM does not move the cursor to the home position
+DLTests.test_DL_ClearOutLeftRightAndTopBottomScrollRegion|libtsm has no left and right margins, DECSLRM
+DLTests.test_DL_InLeftRightAndTopBottomScrollRegion|libtsm has no left and right margins, DECSLRM
+DLTests.test_DL_InLeftRightScrollRegion|libtsm has no left and right margins, DECSLRM
+DLTests.test_DL_OutsideLeftRightScrollRegion|libtsm has no left and right margins, DECSLRM
+ECHTests.test_ECH_respectsISOProtection|libtsm has no ISO protection, SPA and EPA
+EDTests.test_ED_respectsISOProtection|libtsm has no ISO protection, SPA and EPA
+ELTests.test_EL_respectsISOProtection|libtsm has no ISO protection, SPA and EPA
+FFTests.test_FF_MovesDoesNotScrollOutsideLeftRight|libtsm has no left and right margins, DECSLRM
+HPATests.test_HPA_DefaultParams|libtsm has no HPA, CSI Pn `
+HPATests.test_HPA_DoesNotChangeRow|libtsm has no HPA, CSI Pn `
+HPATests.test_HPA_IgnoresOriginMode|libtsm has no HPA, CSI Pn `
+HPATests.test_HPA_StopsAtRightEdge|libtsm has no HPA, CSI Pn `
+HPRTests.test_HPR_DefaultParams|libtsm has no HPR, CSI Pn a
+HPRTests.test_HPR_DoesNotChangeRow|libtsm has no HPR, CSI Pn a
+HPRTests.test_HPR_IgnoresOriginMode|libtsm has no HPR, CSI Pn a
+HPRTests.test_HPR_StopsAtRightEdge|libtsm has no HPR, CSI Pn a
+HTSTests.test_HTS_8bit|upstream skip: term reads UTF-8, where bytes 0x80 to 0x9f are not C1 controls
+HVPTests.test_HVP_RespectsOriginMode|libtsm has no left and right margins, DECSLRM
+ICHTests.test_ICH_IsNoOpWhenCursorBeginsOutsideScrollRegion|libtsm has no left and right margins, DECSLRM
+ICHTests.test_ICH_ScrollOffRightMarginInScrollRegion|libtsm has no left and right margins, DECSLRM
+ILTests.test_IL_RespectsScrollRegion|libtsm has no left and right margins, DECSLRM
+ILTests.test_IL_RespectsScrollRegion_Over|libtsm has no left and right margins, DECSLRM
+INDTests.test_IND_8bit|upstream skip: term reads UTF-8, where bytes 0x80 to 0x9f are not C1 controls
+INDTests.test_IND_MovesDoesNotScrollOutsideLeftRight|libtsm has no left and right margins, DECSLRM
+LFTests.test_LF_MovesDoesNotScrollOutsideLeftRight|libtsm has no left and right margins, DECSLRM
+ManipulateSelectionDataTests.test_ManipulateSelectionData_default|upstream skip: needs xterm's allowWindowOps; term's host tests check OSC 52
+NELTests.test_NEL_8bit|upstream skip: term reads UTF-8, where bytes 0x80 to 0x9f are not C1 controls
+NELTests.test_NEL_MovesDoesNotScrollOutsideLeftRight|libtsm has no left and right margins, DECSLRM
+PMTests.test_PM_8bit|upstream skip: term reads UTF-8, where bytes 0x80 to 0x9f are not C1 controls
+REPTests.test_REP_DefaultParam|REP with no parameter repeats the character more than once
+REPTests.test_REP_RespectsLeftRightMargins|libtsm has no left and right margins, DECSLRM
+REPTests.test_REP_RespectsTopBottomMargins|REP does not wrap at the right edge as writing the characters would
+RISTests.test_RIS_ExitAltScreen|RIS erases only the screen in use and leaves the alternate screen's text
+RISTests.test_RIS_ResetDECCOLM|term has no 132-column mode; DECCOLM keeps 80 columns
+RISTests.test_RIS_ResetTitleMode|libtsm keeps no window title and does not answer CSI 21 t
+RITests.test_RI_8bit|upstream skip: term reads UTF-8, where bytes 0x80 to 0x9f are not C1 controls
+RITests.test_RI_MovesDoesNotScrollOutsideLeftRight|libtsm has no left and right margins, DECSLRM
+ResetColorTests.test_ResetColor_All|OSC 4 does not change the palette, so OSC 104 has nothing to reset
+ResetColorTests.test_ResetColor_Standard|OSC 4 does not change the palette, so OSC 104 has nothing to reset
+ResetSpecialColorTests.test_ResetSpecialColor_Dynamic|OSC 4 and 5 do not change the special colors, so OSC 105 has nothing to reset
+ResetSpecialColorTests.test_ResetSpecialColor_Multiple|OSC 4 and 5 do not change the special colors, so OSC 105 has nothing to reset
+ResetSpecialColorTests.test_ResetSpecialColor_Multiple2|OSC 4 and 5 do not change the special colors, so OSC 105 has nothing to reset
+ResetSpecialColorTests.test_ResetSpecialColor_Single|OSC 4 and 5 do not change the special colors, so OSC 105 has nothing to reset
+ResetSpecialColorTests.test_ResetSpecialColor_Single2|OSC 4 and 5 do not change the special colors, so OSC 105 has nothing to reset
+S8C1TTests.test_S8C1T_CSI|upstream skip: term reads UTF-8, where bytes 0x80 to 0x9f are not C1 controls
+S8C1TTests.test_S8C1T_DCS|upstream skip: term reads UTF-8, where bytes 0x80 to 0x9f are not C1 controls
+S8C1TTests.test_S8C1T_SPA_EPA|upstream skip: term reads UTF-8, where bytes 0x80 to 0x9f are not C1 controls
+SDTests.test_SD_BigScrollLeftRightAndTopBottomScrollRegion|libtsm has no left and right margins, DECSLRM
+SDTests.test_SD_LeftRightAndTopBottomScrollRegion|libtsm has no left and right margins, DECSLRM
+SDTests.test_SD_OutsideLeftRightScrollRegion|libtsm has no left and right margins, DECSLRM
+SDTests.test_SD_RespectsLeftRightScrollRegion|libtsm has no left and right margins, DECSLRM
+SMTests.test_SM_IRM_TruncatesAtRightMargin|libtsm has no left and right margins, DECSLRM
+SMTitleTests.test_SMTitle_SetHexQueryHex|upstream skip: needs xterm's window operations to set and report the title
+SMTitleTests.test_SMTitle_SetHexQueryUTF8|upstream skip: needs xterm's window operations to set and report the title
+SMTitleTests.test_SMTitle_SetUTF8QueryHex|upstream skip: needs xterm's window operations to set and report the title
+SMTitleTests.test_SMTitle_SetUTF8QueryUTF8|upstream skip: needs xterm's window operations to set and report the title
+SOSTests.test_SOS_8bit|upstream skip: term reads UTF-8, where bytes 0x80 to 0x9f are not C1 controls
+SUTests.test_SU_BigScrollLeftRightAndTopBottomScrollRegion|libtsm has no left and right margins, DECSLRM
+SUTests.test_SU_LeftRightAndTopBottomScrollRegion|libtsm has no left and right margins, DECSLRM
+SUTests.test_SU_OutsideLeftRightScrollRegion|libtsm has no left and right margins, DECSLRM
+SUTests.test_SU_RespectsLeftRightScrollRegion|libtsm has no left and right margins, DECSLRM
+VPRTests.test_VPR_IgnoresOriginMode|libtsm has no left and right margins, DECSLRM
+VTTests.test_VT_MovesDoesNotScrollOutsideLeftRight|libtsm has no left and right margins, DECSLRM
+XtermSaveTests.test_XtermSave_SaveResetState|libtsm has no XTSAVE and XTRESTORE, CSI ? s and CSI ? r
+XtermSaveTests.test_XtermSave_SaveSetState|libtsm has no XTSAVE and XTRESTORE, CSI ? s and CSI ? r
+XtermWinopsTests.test_XtermWinops_DECSLPP|CSI t does not resize the screen; the pty takes the screen's size
+XtermWinopsTests.test_XtermWinops_IconifyDeiconfiy|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_MoveToXY|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_MoveToXY_Defaults|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_PushIconAndWindow_PopIcon|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_PushIconAndWindow_PopIconAndWindow|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_PushIconAndWindow_PopWindow|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_PushIconThenWindowThenPopBoth|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_PushIcon_PopIcon|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_PushMultiplePopMultiple_Icon|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_PushMultiplePopMultiple_Window|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_PushWindow_PopWindow|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_ReportIconLabel|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_ReportWindowLabel|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_ResizePixels_BothParameters|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_ResizePixels_OmittedHeight|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_ResizePixels_OmittedWidth|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_ResizePixels_ZeroHeight|libtsm has no xterm window operations, so CSI t gets no report
+XtermWinopsTests.test_XtermWinops_ResizePixels_ZeroWidth|libtsm has no xterm window operations, so CSI t gets no report

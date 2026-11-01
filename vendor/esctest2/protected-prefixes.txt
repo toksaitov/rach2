@@ -1,5 +1,8 @@
 # Required queries and string handling cannot be accepted as known failures.
-APCTests.
+# The 8-bit forms of APC, PM and SOS are not among them: term reads its
+# input as UTF-8, in which bytes 0x80 to 0x9f are not C1 controls, and
+# upstream passes them in xterm only with UTF-8 off (disableWideChars).
+APCTests.test_APC_Basic
 DATests.
 DCSTests.
 DECDSRTests.test_DECDSR_DECXCPR
@@ -10,9 +13,9 @@ DECRQMTests.test_DECRQM_ANSI_SRM
 DECRQMTests.test_DECRQM_DEC_DECAWM
 DECRQMTests.test_DECRQM_DEC_DECCKM
 DECRQMTests.test_DECRQM_DEC_DECOM
-PMTests.
+PMTests.test_PM_Basic
 SCORCTests.
-SOSTests.
+SOSTests.test_SOS_Basic
 SaveRestoreCursorTests.
 # Keyboard protocols, Unicode, sync, focus, OSC 10/11 and OSC 52 have their
 # own host tests with no exceptions. Other DECRQM cases test DEC modes the

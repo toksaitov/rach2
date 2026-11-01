@@ -6,15 +6,15 @@ esctest2 checks terminal escape sequences against the behavior its upstream test
 
 `make esctest2` builds the controller, `term-host` and the packaged Python driver. `tests/run esctest2` prepares and runs the case of [`host.esctest2.json`](../../tests/cases/host.esctest2.json). It needs a POSIX host with Python 3. The controller executes the upstream driver directly, without a shell or another Python driver. The collection records the interpreter, driver archive, terminal, controller and policy files as prepared inputs.
 
-The milestone's end run includes `esctest2` with `style` and `host`. Its first failures join the end run's fixes; no results or accepted failures have been recorded yet. The release runs the registered suite too. The case runs on Linux and macOS. Its host requirement excludes Windows, which has no implementation of the POSIX pty used by `term -H`.
+The release runs the registered suite. Of the 567 upstream cases the driver selects, 268 pass on `term`; the other 299, 259 failures and 40 upstream skips, are the accepted failures of `known-failures.txt`. The case runs on Linux and macOS. Its host requirement excludes Windows, which has no implementation of the POSIX pty used by `term -H`.
 
 ## Results
 
 The controller requires a nonempty result file, one result per test name, a final count and a clean terminal exit. A failure retains its scratch directory and names it on stderr. `driver.log` has the upstream tracebacks, `results.tsv` the exact names and statuses, and `screen.sock` is removed after the children end. Upstream's driver can exit zero after failed tests, so its process status alone is insufficient.
 
-[`known-failures.txt`](known-failures.txt) is empty until the end run has made and fixed its findings. Each accepted entry then has the form `ClassTests.test_Name|concrete reason`, sorted by name. Names are exact, with no pattern characters, duplicates or empty reasons. After that first list, changes may only remove entries. Every entry must occur once and fail in each run: a passing, unused or renamed entry fails the suite. An upstream skip or upstream known bug requires its own entry too.
+[`known-failures.txt`](known-failures.txt) lists the accepted failures. Each entry has the form `ClassTests.test_Name|concrete reason`, sorted by name. Names are exact, with no pattern characters, duplicates or empty reasons. Changes may only remove entries. Every entry must occur once and fail in each run: a passing, unused or renamed entry fails the suite. An upstream skip or upstream known bug requires its own entry too.
 
-[`protected-prefixes.txt`](protected-prefixes.txt) prevents exceptions for the upstream cases of the terminal features promised by tasks 18, 19 and 21. The keyboard, Unicode, synchronized-output, focus and clipboard host tests have no exception mechanism. Other upstream cases exercise features beyond those promises; an accepted failure must say which operation is absent or differs. The list is established by review in the end run, never generated from failing output.
+[`protected-prefixes.txt`](protected-prefixes.txt) prevents exceptions for the upstream cases of the terminal features promised by tasks 18, 19 and 21. The keyboard, Unicode, synchronized-output, focus and clipboard host tests have no exception mechanism. Other upstream cases exercise features beyond those promises; an accepted failure must say which operation is absent or differs. The list was set by review, never generated from failing output. The 8-bit forms of APC, PM and SOS are left out of it: `term` reads its input as UTF-8, in which bytes 0x80 to 0x9f are not C1 controls, and upstream expects them to work in xterm only with UTF-8 off.
 
 ## Sources and license
 
