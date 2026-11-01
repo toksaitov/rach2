@@ -117,6 +117,18 @@ exits.
 A paste sends it with each LF as CR and with ESC left out, bracketed
 under mode 2004.
 .Pp
+The bell, BEL, sounds a short soft beep on the PC speaker through
+.Pa /dev/console ,
+or shows the screen in inverse colors, or both or neither, as the
+settings'
+.Va bell
+says; a program sets the beep's pitch and length with Linux's
+.Ql "ESC [ 10 ; N ]"
+and
+.Ql "ESC [ 11 ; N ]" ;
+see
+.Xr term.conf 5 .
+.Pp
 .Xr showkey 1
 is run on the kernel console, since under
 .Nm
@@ -144,7 +156,7 @@ The packed font.
 .It Pa /fb
 The framebuffer.
 .It Pa /dev/console
-The keyboard.
+The keyboard and the speaker.
 .El
 .Sh EXIT STATUS
 .Nm

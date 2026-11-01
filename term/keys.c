@@ -34,6 +34,8 @@
 #define TK_KDGKBDIACRUC 0x4BFA
 #define TK_KDGKBLED     0x4B64
 #define TK_KDSKBLED     0x4B65
+#define TK_KDMKTONE     0x4B30  /* ms in the high 16 bits, divisor in the low */
+#define TK_PIT_CLOCK    1193182 /* the clock the divisor divides, in Hz */
 
 struct tk_kbentry {
     unsigned char kb_table;
@@ -890,6 +892,24 @@ void term_keys_reset(struct term_keys *k)
     keymap_state_init(&k->state, leds);
     k->state.locks = locks;
     locks_in(k);
+}
+
+int term_keys_tone(struct term_keys *k, unsigned hz, unsigned ms)
+{
+    unsigned long divisor;
+
+    if (k->fd < 0)
+        return -ENOTTY;
+    if (hz == 0 || ms == 0)
+        return 0;
+    divisor = TK_PIT_CLOCK / hz;
+    if (divisor == 0 || divisor > 0xFFFF)
+        return 0;
+    if (ms > 0xFFFF)
+        ms = 0xFFFF;
+    if (ioctl(k->fd, TK_KDMKTONE, (unsigned long)ms << 16 | divisor) < 0)
+        return -errno;
+    return 0;
 }
 
 void term_keys_close(struct term_keys *k)

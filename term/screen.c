@@ -31,12 +31,20 @@ static void screen_write(struct tsm_vte *vte, const char *u8, size_t len, void *
     send_bytes(data, u8, len);
 }
 
-/** libtsm's bell callback: the loop shows the bell and clears the flag. */
+/**
+ * libtsm's bell callback: the loop rings the bell and clears the flag. The
+ * tone is taken now, since a sequence later in the same output may change
+ * it.
+ */
 static void screen_bell(struct tsm_vte *vte, void *data)
 {
     struct term_screen *s = data;
+    int hz;
+    int ms;
 
-    (void)vte;
+    tsm_vte_get_bell_tone(vte, &hz, &ms);
+    s->bell_hz = hz < 0 ? TERM_BELL_HZ : (unsigned)hz;
+    s->bell_ms = ms < 0 ? TERM_BELL_MS : (unsigned)ms;
     s->bell = true;
 }
 
@@ -123,6 +131,8 @@ int term_screen_init(struct term_screen *s, struct term_pty *pty, unsigned cols,
     s->vte = NULL;
     s->pty = pty;
     s->bell = false;
+    s->bell_hz = TERM_BELL_HZ;
+    s->bell_ms = TERM_BELL_MS;
     s->clipboard = NULL;
     s->clipboard_len = 0;
     s->tap = NULL;

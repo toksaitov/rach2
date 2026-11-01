@@ -1,0 +1,104 @@
+Take the Linux console's bell sequences and report the tone they set
+
+The Linux console sets its bell's pitch with CSI 10 ; n ], in Hz, and its
+length with CSI 11 ; n ], in milliseconds, which setterm writes; a length
+of 2000 or more is 0, which silences the bell, and either sequence with no
+n sets the default again. do_csi's ] case took only CSI 16 ; n ].
+
+Keep both values, -1 for the default, which a reset sets again, and add
+tsm_vte_get_bell_tone() to read them, so that the program that sounds the
+bell from the bell callback can sound it at the pitch and length asked
+for. The default is the caller's to choose. A ] sequence with a private
+marker is ignored.
+
+--- a/src/tsm/libtsm.h
++++ b/src/tsm/libtsm.h
+@@ -495,6 +495,21 @@
+ void tsm_vte_set_led_cb(struct tsm_vte *vte, tsm_vte_led_cb led_cb, void *led_data);
+ 
+ /**
++ * @brief Read the bell's tone that the Linux console's sequences set.
++ *
++ * CSI 10 ; n ] sets the bell's pitch to n Hz and CSI 11 ; n ] its length to
++ * n milliseconds, where 2000 or more is 0, silent, as Linux's console takes
++ * them. Either with no n, and a reset, return it to the default, which is
++ * the caller's to choose. Sounding the bell is the caller's too, from the
++ * bell callback.
++ *
++ * @param vte The vte object
++ * @param hz Where the pitch in Hz is stored, or -1 for the default
++ * @param ms Where the length in milliseconds is stored, or -1 for the default
++ */
++void tsm_vte_get_bell_tone(struct tsm_vte *vte, int *hz, int *ms);
++
++/**
+  * @brief Set color palette to one of the predefined palette on the vte object.
+  *
+  * Current supported palette names are
+--- a/src/tsm/libtsm.sym
++++ b/src/tsm/libtsm.sym
+@@ -174,4 +174,5 @@
+ 	tsm_vte_set_clipboard_cb;
+ 	tsm_vte_handle_key;
+ 	tsm_vte_get_key_flags;
++	tsm_vte_get_bell_tone;
+ } LIBTSM_4_8;
+--- a/src/tsm/tsm-vte.c
++++ b/src/tsm/tsm-vte.c
+@@ -216,6 +216,8 @@
+ 
+ 	tsm_vte_bell_cb bell_cb;
+ 	void *bell_data;
++	int bell_hz;		/* CSI 10 ; n ]'s pitch, or -1 for the default */
++	int bell_ms;		/* CSI 11 ; n ]'s length, or -1 for the default */
+ 
+ 	tsm_vte_led_cb led_cb;
+ 	void *led_data;
+@@ -645,6 +647,13 @@
+ 
+ 	vte->bell_cb = bell_cb;
+ 	vte->bell_data = bell_data;
++}
++
++SHL_EXPORT
++void tsm_vte_get_bell_tone(struct tsm_vte *vte, int *hz, int *ms)
++{
++	*hz = vte ? vte->bell_hz : -1;
++	*ms = vte ? vte->bell_ms : -1;
+ }
+ 
+ SHL_EXPORT
+@@ -939,6 +948,8 @@
+ 	vte->focus_events = false;
+ 	vte->sync_hold = false;
+ 	vte->alt_cursor_saved = false;
++	vte->bell_hz = -1;
++	vte->bell_ms = -1;
+ 
+ 	memcpy(&vte->cattr, &vte->def_attr, sizeof(vte->cattr));
+ 	to_rgb(vte, &vte->cattr);
+@@ -2492,10 +2503,21 @@
+ 		else if (vte->csi_argv[0] <= 0)
+ 			restore_state(vte);
+ 		break;
+-	case ']': /* Cursor blinking rate */
+-		/* This behavior is similar to agetty */
+-		if (vte->csi_argv[0] == 16 && vte->csi_argc >= 2)
++	case ']': /* The Linux console's private settings */
++		if (vte->csi_flags & CSI_PRIVATE)
++			break;
++		/* CSI 10 ; n ] is the bell's pitch in Hz and CSI 11 ; n ] its
++		 * length in milliseconds; a length of 2000 or more is 0, silent,
++		 * and either with no n is the default again, as on Linux. */
++		if (vte->csi_argv[0] == 10) {
++			vte->bell_hz = vte->csi_argc >= 2 ? vte->csi_argv[1] : -1;
++		} else if (vte->csi_argv[0] == 11) {
++			num = vte->csi_argc >= 2 ? vte->csi_argv[1] : -1;
++			vte->bell_ms = num >= 2000 ? 0 : num;
++		} else if (vte->csi_argv[0] == 16 && vte->csi_argc >= 2) {
++			/* This behavior is similar to agetty */
+ 			tsm_screen_set_cursor_blinking_rate_ms(vte->con, vte->csi_argv[1]);
++		}
+ 		break;
+ 	default:
+ 		llog_debug(vte, "unhandled CSI sequence %c", data);
