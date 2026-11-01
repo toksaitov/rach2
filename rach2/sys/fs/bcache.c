@@ -151,16 +151,20 @@ uint32_t bcache_buckets(void)
     return bhash_size;
 }
 
-/** The bucket of the index for block `blk` of `dev`: the block's bits,
- * the high ones folded onto the low, and the device's address mixed in by a
- * multiplication, so that the same block of two partitions falls apart. */
+/** The bucket of the index for block `blk` of `dev`. The block's number,
+ * its high bits folded onto the low, gives consecutive blocks consecutive
+ * buckets, which no two of them share; the device moves its blocks to a
+ * place of their own, the top bits of its address's product with the golden
+ * ratio's fraction (Knuth's multiplicative hashing), which every bit of the
+ * address reaches, so that devices whose records lie a power of two apart
+ * are not put on the same buckets. */
 static uint32_t bucket_of(const block_device_t *dev, uint64_t blk)
 {
     uint32_t lo = (uint32_t)blk;
-    uint32_t h = lo ^ (lo >> bhash_shift) ^ (uint32_t)(blk >> 32);
+    uint32_t at = lo ^ (lo >> bhash_shift) ^ (uint32_t)(blk >> 32);
+    uint32_t place = ((uint32_t)((uintptr_t)dev >> 4) * 0x9E3779B1u) >> (32 - bhash_shift);
 
-    h ^= (uint32_t)((uintptr_t)dev >> 4) * 0x9E3779B1u;
-    return h & (bhash_size - 1u);
+    return (at + place) & (bhash_size - 1u);
 }
 
 /** Give the index a bucket for each buffer the limit allows, once the
