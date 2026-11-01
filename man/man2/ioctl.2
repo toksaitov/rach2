@@ -432,7 +432,8 @@ sample rate in samples per second, format (0 unsigned 8-bit, 1 signed
 16-bit little-endian), and channels (1 mono, 2 stereo).
 Pass them to the active driver's start operation.
 HDA accepts a nonzero input rate through 384000 Hz and resamples queued
-writes to a codec-supported signed 16-bit stereo format.
+writes to a codec-supported signed 16-bit stereo format, keeping a stereo
+input's two channels.
 It selects the closest supported rate at or below the request, or the
 lowest supported rate when all are higher.
 A codec with no usable PCM rate or sample width is refused.
@@ -682,6 +683,12 @@ is invalid or was opened with
 .It Bq Er EBUSY
 .Dv BLKRRPART
 found another descriptor open on the disk or a claim on its partitions.
+.Dv AUDIO_START
+or
+.Dv AUDIO_WRITE
+on HDA while
+.Pa /dev/dsp
+is open.
 A framebuffer request belongs to another process, or a request other
 than
 .Dv FB_MODE_13H
