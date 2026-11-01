@@ -29,8 +29,13 @@
  * the default one's, or with no secret written the modified EUI-64 of the
  * station address, as Linux does; with `use_tempaddr` above 0 a temporary
  * address with a random identifier as well. Every address with a lifetime
- * is deprecated and then removed as its lifetimes end. Redirects are
- * counted and ignored.
+ * is deprecated and then removed as its lifetimes end. The RDNSS and DNSSL
+ * options of RFC 8106 go to netlink's RTNLGRP_ND_USEROPT
+ * (`netlink_nd_useropt`), whose listener sets the resolver. A card whose
+ * link goes down forgets its neighbours, its routers' routes and settings
+ * and its SLAAC and temporary addresses, as one taken down does, and when
+ * the link comes back detects its addresses and solicits routers again.
+ * Redirects are counted and ignored.
  *
  * Everything here runs with interrupts off: from the receive path, from
  * the tick (`nd6_tick`), or under net_lock in a system call. The random

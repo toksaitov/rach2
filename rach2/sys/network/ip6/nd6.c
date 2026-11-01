@@ -20,6 +20,7 @@
 #include "../core/byteorder.h"
 #include "../ethernet/ethernet.h"
 #include "../driver/netdev.h"
+#include "../socket/netlink.h"
 
 /* The low half of the tick count, enough for the intervals here, which
  * are all far shorter than its cycle. */
@@ -60,6 +61,8 @@
 #define OPT_PREFIX 3
 #define OPT_MTU    5
 #define OPT_NONCE  14
+#define OPT_RDNSS  25
+#define OPT_DNSSL  31
 
 /* The flags of an advertisement: from a router, solicited, override. */
 #define NA_ROUTER    0x80
@@ -70,8 +73,10 @@
 #define PI_ONLINK 0x80
 #define PI_AUTO   0x40
 
-/* The most prefix options one advertisement is read for. */
+/* The most prefix options, and RDNSS and DNSSL options, one advertisement
+ * is read for. */
 #define MAX_PREFIXES 8
+#define MAX_USEROPTS 8
 
 /* The nonces of the last duplicate detections a card sent, which tell its
  * own solicitation looped back from another node's (RFC 7527). */
@@ -284,7 +289,7 @@ int nd6_conf_get(int which, int key, int32_t *value)
     return 0;
 }
 
-static void forget_if(struct netdev *nd, int addresses);
+static void forget_if(struct netdev *nd, int stop);
 static void solicit_routers(struct netdev *nd, struct nd6_if *ni);
 
 /**
@@ -1010,11 +1015,15 @@ struct nd6_opts {
     const uint8_t *slla, *tlla, *mtu, *nonce;
     const uint8_t *prefix[MAX_PREFIXES];
     int nprefix;
+    const uint8_t *useropt[MAX_USEROPTS];
+    int nuseropt;
 };
 
 /** Read the options in the `len` bytes at `p` into `o`: 1, or 0 for an
  * option of length 0 or past the end, which makes the message invalid
- * (RFC 4861, 4.6). */
+ * (RFC 4861, 4.6). An RDNSS option shorter than one server, or of a length
+ * that is not one server's multiple, or a DNSSL option with no domain, is
+ * ignored, as RFC 8106, 5, asks. */
 static int parse_opts(const uint8_t *p, uint32_t len, struct nd6_opts *o)
 {
     k_memset(o, 0, sizeof(*o));
@@ -1035,6 +1044,10 @@ static int parse_opts(const uint8_t *p, uint32_t len, struct nd6_opts *o)
             o->nonce = p + 2;
         } else if (p[0] == OPT_PREFIX && olen == 32 && o->nprefix < MAX_PREFIXES) {
             o->prefix[o->nprefix++] = p;
+        } else if (((p[0] == OPT_RDNSS && p[1] >= 3 && (p[1] & 1)) ||
+                    (p[0] == OPT_DNSSL && p[1] >= 2)) &&
+                   o->nuseropt < MAX_USEROPTS) {
+            o->useropt[o->nuseropt++] = p;
         }
         p += olen;
         len -= olen;
@@ -1179,7 +1192,9 @@ static void rx_na(struct netdev *nd, struct nd6_if *ni, const uint8_t *dst, cons
  * A router advertisement (RFC 4861, 6.3.4): its sender becomes a default
  * route for its router lifetime, its hop limit, timers and MTU are taken,
  * its on-link prefixes become routes, and its autonomous /64 prefixes make
- * addresses (`slaac`). It ends the card's solicitations.
+ * addresses (`slaac`). It ends the card's solicitations. Its RDNSS and
+ * DNSSL options go to netlink for a program to take the name servers from,
+ * on an interface that ignores advertisements too, as Linux sends them.
  */
 static void rx_ra(struct netdev *nd, struct nd6_if *ni, const uint8_t *src, const uint8_t *msg,
                   uint16_t len)
@@ -1192,6 +1207,9 @@ static void rx_ra(struct netdev *nd, struct nd6_if *ni, const uint8_t *src, cons
     if (len < 16 || !ip6_is_linklocal(src) || !parse_opts(msg + 16, len - 16u, &o)) {
         net_mib6.icmp6_in_errors++;
         return;
+    }
+    for (i = 0; i < o.nuseropt; i++) {
+        netlink_nd_useropt(nd, src, o.useropt[i], (uint32_t)o.useropt[i][1] * 8u);
     }
     if (!accepts_ra(ni)) {
         return;
@@ -1327,10 +1345,11 @@ void nd6_if_up(struct netdev *nd)
 
 /**
  * Forget what `nd` learned from its link: its neighbours and the datagrams
- * waiting for them, its routers' routes and settings, and with `addresses`
- * the addresses they made. The caller holds no lock, or net_lock.
+ * waiting for them, its routers' routes and settings, and the addresses
+ * they made; with `stop`, discovery stops until `nd6_if_up` starts it
+ * again. The caller holds no lock, or net_lock.
  */
-static void forget_if(struct netdev *nd, int addresses)
+static void forget_if(struct netdev *nd, int stop)
 {
     struct nd6_if *ni = if_of(nd);
     uint32_t lock = net_lock();
@@ -1348,11 +1367,11 @@ static void forget_if(struct netdev *nd, int addresses)
     }
     route6_forget(nd, ROUTE6_PROTO_RA);
     if (ni) {
-        ni->started = 0;
+        ni->started = (uint8_t)(ni->started && !stop);
         ni->rs_left = 0;
         if_defaults(ni);
     }
-    for (i = nd->naddr6 - 1; addresses && i >= 0; i--) {
+    for (i = nd->naddr6 - 1; i >= 0; i--) {
         if (i < nd->naddr6 && nd->addr6[i].proto == NETDEV_PROTO_KERNEL_RA) {
             netconf_del_address6(nd, nd->addr6[i].addr);
         }
@@ -1471,16 +1490,22 @@ static void dad_timers(struct netdev *nd)
     }
 }
 
-/** A card's timers: a link that came back runs its detections and
- * solicitations again, then the tentative addresses, the router
- * solicitations and the lifetimes. */
+/**
+ * A card's timers: a link that went down forgets what it learned from its
+ * routers, as a card taken down does, since the link that comes back may be
+ * another network, and one that came back detects its addresses and
+ * solicits routers again, as Linux does on a carrier change; then the
+ * tentative addresses, the router solicitations and the lifetimes.
+ */
 static void if_timers(struct netdev *nd, struct nd6_if *ni)
 {
     uint8_t ll[IP6_ADDR_LEN];
     int running = netdev_running(nd);
 
-    if (running && !ni->running) {
-        redetect(nd, 0);
+    if (!running && ni->running) {
+        forget_if(nd, 0);
+    } else if (running && !ni->running) {
+        redetect(nd, 1);
         solicit_routers(nd, ni);
     }
     ni->running = (uint8_t)running;

@@ -68,6 +68,15 @@ With
 .Va use_tempaddr
 above 0 a temporary address of RFC 8981, with a random identifier, is made
 beside it.
+The advertisement's RDNSS and DNSSL options, the name servers and search
+domains of RFC 8106, go to
+.Xr netlink 7 Ns 's
+.Dv RTNLGRP_ND_USEROPT
+for a program to set the resolver from.
+A card whose link goes down forgets these addresses, the routers and their
+routes and settings, and its neighbours, as a card taken down does, since
+the link may come back on another network; when it comes back the card
+detects its addresses again and solicits routers.
 .It
 A program adds an address with
 .Ql ifconfig eth0 add ADDR/LEN
