@@ -25,6 +25,13 @@ static uint16_t converter_format[128];
 static uint32_t configurations[128];
 static uint16_t out_amp[128];
 static uint32_t sense[128]; /* each pin's Get Pin Sense word */
+/* Each node's input amplifiers as the last verbs set them, by index and
+ * channel (0 left, 1 right): the payload's low byte, mute and gain, with
+ * 0x100 once one is set; each pin's widget control and each converter's
+ * stream and channel. */
+static uint16_t in_amp[128][16][2];
+static uint8_t pin_ctl[128];
+static uint8_t channel[128];
 static unsigned conn_reads, verbs, bad_offsets, sense_triggers;
 static int codec_silent;  /* the codec takes commands and never answers */
 static int clock_stopped; /* the wall clock does not advance */
@@ -93,6 +100,16 @@ static uint32_t model_verb(uint32_t command)
         converter_format[nid] = (uint16_t)verb;
     if ((verb & 0xF0000) == HDA_VERB_SET_AMP_GAIN && (verb & 0x8000))
         out_amp[nid] = (uint16_t)verb;
+    if ((verb & 0xF0000) == HDA_VERB_SET_AMP_GAIN && (verb & 0x4000)) {
+        if (verb & 0x2000)
+            in_amp[nid][(verb >> 8) & 15][0] = (uint16_t)(0x100 | (verb & 0xFF));
+        if (verb & 0x1000)
+            in_amp[nid][(verb >> 8) & 15][1] = (uint16_t)(0x100 | (verb & 0xFF));
+    }
+    if ((verb & 0xFFF00) == HDA_VERB_SET_PIN_CTRL)
+        pin_ctl[nid] = (uint8_t)offset;
+    if ((verb & 0xFFF00) == HDA_VERB_SET_CHANNEL)
+        channel[nid] = (uint8_t)offset;
     if (verb == 0xA0000)
         return converter_format[nid];
     return 0;
@@ -150,7 +167,15 @@ static void reset_model(void)
     k_memset(configurations, 0, sizeof(configurations));
     k_memset(out_amp, 0, sizeof(out_amp));
     k_memset(sense, 0, sizeof(sense));
+    k_memset(in_amp, 0, sizeof(in_amp));
+    k_memset(pin_ctl, 0, sizeof(pin_ctl));
+    k_memset(channel, 0, sizeof(channel));
     conn_reads = verbs = bad_offsets = sense_triggers = 0;
+    cap_stream = NULL;
+    cap_running = false;
+    hda_subsystem = 0;
+    num_input_streams = 0;
+    input_stream_index = 0;
     codec_silent = clock_stopped = dma_model = 0;
     playing = stream_started = false;
     user_callback = NULL;
@@ -520,6 +545,14 @@ static void row_report(void)
                        "pin-caps 0x00000010 config 0x00100000 conn 2\n") != NULL,
           "a pin without presence detect has no sense");
     check(strstr(text, "\nadcs 3\n") != NULL, "report lists the adcs");
+    check(strstr(text, "input adc 3 index 0 mid 0 index 0 pin 4 int-mic 0 jack-mic 4 inv-dmic 0 "
+                       "level 0 pin-ctl 0x00\n") != NULL,
+          "report exposes the input path");
+    check(strstr(text, "caps adc 3 source 1 pcm 0x00030FFF formats 0x00000001\n") != NULL,
+          "report exposes the adc's capabilities");
+    check(strstr(text, "capture running 0 requested 0 rate 0 format 0x0000 period 0 periods 0 "
+                       "frames 0 overruns 0 lpib 0\n") != NULL,
+          "report exposes the idle input stream");
     hda_stop();
     check(strstr(text, "playing 1") != NULL, "open snapshot survives stop");
     check(audio_proc_text(small, (int)sizeof(small)) > (int)sizeof(small) &&
@@ -935,6 +968,372 @@ static void row_shutdown(void)
     check(mmio_reads == reads && mmio_writes == writes, "repeated shutdown does no MMIO");
 }
 
+/**
+ * Give the model the Lenovo G50-70's codec, as dev-log/68-sound/lenovo.md
+ * records it: the Conexant CX20751/2 with widgets 16 to 28, its two DACs,
+ * the ADCs 19 and 20, the output mixer 21, the headphone pin 22, the speaker
+ * 23, the unconnected pin 24, the jack mic 25 and the internal mic 26.
+ */
+static void model_lenovo(void)
+{
+    static const uint8_t pins[] = {22, 23, 24, 25, 26};
+    static const uint32_t pin_caps[] = {0x1C, 0x10, 0x1124, 0x1124, 0x20};
+    static const uint32_t configs[] = {0x04211040, 0x94170110, 0x40F001F0, 0x04A11030, 0x94A70120};
+    static const uint32_t wcaps[] = {0x00400581, 0x00400501, 0x0040048B, 0x0040048B, 0x0040048B};
+    int i;
+
+    params[0][HDA_PARAM_VENDOR_ID] = 0x14F1510F;
+    params[1][HDA_PARAM_NODE_COUNT] = (16u << 16) | 13;
+    params[1][HDA_PARAM_GPIO_COUNT] = 0x40000003;
+    for (i = 16; i <= 17; i++) {
+        params[i][HDA_PARAM_AUDIO_CAPS] = 0x00000C1D;
+        params[i][HDA_PARAM_OUTPUT_AMP] = 0x80034A4A;
+        params[i][0x0A] = 0x20060;
+        params[i][0x0B] = 1;
+    }
+    params[18][HDA_PARAM_AUDIO_CAPS] = 0x0070000C;
+    for (i = 19; i <= 20; i++) {
+        params[i][HDA_PARAM_AUDIO_CAPS] = 0x00100D1B;
+        params[i][HDA_PARAM_INPUT_AMP] = 0x8003504A;
+        params[i][HDA_PARAM_CONN_LIST] = 3;
+        params[i][0x0A] = 0x20060;
+        params[i][0x0B] = 1;
+    }
+    connections[19][0] = 24;
+    connections[19][1] = 26;
+    connections[19][2] = 25;
+    connections[20][0] = 25;
+    connections[20][1] = 26;
+    connections[20][2] = 21;
+    params[21][HDA_PARAM_AUDIO_CAPS] = 0x0020050B;
+    params[21][HDA_PARAM_INPUT_AMP] = 0x80034A4A;
+    params[21][HDA_PARAM_CONN_LIST] = 2;
+    connections[21][0] = 16;
+    connections[21][1] = 17;
+    for (i = 0; i < 5; i++) {
+        params[pins[i]][HDA_PARAM_AUDIO_CAPS] = wcaps[i];
+        params[pins[i]][HDA_PARAM_PIN_CAPS] = pin_caps[i];
+        configurations[pins[i]] = configs[i];
+        if (pins[i] >= 24)
+            params[pins[i]][HDA_PARAM_INPUT_AMP] = 0x002F0300;
+        if (pins[i] <= 24) {
+            params[pins[i]][HDA_PARAM_CONN_LIST] = 2;
+            connections[pins[i]][0] = 16;
+            connections[pins[i]][1] = 17;
+        }
+    }
+    params[27][HDA_PARAM_AUDIO_CAPS] = params[28][HDA_PARAM_AUDIO_CAPS] = 0x00F00000;
+}
+
+/* What the model's reader was handed: the transfers, their bytes, the
+ * period calls, and the first bytes of the last transfer. */
+static unsigned got_transfers, got_periods;
+static uint32_t got_bytes;
+static uint8_t got_first[8];
+
+/** The model reader's `transfer`: count it and keep its first bytes. */
+static void got_transfer(audio_stream_t *s, uint8_t *buf, size_t size)
+{
+    (void)s;
+    got_transfers++;
+    got_bytes += (uint32_t)size;
+    k_memcpy(got_first, buf, size < sizeof(got_first) ? size : sizeof(got_first));
+}
+
+/** The model reader's `period`: count it. */
+static void got_period(audio_stream_t *s)
+{
+    (void)s;
+    got_periods++;
+}
+
+/** Open and set up `s` for capture at `rate`, `format` and `channels`, with
+ * a period of `bytes`; the model has one input stream before its output. */
+static int open_capture(audio_stream_t *s, uint32_t rate, audio_format_t format, int channels,
+                        uint32_t bytes)
+{
+    int rc;
+
+    k_memset(s, 0, sizeof(*s));
+    s->dir = AUDIO_CAPTURE;
+    s->rate = rate;
+    s->format = format;
+    s->channels = channels;
+    s->period_bytes = bytes;
+    s->periods = 4;
+    s->transfer = got_transfer;
+    s->period = got_period;
+    got_transfers = got_periods = 0;
+    got_bytes = 0;
+    num_input_streams = 1;
+    input_stream_index = 0;
+    output_stream_index = 1;
+    dma_checked = true;
+    dma_posbuf_use = false;
+    rc = hda_driver.stream_open(s);
+    return rc != 0 ? rc : hda_driver.stream_setup(s);
+}
+
+/** Put the input stream's position at `pos` bytes of its DMA buffer. */
+static void move_input(uint32_t pos)
+{
+    hda_test_write(0x80 + HDA_SD_LPIB, pos, 32);
+}
+
+/**
+ * On the G50-70's codec discovery records ADC 19 reading the internal mic 26
+ * through its connection 1, which reaches the jack mic 25 too, and a start
+ * selects it, gives the ADC the input stream's tag and format, unmutes its
+ * amplifier on that connection at 0 dB, step 74, mutes its others, and
+ * enables the pin's input with no VREF, which the pin lacks. With the
+ * machine's subsystem the inverted right channel is muted, and the left is
+ * recorded in both.
+ */
+static void row_capture_path(void)
+{
+    audio_stream_t s;
+    const hda_input_report_t *in = &hda_get_report()->input;
+
+    row = "capture-path";
+    reset_model();
+    model_lenovo();
+    check(hda_find_output(), "enumeration succeeds");
+    check(in->adc == 19 && in->index == 1 && in->pin == 26 && in->mid == 0,
+          "adc 19 reads the internal mic on connection 1");
+    check(in->int_mic == 26 && in->jack_mic == 25, "the internal and jack mics are found");
+    check(in->level == 74 && !in->inv_dmic, "0 dB is the level; no quirk without the subsystem");
+    check(in->caps.nid == 19 && in->caps.source == 19 && in->caps.pcm == 0x20060,
+          "the adc's own capabilities");
+    check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0, "capture set up");
+    check(hda_driver.stream_start(&s) == 0, "capture starts");
+    check(selected[19] == 1 && channel[19] == (HDA_CAPTURE_TAG << 4),
+          "the adc selects the mic and takes the input stream's tag");
+    check(converter_format[19] == 0x0011 && hda_test_read(0x80 + HDA_SD_FORMAT, 16) == 0x0011,
+          "the adc and the stream record 48 kHz 16-bit stereo");
+    check(in_amp[19][1][0] == (0x100 | 74) && in_amp[19][1][1] == (0x100 | 74),
+          "the mic's connection is unmuted at 0 dB");
+    check(in_amp[19][0][0] == 0x180 && in_amp[19][2][1] == 0x180,
+          "the other connections are muted");
+    check(pin_ctl[26] == 0x20 && in->pin_ctl == 0x20,
+          "the internal mic's input is on, with no vref");
+    check(in_amp[26][0][0] == 0x100, "the pin's boost is at 0 dB");
+    hda_driver.stream_close(&s);
+    check(channel[19] == 0, "a close takes the stream's tag from the adc");
+
+    row = "capture-inverted-mic";
+    reset_model();
+    model_lenovo();
+    hda_subsystem = 0x17AA3978;
+    check(hda_find_output() && in->inv_dmic, "the g50-70's internal mic is inverted");
+    check(open_capture(&s, 44100, AUDIO_S16LE, 2, 4096) == 0, "capture set up");
+    check(hda_driver.stream_start(&s) == 0, "capture starts");
+    check(in_amp[19][1][0] == (0x100 | 74) && in_amp[19][1][1] == (0x100 | 0x80 | 74),
+          "the right channel is muted and the left is not");
+    {
+        static const uint8_t frame[] = {0x34, 0x12, 0xCC, 0xED};
+
+        k_memcpy(cap_buffer, frame, sizeof(frame));
+        hda_capture_convert(&s, cap_buffer);
+        check(cap_out[0] == 0x34 && cap_out[1] == 0x12 && cap_out[2] == 0x34 && cap_out[3] == 0x12,
+              "the left is recorded in both channels");
+    }
+    hda_driver.stream_close(&s);
+
+    row = "capture-jack-mic";
+    reset_model();
+    model_adc();
+    check(hda_find_output(), "enumeration succeeds");
+    check(in->adc == 3 && in->pin == 4 && in->jack_mic == 4 && !in->int_mic, "the jack mic alone");
+    check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0 && hda_driver.stream_start(&s) == 0,
+          "capture starts");
+    check(pin_ctl[4] == 0x24, "the jack mic is biased at vref 80%");
+    hda_driver.stream_close(&s);
+
+    row = "capture-selector";
+    reset_model();
+    model_adc();
+    params[3][HDA_PARAM_CONN_LIST] = 2;
+    connections[3][0] = 6;
+    connections[3][1] = 5;
+    params[5][HDA_PARAM_AUDIO_CAPS] = (HDA_WIDGET_AUDIO_SEL << 20) | (1u << 8);
+    params[5][HDA_PARAM_CONN_LIST] = 2;
+    connections[5][0] = 7;
+    connections[5][1] = 4;
+    check(hda_find_output(), "enumeration succeeds");
+    check(in->adc == 3 && in->index == 1 && in->mid == 5 && in->mid_index == 1,
+          "the adc reaches the mic through a selector");
+    check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0 && hda_driver.stream_start(&s) == 0,
+          "capture starts");
+    check(selected[3] == 1 && selected[5] == 1, "both connections are selected");
+    hda_driver.stream_close(&s);
+
+    row = "capture-none";
+    reset_model();
+    check(hda_find_output() && hda_get_report()->input.adc == 0, "a codec with no adc");
+    num_input_streams = 1;
+    s.dir = AUDIO_CAPTURE;
+    check(hda_driver.stream_open(&s) == -ENODEV, "has no capture");
+}
+
+/**
+ * The input stream alone: stream_setup grants the ADC's rate and a period
+ * whole in DMA descriptors; a start programs the descriptor; each service
+ * hands over the periods the position has passed, converted to the reader's
+ * format, and counts their frames; the position moves within a period; a
+ * second open is refused; and after a stop nothing more is handed over.
+ */
+static void row_capture_stream(void)
+{
+    audio_stream_t s, t;
+    const hda_input_report_t *in = &hda_get_report()->input;
+    uint32_t i;
+
+    row = "capture-stream";
+    reset_model();
+    model_adc();
+    params[1][0x0A] = 0x20000 | (1u << 2) | (1u << 6); /* 16000 and 48000 Hz */
+    check(hda_find_output(), "enumeration succeeds");
+    check(open_capture(&s, 8000, AUDIO_U8, 1, 1000) == 0, "capture set up");
+    check(s.rate == 16000, "the nearest rate the adc has is granted");
+    check(s.period_bytes == 992 && s.device_periods == 16,
+          "992 frames, 31 descriptors' 128 bytes in stereo, in 16 periods");
+    k_memset(&t, 0, sizeof(t));
+    t.dir = AUDIO_CAPTURE;
+    check(hda_driver.stream_open(&t) == -EBUSY, "a second capture is refused");
+    clock_stopped = 1;
+    check(hda_driver.stream_start(&s) == 0, "capture starts");
+    check(hda_test_read(0x80 + HDA_SD_CBL, 32) == 3968 * 16 &&
+              hda_test_read(0x80 + HDA_SD_LVI, 16) == 15,
+          "sixteen periods of 3968 bytes");
+    check((hda_test_read(0x80 + HDA_SD_CTL, 32) & 0xF00006) ==
+              (0x200000 | HDA_SD_CTL_RUN | HDA_SD_CTL_IOCE),
+          "the stream runs with its tag and its interrupt");
+    check(cap_bdl[1].length == 3968 && cap_bdl[1].ioc == 1, "each period interrupts");
+    check(in->running && in->rate == 16000 && in->requested_rate == 8000 && in->format == 0x0211,
+          "the report has the stream");
+    for (i = 0; i < 3968 * 16; i += 4) {
+        cap_buffer[i + 1] = 0x40;
+        cap_buffer[i + 3] = 0x20;
+    }
+    hda_tick();
+    check(got_transfers == 0, "nothing is handed over before a period ends");
+    move_input(3968 * 3 + 400);
+    clock_value += 3 * 24000 * 62;
+    hda_tick();
+    check(got_transfers == 3 && got_periods == 3 && got_bytes == 3 * 992,
+          "three periods are handed over");
+    check(got_first[0] == 0xB0, "u8 mono is the mean of the channels, 0x3000, offset");
+    check(in->frames == 3 * 992 && in->overruns == 0, "the frames are counted");
+    check(hda_driver.stream_position(&s) == 3 * 992 + 100, "the position moves within a period");
+    hda_irq_handler(NULL);
+    check(got_transfers == 3, "an interrupt for no stream hands over nothing");
+    move_input(3968 * 5);
+    clock_value += 2 * 24000 * 62;
+    hda_test_write(HDA_INTSTS, 1, 32);
+    hda_irq_handler(NULL);
+    check(got_transfers == 5 && in->frames == 5 * 992, "the input stream's interrupt serves it");
+    hda_driver.stream_stop(&s);
+    check(!in->running && !(hda_test_read(0x80 + HDA_SD_CTL, 8) & HDA_SD_CTL_RUN),
+          "a stop halts the stream");
+    move_input(3968 * 9);
+    hda_tick();
+    check(got_transfers == 5, "nothing is handed over after a stop");
+    check(hda_driver.stream_position(&s) == 5 * 992, "the position stays where it stopped");
+    hda_driver.stream_close(&s);
+    check(hda_driver.stream_open(&t) == 0, "a close gives the stream back");
+    hda_driver.stream_close(&t);
+    clock_stopped = 0;
+}
+
+/**
+ * Capture runs beside playback: each has its own descriptor and tag, the
+ * interrupt serves both, and a stop of one leaves the other running.
+ */
+static void row_capture_duplex(void)
+{
+    audio_stream_t s;
+    const hda_input_report_t *in = &hda_get_report()->input;
+
+    row = "capture-duplex";
+    reset_model();
+    model_adc();
+    check(hda_find_output(), "enumeration succeeds");
+    check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0, "capture set up");
+    clock_stopped = 1;
+    check(hda_driver.stream_start(&s) == 0, "capture starts");
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0, "playback starts beside it");
+    check((hda_test_read(0xA0 + HDA_SD_CTL, 32) >> 20) == 1 &&
+              (hda_test_read(0x80 + HDA_SD_CTL, 32) >> 20) == HDA_CAPTURE_TAG,
+          "each stream has its own tag");
+    check(channel[2] == 0x10 && channel[3] == (HDA_CAPTURE_TAG << 4), "and so has each converter");
+    move_input(4096 * 2);
+    clock_value += 2 * 24000 * 21;
+    hda_test_write(HDA_INTSTS, 3, 32);
+    hda_irq_handler(NULL);
+    check(got_transfers == 2 && got_bytes == 2 * 4096, "the shared interrupt serves capture");
+    hda_stop();
+    check(in->running && (hda_test_read(0x80 + HDA_SD_CTL, 8) & HDA_SD_CTL_RUN),
+          "a stop of playback leaves capture running");
+    move_input(4096 * 4);
+    clock_value += 2 * 24000 * 21;
+    hda_tick();
+    check(got_transfers == 4, "capture goes on alone");
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0, "playback starts again");
+    hda_driver.stream_stop(&s);
+    check(playing && (hda_test_read(0xA0 + HDA_SD_CTL, 8) & HDA_SD_CTL_RUN),
+          "a stop of capture leaves playback running");
+    hda_stop();
+    hda_driver.stream_close(&s);
+    clock_stopped = 0;
+}
+
+/**
+ * A service late by a whole revolution of the DMA buffer counts an overrun,
+ * found by the wall clock where the position cannot show it, and hands over
+ * the newest revolution: every period but the one the device writes. So
+ * does one that finds the device come round to the period it hands over
+ * next. One on time counts none.
+ */
+static void row_capture_overrun(void)
+{
+    audio_stream_t s;
+    const hda_input_report_t *in = &hda_get_report()->input;
+
+    row = "capture-overrun";
+    reset_model();
+    model_adc();
+    check(hda_find_output(), "enumeration succeeds");
+    /* 1024 frames a period at 48 kHz, 21.3 ms; sixteen periods, 341 ms. */
+    check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0 && s.device_periods == 16,
+          "capture set up");
+    clock_stopped = 1;
+    check(hda_driver.stream_start(&s) == 0, "capture starts");
+    move_input(4096 * 2 + 100);
+    clock_value += 24000 * 44;
+    hda_tick();
+    check(got_transfers == 2 && in->overruns == 0, "a service on time");
+    move_input(4096 * 3);
+    clock_value += 24000 * (21 + 341);
+    hda_tick();
+    check(in->overruns == 1, "a revolution the position cannot show is an overrun");
+    check(got_transfers == 2 + 15 && got_periods == 2 + 15,
+          "every period but the one being written is handed over");
+    check(hda_driver.stream_position(&s) == 3 * 1024 + 16 * 1024,
+          "the position counts the revolution");
+    move_input(4096 * 3 + 2000);
+    clock_value += 24000 * 10;
+    hda_tick();
+    check(got_transfers == 17 && in->overruns == 1, "a service within a period hands over none");
+    /* 64036 bytes on, 16009 frames: 334 ms, less than a revolution. */
+    move_input(4096 * 3 + 500);
+    clock_value += 24000 * 334;
+    hda_tick();
+    check(in->overruns == 2, "the device come round to the next period is an overrun");
+    check(got_transfers == 17 + 15, "and the newest revolution is handed over");
+    hda_driver.stream_close(&s);
+    clock_stopped = 0;
+}
+
 /** Run codec and controller rows: 0 when every check passes, 1 otherwise. */
 int main(void)
 {
@@ -954,6 +1353,10 @@ int main(void)
     row_writer_stall();
     row_missed();
     row_shutdown();
+    row_capture_path();
+    row_capture_stream();
+    row_capture_duplex();
+    row_capture_overrun();
     printf("hda-test: result: %s\n", failures ? "fail" : "pass");
     return failures ? 1 : 0;
 }
