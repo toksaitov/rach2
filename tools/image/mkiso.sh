@@ -21,8 +21,8 @@
 #
 # Usage: ./mkiso.sh IMAGE
 #
-# IMAGE is test, os-simple, os-real, rach2-metal, rach2-recovery or
-# rach2-recovery-with-key.
+# IMAGE is test, os-simple, os-real, rach2-metal, rach2-term, rach2-recovery
+# or rach2-recovery-with-key.
 #
 # Requires xorriso. Build the kernel and the image first (make). The kernel,
 # the image and the ISO are those of the architecture in RACH2_ARCH
@@ -34,9 +34,9 @@ set -e
 IMAGE="$1"
 # Allowlist the image name before it reaches the destructive rm -rf below.
 case "$IMAGE" in
-    test|os-simple|os-real|rach2-metal|rach2-recovery|rach2-recovery-with-key) ;;
+    test|os-simple|os-real|rach2-metal|rach2-term|rach2-recovery|rach2-recovery-with-key) ;;
     *)
-        echo "usage: mkiso.sh <test|os-simple|os-real|rach2-metal|rach2-recovery[-with-key]>" >&2
+        echo "usage: mkiso.sh <test|os-simple|os-real|rach2-metal|rach2-term|rach2-recovery[-with-key]>" >&2
         exit 2
         ;;
 esac
@@ -54,12 +54,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 . "$REPO/mk/arch.sh"
 
-# The metal profile has the kernel that cannot write a disk, and no other
+# The metal profile and the term stick's, which is the metal system with
+# `term` and Doom, have the kernel that cannot write a disk, and no other
 # profile does. This is the stick that goes into a laptop whose SSD has
 # somebody's Windows, so the kernel's disk policy is checked here: the
 # ordinary kernel staged under the metal name would make a stick that can
 # write that SSD.
-if [ "$IMAGE" = rach2-metal ]; then
+case "$IMAGE" in
+    rach2-metal|rach2-term) METAL=yes ;;
+    *)                      METAL=no ;;
+esac
+if [ "$METAL" = yes ]; then
     KERNEL="$ARCH_BUILD/rach2-metal/kernel"
     POLICY=read-only
 elif [ "$RECOVERY" = yes ]; then
@@ -77,7 +82,7 @@ ISO_OUT="$ARCH_BUILD/images/$IMAGE.iso"
 ISODIR="$ARCH_BUILD/iso/$IMAGE"
 
 if [ ! -f "$KERNEL" ]; then
-    if [ "$IMAGE" = rach2-metal ]; then
+    if [ "$METAL" = yes ]; then
         echo "mkiso: metal kernel not built ($KERNEL); run 'make rach2-metal' first" >&2
     else
         echo "mkiso: kernel not built ($KERNEL); run 'make' first" >&2
@@ -153,6 +158,24 @@ menuentry \"Start Rach2 with no network\" {
 }
 "
     METAL_DEFAULT_ARGS="$METAL_NET"
+elif [ "$IMAGE" = rach2-term ]; then
+    # The term stick starts `term` as the console session (init(8)); its other
+    # entries take an address from DHCP, and give the kernel console's login
+    # in place of `term`, which is how a `term` that fails is told from the
+    # rest of the boot.
+    METAL_ENTRIES="menuentry \"Start Rach2 in term, and ask the network for an address\" {
+    \$rach2_load /boot/kernel rach2.ip=none rach2.netconsole rach2.console=term
+    \$rach2_module /boot/rach2-term.krffs
+    boot
+}
+
+menuentry \"Start Rach2 on the kernel console\" {
+    \$rach2_load /boot/kernel $METAL_NET
+    \$rach2_module /boot/rach2-term.krffs
+    boot
+}
+"
+    METAL_DEFAULT_ARGS="$METAL_NET rach2.console=term"
 elif [ "$RECOVERY" = yes ]; then
     # The stick takes an address from DHCP and answers SSH on it, which is
     # how reflash is reached from a host beside the machine; the disk it

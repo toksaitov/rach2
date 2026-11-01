@@ -1,0 +1,144 @@
+# rach2-term.manifest: the RAM root of the term stick, the metal system with
+# `term`, its font and Doom, which the Lenovo G50-70 boots from a USB stick
+# with `term` as its console (rach2.console=term).
+#
+# It is rach2-metal.manifest with four more files, and a line without a
+# comment here has the reason that manifest gives it. The kernel mounts its
+# root before USB starts, so a stick boot runs from this image alone, and the
+# image carries what a person checks at the screen: `term` and the packed
+# Unifont it draws with, Doom and the WAD. They take some 8.5 MiB, so the
+# image is 16 MiB where the metal one is 8; the kernel maps a module from
+# wherever GRUB loads it (rach2/sys/mm/Readme.md).
+# The WAD is a file and not an optional one: a stick without it has no game
+# to check, so the build stops instead.
+#
+# What the metal system lacks this lacks too: the compiler, /src, bootctl and
+# the GNU programs, Claude Code, Codex and Gemini CLI among them, which run
+# only from the GNU root on the internal disk.
+
+dir 0755 /bin
+file 0755 /bin/audiotest build/utils/audiotest
+file 0755 /bin/busybox build/vendor/busybox/busybox
+file 0755 /bin/sh build/vendor/busybox/busybox
+
+# The three applets that need the set-id bit come from BusyBox's second
+# build, which has only login, passwd and su, as in os-real.
+file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
+file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
+file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
+
+file 0755 /bin/ping build/utils/ping
+# dmesg, which prints the kernel's log from /dev/bootlog
+# (krffs/dmesg.script).
+file 0755 /bin/dmesg krffs/dmesg.script
+file 0755 /bin/dropbearmulti build/vendor/dropbear/dropbearmulti
+# Attaches a file to a loop device so a file system in a file can be mounted
+# (utils/Readme.md); it writes /dev/loop-control, which is root's.
+file 0755 /bin/loopctl build/utils/loopctl
+# Reads and sets the volume through /dev/mixer (mixer(1)); acpid's volume
+# action runs it for the volume keys.
+file 0755 /bin/mixer build/utils/mixer
+# Doom (ports/doom/Readme.md), which reads its game data from
+# /demo/doom1.wad.
+file 0755 /bin/doom build/ports/doom/doom
+
+dir 0755 /sbin
+file 0755 /sbin/init build/utils/sbin/init-metal
+# The periodic sync init keeps running: sleep thirty seconds, sync(2), for ever.
+file 0755 /bin/update build/utils/update
+
+dir 0755 /etc
+dir 0700 /etc/dropbear
+text 0644 /etc/motd Rach2 on real hardware (term stick). No disk, no compiler: this machine lives in RAM. Run doom to play.\n
+text 0644 /etc/hostname rach2\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\n
+file 0600 /etc/shadow krffs/shadow
+text 0644 /etc/group root:x:0:\ntest:x:1000:\n
+text 0644 /etc/shells /bin/sh\n
+dir 0755 /etc/rach2
+text 0644 /etc/rach2/limits # The limits every session starts with: a name, the soft value and the\n# hard one; unlimited for none. Root may raise them.\nnproc 256 512\nnofile 1024 1024\nas unlimited unlimited\n
+# The resolvers the image starts with, which a DHCP lease replaces
+# (krffs/udhcpc-default.script). They are public ones and not the gateway,
+# since a router need not answer queries itself. utils/resolv.c reads the
+# first `nameserver` line, and musl's resolver up to three.
+text 0644 /etc/resolv.conf nameserver 1.1.1.1\nnameserver 1.0.0.1\n
+text 0644 /etc/hosts 127.0.0.1 localhost\n
+text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\ncd "$HOME"\n
+
+# The network configuration `ifup -a` reads, in the file where Debian keeps
+# it and BusyBox's ifup reads it. `dhcp` brings the machine up on whatever
+# network it is plugged into; a `static` stanza in the same file would give
+# it a fixed address instead.
+dir 0755 /etc/network
+text 0644 /etc/network/interfaces auto eth0\niface eth0 inet dhcp\n
+
+# The four directories `ifup` runs through run-parts. It treats a failure of any
+# of them as a failed method, and run-parts on a directory that is not there is
+# a failure, so they exist and are empty.
+dir 0755 /etc/network/if-pre-up.d
+dir 0755 /etc/network/if-up.d
+dir 0755 /etc/network/if-down.d
+dir 0755 /etc/network/if-post-down.d
+
+# BusyBox's acpid, which init starts on an image that has /etc/acpid.conf
+# (init(8)). /etc/acpi.map names the keys acpid acts on, the power button,
+# the volume keys and the brightness keys, and replaces acpid's built-in map
+# whole; acpid.conf names each key's action, a file under /etc/acpi that
+# acpid runs with no argument. KRFFS has no links, so a script is staged
+# under each name it is run by, and takes its direction from that name.
+file 0644 /etc/acpi.map krffs/acpi/acpi.map
+file 0644 /etc/acpid.conf krffs/acpi/acpid.conf
+dir 0755 /etc/acpi
+file 0755 /etc/acpi/power krffs/acpi/power.script
+dir 0755 /etc/acpi/volume
+file 0755 /etc/acpi/volume/up krffs/acpi/volume.script
+file 0755 /etc/acpi/volume/down krffs/acpi/volume.script
+file 0755 /etc/acpi/volume/mute krffs/acpi/volume.script
+dir 0755 /etc/acpi/brightness
+file 0755 /etc/acpi/brightness/up krffs/acpi/brightness.script
+file 0755 /etc/acpi/brightness/down krffs/acpi/brightness.script
+
+dir 0755 /var
+# Where init puts what its services print, once the console is the login's.
+dir 0755 /var/log
+# Where `ifup` records the interfaces it has brought up. It writes the file
+# through a temporary beside it, so the directory must exist.
+dir 0755 /var/run
+
+dir 0755 /usr
+dir 0755 /usr/share
+dir 0755 /usr/share/udhcpc
+# The script udhcpc runs when a lease arrives or ends, which turns the lease
+# into an address, a route and a resolver.
+file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
+# The keymaps, which loadkeys finds by name, as in `loadkeys -u kg alt-shift`
+# (vendor/keymaps/Readme.md).
+tree 0644 /usr/share/kbd/keymaps/xkb vendor/keymaps/xkb
+# term, the terminal on the whole framebuffer, which init starts as the
+# console session on a boot with rach2.console=term (init(8)), and the
+# packed Unifont it draws with (vendor/unifont/Readme.md).
+file 0755 /bin/term build/term/term
+dir 0755 /usr/share/term
+file 0644 /usr/share/term/unifont.font build/unifont/unifont.font
+
+dir 0755 /root
+dir 0700 /root/.ssh
+file 0600 /root/.ssh/authorized_keys krffs/authorized_keys
+
+dir 1777 /tmp
+dir 0755 /home
+dir 0700:1000:1000 /home/test
+dir 0700:1000:1000 /home/test/.ssh
+file 0600:1000:1000 /home/test/.ssh/authorized_keys krffs/test_authorized_keys
+
+# kbd console keyboard tools (vendor/kbd/Readme.md).
+file 0755 /bin/loadkeys build/vendor/kbd/loadkeys
+file 0755 /bin/dumpkeys build/vendor/kbd/dumpkeys
+file 0755 /bin/setleds build/vendor/kbd/setleds
+file 0755 /bin/kbdrate build/vendor/kbd/kbdrate
+file 0755 /bin/showkey build/vendor/kbd/showkey
+file 0755 /bin/kbd_mode build/vendor/kbd/kbd_mode
+
+# Doom's game data, which ports/doom/fetch_wad.sh checks in the tree.
+dir 0755 /demo
+file 0644 /demo/doom1.wad ports/doom/doom1.wad

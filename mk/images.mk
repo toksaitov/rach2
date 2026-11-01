@@ -40,6 +40,9 @@ $(MKEXFATFIXTURE): tests/host/mkexfatfixture.c tests/host/exfat_upcase.inc tools
 $(IMAGES_DIR)/rach2-metal.iso: $(METAL_KERNEL) $(METAL_IMAGE) tools/image/mkiso.sh $(GRUB_FILES) \
                                $(BINFIND) $(SHA256TOOL)
 	RACH2_ARCH=$(ARCH) sh tools/image/mkiso.sh rach2-metal
+$(IMAGES_DIR)/rach2-term.iso: $(METAL_KERNEL) $(TERM_IMAGE) tools/image/mkiso.sh $(GRUB_FILES) \
+                              $(BINFIND) $(SHA256TOOL)
+	RACH2_ARCH=$(ARCH) sh tools/image/mkiso.sh rach2-term
 $(RECOVERY_ISO): $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) tools/image/mkiso.sh tools/image/keyname.sh \
                  $(GRUB_FILES) $(BINFIND) $(SHA256TOOL)
 	@sh tools/image/keyname.sh $@
@@ -51,6 +54,16 @@ STICK_IMAGE = $(IMAGES_DIR)/rach2-stick.img
 rach2-stick-image: $(STICK_IMAGE)
 $(STICK_IMAGE): $(IMAGES_DIR)/rach2-metal.iso tools/image/mkstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
 	sh tools/image/mkstick.sh $(IMAGES_DIR)/rach2-metal.iso $@ $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
+
+# The term stick: the same layout around the term ISO, whose system is the
+# metal one with term as its console, its font, Doom and the WAD in RAM. Its
+# SHA-256 is written beside it, for the check after it is written to a stick.
+TERM_STICK = $(IMAGES_DIR)/rach2-term-stick.img
+rach2-term-stick: $(TERM_STICK)
+$(TERM_STICK): $(IMAGES_DIR)/rach2-term.iso tools/image/mkstick.sh $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK) \
+               $(SHA256TOOL)
+	sh tools/image/mkstick.sh $(IMAGES_DIR)/rach2-term.iso $@ $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK)
+	cd $(dir $@) && $(abspath $(SHA256TOOL)) $(notdir $@) > $(notdir $@).sha256
 
 # The install stick (tools/image/mkinstallstick.sh): the recovery ISO followed
 # by an exFAT volume with the sealed disk, its manifest, the root update image
@@ -64,4 +77,4 @@ $(INSTALL_STICK): $(RECOVERY_ISO) $(SEALED_DISK) $(SEALED_EXT2) mk/images.mk too
 	@sh tools/image/keyname.sh $@
 	sh tools/image/mkinstallstick.sh $(RECOVERY_ISO) $(SEALED_DISK) $@ \
 	    $(MKEXFATFIXTURE) $(MKMBR) $(STICKCHECK) $(SEALED_EXT2) 256
-.PHONY: rach2-stick-image rach2-install-stick
+.PHONY: rach2-stick-image rach2-term-stick rach2-install-stick

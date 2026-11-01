@@ -151,6 +151,7 @@ OS_SIMPLE_IMAGE = $(IMAGES_DIR)/os-simple.krffs
 OS_REAL_IMAGE   = $(IMAGES_DIR)/os-real.krffs
 OS_REAL_EXT2    = $(IMAGES_DIR)/os-real.ext2
 METAL_IMAGE     = $(IMAGES_DIR)/rach2-metal.krffs
+TERM_IMAGE      = $(IMAGES_DIR)/rach2-term.krffs
 OS_REAL_DISK    = $(IMAGES_DIR)/os-real.disk
 OS_REAL_GRUB_DISK = $(IMAGES_DIR)/os-real-grub$(RECOVERY_KEY_TAG).disk
 ETUDE_DISK      = $(IMAGES_DIR)/etude-disk.disk
@@ -181,7 +182,7 @@ STEP_INPUTS     = $(foreach f,$(filter-out gnu-in-copy,$^),$(if $(filter %.stamp
 
 .PHONY: all clean distclean images musl-programs test preflight check-sources \
         test-image os-simple-image os-real-image os-real-disk \
-        rach2-metal rach2-metal-image \
+        rach2-metal rach2-metal-image rach2-term-image \
         rach2-sealed-disk rach2-recovery rach2-recovery-image \
         isos test-iso os-simple-iso os-real-iso rach2-metal-iso \
         check-busybox check-setid check-dropbearmulti check-libc check-tcc \
@@ -443,6 +444,7 @@ MANIFEST_DEPS_os_simple := $(shell $(MANIFEST_DEPS) krffs/manifests/os-simple.ma
 MANIFEST_DEPS_os_real := $(shell $(MANIFEST_DEPS) krffs/manifests/os-real.manifest)
 MANIFEST_DEPS_os_real_gnu := $(shell $(MANIFEST_DEPS) krffs/manifests/os-real-gnu.manifest)
 MANIFEST_DEPS_rach2_metal := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-metal.manifest)
+MANIFEST_DEPS_rach2_term := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-term.manifest)
 MANIFEST_DEPS_rach2_recovery := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-recovery.manifest)
 MANIFEST_DEPS_rach2_metal_disk := $(shell $(MANIFEST_DEPS) krffs/manifests/rach2-metal-disk.manifest)
 MANIFEST_DEPS_grub_test := $(shell $(MANIFEST_DEPS) krffs/manifests/grub-test.manifest)
@@ -459,7 +461,7 @@ MANIFEST_PARTS_os_real = kbd libtsm utils check-busybox check-tcc check-pdpmake 
                          check-dropbearmulti check-e2fsck tools/etude/guest ports/doom $(MAN_ALL)
 MANIFEST_INPUTS = $(sort $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) \
     $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_os_real_gnu) $(MANIFEST_DEPS_rach2_metal) \
-    $(MANIFEST_DEPS_rach2_recovery) $(MANIFEST_DEPS_rach2_metal_disk) $(MANIFEST_DEPS_grub_test) \
+    $(MANIFEST_DEPS_rach2_term) $(MANIFEST_DEPS_rach2_recovery) $(MANIFEST_DEPS_rach2_metal_disk) $(MANIFEST_DEPS_grub_test) \
     $(MANIFEST_DEPS_etude_disk) $(MANIFEST_DEPS_shutdown_test) $(MANIFEST_DEPS_disk_test) \
     $(MANIFEST_DEPS_persist_test) $(MANIFEST_DEPS_doom_test))
 STAGED_IN_MANIFESTS = $(filter $(ARCH_MUSL)/% $(TCC_STAGE)/%,$(MANIFEST_INPUTS))
@@ -1139,10 +1141,12 @@ mancheck-prepared: $(MANCHECK)
 mancheck mancheck-prepared:
 	$(MANCHECK) man rach2/sys/arch/i686/sysnr.h rach2/sys/arch/i686/systab.c:rach2/sys/syscall_net.c $(BUSYBOX_STAGE)/applet_tables-main.h \
 	    utils/programs.mk krffs/manifests/rach2-recovery.manifest krffs/manifests/os-simple.manifest \
-	    krffs/manifests/os-real.manifest krffs/manifests/rach2-metal-disk.manifest
+	    krffs/manifests/os-real.manifest krffs/manifests/rach2-metal-disk.manifest \
+	    krffs/manifests/rach2-term.manifest
 	$(MANCHECK) man rach2/sys/arch/x86_64/sysnr.h rach2/sys/arch/x86_64/systab.c $(BUSYBOX_STAGE)/applet_tables-main.h \
 	    utils/programs.mk krffs/manifests/rach2-recovery.manifest krffs/manifests/os-simple.manifest \
-	    krffs/manifests/os-real.manifest krffs/manifests/rach2-metal-disk.manifest
+	    krffs/manifests/os-real.manifest krffs/manifests/rach2-metal-disk.manifest \
+	    krffs/manifests/rach2-term.manifest
 # `make syscalls` writes rach2/syscalls.md, the calls both tables register
 # with their numbers and pages, or the file SYSCALLS_MD names.
 SYSCALLS_MD = rach2/syscalls.md
@@ -1392,6 +1396,17 @@ $(METAL_IMAGE): Makefile $(DEMO_CREDS) krffs/manifests/rach2-metal.manifest $(MA
 	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $@ 8
 
 rach2-metal-image: $(METAL_IMAGE)
+
+# The term stick's RAM image: the metal one with term, its font, Doom and the
+# WAD (krffs/manifests/rach2-term.manifest). The WAD is not in Git, so a tree
+# without it stops here with fetch_wad.sh's word on where one is had; the
+# rule runs only when the file is absent.
+$(TERM_IMAGE): Makefile $(DEMO_CREDS) krffs/manifests/rach2-term.manifest $(MANIFEST_DEPS_rach2_term) $(IMAGE_TOOLS) | kbd preflight krffs rach2 rach2-metal utils check-busybox check-setid check-dropbearmulti ports/doom term unifont
+	$(MKIMAGE) krffs/manifests/rach2-term.manifest $@ 16 2048
+ports/doom/doom1.wad:
+	@sh ports/doom/fetch_wad.sh
+
+rach2-term-image: $(TERM_IMAGE)
 
 # The recovery RAM image: what the recovery kernel loads as its root. It is the
 # metal profile plus the programs that repair a disk and the pages that describe

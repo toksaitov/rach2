@@ -85,6 +85,7 @@ The images are written under `build/images/`, or `build/x86_64/images/` for x86-
 | `os-real` | `os-real.krffs`, `os-real.ext2`, `os-real.disk` (`make os-real-image`, `os-real-ext2`, `os-real-disk`), suites' disks and volumes | BusyBox, Dropbear, TinyCC, pdpmake, musl's headers and libraries, `mke2fs`, `bootctl`, `update`, `mixer`, acpid's map and actions under `/etc`, the manual, Doom, `/src` |
 | `os-real-gnu` | `os-real-gnu.ext2` (`make os-real-gnu-ext2`) | os-real without Dropbear, with `init-metal`; the GNU layer is installed over it |
 | `rach2-metal` | `rach2-metal.krffs` (`make rach2-metal-image`) | the metal kernel's 8 MiB RAM root: a shell, Dropbear, the accounts and keys, with space for the acceptance's 1 MiB loop image |
+| `rach2-term` | `rach2-term.krffs` (`make rach2-term-image`) | the term stick's 16 MiB RAM root: `rach2-metal`'s with `term`, its font, Doom and the WAD, kept at least 2 MiB free |
 | `rach2-metal-disk` | `rach2-metal-disk.ext2`, the sealed disk's root (`make rach2-sealed-disk`), and `installer-root.ext2` | os-real with `init-metal` and `/demo` |
 | `rach2-recovery` | `rach2-recovery.krffs`, or `rach2-recovery-with-key.krffs` in a tree with a recovery key (`make rach2-recovery-image`) | `init-recovery`, the repair programs, and `recovery_authorized_keys` if the tree has one |
 | `grub-test` | `grub-test.ext2`, for `grub` and `bootorder` | os-real and two marked GRUB cores; `grub` stops if the other lines differ from os-real's |

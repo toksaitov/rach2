@@ -71,6 +71,11 @@ trusted text 0644:0:0 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOM
 trusted file 0600:0:0 /root/.ssh/authorized_keys krffs/authorized_keys
 init init-metal
 
+# The term stick's profile: the metal one with term, which init runs as root
+# on a boot with rach2.console=term, exactly as its manifest is built.
+manifest rach2-term copy rach2-metal
+trusted file 0755:0:0 /bin/term build/term/term
+
 # The recovery profile, the one image that authenticates nobody: it boots
 # to a shell, has no stored password, and nothing on it decides who a person
 # is at its console. It answers the network only when the build had a key to

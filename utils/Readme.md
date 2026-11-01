@@ -68,7 +68,7 @@ The manifests in `krffs/manifests/` choose. They give the i686 paths under `buil
 * `os-simple.manifest`: every program of `UTILITIES` into `/bin`, by one `exec-dir` line; `login` and `adduser`; `su` and `passwd` set-uid root, mode 04755; `init-login` as `/sbin/init`.
 * `os-real.manifest` (os-real in RAM, as an ext2 root and on its disks) and `grub-test.manifest`: `audiotest`, `ping`, `loopctl`, `mixer`, `update`, `bootctl` and `init-login`, and this directory's source at `/src/utils`.
 * `rach2-metal-disk.manifest` (the sealed disk's root) and `os-real-gnu.manifest` (the GNU root): the same, with `init-metal`.
-* `rach2-metal.manifest`: `audiotest`, `ping`, `loopctl`, `mixer`, `update` and `init-metal`.
+* `rach2-metal.manifest` and `rach2-term.manifest` (the term stick's root): `audiotest`, `ping`, `loopctl`, `mixer`, `update` and `init-metal`.
 * `rach2-recovery.manifest`: `ping`, `reflash`, `bootctl`, `growroot`, `growset`, `growboot`, `diskctl`, `mixer`, `update`, `init-recovery`, `rach2-install` and `rach2-recover`.
 * `test.manifest`: `echo`, and at the root of the image `sudo`, `su` and `passwd` set-uid root, `adduser`, `adduser-crash` and `login`.
 * `login-test-strict.manifest`, `login-test-shell.manifest` and `shutdown-test.manifest`: `init-login`, `init-shell`, and `init-shell` with `su`.
