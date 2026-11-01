@@ -673,7 +673,8 @@ static void peer_mss_row(void)
  * Check that a router's report that a segment in flight was too big for a link
  * of 1480 bytes shrinks the connection's segments to 1440 and sends the oldest
  * again at that size, and that a report for a sequence number not in flight, or
- * one that would make them larger, changes nothing.
+ * one that would make them larger, changes nothing. `tcp_in_flight`, which ICMP
+ * asks before it lowers the shared path MTU, gives the same answers.
  */
 static void path_mtu_row(void)
 {
@@ -692,6 +693,15 @@ static void path_mtu_row(void)
     n_segs = 0;
     CHECK("it sends 4000 bytes", tcp_send(&sock, bytes, (int)sizeof(bytes)) == 4000);
     CHECK("in segments of 1460", n_segs >= 1 && segs[0].len - TCP_HDR_SIZE == TCP_MSS);
+    CHECK("a sequence past what was sent is not in flight",
+          !tcp_in_flight(net_addr4(net_ip_addr), lport, net_addr4(PEER), 89, iss + 1 + 8000u));
+    CHECK("the SYN's sequence, acknowledged, is not in flight",
+          !tcp_in_flight(net_addr4(net_ip_addr), lport, net_addr4(PEER), 89, iss));
+    CHECK("another port's sequence is not in flight",
+          !tcp_in_flight(net_addr4(net_ip_addr), (uint16_t)(lport + 1), net_addr4(PEER), 89,
+                         iss + 1));
+    CHECK("the oldest unacknowledged byte is in flight",
+          tcp_in_flight(net_addr4(net_ip_addr), lport, net_addr4(PEER), 89, iss + 1));
     tcp_path_mtu(net_ip_addr, PEER, lport, 89, iss + 1 + 8000u, 1480);
     CHECK("a report for a sequence number not in flight changes nothing",
           sock.tcb->snd_mss == TCP_MSS);

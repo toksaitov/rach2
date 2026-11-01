@@ -35,6 +35,7 @@ extern int dprintf(int fd, const char *fmt, ...);
 extern void *malloc(unsigned long n);
 extern void free(void *p);
 extern void *memcpy(void *d, const void *s, unsigned long n);
+extern int memcmp(const void *a, const void *b, unsigned long n);
 
 #include "../../rach2/sys/network/ethernet/ethernet.h"
 #include "../../rach2/sys/network/driver/netdev.h"
@@ -347,11 +348,36 @@ static uint16_t tx_len;
 static struct netdev *tx_card;
 static uint8_t tx_frame[64];
 
+/* The payload of the IPv4 datagram the frames handed to the driver make up,
+ * put back together by each fragment's offset: the bytes they carried, the
+ * identification of the first and whether every later one had it too, and
+ * whether a fragment without MF came. */
+static uint8_t tx_whole[65536];
+static uint32_t tx_whole_bytes;
+static uint16_t tx_whole_id;
+static int tx_whole_ids_agree, tx_whole_last;
+
 /** Record a frame handed to the driver and answer it with `tx_answer`. */
 int netdev_tx(struct netdev *nd, const uint8_t *frame, uint16_t len)
 {
     unsigned i;
 
+    if (len >= 14 + 20 && read16be(frame + 12) == 0x0800) {
+        const uint8_t *ip = frame + 14;
+        uint32_t off = (uint32_t)(read16be(ip + 6) & 0x1fffu) * 8u;
+        uint32_t n = (uint32_t)read16be(ip + 2) - 20u;
+
+        if (tx_whole_bytes == 0) {
+            tx_whole_id = read16be(ip + 4);
+            tx_whole_ids_agree = 1;
+        }
+        tx_whole_ids_agree &= read16be(ip + 4) == tx_whole_id;
+        tx_whole_last |= !(read16be(ip + 6) & IP_MF);
+        if (off + n <= sizeof(tx_whole)) {
+            memcpy(tx_whole + off, ip + 20, n);
+        }
+        tx_whole_bytes += n;
+    }
     tx_card = nd;
     for (i = 0; i < len && i < sizeof(tx_frame); i++) {
         tx_frame[i] = frame[i];
@@ -514,7 +540,7 @@ static void loop_reset(void)
 /**
  * Check a datagram of `len` bytes of payload that ip_tx took, where path `path`
  * puts it: 0 the loopback ring, whole and with DF, however long; 1 an ARP
- * request and no data frame, its fragments held; any other the driver, one
+ * request and no data frame, the datagram held whole; any other the driver, one
  * frame with DF within the MTU, else its fragments, of which the last is in
  * `ip_tx_buf`.
  */
@@ -530,8 +556,9 @@ static void check_tx_path(unsigned path, uint16_t len)
                   read16be(dg + 6) == 0x4000 && ip_checksum(dg, 20) == 0 && tx_frames == 0 &&
                   arp_queries == 0);
     } else if (path == 1) {
-        CHECK("ARP miss requests resolution once without a data frame",
-              arp_queries == frags && arp_requests == 1 && tx_frames == 0);
+        CHECK("ARP miss holds the datagram whole and requests resolution once without a data "
+              "frame",
+              arp_queries == 1 && arp_requests == 1 && tx_frames == 0);
     } else if (frags == 1) {
         CHECK("wire datagram includes both headers within the MTU",
               tx_frames == 1 && tx_len == 14 + 20 + len && read16be(ip_tx_buf + 2) == 20 + len &&
@@ -672,6 +699,47 @@ static void test_tx_hold(void)
     kernel_ticks += IP_HOLD_TICKS + 1u;
     ip_hold_resolved(&the_iface, 0x0A000202u, mac);
     CHECK("a datagram held for more than three seconds is dropped", tx_frames == 1);
+}
+
+/**
+ * Check that a datagram of 60000 bytes sent at an MTU of 576 to a next hop
+ * missing from the ARP cache waits whole and leaves, once the mapping is
+ * learned, as all 109 of its fragments, which put it back together byte for
+ * byte: held one fragment to a slot, the 64 slots would keep only the last
+ * 64.
+ */
+static void test_tx_hold_fragments(void)
+{
+    static const uint8_t mac[6] = {0x02, 0x22, 0x33, 0x44, 0x55, 0x66};
+    static uint8_t payload[60000];
+    uint32_t i;
+
+    reset();
+    ip_hold_forget(0);
+    for (i = 0; i < sizeof(payload); i++) {
+        payload[i] = (uint8_t)(i * 7u + i / 251u);
+    }
+    the_iface.mtu = 576;
+    arp_known = 0;
+    arp_requests = tx_frames = 0;
+    tx_answer = NETDEV_TX_OK;
+    kernel_ticks = 5000;
+    CHECK("a send of 60000 bytes at MTU 576 on an ARP miss is taken and sends no data frame",
+          ip_tx(0x0A000202u, IP_PROTO_UDP, payload, (uint16_t)sizeof(payload), IP_TTL_DEFAULT) ==
+                  0 &&
+              tx_frames == 0 && arp_requests == 1);
+    memset(tx_whole, 0, sizeof(tx_whole));
+    tx_whole_bytes = 0;
+    tx_whole_last = 0;
+    ip_hold_resolved(&the_iface, 0x0A000202u, mac);
+    CHECK("it leaves in 109 fragments of 552 bytes when the mapping is learned",
+          tx_frames == 109 && tx_len == 14 + 20 + (60000 - 108 * 552));
+    CHECK("which carry the whole datagram under one identification, the last without MF",
+          tx_whole_bytes == sizeof(payload) && tx_whole_ids_agree && tx_whole_last &&
+              memcmp(tx_whole, payload, sizeof(payload)) == 0);
+    ip_hold_resolved(&the_iface, 0x0A000202u, mac);
+    CHECK("and only once", tx_frames == 109);
+    the_iface.mtu = 1500;
 }
 
 /**
@@ -903,6 +971,7 @@ int main(void)
     test_tx_link_down();
     test_tx_errors();
     test_tx_hold();
+    test_tx_hold_fragments();
     test_loop_full();
     test_loop_left_idle();
     test_loop_big();

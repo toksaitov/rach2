@@ -1,12 +1,16 @@
 /*
- * Exercise ping deadlines with timer interrupts still pending at each send.
+ * Exercise ping deadlines with timer interrupts still pending at each send,
+ * and the check of a fragmentation-needed report against its connection.
  * host-deps: rach2/sys/network/ip/icmp.c rach2/sys/network/ip6/addr6.c
+ * host-deps: rach2/sys/network/socket/address.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c tests/host/compat/kheap_host.c
  */
 #include "network/ip/icmp.h"
 #include "network/ip/ip.h"
 #include "network/core/byteorder.h"
 #include "network/net.h"
+#include "network/tcp/tcp.h"
+#include "lib/kstring.h"
 #include "proc/process.h"
 #include "proc/wait_queue.h"
 #include "rtc.h"
@@ -152,20 +156,31 @@ int ip_is_local(uint32_t ip)
     return 0;
 }
 
-/** No row reports a datagram too big, which asks whose source it was. */
+/* The model's address, and the one connection the reports name: from
+ * HOST:HOST_PORT to PEER:PEER_PORT, with bytes FLIGHT_UNA up to FLIGHT_NXT
+ * sent and unacknowledged. */
+#define HOST       0x0A00020Fu
+#define PEER       0x0A000263u
+#define HOST_PORT  40000u
+#define PEER_PORT  80u
+#define FLIGHT_UNA 1000u
+#define FLIGHT_NXT 3000u
+
+/* The path MTU the last report set, 0 for none, and the reports TCP took. */
+static uint32_t pmtu;
+static unsigned tcp_reports;
+
+/** Only HOST is this machine's. */
 int netdev_owns(uint32_t ip)
 {
-    (void)ip;
-    CHECK(0, "no fragmentation-needed report");
-    return 0;
+    return ip == HOST;
 }
 
-/** No row lowers a path MTU. */
+/** Record the path MTU a report sets for PEER, the only destination. */
 void ip_pmtu_lower(uint32_t dst, uint32_t mtu)
 {
-    (void)dst;
-    (void)mtu;
-    CHECK(0, "no path MTU lowered");
+    CHECK(dst == PEER, "only the peer's path MTU falls");
+    pmtu = mtu;
 }
 
 /** No row tests local or broadcast addresses. */
@@ -175,17 +190,48 @@ int netdev_is_broadcast(uint32_t ip)
     return 0;
 }
 
-/** No row receives a TCP error. */
+/** Whether `seq` is in flight on the model's one connection, as tcp.c
+ * judges it. */
+int tcp_in_flight(net_addr_t local_ip, uint16_t local_port, net_addr_t remote_ip,
+                  uint16_t remote_port, uint32_t seq)
+{
+    return net_addr_equal(local_ip, net_addr4(HOST)) && local_port == HOST_PORT &&
+           net_addr_equal(remote_ip, net_addr4(PEER)) && remote_port == PEER_PORT &&
+           (int32_t)(seq - FLIGHT_UNA) >= 0 && (int32_t)(seq - FLIGHT_NXT) < 0;
+}
+
+/** Count a report TCP takes, which must be one in flight. */
 void tcp_path_mtu(uint32_t src, uint32_t dst, uint16_t sport, uint16_t dport, uint32_t seq,
                   uint16_t mtu)
 {
-    (void)src;
-    (void)dst;
-    (void)sport;
-    (void)dport;
-    (void)seq;
-    (void)mtu;
-    CHECK(0, "no TCP error");
+    CHECK(tcp_in_flight(net_addr4(src), sport, net_addr4(dst), dport, seq),
+          "TCP takes only a report in flight");
+    CHECK(mtu == pmtu, "TCP takes the MTU the path has");
+    tcp_reports++;
+}
+
+/**
+ * Give icmp_rx a fragmentation-needed report of `mtu` that quotes a
+ * datagram of protocol `proto` from HOST:`sport` to PEER:PEER_PORT, whose
+ * first eight bytes after the header are the ports and the sequence `seq`;
+ * `quote` is how many of them the report carries.
+ */
+static void frag_needed(uint8_t proto, uint16_t sport, uint32_t seq, uint16_t mtu, uint16_t quote)
+{
+    uint8_t m[8 + 20 + 8];
+
+    k_memset(m, 0, sizeof(m));
+    m[0] = ICMP_UNREACHABLE;
+    m[1] = ICMP_FRAG_NEEDED;
+    write16be(m + 6, mtu);
+    m[8] = 0x45;
+    m[8 + 9] = proto;
+    write32be(m + 8 + 12, HOST);
+    write32be(m + 8 + 16, PEER);
+    write16be(m + 28, sport);
+    write16be(m + 30, PEER_PORT);
+    write32be(m + 32, seq);
+    icmp_rx(PEER, HOST, 64, m, (uint16_t)(28 + quote));
 }
 
 /** No row receives a UDP error. */
@@ -261,5 +307,18 @@ int main(void)
     reply = 1;
     CHECK(icmp_ping(0x0A000263u) == 0, "an immediate reply has a zero round trip");
     CHECK(proc.wakeup_tick == 0, "a reply disarms the deadline");
+
+    frag_needed(IP_PROTO_TCP, HOST_PORT, FLIGHT_NXT + 5000u, 1280, 8);
+    CHECK(pmtu == 0 && tcp_reports == 0, "a sequence not in flight leaves the path MTU");
+    frag_needed(IP_PROTO_TCP, HOST_PORT, FLIGHT_UNA - 1u, 1280, 8);
+    CHECK(pmtu == 0 && tcp_reports == 0, "an acknowledged sequence leaves the path MTU");
+    frag_needed(IP_PROTO_TCP, HOST_PORT + 1u, FLIGHT_UNA, 1280, 8);
+    CHECK(pmtu == 0 && tcp_reports == 0, "another connection's report leaves the path MTU");
+    frag_needed(IP_PROTO_TCP, HOST_PORT, FLIGHT_UNA, 1280, 4);
+    CHECK(pmtu == 0 && tcp_reports == 0, "a quote without the sequence leaves the path MTU");
+    frag_needed(IP_PROTO_TCP, HOST_PORT, FLIGHT_UNA + 1u, 1280, 8);
+    CHECK(pmtu == 1280 && tcp_reports == 1, "a sequence in flight lowers the path MTU");
+    frag_needed(IP_PROTO_UDP, 5353u, 0, 1000, 8);
+    CHECK(pmtu == 1000 && tcp_reports == 1, "a UDP report lowers the path MTU, TCP untold");
     return failures != 0;
 }
