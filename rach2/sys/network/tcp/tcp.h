@@ -350,10 +350,11 @@ void tcp_init(void);
  * `remote_ip`:`remote_port` at sequence `seq` did not fit a link of `mtu`
  * bytes (RFC 1191): the connection's segments shrink to the MTU less 40
  * bytes of headers, but not below TCP_MSS_DEFAULT, and what is
- * unacknowledged is sent again from the oldest byte, as after a timeout. A
- * report for no connection or one still in its handshake, whose sequence is
- * not in flight, or which would not make the segments smaller, changes
- * nothing. Called with interrupts off, from ICMP's receive path.
+ * unacknowledged is sent again from the oldest byte, as after a timeout. The
+ * largest size black-hole probing may return to falls with it, even when the
+ * segments are already smaller. A report for no connection or one still in
+ * its handshake, or whose sequence is not in flight, changes nothing. Called
+ * with interrupts off, from ICMP's receive path.
  */
 void tcp_path_mtu(uint32_t local_ip, uint32_t remote_ip, uint16_t local_port, uint16_t remote_port,
                   uint32_t seq, uint16_t mtu);

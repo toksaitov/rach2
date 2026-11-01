@@ -73,8 +73,12 @@ The initial retransmission timeout is one second.
 Once a round trip is measured it is the smoothed round trip plus four
 deviations, at least 200 milliseconds.
 It doubles on timeout to a maximum of 60 seconds.
-Seven successive expiries permit retransmission; the eighth ends the
-connection.
+In the handshake seven successive expiries permit retransmission and the
+eighth ends the attempt; an open connection is given up as
+.Xr tcp 7
+says, after about 15 minutes, and
+.Dv TCP_USER_TIMEOUT
+replaces either bound.
 A failed blocking handshake returns
 .Er ECONNREFUSED ,
 including a handshake that timed out.
@@ -217,4 +221,5 @@ or is neither a supported datagram nor stream socket.
 .Xr poll 2 ,
 .Xr socket 2 ,
 .Xr socketcall 2 ,
-.Xr ipv6 7
+.Xr ipv6 7 ,
+.Xr tcp 7

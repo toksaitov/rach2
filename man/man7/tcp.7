@@ -1,0 +1,160 @@
+.Dd November 2, 2026
+.Dt TCP 7
+.Os
+.Sh NAME
+.Nm tcp
+.Nd the Transmission Control Protocol
+.Sh SYNOPSIS
+.In sys/socket.h
+.In netinet/in.h
+.In netinet/tcp.h
+.Ft int
+.Fn socket "AF_INET" "SOCK_STREAM" "0"
+.Ft int
+.Fn socket "AF_INET6" "SOCK_STREAM" "0"
+.Sh DESCRIPTION
+A
+.Dv SOCK_STREAM
+socket of
+.Dv AF_INET
+or
+.Dv AF_INET6
+is a TCP connection: a reliable stream of bytes in each direction between
+two ports.
+.Xr connect 2
+opens one,
+.Xr listen 2
+and
+.Xr accept 2
+take those a peer opens, and
+.Xr shutdown 2
+and
+.Xr close 2
+end them.
+.Xr connect 2
+gives the retransmission timeout, the handshake's give-up and the resets.
+.Ss Keepalive
+A connection with
+.Dv SO_KEEPALIVE
+set, nothing queued and nothing unacknowledged that has received nothing
+for
+.Dv TCP_KEEPIDLE
+seconds is sent a probe: one byte the peer has had already, at the
+sequence number before the oldest unacknowledged one, which a peer that is
+there answers with an acknowledgement.
+While none is answered another goes each
+.Dv TCP_KEEPINTVL
+seconds, and when
+.Dv TCP_KEEPCNT
+probes have gone unanswered the peer is sent a reset and the connection
+ends with
+.Er ETIMEDOUT .
+Any segment received answers the probes.
+The defaults, 7200 seconds, 75 seconds and 9 probes, are those of
+.Pa /proc/sys/net/ipv4/tcp_keepalive_time ,
+.Pa tcp_keepalive_intvl
+and
+.Pa tcp_keepalive_probes ;
+a socket's own values replace them, and a new value applies at once,
+measured from the last segment received.
+A connection
+.Xr accept 2
+gives takes the listener's settings.
+A probe from the peer, a segment with no data below the next sequence
+number expected, is answered with an acknowledgement.
+.Ss Give-up
+A connection whose data or FIN goes unacknowledged is given up with
+.Er ETIMEDOUT
+when Linux would give it up with
+.Pa /proc/sys/net/ipv4/tcp_retries2
+of 15: after the time 16 timeouts take when the first is 200 milliseconds
+and each doubles up to 120 seconds, 924.6 seconds, counted from the sending
+of what the first timeout found unacknowledged.
+This side's own timeout doubles only up to 60 seconds, so it sends more
+retransmissions in that time than Linux does.
+.Dv TCP_USER_TIMEOUT ,
+a count of milliseconds, replaces that time, in the handshake as well, and
+ends the keepalive's probing that long after the last segment received;
+0 restores the default.
+A frame the card refuses is kept and sent again at the next tick; a
+connection whose every frame the card has refused for 30 seconds, with
+nothing sent between, is given up, but the wait does not run while the card
+reports its link down, so a cable out for a minute ends nothing.
+.Ss Black holes
+A path that drops segments larger than some size without reporting it, a
+black hole, is detected as RFC 4821 and Linux's
+.Pa tcp_mtu_probing
+1 detect it.
+The third timeout in a row of more than a floor of data, 536 bytes on IPv4
+and 1220 on IPv6, sent on a link that is up, lowers the segment size to 1024
+bytes, and each further timeout halves it, never below the floor.
+Ten minutes later a probe, a segment halfway between the size and the
+largest the peer and the path allow, goes ahead of new data when enough is
+queued; its acknowledgement makes its size the connection's and the next
+probe goes at once, and its loss lowers the top of the search below it.
+A search that has closed to within 8 bytes starts again from the top ten
+minutes later.
+.Pa /proc/sys/net/ipv4/tcp_mtu_probing
+sets the mode: 0 does neither, 1, the default, starts the search at a black
+hole, and 2 starts every connection at 1024 bytes and probes upward.
+A router's report that a segment was too big lowers the size and the top of
+the search at once.
+.Ss Options
+At level
+.Dv SOL_SOCKET ,
+.Dv SO_KEEPALIVE
+turns keepalive on with a nonzero integer and off with 0.
+At level
+.Dv IPPROTO_TCP :
+.Bl -tag -width TCP_USER_TIMEOUT
+.It Dv TCP_KEEPIDLE
+The idle seconds before the first probe, 1 to 32767.
+.It Dv TCP_KEEPINTVL
+The seconds between probes, 1 to 32767.
+.It Dv TCP_KEEPCNT
+The probes unanswered before the reset, 1 to 127.
+.It Dv TCP_USER_TIMEOUT
+The milliseconds of unacknowledged data after which the connection is given
+up, 0 for the default.
+.It Dv TCP_NODELAY
+Accepted with no effect, since segments are sent as soon as the windows
+allow.
+.El
+.Pp
+Each is an integer, and
+.Xr getsockopt 2
+reads the keepalive values as the socket set them or as the defaults it
+takes.
+.Ss Counters
+.Pa /proc/net/netstat
+counts in its
+.Ql TcpExt:
+line the retransmission timeouts, TCPTimeouts; the connections a timeout
+ended, TCPAbortOnTimeout; the keepalive probes sent, TCPKeepAlive; and the
+probes of a larger segment lost and taken, TCPMTUPFail and TCPMTUPSuccess.
+.Pa /proc/net/snmp
+counts the segments and the connections ended; see
+.Xr proc 5 .
+.Sh ERRORS
+.Xr setsockopt 2
+fails with
+.Er EINVAL
+for a value shorter than an integer or out of the option's range.
+A connection given up reports
+.Er ETIMEDOUT
+to a blocked call,
+.Dv SO_ERROR
+and
+.Xr poll 2 .
+.Sh SEE ALSO
+.Xr accept 2 ,
+.Xr connect 2 ,
+.Xr getsockopt 2 ,
+.Xr listen 2 ,
+.Xr setsockopt 2 ,
+.Xr socket 2 ,
+.Xr proc 5 ,
+.Xr ipv6 7
+.Sh STANDARDS
+RFC 9293, the protocol; RFC 1122, section 4.2.3.6, keepalive; RFC 4821,
+packetization layer path MTU discovery; RFC 5482, the user timeout.

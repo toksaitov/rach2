@@ -84,7 +84,9 @@ is at least 2304.
 Getting it returns the doubled value; the default is 212992.
 A datagram that arrives with the budget spent is dropped.
 .It Dv SO_KEEPALIVE
-Accepted without effect; reads as integer zero.
+Set or get a boolean stored on the socket, which on a TCP socket turns on
+the keepalive probes of
+.Xr tcp 7 .
 .It Dv SO_RCVTIMEO
 Accepted without effect.
 It does not bound a receive wait.
@@ -218,6 +220,26 @@ At level
 .Dv IPPROTO_TCP ,
 accepted without effect; reads as integer zero.
 The stack already sends promptly.
+.It Dv TCP_KEEPIDLE , TCP_KEEPINTVL , TCP_KEEPCNT
+At level
+.Dv IPPROTO_TCP
+on a stream socket, set or get the keepalive's idle seconds, 1 to 32767,
+the seconds between probes, 1 to 32767, and the probes unanswered before
+the connection is reset, 1 to 127.
+Until set they read as the defaults of
+.Pa /proc/sys/net/ipv4/tcp_keepalive_time ,
+.Pa tcp_keepalive_intvl
+and
+.Pa tcp_keepalive_probes .
+.It Dv TCP_USER_TIMEOUT
+At level
+.Dv IPPROTO_TCP
+on a stream socket, set or get the milliseconds of unacknowledged data
+after which the connection is given up, 0 for the default.
+.Xr tcp 7
+describes the four.
+On a socket of another type they are accepted without effect and read as
+integer zero.
 .It Dv PACKET_AUXDATA
 At level
 .Dv SOL_PACKET ,
@@ -275,14 +297,15 @@ is nonpositive as a signed 32-bit value;
 an
 .Dv SO_REUSEADDR ,
 .Dv SO_BROADCAST ,
+.Dv SO_KEEPALIVE ,
 .Dv SO_RCVBUF ,
-.Dv IP_MTU_DISCOVER
-or
+.Dv IP_MTU_DISCOVER ,
 .Dv IP_TTL
-value is shorter than an integer; the hop limit is outside 1 through 255;
-or
+or TCP keepalive or user timeout value is shorter than an integer; the hop
+limit is outside 1 through 255;
 .Dv IP_MTU_DISCOVER
-is outside 0 through 5.
+is outside 0 through 5; or a TCP keepalive value is outside its range, or
+the user timeout negative.
 An IPv6 option's value is shorter than an integer, or a
 .Vt struct ipv6_mreq ;
 a hop limit or class is outside \-1 through 255, or a loop other than 0 or
@@ -332,4 +355,5 @@ does not refer to a socket.
 .Xr send 2 ,
 .Xr socket 2 ,
 .Xr socketcall 2 ,
-.Xr ipv6 7
+.Xr ipv6 7 ,
+.Xr tcp 7

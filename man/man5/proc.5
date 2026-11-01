@@ -717,6 +717,19 @@ queue's budget dropped.
 A broadcast for a port no socket has counts as NoPorts, where Linux counts
 it in a field of its own, IgnoredMulti.
 The counters start at zero at boot and wrap at 2^32.
+.It Pa /proc/net/netstat
+Of the
+.Ql TcpExt:
+counters Linux has, a line of names and a line of values for those this
+kernel keeps, in Linux's order, which
+.Xr nstat 8
+reads by name: TCPTimeouts, the retransmission timeouts; TCPAbortOnTimeout,
+the connections a timeout ended; TCPKeepAlive, the keepalive probes sent;
+and TCPMTUPFail and TCPMTUPSuccess, the probes of a larger segment lost and
+taken, as
+.Xr tcp 7
+describes them.
+The counters start at zero at boot and wrap at 2^32.
 .It Pa /proc/net/snmp6
 A line for each IPv6, ICMPv6 and UDP counter this kernel keeps, its name in
 32 columns, a tab and its value, in Linux's order, which
@@ -862,6 +875,20 @@ past a value written keeps what it has;
 caller's write of 0 succeeds, and of any other number fails with
 .Er EINVAL ,
 where Linux would begin to forward.
+.Pa net/ipv4/tcp_keepalive_time ,
+7200, and
+.Pa net/ipv4/tcp_keepalive_intvl ,
+75, the seconds before a TCP connection's first keepalive probe and between
+probes, each from 1 to 2147483,
+.Pa net/ipv4/tcp_keepalive_probes ,
+9, the probes unanswered before the connection is reset, from 0 to 255,
+.Pa net/ipv4/tcp_retries2 ,
+15, the retransmissions whose time an open connection is given up after,
+from 0 to 255, and
+.Pa net/ipv4/tcp_mtu_probing ,
+1, the mode of black-hole detection, from 0 to 2, are the settings of
+.Xr tcp 7 ,
+which a privileged caller's write sets for every connection at once.
 .Pa net/ipv6/conf/ Ns Ar NAME ,
 for
 .Ar NAME
@@ -1683,4 +1710,5 @@ process also names a directory, which is not listed.
 .Xr disk 7 ,
 .Xr memory 7 ,
 .Xr rach2 7 ,
+.Xr tcp 7 ,
 .Xr vdso 7
