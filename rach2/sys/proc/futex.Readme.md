@@ -22,17 +22,17 @@ A futex is a 32-bit word of user memory on which a thread sleeps until another w
 
 A futex is identified by a key of two words (`futex_key`): the address space, which is the page directory of the caller's process, and the user address. The threads of a process share a page directory, and so do a `vfork` child and its parent, and processes made with `CLONE_VM`. A word in a `VM_SHARED` region, shared anonymous memory or a file of `/dev/shm` mapped `MAP_SHARED`, is identified instead by its physical address, the page's frame and the offset in it, with a marker in place of the address space, unless the operation has `FUTEX_PRIVATE_FLAG`. So processes that map the same page identify its futexes alike, as a mutex made `PTHREAD_PROCESS_SHARED` needs.
 
-A waiter's record, `struct futex_q`, is on its own kernel stack while it sleeps, filed in one of `FUTEX_BUCKETS`, 64, lists by a hash of its key. Each bucket has a wait queue its waiters sleep on. A wake walks one bucket, so it passes over the waiters of other futexes only when their keys hash alike.
+A waiter's record, `struct futex_q`, is on its own kernel stack while it sleeps, filed in one of `FUTEX_BUCKETS`, 64, lists by a hash of its key. The record has a wait queue of its own, on which only that waiter sleeps. A wake walks one bucket, so it passes over the waiters of other futexes only when their keys hash alike.
 
 ### Wait and wake
 
-`futex_wait` first turns a timeout into a deadline (below), then makes the word's page resident (`vm_prefault_range`), which may sleep. With interrupts off it then reads the word, returns `EAGAIN` when the word differs from the expected value, and otherwise files the waiter. With interrupts off no fault can come between the read and the filing, and the big lock keeps the kernel code of other processors out, so a wake that comes after the comparison finds the waiter. The waiter then sleeps on the bucket's queue (`wq_wait_event`) until a waker marks it, its deadline comes, or a signal arrives, and a waiter that was not marked takes itself off the list.
+`futex_wait` first turns a timeout into a deadline (below), then makes the word's page resident (`vm_prefault_range`), which may sleep. With interrupts off it then reads the word, returns `EAGAIN` when the word differs from the expected value, and otherwise files the waiter. With interrupts off no fault can come between the read and the filing, and the big lock keeps the kernel code of other processors out, so a wake that comes after the comparison finds the waiter. The waiter then sleeps on its own queue (`wq_wait_event`) until a waker marks it, its deadline comes, or a signal arrives, and a waiter that was not marked takes itself off the list.
 
-`futex_wake` marks up to the requested number of matching waiters, a waiter matching when its key is the wake's and its bitset meets the wake's, takes them off the list, and wakes the bucket's queue. The bucket's other sleepers find themselves unmarked and sleep again.
+`futex_wake` marks up to the requested number of matching waiters, a waiter matching when its key is the wake's and its bitset meets the wake's, takes them off the list, and wakes each one's queue, so a wake of one makes one thread runnable and the bucket's other sleepers stay asleep. Each wake comes before interrupts are on again: the queue is on the waiter's stack, and the waiter cannot leave its wait meanwhile, since the big lock keeps it from running on another processor.
 
 ### Deadlines
 
-A deadline is a tick of the kernel's 100 Hz clock. A relative timeout, `FUTEX_WAIT`'s, becomes whole 10 ms ticks, a part of a tick counted as one (`futex_ticks`); an absolute one, `FUTEX_WAIT_BITSET`'s, is measured when the call begins against the monotonic clock, or the real-time clock with `FUTEX_CLOCK_REALTIME` (`futex_ticks_until`). The deadline is the clock's current tick plus those ticks plus one, so a wait never ends before the time it asked for. It is fixed before the word's page is brought in, so a fault's sleep counts against it, and a deadline that the fault outlasted ends the call with `ETIMEDOUT` once the word is compared. The tick wakes the waiter through the record's `wakeup_tick` ([processes](Readme.md)).
+A deadline is a tick of the kernel's clock, which counts `TICK_HZ` (`timer.h`) a second. A relative timeout, `FUTEX_WAIT`'s, becomes whole ticks, a part of a tick counted as one (`futex_ticks`); an absolute one, `FUTEX_WAIT_BITSET`'s, is measured when the call begins against the monotonic clock, or the real-time clock with `FUTEX_CLOCK_REALTIME` (`futex_ticks_until`). The deadline is the clock's current tick plus those ticks plus one, so a wait never ends before the time it asked for. It is fixed before the word's page is brought in, so a fault's sleep counts against it, and a deadline that the fault outlasted ends the call with `ETIMEDOUT` once the word is compared. The tick wakes the waiter through the record's `wakeup_tick` ([processes](Readme.md)).
 
 A signal the process acts on ends a wait with `EINTR`. The dispatcher restarts a wait without a timeout, as it restarts a read, and does not restart a timed one (`futex_restartable`): a restart would measure the timeout again from the start, and a handler that ran often enough would keep the wait from ever ending.
 
@@ -50,7 +50,7 @@ A word's page is made present and writable before the word is read. The read, th
 
 * The requeue, wake-and-modify and priority-inheritance operations answer `ENOSYS`, the second address is ignored, and i686 has no `futex_time64`.
 * `FUTEX_CLOCK_REALTIME` is taken with `FUTEX_WAIT_BITSET` alone; with `FUTEX_WAIT` it is `ENOSYS`.
-* A deadline is a whole number of 10 ms ticks.
+* A deadline is a whole number of the kernel's ticks.
 * A timed wait that a signal interrupts is not restarted, also when no handler runs; Linux restarts it then with its first deadline.
 * A thread's end walks at most 2048 entries of its robust list.
 

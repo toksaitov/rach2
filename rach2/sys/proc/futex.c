@@ -53,6 +53,9 @@ static const char futex_shared_space;
  * the count bounds the walk and not the number of waiters. */
 #define FUTEX_BUCKETS 64
 
+/* The nanoseconds in one tick of the kernel's clock. */
+#define FUTEX_TICK_NS (1000000000u / TICK_HZ)
+
 /* A sleeping waiter, on its own kernel stack while it sleeps. */
 struct futex_q {
     const void *space; /* the address space's page directory, or shared memory */
@@ -61,12 +64,12 @@ struct futex_q {
     int woken;         /* a wake marked it and took it off its list */
     int timed;         /* the wait has a deadline */
     uint32_t target;   /* the tick the sleep ends at, with `timed` */
+    wait_queue_t wq;   /* the waiter's own queue, which only it sleeps on */
     struct futex_q *next;
 };
 
-/* Each bucket's waiters, the newest first, and the queue they sleep on. */
+/* Each bucket's waiters, the newest first. */
 static struct futex_q *_waiters[FUTEX_BUCKETS];
-static wait_queue_t _queues[FUTEX_BUCKETS];
 
 /** The bucket a futex named `space` and `uaddr` is filed in. */
 static uint32_t futex_bucket(const void *space, uintptr_t uaddr)
@@ -74,14 +77,15 @@ static uint32_t futex_bucket(const void *space, uintptr_t uaddr)
     return (uint32_t)((((uintptr_t)space >> 4) ^ (uaddr >> 2) ^ (uaddr >> 12)) % FUTEX_BUCKETS);
 }
 
-/* Whole 10 ms ticks in `sec` seconds and `nsec` nanoseconds, a partial tick
+/* Whole ticks in `sec` seconds and `nsec` nanoseconds, a partial tick
  * counted as one, clamped so a later signed comparison of ticks stays valid. */
 static uint32_t futex_ticks(long sec, long nsec)
 {
-    uint32_t s = (unsigned long)sec > 21474836u ? 21474836u : (uint32_t)sec;
+    uint32_t most = 0x7FFFFFFEu / TICK_HZ;
+    uint32_t s = (unsigned long)sec > most ? most : (uint32_t)sec;
     uint32_t ticks;
 
-    ticks = s * 100u + ((uint32_t)nsec + 9999999u) / 10000000u;
+    ticks = s * TICK_HZ + ((uint32_t)nsec + (FUTEX_TICK_NS - 1u)) / FUTEX_TICK_NS;
     return ticks > 0x7FFFFFFEu ? 0x7FFFFFFEu : ticks;
 }
 
@@ -100,7 +104,7 @@ static uint32_t futex_ticks_until(const struct kernel_timespec *at, int realtime
     } else {
         tick_now(&seconds32, &ticks32, &total32);
         sec = seconds32;
-        nsec = (int64_t)ticks32 * 10000000;
+        nsec = (int64_t)ticks32 * FUTEX_TICK_NS;
     }
     dsec = (int64_t)at->tv_sec - sec;
     dnsec = (int32_t)at->tv_nsec - (int32_t)nsec;
@@ -208,6 +212,7 @@ static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_tim
     q.bitset = bitset;
     q.woken = 0;
     q.next = NULL;
+    wait_queue_init(&q.wq);
     bucket = futex_bucket(q.space, q.uaddr);
 
     flags = kirq_save();
@@ -228,7 +233,7 @@ static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_tim
     kirq_restore(flags);
 
     current_proc->wakeup_tick = q.timed ? (q.target != 0 ? q.target : 1u) : 0;
-    rc = wq_wait_event(&_queues[bucket], futex_q_done, &q);
+    rc = wq_wait_event(&q.wq, futex_q_done, &q);
     current_proc->wakeup_tick = 0;
 
     flags = kirq_save();
@@ -245,10 +250,18 @@ static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_tim
     return -ETIMEDOUT;
 }
 
-/* Wake up to `n` waiters on the futex at `uaddr` whose bitset meets
+/**
+ * Wake up to `n` waiters on the futex at `uaddr` whose bitset meets
  * `bitset`, named as `futex_key` names it with `flags_op`; the number
  * woken, or -EFAULT when a futex that may be shared has a page that cannot
- * be brought in. */
+ * be brought in.
+ *
+ * Each waiter marked is woken on its own queue, so the bucket's other
+ * sleepers stay asleep. The queue is on the waiter's stack, and the wake
+ * comes before interrupts are on again: the waiter cannot leave its wait
+ * before then, since the big lock keeps it from running on another
+ * processor and interrupts off keep the tick from switching to it here.
+ */
 static int futex_wake(uintptr_t uaddr, uint32_t n, uint32_t bitset, int flags_op)
 {
     const void *space;
@@ -272,14 +285,12 @@ static int futex_wake(uintptr_t uaddr, uint32_t n, uint32_t bitset, int flags_op
             q->woken = 1;
             *pp = q->next;
             woken++;
+            wq_wake_all(&q->wq);
         } else {
             pp = &q->next;
         }
     }
     kirq_restore(flags);
-    if (woken) {
-        wq_wake_all(&_queues[bucket]);
-    }
     return woken;
 }
 
