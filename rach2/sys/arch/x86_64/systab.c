@@ -342,6 +342,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_READLINKAT] = sys_readlinkat;
     table[SYS_FCHMODAT] = sys_fchmodat;
     table[SYS_FACCESSAT] = sys_faccessat;
+    table[SYS_FACCESSAT2] = sys_faccessat2;
     table[SYS_PSELECT6] = sys_pselect6;
     table[SYS_PPOLL] = sys_ppoll;
     table[SYS_UNSHARE] = sys_unshare;
