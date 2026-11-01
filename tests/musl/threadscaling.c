@@ -1,7 +1,8 @@
-/* threadscaling: count process-index and VMA work while creating held threads. */
+/* threadscaling: count process, VMA and selection work beside blocked threads. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <pthread.h>
+#include <sched.h>
 #include <stdint.h>
 #include <signal.h>
 #include <stdio.h>
@@ -16,11 +17,13 @@ static pthread_cond_t started = PTHREAD_COND_INITIALIZER;
 static pthread_cond_t release = PTHREAD_COND_INITIALIZER;
 static unsigned int waiting;
 static int go;
-static const char *keys[] = {"process_pid_steps", "process_uid_steps", "process_timer_steps",
-                             "vm_gap_steps", "process_timer_passes"};
+static int runner_stop;
+static const char *keys[] = {"process_pid_steps", "process_uid_steps",    "process_timer_steps",
+                             "vm_gap_steps",      "process_timer_passes", "scheduler_picks",
+                             "scheduler_steps"};
 
-/** Read the five modulo-2^32 work counts; -1 if any field is absent. */
-static int counts(uint32_t value[5])
+/** Read the seven modulo-2^32 work counts; -1 if any field is absent. */
+static int counts(uint32_t value[7])
 {
     FILE *f = fopen("/proc/stat", "r");
     char line[256], key[80];
@@ -34,7 +37,7 @@ static int counts(uint32_t value[5])
         if (sscanf(line, "%79s %lu", key, &n) != 2) {
             continue;
         }
-        for (i = 0; i < 5; i++) {
+        for (i = 0; i < 7; i++) {
             if (strcmp(key, keys[i]) == 0) {
                 value[i] = (uint32_t)n;
                 found |= 1u << i;
@@ -42,7 +45,7 @@ static int counts(uint32_t value[5])
         }
     }
     fclose(f);
-    return found == 31 ? 0 : -1;
+    return found == 127 ? 0 : -1;
 }
 
 /** Announce entry and wait under the mutex until the parent releases all. */
@@ -59,17 +62,26 @@ static void *worker(void *arg)
     return NULL;
 }
 
-/** Create n held threads, count the work, then release and join every one.
- * Every creation result is checked; failures still release and join all
- * threads already made. Return -1 if creation, joining or a work bound fails.
- */
+/** Keep a second thread runnable until the parent ends the sample. */
+static void *runner(void *arg)
+{
+    (void)arg;
+    while (!__atomic_load_n(&runner_stop, __ATOMIC_SEQ_CST)) {
+        sched_yield();
+    }
+    return NULL;
+}
+
+/** Count selection work with n blocked threads and two runnable threads.
+ * Release and join all created threads on success or failure. Return -1
+ * when creation, joining or a work bound fails, and zero otherwise. */
 static int batch(unsigned int n)
 {
-    pthread_t threads[256];
-    uint32_t before[5], after[5], idle[5];
+    pthread_t threads[256], running;
+    uint32_t before[7], after[7], idle[7];
     struct timespec pause = {0, 20000000};
     unsigned int made = 0, i;
-    int failed = 0, rc;
+    int failed = 0, rc, running_made = 0;
 
     waiting = 0;
     go = 0;
@@ -116,6 +128,34 @@ static int batch(unsigned int n)
             (uint32_t)(idle[2] - after[2]) > 16u * ((uint32_t)(idle[4] - after[4]) + 1u)) {
             failed = 1;
         }
+        runner_stop = 0;
+        if (pthread_create(&running, NULL, runner, NULL) == 0) {
+            running_made = 1;
+        } else {
+            failed = 1;
+        }
+        if (counts(after) != 0) {
+            failed = 1;
+        } else {
+            for (i = 0; i < 1024; i++) {
+                sched_yield();
+            }
+            if (counts(idle) != 0) {
+                failed = 1;
+            } else {
+                uint32_t picks = idle[5] - after[5];
+                uint32_t steps = idle[6] - after[6];
+
+                printf("threadscaling: held %u: picks %u entries %u\n", n, picks, steps);
+                if (picks < 1024 || (uint64_t)steps > 8u * (uint64_t)picks + 64u) {
+                    failed = 1;
+                }
+            }
+        }
+    }
+    __atomic_store_n(&runner_stop, 1, __ATOMIC_SEQ_CST);
+    if (running_made && pthread_join(running, NULL) != 0) {
+        failed = 1;
     }
     pthread_mutex_lock(&lock);
     go = 1;

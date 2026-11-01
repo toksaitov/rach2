@@ -778,6 +778,10 @@ list since boot, modulo 2^32.
 Untimed blocked threads are absent from the timer list.
 .It Li process_timer_passes
 Passes over the active timer list since boot, modulo 2^32.
+.It Li scheduler_picks , scheduler_steps
+Scheduler selection attempts and ready-list entries examined by local selection and
+stealing since boot, modulo 2^32.
+Blocked threads add no entries to examine.
 .It Li vm_gap_steps
 Candidate gaps examined by the virtual memory free-range search since boot,
 modulo 2^32.

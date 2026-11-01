@@ -750,6 +750,7 @@ void acpica_thread_start(void)
     proc_set_comm(p, "kacpid");
     setup_process_stack(p, osl_thread);
     thread = p;
+    sched_make_ready(p);
     kirq_restore(flags);
     klog(KLOG_DEBUG, "acpi", "thread: kacpid is pid %d", (int)p->pid);
 }

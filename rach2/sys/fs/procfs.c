@@ -2728,6 +2728,10 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_u32(t, proc_work_count(2));
     ap_str(t, "\nprocess_timer_passes ");
     ap_u32(t, proc_work_count(3));
+    ap_str(t, "\nscheduler_picks ");
+    ap_u32(t, sched_work_count(0));
+    ap_str(t, "\nscheduler_steps ");
+    ap_u32(t, sched_work_count(1));
     ap_str(t, "\nvm_gap_steps ");
     ap_u32(t, vm_gap_steps());
     ap_ch(t, '\n');

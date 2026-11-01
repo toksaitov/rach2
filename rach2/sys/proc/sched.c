@@ -20,35 +20,74 @@
 /* Nonzero while the scheduler is on (`sched_enable`). */
 static volatile int _sched_enabled = 0;
 
-/*
- * The run queues. A ready process is on the queue of the processor its
- * `cpu` names, and the queues are the process list read through that
- * field, so that a process is on one queue by construction and the list
- * stays the one order the selection rotates through. The lock covers the
- * fields below and a process's `cpu` and READY state as a wake or a
- * selection changes them; it is taken after the big lock.
- */
+/* The big lock precedes this lock; interrupts cannot see partial links. */
 static struct spinlock sched_lock = SPINLOCK_INIT;
 
-/** Each processor's last ordinary selection; a wake preference does not
- * move it. */
-static process_t *_last_sched[NR_CPUS];
+struct ready_queue {
+    process_t *head, *tail;
+    unsigned int count; /* ready records, excluding the current and idle tasks */
+};
+static struct ready_queue run_queues[NR_CPUS];
+static uint32_t pick_count, pick_steps; /* selection attempts and entries examined, modulo 2^32 */
 
-/** Nonzero when a processor's next selection may prefer a woken process; a
- * preferred selection clears it, so the one after it is ordinary. */
+/** Nonzero when the next selection may prefer a wait-queue wake. */
 static int _wake_turn[NR_CPUS];
+
+/** Unlink a queued process in constant work, with sched_lock held. */
+static void sched_remove(process_t *p)
+{
+    struct ready_queue *q;
+
+    if (!p->ready_linked) {
+        return;
+    }
+    q = &run_queues[p->cpu];
+    if (p->ready_prev) {
+        p->ready_prev->ready_next = p->ready_next;
+    } else {
+        q->head = p->ready_next;
+    }
+    if (p->ready_next) {
+        p->ready_next->ready_prev = p->ready_prev;
+    } else {
+        q->tail = p->ready_prev;
+    }
+    q->count--;
+    p->ready_prev = p->ready_next = NULL;
+    p->ready_linked = 0;
+}
+
+/** Append a noncurrent ready process once, with sched_lock held. */
+static void sched_append(process_t *p)
+{
+    struct ready_queue *q = &run_queues[p->cpu];
+
+    if (p->ready_linked || p == cpu_table[p->cpu].idle) {
+        return;
+    }
+    p->ready_prev = q->tail;
+    p->ready_next = NULL;
+    if (q->tail) {
+        q->tail->ready_next = p;
+    } else {
+        q->head = p;
+    }
+    q->tail = p;
+    q->count++;
+    p->ready_linked = 1;
+}
 
 void sched_forget(process_t *p)
 {
     uint32_t flags = spin_lock_irqsave(&sched_lock);
-    int c;
 
-    for (c = 0; c < NR_CPUS; c++) {
-        if (_last_sched[c] == p) {
-            _last_sched[c] = p->prev;
-        }
-    }
+    sched_remove(p);
     spin_unlock_irqrestore(&sched_lock, flags);
+}
+
+uint32_t sched_work_count(unsigned int index)
+{
+    return index == 0 ? pick_count : index == 1 ? pick_steps : 0;
 }
 
 void init_sched(void)
@@ -56,8 +95,10 @@ void init_sched(void)
     int c;
 
     _sched_enabled = 0;
+    pick_count = pick_steps = 0;
     for (c = 0; c < NR_CPUS; c++) {
-        _last_sched[c] = NULL;
+        run_queues[c].head = run_queues[c].tail = NULL;
+        run_queues[c].count = 0;
         _wake_turn[c] = 1;
     }
 }
@@ -103,61 +144,60 @@ static int sched_may_run(const process_t *p, int cpu)
 }
 
 /**
- * Find a process of processor `cpu`'s queue that may run there, after its
- * ordinary cursor, wrapping once.
- *
- * With `woken_only`, consider only wait-queue wakeups. The run queues' lock
- * is held.
+ * Find an eligible entry on queue `owner` for processor `cpu`, optionally
+ * requiring a wake mark. Drop a record whose state changed before its
+ * removal; sched_lock is held.
  */
-static process_t *sched_find(int cpu, int woken_only)
+static process_t *sched_find(int owner, int cpu, int woken_only)
 {
-    process_t *start;
-    process_t *p;
+    process_t *p = run_queues[owner].head;
 
-    start = _last_sched[cpu] && _last_sched[cpu]->next ? _last_sched[cpu]->next : proc_list;
-    p = start;
-    if (!p) {
-        return NULL;
-    }
-    do {
-        if (p->cpu == cpu && (!woken_only || p->woken) && sched_may_run(p, cpu)) {
+    while (p) {
+        process_t *next = p->ready_next;
+
+        pick_steps++;
+        if (p->state != PROC_READY) {
+            sched_remove(p);
+        } else if ((!woken_only || p->woken) && sched_may_run(p, cpu)) {
             return p;
         }
-        p = p->next ? p->next : proc_list;
-    } while (p != start);
+        p = next;
+    }
     return NULL;
 }
 
 /**
- * For processor `cpu`, which has nothing of its own to run, the ready
- * process of the busiest other queue that may run on it, moved to its
- * queue; NULL when there is none. The busiest queue is the one with the
- * most ready processes. The run queues' lock is held.
+ * Take the first eligible entry from the busiest other queue, trying each
+ * donor at most once. Counts choose donors without visiting blocked records.
+ * The returned process is unlinked before its cpu changes; sched_lock is held.
  */
 static process_t *sched_steal(int cpu)
 {
-    int ready[NR_CPUS];
-    process_t *best = NULL;
+    uint64_t tried = (uint64_t)1 << cpu;
     process_t *p;
-    int c;
+    unsigned int most;
+    int c, donor;
 
-    for (c = 0; c < NR_CPUS; c++) {
-        ready[c] = 0;
-    }
-    for (p = proc_list; p; p = p->next) {
-        if (p->state == PROC_READY && p->cpu >= 0 && p->cpu < NR_CPUS) {
-            ready[p->cpu]++;
+    for (;;) {
+        donor = -1;
+        most = 0;
+        for (c = 0; c < NR_CPUS; c++) {
+            if (!((tried >> c) & 1u) && run_queues[c].count > most) {
+                donor = c;
+                most = run_queues[c].count;
+            }
+        }
+        if (donor < 0) {
+            return NULL;
+        }
+        tried |= (uint64_t)1 << donor;
+        p = sched_find(donor, cpu, 0);
+        if (p) {
+            sched_remove(p);
+            p->cpu = cpu;
+            return p;
         }
     }
-    for (p = proc_list; p; p = p->next) {
-        if (p->cpu != cpu && sched_may_run(p, cpu) && (!best || ready[p->cpu] > ready[best->cpu])) {
-            best = p;
-        }
-    }
-    if (best) {
-        best->cpu = cpu;
-    }
-    return best;
 }
 
 /**
@@ -205,10 +245,14 @@ void sched_make_ready(process_t *p)
     int target;
     int kick;
 
+    sched_remove(p);
     p->state = PROC_READY;
     proc_timer_update(p);
     target = sched_place(p);
     p->cpu = target;
+    if (cpu_table[target].current != p) {
+        sched_append(p);
+    }
     kick = sched_cpu_idle(target) || cpu_table[target].current == p;
     spin_unlock_irqrestore(&sched_lock, flags);
     if (kick) {
@@ -223,7 +267,9 @@ void sched_set_affinity(process_t *p, uint64_t mask)
 
     p->affinity = mask;
     if (p->state == PROC_READY && cpu_table[p->cpu].current != p && !sched_allowed(p, p->cpu)) {
+        sched_remove(p);
         p->cpu = sched_choose(p);
+        sched_append(p);
         if (sched_cpu_idle(p->cpu)) {
             kick = p->cpu;
         }
@@ -238,8 +284,8 @@ void sched_set_affinity(process_t *p, uint64_t mask)
 }
 
 /**
- * A preferred selection consumes its wake mark without moving the ordinary
- * cursor, and the selection after it is ordinary, so the cursor advances at
+ * A preferred selection consumes its wake mark without passing over earlier
+ * ready entries, and the next selection is ordinary, so the head advances at
  * least every second selection even when sleepers wake repeatedly; a turn
  * with no woken candidate is ordinary. A processor steals from another
  * queue (`sched_steal`) only when its current process is its idle task or
@@ -306,9 +352,12 @@ void schedule(void)
     me = (int)arch_cpu_id();
     cpu = &cpu_table[me];
     old = cpu->current;
+    pick_count++;
+    sched_remove(old);
     proc_timer_update(old);
-    if (old->state != PROC_READY) {
-        old->woken = 0;
+    old->woken = 0;
+    if (old->state == PROC_READY) {
+        old->state = PROC_RUNNING;
     }
     if (cpu->idle && old != cpu->idle && (old->state == PROC_RUNNING || old->state == PROC_READY) &&
         !((old->affinity >> me) & 1u)) {
@@ -322,14 +371,13 @@ void schedule(void)
         old->state = PROC_READY;
     }
     if (_wake_turn[me]) {
-        next = sched_find(me, 1);
+        next = sched_find(me, me, 1);
     }
     if (next) {
         _wake_turn[me] = 0;
     } else {
-        next = sched_find(me, 0);
+        next = sched_find(me, me, 0);
         if (next) {
-            _last_sched[me] = next;
             _wake_turn[me] = 1;
         } else if (old == cpu->idle || old->state != PROC_RUNNING) {
             next = sched_steal(me);
@@ -347,6 +395,7 @@ void schedule(void)
         smp_kick(kick);
     }
 
+    sched_remove(next);
     usb_stamp_dispatch(next->pid);
     next->woken = 0;
     if (next == old) {
@@ -366,6 +415,9 @@ void schedule(void)
         }
     }
 
+    if (old->state == PROC_READY && old != cpu->idle) {
+        sched_append(old);
+    }
     next->state = PROC_RUNNING;
     next->cpu = me;
 

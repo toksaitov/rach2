@@ -386,6 +386,9 @@ struct process {
     int cpu;
     uint64_t affinity;
     int bkl_depth;
+    /* Ready-list links, owned by sched.c; current and idle tasks are absent. */
+    struct process *ready_prev, *ready_next;
+    int ready_linked;
     /* Index links, owned by process.c under the big kernel lock. */
     struct process *pid_next;
     struct proc_user_count *user_count;
@@ -429,8 +432,10 @@ void proc_reclaim_boot_pids(void);
  * pid not in use, below 2000000000, the leader of a thread group, a session
  * and a process group of its own, the default limits, a descriptor table
  * with the standard descriptions, the working directory /, the umask 022,
- * every processor in its affinity, and this processor's queue. NULL when
- * the heap has no room for it or one of its parts. Each record counts once
+ * every processor in its affinity, and this processor as its last CPU.
+ * The caller builds its context, then calls sched_make_ready to enqueue it
+ * or makes it current directly. NULL when the heap has no room for it or
+ * one of its parts. Each record counts once
  * in `process_forks_since_boot`. */
 process_t *alloc_process(void);
 
