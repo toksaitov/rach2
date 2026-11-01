@@ -327,26 +327,21 @@ static int chip_test(struct ath9k *ah)
 }
 
 /**
- * The most power `freq` allows, in dBm rounded up: the highest target power
- * over the CCK, OFDM and HT20 rates, each capped by its conformance limit,
- * as the test pass of ath9k_hw_set_txpowerlimit finds it for a channel.
+ * The most power `freq` allows, in dBm rounded up: the highest of the
+ * EEPROM's target powers there over every rate, as the test pass of
+ * ath9k_hw_set_txpowerlimit finds it. That pass names no conformance test
+ * (NO_CTL), so no CTL limit applies; phy.c applies them when it sets the
+ * power for a channel.
  */
 static int8_t channel_power(const struct ath9k *ah, unsigned freq)
 {
     uint8_t t[ar9300RateSize];
-    unsigned i, cap, best = 0;
+    unsigned i, best = 0;
 
     ath9k_eeprom_target_power(ah, freq, t);
-    for (i = 0; i < ALL_TARGET_HT40_0_8_16; i++) {
-        if (i <= ALL_TARGET_LEGACY_54)
-            cap = ath9k_eeprom_ctl_limit(ah, freq, CTL_11G);
-        else if (i <= ALL_TARGET_LEGACY_11S)
-            cap = ath9k_eeprom_ctl_limit(ah, freq, CTL_11B);
-        else
-            cap = ath9k_eeprom_ctl_limit(ah, freq, CTL_2GHT20);
-        if ((t[i] < cap ? t[i] : cap) > best)
-            best = t[i] < cap ? t[i] : cap;
-    }
+    for (i = 0; i < ar9300RateSize; i++)
+        if (t[i] > best)
+            best = t[i];
     return (int8_t)((best + 1) / 2);
 }
 
