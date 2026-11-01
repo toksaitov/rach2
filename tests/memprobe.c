@@ -1,5 +1,5 @@
 /**
- * memprobe: memory above the kernel's 32 MiB identity window, from user
+ * memprobe: memory above the kernel's 64 MiB identity window, from user
  * space.
  *
  * `memprobe MIB`: the probe maps MIB megabytes anonymously, writes each page

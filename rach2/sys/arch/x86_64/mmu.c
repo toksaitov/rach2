@@ -157,7 +157,7 @@ static void map_image(uintptr_t from, uintptr_t to, pte_t flags)
 
 /* The direct map's reach on a processor without 1 GiB pages, where each GiB
  * takes a page directory of 2 MiB pages, carved in the boot's window below
- * 32 MiB: 64 GiB take 256 KiB of it. */
+ * HARD_MEMORY_LIMIT: 64 GiB take 256 KiB of it. */
 #define DIRECT_2M_REACH (64UL * GIB)
 
 /** Whether the processor has 1 GiB pages (CPUID 0x80000001, EDX bit 26). */

@@ -104,13 +104,14 @@ extern pte_t mmu_nx;
 #define PTE_ADDR(e) ((e) & ~(pte_t)PTE_FLAGS)
 
 /*
- * The boot's window: the kernel image, the boot data, the page tables the
- * boot carves and the DMA buffers a device is given the physical address of
- * live below it. The kernel reaches it, as it reaches all physical memory,
- * through the direct map at KVA_DIRECT, and the image at KVA_IMAGE as well,
- * never at its physical address, since the lower half is user space.
+ * The boot's window, 64 MiB: the kernel image, the boot data, the page
+ * tables the boot carves and the DMA buffers a device is given the physical
+ * address of live below it. The kernel reaches it, as it reaches all
+ * physical memory, through the direct map at KVA_DIRECT, and the image at
+ * KVA_IMAGE as well, never at its physical address, since the lower half is
+ * user space.
  */
-#define HARD_MEMORY_LIMIT 0x2000000
+#define HARD_MEMORY_LIMIT 0x4000000
 
 /*
  * The kernel's virtual layout, the upper half of the 48-bit address space.
