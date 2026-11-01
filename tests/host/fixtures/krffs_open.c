@@ -176,6 +176,12 @@ static void dcache_forget(struct vfs_mount *mnt, void *dir, const char *name)
     (void)name;
 }
 
+/** No fixture mount is detached, so a closed description reaps nothing. */
+static void reap_if_detached(const struct vfs_mount *mnt)
+{
+    (void)mnt;
+}
+
 #include "vfs_open.inc"
 
 /** All fixture files use the mounted KRFFS adapter. */
