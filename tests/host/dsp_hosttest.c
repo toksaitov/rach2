@@ -1,7 +1,9 @@
 /**
  * /dev/dsp (audio/dsp.c) over a model driver: each ioctl's answer, blocking
- * and interrupted writes, partial frames, drain against reset, the trigger,
- * and the negotiation sequences of sox_ng's, FFmpeg's and cmus's OSS outputs.
+ * and interrupted writes and reads, partial frames, drain against reset, the
+ * trigger, a reader that falls behind, playback and capture on one open, and
+ * the negotiation sequences of sox_ng's, FFmpeg's and cmus's OSS outputs and
+ * of sox_ng's and FFmpeg's OSS inputs.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
@@ -10,11 +12,16 @@
  * The test includes dsp.c whole. The model driver's DMA buffer has two
  * periods; a tick plays the one due, appends its bytes to `m.out`, refills it
  * through the stream's `transfer` and calls `period`, as a device's interrupt
- * would. A wait runs ticks until its condition holds, or ends with a signal
- * when a row asks for one, so `m.out` is exactly what a listener would hear.
+ * would. Its capture stream records the pattern in order: a tick hands the
+ * next period of it over through `transfer` and calls `period`. A wait runs
+ * ticks until its condition holds, or ends with a signal when a row asks for
+ * one, so `m.out` is exactly what a listener would hear and `got` exactly
+ * what a program read.
  * The sequences are those of sox_ng's `src/oss.c` (ossinit), FFmpeg's
  * `libavdevice/oss.c` (ff_oss_audio_open) and `oss_enc.c`, and cmus's
- * `op/oss.c` (oss_open, oss_set_sf, oss_buffer_space, oss_pause).
+ * `op/oss.c` (oss_open, oss_set_sf, oss_buffer_space, oss_pause); the
+ * inputs' are sox_ng's ossinit and oss_read and FFmpeg's `oss_dec.c`
+ * (audio_read_header, audio_read_packet).
  */
 #include "audio/dsp.c"
 
@@ -54,8 +61,26 @@ static struct {
     uint32_t out_len;
 } m;
 
-/* The bytes the rows write, each different from its neighbours. */
+/* The model's capture stream: what it was asked, and how far into the
+ * pattern it has recorded. */
+static struct {
+    audio_stream_t *s;
+    int running;
+    uint32_t position; /* frames recorded since the start */
+    uint32_t at;       /* the pattern's byte the device records next */
+    int refuse_open;   /* stream_open's error, or 0 */
+    int refuse_start;  /* stream_start's error, or 0 */
+    int starts, stops, closes;
+    unsigned ticks;
+} cap;
+
+/* The bytes the rows write and the model records, each different from its
+ * neighbours. */
 static uint8_t pattern[PATTERN];
+
+/* What the rows read, in order. */
+static uint8_t got[PATTERN];
+static uint32_t got_len;
 
 static fd_entry_t entry;
 static struct open_file description;
@@ -100,12 +125,34 @@ static void model_fill(int i)
     m.given += m.s->period_bytes / model_frame();
 }
 
-/** Play one period, as the device does, then refill it and tell the
- * stream. Nothing happens while the stream is stopped. */
+/** Record one period of the pattern, as the device does, hand it over and
+ * tell the stream. Nothing happens while the stream is stopped. */
+static void cap_tick(void)
+{
+    uint32_t n;
+
+    if (!cap.running) {
+        return;
+    }
+    n = cap.s->period_bytes;
+    check(cap.at + n <= PATTERN, "the pattern has a period more to record");
+    if (cap.at + n > PATTERN) {
+        return;
+    }
+    cap.s->transfer(cap.s, pattern + cap.at, n);
+    cap.at += n;
+    cap.position += n / frame_bytes(cap.s);
+    cap.ticks++;
+    cap.s->period(cap.s);
+}
+
+/** Let a period pass: record one when capture runs, and play one, then
+ * refill it and tell the stream, when playback runs. */
 static void model_tick(void)
 {
     uint32_t n;
 
+    cap_tick();
     if (!m.running) {
         return;
     }
@@ -124,6 +171,16 @@ static void model_tick(void)
 
 static int model_open(audio_stream_t *s)
 {
+    if (s->dir == AUDIO_CAPTURE) {
+        if (cap.refuse_open) {
+            return cap.refuse_open;
+        }
+        if (cap.s) {
+            return -EBUSY;
+        }
+        cap.s = s;
+        return 0;
+    }
     if (m.refuse_open) {
         return m.refuse_open;
     }
@@ -136,23 +193,36 @@ static int model_open(audio_stream_t *s)
 }
 
 /** Grant the rate within the model's range, a period no larger than its
- * limit, and a DMA buffer of two periods. */
+ * limit, and a DMA buffer of two periods for playback, eight for capture. */
 static int model_setup(audio_stream_t *s)
 {
-    check(s == m.s, "setup of the open stream");
-    check(!m.running, "setup while stopped");
+    int in = s->dir == AUDIO_CAPTURE;
+
+    check(s == (in ? cap.s : m.s), "setup of the open stream");
+    check(!(in ? cap.running : m.running), "setup while stopped");
     check(s->format == AUDIO_U8 || s->format == AUDIO_S16LE, "a known format");
     check(s->channels == 1 || s->channels == 2, "one or two channels");
     s->rate = clamp(s->rate, m.rate_min, m.rate_max);
     if (s->period_bytes > m.period_max) {
         s->period_bytes = m.period_max;
     }
-    s->device_periods = 2;
+    s->device_periods = in ? 8 : 2;
     return 0;
 }
 
 static int model_start(audio_stream_t *s)
 {
+    if (s->dir == AUDIO_CAPTURE) {
+        check(s == cap.s && !cap.running, "start of the stopped capture stream");
+        check(!masked, "a capture start with interrupts on, outside the open's lock");
+        if (cap.refuse_start) {
+            return cap.refuse_start;
+        }
+        cap.running = 1;
+        cap.position = 0;
+        cap.starts++;
+        return 0;
+    }
     check(s == m.s && !m.running, "start of the stopped stream");
     check(!masked, "a start with interrupts on, outside the open's lock");
     if (m.refuse_start) {
@@ -170,6 +240,13 @@ static int model_start(audio_stream_t *s)
 
 static void model_stop(audio_stream_t *s)
 {
+    if (s->dir == AUDIO_CAPTURE) {
+        check(s == cap.s && cap.running, "stop of the running capture stream");
+        check(!masked, "a capture stop with interrupts on, outside the open's lock");
+        cap.running = 0;
+        cap.stops++;
+        return;
+    }
     check(s == m.s && m.running, "stop of the running stream");
     check(!masked, "a stop with interrupts on, outside the open's lock");
     m.running = 0;
@@ -178,6 +255,12 @@ static void model_stop(audio_stream_t *s)
 
 static void model_close(audio_stream_t *s)
 {
+    if (s->dir == AUDIO_CAPTURE) {
+        check(s == cap.s && !cap.running, "close of the stopped capture stream");
+        cap.s = NULL;
+        cap.closes++;
+        return;
+    }
     check(s == m.s, "close of the open stream");
     check(!m.running, "close after the stop");
     m.s = NULL;
@@ -186,12 +269,17 @@ static void model_close(audio_stream_t *s)
 
 static uint32_t model_position(audio_stream_t *s)
 {
+    if (s->dir == AUDIO_CAPTURE) {
+        check(s == cap.s && cap.running, "position of the running capture stream");
+        return cap.position;
+    }
     check(s == m.s && m.running, "position of the running stream");
     return m.position;
 }
 
 static uint32_t model_delay(audio_stream_t *s)
 {
+    check(s->dir == AUDIO_PLAYBACK, "the delay of playback alone");
     check(s == m.s && m.running, "delay of the running stream");
     return m.given - m.position;
 }
@@ -224,7 +312,7 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
             signal_after = -1;
             return -EINTR;
         }
-        if (!m.running || n > 100000) {
+        if ((!m.running && !cap.running) || n > 100000) {
             check(0, "a wait that nothing ends");
             return -EINTR;
         }
@@ -270,8 +358,10 @@ int copy_to_user(void __user *dst, const void *src, size_t len)
 static void begin(const char *name)
 {
     row = name;
-    check(m.s == NULL, "no stream open between rows");
+    check(m.s == NULL && cap.s == NULL, "no stream open between rows");
     k_memset(&m, 0, sizeof(m));
+    k_memset(&cap, 0, sizeof(cap));
+    got_len = 0;
     m.rate_min = 4000;
     m.rate_max = 48000;
     m.period_max = MODEL_PERIOD_MAX;
@@ -306,6 +396,32 @@ static int ask(uint32_t request, int value)
 static int32_t put(uint32_t at, uint32_t n)
 {
     return dspdev_write(&entry, (const char __user *)(pattern + at), n);
+}
+
+/** Read `n` bytes onto the end of `got`. */
+static int32_t take(uint32_t n)
+{
+    int32_t rc = dspdev_read(&entry, (char __user *)(got + got_len), n);
+
+    if (rc > 0) {
+        got_len += (uint32_t)rc;
+    }
+    return rc;
+}
+
+/** Whether `got` from `at` has `n` bytes of the pattern from `from`. */
+static int recorded(uint32_t at, uint32_t from, uint32_t n)
+{
+    return at + n <= got_len && memcmp(got + at, pattern + from, n) == 0;
+}
+
+/** GETISPACE's answer. */
+static struct dsp_buf_info ispace(void)
+{
+    struct dsp_buf_info info;
+
+    check(dspdev_ioctl(&entry, DSP_GETISPACE, (uintptr_t)&info) == 0, "GETISPACE succeeds");
+    return info;
 }
 
 /** The bytes queued by GETODELAY. */
@@ -358,7 +474,7 @@ static void close_dsp(void)
 {
     dspdev_close(&entry);
     check(entry.priv == NULL && dsp_owner == NULL, "the device is free after the close");
-    check(m.s == NULL, "the stream is closed");
+    check(m.s == NULL && cap.s == NULL, "the streams are closed");
 }
 
 /** OSS's defaults at open, the fixed answers, and one open at a time. */
@@ -395,14 +511,15 @@ static void row_defaults(void)
 static void row_refusals(void)
 {
     begin("refusals");
-    check(open_dsp(0) == -ENXIO, "an open for reading is ENXIO");
-    check(open_dsp(2) == -ENXIO, "an open for reading and writing is ENXIO");
+    check(open_dsp(3) == -EINVAL, "an access mode of 3 is EINVAL");
     m.refuse_open = -EBUSY;
     check(open_dsp(1) == -EBUSY, "the driver's stream taken is EBUSY");
     check(dsp_owner == NULL, "a refused open leaves the device free");
     m.refuse_open = 0;
     kheap_host_largest = 1024;
     check(open_dsp(1) == -ENOMEM, "no room for the buffer is ENOMEM");
+    check(open_dsp(0) == -ENOMEM, "nor for a reader's");
+    check(open_dsp(2) == -ENOMEM, "nor for both");
     kheap_host_largest = 0;
     check(dsp_owner == NULL && m.s == NULL, "a failed allocation leaves the device free");
     check(open_dsp(1) == 0, "the next open succeeds");
@@ -642,13 +759,12 @@ static void row_sox(void)
 }
 
 /** FFmpeg's `-f oss` output: GETFMTS, SETFMT, STEREO, SPEED read back, then
- * writes of OSS_AUDIO_BLOCK_SIZE; its input opens for reading. */
+ * writes of OSS_AUDIO_BLOCK_SIZE. */
 static void row_ffmpeg(void)
 {
     int formats;
 
     begin("FFmpeg");
-    check(open_dsp(0) == -ENXIO, "the input's O_RDONLY open is ENXIO");
     check(open_dsp(1) == 0, "the output's O_WRONLY open");
     formats = ask(DSP_GETFMTS, 0);
     check(formats & AFMT_S16_LE, "GETFMTS has S16_LE");
@@ -701,6 +817,259 @@ static void row_cmus(void)
     check(played(0, 0, n) && silent_from(n, AUDIO_S16LE), "the whole file played");
 }
 
+/** An open for reading: OSS's defaults, the capture buffer's layout, and
+ * the answers of the output's requests. */
+static void row_capture_defaults(void)
+{
+    struct dsp_buf_info info;
+    struct dsp_count_info optr;
+    int value = 0;
+
+    begin("capture defaults");
+    check(open_dsp(0) == 0, "an open for reading succeeds");
+    check(cap.s != NULL && m.s == NULL, "only the capture stream is taken");
+    check(ask(DSP_SETFMT, AFMT_QUERY) == AFMT_U8, "U8 at open");
+    check(ask(DSP_CHANNELS, 0) == 1, "mono at open");
+    check(ask(DSP_SPEED, 0) == 8000, "8000 Hz at open");
+    check(ask(DSP_GETBLKSIZE, 0) == 128, "a period of about 23 ms");
+    info = ispace();
+    check(info.fragments == 0 && info.fragstotal == 4 && info.fragsize == 128 && info.bytes == 0,
+          "four periods, none recorded, not raised to the driver's eight");
+    check(ask(DSP_GETTRIGGER, 0) == PCM_ENABLE_INPUT, "the input trigger is on");
+    check(ask(DSP_GETCAPS, 0) == (DSP_CAP_REVISION | DSP_CAP_REALTIME | DSP_CAP_TRIGGER),
+          "no duplex in an open for reading");
+    check(call(DSP_SETDUPLEX, &value) == -EINVAL, "SETDUPLEX is EINVAL");
+    check(dspdev_ioctl(&entry, DSP_GETOSPACE, (uintptr_t)&info) == -EINVAL, "GETOSPACE is EINVAL");
+    check(call(DSP_GETODELAY, &value) == -EINVAL, "GETODELAY is EINVAL");
+    check(dspdev_ioctl(&entry, DSP_GETOPTR, (uintptr_t)&optr) == -EINVAL, "GETOPTR is EINVAL");
+    check(ask(DSP_SYNC, 0) == 0 && ask(DSP_POST, 0) == 0, "SYNC and POST do nothing");
+    check(put(0, 4) == -EBADF, "a write is EBADF");
+    check(cap.starts == 0, "nothing recorded before a read");
+    close_dsp();
+    check(cap.closes == 1 && cap.stops == 0, "a close of a stream never started");
+}
+
+/** Reads that wait for the device to record, in pieces of any size, and
+ * the counts GETISPACE and GETIPTR give meanwhile. */
+static void row_reading(void)
+{
+    struct dsp_buf_info info;
+    struct dsp_count_info iptr;
+
+    begin("reading");
+    check(open_dsp(0) == 0, "open");
+    cd_quality();
+    waits = 0;
+    check(take(3000) == 3000, "a read of almost three periods completes");
+    check(cap.starts == 1 && cap.ticks == 3 && waits > 0,
+          "it started the stream and waited for three periods");
+    check(recorded(0, 0, 3000), "what was read is what was recorded, in order");
+    info = ispace();
+    check(info.fragments == 0 && info.fragstotal == 4 && info.fragsize == 1024 && info.bytes == 72,
+          "the rest of the third period is ready");
+    model_tick();
+    model_tick();
+    info = ispace();
+    check(info.fragments == 2 && info.bytes == 2120, "two periods more are ready");
+    check(take(2) == 2, "half a frame");
+    check(take(2118) == 2118, "the rest, from within the frame");
+    check(recorded(0, 0, 5120), "every byte in order");
+    check(dspdev_ioctl(&entry, DSP_GETIPTR, (uintptr_t)&iptr) == 0, "GETIPTR succeeds");
+    check(iptr.bytes == 5 * 1024 && iptr.blocks == 5 && iptr.ptr == 1024,
+          "five periods recorded, the position in the second of the buffer");
+    check(dspdev_ioctl(&entry, DSP_GETIPTR, (uintptr_t)&iptr) == 0 && iptr.blocks == 0,
+          "GETIPTR counts periods since the last");
+    close_dsp();
+    check(cap.stops == 1, "the close stops the stream");
+}
+
+/** A reader that falls behind by the whole buffer keeps the oldest frames;
+ * the device's newest are dropped in whole frames, even when a read left a
+ * partial frame at the head. */
+static void row_overrun(void)
+{
+    struct dsp_count_info iptr;
+    int i;
+
+    begin("overrun");
+    check(open_dsp(0) == 0, "open");
+    cd_quality();
+    check(take(1024) == 1024, "the first period");
+    for (i = 0; i < 6; i++) {
+        model_tick();
+    }
+    check(ispace().bytes == 4096 && ispace().fragments == 4, "the buffer is full");
+    check(take(2) == 2, "half a frame");
+    model_tick();
+    check(ispace().bytes == 4094, "no part of a frame is taken into the room left");
+    check(take(4094) == 4094, "the rest");
+    check(recorded(0, 0, 5120), "the oldest periods, in order");
+    model_tick();
+    check(take(1024) == 1024 && recorded(5120, 8192, 1024),
+          "then the period recorded next, after the three dropped");
+    check(dspdev_ioctl(&entry, DSP_GETIPTR, (uintptr_t)&iptr) == 0 && iptr.bytes == 9 * 1024,
+          "GETIPTR counts the dropped periods as recorded");
+    close_dsp();
+}
+
+/** A signal ends a blocked read with what it took, or EINTR; O_NONBLOCK
+ * gives EAGAIN; poll for input starts recording and tells of a period. */
+static void row_read_interrupted(void)
+{
+    struct wait_queue *wq = NULL;
+
+    begin("read interrupted");
+    check(open_dsp(0) == 0, "open");
+    cd_quality();
+    check(dspdev_poll(&entry, POLLIN | POLLOUT, &wq) == 0 && wq == &dsp_owner->wq,
+          "nothing ready yet, on the open's queue");
+    check(cap.running && cap.starts == 1, "a poll for input starts recording");
+    signal_after = 0;
+    check(take(100) == -EINTR, "a signal before any byte is EINTR");
+    model_tick();
+    check(dspdev_poll(&entry, POLLIN | POLLOUT, &wq) == POLLIN, "POLLIN with a period recorded");
+    signal_after = 0;
+    check(take(3000) == 1024, "a signal returns the bytes taken");
+    check(ask(DSP_NONBLOCK, 0) == 0, "NONBLOCK");
+    check(take(100) == -EAGAIN, "a nonblocking read of nothing is EAGAIN");
+    model_tick();
+    check(take(3000) == 1024, "a nonblocking read takes what there is");
+    check(recorded(0, 0, 2048), "in order");
+    model_tick();
+    check(take(2) == 2, "half a frame");
+    check(ask(DSP_RESET, 0) == 0 && !cap.running, "RESET stops recording");
+    check(ispace().bytes == 0, "RESET empties the buffer");
+    check(take(10) == -EAGAIN && cap.starts == 2, "a read after RESET starts again");
+    close_dsp();
+}
+
+/** SETTRIGGER holds and releases recording; a start that fails. */
+static void row_read_trigger(void)
+{
+    struct wait_queue *wq = NULL;
+
+    begin("read trigger");
+    check(open_dsp(0) == 0, "open");
+    cd_quality();
+    check(call(DSP_SETTRIGGER, &(int){0}) == 0 && ask(DSP_GETTRIGGER, 0) == 0, "trigger off");
+    check(ask(DSP_NONBLOCK, 0) == 0, "NONBLOCK");
+    check(take(10) == -EAGAIN && cap.starts == 0, "a read with input off starts nothing");
+    check(dspdev_poll(&entry, POLLIN, &wq) == 0 && cap.starts == 0, "nor does a poll");
+    check(call(DSP_SETTRIGGER, &(int){PCM_ENABLE_INPUT}) == 0 && cap.running,
+          "the trigger on starts recording");
+    check(ask(DSP_GETTRIGGER, 0) == PCM_ENABLE_INPUT, "GETTRIGGER reads it back");
+    model_tick();
+    check(call(DSP_SETTRIGGER, &(int){0}) == 0 && !cap.running, "the trigger off stops it");
+    check(ispace().bytes == 1024, "what was recorded stays");
+    check(take(4096) == 1024 && recorded(0, 0, 1024), "and is read");
+    cap.refuse_start = -EIO;
+    check(call(DSP_SETTRIGGER, &(int){PCM_ENABLE_INPUT}) == -EIO, "SETTRIGGER gives the error");
+    check(take(10) == -EIO, "so does a read");
+    cap.refuse_start = 0;
+    close_dsp();
+}
+
+/** O_RDWR: both streams, set alike, each started by its own direction and
+ * stopped by RESET; an open without both directions. */
+static void row_duplex(void)
+{
+    uint32_t len;
+    int value = 0;
+
+    begin("duplex");
+    check(open_dsp(2) == 0, "an open for reading and writing succeeds");
+    check(m.s != NULL && cap.s != NULL, "both streams are taken");
+    check(ask(DSP_GETCAPS, 0) ==
+              (DSP_CAP_REVISION | DSP_CAP_REALTIME | DSP_CAP_TRIGGER | DSP_CAP_DUPLEX),
+          "duplex among the caps");
+    check(call(DSP_SETDUPLEX, &value) == 0, "SETDUPLEX succeeds");
+    check(ask(DSP_GETTRIGGER, 0) == (PCM_ENABLE_INPUT | PCM_ENABLE_OUTPUT), "both triggers on");
+    cd_quality();
+    check(cap.s->format == AUDIO_S16LE && cap.s->channels == 2 && cap.s->rate == 44100 &&
+              cap.s->period_bytes == 1024,
+          "capture is set as playback is");
+    check(ospace().fragstotal == 4 && ispace().fragstotal == 4, "four periods each way");
+    check(put(0, 2048) == 2048 && m.running && !cap.running, "a write starts playback alone");
+    check(take(2048) == 2048 && cap.starts == 1 && cap.ticks == 2, "a read starts capture");
+    check(recorded(0, 0, 2048) && played(0, 0, 2048), "both directions moved the pattern");
+    check(ask(DSP_RESET, 0) == 0 && !m.running && !cap.running, "RESET stops both");
+    check(odelay() == 0 && ispace().bytes == 0, "and empties both");
+    check(put(0, 1000) == 1000, "a short write");
+    len = m.out_len;
+    close_dsp();
+    check(played(len, 0, 1000) && silent_from(len + 1000, AUDIO_S16LE), "the close plays it");
+    check(m.closes == 1 && cap.closes == 1, "both streams given back");
+
+    begin("duplex refused");
+    cap.refuse_open = -ENODEV;
+    check(open_dsp(2) == -ENODEV, "no capture stream is ENODEV");
+    check(dsp_owner == NULL && m.s == NULL && m.closes == 1, "playback's stream is given back");
+    check(open_dsp(0) == -ENODEV, "so is an open for reading");
+    check(open_dsp(1) == 0, "an open for writing succeeds");
+    check(call(DSP_SETDUPLEX, &value) == -EINVAL, "SETDUPLEX is EINVAL");
+    check(ask(DSP_GETTRIGGER, 0) == PCM_ENABLE_OUTPUT, "the output trigger alone");
+    check(dspdev_read(&entry, (char __user *)got, 4) == -EBADF, "a read is EBADF");
+    close_dsp();
+    cap.refuse_open = 0;
+    m.refuse_open = -ENODEV;
+    check(open_dsp(2) == -ENODEV && cap.s == NULL && cap.closes == 0,
+          "no playback stream is ENODEV, before capture is taken");
+    check(open_dsp(0) == 0, "an open for reading succeeds");
+    close_dsp();
+}
+
+/** sox_ng's `rec`: RESET, GETFMTS, SETFMT, STEREO, SPEED, GETBLKSIZE for
+ * its buffer, SYNC, then reads of a buffer each. */
+static void row_sox_rec(void)
+{
+    uint32_t i;
+    int block;
+
+    begin("sox_ng rec");
+    check(open_dsp(0) == 0, "open O_RDONLY");
+    check(ask(DSP_RESET, 0) == 0, "RESET");
+    check(ask(DSP_GETFMTS, 0) & AFMT_S16_LE, "GETFMTS has S16_LE");
+    check(ask(DSP_SETFMT, AFMT_S16_LE) == AFMT_S16_LE, "SETFMT");
+    check(ask(DSP_STEREO, 1) == 1, "STEREO");
+    check(ask(DSP_SPEED, 44100) == 44100, "SPEED");
+    block = ask(DSP_GETBLKSIZE, 0);
+    check(block == 4096, "a period of 4096 bytes");
+    check(ask(DSP_SYNC, 0) == 0 && cap.starts == 0, "SYNC returns and starts nothing");
+    for (i = 0; i < 8; i++) {
+        check(take((uint32_t)block) == block, "each buffer filled");
+    }
+    close_dsp();
+    check(recorded(0, 0, 8 * 4096), "the whole recording, in order");
+}
+
+/** FFmpeg's `-f oss` input: O_RDONLY made nonblocking, GETFMTS, SETFMT,
+ * STEREO, SPEED read back, then reads of OSS_AUDIO_BLOCK_SIZE, retried on
+ * EAGAIN, each followed by GETISPACE for the packet's time. */
+static void row_ffmpeg_in(void)
+{
+    int32_t rc;
+    int tries = 0;
+
+    begin("FFmpeg input");
+    check(open_dsp(0) == 0, "open O_RDONLY");
+    description.status_flags |= OFD_NONBLOCK;
+    check(ask(DSP_GETFMTS, 0) & AFMT_S16_LE, "GETFMTS has S16_LE");
+    check(ask(DSP_SETFMT, AFMT_S16_LE) == AFMT_S16_LE, "SETFMT");
+    check(ask(DSP_STEREO, 1) == 1, "STEREO");
+    check(ask(DSP_SPEED, 48000) == 48000, "SPEED read back");
+    while (got_len < 4096 * 10 && tries++ < 100) {
+        rc = take(4096);
+        if (rc == -EAGAIN) {
+            model_tick();
+            continue;
+        }
+        check(rc == 4096, "a read of a whole block");
+        check(ispace().bytes == 0, "GETISPACE after it");
+    }
+    check(got_len == 4096 * 10 && recorded(0, 0, got_len), "ten blocks, in order");
+    close_dsp();
+}
+
 int main(void)
 {
     uint32_t i;
@@ -719,6 +1088,14 @@ int main(void)
     row_sox();
     row_ffmpeg();
     row_cmus();
+    row_capture_defaults();
+    row_reading();
+    row_overrun();
+    row_read_interrupted();
+    row_read_trigger();
+    row_duplex();
+    row_sox_rec();
+    row_ffmpeg_in();
     if (failures) {
         printf("dsp-hosttest: %d failures\n", failures);
         return 1;
