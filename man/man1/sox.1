@@ -70,6 +70,8 @@ Describe a format.
 .It Fl Fl version
 Print the version.
 .El
+.Sh EXIT STATUS
+.Ex -std
 .Sh EXAMPLES
 Convert a WAV to mono at 44100 Hz:
 .Bd -literal -offset indent
@@ -80,13 +82,11 @@ Keep the first five seconds at half volume:
 .Bd -literal -offset indent
 sox input.wav output.wav trim 0 5 vol 0.5
 .Ed
-.Sh EXIT STATUS
-.Ex -std
 .Sh SEE ALSO
+.Xr mixer 1 ,
 .Xr play 1 ,
 .Xr rec 1 ,
 .Xr soxi 1 ,
-.Xr mixer 1 ,
 .Xr dsp 4
 .Sh LIMITS
 External MP3, FLAC, Ogg Vorbis and Opus codecs are disabled.
