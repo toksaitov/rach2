@@ -19,7 +19,7 @@ The manual pages give what each file contains and what each call on it returns:
 * [null(4)](../../../man/man4/null.4) (`null`, `zero`, `full`), [random(4)](../../../man/man4/random.4) (`random`, `urandom`) and [mem(4)](../../../man/man4/mem.4).
 * [console(4)](../../../man/man4/console.4) (`console`, `tty`, `ptmx`, `pts/N`) and [bootlog(4)](../../../man/man4/bootlog.4) (`bootlog`, `screenlog`, `framefail`).
 * [disk(4)](../../../man/man4/disk.4) (`diskN`, `diskNpM`, `bootpart`, `grubcore`), [loop(4)](../../../man/man4/loop.4) (`loop0` to `loop3`, `loop-control`) and [rtc(4)](../../../man/man4/rtc.4) (`rtc0`); their block requests are in [ioctl(2)](../../../man/man2/ioctl.2).
-* [input(4)](../../../man/man4/input.4) (`input/eventN`) and [mixer(4)](../../../man/man4/mixer.4) (`mixer`), whose operations are those of [`../evdev.h`](../evdev.h) and [`../audio/mixer.h`](../audio/mixer.h).
+* [input(4)](../../../man/man4/input.4) (`input/eventN`), [mixer(4)](../../../man/man4/mixer.4) (`mixer`) and [dsp(4)](../../../man/man4/dsp.4) (`dsp`), whose operations are those of [`../evdev.h`](../evdev.h), [`../audio/mixer.h`](../audio/mixer.h) and [`../audio/dsp.h`](../audio/dsp.h).
 * [busybox-sysklogd(8)](../../../man/man8/busybox-sysklogd.8): `/dev/log`, a link to `/var/run/log` (`SYNTH_DEV_LOG_TARGET`), where `syslogd` makes its socket.
 * [proc(5)](../../../man/man5/proc.5): every file of `/proc`, and `/dev/fd`, `/dev/fd/N`, `/dev/stdin`, `/dev/stdout` and `/dev/stderr`, which are the caller's `/proc/self/fd` and its links.
 * [sysfs(5)](../../../man/man5/sysfs.5): every file of `/sys`.
