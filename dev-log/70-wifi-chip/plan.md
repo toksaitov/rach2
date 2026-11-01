@@ -115,7 +115,6 @@ Labels: `owner-only`. Owns `dev-log/70-wifi-chip/lenovo.md` and a read-only `/sy
 * 8a. A read-only `config` file for each PCI device, as Linux has, so that BusyBox's `lspci` and a short reader show capabilities; tried on a trial boot.
 * 8b. The card's subsystem ID, the MSI capability, the link's ASPM state, the interrupt line the firmware routes; whether the DMAR table enables remapping.
 * 8c. The `VPC2004` device's methods and the EC's Wi-Fi bit, read without pressing a key.
-* 8d. Whether a loop can boot a Linux kernel with ath9k on a trial boot without the owner (through the candidate slot or GRUB's next-boot entry) to record ath9k's register reads and a scan as the baseline; if it can, do it; if not, say why and leave the baseline to the study's reports.
 * Done: `lenovo.md` has each fact with the command that read it, and the release back in both slots.
 
 ### 9. The driver on the Lenovo: bring-up and scan
@@ -153,6 +152,70 @@ Labels: `owner-only`. Waits on #2100, the fix of bwrap as root. Silent, over SSH
 * 12c. OpenCode's acceptance without its screen (#1938's silent half).
 * 12d. Doom's sound counters with the mixer at 0 at night and at 1 by day, the `-timedemo` run with nothing on the screen the owner would see (#2025's silent half).
 * Done: each result recorded on its 68 issue and here.
+
+### 15. RTC wake from power-off
+
+Labels: `owner-only`. Owns `rach2/sys/acpi/sleep.c` and the alarm's parts of `rach2/sys/fs/devfs.c` and `rach2/sys/arch/x86/cmos.c`. Waits on nothing. Runs before every other Lenovo step of 15 to 19.
+
+The owner, after Alpine's warm reboot on the Lenovo left it at "EFI boot failed" at 04:08 UTC+6 on 2026-11-02 and woke them: "I am Ok with Linux to discover things, BUT JESUS DON'T FREAKING KILL THE NOTEBOOK AND STALL THE WORK SO THAT I HAVE TO WAKE UP AGAIN AND REBOOT THE MACHINE???? PLAN THE FREAKING CONTROL OF THE NOTEBOOK AND HOW TO BRING IT BACK TO THE ORIGINAL STATE!!!"
+
+A first run of a step that can leave the Lenovo off, hung or unbootable runs only from 09:00 to 23:00 UTC+6, after a "Lenovo notice:" on this issue, as the `machine` skill says. The owner may be away then: a machine left off waits until the owner is home, and nothing goes to the owner's phone. Every later first run has the RTC alarm of 15b armed beside it.
+
+* 15a. Arm the CMOS alarm for S5: Rach2 has `/dev/rtc0`'s alarm and `/sys/class/rtc/rtc0/wakealarm`, which BusyBox's `rtcwake` sets; make poweroff leave the alarm interrupt on in CMOS register B and ACPI's `RTC_EN` set in `PM1_EN`, cleared `RTC_STS` first, with a host test of `sleep.c`'s order of writes.
+* 15b. On the Lenovo: `rtcwake -m no -s 120`, then `poweroff`, and the release answers SSH again by itself.
+* 15c. The same from Linux: `rtcwake -m off` in the trial init that 19 uses.
+* Done: 15b passes three times in a row; the measurements are in `dev-log/70-wifi-chip/lenovo.md`.
+
+### 16. The hardware watchdog
+
+Labels: `owner-only`. Owns a new `rach2/sys/watchdog/` (the TCO timer of the Lynx Point-LP PCH, found through the LPC bridge's TCO base), `/dev/watchdog` in `devfs.c` with Linux's `WDIOC_*` ioctls, BusyBox's `watchdog` applet and `man/` pages for both. Waits on nothing.
+
+The owner, after Alpine's warm reboot on the Lenovo left it at "EFI boot failed" at 04:08 UTC+6 on 2026-11-02 and woke them: "I am Ok with Linux to discover things, BUT JESUS DON'T FREAKING KILL THE NOTEBOOK AND STALL THE WORK SO THAT I HAVE TO WAKE UP AGAIN AND REBOOT THE MACHINE???? PLAN THE FREAKING CONTROL OF THE NOTEBOOK AND HOW TO BRING IT BACK TO THE ORIGINAL STATE!!!"
+
+A first run of a step that can leave the Lenovo off, hung or unbootable runs only from 09:00 to 23:00 UTC+6, after a "Lenovo notice:" on this issue, as the `machine` skill says. The owner may be away then: a machine left off waits until the owner is home, and nothing goes to the owner's phone. Every later first run has the RTC alarm of 15b armed beside it.
+
+* 16a. The driver and a host test of its register model: set the timeout, kick, stop, and the second timeout's reset.
+* 16b. On q35 in QEMU, whose ICH9 has the same TCO block: a stopped kick resets the guest, in a boot that ends by itself.
+* 16c. On the Lenovo, with 15b's alarm armed: kick for 60 s, stop, and the machine resets and comes back on the release.
+* 16d. iTCO_wdt armed from Linux in the trial init that 19 uses.
+* Done: 16b, and 16c three times in a row.
+
+### 17. Wake-on-LAN as a second way to power on
+
+Labels: `owner-only`. Owns the RTL8111 driver's wake bits and their part of `lenovo.md`. Waits on nothing.
+
+The owner, after Alpine's warm reboot on the Lenovo left it at "EFI boot failed" at 04:08 UTC+6 on 2026-11-02 and woke them: "I am Ok with Linux to discover things, BUT JESUS DON'T FREAKING KILL THE NOTEBOOK AND STALL THE WORK SO THAT I HAVE TO WAKE UP AGAIN AND REBOOT THE MACHINE???? PLAN THE FREAKING CONTROL OF THE NOTEBOOK AND HOW TO BRING IT BACK TO THE ORIGINAL STATE!!!"
+
+A first run of a step that can leave the Lenovo off, hung or unbootable runs only from 09:00 to 23:00 UTC+6, after a "Lenovo notice:" on this issue, as the `machine` skill says. The owner may be away then: a machine left off waits until the owner is home, and nothing goes to the owner's phone. Every later first run has the RTC alarm of 15b armed beside it.
+
+* 17a. Read silently whether the card and the firmware keep PME from S5: the card's `Config` registers on the running release, and the ACPI tables in `build/worktrees/m3/build/tmp/t2251/tables` for the LAN device's `_PRW` and the PCH's GPE.
+* 17b. Arm magic-packet wake in the driver before poweroff.
+* 17c. On the Lenovo, with 15b's alarm set as the fallback: poweroff, then a magic packet from the Mac, which brings it back before the alarm.
+* Done: a yes or no in `lenovo.md` with its evidence; on a yes, poweroff arms Wake-on-LAN.
+
+### 18. A tool that keeps a way back for any risky Lenovo step
+
+Labels: `owner-only`. Owns `tools/flow/lenovo-trial.sh`, its host test and its part of `tools/flow/Readme.md`. Waits on 15 and 16.
+
+The owner, after Alpine's warm reboot on the Lenovo left it at "EFI boot failed" at 04:08 UTC+6 on 2026-11-02 and woke them: "I am Ok with Linux to discover things, BUT JESUS DON'T FREAKING KILL THE NOTEBOOK AND STALL THE WORK SO THAT I HAVE TO WAKE UP AGAIN AND REBOOT THE MACHINE???? PLAN THE FREAKING CONTROL OF THE NOTEBOOK AND HOW TO BRING IT BACK TO THE ORIGINAL STATE!!!"
+
+* 18a. `tools/flow/lenovo-trial.sh STEP`: take the Lenovo's lock; save the boot partition's image and both slots' hashes, read through FAT, since a slot's clusters may be scattered; arm a one-shot boot whose next boot is the release, the RTC alarm and the watchdog (and Wake-on-LAN if 17 says yes); run STEP; wait for SSH until the alarm's time and a margin.
+* 18b. Then restore: write back only the boot partition's sectors that changed, put the release in both slots, check both byte for byte against what was saved, run `mixer vol 1`, and free the lock.
+* 18c. When the machine does not come back, write `build/flow/incident` and leave the lock held, so that the manager is told; nobody is woken at night.
+* 18d. A host test that runs the tool against a fake machine, through its return, its restore and its incident.
+* Done: 18d passes, and one harmless STEP, a `poweroff`, runs through the tool on the Lenovo and is restored.
+
+### 19. Linux discovery through the tool
+
+Labels: `owner-only`. Owns `dev-log/70-wifi-chip/lenovo.md`'s Linux sections. Waits on 18. Replaces 8d.
+
+The owner, after Alpine's warm reboot on the Lenovo left it at "EFI boot failed" at 04:08 UTC+6 on 2026-11-02 and woke them: "I am Ok with Linux to discover things, BUT JESUS DON'T FREAKING KILL THE NOTEBOOK AND STALL THE WORK SO THAT I HAVE TO WAKE UP AGAIN AND REBOOT THE MACHINE???? PLAN THE FREAKING CONTROL OF THE NOTEBOOK AND HOW TO BRING IT BACK TO THE ORIGINAL STATE!!!"
+
+A first run of a step that can leave the Lenovo off, hung or unbootable runs only from 09:00 to 23:00 UTC+6, after a "Lenovo notice:" on this issue, as the `machine` skill says. The owner may be away then: a machine left off waits until the owner is home, and nothing goes to the owner's phone. Every later first run has the RTC alarm of 15b armed beside it.
+
+* 19a. Why Alpine's warm reboot at 04:08 left the firmware unable to boot: trials through the tool, a reboot with ath9k unloaded first, `reboot -f`, and poweroff with the alarm, each with and without the mmiotrace.
+* 19b. The ath9k baseline: m3's register trace and scans in `build/worktrees/m3/build/tmp/t2251/linuxrun` are kept; take more through the tool only where tasks 2 to 6 need what they lack. Linux leaves by poweroff and the alarm, never a warm reboot.
+* Done: the cause and the baseline are in `lenovo.md`, and the release is back in both slots.
 
 ### 14. The 32-bit build under UEFI on the Lenovo
 
