@@ -21,6 +21,10 @@ It uses the ordinary IP, ARP, DHCP and packet-socket paths.
 Association gives carrier; authorization opens the control port.
 Before authorization only EAPOL, EtherType 0x888e, passes in either direction.
 A stopped, blocked or unassociated radio passes no data.
+On radios that enable feedback rate control, acknowledged data uses measured
+delivery probability and airtime to select legacy rates or one-stream HT20
+MCS 0 through 7.
+EAPOL and management frames use the lowest basic rate.
 Each radio has a switch of
 .Xr rfkill 4 ,
 .Li phyN ,

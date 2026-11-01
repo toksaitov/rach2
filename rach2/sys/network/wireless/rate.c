@@ -1,6 +1,6 @@
 /* Rate selection: the radio's own rate_ops when it has them, and otherwise
  * a fixed table of the BSS's basic rates, which every station of the BSS
- * can receive. Milestone 70 puts a rate-control algorithm behind rate_ops. */
+ * can receive. Feedback radios may install rc_minstrel's rate_ops. */
 #include "data.h"
 
 /* Attempts at each rate of the basic table, fastest first; the last,

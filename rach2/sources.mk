@@ -140,6 +140,7 @@ C_SRC_SHARED = kernel.c \
     sys/network/wireless/key.c \
     sys/network/wireless/agg_rx.c \
     sys/network/wireless/rate.c \
+    sys/network/wireless/rc_minstrel.c \
     sys/network/wireless/wsim.c \
     sys/network/wireless/nl80211.c \
     sys/network/wireless/sta.c \

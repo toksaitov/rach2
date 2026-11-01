@@ -24,6 +24,8 @@ The `genetlink_hosttest.c` model registers a family against the real generic dis
 
 ## Results
 
+`rc_hosttest.c` checks the wireless rate controller with recorded retry completions and modeled clean, lossy and recovered links. It also checks per-series ACK attribution, capability intersections and reset on a peer change, without files or child processes.
+
 The driver prints one result, assertion and progress record per completed check, and the assertion `listed` for agreement between the manifest, source tree and prepared inventory. A source check missing from the manifest is not executed and fails `listed`; a declared check missing from the inventory fails its assertion and `listed`.
 
 A check passes only after exit status zero, confirmed process cleanup and unchanged binary and input hashes. Every sanitizer is fatal. Each check has private scratch under the driver's `rach2-host.XXXXXX` directory in `TMPDIR`; complete output goes to its `NAME.log`. Failed evidence is kept and its directory printed. Successful runs remove their scratch. A stopped driver cancels and reaps its children before removing scratch; unconfirmed cleanup retains it. The case has no time limit of its own. Each completed check writes `progress checks N` for etude's watchdog.
