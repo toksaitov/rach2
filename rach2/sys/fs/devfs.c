@@ -34,6 +34,7 @@
 #include "../proc/suspend.h"
 #include "../proc/wait_queue.h"
 #include "../evdev.h"
+#include "../audio/dsp.h"
 #include "../audio/mixer.h"
 
 /* The open flags `devfs_open` acts on, at Linux's values. */
@@ -1495,9 +1496,12 @@ static int32_t dev_rtc_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 static const struct file_ops rtc_ops = {dev_rtc_read, dev_rtc_write, dev_rtc_poll, dev_rtc_ioctl,
                                         NULL};
 
-/* The event devices' operations are evdev.c's and the mixer's mixer.c's. */
+/* The event devices' operations are evdev.c's, the mixer's mixer.c's and the
+   audio device's dsp.c's. */
 static const struct file_ops evdev_ops = {evdev_read, NULL, evdev_poll, evdev_ioctl, evdev_close};
 static const struct file_ops mixer_ops = {NULL, NULL, dev_poll, mixer_ioctl, NULL};
+static const struct file_ops dsp_ops = {NULL, dspdev_write, dspdev_poll, dspdev_ioctl,
+                                        dspdev_close};
 
 static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_write, dev_poll,
                                              dev_ioctl, dev_grubcore_close};
@@ -1565,15 +1569,15 @@ static struct disk *window_disk(const struct devfs_entry *dev)
  * the owner of every device being root:root: /dev/null, /dev/zero,
  * /dev/full, the random devices and the terminals are 0666, as on Linux, and
  * every other device is root's, with group access to /dev/mem and the loop
- * devices. /dev/mixer is 0666 so that the console's user sets the volume,
- * as a desktop's ACL gives it on Linux, and the event devices of
- * /dev/input are root's. `bootpart` and `grubcore` are present only while
- * published, the mixer while an audio driver offers its volume and an event
- * device while its input device is registered, as the disk nodes after the
- * table are, which is why the listing goes through
- * `devfs_dirent` and skips an absent device instead of stopping at it: a
- * machine that has a later one and not an earlier one would otherwise have
- * a device it could open and could not list.
+ * devices. /dev/mixer and /dev/dsp are 0666 so that the console's user sets
+ * the volume and plays sound, as a desktop's ACL gives them on Linux, and the
+ * event devices of /dev/input are root's. `bootpart` and `grubcore` are
+ * present only while published, the mixer while an audio driver offers its
+ * volume, dsp while it offers streams, and an event device while its input
+ * device is registered, as the disk nodes after the table are, which is why
+ * the listing goes through `devfs_dirent` and skips an absent device instead
+ * of stopping at it: a machine that has a later one and not an earlier one
+ * would otherwise have a device it could open and could not list.
  *
  * An entry with NULL operations is a terminal, which `devfs_open` opens
  * itself: console and tty give an FD_TYPE_CONSOLE descriptor, tty a pty's
@@ -1600,6 +1604,7 @@ static const struct devfs_entry dev_table[] = {{"mem", 1, 1, 0, 0640, &mem_ops},
                                                {"screenlog", 240, 38, 0, 0600, &screenlog_ops},
                                                {"rtc0", 254, 0, 0, 0600, &rtc_ops},
                                                {"mixer", 14, 0, 0, 0666, &mixer_ops},
+                                               {"dsp", 14, 3, 0, 0666, &dsp_ops},
                                                {"input/event0", 13, 64, 0, 0600, &evdev_ops},
                                                {"input/event1", 13, 65, 0, 0600, &evdev_ops},
                                                {"input/event2", 13, 66, 0, 0600, &evdev_ops},
@@ -1645,8 +1650,8 @@ static int devfs_loop_index(const struct devfs_entry *dev)
 }
 
 /** Whether table entry `i` is present now: bootpart and grubcore only while
- * published, the mixer and an event device only while `mixer_present` and
- * `evdev_present` say, and every other entry always. */
+ * published, the mixer, dsp and an event device only while `mixer_present`,
+ * `dspdev_present` and `evdev_present` say, and every other entry always. */
 static int devfs_entry_present(int i)
 {
     if (dev_table[i].ops == &evdev_ops) {
@@ -1654,6 +1659,9 @@ static int devfs_entry_present(int i)
     }
     if (dev_table[i].ops == &mixer_ops) {
         return mixer_present();
+    }
+    if (dev_table[i].ops == &dsp_ops) {
+        return dspdev_present();
     }
     if (dev_table[i].ops == &bootpart_ops) {
         return bootpart.present;
@@ -2171,8 +2179,9 @@ int devfs_open(const char *name, int flags)
     e->node = NULL;
     e->sock = NULL;
     e->ofd->offset = 0;
-    if (dev->ops == &evdev_ops) {
-        int32_t rc = evdev_open(e, dev->minor - EVDEV_MINOR_BASE);
+    if (dev->ops == &evdev_ops || dev->ops == &dsp_ops) {
+        int32_t rc = dev->ops == &dsp_ops ? dspdev_open(e, flags)
+                                          : evdev_open(e, dev->minor - EVDEV_MINOR_BASE);
 
         if (rc != 0) {
             fd_free(current_proc->fds, fd);
