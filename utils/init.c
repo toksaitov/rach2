@@ -1591,18 +1591,12 @@ static void report_backup_tables(void)
  * `ifup` gets the four directories of programs for its path. It is not given
  * a shell by `SHELL`, which it would also take: `check-setid` requires that
  * `init-metal` have no shell's path in it.
- *
- * IPv6's stable secret, kept in /var/lib, is put in force first
- * (`ip6secret_keep`), so that the addresses the routers' prefixes give
- * stay the same from one boot to the next; a failure there is reported and
- * the network is still configured.
  */
 static void configure_network(void)
 {
     pid_t pid;
     int status = 0;
 
-    (void)ip6secret_keep("init: network");
     unlink("/var/run/ifstate");
     pid = fork();
     if (pid < 0) {
@@ -2436,13 +2430,14 @@ static void apply_limits(void)
 /**
  * Set the machine up before the first child: empty `/var/run` and give it a
  * `utmp` with only this boot's record, set the limits, open the service log
- * and write the backlights' kept levels back (`keep_backlights`). The
- * recovery build takes the key the installer put on the recovery partition
- * it booted from, says on the console whether a key was built into its image
- * and whether the partition's turned SSH on, since the two kinds of image
- * look identical from outside, and names each disk whose GUID table was read
- * from its backup. A metal boot whose line has `rach2.fsck` then checks its
- * ext2 partitions.
+ * and write the backlights' kept levels back (`keep_backlights`), and put
+ * IPv6's stable secret, kept in /var/lib, in force (`ip6secret_keep`), so
+ * that the addresses the routers' prefixes give stay the same from one boot
+ * to the next, whoever configures the network. The recovery build takes the key the installer put
+ * on the recovery partition it booted from, says on the console whether a key was built into its
+ * image and whether the partition's turned SSH on, since the two kinds of image look identical from
+ * outside, and names each disk whose GUID table was read from its backup. A metal boot whose line
+ * has `rach2.fsck` then checks its ext2 partitions.
  */
 static void set_up(void)
 {
@@ -2451,6 +2446,7 @@ static void set_up(void)
     apply_limits();
     open_service_log();
     keep_backlights();
+    (void)ip6secret_keep("init: ipv6");
 #ifdef INIT_RECOVERY
     report_recovery_keys();
     report_backup_tables();
