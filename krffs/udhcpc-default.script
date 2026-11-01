@@ -11,7 +11,8 @@
 # request and when a lease is lost, and leaves the interface with no address.
 # `bound` is a new lease and `renew` an extension of one; both apply the whole
 # answer, because a renewal may carry a different router or resolver than the
-# lease before it.
+# lease before it. The interfaces file runs udhcpc with `-O mtu`, so a lease
+# may carry an MTU, which is applied too.
 
 # shellcheck disable=SC2154 # udhcpc passes the lease in the environment
 RESOLV=/etc/resolv.conf
@@ -47,6 +48,13 @@ case "$1" in
 			/bin/busybox ifconfig "$interface" "$ip" netmask "$subnet" || fail=1
 		else
 			/bin/busybox ifconfig "$interface" "$ip" || fail=1
+		fi
+
+		# An MTU only when the lease gives one: a network such as a PPPoE
+		# line's carries less than Ethernet's 1500 bytes, and its server
+		# says so. Without one the interface keeps the MTU it has.
+		if [ -n "$mtu" ]; then
+			/bin/busybox ifconfig "$interface" mtu "$mtu" || fail=1
 		fi
 
 		# Old default routes go before the new one. The loop ends when a

@@ -165,7 +165,7 @@ text 0644 /etc/nsswitch.conf passwd: files\ngroup: files\nshadow: files\nhosts: 
 text 0644 /etc/ld.so.conf /usr/lib/i386-linux-gnu\n/usr/lib/x86_64-linux-gnu\n
 
 dir 0755 /etc/network
-text 0644 /etc/network/interfaces auto eth0\niface eth0 inet dhcp\n
+text 0644 /etc/network/interfaces auto eth0\niface eth0 inet dhcp\n    udhcpc_opts -O mtu\n
 dir 0755 /etc/network/if-pre-up.d
 dir 0755 /etc/network/if-up.d
 dir 0755 /etc/network/if-down.d

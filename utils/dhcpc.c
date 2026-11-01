@@ -883,7 +883,9 @@ static int iface_has(int fd, unsigned long addr)
  *
  * The address goes on before the mask, which is the order the two ioctls are
  * meant to be issued in, and the route after both, because a gateway must be
- * on a subnet this machine already has. The old default route is deleted
+ * on a subnet this machine already has. An MTU the lease gives is set
+ * between them; one the interface refuses is reported and leaves the MTU as
+ * it was, since the lease works without it. The old default route is deleted
  * whether or not the lease names a router: a gateway from the network this
  * machine was on before is not one here.
  *
@@ -925,6 +927,17 @@ static int apply(int fd, const struct dhcp_lease *l, int strict)
     if (ioctl(fd, SIOCSIFNETMASK, &ifr) < 0) {
         fprintf(stderr, "dhcpc: cannot set the netmask: %s\n", strerror(errno));
         return -1;
+    }
+    if (l->mtu) {
+        memset(&ifr, 0, sizeof(ifr));
+        strncpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name) - 1);
+        ifr.ifr_mtu = (int)l->mtu;
+        if (ioctl(fd, SIOCSIFMTU, &ifr) < 0) {
+            fprintf(stderr, "dhcpc: %s: cannot set the mtu to %lu: %s\n", ifname, l->mtu,
+                    strerror(errno));
+        } else {
+            printf("dhcpc: %s: mtu %lu\n", ifname, l->mtu);
+        }
     }
 
     memset(&rt, 0, sizeof(rt));

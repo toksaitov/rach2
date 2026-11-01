@@ -118,7 +118,7 @@ text 0644 /etc/profile export PATH=/bin:/usr/bin\nexport HOME="${HOME:-/root}"\n
 # network it is plugged into; a `static` stanza in the same file would give
 # it a fixed address instead.
 dir 0755 /etc/network
-text 0644 /etc/network/interfaces auto eth0\niface eth0 inet dhcp\n    post-up /bin/rescue-static &\n
+text 0644 /etc/network/interfaces auto eth0\niface eth0 inet dhcp\n    udhcpc_opts -O mtu\n    post-up /bin/rescue-static &\n
 
 # What the post-up command above runs: it waits for a lease and takes the
 # sealed disk's fixed address if none arrives, so that a machine whose boot

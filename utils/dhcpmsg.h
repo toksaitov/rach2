@@ -53,7 +53,8 @@ struct dhcp_lease {
     int has_seconds;  /* the reply has a four-byte lease time option */
     unsigned long dns[3];
     int dns_count;
-    char domain[64]; /* empty when absent or not letters, digits, dots and hyphens */
+    unsigned long mtu; /* the interface MTU option, in bytes */
+    char domain[64];   /* empty when absent or not letters, digits, dots and hyphens */
 };
 
 /** The fields of one message that `dhcp_build` makes, addresses in host byte

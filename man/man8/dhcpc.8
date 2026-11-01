@@ -1,4 +1,4 @@
-.Dd September 24, 2026
+.Dd November 2, 2026
 .Dt DHCPC 8
 .Os
 .Sh NAME
@@ -19,6 +19,11 @@ It validates the lease before applying the address, netmask, default route,
 and resolver configuration.
 A missing netmask selects the address's classful mask for both validation
 and application, including renewals of an unchanged address.
+The client asks for the interface MTU, option 26, and sets the MTU a lease
+gives with
+.Dv SIOCSIFMTU ;
+an MTU the interface refuses is reported, and the lease is applied without
+it.
 A packet socket receives replies before the interface has an address.
 Each resolver update writes and closes a private temporary file before
 renaming it over

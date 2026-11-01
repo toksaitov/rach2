@@ -1031,6 +1031,17 @@ Do not send the MAC address as the client identifier.
 .El
 .Pp
 USR1 renews the lease; USR2 releases it.
+.Pp
+.Pa /etc/network/interfaces
+runs
+.Nm udhcpc
+with
+.Ql -O mtu
+through
+.Ic udhcpc_opts ,
+and the default script sets the interface's MTU from a lease that gives
+one, option 26, with
+.Ql ifconfig IFACE mtu N .
 .Ss udhcpc6
 The options
 .Fl i , s , p , t , T , A , b , n , q , R , f , S , o , O

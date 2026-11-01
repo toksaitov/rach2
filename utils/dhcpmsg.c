@@ -17,6 +17,7 @@
 #define OPT_ROUTER    3
 #define OPT_DNS       6
 #define OPT_DOMAIN    15
+#define OPT_MTU       26
 #define OPT_REQUESTED 50
 #define OPT_LEASE     51
 #define OPT_T1        58
@@ -130,11 +131,12 @@ unsigned int dhcp_build(unsigned char *out, unsigned int outlen, const struct dh
         optlen += 4;
     }
     o[optlen++] = OPT_PARAMS;
-    o[optlen++] = 4;
+    o[optlen++] = 5;
     o[optlen++] = OPT_SUBNET;
     o[optlen++] = OPT_ROUTER;
     o[optlen++] = OPT_DNS;
     o[optlen++] = OPT_DOMAIN;
+    o[optlen++] = OPT_MTU;
     o[optlen++] = OPT_END;
 
     while (OPTIONS_OFF + optlen < 300) {
@@ -293,6 +295,11 @@ int dhcp_parse(const unsigned char *msg, unsigned int len, uint32_t xid,
         case OPT_ROUTER:
             if (optsize >= 4) {
                 l->router = be32(o + i + 2);
+            }
+            break;
+        case OPT_MTU:
+            if (optsize == 2) {
+                l->mtu = be16(o + i + 2);
             }
             break;
         case OPT_SERVERID:
