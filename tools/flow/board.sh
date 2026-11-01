@@ -95,8 +95,10 @@
 # closed issue that has no assignee to the account that closed it, and fails
 # when the listing of the board fails.
 #
-# `finish N COMMENT` is how a worker closes a subtask: it assigns N to this
-# account, closes N with COMMENT and sets it Done.
+# `finish N COMMENT` is how a worker closes a subtask or a task: it assigns N
+# to this account, closes N with COMMENT and sets it Done. It refuses, naming
+# them, while a subtask of N is open, since the manager may add one to a task
+# that is being worked.
 #
 # `card M PARENT TITLE` files an issue TITLE in milestone M, a sub-issue of
 # PARENT unless PARENT is `-`, assigned to OWNER and put on the board in
@@ -549,6 +551,13 @@ done_()
 finish()
 {
     login
+    read_board
+    open=$(printf '%s\n' "$board" | awk -F '\t' -v p="$1" '
+        $8 == p && $4 == "OPEN" { printf "%s#%s", sep, $3; sep = " " }')
+    if [ -n "$open" ]; then
+        echo "board: #$1: subtasks $open are open; finish them first" >&2
+        exit 1
+    fi
     if ! assign "$1" "$me" ||
         ! gh issue close "$1" --repo "$REPO" --comment "$2" > /dev/null ||
         ! set_status "$1" Done; then
