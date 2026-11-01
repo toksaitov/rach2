@@ -418,8 +418,8 @@ static void sock_fd_flags(fd_entry_t *entry, uint32_t flags)
 /**
  * Check the kind of socket socket(2) is asked to make, `domain`, `*type` and
  * `protocol`: AF_INET with SOCK_STREAM, SOCK_DGRAM or SOCK_RAW (ICMP, or the
- * ioctl-only descriptor of IPPROTO_RAW), AF_INET6 with SOCK_RAW and ICMPv6,
- * AF_PACKET with SOCK_DGRAM, and
+ * ioctl-only descriptor of IPPROTO_RAW), AF_INET6 with SOCK_RAW and ICMPv6
+ * or IPPROTO_RAW, AF_PACKET with SOCK_DGRAM, and
  * AF_NETLINK with SOCK_RAW or SOCK_DGRAM, which are one thing, since the
  * kernel's answers are datagrams: `*type` is set to SOCK_DGRAM for it. The
  * raw and packet forms need a privileged caller (-EPERM); a netlink protocol
@@ -427,7 +427,7 @@ static void sock_fd_flags(fd_entry_t *entry, uint32_t flags)
  * family, -EPROTONOSUPPORT, -ESOCKTNOSUPPORT or -EINVAL for a type or a
  * protocol the family does not have.
  *
- * The families are IPv4, IPv6 for ICMPv6 alone, the packet family, which the
+ * The families are IPv4, IPv6 for its raw sockets alone, the packet family, which the
  * DHCP client needs to see replies that arrive before this machine owns an
  * address, and netlink; another fails here rather than make a socket that
  * cannot work, and an IPv6 stream or datagram socket is -EAFNOSUPPORT, the
@@ -437,7 +437,9 @@ static void sock_fd_flags(fd_entry_t *entry, uint32_t flags)
  * the interface ioctls (BusyBox's `udhcp_read_interface`), so here it is a
  * descriptor that takes ioctls and closes, and fails to send or receive,
  * since this stack has no raw IP path. IPPROTO_ICMP is the socket `ping` and
- * `traceroute` send and receive on. A packet socket reads every frame of its
+ * `traceroute` send and receive on. AF_INET6's IPPROTO_RAW is Linux's: it
+ * sends datagrams the caller built whole, header included, and receives
+ * nothing. A packet socket reads every frame of its
  * protocol the machine receives and sends frames the IP layer never saw,
  * which is why it and the raw sockets need privilege. Its protocol is in
  * network byte order, as Linux takes it: IPv4, ARP or IPv6, the three this
@@ -453,7 +455,7 @@ static int32_t socket_kind(int domain, int *type, int protocol)
         if (*type != SOCK_RAW) {
             return -EAFNOSUPPORT;
         }
-        if (protocol != IPPROTO_ICMPV6) {
+        if (protocol != IPPROTO_ICMPV6 && protocol != IPPROTO_RAW) {
             return -EPROTONOSUPPORT;
         }
         if (!current_proc || !proc_privileged(current_proc)) {
@@ -778,17 +780,24 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
  * The kernel sums the message, as Linux does for ICMPv6 whatever the
  * caller wrote, since the pseudo-header holds the source it chooses. A
  * group is sent to with the hop limit 1, Linux's default for multicast, and
- * any other address with the socket's. Returns `len`, the error of
- * `sockaddr_in6_in` or `icmp6_send`, -EINVAL for a message too short to
- * hold its checksum, -EMSGSIZE past one 1500-byte datagram, or -EFAULT.
- * The copy into `raw_send_buf` runs with interrupts on, and the send under
- * the network lock, as an IPv4 raw send does.
+ * any other address with the socket's. A message past the path MTU leaves
+ * in fragments. A socket of IPPROTO_RAW sends instead the datagram at
+ * `buf_ptr` whole, toward the address, as `ip6_tx_whole` says.
+ *
+ * Returns `len`, the error of `sockaddr_in6_in`, `icmp6_send` or
+ * `ip6_tx_whole`, -EINVAL for a message too short to hold its checksum,
+ * -EMSGSIZE past the largest payload, 65535 bytes, or past one 1500-byte
+ * datagram for IPPROTO_RAW, -ENOMEM when no block holds a message past
+ * `raw_send_buf`, or -EFAULT. The copy runs with interrupts on, and the
+ * send under the network lock, as an IPv4 raw send does.
  */
 static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uintptr_t sa_ptr,
                            int addrlen)
 {
     uint8_t dst[16];
+    uint8_t *buf = raw_send_buf;
     uint32_t netflags;
+    int whole = sock->protocol == IPPROTO_RAW;
     int scope, r;
 
     r = sockaddr_in6_in(sa_ptr, addrlen, dst, &scope);
@@ -798,16 +807,30 @@ static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uint
     if (len < 4) {
         return -EINVAL;
     }
-    if (len > (int)(IP6_MTU - IP6_HDR_SIZE)) {
+    if (len > (whole ? (int)IP6_MTU : (int)IP6_PAYLOAD_MAX)) {
         return -EMSGSIZE;
     }
-    if (copy_from_user(raw_send_buf, (const void __user *)buf_ptr, (uint32_t)len) != 0) {
-        return -EFAULT;
+    if (len > (int)sizeof(raw_send_buf)) {
+        buf = kmalloc((size_t)len);
+        if (!buf) {
+            return -ENOMEM;
+        }
     }
-    netflags = net_lock();
-    r = icmp6_send(0, dst, scope, raw_send_buf, (uint16_t)len,
-                   ip6_is_multicast(dst) ? IP6_HOP_LIMIT_MCAST : sock->ip_ttl);
-    net_unlock(netflags);
+    if (copy_from_user(buf, (const void __user *)buf_ptr, (uint32_t)len) != 0) {
+        r = -EFAULT;
+    } else {
+        netflags = net_lock();
+        if (whole) {
+            r = ip6_tx_whole(buf, (uint32_t)len, dst, scope);
+        } else {
+            r = icmp6_send(0, dst, scope, buf, (uint16_t)len,
+                           ip6_is_multicast(dst) ? IP6_HOP_LIMIT_MCAST : sock->ip_ttl);
+        }
+        net_unlock(netflags);
+    }
+    if (buf != raw_send_buf) {
+        kfree(buf);
+    }
     return r < 0 ? r : (int32_t)len;
 }
 
