@@ -19,9 +19,9 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `dmesg` | [dmesg(1)](man1/dmesg.1) | in-house (`dmesg.script`) |  | yes |
 | `doom` | [doom(1)](man1/doom.1) | Doom |  |  |
 | `dropbearmulti` | [dropbear(8)](man8/dropbear.8) | Dropbear |  | yes |
-| `dumpkeys` | [dumpkeys(1)](man1/dumpkeys.1) | kbd |  | yes |
+| `dumpkeys` | [dumpkeys(1)](man1/dumpkeys.1) | kbd |  |  |
 | `init` | [init(8)](man8/init.8) | in-house (`init-login`) | yes | in-house (`init-recovery`) |
-| `kbd_mode` | [kbd_mode(1)](man1/kbd_mode.1) | kbd |  | yes |
+| `kbd_mode` | [kbd_mode(1)](man1/kbd_mode.1) | kbd |  |  |
 | `kbdrate` | [kbdrate(8)](man8/kbdrate.8) | kbd |  | yes |
 | `loadkeys` | [loadkeys(1)](man1/loadkeys.1) | kbd |  | yes |
 | `login` | [login(1)](man1/login.1) | BusyBox (`busybox-suid`) | in-house |  |
@@ -34,7 +34,7 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `ping` | [ping(1)](man1/ping.1) | in-house | yes | yes |
 | `setleds` | [setleds(1)](man1/setleds.1) | kbd |  | yes |
 | `sh` | [sh(1)](man1/sh.1) | BusyBox (`busybox`) | in-house (`ish`) | yes |
-| `showkey` | [showkey(1)](man1/showkey.1) | kbd |  | yes |
+| `showkey` | [showkey(1)](man1/showkey.1) | kbd |  |  |
 | `su` | [su(1)](man1/su.1) | BusyBox (`busybox-suid`) | in-house | yes |
 | `tcc` | [tcc(1)](man1/tcc.1) | TinyCC |  |  |
 | `update` | [update(8)](man8/update.8) | in-house | yes | yes |

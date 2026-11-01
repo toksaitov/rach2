@@ -6,11 +6,12 @@
  * The first boot takes the default entry, on which GRUB sets the mode the
  * video BIOS prefers; the scenario reads the login prompt off a screen dump
  * with screentext and shows Doom's 320x200 picture scaled onto the whole
- * framebuffer, and the console drawing again once the game has gone. The host then arms the text
- * entry for one boot in the copy's GRUB environment block, as grub-editenv would, and the second
- * boot shows the console in 80 by 25 cells and Doom in the VGA's mode 13h. Each boot is driven at
- * the serial console as root, and every screen is judged by QMP's screen dump: its size, and how
- * many colors it has.
+ * framebuffer, and the console drawing again once the game has gone. The
+ * host then arms the text entry for one boot in the copy's GRUB environment
+ * block, as grub-editenv would, and the second boot shows the console in 80
+ * by 25 cells and Doom in the VGA's mode 13h. Each boot is driven at the
+ * serial console as root, and every screen is judged by QMP's screen dump:
+ * its size, and how many colors it has.
  */
 #include <stdio.h>
 #include <stdlib.h>

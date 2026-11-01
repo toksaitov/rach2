@@ -934,7 +934,7 @@ static void test_digests_write(void)
           "write: the digest of what was written");
     close(fds[0]);
     CHECK(pid > 0 && waitpid(pid, &status, 0) == pid && status == 0, "write: the writer");
-    /* The writer keeps the file under its real path; /tmp is a link on macOS. */
+    /* /tmp is a link on macOS; the writer records the real path. */
     real = realpath(dst, NULL);
     CHECK(stat(dst, &st) == 0 && (size_t)st.st_size == n && real != NULL && has_line(cache, real),
           "write: the file and its line");

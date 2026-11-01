@@ -3,12 +3,12 @@
  * builds.
  *
  * The guest builds (rach2/guest.mk, utils/guest.mk, ish/guest.mk,
- * term/guest.mk) are written for pdpmake, which reads none of the GNU makefiles of the host
- * build. They share its source manifests, but their rules are their own. A
- * guest list that differs builds a kernel missing a file or a program
- * missing its companion source, and the failure would appear only inside a
- * booted guest, late and hard to read. The check runs on the host, in the
- * style check, and requires six things:
+ * term/guest.mk) are written for pdpmake, which reads none of the host
+ * build's GNU makefiles. They share its source manifests, but their rules
+ * are their own. A guest list that differs builds a kernel missing a file
+ * or a program missing its companion source, and the failure would appear
+ * only inside a booted guest, late and hard to read. The check runs on the
+ * host, in the style check, and requires six things:
  *
  *   1. rach2/guest.mk derives OBJS from the shared rach2/sources.mk lists
  *      the host build includes, object for object, loader.o first, no

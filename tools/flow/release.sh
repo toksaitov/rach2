@@ -2002,9 +2002,10 @@ main()
             *) fail trial "the machine runs ${now:-nothing that answers} after the install" ;;
         esac
         where || fail trial "the machine answered as another machine"
-        printf '%s\n' "$cmdline" | tr ' ' '\n' | grep -qx 'rach2\.slot=candidate' &&
-            printf '%s\n' "$cmdline" | tr ' ' '\n' | grep -qx 'rach2\.console=term' ||
+        if ! printf '%s\n' "$cmdline" | tr ' ' '\n' | grep -qx 'rach2\.slot=candidate' ||
+            ! printf '%s\n' "$cmdline" | tr ' ' '\n' | grep -qx 'rach2\.console=term'; then
             fail trial "the trial boot's command line lacks rach2.slot=candidate or rach2.console=term: ${cmdline:-none read}"
+        fi
         RACH2_MEASURE_SLOT=candidate RACH2_MEASURE_KERNEL=$files/../rach2/kernel \
             sh tools/dev/machine_identity.sh "$state/identity" ssh -i "$repo/krffs/rach2_demo_ed25519" \
             -o BatchMode=yes -o ConnectTimeout=10 -o LogLevel=ERROR -o UserKnownHostsFile=/dev/null \
