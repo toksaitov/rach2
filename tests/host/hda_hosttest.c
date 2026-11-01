@@ -34,7 +34,10 @@ static uint8_t pin_ctl[128];
 static uint8_t channel[128];
 static uint16_t eapd[128]; /* each pin's EAPD/BTL payload, with 0x100 once set */
 static unsigned conn_reads, verbs, bad_offsets, sense_triggers;
-static int codec_silent;  /* the codec takes commands and never answers */
+static int codec_silent; /* the codec takes commands and never answers */
+/* The command the codec refuses, ending it with no response, when its node
+ * and verb bits under fail_mask are fail_command; none while fail_mask is 0. */
+static uint32_t fail_command, fail_mask;
 static int clock_stopped; /* the wall clock does not advance */
 /* The interrupt flag kirq_save and kirq_restore keep; the delays made and
  * those made with interrupts off; the reads of ICS with interrupts on. */
@@ -145,13 +148,18 @@ void hda_test_write(uint32_t offset, uint32_t value, int bits)
     if (offset == HDA_ICS) {
         if (value & HDA_ICS_IRV)
             mmio[HDA_ICS] &= ~HDA_ICS_IRV;
-        if ((value & HDA_ICS_ICB) && codec_silent) {
-            model_verb(hda_test_read(HDA_ICW, 32));
-            mmio[HDA_ICS] |= HDA_ICS_ICB;
-        } else if (value & HDA_ICS_ICB) {
-            uint32_t reply = model_verb(hda_test_read(HDA_ICW, 32));
-            hda_test_write(HDA_IRR, reply, 32);
-            mmio[HDA_ICS] = HDA_ICS_IRV;
+        if (value & HDA_ICS_ICB) {
+            uint32_t command = hda_test_read(HDA_ICW, 32);
+
+            if (fail_mask && (command & fail_mask) == fail_command) {
+                mmio[HDA_ICS] = 0;
+            } else if (codec_silent) {
+                model_verb(command);
+                mmio[HDA_ICS] |= HDA_ICS_ICB;
+            } else {
+                hda_test_write(HDA_IRR, model_verb(command), 32);
+                mmio[HDA_ICS] = HDA_ICS_IRV;
+            }
         }
         return;
     }
@@ -181,6 +189,7 @@ static void reset_model(void)
     num_input_streams = 0;
     input_stream_index = 0;
     codec_silent = clock_stopped = dma_model = 0;
+    fail_command = fail_mask = 0;
     playing = stream_started = false;
     user_callback = NULL;
     hda_base = 1;
@@ -1575,7 +1584,51 @@ static void row_jack_capture(void)
     clock_stopped = 0;
 }
 
-/** Run codec and controller rows: 0 when every check passes, 1 otherwise. */
+/**
+ * A capture start whose codec path fails: on the G50-70's codec, ADC 19
+ * refuses its format verb, then internal mic 26 its widget control. Each
+ * start returns -EIO and leaves capture stopped, its descriptor halted, the
+ * ADC untagged and the pin's input off, and keeps jack mic 25, which
+ * capture moved from, for the next try. Once the codec takes every verb,
+ * the next start records and turns the jack mic's input off.
+ */
+static void row_capture_fails(void)
+{
+    audio_stream_t s;
+    const hda_input_report_t *in = &hda_get_report()->input;
+
+    row = "capture-fails";
+    reset_model();
+    model_lenovo();
+    check(hda_find_output(), "enumeration succeeds");
+    clock_stopped = 1;
+    check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0, "capture set up");
+    mic_left = 25;
+    mic_program = true;
+    fail_mask = 0x7FF0000;
+    fail_command = (19u << 20) | HDA_VERB_SET_CONV_FMT;
+    check(hda_driver.stream_start(&s) == -EIO, "a refused format verb fails the start");
+    check(!cap_running && !in->running && !(hda_test_read(0x80 + HDA_SD_CTL, 8) & HDA_SD_CTL_RUN),
+          "capture stays stopped");
+    check(channel[19] == 0 && pin_ctl[26] == 0, "the adc is untagged and the pin's input off");
+    check(mic_program && mic_left == 25, "the pin left waits for the next try");
+    fail_mask = 0x7FFFF00;
+    fail_command = (26u << 20) | HDA_VERB_SET_PIN_CTRL;
+    check(hda_driver.stream_start(&s) == -EIO && !cap_running && channel[19] == 0,
+          "a refused route verb fails the start too");
+    check(mic_program && mic_left == 25, "and the pin left still waits");
+    fail_mask = 0;
+    pin_ctl[25] = 0x24;
+    check(hda_driver.stream_start(&s) == 0 && cap_running && in->running, "the next start records");
+    check(channel[19] == (HDA_CAPTURE_TAG << 4) && converter_format[19] == in->format &&
+              pin_ctl[26] == 0x20,
+          "the path is programmed");
+    check(pin_ctl[25] == 0 && !mic_program && mic_left == 0, "and the pin left is turned off");
+    hda_driver.stream_stop(&s);
+    hda_driver.stream_close(&s);
+    clock_stopped = 0;
+}
+
 /**
  * The input controls over the G50-70's codec: the two mics are the
  * sources, with a gain on ADC 19 and a boost on each pin. The gain reads 93
@@ -1637,6 +1690,7 @@ static void row_input_controls(void)
           "a codec with no adc has no sources");
 }
 
+/** Run codec and controller rows: 0 when every check passes, 1 otherwise. */
 int main(void)
 {
     row_rates();
@@ -1659,6 +1713,7 @@ int main(void)
     row_capture_stream();
     row_capture_duplex();
     row_capture_overrun();
+    row_capture_fails();
     row_input_controls();
     row_jack_switch();
     row_jack_reads();

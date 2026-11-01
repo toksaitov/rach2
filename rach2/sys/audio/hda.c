@@ -4166,17 +4166,24 @@ static bool hda_input_program(int vmode)
 /**
  * Program the input path for format word `fmt`: power the function group
  * and the ADC, give the ADC the format and the input stream's tag, and
- * program the route from the source recorded (hda_input_program).
+ * program the route from the source recorded (hda_input_program). Return 0,
+ * or -EIO when a verb failed; every verb is sent even so. The route's retry
+ * flags, mic_program and mic_left, are cleared only on success, so that a
+ * pin capture moved from is turned off at the next try.
  */
-static void hda_capture_path(uint16_t fmt)
+static int hda_capture_path(uint16_t fmt)
 {
-    hda_send_verb(codec_addr, audio_fg_nid, HDA_VERB_SET_POWER | 0x00);
-    hda_send_verb(codec_addr, adc_nid, HDA_VERB_SET_POWER | 0x00);
-    hda_send_verb(codec_addr, adc_nid, HDA_VERB_SET_CONV_FMT | fmt);
-    hda_send_verb(codec_addr, adc_nid, HDA_VERB_SET_CHANNEL | (HDA_CAPTURE_TAG << 4));
-    hda_input_program(HDA_VERB_WAIT);
+    bool ok = true;
+
+    hda_put(audio_fg_nid, HDA_VERB_SET_POWER | 0x00, HDA_VERB_WAIT, &ok);
+    hda_put(adc_nid, HDA_VERB_SET_POWER | 0x00, HDA_VERB_WAIT, &ok);
+    hda_put(adc_nid, HDA_VERB_SET_CONV_FMT | fmt, HDA_VERB_WAIT, &ok);
+    hda_put(adc_nid, HDA_VERB_SET_CHANNEL | (HDA_CAPTURE_TAG << 4), HDA_VERB_WAIT, &ok);
+    if (!hda_input_program(HDA_VERB_WAIT) || !ok)
+        return -EIO;
     mic_program = false;
     mic_left = 0;
+    return 0;
 }
 
 /** Take the input stream for `s`: 0, -EBUSY while it is taken, or -ENODEV
@@ -4240,13 +4247,16 @@ static int hda_capture_setup(audio_stream_t *s)
  * the descriptor list over the DMA buffer with an interrupt at each period,
  * program the path, and run. The first start after the controller was set
  * up chooses where positions are read (hda_check_dma), as playback's does.
- * 0, or -EIO when the stream is not set up, already runs, or will not reset.
+ * 0, or -EIO when the stream is not set up, already runs, or will not reset,
+ * or the codec does not take the path (hda_capture_path); after an error
+ * capture stays stopped, the descriptor halted and the ADC untagged.
  */
 static int hda_capture_start(audio_stream_t *s)
 {
     int stream = input_stream_index;
     uint64_t addr = (uint64_t)virt_to_phys(cap_buffer);
     uint32_t flags, i;
+    int err;
 
     if (s != cap_stream || !cap_period || cap_running || !hda_base)
         return -EIO;
@@ -4270,7 +4280,14 @@ static int hda_capture_start(audio_stream_t *s)
     hda_sd_write16(stream, HDA_SD_FORMAT, cap_format);
     hda_sd_write32(stream, HDA_SD_CTL, ((uint32_t)HDA_CAPTURE_TAG << 20) | HDA_SD_CTL_IOCE);
     hda_jack_hold();
-    hda_capture_path(cap_format);
+    err = hda_capture_path(cap_format);
+    if (err) {
+        hda_sd_write8(stream, HDA_SD_CTL, 0);
+        hda_send_verb(codec_addr, adc_nid, HDA_VERB_SET_CHANNEL | 0);
+        hda_send_verb(codec_addr, in_pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00);
+        hda_jack_release();
+        return err;
+    }
     hda_jack_release();
     arch_dma_flush_all();
 
