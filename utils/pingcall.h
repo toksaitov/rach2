@@ -26,7 +26,8 @@
 #define SC_PING_DATA 0x1001
 /* An ICMPv6 echo: the address of the destination's 16 bytes in network
  * order, the index of the interface a link-local destination is reached by
- * or 0, the data size, at most 1452 bytes, and the hop limit, 1 to 255.
+ * or 0, the data size, at most 65527 bytes, sent in fragments past 1452,
+ * and the hop limit, 1 to 255.
  * Returns as SC_PING_DATA does. */
 #define SC_PING6     0x1002
 
