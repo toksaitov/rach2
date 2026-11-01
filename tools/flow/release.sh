@@ -1,3 +1,4 @@
+[ -z "$prepare" ] || { mkdir -p "$state/prepare"; log=$state/prepare/log; }
 #!/bin/sh
 #
 # release.sh: release milestone M at commit SHA: test SHA with a full run on
