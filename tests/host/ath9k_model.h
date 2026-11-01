@@ -50,7 +50,7 @@
 
 /* The bytes of the window the model keeps: every register of reg.h and
  * the OTP window lie below it. */
-#define ATH9K_MODEL_WINDOW 0x20000
+#define ATH9K_MODEL_WINDOW 0x21000
 
 /* The largest EEPROM and OTP, 4 KiB, the most ath9k reads of either
  * (AR9300_BASE_ADDR_4K): the EEPROM's window is 0x2000 to 0x3fff and the

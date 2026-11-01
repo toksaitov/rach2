@@ -5,7 +5,7 @@
  * No datasheet of the family is public. These definitions are therefore
  * ath9k's, from Linux v6.16 (commit
  * 038d61fd642278bab63ee8ef722c50d10ab01e8f): drivers/net/wireless/
- * ath/reg.h, and ath9k's reg.h, ar9003_mac.h, mac.h and ar9003_phy.h, in
+ * ath/reg.h, and ath9k's reg.h, ar9003_mac.h, mac.h, ar9003_phy.h and reg_mci.h, in
  * that order, each section headed by the file it comes from. These changes
  * were made to them, and no value was changed by hand:
  *
@@ -22,6 +22,9 @@
  *   revision numbers and its 1.0 and SoC registers) are left out, and so
  *   are the AR5416 descriptor's word aliases. The AR9565's version,
  *   revisions and GPIO count are its row's, in chips.c.
+ * - AR_SWITCH_TABLE_COM_ALL is AR_SWITCH_TABLE_COM_AR9462_ALL, the
+ *   24-bit field the AR9565 shares. The reg_mci.h section keeps the
+ *   coexistence controls used to leave Bluetooth unused.
  * - ath9k's enum of AR_INTR_SYNC_* bits is written as macros, since C89
  *   holds an enumeration constant to an int. C++ comments became C
  *   comments, and tabs spaces.
@@ -2589,7 +2592,7 @@
 #define AR_CH0_TOP_XPABIASLVL   (0x300)
 #define AR_CH0_TOP_XPABIASLVL_S (8)
 
-#define AR_SWITCH_TABLE_COM_ALL        (0xffff)
+#define AR_SWITCH_TABLE_COM_ALL        (0xffffff)
 #define AR_SWITCH_TABLE_COM_ALL_S      (0)
 #define AR_SWITCH_TABLE_COM_SPDT       (0x00f00000)
 #define AR_SWITCH_TABLE_COM_SPDT_ALL   (0x0000fff0)
@@ -2597,6 +2600,15 @@
 
 #define AR_SWITCH_TABLE_COM2_ALL   (0xffffff)
 #define AR_SWITCH_TABLE_COM2_ALL_S (0)
+
+/* ath9k/reg_mci.h: coexistence control and the WLAN/BT switch owner. */
+#define AR_MCI_INTERRUPT_EN             0x182c
+#define AR_MCI_INTERRUPT_RX_MSG_EN      0x183c
+#define AR_BTCOEX_CTRL                  0x18ac
+#define AR_BTCOEX_CTRL_WBTIMER_EN       0x00000002
+#define AR_BTCOEX_CTRL_MCI_MODE_EN      0x00000004
+#define AR_BTCOEX_CTRL_SPDT_ENABLE      0x00000001
+#define AR_BTCOEX_CTRL_BT_OWN_SPDT_CTRL 0x00000002
 
 #define AR_SWITCH_TABLE_ALL   (0xfff)
 #define AR_SWITCH_TABLE_ALL_S (0)
