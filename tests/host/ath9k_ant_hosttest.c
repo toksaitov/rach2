@@ -9,8 +9,6 @@
  * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c rach2/sys/proc/suspend.c
  */
-#include <stdio.h>
-
 #include "ath9k_model.h"
 #include "network/wireless/wiphy.h"
 #include "cmdline.h"
@@ -20,6 +18,7 @@
 #include "proc/percpu.h"
 #include "proc/wait_queue.h"
 #include "klog.h"
+#include <stdio.h>
 
 static unsigned fails;
 #define CHECK(c)                                                                \
