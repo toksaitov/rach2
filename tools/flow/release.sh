@@ -47,7 +47,11 @@
 #   that exits or is stopped stops Windows' preparation and ends both claims.
 #   The Lenovo's run, lenovo, is the native cases of tests/native on the
 #   trial boot, which `native-deploy run` starts from here with the payload
-#   the build makes, after the acceptance. A run that ends without a status,
+#   the build makes, after the acceptance. The trial boot's console session
+#   is `term`, which holds the framebuffer that the cases of `console` open,
+#   so the run stops it first; init then starts the kernel console's login in
+#   its place, and ending that login once the run is over starts `term`
+#   again. A run that ends without a status,
 #   in Windows' preparation or its cases, runs again, at most three runs in
 #   all.
 # * A failed run adds a line `failure MACHINE RUN WORD...` to the record, the
@@ -1384,6 +1388,40 @@ windows_halt()
     rm -f "$state/windows.run"
 }
 
+# screen_free: stop the trial boot's console session, `term`, which holds the
+# framebuffer, and set `login` to the process of the kernel console's login
+# that init starts in its place; leave `login` empty when no `term` runs.
+screen_free()
+{
+    login=$(lenovo 'kids() { for p in /proc/[0-9]*; do
+            read -r pid comm s ppid r < $p/stat 2> /dev/null && [ "$ppid" = 1 ] && echo "$pid $comm"; done; }
+        t=$(kids | sed -n "s/ (term)\$//p")
+        [ -n "$t" ] || exit 0
+        before=" $(kids | cut -d " " -f 1 | tr "\n" " ")"
+        kill $t || exit 1
+        n=0
+        while [ $n -lt 20 ]; do
+            sleep 1
+            n=$((n + 1))
+            [ ! -d /proc/$t ] || continue
+            for k in $(kids | cut -d " " -f 1); do
+                case $before in *" $k "*) ;; *) echo $k; exit 0 ;; esac
+            done
+        done
+        exit 1') || fail lenovo "the console's term would not give up the screen"
+    [ -z "$login" ] || say "lenovo: stopped the console's term for the run; login $login stands in"
+}
+
+# screen_back: end the kernel console's login that screen_free left, so that
+# init starts `term` again.
+screen_back()
+{
+    [ -n "$login" ] || return 0
+    lenovo "read -r pid comm s ppid r < /proc/$login/stat 2> /dev/null && [ \"\$ppid\" = 1 ] &&
+        kill -HUP $login" > /dev/null 2>&1 || say "lenovo: the console's login $login was gone"
+    login=''
+}
+
 # lenovo_run: run the native cases on the trial boot, every case or those of
 # the record's `again lenovo` line, with native-deploy from this computer, and
 # mark it done or end the release on its failure.
@@ -1405,6 +1443,7 @@ lenovo_run()
             fail lenovo "the native cases' payload could not be staged: $(tail -n 3 "$state/$id.out" | tr '\n' ' ')"
         say "lenovo: staged $staged"
     fi
+    screen_free
     id=milestone$milestone-$(echo "$sha" | cut -c 1-12)-lenovo-$(date -u '+%m%d-%H%M%S')
     note "lenovo started $id"
     # shellcheck disable=SC2086 # the cases are words
@@ -1416,9 +1455,11 @@ lenovo_run()
         --far "$(setting lenovo far)" --empty "$(setting lenovo empty)" \
         --silent "$(setting lenovo silent)" --purpose phase_first_run -- $words \
         > "$state/$id.out" 2>&1; then
+        screen_back
         mark lenovo "run $id"
         return 0
     fi
+    screen_back
     log=''
     for f in "$state/$id"/collection-*.out; do
         [ ! -f "$f" ] || log=$f

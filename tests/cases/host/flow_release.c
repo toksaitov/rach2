@@ -311,6 +311,10 @@ static int ssh_mock(int argc, char **argv)
         append(ev("RELEASE_TEST_CALLS"), "machine read\n");
         return 1;
     }
+    if (strstr(command, "(term)")) {
+        append(ev("RELEASE_TEST_CALLS"), "machine write stop term\n");
+        return 0;
+    }
     if (!strcmp(command, "bootctl status")) {
         append(ev("RELEASE_TEST_CALLS"), "machine read\n");
         puts("bootctl: next_entry: empty");
