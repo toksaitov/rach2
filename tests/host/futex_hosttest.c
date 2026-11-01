@@ -247,6 +247,12 @@ void wq_wake_all(wait_queue_t *wq)
     wakes++;
 }
 
+/** A waiter's queue needs nothing in the model. */
+void wait_queue_init(wait_queue_t *wq)
+{
+    (void)wq;
+}
+
 /** The wall clock: 100 s. */
 void get_current_time(int64_t *seconds, int64_t *nanoseconds)
 {
