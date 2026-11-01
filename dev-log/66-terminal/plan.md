@@ -556,3 +556,15 @@ The second round, in which each reviewer argued against the revision:
 * Fable: Codex is signed in only in the owner's accounts. Changed: task 12 records Claude Code; task 29 looks at Codex and Gemini CLI.
 * Codex proposed keeping the LEDs inside the devices' task, since their events share one order; the LEDs are an output path through files the devices' task does not touch, so they run beside it.
 * Codex proposed that the translator wait on the key table; with tests run at the end, the translator merges without it, and the table's test joins them.
+
+## The Lenovo
+
+Task 29's work on the Lenovo, as it stands.
+
+* The build, on 1 November: 48ec5629d built in the testing host's release copy as `release.sh` builds it, after `make clean` and with `make machine GNU_AGENTS=all`, in about 15 minutes from the retained vendor and GNU builds. The root's `/demo/doom1.wad`, read with debugfs, equals the host's `/etc/rach2/doom1.wad`. The kernel is `ed5d0419...` by SHA-256, 2,197,936 bytes; the GNU root `81b11e02...`.
+* Before the trial both slots were checked against the release record of milestone 65 (`9bf73101...`), through the boot partition's files, and `bootctl fallback` was run first.
+* The trial of the 64-bit kernel alone, on the installed root of milestone 65: `bootctl kernel` and one reboot, about 30 s to SSH; `machine_identity.sh` found the kernel running from the candidate slot. The boot log has the framebuffer, RGB 1366x768 at 32 bits and pitch 5504, mapped write-combining, the console at 85x24, and the USB keyboard and mouse behind the hub on port 2.
+* Over SSH on that trial, the milestone's `doom`, `term` and Unifont and the WAD copied to `/dev/shm`, the screen free of `term`: `doom -playdemo demo1` played the demo to its end with status 0, the game reporting 10,084 frames in 144,626 ms, the longest 30 ms.
+* `term` at scale 2 over SSH ran a shell script that follows each update with a cursor position report and reads the reply before the next, so that each waits until `term` has read it; times are from `/proc/uptime`. A whole screen, 24 rows of 85 characters alternating between two letters: 100 in 1.30 s, 13 ms each. A scroll of the whole screen by one line of 85 characters: 200 in 2.46 s, 12 ms each, a whole frame's `pwrite` of 4,227,072 bytes. A spinner's update of one cell: 400 in 0.11 s, 0.3 ms each; the report alone, 400 in 0.19 s. The writes are fast enough without mmap of the framebuffer.
+* The release was then put back: `bootctl kernel` of the release's kernel, a boot, `bootctl commit` and `bootctl fallback`, both slots `9bf73101...` again.
+* Still to do: the trial of the whole build through the update the release makes, once #1773 lets `rach2-install --update` carry `rach2.console=term`; the 32-bit kernel under UEFI; and the owner's checks at the keyboard and screen.
