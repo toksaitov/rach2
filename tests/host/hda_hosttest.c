@@ -936,7 +936,9 @@ const char *audio_get_driver_name(void)
     return "Intel HD Audio";
 }
 
-/** Only the first start after setup waits for the DMA check; none prints. */
+/** Only the first start after setup waits for the DMA check, which reads the
+ * wall clock at each poll; a later start reads it twice, for the session's
+ * start and the service's last reading. No start prints. */
 static void row_dma_check(void)
 {
     unsigned reads;
@@ -951,7 +953,7 @@ static void row_dma_check(void)
     hda_stop();
     reads = clock_reads;
     check(hda_start(48000, AUDIO_S16LE, 2) == 0, "second start succeeds");
-    check(clock_reads - reads <= 1, "second start does not wait");
+    check(clock_reads - reads <= 2, "second start does not wait");
     check(console_writes == 0, "starts print nothing on the console");
     hda_stop();
 }
