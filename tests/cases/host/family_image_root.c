@@ -32,6 +32,8 @@ int family_image_root_make(struct fixture *f, const char *target, const char *op
                                     "check-pdpmake",
                                     "check-e2fsck",
                                     "ports/doom",
+                                    "kbd",
+                                    "libtsm",
                                     "vendor/musl/.stamp",
                                     "build/krffs/mkfs.krffs",
                                     "build/krffs/stageimage.krffs",
