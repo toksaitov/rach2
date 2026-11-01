@@ -213,7 +213,7 @@ On i686 the window runs from `0xD0000000` to the lowest PCI memory BAR whose add
 
 The cache has `PC_SLOTS`, 2048 slots, and uses as many as half the caches' target allows. A slot takes a frame of the DMA pool when it is first filled, since the backing may give the frame's address to a device, and gives it back under pressure (`pc_shrink`). On a miss `pc_fault` takes a free slot or the clock's victim, written back first when dirty, reads the page, and maps it read-only for a read or writable and dirty for a write; a later write to a page mapped read-only faults again and marks it dirty. The fault path polls the disk with interrupts off and never sleeps.
 
-`pc_writeback` marks the slot `pinned`, which eviction, reclaim and other writebacks respect, then maps the page read-only and clears its dirty mark before the write, so a store during the write marks it dirty again; a failed write leaves it dirty. `pc_sync` returns `PC_SYNC_BUSY` when it passed over a pinned slot and `PC_SYNC_FAILED` when a write failed. `fsync` of a file of the KRFFS root answers EIO on either, and `sync` repeats while a slot is busy, for at most 3000 ticks, 30 seconds at the PC's 100 Hz.
+`pc_writeback` marks the slot `pinned`, which eviction, reclaim and other writebacks respect, then maps the page read-only and clears its dirty mark before the write, so a store during the write marks it dirty again; a failed write leaves it dirty. `pc_sync` returns `PC_SYNC_BUSY` when it passed over a pinned slot and `PC_SYNC_FAILED` when a write failed. `fsync` of a file of the KRFFS root answers EIO on either, and `sync` repeats while a slot is busy, for at most 30 seconds of ticks.
 
 ## Limits
 
