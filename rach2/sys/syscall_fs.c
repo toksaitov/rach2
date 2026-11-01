@@ -9956,49 +9956,591 @@ static int32_t fcntl_seals(const fd_entry_t *entry, int cmd, uint32_t arg)
 #define MFD_NOEXEC_SEAL   0x08u
 #define MFD_EXEC          0x10u
 
-/**
- * The descriptor-to-descriptor copies: splice and tee, with the descriptors
- * in the first and third arguments and in the first and second, and
- * sendfile and sendfile64, with the output descriptor first and the input
- * second.
- *
- * The kernel moves no data between two descriptors itself, so each answers
- * -EINVAL once both descriptors are open, as Linux answers for descriptors it
- * cannot splice or send from, and -EBADF otherwise. GNU grep drains a pipe
- * it has read enough of with splice when its output is /dev/null, and copies
- * through read and write after an EINVAL, which it takes for "not this kind
- * of descriptor", where any other error is its read's.
- */
-static int32_t no_copy(int a, int b)
+/* splice's and tee's flags: SPLICE_F_NONBLOCK, the one this kernel acts
+ * on, and all four, of which a move or a gift of pages is a copy here and
+ * SPLICE_F_MORE a hint. */
+#define SPLICE_F_NONBLOCK 0x02u
+#define SPLICE_F_ALL      0x0Fu
+
+/* The bytes a copy between descriptors moves through its kernel buffer at a
+ * time. */
+#define COPY_CHUNK 32768u
+
+/* The largest file offset, Linux's loff_t's, and the largest i386's sendfile
+ * with a 32-bit offset reaches, Linux's MAX_NON_LFS. */
+#define COPY_POS_MAX   ((((uint64_t)0x7FFFFFFFu) << 32) | 0xFFFFFFFFu)
+#define COPY_POS_MAX32 0x7FFFFFFFu
+
+/** The caller's descriptor `fd` for a copy, or NULL when it is not open or
+ * was opened with O_PATH. */
+static fd_entry_t *copy_fd(int fd)
 {
+    fd_entry_t *e = fd_get(current_proc->fds, fd);
+
+    return e && !(e->flags & FD_FLAG_PATH) ? e : NULL;
+}
+
+/** Whether the description of `e` has O_NONBLOCK. */
+static int copy_nonblock(const fd_entry_t *e)
+{
+    return e->ofd && (e->ofd->status_flags & OFD_NONBLOCK);
+}
+
+/**
+ * Whether `e` is open on a regular file of the KRFFS root or of a mounted
+ * type, which the copies read and write at an offset: 0, -EISDIR for a
+ * directory, or -EINVAL for anything else, a FIFO, a device and a /proc
+ * file among them.
+ */
+static int32_t copy_regular(fd_entry_t *e)
+{
+    struct vfs_stat st;
+
+    if (e->type == FD_TYPE_DIR) {
+        return -EISDIR;
+    }
+    if (e->type != FD_TYPE_FILE || e->ops || !e->ofd || !e->ofd->vmnt ||
+        vfs_getattr(e->ofd->vmnt, e->ofd->vnode, &st) != 0) {
+        return -EINVAL;
+    }
+    if ((st.mode & S_IFMT) == S_IFDIR) {
+        return -EISDIR;
+    }
+    return (st.mode & S_IFMT) == S_IFREG ? 0 : -EINVAL;
+}
+
+/** Read the offset at the user's `uoff` into `*pos`: a 64-bit loff_t, or
+ * with `narrow` i386's 32-bit off_t. Returns 0, -EFAULT, or -EINVAL for an
+ * offset below 0. */
+static int32_t copy_off_get(uintptr_t uoff, int narrow, uint64_t *pos)
+{
+    if (narrow) {
+        int32_t v;
+
+        if (copy_from_user(&v, (const void __user *)uoff, sizeof(v)) != 0) {
+            return -EFAULT;
+        }
+        if (v < 0) {
+            return -EINVAL;
+        }
+        *pos = (uint64_t)v;
+    } else {
+        long long v;
+
+        if (copy_from_user(&v, (const void __user *)uoff, sizeof(v)) != 0) {
+            return -EFAULT;
+        }
+        if (v < 0) {
+            return -EINVAL;
+        }
+        *pos = (uint64_t)v;
+    }
+    return 0;
+}
+
+/** Store `pos` at the user's `uoff`, as `copy_off_get` reads it: 0 or
+ * -EFAULT. */
+static int32_t copy_off_put(uintptr_t uoff, int narrow, uint64_t pos)
+{
+    if (narrow) {
+        int32_t v = (int32_t)pos;
+
+        return copy_to_user((void __user *)uoff, &v, sizeof(v)) != 0 ? -EFAULT : 0;
+    } else {
+        long long v = (long long)pos;
+
+        return copy_to_user((void __user *)uoff, &v, sizeof(v)) != 0 ? -EFAULT : 0;
+    }
+}
+
+/**
+ * The kernel buffer of a copy, COPY_CHUNK bytes from the heap opened to the
+ * user-copy checks (`user_window_open`), so that the read and write paths,
+ * which take user buffers, take it; NULL when the heap has no room. The
+ * copy gives it back with `copy_buf_put`.
+ */
+static char *copy_buf_get(void)
+{
+    char *buf = kmalloc(COPY_CHUNK);
+
+    if (buf) {
+        user_window_open(buf, COPY_CHUNK);
+    }
+    return buf;
+}
+
+/** Close the window on a copy's buffer and free it. */
+static void copy_buf_put(char *buf)
+{
+    user_window_close();
+    kfree(buf);
+}
+
+/**
+ * Write `n` bytes of a copy's buffer `buf` to `out`, the caller's descriptor
+ * `out_fd`: to a pipe without waiting, since the caller waited for its room;
+ * to a regular file at `*at` when `at` is not NULL, as pwrite64 writes; and
+ * otherwise as write(2) writes, at the description's offset and by its
+ * O_NONBLOCK. Returns the bytes written or a negative errno.
+ */
+static int32_t copy_put(fd_entry_t *out, int out_fd, const char *buf, uint32_t n,
+                        const uint64_t *at)
+{
+    if (pipe_is(out)) {
+        return pipe_splice_write(out, (const char __force __user *)buf, n, 1);
+    }
+    if (at) {
+        return file_write(out, (const char __force __user *)buf, n, at);
+    }
+    return write_fd(out_fd, (const char __force __user *)buf, n);
+}
+
+/**
+ * Copy up to `count` bytes of the regular file `in` from `*pos` to `out`,
+ * the caller's descriptor `out_fd`, at `*out_at` when that is not NULL, a
+ * chunk at a time through `buf`, a copy's buffer (`copy_buf_get`). Each
+ * chunk is read at `*pos` as pread64 reads, and `*pos` and `*out_at` move
+ * past what `out` took.
+ *
+ * A pipe's room is waited for before the first chunk unless `nonblock`, and
+ * a chunk is no larger than the room, so a copy into a pipe returns what
+ * fitted, as Linux's splice does, and never holds bytes it cannot write. The
+ * copy ends at the end of the file, at a short write and, once a byte has
+ * moved, at a signal. Returns the bytes copied, or the first error when none
+ * were.
+ */
+static int32_t copy_from_file(fd_entry_t *in, uint64_t *pos, fd_entry_t *out, int out_fd,
+                              uint64_t *out_at, uint32_t count, int nonblock, char *buf)
+{
+    uint32_t done = 0;
+
+    while (done < count) {
+        uint32_t want = count - done;
+        int32_t got, put;
+
+        if (want > COPY_CHUNK) {
+            want = COPY_CHUNK;
+        }
+        if (pipe_is(out)) {
+            int32_t room = pipe_splice_room(out, nonblock || done > 0);
+
+            if (room < 0) {
+                return done > 0 ? (int32_t)done : room;
+            }
+            if ((uint32_t)room < want) {
+                want = (uint32_t)room;
+            }
+        }
+        got = file_read(in, (char __force __user *)buf, want, pos);
+        if (got <= 0) {
+            return done > 0 ? (int32_t)done : got;
+        }
+        put = copy_put(out, out_fd, buf, (uint32_t)got, out_at);
+        if (put == -EAGAIN && pipe_is(out) && !nonblock && done == 0) {
+            continue; /* another writer took the room while the read slept */
+        }
+        if (put < 0) {
+            return done > 0 ? (int32_t)done : put;
+        }
+        *pos += (uint64_t)put;
+        if (out_at) {
+            *out_at += (uint64_t)put;
+        }
+        done += (uint32_t)put;
+        if (put < got || (uint32_t)got < want || signal_pending()) {
+            break;
+        }
+    }
+    return (int32_t)done;
+}
+
+/**
+ * Copy up to `count` bytes from the pipe of the read end `in` to `out`,
+ * the caller's descriptor `out_fd` and not a pipe, at `*out_at` when that is
+ * not NULL, which moves past what was written, through `buf` as
+ * `copy_from_file` does. Each chunk is copied out of the ring, written, and
+ * only then taken from the ring (`pipe_splice_consume`), so a short or
+ * failed write leaves the rest in the pipe. The pipe's bytes are waited for
+ * before the first chunk unless `nonblock`. Returns the bytes copied, 0 for
+ * an empty pipe with no writer, or the first error when none were.
+ */
+static int32_t copy_from_pipe(fd_entry_t *in, fd_entry_t *out, int out_fd, uint64_t *out_at,
+                              uint32_t count, int nonblock, char *buf)
+{
+    uint32_t done = 0;
+
+    while (done < count) {
+        uint32_t want = count - done;
+        uint32_t mark = 0;
+        int32_t got, put;
+
+        if (want > COPY_CHUNK) {
+            want = COPY_CHUNK;
+        }
+        got = pipe_splice_peek(in, (uint8_t *)buf, want, nonblock || done > 0, &mark);
+        if (got <= 0) {
+            return done > 0 ? (int32_t)done : got;
+        }
+        put = copy_put(out, out_fd, buf, (uint32_t)got, out_at);
+        if (put < 0) {
+            return done > 0 ? (int32_t)done : put;
+        }
+        pipe_splice_consume(in, (uint32_t)put, mark);
+        if (out_at) {
+            *out_at += (uint64_t)put;
+        }
+        done += (uint32_t)put;
+        if (put < got || signal_pending()) {
+            break;
+        }
+    }
+    return (int32_t)done;
+}
+
+/** Store the offset a copy left in `pos` for the descriptor `e`: at the
+ * user's `uoff` when it gave one, and otherwise as the description's
+ * offset, under its lock. Returns 0 or -EFAULT. */
+static int32_t copy_pos_done(fd_entry_t *e, uintptr_t uoff, int narrow, uint64_t pos)
+{
+    if (uoff) {
+        return copy_off_put(uoff, narrow, pos);
+    }
+    fd_ofd_lock(e->ofd);
+    e->ofd->offset = pos;
+    fd_ofd_unlock(e->ofd);
+    return 0;
+}
+
+/**
+ * splice(2): move up to the length in argument 4 between the descriptors in
+ * arguments 0 and 2, at least one of them a pipe, with the offsets at the
+ * user's addresses in arguments 1 and 3 and the flags in argument 5.
+ *
+ * Pipe to pipe moves the bytes ring to ring (`pipe_tee`). Pipe to anything
+ * else writes the pipe's bytes as write(2) would and takes from the pipe
+ * what was written (`copy_from_pipe`), into a regular file at the offset at
+ * argument 3, which moves past them, or at and past the description's. A
+ * regular file to a pipe reads what fits in the pipe from the offset at
+ * argument 1, or from and past the description's (`copy_from_file`). A
+ * pipe end is waited on unless SPLICE_F_NONBLOCK or its description's
+ * O_NONBLOCK; the other flags change nothing.
+ *
+ * Returns the bytes moved, 0 for a length of 0 or an empty pipe with no
+ * writer, or a negative errno, in Linux's order: -EINVAL for an unknown
+ * flag, -EBADF for a descriptor not open, -ESPIPE for an offset given for a
+ * pipe, -EBADF for an input not open for reading or an output not open for
+ * writing, -EINVAL for one pipe at both ends, for no pipe, for a source
+ * other than a pipe or a regular file, for an output with O_APPEND, and
+ * for an offset below 0 or given for an output that cannot seek, -EFAULT,
+ * or the pipe's and the file's errors.
+ */
+long sys_splice(isr_params_t *params)
+{
+    int fd_in = (int)SC_ARG(params, 0);
+    uintptr_t uoff_in = SC_ARG(params, 1);
+    int fd_out = (int)SC_ARG(params, 2);
+    uintptr_t uoff_out = SC_ARG(params, 3);
+    uint32_t len = USER_RW_LEN(SC_ARG(params, 4));
+    uint32_t flags = (uint32_t)SC_ARG(params, 5);
+    int nonblock = (flags & SPLICE_F_NONBLOCK) != 0;
+    fd_entry_t *in, *out;
+    uint64_t pos = 0;
+    int32_t rc;
+    char *buf;
+
+    if (len == 0) {
+        return 0;
+    }
+    if (flags & ~SPLICE_F_ALL) {
+        return -EINVAL;
+    }
     if (!current_proc) {
         return -ESRCH;
     }
-    if (!fd_get(current_proc->fds, a) || !fd_get(current_proc->fds, b)) {
+    in = copy_fd(fd_in);
+    out = copy_fd(fd_out);
+    if (!in || !out) {
         return -EBADF;
     }
-    return -EINVAL;
+    if ((pipe_is(in) && uoff_in) || (pipe_is(out) && uoff_out)) {
+        return -ESPIPE;
+    }
+    if (!(in->flags & FD_FLAG_READ) || !(out->flags & FD_FLAG_WRITE)) {
+        return -EBADF;
+    }
+    if (pipe_is(in) && pipe_is(out)) {
+        return pipe_tee(in, out, len, nonblock || copy_nonblock(in) || copy_nonblock(out), 1);
+    }
+    if (pipe_is(in)) {
+        if (out->ofd && (out->ofd->status_flags & OFD_APPEND)) {
+            return -EINVAL;
+        }
+        if (uoff_out) {
+            if (copy_regular(out) != 0) {
+                return -EINVAL;
+            }
+            rc = copy_off_get(uoff_out, 0, &pos);
+            if (rc != 0) {
+                return rc;
+            }
+        }
+        buf = copy_buf_get();
+        if (!buf) {
+            return -ENOMEM;
+        }
+        rc = copy_from_pipe(in, out, fd_out, uoff_out ? &pos : NULL, len,
+                            nonblock || copy_nonblock(in), buf);
+        copy_buf_put(buf);
+        if (rc > 0 && uoff_out && copy_off_put(uoff_out, 0, pos) != 0) {
+            return -EFAULT;
+        }
+        return rc;
+    }
+    if (!pipe_is(out) || copy_regular(in) != 0) {
+        return -EINVAL;
+    }
+    if (uoff_in) {
+        rc = copy_off_get(uoff_in, 0, &pos);
+        if (rc != 0) {
+            return rc;
+        }
+    } else {
+        pos = in->ofd->offset;
+    }
+    buf = copy_buf_get();
+    if (!buf) {
+        return -ENOMEM;
+    }
+    rc = copy_from_file(in, &pos, out, fd_out, NULL, len, nonblock || copy_nonblock(out), buf);
+    copy_buf_put(buf);
+    if (rc > 0 && copy_pos_done(in, uoff_in, 0, pos) != 0) {
+        return -EFAULT;
+    }
+    return rc;
 }
 
-/** splice(2): `no_copy` of the input and output descriptors, the first and
- * third arguments. */
-long sys_splice(isr_params_t *params)
-{
-    return no_copy((int)SC_ARG(params, 0), (int)SC_ARG(params, 2));
-}
-
-/** tee(2): `no_copy` of the input and output descriptors, the first and
- * second arguments. */
+/**
+ * tee(2): copy up to the length in argument 2 from the pipe of the read end
+ * in argument 0 to that of the write end in argument 1, leaving the bytes in
+ * the first (`pipe_tee`), with the flags in argument 3. Waits as splice
+ * does. Returns the bytes copied, 0 for a length of 0 or an empty pipe with
+ * no writer, or a negative errno: -EINVAL for an unknown flag, -EBADF for a
+ * descriptor not open for its direction, -EINVAL for a descriptor that is no
+ * pipe or one pipe at both ends, or the pipes' errors.
+ */
 long sys_tee(isr_params_t *params)
 {
-    return no_copy((int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
+    uint32_t len = USER_RW_LEN(SC_ARG(params, 2));
+    uint32_t flags = (uint32_t)SC_ARG(params, 3);
+    fd_entry_t *in, *out;
+
+    if (flags & ~SPLICE_F_ALL) {
+        return -EINVAL;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    in = copy_fd((int)SC_ARG(params, 0));
+    if (!in || !(in->flags & FD_FLAG_READ)) {
+        return -EBADF;
+    }
+    out = copy_fd((int)SC_ARG(params, 1));
+    if (!out || !(out->flags & FD_FLAG_WRITE)) {
+        return -EBADF;
+    }
+    if (!pipe_is(in) || !pipe_is(out)) {
+        return -EINVAL;
+    }
+    return pipe_tee(in, out, len,
+                    (flags & SPLICE_F_NONBLOCK) || copy_nonblock(in) || copy_nonblock(out), 0);
 }
 
-/** sendfile(2), and i386's sendfile64: `no_copy` of the output and input
- * descriptors, the first and second arguments. */
+/**
+ * The body of sendfile(2): copy up to `count` bytes of the regular file open
+ * on `in_fd` to `out_fd` (`copy_from_file`), from the offset at the user's
+ * `uoff`, which moves past what was sent while the description's stays, or
+ * from and past the description's offset when `uoff` is 0. With `narrow`
+ * the offset is i386's 32-bit one, and the copy stops at the largest it
+ * holds.
+ *
+ * A pipe takes what fits in it, waited for unless either description has
+ * O_NONBLOCK; any other output is written as write(2) writes it, a socket
+ * among them. Returns the bytes sent, or a negative errno in Linux's order:
+ * -EBADF for an input not open for reading, -ESPIPE for an offset given for
+ * a pipe, -EINVAL for an input that is not a regular file or an offset below
+ * 0, -EFAULT, -EBADF for an output not open for writing, -EINVAL for one
+ * with O_APPEND, -EOVERFLOW for a 32-bit offset at its limit, or the error
+ * of the first read or write.
+ */
+static long do_sendfile(int out_fd, int in_fd, uintptr_t uoff, uint32_t count, int narrow)
+{
+    uint64_t limit = narrow ? COPY_POS_MAX32 : COPY_POS_MAX;
+    fd_entry_t *in, *out;
+    uint64_t pos;
+    int32_t rc;
+    char *buf;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    in = copy_fd(in_fd);
+    if (!in || !(in->flags & FD_FLAG_READ)) {
+        return -EBADF;
+    }
+    if (uoff && pipe_is(in)) {
+        return -ESPIPE;
+    }
+    if (copy_regular(in) != 0) {
+        return -EINVAL;
+    }
+    if (uoff) {
+        rc = copy_off_get(uoff, narrow, &pos);
+        if (rc != 0) {
+            return rc;
+        }
+    } else {
+        pos = in->ofd->offset;
+    }
+    out = copy_fd(out_fd);
+    if (!out || !(out->flags & FD_FLAG_WRITE)) {
+        return -EBADF;
+    }
+    if (!pipe_is(out) && out->ofd && (out->ofd->status_flags & OFD_APPEND)) {
+        return -EINVAL;
+    }
+    if (pos + count > limit) {
+        if (pos >= limit) {
+            return -EOVERFLOW;
+        }
+        count = (uint32_t)(limit - pos);
+    }
+    if (count == 0) {
+        return 0;
+    }
+    buf = copy_buf_get();
+    if (!buf) {
+        return -ENOMEM;
+    }
+    rc = copy_from_file(in, &pos, out, out_fd, NULL, count,
+                        copy_nonblock(in) || (pipe_is(out) && copy_nonblock(out)), buf);
+    copy_buf_put(buf);
+    if (rc > 0 && copy_pos_done(in, uoff, narrow, pos) != 0) {
+        return -EFAULT;
+    }
+    return rc;
+}
+
+/** sendfile(2) with a 64-bit offset: x86-64's sendfile and i386's
+ * sendfile64, with the output descriptor, the input descriptor, the offset's
+ * address and the count (`do_sendfile`). */
 long sys_sendfile(isr_params_t *params)
 {
-    return no_copy((int)SC_ARG(params, 0), (int)SC_ARG(params, 1));
+    return do_sendfile((int)SC_ARG(params, 0), (int)SC_ARG(params, 1), SC_ARG(params, 2),
+                       USER_RW_LEN(SC_ARG(params, 3)), 0);
+}
+
+/** i386's sendfile, whose offset is a 32-bit off_t (`do_sendfile`). */
+long sys_sendfile32(isr_params_t *params)
+{
+    return do_sendfile((int)SC_ARG(params, 0), (int)SC_ARG(params, 1), SC_ARG(params, 2),
+                       USER_RW_LEN(SC_ARG(params, 3)), 1);
+}
+
+/**
+ * copy_file_range(2): copy up to the length in argument 4 from the regular
+ * file open on the descriptor in argument 0 to the one in argument 2, with
+ * the offsets at the user's addresses in arguments 1 and 3, each moving
+ * past what was copied, or the descriptions' offsets where an address is 0,
+ * and the flags in argument 5, which must be 0. There is no file system
+ * here that shares extents, so every copy is the generic one, through the
+ * read and write paths (`copy_from_file`), between any two mounts, as Linux
+ * falls back to for a file system without its own. The length is cut at
+ * the end of the input.
+ *
+ * Returns the bytes copied, 0 at or past the end of the input, or a negative
+ * errno in Linux's order: -EINVAL for a flag, -EBADF for a descriptor not
+ * open, -EISDIR for a directory, -EINVAL for anything else not a regular
+ * file, -EBADF for an input not open for reading or an output not open for
+ * writing or with O_APPEND, -EFAULT, -EINVAL for an offset below 0,
+ * -EOVERFLOW for a range past the largest offset, -EINVAL for ranges of one
+ * file that overlap, or the error of the first read or write.
+ */
+long sys_copy_file_range(isr_params_t *params)
+{
+    uintptr_t uoff_in = SC_ARG(params, 1);
+    int fd_out = (int)SC_ARG(params, 2);
+    uintptr_t uoff_out = SC_ARG(params, 3);
+    uint32_t len = USER_RW_LEN(SC_ARG(params, 4));
+    struct vfs_stat st;
+    fd_entry_t *in, *out;
+    uint64_t pos_in, pos_out;
+    int32_t rc;
+    char *buf;
+
+    if (SC_ARG(params, 5) != 0) {
+        return -EINVAL;
+    }
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    in = copy_fd((int)SC_ARG(params, 0));
+    out = copy_fd(fd_out);
+    if (!in || !out) {
+        return -EBADF;
+    }
+    rc = copy_regular(in);
+    if (rc == 0) {
+        rc = copy_regular(out);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    if (!(in->flags & FD_FLAG_READ) || !(out->flags & FD_FLAG_WRITE) ||
+        (out->ofd->status_flags & OFD_APPEND)) {
+        return -EBADF;
+    }
+    pos_in = in->ofd->offset;
+    pos_out = out->ofd->offset;
+    rc = uoff_in ? copy_off_get(uoff_in, 0, &pos_in) : 0;
+    if (rc == 0 && uoff_out) {
+        rc = copy_off_get(uoff_out, 0, &pos_out);
+    }
+    if (rc != 0) {
+        return rc;
+    }
+    if (pos_in + len > COPY_POS_MAX || pos_out + len > COPY_POS_MAX) {
+        return -EOVERFLOW;
+    }
+    rc = vfs_getattr(in->ofd->vmnt, in->ofd->vnode, &st);
+    if (rc != 0) {
+        return rc;
+    }
+    if (pos_in >= st.size) {
+        len = 0;
+    } else if (len > st.size - pos_in) {
+        len = (uint32_t)(st.size - pos_in);
+    }
+    if (in->ofd->vmnt == out->ofd->vmnt && in->ofd->vnode == out->ofd->vnode &&
+        pos_out < pos_in + len && pos_in < pos_out + len) {
+        return -EINVAL;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    buf = copy_buf_get();
+    if (!buf) {
+        return -ENOMEM;
+    }
+    rc = copy_from_file(in, &pos_in, out, fd_out, &pos_out, len, 0, buf);
+    copy_buf_put(buf);
+    if (rc > 0 && (copy_pos_done(in, uoff_in, 0, pos_in) != 0 ||
+                   copy_pos_done(out, uoff_out, 0, pos_out) != 0)) {
+        return -EFAULT;
+    }
+    return rc;
 }
 
 /* fallocate's modes, of which one at most is given, and its one flag. */

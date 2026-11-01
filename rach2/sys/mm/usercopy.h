@@ -37,9 +37,25 @@
 #define USER_ADDR_ERRNO(v) ((unsigned long)(v) > (unsigned long)-4096L)
 
 /** 1 if [addr, addr + len) lies wholly within user space, USER_ADDR_MIN to
- * USER_ADDR_MAX (arch/arch.h), and does not wrap; else 0. An empty range is
- * always 1. */
+ * USER_ADDR_MAX (arch/arch.h), and does not wrap, or within the thread's
+ * window (`user_window_open`); else 0. An empty range is always 1. */
 int user_range_ok(uintptr_t addr, size_t len);
+
+/**
+ * Let the calling thread's user-copy checks take the `len` bytes of kernel
+ * memory at `buf` as a present, writable user range, until
+ * `user_window_close`: `user_range_ok`, and with it `copy_from_user`,
+ * `copy_to_user` and the system call layer's buffer checks, and
+ * `vm_prefault_range`. sendfile, splice and copy_file_range open one
+ * around a buffer they pass to the read and write paths of a descriptor,
+ * which take only user addresses, as Linux's set_fs(KERNEL_DS) once let
+ * kernel_read and kernel_write do. One window at a time; the thread's
+ * other addresses are checked as before.
+ */
+void user_window_open(void *buf, uint32_t len);
+
+/** Close the calling thread's window (`user_window_open`). */
+void user_window_close(void);
 
 /** Copy `n` bytes from the user address `src` into `dst`: 0, also for an
  * `n` of 0, or -EFAULT when a byte of the source is outside user space, in

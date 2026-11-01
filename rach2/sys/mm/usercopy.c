@@ -2,6 +2,7 @@
 
 #include "usercopy.h"
 #include "paging.h"
+#include "../proc/process.h"
 #include "../arch/arch.h"
 
 #include "../lib/kstring.h"
@@ -12,7 +13,7 @@
  * without an overflow. */
 int user_range_ok(uintptr_t addr, size_t len)
 {
-    if (len == 0) {
+    if (len == 0 || proc_window_covers(current_proc, addr, len)) {
         return 1;
     }
     if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX) {
@@ -22,6 +23,18 @@ int user_range_ok(uintptr_t addr, size_t len)
         return 0;
     }
     return 1;
+}
+
+void user_window_open(void *buf, uint32_t len)
+{
+    current_proc->uwin_base = (uintptr_t)buf;
+    current_proc->uwin_len = len;
+}
+
+void user_window_close(void)
+{
+    current_proc->uwin_len = 0;
+    current_proc->uwin_base = 0;
 }
 
 /** The range is brought in before the copy (`vm_prefault_range`), so that

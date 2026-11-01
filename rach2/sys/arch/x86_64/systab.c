@@ -349,6 +349,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_GET_ROBUST_LIST] = sys_get_robust_list;
     table[SYS_SPLICE] = sys_splice;
     table[SYS_TEE] = sys_tee;
+    table[SYS_COPY_FILE_RANGE] = sys_copy_file_range;
     table[SYS_UTIMENSAT] = sys_utimensat;
     table[SYS_EPOLL_PWAIT] = sys_epoll_pwait;
     table[SYS_SIGNALFD] = sys_signalfd;

@@ -281,6 +281,11 @@ struct process {
      * no frame after the first (fs/pathbuf.c). */
     char *path_bufs[PATH_BUFS];
     uint32_t path_bufs_busy;
+    /* A kernel buffer the user-copy checks take as user memory while a
+     * descriptor-to-descriptor copy runs it through the read and write
+     * paths (`user_window_open`); `uwin_len` 0 when none is open. */
+    uintptr_t uwin_base;
+    uint32_t uwin_len;
     /* CPU time in ticks. The timer adds the tick it interrupts to `utime`
      * when this thread was in user mode and to `stime` when it was in the
      * kernel, and a tick of an idle wait to neither. A fork starts both at
@@ -508,6 +513,14 @@ isr_params_t *proc_user_frame(const process_t *t);
  * (`ns_privileged`). A macro, so that the host tests that compile the
  * callers without this file's functions need no stub of it. */
 #define proc_privileged(p) ((p)->euid == 0 && !(p)->nocaps && !(p)->userns)
+
+/* Whether [addr, addr + len) lies in the kernel buffer the thread `p` has
+ * opened to the user-copy checks (`user_window_open`). A macro, so that
+ * paging.c and usercopy.c, which host tests compile apart, share it. */
+#define proc_window_covers(p, addr, len)                                 \
+    ((p) && (p)->uwin_len != 0 && (uintptr_t)(addr) >= (p)->uwin_base && \
+     (uintptr_t)(len) <= (p)->uwin_len &&                                \
+     (uintptr_t)(addr) - (p)->uwin_base <= (p)->uwin_len - (uintptr_t)(len))
 
 /** The CPU time in ticks of the whole process `p` is a thread of: every
  * thread's, those that have ended included, user and system. */
