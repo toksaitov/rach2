@@ -1,0 +1,185 @@
+Rach2: build ifplugd against the ported musl.
+
+`networking/ifplugd.c` includes seven of Linux's user headers, and
+`libbb/xconnect.c` includes `<linux/netlink.h>` for ifplugd's netlink socket;
+the ported musl installs none of them. The patch adds
+`include/rach2_linux_net.h`, with the netlink, MII, ethtool and wireless
+definitions the two files use, as Linux 6.18.54 defines them, and includes it
+in their place, as `0003-mkfs-vfat-define-linux-requests.patch` does for
+`mkfs_vfat`.
+
+diff -ruN a/include/rach2_linux_net.h b/include/rach2_linux_net.h
+--- a/include/rach2_linux_net.h	1970-01-01 06:00:00.000000000 +0600
++++ b/include/rach2_linux_net.h	2026-11-02 00:51:24.858318048 +0500
+@@ -0,0 +1,120 @@
++/*
++ * Rach2: the parts of Linux's user headers <linux/netlink.h>,
++ * <linux/rtnetlink.h>, <linux/sockios.h>, <linux/mii.h>, <linux/ethtool.h>
++ * and <linux/wireless.h> that ifplugd and libbb's netlink socket use, which
++ * the ported musl does not install. The numbers and layouts are Linux's
++ * user ABI, as Linux 6.18.54 defines them.
++ */
++#ifndef RACH2_LINUX_NET_H
++#define RACH2_LINUX_NET_H
++
++#include <stdint.h>
++#include <sys/socket.h>
++#include <net/if.h>
++
++/* <linux/netlink.h> */
++#define NETLINK_ROUTE 0
++
++struct sockaddr_nl {
++	sa_family_t nl_family;
++	unsigned short nl_pad;
++	uint32_t nl_pid;
++	uint32_t nl_groups;
++};
++
++struct nlmsghdr {
++	uint32_t nlmsg_len;
++	uint16_t nlmsg_type;
++	uint16_t nlmsg_flags;
++	uint32_t nlmsg_seq;
++	uint32_t nlmsg_pid;
++};
++
++#define NLMSG_ALIGNTO 4U
++#define NLMSG_ALIGN(len) (((len) + NLMSG_ALIGNTO - 1) & ~(NLMSG_ALIGNTO - 1))
++#define NLMSG_HDRLEN ((int)NLMSG_ALIGN(sizeof(struct nlmsghdr)))
++#define NLMSG_LENGTH(len) ((len) + NLMSG_HDRLEN)
++#define NLMSG_SPACE(len) NLMSG_ALIGN(NLMSG_LENGTH(len))
++#define NLMSG_DATA(nlh) ((void *)(((char *)(nlh)) + NLMSG_HDRLEN))
++#define NLMSG_NEXT(nlh, len) ((len) -= NLMSG_ALIGN((nlh)->nlmsg_len), \
++	(struct nlmsghdr *)(((char *)(nlh)) + NLMSG_ALIGN((nlh)->nlmsg_len)))
++#define NLMSG_OK(nlh, len) ((len) >= (int)sizeof(struct nlmsghdr) && \
++	(nlh)->nlmsg_len >= sizeof(struct nlmsghdr) && \
++	(nlh)->nlmsg_len <= (len))
++#define NLMSG_PAYLOAD(nlh, len) ((nlh)->nlmsg_len - NLMSG_SPACE((len)))
++
++/* <linux/rtnetlink.h> and <linux/if_link.h> */
++#define RTM_NEWLINK 16
++#define RTM_DELLINK 17
++#define RTMGRP_LINK 1
++#define IFLA_IFNAME 3
++
++struct rtattr {
++	unsigned short rta_len;
++	unsigned short rta_type;
++};
++
++#define RTA_ALIGNTO 4U
++#define RTA_ALIGN(len) (((len) + RTA_ALIGNTO - 1) & ~(RTA_ALIGNTO - 1))
++#define RTA_OK(rta, len) ((len) >= (int)sizeof(struct rtattr) && \
++	(rta)->rta_len >= sizeof(struct rtattr) && \
++	(rta)->rta_len <= (len))
++#define RTA_NEXT(rta, attrlen) ((attrlen) -= RTA_ALIGN((rta)->rta_len), \
++	(struct rtattr *)(((char *)(rta)) + RTA_ALIGN((rta)->rta_len)))
++#define RTA_LENGTH(len) (RTA_ALIGN(sizeof(struct rtattr)) + (len))
++#define RTA_DATA(rta) ((void *)(((char *)(rta)) + RTA_LENGTH(0)))
++#define RTA_PAYLOAD(rta) ((int)((rta)->rta_len) - RTA_LENGTH(0))
++
++struct ifinfomsg {
++	unsigned char ifi_family;
++	unsigned char __ifi_pad;
++	unsigned short ifi_type;
++	int ifi_index;
++	unsigned ifi_flags;
++	unsigned ifi_change;
++};
++
++#define IFLA_RTA(r) ((struct rtattr *)(((char *)(r)) + NLMSG_ALIGN(sizeof(struct ifinfomsg))))
++#define IFLA_PAYLOAD(n) NLMSG_PAYLOAD(n, sizeof(struct ifinfomsg))
++
++/* <linux/sockios.h> */
++#define SIOCETHTOOL    0x8946
++#define SIOCGMIIPHY    0x8947
++#define SIOCGMIIREG    0x8948
++#define SIOCDEVPRIVATE 0x89F0
++
++/* <linux/mii.h> */
++struct mii_ioctl_data {
++	uint16_t phy_id;
++	uint16_t reg_num;
++	uint16_t val_in;
++	uint16_t val_out;
++};
++
++/* <linux/ethtool.h> */
++#define ETHTOOL_GLINK 0x0000000a
++
++struct ethtool_value {
++	uint32_t cmd;
++	uint32_t data;
++};
++
++/* <linux/wireless.h>: the request for the access point's address, in a
++ * struct iwreq whose union has the size of Linux's union iwreq_data. */
++#define SIOCGIWAP 0x8B15
++
++struct iwreq {
++	union {
++		char ifrn_name[IFNAMSIZ];
++	} ifr_ifrn;
++	union {
++		struct sockaddr ap_addr;
++		struct {
++			void *pointer;
++			uint16_t length;
++			uint16_t flags;
++		} data;
++	} u;
++};
++
++#endif
+diff -ruN a/libbb/xconnect.c b/libbb/xconnect.c
+--- a/libbb/xconnect.c	2021-09-30 04:04:47.000000000 +0600
++++ b/libbb/xconnect.c	2026-11-02 00:51:24.869812689 +0500
+@@ -12,7 +12,7 @@
+ #include <net/if.h>
+ #include <sys/un.h>
+ #if ENABLE_IFPLUGD || ENABLE_FEATURE_MDEV_DAEMON || ENABLE_UEVENT
+-# include <linux/netlink.h>
++# include "rach2_linux_net.h" /* Rach2: musl has no <linux/netlink.h> */
+ #endif
+ #include "libbb.h"
+ 
+diff -ruN a/networking/ifplugd.c b/networking/ifplugd.c
+--- a/networking/ifplugd.c	2023-01-03 20:14:43.000000000 +0600
++++ b/networking/ifplugd.c	2026-11-02 00:51:24.869683964 +0500
+@@ -44,30 +44,13 @@
+ #include "libbb.h"
+ 
+ #include "fix_u32.h"
+-#include <linux/if.h>
+-#include <linux/mii.h>
+-#include <linux/ethtool.h>
+-#ifdef HAVE_NET_ETHERNET_H
+-/* musl breakage:
+- * In file included from /usr/include/net/ethernet.h:10,
+- *                  from networking/ifplugd.c:41:
+- * /usr/include/netinet/if_ether.h:96: error: redefinition of 'struct ethhdr'
+- *
+- * Build succeeds without it on musl. Commented it out.
+- * If on your system you need it, consider removing <linux/ethtool.h>
+- * and copy-pasting its definitions here (<linux/ethtool.h> is what pulls in
+- * conflicting definition of struct ethhdr on musl).
+- */
+-/* # include <net/ethernet.h> */
+-#endif
+-#include <linux/netlink.h>
+-#include <linux/rtnetlink.h>
+-#include <linux/sockios.h>
++/* Rach2: the ported musl has none of Linux's user headers this applet
++ * includes upstream, <linux/if.h>, <linux/mii.h>, <linux/ethtool.h>,
++ * <linux/netlink.h>, <linux/rtnetlink.h>, <linux/sockios.h> and
++ * <linux/wireless.h>; the definitions it uses are in this header. */
++#include "rach2_linux_net.h"
+ #include <syslog.h>
+ 
+-#define __user
+-#include <linux/wireless.h>
+-
+ #ifndef ETH_ALEN
+ # define ETH_ALEN  6
+ #endif
