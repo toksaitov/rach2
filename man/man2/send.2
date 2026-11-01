@@ -52,6 +52,26 @@ first that goes short; a UDP socket gathers up to eight into one
 datagram; a raw or packet socket takes one buffer, and more fail with
 .Er EOPNOTSUPP .
 Control messages of an IPv4 socket are ignored.
+On an AF_INET6 UDP or raw socket the control messages of level
+.Dv IPPROTO_IPV6
+apply to that datagram alone, before the socket's options
+.Pq Xr setsockopt 2 :
+.Dv IPV6_PKTINFO ,
+a
+.Vt struct in6_pktinfo
+of the source, which must be an address of this machine, or :: for the
+usual one, and the index of the interface to leave by, or 0, which must
+agree with the destination's scope id;
+.Dv IPV6_HOPLIMIT
+and
+.Dv IPV6_TCLASS ,
+integers from \-1 through 255, \-1 for the socket's.
+Another type at that level fails with
+.Er EINVAL ,
+and messages of other levels are ignored.
+A raw socket of
+.Dv IPPROTO_RAW
+sends the header it was given whatever they say.
 On an
 .Dv AF_UNIX
 socket all three calls carry what
@@ -294,8 +314,11 @@ is shorter than 20 bytes, its hardware-address length is not six, or
 its effective protocol is none of IPv4, ARP and IPv6; a raw ICMPv6
 address is shorter than 24 bytes, or its message shorter than four; a
 link-local IPv6 destination names no interface on a machine with more
-than one card; or a UDP socket bound to an address in 127/8 sends to an
-address that is not the machine's.
+than one card; a UDP socket bound to an address in 127/8 sends to an
+address that is not the machine's; or an IPv6 control message is
+malformed, of another type, out of range, gives a source that is not
+this machine's, or an interface that disagrees with the destination's
+scope id.
 .It Bq Er EMSGSIZE
 A UDP payload exceeds 1472 bytes, a raw ICMP message exceeds 1480 bytes,
 a raw ICMPv6 message exceeds 65535 bytes, an IPv6 datagram sent whole
@@ -312,7 +335,10 @@ No route exists for an IPv4 or IPv6 datagram.
 The local delivery queue is full or the link layer cannot accept an
 IPv4 or IPv6 datagram.
 .It Bq Er ENODEV
-A packet destination specifies an unregistered interface index.
+A packet destination, or the
+.Dv IPV6_PKTINFO
+control message of an IPv6 send, specifies an unregistered interface
+index.
 .It Bq Er ENOTSOCK
 .Fa fd
 does not refer to a socket.

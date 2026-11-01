@@ -157,13 +157,16 @@ Linux waits for all
 messages or the timeout without
 .Dv MSG_WAITFORONE .
 .Pp
-Among IPv4 and packet sockets,
+Among Internet and packet sockets,
 .Fn recvmsg
 takes
 .Dv SOCK_DGRAM
-sockets, packet sockets included, and rejects stream and
+and
 .Dv SOCK_RAW
-sockets; the rest of this section describes those.
+sockets, packet sockets included, and rejects stream sockets and the
+raw descriptor of
+.Dv IPPROTO_RAW
+that takes only ioctls; the rest of this section describes those.
 On an
 .Dv AF_UNIX
 socket of any type it receives data, the sender's name and the control
@@ -212,6 +215,36 @@ is set to zero, and
 is
 .Dv MSG_TRUNC
 when the datagram was longer than the buffers and zero otherwise.
+.Pp
+An AF_INET6 UDP or raw socket that asked for them with
+.Dv IPV6_RECVPKTINFO ,
+.Dv IPV6_RECVHOPLIMIT
+or
+.Dv IPV6_RECVTCLASS
+.Pq Xr setsockopt 2
+receives, at level
+.Dv IPPROTO_IPV6
+and in this order,
+.Dv IPV6_PKTINFO ,
+a
+.Vt struct in6_pktinfo
+of the datagram's destination and the index of the interface it came in
+on;
+.Dv IPV6_HOPLIMIT ,
+its hop limit; and
+.Dv IPV6_TCLASS ,
+its traffic class, each an integer.
+An IPv4 datagram received on a dual-stack socket has its destination,
+mapped, and interface 0, and neither of the others.
+The control buffer is checked before the datagram is taken.
+A message that does not fit whole is not written, nor is any after it,
+and
+.Dv MSG_CTRUNC
+is set in
+.Fa msg Ns ->msg_flags ;
+.Fa msg Ns ->msg_controllen
+receives the bytes written, their padding counted as far as the buffer
+goes.
 .Ss Kernel interface
 These operations use
 .Xr socketcall 2
