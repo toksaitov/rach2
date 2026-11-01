@@ -165,9 +165,16 @@ dir 0755 /usr/share/udhcpc
 # The script udhcpc runs when a lease arrives or ends, which turns the lease
 # into an address, a route and a resolver.
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
-# The keymaps, which loadkeys finds by name, as in `loadkeys -u kg alt-shift`
+# The one keymap init loads here, `us` and the two files it includes: this
+# root has no /etc/vconsole.conf, so init loads `us` (init(8)), and its 5 MiB
+# must keep 512 KiB free, which the other layouts' 150 KiB would take
 # (vendor/keymaps/Readme.md).
-tree 0644 /usr/share/kbd/keymaps/xkb vendor/keymaps/xkb
+dir 0755 /usr/share/kbd
+dir 0755 /usr/share/kbd/keymaps
+dir 0755 /usr/share/kbd/keymaps/xkb
+file 0644 /usr/share/kbd/keymaps/xkb/us.map vendor/keymaps/xkb/us.map
+file 0644 /usr/share/kbd/keymaps/xkb/common.inc vendor/keymaps/xkb/common.inc
+file 0644 /usr/share/kbd/keymaps/xkb/xterm-strings.inc vendor/keymaps/xkb/xterm-strings.inc
 # The pages man/recovery lists: what the installer and the recovery menu direct
 # a person to, readable here with man(1). mancheck requires each.
 dir 0755 /usr/share/man
