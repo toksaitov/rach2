@@ -1107,9 +1107,9 @@ static int32_t netlink_addr_to_user(const uint8_t *nl, uintptr_t sa_ptr, uintptr
  * sending a wrong checksum on purpose is testing something. A message past
  * one frame leaves in fragments under the socket's IP_MTU_DISCOVER, up to
  * the largest IPv4 payload. An AF_INET6 one sends as `raw6_sendto` says.
- * The copy into
- * `raw_send_buf`, or a block of the heap, runs with interrupts on, since bringing in the caller's
- * pages may sleep; the send then holds the network lock against a receive
+ * The copy into `raw_send_buf`, or a block of the heap, runs with interrupts
+ * on, since bringing in the caller's pages may sleep; the send then holds the
+ * network lock against a receive
  * interrupt that would build a datagram in the same transmit buffers, the
  * rule of net.h, which `udp_tx` keeps for the same reason. A packet socket
  * sends an IP packet the caller built to the hardware address in its
