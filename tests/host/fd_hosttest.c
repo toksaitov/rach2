@@ -26,7 +26,13 @@ extern void free(void *ptr);
 extern int printf(const char *format, ...);
 extern void exit(int status);
 volatile uint32_t init_pid;
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
+
+/** The tick count as the kernel reads it whole: the model's `kernel_ticks`. */
+uint64_t tick_count(void)
+{
+    return kernel_ticks;
+}
 
 const struct vfs_type vfs_krffs_type = {0, 0, 0, 1, 0, 0};
 static const struct vfs_type other_type = {0, 0, 0, 1, 0, 0};

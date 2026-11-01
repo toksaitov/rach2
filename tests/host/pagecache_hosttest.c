@@ -256,8 +256,9 @@ static void test_sleeping_writeback(void)
 
 #ifdef PAGECACHE_SYNC_HOSTTEST
 #include "isr.h"
+#include "timer.h"
 
-static volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
 static uint32_t sync_waits;
 static uint32_t sync_yields;
 static uint32_t sync_mounts;
@@ -301,9 +302,9 @@ void idle_wait_irq_on(void)
  *
  * A busy page starts clean, as it does during writeback, then becomes dirty
  * before the writer releases it, and the sync must write it. A stuck slot
- * must stop the wait at its bound of 3000 ticks, the tick count wrapping on
- * the way. A failure alone must return without waiting, and a later sync
- * writes the failed page.
+ * must stop the wait at its bound of 30 seconds of ticks, the low word of
+ * the tick count wrapping on the way. A failure alone must return without
+ * waiting, and a later sync writes the failed page.
  */
 static void test_sync_wait(void)
 {
@@ -339,7 +340,7 @@ static void test_sync_wait(void)
             CHECK(fake_writes[0] == 1);
             CHECK(!pc_slots[0].dirty && !pc_slots[0].pinned);
         } else if (row == 3) {
-            CHECK(sync_waits == 3000);
+            CHECK(sync_waits == MS_TO_TICKS(30000));
             CHECK(pc_slots[0].pinned);
             CHECK(fake_attempts[0] == 0);
         } else {

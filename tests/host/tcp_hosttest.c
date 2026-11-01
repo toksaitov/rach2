@@ -36,7 +36,7 @@ extern void *malloc(unsigned long n);
 
 /* ---- the clock, and the layers above and below ---- */
 
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
 
 /**
  * Return the microsecond clock TCP times its round trips by, for `ss -i`: 10000

@@ -3,6 +3,7 @@
  * other threads to park, a thread's parking, and extended numbering.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/tick.c
  * host-cflags: -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast
  *
  * `proc/coredump.c` is included whole. The writer keeps the file in memory,

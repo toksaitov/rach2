@@ -10,16 +10,23 @@
 #include "proc/process.h"
 #include "proc/wait_queue.h"
 #include "rtc.h"
+#include "timer.h"
 
 extern int printf(const char *format, ...);
 
 static process_t proc;
 struct percpu cpu_table[NR_CPUS] = {{.current = &proc}};
 struct net_mib net_mib;
-volatile uint32_t kernel_ticks;
-static uint32_t now; /* current tick, including undelivered interrupts */
+volatile uint64_t kernel_ticks;
+
+/** The tick count as the kernel reads it whole: the model's `kernel_ticks`. */
+uint64_t tick_count(void)
+{
+    return kernel_ticks;
+}
+static uint64_t now; /* current tick, including undelivered interrupts */
 static uint32_t lag; /* ticks not yet counted by the interrupt handler */
-static uint32_t sent_at;
+static uint64_t sent_at;
 static unsigned sends, waits;
 static int reply;
 static uint8_t echo[8];
@@ -62,7 +69,7 @@ void write32be(uint8_t *p, uint32_t value)
     } while (0)
 
 /** Read the tick independently of the delivered interrupt count. */
-uint32_t rtc_ticks_now(void)
+uint64_t rtc_ticks_now(void)
 {
     return now;
 }
@@ -190,14 +197,11 @@ void wq_wake_all(wait_queue_t *wq)
  * up. Leave interrupts pending before the next attempt too. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    uint32_t deadline = proc.wakeup_tick;
-    uint32_t expected = sent_at + 100u;
+    uint64_t deadline = proc.wakeup_tick;
+    uint64_t expected = sent_at + TICK_HZ;
 
     (void)wq;
     waits++;
-    if (!expected) {
-        expected = 1u;
-    }
     CHECK(deadline == expected, "deadline includes undelivered ticks");
     if (reply) {
         echo[0] = ICMP_ECHO_REPLY;
@@ -220,15 +224,15 @@ void idle_wait_irq_on(void)
 }
 
 /** Exercise four attempts with no lag, with three undelivered ticks at
- * every send, and over the tick count's wrap; then an immediate reply with
- * the handler still behind the request's starting tick. */
+ * every send, and across 2^32 ticks; then an immediate reply with the
+ * handler still behind the request's starting tick. */
 int main(void)
 {
     unsigned row;
 
     proc.in_syscall = 1;
     for (row = 0; row < 3; row++) {
-        kernel_ticks = row == 2 ? 0xFFFFFF99u : 100u;
+        kernel_ticks = row == 2 ? 0xFFFFF99Aull : 100u;
         lag = row == 0 ? 0u : 3u;
         now = kernel_ticks + lag;
         sends = waits = 0;

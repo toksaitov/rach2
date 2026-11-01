@@ -74,7 +74,7 @@ void outb(uint16_t port, uint8_t val)
 }
 
 /* The tick the rows set, the LEDs they want, and the warnings logged. */
-volatile uint32_t kernel_ticks;
+volatile uint64_t kernel_ticks;
 static unsigned int wanted_leds;
 static int warnings;
 
