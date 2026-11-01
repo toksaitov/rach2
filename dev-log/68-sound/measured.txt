@@ -1,0 +1,44 @@
+soxmeasure notes, 2026-11-01. Toolchain: vendor/musl/muslgcc (RACH2_ARCH=x86_64|i686), musl installs as built in the main checkout.
+Linux 6.18.54 uapi headers fetched from git.kernel.org stable: linux/soundcard.h linux/ioctl.h linux/patchkey.h asm-generic/ioctl.h, plus asm/ioctl.h = #include <asm-generic/ioctl.h>; given with -I.
+
+== sox_ng 14.8.0.1 (codeberg release, sha256 7698a1b2699499b0b38fa95a15bb56c68928d97b144bce03b7ecb76fe9c46698), configure script:
+# usage: sh cfg.sh ARCH HOSTTRIPLE CROSSPREFIX  (run from build dir)
+W=build/tmp/soxmeasure
+S=$W/src/sox_ng-14.8.0.1
+export RACH2_ARCH=$1
+"$S/configure" --host=$2 --build=$("$S/config.guess") --prefix=/usr \
+ --disable-shared --enable-static --enable-replace --disable-openmp --disable-stack-protector \
+ --without-libltdl --without-magic --without-png --without-fftw --without-speexdsp --without-ladspa \
+ --without-mad --without-id3tag --without-lame --without-twolame --without-oggvorbis --without-opus \
+ --without-flac --without-amrwb --without-amrnb --without-wavpack --without-sndio --without-coreaudio \
+ --without-alsa --without-ao --without-pulseaudio --without-waveaudio --without-sndfile --without-sunaudio \
+ --with-oss \
+ CC=vendor/musl/muslgcc AR=$3ar RANLIB=$3ranlib STRIP=$3strip \
+ CPPFLAGS="-I$W/linuxinc" PKG_CONFIG=false LDFLAGS="-Wl,-z,noexecstack"
+Result: builds, 0 patch lines. x86_64 sox_ng 2967552 B, stripped 864088 B; i686 2688376 / 800168 B. make -j8 ~17 s. --help: AUDIO DEVICE DRIVERS: oss ossdsp; wav, wavpcm in formats. play/rec/soxi links via --enable-replace. Ran under docker debian:bookworm-slim (amd64 emulation).
+
+== OSS 4: build2020 tarball not published; used oss-v4.2-build2019-src-gpl.tar.bz2 (sha256 1f2fd62a633c59cf76f9d773048c78e770bbee40730ec6454796061d29d3f814) and sf git master (buildid 2021, COPYING internal-use only).
+Linux soundcard.h: fails (oss_audioinfo, SNDCTL_AUDIOINFO, SNDCTL_DSP_COOKEDMODE, AFMT_S24_*/S32_*, PLAYTGT/RECSRC...). OSS4 include/soundcard.h (BSD): compiles clean:
+  muslgcc -O2 -I OSS/include -I OSS/cmd/ossplay -I OSS/kernel/framework/include -c OSS/cmd/ossplay/*.c; muslgcc -Wl,-z,noexecstack -o ossplay *.o; ossrecord = link to ossplay
+  x86_64 137432 B (stripped 115912); i686 138132 (112128).
+
+== FFmpeg 9.0.2 (latest stable, gpg Good) and 8.1.3, script:
+# usage: sh ffcfg.sh SRCDIR ARCH CROSSPREFIX   (run from the build dir)
+W=build/tmp/soxmeasure
+export RACH2_ARCH=$2
+"$1/configure" --prefix=/usr --enable-cross-compile --target-os=linux --arch=$2 \
+ --cc=vendor/musl/muslgcc --ar=$3ar --nm=$3nm --ranlib=$3ranlib --strip=$3strip \
+ --pkg-config=false --disable-autodetect --enable-pthreads --disable-x86asm \
+ --enable-static --disable-shared --disable-doc --disable-debug \
+ --extra-cflags="-I$W/linuxinc" --extra-ldflags="-Wl,-z,noexecstack" \
+ --disable-everything \
+ --enable-indev=oss --enable-outdev=oss \
+ --enable-protocol=file,pipe \
+ --enable-demuxer=wav,mp3,flac,ogg,aac,mov,pcm_s16le \
+ --enable-muxer=wav,pcm_s16le \
+ --enable-decoder=mp3,mp3float,flac,vorbis,opus,aac,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s32le,pcm_u8,pcm_f32le \
+ --enable-encoder=pcm_s16le,pcm_s24le,pcm_s32le,pcm_u8,pcm_f32le \
+ --enable-parser=mpegaudio,flac,vorbis,opus,aac \
+ --enable-filter=aresample,aformat,anull,abuffer,abuffersink,volume \
+ --enable-swresample
+Result: both build, 0 patch lines. 9.0.2: configure 36.5 s, make -j8 39.3 s, ffmpeg 4604320 B stripped. 8.1.3: make 32.8 s, 3090976 B. -devices: DE oss; -decoders: aac flac mp3 mp3float opus vorbis pcm_*; LGPL 2.1+.
