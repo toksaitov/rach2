@@ -7,7 +7,7 @@
  * Every path call classifies its path, and the split into components and
  * the parsing of process ids and descriptor numbers are where an error of
  * one is easy to make, so the rows run here under the sanitizers. The model
- * has one network interface, eth0, and no disks.
+ * has a wired interface eth0, a wireless wlan0 and no disks.
  */
 
 #include "fs/synthfs.h"
@@ -18,6 +18,9 @@ static int fails;
  *  eth0, the one interface of the model, and -1 for any other. */
 int sysfs_net_index(const char *name, int len)
 {
+    if (len == 5 && name[0] == 'w' && name[1] == 'l' && name[2] == 'a' && name[3] == 'n' &&
+        name[4] == '0')
+        return 3;
     return len == 4 && name[0] == 'e' && name[1] == 't' && name[2] == 'h' && name[3] == '0' ? 2
                                                                                             : -1;
 }
@@ -26,7 +29,15 @@ int sysfs_net_index(const char *name, int len)
  *  `cap` holds it. */
 void sysfs_net_name(int index, char *out, int cap)
 {
-    (void)index;
+    if (index == 3 && cap > 5) {
+        out[0] = 'w';
+        out[1] = 'l';
+        out[2] = 'a';
+        out[3] = 'n';
+        out[4] = '0';
+        out[5] = '\0';
+        return;
+    }
     if (cap > 4) {
         out[0] = 'e';
         out[1] = 't';
@@ -43,18 +54,16 @@ int sysfs_net_pci_key(int index)
     return index == 2 ? 0x18 : -1;
 }
 
-/** The classifier fixture has no radio on its wired interface. */
+/** wlan0 belongs to phy7; the wired interface has no radio. */
 int sysfs_net_wiphy(int index)
 {
-    (void)index;
-    return -1;
+    return index == 3 ? 7 : -1;
 }
 
-/** No radio driver is registered in this fixture. */
+/** phy7 uses the software radio driver. */
 const char *sysfs_wlan_driver(int index)
 {
-    (void)index;
-    return 0;
+    return index == 7 ? "wsim" : 0;
 }
 
 /** No disk node has a name, since the model has no disks: /sys/block and
@@ -175,6 +184,35 @@ static void sys_tree(void)
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:20.0", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:1F.2", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("sys/bus/pci/devices/0000:00:1f.2/vendor", &vp) == VNODE_ENOENT);
+}
+
+/** Check radio attributes and both routes to the driver link. */
+static void sys_wireless(void)
+{
+    struct vpath vp;
+    char path[128];
+
+    CHECK(synth_classify("proc/net/wireless", &vp) == VNODE_PROC_NET_FILE &&
+          vp.procfile == SYNTH_PROC_NETWIRELESS);
+    CHECK(synth_classify("sys/class/ieee80211", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_CLASS_IEEE80211);
+    CHECK(synth_classify("sys/class/ieee80211/phy7/index", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_WLAN_PHY && vp.syskey == 7 && vp.procfile == 0);
+    CHECK(synth_classify("sys/class/ieee80211/phy7/macaddress/x", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("sys/class/ieee80211/phy07", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/class/ieee80211/phy-1", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/class/net/wlan0/phy80211", &vp) == VNODE_SYS_LINK &&
+          vp.sysent == SYSFS_WLAN_PHY && vp.syskey == 7);
+    synth_sys_path(vp.sysent, vp.syskey, path, sizeof(path));
+    CHECK(eq(path, "/sys/class/ieee80211/phy7"));
+    CHECK(synth_classify("sys/class/net/wlan0/phy80211/name", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_WLAN_PHY && vp.procfile == 1);
+    CHECK(synth_classify("sys/class/net/wlan0/device/driver", &vp) == VNODE_SYS_LINK &&
+          vp.sysent == SYSFS_WLAN_DRIVER && vp.syskey == 7);
+    synth_sys_path(vp.sysent, vp.syskey, path, sizeof(path));
+    CHECK(eq(path, "/sys/class/ieee80211/phy7/device/wsim"));
+    CHECK(synth_classify("sys/class/ieee80211/phy7/device/wsim", &vp) == VNODE_SYS_DIR);
+    CHECK(synth_classify("sys/class/net/eth0/phy80211", &vp) == VNODE_ENOENT);
 }
 
 /**
@@ -484,6 +522,7 @@ int main(void)
     paths();
     sys_tree();
     sys_class();
+    sys_wireless();
     sys_cpus();
     return fails > 255 ? 255 : fails;
 }
