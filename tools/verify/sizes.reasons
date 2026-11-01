@@ -138,6 +138,7 @@ rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over
 rach2/sys/fs/procfs.c:procfs_kind_name complexity 31 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open complexity 64 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_readlink_fd lines 137 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_readlink_fd complexity 27 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_sysctl_write complexity 28 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_gen_text complexity 34 a dispatcher, one arm per command, read as a table
 
@@ -308,7 +309,6 @@ tests/bigfileprobe.c:write_mode lines 116 a probe, one sequence of steps in the 
 tests/bootprobe.c:probe_main lines 320 a probe, one sequence of steps in the order the log records them
 tests/bootprobe.c:auth_case lines 158 a probe, one sequence of steps in the order the log records them
 
-tests/cases/host/flow_release.c:run complexity 26 a test routine, one stage after another, read from the top
 
 tests/cases/machine/agent_accept.c:agent_accept_action complexity 27 a dispatcher, one arm per command, read as a table
 
@@ -651,7 +651,7 @@ tests/musl/pwauthmusl.c:check_prompt lines 106 a test's rows, each a case, read 
 
 tests/musl/readvmusl.c:check_datagram lines 111 a test's rows, each a case, read as one table
 
-tests/musl/sandboxmusl.c:sandbox complexity 38 a test's rows, each a case, read as one table
+tests/musl/sandboxmusl.c:sandbox complexity 45 a test's rows, each a case, read as one table
 
 tests/musl/sockflagmusl.c:main complexity 26 a probe, one sequence of steps in the order the log records them
 tests/musl/spawnmusl.c:main lines 111 a test's rows, each a case, read as one table
