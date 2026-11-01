@@ -102,10 +102,11 @@
 #
 # `check [HELD...]` prints a line `board: LINE` for each inconsistency of
 # the board it can see: an open task that no loop in HELD holds whose branch
-# `task/N` its milestone's branch already contains, an open card In progress with no assignee, or one
-# that no worker loop holds when HELD lists the issues the loops hold, a card
-# Done or closed whose state or Status disagrees, and an open milestone whose
-# cards are all closed. status.sh runs it on every check.
+# `task/N` its milestone's branch already contains, an open card In progress
+# with no assignee, or one that no worker loop holds when HELD lists the
+# issues the loops hold, a card Done or closed whose state or Status
+# disagrees, and an open milestone whose cards are all closed. status.sh runs
+# it on every check.
 #
 # `archive M` archives the cards of the closed issues of milestone M and of
 # their closed subtasks, and prints the numbers it archived; release.sh runs
