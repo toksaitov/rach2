@@ -7,6 +7,7 @@
 #include "synthfs.h"
 
 #include "../display/backlight.h"
+#include "../rfkill.h"
 
 /* A path component as a (pointer, length) slice; the path is not modified. */
 struct comp {
@@ -859,7 +860,14 @@ const char *sysfs_attr(int node, int n)
     static const char *const backlight[] = {"actual_brightness", "bl_power", "brightness",
                                             "max_brightness",    "type",     0};
     static const char *const phy[] = {"index", "name", "macaddress", "uevent", 0};
+    /* In the order of rfkill.h's RFKILL_ATTR_ numbers. */
+    static const char *const rfkill[] = {"hard",       "hard_block_reasons",
+                                         "index",      "name",
+                                         "persistent", "soft",
+                                         "state",      "type",
+                                         "uevent",     0};
     const char *const *list = node == SYSFS_WLAN_PHY       ? phy
+                              : node == SYSFS_RFKILL       ? rfkill
                               : node == SYSFS_NET_IF       ? attrs
                               : node == SYSFS_NET_STATS    ? stats
                               : node == SYSFS_RTC0         ? rtc
@@ -886,7 +894,8 @@ const char *sysfs_attr(int node, int n)
 int sysfs_attr_writable(int node, int attr)
 {
     return (node == SYSFS_RTC0 && attr == 5) || (node == SYSFS_POWER && attr == 1) ||
-           (node == SYSFS_BACKLIGHT && (attr == BACKLIGHT_POWER || attr == BACKLIGHT_BRIGHTNESS));
+           (node == SYSFS_BACKLIGHT && (attr == BACKLIGHT_POWER || attr == BACKLIGHT_BRIGHTNESS)) ||
+           (node == SYSFS_RFKILL && (attr == RFKILL_ATTR_SOFT || attr == RFKILL_ATTR_STATE));
 }
 
 /** The part of a disk node's /sys path below the disk's directory: its
@@ -938,6 +947,15 @@ void synth_sys_path(int node, int key, char *out, int cap)
     int pos = 0;
 
     if (cap <= 0) {
+        return;
+    }
+    if (node == SYSFS_CLASS_RFKILL || node == SYSFS_RFKILL) {
+        synth_put(out, cap, &pos, "/sys/class/rfkill");
+        if (node == SYSFS_RFKILL) {
+            synth_put(out, cap, &pos, "/rfkill");
+            synth_put_uint(out, cap, &pos, (unsigned)key);
+        }
+        out[pos] = '\0';
         return;
     }
     if (node >= SYSFS_CLASS_IEEE80211 && node <= SYSFS_WLAN_DRIVER) {
@@ -1293,8 +1311,25 @@ static int synth_classify_sys_block(const struct comp *c, int n, int dev, struct
     return synth_classify_block_dir(c + 1, n - 1, key, vp);
 }
 
+/** Classify the components `c` of `n` in the directory of radio switch
+ * `index`: its attributes, and `device`, the link to its radio, through
+ * which the radio's directory is reached as /sys/class/ieee80211 has it. */
+static int synth_classify_rfkill(const struct comp *c, int n, int index, struct vpath *vp)
+{
+    int phy = rfkill_phy(index);
+
+    if (n >= 1 && comp_eq(c[0], "device") && phy >= 0) {
+        synth_classify_phy(c + 1, n - 1, phy, vp);
+        if (n == 1)
+            vp->kind = VNODE_SYS_LINK;
+        return vp->kind;
+    }
+    return synth_classify_sys_attr(c, n, SYSFS_RFKILL, index, vp);
+}
+
 /** Classify the components `c` of `n` below /sys/class: the network
- * interfaces' class, the clock's and the backlights'. */
+ * interfaces' class, the radios', the radio switches', the clock's and the
+ * backlights'. */
 static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *vp)
 {
     vp->kind = VNODE_SYS_DIR;
@@ -1323,6 +1358,10 @@ static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *v
             phy = phy * 10 + c[1].s[i] - '0';
         }
         return synth_classify_phy(c + 2, n - 2, phy, vp);
+    } else if (comp_eq(c[0], "rfkill") && n == 1) {
+        vp->sysent = SYSFS_CLASS_RFKILL;
+    } else if (comp_eq(c[0], "rfkill") && rfkill_lookup(c[1].s, c[1].len) >= 0) {
+        return synth_classify_rfkill(c + 2, n - 2, rfkill_lookup(c[1].s, c[1].len), vp);
     } else if (comp_eq(c[0], "rtc")) {
         return synth_classify_sys_fixed(c + 1, n - 1, SYSFS_CLASS_RTC, vp);
     } else if (comp_eq(c[0], "backlight") && n == 1) {

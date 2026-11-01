@@ -7,10 +7,12 @@
  * Every path call classifies its path, and the split into components and
  * the parsing of process ids and descriptor numbers are where an error of
  * one is easy to make, so the rows run here under the sanitizers. The model
- * has a wired interface eth0, a wireless wlan0 and no disks.
+ * has a wired interface eth0, a wireless wlan0 with its switch rfkill3, and
+ * no disks.
  */
 
 #include "fs/synthfs.h"
+#include "rfkill.h"
 
 static int fails;
 
@@ -56,6 +58,19 @@ int sysfs_net_pci_key(int index)
 
 /** wlan0 belongs to phy7; the wired interface has no radio. */
 int sysfs_net_wiphy(int index)
+{
+    return index == 3 ? 7 : -1;
+}
+
+/** The switch named by the `len` bytes at `name`: 3 for rfkill3, phy7's,
+ *  and -1 for any other. */
+int rfkill_lookup(const char *name, int len)
+{
+    return len == 7 && name[0] == 'r' && name[5] == 'l' && name[6] == '3' ? 3 : -1;
+}
+
+/** rfkill3 belongs to phy7. */
+int rfkill_phy(int index)
 {
     return index == 3 ? 7 : -1;
 }
@@ -213,6 +228,30 @@ static void sys_wireless(void)
     CHECK(eq(path, "/sys/class/ieee80211/phy7/device/wsim"));
     CHECK(synth_classify("sys/class/ieee80211/phy7/device/wsim", &vp) == VNODE_SYS_DIR);
     CHECK(synth_classify("sys/class/net/eth0/phy80211", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/class/rfkill", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_CLASS_RFKILL);
+    CHECK(synth_classify("sys/class/rfkill/rfkill3", &vp) == VNODE_SYS_DIR &&
+          vp.sysent == SYSFS_RFKILL && vp.syskey == 3);
+    synth_sys_path(vp.sysent, vp.syskey, path, sizeof(path));
+    CHECK(eq(path, "/sys/class/rfkill/rfkill3"));
+    CHECK(synth_classify("sys/class/rfkill/rfkill3/soft", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_RFKILL && vp.procfile == RFKILL_ATTR_SOFT &&
+          sysfs_attr_writable(vp.sysent, vp.procfile));
+    CHECK(synth_classify("sys/class/rfkill/rfkill3/state", &vp) == VNODE_SYS_FILE &&
+          sysfs_attr_writable(vp.sysent, vp.procfile));
+    CHECK(synth_classify("sys/class/rfkill/rfkill3/uevent", &vp) == VNODE_SYS_FILE &&
+          vp.procfile == RFKILL_ATTR_UEVENT && !sysfs_attr_writable(vp.sysent, vp.procfile));
+    CHECK(synth_classify("sys/class/rfkill/rfkill3/hard_block_reasons", &vp) == VNODE_SYS_FILE &&
+          vp.procfile == RFKILL_ATTR_REASONS);
+    CHECK(synth_classify("sys/class/rfkill/rfkill3/device", &vp) == VNODE_SYS_LINK &&
+          vp.sysent == SYSFS_WLAN_PHY && vp.syskey == 7);
+    synth_sys_path(vp.sysent, vp.syskey, path, sizeof(path));
+    CHECK(eq(path, "/sys/class/ieee80211/phy7"));
+    CHECK(synth_classify("sys/class/rfkill/rfkill3/device/name", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_WLAN_PHY && vp.procfile == 1);
+    CHECK(synth_classify("sys/class/rfkill/rfkill3/type/x", &vp) == VNODE_ENOTDIR);
+    CHECK(synth_classify("sys/class/rfkill/rfkill3/bogus", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("sys/class/rfkill/rfkill4", &vp) == VNODE_ENOENT);
 }
 
 /**

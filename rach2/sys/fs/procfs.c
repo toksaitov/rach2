@@ -62,6 +62,7 @@
 #include "../network/ethernet/ethernet.h"
 #include "../network/driver/netdev.h"
 #include "../network/wireless/wiphy.h"
+#include "../rfkill.h"
 #include "../network/arp/arp.h"
 #include "../network/tcp/tcp.h"
 #include "../network/netconf.h"
@@ -140,6 +141,7 @@
 #define SYSFS_INO_BLOCK     0x04000000u
 #define SYSFS_INO_CPU       0x05000000u
 #define SYSFS_INO_BACKLIGHT 0x06000000u
+#define SYSFS_INO_RFKILL    0x08000000u
 #define SYSFS_INO_USB       0x80000000u
 #define SYSFS_INO_FILE      0x40000000u
 #define PROCFS_INO_SYS      0x140u /* and the entries of /proc/sys after it */
@@ -4478,6 +4480,9 @@ uint32_t sysfs_ino(int node, int key, int file)
     if (node == SYSFS_BACKLIGHT) {
         return SYSFS_INO_BACKLIGHT | ((uint32_t)key & 0xFFFFu) << 8 | ((uint32_t)file & 0xFFu);
     }
+    if (node == SYSFS_RFKILL) {
+        return SYSFS_INO_RFKILL | ((uint32_t)key & 0xFFFFu) << 8 | ((uint32_t)file & 0xFFu);
+    }
     if (node == SYSFS_PCI_DEVICE && file == 2) {
         return SYSFS_INO_PCI_LINK + (uint32_t)key;
     }
@@ -4824,6 +4829,9 @@ int sysfs_device_exists(int node, int key)
     if (node == SYSFS_BACKLIGHT) {
         return key >= 0 && key < backlight_count();
     }
+    if (node == SYSFS_RFKILL) {
+        return rfkill_present(key);
+    }
     return node == SYSFS_PCI_DEVICE ? sysfs_pci_present(key) : sysfs_usb_find(key, &r) >= 0;
 }
 
@@ -5146,6 +5154,21 @@ static int procfs_gen_backlight(struct procfs_text *t, int key, int attr)
     return t->len;
 }
 
+/** Append attribute `attr` of radio switch `key` (rfkill.h): its length, or
+ * -ENOENT for a switch that is gone. */
+static int procfs_gen_rfkill(struct procfs_text *t, int key, int attr)
+{
+    char text[160];
+    int len = rfkill_show(key, attr, text, (int)sizeof(text) - 1);
+
+    if (len < 0) {
+        return len;
+    }
+    text[len] = '\0';
+    ap_str(t, text);
+    return t->len;
+}
+
 /**
  * Render the attribute `attr` of processor `cpu`'s topology directory, in
  * the order `sysfs_attr` lists them: Linux's masks and lists of the
@@ -5246,6 +5269,10 @@ static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int
     if (vp->sysent == SYSFS_BACKLIGHT) {
         *key = vp->syskey;
         return procfs_gen_backlight(t, vp->syskey, vp->procfile);
+    }
+    if (vp->sysent == SYSFS_RFKILL) {
+        *key = vp->syskey;
+        return procfs_gen_rfkill(t, vp->syskey, vp->procfile);
     }
     if (SYSFS_IS_BLOCK(vp->sysent)) {
         *key = vp->syskey;
@@ -6296,6 +6323,8 @@ static int32_t procfs_sysattr_read(fd_entry_t *e, char __user *buf, uint32_t cou
     procfs_text_init(&t);
     len = f->origin_task >> 8 == SYSFS_BACKLIGHT
               ? procfs_gen_backlight(&t, f->origin_pid, f->origin_task & 255)
+          : f->origin_task >> 8 == SYSFS_RFKILL
+              ? procfs_gen_rfkill(&t, f->origin_pid, f->origin_task & 255)
               : procfs_gen_sysattr(&t, f->origin_task >> 8, f->origin_task & 255);
     if (len < 0 || t.nomem) {
         kfree(t.buf);
@@ -6353,8 +6382,9 @@ static int64_t sysattr_number(const char *s, uint32_t len, int *relative)
  * another state is -EINVAL. The whole count is taken, or the write fails
  * with -EFAULT, -EIO for a clock that cannot be read or cleared, or one of
  * the errors above. A backlight's brightness and bl_power take what
- * `backlight_store` takes, and have its errors. A write of more than 31
- * bytes, which would be read in part, is -EINVAL and changes nothing.
+ * `backlight_store` takes, and have its errors; a radio switch's soft and
+ * state take what `rfkill_store` takes. A write of more than 31 bytes,
+ * which would be read in part, is -EINVAL and changes nothing.
  */
 static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint32_t count)
 {
@@ -6378,6 +6408,10 @@ static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint3
     }
     if (f->origin_task >> 8 == SYSFS_BACKLIGHT) {
         rc = backlight_store(f->origin_pid, f->origin_task & 255, text, (int)n);
+        return rc != 0 ? rc : (int32_t)count;
+    }
+    if (f->origin_task >> 8 == SYSFS_RFKILL) {
+        rc = rfkill_store(f->origin_pid, f->origin_task & 255, text, (int)n);
         return rc != 0 ? rc : (int32_t)count;
     }
     if (f->origin_task >> 8 == SYSFS_POWER) {

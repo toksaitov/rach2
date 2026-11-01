@@ -368,6 +368,8 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_WLAN_PHY        37 /* phyN, key is the radio index */
 #define SYSFS_WLAN_DEVICE     38 /* phyN/device */
 #define SYSFS_WLAN_DRIVER     39 /* phyN/device/DRIVER */
+#define SYSFS_CLASS_RFKILL    40 /* /sys/class/rfkill */
+#define SYSFS_RFKILL          41 /* /sys/class/rfkill/rfkillN, whose key is N */
 
 /** Return the radio index of a network interface, or -1. */
 int sysfs_net_wiphy(int index);
@@ -380,7 +382,7 @@ const char *sysfs_wlan_driver(int index);
 #define SYSFS_KEYED(node)                                                                  \
     ((node) == SYSFS_PCI_DEVICE || (node) == SYSFS_USB_DEVICE || (node) == SYSFS_NET_IF || \
      (node) == SYSFS_NET_STATS || (node) == SYSFS_CPUN || (node) == SYSFS_CPU_TOPOLOGY ||  \
-     (node) == SYSFS_BACKLIGHT || SYSFS_IS_BLOCK(node) ||                                  \
+     (node) == SYSFS_BACKLIGHT || SYSFS_IS_BLOCK(node) || (node) == SYSFS_RFKILL ||        \
      ((node) >= SYSFS_WLAN_PHY && (node) <= SYSFS_WLAN_DRIVER))
 
 /** Whether `node` is a directory of a disk node: its own, its queue's, its
@@ -394,8 +396,8 @@ const char *sysfs_wlan_driver(int index);
 const char *sysfs_attr(int node, int n);
 
 /** Whether the attribute `attr` of `node` takes a privileged write:
- * rtc0's wakealarm, /sys/power's state, and a backlight's brightness and
- * bl_power. */
+ * rtc0's wakealarm, /sys/power's state, a backlight's brightness and
+ * bl_power, and a radio switch's soft and state. */
 int sysfs_attr_writable(int node, int attr);
 
 /** The interfaces' part, in procfs.c: the index of the interface named by

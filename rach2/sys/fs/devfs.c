@@ -34,6 +34,7 @@
 #include "../proc/suspend.h"
 #include "../proc/wait_queue.h"
 #include "../evdev.h"
+#include "../rfkill.h"
 #include "../audio/dsp.h"
 #include "../audio/mixer.h"
 #include "../network/wireless/wsim.h"
@@ -1505,6 +1506,9 @@ static const struct file_ops wsim_ops = {wsim_read, wsim_write, wsim_poll, wsim_
 static const struct file_ops mixer_ops = {NULL, NULL, dev_poll, mixer_ioctl, NULL};
 static const struct file_ops dsp_ops = {dspdev_read, dspdev_write, dspdev_poll, dspdev_ioctl,
                                         dspdev_close};
+/* /dev/rfkill's are rfkill.c's. */
+static const struct file_ops rfkill_ops = {rfkill_read, rfkill_write, rfkill_poll, rfkill_ioctl,
+                                           rfkill_close};
 
 static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_write, dev_poll,
                                              dev_ioctl, dev_grubcore_close};
@@ -1573,8 +1577,10 @@ static struct disk *window_disk(const struct devfs_entry *dev)
  * /dev/full, the random devices and the terminals are 0666, as on Linux, and
  * every other device is root's, with group access to /dev/mem and the loop
  * devices. /dev/mixer and /dev/dsp are 0666 so that the console's user sets
- * the volume and plays sound, as a desktop's ACL gives them on Linux, and the
- * event devices of /dev/input are root's. `bootpart` and `grubcore` are
+ * the volume and plays sound, as a desktop's ACL gives them on Linux, the
+ * event devices of /dev/input are root's, and /dev/rfkill, at Linux's 10:242,
+ * is 0644, as udev makes it, so that anyone reads the radio switches and
+ * root changes them. `bootpart` and `grubcore` are
  * present only while published, the mixer while an audio driver offers its
  * volume, dsp while it offers streams, and an event device while its input
  * device is registered, as the disk nodes after the table are, which is why
@@ -1609,6 +1615,7 @@ static const struct devfs_entry dev_table[] = {{"mem", 1, 1, 0, 0640, &mem_ops},
                                                {"rtc0", 254, 0, 0, 0600, &rtc_ops},
                                                {"mixer", 14, 0, 0, 0666, &mixer_ops},
                                                {"dsp", 14, 3, 0, 0666, &dsp_ops},
+                                               {"rfkill", 10, 242, 0, 0644, &rfkill_ops},
                                                {"input/event0", 13, 64, 0, 0600, &evdev_ops},
                                                {"input/event1", 13, 65, 0, 0600, &evdev_ops},
                                                {"input/event2", 13, 66, 0, 0600, &evdev_ops},
@@ -2183,10 +2190,12 @@ int devfs_open(const char *name, int flags)
     e->node = NULL;
     e->sock = NULL;
     e->ofd->offset = 0;
-    if (dev->ops == &evdev_ops || dev->ops == &dsp_ops || dev->ops == &wsim_ops) {
-        int32_t rc = dev->ops == &dsp_ops    ? dspdev_open(e, flags)
-                     : dev->ops == &wsim_ops ? wsim_open(e)
-                                             : evdev_open(e, dev->minor - EVDEV_MINOR_BASE);
+    if (dev->ops == &evdev_ops || dev->ops == &dsp_ops || dev->ops == &wsim_ops ||
+        dev->ops == &rfkill_ops) {
+        int32_t rc = dev->ops == &dsp_ops      ? dspdev_open(e, flags)
+                     : dev->ops == &wsim_ops   ? wsim_open(e)
+                     : dev->ops == &rfkill_ops ? rfkill_open(e)
+                                               : evdev_open(e, dev->minor - EVDEV_MINOR_BASE);
 
         if (rc != 0) {
             fd_free(current_proc->fds, fd);

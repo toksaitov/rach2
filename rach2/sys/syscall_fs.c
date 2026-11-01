@@ -59,6 +59,7 @@
 #include "lib/kuser.h"
 #include "lib/kstring.h"
 #include "display/backlight.h"
+#include "rfkill.h"
 #include "display/fb.h"
 #include "speaker.h"
 #include "audio/audio.h"
@@ -13214,6 +13215,7 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
                  {SYSFS_CLASS, "backlight", SYSFS_CLASS_BACKLIGHT},
                  {SYSFS_CLASS, "net", SYSFS_CLASS_NET},
                  {SYSFS_CLASS, "ieee80211", SYSFS_CLASS_IEEE80211},
+                 {SYSFS_CLASS, "rfkill", SYSFS_CLASS_RFKILL},
                  {SYSFS_CLASS, "rtc", SYSFS_CLASS_RTC},
                  {SYSFS_CLASS_RTC, "rtc0", SYSFS_RTC0},
                  {SYSFS_RTC0, "device", SYSFS_RTC_DEVICE},
@@ -13259,6 +13261,23 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
         return 0;
     if (node == SYSFS_CLASS_NET || node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
         return synth_sys_net_dirent(node, key, n, name, ino, dtype);
+    }
+    if (node == SYSFS_CLASS_RFKILL) {
+        int index = rfkill_nth(n);
+        if (index < 0)
+            return 0;
+        k_memcpy(name, "rfkill", 6);
+        k_itoa(index, name + 6, 26, 10, 0);
+        *ino = sysfs_ino(SYSFS_RFKILL, index, 0);
+        *dtype = DT_DIR;
+        return 1;
+    }
+    if (node == SYSFS_RFKILL) {
+        if (sysfs_attr(node, n))
+            return synth_entry(sysfs_attr(node, n), sysfs_ino(node, key, 1 + n), DT_REG, name, ino,
+                               dtype);
+        return synth_entry(n == RFKILL_ATTRS && rfkill_phy(key) >= 0 ? "device" : NULL,
+                           sysfs_ino(SYSFS_WLAN_PHY, rfkill_phy(key), 2), DT_LNK, name, ino, dtype);
     }
     if (node == SYSFS_CLASS_BACKLIGHT) {
         return synth_entry(backlight_name(n), sysfs_ino(SYSFS_BACKLIGHT, n, 0), DT_DIR, name, ino,
