@@ -101,8 +101,8 @@
 # reopen a closed card first, for a step that runs again.
 #
 # `check [HELD...]` prints a line `board: LINE` for each inconsistency of
-# the board it can see: an open task whose branch `task/N` its milestone's
-# branch already contains, an open card In progress with no assignee, or one
+# the board it can see: an open task that no loop in HELD holds whose branch
+# `task/N` its milestone's branch already contains, an open card In progress with no assignee, or one
 # that no worker loop holds when HELD lists the issues the loops hold, a card
 # Done or closed whose state or Status disagrees, and an open milestone whose
 # cards are all closed. status.sh runs it on every check.
@@ -579,6 +579,8 @@ check()
         END { for (m in cards) if (!open[m]) print "board: milestone " m " is open but all its tasks are closed" }'
     printf '%s\n' "$board" | awk -F '\t' '$4 == "OPEN" && $8 == "" && $11 != "" { print $3 " " $11 }' |
         while read -r n b; do
+            # A loop that holds the task may have pushed part of it already.
+            case " $* " in *" $n "*) continue ;; esac
             s=$(gh api "repos/$REPO/compare/$b...task/$n" --jq .status 2> /dev/null) || continue
             case $s in identical|behind) echo "board: #$n is open but $b contains task/$n" ;; esac
         done
