@@ -135,9 +135,12 @@ gives the bytes a read of the whole queue returns.
 names it
 .Dq anon_inode:inotify .
 .Pp
-A user may have 128 instances and 8192 watches, the limits
-.Pa /proc/sys/fs/inotify
-reports.
+A user may have 128 instances and 8192 watches, and an instance may
+queue 16384 events, the limits of
+.Pa /proc/sys/fs/inotify ,
+where root may change them, as
+.Xr proc 5
+says.
 .Pp
 Where Linux differs: a file is gone for its watches when its last link
 is removed, where Linux waits for its last close; the events of a file

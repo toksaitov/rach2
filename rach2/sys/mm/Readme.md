@@ -141,7 +141,7 @@ The dumpable flag of `prctl` is kept here, one for every thread that shares the 
 
 ### Regions
 
-`vm.c` keeps a process's regions in an array from the heap, sorted by address, so a lookup is a binary search and a free range is a gap between two entries. The array starts with 16 entries and doubles up to `VMA_LIMIT`, 65536, the bound Linux keeps as `max_map_count`; a change that needs one more is refused, and the kernel logs `vm: OPERATION: pid N (NAME) has used all 65536 of its mappings` once for the process. `vm_reserve` makes room for the entries a change needs before the change starts, so a split either fails with nothing changed or cannot fail.
+`vm.c` keeps a process's regions in an array from the heap, sorted by address, so a lookup is a binary search and a free range is a gap between two entries. The array starts with 16 entries and doubles up to `vm_max_map_count`, `VMA_LIMIT` (65536) at boot and `/proc/sys/vm/max_map_count`, the bound Linux keeps under that name; a change that would take the process past it is refused, and the kernel logs `vm: OPERATION: pid N (NAME) has used all LIMIT of its mappings` once for the process. A process already past a lower value written keeps its regions, and only a change that adds one fails. `vm_reserve` makes room for the entries a change needs before the change starts, so a split either fails with nothing changed or cannot fail.
 
 A region, `vma_t`, is a half-open, page-aligned range of a type: `VM_CODE` or `VM_DATA` for an ELF segment, the pages of it that map the program's file or the anonymous pages past them, `VM_HEAP` for the heap `brk` grows, `VM_STACK` for the main stack, `VM_ANON` for private anonymous memory, `VM_FILE` for a private mapping of a file that `mmap` made, and `VM_SHARED` for shared anonymous memory or a shared mapping of a file on tmpfs or ext2. Its protection is `VM_PROT_READ`, `VM_PROT_WRITE` and `VM_PROT_EXEC`, with two marks beside them that splits, merges and moves keep: `VM_PROT_NOWRITE`, a region `mprotect` may never make writable, and `VM_PROT_IO`, `/dev/mem`'s frames, which no fault backs and neither a core file nor `/proc/PID/mem` reads, since a read of a device register can change the device. Neighbours of the same type and protection merge, and two that map a file merge only where its pages continue.
 
@@ -220,7 +220,7 @@ The cache has `PC_SLOTS`, 2048 slots, and uses as many as half the caches' targe
 * The heap is 256 MiB on i686 whatever the machine has.
 * A file's pages are numbered in 32 bits: a mapping of a file or of shared memory past page 2^32 is refused with EOVERFLOW, and a file in memory ends at 16 TiB less a page.
 * A writable shared mapping of a file is possible on tmpfs and ext2 alone. A store past the end of an ext2 file through a shared mapping is lost, and a touch past the end of a mapped tmpfs file ends in `SIGSEGV`, where Linux sends `SIGBUS` for both.
-* A process has at most 65536 regions.
+* A process has at most 65536 regions, unless `vm.max_map_count` is raised.
 * A KRFFS disk root is at most 512 MiB, less on i686 where a BAR shortens the window, and the disk page cache keeps at most 2048 pages.
 * The MMIO region never frees a mapping, the modules together have 64 MiB and must lie below 4 GiB, and i686 has 1024 temporary mappings.
 * i686 does not randomize addresses, and x86-64 places the first program, which the kernel loads itself, at fixed addresses.

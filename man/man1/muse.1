@@ -100,9 +100,7 @@ By default
 asks before a command with side effects and runs each shell command in a
 sandbox, which on Linux is a copy of bubblewrap built into the program.
 Bubblewrap needs parts of Linux that Rach2 does not have yet, among them
-.Fn pivot_root
-and
-.Pa /proc/sys/kernel/overflowuid ,
+.Fn pivot_root ,
 and Meta documents that
 .Nm
 refuses a shell command when it cannot run it in the sandbox.

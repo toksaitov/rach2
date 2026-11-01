@@ -12,6 +12,7 @@
 #define VM_PAGE_SHIFT 12
 
 int randomize_va_space = ASLR_MMAP_PAGES != 0 ? 2 : 0;
+int vm_max_map_count = VMA_LIMIT;
 
 /* The files whose last reference went, waiting for `vm_file_reap`. */
 static struct vm_file *vm_dead;
@@ -123,21 +124,22 @@ int vm_copy(vm_space_t *dst, const vm_space_t *src)
 
 int vm_reserve(vm_space_t *vm, uint32_t n)
 {
+    uint32_t limit = vm_max_map_count > 0 ? (uint32_t)vm_max_map_count : 0u;
     uint32_t cap;
     vma_t *grown;
 
+    if (n > 0 && vm->count + n > limit) {
+        return -1;
+    }
     if (vm->cap - vm->count >= n) {
         return 0;
-    }
-    if (vm->count + n > VMA_LIMIT) {
-        return -1;
     }
     cap = vm->cap ? vm->cap : VMA_FIRST;
     while (cap < vm->count + n) {
         cap *= 2;
     }
-    if (cap > VMA_LIMIT) {
-        cap = VMA_LIMIT;
+    if (cap > limit) {
+        cap = limit;
     }
     grown = kmalloc(sizeof(vma_t) * cap);
     if (!grown) {
