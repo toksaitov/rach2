@@ -5,6 +5,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <stdlib.h>
+#include <arpa/inet.h>
 
 #include "ipcheck.h"
 #include "netcfg.h"
@@ -115,12 +117,50 @@ static int finish_pass(FILE *f, const char *path, int pass)
     return -1;
 }
 
+/**
+ * Take the line `key value` of the inet6 stanza of `s`: an address, as
+ * `ADDR` or `ADDR/LEN`, a prefix's length as `netmask`, or a gateway.
+ * Other keys are passed over. A value that cannot be used sets `bad6` and
+ * is reported.
+ */
+static void read6(const char *path, struct netcfg_iface *s, const char *key, char *value)
+{
+    char *slash = strchr(value, '/');
+    char *end;
+    long len = -1;
+
+    if (strcmp(key, "address") != 0 && strcmp(key, "netmask") != 0 && strcmp(key, "gateway") != 0) {
+        return;
+    }
+    if (strcmp(key, "netmask") == 0 || (strcmp(key, "address") == 0 && slash)) {
+        const char *digits = slash && strcmp(key, "address") == 0 ? slash + 1 : value;
+
+        len = strtol(digits, &end, 10);
+        if (*digits < '0' || *digits > '9' || *end != '\0' || len > 128) {
+            fprintf(stderr, "netup: %s: %s: '%s' is not a prefix's length\n", path, s->name,
+                    digits);
+            s->bad6 = 1;
+            return;
+        }
+        s->prefix6 = (int)len;
+        if (strcmp(key, "netmask") == 0) {
+            return;
+        }
+        *slash = '\0';
+    }
+    if (inet_pton(AF_INET6, value, strcmp(key, "address") == 0 ? s->address6 : s->gateway6) != 1) {
+        fprintf(stderr, "netup: %s: %s: '%s' is not an IPv6 address\n", path, s->name, value);
+        s->bad6 = 1;
+    }
+}
+
 int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max, int add_auto)
 {
     FILE *f = fopen(path, "r");
     char line[NETCFG_LINE_MAX];
     char keep[NETCFG_LINE_MAX];
     struct netcfg_iface *current = NULL;
+    int inet6 = 0;
     int pass;
 
     if (!f) {
@@ -196,7 +236,8 @@ int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max,
                 int i;
 
                 current = NULL;
-                if (strcmp(family, "inet") != 0) {
+                inet6 = strcmp(family, "inet6") == 0;
+                if (strcmp(family, "inet") != 0 && !inet6) {
                     continue;
                 }
                 if (!netcfg_name_ok(name)) {
@@ -215,6 +256,24 @@ int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max,
                 if (!current) {
                     continue;
                 }
+                if (inet6) {
+                    current->prefix6 = -1;
+                    if (strcmp(method, "auto") == 0) {
+                        current->method6 = NETCFG6_AUTO;
+                    } else if (strcmp(method, "static") == 0) {
+                        current->method6 = NETCFG6_STATIC;
+                    } else if (strcmp(method, "manual") == 0 || strcmp(method, "loopback") == 0) {
+                        current->method6 = NETCFG6_MANUAL;
+                    } else {
+                        fprintf(stderr,
+                                "netup: %s: %s: inet6 method '%s' is not one this "
+                                "understands\n",
+                                path, name, method);
+                        current->method6 = NETCFG6_MANUAL;
+                        current->bad6 = 1;
+                    }
+                    continue;
+                }
                 current->found = 1;
                 if (strcmp(method, "dhcp") == 0) {
                     current->dhcp = 1;
@@ -230,6 +289,10 @@ int netcfg_read(const char *path, struct netcfg_iface *want, int count, int max,
                 continue;
             }
             if (!current) {
+                continue;
+            }
+            if (inet6) {
+                read6(path, current, key, word(rest, &rest));
                 continue;
             }
             if (strcmp(key, "address") == 0 || strcmp(key, "netmask") == 0 ||
@@ -281,4 +344,45 @@ int netcfg_check_static(const struct netcfg_iface *s, char *err, size_t errlen)
         return -1;
     }
     return ipcheck_config(s->address, s->netmask, s->gateway, err, errlen);
+}
+
+/** Whether the 16 bytes at `a` are all `v` but the last, which is `last`. */
+static int all_but_last(const unsigned char *a, unsigned char v, unsigned char last)
+{
+    int i;
+
+    for (i = 0; i < 15 && a[i] == v; i++) {
+    }
+    return i == 15 && a[15] == last;
+}
+
+/** Whether `a` is ::, ::1, a group, ff00::/8, or an IPv4-mapped address,
+ * ::ffff:0:0/96: no address an interface's own or a gateway may be. */
+static int not_unicast(const unsigned char *a)
+{
+    static const unsigned char mapped[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff};
+
+    return all_but_last(a, 0, 0) || all_but_last(a, 0, 1) || a[0] == 0xff ||
+           memcmp(a, mapped, sizeof(mapped)) == 0;
+}
+
+int netcfg_check_static6(const struct netcfg_iface *s, char *err, size_t errlen)
+{
+    if (all_but_last(s->address6, 0, 0)) {
+        say(err, errlen, "a static inet6 stanza with no address");
+        return -1;
+    }
+    if (s->prefix6 < 0) {
+        say(err, errlen, "a static inet6 stanza with no prefix length");
+        return -1;
+    }
+    if (not_unicast(s->address6)) {
+        say(err, errlen, "an inet6 address no interface can hold");
+        return -1;
+    }
+    if (!all_but_last(s->gateway6, 0, 0) && not_unicast(s->gateway6)) {
+        say(err, errlen, "an inet6 gateway that is no router's address");
+        return -1;
+    }
+    return 0;
 }
