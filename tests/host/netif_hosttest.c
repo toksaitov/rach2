@@ -735,6 +735,40 @@ void netlink_name(struct socket *sock, uint8_t *sa)
     (void)sa;
 }
 
+/** Refuse every option: no row opens a netlink socket. */
+int32_t netlink_setsockopt(struct socket *s, int optname, int val, int optlen)
+{
+    (void)s;
+    (void)optname;
+    (void)val;
+    (void)optlen;
+    return -ENOPROTOOPT;
+}
+
+/** Every socket here is in the first network namespace. */
+int socket_outside(const struct socket *s)
+{
+    (void)s;
+    return 0;
+}
+
+/** A socket of the first network namespace reaches every address. */
+int socket_ns_reaches(const struct socket *s, net_addr_t a, int up)
+{
+    (void)s;
+    (void)a;
+    (void)up;
+    return 1;
+}
+
+/** A socket of the first network namespace names both interfaces, eth0 as
+ * index 1 and eth1 as 2. */
+struct netdev *socket_iface6(const struct socket *s, int ifindex)
+{
+    (void)s;
+    return ifindex > 0 ? netdev_at(ifindex - 1) : NULL;
+}
+
 /** Set up eth0 and eth1, with distinct addresses and station addresses, and
  * descriptor 3, then run the rows; return 0 when every one passes. */
 int main(void)
