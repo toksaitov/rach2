@@ -616,3 +616,17 @@ The third run, after batches 5 and 6, passed style on both architectures, and th
 * `tests/host/unifont_hosttest.c` counted U+1100, a wide glyph, among the narrow ones.
 * The `checks` witness of `host.host.tests` allowed 160 checks, and the group has 175 besides its listing.
 * `tests/host/term_hosttest.c`: the round trip's child turned echo on after printing the line that the test answers with a return, so a return that came first went unechoed and the next line fell one row short. The child now turns echo on first.
+
+## Release
+
+Milestone 66 was released on 2026-11-01 at 17:44 UTC+6, at 2dd8dd1b7.
+
+* Ubuntu in WSL: every suite passed, run 41290850995.
+* Windows: every suite but style passed, run milestone3-9cfcde58ccf1-windows-1101-085458. Its result line came out garbled, so `-r` would have run everything again; `failed_in` in `release.sh` (629a713c9) now reads the failed suites from the lines of their failures.
+* The Mac: i686:esctest2 failed with ENOTTY, since macOS refuses TIOCSWINSZ on a pty master whose slave was never opened. #1803 (364913c48) sets the first size on the slave in `term`'s child; the rerun milestone3-364913c48899-mac-1101-105240 passed.
+* The Lenovo: the acceptance passed. devprobe and musl/threadmusl.framebuffer failed with EBUSY, since the trial boot's console session is `term`, which holds `/fb`. `release.sh` (cc4c3b1e8) now stops the console's `term` for the native cases and ends the kernel console's login that init starts in its place afterwards, so init starts `term` again. The rerun milestone3-2dd8dd1b70ad-lenovo-1101-114310 passed, and the trial was committed.
+* The release was stopped from 16:33 to 16:52 while the owner checked the Lenovo by hand: Doom with sound on the full screen, and Claude Code, Codex, agy and Muse over SSH and on `term` (#1770).
+
+## Left open
+
+* The plan, #1770 and `krffs/manifests/rach2-term.manifest` name Gemini CLI; the root stages agy. The text should say agy, unless the owner adds Gemini CLI.
