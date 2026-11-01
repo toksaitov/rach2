@@ -119,6 +119,9 @@
 # * wpa_supplicant: Jouni Malinen's key,
 #   EC4AA0A991A5F2464582D52D2B6EF432EFC895FA, which w1.fi's releases page
 #   names.
+# * iw: Johannes Berg's key, C0EBC440F6DA091C884D8532E0F373F37BF9099A,
+#   through its signing subkey A5E03CB13B3733C48DDA1478D74AA23BCB0F6800,
+#   which signs the uncompressed tar.
 binutils 2.47 https://ftp.gnu.org/gnu/binutils/binutils-2.47.tar.xz 154ab23b60070e8f27013c22977f1129425d67d1e8acd6e13010e617811e4cff
 gcc 16.2.0 https://ftp.gnu.org/gnu/gcc/gcc-16.2.0/gcc-16.2.0.tar.xz e6738e29597f733270731aa90600f37ffdc045079dfc27ec7e8192cc81085c3e
 gmp 6.3.0 https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
@@ -239,3 +242,4 @@ cmus 2.12.0 https://snapshot.debian.org/archive/debian/20261002T000000Z/pool/mai
 cmus-debian 2.12.0-3 https://snapshot.debian.org/archive/debian/20261002T000000Z/pool/main/c/cmus/cmus_2.12.0-3.debian.tar.xz dcdbda04f42785079be734c3282e8a114a1ee55da01505ac92da56778bd035a4
 libnl 3.12.0 https://github.com/thom311/libnl/releases/download/libnl3_12_0/libnl-3.12.0.tar.gz fc51ca7196f1a3f5fdf6ffd3864b50f4f9c02333be28be4eeca057e103c0dd18
 wpa_supplicant 2.12 https://w1.fi/releases/wpa_supplicant-2.12.tar.gz 08e23937e16d0155e55cab2b51f51fbe10d80a1aa91c4e15442645059b737ef6
+iw 6.17 https://cdn.kernel.org/pub/software/network/iw/iw-6.17.tar.xz 7d182e498289ab39b257da6780d562e415377107f50358ee5b55b8cfe40b1e33
