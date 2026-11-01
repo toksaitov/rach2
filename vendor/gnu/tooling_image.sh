@@ -297,6 +297,7 @@ IMAGE='$(basename "$OUT")'
 SIZE='$SIZE'
 JOBS='$CPUS'
 DRY_RUN='$DRY'
+IMAGE_TIME='$(printf '%s' "${SOURCE_DATE_EPOCH:-$(git log -1 --format=%ct HEAD)}" | tr -cd 0-9)'
 EOF
 }
 
