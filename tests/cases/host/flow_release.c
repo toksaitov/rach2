@@ -660,6 +660,22 @@ static int finished_rows(struct release *r)
         free(line);
         ok = check(r, held, "a finished release pushes master, closes and archives") && ok;
     }
+    {
+        char also[9000];
+        snprintf(also, sizeof(also), "milestone 7\nalso 8\n%s", strchr(r->finished, '\n') + 1);
+        run(r, &(struct release_row){.record = also, .git = "yes"});
+        ok =
+            check(r,
+                  !f->status &&
+                      before(
+                          r, "milestones/7 -f state=closed\n",
+                          "gh api -X PATCH repos/toksaitov/rach2/milestones/8 -f state=closed\n") &&
+                      before(r, "milestones/8 -f state=closed\n", "board archive 7\n") &&
+                      before(r, "board archive 7\n", "board archive 8\n") &&
+                      ended_with(r, "release: passed " H),
+                  "a release with -c closes and archives both milestones") &&
+            ok;
+    }
     run(r, &(struct release_row){.record = r->finished, .git = "yes", .master = H});
     return check(r, !f->status && !called(r, " push ") && called(r, "^board archive 7$"),
                  "master already at the commit is not pushed again") &&

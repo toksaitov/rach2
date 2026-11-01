@@ -3,14 +3,17 @@
 # release.sh: release milestone M at commit SHA: test SHA with a full run on
 # each machine, install it on the Lenovo, move master to it and close M.
 #
-# Usage: release.sh [-r] [-s STATE] M SHA
+# Usage: release.sh [-r] [-c N]... [-s STATE] M SHA
 #        release.sh -p [-s STATE] M SHA
 #        release.sh -a MACHINE [-s STATE] M SHA
 #
 # M is the number of a GitHub milestone, whose description names its branch
 # as `board.sh milestone M` reads it, and SHA a commit already pushed to
 # that branch that contains origin/master, so that master can move to it by
-# fast-forward. The manager starts the script detached in the tmux session
+# fast-forward. Each -c N names another open milestone whose branch SHA
+# contains, released with M: the record says `also N`, and the close closes N
+# and archives its cards after M's, so that milestones whose branches were
+# joined at their end take one release. The manager starts the script detached in the tmux session
 # `rach2-release`, and starts it again with the same arguments when it ended
 # without finishing; it then resumes from its record. It runs on the owner's
 # computer, which reaches the testing host as `ssh testing` and the Lenovo on
@@ -169,8 +172,9 @@
 #   read back. A flush that fails fails the step, since the read-back may
 #   come from the buffer cache.
 # * close: the record says `closing`; SHA is pushed to master by
-#   fast-forward, `git push origin SHA:refs/heads/master`, milestone M is
-#   closed, its cards are archived with `board.sh archive M`, and the last
+#   fast-forward, `git push origin SHA:refs/heads/master`, milestone M and
+#   each N of -c are closed, their cards are archived with `board.sh archive`,
+#   and the last
 #   line printed is `release: passed SHA`. A start of the script that finds
 #   a record with `closing` that did not end finishes that release first,
 #   whatever M and SHA it was given.
@@ -223,7 +227,7 @@ COPY=$OWNER/build/worktrees/release
 ARCH_DIR=build/x86_64
 RECOVERY_IMAGE=images/rach2-recovery-with-key.krffs
 WSL='MSYS_NO_PATHCONV=1 wsl.exe -- bash -s'
-USAGE='usage: release.sh [-r] [-s STATE] M SHA
+USAGE='usage: release.sh [-r] [-c N]... [-s STATE] M SHA
        release.sh -p [-s STATE] M SHA
        release.sh -a MACHINE [-s STATE] M SHA'
 PREPARE_COPY=$OWNER/build/worktrees/prepare
@@ -1709,6 +1713,16 @@ check()
     [ -n "$prepare" ] ||
         git -C "$repo" merge-base --is-ancestor refs/remotes/origin/master "$sha" 2> /dev/null ||
         refuse "$sha does not contain origin/master"
+    for n in $also; do
+        b=$(sh "$repo/tools/flow/board.sh" milestone "$n")
+        case $? in
+            0) ;;
+            3) refuse "-c: milestone $n is not open or names no branch" ;;
+            *) later "milestone $n cannot be read" ;;
+        esac
+        git -C "$repo" merge-base --is-ancestor "refs/remotes/origin/$b" "$sha" 2> /dev/null ||
+            refuse "-c: $sha does not contain $b"
+    done
 }
 
 # unfailed MACHINE: print why MACHINE's last run in the record cannot start
@@ -1816,7 +1830,8 @@ preflight()
         fail preflight "a trial is armed on the machine"
 }
 
-# close: move master to SHA, close milestone M and archive its cards.
+# close: move master to SHA, close milestone M and each milestone of the
+# record's `also` lines, and archive their cards.
 close()
 {
     git -C "$repo" fetch -q origin || later "the fetch failed"
@@ -1824,12 +1839,19 @@ close()
         git -C "$repo" push origin "$sha:refs/heads/master" ||
             later "the push of $sha to master failed"
     fi
-    gh api -X PATCH "repos/$REPO/milestones/$milestone" -f state=closed > /dev/null ||
-        later "milestone $milestone could not be closed"
-    report close pass "Master is at $sha, and milestone $milestone is closed."
+    names='' closed="milestone $milestone is"
+    for n in $milestone $(sed -n 's/^also //p' "$state/record"); do
+        gh api -X PATCH "repos/$REPO/milestones/$n" -f state=closed > /dev/null ||
+            later "milestone $n could not be closed"
+        names="$names${names:+ and }$n"
+    done
+    [ "$names" = "$milestone" ] || closed="milestones $names are"
+    report close pass "Master is at $sha, and $closed closed."
     report release pass "Released $sha on every machine."
-    sh "$repo/tools/flow/board.sh" archive "$milestone" > /dev/null ||
-        later "board.sh archive $milestone failed"
+    for n in $milestone $(sed -n 's/^also //p' "$state/record"); do
+        sh "$repo/tools/flow/board.sh" archive "$n" > /dev/null ||
+            later "board.sh archive $n failed"
+    done
 }
 
 main()
@@ -1840,9 +1862,15 @@ main()
     prepare=
     restart=
     detached=
-    while getopts a:m:prs:w: o; do
+    also=
+    while getopts a:c:m:prs:w: o; do
         case $o in
             a) restart=$OPTARG ;;
+            c)
+                case $OPTARG in
+                    ''|*[!0-9]*) echo "$USAGE" >&2; exit 2 ;;
+                esac
+                also="$also $OPTARG" ;;
             m) macrun=$OPTARG ;;
             p) prepare=1 ;;
             r) rerun=1 ;;
@@ -1852,8 +1880,8 @@ main()
         esac
     done
     shift $((OPTIND - 1))
-    if [ $# -ne 2 ] || { [ -n "$prepare" ] && [ -n "$rerun" ]; } ||
-        { [ -n "$restart" ] && [ -n "$prepare$rerun$macrun$detached" ]; }; then
+    if [ $# -ne 2 ] || { [ -n "$prepare" ] && [ -n "$rerun$also" ]; } ||
+        { [ -n "$restart" ] && [ -n "$prepare$rerun$macrun$detached$also" ]; }; then
         echo "$USAGE" >&2
         exit 2
     fi
@@ -1929,6 +1957,7 @@ main()
         {
             printf 'milestone %s\nsha %s\nbranch %s\nchosen %s\n' "$milestone" "$sha" "$branch" \
                 "$(date -u '+%FT%TZ')"
+            for n in $also; do printf 'also %s\n' "$n"; done
             [ -z "$kept" ] || printf '%s\n' "$kept"
             [ -z "$old" ] || ! grep -qx "milestone $milestone" "$state/record" ||
                 grep -q '^closed ' "$state/record" || grep '^card ' "$state/record"
