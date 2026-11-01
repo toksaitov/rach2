@@ -767,8 +767,8 @@ $(call together,$(KRFFSMOUNT_DISKS)): tests/system/krffsvol.sh $(MKMBR)
 	sh tests/system/krffsvol.sh disks $(CASE_DIR)/krffsmount
 
 # `tests/run ext2`: the ext2 driver booted: the probes as init on an ext2
-# root, ext2probe's link, cost and name-cache rows on a fixture volume the
-# host's mke2fs wrote, and os-real on its ext2 root, written, killed,
+# root, ext2probe's link, cost, name-cache and lookup rows on a fixture volume
+# the host's mke2fs wrote, and os-real on its ext2 root, written, killed,
 # checked, damaged and repaired by recovery's e2fsck. They are the machine cases of
 # tests/cases/machine.ext2.json, which etude runs, and have no target here.
 # The cases boot private copies of the three disks below.
@@ -1567,6 +1567,13 @@ $(ETUDE_SCENARIO_DISK): krffs/manifests/etude-scenario.manifest $(MKDISK) \
 # card, whose stop sends the frames it was given before it silences the card,
 # the case of tests/cases/machine.netconsole-e1000.json.
 
+
+# `tests/run frag6`: IPv6 fragments, extension headers and the path MTU over
+# ::1: an echo past one datagram comes back whole, an unknown option and a
+# routing header with a segment left are refused, overlapping fragments are
+# dropped with their datagram, and a Packet Too Big lowers the path's MTU.
+# They are the cases of tests/cases/guest.frag6.json, which etude runs, and
+# have no target here.
 
 # `tests/run textbusy`: executable files exclude writers until the last image
 # ends, and bind mounts retain removed KRFFS boot-root files until last close.
