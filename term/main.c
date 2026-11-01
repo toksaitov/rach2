@@ -355,7 +355,8 @@ static int loop(struct term *t, int sigfd)
 
         if (p[P_FB].revents & POLLIN)
             read_fb_event(t);
-        if (p[P_KEYS].revents & (POLLIN | POLLHUP | POLLERR)) {
+        /* Keys polled before the screen was lost are the descendant's. */
+        if (!t->suspended && (p[P_KEYS].revents & (POLLIN | POLLHUP | POLLERR))) {
             r = term_keys_read(&t->keys, &t->screen, &t->sel);
             if (r < 0 && r != -EAGAIN && r != -EINTR) {
                 fprintf(stderr, "term: keys: %s\n", strerror(-r));
