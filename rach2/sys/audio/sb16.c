@@ -607,11 +607,17 @@ fail:
  */
 static void sb16_halt(void)
 {
+    uint32_t flags = kirq_save();
+
     if (!playing) {
+        kirq_restore(flags);
         return;
     }
 
+    if (play_stream)
+        sb16_stream_progress();
     playing = false;
+    kirq_restore(flags);
 
     if (is_16bit) {
         dsp_write(DSP_EXIT_16BIT);
@@ -794,13 +800,8 @@ static int sb16_stream_start(audio_stream_t *s)
 /** Stop `s` and keep its final position; no callback follows this return. */
 static void sb16_stream_stop(audio_stream_t *s)
 {
-    uint32_t flags = kirq_save();
-
-    if (s == play_stream && playing) {
-        sb16_stream_progress();
+    if (s == play_stream)
         sb16_halt();
-    }
-    kirq_restore(flags);
 }
 
 /** Stop `s` and give playback back; a different caller changes nothing. */
