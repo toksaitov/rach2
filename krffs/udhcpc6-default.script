@@ -4,19 +4,21 @@
 # or ends.
 #
 # Most IPv6 networks need no DHCPv6: the kernel makes the addresses the
-# routers advertise by itself (SLAAC). A network whose routers tell their
-# hosts to ask a server instead gives the address here, as a lease, with
-# udhcpc6 started for the interface by hand or by an `up` line of its
-# stanza. A DHCPv6 lease carries no prefix length and no route: the address
-# is a /128, and the on-link prefix and the default route are the routers'.
+# routers advertise by itself (SLAAC). A router that sets the M flag in its
+# advertisements tells its hosts to ask a server for an address, and one that
+# sets O alone to ask for the other settings, the DNS servers among them;
+# ndwatch(8) starts udhcpc6 for either, with `-l` for O, and an `up` line of
+# an `inet6` stanza can start it too. A DHCPv6 lease carries no prefix length
+# and no route: the address is a /128, and the on-link prefix and the default
+# route are the routers'. A lease of `-l` has no address, only servers.
 #
 # The address of the lease in force is kept in /var/run, so that a lease
-# lost or replaced takes its address away. The resolver gets the lease's
-# servers beside the IPv4 ones /etc/resolv.conf has, which the IPv4 lease
-# script wrote, so that a machine on both keeps both.
+# lost or replaced takes its address away. The servers go to the resolver
+# merge, resolv.script, as the source IFACE.dhcp6, beside the IPv4 lease's
+# and the routers', so that a machine on both keeps both.
 
 # shellcheck disable=SC2154 # udhcpc6 passes the lease in the environment
-RESOLV=/etc/resolv.conf
+MERGE=/usr/share/udhcpc/resolv.script
 KEPT=/var/run/udhcpc6.$interface.address
 
 fail=0
@@ -29,46 +31,33 @@ drop_old() {
 	fi
 }
 
-# Build the new resolver: the search list, the IPv4 servers already there,
-# then the lease's, reporting the first write that fails.
-write_resolv() {
-	: > "$RESOLV.new" || return 1
+# The lease's resolver lines, for the merge.
+resolv_lines() {
 	if [ -n "$search" ]; then
-		echo "search $search" >> "$RESOLV.new" || return 1
-	fi
-	if [ -f "$RESOLV" ]; then
-		/bin/busybox grep '^nameserver [0-9.]*$' "$RESOLV" >> "$RESOLV.new"
+		echo "search $search"
 	fi
 	for s in $dns; do
-		echo "nameserver $s" >> "$RESOLV.new" || return 1
+		echo "nameserver $s"
 	done
-	return 0
 }
 
 case "$1" in
 	deconfig)
 		drop_old
+		: | "$MERGE" "$interface.dhcp6" || fail=1
 		;;
 
 	bound|renew)
-		if [ -z "$ipv6" ]; then
-			echo "udhcpc6: the lease names no address" >&2
-			exit 1
-		fi
-		if [ "$(cat "$KEPT" 2>/dev/null)" != "$ipv6" ]; then
-			drop_old
-			/bin/busybox ifconfig "$interface" add "$ipv6/128" || fail=1
-			[ $fail = 0 ] && echo "$ipv6" > "$KEPT"
-		fi
-		if [ -n "$dns" ]; then
-			if write_resolv; then
-				/bin/busybox mv "$RESOLV.new" "$RESOLV" || fail=1
-			else
-				echo "udhcpc6: resolver: writing $RESOLV.new failed" >&2
-				/bin/busybox rm -f "$RESOLV.new"
-				fail=1
+		if [ -n "$ipv6" ]; then
+			if [ "$(cat "$KEPT" 2>/dev/null)" != "$ipv6" ]; then
+				drop_old
+				/bin/busybox ifconfig "$interface" add "$ipv6/128" || fail=1
+				[ $fail = 0 ] && echo "$ipv6" > "$KEPT"
 			fi
+		else
+			drop_old
 		fi
+		resolv_lines | "$MERGE" "$interface.dhcp6" || fail=1
 		;;
 esac
 

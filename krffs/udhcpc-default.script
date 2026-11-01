@@ -13,30 +13,42 @@
 # answer, because a renewal may carry a different router or resolver than the
 # lease before it. The interfaces file runs udhcpc with `-O mtu`, so a lease
 # may carry an MTU, which is applied too.
+#
+# The lease's servers go to the resolver merge, resolv.script, as the source
+# IFACE.dhcp, which writes /etc/resolv.conf from them and from what DHCPv6 and
+# the routers' advertisements give, so that no source drops another's.
 
 # shellcheck disable=SC2154 # udhcpc passes the lease in the environment
-RESOLV=/etc/resolv.conf
+MERGE=/usr/share/udhcpc/resolv.script
 
 fail=0
 
-# Build the new resolver, reporting the first write that fails. Every line is
-# checked: a disk with no room left can create the file and then fail to write
-# it, and publishing that would leave a machine that resolves nothing while
-# reporting a lease.
-write_resolv() {
-	: > "$RESOLV.new" || return 1
+# The lease's resolver lines, for the merge.
+resolv_lines() {
 	if [ -n "$domain" ]; then
-		echo "search $domain" >> "$RESOLV.new" || return 1
+		echo "search $domain"
 	fi
 	for s in $dns; do
-		echo "nameserver $s" >> "$RESOLV.new" || return 1
+		echo "nameserver $s"
 	done
-	return 0
+}
+
+# Remove the default routes through the interface. The loop ends when a
+# removal fails, as it does once none is left.
+drop_routes() {
+	while /bin/busybox route del default gw 0.0.0.0 dev "$interface" 2>/dev/null; do
+		:
+	done
 }
 
 case "$1" in
+	# A lost lease, or a link that went down, takes everything the lease
+	# gave: the address, the default route, whose gateway is the last
+	# network's, and the servers.
 	deconfig)
 		/bin/busybox ifconfig "$interface" 0.0.0.0 || fail=1
+		drop_routes
+		: | "$MERGE" "$interface.dhcp" || fail=1
 		;;
 
 	bound|renew)
@@ -57,11 +69,8 @@ case "$1" in
 			/bin/busybox ifconfig "$interface" mtu "$mtu" || fail=1
 		fi
 
-		# Old default routes go before the new one. The loop ends when a
-		# removal fails, as it does once no default route is left.
-		while /bin/busybox route del default gw 0.0.0.0 dev "$interface" 2>/dev/null; do
-			:
-		done
+		# Old default routes go before the new one.
+		drop_routes
 
 		# The lease decides the route, a lease that names none included:
 		# the old default route goes whether or not this one replaces it,
@@ -79,19 +88,12 @@ case "$1" in
 			echo "udhcpc: the lease names no router: nothing off this subnet is reachable" >&2
 		fi
 
-		# The resolver is written on every lease, whether or not this one
-		# names a server: leaving the last lease's servers behind would
-		# point this machine at a network it is no longer on. It is written
-		# through a temporary beside it, so a reader never sees half of one,
-		# and a write that fails leaves the old file rather than publishing
-		# a resolver with nothing in it.
-		if write_resolv; then
-			/bin/busybox mv "$RESOLV.new" "$RESOLV" || fail=1
-		else
-			echo "udhcpc: resolver: writing $RESOLV.new failed" >&2
-			/bin/busybox rm -f "$RESOLV.new"
-			fail=1
-		fi
+		# The servers are given on every lease, whether or not this one
+		# names any: leaving the last lease's behind would point this
+		# machine at a network it is no longer on. The merge keeps the old
+		# file when a write fails, rather than publishing a resolver with
+		# nothing in it.
+		resolv_lines | "$MERGE" "$interface.dhcp" || fail=1
 		;;
 esac
 

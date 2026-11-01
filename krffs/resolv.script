@@ -1,0 +1,102 @@
+#!/bin/sh
+#
+# Make /etc/resolv.conf from the servers and search domains each source of
+# them gives: the IPv4 lease (`udhcpc`), the DHCPv6 lease (`udhcpc6`) and the
+# routers' advertisements (`ndwatch`).
+#
+# `resolv.script NAME` takes NAME's lines, `nameserver ADDRESS` and
+# `search DOMAIN ...`, on its standard input and keeps them in
+# /var/run/resolv/NAME, or removes that file when the input is empty. It then
+# writes the resolver's file whole from every source there, in the order of
+# their names, so that one source's change never drops another's servers.
+# The names are IFACE.dhcp, IFACE.dhcp6 and IFACE.ra, so an interface's IPv4
+# servers come first, then DHCPv6's, then the routers'. A server or domain
+# two sources give appears once.
+#
+# A source that never gave anything and gives nothing now changes nothing:
+# the resolver's file the image starts with stands until a source has a
+# server, as udhcpc's first `deconfig`, before any lease, would otherwise
+# empty it.
+#
+# The sources and the file are written under a lock, `flock` on
+# /var/run/resolv/.lock, since two sources can change at once, and the file
+# through a temporary beside it, so a reader never sees half of one.
+
+DIR=/var/run/resolv
+RESOLV=/etc/resolv.conf
+BB=/bin/busybox
+
+name=$1
+case "$name" in
+	'' | .* | */*)
+		echo "resolv.script: usage: resolv.script NAME < LINES" >&2
+		exit 2
+		;;
+esac
+
+$BB mkdir -p "$DIR" || exit 1
+exec 9> "$DIR/.lock" || exit 1
+$BB flock 9 || exit 1
+
+$BB cat > "$DIR/.$name.new" || {
+	echo "resolv.script: $name: cannot keep its servers" >&2
+	$BB rm -f "$DIR/.$name.new"
+	exit 1
+}
+if [ -s "$DIR/.$name.new" ]; then
+	$BB mv "$DIR/.$name.new" "$DIR/$name" || exit 1
+else
+	$BB rm -f "$DIR/.$name.new"
+	if [ ! -e "$DIR/$name" ]; then
+		exit 0
+	fi
+	$BB rm -f "$DIR/$name" || exit 1
+fi
+
+search=
+servers=
+for f in "$DIR"/*; do
+	[ -f "$f" ] || continue
+	while read -r key rest; do
+		case "$key" in
+			nameserver)
+				for v in $rest; do
+					case " $servers " in
+						*" $v "*) ;;
+						*) servers="$servers $v" ;;
+					esac
+					break
+				done
+				;;
+			search | domain)
+				for v in $rest; do
+					case " $search " in
+						*" $v "*) ;;
+						*) search="$search $v" ;;
+					esac
+				done
+				;;
+		esac
+	done < "$f"
+done
+
+# Write the resolver's file, reporting the first line that fails: a disk
+# with no room left can create the file and then fail to write it.
+write_resolv() {
+	echo "# made by $0 from $DIR; a change here lasts until a source changes" || return 1
+	if [ -n "$search" ]; then
+		echo "search$search" || return 1
+	fi
+	for v in $servers; do
+		echo "nameserver $v" || return 1
+	done
+	return 0
+}
+
+if write_resolv > "$RESOLV.new"; then
+	$BB mv "$RESOLV.new" "$RESOLV" || exit 1
+else
+	echo "resolv.script: writing $RESOLV.new failed" >&2
+	$BB rm -f "$RESOLV.new"
+	exit 1
+fi
