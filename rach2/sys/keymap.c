@@ -1446,15 +1446,253 @@ static void character(struct keymap_state *st, const struct keymap *map, unsigne
     res->text[res->ntext++] = c;
 }
 
-/** Resolve one key event; the public header defines ownership and results. */
-int keymap_key(struct keymap_state *st, const struct keymap *map, unsigned int keycode, int value,
-               struct keymap_result *res)
+/** Return whether an action of type `type` changes the modifier state. */
+static int shift_type(unsigned int type)
+{
+    return type == KM_T_SHIFT || type == KM_T_SLOCK || type == KM_T_LOCK;
+}
+
+/**
+ * Release `keycode`: drop the modifier it holds and, when the last Alt goes
+ * up after digits typed on the keypad, emit the character they name.
+ */
+static void release(struct keymap_state *st, const struct keymap *map, unsigned int keycode,
+                    struct keymap_result *res)
+{
+    unsigned int mod;
+
+    st->pressed[keycode >> 3] &= ~(1U << (keycode & 7));
+    mod = st->key_shift[keycode];
+    st->key_shift[keycode] = 0;
+    if (!mod) {
+        return;
+    }
+    mod--;
+    if (st->down[mod] && --st->down[mod] == 0) {
+        st->shift &= ~(1U << mod);
+    }
+    if (st->npad_on && (mod == KM_G_ALT || mod == KM_G_ALTGR) &&
+        !(st->shift & ((1U << KM_G_ALT) | (1U << KM_G_ALTGR)))) {
+        character(st, map, st->npad, res);
+        st->npad_on = 0;
+        st->npad = 0;
+        res->mods = 0;
+    }
+}
+
+/**
+ * Return the action of a pressed `keycode` in table `table`, or KM_NOSUCHMAP
+ * when the key does nothing there. A key missing from the table keeps its
+ * plain table's modifier, so that a modifier works under any other; an action
+ * Rach2 has not becomes the plain table's, unless that is a modifier.
+ */
+static unsigned int lookup(const struct keymap *map, unsigned int table, unsigned int keycode)
+{
+    unsigned int entry, base;
+
+    entry = table < KM_MAX_TABLES ? map->entry(map->ctx, table, keycode) : KM_NOSUCHMAP;
+    if (entry == KM_NOSUCHMAP) {
+        base = map->entry(map->ctx, 0, keycode);
+        return shift_type(KM_TYPE(base)) ? base : KM_NOSUCHMAP;
+    }
+    if (foreign_action(entry)) {
+        base = map->entry(map->ctx, 0, keycode);
+        return shift_type(KM_TYPE(base)) ? KM_HOLE : base;
+    }
+    return entry;
+}
+
+/**
+ * Apply Caps Lock to `entry`, the action of `keycode` in table `table`: a
+ * letter takes the action of the table with Shift toggled, and a Unicode
+ * character does when that action is its other case.
+ */
+static unsigned int caps(const struct keymap_state *st, const struct keymap *map,
+                         unsigned int table, unsigned int keycode, unsigned int entry)
+{
+    unsigned int base;
+
+    if (!(st->ledflags & KM_LED_CAPS) || table >= KM_MAX_TABLES ||
+        (KM_TYPE(entry) != KM_T_LETTER && !KM_IS_U(entry))) {
+        return entry;
+    }
+    base = map->entry(map->ctx, table ^ (1U << KM_G_SHIFT), keycode);
+    if (base == KM_NOSUCHMAP) {
+        return entry;
+    }
+    if (KM_TYPE(entry) == KM_T_LETTER) {
+        return base;
+    }
+    if (KM_IS_U(base) && KM_U(base) != KM_U(entry) &&
+        (upper(KM_U(base)) == KM_U(entry) || upper(KM_U(entry)) == KM_U(base))) {
+        return base;
+    }
+    return entry;
+}
+
+/** Press `keycode`, whose action of type `type` holds or locks modifier `v`. */
+static void shift_key(struct keymap_state *st, unsigned int keycode, unsigned int type,
+                      unsigned int v, struct keymap_result *res)
+{
+    if (v == KM_G_CAPSSHIFT) {
+        v = KM_G_SHIFT;
+        st->ledflags &= ~KM_LED_CAPS;
+    }
+    if (type == KM_T_LOCK) {
+        st->locks ^= 1U << v;
+        res->kind = KM_RESULT_LOCKS;
+        return;
+    }
+    st->key_shift[keycode] = v + 1;
+    st->down[v]++;
+    st->shift |= 1U << v;
+    if (type == KM_T_SLOCK) {
+        st->slocks ^= 1U << v;
+        res->kind = KM_RESULT_LOCKS;
+    }
+}
+
+/**
+ * Press a dead key, of type KM_T_DEAD with an index into Linux's table of
+ * accents or KM_T_DEAD2 with the accent itself: a second accent composes with
+ * the first, and otherwise the accent waits for the next character.
+ */
+static void dead_key(struct keymap_state *st, const struct keymap *map, unsigned int type,
+                     unsigned int v, struct keymap_result *res)
 {
     static const unsigned long dead[] = {'`',    '\'',   '^',   '~',   '"',   0xB8,  0xAF,
                                          0x2D8,  0x2D9,  0xB0,  0x2DD, 0x2C7, 0x2DB, 0x37A,
                                          0x309B, 0x309C, 0x323, 0x2C0, 0x31B, '/',   0x2BC,
                                          0x2BD,  0x2F5,  0x311, ',',   0xA4,  0x37E};
-    unsigned int table, entry, type, v, base, bit, mod, old_leds;
+    unsigned long accent;
+
+    if (type == KM_T_DEAD && v >= sizeof(dead) / sizeof(dead[0])) {
+        return;
+    }
+    accent = type == KM_T_DEAD ? dead[v] : v;
+    if (st->diacr) {
+        character(st, map, accent, res);
+        if (res->ntext == 2) {
+            res->ntext = 1;
+            st->diacr = accent;
+        }
+    } else {
+        st->diacr = accent;
+        st->compose = 0;
+    }
+}
+
+/**
+ * Press a key of type KM_T_SPEC: Enter, Break and the scrolls are results,
+ * and the locks and Compose change the state only on a press that is not a
+ * repeat, which `fresh` says.
+ */
+static void spec_key(struct keymap_state *st, const struct keymap *map, unsigned int entry,
+                     int fresh, struct keymap_result *res)
+{
+    if (entry == KM_ENTER && (st->compose || st->diacr)) {
+        character(st, map, '\r', res);
+        return;
+    }
+    switch (entry) {
+    case KM_ENTER:
+    case KM_BREAK:
+    case KM_SCROLLFORW:
+    case KM_SCROLLBACK:
+        res->kind = KM_RESULT_SPECIAL;
+        res->key = entry;
+        return;
+    default:
+        break;
+    }
+    if (!fresh) {
+        return;
+    }
+    switch (entry) {
+    case KM_CAPS:
+        st->ledflags ^= KM_LED_CAPS;
+        break;
+    case KM_CAPSON:
+        st->ledflags |= KM_LED_CAPS;
+        break;
+    case KM_NUM:
+    case KM_BARENUMLOCK:
+        st->ledflags ^= KM_LED_NUM;
+        break;
+    case KM_HOLD:
+        st->ledflags ^= KM_LED_SCROLL;
+        break;
+    case KM_COMPOSE:
+        st->diacr = 0;
+        st->compose = 1;
+        break;
+    default:
+        break;
+    }
+}
+
+/**
+ * Press a key whose action `entry` is not a modifier, one case per action
+ * type; `fresh` is as for spec_key.
+ */
+static void action(struct keymap_state *st, const struct keymap *map, unsigned int entry, int fresh,
+                   struct keymap_result *res)
+{
+    unsigned int type = KM_TYPE(entry), v = KM_VALUE(entry);
+
+    if (KM_IS_U(entry)) {
+        character(st, map, KM_U(entry), res);
+        return;
+    }
+    switch (type) {
+    case KM_T_LATIN:
+    case KM_T_LETTER:
+        character(st, map, v, res);
+        break;
+    case KM_T_META:
+        res->mods |= KM_MOD_ALT;
+        character(st, map, v, res);
+        break;
+    case KM_T_DEAD:
+    case KM_T_DEAD2:
+        dead_key(st, map, type, v, res);
+        break;
+    case KM_T_FN:
+        if ((v == 24 || v == 25) && (res->mods & KM_MOD_SHIFT)) {
+            res->kind = KM_RESULT_SPECIAL;
+            res->key = v == 24 ? KM_SCROLLBACK : KM_SCROLLFORW;
+        } else {
+            res->kind = KM_RESULT_FUNC;
+            res->func = v;
+        }
+        break;
+    case KM_T_CUR:
+    case KM_T_PAD:
+        res->kind = KM_RESULT_SPECIAL;
+        res->key = entry;
+        break;
+    case KM_T_ASCII:
+        if (v < 26) {
+            st->npad = st->npad * (v < 10 ? 10 : 16) + (v < 10 ? v : v - 10);
+            if (st->npad > 0x10FFFF) {
+                st->npad = 0x110000;
+            }
+            st->npad_on = 1;
+        }
+        break;
+    case KM_T_SPEC:
+        spec_key(st, map, entry, fresh, res);
+        break;
+    default:
+        break;
+    }
+}
+
+/** Resolve one key event; the public header defines ownership and results. */
+int keymap_key(struct keymap_state *st, const struct keymap *map, unsigned int keycode, int value,
+               struct keymap_result *res)
+{
+    unsigned int table, entry, type, v, bit, old_leds;
     int was_pressed;
 
     res->kind = KM_RESULT_NONE;
@@ -1470,148 +1708,32 @@ int keymap_key(struct keymap_state *st, const struct keymap *map, unsigned int k
     bit = 1U << (keycode & 7);
     was_pressed = (st->pressed[keycode >> 3] & bit) != 0;
     if (value == 0) {
-        st->pressed[keycode >> 3] &= ~bit;
-        mod = st->key_shift[keycode];
-        st->key_shift[keycode] = 0;
-        if (mod) {
-            mod--;
-            if (st->down[mod] && --st->down[mod] == 0) {
-                st->shift &= ~(1U << mod);
-            }
-            if (st->npad_on && (mod == KM_G_ALT || mod == KM_G_ALTGR) &&
-                !(st->shift & ((1U << KM_G_ALT) | (1U << KM_G_ALTGR)))) {
-                character(st, map, st->npad, res);
-                st->npad_on = 0;
-                st->npad = 0;
-                res->mods = 0;
-            }
-        }
+        release(st, map, keycode, res);
         return res->kind;
     }
     if (value == 2 && !was_pressed) {
         return res->kind;
     }
     st->pressed[keycode >> 3] |= bit;
-    if (was_pressed && st->key_shift[keycode]) {
-        return res->kind;
-    }
-    if (!map || !map->entry) {
+    if ((was_pressed && st->key_shift[keycode]) || !map || !map->entry) {
         return res->kind;
     }
     table = table_index(st);
-    entry = table < KM_MAX_TABLES ? map->entry(map->ctx, table, keycode) : KM_NOSUCHMAP;
+    entry = lookup(map, table, keycode);
     if (entry == KM_NOSUCHMAP) {
-        base = map->entry(map->ctx, 0, keycode);
-        type = KM_TYPE(base);
-        if (type != KM_T_SHIFT && type != KM_T_SLOCK && type != KM_T_LOCK) {
-            return res->kind;
-        }
-        entry = base;
-    }
-    if (foreign_action(entry)) {
-        base = map->entry(map->ctx, 0, keycode);
-        type = KM_TYPE(base);
-        entry = type == KM_T_SHIFT || type == KM_T_SLOCK || type == KM_T_LOCK ? KM_HOLE : base;
+        return res->kind;
     }
     type = KM_TYPE(entry);
     v = KM_VALUE(entry);
     old_leds = st->ledflags;
-    if (type == KM_T_SHIFT || type == KM_T_SLOCK || type == KM_T_LOCK) {
+    if (shift_type(type)) {
         if (v >= KM_NR_SHIFT || value != 1 || was_pressed) {
             return res->kind;
         }
-        if (v == KM_G_CAPSSHIFT) {
-            v = KM_G_SHIFT;
-            st->ledflags &= ~KM_LED_CAPS;
-        }
-        if (type != KM_T_LOCK) {
-            st->key_shift[keycode] = v + 1;
-            st->down[v]++;
-            st->shift |= 1U << v;
-        }
-        if (type == KM_T_LOCK) {
-            st->locks ^= 1U << v;
-            res->kind = KM_RESULT_LOCKS;
-        } else if (type == KM_T_SLOCK) {
-            st->slocks ^= 1U << v;
-            res->kind = KM_RESULT_LOCKS;
-        }
+        shift_key(st, keycode, type, v, res);
     } else {
-        if ((st->ledflags & KM_LED_CAPS) && (type == KM_T_LETTER || KM_IS_U(entry))) {
-            base = table < KM_MAX_TABLES ? map->entry(map->ctx, table ^ (1U << KM_G_SHIFT), keycode)
-                                         : KM_NOSUCHMAP;
-            if (base != KM_NOSUCHMAP &&
-                (type == KM_T_LETTER ||
-                 (KM_IS_U(base) && KM_U(base) != KM_U(entry) &&
-                  (upper(KM_U(base)) == KM_U(entry) || upper(KM_U(entry)) == KM_U(base))))) {
-                entry = base;
-                type = KM_TYPE(entry);
-                v = KM_VALUE(entry);
-            }
-        }
-        if (KM_IS_U(entry)) {
-            character(st, map, KM_U(entry), res);
-        } else if (type == KM_T_LATIN || type == KM_T_LETTER || type == KM_T_META) {
-            if (type == KM_T_META) {
-                res->mods |= KM_MOD_ALT;
-            }
-            character(st, map, v, res);
-        } else if (type == KM_T_DEAD || type == KM_T_DEAD2) {
-            unsigned long accent;
-            if (type == KM_T_DEAD && v >= sizeof(dead) / sizeof(dead[0])) {
-                return res->kind;
-            }
-            accent = type == KM_T_DEAD ? dead[v] : v;
-            if (st->diacr) {
-                character(st, map, accent, res);
-                if (res->ntext == 2) {
-                    res->ntext = 1;
-                    st->diacr = accent;
-                }
-            } else {
-                st->diacr = accent;
-                st->compose = 0;
-            }
-        } else if (type == KM_T_FN) {
-            if ((v == 24 || v == 25) && (res->mods & KM_MOD_SHIFT)) {
-                res->kind = KM_RESULT_SPECIAL;
-                res->key = v == 24 ? KM_SCROLLBACK : KM_SCROLLFORW;
-            } else {
-                res->kind = KM_RESULT_FUNC;
-                res->func = v;
-            }
-        } else if (type == KM_T_CUR || type == KM_T_PAD) {
-            res->kind = KM_RESULT_SPECIAL;
-            res->key = entry;
-        } else if (type == KM_T_ASCII && v < 26) {
-            unsigned int radix = v < 10 ? 10 : 16;
-            st->npad = st->npad * radix + (v < 10 ? v : v - 10);
-            if (st->npad > 0x10FFFF) {
-                st->npad = 0x110000;
-            }
-            st->npad_on = 1;
-        } else if (type == KM_T_SPEC) {
-            if (entry == KM_ENTER && (st->compose || st->diacr)) {
-                character(st, map, '\r', res);
-            } else if (entry == KM_ENTER || entry == KM_BREAK || entry == KM_SCROLLFORW ||
-                       entry == KM_SCROLLBACK) {
-                res->kind = KM_RESULT_SPECIAL;
-                res->key = entry;
-            } else if (value == 1 && !was_pressed) {
-                if (entry == KM_CAPS) {
-                    st->ledflags ^= KM_LED_CAPS;
-                } else if (entry == KM_CAPSON) {
-                    st->ledflags |= KM_LED_CAPS;
-                } else if (entry == KM_NUM || entry == KM_BARENUMLOCK) {
-                    st->ledflags ^= KM_LED_NUM;
-                } else if (entry == KM_HOLD) {
-                    st->ledflags ^= KM_LED_SCROLL;
-                } else if (entry == KM_COMPOSE) {
-                    st->diacr = 0;
-                    st->compose = 1;
-                }
-            }
-        }
+        entry = caps(st, map, table, keycode, entry);
+        action(st, map, entry, value == 1 && !was_pressed, res);
         if (entry != KM_HOLE && entry != KM_NOSUCHMAP) {
             st->slocks = 0;
         }
@@ -1802,42 +1924,76 @@ static unsigned int keypad(const struct keymap_result *res, unsigned int modes, 
     return utf8(c, buf);
 }
 
+/**
+ * Encode a text result into `buf`, which holds KM_FUNC_BYTES + 16 bytes:
+ * Shift+Tab is a back tab, Ctrl makes control characters and Alt or Meta an
+ * Escape prefix. Return the length, or 0 for a character UTF-8 cannot encode.
+ */
+static unsigned int text(const struct keymap_result *res, unsigned int mods, char *buf)
+{
+    unsigned int n = 0, i, count;
+    unsigned long c;
+
+    if (!res->ntext || res->ntext > 2) {
+        return 0;
+    }
+    if (res->ntext == 1 && res->text[0] == '\t' && (mods & KM_MOD_SHIFT) &&
+        (!(mods & KM_MOD_CTRL) || res->key == 15)) {
+        buf[n++] = 27;
+        buf[n++] = '[';
+        buf[n++] = 'Z';
+        return n;
+    }
+    if (mods & (KM_MOD_ALT | KM_MOD_META)) {
+        buf[n++] = 27;
+    }
+    for (i = 0; i < res->ntext; i++) {
+        c = res->text[i];
+        if (mods & KM_MOD_CTRL) {
+            c = control(c);
+        }
+        count = utf8(c, buf + n);
+        if (!count) {
+            return 0;
+        }
+        n += count;
+    }
+    return n;
+}
+
+/** Encode a cursor, keypad or Enter result into `buf`, as for text. */
+static unsigned int special(const struct keymap_result *res, unsigned int mods, unsigned int modes,
+                            char *buf)
+{
+    unsigned int n = 0;
+
+    if (KM_TYPE(res->key) == KM_T_CUR && KM_VALUE(res->key) < 4) {
+        return sequence("DBCA"[KM_VALUE(res->key)], 0, (modes & KM_MODE_CURSOR) != 0, mods, buf);
+    }
+    if (KM_TYPE(res->key) == KM_T_PAD) {
+        return keypad(res, modes, buf);
+    }
+    if (res->key == KM_ENTER) {
+        if (mods & (KM_MOD_ALT | KM_MOD_META)) {
+            buf[n++] = 27;
+        }
+        buf[n++] = '\r';
+    }
+    return n;
+}
+
 /** Encode a whole result into temporary storage before changing the buffer. */
 unsigned int keymap_encode(const struct keymap *map, const struct keymap_result *res,
                            unsigned int modes, char *buf, unsigned int size)
 {
     char tmp[KM_FUNC_BYTES + 16];
-    unsigned int n = 0, i, count, mods = res->mods & 15;
-    unsigned long c;
+    unsigned int n = 0, i, mods = res->mods & 15;
 
     if (!buf || !size) {
         return 0;
     }
     if (res->kind == KM_RESULT_TEXT) {
-        if (!res->ntext || res->ntext > 2) {
-            return 0;
-        }
-        if (res->ntext == 1 && res->text[0] == '\t' && (mods & KM_MOD_SHIFT) &&
-            (!(mods & KM_MOD_CTRL) || res->key == 15)) {
-            tmp[n++] = 27;
-            tmp[n++] = '[';
-            tmp[n++] = 'Z';
-        } else {
-            if (mods & (KM_MOD_ALT | KM_MOD_META)) {
-                tmp[n++] = 27;
-            }
-            for (i = 0; i < res->ntext; i++) {
-                c = res->text[i];
-                if (mods & KM_MOD_CTRL) {
-                    c = control(c);
-                }
-                count = utf8(c, tmp + n);
-                if (!count) {
-                    return 0;
-                }
-                n += count;
-            }
-        }
+        n = text(res, mods, tmp);
     } else if (res->kind == KM_RESULT_FUNC) {
         if ((res->func == 24 || res->func == 25) && (mods & KM_MOD_SHIFT)) {
             return 0;
@@ -1846,16 +2002,7 @@ unsigned int keymap_encode(const struct keymap *map, const struct keymap_result 
             n = function_string(map->func[res->func], mods, modes, tmp);
         }
     } else if (res->kind == KM_RESULT_SPECIAL) {
-        if (KM_TYPE(res->key) == KM_T_CUR && KM_VALUE(res->key) < 4) {
-            n = sequence("DBCA"[KM_VALUE(res->key)], 0, (modes & KM_MODE_CURSOR) != 0, mods, tmp);
-        } else if (KM_TYPE(res->key) == KM_T_PAD) {
-            n = keypad(res, modes, tmp);
-        } else if (res->key == KM_ENTER) {
-            if (mods & (KM_MOD_ALT | KM_MOD_META)) {
-                tmp[n++] = 27;
-            }
-            tmp[n++] = '\r';
-        }
+        n = special(res, mods, modes, tmp);
     }
     if (n > size) {
         return 0;
