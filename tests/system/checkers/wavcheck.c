@@ -18,6 +18,9 @@
  * channels distinct: a recording of one channel, or of a device that mixed
  * the two, fails. More than 16 frequencies in a list are refused.
  *
+ * `wavcheck mix FILE FREQ FREQ` requires both tones together in every
+ * channel, in at least two consecutive tenth-second windows.
+ *
  * Exit 0 when every note sounds in its turn, 1 when one does not, another
  * tone sounds, or the recording is too short, and 2 when the file cannot be
  * read or the arguments are invalid.
@@ -318,6 +321,70 @@ static int judge(const short *samples, long frames, unsigned channels, unsigned 
     return rc;
 }
 
+/** Approximate sine on one cycle for the two-tone projection, without a
+ * dependency on the host's math library. `phase` is in [0, 1). */
+static double tone_sine(double phase)
+{
+    double x, x2;
+
+    if (phase >= 0.5)
+        phase -= 1.0;
+    x = phase * 6.283185307179586;
+    x2 = x * x;
+    return x * (1.0 + x2 * (-1.0 / 6.0 +
+                            x2 * (1.0 / 120.0 +
+                                  x2 * (-1.0 / 5040.0 + x2 * (1.0 / 362880.0 - x2 / 39916800.0)))));
+}
+
+/** Require both tones together in at least two consecutive tenth-second
+ * windows in channel `ch`. Each tone must account for at least 10 percent
+ * of the window's energy and exceed the silence threshold. A single tone,
+ * sequential tones or one silent channel cannot pass. */
+static int judge_mix(const short *samples, long frames, unsigned channels, unsigned ch,
+                     unsigned rate, const double *freqs)
+{
+    long at, i, n = (long)rate / 10;
+    double power, re[2], im[2], phase[2], step[2], energy, q;
+    int k, both, run = 0, most = 0;
+
+    if (n < 1 || freqs[0] == freqs[1] || freqs[0] >= rate / 2.0 || freqs[1] >= rate / 2.0)
+        return 2;
+    for (k = 0; k < 2; k++)
+        step[k] = freqs[k] / rate;
+    for (at = 0; at + n <= frames; at += n) {
+        power = 0;
+        for (k = 0; k < 2; k++)
+            re[k] = im[k] = phase[k] = 0;
+        for (i = 0; i < n; i++) {
+            double value = samples[(at + i) * (long)channels + (long)ch];
+
+            power += value * value;
+            for (k = 0; k < 2; k++) {
+                re[k] += value * tone_sine(phase[k]);
+                q = phase[k] + 0.25;
+                if (q >= 1)
+                    q -= 1;
+                im[k] += value * tone_sine(q);
+                phase[k] += step[k];
+                if (phase[k] >= 1)
+                    phase[k] -= 1;
+            }
+        }
+        both = power > (double)n * QUIET * QUIET;
+        for (k = 0; k < 2; k++) {
+            energy = 2 * (re[k] * re[k] + im[k] * im[k]) / (double)n;
+            if (energy < power * 0.10 || energy < (double)n * QUIET * QUIET)
+                both = 0;
+        }
+        run = both ? run + 1 : 0;
+        if (run > most)
+            most = run;
+    }
+    printf("wavcheck: %s: channel %u: both %.0f and %.0f hz in %d consecutive windows\n",
+           most >= 2 ? "ok" : "fail", ch + 1, freqs[0], freqs[1], most);
+    return most >= 2 ? 0 : 1;
+}
+
 /**
  * Check the recording against the frequencies, as the file's comment says.
  *
@@ -332,13 +399,14 @@ int main(int argc, char **argv)
     struct wav w;
     FILE *f;
     double freqs[2][MAX_NOTES];
-    int n_notes[2] = {0, 0}, lists = 1, i, rc = 0;
+    int n_notes[2] = {0, 0}, lists = 1, i, rc = 0, mixed;
     unsigned c;
     long frames;
     short *samples;
 
-    if (argc < 4 || strcmp(argv[1], "scale") != 0) {
-        fprintf(stderr, "usage: wavcheck scale FILE FREQ [FREQ ...] [/ FREQ [FREQ ...]]\n");
+    mixed = argc > 1 && strcmp(argv[1], "mix") == 0;
+    if (argc < 4 || (!mixed && strcmp(argv[1], "scale") != 0) || (mixed && argc != 5)) {
+        fprintf(stderr, "usage: wavcheck scale|mix FILE FREQ [FREQ ...] [/ FREQ [FREQ ...]]\n");
         return 2;
     }
     for (i = 3; i < argc; i++) {
@@ -351,13 +419,14 @@ int main(int argc, char **argv)
             return 2;
         }
         freqs[lists - 1][n_notes[lists - 1]] = atof(argv[i]);
-        if (freqs[lists - 1][n_notes[lists - 1]++] <= 0.0) {
+        if (!(freqs[lists - 1][n_notes[lists - 1]] > 0.0) ||
+            freqs[lists - 1][n_notes[lists - 1]++] > 1000000.0) {
             fprintf(stderr, "wavcheck: %s is not a frequency\n", argv[i]);
             return 2;
         }
     }
     if (n_notes[0] == 0 || (lists == 2 && n_notes[1] == 0)) {
-        fprintf(stderr, "usage: wavcheck scale FILE FREQ [FREQ ...] [/ FREQ [FREQ ...]]\n");
+        fprintf(stderr, "usage: wavcheck scale|mix FILE FREQ [FREQ ...] [/ FREQ [FREQ ...]]\n");
         return 2;
     }
     rc = wav_open(argv[2], &f, &w);
@@ -405,7 +474,9 @@ int main(int argc, char **argv)
 
     for (c = 0; c < (lists == 2 ? 2u : w.channels); c++) {
         int list = lists == 2 ? (int)c : 0;
-        int one = judge(samples, frames, w.channels, c, (double)w.rate, freqs[list], n_notes[list]);
+        int one = mixed ? judge_mix(samples, frames, w.channels, c, w.rate, freqs[0])
+                        : judge(samples, frames, w.channels, c, (double)w.rate, freqs[list],
+                                n_notes[list]);
 
         if (one > rc) {
             rc = one;

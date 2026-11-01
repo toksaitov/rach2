@@ -348,12 +348,19 @@ static long rebuild(const char *text, const char *path, char *why, size_t size)
         if (end == NULL)
             end = text + len;
         p = text + start;
-        if ((size_t)(end - p) > strlen(data_line) && strncmp(p, data_line, strlen(data_line)) == 0)
-            for (p += strlen(data_line);
-                 p + 1 < end && hex_digit(p[0]) >= 0 && hex_digit(p[1]) >= 0; p += 2) {
-                fputc(hex_digit(p[0]) * 16 + hex_digit(p[1]), f);
-                bytes++;
-            }
+        {
+            const char *prefix =
+                strncmp(p, "audioclients: data: ", strlen("audioclients: data: ")) == 0
+                    ? "audioclients: data: "
+                    : data_line;
+
+            if ((size_t)(end - p) > strlen(prefix) && strncmp(p, prefix, strlen(prefix)) == 0)
+                for (p += strlen(prefix);
+                     p + 1 < end && hex_digit(p[0]) >= 0 && hex_digit(p[1]) >= 0; p += 2) {
+                    fputc(hex_digit(p[0]) * 16 + hex_digit(p[1]), f);
+                    bytes++;
+                }
+        }
         line = end + 1;
     }
     memcpy(header, "RIFF", 4);
@@ -436,6 +443,73 @@ static void tone(struct lc *l)
     lc_assert(l, "notes", end.end == ETUDE_END_EXITED && end.value == 0, detail);
 }
 
+/** Run the concurrent players or loopback client, then independently judge
+ * QEMU's recording or the recording read through the guest's DSP. */
+static void clients(struct lc *l, const char *mode)
+{
+    struct etude_case_machine *m;
+    struct etude_termination end;
+    enum etude_status st;
+    uint64_t at = 0, from;
+    char command[96], path[1024], detail[200];
+    char tool[] = "wavcheck", scale[] = "scale", mixed[] = "mix";
+    char n1[] = "262", n2[] = "294", n3[] = "330", n4[] = "349", n5[] = "392";
+    char f1[] = "440", f2[] = "660";
+    char *scale_argv[] = {tool, scale, path, n1, n2, n3, n4, n5, NULL};
+    char *mix_argv[] = {tool, mixed, path, f1, f2, NULL};
+    char *text;
+    const char *evidence;
+    long bytes;
+
+    if (!lc_step(l, "play") || (m = lc_boot(l, "fixture")) == NULL ||
+        !lc_wait(l, m, "Type 'help'", &at, NULL) || !lc_wait(l, m, prompt, &at, NULL))
+        return;
+    from = at;
+    snprintf(command, sizeof(command), "exec /musl/audioclientsmusl %s\r", mode);
+    if (!lc_type(l, m, command) || !lc_wait(l, m, prompt, &at, NULL)) {
+        if (!l->stopped)
+            lc_assert(l, "clients", 0, l->why);
+        return;
+    }
+    lc_find(l, m, "clients", "audioclients: result: complete", from, 1);
+    text = strcmp(mode, "mix") == 0 ? NULL : lc_console(l, "fixture", from, at);
+    if (!lc_quit(l, m, NULL)) {
+        free(text);
+        return;
+    }
+    lc_find(l, m, "no-stall", "audio: stalled", 0, 0);
+    if (strcmp(mode, "mix") == 0) {
+        wavcheck(l, m, mix_argv, path, sizeof(path));
+        return;
+    }
+    if (!lc_step(l, "judge")) {
+        free(text);
+        return;
+    }
+    evidence = etude_evidence(l->c, "loopback.wav");
+    if (!text || !evidence || strlen(evidence) >= sizeof(path)) {
+        free(text);
+        lc_halt(l, ETUDE_REFUSED, "loopback recording");
+        return;
+    }
+    snprintf(path, sizeof(path), "%s", evidence);
+    bytes = rebuild(text, path, detail, sizeof(detail));
+    free(text);
+    if (bytes < 0) {
+        lc_assert(l, "notes", 0, detail);
+        return;
+    }
+    etude_progress(l->c, "wavcheck", 0);
+    st = etude_host(l->c, scale_argv, "wavcheck", &end);
+    if (st != ETUDE_OK) {
+        lc_halt(l, st, "wavcheck");
+        return;
+    }
+    etude_progress(l->c, "wavcheck", 1);
+    snprintf(detail, sizeof(detail), "wavcheck over %ld bytes of the captured mix", bytes);
+    lc_assert(l, "notes", end.end == ETUDE_END_EXITED && end.value == 0, detail);
+}
+
 int etude_scenario(struct etude_case *c)
 {
     static const char *const hdas[] = {"probe-before", "played", "probe-after", "messages",
@@ -445,11 +519,15 @@ int etude_scenario(struct etude_case *c)
     static const char *const dsps[] = {"stereo",   "played-stereo", "defaults", "played-defaults",
                                        "no-stall", "notes",         NULL};
     static const char *const records[] = {"counted", "no-stall", NULL};
+    static const char *const client_assertions[] = {"clients", "no-stall", "notes", NULL};
     static const char *const tones[] = {"counted", "no-stall", "notes", NULL};
     const char *name = case_name(c);
     struct lc l;
 
-    if (strcmp(name, "hda") == 0) {
+    if (strcmp(name, "mix") == 0 || strcmp(name, "loopback") == 0 || strcmp(name, "sox") == 0) {
+        lc_begin(&l, c, client_assertions);
+        clients(&l, name);
+    } else if (strcmp(name, "hda") == 0) {
         lc_begin(&l, c, hdas);
         hda(&l);
     } else if (strcmp(name, "sb16") == 0) {

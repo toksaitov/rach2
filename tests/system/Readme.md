@@ -82,6 +82,9 @@ The programs under `runner/` are host programs that `suites.mk` builds.
 
 ### Checkers and fixtures
 
+`checkers/wavcheck.c` measures ordered square-wave scales in each channel, or, with `mix FILE FREQ FREQ`, projects consecutive tenth-second windows onto the two frequencies. Both must account for at least ten percent of each window's energy and exceed the silence threshold in at least two consecutive windows in each channel. The simultaneous-player case therefore requires two tones playing together; the loopback and sox_ng cases judge the scale captured through OSS.
+
+
 * `checkers/pcapcheck.c` reads a QEMU packet capture: `bcast` checks a broadcast datagram, a source address, an ARP reply or request, or the gateway a packet left through; `netconsole` checks the kernel's netconsole frames and the log in them; `rawwire` checks the hop limits and checksum of the raw-socket probe's sends.
 * `checkers/wavcheck.c` reads the recording of QEMU's `wav` audio backend, or a WAVE file a scenario rebuilt from what the machine recorded, and checks that the machine played the square-wave notes it was asked for, in order, and no other tone, measuring each 50 ms by the median length of the wave's runs, which a period played twice or missed does not move. Each channel is judged on its own: by default every channel must sound the list, and with a second list after a `/` the first channel must sound the first list and the second channel the second, which two lists with no frequency in common make proof that the channels are distinct. It accepts at most 16 frequencies in a list and refuses a longer one.
 * `checkers/usblatency.awk` and `checkers/grow_measure.awk` read the USB latency records and the grow's counters off a console log.

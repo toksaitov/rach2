@@ -583,6 +583,7 @@ struct vchan_reader {
     audio_stream_t *s;
     struct vchan_reader *next;
     int running;
+    uint32_t origin; /* conversion phase when the reader joined */
     uint32_t phase;  /* output rate accumulated against the input rate */
     uint32_t skip;   /* frames in flight before this reader joined */
     uint32_t at;     /* input position when this reader started */
@@ -786,7 +787,7 @@ static int vchan_capture_setup(audio_stream_t *s)
 static int vchan_capture_start(audio_stream_t *s)
 {
     struct vchan_reader *r = vchan_reader_find(s);
-    uint32_t flags;
+    uint32_t flags, frames, n;
     int rc = 0;
 
     if (!r)
@@ -798,6 +799,13 @@ static int vchan_capture_start(audio_stream_t *s)
     r->skip = input.running && !input.loopback ? r->at - input.frames : 0;
     r->running = 1;
     r->phase = r->frames = r->used = 0;
+    frames = input.running ? (input.loopback ? input.frames : r->at) % input.stream.rate : 0;
+    while (frames) {
+        n = frames < VCHAN_CHUNK ? frames : VCHAN_CHUNK;
+        r->phase = (r->phase + n * s->rate) % input.stream.rate;
+        frames -= n;
+    }
+    r->origin = r->phase;
     spin_unlock_irqrestore(&input.lock, flags);
     if (!input.running) {
         input.frames = 0;
@@ -874,6 +882,7 @@ static uint32_t vchan_capture_position(audio_stream_t *s)
         frames = r->frames;
         if (!input.loopback) {
             delta = position - r->at;
+            frac = r->origin;
             frames = 0;
             while (delta) {
                 n = delta < VCHAN_CHUNK ? delta : VCHAN_CHUNK;
