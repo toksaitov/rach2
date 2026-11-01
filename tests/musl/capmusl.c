@@ -1,10 +1,10 @@
 /**
  * capmusl: check capabilities, read and given up with capget and capset.
  *
- * The kernel keeps all of them or none. As root the probe has every one, 0 to
- * 40, effective and permitted, and none inheritable. An unknown version is
- * EINVAL, and with no data 0, with version 3 written back into the header; a
- * set between none and all is EINVAL; a header whose version ends a page
+ * As root the probe has every one, 0 to 40, effective and permitted, and none
+ * inheritable. An unknown version is EINVAL, and with no data 0, with version
+ * 3 written back into the header; an inheritable capability is EINVAL, since
+ * the kernel keeps no inheritable set; a header whose version ends a page
  * answers a question about the version. A child that gives them up, as
  * Chromium's zygote does in each process it forks, has none, in capget and in
  * /proc/self/status, and so has a child it forks; it may not bind a port below
@@ -95,7 +95,7 @@ enum {
     NO_DATA,
     UNKNOWN_VERSION,
     VERSION_ENDS_PAGE,
-    PARTIAL_SET,
+    INHERITABLE_SET,
     MAKE_SECRET,
     DROPPED_CHILD,
     GIVE_UP,
@@ -128,7 +128,7 @@ static const struct {
     {"no-data", "an unknown version with no data was not 0 with version 3 written back"},
     {"unknown-version", "an unknown version was not EINVAL"},
     {"version-ends-page", "a header whose version ends a page was not asked the version alone"},
-    {"partial-set", "a set between none and all was not EINVAL"},
+    {"inheritable-set", "an inheritable capability was not EINVAL"},
     {"secret", "the file only user 1000 may read"},
     {"dropped-child", "a child could not report"},
     {"give-up", "capset with every set empty failed"},
@@ -678,10 +678,12 @@ static int call_rows(void)
     if (!version_ends_page()) {
         return fail(VERSION_ENDS_PAGE);
     }
-    memset(d, 0, sizeof(d));
-    d[0].effective = d[0].permitted = 1;
+    if (get_caps(d) != 0) {
+        return fail(ROOT_ALL);
+    }
+    d[0].inheritable = 1;
     if (set_caps(d) != -1 || errno != EINVAL) {
-        return fail(PARTIAL_SET);
+        return fail(INHERITABLE_SET);
     }
     return 0;
 }

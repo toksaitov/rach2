@@ -10,7 +10,9 @@
  * working directory there, under its path from the new root; reads the root's
  * files by absolute paths and finds nothing of the tree above it; stays at the
  * root on ".."; opens a file through a directory descriptor opened outside, as
- * Linux does, though fchdir to it fails with ENOENT; and passes the root to a
+ * Linux does, and enters it by fchdir, where getcwd fails with ENOENT and a
+ * relative name reaches a file there, until a chdir by an absolute path
+ * takes it back inside; and passes the root to a
  * child of fork and to a copy of this program it execs from inside. A child
  * whose working directory is outside the new root finds it moved to the root,
  * and a second chroot inside the first gives the working directory its path
@@ -140,6 +142,15 @@ static int cwd_is(const char *want)
     return getcwd(buf, sizeof(buf)) != NULL && strcmp(buf, want) == 0;
 }
 
+/** Whether getcwd fails with ENOENT, as for a working directory outside
+ * the root. */
+static int cwd_unreachable(void)
+{
+    char buf[64];
+
+    return getcwd(buf, sizeof(buf)) == NULL && errno == ENOENT;
+}
+
 /** Whether `a` and `b` name one file. */
 static int same_file(const char *a, const char *b)
 {
@@ -263,7 +274,9 @@ static int private_root(void)
 /**
  * Check a root on KRFFS: the child keeps a working directory inside under its
  * new path, reaches the tree outside through a directory descriptor opened
- * there but cannot fchdir to it (ENOENT), stays at the root on "..", and
+ * there and by fchdir to it, where getcwd fails with ENOENT and a relative
+ * name reaches a file, comes back by chdir to an absolute path, stays at the
+ * root on "..", and
  * passes the root to a child of fork and to the copy of this program it
  * execs. Returns 0, or 1 after printing the failure.
  */
@@ -288,7 +301,8 @@ static int krffs_root(void)
             _exit(10 + st);
         }
         through = openat(out, "chrootmusl", O_RDONLY);
-        if (!refused(fchdir(out), ENOENT) || through < 0 || close(through) != 0) {
+        if (through < 0 || close(through) != 0 || fchdir(out) != 0 || !cwd_unreachable() ||
+            access("chrootmusl", R_OK) != 0 || chdir("/dir") != 0 || !cwd_is("/dir")) {
             _exit(4);
         }
         if (chdir("..") != 0 || !cwd_is("/") || chdir("..") != 0 || !cwd_is("/")) {

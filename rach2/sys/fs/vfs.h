@@ -662,7 +662,9 @@ void vfs_reap_detached(void);
  * where the old root is shown, both as paths from the caller's root. The
  * old root, which must be the root of a mount, is shown at `put_old` by a
  * bind, with the mounts below it but the new root and those below that, and
- * the originals are taken from the caller's namespace, as Linux moves them.
+ * the originals are taken from the caller's namespace, as Linux moves them,
+ * but for those the new root is below, through which a descriptor opened
+ * before still reaches it.
  * When `put_old` names the new root itself nothing is shown or taken: Linux
  * stacks the old root over the new, where it stays until a lazy unmount
  * through a descriptor or a working directory on it. On success `*out` has
