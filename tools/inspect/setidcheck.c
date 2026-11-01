@@ -1894,9 +1894,11 @@ static int trusted_text_matches(const struct image *im, const char *path, const 
 /* ---- the ext2 reader ----
 
    A small read-only reader of its own, sharing nothing with the kernel's
-   driver, for the one profile tools/image/mkext2.sh writes: revision 1,
-   4 KiB blocks, 128-byte inodes, and the features resize_inode, filetype,
-   sparse_super and large_file with no other. Any other feature, any block
+   driver, for the profile tools/image/mkext2.sh writes: revision 1,
+   4 KiB blocks, 256-byte inodes, and the features resize_inode, filetype,
+   sparse_super, large_file and extra_isize with no other; the same with
+   128-byte inodes and without extra_isize, the profile of older images, is
+   read too. Any other feature, any block
    outside the volume or inside its structural blocks, any malformed
    directory entry, any inode it cannot place and a file larger than
    `EXT2_FILE_MAX` fail the image, so that the build stops on an image this
@@ -1907,7 +1909,7 @@ static int trusted_text_matches(const struct image *im, const char *path, const 
 
 #define EXT2_MAGIC     0xEF53u
 #define EXT2_BLOCK     4096u
-#define EXT2_INODE     128u
+#define EXT2_INODE     128u /* the part of an inode the reader reads */
 #define EXT2_FIRST_INO 11u
 #define EXT2_FT_MAX    7u
 
@@ -1925,6 +1927,7 @@ struct ext2 {
     uint64_t size;
     /* Blocks, inodes, blocks per group, inodes per group, groups. */
     unsigned long blocks, inodes, bpg, ipg, groups;
+    unsigned long inode_size;   /* the bytes of an inode's slot, 128 or 256 */
     unsigned long reserved_gdt; /* blocks kept after each descriptor table */
     unsigned char *gd;          /* the group descriptors, 32 bytes each */
     unsigned char *structural;  /* one byte per block: 1 if a table's */
@@ -2035,17 +2038,20 @@ static int ext2_open(struct ext2 *fs, const char *path, int64_t offset, int64_t 
         return ext2_fail(fs, "revision %lu; the profile is revision 1", rd32(sb + 76));
     if (rd32(sb + 24) != 2)
         return ext2_fail(fs, "block size %lu; the profile is 4096", 1024ul << rd32(sb + 24));
-    if (rd16(sb + 88) != EXT2_INODE)
-        return ext2_fail(fs, "inode size %u; the profile is 128", rd16(sb + 88));
+    fs->inode_size = rd16(sb + 88);
+    if (fs->inode_size != 128 && fs->inode_size != 256)
+        return ext2_fail(fs, "inode size %lu; the profile is 256 or 128", fs->inode_size);
     compat = rd32(sb + 92);
     incompat = rd32(sb + 96);
     ro_compat = rd32(sb + 100);
-    if (compat != 0x10 || incompat != 0x2 || ro_compat != 0x3)
+    if (compat != 0x10 || incompat != 0x2 ||
+        (ro_compat != 0x3 && (ro_compat != 0x43 || fs->inode_size != 256)))
         return ext2_fail(fs,
                          "features %#lx/%#lx/%#lx (compatible, "
                          "incompatible, read-only); the profile is "
-                         "0x10/0x2/0x3, resize_inode, filetype, sparse_super "
-                         "and large_file alone",
+                         "0x10/0x2/0x43, resize_inode, filetype, sparse_super, "
+                         "large_file and extra_isize alone, or 0x10/0x2/0x3 "
+                         "without extra_isize",
                          compat, incompat, ro_compat);
     fs->reserved_gdt = rd16(sb + 206);
     if (rd32(sb + 84) != EXT2_FIRST_INO)
@@ -2090,7 +2096,7 @@ static int ext2_open(struct ext2 *fs, const char *path, int64_t offset, int64_t 
         unsigned long bb = rd32(fs->gd + g * 32 + 0);
         unsigned long ib = rd32(fs->gd + g * 32 + 4);
         unsigned long it = rd32(fs->gd + g * 32 + 8);
-        unsigned long it_blocks = (fs->ipg * EXT2_INODE + EXT2_BLOCK - 1) / EXT2_BLOCK;
+        unsigned long it_blocks = (fs->ipg * fs->inode_size + EXT2_BLOCK - 1) / EXT2_BLOCK;
 
         if (bb >= fs->blocks || ib >= fs->blocks || it >= fs->blocks || it + it_blocks > fs->blocks)
             return ext2_fail(fs,
@@ -2127,8 +2133,8 @@ static void ext2_close(struct ext2 *fs)
 }
 
 /**
- * Read the 128 bytes of inode `ino` into `out`, placed through its group's
- * table. Return 0, or -1 with `fs->err` set.
+ * Read the first 128 bytes of inode `ino` into `out`, placed through its
+ * group's table. Return 0, or -1 with `fs->err` set.
  */
 static int ext2_inode(struct ext2 *fs, unsigned long ino, unsigned char *out)
 {
@@ -2139,7 +2145,7 @@ static int ext2_inode(struct ext2 *fs, unsigned long ino, unsigned char *out)
     g = (ino - 1) / fs->ipg;
     index = (ino - 1) % fs->ipg;
     table = rd32(fs->gd + g * 32 + 8);
-    return ext2_read(fs, (uint64_t)table * EXT2_BLOCK + (uint64_t)index * EXT2_INODE, out,
+    return ext2_read(fs, (uint64_t)table * EXT2_BLOCK + (uint64_t)index * fs->inode_size, out,
                      EXT2_INODE);
 }
 
@@ -4430,7 +4436,7 @@ static long st_ext2_inode_at(const char *image, unsigned long ino)
     g = (ino - 1) / fs.ipg;
     index = (ino - 1) % fs.ipg;
     table = rd32(fs.gd + g * 32 + 8);
-    at = (long)(table * EXT2_BLOCK + index * EXT2_INODE);
+    at = (long)(table * EXT2_BLOCK + index * fs.inode_size);
     ext2_close(&fs);
     return at;
 }
