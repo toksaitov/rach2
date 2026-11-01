@@ -19,6 +19,13 @@ file 0755 /bin/sox build/vendor/sox_ng/sox
 file 0755 /bin/play build/vendor/sox_ng/mode
 file 0755 /bin/rec build/vendor/sox_ng/mode
 file 0755 /bin/soxi build/vendor/sox_ng/mode
+# The Wi-Fi station, its control and passphrase programs, and iw, which
+# configures the radios through nl80211 (vendor/hostap/Readme.md,
+# vendor/iw/Readme.md).
+file 0755 /bin/wpa_supplicant build/vendor/hostap/wpa_supplicant
+file 0755 /bin/wpa_cli build/vendor/hostap/wpa_cli
+file 0755 /bin/wpa_passphrase build/vendor/hostap/wpa_passphrase
+file 0755 /bin/iw build/vendor/iw/iw
 # This BusyBox has no set-id bit. A set-user-ID BusyBox would run each of
 # its BB_SUID_REQUIRE and BB_SUID_MAYBE applets as root unless a
 # configuration file confined it, so there are two binaries, as BusyBox
@@ -146,6 +153,11 @@ text 0644 /demo/hello.txt hello, world\n
 # password fields, which is what the separate shadow file is for.
 dir 0755 /etc
 file 0644 /etc/sox.COPYING build/vendor/sox_ng/COPYING
+# The license notices of the Wi-Fi programs and of the libraries they link.
+file 0644 /etc/hostap.COPYING build/vendor/hostap/COPYING
+file 0644 /etc/iw.COPYING build/vendor/iw/COPYING
+file 0644 /etc/libnl.COPYING build/vendor/libnl/COPYING
+file 0644 /etc/openssl.LICENSE build/vendor/openssl/LICENSE.txt
 dir 0700 /etc/dropbear
 text 0644 /etc/motd Rach2\n\nThe log of this boot is in /dev/bootlog, for root.\nWhat the services print is in /var/log/services.\nType su to become root.\n\n
 text 0644 /etc/hostname rach2\n

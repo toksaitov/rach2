@@ -4,7 +4,7 @@ This directory has the keyboard layouts of Rach2's console, as kbd's text keymap
 
 ## Use
 
-The images that stage kbd's programs, those with Dropbear and the GNU root, stage `xkb/` as `/usr/share/kbd/keymaps/xkb`, where kbd's `loadkeys` finds a map by its name. The recovery root stages only `us.map` and its two includes there, the map its init loads, since its 5 MiB must keep 512 KiB free. A layout is loaded first and add-ons after it:
+The images that stage kbd's programs, those with Dropbear and the GNU root, stage `xkb/` as `/usr/share/kbd/keymaps/xkb`, where kbd's `loadkeys` finds a map by its name. The recovery root stages only `us.map` and its two includes there, the map its init loads, since its 10 MiB must keep 512 KiB free. A layout is loaded first and add-ons after it:
 
 ```
 loadkeys -u kg alt-shift

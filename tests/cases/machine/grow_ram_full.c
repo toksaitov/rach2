@@ -1,6 +1,6 @@
 /*
  * grow_ram_full.c: the scenario of machine.grow.ram-full: save, grow and
- * restore of tools/dev/machine_grow.sh run with the recovery system's 5 MiB
+ * restore of tools/dev/machine_grow.sh run with the recovery system's
  * RAM root full, keeping their work and their logs on the store, and a store
  * that fills while the restore's log grows failing the restore with a
  * message, after which the restore run again finishes.
@@ -62,15 +62,16 @@ static int line_has(const char *text, const char *first, const char *then)
  * and the name records that are left. The heap and the image the stick
  * boots are not touched.
  *
- * @return 1 when the root has 4900 to 5120 KiB and is full, 0 otherwise.
+ * @return 1 when the root has 10020 to 10240 KiB and is full, 0 otherwise.
  */
 static int fill_root(struct drive *d)
 {
     int ok;
 
-    ok = grow_shell(d, "SIZED", NULL, "%s",
-                    "df -k / > /mnt/grow/root.before && "
-                    "awk 'NR == 2 {exit !($2 <= 5120 && $2 >= 4900)}' /mnt/grow/root.before") == 0;
+    ok =
+        grow_shell(d, "SIZED", NULL, "%s",
+                   "df -k / > /mnt/grow/root.before && "
+                   "awk 'NR == 2 {exit !($2 <= 10240 && $2 >= 10020)}' /mnt/grow/root.before") == 0;
     ok = grow_shell(d, "BLOCKS", NULL, "%s",
                     "dd if=/dev/zero of=/tmp/occupied bs=4096 2>/mnt/grow/fill.log; "
                     "test \"$?\" != 0") == 0 &&
@@ -115,7 +116,7 @@ static int round_trip(struct etude_case *c, struct state *s, const char *name)
         return -1;
     grow_recovery_boot(&d, c, "-n");
     round_assert(c, name, "full", &d, fill_root(&d),
-                 "the RAM root is not of 4900 to 5120 KiB, or a file system with blocks free");
+                 "the RAM root is not of 10020 to 10240 KiB, or a file system with blocks free");
 
     st = grow_shell(&d, "SAVED", &out, "%s",
                     "sh /tmp/grow-plan/machine_grow.sh save /dev/disk0 /mnt/grow /tmp/grow-plan "

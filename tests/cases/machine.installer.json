@@ -108,7 +108,7 @@
       "units": ["installer", "`tests/system/suites/installer.sh` rows 3 and 3b, the installer's refusals and the installs onto the second and the first of two disks", "`tests/system/suites/installer.sh` row 4, the boot of the installed disk", "`tests/system/suites/installer.sh` row 6, the SSH logins on the installed machine", "`tests/system/suites/installer.sh` rows 6b and 6c, the recovery system's key placed and not"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"stick": "the test stick, under an overlay", "image": "the 108 MiB disk image the test stick carries", "one": "a patterned disk of 256 MiB", "two": "a patterned disk of 256 MiB", "keyless": "the recovery image staged with no key"}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"stick": "the test stick, under an overlay", "image": "the 116 MiB disk image the test stick carries", "one": "a patterned disk of 256 MiB", "two": "a patterned disk of 256 MiB", "keyless": "the recovery image staged with no key"}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "installer_install", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["image-disk"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the overlay and the two disks, which it keeps after a failure; the scenario removes the keys and the outputs it made"},
       "steps": [
@@ -187,7 +187,7 @@
       "units": ["installer", "`tests/system/suites/installer.sh` row 5, the disk with a mount"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"stick": "the test stick, under an overlay", "image": "a copy of the 108 MiB disk image, whose boot partition is mounted"}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"stick": "the test stick, under an overlay", "image": "a copy of the 116 MiB disk image, whose boot partition is mounted"}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "installer_mounted", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["image"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the overlay and the disk's copy, which it keeps after a failure"},
       "steps": [

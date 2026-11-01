@@ -102,6 +102,11 @@ file 0755 /bin/update build/utils/update
 dir 0755 /etc
 text 0644 /etc/motd Rach2 recovery. This machine mounts nothing from the disk it is repairing: /dev/disk0 is the whole drive and reflash writes it.\n
 text 0644 /etc/hostname rach2\n
+# The license notices of the Wi-Fi programs and of the libraries they link.
+file 0644 /etc/hostap.COPYING build/vendor/hostap/COPYING
+file 0644 /etc/iw.COPYING build/vendor/iw/COPYING
+file 0644 /etc/libnl.COPYING build/vendor/libnl/COPYING
+file 0644 /etc/openssl.LICENSE build/vendor/openssl/LICENSE.txt
 text 0644 /etc/passwd root:x:0:0:root:/root:/bin/sh\ntest:x:1000:1000:test:/home/test:/bin/sh\n
 # No stored password: nothing in this image authenticates anybody. The account
 # files remain because the tools run as somebody and the shell reads them.
@@ -181,6 +186,13 @@ file 0755 /usr/share/udhcpc/resolv.script krffs/resolv.script
 dir 0755 /etc/ifplugd
 file 0755 /etc/ifplugd/ifplugd.action krffs/ifplugd.action
 file 0755 /sbin/ndwatch build/utils/ndwatch
+# The Wi-Fi station, its control and passphrase programs, and iw, which
+# configures the radios through nl80211 (vendor/hostap/Readme.md,
+# vendor/iw/Readme.md).
+file 0755 /bin/wpa_supplicant build/vendor/hostap/wpa_supplicant
+file 0755 /bin/wpa_cli build/vendor/hostap/wpa_cli
+file 0755 /bin/wpa_passphrase build/vendor/hostap/wpa_passphrase
+file 0755 /bin/iw build/vendor/iw/iw
 # What init runs on a machine with a Wi-Fi radio (init(8)): wpa_supplicant
 # with this configuration, which wifi(1) adds networks to and which then
 # holds their passphrases, so that only root reads it, and wpa_cli, which
@@ -195,7 +207,7 @@ file 0755 /sbin/zzz krffs/zzz
 dir 0755 /etc/zzz.d
 file 0755 /etc/zzz.d/wifi krffs/zzz-wifi
 # The one keymap init loads here, `us` and the two files it includes: this
-# root has no /etc/vconsole.conf, so init loads `us` (init(8)), and its 5 MiB
+# root has no /etc/vconsole.conf, so init loads `us` (init(8)), and its 10 MiB
 # must keep 512 KiB free, which the other layouts' 150 KiB would take
 # (vendor/keymaps/Readme.md).
 dir 0755 /usr/share/kbd
@@ -230,7 +242,7 @@ dir 0700:1000:1000 /home/test
 
 # The kbd tools that init's console settings run (vendor/kbd/Readme.md).
 # dumpkeys, showkey and kbd_mode, which only inspect the keyboard, stay off
-# this root, whose 5 MiB must keep 512 KiB free.
+# this root, whose 10 MiB must keep 512 KiB free.
 file 0755 /bin/loadkeys build/vendor/kbd/loadkeys
 file 0755 /bin/setleds build/vendor/kbd/setleds
 file 0755 /bin/kbdrate build/vendor/kbd/kbdrate

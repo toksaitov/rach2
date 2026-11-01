@@ -203,10 +203,18 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # one, the string routines swept, a machine of 8 MiB refused and kernel stacks
 # run out. They are the machine cases of tests/cases/machine.memory.json, which
 # etude runs, and have no target here. The case of 8 MiB boots the recovery
-# kernel with this copy of its image, whose name does not depend on whether the
-# image carries a key.
-$(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE)
-	cp $(RECOVERY_IMAGE) $@
+# kernel with an image of its own: the recovery manifest less the Wi-Fi
+# programs, in 5 MiB, since QEMU loads the kernel and its image only where
+# both fit in the machine's memory, and they must leave the kernel less than
+# the 1 MiB it needs to manage. The copy keeps the manifest's name, by which
+# tools/inspect/setid.allow knows it, and the image's name does not depend on
+# whether it carries a key.
+$(IMAGES_DIR)/memory-test.recovery.krffs: $(RECOVERY_IMAGE) krffs/manifests/rach2-recovery.manifest
+	@mkdir -p $(@D)/memory-test
+	sed -e '/ build\/vendor\/hostap\//d' -e '/ build\/vendor\/iw\//d' \
+	    -e '/ build\/vendor\/libnl\//d' -e '/ build\/vendor\/openssl\//d' \
+	    krffs/manifests/rach2-recovery.manifest > $(@D)/memory-test/rach2-recovery.manifest
+	$(MKIMAGE) $(@D)/memory-test/rach2-recovery.manifest $@ 5
 # `tests/run pools`: many pipes, ptys, sockets and processes live at once,
 # and the kernel heap back where it started after a thousand each of pipes,
 # ptys and sockets (see tests/poolprobe.c). They are the guest cases of
@@ -440,7 +448,7 @@ $(ARCH_CASE_DIR)/install.disk: $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(
                                tools/image/mkdisk_grub.sh $(DISK_TOOLS) $(GRUB_FILES) | rach2
 	@mkdir -p $(@D)
 	RACH2_DISK_TABLE=mbr \
-	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_RECOVERY_MB=16 \
 	RACH2_DISK_EXT2_MB=96 \
 	RACH2_DISK_EXT2_IMAGE=$(OS_REAL_SMALL_EXT2) \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
@@ -505,7 +513,7 @@ $(DRILL_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh tools/image/grub-em
                     $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(OS_SIMPLE_EXT2) $(DISK_TOOLS) $(GRUB_FILES)
 	@mkdir -p $(@D)
 	RACH2_DISK_TABLE=mbr \
-	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_RECOVERY_MB=16 \
 	RACH2_DISK_EXT2_MB=16 \
 	RACH2_DISK_EXT2_IMAGE=$(OS_SIMPLE_EXT2) \
 	RACH2_DISK_APPEND="rach2.diskdiag" \
@@ -953,7 +961,7 @@ INSTALLER_DISK = $(IMAGES_DIR)/installer-test.disk
 $(INSTALLER_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) \
                    tools/image/mkdisk_grub.sh $(DISK_TOOLS) | rach2 rach2-recovery utils krffs
 	@mkdir -p $(IMAGES_DIR)
-	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_RECOVERY_MB=16 \
 	RACH2_DISK_EXT2_MB=64 \
 	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \
@@ -1113,7 +1121,7 @@ build/tests/cases/grow/grow_tool.sh build/tests/cases/grow/grow_measure.awk:
 $(ARCH_CASE_DIR)/uefi/disk.img: $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(INSTALLER_EXT2) \
                                 tools/image/mkdisk_grub.sh $(DISK_TOOLS) $(GRUB_FILES) | rach2
 	@mkdir -p $(@D)
-	RACH2_DISK_RECOVERY_MB=8 \
+	RACH2_DISK_RECOVERY_MB=16 \
 	RACH2_DISK_EXT2_MB=64 \
 	RACH2_DISK_EXT2_IMAGE=$(INSTALLER_EXT2) \
 	RACH2_DISK_RECOVERY_KERNEL=$(RECOVERY_KERNEL) \

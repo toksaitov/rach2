@@ -355,11 +355,11 @@
     },
     {
       "case_id": "machine.grow.ram-full",
-      "behavior": "on the disk of the installed machine's layout on an MBR, booted from the recovery stick with its 5 MiB RAM root filled until it has no free block, tools/dev/machine_grow.sh saves, grows and restores with its work directories and logs on the store, and the RAM root is as full after as before; a store that fills while the restore's log grows fails the restore with a message, and the restore run again finishes; after each round the target has every byte it had and boots recovery without the stick",
+      "behavior": "on the disk of the installed machine's layout on an MBR, booted from the recovery stick with its 10 MiB RAM root filled until it has no free block, tools/dev/machine_grow.sh saves, grows and restores with its work directories and logs on the store, and the RAM root is as full after as before; a store that fills while the restore's log grows fails the restore with a message, and the restore run again finishes; after each round the target has every byte it had and boots recovery without the stick",
       "units": ["grow", "`tools/dev/machine_grow.sh` with the RAM root full, on the MBR fixture"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"table": "mbr", "disk_sectors": 397312, "disk_id": "1acef00d", "ram_root_kib": 5120, "rounds": "fixed full-log"}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"table": "mbr", "disk_sectors": 397312, "disk_id": "1acef00d", "ram_root_kib": 10240, "rounds": "fixed full-log"}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": ["qemu-img"], "features": {}},
       "execution": {"program": "grow_ram_full", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick", "store"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the stick's and the store's copies and the target's overlay, and the scenario removes the raw images converted from the overlay as each is judged, and the empty overlay's copy and the files read from the store at its end; both keep them after a failure"},
       "steps": [
@@ -373,7 +373,7 @@
         {"machine_id": "target", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "target", "base": "disk", "cluster_bytes": 4096, "serial": "GROWTEST", "boot": true}], "cpu": "max", "processors": 2, "memory_bytes": 536870912, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
-        {"assertion_id": "fixed-full", "checks": "the RAM root has 4900 to 5120 KiB, and after a file of whole blocks, its last fragments and empty files it has no free block", "source": "scenario"},
+        {"assertion_id": "fixed-full", "checks": "the RAM root has 10020 to 10240 KiB, and after a file of whole blocks, its last fragments and empty files it has no free block", "source": "scenario"},
         {"assertion_id": "fixed-save", "checks": "save ends with status 0 without a machine-grow failure, and every saved file the host reads off the store has the digest SHA256SUMS gives it", "source": "scenario"},
         {"assertion_id": "fixed-grown", "checks": "grow ends with status 0 without a machine-grow failure", "source": "scenario"},
         {"assertion_id": "fixed-restored", "checks": "restore ends with status 0 without a machine-grow failure, and its output says every saved range matches and the restored root checks clean", "source": "scenario"},
@@ -381,7 +381,7 @@
         {"assertion_id": "fixed-work", "checks": "no work directory is in /tmp, and at least three are on the store", "source": "scenario"},
         {"assertion_id": "fixed-bytes", "checks": "after the restore the target is the disk as it was in every byte", "source": "scenario"},
         {"assertion_id": "fixed-boots", "checks": "the target booted alone starts recovery, with recovery saved and no next entry, and its root has the owner's file", "source": "scenario"},
-        {"assertion_id": "full-log-full", "checks": "the RAM root has 4900 to 5120 KiB, and after a file of whole blocks, its last fragments and empty files it has no free block", "source": "scenario"},
+        {"assertion_id": "full-log-full", "checks": "the RAM root has 10020 to 10240 KiB, and after a file of whole blocks, its last fragments and empty files it has no free block", "source": "scenario"},
         {"assertion_id": "full-log-save", "checks": "save ends with status 0 without a machine-grow failure, and every saved file the host reads off the store has the digest SHA256SUMS gives it", "source": "scenario"},
         {"assertion_id": "full-log-grown", "checks": "grow ends with status 0 without a machine-grow failure", "source": "scenario"},
         {"assertion_id": "log-full", "checks": "the restore through full-log.sh, with the store full, ends with a status other than 0, and the console has the machine-grow failure of writing restore.log", "source": "scenario"},

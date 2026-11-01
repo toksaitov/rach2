@@ -527,7 +527,7 @@ MANIFEST_DEPS_doom_test := $(shell $(MANIFEST_DEPS) krffs/manifests/doom-test.ma
 # which is os-real's with two more files. Every rule that stages either names
 # them as prerequisites, order-only in the rule of a file, so that a tree with
 # nothing built yet can stage it.
-MANIFEST_PARTS_os_real = sox_ng kbd libtsm utils check-busybox check-tcc check-pdpmake check-setid \
+MANIFEST_PARTS_os_real = sox_ng hostap iw kbd libtsm utils check-busybox check-tcc check-pdpmake check-setid \
                          check-dropbearmulti check-e2fsck tools/etude/guest ports/doom $(MAN_ALL)
 MANIFEST_INPUTS = $(sort $(MANIFEST_DEPS_test) $(MANIFEST_DEPS_os_simple) \
     $(MANIFEST_DEPS_os_real) $(MANIFEST_DEPS_os_real_gnu) $(MANIFEST_DEPS_rach2_metal) \
@@ -1385,11 +1385,12 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 	$(MKIMAGE) krffs/manifests/os-simple.manifest $@ 10
 
 # The os-real image: the BusyBox shell and tools, the Dropbear SSH server and
-# client, TinyCC and pdpmake, sox_ng, Doom, the manual, the sources under /src,
-# and an /etc and /root tree. The image is 24 MiB on i686 and 25 on x86-64, of
-# which the tree with Doom's WAD takes 21.3 MiB and 22.1 MiB, since x86-64's
-# programs are larger; the small /bin/sh launcher keeps one copy of BusyBox
-# beside sox_ng.
+# client, TinyCC and pdpmake, sox_ng, the Wi-Fi station and iw, Doom, the
+# manual, the sources under /src, and an /etc and /root tree. The image is
+# 27 MiB on i686 and 29 on x86-64, of which the tree with Doom's WAD takes
+# 24.6 MiB and 26.4 MiB, since x86-64's programs are larger; wpa_supplicant
+# and its tools take 3.3 MiB and 4.4 of that, and the small /bin/sh launcher
+# keeps one copy of BusyBox beside sox_ng.
 # ACPICA's core is staged as an archive of 0.45 MiB to keep the tree small
 # (vendor/acpica/build_acpica.sh).
 # The image is the root the running system writes, /tmp among it, so the build
@@ -1403,11 +1404,11 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # takes from the window's top for the block requests, the page cache and the
 # drivers' buffers; the kernel stacks and the heap come from above the window
 # first. Booted by QEMU with 128 MiB, the kernel ends at 6.4 MiB on i686 and
-# 6.9 MiB on x86-64, the module follows it to 30.4 MiB and 31.9 MiB, the
-# boot's tables take 1.2 MiB and 0.6 MiB, and 32.4 MiB and 31.5 MiB are left
+# 6.9 MiB on x86-64, the module follows it to 33.4 MiB and 35.9 MiB, the
+# boot's tables take 1.2 MiB and 0.6 MiB, and 29.4 MiB and 27.5 MiB are left
 # for those frames. On i686 the frame table, 4 bytes for each 4 KiB frame
 # below the top of usable memory, is among the boot's tables, so a machine
-# with 4 GiB takes 3 MiB more of the window and leaves 29.6 MiB; the module
+# with 4 GiB takes 3 MiB more of the window and leaves 26.4 MiB; the module
 # is kept well below the window for that reason. The manual's aliases are a
 # table and not files, since the RAM root and a KRFFS disk walk every node on
 # a lookup and hundreds of alias files would make the self-build suite five
@@ -1415,9 +1416,9 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # gen_demo_password.sh the account passwords and /etc/shadow, each when
 # absent; the check targets require each vendored binary it stages.
 ifeq ($(ARCH),x86_64)
-OS_REAL_MIB = 25
+OS_REAL_MIB = 29
 else
-OS_REAL_MIB = 24
+OS_REAL_MIB = 27
 endif
 OS_REAL_FREE_KIB = 512
 OS_REAL_WAD_KIB = 4100
@@ -1514,13 +1515,15 @@ RECOVERY_KEY_TAG = -with-key
 endif
 RECOVERY_IMAGE = $(IMAGES_DIR)/$(RECOVERY_NAME).krffs
 RECOVERY_ISO = $(IMAGES_DIR)/$(RECOVERY_NAME).iso
-# The recovery system's root is 5 MiB of RAM: its programs take a little over
-# 4, and the rest is where the system writes, the plan of a machine's grow in
-# /tmp among it, so the build refuses an image with less than 512 KiB free.
-# The installer test disk's 8 MiB recovery partition holds it and its kernel.
-# The installer case's keyless copy takes the same size.
-RECOVERY_MIB = 5
-$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(MANIFEST_DEPS_rach2_recovery) $(IMAGE_TOOLS) $(MAN_ALL) tools/image/keyname.sh | kbd preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
+# The recovery system's root is 10 MiB of RAM: its programs take 7.7 MiB on
+# i686 and 8.8 on x86-64, 3.3 and 4.4 of them the Wi-Fi station and iw, and
+# the rest is where the system writes, the plan of a machine's grow in /tmp
+# among it, so the build refuses an image with less than 512 KiB free. The
+# suites' disks give it and its kernel a recovery partition of 16 MiB, and an
+# installed disk one of 64. The installer case's keyless copy takes the same
+# size.
+RECOVERY_MIB = 10
+$(RECOVERY_IMAGE): $(DEMO_CREDS) krffs/manifests/rach2-recovery.manifest $(MANIFEST_DEPS_rach2_recovery) $(IMAGE_TOOLS) $(MAN_ALL) tools/image/keyname.sh | kbd hostap iw preflight krffs rach2 rach2-recovery utils check-busybox check-setid check-dropbearmulti check-e2fsck
 	@sh tools/image/keyname.sh $@
 	$(MKIMAGE) krffs/manifests/rach2-recovery.manifest $@ $(RECOVERY_MIB) 512
 
@@ -1632,13 +1635,13 @@ GRUB_FILES      = $(wildcard vendor/grub/*.img) vendor/grub/bootx64.efi \
 MKEXFATFIXTURE  = build/tests/host/mkexfatfixture
 
 SEALED_EXT2 = $(IMAGES_DIR)/rach2-metal-disk.ext2
-$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_ALL) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck kbd libtsm sox_ng ports/doom term unifont
+$(SEALED_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_ALL) tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti check-e2fsck kbd libtsm sox_ng hostap iw ports/doom term unifont
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 1024
 # The alias builds everything the disk is made of, then asks for the disk
 # itself. The two are separate because the components are phony targets,
 # which are always out of date, and a disk that named them directly would be
 # rebuilt on every invocation, half a minute each time.
-rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti kbd sox_ng ports/doom term unifont $(CFGCHECK)
+rach2-sealed-disk: krffs rach2 utils rach2-recovery rach2-recovery-image check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti kbd sox_ng hostap iw ports/doom term unifont $(CFGCHECK)
 	@$(MAKE) --no-print-directory $(SEALED_DISK)
 
 $(SEALED_DISK): $(KERNEL) $(RECOVERY_KERNEL) $(RECOVERY_IMAGE) $(SEALED_EXT2) \
