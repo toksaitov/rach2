@@ -73,6 +73,10 @@
 
 #define KILL_LINE "killall -KILL term"
 
+/* The characters typed at once: with Shift a character is some ten events
+ * of QEMU's queue of fifty. */
+#define CHUNK 4
+
 /* One attempt of a case. */
 struct tc {
     struct net_case u;
@@ -303,6 +307,59 @@ static void type(struct tc *s, struct net_boot *b, const char *text)
     }
 }
 
+/** Copy `text` into `out`, of `size` bytes, without its spaces and line
+ * ends, which a grid read back loses at the ends of wrapped lines. */
+static void squeeze(const char *text, char *out, size_t size)
+{
+    size_t n = 0;
+
+    for (; text != NULL && *text != '\0' && n + 1 < size; text++)
+        if (*text != ' ' && *text != '\n')
+            out[n++] = *text;
+    out[n] = '\0';
+}
+
+/**
+ * Type `line` and Enter at the shell on term's screen, CHUNK characters at a
+ * time, each chunk once term's grid shows the prompt's `#` and the ones
+ * before: QEMU's queue of keys holds some fifty events, each a key's press,
+ * release or delay, and drops what comes past it.
+ */
+static void type_line(struct tc *s, struct net_boot *b, const char *line)
+{
+    char path[4096], chunk[CHUNK + 1], typed[512], want[512], seen[8192];
+    struct net_run text;
+    struct dump d;
+    size_t done = 0, n, len = strlen(line);
+    unsigned i;
+    int echoed;
+
+    if (len + 1 >= sizeof(typed) || net_path(&s->u, "typed.ppm", path, sizeof(path)) == NULL) {
+        net_fail(&s->u, "the line %.20s is too long to type", line);
+        return;
+    }
+    while (done < len && net_ok(&s->u)) {
+        n = len - done < CHUNK ? len - done : CHUNK;
+        memcpy(chunk, line + done, n);
+        chunk[n] = '\0';
+        type(s, b, chunk);
+        done += n;
+        typed[0] = '#';
+        memcpy(typed + 1, line, done);
+        typed[done + 1] = '\0';
+        squeeze(typed, want, sizeof(want));
+        for (i = 0, echoed = 0; i < DUMPS_MAX && !echoed && net_ok(&s->u); i++) {
+            screen(s, b, path, "typed.ppm", &d, "--term", &text);
+            squeeze(net_exited0(&text) ? text.out : NULL, seen, sizeof(seen));
+            echoed = strstr(seen, want) != NULL;
+            net_run_free(&text);
+        }
+        if (!echoed && net_ok(&s->u))
+            net_fail(&s->u, "term's grid never showed the typed %s", typed + 1);
+    }
+    type(s, b, "\r");
+}
+
 /**
  * Step `term`: the boot, term's screen with its login prompt, and the login
  * typed at it. Reports `framebuffer`, `term-screen` and `term-login`.
@@ -370,7 +427,7 @@ static void probes(struct tc *s, struct net_boot *b)
     const char *at;
 
     if (net_step(&s->u, "probes") == ETUDE_OK) {
-        type(s, b, PROBE_LINE "\r");
+        type_line(s, b, PROBE_LINE);
         if (net_wait(b, PROBE_END) == ETUDE_OK)
             log = net_file(b->console);
     }
@@ -395,7 +452,7 @@ static void doom(struct tc *s, struct net_boot *b)
     memset(&game, 0, sizeof(game));
     memset(&back, 0, sizeof(back));
     if (net_step(&s->u, "doom") == ETUDE_OK) {
-        type(s, b, DOOM_LINE "\r");
+        type_line(s, b, DOOM_LINE);
         frame = net_wait(b, DOOM_FRAME) == ETUDE_OK;
         if (frame && net_path(&s->u, "doom.ppm", path, sizeof(path)) != NULL)
             screen(s, b, path, "doom.ppm", &game, NULL, NULL);
@@ -429,7 +486,7 @@ static void fallback(struct tc *s, struct net_boot *b)
 
     memset(&d, 0, sizeof(d));
     if (net_step(&s->u, "fallback") == ETUDE_OK) {
-        type(s, b, KILL_LINE "\r");
+        type_line(s, b, KILL_LINE);
         killed = net_wait(b, KILLED) == ETUDE_OK;
     }
     net_assert(&s->u, "killed", killed, "init did not say: %s", KILLED);
