@@ -70,7 +70,7 @@
         {"name": "image-tools", "node": "images/etude-image.krffs", "per_architecture": true}
       ],
       "timing": [
-        {"kind": "injected_delay", "where": "tests/musl/clockmusl.c:122", "assumes": "the guest's calendar clock moves by at least one second across the probe's sleep of two seconds", "uncertainty_us": null}
+        {"kind": "injected_delay", "where": "tests/musl/clockmusl.c:123", "assumes": "the guest's calendar clock moves by at least one second across the probe's sleep of two seconds", "uncertainty_us": null}
       ],
       "native": {"plan": "none", "class": "disk", "reason": "the guest builds on a private copy of a disk root and the kernel it built boots from a GRUB disk that the scenario writes"}
     },

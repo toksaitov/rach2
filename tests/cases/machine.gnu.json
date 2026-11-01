@@ -2469,7 +2469,7 @@
         {"name": "gnu_scenario", "node": "tests/cases/machine/gnu_scenario", "per_architecture": false}
       ],
       "timing": [
-        {"kind": "injected_delay", "where": "tests/musl/clockmusl.c:122", "assumes": "the guest's calendar clock moves by at least one second across the probe's sleep of two seconds", "uncertainty_us": null}
+        {"kind": "injected_delay", "where": "tests/musl/clockmusl.c:123", "assumes": "the guest's calendar clock moves by at least one second across the probe's sleep of two seconds", "uncertainty_us": null}
       ],
       "native": {"plan": "none", "class": "system", "reason": "it writes /etc/ntp.conf, kills the machine's ntpd and sets the clock to 2030"}
     },

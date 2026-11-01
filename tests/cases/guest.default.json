@@ -3075,7 +3075,7 @@
         {"name": "default_scenario", "node": "tests/cases/machine/default_scenario", "per_architecture": false}
       ],
       "timing": [
-        {"kind": "injected_delay", "where": "tests/musl/clockmusl.c:122", "assumes": "the guest's calendar clock moves by at least one second across the probe's sleep of two seconds", "uncertainty_us": null}
+        {"kind": "injected_delay", "where": "tests/musl/clockmusl.c:123", "assumes": "the guest's calendar clock moves by at least one second across the probe's sleep of two seconds", "uncertainty_us": null}
       ],
       "native": {"plan": "none", "class": "network", "reason": "the probe compares the guest's clocks with a reference on the host, which the scenario serves on a UDP port that QEMU's user network reaches; tests/native/musl.cases runs it natively without the reference"}
     },

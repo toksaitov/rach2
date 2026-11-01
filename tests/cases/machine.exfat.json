@@ -352,7 +352,7 @@
         },
         {
           "kind": "injected_delay",
-          "where": "tests/lagprobe.c:369",
+          "where": "tests/lagprobe.c:370",
           "assumes": "sleep_ms, through which the parent spaces its syncs 30 ms apart across the writers' run, as the stimulus; the probe judges each file's bytes and every sync's result, never elapsed time",
           "uncertainty_us": null
         }
