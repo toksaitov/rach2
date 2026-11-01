@@ -24,6 +24,7 @@
 #define _PIPE_H_
 
 #include "../lib/kint.h"
+#include "../lib/kuser.h"
 #include "../proc/wait_queue.h"
 
 #define PIPE_BUF_SIZE 65536 /* a power of two, for the ring mask */
@@ -74,6 +75,60 @@ struct fd_entry;
  * the wait. May sleep.
  */
 int32_t fifo_attach(struct fd_entry *e, const void *mnt, uint64_t ino, int flags);
+
+/* The operations splice(2), tee(2) and sendfile(2) use on a pipe end, in
+ * pipe.c. */
+
+/** Whether the descriptor `e` is an end of a pipe or of a FIFO. */
+int pipe_is(const struct fd_entry *e);
+
+/**
+ * Write `count` bytes of `buf`, a user buffer or one the thread opened to
+ * the user-copy checks, to the write end `e`, as a write(2) of it does but
+ * without waiting for room when `nonblock`, the descriptor's O_NONBLOCK or
+ * not; the bytes written or a negative errno, -EAGAIN, -EPIPE with SIGPIPE
+ * raised, -EINTR, -EBADF, -EFAULT or -ENOMEM.
+ */
+int32_t pipe_splice_write(struct fd_entry *e, const char __user *buf, uint32_t count, int nonblock);
+
+/**
+ * Wait for room in the pipe of the write end `e` unless `nonblock`: the
+ * bytes free, or -EAGAIN, -EINTR, -EBADF, or -EPIPE with SIGPIPE raised when
+ * no reader is left. A splice into a pipe reads its source only for the room
+ * there is, as Linux's does, so that it never waits with bytes in hand.
+ */
+int32_t pipe_splice_room(struct fd_entry *e, int nonblock);
+
+/**
+ * Copy up to `n` of the bytes buffered in the read end `e`'s pipe into the
+ * kernel buffer `dst`, without taking them, after waiting for one unless
+ * `nonblock`; `*mark` is the count the pipe had given out then, for
+ * `pipe_splice_consume`. Returns the bytes copied, 0 for an empty pipe with
+ * no writer left, or -EAGAIN, -EINTR or -EBADF.
+ */
+int32_t pipe_splice_peek(struct fd_entry *e, uint8_t *dst, uint32_t n, int nonblock,
+                         uint32_t *mark);
+
+/**
+ * Take from the read end `e`'s pipe the first `n` bytes that
+ * `pipe_splice_peek` copied at `mark`, less those another reader took
+ * meanwhile, and wake the writers for room. Such a reader gets the bytes too,
+ * so a byte goes out twice and none is lost; a splice that shares its pipe
+ * with another reader has no order Linux promises either.
+ */
+void pipe_splice_consume(struct fd_entry *e, uint32_t n, uint32_t mark);
+
+/**
+ * Copy up to `len` bytes from the pipe of the read end `in` to that of the
+ * write end `out`, ring to ring, taking them from `in` when `move` (splice)
+ * and leaving them (tee). Waits for a byte in `in` and then for room in
+ * `out` unless `nonblock`, and copies what both allow at once, nothing
+ * between that sleeps. Returns the bytes copied, 0 for an empty `in` with no
+ * writer left, or a negative errno: -EINVAL for one pipe at both ends,
+ * -EAGAIN, -EINTR, -EPIPE with SIGPIPE raised when `out` has no reader, or
+ * -ENOMEM when the heap has no room for `out`'s ring.
+ */
+int32_t pipe_tee(struct fd_entry *in, struct fd_entry *out, uint32_t len, int nonblock, int move);
 
 struct isr_params;
 /* The handlers of pipe(2) and pipe2(2), which arch_syscall_init enters in

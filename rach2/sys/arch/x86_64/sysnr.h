@@ -269,6 +269,7 @@
 #define SYS_GETRANDOM              318
 #define SYS_MEMFD_CREATE           319
 #define SYS_MLOCK2                 325
+#define SYS_COPY_FILE_RANGE        326
 #define SYS_STATX                  332
 #define SYS_CLONE3                 435
 #define SYS_CLOSE_RANGE            436

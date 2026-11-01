@@ -220,22 +220,36 @@ static int32_t pipe_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)done;
 }
 
+/** Linux's SIGPIPE for a write to a pipe no reader is left on: SI_USER,
+ * from the writer, to its thread. */
+static void pipe_sigpipe(void)
+{
+    struct k_siginfo info;
+
+    k_memset(&info, 0, sizeof(info));
+    info.code = SI_USER;
+    info.pid = current_proc->tgid;
+    info.uid = current_proc->ruid;
+    signal_post_thread(current_proc, SIGPIPE, &info);
+}
+
 /**
  * The write of a pipe end: all `count` bytes, waiting whenever the ring is
- * full. Returns the bytes written, or, before a transfer, -EBADF for a
- * descriptor not open for writing, -EFAULT for a bad buffer, -EAGAIN for a
- * full pipe with O_NONBLOCK, -EINTR when a signal ends a wait, or -ENOMEM
- * when the heap has no room for the ring; each of these after a transfer
- * returns the count written instead. With no reader left the write raises
- * SIGPIPE in the calling thread, as Linux sends it, and returns -EPIPE or
- * the count written. Readers are woken for data at every transfer, the ring
- * empty before it or not, so an edge-triggered epoll registration of the
- * read end is told of each write, as Linux tells one of a pipe.
+ * full unless `nonblock`. Returns the bytes written, or, before a transfer,
+ * -EBADF for a descriptor not open for writing, -EFAULT for a bad buffer,
+ * -EAGAIN for a full pipe with `nonblock`, -EINTR when a signal ends a wait,
+ * or -ENOMEM when the heap has no room for the ring; each of these after a
+ * transfer returns the count written instead. With no reader left the write
+ * raises SIGPIPE in the calling thread, as Linux sends it, and returns
+ * -EPIPE or the count written. Readers are woken for data at every
+ * transfer, the ring empty before it or not, so an edge-triggered epoll
+ * registration of the read end is told of each write, as Linux tells one of
+ * a pipe.
  *
  * Each transfer makes its page present as `pipe_read`'s does, and judges
  * the readers and the ring again after that sleep.
  */
-static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+static int32_t pipe_put(fd_entry_t *e, const char __user *buf, uint32_t count, int nonblock)
 {
     pipe_t *p = (pipe_t *)e->priv;
     uint32_t done = 0;
@@ -256,22 +270,13 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
         uintptr_t addr = (__force uintptr_t)(buf + done);
 
         if (!p->read_open) {
-            {
-                /* Linux's SIGPIPE: SI_USER, from the writer, to its thread. */
-                struct k_siginfo info;
-
-                k_memset(&info, 0, sizeof(info));
-                info.code = SI_USER;
-                info.pid = current_proc->tgid;
-                info.uid = current_proc->ruid;
-                signal_post_thread(current_proc, SIGPIPE, &info);
-            }
+            pipe_sigpipe();
             return (done > 0) ? (int32_t)done : -EPIPE;
         }
 
         space = pipe_free_space(p);
         if (space == 0) {
-            if (fd_is_nonblock(e)) {
+            if (nonblock) {
                 return (done > 0) ? (int32_t)done : -EAGAIN;
             }
             if (wq_wait_event(&p->write_wq, pipe_writable, p) < 0) {
@@ -313,6 +318,13 @@ static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     }
 
     return (int32_t)done;
+}
+
+/** The write of a pipe end (`pipe_put`), waiting for room unless the
+ * description has O_NONBLOCK. */
+static int32_t pipe_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    return pipe_put(e, buf, count, fd_is_nonblock(e));
 }
 
 /* poll(2) event bits, the Linux values. */
@@ -420,6 +432,156 @@ static void pipe_close(fd_entry_t *e)
 }
 
 static const struct file_ops pipe_ops = {pipe_read, pipe_write, pipe_poll, pipe_ioctl, pipe_close};
+
+int pipe_is(const fd_entry_t *e)
+{
+    return e->ops == &pipe_ops;
+}
+
+int32_t pipe_splice_write(fd_entry_t *e, const char __user *buf, uint32_t count, int nonblock)
+{
+    return pipe_put(e, buf, count, nonblock);
+}
+
+int32_t pipe_splice_room(fd_entry_t *e, int nonblock)
+{
+    pipe_t *p = (pipe_t *)e->priv;
+
+    if (!(e->flags & FD_FLAG_WRITE)) {
+        return -EBADF;
+    }
+    for (;;) {
+        if (!p->read_open) {
+            pipe_sigpipe();
+            return -EPIPE;
+        }
+        if (pipe_free_space(p) != 0) {
+            return (int32_t)pipe_free_space(p);
+        }
+        if (nonblock) {
+            return -EAGAIN;
+        }
+        if (wq_wait_event(&p->write_wq, pipe_writable, p) < 0) {
+            return -EINTR;
+        }
+    }
+}
+
+/**
+ * Wait until the pipe of the read end `e` has bytes, or has no writer left:
+ * the bytes buffered, 0 for none and no writer, -EAGAIN for none with
+ * `nonblock`, or -EINTR when a signal ends the wait.
+ */
+static int32_t pipe_wait_data(fd_entry_t *e, int nonblock)
+{
+    pipe_t *p = (pipe_t *)e->priv;
+
+    while (pipe_available(p) == 0) {
+        if (!p->write_open) {
+            return 0;
+        }
+        if (nonblock) {
+            return -EAGAIN;
+        }
+        if (wq_wait_event(&p->read_wq, pipe_readable, p) < 0) {
+            return -EINTR;
+        }
+    }
+    return (int32_t)pipe_available(p);
+}
+
+int32_t pipe_splice_peek(fd_entry_t *e, uint8_t *dst, uint32_t n, int nonblock, uint32_t *mark)
+{
+    pipe_t *p = (pipe_t *)e->priv;
+    int32_t avail;
+    uint32_t i;
+
+    if (!(e->flags & FD_FLAG_READ)) {
+        return -EBADF;
+    }
+    avail = pipe_wait_data(e, nonblock);
+    if (avail <= 0) {
+        return avail;
+    }
+    if (n > (uint32_t)avail) {
+        n = (uint32_t)avail;
+    }
+    for (i = 0; i < n; i++) {
+        dst[i] = p->buf[(p->head + i) & (PIPE_BUF_SIZE - 1)];
+    }
+    *mark = p->head;
+    return (int32_t)n;
+}
+
+void pipe_splice_consume(fd_entry_t *e, uint32_t n, uint32_t mark)
+{
+    pipe_t *p = (pipe_t *)e->priv;
+    uint32_t gone = p->head - mark;
+
+    if (n <= gone) {
+        return;
+    }
+    n -= gone;
+    if (n > pipe_available(p)) {
+        n = pipe_available(p);
+    }
+    pipe_ring_consume(p, n);
+    pipe_wake(p, &p->write_wq, WQ_ROOM);
+}
+
+int32_t pipe_tee(fd_entry_t *in, fd_entry_t *out, uint32_t len, int nonblock, int move)
+{
+    pipe_t *a = (pipe_t *)in->priv;
+    pipe_t *b = (pipe_t *)out->priv;
+    uint32_t n, i;
+
+    if (a == b) {
+        return -EINVAL;
+    }
+    for (;;) {
+        int32_t avail = pipe_wait_data(in, nonblock);
+
+        if (avail <= 0) {
+            return avail;
+        }
+        if (!b->read_open) {
+            pipe_sigpipe();
+            return -EPIPE;
+        }
+        if (pipe_free_space(b) != 0) {
+            break;
+        }
+        if (nonblock) {
+            return -EAGAIN;
+        }
+        if (wq_wait_event(&b->write_wq, pipe_writable, b) < 0) {
+            return -EINTR;
+        }
+    }
+    if (!b->buf) {
+        b->buf = kmalloc(PIPE_BUF_SIZE);
+        if (!b->buf) {
+            return -ENOMEM;
+        }
+    }
+    n = pipe_available(a);
+    if (n > pipe_free_space(b)) {
+        n = pipe_free_space(b);
+    }
+    if (n > len) {
+        n = len;
+    }
+    for (i = 0; i < n; i++) {
+        b->buf[(b->tail + i) & (PIPE_BUF_SIZE - 1)] = a->buf[(a->head + i) & (PIPE_BUF_SIZE - 1)];
+    }
+    pipe_ring_produce(b, n);
+    pipe_wake(b, &b->read_wq, WQ_DATA);
+    if (move) {
+        pipe_ring_consume(a, n);
+        pipe_wake(a, &a->write_wq, WQ_ROOM);
+    }
+    return (int32_t)n;
+}
 
 /** Make the caller's reserved descriptor `fd` an end of `p` with the access
  * `access`, close-on-exec and O_NONBLOCK as pipe2's `flags` ask. */

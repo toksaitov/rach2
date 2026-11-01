@@ -524,6 +524,10 @@ long sys_tee(isr_params_t *params);
 
 long sys_sendfile(isr_params_t *params);
 
+long sys_sendfile32(isr_params_t *params);
+
+long sys_copy_file_range(isr_params_t *params);
+
 long sys_fallocate(isr_params_t *params);
 
 long sys_close_range(isr_params_t *params);

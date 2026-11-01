@@ -502,7 +502,8 @@ static int range_ready(struct mm *mm, uintptr_t start, uintptr_t end, int write)
  * recover. So once every page is in, the range is checked again with
  * nothing that sleeps, and brought in again when a page went. A range that
  * wraps is refused, since the loop would end early and leave its tail
- * unbacked.
+ * unbacked. A kernel buffer the thread opened to the checks
+ * (`user_window_open`) is present already.
  */
 int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
@@ -511,7 +512,7 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
     if (!current_proc || current_proc->mm == NULL) {
         return 0;
     }
-    if (len == 0) {
+    if (len == 0 || proc_window_covers(current_proc, addr, len)) {
         return 1;
     }
 
