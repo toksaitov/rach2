@@ -7,13 +7,13 @@
  * that order, each of which may decline it by level or be absent. A record
  * looks like this on the serial port:
  *
- *     <3>[12.34] ahci: command: timed out on port 0
+ *     <3>[12.340000] ahci: command: timed out on port 0
  *
  * The angle brackets hold the level with the kernel facility implied, which is
  * the form BusyBox's `klogd` parses. The brackets hold uptime in seconds and
- * hundredths. The subsystem and the `event: detail` text after it are the
- * shape `AGENTS.md` requires of every message; the call writes the subsystem
- * and its colon itself.
+ * microseconds, as Linux's do, counted in whole ticks. The subsystem and the `event: detail` text
+ * after it are the shape `AGENTS.md` requires of every message; the call writes the subsystem and
+ * its colon itself.
  *
  * The debug shell's menus, prompts and command output are not diagnostics.
  * They go through `console_putc`, `console_puts` and `console_printf`, which

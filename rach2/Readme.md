@@ -21,10 +21,10 @@ A program enters the kernel with `int 0x80` on i686 and `syscall` on x86-64, wit
 
 The command line is a list of words, which [cmdline.md](cmdline.md) gives in full. Three are needed first: `rach2.rescue` starts the debug shell in place of `/sbin/init`, `rach2.root=` chooses the root, and `rach2.loglevel=N` sets the least urgent level the screen shows.
 
-`klog(level, subsystem, format, ...)` (`sys/klog.h`) writes one record of the log, a line with syslog's level and the uptime in seconds before it:
+`klog(level, subsystem, format, ...)` (`sys/klog.h`) writes one record of the log, a line with syslog's level and the uptime in seconds and microseconds, as Linux writes them, before it:
 
 ```text
-<3>[12.34] ahci: command: timed out on port 0
+<3>[12.340000] ahci: command: timed out on port 0
 ```
 
 The levels are `KLOG_CRIT` 2, `KLOG_ERR` 3, `KLOG_WARN` 4, `KLOG_INFO` 6 and `KLOG_DEBUG` 7. A 16 KiB ring keeps the latest records, which `/dev/bootlog` ([bootlog(4)](../man/man4/bootlog.4)), `syslog` ([syslog(2)](../man/man2/syslog.2)) and `dmesg` read. COM1 receives every record. The screen shows `INFO` and more urgent during the boot, and `CRIT` alone once init starts, unless the command line gave a level or `rach2.fsck`, or the root is read-only.

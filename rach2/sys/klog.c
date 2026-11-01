@@ -35,11 +35,12 @@
 #include "lib/kfmt.h"
 #include "lib/kirq.h"
 #include "network/netconsole.h"
+#include "timer.h"
 
-/* The timer's tick counter, at 100 Hz, read for the timestamp and for
-   nothing else; before the timer starts it is zero, and a record reads
-   `[0.00]`. */
-extern volatile uint32_t kernel_ticks;
+/* The microseconds in one tick of `kernel_ticks`, which is read for the
+   timestamp; before the timer starts it is zero, and a record reads
+   `[0.000000]`. */
+#define KLOG_TICK_US (1000000u / TICK_HZ)
 
 /* ---- the record ---- */
 
@@ -115,9 +116,12 @@ static void build_u32(uint32_t v)
 }
 
 /**
- * Build `<level>[seconds.hundredths] subsystem: text` and one newline.
+ * Build `<level>[seconds.microseconds] subsystem: text` and one newline.
  *
- * The prefix is the form BusyBox's klogd reads. A record that did not fit
+ * The prefix is the form BusyBox's klogd reads, and the stamp Linux's, with
+ * six digits after the point, which util-linux's dmesg reads as
+ * microseconds; it moves by whole ticks. The seconds are not padded, so the
+ * stamp is digits, a point and digits. A record that did not fit
  * ends in `...` before its newline rather than simply stopping, so a reader
  * can tell a cut line from a short one.
  *
@@ -131,6 +135,8 @@ static void klog_build(struct klog_record *r, int level, const char *subsystem, 
                        va_list ap)
 {
     uint32_t ticks = kernel_ticks;
+    uint32_t us = ticks % TICK_HZ * KLOG_TICK_US;
+    uint32_t place;
 
     build_at = r->text;
     build_left = KLOG_RECORD_MAX - 4;
@@ -141,10 +147,11 @@ static void klog_build(struct klog_record *r, int level, const char *subsystem, 
     build_u32((uint32_t)level);
     build_putc('>');
     build_putc('[');
-    build_u32(ticks / 100u);
+    build_u32(ticks / TICK_HZ);
     build_putc('.');
-    build_putc((char)('0' + (ticks / 10u) % 10u));
-    build_putc((char)('0' + ticks % 10u));
+    for (place = 100000u; place > 0; place /= 10u) {
+        build_putc((char)('0' + us / place % 10u));
+    }
     build_putc(']');
     build_putc(' ');
     r->body = (uint32_t)(build_at - r->text);
