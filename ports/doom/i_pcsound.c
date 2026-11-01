@@ -84,6 +84,7 @@ static struct {
     uint32_t length;        /* in bytes, no more than the lump has */
     uint32_t position;      /* the next sample */
     int volume;             /* 0 to 254, twice the engine's */
+    uint32_t start_ms;      /* DG_GetTicksMs when the effect started */
     boolean active;
 } channels[NUM_CHANNELS];
 
@@ -275,18 +276,36 @@ static int PCSoundGetSfxLumpNum(sfxinfo_t *sfxinfo)
     return lumpnum;
 }
 
-/**
- * Advance every effect playing by `samples`, the time a stall dropped, so
- * that the part of an effect that fell in it is not played late; an effect
- * that ends in it ends. The music goes on from where it was.
- */
-static void skip_channels(uint32_t samples)
+/** Convert `ms` milliseconds to samples at OUTPUT_SAMPLE_RATE. */
+static uint32_t ms_to_samples(uint32_t ms)
 {
+    return ms / 1000 * OUTPUT_SAMPLE_RATE + ms % 1000 * OUTPUT_SAMPLE_RATE / 1000;
+}
+
+/**
+ * Advance every effect playing by the part of a stall that fell inside its
+ * life, so that none of it is played late; an effect that ends in it ends.
+ * The stall runs from `from` to `to` samples after the update at `since_ms`.
+ * An effect started after `since_ms` skips only from its start, so that one
+ * begun after the stall keeps its beginning. The music goes on from where it
+ * was.
+ */
+static void skip_channels(uint32_t since_ms, uint32_t from, uint32_t to)
+{
+    uint32_t begin, samples;
     int i;
 
     for (i = 0; i < NUM_CHANNELS; i++) {
         if (!channels[i].active)
             continue;
+        begin = from;
+        if ((int32_t)(channels[i].start_ms - since_ms) > 0 &&
+            ms_to_samples(channels[i].start_ms - since_ms) > begin) {
+            begin = ms_to_samples(channels[i].start_ms - since_ms);
+        }
+        if (begin >= to)
+            continue;
+        samples = to - begin;
         if (channels[i].length - channels[i].position <= samples) {
             channels[i].position = channels[i].length;
             channels[i].active = false;
@@ -397,8 +416,8 @@ static uint32_t queued_level(uint32_t period)
  * counts the buffer and what the kernel's mix and driver hold, which Doom
  * cannot shorten; GETOSPACE gives the buffer's part. When the time since the last
  * update is longer than what was queued then, the device played silence for
- * the rest, and the effects skip it with skip_channels, so that none plays
- * late. The samples are mixed in chunks of MIX_BUFFER_SIZE, and what a write
+ * the rest, and each effect skips the part of it inside its life with
+ * skip_channels, so that none plays late. The samples are mixed in chunks of MIX_BUFFER_SIZE, and what a write
  * does not take is dropped. The first write starts the device with
  * SNDCTL_DSP_POST, which would otherwise wait for its driver's buffer to
  * fill. The report gets the delay after the update.
@@ -407,7 +426,7 @@ static void dsp_update(void)
 {
     audio_buf_info space;
     int delay, w;
-    uint32_t now_ms, elapsed, buffered, want, chunk, off;
+    uint32_t now_ms, since_ms, elapsed, buffered, want, chunk, off;
 
     if (ioctl(dsp_fd, SNDCTL_DSP_GETODELAY, &delay) < 0 ||
         ioctl(dsp_fd, SNDCTL_DSP_GETOSPACE, &space) < 0 || delay < 0 ||
@@ -416,11 +435,11 @@ static void dsp_update(void)
     }
 
     now_ms = DG_GetTicksMs();
-    elapsed = now_ms - last_audio_ms;
+    since_ms = last_audio_ms;
     last_audio_ms = now_ms;
-    elapsed = elapsed / 1000 * OUTPUT_SAMPLE_RATE + elapsed % 1000 * OUTPUT_SAMPLE_RATE / 1000;
+    elapsed = ms_to_samples(now_ms - since_ms);
     if (dsp_started && elapsed > queued_samples) {
-        skip_channels(elapsed - queued_samples);
+        skip_channels(since_ms, queued_samples, elapsed);
     }
 
     buffered = (uint32_t)(space.fragstotal * space.fragsize - space.bytes);
@@ -566,6 +585,7 @@ static int PCSoundStartSound(sfxinfo_t *sfxinfo, int channel, int vol, int sep)
         }
         channels[channel].position = 0;
         channels[channel].volume = vol * 2;
+        channels[channel].start_ms = DG_GetTicksMs();
         channels[channel].active = true;
 
         return channel;
