@@ -772,7 +772,7 @@ $(call together,$(KRFFSMOUNT_DISKS)): tests/system/krffsvol.sh $(MKMBR)
 $(IMAGES_DIR)/ext2-probes.disk: $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test) \
                                 tools/image/mkext2.sh $(IMAGE_TOOLS) $(MKMBR) \
                                 | preflight krffs rach2 tests musl-programs utils ish \
-                                  tools/etude/guest check-dropbearmulti
+                                  tools/etude/guest check-dropbearmulti kbd
 	@mkdir -p $(IMAGES_DIR)
 	sh tools/image/mkext2.sh krffs/manifests/test.manifest $@.vol 16
 	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $@.vol; } > $@.tmp
@@ -1273,7 +1273,7 @@ $(SELFBUILD_GRUB): tools/image/mkdisk_grub.sh $(OS_SIMPLE_EXT2) $(TEST_IMAGE) $(
 $(SELFBUILD_ROOTS): $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test) \
                     tools/image/mkext2.sh tools/image/mkdisk_grub.sh $(IMAGE_TOOLS) $(DISK_TOOLS) \
                     $(GRUB_FILES) | preflight krffs rach2 tests musl-programs utils ish \
-                    tools/etude/guest check-dropbearmulti
+                    tools/etude/guest check-dropbearmulti kbd
 	@mkdir -p $(@D)
 	sh tools/image/mkext2.sh krffs/manifests/test.manifest $@.ext2 16
 	echo "$(SELFBUILD_PLACEHOLDER)" > $@.kernel
