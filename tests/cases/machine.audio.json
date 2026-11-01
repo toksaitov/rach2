@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.audio",
-  "summary": "What the machine plays reaches its sound card as the notes it was asked for",
+  "summary": "What the machine plays reaches its sound card as the notes it was asked for, and the mixer's level outlasts a reboot",
   "cases": [
     {
       "case_id": "machine.audio.hda",
@@ -139,6 +139,55 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "QEMU", "reason": "the case reads the queue of QEMU's emulated controller; the Lenovo's figure is the proof's"}
+    },
+    {
+      "case_id": "machine.audio.kept",
+      "behavior": "init keeps the mixer's level across a reboot: mixer vol 5 then reboot reads vol 5:5 after the boot, and a boot whose /var/lib/mixer was removed reads the driver's level",
+      "units": ["audio"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"card": "hda", "level": "vol 5:5", "kept": "/var/lib/mixer"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "mixerkept_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["shutdown-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "set", "stage": "execute", "machine": "fixture", "does": "boot the copy, read mixer, run mixer vol 5 and reboot, and wait for the reset"},
+        {"step_id": "restored", "stage": "execute", "machine": "fixture", "does": "boot the same copy, read mixer and /var/lib/mixer, run mixer vol 7, remove /var/lib/mixer and reboot -f, past init, and wait for the reset"},
+        {"step_id": "default", "stage": "execute", "machine": "fixture", "does": "boot the same copy, read mixer and end the machine with QMP's quit"}
+      ],
+      "machines": [
+        {"machine_id": "fixture", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["shutdown-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": [], "boot_options": ["rach2.fsdisk"], "audio": "hda", "audio_backend": "none"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "default", "checks": "the first boot's mixer reads a level, and not vol 5:5", "source": "scenario"},
+        {"assertion_id": "set", "checks": "mixer vol 5 then mixer reads vol 5:5", "source": "scenario"},
+        {"assertion_id": "reset-saved", "checks": "reboot ends the machine by QEMU's reset", "source": "scenario"},
+        {"assertion_id": "restored", "checks": "after the reboot mixer reads vol 5:5", "source": "scenario"},
+        {"assertion_id": "file", "checks": "/var/lib/mixer has the line vol 5:5", "source": "scenario"},
+        {"assertion_id": "reset-unsaved", "checks": "reboot -f ends the machine by QEMU's reset", "source": "scenario"},
+        {"assertion_id": "default-again", "checks": "after a boot with /var/lib/mixer removed mixer reads the first boot's level, not vol 7:7", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 3}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 150000000, "ceiling_us": 600000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 67108864, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "shutdown-disk", "node": "images/shutdown-test.disk", "per_architecture": true},
+        {"name": "mixerkept_scenario", "node": "tests/cases/machine/mixerkept_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case reboots a QEMU machine on a disk copy and reads the level after each boot"}
     }
   ]
 }

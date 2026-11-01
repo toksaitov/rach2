@@ -11,13 +11,17 @@
 # because one phase checks a refusal: a `halt` run by an account other than
 # root must be refused by the kernel's check of signal permission.
 #
-# The cases of tests/cases/machine.shutdown.json boot copies of it. Host
-# paths are relative to the repository root, where mkdisk.sh runs.
+# The cases of tests/cases/machine.shutdown.json, and machine.audio.kept,
+# boot copies of it. Host paths are relative to the repository root, where
+# mkdisk.sh runs.
 
 dir 0755 /bin
 file 0755 /bin/busybox build/vendor/busybox/busybox
 file 0755 /bin/sh build/vendor/busybox/busybox
 file 04755:0:0 /bin/su build/utils/sbin/su
+# Sets and reads the volume for machine.audio.kept, which sees init keep
+# the level across a reboot.
+file 0755 /bin/mixer build/utils/mixer
 
 dir 0755 /sbin
 file 0755 /sbin/init build/utils/sbin/init-shell
