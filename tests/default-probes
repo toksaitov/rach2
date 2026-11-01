@@ -117,6 +117,7 @@ musl/cputimemusl
 musl/clockidmusl
 musl/schedmusl
 musl/waitidmusl
+musl/pidfdmusl
 musl/prctlmusl
 musl/stackmusl
 musl/sockflagmusl

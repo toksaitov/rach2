@@ -109,6 +109,12 @@ returns 0; each returns -1 with
 .Va errno
 set on failure.
 The kernel returns the negative error number.
+.Sh EXAMPLES
+The default suite's
+.Pa tests/musl/pidfdmusl.c
+opens, polls, signals and waits on pidfds, takes a pipe through
+.Fn pidfd_getfd ,
+and checks the refusals.
 .Sh ERRORS
 .Bl -tag -width "[EMFILE]"
 .It Bq Er EBADF
