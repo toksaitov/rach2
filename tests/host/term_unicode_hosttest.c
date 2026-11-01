@@ -127,7 +127,7 @@ static void check_vector(const struct vector *v, size_t split)
     term_screen_free(&s);
 }
 
-/** Compare text, widths, attributes and cursor after two ways of feeding input. */
+/** Compare text, widths, attributes and cursor after input fed two ways. */
 static void equal(const struct term_snapshot *a, const struct term_snapshot *b)
 {
     CHECK(a->cols == b->cols && a->rows == b->rows);

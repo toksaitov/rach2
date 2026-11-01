@@ -14,7 +14,8 @@
  * host-deps: vendor/libtsm/libtsm-4.8.0/src/tsm/tsm-vte.c
  * host-deps: vendor/libtsm/libtsm-4.8.0/src/shared/shl-htable.c
  * host-deps: vendor/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.c
- * host-cflags: -I vendor/libtsm/libtsm-4.8.0/src/tsm -I vendor/libtsm/libtsm-4.8.0/src/shared
+ * host-cflags: -I vendor/libtsm/libtsm-4.8.0/src/tsm
+ * host-cflags: -I vendor/libtsm/libtsm-4.8.0/src/shared
  * host-cflags: -I vendor/libtsm/libtsm-4.8.0/external -I rach2/include
  * host-cflags: -I vendor/libtsm/libtsm-4.8.0/external/wcwidth
  * host-cflags: -include vendor/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.h
@@ -254,7 +255,7 @@ static void escape(const unsigned char *bytes, int n, char *out, size_t size)
     out[len] = '\0';
 }
 
-/** The child of the key table's cases: modes `modes` printed, input read away. */
+/** The key table cases' child: modes `modes` printed, input read away. */
 static void table_script(char *buf, size_t size, unsigned modes)
 {
     fix_format(buf, size, "stty raw -echo; printf '%s%sready'; exec cat >/dev/null",

@@ -194,7 +194,7 @@ static struct tsm_screen_attr colors(struct rgb fg, struct rgb bg)
     return a;
 }
 
-/** Put `len` code points at column `x` and row `y`, `width` wide, changed now. */
+/** Put `len` code points at column `x`, row `y`, `width` wide, changed now. */
 static void put_cell(unsigned x, unsigned y, const uint32_t *ch, size_t len, unsigned width,
                      struct tsm_screen_attr attr)
 {
@@ -284,7 +284,7 @@ static uint32_t at(unsigned x, unsigned y)
     return v;
 }
 
-/** Overwrite the framebuffer file's pixels of cell `x`, `y` at scale 1 with 0x55. */
+/** Overwrite the file's pixels of cell `x`, `y` at scale 1 with 0x55. */
 static void scribble(unsigned x, unsigned y)
 {
     unsigned char junk[16 * 4];
@@ -560,7 +560,7 @@ static void test_combining(void)
     CHECK(cell_shows(3, 1, glyph_fffd, orange, blue), "a character the font lacks is U+FFFD");
 }
 
-/** The cursor's shapes, its moves, its visibility and the scrollback's shift. */
+/** The cursor's shapes, moves and visibility, and the scrollback's shift. */
 static void test_cursor(void)
 {
     unsigned char want[16];

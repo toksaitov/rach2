@@ -241,7 +241,10 @@ static void draw_cell(struct term_draw *d, const uint32_t *ch, size_t len, unsig
     damage(d, y, x0, x0 + w);
 }
 
-/** Draw the cell `c` that tsm_screen_draw() reported, with the cursor's shape `cursor`. */
+/**
+ * Draw the cell `c` that tsm_screen_draw() reported, with the cursor's shape
+ * `cursor`.
+ */
 static void draw_saved(struct term_draw *d, struct term_draw_cell *c, int cursor)
 {
     draw_cell(d, c->ch, c->len, c->width, c->x, c->y, &c->attr, cursor);

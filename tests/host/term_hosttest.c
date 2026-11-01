@@ -14,7 +14,8 @@
  * host-deps: vendor/libtsm/libtsm-4.8.0/src/tsm/tsm-vte.c
  * host-deps: vendor/libtsm/libtsm-4.8.0/src/shared/shl-htable.c
  * host-deps: vendor/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.c
- * host-cflags: -I vendor/libtsm/libtsm-4.8.0/src/tsm -I vendor/libtsm/libtsm-4.8.0/src/shared
+ * host-cflags: -I vendor/libtsm/libtsm-4.8.0/src/tsm
+ * host-cflags: -I vendor/libtsm/libtsm-4.8.0/src/shared
  * host-cflags: -I vendor/libtsm/libtsm-4.8.0/external -I rach2/include
  * host-cflags: -I vendor/libtsm/libtsm-4.8.0/external/wcwidth
  * host-cflags: -include vendor/libtsm/libtsm-4.8.0/external/wcwidth/wcwidth.h
@@ -247,7 +248,7 @@ static void test_round_trip(const char *conf)
     CHECK(finish(&r) == 7, "term -H exits with the child's status");
 }
 
-/** The end of standard input hangs the child up, and term returns its status. */
+/** The end of standard input hangs up the child; term returns its status. */
 static void test_hangup(const char *conf)
 {
     static const char script[] = "trap '' HUP; echo ready; read line; exit 5";

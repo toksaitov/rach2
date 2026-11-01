@@ -109,7 +109,7 @@ struct tk_kbdiacrsuc {
 
 /* ---- Where the keymap is read ---- */
 
-/** A table entry of the console, by KDGKBENT; KM_HOLE when it cannot be read. */
+/** A table entry of the console by KDGKBENT; KM_HOLE when it cannot be read. */
 static unsigned console_get(const struct term_keys *k, unsigned table, unsigned code)
 {
     struct tk_kbentry e;

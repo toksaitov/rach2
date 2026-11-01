@@ -170,7 +170,7 @@ static void start(void)
     led_last = 0;
 }
 
-/** Write `len` bytes of the application's output to the vte, in pieces of `piece`. */
+/** Write `len` bytes of the program's output to the vte, `piece` at a time. */
 static void put_split(const char *s, size_t len, size_t piece)
 {
     size_t i, n;
@@ -214,7 +214,7 @@ static uint32_t cell(unsigned int x, unsigned int y)
     return found;
 }
 
-/** The calls the first patch declared: mode 2026's hold and mode 1004's reports. */
+/** The first patch's calls: mode 2026's hold and mode 1004's reports. */
 static void test_calls(void)
 {
     start();
@@ -408,7 +408,7 @@ static void test_order(void)
     check(strcmp(osc_last, "999;?") == 0, "the OSC callback has the unknown OSC");
 }
 
-/** OSC 52 to the clipboard callback, whole, split, cancelled and without one. */
+/** OSC 52 to the clipboard callback: whole, split, cancelled and without it. */
 static void test_osc52(void)
 {
     static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -479,7 +479,7 @@ static const struct {
     {"C1 APC", "\302\237", "\302\234"},
 };
 
-/** Send `body` in the string kind `k`, then "Z", and check that only "Z" shows. */
+/** Send `body` in string kind `k`, then "Z", and check that only "Z" shows. */
 static void consumed(size_t k, const char *body, size_t len, size_t piece, const char *what)
 {
     char buf[128];

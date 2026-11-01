@@ -72,7 +72,7 @@ void *width_realloc(void *ptr, size_t size)
     return realloc(ptr, size);
 }
 
-/** Copy the draw callback's borrowed text and attributes into a bounded frame. */
+/** Copy the draw callback's borrowed text and attributes into a frame. */
 static int draw_cell(struct tsm_screen *screen, uint64_t id, const uint32_t *ch, size_t len,
                      unsigned int width, unsigned int x, unsigned int y,
                      const struct tsm_screen_attr *attr, tsm_age_t age, void *data)
@@ -118,7 +118,7 @@ static void cell_is(struct drawing *draw, unsigned int x, unsigned int y, unsign
         cell_is(d, x, y, w, expected, sizeof(expected) / sizeof(*expected)); \
     } while (0)
 
-/** Allocate a small screen with autowrap and no cursor inversion; caller owns it. */
+/** A small screen with autowrap and no cursor inversion; the caller owns it. */
 static struct tsm_screen *new_screen(unsigned int width, unsigned int height)
 {
     struct tsm_screen *screen = NULL;
@@ -292,7 +292,7 @@ static void vte_write(struct tsm_vte *vte, const char *text, size_t len, void *d
     (void)data;
 }
 
-/** Drive UTF-8 byte boundaries, SGR, early wrap and alternate-screen isolation. */
+/** UTF-8 across writes, SGR, early wrap and the alternate screen kept apart. */
 static void utf8_input(void)
 {
     const char input[] = "abcde\033[1m\344\270\255\033[0m\314\201!";
@@ -327,7 +327,7 @@ static void utf8_input(void)
     tsm_screen_unref(screen);
 }
 
-/** Fail each allocation during symbol creation, then retry on the same table. */
+/** Fail each allocation in a symbol's creation, then retry on one table. */
 static void allocation_failures(void)
 {
     struct tsm_screen_attr attr = {0};
@@ -360,7 +360,7 @@ static void allocation_failures(void)
     }
 }
 
-/** Check the public terminal behavior without creating files or child processes. */
+/** The terminal's public behaviour, with no files and no child processes. */
 int main(void)
 {
     wide_glyphs();

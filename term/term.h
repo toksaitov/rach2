@@ -233,7 +233,7 @@ bool term_screen_held(struct term_screen *s);
 /** End the child's hold of mode 2026. */
 void term_screen_release(struct term_screen *s);
 
-/** Tell the child, under mode 1004, that the screen gained or lost the focus. */
+/** Tell the child, under mode 1004, that the screen gained or lost focus. */
 void term_screen_focus(struct term_screen *s, bool focused);
 
 /**
@@ -274,7 +274,7 @@ void term_screen_paste(struct term_screen *s, const char *text);
 /** Whether the alternate screen is in use, which keeps no scrollback. */
 bool term_screen_alternate(struct term_screen *s);
 
-/** Show `lines` lines further back in the scrollback, or forward if negative. */
+/** Show `lines` lines further back in the scrollback, forward if negative. */
 void term_screen_scroll(struct term_screen *s, int lines);
 
 /** Show the screen itself, below its scrollback. */
@@ -638,7 +638,7 @@ int term_keys_set_string(struct term_keys *k, unsigned n, const char *text);
  */
 void term_keys_reset(struct term_keys *k);
 
-/** Give the keyboard its mode and the console its settings back, and close it. */
+/** Give back the keyboard's mode and the console's settings, and close it. */
 void term_keys_close(struct term_keys *k);
 
 /* ---- Host mode (host.c) ---- */

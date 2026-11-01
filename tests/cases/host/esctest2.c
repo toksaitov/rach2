@@ -196,7 +196,7 @@ static int reply(const char *text)
     return 0;
 }
 
-/** Transfer a snapshot command after the driver's CPR has drained its output. */
+/** Send a snapshot command once the driver's CPR has drained its output. */
 static int measurement(char *request)
 {
     char answer[4096], trailing;
@@ -282,7 +282,7 @@ static int serve(void)
     }
 }
 
-/** Require one result per selected case, END, and exact use of every exception. */
+/** Require a result for each case chosen, END, and each exception used once. */
 static int results(void)
 {
     char path[4096], text[4096];
