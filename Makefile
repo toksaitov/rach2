@@ -1315,10 +1315,11 @@ musl-programs: $(LIBC_STAMP)
 # status; `make test` runs the style checks, the host tests and the core
 # tier, which includes that suite. It is the RAM root of the suites that boot
 # it, and loopdevprobe copies a 4 MiB image onto it, so it keeps 5 MiB free:
-# 14 MiB, including sox_ng, with at least 5 MiB free after staging.
+# 15 MiB, including sox_ng, of which the tree takes 8.8 MiB on i686 and
+# 9.1 MiB on x86-64.
 $(TEST_IMAGE): $(DEMO_CREDS) krffs/manifests/test.manifest $(MANIFEST_DEPS_test) $(IMAGE_TOOLS) | preflight krffs rach2 tests musl-programs utils ish tools/etude/guest \
               check-dropbearmulti sox_ng kbd
-	$(MKIMAGE) krffs/manifests/test.manifest $@ 14 5120
+	$(MKIMAGE) krffs/manifests/test.manifest $@ 15 5120
 
 # The disk of etude's cases that boot a KRFFS root on disk, such as those of
 # tests/cases/guest.stress.json: 64 MiB with a KRFFS partition of 48, of which
