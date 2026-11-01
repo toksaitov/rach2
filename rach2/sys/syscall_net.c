@@ -410,11 +410,14 @@ static void sockaddr_in6_out(uint8_t *sa, const uint8_t *addr, int ifindex)
 }
 
 /** Read an Internet endpoint and normalize mapped addresses. A link-scoped
- * IPv6 address with no scope id takes the socket's bound interface, and a
- * group with neither IPV6_MULTICAST_IF's, as on Linux. Returns zero or a
- * negative errno; checks the socket's family and V6ONLY. */
-static int inet_endpoint_in(const struct socket *sock, uintptr_t ptr, int len, net_addr_t *addr,
-                            uint16_t *port)
+ * IPv6 address with no scope id takes the socket's bound interface, then
+ * `pktif`, a sendmsg's IPV6_PKTINFO interface or 0, and a group with none
+ * of them IPV6_MULTICAST_IF's, as on Linux. Returns zero or a negative
+ * errno: -EINVAL for a link-scoped address left with no interface, -ENODEV
+ * for one the socket may not name (`socket_iface6`); checks the socket's
+ * family and V6ONLY. */
+static int inet_endpoint_in(const struct socket *sock, uintptr_t ptr, int len, int pktif,
+                            net_addr_t *addr, uint16_t *port)
 {
     uint8_t sa[SOCKADDR_MIN], ip[16];
     int scope, rc;
@@ -439,11 +442,13 @@ static int inet_endpoint_in(const struct socket *sock, uintptr_t ptr, int len, n
     if (addr->family == AF_INET6 && ip6_link_scoped(addr->v6)) {
         if (!addr->scope)
             addr->scope = (uint32_t)sock->bound_device;
+        if (!addr->scope)
+            addr->scope = (uint32_t)pktif; /* IPV6_PKTINFO */
         if (!addr->scope && ip6_is_multicast(addr->v6))
             addr->scope = (uint32_t)sock->mif6; /* IPV6_MULTICAST_IF */
         if (!addr->scope)
             return -EINVAL;
-        if (!netdev_at((int)(addr->scope - 1u)))
+        if (!socket_iface6(sock, (int)addr->scope))
             return -ENODEV;
     }
     *port = SC_BE16(sa + 2);
@@ -877,7 +882,7 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
     {
         net_addr_t addr;
         uint16_t port;
-        int rc = inet_endpoint_in(entry->sock, sa_ptr, addrlen, &addr, &port);
+        int rc = inet_endpoint_in(entry->sock, sa_ptr, addrlen, 0, &addr, &port);
         if (rc)
             return rc;
         if (sock_is_query(entry->sock))
@@ -1010,7 +1015,7 @@ static int32_t udp_sendto(fd_entry_t *entry, const uint8_t *buf, int len, uintpt
         dst = entry->sock->remote_ip;
         port = entry->sock->remote_port;
     } else {
-        rc = inet_endpoint_in(entry->sock, sa_ptr, addrlen, &dst, &port);
+        rc = inet_endpoint_in(entry->sock, sa_ptr, addrlen, opt ? opt->ifindex : 0, &dst, &port);
         if (rc)
             return rc;
     }
@@ -1499,7 +1504,7 @@ static int32_t do_connect(int fd, uintptr_t sa_ptr, int addrlen)
         entry->sock->remote_port = 0;
         return 0;
     }
-    rc = inet_endpoint_in(entry->sock, sa_ptr, addrlen, &dst_ip, &dst_port);
+    rc = inet_endpoint_in(entry->sock, sa_ptr, addrlen, 0, &dst_ip, &dst_port);
     if (rc)
         return rc;
     if (!socket_ns_reaches(entry->sock, dst_ip, 1))
@@ -2004,13 +2009,6 @@ static int tcp_option_get(const struct socket *sock, int optname)
     return (int)sock->user_timeout;
 }
 
-/** The interface of index `ifindex`, or NULL for one that does not
- * exist, 0 and negative indexes among them. */
-static struct netdev *iface_of(int ifindex)
-{
-    return ifindex > 0 ? netdev_at(ifindex - 1) : 0;
-}
-
 /**
  * Join or leave, as `join` says, the group of the struct ipv6_mreq of
  * `optlen` bytes at `optval_ptr` for the AF_INET6 socket `sock`
@@ -2018,10 +2016,11 @@ static struct netdev *iface_of(int ifindex)
  * index 0 takes the one the group's route takes; a leave with index 0 takes
  * the first membership of the group on any interface. Returns 0, -EINVAL
  * for a value shorter than the structure or an address that is no group,
- * -EPROTO on a stream socket, -EFAULT, -ENODEV for an interface that does
- * not exist or no route, -EADDRINUSE for a group the socket has joined
- * there, -EADDRNOTAVAIL for a leave of one it has not, or -ENOBUFS past
- * SOCK_GROUPS6 memberships or the interface's groups.
+ * -EPROTO on a stream socket, -EFAULT, -ENODEV for an interface the socket
+ * may not name (`socket_iface6`) or no route, which a socket of a network
+ * namespace other than the first never has, -EADDRINUSE for a group the
+ * socket has joined there, -EADDRNOTAVAIL for a leave of one it has not,
+ * or -ENOBUFS past SOCK_GROUPS6 memberships or the interface's groups.
  */
 static int32_t group6_change(struct socket *sock, int join, uintptr_t optval_ptr, int optlen)
 {
@@ -2054,7 +2053,7 @@ static int32_t group6_change(struct socket *sock, int join, uintptr_t optval_ptr
         if (i == sock->ngroups6) {
             r = -EADDRNOTAVAIL;
         } else {
-            nd = iface_of(sock->groups6[i].ifindex);
+            nd = socket_iface6(sock, sock->groups6[i].ifindex);
             if (nd) {
                 netdev_leave6(nd, mreq);
             }
@@ -2065,7 +2064,11 @@ static int32_t group6_change(struct socket *sock, int join, uintptr_t optval_ptr
     } else if (sock->ngroups6 == SOCK_GROUPS6) {
         r = -ENOBUFS;
     } else {
-        nd = ifindex ? iface_of(ifindex) : ip6_route_find(mreq, 0, via);
+        if (ifindex) {
+            nd = socket_iface6(sock, ifindex);
+        } else {
+            nd = socket_outside(sock) ? 0 : ip6_route_find(mreq, 0, via);
+        }
         r = nd ? netdev_join6(nd, mreq) : -ENODEV;
         if (r == 0) {
             k_memcpy(sock->groups6[sock->ngroups6].group, mreq, 16);
@@ -2119,10 +2122,10 @@ static uint8_t ipv6_rx_bit(int optname)
  * AF_INET6 socket `sock`, with `val` the int at `optval_ptr` when `optlen`
  * holds one. The hop limits and the class take -1 to 255, -1 for the
  * default (64 or the routers', 1, and 0); the loop 0 or 1; the multicast
- * interface an index that exists, or 0, and when the socket is bound to an
- * interface, that one. Returns 0, -EINVAL for a value shorter than an int
- * or out of range, -ENODEV for an interface that does not exist, or the
- * errors of `group6_change`.
+ * interface an index the socket may name (`socket_iface6`), or 0, and when
+ * the socket is bound to an interface, that one. Returns 0, -EINVAL for a
+ * value shorter than an int or out of range, -ENODEV for an interface the
+ * socket may not name, or the errors of `group6_change`.
  */
 static int32_t ipv6_set(struct socket *sock, int optname, uintptr_t optval_ptr, int optlen, int val)
 {
@@ -2156,7 +2159,7 @@ static int32_t ipv6_set(struct socket *sock, int optname, uintptr_t optval_ptr, 
         sock->mloop6 = (uint8_t)val;
         return 0;
     case IPV6_MULTICAST_IF:
-        if (val != 0 && !iface_of(val)) {
+        if (val != 0 && !socket_iface6(sock, val)) {
             return -ENODEV;
         }
         if (val != 0 && sock->bound_device && val != sock->bound_device) {
@@ -2629,16 +2632,18 @@ static int32_t put_rx_control(const struct socket *sock, uintptr_t control, uint
 }
 
 /**
- * Read the control messages of a sendmsg on an AF_INET6 socket, the
+ * Read the control messages of a sendmsg on the AF_INET6 socket `sock`, the
  * `controllen` bytes at `control`, into `opt`: IPV6_PKTINFO, a source
  * address, :: for none, and an interface, 0 for none; IPV6_HOPLIMIT and
  * IPV6_TCLASS, each an int from -1 to 255, -1 for the socket's. Messages
  * of another level are passed over, as they were before any was read.
  * Returns 0, -EINVAL for a header whose length is short or runs past the
- * buffer, a message of SOL_IPV6 of another type or the wrong size, a value
- * out of range or an interface that does not exist, or -EFAULT.
+ * buffer, a message of SOL_IPV6 of another type or the wrong size or a
+ * value out of range, -ENODEV for an interface the socket may not name
+ * (`socket_iface6`), or -EFAULT.
  */
-static int32_t get_tx_control(uintptr_t control, uint32_t controllen, struct net_txopt *opt)
+static int32_t get_tx_control(const struct socket *sock, uintptr_t control, uint32_t controllen,
+                              struct net_txopt *opt)
 {
     uint32_t off = 0;
 
@@ -2672,7 +2677,7 @@ static int32_t get_tx_control(uintptr_t control, uint32_t controllen, struct net
             }
             if (hdr.cmsg_type == IPV6_PKTINFO) {
                 opt->ifindex = (int)SC_LE32(data + 16);
-                if (opt->ifindex != 0 && !iface_of(opt->ifindex)) {
+                if (opt->ifindex != 0 && !socket_iface6(sock, opt->ifindex)) {
                     return -ENODEV;
                 }
                 opt->src = net_addr6(data, 0);
@@ -2892,7 +2897,7 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
         if (hdr.msg_controllen > 0x7FFFFFFFu) {
             return -EINVAL;
         }
-        rc = get_tx_control(hdr.msg_control, (uint32_t)hdr.msg_controllen, &txopt);
+        rc = get_tx_control(entry->sock, hdr.msg_control, (uint32_t)hdr.msg_controllen, &txopt);
         if (rc != 0) {
             return rc;
         }

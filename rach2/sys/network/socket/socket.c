@@ -124,6 +124,11 @@ int socket_ns_reaches(const socket_t *s, net_addr_t a, int up)
     return lo && lo->ip && (lo->up || !up) && a.family == AF_INET && IP_IS_LOOPBACK(a.v4);
 }
 
+struct netdev *socket_iface6(const socket_t *s, int ifindex)
+{
+    return ifindex > 0 && !s->ns ? netdev_at(ifindex - 1) : NULL;
+}
+
 void net_ns_gone(struct netns *ns)
 {
     socket_t *s;
@@ -295,7 +300,7 @@ void socket_leave_groups6(struct socket *sock)
     int i;
 
     for (i = 0; i < sock->ngroups6; i++) {
-        struct netdev *nd = netdev_at(sock->groups6[i].ifindex - 1);
+        struct netdev *nd = socket_iface6(sock, sock->groups6[i].ifindex);
 
         if (nd) {
             netdev_leave6(nd, sock->groups6[i].group);

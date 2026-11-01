@@ -315,6 +315,15 @@ struct socket *socket_alloc(int type);
  * `socket_ns_reaches` allows (`do_bind` and the rest in syscall_net.c). */
 int socket_outside(const struct socket *s);
 
+struct netdev;
+
+/** The interface of index `ifindex` that the AF_INET6 socket `s` may name,
+ * or NULL for none: the machine's, in the first network namespace; none in
+ * another, whose one interface, its `lo`, carries no IPv6, so that a socket
+ * there neither joins a group nor sends by an interface of the machine's.
+ * 0 and negative indexes name nothing. */
+struct netdev *socket_iface6(const struct socket *s, int ifindex);
+
 /** Whether the socket `s` reaches the address `a`: any, for a socket of the
  * first network namespace; else 127/8 only, while its namespace's `lo` has
  * its address and, with `up`, is up, as a send needs and a bind does not. */
