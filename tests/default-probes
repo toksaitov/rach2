@@ -146,6 +146,9 @@ musl/seccompmusl
 # Namespaces: user, PID, mount, network, UTS and IPC, by unshare, setns and
 # clone.
 musl/nsmusl
+# A sandbox built as bubblewrap builds one: pivot_root, MNT_DETACH, proc
+# anywhere, the bounding set and capset of single capabilities.
+musl/sandboxmusl
 # FIFO files made by mkfifo and mknodat: their opens, waits and bytes.
 musl/fifomusl
 # statx, which both libcs call first for every stat, beside fstatat64.

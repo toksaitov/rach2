@@ -4122,7 +4122,7 @@ int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *
             struct vfs_mount *c = mounts[i];
 
             if (c && c->state == VFS_ACTIVE && !(c->ns_hidden & bit) && mount_within(c, rmnt) &&
-                !mount_within(c, nref.mnt)) {
+                !mount_within(c, nref.mnt) && !mount_within(nref.mnt, c)) {
                 c->ns_hidden |= bit;
             }
         }
