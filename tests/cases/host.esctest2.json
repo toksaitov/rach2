@@ -20,6 +20,7 @@
       },
       "requirements": {
         "host_api": "c",
+        "hosts": ["linux", "macos"],
         "tools": [],
         "features": {}
       },

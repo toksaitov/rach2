@@ -119,6 +119,7 @@ int main(int argc, char **argv)
         return fail("CLOCK_MONOTONIC is not time since boot");
     }
 
+    /* interval: a two-second sleep must advance the real-time clock */
     sleep(2);
     second = time(NULL);
     slept = (long)second - (long)first;

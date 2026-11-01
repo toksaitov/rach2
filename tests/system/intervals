@@ -73,3 +73,5 @@ tests/musl/pollmusl.c: the parent's state is looked at again every millisecond
 tests/host/pwauth_hosttest.c: the pipe is drained and the reader checked every 50 ms
 tools/etude/host_prepare_io.c: observe preparation stop requests every 100 ms
 tests/host/etude_repeat_hosttest.c: the ledger is read again every 100 ms
+tests/musl/clockmusl.c: a two-second sleep must advance the real-time clock
+tests/lagprobe.c: pause between syncs and before a competing mount

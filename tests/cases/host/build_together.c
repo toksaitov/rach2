@@ -139,6 +139,7 @@ static int together_tree(struct fixture *f)
                            "rach2/sources.mk",
                            "ish/Makefile",
                            "ish/sources.mk",
+                           "term/sources.mk",
                            "utils/Makefile",
                            "utils/programs.mk",
                            "ports/doom/Makefile",

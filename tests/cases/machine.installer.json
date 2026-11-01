@@ -50,7 +50,7 @@
         {"witness_id": "update", "kind": "quiet", "means": "`rach2-install --update` has written the root from the stick", "limit": 3, "bound": {"floor_us": 1000000, "initial_us": 1800000000, "ceiling_us": 7200000000}}
       ],
       "bounds": {"case": {"floor_us": 5000000, "initial_us": 7200000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 600000000, "ceiling_us": 1800000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}}},
-      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1476395008, "disk_bytes": 6442450944, "locks": [], "ports": 0, "loop_devices": 0},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 2013265920, "disk_bytes": 6442450944, "locks": [], "ports": 0, "loop_devices": 0},
       "prepare": [
         {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
         {"name": "stick", "node": "images/cases/install-stick.img", "per_architecture": true},

@@ -124,7 +124,7 @@ last=${listed##* }
 C="$WORK/clean"
 for f in Makefile tests/registry tests/Makefile tests/system/suites.mk krffs/Makefile \
     krffs/manifest_deps.sh krffs/programs.sh rach2/Makefile rach2/sources.mk ish/Makefile \
-    ish/sources.mk utils/Makefile utils/programs.mk ports/doom/Makefile tools/etude/sources.mk \
+    ish/sources.mk term/sources.mk utils/Makefile utils/programs.mk ports/doom/Makefile tools/etude/sources.mk \
     tests/cases/host/scripts.mk tests/cases/host/family.mk tests/system/fakeapi/native.mk \
     tests/native/native.mk tests/native/sources.mk \
     $(find rach2/sys -name sources.mk); do
