@@ -463,6 +463,17 @@ Another caller fails with
 .Er EPERM ,
 and a bad pointer with
 .Er EFAULT .
+.Ss Speaker
+.Dv KIOCSOUND
+sounds the PC speaker until the next request and
+.Dv KDMKTONE
+sounds a tone of a given length, which the kernel ends, each with a
+divisor of the interval timer's 1193182 Hz, in Linux's encodings; see
+.Xr ioctl 2 .
+The console's own BEL does not sound the speaker;
+.Xr term 1
+sounds its bell with
+.Dv KDMKTONE .
 .Sh FILES
 .Bl -tag -width /dev/console
 .It Pa /dev/console
@@ -490,8 +501,10 @@ may refuse them.
 .Xr kbd_mode 1 ,
 .Xr loadkeys 1 ,
 .Xr login 1 ,
+.Xr term 1 ,
 .Xr getpid 2 ,
 .Xr ioctl 2 ,
 .Xr open 2 ,
 .Xr backlight 4 ,
-.Xr bootlog 4
+.Xr bootlog 4 ,
+.Xr proc 5

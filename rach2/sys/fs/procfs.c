@@ -33,6 +33,7 @@
 #include "../usb/core.h"
 #include "../pci.h"
 #include "../audio/audio_proc.h"
+#include "../speaker.h"
 #include "../usb/usb.h"
 #include "../block/usbdisk.h"
 #include "../tty/pty.h"
@@ -3305,13 +3306,16 @@ static void ap_counter(struct procfs_text *t, const char *name, uint32_t v)
 /**
  * Render /proc/console: the serial receive path's counters, from the UART
  * to the readers, so where a typed byte was lost can be read off the
- * machine rather than guessed.
+ * machine rather than guessed; then the speaker's (`speaker_get_counters`),
+ * so that a tone can be counted where it cannot be heard.
  */
 static int procfs_gen_console(struct procfs_text *t)
 {
     struct console_counters c;
+    struct speaker_counters sp;
 
     tty_console_counters(&c);
+    speaker_get_counters(&sp);
     ap_counter(t, "uart-bytes", c.uart_bytes);
     ap_counter(t, "uart-overruns", c.uart_overruns);
     ap_counter(t, "irq-drains", c.irq_drains);
@@ -3328,6 +3332,12 @@ static int procfs_gen_console(struct procfs_text *t)
     ap_counter(t, "read-bytes", c.ldisc.read_bytes);
     ap_counter(t, "queue-max", c.ldisc.queue_max);
     ap_counter(t, "line-max", c.ldisc.line_max);
+    ap_counter(t, "speaker-tones", sp.tones);
+    ap_counter(t, "speaker-sounds", sp.sounds);
+    ap_counter(t, "speaker-ends", sp.ends);
+    ap_counter(t, "speaker-cuts", sp.cuts);
+    ap_counter(t, "speaker-divisor", sp.divisor);
+    ap_counter(t, "speaker-ms", sp.ms);
     return t->len;
 }
 

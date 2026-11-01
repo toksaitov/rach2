@@ -55,6 +55,7 @@
 #include "sys/audio/audio.h"
 #include "sys/audio/audio_debug.h"
 #include "sys/audio/hda.h"
+#include "sys/speaker.h"
 #include "sys/udelay.h"
 #include "sys/network/net.h"
 #include "sys/network/netconf.h"
@@ -246,7 +247,7 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
  * delivery, the USB controller's event ring, the
  * keyboards' repeat, after the USB reports that may press or release a key,
  * the block layer's lagged requests and deadlines, the platform's devices,
- * and the console's serial port.
+ * the end of a speaker's tone, and the console's serial port.
  *
  * The tick is accounted as idle or busy first, before anything below can
  * wake a process: the accounting records what the processor was doing when
@@ -309,6 +310,7 @@ static void timer_handler(isr_params_t *params)
     block_lag_tick();
     block_request_tick();
     platform_tick();
+    speaker_tick();
     tty_console_poll();
 
     sched_preempt();

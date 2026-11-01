@@ -27,7 +27,8 @@ float libsamplerate_scale = 0.65f;
 extern int ioctl(int fd, unsigned long request, ...);
 
 /* The console's sound requests (rach2/sys/syscall.c). */
-#define KIOCSOUND       0x4B2F  /* PC speaker frequency (0 = off) */
+#define KIOCSOUND       0x4B2F  /* PC speaker: the PIT's divisor, 0 = off */
+#define PIT_CLOCK       1193182 /* the PIT's input clock in Hz */
 #define AUDIO_GET_INFO  0x4101  /* Get audio driver info */
 #define AUDIO_START     0x4102  /* Start audio playback */
 #define AUDIO_STOP      0x4103  /* Stop audio playback */
@@ -163,11 +164,12 @@ static struct {
     boolean active;
 } dp_state;
 
-/** Sound `freq` Hz on the PC speaker; 0 silences it. */
+/** Sound `freq` Hz on the PC speaker; 0 silences it. KIOCSOUND takes the
+ * PIT's divisor, as Linux's does. */
 static void play_tone(uint32_t freq)
 {
     current_freq = freq;
-    ioctl(audio_fd, KIOCSOUND, freq);
+    ioctl(audio_fd, KIOCSOUND, freq ? PIT_CLOCK / freq : 0);
 }
 
 /** Silence the PC speaker, unless it is silent already. */
