@@ -25,25 +25,28 @@ The owner's four messages and the decisions are in `dev-log/69-wifi/plan.md`, wh
 
 Fourteen tasks. The branch is cut from 69's at its start and takes 69's branch again by merge: task 1's worker merges `origin/milestone/69-wifi` into its task branch first, once 69's task 1 has merged, and the manager merges 69 into this branch again before tasks 9 and 10 start. Task 1 writes the driver's headers and the chip model; tasks 2 to 7 then run at once in separate files. Task 8 runs now. Tasks 9 and 10 try the merged parts on the Lenovo over SSH on trial boots, silently, as the `machine` skill says; task 12 does 67's and 68's silent steps on a trial boot of their joined head; task 14 boots the 32-bit build on the Lenovo by day; task 13 is the sitting. The four milestones 67 to 70 are released together at the end, as `dev-log/69-wifi/plan.md` says; the release does not wait for the sitting.
 
-All of the driver is under `rach2/sys/network/driver/ar9565/`, which no task of 69 touches; each task here owns its files in it.
+All of the driver is under `rach2/sys/network/driver/ath9k/`, which no task of 69 touches; each task here owns its files in it.
 
 ## Tasks
 
 ### 1. The driver's headers and the chip model
 
-Owns `driver/ar9565/reg.h`, `ar9565.h`, `io.h`, `driver/ar9565/Readme.md` and `tests/host/ar9565_model.c` and `.h`. Waits on 69's task 1.
+Owns `driver/ath9k/reg.h`, `ath9k.h`, `io.h`, `driver/ath9k/Readme.md` and `tests/host/ath9k_model.c` and `.h`. Waits on 69's task 1.
 
 * 1a. Merge `origin/milestone/69-wifi` into the task branch, so that 69's `radio.h` and `wireless.h` are here.
 * 1b. `reg.h`: the AR9003 MAC, PCU, baseband and radio registers the AR9565 path uses, from ath9k's `reg.h`, `ar9003_phy.h` and `ar9003_mac.h` (ISC, kept with its permission text).
 * 1c. `io.h`: register reads and writes and the read-modify-write forms behind an indirection a host test replaces with the model, as `rtl8168.c` does.
-* 1d. `ar9565.h`: the driver's state, the calls between its parts, the EEPROM's fields.
-* 1e. The chip model: a register file with hooks a part's test sets (reset, the EEPROM's words, the rings' DMA), and its interface in `ar9565_model.h`.
+* 1d. `ath9k.h`: the driver's state, the calls between its parts, the EEPROM's fields.
+* 1e. The chip model: a register file with hooks a part's test sets (reset, the EEPROM's words, the rings' DMA), and its interface in `ath9k_model.h`.
 * 1f. The Readme's summary, Sources and license, Design with a heading for each part.
 * Done: the headers compile under `-ansi` with both cross compilers; the model builds as a host object.
+* 1g. The AR9003 family in `driver/ath9k/`, with a table of chips; the AR9565 is its one row.
+
+The owner, 2026-11-02: "Ensure, the driver abstractions are in place to add drivers easily for more chipsets and to be able to reuse common structures." The driver is for the AR9003 family, as ath9k's ar9003 code is, in `driver/ath9k/`: probe matches a table of PCI IDs, each row holding that chip's init tables, revision checks and quirks, with the AR9565 the only row now; family code carries no AR9565 names (1g). Kept thin: names, the table and one ops struct.
 
 ### 2. Bring-up
 
-Owns `ar9565/pci.c`, `hw.c`, `eeprom.c`, `initvals.h` and `tests/host/ar9565_hw_hosttest.c`. Waits on 1.
+Owns `ath9k/pci.c`, `hw.c`, `eeprom.c`, `initvals.h` and `tests/host/ath9k_hw_hosttest.c`. Waits on 1.
 
 * 2a. Probe: 168c:0036 and the subsystem flags of ath9k's `pci.c` for the Lenovo IDs 17aa:3026 and 17aa:4026, the memory window, bus mastering, 32-bit DMA; registration as a radio of `radio.h`.
 * 2b. Power-on, the RTC reset and force-wake, the chip revision (1.0 or 1.1), and a refusal that names the register when the card reads 0xffffffff.
@@ -55,7 +58,7 @@ Owns `ar9565/pci.c`, `hw.c`, `eeprom.c`, `initvals.h` and `tests/host/ar9565_hw_
 
 ### 3. Radio and calibration
 
-Owns `ar9565/phy.c`, `calib.c`, `ani.c` and `tests/host/ar9565_phy_hosttest.c`. Waits on 1.
+Owns `ath9k/phy.c`, `calib.c`, `ani.c` and `tests/host/ath9k_phy_hosttest.c`. Waits on 1.
 
 * 3a. The synthesizer and channel for HT20 on channels 1 to 13; the mode and band tables at every channel change.
 * 3b. Transmit power from the EEPROM, capped by the regulatory domain.
@@ -67,7 +70,7 @@ Owns `ar9565/phy.c`, `calib.c`, `ani.c` and `tests/host/ar9565_phy_hosttest.c`. 
 
 ### 4. DMA, interrupts and recovery
 
-Owns `ar9565/recv.c`, `xmit.c`, `mac.c`, `key.c`, `intr.c`, `recover.c` and `tests/host/ar9565_mac_hosttest.c`. Waits on 1.
+Owns `ath9k/recv.c`, `xmit.c`, `mac.c`, `key.c`, `intr.c`, `recover.c` and `tests/host/ath9k_mac_hosttest.c`. Waits on 1.
 
 * 4a. The EDMA receive FIFOs (high and low priority) and the receive status at each buffer's head.
 * 4b. Transmit queues per access category, descriptors with four rate and retry series, and the transmit status ring feeding rate control.
@@ -80,7 +83,7 @@ Owns `ar9565/recv.c`, `xmit.c`, `mac.c`, `key.c`, `intr.c`, `recover.c` and `tes
 
 ### 5. Antenna, power and the bus
 
-Owns `ar9565/antenna.c`, `power.c` and `tests/host/ar9565_ant_hosttest.c`. Waits on 1.
+Owns `ath9k/antenna.c`, `power.c` and `tests/host/ath9k_ant_hosttest.c`. Waits on 1.
 
 * 5a. The AR9565's LNA combining and antenna diversity, from the subsystem flags.
 * 5b. The antenna switch set for WLAN with Bluetooth unused; coexistence off.
@@ -138,7 +141,7 @@ Labels: `owner-only`. Owns the traffic section of `lenovo.md`. Waits on 5, 6, 9,
 
 ### 11. Transmit aggregation
 
-Owns `ar9565/ampdu.c` and `tests/host/ar9565_ampdu_hosttest.c`. Waits on 9.
+Owns `ath9k/ampdu.c` and `tests/host/ath9k_ampdu_hosttest.c`. Waits on 9.
 
 * 11a. Transmit A-MPDU with ADDBA and BlockAck status, off by a boot option.
 * 11b. The host test on the model.
