@@ -12,6 +12,7 @@
 #include "../serial.h"
 #include "../irq.h"
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
 
 #define SB16_BASE      0x220
 #define SB16_IRQ       5
@@ -565,6 +566,28 @@ static void sb16_stop(void)
 
     underrun_count = 0;
     underrun_samples = 0;
+}
+
+uint32_t sb16_delay_frames(void)
+{
+    uint32_t frame = (is_16bit ? 2u : 1u) * (current_channels == 2 ? 2u : 1u);
+    uint32_t unit = is_16bit ? 2u : 1u;
+    uint32_t total = period_bytes * 2u / unit;
+    uint32_t flags, ahead = 0;
+    int left;
+
+    flags = kirq_save();
+    if (playing) {
+        left = dma_remaining(is_16bit ? SB16_DMA_16BIT : SB16_DMA_8BIT);
+        if (left >= 1 && (uint32_t)left <= total) {
+            ahead = (uint32_t)left * unit;
+            if (ahead <= period_bytes)
+                ahead += period_bytes;
+        }
+        ahead += user_callback ? 0 : ring_available();
+    }
+    kirq_restore(flags);
+    return ahead / frame;
 }
 
 /** Whether playback is running. */
