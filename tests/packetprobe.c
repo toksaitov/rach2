@@ -246,7 +246,7 @@ static const struct {
     int own;
 } path_rows[] = {
     {"stream-refused", 0},
-    {"ipv6-refused", 0},
+    {"ipv6-open", 0},
     {"open", 0},
     {"auxdata-refused", 0},
     {"bind-missing", 0},
@@ -281,6 +281,7 @@ static const struct {
     {"ipv4-only", 0},
     {"both-answered", 0},
     {"arp-cache", 0},
+    {"ipv6-frame", 1},
     {"reopen", 0},
     {"table-read", 0},
     {"bind-listed", 0},
@@ -694,14 +695,157 @@ static void native_rows(int fd)
 }
 
 /**
+ * An IPv6 packet socket bound to the interface sees a frame of EtherType
+ * 0x86DD. It sends, from the interface's link-local address, a neighbour
+ * solicitation for fe80::2, the address of QEMU's user network, to that
+ * address's solicited-node group, ff02::1:ff00:2, at 33:33:ff:00:00:02,
+ * with a hop limit of 255 and its station address as an option (RFC 4861,
+ * 4.3), and waits for the advertisement that answers it. The kernel has no
+ * neighbour discovery to send one of its own, so the frame read can only be
+ * the answer to this one.
+ */
+static void ipv6_frame(void)
+{
+    static const uint8_t target[16] = {0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2};
+    unsigned long args[6];
+    struct sockaddr_ll_probe sll;
+    struct pollfd_probe pfd;
+    unsigned char ifr[40];
+    uint8_t mac[6];
+    unsigned long sum;
+    unsigned int i;
+    int fd, n;
+    /* volatile: the kernel writes it through a pointer. */
+    volatile unsigned int fromlen;
+
+    args[0] = AF_PACKET;
+    args[1] = SOCK_DGRAM;
+    args[2] = ETH_P_IPV6_BE;
+    fd = socketcall(SC_SOCKET, args);
+    if (fd < 0) {
+        fail_n("ipv6-frame", "the IPv6 socket did not open", fd);
+    }
+    ifreq_for(ifr);
+    if (sys_ioctl(fd, SIOCGIFHWADDR, ifr) != 0) {
+        fail("ipv6-frame", "the interface would not report its hardware address");
+    }
+    for (i = 0; i < 6; i++) {
+        mac[i] = ifr[18 + i];
+    }
+    sll = zero_sll;
+    sll.sll_family = AF_PACKET;
+    sll.sll_protocol = ETH_P_IPV6_BE;
+    sll.sll_ifindex = if_index;
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)&sll;
+    args[2] = sizeof(sll);
+    if (socketcall(SC_BIND, args) != 0) {
+        fail("ipv6-frame", "a bind naming IPv6 was refused");
+    }
+
+    /* The IPv6 header: version 6, a payload of 32 bytes, ICMPv6, hop
+     * limit 255, from fe80:: and the modified EUI-64 of the station
+     * address, to the solicited-node group. */
+    for (i = 0; i < 72; i++) {
+        frame[i] = 0;
+    }
+    frame[0] = 0x60;
+    frame[5] = 32;
+    frame[6] = 58;
+    frame[7] = 255;
+    frame[8] = 0xfe;
+    frame[9] = 0x80;
+    frame[16] = (uint8_t)(mac[0] ^ 0x02);
+    frame[17] = mac[1];
+    frame[18] = mac[2];
+    frame[19] = 0xff;
+    frame[20] = 0xfe;
+    frame[21] = mac[3];
+    frame[22] = mac[4];
+    frame[23] = mac[5];
+    frame[24] = 0xff;
+    frame[25] = 2;
+    frame[35] = 1;
+    frame[36] = 0xff;
+    frame[39] = 2;
+    /* The solicitation: type 135, the target, and the option of type 1 and
+     * a length of one 8-byte unit holding the station address. */
+    frame[40] = 135;
+    for (i = 0; i < 16; i++) {
+        frame[48 + i] = target[i];
+    }
+    frame[64] = 1;
+    frame[65] = 1;
+    for (i = 0; i < 6; i++) {
+        frame[66 + i] = mac[i];
+    }
+    /* The checksum over the pseudo-header, the two addresses, the length
+     * and the next header, and the message. */
+    sum = 32 + 58;
+    for (i = 8; i < 40; i += 2) {
+        sum += ((unsigned long)frame[i] << 8) | frame[i + 1];
+    }
+    for (i = 40; i < 72; i += 2) {
+        sum += ((unsigned long)frame[i] << 8) | frame[i + 1];
+    }
+    while (sum >> 16) {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    sum = ~sum & 0xffff;
+    frame[42] = (uint8_t)(sum >> 8);
+    frame[43] = (uint8_t)sum;
+
+    sll.sll_hatype = 1;
+    sll.sll_halen = 6;
+    sll.sll_addr[0] = 0x33;
+    sll.sll_addr[1] = 0x33;
+    sll.sll_addr[2] = 0xff;
+    sll.sll_addr[3] = 0;
+    sll.sll_addr[4] = 0;
+    sll.sll_addr[5] = 2;
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)frame;
+    args[2] = 72;
+    args[3] = 0;
+    args[4] = (unsigned long)&sll;
+    args[5] = sizeof(sll);
+    n = socketcall(SC_SENDTO, args);
+    if (n != 72) {
+        fail_n("ipv6-frame", "the neighbour solicitation did not send", n);
+    }
+
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    n = sys_poll_wait(&pfd, 1);
+    if (n <= 0 || !(pfd.revents & POLLIN)) {
+        fail_n("ipv6-frame", "a poll for an IPv6 frame ended with nothing to read", n);
+    }
+    sll = zero_sll;
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)frame;
+    args[2] = sizeof(frame);
+    args[3] = 0x40; /* MSG_DONTWAIT */
+    args[4] = (unsigned long)&sll;
+    fromlen = sizeof(sll);
+    args[5] = (unsigned long)&fromlen;
+    if (socketcall(SC_RECVFROM, args) < 40) {
+        fail("ipv6-frame", "a frame on the IPv6 socket was shorter than an IPv6 header");
+    }
+    if ((frame[0] >> 4) != 6 || sll.sll_protocol != ETH_P_IPV6_BE) {
+        fail("ipv6-frame", "the IPv6 socket was given a frame that is not IPv6");
+    }
+    sys_close(fd);
+}
+
+/**
  * The probe, in the order below; it fails at the first wrong answer.
  *
- * What it refuses: a stream packet socket; a socket for IPv6, a protocol
- * this stack has no frames for (-EINVAL); and PACKET_AUXDATA, the option a
+ * What it refuses: a stream packet socket, and PACKET_AUXDATA, the option a
  * client sets to be told about checksum offload, since the socket attaches
- * no control data. What it accepts at creation: no protocol at all, which
- * is what `arping` opens and then names in its bind. A bind to an interface
- * that does not exist is -ENODEV.
+ * no control data. What it accepts at creation: a socket for IPv6, and no
+ * protocol at all, which is what `arping` opens and then names in its bind.
+ * A bind to an interface that does not exist is -ENODEV.
  *
  * What it sends: a DHCP discover, an IP packet the caller built whole,
  * broadcast from a machine that has no address yet. That is the case this
@@ -748,7 +892,11 @@ static void native_rows(int fd)
  * `arp_rx` would pass a socket-only test and leave the machine unable to
  * resolve anything, so the gateway must be in /proc/net/arp.
  *
- * Every frame the probe waits for, an offer, an ARP reply or an echo reply,
+ * On QEMU's network an IPv6 socket then sees a frame of EtherType 0x86DD,
+ * as `ipv6_frame` says.
+ *
+ * Every frame the probe waits for, an offer, an ARP reply, an echo reply or
+ * a neighbour advertisement,
  * it waits for in poll with no timeout, and judges what came; the suite's
  * limit ends a run in which one never comes.
  *
@@ -778,7 +926,7 @@ void probe_main(unsigned long *sp)
     report_begin(report_case((char **)(sp + 2 + sp[0]), "guest.packet.packetprobe"));
     plan(!probe_native());
 
-    /* What it refuses: a stream socket, IPv6, and PACKET_AUXDATA. */
+    /* What it refuses: a stream socket, and PACKET_AUXDATA; it takes IPv6. */
     args[0] = AF_PACKET;
     args[1] = SOCK_STREAM;
     args[2] = ETH_P_IP_BE;
@@ -787,10 +935,11 @@ void probe_main(unsigned long *sp)
     }
     args[1] = SOCK_DGRAM;
     args[2] = ETH_P_IPV6_BE;
-    if (socketcall(SC_SOCKET, args) != -EINVAL) {
-        fail("ipv6-refused", "a packet socket for a protocol this stack has no frames for "
-                             "was not refused");
+    r = socketcall(SC_SOCKET, args);
+    if (r < 0) {
+        fail_n("ipv6-open", "a packet socket for IPv6 did not open", r);
     }
+    sys_close(r);
     /* What it accepts at creation: no protocol, as `arping` opens it. */
     args[2] = 0;
     r = socketcall(SC_SOCKET, args);
@@ -1336,6 +1485,10 @@ two_protocols:
 
         sys_close(arp_fd);
         sys_close(ip_fd);
+    }
+
+    if (!probe_native()) {
+        ipv6_frame();
     }
 
     check_close_releases();
