@@ -157,9 +157,10 @@ knownConditionTrueFalse:*tests/musl/statmusl.c
 # between the checks of a chain joined by `||`.
 knownConditionTrueFalse:*tests/musl/ptracemusl.c
 
-# Linux's struct stat64 and struct rusage, laid out member for member for a
-# call the probe makes by number.
+# Linux's struct stat64, struct rusage and struct clone_args, laid out member
+# for member for a call the probe makes by number.
 unusedStructMember:*tests/musl/fdcallmusl.c
+unusedStructMember:*tests/musl/pidfdmusl.c
 unusedStructMember:*tests/musl/waitidmusl.c
 
 # The probes reach the kernel through inline assembly, which cppcheck does not

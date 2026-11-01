@@ -14,8 +14,8 @@
  * killed, the wait reports it and reaps it alone. The raw call's fifth
  * argument receives the CPU time and the peak memory of a child that spun,
  * and zero in the counters the kernel does not keep. No event, an unknown
- * option or idtype and a pid of 0 fail with EINVAL, any pidfd with EBADF,
- * and a wait with no child at all with ECHILD.
+ * option or idtype and a pid of 0 fail with EINVAL, a descriptor that is not
+ * a pidfd with EBADF, and a wait with no child at all with ECHILD.
  *
  * It prints "WAITIDMUSL OK" and exits 0 on success, or prints "WAITIDMUSL
  * FAIL (detail)" and exits 1 at the first failure. etude's report
@@ -354,7 +354,7 @@ static int selections(void)
     }
     report_held();
     if (waitid(P_PIDFD, 3, &si, WEXITED) != -1 || errno != EBADF) {
-        return fail("a pidfd was not refused with EBADF");
+        return fail("a descriptor that is not a pidfd was not refused with EBADF");
     }
     report_held();
     if (waitid(P_ALL, 0, &si, WEXITED) != -1 || errno != ECHILD) {

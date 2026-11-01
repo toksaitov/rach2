@@ -243,6 +243,7 @@ A write of `freeze` or `mem` to `/sys/power/state` (`rach2/sys/fs/procfs.c`) cal
 * `tests/auxvprobe.c`, `tests/musl/execargmusl.c` and `tests/musl/stackmusl.c`: the initial stack, the limits on the strings `execve` copies, and `RLIMIT_STACK`.
 * `tests/musl/fdexecmusl.c`: `execve` of `/proc/self/fd/N`, the checks it makes of the descriptor's file, and the name the new image has.
 * `tests/musl/waitidmusl.c`, `tests/musl/cputimemusl.c` and `tests/jobprobe.c`: `waitid`'s siginfo, CPU time, and sessions and process groups.
+* `tests/musl/pidfdmusl.c`: clone3's `CLONE_CLEAR_SIGHAND` and `CLONE_PIDFD`, pidfds through `poll`, `waitid`, `pidfd_send_signal` and `pidfd_getfd`, the page fault counts of `getrusage` and `wait4`, and `MAP_POPULATE`.
 * `tests/credprobe.c`, `tests/suidprobe.c`, `tests/musl/suidmusl.c`, `tests/musl/capmusl.c` and `tests/musl/sandboxmusl.c`: the credential rules, a set-id exec, capabilities and the bounding set.
 * `tests/musl/threadscaling.c`: with 16, 64 and 256 blocked threads and two runnable threads, ready entries examined stay within eight per selection plus 64, by the kernel counters.
 * `tests/limitprobe.c`: `RLIMIT_NPROC`, `RLIMIT_NOFILE` and `RLIMIT_AS`.
