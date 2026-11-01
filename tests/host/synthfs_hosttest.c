@@ -43,6 +43,20 @@ int sysfs_net_pci_key(int index)
     return index == 2 ? 0x18 : -1;
 }
 
+/** The classifier fixture has no radio on its wired interface. */
+int sysfs_net_wiphy(int index)
+{
+    (void)index;
+    return -1;
+}
+
+/** No radio driver is registered in this fixture. */
+const char *sysfs_wlan_driver(int index)
+{
+    (void)index;
+    return 0;
+}
+
 /** No disk node has a name, since the model has no disks: /sys/block and
  *  /sys/dev/block are empty. Returns -1. */
 int sysfs_block_find(const char *name, int len, int disk)

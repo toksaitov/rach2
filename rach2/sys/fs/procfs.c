@@ -61,6 +61,7 @@
 #include "../syscall.h"
 #include "../network/ethernet/ethernet.h"
 #include "../network/driver/netdev.h"
+#include "../network/wireless/wiphy.h"
 #include "../network/arp/arp.h"
 #include "../network/tcp/tcp.h"
 #include "../network/netconf.h"
@@ -4371,12 +4372,47 @@ static int procfs_gen_netipv6route(struct procfs_text *t)
     return t->len;
 }
 
+/** Render Linux's wireless statistics, with signed dBm signal and noise. */
+static int procfs_gen_wireless(struct procfs_text *t)
+{
+    unsigned i;
+    struct wlan *wlan;
+
+    ap_str(t, "Inter-| sta-|   Quality        |   Discarded packets               | Missed | WE\n"
+              " face | tus | link level noise |  nwid  crypt   frag  retry   misc | beacon | 22\n");
+    for (i = 0; net_ns_seen() && (wlan = wlan_at(i)) != 0; ++i) {
+        struct wlan_counters c;
+        wlan_get_counters(wlan, &c);
+        ap_str(t, wlan->netdev.name);
+        ap_str(t, ": 0000 ");
+        ap_u32(t, c.quality);
+        ap_str(t, ". ");
+        ap_int(t, c.signal / 100);
+        ap_str(t, ". ");
+        ap_int(t, c.noise / 100);
+        ap_str(t, ". 0 ");
+        ap_u32(t, c.rx_decrypt_errors);
+        ap_ch(t, ' ');
+        ap_u32(t, c.rx_fragments);
+        ap_ch(t, ' ');
+        ap_u32(t, c.tx_retries);
+        ap_ch(t, ' ');
+        ap_u32(t, c.rx_dropped);
+        ap_ch(t, ' ');
+        ap_u32(t, c.missed_beacons);
+        ap_ch(t, '\n');
+    }
+    return t->nomem ? -1 : t->len;
+}
+
 /** Render the /proc/net file of origin `origin`, one with a name from
  * `synth_net_name`: those `synth_net_file` gives and the two files of
  * /proc/net/stat. */
 static int procfs_gen_net(struct procfs_text *t, int origin)
 {
     switch (origin) {
+    case SYNTH_PROC_NETWIRELESS:
+        return procfs_gen_wireless(t);
     case SYNTH_PROC_NETPACKET:
         return procfs_gen_netpacket(t);
     case SYNTH_PROC_NETSNMP6:
@@ -4422,6 +4458,9 @@ int procfs_fd_is_sys(struct fd_entry *e)
 
 uint32_t sysfs_ino(int node, int key, int file)
 {
+    if (node >= SYSFS_WLAN_PHY && node <= SYSFS_WLAN_DRIVER)
+        return 0x07000000u | ((uint32_t)(node - SYSFS_WLAN_PHY) << 20) | ((uint32_t)key << 8) |
+               (uint32_t)file;
     if (SYSFS_IS_BLOCK(node)) {
         return SYSFS_INO_BLOCK | (uint32_t)(node - SYSFS_BLOCK) << 20 |
                ((uint32_t)key & 0xFFFu) << 8 | (uint32_t)file;
@@ -4751,11 +4790,27 @@ int sysfs_net_pci_key(int index)
     return nd ? nd->pci_key : -1;
 }
 
+/** Return the radio number of a visible interface, or -1. */
+int sysfs_net_wiphy(int index)
+{
+    const struct wlan *wlan = wlan_from_netdev(sysfs_netdev(index));
+    return wlan ? (int)wlan->radio->index : -1;
+}
+
+/** Return a visible radio's static driver name, or NULL. */
+const char *sysfs_wlan_driver(int index)
+{
+    const struct wlan *wlan = net_ns_seen() ? wlan_by_index((unsigned)index) : 0;
+    return wlan ? wlan->radio->name : 0;
+}
+
 int sysfs_device_exists(int node, int key)
 {
     struct usb_sys_row r;
     struct devfs_disk_row row;
 
+    if (node >= SYSFS_WLAN_PHY && node <= SYSFS_WLAN_DRIVER)
+        return sysfs_wlan_driver(key) != 0;
     if (SYSFS_IS_BLOCK(node)) {
         return devfs_disk_row(key, &row) == 1 && (node == SYSFS_BLOCK_PART) == (row.partno != 0) &&
                (node != SYSFS_BLOCK_LOOP || sysfs_block_loop(key) >= 0);
@@ -5146,6 +5201,35 @@ static int procfs_gen_topology(struct procfs_text *t, int cpu, int attr)
     return t->len;
 }
 
+/** Render the attributes of a registered radio, with Linux's spelling. */
+static int procfs_gen_phy(struct procfs_text *t, int key, int attr)
+{
+    const struct wlan *wlan = net_ns_seen() ? wlan_by_index((unsigned)key) : 0;
+
+    if (!wlan)
+        return -ENOENT;
+    switch (attr) {
+    case 0:
+        ap_u32(t, (unsigned)key);
+        break;
+    case 1:
+        ap_str(t, "phy");
+        ap_u32(t, (unsigned)key);
+        break;
+    case 2:
+        ap_mac(t, wlan->radio->mac);
+        break;
+    case 3:
+        ap_str(t, "DEVTYPE=wlan\nDRIVER=");
+        ap_str(t, wlan->radio->name);
+        break;
+    default:
+        return -ENOENT;
+    }
+    ap_ch(t, '\n');
+    return t->nomem ? -1 : t->len;
+}
+
 /**
  * Render the /sys file at the path `vp`: an attribute of a backlight, of a
  * disk node, of an interface, of a processor's topology or of a fixed
@@ -5155,6 +5239,10 @@ static int procfs_gen_topology(struct procfs_text *t, int cpu, int attr)
  */
 static int procfs_gen_sysfile(struct procfs_text *t, const struct vpath *vp, int *key)
 {
+    if (vp->sysent == SYSFS_WLAN_PHY) {
+        *key = vp->syskey;
+        return procfs_gen_phy(t, vp->syskey, vp->procfile);
+    }
     if (vp->sysent == SYSFS_BACKLIGHT) {
         *key = vp->syskey;
         return procfs_gen_backlight(t, vp->syskey, vp->procfile);

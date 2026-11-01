@@ -126,6 +126,11 @@ gives.
 .It Pa /sys/class/net/IF/device
 A symbolic link to the interface's PCI function,
 .Pa ../../../devices/pci0000:00/0000:BB:DD.F .
+.It Pa /sys/class/ieee80211/phyN
+A registered radio's attributes and driver links; see
+.Xr wlan 4 .
+.It Pa /sys/class/net/wlanN/phy80211
+A link to the radio of a wireless station interface.
 .It Pa /sys/class/rtc/rtc0
 The CMOS clock of
 .Xr rtc 4 :
@@ -387,6 +392,11 @@ The PCI functions.
 The USB devices.
 .It Pa /sys/class/net
 The network interfaces.
+.It Pa /sys/class/ieee80211/phyN
+A registered radio's attributes and driver links; see
+.Xr wlan 4 .
+.It Pa /sys/class/net/wlanN/phy80211
+A link to the radio of a wireless station interface.
 .It Pa /sys/class/rtc/rtc0
 The real-time clock.
 .It Pa /sys/class/backlight

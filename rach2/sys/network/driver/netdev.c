@@ -23,6 +23,9 @@
  * found them, and `lo` after them. */
 static struct netdev ifaces[NETDEV_MAX + 1];
 static int niface;
+static struct netdev *extra[NETDEV_MAX];
+static int nextra;
+static int next_index;
 
 /* Whether `lo` stands after the cards, in ifaces[niface]. */
 static int lo_ready;
@@ -39,17 +42,21 @@ static const struct netdev_ops *const drivers[] = {&rtl8139_netdev, &e1000_netde
 
 int netdev_count(void)
 {
-    return niface;
+    return niface + nextra;
 }
 
 struct netdev *netdev_at(int n)
 {
-    return n >= 0 && n < niface + lo_ready ? &ifaces[n] : 0;
+    if (n >= 0 && n < niface)
+        return &ifaces[n];
+    if (n >= niface && n < niface + nextra)
+        return extra[n - niface];
+    return n == niface + nextra && lo_ready ? &ifaces[niface] : 0;
 }
 
 int netdev_listed(void)
 {
-    return niface + lo_ready;
+    return niface + nextra + lo_ready;
 }
 
 struct netdev *netdev_loopback(void)
@@ -98,6 +105,7 @@ static void loopback_up(void)
     nd->naddr6 = 1;
     nd->up = 1;
     lo_ready = 1;
+    next_index = niface + 2;
 }
 
 /** Copy the IPv6 address at `from` to `to`. */
@@ -146,9 +154,9 @@ struct netdev *netdev_owner6(const uint8_t *addr)
 {
     int i;
 
-    for (i = 0; i < niface + lo_ready; i++) {
-        if (netdev_holds6(&ifaces[i], addr)) {
-            return &ifaces[i];
+    for (i = 0; i < netdev_listed(); i++) {
+        if (netdev_holds6(netdev_at(i), addr)) {
+            return netdev_at(i);
         }
     }
     return 0;
@@ -214,15 +222,15 @@ int netdev_member6(const struct netdev *nd, const uint8_t *group)
 
 struct netdev *netdev_first(void)
 {
-    return niface > 0 ? &ifaces[0] : 0;
+    return niface > 0 ? &ifaces[0] : nextra ? extra[0] : 0;
 }
 
 struct netdev *netdev_by_name(const char *name)
 {
     int i;
 
-    for (i = 0; i < niface + lo_ready; i++) {
-        const char *a = ifaces[i].name;
+    for (i = 0; i < netdev_listed(); i++) {
+        const char *a = netdev_at(i)->name;
         const char *b = name;
 
         while (*a != 0 && *a == *b) {
@@ -230,7 +238,7 @@ struct netdev *netdev_by_name(const char *name)
             b++;
         }
         if (*a == 0 && *b == 0) {
-            return &ifaces[i];
+            return netdev_at(i);
         }
     }
     return 0;
@@ -282,8 +290,8 @@ int netdev_owns(uint32_t ip)
 {
     int i;
 
-    for (i = 0; i < niface; i++) {
-        if (netdev_holds(&ifaces[i], ip)) {
+    for (i = 0; i < netdev_count(); i++) {
+        if (netdev_holds(netdev_at(i), ip)) {
             return 1;
         }
     }
@@ -297,8 +305,8 @@ int netdev_is_broadcast(uint32_t ip)
     if (ip == 0xFFFFFFFFu) {
         return 1;
     }
-    for (i = 0; i < niface; i++) {
-        const struct netdev *nd = &ifaces[i];
+    for (i = 0; i < netdev_count(); i++) {
+        const struct netdev *nd = netdev_at(i);
 
         if (nd->ip != 0 && nd->mask != 0 && ip == (nd->ip | ~nd->mask)) {
             return 1;
@@ -495,4 +503,38 @@ int netdev_running(const struct netdev *nd)
         return link.up ? 1 : 0;
     }
     return 1;
+}
+
+/** Attach a non-PCI interface without moving any existing interface record. */
+int netdev_register(struct netdev *nd)
+{
+    unsigned used = 0;
+    int i, slot;
+
+    if (!nd || !nd->ops || !nd->ops->tx || !nd->name[0] || netdev_by_name(nd->name))
+        return -EINVAL;
+    if (niface + nextra >= NETDEV_MAX || next_index <= 0 || next_index == 0x7fffffff)
+        return -ENOSPC;
+    for (i = 0; i < netdev_listed(); ++i)
+        used |= 1u << netdev_slot(netdev_at(i));
+    for (slot = 1; slot <= NETDEV_MAX + 1 && (used & (1u << slot)); ++slot) {
+    }
+    nd->slot = slot;
+    nd->index = next_index++;
+    extra[nextra++] = nd;
+    return 0;
+}
+
+/** Withdraw an attached interface after its driver and work have stopped. */
+void netdev_unregister(struct netdev *nd)
+{
+    int i;
+
+    for (i = 0; i < nextra && extra[i] != nd; ++i) {
+    }
+    if (i == nextra)
+        return;
+    for (; i + 1 < nextra; ++i)
+        extra[i] = extra[i + 1];
+    extra[--nextra] = 0;
 }

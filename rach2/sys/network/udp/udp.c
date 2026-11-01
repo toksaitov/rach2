@@ -260,7 +260,7 @@ static int udp_route6(const struct socket *sock, net_addr_t *dst, const struct n
         if (dst->scope && dst->scope != (uint32_t)opt->ifindex) {
             return -EINVAL;
         }
-        if (!netdev_at(opt->ifindex - 1)) {
+        if (!netdev_by_index(opt->ifindex)) {
             return -ENODEV;
         }
         dst->scope = (uint32_t)opt->ifindex;

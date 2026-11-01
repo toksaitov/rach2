@@ -159,6 +159,7 @@ const char *synth_ns_name(int kind);
 #define SYNTH_PROC_NETRAW6     63
 /* /proc/net/netstat, the last of `synth_net_file`'s. */
 #define SYNTH_PROC_NETNETSTAT  64
+#define SYNTH_PROC_NETWIRELESS 65
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */
@@ -363,13 +364,24 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_BACKLIGHT       34 /* /sys/class/backlight/NAME, whose key is its index */
 #define SYSFS_CPU_TOPOLOGY    35 /* /sys/devices/system/cpu/cpuN/topology, whose key is N */
 
+#define SYSFS_CLASS_IEEE80211 36 /* /sys/class/ieee80211 */
+#define SYSFS_WLAN_PHY        37 /* phyN, key is the radio index */
+#define SYSFS_WLAN_DEVICE     38 /* phyN/device */
+#define SYSFS_WLAN_DRIVER     39 /* phyN/device/DRIVER */
+
+/** Return the radio index of a network interface, or -1. */
+int sysfs_net_wiphy(int index);
+/** Return a radio's static driver name, or NULL if absent. */
+const char *sysfs_wlan_driver(int index);
+
 /** Whether the /sys directory `node` is one of a device, an interface, a
  * processor or a disk node, which `syskey` says, and which exists only while
  * that does. */
 #define SYSFS_KEYED(node)                                                                  \
     ((node) == SYSFS_PCI_DEVICE || (node) == SYSFS_USB_DEVICE || (node) == SYSFS_NET_IF || \
      (node) == SYSFS_NET_STATS || (node) == SYSFS_CPUN || (node) == SYSFS_CPU_TOPOLOGY ||  \
-     (node) == SYSFS_BACKLIGHT || SYSFS_IS_BLOCK(node))
+     (node) == SYSFS_BACKLIGHT || SYSFS_IS_BLOCK(node) ||                                  \
+     ((node) >= SYSFS_WLAN_PHY && (node) <= SYSFS_WLAN_DRIVER))
 
 /** Whether `node` is a directory of a disk node: its own, its queue's, its
  * device's or a loop device's `loop`. */

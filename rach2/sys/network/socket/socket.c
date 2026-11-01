@@ -126,7 +126,7 @@ int socket_ns_reaches(const socket_t *s, net_addr_t a, int up)
 
 struct netdev *socket_iface6(const socket_t *s, int ifindex)
 {
-    return ifindex > 0 && !s->ns ? netdev_at(ifindex - 1) : NULL;
+    return ifindex > 0 && !s->ns ? netdev_by_index(ifindex) : NULL;
 }
 
 void net_ns_gone(struct netns *ns)

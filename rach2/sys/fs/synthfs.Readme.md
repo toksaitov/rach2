@@ -31,6 +31,8 @@ Other parts of the kernel call devfs:
 * `mount(2)` (`vfs_do_mount` in `vfs.c`) and the kernel's ext2 root turn a `/dev` path into a sector range with `devfs_window_of` and claim it with `devfs_claim`.
 * An open of a device node on a disk file system opens the devfs device of the same kind and number (`open_device` in `syscall_fs.c`, `devfs_name_of`), and fails with `ENXIO` when devfs has none.
 
+Wireless radio attributes and the network interface's `phy80211` and `device/driver` entries are described in [`../network/wireless/Readme.md`](../network/wireless/Readme.md). They are present only while the radio is registered and visible in the caller's network namespace.
+
 ## Design
 
 ### Classification

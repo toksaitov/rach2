@@ -762,6 +762,7 @@ static uint32_t prefix_of(uint32_t mask)
 /* Userspace's link policy is separate from the driver's carrier state. */
 struct link_policy {
     const struct netdev *dev;
+    int index; /* distinguish a newly registered interface at a reused address */
     uint8_t mode, authorized;
 };
 static struct link_policy link_policies[NETDEV_MAX + 1];
@@ -774,15 +775,17 @@ static struct link_policy *policy_of(const struct netdev *nd, int create)
     struct link_policy *empty = 0;
 
     for (i = 0; i < NETDEV_MAX + 1; ++i) {
-        if (link_policies[i].dev == nd) {
+        if (link_policies[i].dev == nd && link_policies[i].index == nd->index) {
             return &link_policies[i];
         }
-        if (!link_policies[i].dev) {
+        if (!link_policies[i].dev || !netdev_by_index(link_policies[i].index)) {
             empty = &link_policies[i];
         }
     }
     if (create && empty) {
         empty->dev = nd;
+        empty->index = nd->index;
+        empty->mode = 0;
         empty->authorized = 1;
         return empty;
     }
@@ -1270,7 +1273,7 @@ static struct nl_build watch_b;
  * comparison runs in the timer tick; NULL for none. */
 static struct netdev *watch_dev(int index)
 {
-    return index >= 1 && index <= netdev_listed() ? netdev_at(index - 1) : 0;
+    return netdev_by_index(index);
 }
 
 /** Whether a NETLINK_ROUTE socket of the first namespace is in a group the

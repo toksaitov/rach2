@@ -5,6 +5,7 @@
  * `arch_syscall_init` (arch/i686/systab.c, arch/x86_64/systab.c); what it
  * shares with the other arms is in syscall_internal.h.
  */
+#include "network/wireless/wiphy.h"
 #include "arch/uabi.h"
 #include "../kernel.h"
 #include "mm/kheap.h"
@@ -6122,11 +6123,16 @@ static int synth_is_sys(const struct vpath *vp)
  * `out` of `cap` bytes; returns its length. */
 static int synth_sys_link(const struct vpath *vp, char *out, int cap)
 {
-    char path[64];
+    char path[128];
     const char *up = SYSFS_IS_BLOCK(vp->sysent) ? "../.." : "../../..";
     int n = 0, i;
 
     synth_sys_path(vp->sysent, vp->syskey, path, (int)sizeof(path));
+    if (vp->sysent == SYSFS_WLAN_PHY || vp->sysent == SYSFS_WLAN_DRIVER) {
+        for (i = 0; path[i] && n < cap; ++i)
+            out[n++] = path[i];
+        return n;
+    }
     for (i = 0; up[i] != '\0' && n < cap; i++) {
         out[n++] = up[i];
     }
@@ -13017,6 +13023,16 @@ static int synth_sys_net_dirent(int node, int key, int n, char *name, uint64_t *
         *dtype = DT_DIR;
         return 1;
     }
+    if (node == SYSFS_NET_IF && sysfs_net_wiphy(key) >= 0) {
+        int phy = sysfs_net_wiphy(key);
+        if (n == i + 1 || n == i + 2) {
+            k_strncpy(name, n == i + 1 ? "device" : "phy80211", 31);
+            *ino = sysfs_ino(n == i + 1 ? SYSFS_WLAN_DEVICE : SYSFS_WLAN_PHY, phy, 0);
+            *dtype = n == i + 1 ? DT_DIR : DT_LNK;
+            return 1;
+        }
+        return 0;
+    }
     if (node == SYSFS_NET_IF && n == i + 1 && sysfs_net_pci_key(key) >= 0) {
         k_strncpy(name, "device", 31);
         *ino = sysfs_ino(SYSFS_PCI_DEVICE, sysfs_net_pci_key(key), 2);
@@ -13197,6 +13213,7 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
                  {SYSFS_ROOT, "power", SYSFS_POWER},
                  {SYSFS_CLASS, "backlight", SYSFS_CLASS_BACKLIGHT},
                  {SYSFS_CLASS, "net", SYSFS_CLASS_NET},
+                 {SYSFS_CLASS, "ieee80211", SYSFS_CLASS_IEEE80211},
                  {SYSFS_CLASS, "rtc", SYSFS_CLASS_RTC},
                  {SYSFS_CLASS_RTC, "rtc0", SYSFS_RTC0},
                  {SYSFS_RTC0, "device", SYSFS_RTC_DEVICE},
@@ -13212,6 +13229,34 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
                                dtype);
         }
     }
+    if (node == SYSFS_CLASS_IEEE80211) {
+        struct wlan *wlan = net_ns_seen() ? wlan_at((unsigned)n) : 0;
+        if (!wlan)
+            return 0;
+        k_memcpy(name, "phy", 3);
+        k_itoa((int)wlan->radio->index, name + 3, 29, 10, 0);
+        *ino = sysfs_ino(SYSFS_WLAN_PHY, (int)wlan->radio->index, 0);
+        *dtype = DT_DIR;
+        return 1;
+    }
+    if (node == SYSFS_WLAN_PHY) {
+        for (i = 0; sysfs_attr(node, i); ++i) {
+            if (n == i)
+                return synth_entry(sysfs_attr(node, i), sysfs_ino(node, key, i + 1), DT_REG, name,
+                                   ino, dtype);
+        }
+        return synth_entry(n == i ? "device" : NULL, sysfs_ino(SYSFS_WLAN_DEVICE, key, 0), DT_DIR,
+                           name, ino, dtype);
+    }
+    if (node == SYSFS_WLAN_DEVICE) {
+        return synth_entry(n == 0   ? "driver"
+                           : n == 1 ? sysfs_wlan_driver(key)
+                                    : NULL,
+                           sysfs_ino(SYSFS_WLAN_DRIVER, key, 0), n ? DT_DIR : DT_LNK, name, ino,
+                           dtype);
+    }
+    if (node == SYSFS_WLAN_DRIVER)
+        return 0;
     if (node == SYSFS_CLASS_NET || node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
         return synth_sys_net_dirent(node, key, n, name, ino, dtype);
     }

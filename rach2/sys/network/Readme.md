@@ -1,8 +1,10 @@
 # `network/`: the IPv4 and IPv6 network stack
 
-The network stack connects the machine to Ethernet: drivers for three cards, Ethernet, ARP, IPv4 with a routing table, ICMP, UDP and TCP, IPv6 with ICMPv6, UDP and TCP, neighbour discovery, address autoconfiguration and MLD, the sockets programs open on them, packet, raw and netlink sockets, and netconsole, which broadcasts the kernel log. It exists so that programs written for Linux, Dropbear and the DHCP clients among them, reach QEMU's user network and a real LAN through Linux's socket calls and configuration interfaces. The C is the same on i686 and x86-64; the architectures differ in how a program enters the socket calls and in the layout of the structures it passes. AF_UNIX sockets are in [`ipc/`](../ipc/Readme.md).
+The network stack connects the machine to Ethernet and wireless station interfaces: drivers for three cards, Ethernet, ARP, IPv4 with a routing table, ICMP, UDP and TCP, IPv6 with ICMPv6, UDP and TCP, neighbour discovery, address autoconfiguration and MLD, the sockets programs open on them, packet, raw and netlink sockets, and netconsole, which broadcasts the kernel log. It exists so that programs written for Linux, Dropbear and the DHCP clients among them, reach QEMU's user network and a real LAN through Linux's socket calls and configuration interfaces. The C is the same on i686 and x86-64; the architectures differ in how a program enters the socket calls and in the layout of the structures it passes. AF_UNIX sockets are in [`ipc/`](../ipc/Readme.md).
 
 ## Interfaces
+
+The wireless registry, station Ethernet conversion, control port and radio contracts are described in [`wireless/Readme.md`](wireless/Readme.md). Wireless interfaces use the same IP, ARP and socket paths as the cards. Enumeration positions are separate from stable interface indexes: `netdev_at` enumerates cards and radios, then loopback, while `netdev_by_index` resolves an index. Attaching and removing a radio keeps the other interface records and indexes unchanged. IPv6 discovery and multicast state use bounded private slots, reset when a new interface takes a slot.
 
 ### System calls
 

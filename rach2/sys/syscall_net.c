@@ -608,7 +608,8 @@ static int32_t socket_kind(int domain, int *type, int protocol)
             return -ESOCKTNOSUPPORT;
         }
         if ((uint16_t)protocol != 0 && (uint16_t)protocol != PACKET_PROTO_IP &&
-            (uint16_t)protocol != PACKET_PROTO_ARP && (uint16_t)protocol != PACKET_PROTO_IPV6) {
+            (uint16_t)protocol != PACKET_PROTO_ARP && (uint16_t)protocol != PACKET_PROTO_IPV6 &&
+            (uint16_t)protocol != PACKET_PROTO_PAE) {
             return -EINVAL;
         }
     }
@@ -871,7 +872,8 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
                             ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 2] << 16) |
                             ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 3] << 24));
         proto = SC_BE16(sll + SOCKADDR_LL_PROTOCOL);
-        if (proto != 0 && proto != ETH_TYPE_IP && proto != ETH_TYPE_ARP && proto != ETH_TYPE_IPV6) {
+        if (proto != 0 && proto != ETH_TYPE_IP && proto != ETH_TYPE_ARP && proto != ETH_TYPE_IPV6 &&
+            proto != ETH_TYPE_PAE) {
             return -EINVAL;
         }
         r = packet_bind(entry->sock, (int)ifindex);
@@ -1389,7 +1391,7 @@ static int32_t do_ping6(const unsigned long *args)
     if (args[3] < 1 || args[3] > 255) {
         return -EINVAL;
     }
-    if (args[1] > (unsigned long)netdev_seen_count()) {
+    if (args[1] && (args[1] > 0x7ffffffful || !net_ns_seen() || !netdev_by_index((int)args[1]))) {
         return -ENODEV;
     }
     if (args[2] != (uint32_t)args[2]) {
@@ -1790,7 +1792,7 @@ static int32_t do_getsockname(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
         uint8_t sll[SOCKADDR_LL_LEN];
         uint32_t caller_len, copy_len;
         int ifindex = packet_ifindex(entry->sock);
-        struct netdev *nd = netdev_at(ifindex - 1);
+        struct netdev *nd = netdev_by_index(ifindex);
 
         if (copy_from_user(&caller_len, (const void __user *)salen_ptr, sizeof(caller_len)) != 0) {
             return -EFAULT;
@@ -2501,7 +2503,7 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
     } else if (level == SOL_SOCKET && optname == SO_BINDTODEVICE) {
         char name[IFNAMSIZ];
         uint32_t give;
-        struct netdev *nd = netdev_at(entry->sock->bound_device - 1);
+        struct netdev *nd = netdev_by_index(entry->sock->bound_device);
 
         k_memset(name, 0, sizeof(name));
         if (nd) {

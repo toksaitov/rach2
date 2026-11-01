@@ -302,10 +302,10 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
 
         if (!net_ns_seen()) {
             at = index == 1 ? netif_ns_lo() : 0;
-        } else if (index < 1 || index > netdev_seen_count()) {
+        } else if (!netdev_by_index(index)) {
             return -ENODEV;
         } else {
-            at = netdev_at(index - 1);
+            at = netdev_by_index(index);
         }
         if (!at || at->index != index) {
             return -ENODEV;
@@ -343,6 +343,8 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
         return loopback_set(request, ifr, nd);
     }
     switch (request) {
+    case 0x8b01: /* cfg80211 exposes no wireless extensions. */
+        return -EOPNOTSUPP;
     case SIOCGIFINDEX:
         k_memset(ifr + IFREQ_UNION, 0, IFREQ_LEN - IFREQ_UNION);
         ifr[IFREQ_UNION] = (uint8_t)nd->index;
@@ -719,6 +721,8 @@ int32_t netif_ioctl(uint32_t request, uintptr_t arg, int family, int *handled)
         return in6_route_ioctl(request, arg);
     }
     switch (request) {
+    case 0x8b01: /* SIOCGIWNAME */
+        return ifreq_ioctl(request, arg);
     case SIOCGIFCONF:
         return ifconf_ioctl(arg);
     case SIOCGIFNAME:

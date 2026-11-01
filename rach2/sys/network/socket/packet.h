@@ -25,7 +25,7 @@ int packet_ifindex(struct socket *sock);
  * destination MAC in the `sockaddr_ll` and this layer prepends the header.
  *
  * A socket sees one EtherType, its protocol: IPv4 for a DHCP client, ARP for
- * `arping`, or IPv6. Any other is refused at `socket` and `bind`
+ * `arping`, IPv6, or EAPOL for a Wi-Fi supplicant. Any other is refused at `socket` and `bind`
  * (syscall_net.c) rather than bound to a filter this does not implement, and
  * a socket whose protocol is 0 receives nothing, which is Linux's rule and is
  * what a caller that named no protocol asked for. The kernel's own handlers
@@ -45,6 +45,7 @@ int packet_ifindex(struct socket *sock);
  * caller passes after `htons`. */
 #define PACKET_PROTO_IP   0x0008u
 #define PACKET_PROTO_ARP  0x0608u
+#define PACKET_PROTO_PAE  0x8e88u
 #define PACKET_PROTO_IPV6 0xDD86u
 
 /* The `sockaddr_ll` a receive reports, and the two fields a reader decides on:

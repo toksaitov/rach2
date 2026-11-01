@@ -488,6 +488,10 @@ and
 .Dv SIOCGIFFLAGS
 return its index, hardware address, IPv4 address, netmask, broadcast
 address, MTU, and flags, respectively.
+.Dv SIOCGIWNAME
+returns
+.Er EOPNOTSUPP ;
+wireless stations use nl80211 instead of wireless extensions.
 .Pp
 .Dv SIOCSIFADDR ,
 .Dv SIOCSIFNETMASK ,

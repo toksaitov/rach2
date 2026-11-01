@@ -328,11 +328,12 @@ static const struct {
                 {SYNTH_PROC_NETUDP6, "udp6"},
                 {SYNTH_PROC_NETRAW6, "raw6"},
                 {SYNTH_PROC_NETNETSTAT, "netstat"},
+                {SYNTH_PROC_NETWIRELESS, "wireless"},
                 {SYNTH_PROC_NETSTAT_RT, "stat/rt_cache"},
                 {SYNTH_PROC_NETSTAT_ARP, "stat/arp_cache"}};
 
 /* The files of `netfiles` directly in /proc/net, the ones before stat's. */
-#define SYNTH_NET_FILES 13
+#define SYNTH_NET_FILES 14
 
 int synth_net_slot(int origin)
 {
@@ -857,7 +858,9 @@ const char *sysfs_attr(int node, int n)
     /* In the order of backlight.h's BACKLIGHT_ attributes. */
     static const char *const backlight[] = {"actual_brightness", "bl_power", "brightness",
                                             "max_brightness",    "type",     0};
-    const char *const *list = node == SYSFS_NET_IF         ? attrs
+    static const char *const phy[] = {"index", "name", "macaddress", "uevent", 0};
+    const char *const *list = node == SYSFS_WLAN_PHY       ? phy
+                              : node == SYSFS_NET_IF       ? attrs
                               : node == SYSFS_NET_STATS    ? stats
                               : node == SYSFS_RTC0         ? rtc
                               : node == SYSFS_RTC_POWER    ? wakeup
@@ -935,6 +938,21 @@ void synth_sys_path(int node, int key, char *out, int cap)
     int pos = 0;
 
     if (cap <= 0) {
+        return;
+    }
+    if (node >= SYSFS_CLASS_IEEE80211 && node <= SYSFS_WLAN_DRIVER) {
+        synth_put(out, cap, &pos, "/sys/class/ieee80211");
+        if (node != SYSFS_CLASS_IEEE80211) {
+            synth_put(out, cap, &pos, "/phy");
+            synth_put_uint(out, cap, &pos, (unsigned)key);
+        }
+        if (node >= SYSFS_WLAN_DEVICE)
+            synth_put(out, cap, &pos, "/device");
+        if (node == SYSFS_WLAN_DRIVER) {
+            synth_put(out, cap, &pos, "/");
+            synth_put(out, cap, &pos, sysfs_wlan_driver(key) ? sysfs_wlan_driver(key) : "wireless");
+        }
+        out[pos] = '\0';
         return;
     }
     if (SYSFS_IS_BLOCK(node)) {
@@ -1047,6 +1065,36 @@ static int sys_net_attr_of(int node, struct comp name)
     return -1;
 }
 
+/** Classify a radio's directory and its device and driver links. */
+static int synth_classify_phy(const struct comp *c, int n, int phy, struct vpath *vp)
+{
+    int attr;
+    const char *driver = sysfs_wlan_driver(phy);
+
+    vp->syskey = phy;
+    vp->sysent = SYSFS_WLAN_PHY;
+    vp->kind = VNODE_SYS_DIR;
+    if (!n)
+        return vp->kind;
+    if (comp_eq(c[0], "device")) {
+        vp->sysent = SYSFS_WLAN_DEVICE;
+        if (n == 1)
+            return vp->kind;
+        if (comp_eq(c[1], "driver") || (driver && comp_eq(c[1], driver))) {
+            vp->sysent = SYSFS_WLAN_DRIVER;
+            vp->kind =
+                n == 2 ? (comp_eq(c[1], "driver") ? VNODE_SYS_LINK : VNODE_SYS_DIR) : VNODE_ENOENT;
+            return vp->kind;
+        }
+    } else if ((attr = sys_net_attr_of(SYSFS_WLAN_PHY, c[0])) >= 0) {
+        vp->procfile = attr;
+        vp->kind = n == 1 ? VNODE_SYS_FILE : VNODE_ENOTDIR;
+        return vp->kind;
+    }
+    vp->kind = VNODE_ENOENT;
+    return vp->kind;
+}
+
 /**
  * The node at `c` of `n` components below /sys/class/net: an interface's
  * directory by its name, an attribute file or its statistics directory and
@@ -1064,6 +1112,16 @@ static int synth_classify_sys_net(const struct comp *c, int n, struct vpath *vp)
     }
     vp->sysent = SYSFS_NET_IF;
     vp->syskey = index;
+    if (n >= 2 && (comp_eq(c[1], "phy80211") || comp_eq(c[1], "device")) &&
+        sysfs_net_wiphy(index) >= 0) {
+        int phy = sysfs_net_wiphy(index);
+        if (comp_eq(c[1], "device"))
+            return synth_classify_phy(c + 1, n - 1, phy, vp);
+        synth_classify_phy(c + 2, n - 2, phy, vp);
+        if (n == 2)
+            vp->kind = VNODE_SYS_LINK;
+        return vp->kind;
+    }
     if (n >= 2 && comp_eq(c[1], "device")) {
         vp->sysent = SYSFS_PCI_DEVICE;
         vp->syskey = sysfs_net_pci_key(index);
@@ -1246,6 +1304,25 @@ static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *v
         vp->sysent = SYSFS_CLASS_NET;
     } else if (comp_eq(c[0], "net")) {
         return synth_classify_sys_net(c + 1, n - 1, vp);
+    } else if (comp_eq(c[0], "ieee80211")) {
+        int phy = 0, i;
+        if (n == 1) {
+            vp->sysent = SYSFS_CLASS_IEEE80211;
+            return vp->kind;
+        }
+        if (c[1].len < 4 || c[1].len > 6 || c[1].s[0] != 'p' || c[1].s[1] != 'h' ||
+            c[1].s[2] != 'y' || (c[1].len > 4 && c[1].s[3] == '0')) {
+            vp->kind = VNODE_ENOENT;
+            return vp->kind;
+        }
+        for (i = 3; i < c[1].len; ++i) {
+            if (c[1].s[i] < '0' || c[1].s[i] > '9') {
+                vp->kind = VNODE_ENOENT;
+                return vp->kind;
+            }
+            phy = phy * 10 + c[1].s[i] - '0';
+        }
+        return synth_classify_phy(c + 2, n - 2, phy, vp);
     } else if (comp_eq(c[0], "rtc")) {
         return synth_classify_sys_fixed(c + 1, n - 1, SYSFS_CLASS_RTC, vp);
     } else if (comp_eq(c[0], "backlight") && n == 1) {

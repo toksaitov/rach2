@@ -1,0 +1,56 @@
+.Dd November 2, 2026
+.Dt WLAN 4
+.Os Rach2
+.Sh NAME
+.Nm wlan
+.Nd wireless station network interfaces
+.Sh DESCRIPTION
+A registered radio appears as
+.Li phyN
+with an Ethernet interface named
+.Li wlanN .
+The interface is initially down.
+It uses the ordinary IP, ARP, DHCP and packet-socket paths.
+Association gives carrier; authorization opens the control port.
+Before authorization only EAPOL, EtherType 0x888e, passes in either direction.
+A stopped, blocked or unassociated radio passes no data.
+.Pp
+The station converts Ethernet II frames to three-address 802.11 data frames
+with LLC/SNAP headers.
+IPX and AARP use the IEEE 802.1H bridge-tunnel header.
+The receive conversion accepts data and QoS data after decryption and
+reassembly; it refuses four-address, null and aggregate frames.
+.Pp
+The world regulatory domain permits active use of channels 1 through 11,
+passive use of 12 and 13, and no use of 14.
+The radio's EEPROM capabilities can restrict this further.
+An EEPROM country of US or CA disables channels 12 and 13.
+Power is at most 20 dBm and never greater than the radio advertises.
+.Pp
+Wireless extensions are absent.
+.Dv SIOCGIWNAME
+returns
+.Er EOPNOTSUPP .
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /proc/net/wireless
+Link quality from 0 to 70, signal and noise in signed dBm, discard counters
+and missed beacons, in Linux's format.
+.It Pa /sys/class/ieee80211/phyN
+The radio's
+.Pa index ,
+.Pa name ,
+.Pa macaddress
+and
+.Pa uevent
+attributes.
+.It Pa /sys/class/net/wlanN/phy80211
+A link to the radio.
+.It Pa /sys/class/net/wlanN/device/driver
+A link whose final component is the registered radio driver name.
+.El
+.Sh SEE ALSO
+.Xr socket 2 ,
+.Xr ioctl 2 ,
+.Xr proc 5 ,
+.Xr sysfs 5

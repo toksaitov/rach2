@@ -141,6 +141,9 @@ C_SRC_SHARED = kernel.c \
     sys/network/route.c \
     sys/network/netconsole.c \
     sys/network/core/net_core.c \
+    sys/network/wireless/wiphy.c \
+    sys/network/wireless/wlan.c \
+    sys/network/wireless/reg.c \
     sys/network/driver/netdev.c \
     sys/network/driver/e1000.c \
     sys/network/driver/rtl8139.c \

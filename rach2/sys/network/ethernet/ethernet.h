@@ -28,6 +28,7 @@
 /* EtherType values. */
 #define ETH_TYPE_IP   0x0800
 #define ETH_TYPE_ARP  0x0806
+#define ETH_TYPE_PAE  0x888e
 #define ETH_TYPE_IPV6 0x86DD
 
 /* The interface a frame arrived on, or whose counters are asked about. */

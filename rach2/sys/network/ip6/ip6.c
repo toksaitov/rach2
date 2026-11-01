@@ -207,7 +207,7 @@ void ip6_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 
 void ip6_loop_rx(int ifindex, const uint8_t *data, uint32_t len)
 {
-    struct netdev *nd = ifindex > 0 ? netdev_at(ifindex - 1) : 0;
+    struct netdev *nd = ifindex > 0 ? netdev_by_index(ifindex) : 0;
 
     if (nd && ip6_is_multicast(data + 24)) {
         ip6_input(nd, data, len, 1);
@@ -456,7 +456,7 @@ int ip6_tx_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t nh,
         return -ENETUNREACH;
     }
     if (opts & IP6_TXF_ONLINK) {
-        out = ifindex >= 1 && ifindex <= netdev_listed() ? netdev_at(ifindex - 1) : 0;
+        out = netdev_by_index(ifindex);
         if (out && (!out->up || out->loopback || nd6_disabled(out))) {
             out = 0;
         }

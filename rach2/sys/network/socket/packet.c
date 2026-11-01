@@ -80,7 +80,7 @@ int packet_bind(struct socket *sock, int ifindex)
     uint32_t flags;
     struct packet_binding *b;
 
-    if (ifindex != 0 && (ifindex < 1 || ifindex > netdev_seen_count())) {
+    if (ifindex != 0 && (!net_ns_seen() || !netdev_by_index(ifindex))) {
         return -ENODEV;
     }
 
@@ -337,10 +337,11 @@ int packet_send(struct socket *sock, int ifindex, const uint8_t *dst_mac, uint16
     if (len == 0 || len > ETH_MTU) {
         return -EMSGSIZE;
     }
-    if (ethertype != ETH_TYPE_IP && ethertype != ETH_TYPE_ARP && ethertype != ETH_TYPE_IPV6) {
+    if (ethertype != ETH_TYPE_IP && ethertype != ETH_TYPE_ARP && ethertype != ETH_TYPE_IPV6 &&
+        ethertype != ETH_TYPE_PAE) {
         return -EINVAL;
     }
-    if (ifindex != 0 && (ifindex < 1 || ifindex > netdev_seen_count())) {
+    if (ifindex != 0 && (!net_ns_seen() || !netdev_by_index(ifindex))) {
         return -ENODEV;
     }
     flags = net_lock();
@@ -348,7 +349,7 @@ int packet_send(struct socket *sock, int ifindex, const uint8_t *dst_mac, uint16
     if (ifindex == 0 && b) {
         ifindex = b->ifindex;
     }
-    nd = ifindex != 0 ? netdev_at(ifindex - 1) : netdev_first();
+    nd = ifindex != 0 ? netdev_by_index(ifindex) : netdev_first();
     if (!nd) {
         net_unlock(flags);
         return -ENETDOWN;
@@ -357,7 +358,10 @@ int packet_send(struct socket *sock, int ifindex, const uint8_t *dst_mac, uint16
         net_unlock(flags);
         return -EMSGSIZE;
     }
-    ethernet_tx(nd, dst_mac, ethertype, data, len);
+    if (ethernet_tx(nd, dst_mac, ethertype, data, len) != NETDEV_TX_OK) {
+        net_unlock(flags);
+        return -ENETDOWN;
+    }
     net_unlock(flags);
     return (int)len;
 }

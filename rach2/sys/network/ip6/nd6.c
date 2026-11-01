@@ -132,6 +132,7 @@ struct nd6_if {
 static struct nd6_entry cache6[ND6_CACHE_SIZE];
 static struct nd6_hold hold6[ND6_HOLD_SLOTS];
 static struct nd6_if ifs6[NETDEV_MAX + 1];
+static int if_index[NETDEV_MAX + 1];
 static struct nd6_conf conf_all, conf_default;
 
 /** Free the datagram held in `h` and the slot. */
@@ -195,12 +196,6 @@ static int due(uint32_t t)
     return (int32_t)(NOW - t) >= 0;
 }
 
-/** The state of interface `nd`, or NULL for NULL or one past the table. */
-static struct nd6_if *if_of(const struct netdev *nd)
-{
-    return nd && nd->index >= 1 && nd->index <= NETDEV_MAX + 1 ? &ifs6[nd->index - 1] : 0;
-}
-
 /** The base reachable time of `ni` drawn again between half and one and a
  * half of itself (RFC 4861, 6.3.2). */
 static void draw_reachable(struct nd6_if *ni)
@@ -222,6 +217,21 @@ static void if_defaults(struct nd6_if *ni)
     ni->reachable_ms = 0;
     ni->retrans = RETRANS_TIMER_MS * TICK_HZ / 1000u;
     draw_reachable(ni);
+}
+
+/** The state of interface `nd`, or NULL for NULL or one past the table. */
+static struct nd6_if *if_of(const struct netdev *nd)
+{
+    int slot = netdev_slot(nd) - 1;
+    if (!nd || slot < 0 || slot > NETDEV_MAX)
+        return 0;
+    if (if_index[slot] != nd->index) {
+        k_memset(&ifs6[slot], 0, sizeof(ifs6[slot]));
+        ifs6[slot].conf = conf_default;
+        if_defaults(&ifs6[slot]);
+        if_index[slot] = nd->index;
+    }
+    return &ifs6[slot];
 }
 
 static void conf_defaults(struct nd6_conf *c)
@@ -256,8 +266,8 @@ static struct nd6_conf *conf_of(int which)
     if (which == ND6_CONF_DEFAULT) {
         return &conf_default;
     }
-    if (which >= 1 && which <= netdev_listed() && which <= NETDEV_MAX + 1) {
-        return &ifs6[which - 1].conf;
+    if (which >= 1 && netdev_by_index(which)) {
+        return &if_of(netdev_by_index(which))->conf;
     }
     return 0;
 }
@@ -373,7 +383,7 @@ int nd6_conf_set(int which, int key, int32_t value)
         return -EINVAL;
     }
     if (which >= 1) {
-        if_set(netdev_at(which - 1), key, value);
+        if_set(netdev_by_index(which), key, value);
         return 0;
     }
     c->v[key] = value;

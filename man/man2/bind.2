@@ -92,7 +92,7 @@ socket takes a 20-byte
 .Vt sockaddr_ll .
 Its interface index may be zero for all interfaces or the index of an
 existing interface.
-The protocol, in network byte order, may select IPv4 or ARP; zero keeps
+The protocol, in network byte order, may select IPv4, ARP, IPv6 or EAPOL; zero keeps
 the socket's existing protocol.
 Changing the interface or protocol discards queued packets.
 .Ss Netlink sockets
@@ -151,7 +151,7 @@ The socketcall argument array or the required address bytes cannot be read.
 .It Er EINVAL
 The address length is negative or less than eight bytes, a packet
 address is shorter than 20 bytes, or a packet protocol is neither zero,
-IPv4 nor ARP.
+IPv4, ARP, IPv6 nor EAPOL.
 .It Er ENOBUFS
 Memory for a packet-socket binding cannot be allocated.
 .It Er ENODEV

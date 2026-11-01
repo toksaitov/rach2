@@ -65,7 +65,7 @@ Effective user ID 0 is required.
 The low 16 bits of
 .Fa protocol
 must contain the Ethernet protocol in network byte order:
-IPv4 (0x0800), ARP (0x0806), IPv6 (0x86DD), or zero.
+IPv4 (0x0800), ARP (0x0806), IPv6 (0x86DD), EAPOL (0x888E), or zero.
 Zero leaves the protocol unspecified until
 .Xr bind 2 .
 .It Dv AF_NETLINK , SOCK_RAW No or Dv SOCK_DGRAM
@@ -191,7 +191,7 @@ has a bit above its low four other than
 and
 .Dv SOCK_NONBLOCK ,
 the socket type is not accepted, or a packet protocol is none of zero,
-IPv4, ARP and IPv6.
+IPv4, ARP, IPv6 and EAPOL.
 An
 .Dv AF_PACKET , SOCK_RAW
 request also returns this error.

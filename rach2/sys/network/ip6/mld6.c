@@ -49,6 +49,7 @@ struct mld6_if {
 };
 
 static struct mld6_if mlds[NETDEV_MAX + 1];
+static int mld_index[NETDEV_MAX + 1];
 
 static const uint8_t all_mld_routers[IP6_ADDR_LEN] = {0xff, 2, 0, 0, 0, 0, 0, 0,
                                                       0,    0, 0, 0, 0, 0, 0, 0x16};
@@ -80,7 +81,14 @@ static int reportable(const uint8_t *group)
 
 static struct mld6_if *mld_of(const struct netdev *nd)
 {
-    return nd->index >= 1 && nd->index <= NETDEV_MAX + 1 ? &mlds[nd->index - 1] : 0;
+    int slot = netdev_slot(nd) - 1;
+    if (!nd || slot < 0 || slot > NETDEV_MAX)
+        return 0;
+    if (mld_index[slot] != nd->index) {
+        k_memset(&mlds[slot], 0, sizeof(mlds[slot]));
+        mld_index[slot] = nd->index;
+    }
+    return &mlds[slot];
 }
 
 static int v1(const struct mld6_if *m)

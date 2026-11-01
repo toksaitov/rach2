@@ -48,6 +48,9 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
     etype = (uint16_t)(((uint16_t)data[12] << 8) | data[13]);
 
     switch (etype) {
+    case ETH_TYPE_PAE:
+        packet_rx(nd, etype, data, len);
+        break;
     case ETH_TYPE_ARP:
         packet_rx(nd, etype, data, len);
         arp_rx(nd, data + ETH_HDR_SIZE, (uint16_t)(len - ETH_HDR_SIZE));

@@ -321,7 +321,7 @@ void route6_tick(void)
 /** The interface of index `ifindex`, or NULL for one that does not exist. */
 static struct netdev *by_index(int ifindex)
 {
-    return ifindex >= 1 && ifindex <= netdev_listed() ? netdev_at(ifindex - 1) : 0;
+    return netdev_by_index(ifindex);
 }
 
 /**

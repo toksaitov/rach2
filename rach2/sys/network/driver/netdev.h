@@ -218,6 +218,7 @@ struct netdev {
     void *dev;
     char name[8];
     int index; /* 1 upward, as a packet socket binds to */
+    int slot;  /* private protocol-table slot; zero uses index for static devices */
     /* The card's station address, which its driver reads at bring-up and
      * `ethernet_tx` puts in every frame the interface sends; zeros for
      * `lo`. */
@@ -311,7 +312,7 @@ int netdev_mtu_ok(const struct netdev *nd, uint32_t mtu);
  */
 int netdev_set_mtu(struct netdev *nd, uint32_t mtu);
 
-/** The number of cards the last probe brought up, `lo` not counted. The
+/** The number of Ethernet and attached radio interfaces, `lo` not counted. The
  * stack, which routes only through cards and also runs in interrupts,
  * counts interfaces by this. */
 int netdev_count(void);
@@ -342,10 +343,10 @@ int net_admin(void);
  * calls that list interfaces to a program count them by this. */
 int netdev_seen_count(void);
 
-/** Interface `n`, from 0: the cards, then `lo`; NULL for any other `n`. */
+/** Interface `n`, from 0: cards, attached radios, then `lo`; NULL past them. */
 struct netdev *netdev_at(int n);
 
-/** The number of interfaces, the cards and `lo`, which netdev_seen_count()
+/** The number of interfaces, the cards, radios and `lo`, which netdev_seen_count()
  * gives in the first network namespace. */
 int netdev_listed(void);
 
@@ -474,7 +475,7 @@ void netdev_leave6(struct netdev *nd, const uint8_t *group);
 /** Whether `nd` is a member of the IPv6 multicast group `group`. */
 int netdev_member6(const struct netdev *nd, const uint8_t *group);
 
-/** The first card's interface, `eth0`, or NULL when no card came up. */
+/** The first Ethernet or radio interface, or NULL when none is registered. */
 struct netdev *netdev_first(void);
 
 /**
@@ -544,5 +545,33 @@ int netdev_link(const struct netdev *nd, struct netdev_link *out);
  * no frame on an interface that is not running.
  */
 int netdev_running(const struct netdev *nd);
+
+/** Find a stable interface index, independent of enumeration order. */
+static __inline__ struct netdev *netdev_by_index(int index)
+{
+    int i;
+    for (i = 0; i <= NETDEV_MAX; ++i) {
+        struct netdev *nd = netdev_at(i);
+        if (!nd)
+            break;
+        if (nd->index == index)
+            return nd;
+    }
+    return 0;
+}
+
+/** Return the bounded protocol-table slot, including for static devices. */
+static __inline__ int netdev_slot(const struct netdev *nd)
+{
+    return nd ? (nd->slot ? nd->slot : nd->index) : 0;
+}
+
+/** Attach caller-owned Ethernet interface, initially configured by caller.
+ * Kernel lock held, no net_lock; 0, -EINVAL or -ENOSPC. Storage remains
+ * valid until unregister; index is assigned and never reused. */
+int netdev_register(struct netdev *nd);
+/** Remove an attached interface after its owner clears address and route state.
+ * Kernel lock held, no net_lock; call after driver and work have stopped. */
+void netdev_unregister(struct netdev *nd);
 
 #endif /* _NETDEV_H_ */
