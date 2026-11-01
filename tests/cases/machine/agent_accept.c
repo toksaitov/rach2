@@ -634,21 +634,31 @@ static int escape_running(struct acceptance *s)
 /**
  * Press Escape to cancel the turn.
  *
- * OpenCode cancels a turn on a second Escape, which s->again asks for. For
- * such an agent the key is pressed while the screen shows the turn or that
- * request, a second apart: each press either asks for the second or is the
- * second, and a request that lapses is made again. Return 1 once the screen
- * shows neither, or 0 when the screen or a key fails.
+ * OpenCode cancels a turn on a second Escape within some five seconds of the
+ * first, which s->again asks for, and a screen read from the agent's
+ * machine can take as long under emulation. For such an agent a script on
+ * the client presses Escape twice, a second apart, while the screen shows
+ * the turn or that request: the first press asks for the second, or is the
+ * second when the request is already shown, and a press that reaches an
+ * agent no longer working changes nothing. Return 1 once the screen shows
+ * neither, or 0 when the screen or a key fails.
  */
 static int interrupt(struct acceptance *s)
 {
+    static const char script[] =
+        "/usr/bin/tmux -N -L etude-agent-accept send-keys -t \"$1\" Escape && sleep 1 && "
+        "exec /usr/bin/tmux -N -L etude-agent-accept send-keys -t \"$1\" Escape";
+    const char *args[] = {"/bin/sh", "-c", script, "etude-interrupt", s->target, NULL};
     if (!*s->again)
         return keys(s, 0, "Escape");
     while (net_ok(s->u) && get_screen(s, 0)) {
+        char *text;
         if (!shows(s, s->busy) && !shows(s, s->again))
             return 1;
-        if (!keys(s, 0, "Escape"))
+        text = client(s, args);
+        if (!text)
             return 0;
+        free(text);
         pause_read();
     }
     return 0;

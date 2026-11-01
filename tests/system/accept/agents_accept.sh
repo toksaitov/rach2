@@ -501,10 +501,12 @@ escape_running() {
     return 1
 }
 
-# interrupt: press Escape to cancel the turn. For an agent that asks for a
-# second Escape, press it while the screen shows the turn or AGAIN, a second
-# apart; each press either asks for the second or is the second, and a
-# request for the second that lapses is made again.
+# interrupt: press Escape to cancel the turn. OpenCode cancels a turn on a
+# second Escape within some five seconds of the first, which AGAIN asks for;
+# for such an agent, press Escape twice, a second apart, while the screen
+# shows the turn or AGAIN. The first press asks for the second, or is the
+# second when the request is already shown, and a press that reaches an
+# agent no longer working changes nothing.
 interrupt() {
     if [ -z "$AGAIN" ]; then
         keys Escape
@@ -514,8 +516,11 @@ interrupt() {
         SCREEN=$(screen)
         shows "$BUSY" || shows "$AGAIN" || return 0
         keys Escape
-        # interval: a second for the agent to draw the key's effect
+        # interval: the second press comes well within the agent's wait for it
         sleep 1
+        keys Escape
+        # interval: the screen is read every two seconds
+        sleep 2
     done
 }
 
