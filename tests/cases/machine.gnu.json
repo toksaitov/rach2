@@ -2284,7 +2284,7 @@
     },
     {
       "case_id": "machine.gnu.gdb",
-      "behavior": "gdb stops at a breakpoint in f with x=20, steps to the return, prints y as 40, backtraces into main, and the program exits normally; a `catch syscall exit_group` catchpoint stops; `gdb --configuration` has --enable-tui.",
+      "behavior": "gdb stops at a breakpoint in f with x=20, steps to the return, prints y as 40, backtraces into main, and the program exits normally; a `catch syscall exit_group` catchpoint stops; on x86-64 gdb finds __vdso_clock_gettime in the system-supplied DSO it read from the process; `gdb --configuration` has --enable-tui.",
       "units": ["gnu_rows.sh row_gdb"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],

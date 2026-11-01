@@ -1112,7 +1112,9 @@ EOF
 
 # GDB runs a program, stops at a breakpoint, steps, prints a variable and
 # a backtrace, and lets it run to its end; it stops at a system call named
-# in a catchpoint, and is built with its text user interface.
+# in a catchpoint; on x86-64 it reads the vDSO's symbols from the stopped
+# process, as it does a system-supplied DSO; and it is built with its text
+# user interface.
 row_gdb() {
     cat > "$WORK/g.c" << 'EOF'
 int f(int x)
@@ -1135,6 +1137,11 @@ EOF
     has "the end" "$OUT" "exited normally"
     output "gdb's catch syscall" gdb -nx -batch -ex 'catch syscall exit_group' -ex run -ex continue ./g
     has "a catchpoint of a call by its name" "$OUT" "Catchpoint 1 (call to syscall exit_group)"
+    if [ "$MACHINE" = x86_64 ]; then
+        output "gdb and the vDSO" gdb -nx -batch -ex 'break f' -ex run \
+            -ex 'info symbol __vdso_clock_gettime' ./g
+        has "the vDSO's symbols read from the process" "$OUT" "of system-supplied DSO at 0x"
+    fi
     has "gdb's text user interface" "$(gdb --configuration)" "--enable-tui"
 }
 
