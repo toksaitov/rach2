@@ -561,6 +561,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "nd6",
+          "checks": "tests/host/nd6_hosttest.c checks each card's ra_defrtr_metric on its routers' IPv6 default routes, the cable's chosen over Wi-Fi's, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "nd6hold",
           "checks": "tests/host/nd6hold_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
