@@ -1207,7 +1207,7 @@ static int32_t sleep_until_time(enum kclock_kind kind, const struct kernel_times
  * `timespec_ticks`. The end is measured from where in the tick in progress
  * the call is (`rtc_tick_phase`): counting that tick as a whole would make
  * every sleep of a tick or less last two, so that `usleep(1000)` would take
- * 20 ms.
+ * 2 ms.
  *
  * The sleep also lasts until time since boot, read at the call, has advanced
  * by `req`. A tick the timer lost while the processor could not take it

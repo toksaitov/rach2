@@ -75,7 +75,7 @@ uint64_t tick_div(uint64_t n, uint32_t d, uint32_t *rem);
 /**
  * A span of `sec` seconds and `nsec` nanoseconds, neither negative and
  * `nsec` under a second, as whole ticks, a partial tick counted as one. The
- * seconds are cut at 2^40, some 34000 years, which a deadline of ticks
+ * seconds are cut at 2^40, about 34800 years, which a deadline of ticks
  * waits as long as any later one, so the sum with the tick count cannot
  * overflow.
  */

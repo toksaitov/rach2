@@ -208,8 +208,8 @@ static void tick_to(uint32_t to)
     }
 }
 
-/** Run the tick once every 10 ms from now to `to`, as a tick of 100 Hz
- * would, so that a repeat comes only at those ticks. */
+/** Run the tick once every 10 ms from now to `to`, so that a repeat comes
+ * only at those ticks, as it would when ticks are late. */
 static void tick_by_10ms(uint32_t to)
 {
     while (kernel_ticks != to) {
