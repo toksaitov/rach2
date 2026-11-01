@@ -193,8 +193,9 @@ static void test_round_trip(const char *conf)
                                  "stty -icanon -echo min 1; "
                                  "printf '\\033[20;7H\\033[6n'; "
                                  "reply=$(dd bs=1 count=7 2>/dev/null | tr '\\033' E); "
+                                 "stty icanon echo; "
                                  "printf '\\033[22;1Hcpr:%s\\n' \"$reply\"; "
-                                 "stty icanon echo; read line; "
+                                 "read line; "
                                  "printf 'size:%s\\n' \"$(stty size)\"; "
                                  "read line; exit 7";
     char *argv[] = {"term", "-H", "-c", (char *)conf, "/bin/sh", "-c", (char *)script, NULL};
