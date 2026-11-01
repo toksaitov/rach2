@@ -402,13 +402,13 @@ static int timer_count_rows(uint32_t p)
 }
 
 /**
- * The rows of `timer_clock_check` for the reference, the PM timer's 35795.45
- * counts a tick: short of a tick, none, and a count past it, one; the edge
- * then 45 hundredths past its count, so that count is short of it; after two
- * ticks, the edge two ticks on exactly; an interrupt nine and a half ticks
- * late counts nine, the same one again none, with the place unchanged; a
- * gap of 2^40 counts, some 85 hours, counts the bound; and a count behind
- * the edge counts none.
+ * The rows of `timer_clock_check` for the reference, with the PM timer's
+ * 35795.45 counts a tick of 100 Hz kept in hundredths of a count: short of a
+ * tick, none, and a count past it, one; the edge then 45 hundredths past its
+ * count, so that count is short of it; after two ticks, the edge two ticks
+ * on exactly; an interrupt nine and a half ticks late counts nine, the same
+ * one again none, with the place unchanged; a gap of 2^40 counts, some 85
+ * hours, counts the bound; and a count behind the edge counts none.
  */
 static int timer_ref_rows(void)
 {

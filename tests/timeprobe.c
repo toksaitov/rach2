@@ -210,9 +210,10 @@ PROBE_SP_ENTRY;
  * Both getrandom buffers start zeroed, so a call that writes nothing fails
  * the test that the two differ.
  *
- * The sleep of 150 ms is fifteen ticks; two reads of a clock that moves in
- * ticks can straddle two of them, so the bound is 130. How far the sleep
- * overshot depends on the machine, and the probe does not judge it.
+ * The sleep of 150 ms is 150 ticks; two reads of a clock that moves in
+ * ticks can straddle two of them, and the bound of 130 leaves room past
+ * that. How far the sleep overshot depends on the machine, and the probe
+ * does not judge it.
  *
  * `_start` calls it with the initial stack, whose environment gives the
  * case's identity.

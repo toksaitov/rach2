@@ -47,9 +47,9 @@ void platform_report(void);
 void platform_report_hold(void);
 
 /**
- * Bring up the interrupt controllers and start the periodic tick, 100 times
- * a second, with `tick` its handler, and check that it arrives. Interrupts
- * are on when this returns.
+ * Bring up the interrupt controllers and start the periodic tick, TICK_HZ
+ * times a second, with `tick` its handler, and check that it arrives.
+ * Interrupts are on when this returns.
  */
 void platform_timer_start(isr_handler_t tick);
 
