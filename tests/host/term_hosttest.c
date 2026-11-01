@@ -307,7 +307,8 @@ static void test_conf(void)
 
     fprintf(stderr, "settings\n");
     term_conf_defaults(&c);
-    CHECK(strcmp(c.font, TERM_FONT_PATH) == 0 && c.scale == 1 && c.scrollback == TERM_SCROLLBACK,
+    CHECK(strcmp(c.font, TERM_FONT_PATH) == 0 && c.scale == 1 && c.scrollback == TERM_SCROLLBACK &&
+              c.bell == TERM_BELL_AUDIBLE,
           "the defaults");
     CHECK(term_conf_read(&c, fix_path("absent.conf")) == 0, "a missing file is no error");
     CHECK(c.scale == 1, "a missing file changes nothing");
@@ -326,16 +327,20 @@ static void test_conf(void)
           "scrollback = 100001\n"
           "scrollback = 12x\n"
           "font = relative.font\n"
+          "bell = both\n"
+          "bell = loud\n"
           "colour = blue\n"
           "no equals sign\n"
           "scale =\n",
           f);
     fclose(f);
-    fprintf(stderr, "  (seven diagnostics follow)\n");
+    fprintf(stderr, "  (eight diagnostics follow)\n");
     CHECK(term_conf_read(&c, path) == 0, "a file with bad lines is read");
     CHECK(c.scale == 2, "scale = 2, and bad scales are skipped");
     CHECK(c.scrollback == 250, "scrollback=250, and bad counts are skipped");
     CHECK(strcmp(c.font, "/fonts/u.font") == 0, "font, and a relative path is skipped");
+    CHECK(c.bell == (TERM_BELL_AUDIBLE | TERM_BELL_VISUAL),
+          "bell = both, and a bad bell is skipped");
 }
 
 int main(void)

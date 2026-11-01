@@ -109,6 +109,7 @@ void term_conf_defaults(struct term_conf *c)
     strcpy(c->font, TERM_FONT_PATH);
     c->scale = 1;
     c->scrollback = TERM_SCROLLBACK;
+    c->bell = TERM_BELL_AUDIBLE;
 }
 
 /** Strip blanks from both ends of `s` in place and return its first byte. */
@@ -164,6 +165,17 @@ static const char *conf_set(struct term_conf *c, const char *name, const char *v
     } else if (strcmp(name, "scrollback") == 0) {
         if (!parse_number(value, 0, TERM_SCROLLBACK_MAX, &c->scrollback))
             return "not a count of lines from 0 to 100000";
+    } else if (strcmp(name, "bell") == 0) {
+        if (strcmp(value, "audible") == 0)
+            c->bell = TERM_BELL_AUDIBLE;
+        else if (strcmp(value, "visual") == 0)
+            c->bell = TERM_BELL_VISUAL;
+        else if (strcmp(value, "both") == 0)
+            c->bell = TERM_BELL_AUDIBLE | TERM_BELL_VISUAL;
+        else if (strcmp(value, "none") == 0)
+            c->bell = 0;
+        else
+            return "not audible, visual, both or none";
     } else {
         return "unknown setting";
     }
@@ -222,6 +234,7 @@ struct term {
     struct term_screen screen;
     struct term_pty pty;
     const char *conf; /* the settings file, where a change of scale is kept */
+    unsigned bell;    /* the bell's setting, TERM_BELL_* */
     unsigned cols;    /* the screen's size in cells */
     unsigned rows;
     bool suspended;    /* a descendant has the screen and the keyboard */
@@ -338,14 +351,28 @@ static int read_keys(struct term *t)
 }
 
 /**
- * Show what the round changed: the new size, the visible bell, and a frame
- * when the screen changed or the bell's end or the hold's bound came.
+ * Ring the bell as the settings say: sound the speaker at the tone the child
+ * set or term's soft default, and show the screen in inverse colors. A
+ * speaker that fails is not reported, since the bell is no error of the
+ * child's.
+ */
+static void ring(struct term *t)
+{
+    if (t->bell & TERM_BELL_AUDIBLE)
+        term_keys_tone(&t->keys, t->screen.bell_hz, t->screen.bell_ms);
+    if (t->bell & TERM_BELL_VISUAL)
+        term_draw_bell(&t->draw);
+}
+
+/**
+ * Show what the round changed: the new size, the bell, and a frame when the
+ * screen changed or the visible bell's end or the hold's bound came.
  */
 static void present(struct term *t)
 {
     follow_size(t);
     if (t->screen.bell) {
-        term_draw_bell(&t->draw);
+        ring(t);
         t->screen.bell = false;
     }
     if (t->dirty || term_draw_timeout(&t->draw) == 0) {
@@ -444,6 +471,7 @@ static int run(const struct term_options *o, const struct term_conf *conf)
     t.pty.master = -1;
     t.pty.child = -1;
     t.conf = o->conf;
+    t.bell = conf->bell;
 
     sigfd = term_signals_open();
     if (sigfd < 0) {

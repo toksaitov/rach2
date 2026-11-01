@@ -32,6 +32,17 @@
 #define TERM_SCROLLBACK_MAX 100000
 
 /*
+ * The bell: TERM_BELL_AUDIBLE sounds the speaker, TERM_BELL_VISUAL shows the
+ * screen in inverse colors, and `bell = both` does both. The PC speaker has
+ * no volume, so a soft beep is a short and low one; a program sets another
+ * pitch and length with the Linux console's CSI 10 ; n ] and CSI 11 ; n ].
+ */
+#define TERM_BELL_AUDIBLE 1u
+#define TERM_BELL_VISUAL  2u
+#define TERM_BELL_HZ      750 /* the beep's pitch unless a program sets one */
+#define TERM_BELL_MS      40  /* its length in milliseconds */
+
+/*
  * Bytes of the child's output parsed before the loop looks at the keys
  * again, so that typing stays prompt while a program floods the screen.
  */
@@ -57,6 +68,7 @@ struct term_conf {
     char font[256];      /* the packed font's path */
     unsigned scale;      /* the font's scale, 1 or 2 */
     unsigned scrollback; /* lines of history, 0 to TERM_SCROLLBACK_MAX */
+    unsigned bell;       /* TERM_BELL_AUDIBLE, TERM_BELL_VISUAL, both or 0 */
 };
 
 /** Set every setting to its default. */
@@ -197,7 +209,9 @@ struct term_screen {
     struct tsm_screen *screen;
     struct tsm_vte *vte;
     struct term_pty *pty; /* where the parser's replies are written */
-    bool bell;            /* the bell rang; the loop shows it and clears this */
+    bool bell;            /* the bell rang; the loop rings it and clears this */
+    unsigned bell_hz;     /* the pitch it rang at: CSI 10 ; n ]'s or TERM_BELL_HZ */
+    unsigned bell_ms;     /* its length: CSI 11 ; n ]'s or TERM_BELL_MS; 0 silent */
     char *clipboard;      /* the clipboard's text, from a selection or OSC 52 */
     size_t clipboard_len; /* its bytes; the text is also NUL-terminated */
     /* Called with every byte written for the child, before the pty takes
@@ -596,6 +610,14 @@ struct term_keys {
  * locks start as the console has them.
  */
 int term_keys_open(struct term_keys *k, const char *path);
+
+/**
+ * Sound the console's speaker at `hz` for `ms` milliseconds with KDMKTONE,
+ * which the kernel ends. A pitch the request cannot carry, below 19 Hz or
+ * above the timer's clock, or a length of 0, sounds nothing. Returns 0, or
+ * a negative errno value; -ENOTTY under term -H, which has no console.
+ */
+int term_keys_tone(struct term_keys *k, unsigned hz, unsigned ms);
 
 /** Set up term -H's keys, with no console and the built-in US keymap. */
 void term_keys_init_host(struct term_keys *k);

@@ -31,6 +31,25 @@ At 1 a cell is 8 by 16 pixels, at 2 it is 16 by 32.
 .It Va scrollback
 The lines of history kept above the screen, 0 to 100000; 1000 by
 default.
+.It Va bell
+What the bell does:
+.Li audible
+sounds the PC speaker,
+.Li visual
+shows the screen in inverse colors for a tenth of a second,
+.Li both
+does both and
+.Li none
+neither;
+.Li audible
+by default.
+The speaker has no volume, so the beep is soft by being short and low,
+40 ms at 750 Hz, unless the program sets another pitch with
+.Ql "ESC [ 10 ; N ]" ,
+in hertz, or length with
+.Ql "ESC [ 11 ; N ]" ,
+in milliseconds, as on Linux's console; a length of 0, or of 2000 or
+more, is silent, and either with no N gives the default back.
 .El
 .Pp
 Ctrl+Shift+Page Up and Ctrl+Shift+Page Down in
@@ -42,9 +61,11 @@ replacing the file's
 line and keeping its others.
 .Sh EXAMPLES
 .Bd -literal -offset indent
-# The Lenovo's 1366x768 screen at 85x24 cells.
+# The Lenovo's 1366x768 screen at 85x24 cells, and a silent bell.
 scale = 2
 scrollback = 5000
+bell = none
 .Ed
 .Sh SEE ALSO
-.Xr term 1
+.Xr term 1 ,
+.Xr ioctl 2
