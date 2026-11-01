@@ -409,6 +409,9 @@ void free_process(process_t *proc)
     proc->state = PROC_UNUSED;
     proc_timer_update(proc);
     pid_remove(proc);
+    if (proc->pid == proc->tgid) {
+        wq_wake_all(&proc->tg->exited);
+    }
     pid_records--;
     user_put(proc->user_count);
     sched_forget(proc);

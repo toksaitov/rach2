@@ -36,6 +36,7 @@ and
 .Xr epoll 2
 report a pidfd readable once every thread of its process has ended, and
 hung up as well once the process has been reaped.
+Both events wake a poller already waiting on the pidfd.
 .Xr waitid 2
 with
 .Dv P_PIDFD
@@ -72,6 +73,8 @@ negative and not
 as
 .Xr rt_sigqueueinfo 2
 has it.
+The kernel copies the whole siginfo before resolving the process, so a
+page fault during the copy cannot leave a stale target.
 Signal 0 checks the permission and sends nothing, and a signal to a process
 whose threads have all ended is discarded.
 .Fa flags

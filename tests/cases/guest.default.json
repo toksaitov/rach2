@@ -4279,7 +4279,13 @@
         {"assertion_id": "self-faults", "checks": "Touching 64 new pages raises getrusage's ru_minflt by at least 64.", "source": "program"},
         {"assertion_id": "populate", "checks": "A 64-page mapping made with MAP_POPULATE raises ru_minflt by at least 64 in the mmap call and by fewer than 64 when its pages are then written.", "source": "program"},
         {"assertion_id": "wait4-faults", "checks": "wait4 reports at least 64 minor faults of a child that touched 64 pages.", "source": "program"},
-        {"assertion_id": "children-faults", "checks": "The children's ru_minflt rises by exactly what wait4 reported.", "source": "program"}
+        {"assertion_id": "children-faults", "checks": "The children's ru_minflt rises by exactly what wait4 reported.", "source": "program"},
+        {"assertion_id": "hangup-wakes", "checks": "Reaping a child wakes a sibling already blocked in poll with no requested events on its pidfd, returning POLLHUP.", "source": "program"},
+        {"assertion_id": "pidfd-file-info", "checks": "pidfd_send_signal faults a fresh file page and delivers its siginfo fields.", "source": "program"},
+        {"assertion_id": "process-file-info", "checks": "rt_sigqueueinfo faults a fresh file page and delivers its siginfo fields.", "source": "program"},
+        {"assertion_id": "thread-file-info", "checks": "rt_tgsigqueueinfo faults a fresh file page and delivers its siginfo fields.", "source": "program"},
+        {"assertion_id": "info-before-target", "checks": "Each queued-signal call rejects unreadable siginfo before resolving a missing target.", "source": "program"},
+        {"assertion_id": "queued-code-permission", "checks": "Each queued-signal call refuses SI_USER sent to a foreign process with EPERM.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

@@ -60,8 +60,8 @@ static int32_t pidfd_write(fd_entry_t *e, const char __user *buf, uint32_t count
 }
 
 /** poll of a pidfd: POLLIN once every thread of the process has ended, and
- * POLLHUP too once it has been reaped, with the queue the last thread's end
- * wakes (`proc_exit_cleanup`). */
+ * POLLHUP too once it has been reaped, with the queue woken at the
+ * last thread's end and the leader's reap. */
 static short pidfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     const struct pidfd *pf = (const struct pidfd *)e->priv;

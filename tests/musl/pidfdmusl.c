@@ -24,6 +24,12 @@
  * EINVAL, a read of a pidfd is EINVAL, and pidfd_send_signal on a
  * descriptor that is not a pidfd is EBADF.
  *
+ * A sibling blocks in poll with no requested events on an unreaped child's
+ * pidfd. Reaping the child wakes it with POLLHUP. Each queued-signal call
+ * copies siginfo from a file page not yet faulted into the caller's mapping;
+ * the signal retains its code, sender, errno and value. Bad siginfo is
+ * rejected before a missing target, and kernel codes stay within a process.
+ *
  * Touching 64 new pages raises getrusage's ru_minflt by at least 64; a
  * mapping of 64 pages made with MAP_POPULATE raises it by at least 64 in the
  * mmap call and by fewer than 64 when they are then written. A child that
@@ -37,7 +43,9 @@
  * `pidfd-readable`, `waitid-pidfd`, `pidfd-hangup`, `pidfd-open`,
  * `send-signal`, `killed`, `send-reaped`, `nonblock-eagain`, `getfd`,
  * `getfd-errors`, `pidfd-errors`, `self-faults`, `populate`, `wait4-faults`
- * and `children-faults`. The first failure fails its assertion and leaves
+ * and `children-faults`, followed by `hangup-wakes`, `pidfd-file-info`,
+ * `process-file-info`, `thread-file-info`, `info-before-target` and
+ * `queued-code-permission`. The first failure fails its assertion and leaves
  * the rest not run.
  */
 
@@ -46,6 +54,8 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <sched.h>
+#include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -352,16 +362,274 @@ static int faults(void)
     return 0;
 }
 
+/** Read a child's state from procfs, or return 0 when it cannot be read. */
+static char child_state(pid_t pid)
+{
+    char path[64];
+    char buf[512];
+    char *end;
+    int fd;
+    ssize_t n;
+
+    snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
+    fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        return 0;
+    }
+    n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) {
+        return 0;
+    }
+    buf[n] = 0;
+    end = strrchr(buf, ')');
+    return end && end[1] == ' ' ? end[2] : 0;
+}
+
+/** Reap an exited child while its sibling is already waiting for POLLHUP.
+ * All children and descriptors are released on success or failure. */
+static int hangup_wakes(void)
+{
+    pid_t target = -1, monitor = -1;
+    int pidfd = -1, ready[2] = {-1, -1};
+    int status, ok = 0;
+    char byte, state;
+    siginfo_t si;
+
+    if (pipe(ready) != 0) {
+        goto out;
+    }
+    target = fork();
+    if (target == 0) {
+        _exit(0);
+    }
+    if (target < 0) {
+        goto out;
+    }
+    pidfd = (int)syscall(SYS_pidfd_open, (long)target, 0L);
+    if (pidfd < 0 || waitid(P_PID, (id_t)target, &si, WEXITED | WNOWAIT) != 0) {
+        goto out;
+    }
+    monitor = fork();
+    if (monitor == 0) {
+        struct pollfd p;
+        int rc;
+
+        close(ready[0]);
+        if (write(ready[1], "r", 1) != 1) {
+            _exit(1);
+        }
+        close(ready[1]);
+        p.fd = pidfd;
+        p.events = 0;
+        p.revents = 0;
+        do {
+            rc = poll(&p, 1, -1);
+        } while (rc < 0 && errno == EINTR);
+        _exit(rc == 1 && (p.revents & POLLHUP) ? 0 : 1);
+    }
+    if (monitor < 0) {
+        goto out;
+    }
+    close(ready[1]);
+    ready[1] = -1;
+    if (read(ready[0], &byte, 1) != 1) {
+        goto out;
+    }
+    do {
+        state = child_state(monitor);
+        if (state == 0 || state == 'Z') {
+            goto out;
+        }
+        sched_yield();
+    } while (state != 'S');
+    if (waitpid(target, &status, 0) != target) {
+        goto out;
+    }
+    target = -1;
+    if (waitpid(monitor, &status, 0) != monitor) {
+        goto out;
+    }
+    monitor = -1;
+    ok = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+out:
+    if (monitor > 0) {
+        kill(monitor, SIGKILL);
+        waitpid(monitor, NULL, 0);
+    }
+    if (target > 0) {
+        kill(target, SIGKILL);
+        waitpid(target, NULL, 0);
+    }
+    if (pidfd >= 0) {
+        close(pidfd);
+    }
+    if (ready[0] >= 0) {
+        close(ready[0]);
+    }
+    if (ready[1] >= 0) {
+        close(ready[1]);
+    }
+    if (!ok) {
+        return fail("a pidfd waiter did not wake when another process reaped its target");
+    }
+    report_held();
+    return 0;
+}
+
+/** Return the count of faults that read a file, or -1 on failure. */
+static long major_faults(void)
+{
+    struct rusage ru;
+
+    return getrusage(RUSAGE_SELF, &ru) == 0 ? ru.ru_majflt : -1;
+}
+
+/** Send queued siginfo through each call, faulting a fresh file page.
+ * The temporary file is unlinked before use; mappings, descriptors and the
+ * signal mask are restored on every return. */
+static int file_info(void)
+{
+    const char *tmp = getenv("TMPDIR");
+    char path[512] = {0};
+    siginfo_t si, got;
+    sigset_t set, old;
+    struct timespec zero = {0, 0};
+    char *mapping = MAP_FAILED;
+    const char *error = "could not prepare a queued siginfo file mapping";
+    int fd = -1, pidfd = -1, i;
+    long before, rc;
+    pid_t pid = getpid();
+
+    sigemptyset(&set);
+    sigaddset(&set, SIGUSR1);
+    if (sigprocmask(SIG_BLOCK, &set, &old) != 0) {
+        return fail(error);
+    }
+    if (snprintf(path, sizeof(path), "%s/pidfd-info.XXXXXX", tmp ? tmp : "/tmp") >=
+        (int)sizeof(path)) {
+        goto out;
+    }
+    fd = mkstemp(path);
+    if (fd < 0) {
+        goto out;
+    }
+    if (unlink(path) != 0) {
+        goto out;
+    }
+    path[0] = 0;
+    memset(&si, 0, sizeof(si));
+    si.si_signo = SIGUSR1;
+    si.si_code = SI_QUEUE;
+    si.si_errno = 37;
+    si.si_pid = pid;
+    si.si_uid = getuid();
+    if (ftruncate(fd, 3 * 4096) != 0) {
+        goto out;
+    }
+    for (i = 0; i < 3; i++) {
+        si.si_value.sival_int = 100 + i;
+        if (pwrite(fd, &si, sizeof(si), i * 4096) != (ssize_t)sizeof(si)) {
+            goto out;
+        }
+    }
+    pidfd = (int)syscall(SYS_pidfd_open, (long)pid, 0L);
+    mapping = mmap(NULL, 3 * 4096, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (pidfd < 0 || mapping == MAP_FAILED) {
+        goto out;
+    }
+    for (i = 0; i < 3; i++) {
+        before = major_faults();
+        if (i == 0) {
+            rc = syscall(SYS_pidfd_send_signal, (long)pidfd, (long)SIGUSR1, mapping + i * 4096, 0L);
+        } else if (i == 1) {
+            rc = syscall(SYS_rt_sigqueueinfo, (long)pid, (long)SIGUSR1, mapping + i * 4096);
+        } else {
+            rc = syscall(SYS_rt_tgsigqueueinfo, (long)pid, syscall(SYS_gettid), (long)SIGUSR1,
+                         mapping + i * 4096);
+        }
+        error = "queued siginfo did not fault its file page or retain its fields";
+        if (rc != 0 || before < 0 || major_faults() <= before ||
+            sigtimedwait(&set, &got, &zero) != SIGUSR1 || got.si_code != SI_QUEUE ||
+            got.si_errno != 37 || got.si_pid != pid || got.si_uid != getuid() ||
+            got.si_value.sival_int != 100 + i) {
+            goto out;
+        }
+        report_held();
+    }
+    error = NULL;
+out:
+    if (mapping != MAP_FAILED) {
+        munmap(mapping, 3 * 4096);
+    }
+    if (pidfd >= 0) {
+        close(pidfd);
+    }
+    if (fd >= 0) {
+        close(fd);
+    }
+    if (fd >= 0 && path[0]) {
+        unlink(path);
+    }
+    sigprocmask(SIG_SETMASK, &old, NULL);
+    return error ? fail(error) : 0;
+}
+
+/** Check siginfo copy ordering and preserve the restriction on kernel codes.
+ * A child used as the foreign target is killed and reaped on every path. */
+static int queued_checks(void)
+{
+    pid_t pid;
+    int pidfd, ok;
+    siginfo_t si;
+
+    if (syscall(SYS_pidfd_send_signal, -1L, (long)SIGUSR1, (void *)1, 0L) != -1 ||
+        errno != EFAULT ||
+        syscall(SYS_rt_sigqueueinfo, 2000000000L, (long)SIGUSR1, (void *)1) != -1 ||
+        errno != EFAULT ||
+        syscall(SYS_rt_tgsigqueueinfo, 2000000000L, 2000000000L, (long)SIGUSR1, (void *)1) != -1 ||
+        errno != EFAULT) {
+        return fail("queued siginfo was not copied before resolving the target");
+    }
+    report_held();
+    pid = pausing_child();
+    if (pid < 0) {
+        return fail("could not fork a queued signal target");
+    }
+    pidfd = (int)syscall(SYS_pidfd_open, (long)pid, 0L);
+    memset(&si, 0, sizeof(si));
+    si.si_signo = SIGUSR1;
+    si.si_code = SI_USER;
+    ok = pidfd >= 0 && syscall(SYS_pidfd_send_signal, (long)pidfd, (long)SIGUSR1, &si, 0L) == -1 &&
+         errno == EPERM && syscall(SYS_rt_sigqueueinfo, (long)pid, (long)SIGUSR1, &si) == -1 &&
+         errno == EPERM &&
+         syscall(SYS_rt_tgsigqueueinfo, (long)pid, (long)pid, (long)SIGUSR1, &si) == -1 &&
+         errno == EPERM;
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    if (pidfd >= 0) {
+        close(pidfd);
+    }
+    if (!ok) {
+        return fail("a queued kernel code was not refused for another process");
+    }
+    report_held();
+    return 0;
+}
+
 /** Begin the report and plan its assertions, in the order they are
  * checked. */
 static void plan(void)
 {
-    static const char *const ids[] = {"clear-sighand",  "clear-sighand-einval", "clone3-pidfd",
-                                      "pidfd-readable", "waitid-pidfd",         "pidfd-hangup",
-                                      "pidfd-open",     "send-signal",          "killed",
-                                      "send-reaped",    "nonblock-eagain",      "getfd",
-                                      "getfd-errors",   "pidfd-errors",         "self-faults",
-                                      "populate",       "wait4-faults",         "children-faults"};
+    static const char *const ids[] = {
+        "clear-sighand",    "clear-sighand-einval", "clone3-pidfd",
+        "pidfd-readable",   "waitid-pidfd",         "pidfd-hangup",
+        "pidfd-open",       "send-signal",          "killed",
+        "send-reaped",      "nonblock-eagain",      "getfd",
+        "getfd-errors",     "pidfd-errors",         "self-faults",
+        "populate",         "wait4-faults",         "children-faults",
+        "hangup-wakes",     "pidfd-file-info",      "process-file-info",
+        "thread-file-info", "info-before-target",   "queued-code-permission"};
     unsigned i;
 
     report_begin(report_case(environ, "guest.default.pidfdmusl"));
@@ -373,7 +641,8 @@ static void plan(void)
 int main(void)
 {
     plan();
-    if (clones() != 0 || opens() != 0 || getfds() != 0 || faults() != 0) {
+    if (clones() != 0 || opens() != 0 || getfds() != 0 || faults() != 0 || hangup_wakes() != 0 ||
+        file_info() != 0 || queued_checks() != 0) {
         return 1;
     }
     report_end();

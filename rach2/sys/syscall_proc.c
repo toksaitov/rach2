@@ -4012,13 +4012,11 @@ long sys_tgkill(isr_params_t *params)
 }
 
 /**
- * The siginfo a caller of rt_sigqueueinfo or rt_tgsigqueueinfo gives at
- * `u`: its code and the three words after it, the pid, uid and value that
- * sigqueue fills in. A code of zero or above, or SI_TKILL, is the kernel's
- * to send, and a caller may give one only to its own process (`own`), as
- * on Linux. Returns 0, -EFAULT when `u` cannot be read, or -EPERM.
+ * Copy and decode a queued signal's siginfo before resolving its target.
+ * Returns 0 or -EFAULT. When nonnull, `signo` gets the signal number from
+ * the same copy. This may sleep on a user page fault.
  */
-static int32_t queued_info(uintptr_t u, int own, struct k_siginfo *info)
+static int32_t queued_info(uintptr_t u, struct k_siginfo *info, int32_t *signo)
 {
     uint8_t buf[SIGINFO_SIZE];
 
@@ -4026,7 +4024,21 @@ static int32_t queued_info(uintptr_t u, int own, struct k_siginfo *info)
         return -EFAULT;
     }
     sigframe_take_siginfo(buf, info);
-    if ((info->code >= 0 || info->code == SI_TKILL) && !own) {
+    if (signo) {
+        k_memcpy(signo, buf, sizeof(*signo));
+    }
+    return 0;
+}
+
+/**
+ * Check a copied siginfo's code and the caller's permission to signal `t`.
+ * Kernel codes and SI_TKILL may be sent only within the caller's process.
+ * Returns 0 or -EPERM; the big lock is held and this does not sleep.
+ */
+static int32_t queued_permit(process_t *t, int signo, const struct k_siginfo *info)
+{
+    if (((info->code >= 0 || info->code == SI_TKILL) && t->tg != current_proc->tg) ||
+        !cred_may_signal(t, signo)) {
         return -EPERM;
     }
     return 0;
@@ -4039,26 +4051,28 @@ static int32_t queued_info(uintptr_t u, int own, struct k_siginfo *info)
  * while pending is merged, where Linux queues it. Signal 0, and a signal to a
  * process whose threads have all ended, are checked and not posted. -EINVAL
  * for a signal out of range, -ESRCH for no such process, and -EFAULT or
- * -EPERM from the siginfo (`queued_info`) or the permission.
+ * -EPERM from the siginfo or the permission.
  */
 long sys_rt_sigqueueinfo(isr_params_t *params)
 {
     int pid = (int)SC_ARG(params, 0);
     int signo = (int)SC_ARG(params, 1);
-    process_t *target = pid > 0 ? proc_named((uint32_t)pid) : NULL;
+    process_t *target;
     struct k_siginfo info;
     int32_t rc;
 
     if (signo < 0 || signo > KSIG_MAX) {
         return -EINVAL;
     }
+    rc = queued_info(SC_ARG(params, 2), &info, NULL);
+    if (rc != 0) {
+        return rc;
+    }
+    target = pid > 0 ? proc_named((uint32_t)pid) : NULL;
     if (!target || target->state == PROC_UNUSED) {
         return -ESRCH;
     }
-    rc = queued_info(SC_ARG(params, 2), target->tg == current_proc->tg, &info);
-    if (rc == 0 && !cred_may_signal(target, signo)) {
-        rc = -EPERM;
-    }
+    rc = queued_permit(target, signo, &info);
     if (rc == 0 && signo != 0 && target->tg->live != 0) {
         signal_post_info(target, signo, &info);
     }
@@ -4069,7 +4083,7 @@ long sys_rt_sigqueueinfo(isr_params_t *params)
  * pidfd_send_signal takes a pidfd, a signal, a siginfo or 0, and flags,
  * which must be 0: the signal posted to the pidfd's process under kill's
  * permission, with the siginfo given, whose si_signo must be the signal and
- * whose code `queued_info` checks, or else kill's. A process outside the
+ * whose code `queued_permit` checks, or else kill's. A process outside the
  * caller's PID namespace and those below it is EINVAL. Signal 0, and a signal
  * to a process whose threads have all ended, are checked and not posted.
  * -EINVAL, -EBADF for a descriptor that is not a pidfd, -ESRCH for a
@@ -4087,6 +4101,15 @@ long sys_pidfd_send_signal(isr_params_t *params)
     if (SC_ARG(params, 3) != 0 || signo < 0 || signo > KSIG_MAX) {
         return -EINVAL;
     }
+    if (uinfo) {
+        rc = queued_info(uinfo, &info, &given);
+        if (rc != 0) {
+            return rc;
+        }
+        if (given != signo) {
+            return -EINVAL;
+        }
+    }
     rc = pidfd_lookup((int)SC_ARG(params, 0), &target, NULL);
     if (rc != 0) {
         return rc;
@@ -4098,21 +4121,15 @@ long sys_pidfd_send_signal(isr_params_t *params)
         return -EINVAL;
     }
     if (uinfo) {
-        if (copy_from_user(&given, (const void __user *)uinfo, sizeof(given)) != 0) {
-            return -EFAULT;
-        }
-        if (given != signo) {
-            return -EINVAL;
-        }
-        rc = queued_info(uinfo, target->tg == current_proc->tg, &info);
+        rc = queued_permit(target, signo, &info);
         if (rc != 0) {
             return rc;
         }
     } else {
+        if (!cred_may_signal(target, signo)) {
+            return -EPERM;
+        }
         sender_info(&info, SI_USER, target);
-    }
-    if (!cred_may_signal(target, signo)) {
-        return -EPERM;
     }
     if (signo != 0 && target->tg->live != 0) {
         signal_post_info(target, signo, &info);
@@ -4127,21 +4144,23 @@ long sys_rt_tgsigqueueinfo(isr_params_t *params)
     int tgid = (int)SC_ARG(params, 0);
     int tid = (int)SC_ARG(params, 1);
     int signo = (int)SC_ARG(params, 2);
-    process_t *t = tid > 0 ? proc_named((uint32_t)tid) : NULL;
+    process_t *t;
     struct k_siginfo info;
     int32_t rc;
 
     if (tgid <= 0 || tid <= 0 || signo < 0 || signo > KSIG_MAX) {
         return -EINVAL;
     }
+    rc = queued_info(SC_ARG(params, 3), &info, NULL);
+    if (rc != 0) {
+        return rc;
+    }
+    t = proc_named((uint32_t)tid);
     if (!t || t->state == PROC_UNUSED || t->state == PROC_ZOMBIE ||
         t->tgid != pid_named((uint32_t)tgid)) {
         return -ESRCH;
     }
-    rc = queued_info(SC_ARG(params, 3), t->tg == current_proc->tg, &info);
-    if (rc == 0 && !cred_may_signal(t, signo)) {
-        rc = -EPERM;
-    }
+    rc = queued_permit(t, signo, &info);
     if (rc == 0 && signo != 0) {
         signal_post_thread(t, signo, &info);
     }

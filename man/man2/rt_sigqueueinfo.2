@@ -39,6 +39,8 @@ A code of zero or above, or
 is the kernel's, and a caller may give it only to its own process, as on
 Linux.
 A signal of 0 checks the target and sends nothing.
+The kernel copies the whole siginfo before resolving the target; a page
+fault during that copy may let another process reap the target.
 .Pp
 The kernel keeps one pending instance of each signal, so a real-time
 signal sent again while it is pending is merged with it, where Linux
