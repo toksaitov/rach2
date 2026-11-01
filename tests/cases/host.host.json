@@ -76,6 +76,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "ideapad",
+          "checks": "tests/host/ideapad_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "ahci",
           "checks": "tests/host/ahci_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -123,6 +128,11 @@
         {
           "assertion_id": "bootverb",
           "checks": "tests/host/bootverb_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "airplane",
+          "checks": "tests/host/airplane_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
         },
         {
