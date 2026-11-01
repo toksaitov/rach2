@@ -702,10 +702,13 @@ build/tests/host-suite/scripts.inventory.json: build/tests/system/fakeapi_test
 build/tests/host-suite/etude.inventory.json: $(ETUDE) build/tests/cases/host/host
 
 # The libtsm and term host tests, and the compilation database that lists
-# them, compile the host build's patched libtsm tree.
+# them, compile the host build's patched libtsm tree. Windows runs those
+# tests in the GNU helper, whose image builds the tree.
+ifneq ($(OS),Windows_NT)
 build/tests/host-suite/tests.inventory.json \
 build/x86_64/tests/host-suite/tests.inventory.json \
 build/tests/style/sources.json build/x86_64/tests/style/sources.json: $(LIBTSM_HOST_STAMP)
+endif
 
 # The native exFAT check uses one architecture-independent prepared volume.
 # Windows runs that check in the GNU helper, whose image builds it separately.
