@@ -12,9 +12,9 @@
  * time, and an id of no process fails with ESRCH.
  * A child blocked after reporting its own CPU time has a clock by id that reads
  * what it reported, or one tick more, and that advances by the three ticks it
- * spins between two reports. Real time and time since boot resolve to the
- * microsecond, and the coarse and CPU clocks to the 10 ms tick, and on i686 the
- * 64-bit call answers as the 32-bit one.
+ * spins between two reports. Real time and time since boot resolve to a
+ * microsecond or less, and the coarse and CPU clocks to the 1 ms tick, and on
+ * i686 the 64-bit call answers as the 32-bit one.
  *
  * `clock_nanosleep` is called through `syscall`, since musl answers some clocks
  * itself and uses `nanosleep` for a relative sleep of real time. An absolute
@@ -91,7 +91,10 @@ struct kts {
 #endif
 
 /* One tick, the granularity of the coarse and CPU clocks, in nanoseconds. */
-#define TICK_NS 10000000L
+#define TICK_NS 1000000L
+
+/* One count of the clock_t that times reports, USER_HZ's 100 a second. */
+#define CLOCK_T_NS 10000000L
 
 /* The count of SIGALRM deliveries to on_alarm. */
 static volatile sig_atomic_t alarms;
@@ -226,9 +229,9 @@ static int coarse_clocks(void)
     long long t0;
     long long t1;
 
-    t0 = (long long)times(NULL) * TICK_NS;
+    t0 = (long long)times(NULL) * CLOCK_T_NS;
     x = ns_of(CLOCK_MONOTONIC_COARSE);
-    t1 = (long long)times(NULL) * TICK_NS;
+    t1 = ((long long)times(NULL) + 1) * CLOCK_T_NS;
     after = ns_of(CLOCK_MONOTONIC);
     if (x < t0 || x > t1 || x > after) {
         printf("CLOCKIDMUSL FAIL (coarse time since boot is not time since boot at the last tick: "
@@ -286,8 +289,10 @@ static int cpu_clocks(void)
     before = ns_of(CLOCK_PROCESS_CPUTIME_ID);
     times(&tm);
     after = ns_of(CLOCK_PROCESS_CPUTIME_ID);
-    x = ((long long)tm.tms_utime + tm.tms_stime) * TICK_NS;
-    if (x < before || x > after) {
+    /* times truncates the user and the system time each to a clock_t. */
+    x = ((long long)tm.tms_utime + tm.tms_stime) * CLOCK_T_NS;
+    if (x + 2 * CLOCK_T_NS <= before || x > after) {
+        printf("clockidmusl: cpu clock %lld, times %lld, cpu clock %lld\n", before, x, after);
         return fail("the process CPU clock does not read what times reports");
     }
     report_held();
@@ -351,8 +356,9 @@ static int clocks(void)
         return 1;
     }
     for (i = 0; i < sizeof(fine) / sizeof(fine[0]); i++) {
-        if (clock_getres(fine[i], &res) != 0 || res.tv_sec != 0 || res.tv_nsec != 1000) {
-            return fail("real time or time since boot does not resolve to the microsecond");
+        if (clock_getres(fine[i], &res) != 0 || res.tv_sec != 0 ||
+            (res.tv_nsec < 1 || res.tv_nsec > 1000)) {
+            return fail("real time or time since boot does not resolve to a microsecond or less");
         }
     }
     report_held();
