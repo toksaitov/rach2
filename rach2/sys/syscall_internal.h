@@ -484,6 +484,9 @@ long sys_statx(isr_params_t *params);
 long sys_access(isr_params_t *params);
 
 long sys_faccessat(isr_params_t *params);
+
+long sys_faccessat2(isr_params_t *params);
+
 long sys_inotify_add_watch(isr_params_t *params);
 
 long sys_chmod(isr_params_t *params);

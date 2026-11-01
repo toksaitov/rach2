@@ -1000,6 +1000,8 @@ long sys_writev(isr_params_t *params)
 
 #define AT_EMPTY_PATH 0x1000 /* *at: operate on the dirfd itself */
 
+#define AT_EACCESS 0x200 /* faccessat2: judge by the effective ids */
+
 #define AT_NO_AUTOMOUNT 0x800 /* fstatat: accepted and meaningless here */
 
 /* The file type bits of a mode, as st_mode has them. */
@@ -7765,13 +7767,14 @@ long sys_statx(isr_params_t *params)
 #define R_OK 4
 
 /**
- * The core of access(2) and faccessat(2): 0 when the file at `name`,
- * leading '/' stripped, exists and grants `mode`, an OR of R_OK, W_OK and
- * X_OK, or F_OK alone, to the caller's real ids; otherwise a negative
- * errno: -EINVAL for any other bit in `mode`, the walk's error, -EACCES, or
- * -EROFS for W_OK on a read-only mounted volume. A final symbolic link is
- * followed, and a path that named a directory by its end, `dir`, must
- * reach one (`resolve_named`).
+ * The core of access(2), faccessat(2) and faccessat2(2): 0 when the file at
+ * `name`, leading '/' stripped, exists and grants `mode`, an OR of R_OK,
+ * W_OK and X_OK, or F_OK alone, to the caller's real ids, or to its
+ * effective ids with AT_EACCESS in `flags`; otherwise a negative errno:
+ * -EINVAL for any other bit in `mode`, the walk's error, -EACCES, or -EROFS
+ * for W_OK on a read-only mounted volume. A final symbolic link is
+ * followed unless `flags` has AT_SYMLINK_NOFOLLOW, and a path that named a
+ * directory by its end, `dir`, must reach one (`resolve_named`).
  *
  * access(2) is the one call judged by the real ids: it exists so that a set-id
  * program can ask what its invoker could do. The walk charges search permission
@@ -7783,8 +7786,10 @@ long sys_statx(isr_params_t *params)
  * the mount it ends on until the attributes are read, as `do_stat64`'s does,
  * and for the same reason.
  */
-static int32_t do_access(const char *name, int mode, int dir)
+static int32_t do_access(const char *name, int mode, int dir, int flags)
 {
+    int real = !(flags & AT_EACCESS);
+    int follow = !(flags & AT_SYMLINK_NOFOLLOW);
     struct vfs_ref ref;
     const struct vpath *vp;
     int32_t rc;
@@ -7793,7 +7798,10 @@ static int32_t do_access(const char *name, int mode, int dir)
     if (mode & ~(R_OK | W_OK | X_OK)) {
         return -EINVAL;
     }
-    werr = resolve_named(name, VFS_WALK_REAL_IDS | VFS_WALK_LOCK, dir, &ref);
+    werr = resolve_named(name,
+                         (real ? VFS_WALK_REAL_IDS : 0) | VFS_WALK_LOCK |
+                             (follow ? 0 : VFS_WALK_NOFOLLOW),
+                         dir, &ref);
     if (werr != 0) {
         return werr;
     }
@@ -7801,21 +7809,22 @@ static int32_t do_access(const char *name, int mode, int dir)
     if (vp) {
         struct kstat s;
 
-        rc = synth_stat(vp, &s, 1);
+        rc = synth_stat(vp, &s, follow || dir);
         vfs_walk_unlock(ref.mnt);
         vfs_ref_release(&ref);
         if (rc != 0) {
             return rc;
         }
-        return cred_access_bits((uint32_t)s.st_uid, (uint32_t)s.st_gid, s.st_mode & 0777u, mode, 1);
+        return cred_access_bits((uint32_t)s.st_uid, (uint32_t)s.st_gid, s.st_mode & 0777u, mode,
+                                real);
     }
     if (!mnt_is_root(ref.mnt)) {
-        rc = cred_access_ref(&ref, mode, 1);
+        rc = cred_access_ref(&ref, mode, real);
         if (rc == 0 && (mode & W_OK) && (ref.mnt->flags & VFS_MS_RDONLY)) {
             rc = -EROFS;
         }
     } else {
-        rc = cred_access_node((krffs_node_t *)ref.node, mode, 1);
+        rc = cred_access_node((krffs_node_t *)ref.node, mode, real);
     }
     vfs_walk_unlock(ref.mnt);
     vfs_ref_release(&ref);
@@ -7842,7 +7851,7 @@ long sys_access(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    rc = do_access(path_name(path), mode, dir);
+    rc = do_access(path_name(path), mode, dir, 0);
     path_buf_put(path);
     return rc;
 }
@@ -7929,29 +7938,110 @@ long sys_inotify_add_watch(isr_params_t *params)
 }
 
 /**
- * faccessat(2): access(2) of a path relative to the directory descriptor in
- * argument 0, or to the working directory for AT_FDCWD; the path and the
- * mode are arguments 1 and 2.
+ * Whether the caller may use what the descriptor `entry` is open on as
+ * `mode` asks, for faccessat2's AT_EMPTY_PATH: the nine-bit rule over the
+ * owner, group and mode fstat reports, by the real ids unless `flags` has
+ * AT_EACCESS, X_OK on anything but a directory needing an execute bit even
+ * for root, and W_OK on a read-only mounted volume -EROFS. Returns 0 or a
+ * negative errno.
  */
-long sys_faccessat(isr_params_t *params)
+static int32_t access_fd(fd_entry_t *entry, int mode, int flags)
 {
-    int dirfd = (int)SC_ARG(params, 0);
-    const char __user *upath = (const char __user *)SC_ARG(params, 1);
-    int mode = (int)SC_ARG(params, 2);
-    char *path;
-    int dir;
+    struct kstat st;
     int32_t rc;
 
-    if (!current_proc || !upath) {
-        return -EFAULT;
+    if (mode & ~(R_OK | W_OK | X_OK)) {
+        return -EINVAL;
     }
-    rc = path_from_user_dir(dirfd, upath, &path, &dir);
+    rc = fstat_fill(entry, &st);
     if (rc != 0) {
         return rc;
     }
-    rc = do_access(path_name(path), mode, dir);
+    rc = cred_access_bits((uint32_t)st.st_uid, (uint32_t)st.st_gid, st.st_mode & 0777u, mode,
+                          !(flags & AT_EACCESS));
+    if (rc == 0 && (mode & X_OK) && (st.st_mode & S_IFMT) != S_IFDIR && !(st.st_mode & 0111u)) {
+        rc = -EACCES;
+    }
+    if (rc == 0 && (mode & W_OK) && entry->ofd && entry->ofd->vmnt &&
+        (entry->ofd->vmnt->flags & VFS_MS_RDONLY)) {
+        rc = -EROFS;
+    }
+    return rc;
+}
+
+/**
+ * The body of faccessat(2) and faccessat2(2): access(2) of the user's path
+ * `upath` relative to the directory descriptor `dirfd`, or to the working
+ * directory for AT_FDCWD, by `do_access` with `flags`. With AT_EMPTY_PATH an
+ * empty or null path names what `dirfd` is open on (`access_fd`), or the
+ * working directory for AT_FDCWD. Any other flag is -EINVAL, a null path
+ * without AT_EMPTY_PATH -EFAULT.
+ */
+static int32_t access_at(int dirfd, const char __user *upath, int mode, int flags)
+{
+    char *path;
+    int empty = 0;
+    int dir = 0;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (flags & ~(AT_EACCESS | AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) {
+        return -EINVAL;
+    }
+    if (flags & AT_EMPTY_PATH) {
+        empty = user_path_empty(upath);
+        if (empty < 0) {
+            return empty;
+        }
+    }
+    if (empty && dirfd != AT_FDCWD) {
+        fd_entry_t *entry = fd_get(current_proc->fds, dirfd);
+
+        return entry ? access_fd(entry, mode, flags) : -EBADF;
+    }
+    if (empty) {
+        path = path_buf_get();
+        if (!path) {
+            return -ENOMEM;
+        }
+        k_strncpy(path, proc_cwd(current_proc), VFS_PATH_MAX);
+    } else {
+        if (!upath) {
+            return -EFAULT;
+        }
+        rc = path_from_user_dir(dirfd, upath, &path, &dir);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    rc = do_access(path_name(path), mode, dir, flags);
     path_buf_put(path);
     return rc;
+}
+
+/**
+ * faccessat(2): access(2) of a path relative to the directory descriptor in
+ * argument 0, or to the working directory for AT_FDCWD; the path and the
+ * mode are arguments 1 and 2. Linux's call has no flags; libc's flags go
+ * to faccessat2.
+ */
+long sys_faccessat(isr_params_t *params)
+{
+    return access_at((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
+                     (int)SC_ARG(params, 2), 0);
+}
+
+/**
+ * faccessat2(2): faccessat with the flags in argument 3, AT_EACCESS to
+ * judge by the effective ids, AT_SYMLINK_NOFOLLOW to judge a final symbolic
+ * link itself, and AT_EMPTY_PATH (`access_at`).
+ */
+long sys_faccessat2(isr_params_t *params)
+{
+    return access_at((int)SC_ARG(params, 0), (const char __user *)SC_ARG(params, 1),
+                     (int)SC_ARG(params, 2), (int)SC_ARG(params, 3));
 }
 
 /**

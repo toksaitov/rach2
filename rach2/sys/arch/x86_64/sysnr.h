@@ -273,6 +273,7 @@
 #define SYS_STATX                  332
 #define SYS_CLONE3                 435
 #define SYS_CLOSE_RANGE            436
+#define SYS_FACCESSAT2             439
 #define SYS_EPOLL_PWAIT2           441
 
 /* Rach2's own call, which Linux does not have: ping(2), the ICMP echo that
