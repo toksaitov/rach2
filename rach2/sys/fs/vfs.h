@@ -587,10 +587,11 @@ void vfs_walk_unlock(struct vfs_mount *mnt);
  * took. The target is recorded by its path from the root of the mount table
  * (`vfs_node_path`). A read-only device (BLOCK_READ_ONLY) makes the mount
  * read-only whatever `flags` asks. A mount of type proc over a directory of
- * /proc succeeds and changes nothing.
+ * /proc succeeds and changes nothing; over any other directory it shows
+ * /proc's files there.
  *
- * Returns 0 or a negative errno: ENODEV for an unknown type, or proc
- * anywhere but /proc; EINVAL for a flag not listed above; the
+ * Returns 0 or a negative errno: ENODEV for an unknown type; EINVAL for a
+ * flag not listed above; the
  * resolver's errors for the target; ENAMETOOLONG for a target path of
  * VFS_COVERED_PATH_MAX bytes or more; EINVAL for a target in a synthetic
  * type or at the root of the mount table; EBUSY for a target that is a
@@ -632,6 +633,48 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
  * and the error of the type's `sync` or `prepare_unmount`.
  */
 int vfs_do_umount(const char *target, int dir);
+
+/**
+ * umount2(2) with MNT_DETACH: take the mount whose root `target` names, and
+ * every mount below it, from the caller's mount namespace at once, however
+ * busy they are; `dir` is as `vfs_do_umount` takes it. The caller's root and
+ * the mounts below it stay, so that after pivot_root the old root can be
+ * let go of while the new one, which was below it, is in use. A mount no
+ * live namespace sees any more is unmounted once nothing holds it
+ * (`vfs_reap_detached`). A permanent mount may be taken from the view, and
+ * stays mounted. Returns 0 or a negative errno: the resolver's errors;
+ * ENOTDIR and EINVAL as `vfs_do_umount` gives them; EINVAL for the root of
+ * the mount table; and EBUSY for a mount that is not active.
+ */
+int vfs_do_detach(const char *target, int dir);
+
+/**
+ * Unmount every mount that no live mount namespace sees and that nothing
+ * holds any more: the mounts a lazy unmount took from the last view of
+ * them, and those a namespace's end left busy. A hold's or a description's
+ * end on such a mount calls it, and so does the end of a namespace.
+ */
+void vfs_reap_detached(void);
+
+/**
+ * The mounts' part of pivot_root(2): `new_root` names the root of a mount,
+ * which becomes the caller's root, and `put_old` a directory at or below it
+ * where the old root is shown, both as paths from the caller's root. The
+ * old root, which must be the root of a mount, is shown at `put_old` by a
+ * bind, with the mounts below it but the new root and those below that, and
+ * the originals are taken from the caller's namespace, as Linux moves them.
+ * When `put_old` names the new root itself nothing is shown or taken: Linux
+ * stacks the old root over the new, where it stays until a lazy unmount
+ * through a descriptor or a working directory on it. On success `*out` has
+ * the new root, held, for the system call layer to move the processes'
+ * roots to and release. 0, or the resolver's errors; ENOTDIR for a
+ * `put_old` that is no directory; EINVAL for a `new_root` that is no
+ * mount's root, is in a synthetic type or is a permanent mount, for a
+ * caller whose root is no mount's root, or for a `put_old` not at or below
+ * `new_root`; EBUSY for a `new_root` or a `put_old` on the caller's root
+ * mount; or the errors of a bind (`vfs_do_bind`).
+ */
+int vfs_pivot_mounts(const char *new_root, const char *put_old, struct vfs_ref *out);
 
 /**
  * mount(2) with MS_BIND: the directory `source` names is shown at the

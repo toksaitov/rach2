@@ -167,6 +167,7 @@
 #define SYS_SETTIMEOFDAY           164
 #define SYS_MOUNT                  165
 #define SYS_UMOUNT2                166
+#define SYS_PIVOT_ROOT             155
 #define SYS_REBOOT                 169
 #define SYS_SETHOSTNAME            170
 #define SYS_SETDOMAINNAME          171

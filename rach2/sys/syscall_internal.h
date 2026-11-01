@@ -322,6 +322,8 @@ long sys_mount(isr_params_t *params);
 
 long sys_umount2(isr_params_t *params);
 
+long sys_pivot_root(isr_params_t *params);
+
 long sys_open(isr_params_t *params);
 
 long sys_openat(isr_params_t *params);

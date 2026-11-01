@@ -1293,6 +1293,18 @@ static int names_tree_root(const char *path)
 }
 
 /**
+ * Whether the working directory's path `cwd` is outside the process's root:
+ * it then begins with two slashes and is its path from the root of the mount
+ * table, as fchdir to a descriptor opened before a chroot or a pivot_root
+ * leaves it (`sys_fchdir`). A path the walk takes with two slashes starts at
+ * the root of the mount table.
+ */
+static int cwd_outside(const char *cwd)
+{
+    return cwd[0] == '/' && cwd[1] == '/';
+}
+
+/**
  * The absolute path of the directory a descriptor is open on, into `out` of
  * `cap` bytes: what its `*at` calls resolve relative names against, and what
  * `fchdir` makes the working directory.
@@ -1448,7 +1460,8 @@ static void path_drop_dot(char *path, int end)
  * path page, or another error of `fd_dir_path`.
  *
  * A relative path joined to a directory outside the process's root, which
- * a descriptor opened before a chroot may be on, begins with three slashes,
+ * a descriptor opened before a chroot or a pivot_root may be on, and so the
+ * working directory an fchdir to one gives, begins with three slashes,
  * and still with two once `path_name` takes the first off: the walk starts
  * a path that begins with two at the root of the mount table, as Linux
  * walks from such a descriptor, and a symbolic link's absolute target and
@@ -1474,6 +1487,7 @@ static int copy_path_at(char *pathbuf, uint32_t size, int dirfd, const char __us
     if (pathbuf[0] != '/' && dirfd == AT_FDCWD) {
         int dotdot = pathbuf[0] == '.' && pathbuf[1] == '.';
 
+        outside = cwd_outside(proc_cwd(current_proc));
         r = path_prepend(pathbuf, size, (uint32_t)len, proc_cwd(current_proc));
         if (r >= 0 && dotdot && cwd_removed()) {
             removed_cwd_parents(pathbuf, (uint32_t)(r - len - 1));
@@ -3344,11 +3358,39 @@ long sys_mount(isr_params_t *params)
 }
 
 /**
+ * Take `root`, a directory's path from the root of the mount table, off the
+ * front of `path`, another such path, which leaves the path the same place
+ * has from that directory: "/" for the directory itself. 0, or -ENOENT when
+ * `path` is not at or below `root`.
+ */
+static int32_t path_strip(char *path, const char *root)
+{
+    uint32_t rl = (uint32_t)k_strlen(root);
+
+    if (!path_under(path, root, rl)) {
+        return -ENOENT;
+    }
+    if (rl > 1) {
+        k_memmove(path, path + rl, k_strlen(path + rl) + 1);
+        if (path[0] == '\0') {
+            path[0] = '/';
+            path[1] = '\0';
+        }
+    }
+    return 0;
+}
+
+/* umount2(2)'s flag for a lazy unmount, the one flag this kernel takes. */
+#define MNT_DETACH 2u
+
+/**
  * umount2(2) takes target and flags, and returns 0 or a negative errno. The
  * caller must have privilege, or privilege over its mount namespace
- * (`mount_privileged`), or the call is -EPERM. The flags must be zero: this
- * kernel has no MNT_FORCE, MNT_DETACH or UMOUNT_NOFOLLOW, and answers EINVAL
- * to any flag.
+ * (`mount_privileged`), or the call is -EPERM. The flags are 0 or
+ * MNT_DETACH, which takes the mount and those below it from the caller's
+ * view at once, however busy, and unmounts them once nothing holds them
+ * (`vfs_do_detach`); this kernel has no MNT_FORCE, MNT_EXPIRE or
+ * UMOUNT_NOFOLLOW, and answers EINVAL to them.
  *
  * A target that names a directory by its end must reach one, which the walk
  * that finds the mount checks (`vfs_do_umount`), so a file named with a
@@ -3370,7 +3412,7 @@ long sys_umount2(isr_params_t *params)
     if (!mount_privileged(NULL)) {
         return -EPERM;
     }
-    if (SC_ARG(params, 1) != 0) {
+    if ((SC_ARG(params, 1) & ~(unsigned long)MNT_DETACH) != 0) {
         return -EINVAL;
     }
     if (!SC_ARG(params, 0)) {
@@ -3381,9 +3423,140 @@ long sys_umount2(isr_params_t *params)
         return n;
     }
     path_drop_dot(tpath, end);
-    n = vfs_do_umount(tpath, end != 0);
+    n = SC_ARG(params, 1) ? vfs_do_detach(tpath, end != 0) : vfs_do_umount(tpath, end != 0);
     path_buf_put(tpath);
     return n;
+}
+
+/**
+ * Move the root of `q`, the caller or a process that shares its mount
+ * namespace and its old root, to `nref`, after pivot_root: its working
+ * directory's path, which is a path from its root, becomes the same place's
+ * path from the new root, or the path from the root of the mount table an
+ * outside one keeps (`cwd_outside`); a working directory at the old root
+ * goes to the new one, as on Linux. `oldroot` is the old root's path from
+ * the root of the mount table, and `buf` a path page. The path and the root
+ * are stored with nothing between them that sleeps.
+ */
+static void pivot_one(process_t *q, const struct vfs_ref *nref, const char *oldroot, char *buf)
+{
+    const char *cwd = proc_cwd(q);
+    const char *newroot = nref->mnt->covered_path;
+    uint32_t ol = oldroot[1] == '\0' ? 0u : (uint32_t)k_strlen(oldroot);
+    uint32_t cl = (uint32_t)k_strlen(cwd);
+    int home = cwd[0] == '/' && cwd[1] == '\0';
+
+    if (cwd_outside(cwd)) {
+        k_memcpy(buf, cwd + 1, cl);
+    } else if (ol + cl + 1 <= VFS_PATH_MAX) {
+        k_memcpy(buf, oldroot, ol);
+        k_memcpy(buf + ol, cwd, cl + 1);
+    } else {
+        home = 1;
+    }
+    if (!home && path_strip(buf, newroot) != 0) {
+        cl = (uint32_t)k_strlen(buf);
+        home = cl + 2 > VFS_PATH_MAX;
+        if (!home) {
+            k_memmove(buf + 1, buf, cl + 1);
+        }
+    }
+    if (home || proc_cwd_set(q, buf) != 0) {
+        home = 1;
+        (void)proc_cwd_set(q, "/");
+    }
+    vfs_root_set(q, nref->mnt, nref->node);
+    if (home) {
+        vfs_cwd_set(q, nref->mnt, nref->node);
+    }
+}
+
+/** The first process of the mount namespace `ns` whose root is still the
+ * old root, the root of `omnt` at `onode`, NULL for the machine's; or NULL
+ * when none is. The search starts again after each move, since a move may
+ * sleep and the list change meanwhile. */
+static process_t *pivot_next(const struct mntns *ns, const struct vfs_mount *omnt,
+                             const void *onode)
+{
+    process_t *q;
+
+    for (q = proc_list; q; q = q->next) {
+        if (q->state != PROC_UNUSED && q->state != PROC_ZOMBIE && q->fs && proc_mntns(q) == ns &&
+            q->fs->root_mnt == omnt && q->fs->root_node == onode) {
+            return q;
+        }
+    }
+    return NULL;
+}
+
+/**
+ * pivot_root(2) takes new_root and put_old: the root of a mount becomes the
+ * caller's root, and the old root is shown at put_old, a directory at or
+ * below new_root (`vfs_pivot_mounts`). Every process of the caller's mount
+ * namespace whose root was the old root has the new one after, the caller
+ * among them, and its working directory keeps its place (`pivot_one`). The
+ * caller needs privilege over its mount namespace (`mount_privileged`), or
+ * the call is -EPERM.
+ *
+ * With put_old naming new_root itself, as bubblewrap, runc and LXC call it
+ * with ".", ".", the old root is not shown anywhere: on Linux it is stacked
+ * over the new one, and the caller lets go of it by a descriptor opened on
+ * it before, fchdir, and umount2 of "." with MNT_DETACH. Returns 0, -EFAULT,
+ * -EPERM, -ENOMEM, or the errors of `vfs_pivot_mounts`.
+ */
+long sys_pivot_root(isr_params_t *params)
+{
+    const struct mntns *ns;
+    struct vfs_mount *omnt;
+    void *onode;
+    struct vfs_ref nref;
+    char *npath, *opath, *oldroot, *buf;
+    process_t *q;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (!mount_privileged(NULL)) {
+        return -EPERM;
+    }
+    if (!SC_ARG(params, 0) || !SC_ARG(params, 1)) {
+        return -EFAULT;
+    }
+    ns = proc_mntns(current_proc);
+    rc = path_from_user(AT_FDCWD, (const char __user *)SC_ARG(params, 0), &npath);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = path_from_user(AT_FDCWD, (const char __user *)SC_ARG(params, 1), &opath);
+    if (rc != 0) {
+        path_buf_put(npath);
+        return rc;
+    }
+    oldroot = path_buf_get();
+    buf = path_buf_get();
+    omnt = current_proc->fs->root_mnt;
+    onode = current_proc->fs->root_node;
+    rc = oldroot && buf ? 0 : -ENOMEM;
+    if (rc == 0 && omnt) {
+        rc = vfs_node_path(omnt, onode, oldroot, VFS_PATH_MAX);
+    } else if (rc == 0) {
+        k_strncpy(oldroot, "/", VFS_PATH_MAX);
+    }
+    if (rc == 0) {
+        rc = vfs_pivot_mounts(npath, opath, &nref);
+    }
+    while (rc == 0 && (q = pivot_next(ns, omnt, onode)) != NULL) {
+        pivot_one(q, &nref, oldroot, buf);
+    }
+    if (rc == 0) {
+        vfs_ref_release(&nref);
+    }
+    path_buf_put(buf);
+    path_buf_put(oldroot);
+    path_buf_put(opath);
+    path_buf_put(npath);
+    return rc;
 }
 
 /**
@@ -5317,13 +5490,18 @@ long sys_chdir(isr_params_t *params)
  * bind, which the path from the root of the mount table does not pass
  * through. Entering takes search permission on the directory, which a
  * synthetic one grants everybody, and the mount hold chdir takes. A
- * descriptor opened with O_PATH does as well as any other.
+ * descriptor opened with O_PATH does as well as any other. A directory
+ * outside the process's root, on a descriptor opened before a chroot or a
+ * pivot_root, is entered as on Linux: the working directory keeps its path
+ * from the root of the mount table (`cwd_outside`), relative names are
+ * resolved from it, and getcwd answers -ENOENT until a chdir.
  */
 long sys_fchdir(isr_params_t *params)
 {
     fd_entry_t *entry;
     struct vfs_ref ref;
     char *path;
+    int outside = 0;
     int32_t rc;
 
     if (!current_proc) {
@@ -5348,7 +5526,13 @@ long sys_fchdir(isr_params_t *params)
         path_buf_put(path);
         return rc;
     }
-    rc = fd_dir_path(entry, path, VFS_PATH_MAX, NULL);
+    rc = fd_dir_path(entry, path, VFS_PATH_MAX, &outside);
+    if (rc == 0 && outside) {
+        rc = k_strlen(path) + 2 > VFS_PATH_MAX ? -ENAMETOOLONG : 0;
+        if (rc == 0) {
+            k_memmove(path + 1, path, k_strlen(path) + 1);
+        }
+    }
     if (rc == 0 && (!entry->ofd || !entry->ofd->vmnt)) {
         rc = -EBADF;
     } else if (rc == 0) {
@@ -5411,7 +5595,8 @@ static int32_t root_check(const struct vfs_ref *ref)
 /**
  * The working directory's path from the root of the mount table, into `buf`
  * of VFS_PATH_MAX bytes: its path from the calling process's root, behind
- * the path of that root when chroot gave the process one.
+ * the path of that root when chroot gave the process one, or the path an
+ * outside one keeps (`cwd_outside`).
  *
  * The path and the root are read together before anything sleeps, and the
  * path is copied into `buf` then: the threads that share them (CLONE_FS) may
@@ -5431,6 +5616,10 @@ static int32_t cwd_global(char *buf)
     int32_t rc;
 
     k_memcpy(buf, proc_cwd(current_proc), cl + 1);
+    if (cwd_outside(buf)) {
+        k_memmove(buf, buf + 1, cl);
+        return 0;
+    }
     root.mnt = current_proc->fs->root_mnt;
     root.node = current_proc->fs->root_node;
     if (!root.mnt) {
@@ -5461,29 +5650,6 @@ static int32_t cwd_global(char *buf)
     }
     path_buf_put(rpath);
     return rc;
-}
-
-/**
- * Take `root`, a directory's path from the root of the mount table, off the
- * front of `path`, another such path, which leaves the path the same place
- * has from that directory: "/" for the directory itself. 0, or -ENOENT when
- * `path` is not at or below `root`.
- */
-static int32_t path_strip(char *path, const char *root)
-{
-    uint32_t rl = (uint32_t)k_strlen(root);
-
-    if (!path_under(path, root, rl)) {
-        return -ENOENT;
-    }
-    if (rl > 1) {
-        k_memmove(path, path + rl, k_strlen(path + rl) + 1);
-        if (path[0] == '\0') {
-            path[0] = '/';
-            path[1] = '\0';
-        }
-    }
-    return 0;
 }
 
 /**
@@ -5581,7 +5747,9 @@ long sys_chroot(isr_params_t *params)
  * with its NUL, into the user's buffer in argument 0, of the size in
  * argument 1; the path's length with its NUL, as Linux's system call
  * returns, or -EFAULT for a NULL or bad buffer, -EINVAL for a size of 0,
- * -ERANGE for a path that does not fit, or -ENOMEM when no path page is to
+ * -ERANGE for a path that does not fit, -ENOENT for a working directory
+ * outside the root, which no path from the root names, as the C libraries
+ * report Linux's "(unreachable)" path, or -ENOMEM when no path page is to
  * be had.
  *
  * The path is copied into a path page before the copy out, which may sleep
@@ -5611,7 +5779,9 @@ long sys_getcwd(isr_params_t *params)
     }
     cwd_len = (uint32_t)k_strlen(proc_cwd(current_proc));
     k_memcpy(cwd, proc_cwd(current_proc), cwd_len + 1);
-    if (cwd_len + 1 > size) {
+    if (cwd_outside(cwd)) {
+        rc = -ENOENT;
+    } else if (cwd_len + 1 > size) {
         rc = -ERANGE;
     } else if (copy_to_user(buf, cwd, cwd_len + 1) != 0) {
         rc = -EFAULT;
