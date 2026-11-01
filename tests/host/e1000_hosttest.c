@@ -867,8 +867,10 @@ int main(void)
           "the frame check sequence is stripped, so a length is a frame length");
     CHECK((model_reg[E1000_RCTL / 4] & E1000_RCTL_BAM) != 0,
           "broadcast is accepted, which ARP and DHCP need");
-    CHECK((model_reg[E1000_RCTL / 4] & (E1000_RCTL_UPE | E1000_RCTL_MPE)) == 0,
-          "the card is not left promiscuous");
+    CHECK((model_reg[E1000_RCTL / 4] & E1000_RCTL_UPE) == 0,
+          "the card is not left promiscuous for unicast");
+    CHECK((model_reg[E1000_RCTL / 4] & E1000_RCTL_MPE) != 0,
+          "every multicast frame is accepted, which IPv6 needs");
     {
         int cleared = 1;
 
