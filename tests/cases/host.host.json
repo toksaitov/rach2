@@ -556,6 +556,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "nd6hold",
+          "checks": "tests/host/nd6hold_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "netcfg",
           "checks": "tests/host/netcfg_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
