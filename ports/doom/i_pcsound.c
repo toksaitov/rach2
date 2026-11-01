@@ -3,7 +3,7 @@
  *
  * Where /dev/dsp opens, as it does over the SB16's or the HDA's driver, the
  * effects are mixed with the music of the OPL3 player into 11,025 Hz unsigned
- * 8-bit mono and written to it, two periods ahead of what the driver holds.
+ * 8-bit mono and written to it, a little ahead of what the kernel holds.
  * Otherwise the effects play on the PC speaker of the console, one tone at a
  * time, and there is no music.
  */
@@ -53,11 +53,11 @@ static boolean opl_music_initialized = false;
 static uint8_t mix_buffer[MIX_BUFFER_SIZE];
 
 /*
- * Output is paced by the device: an update makes what keeps two periods of
- * /dev/dsp's buffer queued ahead of the driver's, so that what is heard is
- * at most the driver's buffer and those two periods behind the game. The
- * music player makes stereo 16-bit samples at OPL_SAMPLE_RATE, which the
- * mixer averages down.
+ * Output is paced by the device: an update makes what keeps /dev/dsp's
+ * buffer at its level, queued_level's, ahead of what the kernel's mix and
+ * driver hold, so that what is heard is at most those and the level behind
+ * the game. The music player makes stereo 16-bit samples at OPL_SAMPLE_RATE,
+ * which the mixer averages down.
  */
 #define OPL_SAMPLE_RATE 49716
 #define OUTPUT_SAMPLE_RATE 11025
@@ -68,7 +68,7 @@ static int16_t opl_buffer[OPL_BUFFER_SAMPLES * 2];  /* stereo pairs */
 #define MUSIC_MIX_GAIN_NUM 6
 #define MUSIC_MIX_GAIN_DEN 1
 
-/* The periods of /dev/dsp's buffer an update keeps queued. */
+/* The periods of /dev/dsp's buffer an update keeps queued, at the least. */
 #define QUEUED_PERIODS 2
 
 static uint32_t last_audio_ms = 0;        /* the clock at the last update */
@@ -381,9 +381,21 @@ static void mix_chunk(uint32_t chunk)
 }
 
 /**
- * Bring /dev/dsp's buffer up to QUEUED_PERIODS periods. GETODELAY, a sample
- * to a byte, counts the buffer and the driver's own, which Doom cannot
- * shorten; GETOSPACE gives the buffer's part. When the time since the last
+ * The samples an update keeps in /dev/dsp's buffer, whose period is `period`
+ * samples: QUEUED_PERIODS periods, or a tic and a period where that is more,
+ * so that the buffer outlasts a game that updates once a tic.
+ */
+static uint32_t queued_level(uint32_t period)
+{
+    uint32_t periods = QUEUED_PERIODS * period;
+
+    return periods > MIX_BUFFER_SIZE + period ? periods : MIX_BUFFER_SIZE + period;
+}
+
+/**
+ * Bring /dev/dsp's buffer up to queued_level. GETODELAY, a sample to a byte,
+ * counts the buffer and what the kernel's mix and driver hold, which Doom
+ * cannot shorten; GETOSPACE gives the buffer's part. When the time since the last
  * update is longer than what was queued then, the device played silence for
  * the rest, and the effects skip it with skip_channels, so that none plays
  * late. The samples are mixed in chunks of MIX_BUFFER_SIZE, and what a write
@@ -412,7 +424,7 @@ static void dsp_update(void)
     }
 
     buffered = (uint32_t)(space.fragstotal * space.fragsize - space.bytes);
-    want = QUEUED_PERIODS * (uint32_t)space.fragsize;
+    want = queued_level((uint32_t)space.fragsize);
     want = buffered < want ? want - buffered : 0;
     if (want > (uint32_t)space.bytes) {
         want = (uint32_t)space.bytes;
