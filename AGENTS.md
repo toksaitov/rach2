@@ -84,6 +84,7 @@ The rules are kept short on purpose; their history is in commit messages and `de
 * The hardware is the owner's: the Mac mini, the development flash drive and the Lenovo, which is on the Mac's network. Only the owner's sessions work on it.
 * The Mac mini's internal SSD, an APPLE SSD AP0512Z with serial `0ba02f1140bcba20`, is never written.
 * The owner works beside the Lenovo. A step there keeps its volume at `mixer vol 1` and measures by counters; one that plays sound aloud or takes the screen is announced on its issue ten minutes before, as the `machine` skill says.
+* A step that needs the owner at the machine waits for one sitting at the very end of all the open work, never in the middle of it. No milestone waits for that sitting: it releases on its automatic checks, the Lenovo's among them, and its steps for the owner move to the milestone that ends with the sitting. The owner names the sitting's time once the machine is ready; nobody asks for it sooner.
 * The owner has authorized writes to the development flash drive and to any disk of the Lenovo, without asking first and without backups; report afterwards what was written. Any other target needs the owner's authorization. The `machine` skill has the identity check that runs before every write.
 
 ## Writing
