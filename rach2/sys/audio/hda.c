@@ -102,22 +102,36 @@ static volatile uint16_t corb_wp = 0;
 static volatile uint16_t rirb_rp = 0;
 
 /*
- * DMA period and buffer size. BDL entry buffer addresses must be 128-byte
- * aligned, so each period is a multiple of 128 bytes in this contiguous
- * multi-buffer. The stream's interrupt may not arrive on a real machine
- * (MSI/IOAPIC routing), so the stream is also serviced from the timer's
- * tick; the period is long enough that a missed tick does not empty it. 16384
- * bytes is about 85ms at 48kHz 16-bit stereo (4096 frames). The descriptor
- * list is volatile, since the controller reads it.
+ * The DMA buffer: HDA_PERIODS periods of period_bytes each, one descriptor
+ * list entry apiece, contiguous in audio_buffer. A period is the frame count
+ * nearest HDA_PERIOD_MS at the stream's rate, rounded to the 128 bytes a
+ * descriptor's address must be aligned to, and at most HDA_PERIOD_MAX:
+ * 4096 bytes at 44.1 kHz 16-bit stereo, 23.2 ms. Each period's end raises the
+ * stream's interrupt, which refills the periods played; the timer tick does
+ * the same where the interrupt does not arrive (MSI or IOAPIC routing), and
+ * two periods ahead outlast any tick. The descriptor list is volatile, since
+ * the controller reads it.
  */
-#define HDA_BUFFER_SIZE 16384
-#define HDA_NUM_BUFFERS 2 /* Double-buffered like SB16 */
-static volatile hda_bdl_entry_t bdl[HDA_NUM_BUFFERS] __attribute__((aligned(1024)));
-static int16_t audio_buffer[HDA_BUFFER_SIZE * HDA_NUM_BUFFERS / 2] __attribute__((aligned(128)));
+#define HDA_PERIOD_MS  23
+#define HDA_PERIODS    3
+#define HDA_PERIOD_MAX 16384
+static volatile hda_bdl_entry_t bdl[HDA_PERIODS] __attribute__((aligned(1024)));
+static int16_t audio_buffer[HDA_PERIOD_MAX * HDA_PERIODS / 2] __attribute__((aligned(128)));
+static uint32_t period_bytes = HDA_PERIOD_MAX; /* set by hda_start */
 
-/* Ring buffer for the write() audio path (Doom). */
-#define HDA_RING_SIZE 8192 /* sized to tolerate bursty writes */
-static uint8_t hda_ring[HDA_RING_SIZE];
+/*
+ * The write path's ring, which `hda_start` sizes to HDA_RING_PERIODS periods
+ * of the caller's frames, so that a write waits at most that long in it and
+ * HDA_PERIODS more in the DMA buffer: 139 ms at 44.1 kHz. Three periods take
+ * a writer's burst of up to one period beside the period the service takes at
+ * once; Doom writes one tic, 28.6 ms, at a time. ring_size is one more than
+ * the bytes it holds, since one slot stays empty, and at most HDA_RING_MAX,
+ * which caps the ring under three periods only above 96 kHz stereo.
+ */
+#define HDA_RING_PERIODS 3
+#define HDA_RING_MAX     32768
+static uint8_t hda_ring[HDA_RING_MAX];
+static uint32_t ring_size = HDA_RING_MAX; /* set by hda_start */
 static volatile uint32_t ring_read_ptr = 0;
 static volatile uint32_t ring_write_ptr = 0;
 
@@ -145,14 +159,14 @@ static uint32_t ring_available(void)
     if (w >= r) {
         return w - r;
     }
-    return HDA_RING_SIZE - r + w;
+    return ring_size - r + w;
 }
 
 /** The bytes the ring can take; one slot stays empty, so a full ring and an
  * empty one differ. */
 static uint32_t ring_free(void)
 {
-    return HDA_RING_SIZE - 1 - ring_available();
+    return ring_size - 1 - ring_available();
 }
 
 /**
@@ -170,7 +184,7 @@ static uint32_t ring_write(const uint8_t *data, uint32_t count)
 
     for (i = 0; i < to_write; i++) {
         hda_ring[wp] = data[i];
-        wp = (wp + 1) % HDA_RING_SIZE;
+        wp = (wp + 1) % ring_size;
     }
 
     ring_write_ptr = wp;
@@ -214,24 +228,24 @@ static uint32_t resample_frac_fp = 0;
 static volatile uint32_t total_bytes_written = 0;
 
 /*
- * DMA progress tracked as an absolute period number (LPIB plus wrap count),
- * not just the 0/1 buffer index. After a full CBL wrap the buffer index
- * returns to its old value, and an absolute period number tells that apart
- * from no progress. The wrap is counted when a reading comes out lower than
- * the one before it, so this holds as long as the handler reads LPIB more
- * often than the buffer turns over; a whole revolution between two readings
- * still looks like none.
+ * The service's state as it last left the stream, which `hda_start` sets for
+ * the start of the buffer: the position read, in bytes into the buffer, the
+ * wall clock read with it, and the period then playing. The periods from the
+ * one after it round to it hold samples not yet played, since the service
+ * refills every period played. lpib_wraps counts the revolutions of the
+ * buffer since the start, those the position showed and those the wall clock
+ * did.
  */
-static volatile bool lpib_tracking_valid = false;
 static volatile uint32_t lpib_last = 0;
+static volatile uint32_t walclk_last = 0;
+static volatile uint32_t hw_period_last = 0;
 static volatile uint32_t lpib_wraps = 0;
-static volatile uint32_t hw_period_last = 0; /* counts HDA_BUFFER_SIZE periods */
 
 /* Diagnostics: the DMA periods refilled since the stream started. */
 static volatile uint32_t hw_fill_count = 0;
 
-/* Whole revolutions of the DMA buffer that passed between two services.
- * The service cannot tell one yet, so this stays 0. */
+/* Whole revolutions of the DMA buffer that passed between two services,
+ * which the position alone cannot show; the wall clock does. */
 static volatile uint32_t missed_revolutions = 0;
 
 /* Forward declarations for MMIO helpers (needed for C89 order). */
@@ -403,12 +417,12 @@ static void ring_render_to_hw_buffer(int16_t *dest, uint32_t out_frames)
             sample16 = 0;
             underrun_samples += out_ch;
         } else if (current_format == AUDIO_S16LE) {
-            int16_t left = (int16_t)((uint16_t)hda_ring[rp] |
-                                     ((uint16_t)hda_ring[(rp + 1) % HDA_RING_SIZE] << 8));
+            int16_t left =
+                (int16_t)((uint16_t)hda_ring[rp] | ((uint16_t)hda_ring[(rp + 1) % ring_size] << 8));
             if (current_channels >= 2 && avail_bytes >= 4) {
-                uint32_t rp_r = (rp + 2) % HDA_RING_SIZE;
+                uint32_t rp_r = (rp + 2) % ring_size;
                 int16_t right = (int16_t)((uint16_t)hda_ring[rp_r] |
-                                          ((uint16_t)hda_ring[(rp_r + 1) % HDA_RING_SIZE] << 8));
+                                          ((uint16_t)hda_ring[(rp_r + 1) % ring_size] << 8));
                 sample16 = (int16_t)(((int32_t)left + (int32_t)right) / 2);
             } else {
                 sample16 = left;
@@ -416,7 +430,7 @@ static void ring_render_to_hw_buffer(int16_t *dest, uint32_t out_frames)
         } else {
             uint8_t left8 = hda_ring[rp];
             if (current_channels >= 2 && avail_bytes >= 2) {
-                uint8_t right8 = hda_ring[(rp + 1) % HDA_RING_SIZE];
+                uint8_t right8 = hda_ring[(rp + 1) % ring_size];
                 int16_t mixed = (int16_t)(((int32_t)left8 + (int32_t)right8) / 2);
                 sample16 = (int16_t)(mixed - 128) * 256;
             } else {
@@ -442,7 +456,7 @@ static void ring_render_to_hw_buffer(int16_t *dest, uint32_t out_frames)
         while (frac >= (1u << 16)) {
             frac -= (1u << 16);
             if (avail_bytes >= in_bytes_per_frame) {
-                rp = (rp + in_bytes_per_frame) % HDA_RING_SIZE;
+                rp = (rp + in_bytes_per_frame) % ring_size;
                 avail_bytes -= in_bytes_per_frame;
             } else {
                 frac &= 0xFFFFu;
@@ -476,70 +490,141 @@ static uint8_t hda_get_out_amp_max(uint8_t nid);
 static uint8_t hda_get_in_amp_max(uint8_t nid);
 static uint8_t hda_clamp_gain(uint8_t gain, uint8_t max);
 static void hda_set_volume(int volume);
+static void fill_silence(volatile uint8_t *buffer, size_t size, bool is_signed);
+
+/** The bytes of one frame of the stream as the controller plays it. */
+static uint32_t hda_out_frame(void)
+{
+    return (current_hw_format == AUDIO_S16LE ? 2u : 1u) *
+           (current_hw_channels > 0 ? (uint32_t)current_hw_channels : 1u);
+}
+
+/** The bytes of one frame as the caller writes it. */
+static uint32_t hda_in_frame(void)
+{
+    return (current_format == AUDIO_S16LE ? 2u : 1u) *
+           (current_channels > 0 ? (uint32_t)current_channels : 1u);
+}
 
 /**
- * Refill the DMA period the engine is about to play, if it has advanced.
+ * The bytes of a DMA period at `rate` frames per second of `frame` bytes:
+ * the frame count nearest HDA_PERIOD_MS, rounded to the nearest multiple of
+ * the 128 bytes a descriptor's address is aligned to, from 128 to
+ * HDA_PERIOD_MAX. A frame is 1, 2 or 4 bytes, which divide 128, so a period
+ * holds whole frames.
+ */
+static uint32_t hda_period_bytes(uint32_t rate, uint32_t frame)
+{
+    uint32_t bytes = (rate * HDA_PERIOD_MS + 500u) / 1000u * frame;
+
+    bytes = (bytes + 64u) / 128u * 128u;
+    if (bytes < 128u)
+        return 128u;
+    return bytes > HDA_PERIOD_MAX ? HDA_PERIOD_MAX : bytes;
+}
+
+/**
+ * The time `bytes` of the stream take to play, in microseconds, at the
+ * programmed rate. `bytes` is at most the DMA buffer, so no product here
+ * passes 32 bits.
+ */
+static uint32_t hda_bytes_us(uint32_t bytes)
+{
+    uint32_t rate = current_hw_sample_rate ? current_hw_sample_rate : 48000u;
+    uint32_t milli = bytes / hda_out_frame() * 1000u; /* frames times 1000 */
+
+    return milli / rate * 1000u + milli % rate * 1000u / rate;
+}
+
+/**
+ * Convert `frames` of the stream, at most 65536, to frames at the caller's
+ * rate, by the resampler's 16.16 step; rounded up when `up` is true, down
+ * otherwise. The product is split at the step's binary point so that it
+ * stays in 32 bits.
+ */
+static uint32_t hda_frames_in(uint32_t frames, bool up)
+{
+    uint32_t step = resample_step_fp ? resample_step_fp : 1u << 16;
+
+    return frames * (step >> 16) + (frames * (step & 0xFFFFu) + (up ? 0xFFFFu : 0u)) / 65536u;
+}
+
+/** Fill period `index` of the DMA buffer from the callback or the ring, and
+ * write it back to memory for the controller. */
+static void hda_fill_period(uint32_t index)
+{
+    int16_t *period = audio_buffer + index * period_bytes / 2u;
+
+    if (user_callback)
+        user_callback(period, period_bytes);
+    else
+        ring_render_to_hw_buffer(period, period_bytes / hda_out_frame());
+    hda_dma_sync_range(period, period_bytes);
+    hw_fill_count++;
+}
+
+/**
+ * Refill every DMA period played since the last call.
  *
  * Called from the stream's interrupt and from every timer tick (hda_tick),
- * both with interrupts off. Reads the play pointer from the position buffer
- * or LPIB, converts it to an absolute period number, counting a wrap of the
- * buffer when the position comes out lower than the last, and returns without
- * work if no new period has started. Otherwise it fills the buffer the engine
- * is not currently reading, from the user callback or the ring resampler, and
- * flushes it so the controller sees fresh samples.
+ * both with interrupts off. The play position, from the position buffer or
+ * LPIB, names the period playing; the periods from the one playing at the
+ * last call up to this one have been played, and are filled in that order, so
+ * that they play after the periods filled before them.
+ *
+ * The position cannot show a whole revolution of the buffer between two
+ * calls, after which every period but the one playing has been played again.
+ * The wall clock, which counts 24 MHz whatever the stream does, can: when the
+ * time since the last call exceeds the bytes the position moved by a
+ * revolution, less half a period of tolerance, the revolutions are counted in
+ * missed_revolutions, the rest of the period playing is silenced, and every
+ * other period is filled afresh, so that no stale period is played again.
  */
 static void hda_service_stream(void)
 {
-    uint32_t lpib;
-    uint32_t cbl;
-    uint32_t lpib_mod;
-    uint32_t hw_period;
-    int current_buf, next_buf;
-    int16_t *next_buffer;
+    uint32_t cbl, pos, now, period, elapsed, moved, rev, half, first, count, i;
 
     if (!playing || !stream_started || !hda_base) {
         return;
     }
 
-    cbl = HDA_BUFFER_SIZE * HDA_NUM_BUFFERS;
-    lpib = hda_stream_position();
-    lpib_mod = (cbl != 0) ? (lpib % cbl) : lpib;
+    cbl = period_bytes * HDA_PERIODS;
+    pos = hda_stream_position() % cbl;
+    now = hda_read32(HDA_WALCLK);
+    period = pos / period_bytes;
 
-    if (!lpib_tracking_valid) {
-        lpib_tracking_valid = true;
-        lpib_last = lpib_mod;
-        lpib_wraps = 0;
-        hw_period_last = (HDA_BUFFER_SIZE != 0) ? (lpib_mod / HDA_BUFFER_SIZE) : 0;
-    } else {
-        if (lpib_mod < lpib_last) {
-            lpib_wraps++;
+    elapsed = (now - walclk_last) / 24u;
+    moved = (pos + cbl - lpib_last) % cbl;
+    if (pos < lpib_last)
+        lpib_wraps++;
+    rev = hda_bytes_us(cbl);
+    half = hda_bytes_us(period_bytes) / 2u;
+    moved = hda_bytes_us(moved);
+    if (elapsed + half >= moved + rev) {
+        uint32_t missed = (elapsed + half - moved) / rev;
+        uint32_t from = (pos + 127u) & ~127u;
+
+        missed_revolutions += missed;
+        lpib_wraps += missed;
+        if (from < (period + 1) * period_bytes) {
+            uint8_t *rest = (uint8_t *)audio_buffer + from;
+            uint32_t size = (period + 1) * period_bytes - from;
+
+            fill_silence(rest, size, current_hw_format == AUDIO_S16LE);
+            hda_dma_sync_range(rest, size);
         }
-        lpib_last = lpib_mod;
-
-        hw_period = (HDA_BUFFER_SIZE != 0) ? ((lpib_wraps * cbl + lpib_mod) / HDA_BUFFER_SIZE) : 0;
-        if (hw_period == hw_period_last) {
-            return;
-        }
-        hw_period_last = hw_period;
-    }
-
-    current_buf =
-        (HDA_BUFFER_SIZE != 0) ? ((int)(lpib_mod / HDA_BUFFER_SIZE) % HDA_NUM_BUFFERS) : 0;
-    next_buf = (current_buf + 1) % HDA_NUM_BUFFERS;
-    next_buffer = audio_buffer + (next_buf * HDA_BUFFER_SIZE) / 2;
-
-    if (user_callback) {
-        user_callback(next_buffer, HDA_BUFFER_SIZE);
+        first = period + 1;
+        count = HDA_PERIODS - 1;
     } else {
-        uint32_t out_ch = (current_hw_channels > 0) ? (uint32_t)current_hw_channels : 1;
-        uint32_t frames = HDA_BUFFER_SIZE / (2u * out_ch);
-        ring_render_to_hw_buffer(next_buffer, frames);
+        first = hw_period_last;
+        count = (period + HDA_PERIODS - hw_period_last) % HDA_PERIODS;
     }
+    lpib_last = pos;
+    walclk_last = now;
+    hw_period_last = period;
 
-    /* Ensure the controller sees freshly written samples on real hardware. */
-    hda_dma_sync_range(next_buffer, HDA_BUFFER_SIZE);
-
-    hw_fill_count++;
+    for (i = 0; i < count; i++)
+        hda_fill_period((first + i) % HDA_PERIODS);
 }
 
 /**
@@ -2602,30 +2687,41 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
         return -EIO;
     }
 
+    period_bytes = hda_period_bytes(hw_rate, hda_out_frame());
+    ring_size = HDA_RING_MAX;
+    if (!user_callback) {
+        uint32_t frames = hda_frames_in(period_bytes / hda_out_frame(), true);
+
+        if (frames * HDA_RING_PERIODS * hda_in_frame() < HDA_RING_MAX)
+            ring_size = frames * HDA_RING_PERIODS * hda_in_frame() + 1u;
+    }
+    ring_read_ptr = 0;
+    ring_write_ptr = 0;
+
     buf_addr = (uint64_t)virt_to_phys(audio_buffer);
-    for (i = 0; i < HDA_NUM_BUFFERS; i++) {
-        bdl[i].addr_low = (uint32_t)(buf_addr + (uint64_t)i * HDA_BUFFER_SIZE);
-        bdl[i].addr_high = hda_hi(buf_addr + (uint64_t)i * HDA_BUFFER_SIZE);
-        bdl[i].length = HDA_BUFFER_SIZE;
+    for (i = 0; i < HDA_PERIODS; i++) {
+        bdl[i].addr_low = (uint32_t)(buf_addr + (uint64_t)i * period_bytes);
+        bdl[i].addr_high = hda_hi(buf_addr + (uint64_t)i * period_bytes);
+        bdl[i].length = period_bytes;
         bdl[i].ioc = 1; /* interrupt on completion */
     }
 
     if (user_callback) {
-        for (i = 0; i < HDA_NUM_BUFFERS; i++) {
-            user_callback((uint8_t *)audio_buffer + (i * HDA_BUFFER_SIZE), HDA_BUFFER_SIZE);
+        for (i = 0; i < HDA_PERIODS; i++) {
+            user_callback((uint8_t *)audio_buffer + i * period_bytes, period_bytes);
         }
     } else {
         /* Write path silence is signed 16-bit zeros. */
-        fill_silence((uint8_t *)audio_buffer, HDA_BUFFER_SIZE * HDA_NUM_BUFFERS, true);
+        fill_silence((uint8_t *)audio_buffer, period_bytes * HDA_PERIODS, true);
     }
 
     /* Push initial samples to RAM for DMA (matters on some laptops). */
-    hda_dma_sync_range(audio_buffer, HDA_BUFFER_SIZE * HDA_NUM_BUFFERS);
+    hda_dma_sync_range(audio_buffer, period_bytes * HDA_PERIODS);
 
     hda_sd_write32(stream, HDA_SD_BDPL, (uint32_t)virt_to_phys(bdl));
     hda_sd_write32(stream, HDA_SD_BDPU, hda_hi(virt_to_phys(bdl)));
-    hda_sd_write32(stream, HDA_SD_CBL, HDA_BUFFER_SIZE * HDA_NUM_BUFFERS);
-    hda_sd_write16(stream, HDA_SD_LVI, HDA_NUM_BUFFERS - 1);
+    hda_sd_write32(stream, HDA_SD_CBL, period_bytes * HDA_PERIODS);
+    hda_sd_write16(stream, HDA_SD_LVI, HDA_PERIODS - 1);
     hda_sd_write16(stream, HDA_SD_FORMAT, fmt);
 
     hda_sd_write32(stream, HDA_SD_CTL, (stream_tag << 20) | HDA_SD_CTL_IOCE);
@@ -2819,15 +2915,21 @@ static int hda_start(uint32_t sample_rate, audio_format_t format, int channels)
     /* Flush caches so the controller sees BDL/buffers on real hardware */
     arch_dma_flush_all();
 
-    playing = true;
-    lpib_tracking_valid = false;
+    /* The position buffer keeps the last stream's position until the DMA
+     * writes this one's. */
+    if (dma_posbuf_enabled && (uint32_t)stream * 2u < (uint32_t)(HDA_MAX_STREAMS * 2)) {
+        dma_posbuf[stream * 2] = 0;
+        hda_dma_sync_range(&dma_posbuf[stream * 2], (uint32_t)sizeof(uint32_t));
+    }
     lpib_last = 0;
     lpib_wraps = 0;
     hw_period_last = 0;
+    playing = true;
 
     {
         uint32_t ctl = hda_sd_read32(stream, HDA_SD_CTL);
         ctl |= HDA_SD_CTL_RUN;
+        walclk_last = hda_read32(HDA_WALCLK);
         hda_sd_write32(stream, HDA_SD_CTL, ctl);
     }
     stream_started = true;
@@ -2868,9 +2970,7 @@ static void hda_stop(void)
     playing = false;
     hda_report.playing = false;
     stream_started = false;
-    lpib_tracking_valid = false;
     lpib_last = 0;
-    lpib_wraps = 0;
     hw_period_last = 0;
 
     ring_read_ptr = 0;
@@ -2892,41 +2992,58 @@ static uint32_t hda_stream_position(void)
 }
 
 /**
- * The time a sample written now waits to be played, in milliseconds: the
- * ring's frames at the requested rate, and the DMA buffer's frames ahead of
- * position `lpib`, at the programmed rate. The service keeps the period
- * after the one playing filled, so the DMA holds the rest of the period
- * playing and one more. 0 when no stream plays.
+ * The frames queued at position `pos`, in frames at the caller's rate: the
+ * ring's, and the DMA buffer's from `pos` to the end of the samples the
+ * service has put there, converted from the programmed rate. That end is the
+ * start of the period playing at the last service, since every period after
+ * it has been filled; a distance of 0 is the whole buffer. 0 when no stream
+ * plays. The caller keeps interrupts off, so that the service does not move
+ * the end between the reads.
  */
-static uint32_t hda_queued_ms(uint32_t lpib)
+static uint32_t hda_delay_at(uint32_t pos)
 {
-    uint32_t in_frame = (current_format == AUDIO_S16LE ? 2u : 1u) *
-                        (current_channels > 0 ? (uint32_t)current_channels : 1u);
-    uint32_t out_frame = 2u * (current_hw_channels > 0 ? (uint32_t)current_hw_channels : 1u);
-    uint32_t dma = 2u * HDA_BUFFER_SIZE - lpib % HDA_BUFFER_SIZE;
-    uint32_t ms = 0;
+    uint32_t cbl = period_bytes * HDA_PERIODS;
+    uint32_t dma;
 
     if (!playing || !current_sample_rate || !current_hw_sample_rate)
         return 0;
-    if (!user_callback)
-        ms += ring_available() / in_frame * 1000u / current_sample_rate;
-    ms += dma / out_frame * 1000u / current_hw_sample_rate;
-    return ms;
+    dma = (hw_period_last * period_bytes + cbl - pos % cbl) % cbl;
+    if (dma == 0)
+        dma = cbl;
+    dma /= hda_out_frame();
+    if (user_callback)
+        return dma;
+    return ring_available() / hda_in_frame() + hda_frames_in(dma, false);
+}
+
+uint32_t hda_delay_frames(void)
+{
+    uint32_t flags, frames = 0;
+
+    flags = kirq_save();
+    if (hda_base && playing && stream_started)
+        frames = hda_delay_at(hda_stream_position());
+    kirq_restore(flags);
+    return frames;
 }
 
 void hda_read_queue(void)
 {
     hda_queue_report_t *q = &hda_report.queue;
+    uint32_t flags = kirq_save();
 
     q->lpib = hda_base && hda_report.ready ? hda_stream_position() : 0;
     q->fill = ring_available();
     q->high = ring_high_water;
-    q->delay_ms = hda_base && hda_report.ready ? hda_queued_ms(q->lpib) : 0;
+    q->delay_ms = 0;
+    if (hda_base && hda_report.ready && current_sample_rate)
+        q->delay_ms = hda_delay_at(q->lpib) * 1000u / current_sample_rate;
     q->written = session_bytes_written;
     q->dropped = session_bytes_dropped;
     q->periods = hw_fill_count;
     q->underruns = underrun_count;
     q->missed = missed_revolutions;
+    kirq_restore(flags);
 }
 
 void hda_tick(void)
