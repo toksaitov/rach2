@@ -402,9 +402,23 @@ text again when the mode returns to text.
 These requests require a console descriptor.
 They are not selected merely by descriptor number 1 or 2.
 .Bl -tag -width "AUDIO_SET_VOLUME"
-.It Dv KIOCSOUND
-A zero integer argument silences the PC speaker.
-A nonzero argument is the requested frequency in hertz.
+.It Dv KIOCSOUND No (0x4B2F)
+Sound the PC speaker until the next request, at 1193182 Hz, the clock of
+the PC's interval timer, divided by the integer argument, as on Linux.
+A zero argument silences the speaker.
+.It Dv KDMKTONE No (0x4B30)
+Sound a tone and end it: the argument's high 16 bits are its length in
+milliseconds and its low 16 bits the divisor, as for
+.Dv KIOCSOUND .
+The kernel's tick silences the speaker when the length has passed.
+A length or divisor of 0 silences the speaker.
+.Pp
+Each of the two ends the tone or sound before it, and a divisor whose
+pitch is not between 21 and 32766 Hz silences the speaker, as on Linux.
+Both return 0.
+.Pa /proc/console
+counts the tones and sounds; see
+.Xr proc 5 .
 .It Dv AUDIO_GET_INFO No (0x4101)
 Write two 32-bit unsigned fields through
 .Fa arg :

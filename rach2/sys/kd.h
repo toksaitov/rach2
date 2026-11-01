@@ -12,8 +12,8 @@
 /*
  * The requests and structures of Linux's <linux/kd.h>, with its numbers, which
  * kbd's tools and Linux's programs send to the console. `kd_ioctl` answers
- * them; KIOCSOUND, 0x4B2F, is the speaker's and stays with the console's
- * other requests in syscall.c.
+ * them; KIOCSOUND, 0x4B2F, and KDMKTONE, 0x4B30, are the speaker's and stay
+ * with the console's other requests in syscall.c.
  */
 
 #define KDGETLED 0x4B31 /* the LEDs lit, LED_* */

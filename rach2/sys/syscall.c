@@ -84,7 +84,8 @@
 /*
  * ioctl request codes (Linux compatible subset)
  */
-#define KIOCSOUND 0x4B2F /* Set PC speaker frequency (0 = off) */
+#define KIOCSOUND 0x4B2F /* sound the speaker: a PIT divisor, 0 silences */
+#define KDMKTONE  0x4B30 /* a tone: ms in the high 16 bits, divisor in the low */
 
 #define TIOCLINUX 0x541C /* The Linux console's subcodes, in the byte at arg */
 
@@ -2026,10 +2027,11 @@ static int32_t console_tioclinux(uintptr_t arg)
 
 /**
  * Answer the console's requests: TIOCLINUX (`console_tioclinux`), KIOCSOUND
- * on the PC speaker, Linux's KD* keyboard requests (`kd_ioctl`), and the
- * AUDIO_* requests on the active driver. The AUDIO_* requests other than
- * AUDIO_GET_INFO are -ENODEV with no driver, and AUDIO_START and AUDIO_WRITE
- * return the driver's -errno. AUDIO_WRITE checks the caller's samples with
+ * and KDMKTONE on the PC speaker in Linux's encodings (`speaker_tone`),
+ * Linux's KD* keyboard requests (`kd_ioctl`), and the AUDIO_* requests on
+ * the active driver. The AUDIO_* requests other than AUDIO_GET_INFO are
+ * -ENODEV with no driver, and AUDIO_START and AUDIO_WRITE return the
+ * driver's -errno. AUDIO_WRITE checks the caller's samples with
  * `user_buffer_ok`, and the driver reads them in place. Any other request is
  * -ENOTTY.
  */
@@ -2041,10 +2043,15 @@ static int32_t console_ioctl(uint32_t request, uintptr_t arg)
         return console_tioclinux(arg);
     }
     if (request == KIOCSOUND) {
-        if (arg == 0) {
-            speaker_off();
+        speaker_tone((uint32_t)arg, 0);
+        return 0;
+    }
+    if (request == KDMKTONE) {
+        /* A length of 0 silences, as Linux's does. */
+        if ((arg >> 16) & 0xFFFF) {
+            speaker_tone((uint32_t)(arg & 0xFFFF), (uint32_t)((arg >> 16) & 0xFFFF));
         } else {
-            speaker_on((uint32_t)arg);
+            speaker_tone(0, 0);
         }
         return 0;
     }

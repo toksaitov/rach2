@@ -97,7 +97,7 @@ Once it owns `/fb`, the game takes the keyboard when its standard input is a ter
 
 With sample output, an effect is a `DS` lump, unsigned 8-bit samples after an 8-byte header, and eight channels play at once at the engine's volumes; the stereo separation is ignored. Each time the engine updates its sound, the module works out from the clock how many output samples are due, at most 5040, and makes them in chunks of 315. For each chunk it takes 49716/11025 times as many stereo samples from the music player, averages them down to the output rate in 8 bits, adds the channels, and limits each sum to a byte. `AUDIO_WRITE` may take part of a chunk when the kernel's ring is full; the module writes the rest again until a call takes nothing, and drops what is left. What the kernel does with the stream is in [the audio Readme](../../rach2/sys/audio/Readme.md).
 
-On the PC speaker an effect is a `DP` lump: a 4-byte header, then one tone value for each 7 ms. A value from 1 to 127 is a frequency, 175 Hz times 2 to the power (value - 1) / 24, which `KIOCSOUND` sounds; 0 and values above 127 are silence. The speaker sounds one effect at a time, and a new effect ends the one playing.
+On the PC speaker an effect is a `DP` lump: a 4-byte header, then one tone value for each 7 ms. A value from 1 to 127 is a frequency, 175 Hz times 2 to the power (value - 1) / 24, which `KIOCSOUND` sounds as the PIT's divisor, 1193182 divided by the frequency; 0 and values above 127 are silence. The speaker sounds one effect at a time, and a new effect ends the one playing.
 
 ### Music
 

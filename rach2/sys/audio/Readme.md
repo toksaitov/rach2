@@ -19,7 +19,7 @@ The boot calls `init_audio` (`audio.c`) once, unless the command line has `rach2
 
 ### Programs
 
-A program drives audio with `ioctl` on a console descriptor: `KIOCSOUND` sounds the speaker, and `AUDIO_GET_INFO`, `AUDIO_START`, `AUDIO_STOP`, `AUDIO_WRITE` and `AUDIO_SET_VOLUME` call the active driver (`sys_ioctl` in `sys/syscall.c`). [ioctl(2)](../../../man/man2/ioctl.2) has their arguments and errors. `AUDIO_WRITE` is the write path above; no ioctl sets a callback. `/dev/mixer` ([mixer(4)](../../../man/man4/mixer.4)), in `mixer.c`, is OSS's mixer over `set_volume` and `get_volume`, there while the driver has a `get_volume`: its one channel, the volume, reads as the level on both sides, and a write sets the louder side. `KIOCSOUND` drives the speaker directly, whichever driver is active and under `rach2.noaudio` too.
+A program drives audio with `ioctl` on a console descriptor: `KIOCSOUND` and `KDMKTONE` sound the speaker, and `AUDIO_GET_INFO`, `AUDIO_START`, `AUDIO_STOP`, `AUDIO_WRITE` and `AUDIO_SET_VOLUME` call the active driver (`sys_ioctl` in `sys/syscall.c`). [ioctl(2)](../../../man/man2/ioctl.2) has their arguments and errors. `AUDIO_WRITE` is the write path above; no ioctl sets a callback. `/dev/mixer` ([mixer(4)](../../../man/man4/mixer.4)), in `mixer.c`, is OSS's mixer over `set_volume` and `get_volume`, there while the driver has a `get_volume`: its one channel, the volume, reads as the level on both sides, and a write sets the louder side. `KIOCSOUND` and `KDMKTONE` drive the speaker directly, whichever driver is active and under `rach2.noaudio` too.
 
 [audiotest(1)](../../../man/man1/audiotest.1) plays a square wave through these ioctls. It opens `/dev/console` itself, so it works from an SSH session, whose standard descriptors are a pty and not the console. Doom's sound is described in [its Readme](../../../ports/doom/Readme.md).
 
@@ -78,7 +78,9 @@ Each DAC's capabilities are its Supported PCM Size, Rates and Supported Stream F
 
 ### PC speaker
 
-`sys/speaker.h` declares `speaker_on(hz)` and `speaker_off()`. `sys/arch/x86/speaker.c` programs channel 2 of the 8254 in mode 3, a square wave, with 1193182 divided by the frequency, clamped to 0xFFFF (about 18 Hz), and sets bits 0 and 1 of port 0x61 to connect the channel to the speaker; 0 Hz and `speaker_off` clear them. `speaker_driver` in `audio.c` accepts `start` with any arguments and plays nothing: its `write` returns -EOPNOTSUPP and it never calls a callback.
+`sys/speaker.h` declares `speaker_on(hz)`, `speaker_on_divisor`, `speaker_off()` and `speaker_tone`. `sys/arch/x86/speaker.c` programs channel 2 of the 8254 in mode 3, a square wave, with a divisor of 1193182, the frequency's or the one given, clamped to 0xFFFF (about 18 Hz), and sets bits 0 and 1 of port 0x61 to connect the channel to the speaker; 0 and `speaker_off` clear them.
+
+`speaker_tone(divisor, ms)` answers the console's requests in Linux's encodings: `KIOCSOUND`'s argument is the divisor, sounded until the next request, and `KDMKTONE`'s low 16 bits are the divisor and its high 16 bits the tone's length in milliseconds, 0 for silence. A divisor whose pitch is not between 21 and 32766 Hz silences the speaker, as Linux's console does. Each request ends the tone or sound before it. A tone records the low half of the tick count it ends at, and `speaker_tick`, which the boot processor's tick calls, silences the speaker once the count reaches it, so a late interrupt that counts several ticks ends the tone in time. A spinlock taken with interrupts off keeps the request and the tick apart. The counts of tones and sounds begun, of tones the tick ended and of those a request cut short, with the last divisor and length, are the `speaker-` lines of `/proc/console` ([proc(5)](../../../man/man5/proc.5)). `speaker_driver` in `audio.c` accepts `start` with any arguments and plays nothing: its `write` returns -EOPNOTSUPP and it never calls a callback.
 
 ## Limits
 
@@ -88,12 +90,12 @@ Each DAC's capabilities are its Supported PCM Size, Rates and Supported Stream F
 * The write path plays stereo input as mono, and its resampler does not filter, so a converted rate aliases.
 * The SB16 uses IRQ 5 and DMA channels 1 and 5 only.
 * `/proc/audio` reports what was programmed. It does not measure the DAC's clock or tell which output is audible.
-* The speaker has no volume, and the console's BEL character does not sound it (`sys/kio.c`).
+* The speaker has no volume, and the console's BEL character does not sound it (`sys/kio.c`); [term](../../../term/Readme.md) sounds its bell with `KDMKTONE`.
 
 ## Tests
 
 * `tests/run audio`, in the core tier, runs the two cases of [`tests/cases/machine.audio.json`](../../../tests/cases/machine.audio.json) on the run's accelerator, each a boot whose QEMU records what the card played with the `wav` audio backend. The first, of the test image, has QEMU's `intel-hda` and `hda-duplex`; the debug shell runs `audio test scale 2000`, `wavcheck` (`tests/system/checkers/wavcheck.c`) measures the frequency of each 50 ms of the recording from the lengths of the square wave's runs and requires the five notes in order and no other tone, and `intrprobe` reads `/proc/interrupts` before and after, where the count on the `hda` message vector must have grown. The second, of the kernel alone in the debug shell, has QEMU's `sb16`, runs the same command and checks the recording the same way. A stall fails either case.
 * `tests/run host` runs `tests/host/hda_hosttest.c`, which compiles `hda.c` and `audio_proc.c` against a model codec and model registers and checks every rate bit in both modes, the capability rules, connection list decoding, routing, the `/proc/audio` text, underruns and shutdown with a pending interrupt. It also runs `tests/host/sb16_hosttest.c`, which compiles `sb16.c` and `audio_debug.c` against port stubs and a model of the DMA position and checks partial frames across the ring's wrap, short writes, the period at each rate and format, a failure at each setup step, callback refills into the half the DMA is not reading wherever the interrupts find it, the scale's every frame, note and rest, and its report of a device that stops.
-* `tests/host/dma_hosttest.c` checks the mask port and value for each transfer channel, the count register read across a borrow in either reading, and requires channel 4 and invalid channels to do no I/O. The speaker and `KIOCSOUND` have no test, and no suite runs `audiotest` or the probe built from `tests/musl/hdaprobe.c`.
+* `tests/host/dma_hosttest.c` checks the mask port and value for each transfer channel, the count register read across a borrow in either reading, and requires channel 4 and invalid channels to do no I/O. The speaker, `KIOCSOUND` and `KDMKTONE` have no test, and no suite runs `audiotest` or the probe built from `tests/musl/hdaprobe.c`.
 
 Run a suite with `tests/run NAME`.
