@@ -44,8 +44,14 @@
  * 64-bit fields (clock_gettime on x86-64). close_range marks a range of
  * descriptors close-on-exec and closes it, reaches past the table's end, and
  * fails with EINVAL for a flag it does not take and for a backward range.
- * splice from a pipe to /dev/null, tee and sendfile answer EINVAL, which GNU
- * grep takes for a descriptor it must read instead, and EBADF for a closed one.
+ * splice moves a pipe's bytes to /dev/null and a file's into a pipe from an
+ * offset it moves, tee copies a pipe's bytes to another and leaves them,
+ * sendfile sends a file to an AF_UNIX socket and to a file, copy_file_range
+ * copies a file's bytes into another at both offsets and stops at the end,
+ * SEEK_DATA finds data at the offset and SEEK_HOLE the hole at the end,
+ * FICLONE is EOPNOTSUPP, faccessat2 takes AT_EACCESS, AT_SYMLINK_NOFOLLOW and
+ * AT_EMPTY_PATH, splice from a closed descriptor is EBADF, and a pty master
+ * reads the slave's last output and then EIO once the slave has closed.
  * posix_fallocate gives a file in /dev/shm its pages, the size and the blocks
  * of the range, and answers EOPNOTSUPP for a file of KRFFS or of /proc open for
  * writing, after which glibc's writes the range itself, EBADF for one open only
@@ -83,7 +89,9 @@
  * `recvmmsg`, `recvmmsg-wide-count`, `socket-wide-domain`, `clock-gettime64`,
  * `time-call`, `close-range-cloexec`, `close-range-below`,
  * `close-range-einval-flag`, `close-range-backward`, `close-range-end`,
- * `splice-einval`, `tee-einval`, `sendfile-einval`, `splice-ebadf`,
+ * `splice-pipe-null`, `splice-file-pipe`, `tee-pipes`, `sendfile-socket`,
+ * `sendfile-file`, `copy-file-range`, `seek-data-hole`, `ficlone-eopnotsupp`,
+ * `faccessat2`, `splice-ebadf`, `pty-hangup-eio`,
  * `fallocate-krffs`, `fallocate-ebadf`, `fallocate-einval`, `fallocate-espipe`,
  * `fallocate-mode`, `fallocate-proc`, `fallocate-shm`, `adjtimex`,
  * `clock-adjtime`, `listxattr`, `getxattr`, `lsetxattr-enoent`,
@@ -122,6 +130,7 @@
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/sendfile.h>
 #include <sys/signalfd.h>
 #include <sys/timex.h>
 #include <sys/xattr.h>
@@ -143,6 +152,9 @@
  * clock_gettime64, call 403, and sendfile64 are x86-64's clock_gettime and
  * sendfile, whose fields and offsets are 64 bits wide.
  */
+/* ioctl's FICLONE, _IOW(0x94, 9, int), from linux/fs.h. */
+#define FICLONE_REQUEST 0x40049409
+
 #if defined __x86_64__
 #define SYS_CLOCK_GETTIME64 SYS_clock_gettime
 #define SYS_sendfile64      SYS_sendfile
@@ -1096,39 +1108,128 @@ static int ranges(void)
 }
 
 /**
- * Check that splice from a pipe to /dev/null, tee and sendfile fail with
- * EINVAL, and splice from a closed descriptor with EBADF. Returns 0, or 1 after
- * the failure is printed.
+ * Check the copies between descriptors, on files in /tmp: splice of a pipe's
+ * bytes to /dev/null and of a file's from an offset into a pipe, tee between
+ * pipes, sendfile to an AF_UNIX socket and to a file, copy_file_range,
+ * SEEK_DATA and SEEK_HOLE, FICLONE, faccessat2's flags, and splice from a
+ * closed descriptor. Returns 0, or 1 after the failure is printed.
  */
 static int copies(void)
 {
-    int p[2], q[2];
+    static const char text[] = "0123456789abcdef";
+    char got[32];
+    int p[2], q[2], sv[2];
     int null = open("/dev/null", O_WRONLY);
+    int fd = open("/tmp/callsmusl.copy", O_CREAT | O_RDWR | O_TRUNC, 0600);
+    int out = open("/tmp/callsmusl.copied", O_CREAT | O_RDWR | O_TRUNC, 0600);
+    off_t at, to;
 
-    if (null < 0 || pipe(p) != 0 || pipe(q) != 0 || write(p[1], "abc", 3) != 3) {
-        return fail("a pipe with bytes in it and /dev/null");
+    unlink("/tmp/callsmusl.link");
+    if (null < 0 || fd < 0 || out < 0 || pipe(p) != 0 || pipe(q) != 0 ||
+        socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 || write(fd, text, 16) != 16 ||
+        write(p[1], "abc", 3) != 3 || symlink("/tmp/callsmusl.none", "/tmp/callsmusl.link") != 0) {
+        return fail("files, pipes, a socket pair, a dangling link and /dev/null");
     }
-    if (syscall(SYS_splice, p[0], NULL, null, NULL, 16, 0) != -1 || errno != EINVAL) {
-        return fail("splice from a pipe to /dev/null was not EINVAL");
-    }
-    held();
-    if (syscall(SYS_tee, p[0], q[1], 16, 0) != -1 || errno != EINVAL) {
-        return fail("tee was not EINVAL");
-    }
-    held();
-    if (syscall(SYS_sendfile64, null, p[0], NULL, 16) != -1 || errno != EINVAL) {
-        return fail("sendfile was not EINVAL");
+    if (splice(p[0], NULL, null, NULL, 16, 0) != 3) {
+        return fail("splice of a pipe's 3 bytes to /dev/null did not move them");
     }
     held();
-    if (syscall(SYS_splice, 999, NULL, null, NULL, 16, 0) != -1 || errno != EBADF) {
+    at = 4;
+    if (splice(fd, &at, p[1], NULL, 6, 0) != 6 || at != 10 || read(p[0], got, sizeof got) != 6 ||
+        memcmp(got, "456789", 6) != 0 || lseek(fd, 0, SEEK_CUR) != 16) {
+        return fail("splice of a file from an offset into a pipe");
+    }
+    held();
+    if (write(p[1], "xyz", 3) != 3 || tee(p[0], q[1], 16, 0) != 3 ||
+        read(q[0], got, sizeof got) != 3 || read(p[0], got + 3, sizeof got - 3) != 3 ||
+        memcmp(got, "xyzxyz", 6) != 0) {
+        return fail("tee did not copy a pipe's bytes and leave them");
+    }
+    held();
+    at = 8;
+    if (sendfile(sv[0], fd, &at, 8) != 8 || at != 16 || read(sv[1], got, sizeof got) != 8 ||
+        memcmp(got, "89abcdef", 8) != 0) {
+        return fail("sendfile of a file to an AF_UNIX socket");
+    }
+    held();
+    if (lseek(fd, 2, SEEK_SET) != 2 || sendfile(out, fd, NULL, 4) != 4 ||
+        lseek(fd, 0, SEEK_CUR) != 6 || pread(out, got, sizeof got, 0) != 4 ||
+        memcmp(got, "2345", 4) != 0) {
+        return fail("sendfile of a file to a file");
+    }
+    held();
+    at = 10;
+    to = 4;
+    if (copy_file_range(fd, &at, out, &to, 64, 0) != 6 || at != 16 || to != 10 ||
+        pread(out, got, sizeof got, 0) != 10 || memcmp(got, "2345abcdef", 10) != 0 ||
+        copy_file_range(fd, &at, out, &to, 64, 0) != 0) {
+        return fail("copy_file_range");
+    }
+    held();
+    if (lseek(fd, 5, SEEK_DATA) != 5 || lseek(fd, 5, SEEK_HOLE) != 16 ||
+        lseek(fd, 16, SEEK_DATA) != -1 || errno != ENXIO) {
+        return fail("lseek's SEEK_DATA and SEEK_HOLE");
+    }
+    held();
+    if (ioctl(out, FICLONE_REQUEST, fd) != -1 || errno != EOPNOTSUPP) {
+        return fail("FICLONE was not EOPNOTSUPP");
+    }
+    held();
+    if (syscall(SYS_faccessat2, AT_FDCWD, "/tmp/callsmusl.copy", R_OK | W_OK, AT_EACCESS) != 0 ||
+        syscall(SYS_faccessat2, AT_FDCWD, "/tmp/callsmusl.link", F_OK, AT_SYMLINK_NOFOLLOW) != 0 ||
+        syscall(SYS_faccessat2, fd, "", R_OK, AT_EMPTY_PATH) != 0 ||
+        syscall(SYS_faccessat2, AT_FDCWD, "/tmp/callsmusl.link", F_OK, 0) != -1 ||
+        errno != ENOENT) {
+        return fail("faccessat2's flags");
+    }
+    held();
+    if (splice(999, NULL, null, NULL, 16, 0) != -1 || errno != EBADF) {
         return fail("splice from a closed descriptor was not EBADF");
     }
     held();
     close(null);
+    close(fd);
+    close(out);
     close(p[0]);
     close(p[1]);
     close(q[0]);
     close(q[1]);
+    close(sv[0]);
+    close(sv[1]);
+    unlink("/tmp/callsmusl.copy");
+    unlink("/tmp/callsmusl.copied");
+    unlink("/tmp/callsmusl.link");
+    return 0;
+}
+
+/**
+ * Check that a pty master reads the slave's last output and then EIO once
+ * the slave has closed, as Linux's does. Returns 0, or 1 after the failure
+ * is printed.
+ */
+static int hangups(void)
+{
+    char name[32], got[8];
+    struct termios t;
+    int master = posix_openpt(O_RDWR | O_NOCTTY);
+    int slave;
+
+    if (master < 0 || grantpt(master) != 0 || unlockpt(master) != 0 ||
+        ptsname_r(master, name, sizeof name) != 0 || (slave = open(name, O_RDWR | O_NOCTTY)) < 0 ||
+        tcgetattr(slave, &t) != 0) {
+        return fail("a pseudo-terminal pair");
+    }
+    cfmakeraw(&t);
+    tcsetattr(slave, TCSANOW, &t);
+    if (write(slave, "ok", 2) != 2) {
+        return fail("a slave write");
+    }
+    close(slave);
+    if (read(master, got, sizeof got) != 2 || read(master, got, sizeof got) != -1 || errno != EIO) {
+        return fail("a pty master did not read EIO after the slave's output once it closed");
+    }
+    held();
+    close(master);
     return 0;
 }
 
@@ -1713,10 +1814,17 @@ static void plan(void)
                                          "close-range-einval-flag",
                                          "close-range-backward",
                                          "close-range-end",
-                                         "splice-einval",
-                                         "tee-einval",
-                                         "sendfile-einval",
+                                         "splice-pipe-null",
+                                         "splice-file-pipe",
+                                         "tee-pipes",
+                                         "sendfile-socket",
+                                         "sendfile-file",
+                                         "copy-file-range",
+                                         "seek-data-hole",
+                                         "ficlone-eopnotsupp",
+                                         "faccessat2",
                                          "splice-ebadf",
+                                         "pty-hangup-eio",
                                          "fallocate-krffs",
                                          "fallocate-ebadf",
                                          "fallocate-einval",
@@ -1770,9 +1878,9 @@ int main(int argc, char **argv)
     probe_args(argc, argv);
     plan();
     if (signals() || memory() || identity() || messages() || clocks() || ranges() || copies() ||
-        reserves() || adjusts() || advises() || terminals() || peaks() || refusals() || setgids() ||
-        privacies() || timers() || queues() || flows() || signalfds() || cputimers() || devmems() ||
-        klogs() || rtcs()) {
+        hangups() || reserves() || adjusts() || advises() || terminals() || peaks() || refusals() ||
+        setgids() || privacies() || timers() || queues() || flows() || signalfds() || cputimers() ||
+        devmems() || klogs() || rtcs()) {
         return 1;
     }
     report_end();
