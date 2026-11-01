@@ -160,8 +160,8 @@ int timer_clock_check(void);
 /**
  * Measure the processor's time-stamp counter, once, with interrupts off,
  * where its counter runs at one rate whatever the processor's clock does
- * (on a PC, what `cpuid` leaf 0x80000007 says) and `rach2.notsc` is not on
- * the command line: against the reference that keeps the clock, the HPET
+ * (on a PC, what `cpuid` leaf 0x80000007 says, or `rach2.tscreliable`) and
+ * `rach2.notsc` is not on the command line: against the reference that keeps the clock, the HPET
  * or the PM timer, over the 20 ms window of three whose readings of it were
  * closest to the counter's, or on a machine with neither, as the lowest
  * rate of three waits of 20 ms on the 8254, so that it can be the

@@ -403,8 +403,10 @@ static uint32_t tsc_against_reference(void)
 /**
  * Measure the TSC against the active reference, the HPET or the PM timer,
  * or against the 8254 on a machine with neither, once, with interrupts off.
- * It is measured only where `cpuid` says it runs at one rate, and never
- * with `rach2.notsc` on the command line. The TSC's difference is taken in
+ * It is measured only where `cpuid` says it runs at one rate or
+ * `rach2.tscreliable` says to take it as one that does, as QEMU's emulator
+ * needs, which reports no such counter, and never with `rach2.notsc` on the
+ * command line. The TSC's difference is taken in
  * 64 bits, so that a long one is not taken for a short one.
  */
 uint32_t timer_calibrate(void)
@@ -415,7 +417,7 @@ uint32_t timer_calibrate(void)
         return tsc_per_tick;
     }
     tsc_measured = 1;
-    if (kcmdline_has("rach2.notsc") || !tsc_one_rate()) {
+    if (kcmdline_has("rach2.notsc") || !(tsc_one_rate() || kcmdline_has("rach2.tscreliable"))) {
         return 0;
     }
     flags = kirq_save();

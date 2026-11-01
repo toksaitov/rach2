@@ -87,7 +87,8 @@ uint32_t pit_period_us(void);
 uint32_t pit_wait_counts(uint32_t counts);
 
 /** The TSC's counts in a tick, as `timer_calibrate` measured them, or 0
- * when it was not measured: no invariant TSC, or `rach2.notsc`. */
+ * when it was not measured: no invariant TSC and no `rach2.tscreliable`, or
+ * `rach2.notsc`. */
 uint32_t tsc_counts_per_tick(void);
 
 /*
