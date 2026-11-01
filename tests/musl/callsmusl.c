@@ -1108,11 +1108,12 @@ static int ranges(void)
 }
 
 /**
- * Check the copies between descriptors, on files in /tmp: splice of a pipe's
- * bytes to /dev/null and of a file's from an offset into a pipe, tee between
- * pipes, sendfile to an AF_UNIX socket and to a file, copy_file_range,
- * SEEK_DATA and SEEK_HOLE, FICLONE, faccessat2's flags, and splice from a
- * closed descriptor. Returns 0, or 1 after the failure is printed.
+ * Check the copies between descriptors, on files in /tmp and a link in
+ * /dev/shm, since KRFFS keeps no links: splice of a pipe's bytes to /dev/null
+ * and of a file's from an offset into a pipe, tee between pipes, sendfile to
+ * an AF_UNIX socket and to a file, copy_file_range, SEEK_DATA and SEEK_HOLE,
+ * FICLONE, faccessat2's flags, and splice from a closed descriptor. Returns
+ * 0, or 1 after the failure is printed.
  */
 static int copies(void)
 {
@@ -1124,10 +1125,11 @@ static int copies(void)
     int out = open("/tmp/callsmusl.copied", O_CREAT | O_RDWR | O_TRUNC, 0600);
     off_t at, to;
 
-    unlink("/tmp/callsmusl.link");
+    unlink("/dev/shm/callsmusl.link");
     if (null < 0 || fd < 0 || out < 0 || pipe(p) != 0 || pipe(q) != 0 ||
         socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 || write(fd, text, 16) != 16 ||
-        write(p[1], "abc", 3) != 3 || symlink("/tmp/callsmusl.none", "/tmp/callsmusl.link") != 0) {
+        write(p[1], "abc", 3) != 3 ||
+        symlink("/dev/shm/callsmusl.none", "/dev/shm/callsmusl.link") != 0) {
         return fail("files, pipes, a socket pair, a dangling link and /dev/null");
     }
     if (splice(p[0], NULL, null, NULL, 16, 0) != 3) {
@@ -1176,9 +1178,10 @@ static int copies(void)
     }
     held();
     if (syscall(SYS_faccessat2, AT_FDCWD, "/tmp/callsmusl.copy", R_OK | W_OK, AT_EACCESS) != 0 ||
-        syscall(SYS_faccessat2, AT_FDCWD, "/tmp/callsmusl.link", F_OK, AT_SYMLINK_NOFOLLOW) != 0 ||
+        syscall(SYS_faccessat2, AT_FDCWD, "/dev/shm/callsmusl.link", F_OK, AT_SYMLINK_NOFOLLOW) !=
+            0 ||
         syscall(SYS_faccessat2, fd, "", R_OK, AT_EMPTY_PATH) != 0 ||
-        syscall(SYS_faccessat2, AT_FDCWD, "/tmp/callsmusl.link", F_OK, 0) != -1 ||
+        syscall(SYS_faccessat2, AT_FDCWD, "/dev/shm/callsmusl.link", F_OK, 0) != -1 ||
         errno != ENOENT) {
         return fail("faccessat2's flags");
     }
@@ -1198,7 +1201,7 @@ static int copies(void)
     close(sv[1]);
     unlink("/tmp/callsmusl.copy");
     unlink("/tmp/callsmusl.copied");
-    unlink("/tmp/callsmusl.link");
+    unlink("/dev/shm/callsmusl.link");
     return 0;
 }
 
