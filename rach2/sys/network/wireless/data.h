@@ -180,6 +180,9 @@ struct wlan_data {
 
     struct wlan_data_txq txq[WLAN_DATA_TX_QUEUE];
     unsigned txq_head, txq_count; /* under txq_lock */
+    /* Under txq_lock: the radio refused the head with -ENOBUFS, so the
+     * queue waits for its next completion rather than for a new frame. */
+    int txq_held;
     struct spinlock txq_lock;
     struct wlan_data_work tx_work[2]; /* drain the queue; data.c sets run */
 
@@ -312,12 +315,23 @@ int wlan_data_kick(struct wlan_data_work work[2], uint64_t due);
 
 /** Copy an Ethernet frame into the transmit queue and queue its drain;
  * the adapter's tx_ethernet calls it with net_lock, so it never sleeps.
- * Returns 0, -EINVAL, -ENOTCONN or -ENOBUFS when the queue is full. */
+ * The drain is not queued while the queue is held. Returns 0, -EINVAL,
+ * -ENOTCONN or -ENOBUFS when the queue is full. */
 int wlan_data_queue(struct wlan_data *d, const uint8_t *frame, unsigned len);
 
-/** Take the oldest frame off the transmit queue into `out`, of
- * WLAN_DATA_ETH_MAX bytes, and set *len. Returns 1, or 0 when it is empty. */
-int wlan_data_dequeue(struct wlan_data *d, uint8_t *out, unsigned *len);
+/** Copy the oldest frame of the transmit queue into `out`, of
+ * WLAN_DATA_ETH_MAX bytes, and set *len, leaving it queued. Returns 1, or 0
+ * when the queue is empty. */
+int wlan_data_peek(struct wlan_data *d, uint8_t *out, unsigned *len);
+
+/** Take the oldest frame off the transmit queue, if any. Worker only, so
+ * that nothing but a disconnect changes the head between a peek and a pop. */
+void wlan_data_pop(struct wlan_data *d);
+
+/** Mark the transmit queue held (`held` != 0) or free: while held, a frame
+ * queued does not queue the drain, which the radio's next completion does.
+ * Worker only. */
+void wlan_data_hold(struct wlan_data *d, int held);
 
 /** The length of a data or management frame's MAC header, Address 4, QoS
  * Control and HT Control included, or 0 when `len` bytes cannot hold it or

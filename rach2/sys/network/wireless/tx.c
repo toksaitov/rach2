@@ -196,6 +196,7 @@ void wlan_data_disconnect(struct wlan_data *d)
     flags = spin_lock_irqsave(&d->txq_lock);
     d->txq_head = 0;
     d->txq_count = 0;
+    d->txq_held = 0;
     spin_unlock_irqrestore(&d->txq_lock, flags);
     wlan_data_clear_keys(d);
     d->connected = 0;
@@ -453,6 +454,7 @@ int wlan_data_queue(struct wlan_data *d, const uint8_t *frame, unsigned len)
 {
     struct wlan_data_txq *q;
     uint32_t flags;
+    int held;
 
     if (!d || !frame || len < 14 || len > WLAN_DATA_ETH_MAX)
         return -EINVAL;
@@ -467,13 +469,16 @@ int wlan_data_queue(struct wlan_data *d, const uint8_t *frame, unsigned len)
     k_memcpy(q->frame, frame, len);
     q->len = len;
     d->txq_count++;
+    held = d->txq_held;
     spin_unlock_irqrestore(&d->txq_lock, flags);
-    /* -EBUSY means a drain is queued, which takes this frame. */
-    (void)wlan_data_kick(d->tx_work, 0);
+    /* -EBUSY means a drain is queued, which takes this frame. A held queue
+     * waits for the radio's next completion instead. */
+    if (!held)
+        (void)wlan_data_kick(d->tx_work, 0);
     return 0;
 }
 
-int wlan_data_dequeue(struct wlan_data *d, uint8_t *out, unsigned *len)
+int wlan_data_peek(struct wlan_data *d, uint8_t *out, unsigned *len)
 {
     struct wlan_data_txq *q;
     uint32_t flags;
@@ -486,8 +491,27 @@ int wlan_data_dequeue(struct wlan_data *d, uint8_t *out, unsigned *len)
     q = &d->txq[d->txq_head];
     k_memcpy(out, q->frame, q->len);
     *len = q->len;
-    d->txq_head = (d->txq_head + 1) % WLAN_DATA_TX_QUEUE;
-    d->txq_count--;
     spin_unlock_irqrestore(&d->txq_lock, flags);
     return 1;
+}
+
+void wlan_data_pop(struct wlan_data *d)
+{
+    uint32_t flags;
+
+    flags = spin_lock_irqsave(&d->txq_lock);
+    if (d->txq_count) {
+        d->txq_head = (d->txq_head + 1) % WLAN_DATA_TX_QUEUE;
+        d->txq_count--;
+    }
+    spin_unlock_irqrestore(&d->txq_lock, flags);
+}
+
+void wlan_data_hold(struct wlan_data *d, int held)
+{
+    uint32_t flags;
+
+    flags = spin_lock_irqsave(&d->txq_lock);
+    d->txq_held = held != 0;
+    spin_unlock_irqrestore(&d->txq_lock, flags);
 }

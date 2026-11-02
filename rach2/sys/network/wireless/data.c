@@ -37,36 +37,58 @@ static int data_tx_ethernet(struct wlan *wlan, const uint8_t *frame, unsigned le
     return d ? wlan_data_queue(d, frame, len) : -ENOTCONN;
 }
 
-/** Send what the adapter queued, checking the control port again, since
- * authorization may have changed while a frame waited. */
+/**
+ * Send what the adapter queued, checking the control port again, since
+ * authorization may have changed while a frame waited. A frame the radio
+ * refuses with -ENOBUFS, its ring for the frame's access category being
+ * full, stays at the head and the queue is held until a completion frees a
+ * slot, as Linux's drivers stop the queue (ieee80211_stop_queue) and wake
+ * it from their completions; any other refusal drops the frame and counts
+ * it.
+ */
 static void data_drain_tx(struct wlan_work *work)
 {
     struct wlan_data *d = ((struct wlan_data_work *)work)->data;
     unsigned len, n;
     uint16_t protocol;
+    int rc;
 
-    while (wlan_data_dequeue(d, d->eth, &len)) {
+    wlan_data_hold(d, 0);
+    while (wlan_data_peek(d, d->eth, &len)) {
         protocol = (uint16_t)((unsigned)d->eth[12] << 8 | d->eth[13]);
-        if (!d->connected || !wlan_port_allowed(d->wlan, protocol) ||
-            wlan_encap(d->eth, len, d->bssid, 0, d->buf, sizeof(d->buf), &n) != 0 ||
-            wlan_data_tx(d, d->buf, n, sizeof(d->buf), wlan_data_priority(d->eth, len)) != 0) {
+        if (!d->connected)
+            rc = -ENOTCONN;
+        else if (!wlan_port_allowed(d->wlan, protocol))
+            rc = -EACCES;
+        else
+            rc = wlan_encap(d->eth, len, d->bssid, 0, d->buf, sizeof(d->buf), &n);
+        if (rc == 0)
+            rc = wlan_data_tx(d, d->buf, n, sizeof(d->buf), wlan_data_priority(d->eth, len));
+        if (rc == -ENOBUFS) {
+            wlan_data_hold(d, 1);
+            return;
+        }
+        wlan_data_pop(d);
+        if (rc) {
             uint32_t flags = net_lock(); /* an interface's count (netdev.h) */
 
             d->wlan->netdev.tx_dropped++;
             net_unlock(flags);
-            continue;
         }
     }
 }
 
 /** Take what the radio reported: completions first, so that rate
- * selection learns of them before it picks again, then received frames. */
+ * selection learns of them before it picks again, then received frames.
+ * A completion frees a slot of the radio's ring, so a held transmit queue
+ * is drained again once the completions are taken. */
 static void data_drain_rx(struct wlan_work *work)
 {
     struct wlan_data *d = ((struct wlan_data_work *)work)->data;
     struct wlan_tx_status status;
     struct wlan_data_rxq *q;
     uint32_t flags;
+    int completed = 0;
 
     for (;;) {
         flags = spin_lock_irqsave(&d->rxq_lock);
@@ -78,11 +100,12 @@ static void data_drain_rx(struct wlan_work *work)
             wlan_data_tx_status(d, &status);
             if (d->tx_status)
                 d->tx_status(d->wlan, &status);
+            completed = 1;
             continue;
         }
         if (!d->rxq_count) {
             spin_unlock_irqrestore(&d->rxq_lock, flags);
-            return;
+            break;
         }
         q = &d->rxq[d->rxq_head];
         spin_unlock_irqrestore(&d->rxq_lock, flags);
@@ -93,6 +116,9 @@ static void data_drain_rx(struct wlan_work *work)
         d->rxq_count--;
         spin_unlock_irqrestore(&d->rxq_lock, flags);
     }
+    /* The worker alone sets txq_held, so it reads it without the lock. */
+    if (completed && d->txq_held)
+        (void)wlan_data_kick(d->tx_work, 0);
 }
 
 int wlan_data_attach(struct wlan *wlan, wlan_data_event_fn event)
