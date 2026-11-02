@@ -281,7 +281,9 @@ scratch() {
 
 # setup [AGENT]: write the QEMU mode's dummy keys, the environment that points
 # the agents at the fake server, and the settings each agent reads from its
-# home. OpenCode keeps its key in its database, where only the program writes,
+# home. Muse Code's turn off its reminders and the recap it asks the model
+# for when the screen has been left alone a while, which a session under
+# emulation is, and which the fake server's script does not play. OpenCode keeps its key in its database, where only the program writes,
 # so for AGENT opencode its own `auth import` stores the key there.
 setup() {
     local ca=$DIR/ca.pem
@@ -337,6 +339,7 @@ EOF
     "ca_bundle": "$ca"
   },
   "telemetry": {"enabled": false},
+  "tui": {"away_recap_enabled": false},
   "runtime_capabilities": {
     "plugin:tbh-reminders:reminder:goal-reminder": {"enabled": false},
     "plugin:tbh-reminders:reminder:memory": {"enabled": false},

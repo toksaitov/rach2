@@ -42,7 +42,7 @@
       {"turn": {
         "input": [{"role": "user", "text": "sleep 600"}],
         "output": [{"call": "bash", "namespace": "muse", "id": "call_sleep",
-                    "arguments": {"command": "sleep 600"}}]}}
+                    "arguments": {"command": "sleep 600", "yield_time_ms": 300000}}]}}
     ]
   },
   "after": {
