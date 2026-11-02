@@ -147,7 +147,8 @@ static int by_length(const void *a, const void *b)
 
 /**
  * The frequency of the square wave in the `n` samples at `s`, recorded at
- * `rate`, or -1 when fewer than half of them are sound.
+ * `rate`, or -1 when fewer than half of them are sound or the window holds
+ * two notes.
  *
  * The half period of a square wave is the length of its runs of one sign, so
  * the frequency is the rate over twice the median length of the runs that
@@ -157,10 +158,14 @@ static int by_length(const void *a, const void *b)
  * device that plays a period of its buffer again, or misses one, breaks the
  * runs at the ends of that period and leaves the others whole, so the median
  * does not move. A window of sound with fewer than two whole runs gives 0.
+ * A window that holds the end of one note and the start of the next has runs
+ * of two lengths, and its median may fall on the broken run between them and
+ * name a third note; its quartile runs differ by more than a sample and by
+ * more than twice TOLERANCE, which no one note's runs do.
  */
 static double frequency_of(const short *s, long n, double rate, long *runs)
 {
-    long i, loud = 0, start = -1, n_runs = 0;
+    long i, loud = 0, start = -1, n_runs = 0, spread;
     int sign = 0;
 
     for (i = 0; i < n; i++) {
@@ -188,6 +193,10 @@ static double frequency_of(const short *s, long n, double rate, long *runs)
         return 0.0;
     }
     qsort(runs, (size_t)n_runs, sizeof(runs[0]), by_length);
+    spread = runs[3 * n_runs / 4] - runs[n_runs / 4];
+    if (spread > 1 && (double)spread > 2.0 * TOLERANCE * (double)runs[n_runs / 2]) {
+        return -1.0;
+    }
     return rate / (2.0 * (double)runs[n_runs / 2]);
 }
 
@@ -215,10 +224,9 @@ static int note_of(double hz, const double *freqs, int n_notes)
  * window that is mostly sound is labelled with the note its frequency is, and
  * the labels must visit every note in the order named, with no note before
  * its predecessor. A window of less sound, which the edges of a note give,
- * belongs to no note; a window of sound at no named frequency is a wrong tone.
- * Each message begins with `who`, which names the channel swept or is empty.
- * Returns 0 when the notes are right, 1 when they are not, and 2 when memory
- * runs out.
+ * and one that holds two notes belong to no note; a window of sound at no named frequency is a
+ * wrong tone. Each message begins with `who`, which names the channel swept or is empty. Returns 0
+ * when the notes are right, 1 when they are not, and 2 when memory runs out.
  */
 static int sweep(const short *s, long frames, double rate, const double *freqs, int n_notes,
                  const char *who)
