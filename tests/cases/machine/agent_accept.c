@@ -796,11 +796,26 @@ static int session_resume(struct acceptance *s)
         return 0;
     return tmux(s, (const char *const[]){"kill-server", NULL});
 }
+/**
+ * The agent's screen, from its start to its reopened conversation. When it
+ * fails for OpenCode, the end of the log its screen writes, its private
+ * server's among it, goes to standard error and the evidence, since a server
+ * that ends early leaves no other trace and the disk keeps no unsynced log.
+ */
 static int session(struct acceptance *s)
 {
     struct etude_guest_result result;
     int ok = session_start(s) && session_work(s) && session_cancel(s) && session_reconnect(s) &&
              session_resume(s);
+
+    if (!ok && !strcmp(s->agent, "opencode")) {
+        char *log = guest(s, "log", NULL);
+
+        if (log) {
+            fprintf(stderr, "agents-accept: opencode: log:\n%s", log);
+            free(log);
+        }
+    }
 
     if (s->terminal_service) {
         enum etude_status st = etude_guest_service_finish(s->u->client, !ok, &result);

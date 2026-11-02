@@ -11,12 +11,16 @@
 # agents_accept.sh puts in ~/rach2-accept/fixture, and its screen is the tmux
 # session rach2-accept-AGENT on the server rach2-accept. The commands:
 #
-#   prepare AGENT     make the repository again, with one commit.
+#   prepare AGENT     make the repository again, with one commit, and remove
+#                     the agent's log.
 #   run AGENT ACTION  run the agent as ACTION says, in its repository and in
 #                     the environment ~/rach2-accept/env gives where it
 #                     exists, then print `rach2-accept: ended with status N`.
 #                     ACTION is start or resume, for its screen, or once,
-#                     for one request without a screen.
+#                     for one request without a screen. OpenCode's screen
+#                     prints its log and that of its private server, and
+#                     the server's own standard error, on its standard
+#                     error, which goes to ~/rach2-accept/opencode.log.
 #   version AGENT     print the agent's version, as its --version prints it,
 #                     and the SHA-256 of its program; AGENT may also be gh.
 #   pid AGENT         print the process of the agent in its tmux session.
@@ -36,6 +40,9 @@
 #   screen AGENT [all]
 #                     print the agent's screen, or with `all` its whole
 #                     history.
+#   log AGENT         print the last 200 lines of ~/rach2-accept/AGENT.log,
+#                     the standard error of the agent's screen where `run`
+#                     keeps it.
 #   work AGENT        print the repository's commits, its greeting, the result
 #                     of its check at HEAD and the files `git status` lists.
 #   credentials MODE [AGENT...]
@@ -99,7 +106,7 @@ session() {
 # under SSH without the login shell whose profile turns off OpenCode's update
 # check and agy's updater, which replaces /opt/agy/bin/agy, so their command
 # lines do that.
-# shellcheck disable=SC2016 # the run command's eval expands MUSE_ARGS
+# shellcheck disable=SC2016 # the run command's eval expands MUSE_ARGS and DIR
 command_line() {
     case $1.$2 in
         claude.start) echo 'claude --permission-mode bypassPermissions' ;;
@@ -114,8 +121,10 @@ command_line() {
         muse.start) echo 'muse --yolo $MUSE_ARGS' ;;
         muse.resume) echo 'muse resume --last --yolo $MUSE_ARGS' ;;
         muse.once) echo "muse exec --yolo \$MUSE_ARGS '$ONCE_PROMPT'" ;;
-        opencode.start) echo 'opencode --standalone --auto' ;;
-        opencode.resume) echo 'opencode --standalone --auto --continue' ;;
+        opencode.start) echo 'OPENCODE_PRINT_LOGS=1 opencode --standalone --auto 2>> "$DIR/opencode.log"' ;;
+        opencode.resume)
+            echo 'OPENCODE_PRINT_LOGS=1 opencode --standalone --auto --continue 2>> "$DIR/opencode.log"'
+            ;;
         opencode.once)
             echo "OPENCODE_DISABLE_AUTOUPDATE=1 opencode run --standalone '$ONCE_PROMPT' < /dev/null"
             ;;
@@ -381,7 +390,7 @@ EOF
 main() {
     case ${1:-} in
         prepare)
-            rm -rf "${DIR:?}/$2" && mkdir -p "$DIR/$2" && cp "$DIR"/fixture/* "$DIR/$2/" &&
+            rm -rf "${DIR:?}/$2" "$DIR/$2.log" && mkdir -p "$DIR/$2" && cp "$DIR"/fixture/* "$DIR/$2/" &&
                 cd "$DIR/$2" && git init -q --initial-branch=master &&
                 git config user.name 'Rach2 acceptance' &&
                 git config user.email accept@rach2.invalid &&
@@ -460,6 +469,9 @@ main() {
                     printf '%s %s %s\n' "$size" \
                         "$(stty -F "$tty" size | awk '{ print $2 "x" $1 }')" "$attached"
                 done
+            ;;
+        log)
+            [ ! -f "$DIR/$2.log" ] || tail -n 200 "$DIR/$2.log"
             ;;
         work)
             cd "$DIR/$2" || exit 1
