@@ -274,38 +274,72 @@ void wlan_radio_rfkill(struct wlan_radio *radio, int blocked)
     wlan_rfkill_queue(wlan);
 }
 
+/** Return whether name is a radio's name: 1 to 31 letters, digits, '_'
+ * and '-'. */
+static int radio_name_valid(const char *name)
+{
+    unsigned i;
+    char c;
+
+    if (!name || !name[0])
+        return 0;
+    for (i = 0; name[i]; ++i) {
+        c = name[i];
+        if (i == 31 || !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                         (c >= '0' && c <= '9') || c == '_' || c == '-'))
+            return 0;
+    }
+    return 1;
+}
+
+/** Return whether band has channels and rates within their bounds, no two
+ * channels sharing a number or a frequency and no rate zero. */
+static int band_valid(const struct wlan_band *band)
+{
+    unsigned i, j;
+
+    if (!band->n_channels || band->n_channels > WLAN_RADIO_MAX_CHANNELS || !band->n_rates ||
+        band->n_rates > WLAN_RADIO_MAX_RATES)
+        return 0;
+    for (i = 0; i < band->n_channels; ++i)
+        for (j = 0; j < i; ++j)
+            if (band->channels[i].number == band->channels[j].number ||
+                band->channels[i].frequency == band->channels[j].frequency)
+                return 0;
+    for (i = 0; i < band->n_rates; ++i)
+        if (!band->rates[i])
+            return 0;
+    return 1;
+}
+
+/** Return whether radio may be registered: every operation set, a valid
+ * name and band, no wlan yet, and a unicast MAC address that is not zero. */
+static int radio_valid(const struct wlan_radio *radio)
+{
+    const uint8_t *mac;
+
+    if (!radio || !radio->ops || !radio->ops->start || !radio->ops->stop || !radio->ops->config ||
+        !radio->ops->tx || radio->wlan)
+        return 0;
+    mac = radio->mac;
+    if ((mac[0] & 1) || !(mac[0] | mac[1] | mac[2] | mac[3] | mac[4] | mac[5]))
+        return 0;
+    return radio_name_valid(radio->name) && band_valid(&radio->band);
+}
+
 /** Validate and register a borrowed radio, leaving it down on success. */
 int wlan_register_radio(struct wlan_radio *radio, struct wlan **out)
 {
     struct wlan *wlan;
-    unsigned i, j, slot;
+    unsigned i, slot;
     int rc;
     char phy[8];
 
     if (!out)
         return -EINVAL;
     *out = 0;
-    if (!radio || !radio->ops || !radio->ops->start || !radio->ops->stop || !radio->ops->config ||
-        !radio->ops->tx || !radio->name || !radio->name[0] || radio->wlan || (radio->mac[0] & 1) ||
-        !(radio->mac[0] | radio->mac[1] | radio->mac[2] | radio->mac[3] | radio->mac[4] |
-          radio->mac[5]) ||
-        !radio->band.n_channels || radio->band.n_channels > WLAN_RADIO_MAX_CHANNELS ||
-        !radio->band.n_rates || radio->band.n_rates > WLAN_RADIO_MAX_RATES)
+    if (!radio_valid(radio))
         return -EINVAL;
-    for (i = 0; radio->name[i]; ++i)
-        if (i == 31 || !((radio->name[i] >= 'a' && radio->name[i] <= 'z') ||
-                         (radio->name[i] >= 'A' && radio->name[i] <= 'Z') ||
-                         (radio->name[i] >= '0' && radio->name[i] <= '9') ||
-                         radio->name[i] == '_' || radio->name[i] == '-'))
-            return -EINVAL;
-    for (i = 0; i < radio->band.n_channels; ++i)
-        for (j = 0; j < i; ++j)
-            if (radio->band.channels[i].number == radio->band.channels[j].number ||
-                radio->band.channels[i].frequency == radio->band.channels[j].frequency)
-                return -EINVAL;
-    for (i = 0; i < radio->band.n_rates; ++i)
-        if (!radio->band.rates[i])
-            return -EINVAL;
     for (slot = 0; slot < WLAN_MAX_RADIOS && radios[slot]; ++slot) {
     }
     if (slot == WLAN_MAX_RADIOS || next_phy > 999)
