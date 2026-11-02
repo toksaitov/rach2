@@ -121,6 +121,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "ath9k_trial",
+          "checks": "tests/host/ath9k_trial_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "bcache_cost",
           "checks": "tests/host/bcache_cost_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
