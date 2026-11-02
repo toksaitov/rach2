@@ -1473,8 +1473,8 @@ static unsigned taken, refused, failed_send;
  * millisecond to the Mac, as a transfer sends them, while the AP sends two
  * of 1000 bytes under the pairwise key and, every 50 ms, one to every
  * station under the group key; then `tail` ms more for what is in flight.
- * A datagram the radio refuses with -ENOBUFS is dropped, as data.c's drain
- * drops it.
+ * A datagram the radio refuses with -ENOBUFS is counted and not sent again;
+ * data.c's drain, which this test does not run, would hold it instead.
  */
 static void traffic(unsigned ms, unsigned tail)
 {

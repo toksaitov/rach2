@@ -239,7 +239,7 @@ esac
 exit 0
 ```
 
-Rach2 refuses a /32: `ip addr add 192.168.0.105/32` answers `Invalid argument`, since `netconf.c` takes no all-ones mask. wlan0 got 192.168.0.105/30 by hand instead, whose 192.168.0.104/30 holds no host the trial talks to, and a host route to the Mac:
+The trial's kernel refused a /32: `ip addr add 192.168.0.105/32` answered `Invalid argument`, since its `netconf.c` took no all-ones mask; since 474b8bcc5 Rach2 takes a /32 with no subnet route, as Linux does. wlan0 got 192.168.0.105/30 by hand instead, whose 192.168.0.104/30 holds no host the trial talks to, and a host route to the Mac:
 
 ```
 # ip route
@@ -290,7 +290,7 @@ wait
 * `ping`: 7,192 sent, 7,192 received, rtt 2.1/23.9/1042.9 ms.
 * 17,266,429 frames out and 6,710,427 in; tx retries 228,326, tx failed 0, beacon loss 0; signal -42 to -48 dBm; tx bitrate 65.0 MBit/s in 23 samples and 58.5 in two; 5,357,003 messages on vector 52.
 * No `ath9k: reset` line all trial, so there was no reset to recover, and `wpa_state=COMPLETED` in every sample.
-* 62,988 datagrams, 0.4% of what went out, were refused with `-ENOBUFS` by the driver's full ring of 64 and dropped by `data.c`'s drain; TCP sent them again. The byte counters wrapped five times: every interface's counters are 32-bit (`driver/netdev.h`).
+* 62,988 datagrams, 0.4% of what went out, were refused with `-ENOBUFS` by the driver's full ring of 64 and dropped by `data.c`'s drain; TCP sent them again. The byte counters wrapped five times: every interface's counters were 32-bit. Since 0424d560a, after the trial's kernel, the drain holds a refused frame at the head of its queue until a completion instead of dropping it, and since d7e463684 the counters are 64-bit.
 
 The link's return after the AP's restart needs the owner to restart the router, and moved to the sitting, #2275.
 
