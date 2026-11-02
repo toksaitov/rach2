@@ -17,6 +17,13 @@ file 0755 /bin/sox build/vendor/sox_ng/sox
 file 0755 /bin/play build/vendor/sox_ng/mode
 file 0755 /bin/rec build/vendor/sox_ng/mode
 file 0755 /bin/soxi build/vendor/sox_ng/mode
+# The Wi-Fi station, its control and passphrase programs, and iw, which
+# configures the radios through nl80211 (vendor/hostap/Readme.md,
+# vendor/iw/Readme.md).
+file 0755 /bin/wpa_supplicant build/vendor/hostap/wpa_supplicant
+file 0755 /bin/wpa_cli build/vendor/hostap/wpa_cli
+file 0755 /bin/wpa_passphrase build/vendor/hostap/wpa_passphrase
+file 0755 /bin/iw build/vendor/iw/iw
 # This BusyBox has no set-id bit. A set-user-ID BusyBox would run each of
 # its BB_SUID_REQUIRE and BB_SUID_MAYBE applets as root unless a
 # configuration file confined it, so there are two binaries, as BusyBox
@@ -50,6 +57,9 @@ file 0755 /bin/loopctl build/utils/loopctl
 # Reads and sets the volume through /dev/mixer (mixer(1)); acpid's volume
 # action runs it for the volume keys.
 file 0755 /bin/mixer build/utils/mixer
+# wifi, which scans for Wi-Fi networks and joins, lists and forgets them
+# through wpa_supplicant (wifi(1)).
+file 0755 /bin/wifi build/utils/wifi
 optional-file 0755 /bin/doom build/ports/doom/doom
 
 # The compiler, and the system root it reads when it runs. /bin/tcc is an
@@ -141,6 +151,11 @@ text 0644 /demo/hello.txt hello, world\n
 # password fields, which is what the separate shadow file is for.
 dir 0755 /etc
 file 0644 /etc/sox.COPYING build/vendor/sox_ng/COPYING
+# The license notices of the Wi-Fi programs and of the libraries they link.
+file 0644 /etc/hostap.COPYING build/vendor/hostap/COPYING
+file 0644 /etc/iw.COPYING build/vendor/iw/COPYING
+file 0644 /etc/libnl.COPYING build/vendor/libnl/COPYING
+file 0644 /etc/openssl.LICENSE build/vendor/openssl/LICENSE.txt
 dir 0700 /etc/dropbear
 text 0644 /etc/motd Rach2\n\nThe log of this boot is in /dev/bootlog, for root.\nWhat the services print is in /var/log/services.\nType su to become root.\n\n
 text 0644 /etc/hostname rach2\n
@@ -206,6 +221,23 @@ file 0755 /usr/share/udhcpc/default6.script krffs/udhcpc6-default.script
 # The resolver merge the lease scripts and ndwatch give their servers to,
 # which writes /etc/resolv.conf from all of them (ndwatch(8)).
 file 0755 /usr/share/udhcpc/resolv.script krffs/resolv.script
+# What init runs on a machine with a Wi-Fi radio (init(8)): wpa_supplicant
+# with this configuration, which wifi(1) adds networks to and which then
+# holds their passphrases, so that only root reads it, and wpa_cli, which
+# runs this action as the station joins and leaves a network, to start and
+# stop the DHCP client on wlan0.
+dir 0700 /etc/wpa_supplicant
+file 0600 /etc/wpa_supplicant/wlan0.conf krffs/wpa_supplicant.conf
+file 0755 /etc/wpa_supplicant/wpa_action krffs/wpa_action
+# zzz, which suspends the machine to idle, and its Wi-Fi hook, which
+# leaves the network before the suspend and joins it again after (zzz(8)).
+file 0755 /sbin/zzz krffs/zzz
+dir 0755 /etc/zzz.d
+file 0755 /etc/zzz.d/wifi krffs/zzz-wifi
+# wsimrelay, which carries a software radio's frames between /dev/wsim and
+# a peer over UDP, for a machine whose Wi-Fi is the tests' software medium
+# (wsimrelay(8)).
+file 0755 /sbin/wsimrelay build/utils/sbin/wsimrelay
 # The keymaps, which loadkeys finds by name, as in `loadkeys -u kg alt-shift`
 # (vendor/keymaps/Readme.md).
 tree 0644 /usr/share/kbd/keymaps/xkb vendor/keymaps/xkb
@@ -243,12 +275,6 @@ optional-file 0644 /demo/doom1.wad ports/doom/doom1.wad
 # The test runner controls installed commands through this framed helper.
 file 0755 /etude-guest build/tools/etude/guest/etude-guest
 
-# The two core images the grub suite builds, each with a marker of which one
-# it is, so that a boot is known by what its boot loader prints
-# (tools/image/mkgrubcore.sh).
-file 0644 /core-a.img build/images/core-a.img
-file 0644 /core-b.img build/images/core-b.img
-
 # kbd console keyboard tools (vendor/kbd/Readme.md).
 file 0755 /bin/loadkeys build/vendor/kbd/loadkeys
 file 0755 /bin/dumpkeys build/vendor/kbd/dumpkeys
@@ -256,3 +282,9 @@ file 0755 /bin/setleds build/vendor/kbd/setleds
 file 0755 /bin/kbdrate build/vendor/kbd/kbdrate
 file 0755 /bin/showkey build/vendor/kbd/showkey
 file 0755 /bin/kbd_mode build/vendor/kbd/kbd_mode
+
+# The two core images the grub suite builds, each with a marker of which one
+# it is, so that a boot is known by what its boot loader prints
+# (tools/image/mkgrubcore.sh).
+file 0644 /core-a.img build/images/core-a.img
+file 0644 /core-b.img build/images/core-b.img
