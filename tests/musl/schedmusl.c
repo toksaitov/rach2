@@ -24,7 +24,7 @@
  * asking for it, with SCHED_RESET_ON_FORK or not, succeeds; SCHED_FIFO and
  * SCHED_RR fail with EPERM, and the other policies, a priority that does not
  * suit its policy, and an unknown policy with EINVAL. The priority ranges
- * are Linux's, and the time slice is one 10 ms tick. The affinity is the
+ * are Linux's, and the time slice is one 1 ms tick. The affinity is the
  * processors /proc/cpuinfo lists, by their ids, which need not run without a
  * gap, read raw as the bytes of the longs the highest takes, four on i386 to
  * 32 processors and eight past them and on x86-64; a mask of the last
@@ -680,8 +680,8 @@ static int ranges(void)
         return fail("the range of an unknown policy was not refused with EINVAL");
     }
     row_held();
-    if (sched_rr_get_interval(0, &slice) != 0 || slice.tv_sec != 0 || slice.tv_nsec != 10000000L) {
-        return fail("the time slice is not one 10 ms tick");
+    if (sched_rr_get_interval(0, &slice) != 0 || slice.tv_sec != 0 || slice.tv_nsec != 1000000L) {
+        return fail("the time slice is not one 1 ms tick");
     }
     row_held();
     return 0;

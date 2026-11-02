@@ -4157,7 +4157,7 @@
         {"assertion_id": "setparam-einval", "checks": "sched_setparam of priority 5 fails with EINVAL", "source": "program"},
         {"assertion_id": "priority-ranges", "checks": "sched_get_priority_min and max give Linux's ranges", "source": "program"},
         {"assertion_id": "range-einval", "checks": "the range of an unknown policy fails with EINVAL", "source": "program"},
-        {"assertion_id": "time-slice", "checks": "sched_rr_get_interval gives one 10 ms tick", "source": "program"},
+        {"assertion_id": "time-slice", "checks": "sched_rr_get_interval gives one 1 ms tick", "source": "program"},
         {"assertion_id": "cpuinfo", "checks": "/proc/cpuinfo lists at least one processor and none past the kernel's 64", "source": "program"},
         {"assertion_id": "affinity-cpuinfo", "checks": "the affinity is the processors /proc/cpuinfo lists, by their ids", "source": "program"},
         {"assertion_id": "affinity-raw-bytes", "checks": "the raw sched_getaffinity returns the bytes of the longs the highest processor takes", "source": "program"},
