@@ -3536,6 +3536,19 @@ static void start_audio(void)
 }
 
 /**
+ * Register the simulated radios with the wireless layer, after the wired
+ * network, and log how many there are when there are any.
+ */
+static void start_radios(void)
+{
+    int radios = wlan_init();
+
+    if (radios > 0) {
+        klog(KLOG_INFO, "wsim", "ready: %d radios", radios);
+    }
+}
+
+/**
  * The order of the boot is the hardware's and the allocator's.
  *
  * The boot is kernel code, and holds the big lock, as every entry into the
@@ -3906,13 +3919,7 @@ void kernel_main(const struct boot_info *boot)
         } else {
             klog(KLOG_WARN, "net", "absent: %s", net_error());
         }
-        {
-            int radios = wlan_init();
-
-            if (radios > 0) {
-                klog(KLOG_INFO, "wsim", "ready: %d radios", radios);
-            }
-        }
+        start_radios();
     }
 
     check_timing();
