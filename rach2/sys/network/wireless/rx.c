@@ -347,14 +347,41 @@ static int defrag(struct wlan_data *d, uint8_t **frame, unsigned *len, unsigned 
     return 1;
 }
 
+/**
+ * Check the Michael MIC of the whole TKIP MSDU of *len bytes at frame, whose
+ * header is hdrlen bytes long, under the key c names, unless the radio
+ * checked it, and cut the MIC from *len. Returns 0, -EINVAL for an MSDU too
+ * short to hold the MIC, or mic_failure's result for a wrong MIC.
+ */
+static int rx_michael(struct wlan_data *d, const uint8_t *frame, unsigned *len, unsigned hdrlen,
+                      unsigned priority, const struct rx_crypt *c)
+{
+    uint8_t mic[WLAN_TKIP_MIC_LEN];
+
+    if (c->mic_error)
+        return mic_failure(d, frame, c->key);
+    if (c->mic_stripped)
+        return 0;
+    if (*len < hdrlen + WLAN_TKIP_MIC_LEN) {
+        d->counters->rx_dropped++;
+        return -EINVAL;
+    }
+    /* From the AP, DA is Address 1 and SA Address 3. */
+    wlan_tkip_michael(c->key->key.data + 24, frame + 4, frame + 16, priority, frame + hdrlen,
+                      *len - hdrlen - WLAN_TKIP_MIC_LEN, mic);
+    if (!same(mic, frame + *len - WLAN_TKIP_MIC_LEN, WLAN_TKIP_MIC_LEN))
+        return mic_failure(d, frame, c->key);
+    *len -= WLAN_TKIP_MIC_LEN;
+    return 0;
+}
+
 int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
                       const struct wlan_rx_status *status)
 {
     unsigned fc = frame_control(frame), hdrlen = wlan_data_hdrlen(frame, len);
-    unsigned seqctl, idx = WLAN_NON_QOS_TID, priority = 0, body;
+    unsigned seqctl, idx = WLAN_NON_QOS_TID, priority = 0;
     int group = frame[4] & 1, qos = (fc & IEEE80211_STYPE_QOS_DATA) != 0, rc;
     struct rx_crypt c;
-    uint8_t mic[WLAN_TKIP_MIC_LEN];
 
     if (!hdrlen)
         return -EINVAL;
@@ -398,21 +425,9 @@ int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
     }
 
     if (c.key && c.key->key.cipher == WLAN_CIPHER_SUITE_TKIP) {
-        if (c.mic_error)
-            return mic_failure(d, frame, c.key);
-        if (!c.mic_stripped) {
-            if (len < hdrlen + WLAN_TKIP_MIC_LEN) {
-                d->counters->rx_dropped++;
-                return -EINVAL;
-            }
-            body = len - hdrlen;
-            /* From the AP, DA is Address 1 and SA Address 3. */
-            wlan_tkip_michael(c.key->key.data + 24, frame + 4, frame + 16, priority, frame + hdrlen,
-                              body - WLAN_TKIP_MIC_LEN, mic);
-            if (!same(mic, frame + len - WLAN_TKIP_MIC_LEN, WLAN_TKIP_MIC_LEN))
-                return mic_failure(d, frame, c.key);
-            len -= WLAN_TKIP_MIC_LEN;
-        }
+        rc = rx_michael(d, frame, &len, hdrlen, priority, &c);
+        if (rc)
+            return rc;
         c.key->key.rx_pn[idx] = c.pn;
     }
 
@@ -522,56 +537,66 @@ static int have_igtk(struct wlan_data *d)
     return 0;
 }
 
-int wlan_data_rx_mgmt(struct wlan_data *d, uint8_t *frame, unsigned *len,
-                      const struct wlan_rx_status *status)
+/**
+ * Open the unicast robust management frame of *len bytes at frame, whose
+ * header is hdrlen bytes long, under the pairwise CCMP key its key ID names,
+ * and check its counter against the last management frame's. Returns
+ * WLAN_DATA_PROTECTED with *len cut to the plaintext, -EINVAL for a frame
+ * that may not be protected so or whose CCMP header is cut short, -ENOKEY,
+ * -ESTALE for a replay, or ccmp_open's error; the counters record a failure.
+ */
+static int rx_mgmt_ccmp(struct wlan_data *d, uint8_t *frame, unsigned *len, unsigned hdrlen,
+                        const struct wlan_rx_status *status)
 {
-    unsigned fc, hdrlen, n, keyid;
+    unsigned n = *len, keyid;
     struct wlan_data_key *k;
     uint64_t pn;
     int rc;
 
-    if (!d || !frame || !len || !status || *len > IEEE80211_MAX_FRAME_LEN)
+    if ((frame[4] & 1) || !wlan_data_robust_mgmt(frame, n))
         return -EINVAL;
-    n = *len;
-    hdrlen = wlan_data_hdrlen(frame, n);
-    fc = hdrlen ? frame_control(frame) : 0;
-    if (!hdrlen || (fc & (IEEE80211_FCTL_VERS | IEEE80211_FCTL_FTYPE)) != IEEE80211_FTYPE_MGMT)
-        return -EINVAL;
-    if (!d->connected || !same(frame + 10, d->bssid, 6) ||
-        (fc & IEEE80211_FCTL_STYPE) == IEEE80211_STYPE_BEACON) {
-        if (fc & IEEE80211_FCTL_PROTECTED)
-            return -ENOKEY;
-        return WLAN_DATA_UNPROTECTED;
-    }
-    note_signal(d, status);
-    if ((fc & IEEE80211_FCTL_PROTECTED) || (status->flags & WLAN_RX_DECRYPTED)) {
-        if ((frame[4] & 1) || !wlan_data_robust_mgmt(frame, n))
+    if ((status->flags & WLAN_RX_DECRYPTED) && (status->flags & WLAN_RX_IV_STRIPPED)) {
+        keyid = status->key_index;
+    } else {
+        if (n < hdrlen + WLAN_CCMP_HDR_LEN || !(frame[hdrlen + 3] & 0x20))
             return -EINVAL;
-        if ((status->flags & WLAN_RX_DECRYPTED) && (status->flags & WLAN_RX_IV_STRIPPED)) {
-            keyid = status->key_index;
-        } else {
-            if (n < hdrlen + WLAN_CCMP_HDR_LEN || !(frame[hdrlen + 3] & 0x20))
-                return -EINVAL;
-            keyid = frame[hdrlen + 3] >> 6;
-        }
-        k = wlan_data_pairwise_key(d, keyid);
-        if (!k || k->key.cipher != WLAN_CIPHER_SUITE_CCMP) {
-            d->counters->rx_decrypt_errors++;
-            return -ENOKEY;
-        }
-        rc = ccmp_open(k, frame, &n, hdrlen, status, &pn);
-        if (rc) {
-            d->counters->rx_decrypt_errors++;
-            return rc;
-        }
-        if (pn <= k->rx_mgmt_pn) {
-            d->counters->rx_replays++;
-            return -ESTALE;
-        }
-        k->rx_mgmt_pn = pn;
-        *len = n;
-        return WLAN_DATA_PROTECTED;
+        keyid = frame[hdrlen + 3] >> 6;
     }
+    k = wlan_data_pairwise_key(d, keyid);
+    if (!k || k->key.cipher != WLAN_CIPHER_SUITE_CCMP) {
+        d->counters->rx_decrypt_errors++;
+        return -ENOKEY;
+    }
+    rc = ccmp_open(k, frame, &n, hdrlen, status, &pn);
+    if (rc) {
+        d->counters->rx_decrypt_errors++;
+        return rc;
+    }
+    if (pn <= k->rx_mgmt_pn) {
+        d->counters->rx_replays++;
+        return -ESTALE;
+    }
+    k->rx_mgmt_pn = pn;
+    *len = n;
+    return WLAN_DATA_PROTECTED;
+}
+
+/**
+ * Check the BIP MMIE of the group-addressed robust management frame of *len
+ * bytes at frame, whose header is hdrlen bytes long, under the IGTK its key
+ * ID names, and its counter against that key's. Returns
+ * WLAN_DATA_UNPROTECTED for a frame BIP does not cover or, without an IGTK,
+ * cannot; WLAN_DATA_PROTECTED with *len cut before the MMIE; -ENOKEY,
+ * -ESTALE for a replay, or wlan_bip_check's error; the counters record a
+ * failure.
+ */
+static int rx_mgmt_bip(struct wlan_data *d, uint8_t *frame, unsigned *len, unsigned hdrlen)
+{
+    unsigned n = *len, keyid;
+    struct wlan_data_key *k;
+    uint64_t pn;
+    int rc;
+
     if (!(frame[4] & 1) || !wlan_data_robust_mgmt(frame, n) || !have_igtk(d))
         return WLAN_DATA_UNPROTECTED;
     if (n < hdrlen + IEEE80211_MMIE_LEN || frame[n - IEEE80211_MMIE_LEN] != WLAN_EID_MMIE ||
@@ -595,4 +620,28 @@ int wlan_data_rx_mgmt(struct wlan_data *d, uint8_t *frame, unsigned *len,
     k->key.rx_pn[WLAN_NON_QOS_TID] = pn;
     *len = n;
     return WLAN_DATA_PROTECTED;
+}
+
+int wlan_data_rx_mgmt(struct wlan_data *d, uint8_t *frame, unsigned *len,
+                      const struct wlan_rx_status *status)
+{
+    unsigned fc, hdrlen, n;
+
+    if (!d || !frame || !len || !status || *len > IEEE80211_MAX_FRAME_LEN)
+        return -EINVAL;
+    n = *len;
+    hdrlen = wlan_data_hdrlen(frame, n);
+    fc = hdrlen ? frame_control(frame) : 0;
+    if (!hdrlen || (fc & (IEEE80211_FCTL_VERS | IEEE80211_FCTL_FTYPE)) != IEEE80211_FTYPE_MGMT)
+        return -EINVAL;
+    if (!d->connected || !same(frame + 10, d->bssid, 6) ||
+        (fc & IEEE80211_FCTL_STYPE) == IEEE80211_STYPE_BEACON) {
+        if (fc & IEEE80211_FCTL_PROTECTED)
+            return -ENOKEY;
+        return WLAN_DATA_UNPROTECTED;
+    }
+    note_signal(d, status);
+    if ((fc & IEEE80211_FCTL_PROTECTED) || (status->flags & WLAN_RX_DECRYPTED))
+        return rx_mgmt_ccmp(d, frame, len, hdrlen, status);
+    return rx_mgmt_bip(d, frame, len, hdrlen);
 }

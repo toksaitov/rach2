@@ -146,6 +146,19 @@ int ieee80211_put_elem(uint8_t *buf, unsigned cap, unsigned *used, unsigned id,
     return 0;
 }
 
+/** Return whether p describes station elements that can be built: an SSID
+ * and rates within their bounds, each other element within one element's
+ * 255 bytes, an RSN element of at least its version, and every element of
+ * nonzero length with its bytes. */
+static int sta_elems_valid(const struct ieee80211_sta_elems *p)
+{
+    return p->ssid_len <= IEEE80211_MAX_SSID_LEN && (!p->ssid_len || p->ssid) && p->rates &&
+           p->rates_len && p->rates_len <= IEEE80211_MAX_RATES && p->rsn_len <= 255 &&
+           p->rsnx_len <= 255 && p->ext_cap_len <= 255 &&
+           (!p->rsn_len || (p->rsn && p->rsn_len >= 2)) && (!p->rsnx_len || p->rsnx) &&
+           (!p->ext_cap_len || p->ext_cap);
+}
+
 /** Build station elements after validating every pointer, length and bound. */
 int ieee80211_build_sta_elems(uint8_t *buf, unsigned cap, unsigned *used,
                               const struct ieee80211_sta_elems *p)
@@ -153,10 +166,7 @@ int ieee80211_build_sta_elems(uint8_t *buf, unsigned cap, unsigned *used,
     static const uint8_t wmm[7] = {0, 0x50, 0xf2, 2, 0, 1, 0};
     unsigned need, first, pos;
 
-    if (!buf || !used || !p || p->ssid_len > IEEE80211_MAX_SSID_LEN || (p->ssid_len && !p->ssid) ||
-        !p->rates || !p->rates_len || p->rates_len > IEEE80211_MAX_RATES || p->rsn_len > 255 ||
-        p->rsnx_len > 255 || p->ext_cap_len > 255 || (p->rsn_len && (!p->rsn || p->rsn_len < 2)) ||
-        (p->rsnx_len && !p->rsnx) || (p->ext_cap_len && !p->ext_cap))
+    if (!buf || !used || !p || !sta_elems_valid(p))
         return -EINVAL;
     first = p->rates_len > 8 ? 8 : p->rates_len;
     need = 2 + p->ssid_len + 2 + p->rates_len;

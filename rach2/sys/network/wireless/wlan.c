@@ -74,13 +74,31 @@ int wlan_encap(const uint8_t *ethernet, unsigned len, const uint8_t bssid[6], un
     return 0;
 }
 
+/** Return 1 when the payload of n bytes at llc, at least 3, begins with an
+ * RFC 1042 or bridge-tunnel SNAP header that the Ethernet frame drops for
+ * its type, 0 when the frame keeps the payload whole behind a length, or -1
+ * for an LLC/SNAP header cut short. */
+static int snap_strip(const uint8_t *llc, unsigned n)
+{
+    uint16_t type;
+
+    if (llc[0] != 0xaa || llc[1] != 0xaa || llc[2] != 3)
+        return 0;
+    if (n < 8)
+        return -1;
+    type = type_at(llc + 6);
+    /* RFC 1042's IPX/AARP exception retains the complete LLC header. */
+    return !llc[3] && !llc[4] && type >= 0x0600 &&
+           (llc[5] == 0xf8 || (!llc[5] && type != 0x8137 && type != 0x80f3));
+}
+
 /** Decode a decrypted FromDS station MPDU, preserving outputs on error. */
 int wlan_decap(const uint8_t *frame, unsigned len, const uint8_t bssid[6], uint8_t *out,
                unsigned cap, unsigned *outlen)
 {
     unsigned hdr = IEEE80211_HDRLEN, payload, total;
-    uint16_t fc, type;
-    int strip = 0;
+    uint16_t fc;
+    int strip;
     const uint8_t *llc;
 
     if (!frame || !bssid || !out || !outlen || len < IEEE80211_HDRLEN)
@@ -102,14 +120,9 @@ int wlan_decap(const uint8_t *frame, unsigned len, const uint8_t bssid[6], uint8
         return -EINVAL;
     llc = frame + hdr;
     payload = len - hdr;
-    if (llc[0] == 0xaa && llc[1] == 0xaa && llc[2] == 3) {
-        if (payload < 8)
-            return -EINVAL;
-        type = type_at(llc + 6);
-        /* RFC 1042's IPX/AARP exception retains the complete LLC header. */
-        strip = !llc[3] && !llc[4] && type >= 0x0600 &&
-                (llc[5] == 0xf8 || (!llc[5] && type != 0x8137 && type != 0x80f3));
-    }
+    strip = snap_strip(llc, payload);
+    if (strip < 0)
+        return -EINVAL;
     if (strip)
         payload -= 8;
     total = ETH_HDR_SIZE + payload;
