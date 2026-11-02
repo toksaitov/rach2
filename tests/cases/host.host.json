@@ -3014,7 +3014,7 @@
         },
         {
           "kind": "injected_delay",
-          "where": "tests/cases/host/build_together.c:286",
+          "where": "tests/cases/host/build_together.c:288",
           "assumes": "A one-second maker workload lets a second run of one maker overlap the first. The assertion counts runs.",
           "uncertainty_us": null
         },
