@@ -317,10 +317,14 @@ static int boot_update(struct etude_case *c, struct state *s)
                    "echo ROOT\"\"CHECKED || { echo STICK\"\"FAIL: root check; poweroff -f; }");
     drive_expect(&d, "ROOTCHECKED");
     drive_send(&d, "mount -t ext2 /dev/disk0p3 /old && grep -qx stick-login /old/root/.stick-login "
-                   "&& test $(stat -c %%a /old/root/.stick-login) = 600 && "
-                   "grep -qx '# stickproof' /old/etc/vconsole.conf && umount /old && "
+                   "&& test $(stat -c %%a /old/root/.stick-login) = 600 && umount /old && "
                    "echo LOGIN\"\"KEPT || { echo STICK\"\"FAIL: login check; poweroff -f; }");
     drive_expect(&d, "LOGINKEPT");
+    drive_send(&d,
+               "mount -t ext2 /dev/disk0p3 /old && grep -qx '# stickproof' /old/etc/vconsole.conf "
+               "&& umount /old && echo KEYMAP\"\"KEPT || "
+               "{ echo STICK\"\"FAIL: keymap check; poweroff -f; }");
+    drive_expect(&d, "KEYMAPKEPT");
     updated = !d.failed;
     drive_send(&d, "bootctl --target /dev/disk0p1 status");
     drive_expect(&d, "saved_entry: recovery");
