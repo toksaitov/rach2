@@ -3,8 +3,10 @@
  * and eeprom.c, against the chip model of ath9k_model.h.
  *
  * host-deps: tests/host/ath9k_model.c rach2/sys/network/driver/ath9k/hw.c
- * host-deps: rach2/sys/network/driver/ath9k/eeprom.c rach2/sys/network/driver/ath9k/chips.c
- * host-deps: rach2/sys/network/driver/ath9k/io.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/network/driver/ath9k/eeprom.c
+ * host-deps: rach2/sys/network/driver/ath9k/chips.c
+ * host-deps: rach2/sys/network/driver/ath9k/io.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kctypes.c
  *
  * The recorded chip is the Lenovo G50-70's AR9565 as Linux 6.18's ath9k
  * found it under mmiotrace (dev-log/70-wifi-chip/linux/): its revision
@@ -908,69 +910,56 @@ static void test_recorded(void)
         print_log();
 }
 
-/** The radio's operations on the recorded card, after test_recorded. */
-static void test_radio(void)
-{
-    /* A reset's calls, in ath9k_hw_reset's order (from full sleep the
-     * noise floor is not read). */
-#define RESET_CALLS                                                                                \
+/* The radio's operations on the recorded card, after test_recorded: a frame,
+ * a transmit's information and the empty list of calls the steps share. */
+static const uint8_t radio_frame[24] = {0x08};
+static const struct wlan_tx_info radio_info;
+static const char *const no_calls[] = {NULL};
+
+/* A reset's calls, in ath9k_hw_reset's order (from full sleep the noise
+ * floor is not read). */
+#define RADIO_RESET_CALLS                                                                          \
     "cal_set_channel", "phy_mark_inactive", "phy_process_ini", "phy_set_rfmode",                   \
         "phy_set_delta_slope", "phy_spur_mitigate", "ant_set", "mac_set_address", "mac_set_bssid", \
         "phy_set_channel", "mac_init_queues", "ani_reset", "phy_init_bb", "cal_init", "nf_load",   \
         "nf_start"
-    static const char *const start[] = {
-        RESET_CALLS,       "key_restore", "mac_set_filter", "rx_start",
-        "mac_intr_enable", "cal_start",   "recover_start",  NULL};
-    static const char *const retune[] = {
-        "mac_intr_disable", "mac_abort_tx",   "rx_stop",  "tx_drain",        "nf_read", RESET_CALLS,
-        "key_restore",      "mac_set_filter", "rx_start", "mac_intr_enable", NULL};
-#undef RESET_CALLS
-    static const char *const stop[] = {
-        "mac_intr_disable", "recover_stop", "cal_stop", "mac_intr_disable",
-        "mac_abort_tx",     "rx_stop",      "tx_drain", NULL};
-    static const char *const filter[] = {"mac_set_filter", NULL};
-    static const char *const none[] = {NULL};
-    static const uint8_t frame[24] = {0x08};
-    struct wlan_radio *radio = &card.radio;
+/** The switch's poll, and a suspended or stopped radio, which starts
+ * nothing and keeps the channel and filters for its start. */
+static void radio_test_stopped(struct wlan_radio *radio)
+{
+    static const char *const poll[] = {"rfkill_poll", NULL};
     const struct wlan_radio_ops *ops = radio->ops;
-    struct wlan_bss bss;
-    struct wlan_key key;
-    struct wlan_tx_info info;
     uint64_t tsf;
-    int dis, cold, en, rc, slot;
-
-    if (registered != radio)
-        return;
-    model.log_reads = 0;
-    ath9k_model_log_clear(&model);
-    notes_clear();
-    k_memset(&info, 0, sizeof(info));
 
     /* The switch is read each second, on the two records in turn. */
     run_queued();
-    {
-        static const char *const poll[] = {"rfkill_poll", NULL};
-        CHECK(calls_are(poll));
-    }
+    CHECK(calls_are(poll));
     CHECK(n_queued == 2 && queued == &card.bus.rfkill_work[1]);
     notes_clear();
 
-    /* A suspended card does not start. */
     card.power.suspended = 1;
     CHECK(ops->start(radio) == -EBUSY);
-    CHECK(calls_are(none) && !card.bus.started);
+    CHECK(calls_are(no_calls) && !card.bus.started);
     card.power.suspended = 0;
 
-    /* A stopped radio keeps the channel and the filters for its start. */
     CHECK(ops->config(radio, &radio->band.channels[5], 3) == 0);
-    CHECK(calls_are(none));
-    CHECK(ops->tx(radio, frame, sizeof(frame), &info) == -ENETDOWN);
+    CHECK(calls_are(no_calls));
+    CHECK(ops->tx(radio, radio_frame, sizeof(radio_frame), &radio_info) == -ENETDOWN);
     CHECK(ops->get_tsf(radio, &tsf) == -ENETDOWN);
+}
 
-    /* The start: the wake from full sleep is a power-on reset, and the
-     * channel's reset after the baseband is turned off is cold; the
-     * baseband is on again before the calibration and the LED register is
-     * written last, then come the station's state and the periodic work. */
+/** The start: the wake from full sleep is a power-on reset, and the
+ * channel's reset after the baseband is turned off is cold; the baseband is
+ * on again before the calibration and the LED register is written last,
+ * then come the station's state and the periodic work. */
+static void radio_test_start(struct wlan_radio *radio)
+{
+    static const char *const start[] = {
+        RADIO_RESET_CALLS, "key_restore", "mac_set_filter", "rx_start",
+        "mac_intr_enable", "cal_start",   "recover_start",  NULL};
+    const struct wlan_radio_ops *ops = radio->ops;
+    int dis, cold, en;
+
     CHECK(ops->start(radio) == 0);
     CHECK(card.bus.started);
     CHECK(calls_are(start));
@@ -1000,10 +989,26 @@ static void test_radio(void)
     /* A second start does nothing. */
     notes_clear();
     CHECK(ops->start(radio) == 0);
-    CHECK(calls_are(none));
+    CHECK(calls_are(no_calls));
+}
 
-    /* The same channel is the filter alone; another a reset onto it with
-     * DMA stopped around it, warm since the chip is awake and idle. */
+/** The started radio's channel changes. The same channel is the filter
+ * alone; another a reset onto it with DMA stopped around it, warm since the
+ * chip is awake and idle. A retune whose calibration fails, after the
+ * synthesizer took the channel, leaves the chip off: the same channel again
+ * is a full reset, not the filter alone, until one succeeds, and a start of
+ * the started radio after such a failure resets again. */
+static void radio_test_config(struct wlan_radio *radio)
+{
+    static const char *const retune[] = {
+        "mac_intr_disable", "mac_abort_tx",    "rx_stop",     "tx_drain",
+        "nf_read",          RADIO_RESET_CALLS, "key_restore", "mac_set_filter",
+        "rx_start",         "mac_intr_enable", NULL};
+    static const char *const filter[] = {"mac_set_filter", NULL};
+    static const char *const reset[] = {"reset", NULL};
+    const struct wlan_radio_ops *ops = radio->ops;
+    int cold;
+
     CHECK(ops->config(radio, &radio->band.channels[5], 7) == 0);
     CHECK(calls_are(filter));
     CHECK(filter_set == 7);
@@ -1015,9 +1020,6 @@ static void test_radio(void)
     cold = ath9k_model_find(&model, 0, ATH9K_MODEL_WRITE, AR_RTC_RC);
     CHECK(cold >= 0 && model.log[cold].value == AR_RTC_RC_MAC_WARM);
 
-    /* A retune whose calibration fails, after the synthesizer took the
-     * channel, leaves the chip off: the same channel again is a full
-     * reset, not the filter alone, until one succeeds. */
     cal_rc = -EIO;
     CHECK(ops->config(radio, &radio->band.channels[10], 7) == -EIO);
     CHECK(logged("ath9k: config: failed: 2462 MHz: -5"));
@@ -1032,23 +1034,33 @@ static void test_radio(void)
     CHECK(ops->config(radio, &radio->band.channels[10], 7) == 0);
     CHECK(calls_are(retune));
     CHECK(card.recover.failures == 0);
-    /* A start of the started radio after such a failure resets again. */
+
     cal_rc = -EIO;
     CHECK(ops->config(radio, &radio->band.channels[0], 7) == -EIO);
     cal_rc = 0;
     notes_clear();
     CHECK(ops->start(radio) == 0);
-    {
-        static const char *const reset[] = {"reset", NULL};
-        CHECK(calls_are(reset));
-    }
+    CHECK(calls_are(reset));
     CHECK(card.recover.failures == 0 && card.phy.channel.frequency == 2412);
+}
 
-    /* Transmit, keys, the BSSID, aggregation and the TSF reach their parts. */
+/** Transmit, keys, the BSSID, aggregation and the TSF reach their parts,
+ * and the association narrows the filter and starts the receive window. */
+static void radio_test_parts(struct wlan_radio *radio)
+{
+    static const char *const misc[] = {
+        "tx",        "key_set",       "key_clear", "mac_set_bssid", "mac_set_filter",
+        "ampdu_sta", "mac_set_bssid", "ampdu_sta", "ampdu_action",  NULL};
+    const struct wlan_radio_ops *ops = radio->ops;
+    const uint8_t *frame = radio_frame;
+    struct wlan_bss bss;
+    struct wlan_key key;
+    uint64_t tsf;
+    int slot = -1;
+
     notes_clear();
-    CHECK(ops->tx(radio, frame, sizeof(frame), &info) == 0);
+    CHECK(ops->tx(radio, frame, sizeof(radio_frame), &radio_info) == 0);
     k_memset(&key, 0, sizeof(key));
-    slot = -1;
     CHECK(ops->set_key(radio, 1, frame, &key, &slot) == 0 && slot == 4);
     CHECK(ops->set_key(radio, 0, frame, &key, &slot) == 0 && slot_cleared == 4);
     k_memset(&bss, 0, sizeof(bss));
@@ -1057,7 +1069,6 @@ static void test_radio(void)
     CHECK(ops->sta_state(radio, &bss, WLAN_STA_NONE, WLAN_STA_AUTHENTICATING) == 0);
     CHECK(bssid_set[0] == 0x02 && bssid_set[5] == 0x99);
     CHECK(ampdu_sta_bss == NULL && !card.mac.associated);
-    /* The association narrows the filter and starts the receive window. */
     card.recover.rx_active = 7;
     CHECK(ops->sta_state(radio, &bss, WLAN_STA_AUTHENTICATED, WLAN_STA_ASSOCIATED) == 0);
     CHECK(ampdu_sta_bss == &bss && card.mac.associated);
@@ -1069,15 +1080,20 @@ static void test_radio(void)
     CHECK(!card.mac.associated);
     CHECK(ops->ampdu_action(radio, WLAN_AMPDU_TX_START, frame, 0, 0, 64) == 0);
     CHECK(ops->get_tsf(radio, &tsf) == 0 && tsf == 0x123456789ull);
-    {
-        static const char *const misc[] = {
-            "tx",        "key_set",       "key_clear", "mac_set_bssid", "mac_set_filter",
-            "ampdu_sta", "mac_set_bssid", "ampdu_sta", "ampdu_action",  NULL};
-        CHECK(calls_are(misc));
-    }
+    CHECK(calls_are(misc));
+}
 
-    /* The stop: the work and DMA stopped, then a cold reset and full sleep;
-     * twice is once. */
+/** The stop: the work and DMA stopped, then a cold reset and full sleep;
+ * twice is once. A start that fails then leaves the radio stopped and the
+ * chip asleep, and the next start resets it cold again. */
+static void radio_test_stop(struct wlan_radio *radio)
+{
+    static const char *const stop[] = {
+        "mac_intr_disable", "recover_stop", "cal_stop", "mac_intr_disable",
+        "mac_abort_tx",     "rx_stop",      "tx_drain", NULL};
+    const struct wlan_radio_ops *ops = radio->ops;
+    int dis, cold;
+
     notes_clear();
     ath9k_model_log_clear(&model);
     ops->stop(radio);
@@ -1090,15 +1106,12 @@ static void test_radio(void)
     CHECK(!(ath9k_model_peek(&model, AR_RTC_RESET) & AR_RTC_RESET_EN));
     notes_clear();
     ops->stop(radio);
-    CHECK(calls_are(none));
-    CHECK(ops->tx(radio, frame, sizeof(frame), &info) == -ENETDOWN);
+    CHECK(calls_are(no_calls));
+    CHECK(ops->tx(radio, radio_frame, sizeof(radio_frame), &radio_info) == -ENETDOWN);
 
-    /* A start that fails leaves the radio stopped and the chip asleep, and
-     * the next start resets it cold again. */
     cal_rc = -EIO;
     notes_clear();
-    rc = ops->start(radio);
-    CHECK(rc == -EIO);
+    CHECK(ops->start(radio) == -EIO);
     CHECK(logged("ath9k: start: failed: -5"));
     CHECK(!card.bus.started);
     CHECK(call_index("cal_start") == ~0u);
@@ -1110,6 +1123,24 @@ static void test_radio(void)
     cold = dis < 0 ? -1 : ath9k_model_find(&model, (unsigned)dis, ATH9K_MODEL_WRITE, AR_RTC_RC);
     CHECK(cold >= 0 && model.log[cold].value == (AR_RTC_RC_MAC_WARM | AR_RTC_RC_MAC_COLD));
     ops->stop(radio);
+}
+
+/** The radio's operations on the recorded card, after test_recorded, from
+ * the stopped radio through its start, retunes and parts to its stop. */
+static void test_radio(void)
+{
+    struct wlan_radio *radio = &card.radio;
+
+    if (registered != radio)
+        return;
+    model.log_reads = 0;
+    ath9k_model_log_clear(&model);
+    notes_clear();
+    radio_test_stopped(radio);
+    radio_test_start(radio);
+    radio_test_config(radio);
+    radio_test_parts(radio);
+    radio_test_stop(radio);
 }
 
 /** Revision 1.1 names itself on the boot line and takes its radio

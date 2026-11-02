@@ -3,12 +3,17 @@
  * recovery, mac.c, recv.c, xmit.c, key.c, intr.c and recover.c, against
  * the chip model of ath9k_model.h.
  *
- * host-deps: rach2/sys/network/driver/ath9k/io.c rach2/sys/network/driver/ath9k/chips.c
- * host-deps: rach2/sys/network/driver/ath9k/mac.c rach2/sys/network/driver/ath9k/recv.c
- * host-deps: rach2/sys/network/driver/ath9k/xmit.c rach2/sys/network/driver/ath9k/key.c
- * host-deps: rach2/sys/network/driver/ath9k/intr.c rach2/sys/network/driver/ath9k/recover.c
+ * host-deps: rach2/sys/network/driver/ath9k/io.c
+ * host-deps: rach2/sys/network/driver/ath9k/chips.c
+ * host-deps: rach2/sys/network/driver/ath9k/mac.c
+ * host-deps: rach2/sys/network/driver/ath9k/recv.c
+ * host-deps: rach2/sys/network/driver/ath9k/xmit.c
+ * host-deps: rach2/sys/network/driver/ath9k/key.c
+ * host-deps: rach2/sys/network/driver/ath9k/intr.c
+ * host-deps: rach2/sys/network/driver/ath9k/recover.c
  * host-deps: rach2/sys/network/driver/ath9k/ampdu.c
- * host-deps: tests/host/ath9k_model.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/ath9k_model.c rach2/sys/lib/kstring.c
+ * host-deps: rach2/sys/lib/kctypes.c
  *
  * The test stands in for the parts it does not link: hw.c's reset is a
  * warm reset of the model followed by mac.c's queue set-up, as
@@ -484,36 +489,13 @@ static unsigned qos_data(uint8_t *f, unsigned body, int prot)
 /* Receive.                                                             */
 /* ------------------------------------------------------------------ */
 
-static void test_rx(void)
+/** Associated, the AP's beacons set noise immunity's average, each
+ * weighing a tenth after the first; another BSS's beacon, a frame that is
+ * no beacon, an RSSI the chip could not read and a CRC error leave it. The
+ * beacon is the `len` bytes of `f`; the counts are left as the first beacon
+ * left them, for the rows after. */
+static void rx_beacon_rssi(uint8_t *f, unsigned len)
 {
-    uint8_t f[600], chip[700];
-    unsigned len, n;
-
-    setup(1);
-    CHECK(msi_handler != 0 && ah.mac.msi && ah.bus.vector == 0x60 && !INTX_OFF());
-    CHECK(model.rx[0].count == ATH9K_RX_HP_DEPTH && model.rx[1].count == ATH9K_RX_LP_DEPTH);
-    CHECK(ath9k_model_peek(&model, AR_DATABUF_SIZE) == ATH9K_RX_BUF_LEN - 48);
-    CHECK(!(ath9k_model_peek(&model, AR_DIAG_SW) & (AR_DIAG_RX_DIS | AR_DIAG_RX_ABORT)));
-    CHECK(model.rxe);
-
-    /* A beacon on the low-priority FIFO at 1 Mbit/s. */
-    len = beacon(f, 100);
-    CHECK(receive(0, f, len, 0x1b, 40, 0) == 0);
-    CHECK(model.rx[1].count == ATH9K_RX_LP_DEPTH - 1);
-    interrupt();
-    CHECK(rx_count == 1 && rx_len[0] == len && k_memcmp(rx_frame[0], f, len) == 0);
-    CHECK(rx_st[0].rate == 0 && rx_st[0].rate_flags == 0);
-    CHECK(rx_st[0].signal == -95 + 40 && rx_st[0].frequency == 2437 && rx_st[0].hw_key == -1);
-    CHECK(rx_st[0].flags == 0);
-    CHECK(model.rx[1].count == ATH9K_RX_LP_DEPTH);
-    CHECK(ant_calls == 1 && ah.stats.rx_frames == 1);
-    CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_ENABLE);
-    CHECK(ah.ani.beacon_rssi == 0); /* not associated: not the AP's */
-
-    /* Associated, the AP's beacons set noise immunity's average, each
-     * weighing a tenth after the first; another BSS's beacon, a frame
-     * that is no beacon, an RSSI the chip could not read and a CRC error
-     * leave it. */
     ah.mac.associated = 1;
     k_memcpy(ah.mac.bssid, ap, 6);
     CHECK(receive(0, f, len, 0x1b, 50, 0) == 0);
@@ -546,13 +528,18 @@ static void test_rx(void)
     CHECK(ah.ani.beacon_rssi == 43); /* 48 * 9 / 10 */
     ah.mac.associated = 0;
     ah.ani.beacon_rssi = ah.ani.beacon_lpf = ah.ani.beacon_heard = 0;
-    /* The counts as the first beacon left them, for the rows below. */
     rx_count = 1;
     ah.stats.rx_frames = 1;
     ah.stats.rx_crc = 0;
+}
 
-    /* A QoS data frame, which the chip pads after its 26-byte header, on
-     * the high-priority FIFO at MCS 5 with a short guard interval. */
+/** A QoS data frame, which the chip pads after its 26-byte header, on the
+ * high-priority FIFO at MCS 5 with a short guard interval. */
+static void rx_qos(void)
+{
+    uint8_t f[600], chip[700];
+    unsigned len;
+
     len = qos_data(f, 300, 0);
     k_memcpy(chip, f, 26);
     chip[26] = chip[27] = 0xee;
@@ -573,6 +560,14 @@ static void test_rx(void)
     CHECK(rx_count == 2 && rx_len[1] == len && k_memcmp(rx_frame[1], f, len) == 0);
     CHECK(rx_st[1].rate == 5 && rx_st[1].rate_flags == (WLAN_RATE_MCS | WLAN_RATE_SHORT_GI));
     CHECK(model.rx[0].count == ATH9K_RX_HP_DEPTH);
+}
+
+/** The frames receive drops or counts: errors, a frame over two buffers,
+ * one the station refuses, and the ring's wrap. */
+static void rx_drops(void)
+{
+    uint8_t f[100];
+    unsigned len, n;
 
     /* A CRC error and a phy error are dropped and counted; their buffers
      * go back. A phy restart after a good delimiter is not an error. */
@@ -634,6 +629,38 @@ static void test_rx(void)
     CHECK(model.overruns == 0 && model.dma_faults == 0);
 }
 
+/** Receive on a card with messages: a beacon on the low-priority FIFO at
+ * 1 Mbit/s, then the rows of rx_beacon_rssi, rx_qos and rx_drops. */
+static void test_rx(void)
+{
+    uint8_t f[100];
+    unsigned len;
+
+    setup(1);
+    CHECK(msi_handler != 0 && ah.mac.msi && ah.bus.vector == 0x60 && !INTX_OFF());
+    CHECK(model.rx[0].count == ATH9K_RX_HP_DEPTH && model.rx[1].count == ATH9K_RX_LP_DEPTH);
+    CHECK(ath9k_model_peek(&model, AR_DATABUF_SIZE) == ATH9K_RX_BUF_LEN - 48);
+    CHECK(!(ath9k_model_peek(&model, AR_DIAG_SW) & (AR_DIAG_RX_DIS | AR_DIAG_RX_ABORT)));
+    CHECK(model.rxe);
+
+    len = beacon(f, 100);
+    CHECK(receive(0, f, len, 0x1b, 40, 0) == 0);
+    CHECK(model.rx[1].count == ATH9K_RX_LP_DEPTH - 1);
+    interrupt();
+    CHECK(rx_count == 1 && rx_len[0] == len && k_memcmp(rx_frame[0], f, len) == 0);
+    CHECK(rx_st[0].rate == 0 && rx_st[0].rate_flags == 0);
+    CHECK(rx_st[0].signal == -95 + 40 && rx_st[0].frequency == 2437 && rx_st[0].hw_key == -1);
+    CHECK(rx_st[0].flags == 0);
+    CHECK(model.rx[1].count == ATH9K_RX_LP_DEPTH);
+    CHECK(ant_calls == 1 && ah.stats.rx_frames == 1);
+    CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_ENABLE);
+    CHECK(ah.ani.beacon_rssi == 0); /* not associated: not the AP's */
+
+    rx_beacon_rssi(f, len);
+    rx_qos();
+    rx_drops();
+}
+
 /* ------------------------------------------------------------------ */
 /* Transmit.                                                            */
 /* ------------------------------------------------------------------ */
@@ -666,26 +693,45 @@ static struct wlan_tx_info tx_info(unsigned ac, uint64_t cookie)
     return info;
 }
 
-static void test_tx(void)
+/** Check that `d`, the descriptor of the `len`-byte QoS data frame `f` on
+ * BE, holds what ath9k writes: its queue, length, checksum, tries, rates,
+ * durations and chains, and the frame padded after its header. */
+static void check_be_desc(const struct ar9003_txc *d, const uint8_t *f, unsigned len)
+{
+    const uint8_t *buf;
+    uint32_t sum;
+
+    CHECK(MS(d->info, AR_DescId) == ATH9K_VENDOR_ID && (d->info & AR_TxRxDesc) &&
+          (d->info & AR_CtrlStat));
+    CHECK(MS(d->info, AR_TxQcuNum) == 1 && (d->info & 0xff) == 0x18);
+    CHECK(MS(d->ctl3, AR_BufLen) == len + 2);
+    sum = d->info + d->link + d->data0 + d->ctl3 + d->data1 + d->ctl5 + d->data2 + d->ctl7 +
+          d->data3 + d->ctl9;
+    CHECK((d->ctl10 & AR_TxPtrChkSum) == (((sum & 0xffff) + (sum >> 16)) & 0xffff));
+    CHECK((d->ctl11 & AR_FrameLen) == len + 4 && !(d->ctl11 & AR_DestIdxValid));
+    CHECK(MS(d->ctl13, AR_XmitDataTries0) == 2 && MS(d->ctl13, AR_XmitDataTries1) == 3);
+    CHECK(MS(d->ctl13, AR_XmitDataTries2) == 4 && MS(d->ctl13, AR_XmitDataTries3) == 0);
+    CHECK(MS(d->ctl14, AR_XmitRate0) == 0x0c && MS(d->ctl14, AR_XmitRate1) == 0x0b);
+    CHECK(MS(d->ctl14, AR_XmitRate2) == 0x1b);
+    CHECK(MS(d->ctl15, AR_PacketDur0) > 16 &&
+          MS(d->ctl15, AR_PacketDur1) > MS(d->ctl15, AR_PacketDur0));
+    CHECK(MS(d->ctl18, AR_ChainSel0) == ah.hw.chip->chainmask);
+    CHECK(d->ctl19 == AR_Not_Sounding && MS(d->ctl17, AR_EncrType) == 0);
+    buf = dma_map(&model, d->data0, len + 2);
+    CHECK(buf && k_memcmp(buf, f, 26) == 0 && k_memcmp(buf + 28, f + 26, 200) == 0);
+}
+
+/** A QoS data frame on BE, which goes out padded after its header, and its
+ * status; then a frame that ran out of tries. */
+static void tx_be(void)
 {
     uint8_t f[400];
     struct wlan_tx_info info;
     struct ar9003_txs st;
     const struct ar9003_txc *d;
-    const uint8_t *buf;
-    uint32_t bus, sum;
-    unsigned len, i, q;
+    uint32_t bus;
+    unsigned len, q;
 
-    setup(1);
-    /* Queues: VO is QCU 3 and BK QCU 0, each a DCU of its own number. */
-    CHECK(ah.tx.q[WLAN_AC_VO].qnum == 3 && ah.tx.q[WLAN_AC_BK].qnum == 0);
-    CHECK(ath9k_model_peek(&model, AR_DQCUMASK(2)) == 4);
-    CHECK(MS(ath9k_model_peek(&model, AR_DLCL_IFS(1)), AR_D_LCL_IFS_AIFS) == 3);
-    CHECK(MS(ath9k_model_peek(&model, AR_DLCL_IFS(3)), AR_D_LCL_IFS_CWMIN) == 3);
-    CHECK(ath9k_model_peek(&model, AR_Q_STATUS_RING_START) == ah.tx.status_bus);
-    CHECK(model.txs_end == ah.tx.status_bus + ATH9K_TXS_RING * sizeof(struct ar9003_txs));
-
-    /* A QoS data frame on BE, which goes out padded after its header. */
     len = qos_data(f, 200, 0);
     info = tx_info(WLAN_AC_BE, 77);
     CHECK(ath9k_tx(&ah, f, len, &info) == 0);
@@ -694,26 +740,8 @@ static void test_tx(void)
     bus = model.tx[1].bus[model.tx[1].head];
     d = desc_at(bus);
     CHECK(d != 0);
-    if (d) {
-        CHECK(MS(d->info, AR_DescId) == ATH9K_VENDOR_ID && (d->info & AR_TxRxDesc) &&
-              (d->info & AR_CtrlStat));
-        CHECK(MS(d->info, AR_TxQcuNum) == 1 && (d->info & 0xff) == 0x18);
-        CHECK(MS(d->ctl3, AR_BufLen) == len + 2);
-        sum = d->info + d->link + d->data0 + d->ctl3 + d->data1 + d->ctl5 + d->data2 + d->ctl7 +
-              d->data3 + d->ctl9;
-        CHECK((d->ctl10 & AR_TxPtrChkSum) == (((sum & 0xffff) + (sum >> 16)) & 0xffff));
-        CHECK((d->ctl11 & AR_FrameLen) == len + 4 && !(d->ctl11 & AR_DestIdxValid));
-        CHECK(MS(d->ctl13, AR_XmitDataTries0) == 2 && MS(d->ctl13, AR_XmitDataTries1) == 3);
-        CHECK(MS(d->ctl13, AR_XmitDataTries2) == 4 && MS(d->ctl13, AR_XmitDataTries3) == 0);
-        CHECK(MS(d->ctl14, AR_XmitRate0) == 0x0c && MS(d->ctl14, AR_XmitRate1) == 0x0b);
-        CHECK(MS(d->ctl14, AR_XmitRate2) == 0x1b);
-        CHECK(MS(d->ctl15, AR_PacketDur0) > 16 &&
-              MS(d->ctl15, AR_PacketDur1) > MS(d->ctl15, AR_PacketDur0));
-        CHECK(MS(d->ctl18, AR_ChainSel0) == ah.hw.chip->chainmask);
-        CHECK(d->ctl19 == AR_Not_Sounding && MS(d->ctl17, AR_EncrType) == 0);
-        buf = dma_map(&model, d->data0, len + 2);
-        CHECK(buf && k_memcmp(buf, f, 26) == 0 && k_memcmp(buf + 28, f + 26, 200) == 0);
-    }
+    if (d)
+        check_be_desc(d, f, len);
 
     /* Its status: acknowledged at the second series after one failure
      * there, so the first used both its tries. */
@@ -735,6 +763,16 @@ static void test_tx(void)
     interrupt();
     CHECK(txs_count == 2 && txs[1].cookie == 78 && txs[1].flags == 0 && ah.stats.tx_failed == 1);
     CHECK(txs[1].rates[2].count == 4 && txs[1].rates[3].index == -1);
+}
+
+/** The FIFO and the ring: ten frames on VO, a queue's ring and one more,
+ * and the frames transmit refuses. */
+static void tx_fifo(void)
+{
+    uint8_t f[100];
+    struct wlan_tx_info info;
+    struct ar9003_txs st;
+    unsigned len, i;
 
     /* Ten frames on VO: eight go to the FIFO, the rest as statuses free
      * room, in order. */
@@ -781,32 +819,55 @@ static void test_tx(void)
     info.hw_key = 9;
     CHECK(ath9k_tx(&ah, f, len, &info) == -EINVAL);
     CHECK(model.dma_faults == 0);
+}
 
-    /* An underrun or a descriptor the chip refused is no ACK, even beside
-     * AR_FrmXmitOK, and a status without AR_FrmXmitOK is none either,
-     * unless the frame asked for no ACK or went to a group address. */
-    {
-        static const uint32_t s3[5] = {AR_FrmXmitOK | AR_TxDataUnderrun,
-                                       AR_FrmXmitOK | AR_TxDelimUnderrun,
-                                       AR_FrmXmitOK | AR_DescCfgErr, 0, 0};
-        unsigned base = txs_count, failed = ah.stats.tx_failed;
+/** An underrun or a descriptor the chip refused is no ACK, even beside
+ * AR_FrmXmitOK, and a status without AR_FrmXmitOK is none either, unless
+ * the frame asked for no ACK or went to a group address. */
+static void tx_no_ack(void)
+{
+    static const uint32_t s3[5] = {AR_FrmXmitOK | AR_TxDataUnderrun,
+                                   AR_FrmXmitOK | AR_TxDelimUnderrun, AR_FrmXmitOK | AR_DescCfgErr,
+                                   0, 0};
+    unsigned base = txs_count, failed = ah.stats.tx_failed;
+    uint8_t f[300];
+    struct wlan_tx_info info;
+    struct ar9003_txs st;
+    unsigned len, i;
 
-        for (i = 0; i < 6; i++) {
-            len = i < 5 ? qos_data(f, 200, 0) : beacon(f, 64);
-            info = tx_info(WLAN_AC_BE, 300 + i);
-            if (i == 4)
-                info.flags = WLAN_TX_NO_ACK;
-            CHECK(ath9k_tx(&ah, f, len, &info) == 0);
-            k_memset(&st, 0, sizeof(st));
-            st.status3 = i < 5 ? s3[i] : 0;
-            CHECK(ath9k_model_tx_complete(&model, 1, &st) != 0);
-            interrupt();
-        }
-        CHECK(txs_count == base + 6 && ah.stats.tx_failed == failed + 4);
-        for (i = 0; i < 6 && base + i < MAX_TXS; i++)
-            CHECK(txs[base + i].cookie == 300 + i &&
-                  txs[base + i].flags == (i < 4 ? 0 : WLAN_TX_ACKED));
+    for (i = 0; i < 6; i++) {
+        len = i < 5 ? qos_data(f, 200, 0) : beacon(f, 64);
+        info = tx_info(WLAN_AC_BE, 300 + i);
+        if (i == 4)
+            info.flags = WLAN_TX_NO_ACK;
+        CHECK(ath9k_tx(&ah, f, len, &info) == 0);
+        k_memset(&st, 0, sizeof(st));
+        st.status3 = i < 5 ? s3[i] : 0;
+        CHECK(ath9k_model_tx_complete(&model, 1, &st) != 0);
+        interrupt();
     }
+    CHECK(txs_count == base + 6 && ah.stats.tx_failed == failed + 4);
+    for (i = 0; i < 6 && base + i < MAX_TXS; i++)
+        CHECK(txs[base + i].cookie == 300 + i &&
+              txs[base + i].flags == (i < 4 ? 0 : WLAN_TX_ACKED));
+}
+
+/** Transmit on a card with messages: the queues' set-up, then the rows of
+ * tx_be, tx_fifo and tx_no_ack. */
+static void test_tx(void)
+{
+    setup(1);
+    /* Queues: VO is QCU 3 and BK QCU 0, each a DCU of its own number. */
+    CHECK(ah.tx.q[WLAN_AC_VO].qnum == 3 && ah.tx.q[WLAN_AC_BK].qnum == 0);
+    CHECK(ath9k_model_peek(&model, AR_DQCUMASK(2)) == 4);
+    CHECK(MS(ath9k_model_peek(&model, AR_DLCL_IFS(1)), AR_D_LCL_IFS_AIFS) == 3);
+    CHECK(MS(ath9k_model_peek(&model, AR_DLCL_IFS(3)), AR_D_LCL_IFS_CWMIN) == 3);
+    CHECK(ath9k_model_peek(&model, AR_Q_STATUS_RING_START) == ah.tx.status_bus);
+    CHECK(model.txs_end == ah.tx.status_bus + ATH9K_TXS_RING * sizeof(struct ar9003_txs));
+
+    tx_be();
+    tx_fifo();
+    tx_no_ack();
 }
 
 /* ------------------------------------------------------------------ */
@@ -846,18 +907,162 @@ static int entry_is(unsigned e, const struct wlan_key *k, uint32_t type, uint32_
            ath9k_model_peek(&model, AR_KEYTABLE_MAC1(e)) == mac1;
 }
 
+static const uint8_t bcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+
+/** A CCMP frame the cache decrypted keeps its IV and MIC; a TKIP one loses
+ * its ICV. `slot` holds the CCMP key and `s2` the TKIP one. */
+static void keys_rx(int slot, int s2)
+{
+    uint8_t f[200];
+    unsigned len;
+
+    len = qos_data(f, 120, 1);
+    CHECK(receive(0, f, len, 0x0c, 30, AR_RxKeyIdxValid | SM(slot, AR_KeyIdx)) == 0);
+    CHECK(receive(0, f, len, 0x0c, 30, AR_RxKeyIdxValid | SM(s2, AR_KeyIdx)) == 0);
+    CHECK(receive(0, f, len, 0x0c, 30, AR_DecryptCRCErr & 0) == 0);
+    ath9k_tick(&ah);
+    CHECK(rx_count == 3);
+    CHECK((rx_st[0].flags & WLAN_RX_DECRYPTED) && rx_st[0].hw_key == slot && rx_len[0] == len);
+    CHECK((rx_st[1].flags & WLAN_RX_DECRYPTED) && rx_st[1].hw_key == s2 && rx_len[1] == len - 4);
+    CHECK(!(rx_st[2].flags & WLAN_RX_DECRYPTED)); /* keyid 0's group entry is empty */
+    {
+        static uint8_t buf[300];
+        struct ar9003_rxs st;
+
+        k_memset(&st, 0, sizeof(st));
+        k_memcpy(buf, f, 26);
+        buf[26] = buf[27] = 0;
+        k_memcpy(buf + 28, f + 26, 120);
+        st.status11 = AR_DecryptCRCErr;
+        CHECK(ath9k_model_rx(&model, 0, buf, len + 2 + 4, &st) == 0);
+    }
+    ath9k_tick(&ah);
+    CHECK(rx_count == 4 && !(rx_st[3].flags & WLAN_RX_DECRYPTED) && ah.stats.rx_decrypt == 1);
+}
+
+/** A frame sent with the CCMP key at `slot` names its entry and leaves the
+ * MIC to the chip. */
+static void keys_tx(int slot)
+{
+    uint8_t f[200];
+    unsigned len;
+    struct wlan_tx_info info;
+
+    info = tx_info(WLAN_AC_BE, 5);
+    info.flags = WLAN_TX_HW_KEY;
+    info.hw_key = slot;
+    len = qos_data(f, 100, 1) + 8 + 8;
+    CHECK(ath9k_tx(&ah, f, len, &info) == 0);
+    {
+        const struct ar9003_txc *d = desc_at(model.tx[1].bus[model.tx[1].head]);
+
+        CHECK(d && (d->ctl11 & AR_DestIdxValid) && MS(d->ctl12, AR_DestIdx) == (unsigned)slot);
+        CHECK(d && MS(d->ctl17, AR_EncrType) == 2 && (d->ctl11 & AR_FrameLen) == len + 4);
+        CHECK(d && MS(d->ctl3, AR_BufLen) == len - 8 + 2);
+    }
+}
+
+/** Clearing the TKIP key `tkip` at `s2` clears its registers and its MIC
+ * entry, twice harmlessly, and the key can be installed again. */
+static void keys_clear(const struct wlan_key *tkip, int s2)
+{
+    ath9k_key_clear(&ah, s2, ap, 0);
+    CHECK(ath9k_model_peek(&model, AR_KEYTABLE_TYPE(s2)) == AR_KEYTABLE_TYPE_CLR);
+    CHECK(ath9k_model_peek(&model, AR_KEYTABLE_KEY0(s2 + 64)) == 0);
+    CHECK(ah.keys.entry[s2].used == ATH9K_KEY_FREE &&
+          ah.keys.entry[s2 + 64].used == ATH9K_KEY_FREE);
+    ath9k_key_clear(&ah, s2, ap, 0); /* twice is harmless */
+    CHECK(ath9k_key_set(&ah, ap, tkip, &s2) == 0);
+}
+
+/** A group key installed at the index of the one it replaces takes its
+ * entry, and the station's removal of the old key after the install
+ * leaves the new one, in the cache and in the copy a reset writes
+ * back; removing the new one clears the entry. */
+static void keys_group_replace(void)
+{
+    struct wlan_key g1 = make_key(WLAN_CIPHER_SUITE_CCMP, 2, 0, bcast);
+    struct wlan_key g2 = g1;
+    int a = -1, b = -1;
+
+    g2.data[0] ^= 0xff;
+    CHECK(ath9k_key_set(&ah, bcast, &g1, &a) == 0 && a == 2);
+    CHECK(ath9k_key_set(&ah, bcast, &g2, &b) == 0 && b == 2);
+    ath9k_key_clear(&ah, a, bcast, &g1);
+    CHECK(ah.keys.entry[2].used == ATH9K_KEY_USED);
+    CHECK(entry_is(2, &g2, AR_KEYTABLE_TYPE_CCM, AR_KEYTABLE_VALID));
+    ath9k_key_restore(&ah);
+    CHECK(entry_is(2, &g2, AR_KEYTABLE_TYPE_CCM, AR_KEYTABLE_VALID));
+    ath9k_key_clear(&ah, b, bcast, &g2);
+    CHECK(ah.keys.entry[2].used == ATH9K_KEY_FREE);
+    CHECK(ath9k_model_peek(&model, AR_KEYTABLE_TYPE(2)) == AR_KEYTABLE_TYPE_CLR);
+}
+
+/** A pairwise key replaced while frames that name it wait: the one sent
+ * by keys_tx and eight more on BE, eight in the FIFO and one behind. The
+ * removal serves the eight the chip finished, which pushes the ninth
+ * with the key still in place; that one never finishes, so after 20 ms
+ * the chip is reset, which reports it failed, and only then is the
+ * entry cleared, with no frame left that names it. */
+static void keys_pairwise_replace(const struct wlan_key *ccmp, int slot, uint32_t mac1)
+{
+    uint8_t f[200];
+    unsigned len;
+    struct wlan_tx_info info;
+    struct wlan_key next = *ccmp;
+    struct ar9003_txs st;
+    unsigned i, base = txs_count;
+    uint64_t usec;
+    int s4 = -1;
+
+    len = qos_data(f, 100, 1) + 8 + 8;
+    for (i = 0; i < 8; i++) {
+        info = tx_info(WLAN_AC_BE, 10 + i);
+        info.flags = WLAN_TX_HW_KEY;
+        info.hw_key = slot;
+        CHECK(ath9k_tx(&ah, f, len, &info) == 0);
+    }
+    CHECK(ah.tx.q[WLAN_AC_BE].count == 9 && model.tx[1].count == ATH9K_TX_FIFO_DEPTH);
+    k_memset(&st, 0, sizeof(st));
+    st.status3 = AR_FrmXmitOK;
+    for (i = 0; i < 8; i++)
+        CHECK(ath9k_model_tx_complete(&model, 1, &st) != 0);
+    next.data[0] ^= 0xff;
+    CHECK(ath9k_key_set(&ah, ap, &next, &s4) == 0 && s4 != slot);
+    usec = model.usec;
+    ath9k_key_clear(&ah, slot, ap, ccmp);
+    CHECK(model.usec - usec >= 20000);
+    CHECK(txs_count == base + 9 && ah.stats.resets[ATH9K_RESET_TX_HANG] == 1);
+    for (i = 0; i < 9 && base + i < MAX_TXS; i++)
+        CHECK(txs[base + i].flags == (i < 8 ? WLAN_TX_ACKED : 0));
+    CHECK(ah.tx.q[WLAN_AC_BE].count == 0 && model.tx[1].count == 0);
+    CHECK(ah.keys.entry[slot].used == ATH9K_KEY_FREE);
+    CHECK(ath9k_model_peek(&model, AR_KEYTABLE_TYPE(slot)) == AR_KEYTABLE_TYPE_CLR);
+    CHECK(entry_is((unsigned)s4, &next, AR_KEYTABLE_TYPE_CCM, mac1));
+
+    /* A frame of the new key the chip finished goes out before its
+     * removal, which needs no reset. */
+    info = tx_info(WLAN_AC_BE, 20);
+    info.flags = WLAN_TX_HW_KEY;
+    info.hw_key = s4;
+    CHECK(ath9k_tx(&ah, f, len, &info) == 0);
+    CHECK(ath9k_model_tx_complete(&model, 1, &st) != 0);
+    ath9k_key_clear(&ah, s4, ap, &next);
+    CHECK(txs_count == base + 10 && base + 9 < MAX_TXS && txs[base + 9].flags == WLAN_TX_ACKED);
+    CHECK(ah.stats.resets[ATH9K_RESET_TX_HANG] == 1 && ah.keys.entry[s4].used == ATH9K_KEY_FREE);
+}
+
+/** The key cache on a card without messages: CCMP, TKIP and group keys
+ * installed, then the rows of keys_rx, keys_tx, keys_clear,
+ * keys_group_replace and keys_pairwise_replace. */
 static void test_keys(void)
 {
-    static const uint8_t bcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
     struct wlan_key ccmp = make_key(WLAN_CIPHER_SUITE_CCMP, 0, WLAN_KEY_PAIRWISE, ap);
     struct wlan_key tkip = make_key(WLAN_CIPHER_SUITE_TKIP, 0, WLAN_KEY_PAIRWISE, ap);
     struct wlan_key gtk = make_key(WLAN_CIPHER_SUITE_TKIP, 1, WLAN_KEY_DEFAULT, bcast);
     struct wlan_key igtk = make_key(WLAN_CIPHER_SUITE_AES_CMAC, 4, 0, bcast);
     uint32_t mac1 = (((uint32_t)ap[4] | (uint32_t)ap[5] << 8) >> 1) | AR_KEYTABLE_VALID;
     int slot = -1, s2 = -1, s3 = -1, first, last;
-    uint8_t f[200];
-    unsigned len;
-    struct wlan_tx_info info;
 
     setup(0);
     CHECK(msi_handler == 0 && !ah.mac.msi && ah.bus.vector == 0);
@@ -896,127 +1101,11 @@ static void test_keys(void)
     CHECK(ath9k_key_set(&ah, bcast, &igtk, &slot) == -EOPNOTSUPP);
     slot = AR_RSVD_KEYTABLE_ENTRIES;
 
-    /* A CCMP frame the cache decrypted keeps its IV and MIC; a TKIP one
-     * loses its ICV. */
-    len = qos_data(f, 120, 1);
-    CHECK(receive(0, f, len, 0x0c, 30, AR_RxKeyIdxValid | SM(slot, AR_KeyIdx)) == 0);
-    CHECK(receive(0, f, len, 0x0c, 30, AR_RxKeyIdxValid | SM(s2, AR_KeyIdx)) == 0);
-    CHECK(receive(0, f, len, 0x0c, 30, AR_DecryptCRCErr & 0) == 0);
-    ath9k_tick(&ah);
-    CHECK(rx_count == 3);
-    CHECK((rx_st[0].flags & WLAN_RX_DECRYPTED) && rx_st[0].hw_key == slot && rx_len[0] == len);
-    CHECK((rx_st[1].flags & WLAN_RX_DECRYPTED) && rx_st[1].hw_key == s2 && rx_len[1] == len - 4);
-    CHECK(!(rx_st[2].flags & WLAN_RX_DECRYPTED)); /* keyid 0's group entry is empty */
-    {
-        static uint8_t buf[300];
-        struct ar9003_rxs st;
-
-        k_memset(&st, 0, sizeof(st));
-        k_memcpy(buf, f, 26);
-        buf[26] = buf[27] = 0;
-        k_memcpy(buf + 28, f + 26, 120);
-        st.status11 = AR_DecryptCRCErr;
-        CHECK(ath9k_model_rx(&model, 0, buf, len + 2 + 4, &st) == 0);
-    }
-    ath9k_tick(&ah);
-    CHECK(rx_count == 4 && !(rx_st[3].flags & WLAN_RX_DECRYPTED) && ah.stats.rx_decrypt == 1);
-
-    /* A frame sent with the CCMP key names its entry and leaves the MIC
-     * to the chip. */
-    info = tx_info(WLAN_AC_BE, 5);
-    info.flags = WLAN_TX_HW_KEY;
-    info.hw_key = slot;
-    len = qos_data(f, 100, 1) + 8 + 8;
-    CHECK(ath9k_tx(&ah, f, len, &info) == 0);
-    {
-        const struct ar9003_txc *d = desc_at(model.tx[1].bus[model.tx[1].head]);
-
-        CHECK(d && (d->ctl11 & AR_DestIdxValid) && MS(d->ctl12, AR_DestIdx) == (unsigned)slot);
-        CHECK(d && MS(d->ctl17, AR_EncrType) == 2 && (d->ctl11 & AR_FrameLen) == len + 4);
-        CHECK(d && MS(d->ctl3, AR_BufLen) == len - 8 + 2);
-    }
-
-    /* Clearing an entry clears its registers and its MIC entry. */
-    ath9k_key_clear(&ah, s2, ap, 0);
-    CHECK(ath9k_model_peek(&model, AR_KEYTABLE_TYPE(s2)) == AR_KEYTABLE_TYPE_CLR);
-    CHECK(ath9k_model_peek(&model, AR_KEYTABLE_KEY0(s2 + 64)) == 0);
-    CHECK(ah.keys.entry[s2].used == ATH9K_KEY_FREE &&
-          ah.keys.entry[s2 + 64].used == ATH9K_KEY_FREE);
-    ath9k_key_clear(&ah, s2, ap, 0); /* twice is harmless */
-    CHECK(ath9k_key_set(&ah, ap, &tkip, &s2) == 0);
-
-    /* A group key installed at the index of the one it replaces takes its
-     * entry, and the station's removal of the old key after the install
-     * leaves the new one, in the cache and in the copy a reset writes
-     * back; removing the new one clears the entry. */
-    {
-        struct wlan_key g1 = make_key(WLAN_CIPHER_SUITE_CCMP, 2, 0, bcast);
-        struct wlan_key g2 = g1;
-        int a = -1, b = -1;
-
-        g2.data[0] ^= 0xff;
-        CHECK(ath9k_key_set(&ah, bcast, &g1, &a) == 0 && a == 2);
-        CHECK(ath9k_key_set(&ah, bcast, &g2, &b) == 0 && b == 2);
-        ath9k_key_clear(&ah, a, bcast, &g1);
-        CHECK(ah.keys.entry[2].used == ATH9K_KEY_USED);
-        CHECK(entry_is(2, &g2, AR_KEYTABLE_TYPE_CCM, AR_KEYTABLE_VALID));
-        ath9k_key_restore(&ah);
-        CHECK(entry_is(2, &g2, AR_KEYTABLE_TYPE_CCM, AR_KEYTABLE_VALID));
-        ath9k_key_clear(&ah, b, bcast, &g2);
-        CHECK(ah.keys.entry[2].used == ATH9K_KEY_FREE);
-        CHECK(ath9k_model_peek(&model, AR_KEYTABLE_TYPE(2)) == AR_KEYTABLE_TYPE_CLR);
-    }
-
-    /* A pairwise key replaced while frames that name it wait: the one sent
-     * above and eight more on BE, eight in the FIFO and one behind. The
-     * removal serves the eight the chip finished, which pushes the ninth
-     * with the key still in place; that one never finishes, so after 20 ms
-     * the chip is reset, which reports it failed, and only then is the
-     * entry cleared, with no frame left that names it. */
-    {
-        struct wlan_key next = ccmp;
-        struct ar9003_txs st;
-        unsigned i, base = txs_count;
-        uint64_t usec;
-        int s4 = -1;
-
-        len = qos_data(f, 100, 1) + 8 + 8;
-        for (i = 0; i < 8; i++) {
-            info = tx_info(WLAN_AC_BE, 10 + i);
-            info.flags = WLAN_TX_HW_KEY;
-            info.hw_key = slot;
-            CHECK(ath9k_tx(&ah, f, len, &info) == 0);
-        }
-        CHECK(ah.tx.q[WLAN_AC_BE].count == 9 && model.tx[1].count == ATH9K_TX_FIFO_DEPTH);
-        k_memset(&st, 0, sizeof(st));
-        st.status3 = AR_FrmXmitOK;
-        for (i = 0; i < 8; i++)
-            CHECK(ath9k_model_tx_complete(&model, 1, &st) != 0);
-        next.data[0] ^= 0xff;
-        CHECK(ath9k_key_set(&ah, ap, &next, &s4) == 0 && s4 != slot);
-        usec = model.usec;
-        ath9k_key_clear(&ah, slot, ap, &ccmp);
-        CHECK(model.usec - usec >= 20000);
-        CHECK(txs_count == base + 9 && ah.stats.resets[ATH9K_RESET_TX_HANG] == 1);
-        for (i = 0; i < 9 && base + i < MAX_TXS; i++)
-            CHECK(txs[base + i].flags == (i < 8 ? WLAN_TX_ACKED : 0));
-        CHECK(ah.tx.q[WLAN_AC_BE].count == 0 && model.tx[1].count == 0);
-        CHECK(ah.keys.entry[slot].used == ATH9K_KEY_FREE);
-        CHECK(ath9k_model_peek(&model, AR_KEYTABLE_TYPE(slot)) == AR_KEYTABLE_TYPE_CLR);
-        CHECK(entry_is((unsigned)s4, &next, AR_KEYTABLE_TYPE_CCM, mac1));
-
-        /* A frame of the new key the chip finished goes out before its
-         * removal, which needs no reset. */
-        info = tx_info(WLAN_AC_BE, 20);
-        info.flags = WLAN_TX_HW_KEY;
-        info.hw_key = s4;
-        CHECK(ath9k_tx(&ah, f, len, &info) == 0);
-        CHECK(ath9k_model_tx_complete(&model, 1, &st) != 0);
-        ath9k_key_clear(&ah, s4, ap, &next);
-        CHECK(txs_count == base + 10 && base + 9 < MAX_TXS && txs[base + 9].flags == WLAN_TX_ACKED);
-        CHECK(ah.stats.resets[ATH9K_RESET_TX_HANG] == 1 &&
-              ah.keys.entry[s4].used == ATH9K_KEY_FREE);
-    }
+    keys_rx(slot, s2);
+    keys_tx(slot);
+    keys_clear(&tkip, s2);
+    keys_group_replace();
+    keys_pairwise_replace(&ccmp, slot, mac1);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1038,13 +1127,220 @@ static void check_restored(const struct wlan_key *ccmp, int slot, uint32_t mac1)
     CHECK(entry_is((unsigned)slot, ccmp, AR_KEYTABLE_TYPE_CCM, mac1));
 }
 
+/** A queue whose frame gets no status across two checks is hung: the
+ * frame is reported failed, and the reset brings everything back,
+ * the key the warm reset cleared among it. Then the MAC's hang signature
+ * on queue 1, the AR9003's DMA debug words. */
+static void recover_tx_hang(const struct wlan_key *ccmp, int slot, uint32_t mac1)
+{
+    struct wlan_tx_info info;
+    uint8_t f[100];
+    unsigned len, i;
+
+    len = beacon(f, 64);
+    info = tx_info(WLAN_AC_BE, 9);
+    CHECK(ath9k_tx(&ah, f, len, &info) == 0);
+    for (i = 0; i < 4; i++) {
+        CHECK(receive(0, f, len, 0x1b, 20, 0) == 0);
+        interrupt();
+    }
+    CHECK(ath9k_hang_check(&ah) == -1);
+    CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_TX_HANG);
+    CHECK(txs_count == 1 && txs[0].cookie == 9 && txs[0].flags == 0);
+    /* No reset of its own before ath9k_hw_reset, which resets cold while
+     * DMA runs, as ath_reset_internal leaves it. */
+    CHECK(hw_resets == 2 && cold_resets == 0 && ah.stats.resets[ATH9K_RESET_TX_HANG] == 1);
+    CHECK(ah.tx.q[WLAN_AC_BE].count == 0 && model.tx[1].count == 0);
+    check_restored(ccmp, slot, mac1);
+    CHECK(ath9k_model_peek(&model, AR_BEACON_PERIOD) == 102400);
+    CHECK(ath9k_model_peek(&model, AR_PHY_WATCHDOG_CTL_2) & AR_PHY_WATCHDOG_IRQ_ENABLE);
+
+    ath9k_model_poke(&model, AR_DMADBG_4, 0x6u << 5);
+    ath9k_model_poke(&model, AR_DMADBG_6, 0x1);
+    CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_MAC_HANG);
+    CHECK(ah.stats.resets[ATH9K_RESET_MAC_HANG] == 1 && hw_resets == 3);
+    check_restored(ccmp, slot, mac1);
+    ath9k_model_poke(&model, AR_DMADBG_4, 0x6u << 5);
+    ath9k_model_poke(&model, AR_DMADBG_6, 0x2); /* not complete: no hang */
+    CHECK(ath9k_hang_check(&ah) == -1);
+    ath9k_model_poke(&model, AR_DMADBG_4, 0);
+}
+
+/** Receive: a window with a frame a second passes; one without, while
+ * associated, is a stall; one while not associated is not judged. */
+static void recover_rx_stall(const struct wlan_key *ccmp, int slot, uint32_t mac1)
+{
+    uint8_t f[100];
+    unsigned len, i;
+
+    len = beacon(f, 64);
+    now_ms += 4000;
+    for (i = 0; i < 4; i++) {
+        CHECK(receive(0, f, len, 0x1b, 20, 0) == 0);
+        interrupt();
+    }
+    CHECK(ath9k_hang_check(&ah) == -1);
+    now_ms += 4000;
+    CHECK(receive(0, f, len, 0x1b, 20, 0) == 0);
+    interrupt();
+    CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_RX_STALL);
+    CHECK(cold_resets == 0);
+    check_restored(ccmp, slot, mac1);
+    ah.mac.associated = 0;
+    ath9k_mac_set_bssid(&ah, (const uint8_t *)"\0\0\0\0\0\0", 0);
+    now_ms += 4000;
+    CHECK(ath9k_hang_check(&ah) == -1); /* not associated: not judged */
+    CHECK(ah.rx.hw_filter & ATH9K_RX_FILTER_BEACON);
+}
+
+/** A fatal PCIe error asks the worker for a reset and leaves the chip's
+ * interrupts off until it runs; the baseband watchdog's hang is reset; beacon
+ * misses and receive overruns are counted. */
+static void recover_fatal(const struct wlan_key *ccmp, int slot, uint32_t mac1)
+{
+    unsigned before;
+
+    before = hw_resets;
+    sync_cause = AR_INTR_SYNC_HOST1_FATAL;
+    interrupt();
+    CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_DISABLE && ah.recover.pending);
+    CHECK(sync_cause == 0);
+    ath9k_tick(&ah);
+    CHECK(run_work() >= 1 && hw_resets == before + 1 && ah.stats.resets[ATH9K_RESET_FATAL] == 1);
+    check_restored(ccmp, slot, 0x0 | mac1);
+
+    /* The baseband watchdog: a known harmless state is cleared, a hang is
+     * reset. */
+    before = hw_resets;
+    ath9k_model_poke(&model, AR_ISR_S2, AR_ISR_S2_BB_WATCHDOG);
+    ath9k_model_poke(&model, AR_PHY_WATCHDOG_STATUS, 0x1300000a);
+    ath9k_model_raise(&model, AR_ISR_BCNMISC);
+    interrupt();
+    CHECK(!ah.recover.pending && ath9k_model_peek(&model, AR_IER) == AR_IER_ENABLE);
+    ath9k_model_poke(&model, AR_PHY_WATCHDOG_STATUS, 0x0400000a);
+    ath9k_model_raise(&model, AR_ISR_BCNMISC);
+    interrupt();
+    CHECK(ah.recover.pending && ah.recover.bb_status == 0x0400000a);
+    run_work();
+    CHECK(hw_resets == before + 1 && ah.stats.resets[ATH9K_RESET_BB_WATCHDOG] == 1);
+    check_restored(ccmp, slot, mac1);
+
+    /* Beacon misses and receive overruns are counted. */
+    ath9k_model_raise(&model, AR_ISR_BMISS | AR_ISR_RXORN);
+    interrupt();
+    CHECK(ah.stats.beacon_miss == 1 && ah.stats.rx_overrun == 1);
+}
+
+/** A message sent before a disable that arrives after it, in the reset
+ * or retune that followed, touches nothing; the cause waits for the
+ * enable, and a served message enables the interrupts again. */
+static void recover_late_message(void)
+{
+    unsigned before;
+
+    ath9k_mac_intr_disable(&ah);
+    ath9k_model_raise(&model, AR_ISR_BMISS);
+    ath9k_model_log_clear(&model);
+    model.log_reads = 1;
+    interrupt();
+    CHECK(model.log_count == 0 && ah.stats.beacon_miss == 1);
+    model.log_reads = 0;
+    ath9k_mac_intr_enable(&ah);
+    before = ath9k_model_count(&model, ATH9K_MODEL_WRITE, AR_PCIE_MSI);
+    interrupt();
+    CHECK(ah.stats.beacon_miss == 2);
+    /* A served message enables the interrupts again, the message engine's
+     * enable with them, as ath9k's tasklet does. */
+    CHECK(!msi_handler || ath9k_model_count(&model, ATH9K_MODEL_WRITE, AR_PCIE_MSI) > before);
+    CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_ENABLE);
+}
+
+/** Messages that find no cause are counted, and EMPTY_MAX of them in a
+ * row end the messages: the card is then served from the tick. */
+static void recover_msi_storms(void)
+{
+    unsigned i, spurious = ah.stats.spurious;
+
+    ath9k_tick(&ah);
+    for (i = 0; i < 999; i++)
+        interrupt();
+    CHECK(ah.stats.spurious == spurious + 999 && ah.mac.msi && !INTX_OFF());
+    ath9k_tick(&ah);
+    ath9k_model_raise(&model, AR_ISR_BMISS);
+    interrupt();
+    CHECK(ah.stats.beacon_miss == 3 && ah.mac.empty == 0);
+    for (i = 0; i < 1000; i++)
+        interrupt();
+    CHECK(!ah.mac.msi && msi_disables == 1 && INTX_OFF());
+    ah.mac.msi = 1;
+    pci_command &= (uint16_t)~PCI_CMD_INTERRUPT_DIS;
+    ath9k_mac_intr_enable(&ah);
+
+    /* BURST_MAX messages between two ticks, each with a cause, as a
+     * cause that came back at once would send, end them too. */
+    ath9k_tick(&ah);
+    for (i = 0; i < 999; i++) {
+        ath9k_model_raise(&model, AR_ISR_BMISS);
+        interrupt();
+    }
+    CHECK(ah.mac.msi);
+    interrupt();
+    CHECK(!ah.mac.msi && msi_disables == 2 && INTX_OFF());
+    CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_ENABLE);
+    ah.mac.msi = 1;
+    pci_command &= (uint16_t)~PCI_CMD_INTERRUPT_DIS;
+    ath9k_mac_intr_enable(&ah);
+    ath9k_tick(&ah);
+}
+
+/** A reset that fails leaves the chip off; the next check tries again;
+ * receive DMA that does not stop is waited for; the filter is kept while
+ * receive is stopped; and the checks stop with the radio. */
+static void recover_failed(const struct wlan_key *ccmp, int slot, uint32_t mac1)
+{
+    unsigned before;
+
+    hw_reset_rc = -EIO;
+    CHECK(ath9k_reset(&ah, ATH9K_RESET_CAL) == -EIO && ah.recover.failures == 1);
+    CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_DISABLE);
+    hw_reset_rc = 0;
+    before = cal_starts;
+    CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_CAL && ah.recover.failures == 0);
+    CHECK(cal_starts == before + 1);
+    check_restored(ccmp, slot, mac1);
+
+    /* Receive DMA that does not stop is waited for, and the reset goes on. */
+    model.stuck_rx_dma = 1;
+    CHECK(ath9k_reset(&ah, ATH9K_RESET_BB_HANG) == 0);
+    model.stuck_rx_dma = 0;
+    check_restored(ccmp, slot, mac1);
+
+    /* The filter is kept while receive is stopped (f0b2c30a2029): the chip
+     * holds none, and the next start writes the one asked for meanwhile. */
+    CHECK(ath9k_rx_stop(&ah) == 0);
+    CHECK(ath9k_model_peek(&model, AR_RX_FILTER) == 0);
+    ath9k_model_log_clear(&model);
+    ath9k_mac_set_filter(&ah, WLAN_FILTER_PROMISC);
+    CHECK(ath9k_model_count(&model, ATH9K_MODEL_WRITE, AR_RX_FILTER) == 0);
+    CHECK(ath9k_hw_reset(&ah, &ah.phy.channel) == 0 && ath9k_rx_start(&ah) == 0);
+    CHECK(ath9k_model_peek(&model, AR_RX_FILTER) & ATH9K_RX_FILTER_PROM);
+
+    /* The checks stop with the radio. */
+    ath9k_recover_stop(&ah);
+    CHECK(queued[0] == 0 && queued[1] == 0 && !ah.recover.running);
+    CHECK(!INTX_OFF());
+    ath9k_intr_detach(&ah);
+    CHECK(vector_freed == 1 && !ah.mac.msi && INTX_OFF());
+    CHECK(model.overruns == 0 && model.dma_faults == 0 && model.unmapped == 0);
+}
+
+/** Hangs and resets on a card with messages, associated and with a CCMP
+ * key: the beacon timers and the queued hang check, then the rows of the
+ * recover_ functions. */
 static void test_recover(void)
 {
     struct wlan_key ccmp = make_key(WLAN_CIPHER_SUITE_CCMP, 0, WLAN_KEY_PAIRWISE, ap);
     uint32_t mac1 = (((uint32_t)ap[4] | (uint32_t)ap[5] << 8) >> 1) | AR_KEYTABLE_VALID;
-    struct wlan_tx_info info;
-    uint8_t f[100];
-    unsigned len, i, before;
     int slot = -1;
 
     setup(1);
@@ -1072,179 +1368,13 @@ static void test_recover(void)
     now_ms += ATH9K_HANG_MS;
     CHECK(run_work() == 1 && queued[0] == &ah.recover.work[0].work && hw_resets == 1);
 
-    /* A queue whose frame gets no status across two checks is hung: the
-     * frame is reported failed, and the reset brings everything back,
-     * the key the warm reset cleared among it. */
-    len = beacon(f, 64);
-    info = tx_info(WLAN_AC_BE, 9);
-    CHECK(ath9k_tx(&ah, f, len, &info) == 0);
-    for (i = 0; i < 4; i++) {
-        CHECK(receive(0, f, len, 0x1b, 20, 0) == 0);
-        interrupt();
-    }
-    CHECK(ath9k_hang_check(&ah) == -1);
-    CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_TX_HANG);
-    CHECK(txs_count == 1 && txs[0].cookie == 9 && txs[0].flags == 0);
-    /* No reset of its own before ath9k_hw_reset, which resets cold while
-     * DMA runs, as ath_reset_internal leaves it. */
-    CHECK(hw_resets == 2 && cold_resets == 0 && ah.stats.resets[ATH9K_RESET_TX_HANG] == 1);
-    CHECK(ah.tx.q[WLAN_AC_BE].count == 0 && model.tx[1].count == 0);
-    check_restored(&ccmp, slot, mac1);
-    CHECK(ath9k_model_peek(&model, AR_BEACON_PERIOD) == 102400);
-    CHECK(ath9k_model_peek(&model, AR_PHY_WATCHDOG_CTL_2) & AR_PHY_WATCHDOG_IRQ_ENABLE);
-
-    /* The MAC's hang signature on queue 1, the AR9003's DMA debug words. */
-    ath9k_model_poke(&model, AR_DMADBG_4, 0x6u << 5);
-    ath9k_model_poke(&model, AR_DMADBG_6, 0x1);
-    CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_MAC_HANG);
-    CHECK(ah.stats.resets[ATH9K_RESET_MAC_HANG] == 1 && hw_resets == 3);
-    check_restored(&ccmp, slot, mac1);
-    ath9k_model_poke(&model, AR_DMADBG_4, 0x6u << 5);
-    ath9k_model_poke(&model, AR_DMADBG_6, 0x2); /* not complete: no hang */
-    CHECK(ath9k_hang_check(&ah) == -1);
-    ath9k_model_poke(&model, AR_DMADBG_4, 0);
-
-    /* Receive: a window with a frame a second passes; one without, while
-     * associated, is a stall. */
-    now_ms += 4000;
-    for (i = 0; i < 4; i++) {
-        CHECK(receive(0, f, len, 0x1b, 20, 0) == 0);
-        interrupt();
-    }
-    CHECK(ath9k_hang_check(&ah) == -1);
-    now_ms += 4000;
-    CHECK(receive(0, f, len, 0x1b, 20, 0) == 0);
-    interrupt();
-    CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_RX_STALL);
-    CHECK(cold_resets == 0);
-    check_restored(&ccmp, slot, mac1);
-    ah.mac.associated = 0;
-    ath9k_mac_set_bssid(&ah, (const uint8_t *)"\0\0\0\0\0\0", 0);
-    now_ms += 4000;
-    CHECK(ath9k_hang_check(&ah) == -1); /* not associated: not judged */
-    CHECK(ah.rx.hw_filter & ATH9K_RX_FILTER_BEACON);
-
-    /* A fatal PCIe error asks the worker for a reset and leaves the chip's
-     * interrupts off until it runs. */
-    before = hw_resets;
-    sync_cause = AR_INTR_SYNC_HOST1_FATAL;
-    interrupt();
-    CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_DISABLE && ah.recover.pending);
-    CHECK(sync_cause == 0);
-    ath9k_tick(&ah);
-    CHECK(run_work() >= 1 && hw_resets == before + 1 && ah.stats.resets[ATH9K_RESET_FATAL] == 1);
-    check_restored(&ccmp, slot, 0x0 | mac1);
-
-    /* The baseband watchdog: a known harmless state is cleared, a hang is
-     * reset. */
-    before = hw_resets;
-    ath9k_model_poke(&model, AR_ISR_S2, AR_ISR_S2_BB_WATCHDOG);
-    ath9k_model_poke(&model, AR_PHY_WATCHDOG_STATUS, 0x1300000a);
-    ath9k_model_raise(&model, AR_ISR_BCNMISC);
-    interrupt();
-    CHECK(!ah.recover.pending && ath9k_model_peek(&model, AR_IER) == AR_IER_ENABLE);
-    ath9k_model_poke(&model, AR_PHY_WATCHDOG_STATUS, 0x0400000a);
-    ath9k_model_raise(&model, AR_ISR_BCNMISC);
-    interrupt();
-    CHECK(ah.recover.pending && ah.recover.bb_status == 0x0400000a);
-    run_work();
-    CHECK(hw_resets == before + 1 && ah.stats.resets[ATH9K_RESET_BB_WATCHDOG] == 1);
-    check_restored(&ccmp, slot, mac1);
-
-    /* Beacon misses and receive overruns are counted. */
-    ath9k_model_raise(&model, AR_ISR_BMISS | AR_ISR_RXORN);
-    interrupt();
-    CHECK(ah.stats.beacon_miss == 1 && ah.stats.rx_overrun == 1);
-
-    /* A message sent before a disable that arrives after it, in the reset
-     * or retune that followed, touches nothing; the cause waits for the
-     * enable. */
-    ath9k_mac_intr_disable(&ah);
-    ath9k_model_raise(&model, AR_ISR_BMISS);
-    ath9k_model_log_clear(&model);
-    model.log_reads = 1;
-    interrupt();
-    CHECK(model.log_count == 0 && ah.stats.beacon_miss == 1);
-    model.log_reads = 0;
-    ath9k_mac_intr_enable(&ah);
-    before = ath9k_model_count(&model, ATH9K_MODEL_WRITE, AR_PCIE_MSI);
-    interrupt();
-    CHECK(ah.stats.beacon_miss == 2);
-    /* A served message enables the interrupts again, the message engine's
-     * enable with them, as ath9k's tasklet does. */
-    CHECK(!msi_handler || ath9k_model_count(&model, ATH9K_MODEL_WRITE, AR_PCIE_MSI) > before);
-    CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_ENABLE);
-
-    /* Messages that find no cause are counted, and EMPTY_MAX of them in a
-     * row end the messages: the card is then served from the tick. */
-    if (msi_handler) {
-        unsigned i, spurious = ah.stats.spurious;
-
-        ath9k_tick(&ah);
-        for (i = 0; i < 999; i++)
-            interrupt();
-        CHECK(ah.stats.spurious == spurious + 999 && ah.mac.msi && !INTX_OFF());
-        ath9k_tick(&ah);
-        ath9k_model_raise(&model, AR_ISR_BMISS);
-        interrupt();
-        CHECK(ah.stats.beacon_miss == 3 && ah.mac.empty == 0);
-        for (i = 0; i < 1000; i++)
-            interrupt();
-        CHECK(!ah.mac.msi && msi_disables == 1 && INTX_OFF());
-        ah.mac.msi = 1;
-        pci_command &= (uint16_t)~PCI_CMD_INTERRUPT_DIS;
-        ath9k_mac_intr_enable(&ah);
-
-        /* BURST_MAX messages between two ticks, each with a cause, as a
-         * cause that came back at once would send, end them too. */
-        ath9k_tick(&ah);
-        for (i = 0; i < 999; i++) {
-            ath9k_model_raise(&model, AR_ISR_BMISS);
-            interrupt();
-        }
-        CHECK(ah.mac.msi);
-        interrupt();
-        CHECK(!ah.mac.msi && msi_disables == 2 && INTX_OFF());
-        CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_ENABLE);
-        ah.mac.msi = 1;
-        pci_command &= (uint16_t)~PCI_CMD_INTERRUPT_DIS;
-        ath9k_mac_intr_enable(&ah);
-        ath9k_tick(&ah);
-    }
-
-    /* A reset that fails leaves the chip off; the next check tries again. */
-    hw_reset_rc = -EIO;
-    CHECK(ath9k_reset(&ah, ATH9K_RESET_CAL) == -EIO && ah.recover.failures == 1);
-    CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_DISABLE);
-    hw_reset_rc = 0;
-    before = cal_starts;
-    CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_CAL && ah.recover.failures == 0);
-    CHECK(cal_starts == before + 1);
-    check_restored(&ccmp, slot, mac1);
-
-    /* Receive DMA that does not stop is waited for, and the reset goes on. */
-    model.stuck_rx_dma = 1;
-    CHECK(ath9k_reset(&ah, ATH9K_RESET_BB_HANG) == 0);
-    model.stuck_rx_dma = 0;
-    check_restored(&ccmp, slot, mac1);
-
-    /* The filter is kept while receive is stopped (f0b2c30a2029): the chip
-     * holds none, and the next start writes the one asked for meanwhile. */
-    CHECK(ath9k_rx_stop(&ah) == 0);
-    CHECK(ath9k_model_peek(&model, AR_RX_FILTER) == 0);
-    ath9k_model_log_clear(&model);
-    ath9k_mac_set_filter(&ah, WLAN_FILTER_PROMISC);
-    CHECK(ath9k_model_count(&model, ATH9K_MODEL_WRITE, AR_RX_FILTER) == 0);
-    CHECK(ath9k_hw_reset(&ah, &ah.phy.channel) == 0 && ath9k_rx_start(&ah) == 0);
-    CHECK(ath9k_model_peek(&model, AR_RX_FILTER) & ATH9K_RX_FILTER_PROM);
-
-    /* The checks stop with the radio. */
-    ath9k_recover_stop(&ah);
-    CHECK(queued[0] == 0 && queued[1] == 0 && !ah.recover.running);
-    CHECK(!INTX_OFF());
-    ath9k_intr_detach(&ah);
-    CHECK(vector_freed == 1 && !ah.mac.msi && INTX_OFF());
-    CHECK(model.overruns == 0 && model.dma_faults == 0 && model.unmapped == 0);
+    recover_tx_hang(&ccmp, slot, mac1);
+    recover_rx_stall(&ccmp, slot, mac1);
+    recover_fatal(&ccmp, slot, mac1);
+    recover_late_message();
+    if (msi_handler)
+        recover_msi_storms();
+    recover_failed(&ccmp, slot, mac1);
 }
 
 /* ------------------------------------------------------------------ */
