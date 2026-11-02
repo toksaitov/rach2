@@ -12,6 +12,7 @@
  */
 
 #include "ns.h"
+#include "pidfd.h"
 #include "tgroup.h"
 #include "../fs/fd.h"
 #include "../fs/file.h"
@@ -1234,26 +1235,12 @@ static int32_t setns_user(struct userns *ns)
     return 0;
 }
 
-/**
- * The caller is given a copy of its set with the one kind changed, so the
- * processes that shared the caller's set keep it.
- */
-long sys_setns(isr_params_t *params)
+/** Whether the caller may join `c`, of a kind other than user: 0, -EPERM
+ * without privilege in its own user namespace and in the one that owns
+ * `c`, or -EINVAL for a PID namespace neither its own nor below it or a
+ * mount namespace while it shares its directories. */
+static int32_t setns_check(const process_t *self, const struct ns_common *c)
 {
-    process_t *self = current_proc;
-    struct ns_common *c = nsfs_ns(fd_get(self->fds, (int)SC_ARG(params, 0)));
-    struct nsset *set;
-    int32_t err = 0;
-
-    if (!c) {
-        return fd_get(self->fds, (int)SC_ARG(params, 0)) ? -EINVAL : -EBADF;
-    }
-    if (SC_ARG(params, 1) != 0 && SC_ARG(params, 1) != kind_flags[c->kind]) {
-        return -EINVAL;
-    }
-    if (c->kind == NS_USER) {
-        return setns_user((struct userns *)c);
-    }
     if (!ns_owner_privileged(self, c) || !ns_privileged(self, proc_userns(self))) {
         return -EPERM;
     }
@@ -1270,34 +1257,153 @@ long sys_setns(isr_params_t *params)
     if (c->kind == NS_MNT && self->fs->refs > 1) {
         return -EINVAL;
     }
+    return 0;
+}
+
+/**
+ * Give the caller a copy of its set in which each namespace of `ns` not
+ * NULL, of a kind other than user, takes the place of its kind, so that the
+ * processes that shared the caller's set keep it. The copy takes a
+ * reference to each. 0, or -ENOMEM with the caller's set as it was.
+ */
+static int32_t setns_commit(process_t *self, struct ns_common *const ns[NS_KINDS])
+{
+    struct nsset *set;
+    int32_t err = 0;
+    int k;
+
     set = nsset_copy(proc_nsset(self), 0, proc_userns(self), proc_pidns(self), &err);
     if (!set) {
         return err;
     }
-    switch (c->kind) {
-    case NS_PID:
-        ns_put(&set->pid_children->c);
-        set->pid_children = (struct pidns *)c;
-        break;
-    case NS_MNT:
-        ns_put(&set->mnt->c);
-        set->mnt = (struct mntns *)c;
-        break;
-    case NS_NET:
-        ns_put(&set->net->c);
-        set->net = (struct netns *)c;
-        break;
-    case NS_UTS:
-        ns_put(&set->uts->c);
-        set->uts = (struct utsns *)c;
-        break;
-    default:
-        ns_put(&set->ipc->c);
-        set->ipc = (struct ipcns *)c;
-        break;
+    for (k = 0; k < NS_KINDS; k++) {
+        struct ns_common *c = ns[k];
+
+        if (!c || k == NS_USER) {
+            continue;
+        }
+        switch (k) {
+        case NS_PID:
+            ns_put(&set->pid_children->c);
+            set->pid_children = (struct pidns *)c;
+            break;
+        case NS_MNT:
+            ns_put(&set->mnt->c);
+            set->mnt = (struct mntns *)c;
+            break;
+        case NS_NET:
+            ns_put(&set->net->c);
+            set->net = (struct netns *)c;
+            break;
+        case NS_UTS:
+            ns_put(&set->uts->c);
+            set->uts = (struct utsns *)c;
+            break;
+        default:
+            ns_put(&set->ipc->c);
+            set->ipc = (struct ipcns *)c;
+            break;
+        }
+        ns_get(c);
     }
-    ns_get(c);
     nsset_put(self->nsset);
     self->nsset = set;
     return 0;
+}
+
+/**
+ * setns of a pidfd naming `target`, NULL once reaped, with `flags` the
+ * CLONE_NEW flags of the kinds to join: the caller joins each of those
+ * namespaces of the target, or none of them, as on Linux. A user namespace
+ * is joined first, under setns_user's rules, and the other kinds are then
+ * judged with the capabilities it gives; when one is refused, the caller's
+ * user namespace and capabilities are put back.
+ */
+static long setns_pidfd(process_t *self, const process_t *target, unsigned long flags)
+{
+    struct ns_common *ns[NS_KINDS];
+    struct userns *old = self->userns;
+    uint32_t cap_lost[2], bset_lost[2], nocaps = self->nocaps, granted = self->ns_granted;
+    int32_t err = 0;
+    int k, joined = 0;
+
+    if (flags == 0 || (flags & ~(unsigned long)CLONE_NEW_ANY)) {
+        return -EINVAL;
+    }
+    if (!target || target->tg->live == 0) {
+        return -ESRCH;
+    }
+    for (k = 0; k < NS_KINDS; k++) {
+        ns[k] = (flags & kind_flags[k]) ? ns_of(target, k) : NULL;
+    }
+    cap_lost[0] = self->cap_lost[0];
+    cap_lost[1] = self->cap_lost[1];
+    bset_lost[0] = self->bset_lost[0];
+    bset_lost[1] = self->bset_lost[1];
+    if (old) {
+        ns_get(&old->c);
+    }
+    if (ns[NS_USER]) {
+        err = setns_user((struct userns *)ns[NS_USER]);
+        joined = err == 0;
+    }
+    for (k = 0; !err && k < NS_KINDS; k++) {
+        if (ns[k] && k != NS_USER) {
+            err = setns_check(self, ns[k]);
+        }
+    }
+    if (!err) {
+        err = setns_commit(self, ns);
+    }
+    if (err && joined) {
+        ns_put(&self->userns->c);
+        self->userns = old;
+        old = NULL;
+        self->ns_granted = granted;
+        self->bset_lost[0] = bset_lost[0];
+        self->bset_lost[1] = bset_lost[1];
+        self->cap_lost[0] = cap_lost[0];
+        self->cap_lost[1] = cap_lost[1];
+        self->nocaps = nocaps;
+    }
+    if (old) {
+        ns_put(&old->c);
+    }
+    for (k = 0; k < NS_KINDS; k++) {
+        ns_put(ns[k]);
+    }
+    return err;
+}
+
+/**
+ * The caller is given a copy of its set with the one kind changed, so the
+ * processes that shared the caller's set keep it.
+ */
+long sys_setns(isr_params_t *params)
+{
+    process_t *self = current_proc;
+    int fd = (int)SC_ARG(params, 0);
+    struct ns_common *c = nsfs_ns(fd_get(self->fds, fd));
+    struct ns_common *ns[NS_KINDS] = {NULL};
+    process_t *target;
+    int32_t err;
+
+    if (!c) {
+        if (pidfd_lookup(fd, &target, NULL) == 0) {
+            return setns_pidfd(self, target, SC_ARG(params, 1));
+        }
+        return fd_get(self->fds, fd) ? -EINVAL : -EBADF;
+    }
+    if (SC_ARG(params, 1) != 0 && SC_ARG(params, 1) != kind_flags[c->kind]) {
+        return -EINVAL;
+    }
+    if (c->kind == NS_USER) {
+        return setns_user((struct userns *)c);
+    }
+    err = setns_check(self, c);
+    if (err) {
+        return err;
+    }
+    ns[c->kind] = c;
+    return setns_commit(self, ns);
 }

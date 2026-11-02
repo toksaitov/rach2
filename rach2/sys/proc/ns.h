@@ -304,9 +304,13 @@ long sys_unshare(isr_params_t *params);
  * the caller's user namespace and in the one that owns the target. A PID
  * namespace must be the caller's or below it, and becomes the one its next
  * children are made in; a mount namespace needs directories of the
- * caller's own. 0, or -EBADF for no descriptor, -EINVAL for one that is not
- * a namespace's, a flag of another kind or a caller these rules exclude,
- * -EPERM without the privilege, or -ENOMEM.
+ * caller's own. A pidfd in place of the descriptor takes the CLONE_NEW
+ * flags of one or more kinds, and the caller joins each of those namespaces
+ * of its process or none: the user namespace first, the others then judged
+ * with the capabilities it gives. 0, or -EBADF for no descriptor, -EINVAL
+ * for one that is neither a namespace's nor a pidfd, a flag of another kind
+ * or a caller these rules exclude, -EPERM without the privilege, -ESRCH for
+ * a pidfd's process that has ended, or -ENOMEM.
  */
 long sys_setns(isr_params_t *params);
 

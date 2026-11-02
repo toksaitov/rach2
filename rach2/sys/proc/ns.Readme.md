@@ -13,6 +13,7 @@ A namespace is a view of one part of the system that the processes in it share. 
 
 * `unshare`, `clone` and `clone3` take the flags `CLONE_NEWUSER`, `CLONE_NEWPID`, `CLONE_NEWNS`, `CLONE_NEWNET`, `CLONE_NEWUTS` and `CLONE_NEWIPC` (`ns.h`).
 * `/proc/PID/ns` has a link for each kind, whose target is `KIND:[INUM]` (`ns_link_name`). An open of one gives a descriptor on the namespace (`nsfs_open`), which `setns` takes and on which `ioctl` answers `NS_GET_USERNS`, `NS_GET_PARENT`, `NS_GET_NSTYPE` and `NS_GET_OWNER_UID` (`nsfs_ioctl`).
+* `setns` also takes a pidfd with the `CLONE_NEW` flags of one or more kinds, as Linux has since 5.8 and util-linux's `nsenter -t` uses, and moves the caller into each of those namespaces of the process or into none (`setns_pidfd`): the user namespace first, the others then judged with the capabilities it gives, and the caller's user namespace and capabilities put back when one is refused.
 * `/proc/PID/uid_map`, `gid_map` and `setgroups` read and write a user namespace's maps (`ns_map_text`, `ns_map_write`).
 * Inside the kernel, `uid_seen`, `gid_seen`, `uid_named` and `gid_named` translate ids, and `pid_seen`, `pid_seen_by` and `pid_named` process ids, between the kernel's and the current process's view; `ns_privileged` and `ns_owner_privileged` answer privilege; `proc_userns` to `proc_ipcns` give a process's namespaces; and `ns_fork`, `ns_exec`, `ns_release`, `ns_reaper` and `ns_reaper_gone` are called by fork, exec, the release of a record and a process's end ([processes](Readme.md)).
 
