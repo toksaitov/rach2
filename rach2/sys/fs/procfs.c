@@ -2005,6 +2005,81 @@ static void mount_reader_root(char *prefix);
 static const char *path_seen(const char *path, const char *prefix);
 
 /**
+ * Append to `t` the /proc link target of the synthetic directory `e`: the
+ * path from the reader's root by which it was opened, when it was opened by
+ * a path, and otherwise the path its kind and owner give.
+ */
+static void synth_dir_target(struct procfs_text *t, const fd_entry_t *e)
+{
+    struct synth_dir *sd = (struct synth_dir *)e->priv;
+    char path[64];
+
+    if (e->ofd && e->ofd->dirpath) {
+        char prefix[VFS_COVERED_PATH_MAX];
+        const char *seen;
+
+        mount_reader_root(prefix);
+        seen = path_seen(e->ofd->dirpath, prefix);
+        ap_str(t, seen ? seen : e->ofd->dirpath);
+    } else if (sd) {
+        synth_dir_path(sd->kind, sd->pid, sd->tid, path, (int)sizeof(path));
+        ap_str(t, path);
+    }
+}
+
+/**
+ * Append to `t` the /proc link target of the descriptor `e` of a file of
+ * /proc or /sys, rebuilt from its origin: a global file's path, a file of
+ * /proc/net, a sysfs attribute, a sysctl, or a file of a process's or a
+ * task's directory, with the ids the reader sees.
+ */
+static void proc_file_target(struct procfs_text *t, const fd_entry_t *e)
+{
+    struct procfs_file *pf = (struct procfs_file *)e->priv;
+    const char *path;
+
+    if (!pf) {
+        return;
+    }
+    path = procfs_global_fd_path(pf->origin_file);
+    if (path) {
+        ap_str(t, path);
+        return;
+    }
+    if (synth_net_name(pf->origin_file)) {
+        ap_str(t, "/proc/net/");
+        ap_str(t, synth_net_name(pf->origin_file));
+        return;
+    }
+    if (pf->origin_file == SYNTH_SYS_UEVENT) {
+        char where[64];
+        int node = pf->origin_task >> 8;
+
+        synth_sys_path(node, pf->origin_pid, where, (int)sizeof(where));
+        ap_str(t, where);
+        ap_ch(t, '/');
+        ap_str(t, sysfs_attr(node, pf->origin_task & 255) ? sysfs_attr(node, pf->origin_task & 255)
+                                                          : "uevent");
+        return;
+    }
+    if (pf->origin_file == SYNTH_PROC_SYSCTL) {
+        char where[96];
+
+        synth_dir_path(VNODE_PROC_SYS_DIR, pf->origin_pid, 0, where, (int)sizeof(where));
+        ap_str(t, where);
+        return;
+    }
+    ap_str(t, "/proc/");
+    if (pf->origin_task != 0) {
+        ap_u32(t, pid_seen((uint32_t)pf->origin_task));
+        ap_str(t, "/task/");
+    }
+    ap_u32(t, pid_seen((uint32_t)pf->origin_pid));
+    ap_ch(t, '/');
+    ap_str(t, procfs_pid_file_name(pf->origin_file));
+}
+
+/**
  * The target of each kind of descriptor is the one Linux's /proc gives: the
  * path of a file or directory (`procfs_file_target`), /dev/console,
  * /dev/NAME for a device, /dev/pts/N, which musl's ttyname_r matches,
@@ -2082,65 +2157,12 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
     case FD_TYPE_DIR:
         procfs_file_target(t, e);
         break;
-    case FD_TYPE_SYNTH_DIR: {
-        struct synth_dir *sd = (struct synth_dir *)e->priv;
-        char path[64];
-        if (e->ofd && e->ofd->dirpath) {
-            char prefix[VFS_COVERED_PATH_MAX];
-            const char *seen;
-
-            mount_reader_root(prefix);
-            seen = path_seen(e->ofd->dirpath, prefix);
-            ap_str(t, seen ? seen : e->ofd->dirpath);
-        } else if (sd) {
-            synth_dir_path(sd->kind, sd->pid, sd->tid, path, (int)sizeof(path));
-            ap_str(t, path);
-        }
+    case FD_TYPE_SYNTH_DIR:
+        synth_dir_target(t, e);
         break;
-    }
-    case FD_TYPE_PROC: {
-        struct procfs_file *pf = (struct procfs_file *)e->priv;
-        if (pf) {
-            const char *path = procfs_global_fd_path(pf->origin_file);
-            if (path) {
-                ap_str(t, path);
-                break;
-            }
-            if (synth_net_name(pf->origin_file)) {
-                ap_str(t, "/proc/net/");
-                ap_str(t, synth_net_name(pf->origin_file));
-                break;
-            }
-            if (pf->origin_file == SYNTH_SYS_UEVENT) {
-                char where[64];
-                int node = pf->origin_task >> 8;
-
-                synth_sys_path(node, pf->origin_pid, where, (int)sizeof(where));
-                ap_str(t, where);
-                ap_ch(t, '/');
-                ap_str(t, sysfs_attr(node, pf->origin_task & 255)
-                              ? sysfs_attr(node, pf->origin_task & 255)
-                              : "uevent");
-                break;
-            }
-            if (pf->origin_file == SYNTH_PROC_SYSCTL) {
-                char where[96];
-
-                synth_dir_path(VNODE_PROC_SYS_DIR, pf->origin_pid, 0, where, (int)sizeof(where));
-                ap_str(t, where);
-                break;
-            }
-            ap_str(t, "/proc/");
-            if (pf->origin_task != 0) {
-                ap_u32(t, pid_seen((uint32_t)pf->origin_task));
-                ap_str(t, "/task/");
-            }
-            ap_u32(t, pid_seen((uint32_t)pf->origin_pid));
-            ap_ch(t, '/');
-            ap_str(t, procfs_pid_file_name(pf->origin_file));
-        }
+    case FD_TYPE_PROC:
+        proc_file_target(t, e);
         break;
-    }
     case FD_TYPE_SYNTH_PATH:
         ap_str(t, e->ofd && e->ofd->dirpath ? e->ofd->dirpath : "/");
         break;
