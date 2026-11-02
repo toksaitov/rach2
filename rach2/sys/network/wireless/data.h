@@ -35,9 +35,10 @@
 /* Set in every transmit cookie the data path makes, so that whoever routes
  * transmit status can tell its frames from the scan's and the MLME's. */
 #define WLAN_DATA_COOKIE        ((uint64_t)1 << 61)
-#define WLAN_DATA_COOKIE_DATA   ((uint64_t)1 << 60) /* a data frame, whose rate the station reports \
-                                                     */
-#define WLAN_PN_MAX             0xffffffffffffULL
+#define WLAN_DATA_COOKIE_DATA                                           \
+    ((uint64_t)1 << 60) /* a data frame, whose rate the station reports \
+                         */
+#define WLAN_PN_MAX 0xffffffffffffULL
 
 /* What wlan_data_rx_mgmt found: a frame that arrived protected and passed
  * its check, now plaintext, or one that arrived without protection. */
@@ -240,8 +241,9 @@ int wlan_data_mlme_tx(struct wlan *wlan, const uint8_t *frame, unsigned len, uns
  * Follow a committed station state; the registry's wlan_set_state calls it.
  * Reaching association, or moving it to another BSS, connects the data path
  * to `bss`, with QoS when the BSS sends WMM parameters and privacy when its
- * capability says so; leaving it disconnects, which removes the keys.
- * Worker only.
+ * capability says so, and without management protection, which the
+ * softMAC station sets in `mfp` once the commit returns; leaving it
+ * disconnects, which removes the keys. Worker only.
  */
 void wlan_data_state(struct wlan *wlan, const struct wlan_bss *bss, enum wlan_sta_state old_state,
                      enum wlan_sta_state new_state);

@@ -277,7 +277,27 @@ static int sta_rx_mgmt(struct wlan *wlan, const uint8_t *frame, unsigned len, un
     return wlan_mlme_rx(&sta_of(wlan)->mlme, frame, len, flags);
 }
 
-static const struct wlan_mlme_ops mlme_ops = {wlan_data_mlme_tx, wlan_set_state, sta_event};
+/**
+ * Commit the MLME's state through the registry, then give a connected data
+ * path the management protection the association negotiated, which the
+ * registry does not know: the data path protects its BlockAck action frames
+ * and refuses unprotected robust ones by it. Returns what wlan_set_state
+ * returns.
+ */
+static int sta_state(struct wlan *wlan, enum wlan_sta_state state, struct wlan_bss *bss)
+{
+    struct wlan_data *d;
+    int rc;
+
+    rc = wlan_set_state(wlan, state, bss);
+    d = wlan_data_of(wlan);
+    if (!rc && state >= WLAN_STA_ASSOCIATED && d && d->connected) {
+        d->mfp = sta_of(wlan)->mlme.mfp != 0;
+    }
+    return rc;
+}
+
+static const struct wlan_mlme_ops mlme_ops = {wlan_data_mlme_tx, sta_state, sta_event};
 
 /* A softMAC station joins through authentication and association, which
  * nl80211 drives for CONNECT, so it has no connect or disconnect of its

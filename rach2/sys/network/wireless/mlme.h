@@ -36,7 +36,8 @@ struct wlan_mlme_ops {
     int (*tx)(struct wlan *wlan, const uint8_t *frame, unsigned len, unsigned flags);
     /** Commit a station state with its BSS, NULL with WLAN_STA_NONE, once
      * the radio's sta_state accepts it: carrier follows association and the
-     * control port authorization. The registry passes wlan_set_state.
+     * control port authorization. The softMAC station passes a call that
+     * commits it with wlan_set_state and then gives the data path m->mfp.
      * Returns 0 or the radio's error, which keeps the old state; a move to
      * NONE always commits. */
     int (*state)(struct wlan *wlan, enum wlan_sta_state state, struct wlan_bss *bss);

@@ -908,6 +908,46 @@ static void row_rfkill(void)
     CHECK(!wlan->blocked && wlan->started && iface->up);
 }
 
+/** An association that requires management protection gives it to the data
+ * path, which protects its BlockAck action frames by it. */
+static void row_mfp(void)
+{
+    static const uint8_t auth_ok[6] = {0, 0, 2, 0, 0, 0};
+    uint8_t f[IEEE80211_MAX_FRAME_LEN];
+    unsigned len;
+
+    rq_begin(NL80211_CMD_AUTHENTICATE, 0);
+    rq_put(NL80211_ATTR_MAC, ap, 6);
+    rq_u32(NL80211_ATTR_WIPHY_FREQ, FREQ);
+    rq_put(NL80211_ATTR_SSID, ssid, sizeof(ssid) - 1);
+    rq_u32(NL80211_ATTR_AUTH_TYPE, NL80211_AUTHTYPE_OPEN_SYSTEM);
+    CHECK(rq_send() == 0);
+    CHECK(take(f) == 30);
+    len = mgmt(f, 0xb0, sta_mac);
+    k_memcpy(f + len, auth_ok, 6);
+    CHECK(hear(f, len + 6) > 0);
+    run_worker();
+    CHECK(wlan->state == WLAN_STA_AUTHENTICATED);
+
+    rq_begin(NL80211_CMD_ASSOCIATE, 0);
+    rq_put(NL80211_ATTR_MAC, ap, 6);
+    rq_u32(NL80211_ATTR_WIPHY_FREQ, FREQ);
+    rq_put(NL80211_ATTR_SSID, ssid, sizeof(ssid) - 1);
+    rq_u32(NL80211_ATTR_USE_MFP, NL80211_MFP_REQUIRED);
+    rq_put(NL80211_ATTR_CONTROL_PORT, 0, 0);
+    CHECK(rq_send() == 0);
+    CHECK(take(f) > 28 && f[0] == 0x00);
+    len = mgmt(f, 0x10, sta_mac);
+    set16(f + len, WLAN_CAPABILITY_ESS);
+    set16(f + len + 2, WLAN_STATUS_SUCCESS);
+    set16(f + len + 4, 0xc001); /* AID 1 */
+    len += 6;
+    CHECK(hear(f, len) > 0);
+    run_worker();
+    CHECK(wlan->state == WLAN_STA_ASSOCIATED);
+    CHECK(wlan_data_of(wlan) && wlan_data_of(wlan)->connected && wlan_data_of(wlan)->mfp);
+}
+
 /** The last close of /dev/wsim unregisters the radio and its interface. */
 static void row_close(void)
 {
@@ -924,6 +964,7 @@ int main(void)
         row_data();
         row_down();
         row_rfkill();
+        row_mfp();
         row_close();
     }
     if (failures) {
