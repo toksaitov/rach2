@@ -292,8 +292,9 @@ scratch() {
 # the agents at the fake server, and the settings each agent reads from its
 # home. Muse Code's turn off its reminders and the recap it asks the model
 # for when the screen has been left alone a while, which a session under
-# emulation is, and which the fake server's script does not play. OpenCode keeps its key in its database, where only the program writes,
-# so for AGENT opencode its own `auth import` stores the key there.
+# emulation is, and which the fake server's script does not play. OpenCode
+# keeps its key in its database, where only the program writes, so for AGENT
+# opencode its own `auth import` stores the key there.
 setup() {
     local ca=$DIR/ca.pem
     mkdir -p "$DIR/keys" "$HOME/.codex" "$HOME/.config/muse" "$HOME/.config/gh" \

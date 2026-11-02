@@ -224,9 +224,10 @@ static int note_of(double hz, const double *freqs, int n_notes)
  * window that is mostly sound is labelled with the note its frequency is, and
  * the labels must visit every note in the order named, with no note before
  * its predecessor. A window of less sound, which the edges of a note give,
- * and one that holds two notes belong to no note; a window of sound at no named frequency is a
- * wrong tone. Each message begins with `who`, which names the channel swept or is empty. Returns 0
- * when the notes are right, 1 when they are not, and 2 when memory runs out.
+ * and one that holds two notes belong to no note; a window of sound at no
+ * named frequency is a wrong tone. Each message begins with `who`, which
+ * names the channel swept or is empty. Returns 0 when the notes are right, 1
+ * when they are not, and 2 when memory runs out.
  */
 static int sweep(const short *s, long frames, double rate, const double *freqs, int n_notes,
                  const char *who)

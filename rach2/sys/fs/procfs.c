@@ -2013,12 +2013,13 @@ static const char *path_seen(const char *path, const char *prefix);
  * `/proc/net/tcp` and `fstat` report, so one socket is one thing to a
  * program reading all three. A synthetic directory has its path, one opened
  * through a bind of /proc or a proc mounted elsewhere the path from the
- * reader's root that reached it (`path_seen`), a descriptor of a file of /proc or /sys the path of
- * that file, rebuilt from its origin, and an O_PATH descriptor of a /dev or /proc node the path it
- * was opened by. The framebuffer and the mouse have no name, and
- * show "anon_inode:[device]". A descriptor that is closed, whose release
- * waits for another thread's call or is under way, has no link, as it has
- * no entry in the directory's listing and no lookup finds it.
+ * reader's root that reached it (`path_seen`), a descriptor of a file of
+ * /proc or /sys the path of that file, rebuilt from its origin, and an O_PATH
+ * descriptor of a /dev or /proc node the path it was opened by. The
+ * framebuffer and the mouse have no name, and show "anon_inode:[device]". A
+ * descriptor that is closed, whose release waits for another thread's call
+ * or is under way, has no link, as it has no entry in the directory's
+ * listing and no lookup finds it.
  */
 int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
 {
