@@ -3,17 +3,28 @@
 # wifiap: the access points of the Linux AP guest, on mac80211_hwsim's radios.
 #
 # Usage: wifiap boot
-#        wifiap start PROFILE
-#        wifiap stop
+#        wifiap start PROFILE [REKEY]
+#        wifiap stop [NETWORK]
+#        wifiap relay PORT
+#        wifiap forge-deauth STATION
 #        wifiap check
 #        wifiap trace
 #
 # `boot` is what init runs: it sets up the cards, makes four radios, starts
 # the profile the kernel's command line names, checks that its beacons are
 # on the air, starts the relay, and then does what wifiap.run says. `start`
-# stops the access points and starts them again with PROFILE; `stop` stops
-# them. `check` scans passively from the guest's own station radio and
-# prints `wifiap: beacon: BSSID SSID` for each network it hears, then
+# stops the access points and starts them again with PROFILE, and with
+# REKEY, network A's group key is made anew every REKEY seconds; `stop`
+# stops them, or with NETWORK, `a` or `b`, that network's alone. `relay`
+# starts the relay to the Rach2 machine's relay at the host's UDP PORT, as
+# wifiap.peer does at boot, and prints `wifiap: relay: ready` once hwsim has
+# taken its registration. `forge-deauth` sends STATION a deauthentication
+# from the access point of network A that it is associated with, made here
+# and sent straight to the relay's peer, so that it reaches the station
+# unprotected whatever protection the station agreed with that access
+# point; it prints `wifiap: forge-deauth: sent BSSID STATION`. `check`
+# scans passively from the guest's own station radio and prints
+# `wifiap: beacon: BSSID SSID` for each network it hears, then
 # `wifiap: check: ok` when all three access points were heard, or
 # `wifiap: check: failed: DETAIL`. `trace` records, while Linux's
 # wpa_supplicant joins under WPA2, SAE and PEAP, every netlink message
@@ -161,7 +172,13 @@ hostapd_up()
 
 stop()
 {
-    for file in "$RUN"/wlan*.pid; do
+    case ${1:-} in
+        '') files="$RUN/wlan*.pid" ;;
+        a) files="$RUN/wlan0.pid $RUN/wlan1.pid" ;;
+        b) files="$RUN/wlan2.pid" ;;
+        *) say "stop: no such network: $1"; return 2 ;;
+    esac
+    for file in $files; do
         [ -f "$file" ] || continue
         pid=$(cat "$file")
         kill "$pid" 2>/dev/null
@@ -179,10 +196,15 @@ start()
         *" $1 "*) ;;
         *) say "start: no such profile: $1"; return 2 ;;
     esac
+    case ${2:-} in
+        '' | *[!0-9]*) [ -z "${2:-}" ] || { say "start: not a number of seconds: $2"; return 2; } ;;
+    esac
     stop
     mkdir -p "$RUN"
-    { apconf wlan0 1 "$SSID_A" br0; security "$1"; } > "$RUN/wlan0.conf"
-    { apconf wlan1 6 "$SSID_A" br0; security "$1"; } > "$RUN/wlan1.conf"
+    rekey=
+    [ -z "${2:-}" ] || rekey="wpa_group_rekey=$2"
+    { apconf wlan0 1 "$SSID_A" br0; security "$1"; echo "$rekey"; } > "$RUN/wlan0.conf"
+    { apconf wlan1 6 "$SSID_A" br0; security "$1"; echo "$rekey"; } > "$RUN/wlan1.conf"
     { apconf wlan2 11 "$SSID_B" ""; security wpa2 | sed "s/=$PSK_A\$/=$PSK_B/"; } > "$RUN/wlan2.conf"
     hostapd_up wlan0 && hostapd_up wlan1 && hostapd_up wlan2 || return 1
     # Setting the card's mode took it down, which dropped any IPv6 address.
@@ -336,8 +358,12 @@ trace()
 
 relay()
 {
-    port=$(arg peer "")
+    port=$1
     [ -n "$port" ] || return 0
+    if [ -f "$RUN/hwsimrelay.pid" ] && kill -0 "$(cat "$RUN/hwsimrelay.pid")" 2> /dev/null; then
+        say "relay: one runs already, to port $(cat "$RUN/peer")"
+        return 1
+    fi
     if [ ! -x /usr/sbin/hwsimrelay ]; then
         say "boot: wifiap.peer=$port, but this guest has no hwsimrelay"
         return 1
@@ -360,7 +386,51 @@ relay()
             return 1
             ;;
     esac
-    say "boot: relay to port $port"
+    echo "$port" > "$RUN/peer"
+    say "relay: ready: to port $port"
+}
+
+# octal HEX...: the bytes HEX, each two hexadecimal digits, as printf's
+# octal escapes.
+octal()
+{
+    for byte in "$@"; do
+        printf '\\%03o' "0x$byte"
+    done
+}
+
+# forge_deauth STATION: send STATION an unprotected deauthentication, reason
+# 2, from the access point of network A that it is associated with, as one
+# datagram of the relay's format (the wireless Readme) to the relay's peer,
+# from a transmitting radio with cookie 0x77. The relay itself would carry
+# the frame through hwsim, whose mac80211 protects it under 802.11w.
+forge_deauth()
+{
+    sta=$1
+    peer=$(cat "$RUN/peer" 2> /dev/null)
+    if [ -z "$peer" ]; then
+        say "forge-deauth: failed: no relay runs"
+        return 1
+    fi
+    bssid=
+    for pair in wlan0:02:00:00:00:00:00:2412 wlan1:02:00:00:00:01:00:2437; do
+        iface=${pair%%:*}
+        rest=${pair#*:}
+        if hostapd_cli -p /run/hostapd -i "$iface" sta "$sta" 2> /dev/null | grep -qi "^$sta"; then
+            bssid=${rest%:*}
+            freq=${rest##*:}
+        fi
+    done
+    if [ -z "$bssid" ]; then
+        say "forge-deauth: failed: $sta is with no access point of network A"
+        return 1
+    fi
+    frame="c0 00 00 00 $(echo "$sta $bssid $bssid" | tr ':' ' ') 10 00 02 00"
+    header="57 53 49 4d 01 01 00 28 00 00 00 01 $(printf '%02x %02x' $((freq / 256)) $((freq % 256)))"
+    header="$header 00 3c 00 00 00 1a 00 00 00 00 00 00 00 77 00 00 00 00 00 00 00 00 00 00 00 00"
+    # shellcheck disable=SC2046,SC2086 # one word for each byte
+    printf "$(octal $header $frame)" | nc -u -w 1 10.0.3.2 "$peer"
+    say "forge-deauth: sent $bssid $sta"
 }
 
 boot()
@@ -374,7 +444,7 @@ boot()
     case $run in
         check) ;;
         trace) [ $status -ne 0 ] || trace || status=1 ;;
-        *) [ $status -ne 0 ] || relay || status=1 ;;
+        *) [ $status -ne 0 ] || relay "$(arg peer "")" || status=1 ;;
     esac
     if [ $status -eq 0 ]; then
         say "ready: $(cat "$RUN/profile") $run, at $(cut -d ' ' -f 1 /proc/uptime) s"
@@ -391,12 +461,15 @@ boot()
 
 case ${1:-} in
     boot) boot ;;
-    start) start "${2:-}" ;;
-    stop) stop ;;
+    start) start "${2:-}" "${3:-}" ;;
+    stop) stop "${2:-}" ;;
+    relay) relay "${2:-}" ;;
+    forge-deauth) forge_deauth "${2:-}" ;;
     check) check ;;
     trace) trace ;;
     *)
-        echo "usage: wifiap boot | start PROFILE | stop | check | trace" >&2
+        echo "usage: wifiap boot | start PROFILE [REKEY] | stop [a|b] | relay PORT |" \
+            "forge-deauth STATION | check | trace" >&2
         exit 2
         ;;
 esac
