@@ -788,9 +788,11 @@ static bool test_usermode(void)
 /**
  * A kernel process for a test of the shell's, the shell's child, that begins
  * at `entry` on a kernel stack of its own, in the address space `dir`, or,
- * when `dir` is NULL, in whatever directory is loaded when it runs. NULL
- * when no record or no stack can be had. `test_process_free` gives back
- * both.
+ * when `dir` is NULL, in whatever directory is loaded when it runs. It has
+ * the shell's affinity before it is made ready, since `sched_make_ready`
+ * queues it on a processor of that affinity and only that processor takes
+ * it from its queue. NULL when no record or no stack can be had.
+ * `test_process_free` gives back both.
  */
 static process_t *test_process(page_dir_t *dir, void (*entry)(void))
 {
@@ -809,6 +811,7 @@ static process_t *test_process(page_dir_t *dir, void (*entry)(void))
     p->space_root = dir ? get_page_dir_phys(dir) : 0;
     p->page_dir = dir;
     p->parent_pid = current_proc->pid;
+    p->affinity = current_proc->affinity;
     setup_process_stack(p, entry);
     sched_make_ready(p);
     return p;
@@ -982,7 +985,6 @@ static void test_preempt(void)
         console_puts("Failed to allocate process A");
         return;
     }
-    proc_a->affinity = here;
 
     proc_b = test_process(NULL, preempt_proc_b);
     if (!proc_b) {
@@ -991,7 +993,6 @@ static void test_preempt(void)
         console_puts("Failed to allocate process B");
         return;
     }
-    proc_b->affinity = here;
 
     sched_enable();
 
