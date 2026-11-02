@@ -27,6 +27,11 @@
  * waited 100 ms past a hole, mac80211's HT_RX_REORDER_BUF_TIMEOUT. */
 #define WLAN_BA_MAX_WINDOW      64
 #define WLAN_BA_TIMEOUT         100
+/* A transmit session's ADDBA request waits a second for its response, and
+ * a request declined or unanswered waits 15 seconds for the next, as
+ * mac80211's ADDBA_RESP_INTERVAL and HT_AGG_RETRIES_PERIOD have it. */
+#define WLAN_BA_TX_RESPONSE     1000
+#define WLAN_BA_TX_RETRY        15000
 /* Set in every transmit cookie the data path makes, so that whoever routes
  * transmit status can tell its frames from the scan's and the MLME's. */
 #define WLAN_DATA_COOKIE        ((uint64_t)1 << 61)
@@ -84,6 +89,17 @@ struct wlan_ba_rx {
     uint16_t head;   /* the next SN to hand on, 12 bits */
     uint16_t window; /* 1 to WLAN_BA_MAX_WINDOW */
     unsigned stored; /* frames held */
+};
+
+/* One TID's BlockAck transmit session, which the station originates. */
+enum wlan_ba_tx_state { WLAN_BA_TX_IDLE, WLAN_BA_TX_REQUESTED, WLAN_BA_TX_ACTIVE };
+struct wlan_ba_tx {
+    uint8_t state;     /* enum wlan_ba_tx_state */
+    uint8_t token;     /* the dialog token of the request */
+    uint16_t ssn;      /* the request's starting sequence number */
+    uint16_t window;   /* the recipient's buffer, while active */
+    uint64_t since;    /* tick of the request */
+    uint64_t retry_at; /* no request before this tick */
 };
 
 /* A work record of the data path. The worker refuses to queue a record
@@ -158,6 +174,9 @@ struct wlan_data {
     struct wlan_defrag defrag[WLAN_DATA_DEFRAG];
     struct wlan_ba_rx ba[8];          /* by TID; 8 to 15 never start a session */
     struct wlan_data_work ba_work[2]; /* the reordering timeout */
+    struct wlan_ba_tx ba_tx[8];       /* the transmit sessions, by TID */
+    uint8_t ba_tx_token;              /* the last dialog token used */
+    uint8_t ba_tx_off;                /* the radio refused one; none until reconnection */
 
     struct wlan_data_txq txq[WLAN_DATA_TX_QUEUE];
     unsigned txq_head, txq_count; /* under txq_lock */
@@ -385,12 +404,15 @@ struct wlan_data_key *wlan_data_group_key(struct wlan_data *d, unsigned index);
 /* agg_rx.c */
 
 /**
- * Answer an ADDBA request or take a DELBA from the AP; `frame` is a
- * Block Ack action frame of `len` bytes and `protected` says whether it
- * came protected, which `mfp` requires. An accepted request starts the
- * TID's reordering buffer, tells the radio by ampdu_action, and is answered
- * with success; a refused one is answered with status 37. Worker only.
- * Returns 0, -EINVAL, -ENOTCONN, -EACCES or -EOPNOTSUPP for another action.
+ * Answer an ADDBA request, take the response to the station's own, or
+ * take a DELBA from the AP; `frame` is a Block Ack action frame of `len`
+ * bytes and `protected` says whether it came protected, which `mfp`
+ * requires. An accepted request starts the TID's reordering buffer, tells
+ * the radio by ampdu_action, and is answered with success; a refused one is
+ * answered with status 37. A response of success to the pending request
+ * starts the transmit session in the radio; a DELBA ends the session of
+ * whichever side the AP is. Worker only. Returns 0, -EINVAL, -ENOTCONN,
+ * -EACCES or -EOPNOTSUPP for another action.
  */
 int wlan_data_rx_action(struct wlan_data *d, const uint8_t *frame, unsigned len, int protected);
 
@@ -415,6 +437,23 @@ void wlan_ba_rx_stop(struct wlan_data *d, unsigned tid, int flush);
 
 /** The reordering timeout's work: hand on what waited too long. */
 void wlan_ba_rx_timeout(struct wlan_work *work);
+
+/**
+ * Ask the AP for a transmit session of TID `tid` after a QoS data frame of
+ * it was sent, unless one is asked for or running, or cannot be: the radio
+ * has no ampdu_action or HT, the AP no HT Capabilities, the TID is of the
+ * voice category, the frame was EAPOL (`eapol`), a protected network has no
+ * pairwise key yet, the radio refused a session on this connection, or the
+ * last request was declined or went unanswered less than
+ * WLAN_BA_TX_RETRY ms ago. The request's window starts at the TID's next
+ * sequence number. Worker only.
+ */
+void wlan_ba_tx_check(struct wlan_data *d, unsigned tid, int eapol);
+
+/** End the TID's transmit session, telling the radio, and wait
+ * WLAN_BA_TX_RETRY before asking again; `delba` sends the AP a DELBA as
+ * the originator. Worker only. */
+void wlan_ba_tx_stop(struct wlan_data *d, unsigned tid, int delba);
 
 /** The second half of receive, for each MPDU the reordering buffer lets go:
  * duplicates, decryption, reassembly and delivery. Defined in rx.c. */

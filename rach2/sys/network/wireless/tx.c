@@ -185,8 +185,12 @@ void wlan_data_disconnect(struct wlan_data *d)
 
     if (!d)
         return;
-    for (i = 0; i < 8; ++i)
+    for (i = 0; i < 8; ++i) {
         wlan_ba_rx_stop(d, i, 0);
+        wlan_ba_tx_stop(d, i, 0);
+    }
+    k_memset(d->ba_tx, 0, sizeof(d->ba_tx));
+    d->ba_tx_off = 0;
     for (i = 0; i < WLAN_DATA_DEFRAG; ++i)
         d->defrag[i].len = 0;
     flags = spin_lock_irqsave(&d->txq_lock);
@@ -356,19 +360,24 @@ int wlan_data_tx(struct wlan_data *d, uint8_t *frame, unsigned len, unsigned cap
         info.ac = WLAN_AC_BE;
         tid = 0;
     }
-    if (k) {
-        rc = protect_data(k, frame, &len, cap, hdrlen, tid, &info);
-        if (rc)
-            return rc;
+    rc = k ? protect_data(k, frame, &len, cap, hdrlen, tid, &info) : 0;
+    if (rc == 0) {
+        wlan_rate_select(d, frame, len, eapol, info.rates);
+        info.cookie = next_cookie(d);
+        info.frequency = d->frequency;
+        rc = d->radio->ops->tx(d->radio, frame, len, &info);
     }
-    wlan_rate_select(d, frame, len, eapol, info.rates);
-    info.cookie = next_cookie(d);
-    info.frequency = d->frequency;
-    rc = d->radio->ops->tx(d->radio, frame, len, &info);
-    if (rc)
+    if (rc) {
+        /* Nothing went out, so the number goes to the next frame, leaving
+         * no hole in a BlockAck window. */
+        d->tx_seq[d->qos ? tid : WLAN_NON_QOS_TID] =
+            (uint16_t)(((unsigned)frame[22] | (unsigned)frame[23] << 8) >> 4);
         return rc;
+    }
     d->counters->tx_packets++;
     d->counters->tx_bytes += len;
+    if (d->qos)
+        wlan_ba_tx_check(d, tid, eapol);
     return 0;
 }
 

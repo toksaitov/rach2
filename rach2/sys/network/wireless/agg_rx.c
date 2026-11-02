@@ -1,6 +1,8 @@
-/* BlockAck receive: ADDBA answered and DELBA taken, and each session's
+/* BlockAck: on receive, ADDBA answered and DELBA taken, and each session's
  * reordering buffer with its timeout, as 802.11-2020 10.24.7 describes and
- * Linux's net/mac80211/agg-rx.c and ieee80211_sta_manage_reorder_buf do. */
+ * Linux's net/mac80211/agg-rx.c and ieee80211_sta_manage_reorder_buf do; on
+ * transmit, the station's own ADDBA request and its response, as
+ * net/mac80211/agg-tx.c sends and takes them for a radio that aggregates. */
 #include "data.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
@@ -211,20 +213,30 @@ void wlan_ba_rx_timeout(struct wlan_work *work)
     arm_timeout(d);
 }
 
-/** Send the answer to an ADDBA request (802.11-2020 9.6.4.3), protected
- * when the request came protected, as it does under 802.11w. */
-static void addba_resp(struct wlan_data *d, unsigned token, unsigned status, unsigned tid,
-                       unsigned window, unsigned timeout, int protect)
+/** Send the AP a Block Ack action frame whose body is the `n` bytes of
+ * `body`, at most 9, protected when `protect` is set. Returns
+ * wlan_data_tx_mgmt's answer. */
+static int send_back(struct wlan_data *d, const uint8_t *body, unsigned n, int protect)
 {
     uint8_t frame[IEEE80211_HDRLEN + 9 + WLAN_CCMP_HDR_LEN + WLAN_CCMP_MIC_LEN];
-    unsigned params = 0x0002 | tid << 2 | window << 6; /* immediate BlockAck */
-    uint8_t *p = frame + IEEE80211_HDRLEN;
 
     k_memset(frame, 0, sizeof(frame));
     frame[0] = (uint8_t)(IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_ACTION);
     k_memcpy(frame + 4, d->bssid, 6);
     k_memcpy(frame + 10, d->radio->mac, 6);
     k_memcpy(frame + 16, d->bssid, 6);
+    k_memcpy(frame + IEEE80211_HDRLEN, body, n);
+    return wlan_data_tx_mgmt(d, frame, IEEE80211_HDRLEN + n, sizeof(frame), 0, protect, 0);
+}
+
+/** Send the answer to an ADDBA request (802.11-2020 9.6.4.3), protected
+ * when the request came protected, as it does under 802.11w. */
+static void addba_resp(struct wlan_data *d, unsigned token, unsigned status, unsigned tid,
+                       unsigned window, unsigned timeout, int protect)
+{
+    unsigned params = 0x0002 | tid << 2 | window << 6; /* immediate BlockAck */
+    uint8_t p[9];
+
     p[0] = WLAN_CATEGORY_BACK;
     p[1] = WLAN_ACTION_ADDBA_RESP;
     p[2] = (uint8_t)token;
@@ -234,7 +246,128 @@ static void addba_resp(struct wlan_data *d, unsigned token, unsigned status, uns
     p[6] = (uint8_t)(params >> 8);
     p[7] = (uint8_t)timeout;
     p[8] = (uint8_t)(timeout >> 8);
-    (void)wlan_data_tx_mgmt(d, frame, IEEE80211_HDRLEN + 9, sizeof(frame), 0, protect, 0);
+    (void)send_back(d, p, sizeof(p), protect);
+}
+
+/** Whether the BSS's elements hold HT Capabilities, which an AP that takes
+ * A-MPDUs sends. */
+static int bss_ht(const struct wlan_bss *bss)
+{
+    unsigned at = 0;
+
+    while (bss && at + 2 <= bss->ies_len && at + 2 + bss->ies[at + 1] <= bss->ies_len) {
+        if (bss->ies[at] == WLAN_EID_HT_CAPABILITY)
+            return 1;
+        at += 2 + bss->ies[at + 1];
+    }
+    return 0;
+}
+
+void wlan_ba_tx_check(struct wlan_data *d, unsigned tid, int eapol)
+{
+    struct wlan_radio *radio = d->radio;
+    struct wlan_ba_tx *b;
+    uint64_t now;
+    unsigned params;
+    uint8_t p[9];
+
+    if (tid >= 8 || eapol || !d->connected || !d->qos || d->ba_tx_off ||
+        !radio->ops->ampdu_action || !radio->band.ht_supported || wlan_data_ac(tid) == WLAN_AC_VO)
+        return;
+    b = &d->ba_tx[tid];
+    now = tick_count();
+    if (b->state == WLAN_BA_TX_REQUESTED && now - b->since >= WLAN_BA_TX_RESPONSE) {
+        b->state = WLAN_BA_TX_IDLE;
+        b->retry_at = now + WLAN_BA_TX_RETRY;
+    }
+    if (b->state != WLAN_BA_TX_IDLE || now < b->retry_at || !bss_ht(d->bss) ||
+        (d->privacy && !wlan_data_pairwise_key(d, d->tx_pairwise)))
+        return;
+    /* 802.11-2020 9.6.4.2: immediate BlockAck of the largest window, no
+     * timeout, starting at the TID's next frame. */
+    params = 0x0002 | tid << 2 | WLAN_BA_MAX_WINDOW << 6;
+    b->token = ++d->ba_tx_token;
+    b->ssn = d->tx_seq[tid];
+    p[0] = WLAN_CATEGORY_BACK;
+    p[1] = WLAN_ACTION_ADDBA_REQ;
+    p[2] = b->token;
+    p[3] = (uint8_t)params;
+    p[4] = (uint8_t)(params >> 8);
+    p[5] = 0;
+    p[6] = 0;
+    p[7] = (uint8_t)(b->ssn << 4);
+    p[8] = (uint8_t)(b->ssn >> 4);
+    if (send_back(d, p, sizeof(p), d->mfp) != 0) {
+        b->retry_at = now + WLAN_BA_TX_RETRY;
+        return;
+    }
+    b->state = WLAN_BA_TX_REQUESTED;
+    b->since = now;
+}
+
+void wlan_ba_tx_stop(struct wlan_data *d, unsigned tid, int delba)
+{
+    struct wlan_radio *radio = d->radio;
+    struct wlan_ba_tx *b;
+    unsigned params;
+    uint8_t p[6];
+
+    if (tid >= 8)
+        return;
+    b = &d->ba_tx[tid];
+    if (b->state == WLAN_BA_TX_ACTIVE && radio->ops->ampdu_action)
+        (void)radio->ops->ampdu_action(radio, WLAN_AMPDU_TX_STOP, d->bssid, tid, 0, 0);
+    if (delba) {
+        /* 802.11-2020 9.6.4.4: the originator ends the session, reason 37,
+         * the peer does not want to use the mechanism. */
+        params = 0x0800 | tid << 12;
+        p[0] = WLAN_CATEGORY_BACK;
+        p[1] = WLAN_ACTION_DELBA;
+        p[2] = (uint8_t)params;
+        p[3] = (uint8_t)(params >> 8);
+        p[4] = 37;
+        p[5] = 0;
+        (void)send_back(d, p, sizeof(p), d->mfp);
+    }
+    b->state = WLAN_BA_TX_IDLE;
+    b->retry_at = tick_count() + WLAN_BA_TX_RETRY;
+}
+
+/**
+ * Take the AP's answer to the pending ADDBA request of its TID and token:
+ * on success with immediate BlockAck and a window, start the session in
+ * the radio from the request's starting number; on a refusal, ask again
+ * after WLAN_BA_TX_RETRY. A radio that cannot start it is sent a DELBA,
+ * and one that does not aggregate at all is asked no more on this
+ * connection.
+ */
+static void addba_resp_rx(struct wlan_data *d, unsigned token, unsigned status, unsigned params)
+{
+    struct wlan_radio *radio = d->radio;
+    unsigned tid = params >> 2 & 0xf, window = params >> 6;
+    struct wlan_ba_tx *b;
+    int rc;
+
+    if (tid >= 8 || d->ba_tx[tid].state != WLAN_BA_TX_REQUESTED || d->ba_tx[tid].token != token)
+        return;
+    b = &d->ba_tx[tid];
+    if (status != WLAN_STATUS_SUCCESS || !(params & 0x0002) || window == 0 ||
+        !radio->ops->ampdu_action) {
+        b->state = WLAN_BA_TX_IDLE;
+        b->retry_at = tick_count() + WLAN_BA_TX_RETRY;
+        return;
+    }
+    if (window > WLAN_BA_MAX_WINDOW)
+        window = WLAN_BA_MAX_WINDOW;
+    rc = radio->ops->ampdu_action(radio, WLAN_AMPDU_TX_START, d->bssid, tid, b->ssn, window);
+    if (rc != 0) {
+        if (rc == -EOPNOTSUPP)
+            d->ba_tx_off = 1;
+        wlan_ba_tx_stop(d, tid, 1);
+        return;
+    }
+    b->state = WLAN_BA_TX_ACTIVE;
+    b->window = (uint16_t)window;
 }
 
 int wlan_data_rx_action(struct wlan_data *d, const uint8_t *frame, unsigned len, int protected)
@@ -282,9 +415,15 @@ int wlan_data_rx_action(struct wlan_data *d, const uint8_t *frame, unsigned len,
         params = (unsigned)p[2] | (unsigned)p[3] << 8;
         if (params & 0x0800) /* the AP, the originator, ends our receive */
             wlan_ba_rx_stop(d, params >> 12, 1);
+        else /* the AP, the recipient, ends our transmit */
+            wlan_ba_tx_stop(d, params >> 12, 0);
         return 0;
     case WLAN_ACTION_ADDBA_RESP:
-        return 0; /* the station asks for no transmit sessions */
+        if (len < hdrlen + 9)
+            return -EINVAL;
+        addba_resp_rx(d, p[2], (unsigned)p[3] | (unsigned)p[4] << 8,
+                      (unsigned)p[5] | (unsigned)p[6] << 8);
+        return 0;
     default:
         return -EOPNOTSUPP;
     }
