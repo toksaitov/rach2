@@ -23,6 +23,8 @@ The value of
 .Fa nfds
 must not be negative; one past the end of the caller's descriptor table
 is taken as that end, since no descriptor past it is open.
+The table counts as at least as wide as a long's bits, 32 on i686 and 64
+on x86-64, as Linux's always is.
 A null set pointer selects no descriptors in that direction.
 Each nonnull pointer must address the longs that hold the first
 .Fa nfds
@@ -201,8 +203,8 @@ alone blocked after the call.
 .It Bq Er EBADF
 A selected descriptor below
 .Fa nfds
-is not open, including one beyond the allocated descriptor table, or
-was opened with
+is not open, including one beyond the allocated descriptor table but
+within a long's bits, or was opened with
 .Dv O_PATH .
 .It Bq Er EFAULT
 A complete descriptor set cannot be read or written, the timeout cannot

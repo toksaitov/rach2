@@ -555,10 +555,13 @@ long sys_ppoll(struct isr_params *params)
  * Returns as `sys__newselect` does.
  *
  * As on Linux, `nfds` is cut to the size of the caller's table, past which
- * no descriptor is open, and each set is read and written for the longs
- * that hold its first `nfds` bits, no more, so that a caller may pass sets
- * wider than FD_SETSIZE for a descriptor past 1023. A long's bits are the
- * bits of the 32-bit words the translation reads, on a little-endian
+ * no descriptor is open, and the table counts as at least a long's bits
+ * wide, as Linux's always is, so that a bit in the first long for a
+ * descriptor that is not open is -EBADF and not a bit ignored, after which
+ * a wait with no timeout would never end. Each set is read and written for
+ * the longs that hold its first `nfds` bits, no more, so that a caller may
+ * pass sets wider than FD_SETSIZE for a descriptor past 1023. A long's bits
+ * are the bits of the 32-bit words the translation reads, on a little-endian
  * machine. The sets come from the heap, sized by the call.
  *
  * A set bit whose descriptor is not open fails the call with -EBADF: the
@@ -572,7 +575,7 @@ static int32_t select_common(int nfds, uintptr_t ur, uintptr_t uw, uintptr_t ue,
     struct kernel_pollfd *fds;
     uint32_t *sets, *rset, *wset, *eset, *orset, *owset, *oeset;
     uint32_t setbytes, words;
-    int npoll, ready, i;
+    int npoll, ready, i, cut;
 
     if (!current_proc) {
         return -ESRCH;
@@ -580,8 +583,12 @@ static int32_t select_common(int nfds, uintptr_t ur, uintptr_t uw, uintptr_t ue,
     if (nfds < 0) {
         return -EINVAL;
     }
-    if (nfds > fd_table_cap(current_proc->fds)) {
-        nfds = fd_table_cap(current_proc->fds);
+    cut = fd_table_cap(current_proc->fds);
+    if (cut < (int)long_bits) {
+        cut = (int)long_bits;
+    }
+    if (nfds > cut) {
+        nfds = cut;
     }
     setbytes = ((uint32_t)nfds + long_bits - 1) / long_bits * (uint32_t)sizeof(long);
     words = setbytes / 4;
