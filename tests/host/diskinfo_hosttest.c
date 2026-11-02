@@ -447,7 +447,7 @@ int main(void)
 
     {
         int full = diskinfo_format(&d, buf, (int)sizeof(buf));
-        static char small[600];
+        static char small[DISKINFO_RECORD_BYTES];
         int n;
 
         for (i = 0; i < (int)sizeof(small); i++) {
