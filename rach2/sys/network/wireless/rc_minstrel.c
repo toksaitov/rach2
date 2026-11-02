@@ -67,7 +67,7 @@ static int lowest(const struct wlan_radio *radio, uint32_t mask)
     return low;
 }
 
-/** Refresh the peer intersection; a changed address/channel/rate set resets it. */
+/** Refresh the peer intersection, reset by a new address, channel or rates. */
 static void connect_peer(struct wlan_radio *radio, const struct wlan_bss *peer)
 {
     struct wlan_minstrel *s = radio->rate_priv;
@@ -120,7 +120,7 @@ static unsigned airtime(const struct wlan_radio *radio, unsigned index, unsigned
     return 80 + 4 * ((bits * 10 + rate * 4 - 1) / (rate * 4));
 }
 
-/** Rank measured delivery per airtime, with the HT-style 10/95 percent bounds. */
+/** Rank measured delivery per airtime, with HT-style 10/95 percent bounds. */
 static unsigned throughput(const struct wlan_radio *radio, unsigned index)
 {
     struct wlan_minstrel *s = radio->rate_priv;
@@ -133,33 +133,44 @@ static unsigned throughput(const struct wlan_radio *radio, unsigned index)
     return p * 1000000u / airtime(radio, index, 1200);
 }
 
-/** Append a distinct rate within the airtime budget, initializing its retry count. */
-static void append_rate(struct wlan_radio *radio, struct wlan_tx_rate *rates, unsigned *n,
-                        unsigned *budget, int index, unsigned len, int probe)
+/* A rate series being built for one frame. */
+struct series {
+    struct wlan_tx_rate *rates; /* WLAN_TX_RATE_SERIES entries */
+    unsigned n;                 /* entries filled */
+    unsigned budget;            /* airtime left, in us */
+    unsigned len;               /* frame length, in bytes */
+};
+
+/**
+ * Append a distinct rate to `sr` within its airtime budget, with a retry
+ * count of one when `probe` is set and of up to two otherwise.
+ */
+static void append_rate(struct wlan_radio *radio, struct series *sr, int index, int probe)
 {
+    struct wlan_tx_rate *rates = sr->rates;
     unsigned i, cost, count;
     int mcs;
 
-    if (index < 0 || *n == WLAN_TX_RATE_SERIES)
+    if (index < 0 || sr->n == WLAN_TX_RATE_SERIES)
         return;
     mcs = index >= WLAN_RADIO_MAX_RATES;
-    for (i = 0; i < *n; ++i)
+    for (i = 0; i < sr->n; ++i)
         if (rates[i].index == (mcs ? index - WLAN_RADIO_MAX_RATES : index) &&
             !!(rates[i].flags & WLAN_RATE_MCS) == mcs)
             return;
-    cost = airtime(radio, (unsigned)index, len);
-    count = *budget / cost;
+    cost = airtime(radio, (unsigned)index, sr->len);
+    count = sr->budget / cost;
     if (count > (probe ? 1u : 2u))
         count = probe ? 1u : 2u;
-    if (!count && *n)
+    if (!count && sr->n)
         return;
     if (!count)
         count = 1; /* One full-size 1 Mbit/s MPDU can exceed the budget. */
-    rates[*n].index = (int16_t)(mcs ? index - WLAN_RADIO_MAX_RATES : index);
-    rates[*n].flags = mcs ? WLAN_RATE_MCS : 0;
-    rates[*n].count = (uint8_t)count;
-    *budget = cost * count < *budget ? *budget - cost * count : 0;
-    ++*n;
+    rates[sr->n].index = (int16_t)(mcs ? index - WLAN_RADIO_MAX_RATES : index);
+    rates[sr->n].flags = mcs ? WLAN_RATE_MCS : 0;
+    rates[sr->n].count = (uint8_t)count;
+    sr->budget = cost * count < sr->budget ? sr->budget - cost * count : 0;
+    ++sr->n;
 }
 
 /** Select throughput, next throughput, probability and basic fallback rates. */
@@ -167,7 +178,8 @@ static void minstrel_select(struct wlan_radio *radio, const struct wlan_bss *pee
                             const uint8_t *frame, unsigned len, struct wlan_tx_rate *rates)
 {
     struct wlan_minstrel *s = radio->rate_priv;
-    unsigned i, n = 0, budget = RC_BUDGET, score, best_score = 0, next_score = 0;
+    struct series sr;
+    unsigned i, score, best_score = 0, next_score = 0;
     unsigned p, best_p = 0;
     int low, best, next, reliable, sample = -1;
 
@@ -182,9 +194,13 @@ static void minstrel_select(struct wlan_radio *radio, const struct wlan_bss *pee
         return;
     if (len > IEEE80211_MAX_FRAME_LEN)
         len = IEEE80211_MAX_FRAME_LEN;
+    sr.rates = rates;
+    sr.n = 0;
+    sr.budget = RC_BUDGET;
+    sr.len = len;
     if (!frame || len < IEEE80211_HDRLEN || (frame[4] & 1) ||
         (frame[0] & IEEE80211_FCTL_FTYPE) != IEEE80211_FTYPE_DATA) {
-        append_rate(radio, rates, &n, &budget, low, len, 0);
+        append_rate(radio, &sr, low, 0);
         return;
     }
     best = next = reliable = low;
@@ -218,14 +234,14 @@ static void minstrel_select(struct wlan_radio *radio, const struct wlan_bss *pee
         }
     }
     if (sample >= 0 && nominal(radio, (unsigned)sample) > nominal(radio, (unsigned)best))
-        append_rate(radio, rates, &n, &budget, sample, len, 1);
-    append_rate(radio, rates, &n, &budget, best, len, 0);
+        append_rate(radio, &sr, sample, 1);
+    append_rate(radio, &sr, best, 0);
     if (sample >= 0)
-        append_rate(radio, rates, &n, &budget, sample, len, 1);
+        append_rate(radio, &sr, sample, 1);
     if (sample < 0)
-        append_rate(radio, rates, &n, &budget, next, len, 0);
-    append_rate(radio, rates, &n, &budget, reliable, len, 0);
-    append_rate(radio, rates, &n, &budget, low, len, 0);
+        append_rate(radio, &sr, next, 0);
+    append_rate(radio, &sr, reliable, 0);
+    append_rate(radio, &sr, low, 0);
 }
 
 /** Account actual retries; only the final attempted series earns one ACK. */
