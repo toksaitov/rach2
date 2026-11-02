@@ -94,9 +94,10 @@ session() {
 # command AGENT ACTION: print the command line of ACTION for AGENT. MUSE_ARGS
 # is empty on the Lenovo; the QEMU mode's environment names the model of the
 # fake server's script. OpenCode runs with a private server, which ends with
-# it, in place of the background service; its request without a screen runs
-# under SSH without the login shell whose profile turns off its update check,
-# so its command line does that.
+# it, in place of the background service. The requests without a screen run
+# under SSH without the login shell whose profile turns off OpenCode's update
+# check and agy's updater, which replaces /opt/agy/bin/agy, so their command
+# lines do that.
 # shellcheck disable=SC2016 # the run command's eval expands MUSE_ARGS
 command_line() {
     case $1.$2 in
@@ -108,7 +109,7 @@ command_line() {
         codex.once) echo "codex exec '$ONCE_PROMPT' < /dev/null" ;;
         agy.start) echo 'agy --dangerously-skip-permissions' ;;
         agy.resume) echo 'agy --dangerously-skip-permissions --continue' ;;
-        agy.once) echo "agy -p '$ONCE_PROMPT'" ;;
+        agy.once) echo "AGY_CLI_DISABLE_AUTO_UPDATE=true agy -p '$ONCE_PROMPT'" ;;
         muse.start) echo 'muse --yolo $MUSE_ARGS' ;;
         muse.resume) echo 'muse resume --last --yolo $MUSE_ARGS' ;;
         muse.once) echo "muse exec --yolo \$MUSE_ARGS '$ONCE_PROMPT'" ;;
@@ -374,7 +375,7 @@ main() {
         version)
             case $2 in
                 gh) out=$(gh --version | head -n 1) ;;
-                *) out=$("$2" --version 2>&1) ;;
+                *) out=$(AGY_CLI_DISABLE_AUTO_UPDATE=true "$2" --version 2>&1) ;;
             esac
             printf '%s\n' "$out"
             sha256sum "$(readlink -f "$(type -P "$2")")"
