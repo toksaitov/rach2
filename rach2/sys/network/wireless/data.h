@@ -10,8 +10,11 @@
 /* Pairwise keys take index 0 or 1, as Extended Key ID allows. */
 #define WLAN_DATA_PAIRWISE_KEYS 2
 #define WLAN_DATA_IGTK_FIRST    4
-/* Frames waiting in the transmit queue; a full queue refuses the next. */
+/* Frames waiting in the transmit queue; a full queue refuses the next. Its
+ * last WLAN_DATA_TX_EAPOL slots take only EAPOL, so that a handshake's reply
+ * finds room behind a bulk transfer, as Linux's voice queue gives it. */
 #define WLAN_DATA_TX_QUEUE      16
+#define WLAN_DATA_TX_EAPOL      2
 /* Received frames and transmit completions waiting for the worker. The
  * completion queue is longer than any radio's transmit queue, so that no
  * completion is lost. */
@@ -325,7 +328,8 @@ int wlan_data_kick(struct wlan_data_work work[2], uint64_t due);
 /** Copy an Ethernet frame into the transmit queue and queue its drain;
  * the adapter's tx_ethernet calls it with net_lock, so it never sleeps.
  * The drain is not queued while the queue is held. Returns 0, -EINVAL,
- * -ENOTCONN or -ENOBUFS when the queue is full. */
+ * -ENOTCONN or -ENOBUFS when the queue is full, which for a frame other
+ * than EAPOL is when only the WLAN_DATA_TX_EAPOL slots are left. */
 int wlan_data_queue(struct wlan_data *d, const uint8_t *frame, unsigned len);
 
 /** Copy the oldest frame of the transmit queue into `out`, of

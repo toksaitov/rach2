@@ -1,6 +1,7 @@
 /* Check the wireless transmit queue's back-pressure: a radio whose ring is
  * full holds the queue's frames until its completions free slots, in order
- * and with none dropped, while another refusal and a stop still drop them.
+ * and with none dropped, the queue keeps its last slots for EAPOL, and
+ * another refusal and a stop still drop frames.
  * host-deps: rach2/sys/network/wireless/data.c
  * host-deps: rach2/sys/network/wireless/tx.c
  * host-deps: rach2/sys/network/wireless/rx.c
@@ -272,19 +273,26 @@ static void radio_stop(struct wlan_radio *r)
     }
 }
 
-/** Queue Ethernet frame number `mark` through the adapter's tx_ethernet. */
-static int send(unsigned mark)
+/** Queue Ethernet frame number `mark` of EtherType `type` through the
+ * adapter's tx_ethernet. */
+static int send_type(unsigned mark, unsigned type)
 {
     uint8_t eth[ETH_HDR_SIZE + 40];
 
     k_memset(eth, 0, sizeof(eth));
     k_memcpy(eth, far, 6);
     k_memcpy(eth + 6, sta, 6);
-    eth[12] = 0x08; /* IPv4, best effort */
-    eth[13] = 0x00;
+    eth[12] = (uint8_t)(type >> 8);
+    eth[13] = (uint8_t)type;
     eth[14] = 0x45;
     eth[ETH_MARK] = (uint8_t)mark;
     return wlan.tx_ethernet(&wlan, eth, sizeof(eth));
+}
+
+/** Queue IPv4 frame number `mark`, best effort. */
+static int send(unsigned mark)
+{
+    return send_type(mark, 0x0800);
 }
 
 /** The frames the adapter's queue holds. */
@@ -335,17 +343,18 @@ static void setup(void)
 /* --- The checks. --- */
 
 /**
- * Twenty frames into a ring of four behind a queue of sixteen: the ring
- * fills, the queue holds the rest without a drain queued per frame, the
- * twenty-first is refused to its sender, and completions one at a time
- * send all twenty in order with consecutive sequence numbers.
+ * Eighteen frames into a ring of four behind the fourteen slots of the
+ * queue that data may take: the ring fills, the queue holds the rest
+ * without a drain queued per frame, the nineteenth is refused to its
+ * sender, and completions one at a time send all eighteen in order with
+ * consecutive sequence numbers.
  */
 static void check_hold(void)
 {
-    unsigned i, total = RING + WLAN_DATA_TX_QUEUE;
+    unsigned i, data = WLAN_DATA_TX_QUEUE - WLAN_DATA_TX_EAPOL, total = RING + data;
 
     setup();
-    for (i = 0; i < WLAN_DATA_TX_QUEUE; ++i)
+    for (i = 0; i < data; ++i)
         CHECK(send(i) == 0);
     run_work();
     CHECK(ring_count == RING);
@@ -353,7 +362,7 @@ static void check_hold(void)
     /* The first two frames queued both drain records, and each run stops
      * at its first refusal. */
     CHECK(refusals >= 1 && refusals <= 2);
-    CHECK(waiting() == WLAN_DATA_TX_QUEUE - RING);
+    CHECK(waiting() == data - RING);
     CHECK(wlan_data_of(&wlan)->txq_held);
     CHECK(wlan.netdev.tx_dropped == 0);
 
@@ -362,7 +371,7 @@ static void check_hold(void)
     for (; i < total; ++i)
         CHECK(send(i) == 0);
     CHECK(pending() == 0);
-    CHECK(waiting() == WLAN_DATA_TX_QUEUE);
+    CHECK(waiting() == data);
     CHECK(send(total) == -ENOBUFS);
 
     /* Each completion frees a slot, which the next frame takes. */
@@ -387,6 +396,43 @@ static void check_hold(void)
     CHECK(n_taken == total + 1 && marks[total] == 99);
     complete(1, 1);
     run_work();
+    wlan_data_detach(&wlan);
+}
+
+/**
+ * EAPOL behind a bulk transfer, as a group rekey's reply comes while the
+ * queue is full of data: the last two slots take EAPOL alone, a third
+ * EAPOL frame is refused, and the two go after the data queued before
+ * them.
+ */
+static void check_eapol_room(void)
+{
+    unsigned i, data = WLAN_DATA_TX_QUEUE - WLAN_DATA_TX_EAPOL, total = RING + data;
+
+    setup();
+    for (i = 0; i < data; ++i)
+        CHECK(send(i) == 0);
+    run_work();
+    for (; i < total; ++i)
+        CHECK(send(i) == 0);
+    CHECK(waiting() == data);
+    CHECK(send(total) == -ENOBUFS);
+    CHECK(send_type(100, 0x888e) == 0);
+    CHECK(send_type(101, 0x888e) == 0);
+    CHECK(waiting() == WLAN_DATA_TX_QUEUE);
+    CHECK(send_type(102, 0x888e) == -ENOBUFS);
+    CHECK(pending() == 0);
+
+    while (ring_count) {
+        complete(1, 1);
+        run_work();
+    }
+    CHECK(n_taken == total + 2);
+    for (i = 0; i < total; ++i)
+        CHECK(marks[i] == i);
+    CHECK(marks[total] == 100 && marks[total + 1] == 101);
+    CHECK(waiting() == 0);
+    CHECK(wlan.netdev.tx_dropped == 0);
     wlan_data_detach(&wlan);
 }
 
@@ -445,6 +491,7 @@ static void check_stop(void)
 int main(void)
 {
     check_hold();
+    check_eapol_room();
     check_other_refusal();
     check_stop();
     if (failures) {

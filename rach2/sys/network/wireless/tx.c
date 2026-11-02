@@ -459,14 +459,18 @@ int wlan_data_queue(struct wlan_data *d, const uint8_t *frame, unsigned len)
 {
     struct wlan_data_txq *q;
     uint32_t flags;
+    unsigned room;
     int held;
 
     if (!d || !frame || len < 14 || len > WLAN_DATA_ETH_MAX)
         return -EINVAL;
     if (!d->connected || !d->tx_work[0].work.run)
         return -ENOTCONN;
+    room = WLAN_DATA_TX_QUEUE;
+    if (frame[12] != 0x88 || frame[13] != 0x8e)
+        room -= WLAN_DATA_TX_EAPOL;
     flags = spin_lock_irqsave(&d->txq_lock);
-    if (d->txq_count == WLAN_DATA_TX_QUEUE) {
+    if (d->txq_count >= room) {
         spin_unlock_irqrestore(&d->txq_lock, flags);
         return -ENOBUFS;
     }
