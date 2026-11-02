@@ -58,7 +58,7 @@ A test's opening comment may have five kinds of line, which the preparation tool
 * `host-alone: REASON`: the test runs when no other check runs, after the others, for its declared platform isolation or a window of a fraction of a second that a busy machine could miss. `etude_platform_hosttest.c`, `etude_qemu_hosttest.c`, `etude_remote_hosttest.c`, `etude_repeat_hosttest.c` and `etude_watchdog_hosttest.c` have one.
 * `host-arch: REASON`: the test boots the kernel of the architecture `ARCH` names, for the reason given, and so is the `boots` case's, which runs once for each architecture. `etude_qemu_hosttest.c`, `etude_watchdog_hosttest.c`, `etude_scenario_hosttest.c` and `etude_legacyset_hosttest.c` have one.
 
-A path on a `host-deps:` or `host-cflags:` line that begins `vendor/` names a vendored port's extracted tree as i686 has it, such as `vendor/musl/musl-1.2.5/`. For a run with `ARCH=x86_64`, the preparation tool reads it from `build/x86_64/vendor-work/` instead, where an x86-64 build extracts the same sources, so a tree that has built only x86-64 runs the test.
+A path of a check's metadata in a vendored port's extracted tree, `vendor/NAME/NAME-VERSION/` as i686 has it, such as `vendor/musl/musl-1.2.5/`, is read for a run with `ARCH=x86_64` from `build/x86_64/vendor-work/` instead, where an x86-64 build extracts the same sources, so a tree that has built only x86-64 runs the test. Another path under `vendor/`, such as a GNU recipe in `vendor/gnu/ports/`, is the repository's file on both architectures.
 
 `tools/verify/coverage.sh` reads the same lines to measure which lines of the named sources a test runs.
 

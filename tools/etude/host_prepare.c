@@ -154,15 +154,32 @@ static int metadata(const char *text, const char *tag, struct hp_words *words)
 }
 
 /**
- * Map each vendored path of `words` to the x86-64 build's copy when `arch` is
- * x86_64, which builds its vendored projects under build/x86_64/vendor-work.
+ * Say whether `word` names a path in a vendored project's extracted tree,
+ * vendor/NAME/NAME-VERSION/..., not a file the repository keeps under
+ * vendor/, such as a GNU recipe.
+ */
+static int extracted_path(const char *word)
+{
+    const char *name = word + 7, *slash;
+    size_t n;
+
+    if (strncmp(word, "vendor/", 7) || !(slash = strchr(name, '/')))
+        return 0;
+    n = (size_t)(slash - name);
+    return n > 0 && !strncmp(slash + 1, name, n) && slash[1 + n] == '-';
+}
+
+/**
+ * Map each path of `words` in a vendored project's extracted tree to the
+ * x86-64 build's copy when `arch` is x86_64, which extracts the projects
+ * under build/x86_64/vendor-work.
  */
 static void architecture_words(struct hp_words *words, const char *arch)
 {
     if (strcmp(arch, "x86_64"))
         return;
     for (size_t i = 0; i < words->n; i++)
-        if (!strncmp(words->v[i], "vendor/", 7)) {
+        if (extracted_path(words->v[i])) {
             struct jbuf mapped = {0};
             jbuf_puts(&mapped, "build/x86_64/vendor-work/");
             jbuf_puts(&mapped, words->v[i] + 7);
