@@ -551,13 +551,14 @@ static void check_levels(int fd)
 }
 
 /** Check the masks of `fd`, which have the volume and PCM, and the SB16's
- * nothing else; that PCM is a level of its own beside the volume, and a
- * channel it lacks; and that SOUND_MIXER_INFO names the driver `id` and
- * counts the writes. */
+ * nothing else; that PCM is the level of the caller's own playback, 100 and
+ * fixed while it has none and its own level beside the volume once it opens
+ * /dev/dsp; a channel it lacks; and that SOUND_MIXER_INFO names the driver
+ * `id` and counts the writes. */
 static void check_info(int fd, const char *id)
 {
     struct mixer_info info;
-    int v;
+    int v, dsp;
     long rc;
 
     if (ioctl(fd, MIXER_READ_DEVMASK, (long)&v) != 0 || (v & 0x11) != 0x11 ||
@@ -571,13 +572,22 @@ static void check_info(int fd, const char *id)
         fail_with("PCM at boot is not 100 on both sides", 1, v);
     }
     v = 0x3232;
+    if (ioctl(fd, MIXER_WRITE_PCM, (long)&v) != 0 || v != 0x6464 || volume(fd) != 0x5050) {
+        fail_with("PCM of a process that plays nothing did not stay 100", 1, v);
+    }
+    dsp = open_or_fail("/dev/dsp", O_WRONLY, "/dev/dsp did not open");
+    v = 0x3232;
     if (ioctl(fd, MIXER_WRITE_PCM, (long)&v) != 0 || v != 0x3232 || volume(fd) != 0x5050) {
         fail_with("PCM set to 50 moves the volume", 1, v);
+    }
+    if (ioctl(fd, MIXER_READ_PCM, (long)&v) != 0 || v != 0x3232) {
+        fail_with("PCM set to 50 does not read 50", 1, v);
     }
     v = 0x6464;
     if (ioctl(fd, MIXER_WRITE_PCM, (long)&v) != 0 || v != 0x6464) {
         fail_with("PCM set back to 100 did not give 100 back", 1, v);
     }
+    syscall3(SYS_CLOSE, dsp, 0, 0);
     if ((rc = ioctl(fd, MIXER_READ_BASS, (long)&v)) != -EINVAL) {
         fail_with("a channel the mixer lacks is not EINVAL", 1, rc);
     }
