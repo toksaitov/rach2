@@ -89,6 +89,9 @@ diskctl: $(SRC_diskctl) $(HDR_diskctl)
 mixer: mixer.c
 	$(UCC) $(UFLAGS) -o mixer.new mixer.c
 	mv mixer.new mixer
+wifi: wifi.c
+	$(UCC) $(UFLAGS) -o wifi.new wifi.c
+	mv wifi.new wifi
 
 update: update.c
 	$(UCC) $(UFLAGS) -o update.new update.c
