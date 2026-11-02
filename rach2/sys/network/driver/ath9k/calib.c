@@ -577,24 +577,32 @@ static int32_t asr(int32_t v, unsigned n)
     return v >= 0 ? v >> n : -((-(v + 1)) >> n) - 1;
 }
 
-/** Solve the 4x4 linear equation of the loopback IQ calibration, as
+/* One pass of the loopback, without or with the analog phase shift: the
+ * normalized sine and cosine of its angle, and the magnitude and phase of
+ * its first measurement, each in units of 1 << 15. */
+struct iq_pass {
+    int32_t sin, cos;
+    int32_t mag, phs;
+};
+
+/** Solve the 4x4 linear equation of the loopback IQ calibration from the
+ * passes without (`a0`) and with (`a1`) the phase shift, as
  * ar9003_hw_solve_iq_cal does. Returns 0 when it is singular. */
-static int solve_iq_cal(int32_t sin1, int32_t cos1, int32_t sin2, int32_t cos2, int32_t mag_a0_d0,
-                        int32_t phs_a0_d0, int32_t mag_a1_d0, int32_t phs_a1_d0, int32_t *solved)
+static int solve_iq_cal(const struct iq_pass *a0, const struct iq_pass *a1, int32_t *solved)
 {
     const int32_t shift = 1 << 15;
-    int32_t f1 = cos1 - cos2, f3 = sin1 - sin2, f2;
+    int32_t f1 = a0->cos - a1->cos, f3 = a0->sin - a1->sin, f2;
     int32_t mag_tx, phs_tx;
 
     f2 = (asr(f1, 3) * asr(f1, 3) + asr(f3, 3) * asr(f3, 3)) >> 9;
     if (!f2)
         return 0;
-    mag_tx = (f1 * (mag_a0_d0 - mag_a1_d0) + f3 * (phs_a0_d0 - phs_a1_d0)) / f2;
-    phs_tx = (f3 * (-mag_a0_d0 + mag_a1_d0) + f1 * (phs_a0_d0 - phs_a1_d0)) / f2;
+    mag_tx = (f1 * (a0->mag - a1->mag) + f3 * (a0->phs - a1->phs)) / f2;
+    phs_tx = (f3 * (-a0->mag + a1->mag) + f1 * (a0->phs - a1->phs)) / f2;
     solved[0] = mag_tx;
     solved[1] = phs_tx;
-    solved[2] = mag_a0_d0 - (cos1 * mag_tx + sin1 * phs_tx) / shift;
-    solved[3] = phs_a0_d0 + (sin1 * mag_tx - cos1 * phs_tx) / shift;
+    solved[2] = a0->mag - (a0->cos * mag_tx + a0->sin * phs_tx) / shift;
+    solved[3] = a0->phs + (a0->sin * mag_tx - a0->cos * phs_tx) / shift;
     return 1;
 }
 
@@ -607,6 +615,20 @@ static int32_t mag_approx(int32_t re, int32_t im)
     max = a > b ? a : b;
     min = a > b ? b : a;
     return max - max / 32 + min / 8 + min / 4;
+}
+
+/** One gain's correction word from its magnitude and phase corrections,
+ * in units of 1 << 15: each scaled and held to -63..63, the magnitude from
+ * bit 7 up and the phase in the 7 bits below, as ar9003_hw_calc_iq_corr packs
+ * them. */
+static int iq_corr_word(int32_t mag_corr, int32_t phs_corr)
+{
+    const int32_t scale = 1 << 15;
+    int32_t qq = mag_corr * 128 / scale, qi = phs_corr * 256 / scale;
+
+    qi = qi < -63 ? -63 : qi > 63 ? 63 : qi;
+    qq = qq < -63 ? -63 : qq > 63 ? 63 : qq;
+    return (qq * 128) + (0x7f & qi);
 }
 
 /** A 12-bit two's complement field as a signed value. */
@@ -628,8 +650,8 @@ static int calc_iq_corr(const uint32_t *res, int *iqc)
     int32_t m_a1_d0, p_a1_d0, c_a1_d0, m_a1_d1, p_a1_d1, c_a1_d1;
     int32_t mag_a0_d0, mag_a1_d0, mag_a0_d1, mag_a1_d1;
     int32_t phs_a0_d0, phs_a1_d0, phs_a0_d1, phs_a1_d1;
-    int32_t sin1, cos1, sin2, cos2, mag1, mag2, solved[4];
-    int32_t mag_corr, phs_corr, qq, qi;
+    int32_t mag1, mag2, solved[4];
+    struct iq_pass a0, a1;
 
     m_a0_d0 = s12(res[0]);
     p_a0_d0 = s12(res[0] >> 12);
@@ -661,42 +683,33 @@ static int calc_iq_corr(const uint32_t *res, int *iqc)
     phs_a1_d1 = (c_a1_d1 * scale) / p_a1_d1;
 
     /* Without and with the analog phase shift. */
-    sin1 = ((mag_a0_d0 - mag_a0_d1) * delpt_shift) / DELPT;
-    cos1 = ((phs_a0_d1 - phs_a0_d0) * delpt_shift) / DELPT;
-    sin2 = ((mag_a1_d0 - mag_a1_d1) * delpt_shift) / DELPT;
-    cos2 = ((phs_a1_d1 - phs_a1_d0) * delpt_shift) / DELPT;
+    a0.sin = ((mag_a0_d0 - mag_a0_d1) * delpt_shift) / DELPT;
+    a0.cos = ((phs_a0_d1 - phs_a0_d0) * delpt_shift) / DELPT;
+    a1.sin = ((mag_a1_d0 - mag_a1_d1) * delpt_shift) / DELPT;
+    a1.cos = ((phs_a1_d1 - phs_a1_d0) * delpt_shift) / DELPT;
 
-    mag1 = mag_approx(cos1, sin1);
-    mag2 = mag_approx(cos2, sin2);
+    mag1 = mag_approx(a0.cos, a0.sin);
+    mag2 = mag_approx(a1.cos, a1.sin);
     if (mag1 == 0 || mag2 == 0)
         return 0;
-    sin1 = sin1 * scale / mag1;
-    cos1 = cos1 * scale / mag1;
-    sin2 = sin2 * scale / mag2;
-    cos2 = cos2 * scale / mag2;
+    a0.sin = a0.sin * scale / mag1;
+    a0.cos = a0.cos * scale / mag1;
+    a1.sin = a1.sin * scale / mag2;
+    a1.cos = a1.cos * scale / mag2;
+    a0.mag = mag_a0_d0;
+    a0.phs = phs_a0_d0;
+    a1.mag = mag_a1_d0;
+    a1.phs = phs_a1_d0;
 
-    if (!solve_iq_cal(sin1, cos1, sin2, cos2, mag_a0_d0, phs_a0_d0, mag_a1_d0, phs_a1_d0, solved))
+    if (!solve_iq_cal(&a0, &a1, solved))
         return 0;
 
     if (scale == solved[0])
         return 0;
-    mag_corr = (solved[0] * scale) / (scale - solved[0]);
-    phs_corr = -solved[1];
-    qq = mag_corr * 128 / scale;
-    qi = phs_corr * 256 / scale;
-    qi = qi < -63 ? -63 : qi > 63 ? 63 : qi;
-    qq = qq < -63 ? -63 : qq > 63 ? 63 : qq;
-    iqc[0] = (qq * 128) + (0x7f & qi);
-
+    iqc[0] = iq_corr_word((solved[0] * scale) / (scale - solved[0]), -solved[1]);
     if (-solved[2] == scale)
         return 0;
-    mag_corr = (-solved[2] * scale) / (scale + solved[2]);
-    phs_corr = -solved[3];
-    qq = mag_corr * 128 / scale;
-    qi = phs_corr * 256 / scale;
-    qi = qi < -63 ? -63 : qi > 63 ? 63 : qi;
-    qq = qq < -63 ? -63 : qq > 63 ? 63 : qq;
-    iqc[1] = (qq * 128) + (0x7f & qi);
+    iqc[1] = iq_corr_word((-solved[2] * scale) / (scale + solved[2]), -solved[3]);
     return 1;
 }
 
@@ -949,18 +962,18 @@ static int has_caldata(const struct ath9k *ah)
 }
 
 /**
- * Run the reset-time calibrations, as ar9003_hw_init_cal_pcoem does on a
- * chip without RTT and with coexistence off: every chain calibrates; the
- * carrier leak runs, since a full reset forgets its table, and the TX IQ
- * calibration runs as part of the AGC calibration when ath9k would have
- * calibration data (has_caldata); with the carrier leak on, the baseband restarts with the longest
- * receive delay around the AGC calibration, which runs at every reset,
+ * Run the reset-time calibrations, as ar9003_hw_init_cal_pcoem does on a chip
+ * without RTT and with coexistence off: every chain calibrates; the carrier
+ * leak runs, since a full reset forgets its table, and the TX IQ calibration
+ * runs as part of the AGC calibration when ath9k would have calibration data
+ * (has_caldata); with the carrier leak on, the baseband restarts with the
+ * longest receive delay around the AGC calibration, which runs at every reset,
  * since only ath9k's fast channel change may skip it; then the manual peak
- * calibration, the TX IQ and carrier-leak results, and the RX IQ
- * calibration started over. The AR9565 1.1's RTT, which keeps the
- * calibration across channels, is not used: the G50-70's chip is a 1.0.1,
- * and without RTT the 1.1 calibrates as the 1.0 does. A chip not made for
- * PC makers takes ath9k's ar9003_hw_init_cal_soc, which no row needs.
+ * calibration, the TX IQ and carrier-leak results, and the RX IQ calibration
+ * started over. The AR9565 1.1's RTT, which keeps the calibration across
+ * channels, is not used: the G50-70's chip is a 1.0.1, and without RTT the 1.1
+ * calibrates as the 1.0 does. A chip not made for PC makers takes ath9k's
+ * ar9003_hw_init_cal_soc, which no row needs.
  */
 int ath9k_cal_init(struct ath9k *ah, const struct wlan_channel *chan)
 {
