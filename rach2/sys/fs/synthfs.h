@@ -263,12 +263,14 @@ int synth_sys_count(void);
 #define SYNTH_SYS_FILE_NR            40
 #define SYNTH_SYS_RANDOMIZE_VA_SPACE 41
 /* net/ipv6/conf, the directory of IPv6's settings, which holds those of
- * all interfaces, of the default for a new one, and of each of `lo`, the
- * cards' interfaces, eth0 to eth3 (NETDEV_MAX), and the radios', wlan0 to
- * wlan3 (WLAN_MAX_RADIOS); and the files of each, in this order, which
- * procfs reads and writes through nd6.h. */
+ * all interfaces, of the default for a new one, and of each interface the
+ * caller sees, `lo`, the cards' and the radios', one directory for each of
+ * the SYNTH_IPV6_IFACES slots an interface holds while it is there
+ * (`netdev_slot`, NETDEV_MAX + 1 of them); and the files of each, in this
+ * order, which procfs reads and writes through nd6.h. */
 #define SYNTH_SYS_IPV6_CONF          43
-#define SYNTH_IPV6_DIRS              11
+#define SYNTH_IPV6_IFACES            5
+#define SYNTH_IPV6_DIRS              (2 + SYNTH_IPV6_IFACES)
 #define SYNTH_IPV6_ACCEPT_RA         0
 #define SYNTH_IPV6_AUTOCONF          1
 #define SYNTH_IPV6_DISABLE           2
@@ -286,8 +288,9 @@ int synth_sys_count(void);
  * Whether `entry` is under net/ipv6/conf: 1 with the name of its directory
  * in `*dir`, `all`, `default` or an interface's, and in `*key` the
  * SYNTH_IPV6_* of its file, or -1 for the directory itself; 0 for any
- * other entry. A directory of an interface the caller does not see has no
- * parent, and so is not found or listed.
+ * other entry. The directory of a slot that holds no interface the caller
+ * sees is named by the empty string and has no parent, and so is not found
+ * or listed.
  */
 int synth_sys_ipv6(int entry, const char **dir, int *key);
 /** Whether a privileged caller may write the file entry `entry`. */
@@ -409,6 +412,11 @@ int sysfs_net_index(const char *name, int len);
 /** The name of the interface `index`, NUL-terminated, into `out` of `cap`
  * bytes. */
 void sysfs_net_name(int index, char *out, int cap);
+
+/** The name of the interface the caller sees in the slot `slot`, 1 to
+ * SYNTH_IPV6_IFACES (`netdev_slot`), or the empty string when it sees none
+ * there. The name is the interface's own, valid while it stays registered. */
+const char *sysfs_net_slot_name(int slot);
 
 /** The PCI key of the card of the interface `index`, or -1. */
 int sysfs_net_pci_key(int index);

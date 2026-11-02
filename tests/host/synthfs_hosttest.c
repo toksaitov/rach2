@@ -8,7 +8,8 @@
  * the parsing of process ids and descriptor numbers are where an error of
  * one is easy to make, so the rows run here under the sanitizers. The model
  * has a wired interface eth0, a wireless wlan0 with its switch rfkill3, and
- * no disks.
+ * no disks; its interfaces' slots hold lo, eth0, wlan0 and wlan4, a radio
+ * registered after others were removed.
  */
 
 #include "fs/synthfs.h"
@@ -47,6 +48,15 @@ void sysfs_net_name(int index, char *out, int cap)
         out[3] = '0';
         out[4] = '\0';
     }
+}
+
+/** The interface in the slot `slot`: lo, eth0, wlan0 and wlan4 in 1 to 4,
+ *  and none in 5. */
+const char *sysfs_net_slot_name(int slot)
+{
+    static const char *const names[] = {"", "lo", "eth0", "wlan0", "wlan4", ""};
+
+    return slot >= 0 && slot <= 5 ? names[slot] : "";
 }
 
 /** The PCI key of eth0's card, 0x18 (bus 0, device 3, function 0), and -1
@@ -450,9 +460,32 @@ static void paths(void)
 }
 
 /**
+ * /proc/sys/net/ipv6/conf: a directory for `all`, `default` and each
+ * interface in a slot, whatever its name, wlan4 among them, and none for a
+ * name no slot holds.
+ */
+static void ipv6_conf(void)
+{
+    struct vpath vp;
+    char path[64];
+    const char *dir;
+    int key;
+
+    CHECK(synth_classify("proc/sys/net/ipv6/conf/all/forwarding", &vp) == VNODE_PROC_SYS_FILE);
+    CHECK(synth_classify("proc/sys/net/ipv6/conf/lo/accept_ra", &vp) == VNODE_PROC_SYS_FILE);
+    CHECK(synth_classify("proc/sys/net/ipv6/conf/wlan4", &vp) == VNODE_PROC_SYS_DIR);
+    synth_dir_path(VNODE_PROC_SYS_DIR, vp.sysent, 0, path, (int)sizeof(path));
+    CHECK(eq(path, "/proc/sys/net/ipv6/conf/wlan4"));
+    CHECK(synth_classify("proc/sys/net/ipv6/conf/wlan4/disable_ipv6", &vp) == VNODE_PROC_SYS_FILE &&
+          synth_sys_ipv6(vp.sysent, &dir, &key) && eq(dir, "wlan4") && key == SYNTH_IPV6_DISABLE);
+    CHECK(synth_classify("proc/sys/net/ipv6/conf/wlan1", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/sys/net/ipv6/conf/eth1/autoconf", &vp) == VNODE_ENOENT);
+}
+
+/**
  * The rows of the root, /dev and /proc, then those of `bounds`,
- * `past_a_file`, `past_a_name`, `paths`, `sys_tree`, `sys_class` and
- * `sys_cpus`:
+ * `past_a_file`, `past_a_name`, `paths`, `sys_tree`, `sys_class`,
+ * `sys_wireless`, `sys_cpus` and `ipv6_conf`:
  *
  * - the empty path and ordinary names are the KRFFS root's, "devices" and
  *   "proconsul" among them, which only begin as "dev" and "proc" do;
@@ -563,5 +596,6 @@ int main(void)
     sys_class();
     sys_wireless();
     sys_cpus();
+    ipv6_conf();
     return fails > 255 ? 255 : fails;
 }

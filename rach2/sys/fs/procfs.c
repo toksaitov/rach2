@@ -4788,6 +4788,24 @@ void sysfs_net_name(int index, char *out, int cap)
     }
 }
 
+/* synthfs.h's net/ipv6/conf has a directory for each slot an interface can
+ * hold. */
+typedef char ipv6_slots_fit[(SYNTH_IPV6_IFACES == NETDEV_MAX + 1) ? 1 : -1];
+
+const char *sysfs_net_slot_name(int slot)
+{
+    int i;
+
+    for (i = 0; i < netdev_seen_count(); i++) {
+        const struct netdev *nd = netdev_at(i);
+
+        if (nd && netdev_slot(nd) == slot) {
+            return nd->name;
+        }
+    }
+    return "";
+}
+
 int sysfs_net_pci_key(int index)
 {
     const struct netdev *nd = sysfs_netdev(index);

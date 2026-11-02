@@ -253,12 +253,11 @@ static const struct {
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
 
-/* net/ipv6/conf's directories, `all`, `default`, `lo` and the cards'
- * interfaces, and the files of each, in the order of SYNTH_IPV6_*. Each
- * directory is an entry after the table's, followed by an entry for each
- * of its files. */
-static const char *const ipv6_dirs[SYNTH_IPV6_DIRS] = {
-    "all", "default", "lo", "eth0", "eth1", "eth2", "eth3", "wlan0", "wlan1", "wlan2", "wlan3"};
+/* net/ipv6/conf's directories, `all`, `default` and one for each slot of
+ * an interface, named as `sysfs_net_slot_name` names it, and the files of
+ * each, in the order of SYNTH_IPV6_*. Each directory is an entry after the
+ * table's, followed by an entry for each of its files. */
+static const char *const ipv6_dirs[2] = {"all", "default"};
 static const char *const ipv6_files[SYNTH_IPV6_KEYS] = {
     "accept_ra",        "autoconf",      "disable_ipv6", "forwarding",
     "ra_defrtr_metric", "stable_secret", "use_tempaddr"};
@@ -270,30 +269,15 @@ int synth_sys_count(void)
 
 int synth_sys_ipv6(int entry, const char **dir, int *key)
 {
-    int at = entry - SYNTH_SYS_TABLE;
+    int at = entry - SYNTH_SYS_TABLE, d;
 
     if (at < 0 || entry >= synth_sys_count()) {
         return 0;
     }
-    *dir = ipv6_dirs[at / (1 + SYNTH_IPV6_KEYS)];
+    d = at / (1 + SYNTH_IPV6_KEYS);
+    *dir = d < 2 ? ipv6_dirs[d] : sysfs_net_slot_name(d - 1);
     *key = at % (1 + SYNTH_IPV6_KEYS) - 1;
     return 1;
-}
-
-/** Whether the net/ipv6/conf directory `name` is there: `all` and
- * `default` always, and an interface's while the caller sees it
- * (`sysfs_net_index`). */
-static int ipv6_dir_present(const char *name)
-{
-    int len = 0;
-
-    if (name == ipv6_dirs[0] || name == ipv6_dirs[1]) {
-        return 1;
-    }
-    while (name[len] != '\0') {
-        len++;
-    }
-    return sysfs_net_index(name, len) >= 0;
 }
 
 int synth_sys_writable(int entry)
@@ -378,7 +362,7 @@ int synth_sys_parent(int entry)
     int key;
 
     if (synth_sys_ipv6(entry, &dir, &key)) {
-        return key >= 0 ? entry - 1 - key : ipv6_dir_present(dir) ? SYNTH_SYS_IPV6_CONF : -1;
+        return key >= 0 ? entry - 1 - key : dir[0] != '\0' ? SYNTH_SYS_IPV6_CONF : -1;
     }
     return entry >= 0 && entry < SYNTH_SYS_TABLE ? sysents[entry].parent : -1;
 }
