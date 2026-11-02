@@ -1085,7 +1085,7 @@ static void addr_msg(struct nl_build *b, const struct netdev *nd, uint32_t ip, u
     put32(ifa + 4, (uint32_t)nd->index);
     msg_attr_ip(msg, IFA_ADDRESS, ip);
     msg_attr_ip(msg, IFA_LOCAL, ip);
-    if (!nd->loopback) {
+    if (!nd->loopback && NETDEV_MASK_HAS_BROADCAST(mask)) {
         msg_attr_ip(msg, IFA_BROADCAST, ip | ~mask);
     }
     msg_attr(msg, IFA_LABEL, nd->name, (uint16_t)(k_strlen(nd->name) + 1));
@@ -2175,8 +2175,8 @@ static int32_t route_change(const uint8_t *req, uint16_t type, uint16_t flags, u
                               : nd->gateway != 0)) {
         return default_route_change(nd, type, flags, r.gw);
     }
-    if (type == RTM_NEWROUTE && r.gw == 0 && nd->mask != 0 && dst_len == prefix_of(nd->mask) &&
-        r.dst == (nd->ip & nd->mask)) {
+    if (type == RTM_NEWROUTE && r.gw == 0 && nd->mask != 0 && nd->mask != 0xFFFFFFFFu &&
+        dst_len == prefix_of(nd->mask) && r.dst == (nd->ip & nd->mask)) {
         return (flags & NLM_F_EXCL) ? -EEXIST : 0;
     }
     return added_route_change(nd, type, flags, &r);

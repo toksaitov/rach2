@@ -25,10 +25,10 @@ unsigned long ipcheck_mask(unsigned long address, unsigned long netmask);
  * configuration.
  *
  * The address must be nonzero, must not have a first octet of 0, 127, or 224
- * and above, and must not be its subnet's network or broadcast address. The
- * netmask must be a run of ones from the top bit and shorter than 32 bits; a
- * zero netmask is checked as `ipcheck_mask` gives it, and the caller must
- * then apply that mask with the address. A nonzero gateway must pass the same
+ * and above, and must not be its subnet's network or broadcast address, which
+ * a /31 and a /32 do not have. The netmask must be a run of ones from the top
+ * bit; a zero netmask is checked as `ipcheck_mask` gives it, and the caller
+ * must then apply that mask with the address. A nonzero gateway must pass the same
  * first-octet test and be a host of the address's subnet other than the
  * address; a zero gateway is not checked.
  *

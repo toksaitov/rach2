@@ -55,6 +55,7 @@ int ipcheck_config(unsigned long address, unsigned long netmask, unsigned long g
 {
     unsigned long mask = ipcheck_mask(address, netmask);
     unsigned long inverted;
+    int edges; /* the subnet has a network and a broadcast address */
 
     if (address == 0) {
         say(err, errlen, "there is no address");
@@ -65,11 +66,13 @@ int ipcheck_config(unsigned long address, unsigned long netmask, unsigned long g
         return -1;
     }
     inverted = ~mask & 0xFFFFFFFFUL;
-    if ((inverted & (inverted + 1)) != 0 || mask == 0xFFFFFFFFUL) {
+    if ((inverted & (inverted + 1)) != 0) {
         say(err, errlen, "the netmask is not a run of ones");
         return -1;
     }
-    if (address == (address & mask) || address == (address | inverted)) {
+    /* Every address of a /31 or a /32 is a host (RFC 3021). */
+    edges = inverted > 1;
+    if (edges && (address == (address & mask) || address == (address | inverted))) {
         say(err, errlen,
             "the address is this subnet's network or broadcast address, "
             "not a host");
@@ -81,7 +84,7 @@ int ipcheck_config(unsigned long address, unsigned long netmask, unsigned long g
             return -1;
         }
         if ((gateway & mask) != (address & mask) || gateway == address ||
-            gateway == (gateway & mask) || gateway == (gateway | inverted)) {
+            (edges && (gateway == (gateway & mask) || gateway == (gateway | inverted)))) {
             say(err, errlen, "the gateway is not a host on this subnet");
             return -1;
         }

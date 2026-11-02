@@ -89,11 +89,13 @@ static int arp_address_is_a_neighbour(struct netdev *nd, uint32_t ip)
     if (netconf_address_is_impossible(ip)) {
         return 0;
     }
-    if (nd != 0 && nd->mask != 0 && (ip == (nd->ip & nd->mask) || ip == (nd->ip | ~nd->mask))) {
+    if (nd != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask) &&
+        (ip == (nd->ip & nd->mask) || ip == (nd->ip | ~nd->mask))) {
         return 0;
     }
     for (i = 0; nd != 0 && i < nd->naddr2; i++) {
-        if (ip == (nd->ip2[i] & nd->mask2[i]) || ip == (nd->ip2[i] | ~nd->mask2[i])) {
+        if (NETDEV_MASK_HAS_BROADCAST(nd->mask2[i]) &&
+            (ip == (nd->ip2[i] & nd->mask2[i]) || ip == (nd->ip2[i] | ~nd->mask2[i]))) {
             return 0;
         }
     }

@@ -264,11 +264,12 @@ int netdev_on_link(const struct netdev *nd, uint32_t ip)
     int i;
 
     for (i = 0; i < nd->naddr2; i++) {
-        if ((ip & nd->mask2[i]) == (nd->ip2[i] & nd->mask2[i])) {
+        if (nd->mask2[i] != 0xFFFFFFFFu && (ip & nd->mask2[i]) == (nd->ip2[i] & nd->mask2[i])) {
             return 1;
         }
     }
-    return nd->ip != 0 && nd->mask != 0 && (ip & nd->mask) == (nd->ip & nd->mask);
+    return nd->ip != 0 && nd->mask != 0 && nd->mask != 0xFFFFFFFFu &&
+           (ip & nd->mask) == (nd->ip & nd->mask);
 }
 
 uint32_t netdev_source(const struct netdev *nd, uint32_t hop)
@@ -308,11 +309,11 @@ int netdev_is_broadcast(uint32_t ip)
     for (i = 0; i < netdev_count(); i++) {
         const struct netdev *nd = netdev_at(i);
 
-        if (nd->ip != 0 && nd->mask != 0 && ip == (nd->ip | ~nd->mask)) {
+        if (nd->ip != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask) && ip == (nd->ip | ~nd->mask)) {
             return 1;
         }
         for (a = 0; a < nd->naddr2; a++) {
-            if (ip == (nd->ip2[a] | ~nd->mask2[a])) {
+            if (NETDEV_MASK_HAS_BROADCAST(nd->mask2[a]) && ip == (nd->ip2[a] | ~nd->mask2[a])) {
                 return 1;
             }
         }

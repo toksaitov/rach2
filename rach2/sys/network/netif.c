@@ -203,10 +203,13 @@ static uint32_t if_type(const struct netdev *nd)
     return nd->loopback ? NETDEV_LOOPBACK_TYPE : ARPHRD_ETHER;
 }
 
-/** The broadcast address of `nd`'s subnet, or 0 for none and for `lo`. */
+/** The broadcast address of `nd`'s subnet, or 0 for none, for `lo`, and
+ * for a /31 or /32, as on Linux. */
 static uint32_t if_broadcast(const struct netdev *nd)
 {
-    return nd->ip != 0 && nd->mask != 0 && !nd->loopback ? (nd->ip | ~nd->mask) : 0;
+    return nd->ip != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask) && !nd->loopback
+               ? (nd->ip | ~nd->mask)
+               : 0;
 }
 
 /** The flags SIOCGIFFLAGS reports: up as an administrator left it, running
@@ -378,8 +381,9 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
     case SIOCSIFNETMASK:
         return netconf_set_netmask(nd, be32(ifr + IFREQ_SA_ADDR));
     case SIOCSIFBRDADDR:
-        if (be32(ifr + IFREQ_SA_ADDR) !=
-            (nd->ip != 0 && nd->mask != 0 ? (nd->ip | ~nd->mask) : 0xFFFFFFFFu)) {
+        if (be32(ifr + IFREQ_SA_ADDR) != (nd->ip != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask)
+                                              ? (nd->ip | ~nd->mask)
+                                              : 0xFFFFFFFFu)) {
             return -EINVAL;
         }
         return 0;

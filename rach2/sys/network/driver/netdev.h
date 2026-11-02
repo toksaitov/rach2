@@ -441,7 +441,8 @@ void netdev_route_prune(struct netdev *nd);
  * NULL `nd` or an `ip` of 0. */
 int netdev_holds(const struct netdev *nd, uint32_t ip);
 
-/** Whether `ip` is on one of `nd`'s subnets. */
+/** Whether `ip` is on one of `nd`'s subnets; a /32 puts no other address
+ * on the link, as on Linux, so its own address is not counted. */
 int netdev_on_link(const struct netdev *nd, uint32_t ip);
 
 /** The address of `nd` a datagram to the next hop `hop` leaves from: the
@@ -451,6 +452,12 @@ uint32_t netdev_source(const struct netdev *nd, uint32_t hop);
 /** Whether `ip` is an address of one of the cards' interfaces, which makes
  * a datagram to it this machine's. `lo`'s 127.0.0.1 is not counted. */
 int netdev_owns(uint32_t ip);
+
+/* Whether a subnet of the contiguous `mask` has a network and a broadcast
+ * address: whether its prefix is 1 to 30. Every address of a /31 is a host
+ * (RFC 3021), as the one of a /32 is, and Linux gives neither a broadcast
+ * address. */
+#define NETDEV_MASK_HAS_BROADCAST(mask) ((mask) != 0u && ((mask) | 1u) != 0xFFFFFFFFu)
 
 /** Whether `ip` is 255.255.255.255 or the broadcast address of a subnet
  * one of the cards' interfaces is on. */

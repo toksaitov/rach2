@@ -2,13 +2,13 @@
  * route.c: the IPv4 routing table, as driver/netdev.h declares it.
  *
  * The routes the cards imply are found from them when they are asked for:
- * the subnet of each address, reached on the link, and a card's gateway as
- * its default route; `lo` has none. The routes a program adds, through
- * SIOCADDRT or RTM_NEWROUTE, are kept in a table of NETDEV_ROUTES. A lookup
- * takes, of the routes of interfaces that are up and have that destination,
- * the one of the longest prefix, then of the lowest metric, then the first
- * found, which puts an implied route before an added one of the same prefix
- * and metric, as Linux's kernel routes come first.
+ * the subnet of each address but a /32, reached on the link, and a card's
+ * gateway as its default route; `lo` has none. The routes a program adds,
+ * through SIOCADDRT or RTM_NEWROUTE, are kept in a table of NETDEV_ROUTES. A
+ * lookup takes, of the routes of interfaces that are up and have that
+ * destination, the one of the longest prefix, then of the lowest metric, then
+ * the first found, which puts an implied route before an added one of the
+ * same prefix and metric, as Linux's kernel routes come first.
  */
 
 #include "driver/netdev.h"
@@ -64,7 +64,7 @@ static int implied_at(const struct netdev *nd, int n, struct netdev_rt *out)
         uint32_t ip = a < 0 ? nd->ip : nd->ip2[a];
         uint32_t mask = a < 0 ? nd->mask : nd->mask2[a];
 
-        if (ip == 0 || mask == 0 || subnet_seen(nd, a, ip, mask)) {
+        if (ip == 0 || mask == 0 || mask == 0xFFFFFFFFu || subnet_seen(nd, a, ip, mask)) {
             continue;
         }
         if (count++ == n) {

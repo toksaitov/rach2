@@ -269,6 +269,14 @@ int netconf_parse_addr(const char *s, uint32_t *ip)
     return 1;
 }
 
+/** Whether `ip` is a host of its subnet under the contiguous `mask`: any
+ * address of a /31 or /32, and of a wider subnet one that is neither its
+ * network nor its broadcast address. */
+static int is_host(uint32_t ip, uint32_t mask)
+{
+    return !NETDEV_MASK_HAS_BROADCAST(mask) || (ip != (ip & mask) && ip != (ip | ~mask));
+}
+
 int netconf_parse_cidr(const char *s, uint32_t *ip, uint32_t *mask)
 {
     uint32_t v, prefix, m;
@@ -283,14 +291,11 @@ int netconf_parse_cidr(const char *s, uint32_t *ip, uint32_t *mask)
     if (!parse_quartet(&s, &prefix) || *s != '\0') {
         return 0;
     }
-    if (prefix < 1u || prefix > 30u) {
+    if (prefix < 1u || prefix > 32u) {
         return 0;
     }
     m = (uint32_t)(0xFFFFFFFFu << (32u - prefix));
-    if (netconf_address_is_impossible(v)) {
-        return 0;
-    }
-    if ((v & ~m) == 0u || (v & ~m) == (~m & 0xFFFFFFFFu)) {
+    if (netconf_address_is_impossible(v) || !is_host(v, m)) {
         return 0;
     }
     *ip = v;
@@ -309,10 +314,7 @@ int netconf_gateway_ok(uint32_t gw, uint32_t ip, uint32_t mask)
     if (gw == ip) {
         return 0;
     }
-    if ((gw & ~mask) == 0u || (gw & ~mask) == (~mask & 0xFFFFFFFFu)) {
-        return 0;
-    }
-    return 1;
+    return is_host(gw, mask);
 }
 
 int netconf_apply(const char **why)
@@ -433,7 +435,7 @@ static int mask_ok(uint32_t mask)
 
 uint32_t netconf_broadcast(void)
 {
-    if (net_ip_addr == 0 || net_ip_mask == 0) {
+    if (net_ip_addr == 0 || !NETDEV_MASK_HAS_BROADCAST(net_ip_mask)) {
         return 0xFFFFFFFFu;
     }
     return net_ip_addr | ~net_ip_mask;
@@ -521,12 +523,11 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
 }
 
 /** Whether `ip`/`mask` may be an address of an interface: a possible
- * address, a contiguous mask other than 0 and all ones, and a host of its
- * subnet; 0, or -EINVAL. */
+ * address, a contiguous mask other than 0, and a host of its subnet; 0, or
+ * -EINVAL. */
 static int addr_valid(uint32_t ip, uint32_t mask)
 {
-    if (netconf_address_is_impossible(ip) || !mask_ok(mask) || mask == 0 || mask == 0xFFFFFFFFu ||
-        ip == (ip & mask) || ip == (ip | ~mask)) {
+    if (netconf_address_is_impossible(ip) || !mask_ok(mask) || mask == 0 || !is_host(ip, mask)) {
         return -EINVAL;
     }
     return 0;
@@ -653,7 +654,7 @@ int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
             return 0;
         }
 
-        if (ip == (ip & derived) || ip == (ip | ~derived)) {
+        if (!is_host(ip, derived)) {
             addr_publish(nd, 0, 0);
             nd->pending_ip = ip;
         } else {
@@ -665,9 +666,7 @@ int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
         return 0;
     }
 
-    if (!mask_ok(mask) || mask == 0xFFFFFFFFu) {
-        rc = -EINVAL;
-    } else if (ip == (ip & mask) || ip == (ip | ~mask)) {
+    if (!mask_ok(mask) || !is_host(ip, mask)) {
         rc = -EINVAL;
     }
     if (rc == 0) {
@@ -708,9 +707,7 @@ int netconf_set_netmask(struct netdev *nd, uint32_t mask)
         nd->pending_ip = 0;
     } else if (ip == 0) {
         rc = -EINVAL;
-    } else if (!mask_ok(mask) || mask == 0xFFFFFFFFu) {
-        rc = -EINVAL;
-    } else if (ip == (ip & mask) || ip == (ip | ~mask)) {
+    } else if (!mask_ok(mask) || !is_host(ip, mask)) {
         rc = -EINVAL;
     } else {
         addr_publish(nd, ip, mask);

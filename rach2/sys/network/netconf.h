@@ -47,10 +47,10 @@ extern uint32_t net_ip_gateway;
  *
  * Refuses what cannot be a host on a LAN: a malformed quartet, one over 255,
  * a leading zero (which reads as octal elsewhere, so the same text would be
- * two addresses to two readers), trailing text, a prefix outside 1 to 30
- * (a /31 or /32 has no host address beside its network and broadcast
- * addresses), an address `netconf_address_is_impossible` refuses, and the
- * subnet's own network and broadcast addresses.
+ * two addresses to two readers), trailing text, a prefix outside 1 to 32, an
+ * address `netconf_address_is_impossible` refuses, and the subnet's own
+ * network and broadcast addresses, which a /31 and a /32 do not have: each
+ * of their addresses is a host (RFC 3021).
  *
  * @return 1 on success, 0 on refusal, with `*ip` and `*mask` untouched.
  */
@@ -68,8 +68,8 @@ int netconf_parse_addr(const char *s, uint32_t *ip);
  * Whether `gw` can be the gateway of the interface with the address `ip` and
  * the mask `mask`: a possible address (`netconf_address_is_impossible`) on
  * that subnet, other than `ip` and the subnet's network and broadcast
- * addresses. A mask of 0 makes every address one of the subnet, so a caller
- * checks the mask first.
+ * addresses: the other address of a /31, and none under a /32. A mask of 0
+ * makes every address one of the subnet, so a caller checks the mask first.
  *
  * @return 1 when usable, 0 otherwise.
  */
@@ -95,7 +95,8 @@ int netconf_gateway_ok(uint32_t gw, uint32_t ip, uint32_t mask);
 int netconf_apply(const char **why);
 
 /** The broadcast address of the first interface's subnet, from `net_ip_addr`
- * and `net_ip_mask`, or 255.255.255.255 while either is 0. */
+ * and `net_ip_mask`, or 255.255.255.255 while either is 0 or the subnet is a
+ * /31 or /32, which has none. */
 uint32_t netconf_broadcast(void);
 
 /**
@@ -124,11 +125,11 @@ int netconf_is_broadcast(uint32_t ip);
  *
  * An address of 0 unconfigures the interface, mask and all. Any other must be
  * a possible address (`netconf_address_is_impossible`), under a mask that is
- * contiguous, short of all ones, and leaves the address a host of its subnet;
- * EINVAL otherwise. A mask of 0 means the classful mask the first octet
- * implies, as on Linux, until `netconf_set_netmask` gives one: `ifconfig`
- * sends the address and the mask in two ioctls. An address that is no host
- * under the classful mask waits for its mask with the interface
+ * contiguous and leaves the address a host of its subnet, as any address of
+ * a /31 or /32 is; EINVAL otherwise. A mask of 0 means the classful mask the
+ * first octet implies, as on Linux, until `netconf_set_netmask` gives one:
+ * `ifconfig` sends the address and the mask in two ioctls. An address that is
+ * no host under the classful mask waits for its mask with the interface
  * unconfigured. The address in force given again with a mask of 0, once its
  * mask has been given, changes nothing.
  *
@@ -155,9 +156,9 @@ int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask);
  * for one when there is one, else of the address in force.
  *
  * A mask of 0 leaves the address in force with no subnet, and drops an
- * address waiting for its mask. Otherwise the mask must be contiguous, short
- * of all ones, and leave the address a host of its subnet, and the interface
- * must have an address; EINVAL otherwise. A refusal while the mask in force
+ * address waiting for its mask. Otherwise the mask must be contiguous and
+ * leave the address a host of its subnet, and the interface must have an
+ * address; EINVAL otherwise. A refusal while the mask in force
  * is the classful one, or while an address waits for its mask, unconfigures
  * the interface. A change drops what `netconf_set_address` lists. Takes
  * `net_lock`.
@@ -183,8 +184,9 @@ int netconf_set_gateway(struct netdev *nd, uint32_t gw);
  * Give `nd` the address `ip`/`mask` beside those it holds, as `ip addr add`
  * does, or make it the first address of an interface with none
  * (`netconf_set_address`). An address added beside the first drops nothing.
- * EINVAL for an impossible address, a mask that is 0, all ones or not
- * contiguous, or an address that is no host under its mask; EEXIST for an
+ * EINVAL for an impossible address, a mask that is 0 or not contiguous, or
+ * an address that is no host under its mask, which every address of a /31
+ * or /32 is; EEXIST for an
  * address the interface holds; ENOSPC past NETDEV_ADDRS more. Takes
  * `net_lock`.
  */
