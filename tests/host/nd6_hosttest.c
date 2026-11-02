@@ -2,6 +2,7 @@
  * host-deps: rach2/sys/network/ip6/route6.c rach2/sys/network/ip6/addr6.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/lib/ksha256.c
+ * host-deps: tests/host/compat/kheap_host.c
  */
 #include "../../rach2/sys/network/ip6/nd6.c"
 
@@ -168,6 +169,24 @@ int icmp6_send_opts(const uint8_t *src, const uint8_t *dst, int ifindex, uint8_t
     (void)len;
     (void)hlim;
     (void)opts;
+    return 0;
+}
+
+/** Fragments are dropped: no row sends past the path MTU. */
+int frag6_output(struct netdev *out, const uint8_t *via, const uint8_t *src, const uint8_t *dst,
+                 uint8_t nh, const uint8_t *payload, uint16_t plen, uint8_t hlim, uint8_t tclass,
+                 uint32_t mtu)
+{
+    (void)out;
+    (void)via;
+    (void)src;
+    (void)dst;
+    (void)nh;
+    (void)payload;
+    (void)plen;
+    (void)hlim;
+    (void)tclass;
+    (void)mtu;
     return 0;
 }
 
