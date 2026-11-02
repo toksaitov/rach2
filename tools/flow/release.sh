@@ -649,7 +649,8 @@ full_failed()
 
 # full: find or start the full run of SHA, or of the suites of the record's
 # `again full` line, and wait for it to end, first applying a result the
-# record has and has not acted on.
+# record has and has not acted on. GitHub cuts a run's title past 509
+# characters and ends it with `...`, so a long title matches by that prefix.
 full()
 {
     only=$(sed -n 's/^again full //p' "$state/record")
@@ -665,7 +666,9 @@ full()
     while :; do
         run=$(gh run list --repo "$REPO" --workflow full.yml --limit 50 \
             --json databaseId,displayTitle,status,conclusion,createdAt \
-            --jq "[.[] | select(.displayTitle == \"$title\" and
+            --jq "\"$title\" as \$t | [.[] | select(.displayTitle as \$d |
+                (\$d == \$t or ((\$d | endswith(\"...\")) and
+                 (\$t | startswith(\$d[:-3])))) and
                 .createdAt >= \"$chosen\")][0] |
                 select(. != null) | \"\(.databaseId) \(.status) \(.conclusion)\"") ||
             later "the full runs cannot be listed"
