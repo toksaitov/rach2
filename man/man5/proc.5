@@ -1637,7 +1637,9 @@ decimal, are those
 .Xr stat 2
 gives the file, and read
 .Ql 00:00 0
-for a region of no file.
+for a region of no file; a segment of the program or of the linker that
+was loaded and not mapped, as the debug shell loads its program, has those
+of the file it names.
 A region with no path ends at the space after the inode, as on Linux.
 It and
 .Pa smaps

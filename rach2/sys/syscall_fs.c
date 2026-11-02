@@ -423,12 +423,15 @@ void fd_release_backing(fd_entry_t *e)
  * Linux; and on a type that keeps a node only while it is open, mounted
  * KRFFS, a pin, so a rename or an unlink leaves the file to it. On the KRFFS
  * root the address space counts as a holder of the node (`fd_node_holders`),
- * and a relocation moves the description's node (`fd_ofd_repoint`). NULL
- * when the heap has no room or the pin fails.
+ * and a relocation moves the description's node (`fd_ofd_repoint`). Its
+ * inode number is the file's, as an open gives it, which /proc/PID/maps
+ * prints for the program's segments. NULL when the heap has no room or the
+ * pin fails.
  */
 struct open_file *fs_exe_open(const struct vfs_ref *ref)
 {
     struct open_file *ofd = fd_ofd_new();
+    struct vfs_stat st;
 
     if (!ofd) {
         return NULL;
@@ -441,6 +444,11 @@ struct open_file *fs_exe_open(const struct vfs_ref *ref)
     vfs_ref_hold(ref);
     ofd->vmnt = ref->mnt;
     ofd->vnode = ref->node;
+    if (!mnt_is_root(ref->mnt)) {
+        ofd->ino = vfs_getattr(ref->mnt, ref->node, &st) == 0 ? st.ino : 0;
+    } else {
+        ofd->ino = ref->node == krffs_fs->node ? 1 : krffs_node_ino(ref->node);
+    }
     vfs_desc_open(ref->mnt);
     return ofd;
 }

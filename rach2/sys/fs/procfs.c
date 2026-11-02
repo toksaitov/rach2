@@ -1263,16 +1263,22 @@ static const char *maps_path(const struct mm *mm, const vma_t *r)
     return NULL;
 }
 
-/** Append the device and inode of the file region `r` maps, as stat gives
- * them (`vfs_fill_stat64`): the major and minor numbers in hex, a space and
- * the inode in decimal, or "00:00 0" for a region that maps no file. */
-static void ap_maps_identity(struct procfs_text *t, const vma_t *r)
+/** Append the device and inode of the file region `r` of `mm` maps, as stat
+ * gives them (`vfs_fill_stat64`): the major and minor numbers in hex, a space
+ * and the inode in decimal, or "00:00 0" for a region of no file. A segment
+ * of the program or the dynamic linker that was loaded and not mapped, as
+ * the debug shell loads its program, has the identity of the file whose
+ * path `maps_path` gives it. */
+static void ap_maps_identity(struct procfs_text *t, const struct mm *mm, const vma_t *r)
 {
     const struct open_file *ofd = filemap_ofd(r->file);
     const struct vfs_mount *base;
     uint32_t dev = 0;
     int i;
 
+    if (!r->file && (r->type == VM_CODE || r->type == VM_DATA)) {
+        ofd = r->end <= mm->vm.heap_start ? mm->exe_file : mm->interp_file;
+    }
     if (!ofd || !ofd->vmnt) {
         ap_str(t, "00:00 0");
         return;
@@ -1307,7 +1313,7 @@ static void ap_maps_line(struct procfs_text *t, const struct mm *mm, const vma_t
     ap_ch(t, ' ');
     ap_xlow(t, r->file ? r->pgoff * PAGE_SIZE : 0u, 8);
     ap_ch(t, ' ');
-    ap_maps_identity(t, r);
+    ap_maps_identity(t, mm, r);
     ap_ch(t, ' ');
     if (path) {
         do {
