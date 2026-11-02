@@ -130,7 +130,10 @@ struct wlan_radio_ops {
     int (*sta_state)(struct wlan_radio *radio, const struct wlan_bss *bss,
                      enum wlan_sta_state old_state, enum wlan_sta_state new_state);
     /** Start or stop BlockAck for tid, starting sequence ssn (12 bits), with
-     * window 1 to 64 MPDUs. An unsupported action uses software handling. */
+     * window 1 to 64 MPDUs. An unsupported receive action uses software
+     * reordering. Under a transmit session the radio forms the A-MPDUs,
+     * reads the BlockAck and sends any BlockAckReq; -EOPNOTSUPP for
+     * WLAN_AMPDU_TX_START says it sends no aggregates. */
     int (*ampdu_action)(struct wlan_radio *radio, enum wlan_ampdu_action action,
                         const uint8_t peer[6], unsigned tid, unsigned ssn, unsigned window);
     /** Optional hardware scan: copy request before returning 0, report one
