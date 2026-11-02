@@ -113,14 +113,18 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/* The kirq_save regions open, with interrupts off while it is nonzero, and
+ * its value at the last push of a BlockAckReq. */
+static unsigned irq_off, bar_irq_off;
+
 uint32_t kirq_save(void)
 {
-    return 0;
+    return irq_off++;
 }
 
 void kirq_restore(uint32_t flags)
 {
-    (void)flags;
+    irq_off = flags;
 }
 
 int kcmdline_has(const char *flag)
@@ -298,6 +302,8 @@ static void ap_ies(int ht, unsigned ampdu)
     bss.ies_len = n;
 }
 
+static void model_write(struct ath9k_model *m, uint32_t reg, uint32_t value);
+
 /**
  * A started card with its queues set up, as a reset leaves them, and a
  * station connected with QoS to an open HT AP whose A-MPDUs are up to
@@ -316,6 +322,7 @@ static void setup(void)
     noampdu = 0;
     ath9k_model_init(&model, chip, chip->revs[0].mac_rev);
     model.hooks.dma = dma_map;
+    model.hooks.write = model_write;
     ath9k_model_attach(&model, &ah);
     ath9k_model_poke(&model, AR_RTC_RESET, AR_RTC_RESET_EN);
     ath9k_model_poke(&model, AR_RTC_FORCE_WAKE, AR_RTC_FORCE_WAKE_EN);
@@ -399,6 +406,19 @@ static unsigned chain_of(unsigned q, unsigned k, struct ar9003_txc **out, unsign
 static const uint8_t *frame_of(const struct ar9003_txc *dc)
 {
     return dc ? dma_map(&model, dc->data0, MS(dc->ctl3, AR_BufLen)) : 0;
+}
+
+/** Note the interrupt regions open at each push of a BlockAckReq. */
+static void model_write(struct ath9k_model *m, uint32_t reg, uint32_t value)
+{
+    const uint8_t *f;
+
+    (void)m;
+    if (reg < AR_QTXDP(0) || reg > AR_QTXDP(AR_NUM_QCU - 1))
+        return;
+    f = frame_of(desc_at(value));
+    if (f && f[0] == 0x84)
+        bar_irq_off = irq_off;
 }
 
 /** The sequence number of the QoS data frame a descriptor sends. */
@@ -817,7 +837,7 @@ static void test_give_up(void)
     struct wlan_tx_status st;
     const uint8_t *f;
     uint64_t cookie;
-    unsigned s0, ssn, txs_before;
+    unsigned s0, ssn, txs_before, i;
 
     setup();
     establish(64);
@@ -826,16 +846,21 @@ static void test_give_up(void)
     CHECK(chain_of(1, 0, dc, 4) == 1);
     s0 = seq_of(dc[0]);
 
-    /* Fifteen attempts at each try, and none acknowledged: kept twice,
-     * then given up with the tries of the last. */
-    (void)finish(1, AR_ExcessiveRetries | SM(14, AR_DataFailCnt), 0, 0, 0, 0);
-    CHECK(reported(cookie, 0) == 0 && model.tx[1].count == 1);
-    (void)finish(1, AR_ExcessiveRetries | SM(14, AR_DataFailCnt), 0, 0, 0, 0);
-    CHECK(reported(cookie, 0) == 0 && model.tx[1].count == 1);
+    /* Every try of the four series fails, eight attempts a push: kept
+     * three times, 24 attempts, then sent with the six left of its 30, the
+     * last series ended, and given up with the tries of that push. */
+    for (i = 0; i < 3; i++) {
+        (void)finish(1, AR_ExcessiveRetries | SM(1, AR_DataFailCnt), SM(3, AR_FinalTxIdx), 0, 0, 0);
+        CHECK(reported(cookie, 0) == 0 && model.tx[1].count == 1);
+    }
+    CHECK(chain_of(1, 0, dc, 4) == 1);
+    CHECK(MS(dc[0]->ctl13, AR_XmitDataTries0) == 2 && MS(dc[0]->ctl13, AR_XmitDataTries1) == 2);
+    CHECK(MS(dc[0]->ctl13, AR_XmitDataTries2) == 2 && MS(dc[0]->ctl13, AR_XmitDataTries3) == 0);
     txs_before = txs_count;
-    (void)finish(1, AR_ExcessiveRetries | SM(14, AR_DataFailCnt), 0, 0, 0, 0);
-    CHECK(reported(cookie, &st) == 1 && st.flags == 0 && st.rates[0].count == 15);
-    CHECK(counters.tx_failed == 1 && ah.ampdu.sw_retries == 2);
+    (void)finish(1, AR_ExcessiveRetries | SM(1, AR_DataFailCnt), SM(2, AR_FinalTxIdx), 0, 0, 0);
+    CHECK(reported(cookie, &st) == 1 && st.flags == 0 && st.rates[2].count == 2);
+    CHECK(st.rates[3].index == -1);
+    CHECK(counters.tx_failed == 1 && ah.ampdu.sw_retries == 3);
 
     /* The window moved past it, and a BlockAckReq for its successor went
      * out on its queue, compressed, of TID 0, at 1 Mbit/s. */
@@ -909,6 +934,9 @@ static void test_gaps(void)
     CHECK(ah.ampdu.bars == 1 && model.tx[1].count == 2 && chain_of(1, 1, dc, 40) == 1);
     f = frame_of(dc[0]);
     CHECK(f && f[0] == 0x84 && (((unsigned)f[18] | (unsigned)f[19] << 8) >> 4) == s);
+    /* The worker chose and queued it with interrupts off before its queue
+     * took them off again, so that no completion came between. */
+    CHECK(bar_irq_off >= 2 && irq_off == 0);
     finish_all();
 
     /* After a stop the frames go alone, outside any window. */

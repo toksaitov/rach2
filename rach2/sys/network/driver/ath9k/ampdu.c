@@ -239,6 +239,38 @@ static unsigned pad4(unsigned len)
     return (4 - (len & 3)) & 3;
 }
 
+/**
+ * Cut `rates` to at most `left` attempts in all, as the chip makes them,
+ * at most 15 a series, so that a frame sent again under its session has
+ * no more than its ATH9K_BA_MAX_TRIES. The series after the last one
+ * needed are ended.
+ */
+static void cut_tries(struct wlan_tx_rate rates[WLAN_TX_RATE_SERIES], unsigned left)
+{
+    unsigned i, n;
+
+    for (i = 0; i < WLAN_TX_RATE_SERIES; i++) {
+        if (rates[i].index < 0 || rates[i].count == 0)
+            break;
+        n = rates[i].count > 15 ? 15 : rates[i].count;
+        if (left == 0) {
+            rates[i].index = -1;
+            rates[i].count = 0;
+            continue;
+        }
+        if (n > left)
+            n = left;
+        rates[i].count = (uint8_t)n;
+        left -= n;
+    }
+}
+
+/** The attempts slot `s` has left under its session, at least 1. */
+static unsigned tries_left(const struct ath9k_tx_slot *s)
+{
+    return s->tries < ATH9K_BA_MAX_TRIES ? ATH9K_BA_MAX_TRIES - s->tries : 1;
+}
+
 /** The chains of BlockAck sessions queue `q`'s FIFO holds. */
 static unsigned session_depth(const struct ath9k_txq *q)
 {
@@ -258,7 +290,8 @@ static unsigned session_depth(const struct ath9k_txq *q)
  * the frames that follow it while they are of its session, start at an
  * MCS, fit in its window and its length limit, and number at most half
  * the window. Kept frames come first in the ring, so a retry goes before
- * new frames.
+ * new frames. A push of a session's frames makes no more attempts than
+ * the one of them with the fewest left may have.
  */
 unsigned ath9k_ampdu_form(struct ath9k *ah, struct ath9k_txq *q, unsigned *aggr_len,
                           struct wlan_tx_rate rates[WLAN_TX_RATE_SERIES])
@@ -266,7 +299,7 @@ unsigned ath9k_ampdu_form(struct ath9k *ah, struct ath9k_txq *q, unsigned *aggr_
     struct ath9k_tx_slot *s = slot_at(q, q->queued);
     struct ath9k_tid *t = session_of(ah, s);
     struct wlan_tx_rate cut[WLAN_TX_RATE_SERIES];
-    unsigned n, half, limit, al, delta, bpad, avail = q->count - q->queued;
+    unsigned n, half, limit, al, delta, bpad, left, avail = q->count - q->queued;
     int in;
 
     k_memcpy(rates, s->info.rates, sizeof(s->info.rates));
@@ -281,7 +314,9 @@ unsigned ath9k_ampdu_form(struct ath9k *ah, struct ath9k_txq *q, unsigned *aggr_
     in = admit(t, s);
     if (in <= 0)
         return in < 0 ? 1 : 0;
-    k_memcpy(cut, rates, sizeof(cut));
+    left = tries_left(s);
+    cut_tries(rates, left);
+    k_memcpy(cut, s->info.rates, sizeof(cut));
     limit = aggr_limit(ah, q, cut);
     if (limit == 0)
         return 1;
@@ -303,9 +338,12 @@ unsigned ath9k_ampdu_form(struct ath9k *ah, struct ath9k_txq *q, unsigned *aggr_
         al += bpad + delta;
         next->ndelim = (uint8_t)delimiters(ah, &cut[0], next->framelen);
         bpad = pad4(delta) + next->ndelim * DELIM_SZ;
+        if (tries_left(next) < left)
+            left = tries_left(next);
     }
     if (n == 1)
         return 1;
+    cut_tries(cut, left);
     k_memcpy(rates, cut, sizeof(cut));
     *aggr_len = al;
     ah->ampdu.aggregates++;
@@ -325,9 +363,10 @@ int ath9k_ampdu_owns(const struct ath9k *ah, const struct ath9k_txq *q)
  * the BlockAck's bitmap from its starting number, and one with no bitmap
  * asks for a reset, as ath9k does for a station. A frame is acknowledged
  * by its bit, or, sent alone, by the chain's success. A frame of its
- * session that was not stays in the ring for another push, its Retry bit
- * set, until ATH9K_BA_MAX_TRIES attempts; then it is given up, and the
- * recipient is owed a BlockAckReq past it. A frame of a session that has
+ * session that was not has the chain's attempts added to its own, and
+ * while they are fewer than ATH9K_BA_MAX_TRIES it stays in the ring for
+ * another push, its Retry bit set; then it is given up, and the recipient
+ * is owed a BlockAckReq past it. A frame of a session that has
  * ended goes nowhere again. The first frame finished carries the chain's
  * tries to rate control, as ath9k's rc_update does; the rest report none.
  */
@@ -362,8 +401,9 @@ void ath9k_ampdu_status(struct ath9k *ah, struct ath9k_txq *q, const struct ar90
             acked = has_ba && bit < ATH9K_BA_WINDOW && ((ba[bit >> 5] >> (bit & 31)) & 1);
         else
             acked = ok;
-        if (!acked && tracked && s->tries < ATH9K_BA_MAX_TRIES) {
+        if (!acked && tracked)
             s->tries = (uint8_t)(s->tries + attempts > 255 ? 255 : s->tries + attempts);
+        if (!acked && tracked && s->tries < ATH9K_BA_MAX_TRIES) {
             s->fc |= IEEE80211_FCTL_RETRY;
             s->buf[1] |= IEEE80211_FCTL_RETRY >> 8;
             ah->ampdu.sw_retries++;
@@ -402,7 +442,8 @@ void ath9k_ampdu_drain(struct ath9k *ah)
  * window's start, before which every frame is done, so it skips the frames
  * given up and passes over none still to be sent. It goes on its TID's
  * queue behind every frame there, at the band's lowest rate. One that finds
- * no room stays owed.
+ * no room stays owed. Each is chosen and queued with interrupts off, as
+ * the windows are moved.
  */
 void ath9k_ampdu_bar(struct ath9k *ah)
 {
@@ -411,12 +452,18 @@ void ath9k_ampdu_bar(struct ath9k *ah)
     uint8_t f[BAR_LEN];
     struct wlan_tx_info info;
     unsigned i, ctl;
+    uint32_t flags;
 
     for (i = 0; i < 8; i++) {
         struct ath9k_tid *t = &ah->ampdu.tid[i];
 
-        if (!t->active || !t->bar_owed || sn_less(t->seq_start, t->bar_seq))
+        /* A completion between the check and the queueing could owe a
+         * later BlockAckReq that this one would wipe out. */
+        flags = kirq_save();
+        if (!t->active || !t->bar_owed || sn_less(t->seq_start, t->bar_seq)) {
+            kirq_restore(flags);
             continue;
+        }
         k_memset(f, 0, sizeof(f));
         f[0] = (uint8_t)(IEEE80211_FTYPE_CTL | IEEE80211_STYPE_BACK_REQ);
         k_memcpy(f + 4, ah->ampdu.peer, 6);
@@ -434,11 +481,11 @@ void ath9k_ampdu_bar(struct ath9k *ah)
         info.tid = (uint8_t)i;
         info.hw_key = -1;
         t->bar_owed = 0;
-        if (ath9k_tx_own(ah, f, sizeof(f), &info) != 0) {
+        if (ath9k_tx_own(ah, f, sizeof(f), &info) != 0)
             t->bar_owed = 1;
-            continue;
-        }
-        ah->ampdu.bars++;
+        else
+            ah->ampdu.bars++;
+        kirq_restore(flags);
     }
 }
 
