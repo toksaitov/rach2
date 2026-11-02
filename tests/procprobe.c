@@ -1816,7 +1816,7 @@ static void count_rows(void)
     n = slurp("/proc/net/snmp", buf, (int)sizeof(buf));
     check("snmp-tcp-names",
           has_line_starting(buf, n, "Tcp: RtoAlgorithm") &&
-              contains(buf, n, "\nTcp: 1 1000 60000 -1 "),
+              contains(buf, n, "\nTcp: 1 200 60000 -1 "),
           "/proc/net/snmp has the Tcp names and under them their values");
 
     fd = new_socket(args);
