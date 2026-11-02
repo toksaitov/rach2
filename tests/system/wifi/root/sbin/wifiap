@@ -148,26 +148,30 @@ apconf()
     echo "channel=$2"
     echo "ieee80211n=1"
     echo "wmm_enabled=1"
+    # The log keeps 802.1X's records, among them each EAP Response-Identity
+    # with its length, which is the outer identity's.
+    echo "logger_stdout=-1"
+    echo "logger_stdout_level=1"
     [ -z "$4" ] || echo "bridge=$4"
 }
 
-# hostapd_up NAME: start hostapd on the configuration $RUN/NAME.conf and
-# wait until it has enabled its access point. Returns 1, with its log
-# printed, when it did not.
+# hostapd_up NAME: start hostapd on the configuration $RUN/NAME.conf in
+# the background and wait until it has enabled its access point. Returns 1,
+# with its log printed, when it ends first. Alpine's hostapd has no debug
+# file, so its records reach $RUN/NAME.log through its standard output.
 hostapd_up()
 {
-    # shellcheck disable=SC2094 # hostapd's -f and its output both append
-    if ! hostapd -B -t -P "$RUN/$1.pid" -f "$RUN/$1.log" "$RUN/$1.conf" \
-        >> "$RUN/$1.log" 2>&1; then
-        say "start: hostapd $1 failed:"
-        cat "$RUN/$1.log"
-        return 1
-    fi
-    if ! hostapd_cli -p /run/hostapd -i "$1" status 2>/dev/null | grep -q '^state=ENABLED'; then
-        say "start: hostapd $1 is not enabled:"
-        cat "$RUN/$1.log"
-        return 1
-    fi
+    hostapd -t "$RUN/$1.conf" >> "$RUN/$1.log" 2>&1 &
+    echo $! > "$RUN/$1.pid"
+    until hostapd_cli -p /run/hostapd -i "$1" status 2>/dev/null | grep -q '^state=ENABLED'; do
+        if ! kill -0 "$(cat "$RUN/$1.pid")" 2>/dev/null; then
+            say "start: hostapd $1 failed:"
+            cat "$RUN/$1.log"
+            rm -f "$RUN/$1.pid"
+            return 1
+        fi
+        sleep 1
+    done
 }
 
 stop()
