@@ -265,6 +265,7 @@ int fx_collection_qemu(void)
     site.qemu_i686 = site.qemu_x86_64 = given;
     spec.attempt_id = "windows-qemu";
     spec.profile = &p;
+    spec.envp = environ; /* QEMU's crypto provider needs SystemRoot */
     spec.site = &site;
     spec.console_max = 65536;
     spec.grace_us = UINT64_C(1000000);
