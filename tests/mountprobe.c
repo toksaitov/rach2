@@ -3,9 +3,10 @@
  *
  * The suite's disk has a FAT32 volume on /dev/disk0p2 holding `hello.txt`
  * and a copy of the `hello` program. The rows: a writable mount is placed
- * and taken away, then a read-only one is placed; the files on it stat, open,
- * read and list, its statfs is vfat's, and a symlink onto a name that exists
- * there is EEXIST before the mount's EROFS; a program on a `noexec` mount is
+ * and taken away, then a read-only one is placed, and a tmpfs over it hides
+ * its files until it is taken away; the files on it stat, open, read and
+ * list, its statfs is vfat's, and a symlink onto a name that exists there
+ * is EEXIST before the mount's EROFS; a program on a `noexec` mount is
  * refused with EACCES though its mode allows it; a mount is busy while any
  * description on it lives, in this process or a forked one, through `dup`,
  * `dup2` and `F_DUPFD`, and a close-on-exec descriptor is dropped by
@@ -398,11 +399,12 @@ static void read_text(const char *path)
  * directory descriptor follows a rename of its directory, since the type
  * rebuilds the path from the volume; its removal; the refused flags,
  * targets, sources and options; and the read-only mount the later rows use,
- * with the second mounts it makes busy.
+ * a tmpfs stacked over it and taken away, and the second mount it makes busy.
  *
  * F_DUPFD is tried on the root before any mount, so that a later failure of
- * it is the mount's and not the table's. The second mount on the same target
- * names another source, so that its EBUSY can only be the target's.
+ * it is the mount's and not the table's. A second mount on the same target
+ * goes over the first and hides its files, as on Linux, and an unmount takes
+ * the top one.
  */
 static void rows_placing(void)
 {
@@ -468,8 +470,12 @@ static void rows_placing(void)
     if (do_mount(src, mnt, MS_RDONLY, 0) != 0) {
         fail("the read-only mount");
     }
-    if (do_mount(krffs_src, mnt, MS_RDONLY, 0) != -EBUSY) {
-        fail("a second mount on the same target is EBUSY");
+    if (syscall5(SYS_MOUNT, (long)"none", (long)mnt, (long)"tmpfs", 0, 0) != 0 ||
+        xstat(in_mnt("/hello.txt")) != -ENOENT) {
+        fail("a second mount on the same target goes over the first");
+    }
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0 || xstat(in_mnt("/hello.txt")) != 0) {
+        fail("an unmount takes the top mount and shows the one below");
     }
     if (do_mount(src, mnt2, MS_RDONLY, 0) != -ENOENT) {
         fail("a missing target is ENOENT");
