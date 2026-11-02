@@ -223,8 +223,7 @@ static uint32_t begin(struct message *m, unsigned type, unsigned cmd, unsigned f
     m->len = NLMSG_HDRLEN + GENL_HDRLEN;
     h->nlmsg_type = (unsigned short)type;
     h->nlmsg_flags = (unsigned short)(NLM_F_REQUEST | flags);
-    if (!++sequence)
-        ++sequence;
+    sequence = sequence == 0xffffffffu ? 1 : sequence + 1;
     h->nlmsg_seq = sequence;
     g->cmd = (unsigned char)cmd;
     g->version = 1;
