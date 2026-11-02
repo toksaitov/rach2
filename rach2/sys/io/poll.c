@@ -549,6 +549,24 @@ long sys_ppoll(struct isr_params *params)
 }
 
 /**
+ * Copy `bytes` of the user fd_set at `u`, when `u` is not 0, into `set`.
+ * Returns 0, or -EFAULT when the set cannot be read.
+ */
+static int32_t fdset_in(uint32_t *set, uintptr_t u, uint32_t bytes)
+{
+    return u && copy_from_user(set, (const void __user *)u, bytes) != 0 ? -EFAULT : 0;
+}
+
+/**
+ * Copy `bytes` of `set` to the user fd_set at `u`, when `u` is not 0.
+ * Returns 0, or -EFAULT when the set cannot be written.
+ */
+static int32_t fdset_out(uintptr_t u, const uint32_t *set, uint32_t bytes)
+{
+    return u && copy_to_user((void __user *)u, set, bytes) != 0 ? -EFAULT : 0;
+}
+
+/**
  * The body of the select calls: the descriptors below `nfds` set in the
  * user fd_sets at `ur`, `uw` and `ue`, each 0 for none, waited on until the
  * deadline `d` when it is set, and the sets the caller gave written back.
@@ -605,9 +623,8 @@ static int32_t select_common(int nfds, uintptr_t ur, uintptr_t uw, uintptr_t ue,
     oeset = owset + words;
     fds = (struct kernel_pollfd *)(oeset + words);
     ready = 0;
-    if ((ur && copy_from_user(rset, (const void __user *)ur, setbytes) != 0) ||
-        (uw && copy_from_user(wset, (const void __user *)uw, setbytes) != 0) ||
-        (ue && copy_from_user(eset, (const void __user *)ue, setbytes) != 0)) {
+    if (fdset_in(rset, ur, setbytes) || fdset_in(wset, uw, setbytes) ||
+        fdset_in(eset, ue, setbytes)) {
         ready = -EFAULT;
     }
     npoll = ready == 0 ? fdsets_to_pollfds((uint32_t)nfds, rset, wset, eset, fds, nfds) : 0;
@@ -624,9 +641,8 @@ static int32_t select_common(int nfds, uintptr_t ur, uintptr_t uw, uintptr_t ue,
     }
     if (ready >= 0) {
         ready = pollfds_to_fdsets(fds, npoll, orset, owset, oeset);
-        if ((ur && copy_to_user((void __user *)ur, orset, setbytes) != 0) ||
-            (uw && copy_to_user((void __user *)uw, owset, setbytes) != 0) ||
-            (ue && copy_to_user((void __user *)ue, oeset, setbytes) != 0)) {
+        if (fdset_out(ur, orset, setbytes) || fdset_out(uw, owset, setbytes) ||
+            fdset_out(ue, oeset, setbytes)) {
             ready = -EFAULT;
         }
     }

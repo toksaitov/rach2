@@ -149,7 +149,6 @@ rach2/sys/fs/vfs.c:resolve_path nesting 5 one file system operation over the on-
 rach2/sys/fs/vfs.c:resolve_path params 7 the parameters are one level's cursor in a recursive walk
 rach2/sys/fs/vfs.c:bind_refs params 7 the parameters are one bind's source and target, each a place and its real path, and the mount a recursive bind skips
 
-rach2/sys/io/poll.c:select_common complexity 26 one system call's contract, its checks in the order the manual page lists the errors
 
 rach2/sys/ipc/unix.c:build params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
 rach2/sys/ipc/unix.c:recv_msg params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
