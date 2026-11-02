@@ -10,7 +10,8 @@
  * refused with EACCES though its mode allows it; a mount is busy while any
  * description on it lives, in this process or a forked one, through `dup`,
  * `dup2` and `F_DUPFD`, and a close-on-exec descriptor is dropped by
- * `execve`; a working directory inside it is busy too; the refused flags
+ * `execve`; a working directory inside it is busy too; MNT_DETACH takes a
+ * busy mount from view and its last close unmounts it; the refused flags
  * and targets answer EINVAL, a bind of a device ENOTDIR, a long target
  * ENAMETOOLONG, a rename across EXDEV, and the mount point refuses `rmdir`,
  * `unlink` and `rename` with EBUSY; an unprivileged caller gets EPERM; `..`
@@ -802,36 +803,40 @@ static void rows_lifetime(void)
 
 /** A target too long for the mount's record (VFS_COVERED_PATH_MAX in
  * rach2/sys/fs/vfs.h, 256 bytes with the NUL) claims nothing: a path of
- * three 99-byte names, 300 bytes from the root or longer from a native
- * run's workspace, is ENAMETOOLONG, and the source then mounts elsewhere.
- * No one name may pass 255 bytes, so the path is three directories deep. */
+ * three 99-byte names below the second mount point, longer than 300 bytes
+ * from the root, is ENAMETOOLONG, and the source then mounts elsewhere. No
+ * one name may pass 255 bytes, so the path is three directories deep, and
+ * they are made on a tmpfs, since KRFFS keeps a whole path in 256 bytes. */
 static void row_long_target(void)
 {
-    static char longname[310];
-    const char *target;
-    int i, level;
+    static char target[64 + 310];
+    int i, level, base;
 
+    for (base = 0; mnt2[base] != '\0'; base++) {
+        target[base] = mnt2[base];
+    }
     for (level = 0; level < 3; level++) {
-        longname[level * 100] = '/';
+        target[base + level * 100] = '/';
         for (i = 1; i < 100; i++) {
-            longname[level * 100 + i] = 'n';
+            target[base + level * 100 + i] = 'n';
         }
     }
-    target = probe_native() ? longname + 1 : longname;
+    if (syscall5(SYS_MOUNT, (long)"none", (long)mnt2, (long)"tmpfs", 0, 0) != 0) {
+        fail("a tmpfs to hold the long target");
+    }
     for (level = 1; level <= 3; level++) {
-        longname[level * 100] = 0;
+        target[base + level * 100] = 0;
         if (syscall2(SYS_MKDIR, (long)target, 0755) != 0) {
             fail("mkdir of the long target");
         }
-        longname[level * 100] = '/';
+        target[base + level * 100] = '/';
     }
-    longname[300] = 0;
+    target[base + 300] = 0;
     if (do_mount(src, target, MS_RDONLY, 0) != -ENAMETOOLONG) {
         fail("a long target is ENAMETOOLONG");
     }
-    for (level = 3; level >= 1; level--) {
-        longname[level * 100] = 0;
-        syscall1(SYS_RMDIR, (long)target);
+    if (syscall2(SYS_UMOUNT2, (long)mnt2, 0) != 0) {
+        fail("the tmpfs of the long target is taken away");
     }
     if (do_mount(src, mnt2, MS_RDONLY, 0) != 0 || syscall2(SYS_UMOUNT2, (long)mnt2, 0) != 0) {
         fail("the source mounts after the refused long target");
@@ -840,13 +845,15 @@ static void row_long_target(void)
 
 /** The rows of umount2's flags and the permanent mounts, an unprivileged
  * caller, noexec, a program run from the mount, and a target too long for
- * the mount's record, which claims nothing. The noexec and executable
- * mounts pass `umask=000`, which makes every file 0777, so that only noexec
- * refuses the program. */
+ * the mount's record, which claims nothing. MNT_DETACH takes a mount with
+ * two files open from view, and their last close unmounts it; the two keep
+ * its record apart from the one `rows_record` looks for. The noexec and
+ * executable mounts pass `umask=000`, which makes every file 0777, so that
+ * only noexec refuses the program. */
 static void rows_flags(void)
 {
     char *av[2];
-    int pid;
+    int pid, fd, fd2;
 
     if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != -EINVAL) {
         fail("umount2 of a directory that is not a mount point is EINVAL");
@@ -854,10 +861,20 @@ static void rows_flags(void)
     if (do_mount(src, mnt, MS_RDONLY, 0) != 0) {
         fail("the mount for the flag rows");
     }
-    if (syscall2(SYS_UMOUNT2, (long)mnt, MNT_DETACH) != -EINVAL ||
-        syscall2(SYS_UMOUNT2, (long)mnt, MNT_FORCE) != -EINVAL ||
+    if (syscall2(SYS_UMOUNT2, (long)mnt, MNT_FORCE) != -EINVAL ||
         syscall2(SYS_UMOUNT2, (long)mnt, UMOUNT_NOFOLLOW) != -EINVAL) {
-        fail("MNT_DETACH, MNT_FORCE and UMOUNT_NOFOLLOW are EINVAL");
+        fail("MNT_FORCE and UMOUNT_NOFOLLOW are EINVAL");
+    }
+    fd = syscall3(SYS_OPEN, (long)in_mnt("/hello.txt"), O_RDONLY, 0);
+    fd2 = syscall3(SYS_OPEN, (long)in_mnt("/hello.txt"), O_RDONLY, 0);
+    if (fd < 0 || fd2 < 0 || syscall2(SYS_UMOUNT2, (long)mnt, MNT_DETACH) != 0 ||
+        xstat(in_mnt("/hello.txt")) != -ENOENT || syscall3(SYS_READ, fd, (long)buf, 1) != 1) {
+        fail("MNT_DETACH takes a busy mount from view, and its open files still read");
+    }
+    syscall1(SYS_CLOSE, fd);
+    syscall1(SYS_CLOSE, fd2);
+    if (do_mount(src, mnt, MS_RDONLY, 0) != 0) {
+        fail("the mount after the detached one, freed by its last close");
     }
     if (syscall2(SYS_UMOUNT2, (long)"/proc", 0) != -EBUSY ||
         syscall2(SYS_UMOUNT2, (long)"/dev", 0) != -EBUSY ||
