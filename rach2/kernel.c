@@ -3536,13 +3536,29 @@ static void start_audio(void)
 }
 
 /**
- * Register the simulated radios with the wireless layer, after the wired
- * network, and log how many there are when there are any.
+ * Start the network unless `rach2.nonet` is given: the wired card, the
+ * network console with `rach2.netconsole`, and then the simulated radios,
+ * logging what each start found.
  */
-static void start_radios(void)
+static void start_network(void)
 {
-    int radios = wlan_init();
+    int radios;
 
+    if (kcmdline_has("rach2.nonet")) {
+        klog(KLOG_INFO, "net", "skipped: rach2.nonet");
+        return;
+    }
+    klog(KLOG_INFO, "net", "started");
+    if (init_network()) {
+        klog(KLOG_INFO, "net", "ready: %s", net_status());
+        if (kcmdline_has("rach2.netconsole")) {
+            netconsole_enable();
+        }
+        net_print_info();
+    } else {
+        klog(KLOG_WARN, "net", "absent: %s", net_error());
+    }
+    radios = wlan_init();
     if (radios > 0) {
         klog(KLOG_INFO, "wsim", "ready: %d radios", radios);
     }
@@ -3906,21 +3922,7 @@ void kernel_main(const struct boot_info *boot)
         }
     }
 
-    if (kcmdline_has("rach2.nonet")) {
-        klog(KLOG_INFO, "net", "skipped: rach2.nonet");
-    } else {
-        klog(KLOG_INFO, "net", "started");
-        if (init_network()) {
-            klog(KLOG_INFO, "net", "ready: %s", net_status());
-            if (kcmdline_has("rach2.netconsole")) {
-                netconsole_enable();
-            }
-            net_print_info();
-        } else {
-            klog(KLOG_WARN, "net", "absent: %s", net_error());
-        }
-        start_radios();
-    }
+    start_network();
 
     check_timing();
     if (kcmdline_has("rach2.strings")) {
