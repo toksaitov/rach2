@@ -610,7 +610,9 @@ static void requests(struct socket *sock)
     CHECK(nla_parse(storage + 1, msg.len, 0, 2, item, &offset) == 0);
     CHECK(nla_get_u64(item[1]) == 0x0123456789abcdefULL);
     CHECK(nla_put_u32(&msg, 1, 7) == 0);
-    CHECK(nla_parse(storage + 1, msg.len, 0, 2, item, &offset) == -EINVAL);
+    CHECK(nla_parse(storage + 1, msg.len, 0, 2, item, &offset) == 0);
+    CHECK(item[1] && nla_get_u32(item[1]) == 7 && offset == 0);
+    CHECK(nla_parse(storage + 1, msg.len - 1, 0, 2, item, &offset) == -EINVAL);
     CHECK(!item[0] && !item[1] && !item[2] && offset == 12);
     genl_msg_init(&msg, storage, 4);
     CHECK(nla_put_u32(&msg, 1, 1) == -EMSGSIZE && msg.len == 0);
