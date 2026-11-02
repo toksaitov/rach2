@@ -73,6 +73,14 @@ The pair is freed after both ends close, and its index may be reused.
 .Ss Line discipline and job control
 Canonical mode collects input into lines; raw mode permits input without
 waiting for a complete line.
+A canonical line holds 4095 bytes before its newline, as on Linux; a byte
+typed past them is dropped and counted in
+.Li line-drops
+of
+.Pa /proc/console .
+A read returns at most one line, and the whole of it when its buffer is
+large enough.
+The input queue holds 8192 bytes, room for two such lines.
 With
 .Dv IUTF8 ,
 which a new terminal has, the erase character removes a whole UTF-8

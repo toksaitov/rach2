@@ -4881,8 +4881,10 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
  * description, as recv(2) does; the query socket is -EOPNOTSUPP. A file of
  * the KRFFS root or of a mounted type is `file_read`'s.
  *
- * A console read returns one line, or one burst of raw bytes, of at most
- * N_TTY_READ_CHUNK bytes, and the caller loops for more. It waits in the
+ * A console read returns one line, or one burst of raw bytes of at most
+ * N_TTY_READ_CHUNK, and the caller loops for more raw bytes. A line longer
+ * than N_TTY_READ_CHUNK is copied a chunk at a time (`tty_read_rest`). It
+ * waits in the
  * line discipline of `console_tty` until a cooked line or VMIN raw bytes
  * arrive, unless O_NONBLOCK makes it -EAGAIN, and a pending signal ends the
  * wait with -EINTR. While a reader waits, or once a session owns the
@@ -4956,7 +4958,7 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
 
     if (entry->type == FD_TYPE_CONSOLE) {
         unsigned char kbuf[N_TTY_READ_CHUNK];
-        uint32_t want;
+        uint32_t want, done;
         int n;
 
         if (!(entry->flags & FD_FLAG_READ)) {
@@ -4986,10 +4988,19 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
         if (n < 0) {
             return n;
         }
-        if (copy_to_user(buf, kbuf, (uint32_t)n) != 0) {
-            return -EFAULT;
+        done = 0;
+        while (n > 0) {
+            if (copy_to_user(buf + done, kbuf, (uint32_t)n) != 0) {
+                return -EFAULT;
+            }
+            done += (uint32_t)n;
+            want = count - done;
+            if (want > sizeof(kbuf)) {
+                want = sizeof(kbuf);
+            }
+            n = tty_read_rest(&console_tty, kbuf, (int)want);
         }
-        return n;
+        return (int32_t)done;
     }
 
     if (entry->type == FD_TYPE_MOUSE) {

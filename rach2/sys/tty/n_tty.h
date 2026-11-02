@@ -77,8 +77,12 @@ struct ktermios {
 #define NTTY_SIGQUIT 3
 #define NTTY_SIGTSTP 20
 
-#define N_TTY_LINE_MAX 256  /* longest editable canonical line */
-#define N_TTY_READ_MAX 4096 /* the cooked/raw bytes ready for read(); a power of two */
+/* The longest canonical line with its terminator, Linux's N_TTY_BUF_SIZE:
+ * 4095 bytes and a newline. */
+#define N_TTY_LINE_MAX 4096
+/* The cooked or raw bytes ready for read(): a power of two, and two lines,
+ * so that a whole line still fits beside a queue `n_tty_has_room` let fill. */
+#define N_TTY_READ_MAX 8192
 #define N_TTY_READ_CHUNK \
     1024 /* what one read() copies through its stack bounce; the caller loops */
 
@@ -108,6 +112,7 @@ struct n_tty {
     unsigned char rq_end[N_TTY_READ_MAX];
     unsigned int rq_head; /* monotonic; slot = head & (SIZE-1) */
     unsigned int rq_tail;
+    int rq_mid;           /* the last canonical read stopped inside a line */
     int eof;              /* a pending end-of-file: a VEOF on an empty line, or a hangup */
     unsigned int eof_pos; /* the rq stream position of the pending EOF */
     struct n_tty_counters counters;
@@ -209,6 +214,15 @@ void n_tty_flush(struct n_tty *t);
  * queue, then a partial canonical line a mode switch could not queue.
  */
 int n_tty_read(struct n_tty *t, unsigned char *buf, int count);
+
+/**
+ * Whether the last canonical read stopped inside a line, for want of room in
+ * its buffer: nonzero if so, and a read now returns the rest of that line.
+ * A caller that copies a read through a smaller buffer than its reader's
+ * reads on while this holds, so that a read returns a whole line, as Linux's
+ * does. 0 in raw mode and after a flush.
+ */
+int n_tty_line_open(const struct n_tty *t);
 
 /**
  * Count of bytes queued for reading (the TIOCINQ value).

@@ -314,6 +314,22 @@ int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock)
     }
 }
 
+int tty_read_rest(struct tty *t, unsigned char *kbuf, int count)
+{
+    uint32_t flags;
+    int n = 0;
+
+    if (count <= 0) {
+        return 0;
+    }
+    flags = kirq_save();
+    if (n_tty_line_open(&t->ldisc)) {
+        n = n_tty_read(&t->ldisc, kbuf, count);
+    }
+    kirq_restore(flags);
+    return n;
+}
+
 static void console_sink(void *ctx, unsigned char c);
 
 /**

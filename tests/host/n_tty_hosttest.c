@@ -177,6 +177,55 @@ static void reused_markers(void)
     expect_line(&t, "ab", 2, "ring reuse clears old end markers");
 }
 
+/**
+ * A canonical line holds 4095 bytes before its newline, as Linux's n_tty
+ * does: of 4096 bytes typed and a newline, the 4096th is dropped and counted
+ * in line_drops, and a read returns the rest with its newline. A read for
+ * less stops inside the line, which `n_tty_line_open` reports until a read
+ * takes the rest; the next line is not joined to it.
+ */
+static void long_line(void)
+{
+    static struct n_tty t;
+    static unsigned char buf[N_TTY_LINE_MAX + 16];
+    struct cap cp;
+    int i, n, ok;
+
+    n_tty_init(&t);
+    cap_reset(&cp);
+    for (i = 0; i < N_TTY_LINE_MAX; i++) {
+        feed(&t, &cp, (unsigned char)('a' + i % 26));
+    }
+    feed(&t, &cp, '\n');
+    CHECK(t.counters.line_drops == 1 && t.counters.line_max == N_TTY_LINE_MAX - 1);
+    n = n_tty_read(&t, buf, sizeof(buf));
+    CHECK(n == N_TTY_LINE_MAX && buf[N_TTY_LINE_MAX - 1] == '\n');
+    for (i = 0, ok = 1; i < N_TTY_LINE_MAX - 1; i++) {
+        ok &= buf[i] == (unsigned char)('a' + i % 26);
+    }
+    CHECK(ok);
+    CHECK(!n_tty_line_open(&t) && n_tty_inq(&t) == 0);
+
+    /* A read through a smaller buffer leaves the line open for the rest. */
+    for (i = 0; i < N_TTY_LINE_MAX - 1; i++) {
+        feed(&t, &cp, 'b');
+    }
+    feed(&t, &cp, '\n');
+    feed_str(&t, &cp, "c\n");
+    CHECK(t.counters.line_drops == 1);
+    CHECK(n_tty_read(&t, buf, 1024) == 1024 && n_tty_line_open(&t));
+    CHECK(n_tty_read(&t, buf, 1024) == 1024 && n_tty_line_open(&t));
+    n = n_tty_read(&t, buf, sizeof(buf));
+    CHECK(n == N_TTY_LINE_MAX - 2048 && buf[n - 1] == '\n' && !n_tty_line_open(&t));
+    CHECK(n_tty_read(&t, buf, sizeof(buf)) == 2 && buf[0] == 'c');
+
+    /* A flush closes an open line. */
+    feed_str(&t, &cp, "long\n");
+    CHECK(n_tty_read(&t, buf, 2) == 2 && n_tty_line_open(&t));
+    n_tty_flush(&t);
+    CHECK(!n_tty_line_open(&t));
+}
+
 /** A new terminal's control flags are Linux's: 38400 baud, eight-bit
  * characters, the receiver on and a hang-up at the last close, so that
  * `stty` does not report speed 0, which is the code for hanging up. */
@@ -720,22 +769,7 @@ int main(void)
     CHECK(n == 1 && buf[0] == 'a');
     CHECK(n_tty_read(&t, buf, sizeof(buf)) == 0); /* then persistent EOF */
 
-    /* buffer bounds: a canonical line longer than the buffer is capped */
-    n_tty_init(&t);
-    cap_reset(&cp);
-    for (i = 0; i < 300; i++) {
-        feed(&t, &cp, 'a');
-    }
-    feed(&t, &cp, '\n');
-    n = n_tty_read(&t, buf, sizeof(buf));
-    CHECK(n == N_TTY_LINE_MAX); /* 255 'a' + '\n' == 256 */
-    CHECK(buf[N_TTY_LINE_MAX - 1] == '\n');
-    for (i = 0; i < N_TTY_LINE_MAX - 1; i++) {
-        if (buf[i] != 'a') {
-            fails++;
-            break;
-        }
-    }
+    long_line();
 
     return fails > 255 ? 255 : fails;
 }

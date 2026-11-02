@@ -55,6 +55,7 @@ void n_tty_flush(struct n_tty *t)
     t->counters.flush_bytes += (unsigned int)t->line_len + rq_count(t);
     t->line_len = 0;
     t->rq_head = t->rq_tail;
+    t->rq_mid = 0;
     t->eof = 0;
 }
 
@@ -279,6 +280,7 @@ void n_tty_init(struct n_tty *t)
     t->line_len = 0;
     t->rq_head = 0;
     t->rq_tail = 0;
+    t->rq_mid = 0;
     t->eof = 0;
     for (i = 0; i < (int)sizeof(t->counters); i++) {
         ((unsigned char *)&t->counters)[i] = 0;
@@ -414,6 +416,11 @@ int n_tty_read_timer(const struct n_tty *t)
     return t->tio.c_cc[VMIN] == 0 ? N_TTY_TIMER_READ : N_TTY_TIMER_BYTE;
 }
 
+int n_tty_line_open(const struct n_tty *t)
+{
+    return (t->tio.c_lflag & ICANON) && t->rq_mid && rq_count(t) > 0;
+}
+
 int n_tty_inq(const struct n_tty *t)
 {
     if (t->tio.c_lflag & ICANON) {
@@ -430,14 +437,19 @@ int n_tty_read(struct n_tty *t, unsigned char *buf, int count)
     if (count <= 0) {
         return 0;
     }
+    t->rq_mid = 0;
     if (canon) {
         if (t->eof && t->rq_head == t->eof_pos) {
             t->eof = 0;
             return 0;
         }
-        while (n < count && rq_count(t) > 0) {
+        while (rq_count(t) > 0) {
             unsigned char c;
             if (t->eof && t->rq_head == t->eof_pos) {
+                break;
+            }
+            if (n == count) {
+                t->rq_mid = 1;
                 break;
             }
             c = rq_pop(t);

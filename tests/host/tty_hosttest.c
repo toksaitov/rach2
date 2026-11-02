@@ -901,6 +901,81 @@ static void hangup_read(void)
 }
 
 /** Run every row; 0 when each passes, 1 otherwise. */
+static char long_input[N_TTY_LINE_MAX + 1];
+static char long_out[N_TTY_READ_MAX];
+
+/** Whether `n` bytes of `long_out` are `long_input`'s line, its 4096th byte
+ * dropped: 4095 bytes and the newline. */
+static int long_read(int n)
+{
+    int i;
+
+    if (n != N_TTY_LINE_MAX || long_out[N_TTY_LINE_MAX - 1] != '\n') {
+        return 0;
+    }
+    for (i = 0; i < N_TTY_LINE_MAX - 1; i++) {
+        if (long_out[i] != long_input[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/**
+ * A canonical line holds 4095 bytes before its newline, on a slave and on
+ * the console: of 4096 bytes typed and a newline, the 4096th is dropped and
+ * counted, and one read returns the line whole though it copies through a
+ * bounce of N_TTY_READ_CHUNK. A master writing a second such line behind
+ * the first stops short when the slave has no room for a line, drops
+ * nothing, and writes the rest once the first is read.
+ */
+static void long_lines(void)
+{
+    int i, n, done;
+
+    for (i = 0; i < N_TTY_LINE_MAX; i++) {
+        long_input[i] = (char)('a' + i % 26);
+    }
+    long_input[N_TTY_LINE_MAX] = '\n';
+
+    setup_pair();
+    current_proc = &producer;
+    pair.slave.ldisc.tio.c_lflag |= ICANON;
+    CHECK(ptm_write(&master, long_input, sizeof(long_input)) == (int)sizeof(long_input),
+          "the master writes a line of 4096 bytes and a newline");
+    CHECK(pair.slave.ldisc.counters.line_drops == 1, "the slave drops the line's 4096th byte");
+    n = ptm_write(&master, long_input, sizeof(long_input));
+    CHECK(n > 0 && n < (int)sizeof(long_input), "a second line stops short of a full slave");
+    CHECK(pts_read(&slave, long_out, sizeof(long_out)) == N_TTY_LINE_MAX &&
+              long_read(N_TTY_LINE_MAX),
+          "one slave read returns 4095 bytes and the newline");
+    CHECK(ptm_write(&master, long_input + n, sizeof(long_input) - n) == (int)sizeof(long_input) - n,
+          "the master writes the rest of the second line once the first is read");
+    CHECK(pts_read(&slave, long_out, sizeof(long_out)) == N_TTY_LINE_MAX &&
+              long_read(N_TTY_LINE_MAX),
+          "the second line is read whole");
+    CHECK(pair.slave.ldisc.counters.line_drops == 2 && pair.slave.ldisc.counters.queue_drops == 0,
+          "a master that waits loses no byte but each line's 4096th");
+
+    setup_pair();
+    tty_console_init();
+    tty_set_session(&console_tty, 1, 1);
+    serial_bytes = long_input;
+    serial_pos = 0;
+    serial_len = (int)sizeof(long_input);
+    irq_enabled = 0;
+    console_pump(&console_tty);
+    irq_enabled = 1;
+    CHECK(serial_pos == serial_len && console_tty.ldisc.counters.line_drops == 1,
+          "the console takes COM1's line and drops its 4096th byte");
+    n = tty_read(&console_tty, (unsigned char *)long_out, N_TTY_READ_CHUNK, 1);
+    for (done = 0; n > 0;
+         n = tty_read_rest(&console_tty, (unsigned char *)long_out + done, N_TTY_READ_CHUNK)) {
+        done += n;
+    }
+    CHECK(long_read(done), "the console's read returns 4095 bytes and the newline");
+}
+
 int main(void)
 {
     read_wakes_poll();
@@ -918,6 +993,7 @@ int main(void)
     copy_refit();
     timed_reads();
     hangup_read();
+    long_lines();
     printf("tty-test: result: %d failures\n", failures);
     return failures ? 1 : 0;
 }

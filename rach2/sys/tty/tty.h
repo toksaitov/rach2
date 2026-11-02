@@ -149,6 +149,18 @@ void tty_input_char(struct tty *t, unsigned char c);
 int tty_read(struct tty *t, unsigned char *kbuf, int count, int nonblock);
 
 /**
+ * Copy up to `count` bytes more of the canonical line the last read of `t`
+ * stopped inside (`n_tty_line_open`) into `kbuf`, without waiting.
+ *
+ * Returns the byte count, or 0 when no line is open, as after a read that
+ * ended at its line's end or when another reader took the rest. A read of
+ * the console or a slave calls it after `tty_read` while its user buffer has
+ * room, so that one read returns a line longer than its bounce buffer whole.
+ * Thread context; it takes interrupts off itself.
+ */
+int tty_read_rest(struct tty *t, unsigned char *kbuf, int count);
+
+/**
  * Write `count` bytes of `kbuf` through output processing (OPOST, ONLCR) to
  * the sink. Returns `count`: a tty write neither waits nor fails. On the
  * console the write is bracketed by console_write_begin and

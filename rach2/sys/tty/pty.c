@@ -503,14 +503,16 @@ static const struct file_ops ptm_ops = {ptm_read, ptm_write, ptm_poll, ptm_ioctl
  * ignored.
  * The wait is `tty_read`'s, which honours VMIN and VTIME and ends at the
  * master's close (`tty_hangup`), even after another reader consumed the
- * discipline's single canonical EOF marker. A read returns at most
- * N_TTY_READ_CHUNK bytes and wakes a master writer waiting for room.
+ * discipline's single canonical EOF marker. A raw read returns at most
+ * N_TTY_READ_CHUNK bytes, and a canonical one its whole line, copied a chunk
+ * at a time (`tty_read_rest`); each chunk wakes a master writer waiting for
+ * room.
  */
 static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct pty *p = (struct pty *)e->priv;
     unsigned char kbuf[N_TTY_READ_CHUNK];
-    uint32_t want;
+    uint32_t want, done;
     int n;
 
     if (!(e->flags & FD_FLAG_READ)) {
@@ -535,19 +537,24 @@ static int32_t pts_read(fd_entry_t *e, char __user *buf, uint32_t count)
         return -EINTR;
     }
     n = tty_read(&p->slave, kbuf, (int)want, e->ofd && (e->ofd->status_flags & OFD_NONBLOCK));
-    if (n > 0) {
-        wq_wake(&p->m_read_wq, WQ_ROOM);
-    }
     if (n < 0) {
         return n;
     }
-    if (copy_to_user(buf, kbuf, (uint32_t)n) != 0) {
-        return -EFAULT;
-    }
-    if (n > 0) {
+    done = 0;
+    while (n > 0) {
+        wq_wake(&p->m_read_wq, WQ_ROOM);
+        if (copy_to_user(buf + done, kbuf, (uint32_t)n) != 0) {
+            return -EFAULT;
+        }
+        done += (uint32_t)n;
         p->atime = pty_now();
+        want = count - done;
+        if (want > sizeof(kbuf)) {
+            want = sizeof(kbuf);
+        }
+        n = tty_read_rest(&p->slave, kbuf, (int)want);
     }
-    return n;
+    return (int32_t)done;
 }
 
 /** A slave writer can go on: the ring has room for a byte of output at its
