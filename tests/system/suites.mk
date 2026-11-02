@@ -858,6 +858,32 @@ $(GNU_TEST_DISK): $(GNU_TEST_EXT2) $(MKMBR)
 	$(MKMBR) --lba $@.tmp 2048:$$((mib * 2048)):83 > /dev/null
 	mv $@.tmp $@
 
+# `tests/run wifi`: Wi-Fi above the radio, a station on the installed system
+# joining the access points of the Linux AP guest (tests/system/wifi) through
+# a wsim radio and the two relays, in each security the guest offers, and
+# keeping its addresses, routes and servers right through a rekey, a lost
+# and a restarted access point, a roam, a move between networks, a pulled
+# cable and an rfkill block. Its cases are in tests/cases/machine.wifi.json,
+# which etude runs. Each boots this disk: the installed system's ext2 root,
+# whose init-metal starts wpa_supplicant, behind a table of one partition,
+# copied sparse as gnu-test.disk is. The guest, $(WIFI_GUEST_DIR), is built
+# for x86-64 whatever ARCH is, and booted so beside either architecture.
+WIFI_TEST_DISK = $(IMAGES_DIR)/wifi-test.disk
+$(WIFI_TEST_DISK): $(SEALED_EXT2) $(MKMBR)
+	@mkdir -p $(@D)
+	rm -f $@.tmp
+	mib=$$(($$(wc -c < $(SEALED_EXT2)) / 1048576)) && \
+	dd if=/dev/zero of=$@.tmp bs=1048576 count=0 seek=$$((mib + 2)) 2>/dev/null && \
+	dd if=$(SEALED_EXT2) of=$@.tmp bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null && \
+	$(MKMBR) --lba $@.tmp 2048:$$((mib * 2048)):83 > /dev/null
+	mv $@.tmp $@
+
+# `tests/run wifi-gnu`: the GNU root's own wpa_supplicant joining the Linux AP
+# guest's networks under WPA2, SAE and PEAP as the installed system's does,
+# the case of tests/cases/machine.wifi-gnu.json, on an overlay of
+# gnu-test.disk, apart from `wifi` so that the suite of the installed system
+# never needs the GNU layer.
+
 # The files the gnu cases put on the machine or serve beside it: the rows'
 # script, GNU sed's tarball, which the autotools row builds, and the ntpd
 # row's SNTP server.

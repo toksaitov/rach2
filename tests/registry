@@ -55,6 +55,8 @@ sealed|qemu,ssh,mformat,mmd,mcopy,debugfs,e2fsck,gzip|full
 fakeapi|qemu|full|etude-fakeapi.disk*|1024|x86_64
 dhcp|qemu|full
 netif|qemu|full
+wifi|qemu,qemu-system-x86_64,curl,tar,gzip|full||768
+wifi-gnu|qemu,qemu-system-x86_64,curl,tar,gzip|full||2560
 mount|qemu,mformat,mcopy,mdel,mdir|core
 fdlock|qemu|full
 grow|qemu,mke2fs,e2fsck,qemu-img,xorriso|full||512

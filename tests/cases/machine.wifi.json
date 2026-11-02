@@ -1,0 +1,1669 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.wifi",
+  "summary": "Wi-Fi above the radio: the installed system, a wsim radio carried by wsimrelay, joining the access points of the Linux AP guest's mac80211_hwsim radios in each security they offer and keeping its network as they change, each case a boot of the guest and the station that tests/cases/machine/wifi_scenario.c drives",
+  "cases": [
+    {
+      "case_id": "machine.wifi.wpa2",
+      "behavior": "the installed system joins WPA2-Personal network A with wifi connect, takes a lease, resolves the endpoint through the AP's DNS, pings the AP and echoes 256 KiB to the host through it, and iw and /proc/net/wireless describe the radio and the link",
+      "units": [
+        "wifi",
+        "wpa_supplicant",
+        "nl80211",
+        "wlan",
+        "wsim",
+        "utils/wifi.c",
+        "tests/system/wifi",
+        "udhcpc",
+        "iw"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "posix",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "wifi_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends both machines and the service if they still run, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "serve",
+          "stage": "boot",
+          "does": "start hostpeer's TCP and UDP echo on the case's port 3, the endpoint 10.0.2.2 that the AP's DNS names endpoint.wifi.test"
+        },
+        {
+          "step_id": "ap",
+          "stage": "boot",
+          "machine": "ap",
+          "does": "boot the Linux AP guest to its shell, start network A's access points in the case's first profile and its relay to the station's port 1"
+        },
+        {
+          "step_id": "station",
+          "stage": "boot",
+          "machine": "station",
+          "does": "boot the station, pull its cable out through QMP, log in as root at the console, give eth1 10.0.4.15 and start wsimrelay to the guest's port 0"
+        },
+        {
+          "step_id": "join",
+          "stage": "execute",
+          "machine": "station",
+          "does": "wifi scan, then wifi connect rach2-net with its passphrase, wait for the kernel's record of the lease 192.168.71.50, and read route -n and resolv.conf"
+        },
+        {
+          "step_id": "traffic",
+          "stage": "execute",
+          "machine": "station",
+          "does": "nslookup endpoint.wifi.test, ping ap.wifi.test and send 256 KiB of random bytes through nc to the endpoint's echo"
+        },
+        {
+          "step_id": "tools",
+          "stage": "execute",
+          "machine": "station",
+          "does": "read iw dev, iw phy, iw dev wlan0 scan, iw dev wlan0 link, /proc/net/wireless and wpa_cli status"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "ap",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "ap-kernel",
+            "initrd": "ap-initrd",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 536870912,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "e1000",
+                "forwards": [
+                  {
+                    "protocol": "tcp",
+                    "port": 2,
+                    "guest_port": 2222
+                  }
+                ]
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.3.0/24",
+                "host": "10.0.3.2",
+                "dhcpstart": "10.0.3.15",
+                "dns": "10.0.3.3",
+                "forwards": [
+                  {
+                    "protocol": "udp",
+                    "port": 0,
+                    "guest_port": 5550
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "console=ttyS0",
+              "panic=-1",
+              "quiet",
+              "wifiap.profile=wpa2",
+              "wifiap.run=shell"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        },
+        {
+          "machine_id": "station",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "station-disk",
+                "base": "wifi-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 268435456,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "e1000",
+                "id": "cable"
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.4.0/24",
+                "host": "10.0.4.2",
+                "dhcpstart": "10.0.4.15",
+                "dns": "10.0.4.3",
+                "forwards": [
+                  {
+                    "protocol": "udp",
+                    "port": 1,
+                    "guest_port": 5550
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.wsim=1",
+              "rach2.ip=none"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "endpoint",
+          "program": "hostpeer",
+          "ready": "hostpeer: echoing",
+          "does": "echo each TCP connection and UDP datagram on the case's port 3 until stopped"
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "scan",
+          "checks": "wifi scan lists rach2-net with WPA2 and rach2-other",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "join",
+          "checks": "wifi connect says `wifi: connected to rach2-net`",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "lease",
+          "checks": "the default route is through 192.168.71.1 on wlan0 at metric 600, and resolv.conf names 192.168.71.1",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "dns",
+          "checks": "nslookup gives endpoint.wifi.test the address 10.0.2.2",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ping",
+          "checks": "ping ap.wifi.test has its 3 replies",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "transfer",
+          "checks": "the 262144 bytes that come back from the echo are those sent",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "iw-dev",
+          "checks": "iw dev shows wlan0 managed on rach2-net",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "iw-phy",
+          "checks": "iw phy shows phy0 with 2412 MHz, CCMP and the managed mode",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "iw-scan",
+          "checks": "iw dev wlan0 scan shows the three BSSIDs and rach2-other",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "iw-link",
+          "checks": "iw dev wlan0 link shows the AP, rach2-net, a signal and the DTIM period",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "wireless",
+          "checks": "/proc/net/wireless has wlan0's line with a signal level",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "state",
+          "checks": "wpa_supplicant is still COMPLETED",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 6
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 900000000,
+          "ceiling_us": 2700000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 2000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 1073741824,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 4,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "wifi-image",
+          "node": "images/wifi-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "ap-kernel",
+          "node": "wifi/guest/vmlinuz",
+          "per_architecture": false
+        },
+        {
+          "name": "ap-initrd",
+          "node": "wifi/guest/initrd",
+          "per_architecture": false
+        },
+        {
+          "name": "hostpeer",
+          "node": "tests/system/hostpeer",
+          "per_architecture": false
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "wifi_scenario",
+          "node": "tests/cases/machine/wifi_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the station's radio is wsim, whose frames reach the Linux AP guest's mac80211_hwsim radios only through the two QEMU user networks' UDP forwards"
+      }
+    },
+    {
+      "case_id": "machine.wifi.security",
+      "behavior": "the installed system joins SAE with MFP required and keeps the link through an unprotected deauthentication, then joins network A as WPA3 transition, WPA with TKIP and an open network",
+      "units": [
+        "wifi",
+        "wpa_supplicant",
+        "nl80211",
+        "wlan",
+        "wsim",
+        "utils/wifi.c",
+        "tests/system/wifi",
+        "SAE",
+        "MFP",
+        "TKIP"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "posix",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "wifi_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends both machines and the service if they still run, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "serve",
+          "stage": "boot",
+          "does": "start hostpeer's TCP and UDP echo on the case's port 3, the endpoint 10.0.2.2 that the AP's DNS names endpoint.wifi.test"
+        },
+        {
+          "step_id": "ap",
+          "stage": "boot",
+          "machine": "ap",
+          "does": "boot the Linux AP guest to its shell, start network A's access points in the case's first profile and its relay to the station's port 1"
+        },
+        {
+          "step_id": "station",
+          "stage": "boot",
+          "machine": "station",
+          "does": "boot the station, pull its cable out through QMP, log in as root at the console, give eth1 10.0.4.15 and start wsimrelay to the guest's port 0"
+        },
+        {
+          "step_id": "sae",
+          "stage": "execute",
+          "machine": "station",
+          "does": "wifi connect rach2-net under SAE with management frame protection required, wait for the lease and read wpa_cli status"
+        },
+        {
+          "step_id": "deauth",
+          "stage": "execute",
+          "machine": "ap",
+          "does": "raise wpa_supplicant's log level, have the guest forge an unprotected deauthentication from the AP to the station through the relay, and read the station's state, its BSSID and its log"
+        },
+        {
+          "step_id": "transition",
+          "stage": "execute",
+          "machine": "station",
+          "does": "wifiap start transition, wifi forget and wifi connect rach2-net, and read wpa_cli status"
+        },
+        {
+          "step_id": "tkip",
+          "stage": "execute",
+          "machine": "station",
+          "does": "wifiap start tkip, wifi forget and wifi connect rach2-net, and read wpa_cli status"
+        },
+        {
+          "step_id": "open",
+          "stage": "execute",
+          "machine": "station",
+          "does": "wifiap start open, wifi forget and wifi connect rach2-net with no passphrase, and read wpa_cli status"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "ap",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "ap-kernel",
+            "initrd": "ap-initrd",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 536870912,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "e1000",
+                "forwards": [
+                  {
+                    "protocol": "tcp",
+                    "port": 2,
+                    "guest_port": 2222
+                  }
+                ]
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.3.0/24",
+                "host": "10.0.3.2",
+                "dhcpstart": "10.0.3.15",
+                "dns": "10.0.3.3",
+                "forwards": [
+                  {
+                    "protocol": "udp",
+                    "port": 0,
+                    "guest_port": 5550
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "console=ttyS0",
+              "panic=-1",
+              "quiet",
+              "wifiap.profile=wpa2",
+              "wifiap.run=shell"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        },
+        {
+          "machine_id": "station",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "station-disk",
+                "base": "wifi-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 268435456,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "e1000",
+                "id": "cable"
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.4.0/24",
+                "host": "10.0.4.2",
+                "dhcpstart": "10.0.4.15",
+                "dns": "10.0.4.3",
+                "forwards": [
+                  {
+                    "protocol": "udp",
+                    "port": 1,
+                    "guest_port": 5550
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.wsim=1",
+              "rach2.ip=none"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "endpoint",
+          "program": "hostpeer",
+          "ready": "hostpeer: echoing",
+          "does": "echo each TCP connection and UDP datagram on the case's port 3 until stopped"
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "sae",
+          "checks": "the station joins with key_mgmt=SAE and pmf=2, takes the lease and pings the AP",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "forged",
+          "checks": "the guest says it sent the deauthentication",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "deauth-ignored",
+          "checks": "wpa_supplicant logs the unprotected deauthentication dropped, stays COMPLETED on the same BSSID without a disconnection, and pings the AP",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "transition",
+          "checks": "the station joins the transition network with key_mgmt=SAE and pmf=1",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "tkip",
+          "checks": "the station joins with key_mgmt=WPA-PSK and pairwise_cipher=TKIP",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "open",
+          "checks": "the station joins the open network with key_mgmt=NONE",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 8
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 1200000000,
+          "ceiling_us": 3600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 2000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 1073741824,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 4,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "wifi-image",
+          "node": "images/wifi-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "ap-kernel",
+          "node": "wifi/guest/vmlinuz",
+          "per_architecture": false
+        },
+        {
+          "name": "ap-initrd",
+          "node": "wifi/guest/initrd",
+          "per_architecture": false
+        },
+        {
+          "name": "hostpeer",
+          "node": "tests/system/hostpeer",
+          "per_architecture": false
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "wifi_scenario",
+          "node": "tests/cases/machine/wifi_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the station's radio is wsim, whose frames reach the Linux AP guest's mac80211_hwsim radios only through the two QEMU user networks' UDP forwards"
+      }
+    },
+    {
+      "case_id": "machine.wifi.enterprise",
+      "behavior": "the installed system joins WPA2-Enterprise only after its user trusts the server's certificate, pins it across a reboot, refuses a changed one, sends eduroam's anonymous identity and joins by PEAP-MSCHAPv2 and TTLS-PAP",
+      "units": [
+        "wifi",
+        "wpa_supplicant",
+        "nl80211",
+        "wlan",
+        "wsim",
+        "utils/wifi.c",
+        "tests/system/wifi",
+        "PEAP",
+        "TTLS",
+        "EAP"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "posix",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "wifi_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends both machines and the service if they still run, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "serve",
+          "stage": "boot",
+          "does": "start hostpeer's TCP and UDP echo on the case's port 3, the endpoint 10.0.2.2 that the AP's DNS names endpoint.wifi.test"
+        },
+        {
+          "step_id": "ap",
+          "stage": "boot",
+          "machine": "ap",
+          "does": "boot the Linux AP guest to its shell, start network A's access points in the case's first profile and its relay to the station's port 1"
+        },
+        {
+          "step_id": "station",
+          "stage": "boot",
+          "machine": "station",
+          "does": "boot the station, pull its cable out through QMP, log in as root at the console, give eth1 10.0.4.15 and start wsimrelay to the guest's port 0"
+        },
+        {
+          "step_id": "probe",
+          "stage": "execute",
+          "machine": "station",
+          "does": "wifi connect rach2-net with the user's identity, password and eduroam's anonymous identity, read the certificate it shows, look at the AP's stations while it asks, and answer no"
+        },
+        {
+          "step_id": "peap",
+          "stage": "execute",
+          "machine": "station",
+          "does": "wifi connect again and answer yes, wait for the lease, and read wpa_cli status, the configuration and the AP's record of the outer identity"
+        },
+        {
+          "step_id": "poweroff",
+          "stage": "execute",
+          "machine": "station",
+          "does": "sync and power the station off"
+        },
+        {
+          "step_id": "reboot",
+          "stage": "boot",
+          "machine": "station",
+          "does": "boot the station again, pull its cable out, log in, and start its relay, wait for the lease it takes by itself and read wpa_cli status"
+        },
+        {
+          "step_id": "changed",
+          "stage": "execute",
+          "machine": "ap",
+          "does": "wifiap start enterprise2, whose server has another certificate, wait for the station's refusal and read wifi status"
+        },
+        {
+          "step_id": "ttls",
+          "stage": "execute",
+          "machine": "station",
+          "does": "wifiap start enterprise, wifi forget, and wifi connect -e ttls-pap answering yes, and read wpa_cli status"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "ap",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "ap-kernel",
+            "initrd": "ap-initrd",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 536870912,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "e1000",
+                "forwards": [
+                  {
+                    "protocol": "tcp",
+                    "port": 2,
+                    "guest_port": 2222
+                  }
+                ]
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.3.0/24",
+                "host": "10.0.3.2",
+                "dhcpstart": "10.0.3.15",
+                "dns": "10.0.3.3",
+                "forwards": [
+                  {
+                    "protocol": "udp",
+                    "port": 0,
+                    "guest_port": 5550
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "console=ttyS0",
+              "panic=-1",
+              "quiet",
+              "wifiap.profile=wpa2",
+              "wifiap.run=shell"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        },
+        {
+          "machine_id": "station",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "station-disk",
+                "base": "wifi-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 268435456,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "e1000",
+                "id": "cable"
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.4.0/24",
+                "host": "10.0.4.2",
+                "dhcpstart": "10.0.4.15",
+                "dns": "10.0.4.3",
+                "forwards": [
+                  {
+                    "protocol": "udp",
+                    "port": 1,
+                    "guest_port": 5550
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.wsim=1",
+              "rach2.ip=none"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "endpoint",
+          "program": "hostpeer",
+          "ready": "hostpeer: echoing",
+          "does": "echo each TCP connection and UDP datagram on the case's port 3 until stopped"
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "probe",
+          "checks": "the probe shows the server's subject and SHA-256 fingerprint, and while it asks the AP has no station",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "no-password",
+          "checks": "the log has the probe stopped at the certificate, and no EAP success but the one after a yes",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "refused",
+          "checks": "wifi says rach2-net is not trusted and is not kept, and the configuration has no network",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "peap",
+          "checks": "the station joins with EAP-PEAP and MSCHAPV2 and pings the AP",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pinned",
+          "checks": "the configuration has ca_cert as the server's SHA-256 and the anonymous identity",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "anonymous",
+          "checks": "hostapd records every outer EAP Response-Identity with 30 bytes, the 25 of anonymous@university.test after the header, never the 12 of student",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "pin-kept",
+          "checks": "after the reboot the station joins by PEAP by itself, with no question",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "changed",
+          "checks": "the station logs the certificate mismatch, and wifi status says it is not connected because the certificate is not the one trusted",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "ttls",
+          "checks": "the station joins with EAP-TTLS and PAP and pings the AP",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "state",
+          "checks": "wpa_supplicant is still COMPLETED",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 9
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 1500000000,
+          "ceiling_us": 4500000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 2000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 1073741824,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 4,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "wifi-image",
+          "node": "images/wifi-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "ap-kernel",
+          "node": "wifi/guest/vmlinuz",
+          "per_architecture": false
+        },
+        {
+          "name": "ap-initrd",
+          "node": "wifi/guest/initrd",
+          "per_architecture": false
+        },
+        {
+          "name": "hostpeer",
+          "node": "tests/system/hostpeer",
+          "per_architecture": false
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "wifi_scenario",
+          "node": "tests/cases/machine/wifi_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the station's radio is wsim, whose frames reach the Linux AP guest's mac80211_hwsim radios only through the two QEMU user networks' UDP forwards"
+      }
+    },
+    {
+      "case_id": "machine.wifi.robust",
+      "behavior": "the installed system keeps network A through group rekeys, a restart of the AP, a deauthentication, the AP gone and back, and a roam with an SSH session kept, moves to and from network B, and lets the cable take and give back the default route and DNS",
+      "units": [
+        "wifi",
+        "wpa_supplicant",
+        "nl80211",
+        "wlan",
+        "wsim",
+        "utils/wifi.c",
+        "tests/system/wifi",
+        "udhcpc",
+        "ifplugd",
+        "dbclient"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "posix",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "wifi_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends both machines and the service if they still run, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "serve",
+          "stage": "boot",
+          "does": "start hostpeer's TCP and UDP echo on the case's port 3, the endpoint 10.0.2.2 that the AP's DNS names endpoint.wifi.test"
+        },
+        {
+          "step_id": "ap",
+          "stage": "boot",
+          "machine": "ap",
+          "does": "boot the Linux AP guest to its shell, start network A's access points in the case's first profile and its relay to the station's port 1"
+        },
+        {
+          "step_id": "station",
+          "stage": "boot",
+          "machine": "station",
+          "does": "boot the station, pull its cable out through QMP, log in as root at the console, give eth1 10.0.4.15 and start wsimrelay to the guest's port 0"
+        },
+        {
+          "step_id": "join",
+          "stage": "execute",
+          "machine": "station",
+          "does": "wifi connect rach2-net, whose AP makes a new group key every 5 s, and wait for the lease"
+        },
+        {
+          "step_id": "rekey",
+          "stage": "execute",
+          "machine": "ap",
+          "does": "wait for the station's next group rekey, then flush the guest's neighbours and ping the station"
+        },
+        {
+          "step_id": "restart",
+          "stage": "execute",
+          "machine": "ap",
+          "does": "wifiap start wpa2 again and wait for the station to join again"
+        },
+        {
+          "step_id": "deauth",
+          "stage": "execute",
+          "machine": "ap",
+          "does": "deauthenticate the station from both APs of network A and wait for it to join again"
+        },
+        {
+          "step_id": "gone",
+          "stage": "execute",
+          "machine": "ap",
+          "does": "wifiap stop a, wait for the disconnection and read the routes, then start it and wait for the station to join again"
+        },
+        {
+          "step_id": "roam",
+          "stage": "execute",
+          "machine": "station",
+          "does": "open an SSH session to the station's own server through the guest's forward, send a line, wpa_cli roam to the other BSSID, and send another"
+        },
+        {
+          "step_id": "move",
+          "stage": "execute",
+          "machine": "station",
+          "does": "wifi connect rach2-other, then wifiap stop b and wait for the station to go back to rach2-net by itself"
+        },
+        {
+          "step_id": "cable",
+          "stage": "execute",
+          "machine": "station",
+          "does": "plug the cable in through QMP, wait for its route, read the routes and servers and echo through it, then pull it out and read them again"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "ap",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "ap-kernel",
+            "initrd": "ap-initrd",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 536870912,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "e1000",
+                "forwards": [
+                  {
+                    "protocol": "tcp",
+                    "port": 2,
+                    "guest_port": 2222
+                  }
+                ]
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.3.0/24",
+                "host": "10.0.3.2",
+                "dhcpstart": "10.0.3.15",
+                "dns": "10.0.3.3",
+                "forwards": [
+                  {
+                    "protocol": "udp",
+                    "port": 0,
+                    "guest_port": 5550
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "console=ttyS0",
+              "panic=-1",
+              "quiet",
+              "wifiap.profile=wpa2",
+              "wifiap.run=shell"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        },
+        {
+          "machine_id": "station",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "station-disk",
+                "base": "wifi-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 268435456,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "e1000",
+                "id": "cable"
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.4.0/24",
+                "host": "10.0.4.2",
+                "dhcpstart": "10.0.4.15",
+                "dns": "10.0.4.3",
+                "forwards": [
+                  {
+                    "protocol": "udp",
+                    "port": 1,
+                    "guest_port": 5550
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.wsim=1",
+              "rach2.ip=none"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "endpoint",
+          "program": "hostpeer",
+          "ready": "hostpeer: echoing",
+          "does": "echo each TCP connection and UDP datagram on the case's port 3 until stopped"
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "join",
+          "checks": "the station joins, with network A's routes and server, and echoes",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "rekey",
+          "checks": "the station logs a group rekey, answers the guest's broadcast ARP and echoes",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "restart",
+          "checks": "after the restart the station joins again, with network A's routes and server, and echoes",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "deauth",
+          "checks": "after the deauthentication the station joins again, with network A's routes and server, and echoes",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "gone",
+          "checks": "with network A gone the station disconnects and has no route on wlan0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "back",
+          "checks": "with network A back the station joins again, with its routes and server, and echoes",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "roam",
+          "checks": "the station is COMPLETED on the other BSSID and the SSH session carries both lines",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "joined-b",
+          "checks": "the station joins rach2-other with its route and server alone, and echoes",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "moved",
+          "checks": "with rach2-other gone the station joins rach2-net by itself, with its routes and server, and echoes",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "cable-in",
+          "checks": "with the cable in, eth0 has the default route at metric 100 beside wlan0's at 600, resolv.conf names 10.0.2.3, and an echo goes through it",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "cable-out",
+          "checks": "with the cable out the routes and server are network A's alone, and an echo goes over Wi-Fi",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 11
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 2400000000,
+          "ceiling_us": 7200000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 2000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 1073741824,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 4,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "wifi-image",
+          "node": "images/wifi-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "ap-kernel",
+          "node": "wifi/guest/vmlinuz",
+          "per_architecture": false
+        },
+        {
+          "name": "ap-initrd",
+          "node": "wifi/guest/initrd",
+          "per_architecture": false
+        },
+        {
+          "name": "hostpeer",
+          "node": "tests/system/hostpeer",
+          "per_architecture": false
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "wifi_scenario",
+          "node": "tests/cases/machine/wifi_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the station's radio is wsim, whose frames reach the Linux AP guest's mac80211_hwsim radios only through the two QEMU user networks' UDP forwards"
+      }
+    },
+    {
+      "case_id": "machine.wifi.rfkill",
+      "behavior": "rfkill block stops the installed system's radio and leaves the network, and unblock joins it again",
+      "units": [
+        "wifi",
+        "wpa_supplicant",
+        "nl80211",
+        "wlan",
+        "wsim",
+        "utils/wifi.c",
+        "tests/system/wifi",
+        "rfkill"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "posix",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "wifi_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends both machines and the service if they still run, and removes the evidence after a pass"
+      },
+      "steps": [
+        {
+          "step_id": "serve",
+          "stage": "boot",
+          "does": "start hostpeer's TCP and UDP echo on the case's port 3, the endpoint 10.0.2.2 that the AP's DNS names endpoint.wifi.test"
+        },
+        {
+          "step_id": "ap",
+          "stage": "boot",
+          "machine": "ap",
+          "does": "boot the Linux AP guest to its shell, start network A's access points in the case's first profile and its relay to the station's port 1"
+        },
+        {
+          "step_id": "station",
+          "stage": "boot",
+          "machine": "station",
+          "does": "boot the station, pull its cable out through QMP, log in as root at the console, give eth1 10.0.4.15 and start wsimrelay to the guest's port 0"
+        },
+        {
+          "step_id": "join",
+          "stage": "execute",
+          "machine": "station",
+          "does": "wifi connect rach2-net and wait for the lease"
+        },
+        {
+          "step_id": "block",
+          "stage": "execute",
+          "machine": "station",
+          "does": "rfkill block wifi, wait for the disconnection and read rfkill list, iw dev wlan0 link and the routes"
+        },
+        {
+          "step_id": "unblock",
+          "stage": "execute",
+          "machine": "station",
+          "does": "rfkill unblock wifi and wait for the station to join again"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "ap",
+          "qemu": {
+            "architecture": "x86_64",
+            "kernel": "ap-kernel",
+            "initrd": "ap-initrd",
+            "disks": [],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 536870912,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "e1000",
+                "forwards": [
+                  {
+                    "protocol": "tcp",
+                    "port": 2,
+                    "guest_port": 2222
+                  }
+                ]
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.3.0/24",
+                "host": "10.0.3.2",
+                "dhcpstart": "10.0.3.15",
+                "dns": "10.0.3.3",
+                "forwards": [
+                  {
+                    "protocol": "udp",
+                    "port": 0,
+                    "guest_port": 5550
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "console=ttyS0",
+              "panic=-1",
+              "quiet",
+              "wifiap.profile=wpa2",
+              "wifiap.run=shell"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        },
+        {
+          "machine_id": "station",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "station-disk",
+                "base": "wifi-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 268435456,
+            "firmware": "direct",
+            "devices": [
+              {
+                "model": "e1000",
+                "id": "cable"
+              },
+              {
+                "model": "e1000",
+                "net": "10.0.4.0/24",
+                "host": "10.0.4.2",
+                "dhcpstart": "10.0.4.15",
+                "dns": "10.0.4.3",
+                "forwards": [
+                  {
+                    "protocol": "udp",
+                    "port": 1,
+                    "guest_port": 5550
+                  }
+                ]
+              }
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.wsim=1",
+              "rach2.ip=none"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [
+        {
+          "service_id": "endpoint",
+          "program": "hostpeer",
+          "ready": "hostpeer: echoing",
+          "does": "echo each TCP connection and UDP datagram on the case's port 3 until stopped"
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "join",
+          "checks": "the station joins and pings the AP",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "blocked",
+          "checks": "rfkill list says soft blocked, iw says not connected, there is no default route on wlan0, and wpa_supplicant is not COMPLETED",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "unblocked",
+          "checks": "after the unblock the station joins again, with network A's routes and server, and echoes",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 6
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 900000000,
+          "ceiling_us": 2700000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 2000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 1073741824,
+        "disk_bytes": 268435456,
+        "locks": [],
+        "ports": 4,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "wifi-image",
+          "node": "images/wifi-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "ap-kernel",
+          "node": "wifi/guest/vmlinuz",
+          "per_architecture": false
+        },
+        {
+          "name": "ap-initrd",
+          "node": "wifi/guest/initrd",
+          "per_architecture": false
+        },
+        {
+          "name": "hostpeer",
+          "node": "tests/system/hostpeer",
+          "per_architecture": false
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "wifi_scenario",
+          "node": "tests/cases/machine/wifi_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "QEMU",
+        "reason": "the station's radio is wsim, whose frames reach the Linux AP guest's mac80211_hwsim radios only through the two QEMU user networks' UDP forwards"
+      }
+    }
+  ]
+}
