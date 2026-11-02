@@ -23,8 +23,9 @@
  * pinned on yes, with no password sent before the yes; one refused on no,
  * removed, and given no password; a pinned network whose server presents
  * another certificate, which is refused and kept, and whose reason `wifi
- * status` finds in the log; the known networks listed with a pin; a network
- * forgotten; and the decoding of a name.
+ * status` finds in the log through the EAP failure that follows it, and a
+ * later attempt's refused password; the known networks listed with a pin;
+ * a network forgotten; and the decoding of a name.
  *
  * The test runs in its directory, so that the sockets' relative paths fit
  * sun_path. Each message stays under 2048 bytes, macOS's largest datagram on
@@ -535,17 +536,45 @@ static void row_changed(void)
     fputs("ntpd: setting time\n"
           "wlan0: CTRL-EVENT-CONNECTED - Connection to 02:00:00:00:00:03 completed [id=0 id_str=]\n"
           "wlan0: CTRL-EVENT-DISCONNECTED bssid=02:00:00:00:00:03 reason=3 locally_generated=1\n"
+          "wlan0: SME: Trying to authenticate with 02:00:00:00:00:03 (SSID='uni' freq=2412 MHz)\n"
+          "wlan0: Trying to associate with 02:00:00:00:00:03 (SSID='uni' freq=2412 MHz)\n"
+          "wlan0: Associated with 02:00:00:00:00:03\n"
+          "wlan0: CTRL-EVENT-EAP-STARTED EAP authentication started\n"
+          "wlan0: CTRL-EVENT-EAP-PROPOSED-METHOD vendor=0 method=25\n"
           "wlan0: CTRL-EVENT-EAP-PEER-CERT depth=0 subject='/CN=other' hash=" HASH2 "\n"
           "udhcpc: started, v1.36.1\n"
           "wlan0: CTRL-EVENT-EAP-TLS-CERT-ERROR reason=0 depth=0 subject='/CN=other' "
-          "err='Server certificate mismatch'\n",
+          "err='Server certificate mismatch'\n"
+          "wlan0: CTRL-EVENT-EAP-FAILURE EAP authentication failed\n"
+          "wlan0: CTRL-EVENT-SSID-TEMP-DISABLED id=0 ssid=\"uni\" auth_failures=1 duration=10 "
+          "reason=AUTH_FAILED\n"
+          "wlan0: CTRL-EVENT-DISCONNECTED bssid=02:00:00:00:00:03 reason=23\n",
           f);
     fclose(f);
     CHECK(run(status, "", known, HASH2) == 0, "status: exits 0");
     CHECK(strstr(out, "not connected (DISCONNECTED)\n") != 0, "status: not connected");
-    CHECK(strstr(out, "not the one trusted for this network\n") != 0, "status: says why");
+    CHECK(strstr(out, "not the one trusted for this network\n") != 0,
+          "status: the certificate, not the EAP failure after it");
+    CHECK(!strstr(out, "identity or password"), "status: no password error");
     CHECK(strstr(out, "it presented /CN=other\n") != 0, "status: the certificate presented");
     CHECK(strstr(out, "SHA-256: 00:11:22:33") != 0, "status: its fingerprint");
+
+    f = fopen("services", "a");
+    if (!f) {
+        exit(1);
+    }
+    fputs("wlan0: SME: Trying to authenticate with 02:00:00:00:00:03 (SSID='uni' freq=2412 MHz)\n"
+          "wlan0: Trying to associate with 02:00:00:00:00:03 (SSID='uni' freq=2412 MHz)\n"
+          "wlan0: CTRL-EVENT-EAP-STARTED EAP authentication started\n"
+          "wlan0: CTRL-EVENT-EAP-PEER-CERT depth=0 subject='/CN=uni' hash=" HASH1 "\n"
+          "wlan0: CTRL-EVENT-EAP-FAILURE EAP authentication failed\n"
+          "wlan0: CTRL-EVENT-SSID-TEMP-DISABLED id=0 ssid=\"uni\" auth_failures=2 duration=20 "
+          "reason=AUTH_FAILED\n",
+          f);
+    fclose(f);
+    CHECK(run(status, "", known, HASH1) == 0 &&
+              strstr(out, "refused the identity or password\n") != 0 && !strstr(out, "trusted"),
+          "status: a later attempt's password error");
 
     f = fopen("services", "a");
     if (!f) {

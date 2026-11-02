@@ -942,23 +942,34 @@ static int failure_of(const char *ev, char *why, size_t size)
  * failure wpa_supplicant logged for `WIFI_IFACE` since it started or last
  * connected, into `why`, and the certificate the server last presented into
  * `cert`. Returns 1 when one is found, else 0.
+ *
+ * A refused certificate is the reason for the rest of its attempt, which
+ * begins at an authentication, an association or the start of EAP:
+ * wpa_supplicant follows it with `CTRL-EVENT-EAP-FAILURE` and an
+ * `AUTH_FAILED` that would otherwise read as a refused password.
  */
 static int logged_failure(char *why, size_t size, struct cert *cert)
 {
-    char line[MSG_MAX], prefix[32], *ev;
+    char line[MSG_MAX], prefix[32], auth[48], assoc[48], *ev;
     FILE *f = fopen(WIFI_LOG, "r");
-    int found = 0;
+    int found = 0, refused = 0;
 
     if (!f) {
         return 0;
     }
     snprintf(prefix, sizeof(prefix), "%s: CTRL-EVENT-", WIFI_IFACE);
+    snprintf(auth, sizeof(auth), "%s: SME: Trying to authenticate with ", WIFI_IFACE);
+    snprintf(assoc, sizeof(assoc), "%s: Trying to associate with ", WIFI_IFACE);
     cert->hash[0] = '\0';
     while (fgets(line, sizeof(line), f)) {
         line[strcspn(line, "\n")] = '\0';
         if (strstr(line, "Successfully initialized wpa_supplicant")) {
-            found = 0;
+            found = refused = 0;
             cert->hash[0] = '\0';
+            continue;
+        }
+        if (strstr(line, auth) || strstr(line, assoc)) {
+            refused = 0;
             continue;
         }
         ev = strstr(line, prefix);
@@ -967,16 +978,19 @@ static int logged_failure(char *why, size_t size, struct cert *cert)
         }
         ev += strlen(WIFI_IFACE) + 2;
         if (strncmp(ev, "CTRL-EVENT-CONNECTED", 20) == 0) {
-            found = 0;
+            found = refused = 0;
             cert->hash[0] = '\0';
+        } else if (strncmp(ev, "CTRL-EVENT-EAP-STARTED", 22) == 0) {
+            refused = 0;
         } else if (strncmp(ev, "CTRL-EVENT-EAP-PEER-CERT depth=0 ", 33) == 0 &&
                    word_field(ev, " hash=", cert->hash, sizeof(cert->hash)) == 0) {
             if (quoted_field(ev, "subject='", "' hash=", cert->subject, sizeof(cert->subject)) !=
                 0) {
                 cert->subject[0] = '\0';
             }
-        } else if (failure_of(ev, why, size)) {
+        } else if (!refused && failure_of(ev, why, size)) {
             found = 1;
+            refused = strncmp(ev, "CTRL-EVENT-EAP-TLS-CERT-ERROR", 29) == 0;
         }
     }
     fclose(f);
