@@ -137,4 +137,8 @@ intptr_t vdso_map(struct vm_space *vm, uintptr_t at);
  * that `vdso_map` maps, and NULL for any other. */
 const char *vdso_region_name(const struct vm_file *f);
 
+/** Whether `f` is the file of the data page, [vvar], which a core file
+ * leaves as a hole (proc/coredump.c). */
+int vdso_is_data(const struct vm_file *f);
+
 #endif /* _VDSO_H_ */

@@ -17,6 +17,7 @@
 #include "../mm/paging.h"
 #include "../mm/vm.h"
 #include "../timer.h"
+#include "../vdso.h"
 
 /* The notes every architecture's core file has; the floating-point notes
  * are the architecture's (`arch_core_fp_notes`). */
@@ -118,13 +119,15 @@ struct core_out {
     int32_t err; /* the first error, after which nothing is written */
 };
 
-/* What the file has of a region: its range and protection, and whether it
- * maps a file, taken once before anything is written. */
+/* What the file has of a region: its range and protection, whether it
+ * maps a file, and whether its pages are all holes, taken once before
+ * anything is written. */
 struct core_region {
     uintptr_t start;
     uintptr_t end;
     uint32_t prot;
     int of_file;
+    int holes; /* the vDSO's data page, [vvar] */
 };
 
 /** Put `v` at `p` little-endian, the processor's order and ELFDATA2LSB. */
@@ -383,7 +386,9 @@ static uintptr_t region_file_size(const struct core_region *r)
  * version of libc that libthread_db checks; and a hole for a page of
  * anonymous memory it never touched. Each page is looked up in the address
  * space as it is read, so a page another process sharing the space has
- * unmapped since the regions were taken is a hole.
+ * unmapped since the regions were taken is a hole. The vDSO's data page is
+ * a hole, as Linux leaves it, since Linux's dump cannot take a page of that
+ * mapping; it holds the kernel's clock, which says nothing of the process.
  */
 static void region_write(struct core_out *o, struct mm *mm, const struct core_region *r)
 {
@@ -395,7 +400,7 @@ static void region_write(struct core_out *o, struct mm *mm, const struct core_re
         return;
     }
     for (addr = r->start; addr < r->end && o->err == 0; addr += PAGE_SIZE) {
-        if ((!r->of_file && paging_user_phys(mm->dir, addr) == 0) ||
+        if (r->holes || (!r->of_file && paging_user_phys(mm->dir, addr) == 0) ||
             paging_access(mm, addr, page, PAGE_SIZE, 0) != 0) {
             (void)out(o, NULL, PAGE_SIZE);
         } else {
@@ -421,6 +426,7 @@ static struct core_region *regions_take(const vm_space_t *vm, uint32_t *count)
         regions[i].end = r->end;
         regions[i].prot = r->prot;
         regions[i].of_file = r->file != NULL;
+        regions[i].holes = vdso_is_data(r->file);
     }
     *count = vm->count;
     return regions;

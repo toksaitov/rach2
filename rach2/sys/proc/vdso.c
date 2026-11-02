@@ -93,3 +93,8 @@ const char *vdso_region_name(const struct vm_file *f)
 {
     return f == &vdso_data_file || f == &vdso_image_file ? f->path : 0;
 }
+
+int vdso_is_data(const struct vm_file *f)
+{
+    return f == &vdso_data_file;
+}
