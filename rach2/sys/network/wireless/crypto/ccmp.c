@@ -150,7 +150,8 @@ static void ccm_run(const struct wlan_aes128 *ctx, const struct ccmp_hdr *h, uin
     ccm_ctr(ks, h->nonce, n > 0 ? 1 : 0);
     wcrypto_aes2(ctx, x, ks);
 
-    for (off = 0, blk = 1; off < n; off += 16, blk++) {
+    blk = 1;
+    for (off = 0; off < n; off += 16, blk++) {
         m = n - off < 16 ? n - off : 16;
         for (j = 0; j < m; j++) {
             uint8_t c, p;
@@ -179,7 +180,8 @@ static void ccm_ctr_copy(const struct wlan_aes128 *ctx, const uint8_t nonce[13],
     uint8_t ks[32];
     unsigned off, j, m, blk;
 
-    for (off = 0, blk = 1; off < n; off += 32, blk += 2) {
+    blk = 1;
+    for (off = 0; off < n; off += 32, blk += 2) {
         ccm_ctr(ks, nonce, blk);
         ccm_ctr(ks + 16, nonce, blk + 1);
         wcrypto_aes2(ctx, ks, ks + 16);

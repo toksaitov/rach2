@@ -296,7 +296,9 @@ void wlan_aes128_setkey(struct wlan_aes128 *ctx, const uint8_t key[16])
         skey[(i << 1) + 0] = tmp;
         skey[(i << 1) + 1] = tmp;
     }
-    for (i = 4, j = 0, k = 0; i < 44; i++) {
+    j = 0;
+    k = 0;
+    for (i = 4; i < 44; i++) {
         if (j == 0) {
             tmp = (tmp << 24) | (tmp >> 8);
             tmp = aes_sub_word(tmp) ^ aes_rcon[k];
@@ -311,7 +313,8 @@ void wlan_aes128_setkey(struct wlan_aes128 *ctx, const uint8_t key[16])
     }
     for (i = 0; i < 44; i += 4)
         aes_ct_ortho(skey + (i << 1));
-    for (i = 0, j = 0; i < 44; i++, j += 2)
+    j = 0;
+    for (i = 0; i < 44; i++, j += 2)
         ctx->round_key[i] = (skey[j + 0] & 0x55555555) | (skey[j + 1] & 0xAAAAAAAA);
     wcrypto_wipe(skey, sizeof(skey));
 }
@@ -321,7 +324,8 @@ static void aes_ct_expand(uint32_t skey[88], const struct wlan_aes128 *ctx)
 {
     unsigned u, v;
 
-    for (u = 0, v = 0; u < 44; u++, v += 2) {
+    v = 0;
+    for (u = 0; u < 44; u++, v += 2) {
         uint32_t x, y;
 
         x = y = ctx->round_key[u];

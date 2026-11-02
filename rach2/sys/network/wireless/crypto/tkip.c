@@ -221,13 +221,16 @@ void wlan_tkip_rc4(const uint8_t key[16], uint8_t *data, unsigned len)
 
     for (i = 0; i < 256; i++)
         s[i] = (uint8_t)i;
-    for (i = 0, j = 0; i < 256; i++) {
+    j = 0;
+    for (i = 0; i < 256; i++) {
         j = (j + s[i] + key[i & 15]) & 0xff;
         t = s[i];
         s[i] = s[j];
         s[j] = t;
     }
-    for (n = 0, i = 0, j = 0; n < len; n++) {
+    i = 0;
+    j = 0;
+    for (n = 0; n < len; n++) {
         i = (i + 1) & 0xff;
         j = (j + s[i]) & 0xff;
         t = s[i];
