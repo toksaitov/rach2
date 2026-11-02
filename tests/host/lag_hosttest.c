@@ -251,7 +251,8 @@ static void refusals(void)
 /**
  * Install the wrapper over the backing device with a lag of three hundredths
  * of a second and run the rows. The wrapper delivers each completion after
- * the lag, and a duplicate with an error two hundredths later. The rows require that:
+ * the lag, and a duplicate with an error two hundredths later. The rows
+ * require that:
  *
  * - `rach2.blocklag` and `rach2.blockfail` take a count from 1 to a million
  *   and refuse any other value, with no digits, with a trailing non-digit,
