@@ -13244,6 +13244,40 @@ static int synth_sys_radio_dirent(int node, int key, int n, char *name, uint64_t
 }
 
 /**
+ * The `n`th entry of the /sys directory `node` of the PCI or USB bus, as
+ * `synth_sys_dirent` gives it: a device's uevent, and a PCI function's
+ * config after it; a link for each device in the bus's `devices`, and a
+ * directory for each in the directory the links lead to. 0 past the last
+ * and for any other node.
+ */
+static int synth_sys_bus_dirent(int node, int key, int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    int dev, links;
+
+    if (node == SYSFS_PCI_DEVICE && n == 1) {
+        return synth_entry("config", sysfs_ino(node, key, 1 + SYSFS_PCI_CONFIG), DT_REG, name, ino,
+                           dtype);
+    }
+    if (node == SYSFS_PCI_DEVICE || node == SYSFS_USB_DEVICE) {
+        return synth_entry(n == 0 ? "uevent" : NULL, sysfs_ino(node, key, 1), DT_REG, name, ino,
+                           dtype);
+    }
+    links = node == SYSFS_PCI_LINKS || node == SYSFS_USB_LINKS;
+    if (!links && node != SYSFS_PCI_ROOT && node != SYSFS_USB_ROOT) {
+        return 0;
+    }
+    dev = node == SYSFS_PCI_LINKS || node == SYSFS_PCI_ROOT ? SYSFS_PCI_DEVICE : SYSFS_USB_DEVICE;
+    key = sysfs_device_key(dev, n);
+    if (key < 0) {
+        return 0;
+    }
+    synth_sys_device_name(dev, key, name, 32);
+    *ino = sysfs_ino(dev, key, links ? 2 : 0);
+    *dtype = links ? DT_LNK : DT_DIR;
+    return 1;
+}
+
+/**
  * The `n`th entry of the /sys directory `node`, whose device is `key`: its
  * name, inode and type, and 1, or 0 past the last. The fixed directories
  * hold the next ones down, a bus's `devices` a link for each device, the
@@ -13282,7 +13316,7 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
                  {SYSFS_ROOT, "block", SYSFS_BLOCK},
                  {SYSFS_ROOT, "dev", SYSFS_DEV},
                  {SYSFS_DEV, "block", SYSFS_DEV_BLOCK}};
-    int i, dev, links;
+    int i;
 
     for (i = 0; i < (int)(sizeof(fixed) / sizeof(fixed[0])); i++) {
         if (fixed[i].node == node && n-- == 0) {
@@ -13323,27 +13357,7 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
         return synth_entry(sysfs_attr(node, n), sysfs_ino(node, 0, 1 + n), DT_REG, name, ino,
                            dtype);
     }
-    if (node == SYSFS_PCI_DEVICE && n == 1) {
-        return synth_entry("config", sysfs_ino(node, key, 1 + SYSFS_PCI_CONFIG), DT_REG, name, ino,
-                           dtype);
-    }
-    if (node == SYSFS_PCI_DEVICE || node == SYSFS_USB_DEVICE) {
-        return synth_entry(n == 0 ? "uevent" : NULL, sysfs_ino(node, key, 1), DT_REG, name, ino,
-                           dtype);
-    }
-    links = node == SYSFS_PCI_LINKS || node == SYSFS_USB_LINKS;
-    if (!links && node != SYSFS_PCI_ROOT && node != SYSFS_USB_ROOT) {
-        return 0;
-    }
-    dev = node == SYSFS_PCI_LINKS || node == SYSFS_PCI_ROOT ? SYSFS_PCI_DEVICE : SYSFS_USB_DEVICE;
-    key = sysfs_device_key(dev, n);
-    if (key < 0) {
-        return 0;
-    }
-    synth_sys_device_name(dev, key, name, 32);
-    *ino = sysfs_ino(dev, key, links ? 2 : 0);
-    *dtype = links ? DT_LNK : DT_DIR;
-    return 1;
+    return synth_sys_bus_dirent(node, key, n, name, ino, dtype);
 }
 
 /**
