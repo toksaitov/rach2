@@ -143,7 +143,7 @@ rach2/sys/fs/procfs.c:procfs_sysctl_write complexity 28 a dispatcher, one arm pe
 rach2/sys/fs/procfs.c:procfs_gen_text complexity 34 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify_pid complexity 26 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/synthfs.c:synth_sys_path complexity 29 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/synthfs.c:synth_sys_path complexity 30 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/vfs.c:resolve_path complexity 80 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/vfs.c:resolve_path lines 268 one file system operation over the on-disk format, each step a rule of the format
@@ -211,6 +211,23 @@ rach2/sys/network/tcp/tcp.c:tcp_rx_addr lines 359 a state machine, one arm per s
 rach2/sys/network/tcp/tcp.c:tcp_rx_addr nesting 6 a state machine, one arm per state, read as a table
 rach2/sys/network/tcp/tcp.c:tcp_rx_addr complexity 91 a state machine, one arm per state, read as a table
 
+rach2/sys/network/wireless/agg_rx.c:addba_resp params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
+
+rach2/sys/network/wireless/crypto/aes.c:aes_ct_sbox lines 171 the S-box as Boyar and Peralta's straight-line circuit, a gate a line, as BearSSL writes it
+
+rach2/sys/network/wireless/crypto/ccmp.c:ccm_run params 7 the parameters are one CCM pass: its key, header, data and length, its direction, whether it writes and where the tag goes
+
+rach2/sys/network/wireless/crypto/tkip.c:wlan_tkip_michael params 7 the parameters are the key, the fields of the MIC's pseudo-header and the MSDU, as 802.11 lists them, and the MIC
+
+rach2/sys/network/wireless/nl80211.c:connect_event params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
+
+rach2/sys/network/wireless/rx.c:rx_decrypt params 8 the parameters are one received frame, its lengths, status and counter slot, and where its key and counter are written
+
+rach2/sys/network/wireless/tx.c:protect_data params 7 the parameters are one MPDU's key, buffer, length, room, header length and priority, and the transmit info filled for it
+rach2/sys/network/wireless/tx.c:wlan_data_tx_mgmt params 7 the parameters are the fields of one command; a struct for them would be filled and unpacked once
+
+rach2/sys/network/wireless/wlan.c:wlan_encap params 7 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
+
 rach2/sys/pci.c:pci_find_device nesting 5 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/pci.c:pci_find_device_skip nesting 6 a hardware sequence, the registers written in the order the datasheet requires
 rach2/sys/pci.c:pci_find_nth_by_id nesting 5 a hardware sequence, the registers written in the order the datasheet requires
@@ -240,7 +257,7 @@ rach2/sys/syscall_fs.c:sys_fcntl64 lines 111 a dispatcher, one arm per command, 
 rach2/sys/syscall_fs.c:sys_readv complexity 29 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:utimes_node complexity 42 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:synth_stat complexity 32 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_sys_dirent complexity 33 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_sys_dirent complexity 34 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:sys_lseek lines 101 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:readv_dgram complexity 26 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:copy_from_file params 8 the parameters are one copy's two ends, its count, whether it may wait and its buffer, as splice and copy_file_range give them
@@ -405,6 +422,8 @@ tests/host/fatname_hosttest.c:main lines 122 a test's rows, each a case, read as
 tests/host/fbdev_hosttest.c:owners lines 102 a test's rows, each a case, read as one table
 tests/host/fbdev_hosttest.c:requests complexity 27 a test's rows, each a case, read as one table
 
+tests/host/genetlink_hosttest.c:requests complexity 37 a test's rows, each a case, read as one table
+
 tests/host/gpt_hosttest.c:main lines 168 a test's rows, each a case, read as one table
 
 tests/host/grubslot_hosttest.c:main lines 153 a test's rows, each a case, read as one table
@@ -482,6 +501,7 @@ tests/host/msc_hosttest.c:xhci_submit lines 128 a test's rows, each a case, read
 tests/host/n_tty_hosttest.c:main complexity 68 a test's rows, each a case, read as one table
 tests/host/n_tty_hosttest.c:main lines 403 a test's rows, each a case, read as one table
 
+tests/host/nd6_hosttest.c:icmp6_send_opts params 7 a stub of the kernel's, whose parameters are the fields of one packet
 tests/host/nd6hold_hosttest.c:icmp6_send_opts params 7 a stub of the kernel's, whose parameters are the fields of one packet
 tests/host/nd6hold_hosttest.c:ip6_walk params 7 a stub of the kernel's, whose parameters are the fields of one packet
 
@@ -491,6 +511,13 @@ tests/host/netconf_hosttest.c:main lines 309 a test's rows, each a case, read as
 tests/host/netconsole_hosttest.c:main lines 125 a test's rows, each a case, read as one table
 
 tests/host/netdev_hosttest.c:main lines 131 a test's rows, each a case, read as one table
+
+tests/host/nl80211_hosttest.c:event params 7 the parameters are the fields of one message; a struct for them would be filled and unpacked once
+tests/host/nl80211_hosttest.c:scan lines 139 a test's rows, each a case, read as one table
+tests/host/nl80211_hosttest.c:join_wpa2 complexity 34 a test's rows, each a case, read as one table
+tests/host/nl80211_hosttest.c:join_wpa2 lines 147 a test's rows, each a case, read as one table
+tests/host/nl80211_hosttest.c:keys lines 135 a test's rows, each a case, read as one table
+tests/host/nl80211_hosttest.c:connect_row lines 115 a test's rows, each a case, read as one table
 
 tests/host/packet_hosttest.c:main lines 173 a test's rows, each a case, read as one table
 
@@ -528,6 +555,7 @@ tests/host/rtl8168_hosttest.c:main complexity 99 a test's rows, each a case, rea
 tests/host/rtl8168_hosttest.c:main lines 692 a test's rows, each a case, read as one table
 
 tests/host/synthfs_hosttest.c:main complexity 41 a test's rows, each a case, read as one table
+tests/host/synthfs_hosttest.c:sys_wireless complexity 26 a test's rows, each a case, read as one table
 
 tests/host/syscall_hosttest.c:clock_ids complexity 32 a test's rows, each a case, read as one table
 tests/host/syscall_hosttest.c:clock_sleeps lines 104 a test's rows, each a case, read as one table
@@ -554,6 +582,22 @@ tests/host/vga_text_hosttest.c:row_widths complexity 30 a test's rows, each a ca
 
 tests/host/vm_hosttest.c:main complexity 49 a test's rows, each a case, read as one table
 tests/host/vm_hosttest.c:main lines 239 a test's rows, each a case, read as one table
+
+tests/host/wcrypto_hosttest.c:ccmp_vector params 7 the parameters are one test vector's key, plaintext, ciphertext, counter and key ID, which each row gives
+
+tests/host/wifi_hosttest.c:fake_answer complexity 42 a dispatcher, one arm per command, read as a table
+
+tests/host/wlan_data_hosttest.c:ap_frame params 9 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
+tests/host/wlan_data_hosttest.c:check_blockack complexity 42 a test's rows, each a case, read as one table
+
+tests/host/wlan_dev_hosttest.c:station complexity 40 a test's rows, each a case, read as one table
+tests/host/wlan_dev_hosttest.c:station lines 117 a test's rows, each a case, read as one table
+tests/host/wlan_dev_hosttest.c:blocking complexity 37 a test's rows, each a case, read as one table
+tests/host/wlan_dev_hosttest.c:removal complexity 29 a test's rows, each a case, read as one table
+
+tests/host/wlan_mlme_hosttest.c:open_association complexity 26 a test's rows, each a case, read as one table
+
+tests/host/wsim_hosttest.c:send_frame params 7 the parameters are the arguments of one call the test makes, passed through
 
 tests/host/xhci_hosttest.c:doorbell_rung complexity 26 a test's rows, each a case, read as one table
 tests/host/xhci_hosttest.c:endpoint_doorbell complexity 38 a test's rows, each a case, read as one table
@@ -714,6 +758,14 @@ tests/system/fixtures/vfs_unmount.c:resolve_path params 7 a fixture builder, the
 tests/system/runner/ptydrive.c:main complexity 47 a parser over an external format, one check per field in the format's order
 tests/system/runner/ptydrive.c:main lines 160 a parser over an external format, one check per field in the format's order
 
+tests/system/wifi/hwsimrelay.c:decode complexity 37 a parser over an external format, one check per field in the format's order
+tests/system/wifi/hwsimrelay.c:kernel_frame complexity 32 a parser over an external format, one check per field in the format's order
+tests/system/wifi/hwsimrelay.c:udp_input complexity 33 a parser over an external format, one check per field in the format's order
+tests/system/wifi/hwsimrelay.c:main complexity 27 an event loop, one arm per descriptor and signal, read from the top
+
+tests/system/wifi/mkcpio.c:tar_entries complexity 38 one procedure over a file format, in the order the format is read
+tests/system/wifi/mkcpio.c:tar_entries lines 108 one procedure over a file format, in the order the format is read
+
 tests/udptest.c:probe_main lines 149 a probe, one sequence of steps in the order the log records them
 
 tests/usbdiskprobe.c:part_hold complexity 43 a probe, one sequence of steps in the order the log records them
@@ -841,3 +893,7 @@ tools/etude/serial.c:etude_serial_put_reader params 8 the parameters are one sto
 tools/etude/posix/scenario.c:command_invocation params 8 the parameters are the fields of one installed command's invocation, written in the document's order
 tools/etude/posix/repeat.c:ask params 7 the parameters are one request to the ledger: the run, the attempt, the claim, its resources and their count, whether it waits, and where its hold is kept
 tests/cases/machine/netcase.c:net_guest params 7 the case, machine, arguments, environment, input, evidence and result describe one guest command
+
+utils/wifi.c:select_wait complexity 27 an event loop, one arm per event wpa_supplicant sends, read as a table
+
+utils/wsimmedium.c:medium_check complexity 26 a parser over an external format, one check per field in the format's order
