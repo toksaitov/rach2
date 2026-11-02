@@ -114,6 +114,13 @@ static int fails;
         }                                                                                       \
     } while (0)
 
+/* The null device, where QEMU's environment sends SDL's disk output. */
+#ifdef _WIN32
+#define NULL_DEVICE "NUL"
+#else
+#define NULL_DEVICE "/dev/null"
+#endif
+
 /* The grace periods: short for the stand-ins, longer for a real QEMU. */
 #define FAKE_GRACE_US 300000u
 #define REAL_GRACE_US 5000000u
@@ -1250,7 +1257,7 @@ static void test_audio_env(void)
     CHECK(etude_qemu_env(&p, caller, "/f/tone.raw", &out) == 0 && has_env(envp, "PATH=/bin") &&
               has_env(envp, "HOME=/h") && has_env(envp, "SDL_AUDIODRIVER=disk") &&
               has_env(envp, "SDL_DISKAUDIOFILEIN=/f/tone.raw") &&
-              has_env(envp, "SDL_DISKAUDIOFILE=/dev/null") && env_count(envp, "SDL_") == 3 &&
+              has_env(envp, "SDL_DISKAUDIOFILE=" NULL_DEVICE) && env_count(envp, "SDL_") == 3 &&
               env_count(envp, "") == 5,
           "audio environment of sdl");
     CHECK(etude_qemu_env(&p, NULL, "/f/tone.raw", &out) == 0 && env_count(envp, "") == 3,
@@ -1350,7 +1357,19 @@ static void test_audio_backends(void)
             etude_machine_type(rows[i].m, "go\r", 3);
     }
     run_rows(q, rows, 2);
+#ifdef _WIN32
+    {
+        /* The launcher gives QEMU the input's long native path. */
+        wchar_t *wide = etude_win_long_path(rows[1].profile.audio_input);
+        char *input = wide != NULL ? etude_win_utf8(wide) : NULL;
+
+        snprintf(want, sizeof(want), "fake: sdl disk %s\r\n", input != NULL ? input : "?");
+        free(input);
+        free(wide);
+    }
+#else
     snprintf(want, sizeof(want), "fake: sdl disk %s\r\n", rows[1].profile.audio_input);
+#endif
     for (i = 0; i < 2; i++) {
         row_check(&rows[i]);
         res = rows[i].m != NULL ? etude_machine_result(rows[i].m) : NULL;
