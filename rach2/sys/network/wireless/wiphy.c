@@ -162,20 +162,26 @@ static void wlan_request_unlink(struct wlan *wlan, struct wlan_request *req)
  * Start the radio as its interface comes up, and leave the network and stop
  * it as the interface goes down, as cfg80211 does on dev_open and dev_close.
  * A radio blocked by rfkill lets the interface come up and starts once the
- * block lifts. Process context without net_lock; the driver's start may
- * sleep, and the way down waits for the worker. Returns 0, the driver's
- * error from its start, or -ENODEV when the radio was removed meanwhile,
- * in which case nothing of it may be touched: removal waits for the worker
- * to run the way down and for the start to return, but not for the caller.
+ * block lifts. A worker that failed to start is made again first: without
+ * one the interface stays down with -ENOMEM, and the way down stops the
+ * radio itself instead of waiting. Process context without net_lock; the
+ * driver's start may sleep, and the way down waits for the worker. Returns
+ * 0, -ENOMEM, the driver's error from its start, or -ENODEV when the radio
+ * was removed meanwhile, in which case nothing of it may be touched: removal
+ * waits for the worker to run the way down and for the start to return, but
+ * not for the caller.
  */
 static int wireless_set_up(void *dev, int up)
 {
     struct wlan *wlan = dev;
     struct wlan_request req;
-    int rc = 0;
+    int rc = 0, worker;
 
     if (wlan->removing)
         return 0;
+    worker = wlan_work_start() == 0;
+    if (up && !worker)
+        return -ENOMEM;
     k_memset(&req, 0, sizeof(req));
     req.work.wlan = wlan;
     req.work.run = wlan_down_run;
@@ -191,7 +197,7 @@ static int wireless_set_up(void *dev, int up)
             wq_wake_all(&request_wq);
             return -ENODEV;
         }
-    } else if (wlan_queue_work(&req.work, 0) == 0) {
+    } else if (worker && wlan_queue_work(&req.work, 0) == 0) {
         (void)wq_wait_event_nointr(&request_wq, wlan_down_done, &req);
         if (req.gone)
             return -ENODEV;

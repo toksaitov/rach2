@@ -85,6 +85,17 @@ int net_ns_seen(void)
     return !foreign;
 }
 
+static int work_start_error; /* what the next start of the worker returns */
+static unsigned work_starts;
+
+/** The worker's start: the wait below stands in for its thread, so a start
+ * only counts and returns what the row chose. */
+int wlan_work_start(void)
+{
+    ++work_starts;
+    return work_start_error;
+}
+
 /** Wakes are not needed: the wait below runs the worker itself. */
 void wq_wake_all(wait_queue_t *wq)
 {
@@ -2167,6 +2178,22 @@ static void fullmac(void)
     wlan_bss_destroy(&table3);
 }
 
+/** A request made while the worker cannot be started fails with -ENOMEM
+ * and queues nothing to wait for; once it can, the next request makes it
+ * and runs. */
+static void worker_absent(void)
+{
+    n_calls = 0;
+    work_starts = 0;
+    work_start_error = -ENOMEM;
+    rq_begin(NL80211_CMD_ABORT_SCAN, 0);
+    rq_u32(NL80211_ATTR_IFINDEX, 2);
+    CHECK(rq_send() == -ENOMEM);
+    CHECK(work_starts == 1 && n_calls == 0 && wlan_work_next_due() == 0);
+    work_start_error = 0;
+    CHECK(rq_send() == 0 && work_starts == 2 && n_calls == 1 && last.kind == CALL_ABORT);
+}
+
 int main(void)
 {
     setup();
@@ -2186,6 +2213,7 @@ int main(void)
     frames();
     reg_mic_power();
     attachment();
+    worker_absent();
     fullmac();
     nl80211_detach(WLAN1);
     wlan_bss_destroy(&table);

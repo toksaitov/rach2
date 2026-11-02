@@ -24,7 +24,9 @@
  * first radio starts. Before the first program has its pid the thread is
  * only marked wanted, so that init takes pid 1, and wlan_work_threads_start
  * makes it. Returns 0 or -ENOMEM. Work queued before the thread exists
- * waits for it. */
+ * waits for it. A failure leaves no thread and the next call tries again,
+ * so whoever is about to sleep on the worker's work calls it first: nl80211
+ * before each request and the interface before it comes up or goes down. */
 int wlan_work_start(void);
 
 /** Make the thread a radio asked for before the first program started,

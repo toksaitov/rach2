@@ -714,13 +714,19 @@ static int hop_done(void *arg)
  * Run fn(sta, arg) on the wireless worker and return its result, sleeping
  * until it has run. arg stays the caller's. The handler must not use sta
  * afterwards unless the result is not -ENODEV: nl80211_detach ends a
- * waiting request with -ENODEV and frees the station.
+ * waiting request with -ENODEV and frees the station. A worker that failed
+ * to start is made again first; -ENOMEM when it still cannot be, since no
+ * request may wait for a worker that does not exist.
  */
 static int on_worker(struct sta *sta, hop_fn fn, void *arg)
 {
     struct hop h;
     int rc;
 
+    rc = wlan_work_start();
+    if (rc) {
+        return rc;
+    }
     k_memset(&h, 0, sizeof(h));
     h.work.wlan = sta->wlan;
     h.work.run = hop_run;

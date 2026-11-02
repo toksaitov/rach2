@@ -355,10 +355,15 @@ int nd6_forget(struct netdev *nd, const uint8_t *addr)
     return -ENOENT;
 }
 
-/** The model drains data explicitly and needs no worker thread. */
+static int work_start_error; /* what the next start of the worker returns */
+static unsigned work_starts;
+
+/** The model drains data explicitly and needs no worker thread; a start
+ * only counts and returns what the row chose. */
 int wlan_work_start(void)
 {
-    return 0;
+    ++work_starts;
+    return work_start_error;
 }
 
 /** Keep the same per-radio scan attachments as the real scan layer. */
@@ -840,6 +845,36 @@ static void removal(void)
     CHECK(netdev_count() == 0);
 }
 
+/** While the worker cannot be started, the interface stays down with
+ * -ENOMEM, and the way down stops the radio without waiting for a worker
+ * that does not exist; once it can be, the interface comes up. */
+static void worker_absent(void)
+{
+    struct wlan_radio radio;
+    struct wlan *wlan = 0;
+    struct netdev *nd;
+    unsigned before_starts = starts, before_stops = stops, tries;
+
+    setup(&radio, 6);
+    CHECK(wlan_register_radio(&radio, &wlan) == 0 && wlan);
+    if (!wlan)
+        return;
+    nd = &wlan->netdev;
+    tries = work_starts;
+    work_start_error = -ENOMEM;
+    CHECK(netconf_set_up(nd, 1) == -ENOMEM && !nd->up && !wlan->started);
+    CHECK(work_starts == tries + 1 && starts == before_starts);
+    work_start_error = 0;
+    CHECK(netconf_set_up(nd, 1) == 0 && nd->up && wlan->started);
+    work_start_error = -ENOMEM;
+    CHECK(netconf_set_up(nd, 0) == 0 && !nd->up && !wlan->started);
+    CHECK(work_starts == tries + 3 && stops == before_stops + 1);
+    CHECK(work_count == 0 && !wlan->requests && !wlan->busy);
+    work_start_error = 0;
+    wlan_unregister_radio(wlan);
+    CHECK(netdev_count() == 0);
+}
+
 /** Check bridge-tunnel, RFC 1042 exceptions and QoS header bounds. */
 static void conversion(void)
 {
@@ -941,6 +976,7 @@ int main(void)
     station();
     blocking();
     removal();
+    worker_absent();
     conversion();
     regulatory();
     return failures ? 1 : 0;
