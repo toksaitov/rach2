@@ -175,12 +175,13 @@ and the attributes
 .Dv IFLA_BROADCAST ,
 .Dv IFLA_MTU ,
 .Dv IFLA_OPERSTATE ,
-.Dv IFLA_STATS
-with the packets, bytes and drops each way and the receive errors, and
 .Dv IFLA_STATS64
-with the same counters in Linux's 25 eight-byte words, the rest 0, which
+with the packets, bytes and drops each way and the receive errors in
+Linux's 25 eight-byte words, the rest 0, which
 .Ql ip -s link
-prints.
+prints, and
+.Dv IFLA_STATS
+with the same counters cut to their low 32 bits, as Linux cuts them.
 Without it, the one message of the interface whose index the
 .Vt struct ifinfomsg
 names, or with an index of 0, whose name an

@@ -598,6 +598,8 @@ Receive:  bytes packets errs drop fifo frame compressed multicast
 Transmit: bytes packets errs drop fifo colls carrier compressed
 .Ed
 .Pp
+The interface's bytes, packets, receive errors and drops are 64-bit
+counts, which do not wrap in practice.
 The receive FIFO and both compressed counters are zero.
 Receive drops include frames missed by the card.
 The frame, multicast, transmit error, FIFO, collision, and carrier
