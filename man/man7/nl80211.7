@@ -40,6 +40,10 @@ A request that names neither fails with
 .Er EINVAL ;
 one that names an interface or wiphy not present fails with
 .Er ENODEV .
+The radios belong to the first network namespace: from another, a request
+that names one fails with
+.Er ENODEV
+and a dump lists none.
 Commands that change the station need network administration privilege and
 otherwise fail with
 .Er EPERM .

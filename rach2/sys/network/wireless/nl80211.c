@@ -576,7 +576,9 @@ static const struct nlattr *nest_next(const struct nlattr *nest, unsigned *at, i
 }
 
 /** The station named by the request's IFINDEX or WDEV; *error is -EINVAL
- * when neither is given and -ENODEV when no station has it. */
+ * when neither is given and -ENODEV when no station has it. A caller
+ * outside the first network namespace sees none, since the radios'
+ * interfaces are that namespace's, as route netlink shows it. */
 static struct sta *sta_of(const struct genl_info *info, int *error)
 {
     unsigned i;
@@ -586,6 +588,9 @@ static struct sta *sta_of(const struct genl_info *info, int *error)
         return 0;
     }
     *error = -ENODEV;
+    if (!net_ns_seen()) {
+        return 0;
+    }
     for (i = 0; i < MAX_STATIONS; ++i) {
         struct sta *s = stations[i];
 
@@ -614,7 +619,7 @@ static struct sta *sta_of_wiphy(const struct genl_info *info, int *error)
     if (!info->attrs[NL80211_ATTR_WIPHY]) {
         return sta_of(info, error);
     }
-    for (i = 0; i < MAX_STATIONS; ++i) {
+    for (i = 0; net_ns_seen() && i < MAX_STATIONS; ++i) {
         if (stations[i] &&
             stations[i]->radio->index == nla_get_u32(info->attrs[NL80211_ATTR_WIPHY])) {
             *error = 0;
@@ -888,13 +893,13 @@ static int dump_wiphy(struct genl_dump *dump, struct genl_msg *msg)
         }
         dump->args[3] = 1;
     }
-    for (slot = (unsigned)dump->args[0]; slot < MAX_STATIONS; ++slot) {
+    for (slot = (unsigned)dump->args[0]; net_ns_seen() && slot < MAX_STATIONS; ++slot) {
         s = stations[slot];
         if (s && (!dump->args[2] || s->radio->index + 1ul == dump->args[2])) {
             break;
         }
     }
-    if (slot >= MAX_STATIONS) {
+    if (!net_ns_seen() || slot >= MAX_STATIONS) {
         return 0;
     }
     begin_wiphy(msg, s, info->seq);
@@ -977,7 +982,7 @@ static int dump_interface(struct genl_dump *dump, struct genl_msg *msg)
     const struct nlattr *wiphy = dump->info.attrs[NL80211_ATTR_WIPHY];
     unsigned slot;
 
-    for (slot = (unsigned)dump->args[0]; slot < MAX_STATIONS; ++slot) {
+    for (slot = (unsigned)dump->args[0]; net_ns_seen() && slot < MAX_STATIONS; ++slot) {
         struct sta *s = stations[slot];
 
         if (s && (!wiphy || nla_get_u32(wiphy) == s->radio->index)) {

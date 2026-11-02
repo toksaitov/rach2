@@ -117,6 +117,12 @@ int net_admin(void)
     return 1;
 }
 
+/** The test runs in the first network namespace, which the radio belongs to. */
+int net_ns_seen(void)
+{
+    return 1;
+}
+
 /** No rach2.wsim: the radio comes from an open of /dev/wsim. */
 int kcmdline_value(const char *key, char *out, unsigned int cap)
 {
