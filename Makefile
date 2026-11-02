@@ -1439,8 +1439,9 @@ $(OS_REAL_EXT2): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_
 # GRUB loads is the whole system, since nothing is mounted from a disk, so it
 # has a shell, dropbear, the account files and the keys, and leaves out the
 # compiler, /src, Doom and bootctl, which a machine with no writable disk
-# cannot use. 4 MiB: the binaries come to about 1.4 MiB, and the rest is room
-# under the kernel's 64 MiB window.
+# cannot use. 16 MiB, of which 6 MiB must stay free: /tmp is on this root,
+# and the acceptance's image row puts a file system of 4 MiB there
+# (tests/cases/machine/metal/loop.krffs).
 #
 # The metal kernel: the same sources built read-only at the disk, into its own
 # object tree so the two kernels never share one. The switch is a build switch
@@ -1482,7 +1483,7 @@ rach2-recovery: krffs rach2 $(RECOVERY_KERNEL) $(BINFIND) $(CHECKRECOVERY)
 # invocation, so each suite that boots it would restage it, and two running at
 # once would restage it under each other.
 $(METAL_IMAGE): Makefile $(DEMO_CREDS) krffs/manifests/rach2-metal.manifest $(MANIFEST_DEPS_rach2_metal) $(IMAGE_TOOLS) | kbd preflight krffs rach2 rach2-metal utils sox_ng check-busybox check-setid check-dropbearmulti
-	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $@ 8
+	$(MKIMAGE) krffs/manifests/rach2-metal.manifest $@ 16 6144
 
 rach2-metal-image: $(METAL_IMAGE)
 
