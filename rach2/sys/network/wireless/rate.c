@@ -122,3 +122,16 @@ void wlan_rate_status(struct wlan_data *d, const struct wlan_tx_status *status)
     if (d->radio->rate_ops && d->radio->rate_ops->status)
         d->radio->rate_ops->status(d->radio, status);
 }
+
+unsigned wlan_rate_value(const struct wlan_band *band, int index, unsigned flags)
+{
+    /* 802.11-2020 Table 19-27, HT20 with one spatial stream. */
+    static const uint16_t mcs_long[8] = {65, 130, 195, 260, 390, 520, 585, 650};
+    static const uint16_t mcs_short[8] = {72, 144, 217, 289, 433, 578, 650, 722};
+
+    if (index < 0)
+        return 0;
+    if (flags & WLAN_RATE_MCS)
+        return index < 8 ? (flags & WLAN_RATE_SHORT_GI ? mcs_short : mcs_long)[index] : 0;
+    return (unsigned)index < band->n_rates ? band->rates[index] : 0;
+}

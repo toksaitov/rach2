@@ -59,13 +59,16 @@ static void cut(uint8_t *frame, unsigned *len, unsigned at, unsigned n)
     *len -= n;
 }
 
-/** Note the signal of a frame from the BSS, which /proc/net/wireless and
- * nl80211's station report. Quality is the signal above -110 dBm, at most
+/** Note the signal and rate of a frame from the BSS, which /proc/net/wireless
+ * and nl80211's station report. Quality is the signal above -110 dBm, at most
  * 70, as iw and Linux's wireless extensions scale it. */
 static void note_signal(struct wlan_data *d, const struct wlan_rx_status *status)
 {
     int q = status->signal + 110;
+    unsigned rate = wlan_rate_value(&d->radio->band, status->rate, status->rate_flags);
 
+    if (rate)
+        d->rx_rate = (uint16_t)rate;
     if (!status->signal)
         return;
     d->counters->signal = (int32_t)status->signal * 100;

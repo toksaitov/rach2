@@ -248,6 +248,10 @@ static void sta_status(struct wlan *wlan, struct nl80211_status *out)
         out->mfp = m->mfp;
         out->assoc_at = s->assoc_at;
         out->last_rx = m->last_beacon;
+        if (wlan_data_of(wlan)) {
+            out->tx_rate = wlan_data_of(wlan)->tx_rate;
+            out->rx_rate = wlan_data_of(wlan)->rx_rate;
+        }
     }
     wlan_get_counters(wlan, &out->counters);
 }

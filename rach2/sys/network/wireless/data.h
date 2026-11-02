@@ -35,6 +35,8 @@
 /* Set in every transmit cookie the data path makes, so that whoever routes
  * transmit status can tell its frames from the scan's and the MLME's. */
 #define WLAN_DATA_COOKIE        ((uint64_t)1 << 61)
+#define WLAN_DATA_COOKIE_DATA   ((uint64_t)1 << 60) /* a data frame, whose rate the station reports \
+                                                     */
 #define WLAN_PN_MAX             0xffffffffffffULL
 
 /* What wlan_data_rx_mgmt found: a frame that arrived protected and passed
@@ -153,6 +155,11 @@ struct wlan_data {
 
     /* Rate selection's view of the BSS: bits of the radio's band rates. */
     uint32_t rates_basic, rates_supported;
+
+    /* The rate of the last data frame acknowledged and of the last frame
+     * received from the BSS, in 100 kbit/s, which nl80211's station dump
+     * reports; zero until one comes. */
+    uint16_t tx_rate, rx_rate;
 
     /* Sequence numbers to send, per TID; WLAN_NON_QOS_TID counts non-QoS
      * data and management frames, as one counter. */
@@ -487,5 +494,10 @@ void wlan_rate_select(struct wlan_data *d, const uint8_t *frame, unsigned len, i
 
 /** Pass a transmit status to the radio's rate_ops, if it has any. */
 void wlan_rate_status(struct wlan_data *d, const struct wlan_tx_status *status);
+
+/** The bit rate in 100 kbit/s of `index` with WLAN_RATE_* `flags` in
+ * `band`: a band rate, or an HT20 MCS of one stream, long or short guard
+ * interval; zero for one that is not. */
+unsigned wlan_rate_value(const struct wlan_band *band, int index, unsigned flags);
 
 #endif

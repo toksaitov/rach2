@@ -53,6 +53,11 @@ The access point a station is joined to, with the signal and rates.
 .It Cm dev Ar ifname Cm station dump
 The stations the interface knows: the access point of a station, or the
 clients of an access point.
+A station's
+.Sy tx bitrate
+is the rate of its last data frame the access point acknowledged, and its
+.Sy rx bitrate
+that of the last frame it received from the access point.
 .It Cm dev Ar ifname Cm connect Ar ssid Op Ar freq
 Join an open network.
 A secured network is joined with

@@ -45,7 +45,7 @@ static void put_seq(struct wlan_data *d, uint8_t *frame, unsigned index)
 /** A fresh transmit cookie of the data path. */
 static uint64_t next_cookie(struct wlan_data *d)
 {
-    d->next_cookie = (d->next_cookie + 1) & (WLAN_DATA_COOKIE - 1);
+    d->next_cookie = (d->next_cookie + 1) & (WLAN_DATA_COOKIE_DATA - 1);
     if (!d->next_cookie)
         d->next_cookie = 1;
     return WLAN_DATA_COOKIE | d->next_cookie;
@@ -173,6 +173,7 @@ int wlan_data_connect(struct wlan_data *d, const struct wlan_bss *bss, int qos, 
     }
     for (i = 0; i < WLAN_DATA_DEFRAG; ++i)
         d->defrag[i].len = 0;
+    d->tx_rate = d->rx_rate = 0;
     wlan_rate_connect(d, bss);
     d->connected = 1;
     return 0;
@@ -364,7 +365,7 @@ int wlan_data_tx(struct wlan_data *d, uint8_t *frame, unsigned len, unsigned cap
     rc = k ? protect_data(k, frame, &len, cap, hdrlen, tid, &info) : 0;
     if (rc == 0) {
         wlan_rate_select(d, frame, len, eapol, info.rates);
-        info.cookie = next_cookie(d);
+        info.cookie = next_cookie(d) | (eapol ? 0 : WLAN_DATA_COOKIE_DATA);
         info.frequency = d->frequency;
         rc = d->radio->ops->tx(d->radio, frame, len, &info);
     }
@@ -443,6 +444,10 @@ void wlan_data_tx_status(struct wlan_data *d, const struct wlan_tx_status *statu
         return;
     for (i = 0; i < WLAN_TX_RATE_SERIES && status->rates[i].index >= 0; ++i)
         attempts += status->rates[i].count;
+    /* The series that ended the frame is the last one tried. */
+    if ((status->cookie & WLAN_DATA_COOKIE_DATA) && (status->flags & WLAN_TX_ACKED) && i > 0)
+        d->tx_rate = (uint16_t)wlan_rate_value(&d->radio->band, status->rates[i - 1].index,
+                                               status->rates[i - 1].flags);
     if (attempts > 1)
         d->counters->tx_retries += attempts - 1;
     if (!(status->flags & (WLAN_TX_ACKED | WLAN_TX_FILTERED)))

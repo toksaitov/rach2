@@ -673,7 +673,7 @@ static void test_aggregate(void)
 
     setup();
     establish(64);
-    cookie0 = WLAN_DATA_COOKIE | (d->next_cookie + 1);
+    cookie0 = WLAN_DATA_COOKIE | WLAN_DATA_COOKIE_DATA | (d->next_cookie + 1);
 
     /* Ten frames: two go alone, in their window, and eight wait. */
     for (i = 0; i < 10; i++)
@@ -821,7 +821,7 @@ static void test_give_up(void)
 
     setup();
     establish(64);
-    cookie = WLAN_DATA_COOKIE | (d->next_cookie + 1);
+    cookie = WLAN_DATA_COOKIE | WLAN_DATA_COOKIE_DATA | (d->next_cookie + 1);
     CHECK(send(0, 500, 0) == 0);
     CHECK(chain_of(1, 0, dc, 4) == 1);
     s0 = seq_of(dc[0]);
