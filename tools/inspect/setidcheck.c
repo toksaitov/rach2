@@ -4578,7 +4578,7 @@ static void st_ext2_rows(const struct allow *img_allow)
         b[3] = 0;
         if (st_ext2_poke(clean, mut, 1024 + 96, b, 4) == 0)
             st_ext2_case(img_allow, "ext2: a feature outside the profile", mut, 0,
-                         "the profile is 0x10/0x2/0x3");
+                         "the profile is 0x10/0x2/0x43");
         /* A block past the volume in the set-id file's first pointer. */
         ino = st_ext2_inode_of(clean, "/bin/su");
         at = ino ? st_ext2_inode_at(clean, ino) : -1;
