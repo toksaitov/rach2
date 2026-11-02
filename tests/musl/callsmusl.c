@@ -1325,6 +1325,34 @@ static int reaped_ok(pid_t pid)
     return waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 
+/** Read a child's count of bytes from its result pipe `fd` into `*n`, and
+ * return whether a whole count came and is not negative. */
+static int count_read(int fd, int *n)
+{
+    return read(fd, n, sizeof *n) == (ssize_t)sizeof *n && *n >= 0;
+}
+
+/**
+ * Return whether the pipe's `data` went to the splicer and the reader each
+ * once, in order: `spliced` bytes on the socket `sock`, which are the first,
+ * and the `read_n` bytes after them on the reader's result pipe `rres`.
+ */
+static int spliced_bytes_ok(const char *data, int spliced, int read_n, int rres, int sock)
+{
+    char got[SPLICED_SIZE + 1];
+    size_t left;
+    ssize_t r;
+    int ok;
+
+    ok = spliced + read_n == SPLICED_SIZE && read(rres, got, (size_t)read_n) == (ssize_t)read_n &&
+         memcmp(got, data + spliced, (size_t)read_n) == 0;
+    for (left = (size_t)spliced; ok && left > 0; left -= (size_t)r) {
+        r = read(sock, got, left);
+        ok = r > 0 && memcmp(got, data + (spliced - (int)left), (size_t)r) == 0;
+    }
+    return ok;
+}
+
 /**
  * Check that a byte of a pipe goes to one reader. A child splices
  * SPLICED_SIZE bytes from the pipe into a socket that is full, and is seen
@@ -1387,18 +1415,10 @@ static int spliced_once(void)
     close(p[0]);
     close(sres[1]);
     close(rres[1]);
-    if (!ok || read(sres[0], &spliced, sizeof spliced) != (ssize_t)sizeof spliced ||
-        read(rres[0], &read_n, sizeof read_n) != (ssize_t)sizeof read_n || spliced < 0 ||
-        read_n < 0) {
+    if (!ok || !count_read(sres[0], &spliced) || !count_read(rres[0], &read_n)) {
         return fail("the splicer's and the reader's counts");
     }
-    ok = spliced + read_n == SPLICED_SIZE &&
-         read(rres[0], got, (size_t)read_n) == (ssize_t)read_n &&
-         memcmp(got, data + spliced, (size_t)read_n) == 0;
-    for (left = (size_t)spliced; ok && left > 0; left -= (size_t)r) {
-        r = read(sv[1], got, left);
-        ok = r > 0 && memcmp(got, data + (spliced - (int)left), (size_t)r) == 0;
-    }
+    ok = spliced_bytes_ok(data, spliced, read_n, rres[0], sv[1]);
     close(sv[1]);
     close(sres[0]);
     close(rres[0]);
