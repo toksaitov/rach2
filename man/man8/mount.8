@@ -48,8 +48,9 @@ and
 itself, and they cannot be unmounted, as
 .Xr mount 2
 describes.
-The target must be a directory other than the root directory or an
-existing mount point.
+The target must be a directory other than the root directory.
+A mount on an existing mount point goes over it, and hides it until the
+new mount is taken away.
 .Pp
 The source of a
 .Ql tmpfs
@@ -229,7 +230,7 @@ A mount flag is unsupported, or the target is the root of the root file system.
 .It Er ENOTDIR
 The target is not a directory.
 .It Er EBUSY
-The target is already a mount point; the source range is mounted or has
+The source range is mounted or has
 an open descriptor permitting writes; or an unmount was attempted while
 a file or loop device still referred to the volume.
 .It Er ENAMETOOLONG
