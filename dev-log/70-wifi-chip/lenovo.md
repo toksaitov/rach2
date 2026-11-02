@@ -153,3 +153,48 @@ cmp /boot/kernel /boot/fallback
 gave `8b9611b26d79114725d65955e2ff2fbc4a28dce16dca531530348a8da99aecd7` for both, the release's kernel, and the two files are identical. `/boot/grub/grub.cfg` and `/boot/boot.cfg` have the SHA-256 they had at 03:49, before the Linux files went on, and `/boot/t2251` and `/boot/grub/x86_64-efi` are gone. `bootctl status` gives `saved_entry: candidate`, `next_entry: empty` and `booted: candidate`, and `/etc/rach2/release` names `2dd8dd1b`.
 
 A raw read of each slot from `bootctl status`'s first sector does not check this: the slot files are not contiguous on the partition, so 8,192 sectors from the first one differ after 2 MiB.
+
+## Bring-up and scan
+
+Rach2's ath9k driver on the card, over SSH on trial boots through `bootctl kernel`, silent, with `mixer vol 1` after each boot. The first trial, from 07:23 UTC+6, booted kernel `bce906cf...01ad` (811fa66af, x86_64, 2,662,344 bytes); both slots held the release before it, read through the FAT. On the trial boot `bootctl status` gave `saved_entry: fallback`, `next_entry: empty` and `booted: candidate`, so a hang would have given the release at the next power-up. The kernel log was streamed over SSH throughout, from `/dev/bootlog`, which does not follow, with this reader:
+
+```sh
+# follow.sh: print what the kernel log gains, five times a second.
+n=$(wc -c < /dev/bootlog)
+while :; do
+    m=$(wc -c < /dev/bootlog)
+    if [ "$m" -gt "$n" ]; then
+        tail -c +$((n + 1)) /dev/bootlog | head -c $((m - n))
+        n=$m
+    fi
+    usleep 200000
+done
+```
+
+### The boot line and the MAC address
+
+```
+ath9k: interrupts: messages on vector 52
+ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
+```
+
+`ip link` shows `wlan0` down with `link/ether b8:ee:65:32:89:15`. Linux's ath9k wrote the same address to the card: `AR_STA_ID0` 0x3265eeb8 and the low half of `AR_STA_ID1` 0x1589, at lines 4566 and 4987 of the mmiotrace. The worker kwlan is pid 3 and init pid 1. The command word reads 0x0006 with messages on: memory decoding and bus mastering, Interrupt Disable clear.
+
+### The radio's start
+
+`ip link set wlan0 up` returned 0 at once, and `wlan0` read `<NO-CARRIER,BROADCAST,MULTICAST,UP>`. The log gained only the interface's IPv6 address; no `polled` line, no reset. `/proc/interrupts` counted 2,207 messages on vector 52 in the first 37 s and then a steady 59 a second, the beacons heard on channel 1.
+
+### A scan
+
+`iw dev wlan0 scan`, with a static iw 6.17 copied to `/dev/shm`, returned in under a second with 26 BSSes: 12 on channel 1, 1 each on 2, 3, 5, 10, 11 and 13, 2 on 4, 4 on 6 and 3 on 8. Linux's two scans had found 21 and 30.
+
+* TDA-NET, the owner's network, was BSS 60:a4:b7:a4:eb:63 on 2427 MHz, channel 4, at -15 dBm; Linux had found it on channel 7 at -27 and -16 dBm, so the router has changed channel since. A second scan, 7 minutes later, gave it at -57 dBm among 19 BSSes.
+* The Mac (`system_profiler SPAirPortDataType`, which hides the names of networks it has not joined) saw 2.4 GHz networks on channels 1 (two), 4, 5, 6, 8 and 10, and gave a signal only for its channel 4 network, TDA-NET, at -25 dBm. Each of those channels has networks in Rach2's list.
+* Signals run from -15 to -92 dBm, except nine BSSes on channel 1 at -99 to -114 dBm, each heard in the scan itself. The driver reports the noise floor plus `AR_RxRSSICombined`, as ath9k does, so these are frames whose combined RSSI read negative. Only channel 1, where the radio had listened for 80 s before the scan, shows them.
+
+### A stuck queue
+
+* `AR_Q_TXD` cannot hang a queue: on this chip it makes a queue finish what it holds, as ath9k's `ath9k_hw_stop_dma_queue` relies on. With all ten bits set and a scan of the channel the radio sat on, the probe request was sent and no reset followed.
+* Clearing the ten `AR_DnQCUMASK` words (0x1000 to 0x1024) does hang it: a scan of the same channel left `AR_Q_TXE` at 0x8, a frame in QCU 3, the VO queue that probe requests take, for two minutes.
+* No reset came, because the hang check ran only once, a second after the start: it queued its own record again from inside its callback, which the worker refuses (11b2c9de4 fixes it).
+* A full scan's first retune then aborted TX, with its bounded waits, and reset the chip: `AR_Q_TXE` read 0, the masks 1 << n again, and the scan found 19 BSSes, TDA-NET among them. Messages stayed on throughout, 24,911 of them by 07:32, with no `polled` line.
