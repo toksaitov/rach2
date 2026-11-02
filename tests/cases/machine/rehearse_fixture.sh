@@ -64,10 +64,15 @@ backup_from=$(( (sectors - 33) / 8 * 8 ))
 rm -f "$dir/save.set"
 
 # The save disk, exFAT and not FAT32, since this kernel writes FAT32 a block
-# at a time. mkmbr writes only the table of the first sector, so it writes
-# it on an empty disk of the save disk's length, save.mbr, whose first
+# at a time. Its volume has a mebibyte for each mebibyte of the ranges,
+# rounded up, and 64 MiB more for the volume's own structures and each
+# file's last cluster, so that it fits whatever the grow writes: 256-byte
+# inodes double the inode tables, some 3.7 GiB beyond the image at the
+# Lenovo's size. mkmbr writes only the table of the first sector, so it
+# writes it on an empty disk of the save disk's length, save.mbr, whose first
 # mebibyte then goes before the volume as save.img is written.
-save_sectors=$(( (image_sectors / 2048 + 2048 + 32) * 2048 ))
+save_sectors=$(awk '{ n += $2 } END { printf "%d\n", (int((n + 2047) / 2048) + 64) * 2048 }' \
+    "$dir/ranges")
 "$mkexfat" --make "$dir/save.vol" --sectors "$save_sectors" --offset 2048 \
     --add "ranges=$dir/ranges" > /dev/null
 save_bytes=$((1048576 + $(wc -c < "$dir/save.vol")))
