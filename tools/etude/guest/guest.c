@@ -34,6 +34,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/utsname.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <time.h>
@@ -388,13 +389,15 @@ static void token_of(const void *p, size_t n, char out[ETUDE_FRAME_TOKEN_LEN + 1
 /**
  * Find the boot's token. Linux has a boot identity in /proc, and macOS, where
  * the host tests run etude-guest too, has one in the sysctl
- * kern.bootsessionuuid. Rach2 has none, and the first etude-guest of a boot
- * writes random bytes to a file in /dev/shm, a tmpfs that every boot mounts
- * empty, for every later one to read. These bytes distinguish boots and
- * need no secure random source; GRND_INSECURE supplies them when Rach2
- * cannot read /dev/urandom. The file is published whole by
- * link(2), so a reader never sees a part, and it is used only when this user
- * or root owns it and nobody else may write it.
+ * kern.bootsessionuuid. On Rach2, the first etude-guest of a boot writes
+ * random bytes to a file in /dev/shm, a tmpfs that every boot mounts empty,
+ * for every later one to read. Rach2's procfs has a boot_id too, but etude's
+ * clock and ledger and the Lenovo's deployment read only this file there, so
+ * the guest uses it whenever uname names Rach2. These bytes distinguish boots
+ * and need no secure random source; GRND_INSECURE supplies them when Rach2
+ * cannot read /dev/urandom. The file is published whole by link(2), so a
+ * reader never sees a part, and it is used only when this user or root owns
+ * it and nobody else may write it.
  */
 static int find_boot(void)
 {
@@ -404,10 +407,14 @@ static int find_boot(void)
     unsigned char rnd[32];
     char hex[65];
     struct stat st;
+    struct utsname kernel;
     long n;
     int fd;
 
-    n = read_file("/proc/sys/kernel/random/boot_id", buf, sizeof(buf));
+    if (uname(&kernel) == 0 && etude_boot_is_rach2(kernel.sysname, kernel.release, kernel.version))
+        n = -1;
+    else
+        n = read_file("/proc/sys/kernel/random/boot_id", buf, sizeof(buf));
 #if defined(__APPLE__)
     if (n <= 0) {
         size_t len = sizeof(buf) - 1;
