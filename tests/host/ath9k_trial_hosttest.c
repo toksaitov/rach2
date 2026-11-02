@@ -855,7 +855,7 @@ static void ap_queue(unsigned fc, const uint8_t *da, const uint8_t *body, unsign
     airq[at].len = 24 + n + 4;
     k_memset(&airq[at].status, 0, sizeof(airq[at].status));
     airq[at].status.status11 = AR_RxFrameOK | status11;
-    airq[at].status.status1 = SM(0x0c, AR_RxRate); /* 6 Mbit/s, OFDM */
+    airq[at].status.status1 = SM(0x0b, AR_RxRate); /* 6 Mbit/s, OFDM */
 }
 
 /** Queue a management frame of subtype `stype` to the station. */
@@ -1573,6 +1573,10 @@ static void connect_and_soak(void)
     CHECK(ap.addba == 1 && card.ampdu.tid[0].active);
     CHECK(ap.aggregates > 0 && ap.subframes > 2 * ap.aggregates);
     CHECK(ap.fast > ap.data / 2);
+    /* What `iw dev wlan0 station dump` reports, from the last frames:
+     * MCS 3 to 5 out, which are 26 to 52 Mbit/s, and 6 Mbit/s in. */
+    CHECK(data.tx_rate >= 260 && data.tx_rate <= 520);
+    CHECK(data.rx_rate == 60);
     printf("ath9k_trial_hosttest: %s: %u frames out, %u in aggregates of %u, %u in, last rate "
            "0x%02x\n",
            polled ? "polled" : "messages", ap.data, ap.subframes, ap.aggregates, delivered_ip,
