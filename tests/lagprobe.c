@@ -261,19 +261,23 @@ static void run_sleep(void)
  * least one quarantine and one release must be the read's own; the boot's
  * own lagged requests and their late answers may land inside the window
  * too, so an exact count would depend on the timing. The second read comes
- * after the late completion has freed the quarantined slot, two seconds
- * after the deadline.
+ * after the late completion has freed the quarantined slot, two seconds of
+ * ticks after the deadline, which the probe waits for by the lag device's
+ * count of answers: under a hypervisor that drops timer interrupts the ticks
+ * run slower than the time of day, and a wait by the clock could end before
+ * the answer and find the device still stalled.
  */
 static void run_deadline(void)
 {
     int quarantines = disk_counter("disk-quarantines ");
     int releases = disk_counter("disk-releases ");
     int waited = disk_counter("disk-wait-ticks ");
-    unsigned start;
+    int answered;
 
     if (read_part(512) != -EIO) {
         fail("the first read past the deadline was not EIO");
     }
+    answered = disk_counter("lag-completions ");
     /* In flight for the whole deadline, which the block layer counts. */
     puts("LAGPROBE first read: ticks in flight:");
     say_numbers((unsigned)(disk_counter("disk-wait-ticks ") - waited), 0, 0, 0);
@@ -288,9 +292,9 @@ static void run_deadline(void)
         disk_counter("disk-releases ") - releases < 1) {
         fail("the first read was not quarantined and released");
     }
-    /* The late completion frees the quarantined slot within the wait. */
-    start = now_ms();
-    while (now_ms() - start < 3000u) {
+    /* The late completion frees the quarantined slot when it is counted. */
+    while (disk_counter("lag-completions ") == answered) {
+        syscall0(SYS_SCHED_YIELD);
     }
     quarantines = disk_counter("disk-quarantines ");
     releases = disk_counter("disk-releases ");
