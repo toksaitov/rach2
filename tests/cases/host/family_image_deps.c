@@ -156,7 +156,10 @@ int family_image_prerequisites(struct fixture *f)
     snprintf(marker, sizeof(marker), "%s/root/%s/tests/system/imagerace.d/marker", f->work,
              family_image_build_path());
     family_row(f, "beneath", fx_text(marker, "nested\n") && no_builder(f, test));
+    /* Make's database outgrows the report's 1 MiB; only its two rules count. */
+    f->quiet = 1;
     family_image_root_make(f, test, "-pn");
+    f->quiet = 0;
     snprintf(dependency, sizeof(dependency), " %s/tests/vmprobe ", family_image_build_path());
     family_row(f, "named", db_has(f, test, dependency, 0));
     snprintf(vmprobe, sizeof(vmprobe), "%s/tests/vmprobe", family_image_build_path());

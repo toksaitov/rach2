@@ -501,8 +501,13 @@ int fx_wait(struct fixture *f, struct fx_child *p)
     f->out = fx_read(p->out);
     f->err = fx_read(p->err);
     f->status = p->status;
-    printed = printf("command %u: status %d\n%s%s", f->command, f->status, f->out ? f->out : "",
-                     f->err ? f->err : "");
+    if (f->quiet)
+        printed =
+            printf("command %u: status %d\noutput: %lu bytes not shown\n%s", f->command, f->status,
+                   (unsigned long)(f->out ? strlen(f->out) : 0), f->err ? f->err : "");
+    else
+        printed = printf("command %u: status %d\n%s%s", f->command, f->status, f->out ? f->out : "",
+                         f->err ? f->err : "");
     print_errno = printed < 0 ? errno : 0;
     flushed = fflush(stdout);
     flush_errno = flushed != 0 ? errno : 0;

@@ -7,6 +7,7 @@ struct fixture {
     char root[4096], tree[4096], work[4096], bin[4096], self[4096];
     char *out, *err;
     int status, failed;
+    int quiet; /* report a command's output by its size, not its text */
     unsigned command;
 };
 struct fx_child {
