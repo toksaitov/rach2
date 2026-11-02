@@ -265,7 +265,10 @@ static void lay(unsigned char *disk, const unsigned *at, const char *text, unsig
     for (i = 0; i < n * len; i++)
         disk[at[i / 512] * 512 + i % 512] = text[i % len];
 }
-/** Make the image with NC copies of C in the candidate slot and NF of F in the fallback. */
+/**
+ * Make the image with NC copies of C in the candidate slot and NF of F in the
+ * fallback.
+ */
 static void image(unsigned char *disk, const char *c, unsigned nc, const char *f, unsigned nf)
 {
     static const unsigned grubenv[] = {24, 25};
