@@ -44,6 +44,7 @@ static int mock_command(int argc, char **argv)
         {"FLOW_MEASURE", flow_measure_mock}, {"FLOW_TESTING", flow_testing_mock},
         {"FLOW_DEPLOY", flow_deploy_mock},   {"FLOW_VERSION", flow_version_mock},
         {"FLOW_WORKER", flow_worker_mock},   {"FLOW_SPACE", flow_space_mock},
+        {"FLOW_APGUEST", flow_apguest_mock},
     };
     unsigned i;
     for (i = 0; i < sizeof(mocks) / sizeof(mocks[0]); i++)
@@ -72,6 +73,7 @@ static int controller(struct fixture *f, const char *id)
         {"leftovers", flow_leftovers},
         {"worker_park", flow_worker},
         {"space", flow_space},
+        {"apguest", flow_apguest},
     };
     unsigned i;
     for (i = 0; i < sizeof(controllers) / sizeof(controllers[0]); i++)

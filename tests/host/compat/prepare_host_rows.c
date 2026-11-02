@@ -201,7 +201,7 @@ static void copy_named(const char *tree, const char *text)
     }
 }
 
-/** Check the scripts group: its 45 checks, and the refusal of a manifest
+/** Check the scripts group: its 46 checks, and the refusal of a manifest
  * that lacks one of them or gives one twice. */
 static void script_partition_routes(void)
 {
@@ -248,7 +248,7 @@ static void script_partition_routes(void)
     }
     free(list);
     json_free(seen);
-    PF_CHECK(names == 45 && unique == 45, "scripts: 45 checks, each named once");
+    PF_CHECK(names == 46 && unique == 46, "scripts: 46 checks, each named once");
     manifest = pf_jload(pf_at(tree, "tests/cases/host.host.json"));
     cases = json_member(manifest, "cases");
     for (i = 0; cases && i < cases->count; i++) {

@@ -2,7 +2,7 @@
 #ifndef HOST_SCRIPT_INVENTORY_H
 #define HOST_SCRIPT_INVENTORY_H
 #include <stddef.h>
-#define HOST_SCRIPT_ROWS  45
+#define HOST_SCRIPT_ROWS  46
 #define HOST_SCRIPT_PARTS 5
 enum host_script_kind { SCRIPT_KERNEL, SCRIPT_PROTOCOL, SCRIPT_IMAGE, SCRIPT_BUILD, SCRIPT_FLOW };
 enum host_script_part {

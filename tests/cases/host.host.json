@@ -3267,6 +3267,11 @@
           "assertion_id": "space",
           "checks": "disk admission requires a Windows reading: its native C controller passes every row",
           "source": "scenario"
+        },
+        {
+          "assertion_id": "apguest",
+          "checks": "apguest.sh -m check fails when the guest's check fails or gives no result: its native C controller passes every row",
+          "source": "scenario"
         }
       ],
       "branches": [],
@@ -3279,13 +3284,13 @@
           "witness_id": "stage",
           "kind": "step",
           "means": "a declared scenario step has ended",
-          "limit": 15
+          "limit": 16
         },
         {
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 13
+          "limit": 14
         }
       ],
       "bounds": {
@@ -3430,6 +3435,11 @@
           "step_id": "space",
           "stage": "execute",
           "does": "run every native regression row of space"
+        },
+        {
+          "step_id": "apguest",
+          "stage": "execute",
+          "does": "run every native regression row of apguest"
         }
       ],
       "machines": [

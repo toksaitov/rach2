@@ -14,7 +14,7 @@ The cases keep their assertion identifiers:
 4. `boots`: tests with `host-arch:`, over each selected architecture's kernel and images.
 5. `checkers`: the five checker selftests under the sanitizers.
 6. `fuzz`: each prepared fuzz harness replaying its complete committed corpus. An empty corpus fails preparation.
-7. `scripts_native`, `scripts_images`, `scripts_build`, `scripts` and `scripts_tools`: disjoint partitions of all 45 behavioral assertions of `host.list`, preserving each assertion and its position relative to the other rows of its partition. A row awaiting an adapter fails explicitly; it is never a preparation-time pass.
+7. `scripts_native`, `scripts_images`, `scripts_build`, `scripts` and `scripts_tools`: disjoint partitions of all 46 behavioral assertions of `host.list`, preserving each assertion and its position relative to the other rows of its partition. A row awaiting an adapter fails explicitly; it is never a preparation-time pass.
 
 The build-only inventory builder reads source metadata, compiles the checks and hashes compiler dependencies, including locally included `.c` files. Its `--print-commands` option prints commands without compiling or executing. `tools/dev/gen_compile_commands.sh` and `tools/verify/coverage.sh` read the commands it prints.
 

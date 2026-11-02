@@ -29,6 +29,7 @@ leftovers|the manager's removal of failed tests, home files and landed copies
 agents_guest|the agents guest's scratch removed on every exit
 testing_run|testing.sh run's quoted commands, a worktree's sync and wait's reports
 space|disk admission requires a Windows reading
+apguest|apguest.sh -m check fails when the guest's check fails or gives no result
 prereq|prereq.sh's reports, installs and recipe, and elfwrap.sh's kept and replaced wrappers
 etude_version|etude's versions built once, reused and kept side by side
 etude_deploy|etude deployed again and after a cut, changing no clone, key or running test
