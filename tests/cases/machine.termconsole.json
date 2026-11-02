@@ -25,7 +25,7 @@
         {"step_id": "colors", "stage": "execute", "machine": "uefi",
          "does": "type the line that enters the alternate screen, sets the foreground and background vim's blue color scheme sets, leaves the alternate screen with them set, homes the cursor, clears the screen and echoes a mark, and dump the screen until term's grid shows the mark"},
         {"step_id": "doom", "stage": "execute", "machine": "uefi",
-         "does": "type the line that starts Doom in the background, says on COM1 when its first frame is drawn and waits for a key read from /dev/console; dump the screen, press space, wait for the game to be gone, and dump the screen until term has drawn it again"},
+         "does": "type the line that starts Doom in the background, says on COM1 when its first frame is drawn and reads /dev/console's key codes until space's press; dump the screen, press space, wait for the game to be gone, and dump the screen until term has drawn it again"},
         {"step_id": "fallback", "stage": "execute", "machine": "uefi",
          "does": "type killall -KILL term, wait for init's report of the signal, dump the screen until the kernel console shows its login prompt, log in as root on COM1 and power off"}
       ],

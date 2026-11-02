@@ -59,14 +59,17 @@
 /*
  * The line that runs Doom inside term: the game in the background, with no
  * terminal as its input, so that it takes the screen and leaves the keyboard;
- * a mark on COM1 at its first frame; then one byte read from /dev/console,
- * the key the scenario presses once it has dumped the screen, since term,
- * suspended, reads no key; then the game killed and waited for.
+ * a mark on COM1 at its first frame; then /dev/console's key codes read up
+ * to 57 pressed, the byte '9', from the space the scenario presses once it
+ * has dumped the screen, since term, suspended, reads no key; then the game
+ * killed and waited for. The release of the Enter that ran the line can come
+ * after term let the keyboard go, as it does under WHPX, and wait there first.
  */
 #define DOOM_LINE                                                                         \
     "doom < /dev/null > /tmp/game.txt 2>&1 & until grep -q '1 frames in' /tmp/game.txt; " \
     "do sleep 1; done; printf 'DOOM''FRAME\\r\\n' > /dev/console; "                       \
-    "dd if=/dev/console bs=1 count=1 > /dev/null 2>&1; kill $!; wait; "                   \
+    "until dd if=/dev/console bs=1 count=1 2> /dev/null | grep -q 9; do :; done; "        \
+    "kill $!; wait; "                                                                     \
     "printf 'DOOM''GONE\\r\\n' > /dev/console"
 #define DOOM_FRAME "DOOMFRAME"
 #define DOOM_GONE  "DOOMGONE"
