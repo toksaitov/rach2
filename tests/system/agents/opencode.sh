@@ -91,12 +91,23 @@ serve() {
 }
 
 # find_in NAME DIR QUERY PATH: require the server NAME to find PATH, and
-# only PATH, for QUERY in DIR.
+# only PATH, for QUERY in DIR. A server's first search of DIR waits three
+# seconds for FFF's scan and then searches what the scan has indexed, which
+# in a large tree under emulation can be nothing yet, so an answer that
+# finds nothing is asked for again, once a second, as the scan goes on.
 find_in() {
     local url password
     url=${1}_URL password=${1}_PASSWORD
-    output "the search of $1" curl -sS -u "opencode:${!password}" --get \
-        --data-urlencode "query=$3" --data-urlencode "directory=$2" "${!url}/api/fs/find"
+    while :; do
+        output "the search of $1" curl -sS -u "opencode:${!password}" --get \
+            --data-urlencode "query=$3" --data-urlencode "directory=$2" "${!url}/api/fs/find"
+        case $OUT in
+            *'"data":[]'*) ;;
+            *) break ;;
+        esac
+        # interval: an empty search is asked again every second
+        sleep 1
+    done
     has "the search of $1" "$OUT" "\"data\":[{\"path\":\"$4\",\"type\":\"file\"}]"
 }
 
