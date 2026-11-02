@@ -949,13 +949,14 @@ endif
 # groups fill the first 64 MiB group, as growset requires, and it has one inode
 # for each 32 KiB, 2048, twice the nodes it holds, so that the uefi suite's grow
 # to 4 TiB writes 16 GiB of inode tables and not the 128 GiB mke2fs's ratio for
-# a small volume would make it.
+# a small volume would make it. Its prerequisites are the sealed root's, since
+# the manifest is the same.
 INSTALLER_EXT2 = $(IMAGES_DIR)/installer-root.ext2
 $(INSTALLER_EXT2): $(FS_DEMO_IMAGES) $(DEMO_CREDS) krffs/manifests/rach2-metal-disk.manifest \
                    $(MANIFEST_DEPS_rach2_metal_disk) $(MAN_ALL) \
                    tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 utils \
                    check-busybox check-tcc check-pdpmake check-setid check-dropbearmulti \
-                   check-e2fsck kbd libtsm sox_ng ports/doom term unifont
+                   check-e2fsck kbd libtsm sox_ng hostap iw ports/doom term unifont
 	sh tools/image/mkext2.sh krffs/manifests/rach2-metal-disk.manifest $@ 64 16384 32768
 INSTALLER_DISK = $(IMAGES_DIR)/installer-test.disk
 $(INSTALLER_DISK): $(DEMO_CREDS) $(KERNEL) $(RECOVERY_KERNEL) $(INSTALLER_EXT2) $(RECOVERY_IMAGE) \
