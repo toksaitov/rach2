@@ -1326,13 +1326,6 @@ int ath9k_rate_index(const struct ath9k *ah, unsigned code, uint8_t *flags);
 #define ATH9K_TX_ACKED 0x01 /* acknowledged, by an ACK or a BlockAck */
 #define ATH9K_TX_RATES 0x02 /* report the chain's tries, for rate control */
 
-/** Fill slot `s`'s descriptor as one of `n` frames of an aggregate, the
- * `i`th, of `aggr_len` bytes, or alone when `n` is 1, sent at `rates` and
- * linked to the descriptor at `link`, as ar9003_set_txdesc does. */
-void ath9k_tx_desc(struct ath9k *ah, const struct ath9k_txq *q, struct ath9k_tx_slot *s,
-                   const struct wlan_tx_rate *rates, unsigned i, unsigned n, unsigned aggr_len,
-                   uint32_t link);
-
 /** Report slot `s` finished, ATH9K_TX_* in `how`, with status `ts` of
  * `chain`, and count it; the driver's own frames go to nobody. Interrupt. */
 void ath9k_tx_report(struct ath9k *ah, const struct ath9k_tx_slot *s,

@@ -156,30 +156,34 @@ int ath9k_tx_init(struct ath9k *ah)
     unsigned g, total = ATH9K_TX_QUEUES * ATH9K_TX_RING;
     unsigned per_desc = ATH9K_DMA_PAGE / sizeof(struct ar9003_txc);
     unsigned per_buf = ATH9K_DMA_PAGE / ATH9K_TX_BUF_LEN;
-    uint8_t *dpage = 0, *bpage = 0;
-    uint32_t dbus = 0, bbus = 0;
 
     ah->tx.status = ath9k_dma_alloc(ah, &ah->tx.status_bus);
     if (!ah->tx.status)
         return -ENOMEM;
     for (g = 0; g < total; g++) {
         struct ath9k_tx_slot *s = &ah->tx.q[g / ATH9K_TX_RING].slot[g % ATH9K_TX_RING];
+        /* The first slots on s's pages, which hold the pages. */
+        unsigned dg = g - g % per_desc, bg = g - g % per_buf;
+        const struct ath9k_tx_slot *d = &ah->tx.q[dg / ATH9K_TX_RING].slot[dg % ATH9K_TX_RING];
+        const struct ath9k_tx_slot *b = &ah->tx.q[bg / ATH9K_TX_RING].slot[bg % ATH9K_TX_RING];
 
-        if (g % per_desc == 0 && !(dpage = ath9k_dma_alloc(ah, &dbus)))
+        if (s == d && !(s->desc = ath9k_dma_alloc(ah, &s->desc_bus)))
             goto fail;
-        if (g % per_buf == 0 && !(bpage = ath9k_dma_alloc(ah, &bbus)))
+        if (s == b && !(s->buf = ath9k_dma_alloc(ah, &s->buf_bus))) {
+            if (s == d)
+                ath9k_dma_free(ah, s->desc);
+            s->desc = 0;
             goto fail;
-        s->desc = (struct ar9003_txc *)(void *)(dpage + (g % per_desc) * sizeof(struct ar9003_txc));
-        s->desc_bus = dbus + (g % per_desc) * sizeof(struct ar9003_txc);
-        s->buf = bpage + (g % per_buf) * ATH9K_TX_BUF_LEN;
-        s->buf_bus = bbus + (g % per_buf) * ATH9K_TX_BUF_LEN;
+        }
+        s->desc = d->desc + g % per_desc;
+        s->desc_bus = d->desc_bus + (g % per_desc) * sizeof(struct ar9003_txc);
+        s->buf = b->buf + (g % per_buf) * ATH9K_TX_BUF_LEN;
+        s->buf_bus = b->buf_bus + (g % per_buf) * ATH9K_TX_BUF_LEN;
     }
     return 0;
 fail:
-    /* The descriptor page taken for the slot whose buffer failed. */
-    if (g % per_desc == 0 && dpage)
-        ath9k_dma_free(ah, dpage);
-    for (total = g, g = 0; g < total; g++) {
+    total = g;
+    for (g = 0; g < total; g++) {
         struct ath9k_tx_slot *s = &ah->tx.q[g / ATH9K_TX_RING].slot[g % ATH9K_TX_RING];
 
         if (g % per_desc == 0)
@@ -241,30 +245,31 @@ static unsigned frame_type(unsigned fc)
     }
 }
 
+/* A descriptor's four rate series, as ar9003_set_txdesc writes them: each
+ * series' tries, rate code and duration, zero from the first series not
+ * sent; the series that send RTS first, as bits 0 to 3; and control word
+ * 18's rate flags and chains of each series. */
+struct tx_series {
+    unsigned tries[WLAN_TX_RATE_SERIES], codes[WLAN_TX_RATE_SERIES], dur[WLAN_TX_RATE_SERIES];
+    uint32_t rts_flags, ctl18;
+};
+
 /**
- * Fill slot `s`'s descriptor as ar9003_set_txdesc does for a frame that is
- * one buffer, first and last of itself: the buffer, four rate series with
- * durations for the frame, or for the whole aggregate when it is the `i`th
- * of `n`, RTS where a series asks for it, the key's entry and type, the
- * aggregate's flags, length and delimiters, the link to the next
- * subframe's descriptor and the checksum of the descriptor's pointers.
- * A first series that names no rate the chip sends, which rate control
- * leaves for a peer it cannot read, goes at the slowest rate twice, since
- * mac80211 never gives ath9k a descriptor with no tries.
+ * Fill `ts` with the series of `rates` for `airlen` bytes on the air. A
+ * first series that names no rate the chip sends, which rate control leaves
+ * for a peer it cannot read, goes at the slowest rate twice, since mac80211
+ * never gives ath9k a descriptor with no tries; the series end at the first
+ * later one that names none.
  */
-void ath9k_tx_desc(struct ath9k *ah, const struct ath9k_txq *q, struct ath9k_tx_slot *s,
-                   const struct wlan_tx_rate *rates, unsigned i, unsigned n, unsigned aggr_len,
-                   uint32_t link)
+static void fill_series(struct ath9k *ah, const struct wlan_tx_rate *rates, unsigned airlen,
+                        struct tx_series *ts)
 {
     static const struct wlan_tx_rate slowest = {0, 2, 0};
-    struct ar9003_txc *d = s->desc;
     struct wlan_tx_rate r[WLAN_TX_RATE_SERIES];
-    unsigned tries[WLAN_TX_RATE_SERIES], codes[WLAN_TX_RATE_SERIES], dur[WLAN_TX_RATE_SERIES];
     unsigned k, chains = ah->hw.chip ? ah->hw.chip->chainmask : 1;
-    unsigned airlen = n > 1 ? aggr_len : s->framelen;
-    uint32_t sum, ctl18 = 0, rts_flags = 0, aggr12 = 0, aggr17 = 0;
     int ended = 0;
 
+    k_memset(ts, 0, sizeof(*ts));
     for (k = 0; k < WLAN_TX_RATE_SERIES; k++)
         r[k] = rates[k];
     if (r[0].index < 0 || r[0].count == 0 || rate_code(ah, &r[0]) == 0)
@@ -274,22 +279,50 @@ void ath9k_tx_desc(struct ath9k *ah, const struct ath9k_txq *q, struct ath9k_tx_
 
         if (ended || r[k].index < 0 || r[k].count == 0 || code == 0) {
             ended = 1;
-            tries[k] = codes[k] = dur[k] = 0;
             continue;
         }
-        tries[k] = r[k].count > 15 ? 15 : r[k].count;
-        codes[k] = code;
-        dur[k] = air_time(ah, &r[k], airlen);
+        ts->tries[k] = r[k].count > 15 ? 15 : r[k].count;
+        ts->codes[k] = code;
+        ts->dur[k] = air_time(ah, &r[k], airlen);
         if (r[k].flags & WLAN_RATE_RTS_CTS)
-            rts_flags |= 1u << k;
+            ts->rts_flags |= 1u << k;
     }
     /* Each series' rate flags are 5 bits apart, and its chains with them. */
     for (k = 0; k < WLAN_TX_RATE_SERIES; k++)
-        if (tries[k])
-            ctl18 |=
+        if (ts->tries[k])
+            ts->ctl18 |=
                 (((r[k].flags & WLAN_RATE_SHORT_GI) && (r[k].flags & WLAN_RATE_MCS) ? AR_GI0 : 0) |
                  SM(chains, AR_ChainSel0))
                 << (5 * k);
+}
+
+/** The slot `i` places past queue `q`'s head. */
+static struct ath9k_tx_slot *slot_at(struct ath9k_txq *q, unsigned i)
+{
+    return &q->slot[(q->head + i) % ATH9K_TX_RING];
+}
+
+/**
+ * Fill the descriptor of chain `c`'s `i`th frame, of the `c->n` that start
+ * at queue `q`'s first slot not yet pushed, as ar9003_set_txdesc does for a
+ * frame that is one buffer, first and last of itself: the buffer, four rate
+ * series with durations for the frame, or for the whole aggregate of
+ * `aggr_len` bytes when `c->n` is over 1, RTS where a series asks for it,
+ * the key's entry and type, the aggregate's flags, length and delimiters,
+ * the link to the next subframe's descriptor and the checksum of the
+ * descriptor's pointers.
+ */
+static void tx_desc(struct ath9k *ah, struct ath9k_txq *q, const struct ath9k_tx_chain *c,
+                    unsigned i, unsigned aggr_len)
+{
+    struct ath9k_tx_slot *s = slot_at(q, q->queued + i);
+    struct ar9003_txc *d = s->desc;
+    unsigned n = c->n;
+    uint32_t link = i + 1 < n ? slot_at(q, q->queued + i + 1)->desc_bus : 0;
+    uint32_t sum, aggr12 = 0, aggr17 = 0;
+    struct tx_series ts;
+
+    fill_series(ah, c->rates, n > 1 ? aggr_len : s->framelen, &ts);
     if (n > 1) {
         aggr12 = AR_IsAggr | (i + 1 < n ? AR_MoreAggr : 0);
         aggr17 =
@@ -307,31 +340,25 @@ void ath9k_tx_desc(struct ath9k *ah, const struct ath9k_txq *q, struct ath9k_tx_
     d->ctl10 = ((sum & 0xffff) + (sum >> 16)) & AR_TxPtrChkSum;
     d->ctl11 = (s->framelen & AR_FrameLen) | SM(MAX_RATE_POWER, AR_XmitPower0) |
                (s->keyix >= 0 ? AR_DestIdxValid : 0) | AR_ClrDestMask |
-               ((rts_flags & 1) ? AR_RTSEnable : 0);
+               ((ts.rts_flags & 1) ? AR_RTSEnable : 0);
     d->ctl12 = (s->keyix >= 0 ? SM((unsigned)s->keyix, AR_DestIdx) : 0) |
                SM(frame_type(s->fc), AR_FrameType) |
                ((s->info.flags & WLAN_TX_NO_ACK) ? AR_NoAck : 0) | aggr12;
-    d->ctl13 = SM(tries[0], AR_XmitDataTries0) | SM(tries[1], AR_XmitDataTries1) |
-               SM(tries[2], AR_XmitDataTries2) | SM(tries[3], AR_XmitDataTries3) |
+    d->ctl13 = SM(ts.tries[0], AR_XmitDataTries0) | SM(ts.tries[1], AR_XmitDataTries1) |
+               SM(ts.tries[2], AR_XmitDataTries2) | SM(ts.tries[3], AR_XmitDataTries3) |
                (frame_type(s->fc) == PKT_TYPE_PSPOLL ? 0 : AR_DurUpdateEna);
-    d->ctl14 = SM(codes[0], AR_XmitRate0) | SM(codes[1], AR_XmitRate1) |
-               SM(codes[2], AR_XmitRate2) | SM(codes[3], AR_XmitRate3);
-    d->ctl15 = SM(dur[0], AR_PacketDur0) | ((rts_flags & 1) ? AR_RTSCTSQual0 : 0) |
-               SM(dur[1], AR_PacketDur1) | ((rts_flags & 2) ? AR_RTSCTSQual1 : 0);
-    d->ctl16 = SM(dur[2], AR_PacketDur2) | ((rts_flags & 4) ? AR_RTSCTSQual2 : 0) |
-               SM(dur[3], AR_PacketDur3) | ((rts_flags & 8) ? AR_RTSCTSQual3 : 0);
+    d->ctl14 = SM(ts.codes[0], AR_XmitRate0) | SM(ts.codes[1], AR_XmitRate1) |
+               SM(ts.codes[2], AR_XmitRate2) | SM(ts.codes[3], AR_XmitRate3);
+    d->ctl15 = SM(ts.dur[0], AR_PacketDur0) | ((ts.rts_flags & 1) ? AR_RTSCTSQual0 : 0) |
+               SM(ts.dur[1], AR_PacketDur1) | ((ts.rts_flags & 2) ? AR_RTSCTSQual1 : 0);
+    d->ctl16 = SM(ts.dur[2], AR_PacketDur2) | ((ts.rts_flags & 4) ? AR_RTSCTSQual2 : 0) |
+               SM(ts.dur[3], AR_PacketDur3) | ((ts.rts_flags & 8) ? AR_RTSCTSQual3 : 0);
     d->ctl17 = SM(s->keytype, AR_EncrType) | aggr17;
-    d->ctl18 = ctl18 | SM(rate_codes[0].code, AR_RTSCTSRate);
+    d->ctl18 = ts.ctl18 | SM(rate_codes[0].code, AR_RTSCTSRate);
     d->ctl19 = AR_Not_Sounding;
     d->ctl20 = SM(MAX_RATE_POWER, AR_XmitPower1);
     d->ctl21 = SM(MAX_RATE_POWER, AR_XmitPower2);
     d->ctl22 = SM(MAX_RATE_POWER, AR_XmitPower3);
-}
-
-/** The slot `i` places past queue `q`'s head. */
-static struct ath9k_tx_slot *slot_at(struct ath9k_txq *q, unsigned i)
-{
-    return &q->slot[(q->head + i) % ATH9K_TX_RING];
 }
 
 /**
@@ -348,12 +375,9 @@ static void kick(struct ath9k *ah, struct ath9k_txq *q)
         n = ath9k_ampdu_form(ah, q, &aggr_len, c->rates);
         if (n == 0)
             break;
-        for (i = 0; i < n; i++) {
-            uint32_t link = i + 1 < n ? slot_at(q, q->queued + i + 1)->desc_bus : 0;
-
-            ath9k_tx_desc(ah, q, slot_at(q, q->queued + i), c->rates, i, n, aggr_len, link);
-        }
         c->n = (uint8_t)n;
+        for (i = 0; i < n; i++)
+            tx_desc(ah, q, c, i, aggr_len);
         c->aggr = n > 1;
         c->ba = slot_at(q, q->queued)->ba;
         k_barrier();
