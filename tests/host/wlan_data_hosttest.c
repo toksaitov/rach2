@@ -1,7 +1,8 @@
 /* Check the station's data path against a scripted AP and a stub radio:
  * transmit and receive under CCMP and TKIP in software and in a radio's key
- * slot, replays, duplicates, fragments, BlockAck reordering, a group rekey,
- * BIP and protected management frames, A-MSDU and rate selection.
+ * slot, data refused without a key, replays, duplicates, fragments, BlockAck
+ * reordering, a group rekey, BIP and protected management frames, A-MSDU and
+ * rate selection.
  * host-deps: rach2/sys/network/wireless/tx.c
  * host-deps: rach2/sys/network/wireless/rx.c
  * host-deps: rach2/sys/network/wireless/key.c
@@ -489,7 +490,7 @@ static void check_keys(void)
     CHECK(wlan_data_remove_key(d, bssid, 0) == 0 && !wlan_data_pairwise_key(d, 0));
 }
 
-/** Transmit in clear, then under CCMP in software. */
+/** Transmit in clear on an open network, then under CCMP in software. */
 static void check_tx_ccmp(void)
 {
     uint8_t f[IEEE80211_MAX_FRAME_LEN], plain[200];
@@ -497,6 +498,7 @@ static void check_tx_ccmp(void)
     uint64_t pn;
 
     setup(1);
+    CHECK(wlan_data_connect(d, &bss, 1, 0, 0) == 0);
     len = sta_frame(f, ipv4_snap, 100);
     k_memcpy(plain, f, len);
     CHECK(wlan_data_tx(d, f, len, sizeof(f), 5) == 0);
@@ -552,6 +554,32 @@ static void check_tx_ccmp(void)
     /* Not data from the station. */
     f[1] = IEEE80211_FCTL_FROMDS >> 8;
     CHECK(wlan_data_tx(d, f, len, sizeof(f), 0) == -EINVAL);
+}
+
+/** A protected network sends EAPOL alone in clear: before the pairwise
+ * key, and after its removal, which must not leave data unprotected. */
+static void check_tx_nokey(void)
+{
+    uint8_t f[IEEE80211_MAX_FRAME_LEN];
+    unsigned len;
+
+    setup(1);
+    len = sta_frame(f, ipv4_snap, 100);
+    CHECK(wlan_data_tx(d, f, len, sizeof(f), 0) == -ENOKEY && n_sent == 0);
+    len = sta_frame(f, eapol_snap, 60);
+    CHECK(wlan_data_tx(d, f, len, sizeof(f), 7) == 0 && n_sent == 1);
+    CHECK(!(sent[0].frame[1] & (IEEE80211_FCTL_PROTECTED >> 8)));
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
+    len = sta_frame(f, ipv4_snap, 100);
+    CHECK(wlan_data_tx(d, f, len, sizeof(f), 0) == 0 && n_sent == 2);
+    CHECK(sent[1].frame[1] & (IEEE80211_FCTL_PROTECTED >> 8));
+    /* NL80211_CMD_DEL_KEY on the authorized connection. */
+    CHECK(wlan_data_remove_key(d, bssid, 0) == 0);
+    len = sta_frame(f, ipv4_snap, 100);
+    CHECK(wlan_data_tx(d, f, len, sizeof(f), 0) == -ENOKEY && n_sent == 2);
+    len = sta_frame(f, eapol_snap, 60);
+    CHECK(wlan_data_tx(d, f, len, sizeof(f), 7) == 0 && n_sent == 3);
+    CHECK(!(sent[2].frame[1] & (IEEE80211_FCTL_PROTECTED >> 8)));
 }
 
 /** Transmit under a key the radio holds: headers and room, its slot. */
@@ -779,6 +807,21 @@ static void check_tkip(void)
     ap_tkip(f, &len, h, 0x10009, 0);
     CHECK(rx(f, len) == 0 && n_got == 2);
     CHECK(got_len[1] == h + 120 && !cmp(got[1] + h, msdu, 120));
+    CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[4] == 0x10009);
+    /* Fragments whose headers differ in length, 26 bytes and then 30 with
+     * HT Control, both bodies empty: the MSDU would be shorter than the last
+     * header, and Michael would read past it. */
+    len = ap_frame(f, sta, 1, 4, 56, 0, 1, msdu, 0);
+    ap_tkip(f, &len, h, 0x1000a, 0);
+    CHECK(rx(f, len) == 0);
+    len = ap_frame(f, sta, 1, 4, 56, 1, 0, msdu, 0);
+    f[1] |= IEEE80211_FCTL_ORDER >> 8;
+    k_memset(f + h, 0, IEEE80211_HT_CTL_LEN);
+    len += IEEE80211_HT_CTL_LEN;
+    ap_tkip(f, &len, h + IEEE80211_HT_CTL_LEN, 0x1000b, 0);
+    n = counters.rx_dropped;
+    CHECK(rx(f, len) == -EINVAL && counters.rx_dropped == n + 1);
+    CHECK(n_got == 2 && n_events == 1);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[4] == 0x10009);
     /* The radio found the MIC wrong. */
     {
@@ -1120,6 +1163,7 @@ static void check_rates(void)
     struct wlan_tx_status st;
 
     setup(0);
+    CHECK(wlan_data_connect(d, &bss, 0, 0, 0) == 0);
     radio.rate_ops = &rc_ops;
     rate_selects = rate_statuses = 0;
     len = sta_frame(f, ipv4_snap, 60);
@@ -1167,6 +1211,7 @@ int main(void)
 {
     check_keys();
     check_tx_ccmp();
+    check_tx_nokey();
     check_tx_hw();
     check_rx_ccmp();
     check_fragments();
