@@ -781,6 +781,32 @@ static void test_tx(void)
     info.hw_key = 9;
     CHECK(ath9k_tx(&ah, f, len, &info) == -EINVAL);
     CHECK(model.dma_faults == 0);
+
+    /* An underrun or a descriptor the chip refused is no ACK, even beside
+     * AR_FrmXmitOK, and a status without AR_FrmXmitOK is none either,
+     * unless the frame asked for no ACK or went to a group address. */
+    {
+        static const uint32_t s3[5] = {AR_FrmXmitOK | AR_TxDataUnderrun,
+                                       AR_FrmXmitOK | AR_TxDelimUnderrun,
+                                       AR_FrmXmitOK | AR_DescCfgErr, 0, 0};
+        unsigned base = txs_count, failed = ah.stats.tx_failed;
+
+        for (i = 0; i < 6; i++) {
+            len = i < 5 ? qos_data(f, 200, 0) : beacon(f, 64);
+            info = tx_info(WLAN_AC_BE, 300 + i);
+            if (i == 4)
+                info.flags = WLAN_TX_NO_ACK;
+            CHECK(ath9k_tx(&ah, f, len, &info) == 0);
+            k_memset(&st, 0, sizeof(st));
+            st.status3 = i < 5 ? s3[i] : 0;
+            CHECK(ath9k_model_tx_complete(&model, 1, &st) != 0);
+            interrupt();
+        }
+        CHECK(txs_count == base + 6 && ah.stats.tx_failed == failed + 4);
+        for (i = 0; i < 6 && base + i < MAX_TXS; i++)
+            CHECK(txs[base + i].cookie == 300 + i &&
+                  txs[base + i].flags == (i < 4 ? 0 : WLAN_TX_ACKED));
+    }
 }
 
 /* ------------------------------------------------------------------ */

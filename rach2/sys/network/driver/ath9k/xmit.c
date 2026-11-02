@@ -561,17 +561,34 @@ void ath9k_tx_retire(struct ath9k *ah, struct ath9k_txq *q, uint32_t keep)
 }
 
 /**
+ * Whether the chain whose status is `ts` went out: no error ended it, nor
+ * an underrun or a descriptor the chip refused, and, when `ack` says an
+ * acknowledgement was expected, AR_FrmXmitOK says an ACK or a BlockAck
+ * came.
+ */
+int ath9k_tx_ok(const struct ar9003_txs *ts, int ack)
+{
+    if (ts->status3 & (AR_ExcessiveRetries | AR_Filtered | AR_FIFOUnderrun | AR_TxTimerExpired |
+                       AR_TxDataUnderrun | AR_TxDelimUnderrun | AR_DescCfgErr))
+        return 0;
+    if (ts->status8 & AR_TxOpExceeded)
+        return 0;
+    return !ack || (ts->status3 & AR_FrmXmitOK);
+}
+
+/**
  * Finish queue `q`'s oldest chain, a single frame outside any session:
- * acknowledged when no error ended it.
+ * acknowledged when ath9k_tx_ok says it went out, with an ACK unless it
+ * asked for none or its receiver is a group address, which the chip
+ * expects none from.
  */
 static void complete(struct ath9k *ah, struct ath9k_txq *q, const struct ar9003_txs *ts)
 {
-    int failed =
-        (ts->status3 & (AR_ExcessiveRetries | AR_Filtered | AR_FIFOUnderrun | AR_TxTimerExpired)) ||
-        (ts->status8 & AR_TxOpExceeded);
+    struct ath9k_tx_slot *s = slot_at(q, 0);
+    int ok = ath9k_tx_ok(ts, !(s->info.flags & WLAN_TX_NO_ACK) && !(s->buf[4] & 0x01));
 
-    ath9k_tx_report(ah, slot_at(q, 0), &q->chain[q->chain_head], ts,
-                    ATH9K_TX_RATES | (failed ? 0 : ATH9K_TX_ACKED));
+    ath9k_tx_report(ah, s, &q->chain[q->chain_head], ts,
+                    ATH9K_TX_RATES | (ok ? ATH9K_TX_ACKED : 0));
     ath9k_tx_retire(ah, q, 0);
 }
 

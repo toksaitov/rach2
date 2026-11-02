@@ -321,7 +321,7 @@ int ath9k_ampdu_owns(const struct ath9k *ah, const struct ath9k_txq *q)
 
 /**
  * Finish the oldest chain of `q`, as ath_tx_complete_aggr does. The chain
- * succeeded when no error ended it; an aggregate that succeeded carries
+ * succeeded when ath9k_tx_ok says so; an aggregate that succeeded carries
  * the BlockAck's bitmap from its starting number, and one with no bitmap
  * asks for a reset, as ath9k does for a station. A frame is acknowledged
  * by its bit, or, sent alone, by the chain's success. A frame of its
@@ -338,9 +338,7 @@ void ath9k_ampdu_status(struct ath9k *ah, struct ath9k_txq *q, const struct ar90
     uint32_t keep = 0, ba[2] = {0, 0};
     int ok, has_ba, rates = ATH9K_TX_RATES;
 
-    ok = !(ts->status3 & (AR_ExcessiveRetries | AR_Filtered | AR_FIFOUnderrun | AR_TxTimerExpired |
-                          AR_TxDataUnderrun | AR_TxDelimUnderrun | AR_DescCfgErr)) &&
-         !(ts->status8 & AR_TxOpExceeded);
+    ok = ath9k_tx_ok(ts, 1);
     has_ba = c->aggr && ok && (ts->status2 & AR_TxBaStatus);
     seq_st = MS(ts->status8, AR_SeqNum);
     if (has_ba) {

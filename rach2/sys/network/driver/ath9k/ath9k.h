@@ -1309,6 +1309,10 @@ unsigned ath9k_tx_service(struct ath9k *ah);
  * DMA is stopped; refuse frames until ath9k_mac_init_queues. Worker. */
 void ath9k_tx_drain(struct ath9k *ah);
 
+/** Whether a chain whose status is `ts` went out, with an ACK or a
+ * BlockAck when `ack` says one was expected. */
+int ath9k_tx_ok(const struct ar9003_txs *ts, int ack);
+
 /** Serve the status ring until no accepted frame names key entry `keyix`,
  * for at most 20 ms; 0, or -ETIMEDOUT while one still does. Worker. */
 int ath9k_tx_flush_key(struct ath9k *ah, int keyix);
