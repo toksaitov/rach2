@@ -352,8 +352,10 @@ static int map_card(struct ath9k *ah)
     }
     if ((uint64_t)(uintptr_t)addr != addr ||
         (ah->bus.mmio = map_mmio((uintptr_t)addr, ATH9K_WINDOW)) == 0) {
-        klog(KLOG_ERR, "ath9k", "probe: failed: %02x:%02x.%x: the window at 0x%llx will not map",
-             dev->bus, dev->device, dev->function, (unsigned long long)addr);
+        klog(KLOG_ERR, "ath9k",
+             "probe: failed: %02x:%02x.%x: the window at 0x%08lx%08lx will not map", dev->bus,
+             dev->device, dev->function, (unsigned long)(addr >> 32),
+             (unsigned long)(addr & 0xffffffffUL));
         return -ENODEV;
     }
     pci_enable_memory_space(dev);
