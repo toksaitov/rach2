@@ -257,6 +257,10 @@ file 0755 /etc/wpa_supplicant/wpa_action krffs/wpa_action
 file 0755 /sbin/zzz krffs/zzz
 dir 0755 /etc/zzz.d
 file 0755 /etc/zzz.d/wifi krffs/zzz-wifi
+# wsimrelay, which carries a software radio's frames between /dev/wsim and
+# a peer over UDP, for a machine whose Wi-Fi is the tests' software medium
+# (wsimrelay(8)).
+file 0755 /sbin/wsimrelay build/utils/sbin/wsimrelay
 # The kernel settings init applies at boot with sysctl -p (init(8)): an
 # outgoing IPv6 connection takes a temporary address, made anew each day
 # (RFC 8981), while the stable address still answers connections from
