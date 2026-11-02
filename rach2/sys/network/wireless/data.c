@@ -60,9 +60,7 @@ static void data_drain_tx(struct wlan_work *work)
             rc = -ENOTCONN;
         else if (!wlan_port_allowed(d->wlan, protocol))
             rc = -EACCES;
-        else
-            rc = wlan_encap(d->eth, len, d->bssid, 0, d->buf, sizeof(d->buf), &n);
-        if (rc == 0)
+        else if ((rc = wlan_encap(d->eth, len, d->bssid, 0, d->buf, sizeof(d->buf), &n)) == 0)
             rc = wlan_data_tx(d, d->buf, n, sizeof(d->buf), wlan_data_priority(d->eth, len));
         if (rc == -ENOBUFS) {
             wlan_data_hold(d, 1);
