@@ -81,11 +81,13 @@
 
 #include <stdarg.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
+/* exit alone of <stdlib.h>, whose <sys/types.h> on glibc defines int64_t
+ * as long, against kint.h's long long. */
+extern void exit(int status);
 extern int printf(const char *format, ...);
 extern int vsnprintf(char *str, __SIZE_TYPE__ size, const char *format, va_list ap);
 
