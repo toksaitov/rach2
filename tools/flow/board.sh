@@ -241,11 +241,21 @@ item()
             select(.project.id == \"$(id_of project)\") | .id"
 }
 
-# set_status N NAME: set issue N's Status to the option NAME.
+# set_status N NAME: set issue N's Status to the option NAME, putting the
+# issue on the board first if `gh issue create` left it off.
 set_status()
 {
+    it=$(item "$1") || it=
+    if [ -z "$it" ]; then
+        gh project item-add "$BOARD" --owner "$OWNER" \
+            --url "https://github.com/$REPO/issues/$1" > /dev/null && { it=$(item "$1") || it=; }
+    fi
+    if [ -z "$it" ]; then
+        echo "board: #$1: it is not on the board" >&2
+        return 1
+    fi
     gh project item-edit --project-id "$(id_of project)" \
-        --field-id "$(id_of field)" --id "$(item "$1")" \
+        --field-id "$(id_of field)" --id "$it" \
         --single-select-option-id "$(id_of "$(echo "$2" | tr ' ' _)")" > /dev/null
 }
 
@@ -524,11 +534,17 @@ milestone()
 
 ready()
 {
+    rc=0
     for n; do
-        set_status "$n" Ready
-        printf '%s ' "$n"
+        if set_status "$n" Ready; then
+            printf '%s ' "$n"
+        else
+            echo "board: #$n: cannot set it Ready" >&2
+            rc=1
+        fi
     done
     echo
+    return $rc
 }
 
 done_()
