@@ -3,9 +3,10 @@
  *
  * host-deps:
  *
- * The test runs the enqueue, which adds a waiter once, the dequeue, and
- * wq_wake_all, which makes every blocked waiter ready and empties the queue,
- * under the sanitizers and with process records of its own. The block and
+ * The test runs the enqueue, which adds a waiter once at the tail, the
+ * dequeue, and wq_wake_all, which makes every blocked waiter ready, oldest
+ * first, and empties the queue, under the sanitizers and with process records
+ * of its own. The block and
  * the idle wait run only in the kernel, where the guest probe waitprobe
  * covers them.
  *
@@ -109,6 +110,67 @@ static void enqueue(wait_queue_t *wq, process_t *p)
 static void dequeue(wait_queue_t *wq, process_t *p)
 {
     wq_dequeue(wq, &p->waiter);
+}
+
+/** Say whether `wq` holds the waiters of `p` and then `q` and then `r`, and
+ * nothing more. */
+static int order_is(wait_queue_t *wq, process_t *p, process_t *q, process_t *r)
+{
+    struct wq_waiter *w = wq->head;
+
+    return w && w->proc == p && (w = w->next) && w->proc == q && (w = w->next) && w->proc == r &&
+           !w->next;
+}
+
+/** The record of the order in which a wake made processes ready. */
+static process_t *woke[3];
+static int nwoke;
+
+/** Note the processes of `wq` that a wake will make ready, head first. */
+static void note_wake_order(wait_queue_t *wq)
+{
+    struct wq_waiter *w;
+
+    nwoke = 0;
+    for (w = wq->head; w && nwoke < 3; w = w->next) {
+        woke[nwoke++] = w->proc;
+    }
+}
+
+/**
+ * Waiters keep the order they came in, so a wake makes the oldest ready
+ * first, and a waiter whose condition is still false joins the tail again,
+ * behind the older waiters and ahead of a later one. At the head, the newest
+ * waiter would be made ready first at every wake, and a waiter for a lock
+ * that two others take in turn would never get it.
+ */
+static void wake_order(void)
+{
+    wait_queue_t wq;
+    static process_t a, b, c;
+
+    wait_queue_init(&wq);
+    a.state = b.state = c.state = PROC_BLOCKED;
+    enqueue(&wq, &a);
+    enqueue(&wq, &b);
+    enqueue(&wq, &c);
+    enqueue(&wq, &a); /* already queued: keeps its place */
+    CHECK(order_is(&wq, &a, &b, &c));
+    note_wake_order(&wq);
+    wq_wake_all(&wq);
+    CHECK(nwoke == 3 && woke[0] == &a && woke[1] == &b && woke[2] == &c);
+
+    /* a and c find their conditions false and join again; b asks later. */
+    a.state = c.state = PROC_BLOCKED;
+    enqueue(&wq, &a);
+    enqueue(&wq, &c);
+    b.state = PROC_BLOCKED;
+    enqueue(&wq, &b);
+    CHECK(order_is(&wq, &a, &c, &b));
+    dequeue(&wq, &c);
+    enqueue(&wq, &c);
+    CHECK(order_is(&wq, &a, &b, &c));
+    wq_wake_all(&wq);
 }
 
 /**
@@ -236,5 +298,6 @@ int main(void)
         current_proc = 0;
     }
     wake_kinds();
+    wake_order();
     return fails > 255 ? 255 : fails;
 }

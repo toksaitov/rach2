@@ -84,18 +84,24 @@ void wait_queue_init(wait_queue_t *wq)
     }
 }
 
-/* Put `w` on the queue unless it is there; `wq_lock` is held. */
+/**
+ * Put `w` at the tail of the queue unless it is on it; `wq_lock` is held.
+ * A wake makes the sleepers ready in queue order and the ready list runs
+ * them in that order, so the tail keeps a lock's oldest waiter first: at the
+ * head, the newest waiter would take each release and starve the oldest.
+ */
 static void wq_enqueue(wait_queue_t *wq, struct wq_waiter *w)
 {
-    struct wq_waiter *q;
+    struct wq_waiter **link = &wq->head;
 
-    for (q = wq->head; q; q = q->next) {
-        if (q == w) {
+    while (*link) {
+        if (*link == w) {
             return;
         }
+        link = &(*link)->next;
     }
-    w->next = wq->head;
-    wq->head = w;
+    w->next = NULL;
+    *link = w;
 }
 
 /* Take `w` off the queue if it is there; `wq_lock` is held. */

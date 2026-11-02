@@ -40,7 +40,7 @@
 #define WQ_KINDS  3
 
 typedef struct wait_queue {
-    /* The sleepers' and pollers' records, the newest first. */
+    /* The sleepers' and pollers' records, the oldest first. */
     struct wq_waiter *head;
     /* The wakes of each kind, in the order of their bits. They wrap. */
     uint32_t wakes[WQ_KINDS];
