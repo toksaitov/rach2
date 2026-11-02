@@ -622,9 +622,11 @@ int ath9k_key_set(struct ath9k *ah, const uint8_t peer[6], const struct wlan_key
     return 0;
 }
 
-void ath9k_key_clear(struct ath9k *ah, int slot)
+void ath9k_key_clear(struct ath9k *ah, int slot, const uint8_t peer[6], const struct wlan_key *key)
 {
     (void)ah;
+    (void)peer;
+    (void)key;
     note("key_clear");
     slot_cleared = slot;
 }

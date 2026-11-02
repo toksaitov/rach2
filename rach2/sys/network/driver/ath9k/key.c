@@ -177,69 +177,64 @@ static int reserve(const struct ath9k *ah, unsigned type)
     return -1;
 }
 
-/**
- * Install `key` for `peer`, as ath_key_config does in a station: a group
- * key, which has a multicast peer or no WLAN_KEY_PAIRWISE, at the entry of
- * its index, replacing the key there; a pairwise key of index 0 at a free
- * entry. A station's TKIP group key is for receive alone, so both halves
- * of its MIC entry take the receive MIC key, as ath_setkey_tkip gives
- * them. Returns 0 and *slot; -EOPNOTSUPP for another cipher, an
- * integrity key or a pairwise key of another index, which stay in
- * software; -ENOSPC when the cache is full.
- */
-int ath9k_key_set(struct ath9k *ah, const uint8_t peer[6], const struct wlan_key *key, int *slot)
+/** Whether `key` for `peer` is a group key: a multicast peer, or no
+ * WLAN_KEY_PAIRWISE. */
+static int is_group(const uint8_t peer[6], const struct wlan_key *key)
 {
-    struct ath9k_key *k;
-    unsigned type;
-    int idx, group = (peer[0] & 0x01) || !(key->flags & WLAN_KEY_PAIRWISE);
+    return (peer[0] & 0x01) || !(key->flags & WLAN_KEY_PAIRWISE);
+}
 
+/**
+ * Fill `k` with the copy of `key` for `peer` that the cache holds: its
+ * type, the peer of a pairwise key, and the temporal key; for TKIP the
+ * receive MIC key and, after it, the transmit MIC key, or the receive one
+ * again for a group key, which a station only receives with, as
+ * ath_setkey_tkip writes them. Returns 0, or -EOPNOTSUPP for a cipher the
+ * cache does not do.
+ */
+static int make_copy(struct ath9k_key *k, const uint8_t peer[6], const struct wlan_key *key)
+{
+    int group = is_group(peer, key);
+
+    k_memset(k, 0, sizeof(*k));
     if (key->cipher == WLAN_CIPHER_SUITE_CCMP && key->len == 16)
-        type = AR_KEYTABLE_TYPE_CCM;
+        k->type = AR_KEYTABLE_TYPE_CCM;
     else if (key->cipher == WLAN_CIPHER_SUITE_TKIP && key->len == 32)
-        type = AR_KEYTABLE_TYPE_TKIP;
+        k->type = AR_KEYTABLE_TYPE_TKIP;
     else
         return -EOPNOTSUPP;
-    if (group) {
-        if (key->index >= AR_RSVD_KEYTABLE_ENTRIES)
-            return -EOPNOTSUPP;
-        idx = (int)key->index;
-        if (ah->keys.entry[idx].used == ATH9K_KEY_USED)
-            ath9k_key_clear(ah, idx);
-    } else {
-        if (key->index != 0)
-            return -EOPNOTSUPP;
-        idx = reserve(ah, type);
-        if (idx < 0)
-            return -ENOSPC;
-    }
-
-    k = &ah->keys.entry[idx];
-    k_memset(k, 0, sizeof(*k));
     k->used = ATH9K_KEY_USED;
-    k->type = (uint8_t)type;
     if (!group)
         k_memcpy(k->peer, peer, 6);
     k_memcpy(k->key, key->data, 16);
-    if (type == AR_KEYTABLE_TYPE_TKIP) {
+    if (k->type == AR_KEYTABLE_TYPE_TKIP) {
         k_memcpy(k->mic, key->data + TKIP_RX_MIC, 8);
         k_memcpy(k->mic + 8, key->data + (group ? TKIP_RX_MIC : TKIP_TX_MIC), 8);
-        ah->keys.entry[idx + MIC_OFFSET].used = ATH9K_KEY_MIC;
     }
-    write_entry(ah, (unsigned)idx, k);
-    *slot = idx;
     return 0;
 }
 
-/** Clear entry `slot` and forget its copy; an entry not in use is left. */
-void ath9k_key_clear(struct ath9k *ah, int slot)
+/**
+ * Finish the use of entry `slot` by the frames accepted for transmit
+ * before the entry changes, as radio.h asks of a removal: let them go out
+ * with the key they were accepted with, and when they have not in 20 ms,
+ * reset the chip, whose drain reports them failed. A stopped chip has
+ * none.
+ */
+static void finish_use(struct ath9k *ah, int slot)
 {
-    struct ath9k_key *k;
-    int tkip;
+    if (ah->bus.started && ath9k_tx_flush_key(ah, slot) != 0)
+        (void)ath9k_reset(ah, ATH9K_RESET_TX_HANG);
+}
 
-    if (slot < 0 || slot >= AR_KEY_CACHE_SIZE || ah->keys.entry[slot].used != ATH9K_KEY_USED)
-        return;
-    k = &ah->keys.entry[slot];
-    tkip = k->type == AR_KEYTABLE_TYPE_TKIP;
+/** Clear entry `slot`, in use, and forget its copy, once no frame names
+ * it. */
+static void forget(struct ath9k *ah, int slot)
+{
+    struct ath9k_key *k = &ah->keys.entry[slot];
+    int tkip = k->type == AR_KEYTABLE_TYPE_TKIP;
+
+    finish_use(ah, slot);
     /* A stopped chip sleeps, and the next start's restore clears the whole
      * cache. */
     if (ah->bus.started)
@@ -247,6 +242,68 @@ void ath9k_key_clear(struct ath9k *ah, int slot)
     if (tkip)
         ah->keys.entry[slot + MIC_OFFSET].used = ATH9K_KEY_FREE;
     k_memset(k, 0, sizeof(*k));
+}
+
+/**
+ * Install `key` for `peer`, as ath_key_config does in a station: a group
+ * key at the entry of its index, replacing the key there; a pairwise key
+ * of index 0 at a free entry. Returns 0 and *slot; -EOPNOTSUPP for another
+ * cipher, an integrity key or a pairwise key of another index, which stay
+ * in software; -ENOSPC when the cache is full.
+ */
+int ath9k_key_set(struct ath9k *ah, const uint8_t peer[6], const struct wlan_key *key, int *slot)
+{
+    struct ath9k_key copy;
+    int idx;
+
+    if (make_copy(&copy, peer, key) != 0)
+        return -EOPNOTSUPP;
+    if (is_group(peer, key)) {
+        if (key->index >= AR_RSVD_KEYTABLE_ENTRIES)
+            return -EOPNOTSUPP;
+        idx = (int)key->index;
+        if (ah->keys.entry[idx].used == ATH9K_KEY_USED)
+            forget(ah, idx);
+    } else {
+        if (key->index != 0)
+            return -EOPNOTSUPP;
+        idx = reserve(ah, copy.type);
+        if (idx < 0)
+            return -ENOSPC;
+    }
+    ah->keys.entry[idx] = copy;
+    if (copy.type == AR_KEYTABLE_TYPE_TKIP)
+        ah->keys.entry[idx + MIC_OFFSET].used = ATH9K_KEY_MIC;
+    write_entry(ah, (unsigned)idx, &copy);
+    *slot = idx;
+    return 0;
+}
+
+/**
+ * Clear entry `slot` and forget its copy, after the frames that name it
+ * are finished; an entry not in use is left. With `key`, the entry is
+ * cleared only while it holds `key` for `peer`: a group key installed at
+ * the same index replaces the old one in place, so that the removal of
+ * the old key, which the station makes after the install, leaves the new.
+ */
+void ath9k_key_clear(struct ath9k *ah, int slot, const uint8_t peer[6], const struct wlan_key *key)
+{
+    struct ath9k_key copy;
+    const uint8_t *a, *b;
+    unsigned i;
+
+    if (slot < 0 || slot >= AR_KEY_CACHE_SIZE || ah->keys.entry[slot].used != ATH9K_KEY_USED)
+        return;
+    if (key) {
+        if (make_copy(&copy, peer, key) != 0)
+            return;
+        a = (const uint8_t *)&copy;
+        b = (const uint8_t *)&ah->keys.entry[slot];
+        for (i = 0; i < sizeof(copy); i++)
+            if (a[i] != b[i])
+                return;
+    }
+    forget(ah, slot);
 }
 
 /**

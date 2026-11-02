@@ -911,13 +911,86 @@ static void test_keys(void)
     }
 
     /* Clearing an entry clears its registers and its MIC entry. */
-    ath9k_key_clear(&ah, s2);
+    ath9k_key_clear(&ah, s2, ap, 0);
     CHECK(ath9k_model_peek(&model, AR_KEYTABLE_TYPE(s2)) == AR_KEYTABLE_TYPE_CLR);
     CHECK(ath9k_model_peek(&model, AR_KEYTABLE_KEY0(s2 + 64)) == 0);
     CHECK(ah.keys.entry[s2].used == ATH9K_KEY_FREE &&
           ah.keys.entry[s2 + 64].used == ATH9K_KEY_FREE);
-    ath9k_key_clear(&ah, s2); /* twice is harmless */
+    ath9k_key_clear(&ah, s2, ap, 0); /* twice is harmless */
     CHECK(ath9k_key_set(&ah, ap, &tkip, &s2) == 0);
+
+    /* A group key installed at the index of the one it replaces takes its
+     * entry, and the station's removal of the old key after the install
+     * leaves the new one, in the cache and in the copy a reset writes
+     * back; removing the new one clears the entry. */
+    {
+        struct wlan_key g1 = make_key(WLAN_CIPHER_SUITE_CCMP, 2, 0, bcast);
+        struct wlan_key g2 = g1;
+        int a = -1, b = -1;
+
+        g2.data[0] ^= 0xff;
+        CHECK(ath9k_key_set(&ah, bcast, &g1, &a) == 0 && a == 2);
+        CHECK(ath9k_key_set(&ah, bcast, &g2, &b) == 0 && b == 2);
+        ath9k_key_clear(&ah, a, bcast, &g1);
+        CHECK(ah.keys.entry[2].used == ATH9K_KEY_USED);
+        CHECK(entry_is(2, &g2, AR_KEYTABLE_TYPE_CCM, AR_KEYTABLE_VALID));
+        ath9k_key_restore(&ah);
+        CHECK(entry_is(2, &g2, AR_KEYTABLE_TYPE_CCM, AR_KEYTABLE_VALID));
+        ath9k_key_clear(&ah, b, bcast, &g2);
+        CHECK(ah.keys.entry[2].used == ATH9K_KEY_FREE);
+        CHECK(ath9k_model_peek(&model, AR_KEYTABLE_TYPE(2)) == AR_KEYTABLE_TYPE_CLR);
+    }
+
+    /* A pairwise key replaced while frames that name it wait: the one sent
+     * above and eight more on BE, eight in the FIFO and one behind. The
+     * removal serves the eight the chip finished, which pushes the ninth
+     * with the key still in place; that one never finishes, so after 20 ms
+     * the chip is reset, which reports it failed, and only then is the
+     * entry cleared, with no frame left that names it. */
+    {
+        struct wlan_key next = ccmp;
+        struct ar9003_txs st;
+        unsigned i, base = txs_count;
+        uint64_t usec;
+        int s4 = -1;
+
+        len = qos_data(f, 100, 1) + 8 + 8;
+        for (i = 0; i < 8; i++) {
+            info = tx_info(WLAN_AC_BE, 10 + i);
+            info.flags = WLAN_TX_HW_KEY;
+            info.hw_key = slot;
+            CHECK(ath9k_tx(&ah, f, len, &info) == 0);
+        }
+        CHECK(ah.tx.q[WLAN_AC_BE].count == 9 && model.tx[1].count == ATH9K_TX_FIFO_DEPTH);
+        k_memset(&st, 0, sizeof(st));
+        st.status3 = AR_FrmXmitOK;
+        for (i = 0; i < 8; i++)
+            CHECK(ath9k_model_tx_complete(&model, 1, &st) != 0);
+        next.data[0] ^= 0xff;
+        CHECK(ath9k_key_set(&ah, ap, &next, &s4) == 0 && s4 != slot);
+        usec = model.usec;
+        ath9k_key_clear(&ah, slot, ap, &ccmp);
+        CHECK(model.usec - usec >= 20000);
+        CHECK(txs_count == base + 9 && ah.stats.resets[ATH9K_RESET_TX_HANG] == 1);
+        for (i = 0; i < 9 && base + i < MAX_TXS; i++)
+            CHECK(txs[base + i].flags == (i < 8 ? WLAN_TX_ACKED : 0));
+        CHECK(ah.tx.q[WLAN_AC_BE].count == 0 && model.tx[1].count == 0);
+        CHECK(ah.keys.entry[slot].used == ATH9K_KEY_FREE);
+        CHECK(ath9k_model_peek(&model, AR_KEYTABLE_TYPE(slot)) == AR_KEYTABLE_TYPE_CLR);
+        CHECK(entry_is((unsigned)s4, &next, AR_KEYTABLE_TYPE_CCM, mac1));
+
+        /* A frame of the new key the chip finished goes out before its
+         * removal, which needs no reset. */
+        info = tx_info(WLAN_AC_BE, 20);
+        info.flags = WLAN_TX_HW_KEY;
+        info.hw_key = s4;
+        CHECK(ath9k_tx(&ah, f, len, &info) == 0);
+        CHECK(ath9k_model_tx_complete(&model, 1, &st) != 0);
+        ath9k_key_clear(&ah, s4, ap, &next);
+        CHECK(txs_count == base + 10 && base + 9 < MAX_TXS && txs[base + 9].flags == WLAN_TX_ACKED);
+        CHECK(ah.stats.resets[ATH9K_RESET_TX_HANG] == 1 &&
+              ah.keys.entry[s4].used == ATH9K_KEY_FREE);
+    }
 }
 
 /* ------------------------------------------------------------------ */

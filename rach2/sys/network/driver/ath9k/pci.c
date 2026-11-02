@@ -212,7 +212,8 @@ static int radio_tx(struct wlan_radio *radio, const uint8_t *frame, unsigned len
 }
 
 /** radio.h's set_key: install into a free entry of the cache, or clear
- * the entry an install gave. */
+ * the entry an install gave, unless a key of the same index has replaced
+ * it there. */
 static int radio_set_key(struct wlan_radio *radio, int enable, const uint8_t peer[6],
                          const struct wlan_key *key, int *slot)
 {
@@ -220,7 +221,7 @@ static int radio_set_key(struct wlan_radio *radio, int enable, const uint8_t pee
 
     if (enable)
         return ah->bus.started ? ath9k_key_set(ah, peer, key, slot) : -ENETDOWN;
-    ath9k_key_clear(ah, *slot);
+    ath9k_key_clear(ah, *slot, peer, key);
     return 0;
 }
 

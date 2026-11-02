@@ -29,6 +29,12 @@
 
 #define FCS_LEN 4
 
+/* How long ath9k_tx_flush_key lets the frames that name a key entry go
+ * out, and how often it serves the status ring meanwhile, in
+ * microseconds. */
+#define KEY_FLUSH_US   20000
+#define KEY_FLUSH_STEP 100
+
 /* The chip's code of each legacy rate, in 100 kbit/s, as ath9k's rate
  * table gives them; a CCK rate but 1 Mbit/s takes ATH9K_RATE_CCK_SP for a
  * short preamble. An MCS is ATH9K_RATE_MCS with its index. */
@@ -614,6 +620,52 @@ unsigned ath9k_tx_service(struct ath9k *ah)
     for (ac = 0; ac < ATH9K_TX_QUEUES; ac++)
         kick(ah, &ah->tx.q[ac]);
     return n;
+}
+
+/** Whether a frame accepted for transmit names key entry `keyix`.
+ * Interrupts off. */
+static int names_key(struct ath9k *ah, int keyix)
+{
+    unsigned ac, i;
+
+    for (ac = 0; ac < ATH9K_TX_QUEUES; ac++) {
+        struct ath9k_txq *q = &ah->tx.q[ac];
+
+        for (i = 0; i < q->count; i++)
+            if (slot_at(q, i)->keyix == keyix)
+                return 1;
+    }
+    return 0;
+}
+
+/**
+ * Wait for the frames accepted for transmit that name key entry `keyix` to
+ * finish, as mac80211 flushes the queues before it replaces a pairwise
+ * key: serve the status ring, which also pushes the frames still waiting,
+ * every KEY_FLUSH_STEP microseconds for at most KEY_FLUSH_US. Returns 0
+ * once no frame names the entry, or -ETIMEDOUT.
+ */
+int ath9k_tx_flush_key(struct ath9k *ah, int keyix)
+{
+    unsigned waited = 0;
+    uint32_t flags;
+    int busy;
+
+    for (;;) {
+        flags = kirq_save();
+        busy = names_key(ah, keyix);
+        if (busy) {
+            (void)ath9k_tx_service(ah);
+            busy = names_key(ah, keyix);
+        }
+        kirq_restore(flags);
+        if (!busy)
+            return 0;
+        if (waited >= KEY_FLUSH_US)
+            return -ETIMEDOUT;
+        ATH9K_UDELAY(ah, KEY_FLUSH_STEP);
+        waited += KEY_FLUSH_STEP;
+    }
 }
 
 /**

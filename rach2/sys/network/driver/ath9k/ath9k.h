@@ -1309,6 +1309,10 @@ unsigned ath9k_tx_service(struct ath9k *ah);
  * DMA is stopped; refuse frames until ath9k_mac_init_queues. Worker. */
 void ath9k_tx_drain(struct ath9k *ah);
 
+/** Serve the status ring until no accepted frame names key entry `keyix`,
+ * for at most 20 ms; 0, or -ETIMEDOUT while one still does. Worker. */
+int ath9k_tx_flush_key(struct ath9k *ah, int keyix);
+
 /** The radio.band.rates index of the chip's rate code `code`, or its MCS
  * index with WLAN_RATE_MCS in *flags, and WLAN_RATE_SHORT_PREAMBLE for a
  * CCK rate with a short preamble; -1 for a rate the band lacks. */
@@ -1346,8 +1350,10 @@ int ath9k_tx_own(struct ath9k *ah, const uint8_t *frame, unsigned len,
  * -EOPNOTSUPP for a cipher the cache does not do. Worker. */
 int ath9k_key_set(struct ath9k *ah, const uint8_t peer[6], const struct wlan_key *key, int *slot);
 
-/** Clear entry `slot`. Worker. */
-void ath9k_key_clear(struct ath9k *ah, int slot);
+/** Clear entry `slot` once no accepted frame names it; with `key`, only
+ * while the entry holds `key` for `peer`, not a key that replaced it.
+ * Worker. */
+void ath9k_key_clear(struct ath9k *ah, int slot, const uint8_t peer[6], const struct wlan_key *key);
 
 /** Clear the whole cache, then write back each entry in use. Worker,
  * after a reset. */
