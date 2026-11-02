@@ -108,13 +108,6 @@ void klog(int level, const char *subsystem, const char *format, ...)
     logs++;
 }
 
-/** The boot line, which names no ath9k option here. */
-int kcmdline_has(const char *flag)
-{
-    (void)flag;
-    return 0;
-}
-
 uint32_t kirq_save(void)
 {
     return 0;
@@ -186,9 +179,17 @@ void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t o
 }
 static int nomsi; /* rach2.ath9k_nomsi on the boot line */
 
+/** The boot line, which holds rach2.ath9k_nomsi alone, when nomsi says. */
 int kcmdline_has(const char *flag)
 {
-    return nomsi && flag[0] == 'r';
+    static const char want[] = "rach2.ath9k_nomsi";
+    unsigned i;
+
+    if (!nomsi)
+        return 0;
+    for (i = 0; want[i] && flag[i] == want[i]; i++) {
+    }
+    return want[i] == 0 && flag[i] == 0;
 }
 
 void pci_msi_disable(const pci_device_t *dev)
