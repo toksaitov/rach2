@@ -1,7 +1,8 @@
 /*
- * Check helper architecture selection without starting QEMU. An explicit
- * helper architecture selects its launch profile and memory accounting,
- * while an ordinary machine cannot override the case architecture.
+ * Check machine architecture selection without starting QEMU. An explicit
+ * architecture, i686 or x86_64, selects a machine's launch profile and memory
+ * accounting, a helper's or another's; casecheck, not the runtime, says which
+ * machines may give one.
  *
  * host-deps: tools/etude/serial.c tools/etude/processor.c
  * host-deps: tools/etude/posix/qemu.c tools/etude/qemu_profile.c
@@ -73,8 +74,8 @@ static void memory(void)
     check_arch(decl_need(&c, &d) == ETUDE_BIGMEM_RESIDENT + ETUDE_BIGMEM_OVERHEAD,
                "memory accounting ignored the helper architecture");
     d.helper = 0;
-    check_arch(strcmp(machine_architecture(&c, &d), "i686") == 0,
-               "an ordinary machine changed architecture");
+    check_arch(strcmp(machine_architecture(&c, &d), "x86_64") == 0,
+               "an ordinary machine's own architecture was not taken");
     eh_json_free(qemu);
 }
 
@@ -90,8 +91,8 @@ int main(void)
     declaration("true", "\"architecture\":\"i686\"", 1, "i686");
     declaration("true", "", 1, "i686");
     declaration("false", "", 1, "i686");
-    declaration("false", "\"architecture\":\"x86_64\"", 0, NULL);
-    declaration("false", "\"architecture\":\"i686\"", 0, NULL);
+    declaration("false", "\"architecture\":\"x86_64\"", 1, "x86_64");
+    declaration("false", "\"architecture\":\"i686\"", 1, "i686");
     declaration("true", "\"architecture\":\"arm64\"", 0, NULL);
     declaration("true", "\"architecture\":17", 0, NULL);
     memory();
