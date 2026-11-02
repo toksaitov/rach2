@@ -17,15 +17,19 @@
 
 #include "lifecycle.h"
 
-/* The root's partition on the ext2 disk: 64 MiB at LBA 2048. The KRFFS
- * disk's is LC_PART_SIZE. */
+/* The root's partition on the ext2 disk: 96 MiB at LBA 2048. */
 #define PART_OFFSET 1048576L
-#define PART_SIZE   67108864L
+#define PART_SIZE   100663296L
+
+/* The root's partition on the KRFFS disk, which suites.mk makes with
+ * `96 80`: 80 MiB at LBA 2048, larger than the LC_PART_SIZE of os-real's
+ * other disks. */
+#define KRFFS_PART_SIZE "83886080"
 
 /* The free bytes a build needs on the root: the copied source tree, the
  * objects, the response file and the kernel set aside, with margin. The
- * x86-64 build with ACPICA and its kernel take about 22 MiB. */
-#define NEED_BYTES 25165824L
+ * x86-64 build with ACPICA takes about 22 MiB and its kernel 3.3 MB. */
+#define NEED_BYTES 33554432L
 
 /* The least a kernel can be: the tcc-linked kernel is about 1.7 MB on i686
  * and 2.0 MB on x86-64, and a smaller file is a build that stopped short. */
@@ -482,7 +486,7 @@ static void room(struct sb *s)
 {
     char name[] = "setidcheck", free_opt[] = "--free", image_opt[] = "--image",
          offset_opt[] = "--offset", offset[] = LC_PART_OFFSET, size_opt[] = "--size",
-         size[] = LC_PART_SIZE, debugfs[] = "debugfs", request_opt[] = "-R", request[] = "stats",
+         size[] = KRFFS_PART_SIZE, debugfs[] = "debugfs", request_opt[] = "-R", request[] = "stats",
          why[160], *out;
     char *krffs[] = {name, free_opt, image_opt, s->image, offset_opt, offset, size_opt, size, NULL};
     char *ext2[] = {debugfs, request_opt, request, s->root, NULL};
@@ -621,7 +625,7 @@ static void consistent(struct sb *s)
 static int extract(struct sb *s)
 {
     char readfile[] = "readfile.krffs", kept[] = KEPT, offset_opt[] = "--offset",
-         offset[] = LC_PART_OFFSET, size_opt[] = "--size", size[] = LC_PART_SIZE,
+         offset[] = LC_PART_OFFSET, size_opt[] = "--size", size[] = KRFFS_PART_SIZE,
          debugfs[] = "debugfs", request_opt[] = "-R", request[1200], sha[] = "sha256",
          elfcheck[] = "elfcheck", kernel_opt[] = "--kernel", tcc_opt[] = "--tcc", why[200], *out;
     char *krffs[] = {readfile, s->image, kept, s->kernel, offset_opt, offset, size_opt, size, NULL};

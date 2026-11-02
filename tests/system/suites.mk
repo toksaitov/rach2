@@ -1283,9 +1283,11 @@ $(IMAGES_DIR)/smp-test.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MA
 # of an installed root on an ext2 root of the test manifest; and root's build
 # of /src/ish in place.
 #
-# SELFBUILD_DISK is a disk of os-real, of which each KRFFS case boots a private
-# copy, and SELFBUILD_EXT2_DISK the same system as an ext2 volume of 64 MiB on a
-# partition at LBA 2048, where the KRFFS disk has its 48 MiB. The kernel the
+# SELFBUILD_DISK is a disk of os-real with an 80 MiB KRFFS partition at LBA
+# 2048, of which each KRFFS case boots a private copy, and SELFBUILD_EXT2_DISK
+# the same system as an ext2 volume of 96 MiB on a partition at the same LBA:
+# the copied tree, its objects and the kernel set aside take some 25 MiB on
+# x86-64, more than os-real's 48 MiB root has free. The kernel the
 # machine builds is no artifact, so it boots from a disk that GRUB starts, whose
 # kernel the scenario writes. SELFBUILD_GRUB has a placeholder that cannot boot
 # in the slots of its candidate and recovery entries: the candidate entry boots
@@ -1303,15 +1305,15 @@ SELFBUILD_PROBES = $(ARCH_CASE_DIR)/selfbuild/probes.list
 SELFBUILD_PLACEHOLDER = no kernel: the selfbuild scenario writes the one the machine built
 $(SELFBUILD_DISK): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) \
                    $(IMAGE_TOOLS) $(MAN_ALL) | preflight krffs rach2 $(MANIFEST_PARTS_os_real)
-	$(MKDISK) krffs/manifests/os-real.manifest $@ 64 48
+	$(MKDISK) krffs/manifests/os-real.manifest $@ 96 80
 $(SELFBUILD_EXT2_VOL): $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) \
                        tools/image/mkext2.sh $(IMAGE_TOOLS) | preflight krffs rach2 \
                        $(MANIFEST_PARTS_os_real)
-	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 64
+	sh tools/image/mkext2.sh krffs/manifests/os-real.manifest $@ 96
 $(SELFBUILD_EXT2_DISK): $(SELFBUILD_EXT2_VOL) $(MKMBR)
 	{ dd if=/dev/zero bs=1048576 count=1 2>/dev/null; cat $(SELFBUILD_EXT2_VOL); \
 	  dd if=/dev/zero bs=1048576 count=15 2>/dev/null; } > $@.tmp
-	$(MKMBR) --lba $@.tmp 2048:131072:83 > /dev/null
+	$(MKMBR) --lba $@.tmp 2048:196608:83 > /dev/null
 	mv $@.tmp $@
 $(SELFBUILD_GRUB): tools/image/mkdisk_grub.sh $(OS_SIMPLE_EXT2) $(TEST_IMAGE) $(DISK_TOOLS) \
                    $(GRUB_FILES)
