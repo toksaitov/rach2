@@ -248,9 +248,32 @@ static void init_pll(struct ath9k *ah)
 }
 
 /**
+ * Set the PCIe link's power save, as ar9003_hw_configpcipowersave does,
+ * where ath9k calls it: while ASPM is on, the core allowed into L1 and
+ * AR_WA written again unless `power_off`, then the PCIe PHY's table, which
+ * on the AR9565 keeps CLKREQ off in L1, the same for both. The chip is
+ * awake.
+ */
+void ath9k_hw_pcie_powersave(struct ath9k *ah, int power_off)
+{
+    const struct ath9k_ini *t = &ah->hw.pcie;
+    unsigned i;
+
+    if (!ah->power.aspm || (ah->options & ATH9K_OPT_NO_ASPM))
+        return;
+    if (!power_off) {
+        REG_SET_BIT(ah, AR_PCIE_PM_CTRL, AR_PCIE_PM_CTRL_ENA);
+        REG_WRITE(ah, AR_WA, ah->hw.wa);
+    }
+    for (i = 0; i < t->rows; i++)
+        REG_WRITE(ah, t->words[i * t->columns], t->words[i * t->columns + 1]);
+}
+
+/**
  * Stop the chip and leave it in full sleep, as ath9k_hw_disable and the
- * end of ath9k_stop do: wake it, reset it cold, set the PLL and let it
- * sleep. A chip that does not wake is left as it is.
+ * end of ath9k_stop do: wake it, reset it cold, set the PLL, set the PCIe
+ * link's power save for the stop, and let it sleep. A chip that does not
+ * wake is left as it is.
  */
 void ath9k_hw_disable(struct ath9k *ah)
 {
@@ -258,6 +281,7 @@ void ath9k_hw_disable(struct ath9k *ah)
         return;
     if (ath9k_hw_set_reset(ah, ATH9K_RESET_COLD) == 0)
         init_pll(ah);
+    ath9k_hw_pcie_powersave(ah, 1);
     ath9k_hw_set_power(ah, ATH9K_PM_FULL_SLEEP);
 }
 

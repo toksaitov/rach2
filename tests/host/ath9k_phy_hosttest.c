@@ -550,7 +550,13 @@ static void test_cal_init(void)
     CHECK(sel >= 0 && iq1 > sel && iq0 > iq1 && agc > iq0 && peak > agc && mode > peak);
     CHECK(agc >= 0 && (model.log[agc].value & AR_PHY_AGC_CONTROL_CAL));
     CHECK(field(AR_PHY_TX_IQCAL_CONTROL_1, AR_PHY_TX_IQCAL_CONTROL_1_IQCORR_I_Q_COFF_DELPT) == 32);
+    /* With no BSSID ath9k has no calibration data, and TX IQ calibration
+     * does not run; with one it does. */
+    CHECK(field(AR_PHY_TX_IQCAL_CONTROL_0, AR_PHY_TX_IQCAL_CONTROL_0_ENABLE_TXIQ_CAL) == 0);
+    ah.mac.bssid[5] = 1;
+    CHECK(ath9k_cal_init(&ah, &c) == 0);
     CHECK(field(AR_PHY_TX_IQCAL_CONTROL_0, AR_PHY_TX_IQCAL_CONTROL_0_ENABLE_TXIQ_CAL) == 1);
+    ah.mac.bssid[5] = 0;
     /* The peak detector's DAC, found bit by bit, is the last below the
      * turn; the overrides are released. */
     CHECK(field(AR_PHY_65NM_RXRF_AGC(0), AR_PHY_65NM_RXRF_AGC_AGC2G_CALDAC_OVR) == PEAK_DAC);
@@ -691,6 +697,7 @@ static void card_running(void)
     CHECK(ath9k_phy_set_channel(&ah, &c) == 0);
     ath9k_ani_reset(&ah);
     CHECK(ath9k_cal_init(&ah, &c) == 0);
+    ah.mac.irq_on = 1; /* as the start's enable leaves it */
     ath9k_cal_start(&ah);
 }
 
@@ -724,6 +731,16 @@ static void test_work(void)
     now = t + 3000;
     CHECK(wlan_work_run_due(now) == 1);
     CHECK(ah.cal.temp == 0x55);
+    /* While interrupts are off, as in a reset that failed, the work reads
+     * and writes nothing and looks again a period later. */
+    ah.mac.irq_on = 0;
+    ath9k_model_log_clear(&model);
+    model.log_reads = 1;
+    now = t + 4000;
+    CHECK(wlan_work_run_due(now) == 1);
+    CHECK(model.log_count == 0 && wlan_work_next_due() == t + 5000);
+    model.log_reads = 0;
+    ah.mac.irq_on = 1;
     /* Twenty minutes on, it starts again, and the next second's sample
      * finishes it. */
     now = t + 1000 + ATH9K_RESTART_CAL_MS;

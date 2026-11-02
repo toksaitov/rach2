@@ -160,9 +160,12 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
     return msi_refused ? -1 : 0;
 }
 
+static unsigned msi_disables;
+
 void pci_msi_disable(const pci_device_t *dev)
 {
     (void)dev;
+    msi_disables++;
 }
 
 /* The worker: the queued work, which the test runs. */
@@ -255,6 +258,15 @@ void ath9k_ant_rx(struct ath9k *ah, const struct ar9003_rxs *rxs)
     ant_calls++;
 }
 
+static unsigned cal_starts;
+
+/** calib.c's start, which a reset that recovers calls on a started radio. */
+void ath9k_cal_start(struct ath9k *ah)
+{
+    (void)ah;
+    cal_starts++;
+}
+
 static int hw_reset_rc;
 static unsigned hw_resets, cold_resets;
 
@@ -333,6 +345,7 @@ static void setup(int msi)
     msi_ready = msi;
     msi_refused = 0;
     msi_handler = 0;
+    msi_disables = 0;
 
     ath9k_model_init(&model, chip, chip->revs[0].mac_rev);
     model.hooks.dma = dma_map;
@@ -955,12 +968,47 @@ static void test_recover(void)
     interrupt();
     CHECK(ah.stats.beacon_miss == 1 && ah.stats.rx_overrun == 1);
 
+    /* A message sent before a disable that arrives after it, in the reset
+     * or retune that followed, touches nothing; the cause waits for the
+     * enable. */
+    ath9k_mac_intr_disable(&ah);
+    ath9k_model_raise(&model, AR_ISR_BMISS);
+    ath9k_model_log_clear(&model);
+    model.log_reads = 1;
+    interrupt();
+    CHECK(model.log_count == 0 && ah.stats.beacon_miss == 1);
+    model.log_reads = 0;
+    ath9k_mac_intr_enable(&ah);
+    interrupt();
+    CHECK(ah.stats.beacon_miss == 2);
+
+    /* Messages that find no cause are counted, and EMPTY_MAX of them in a
+     * row end the messages: the card is then served from the tick. */
+    if (msi_handler) {
+        unsigned i, spurious = ah.stats.spurious;
+
+        for (i = 0; i < 999; i++)
+            interrupt();
+        CHECK(ah.stats.spurious == spurious + 999 && ah.mac.msi);
+        ath9k_model_raise(&model, AR_ISR_BMISS);
+        interrupt();
+        CHECK(ah.stats.beacon_miss == 3 && ah.mac.empty == 0);
+        for (i = 0; i < 1000; i++)
+            interrupt();
+        CHECK(!ah.mac.msi && msi_disables == 1);
+        ah.mac.msi = 1;
+    }
+
     /* A reset that fails leaves the chip off; the next check tries again. */
     hw_reset_rc = -EIO;
     CHECK(ath9k_reset(&ah, ATH9K_RESET_CAL) == -EIO && ah.recover.failures == 1);
     CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_DISABLE);
     hw_reset_rc = 0;
+    ah.bus.started = 1;
+    before = cal_starts;
     CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_CAL && ah.recover.failures == 0);
+    CHECK(cal_starts == before + 1);
+    ah.bus.started = 0;
     check_restored(&ccmp, slot, mac1);
 
     /* Receive DMA that does not stop is waited for, and the reset goes on. */

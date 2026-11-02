@@ -22,6 +22,15 @@
 #define BB_WD_RADAR_FIX 0x04000539u
 #define BB_WD_HARMLESS  0x1300000au
 
+/* Messages in a row that found no cause before the card is served by the
+ * tick alone, as Linux's spurious-interrupt check gives up on a line. */
+#define EMPTY_MAX 1000
+
+/* What serve found. */
+#define SERVE_NONE  0 /* no cause */
+#define SERVE_DONE  1 /* causes served */
+#define SERVE_RESET 2 /* a reset was asked for, which left interrupts off */
+
 /* The card the message vector serves; the driver has one. */
 static struct ath9k *msi_card;
 
@@ -124,11 +133,13 @@ static unsigned serve_rings(struct ath9k *ah, uint32_t isr, int raised)
 }
 
 /**
- * Read and serve the causes, as ar9003_hw_get_isr reads them on a chip
- * whose ISR clears on read: the MAC's when the asynchronous cause says so
- * and the chip is awake, its second word when the first asks, and the
- * synchronous PCIe errors, which are fatal. Returns nonzero when a reset
- * was asked for, which leaves interrupts off.
+ * Read and serve the causes, as ath9k_hw_intrpend and ar9003_hw_get_isr
+ * read them on a chip whose ISR clears on read, with the chip's
+ * interrupts still enabled, since the asynchronous cause shows the MAC's
+ * only while they are: the MAC's when the asynchronous cause says so and
+ * the chip is awake, its second word when the first asks, and the
+ * synchronous PCIe errors, which are fatal. Returns SERVE_NONE, SERVE_DONE
+ * or SERVE_RESET.
  */
 static int serve(struct ath9k *ah)
 {
@@ -137,7 +148,7 @@ static int serve(struct ath9k *ah)
     async = REG_READ(ah, AR_INTR_ASYNC_CAUSE);
     if (async == 0xffffffffu) {
         ath9k_reset_schedule(ah, ATH9K_RESET_FATAL);
-        return 1;
+        return SERVE_RESET;
     }
     if ((async & AR_INTR_MAC_IRQ) &&
         (REG_READ(ah, AR_RTC_STATUS) & AR_RTC_STATUS_M) == AR_RTC_STATUS_ON) {
@@ -159,11 +170,13 @@ static int serve(struct ath9k *ah)
         (void)REG_READ(ah, AR_INTR_SYNC_CAUSE_CLR);
         if (fatal) {
             ath9k_reset_schedule(ah, ATH9K_RESET_FATAL);
-            return 1;
+            return SERVE_RESET;
         }
     }
     if (isr == 0xffffffffu)
-        return 0;
+        return SERVE_DONE;
+    if (isr == 0 && sync == 0)
+        return SERVE_NONE;
     if ((isr2 & AR_ISR_S2_BB_WATCHDOG) && (ah->mac.imask2 & AR_IMR_S2_BB_WATCHDOG)) {
         uint32_t status = REG_READ(ah, AR_PHY_WATCHDOG_STATUS);
 
@@ -171,7 +184,7 @@ static int serve(struct ath9k *ah)
         ah->recover.bb_status = status;
         if (bb_watchdog_check(ah, status)) {
             ath9k_reset_schedule(ah, ATH9K_RESET_BB_WATCHDOG);
-            return 1;
+            return SERVE_RESET;
         }
     }
     if (isr & AR_ISR_BMISS)
@@ -179,35 +192,60 @@ static int serve(struct ath9k *ah)
     if (isr & AR_ISR_RXORN)
         ah->stats.rx_overrun++;
     (void)serve_rings(ah, isr, 1);
-    return 0;
+    return SERVE_DONE;
 }
 
 /**
- * The card's interrupt: with every interrupt of the chip off, serve the
- * causes, then turn them on again unless a reset was asked for. On a
- * message the chip sends again when it is turned on with a cause still
- * raised, so what arrives while it is off waits for no tick. During a
- * reset the chip is left off, as ath_isr leaves it.
+ * Give up on the card's messages after EMPTY_MAX in a row found no cause:
+ * disable them at the bus, so that the card can send no more, and serve
+ * the card from the tick, whose service reads the same causes.
+ */
+static void messages_off(struct ath9k *ah)
+{
+    pci_msi_disable(&ah->bus.dev);
+    ah->mac.msi = 0;
+    klog(KLOG_WARN, "ath9k", "interrupts: polled, %u messages found no cause",
+         (unsigned)ah->mac.empty);
+}
+
+/**
+ * The card's interrupt, as ath_isr takes it: nothing while interrupts are
+ * off, since a message sent before a disable may arrive in the middle of
+ * the reset or retune that followed it; the chip's interrupts killed and
+ * nothing more while a reset is asked for; otherwise the causes read and
+ * cleared before anything else is written, and served at once, since the
+ * handler runs with the processor's interrupts off. A message that finds
+ * no cause is counted, and EMPTY_MAX of them in a row end the messages.
  */
 void ath9k_intr(struct ath9k *ah)
 {
     ah->stats.interrupts++;
-    ath9k_mac_intr_disable(ah);
-    if (ah->recover.resetting)
+    if (!ah->mac.irq_on)
         return;
-    if (serve(ah) == 0)
-        ath9k_mac_intr_enable(ah);
+    if (ah->recover.resetting || ah->recover.pending) {
+        ath9k_mac_intr_disable(ah);
+        return;
+    }
+    if (serve(ah) != SERVE_NONE) {
+        ah->mac.empty = 0;
+        return;
+    }
+    ah->stats.spurious++;
+    if (++ah->mac.empty >= EMPTY_MAX && ah->mac.msi)
+        messages_off(ah);
 }
 
 /**
  * The tick: the causes, served as the handler serves them, for a card
  * without messages, whose interrupts stay on since no line carries them;
  * on one with messages, a look at the rings for what a missed message
- * left there.
+ * left there. Nothing while interrupts are off, which covers every start,
+ * reset and retune.
  */
 void ath9k_tick(struct ath9k *ah)
 {
-    if (ah->recover.resetting || ah->recover.pending || (!ah->rx.running && !ah->tx.running))
+    if (!ah->mac.irq_on || ah->recover.resetting || ah->recover.pending ||
+        (!ah->rx.running && !ah->tx.running))
         return;
     if (!ah->mac.msi) {
         (void)serve(ah);

@@ -142,6 +142,8 @@ int ath9k_reset(struct ath9k *ah, enum ath9k_reset_reason why)
     ah->recover.rx_active = 0;
     ah->recover.resetting = 0;
     ath9k_mac_intr_enable(ah);
+    if (ah->bus.started)
+        ath9k_cal_start(ah);
     klog(KLOG_INFO, "ath9k", "reset: %s: recovered", reason_name[why]);
     return 0;
 }

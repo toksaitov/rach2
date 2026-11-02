@@ -394,12 +394,14 @@ void ath9k_mac_set_bssid(struct ath9k *ah, const uint8_t bssid[6], unsigned aid)
  * Enable the chip's interrupts, as ath9k_hw_set_interrupts and
  * ath9k_hw_enable_interrupts do: the masks, the global enable, the
  * asynchronous cause of the MAC and the synchronous PCIe errors, and on
- * a card with messages the message engine.
+ * a card with messages the message engine. The caller has the chip up:
+ * the handler serves from the first write on.
  */
 void ath9k_mac_intr_enable(struct ath9k *ah)
 {
     unsigned i;
 
+    ah->mac.irq_on = 1;
     REG_WRITE(ah, AR_IMR, ah->mac.imask);
     REG_WRITE(ah, AR_IMR_S2, ah->mac.imask2);
     REG_WRITE(ah, AR_IER, AR_IER_ENABLE);
@@ -426,9 +428,12 @@ void ath9k_mac_intr_enable(struct ath9k *ah)
 /**
  * Disable every interrupt, as ath9k_hw_kill_interrupts does; each write is
  * read back so that it has reached the chip before the caller goes on.
+ * From here to the next enable the handler and the tick touch nothing, so
+ * a message sent before the disable cannot run into a reset.
  */
 void ath9k_mac_intr_disable(struct ath9k *ah)
 {
+    ah->mac.irq_on = 0;
     REG_WRITE(ah, AR_IER, AR_IER_DISABLE);
     (void)REG_READ(ah, AR_IER);
     REG_WRITE(ah, AR_INTR_ASYNC_ENABLE, 0);

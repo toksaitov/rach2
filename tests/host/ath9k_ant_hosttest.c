@@ -115,6 +115,13 @@ int wlan_start(struct wlan *wlan)
     return 0;
 }
 
+/** hw.c's link power save, which the attach sets; hw.c is not linked. */
+void ath9k_hw_pcie_powersave(struct ath9k *a, int power_off)
+{
+    (void)a;
+    (void)power_off;
+}
+
 /** Count a logged resume failure; the suspend's own result stays separate. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
@@ -199,29 +206,29 @@ static void switch_tables(void)
     CHECK(ath9k_model_peek(&model, AR_PHY_SWITCH_COM_2) == 0x5aabcdef);
     CHECK(ath9k_model_peek(&model, AR_PHY_SWITCH_CHAIN_0) == 0xabcd0789);
     CHECK(ath9k_model_peek(&model, AR_PHY_SWITCH_CHAIN_1) == 0x12345678);
-    CHECK(ath9k_model_peek(&model, AR_PHY_GLB_CONTROL) == 0xabcdabc1);
-    CHECK(ath9k_model_peek(&model, AR_BTCOEX_CTRL) == 0);
-    CHECK(ath9k_model_peek(&model, AR_MCI_INTERRUPT_EN) == 0);
-    CHECK(ath9k_model_peek(&model, AR_MCI_INTERRUPT_RX_MSG_EN) == 0);
+    CHECK(ath9k_model_peek(&model, AR_PHY_GLB_CONTROL) == 0xabcdabc3);
+    /* ath9k leaves the coexistence registers alone while it is off. */
+    CHECK(ath9k_model_peek(&model, AR_BTCOEX_CTRL) == 0xffffffff);
+    CHECK(ath9k_model_peek(&model, AR_MCI_INTERRUPT_EN) == 0xffffffff);
+    CHECK(ath9k_model_peek(&model, AR_MCI_INTERRUPT_RX_MSG_EN) == 0xffffffff);
     gain = ath9k_model_peek(&model, AR_PHY_MC_GAIN_CTRL);
     CHECK((gain & 0x800001ff) == 0x80000155);
     CHECK(MS(gain, AR_PHY_ANT_DIV_MAIN_LNACONF) == 2);
     CHECK(MS(gain, AR_PHY_ANT_DIV_ALT_LNACONF) == 1);
-    CHECK(MS(gain, AR_PHY_ANT_FAST_DIV_BIAS) == 3);
-    CHECK(gain & AR_ANT_DIV_ENABLE);
-    CHECK(gain & AR_PHY_ANT_SW_RX_PROT);
+    /* Bluetooth antenna diversity is off, ath9k's default: LNA diversity
+     * and its receive protection cleared, the fast diversity the EEPROM's
+     * control gives, 0xc9 on the AR9565, and no switch of M2 flags. */
+    CHECK(!(gain & AR_ANT_DIV_ENABLE));
+    CHECK(!(gain & AR_PHY_ANT_SW_RX_PROT));
     CHECK(ath9k_model_peek(&model, AR_PHY_CCK_DETECT) & AR_FAST_DIV_ENABLE);
-    CHECK(ath9k_model_peek(&model, AR_PHY_RESTART) & AR_PHY_RESTART_ENABLE_DIV_M2FLAG);
-    CHECK(ath9k_model_peek(&model, AR_BTCOEX_WL_LNADIV) & AR_BTCOEX_WL_LNADIV_FORCE_ON);
+    CHECK(ath9k_model_count(&model, ATH9K_MODEL_WRITE, AR_PHY_RESTART) == 0);
+    CHECK(!(ath9k_model_peek(&model, AR_BTCOEX_WL_LNADIV) & AR_BTCOEX_WL_LNADIV_FORCE_ON));
     CHECK(!model.unmapped);
-    CHECK(ath9k_model_find(&model, 0, ATH9K_MODEL_WRITE, AR_MCI_INTERRUPT_EN) <
-          ath9k_model_find(&model, 0, ATH9K_MODEL_WRITE, AR_PHY_GLB_CONTROL));
     ah.bus.flags = ATH9K_PCI_1ANT;
     ath9k_ant_set(&ah);
     CHECK(!ah.ant.diversity && !ah.ant.combining);
     CHECK(!(ath9k_model_peek(&model, AR_PHY_MC_GAIN_CTRL) & AR_ANT_DIV_ENABLE));
-    CHECK(!(ath9k_model_peek(&model, AR_PHY_CCK_DETECT) & AR_FAST_DIV_ENABLE));
-    CHECK(!(ath9k_model_peek(&model, AR_PHY_RESTART) & AR_PHY_RESTART_ENABLE_DIV_M2FLAG));
+    CHECK(ath9k_model_peek(&model, AR_PHY_CCK_DETECT) & AR_FAST_DIV_ENABLE);
     CHECK(!(ath9k_model_peek(&model, AR_BTCOEX_WL_LNADIV) & AR_BTCOEX_WL_LNADIV_FORCE_ON));
     ah.bus.flags |= ATH9K_PCI_BT_ANT_DIV;
     ath9k_ant_set(&ah);

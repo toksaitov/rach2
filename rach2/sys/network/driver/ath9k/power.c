@@ -58,6 +58,7 @@ void ath9k_power_init(struct ath9k *ah)
     p->rfkill_polarity = (silent >> 1) & 1;
     p->rfkill_gpio = (silent >> 2) & 0x3f;
     p->rfkill_reported = p->hw_blocked = p->suspended = p->resume = 0;
+    ath9k_hw_pcie_powersave(ah, 0);
     ath9k_rfkill_poll(ah);
 }
 

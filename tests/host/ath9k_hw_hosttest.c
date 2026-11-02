@@ -842,7 +842,7 @@ static void test_recorded(void)
     }
     CHECK(card.bus.flags == (ATH9K_PCI_2ANT | ATH9K_PCI_BT_ANT_DIV));
     CHECK(card.bus.subsys_vendor == 0x17aa && card.bus.subsys_device == 0x4026);
-    CHECK(mapped_at == 0xc0400000u && mapped_len == 0x20000);
+    CHECK(mapped_at == 0xc0400000u && mapped_len == 0x80000);
     CHECK(memory_on == 1 && master_on == 1);
     CHECK(cache_line == 16 && latency == 0xa8);
     CHECK(model.unmapped == 0);

@@ -830,6 +830,10 @@ struct ath9k_mac {
     uint16_t beacon_interval; /* TU; 0 while the beacon timers are off */
     uint8_t dtim_period;
     uint8_t msi;      /* the card sends messages; AR_PCIE_MSI is set */
+    uint8_t irq_on;   /* interrupts enabled; clear from a disable to the
+                       * enable that ends a start, a reset or a retune,
+                       * and the handler and the tick touch nothing then */
+    uint16_t empty;   /* messages in a row that found no cause */
     uint32_t msi_reg; /* AR_PCIE_MSI as read before it is enabled */
 };
 
@@ -925,6 +929,7 @@ struct ath9k_ampdu {
 /* What the driver counts, for the kernel log and the hang checks. */
 struct ath9k_stats {
     uint32_t interrupts;
+    uint32_t spurious; /* messages that found no cause */
     uint32_t rx_frames;
     uint32_t rx_crc;
     uint32_t rx_phy;
@@ -1035,6 +1040,10 @@ int ath9k_hw_set_power(struct ath9k *ah, enum ath9k_power_mode mode);
 
 /** Stop the chip and leave it in full sleep, as ath9k_hw_disable does. */
 void ath9k_hw_disable(struct ath9k *ah);
+
+/** Set the PCIe link's power save while ASPM is on: for a running chip,
+ * or for a stop when `power_off`. The chip is awake. */
+void ath9k_hw_pcie_powersave(struct ath9k *ah, int power_off);
 
 /* eeprom.c */
 
@@ -1329,7 +1338,8 @@ int ath9k_intr_attach(struct ath9k *ah);
 void ath9k_intr_detach(struct ath9k *ah);
 
 /** Serve the chip's interrupt causes: receive, transmit, beacon miss, and
- * the fatal causes, which ask recover.c for a reset. Interrupt. */
+ * the fatal causes, which ask recover.c for a reset. Interrupt, with the
+ * processor's interrupts off. */
 void ath9k_intr(struct ath9k *ah);
 
 /** The tick's service: the whole handler on a card without messages,

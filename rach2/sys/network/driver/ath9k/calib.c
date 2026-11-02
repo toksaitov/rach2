@@ -936,11 +936,24 @@ static void cl_post_proc(struct ath9k *ah, int reusable)
 }
 
 /**
+ * Whether ath9k would reset with calibration data, which it keeps for the
+ * channel a station has joined and gives no reset at start or off
+ * channel: here, while the chip has a BSSID. Without it TX IQ calibration
+ * does not run, as the trace of Linux's start and scan shows.
+ */
+static int has_caldata(const struct ath9k *ah)
+{
+    const uint8_t *b = ah->mac.bssid;
+
+    return (b[0] | b[1] | b[2] | b[3] | b[4] | b[5]) != 0;
+}
+
+/**
  * Run the reset-time calibrations, as ar9003_hw_init_cal_pcoem does on a
  * chip without RTT and with coexistence off: every chain calibrates; the
- * carrier leak runs unless the channel's table is kept, the TX IQ
- * calibration runs as part of the AGC calibration unless its result is
- * kept; with the carrier leak on, the baseband restarts with the longest
+ * carrier leak runs, since a full reset forgets its table, and the TX IQ
+ * calibration runs as part of the AGC calibration when ath9k would have
+ * calibration data (has_caldata); with the carrier leak on, the baseband restarts with the longest
  * receive delay around the AGC calibration, which runs at every reset,
  * since only ath9k's fast channel change may skip it; then the manual peak
  * calibration, the TX IQ and carrier-leak results, and the RX IQ
@@ -957,6 +970,9 @@ int ath9k_cal_init(struct ath9k *ah, const struct wlan_channel *chan)
     unsigned i;
 
     (void)chan;
+    /* A full reset calibrates again, as ath9k_hw_reset clears both before
+     * ath9k_hw_init_cal. */
+    cal->flags &= ~(ATH9K_CAL_TXIQ_DONE | ATH9K_CAL_TXCL_DONE);
     set_chain_masks(ah, chainmask(ah), chainmask(ah));
 
     if (cal->enabled & ATH9K_CAL_ENABLE_TXCL) {
@@ -970,7 +986,7 @@ int ath9k_cal_init(struct ath9k *ah, const struct wlan_channel *chan)
         REG_RMW_FIELD(ah, AR_PHY_TX_IQCAL_CONTROL_1,
                       AR_PHY_TX_IQCAL_CONTROL_1_IQCORR_I_Q_COFF_DELPT, DELPT);
         if (cal->enabled & ATH9K_CAL_ENABLE_TXIQ_ON_AGC) {
-            if (!(cal->flags & ATH9K_CAL_TXIQ_DONE))
+            if (has_caldata(ah))
                 REG_SET_BIT(ah, AR_PHY_TX_IQCAL_CONTROL_0,
                             AR_PHY_TX_IQCAL_CONTROL_0_ENABLE_TXIQ_CAL);
             else
@@ -1046,7 +1062,11 @@ static int elapsed(uint64_t now, uint64_t since, uint64_t period)
  * restart 20 minutes after; ANI every second; and the work queued again
  * after the shortest period still due. The thermometer's latest reading
  * is kept in cal.temp. A failed calibration asks recover.c for a reset,
- * which starts the work again, and queues nothing.
+ * which starts the work again, and queues nothing. While the chip's
+ * interrupts are off, from a reset or a retune that has not finished or
+ * one that failed, the chip may be held in reset, so the work touches no
+ * register and looks again a period later, as ath_ani_calibrate skips a
+ * chip that is not awake.
  */
 static void cal_run(struct wlan_work *work)
 {
@@ -1057,6 +1077,10 @@ static void cal_run(struct wlan_work *work)
 
     if (!cal->running)
         return;
+    if (!ah->mac.irq_on || ah->recover.resetting || ah->recover.pending) {
+        cal_queue(cal, now + ATH9K_ANI_MS);
+        return;
+    }
     if (elapsed(now, cal->last_long,
                 (cal->flags & ATH9K_CAL_NF_INTF) ? LONG_CAL_INTF_MS : ATH9K_LONG_CAL_MS)) {
         longcal = 1;

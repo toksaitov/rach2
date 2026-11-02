@@ -21,9 +21,10 @@
 #include "../../wireless/rc_minstrel.h"
 #include "../../wireless/wiphy.h"
 
-/* The bytes of the card's window the driver maps: every register and the
- * OTP lie below it, though the BAR is 512 KiB. */
-#define ATH9K_WINDOW 0x20000
+/* The bytes of the card's window the driver maps, the whole 512 KiB BAR as
+ * ath9k maps it: the AR9565's global registers, AR_GLB_SWREG_DISCONT_MODE
+ * and AR_PHY_GLB_CONTROL, lie past 128 KiB. */
+#define ATH9K_WINDOW 0x80000
 
 /* How often the radio switch is read, in milliseconds. */
 #define RFKILL_POLL_MS 1000
@@ -133,6 +134,10 @@ static int radio_start(struct wlan_radio *radio)
         return 0;
     if (ah->power.suspended)
         return -EBUSY;
+    /* ath9k_start wakes the chip and sets the link's power save before
+     * its reset. */
+    if (ath9k_hw_set_power(ah, ATH9K_PM_AWAKE) == 0)
+        ath9k_hw_pcie_powersave(ah, 0);
     rc = bring_up(ah, start_channel(ah));
     if (rc != 0) {
         klog(KLOG_ERR, "ath9k", "start: failed: %d", rc);

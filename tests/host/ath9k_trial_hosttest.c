@@ -476,9 +476,21 @@ void wlan_cancel_work(struct wlan_work *work)
 static unsigned asleep_accesses;
 static uint32_t asleep_first; /* the first such register */
 
-/** Count an access to `reg` while the RTC is not on. */
+/* Writes of the PCIe PHY's table, which ath9k makes at the attach, the
+ * start and the stop while ASPM is on. */
+static unsigned serdes_writes;
+
+/* Accesses at or past the end of the window pci.c maps, which on the
+ * machine reach no register of the card. */
+static unsigned beyond_window;
+static uint32_t beyond_first;
+
+/** Count an access to `reg` past the mapped window or while the RTC is not
+ * on. */
 static void awake_check(const struct ath9k_model *m, uint32_t reg)
 {
+    if (reg + 4 > ATH9K_WINDOW && beyond_window++ == 0)
+        beyond_first = reg;
     if ((reg >= 0x4000 && reg <= 0x4fff) || (reg >= 0x7000 && reg <= 0x7fff))
         return;
     if ((m->reg[AR_RTC_RESET / 4] & AR_RTC_RESET_EN) &&
@@ -487,6 +499,8 @@ static void awake_check(const struct ath9k_model *m, uint32_t reg)
     if (asleep_accesses++ == 0)
         asleep_first = reg;
 }
+
+static int chip_asks(void);
 
 /* AR_INTR_SYNC_CAUSE, the PCIe errors, which clear by writing ones. */
 static uint32_t sync_cause;
@@ -502,6 +516,12 @@ static int chip_read(struct ath9k_model *m, uint32_t reg, uint32_t *value)
     awake_check(m, reg);
     if (reg == AR_INTR_SYNC_CAUSE) {
         *value = sync_cause;
+        return 1;
+    }
+    if (reg == AR_INTR_ASYNC_CAUSE) {
+        /* The MAC's interrupt reaches the cause only while AR_IER and the
+         * async enable let it out, as on the chip. */
+        *value = chip_asks() ? AR_INTR_MAC_IRQ : 0;
         return 1;
     }
     if (reg == AR_GPIO_IN) {
@@ -529,6 +549,8 @@ static int chip_read(struct ath9k_model *m, uint32_t reg, uint32_t *value)
 static void chip_write(struct ath9k_model *m, uint32_t reg, uint32_t value)
 {
     awake_check(m, reg);
+    if (reg == 0x18c00) /* the first row of the PCIe PHY's table */
+        serdes_writes++;
     if (reg == AR_INTR_SYNC_CAUSE)
         sync_cause &= ~value;
     if (reg == AR_PHY_AGC_CONTROL)
@@ -697,11 +719,11 @@ static int probe_request(void)
 static void model_clean(const char *step)
 {
     if (model.unmapped || model.dma_faults || model.overruns || storms || over_bound ||
-        asleep_accesses) {
+        asleep_accesses || beyond_window) {
         printf("  after %s: unmapped %u, dma faults %u, overruns %u, storms %u, over %u, "
-               "asleep %u (first 0x%x)\n",
+               "asleep %u (first 0x%x), past the window %u (first 0x%x)\n",
                step, model.unmapped, model.dma_faults, model.overruns, storms, over_bound,
-               asleep_accesses, asleep_first);
+               asleep_accesses, asleep_first, beyond_window, beyond_first);
         failures++;
     }
 }
@@ -732,6 +754,8 @@ int main(void)
                  "17aa:4026") == 1);
     CHECK(!chip_irq_on_at_msi);
     CHECK(!(ath9k_model_peek(&model, AR_IER) & AR_IER_ENABLE));
+    CHECK(serdes_writes == 1);
+    CHECK(ath9k_model_peek(&model, AR_PCIE_PM_CTRL) & AR_PCIE_PM_CTRL_ENA);
     run_for(3000);
     CHECK(messages == 0);
     CHECK(rfkill_reports == 1 && rfkill_blocked == 0);
@@ -747,6 +771,7 @@ int main(void)
     CHECK(registered->ops->start(registered) == 0);
     waited_since(start, "the start");
     CHECK(card.bus.started);
+    CHECK(serdes_writes == 2);
     CHECK(model.rxe);
     CHECK(ath9k_model_peek(&model, AR_IER) & AR_IER_ENABLE);
     deliver();
@@ -795,6 +820,7 @@ int main(void)
     registered->ops->stop(registered);
     waited_since(start, "the stop");
     CHECK(!card.bus.started);
+    CHECK(serdes_writes == 3);
     CHECK(!model.rxe);
     CHECK(!(ath9k_model_peek(&model, AR_IER) & AR_IER_ENABLE));
     before = messages;
