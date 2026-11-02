@@ -128,9 +128,11 @@ struct wlan_work {
  */
 int wlan_register_radio(struct wlan_radio *radio, struct wlan **out);
 
-/** Stop radio, cancel scans, drain work/status and remove interfaces.
- * Process context, no net_lock; may sleep. Frees registry-owned wlan only.
- * Driver must prevent new IRQ callbacks before this call returns. */
+/** Stop radio, cancel scans, drain work, status and the interface's requests
+ * to come up or go down, and remove interfaces. Process context, no net_lock,
+ * never the wireless worker, whose work it waits for; may sleep. Frees
+ * registry-owned wlan only. Driver must prevent new IRQ callbacks before
+ * this call returns. */
 void wlan_unregister_radio(struct wlan *wlan);
 
 /** Queue work for absolute tick due, or immediately at zero; IRQ-safe under

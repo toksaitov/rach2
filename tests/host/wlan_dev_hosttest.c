@@ -1,7 +1,9 @@
-/* Check radio registration, station Ethernet conversion, the EAPOL gate and
- * the radio's rfkill switch.
+/* Check radio registration, station Ethernet conversion, the EAPOL gate,
+ * the radio's rfkill switch, and its removal while a request to bring its
+ * interface up or down sleeps.
  * host-deps: rach2/sys/network/wireless/wiphy.c
  * host-deps: rach2/sys/rfkill.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/park_host.c
  * host-deps: rach2/sys/network/wireless/wlan.c
  * host-deps: rach2/sys/network/wireless/reg.c
  * host-deps: rach2/sys/network/driver/netdev.c
@@ -46,6 +48,16 @@ static unsigned work_count;
 static uint8_t sent[IEEE80211_MAX_FRAME_LEN], queued[ETH_HDR_SIZE + ETH_MTU];
 static unsigned sent_len, queued_len;
 static unsigned run_work(void);
+/* A second process's interface request, run on a stack of its own by
+ * `park_run` (compat/park_host.c), and whether the stub radio's next start
+ * sleeps, parking that request until it is resumed. */
+static struct netdev *call_nd;
+static int call_up, call_rc, park_in_start;
+int park_run(void (*fn)(void));
+int park_resume(void);
+int park_active(void);
+int park_waiting(void);
+void park(void);
 uint8_t net_mac[6];
 
 #define CHECK(x)                                                                \
@@ -171,12 +183,26 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return cond(arg) ? 0 : -EINTR;
 }
 
-/** An interface's way down waits for the model worker, which runs here. */
+/** A wait in the parked request gives the processor back until it is
+ * resumed with its condition true. Any other waiter runs the model worker
+ * and then the parked request, as the scheduler would, until its condition
+ * holds; a wait that the model cannot end is a failure. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
-    while (!cond(arg) && run_work()) {
+    if (park_active()) {
+        while (!cond(arg))
+            park();
+        return 0;
     }
+    while (!cond(arg)) {
+        if (run_work())
+            continue;
+        if (!park_waiting())
+            break;
+        (void)park_resume();
+    }
+    CHECK(cond(arg));
     return 0;
 }
 
@@ -276,9 +302,18 @@ int wlan_scan_abort(struct wlan_scan *scan)
     return 0;
 }
 
-/** Model administrative state without the separate IPv6 state machine. */
+/** Model administrative state without the separate IPv6 state machine: the
+ * driver hears of a change first, and its refusal leaves `nd` untouched. */
 int netconf_set_up(struct netdev *nd, int up)
 {
+    int rc;
+
+    up = up ? 1 : 0;
+    if (up != nd->up && nd->ops && nd->ops->set_up) {
+        rc = nd->ops->set_up(nd->dev, up);
+        if (rc)
+            return rc;
+    }
     nd->up = up;
     return 0;
 }
@@ -451,11 +486,16 @@ void wlan_bss_destroy(struct wlan_bss_table *table)
     CHECK(table->count == 0);
 }
 
-/** Start only outside net_lock, optionally failing before any state changes. */
+/** Start only outside net_lock, optionally failing before any state changes,
+ * and sleeping once when asked, as a driver loading its firmware does. */
 static int radio_start(struct wlan_radio *radio)
 {
     (void)radio;
     CHECK(lock_depth == 0);
+    if (park_in_start && park_active()) {
+        park_in_start = 0;
+        park();
+    }
     ++starts;
     return start_error;
 }
@@ -746,6 +786,60 @@ static void blocking(void)
     CHECK(work_count == 0);
 }
 
+/** The second process's request: bring `call_nd` up or down. */
+static void call_set_up(void)
+{
+    call_rc = netconf_set_up(call_nd, call_up);
+}
+
+/** Bring an interface up and down, then remove its radio while another
+ * process's request sleeps: a way down waiting for the worker, then a way up
+ * inside the driver's start. Removal lets each finish on the live radio, and
+ * the request answers -ENODEV without touching the freed interface. */
+static void removal(void)
+{
+    struct wlan_radio radio;
+    struct wlan *wlan = 0;
+    unsigned before_starts = starts, before_stops = stops;
+    int index;
+
+    setup(&radio, 4);
+    CHECK(wlan_register_radio(&radio, &wlan) == 0 && wlan);
+    if (!wlan)
+        return;
+    call_nd = &wlan->netdev;
+    index = call_nd->index;
+    CHECK(netconf_set_up(call_nd, 1) == 0 && call_nd->up && wlan->started);
+    CHECK(starts == before_starts + 1 && !wlan->requests && !wlan->busy);
+    CHECK(netconf_set_up(call_nd, 0) == 0 && !call_nd->up && !wlan->started);
+    CHECK(stops == before_stops + 1 && !wlan->requests && !wlan->busy && work_count == 0);
+    CHECK(netconf_set_up(call_nd, 1) == 0 && wlan->started && starts == before_starts + 2);
+    call_up = 0;
+    CHECK(park_run(call_set_up) == 0 && wlan->busy == 1 && work_count == 1);
+    wlan_unregister_radio(wlan);
+    CHECK(run_work() == 0 && park_waiting() && stops == before_stops + 2);
+    CHECK(radio.wlan == 0 && !wlan_by_index(radio.index) && !netdev_by_index(index));
+    CHECK(park_resume() == 1 && call_rc == -ENODEV);
+
+    setup(&radio, 5);
+    wlan = 0;
+    CHECK(wlan_register_radio(&radio, &wlan) == 0 && wlan);
+    if (!wlan)
+        return;
+    call_nd = &wlan->netdev;
+    index = call_nd->index;
+    call_up = 1;
+    park_in_start = 1;
+    CHECK(park_run(call_set_up) == 0 && wlan->busy == 1 && !wlan->started);
+    wlan_unregister_radio(wlan);
+    CHECK(!park_waiting());
+    if (park_waiting())
+        (void)park_resume();
+    CHECK(call_rc == -ENODEV && starts == before_starts + 3);
+    CHECK(stops == before_stops + 3 && radio.wlan == 0 && !netdev_by_index(index));
+    CHECK(netdev_count() == 0);
+}
+
 /** Check bridge-tunnel, RFC 1042 exceptions and QoS header bounds. */
 static void conversion(void)
 {
@@ -846,6 +940,7 @@ int main(void)
 {
     station();
     blocking();
+    removal();
     conversion();
     regulatory();
     return failures ? 1 : 0;

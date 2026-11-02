@@ -125,7 +125,8 @@ struct netdev_counters {
  * `set_up` is told that the interface is being brought up (`up` nonzero) or
  * down, before `nd->up` changes, in process context without `net_lock`; it
  * may sleep. It returns 0, or a negative errno that refuses the change and
- * leaves the interface as it was. A card that runs from `init` to `stop`
+ * leaves the interface as it was: -ENODEV when the device was removed while
+ * it slept, after which nothing of `nd` may be touched. A card that runs from `init` to `stop`
  * whatever the interface's flags leaves it NULL; a radio starts here, and
  * leaves its network and stops here on the way down.
  */

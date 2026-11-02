@@ -10,6 +10,8 @@
 #define WLAN_MAX_RADIOS NETDEV_MAX
 #define WLAN_ETH_P_PAE  0x888e
 
+struct wlan_request;
+
 struct wlan {
     struct wlan_radio *radio;
     struct netdev netdev;
@@ -30,6 +32,13 @@ struct wlan {
     struct wlan_work rfkill_work[2];
     unsigned soft_blocked, resume;
     volatile unsigned hw_blocked;
+    /* The interface's requests to come up or go down in flight, each on
+     * its caller's stack, and how many of them removal waits for: a way
+     * down the worker has not yet run, or a driver start not yet returned.
+     * Removal marks each record gone, so that its caller, waking, touches
+     * nothing of the freed radio. */
+    struct wlan_request *requests;
+    unsigned busy;
     /* Each private pointer is owned by the named component. */
     void *work_priv, *scan_priv, *mlme_priv, *data_priv;
     /** Copy and enqueue Ethernet data; called with net_lock, never sleep.

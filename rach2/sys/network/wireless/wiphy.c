@@ -21,13 +21,16 @@
 static struct wlan *radios[WLAN_MAX_RADIOS];
 static unsigned next_phy;
 static wlan_event_fn event_handler;
-static wait_queue_t down_wq; /* callers waiting for wlan_down_run */
+static wait_queue_t request_wq; /* a request ended, or removal may go on */
 
-/* An interface going down, carried to the worker. The record is on the
- * caller's stack. */
-struct wlan_down {
+/* A request to bring the interface up or take it down, linked on its radio
+ * from the call until its caller resumes. The record is on the caller's
+ * stack, and the way down carries it to the worker. */
+struct wlan_request {
     struct wlan_work work; /* first: wlan_down_run finds the record from it */
-    int done;
+    struct wlan_request *next;
+    int done; /* the worker has run the way down */
+    int gone; /* removal ran meanwhile: the radio is freed or going */
 };
 
 /** Install the server's event consumer under the kernel lock. */
@@ -116,53 +119,88 @@ static void wireless_stop(void *dev)
 }
 
 /** On the worker, end a scan, deauthenticate, sending the frame, and stop the
- * radio; then wake the caller. */
+ * radio; then let go of the radio and wake the caller and removal. */
 static void wlan_down_run(struct wlan_work *work)
 {
-    struct wlan_down *down = (struct wlan_down *)work;
+    struct wlan_request *req = (struct wlan_request *)work;
     struct wlan *wlan = work->wlan;
 
     if (wlan_scan_running(&wlan->scan))
         (void)wlan_scan_abort(&wlan->scan);
     wlan_sta_leave(wlan, 1);
     wlan_stop(wlan);
-    down->done = 1;
-    wq_wake_all(&down_wq);
+    --wlan->busy;
+    req->done = 1;
+    wq_wake_all(&request_wq);
 }
 
-/** Whether the wlan_down record arg has run. */
+/** Whether the way down in request arg has run. */
 static int wlan_down_done(void *arg)
 {
-    return ((const struct wlan_down *)arg)->done;
+    return ((const struct wlan_request *)arg)->done;
+}
+
+/** Whether no request holds the radio arg. */
+static int wlan_idle(void *arg)
+{
+    return ((const struct wlan *)arg)->busy == 0;
+}
+
+/** Take request req off its radio's list; kernel lock held. */
+static void wlan_request_unlink(struct wlan *wlan, struct wlan_request *req)
+{
+    struct wlan_request **link;
+
+    for (link = &wlan->requests; *link; link = &(*link)->next)
+        if (*link == req) {
+            *link = req->next;
+            return;
+        }
 }
 
 /**
  * Start the radio as its interface comes up, and leave the network and stop
  * it as the interface goes down, as cfg80211 does on dev_open and dev_close.
  * A radio blocked by rfkill lets the interface come up and starts once the
- * block lifts. Process context without net_lock; the way down waits for the
- * worker. Returns 0 or the driver's error from its start.
+ * block lifts. Process context without net_lock; the driver's start may
+ * sleep, and the way down waits for the worker. Returns 0, the driver's
+ * error from its start, or -ENODEV when the radio was removed meanwhile,
+ * in which case nothing of it may be touched: removal waits for the worker
+ * to run the way down and for the start to return, but not for the caller.
  */
 static int wireless_set_up(void *dev, int up)
 {
     struct wlan *wlan = dev;
-    struct wlan_down down;
-    int rc;
+    struct wlan_request req;
+    int rc = 0;
 
     if (wlan->removing)
         return 0;
+    k_memset(&req, 0, sizeof(req));
+    req.work.wlan = wlan;
+    req.work.run = wlan_down_run;
+    req.next = wlan->requests;
+    wlan->requests = &req;
+    ++wlan->busy;
     if (up) {
         rc = wlan_start(wlan);
-        return rc == -ERFKILL ? 0 : rc;
-    }
-    k_memset(&down, 0, sizeof(down));
-    down.work.wlan = wlan;
-    down.work.run = wlan_down_run;
-    if (wlan_queue_work(&down.work, 0) == 0)
-        (void)wq_wait_event_nointr(&down_wq, wlan_down_done, &down);
-    else
+        if (rc == -ERFKILL)
+            rc = 0;
+        --wlan->busy;
+        if (req.gone) {
+            wq_wake_all(&request_wq);
+            return -ENODEV;
+        }
+    } else if (wlan_queue_work(&req.work, 0) == 0) {
+        (void)wq_wait_event_nointr(&request_wq, wlan_down_done, &req);
+        if (req.gone)
+            return -ENODEV;
+    } else {
         wlan_stop(wlan);
-    return 0;
+        --wlan->busy;
+    }
+    wlan_request_unlink(wlan, &req);
+    return rc;
 }
 
 static const struct netdev_ops wireless_ops = {"wireless",    0, wireless_tx, 0, wireless_stop,
@@ -393,7 +431,10 @@ void wlan_stop(struct wlan *wlan)
     }
 }
 
-/** Stop and drain a radio, withdraw its interface and free station storage. */
+/** Stop and drain a radio, withdraw its interface and free station storage.
+ * The interface's requests in flight are marked gone first, and removal
+ * waits until the worker has run each way down and each driver start has
+ * returned, so that nothing still running holds the radio it frees. */
 void wlan_unregister_radio(struct wlan *wlan)
 {
     unsigned i;
@@ -403,10 +444,15 @@ void wlan_unregister_radio(struct wlan *wlan)
     struct arp_row neighbors[ARP_CACHE_SIZE];
     int count;
     struct nd6_row neighbors6[ND6_CACHE_SIZE];
+    struct wlan_request *req;
 
     if (!wlan || wlan->removing)
         return;
     wlan->removing = 1;
+    for (req = wlan->requests; req; req = req->next)
+        req->gone = 1;
+    wlan->requests = 0;
+    (void)wq_wait_event_nointr(&request_wq, wlan_idle, wlan);
     rfkill_unregister(wlan->rfkill);
     wlan_cancel_work(&wlan->rfkill_work[0]);
     wlan_cancel_work(&wlan->rfkill_work[1]);
