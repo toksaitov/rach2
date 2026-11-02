@@ -441,19 +441,27 @@ typedef char ar9300_eeprom_size_is_1088[sizeof(struct ar9300_eeprom) == 1088 ? 1
 #define ATH9K_RX_BUF_LEN  3904
 
 /* Transmit: the four access categories' queues, each a ring of frames of
- * which at most ATH9K_TX_FIFO_DEPTH are in the chip's FIFO at once
- * (ath9k's ATH_TXFIFO_DEPTH), and the attempts a frame gets over its four
- * series (ATH_TXMAXTRY). The chip writes one status per frame, so at most
- * ATH9K_TX_QUEUES * ATH9K_TX_FIFO_DEPTH are unread at once; the status ring
- * holds twice that in one page, where ath9k's ATH_TXSTATUS_RING_SIZE of 512
- * would need five contiguous ones. A frame's copy, with its padding, IV and
- * MIC, takes half a page. */
+ * which at most ATH9K_TX_FIFO_DEPTH chains, a single frame or an aggregate
+ * each, are in the chip's FIFO at once (ath9k's ATH_TXFIFO_DEPTH), and the
+ * attempts a frame gets over its four series (ATH_TXMAXTRY). The chip
+ * writes one status per chain, so at most ATH9K_TX_QUEUES *
+ * ATH9K_TX_FIFO_DEPTH are unread at once; the status ring holds twice that
+ * in one page, where ath9k's ATH_TXSTATUS_RING_SIZE of 512 would need five
+ * contiguous ones. A frame's copy, with its padding, IV and MIC, takes half
+ * a page. */
 #define ATH9K_TX_QUEUES     4
 #define ATH9K_TX_RING       64
 #define ATH9K_TX_FIFO_DEPTH 8
 #define ATH9K_TXS_RING      64
 #define ATH9K_TX_MAX_TRIES  13
 #define ATH9K_TX_BUF_LEN    2048
+
+/* Transmit aggregation (ath9k.h): the largest BlockAck window, the attempts
+ * a frame of a session gets in all before it is given up (ATH_MAX_SW_RETRIES),
+ * and the most bytes an aggregate may have (ATH_AMPDU_LIMIT_MAX). */
+#define ATH9K_BA_WINDOW       64
+#define ATH9K_BA_MAX_TRIES    30
+#define ATH9K_AMPDU_LIMIT_MAX 65535
 
 /* The DMA memory the driver asks for, a page at a time. */
 #define ATH9K_DMA_PAGE 4096
@@ -520,6 +528,7 @@ enum ath9k_reset_reason {
     ATH9K_RESET_TX_HANG,     /* a queue held frames past its deadline */
     ATH9K_RESET_RX_STALL,    /* no frame received for too long */
     ATH9K_RESET_CAL,         /* a calibration failed */
+    ATH9K_RESET_TX_ERROR,    /* an aggregate went out and no BlockAck came */
     ATH9K_RESET_REASONS
 };
 
@@ -751,23 +760,49 @@ struct ath9k_rx {
     uint32_t tsf_low;   /* and its lower half, to extend a status's stamp */
 };
 
-/* A frame given to a queue, from its acceptance to its status. */
+/* A frame given to a queue, from its acceptance to its status. A slot
+ * owns its descriptor and buffer; xmit.c moves slots within the ring, and
+ * they move with it. */
 struct ath9k_tx_slot {
     struct ar9003_txc *desc; /* its descriptor */
     uint32_t desc_bus;
     uint8_t *buf; /* ATH9K_TX_BUF_LEN bytes: the frame, padded after its header */
     uint32_t buf_bus;
-    unsigned len; /* the frame's length as the station gave it */
+    unsigned len;      /* the frame's length as the station gave it */
+    uint16_t buflen;   /* the bytes of buf the chip reads */
+    uint16_t framelen; /* on the air, with the FCS and what the key cache adds */
+    uint16_t fc;       /* its frame control */
+    uint16_t seq;      /* its sequence number */
+    int16_t keyix;     /* its key cache entry, or -1 */
+    uint8_t keytype;   /* AR_EncrType's value */
+    uint8_t own;       /* the driver's own frame, a BlockAckReq, reported to nobody */
+    uint8_t ba;        /* in its TID's BlockAck window, of session `gen` */
+    uint8_t gen;
+    uint8_t tries;  /* attempts so far under BlockAck (ath9k's fi->retries) */
+    uint8_t ndelim; /* delimiters after it in its aggregate */
     struct wlan_tx_info info;
+};
+
+/* What one push to a queue's FIFO holds: `n` slots from the queue's head
+ * onward, one frame or an aggregate, and the rate series the chain was
+ * sent with, which its status reports. */
+struct ath9k_tx_chain {
+    uint8_t n;
+    uint8_t aggr; /* the slots went as one A-MPDU */
+    struct wlan_tx_rate rates[WLAN_TX_RATE_SERIES];
 };
 
 /* One hardware queue, AR_NUM_QCU's numbering, for one access category. */
 struct ath9k_txq {
     struct ath9k_tx_slot slot[ATH9K_TX_RING];
     unsigned qnum;
-    unsigned head;    /* the oldest frame not yet completed */
-    unsigned count;   /* frames accepted and not completed */
-    unsigned queued;  /* of those, frames pushed to the chip's FIFO */
+    unsigned head;   /* the oldest frame not yet completed */
+    unsigned count;  /* frames accepted and not completed */
+    unsigned queued; /* of those, frames pushed to the chip's FIFO, which
+                      * are the first `queued` from the head */
+    struct ath9k_tx_chain chain[ATH9K_TX_FIFO_DEPTH]; /* the FIFO's, oldest first */
+    unsigned chain_head;
+    unsigned chains;
     uint8_t inflight; /* the last hang check saw frames pushed (ath9k's
                        * axq_tx_inprogress); a status clears it */
 };
@@ -857,16 +892,29 @@ struct ath9k_power_state {
     uint8_t rfkill_reported; /* a switch sample reached the registered radio */
 };
 
-/* One traffic identifier's transmit BlockAck session. */
+/* One traffic identifier's transmit BlockAck session and its window
+ * (ath9k's ath_atx_tid). Sequence numbers are 12 bits. */
 struct ath9k_tid {
     uint8_t active;
-    uint16_t ssn;    /* the window's first sequence number */
-    uint16_t window; /* 1 to 64 MPDUs */
+    uint8_t gen;        /* counts the sessions, so a slot of an older one is known */
+    uint8_t bar_owed;   /* a BlockAckReq is owed once seq_start reaches bar_seq */
+    uint16_t window;    /* 1 to ATH9K_BA_WINDOW MPDUs */
+    uint16_t seq_start; /* the oldest frame not done; all before it are */
+    uint16_t seq_next;  /* the number after the last frame that entered */
+    uint16_t bar_seq;
+    uint64_t out; /* bit i: seq_start + i entered and is not done */
 };
 
-/* ampdu.c's: the sessions by TID. */
+/* ampdu.c's: the AP's A-MPDU parameters and the sessions by TID. */
 struct ath9k_ampdu {
+    uint8_t peer[6];
+    uint16_t max_len; /* the AP's longest A-MPDU, bytes */
+    uint8_t density;  /* the AP's least MPDU start spacing, microseconds */
     struct ath9k_tid tid[8];
+    uint32_t aggregates; /* aggregates sent */
+    uint32_t subframes;  /* frames sent in them */
+    uint32_t sw_retries; /* frames sent again for a hole in a BlockAck */
+    uint32_t bars;       /* BlockAckReqs sent */
 };
 
 /* What the driver counts, for the kernel log and the hang checks. */
@@ -1213,7 +1261,8 @@ int ath9k_tx_init(struct ath9k *ah);
 int ath9k_tx(struct ath9k *ah, const uint8_t *frame, unsigned len, const struct wlan_tx_info *info);
 
 /** Read the status ring and report each finished frame with
- * wlan_radio_tx_status. Interrupt. Returns the frames finished. */
+ * wlan_radio_tx_status, an aggregate's through ampdu.c. Interrupt. Returns
+ * the chains finished. */
 unsigned ath9k_tx_service(struct ath9k *ah);
 
 /** Report every accepted frame as failed and empty the queues, after the
@@ -1224,6 +1273,32 @@ void ath9k_tx_drain(struct ath9k *ah);
  * index with WLAN_RATE_MCS in *flags, and WLAN_RATE_SHORT_PREAMBLE for a
  * CCK rate with a short preamble; -1 for a rate the band lacks. */
 int ath9k_rate_index(const struct ath9k *ah, unsigned code, uint8_t *flags);
+
+/* The outcome of a frame xmit.c reports, for ath9k_tx_report. */
+#define ATH9K_TX_ACKED 0x01 /* acknowledged, by an ACK or a BlockAck */
+#define ATH9K_TX_RATES 0x02 /* report the chain's tries, for rate control */
+
+/** Fill slot `s`'s descriptor as one of `n` frames of an aggregate, the
+ * `i`th, of `aggr_len` bytes, or alone when `n` is 1, sent at `rates` and
+ * linked to the descriptor at `link`, as ar9003_set_txdesc does. */
+void ath9k_tx_desc(struct ath9k *ah, const struct ath9k_txq *q, struct ath9k_tx_slot *s,
+                   const struct wlan_tx_rate *rates, unsigned i, unsigned n, unsigned aggr_len,
+                   uint32_t link);
+
+/** Report slot `s` finished, ATH9K_TX_* in `how`, with status `ts` of
+ * `chain`, and count it; the driver's own frames go to nobody. Interrupt. */
+void ath9k_tx_report(struct ath9k *ah, const struct ath9k_tx_slot *s,
+                     const struct ath9k_tx_chain *chain, const struct ar9003_txs *ts, unsigned how);
+
+/** Retire the oldest chain of queue `q` after its status: its slots whose
+ * bit is set in `keep` stay, in order, to be pushed again after the chains
+ * the FIFO still holds; the rest leave the ring. Interrupt. */
+void ath9k_tx_retire(struct ath9k *ah, struct ath9k_txq *q, uint32_t keep);
+
+/** Queue the driver's own frame of `len` bytes on info->ac's queue, as
+ * ath9k_tx does, with no status to the station. Any context. */
+int ath9k_tx_own(struct ath9k *ah, const uint8_t *frame, unsigned len,
+                 const struct wlan_tx_info *info);
 
 /* key.c */
 
@@ -1317,12 +1392,41 @@ int ath9k_resume_all(void);
 
 /* ampdu.c */
 
-/** The radio's ampdu_action operation. -EOPNOTSUPP for the receive actions,
- * and for every action under ATH9K_OPT_NO_AMPDU. Worker. */
+/** The radio's ampdu_action operation: start or stop the transmit session
+ * of `tid` with `peer`, its window starting at `ssn`; -EOPNOTSUPP for the
+ * receive actions, and for every action under ATH9K_OPT_NO_AMPDU, which
+ * rach2.ath9k_noampdu on the boot line sets. Worker. */
 int ath9k_ampdu_action(struct ath9k *ah, enum wlan_ampdu_action action, const uint8_t peer[6],
                        unsigned tid, unsigned ssn, unsigned window);
 
-/** Take a finished aggregate's status and BlockAck bitmap. Interrupt. */
-void ath9k_ampdu_status(struct ath9k *ah, const struct ar9003_txs *ts);
+/** Take the AP's A-MPDU length and spacing from its HT Capabilities in
+ * `bss`, or go back to the most cautious ones when `bss` is NULL or has
+ * none. pci.c's sta_state calls it on association. Worker. */
+void ath9k_ampdu_sta(struct ath9k *ah, const struct wlan_bss *bss);
+
+/** Choose what the next push of queue `q` holds, from the slot `queued`
+ * places past its head: set *aggr_len and the slots' ndelim, enter new
+ * frames in their window, and return how many slots, 1 for a frame sent
+ * alone and 0 when the next frame must wait for its window. Fills `rates`
+ * with the series the push goes at. Interrupt or worker, interrupts off. */
+unsigned ath9k_ampdu_form(struct ath9k *ah, struct ath9k_txq *q, unsigned *aggr_len,
+                          struct wlan_tx_rate rates[WLAN_TX_RATE_SERIES]);
+
+/** Whether the oldest chain of `q` needs ampdu.c to finish it: a frame of
+ * a session or the driver's own frame. */
+int ath9k_ampdu_owns(const struct ath9k *ah, const struct ath9k_txq *q);
+
+/** Finish the oldest chain of `q` with status `ts`, as ath_tx_complete_aggr
+ * does: a frame the BlockAck acknowledged is done, a hole goes again until
+ * its tries run out, and a frame given up leaves its window behind a
+ * BlockAckReq. Interrupt. */
+void ath9k_ampdu_status(struct ath9k *ah, struct ath9k_txq *q, const struct ar9003_txs *ts);
+
+/** Forget the frames of every window after ath9k_tx_drain dropped them, and
+ * owe the AP a BlockAckReq past them. Worker. */
+void ath9k_ampdu_drain(struct ath9k *ah);
+
+/** Queue the BlockAckReqs owed, as room allows. Any context. */
+void ath9k_ampdu_bar(struct ath9k *ah);
 
 #endif

@@ -34,7 +34,8 @@
 
 /* The names of enum ath9k_reset_reason, for the log. */
 static const char *const reason_name[ATH9K_RESET_REASONS] = {
-    "fatal", "bb-watchdog", "bb-hang", "mac-hang", "tx-hang", "rx-stall", "calibration"};
+    "fatal",   "bb-watchdog", "bb-hang",     "mac-hang",
+    "tx-hang", "rx-stall",    "calibration", "tx-error"};
 
 /** The card whose recover.`member` is `w`. */
 #define CARD_OF(w, member) ((struct ath9k *)(void *)((char *)(w) - offsetof(struct ath9k, member)))

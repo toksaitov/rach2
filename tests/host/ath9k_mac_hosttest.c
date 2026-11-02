@@ -7,6 +7,7 @@
  * host-deps: rach2/sys/network/driver/ath9k/mac.c rach2/sys/network/driver/ath9k/recv.c
  * host-deps: rach2/sys/network/driver/ath9k/xmit.c rach2/sys/network/driver/ath9k/key.c
  * host-deps: rach2/sys/network/driver/ath9k/intr.c rach2/sys/network/driver/ath9k/recover.c
+ * host-deps: rach2/sys/network/driver/ath9k/ampdu.c
  * host-deps: tests/host/ath9k_model.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * The test stands in for the parts it does not link: hw.c's reset is a
@@ -105,6 +106,13 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)subsystem;
     (void)format;
     logs++;
+}
+
+/** The boot line, which names no ath9k option here. */
+int kcmdline_has(const char *flag)
+{
+    (void)flag;
+    return 0;
 }
 
 uint32_t kirq_save(void)
