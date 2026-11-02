@@ -38,6 +38,21 @@
 /* The card the message vector serves; the driver has one. */
 static struct ath9k *msi_card;
 
+/**
+ * Mask the card's INTx line with the command word's Interrupt Disable bit,
+ * for a card served by the tick: no handler takes the line, so a level
+ * interrupt nobody clears would hold its pin, unmasked or shared, for
+ * ever. A card with messages needs no mask, since MSI suppresses INTx.
+ */
+static void intx_off(struct ath9k *ah)
+{
+    const pci_device_t *d = &ah->bus.dev;
+    uint16_t command = pci_read_config16(d->bus, d->device, d->function, PCI_COMMAND);
+
+    pci_write_config16(d->bus, d->device, d->function, PCI_COMMAND,
+                       (uint16_t)(command | PCI_CMD_INTERRUPT_DIS));
+}
+
 /** The vector's handler. */
 static void ath9k_msi(isr_params_t *params)
 {
@@ -50,7 +65,8 @@ static void ath9k_msi(isr_params_t *params)
  * Take a vector for the card's messages and enable them, as the RTL8168's
  * driver does: the handler first, so that no message arrives on a vector
  * nothing serves, then the capability. The chip's own message engine is
- * enabled with its interrupts, from mac.msi.
+ * enabled with its interrupts, from mac.msi. A card left polled has its
+ * INTx line masked.
  */
 int ath9k_intr_attach(struct ath9k *ah)
 {
@@ -59,15 +75,18 @@ int ath9k_intr_attach(struct ath9k *ah)
     ah->bus.vector = 0;
     ah->mac.msi = 0;
     if (kcmdline_has("rach2.ath9k_nomsi")) {
+        intx_off(ah);
         klog(KLOG_INFO, "ath9k", "interrupts: polled, rach2.ath9k_nomsi");
         return 0;
     }
     if (!isr_msi_ready()) {
+        intx_off(ah);
         klog(KLOG_INFO, "ath9k", "interrupts: polled, no usable APIC");
         return 0;
     }
     vector = isr_alloc_vector();
     if (vector < 0) {
+        intx_off(ah);
         klog(KLOG_INFO, "ath9k", "interrupts: polled, no vector free");
         return 0;
     }
@@ -76,6 +95,7 @@ int ath9k_intr_attach(struct ath9k *ah)
     if (pci_msi_enable(&ah->bus.dev, (uint8_t)vector) != 0) {
         isr_free_vector(vector);
         msi_card = 0;
+        intx_off(ah);
         klog(KLOG_INFO, "ath9k", "interrupts: polled, the card sends no messages");
         return 0;
     }
@@ -85,12 +105,16 @@ int ath9k_intr_attach(struct ath9k *ah)
     return 0;
 }
 
-/** Disable the card's messages and give the vector back. */
+/** Disable the card's messages, mask its INTx line and give the vector
+ * back. */
 void ath9k_intr_detach(struct ath9k *ah)
 {
-    if (!ah->bus.vector)
+    if (!ah->bus.vector) {
+        intx_off(ah);
         return;
+    }
     pci_msi_disable(&ah->bus.dev);
+    intx_off(ah);
     isr_free_vector(ah->bus.vector);
     msi_card = 0;
     ah->bus.vector = 0;
@@ -206,12 +230,14 @@ static int serve(struct ath9k *ah)
 /**
  * Give up on the card's messages after EMPTY_MAX in a row found no cause
  * or BURST_MAX came between two ticks: disable them at the bus, so that
- * the card can send no more, and serve the card from the tick, whose
- * service reads the same causes, with the chip's message engine off.
+ * the card can send no more, mask its INTx line, which the card raises
+ * once messages are off, and serve the card from the tick, whose service
+ * reads the same causes, with the chip's message engine off.
  */
 static void messages_off(struct ath9k *ah, const char *why)
 {
     pci_msi_disable(&ah->bus.dev);
+    intx_off(ah);
     ah->mac.msi = 0;
     ath9k_mac_intr_disable(ah);
     ath9k_mac_intr_enable(ah);

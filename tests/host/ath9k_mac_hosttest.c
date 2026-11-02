@@ -161,6 +161,29 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
 }
 
 static unsigned msi_disables;
+
+/* The card's command word: memory space and bus master on, as the probe
+ * leaves them, and Interrupt Disable as the driver sets it. */
+static uint16_t pci_command;
+#define INTX_OFF() ((pci_command & PCI_CMD_INTERRUPT_DIS) != 0)
+
+uint16_t pci_read_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
+{
+    (void)bus;
+    (void)device;
+    (void)function;
+    return offset == PCI_COMMAND ? pci_command : 0;
+}
+
+void pci_write_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset,
+                        uint16_t value)
+{
+    (void)bus;
+    (void)device;
+    (void)function;
+    if (offset == PCI_COMMAND)
+        pci_command = value;
+}
 static int nomsi; /* rach2.ath9k_nomsi on the boot line */
 
 int kcmdline_has(const char *flag)
@@ -352,6 +375,7 @@ static void setup(int msi)
     msi_refused = 0;
     msi_handler = 0;
     msi_disables = 0;
+    pci_command = PCI_CMD_MEMORY_SPACE | PCI_CMD_BUS_MASTER;
 
     ath9k_model_init(&model, chip, chip->revs[0].mac_rev);
     model.hooks.dma = dma_map;
@@ -459,7 +483,7 @@ static void test_rx(void)
     unsigned len, n;
 
     setup(1);
-    CHECK(msi_handler != 0 && ah.mac.msi && ah.bus.vector == 0x60);
+    CHECK(msi_handler != 0 && ah.mac.msi && ah.bus.vector == 0x60 && !INTX_OFF());
     CHECK(model.rx[0].count == ATH9K_RX_HP_DEPTH && model.rx[1].count == ATH9K_RX_LP_DEPTH);
     CHECK(ath9k_model_peek(&model, AR_DATABUF_SIZE) == ATH9K_RX_BUF_LEN - 48);
     CHECK(!(ath9k_model_peek(&model, AR_DIAG_SW) & (AR_DIAG_RX_DIS | AR_DIAG_RX_ABORT)));
@@ -762,6 +786,7 @@ static void test_keys(void)
 
     setup(0);
     CHECK(msi_handler == 0 && !ah.mac.msi && ah.bus.vector == 0);
+    CHECK(pci_command == (PCI_CMD_MEMORY_SPACE | PCI_CMD_BUS_MASTER | PCI_CMD_INTERRUPT_DIS));
     CHECK(ath9k_model_peek(&model, AR_PCU_MISC) & AR_PCU_MIC_NEW_LOC_ENA);
     CHECK(ath9k_model_peek(&model, AR_STA_ID1) & AR_STA_ID1_CRPT_MIC_ENABLE);
     CHECK(MS(ath9k_model_peek(&model, AR_AES_MUTE_MASK1), AR_AES_MUTE_MASK1_FC_MGMT) == 0xc7ff);
@@ -1004,15 +1029,16 @@ static void test_recover(void)
         ath9k_tick(&ah);
         for (i = 0; i < 999; i++)
             interrupt();
-        CHECK(ah.stats.spurious == spurious + 999 && ah.mac.msi);
+        CHECK(ah.stats.spurious == spurious + 999 && ah.mac.msi && !INTX_OFF());
         ath9k_tick(&ah);
         ath9k_model_raise(&model, AR_ISR_BMISS);
         interrupt();
         CHECK(ah.stats.beacon_miss == 3 && ah.mac.empty == 0);
         for (i = 0; i < 1000; i++)
             interrupt();
-        CHECK(!ah.mac.msi && msi_disables == 1);
+        CHECK(!ah.mac.msi && msi_disables == 1 && INTX_OFF());
         ah.mac.msi = 1;
+        pci_command &= (uint16_t)~PCI_CMD_INTERRUPT_DIS;
         ath9k_mac_intr_enable(&ah);
 
         /* BURST_MAX messages between two ticks, each with a cause, as a
@@ -1024,9 +1050,10 @@ static void test_recover(void)
         }
         CHECK(ah.mac.msi);
         interrupt();
-        CHECK(!ah.mac.msi && msi_disables == 2);
+        CHECK(!ah.mac.msi && msi_disables == 2 && INTX_OFF());
         CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_ENABLE);
         ah.mac.msi = 1;
+        pci_command &= (uint16_t)~PCI_CMD_INTERRUPT_DIS;
         ath9k_mac_intr_enable(&ah);
         ath9k_tick(&ah);
     }
@@ -1060,8 +1087,9 @@ static void test_recover(void)
     /* The checks stop with the radio. */
     ath9k_recover_stop(&ah);
     CHECK(queued[0] == 0 && queued[1] == 0 && !ah.recover.running);
+    CHECK(!INTX_OFF());
     ath9k_intr_detach(&ah);
-    CHECK(vector_freed == 1 && !ah.mac.msi);
+    CHECK(vector_freed == 1 && !ah.mac.msi && INTX_OFF());
     CHECK(model.overruns == 0 && model.dma_faults == 0 && model.unmapped == 0);
 }
 
@@ -1089,7 +1117,9 @@ static void test_attach(void)
     setup(1);
     msi_refused = 1;
     ath9k_intr_detach(&ah);
+    pci_command &= (uint16_t)~PCI_CMD_INTERRUPT_DIS;
     CHECK(ath9k_intr_attach(&ah) == 0 && !ah.mac.msi && ah.bus.vector == 0 && msi_handler == 0);
+    CHECK(INTX_OFF());
     len = beacon(f, 50);
     CHECK(receive(1, f, len, 0x1b, 5, 0) == 0);
     ath9k_tick(&ah);
@@ -1105,8 +1135,10 @@ static void test_attach(void)
 
     /* rach2.ath9k_nomsi leaves the card polled. */
     ath9k_intr_detach(&ah);
+    pci_command &= (uint16_t)~PCI_CMD_INTERRUPT_DIS;
     nomsi = 1;
     CHECK(ath9k_intr_attach(&ah) == 0 && !ah.mac.msi && ah.bus.vector == 0 && msi_handler == 0);
+    CHECK(INTX_OFF());
     nomsi = 0;
 }
 
