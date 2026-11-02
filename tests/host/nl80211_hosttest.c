@@ -77,6 +77,14 @@ int net_admin(void)
     return privileged;
 }
 
+static int foreign; /* the caller is in a network namespace of its own */
+
+/** Whether the caller is in the first network namespace. */
+int net_ns_seen(void)
+{
+    return !foreign;
+}
+
 /** Wakes are not needed: the wait below runs the worker itself. */
 void wq_wake_all(wait_queue_t *wq)
 {
@@ -937,6 +945,84 @@ static void interfaces(void)
     CHECK(rq_send() == -EOPNOTSUPP);
 }
 
+/** Check that the nests of a scan event say SSID ssid and every enabled
+ * channel, 2412 to 2472 MHz, as a scan that names none covers. */
+static void check_all_channels(const char *ssid)
+{
+    const struct nlattr *t[15];
+    unsigned i;
+
+    parse_nest(tb[NL80211_ATTR_SCAN_SSIDS], t, 3);
+    CHECK(has_bytes(t[0], ssid, slen(ssid)) && t[1] == 0);
+    parse_nest(tb[NL80211_ATTR_SCAN_FREQUENCIES], t, 14);
+    for (i = 0; i < 13; ++i) {
+        CHECK(u32_of(t[i]) == 2412 + 5 * i);
+    }
+    CHECK(t[13] == 0);
+}
+
+/** Send DEL_KEY of group key 2 on wlan0 and return its outcome. */
+static int del_group_key(void)
+{
+    unsigned nest;
+
+    rq_begin(NL80211_CMD_DEL_KEY, 0);
+    rq_u32(NL80211_ATTR_IFINDEX, 2);
+    nest = rq_nest(NL80211_ATTR_KEY);
+    rq_u8(NL80211_KEY_IDX, 2);
+    rq_end(nest);
+    return rq_send();
+}
+
+/** An administrator of a user and network namespace of its own, which
+ * passes net_admin, finds no radio by any name, lists none, and cannot
+ * change the machine's station; the same requests reach it from the first
+ * namespace. */
+static void namespaces(void)
+{
+    foreign = 1;
+    n_calls = 0;
+    rq_begin(NL80211_CMD_GET_INTERFACE, 0);
+    rq_u32(NL80211_ATTR_IFINDEX, 2);
+    CHECK(rq_send() == -ENODEV);
+    rq_begin(NL80211_CMD_GET_INTERFACE, 0);
+    rq_u64(NL80211_ATTR_WDEV, 1);
+    CHECK(rq_send() == -ENODEV);
+    rq_begin(NL80211_CMD_GET_INTERFACE, 1);
+    CHECK(rq_send() == 0 && n_replies == 1 && get16(replies[0].data + 4) == NLMSG_DONE);
+    rq_begin(NL80211_CMD_GET_WIPHY, 0);
+    rq_u32(NL80211_ATTR_WIPHY, 0);
+    CHECK(rq_send() == -ENODEV);
+    rq_begin(NL80211_CMD_GET_WIPHY, 1);
+    rq_flag(NL80211_ATTR_SPLIT_WIPHY_DUMP);
+    CHECK(rq_send() == 0 && n_replies == 1 && get16(replies[0].data + 4) == NLMSG_DONE);
+    rq_begin(NL80211_CMD_GET_WIPHY, 1);
+    rq_u32(NL80211_ATTR_WIPHY, 0);
+    CHECK(rq_send() == -ENODEV);
+    rq_begin(NL80211_CMD_GET_SCAN, 1);
+    rq_u32(NL80211_ATTR_IFINDEX, 2);
+    CHECK(rq_send() == -ENODEV);
+    rq_begin(NL80211_CMD_GET_STATION, 1);
+    rq_u32(NL80211_ATTR_IFINDEX, 2);
+    CHECK(rq_send() == -ENODEV);
+    rq_begin(NL80211_CMD_DISCONNECT, 0);
+    rq_u32(NL80211_ATTR_IFINDEX, 2);
+    CHECK(rq_send() == -ENODEV);
+    rq_begin(NL80211_CMD_TRIGGER_SCAN, 0);
+    rq_u32(NL80211_ATTR_IFINDEX, 2);
+    CHECK(rq_send() == -ENODEV);
+    CHECK(del_group_key() == -ENODEV);
+    CHECK(n_calls == 0);
+
+    foreign = 0;
+    CHECK(del_group_key() == 0 && n_calls == 1 && last.kind == CALL_DEL_KEY);
+    rq_begin(NL80211_CMD_DISCONNECT, 0);
+    rq_u32(NL80211_ATTR_IFINDEX, 2);
+    CHECK(rq_send() == -ENOTCONN);
+    rq_begin(NL80211_CMD_GET_INTERFACE, 1);
+    CHECK(rq_send() == 0 && n_replies == 2);
+}
+
 /** Check that the nests of a scan event say SSID "" or "lab" and the
  * frequencies 2412 and 2437. */
 static void check_scan_request(const char *ssid)
@@ -1646,7 +1732,7 @@ static void connect_row(void)
     hear(ap3, "other", 6, -20);
     scan_ev(WLAN_EVENT_SCAN_DONE, cookie);
     CHECK(find_event(GROUP_SCAN, NL80211_CMD_NEW_SCAN_RESULTS) != 0);
-    check_scan_request("lab");
+    check_all_channels("lab");
     CHECK(wlan_work_run_due(now) == 1);
     CHECK(last.kind == CALL_AUTH && same(last.auth.bssid, ap1, 6));
     CHECK(last.auth.algorithm == WLAN_AUTH_OPEN && last.auth.frequency == 2437);
@@ -2089,6 +2175,7 @@ int main(void)
     wiphy_split();
     wiphy_whole();
     interfaces();
+    namespaces();
     scan();
     join_wpa2();
     leave_and_timeouts();
