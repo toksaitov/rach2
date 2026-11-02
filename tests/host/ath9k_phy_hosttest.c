@@ -9,7 +9,8 @@
  * host-deps: rach2/sys/network/driver/ath9k/calib.c
  * host-deps: rach2/sys/network/driver/ath9k/ani.c
  * host-deps: rach2/sys/network/wireless/work.c
- * host-deps: rach2/sys/cmdline.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/cmdline.c
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
  */
 #include "ath9k_model.h"

@@ -16,20 +16,31 @@
  * tick as `rach2.ath9k_nomsi` leaves it.
  *
  * host-deps: tests/host/ath9k_model.c rach2/sys/network/driver/ath9k/hw.c
- * host-deps: rach2/sys/network/driver/ath9k/eeprom.c rach2/sys/network/driver/ath9k/chips.c
- * host-deps: rach2/sys/network/driver/ath9k/io.c rach2/sys/network/driver/ath9k/phy.c
- * host-deps: rach2/sys/network/driver/ath9k/calib.c rach2/sys/network/driver/ath9k/ani.c
- * host-deps: rach2/sys/network/driver/ath9k/mac.c rach2/sys/network/driver/ath9k/recv.c
- * host-deps: rach2/sys/network/driver/ath9k/xmit.c rach2/sys/network/driver/ath9k/key.c
- * host-deps: rach2/sys/network/driver/ath9k/intr.c rach2/sys/network/driver/ath9k/recover.c
- * host-deps: rach2/sys/network/driver/ath9k/antenna.c rach2/sys/network/driver/ath9k/power.c
+ * host-deps: rach2/sys/network/driver/ath9k/eeprom.c
+ * host-deps: rach2/sys/network/driver/ath9k/chips.c
+ * host-deps: rach2/sys/network/driver/ath9k/io.c
+ * host-deps: rach2/sys/network/driver/ath9k/phy.c
+ * host-deps: rach2/sys/network/driver/ath9k/calib.c
+ * host-deps: rach2/sys/network/driver/ath9k/ani.c
+ * host-deps: rach2/sys/network/driver/ath9k/mac.c
+ * host-deps: rach2/sys/network/driver/ath9k/recv.c
+ * host-deps: rach2/sys/network/driver/ath9k/xmit.c
+ * host-deps: rach2/sys/network/driver/ath9k/key.c
+ * host-deps: rach2/sys/network/driver/ath9k/intr.c
+ * host-deps: rach2/sys/network/driver/ath9k/recover.c
+ * host-deps: rach2/sys/network/driver/ath9k/antenna.c
+ * host-deps: rach2/sys/network/driver/ath9k/power.c
  * host-deps: rach2/sys/network/driver/ath9k/ampdu.c
  * host-deps: rach2/sys/network/wireless/tx.c rach2/sys/network/wireless/rx.c
- * host-deps: rach2/sys/network/wireless/key.c rach2/sys/network/wireless/agg_rx.c
- * host-deps: rach2/sys/network/wireless/rate.c rach2/sys/network/wireless/elems.c
+ * host-deps: rach2/sys/network/wireless/key.c
+ * host-deps: rach2/sys/network/wireless/agg_rx.c
+ * host-deps: rach2/sys/network/wireless/rate.c
+ * host-deps: rach2/sys/network/wireless/elems.c
  * host-deps: rach2/sys/network/wireless/rc_minstrel.c
- * host-deps: rach2/sys/network/wireless/crypto/aes.c rach2/sys/network/wireless/crypto/ccmp.c
- * host-deps: rach2/sys/network/wireless/crypto/bip.c rach2/sys/network/wireless/crypto/tkip.c
+ * host-deps: rach2/sys/network/wireless/crypto/aes.c
+ * host-deps: rach2/sys/network/wireless/crypto/ccmp.c
+ * host-deps: rach2/sys/network/wireless/crypto/bip.c
+ * host-deps: rach2/sys/network/wireless/crypto/tkip.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  *
@@ -582,8 +593,9 @@ static int rx_deaf;
  * low (rfSilent 0x2d), and the machine's reads it unblocked. */
 static int radio_switch_on = 1;
 
-/** Answer AR_INTR_SYNC_CAUSE and the radio switch's GPIO; grant the radio bus while it is asked
- * for, and turn the peak detector's output at PEAK_DAC, as the hardware does. */
+/** Answer AR_INTR_SYNC_CAUSE and the radio switch's GPIO; grant the radio bus
+ * while it is asked for, and turn the peak detector's output at PEAK_DAC, as
+ * the hardware does. */
 static int chip_read(struct ath9k_model *m, uint32_t reg, uint32_t *value)
 {
     awake_check(m, reg);

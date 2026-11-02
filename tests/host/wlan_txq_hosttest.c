@@ -167,7 +167,7 @@ void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
     (void)len;
 }
 
-/* --- The stub radio: a ring of RING frames, completed when the test says. --- */
+/* --- The stub radio: a ring of RING frames, which the test completes. --- */
 
 static struct wlan_radio radio;
 static struct wlan wlan;

@@ -23,7 +23,8 @@ static struct wlan_minstrel state;
 static struct wlan_bss peer;
 static uint8_t frame[1200];
 
-/** Reset a complete 2.4 GHz station with all twelve legacy rates and MCS 0..7. */
+/** Reset a complete 2.4 GHz station with all twelve legacy rates and MCS
+ * 0..7. */
 static void setup(void)
 {
     static const uint16_t rates[12] = {10, 20, 55, 110, 60, 90, 120, 180, 240, 360, 480, 540};
@@ -66,7 +67,8 @@ static unsigned speed(const struct wlan_tx_rate *rate)
     return radio.band.rates[rate->index % 12];
 }
 
-/** Require a compact, distinct, bounded retry series and cleared unused slots. */
+/** Require a compact, distinct, bounded retry series and cleared unused
+ * slots. */
 static void select_rates(struct wlan_tx_rate *rates)
 {
     unsigned i, j, n = 0, count = 0;
@@ -91,7 +93,8 @@ static void select_rates(struct wlan_tx_rate *rates)
     CHECK(count <= 8);
 }
 
-/** Replay one recorded completion 32 times, independently of the selected chain. */
+/** Replay one recorded completion 32 times, independently of the selected
+ * chain. */
 static void replay(const struct wlan_tx_status *status)
 {
     unsigned i;
@@ -100,7 +103,8 @@ static void replay(const struct wlan_tx_status *status)
         radio.rate_ops->status(&radio, status);
 }
 
-/** Recorded ACKs climb from MCS 0 to 7; failed high series then fall to 6 Mbit/s. */
+/** Recorded ACKs climb from MCS 0 to 7; failed high series then fall to
+ * 6 Mbit/s. */
 static void recorded(void)
 {
     static const struct wlan_tx_status clean[] = {
@@ -139,7 +143,8 @@ static void recorded(void)
     CHECK(state.rates[12 + 7].probability < 10);
 }
 
-/** A link model returns actual attempts, stopping precisely at the first ACK. */
+/** A link model returns actual attempts, stopping precisely at the first
+ * ACK. */
 static void complete(const struct wlan_tx_rate *rates, unsigned ceiling, int only_fast)
 {
     struct wlan_tx_status status;
@@ -164,7 +169,8 @@ static void complete(const struct wlan_tx_rate *rates, unsigned ceiling, int onl
     radio.rate_ops->status(&radio, &status);
 }
 
-/** Exercise exploration, degradation, recovery and nonmonotonic rate success. */
+/** Exercise exploration, degradation, recovery and nonmonotonic rate
+ * success. */
 static void changing_link(void)
 {
     struct wlan_tx_rate rates[WLAN_TX_RATE_SERIES];
