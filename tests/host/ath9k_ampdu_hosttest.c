@@ -687,55 +687,38 @@ static void test_option(void)
     CHECK(ath9k_ampdu_action(&ah, WLAN_AMPDU_RX_START, ap, 0, 0, 64) == -EOPNOTSUPP);
 }
 
-/* Aggregates: their descriptors, the BlockAck read back, a hole sent
- * again before the new frames, and one status for rate control each. */
-static void test_aggregate(void)
+/* The descriptors of an aggregate of eight 1000-byte frames whose first
+ * has sequence number SEQ, sent after a lone frame that took SINGLE_DUR. */
+static void check_eight(struct ar9003_txc **dc, unsigned seq, unsigned single_dur)
+{
+    unsigned i;
+    uint32_t sum;
+
+    /* 1038 bytes each with the FCS, a delimiter before each and two bytes
+     * of padding after all but the last. */
+    CHECK(MS(dc[0]->ctl17, AR_AggrLen) == 8 * (4 + 1038) + 7 * 2);
+    for (i = 0; i < 8; i++) {
+        CHECK((dc[i]->ctl12 & AR_IsAggr) && !!(dc[i]->ctl12 & AR_MoreAggr) == (i + 1 < 8));
+        CHECK((dc[i]->ctl11 & AR_FrameLen) == 1038 && MS(dc[i]->ctl17, AR_PadDelim) == 0);
+        CHECK(seq_of(dc[i]) == ((seq + i) & 0xfff));
+        CHECK(MS(dc[i]->ctl14, AR_XmitRate0) == 0x87 && MS(dc[i]->ctl14, AR_XmitRate2) == 0x83);
+        CHECK(MS(dc[i]->ctl13, AR_XmitDataTries3) == 0 && MS(dc[i]->ctl14, AR_XmitRate3) == 0);
+        CHECK(MS(dc[i]->ctl15, AR_PacketDur0) > 8 * single_dur / 2);
+        sum = dc[i]->info + dc[i]->link + dc[i]->data0 + dc[i]->ctl3;
+        CHECK((dc[i]->ctl10 & AR_TxPtrChkSum) == (((sum & 0xffff) + (sum >> 16)) & 0xffff));
+    }
+    CHECK(dc[7]->link == 0 && MS(dc[7]->ctl17, AR_AggrLen) == 0);
+}
+
+/* The rest of test_aggregate's ten frames, the first of which, sequence
+ * number S0 and cookie COOKIE0, is acknowledged and the next eight are on
+ * the air as one aggregate behind the second. */
+static void ack_with_hole(unsigned s0, uint64_t cookie0)
 {
     struct ar9003_txc *dc[40];
     struct wlan_tx_status st;
-    uint64_t cookie0;
-    unsigned n, i, s0, al, single_dur;
-    uint32_t sum;
     const uint8_t *f;
-
-    setup();
-    establish(64);
-    cookie0 = WLAN_DATA_COOKIE | WLAN_DATA_COOKIE_DATA | (d->next_cookie + 1);
-
-    /* Ten frames: two go alone, in their window, and eight wait. */
-    for (i = 0; i < 10; i++)
-        CHECK(send(0, 1000, 0) == 0);
-    CHECK(model.tx[1].count == 2 && ah.tx.q[WLAN_AC_BE].count == 10);
-    CHECK(chain_of(1, 0, dc, 40) == 1);
-    s0 = seq_of(dc[0]);
-    CHECK(!(dc[0]->ctl12 & AR_IsAggr) && dc[0]->link == 0);
-    CHECK(MS(dc[0]->ctl13, AR_XmitDataTries3) == 2 && MS(dc[0]->ctl14, AR_XmitRate3) == 0x1b);
-    single_dur = MS(dc[0]->ctl15, AR_PacketDur0);
-    CHECK(ah.ampdu.tid[0].seq_start == s0 && ah.ampdu.tid[0].out == 3);
-
-    /* The first acknowledged: the eight go as one aggregate. */
-    (void)finish_ok(1);
-    CHECK(reported(cookie0, &st) == 1 && st.flags == WLAN_TX_ACKED);
-    CHECK(model.tx[1].count == 2 && ah.ampdu.aggregates == 1 && ah.ampdu.subframes == 8);
-    n = chain_of(1, 1, dc, 40);
-    CHECK(n == 8);
-    if (n == 8) {
-        /* 1038 bytes each with the FCS, a delimiter before each and two
-         * bytes of padding after all but the last. */
-        al = 8 * (4 + 1038) + 7 * 2;
-        CHECK(MS(dc[0]->ctl17, AR_AggrLen) == al);
-        for (i = 0; i < n; i++) {
-            CHECK((dc[i]->ctl12 & AR_IsAggr) && !!(dc[i]->ctl12 & AR_MoreAggr) == (i + 1 < n));
-            CHECK((dc[i]->ctl11 & AR_FrameLen) == 1038 && MS(dc[i]->ctl17, AR_PadDelim) == 0);
-            CHECK(seq_of(dc[i]) == ((s0 + 2 + i) & 0xfff));
-            CHECK(MS(dc[i]->ctl14, AR_XmitRate0) == 0x87 && MS(dc[i]->ctl14, AR_XmitRate2) == 0x83);
-            CHECK(MS(dc[i]->ctl13, AR_XmitDataTries3) == 0 && MS(dc[i]->ctl14, AR_XmitRate3) == 0);
-            CHECK(MS(dc[i]->ctl15, AR_PacketDur0) > 8 * single_dur / 2);
-            sum = dc[i]->info + dc[i]->link + dc[i]->data0 + dc[i]->ctl3;
-            CHECK((dc[i]->ctl10 & AR_TxPtrChkSum) == (((sum & 0xffff) + (sum >> 16)) & 0xffff));
-        }
-        CHECK(dc[7]->link == 0 && MS(dc[7]->ctl17, AR_AggrLen) == 0);
-    }
+    unsigned i;
 
     /* The second alone, then the aggregate's BlockAck with the fourth
      * missing: seven are done, one stays with its Retry bit set and goes
@@ -758,6 +741,42 @@ static void test_aggregate(void)
         CHECK(reported(cookie0 + i, 0) == 1);
     CHECK(ah.ampdu.tid[0].out == 0 && ah.ampdu.tid[0].seq_start == ((s0 + 10) & 0xfff));
     CHECK(counters.tx_failed == 0 && ah.tx.q[WLAN_AC_BE].count == 0 && model.tx[1].count == 0);
+}
+
+/* Aggregates: their descriptors, the BlockAck read back, a hole sent
+ * again before the new frames, and one status for rate control each. */
+static void test_aggregate(void)
+{
+    struct ar9003_txc *dc[40];
+    struct wlan_tx_status st;
+    uint64_t cookie0;
+    unsigned n, i, s0, single_dur;
+
+    setup();
+    establish(64);
+    cookie0 = WLAN_DATA_COOKIE | WLAN_DATA_COOKIE_DATA | (d->next_cookie + 1);
+
+    /* Ten frames: two go alone, in their window, and eight wait. */
+    for (i = 0; i < 10; i++)
+        CHECK(send(0, 1000, 0) == 0);
+    CHECK(model.tx[1].count == 2 && ah.tx.q[WLAN_AC_BE].count == 10);
+    CHECK(chain_of(1, 0, dc, 40) == 1);
+    s0 = seq_of(dc[0]);
+    CHECK(!(dc[0]->ctl12 & AR_IsAggr) && dc[0]->link == 0);
+    CHECK(MS(dc[0]->ctl13, AR_XmitDataTries3) == 2 && MS(dc[0]->ctl14, AR_XmitRate3) == 0x1b);
+    single_dur = MS(dc[0]->ctl15, AR_PacketDur0);
+    CHECK(ah.ampdu.tid[0].seq_start == s0 && ah.ampdu.tid[0].out == 3);
+
+    /* The first acknowledged: the eight go as one aggregate. */
+    (void)finish_ok(1);
+    CHECK(reported(cookie0, &st) == 1 && st.flags == WLAN_TX_ACKED);
+    CHECK(model.tx[1].count == 2 && ah.ampdu.aggregates == 1 && ah.ampdu.subframes == 8);
+    n = chain_of(1, 1, dc, 40);
+    CHECK(n == 8);
+    if (n == 8)
+        check_eight(dc, s0 + 2, single_dur);
+
+    ack_with_hole(s0, cookie0);
 
     /* Short frames: delimiters up to the chip's 256 bytes. */
     for (i = 0; i < 4; i++)

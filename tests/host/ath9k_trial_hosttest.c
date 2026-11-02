@@ -1560,6 +1560,34 @@ static void clean_traffic(unsigned ms, const char *step)
     model_clean(step);
 }
 
+/** Fill `bss` with the AP of the trial as its beacons describe it. */
+static void ap_bss(void)
+{
+    /* SSID, rates, HT Capabilities (MCS 0 to 7, A-MPDUs of 64 KiB
+     * spaced 4 us), HT Operation on channel 4, and WMM. */
+    static const uint8_t ies[] = {
+        /* SSID */
+        0, 7, 'T', 'D', 'A', '-', 'N', 'E', 'T',
+        /* Supported Rates, 1 to 11 basic, and Extended Supported Rates */
+        1, 8, 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24, 50, 4, 0x30, 0x48, 0x60, 0x6c,
+        /* HT Capabilities */
+        45, 26, 0x2c, 0x01, 0x17, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+        /* HT Operation */
+        61, 22, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        /* WMM Parameter */
+        0xdd, 24, 0x00, 0x50, 0xf2, 0x02, 0x01, 0x01, 0x00, 0x00, 0x03, 0xa4, 0x00, 0x00, 0x27,
+        0xa4, 0x00, 0x00, 0x42, 0x43, 0x5e, 0x00, 0x62, 0x32, 0x2f, 0x00};
+
+    k_memset(&bss, 0, sizeof(bss));
+    k_memcpy(bss.bssid, ap_mac, 6);
+    bss.frequency = AP_FREQ;
+    bss.beacon_interval = 100;
+    bss.capability = WLAN_CAPABILITY_ESS | WLAN_CAPABILITY_PRIVACY;
+    k_memcpy(bss.ies, ies, sizeof(ies));
+    bss.ies_len = sizeof(ies);
+}
+
 /** Task 10's path on the trial boot, after the scan and its reset. */
 static void connect_and_soak(void)
 {
@@ -1567,31 +1595,7 @@ static void connect_and_soak(void)
     int slot;
 
     wlan_data_init(&data, &the_wlan, registered, &counters, station_deliver, station_event);
-    k_memset(&bss, 0, sizeof(bss));
-    k_memcpy(bss.bssid, ap_mac, 6);
-    bss.frequency = AP_FREQ;
-    bss.beacon_interval = 100;
-    bss.capability = WLAN_CAPABILITY_ESS | WLAN_CAPABILITY_PRIVACY;
-    {
-        /* SSID, rates, HT Capabilities (MCS 0 to 7, A-MPDUs of 64 KiB
-         * spaced 4 us), HT Operation on channel 4, and WMM. */
-        static const uint8_t ies[] = {
-            /* SSID */
-            0, 7, 'T', 'D', 'A', '-', 'N', 'E', 'T',
-            /* Supported Rates, 1 to 11 basic, and Extended Supported Rates */
-            1, 8, 0x82, 0x84, 0x8b, 0x96, 0x0c, 0x12, 0x18, 0x24, 50, 4, 0x30, 0x48, 0x60, 0x6c,
-            /* HT Capabilities */
-            45, 26, 0x2c, 0x01, 0x17, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0,
-            /* HT Operation */
-            61, 22, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            /* WMM Parameter */
-            0xdd, 24, 0x00, 0x50, 0xf2, 0x02, 0x01, 0x01, 0x00, 0x00, 0x03, 0xa4, 0x00, 0x00, 0x27,
-            0xa4, 0x00, 0x00, 0x42, 0x43, 0x5e, 0x00, 0x62, 0x32, 0x2f, 0x00};
-
-        k_memcpy(bss.ies, ies, sizeof(ies));
-        bss.ies_len = sizeof(ies);
-    }
+    ap_bss();
     station_on = 1;
     join();
 
@@ -1685,11 +1689,53 @@ static void connect_and_soak(void)
 /* The trial.                                                          */
 /* ------------------------------------------------------------------ */
 
-/** The trial, once; returns the failures, at most 255. */
-static int trial(void)
+/** The scan of the trial boot, then a transmit queue that stops and the
+ * reset that recovers it, with the radio started on channel 1. */
+static void scan_and_hang(void)
 {
     const struct wlan_channel *ch;
     unsigned i, before;
+    uint64_t start;
+
+    /* A scan: each channel for 50 ms with a probe request, as scan.c
+     * does, then back home to channel 1. */
+    for (i = 0; i < 13; i++) {
+        ch = &card.radio.band.channels[i];
+        start = model.usec;
+        CHECK(registered->ops->config(registered, ch, WLAN_FILTER_OTHER_BSS) == 0);
+        waited_since(start, "a channel change");
+        CHECK(card.phy.channel.frequency == ch->frequency);
+        CHECK(probe_request() == 0);
+        run_for(110);
+    }
+    CHECK(registered->ops->config(registered, &card.radio.band.channels[0], 0) == 0);
+    run_for(1000);
+    CHECK(tx_statuses == 13);
+    CHECK(tx_failed == 0);
+    CHECK(logged("ath9k: reset") == 0);
+    model_clean("the scan");
+
+    /* A queue that stops sending: the hang check finds it and resets the
+     * chip, and the next frame goes out. */
+    model.stuck_tx_dma = 1;
+    before = tx_statuses;
+    CHECK(probe_request() == 0);
+    run_for(3000);
+    CHECK(logged("ath9k: reset: ") >= 1);
+    CHECK(card.stats.resets[ATH9K_RESET_TX_HANG] == 1);
+    CHECK(tx_statuses == before + 1 && tx_failed == 1);
+    model.stuck_tx_dma = 0;
+    CHECK(probe_request() == 0);
+    run_for(1000);
+    CHECK(tx_statuses == before + 2 && tx_failed == 1);
+    CHECK(model.rxe);
+    model_clean("the recovery");
+}
+
+/** The trial, once; returns the failures, at most 255. */
+static int trial(void)
+{
+    unsigned before;
     uint64_t start;
 
     lenovo_model(1);
@@ -1735,39 +1781,7 @@ static int trial(void)
     CHECK(logged("ath9k: reset") == 0);
     model_clean("the start");
 
-    /* A scan: each channel for 50 ms with a probe request, as scan.c
-     * does, then back home to channel 1. */
-    for (i = 0; i < 13; i++) {
-        ch = &card.radio.band.channels[i];
-        start = model.usec;
-        CHECK(registered->ops->config(registered, ch, WLAN_FILTER_OTHER_BSS) == 0);
-        waited_since(start, "a channel change");
-        CHECK(card.phy.channel.frequency == ch->frequency);
-        CHECK(probe_request() == 0);
-        run_for(110);
-    }
-    CHECK(registered->ops->config(registered, &card.radio.band.channels[0], 0) == 0);
-    run_for(1000);
-    CHECK(tx_statuses == 13);
-    CHECK(tx_failed == 0);
-    CHECK(logged("ath9k: reset") == 0);
-    model_clean("the scan");
-
-    /* A queue that stops sending: the hang check finds it and resets the
-     * chip, and the next frame goes out. */
-    model.stuck_tx_dma = 1;
-    before = tx_statuses;
-    CHECK(probe_request() == 0);
-    run_for(3000);
-    CHECK(logged("ath9k: reset: ") >= 1);
-    CHECK(card.stats.resets[ATH9K_RESET_TX_HANG] == 1);
-    CHECK(tx_statuses == before + 1 && tx_failed == 1);
-    model.stuck_tx_dma = 0;
-    CHECK(probe_request() == 0);
-    run_for(1000);
-    CHECK(tx_statuses == before + 2 && tx_failed == 1);
-    CHECK(model.rxe);
-    model_clean("the recovery");
+    scan_and_hang();
 
     /* Task 10's: the join, traffic, a reset under load, the AP's restart. */
     connect_and_soak();

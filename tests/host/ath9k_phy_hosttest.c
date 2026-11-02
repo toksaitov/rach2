@@ -702,6 +702,8 @@ static void card_running(void)
     ath9k_cal_start(&ah);
 }
 
+/** The periodic work: the IQ sample and its correction, the thermometer,
+ * the work held while interrupts are off, and the restart. */
 static void test_work(void)
 {
     uint64_t t;
@@ -752,6 +754,13 @@ static void test_work(void)
     CHECK(ah.cal.done && ah.cal.iq_valid);
     ath9k_cal_stop(&ah);
     CHECK(wlan_work_next_due() == 0);
+}
+
+/** The periodic work's refusals: a coefficient at a bound, a sample still
+ * running, and a noise floor load the chip does not take. */
+static void test_work_refused(void)
+{
+    uint64_t t;
 
     /* A coefficient at its bound: nothing is written, not even the enable
      * (6f37ff96d3bd). */
@@ -975,6 +984,7 @@ int main(void)
     test_cal_init();
     test_nf();
     test_work();
+    test_work_refused();
     test_ani();
     test_channel_change();
     if (fails) {
