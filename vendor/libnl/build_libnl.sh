@@ -51,6 +51,7 @@ echo "libnl: extracting into $WORK"
 rm -rf "$SRC" "$STAGE"
 mkdir -p "$WORK"
 tar xzf "$TARBALL" -C "$WORK"
+# shellcheck disable=SC2016 # $1 is the stub's own argument
 printf '#!/bin/sh\n[ "$1" = --atleast-pkgconfig-version ]\n' > "$WORK/pkg-config"
 chmod +x "$WORK/pkg-config"
 
