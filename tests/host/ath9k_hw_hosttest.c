@@ -1004,7 +1004,8 @@ static void test_radio(void)
     CHECK(ops->get_tsf(radio, &tsf) == 0 && tsf == 0x123456789ull);
     {
         static const char *const misc[] = {
-            "tx", "key_set", "key_clear", "mac_set_bssid", "mac_set_bssid", "ampdu_action", NULL};
+            "tx",        "key_set",      "key_clear", "mac_set_bssid", "ampdu_sta", "mac_set_bssid",
+            "ampdu_sta", "ampdu_action", NULL};
         CHECK(calls_are(misc));
     }
 
