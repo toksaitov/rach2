@@ -1,6 +1,6 @@
 # The Lenovo's facts
 
-What the Lenovo G50-70 reported on 2026-11-02, from 03:32 to 04:31 UTC+6, about its Wi-Fi card, the QCA9565 at 02:00.0: the card's configuration space, its interrupt route, its link power states, the DMA remapping hardware, and the `VPC2004` device and the embedded controller's Wi-Fi bits that the airplane key works through. It then gives Linux's view of the card from one Alpine boot, and the hang that boot left at 04:08, and closes with Rach2's own driver on the card on two trial boots from 07:23 to 07:40: its boot line, its start, two scans and a forced reset.
+What the Lenovo G50-70 reported on 2026-11-02, from 03:32 to 04:31 UTC+6, about its Wi-Fi card, the QCA9565 at 02:00.0: the card's configuration space, its interrupt route, its link power states, the DMA remapping hardware, and the `VPC2004` device and the embedded controller's Wi-Fi bits that the airplane key works through. It then gives Linux's view of the card from one Alpine boot, and the hang that boot left at 04:08, and closes with Rach2's own driver on the card on two trial boots from 07:23 to 07:40: its boot line, its start, two scans and a forced reset. A third trial, from 08:42 to 10:48, joined the owner's network for a transfer and a two-hour soak.
 
 ## How it was read
 
@@ -211,6 +211,92 @@ The second trial, from 07:37 UTC+6, booted kernel `5b503978...eb72` (11b2c9de4, 
 ### The release back
 
 The release's kernel was copied from the fallback slot through the FAT, armed with `bootctl kernel`, booted (`/etc/rach2/release` names 2dd8dd1b), committed and copied to the fallback slot. Through the FAT, both `/boot/kernel` and `/boot/fallback` then read `8b9611b26d79114725d65955e2ff2fbc4a28dce16dca531530348a8da99aecd7` over the release's 2,198,480 bytes, zero after them, and `cmp` finds them identical; `bootctl status` gives `saved_entry: candidate`, `next_entry: empty` and `booted: candidate`.
+
+## Traffic and soak
+
+Task 10's trial, from 08:42 to 10:48 UTC+6: Rach2's driver joined the owner's network, TDA-NET, and carried traffic to the Mac's Wi-Fi, 192.168.0.204, for two hours. It booted kernel `86293bcf` (59d3bcde1, x86_64, 2,697,488 bytes) through `bootctl kernel`, silent, with `mixer vol 1`; both slots held the release before it, read through the FAT. On the trial boot `bootctl status` gave `saved_entry: fallback`, `next_entry: empty` and `booted: candidate`. Static `wpa_supplicant`, `wpa_cli` and `iw` from this tree (musl, x86_64) ran from `/dev/shm`, and the network's passphrase was there only for the run, in a file of mode 600 that was never printed.
+
+### The join
+
+* `ip link set wlan0 up` and a scan found TDA-NET at 60:a4:b7:a4:eb:63, now on 2437 MHz, channel 6, at -19 dBm. It offers RSN with CCMP and PSK alone, so the join is WPA2-Personal; WPA3 needs an AP that offers SAE.
+* `wpa_supplicant -B -D nl80211 -i wlan0 -c /dev/shm/home.conf` reached `wpa_state=COMPLETED` within 1 s: SME authentication, association, then `WPA: Key negotiation completed with 60:a4:b7:a4:eb:63 [PTK=CCMP GTK=CCMP]`. `iw dev wlan0 link` gave 2437 MHz at -26 dBm, and the kernel log gained only wlan0's IPv6 address.
+
+### DHCP and the routes
+
+SSH from the Mac comes from 192.168.0.100 on its cable to the Lenovo's eth0, 192.168.0.106, on the same /24, so wlan0 must not take a second route to it. `udhcpc -i wlan0 -s /dev/shm/dhcp.sh` got 192.168.0.105 from 192.168.0.1, with this script:
+
+```sh
+# dhcp.sh: udhcpc's script for the trial: the address on wlan0 alone, no
+# default route and no resolver, so that SSH and the release's routes stay
+# on eth0.
+case "$1" in
+deconfig) ip addr flush dev "$interface" ;;
+bound|renew)
+    ip addr flush dev "$interface"
+    ip addr add "$ip/32" dev "$interface"
+    echo "$ip" > /dev/shm/wlan_ip ;;
+esac
+exit 0
+```
+
+Rach2 refuses a /32: `ip addr add 192.168.0.105/32` answers `Invalid argument`, since `netconf.c` takes no all-ones mask. wlan0 got 192.168.0.105/30 by hand instead, whose 192.168.0.104/30 holds no host the trial talks to, and a host route to the Mac:
+
+```
+# ip route
+192.168.0.0/24 dev eth0 proto kernel scope link src 192.168.0.106
+default via 192.168.0.1 dev eth0
+192.168.0.104/30 dev wlan0 proto kernel scope link src 192.168.0.105
+192.168.0.204 dev wlan0 proto static scope link
+```
+
+`ip route get 192.168.0.100` gives `dev eth0`, and `ip route get 192.168.0.204` gives `dev wlan0`.
+
+### Ping, a transfer and the rate
+
+* `ping -c 20 192.168.0.204`: 20 sent, 20 received, rtt 16.5/77.8/135.3 ms, with the Mac's radio in power save.
+* 100 MiB of `/dev/urandom` went to `nc -l 192.168.0.204 5001` on the Mac over wlan0 in 38.6 s, 21.7 Mbit/s. Both ends' SHA-256 is d3c670152e8d692464c5cbfa68f1605f237b3613b232e82e67e545e5b7ba091a.
+* `iw dev wlan0 station dump` right after gave `tx bitrate: 65.0 MBit/s`, MCS 7, and `rx bitrate: 1.0 MBit/s`, the rate of the last frame the AP sent, which a group frame or a null frame at 1 Mbit/s can be. tx failed 0, beacon loss 0, signal -45 dBm.
+
+### The soak
+
+From 08:45:35 to 10:45:37, `soak.sh 7200 192.168.0.204` sent 50 MiB transfers to the Mac in a loop, pinged it once a second and logged a line of counters every 300 s:
+
+```sh
+# soak.sh SECONDS PEER: transfers to PEER:5001 in a loop and a ping a
+# second, with a sample every 300 s, for SECONDS; output in /dev/shm/soak.
+end=$(( $(cut -d. -f1 /proc/uptime) + $1 ))
+peer=$2
+ping -i 1 -w "$1" "$peer" > /dev/shm/soak.ping 2>&1 &
+(while [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ]; do
+    dd if=/dev/zero bs=65536 count=800 2>/dev/null | nc -w 30 "$peer" 5001
+    echo "xfer $(date +%H:%M:%S) rc=$?"
+    sleep 2
+done) > /dev/shm/soak.xfer 2>&1 &
+while [ "$(cut -d. -f1 /proc/uptime)" -lt "$end" ]; do
+    sh /dev/shm/sample.sh
+    sleep 300
+done > /dev/shm/soak.samples 2>&1
+sh /dev/shm/sample.sh >> /dev/shm/soak.samples
+wait
+```
+
+`sample.sh` reads wlan0's line of `/proc/net/dev`, the station dump's rates, retries, failures, signal and beacon loss, the vector's count in `/proc/interrupts`, the `ath9k: reset` lines in `/dev/bootlog` and `wpa_cli status`'s `wpa_state`. The last of its 25 lines:
+
+```
+10:45:37 dev[ 381421502 6710427 0 0 0 0 0 0 2424569885 17266429 0 62988 0 0 0 0]  tx retries: 228326; tx failed: 0; beacon loss: 0; rx drop misc: 286; signal: -47 dBm; tx bitrate: 65.0 MBit/s; rx bitrate: 1.0 MBit/s; irq[52: 5357003 MSI ath9k] resets=0 wpa_state=COMPLETED
+```
+
+* 435 transfers, every one rc 0: 21.2 GiB, about 25 Mbit/s. The two after them got rc 1, because the Mac's listener had stopped at the end of its own two hours.
+* `ping`: 7,192 sent, 7,192 received, rtt 2.1/23.9/1042.9 ms.
+* 17,266,429 frames out and 6,710,427 in; tx retries 228,326, tx failed 0, beacon loss 0; signal -42 to -48 dBm; tx bitrate 65.0 MBit/s in 23 samples and 58.5 in two; 5,357,003 messages on vector 52.
+* No `ath9k: reset` line all trial, so there was no reset to recover, and `wpa_state=COMPLETED` in every sample.
+* 62,988 datagrams, 0.4% of what went out, were refused with `-ENOBUFS` by the driver's full ring of 64 and dropped by `data.c`'s drain; TCP sent them again. The byte counters wrapped five times: every interface's counters are 32-bit (`driver/netdev.h`).
+
+The link's return after the AP's restart needs the owner to restart the router, and moved to the sitting, #2275.
+
+### The release back
+
+`wpa_supplicant` was stopped and `home.conf`, with the supplicant's other files, deleted from `/dev/shm`; `ls /dev/shm/home.conf` gave `No such file or directory` before the release booted. The release's kernel was then copied from the fallback slot through the FAT, armed, booted at 10:48 (`/etc/rach2/release` names 2dd8dd1b), committed and copied to the fallback slot. Through the FAT, both `/boot/kernel` and `/boot/fallback` read `8b9611b26d79114725d65955e2ff2fbc4a28dce16dca531530348a8da99aecd7`, `cmp` finds them identical, and `bootctl status` gives `saved_entry: candidate`, `next_entry: empty` and `booted: candidate`.
 
 ## The 32-bit build under UEFI
 
