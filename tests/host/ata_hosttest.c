@@ -781,7 +781,7 @@ static void ten_seconds_while_asleep(void)
 {
     int i;
 
-    for (i = 0; i < 1000; i++) {
+    for (i = 0; i < (int)MS_TO_TICKS(10000); i++) {
         ata_tick();
     }
 }
@@ -791,7 +791,7 @@ static void thirty_seconds_while_asleep(void)
 {
     int i;
 
-    for (i = 0; i < 3001; i++) {
+    for (i = 0; i <= (int)MS_TO_TICKS(30000); i++) {
         ata_tick();
     }
 }
