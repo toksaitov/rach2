@@ -127,6 +127,7 @@ for f in Makefile tests/registry tests/Makefile tests/system/suites.mk krffs/Mak
     ish/sources.mk term/sources.mk utils/Makefile utils/programs.mk ports/doom/Makefile tools/etude/sources.mk \
     tests/cases/host/scripts.mk tests/cases/host/family.mk tests/system/fakeapi/native.mk \
     tests/native/native.mk tests/native/sources.mk \
+    tests/system/wifi/wifi.mk tests/system/wifi/hwsimrelay.mk \
     $(find rach2/sys -name sources.mk); do
     mkdir -p "$C/$(dirname "$f")"
     cp "$f" "$C/$f"
