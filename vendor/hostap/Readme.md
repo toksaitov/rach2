@@ -45,7 +45,7 @@ Put the new release's two tarballs here after checking their signatures, change 
 
 ## Limits
 
-The programs need generic netlink with nl80211, packet sockets of protocol 0x888E for EAPOL and the wireless interface from the kernel ([dev-log/69-wifi](../../dev-log/69-wifi/plan.md)); until those are merged, the programs start and print their version but find no radio.
+wpa_supplicant can do on Rach2 only what the kernel's nl80211 offers; the [wireless Readme](../../rach2/sys/network/wireless/Readme.md#limits) lists what it refuses, such as WEP, FT and the connection-quality monitor. hostapd does not run on Rach2, whose nl80211 has no access-point mode.
 
 ## Tests
 

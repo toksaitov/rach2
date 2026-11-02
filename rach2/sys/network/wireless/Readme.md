@@ -145,7 +145,7 @@ The data path follows Linux's `net/mac80211/tx.c`, `rx.c`, `wpa.c`, `key.c` and 
 
 `agg_rx.c` answers an ADDBA request for TIDs 0 to 7 with immediate BlockAck, a window of the AP's size up to 64 and the AP's timeout echoed, protected when the request was; delayed BlockAck, a TID of 8 or more, or a station without QoS is declined with status 37. The radio learns the session through `ampdu_action`. The buffer holds MPDUs by sequence number modulo 64 and hands them on in order: a frame before the window is a duplicate, one past it moves the window and hands on what it passes, and a BlockAckReq moves the window to its starting number. A frame that waited 100 ms past a hole goes on with the frames before it, as mac80211's `HT_RX_REORDER_BUF_TIMEOUT` does. The worker refuses to queue a record from its own callback, so the timeout and both drains have two work records each.
 
-`rate.c` gives a frame the radio's `rate_ops` when it has them, and otherwise the basic table: the BSS's basic rates, fastest first, two attempts each, the last and slowest four. EAPOL and management frames take the slowest basic rate alone. Completions go to `rate_ops` with the attempts made; milestone 70 puts its rate control behind that interface.
+`rate.c` gives a frame the radio's `rate_ops` when it has them, and otherwise the basic table: the BSS's basic rates, fastest first, two attempts each, the last and slowest four. EAPOL and management frames take the slowest basic rate alone. Completions go to `rate_ops` with the attempts made, for a driver's own rate control to learn from; no radio has one yet, so every frame takes the basic table.
 
 ### Cryptography
 

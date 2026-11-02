@@ -36,7 +36,7 @@ Put the new release here after checking its signature, change `VERSION` and `TAR
 
 ## Limits
 
-iw needs generic netlink with nl80211 from the kernel ([dev-log/69-wifi](../../dev-log/69-wifi/plan.md)); until that is merged, `iw --version` works and every other command reports that nl80211 is not found.
+A command of iw's that the kernel's nl80211 does not have fails with `Operation not supported`; the [wireless Readme](../../rach2/sys/network/wireless/Readme.md#limits) lists those it refuses, such as `REMAIN_ON_CHANNEL` and `SET_CQM`.
 
 ## Tests
 

@@ -151,7 +151,7 @@ static uint16_t tkip_s(uint16_t v)
     return (uint16_t)(tkip_sbox[v & 0xff] ^ (uint16_t)(hi >> 8 | hi << 8));
 }
 
-/** Phase 1: mix TK, TA and IV32 into TTAK in eight rounds. */
+/** TKIP's first phase: mix TK, TA and IV32 into TTAK in eight rounds. */
 void wlan_tkip_mix1(const uint8_t tk[16], const uint8_t ta[6], uint32_t iv32, uint16_t ttak[5])
 {
     unsigned i, j;
@@ -177,8 +177,9 @@ static uint16_t ror16(uint16_t x)
     return (uint16_t)(x >> 1 | x << 15);
 }
 
-/** Phase 2: mix TTAK, TK and IV16 into the RC4 key of one packet, whose
- * first three bytes are the WEP-style IV with its weak-key bit cleared. */
+/** TKIP's second phase: mix TTAK, TK and IV16 into the RC4 key of one
+ * packet, whose first three bytes are the WEP-style IV with its weak-key bit
+ * cleared. */
 void wlan_tkip_mix2(const uint8_t tk[16], const uint16_t ttak[5], uint16_t iv16, uint8_t rc4key[16])
 {
     uint16_t ppk[6];
