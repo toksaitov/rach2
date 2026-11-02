@@ -1041,6 +1041,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "wlan_txq",
+          "checks": "tests/host/wlan_txq_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "wsim",
           "checks": "tests/host/wsim_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
