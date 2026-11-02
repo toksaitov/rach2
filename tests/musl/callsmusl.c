@@ -1331,12 +1331,14 @@ static int reaped_ok(pid_t pid)
  * asleep with them in hand; a second child then reads the pipe to its end,
  * and once it has ended or is seen asleep the caller empties the socket. The
  * bytes the socket carries and those the reader got must be the pipe's,
- * each once, in order. Returns 0, or 1 after the failure is printed.
+ * each once, in order. Each child reports on a pipe of its own, since the
+ * reader can see the end of the pipe and report before the splicer returns.
+ * Returns 0, or 1 after the failure is printed.
  */
 static int spliced_once(void)
 {
     char data[SPLICED_SIZE], fill[4096], got[SPLICED_SIZE + 1];
-    int p[2], sv[2], res[2], spliced = -1, read_n = -1;
+    int p[2], sv[2], sres[2], rres[2], spliced = -1, read_n = -1;
     size_t filled = 0, left;
     ssize_t r;
     pid_t splicer, reader;
@@ -1347,7 +1349,8 @@ static int spliced_once(void)
         data[i] = pattern_byte(i);
     }
     memset(fill, '#', sizeof fill);
-    if (pipe(p) != 0 || pipe(res) != 0 || socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
+    if (pipe(p) != 0 || pipe(sres) != 0 || pipe(rres) != 0 ||
+        socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0 ||
         write(p[1], data, SPLICED_SIZE) != SPLICED_SIZE || fcntl(sv[0], F_SETFL, O_NONBLOCK) != 0) {
         return fail("a pipe and a socket pair to splice it into");
     }
@@ -1360,14 +1363,14 @@ static int spliced_once(void)
     }
     splicer = fork();
     if (splicer == 0) {
-        splice_child(p[0], sv[0], res[1]);
+        splice_child(p[0], sv[0], sres[1]);
     }
     if (splicer < 0 || !seen_asleep(splicer)) {
         return fail("the splice into a full socket did not sleep");
     }
     reader = fork();
     if (reader == 0) {
-        read_child(p[0], res[1]);
+        read_child(p[0], rres[1]);
     }
     if (reader < 0) {
         return fail("fork of the reader");
@@ -1382,20 +1385,23 @@ static int spliced_once(void)
     ok = reaped_ok(splicer) && reaped_ok(reader);
     close(sv[0]);
     close(p[0]);
-    close(res[1]);
-    if (!ok || read(res[0], &spliced, sizeof spliced) != (ssize_t)sizeof spliced ||
-        read(res[0], &read_n, sizeof read_n) != (ssize_t)sizeof read_n || spliced < 0 ||
+    close(sres[1]);
+    close(rres[1]);
+    if (!ok || read(sres[0], &spliced, sizeof spliced) != (ssize_t)sizeof spliced ||
+        read(rres[0], &read_n, sizeof read_n) != (ssize_t)sizeof read_n || spliced < 0 ||
         read_n < 0) {
         return fail("the splicer's and the reader's counts");
     }
-    ok = spliced + read_n == SPLICED_SIZE && read(res[0], got, (size_t)read_n) == (ssize_t)read_n &&
+    ok = spliced + read_n == SPLICED_SIZE &&
+         read(rres[0], got, (size_t)read_n) == (ssize_t)read_n &&
          memcmp(got, data + spliced, (size_t)read_n) == 0;
     for (left = (size_t)spliced; ok && left > 0; left -= (size_t)r) {
         r = read(sv[1], got, left);
         ok = r > 0 && memcmp(got, data + (spliced - (int)left), (size_t)r) == 0;
     }
     close(sv[1]);
-    close(res[0]);
+    close(sres[0]);
+    close(rres[0]);
     if (!ok) {
         char why[96];
 
