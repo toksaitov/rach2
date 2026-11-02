@@ -12,6 +12,8 @@
 #include "../lib/kint.h"
 #include "../lib/kstd.h"
 
+struct frame_map;
+
 /**
  * End of the kernel image in the physical address space. Both linkers that
  * build this kernel provide the symbol: `link.ld` assigns it for GNU ld, and
@@ -42,5 +44,15 @@ uintptr_t mem_reserve(size_t size, bool align);
 /** The same reservation as the kernel's address of it (`phys_to_virt`),
  * for a caller that fills a structure there; NULL on failure. */
 void *mem_reserve_ptr(size_t size, bool align);
+
+/**
+ * Raise the break to the lowest page-aligned place where `size`
+ * bytes lie in one usable range of `map` below HARD_MEMORY_LIMIT, so that
+ * the next reservation of that size does not land on memory the firmware
+ * keeps, such as the NVS ranges OVMF puts at 8 MiB. The break stays where
+ * it is when the map has no ranges or none holds the bytes. For a carving
+ * before the frame table exists, which `mem_reserve` cannot check.
+ */
+void mem_reserve_usable(const struct frame_map *map, size_t size);
 
 #endif

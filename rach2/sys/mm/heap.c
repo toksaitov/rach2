@@ -2,6 +2,7 @@
 
 #include "../arch/arch.h"
 #include "../klog.h"
+#include "frame.h"
 #include "heap.h"
 #include "paging.h"
 #include "../serial.h"
@@ -69,4 +70,17 @@ void *mem_reserve_ptr(size_t size, bool align)
     uintptr_t at = mem_reserve(size, align);
 
     return at ? phys_to_virt(at) : NULL;
+}
+
+void mem_reserve_usable(const struct frame_map *map, size_t size)
+{
+    uint64_t at;
+
+    if (map->top_frame == 0 || mem_reserved_ptr > HARD_MEMORY_LIMIT) {
+        return;
+    }
+    if (frame_map_first(map, size, mem_reserved_ptr, HARD_MEMORY_LIMIT, &at) == 0 &&
+        at > mem_reserved_ptr) {
+        mem_reserved_ptr = (uintptr_t)at;
+    }
 }

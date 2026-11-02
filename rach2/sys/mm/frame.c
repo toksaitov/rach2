@@ -296,3 +296,25 @@ int frame_map_place(const struct frame_map *m, uint64_t bytes, uint64_t floor, u
     }
     return -1;
 }
+
+int frame_map_first(const struct frame_map *m, uint64_t bytes, uint64_t floor, uint64_t limit,
+                    uint64_t *at)
+{
+    uint64_t span = (bytes + FRAME_PAGE_SIZE - 1) & ~(uint64_t)(FRAME_PAGE_SIZE - 1);
+    uint32_t i;
+
+    if (bytes == 0 || span < bytes) {
+        return -1;
+    }
+    for (i = 0; i < m->count; i++) {
+        uint64_t lo = m->usable[i].start > floor ? m->usable[i].start : floor;
+        uint64_t hi = m->usable[i].end < limit ? m->usable[i].end : limit;
+
+        lo = (lo + FRAME_PAGE_SIZE - 1) & ~(uint64_t)(FRAME_PAGE_SIZE - 1);
+        if (lo < hi && hi - lo >= span) {
+            *at = lo;
+            return 0;
+        }
+    }
+    return -1;
+}

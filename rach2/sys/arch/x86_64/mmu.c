@@ -263,6 +263,7 @@ void *mmu_frame_table(struct frame_map *map, size_t bytes)
     if (frame_map_place(map, bytes, HARD_MEMORY_LIMIT, &at) == 0) {
         return phys_to_virt(at);
     }
+    mem_reserve_usable(map, bytes);
     return mem_reserve_ptr(bytes, true);
 }
 

@@ -111,6 +111,16 @@ uint64_t frame_map_managed(const struct frame_map *m);
 int frame_map_place(const struct frame_map *m, uint64_t bytes, uint64_t floor, uint64_t *at);
 
 /**
+ * Find room for `bytes`, rounded up to whole frames, in one usable range
+ * at or above `floor` and below `limit`: the lowest page-aligned place that
+ * holds it, so that the boot allocator's break, which carves upward, moves
+ * past a hole in the map and no further. Sets `*at` and returns 0, or
+ * returns -1 when no range holds it. Nothing is reserved.
+ */
+int frame_map_first(const struct frame_map *m, uint64_t bytes, uint64_t floor, uint64_t limit,
+                    uint64_t *at);
+
+/**
  * The `index`-th entry of a memory map in the boot record's form, for the
  * boot's record of the map as the firmware gave it. Returns 1 with the
  * entry's fields, or 0 past the last entry or at a malformed one.

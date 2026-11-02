@@ -104,11 +104,12 @@ uint64_t mmu_phys_reach(void)
 
 /**
  * The frame table at the boot allocator's break, in the identity window,
- * where the kernel reaches it before paging is on.
+ * where the kernel reaches it before paging is on, moved past any range of
+ * the window the map does not offer.
  */
 void *mmu_frame_table(struct frame_map *map, size_t bytes)
 {
-    (void)map;
+    mem_reserve_usable(map, bytes);
     return mem_reserve_ptr(bytes, true);
 }
 

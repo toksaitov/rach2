@@ -18,8 +18,9 @@
  * with the reservations the boot makes on it; and QEMU's map at 72 GiB with
  * the 64 GiB reach of a processor without 1 GiB pages. The reservations are
  * replayed against each and the four numbers checked, and the frame table
- * is placed with `frame_map_place`. Exits with the count of failed checks, at
- * most 50.
+ * is placed with `frame_map_place`, and on i686 at the boot allocator's
+ * break with `frame_map_first`, past the NVS ranges OVMF puts at 8 MiB.
+ * Exits with the count of failed checks, at most 50.
  */
 
 #include "mm/frame.h"
@@ -588,6 +589,45 @@ static void place(void)
     CHECK(frame_map_place(&m, 0, MIB(32), &at) == -1);
 }
 
+/**
+ * The break's move on i686 (`mem_reserve_usable`): the lowest page-aligned
+ * place at or above the floor and below the limit, in one range, through
+ * the low end of QEMU's map under OVMF at 6 GiB, whose NVS ranges from
+ * 8 MiB to 9 MiB stopped a boot that carved its 2 MiB frame table at a
+ * break of 7 MiB.
+ */
+static void first(void)
+{
+    uint8_t map[8 * BOOT_MMAP_ENTRY];
+    struct frame_map m;
+    uint32_t n = 0;
+    uint64_t at = 0;
+    uint64_t table;
+
+    n += put_entry(map, n, 0, 0xA0000, MAP_USABLE);
+    n += put_entry(map, n, MIB(1), MIB(7), MAP_USABLE);
+    n += put_entry(map, n, MIB(8), 0x8000, MAP_NVS);
+    n += put_entry(map, n, 0x808000, 0x3000, MAP_USABLE);
+    n += put_entry(map, n, 0x80B000, 0x1000, MAP_NVS);
+    n += put_entry(map, n, 0x80C000, 0x5000, MAP_USABLE);
+    n += put_entry(map, n, 0x811000, 0xEF000, MAP_NVS);
+    n += put_entry(map, n, MIB(9), 0x7EE3B000 - MIB(9), MAP_USABLE);
+    CHECK(frame_map_build(&m, map, n, 0, REACH_I686) == 0);
+    table = m.top_frame * 4u;
+    CHECK(table == 0x7EE3Bu * 4u);
+    CHECK(frame_map_first(&m, table, MIB(7), FRAME_DIRECT_MAP_LIMIT, &at) == 0 && at == MIB(9));
+    CHECK(frame_map_first(&m, table, MIB(5), FRAME_DIRECT_MAP_LIMIT, &at) == 0 && at == MIB(5));
+    CHECK(frame_map_first(&m, table, MIB(5) + 1, FRAME_DIRECT_MAP_LIMIT, &at) == 0);
+    CHECK(at == MIB(5) + KIB(4));
+    CHECK(frame_map_first(&m, KIB(12), MIB(8), FRAME_DIRECT_MAP_LIMIT, &at) == 0 &&
+          at == 0x808000u);
+    CHECK(frame_map_first(&m, KIB(12) + 1, MIB(8), FRAME_DIRECT_MAP_LIMIT, &at) == 0 &&
+          at == 0x80C000u);
+    CHECK(frame_map_first(&m, MIB(55), MIB(7), FRAME_DIRECT_MAP_LIMIT, &at) == 0 && at == MIB(9));
+    CHECK(frame_map_first(&m, MIB(55) + 1, MIB(7), FRAME_DIRECT_MAP_LIMIT, &at) == -1);
+    CHECK(frame_map_first(&m, 0, MIB(7), FRAME_DIRECT_MAP_LIMIT, &at) == -1);
+}
+
 /** Run the rows; the count of failed checks, at most 50. */
 int main(void)
 {
@@ -601,5 +641,6 @@ int main(void)
     uefi();
     ranges_bound();
     place();
+    first();
     return (fails > 50) ? 50 : fails;
 }
