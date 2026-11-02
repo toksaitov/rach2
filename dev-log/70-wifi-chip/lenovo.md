@@ -198,3 +198,16 @@ ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys 17aa:4026
 * Clearing the ten `AR_DnQCUMASK` words (0x1000 to 0x1024) does hang it: a scan of the same channel left `AR_Q_TXE` at 0x8, a frame in QCU 3, the VO queue that probe requests take, for two minutes.
 * No reset came, because the hang check ran only once, a second after the start: it queued its own record again from inside its callback, which the worker refuses (11b2c9de4 fixes it).
 * A full scan's first retune then aborted TX, with its bounded waits, and reset the chip: `AR_Q_TXE` read 0, the masks 1 << n again, and the scan found 19 BSSes, TDA-NET among them. Messages stayed on throughout, 24,911 of them by 07:32, with no `polled` line.
+
+### A forced reset and a second scan
+
+The second trial, from 07:37 UTC+6, booted kernel `5b503978...eb72` (11b2c9de4, 2,662,384 bytes) under the same conditions, and `bootctl status` on it gave `saved_entry: fallback` and `next_entry: empty` again.
+
+* The start, a full scan (22 BSSes) and a scan of channel 1 ran as on the first trial, with the hang check now running each second; it found nothing in the 36 s before the masks were cleared.
+* At 07:38:12 the ten `AR_DnQCUMASK` words read 1 << n and were written 0, with `AR_Q_TXE` at 0. A scan of channel 1 then left a frame in QCU 3, and the log gave `<6>[76.685000] ath9k: reset: tx-hang: recovered`, the check's second look at the queue. After it `AR_Q_TXE` read 0 and the masks 1 << n, and no other reset followed.
+* At 07:38:32 a full scan returned 20 BSSes, 15 of them heard in the scan itself, TDA-NET among them at -57 dBm on channel 4.
+* At 07:38:57 `ip link set wlan0 down` returned 0, and no message came in the 3 s after it. The trial sent 3,583 messages in all, with no `polled` line.
+
+### The release back
+
+The release's kernel was copied from the fallback slot through the FAT, armed with `bootctl kernel`, booted (`/etc/rach2/release` names 2dd8dd1b), committed and copied to the fallback slot. Through the FAT, both `/boot/kernel` and `/boot/fallback` then read `8b9611b26d79114725d65955e2ff2fbc4a28dce16dca531530348a8da99aecd7` over the release's 2,198,480 bytes, zero after them, and `cmp` finds them identical; `bootctl status` gives `saved_entry: candidate`, `next_entry: empty` and `booted: candidate`.
