@@ -21,12 +21,14 @@
 int drive_channel(struct etude_case *c);
 
 /*
- * The longest line drive_send types: what the guest terminal's canonical line
- * holds before its newline (N_TTY_LINE_MAX less one, rach2/sys/tty/n_tty.h).
- * A line typed while a command still runs reaches the shell through that
- * line, not its line editor, and loses whatever is past this length.
+ * The longest line drive_send types: what both of the guest's readers of a
+ * typed line hold. The shell's line editor holds 1023 bytes and its NUL
+ * (CONFIG_FEATURE_EDITING_MAX_LEN in vendor/busybox/rach2.config); a line
+ * typed while a command still runs reaches the shell through the terminal's
+ * canonical line instead, which holds 4095 (N_TTY_LINE_MAX less one,
+ * rach2/sys/tty/n_tty.h). Either loses what is past its length.
  */
-#define DRIVE_LINE_MAX 255
+#define DRIVE_LINE_MAX 1023
 
 /*
  * One boot of a machine, driven at its console as a person types at it.

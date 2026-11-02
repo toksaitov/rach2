@@ -22,8 +22,8 @@
  * is typed only once the one before it has ended. */
 #define LINE_END "LINE_END"
 
-/* The longest line typed: the console's line discipline keeps 255 bytes of a
- * line (N_TTY_LINE_MAX in rach2/sys/tty/n_tty.h) and drops the rest. */
+/* The longest line typed, well below the 4095 bytes of a line the console's
+ * line discipline keeps (N_TTY_LINE_MAX in rach2/sys/tty/n_tty.h). */
 #define TYPED_MAX 240
 
 /* One attempt, its boot, and what the last line typed printed. */
