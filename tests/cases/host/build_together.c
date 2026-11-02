@@ -145,6 +145,8 @@ static int together_tree(struct fixture *f)
                            "ports/doom/Makefile",
                            "tools/etude/sources.mk",
                            "tests/system/suites.mk",
+                           "tests/system/wifi/wifi.mk",
+                           "tests/system/wifi/hwsimrelay.mk",
                            NULL};
     char target[4096];
     snprintf(target, sizeof(target), "%s", bp(f->work, "tree"));
