@@ -239,13 +239,26 @@ static unsigned pad4(unsigned len)
     return (4 - (len & 3)) & 3;
 }
 
+/** The chains of BlockAck sessions queue `q`'s FIFO holds. */
+static unsigned session_depth(const struct ath9k_txq *q)
+{
+    unsigned k, depth = 0;
+
+    for (k = 0; k < q->chains; k++)
+        depth += q->chain[(q->chain_head + k) % ATH9K_TX_FIFO_DEPTH].ba;
+    return depth;
+}
+
 /**
  * Choose the next push of queue `q`, as ath_tx_form_aggr does: a frame
- * outside any session goes alone; a frame of a session that must wait for
- * its window holds the queue back; otherwise the aggregate takes the frames
- * that follow it while they are of its session, start at an MCS, fit in
- * its window and its length limit, and number at most half the window.
- * Kept frames come first in the ring, so a retry goes before new frames.
+ * outside any session goes alone; a frame of a session waits, holding the
+ * queue back, while the FIFO holds ATH9K_AMPDU_DEPTH chains of sessions, so
+ * that the frames behind it gather into an aggregate, as ath_txq_schedule
+ * has them, or while its window has no room; otherwise the aggregate takes
+ * the frames that follow it while they are of its session, start at an
+ * MCS, fit in its window and its length limit, and number at most half
+ * the window. Kept frames come first in the ring, so a retry goes before
+ * new frames.
  */
 unsigned ath9k_ampdu_form(struct ath9k *ah, struct ath9k_txq *q, unsigned *aggr_len,
                           struct wlan_tx_rate rates[WLAN_TX_RATE_SERIES])
@@ -263,6 +276,8 @@ unsigned ath9k_ampdu_form(struct ath9k *ah, struct ath9k_txq *q, unsigned *aggr_
         s->ba = 0;
         return 1;
     }
+    if (session_depth(q) >= ATH9K_AMPDU_DEPTH)
+        return 0;
     in = admit(t, s);
     if (in <= 0)
         return in < 0 ? 1 : 0;

@@ -314,6 +314,7 @@ static void kick(struct ath9k *ah, struct ath9k_txq *q)
         }
         c->n = (uint8_t)n;
         c->aggr = n > 1;
+        c->ba = slot_at(q, q->queued)->ba;
         k_barrier();
         ath9k_mac_tx_push(ah, q->qnum, slot_at(q, q->queued)->desc_bus);
         q->chains++;

@@ -463,6 +463,10 @@ typedef char ar9300_eeprom_size_is_1088[sizeof(struct ar9300_eeprom) == 1088 ? 1
 #define ATH9K_BA_MAX_TRIES    30
 #define ATH9K_AMPDU_LIMIT_MAX 65535
 
+/* The chains of BlockAck sessions a queue's FIFO holds before the next
+ * frames of one wait to go as an aggregate (ATH_AGGR_MIN_QDEPTH). */
+#define ATH9K_AMPDU_DEPTH 2
+
 /* The DMA memory the driver asks for, a page at a time. */
 #define ATH9K_DMA_PAGE 4096
 
@@ -789,6 +793,7 @@ struct ath9k_tx_slot {
 struct ath9k_tx_chain {
     uint8_t n;
     uint8_t aggr; /* the slots went as one A-MPDU */
+    uint8_t ba;   /* they are of a BlockAck session */
     struct wlan_tx_rate rates[WLAN_TX_RATE_SERIES];
 };
 
