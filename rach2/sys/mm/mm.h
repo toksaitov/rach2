@@ -46,8 +46,10 @@ struct open_file;
 struct vfs_mount;
 struct vfs_ref;
 
-/* The words of an auxiliary vector an address space keeps. */
-#define MM_AUXV_WORDS 32
+/* The words of an auxiliary vector an address space keeps: two for each of
+ * the UIMAGE_AUXV entries an image is given (proc/uimage.h), which
+ * syscall_proc.c checks. */
+#define MM_AUXV_WORDS 34
 
 struct mm {
     uint32_t users;

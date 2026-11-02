@@ -1617,6 +1617,12 @@ static int32_t exec_interp(struct exec_state *s, uintptr_t *base)
     return 0;
 }
 
+/* The auxiliary vector an image is given fits the address space's copy of
+ * it, which exec_build and the boot's first program store whole. */
+typedef char
+    mm_auxv_holds_uimage[sizeof(((struct mm *)0)->auxv) == sizeof(((struct uimage *)0)->auxv) ? 1
+                                                                                              : -1];
+
 /**
  * Build the new image in `s`'s address space of its own while the caller's
  * still runs, as Linux's `load_elf_binary` builds one, in the layout
@@ -1693,7 +1699,7 @@ static int32_t exec_build(struct exec_state *s)
     s->mm->arg_end = s->args.env_start;
     s->mm->env_start = s->args.env_start;
     s->mm->env_end = s->args.env_end;
-    k_memcpy(s->mm->auxv, s->args.auxv, sizeof(s->args.auxv));
+    k_memcpy(s->mm->auxv, s->args.auxv, sizeof(s->mm->auxv));
     if (s->layout.interp[0] != '\0') {
         mm_set_interp(s->mm, s->layout.interp);
     }

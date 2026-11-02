@@ -1238,7 +1238,7 @@ static uintptr_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
         mm->arg_end = u.env_start;
         mm->env_start = u.env_start;
         mm->env_end = u.env_end;
-        k_memcpy(mm->auxv, u.auxv, sizeof(u.auxv));
+        k_memcpy(mm->auxv, u.auxv, sizeof(mm->auxv));
     }
     uimage_release(&u);
     return sp;
