@@ -2496,13 +2496,15 @@ static int procfs_gen_partitions(struct procfs_text *t)
  * drops are the ones the drivers note (`ethernet_note_rx_error`,
  * `ethernet_note_rx_drop`) and the frames `ethernet_rx` drops, and the
  * transmit drops are the frames a driver refused or `ethernet_tx` did not
- * give it. Seven more come from the card, through the driver's `counters`,
- * in the columns Linux fills from a card's own tallies: frames the card
- * missed add to the receive drops, alignment errors are the frame column,
- * multicasts their own, and on the transmit side errors, underruns (fifo),
- * collisions and the transmissions the card aborted (carrier). A card that
- * keeps no such counts leaves them zero. The two compressed columns and the
- * receive fifo are zero: nothing here has them.
+ * give it. They are 64 bits wide, copied inside `net_lock` (netdev.h) so
+ * that none is read half updated. Seven more come from the card, through
+ * the driver's `counters`, in the columns Linux fills from a card's own
+ * tallies: frames the card missed add to the receive drops, alignment errors
+ * are the frame column, multicasts their own, and on the transmit side
+ * errors, underruns (fifo), collisions and the transmissions the card
+ * aborted (carrier). A card that keeps no such counts leaves them zero. The
+ * two compressed columns and the receive fifo are zero: nothing here has
+ * them.
  */
 static int procfs_gen_netdev(struct procfs_text *t)
 {
@@ -2515,35 +2517,46 @@ static int procfs_gen_netdev(struct procfs_text *t)
     for (i = 0; i < netdev_seen_count(); i++) {
         const struct netdev *nd = netdev_at(i);
         struct netdev_counters card = {0, 0, 0, 0, 0, 0, 0};
+        uint64_t v[7]; /* the interface's counts, as netdev.h orders them */
+        uint32_t flags;
 
         if (nd->ops->counters && !nd->ops->counters(nd->dev, &card)) {
             card.rx_missed = card.rx_frame = card.rx_multicast = 0;
             card.tx_errors = card.tx_fifo = card.tx_collisions = 0;
             card.tx_carrier = 0;
         }
+        flags = net_lock();
+        v[0] = nd->rx_packets;
+        v[1] = nd->rx_bytes;
+        v[2] = nd->rx_errors;
+        v[3] = nd->rx_dropped;
+        v[4] = nd->tx_packets;
+        v[5] = nd->tx_bytes;
+        v[6] = nd->tx_dropped;
+        net_unlock(flags);
         ap_str(t, "  ");
         ap_str(t, nd->name);
         ap_str(t, ": ");
-        ap_u32(t, nd->rx_bytes);
+        ap_u64(t, v[1]);
         ap_ch(t, ' ');
-        ap_u32(t, nd->rx_packets);
+        ap_u64(t, v[0]);
         ap_ch(t, ' ');
-        ap_u32(t, nd->rx_errors);
+        ap_u64(t, v[2]);
         ap_ch(t, ' ');
-        ap_u32(t, nd->rx_dropped + card.rx_missed);
+        ap_u64(t, v[3] + card.rx_missed);
         /* fifo, frame, compressed, multicast */
         ap_str(t, " 0 ");
         ap_u32(t, card.rx_frame);
         ap_str(t, " 0 ");
         ap_u32(t, card.rx_multicast);
         ap_ch(t, ' ');
-        ap_u32(t, nd->tx_bytes);
+        ap_u64(t, v[5]);
         ap_ch(t, ' ');
-        ap_u32(t, nd->tx_packets);
+        ap_u64(t, v[4]);
         ap_ch(t, ' ');
         ap_u32(t, card.tx_errors);
         ap_ch(t, ' ');
-        ap_u32(t, nd->tx_dropped);
+        ap_u64(t, v[6]);
         /* fifo, colls, carrier, compressed */
         ap_ch(t, ' ');
         ap_u32(t, card.tx_fifo);
@@ -5001,7 +5014,8 @@ static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int at
     }
     known = netdev_link(nd, &link);
     if (node == SYSFS_NET_STATS) {
-        uint32_t v[10];
+        uint64_t v[10];
+        uint32_t flags = net_lock();
 
         v[0] = c.tx_collisions;
         v[1] = c.rx_multicast;
@@ -5013,7 +5027,8 @@ static int procfs_gen_netattr(struct procfs_text *t, int node, int index, int at
         v[7] = nd->tx_dropped;
         v[8] = c.tx_errors;
         v[9] = nd->tx_packets;
-        ap_u32(t, v[attr]);
+        net_unlock(flags);
+        ap_u64(t, v[attr]);
         ap_ch(t, '\n');
         return t->len;
     }

@@ -3,6 +3,7 @@
  * dispatch of received frames, and the MLME's calls into the data path. */
 #include "data.h"
 #include "wiphy.h"
+#include "../net.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
@@ -49,7 +50,10 @@ static void data_drain_tx(struct wlan_work *work)
         if (!d->connected || !wlan_port_allowed(d->wlan, protocol) ||
             wlan_encap(d->eth, len, d->bssid, 0, d->buf, sizeof(d->buf), &n) != 0 ||
             wlan_data_tx(d, d->buf, n, sizeof(d->buf), wlan_data_priority(d->eth, len)) != 0) {
+            uint32_t flags = net_lock(); /* an interface's count (netdev.h) */
+
             d->wlan->netdev.tx_dropped++;
+            net_unlock(flags);
             continue;
         }
     }

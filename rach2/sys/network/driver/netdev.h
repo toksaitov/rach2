@@ -253,15 +253,20 @@ struct netdev {
     uint32_t pending_ip;
     int mask_provisional;
 
-    /* The interface's counts, which wrap at 32 bits: ethernet.c keeps a
-     * card's, and the IP layer's loopback ring `lo`'s. */
-    uint32_t rx_packets;
-    uint32_t rx_bytes;
-    uint32_t rx_errors;
-    uint32_t rx_dropped;
-    uint32_t tx_packets;
-    uint32_t tx_bytes;
-    uint32_t tx_dropped;
+    /* The interface's counts, in 64 bits as Linux's `rtnl_link_stats64`,
+     * so that none wraps in practice: ethernet.c keeps a card's, and the IP
+     * layer's loopback ring `lo`'s. Each is changed with interrupts off, as
+     * net.h's rule has it. On i686 a 64-bit add is two instructions, so a
+     * reader that ran between them would see a torn value, half old and half
+     * new; Linux has `u64_stats_sync` for that. A reader here copies the
+     * counts inside `net_lock`, which no update can interrupt. */
+    uint64_t rx_packets;
+    uint64_t rx_bytes;
+    uint64_t rx_errors;
+    uint64_t rx_dropped;
+    uint64_t tx_packets;
+    uint64_t tx_bytes;
+    uint64_t tx_dropped;
 
     /* Whether the interface is up, `IFF_UP`, as the probe leaves it and an
      * administrator sets it. ethernet.c drops every frame received on an

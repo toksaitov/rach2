@@ -148,12 +148,13 @@ int wlan_rx_ethernet(struct wlan *wlan, const uint8_t *frame, unsigned len)
 
     if (!wlan || !frame || len < ETH_HDR_SIZE || len > ETH_HDR_SIZE + ETH_MTU)
         return -EINVAL;
+    flags = net_lock();
     if (!wlan->netdev.up || !wlan_port_allowed(wlan, type_at(frame + 12))) {
         wlan->counters.rx_dropped++;
         wlan->netdev.rx_dropped++;
+        net_unlock(flags);
         return -EACCES;
     }
-    flags = net_lock();
     ethernet_rx(&wlan->netdev, frame, (uint16_t)len);
     net_unlock(flags);
     return 0;

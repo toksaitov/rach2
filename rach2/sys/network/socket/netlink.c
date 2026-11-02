@@ -865,13 +865,14 @@ static uint8_t linkmode(const struct netdev *nd)
  * state, as an administrator left it; IFF_RUNNING, IFF_LOWER_UP and the
  * operational state up also need its card to report its link up
  * (`netdev_running`), as on Linux, where a link that is down has neither
- * flag. `lo` reports the operational state unknown. Its counters go in
- * Linux's `struct rtnl_link_stats`, 24 words of which this interface keeps
- * seven: the packets, bytes and drops each way, and the receive errors. They
- * go again in `struct rtnl_link_stats64`, 25 eight-byte words, which Linux
- * sends beside it and iproute2 reads first; without it iproute2 prints a
- * counter that only the second set has, the drops for other hosts, from
- * memory it never set.
+ * flag. `lo` reports the operational state unknown. Its counters, copied
+ * inside `net_lock` (netdev.h), go whole in Linux's `struct
+ * rtnl_link_stats64`, 25 eight-byte words, seven of which this interface
+ * keeps: the packets, bytes and drops each way, and the receive errors.
+ * iproute2 reads it first; without it iproute2 prints a counter that only
+ * that set has, the drops for other hosts, from memory it never set. They
+ * go again in `struct rtnl_link_stats`, 24 words of 32 bits, truncated to
+ * their low halves as Linux truncates them.
  */
 static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags)
 {
@@ -885,6 +886,10 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
                   (running && oper != IF_OPER_DORMANT ? IFF_RUNNING : 0);
     uint8_t stats[96];
     uint8_t stats64[200];
+    /* rx_packets, tx_packets, rx_bytes, tx_bytes, rx_errors, tx_errors,
+     * rx_dropped, tx_dropped: the first eight words of both sets. */
+    uint64_t v[8];
+    uint32_t lock;
     int i;
 
     put16(ifi + 2, nd->loopback ? NETDEV_LOOPBACK_TYPE : ARPHRD_ETHER);
@@ -896,19 +901,24 @@ static void link_msg(struct nl_build *b, const struct netdev *nd, uint16_t flags
     msg_attr32(msg, IFLA_MTU, nd->mtu);
     msg_attr(msg, IFLA_OPERSTATE, &oper, 1);
     msg_attr(msg, IFLA_LINKMODE, &mode, 1);
+    lock = net_lock();
+    v[0] = nd->rx_packets;
+    v[1] = nd->tx_packets;
+    v[2] = nd->rx_bytes;
+    v[3] = nd->tx_bytes;
+    v[4] = nd->rx_errors;
+    v[5] = 0;
+    v[6] = nd->rx_dropped;
+    v[7] = nd->tx_dropped;
+    net_unlock(lock);
     k_memset(stats, 0, sizeof(stats));
-    put32(stats + 0, nd->rx_packets);
-    put32(stats + 4, nd->tx_packets);
-    put32(stats + 8, nd->rx_bytes);
-    put32(stats + 12, nd->tx_bytes);
-    put32(stats + 16, nd->rx_errors);
-    put32(stats + 24, nd->rx_dropped);
-    put32(stats + 28, nd->tx_dropped);
-    msg_attr(msg, IFLA_STATS, stats, sizeof(stats));
     k_memset(stats64, 0, sizeof(stats64));
     for (i = 0; i < 8; i++) {
-        k_memcpy(stats64 + 8 * i, stats + 4 * i, 4); /* each low word; the high ones 0 */
+        put32(stats + 4 * i, (uint32_t)v[i]);
+        put32(stats64 + 8 * i, (uint32_t)v[i]);
+        put32(stats64 + 8 * i + 4, (uint32_t)(v[i] >> 32));
     }
+    msg_attr(msg, IFLA_STATS, stats, sizeof(stats));
     msg_attr(msg, IFLA_STATS64, stats64, sizeof(stats64));
     nl_append(b, msg);
 }

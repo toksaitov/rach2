@@ -19,6 +19,7 @@
  * host-deps: tests/host/compat/spinlock_host.c
  */
 #include "network/wireless/data.h"
+#include "network/net.h"
 #include "lib/kerrno.h"
 #include "lib/kstring.h"
 #include "mm/kheap.h"
@@ -54,6 +55,19 @@ static const uint8_t tkip_key[32] = {
     0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77, 0x78};
 static const uint8_t ipv4_snap[8] = {0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00, 0x08, 0x00};
 static const uint8_t eapol_snap[8] = {0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8e};
+
+/** The network lock, which data.c takes to count a dropped frame: nothing
+ * to exclude in a test of one thread. */
+uint32_t net_lock(void)
+{
+    return 0;
+}
+
+/** Release the network lock: nothing to restore. */
+void net_unlock(uint32_t flags)
+{
+    (void)flags;
+}
 
 /** Compare n bytes: 0 when they are equal. */
 static int cmp(const uint8_t *a, const uint8_t *b, unsigned n)
