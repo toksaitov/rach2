@@ -29,7 +29,7 @@
 #define VPCCMD_R_RF   0x23 /* the radio switch: 1 lets the radios run */
 #define VPCCMD_W_RF   0x24
 
-/* The bit of _CFG that says the machine has Wi-Fi (Linux's CFG_CAP_WIFI_BIT). */
+/* The bit of _CFG that says the machine has Wi-Fi (Linux CFG_CAP_WIFI_BIT). */
 #define CFG_CAP_WIFI 18
 
 /* The event bit after which the radio switch is read again. */

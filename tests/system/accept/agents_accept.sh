@@ -40,13 +40,13 @@
 # agent's credential source and gh's: a file, or for OpenCode the secrets of its
 # database's credential records, read in one transaction. After the sessions,
 # in which an agent may renew its own sign-in, it keeps each source's SHA-256,
-# reboots as root and requires each source unchanged, every version and program unchanged, `gh auth
-# status` to pass, and each agent to answer one request without its screen,
-# which only a program still signed in can do. Last it sends its log to the
-# machine, which counts there the strings of the credential sources the log has;
-# none may be in it. Only that count comes back. It removes ~/rach2-accept on
-# the machine at the end, and refuses to start when that directory exists
-# without the mark the script leaves in it.
+# reboots as root and requires each source unchanged, every version and
+# program unchanged, `gh auth status` to pass, and each agent to answer one
+# request without its screen, which only a program still signed in can do.
+# Last it sends its log to the machine, which counts there the strings of the
+# credential sources the log has; none may be in it. Only that count comes
+# back. It removes ~/rach2-accept on the machine at the end, and refuses to
+# start when that directory exists without the mark the script leaves in it.
 #
 # Each text the script reads from the machine, a screen, an answer or the
 # output of a step, passes first through a filter there that replaces each

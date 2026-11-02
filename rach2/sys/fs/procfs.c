@@ -130,8 +130,9 @@
 /* Inode namespace for /sys: a fixed directory by its node, with its
  * attribute files 256 apart above it; a PCI function's directory by its
  * key times four, with its uevent one more and its config three more, and
- * its link by its key in a range of its own; a USB device's directory by its key with the top bit
- * set, its uevent with the next bit too, and its link with that bit alone;
+ * its link by its key in a range of its own; a USB device's directory by
+ * its key with the top bit set, its uevent with the next bit too, and its
+ * link with that bit alone;
  * and an interface's, a disk node's and a processor's directory and files
  * each in a range of its own, by the key from bit 8 and the file in the low
  * byte. The keys are below 2^30 (synthfs.h). */

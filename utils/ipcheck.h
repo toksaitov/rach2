@@ -28,9 +28,9 @@ unsigned long ipcheck_mask(unsigned long address, unsigned long netmask);
  * and above, and must not be its subnet's network or broadcast address, which
  * a /31 and a /32 do not have. The netmask must be a run of ones from the top
  * bit; a zero netmask is checked as `ipcheck_mask` gives it, and the caller
- * must then apply that mask with the address. A nonzero gateway must pass the same
- * first-octet test and be a host of the address's subnet other than the
- * address; a zero gateway is not checked.
+ * must then apply that mask with the address. A nonzero gateway must pass
+ * the same first-octet test and be a host of the address's subnet other than
+ * the address; a zero gateway is not checked.
  *
  * Returns 0 when the configuration can be applied, or -1 with the reason in
  * `err`, cut to `errlen - 1` bytes and terminated, as a phrase the caller

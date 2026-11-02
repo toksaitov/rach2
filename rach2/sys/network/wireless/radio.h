@@ -119,8 +119,8 @@ struct wlan_radio_ops {
      * accepts nothing and must produce no status. -ENOBUFS says the ring is
      * full, only while it holds frames whose statuses will come: the
      * station keeps the frame and tries again after the next status. Never
-     * call back inline.
-     * HW_KEY frames include IV/MIC space; hardware fills it, never strips it. */
+     * call back inline. HW_KEY frames include IV/MIC space; hardware
+     * fills it, never strips it. */
     int (*tx)(struct wlan_radio *radio, const uint8_t *frame, unsigned len,
               const struct wlan_tx_info *info);
     /** Install (enable != 0) or remove a key; set *slot on install.
