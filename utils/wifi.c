@@ -1058,13 +1058,15 @@ static int ask(const char *prompt, char *buf, size_t size, int secret)
     int hide = secret && isatty(STDIN_FILENO) && tcgetattr(STDIN_FILENO, &old) == 0;
     char *got;
 
-    fputs(prompt, stdout);
-    fflush(stdout);
+    /* Echo goes off before the prompt shows, since TCSAFLUSH discards what
+     * was typed before it: an answer typed once the prompt is seen is kept. */
     if (hide) {
         quiet = old;
         quiet.c_lflag &= ~(tcflag_t)ECHO;
         (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &quiet);
     }
+    fputs(prompt, stdout);
+    fflush(stdout);
     got = fgets(buf, (int)size, stdin);
     if (hide) {
         (void)tcsetattr(STDIN_FILENO, TCSAFLUSH, &old);
