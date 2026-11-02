@@ -1370,9 +1370,12 @@ static int lenovo_rows(struct release *r)
                .record = r->tried, .accept = "pass", .machines = LENOVO, .native = "fail"});
     machine_line(r, "lenovo started ", id, sizeof(id));
     snprintf(last, sizeof(last), "failed tests: lenovo run %s: dirprobe.ext2", id);
+    /* Stopping the console's term for the run is the one write expected. */
     ok = check(r,
                f->status == 1 && last_is(record(r), last) && called(r, "^accept 192.168.0.106$") &&
-                   !called(r, "^(machine write|gh issue)"),
+                   count(flow_path(f, "calls"), "^machine write") ==
+                       count(flow_path(f, "calls"), "^machine write stop term$") &&
+                   !called(r, "^gh issue"),
                "native failure is recorded and keeps the trial uncommitted") &&
          ok;
     return ok;
