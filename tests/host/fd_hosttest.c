@@ -217,11 +217,13 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
-/** Check that a wake follows the description's release. */
+/** Check that a wake follows the description's release, once the rows of
+ * the description have one; a process freed before them wakes its exit
+ * waiters with none open. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
-    check(!reader->busy, "wake follows description release");
+    check(!reader || !reader->busy, "wake follows description release");
 }
 
 /**
@@ -343,7 +345,7 @@ static void close_process(process_t *p)
 static void process_allocations(void)
 {
     process_t *keeper = alloc_process();
-    int fail;
+    int fail, held = allocations;
     uint32_t forks = process_forks_since_boot();
 
     check(keeper != NULL, "initial process allocation");
@@ -357,14 +359,17 @@ static void process_allocations(void)
         check(proc_list == keeper && proc_tail == keeper && !keeper->next,
               "failed process is not published");
         check(process_forks_since_boot() == forks, "failed process is not counted");
-        check(allocations == 9, "failed process releases every allocation");
+        check(allocations == held, "failed process releases every allocation");
         if (p) {
             close_process(p);
             forks = process_forks_since_boot();
         }
     }
     close_process(keeper);
-    check(!proc_list && !proc_tail && !allocations, "process cleanup releases all storage");
+    /* The pid index lives as long as the kernel: the rows after this one
+     * count from it. */
+    check(!proc_list && !proc_tail && allocations == 1, "process cleanup releases all storage");
+    allocations = 0;
 }
 
 /** A thread allocation shares the records it keeps and makes no stdio.
