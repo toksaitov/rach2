@@ -2,20 +2,19 @@
  * inotifymusl: check inotify's events and errors as Linux reports them.
  *
  * A watch of a directory reports a file made, opened, written twice (one
- * IN_MODIFY, since the second merges with the first), closed, its mode
- * changed, read and closed again, moved away with a cookie that pairs its two
- * events, linked, unlinked, and a directory made and removed with IN_ISDIR. A
- * watch of the file itself reports its attribute change, its opens and
- * closes, the move of it, the changes of its links, and its removal, after
- * which the watch is gone with IN_IGNORED. A read too small for the next event is EINVAL, an
- * empty queue of a nonblocking instance is EAGAIN, FIONREAD gives the bytes a
- * read returns, and poll shows when an event is queued. A second watch of the
- * same file changes the first and returns its descriptor, with IN_MASK_CREATE
- * it fails with EEXIST, a one-shot watch is removed after its first event,
- * and inotify_rm_watch queues IN_IGNORED. inotify_init made with inline
- * assembly leaves the caller's EBX, which i386 code keeps its global offset
- * table in, as it was, and on x86-64 its RDI, where inotify_init1 takes its
- * flags.
+ * IN_MODIFY, since the second merges with the first), closed, its mode changed,
+ * read and closed again, moved away with a cookie that pairs its two events,
+ * linked, unlinked, and a directory made and removed with IN_ISDIR. A watch of
+ * the file itself reports its attribute change, its opens and closes, the move
+ * of it, the changes of its links, and its removal, after which the watch is
+ * gone with IN_IGNORED. A read too small for the next event is EINVAL, an empty
+ * queue of a nonblocking instance is EAGAIN, FIONREAD gives the bytes a read
+ * returns, and poll shows when an event is queued. A second watch of the same
+ * file changes the first and returns its descriptor, with IN_MASK_CREATE it
+ * fails with EEXIST, a one-shot watch is removed after its first event, and
+ * inotify_rm_watch queues IN_IGNORED. inotify_init made with inline assembly
+ * leaves the caller's EBX, which i386 code keeps its global offset table in, as
+ * it was, and on x86-64 its RDI, where inotify_init1 takes its flags.
  *
  * The directory watched is /dev/shm/inotifymusl, or the one the argument
  * `dir=PATH` names, which must be on a tmpfs, as a native run gives it under
