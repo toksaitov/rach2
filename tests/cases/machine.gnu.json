@@ -1062,7 +1062,7 @@
     },
     {
       "case_id": "machine.gnu.utillinux",
-      "behavior": "lsblk lists a disk; findmnt names / ext2 and `--verify` of /etc/fstab finds no errors; a lock whose holder says it holds it makes `flock -w 1` exit 1, and the freed lock is taken; prlimit NOFILE; ionice best-effort prio 5; a session as root on a terminal of the machine's own server, then last, the reboot record in utmp and `last -x reboot`; column -t; `script -e` exit 3; uuidgen form; dmesg; newgrp mode 4755 root; `unshare -r` as test gives uid 0; `unshare -pf --mount-proc` gives pid 1 and 3 processes; `unshare -u` changes only the inner hostname; `nsenter -t 1 -u` sees the outer one; lsns lists user.",
+      "behavior": "lsblk lists a disk; findmnt names / ext2 and `--verify` of /etc/fstab finds no errors and warns only that libblkid names the extra_isize volume ext4; a lock whose holder says it holds it makes `flock -w 1` exit 1, and the freed lock is taken; prlimit NOFILE; ionice best-effort prio 5; a session as root on a terminal of the machine's own server, then last, the reboot record in utmp and `last -x reboot`; column -t; `script -e` exit 3; uuidgen form; dmesg; newgrp mode 4755 root; `unshare -r` as test gives uid 0; `unshare -pf --mount-proc` gives pid 1 and 3 processes; `unshare -u` changes only the inner hostname; `nsenter -t 1 -u` sees the outer one; lsns lists user.",
       "units": ["gnu_rows.sh row_utillinux"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],

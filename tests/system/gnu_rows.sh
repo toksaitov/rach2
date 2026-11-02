@@ -547,12 +547,16 @@ row_procps() {
 # set-user-ID mode, and the namespaces unshare makes, nsenter enters and lsns
 # lists.
 row_utillinux() {
-    local pid line
+    local pid line verify
     local opts=(-i "$WORK/id" -o BatchMode=yes -o StrictHostKeyChecking=no -o LogLevel=ERROR
                 -o "UserKnownHostsFile=$WORK/known")
     has "lsblk" "$(lsblk -dno NAME,TYPE)" "disk"
     same "findmnt" "$(findmnt -no FSTYPE /)" "ext2"
-    has "findmnt --verify of /etc/fstab" "$(findmnt --verify 2>&1)" "Success, no errors or warnings detected"
+    # libblkid names ext4 an ext2 volume with extra_isize, as mkext2.sh
+    # makes every root, so the one warning is that /etc/fstab says ext2.
+    verify=$(findmnt --verify 2>&1)
+    has "findmnt --verify of /etc/fstab" "$verify" "0 parse errors, 0 errors, 1 warning"
+    has "findmnt --verify of /etc/fstab" "$verify" "[W] ext2 does not match with on-disk ext4"
     mkfifo "$WORK/held" "$WORK/release"
     # shellcheck disable=SC2016 # the dollar is the inner shell's
     flock "$WORK/lock" sh -c 'echo held; read -r _ < "$1"' sh "$WORK/release" > "$WORK/held" &
