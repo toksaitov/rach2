@@ -216,6 +216,35 @@ static void beacon_signal(struct ath9k *ah, const uint8_t *frame, unsigned len, 
 }
 
 /**
+ * Judge a frame by its status word `s11`, as ath9k_cmn_rx_accept does: a
+ * bad CRC, or a phy error other than an OFDM restart with a bad CRC after
+ * the delimiter, drops it; a failed decryption, which sets `*decrypt_error`,
+ * or a failed Michael MIC keeps it. Each is counted. Returns 0 to keep the
+ * frame, -1 to drop it.
+ */
+static int rx_accept(struct ath9k *ah, uint32_t s11, int *decrypt_error)
+{
+    if (s11 & AR_RxFrameOK)
+        return 0;
+    if (s11 & AR_CRCErr) {
+        ah->stats.rx_crc++;
+        return -1;
+    }
+    if ((s11 & AR_PHYErr) &&
+        !(MS(s11, AR_PHYErrCode) == PHYERR_OFDM_RESTART && (s11 & AR_PostDelimCRCErr))) {
+        ah->stats.rx_phy++;
+        return -1;
+    }
+    if (s11 & AR_DecryptCRCErr) {
+        ah->stats.rx_decrypt++;
+        *decrypt_error = 1;
+    } else if (s11 & AR_MichaelErr) {
+        ah->stats.rx_mic++;
+    }
+    return 0;
+}
+
+/**
  * Hand one completed buffer's frame to the station, as ath9k's
  * ath9k_cmn_rx_accept and ath9k_cmn_rx_skb_postprocess judge it: a frame
  * with a bad CRC or a phy error is dropped and counted; one the chip
@@ -243,23 +272,8 @@ static int deliver(struct ath9k *ah, uint8_t *buf, int hp)
         ah->stats.rx_dropped++;
         return 0;
     }
-    if (!(s11 & AR_RxFrameOK)) {
-        if (s11 & AR_CRCErr) {
-            ah->stats.rx_crc++;
-            return 0;
-        }
-        if ((s11 & AR_PHYErr) &&
-            !(MS(s11, AR_PHYErrCode) == PHYERR_OFDM_RESTART && (s11 & AR_PostDelimCRCErr))) {
-            ah->stats.rx_phy++;
-            return 0;
-        }
-        if (s11 & AR_DecryptCRCErr) {
-            ah->stats.rx_decrypt++;
-            decrypt_error = 1;
-        } else if (s11 & AR_MichaelErr) {
-            ah->stats.rx_mic++;
-        }
-    }
+    if (rx_accept(ah, s11, &decrypt_error) != 0)
+        return 0;
     if (len < FCS_LEN + 10 || len > ATH9K_RX_BUF_LEN - sizeof(*rxs)) {
         ah->stats.rx_dropped++;
         return 0;
