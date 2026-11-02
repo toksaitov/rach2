@@ -5,7 +5,8 @@
  * up`, interrupts by message and the timer tick while frames arrive, a
  * scan across channels 1 to 13 with a probe request on each, a transmit
  * queue that stops and the reset that recovers it, and `ip link set wlan0
- * down`.
+ * down`. It runs twice, in two processes: with the card's messages, and
+ * polled from the tick as `rach2.ath9k_nomsi` leaves it.
  *
  * host-deps: tests/host/ath9k_model.c rach2/sys/network/driver/ath9k/hw.c
  * host-deps: rach2/sys/network/driver/ath9k/eeprom.c rach2/sys/network/driver/ath9k/chips.c
@@ -50,6 +51,11 @@
 #include "network/wireless/wiphy.h"
 
 #include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 extern int printf(const char *format, ...);
 extern int vsnprintf(char *str, __SIZE_TYPE__ size, const char *format, va_list ap);
@@ -143,10 +149,12 @@ void krandom_bytes(void *buf, uint32_t n)
 }
 
 /** The boot line has no option: the trial boots the installed line. */
+/* The run without messages, as rach2.ath9k_nomsi asks. */
+static int polled;
+
 int kcmdline_has(const char *flag)
 {
-    (void)flag;
-    return 0;
+    return polled && strcmp(flag, "rach2.ath9k_nomsi") == 0;
 }
 
 /* Interrupts of the CPU: off between kirq_save and kirq_restore. */
@@ -732,7 +740,8 @@ static void model_clean(const char *step)
 /* The trial.                                                          */
 /* ------------------------------------------------------------------ */
 
-int main(void)
+/** The trial, once; returns the failures, at most 255. */
+static int trial(void)
 {
     const struct wlan_channel *ch;
     unsigned i, before;
@@ -828,9 +837,32 @@ int main(void)
     CHECK(messages == before);
     model_clean("the stop");
 
-    printf("ath9k_trial_hosttest: %u messages, %u frames, longest wait %lu us\n", messages,
-           rx_frames, (unsigned long)longest_wait);
+    printf("ath9k_trial_hosttest: %s: %u messages, %u frames, longest wait %lu us\n",
+           polled ? "polled" : "messages", messages, rx_frames, (unsigned long)longest_wait);
     if (failures)
         print_log();
     return failures > 255 ? 255 : (int)failures;
+}
+
+int main(void)
+{
+    pid_t pid;
+    int status, rc;
+
+    fflush(stdout);
+    pid = fork();
+    if (pid < 0) {
+        printf("ath9k_trial_hosttest: fork failed\n");
+        return 1;
+    }
+    if (pid == 0) {
+        polled = 1;
+        exit(trial());
+    }
+    rc = trial();
+    if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        printf("ath9k_trial_hosttest: polled: failed\n");
+        return rc ? rc : 1;
+    }
+    return rc;
 }

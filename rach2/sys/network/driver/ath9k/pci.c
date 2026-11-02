@@ -80,7 +80,9 @@ static const struct wlan_channel *start_channel(const struct ath9k *ah)
 /**
  * Put the chip on `chan` with receive running, as ath9k_start and the
  * reset of a channel change do: reset onto the channel, write back the
- * keys, set the filter, start receive and enable interrupts.
+ * keys, set the filter, start receive, arm the baseband watchdog, which
+ * the tables turn off and ath9k_hw_reset arms again, and enable
+ * interrupts.
  */
 static int bring_up(struct ath9k *ah, const struct wlan_channel *chan)
 {
@@ -93,6 +95,7 @@ static int bring_up(struct ath9k *ah, const struct wlan_channel *chan)
     rc = ath9k_rx_start(ah);
     if (rc != 0)
         return rc;
+    ath9k_recover_watchdog(ah);
     ath9k_mac_intr_enable(ah);
     return 0;
 }
@@ -115,6 +118,9 @@ static void radio_stop(struct wlan_radio *radio)
 
     if (!ah->bus.started)
         return;
+    /* Interrupts off first, so that no message or tick queues a reset
+     * after the checks are cancelled. */
+    ath9k_mac_intr_disable(ah);
     ah->bus.started = 0;
     ath9k_recover_stop(ah);
     ath9k_cal_stop(ah);
@@ -136,8 +142,11 @@ static int radio_start(struct wlan_radio *radio)
         return -EBUSY;
     /* ath9k_start wakes the chip and sets the link's power save before
      * its reset. */
-    if (ath9k_hw_set_power(ah, ATH9K_PM_AWAKE) == 0)
-        ath9k_hw_pcie_powersave(ah, 0);
+    if (ath9k_hw_set_power(ah, ATH9K_PM_AWAKE) != 0) {
+        klog(KLOG_ERR, "ath9k", "start: failed: the chip does not wake");
+        return -EIO;
+    }
+    ath9k_hw_pcie_powersave(ah, 0);
     rc = bring_up(ah, start_channel(ah));
     if (rc != 0) {
         klog(KLOG_ERR, "ath9k", "start: failed: %d", rc);
@@ -198,7 +207,7 @@ static int radio_set_key(struct wlan_radio *radio, int enable, const uint8_t pee
     struct ath9k *ah = radio->priv;
 
     if (enable)
-        return ath9k_key_set(ah, peer, key, slot);
+        return ah->bus.started ? ath9k_key_set(ah, peer, key, slot) : -ENETDOWN;
     ath9k_key_clear(ah, *slot);
     return 0;
 }
@@ -214,12 +223,19 @@ static int radio_sta_state(struct wlan_radio *radio, const struct wlan_bss *bss,
     static const uint8_t none[6] = {0, 0, 0, 0, 0, 0};
     struct ath9k *ah = radio->priv;
 
-    if (new_state == WLAN_STA_NONE) {
+    if (!ah->bus.started) {
+        /* The chip sleeps; the next start's reset writes what is kept. */
+        if (new_state == WLAN_STA_NONE)
+            k_memcpy(ah->mac.bssid, none, 6);
+        else if (old_state == WLAN_STA_NONE && bss)
+            k_memcpy(ah->mac.bssid, bss->bssid, 6);
+    } else if (new_state == WLAN_STA_NONE) {
         ath9k_mac_set_bssid(ah, none, 0);
-        ath9k_ampdu_sta(ah, NULL);
     } else if (old_state == WLAN_STA_NONE && bss) {
         ath9k_mac_set_bssid(ah, bss->bssid, 0);
     }
+    if (new_state == WLAN_STA_NONE)
+        ath9k_ampdu_sta(ah, NULL);
     if (new_state == WLAN_STA_ASSOCIATED && bss)
         ath9k_ampdu_sta(ah, bss);
     return 0;

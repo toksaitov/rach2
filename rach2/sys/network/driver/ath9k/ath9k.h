@@ -834,6 +834,7 @@ struct ath9k_mac {
                        * enable that ends a start, a reset or a retune,
                        * and the handler and the tick touch nothing then */
     uint16_t empty;   /* messages in a row that found no cause */
+    uint16_t burst;   /* messages since the last tick */
     uint32_t msi_reg; /* AR_PCIE_MSI as read before it is enabled */
 };
 

@@ -99,8 +99,8 @@ static int mac_hung(struct ath9k *ah)
  * Reset the chip on its channel and restore the station's state on it, as
  * ath_reset_internal does with ath_prepare_reset and ath_complete_reset:
  * interrupts off, receive stopped, transmit aborted and every frame
- * reported failed; for a hang or a fatal error a cold reset of the MAC and
- * baseband first, then ath9k_hw_reset; then the address, BSSID, keys,
+ * reported failed; ath9k_hw_reset, which resets cold while DMA runs, as
+ * ath9k_hw_chip_reset does; then the address, BSSID, keys,
  * filter and receive, the beacon timers, the watchdog and the interrupts.
  * A reset that fails leaves the chip off and is tried again by the next
  * check, MAX_FAILURES times in all.
@@ -116,8 +116,6 @@ int ath9k_reset(struct ath9k *ah, enum ath9k_reset_reason why)
     (void)ath9k_rx_stop(ah);
     (void)ath9k_mac_abort_tx(ah);
     ath9k_tx_drain(ah);
-    if (why != ATH9K_RESET_RX_STALL && why != ATH9K_RESET_CAL)
-        (void)ath9k_hw_set_reset(ah, ATH9K_RESET_COLD);
     rc = ath9k_hw_reset(ah, &ah->phy.channel);
     if (rc == 0) {
         ath9k_mac_set_address(ah);
@@ -154,7 +152,8 @@ static void reset_run(struct wlan_work *w)
     struct ath9k *ah = CARD_OF(w, recover.reset_work);
 
     ah->recover.pending = 0;
-    (void)ath9k_reset(ah, (enum ath9k_reset_reason)ah->recover.reason);
+    if (ah->bus.started)
+        (void)ath9k_reset(ah, (enum ath9k_reset_reason)ah->recover.reason);
 }
 
 /**

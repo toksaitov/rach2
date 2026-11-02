@@ -115,7 +115,15 @@ int wlan_start(struct wlan *wlan)
     return 0;
 }
 
-/** hw.c's link power save, which the attach sets; hw.c is not linked. */
+/** hw.c's power, which the radio switch's poll wakes around its read;
+ * hw.c is not linked. */
+int ath9k_hw_set_power(struct ath9k *a, enum ath9k_power_mode mode)
+{
+    a->hw.power = mode;
+    return 0;
+}
+
+/** hw.c's link power save, which the attach sets. */
 void ath9k_hw_pcie_powersave(struct ath9k *a, int power_off)
 {
     (void)a;

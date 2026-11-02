@@ -62,17 +62,22 @@ void ath9k_power_init(struct ath9k *ah)
     ath9k_rfkill_poll(ah);
 }
 
-/** Sample the hard switch and queue a change through the station layer.
- * IRQ-safe under the kernel lock; the host GPIO window remains readable
- * while the radio is stopped. Restore the input direction after a reset.
- * An unreadable card is treated as blocked. */
+/** Sample the hard switch and queue a change through the station layer,
+ * with the chip woken for the read and put back as it was, as ath9k's
+ * ath9k_rfkill_poll_state does with ath9k_ps_wakeup and ath9k_ps_restore;
+ * a chip that does not wake keeps the last sample. Worker or probe, under
+ * the kernel lock. Restore the input direction after a reset. An
+ * unreadable card is treated as blocked. */
 void ath9k_rfkill_poll(struct ath9k *ah)
 {
     struct ath9k_power_state *p = &ah->power;
+    enum ath9k_power_mode was = ah->hw.power;
     uint32_t value, drive, mask;
     unsigned blocked = 0;
 
     if (p->suspended)
+        return;
+    if (p->rfkill_enabled && was != ATH9K_PM_AWAKE && ath9k_hw_set_power(ah, ATH9K_PM_AWAKE) != 0)
         return;
     if (p->rfkill_enabled) {
         if (p->rfkill_gpio >= ah->hw.chip->num_gpio || p->rfkill_gpio >= 16)
@@ -89,6 +94,8 @@ void ath9k_rfkill_poll(struct ath9k *ah)
             }
             blocked = value == 0xffffffffu || ((value >> p->rfkill_gpio) & 1) == p->rfkill_polarity;
         }
+        if (was != ATH9K_PM_AWAKE)
+            (void)ath9k_hw_set_power(ah, was);
     }
     if (ah->radio.wlan && (!p->rfkill_reported || p->hw_blocked != blocked)) {
         wlan_radio_rfkill(&ah->radio, blocked);

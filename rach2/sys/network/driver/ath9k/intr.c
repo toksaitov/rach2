@@ -15,6 +15,7 @@
 #include "ath9k.h"
 #include "../../../irq.h"
 #include "../../../klog.h"
+#include "../../../cmdline.h"
 
 /* The baseband watchdog's states that ath9k's ar9003_hw_bb_watchdog_check
  * knows: one it clears by a touch of the radar detector's power, one it
@@ -22,9 +23,12 @@
 #define BB_WD_RADAR_FIX 0x04000539u
 #define BB_WD_HARMLESS  0x1300000au
 
-/* Messages in a row that found no cause before the card is served by the
- * tick alone, as Linux's spurious-interrupt check gives up on a line. */
+/* Messages in a row that found no cause, or messages between two ticks,
+ * before the card is served by the tick alone, as Linux's
+ * spurious-interrupt check gives up on a line; a tick is a millisecond,
+ * and a card hearing beacons sends a few messages in it. */
 #define EMPTY_MAX 1000
+#define BURST_MAX 1000
 
 /* What serve found. */
 #define SERVE_NONE  0 /* no cause */
@@ -54,6 +58,10 @@ int ath9k_intr_attach(struct ath9k *ah)
 
     ah->bus.vector = 0;
     ah->mac.msi = 0;
+    if (kcmdline_has("rach2.ath9k_nomsi")) {
+        klog(KLOG_INFO, "ath9k", "interrupts: polled, rach2.ath9k_nomsi");
+        return 0;
+    }
     if (!isr_msi_ready()) {
         klog(KLOG_INFO, "ath9k", "interrupts: polled, no usable APIC");
         return 0;
@@ -196,29 +204,37 @@ static int serve(struct ath9k *ah)
 }
 
 /**
- * Give up on the card's messages after EMPTY_MAX in a row found no cause:
- * disable them at the bus, so that the card can send no more, and serve
- * the card from the tick, whose service reads the same causes.
+ * Give up on the card's messages after EMPTY_MAX in a row found no cause
+ * or BURST_MAX came between two ticks: disable them at the bus, so that
+ * the card can send no more, and serve the card from the tick, whose
+ * service reads the same causes, with the chip's message engine off.
  */
-static void messages_off(struct ath9k *ah)
+static void messages_off(struct ath9k *ah, const char *why)
 {
     pci_msi_disable(&ah->bus.dev);
     ah->mac.msi = 0;
-    klog(KLOG_WARN, "ath9k", "interrupts: polled, %u messages found no cause",
-         (unsigned)ah->mac.empty);
+    ath9k_mac_intr_disable(ah);
+    ath9k_mac_intr_enable(ah);
+    klog(KLOG_WARN, "ath9k", "interrupts: polled, %s", why);
 }
 
 /**
- * The card's interrupt, as ath_isr takes it: nothing while interrupts are
- * off, since a message sent before a disable may arrive in the middle of
- * the reset or retune that followed it; the chip's interrupts killed and
- * nothing more while a reset is asked for; otherwise the causes read and
- * cleared before anything else is written, and served at once, since the
- * handler runs with the processor's interrupts off. A message that finds
- * no cause is counted, and EMPTY_MAX of them in a row end the messages.
+ * The card's interrupt, as ath_isr and ath9k_tasklet take it on a card
+ * with messages: nothing while interrupts are off, since a message sent
+ * before a disable may arrive in the middle of the reset or retune that
+ * followed it; the chip's interrupts killed and nothing more while a reset
+ * is asked for; otherwise the causes read and cleared before anything else
+ * is written, the chip's interrupts killed, the causes served at once,
+ * since the handler runs with the processor's interrupts off, and the
+ * interrupts enabled again, which writes the message engine's enable as
+ * ath9k's does after every interrupt. A message that finds no cause is
+ * counted. EMPTY_MAX of them in a row, or BURST_MAX messages between two
+ * ticks, end the messages.
  */
 void ath9k_intr(struct ath9k *ah)
 {
+    int served;
+
     ah->stats.interrupts++;
     if (!ah->mac.irq_on)
         return;
@@ -226,13 +242,22 @@ void ath9k_intr(struct ath9k *ah)
         ath9k_mac_intr_disable(ah);
         return;
     }
-    if (serve(ah) != SERVE_NONE) {
+    if (ah->mac.msi && ++ah->mac.burst >= BURST_MAX) {
+        messages_off(ah, "too many messages between two ticks");
+        return;
+    }
+    served = serve(ah);
+    if (served == SERVE_RESET)
+        return;
+    if (served == SERVE_DONE) {
         ah->mac.empty = 0;
+        ath9k_mac_intr_disable(ah);
+        ath9k_mac_intr_enable(ah);
         return;
     }
     ah->stats.spurious++;
     if (++ah->mac.empty >= EMPTY_MAX && ah->mac.msi)
-        messages_off(ah);
+        messages_off(ah, "messages found no cause");
 }
 
 /**
@@ -244,6 +269,7 @@ void ath9k_intr(struct ath9k *ah)
  */
 void ath9k_tick(struct ath9k *ah)
 {
+    ah->mac.burst = 0;
     if (!ah->mac.irq_on || ah->recover.resetting || ah->recover.pending ||
         (!ah->rx.running && !ah->tx.running))
         return;

@@ -161,6 +161,12 @@ int pci_msi_enable(const pci_device_t *dev, uint8_t vector)
 }
 
 static unsigned msi_disables;
+static int nomsi; /* rach2.ath9k_nomsi on the boot line */
+
+int kcmdline_has(const char *flag)
+{
+    return nomsi && flag[0] == 'r';
+}
 
 void pci_msi_disable(const pci_device_t *dev)
 {
@@ -371,6 +377,7 @@ static void setup(int msi)
     ath9k_mac_set_filter(&ah, 0);
     CHECK(ath9k_rx_start(&ah) == 0);
     ath9k_mac_intr_enable(&ah);
+    ah.bus.started = 1;
     ath9k_recover_start(&ah);
 }
 
@@ -900,7 +907,9 @@ static void test_recover(void)
     CHECK(ath9k_hang_check(&ah) == -1);
     CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_TX_HANG);
     CHECK(txs_count == 1 && txs[0].cookie == 9 && txs[0].flags == 0);
-    CHECK(hw_resets == 2 && cold_resets == 1 && ah.stats.resets[ATH9K_RESET_TX_HANG] == 1);
+    /* No reset of its own before ath9k_hw_reset, which resets cold while
+     * DMA runs, as ath_reset_internal leaves it. */
+    CHECK(hw_resets == 2 && cold_resets == 0 && ah.stats.resets[ATH9K_RESET_TX_HANG] == 1);
     CHECK(ah.tx.q[WLAN_AC_BE].count == 0 && model.tx[1].count == 0);
     check_restored(&ccmp, slot, mac1);
     CHECK(ath9k_model_peek(&model, AR_BEACON_PERIOD) == 102400);
@@ -929,7 +938,7 @@ static void test_recover(void)
     CHECK(receive(0, f, len, 0x1b, 20, 0) == 0);
     interrupt();
     CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_RX_STALL);
-    CHECK(cold_resets == 2); /* a stall needs no cold reset */
+    CHECK(cold_resets == 0);
     check_restored(&ccmp, slot, mac1);
     ath9k_mac_set_bssid(&ah, (const uint8_t *)"\0\0\0\0\0\0", 0);
     now_ms += 4000;
@@ -979,17 +988,24 @@ static void test_recover(void)
     CHECK(model.log_count == 0 && ah.stats.beacon_miss == 1);
     model.log_reads = 0;
     ath9k_mac_intr_enable(&ah);
+    before = ath9k_model_count(&model, ATH9K_MODEL_WRITE, AR_PCIE_MSI);
     interrupt();
     CHECK(ah.stats.beacon_miss == 2);
+    /* A served message enables the interrupts again, the message engine's
+     * enable with them, as ath9k's tasklet does. */
+    CHECK(!msi_handler || ath9k_model_count(&model, ATH9K_MODEL_WRITE, AR_PCIE_MSI) > before);
+    CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_ENABLE);
 
     /* Messages that find no cause are counted, and EMPTY_MAX of them in a
      * row end the messages: the card is then served from the tick. */
     if (msi_handler) {
         unsigned i, spurious = ah.stats.spurious;
 
+        ath9k_tick(&ah);
         for (i = 0; i < 999; i++)
             interrupt();
         CHECK(ah.stats.spurious == spurious + 999 && ah.mac.msi);
+        ath9k_tick(&ah);
         ath9k_model_raise(&model, AR_ISR_BMISS);
         interrupt();
         CHECK(ah.stats.beacon_miss == 3 && ah.mac.empty == 0);
@@ -997,6 +1013,22 @@ static void test_recover(void)
             interrupt();
         CHECK(!ah.mac.msi && msi_disables == 1);
         ah.mac.msi = 1;
+        ath9k_mac_intr_enable(&ah);
+
+        /* BURST_MAX messages between two ticks, each with a cause, as a
+         * cause that came back at once would send, end them too. */
+        ath9k_tick(&ah);
+        for (i = 0; i < 999; i++) {
+            ath9k_model_raise(&model, AR_ISR_BMISS);
+            interrupt();
+        }
+        CHECK(ah.mac.msi);
+        interrupt();
+        CHECK(!ah.mac.msi && msi_disables == 2);
+        CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_ENABLE);
+        ah.mac.msi = 1;
+        ath9k_mac_intr_enable(&ah);
+        ath9k_tick(&ah);
     }
 
     /* A reset that fails leaves the chip off; the next check tries again. */
@@ -1004,11 +1036,9 @@ static void test_recover(void)
     CHECK(ath9k_reset(&ah, ATH9K_RESET_CAL) == -EIO && ah.recover.failures == 1);
     CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_DISABLE);
     hw_reset_rc = 0;
-    ah.bus.started = 1;
     before = cal_starts;
     CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_CAL && ah.recover.failures == 0);
     CHECK(cal_starts == before + 1);
-    ah.bus.started = 0;
     check_restored(&ccmp, slot, mac1);
 
     /* Receive DMA that does not stop is waited for, and the reset goes on. */
@@ -1072,6 +1102,12 @@ static void test_attach(void)
     CHECK(rx_count == 1 && ah.stats.tick_work == 1);
     ath9k_tick(&ah);
     CHECK(ah.stats.tick_work == 1);
+
+    /* rach2.ath9k_nomsi leaves the card polled. */
+    ath9k_intr_detach(&ah);
+    nomsi = 1;
+    CHECK(ath9k_intr_attach(&ah) == 0 && !ah.mac.msi && ah.bus.vector == 0 && msi_handler == 0);
+    nomsi = 0;
 }
 
 int main(void)

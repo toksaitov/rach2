@@ -622,6 +622,11 @@ int ath9k_intr_attach(struct ath9k *ah)
     return intr_rc;
 }
 
+void ath9k_recover_watchdog(struct ath9k *ah)
+{
+    (void)ah;
+}
+
 void ath9k_recover_start(struct ath9k *ah)
 {
     (void)ah;
@@ -889,8 +894,8 @@ static void test_radio(void)
         "key_restore",      "mac_set_filter", "rx_start", "mac_intr_enable", NULL};
 #undef RESET_CALLS
     static const char *const stop[] = {
-        "recover_stop", "cal_stop", "mac_intr_disable", "mac_abort_tx", "rx_stop",
-        "tx_drain",     NULL};
+        "mac_intr_disable", "recover_stop", "cal_stop", "mac_intr_disable",
+        "mac_abort_tx",     "rx_stop",      "tx_drain", NULL};
     static const char *const filter[] = {"mac_set_filter", NULL};
     static const char *const none[] = {NULL};
     static const uint8_t frame[24] = {0x08};

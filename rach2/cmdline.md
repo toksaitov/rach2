@@ -57,3 +57,4 @@ These options exist for the suites, which use them to bring about a fault or a b
 | `rach2.ath9k_noani` | Leave the Atheros Wi-Fi card's noise immunity at the levels its tables set, the first thing to try if its rate stays at 1 Mbit/s ([ath9k](sys/network/driver/ath9k/Readme.md)). |
 | `rach2.ath9k_noaspm` | Disable PCIe L0s and L1 at both ends of the Atheros Wi-Fi card's link; otherwise keep the firmware settings ([ath9k](sys/network/driver/ath9k/Readme.md)). |
 | `rach2.ath9k_noampdu` | Send the Atheros Wi-Fi card's frames one at a time, refusing the BlockAck sessions that would aggregate them ([ath9k](sys/network/driver/ath9k/Readme.md)). |
+| `rach2.ath9k_nomsi` | Serve the Atheros Wi-Fi card from the timer tick instead of by message-signalled interrupts ([ath9k](sys/network/driver/ath9k/Readme.md)). |

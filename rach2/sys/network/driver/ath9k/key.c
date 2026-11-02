@@ -240,7 +240,10 @@ void ath9k_key_clear(struct ath9k *ah, int slot)
         return;
     k = &ah->keys.entry[slot];
     tkip = k->type == AR_KEYTABLE_TYPE_TKIP;
-    reset_entry(ah, (unsigned)slot, tkip);
+    /* A stopped chip sleeps, and the next start's restore clears the whole
+     * cache. */
+    if (ah->bus.started)
+        reset_entry(ah, (unsigned)slot, tkip);
     if (tkip)
         ah->keys.entry[slot + MIC_OFFSET].used = ATH9K_KEY_FREE;
     k_memset(k, 0, sizeof(*k));
