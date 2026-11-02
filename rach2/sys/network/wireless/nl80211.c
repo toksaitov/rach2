@@ -1843,7 +1843,8 @@ static int get_default_types(const struct nlattr *types, struct key_args *k)
  * attributes of the top level, and the peer from MAC. */
 static int get_key(const struct genl_info *info, struct key_args *k)
 {
-    const struct nlattr *t[NL80211_KEY_LAST + 1];
+    /* nla_parse clears t as well; this is for cppcheck, which misreads it. */
+    const struct nlattr *t[NL80211_KEY_LAST + 1] = {0};
     const struct nlattr *mac = info->attrs[NL80211_ATTR_MAC];
     const struct nlattr *types;
     int rc;

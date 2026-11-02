@@ -114,6 +114,14 @@ unusedStructMember:*sys/ipc/mqueue.c
 # buffer, which it writes through the aligned pointer cppcheck does not follow.
 unassignedVariable:*sys/proc/ptrace.c
 
+# A request that waits for the wireless worker links a hop on its own stack
+# into its station's list, which the worker, or nl80211_detach, unlinks
+# before the request wakes and returns. nl80211_detach cancels each hop's
+# work, which waits for a running hop and so may unlink it; cppcheck, which
+# does not know the cancel waits, calls the test of the list's head constant.
+autoVariables:*sys/network/wireless/nl80211.c
+knownConditionTrueFalse:*sys/network/wireless/nl80211.c
+
 # A receive notes the queue's generation, then faults the user's pages in,
 # which sleeps; another receiver may take the queue meanwhile, which is what
 # the second test of the generation finds. cppcheck does not know the fault-in
