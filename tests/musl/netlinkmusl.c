@@ -26,7 +26,7 @@
  * EEXIST to add again, is taken away, which SIOCGIFADDR sees, and is given
  * back; its default route through SLIRP's gateway is set, EEXIST to set
  * again, removed, ESRCH to remove again, and set as it was; the link is set
- * up; an MTU of 9000 is EOPNOTSUPP and forgetting a neighbour the cache does
+ * up; an MTU of 9000 is EINVAL and forgetting a neighbour the cache does
  * not have is ENOENT. A second address is added, a local route to `ip route
  * get`, and taken away; a route to another network through the gateway is
  * added, EEXIST to add again, in /proc/net/route, and removed, and one
@@ -50,7 +50,7 @@
  * `socket-port-pid`, `second-port`, `bind-eaddrinuse`, `dump-links`,
  * `dump-addrs`, `dump-routes`, `getlink-one`, `getlink-enodev`,
  * `newaddr-einval`, `addr-eexist`, `addr-del`, `addr-restore`,
- * `default-route-add`, `default-route-del`, `link-up`, `mtu-eopnotsupp`,
+ * `default-route-add`, `default-route-del`, `link-up`, `mtu-einval`,
  * `delneigh-enoent`, `route-get-local`, `route-get-unicast`, `rule-dump`,
  * `qdisc-dump`, `second-addr`, `neigh-permanent`, `neigh-forget`, `route-add`,
  * `proc-net-route`, `route-del`, `route-enetunreach`, `route-on-link`,
@@ -543,7 +543,8 @@ static void attr32(char *body, int *len, int type, const void *value)
 
 /**
  * Send a change with NLM_F_ACK and read its acknowledgement. Returns its
- * error, 0 when the change was made, or 1 for no acknowledgement.
+ * error, 0 when the change was made, or 1 for no acknowledgement. errno is
+ * set to the acknowledgement's error, or 0, so that `fail` prints the answer.
  */
 static int ask(int fd, int type, int flags, unsigned int seq, const void *body, int len)
 {
@@ -553,6 +554,7 @@ static int ask(int fd, int type, int flags, unsigned int seq, const void *body, 
         one_answer(fd, &index, &error) != NLMSG_ERROR) {
         return 1;
     }
+    errno = error < 0 ? -error : 0;
     return error;
 }
 
@@ -646,8 +648,8 @@ static int route_changes(int fd)
     }
     held();
     attr32(body, &len, IFLA_MTU, &mtu);
-    if (ask(fd, RTM_NEWLINK, 0, 51, body, len) != -EOPNOTSUPP) {
-        return fail("RTM_NEWLINK of an MTU of 9000 was not EOPNOTSUPP");
+    if (ask(fd, RTM_NEWLINK, 0, 51, body, len) != -EINVAL) {
+        return fail("RTM_NEWLINK of an MTU of 9000 was not EINVAL");
     }
     held();
     memset(ndm, 0, sizeof ndm);
@@ -1073,7 +1075,7 @@ static void plan(char **envp)
                                          "getlink-one",     "getlink-enodev", "newaddr-einval"};
     static const char *const changes[] = {"addr-eexist",       "addr-del",          "addr-restore",
                                           "default-route-add", "default-route-del", "link-up",
-                                          "mtu-eopnotsupp",    "delneigh-enoent"};
+                                          "mtu-einval",        "delneigh-enoent"};
     static const char *const lookup_ids[] = {"route-get-local", "route-get-unicast", "rule-dump",
                                              "qdisc-dump"};
     static const char *const table[] = {"second-addr",       "neigh-permanent", "neigh-forget",

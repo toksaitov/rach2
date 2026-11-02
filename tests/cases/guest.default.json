@@ -4798,7 +4798,7 @@
         {"assertion_id": "default-route-add", "checks": "RTM_NEWROUTE of the default route is acknowledged, then EEXIST.", "source": "program"},
         {"assertion_id": "default-route-del", "checks": "RTM_DELROUTE of the default route is acknowledged, then ESRCH, and the route is set back.", "source": "program"},
         {"assertion_id": "link-up", "checks": "RTM_NEWLINK sets the link up.", "source": "program"},
-        {"assertion_id": "mtu-eopnotsupp", "checks": "RTM_NEWLINK of an MTU of 9000 is EOPNOTSUPP.", "source": "program"},
+        {"assertion_id": "mtu-einval", "checks": "RTM_NEWLINK of an MTU of 9000, past the card's 1500, is EINVAL.", "source": "program"},
         {"assertion_id": "delneigh-enoent", "checks": "RTM_DELNEIGH of a neighbour the cache does not have is ENOENT.", "source": "program"},
         {"assertion_id": "route-get-local", "checks": "ip route get of the machine's own address is a local route on lo.", "source": "program"},
         {"assertion_id": "route-get-unicast", "checks": "ip route get of a neighbour is a unicast route on the first link.", "source": "program"},
