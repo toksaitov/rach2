@@ -1,6 +1,6 @@
 # The Lenovo's facts
 
-What the Lenovo G50-70 reported on 2026-11-02, from 03:32 to 04:31 UTC+6, about its Wi-Fi card, the QCA9565 at 02:00.0: the card's configuration space, its interrupt route, its link power states, the DMA remapping hardware, and the `VPC2004` device and the embedded controller's Wi-Fi bits that the airplane key works through. It closes with Linux's view of the card from one Alpine boot, and the hang that boot left at 04:08.
+What the Lenovo G50-70 reported on 2026-11-02, from 03:32 to 04:31 UTC+6, about its Wi-Fi card, the QCA9565 at 02:00.0: the card's configuration space, its interrupt route, its link power states, the DMA remapping hardware, and the `VPC2004` device and the embedded controller's Wi-Fi bits that the airplane key works through. It then gives Linux's view of the card from one Alpine boot, and the hang that boot left at 04:08, and closes with Rach2's own driver on the card on two trial boots from 07:23 to 07:40: its boot line, its start, two scans and a forced reset.
 
 ## How it was read
 
