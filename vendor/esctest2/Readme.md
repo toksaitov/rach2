@@ -6,7 +6,7 @@ esctest2 checks terminal escape sequences against the behavior its upstream test
 
 `make esctest2` builds the controller, `term-host` and the packaged Python driver. `tests/run esctest2` prepares and runs the case of [`host.esctest2.json`](../../tests/cases/host.esctest2.json). It needs a POSIX host with Python 3. The controller executes the upstream driver directly, without a shell or another Python driver. The collection records the interpreter, driver archive, terminal, controller and policy files as prepared inputs.
 
-The release runs the registered suite. Of the 567 upstream cases the driver selects, 268 pass on `term`; the other 299, 259 failures and 40 upstream skips, are the accepted failures of `known-failures.txt`. The case runs on Linux and macOS. Its host requirement excludes Windows, which has no implementation of the POSIX pty used by `term -H`.
+The release runs the registered suite. Of the 567 upstream cases the driver selects, 271 pass on `term`; the other 296, 256 failures and 40 upstream skips, are the accepted failures of `known-failures.txt`. The case runs on Linux and macOS. Its host requirement excludes Windows, which has no implementation of the POSIX pty used by `term -H`.
 
 ## Results
 
