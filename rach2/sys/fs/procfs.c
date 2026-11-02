@@ -2001,6 +2001,9 @@ static void anon_target(struct procfs_text *t, const fd_entry_t *e)
     ap_str(t, e->priv ? ((const struct anon_obj *)e->priv)->name : "[unknown]");
 }
 
+static void mount_reader_root(char *prefix);
+static const char *path_seen(const char *path, const char *prefix);
+
 /**
  * The target of each kind of descriptor is the one Linux's /proc gives: the
  * path of a file or directory (`procfs_file_target`), /dev/console,
@@ -2008,9 +2011,10 @@ static void anon_target(struct procfs_text *t, const fd_entry_t *e)
  * /dev/ptmx, pipe:[N], socket:[N], and for an anonymous descriptor the
  * target `anon_target` gives. A socket names its own inode, the same number
  * `/proc/net/tcp` and `fstat` report, so one socket is one thing to a
- * program reading all three. A synthetic directory has its path, a
- * descriptor of a file of /proc or /sys the path of that file, rebuilt from
- * its origin, and an O_PATH descriptor of a /dev or /proc node the path it
+ * program reading all three. A synthetic directory has its path, one opened
+ * through a bind of /proc or a proc mounted elsewhere the path from the
+ * reader's root that reached it (`path_seen`), a descriptor of a file of /proc or /sys the path of
+ * that file, rebuilt from its origin, and an O_PATH descriptor of a /dev or /proc node the path it
  * was opened by. The framebuffer and the mouse have no name, and
  * show "anon_inode:[device]". A descriptor that is closed, whose release
  * waits for another thread's call or is under way, has no link, as it has
@@ -2081,7 +2085,12 @@ int procfs_readlink_fd(int pid, int fd, char *buf, int cap)
         struct synth_dir *sd = (struct synth_dir *)e->priv;
         char path[64];
         if (e->ofd && e->ofd->dirpath) {
-            ap_str(t, e->ofd->dirpath);
+            char prefix[VFS_COVERED_PATH_MAX];
+            const char *seen;
+
+            mount_reader_root(prefix);
+            seen = path_seen(e->ofd->dirpath, prefix);
+            ap_str(t, seen ? seen : e->ofd->dirpath);
         } else if (sd) {
             synth_dir_path(sd->kind, sd->pid, sd->tid, path, (int)sizeof(path));
             ap_str(t, path);
@@ -3011,23 +3020,31 @@ static void mount_reader_root(char *prefix)
     }
 }
 
-/** The mount point of `m` as a reader whose root's path is `prefix`
- * (`mount_reader_root`) sees it, or NULL for a mount outside that root,
- * which the reader cannot reach and the tables leave out, as Linux does. */
-static const char *mount_point_seen(const struct vfs_mount *m, const char *prefix)
+/** The path `path`, from the root of the mount table, as a reader whose
+ * root's path is `prefix` (`mount_reader_root`) sees it, or NULL for a place
+ * outside that root. */
+static const char *path_seen(const char *path, const char *prefix)
 {
     uint32_t n = 0;
 
     if (prefix[0] == '\0') {
-        return m->covered_path;
+        return path;
     }
-    while (prefix[n] && m->covered_path[n] == prefix[n]) {
+    while (prefix[n] && path[n] == prefix[n]) {
         n++;
     }
-    if (prefix[n] || (m->covered_path[n] != '/' && m->covered_path[n] != '\0')) {
+    if (prefix[n] || (path[n] != '/' && path[n] != '\0')) {
         return NULL;
     }
-    return m->covered_path[n] ? m->covered_path + n : "/";
+    return path[n] ? path + n : "/";
+}
+
+/** The mount point of `m` as a reader whose root's path is `prefix` sees it
+ * (`path_seen`), or NULL for a mount outside that root, which the reader
+ * cannot reach and the tables leave out, as Linux does. */
+static const char *mount_point_seen(const struct vfs_mount *m, const char *prefix)
+{
+    return path_seen(m->covered_path, prefix);
 }
 
 /** The index of the listed mount made next after the one whose `seq` is

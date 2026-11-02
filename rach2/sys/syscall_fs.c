@@ -1235,21 +1235,47 @@ static int path_under(const char *path, const char *root, uint32_t rl)
 }
 
 /**
- * Make `path`, a path from the root of the mount table, the path the calling
- * process has for the same place from the root chroot gave it: the root's
- * own path comes off the front, and the root itself is "/". A process with
- * no root of its own keeps `path` as it is.
+ * The path of the calling process's root from the root of the mount table,
+ * into `root`, a path page: "/" for a process chroot has given no root of
+ * its own.
  *
  * The root is held while its path is rebuilt from its volume, which may
  * sleep, as `cwd_global` holds it: a thread that shares the directories
- * (CLONE_FS) may chroot meanwhile and let the old root go. Returns 0;
+ * (CLONE_FS) may chroot meanwhile and let the old root go. Returns 0; -EBUSY
+ * for a root on a mount being unmounted; or the error `vfs_node_path` gives
+ * for the root.
+ */
+static int32_t root_global(char *root)
+{
+    struct vfs_ref r;
+    int32_t rc;
+
+    if (!current_proc || !current_proc->fs->root_mnt) {
+        root[0] = '/';
+        root[1] = '\0';
+        return 0;
+    }
+    r.mnt = current_proc->fs->root_mnt;
+    r.node = current_proc->fs->root_node;
+    if (vfs_enter(r.mnt) != 0) {
+        return -EBUSY;
+    }
+    vfs_ref_hold(&r);
+    rc = vfs_node_path(r.mnt, r.node, root, VFS_PATH_MAX);
+    vfs_ref_release(&r);
+    return rc;
+}
+
+/**
+ * Make `path`, a path from the root of the mount table, the path the calling
+ * process has for the same place from the root chroot gave it: the root's
+ * own path (`root_global`) comes off the front, and the root itself is "/".
+ * A process with no root of its own keeps `path` as it is. Returns 0;
  * -ENOENT for a place outside the process's root, which no path of the
- * process reaches; -ENOMEM; -EBUSY for a root on a mount being unmounted; or
- * the error `vfs_node_path` gives for the root.
+ * process reaches; -ENOMEM; or `root_global`'s error.
  */
 static int32_t path_in_root(char *path)
 {
-    struct vfs_ref r;
     char *root;
     uint32_t rl = 0;
     int32_t rc;
@@ -1261,15 +1287,7 @@ static int32_t path_in_root(char *path)
     if (!root) {
         return -ENOMEM;
     }
-    r.mnt = current_proc->fs->root_mnt;
-    r.node = current_proc->fs->root_node;
-    if (vfs_enter(r.mnt) != 0) {
-        path_buf_put(root);
-        return -EBUSY;
-    }
-    vfs_ref_hold(&r);
-    rc = vfs_node_path(r.mnt, r.node, root, VFS_PATH_MAX);
-    vfs_ref_release(&r);
+    rc = root_global(root);
     if (rc == 0) {
         rl = (uint32_t)k_strlen(root);
         rc = path_under(path, root, rl) ? 0 : -ENOENT;
@@ -1357,9 +1375,9 @@ static int fd_dir_path(fd_entry_t *entry, char *out, uint32_t cap, int *outside)
                 return -ENAMETOOLONG;
             }
             k_memcpy(out, entry->ofd->dirpath, k_strlen(entry->ofd->dirpath) + 1);
-            return 0;
+        } else {
+            synth_dir_path(sd->kind, sd->pid, sd->tid, out, (int)cap);
         }
-        synth_dir_path(sd->kind, sd->pid, sd->tid, out, (int)cap);
         return path_in_root_at(out, outside);
     }
     if (entry->type != FD_TYPE_DIR) {
@@ -1762,21 +1780,54 @@ static int mount_permanent_at(const struct vfs_mount *m)
 /**
  * Record `name`, a path as `ofd_record_path` takes it, in the description of
  * `fd`, a descriptor the open of a synthetic node made, when it is open on a
- * directory that the walk reached through `mnt`, a mount other than the
- * system's /dev, /proc and /sys: a bind of one of them or a proc mounted
- * elsewhere, as in a sandbox. Its link in /proc/PID/fd then names it where
- * the caller reached it, which bubblewrap reads back to find the mount it
- * made in mountinfo, and a name relative to it stays below that mount
+ * directory that the walk reached through a mount other than the system's
+ * /dev, /proc and /sys (`permanent` 0): a bind of one of them or a proc
+ * mounted elsewhere, as in a sandbox. Its link in /proc/PID/fd then names it
+ * where the caller reached it, which bubblewrap reads back to find the mount
+ * it made in mountinfo, and a name relative to it stays below that mount
  * (`fd_dir_path`). A directory of the system's own keeps the path its kind
  * gives.
+ *
+ * The path is kept from the root of the mount table, as a synthetic
+ * directory's own path is, so that a chroot after the open does not move it:
+ * `name` from the process's root gets the root's path in front, and one that
+ * begins with a slash, from the root of the mount table as `copy_path_at`
+ * makes a path outside the root, loses that slash. A path that cannot be
+ * made so leaves the directory the path its kind gives.
  */
 static void synth_dir_record(int fd, int permanent, const char *name)
 {
     fd_entry_t *e = fd >= 0 ? &current_proc->fds->entries[fd] : NULL;
+    char *root, *full;
+    uint32_t rl, dl;
 
-    if (e && !permanent && e->type == FD_TYPE_SYNTH_DIR && e->ofd) {
-        ofd_record_path(e->ofd, name);
+    if (!e || permanent || e->type != FD_TYPE_SYNTH_DIR || !e->ofd) {
+        return;
     }
+    ofd_record_path(e->ofd, name[0] == '/' ? name + 1 : name);
+    if (!e->ofd->dirpath || name[0] == '/' || !current_proc->fs->root_mnt) {
+        return;
+    }
+    root = path_buf_get();
+    full = NULL;
+    if (root && root_global(root) == 0) {
+        rl = (uint32_t)k_strlen(root);
+        dl = (uint32_t)k_strlen(e->ofd->dirpath);
+        if (rl == 1) {
+            path_buf_put(root);
+            return;
+        }
+        if (rl + dl < VFS_PATH_MAX && (full = kmalloc(rl + dl + 1)) != NULL) {
+            k_memcpy(full, root, rl);
+            k_memcpy(full + rl, e->ofd->dirpath, dl + 1);
+            if (dl == 1) {
+                full[rl] = '\0';
+            }
+        }
+    }
+    path_buf_put(root);
+    kfree(e->ofd->dirpath);
+    e->ofd->dirpath = full;
 }
 
 /** Whether a synthetic directory of `kind` is one of a process's, whose
