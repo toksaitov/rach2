@@ -281,17 +281,20 @@ static struct wlan_defrag *defrag_slot(struct wlan_data *d, uint64_t now)
 }
 
 /**
- * Take a fragment into reassembly (802.11-2020 10.6). Returns 1 and points
- * *frame and *len at the whole MSDU once its last fragment came, 0 while
- * more are due, or a negative errno for a fragment that cannot belong.
- * Every fragment must come under the same key with consecutive PNs, so
- * that fragments of different frames or keys cannot be mixed (the mixed
- * key and fragment cache attacks, 2021).
+ * Take a fragment, whose header is *hdrlen bytes, into reassembly
+ * (802.11-2020 10.6). Returns 1 and points *frame, *len and *hdrlen at the
+ * whole MSDU and its first fragment's header once its last fragment came, 0
+ * while more are due, or a negative errno for a fragment that cannot
+ * belong. Every fragment must come under the same key with consecutive PNs,
+ * so that fragments of different frames or keys cannot be mixed (the mixed
+ * key and fragment cache attacks, 2021), and with a header of the same
+ * length, so that the MSDU's body is where the first header ends.
  */
-static int defrag(struct wlan_data *d, uint8_t **frame, unsigned *len, unsigned hdrlen,
+static int defrag(struct wlan_data *d, uint8_t **frame, unsigned *len, unsigned *hdrlen,
                   unsigned idx, const struct rx_crypt *c)
 {
     uint8_t *f = *frame;
+    unsigned h = *hdrlen;
     unsigned seqctl = le16(f + 22), seq = seqctl >> 4, frag = seqctl & 0xf;
     unsigned more = frame_control(f) & IEEE80211_FCTL_MOREFRAGS, gen = c->key ? c->key->gen : 0;
     uint64_t now = tick_count();
@@ -305,7 +308,7 @@ static int defrag(struct wlan_data *d, uint8_t **frame, unsigned *len, unsigned 
             return -EINVAL;
         k_memcpy(e->frame, f, *len);
         e->len = *len;
-        e->hdrlen = hdrlen;
+        e->hdrlen = h;
         e->seq = (uint16_t)seq;
         e->tid = (uint8_t)idx;
         e->frag = 0;
@@ -320,13 +323,14 @@ static int defrag(struct wlan_data *d, uint8_t **frame, unsigned *len, unsigned 
     if (!e)
         return -EINVAL;
     if (now - e->started >= WLAN_DATA_FRAG_TIMEOUT || frag != e->frag + 1u || gen != e->key_gen ||
+        h != e->hdrlen ||
         (c->key && c->key->key.cipher == WLAN_CIPHER_SUITE_CCMP && c->pn != e->pn + 1) ||
-        (c->key && c->pn <= e->pn) || e->len + *len - hdrlen > sizeof(e->frame)) {
+        (c->key && c->pn <= e->pn) || e->len + *len - h > sizeof(e->frame)) {
         e->len = 0;
         return -EINVAL;
     }
-    k_memcpy(e->frame + e->len, f + hdrlen, *len - hdrlen);
-    e->len += *len - hdrlen;
+    k_memcpy(e->frame + e->len, f + h, *len - h);
+    e->len += *len - h;
     e->frag = (uint8_t)frag;
     e->pn = c->pn;
     if (more)
@@ -337,6 +341,7 @@ static int defrag(struct wlan_data *d, uint8_t **frame, unsigned *len, unsigned 
     e->frame[22] &= 0xf0;
     *frame = e->frame;
     *len = e->len;
+    *hdrlen = e->hdrlen;
     /* The entry is free again; its bytes stay until the next fragment. */
     e->len = 0;
     return 1;
@@ -384,7 +389,7 @@ int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
             d->counters->rx_dropped++;
             return -EINVAL;
         }
-        rc = defrag(d, &frame, &len, hdrlen, idx, &c);
+        rc = defrag(d, &frame, &len, &hdrlen, idx, &c);
         if (rc <= 0) {
             if (rc < 0)
                 d->counters->rx_dropped++;
@@ -396,11 +401,11 @@ int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
         if (c.mic_error)
             return mic_failure(d, frame, c.key);
         if (!c.mic_stripped) {
-            body = len - hdrlen;
-            if (body < WLAN_TKIP_MIC_LEN) {
+            if (len < hdrlen + WLAN_TKIP_MIC_LEN) {
                 d->counters->rx_dropped++;
                 return -EINVAL;
             }
+            body = len - hdrlen;
             /* From the AP, DA is Address 1 and SA Address 3. */
             wlan_tkip_michael(c.key->key.data + 24, frame + 4, frame + 16, priority, frame + hdrlen,
                               body - WLAN_TKIP_MIC_LEN, mic);
