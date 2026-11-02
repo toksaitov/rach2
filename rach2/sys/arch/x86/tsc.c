@@ -23,7 +23,11 @@ uint64_t tsc_ordered(void)
 {
     uint32_t lo, hi;
 
-    __asm__ __volatile__("lfence\n\trdtsc\n\tlfence" : "=a"(lo), "=d"(hi) : : "memory");
+    /* lfence as bytes 0f ae e8: i686 tcc has no mnemonic for it. */
+    __asm__ __volatile__(".byte 0x0f, 0xae, 0xe8\n\trdtsc\n\t.byte 0x0f, 0xae, 0xe8"
+                         : "=a"(lo), "=d"(hi)
+                         :
+                         : "memory");
     return ((uint64_t)hi << 32) | lo;
 }
 
