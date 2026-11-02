@@ -245,10 +245,11 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
     return -1;
 }
 
-void netconf_set_up(struct netdev *nd, int up)
+int netconf_set_up(struct netdev *nd, int up)
 {
     (void)nd;
     (void)up;
+    return 0;
 }
 
 struct netdev_addr6 *netdev_addr6_of(struct netdev *nd, const uint8_t *addr)
@@ -330,6 +331,12 @@ void route6_learn(struct netdev *nd, const uint8_t *dst, int plen, const uint8_t
     (void)gw;
     (void)metric;
     (void)lifetime;
+}
+
+void route6_ra_metric(struct netdev *nd, uint32_t metric)
+{
+    (void)nd;
+    (void)metric;
 }
 
 void route6_tick(void)
