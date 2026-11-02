@@ -211,3 +211,35 @@ The second trial, from 07:37 UTC+6, booted kernel `5b503978...eb72` (11b2c9de4, 
 ### The release back
 
 The release's kernel was copied from the fallback slot through the FAT, armed with `bootctl kernel`, booted (`/etc/rach2/release` names 2dd8dd1b), committed and copied to the fallback slot. Through the FAT, both `/boot/kernel` and `/boot/fallback` then read `8b9611b26d79114725d65955e2ff2fbc4a28dce16dca531530348a8da99aecd7` over the release's 2,198,480 bytes, zero after them, and `cmp` finds them identical; `bootctl status` gives `saved_entry: candidate`, `next_entry: empty` and `booted: candidate`.
+
+## The 32-bit build under UEFI
+
+Task 14, on 2026-11-02 from 07:40 to 07:45 UTC+6: the i686 build reaches `term`'s login on the Lenovo under UEFI. Its kernel log is `i686-uefi-boot.log` beside this file.
+
+### What booted, and how
+
+* The i686 metal kernel, built with `RACH2_DISK_READONLY`, so it writes no disk (SHA-256 `06e8a42d1cc89ca1df8808b831e90098dae7f078fd42879b06b6d498f126bb81`). With it, the term stick's RAM root `rach2-term.krffs`, 16 MiB (`d1fa0ffcae2ed22cdc3d8fbc20d46256d5ef0257e0c2e86cb35d098ef846425a`). Both were built at `4082ea514` of `task/2272`, which is the milestone's head with `eb38ad565`. The line was the term stick's: `rach2.ip=none rach2.netconsole rach2.console=term`.
+* The milestone's kernel calls no `ath9k_probe`, and the RAM root has no `wpa_supplicant`, so the Wi-Fi card was not touched.
+* The boot partition was never mounted read-write on the Lenovo. It was read whole to the Mac (`cat /dev/bootpart`), and `/t2272/` was added to a copy with mtools. `fsck_msdos -n` found only the long-name entry for the volume label that the original has. The 31 runs of sectors that differed, 37,512 sectors, were written back with `dd ... conv=notrunc` over SSH, and the device was read back and compared with the copy.
+* `bootctl config` staged a menu with one block. When `next_entry` is `recovery`, the block clears and saves `next_entry` before it loads anything, then boots `/t2272/kernel` with `/t2272/rach2-term.krffs` as its module. `bootctl trial recovery` armed it, since `bootctl env` takes no other name.
+* The same disk was rehearsed in QEMU under OVMF at 6 GiB first. The rehearsal used the Lenovo's own `grub.cfg` and `grubenv`. It showed the block booting to `term`'s login, `next_entry` cleared, `reboot -f` reaching the saved entry, and, with `/t2272` missing, GRUB booting the saved entry.
+
+### What works
+
+* GRUB booted the block: `boot: loader: GRUB 2.12-1ubuntu7.3, by multiboot2 on UEFI`. SSH answered 20 s after `reboot`, and `uname -m` gave i686.
+* The screen: `framebuffer, rgb, 1366x768, 32 bits, pitch 5504, at 0xb0000000`, mapped write-combining; the console font at 2x, 85x24 cells.
+* Memory: the 4 GiB reach leaves 13,883,392 KiB unreachable above 4 GiB, which is the host test's Lenovo row. `usable 2783516 KiB`, `managed 2757040 KiB`.
+* The devices: four processors online. The I/O APIC. ACPI with `2872 objects, 0 errors`. The ideapad device (`wifi 0`). HD Audio on messages, codec 0x14f1510f. AHCI with the Samsung SSD 870 EVO, read-only by policy. xHCI with its 13 ports and the stick as a USB disk. The RTL8168GU on messages at 1000 Mb/s full duplex, and the DHCP lease of 192.168.0.106.
+* `init` is pid 1 and runs `term -l` as pid 3. The framebuffer, read through `/dev/mem` at 0xb0000000, held 329 pixels of 229,229,229 on black. That is libtsm's default foreground, which none of the kernel console's colors is. It draws `rach2 login:` at the top left.
+* `mixer vol 1` gave `vol 1:1` in `/proc/audio`, with nothing playing.
+
+### What failed
+
+Nothing on the Lenovo. The rehearsal found one bug, fixed by `eb38ad565` with its check in QEMU under OVMF on i686. The i686 kernel carved its frame table at the boot allocator's break without looking at the memory map. Under OVMF at 6 GiB with no module, the 2 MiB table fell on the NVS ranges OVMF keeps from 8 MiB to 9 MiB, and the boot stopped with `memory: too little for this kernel`. The break now moves past such a hole. The same boot then reached its root lookup, and the term boot still reached its login. The Lenovo's map is usable from 1 MiB to 0xA56B0000, so the bug cannot happen there.
+
+### The release back
+
+* `reboot -f` at 07:43:23 reset the machine through GRUB to the saved entry. Release 3 answered at 07:43:43 from the candidate slot.
+* `bootctl config` put back the original menu, `# no menu staged; bootctl config replaces this file`.
+* The boot partition, read whole again, differed from the 07:40 copy only in the trial's sectors and in GRUB's environment. GRUB had rewritten the environment with the same two values, `saved_entry=candidate` and an empty `next_entry`, in another order. The trial's sectors were written back from the 07:40 copy. The device now equals that copy except for the environment's two sectors.
+* Both slots hold `8b9611b26d79114725d65955e2ff2fbc4a28dce16dca531530348a8da99aecd7`. `bootctl status` gives `saved_entry: candidate`, `next_entry: empty` and `booted: candidate`.
