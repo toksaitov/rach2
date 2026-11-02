@@ -718,6 +718,57 @@ static void link_policy_test(struct socket *route, struct socket *watch)
     check_link(watch, 0, 6, 1);
 }
 
+/** Load the 64-bit word at `p`, in the host's order as netlink's are. */
+static uint64_t get64(const uint8_t *p)
+{
+    return (uint64_t)get32(p) | (uint64_t)get32(p + 4) << 32;
+}
+
+/**
+ * Ask for the link by its index with counts past 2^32 and read them back:
+ * whole in IFLA_STATS64, each eight bytes at its place in `struct
+ * rtnl_link_stats64`, and their low halves in IFLA_STATS, as Linux truncates
+ * them there.
+ */
+static void stats_test(struct socket *route)
+{
+    static const uint64_t want[8] = {
+        0x100000001ull, 0x200000002ull, 0x123456789ull, 5000000000ull, 7, 0, 0x300000003ull, 9};
+    const struct nlattr *attrs[24];
+    const uint8_t *s32, *s64;
+    unsigned n, i;
+
+    card.rx_packets = want[0];
+    card.tx_packets = want[1];
+    card.rx_bytes = want[2];
+    card.tx_bytes = want[3];
+    card.rx_errors = want[4];
+    card.rx_dropped = want[6];
+    card.tx_dropped = want[7];
+    make_request(18, 0, 0, 32);
+    k_memset(request + 16, 0, 16);
+    put32(request + 20, 1);
+    CHECK(netlink_send(route, request, 32) == 32);
+    n = (unsigned)take(route);
+    CHECK(get16(received + 4) == 16 && n > 32);
+    CHECK(nla_parse(received + 32, n - 32, 0, 23, attrs, 0) == 0);
+    CHECK(attrs[7] && get16((const uint8_t *)attrs[7]) == 4 + 96);
+    CHECK(attrs[23] && get16((const uint8_t *)attrs[23]) == 4 + 200);
+    if (!attrs[7] || !attrs[23]) {
+        return;
+    }
+    s32 = (const uint8_t *)attrs[7] + 4;
+    s64 = (const uint8_t *)attrs[23] + 4;
+    for (i = 0; i < 8; i++) {
+        CHECK(get64(s64 + 8 * i) == want[i]);
+        CHECK(get32(s32 + 4 * i) == (uint32_t)want[i]);
+    }
+    for (i = 8; i < 25; i++) {
+        CHECK(get64(s64 + 8 * i) == 0);
+    }
+    CHECK(netlink_pending(route) == -1);
+}
+
 /** Register a family and run every row, releasing all sockets and storage. */
 int main(void)
 {
@@ -753,6 +804,8 @@ int main(void)
     requests(&a);
     multicast(&a, &b);
     link_policy_test(&route, &watch);
+    drain(&watch);
+    stats_test(&route);
     old_id = family.id;
     genl_unregister_family(&family);
     CHECK(!family.id && !groups[39].id);

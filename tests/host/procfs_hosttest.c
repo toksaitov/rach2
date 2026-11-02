@@ -74,10 +74,18 @@ static const char *sysfs_wlan_driver(int index);
 struct net_mib net_mib;
 struct net_mib6 net_mib6;
 
-/** No interface is up here, so /sys/class/net is empty. */
+/* The one interface, `eth0` of index 2, while the counter row runs, and
+ * NULL in every other row, which see /sys/class/net empty. Its driver keeps
+ * no counts of its own. */
+static const struct netdev_ops iface_ops;
+static struct netdev *iface;
+/* The depth of `net_lock` brackets, which the counter row checks are closed. */
+static int lock_depth;
+
+/** One interface while the counter row runs, else none. */
 int netdev_count(void)
 {
-    return 0;
+    return iface != 0;
 }
 
 /** Every interface is in the caller's network namespace. */
@@ -86,19 +94,44 @@ int netdev_seen_count(void)
     return netdev_count();
 }
 
-/** The attribute files of a /sys directory: none. */
+/** The attribute files of a /sys directory: the statistics of an interface,
+ * named as in synthfs.c, and none other. */
 const char *sysfs_attr(int node, int n)
 {
-    (void)node;
-    (void)n;
+    return node == SYSFS_NET_STATS && n >= 0 && n < 10 ? "statistic" : 0;
+}
+
+/** The interface `iface` at 0, else NULL. */
+struct netdev *netdev_at(int n)
+{
+    return n == 0 ? iface : 0;
+}
+
+/** Whether the interface's link is up: no driver here says. */
+int netdev_link(const struct netdev *nd, struct netdev_link *out)
+{
+    (void)nd;
+    (void)out;
     return 0;
 }
 
-/** No interface is up: NULL for every index. */
-struct netdev *netdev_at(int n)
+/** Whether the interface's card is running: no card here. */
+int netdev_running(const struct netdev *nd)
 {
-    (void)n;
+    (void)nd;
     return 0;
+}
+
+/** Open a bracket of the network lock, counting its depth. */
+uint32_t net_lock(void)
+{
+    return (uint32_t)lock_depth++;
+}
+
+/** Close the bracket `net_lock` opened. */
+void net_unlock(uint32_t flags)
+{
+    lock_depth = (int)flags;
 }
 
 /** No mount here is made from a node of /dev, so a mount's device is its
@@ -697,6 +730,54 @@ static void uptime_rows(void)
     cpu_table[0].busy_ticks = 0;
 }
 
+/** /proc/net/dev and /sys/class/net/eth0/statistics give an interface's
+ * counts whole past 2^32, each copied inside a `net_lock` bracket. */
+static void netdev_rows(void)
+{
+    static const char want[] =
+        "  eth0: 4886718345 4294967297 7 12884901891 0 0 0 0 5000000000 8589934594 0 9 0 0 0 0\n";
+    static const char *const stats[] = {"0\n", "0\n",          "4886718345\n", "12884901891\n",
+                                        "7\n", "4294967297\n", "5000000000\n", "9\n",
+                                        "0\n", "8589934594\n"};
+    struct netdev nd;
+    struct procfs_text text;
+    const char *line;
+    int len, i;
+
+    k_memset(&nd, 0, sizeof(nd));
+    k_memcpy(nd.name, "eth0", 5);
+    nd.index = 2;
+    nd.ops = &iface_ops;
+    nd.rx_bytes = 0x123456789ull;
+    nd.rx_packets = 0x100000001ull;
+    nd.rx_errors = 7;
+    nd.rx_dropped = 0x300000003ull;
+    nd.tx_bytes = 5000000000ull;
+    nd.tx_packets = 0x200000002ull;
+    nd.tx_dropped = 9;
+    iface = &nd;
+    /* The text is not terminated: each row compares its last `len` bytes. */
+    procfs_text_init(&text);
+    len = procfs_gen_netdev(&text);
+    line = len >= (int)sizeof(want) - 1 ? text.buf + len - (sizeof(want) - 1) : 0;
+    check(line && __builtin_memcmp(line, want, sizeof(want) - 1) == 0,
+          "/proc/net/dev gives the counts past 2^32 whole");
+    if (line && __builtin_memcmp(line, want, sizeof(want) - 1) != 0) {
+        printf("procfs-hosttest: /proc/net/dev: %.*s", (int)(sizeof(want) - 1), line);
+    }
+    kfree(text.buf);
+    for (i = 0; i < 10; i++) {
+        procfs_text_init(&text);
+        len = procfs_gen_netattr(&text, SYSFS_NET_STATS, 2, i);
+        check(len == (int)__builtin_strlen(stats[i]) &&
+                  __builtin_memcmp(text.buf, stats[i], (unsigned long)len) == 0,
+              "a file of /sys/class/net/eth0/statistics gives its count whole");
+        kfree(text.buf);
+    }
+    check(lock_depth == 0, "each copy of the counts closes its net_lock bracket");
+    iface = 0;
+}
+
 /** A process's stat has the time of all its threads, and a thread's under
  * the process's task directory has its own, each in USER_HZ's clock_t. */
 static void thread_times(void)
@@ -1255,6 +1336,7 @@ int main(void)
     kfree(text.buf);
     thread_times();
     uptime_rows();
+    netdev_rows();
     descriptor_links();
     task_ids();
     mem_descriptor();
@@ -1269,8 +1351,8 @@ int main(void)
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
                "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
-               "process's arguments, oom_score_adj, the paths of the maps and the uptime idle "
-               "sum\n");
+               "process's arguments, oom_score_adj, the paths of the maps, the uptime idle "
+               "sum and an interface's counts\n");
     }
     return failures != 0;
 }
