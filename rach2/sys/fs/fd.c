@@ -244,6 +244,8 @@ int fd_table_init(fd_table_t *table)
     }
     table->entries = kzalloc(sizeof(fd_entry_t) * FD_TABLE_FIRST);
     table->cap = table->entries ? FD_TABLE_FIRST : 0;
+    table->next_free = 0;
+    table->retired = NULL;
     return table->entries ? 0 : -1;
 }
 

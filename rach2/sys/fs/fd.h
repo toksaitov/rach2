@@ -235,8 +235,10 @@ struct process;
  * nothing to release (syscall_proc.c). May sleep. */
 void release_fd_table(fd_table_t *table);
 
-/** Give a new table its first FD_TABLE_FIRST entries, all free; it frees no
- * old entries. 0, or -1 when `table` is NULL or the heap has no room. */
+/** Give a new table its first FD_TABLE_FIRST entries, all free, and no
+ * retired arrays, whatever `table` held; it frees no old entries and leaves
+ * `refs` to the caller. 0, or -1 when `table` is NULL or the heap has no
+ * room. */
 int fd_table_init(fd_table_t *table);
 
 /** Free the entries; the descriptors must have been released first. */
