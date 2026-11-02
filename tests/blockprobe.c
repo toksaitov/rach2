@@ -26,7 +26,7 @@
 #define O_TRUNC  0x200
 
 /* Twenty-four 256 KiB files, 6 MiB in all. The page cache holds PC_SLOTS
-   pages, 8 MiB, or an eighth of memory when that is less (init_pagecache in
+   pages, 16 MiB, or an eighth of memory when that is less (init_pagecache in
    rach2/sys/mm/pagecache.c), so the files outgrow it only on a machine of
    under 48 MiB. */
 #ifndef NFILES

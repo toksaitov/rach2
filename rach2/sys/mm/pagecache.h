@@ -18,15 +18,15 @@
 /* Policy: the most resident pages, in PAGE_SIZE frames, and a power of two,
  * since the lookup hash is sized at twice this. A page's frame is taken
  * when the page is first read and given back under memory pressure
- * (`pc_shrink`), so the cache holds at most 8 MiB and often less. A compile
+ * (`pc_shrink`), so the cache holds at most 16 MiB and often less. A compile
  * on a KRFFS disk root needs its hot set resident: the compiler, the headers
  * and the objects, and the header page of every node in the ring, since a
- * lookup walks the ring. With 1024 slots the ring's header pages of a root
- * with the manual staged do not fit beside the hot set, and every lookup
- * reads the disk again; 2048 holds both with room for the ring to grow
- * (tests/host/pagecache_ring_hosttest.c). */
+ * lookup walks the ring. Once the kernel's own build has added its nodes to
+ * os-real's root, the ring's header pages alone outnumber 2048 slots, and
+ * every lookup reads the disk again; 4096 holds them beside the hot set
+ * with room for the ring to grow (tests/host/pagecache_ring_hosttest.c). */
 #ifndef PC_SLOTS
-#define PC_SLOTS 2048u
+#define PC_SLOTS 4096u
 #endif
 
 /*

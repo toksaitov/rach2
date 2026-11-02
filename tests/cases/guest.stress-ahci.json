@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "family_id": "guest.stress-ahci",
-  "summary": "A KRFFS root on a disk on an AHCI controller, written and read through a page cache four times smaller than the data; the program is tests/stressprobe.c",
+  "summary": "A KRFFS root on a disk on an AHCI controller, written and read through a page cache half the size of the data or less; the program is tests/stressprobe.c",
   "cases": [
     {
       "case_id": "guest.stress-ahci.stressprobe",
-      "behavior": "33 MiB of files written through the page cache of a KRFFS root mounted from a disk on a port of an AHCI controller, at most 8 MiB of which the cache holds, synced and read back, keep every byte",
+      "behavior": "33 MiB of files written through the page cache of a KRFFS root mounted from a disk on a port of an AHCI controller, at most 16 MiB of which the cache holds, synced and read back, keep every byte",
       "units": ["stress-ahci", "stressprobe"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],

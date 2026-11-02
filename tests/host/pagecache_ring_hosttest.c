@@ -10,15 +10,17 @@
  * its own pages resident together; when they do not fit, every lookup
  * refills the cache from the disk.
  *
- * The test models that on a count. The ring's headers are on 492 pages, 66
- * of them the manual's, and the compile has 560 pages of its own: the ring
- * without the manual, 426 pages, fits 1024 slots beside them, and the ring
- * with the manual does not. A round is the compile's pages and then two
- * lookups, each reading every header page in ring order; the first round
- * fills the cache, and the rows count the pages the next three read from
- * the backing. At `PC_SLOTS` they must read none. Two control rows run the
- * same rounds at 1024 slots: without the manual they read none, and with it
- * every round reads the ring again, so the model does show the fault.
+ * The test models that on a count. The headers of os-real's ring are on 916
+ * pages as staged, and on some 2056 once the kernel's build has copied its
+ * tree there and compiled it, 1140 of them the build's; the compile has 560
+ * pages of its own. The staged ring fits 2048 slots beside them, and the
+ * ring with the build's nodes does not. A round is the compile's pages and
+ * then two lookups, each reading every header page in ring order; the first
+ * round fills the cache, and the rows count the pages the next three read
+ * from the backing. At `PC_SLOTS` they must read none. Two control rows run
+ * the same rounds at 2048 slots: without the build's nodes they read none,
+ * and with them every round reads the ring again, so the model does show
+ * the fault.
  *
  * Built with PAGECACHE_HOSTTEST and the slots pagecache.h sets, it includes
  * pagecache.c whole; the backing is a function that stamps each page with
@@ -41,14 +43,15 @@ void k_panic(const char *s)
     __builtin_trap();
 }
 
-/* The ring's header pages with the manual staged, the manual's share of
- * them, the compile's own pages, and the slots of the control rows. */
-#define RING_PAGES   492u
-#define MANUAL_PAGES 66u
-#define HOT_PAGES    560u
-#define OLD_SLOTS    1024u
+/* The ring's header pages once the build's nodes are in it, the build's
+ * share of them, the compile's own pages, and the slots of the control
+ * rows. */
+#define RING_PAGES  2056u
+#define BUILD_PAGES 1140u
+#define HOT_PAGES   560u
+#define OLD_SLOTS   2048u
 /* A round to fill the cache, then the rounds that are counted. */
-#define ROUNDS       4u
+#define ROUNDS      4u
 
 static int fails;
 static uint32_t unserved;
@@ -121,23 +124,23 @@ static uint32_t fills_once_warm(uint32_t ring, uint32_t slots)
     return pc_stat_reads() - before;
 }
 
-/** Run the row at `PC_SLOTS` and the two control rows at 1024 slots, and
+/** Run the row at `PC_SLOTS` and the two control rows at 2048 slots, and
  *  print the counts. Returns 0 when every check passed and 1 otherwise. */
 int main(void)
 {
     uint32_t now = fills_once_warm(RING_PAGES, PC_SLOTS);
-    uint32_t old_without = fills_once_warm(RING_PAGES - MANUAL_PAGES, OLD_SLOTS);
+    uint32_t old_without = fills_once_warm(RING_PAGES - BUILD_PAGES, OLD_SLOTS);
     uint32_t old_with = fills_once_warm(RING_PAGES, OLD_SLOTS);
 
     check(unserved == 0, "every page of the model is served");
-    check(old_without == 0, "at 1024 slots the ring without the manual fits beside a compile");
+    check(old_without == 0, "at 2048 slots the staged ring fits beside a compile");
     check(old_with >= (ROUNDS - 1u) * RING_PAGES,
-          "and with the manual every round reads the ring from the disk again");
+          "and with the build's nodes every round reads the ring from the disk again");
     check(now == 0,
-          "at PC_SLOTS a compile's lookups over the ring with the manual read nothing from the "
-          "disk once warm");
-    printf("pagecache_ring_hosttest: fills once warm: %u at %u slots, %u and %u at 1024 slots "
-           "without and with the manual\n",
+          "at PC_SLOTS a compile's lookups over the ring with the build's nodes read nothing "
+          "from the disk once warm");
+    printf("pagecache_ring_hosttest: fills once warm: %u at %u slots, %u and %u at 2048 slots "
+           "without and with the build's nodes\n",
            now, (unsigned)PC_SLOTS, old_without, old_with);
     if (fails == 0) {
         printf("pagecache_ring_hosttest: result: pass: the ring's header pages and a compile's "

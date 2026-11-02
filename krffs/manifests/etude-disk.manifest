@@ -21,7 +21,7 @@ file 0755 /bootprobe build/tests/bootprobe
 file 0755 /procprobe build/tests/procprobe
 
 # stressprobe, the program of guest.stress and guest.stress-ahci: 33 MiB of
-# files written, synced and read back through a page cache of at most 8 MiB.
+# files written, synced and read back through a page cache of at most 16 MiB.
 file 0755 /stressprobe build/tests/stressprobe
 
 # ahciprobe, the program of guest.queue.fault, whose root is a copy of this

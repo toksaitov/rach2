@@ -212,7 +212,7 @@ Exec and a private mapping read a page of a file at its first touch, so a progra
 
 On i686 the window runs from `0xD0000000` to the lowest PCI memory BAR whose address lies in the 512 MiB after it, and is 512 MiB when none does. On x86-64 no physical address reaches the window's, so it is always 512 MiB. A root larger than the window is refused.
 
-The cache has `PC_SLOTS`, 2048 slots, and uses as many as half the caches' target allows. A slot takes a frame of the DMA pool when it is first filled, since the backing may give the frame's address to a device, and gives it back under pressure (`pc_shrink`). On a miss `pc_fault` takes a free slot or the clock's victim, written back first when dirty, reads the page, and maps it read-only for a read or writable and dirty for a write; a later write to a page mapped read-only faults again and marks it dirty. The fault path polls the disk with interrupts off and never sleeps.
+The cache has `PC_SLOTS`, 4096 slots, and uses as many as half the caches' target allows. A slot takes a frame of the DMA pool when it is first filled, since the backing may give the frame's address to a device, and gives it back under pressure (`pc_shrink`). On a miss `pc_fault` takes a free slot or the clock's victim, written back first when dirty, reads the page, and maps it read-only for a read or writable and dirty for a write; a later write to a page mapped read-only faults again and marks it dirty. The fault path polls the disk with interrupts off and never sleeps.
 
 `pc_writeback` marks the slot `pinned`, which eviction, reclaim and other writebacks respect, then maps the page read-only and clears its dirty mark before the write, so a store during the write marks it dirty again; a failed write leaves it dirty. `pc_sync` returns `PC_SYNC_BUSY` when it passed over a pinned slot and `PC_SYNC_FAILED` when a write failed. `fsync` of a file of the KRFFS root answers EIO on either, and `sync` repeats while a slot is busy, for at most 30 seconds of ticks.
 
@@ -224,7 +224,7 @@ The cache has `PC_SLOTS`, 2048 slots, and uses as many as half the caches' targe
 * A file's pages are numbered in 32 bits: a mapping of a file or of shared memory past page 2^32 is refused with EOVERFLOW, and a file in memory ends at 16 TiB less a page.
 * A writable shared mapping of a file is possible on tmpfs and ext2 alone. A store past the end of an ext2 file through a shared mapping is lost, and a touch past the end of a mapped tmpfs file ends in `SIGSEGV`, where Linux sends `SIGBUS` for both.
 * A process has at most 65536 regions, unless `vm.max_map_count` is raised.
-* A KRFFS disk root is at most 512 MiB, less on i686 where a BAR shortens the window, and the disk page cache keeps at most 2048 pages.
+* A KRFFS disk root is at most 512 MiB, less on i686 where a BAR shortens the window, and the disk page cache keeps at most 4096 pages.
 * The MMIO region never frees a mapping, the modules together have 64 MiB and must lie below 4 GiB, and i686 has 1024 temporary mappings.
 * i686 does not randomize addresses, and x86-64 places the first program, which the kernel loads itself, at fixed addresses.
 * The `mlock` calls change nothing, and `RLIMIT_MEMLOCK` is not kept.

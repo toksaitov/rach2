@@ -1539,7 +1539,7 @@ $(IMAGES_DIR)/etude-recovery.krffs: $(RECOVERY_IMAGE)
 
 # The os-real disk: the same os-real tree, but on a real disk image instead of a
 # RAM-disk module: a 64 MB disk with a 48 MB KRFFS partition at LBA 2048. The
-# partition is larger than the page cache's 8 MiB, so the file system on it is
+# partition is larger than the page cache's 16 MiB, so the file system on it is
 # bigger than what the kernel holds in RAM at once.
 os-real-disk: krffs rach2 $(MANIFEST_PARTS_os_real)
 	$(MKDISK) krffs/manifests/os-real.manifest $(OS_REAL_DISK) 64 48

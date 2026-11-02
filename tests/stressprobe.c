@@ -5,10 +5,10 @@
  * On a KRFFS mounted from a disk (rach2.fsdisk), writes 132 files of 256
  * KiB each, 33 MiB, fsyncing each, then reads every file back and checks a
  * pattern that depends on the file and the offset. The page cache holds at
- * most 8 MiB, so once its slots are full the writes and the reads replace
+ * most 16 MiB, so once its slots are full the writes and the reads replace
  * pages in it, whatever the machine's memory; data that comes back
  * unchanged shows that a file system larger than the cache works through
- * it. A file, 256 KiB, is a thirty-second of the cache's largest size.
+ * it. A file, 256 KiB, is a sixty-fourth of the cache's largest size.
  *
  * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
  * names, guest.stress.stressprobe without it: `written`, every file written
@@ -32,7 +32,7 @@
 #define O_CREAT  0x40
 #define O_TRUNC  0x200
 
-/* 132 x 256 KiB == 33 MiB, over four times the most the page cache holds. */
+/* 132 x 256 KiB == 33 MiB, over twice the most the page cache holds. */
 #define NFILES    132u
 #define FILE_SIZE (256u * 1024u)
 
