@@ -132,6 +132,9 @@
 #   have passed and the Lenovo has answered as itself and, before the
 #   release has touched it, as running its system with no trial armed, so
 #   that a Lenovo that does not answer holds up no machine's run.
+# * hold: while STATE/hold exists, the release does not first touch the
+#   Lenovo; it says the file's line and exits 75, and is started again once a
+#   person's check of a trial boot there has ended and the file is removed.
 # * recovery: the Lenovo boots its recovery system from its recovery
 #   partition; the recovery kernel and image on that partition are replaced
 #   when they differ from the build's, keeping the partition's recovery key
@@ -2011,6 +2014,8 @@ main()
         case $now in
             recovery) ;;
             system*)
+                grep -q '^touched ' "$state/record" || [ ! -e "$state/hold" ] ||
+                    later "the Lenovo is held: $(sed -n 1p "$state/hold")"
                 ! grep -q '^install started ' "$state/record" ||
                     fail install "the machine runs $now after the installer was started, so a reboot came before the release saw its result; check the root by hand"
                 note "touched $(date -u '+%FT%TZ')"
