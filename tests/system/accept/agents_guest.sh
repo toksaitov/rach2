@@ -25,10 +25,11 @@
 #                     agent's program, /opt/AGENT/bin/AGENT, in or out of its
 #                     session.
 #   sleeps AGENT      print each process in the session that runs `sleep 600`.
-#   watch AGENT       start in the background a watcher that reads `sleeps
-#                     AGENT` four times a second and records what it first
-#                     prints in ~/rach2-accept/AGENT.sleeps; it ends then, or
-#                     when the session has gone.
+#   watch AGENT       start in the background a watcher that reads the
+#                     machine's processes ten times a second and records in
+#                     ~/rach2-accept/AGENT.sleeps the first in the session
+#                     that runs `sleep 600`; it ends then, or when the
+#                     session's pane has ended.
 #   seen AGENT        end the watcher and print what it recorded.
 #   pane AGENT        print the pane's size, its terminal's size by stty, and
 #                     the number of clients attached to the session.
@@ -142,6 +143,31 @@ descendants() {
                     print line[p]
             }
         }' | sort -n
+}
+
+# sleeping ROOT: set SLEEPING to the processes below ROOT that run
+# CANCEL_LINE, a number to a line. It reads /proc with the shell's builtins
+# and starts no program, so that a read takes a small part of the second
+# that a cancelled command lives, however loaded the machine is.
+sleeping() {
+    local root=$1 proc pid word line stat
+    local -a field
+    SLEEPING=
+    for proc in /proc/[0-9]*; do
+        line=
+        while IFS= read -r -d '' word; do
+            line+=${line:+ }$word
+        done 2> /dev/null < "$proc/cmdline"
+        [ "$line" = "$CANCEL_LINE" ] || continue
+        pid=${proc#/proc/}
+        while [ -n "$pid" ] && [ "$pid" -gt 1 ] && [ "$pid" != "$root" ]; do
+            IFS= read -r stat 2> /dev/null < "/proc/$pid/stat" || break
+            # The fields after the name, in parentheses: the state, the parent.
+            read -r -a field <<< "${stat##*) }"
+            pid=${field[1]-}
+        done
+        [ "$pid" != "$root" ] || SLEEPING+=${SLEEPING:+$'\n'}${proc#/proc/}
+    done
 }
 
 # credential_sources MODE [AGENT...]: print the selected agents' credential
@@ -406,14 +432,15 @@ main() {
             ;;
         watcher)
             echo "$$" > "$DIR/$2.watch"
-            while pane_pid "$2" > /dev/null; do
-                out=$(main sleeps "$2")
-                if [ -n "$out" ]; then
-                    printf '%s\n' "$out" > "$DIR/$2.sleeps"
+            root=$(pane_pid "$2")
+            while [ -n "$root" ] && [ -d "/proc/$root" ]; do
+                sleeping "$root"
+                if [ -n "$SLEEPING" ]; then
+                    printf '%s\n' "$SLEEPING" > "$DIR/$2.sleeps"
                     break
                 fi
-                # interval: the session is read four times a second
-                sleep 0.25
+                # interval: the processes are read ten times a second
+                sleep 0.1
             done
             rm -f "$DIR/$2.watch"
             ;;
