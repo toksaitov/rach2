@@ -470,6 +470,24 @@ void wlan_cancel_work(struct wlan_work *work)
  * card does. */
 #define PEAK_DAC 40
 
+/* Accesses to the MAC, the baseband or the radio while the chip was not
+ * awake, which an AR9003 may answer with a stalled bus; the host interface
+ * (0x4000 to 0x4fff) and the RTC (0x7000 to 0x7fff) answer in every state. */
+static unsigned asleep_accesses;
+static uint32_t asleep_first; /* the first such register */
+
+/** Count an access to `reg` while the RTC is not on. */
+static void awake_check(const struct ath9k_model *m, uint32_t reg)
+{
+    if ((reg >= 0x4000 && reg <= 0x4fff) || (reg >= 0x7000 && reg <= 0x7fff))
+        return;
+    if ((m->reg[AR_RTC_RESET / 4] & AR_RTC_RESET_EN) &&
+        (m->reg[AR_RTC_FORCE_WAKE / 4] & AR_RTC_FORCE_WAKE_EN))
+        return;
+    if (asleep_accesses++ == 0)
+        asleep_first = reg;
+}
+
 /* AR_INTR_SYNC_CAUSE, the PCIe errors, which clear by writing ones. */
 static uint32_t sync_cause;
 
@@ -481,6 +499,7 @@ static int radio_switch_on = 1;
  * for, and turn the peak detector's output at PEAK_DAC, as the hardware does. */
 static int chip_read(struct ath9k_model *m, uint32_t reg, uint32_t *value)
 {
+    awake_check(m, reg);
     if (reg == AR_INTR_SYNC_CAUSE) {
         *value = sync_cause;
         return 1;
@@ -509,6 +528,7 @@ static int chip_read(struct ath9k_model *m, uint32_t reg, uint32_t *value)
  * the sync causes written. */
 static void chip_write(struct ath9k_model *m, uint32_t reg, uint32_t value)
 {
+    awake_check(m, reg);
     if (reg == AR_INTR_SYNC_CAUSE)
         sync_cause &= ~value;
     if (reg == AR_PHY_AGC_CONTROL)
@@ -676,9 +696,12 @@ static int probe_request(void)
 /** The model's faults so far must be none. */
 static void model_clean(const char *step)
 {
-    if (model.unmapped || model.dma_faults || model.overruns || storms || over_bound) {
-        printf("  after %s: unmapped %u, dma faults %u, overruns %u, storms %u, over %u\n", step,
-               model.unmapped, model.dma_faults, model.overruns, storms, over_bound);
+    if (model.unmapped || model.dma_faults || model.overruns || storms || over_bound ||
+        asleep_accesses) {
+        printf("  after %s: unmapped %u, dma faults %u, overruns %u, storms %u, over %u, "
+               "asleep %u (first 0x%x)\n",
+               step, model.unmapped, model.dma_faults, model.overruns, storms, over_bound,
+               asleep_accesses, asleep_first);
         failures++;
     }
 }
