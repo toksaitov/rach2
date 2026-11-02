@@ -815,8 +815,10 @@ static void case_robust(struct wifi *w)
 
     net_step(&w->u, "cable");
     cable(w, 1);
+    /* The lease script sets the route, then resolv.script the servers. */
     ok = sta(w, &text,
-             "until route -n | grep -q '^0.0.0.0 .*UG .*100 .*eth0'; do sleep 1; done; "
+             "until route -n | grep -q '^0.0.0.0 .*UG .*100 .*eth0' && "
+             "grep -q '^nameserver 10.0.2.3$' /etc/resolv.conf; do sleep 1; done; "
              "route -n; cat /etc/resolv.conf") == 0;
     net_assert(&w->u, "cable-in",
                ok && net_find(text, "0.0.0.0*" GW_A "*UG*600*wlan0") != NULL &&
@@ -826,7 +828,9 @@ static void case_robust(struct wifi *w)
     free(text);
     text = NULL;
     cable(w, 0);
-    ok = sta(w, &text, "while route -n | grep -q eth0; do sleep 1; done") == 0;
+    ok = sta(w, &text,
+             "while route -n | grep -q eth0 || grep -q '^nameserver 10.0.2.3$' /etc/resolv.conf; "
+             "do sleep 1; done") == 0;
     free(text);
     text = NULL;
     net_assert(&w->u, "cable-out", ok && routed(w, 0, &text) && echoed(w, ENDPOINT),
