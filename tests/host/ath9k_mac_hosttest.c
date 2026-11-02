@@ -197,14 +197,18 @@ void pci_msi_disable(const pci_device_t *dev)
     msi_disables++;
 }
 
-/* The worker: the queued work, which the test runs. */
+/* The worker: the queued work, which the test runs. As work.c does, it
+ * refuses a work queued already or whose callback runs. */
 #define MAX_WORK 4
 static struct wlan_work *queued[MAX_WORK];
+static struct wlan_work *work_running;
 
 int wlan_queue_work(struct wlan_work *work, uint64_t due)
 {
     unsigned i;
 
+    if (work == work_running)
+        return -EBUSY;
     work->due = due;
     for (i = 0; i < MAX_WORK; i++)
         if (queued[i] == work)
@@ -236,7 +240,9 @@ static unsigned run_work(void)
 
         if (w && w->due <= now_ms) {
             queued[i] = 0;
+            work_running = w;
             w->run(w);
+            work_running = 0;
             n++;
         }
     }
@@ -915,9 +921,11 @@ static void test_recover(void)
           ((uint32_t)ap[4] | (uint32_t)ap[5] << 8) + (1u << AR_BSS_ID1_AID_S));
 
     /* The hang check is queued on the worker and finds nothing. */
-    CHECK(queued[0] == &ah.recover.work);
+    CHECK(queued[0] == &ah.recover.work[0].work);
     now_ms += ATH9K_HANG_MS;
-    CHECK(run_work() == 1 && queued[0] == &ah.recover.work && hw_resets == 1);
+    CHECK(run_work() == 1 && queued[0] == &ah.recover.work[1].work && hw_resets == 1);
+    now_ms += ATH9K_HANG_MS;
+    CHECK(run_work() == 1 && queued[0] == &ah.recover.work[0].work && hw_resets == 1);
 
     /* A queue whose frame gets no status across two checks is hung: the
      * frame is reported failed, and the reset brings everything back,

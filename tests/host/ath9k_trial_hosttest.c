@@ -432,14 +432,18 @@ void wlan_radio_rfkill(struct wlan_radio *radio, int blocked)
     rfkill_blocked = blocked;
 }
 
-/* The worker: queued work, run in order of its due time. */
+/* The worker: queued work, run in order of its due time. As work.c does,
+ * it refuses a work queued already or whose callback runs. */
 #define MAX_WORK 16
 static struct wlan_work *queued[MAX_WORK];
+static struct wlan_work *work_running;
 
 int wlan_queue_work(struct wlan_work *work, uint64_t due)
 {
     unsigned i;
 
+    if (work == work_running)
+        return -EBUSY;
     for (i = 0; i < MAX_WORK; i++)
         if (queued[i] == work)
             return -EBUSY;
@@ -643,7 +647,9 @@ static void run_work(void)
         queued[at] = 0;
         w->pending = 0;
         start = model.usec;
+        work_running = w;
         w->run(w);
+        work_running = 0;
         waited_since(start, "work");
         deliver();
     }

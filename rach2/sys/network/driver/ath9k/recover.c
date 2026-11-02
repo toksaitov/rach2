@@ -227,34 +227,56 @@ int ath9k_hang_check(struct ath9k *ah)
     return (int)why;
 }
 
-/** The periodic check, queued again while the check runs. */
+/** Queue the next check a period from now, on the record not queued
+ * last, since the worker refuses the record whose callback runs. */
+static void check_queue(struct ath9k *ah)
+{
+    struct ath9k_check_work *w = &ah->recover.work[ah->recover.next_work];
+
+    ah->recover.next_work ^= 1;
+    (void)wlan_queue_work(&w->work, tick_count() + ATH9K_HANG_MS);
+}
+
+/**
+ * The periodic check, which queues the next while the checks run. Nothing
+ * once they are stopped: a stop that cancels one record while the other
+ * runs may leave the other's next run queued, and the chip then sleeps.
+ */
 static void check_run(struct wlan_work *w)
 {
-    struct ath9k *ah = CARD_OF(w, recover.work);
+    struct ath9k *ah = ((struct ath9k_check_work *)(void *)w)->ah;
 
+    if (!ah->recover.running)
+        return;
     (void)ath9k_hang_check(ah);
     if (ah->recover.running)
-        (void)wlan_queue_work(w, tick_count() + ATH9K_HANG_MS);
+        check_queue(ah);
 }
 
 /** Arm the watchdog and queue the first check a period from now. */
 void ath9k_recover_start(struct ath9k *ah)
 {
+    unsigned i;
+
     ah->recover.window = tick_count();
     ah->recover.rx_active = 0;
     ah->recover.failures = 0;
     ah->recover.running = 1;
-    ah->recover.work.wlan = ah->radio.wlan;
-    ah->recover.work.run = check_run;
+    for (i = 0; i < 2; i++) {
+        ah->recover.work[i].ah = ah;
+        ah->recover.work[i].work.wlan = ah->radio.wlan;
+        ah->recover.work[i].work.run = check_run;
+    }
     ath9k_recover_watchdog(ah);
-    (void)wlan_queue_work(&ah->recover.work, tick_count() + ATH9K_HANG_MS);
+    check_queue(ah);
 }
 
 /** Stop the checks and drop a reset not yet run. */
 void ath9k_recover_stop(struct ath9k *ah)
 {
     ah->recover.running = 0;
-    wlan_cancel_work(&ah->recover.work);
+    wlan_cancel_work(&ah->recover.work[0].work);
+    wlan_cancel_work(&ah->recover.work[1].work);
     wlan_cancel_work(&ah->recover.reset_work);
     ah->recover.pending = 0;
 }

@@ -858,18 +858,26 @@ struct ath9k_keys {
     struct ath9k_key entry[AR_KEY_CACHE_SIZE];
 };
 
+/* A record of the periodic hang check. A record cannot be queued while its
+ * callback runs, so each run queues the other of two. */
+struct ath9k_check_work {
+    struct wlan_work work;
+    struct ath9k *ah;
+};
+
 /* recover.c's: what the hang checks compare between runs, and the reset
  * the interrupt handler asks the worker for. */
 struct ath9k_recover {
-    uint64_t window;       /* the tick the receive window began */
-    uint32_t rx_active;    /* services that found receive work in it */
-    uint32_t bb_status;    /* AR_PHY_WATCHDOG_STATUS at the last watchdog */
-    uint8_t resetting;     /* a reset is running; interrupts are ignored */
-    uint8_t failures;      /* resets in a row that failed */
-    uint8_t running;       /* the hang check is queued */
-    uint8_t pending;       /* reset_work is queued for `reason` */
-    uint8_t reason;        /* enum ath9k_reset_reason */
-    struct wlan_work work; /* the periodic hang check */
+    uint64_t window;                 /* the tick the receive window began */
+    uint32_t rx_active;              /* services that found receive work in it */
+    uint32_t bb_status;              /* AR_PHY_WATCHDOG_STATUS at the last watchdog */
+    uint8_t resetting;               /* a reset is running; interrupts are ignored */
+    uint8_t failures;                /* resets in a row that failed */
+    uint8_t running;                 /* the hang check is queued */
+    uint8_t pending;                 /* reset_work is queued for `reason` */
+    uint8_t reason;                  /* enum ath9k_reset_reason */
+    uint8_t next_work;               /* the record the next check is queued on */
+    struct ath9k_check_work work[2]; /* the periodic hang check */
     struct wlan_work reset_work;
 };
 
