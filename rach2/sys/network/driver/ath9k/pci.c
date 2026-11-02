@@ -132,14 +132,15 @@ static void radio_stop(struct wlan_radio *radio)
 
 /** radio.h's start: bring the chip up on its last channel and start the
  * calibration and the hang checks; on failure leave it stopped. A start
- * while power.c holds the card suspended is refused with -EBUSY. */
+ * while power.c holds the card suspended is refused with -EBUSY; one of a
+ * started radio whose last reset failed tries the reset again. */
 static int radio_start(struct wlan_radio *radio)
 {
     struct ath9k *ah = radio->priv;
     int rc;
 
     if (ah->bus.started)
-        return 0;
+        return ah->recover.failures ? ath9k_reset(ah, ATH9K_RESET_CHANNEL) : 0;
     if (ah->power.suspended)
         return -EBUSY;
     /* ath9k_start wakes the chip and sets the link's power save before
@@ -166,7 +167,10 @@ static int radio_start(struct wlan_radio *radio)
  * radio.h's config: a new channel is a full reset onto it with the
  * receive path stopped and started around it, which fails the frames
  * queued for transmit; a new filter alone is written as it is. A stopped
- * radio keeps both for its start.
+ * radio keeps both for its start. A reset that fails leaves the chip off
+ * and counts in recover.failures, as one of recover.c's does, so that the
+ * hang check tries it again and so does the next config, whatever its
+ * channel; one that succeeds clears the count.
  */
 static int radio_config(struct wlan_radio *radio, const struct wlan_channel *channel,
                         unsigned filters)
@@ -179,14 +183,20 @@ static int radio_config(struct wlan_radio *radio, const struct wlan_channel *cha
         ah->phy.channel = *channel;
         return 0;
     }
-    if (channel->frequency == ah->phy.channel.frequency) {
+    if (channel->frequency == ah->phy.channel.frequency && !ah->recover.failures) {
         ath9k_mac_set_filter(ah, filters);
         return 0;
     }
     quiesce(ah);
     rc = bring_up(ah, channel);
-    if (rc != 0)
-        klog(KLOG_ERR, "ath9k", "config: failed: %u MHz: %d", (unsigned)channel->frequency, rc);
+    if (rc == 0) {
+        ah->recover.failures = 0;
+        return 0;
+    }
+    klog(KLOG_ERR, "ath9k", "config: failed: %u MHz: %d", (unsigned)channel->frequency, rc);
+    if (ah->recover.failures < 0xff)
+        ah->recover.failures++;
+    ah->recover.reason = ATH9K_RESET_CHANNEL;
     return rc;
 }
 

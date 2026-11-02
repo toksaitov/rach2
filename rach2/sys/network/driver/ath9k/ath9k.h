@@ -533,6 +533,7 @@ enum ath9k_reset_reason {
     ATH9K_RESET_RX_STALL,    /* no frame received for too long */
     ATH9K_RESET_CAL,         /* a calibration failed */
     ATH9K_RESET_TX_ERROR,    /* an aggregate went out and no BlockAck came */
+    ATH9K_RESET_CHANNEL,     /* a reset onto a new channel failed */
     ATH9K_RESET_REASONS
 };
 
@@ -875,7 +876,9 @@ struct ath9k_recover {
     uint32_t rx_active;              /* services that found receive work in it */
     uint32_t bb_status;              /* AR_PHY_WATCHDOG_STATUS at the last watchdog */
     uint8_t resetting;               /* a reset is running; interrupts are ignored */
-    uint8_t failures;                /* resets in a row that failed */
+    uint8_t failures;                /* resets in a row that failed, a
+                                      * config's among them; the chip is
+                                      * off while it is nonzero */
     uint8_t running;                 /* the hang check is queued */
     uint8_t pending;                 /* reset_work is queued for `reason` */
     uint8_t reason;                  /* enum ath9k_reset_reason */

@@ -633,6 +633,14 @@ void ath9k_recover_start(struct ath9k *ah)
     note("recover_start");
 }
 
+int ath9k_reset(struct ath9k *ah, enum ath9k_reset_reason why)
+{
+    (void)why;
+    note("reset");
+    ah->recover.failures = 0;
+    return 0;
+}
+
 void ath9k_recover_stop(struct ath9k *ah)
 {
     (void)ah;
@@ -982,6 +990,35 @@ static void test_radio(void)
     CHECK(tuned == 2412 && card.phy.channel.frequency == 2412);
     cold = ath9k_model_find(&model, 0, ATH9K_MODEL_WRITE, AR_RTC_RC);
     CHECK(cold >= 0 && model.log[cold].value == AR_RTC_RC_MAC_WARM);
+
+    /* A retune whose calibration fails, after the synthesizer took the
+     * channel, leaves the chip off: the same channel again is a full
+     * reset, not the filter alone, until one succeeds. */
+    cal_rc = -EIO;
+    CHECK(ops->config(radio, &radio->band.channels[10], 7) == -EIO);
+    CHECK(logged("ath9k: config: failed: 2462 MHz: -5"));
+    CHECK(card.phy.channel.frequency == 2462 && card.recover.failures == 1 &&
+          card.recover.reason == ATH9K_RESET_CHANNEL);
+    notes_clear();
+    CHECK(ops->config(radio, &radio->band.channels[10], 7) == -EIO);
+    CHECK(call_index("cal_init") != ~0u && call_index("mac_intr_enable") == ~0u);
+    CHECK(card.recover.failures == 2);
+    cal_rc = 0;
+    notes_clear();
+    CHECK(ops->config(radio, &radio->band.channels[10], 7) == 0);
+    CHECK(calls_are(retune));
+    CHECK(card.recover.failures == 0);
+    /* A start of the started radio after such a failure resets again. */
+    cal_rc = -EIO;
+    CHECK(ops->config(radio, &radio->band.channels[0], 7) == -EIO);
+    cal_rc = 0;
+    notes_clear();
+    CHECK(ops->start(radio) == 0);
+    {
+        static const char *const reset[] = {"reset", NULL};
+        CHECK(calls_are(reset));
+    }
+    CHECK(card.recover.failures == 0 && card.phy.channel.frequency == 2412);
 
     /* Transmit, keys, the BSSID, aggregation and the TSF reach their parts. */
     notes_clear();

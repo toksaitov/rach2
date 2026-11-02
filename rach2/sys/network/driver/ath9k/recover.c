@@ -34,8 +34,8 @@
 
 /* The names of enum ath9k_reset_reason, for the log. */
 static const char *const reason_name[ATH9K_RESET_REASONS] = {
-    "fatal",   "bb-watchdog", "bb-hang",     "mac-hang",
-    "tx-hang", "rx-stall",    "calibration", "tx-error"};
+    "fatal",    "bb-watchdog", "bb-hang",  "mac-hang", "tx-hang",
+    "rx-stall", "calibration", "tx-error", "channel"};
 
 /** The card whose recover.`member` is `w`. */
 #define CARD_OF(w, member) ((struct ath9k *)(void *)((char *)(w) - offsetof(struct ath9k, member)))
@@ -127,7 +127,8 @@ int ath9k_reset(struct ath9k *ah, enum ath9k_reset_reason why)
         ah->stats.resets[why]++;
     ah->recover.reason = (uint8_t)why;
     if (rc) {
-        ah->recover.failures++;
+        if (ah->recover.failures < 0xff)
+            ah->recover.failures++;
         ah->recover.resetting = 0;
         klog(KLOG_WARN, "ath9k", "reset: %s: failed: error %d", reason_name[why], rc);
         return rc;
