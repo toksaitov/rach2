@@ -216,18 +216,27 @@ static unsigned frame_type(unsigned fc)
  * of `n`, RTS where a series asks for it, the key's entry and type, the
  * aggregate's flags, length and delimiters, the link to the next
  * subframe's descriptor and the checksum of the descriptor's pointers.
+ * A first series that names no rate the chip sends, which rate control
+ * leaves for a peer it cannot read, goes at the slowest rate twice, since
+ * mac80211 never gives ath9k a descriptor with no tries.
  */
 void ath9k_tx_desc(struct ath9k *ah, const struct ath9k_txq *q, struct ath9k_tx_slot *s,
-                   const struct wlan_tx_rate *r, unsigned i, unsigned n, unsigned aggr_len,
+                   const struct wlan_tx_rate *rates, unsigned i, unsigned n, unsigned aggr_len,
                    uint32_t link)
 {
+    static const struct wlan_tx_rate slowest = {0, 2, 0};
     struct ar9003_txc *d = s->desc;
+    struct wlan_tx_rate r[WLAN_TX_RATE_SERIES];
     unsigned tries[WLAN_TX_RATE_SERIES], codes[WLAN_TX_RATE_SERIES], dur[WLAN_TX_RATE_SERIES];
     unsigned k, chains = ah->hw.chip ? ah->hw.chip->chainmask : 1;
     unsigned airlen = n > 1 ? aggr_len : s->framelen;
     uint32_t sum, ctl18 = 0, rts_flags = 0, aggr12 = 0, aggr17 = 0;
     int ended = 0;
 
+    for (k = 0; k < WLAN_TX_RATE_SERIES; k++)
+        r[k] = rates[k];
+    if (r[0].index < 0 || r[0].count == 0 || rate_code(ah, &r[0]) == 0)
+        r[0] = slowest;
     for (k = 0; k < WLAN_TX_RATE_SERIES; k++) {
         unsigned code = ended ? 0 : rate_code(ah, &r[k]);
 
