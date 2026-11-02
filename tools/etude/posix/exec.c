@@ -46,6 +46,8 @@ struct etude_proc {
     uint64_t drain_until; /* after the keeper's end, when open output
                              proves a process of the case still runs */
     int noticed;          /* the keeper reported a change of the suspension */
+    size_t pass_out;      /* bytes read from stdout in this pass of the loop */
+    size_t pass_err;      /* and from stderr; neither passes OUTPUT_PASS */
     int finished;
     int returned;
     struct etude_exec_result r;
@@ -308,19 +310,22 @@ static void child_found(void *ctx, long pid)
 
 /**
  * Read what output stream `*fd` holds now, until it would wait, ends, or
- * has given `OUTPUT_PASS` bytes, so that a writer that never pauses does
- * not hold the loop away from the other attempts and the keeper's messages.
+ * has given `OUTPUT_PASS` bytes in this pass of the loop (`serve`), counted
+ * in `pass_out` for stdout, which `scan` names, or `pass_err`, so that a
+ * writer that never pauses does not hold the loop away from the other
+ * attempts and the keeper's messages. The reads of one pass, at the keeper's
+ * report of the end and in `proc_settle` too, share the bound.
  *
- * @return the count of bytes read; at least `OUTPUT_PASS`, with `*fd` still
- * open, when more may be waiting.
+ * @return the count of bytes read.
  */
 static size_t read_output(struct etude_proc *p, int *fd, struct etude_output *o, int scan)
 {
+    size_t *used = scan ? &p->pass_out : &p->pass_err;
     size_t total = 0;
     char buf[4096];
     ssize_t n;
 
-    while (*fd >= 0 && total < OUTPUT_PASS) {
+    while (*fd >= 0 && *used < OUTPUT_PASS) {
         n = read(*fd, buf, sizeof(buf));
         if (n < 0 && errno == EINTR)
             continue;
@@ -332,6 +337,7 @@ static size_t read_output(struct etude_proc *p, int *fd, struct etude_output *o,
             return total;
         }
         total += (size_t)n;
+        *used += (size_t)n;
         if (p->r.output_error == 0)
             p->r.output_error =
                 capture_files_add(scan ? p->files.out : p->files.err, buf, (size_t)n);
@@ -415,7 +421,8 @@ static void read_keeper(struct etude_proc *p)
  * Finish an attempt whose keeper has been reaped, once its output has ended.
  * Output still open after the grace period has a writer that outlived the
  * cleanup, so the cleanup is unconfirmed; once it is, output is read only
- * while more than one pass of it waits, and at most for the grace period.
+ * while each pass of the loop finds its whole bound waiting, and at most for
+ * the grace period.
  */
 static void proc_settle(struct etude_proc *p)
 {
@@ -423,8 +430,10 @@ static void proc_settle(struct etude_proc *p)
 
     if (!p->reaped || p->finished)
         return;
-    more = read_output(p, &p->out, &p->r.out, 1) >= OUTPUT_PASS;
-    more |= read_output(p, &p->err, &p->r.err, 0) >= OUTPUT_PASS;
+    read_output(p, &p->out, &p->r.out, 1);
+    read_output(p, &p->err, &p->r.err, 0);
+    more =
+        (p->out >= 0 && p->pass_out >= OUTPUT_PASS) || (p->err >= 0 && p->pass_err >= OUTPUT_PASS);
     open_output = p->out >= 0 || p->err >= 0;
     if (open_output && (more || p->r.cleanup == ETUDE_CLEANUP_CONFIRMED) &&
         posix_now_us() < p->drain_until)
@@ -506,6 +515,7 @@ static size_t serve(struct etude_exec *ex)
     for (p = ex->procs; p != NULL; p = p->next) {
         if (p->finished)
             continue;
+        p->pass_out = p->pass_err = 0;
         n += read_output(p, &p->out, &p->r.out, 1);
         n += read_output(p, &p->err, &p->r.err, 0);
         if (!p->reaped)
