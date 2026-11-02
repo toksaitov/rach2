@@ -211,20 +211,19 @@ static const struct ath9k_ant_params ar9565_ant = {
  * ath9k's ar9003_phy.c and ar9003_calib.c test AR_SREV_9565 for, the
  * quirks its hw.c gives AR_SREV_9565 by name, and 14 GPIO lines
  * (AR9565_NUM_GPIO). */
-static const struct ath9k_chip ar9565 = {"AR9565",
-                                         0x0036,
-                                         AR_SREV_VERSION_9565,
-                                         ar9565_revs,
-                                         ATH9K_CHIP_2GHZ | ATH9K_CHIP_PCOEM | ATH9K_CHIP_JUPITER |
-                                             ATH9K_CHIP_ANT_COMB | ATH9K_CHIP_MCI |
-                                             ATH9K_CHIP_SPUR_AB | ATH9K_CHIP_IQ_BOUND |
-                                             ATH9K_CHIP_BB_DPLL | ATH9K_CHIP_WA_BIT22 |
-                                             ATH9K_CHIP_PLL_BIT18,
-                                         0x1,
-                                         14,
-                                         ar9565_subsys,
-                                         &ar9565_ops,
-                                         &ar9565_ant};
+static const struct ath9k_chip ar9565 = {
+    "AR9565",
+    0x0036,
+    AR_SREV_VERSION_9565,
+    ar9565_revs,
+    ATH9K_CHIP_2GHZ | ATH9K_CHIP_PCOEM | ATH9K_CHIP_JUPITER | ATH9K_CHIP_ANT_COMB | ATH9K_CHIP_MCI |
+        ATH9K_CHIP_SPUR_AB | ATH9K_CHIP_IQ_BOUND | ATH9K_CHIP_BB_DPLL | ATH9K_CHIP_WA_BIT22 |
+        ATH9K_CHIP_PLL_BIT18,
+    0x1,
+    14,
+    ar9565_subsys,
+    &ar9565_ops,
+    &ar9565_ant};
 
 /* ------------------------------------------------------------------ */
 /* The table and its lookups.                                          */
