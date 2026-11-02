@@ -1357,15 +1357,28 @@ static int hex_of(char *out, unsigned long v, int width)
     return n;
 }
 
-/** Write `v` into `out` in decimal; returns the count written. */
-static int dec_of(char *out, unsigned long v)
+/** Write `v` into `out` in decimal; returns the count written. Each digit
+ * is the remainder of a division by 10 done by shifting and subtracting,
+ * since an i386 64-bit division calls libgcc, which a probe does not link. */
+static int dec_of(char *out, unsigned long long v)
 {
     char tmp[24];
     int n = 0, i = 0;
 
     do {
-        tmp[n++] = (char)('0' + v % 10u);
-        v /= 10u;
+        unsigned long long q = 0, r = 0;
+        int b;
+
+        for (b = 63; b >= 0; b--) {
+            r = (r << 1) | ((v >> b) & 1u);
+            q <<= 1;
+            if (r >= 10u) {
+                r -= 10u;
+                q |= 1u;
+            }
+        }
+        tmp[n++] = (char)('0' + (int)r);
+        v = q;
     } while (v != 0);
     while (n > 0) {
         out[i++] = tmp[--n];
@@ -1410,7 +1423,7 @@ static void maps_fresh_rows(void)
     needle[k++] = ':';
     k += hex_of(needle + k, (dev & 0xffu) | ((dev >> 12) & 0xfff00u), 2);
     needle[k++] = ' ';
-    k += dec_of(needle + k, *(unsigned long *)(st + KSTAT_INO));
+    k += dec_of(needle + k, *(unsigned long long *)(st + KSTAT_INO));
     needle[k++] = ' ';
     needle[k] = '\0';
     check("maps-file-identity", contains(after, b, needle),
