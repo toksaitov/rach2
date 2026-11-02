@@ -396,9 +396,39 @@ static void read_text(const char *path)
 }
 
 /**
+ * The row of a directory renamed on the writable mount: a descriptor of it
+ * opened before the rename makes a file in it after, since the type rebuilds
+ * the path from the volume, and the file and the directory are removed.
+ */
+static void row_renamed_dir(void)
+{
+    int rfd, xfd;
+
+    if (syscall2(SYS_MKDIR, (long)in_mnt("/rdir"), 0755) != 0) {
+        fail("mkdir on the writable mount");
+    }
+    rfd = syscall3(SYS_OPEN, (long)in_mnt("/rdir"), O_RDONLY, 0);
+    if (rfd < 0 || syscall2(SYS_RENAME, (long)in_mnt("/rdir"), (long)in_mnt("/rdir2")) != 0) {
+        fail("open and rename a directory on the mount");
+    }
+    xfd = syscall4(SYS_OPENAT, rfd, (long)"x", O_WRONLY | O_CREAT, 0644);
+    if (xfd < 0 || xstat(in_mnt("/rdir2/x")) != 0) {
+        fail("a directory descriptor follows its directory's rename");
+    }
+    syscall1(SYS_CLOSE, xfd);
+    syscall1(SYS_CLOSE, rfd);
+    if (syscall1(SYS_UNLINK, (long)in_mnt("/rdir2/x")) != 0) {
+        fail("unlink on the writable mount");
+    }
+    if (syscall1(SYS_RMDIR, (long)in_mnt("/rdir2")) != 0) {
+        fail("unlink and rmdir on the writable mount");
+    }
+}
+
+/**
  * The rows that place and refuse mounts: a writable mount, on which a
- * directory descriptor follows a rename of its directory, since the type
- * rebuilds the path from the volume; its removal; the refused flags,
+ * directory descriptor follows a rename of its directory
+ * (`row_renamed_dir`); its removal; the refused flags,
  * targets, sources and options; and the read-only mount the later rows use,
  * a tmpfs stacked over it and taken away, and the second mount it makes busy.
  *
@@ -424,29 +454,7 @@ static void rows_placing(void)
     if (do_mount(src, mnt, 0, 0) != 0) {
         fail("a writable mount is placed");
     }
-    {
-        int rfd, xfd;
-
-        if (syscall2(SYS_MKDIR, (long)in_mnt("/rdir"), 0755) != 0) {
-            fail("mkdir on the writable mount");
-        }
-        rfd = syscall3(SYS_OPEN, (long)in_mnt("/rdir"), O_RDONLY, 0);
-        if (rfd < 0 || syscall2(SYS_RENAME, (long)in_mnt("/rdir"), (long)in_mnt("/rdir2")) != 0) {
-            fail("open and rename a directory on the mount");
-        }
-        xfd = syscall4(SYS_OPENAT, rfd, (long)"x", O_WRONLY | O_CREAT, 0644);
-        if (xfd < 0 || xstat(in_mnt("/rdir2/x")) != 0) {
-            fail("a directory descriptor follows its directory's rename");
-        }
-        syscall1(SYS_CLOSE, xfd);
-        syscall1(SYS_CLOSE, rfd);
-        if (syscall1(SYS_UNLINK, (long)in_mnt("/rdir2/x")) != 0) {
-            fail("unlink on the writable mount");
-        }
-        if (syscall1(SYS_RMDIR, (long)in_mnt("/rdir2")) != 0) {
-            fail("unlink and rmdir on the writable mount");
-        }
-    }
+    row_renamed_dir();
     fill_volume();
     if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("the writable mount is taken away");
@@ -843,16 +851,63 @@ static void row_long_target(void)
     }
 }
 
-/** The rows of umount2's flags and the permanent mounts, an unprivileged
- * caller, noexec, a program run from the mount, and a target too long for
- * the mount's record, which claims nothing. MNT_DETACH takes a mount with
- * two files open from view, and their last close unmounts it; the two keep
- * its record apart from the one `rows_record` looks for. The noexec and
+/** The rows of noexec and of a program run from the mount. The noexec and
  * executable mounts pass `umask=000`, which makes every file 0777, so that
  * only noexec refuses the program. */
-static void rows_flags(void)
+static void rows_exec(void)
 {
     char *av[2];
+    int pid;
+
+    if (do_mount(src, mnt, MS_RDONLY | MS_NOEXEC, "umask=000") != 0) {
+        fail("the noexec mount");
+    }
+    av[0] = (char *)in_mnt("/hello");
+    av[1] = 0;
+    if (syscall3(SYS_EXECVE, (long)av[0], (long)av, (long)(av + 1)) != -EACCES) {
+        fail("execve on a noexec mount is EACCES");
+    }
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
+        fail("umount2 after the noexec row");
+    }
+    if (do_mount(src, mnt, MS_RDONLY, "umask=000") != 0) {
+        fail("the executable mount");
+    }
+    pid = syscall1(SYS_FORK, 0);
+    if (pid == 0) {
+        int xr = syscall3(SYS_EXECVE, (long)av[0], (long)av, (long)(av + 1));
+
+        sys_exit(-xr);
+    }
+    {
+        int st = wait_status(pid);
+
+        if ((st & 0x7f) != 0) {
+            fail("a program runs from the mount: a signal ended it");
+        }
+        if ((st & 0xff00) != 0) {
+            static char why[40] = "a program runs from the mount: errno ";
+            int v = (st >> 8) & 0xff;
+
+            why[37] = (char)('0' + (v / 10) % 10);
+            why[38] = (char)('0' + v % 10);
+            why[39] = 0;
+            fail(why);
+        }
+    }
+    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
+        fail("umount2 after running from the mount");
+    }
+}
+
+/** The rows of umount2's flags and the permanent mounts, an unprivileged
+ * caller, noexec and a program run from the mount (`rows_exec`), and a
+ * target too long for the mount's record, which claims nothing. MNT_DETACH
+ * takes a mount with two files open from view, and their last close
+ * unmounts it; the two keep its record apart from the one `rows_record`
+ * looks for. */
+static void rows_flags(void)
+{
     int pid, fd, fd2;
 
     if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != -EINVAL) {
@@ -900,47 +955,7 @@ static void rows_flags(void)
     if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
         fail("umount2 before the noexec rows");
     }
-
-    if (do_mount(src, mnt, MS_RDONLY | MS_NOEXEC, "umask=000") != 0) {
-        fail("the noexec mount");
-    }
-    av[0] = (char *)in_mnt("/hello");
-    av[1] = 0;
-    if (syscall3(SYS_EXECVE, (long)av[0], (long)av, (long)(av + 1)) != -EACCES) {
-        fail("execve on a noexec mount is EACCES");
-    }
-    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
-        fail("umount2 after the noexec row");
-    }
-    if (do_mount(src, mnt, MS_RDONLY, "umask=000") != 0) {
-        fail("the executable mount");
-    }
-    pid = syscall1(SYS_FORK, 0);
-    if (pid == 0) {
-        int xr = syscall3(SYS_EXECVE, (long)av[0], (long)av, (long)(av + 1));
-
-        sys_exit(-xr);
-    }
-    {
-        int st = wait_status(pid);
-
-        if ((st & 0x7f) != 0) {
-            fail("a program runs from the mount: a signal ended it");
-        }
-        if ((st & 0xff00) != 0) {
-            static char why[40] = "a program runs from the mount: errno ";
-            int v = (st >> 8) & 0xff;
-
-            why[37] = (char)('0' + (v / 10) % 10);
-            why[38] = (char)('0' + v % 10);
-            why[39] = 0;
-            fail(why);
-        }
-    }
-    if (syscall2(SYS_UMOUNT2, (long)mnt, 0) != 0) {
-        fail("umount2 after running from the mount");
-    }
-
+    rows_exec();
     row_long_target();
 }
 

@@ -624,7 +624,6 @@ tests/memprobe.c:probe_main complexity 31 a probe, one sequence of steps in the 
 
 tests/mountprobe.c:rows_lifetime complexity 30 a probe, one sequence of steps in the order the log records them
 tests/mountprobe.c:rows_lifetime lines 128 a probe, one sequence of steps in the order the log records them
-tests/mountprobe.c:rows_placing complexity 26 a probe, one sequence of steps in the order the log records them
 tests/mountprobe.c:rows_reading complexity 26 a probe, one sequence of steps in the order the log records them
 
 tests/musl/addusermusl.c:check_concurrent complexity 53 a test's rows, each a case, read as one table
