@@ -172,9 +172,10 @@ void genl_release(uint32_t portid);
  * Clear the table first and again on failure. Reject truncated headers,
  * payloads, missing alignment bytes and policy errors. A repeated known id
  * takes the last value, as Linux does, since wpa_supplicant repeats
- * NL80211_ATTR_SOCKET_OWNER. Unknown ids above maxattr are skipped. Values borrow data until it
- * changes. Return 0 or -EINVAL; on failure set *bad_offset when non-NULL to the attribute's byte
- * offset from data. policy may be NULL for bounds only.
+ * NL80211_ATTR_SOCKET_OWNER. Unknown ids above maxattr are skipped. Values
+ * borrow data until it changes. Return 0 or -EINVAL; on failure set
+ * *bad_offset when non-NULL to the attribute's byte offset from data. policy
+ * may be NULL for bounds only.
  */
 int nla_parse(const uint8_t *data, unsigned len, const struct nla_policy *policy, unsigned maxattr,
               const struct nlattr **table, unsigned *bad_offset);
