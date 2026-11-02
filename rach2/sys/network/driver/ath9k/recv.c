@@ -20,6 +20,11 @@
 #define RSSI_BAD            -128
 #define PHYERR_OFDM_RESTART 39
 
+/* ath9k's ATH_RSSI_EP_MULTIPLIER and ATH_RSSI_LPF_LEN: the beacons'
+ * average is kept in 128ths, each beacon weighing a tenth. */
+#define RSSI_EP      128
+#define RSSI_LPF_LEN 10
+
 /* The FCS the chip leaves on every frame, and TKIP's ICV, which it leaves
  * on a frame it decrypts and which the station expects removed. */
 #define FCS_LEN      4
@@ -183,6 +188,34 @@ static uint64_t extend_tsf(const struct ath9k *ah, uint32_t stamp)
 }
 
 /**
+ * Take the RSSI `rssi` of a frame into the average of the associated AP's
+ * beacons that noise immunity reads, as ath9k_process_rssi does: a frame
+ * received whole, a beacon whose BSSID is the station's while it is
+ * associated, and an RSSI the chip could read. A reading below the noise
+ * floor counts as 0, so that the average, as ath9k's ends, stays at 0 or
+ * above.
+ */
+static void beacon_signal(struct ath9k *ah, const uint8_t *frame, unsigned len, int rssi)
+{
+    struct ath9k_ani *a = &ah->ani;
+    unsigned i;
+
+    if (!ah->mac.associated || rssi == RSSI_BAD || len < 24 || (frame[0] & 0xfc) != 0x80)
+        return;
+    for (i = 0; i < 6; i++)
+        if (frame[16 + i] != ah->mac.bssid[i])
+            return;
+    if (rssi < 0)
+        rssi = 0;
+    if (a->beacon_heard)
+        a->beacon_lpf = (a->beacon_lpf * (RSSI_LPF_LEN - 1) + rssi * RSSI_EP) / RSSI_LPF_LEN;
+    else
+        a->beacon_lpf = rssi * RSSI_EP;
+    a->beacon_heard = 1;
+    a->beacon_rssi = (a->beacon_lpf + RSSI_EP / 2) / RSSI_EP;
+}
+
+/**
  * Hand one completed buffer's frame to the station, as ath9k's
  * ath9k_cmn_rx_accept and ath9k_cmn_rx_skb_postprocess judge it: a frame
  * with a bad CRC or a phy error is dropped and counted; one the chip
@@ -263,6 +296,8 @@ static int deliver(struct ath9k *ah, uint8_t *buf, int hp)
     st.tsf = extend_tsf(ah, rxs->status3);
     st.frequency = ah->phy.channel.frequency;
     rssi = (int8_t)MS(rxs->status5, AR_RxRSSICombined);
+    if (s11 & AR_RxFrameOK)
+        beacon_signal(ah, frame, len, rssi);
     if (rssi == RSSI_BAD)
         rssi = 0;
     st.signal = (int16_t)((ah->cal.noise_floor ? ah->cal.noise_floor : DEFAULT_NOISE_FLOOR) + rssi);

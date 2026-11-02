@@ -508,6 +508,48 @@ static void test_rx(void)
     CHECK(model.rx[1].count == ATH9K_RX_LP_DEPTH);
     CHECK(ant_calls == 1 && ah.stats.rx_frames == 1);
     CHECK(ath9k_model_peek(&model, AR_IER) == AR_IER_ENABLE);
+    CHECK(ah.ani.beacon_rssi == 0); /* not associated: not the AP's */
+
+    /* Associated, the AP's beacons set noise immunity's average, each
+     * weighing a tenth after the first; another BSS's beacon, a frame
+     * that is no beacon, an RSSI the chip could not read and a CRC error
+     * leave it. */
+    ah.mac.associated = 1;
+    k_memcpy(ah.mac.bssid, ap, 6);
+    CHECK(receive(0, f, len, 0x1b, 50, 0) == 0);
+    interrupt();
+    CHECK(ah.ani.beacon_rssi == 50 && ah.ani.beacon_lpf == 50 * 128);
+    CHECK(receive(0, f, len, 0x1b, 30, 0) == 0);
+    interrupt();
+    CHECK(ah.ani.beacon_rssi == 48); /* (50 * 9 + 30) / 10 */
+    f[16 + 5] ^= 1;
+    CHECK(receive(0, f, len, 0x1b, 5, 0) == 0);
+    f[16 + 5] ^= 1;
+    f[0] = 0x50; /* a probe response */
+    CHECK(receive(0, f, len, 0x1b, 5, 0) == 0);
+    f[0] = 0x80;
+    CHECK(receive(0, f, len, 0x1b, -128, 0) == 0);
+    {
+        static uint8_t buf[200];
+        struct ar9003_rxs st;
+
+        k_memset(&st, 0, sizeof(st));
+        k_memcpy(buf, f, len);
+        st.status5 = SM(5, AR_RxRSSICombined);
+        st.status11 = AR_CRCErr;
+        CHECK(ath9k_model_rx(&model, 0, buf, len + 4, &st) == 0);
+    }
+    interrupt();
+    CHECK(ah.ani.beacon_rssi == 48 && ah.stats.rx_frames == 6);
+    CHECK(receive(0, f, len, 0x1b, -3, 0) == 0); /* below the floor: 0 */
+    interrupt();
+    CHECK(ah.ani.beacon_rssi == 43); /* 48 * 9 / 10 */
+    ah.mac.associated = 0;
+    ah.ani.beacon_rssi = ah.ani.beacon_lpf = ah.ani.beacon_heard = 0;
+    /* The counts as the first beacon left them, for the rows below. */
+    rx_count = 1;
+    ah.stats.rx_frames = 1;
+    ah.stats.rx_crc = 0;
 
     /* A QoS data frame, which the chip pads after its 26-byte header, on
      * the high-priority FIFO at MCS 5 with a short guard interval. */

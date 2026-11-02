@@ -227,8 +227,9 @@ static int radio_set_key(struct wlan_radio *radio, int enable, const uint8_t pee
 /**
  * radio.h's sta_state: the BSSID from the first authentication to the
  * return to NONE, as mac80211's BSS change gives it to ath9k; whether the
- * station is associated, which narrows the beacon filter to the BSS's and
- * lets recover.c judge the receive path, from a window that starts at the
+ * station is associated, which narrows the beacon filter to the BSS's,
+ * starts noise immunity's average of the AP's beacons again and lets
+ * recover.c judge the receive path, from a window that starts at the
  * association; and the AP's A-MPDU limits from association, as ath9k's
  * sta_add takes them. The station layer gives no association ID here, so
  * the chip's stays 0, which only a station in power save would need.
@@ -244,6 +245,11 @@ static int radio_sta_state(struct wlan_radio *radio, const struct wlan_bss *bss,
     if (associated && changed) {
         ah->recover.window = tick_count();
         ah->recover.rx_active = 0;
+    }
+    if (changed) {
+        /* Noise immunity takes the beacons of this association alone. */
+        ah->ani.beacon_heard = 0;
+        ah->ani.beacon_rssi = 0;
     }
     ah->mac.associated = associated;
     if (!ah->bus.started) {

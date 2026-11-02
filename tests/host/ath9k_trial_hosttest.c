@@ -929,6 +929,9 @@ static void ap_air(void)
     }
 }
 
+/* The RSSI of the AP's beacons over the noise floor, a strong signal. */
+#define AP_BEACON_RSSI 45
+
 /** The AP's beacon, every 100 ms while it is on. */
 static void ap_beacon(void)
 {
@@ -942,6 +945,9 @@ static void ap_beacon(void)
     k_memcpy(b + 14, "TDA-NET", 7);
     /* A beacon goes to every station; ap_queue's address is the BSSID. */
     ap_queue(0x0080, bcast, b, 12 + 9, 0);
+    if (airq_count)
+        airq[(airq_head + airq_count - 1) % AIRQ].status.status5 =
+            SM(AP_BEACON_RSSI, AR_RxRSSICombined);
 }
 
 /** Judge a protected data frame of the station's, which descriptor `dc`
@@ -1581,6 +1587,7 @@ static void connect_and_soak(void)
      * session, aggregates, and Minstrel finds MCS 5. */
     clean_traffic(3000, "the traffic");
     CHECK(ap.addba == 1 && card.ampdu.tid[0].active);
+    CHECK(card.ani.beacon_rssi == AP_BEACON_RSSI);
     CHECK(ap.aggregates > 0 && ap.subframes > 2 * ap.aggregates);
     CHECK(ap.fast > ap.data / 2);
     /* What `iw dev wlan0 station dump` reports, from the last frames:
@@ -1640,7 +1647,7 @@ static void connect_and_soak(void)
         held -= card.stats.resets[i];
     CHECK(held == 0);
     CHECK(station_state(WLAN_STA_NONE) == 0);
-    CHECK(!data.connected);
+    CHECK(!data.connected && card.ani.beacon_rssi == 0);
     if (slot >= 0)
         CHECK(entry_holds((unsigned)slot, 0, 0));
     CHECK(entry_holds(1, 0, 0));

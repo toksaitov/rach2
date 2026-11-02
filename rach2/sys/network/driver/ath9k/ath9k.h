@@ -732,8 +732,11 @@ struct ath9k_ani {
     uint16_t ofdm_trig_low;
     uint16_t cck_trig_high;
     uint16_t cck_trig_low;
-    int beacon_rssi;      /* the BSS's beacons' average RSSI, which
-                           * recv.c keeps; 0 until it does */
+    int beacon_rssi;      /* the associated AP's beacons' average RSSI
+                           * over the noise floor, rounded, at least 0,
+                           * which recv.c keeps; 0 until a beacon */
+    int beacon_lpf;       /* that average times 128, ath9k's last_rssi */
+    uint8_t beacon_heard; /* beacon_lpf holds a beacon of this association */
     uint32_t listen_time; /* milliseconds counted since the last restart */
     uint32_t ofdm_errors; /* phy errors counted since the last restart */
     uint32_t cck_errors;
