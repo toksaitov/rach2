@@ -1,4 +1,4 @@
-/* Generic-netlink family registration, request dispatch and attribute helpers. */
+/* Generic-netlink family registration, dispatch and attribute helpers. */
 #ifndef _GENETLINK_H_
 #define _GENETLINK_H_
 
@@ -191,11 +191,11 @@ unsigned nla_len(const struct nlattr *attr);
 unsigned nla_type(const struct nlattr *attr);
 /** Read a policy-validated native-endian u8 payload. */
 uint8_t nla_get_u8(const struct nlattr *attr);
-/** Read a policy-validated native-endian u16 payload without alignment needs. */
+/** Read a policy-validated native-endian u16 payload at any alignment. */
 uint16_t nla_get_u16(const struct nlattr *attr);
-/** Read a policy-validated native-endian u32 payload without alignment needs. */
+/** Read a policy-validated native-endian u32 payload at any alignment. */
 uint32_t nla_get_u32(const struct nlattr *attr);
-/** Read a policy-validated native-endian u64 payload without alignment needs. */
+/** Read a policy-validated native-endian u64 payload at any alignment. */
 uint64_t nla_get_u64(const struct nlattr *attr);
 
 /** Append a bounded attribute and zero its 4-byte alignment padding.
@@ -219,7 +219,7 @@ int nla_put_string(struct genl_msg *msg, unsigned type, const char *string);
 unsigned nla_nest_start(struct genl_msg *msg, unsigned type);
 /** Finish the nest at offset, returning 0 or sticky error. */
 int nla_nest_end(struct genl_msg *msg, unsigned offset);
-/** Discard a nest and its children, restoring len to offset, retaining error. */
+/** Discard a nest and its children, restoring len to offset, keeping error. */
 void nla_nest_cancel(struct genl_msg *msg, unsigned offset);
 
 /** Internal transport entry: dispatch one complete request in process context.

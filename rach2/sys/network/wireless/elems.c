@@ -1,4 +1,4 @@
-/* Parse and build the information elements shared by Wi-Fi management frames. */
+/* Parse and build the information elements of Wi-Fi management frames. */
 #include "ieee80211.h"
 #include "../../lib/kerrno.h"
 
@@ -84,7 +84,7 @@ static int vendor_elem(const uint8_t *p, struct ieee80211_elems *out)
     return 0;
 }
 
-/** Parse bounded elements; all returned pointers borrow buf until it changes. */
+/** Parse bounded elements; the pointers set borrow buf until it changes. */
 int ieee80211_parse_elems(const uint8_t *buf, unsigned len, struct ieee80211_elems *out)
 {
     unsigned id, n, i;

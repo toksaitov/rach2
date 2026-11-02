@@ -617,7 +617,7 @@ static void requests(struct socket *sock)
     CHECK(nla_put_flag(&msg, 2) == -EMSGSIZE && msg.len == 0);
 }
 
-/** Exercise all recipients, memberships above 32 and a slow reader's overrun. */
+/** Check all recipients, memberships above 32 and a slow reader's overrun. */
 static void multicast(struct socket *a, struct socket *b)
 {
     struct genl_msg msg;
@@ -716,7 +716,7 @@ static void link_policy_test(struct socket *route, struct socket *watch)
     check_link(watch, 0, 6, 1);
 }
 
-/** Register a family and run every row with all sockets and storage released. */
+/** Register a family and run every row, releasing all sockets and storage. */
 int main(void)
 {
     struct socket a, b, route, watch;

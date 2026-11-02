@@ -90,12 +90,12 @@ void netlink_close(struct socket *sock);
  * `net_lock` itself. */
 int netlink_bind(struct socket *sock, uint32_t pid, uint32_t groups);
 
-/** Set the SOL_NETLINK option `optname` of `sock` to `val`, the int the
- * caller gave in `optlen` bytes: NETLINK_ADD_MEMBERSHIP and
- * NETLINK_DROP_MEMBERSHIP a group, including generic groups above 32;
- * NETLINK_NO_ENOBUFS, NETLINK_EXT_ACK and NETLINK_CAP_ACK. Another option has no
- * effect. Returns 0, or -EINVAL for a value shorter than an int or a group
- * of 0 or less or an unknown generic group, or -ENOMEM. Takes net_lock. */
+/** Set the SOL_NETLINK option `optname` of `sock` to `val`, the int the caller
+ * gave in `optlen` bytes: NETLINK_ADD_MEMBERSHIP and NETLINK_DROP_MEMBERSHIP a
+ * group, including generic groups above 32; NETLINK_NO_ENOBUFS, NETLINK_EXT_ACK
+ * and NETLINK_CAP_ACK. Another option has no effect. Returns 0, or -EINVAL for
+ * a value shorter than an int or a group of 0 or less or an unknown generic
+ * group, or -ENOMEM. Takes net_lock. */
 int32_t netlink_setsockopt(struct socket *sock, int optname, int val, int optlen);
 
 /** Compare the state notifications are made from with the last, ten times

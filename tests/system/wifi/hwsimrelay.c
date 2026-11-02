@@ -116,7 +116,7 @@ static uint64_t now_ms(void)
     return (uint64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
 }
 
-/** Read an unaligned big-endian integer of n bytes, where n is at most eight. */
+/** Read an unaligned big-endian integer of n bytes, n at most eight. */
 static uint64_t getbe(const unsigned char *p, unsigned n)
 {
     uint64_t v = 0;
@@ -190,7 +190,7 @@ static int decode(struct packet *p, const unsigned char *b, size_t n)
     return 0;
 }
 
-/** Send one wire record to the configured peer; return -1 on transport error. */
+/** Send one wire record to the peer; return -1 on a transport error. */
 static int send_packet(const struct packet *p)
 {
     unsigned char b[WLAN_RELAY_HEADER_LEN + WLAN_RELAY_MAX_FRAME_LEN];
@@ -260,7 +260,7 @@ static int submit(struct message *m)
                : -1;
 }
 
-/** Parse bounded attributes into borrowed pointers; reject malformed duplicates. */
+/** Parse bounded attributes into borrowed pointers; refuse duplicates. */
 static int attributes(const unsigned char *b, size_t n, const unsigned char **a, size_t *sizes,
                       unsigned max)
 {
@@ -291,7 +291,7 @@ static int attributes(const unsigned char *b, size_t n, const unsigned char **a,
     return 0;
 }
 
-/** Read a netlink datagram from the kernel, refusing loss or a foreign sender. */
+/** Read a kernel netlink datagram, refusing loss or a foreign sender. */
 static ssize_t receive_nl(unsigned char *b, size_t size)
 {
     struct sockaddr_nl from;
@@ -369,7 +369,7 @@ static int read_mac(FILE *f, unsigned char *mac)
     return 0;
 }
 
-/** Discover hwsim radios and their medium addresses from Linux's wiphy sysfs. */
+/** Find the hwsim radios and their medium addresses in the wiphy sysfs. */
 static int discover(void)
 {
     DIR *dir;
@@ -461,7 +461,7 @@ static int source_radio(const unsigned char *address)
     return -1;
 }
 
-/** Complete a local hwsim transmission, preserving its cookie and rate flags. */
+/** Complete a local hwsim transmission, keeping its cookie and rate flags. */
 static int local_status(struct pending *p)
 {
     struct message m;
@@ -487,7 +487,7 @@ static int local_status(struct pending *p)
     return submit(&m);
 }
 
-/** Retire a transaction once injections and the peer have reported their results. */
+/** Retire a transaction once its injections and the peer have reported. */
 static int finish(unsigned slot)
 {
     struct pending *p = &pending[slot];
@@ -504,7 +504,7 @@ static int finish(unsigned slot)
         completed[completed_next].used = 1;
         completed[completed_next].packet = out;
         completed_next = (completed_next + 1) % MAX_PENDING;
-        /* A lost UDP completion is retried only in response to a repeated frame. */
+        /* A lost UDP completion is sent again only for a repeated frame. */
         (void)send_packet(&out);
     } else if (local_status(p) < 0) {
         return -1;
@@ -513,7 +513,7 @@ static int finish(unsigned slot)
     return 0;
 }
 
-/** Allocate a bounded transaction; expiry prevents a dead peer from filling it. */
+/** Allocate a transaction; expiry keeps a dead peer from filling the table. */
 static int allocate(void)
 {
     unsigned i;
@@ -570,7 +570,7 @@ static int distribute(const struct packet *p, int source, int slot)
     return 0;
 }
 
-/** Translate a kernel transmit request, retaining everything its status needs. */
+/** Translate a kernel transmit request, keeping all that its status needs. */
 static int kernel_frame(const unsigned char **a, const size_t *sizes)
 {
     struct pending *p, overflow;
@@ -634,7 +634,7 @@ static int kernel_frame(const unsigned char **a, const size_t *sizes)
     return finish((unsigned)slot);
 }
 
-/** Consume an injection's kernel ACK; only an addressed, on-channel RX ACKs TX. */
+/** Take an injection's kernel ACK; only an addressed on-channel RX ACKs TX. */
 static int injection_result(uint32_t seq, int error)
 {
     unsigned i;
@@ -654,7 +654,7 @@ static int injection_result(uint32_t seq, int error)
     return 0;
 }
 
-/** Dispatch a complete kernel datagram, including asynchronous injection ACKs. */
+/** Dispatch a whole kernel datagram, asynchronous injection ACKs among it. */
 static int netlink_input(uint32_t register_seq, int *registered)
 {
     unsigned char b[65536];
@@ -699,7 +699,7 @@ static int netlink_input(uint32_t register_seq, int *registered)
     return off == (size_t)n ? 0 : -1;
 }
 
-/** Accept only correlated completions; distribute peer transmits without echoing. */
+/** Take only matched completions; pass on peer transmits without an echo. */
 static int udp_input(void)
 {
     unsigned char b[WLAN_RELAY_HEADER_LEN + WLAN_RELAY_MAX_FRAME_LEN + 1];
@@ -767,7 +767,7 @@ static int udp_input(void)
     return finish((unsigned)slot);
 }
 
-/** Fail expired or stopping transactions and release every outstanding RX slot. */
+/** Fail expired or stopping transactions and free every outstanding RX slot. */
 static int expire(int all)
 {
     uint64_t now = now_ms();
@@ -796,7 +796,7 @@ static unsigned port(const char *s)
     return !errno && *s && !*end && n > 0 && n <= 65535 ? (unsigned)n : 0;
 }
 
-/** Run one foreground relay until signalled; close sockets on every exit path. */
+/** Run one relay in the foreground until a signal; close sockets on exit. */
 int main(int argc, char **argv)
 {
     struct sockaddr_in addr;
@@ -871,7 +871,7 @@ int main(int argc, char **argv)
         if (registered && (fds[1].revents & POLLIN))
             if (udp_input() < 0)
                 goto out;
-        /* A connected UDP socket reports ICMP errors without a readable record. */
+        /* A connected UDP socket reports an ICMP error with no record. */
         if (fds[1].revents & POLLERR) {
             socklen_t len = sizeof(result);
             (void)getsockopt(udp, SOL_SOCKET, SO_ERROR, &result, &len);

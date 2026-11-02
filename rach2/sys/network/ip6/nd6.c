@@ -1279,12 +1279,13 @@ static void rx_na(struct netdev *nd, struct nd6_if *ni, const uint8_t *dst, cons
 }
 
 /**
- * A router advertisement (RFC 4861, 6.3.4): its sender becomes a default
- * route for its router lifetime, at the card's `ra_defrtr_metric`, its hop limit, timers and MTU
- * are taken, its on-link prefixes become routes, and its autonomous /64 prefixes make addresses
- * (`slaac`). It ends the card's solicitations. Its RDNSS and DNSSL options go to netlink for a
- * program to take the name servers from, on an interface that ignores advertisements too, as Linux
- * sends them.
+ * A router advertisement (RFC 4861, 6.3.4): its sender becomes a default route
+ * for its router lifetime, at the card's `ra_defrtr_metric`, its hop limit,
+ * timers and MTU are taken, its on-link prefixes become routes, and its
+ * autonomous /64 prefixes make addresses (`slaac`). It ends the card's
+ * solicitations. Its RDNSS and DNSSL options go to netlink for a program to
+ * take the name servers from, on an interface that ignores advertisements too,
+ * as Linux sends them.
  */
 static void rx_ra(struct netdev *nd, struct nd6_if *ni, const uint8_t *src, const uint8_t *msg,
                   uint16_t len)

@@ -1,5 +1,6 @@
-/* Lower radio operations, following the split of Linux's mac80211 ieee80211_ops.
- * Reference: Linux v6.16 include/net/mac80211.h; no Linux types are required. */
+/* Lower radio operations, following the split of Linux's mac80211
+ * ieee80211_ops. Reference: Linux v6.16 include/net/mac80211.h; no Linux types
+ * are required. */
 #ifndef _WLAN_RADIO_H_
 #define _WLAN_RADIO_H_
 
@@ -113,10 +114,10 @@ struct wlan_radio_ops {
     void (*stop)(struct wlan_radio *radio);
     /** Tune to channel (20 MHz) and set WLAN_FILTER_* receive filters. */
     int (*config)(struct wlan_radio *radio, const struct wlan_channel *channel, unsigned filters);
-    /** Copy an MPDU without FCS and info before returning 0; report exactly
-     * one later wlan_radio_tx_status, including failures. A negative return
-     * accepts nothing and must produce no status. Never call back inline.
-     * HW_KEY frames include IV/MIC space; hardware fills it, never strips it. */
+    /** Copy an MPDU without FCS and info before returning 0; report exactly one
+     * later wlan_radio_tx_status, including failures. A negative return accepts
+     * nothing and must produce no status. Never call back inline. HW_KEY frames
+     * include IV/MIC space; hardware fills it, never strips it. */
     int (*tx)(struct wlan_radio *radio, const uint8_t *frame, unsigned len,
               const struct wlan_tx_info *info);
     /** Install (enable != 0) or remove a key; set *slot on install.

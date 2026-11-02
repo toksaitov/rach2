@@ -1,7 +1,9 @@
 /* Check the wireless worker's queue, the scan and the BSS table against a
  * stub radio and scripted access points that beacon and answer probes.
- * host-deps: rach2/sys/network/wireless/work.c rach2/sys/network/wireless/scan.c
- * host-deps: rach2/sys/network/wireless/bss.c rach2/sys/network/wireless/elems.c
+ * host-deps: rach2/sys/network/wireless/work.c
+ * host-deps: rach2/sys/network/wireless/scan.c
+ * host-deps: rach2/sys/network/wireless/bss.c
+ * host-deps: rach2/sys/network/wireless/elems.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
  */

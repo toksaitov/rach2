@@ -25,13 +25,13 @@ int packet_ifindex(struct socket *sock);
  * destination MAC in the `sockaddr_ll` and this layer prepends the header.
  *
  * A socket sees one EtherType, its protocol: IPv4 for a DHCP client, ARP for
- * `arping`, IPv6, or EAPOL for a Wi-Fi supplicant. Any other is refused at `socket` and `bind`
- * (syscall_net.c) rather than bound to a filter this does not implement, and
- * a socket whose protocol is 0 receives nothing, which is Linux's rule and is
- * what a caller that named no protocol asked for. The kernel's own handlers
- * still see every frame: a packet socket is offered a copy of each before
- * the handler runs, so ARP still answers and still fills its cache while a
- * client watches the same frames.
+ * `arping`, IPv6, or EAPOL for a Wi-Fi supplicant. Any other is refused at
+ * `socket` and `bind` (syscall_net.c) rather than bound to a filter this does
+ * not implement, and a socket whose protocol is 0 receives nothing, which is
+ * Linux's rule and is what a caller that named no protocol asked for. The
+ * kernel's own handlers still see every frame: a packet socket is offered a
+ * copy of each before the handler runs, so ARP still answers and still fills
+ * its cache while a client watches the same frames.
  *
  * Opening one is restricted to a privileged process (`proc_privileged`). It
  * reads every IP frame the machine receives, including other people's TCP,

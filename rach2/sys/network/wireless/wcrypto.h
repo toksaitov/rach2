@@ -22,8 +22,8 @@ struct wlan_aes128 {
  * callers allocate them monotonically, never wrap them, and check replay
  * before committing an authenticated receive. */
 
-/** Expand exactly 16 key bytes into ctx, with no secret-indexed lookups.
- * ctx and key must be non-NULL; ctx is caller-owned and erased at key removal. */
+/** Expand exactly 16 key bytes into ctx, with no secret-indexed lookups. ctx
+ * and key must be non-NULL; ctx is caller-owned and erased at key removal. */
 void wlan_aes128_setkey(struct wlan_aes128 *ctx, const uint8_t key[16]);
 
 /** Encrypt one 16-byte block; in == out is allowed, partial overlap is not.
@@ -57,8 +57,9 @@ int wlan_ccmp_decrypt(const struct wlan_aes128 *ctx, uint8_t *frame, unsigned *l
 
 /**
  * Append and sign a BIP-CMAC-128 MMIE on a group-addressed management MPDU.
- * key_id is 4 or 5; ipn is 1 to 2^48-1. Keep Protected clear and update *len only
- * on success. Return 0, -EINVAL, or -ENOSPC; preserve all outputs on error.
+ * key_id is 4 or 5; ipn is 1 to 2^48-1. Keep Protected clear and update *len
+ * only on success. Return 0, -EINVAL, or -ENOSPC; preserve all outputs on
+ * error.
  */
 int wlan_bip_sign(const struct wlan_aes128 *ctx, uint8_t *frame, unsigned *len, unsigned cap,
                   uint64_t ipn, unsigned key_id);

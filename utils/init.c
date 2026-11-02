@@ -18,15 +18,16 @@
  * plain `init`: `init-shell` runs a shell on the console, `init-login` puts
  * that console behind `/bin/login`, `init-metal` is `init-login` plus the
  * network, ifplugd and ndwatch, which follow its link and its routers,
- * wpa_supplicant on a machine with a Wi-Fi radio, a supervised SSH server, the system log,
- * BusyBox's NTP daemon where /etc/ntp.conf names a server and, on the GNU system's root, D-Bus's
- * system bus and the cron daemon, and `init-recovery` is the
- * recovery system's, a shell on the console with the metal build's network,
- * services and file system check beside it. The metal build exists because
- * the machine it is for is across the room: nobody types a command at its
- * console to start a daemon, so the daemon has to be running when the
- * machine finishes booting. The console login is the same as `init-login`'s
- * beside it, and is the way back in when the network is what is broken.
+ * wpa_supplicant on a machine with a Wi-Fi radio, a supervised SSH server, the
+ * system log, BusyBox's NTP daemon where /etc/ntp.conf names a server and, on
+ * the GNU system's root, D-Bus's system bus and the cron daemon, and
+ * `init-recovery` is the recovery system's, a shell on the console with the
+ * metal build's network, services and file system check beside it. The metal
+ * build exists because the machine it is for is across the room: nobody types a
+ * command at its console to start a daemon, so the daemon has to be running
+ * when the machine finishes booting. The console login is the same as
+ * `init-login`'s beside it, and is the way back in when the network is what is
+ * broken.
  *
  * On `init-login` and `init-metal`, a boot line with `rach2.console=term`
  * puts that login inside `term`, the terminal on the whole framebuffer,

@@ -105,17 +105,17 @@ struct nd6_row {
 int nd6_conf_get(int which, int key, int32_t *value);
 
 /**
- * Write the setting `key` of `which`. The booleans take 0 or 1, accept_ra
- * 0 to 2, ra_defrtr_metric 1 or more and use_tempaddr any value; -EINVAL
- * otherwise, or -ENODEV. What a write changes happens at once: disabling
- * IPv6 takes every address of the interface away, `lo`'s ::1 among them,
- * and enabling it again gives back ::1 or a card's link-local address and
- * solicits routers; forwarding on stops the solicitations and joins
- * ff02::2; a new ra_defrtr_metric moves the interface's default routes
- * already learned as well as setting the next advertisement's, where Linux
- * waits for the next, so that start-up need not race the first router. Writing forwarding,
- * disable_ipv6 or use_tempaddr of `all` writes it of `default` and of every
- * interface too. Takes net_lock.
+ * Write the setting `key` of `which`. The booleans take 0 or 1, accept_ra 0 to
+ * 2, ra_defrtr_metric 1 or more and use_tempaddr any value; -EINVAL otherwise,
+ * or -ENODEV. What a write changes happens at once: disabling IPv6 takes every
+ * address of the interface away, `lo`'s ::1 among them, and enabling it again
+ * gives back ::1 or a card's link-local address and solicits routers;
+ * forwarding on stops the solicitations and joins ff02::2; a new
+ * ra_defrtr_metric moves the interface's default routes already learned as well
+ * as setting the next advertisement's, where Linux waits for the next, so that
+ * start-up need not race the first router. Writing forwarding, disable_ipv6 or
+ * use_tempaddr of `all` writes it of `default` and of every interface too.
+ * Takes net_lock.
  */
 int nd6_conf_set(int which, int key, int32_t value);
 

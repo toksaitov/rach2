@@ -123,12 +123,12 @@ struct netdev_counters {
  * such counts leaves it NULL.
  *
  * `set_up` is told that the interface is being brought up (`up` nonzero) or
- * down, before `nd->up` changes, in process context without `net_lock`; it
- * may sleep. It returns 0, or a negative errno that refuses the change and
- * leaves the interface as it was: -ENODEV when the device was removed while
- * it slept, after which nothing of `nd` may be touched. A card that runs from `init` to `stop`
- * whatever the interface's flags leaves it NULL; a radio starts here, and
- * leaves its network and stops here on the way down.
+ * down, before `nd->up` changes, in process context without `net_lock`; it may
+ * sleep. It returns 0, or a negative errno that refuses the change and leaves
+ * the interface as it was: -ENODEV when the device was removed while it slept,
+ * after which nothing of `nd` may be touched. A card that runs from `init` to
+ * `stop` whatever the interface's flags leaves it NULL; a radio starts here,
+ * and leaves its network and stops here on the way down.
  */
 struct netdev_ops {
     const char *name;
@@ -355,8 +355,8 @@ int netdev_seen_count(void);
 /** Interface `n`, from 0: cards, attached radios, then `lo`; NULL past them. */
 struct netdev *netdev_at(int n);
 
-/** The number of interfaces, the cards, radios and `lo`, which netdev_seen_count()
- * gives in the first network namespace. */
+/** The number of interfaces, the cards, radios and `lo`, which
+ * netdev_seen_count() gives in the first network namespace. */
 int netdev_listed(void);
 
 /**

@@ -1,6 +1,7 @@
 /* Check the metric of the IPv6 default routes routers advertise, per card.
  * host-deps: rach2/sys/network/ip6/route6.c rach2/sys/network/ip6/addr6.c
- * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c rach2/sys/lib/ksha256.c
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/ksha256.c
  */
 #include "../../rach2/sys/network/ip6/nd6.c"
 
