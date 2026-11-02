@@ -11,6 +11,9 @@ _ := $(shell [ ! -f build/x86_64/vendor-work/musl/.stamp ] || \
     rm -f build/x86_64/vendor-work/musl/.stamp)
 endif
 
+# The compiler's scratch goes under build/tmp; an exported variable keeps the
+# compile line in the shape the compilation database generator reads.
+$(WIFI_HWSIMRELAY): export TMPDIR := $(CURDIR)/build/tmp
 $(WIFI_HWSIMRELAY): tests/system/wifi/hwsimrelay.c tests/system/wifi/hwsimrelay.mk \
     rach2/sys/network/wireless/relay.h vendor/libnl/libnl-3.12.0.tar.gz \
     build/x86_64/vendor-work/musl/.stamp vendor/musl/muslgcc mk/arch.sh | $(SHA256TOOL)
@@ -18,5 +21,5 @@ $(WIFI_HWSIMRELAY): tests/system/wifi/hwsimrelay.c tests/system/wifi/hwsimrelay.
 	    fc51ca7196f1a3f5fdf6ffd3864b50f4f9c02333be28be4eeca057e103c0dd18
 	@mkdir -p $(dir $@) build/tmp build/wifi/uapi
 	tar -xzf vendor/libnl/libnl-3.12.0.tar.gz -C build/wifi/uapi libnl-3.12.0/include/linux-private
-	TMPDIR="$(CURDIR)/build/tmp" RACH2_ARCH=x86_64 vendor/musl/muslgcc \
+	RACH2_ARCH=x86_64 vendor/musl/muslgcc \
 	    -ansi -O2 -Wall -Wextra -Werror -I$(WIFI_RELAY_UAPI) $< -o $@
