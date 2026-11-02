@@ -188,6 +188,32 @@ fail:
     return -ENOMEM;
 }
 
+/**
+ * Give back the status ring and each page of descriptors and buffers, for
+ * a probe that fails after ath9k_tx_init; a page is the first slot's that
+ * shares it, as ath9k_tx_init gave them out. Safe twice.
+ */
+void ath9k_tx_free(struct ath9k *ah)
+{
+    unsigned g, total = ATH9K_TX_QUEUES * ATH9K_TX_RING;
+    unsigned per_desc = ATH9K_DMA_PAGE / sizeof(struct ar9003_txc);
+    unsigned per_buf = ATH9K_DMA_PAGE / ATH9K_TX_BUF_LEN;
+
+    for (g = 0; g < total; g++) {
+        struct ath9k_tx_slot *s = &ah->tx.q[g / ATH9K_TX_RING].slot[g % ATH9K_TX_RING];
+
+        if (g % per_desc == 0)
+            ath9k_dma_free(ah, s->desc);
+        if (g % per_buf == 0)
+            ath9k_dma_free(ah, s->buf);
+        s->desc = 0;
+        s->buf = 0;
+        s->desc_bus = s->buf_bus = 0;
+    }
+    ath9k_dma_free(ah, ah->tx.status);
+    ah->tx.status = 0;
+}
+
 /** ath9k's AR_FrameType for a frame whose frame control is `fc`. */
 static unsigned frame_type(unsigned fc)
 {

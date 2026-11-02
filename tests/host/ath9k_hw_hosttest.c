@@ -548,11 +548,22 @@ void ath9k_mac_intr_disable(struct ath9k *ah)
     note("mac_intr_disable");
 }
 
+/* The receive and transmit pages the probe holds, and tx_init's answer. */
+static int rx_held, tx_held, tx_rc;
+
 int ath9k_rx_init(struct ath9k *ah)
 {
     (void)ah;
     note("rx_init");
+    rx_held = 1;
     return 0;
+}
+
+void ath9k_rx_free(struct ath9k *ah)
+{
+    (void)ah;
+    note("rx_free");
+    rx_held = 0;
 }
 
 int ath9k_rx_start(struct ath9k *ah)
@@ -573,7 +584,16 @@ int ath9k_tx_init(struct ath9k *ah)
 {
     (void)ah;
     note("tx_init");
-    return 0;
+    if (tx_rc == 0)
+        tx_held = 1;
+    return tx_rc;
+}
+
+void ath9k_tx_free(struct ath9k *ah)
+{
+    (void)ah;
+    note("tx_free");
+    tx_held = 0;
 }
 
 int ath9k_tx(struct ath9k *ah, const uint8_t *frame, unsigned len, const struct wlan_tx_info *info)
@@ -785,6 +805,8 @@ static void bus_ready(void)
     minstrel_calls = 0;
     cal_rc = 0;
     intr_rc = 0;
+    tx_rc = 0;
+    rx_held = tx_held = 0;
     queued = NULL;
     n_queued = 0;
     k_memset(&the_wlan, 0, sizeof(the_wlan));
@@ -1160,6 +1182,7 @@ static void test_refusals(void)
     CHECK(logged("ath9k: probe: failed: register: -28"));
     CHECK(call_index("intr_detach") != ~0u);
     CHECK(card.hw.power == ATH9K_PM_FULL_SLEEP);
+    CHECK(!rx_held && !tx_held);
     notes_clear();
     ath9k_poll();
     CHECK(n_calls == 0);
@@ -1173,6 +1196,28 @@ static void test_refusals(void)
     CHECK(registered == NULL);
     CHECK(card.hw.power == ATH9K_PM_FULL_SLEEP);
     CHECK(!(ath9k_model_peek(&model, AR_RTC_RESET) & AR_RTC_RESET_EN));
+    CHECK(!rx_held && !tx_held);
+
+    /* Transmit's pages that cannot be had: receive's are given back, once
+     * the chip is reset cold. */
+    lenovo_model(1);
+    bus_ready();
+    ath9k_model_log_clear(&model);
+    tx_rc = -ENOMEM;
+    CHECK(ath9k_probe() == -ENOMEM);
+    CHECK(registered == NULL && !rx_held && !tx_held);
+    {
+        int at = -1, cold = -1;
+
+        while ((at = ath9k_model_find(&model, (unsigned)(at + 1), ATH9K_MODEL_WRITE, AR_RTC_RC)) >=
+               0)
+            if (model.log[at].value == (AR_RTC_RC_MAC_WARM | AR_RTC_RC_MAC_COLD))
+                cold = at;
+        CHECK(cold >= 0 && (unsigned)cold < call_index("tx_free"));
+        CHECK(n_calls >= 2 && streq(calls[n_calls - 2], "tx_free") &&
+              streq(calls[n_calls - 1], "rx_free"));
+    }
+    CHECK(card.hw.power == ATH9K_PM_FULL_SLEEP);
 }
 
 /* The EEPROM's words for the image test. */

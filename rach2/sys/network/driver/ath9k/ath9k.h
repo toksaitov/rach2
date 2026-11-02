@@ -1267,6 +1267,10 @@ void ath9k_mac_set_beacon_timers(struct ath9k *ah, unsigned interval, unsigned d
 /** Allocate the receive buffers. Attach. -ENOMEM. */
 int ath9k_rx_init(struct ath9k *ah);
 
+/** Give back every buffer ath9k_rx_init took; safe twice. The chip's DMA
+ * is stopped. Attach. */
+void ath9k_rx_free(struct ath9k *ah);
+
 /** Give every buffer to the chip and start receiving; stop, taking the
  * buffers back. Worker. */
 int ath9k_rx_start(struct ath9k *ah);
@@ -1284,6 +1288,10 @@ unsigned ath9k_header_len(unsigned fc);
 
 /** Allocate the descriptors, frame buffers and status ring. Attach. */
 int ath9k_tx_init(struct ath9k *ah);
+
+/** Give back every page ath9k_tx_init took; safe twice. The chip's DMA
+ * is stopped. Attach. */
+void ath9k_tx_free(struct ath9k *ah);
 
 /** The radio's tx operation: copy the frame to a slot of info->ac's queue
  * and push it. -ENOBUFS when the queue is full. Worker. */

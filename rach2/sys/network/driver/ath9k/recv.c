@@ -68,6 +68,19 @@ fail:
     return -ENOMEM;
 }
 
+/** Give back every buffer of both FIFOs, for a probe that fails after
+ * ath9k_rx_init; safe twice. */
+void ath9k_rx_free(struct ath9k *ah)
+{
+    unsigned f, i;
+
+    for (f = 0; f < 2; f++)
+        for (i = 0; i < ATH9K_RX_LP_DEPTH; i++) {
+            ath9k_dma_free(ah, ah->rx.fifo[f].buf[i]);
+            ah->rx.fifo[f].buf[i] = 0;
+        }
+}
+
 /** Clear buffer `i`'s status, so that AR_RxDone reads clear until the
  * chip fills it, and push it to the chip. */
 static void give(struct ath9k *ah, int hp, unsigned i)

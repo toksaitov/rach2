@@ -358,6 +358,18 @@ static int map_card(struct ath9k *ah)
 }
 
 /**
+ * Undo a probe that failed after the chip attached: stop the chip, then
+ * give back the transmit and receive pages that were taken, so that a
+ * failed probe keeps no DMA memory. The interrupt is the caller's.
+ */
+static void probe_unwind(struct ath9k *ah)
+{
+    ath9k_hw_disable(ah);
+    ath9k_tx_free(ah);
+    ath9k_rx_free(ah);
+}
+
+/**
  * Bring up the card of `chip` at `dev` and register its radio, as
  * ath9k_init_device does: attach the chip, then the parts, then the rate
  * control, log the boot line and register. The chip sleeps until the
@@ -397,7 +409,7 @@ static int probe_card(struct ath9k *ah, const struct ath9k_chip *chip, const pci
     if (rc != 0) {
         klog(KLOG_ERR, "ath9k", "probe: failed: %02x:%02x.%x: %d", d->bus, d->device, d->function,
              rc);
-        ath9k_hw_disable(ah);
+        probe_unwind(ah);
         return rc;
     }
     ah->radio.ops = &ath9k_radio_ops;
@@ -413,7 +425,7 @@ static int probe_card(struct ath9k *ah, const struct ath9k_chip *chip, const pci
     if (rc != 0) {
         klog(KLOG_ERR, "ath9k", "probe: failed: register: %d", rc);
         ath9k_intr_detach(ah);
-        ath9k_hw_disable(ah);
+        probe_unwind(ah);
         return rc;
     }
     ah->bus.rfkill_work[0].wlan = ah->bus.rfkill_work[1].wlan = wlan;

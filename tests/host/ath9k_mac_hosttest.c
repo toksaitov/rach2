@@ -1126,6 +1126,24 @@ static void test_attach(void)
     CHECK(ath9k_tx_init(&ah) == -ENOMEM && pages_freed == 2 && ah.tx.status == 0);
     fail_alloc_at = -1;
 
+    /* A probe that fails later gives back every page both took, once. */
+    k_memset(&ah.rx, 0, sizeof(ah.rx));
+    k_memset(&ah.tx, 0, sizeof(ah.tx));
+    pages_used = 0;
+    pages_freed = 0;
+    CHECK(ath9k_rx_init(&ah) == 0 && ath9k_tx_init(&ah) == 0);
+    len = pages_used;
+    CHECK(len ==
+          ATH9K_RX_HP_DEPTH + ATH9K_RX_LP_DEPTH + 1 +
+              ATH9K_TX_QUEUES * ATH9K_TX_RING / (ATH9K_DMA_PAGE / sizeof(struct ar9003_txc)) +
+              ATH9K_TX_QUEUES * ATH9K_TX_RING / (ATH9K_DMA_PAGE / ATH9K_TX_BUF_LEN));
+    ath9k_tx_free(&ah);
+    ath9k_rx_free(&ah);
+    CHECK(pages_freed == len && ah.tx.status == 0 && ah.rx.fifo[1].buf[0] == 0);
+    ath9k_tx_free(&ah);
+    ath9k_rx_free(&ah);
+    CHECK(pages_freed == len);
+
     /* A card whose messages cannot be enabled is served by the tick. */
     setup(1);
     msi_refused = 1;
