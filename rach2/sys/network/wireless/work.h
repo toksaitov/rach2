@@ -21,9 +21,16 @@
 
 /** Start the wireless worker's kernel thread, `kwlan`, if it is not running.
  * Process context under the kernel lock; the registry calls it before its
- * first radio starts. Returns 0 or -ENOMEM. Work queued before the thread
- * exists waits for it. */
+ * first radio starts. Before the first program has its pid the thread is
+ * only marked wanted, so that init takes pid 1, and wlan_work_threads_start
+ * makes it. Returns 0 or -ENOMEM. Work queued before the thread exists
+ * waits for it. */
 int wlan_work_start(void);
+
+/** Make the thread a radio asked for before the first program started,
+ * and every later one at once. platform_threads_start calls it once init
+ * has its pid. */
+void wlan_work_threads_start(void);
 
 /**
  * Run, in the order of their due ticks, every queued work due at `now`,

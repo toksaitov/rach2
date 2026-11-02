@@ -27,6 +27,10 @@ static process_t *thread;
  * can wake them. */
 static wait_queue_t work_wq; /* the thread sleeps here */
 static wait_queue_t idle_wq; /* a cancel waits here for a callback's end */
+/* Whether the first program has its pid, after which the thread may take
+ * one; and whether a radio asked for the thread before then. */
+static int threads_ready;
+static int thread_wanted;
 #endif
 
 /** Wake the thread to look at the queue again; IRQ-safe. */
@@ -182,6 +186,11 @@ int wlan_work_start(void)
     if (thread) {
         return 0;
     }
+    if (!threads_ready) {
+        /* Init must be pid 1, which BusyBox's reboot and poweroff signal. */
+        thread_wanted = 1;
+        return 0;
+    }
     flags = kirq_save();
     base = kstack_alloc();
     p = base ? alloc_process() : 0;
@@ -204,5 +213,13 @@ int wlan_work_start(void)
     kirq_restore(flags);
     klog(KLOG_DEBUG, "wlan", "worker: kwlan is pid %d", (int)p->pid);
     return 0;
+}
+
+void wlan_work_threads_start(void)
+{
+    threads_ready = 1;
+    if (thread_wanted) {
+        (void)wlan_work_start();
+    }
 }
 #endif

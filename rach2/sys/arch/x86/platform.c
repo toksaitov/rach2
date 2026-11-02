@@ -47,6 +47,7 @@
 #include "../../input.h"
 #include "../../klog.h"
 #include "../../mm/paging.h"
+#include "../../network/wireless/work.h"
 #include "../../pci.h"
 #include "../../platform.h"
 #include "../../timer.h"
@@ -423,6 +424,7 @@ void platform_firmware_start(void)
 void platform_threads_start(void)
 {
     acpica_thread_start();
+    wlan_work_threads_start();
 }
 
 /**
