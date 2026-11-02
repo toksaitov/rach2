@@ -113,12 +113,87 @@ static void to_radio(int dev, const unsigned char *r, unsigned len)
     }
 }
 
-int main(int argc, char **argv)
+/** Open the software radio `device` and read its number and address into
+ * info. Returns the descriptor, or -1 after a diagnostic. */
+static int open_radio(const char *device, struct wsim_info *info)
+{
+    int dev = open(device, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+
+    if (dev < 0) {
+        fprintf(stderr, "wsimrelay: %s: %s\n", device, strerror(errno));
+        return -1;
+    }
+    if (ioctl(dev, WSIM_IOC_INFO, info) != 0) {
+        fprintf(stderr, "wsimrelay: %s: not a software radio: %s\n", device, strerror(errno));
+        close(dev);
+        return -1;
+    }
+    return dev;
+}
+
+/** Read what the radio dev has ready at `now`: a frame goes to the peer at
+ * sock, and a status the medium m makes at once back to the radio. Returns
+ * 0, or -1 after a diagnostic when the read fails. */
+static int from_radio(int dev, int sock, const struct sockaddr_in *peer, struct medium *m,
+                      unsigned long now)
 {
     static unsigned char buf[MEDIUM_RECORD_MAX];
+    ssize_t n;
+
+    n = read(dev, buf, sizeof(buf));
+    if (n < 0 && errno != EAGAIN && errno != EINTR) {
+        fprintf(stderr, "wsimrelay: read: %s\n", strerror(errno));
+        return -1;
+    }
+    if (n <= 0) {
+        return 0;
+    }
+    switch (medium_from_radio(m, buf, (unsigned)n, now)) {
+    case MEDIUM_TO_PEER:
+        /* A frame lost here fails when its status is due. */
+        sendto(sock, buf, (size_t)n, 0, (const struct sockaddr *)peer, sizeof(*peer));
+        break;
+    case MEDIUM_TO_RADIO:
+        to_radio(dev, buf, MEDIUM_HEADER);
+        break;
+    default:
+        break;
+    }
+    return 0;
+}
+
+/** Read a datagram from sock and, when it came from the peer's address,
+ * give the radio dev what the medium m makes of it: a frame, whose delivery
+ * goes back to the peer as its status, or a status. */
+static void from_peer(int dev, int sock, const struct sockaddr_in *peer, struct medium *m)
+{
+    static unsigned char buf[MEDIUM_RECORD_MAX];
+    unsigned char status[MEDIUM_HEADER];
+    struct medium_reply reply;
+    struct sockaddr_in from;
+    socklen_t from_len = sizeof(from);
+    ssize_t n;
+
+    n = recvfrom(sock, buf, sizeof(buf), 0, (struct sockaddr *)&from, &from_len);
+    /* The address alone: QEMU's user network gives a forwarded
+     * datagram a source port of its own. */
+    if (n <= 0 || from.sin_addr.s_addr != peer->sin_addr.s_addr ||
+        medium_from_peer(m, buf, (unsigned)n, &reply) != MEDIUM_TO_RADIO) {
+        return;
+    }
+    if (reply.valid) {
+        medium_answer(m, &reply, write(dev, buf, (size_t)n) == n, status);
+        sendto(sock, status, sizeof(status), 0, (const struct sockaddr *)peer, sizeof(*peer));
+    } else {
+        to_radio(dev, buf, MEDIUM_HEADER);
+    }
+}
+
+int main(int argc, char **argv)
+{
     const char *device = "/dev/wsim", *bind_to = "0.0.0.0";
     long port = DEFAULT_PORT, endpoint = 0, signal_dbm = DEFAULT_SIGNAL, timeout = DEFAULT_TIMEOUT;
-    struct sockaddr_in local, peer, from;
+    struct sockaddr_in local, peer;
     struct wsim_info info;
     struct medium m;
     struct sigaction sa;
@@ -155,13 +230,8 @@ int main(int argc, char **argv)
     address(&local, bind_to, port);
     address(&peer, argv[optind], number(argv[optind + 1], 1, 65535));
 
-    dev = open(device, O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    dev = open_radio(device, &info);
     if (dev < 0) {
-        fprintf(stderr, "wsimrelay: %s: %s\n", device, strerror(errno));
-        return 1;
-    }
-    if (ioctl(dev, WSIM_IOC_INFO, &info) != 0) {
-        fprintf(stderr, "wsimrelay: %s: not a software radio: %s\n", device, strerror(errno));
         return 1;
     }
     sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
@@ -187,11 +257,8 @@ int main(int argc, char **argv)
     fds[1].events = POLLIN;
     while (!stopping) {
         unsigned char status[MEDIUM_HEADER];
-        struct medium_reply reply;
-        socklen_t from_len = sizeof(from);
         unsigned long now = now_ms();
         long wait = medium_next(&m, now);
-        ssize_t n;
 
         if (poll(fds, 2, wait < 0 ? -1 : (int)wait) < 0) {
             if (errno == EINTR) {
@@ -205,39 +272,11 @@ int main(int argc, char **argv)
             fprintf(stderr, "wsimrelay: %s: the radio is gone\n", device);
             return 1;
         }
-        if (fds[0].revents & POLLIN) {
-            n = read(dev, buf, sizeof(buf));
-            if (n < 0 && errno != EAGAIN && errno != EINTR) {
-                fprintf(stderr, "wsimrelay: read: %s\n", strerror(errno));
-                return 1;
-            }
-            if (n > 0) {
-                switch (medium_from_radio(&m, buf, (unsigned)n, now)) {
-                case MEDIUM_TO_PEER:
-                    /* A frame lost here fails when its status is due. */
-                    sendto(sock, buf, (size_t)n, 0, (struct sockaddr *)&peer, sizeof(peer));
-                    break;
-                case MEDIUM_TO_RADIO:
-                    to_radio(dev, buf, MEDIUM_HEADER);
-                    break;
-                default:
-                    break;
-                }
-            }
+        if ((fds[0].revents & POLLIN) && from_radio(dev, sock, &peer, &m, now) != 0) {
+            return 1;
         }
         if (fds[1].revents & POLLIN) {
-            n = recvfrom(sock, buf, sizeof(buf), 0, (struct sockaddr *)&from, &from_len);
-            /* The address alone: QEMU's user network gives a forwarded
-             * datagram a source port of its own. */
-            if (n > 0 && from.sin_addr.s_addr == peer.sin_addr.s_addr &&
-                medium_from_peer(&m, buf, (unsigned)n, &reply) == MEDIUM_TO_RADIO) {
-                if (reply.valid) {
-                    medium_answer(&m, &reply, write(dev, buf, (size_t)n) == n, status);
-                    sendto(sock, status, sizeof(status), 0, (struct sockaddr *)&peer, sizeof(peer));
-                } else {
-                    to_radio(dev, buf, MEDIUM_HEADER);
-                }
-            }
+            from_peer(dev, sock, &peer, &m);
         }
         while (medium_expire(&m, now, status)) {
             to_radio(dev, status, MEDIUM_HEADER);
