@@ -529,6 +529,15 @@ static void sock_fd_flags(fd_entry_t *entry, uint32_t flags)
     }
 }
 
+/** Whether a packet socket may take the EtherType type, in host order: 0,
+ * which a socket opened before its bind has, or one of IPv4, ARP, IPv6 and
+ * EAPOL, the types this stack has frames for. */
+static int packet_type_ok(uint16_t type)
+{
+    return type == 0 || type == ETH_TYPE_IP || type == ETH_TYPE_ARP || type == ETH_TYPE_IPV6 ||
+           type == ETH_TYPE_PAE;
+}
+
 /** Whether `protocol` is 0 or the IP protocol of stream or datagram `type`,
  * TCP's or UDP's, the two an IPv4 or IPv6 socket of those types may name. */
 static int ip_protocol_ok(int type, int protocol)
@@ -559,9 +568,8 @@ static int ip_protocol_ok(int type, int protocol)
  * nothing. A packet socket reads every frame of its
  * protocol the machine receives and sends frames the IP layer never saw,
  * which is why it and the raw sockets need privilege. Its protocol is in
- * network byte order, as Linux takes it: IPv4, ARP or IPv6, the three this
- * stack has frames for, or 0 for none yet, as `arping` opens one before its
- * bind gives ARP.
+ * network byte order, as Linux takes it: one `packet_type_ok` allows, or 0
+ * for none yet, as `arping` opens one before its bind gives ARP.
  */
 static int32_t socket_kind(int domain, int *type, int protocol)
 {
@@ -607,9 +615,8 @@ static int32_t socket_kind(int domain, int *type, int protocol)
         if (*type != SOCK_DGRAM) {
             return -ESOCKTNOSUPPORT;
         }
-        if ((uint16_t)protocol != 0 && (uint16_t)protocol != PACKET_PROTO_IP &&
-            (uint16_t)protocol != PACKET_PROTO_ARP && (uint16_t)protocol != PACKET_PROTO_IPV6 &&
-            (uint16_t)protocol != PACKET_PROTO_PAE) {
+        /* x86 holds the network-order protocol byte-swapped. */
+        if (!packet_type_ok((uint16_t)((uint16_t)protocol >> 8 | (uint16_t)protocol << 8))) {
             return -EINVAL;
         }
     }
@@ -872,8 +879,7 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
                             ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 2] << 16) |
                             ((uint32_t)sll[SOCKADDR_LL_IFINDEX + 3] << 24));
         proto = SC_BE16(sll + SOCKADDR_LL_PROTOCOL);
-        if (proto != 0 && proto != ETH_TYPE_IP && proto != ETH_TYPE_ARP && proto != ETH_TYPE_IPV6 &&
-            proto != ETH_TYPE_PAE) {
+        if (!packet_type_ok(proto)) {
             return -EINVAL;
         }
         r = packet_bind(entry->sock, (int)ifindex);
@@ -1049,6 +1055,20 @@ static uint32_t sockaddr_len_of(const struct socket *sock)
  * of the requests the socket answers. */
 #define NETLINK_SEND_MAX 65536
 
+/** Send the netlink message of `len` bytes at buf from the socket `sock`,
+ * holding a reference to it, since a generic netlink request may sleep and
+ * another thread may close the descriptor meanwhile. Returns
+ * `netlink_send`'s result. */
+static int32_t netlink_send_held(struct socket *sock, const uint8_t *buf, uint32_t len)
+{
+    int32_t rc;
+
+    socket_ref(sock);
+    rc = netlink_send(sock, buf, len);
+    socket_unref(sock);
+    return rc;
+}
+
 /** Send the netlink message of `len` bytes at user address `buf_ptr`.
  * Returns `netlink_send`'s result, -EMSGSIZE past `NETLINK_SEND_MAX`,
  * -ENOMEM or -EFAULT. */
@@ -1068,9 +1088,7 @@ static int32_t netlink_send_user(struct socket *sock, uintptr_t buf_ptr, int len
         kfree(copy);
         return -EFAULT;
     }
-    socket_ref(sock);
-    rc = netlink_send(sock, copy, (uint32_t)len);
-    socket_unref(sock);
+    rc = netlink_send_held(sock, copy, (uint32_t)len);
     kfree(copy);
     return rc;
 }
@@ -2973,11 +2991,7 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
         total += (uint32_t)iov[i].iov_len;
     }
     if (entry->sock->family == AF_NETLINK) {
-        struct socket *sock = entry->sock;
-
-        socket_ref(sock);
-        rc = netlink_send(sock, gathered, total);
-        socket_unref(sock);
+        rc = netlink_send_held(entry->sock, gathered, total);
     } else {
         rc = udp_sendto(entry, gathered, (int)total, name_ptr, (int)namelen, opt);
     }

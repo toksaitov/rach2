@@ -298,15 +298,8 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
                       ((uint32_t)ifr[IFREQ_UNION + 2] << 16) |
                       ((uint32_t)ifr[IFREQ_UNION + 3] << 24));
 
-        struct netdev *at;
+        struct netdev *at = net_ns_seen() ? netdev_by_index(index) : index == 1 ? netif_ns_lo() : 0;
 
-        if (!net_ns_seen()) {
-            at = index == 1 ? netif_ns_lo() : 0;
-        } else if (!netdev_by_index(index)) {
-            return -ENODEV;
-        } else {
-            at = netdev_by_index(index);
-        }
         if (!at || at->index != index) {
             return -ENODEV;
         }
