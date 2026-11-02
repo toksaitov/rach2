@@ -149,6 +149,25 @@ load()
     DL="$GNU/downloads/agents/$NAME"
 }
 
+# emulated_libraries: where the build host is not x86 and QEMU's user-mode
+# emulator runs the staged programs, add GCC's runtime libraries to their
+# search path. tooling_job.sh gives the emulator the toolchain's sysroot as
+# QEMU_LD_PREFIX, which has the loader and glibc; libstdc++, libgcc_s and
+# libatomic, which ninja and node need and an x86-64 host has in its own
+# /usr/lib, are in cross/TARGET/lib beside it. The host's own programs pass
+# over that directory's libraries, which are built for another machine.
+emulated_libraries()
+{
+    [ -n "${QEMU_LD_PREFIX:-}" ] || return 0
+    case "$(uname -m)" in
+        x86_64 | i?86) return 0 ;;
+    esac
+    libs="${QEMU_LD_PREFIX%/*}/cross/$GNU_TARGET/lib"
+    [ -d "$libs" ] || return 0
+    LD_LIBRARY_PATH="$libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export LD_LIBRARY_PATH
+}
+
 # stage NAME: fetch, check and stage the package NAME, in a shell of its own
 # so that one recipe's variables and functions do not reach the next.
 stage()
@@ -177,6 +196,7 @@ stage()
         fi
     done
     if command -v package_check > /dev/null 2>&1; then
+        emulated_libraries
         package_check "$STAGE"
     fi
     echo "gnu: agents: $NAME $VERSION: $(cd "$STAGE" && find . ! -type d | wc -l | tr -d ' ') files staged"
