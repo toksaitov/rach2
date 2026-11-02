@@ -17,12 +17,12 @@
       {"turn": {
         "request": {"model": "gpt-5.5", "store": false},
         "input": [{"role": "user", "text": "Read notes.txt and do what it says."}],
-        "output": [{"call": "exec_command", "id": "call_read", "arguments": {"cmd": "cat notes.txt"}}]}},
+        "output": [{"call": "exec_command", "id": "call_read", "arguments": {"cmd": "cat notes.txt", "yield_time_ms": 300000}}]}},
       {"turn": {
         "input": [{"output_of": "call_read",
                    "text": ["Process exited with code 0",
                             "Change the greeting in greeting.txt to: hello, rach2"]}],
-        "output": [{"call": "exec_command", "id": "call_check", "arguments": {"cmd": "sh check.sh"}}]}},
+        "output": [{"call": "exec_command", "id": "call_check", "arguments": {"cmd": "sh check.sh", "yield_time_ms": 300000}}]}},
       {"turn": {
         "input": [{"output_of": "call_check",
                    "text": ["Process exited with code 1",
@@ -33,7 +33,7 @@
         "input": [{"output_of": "call_patch",
                    "text": ["Success. Updated the following files:", "M greeting.txt"]}],
         "output": [{"call": "exec_command", "id": "call_commit",
-                    "arguments": {"cmd": "sh check.sh && git commit -q -am 'Greet Rach2' && git log --format=%s -1"}}]}},
+                    "arguments": {"cmd": "sh check.sh && git commit -q -am 'Greet Rach2' && git log --format=%s -1", "yield_time_ms": 300000}}]}},
       {"turn": {
         "input": [{"output_of": "call_commit",
                    "text": ["Process exited with code 0", "check: ok", "Greet Rach2"]}],

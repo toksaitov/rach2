@@ -25,7 +25,7 @@
                    "text": ["Read text file `notes.txt`.",
                             "Change the greeting in greeting.txt to: hello, rach2"]}],
         "output": [{"call": "bash", "namespace": "muse", "id": "call_check",
-                    "arguments": {"command": "sh check.sh"}}]}},
+                    "arguments": {"command": "sh check.sh", "yield_time_ms": 300000}}]}},
       {"turn": {
         "input": [{"output_of": "call_check",
                    "text": ["\"exit_code\": 1", "check: FAIL: greeting.txt says hello, world"]}],
@@ -35,7 +35,7 @@
       {"turn": {
         "input": [{"output_of": "call_edit", "text": ["edited", "-hello, world", "+hello, rach2"]}],
         "output": [{"call": "bash", "namespace": "muse", "id": "call_commit",
-                    "arguments": {"command": "sh check.sh && git commit -q -am 'Greet Rach2' && git log --format=%s -1"}}]}},
+                    "arguments": {"command": "sh check.sh && git commit -q -am 'Greet Rach2' && git log --format=%s -1", "yield_time_ms": 300000}}]}},
       {"turn": {
         "input": [{"output_of": "call_commit", "text": ["\"exit_code\": 0", "check: ok", "Greet Rach2"]}],
         "output": [{"message": "greeting.txt says hello, rach2, check.sh passes, and the change is committed."}]}},
