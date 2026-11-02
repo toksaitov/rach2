@@ -1,14 +1,20 @@
 /**
  * host-deps: utils/vconsole.c
+ * host-inputs: krffs/manifests/rach2-metal-disk.manifest
+ * host-inputs: krffs/manifests/rach2-recovery.manifest
+ * host-inputs: krffs/manifests/os-real-gnu.manifest
+ * host-inputs: vendor/gnu/ports/wpa_supplicant.sh
  *
  * initpolicy_hosttest.c: init's redirection of its services' output, its
- * SSH policy lines and server arguments, and the environment it starts the
- * console's login with.
+ * SSH policy lines and server arguments, the environment it starts the
+ * console's login with, and its finding wpa_supplicant and wpa_cli where
+ * each image with a Wi-Fi configuration stages them.
  *
  * `utils/init.c` is included whole, as the metal build with the console
- * login, with fopen, dup2, unlink, the execs, fork, waitpid and reboot
- * replaced by the functions below, so that a row can fail a call, send a
- * signal at a chosen point, and see what a child did by its exit status.
+ * login, with fopen, dup2, unlink, the execs, fork, waitpid, reboot, access
+ * and if_nametoindex replaced by the functions below, so that a row can fail
+ * a call, send a signal at a chosen point, see what a child did by its exit
+ * status, and give init an image's files and a `wlan0`.
  */
 #define _GNU_SOURCE
 #include <unistd.h>
@@ -26,6 +32,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <net/if.h>
 
 #ifndef NAME_MAX
 #define NAME_MAX 255
@@ -207,20 +214,56 @@ static int policy_sigtimedwait(const sigset_t *set, siginfo_t *info, const struc
     return -1;
 }
 
+/* The files of the image a row gives init, by their paths on it; `Staged`
+ * is -1 while init sees the host's own files. */
+static char Image[256][128];
+static int Staged = -1;
+
+/** init's access: whether the row's image has `path`, or the host's answer
+ * while no row gives one. */
+static int policy_access(const char *path, int mode)
+{
+    int i;
+
+    if (Staged < 0) {
+        return access(path, mode);
+    }
+    for (i = 0; i < Staged; i++) {
+        if (strcmp(Image[i], path) == 0) {
+            return 0;
+        }
+    }
+    errno = ENOENT;
+    return -1;
+}
+
+/** init's if_nametoindex: `wlan0` exists while a row gives an image. */
+static unsigned int policy_if_nametoindex(const char *name)
+{
+    if (Staged < 0) {
+        return if_nametoindex(name);
+    }
+    return strcmp(name, "wlan0") == 0 ? 3 : 0;
+}
+
 #define INIT_METAL
 #define INIT_CONSOLE_LOGIN
-#define fopen        policy_fopen
-#define dup2         policy_dup2
-#define unlink       policy_unlink
-#define execv        policy_execv
-#define execve       policy_execve
-#define fork         policy_fork
-#define waitpid      policy_waitpid
-#define reboot       policy_reboot
-#define sigtimedwait policy_sigtimedwait
-#define main         init_main
+#define access         policy_access
+#define if_nametoindex policy_if_nametoindex
+#define fopen          policy_fopen
+#define dup2           policy_dup2
+#define unlink         policy_unlink
+#define execv          policy_execv
+#define execve         policy_execve
+#define fork           policy_fork
+#define waitpid        policy_waitpid
+#define reboot         policy_reboot
+#define sigtimedwait   policy_sigtimedwait
+#define main           init_main
 #include "init.c"
 #undef main
+#undef access
+#undef if_nametoindex
 #undef fopen
 #undef dup2
 #undef unlink
@@ -500,9 +543,85 @@ static void sshd_case(int openssh, int password_login, const char *const *want, 
     check(same && argv[i] == NULL, name);
 }
 
+/** Add `path` to the row's image. */
+static void stage(const char *path)
+{
+    if (Staged >= (int)(sizeof(Image) / sizeof(Image[0])) || strlen(path) >= sizeof(Image[0])) {
+        fprintf(stderr, "initpolicy-hosttest: image too large at %s\n", path);
+        exit(2);
+    }
+    snprintf(Image[Staged++], sizeof(Image[0]), "%s", path);
+}
+
+/** Add to the row's image the files and texts the manifest `manifest` stages,
+ * as the image tools read its `file`, `optional-file` and `text` lines. */
+static void stage_manifest(const char *manifest)
+{
+    char line[4096], kind[32], mode[32], path[128];
+    FILE *f = fopen(manifest, "r");
+
+    if (!f) {
+        fprintf(stderr, "initpolicy-hosttest: cannot read %s\n", manifest);
+        exit(2);
+    }
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "%31s %31s %127s", kind, mode, path) == 3 &&
+            (strcmp(kind, "file") == 0 || strcmp(kind, "optional-file") == 0 ||
+             strcmp(kind, "text") == 0)) {
+            stage(path);
+        }
+    }
+    fclose(f);
+}
+
+/** Add to the row's image wpa_supplicant and wpa_cli where the GNU root's
+ * port, `port`, installs them: the directory its `BINDIR=` names. */
+static void stage_gnu_port(const char *port)
+{
+    char line[4096], dir[96], path[128];
+    const char *at;
+    FILE *f = fopen(port, "r");
+
+    dir[0] = '\0';
+    if (!f) {
+        fprintf(stderr, "initpolicy-hosttest: cannot read %s\n", port);
+        exit(2);
+    }
+    while (!dir[0] && fgets(line, sizeof(line), f)) {
+        at = strstr(line, "BINDIR=");
+        if (at) {
+            snprintf(dir, sizeof(dir), "%.*s", (int)strcspn(at + 7, " \t\n\\"), at + 7);
+        }
+    }
+    fclose(f);
+    if (!dir[0]) {
+        fprintf(stderr, "initpolicy-hosttest: no BINDIR in %s\n", port);
+        exit(2);
+    }
+    snprintf(path, sizeof(path), "%s/wpa_supplicant", dir);
+    stage(path);
+    snprintf(path, sizeof(path), "%s/wpa_cli", dir);
+    stage(path);
+}
+
+/** Check that init, given the image of `manifest`, and of the GNU port
+ * `port` when it is not a null pointer, follows `wlan0` with the programs
+ * the image stages. */
+static void wifi_case(const char *manifest, const char *port, const char *name)
+{
+    Staged = 0;
+    stage_manifest(manifest);
+    if (port) {
+        stage_gnu_port(port);
+    }
+    check(wifi_wanted(), name);
+    Staged = -1;
+}
+
 /** Run the rows: the policy parser's boundaries, the SSH server's
- * arguments, every redirection failure, the signal rows and the login's
- * environment. 0 when every check passed, 1 otherwise. */
+ * arguments, every redirection failure, the signal rows, the login's
+ * environment and the Wi-Fi programs of each image. 0 when every check
+ * passed, 1 otherwise. */
 int main(void)
 {
     static const int signals[] = {SIGUSR1, SIGUSR2, SIGTERM};
@@ -565,6 +684,12 @@ int main(void)
     }
     login_case(NULL);
     login_case("60");
+    wifi_case("krffs/manifests/rach2-metal-disk.manifest", NULL,
+              "the installed musl system runs its wpa_supplicant");
+    wifi_case("krffs/manifests/rach2-recovery.manifest", NULL,
+              "the recovery system runs its wpa_supplicant");
+    wifi_case("krffs/manifests/os-real-gnu.manifest", "vendor/gnu/ports/wpa_supplicant.sh",
+              "the GNU root runs its wpa_supplicant");
     fclose(log);
     close(nullfd);
     printf("initpolicy-hosttest: result: %s\n", Failed ? "fail" : "pass");

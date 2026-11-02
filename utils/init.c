@@ -192,15 +192,18 @@ static const char *const Shell_Arg0[] = {"-sh", "-ish", 0};
  * `WPA_CTRL`, and `wpa_cli -a` runs `WPA_ACTION` as it joins and leaves a
  * network, which starts and stops the DHCP client on it; ndwatch follows its
  * routers as on `NETWORK_IFACE`. ifplugd is not run on it: the action's
- * `ifdown` would take down the card wpa_supplicant owns.
+ * `ifdown` would take down the card wpa_supplicant owns. The programs are in
+ * /bin on the musl systems, whose manifests stage every program there, and
+ * in /usr/sbin on the GNU root, where its port installs them; init runs the
+ * first of `WPA_SUPPLICANT_PATHS` and of `WPA_CLI_PATHS` the image has.
  */
-#define WIFI_IFACE             "wlan0"
-#define WPA_SUPPLICANT_PROGRAM "/usr/sbin/wpa_supplicant"
-#define WPA_CLI_PROGRAM        "/usr/sbin/wpa_cli"
-#define WPA_CONF               "/etc/wpa_supplicant/wlan0.conf"
-#define WPA_ACTION             "/etc/wpa_supplicant/wpa_action"
-#define WPA_CTRL_DIR           "/var/run/wpa_supplicant"
-#define WPA_CTRL               WPA_CTRL_DIR "/" WIFI_IFACE
+#define WIFI_IFACE           "wlan0"
+#define WPA_SUPPLICANT_PATHS {"/bin/wpa_supplicant", "/usr/sbin/wpa_supplicant", 0}
+#define WPA_CLI_PATHS        {"/bin/wpa_cli", "/usr/sbin/wpa_cli", 0}
+#define WPA_CONF             "/etc/wpa_supplicant/wlan0.conf"
+#define WPA_ACTION           "/etc/wpa_supplicant/wpa_action"
+#define WPA_CTRL_DIR         "/var/run/wpa_supplicant"
+#define WPA_CTRL             WPA_CTRL_DIR "/" WIFI_IFACE
 
 /*
  * The metric of the IPv6 default route each router gives an interface,
@@ -2421,13 +2424,40 @@ static void start_ndwatch(struct service *s)
     }
 }
 
+/** The first of the paths `paths`, ended by a null pointer, that the image
+ * has as an executable, or a null pointer when it has none. */
+static const char *first_program(const char *const *paths)
+{
+    for (; *paths; paths++) {
+        if (access(*paths, X_OK) == 0) {
+            return *paths;
+        }
+    }
+    return 0;
+}
+
+/** wpa_supplicant's path on this image, or a null pointer. */
+static const char *wpa_supplicant_program(void)
+{
+    static const char *const paths[] = WPA_SUPPLICANT_PATHS;
+
+    return first_program(paths);
+}
+
+/** wpa_cli's path on this image, or a null pointer. */
+static const char *wpa_cli_program(void)
+{
+    static const char *const paths[] = WPA_CLI_PATHS;
+
+    return first_program(paths);
+}
+
 /** Whether to follow `WIFI_IFACE`: the image has wpa_supplicant, wpa_cli,
  * the action and the configuration, and the interface exists. */
 static int wifi_wanted(void)
 {
-    return access(WPA_SUPPLICANT_PROGRAM, X_OK) == 0 && access(WPA_CLI_PROGRAM, X_OK) == 0 &&
-           access(WPA_ACTION, X_OK) == 0 && access(WPA_CONF, R_OK) == 0 &&
-           if_nametoindex(WIFI_IFACE) != 0;
+    return wpa_supplicant_program() && wpa_cli_program() && access(WPA_ACTION, X_OK) == 0 &&
+           access(WPA_CONF, R_OK) == 0 && if_nametoindex(WIFI_IFACE) != 0;
 }
 
 /**
@@ -2449,11 +2479,12 @@ static void start_wpa_supplicant(struct service *s)
                                  (char *)"-c",
                                  (char *)WPA_CONF,
                                  0};
+    const char *program;
     mode_t mask;
 
-    if (s->pid < 0 && wifi_wanted()) {
+    if (s->pid < 0 && wifi_wanted() && (program = wpa_supplicant_program()) != 0) {
         mask = umask(077);
-        s->pid = spawn_service(WPA_SUPPLICANT_PROGRAM, argv);
+        s->pid = spawn_service(program, argv);
         (void)umask(mask);
         s->spawned = time(0);
     }
@@ -2469,10 +2500,11 @@ static void start_wpa_cli(struct service *s, const struct service *supplicant)
     static char *const argv[] = {
         (char *)"wpa_cli",    (char *)"-i", (char *)WIFI_IFACE, (char *)"-p",
         (char *)WPA_CTRL_DIR, (char *)"-a", (char *)WPA_ACTION, 0};
+    const char *program;
 
     if (s->pid < 0 && supplicant->pid >= 0 && access(WPA_CTRL, F_OK) == 0 &&
-        access(WPA_CLI_PROGRAM, X_OK) == 0) {
-        s->pid = spawn_service(WPA_CLI_PROGRAM, argv);
+        (program = wpa_cli_program()) != 0) {
+        s->pid = spawn_service(program, argv);
         s->spawned = time(0);
     }
 }

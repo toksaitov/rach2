@@ -131,8 +131,14 @@ for it.
 On a machine with a Wi-Fi radio, while
 .Ql wlan0
 exists and the image has
-.Pa /usr/sbin/wpa_supplicant ,
-.Pa /usr/sbin/wpa_cli ,
+.Pa wpa_supplicant
+and
+.Pa wpa_cli
+in
+.Pa /bin ,
+as the musl systems stage them, or in
+.Pa /usr/sbin ,
+as the GNU root installs them, and
 .Pa /etc/wpa_supplicant/wpa_action
 and
 .Pa /etc/wpa_supplicant/wlan0.conf ,
