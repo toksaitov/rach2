@@ -3,11 +3,11 @@
  * and its EEPROM and OTP windows, for the ath9k driver.
  *
  * No datasheet of the family is public. These definitions are therefore
- * ath9k's, from Linux v6.16 (commit
- * 038d61fd642278bab63ee8ef722c50d10ab01e8f): drivers/net/wireless/
- * ath/reg.h, and ath9k's reg.h, ar9003_mac.h, mac.h, ar9003_phy.h and reg_mci.h, in
- * that order, each section headed by the file it comes from. These changes
- * were made to them, and no value was changed by hand:
+ * ath9k's, from Linux v6.16 (commit 038d61fd642278bab63ee8ef722c50d10ab01e8f):
+ * drivers/net/wireless/ath/reg.h, and ath9k's reg.h, ar9003_mac.h, mac.h,
+ * ar9003_phy.h and reg_mci.h, in that order, each section headed by the file
+ * it comes from. These changes were made to them, and no value was changed
+ * by hand:
  *
  * - ath9k serves many chips and picks some registers at run time with
  *   AR_SREV_*(ah) tests. Each such test is resolved here for the chips of
