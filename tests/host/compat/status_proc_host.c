@@ -5,10 +5,12 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/utsname.h>
 #if defined(__linux__)
 #include <sys/sysmacros.h>
 #endif
 #include <unistd.h>
+#include "boot_identity.h"
 #include "etude/ledger.h"
 #include "../../cases/host/fixture.h"
 #include "status_proc_host.h"
@@ -56,22 +58,40 @@ static int lock_stat(const char *root, const char *path)
     return n >= 0 && n < (int)sizeof(text) && fx_text(destination, text);
 }
 
+/**
+ * Record under `root` the boot identity the ledger stamps on its claims: on
+ * Rach2 etude-guest's token, which differs from its procfs boot_id, and
+ * elsewhere the procfs boot_id. Record none where the ledger has none, since
+ * the reader then matches every boot, as the ledger's "-" does.
+ */
+static int boot_capture(const char *root)
+{
+    struct utsname kernel;
+    char destination[4096], token[80];
+    int n, rach2 = uname(&kernel) == 0 &&
+                   etude_boot_is_rach2(kernel.sysname, kernel.release, kernel.version);
+    if (rach2 ? etude_boot_file_read("/dev/shm/etude-guest-boot", token, sizeof(token)) != 0
+              : access("/proc/sys/kernel/random/boot_id", F_OK) != 0)
+        return rach2 || errno == ENOENT;
+    n = snprintf(destination, sizeof(destination), "%s/sys/kernel/random", root);
+    if (n < 0 || n >= (int)sizeof(destination) || !fx_mkdir(destination))
+        return 0;
+    n = snprintf(destination, sizeof(destination), "%s/sys/kernel/random/boot_id", root);
+    if (n < 0 || n >= (int)sizeof(destination))
+        return 0;
+    if (!rach2)
+        return fx_copy("/proc/sys/kernel/random/boot_id", destination);
+    strcat(token, "\n");
+    return fx_text(destination, token);
+}
+
 int status_proc_capture(const char *root, const pid_t *pids, size_t count, const char *lock)
 {
-    char destination[4096];
     size_t i;
-    int n;
     if (!fx_mkdir(root) || !lock_stat(root, lock))
         return 0;
     for (i = 0; i < count; i++)
         if (!process_stat(root, pids[i]))
             return 0;
-    if (access("/proc/sys/kernel/random/boot_id", F_OK))
-        return errno == ENOENT;
-    n = snprintf(destination, sizeof(destination), "%s/sys/kernel/random", root);
-    if (n < 0 || n >= (int)sizeof(destination) || !fx_mkdir(destination))
-        return 0;
-    n = snprintf(destination, sizeof(destination), "%s/sys/kernel/random/boot_id", root);
-    return n >= 0 && n < (int)sizeof(destination) &&
-           fx_copy("/proc/sys/kernel/random/boot_id", destination);
+    return boot_capture(root);
 }
