@@ -113,7 +113,7 @@
     },
     {
       "case_id": "machine.memory.memprobe-64",
-      "behavior": "In 64 MiB a process maps 24 MiB, patterns it, forks over it, execs and frees it",
+      "behavior": "In 64 MiB a process maps 16 MiB, patterns it, forks over it, execs and frees it",
       "units": ["memory", "memprobe"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
