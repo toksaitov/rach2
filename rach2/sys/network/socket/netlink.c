@@ -1714,19 +1714,78 @@ static struct netdev *dev_of_index(uint32_t index)
     return 0;
 }
 
+/**
+ * Read a link change's IFLA_LINKMODE and IFLA_OPERSTATE into *mode and
+ * *oper, each 0 when absent, and when either is there find in *policy the
+ * link policy of nd, made on first use. Returns 0; -EINVAL for a mode other
+ * than 0 or 1 or an operstate other than IF_OPER_UP or IF_OPER_DORMANT, or
+ * either not one byte long; -EOPNOTSUPP for a loopback interface or one
+ * outside the first namespace; or -ENOSPC when no policy slot is free.
+ */
+static int32_t link_policy_asked(const uint8_t *req, uint32_t body, const struct netdev *nd,
+                                 const uint8_t **mode, const uint8_t **oper,
+                                 struct link_policy **policy)
+{
+    uint16_t len;
+    uint32_t lock;
+
+    *policy = 0;
+    *mode = req_attr(req, body, 16, IFLA_LINKMODE, &len);
+    if (*mode && (len != 1 || (*mode)[0] > 1)) {
+        return -EINVAL;
+    }
+    *oper = req_attr(req, body, 16, IFLA_OPERSTATE, &len);
+    if (*oper && (len != 1 || ((*oper)[0] != IF_OPER_UP && (*oper)[0] != IF_OPER_DORMANT))) {
+        return -EINVAL;
+    }
+    if (!*mode && !*oper) {
+        return 0;
+    }
+    if (!net_ns_seen() || nd->loopback) {
+        return -EOPNOTSUPP;
+    }
+    lock = net_lock();
+    *policy = policy_of(nd, 1);
+    net_unlock(lock);
+    return *policy ? 0 : -ENOSPC;
+}
+
+/** Apply a link change's mode and operstate, either 0 when absent, to nd's
+ * policy: a new mode sets it, dormant mode leaving the link unauthorized
+ * until an operstate of IF_OPER_UP authorizes it, and IF_OPER_DORMANT takes
+ * the authorization back. Takes net_lock. */
+static void link_policy_set(const struct netdev *nd, struct link_policy *policy,
+                            const uint8_t *mode, const uint8_t *oper)
+{
+    uint32_t lock = net_lock();
+
+    if (mode && policy->mode != mode[0]) {
+        policy->mode = mode[0];
+        policy->authorized = (uint8_t)!mode[0];
+    }
+    if (oper) {
+        policy->authorized = oper[0] == IF_OPER_UP;
+    }
+    (void)operstate(nd);
+    net_unlock(lock);
+}
+
 /** RTM_NEWLINK and RTM_SETLINK: up or down by IFF_UP in the change mask, an
- * MTU by IFLA_MTU (`netdev_set_mtu`), and a name only as it is. The request
- * is checked whole before anything changes. Returns 0, -ENODEV for no such
- * interface, -EINVAL for an MTU out of the interface's range or an
- * IFLA_MTU not four bytes long, or -EOPNOTSUPP for another name or for the
- * machine's `lo` taken down, since it is always up. A namespace's `lo` goes
- * up and down (`netif_ns_lo_set_up`). */
+ * MTU by IFLA_MTU (`netdev_set_mtu`), a link mode by IFLA_LINKMODE and an
+ * operstate by IFLA_OPERSTATE (`link_policy_asked`), and a name only as it
+ * is. The request is checked whole before anything changes. Returns 0,
+ * -ENODEV for no such interface, -EINVAL for an MTU out of the interface's
+ * range or an IFLA_MTU not four bytes long, or -EOPNOTSUPP for another name
+ * or for the machine's `lo` taken down, since it is always up, and the
+ * errors of `link_policy_asked`. A namespace's `lo` goes up and down
+ * (`netif_ns_lo_set_up`). */
 static int32_t link_change(const uint8_t *req, uint32_t body)
 {
     struct netdev *nd = body >= 16 ? link_asked(req, body) : 0;
     uint16_t len;
     const uint8_t *a, *mtu, *mode, *oper;
-    struct link_policy *policy = 0;
+    struct link_policy *policy;
+    int32_t rc;
 
     if (!nd) {
         return -ENODEV;
@@ -1744,27 +1803,9 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
         !(get32(req + NLMSG_HDRLEN + 8) & IFF_UP)) {
         return -EOPNOTSUPP;
     }
-    mode = req_attr(req, body, 16, IFLA_LINKMODE, &len);
-    if (mode && (len != 1 || mode[0] > 1)) {
-        return -EINVAL;
-    }
-    oper = req_attr(req, body, 16, IFLA_OPERSTATE, &len);
-    if (oper && (len != 1 || (oper[0] != IF_OPER_UP && oper[0] != IF_OPER_DORMANT))) {
-        return -EINVAL;
-    }
-    if (mode || oper) {
-        if (!net_ns_seen() || nd->loopback) {
-            return -EOPNOTSUPP;
-        }
-        {
-            uint32_t lock = net_lock();
-
-            policy = policy_of(nd, 1);
-            net_unlock(lock);
-        }
-        if (!policy) {
-            return -ENOSPC;
-        }
+    rc = link_policy_asked(req, body, nd, &mode, &oper, &policy);
+    if (rc) {
+        return rc;
     }
     if (mtu) {
         netdev_set_mtu(nd, get32(mtu));
@@ -1775,25 +1816,14 @@ static int32_t link_change(const uint8_t *req, uint32_t body)
         if (!net_ns_seen()) {
             netif_ns_lo_set_up(nd, up);
         } else {
-            int rc = netconf_set_up(nd, up);
-
+            rc = netconf_set_up(nd, up);
             if (rc) {
                 return rc;
             }
         }
     }
     if (policy) {
-        uint32_t lock = net_lock();
-
-        if (mode && policy->mode != mode[0]) {
-            policy->mode = mode[0];
-            policy->authorized = (uint8_t)!mode[0];
-        }
-        if (oper) {
-            policy->authorized = oper[0] == IF_OPER_UP;
-        }
-        (void)operstate(nd);
-        net_unlock(lock);
+        link_policy_set(nd, policy, mode, oper);
     }
     return 0;
 }
