@@ -15,8 +15,9 @@
  *       readable with the child's byte in it (the row does not time the
  *       wake);
  *   (f) fd contract: a wide nfds with only in-range bits works; a bit naming
- *       a closed fd, past the table or not, is -EBADF; nfds past the fd_set
- *       width is -EINVAL, not a truncation;
+ *       a closed fd, past the table's first sixteen entries or not, is
+ *       -EBADF; an nfds past the fd_set width is cut to the table, as on
+ *       Linux, so sets as wide as it asks find fd 1 writable;
  *   (g) bad timeout: an out-of-range timeval (tv_usec >= 1e6) is -EINVAL;
  *   (h) on x86-64, a ppoll whose timeout is 2^32 seconds waits for its pipe,
  *       which a child writes once the parent sleeps, and does not end at
@@ -237,12 +238,15 @@ static void hangup(void)
 
 /**
  * Case (f), the select fd contract: a wide nfds with only an in-range bit
- * works, a bit for a closed descriptor is -EBADF whether past the table or
- * not, and an nfds past FD_SETSIZE is -EINVAL. `closed` is a descriptor in
- * the table's range that was closed.
+ * works, a bit for a closed descriptor is -EBADF whether past the table's
+ * first sixteen entries or not, and an nfds past FD_SETSIZE, which Linux
+ * cuts to the table, reads sets as wide as it asks. `closed` is a
+ * descriptor in the table's range that was closed. A bit the kernel
+ * ignored would leave these calls, which have no timeout, waiting forever.
  */
 static void select_contract(int closed)
 {
+    static unsigned int wide[2048 / 32];
     unsigned int set[32];
     int i, n;
 
@@ -270,7 +274,11 @@ static void select_contract(int closed)
     check(syscall5(SYS_SELECT, closed + 1, (long)set, 0, 0, 0) == -EBADF,
           "select bit for a closed fd -> -EBADF");
 
-    check(syscall5(SYS_SELECT, 2000, 0, 0, 0, 0) == -EINVAL, "select nfds > FD_SETSIZE -> -EINVAL");
+    /* nfds 2000, past FD_SETSIZE, with a set that wide and fd 1's bit. */
+    wide[1u / 32] = 1u << (1u % 32);
+    n = syscall5(SYS_SELECT, 2000, 0, (long)wide, 0, 0);
+    check(n == 1 && (wide[0] & (1u << 1)) != 0,
+          "select nfds > FD_SETSIZE with a set that wide finds fd 1 writable");
 }
 
 /**
