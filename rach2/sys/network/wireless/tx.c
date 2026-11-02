@@ -328,6 +328,10 @@ int wlan_data_tx(struct wlan_data *d, uint8_t *frame, unsigned len, unsigned cap
         return -EINVAL;
     eapol = len >= hdrlen + 8 && same(frame + hdrlen, eapol_snap, 8);
     k = wlan_data_pairwise_key(d, d->tx_pairwise);
+    /* A protected connection sends nothing in clear but EAPOL, as Linux's
+     * ieee80211_tx_h_select_key drops it; a removed key must not open it. */
+    if (!k && d->privacy && !eapol)
+        return -ENOKEY;
     need = len + (d->qos ? IEEE80211_QOS_CTL_LEN : 0);
     if (k)
         need += k->key.cipher == WLAN_CIPHER_SUITE_TKIP ? 8 + WLAN_TKIP_MIC_LEN + 4

@@ -259,9 +259,11 @@ void wlan_data_disconnect(struct wlan_data *d);
  * when a pairwise key is installed, its next PN: CCMP or TKIP in software,
  * or the headers and room the radio fills when the key is in its slot.
  * EAPOL goes at the lowest basic rate; other data at what rate selection
- * gives. Worker only. Returns 0 once the radio took the frame, -ENOTCONN,
- * -EINVAL for a frame that is not such data, -ENOSPC when cap is short,
- * -EOVERFLOW when the key's PN is spent, or the radio's error.
+ * gives. On a connection to a BSS with privacy, a frame other than EAPOL
+ * needs a pairwise key. Worker only. Returns 0 once the radio took the
+ * frame, -ENOTCONN, -EINVAL for a frame that is not such data, -ENOKEY for
+ * such a frame without the key, -ENOSPC when cap is short, -EOVERFLOW when
+ * the key's PN is spent, or the radio's error.
  */
 int wlan_data_tx(struct wlan_data *d, uint8_t *frame, unsigned len, unsigned cap,
                  unsigned priority);

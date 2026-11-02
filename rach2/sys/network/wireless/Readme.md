@@ -42,7 +42,7 @@ The data path owns the radio's interrupt entry points `wlan_radio_rx` and `wlan_
 
 `wlan_data_mlme_tx` has the signature of the MLME's `tx` operation. It sends a management frame with the non-QoS sequence number and the lowest basic rate, protected on request: CCMP under the pairwise key when individually addressed, BIP under the default integrity key when group addressed. `wlan_set_state` tells the data path of each committed state through `wlan_data_state`: reaching association, or moving it to another BSS, connects the data path, with QoS when the BSS sends WMM parameters and privacy when its capability says so; leaving association disconnects it and removes every key.
 
-`wlan_install_key`, `wlan_remove_key` and `wlan_default_key` of `wireless.h` are the data path's. A pairwise key takes index 0 or 1 and the AP's address; CCMP and TKIP group keys take 0 to 3 and BIP keys 4 and 5. The receive counters given at installation are the RSC; the same key bytes installed again keep the counters. The most recently installed pairwise key transmits.
+`wlan_install_key`, `wlan_remove_key` and `wlan_default_key` of `wireless.h` are the data path's. A pairwise key takes index 0 or 1 and the AP's address; CCMP and TKIP group keys take 0 to 3 and BIP keys 4 and 5. The receive counters given at installation are the RSC; the same key bytes installed again keep the counters. The most recently installed pairwise key transmits. On a connection with privacy, `wlan_data_tx` sends a data frame other than EAPOL only under a pairwise key and refuses it with `-ENOKEY` while there is none, so that removing the key sends nothing in clear, queued frames included.
 
 ### Generic netlink
 
