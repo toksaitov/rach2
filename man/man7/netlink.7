@@ -203,7 +203,8 @@ its prefix length and
 the attributes
 .Dv IFA_ADDRESS ,
 .Dv IFA_LOCAL ,
-.Dv IFA_BROADCAST
+.Dv IFA_BROADCAST ,
+which a /31 and a /32 have not,
 and
 .Dv IFA_LABEL ;
 and for each IPv6 address, the interface's in the order it took them,
@@ -232,8 +233,8 @@ With
 .Dv NLM_F_DUMP ,
 an
 .Dv RTM_NEWROUTE
-message for each route of the main table: each interface's subnets,
-reached on the link, its default route through its gateway when it has
+message for each route of the main table: each interface's subnets but
+a /32's, reached on the link, its default route through its gateway when it has
 one, and the routes programs added, with
 .Dv RTA_PRIORITY
 for a metric; and each route of IPv6's table: the prefixes of the

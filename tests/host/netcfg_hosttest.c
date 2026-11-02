@@ -363,8 +363,9 @@ static int refused(const struct netcfg_iface *s, const char *substring)
  * Check netcfg_check_static on stanzas it must accept and on each rule it
  * applies, matching the reason it gives. Loopback, multicast and network-zero
  * addresses, which no machine can hold and the kernel rejects too, are
- * rejected even when a wide mask puts them on the address's subnet. A /31 has
- * no host addresses, and a /30 has two.
+ * rejected even when a wide mask puts them on the address's subnet. A /32 has
+ * one host address and no room for a gateway, a /31 two (RFC 3021), and a
+ * /30 two beside its network and broadcast addresses.
  */
 static void check_static_judgement(void)
 {
@@ -393,7 +394,11 @@ static void check_static_judgement(void)
     CHECK(refused(&s, "run of ones"), "a netmask that is not a run of ones is refused");
 
     s.netmask = 0xFFFFFFFFUL;
-    CHECK(refused(&s, "run of ones"), "a netmask with no room for a host is refused");
+    s.gateway = 0;
+    CHECK(netcfg_check_static(&s, refusal, sizeof(refusal)) == 0,
+          "a /32 with no gateway is applied");
+    s.gateway = IP(192, 168, 0, 1);
+    CHECK(refused(&s, "gateway is not a host"), "a /32 has no other host for a gateway");
 
     s.netmask = IP(255, 255, 255, 0);
     s.address = IP(192, 168, 0, 0);
@@ -430,13 +435,25 @@ static void check_static_judgement(void)
     s.address = IP(0, 1, 2, 3);
     CHECK(refused(&s, "not one a machine can hold"), "and one on network zero");
 
-    s.address = IP(10, 0, 0, 1);
+    s.address = IP(10, 0, 0, 0);
     s.netmask = IP(255, 255, 255, 254);
+    s.gateway = IP(10, 0, 0, 1);
+    CHECK(netcfg_check_static(&s, refusal, sizeof(refusal)) == 0,
+          "the lower address of a /31 is a host, the upper its gateway");
+    s.address = IP(10, 0, 0, 1);
+    s.gateway = IP(10, 0, 0, 0);
+    CHECK(netcfg_check_static(&s, refusal, sizeof(refusal)) == 0, "and the other way round");
     s.gateway = 0;
-    CHECK(refused(&s, "network or broadcast"), "a subnet with no room for a host is refused");
     s.netmask = IP(255, 255, 255, 252);
     CHECK(netcfg_check_static(&s, refusal, sizeof(refusal)) == 0,
           "a four-address subnet has two hosts in it");
+    s.address = IP(10, 0, 0, 0);
+    CHECK(refused(&s, "network or broadcast"), "but not its network address");
+    s.address = IP(10, 0, 0, 3);
+    CHECK(refused(&s, "network or broadcast"), "nor its broadcast address");
+    s.address = IP(10, 0, 0, 1);
+    s.gateway = IP(10, 0, 0, 3);
+    CHECK(refused(&s, "gateway is not a host"), "nor a gateway that is its broadcast address");
 }
 
 /** Run the cases; return the number of failed checks, at most 120. */

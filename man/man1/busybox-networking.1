@@ -522,9 +522,10 @@ When it is its class's network or broadcast address, the interface has no
 address until a netmask is set under which it is a host.
 In either case a netmask request that fails with
 .Er EINVAL ,
-because the mask is not contiguous, is all ones, or makes the address a
-network or broadcast address, clears the interface's address, and the
-address must be set again.
+because the mask is not contiguous or makes the address a network or
+broadcast address, clears the interface's address, and the address must be
+set again.
+A /31 and a /32 mask have neither: every address under them is a host.
 The address already in force, set again alone, keeps its netmask if it
 has one.
 So a netmask belongs after the address and before a broadcast that
@@ -534,9 +535,9 @@ with an address succeeds only when the address is the broadcast the
 interface's address and netmask imply, and fails with
 .Er EINVAL
 otherwise.
-On an interface with no address or no netmask, the only broadcast
-accepted is 255.255.255.255, though the interface reports its broadcast
-as 0.0.0.0.
+On an interface with no address or no netmask, or with a /31 or /32
+netmask, the only broadcast accepted is 255.255.255.255, though the
+interface reports its broadcast as 0.0.0.0.
 .Cm broadcast +
 computes the broadcast from the address and the netmask given earlier on
 the same command line, in either order, as in

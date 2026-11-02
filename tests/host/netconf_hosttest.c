@@ -158,10 +158,11 @@ void netdev_route_prune(struct netdev *nd)
     (void)nd;
 }
 
-/** Report whether `ip` is the broadcast address of `nd`'s subnet. */
+/** Report whether `ip` is the broadcast address of `nd`'s subnet, which a
+ * /31 and a /32 do not have. */
 static int is_bcast_of(const struct netdev *nd, uint32_t ip)
 {
-    return nd->ip != 0 && nd->mask != 0 && ip == (nd->ip | ~nd->mask);
+    return nd->ip != 0 && NETDEV_MASK_HAS_BROADCAST(nd->mask) && ip == (nd->ip | ~nd->mask);
 }
 
 /** Report the all-ones address and either interface's broadcast address. */
@@ -419,10 +420,100 @@ static void secondary_address_change(void)
 }
 
 /**
- * Run the rows of configure_by_mac and secondary_address_change, then:
+ * Judge the subnets of a /32, a /31 and a /30, as Linux does: every address
+ * of a /32 or a /31 is a host (RFC 3021) and neither has a broadcast address,
+ * so a /32 has no other host for a gateway and a /31 has one; a /30 keeps its
+ * network and broadcast addresses out. The rules are the same for the boot
+ * line, an address set, a mask set and an address added.
+ */
+static void narrow_subnets(void)
+{
+    uint32_t ip = 0, mask = 0;
+
+    CHECK(netconf_parse_cidr("192.168.0.105/32", &ip, &mask) && ip == IP4(192, 168, 0, 105) &&
+              mask == 0xFFFFFFFFu,
+          "a /32 parses");
+    CHECK(netconf_gateway_ok(IP4(192, 168, 0, 1), ip, mask) == 0,
+          "a /32 has no other host to be its gateway");
+    CHECK(netconf_parse_cidr("10.0.0.0/31", &ip, &mask) && ip == IP4(10, 0, 0, 0) &&
+              mask == 0xFFFFFFFEu,
+          "the lower address of a /31 parses");
+    CHECK(netconf_gateway_ok(IP4(10, 0, 0, 1), ip, mask), "and the upper is its gateway");
+    CHECK(netconf_parse_cidr("10.0.0.1/31", &ip, &mask) && ip == IP4(10, 0, 0, 1),
+          "the upper address of a /31 parses");
+    CHECK(netconf_gateway_ok(IP4(10, 0, 0, 0), ip, mask), "and the lower is its gateway");
+    CHECK(netconf_gateway_ok(IP4(10, 0, 0, 2), ip, mask) == 0,
+          "an address past the /31 is no gateway of it");
+    CHECK(cidr_refused("10.0.0.0/30") && cidr_refused("10.0.0.3/30"),
+          "a /30 refuses its network and broadcast addresses");
+    CHECK(netconf_gateway_ok(IP4(10, 0, 0, 3), IP4(10, 0, 0, 1), 0xFFFFFFFCu) == 0,
+          "and they are no gateway of it");
+    CHECK(netconf_gateway_ok(IP4(10, 0, 0, 2), IP4(10, 0, 0, 1), 0xFFFFFFFCu),
+          "but its other host is");
+    CHECK(cidr_refused("192.168.0.105/33"), "a prefix past 32 is refused");
+
+    conf_reset();
+    CHECK(netconf_set_address(&the_iface, IP4(192, 168, 0, 105), 0xFFFFFFFFu) == 0 &&
+              net_ip_mask == 0xFFFFFFFFu,
+          "an interface takes a /32");
+    CHECK(netconf_broadcast() == 0xFFFFFFFFu && !netconf_is_broadcast(IP4(192, 168, 0, 105)),
+          "which has no broadcast address, its own address least of all");
+    CHECK(netconf_set_gateway(&the_iface, IP4(192, 168, 0, 1)) == -EINVAL,
+          "nor a gateway on its subnet");
+    CHECK(netconf_set_address(&the_iface, IP4(10, 0, 0, 1), 0xFFFFFFFEu) == 0,
+          "an interface takes the upper address of a /31");
+    CHECK(netconf_broadcast() == 0xFFFFFFFFu && !netconf_is_broadcast(IP4(10, 0, 0, 0)),
+          "whose other address is a host, not a broadcast address");
+    CHECK(netconf_set_gateway(&the_iface, IP4(10, 0, 0, 0)) == 0 &&
+              net_ip_gateway == IP4(10, 0, 0, 0),
+          "and is its gateway");
+    CHECK(netconf_set_address(&the_iface, IP4(10, 0, 0, 0), 0xFFFFFFFEu) == 0 &&
+              net_ip_gateway == 0,
+          "the lower address of a /31 is taken too, which drops that gateway");
+    CHECK(netconf_set_address(&the_iface, IP4(10, 0, 0, 0), 0xFFFFFFFCu) == -EINVAL &&
+              netconf_set_address(&the_iface, IP4(10, 0, 0, 3), 0xFFFFFFFCu) == -EINVAL,
+          "a /30 refuses its network and broadcast addresses");
+    CHECK(netconf_set_address(&the_iface, IP4(10, 0, 0, 1), 0xFFFFFFFCu) == 0 &&
+              netconf_broadcast() == IP4(10, 0, 0, 3) && netconf_is_broadcast(IP4(10, 0, 0, 3)),
+          "and a host of it has the broadcast address");
+
+    CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0 && net_ip_addr == 0,
+          "an address waiting for its mask");
+    CHECK(netconf_set_netmask(&the_iface, 0xFFFFFFFFu) == 0 && net_ip_addr == IP4(192, 168, 1, 0) &&
+              net_ip_mask == 0xFFFFFFFFu,
+          "is a host under a /32 mask");
+    CHECK(netconf_set_netmask(&the_iface, 0xFFFFFFFEu) == 0 && net_ip_mask == 0xFFFFFFFEu,
+          "and under a /31 mask");
+    CHECK(netconf_set_netmask(&the_iface, 0xFFFFFFFCu) == -EINVAL,
+          "but not under a /30 mask, of which it is the network address");
+
+    iface_reset(&other_iface, 0, 0, 0);
+    other_iface.naddr2 = 0;
+    CHECK(netconf_add_address(&other_iface, IP4(192, 168, 0, 105), 0xFFFFFFFFu) == 0 &&
+              other_iface.ip == IP4(192, 168, 0, 105) && other_iface.mask == 0xFFFFFFFFu,
+          "a /32 is added as an interface's first address");
+    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 0, 0), 0xFFFFFFFEu) == 0 &&
+              netconf_add_address(&other_iface, IP4(10, 0, 0, 1), 0xFFFFFFFEu) == 0 &&
+              other_iface.naddr2 == 2,
+          "both addresses of a /31 are added beside it");
+    CHECK(!netconf_is_broadcast(IP4(10, 0, 0, 0)) && !netconf_is_broadcast(IP4(10, 0, 0, 1)),
+          "neither of which is a broadcast address");
+    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 1, 0), 0xFFFFFFFCu) == -EINVAL &&
+              netconf_add_address(&other_iface, IP4(10, 0, 1, 3), 0xFFFFFFFCu) == -EINVAL,
+          "a /30's network and broadcast addresses are not added");
+    CHECK(netconf_add_address(&other_iface, IP4(10, 0, 1, 2), 0xFFFFFFFCu) == 0 &&
+              other_iface.naddr2 == 3,
+          "its host is");
+    other_iface.naddr2 = 0;
+    conf_reset();
+}
+
+/**
+ * Run the rows of configure_by_mac, secondary_address_change and
+ * narrow_subnets, then:
  *
- *   * netconf_parse_cidr takes an address with a prefix from /1 to /30 and
- *     rejects /31, /32 and /0; text that must not become an address, and an
+ *   * netconf_parse_cidr takes an address with a prefix from /1 to /32 and
+ *     rejects /0; text that must not become an address, and an
  *     address that exists but is not a host, is rejected and leaves the
  *     caller's values alone;
  *   * netconf_parse_addr takes a bare address for the gateway, and
@@ -471,6 +562,7 @@ int main(void)
 
     configure_by_mac();
     secondary_address_change();
+    narrow_subnets();
     ip = 0;
     mask = 0;
     CHECK(netconf_parse_cidr("192.168.1.50/24", &ip, &mask), "a plain LAN address parses");
@@ -480,14 +572,11 @@ int main(void)
     CHECK(netconf_parse_cidr("10.0.2.15/8", &ip, &mask) && mask == 0xFF000000u,
           "a /8 is 255.0.0.0");
     CHECK(netconf_parse_cidr("172.16.5.9/30", &ip, &mask) && mask == 0xFFFFFFFCu,
-          "a /30, the narrowest subnet with a host in it, is accepted");
+          "a /30 is accepted");
     CHECK(netconf_parse_cidr("1.2.3.4/1", &ip, &mask) && mask == 0x80000000u,
           "a /1, the widest, is accepted");
-    CHECK(netconf_parse_cidr("255.255.255.254/31", &ip, &mask) == 0,
-          "a /31 leaves no host address and is refused");
-    CHECK(netconf_parse_cidr("192.168.1.50/32", &ip, &mask) == 0, "a /32 is refused");
     CHECK(netconf_parse_cidr("192.168.1.50/0", &ip, &mask) == 0, "a /0 is refused");
-    CHECK(cidr_refused("192.168.1.50/31"), "the /31 refusal leaves the caller's values alone");
+    CHECK(cidr_refused("192.168.1.50/0"), "the /0 refusal leaves the caller's values alone");
 
     CHECK(cidr_refused("192.168.1.50"), "an address with no prefix is refused");
     CHECK(cidr_refused("192.168.1/24"), "three quartets are refused");
