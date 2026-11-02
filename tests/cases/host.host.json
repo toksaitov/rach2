@@ -96,6 +96,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "ath9k_ampdu",
+          "checks": "tests/host/ath9k_ampdu_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "ath9k_ant",
           "checks": "tests/host/ath9k_ant_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
