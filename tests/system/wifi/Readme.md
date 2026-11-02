@@ -13,7 +13,7 @@ sh tests/system/wifi/apguest.sh -R os-real      # beside a Rach2 machine of ARCH
 sh tests/system/wifi/apguest.sh -m trace -o tests/system/fixtures/wifi
 ```
 
-`apguest.sh`'s comment gives its options. Every boot runs `wifiap check`, a passive scan from the guest's own station radio, which prints `wifiap: beacon: BSSID SSID` for each access point it hears and `wifiap: check: ok` when it heard all three. The boot ends with `wifiap: ready: PROFILE MODE, at T s` or `wifiap: failed: MODE`. In peer mode the guest's console is a TCP server on the host's port BASE+4, where `wifiap start PROFILE`, `hostapd_cli` and `iw` run.
+`apguest.sh`'s comment gives its options. Every boot runs `wifiap check`, a passive scan from the guest's own station radio, which prints `wifiap: beacon: BSSID SSID` for each access point it hears and `wifiap: check: ok` when it heard all three. The boot ends with `wifiap: ready: PROFILE MODE, at T s` or `wifiap: failed: MODE`; `apguest.sh -m check` ends 0 only when that record is ready, since the guest powers off normally after either. In peer mode the guest's console is a TCP server on the host's port BASE+4, where `wifiap start PROFILE`, `hostapd_cli` and `iw` run.
 
 ## Results
 

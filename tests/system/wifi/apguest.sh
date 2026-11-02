@@ -41,7 +41,9 @@
 # `make wifi-guest`; RACH2_QEMU names QEMU, qemu-system-x86_64 by default.
 # The status is the guest's QEMU's, 0 when it powered off, or the Rach2
 # machine's with -R; 1 when the guest did not become ready or a trace did not
-# check out, and 2 for a wrong usage.
+# check out, and 2 for a wrong usage. With -m check it is 0 when the guest's
+# last `wifiap: ready:` or `wifiap: failed:` record is ready and QEMU ended
+# with 0, and 1 otherwise.
 
 set -e
 
@@ -150,6 +152,35 @@ set -- $accel -cpu max -m 512 -smp 2 -no-reboot -display none \
     -device e1000,netdev=n0 \
     -netdev "user,id=n1,net=10.0.3.0/24,hostfwd=udp:127.0.0.1:$BASE-:5550" \
     -device e1000,netdev=n1
+
+if [ "$MODE" = check ]; then
+    # The console goes to the terminal and to the log; the guest powers off
+    # after a failed check as after a good one, so its last record judges.
+    {
+        status=0
+        "$QEMU" "$@" -serial stdio < /dev/null || status=$?
+        echo "$status" > "$work/status"
+    } | tee "$log"
+    status="$(cat "$work/status")"
+    if [ "$status" -ne 0 ]; then
+        echo "apguest: the guest's QEMU failed: status $status" >&2
+        exit 1
+    fi
+    result="$(tr -d '\r' < "$log" | grep -a -e '^wifiap: ready: ' -e '^wifiap: failed: ' | tail -n 1)"
+    case $result in
+        'wifiap: ready: '*)
+            echo "apguest: result: ok: ${result#wifiap: ready: }"
+            exit 0
+            ;;
+        'wifiap: failed: '*)
+            echo "apguest: result: failed: the guest's check failed" >&2
+            ;;
+        *)
+            echo "apguest: result: failed: the guest gave no result" >&2
+            ;;
+    esac
+    exit 1
+fi
 
 if [ -z "$PEER" ] && [ -z "$OUTDIR" ]; then
     "$QEMU" "$@" -serial stdio
