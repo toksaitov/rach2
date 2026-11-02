@@ -169,6 +169,14 @@ C_SRC_SHARED = kernel.c \
     sys/network/driver/ath9k/xmit.c \
     sys/network/driver/ath9k/ampdu.c \
     sys/network/driver/ath9k/key.c \
+    sys/network/driver/ath9k/pci.c \
+    sys/network/driver/ath9k/hw.c \
+    sys/network/driver/ath9k/eeprom.c \
+    sys/network/driver/ath9k/phy.c \
+    sys/network/driver/ath9k/calib.c \
+    sys/network/driver/ath9k/ani.c \
+    sys/network/driver/ath9k/intr.c \
+    sys/network/driver/ath9k/recover.c \
     sys/network/ethernet/ethernet.c \
     sys/network/arp/arp.c \
     sys/network/ip/ip.c \
