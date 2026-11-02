@@ -189,9 +189,9 @@ static int bootctl_mock(int argc, char **argv)
 {
     if (argc != 2 || strcmp(argv[1], "status"))
         return 2;
-    puts("bootctl: candidate: first sector 8, 8 sectors in 1 clusters, 3000 bytes\nbootctl: "
-         "fallback: first sector 16, 8 sectors in 1 clusters, 3000 bytes\nbootctl: grubenv: "
-         "first sector 24, 2 sectors in 1 clusters, 1024 bytes\nbootctl: saved_entry: fallback");
+    puts("bootctl: candidate: first sector 8, 8 sectors in 8 clusters, 3000 bytes\nbootctl: "
+         "fallback: first sector 16, 8 sectors in 8 clusters, 3000 bytes\nbootctl: grubenv: "
+         "first sector 24, 2 sectors in 2 clusters, 1024 bytes\nbootctl: saved_entry: fallback");
     printf("bootctl: next_entry: %s\nbootctl: booted: %s\n", ev("MACHINE_NEXT"),
            *ev("MACHINE_SLOT") ? ev("MACHINE_SLOT")
                                : "not from a slot (no rach2.slot= on /proc/cmdline)");
@@ -234,6 +234,55 @@ int flow_measure_mock(int argc, char **argv)
         return pace_mock(argc, argv);
     return 97;
 }
+/*
+ * The fixture's boot partition is a FAT32 image of 32 sectors of 512 bytes,
+ * one sector a cluster: the boot sector, one FAT of 7 sectors, and the data
+ * from sector 8, where cluster C is sector C + 6. The candidate slot is
+ * sectors 8 to 15; the fallback slot is split, sectors 16 to 19 and then 28
+ * to 31, as `bootctl fallback` can leave it, so that a read of its sectors
+ * in a row hashes the zeros between. The grubenv is sectors 24 and 25.
+ */
+static const unsigned candidate_slot[] = {8, 9, 10, 11, 12, 13, 14, 15},
+                      fallback_slot[] = {16, 17, 18, 19, 28, 29, 30, 31};
+static void put32(unsigned char *p, unsigned long v)
+{
+    p[0] = v & 255;
+    p[1] = v >> 8 & 255;
+    p[2] = v >> 16 & 255;
+    p[3] = v >> 24 & 255;
+}
+/** Link the clusters of the N sectors in AT, in order, in the image's FAT. */
+static void chain(unsigned char *disk, const unsigned *at, unsigned n)
+{
+    unsigned i;
+    for (i = 0; i < n; i++)
+        put32(disk + 512 + 4 * (at[i] - 6), i + 1 < n ? at[i + 1] - 6 : 0x0FFFFFFFUL);
+}
+/** Write N copies of TEXT into the sectors in AT, in order, from the first. */
+static void lay(unsigned char *disk, const unsigned *at, const char *text, unsigned n)
+{
+    size_t len = strlen(text), i;
+    for (i = 0; i < n * len; i++)
+        disk[at[i / 512] * 512 + i % 512] = text[i % len];
+}
+/** Make the image with NC copies of C in the candidate slot and NF of F in the fallback. */
+static void image(unsigned char *disk, const char *c, unsigned nc, const char *f, unsigned nf)
+{
+    static const unsigned grubenv[] = {24, 25};
+    memset(disk, 0, 16384);
+    disk[12] = 2; /* 512 bytes a sector */
+    disk[13] = 1; /* one sector a cluster */
+    disk[14] = 1; /* one reserved sector */
+    disk[16] = 1; /* one FAT */
+    disk[36] = 7; /* 7 sectors a FAT */
+    put32(disk + 512, 0x0FFFFFF8UL);
+    put32(disk + 516, 0x0FFFFFFFUL);
+    chain(disk, candidate_slot, 8);
+    chain(disk, fallback_slot, 8);
+    chain(disk, grubenv, 2);
+    lay(disk, candidate_slot, c, nc);
+    lay(disk, fallback_slot, f, nf);
+}
 struct measure {
     struct fixture *f;
     char source[4096], machine[4096], key[4096], case_dir[4096];
@@ -261,16 +310,10 @@ static int setup(struct measure *m, struct fixture *f)
     for (i = 0; i < 8; i++)
         if (!fx_mock(f, mocks[i]))
             return 0;
-    memset(disk, 0, sizeof(disk));
-    for (j = 0; j < 150; j++)
-        memcpy(disk + 4096 + j * strlen(candidate), candidate, strlen(candidate));
-    for (j = 0; j < 160; j++)
-        memcpy(disk + 8192 + j * strlen(fallback), fallback, strlen(fallback));
+    image(disk, candidate, 150, fallback, 160);
     if (!fx_write(flow_path(f, "machine/bootpart"), disk, sizeof(disk), 0600))
         return 0;
-    memset(disk + 8192, 0, 4096);
-    for (j = 0; j < 150; j++)
-        memcpy(disk + 8192 + j * strlen(candidate), candidate, strlen(candidate));
+    image(disk, candidate, 150, candidate, 150);
     if (!fx_write(flow_path(f, "machine/bootpart-same"), disk, sizeof(disk), 0600))
         return 0;
     for (j = 0; j < 150; j++)
