@@ -124,6 +124,14 @@ void *mem_reserve_ptr(size_t size, bool align)
     return 0;
 }
 
+/** The boot allocator's move past the map's holes: counts the call. */
+void mem_reserve_usable(const struct frame_map *map, size_t size)
+{
+    (void)map;
+    (void)size;
+    boot_carves++;
+}
+
 /** Count the record and print nothing. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
