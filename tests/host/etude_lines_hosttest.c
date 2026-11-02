@@ -30,8 +30,9 @@
  * whose owner ended with its cleanup unconfirmed, one whose owner ended while
  * its process runs, the protected request and one behind it. The reader
  * tools/flow/test_status.py, or ETUDE_LINES_READER, reads proc-format copies
- * of the actual process identities and a kernel-observed lock holder. An
- * empty proc directory also checks the unavailable-host report.
+ * of the actual process identities, a kernel-observed lock holder and the
+ * boot identity the ledger records. An empty proc directory also checks the
+ * unavailable-host report.
  */
 #include <errno.h>
 #include <fcntl.h>
