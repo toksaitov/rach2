@@ -1406,7 +1406,8 @@ int ath9k_ampdu_action(struct ath9k *ah, enum wlan_ampdu_action action, const ui
 
 /** Take the AP's A-MPDU length and spacing from its HT Capabilities in
  * `bss`, or go back to the most cautious ones when `bss` is NULL or has
- * none. pci.c's sta_state calls it on association. Worker. */
+ * none. pci.c's sta_state calls it on association, and with NULL on the
+ * return to NONE. Worker. */
 void ath9k_ampdu_sta(struct ath9k *ah, const struct wlan_bss *bss);
 
 /** Choose what the next push of queue `q` holds, from the slot `queued`

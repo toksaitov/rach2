@@ -319,12 +319,13 @@ static const char *calls[CALLS];
 static unsigned call_at[CALLS];
 static unsigned n_calls;
 
-static int cal_rc;            /* what ath9k_cal_init returns */
-static int intr_rc;           /* what ath9k_intr_attach returns */
-static unsigned tuned;        /* the frequency of the last ath9k_phy_set_channel */
-static unsigned filter_set;   /* the filters of the last ath9k_mac_set_filter */
-static uint8_t bssid_set[6];  /* the BSSID of the last ath9k_mac_set_bssid */
-static int slot_cleared = -1; /* the slot of the last ath9k_key_clear */
+static int cal_rc;                           /* what ath9k_cal_init returns */
+static int intr_rc;                          /* what ath9k_intr_attach returns */
+static unsigned tuned;                       /* the frequency of the last ath9k_phy_set_channel */
+static unsigned filter_set;                  /* the filters of the last ath9k_mac_set_filter */
+static uint8_t bssid_set[6];                 /* the BSSID of the last ath9k_mac_set_bssid */
+static const struct wlan_bss *ampdu_sta_bss; /* the AP of the last ath9k_ampdu_sta */
+static int slot_cleared = -1;                /* the slot of the last ath9k_key_clear */
 
 /** Record a part's call. */
 static void note(const char *name)
@@ -662,6 +663,13 @@ int ath9k_ampdu_action(struct ath9k *ah, enum wlan_ampdu_action action, const ui
     (void)window;
     note("ampdu_action");
     return 0;
+}
+
+void ath9k_ampdu_sta(struct ath9k *ah, const struct wlan_bss *bss)
+{
+    (void)ah;
+    ampdu_sta_bss = bss;
+    note("ampdu_sta");
 }
 
 /* The driver's bus side, whole, so that the test reaches its card and
@@ -1043,9 +1051,11 @@ static void test_radio(void)
     bss.bssid[5] = 0x99;
     CHECK(ops->sta_state(radio, &bss, WLAN_STA_NONE, WLAN_STA_AUTHENTICATING) == 0);
     CHECK(bssid_set[0] == 0x02 && bssid_set[5] == 0x99);
+    CHECK(ampdu_sta_bss == NULL);
     CHECK(ops->sta_state(radio, &bss, WLAN_STA_AUTHENTICATED, WLAN_STA_ASSOCIATED) == 0);
+    CHECK(ampdu_sta_bss == &bss);
     CHECK(ops->sta_state(radio, NULL, WLAN_STA_ASSOCIATED, WLAN_STA_NONE) == 0);
-    CHECK(bssid_set[0] == 0 && bssid_set[5] == 0);
+    CHECK(bssid_set[0] == 0 && bssid_set[5] == 0 && ampdu_sta_bss == NULL);
     CHECK(ops->ampdu_action(radio, WLAN_AMPDU_TX_START, frame, 0, 0, 64) == 0);
     CHECK(ops->get_tsf(radio, &tsf) == 0 && tsf == 0x123456789ull);
     {

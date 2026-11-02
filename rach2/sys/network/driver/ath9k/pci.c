@@ -199,19 +199,24 @@ static int radio_set_key(struct wlan_radio *radio, int enable, const uint8_t pee
 }
 
 /** radio.h's sta_state: the BSSID from the first authentication to the
- * return to NONE, as mac80211's BSS change gives it to ath9k. The station
- * layer gives no association ID here, so the chip's stays 0, which only a
- * station in power save would need. */
+ * return to NONE, as mac80211's BSS change gives it to ath9k, and the AP's
+ * A-MPDU limits from association, as ath9k's sta_add takes them. The
+ * station layer gives no association ID here, so the chip's stays 0, which
+ * only a station in power save would need. */
 static int radio_sta_state(struct wlan_radio *radio, const struct wlan_bss *bss,
                            enum wlan_sta_state old_state, enum wlan_sta_state new_state)
 {
     static const uint8_t none[6] = {0, 0, 0, 0, 0, 0};
     struct ath9k *ah = radio->priv;
 
-    if (new_state == WLAN_STA_NONE)
+    if (new_state == WLAN_STA_NONE) {
         ath9k_mac_set_bssid(ah, none, 0);
-    else if (old_state == WLAN_STA_NONE && bss)
+        ath9k_ampdu_sta(ah, NULL);
+    } else if (old_state == WLAN_STA_NONE && bss) {
         ath9k_mac_set_bssid(ah, bss->bssid, 0);
+    }
+    if (new_state == WLAN_STA_ASSOCIATED && bss)
+        ath9k_ampdu_sta(ah, bss);
     return 0;
 }
 
