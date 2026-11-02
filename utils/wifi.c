@@ -1320,6 +1320,131 @@ static void drop(struct ctrl *c, int id)
     (void)ctrl_ok(c, "REMOVE_NETWORK %d", id);
 }
 
+/** `wifi connect` of the known network `name`, whose id is `id`: nothing
+ * when it is the one joined, else select it and wait for the join. Returns
+ * the command's exit status. */
+static int connect_known(struct ctrl *c, const char *name, int id)
+{
+    char state[64], why[256], reply[MSG_MAX], idtext[16];
+    struct cert cert;
+
+    memset(&cert, 0, sizeof(cert));
+    if (ctrl_request(c, "STATUS", reply, sizeof(reply)) > 0 &&
+        status_field(reply, "wpa_state", state, sizeof(state)) == 0 &&
+        strcmp(state, "COMPLETED") == 0 && status_field(reply, "id", idtext, sizeof(idtext)) == 0 &&
+        atoi(idtext) == id) {
+        printf("wifi: already connected to %s\n", name);
+        return 0;
+    }
+    if (select_wait(c, id, 0, &cert, why, sizeof(why)) != 0) {
+        complain("%s: %s", name, why);
+        if (strstr(why, "not the one trusted")) {
+            complain("`wifi status` shows the certificate it presented");
+        }
+        return 1;
+    }
+    printf("wifi: connected to %s\n", name);
+    return 0;
+}
+
+/** The index in bss of the network `name` in the last scan, or in a new
+ * one when the last has none. Returns -1, having said why, when neither has
+ * it or a scan fails. */
+static int find_bss(struct ctrl *c, struct bss *bss, const char *name)
+{
+    int n, i;
+
+    n = read_scan(c, bss);
+    if (n < 0) {
+        return -1;
+    }
+    for (i = 0; i < n && strcmp(bss[i].ssid, name) != 0; i++) {
+    }
+    if (i < n) {
+        return i;
+    }
+    if (scan(c) != 0 || (n = read_scan(c, bss)) < 0) {
+        return -1;
+    }
+    for (i = 0; i < n && strcmp(bss[i].ssid, name) != 0; i++) {
+    }
+    if (i == n) {
+        complain("%s: no such network in range; `wifi scan` lists them", name);
+        return -1;
+    }
+    return i;
+}
+
+/**
+ * Probe the enterprise network `name`, added as `id` with no password yet,
+ * for its server's certificate, which goes in cert, and on the user's yes
+ * pin it and set the password and domain of `a`. Returns 0, or -1 having
+ * said why and dropped the network. Wipes `a` either way.
+ */
+static int pin_enterprise(struct ctrl *c, int id, const char *name, struct eap *a,
+                          struct cert *cert)
+{
+    char why[256];
+
+    /* No password is set yet, and the handshake stops at the server's
+     * certificate, so nothing secret leaves the machine before the
+     * user's yes. */
+    if (select_wait(c, id, 1, cert, why, sizeof(why)) != 0) {
+        complain("%s: %s", name, why);
+        memset(a, 0, sizeof(*a));
+        drop(c, id);
+        return -1;
+    }
+    /* The events of the probe, and those that would fill the socket's
+     * queue while the user reads, are dropped with the socket; a new
+     * one sees only what comes after the answer. */
+    monitor_close(c);
+    if (!trust(name, cert)) {
+        printf("wifi: %s is not trusted, and is not kept\n", name);
+        memset(a, 0, sizeof(*a));
+        drop(c, id);
+        return -1;
+    }
+    if (ctrl_ok(c, "SET_NETWORK %d ca_cert \"hash://server/sha256/%s\"", id, cert->hash) != 0 ||
+        set_text(c, id, "password", a->password) != 0 ||
+        (a->domain[0] != '\0' && set_text(c, id, "domain_suffix_match", a->domain) != 0) ||
+        ctrl_ok(c, "ENABLE_NETWORK %d no-connect", id) != 0 || monitor_open(c) != 0) {
+        memset(a, 0, sizeof(*a));
+        drop(c, id);
+        return -1;
+    }
+    memset(a, 0, sizeof(*a));
+    return 0;
+}
+
+/**
+ * Add a network for the SSID of ssid_len bytes at ssid, protected as sec
+ * says, by the passphrase pass or the enterprise settings a, and return its
+ * id; or -1, having said why and dropped what it added.
+ */
+static int add_network(struct ctrl *c, const unsigned char *ssid, int ssid_len, enum security sec,
+                       const char *pass, const struct eap *a)
+{
+    char reply[MSG_MAX];
+    int id;
+
+    if (ctrl_request(c, "ADD_NETWORK", reply, sizeof(reply)) < 0 ||
+        !isdigit((unsigned char)reply[0])) {
+        complain("wpa_supplicant refused ADD_NETWORK");
+        return -1;
+    }
+    id = atoi(reply);
+    if (set_hex(c, id, "ssid", ssid, (size_t)ssid_len) != 0 ||
+        ctrl_ok(c, "SET_NETWORK %d bgscan \"%s\"", id, BGSCAN) != 0 ||
+        (sec == SEC_OPEN && ctrl_ok(c, "SET_NETWORK %d key_mgmt NONE", id) != 0) ||
+        (sec == SEC_PERSONAL && set_personal(c, id, pass) != 0) ||
+        (sec == SEC_ENTERPRISE && set_eap(c, id, a) != 0)) {
+        drop(c, id);
+        return -1;
+    }
+    return id;
+}
+
 /**
  * `wifi connect NAME`: join the known network `name`, or add it from the
  * scan, asking its passphrase or its identity and password, probe an
@@ -1331,53 +1456,24 @@ static int cmd_connect(struct ctrl *c, const char *name, const char *methods, co
 {
     static struct bss bss[BSS_MAX];
     static struct eap a;
-    char state[64], why[256], pass[256], reply[MSG_MAX], idtext[16];
+    char why[256], pass[256];
     unsigned char ssid[64];
     struct cert cert;
-    int n, i, id, ssid_len;
+    int i, id, ssid_len;
     enum security sec;
 
-    memset(&cert, 0, sizeof(cert));
     id = known_id(c, name);
     if (id == -2) {
         return 1;
     }
     if (id >= 0) {
-        if (ctrl_request(c, "STATUS", reply, sizeof(reply)) > 0 &&
-            status_field(reply, "wpa_state", state, sizeof(state)) == 0 &&
-            strcmp(state, "COMPLETED") == 0 &&
-            status_field(reply, "id", idtext, sizeof(idtext)) == 0 && atoi(idtext) == id) {
-            printf("wifi: already connected to %s\n", name);
-            return 0;
-        }
-        if (select_wait(c, id, 0, &cert, why, sizeof(why)) != 0) {
-            complain("%s: %s", name, why);
-            if (strstr(why, "not the one trusted")) {
-                complain("`wifi status` shows the certificate it presented");
-            }
-            return 1;
-        }
-        printf("wifi: connected to %s\n", name);
-        return 0;
+        return connect_known(c, name, id);
     }
 
     /* A new network: find it in the last scan, or in a new one. */
-    n = read_scan(c, bss);
-    for (i = 0; n > 0 && i < n && strcmp(bss[i].ssid, name) != 0; i++) {
-    }
-    if (n < 0) {
+    i = find_bss(c, bss, name);
+    if (i < 0) {
         return 1;
-    }
-    if (i == n) {
-        if (scan(c) != 0 || (n = read_scan(c, bss)) < 0) {
-            return 1;
-        }
-        for (i = 0; i < n && strcmp(bss[i].ssid, name) != 0; i++) {
-        }
-        if (i == n) {
-            complain("%s: no such network in range; `wifi scan` lists them", name);
-            return 1;
-        }
     }
     sec = security_of(bss[i].flags);
     if (sec == SEC_WEP || sec == SEC_OTHER) {
@@ -1391,6 +1487,7 @@ static int cmd_connect(struct ctrl *c, const char *name, const char *methods, co
     }
 
     memset(&a, 0, sizeof(a));
+    memset(&cert, 0, sizeof(cert));
     pass[0] = '\0';
     if (sec == SEC_PERSONAL && ask("Passphrase: ", pass, sizeof(pass), 1) != 0) {
         return 1;
@@ -1404,55 +1501,14 @@ static int cmd_connect(struct ctrl *c, const char *name, const char *methods, co
         }
     }
 
-    if (ctrl_request(c, "ADD_NETWORK", reply, sizeof(reply)) < 0 ||
-        !isdigit((unsigned char)reply[0])) {
-        complain("wpa_supplicant refused ADD_NETWORK");
-        memset(pass, 0, sizeof(pass));
-        memset(&a, 0, sizeof(a));
-        return 1;
-    }
-    id = atoi(reply);
-    if (set_hex(c, id, "ssid", ssid, (size_t)ssid_len) != 0 ||
-        ctrl_ok(c, "SET_NETWORK %d bgscan \"%s\"", id, BGSCAN) != 0 ||
-        (sec == SEC_OPEN && ctrl_ok(c, "SET_NETWORK %d key_mgmt NONE", id) != 0) ||
-        (sec == SEC_PERSONAL && set_personal(c, id, pass) != 0) ||
-        (sec == SEC_ENTERPRISE && set_eap(c, id, &a) != 0)) {
-        memset(pass, 0, sizeof(pass));
-        memset(&a, 0, sizeof(a));
-        drop(c, id);
-        return 1;
-    }
+    id = add_network(c, ssid, ssid_len, sec, pass, &a);
     memset(pass, 0, sizeof(pass));
-
-    if (sec == SEC_ENTERPRISE) {
-        /* No password is set yet, and the handshake stops at the server's
-         * certificate, so nothing secret leaves the machine before the
-         * user's yes. */
-        if (select_wait(c, id, 1, &cert, why, sizeof(why)) != 0) {
-            complain("%s: %s", name, why);
-            memset(&a, 0, sizeof(a));
-            drop(c, id);
-            return 1;
-        }
-        /* The events of the probe, and those that would fill the socket's
-         * queue while the user reads, are dropped with the socket; a new
-         * one sees only what comes after the answer. */
-        monitor_close(c);
-        if (!trust(name, &cert)) {
-            printf("wifi: %s is not trusted, and is not kept\n", name);
-            memset(&a, 0, sizeof(a));
-            drop(c, id);
-            return 1;
-        }
-        if (ctrl_ok(c, "SET_NETWORK %d ca_cert \"hash://server/sha256/%s\"", id, cert.hash) != 0 ||
-            set_text(c, id, "password", a.password) != 0 ||
-            (a.domain[0] != '\0' && set_text(c, id, "domain_suffix_match", a.domain) != 0) ||
-            ctrl_ok(c, "ENABLE_NETWORK %d no-connect", id) != 0 || monitor_open(c) != 0) {
-            memset(&a, 0, sizeof(a));
-            drop(c, id);
-            return 1;
-        }
+    if (id < 0) {
         memset(&a, 0, sizeof(a));
+        return 1;
+    }
+    if (sec == SEC_ENTERPRISE && pin_enterprise(c, id, name, &a, &cert) != 0) {
+        return 1;
     }
 
     if (select_wait(c, id, 0, &cert, why, sizeof(why)) != 0) {
