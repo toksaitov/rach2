@@ -422,7 +422,7 @@ tests/host/fatname_hosttest.c:main lines 122 a test's rows, each a case, read as
 tests/host/fbdev_hosttest.c:owners lines 102 a test's rows, each a case, read as one table
 tests/host/fbdev_hosttest.c:requests complexity 27 a test's rows, each a case, read as one table
 
-tests/host/genetlink_hosttest.c:requests complexity 37 a test's rows, each a case, read as one table
+tests/host/genetlink_hosttest.c:requests complexity 39 a test's rows, each a case, read as one table
 
 tests/host/gpt_hosttest.c:main lines 168 a test's rows, each a case, read as one table
 
