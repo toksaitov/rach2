@@ -2138,6 +2138,29 @@ static void devfs_note_open(const struct devfs_entry *dev, fd_entry_t *e)
 }
 
 /**
+ * Give the descriptor e of the device dev the state of its own open: the
+ * sound device's, an event device's, the radio simulator's or the radio
+ * switches'. Returns 0, at once for a device with no such state, or the
+ * open's negative errno.
+ */
+static int32_t devfs_open_state(const struct devfs_entry *dev, fd_entry_t *e, int flags)
+{
+    if (dev->ops == &dsp_ops) {
+        return dspdev_open(e, flags);
+    }
+    if (dev->ops == &wsim_ops) {
+        return wsim_open(e);
+    }
+    if (dev->ops == &rfkill_ops) {
+        return rfkill_open(e);
+    }
+    if (dev->ops == &evdev_ops) {
+        return evdev_open(e, dev->minor - EVDEV_MINOR_BASE);
+    }
+    return 0;
+}
+
+/**
  * /dev/tty follows POSIX: the console when the caller is in the console's
  * session, else the pty slave that has the caller's session, else ENXIO,
  * which is also what dropbear's probe after setsid expects. A job-control
@@ -2190,12 +2213,8 @@ int devfs_open(const char *name, int flags)
     e->node = NULL;
     e->sock = NULL;
     e->ofd->offset = 0;
-    if (dev->ops == &evdev_ops || dev->ops == &dsp_ops || dev->ops == &wsim_ops ||
-        dev->ops == &rfkill_ops) {
-        int32_t rc = dev->ops == &dsp_ops      ? dspdev_open(e, flags)
-                     : dev->ops == &wsim_ops   ? wsim_open(e)
-                     : dev->ops == &rfkill_ops ? rfkill_open(e)
-                                               : evdev_open(e, dev->minor - EVDEV_MINOR_BASE);
+    {
+        int32_t rc = devfs_open_state(dev, e, flags);
 
         if (rc != 0) {
             fd_free(current_proc->fds, fd);
