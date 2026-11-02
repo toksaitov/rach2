@@ -896,11 +896,13 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
     {
         net_addr_t addr;
         uint16_t port;
-        int rc = inet_endpoint_in(entry->sock, sa_ptr, addrlen, 0, &addr, &port);
-        if (rc)
-            return rc;
+        int rc;
+
         if (sock_is_query(entry->sock))
             return -EOPNOTSUPP;
+        rc = inet_endpoint_in(entry->sock, sa_ptr, addrlen, 0, &addr, &port);
+        if (rc)
+            return rc;
         if (!net_addr_any(addr) && !socket_ns_reaches(entry->sock, addr, 0))
             return -EADDRNOTAVAIL;
         if (entry->sock->type == SOCK_RAW) {
