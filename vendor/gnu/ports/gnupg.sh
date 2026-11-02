@@ -4,9 +4,12 @@
 # OpenLDAP and the TSS library are not ported. The manual pages are made from
 # the Texinfo manual by yat2m, which GnuPG 2.5 takes from libgpg-error; it
 # is compiled for the build host from libgpg-error's source and given to make.
+# The tests are left out: `make` in tests/cms runs the gpgsm just built, which
+# cannot load the sysroot's libgcrypt on the build host, and nothing there is
+# installed.
 VERSION=2.5.24
 DEPENDS="libgpg-error libgcrypt libassuan libksba npth ntbtls pinentry sqlite readline zlib bzip2"
-CONFIGURE_ARGS="--disable-nls --disable-ldap --disable-gnutls --disable-tpm2d"
+CONFIGURE_ARGS="--disable-nls --disable-ldap --disable-gnutls --disable-tpm2d --disable-tests"
 CACHE="GPGRT_CONFIG=$ROOT/usr/bin/gpgrt-config"
 
 port_build()
