@@ -14,10 +14,9 @@
  * Needs: root privilege, a writable KRFFS or ext2 root, mounted /proc and
  * /dev, and absent /vp and /procx paths. The root type in /proc/mounts selects
  * the hard-link result, the statfs magic and the inode counts. An unknown
- * root type fails. A native run (probe_args.h) runs the probe in a private
- * root and gives its directory as `root=PATH`, which is the mount point
- * /proc/mounts lists it at; the probe then reads the type of that line in
- * place of the line of /.
+ * root type fails. /proc/mounts names a mount point from the reader's root,
+ * so in the private root of a native run (probe_args.h) the root's line is
+ * the line of / too.
  *
  * Prints "VFSPROBE OK". Freestanding; direct system calls (probe.h).
  *
@@ -257,8 +256,7 @@ static int mount_point_is(const char *p, int end, const char *point)
 
 /**
  * Read the root type from the mount table, independently of statfs, and
- * return its statfs magic: the type of the line whose mount point is the
- * argument `root`, or / without it.
+ * return its statfs magic: the type of the line whose mount point is /.
  *
  * Match the mountpoint and type fields of a complete line. Missing or
  * unsupported roots fail before the probe creates files.
@@ -266,7 +264,7 @@ static int mount_point_is(const char *p, int end, const char *point)
 static unsigned root_magic(void)
 {
     char buf[2048];
-    const char *point = probe_arg("root", "/");
+    const char *point = "/";
     int fd, n, start, end, p, len;
 
     fd = syscall3(SYS_OPEN, (long)"/proc/mounts", O_RDONLY, 0);

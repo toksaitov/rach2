@@ -32,10 +32,11 @@
  * component inside, reach the parent of the directory it covers; and it is
  * unmounted in turn with /dev/shm and /dev/mqueue.
  *
- * /proc/mounts and mountinfo name a mount by its path from the machine's root,
- * so in a private root, as a native run gives one (tests/native/Readme.md),
- * the argument `root=PATH` gives that root's path on the machine, which the
- * rows put in front of the mount points they look for.
+ * /proc/mounts and mountinfo name a mount by its path from the reader's root,
+ * so the rows look for the same lines in a private root, as a native run
+ * gives one (tests/native/Readme.md). There the argument `root=PATH` says
+ * that /dev/shm is a bind of the machine's, whose own mount is reached
+ * through /proc/1/root.
  *
  * The program runs as root, since it mounts. It prints `TMPFSMUSL OK` and
  * exits 0 on success, and prints `TMPFSMUSL FAIL (detail)` and exits 1
@@ -144,19 +145,9 @@ static int fail(const char *what)
     return 1;
 }
 
-/* The machine's path of the root the program runs in, which /proc/mounts and
- * mountinfo put in front of a mount point under it: the argument `root`, or
- * "" for the machine's own root. */
-static const char *root_prefix = "";
-
-/** `format` with its one `%s` replaced by `root_prefix`, in a static buffer. */
-static const char *rooted(const char *format)
-{
-    static char text[384];
-
-    snprintf(text, sizeof(text), format, root_prefix);
-    return text;
-}
+/* Whether the program runs in a private root, which the argument `root`
+ * gives. */
+static int private_root;
 
 /** Whether the text file `path` has a line that begins with `start`. */
 static int has_line(const char *path, const char *start)
@@ -285,7 +276,7 @@ static int placed(void)
         return fail("a rename over a linked file");
     }
     row_held();
-    if (!has_line("/proc/mounts", rooted("none %s" DIR_PATH " tmpfs rw")) ||
+    if (!has_line("/proc/mounts", "none " DIR_PATH " tmpfs rw") ||
         !has_line("/proc/filesystems", "nodev\ttmpfs")) {
         return fail("the /proc files");
     }
@@ -339,7 +330,7 @@ static int deep(void)
 /** Check the permanent shared-memory mount, including from a private root. */
 static int shm_unmount(void)
 {
-    const char *path = root_prefix[0] ? "/proc/1/root/dev/shm" : "/dev/shm";
+    const char *path = private_root ? "/proc/1/root/dev/shm" : "/dev/shm";
     struct stat local, original;
 
     if (stat("/dev/shm", &local) != 0 || stat(path, &original) != 0 ||
@@ -370,7 +361,7 @@ static int shm(void)
         return fail("/dev/shm's kind, mode and magic");
     }
     row_held();
-    if (!has_line("/proc/mounts", rooted("tmpfs %s/dev/shm tmpfs rw,nosuid,nodev"))) {
+    if (!has_line("/proc/mounts", "tmpfs /dev/shm tmpfs rw,nosuid,nodev")) {
         return fail("/dev/shm in /proc/mounts");
     }
     row_held();
@@ -474,7 +465,7 @@ static int bound_mount(void)
         return fail("a bind remounted read-only refuses a write its source takes");
     }
     row_held();
-    if (!mountinfo_has(rooted(" /sub %s" BIND_DST " "))) {
+    if (!mountinfo_has(" /sub " BIND_DST " ")) {
         return fail("mountinfo gives a bind its root within the file system");
     }
     row_held();
@@ -625,7 +616,7 @@ int main(int argc, char **argv)
 {
     probe_args(argc, argv);
     report_begin(report_case(environ, "guest.default.tmpfsmusl"));
-    root_prefix = probe_arg("root", "");
+    private_root = probe_arg("root", "")[0] != '\0';
     if (placed() || resized() || deep() || shm() || bound() || bound_mount() || rbound() ||
         kbound() || krbound()) {
         return 1;
