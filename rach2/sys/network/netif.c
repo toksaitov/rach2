@@ -255,15 +255,6 @@ static int32_t ns_loopback_set(uint32_t request, const uint8_t *ifr, struct netd
     return request == SIOCSIFNETMASK && nd->ip != 0 && v == nd->mask ? 0 : -EOPNOTSUPP;
 }
 
-/** The 32-bit word at the start of the union of the struct ifreq at ifr,
- * an int such as ifr_ifindex or ifr_mtu, in the machine's little-endian
- * order. */
-static uint32_t ifr_word(const uint8_t *ifr)
-{
-    return (uint32_t)ifr[IFREQ_UNION] | ((uint32_t)ifr[IFREQ_UNION + 1] << 8) |
-           ((uint32_t)ifr[IFREQ_UNION + 2] << 16) | ((uint32_t)ifr[IFREQ_UNION + 3] << 24);
-}
-
 /**
  * Handle the requests that read or write an interface.
  *
@@ -302,7 +293,10 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
     }
 
     if (request == SIOCGIFNAME) {
-        int32_t index = (int32_t)ifr_word(ifr);
+        int32_t index =
+            (int32_t)((uint32_t)ifr[IFREQ_UNION] | ((uint32_t)ifr[IFREQ_UNION + 1] << 8) |
+                      ((uint32_t)ifr[IFREQ_UNION + 2] << 16) |
+                      ((uint32_t)ifr[IFREQ_UNION + 3] << 24));
         struct netdev *at;
 
         if (!net_ns_seen()) {
@@ -334,7 +328,11 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
         return -EPERM;
     }
     if (request == SIOCSIFMTU) {
-        return netdev_set_mtu(nd, ifr_word(ifr));
+        uint32_t mtu = (uint32_t)ifr[IFREQ_UNION] | ((uint32_t)ifr[IFREQ_UNION + 1] << 8) |
+                       ((uint32_t)ifr[IFREQ_UNION + 2] << 16) |
+                       ((uint32_t)ifr[IFREQ_UNION + 3] << 24);
+
+        return netdev_set_mtu(nd, mtu);
     }
 
     if (setter && !net_ns_seen()) {
