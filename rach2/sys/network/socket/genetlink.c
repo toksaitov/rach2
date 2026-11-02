@@ -380,37 +380,52 @@ static int valid_name(const char *name)
     return 0;
 }
 
-int genl_register_family(struct genl_family *family)
+/**
+ * Return whether family may be registered: a valid name other than nlctrl's,
+ * no id yet, bounds the messages can hold, each operation with a handler and
+ * a command of its own, and each group with a valid name of its own.
+ */
+static int family_valid(const struct genl_family *family)
 {
-    struct family_entry *entry, *e;
     unsigned i, j;
-    uint32_t lock;
 
     if (!family || !valid_name(family->name) || family->id ||
         !name_compare(family->name, "nlctrl") || family->maxattr > MAX_ATTR ||
         family->hdrsize > MSG_CAP - 20u || (family->n_ops && !family->ops) ||
         (family->n_groups && !family->groups)) {
-        return -EINVAL;
+        return 0;
     }
     for (i = 0; i < family->n_ops; ++i) {
         if (!family->ops[i].doit && !family->ops[i].dumpit) {
-            return -EINVAL;
+            return 0;
         }
         for (j = 0; j < i; ++j) {
             if (family->ops[i].cmd == family->ops[j].cmd) {
-                return -EINVAL;
+                return 0;
             }
         }
     }
     for (i = 0; i < family->n_groups; ++i) {
         if (!valid_name(family->groups[i].name)) {
-            return -EINVAL;
+            return 0;
         }
         for (j = 0; j < i; ++j) {
             if (!name_compare(family->groups[i].name, family->groups[j].name)) {
-                return -EINVAL;
+                return 0;
             }
         }
+    }
+    return 1;
+}
+
+int genl_register_family(struct genl_family *family)
+{
+    struct family_entry *entry, *e;
+    unsigned i;
+    uint32_t lock;
+
+    if (!family_valid(family)) {
+        return -EINVAL;
     }
     entry = kzalloc(sizeof(*entry));
     if (!entry) {
@@ -732,20 +747,75 @@ static int run_dump(struct genl_info *info, const struct genl_ops *op, uint8_t *
     }
 }
 
+/**
+ * The family whose id is id: the controller for GENL_ID_CTRL, with *entry
+ * left 0, or a registered family not being retired, whose entry is stored in
+ * *entry with its users counted up for the caller to count down. Returns 0
+ * when no family has the id. Takes net_lock.
+ */
+static struct genl_family *family_get(unsigned id, struct family_entry **entry)
+{
+    struct genl_family *family = 0;
+    struct family_entry *e;
+    uint32_t lock;
+
+    if (id == GENL_ID_CTRL) {
+        return &controller;
+    }
+    lock = net_lock();
+    for (e = families; e; e = e->next) {
+        if (!e->retiring && e->family->id == id) {
+            *entry = e;
+            ++e->users;
+            family = e->family;
+            break;
+        }
+    }
+    net_unlock(lock);
+    return family;
+}
+
+/**
+ * Find in *op the operation of info's command that the request's flags call
+ * for, a dump or a do. Returns 0, -EOPNOTSUPP with *detail set when the
+ * family has no such operation, or -EPERM when it needs CAP_NET_ADMIN and
+ * the caller lacks it.
+ */
+static int op_get(const struct genl_info *info, const struct genl_ops **op, const char **detail)
+{
+    unsigned i;
+
+    *op = 0;
+    for (i = 0; i < info->family->n_ops; ++i) {
+        if (info->family->ops[i].cmd == info->cmd) {
+            *op = &info->family->ops[i];
+            break;
+        }
+    }
+    if (!*op || (((info->flags & DUMP) == DUMP) ? !(*op)->dumpit : !(*op)->doit)) {
+        *detail = "unsupported generic-netlink operation";
+        return -EOPNOTSUPP;
+    }
+    if (((*op)->flags & GENL_ADMIN_PERM) && !net_admin()) {
+        return -EPERM;
+    }
+    return 0;
+}
+
 int genl_dispatch(struct socket *sock, uint32_t portid, const uint8_t *req, unsigned len)
 {
     static const struct nla_policy ctrl_policy[8] = {
         {GENL_NLA_UNSPEC, 0, 0}, {GENL_NLA_U16, 0, 0},   {GENL_NLA_STRING, 1, GENL_NAMSIZ},
         {GENL_NLA_U32, 0, 0},    {GENL_NLA_U32, 0, 0},   {GENL_NLA_U32, 0, 0},
         {GENL_NLA_NESTED, 0, 0}, {GENL_NLA_NESTED, 0, 0}};
-    struct family_entry *entry = 0, *e;
+    struct family_entry *entry = 0;
     struct genl_info info;
     const struct genl_ops *op = 0;
     const struct nla_policy *policy;
     const struct nlattr **attrs = 0;
     uint8_t *buf = 0;
     const char *detail = 0;
-    unsigned bad = 0, offset, i;
+    unsigned bad = 0, offset;
     uint32_t lock;
     int rc = -ENOENT, sent;
 
@@ -756,20 +826,7 @@ int genl_dispatch(struct socket *sock, uint32_t portid, const uint8_t *req, unsi
     info.flags = (uint16_t)read16(req + 6);
     info.extack = &detail;
     info.bad_offset = &bad;
-    lock = net_lock();
-    if (read16(req + 4) == GENL_ID_CTRL) {
-        info.family = &controller;
-    } else {
-        for (e = families; e; e = e->next) {
-            if (!e->retiring && e->family->id == read16(req + 4)) {
-                entry = e;
-                ++entry->users;
-                info.family = e->family;
-                break;
-            }
-        }
-    }
-    net_unlock(lock);
+    info.family = family_get(read16(req + 4), &entry);
     if (!info.family) {
         detail = "unknown generic-netlink family";
         goto out;
@@ -787,19 +844,8 @@ int genl_dispatch(struct socket *sock, uint32_t portid, const uint8_t *req, unsi
     info.payload_len = len - offset;
     policy = info.family == &controller ? ctrl_policy : info.family->policy;
     if (entry) {
-        for (i = 0; i < info.family->n_ops; ++i) {
-            if (info.family->ops[i].cmd == info.cmd) {
-                op = &info.family->ops[i];
-                break;
-            }
-        }
-        if (!op || (((info.flags & DUMP) == DUMP) ? !op->dumpit : !op->doit)) {
-            rc = -EOPNOTSUPP;
-            detail = "unsupported generic-netlink operation";
-            goto out;
-        }
-        if ((op->flags & GENL_ADMIN_PERM) && !net_admin()) {
-            rc = -EPERM;
+        rc = op_get(&info, &op, &detail);
+        if (rc) {
             goto out;
         }
         if (op->policy) {
