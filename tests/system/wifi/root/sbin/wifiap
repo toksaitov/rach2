@@ -432,7 +432,7 @@ forge_deauth()
     frame="c0 00 00 00 $(echo "$sta $bssid $bssid" | tr ':' ' ') 10 00 02 00"
     header="57 53 49 4d 01 01 00 28 00 00 00 01 $(printf '%02x %02x' $((freq / 256)) $((freq % 256)))"
     header="$header 00 3c 00 00 00 1a 00 00 00 00 00 00 00 77 00 00 00 00 00 00 00 00 00 00 00 00"
-    # shellcheck disable=SC2046,SC2086 # one word for each byte
+    # shellcheck disable=SC2046,SC2059,SC2086 # one word for each byte; the format is the bytes' octal escapes
     printf "$(octal $header $frame)" | nc -u -w 1 10.0.3.2 "$peer"
     say "forge-deauth: sent $bssid $sta"
 }
