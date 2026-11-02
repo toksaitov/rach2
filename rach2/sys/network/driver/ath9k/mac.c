@@ -330,7 +330,7 @@ void ath9k_mac_set_filter(struct ath9k *ah, unsigned filters)
         bits |= ATH9K_RX_FILTER_PROM;
     if (filters & WLAN_FILTER_CONTROL)
         bits |= ATH9K_RX_FILTER_CONTROL;
-    if (ah->mac.aid && !(filters & WLAN_FILTER_OTHER_BSS))
+    if (ah->mac.associated && !(filters & WLAN_FILTER_OTHER_BSS))
         bits |= ATH9K_RX_FILTER_MYBEACON;
     else
         bits |= ATH9K_RX_FILTER_BEACON;
@@ -378,8 +378,7 @@ void ath9k_mac_set_address(struct ath9k *ah)
 
 /**
  * Set the BSSID and association ID, as ath9k_hw_write_associd does, and
- * keep them for the next reset. A station that leaves gives zeros, which
- * also widens the filter to every beacon again.
+ * keep them for the next reset, then write the filter again.
  */
 void ath9k_mac_set_bssid(struct ath9k *ah, const uint8_t bssid[6], unsigned aid)
 {

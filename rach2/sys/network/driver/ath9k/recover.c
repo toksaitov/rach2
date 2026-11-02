@@ -218,7 +218,7 @@ int ath9k_hang_check(struct ath9k *ah)
 
         ah->recover.window = now;
         ah->recover.rx_active = 0;
-        if (ah->mac.aid && interval <= 2 * RX_WINDOW_MS && count < (uint32_t)interval / 1000)
+        if (ah->mac.associated && interval <= 2 * RX_WINDOW_MS && count < (uint32_t)interval / 1000)
             why = ATH9K_RESET_RX_STALL;
     }
     if (why == ATH9K_RESET_REASONS)

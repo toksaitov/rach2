@@ -574,6 +574,10 @@ static int chip_asks(void);
 /* AR_INTR_SYNC_CAUSE, the PCIe errors, which clear by writing ones. */
 static uint32_t sync_cause;
 
+/* The receiver hears nothing until the MAC's next reset, as a receive path
+ * that stalls; the air's frames pass it by. */
+static int rx_deaf;
+
 /* The radio switch: the card's EEPROM gives RF silence on GPIO 11, active
  * low (rfSilent 0x2d), and the machine's reads it unblocked. */
 static int radio_switch_on = 1;
@@ -620,6 +624,8 @@ static void chip_write(struct ath9k_model *m, uint32_t reg, uint32_t value)
     awake_check(m, reg);
     if (reg == 0x18c00) /* the first row of the PCIe PHY's table */
         serdes_writes++;
+    if (reg == AR_RTC_RC && value)
+        rx_deaf = 0;
     if (reg == AR_INTR_SYNC_CAUSE)
         sync_cause &= ~value;
     if (reg == AR_PHY_AGC_CONTROL)
@@ -723,7 +729,7 @@ static void air(unsigned number)
     uint8_t f[64];
     struct ar9003_rxs st;
 
-    if (!model.rxe || card.phy.channel.number != number)
+    if (!model.rxe || rx_deaf || card.phy.channel.number != number)
         return;
     k_memset(f, 0, sizeof(f));
     k_memset(&st, 0, sizeof(st));
@@ -912,6 +918,8 @@ static void ap_data(unsigned ethertype, const uint8_t *payload, unsigned n, int 
  * and the radio listens on channel 4; the rest wait. */
 static void ap_air(void)
 {
+    if (rx_deaf)
+        airq_count = 0;
     while (airq_count && model.rxe && card.phy.channel.frequency == AP_FREQ) {
         if (ath9k_model_rx(&model, 0, airq[airq_head].frame, airq[airq_head].len,
                            &airq[airq_head].status) != 0)
@@ -1537,7 +1545,7 @@ static void clean_traffic(unsigned ms, const char *step)
 /** Task 10's path on the trial boot, after the scan and its reset. */
 static void connect_and_soak(void)
 {
-    unsigned hangs, held, i;
+    unsigned hangs, stalls, held, i;
     int slot;
 
     wlan_data_init(&data, &the_wlan, registered, &counters, station_deliver, station_event);
@@ -1606,6 +1614,18 @@ static void connect_and_soak(void)
     CHECK(model.rxe);
     model_clean("the reset under load");
     clean_traffic(1000, "the traffic after the reset");
+
+    /* The receiver stops hearing while the AP beacons: a window of the
+     * hang check without a frame a second, judged since the station is
+     * associated, resets the chip, which hears again. */
+    stalls = card.stats.resets[ATH9K_RESET_RX_STALL];
+    rx_deaf = 1;
+    for (i = 0; i < 12 && rx_deaf; i++)
+        run_for(1000);
+    CHECK(!rx_deaf && card.stats.resets[ATH9K_RESET_RX_STALL] == stalls + 1);
+    CHECK(bssid_is(ap_mac) && model.rxe);
+    model_clean("the receive stall");
+    clean_traffic(1000, "the traffic after the receive stall");
 
     /* The AP restarts: nothing gets through for five seconds and no
      * beacon comes, so the MLME drops the connection, which clears the

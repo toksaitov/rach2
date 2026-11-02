@@ -995,17 +995,23 @@ static void test_radio(void)
     bss.bssid[5] = 0x99;
     CHECK(ops->sta_state(radio, &bss, WLAN_STA_NONE, WLAN_STA_AUTHENTICATING) == 0);
     CHECK(bssid_set[0] == 0x02 && bssid_set[5] == 0x99);
-    CHECK(ampdu_sta_bss == NULL);
+    CHECK(ampdu_sta_bss == NULL && !card.mac.associated);
+    /* The association narrows the filter and starts the receive window. */
+    card.recover.rx_active = 7;
     CHECK(ops->sta_state(radio, &bss, WLAN_STA_AUTHENTICATED, WLAN_STA_ASSOCIATED) == 0);
-    CHECK(ampdu_sta_bss == &bss);
-    CHECK(ops->sta_state(radio, NULL, WLAN_STA_ASSOCIATED, WLAN_STA_NONE) == 0);
+    CHECK(ampdu_sta_bss == &bss && card.mac.associated);
+    CHECK(card.recover.rx_active == 0 && card.recover.window == tick_count());
+    CHECK(ops->sta_state(radio, &bss, WLAN_STA_ASSOCIATED, WLAN_STA_AUTHORIZED) == 0);
+    CHECK(card.mac.associated);
+    CHECK(ops->sta_state(radio, NULL, WLAN_STA_AUTHORIZED, WLAN_STA_NONE) == 0);
     CHECK(bssid_set[0] == 0 && bssid_set[5] == 0 && ampdu_sta_bss == NULL);
+    CHECK(!card.mac.associated);
     CHECK(ops->ampdu_action(radio, WLAN_AMPDU_TX_START, frame, 0, 0, 64) == 0);
     CHECK(ops->get_tsf(radio, &tsf) == 0 && tsf == 0x123456789ull);
     {
         static const char *const misc[] = {
-            "tx",        "key_set",      "key_clear", "mac_set_bssid", "ampdu_sta", "mac_set_bssid",
-            "ampdu_sta", "ampdu_action", NULL};
+            "tx",        "key_set",       "key_clear", "mac_set_bssid", "mac_set_filter",
+            "ampdu_sta", "mac_set_bssid", "ampdu_sta", "ampdu_action",  NULL};
         CHECK(calls_are(misc));
     }
 

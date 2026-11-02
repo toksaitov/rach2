@@ -826,7 +826,10 @@ struct ath9k_mac {
     uint32_t imask;  /* AR_IMR bits enabled */
     uint32_t imask2; /* AR_IMR_S2 bits enabled */
     uint8_t bssid[6];
-    uint16_t aid;             /* 0 while not associated */
+    uint16_t aid;             /* AR_BSS_ID1's; the station layer gives none,
+                               * so 0 */
+    uint8_t associated;       /* from association to the return below it,
+                               * as radio.h's sta_state reports it */
     uint16_t beacon_interval; /* TU; 0 while the beacon timers are off */
     uint8_t dtim_period;
     uint8_t msi;      /* the card sends messages; AR_PCIE_MSI is set */

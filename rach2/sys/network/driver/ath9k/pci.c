@@ -122,6 +122,8 @@ static void radio_stop(struct wlan_radio *radio)
      * after the checks are cancelled. */
     ath9k_mac_intr_disable(ah);
     ah->bus.started = 0;
+    /* wiphy.c's stop drops the association without a call to sta_state. */
+    ah->mac.associated = 0;
     ath9k_recover_stop(ah);
     ath9k_cal_stop(ah);
     quiesce(ah);
@@ -212,17 +214,28 @@ static int radio_set_key(struct wlan_radio *radio, int enable, const uint8_t pee
     return 0;
 }
 
-/** radio.h's sta_state: the BSSID from the first authentication to the
- * return to NONE, as mac80211's BSS change gives it to ath9k, and the AP's
- * A-MPDU limits from association, as ath9k's sta_add takes them. The
- * station layer gives no association ID here, so the chip's stays 0, which
- * only a station in power save would need. */
+/**
+ * radio.h's sta_state: the BSSID from the first authentication to the
+ * return to NONE, as mac80211's BSS change gives it to ath9k; whether the
+ * station is associated, which narrows the beacon filter to the BSS's and
+ * lets recover.c judge the receive path, from a window that starts at the
+ * association; and the AP's A-MPDU limits from association, as ath9k's
+ * sta_add takes them. The station layer gives no association ID here, so
+ * the chip's stays 0, which only a station in power save would need.
+ */
 static int radio_sta_state(struct wlan_radio *radio, const struct wlan_bss *bss,
                            enum wlan_sta_state old_state, enum wlan_sta_state new_state)
 {
     static const uint8_t none[6] = {0, 0, 0, 0, 0, 0};
     struct ath9k *ah = radio->priv;
+    uint8_t associated = new_state >= WLAN_STA_ASSOCIATED;
+    int changed = associated != ah->mac.associated;
 
+    if (associated && changed) {
+        ah->recover.window = tick_count();
+        ah->recover.rx_active = 0;
+    }
+    ah->mac.associated = associated;
     if (!ah->bus.started) {
         /* The chip sleeps; the next start's reset writes what is kept. */
         if (new_state == WLAN_STA_NONE)
@@ -233,6 +246,8 @@ static int radio_sta_state(struct wlan_radio *radio, const struct wlan_bss *bss,
         ath9k_mac_set_bssid(ah, none, 0);
     } else if (old_state == WLAN_STA_NONE && bss) {
         ath9k_mac_set_bssid(ah, bss->bssid, 0);
+    } else if (changed) {
+        ath9k_mac_set_filter(ah, ah->rx.filters);
     }
     if (new_state == WLAN_STA_NONE)
         ath9k_ampdu_sta(ah, NULL);

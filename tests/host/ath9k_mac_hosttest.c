@@ -908,6 +908,9 @@ static void test_recover(void)
 
     setup(1);
     CHECK(ath9k_key_set(&ah, ap, &ccmp, &slot) == 0);
+    /* Associated, as pci.c's sta_state leaves the card, which this test
+     * does not link. */
+    ah.mac.associated = 1;
     ath9k_mac_set_bssid(&ah, ap, 1);
     model.usec = 0x123456789ull;
     ath9k_mac_set_beacon_timers(&ah, 100, 3);
@@ -974,6 +977,7 @@ static void test_recover(void)
     CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_RX_STALL);
     CHECK(cold_resets == 0);
     check_restored(&ccmp, slot, mac1);
+    ah.mac.associated = 0;
     ath9k_mac_set_bssid(&ah, (const uint8_t *)"\0\0\0\0\0\0", 0);
     now_ms += 4000;
     CHECK(ath9k_hang_check(&ah) == -1); /* not associated: not judged */
