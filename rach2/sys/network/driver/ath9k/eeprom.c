@@ -263,7 +263,8 @@ static int restore(struct ath9k *ah, uint8_t *image)
         }
         if (read(ah, cptr, word, COMP_HDR_LEN + length + COMP_CKSUM_LEN) != 0)
             return -EIO;
-        for (sum = 0, i = 0; i < (unsigned)length; i++)
+        sum = 0;
+        for (i = 0; i < (unsigned)length; i++)
             sum = (uint16_t)(sum + word[COMP_HDR_LEN + i]);
         stored = (uint16_t)(word[COMP_HDR_LEN + length] | word[COMP_HDR_LEN + length + 1] << 8);
         if (sum == stored && restore_block(image, code, reference, word, length) == 0)
@@ -363,17 +364,17 @@ static int power_interpolate(int x, const int *px, const int *py, unsigned np)
 
 /**
  * The target power of column `rate` at `freq` among `n` piers whose bins are
- * `bins` and whose powers are rows of `stride` bytes at `powers`, as
- * ar9003_hw_eeprom_get_tgt_pwr and its HT and CCK forms do.
+ * `bins`, of freq's band, and whose powers are rows of `stride` bytes at
+ * `powers`, as ar9003_hw_eeprom_get_tgt_pwr and its HT and CCK forms do.
  */
 static uint8_t target(const uint8_t *bins, const uint8_t *powers, unsigned n, unsigned stride,
-                      unsigned rate, unsigned freq, int is2ghz)
+                      unsigned rate, unsigned freq)
 {
-    int f[AR9300_NUM_5G_20_TARGET_POWERS], p[AR9300_NUM_5G_20_TARGET_POWERS];
+    int f[AR9300_NUM_5G_20_TARGET_POWERS] = {0}, p[AR9300_NUM_5G_20_TARGET_POWERS] = {0};
     unsigned i;
 
     for (i = 0; i < n; i++) {
-        f[i] = fbin2freq(bins[i], is2ghz);
+        f[i] = fbin2freq(bins[i], is_2ghz(freq));
         p[i] = powers[i * stride + rate];
     }
     return (uint8_t)power_interpolate((int)freq, f, p, n);
@@ -400,15 +401,15 @@ void ath9k_eeprom_target_power(const struct ath9k *ah, unsigned freq, uint8_t t[
 
     k_memset(t, 0, ar9300RateSize);
     for (i = 0; i < 4; i++)
-        t[ALL_TARGET_LEGACY_6_24 + i] = target(legacy_bins, legacy, nl, 4, i, freq, g);
+        t[ALL_TARGET_LEGACY_6_24 + i] = target(legacy_bins, legacy, nl, 4, i, freq);
     if (g)
         for (i = 0; i < 4; i++)
             t[ALL_TARGET_LEGACY_1L_5L + i] =
                 target(e->calTarget_freqbin_Cck, e->calTargetPowerCck[0].tPow2x,
-                       AR9300_NUM_2G_CCK_TARGET_POWERS, 4, i, freq, 1);
+                       AR9300_NUM_2G_CCK_TARGET_POWERS, 4, i, freq);
     for (i = 0; i < 14; i++) {
-        t[ALL_TARGET_HT20_0_8_16 + i] = target(ht20_bins, ht20, nl, 14, i, freq, g);
-        t[ALL_TARGET_HT40_0_8_16 + i] = target(ht40_bins, ht40, nh40, 14, i, freq, g);
+        t[ALL_TARGET_HT20_0_8_16 + i] = target(ht20_bins, ht20, nl, 14, i, freq);
+        t[ALL_TARGET_HT40_0_8_16 + i] = target(ht40_bins, ht40, nh40, 14, i, freq);
     }
 }
 
