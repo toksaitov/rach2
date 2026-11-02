@@ -4925,28 +4925,47 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
 }
 
 /**
- * Read up to `count` bytes of descriptor `fd` into the user's `buf`, for
- * read(2) and readv(2); the bytes read, 0 at the end, or a negative errno:
- * -EBADF for a descriptor that is not open, was opened with O_PATH or is not
- * open for reading, -EFAULT for a NULL or bad buffer. A read of zero bytes
- * returns 0 once the descriptor is known to be valid and does not look at
- * `buf`, which may then be NULL, as POSIX allows.
- *
- * The read goes by what is behind the descriptor. An object with a vtable,
- * a pipe, a pty, a device or a /proc file among them, reads through it
- * (`read_ops`). A socket reads by its type, a datagram or raw socket one
+ * Read up to `count` bytes of the socket of `entry` into the user's `buf`,
+ * for `read_fd`, by the socket's type: a datagram or raw socket one
  * datagram and a stream socket its bytes, straight into the checked user
  * buffer, and without waiting under O_NONBLOCK, a status flag of the
- * description, as recv(2) does; the query socket is -EOPNOTSUPP. A file of
- * the KRFFS root or of a mounted type is `file_read`'s.
+ * description, as recv(2) does. A bad buffer is -EFAULT and the query
+ * socket -EOPNOTSUPP.
+ */
+static int32_t socket_read(fd_entry_t *entry, char __user *buf, uint32_t count)
+{
+    int sock_nonblock;
+
+    if (!entry->sock || !user_buffer_ok((__force uintptr_t)buf, count, 1)) {
+        return -EFAULT;
+    }
+    if (sock_is_query(entry->sock)) {
+        return -EOPNOTSUPP;
+    }
+    sock_nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
+    if (entry->sock->type == SOCK_DGRAM || entry->sock->type == SOCK_RAW) {
+        if (sock_nonblock) {
+            return socket_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL, 0);
+        }
+        return socket_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL, 0);
+    }
+    if (sock_nonblock) {
+        return socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, 0);
+    }
+    return socket_tcp_recv(entry->sock, (uint8_t __force *)buf, (int)count, 0);
+}
+
+/**
+ * Read up to `count` bytes of the console into the user's `buf`, for
+ * `read_fd`, whose descriptor `entry` is the console's; -EBADF when it is not
+ * open for reading.
  *
  * A console read returns one line, or one burst of raw bytes of at most
  * N_TTY_READ_CHUNK, and the caller loops for more raw bytes. A line longer
  * than N_TTY_READ_CHUNK is copied a chunk at a time (`tty_read_rest`). It
- * waits in the
- * line discipline of `console_tty` until a cooked line or VMIN raw bytes
- * arrive, unless O_NONBLOCK makes it -EAGAIN, and a pending signal ends the
- * wait with -EINTR. While a reader waits, or once a session owns the
+ * waits in the line discipline of `console_tty` until a cooked line or VMIN
+ * raw bytes arrive, unless O_NONBLOCK makes it -EAGAIN, and a pending signal
+ * ends the wait with -EINTR. While a reader waits, or once a session owns the
  * console, the keyboard interrupt cooks keystrokes into `console_tty` and
  * not into the kernel shell, so the discipline echoes and edits them and
  * turns ^C into SIGINT; `stdin_waiting_proc`, set for the length of the
@@ -4964,6 +4983,68 @@ static int32_t file_read(fd_entry_t *entry, char __user *buf, uint32_t count, co
  * again in the foreground, or -EIO when SIGTTIN is blocked or ignored, as
  * POSIX has it. Both checks come before `stdin_waiting_proc` is set, so no
  * return leaves it set.
+ */
+static int32_t console_read(fd_entry_t *entry, char __user *buf, uint32_t count)
+{
+    unsigned char kbuf[N_TTY_READ_CHUNK];
+    uint32_t want, done;
+    int n;
+
+    if (!(entry->flags & FD_FLAG_READ)) {
+        return -EBADF;
+    }
+
+    want = count;
+    if (want > sizeof(kbuf)) {
+        want = sizeof(kbuf);
+    }
+
+    if (console_tty.sid == 0 && (int)current_proc->sid == (int)current_proc->pid) {
+        tty_make_sole_ctty(&console_tty, (int)current_proc->sid, (int)current_proc->pgid);
+    }
+    if (tty_is_background(&console_tty, (int)current_proc->sid, (int)current_proc->pgid)) {
+        if ((current_proc->sig_blocked & KSIG_BIT(SIGTTIN)) ||
+            current_proc->sigacts[SIGTTIN].handler == KSIG_IGN) {
+            return -EIO;
+        }
+        tty_signal_group((int)current_proc->pgid, SIGTTIN);
+        return -EINTR;
+    }
+    stdin_waiting_proc = current_proc;
+    n = tty_read(&console_tty, kbuf, (int)want,
+                 entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
+    stdin_waiting_proc = NULL;
+    if (n < 0) {
+        return n;
+    }
+    done = 0;
+    while (n > 0) {
+        if (copy_to_user(buf + done, kbuf, (uint32_t)n) != 0) {
+            return -EFAULT;
+        }
+        done += (uint32_t)n;
+        want = count - done;
+        if (want > sizeof(kbuf)) {
+            want = sizeof(kbuf);
+        }
+        n = tty_read_rest(&console_tty, kbuf, (int)want);
+    }
+    return (int32_t)done;
+}
+
+/**
+ * Read up to `count` bytes of descriptor `fd` into the user's `buf`, for
+ * read(2) and readv(2); the bytes read, 0 at the end, or a negative errno:
+ * -EBADF for a descriptor that is not open, was opened with O_PATH or is not
+ * open for reading, -EFAULT for a NULL or bad buffer. A read of zero bytes
+ * returns 0 once the descriptor is known to be valid and does not look at
+ * `buf`, which may then be NULL, as POSIX allows.
+ *
+ * The read goes by what is behind the descriptor. An object with a vtable,
+ * a pipe, a pty, a device or a /proc file among them, reads through it
+ * (`read_ops`). A socket's read is `socket_read`'s, the console's
+ * `console_read`'s, and that of a file of the KRFFS root or of a mounted
+ * type `file_read`'s.
  *
  * A mouse read returns the whole `struct mouse_packet`s waiting that fit in
  * `count`, without waiting, and 0 when `count` is less than one packet. A
@@ -4994,72 +5075,10 @@ static int32_t read_fd(int fd, char __user *buf, uint32_t count)
     }
 
     if (entry->type == FD_TYPE_SOCKET) {
-        int sock_nonblock;
-        if (!entry->sock || !user_buffer_ok((__force uintptr_t)buf, count, 1)) {
-            return -EFAULT;
-        }
-        if (sock_is_query(entry->sock)) {
-            return -EOPNOTSUPP;
-        }
-        sock_nonblock = entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK);
-        if (entry->sock->type == SOCK_DGRAM || entry->sock->type == SOCK_RAW) {
-            if (sock_nonblock) {
-                return socket_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL,
-                                       0);
-            }
-            return socket_recv(entry->sock, (uint8_t __force *)buf, (int)count, NULL, NULL, 0);
-        }
-        if (sock_nonblock) {
-            return socket_tcp_try_recv(entry->sock, (uint8_t __force *)buf, (int)count, 0);
-        }
-        return socket_tcp_recv(entry->sock, (uint8_t __force *)buf, (int)count, 0);
+        return socket_read(entry, buf, count);
     }
-
     if (entry->type == FD_TYPE_CONSOLE) {
-        unsigned char kbuf[N_TTY_READ_CHUNK];
-        uint32_t want, done;
-        int n;
-
-        if (!(entry->flags & FD_FLAG_READ)) {
-            return -EBADF;
-        }
-
-        want = count;
-        if (want > sizeof(kbuf)) {
-            want = sizeof(kbuf);
-        }
-
-        if (console_tty.sid == 0 && (int)current_proc->sid == (int)current_proc->pid) {
-            tty_make_sole_ctty(&console_tty, (int)current_proc->sid, (int)current_proc->pgid);
-        }
-        if (tty_is_background(&console_tty, (int)current_proc->sid, (int)current_proc->pgid)) {
-            if ((current_proc->sig_blocked & KSIG_BIT(SIGTTIN)) ||
-                current_proc->sigacts[SIGTTIN].handler == KSIG_IGN) {
-                return -EIO;
-            }
-            tty_signal_group((int)current_proc->pgid, SIGTTIN);
-            return -EINTR;
-        }
-        stdin_waiting_proc = current_proc;
-        n = tty_read(&console_tty, kbuf, (int)want,
-                     entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
-        stdin_waiting_proc = NULL;
-        if (n < 0) {
-            return n;
-        }
-        done = 0;
-        while (n > 0) {
-            if (copy_to_user(buf + done, kbuf, (uint32_t)n) != 0) {
-                return -EFAULT;
-            }
-            done += (uint32_t)n;
-            want = count - done;
-            if (want > sizeof(kbuf)) {
-                want = sizeof(kbuf);
-            }
-            n = tty_read_rest(&console_tty, kbuf, (int)want);
-        }
-        return (int32_t)done;
+        return console_read(entry, buf, count);
     }
 
     if (entry->type == FD_TYPE_MOUSE) {
