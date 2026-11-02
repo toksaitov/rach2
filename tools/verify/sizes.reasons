@@ -894,6 +894,10 @@ tools/etude/posix/scenario.c:command_invocation params 8 the parameters are the 
 tools/etude/posix/repeat.c:ask params 7 the parameters are one request to the ledger: the run, the attempt, the claim, its resources and their count, whether it waits, and where its hold is kept
 tests/cases/machine/netcase.c:net_guest params 7 the case, machine, arguments, environment, input, evidence and result describe one guest command
 
+tests/cases/machine/wifi_scenario.c:case_enterprise complexity 29 a scenario, one session at the machines' consoles in the order of the manifest's steps
+tests/cases/machine/wifi_scenario.c:case_robust complexity 30 a scenario, one session at the machines' consoles in the order of the manifest's steps
+tests/cases/machine/wifi_scenario.c:case_robust lines 126 a scenario, one session at the machines' consoles in the order of the manifest's steps
+
 utils/wifi.c:select_wait complexity 27 an event loop, one arm per event wpa_supplicant sends, read as a table
 
 utils/wsimmedium.c:medium_check complexity 26 a parser over an external format, one check per field in the format's order
