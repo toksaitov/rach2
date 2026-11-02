@@ -406,6 +406,30 @@ later()
     exit 75
 }
 
+# net COMMAND...: run COMMAND, a gh or git call over the network, and while it
+# fails for want of a connection run it again every 15 seconds, for up to five
+# minutes, so that a short outage of GitHub does not stop the release. Any
+# other failure returns COMMAND's status at once. COMMAND's standard error
+# goes to the release's.
+net()
+{
+    net_tries=20
+    while :; do
+        net_rc=0
+        "$@" 2> "$state/net.$$" || net_rc=$?
+        net_err=$(cat "$state/net.$$")
+        rm -f "$state/net.$$"
+        [ -z "$net_err" ] || printf '%s\n' "$net_err" >&2
+        [ "$net_rc" -ne 0 ] || return 0
+        net_tries=$((net_tries - 1))
+        [ "$net_tries" -gt 0 ] &&
+            printf '%s\n' "$net_err" | grep -qiE 'error connecting|could not resolve|failed to connect|connection (reset|refused|timed out)|timed out|tls handshake|http (502|503|504)' ||
+            return "$net_rc"
+        say "waiting: $1 cannot reach the network; trying again in 15 seconds" >&2
+        sleep 15
+    done
+}
+
 # refuse WHY: refuse the arguments for WHY, and exit 2.
 refuse()
 {
@@ -640,7 +664,7 @@ full_failed()
 {
     rm -rf "$state/full-$1"
     words=
-    if gh run download "$1" --repo "$REPO" --name failures --dir "$state/full-$1" > /dev/null 2>&1; then
+    if net gh run download "$1" --repo "$REPO" --name failures --dir "$state/full-$1" > /dev/null 2>&1; then
         words=$(grep . "$state/full-$1/failures" 2> /dev/null | tr '\n' ' ' | sed 's/ $//')
     fi
     # shellcheck disable=SC2086 # the failures are words
@@ -664,7 +688,7 @@ full()
     # shellcheck disable=SC2086 # the suites are words
     [ -z "$only" ] || title="$title: again only $(plain $only)"
     while :; do
-        run=$(gh run list --repo "$REPO" --workflow full.yml --limit 50 \
+        run=$(net gh run list --repo "$REPO" --workflow full.yml --limit 50 \
             --json databaseId,displayTitle,status,conclusion,createdAt \
             --jq "\"$title\" as \$t | [.[] | select(.displayTitle as \$d |
                 (\$d == \$t or ((\$d | endswith(\"...\")) and
@@ -701,7 +725,7 @@ full()
         note "dispatched $(date +%s)"
         set -- -f sha="$sha" -f title="$title"
         [ -z "$only" ] || set -- "$@" -f suites="$only"
-        gh workflow run full.yml --repo "$REPO" --ref "$branch" "$@" ||
+        net gh workflow run full.yml --repo "$REPO" --ref "$branch" "$@" ||
             later "the full run could not be started"
         say "full: started a run of $sha${only:+ for $only only}"
         sleep 30
@@ -711,7 +735,7 @@ full()
 # build: build SHA for the Lenovo on the testing host and fetch the results.
 build()
 {
-    git -C "$repo" fetch -q origin || later "the fetch failed"
+    net git -C "$repo" fetch -q origin || later "the fetch failed"
     git -C "$repo" merge-base --is-ancestor refs/remotes/origin/master "$sha" ||
         fail build "$sha does not contain origin/master, so master cannot move to it"
     git -C "$repo" worktree remove --force "$state/wt" 2> /dev/null
@@ -1017,7 +1041,7 @@ mac_start()
         mark mac "only style failed, which the full run checks"
         return 0
     fi
-    git -C "$repo" fetch -q origin || later "the fetch failed"
+    net git -C "$repo" fetch -q origin || later "the fetch failed"
     mac_launch "milestone$milestone-$(echo "$sha" | cut -c 1-12)-mac-$(date -u '+%m%d-%H%M%S')" "$sha"
 }
 
@@ -1234,7 +1258,7 @@ windows_words()
 # Windows' copy fetches SHA from it.
 windows_bundle()
 {
-    if ! git -C "$repo" fetch -q origin ||
+    if ! net git -C "$repo" fetch -q origin ||
         ! git -C "$repo" bundle create "$state/windows.bundle" "refs/remotes/origin/$branch" > /dev/null 2>&1; then
         later "the bundle for Windows could not be made"
     fi
@@ -1708,8 +1732,8 @@ prepare_all()
 # origin/master; set `branch`.
 check()
 {
-    git -C "$repo" fetch -q origin || later "the fetch failed"
-    branch=$(sh "$repo/tools/flow/board.sh" milestone "$milestone")
+    net git -C "$repo" fetch -q origin || later "the fetch failed"
+    branch=$(net sh "$repo/tools/flow/board.sh" milestone "$milestone")
     case $? in
         0) ;;
         3) refuse "milestone $milestone is not open or names no branch" ;;
@@ -1721,7 +1745,7 @@ check()
         git -C "$repo" merge-base --is-ancestor refs/remotes/origin/master "$sha" 2> /dev/null ||
         refuse "$sha does not contain origin/master"
     for n in $also; do
-        b=$(sh "$repo/tools/flow/board.sh" milestone "$n")
+        b=$(net sh "$repo/tools/flow/board.sh" milestone "$n")
         case $? in
             0) ;;
             3) refuse "-c: milestone $n is not open or names no branch" ;;
@@ -1786,7 +1810,7 @@ restart()
         refuse "the release under way is not of milestone $milestone"
     ! grep -q '^closing \|^closed ' "$state/record" || refuse "the release under way closes"
     # Master may have moved since the release began; -r at SHA checks it.
-    git -C "$repo" fetch -q origin || later "the fetch failed"
+    net git -C "$repo" fetch -q origin || later "the fetch failed"
     branch=$(sed -n 's/^branch //p' "$state/record")
     git -C "$repo" merge-base --is-ancestor "$at" "refs/remotes/origin/$branch" 2> /dev/null ||
         refuse "$at is not on $branch"
@@ -1841,14 +1865,14 @@ preflight()
 # record's `also` lines, and archive their cards.
 close()
 {
-    git -C "$repo" fetch -q origin || later "the fetch failed"
+    net git -C "$repo" fetch -q origin || later "the fetch failed"
     if [ "$(git -C "$repo" rev-parse refs/remotes/origin/master)" != "$sha" ]; then
-        git -C "$repo" push origin "$sha:refs/heads/master" ||
+        net git -C "$repo" push origin "$sha:refs/heads/master" ||
             later "the push of $sha to master failed"
     fi
     names='' closed="milestone $milestone is"
     for n in $milestone $(sed -n 's/^also //p' "$state/record"); do
-        gh api -X PATCH "repos/$REPO/milestones/$n" -f state=closed > /dev/null ||
+        net gh api -X PATCH "repos/$REPO/milestones/$n" -f state=closed > /dev/null ||
             later "milestone $n could not be closed"
         names="$names${names:+ and }$n"
     done
@@ -1856,7 +1880,7 @@ close()
     report close pass "Master is at $sha, and $closed closed."
     report release pass "Released $sha on every machine."
     for n in $milestone $(sed -n 's/^also //p' "$state/record"); do
-        sh "$repo/tools/flow/board.sh" archive "$n" > /dev/null ||
+        net sh "$repo/tools/flow/board.sh" archive "$n" > /dev/null ||
             later "board.sh archive $n failed"
     done
 }
