@@ -109,6 +109,19 @@ void pci_write_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t of
                        uint8_t value);
 
 /**
+ * A dword of a function's extended configuration space, offsets 256 to
+ * 4095, which only an ECAM window reaches; below 256 by whichever mechanism
+ * serves the bus. All ones for an offset of 256 or more when no ECAM window
+ * covers the bus.
+ */
+uint32_t pci_read_config32_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset);
+
+/** Write a dword of extended configuration space; nothing when no ECAM
+ * window covers the bus and the offset is 256 or more. */
+void pci_write_config32_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset,
+                            uint32_t value);
+
+/**
  * Read or write a byte, a word or a dword at `port` of the bus's I/O space,
  * where a device's I/O base address register points: the architecture's
  * (arch/x86/pciconf.c: the processor's own ports).

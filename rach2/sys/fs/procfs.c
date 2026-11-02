@@ -35,7 +35,6 @@
 #include "krffs.h"
 #include "../usb/core.h"
 #include "../pci.h"
-#include "../arch/x86/pciconf.h"
 #include "../audio/audio_proc.h"
 #include "../speaker.h"
 #include "../usb/usb.h"
