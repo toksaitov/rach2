@@ -251,7 +251,7 @@ static void begin(int msi)
     usb_stamp_pump(1000, 31000, msi, 1);
     clock_us = 32000;
     usb_stamp_wake();
-    processes[1].state = PROC_READY;
+    sched_make_ready(&processes[1]);
     processes[1].woken = 1;
     records = 0;
     record[0] = '\0';
