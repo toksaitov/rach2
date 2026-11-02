@@ -36,10 +36,11 @@
 # /opt/AGENT/bin/AGENT.
 #
 # Before the sessions it requires each program's version to be the one its
-# recipe pins, and keeps the program's SHA-256 and that of each selected agent's
-# credential source and gh's: a file, or for OpenCode the secrets of its
-# database's credential records, read in one transaction. It reboots as root and
-# requires each source unchanged, every version and program unchanged, `gh auth
+# recipe pins, and keeps the program's SHA-256, and requires each selected
+# agent's credential source and gh's: a file, or for OpenCode the secrets of its
+# database's credential records, read in one transaction. After the sessions,
+# in which an agent may renew its own sign-in, it keeps each source's SHA-256,
+# reboots as root and requires each source unchanged, every version and program unchanged, `gh auth
 # status` to pass, and each agent to answer one request without its screen,
 # which only a program still signed in can do. Last it sends its log to the
 # machine, which counts there the strings of the credential sources the log has;
@@ -732,10 +733,10 @@ for program in $AGENTS gh; do
     esac
 done
 # shellcheck disable=SC2086 # AGENTS is the validated list of program names
-guest credentials "$MODE" $AGENTS > "$work/credentials.before" || give_up "the credential sources"
+guest credentials "$MODE" $AGENTS > "$work/credentials.start" || give_up "the credential sources"
 while read -r file digest; do
     [ "$digest" != missing ] || bad "no credential in $file"
-done < "$work/credentials.before"
+done < "$work/credentials.start"
 # shellcheck disable=SC2086 # AGENTS is the validated list of program names
 OUT=$(guest filtered "$MODE" $AGENTS)
 case $OUT in
@@ -766,6 +767,9 @@ if [ "$MODE" = lenovo ]; then
     OUT=$(root 'cat /sys/class/net/eth0/address') || give_up "root's login by the development key"
     [ "$OUT" = "$MAC" ] || give_up "the machine's station address is $OUT, not the Lenovo's $MAC"
 fi
+# The sources as the sessions left them, since an agent may renew its token.
+# shellcheck disable=SC2086 # AGENTS is the validated list of program names
+guest credentials "$MODE" $AGENTS > "$work/credentials.before" || give_up "the credential sources before the reboot"
 up=$(m 'cut -d . -f 1 /proc/uptime')
 root 'setsid sh -c "sleep 2; reboot" > /dev/null 2>&1 < /dev/null &' ||
     give_up "the reboot was not started"
@@ -783,8 +787,8 @@ guest credentials "$MODE" $AGENTS > "$work/credentials.after" || give_up "the cr
 if cmp -s "$work/credentials.before" "$work/credentials.after"; then
     say "the credential sources are as they were before the reboot: OK"
 else
-    bad "the credential sources changed in the reboot: $(cut -d ' ' -f 1 "$work/credentials.after" |
-        tr '\n' ' ')"
+    bad "the credential sources changed in the reboot: $(awk 'NR == FNR { d[$1] = $2; next }
+        d[$1] != $2 { printf "%s ", $1 }' "$work/credentials.before" "$work/credentials.after")"
 fi
 for program in $AGENTS gh; do
     OUT=$(guest version "$program")
