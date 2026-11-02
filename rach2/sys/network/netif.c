@@ -259,6 +259,34 @@ static int32_t ns_loopback_set(uint32_t request, const uint8_t *ifr, struct netd
 }
 
 /**
+ * Answer SIOCGIFNAME: name in the request `ifr`, read from user memory at
+ * `arg`, the interface whose index its union holds, and write the request
+ * back. Returns 0, -ENODEV for an index the caller does not see, or -EFAULT.
+ */
+static int32_t ifreq_name(uint8_t *ifr, uintptr_t arg)
+{
+    int32_t index =
+        (int32_t)((uint32_t)ifr[IFREQ_UNION] | ((uint32_t)ifr[IFREQ_UNION + 1] << 8) |
+                  ((uint32_t)ifr[IFREQ_UNION + 2] << 16) | ((uint32_t)ifr[IFREQ_UNION + 3] << 24));
+    struct netdev *at;
+
+    if (!net_ns_seen()) {
+        at = index == 1 ? netif_ns_lo() : 0;
+    } else {
+        at = netdev_by_index(index);
+    }
+    if (!at || at->index != index) {
+        return -ENODEV;
+    }
+    k_memset(ifr + IFREQ_NAME, 0, IFREQ_NAMESIZE);
+    k_memcpy(ifr + IFREQ_NAME, at->name, k_strlen(at->name));
+    if (copy_to_user((void __user *)arg, ifr, IFREQ_LEN) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/**
  * Handle the requests that read or write an interface.
  *
  * The name is checked first for every one of them but SIOCGIFNAME, which
@@ -296,28 +324,7 @@ static int32_t ifreq_ioctl(uint32_t request, uintptr_t arg)
     }
 
     if (request == SIOCGIFNAME) {
-        int32_t index =
-            (int32_t)((uint32_t)ifr[IFREQ_UNION] | ((uint32_t)ifr[IFREQ_UNION + 1] << 8) |
-                      ((uint32_t)ifr[IFREQ_UNION + 2] << 16) |
-                      ((uint32_t)ifr[IFREQ_UNION + 3] << 24));
-        struct netdev *at;
-
-        if (!net_ns_seen()) {
-            at = index == 1 ? netif_ns_lo() : 0;
-        } else if (!netdev_by_index(index)) {
-            return -ENODEV;
-        } else {
-            at = netdev_by_index(index);
-        }
-        if (!at || at->index != index) {
-            return -ENODEV;
-        }
-        k_memset(ifr + IFREQ_NAME, 0, IFREQ_NAMESIZE);
-        k_memcpy(ifr + IFREQ_NAME, at->name, k_strlen(at->name));
-        if (copy_to_user((void __user *)arg, ifr, IFREQ_LEN) != 0) {
-            return -EFAULT;
-        }
-        return 0;
+        return ifreq_name(ifr, arg);
     }
 
     nd = named(ifr + IFREQ_NAME);
