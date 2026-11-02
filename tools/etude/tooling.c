@@ -680,7 +680,11 @@ static void channel_line(struct boot *b, const char *line, const struct etude_re
         failure(b->failed, sizeof(b->failed), "the job runner: %s", line + 19);
 }
 
-/** Read what the channel has written since the last read. */
+/**
+ * Read all that the channel has written since the last read. A job's build
+ * can write faster than one buffer for each poll, and the read after QEMU
+ * exits is the last, so it must reach the runner's final lines.
+ */
 static void read_channel(struct boot *b)
 {
     struct etude_reading now;
@@ -693,23 +697,26 @@ static void read_channel(struct boot *b)
             fclose(f);
         return;
     }
-    n = fread(buf, 1, sizeof(buf), f);
-    fclose(f);
-    if (n == 0 || etude_history_now(&now) != 0)
+    if (etude_history_now(&now) != 0) {
+        fclose(f);
         return;
-    b->offset += (long)n;
-    for (i = 0; i < n; i++) {
-        if (buf[i] == '\r')
-            continue;
-        if (buf[i] != '\n') {
-            if (b->linelen + 1 < sizeof(b->line))
-                b->line[b->linelen++] = buf[i];
-            continue;
-        }
-        b->line[b->linelen] = '\0';
-        channel_line(b, b->line, &now);
-        b->linelen = 0;
     }
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        b->offset += (long)n;
+        for (i = 0; i < n; i++) {
+            if (buf[i] == '\r')
+                continue;
+            if (buf[i] != '\n') {
+                if (b->linelen + 1 < sizeof(b->line))
+                    b->line[b->linelen++] = buf[i];
+                continue;
+            }
+            b->line[b->linelen] = '\0';
+            channel_line(b, b->line, &now);
+            b->linelen = 0;
+        }
+    }
+    fclose(f);
 }
 
 /* How a boot ended: by itself, at its deadline, or by a signal's request. */
