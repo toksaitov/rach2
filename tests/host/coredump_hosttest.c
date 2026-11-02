@@ -121,6 +121,13 @@ void arch_core_fp_notes(uint8_t **p, const struct process *t)
     (void)t;
 }
 
+/** No region of the model maps the vDSO, so none is its data page. */
+int vdso_is_data(const struct vm_file *f)
+{
+    (void)f;
+    return 0;
+}
+
 /** The physical address of the page at `addr`: 0x100000 for every page of a
  * region but the second page of a longer one, and 0, no page, for that page
  * and outside every region. */
