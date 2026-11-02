@@ -154,7 +154,7 @@ static int backing_write(block_device_t *device, uint64_t lba, uint32_t count, c
         int mine = tick_inside;
 
         tick_inside = -1;
-        ticks((int)lag_delay + 3);
+        ticks((int)(lag_delay / LAG_UNIT) + 3);
         CHECK(answered[mine] == 0 && duplicated[mine] == 0,
               "a claimed slot whose transfer has not returned is not delivered");
     }
@@ -203,9 +203,11 @@ static void request_init(int i, int write)
     duplicated[i] = 0;
 }
 
-/** Run the wrapper's timer `n` times. */
+/** Run the wrapper's timer for `n` hundredths of a second, the unit of the
+ *  options' times, `LAG_UNIT` ticks each. */
 static void ticks(int n)
 {
+    n *= (int)LAG_UNIT;
     while (n-- > 0) {
         block_lag_tick();
     }
@@ -247,9 +249,9 @@ static void refusals(void)
 }
 
 /**
- * Install the wrapper over the backing device with a lag of three ticks and
- * run the rows. The wrapper delivers each completion after the lag, and a
- * duplicate with an error two ticks later. The rows require that:
+ * Install the wrapper over the backing device with a lag of three hundredths
+ * of a second and run the rows. The wrapper delivers each completion after
+ * the lag, and a duplicate with an error two hundredths later. The rows require that:
  *
  * - `rach2.blocklag` and `rach2.blockfail` take a count from 1 to a million
  *   and refuse any other value, with no digits, with a trailing non-digit,
@@ -284,7 +286,7 @@ int main(void)
     refusals();
     lag = block_lag_wrap(&backing);
     CHECK(lag == &lag_device, "the wrapper installs over the backing");
-    CHECK(lag_delay == 3, "the lag is the three ticks the option named");
+    CHECK(lag_delay == 3 * LAG_UNIT, "the lag is the three hundredths the option named");
     CHECK(fail_write_at == 0, "rach2.blockfail=3x arms no write");
     CHECK(lag->flags == BLOCK_READ_ONLY, "the wrapper keeps only the backing's read-only flag");
     k_memset(&other, 0, sizeof(other));
