@@ -395,6 +395,10 @@ const char *sysfs_wlan_driver(int index);
 #define SYSFS_IS_BLOCK(node) \
     (((node) >= SYSFS_BLOCK_DISK && (node) <= SYSFS_BLOCK_DEV) || (node) == SYSFS_BLOCK_LOOP)
 
+/** Whether `node` is a directory of the radios or of the radio switches,
+ * /sys/class/ieee80211 and /sys/class/rfkill and what lies below them. */
+#define SYSFS_IS_RADIO(node) ((node) >= SYSFS_CLASS_IEEE80211 && (node) <= SYSFS_RFKILL)
+
 /** The name of the `n`th attribute file of the /sys directory `node`, in the
  * order the directory lists them, or NULL past the last, and for a node
  * with none. */

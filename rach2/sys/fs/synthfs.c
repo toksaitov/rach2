@@ -918,6 +918,33 @@ static void synth_sys_block_path(int node, int key, char *out, int cap, int *pos
     synth_put(out, cap, pos, block_subdir(node));
 }
 
+/** Append at *pos in out, of cap bytes, the path of the radio node `node`
+ * with key `key`: the class of the radio switches or one switch, or the
+ * class of the radios, one radio, its device or its device's driver. */
+static void synth_sys_radio_path(int node, int key, char *out, int cap, int *pos)
+{
+    if (node == SYSFS_CLASS_RFKILL || node == SYSFS_RFKILL) {
+        synth_put(out, cap, pos, "/sys/class/rfkill");
+        if (node == SYSFS_RFKILL) {
+            synth_put(out, cap, pos, "/rfkill");
+            synth_put_uint(out, cap, pos, (unsigned)key);
+        }
+        return;
+    }
+    synth_put(out, cap, pos, "/sys/class/ieee80211");
+    if (node != SYSFS_CLASS_IEEE80211) {
+        synth_put(out, cap, pos, "/phy");
+        synth_put_uint(out, cap, pos, (unsigned)key);
+    }
+    if (node >= SYSFS_WLAN_DEVICE) {
+        synth_put(out, cap, pos, "/device");
+    }
+    if (node == SYSFS_WLAN_DRIVER) {
+        synth_put(out, cap, pos, "/");
+        synth_put(out, cap, pos, sysfs_wlan_driver(key) ? sysfs_wlan_driver(key) : "wireless");
+    }
+}
+
 void synth_sys_path(int node, int key, char *out, int cap)
 {
     static const char *const paths[] = {"/sys",
@@ -934,27 +961,8 @@ void synth_sys_path(int node, int key, char *out, int cap)
     if (cap <= 0) {
         return;
     }
-    if (node == SYSFS_CLASS_RFKILL || node == SYSFS_RFKILL) {
-        synth_put(out, cap, &pos, "/sys/class/rfkill");
-        if (node == SYSFS_RFKILL) {
-            synth_put(out, cap, &pos, "/rfkill");
-            synth_put_uint(out, cap, &pos, (unsigned)key);
-        }
-        out[pos] = '\0';
-        return;
-    }
-    if (node >= SYSFS_CLASS_IEEE80211 && node <= SYSFS_WLAN_DRIVER) {
-        synth_put(out, cap, &pos, "/sys/class/ieee80211");
-        if (node != SYSFS_CLASS_IEEE80211) {
-            synth_put(out, cap, &pos, "/phy");
-            synth_put_uint(out, cap, &pos, (unsigned)key);
-        }
-        if (node >= SYSFS_WLAN_DEVICE)
-            synth_put(out, cap, &pos, "/device");
-        if (node == SYSFS_WLAN_DRIVER) {
-            synth_put(out, cap, &pos, "/");
-            synth_put(out, cap, &pos, sysfs_wlan_driver(key) ? sysfs_wlan_driver(key) : "wireless");
-        }
+    if (SYSFS_IS_RADIO(node)) {
+        synth_sys_radio_path(node, key, out, cap, &pos);
         out[pos] = '\0';
         return;
     }
@@ -1312,6 +1320,25 @@ static int synth_classify_rfkill(const struct comp *c, int n, int index, struct 
     return synth_classify_sys_attr(c, n, SYSFS_RFKILL, index, vp);
 }
 
+/** The number N of a radio's name `phyN` in c, N of one to three digits
+ * with no leading zero, or -1 for any other name. */
+static int phy_number(struct comp c)
+{
+    int phy = 0, i;
+
+    if (c.len < 4 || c.len > 6 || c.s[0] != 'p' || c.s[1] != 'h' || c.s[2] != 'y' ||
+        (c.len > 4 && c.s[3] == '0')) {
+        return -1;
+    }
+    for (i = 3; i < c.len; ++i) {
+        if (c.s[i] < '0' || c.s[i] > '9') {
+            return -1;
+        }
+        phy = phy * 10 + c.s[i] - '0';
+    }
+    return phy;
+}
+
 /** Classify the components `c` of `n` below /sys/class: the network
  * interfaces' class, the radios', the radio switches', the clock's and the
  * backlights'. */
@@ -1324,25 +1351,10 @@ static int synth_classify_sys_class(const struct comp *c, int n, struct vpath *v
         vp->sysent = SYSFS_CLASS_NET;
     } else if (comp_eq(c[0], "net")) {
         return synth_classify_sys_net(c + 1, n - 1, vp);
-    } else if (comp_eq(c[0], "ieee80211")) {
-        int phy = 0, i;
-        if (n == 1) {
-            vp->sysent = SYSFS_CLASS_IEEE80211;
-            return vp->kind;
-        }
-        if (c[1].len < 4 || c[1].len > 6 || c[1].s[0] != 'p' || c[1].s[1] != 'h' ||
-            c[1].s[2] != 'y' || (c[1].len > 4 && c[1].s[3] == '0')) {
-            vp->kind = VNODE_ENOENT;
-            return vp->kind;
-        }
-        for (i = 3; i < c[1].len; ++i) {
-            if (c[1].s[i] < '0' || c[1].s[i] > '9') {
-                vp->kind = VNODE_ENOENT;
-                return vp->kind;
-            }
-            phy = phy * 10 + c[1].s[i] - '0';
-        }
-        return synth_classify_phy(c + 2, n - 2, phy, vp);
+    } else if (comp_eq(c[0], "ieee80211") && n == 1) {
+        vp->sysent = SYSFS_CLASS_IEEE80211;
+    } else if (comp_eq(c[0], "ieee80211") && phy_number(c[1]) >= 0) {
+        return synth_classify_phy(c + 2, n - 2, phy_number(c[1]), vp);
     } else if (comp_eq(c[0], "rfkill") && n == 1) {
         vp->sysent = SYSFS_CLASS_RFKILL;
     } else if (comp_eq(c[0], "rfkill") && rfkill_lookup(c[1].s, c[1].len) >= 0) {

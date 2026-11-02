@@ -13185,6 +13185,65 @@ static int synth_sys_cpu_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype
 }
 
 /**
+ * The `n`th entry of the radio directory `node` of /sys, whose radio or
+ * switch is `key`, as `synth_sys_dirent` gives it: /sys/class/ieee80211 a
+ * directory for each radio, a radio's its attributes and `device`, the
+ * device its `driver` link and the driver's directory, which is empty,
+ * /sys/class/rfkill a directory for each switch, and a switch's its
+ * attributes and a `device` link to its radio.
+ */
+static int synth_sys_radio_dirent(int node, int key, int n, char *name, uint64_t *ino,
+                                  uint8_t *dtype)
+{
+    int i;
+
+    if (node == SYSFS_CLASS_IEEE80211) {
+        struct wlan *wlan = net_ns_seen() ? wlan_at((unsigned)n) : 0;
+        if (!wlan)
+            return 0;
+        k_memcpy(name, "phy", 3);
+        k_itoa((int)wlan->radio->index, name + 3, 29, 10, 0);
+        *ino = sysfs_ino(SYSFS_WLAN_PHY, (int)wlan->radio->index, 0);
+        *dtype = DT_DIR;
+        return 1;
+    }
+    if (node == SYSFS_WLAN_PHY) {
+        for (i = 0; sysfs_attr(node, i); ++i) {
+            if (n == i)
+                return synth_entry(sysfs_attr(node, i), sysfs_ino(node, key, i + 1), DT_REG, name,
+                                   ino, dtype);
+        }
+        return synth_entry(n == i ? "device" : NULL, sysfs_ino(SYSFS_WLAN_DEVICE, key, 0), DT_DIR,
+                           name, ino, dtype);
+    }
+    if (node == SYSFS_WLAN_DEVICE) {
+        return synth_entry(n == 0   ? "driver"
+                           : n == 1 ? sysfs_wlan_driver(key)
+                                    : NULL,
+                           sysfs_ino(SYSFS_WLAN_DRIVER, key, 0), n ? DT_DIR : DT_LNK, name, ino,
+                           dtype);
+    }
+    if (node == SYSFS_CLASS_RFKILL) {
+        int index = rfkill_nth(n);
+        if (index < 0)
+            return 0;
+        k_memcpy(name, "rfkill", 6);
+        k_itoa(index, name + 6, 26, 10, 0);
+        *ino = sysfs_ino(SYSFS_RFKILL, index, 0);
+        *dtype = DT_DIR;
+        return 1;
+    }
+    if (node == SYSFS_RFKILL) {
+        if (sysfs_attr(node, n))
+            return synth_entry(sysfs_attr(node, n), sysfs_ino(node, key, 1 + n), DT_REG, name, ino,
+                               dtype);
+        return synth_entry(n == RFKILL_ATTRS && rfkill_phy(key) >= 0 ? "device" : NULL,
+                           sysfs_ino(SYSFS_WLAN_PHY, rfkill_phy(key), 2), DT_LNK, name, ino, dtype);
+    }
+    return 0;
+}
+
+/**
  * The `n`th entry of the /sys directory `node`, whose device is `key`: its
  * name, inode and type, and 1, or 0 past the last. The fixed directories
  * hold the next ones down, a bus's `devices` a link for each device, the
@@ -13231,53 +13290,11 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
                                dtype);
         }
     }
-    if (node == SYSFS_CLASS_IEEE80211) {
-        struct wlan *wlan = net_ns_seen() ? wlan_at((unsigned)n) : 0;
-        if (!wlan)
-            return 0;
-        k_memcpy(name, "phy", 3);
-        k_itoa((int)wlan->radio->index, name + 3, 29, 10, 0);
-        *ino = sysfs_ino(SYSFS_WLAN_PHY, (int)wlan->radio->index, 0);
-        *dtype = DT_DIR;
-        return 1;
-    }
-    if (node == SYSFS_WLAN_PHY) {
-        for (i = 0; sysfs_attr(node, i); ++i) {
-            if (n == i)
-                return synth_entry(sysfs_attr(node, i), sysfs_ino(node, key, i + 1), DT_REG, name,
-                                   ino, dtype);
-        }
-        return synth_entry(n == i ? "device" : NULL, sysfs_ino(SYSFS_WLAN_DEVICE, key, 0), DT_DIR,
-                           name, ino, dtype);
-    }
-    if (node == SYSFS_WLAN_DEVICE) {
-        return synth_entry(n == 0   ? "driver"
-                           : n == 1 ? sysfs_wlan_driver(key)
-                                    : NULL,
-                           sysfs_ino(SYSFS_WLAN_DRIVER, key, 0), n ? DT_DIR : DT_LNK, name, ino,
-                           dtype);
-    }
-    if (node == SYSFS_WLAN_DRIVER)
-        return 0;
     if (node == SYSFS_CLASS_NET || node == SYSFS_NET_IF || node == SYSFS_NET_STATS) {
         return synth_sys_net_dirent(node, key, n, name, ino, dtype);
     }
-    if (node == SYSFS_CLASS_RFKILL) {
-        int index = rfkill_nth(n);
-        if (index < 0)
-            return 0;
-        k_memcpy(name, "rfkill", 6);
-        k_itoa(index, name + 6, 26, 10, 0);
-        *ino = sysfs_ino(SYSFS_RFKILL, index, 0);
-        *dtype = DT_DIR;
-        return 1;
-    }
-    if (node == SYSFS_RFKILL) {
-        if (sysfs_attr(node, n))
-            return synth_entry(sysfs_attr(node, n), sysfs_ino(node, key, 1 + n), DT_REG, name, ino,
-                               dtype);
-        return synth_entry(n == RFKILL_ATTRS && rfkill_phy(key) >= 0 ? "device" : NULL,
-                           sysfs_ino(SYSFS_WLAN_PHY, rfkill_phy(key), 2), DT_LNK, name, ino, dtype);
+    if (SYSFS_IS_RADIO(node)) {
+        return synth_sys_radio_dirent(node, key, n, name, ino, dtype);
     }
     if (node == SYSFS_CLASS_BACKLIGHT) {
         return synth_entry(backlight_name(n), sysfs_ino(SYSFS_BACKLIGHT, n, 0), DT_DIR, name, ino,
