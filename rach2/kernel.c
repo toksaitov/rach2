@@ -71,6 +71,7 @@
 #include "sys/network/ip6/ip6.h"
 #include "sys/network/socket/netlink.h"
 #include "sys/network/wireless/wiphy.h"
+#include "sys/network/driver/ath9k/ath9k.h"
 #include "sys/lib/kint.h"
 #include "sys/lib/kstring.h"
 #include "sys/vdso.h"
@@ -307,6 +308,7 @@ static void timer_handler(isr_params_t *params)
 
     hda_tick();
     netdev_poll();
+    ath9k_poll();
     tcp_tick();
     ip_frag_tick();
     ip6_tick();
@@ -3537,8 +3539,9 @@ static void start_audio(void)
 
 /**
  * Start the network unless `rach2.nonet` is given: the wired card, the
- * network console with `rach2.netconsole`, and then the simulated radios,
- * logging what each start found.
+ * network console with `rach2.netconsole`, then the simulated radios and
+ * the ath9k card, which needs the wireless registry, logging what each start
+ * found.
  */
 static void start_network(void)
 {
@@ -3562,6 +3565,7 @@ static void start_network(void)
     if (radios > 0) {
         klog(KLOG_INFO, "wsim", "ready: %d radios", radios);
     }
+    (void)ath9k_probe();
 }
 
 /**
