@@ -1,6 +1,6 @@
 # Build and verification tools
 
-The programs and scripts under `tools/` prepare a machine to build Rach2 and check what the build makes. `setup/` checks a host for the tools the build and the suites need; `verify/` supplies the source checks whose prepared evidence the style cases verify; `inspect/` judges built kernels, programs and images; `image/` makes the ext2 roots, GRUB disks, sticks and ISOs; `etude/` is the native C collection runner, whose preparation and execution interfaces [its Readme](etude/Readme.md) describes; `ci/` is what the GitHub workflows run; `flow/` runs the worker and manager loops; `dev/` reaches the testing host and installed machines and builds the compilation database; `font/` makes the console's font; `audio/` makes the resampler's coefficients; and `git-hooks/` has the git hooks that check commit messages and the style of what is committed and pushed. The root Makefile runs most of them with the arguments they need, so a person seldom calls one directly. The suites, their runner and their checkers are under [`tests/system/`](../tests/system/Readme.md).
+The programs and scripts under `tools/` prepare a machine to build Rach2 and check what the build makes. `setup/` checks a host for the tools the build and the suites need; `verify/` supplies the source checks whose prepared evidence the style cases verify; `inspect/` judges built kernels, programs and images; `image/` makes the ext2 roots, GRUB disks, sticks and ISOs; `etude/` is the native C collection runner, whose preparation and execution interfaces [its Readme](etude/Readme.md) describes; `ci/` is what the GitHub workflows run; `flow/` runs the worker and manager loops; `dev/` reaches the testing host and installed machines and builds the compilation database; `font/` makes the console's font; `audio/` makes the resampler's coefficients and times the resampler; and `git-hooks/` has the git hooks that check commit messages and the style of what is committed and pushed. The root Makefile runs most of them with the arguments they need, so a person seldom calls one directly. The suites, their runner and their checkers are under [`tests/system/`](../tests/system/Readme.md).
 
 ## Use
 
@@ -337,12 +337,16 @@ A stick image is a hybrid ISO from `mkiso.sh`, padded to a 1 MiB boundary and fo
 
 [mkfont.sh](font/mkfont.sh) writes the console's font from GNU Unifont 18.0.01. It refuses any file but `unifont_all-18.0.01.hex.gz`, by its SHA-256, whose signature was checked with `gpgv` and the GNU keyring; [vendor/unifont/](../vendor/unifont/Readme.md) has the file and says where it comes from. The output is committed, since a build on Rach2 has no network to fetch the font from, and no build step runs the script. [rach2/sys/display/Readme.md](../rach2/sys/display/Readme.md) describes the tables it writes, and [console(4)](../man/man4/console.4) the characters the console shows.
 
-### The resampler's coefficients: `audio/`
+### The resampler: `audio/`
 
     cc -ansi -O2 -o build/tmp/mkresample tools/audio/mkresample.c -lm
     build/tmp/mkresample > rach2/sys/audio/resample_coef.h
 
 [mkresample.c](audio/mkresample.c) writes the coefficient table of the kernel's resampler, a Kaiser-windowed sinc designed by Kaiser's formulas as FreeBSD's `feeder_rate_mkfilter.awk` designs feeder_rate's: the passband to 0.90 of the lower rate's Nyquist frequency, 90 dB from 1.00 of it, 58 zero crossings each side and 256 entries between two, in Q30. The output is committed, since the kernel also builds on Rach2 from its own directory, and another system's libm may round a coefficient differently; no build step runs the program. [rach2/sys/audio/Readme.md](../rach2/sys/audio/Readme.md) describes the resampler that reads the table.
+
+    sh tools/audio/resamplebench.sh [i686] [x86_64]
+
+[resamplebench.c](audio/resamplebench.c) times the kernel's resampler per stereo frame at 96 to 48 kHz and at 44.1 to 48 kHz, beside FreeBSD's `feeder_rate` sinc loops, the polyphase one and the interpolating one, written again over the same table, window and gain. [resamplebench.sh](audio/resamplebench.sh) builds it with the i686 and x86-64 kernel compilers at no optimization and with the kernel's code generation flags, the small code model in place of the kernel's, as a freestanding program that reaches Linux by its system calls alone, under `build/tmp/resamplebench`, and runs each build on the host, which for i686 must run 32-bit programs. Each row is the fastest of five passes of two seconds of output, in nanoseconds a frame and milliseconds a second of sound, and the kernel's time as a multiple of the other row's.
 
 ### Working an installed machine from the host
 
