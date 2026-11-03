@@ -244,6 +244,13 @@ void udp_refused(uint16_t port, uint32_t ip, uint16_t peer)
     CHECK(0, "no UDP error");
 }
 
+/** No ICMP datagram socket holds an echo identifier in this model. */
+int raw_echo_id_used(uint16_t id)
+{
+    (void)id;
+    return 0;
+}
+
 /** The model needs no queue links. */
 void wait_queue_init(wait_queue_t *wq)
 {

@@ -12,7 +12,9 @@
  * has, is not told of it. A datagram of another protocol is not queued and
  * wakes nothing. A datagram past one frame, as a reassembled one is, is
  * queued whole too, and once the queue holds more than the socket's budget
- * the next is dropped and logged.
+ * the next is dropped and logged. An ICMP datagram socket takes only the
+ * echo replies that carry its identifier, without the IP header, and two
+ * such sockets hold different identifiers.
  */
 #include "network/socket/raw.c"
 
@@ -57,12 +59,70 @@ void klog(int level, const char *subsystem, const char *format, ...)
     logged++;
 }
 
+/* The identifiers icmp_echo_id hands out, one past the last. */
+static uint16_t next_id = 0x5243;
+
+/** A new echo identifier, as the kernel's allocator gives one: none of
+ * this model's sockets holds the next. */
+uint16_t icmp_echo_id(void)
+{
+    return next_id++;
+}
+
 /** Record the queue a receive wakes and the kinds of change it names; no
  * process waits in this model. */
 void wq_wake(wait_queue_t *wq, uint32_t kinds)
 {
     woken = wq;
     woken_kinds |= kinds;
+}
+
+/** Fill `d`, 28 bytes, as an IPv4 datagram from 10.0.0.2 holding an
+ * ICMP message of `type` with the echo identifier `id`. */
+static void echo_datagram(uint8_t *d, uint8_t type, uint16_t id)
+{
+    uint32_t i;
+
+    for (i = 0; i < 28; i++) {
+        d[i] = 0;
+    }
+    d[0] = 0x45;
+    d[9] = 1;
+    d[12] = 10;
+    d[15] = 2;
+    d[20] = type;
+    d[24] = (uint8_t)(id >> 8);
+    d[25] = (uint8_t)id;
+    d[27] = 7;
+}
+
+/** The rows of two ICMP datagram sockets. */
+static void echo_rows(void)
+{
+    static struct socket a, b;
+    static uint8_t d[28], copy[8];
+    int ida, idb;
+
+    a.rcvbuf = b.rcvbuf = SOCK_RCVBUF_MIN;
+    CHECK(raw_register(&a, 1, 1) == 0 && raw_register(&b, 1, 1) == 0,
+          "two ICMP datagram sockets register");
+    ida = raw_echo_id(&a);
+    idb = raw_echo_id(&b);
+    CHECK(ida >= 0 && idb >= 0 && ida != idb, "each holds an identifier of its own");
+    CHECK(raw_echo_id_used((uint16_t)ida) && raw_echo_id_used((uint16_t)idb),
+          "both identifiers are held");
+    echo_datagram(d, 0, (uint16_t)ida);
+    raw_rx(1, d, sizeof(d));
+    CHECK(a.rq.count == 1 && a.rq.head->len == 8 && b.rq.count == 0,
+          "an echo reply goes to the socket of its identifier alone");
+    CHECK(sock_dgq_peek(&a.rq, 0, copy, (int)sizeof(copy)) == 8 && copy[0] == 0 && copy[7] == 7,
+          "the reply is the ICMP message, without the IP header");
+    echo_datagram(d, 8, (uint16_t)idb);
+    raw_rx(1, d, sizeof(d));
+    CHECK(b.rq.count == 0, "an echo request with a socket's identifier is not its");
+    raw_unregister(&a);
+    raw_unregister(&b);
+    CHECK(!raw_echo_id_used((uint16_t)ida), "an identifier is free once its socket ends");
 }
 
 /** Run the rows; return 0 when every one passes and 1 otherwise. */
@@ -80,7 +140,7 @@ int main(void)
     for (i = 20; i < sizeof(datagram); i++) {
         datagram[i] = (uint8_t)(0xA0 + i);
     }
-    CHECK(raw_register(&sock, 1) == 0, "a socket registers for ICMP");
+    CHECK(raw_register(&sock, 1, 0) == 0, "a socket registers for ICMP");
     raw_rx(17, datagram, sizeof(datagram));
     CHECK(sock.rq.count == 0 && woken == NULL, "a datagram of another protocol wakes nothing");
     raw_rx(1, datagram, sizeof(datagram));
@@ -105,6 +165,7 @@ int main(void)
           "a datagram that finds the budget spent is dropped, and the drop logged");
     raw_unregister(&sock);
     CHECK(sock.rq.count == 0 && sock.rq.head == NULL, "unregistering frees what was queued");
+    echo_rows();
     printf("raw-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }

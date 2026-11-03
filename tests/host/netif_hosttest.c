@@ -139,12 +139,20 @@ struct socket *socket_alloc(int type)
 }
 
 /** Fail the row and return -ENOBUFS: no row makes a raw socket. */
-int raw_register(struct socket *s, uint8_t proto)
+int raw_register(struct socket *s, uint8_t proto, int echo)
 {
     (void)s;
     (void)proto;
+    (void)echo;
     CHECK(0, "no row registers a raw socket");
     return -ENOBUFS;
+}
+
+/** No row makes an ICMP datagram socket. */
+int raw_echo_id(struct socket *s)
+{
+    (void)s;
+    return -1;
 }
 
 /** No row makes an IPv6 raw socket, which alone has an IPv6 source. */
