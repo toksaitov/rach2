@@ -701,8 +701,8 @@ static void irq_dispatch(isr_params_t *params)
  * it is ended and counted on this processor's record and returns, and the
  * next tick that finds the lock free charges the ticks since
  * (`sched_account_tick`). Waiting for the lock would take from this
- * processor's user code all the time the holder keeps it, the mix's every
- * block of a sound converted in the device's interrupt among them.
+ * processor's user code all the time the holder keeps it, such as the sound
+ * mix's, which converts a channel's rate in the device's interrupt.
  */
 void _irq_router(isr_params_t *params)
 {
