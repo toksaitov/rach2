@@ -4,12 +4,12 @@
  *
  * A DHCP client learns the address after the machine is running and sets it
  * as on Linux, with `SIOCxIF*` on a socket and a `struct ifreq`. A change of
- * address also costs the ARP mappings, learned at the old address, and the
- * connections, which recorded it, so the probe holds a TCP connection open
- * across the change and requires it to be aborted with ENETRESET rather than
- * left sending from an address the machine no longer has. The address is put
- * back at the end and the gateway pinged, which shows that the machine works
- * after the change.
+ * address costs the ARP mappings, learned at the old address, and keeps the
+ * TCP connections, which recorded it, as Linux keeps them: the probe holds a
+ * connection open across the change, requires it to send nothing and report
+ * no error while the address is gone, and to resume when the address comes
+ * back. The address is put back at the end and the gateway pinged, which
+ * shows that the machine works after the change.
  *
  * On a machine booted with `rach2.ip=none` the probe configures the machine
  * instead, in the order `ifconfig` uses and a DHCP client runs: an address,
@@ -112,7 +112,7 @@ typedef unsigned char uint8_t;
 #define EPERM           1
 #define EINVAL          22
 #define ENODEV          19
-#define ENETRESET       102
+#define EAGAIN          11
 #define ESRCH           3
 #define EPROTONOSUPPORT 93
 #define EOPNOTSUPP      95
@@ -297,11 +297,12 @@ static const char *const unaddressed_rows[] = {
 static const char *const configured_rows[] = {"booted-address", "netmask",       "broadcast", "mtu",
                                               "flags",          "query-refusals"};
 static const char *const change_rows[] = {
-    "self-connection",   "set-needs-root",        "address-set",   "reset-once",
-    "listener-survives", "same-address-no-reset", "classful-mask", "reset-not-rearmed"};
-static const char *const down_rows[] = {"gateway-before-down", "down-flags", "down-no-ping",
-                                        "down-no-datagram",    "up-again",   "reset-nonblocking",
-                                        "up-datagram"};
+    "self-connection",   "set-needs-root",        "address-set",   "kept-across-change",
+    "listener-survives", "same-address-no-reset", "classful-mask", "kept-no-error"};
+static const char *const down_rows[] = {
+    "gateway-before-down", "held-resumes",     "down-flags",
+    "down-no-ping",        "down-no-datagram", "up-again",
+    "second-kept",         "up-datagram",      "second-resumes"};
 static const char *const route_rows[] = {
     "invalid-addresses",   "default-route",        "gateway-off-subnet",  "other-route",
     "gatewayless-default", "unknown-device-route", "own-subnet-route",    "default-removed",
@@ -1352,6 +1353,42 @@ static void native_queries(int fd)
     sys_exit(0);
 }
 
+/** The pending error of the socket `fd`, SO_ERROR, or fails the probe with
+ * `what` when it cannot be read. */
+static int so_error(int fd, const char *what)
+{
+    unsigned long args[6];
+    /* The kernel writes it through the pointer getsockopt is given. */
+    volatile int err;
+    uint32_t optlen;
+
+    args[0] = (uint32_t)fd;
+    args[1] = SOL_SOCKET;
+    args[2] = SO_ERROR;
+    args[3] = (unsigned long)&err;
+    optlen = sizeof(err);
+    args[4] = (unsigned long)&optlen;
+    err = -1;
+    if (socketcall(SC_GETSOCKOPT, args) != 0) {
+        fail(what);
+    }
+    return err;
+}
+
+/** Read one byte of the stream `fd` without blocking (MSG_DONTWAIT): what
+ * recv returns. */
+static int recv_now(int fd)
+{
+    unsigned long args[6];
+    char c;
+
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)&c;
+    args[2] = 1;
+    args[3] = 0x40; /* MSG_DONTWAIT */
+    return socketcall(SC_RECV, args);
+}
+
 /**
  * The interface ioctls on a machine with one card, in order; exits with
  * NETIFPROBE OK, or fails the probe.
@@ -1370,15 +1407,16 @@ static void native_queries(int fd)
  *
  * A TCP connection to the machine itself is open across the change of
  * address, so both its ends recorded the old one. A process that is not root
- * may not set the address (EPERM). After the change a write to one end and a
- * read of the other are ENETRESET, and not a bare -1, which the C library
- * reads as EPERM: each end has the reason once and its first reader takes
- * it, as SO_ERROR does on Linux, so SO_ERROR then reads 0. The
- * listener survives, since it answers whatever address the machine has, and
- * accepts a connection to the new address. The same address and mask set
- * again, as a DHCP client sets them at every renewal, reset nothing. An
- * address in another class takes that class's mask, and that later change
- * does not arm the old connection's reset again.
+ * may not set the address (EPERM). After the change the connection is kept,
+ * as on Linux: SO_ERROR reads 0, a write to one end is taken, and a
+ * nonblocking read of the other finds nothing (EAGAIN), since a segment from
+ * an address the machine no longer has is not sent. The listener survives,
+ * since it answers whatever address the machine has, and accepts a
+ * connection to the new address. The same address and mask set again, as a
+ * DHCP client sets them at every renewal, reset nothing. An address in
+ * another class takes that class's mask, and that later change leaves the
+ * held connection with no error. Once 10.0.2.15 is back, the byte written
+ * while it was gone arrives.
  *
  * Down is down in both directions: with the interface down SIOCGIFFLAGS
  * reports neither IFF_UP nor IFF_RUNNING, the gateway does not answer a
@@ -1388,7 +1426,8 @@ static void native_queries(int fd)
  * and the socket has nothing then. With the interface up again the datagram
  * the suite sends at "NETIFPROBE UP" arrives, which shows that the suite
  * sends one. The second connection, open across that change of address,
- * reads ENETRESET without blocking.
+ * reads nothing without blocking and has no error, and once 192.168.90.20
+ * is back the byte written to it while that address was gone arrives.
  *
  * Addresses in 0/8, in 240/4 and of multicast are EINVAL. A default route
  * sets the gateway, a gateway off the subnet is ENETUNREACH as on Linux, and
@@ -1412,10 +1451,7 @@ static void netif_main(void)
     unsigned long args[6];
     int fd, listener, client, conn, client2, conn2, pid, status;
     int inbound, r;
-    /* The kernel writes it through the pointer getsockopt is given. */
-    volatile int err;
     struct pollfd_probe pfd;
-    uint32_t optlen;
 
     /* The descriptor BusyBox's `udhcp_read_interface` makes its ioctls on. */
     args[0] = AF_INET;
@@ -1612,25 +1648,18 @@ static void netif_main(void)
     }
     report_held();
 
-    /* The connection is aborted, and each end reports ENETRESET once. */
-    if (sys_write(conn, ifr, 1) != -ENETRESET) {
-        fail("a write to the aborted connection did not report why it ended");
+    /* The connection is kept: no error, a write taken, and nothing sent. */
+    if (so_error(conn, "the connection's error did not read") != 0 ||
+        so_error(client, "the connection's error did not read") != 0) {
+        fail("the change of address put an error on the connection open across it");
     }
-    if (sys_read(client, ifr, 1) != -ENETRESET) {
-        fail("a read of the aborted connection did not report why it ended");
+    if (sys_write(conn, "x", 1) != 1) {
+        fail("a write to the connection open across the change was not taken");
     }
-    args[0] = (uint32_t)conn;
-    args[1] = SOL_SOCKET;
-    args[2] = SO_ERROR;
-    args[3] = (unsigned long)&err;
-    optlen = sizeof(err);
-    args[4] = (unsigned long)&optlen;
-    err = -1;
-    if (socketcall(SC_GETSOCKOPT, args) != 0) {
-        fail("the connection's error did not read");
-    }
-    if (err != 0) {
-        fail("the reason was reported twice, so nothing took it");
+    r = recv_now(client);
+    if (r != -EAGAIN) {
+        fail_n("a nonblocking read of the connection open across the change did not find nothing",
+               r);
     }
     report_held();
 
@@ -1669,17 +1698,7 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCSIFNETMASK, ifr) != 0) {
         fail("reapplying the same mask failed");
     }
-    args[0] = (uint32_t)conn2;
-    args[1] = SOL_SOCKET;
-    args[2] = SO_ERROR;
-    args[3] = (unsigned long)&err;
-    optlen = sizeof(err);
-    args[4] = (unsigned long)&optlen;
-    err = -1;
-    if (socketcall(SC_GETSOCKOPT, args) != 0) {
-        fail("the surviving connection's error did not read");
-    }
-    if (err != 0) {
+    if (so_error(conn2, "the surviving connection's error did not read") != 0) {
         fail("reapplying the same address reset a connection");
     }
     report_held();
@@ -1696,19 +1715,9 @@ static void netif_main(void)
     }
     report_held();
 
-    /* That change does not arm the old connection's reset again. */
-    args[0] = (uint32_t)conn;
-    args[1] = SOL_SOCKET;
-    args[2] = SO_ERROR;
-    args[3] = (unsigned long)&err;
-    optlen = sizeof(err);
-    args[4] = (unsigned long)&optlen;
-    err = -1;
-    if (socketcall(SC_GETSOCKOPT, args) != 0) {
-        fail("the closed connection's error did not read");
-    }
-    if (err != 0) {
-        fail("a later address change armed the same reset again");
+    /* That change leaves the held connection with no error either. */
+    if (so_error(conn, "the held connection's error did not read") != 0) {
+        fail("a later address change put an error on the held connection");
     }
     set_name("eth0");
     set_ifr_addr(OTHER_IP);
@@ -1753,6 +1762,17 @@ static void netif_main(void)
     }
     report_held();
 
+    /* With 10.0.2.15 back, the byte written while it was gone arrives. */
+    ifr[0] = 0;
+    r = sys_read(client, ifr, 1);
+    if (r != 1 || ifr[0] != 'x') {
+        fail_n("the held connection did not resume when its address came back", r);
+    }
+    if (so_error(conn, "the held connection's error did not read") != 0) {
+        fail("the held connection resumed with an error");
+    }
+    report_held();
+
     set_name("eth0");
     ifr[16] = 0;
     ifr[17] = 0;
@@ -1784,13 +1804,16 @@ static void netif_main(void)
     }
     report_held();
 
-    /* The second connection, open across this change, read without blocking. */
-    args[0] = (uint32_t)conn2;
-    args[1] = (unsigned long)ifr;
-    args[2] = 1;
-    args[3] = 0x40; /* MSG_DONTWAIT */
-    if (socketcall(SC_RECV, args) != -ENETRESET) {
-        fail("a nonblocking read of the aborted connection did not report why it ended");
+    /* The second connection, open across this change, is kept. */
+    if (so_error(conn2, "the second connection's error did not read") != 0) {
+        fail("the change back to 10.0.2.15 put an error on the second connection");
+    }
+    if (sys_write(client2, "y", 1) != 1) {
+        fail("a write to the second connection was not taken");
+    }
+    r = recv_now(conn2);
+    if (r != -EAGAIN) {
+        fail_n("a nonblocking read of the second connection did not find nothing", r);
     }
     report_held();
 
@@ -1817,6 +1840,14 @@ static void netif_main(void)
     if (sys_ioctl(fd, SIOCSIFNETMASK, ifr) != 0) {
         fail("the mask did not return after the down case");
     }
+
+    /* With 192.168.90.20 back, the byte written while it was gone arrives. */
+    ifr[0] = 0;
+    r = sys_read(conn2, ifr, 1);
+    if (r != 1 || ifr[0] != 'y') {
+        fail_n("the second connection did not resume when its address came back", r);
+    }
+    report_held();
 
     /* And the addresses no machine can have. */
     set_name("eth0");
