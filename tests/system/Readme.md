@@ -82,7 +82,7 @@ The programs under `runner/` are host programs that `suites.mk` builds.
 
 ### Checkers and fixtures
 
-`checkers/wavcheck.c` measures ordered square-wave scales in each channel, or, with `mix FILE FREQ FREQ`, projects consecutive tenth-second windows onto the two frequencies. Both must account for at least ten percent of each window's energy and exceed the silence threshold in at least two consecutive windows in each channel. The simultaneous-player case therefore requires two tones playing together; the loopback and sox_ng cases judge the scale captured through OSS.
+`checkers/wavcheck.c` measures ordered square-wave scales in each channel, or, with `mix FILE FREQ FREQ`, projects consecutive tenth-second windows onto the two frequencies, or, with `quiet FILE FREQ LIMIT`, requires the projection on FREQ to stay below an amplitude of LIMIT steps of 16 bits in every tenth-second window. Both must account for at least ten percent of each window's energy and exceed the silence threshold in at least two consecutive windows in each channel. The simultaneous-player case therefore requires two tones playing together; the loopback and sox_ng cases judge the scale captured through OSS.
 
 
 * `checkers/pcapcheck.c` reads a QEMU packet capture: `bcast` checks a broadcast datagram, a source address, an ARP reply or request, or the gateway a packet left through; `netconsole` checks the kernel's netconsole frames and the log in them; `rawwire` checks the hop limits and checksum of the raw-socket probe's sends.

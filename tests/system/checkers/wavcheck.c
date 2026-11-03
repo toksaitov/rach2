@@ -21,6 +21,11 @@
  * `wavcheck mix FILE FREQ FREQ` requires both tones together in every
  * channel, in at least two consecutive tenth-second windows.
  *
+ * `wavcheck quiet FILE FREQ LIMIT` requires the tone of FREQ to stay below
+ * an amplitude of LIMIT steps of 16 bits in every tenth-second window of
+ * every channel: a tone that a resampler should have removed, or the alias
+ * it would have folded to, is absent.
+ *
  * Exit 0 when every note sounds in its turn, 1 when one does not, another
  * tone sounds, or the recording is too short, and 2 when the file cannot be
  * read or the arguments are invalid.
@@ -403,6 +408,51 @@ static int judge_mix(const struct recording *r, unsigned ch, const double *freqs
     return most >= 2 ? 0 : 1;
 }
 
+/** The square root of `v`, at least 0, by Newton's method from above, which
+ * keeps the host's math library out. */
+static double root(double v)
+{
+    double x = v > 1 ? v : 1, last;
+
+    if (v <= 0)
+        return 0;
+    do {
+        last = x;
+        x = (x + v / x) / 2;
+    } while (x < last);
+    return last;
+}
+
+/** Require the tone of `freq` in channel `ch` of the recording `r` to stay
+ * below amplitude `limit` in every tenth-second window, of which there must
+ * be one. The amplitude is the window's projection on the tone's sine and
+ * cosine. */
+static int judge_quiet(const struct recording *r, unsigned ch, double freq, double limit)
+{
+    long at, i, n = (long)r->rate / 10;
+    double re, im, phase, q, value, power, most = 0, step = freq / r->rate;
+
+    if (n < 1 || freq >= r->rate / 2.0)
+        return 2;
+    for (at = 0; at + n <= r->frames; at += n) {
+        re = im = phase = 0;
+        for (i = 0; i < n; i++) {
+            value = r->samples[(at + i) * (long)r->channels + (long)ch];
+            re += value * tone_sine(phase);
+            q = phase + 0.25;
+            im += value * tone_sine(q >= 1 ? q - 1 : q);
+            phase += step;
+            if (phase >= 1)
+                phase -= 1;
+        }
+        power = 4 * (re * re + im * im) / ((double)n * n);
+        most = power > most ? power : most;
+    }
+    printf("wavcheck: %s: channel %u: %.0f hz at most %.3f steps, the limit %.3f\n",
+           most < limit * limit ? "ok" : "fail", ch + 1, freq, root(most), limit);
+    return most < limit * limit ? 0 : 1;
+}
+
 /**
  * Read the frequencies `argv[3]` on into `freqs`: those after a `/` into
  * the second list, the others into the first, counting each list's in
@@ -492,6 +542,29 @@ static int read_recording(const char *path, struct recording *r)
     return 0;
 }
 
+/** Run `wavcheck quiet` on the recording at `path`: every channel judged
+ * on its own by judge_quiet. */
+static int quiet(const char *path, double freq, double limit)
+{
+    struct recording r;
+    unsigned c;
+    int rc, one;
+
+    if (!(freq > 0.0) || !(limit > 0.0)) {
+        fprintf(stderr, "usage: wavcheck quiet FILE FREQ LIMIT\n");
+        return 2;
+    }
+    rc = read_recording(path, &r);
+    if (rc != 0)
+        return rc;
+    for (c = 0; c < r.channels; c++) {
+        one = judge_quiet(&r, c, freq, limit);
+        rc = one > rc ? one : rc;
+    }
+    free(r.samples);
+    return rc;
+}
+
 /**
  * Check the recording against the frequencies, as the file's comment says.
  * Each channel is judged on its own, never mixed with another, since mixing
@@ -505,8 +578,11 @@ int main(int argc, char **argv)
     unsigned c;
 
     mixed = argc > 1 && strcmp(argv[1], "mix") == 0;
+    if (argc == 5 && strcmp(argv[1], "quiet") == 0)
+        return quiet(argv[2], atof(argv[3]), atof(argv[4]));
     if (argc < 4 || (!mixed && strcmp(argv[1], "scale") != 0) || (mixed && argc != 5)) {
         fprintf(stderr, "usage: wavcheck scale|mix FILE FREQ [FREQ ...] [/ FREQ [FREQ ...]]\n");
+        fprintf(stderr, "       wavcheck quiet FILE FREQ LIMIT\n");
         return 2;
     }
     lists = parse_freqs(argc, argv, freqs, n_notes);
