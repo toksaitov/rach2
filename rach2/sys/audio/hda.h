@@ -114,6 +114,7 @@
 #define HDA_VERB_SET_GPIO_MASK  0x71600 /* Set GPIO Enable Mask */
 #define HDA_VERB_SET_GPIO_DIR   0x71700 /* Set GPIO Direction */
 #define HDA_VERB_SET_GPIO_DATA  0x71500 /* Set GPIO Data */
+#define HDA_VERB_SET_BEEP       0x70A00 /* Set Beep Generation: the divider */
 
 /*
  * Codec parameters (for GET_PARAM)
@@ -326,7 +327,8 @@ typedef struct {
  * `queue` the stream's counters as hda_read_queue last read them, `input`
  * the input path and stream, and `jacks` the headphone and microphone jacks.
  * primary_enabled and hp_enabled are the output pins as the last start or
- * jack change left them.
+ * jack change left them, and the `beep` fields the beep generator's
+ * (`hda_driver.beep`).
  */
 typedef struct {
     uint32_t vendor;
@@ -344,6 +346,10 @@ typedef struct {
     hda_queue_report_t queue;
     hda_input_report_t input;
     hda_jack_report_t jacks[HDA_JACKS];
+    uint8_t beep;         /* the beep widget, or 0 */
+    uint8_t beep_divider; /* the generator's divider as last sent; 0 silent */
+    uint8_t beep_path;    /* a beep turned the output pins on with no stream */
+    uint32_t beeps;       /* tones the generator began */
 } hda_report_t;
 
 /** Return cached enumeration and the last stream setup; sends no verbs. */

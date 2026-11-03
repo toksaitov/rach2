@@ -81,8 +81,10 @@ static void speaker_set_volume(int volume)
 
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
-   set_volume, get_volume, the seven stream operations, then the three
-   input controls; the speaker has no volume, no streams and no input. */
+   set_volume, get_volume, the seven stream operations, the three input
+   controls, then the two of the beep generator; the speaker has no
+   volume, no streams, no input and no generator of its own, since
+   speaker_tone drives it. */
 audio_driver_t speaker_driver = {"PC Speaker",
                                  AUDIO_DRIVER_SPEAKER,
                                  speaker_init,
@@ -103,13 +105,17 @@ audio_driver_t speaker_driver = {"PC Speaker",
                                  NULL,
                                  NULL,
                                  NULL,
+                                 NULL,
+                                 NULL,
                                  NULL};
 
-/** Make `d` the device's driver, which programs reach directly. */
+/** Make `d` the device's driver, which programs reach directly, and give
+ * the speaker its beep generator when its device has one. */
 static void audio_choose(audio_driver_t *d)
 {
     audio_hw = d;
     audio = d;
+    speaker_set_beep(d && d->beep && d->beep_level && d->beep_level(-1) >= 0 ? d->beep : NULL);
     vchan_set_loopback(kcmdline_has("rach2.audio.loopback"));
     vchan_dispatch();
 }

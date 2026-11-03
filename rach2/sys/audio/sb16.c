@@ -857,7 +857,8 @@ static uint32_t sb16_stream_delay(audio_stream_t *s)
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
    set_volume, get_volume, the seven stream operations, then the three
-   input controls, which this driver lacks. */
+   input controls and the two of the beep generator, which this driver
+   lacks. */
 audio_driver_t sb16_driver = {"Sound Blaster 16",
                               AUDIO_DRIVER_SB16,
                               sb16_init,
@@ -876,6 +877,8 @@ audio_driver_t sb16_driver = {"Sound Blaster 16",
                               sb16_stream_close,
                               sb16_stream_position,
                               sb16_stream_delay,
+                              NULL,
+                              NULL,
                               NULL,
                               NULL,
                               NULL};

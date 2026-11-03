@@ -3504,6 +3504,9 @@ static int procfs_gen_console(struct procfs_text *t)
     ap_counter(t, "speaker-cuts", sp.cuts);
     ap_counter(t, "speaker-divisor", sp.divisor);
     ap_counter(t, "speaker-ms", sp.ms);
+    ap_counter(t, "speaker-beeps", sp.beeps);
+    ap_counter(t, "speaker-beep-divider", sp.beep_divider);
+    ap_counter(t, "speaker-beep-retries", sp.beep_retries);
     return t->len;
 }
 

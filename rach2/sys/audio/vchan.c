@@ -1245,7 +1245,8 @@ static void vchan_shutdown(void)
         audio_hw->shutdown();
 }
 
-/* Hardware identity is filled by vchan_dispatch at boot. */
+/* Hardware identity, and the beep generator, which needs no mix, are
+ * filled by vchan_dispatch at boot. */
 audio_driver_t vchan_driver = {"Virtual channels",
                                AUDIO_DRIVER_NONE,
                                NULL,
@@ -1266,15 +1267,20 @@ audio_driver_t vchan_driver = {"Virtual channels",
                                vchan_dispatch_delay,
                                vchan_input_caps,
                                vchan_input_select,
-                               vchan_input_level};
+                               vchan_input_level,
+                               NULL,
+                               NULL};
 
-/** Install the mix over hardware that has streams; the speaker stays
- * directly accessible, since it cannot play PCM samples. */
+/** Install the mix over hardware that has streams, passing the beep
+ * generator's operations through; the speaker stays directly accessible,
+ * since it cannot play PCM samples. */
 void vchan_dispatch(void)
 {
     if (!audio_hw || !audio_hw->stream_open)
         return;
     vchan_driver.name = audio_hw->name;
     vchan_driver.type = audio_hw->type;
+    vchan_driver.beep = audio_hw->beep;
+    vchan_driver.beep_level = audio_hw->beep_level;
     audio_set_dispatch(&vchan_driver);
 }

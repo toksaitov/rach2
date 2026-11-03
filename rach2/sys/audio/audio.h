@@ -214,6 +214,23 @@ typedef struct audio_driver {
      * level the control has after, in percent of its steps, or -EINVAL for
      * a source or control the device lacks. */
     int (*input_level)(int ctl, int source, int level);
+
+    /*
+     * The beep generator, a square wave the device makes by itself, which
+     * the console's speaker requests reach (speaker.h): both, or both NULL
+     * in a driver that has none. A driver whose device turns out to lack
+     * one returns -ENODEV from each.
+     */
+
+    /* Sound `hz` until the next call, or stop with 0. With `tick` set the
+     * caller is the timer tick, with interrupts off: it only stops, and a
+     * busy device gives -EBUSY rather than a wait. The divider the
+     * generator was given, 0 for silence, or a negative errno. */
+    int (*beep)(uint32_t hz, int tick);
+
+    /* Set the generator's level, 0 to 100, where 0 silences it; with
+     * `level` negative only read it. The level after, or -ENODEV. */
+    int (*beep_level)(int level);
 } audio_driver_t;
 
 /*

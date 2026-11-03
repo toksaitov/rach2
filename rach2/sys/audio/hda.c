@@ -1602,6 +1602,8 @@ static void hda_service_capture(void);
 static void hda_capture_stop(audio_stream_t *s);
 static bool hda_input_ready(void);
 static void hda_find_jacks(void);
+static void hda_find_beep(void);
+static void hda_beep_tick(void);
 
 /* The PCI subsystem, vendor in the high half, which names a machine's
  * quirks; hda_init reads it. */
@@ -2164,6 +2166,7 @@ static bool hda_find_output(void)
     hda_capture_report();
     hda_find_input();
     hda_find_jacks();
+    hda_find_beep();
     hda_report.ready = true;
     return true;
 }
@@ -3114,6 +3117,26 @@ static bool mic_program = false;    /* capture moved while its stream runs, and 
 static uint8_t mic_left = 0;        /* the pin capture moved from, whose input the
                                        route's programming turns off */
 
+/*
+ * The beep generator (hda_beep), found at enumeration. With no stream
+ * playing the output pins are off, so a beep turns them on as a start does,
+ * and the tick turns them off again once the generator has been silent for
+ * HDA_BEEP_IDLE_TICKS, so that a run of bells does not switch the pins
+ * between bells. The pins and beep_opened change only with the jacks held
+ * or under jack_lock.
+ */
+#define HDA_BEEP_IDLE_TICKS (TICK_HZ > 0 ? TICK_HZ : 1) /* one second */
+
+static uint8_t beep_nid = 0;              /* the beep widget, or 0 */
+static uint8_t beep_word = 0;             /* its output amplifier's step and
+                                             mute bit, for beep_level */
+static int beep_level = 0;                /* the mixer's level, 0 to 100; 0
+                                             leaves the generator silent */
+static volatile uint8_t beep_div = 0;     /* the divider sounding; 0 silent */
+static volatile bool beep_opened = false; /* a beep turned the output pins on
+                                             with no stream playing */
+static uint32_t beep_quiet = 0;           /* ticks silent since, while opened */
+
 static bool hda_input_program(int vmode, bool live);
 static uint8_t hda_source_route(int source, bool take);
 
@@ -3336,7 +3359,8 @@ static void hda_poll_jacks(void)
         for (j = 0; j < HDA_JACKS; j++)
             if (hda_report.jacks[j].pin)
                 hda_jack_reading(j, hda_jack_sense(j));
-        if (playing && hda_output_mode == HDA_OUTMODE_AUTO && hda_report.jacks[HDA_JACK_HP].pin &&
+        if ((playing || beep_opened) && hda_output_mode == HDA_OUTMODE_AUTO &&
+            hda_report.jacks[HDA_JACK_HP].pin &&
             route_hp != (hda_report.jacks[HDA_JACK_HP].state == HDA_JACK_IN))
             hda_route_output(HDA_VERB_TRY);
         hda_follow_mic(HDA_VERB_TRY);
@@ -3752,13 +3776,20 @@ static void hda_halt(void)
     /* 0xB080: output amp, mute bit set. */
     hda_send_verb(codec_addr, dac_nid, HDA_VERB_SET_AMP_GAIN | 0xB080);
     hda_jack_hold();
-    if (pin_nid)
-        hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00);
-    if (hp_pin_nid && hp_pin_nid != pin_nid)
-        hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00);
-    hda_set_eapd(false);
-    hda_report.primary_enabled = hda_report.hp_enabled = 0;
-    route_hp = -1;
+    if (beep_div) {
+        /* A beep sounds through the pins; the tick turns them off after. */
+        beep_opened = true;
+        beep_quiet = 0;
+        hda_report.beep_path = 1;
+    } else {
+        if (pin_nid)
+            hda_send_verb(codec_addr, pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00);
+        if (hp_pin_nid && hp_pin_nid != pin_nid)
+            hda_send_verb(codec_addr, hp_pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00);
+        hda_set_eapd(false);
+        hda_report.primary_enabled = hda_report.hp_enabled = 0;
+        route_hp = -1;
+    }
     hda_jack_release();
 
     hda_report.playing = false;
@@ -3854,6 +3885,7 @@ void hda_tick(void)
     hda_service_stream();
     hda_service_capture();
     hda_poll_jacks();
+    hda_beep_tick();
 }
 
 /** Whether playback is running. */
@@ -4780,6 +4812,189 @@ static int hda_input_level(int ctl, int source, int level)
 }
 
 /*
+ * The beep generator: the codec's beep widget, which sounds a square wave of
+ * 48000 / (4 x divider) Hz for a divider of 1 to 255 sent with Set Beep
+ * Generation, and stops at 0. Linux's hda_beep.c drives it the same way for
+ * the console's tones. On the Lenovo G50-70's Conexant codec it is node 18,
+ * which no widget lists as a connection: the codec mixes it into the output
+ * pins itself, so the pin playing has to be on.
+ */
+
+/**
+ * Find the beep widget, the first of type 7, and set it up as Linux's
+ * generic parser does: power it where it has power states, set its output
+ * amplifier to its 0 dB step, the amplifier's offset, and unmute the input
+ * from it of every mixer that lists it, at that input's 0 dB step. The
+ * generator starts silent. Nothing is sent on a codec that has none.
+ */
+static void hda_find_beep(void)
+{
+    const hda_widget_report_t *b = NULL;
+    int i, j;
+
+    beep_nid = 0;
+    beep_div = 0;
+    beep_opened = false;
+    beep_quiet = 0;
+    hda_report.beep = hda_report.beep_divider = hda_report.beep_path = 0;
+    hda_report.beeps = 0;
+    for (i = 0; i < hda_report.widget_count && !b; i++)
+        if (hda_report.widgets[i].type == HDA_WIDGET_BEEP)
+            b = &hda_report.widgets[i];
+    if (!b)
+        return;
+    beep_nid = hda_report.beep = b->nid;
+    if (b->caps & (1u << 10)) /* Power Control */
+        hda_send_verb(codec_addr, beep_nid, HDA_VERB_SET_POWER | 0x00);
+    beep_level = 100;
+    if (b->caps & (1u << 2)) { /* Out Amp Present */
+        beep_word = hda_clamp_gain((uint8_t)(b->amp_out & 0x7F), hda_amp_steps(b->amp_out));
+        beep_level = hda_word_level(b->amp_out, beep_word);
+        if (beep_level == 0)
+            beep_level = 1;
+        hda_send_verb(codec_addr, beep_nid, HDA_VERB_SET_AMP_GAIN | 0xB000 | beep_word);
+    }
+    for (i = 0; i < hda_report.widget_count; i++) {
+        const hda_widget_report_t *m = &hda_report.widgets[i];
+
+        if (m->type != HDA_WIDGET_AUDIO_MIX || !(m->caps & (1u << 1))) /* In Amp Present */
+            continue;
+        /* Amplifier input indices are four bits. */
+        for (j = 0; j < m->conn_count && j < 16; j++)
+            if (m->conns[j] == beep_nid)
+                hda_send_verb(
+                    codec_addr, m->nid,
+                    HDA_VERB_SET_AMP_GAIN | 0x7000 | ((uint32_t)j << 8) |
+                        hda_clamp_gain((uint8_t)(m->amp_in & 0x7F), hda_amp_steps(m->amp_in)));
+    }
+    hda_send_verb(codec_addr, beep_nid, HDA_VERB_SET_BEEP | 0);
+}
+
+/**
+ * Sound `hz` on the beep generator until the next call, or stop it with 0,
+ * as audio.h's `beep` says. The divider is Linux's, 12000 / `hz` held
+ * between 1 and 255, so that 750 Hz is 16; a level of 0 sends 0. With no
+ * stream playing, a tone first turns the output pins on for the output mode
+ * and EAPD, as a start does (hda_route_output), and hda_beep_tick turns them
+ * off a second after the generator stops. A stop from the tick sends only
+ * the stop, in a try. The divider sent, or -ENODEV, or -EBUSY from the tick.
+ */
+static int hda_beep(uint32_t hz, int tick)
+{
+    uint32_t div = 0;
+
+    if (!beep_nid)
+        return -ENODEV;
+    if (hz && beep_level && !tick) {
+        div = 12000u / hz;
+        if (div > 255)
+            div = 255;
+        if (div < 1)
+            div = 1;
+    }
+    if (tick) {
+        if (hda_verb(codec_addr, beep_nid, HDA_VERB_SET_BEEP | 0, HDA_VERB_TRY, NULL) != 0)
+            return -EBUSY;
+        beep_div = 0;
+        hda_report.beep_divider = 0;
+        return 0;
+    }
+    hda_jack_hold();
+    if (div && !playing && !beep_opened) {
+        hda_route_output(HDA_VERB_WAIT);
+        hda_set_eapd(true);
+        beep_opened = true;
+        hda_report.beep_path = 1;
+    }
+    beep_quiet = 0;
+    hda_send_verb(codec_addr, beep_nid, HDA_VERB_SET_BEEP | div);
+    beep_div = (uint8_t)div;
+    hda_report.beep_divider = (uint8_t)div;
+    if (div)
+        hda_report.beeps++;
+    hda_jack_release();
+    return (int)div;
+}
+
+/**
+ * From the tick: once a stream plays, leave the pins a beep turned on to it;
+ * with none, turn them and EAPD off when the generator has been silent for
+ * HDA_BEEP_IDLE_TICKS, in tries, and try again at the next tick when a verb
+ * fails or code outside the tick holds the jacks.
+ */
+static void hda_beep_tick(void)
+{
+    uint32_t flags;
+    bool ok = true;
+    int i;
+
+    if (!beep_opened || beep_div)
+        return;
+    if (playing) {
+        beep_opened = false;
+        hda_report.beep_path = 0;
+        return;
+    }
+    if (++beep_quiet < HDA_BEEP_IDLE_TICKS)
+        return;
+    flags = kirq_save();
+    if (!spin_trylock(&jack_lock)) {
+        kirq_restore(flags);
+        return;
+    }
+    if (jack_holds == 0 && beep_opened && !beep_div && !playing) {
+        if (pin_nid)
+            hda_put(pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00, HDA_VERB_TRY, &ok);
+        if (hp_pin_nid && hp_pin_nid != pin_nid)
+            hda_put(hp_pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00, HDA_VERB_TRY, &ok);
+        for (i = 0; i < hda_report.widget_count; i++) {
+            const hda_widget_report_t *w = &hda_report.widgets[i];
+
+            if (w->type == HDA_WIDGET_PIN && (w->pin_caps & 0x10000)) /* EAPD capable */
+                hda_put(w->nid, HDA_VERB_SET_EAPD | 0x00, HDA_VERB_TRY, &ok);
+        }
+        if (ok) {
+            beep_opened = false;
+            hda_report.beep_path = 0;
+            hda_report.primary_enabled = hda_report.hp_enabled = 0;
+            route_hp = -1;
+        }
+    }
+    spin_unlock(&jack_lock);
+    kirq_restore(flags);
+}
+
+/**
+ * Set or read the beep generator's level, as audio.h's `beep_level` says:
+ * the output amplifier's step nearest `level`, muted at 0 where it can
+ * mute. A level other than 0 reads as its step's, and at least 1, since
+ * only 0 leaves the generator silent; without an amplifier any other level
+ * is full. Each tone takes the level when it begins.
+ */
+static int hda_beep_level(int level)
+{
+    const hda_widget_report_t *b = hda_widget(beep_nid);
+
+    if (!beep_nid || !b)
+        return -ENODEV;
+    if (level < 0)
+        return beep_level;
+    if (level > 100)
+        level = 100;
+    beep_level = level;
+    if (b->caps & (1u << 2)) { /* Out Amp Present */
+        beep_word = hda_level_word(b->amp_out, level);
+        hda_send_verb(codec_addr, beep_nid, HDA_VERB_SET_AMP_GAIN | 0xB000 | beep_word);
+        if (level) {
+            beep_level = hda_word_level(b->amp_out, beep_word);
+            if (beep_level == 0)
+                beep_level = 1;
+        }
+    }
+    return beep_level;
+}
+
+/*
  * The stream operations: capture is the input stream, and playback the
  * output stream, which a stream has from hda_play_open to hda_play_close.
  */
@@ -4841,11 +5056,11 @@ static uint32_t hda_stream_delay(audio_stream_t *s)
 
 /* The audio_driver_t fields, in the order audio.h declares them: name,
    type, init, shutdown, start, stop, is_playing, set_callback, write,
-   set_volume, get_volume, the seven stream operations, then the three
-   input controls. */
+   set_volume, get_volume, the seven stream operations, the three input
+   controls, then the two of the beep generator. */
 audio_driver_t hda_driver = {"Intel HD Audio",  AUDIO_DRIVER_HDA, hda_init,        hda_shutdown,
                              hda_start,         hda_stop,         hda_is_playing,  hda_set_callback,
                              hda_write,         hda_set_volume,   hda_get_volume,  hda_stream_open,
                              hda_stream_setup,  hda_stream_start, hda_stream_stop, hda_stream_close,
                              hda_stream_frames, hda_stream_delay, hda_input_caps,  hda_input_select,
-                             hda_input_level};
+                             hda_input_level,   hda_beep,         hda_beep_level};

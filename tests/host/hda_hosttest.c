@@ -1,14 +1,17 @@
 /**
  * HDA enumeration and stream programming against a model codec and MMIO,
  * the mix (vchan.c) played through the driver's stream at 24 bits on a codec
- * that has them and at 16 on one that has not, and the driver's report as
- * /proc/audio's text (audio_proc.c) gives it.
+ * that has them and at 16 on one that has not, the driver's report as
+ * /proc/audio's text (audio_proc.c) gives it, and the console's tones
+ * through the PC speaker (arch/x86/speaker.c) and the codec's beep
+ * generator.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
 #include "audio/hda.c"
 #include "audio/audio_proc.c"
 #include "audio/vchan.c"
+#include "arch/x86/speaker.c"
 
 extern int printf(const char *format, ...);
 extern char *strstr(const char *text, const char *needle);
@@ -36,6 +39,16 @@ static uint16_t in_amp[128][16][2];
 static uint8_t pin_ctl[128];
 static uint8_t channel[128];
 static uint16_t eapd[128]; /* each pin's EAPD/BTL payload, with 0x100 once set */
+/* Each node's Set Beep Generation and Set Power State payloads, with 0x100
+ * once set, and the beep verbs sent. */
+static uint16_t beep_ctl[128], power[128];
+static unsigned beep_verbs;
+/* The PC speaker's ports: port 0x61, and the PIT channel 2's count with the
+ * bytes written to it. */
+static uint8_t port61;
+static uint16_t pit_count;
+static unsigned pit_bytes;
+volatile uint64_t kernel_ticks;
 static unsigned conn_reads, verbs, bad_offsets, sense_triggers;
 static int codec_silent; /* the codec takes commands and never answers */
 /* The command the codec refuses, ending it with no response, when its node
@@ -130,6 +143,12 @@ static uint32_t model_verb(uint32_t command)
         channel[nid] = (uint8_t)offset;
     if ((verb & 0xFFF00) == HDA_VERB_SET_EAPD)
         eapd[nid] = (uint16_t)(0x100 | offset);
+    if ((verb & 0xFFF00) == HDA_VERB_SET_BEEP) {
+        beep_ctl[nid] = (uint16_t)(0x100 | offset);
+        beep_verbs++;
+    }
+    if ((verb & 0xFFF00) == HDA_VERB_SET_POWER)
+        power[nid] = (uint16_t)(0x100 | offset);
     if (verb == 0xA0000)
         return converter_format[nid];
     return 0;
@@ -204,6 +223,9 @@ static void reset_model(void)
     k_memset(pin_ctl, 0, sizeof(pin_ctl));
     k_memset(channel, 0, sizeof(channel));
     k_memset(eapd, 0, sizeof(eapd));
+    k_memset(beep_ctl, 0, sizeof(beep_ctl));
+    k_memset(power, 0, sizeof(power));
+    beep_verbs = 0;
     conn_reads = verbs = bad_offsets = sense_triggers = 0;
     log_count = 0;
     run_at = ~0u;
@@ -1192,6 +1214,7 @@ static void model_lenovo(void)
         params[i][0x0B] = 1;
     }
     params[18][HDA_PARAM_AUDIO_CAPS] = 0x0070000C;
+    params[18][HDA_PARAM_OUTPUT_AMP] = 0x000F0707;
     for (i = 19; i <= 20; i++) {
         params[i][HDA_PARAM_AUDIO_CAPS] = 0x00100D1B;
         params[i][HDA_PARAM_INPUT_AMP] = 0x8003504A;
@@ -1978,6 +2001,131 @@ static void row_input_controls(void)
 }
 
 /** Run codec and controller rows: 0 when every check passes, 1 otherwise. */
+/** Run `n` ticks of the boot processor: the clock, then the speaker's and
+ * HDA's work, as the kernel's tick does. */
+static void beep_ticks(unsigned n)
+{
+    unsigned i;
+
+    for (i = 0; i < n; i++) {
+        kernel_ticks++;
+        speaker_tick();
+        hda_tick();
+    }
+}
+
+/**
+ * The G50-70's beep widget 18 has no power control and no connection, and
+ * an output amplifier of 7 steps whose 0 dB step is the last: enumeration
+ * sets it there and leaves the generator silent. KDMKTONE's 750 Hz for
+ * 100 ms sounds the PIT and sends Set Beep Generation 16, 12000 / 750,
+ * with the speaker's pin turned on, since nothing plays; the tick that ends
+ * the tone sends 0, a busy interface delays that by a tick, and a second of
+ * silence turns the pin off again. KIOCSOUND 0 stops a sound, a level of 0
+ * sends 0, and a stop of playback during a tone leaves the pin on until the
+ * tone ends. A widget with power control is powered, a mixer that lists the
+ * widget has that input unmuted at 0 dB, and a codec without one leaves the
+ * PIT alone to sound.
+ */
+static void row_beep(void)
+{
+    const hda_report_t *r = hda_get_report();
+    struct speaker_counters c;
+    unsigned before;
+    int i;
+
+    row = "beep";
+    reset_model();
+    model_lenovo();
+    check(hda_find_output(), "enumeration succeeds");
+    dma_checked = true;
+    check(r->beep == 18 && out_amp[18] == 0xB007 && beep_ctl[18] == 0x100 && power[18] == 0,
+          "the beep widget is set at 0 dB and silent, with no power state of its own");
+    check(power[1] == 0x100, "the function group is powered");
+    check(hda_driver.beep_level(-1) == 100, "the beep level starts at the 0 dB step, 100");
+    speaker_set_beep(hda_driver.beep_level(-1) >= 0 ? hda_driver.beep : NULL);
+    kernel_ticks = 1000;
+    port61 = 0;
+    speaker_tone(SPEAKER_CLOCK / 750, 100);
+    speaker_get_counters(&c);
+    check(beep_ctl[18] == (0x100 | 16) && pit_count == SPEAKER_CLOCK / 750 && (port61 & 3) == 3,
+          "a tone of 750 Hz sends divider 16 and sounds the PIT");
+    check(pin_ctl[23] == 0x40 && r->primary_enabled && r->beep_path,
+          "with nothing playing the speaker's pin is turned on");
+    check(c.beeps == 1 && c.beep_divider == 16 && r->beeps == 1, "the counters name the beep");
+    beep_ticks(99);
+    check(beep_ctl[18] == (0x100 | 16) && (port61 & 3) == 3, "the tone sounds for 99 ticks");
+    mmio[HDA_ICS] = HDA_ICS_ICB;
+    beep_ticks(1);
+    speaker_get_counters(&c);
+    check((port61 & 3) == 0 && beep_ctl[18] == (0x100 | 16) && c.beep_retries == 1,
+          "the tick ending the tone finds the interface busy and silences the PIT");
+    mmio[HDA_ICS] = 0;
+    beep_ticks(1);
+    speaker_get_counters(&c);
+    check(beep_ctl[18] == 0x100 && c.ends == 1 && c.beep_divider == 0,
+          "the next tick sends the stop");
+    beep_ticks(HDA_BEEP_IDLE_TICKS - 2);
+    check(pin_ctl[23] == 0x40, "the pin stays on through a short silence");
+    beep_ticks(2);
+    check(pin_ctl[23] == 0 && !r->primary_enabled && !r->beep_path,
+          "a second of silence turns it off");
+
+    speaker_tone(SPEAKER_CLOCK / 750, 0);
+    check(beep_ctl[18] == (0x100 | 16), "KIOCSOUND sounds the beep");
+    beep_ticks(3);
+    check(beep_ctl[18] == (0x100 | 16), "and no tick ends it");
+    speaker_tone(0, 0);
+    check(beep_ctl[18] == 0x100 && (port61 & 3) == 0, "KIOCSOUND 0 stops it");
+
+    check(hda_driver.beep_level(50) == 57 && out_amp[18] == 0xB004,
+          "a level of 50 sets step 4 of 7, which reads 57");
+    check(hda_driver.beep_level(0) == 0, "a level of 0 reads 0");
+    before = r->beeps;
+    speaker_tone(SPEAKER_CLOCK / 750, 100);
+    check(beep_ctl[18] == 0x100 && r->beeps == before && (port61 & 3) == 3,
+          "at level 0 a tone sends 0 to the generator and sounds the PIT");
+    speaker_tone(0, 0);
+    hda_driver.beep_level(100);
+    beep_ticks(HDA_BEEP_IDLE_TICKS);
+
+    clock_stopped = 1;
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0 && pin_ctl[23] == 0x40, "playback starts");
+    speaker_tone(SPEAKER_CLOCK / 1000, 100);
+    check(beep_ctl[18] == (0x100 | 12), "a tone of 1000 Hz during playback sends divider 12");
+    hda_stop();
+    check(pin_ctl[23] == 0x40 && r->beep_path, "a stop during the tone leaves the pin on");
+    beep_ticks(100);
+    check(beep_ctl[18] == 0x100 && pin_ctl[23] == 0x40, "the tick ends the tone");
+    beep_ticks(HDA_BEEP_IDLE_TICKS);
+    check(pin_ctl[23] == 0 && !r->beep_path, "and the pin goes off a second after");
+    clock_stopped = 0;
+
+    reset_model();
+    model_lenovo();
+    params[18][HDA_PARAM_AUDIO_CAPS] |= 1u << 10; /* Power Control */
+    params[21][HDA_PARAM_CONN_LIST] = 3;
+    connections[21][2] = 18;
+    check(hda_find_output(), "enumeration succeeds with a powered beep");
+    check(power[18] == 0x100 && in_amp[21][2][0] == (0x100 | 0x4A) &&
+              in_amp[21][2][1] == (0x100 | 0x4A),
+          "the widget is powered and the mixer's input from it unmuted at 0 dB");
+
+    reset_model();
+    check(hda_find_output(), "enumeration succeeds without a beep widget");
+    check(r->beep == 0 && hda_driver.beep_level(-1) == -ENODEV &&
+              hda_driver.beep(750, 0) == -ENODEV,
+          "a codec without a beep widget has no generator");
+    speaker_set_beep(hda_driver.beep_level(-1) >= 0 ? hda_driver.beep : NULL);
+    before = verbs;
+    speaker_tone(SPEAKER_CLOCK / 750, 100);
+    check(verbs == before && pit_count == SPEAKER_CLOCK / 750 && (port61 & 3) == 3,
+          "a tone sounds the PIT alone");
+    for (i = 0; i < 100; i++)
+        beep_ticks(1);
+    check((port61 & 3) == 0 && verbs == before, "and the tick ends it without a verb");
+}
+
 int main(void)
 {
     row_rates();
@@ -2010,6 +2158,7 @@ int main(void)
     row_jack_reads();
     row_jack_stop();
     row_jack_capture();
+    row_beep();
     printf("hda-test: result: %s\n", failures ? "fail" : "pass");
     return failures ? 1 : 0;
 }
@@ -2057,7 +2206,6 @@ int spin_trylock(struct spinlock *lock)
     lock->locked = 1;
     return 1;
 }
-/** Give `lock` back. */
 /** Turn interrupts off and take `lock`: the interrupt state before. */
 uint32_t spin_lock_irqsave(struct spinlock *lock)
 {
@@ -2074,9 +2222,25 @@ void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
     kirq_restore(flags);
 }
 
+/** Give `lock` back. */
 void spin_unlock(struct spinlock *lock)
 {
     lock->locked = 0;
+}
+/** Model the speaker's ports: 0x61, and channel 2's count, low byte first. */
+void outb(uint16_t port, uint8_t val)
+{
+    if (port == 0x61)
+        port61 = val;
+    if (port == 0x43)
+        pit_bytes = 0;
+    if (port == 0x42)
+        pit_count = pit_bytes++ == 0 ? val : (uint16_t)(pit_count | (uint16_t)val << 8);
+}
+/** Read port 0x61 of the model. */
+uint8_t inb(uint16_t port)
+{
+    return port == 0x61 ? port61 : 0;
 }
 /** No console is attached to the model. */
 void console_putc(char c)

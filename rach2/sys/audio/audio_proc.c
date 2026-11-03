@@ -264,6 +264,13 @@ int audio_proc_text(char *buf, int cap)
     put_str(t, modes[snap_mode & 3]);
     put_ch(t, '\n');
     put_jacks(t, r);
+    if (r->beep) {
+        put_field(t, "beep widget ", r->beep);
+        put_field(t, " divider ", r->beep_divider);
+        put_field(t, " path ", r->beep_path);
+        put_field(t, " tones ", r->beeps);
+        put_ch(t, '\n');
+    }
     put_field(t, "stream requested ", r->requested_rate);
     put_field(t, " programmed ", r->programmed_rate);
     put_str(t, " format 0x");

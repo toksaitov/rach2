@@ -1,6 +1,6 @@
 /*
  * mixer.c: /dev/mixer (mixer.h), OSS's mixer over the audio driver's master
- * volume and its input controls.
+ * volume, its input controls and its beep generator.
  */
 
 #include "mixer.h"
@@ -33,6 +33,7 @@
 /* The channels this mixer has, by OSS's numbers (SOUND_MIXER_*). */
 #define CH_VOLUME  0
 #define CH_PCM     4
+#define CH_SPEAKER 5
 #define CH_LINE    6
 #define CH_MIC     7
 #define CH_RECLEV  11
@@ -158,13 +159,22 @@ static void sync_levels(void)
     }
 }
 
+/** Whether the driver's device has a beep generator. */
+static int has_beep(void)
+{
+    return audio->beep_level && audio->beep_level(-1) >= 0;
+}
+
 /** The channels the mixer has now, a mask of 1 << channel: VOLUME and PCM,
- * a source's channel and RECLEV when the driver has a gain, and IGAIN when
- * it has a boost. */
+ * SPEAKER when the driver has a beep generator, a source's channel and
+ * RECLEV when it has a gain, and IGAIN when it has a boost. */
 static int devmask(void)
 {
     unsigned controls, sources = input_caps(&controls);
     int mask = 1 << CH_VOLUME | 1 << CH_PCM, i;
+
+    if (has_beep())
+        mask |= 1 << CH_SPEAKER;
 
     if (controls & (1u << AUDIO_IN_GAIN)) {
         for (i = 0; i < AUDIO_SOURCES; i++)
@@ -206,6 +216,8 @@ static int get_level(int ch)
         return mx.volume;
     if (ch == CH_PCM)
         return audio == &vchan_driver ? vchan_pcm(-1) : mx.pcm;
+    if (ch == CH_SPEAKER)
+        return audio->beep_level(-1);
     if (ch == CH_RECLEV)
         return mx.reclev;
     if (ch == CH_IGAIN)
@@ -225,6 +237,8 @@ static void set_level(int ch, int level)
 
     if (ch == CH_PCM && audio == &vchan_driver) {
         (void)vchan_pcm(level);
+    } else if (ch == CH_SPEAKER) {
+        (void)audio->beep_level(level);
     } else if (ch == CH_VOLUME || ch == CH_PCM) {
         *(ch == CH_VOLUME ? &mx.volume : &mx.pcm) = level;
         apply_volume();
