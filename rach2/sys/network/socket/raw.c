@@ -1,7 +1,8 @@
 /*
- * raw.c: AF_INET and AF_INET6 SOCK_RAW sockets, as raw.h describes them:
- * the list of registered sockets and their receive queues. `sendto` in
- * syscall_net.c makes a raw send.
+ * raw.c: AF_INET and AF_INET6 SOCK_RAW sockets, and the ICMP datagram
+ * sockets built on them, as raw.h describes them: the list of registered
+ * sockets and their receive queues. `sendto` in syscall_net.c makes a raw
+ * send.
  */
 
 #include "../../klog.h"
@@ -9,7 +10,9 @@
 #include "socket.h"
 #include "../net.h"
 #include "../ip/ip.h"
+#include "../ip/icmp.h"
 #include "../ip6/ip6.h"
+#include "../ip6/icmp6.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
@@ -29,13 +32,16 @@ struct raw_last {
 };
 
 /* A registered socket: the socket, its registered protocol, whether it is
- * an AF_INET6 one, its ICMPv6 filter, and what it took last, one record
+ * an AF_INET6 one, whether it is an ICMP datagram socket and its echo
+ * identifier then, its ICMPv6 filter, and what it took last, one record
  * from the heap per registration, on a list the receive path walks. */
 struct raw_binding {
     struct raw_binding *next;
     struct socket *sock;
     uint8_t proto;
     int v6;
+    int echo;
+    uint16_t echo_id;
     uint8_t filter6[RAW_FILTER6_LEN]; /* bit t of byte t / 8 blocks type t */
     struct raw_last last;
 };
@@ -63,7 +69,7 @@ static struct raw_last *last_of(struct socket *sock)
     return b ? &b->last : NULL;
 }
 
-int raw_register(struct socket *sock, uint8_t proto)
+int raw_register(struct socket *sock, uint8_t proto, int echo)
 {
     uint32_t flags;
     struct raw_binding *b;
@@ -83,6 +89,10 @@ int raw_register(struct socket *sock, uint8_t proto)
     b->sock = sock;
     b->proto = proto;
     b->v6 = sock->family == AF_INET6;
+    b->echo = echo;
+    if (echo) {
+        b->echo_id = icmp_echo_id();
+    }
     b->next = raws;
     raws = b;
     net_unlock(flags);
@@ -108,6 +118,30 @@ void raw_unregister(struct socket *sock)
     net_unlock(flags);
 }
 
+int raw_echo_id_used(uint16_t id)
+{
+    struct raw_binding *b;
+
+    for (b = raws; b; b = b->next) {
+        if (b->echo && b->echo_id == id) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int raw_echo_id(struct socket *sock)
+{
+    struct raw_binding *b;
+    uint32_t flags = net_lock();
+    int id;
+
+    b = binding_of(sock);
+    id = b && b->echo ? (int)b->echo_id : -1;
+    net_unlock(flags);
+    return id;
+}
+
 /**
  * Queue the `len` bytes at `data` on `b`'s socket, whole, with `meta`, and
  * wake its readers. A datagram past the queue's budget is dropped, the
@@ -127,17 +161,30 @@ static void raw_queue(struct raw_binding *b, const struct sock_dgram *meta, cons
     wq_wake(&b->sock->waiters, WQ_DATA);
 }
 
+/** Whether the ICMP message of `len` bytes at `msg` is an echo reply,
+ * of type `reply`, to the ICMP datagram socket of `b`: one that carries
+ * its identifier. */
+static int raw_echo_answer(const struct raw_binding *b, const uint8_t *msg, uint32_t len,
+                           uint8_t reply)
+{
+    return len >= 8 && msg[0] == reply && msg[1] == 0 &&
+           (uint16_t)((msg[4] << 8) | msg[5]) == b->echo_id;
+}
+
 /** `ip_rx` runs with interrupts off, so the list and the queues are touched
  * without taking `net_lock`. Only the sockets of the datagram's network
- * namespace, `ip_ns`, take it. */
+ * namespace, `ip_ns`, take it. An ICMP datagram socket takes only the echo
+ * replies that carry its identifier, without the IP header. */
 void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
 {
     struct sock_dgram meta;
     struct raw_binding *b;
+    uint32_t ihl;
 
     if (total_len < IP_HDR_SIZE) {
         return;
     }
+    ihl = (uint32_t)(data[0] & 0x0Fu) * 4u;
     k_memset(&meta, 0, sizeof(meta));
     meta.src = net_addr4(((uint32_t)data[12] << 24) | ((uint32_t)data[13] << 16) |
                          ((uint32_t)data[14] << 8) | (uint32_t)data[15]);
@@ -147,16 +194,26 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
     meta.info.tclass = (int16_t)data[1];
 
     for (b = raws; b; b = b->next) {
-        if (!b->v6 && b->proto == proto && b->sock->ns == ip_ns) {
+        if (b->v6 || b->proto != proto || b->sock->ns != ip_ns) {
+            continue;
+        }
+        if (!b->echo) {
             raw_queue(b, &meta, data, total_len);
+        } else if (ihl >= IP_HDR_SIZE && ihl <= total_len &&
+                   raw_echo_answer(b, data + ihl, total_len - ihl, ICMP_ECHO_REPLY)) {
+            raw_queue(b, &meta, data + ihl, total_len - ihl);
         }
     }
 }
 
 /** Whether `b`'s ICMPv6 filter blocks the message of `len` bytes at `msg`:
- * a set bit for its type, or no type at all. Other protocols pass. */
+ * a set bit for its type, or no type at all. Other protocols pass. An
+ * ICMP datagram socket blocks all but its own echo replies. */
 static int raw_filtered6(const struct raw_binding *b, const uint8_t *msg, uint16_t len)
 {
+    if (b->echo) {
+        return !raw_echo_answer(b, msg, len, ICMP6_ECHO_REPLY);
+    }
     if (b->proto != IP6_NH_ICMP6) {
         return 0;
     }

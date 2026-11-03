@@ -61,6 +61,7 @@
 #include "network/ip/icmp.h"
 #include "network/ip6/ip6.h"
 #include "network/ip6/icmp6.h"
+#include "network/core/byteorder.h"
 #include "network/net.h"
 #include "network/netconf.h" /* netconf_is_broadcast */
 #include "cmdline.h"         /* kcmdline_has, for the ENOSYS trace flag */
@@ -312,6 +313,10 @@ static int32_t not_a_socket(const fd_entry_t *entry)
 
 #define IP_TTL 2
 
+/* IP_RECVTTL: a receive answers with the datagram's TTL, a control message
+ * of SOL_IP and type IP_TTL holding an int. */
+#define IP_RECVTTL 12
+
 #define IP_HDRINCL 3
 
 #define IP_OPTIONS 4
@@ -549,10 +554,13 @@ static int ip_protocol_ok(int type, int protocol)
  * Check the kind of socket socket(2) is asked to make, `domain`, `*type` and
  * `protocol`: AF_INET with TCP, UDP or SOCK_RAW (ICMP, or the ioctl-only
  * descriptor of IPPROTO_RAW), AF_INET6 with TCP, UDP, raw ICMPv6 or raw
- * IPv6, AF_PACKET with SOCK_DGRAM, and
+ * IPv6, either with SOCK_DGRAM and ICMP or ICMPv6, AF_PACKET with
+ * SOCK_DGRAM, and
  * AF_NETLINK with SOCK_RAW or SOCK_DGRAM, which are one thing, since the
- * kernel's answers are datagrams: `*type` is set to SOCK_DGRAM for it. The
- * raw and packet forms need a privileged caller (-EPERM); a netlink protocol
+ * kernel's answers are datagrams: `*type` is set to SOCK_DGRAM for it. An
+ * ICMP datagram socket (raw.h) is made as a raw one: `*type` is set to
+ * SOCK_RAW and `*echo` to 1, and any caller may open it. The other raw and
+ * packet forms need a privileged caller (-EPERM); a netlink protocol
  * is checked when the socket is made. Returns 0, or -EAFNOSUPPORT for another
  * family, -EPROTONOSUPPORT, -ESOCKTNOSUPPORT or -EINVAL for a type or a
  * protocol the family does not have.
@@ -571,10 +579,17 @@ static int ip_protocol_ok(int type, int protocol)
  * network byte order, as Linux takes it: one `packet_type_ok` allows, or 0
  * for none yet, as `arping` opens one before its bind gives ARP.
  */
-static int32_t socket_kind(int domain, int *type, int protocol)
+static int32_t socket_kind(int domain, int *type, int protocol, int *echo)
 {
+    *echo = 0;
     if (domain != AF_INET && domain != AF_INET6 && domain != AF_PACKET && domain != AF_NETLINK) {
         return -EAFNOSUPPORT;
+    }
+    if (*type == SOCK_DGRAM && ((domain == AF_INET && protocol == IPPROTO_ICMP) ||
+                                (domain == AF_INET6 && protocol == IPPROTO_ICMPV6))) {
+        *type = SOCK_RAW;
+        *echo = 1;
+        return 0;
     }
     if (domain == AF_INET6) {
         if (*type == SOCK_RAW) {
@@ -630,7 +645,8 @@ static int32_t do_socket(int domain, int type, int protocol)
 {
     struct socket *sock;
     fd_entry_t *entry;
-    int32_t rc = socket_kind(domain, &type, protocol);
+    int echo;
+    int32_t rc = socket_kind(domain, &type, protocol, &echo);
     int fd;
 
     if (rc != 0) {
@@ -659,7 +675,7 @@ static int32_t do_socket(int domain, int type, int protocol)
         int reg;
 
         sock->protocol = (uint16_t)protocol;
-        reg = raw_register(sock, (uint8_t)protocol);
+        reg = raw_register(sock, (uint8_t)protocol, echo);
         if (reg != 0) {
             socket_unref(sock);
             return reg;
@@ -916,6 +932,30 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
 }
 
 /**
+ * Make the message of `len` bytes at `msg`, which an ICMP datagram socket
+ * `sock` sends, the socket's echo request: its type must be `request` and
+ * its code 0, and its identifier becomes the socket's and its checksum 0,
+ * for the send to sum. Any other socket's message is left alone. Returns 1
+ * for a message stamped, 0 for another socket's, or -1 for a message
+ * shorter than an echo's 8-byte header or of another type, which the send
+ * refuses with EINVAL, as Linux does.
+ */
+static int echo_stamp(struct socket *sock, uint8_t *msg, int len, uint8_t request)
+{
+    int id = raw_echo_id(sock);
+
+    if (id < 0) {
+        return 0;
+    }
+    if (len < 8 || msg[0] != request || msg[1] != 0) {
+        return -1;
+    }
+    write16be(msg + 2, 0);
+    write16be(msg + 4, (uint16_t)id);
+    return 1;
+}
+
+/**
  * Send the ICMPv6 message of `len` bytes at `buf_ptr` from the raw socket
  * `sock` to the sockaddr_in6 at `sa_ptr`, in the scope of its scope id.
  * The kernel sums the message, as Linux does for ICMPv6 whatever the
@@ -928,8 +968,12 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
  * A socket of IPPROTO_RAW sends instead the datagram at `buf_ptr` whole,
  * toward the address, as `ip6_tx_whole` says, whatever the options.
  *
+ * An ICMP datagram socket sends only an echo request, with its own
+ * identifier written in (`echo_stamp`).
+ *
  * Returns `len`, the error of `sockaddr_in6_in`, `icmp6_send` or
- * `ip6_tx_whole`, -EINVAL for a message too short to hold its checksum, a
+ * `ip6_tx_whole`, -EINVAL for a message too short to hold its checksum, or
+ * from an ICMP datagram socket one that is no echo request, a
  * source in `opt` that is not this machine's or an interface that
  * disagrees with the address's scope,
  * -EMSGSIZE past the largest payload, 65535 bytes, or past one 1500-byte
@@ -989,6 +1033,8 @@ static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uint
     }
     if (copy_from_user(buf, (const void __user *)buf_ptr, (uint32_t)len) != 0) {
         r = -EFAULT;
+    } else if (echo_stamp(sock, buf, len, ICMP6_ECHO_REQUEST) < 0) {
+        r = -EINVAL;
     } else {
         netflags = net_lock();
         if (whole) {
@@ -1128,8 +1174,10 @@ static int32_t netlink_addr_to_user(const uint8_t *nl, uintptr_t sa_ptr, uintptr
  *
  * A raw socket sends the ICMP message the caller built, checksum included:
  * this layer supplies the IPv4 header and rewrites nothing, since a program
- * sending a wrong checksum on purpose is testing something. A message past
- * one frame leaves in fragments under the socket's IP_MTU_DISCOVER, up to
+ * sending a wrong checksum on purpose is testing something. An ICMP
+ * datagram socket sends only an echo request, whose identifier and checksum
+ * the kernel writes (`echo_stamp`), and -EINVAL for any other message, as
+ * on Linux. A message past one frame leaves in fragments under the socket's IP_MTU_DISCOVER, up to
  * the largest IPv4 payload. An AF_INET6 one sends as `raw6_sendto` says.
  * The copy into `raw_send_buf`, or a block of the heap, runs with interrupts
  * on, since bringing in the caller's pages may sleep; the send then holds the
@@ -1173,7 +1221,7 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
         uint8_t raw_sa[SOCKADDR_IN_LEN];
         uint8_t *msg;
         uint32_t raw_dst;
-        int r;
+        int r, echo;
 
         if (!sa_ptr || addrlen < SOCKADDR_MIN) {
             return -EDESTADDRREQ;
@@ -1201,8 +1249,14 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
         }
         if (copy_from_user(msg, (const void __user *)buf_ptr, (uint32_t)len) != 0) {
             r = -EFAULT;
+        } else if ((echo = echo_stamp(entry->sock, msg, len, ICMP_ECHO_REQUEST)) < 0) {
+            r = -EINVAL;
         } else {
             uint32_t netflags = net_lock();
+
+            if (echo) {
+                write16be(msg + 2, ip_checksum(msg, (uint16_t)len));
+            }
             r = ip_tx_opts(0, raw_dst, (uint8_t)entry->sock->protocol, msg, (uint16_t)len,
                            entry->sock->ip_ttl, entry->sock->pmtudisc);
             raw_count_sent(entry->sock, r, msg, len);
@@ -2199,9 +2253,9 @@ static int32_t ipv6_set(struct socket *sock, int optname, uintptr_t optval_ptr, 
         return 0;
     default:
         if (val) {
-            sock->rxopt6 |= ipv6_rx_bit(optname);
+            sock->rxopt |= ipv6_rx_bit(optname);
         } else {
-            sock->rxopt6 &= (uint8_t)~ipv6_rx_bit(optname);
+            sock->rxopt &= (uint8_t)~ipv6_rx_bit(optname);
         }
         return 0;
     }
@@ -2232,7 +2286,7 @@ static int32_t ipv6_get(const struct socket *sock, int optname, int *val)
     case IPV6_RECVPKTINFO:
     case IPV6_RECVHOPLIMIT:
     case IPV6_RECVTCLASS:
-        *val = (sock->rxopt6 & ipv6_rx_bit(optname)) != 0;
+        *val = (sock->rxopt & ipv6_rx_bit(optname)) != 0;
         return 0;
     default:
         return -ENOPROTOOPT;
@@ -2308,14 +2362,13 @@ static int32_t icmp6_filter_get(struct socket *sock, uintptr_t optval_ptr, uintp
  * limit IP_TTL (1 to 255), SO_BINDTODEVICE, an interface by name or none
  * for an empty name, SO_RCVBUF, which Linux doubles and bounds by
  * SOCK_RCVBUF_MAX and SOCK_RCVBUF_MIN, IP_MTU_DISCOVER, an IP_PMTUDISC_*
- * value, and on a stream socket the keepalive's TCP_KEEPIDLE, TCP_KEEPINTVL
- * and TCP_KEEPCNT and TCP_USER_TIMEOUT (`tcp_option_set`), and accept every
- * other option with no effect, so that the setup of a forking server that
- * sets TCP_NODELAY succeeds; failing them would stop programs that set
- * options a small stack has no use for. Returns 0, or -EINVAL for a flag or
- * hop limit shorter than an int, a hop limit, IP_MTU_DISCOVER or TCP option
- * out of range or a SO_BINDTODEVICE value of no bytes, -ENODEV for an
- * unknown interface, -EFAULT, or -ENOPROTOOPT for the two options below.
+ * value, IP_RECVTTL, which has a receive report the TTL (`put_rx_control`), and on a stream socket
+ * the keepalive's TCP_KEEPIDLE, TCP_KEEPINTVL and TCP_KEEPCNT and TCP_USER_TIMEOUT
+ * (`tcp_option_set`), and accept every other option with no effect, so that the setup of a forking
+ * server that sets TCP_NODELAY succeeds; failing them would stop programs that set options a small
+ * stack has no use for. Returns 0, or -EINVAL for a flag or hop limit shorter than an int, a hop
+ * limit, IP_MTU_DISCOVER or TCP option out of range or a SO_BINDTODEVICE value of no bytes, -ENODEV
+ * for an unknown interface, -EFAULT, or -ENOPROTOOPT for the two options below.
  *
  * Two options fail with -ENOPROTOOPT. A DHCP client sets PACKET_AUXDATA on a
  * packet socket so that it can be told the kernel has not checked a
@@ -2423,6 +2476,17 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
     if (level == SOL_IP && optname == IP_HDRINCL) {
         return -ENOPROTOOPT;
     }
+    if (level == SOL_IP && optname == IP_RECVTTL) {
+        if (optlen < (int)sizeof(int)) {
+            return -EINVAL;
+        }
+        if (val) {
+            entry->sock->rxopt |= SOCK_RX_TTL;
+        } else {
+            entry->sock->rxopt &= (uint8_t)~SOCK_RX_TTL;
+        }
+        return 0;
+    }
     if (level == SOL_IP && optname == IP_MTU_DISCOVER) {
         if (optlen < (int)sizeof(int)) {
             return -EINVAL;
@@ -2509,7 +2573,7 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
     } else if (level == SOL_ICMPV6 && optname == ICMP6_FILTER) {
         return icmp6_filter_get(entry->sock, optval_ptr, optlen_ptr);
     } else if (level == SOL_SOCKET && optname == SO_TYPE) {
-        val = entry->sock->type;
+        val = raw_echo_id(entry->sock) >= 0 ? SOCK_DGRAM : entry->sock->type;
     } else if (level == SOL_SOCKET && optname == SO_ERROR) {
         uint32_t flags = net_lock();
         if (entry->sock->tcb) {
@@ -2550,6 +2614,8 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
         val = (int)entry->sock->ip_ttl;
     } else if (level == SOL_IP && optname == IP_HDRINCL) {
         return -ENOPROTOOPT;
+    } else if (level == SOL_IP && optname == IP_RECVTTL) {
+        val = (entry->sock->rxopt & SOCK_RX_TTL) != 0;
     } else if (level == SOL_IP && optname == IP_OPTIONS) {
         width = 0;
     } else if (level == SOL_IP && optname == IP_MTU_DISCOVER) {
@@ -2587,10 +2653,12 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
 }
 
 /** Whether a receive on `sock` answers with control messages: an AF_INET6
- * UDP or raw socket that asked for one (IPV6_RECV*). */
-static int inet6_rx_control(const struct socket *sock)
+ * UDP or raw socket that asked for one (IPV6_RECV*), or an AF_INET one that
+ * asked for IP_RECVTTL. */
+static int inet_rx_control(const struct socket *sock)
 {
-    return sock->family == AF_INET6 && sock->type != SOCK_STREAM && sock->rxopt6 != 0;
+    return (sock->family == AF_INET6 || sock->family == AF_INET) && sock->type != SOCK_STREAM &&
+           sock->rxopt != 0;
 }
 
 /**
@@ -2628,12 +2696,14 @@ static int32_t put_cmsg(uintptr_t control, uint32_t controllen, uint32_t *used, 
 }
 
 /**
- * Write the control messages the AF_INET6 socket `sock` asked for
- * (`rxopt6`) about the datagram a receive took, which `rx_last` describes,
- * in the order Linux writes them: IPV6_PKTINFO, its destination and the
- * interface it came in on, an IPv4 one's destination mapped; IPV6_HOPLIMIT
- * and IPV6_TCLASS, each an int, when the datagram's are known. Sets
- * `*used` to the bytes of the buffer used. Returns 0, or -EFAULT.
+ * Write the control messages the socket `sock` asked for (`rxopt`) about
+ * the datagram a receive took, which `rx_last` describes, in the order
+ * Linux writes them: for an AF_INET socket IP_TTL, an int, when the
+ * datagram's is known; for an AF_INET6 one IPV6_PKTINFO, its destination
+ * and the interface it came in on, an IPv4 one's destination mapped, and
+ * IPV6_HOPLIMIT and IPV6_TCLASS, each an int, when the datagram's are
+ * known. Sets `*used` to the bytes of the buffer used. Returns 0, or
+ * -EFAULT.
  */
 static int32_t put_rx_control(const struct socket *sock, uintptr_t control, uint32_t controllen,
                               uint32_t *used, unsigned int *mflags)
@@ -2643,18 +2713,25 @@ static int32_t put_rx_control(const struct socket *sock, uintptr_t control, uint
     int v;
 
     *used = 0;
-    if (sock->rxopt6 & SOCK_RX_PKTINFO) {
+    if (sock->family == AF_INET) {
+        if ((sock->rxopt & SOCK_RX_TTL) && info->hlim >= 0) {
+            v = info->hlim;
+            r = put_cmsg(control, controllen, used, SOL_IP, IP_TTL, &v, sizeof(v), mflags);
+        }
+        return r;
+    }
+    if (sock->rxopt & SOCK_RX_PKTINFO) {
         uint8_t pi[IN6_PKTINFO_LEN];
 
         net_addr_to6(info->dst, pi);
         SC_WLE32(pi + 16, info->ifindex);
         r = put_cmsg(control, controllen, used, SOL_IPV6, IPV6_PKTINFO, pi, sizeof(pi), mflags);
     }
-    if (r == 0 && (sock->rxopt6 & SOCK_RX_HOPLIMIT) && info->hlim >= 0) {
+    if (r == 0 && (sock->rxopt & SOCK_RX_HOPLIMIT) && info->hlim >= 0) {
         v = info->hlim;
         r = put_cmsg(control, controllen, used, SOL_IPV6, IPV6_HOPLIMIT, &v, sizeof(v), mflags);
     }
-    if (r == 0 && (sock->rxopt6 & SOCK_RX_TCLASS) && info->tclass >= 0) {
+    if (r == 0 && (sock->rxopt & SOCK_RX_TCLASS) && info->tclass >= 0) {
         v = info->tclass;
         r = put_cmsg(control, controllen, used, SOL_IPV6, IPV6_TCLASS, &v, sizeof(v), mflags);
     }
@@ -2739,9 +2816,9 @@ static int32_t get_tx_control(const struct socket *sock, uintptr_t control, uint
  * control data, and finding none it verifies the UDP checksum itself. So the
  * scatter half is the whole of the work here. The control buffer is answered
  * with a length of zero, the true answer, but on an AF_INET6 UDP or raw
- * socket that asked for IPV6_PKTINFO, IPV6_HOPLIMIT or IPV6_TCLASS
- * (`put_rx_control`); a message that does not fit sets MSG_CTRUNC, and the
- * buffer is checked with the others before the datagram is taken.
+ * socket that asked for IPV6_PKTINFO, IPV6_HOPLIMIT or IPV6_TCLASS, or an
+ * AF_INET one that asked for IP_RECVTTL (`put_rx_control`); a message that does not fit sets
+ * MSG_CTRUNC, and the buffer is checked with the others before the datagram is taken.
  *
  * A datagram longer than the buffers is cut, and `msg_flags` says so with
  * MSG_TRUNC; with MSG_TRUNC in `flags` the call answers the datagram's whole
@@ -2808,7 +2885,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     if (!user_buffer_ok(msg_ptr, sizeof(hdr), 1)) {
         return -EFAULT;
     }
-    if (inet6_rx_control(entry->sock) && hdr.msg_control && hdr.msg_controllen > 0 &&
+    if (inet_rx_control(entry->sock) && hdr.msg_control && hdr.msg_controllen > 0 &&
         (hdr.msg_controllen > 0x7FFFFFFFu ||
          !user_buffer_ok(hdr.msg_control, (uint32_t)hdr.msg_controllen, 1))) {
         return -EFAULT;
@@ -2863,7 +2940,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     }
     hdr.msg_namelen = name_ptr ? (int)addr_len : 0;
     hdr.msg_flags = whole > taken ? (unsigned int)MSG_TRUNC : 0u;
-    if (inet6_rx_control(entry->sock)) {
+    if (inet_rx_control(entry->sock)) {
         uint32_t used;
 
         if (put_rx_control(entry->sock, hdr.msg_control, (uint32_t)hdr.msg_controllen, &used,

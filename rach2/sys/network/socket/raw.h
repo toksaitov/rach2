@@ -43,16 +43,37 @@ struct net_rxinfo;
  * Opening one is restricted to a privileged process (`proc_privileged`), as
  * on Linux, because it reads every datagram of its protocol the machine
  * receives and sends datagrams no transport layer checked.
+ *
+ * An ICMP datagram socket, Linux's "ping socket", is socket(AF_INET,
+ * SOCK_DGRAM, IPPROTO_ICMP) or socket(AF_INET6, SOCK_DGRAM,
+ * IPPROTO_ICMPV6), and any process may open one, as any may on Linux
+ * whose net.ipv4.ping_group_range admits every group. It is a raw socket
+ * inside (SOCK_RAW, which SO_TYPE reports as SOCK_DGRAM) with an echo
+ * identifier of its own, which no other such socket and no ping of the
+ * kernel's holds (`icmp_echo_id`). It sends only echo requests, each with
+ * its identifier written over the caller's and summed by the kernel, and it
+ * receives only the echo replies that carry that identifier, the ICMP
+ * message alone over either family. Any number of them run at once, and
+ * each sees only its own replies.
  */
 
 /**
  * Register `sock` to receive protocol `proto` of IPv4, or of IPv6 when
- * `sock` is an AF_INET6 socket, or change the
- * protocol of a registration it has. Returns 0, or -ENOBUFS with no memory.
- * Called when the socket is created, since a raw socket's protocol is
- * chosen there and not by a later bind. Takes `net_lock` itself.
+ * `sock` is an AF_INET6 socket, as an ICMP datagram socket with an echo
+ * identifier of its own when `echo` is set, or change the protocol of a
+ * registration it has. Returns 0, or -ENOBUFS with no memory. Called when
+ * the socket is created, since a raw socket's protocol is chosen there and
+ * not by a later bind. Takes `net_lock` itself.
  */
-int raw_register(struct socket *sock, uint8_t proto);
+int raw_register(struct socket *sock, uint8_t proto, int echo);
+
+/** The echo identifier of the ICMP datagram socket `sock`, or -1 for any
+ * other socket. Takes `net_lock` itself. */
+int raw_echo_id(struct socket *sock);
+
+/** Whether an ICMP datagram socket holds the echo identifier `id`. Called
+ * under `net_lock`. */
+int raw_echo_id_used(uint16_t id);
 
 /** Remove a socket's registration and free the datagrams it has queued,
  * when its last reference goes (`socket_unref`). Takes `net_lock` itself. */
@@ -63,7 +84,8 @@ void raw_unregister(struct socket *sock);
  *
  * `data` is the whole datagram, header included, reassembled if it came in
  * fragments, and `total_len` its length; one shorter than an IP header is
- * ignored. Each socket queues it whole on its own queue (`sock_dgq`), and
+ * ignored. Each socket queues it whole on its own queue (`sock_dgq`), an
+ * ICMP datagram socket only its own echo reply and without the header, and
  * one whose budget is spent drops it, the newest, the first such drop
  * logged. Called with interrupts
  * off, from `ip_rx`, after the datagram has been accepted for this machine
@@ -78,7 +100,8 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len);
  * that protocol, under the rules of `raw_rx`. A socket of IPPROTO_ICMPV6
  * takes no message of a type its filter blocks (`raw_set_filter6`), nor one
  * too short to have a type, nor one whose checksum fails, which RFC 3542,
- * 3.1, has the kernel check. The hop limit and source are not checked, as
+ * 3.1, has the kernel check; an ICMP datagram socket takes only its own
+ * echo replies, whatever its filter. The hop limit and source are not checked, as
  * on Linux: a reader of neighbor discovery checks them itself. Each message
  * keeps its source, destination, hop limit and traffic class. Called with
  * interrupts off, from `ip6_rx`, before the kernel's own handler.

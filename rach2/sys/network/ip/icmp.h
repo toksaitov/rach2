@@ -7,7 +7,8 @@
  * icmp: the Internet Control Message Protocol. An echo request (type 8) is
  * answered with an echo reply (type 0) that has the request's identifier,
  * sequence and data; `icmp_ping` sends the kernel's own request and waits
- * for the matching reply. A UDP datagram for a port no socket has is
+ * for the matching reply, and an ICMP datagram socket (socket/raw.h) sends
+ * a program's. A UDP datagram for a port no socket has is
  * answered with a port unreachable. Of the errors that come in, a port
  * unreachable is given to UDP, and a report that a datagram was too big for
  * a link lowers its destination's path MTU and is given to TCP.
@@ -35,8 +36,8 @@
  * from `src_ip` to `dst_ip` that arrived with the hop limit `ttl`.
  *
  * An echo request is answered from `dst_ip` with the same identifier,
- * sequence and data. An echo reply from the peer of the ping in flight, with
- * its identifier and sequence, ends the ping's wait. A fragmentation-needed
+ * sequence and data. An echo reply from the peer of a ping in flight, with
+ * its identifier and sequence, ends that ping's wait. A fragmentation-needed
  * report lowers the quoted destination's path MTU (`ip_pmtu_lower`), about a
  * TCP segment only when it is in flight (`tcp_in_flight`), and then also goes
  * to `tcp_path_mtu`; a port unreachable about a UDP datagram goes to
@@ -77,14 +78,21 @@ void icmp_time_exceeded(const uint8_t *dgram, uint16_t len, uint8_t code);
  * and ICMP headers, sent in fragments past one frame. */
 #define ICMP_PING_DATA_MAX (65535u - 20u - 8u)
 
+/**
+ * An echo identifier that no ping in flight and no ICMP datagram socket
+ * holds, the one after the last handed out where it is free; when all
+ * 65536 are held, which takes as many sockets, the next in turn. Called
+ * under `net_lock`.
+ */
+uint16_t icmp_echo_id(void);
+
 /** `icmp_ping_data` with no data and the hop limit `IP_TTL_DEFAULT`. */
 int icmp_ping(uint32_t dst_ip);
 
 /**
  * Send echo requests to `dst_ip` and wait for an answer: the round trip in
- * ticks, or -ETIMEDOUT when no request was answered, -EBUSY when another
- * ping is in flight, -EMSGSIZE for a `size` past `ICMP_PING_DATA_MAX`,
- * -ENOMEM when no block holds a request past one frame, or -EINTR when a
+ * ticks, or -ETIMEDOUT when no request was answered, -EMSGSIZE for a `size` past
+ * `ICMP_PING_DATA_MAX`, -ENOMEM when no block holds a request past one frame, or -EINTR when a
  * signal ended the wait.
  *
  * Up to four requests go, a second apart, each with its own sequence number.
@@ -97,8 +105,9 @@ int icmp_ping(uint32_t dst_ip);
  * request, goes to `*got`, and the hop limit it arrived with to `*got_ttl`,
  * unless `got` is NULL.
  *
- * The machine has one ping in flight at a time, and a caller that finds it
- * taken sends nothing. A process in a system call sleeps for the answer; a
+ * Each call has an identifier of its own (`icmp_echo_id`), so calls run at
+ * once, from any number of processes, and a reply ends only the wait of the
+ * call it answers. A process in a system call sleeps for the answer; a
  * caller outside one, the debug shell, polls with interrupts on. Takes
  * `net_lock` itself, and may sleep.
  */
@@ -112,14 +121,14 @@ int icmp_ping_data(uint32_t dst_ip, uint32_t size, uint8_t ttl, uint16_t *got, u
  * when `dst` is a group, ends the wait. Returns as `icmp_ping_data` does,
  * and also the error of `icmp6_send` when the first request cannot be sent,
  * or -ENOMEM when no block holds a request past one frame.
- * Shares the one ping in flight with IPv4's.
  */
 int icmp_ping6_data(const uint8_t *dst, int ifindex, uint32_t size, uint8_t hlim, uint16_t *got,
                     uint8_t *got_hlim);
 
-/** Give the ping in flight an ICMPv6 echo reply from `src` with the
- * identifier `id` and sequence `seq`, `len` bytes of ICMPv6 that arrived
- * with the hop limit `hlim`. Called with interrupts off, from `icmp6_rx`. */
+/** Give the ping in flight that waits for it an ICMPv6 echo reply from
+ * `src` with the identifier `id` and sequence `seq`, `len` bytes of ICMPv6
+ * that arrived with the hop limit `hlim`. Called with interrupts off, from
+ * `icmp6_rx`. */
 void icmp_ping_reply6(const uint8_t *src, uint16_t id, uint16_t seq, uint16_t len, uint8_t hlim);
 
 #endif /* _ICMP_H_ */

@@ -22,11 +22,12 @@
  * would never end. Both read the one deadline word, so a timer that has
  * fired implies a condition that is true.
  *
- * There is one ping in flight for the whole machine; a program that needs
- * echo exchanges of its own opens a raw socket (socket/raw.c). The slot is
- * claimed under net_lock and released on every way out, and a second caller
- * is refused with -EBUSY and not queued, since a queue would need a fairness
- * rule and would leave a shell command waiting with nothing to show why.
+ * Each caller of the kernel's ping has a record of its own, on its own
+ * stack, linked on a list for as long as its call lasts, with an identifier
+ * no other caller and no ICMP datagram socket holds (`icmp_echo_id`), so any
+ * number of pings run at once and each reply ends only its own caller's
+ * wait. A program that sends echo requests of its own opens an ICMP
+ * datagram socket (socket/raw.c), as Linux's ping does.
  */
 
 #include "../../klog.h"
@@ -48,6 +49,7 @@
 #include "../ip6/ip6.h"
 #include "../ip6/icmp6.h"
 #include "../../mm/kheap.h"
+#include "../socket/raw.h"
 
 /* The echo reply being sent and the kernel's request, each sized for one
  * frame's datagram; a larger one is built in a block of the heap. */
@@ -67,33 +69,53 @@ static uint8_t icmp_error_buf[8 + ICMP_QUOTE_MAX];
 static uint32_t icmp_error_credit = ICMP_ERROR_BURST;
 static uint32_t icmp_error_last;
 
-/* The identifier of the kernel's own echo requests. */
-#define ICMP_PING_ID 0x5243 /* 'RC' */
-
 /* The wait for each request's answer, in ticks, and the requests sent. */
 #define ICMP_PING_WAIT     TICK_HZ /* 1 s */
 #define ICMP_PING_ATTEMPTS 4
 
-/* The one ping in flight, which an echo reply is matched against: whether
- * it is in flight and answered, the answer's length and hop limit, the
- * sequence and peer it waits for, an IPv4 address or, when `ping_v6` is
- * set, the IPv6 one in `ping_peer6`, and the tick its wait ends at, never 0;
- * `ping_seq` is the sequence of the next request. */
-static volatile int ping_active = 0;
-static volatile int ping_replied = 0;
-static volatile uint16_t ping_reply_len; /* the ICMP bytes of the reply */
-static volatile uint8_t ping_reply_ttl;  /* the hop limit it arrived with */
-static volatile uint16_t ping_seq_wait = 0;
-static volatile uint32_t ping_peer_ip = 0;
-static volatile int ping_v6 = 0;
-static uint8_t ping_peer6[16];
-static volatile uint64_t ping_deadline = 0;
-static uint16_t ping_seq = 0;
+/* A ping in flight, which an echo reply is matched against: its identifier,
+ * the sequence and peer it waits for, an IPv4 address or, when `v6` is set,
+ * the IPv6 one in `peer6`, and the tick its wait ends at, never 0; whether
+ * it is answered, and the answer's length and hop limit; and the queue its
+ * caller sleeps on. The record is the caller's, on its stack, and is on the
+ * list `pingers` while the call lasts; the fields the receive path writes
+ * are written under `net_lock` or with interrupts off. */
+struct icmp_pinger {
+    struct icmp_pinger *next;
+    uint16_t id;
+    uint16_t seq_wait;
+    int v6;
+    uint32_t peer_ip;
+    uint8_t peer6[16];
+    volatile uint64_t deadline;
+    volatile int replied;
+    volatile uint16_t reply_len; /* the ICMP bytes of the reply */
+    volatile uint8_t reply_ttl;  /* the hop limit it arrived with */
+    wait_queue_t wq;
+};
 
-/* Where a sleeping pinger waits, and what icmp_rx wakes; initialized by the
- * first ping. */
-static wait_queue_t ping_wq;
-static int ping_wq_ready = 0;
+static struct icmp_pinger *pingers;
+
+/* Where the search for a free identifier starts next: 'RC', and then one
+ * past the last identifier handed out. */
+static uint16_t echo_id_next = 0x5243;
+
+uint16_t icmp_echo_id(void)
+{
+    uint32_t tries;
+
+    for (tries = 0; tries < 0x10000u; tries++) {
+        uint16_t id = echo_id_next++;
+        struct icmp_pinger *p;
+
+        for (p = pingers; p && p->id != id; p = p->next) {
+        }
+        if (!p && !raw_echo_id_used(id)) {
+            return id;
+        }
+    }
+    return echo_id_next++;
+}
 
 /**
  * Take a router's report that a datagram from this machine was too big for
@@ -219,6 +241,33 @@ void icmp_time_exceeded(const uint8_t *dgram, uint16_t len, uint8_t code)
 }
 
 /**
+ * Give an echo reply to the ping in flight that waits for it: over IPv4
+ * from `src_ip`, or with `v6` set over IPv6 from the 16 bytes at `src6`,
+ * with the identifier `id` and sequence `seq`, `len` ICMP bytes that
+ * arrived with the hop limit `ttl`. A reply no caller waits for is
+ * ignored. Called with interrupts off.
+ */
+static void ping_answer(int v6, uint32_t src_ip, const uint8_t *src6, uint16_t id, uint16_t seq,
+                        uint16_t len, uint8_t ttl)
+{
+    struct icmp_pinger *p;
+
+    for (p = pingers; p; p = p->next) {
+        if (p->id != id || p->seq_wait != seq || p->v6 != v6) {
+            continue;
+        }
+        if (v6 ? !ip6_is_multicast(p->peer6) && !ip6_equal(src6, p->peer6) : src_ip != p->peer_ip) {
+            continue;
+        }
+        p->reply_len = len;
+        p->reply_ttl = ttl;
+        p->replied = 1;
+        wq_wake_all(&p->wq);
+        return;
+    }
+}
+
+/**
  * An echo request is copied whole, its type changed to reply and its
  * checksum recomputed; one past a frame, which came in fragments, is
  * answered from a block of the heap, and in fragments, or not at all with
@@ -263,64 +312,52 @@ void icmp_rx(uint32_t src_ip, uint32_t dst_ip, uint8_t ttl, const uint8_t *data,
         uint16_t seq = read16be(data + 6);
 
         net_mib.icmp_in_echo_reps++;
-        if (ping_active && !ping_v6 && src_ip == ping_peer_ip && id == ICMP_PING_ID &&
-            seq == ping_seq_wait) {
-            ping_reply_len = len;
-            ping_reply_ttl = ttl;
-            ping_replied = 1;
-            if (ping_wq_ready) {
-                wq_wake_all(&ping_wq);
-            }
-        }
+        ping_answer(0, src_ip, 0, id, seq, len, ttl);
     }
 }
 
-/**
- * A reply to a request sent to a group may come from any member, so the
- * peer is matched only when the request went to one host.
- */
+/** A reply to a request sent to a group may come from any member, so the
+ * peer is matched only when the request went to one host. */
 void icmp_ping_reply6(const uint8_t *src, uint16_t id, uint16_t seq, uint16_t len, uint8_t hlim)
 {
-    if (ping_active && ping_v6 && id == ICMP_PING_ID && seq == ping_seq_wait &&
-        (ip6_is_multicast(ping_peer6) || ip6_equal(src, ping_peer6))) {
-        ping_reply_len = len;
-        ping_reply_ttl = hlim;
-        ping_replied = 1;
-        if (ping_wq_ready) {
-            wq_wake_all(&ping_wq);
-        }
-    }
+    ping_answer(1, 0, src, id, seq, len, hlim);
 }
 
 /**
- * Whether the ping in flight is done: answered, or past its deadline.
+ * Whether the ping in flight `arg` is done: answered, or past its deadline.
  *
  * Both halves are here on purpose. `wq_wait_event` re-tests this after every
  * wake and waits again while it is false, with the deadline armed again, so a
- * predicate that read only `ping_replied` would be woken at every tick once
- * the deadline had passed and would never return.
+ * predicate that read only `replied` would be woken at every tick once the
+ * deadline had passed and would never return.
  */
 static int ping_done(void *arg)
 {
-    (void)arg;
+    struct icmp_pinger *p = arg;
 
-    return ping_replied || tick_count() >= ping_deadline;
+    return p->replied || tick_count() >= p->deadline;
 }
 
 /**
- * Release the slot of the ping in flight. Called on every way out of
- * `icmp_ping_data` once it has the slot.
+ * Take the ping in flight `p` off the list. Called on every way out of
+ * `ping_attempts` once it is on it.
  *
- * Under `net_lock` because `icmp_rx` reads the same words from an interrupt,
- * and it clears the arming too: a deadline left armed wakes this process early
+ * Under `net_lock` because `icmp_rx` walks the list from an interrupt, and
+ * it clears the arming too: a deadline left armed wakes this process early
  * out of its next unrelated sleep, since `nanosleep` and `poll` read the same
  * `wakeup_tick`.
  */
-static void ping_release(void)
+static void ping_release(struct icmp_pinger *p)
 {
+    struct icmp_pinger **link;
     uint32_t flags = net_lock();
 
-    ping_active = 0;
+    for (link = &pingers; *link; link = &(*link)->next) {
+        if (*link == p) {
+            *link = p->next;
+            break;
+        }
+    }
     net_unlock(flags);
     if (current_proc) {
         current_proc->wakeup_tick = 0;
@@ -329,55 +366,48 @@ static void ping_release(void)
 
 /**
  * The attempts of `ping_run`, each request built in `echo`, which holds
- * 8 + `size` bytes.
+ * 8 + `size` bytes and is used only under `net_lock`.
  *
- * The slot is claimed for the whole call and released as its last act on
- * every path, so a killed pinger cannot strand it: the signal makes the
- * blocked process runnable, the wait breaks with -EINTR, and the release
- * runs before the system call returns. Each request is built and sent under
- * `net_lock`, and its deadline, a second's ticks past the count, is never
- * 0, `wakeup_tick`'s "not sleeping" value. Whether a
- * reply came is read from `ping_replied`, since a wait that returns does not
- * say whether the reply or the deadline ended it.
+ * The caller's record is on the list for the whole call and comes off as
+ * the call's last act on every path, so a killed pinger leaves nothing
+ * behind: the signal makes the blocked process runnable, the wait breaks
+ * with -EINTR, and the release runs before the system call returns. Each
+ * request is built and sent under `net_lock`, and its deadline, a second's
+ * ticks past the count, is never 0, `wakeup_tick`'s "not sleeping" value.
+ * Whether a reply came is read from `replied`, since a wait that returns
+ * does not say whether the reply or the deadline ended it.
  */
 static int ping_attempts(uint32_t dst_ip, const uint8_t *dst6, int ifindex, uint32_t size,
                          uint8_t ttl, uint16_t *got, uint8_t *got_ttl, uint8_t *echo)
 {
+    struct icmp_pinger me;
     uint64_t start;
     uint32_t flags, i;
-    uint16_t seq;
     int attempt;
     int rc = -ETIMEDOUT;
 
-    if (!ping_wq_ready) {
-        wait_queue_init(&ping_wq);
-        ping_wq_ready = 1;
+    k_memset(&me, 0, sizeof(me));
+    wait_queue_init(&me.wq);
+    me.v6 = dst6 != 0;
+    me.peer_ip = dst_ip;
+    if (dst6) {
+        k_memcpy(me.peer6, dst6, sizeof(me.peer6));
     }
 
     flags = net_lock();
-    if (ping_active) {
-        net_unlock(flags);
-
-        return -EBUSY;
-    }
-    ping_active = 1;
-    ping_replied = 0;
-    ping_v6 = dst6 != 0;
-    if (dst6) {
-        k_memcpy(ping_peer6, dst6, sizeof(ping_peer6));
-    }
+    me.id = icmp_echo_id();
+    me.next = pingers;
+    pingers = &me;
     net_unlock(flags);
 
     for (attempt = 0; attempt < ICMP_PING_ATTEMPTS; attempt++) {
-        seq = ping_seq++;
-
         flags = net_lock();
 
         echo[0] = dst6 ? ICMP6_ECHO_REQUEST : ICMP_ECHO_REQUEST;
         echo[1] = 0;
         write16be(echo + 2, 0x0000);
-        write16be(echo + 4, ICMP_PING_ID);
-        write16be(echo + 6, seq);
+        write16be(echo + 4, me.id);
+        write16be(echo + 6, (uint16_t)attempt);
         for (i = 0; i < size; i++) {
             echo[8 + i] = (uint8_t)i;
         }
@@ -385,18 +415,17 @@ static int ping_attempts(uint32_t dst_ip, const uint8_t *dst6, int ifindex, uint
             write16be(echo + 2, ip_checksum(echo, (uint16_t)(8 + size)));
         }
 
-        ping_peer_ip = dst_ip;
-        ping_seq_wait = seq;
-        ping_replied = 0;
+        me.seq_wait = (uint16_t)attempt;
+        me.replied = 0;
         start = rtc_ticks_now();
-        ping_deadline = start + ICMP_PING_WAIT;
+        me.deadline = start + ICMP_PING_WAIT;
 
         if (dst6) {
             int sent = icmp6_send(0, dst6, ifindex, echo, (uint16_t)(8 + size), ttl);
 
             if (sent < 0 && attempt == 0) {
                 net_unlock(flags);
-                ping_release();
+                ping_release(&me);
                 return sent;
             }
         } else if (ip_tx(dst_ip, IP_PROTO_ICMP, echo, (uint16_t)(8 + size), ttl) == 0) {
@@ -408,33 +437,33 @@ static int ping_attempts(uint32_t dst_ip, const uint8_t *dst6, int ifindex, uint
         if (current_proc && current_proc->in_syscall) {
             int waited;
 
-            current_proc->wakeup_tick = ping_deadline;
-            waited = wq_wait_event(&ping_wq, ping_done, 0);
+            current_proc->wakeup_tick = me.deadline;
+            waited = wq_wait_event(&me.wq, ping_done, &me);
             current_proc->wakeup_tick = 0;
             if (waited < 0) {
-                ping_release();
+                ping_release(&me);
 
                 return waited;
             }
         } else {
-            while (!ping_replied && tick_count() < ping_deadline) {
+            while (!me.replied && tick_count() < me.deadline) {
                 idle_wait_irq_on();
             }
         }
 
-        if (ping_replied) {
+        if (me.replied) {
             rc = (int)(rtc_ticks_now() - start);
             if (got) {
-                *got = ping_reply_len;
-                *got_ttl = ping_reply_ttl;
+                *got = me.reply_len;
+                *got_ttl = me.reply_ttl;
             }
-            ping_release();
+            ping_release(&me);
 
             return rc;
         }
     }
 
-    ping_release();
+    ping_release(&me);
     klog(KLOG_INFO, "icmp", "ping: no reply before the timeout");
 
     return rc;

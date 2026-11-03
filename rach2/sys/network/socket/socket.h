@@ -47,11 +47,13 @@
  * (IPV6_JOIN_GROUP), each a group on one interface. */
 #define SOCK_GROUPS6 8
 
-/* The ancillary data an AF_INET6 socket asks a receive for, the bits of
- * `rxopt6`: IPV6_RECVPKTINFO, IPV6_RECVHOPLIMIT and IPV6_RECVTCLASS. */
+/* The ancillary data a socket asks a receive for, the bits of `rxopt`:
+ * IPV6_RECVPKTINFO, IPV6_RECVHOPLIMIT and IPV6_RECVTCLASS of an AF_INET6
+ * socket, and IP_RECVTTL of an AF_INET one. */
 #define SOCK_RX_PKTINFO  0x1
 #define SOCK_RX_HOPLIMIT 0x2
 #define SOCK_RX_TCLASS   0x4
+#define SOCK_RX_TTL      0x8
 
 /*
  * What the network layer saw of a datagram it delivered to a UDP or raw
@@ -183,8 +185,8 @@ typedef struct socket {
      * `tclass6` IPV6_TCLASS, 0 to 255; `mif6` IPV6_MULTICAST_IF, the index of
      * the interface a datagram to a group leaves by when its address names
      * none, or 0; `mloop6` IPV6_MULTICAST_LOOP, whether such a datagram also
-     * comes back to this machine's members of the group; `rxopt6` the
-     * SOCK_RX_* the receives answer with. `groups6` are the `ngroups6`
+     * comes back to this machine's members of the group; `rxopt` the
+     * SOCK_RX_* the receives answer with, of either family. `groups6` are the `ngroups6`
      * groups IPV6_JOIN_GROUP made the socket a member of, each holding one
      * join of the interface, which the socket's end gives back.
      */
@@ -192,7 +194,7 @@ typedef struct socket {
     int16_t mhops6;
     int16_t tclass6;
     uint8_t mloop6;
-    uint8_t rxopt6;
+    uint8_t rxopt;
     int mif6;
     struct {
         uint8_t group[16];
