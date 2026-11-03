@@ -155,7 +155,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: full-i686
-          path: ${{ env.ETUDE_RESULTS }}/full-i686
+          # A kept case's copies are its disk images, sparse files of up to
+          # 10 GiB that would take an hour to upload; the logs leave them out.
+          path: |
+            ${{ env.ETUDE_RESULTS }}/full-i686
+            !${{ env.ETUDE_RESULTS }}/full-i686/kept/*/copies
           retention-days: 14
 
       - name: Upload the x86_64 logs
@@ -163,7 +167,11 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: full-x86_64
-          path: ${{ env.ETUDE_RESULTS }}/full-x86_64
+          # A kept case's copies are its disk images, sparse files of up to
+          # 10 GiB that would take an hour to upload; the logs leave them out.
+          path: |
+            ${{ env.ETUDE_RESULTS }}/full-x86_64
+            !${{ env.ETUDE_RESULTS }}/full-x86_64/kept/*/copies
           retention-days: 14
 
       - name: Write down the failures
