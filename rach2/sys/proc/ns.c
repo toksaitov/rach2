@@ -916,20 +916,22 @@ void ns_exec(process_t *p)
     p->ns_granted = 0;
 }
 
+int cap_ids(const process_t *p)
+{
+    if (!p->userns) {
+        return p->euid == 0;
+    }
+    return p->ns_granted || ns_uid_from_kernel(p->userns, p->euid) == 0;
+}
+
 uint32_t cap_word(const process_t *p, uint32_t i)
 {
     uint32_t full = i == 0 ? 0xFFFFFFFFu : CAP_HIGH_WORD;
-    int ids;
 
     if (i > 1) {
         return 0;
     }
-    if (!p->userns) {
-        ids = p->euid == 0;
-    } else {
-        ids = p->ns_granted || ns_uid_from_kernel(p->userns, p->euid) == 0;
-    }
-    return ids ? full & ~p->cap_lost[i] : 0u;
+    return p->amb_granted || cap_ids(p) ? full & ~p->cap_lost[i] : 0u;
 }
 
 int cap_holds(const process_t *p, uint32_t cap)
@@ -947,6 +949,7 @@ void cap_store(process_t *p, uint32_t lost0, uint32_t lost1)
 void ns_caps_fill(process_t *p)
 {
     p->ns_granted = 1;
+    p->amb_granted = 0;
     p->bset_lost[0] = p->bset_lost[1] = 0;
     p->cap_inh[0] = p->cap_inh[1] = 0;
     p->cap_amb[0] = p->cap_amb[1] = 0;
@@ -1326,7 +1329,7 @@ static long setns_pidfd(process_t *self, const process_t *target, unsigned long 
     struct ns_common *ns[NS_KINDS];
     struct userns *old = self->userns;
     uint32_t cap_lost[2], bset_lost[2], inh[2], amb[2];
-    uint32_t nocaps = self->nocaps, granted = self->ns_granted;
+    uint32_t nocaps = self->nocaps, granted = self->ns_granted, amb_granted = self->amb_granted;
     int32_t err = 0;
     int k, joined = 0;
 
@@ -1365,6 +1368,7 @@ static long setns_pidfd(process_t *self, const process_t *target, unsigned long 
         self->userns = old;
         old = NULL;
         self->ns_granted = granted;
+        self->amb_granted = amb_granted;
         self->bset_lost[0] = bset_lost[0];
         self->bset_lost[1] = bset_lost[1];
         self->cap_lost[0] = cap_lost[0];

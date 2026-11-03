@@ -960,12 +960,14 @@ static int uids_root(const process_t *p)
  * `uids_root` before the change, said one of them was root, and none is
  * now. Linux's `cap_emulate_setxuid` does so, since a program written
  * before the ambient set expects a change to ids other than root and an
- * exec to leave no capability.
+ * exec to leave no capability; it empties the permitted set too, and so
+ * the capabilities an exec gave from the ambient set go (`amb_granted`).
  */
 static void ambient_uid_moved(process_t *p, int had_root)
 {
     if (had_root && !uids_root(p)) {
         p->cap_amb[0] = p->cap_amb[1] = 0;
+        p->amb_granted = 0;
     }
 }
 
@@ -1489,7 +1491,7 @@ static int exec_fs_shared(void)
  * that applies set-id bits does. A capability dropped from the bounding set
  * and not inheritable stays lost. The ambient set is within the inheritable
  * set and the capabilities held, so every case keeps it; `exec_ambient`
- * then narrows it to what the image holds.
+ * then gives an image whose ids give none those of the ambient set.
  */
 static void exec_ids(struct exec_state *s)
 {
@@ -1528,21 +1530,32 @@ static void exec_ids(struct exec_state *s)
 }
 
 /**
- * Narrow `p`'s ambient set at an exec, once the image's ids and
- * capabilities are its own. Linux empties it for an image that runs with
- * ids its caller lacks (`secure`, its is_setid), and otherwise keeps it and
- * gives the image those capabilities. An image of root holds them already,
- * since the ambient set is within those its caller held and the
- * inheritable set (`exec_ids`). An image whose ids give no privilege holds
- * no capability here, where Linux would give it the ambient set, and so
- * loses the set too, which keeps the set within what the thread holds.
+ * Apply `p`'s ambient set at an exec, once the image's ids and
+ * capabilities are its own, as Linux's `cap_bprm_creds_from_file` does for
+ * an image without file capabilities. Linux empties the set for an image
+ * that runs with ids its caller lacks (`secure`, its is_setid), and
+ * otherwise keeps it and gives the image those capabilities, effective and
+ * permitted, whatever its uid. An image of root holds them already, since
+ * the ambient set is within those its caller held and the inheritable set
+ * (`exec_ids`). An image whose ids give no capability (`cap_ids`) holds
+ * those of the ambient set and loses the rest (`amb_granted`), so that a
+ * sandbox an ordinary user starts, such as bubblewrap's --cap-add in a user
+ * namespace whose uid is not 0, keeps what it was asked to keep.
  */
 static void exec_ambient(process_t *p, int secure)
 {
     uint32_t i;
 
+    p->amb_granted = 0;
+    if (secure) {
+        p->cap_amb[0] = p->cap_amb[1] = 0;
+    }
+    if (!cap_ids(p) && (p->cap_amb[0] | p->cap_amb[1]) != 0) {
+        p->amb_granted = 1;
+        cap_store(p, ~p->cap_amb[0], ~p->cap_amb[1]);
+    }
     for (i = 0; i < 2; i++) {
-        p->cap_amb[i] = secure ? 0u : p->cap_amb[i] & cap_word(p, i);
+        p->cap_amb[i] &= cap_word(p, i);
     }
 }
 
@@ -2311,6 +2324,7 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->bset_lost[1] = parent->bset_lost[1];
     k_memcpy(child->cap_inh, parent->cap_inh, sizeof(child->cap_inh));
     k_memcpy(child->cap_amb, parent->cap_amb, sizeof(child->cap_amb));
+    child->amb_granted = parent->amb_granted;
     cap_store(child, parent->cap_lost[0], parent->cap_lost[1]);
     seccomp_inherit(child, parent);
     k_memcpy(child->rlim, parent->rlim, sizeof(child->rlim));

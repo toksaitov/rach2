@@ -259,10 +259,17 @@ void ns_exec(process_t *p);
 #define CAP_SYS_ADMIN 21
 
 /**
+ * Whether `p`'s ids give it the capabilities it has not lost: its
+ * effective uid is 0 in its user namespace, or it made or joined that
+ * namespace and has not since run an exec or changed its effective uid
+ * (`ns_granted`).
+ */
+int cap_ids(const process_t *p);
+
+/**
  * Word `i` of the capabilities `p` holds, its effective and permitted sets
- * alike: those it has not lost (`cap_lost`) when its effective uid is 0 in
- * its user namespace, or when it made or joined that namespace and has not
- * since run an exec or changed its effective uid (`ns_granted`); none
+ * alike: those it has not lost (`cap_lost`) when its ids give them
+ * (`cap_ids`) or an exec gave it its ambient set (`amb_granted`); none
  * otherwise.
  */
 uint32_t cap_word(const process_t *p, uint32_t i);

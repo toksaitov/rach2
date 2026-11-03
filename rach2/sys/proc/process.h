@@ -336,13 +336,19 @@ struct process {
      * inheritable set and adds it to the bounding set an image of root
      * regains. The ambient set stays within the inheritable set and the
      * capabilities held: capset narrows it with them, and an exec keeps it
-     * only for an image that holds them, without set-id bits. A fork passes
-     * both on, and making or joining a user namespace empties both. */
+     * for an image without set-id bits. A fork passes both on, and making or
+     * joining a user namespace empties both. `amb_granted` is set while the
+     * thread holds capabilities its ids do not give it, those of the
+     * ambient set an exec of an image without privilege gave it, as Linux
+     * gives them, with `cap_lost` the rest (`exec_ambient`); the next exec,
+     * ids that leave root and making or joining a user namespace clear it,
+     * and a fork passes it on. */
     uint32_t cap_lost[2];
     uint32_t bset_lost[2];
     uint32_t nocaps;
     uint32_t cap_inh[2];
     uint32_t cap_amb[2];
+    uint32_t amb_granted;
     /* Set while a parent that made this process with CLONE_VFORK waits for
      * it to call execve or end; cleared, and the parent woken, at the one or
      * the other (`proc_vfork_release`). */
