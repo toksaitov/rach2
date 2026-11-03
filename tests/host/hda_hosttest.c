@@ -91,39 +91,25 @@ static void check(int ok, const char *message)
     }
 }
 
-/** Answer verbs from an independently packed codec connection list. */
-static uint32_t model_verb(uint32_t command)
+/** Answer Get Connection List Entry at OFFSET from node NID's packed list. */
+static uint32_t model_conn_list(unsigned nid, unsigned offset)
 {
-    unsigned nid = (command >> 20) & 0x7F;
-    unsigned verb = command & 0xFFFFF;
-    unsigned offset = verb & 255;
+    unsigned width = params[nid][HDA_PARAM_CONN_LIST] & 128 ? 16 : 8;
+    unsigned count = 32 / width;
     uint32_t result = 0;
-    unsigned i, width, count;
+    unsigned i;
 
-    verbs++;
-    if (log_count < VERB_LOG) {
-        log_command[log_count] = command & 0xFFFFFFF;
-        log_clock[log_count++] = clock_value;
-    }
-    check(!(command & (1u << 27)), "no indirect or truncated node verb");
-    if ((verb & 0xFFF00) == HDA_VERB_GET_PARAM)
-        return params[nid][offset & 31];
-    if ((verb & 0xFFF00) == HDA_VERB_GET_CONN_LIST) {
-        width = params[nid][HDA_PARAM_CONN_LIST] & 128 ? 16 : 8;
-        count = 32 / width;
-        conn_reads++;
-        if (offset % count != 0)
-            bad_offsets++;
-        for (i = 0; i < count && offset + i < (params[nid][HDA_PARAM_CONN_LIST] & 127); i++)
-            result |= (uint32_t)connections[nid][offset + i] << (width * i);
-        return result;
-    }
-    if (verb == HDA_VERB_GET_CONFIG_DEF)
-        return configurations[nid];
-    if (verb == HDA_VERB_GET_CONN_SEL)
-        return selected[nid];
-    if (verb == HDA_VERB_GET_PIN_SENSE)
-        return sense[nid];
+    conn_reads++;
+    if (offset % count != 0)
+        bad_offsets++;
+    for (i = 0; i < count && offset + i < (params[nid][HDA_PARAM_CONN_LIST] & 127); i++)
+        result |= (uint32_t)connections[nid][offset + i] << (width * i);
+    return result;
+}
+
+/** Record a set verb's payload, OFFSET its low byte, in node NID's state. */
+static void model_set(unsigned nid, unsigned verb, unsigned offset)
+{
     if (verb == HDA_VERB_SET_PIN_SENSE)
         sense_triggers++;
     if ((verb & 0xFFF00) == HDA_VERB_SET_CONN_SEL)
@@ -150,6 +136,32 @@ static uint32_t model_verb(uint32_t command)
     }
     if ((verb & 0xFFF00) == HDA_VERB_SET_POWER)
         power[nid] = (uint16_t)(0x100 | offset);
+}
+
+/** Answer verbs from an independently packed codec connection list. */
+static uint32_t model_verb(uint32_t command)
+{
+    unsigned nid = (command >> 20) & 0x7F;
+    unsigned verb = command & 0xFFFFF;
+    unsigned offset = verb & 255;
+
+    verbs++;
+    if (log_count < VERB_LOG) {
+        log_command[log_count] = command & 0xFFFFFFF;
+        log_clock[log_count++] = clock_value;
+    }
+    check(!(command & (1u << 27)), "no indirect or truncated node verb");
+    if ((verb & 0xFFF00) == HDA_VERB_GET_PARAM)
+        return params[nid][offset & 31];
+    if ((verb & 0xFFF00) == HDA_VERB_GET_CONN_LIST)
+        return model_conn_list(nid, offset);
+    if (verb == HDA_VERB_GET_CONFIG_DEF)
+        return configurations[nid];
+    if (verb == HDA_VERB_GET_CONN_SEL)
+        return selected[nid];
+    if (verb == HDA_VERB_GET_PIN_SENSE)
+        return sense[nid];
+    model_set(nid, verb, offset);
     if (verb == 0xA0000)
         return converter_format[nid];
     return 0;
@@ -1870,6 +1882,32 @@ static void row_jack_stop(void)
 }
 
 /**
+ * The end of row_jack_capture, on its running stream S: a stop leaves the
+ * pin's input on, a plug while stopped routes the jack mic with its
+ * connection muted, and the next start records it. Closes S.
+ */
+static void jack_capture_stopped(audio_stream_t *s)
+{
+    const hda_input_report_t *in = &hda_get_report()->input;
+
+    hda_driver.stream_stop(s);
+    check(pin_ctl[26] == 0x20 && channel[19] == 0 && (in_amp[19][1][0] & 0x80) &&
+              (in_amp[19][1][1] & 0x80),
+          "a stop mutes and untags the adc and leaves the pin's input on");
+    sense[25] = 0;
+    poll_jacks(2);
+    sense[25] = 0x80000000;
+    poll_jacks(2);
+    check(in->pin == 25 && selected[19] == 2 && pin_ctl[25] == 0x24 && pin_ctl[26] == 0 &&
+              (in_amp[19][2][0] & 0x80),
+          "a plug while stopped routes the jack mic at once, muted");
+    check(hda_driver.stream_start(s) == 0 && selected[19] == 2 && pin_ctl[25] == 0x24,
+          "the next start records it");
+    hda_driver.stream_close(s);
+    clock_stopped = 0;
+}
+
+/**
  * While capture runs on the G50-70's internal mic 26, a headset's plug seen
  * twice moves it to the jack mic 25: ADC 19 selects its connection 2 at
  * 0 dB and mutes the internal mic's, the jack mic is biased at VREF 80% and
@@ -1916,21 +1954,7 @@ static void row_jack_capture(void)
           "the mixer chooses the internal mic with the plug in");
     poll_jacks(2);
     check(in->pin == 26, "and a steady jack leaves its choice");
-    hda_driver.stream_stop(&s);
-    check(pin_ctl[26] == 0x20 && channel[19] == 0 && (in_amp[19][1][0] & 0x80) &&
-              (in_amp[19][1][1] & 0x80),
-          "a stop mutes and untags the adc and leaves the pin's input on");
-    sense[25] = 0;
-    poll_jacks(2);
-    sense[25] = 0x80000000;
-    poll_jacks(2);
-    check(in->pin == 25 && selected[19] == 2 && pin_ctl[25] == 0x24 && pin_ctl[26] == 0 &&
-              (in_amp[19][2][0] & 0x80),
-          "a plug while stopped routes the jack mic at once, muted");
-    check(hda_driver.stream_start(&s) == 0 && selected[19] == 2 && pin_ctl[25] == 0x24,
-          "the next start records it");
-    hda_driver.stream_close(&s);
-    clock_stopped = 0;
+    jack_capture_stopped(&s);
 }
 
 /**
@@ -2042,7 +2066,6 @@ static void row_input_controls(void)
           "a codec with no adc has no sources");
 }
 
-/** Run codec and controller rows: 0 when every check passes, 1 otherwise. */
 /** Run `n` ticks of the boot processor: the clock, then the speaker's and
  * HDA's work, as the kernel's tick does. */
 static void beep_ticks(unsigned n)
@@ -2054,6 +2077,64 @@ static void beep_ticks(unsigned n)
         speaker_tick();
         hda_tick();
     }
+}
+
+/**
+ * The G50-70's beep during playback: a tone of 1000 Hz sends divider 12,
+ * and a stop of playback during it leaves the speaker's pin on until the
+ * tone ends and a second of silence follows.
+ */
+static void beep_during_playback(void)
+{
+    const hda_report_t *r = hda_get_report();
+
+    clock_stopped = 1;
+    check(hda_start(48000, AUDIO_S16LE, 2) == 0 && pin_ctl[23] == 0x40, "playback starts");
+    speaker_tone(SPEAKER_CLOCK / 1000, 100);
+    check(beep_ctl[18] == (0x100 | 12), "a tone of 1000 Hz during playback sends divider 12");
+    hda_stop();
+    check(pin_ctl[23] == 0x40 && r->beep_path, "a stop during the tone leaves the pin on");
+    beep_ticks(100);
+    check(beep_ctl[18] == 0x100 && pin_ctl[23] == 0x40, "the tick ends the tone");
+    beep_ticks(HDA_BEEP_IDLE_TICKS);
+    check(pin_ctl[23] == 0 && !r->beep_path, "and the pin goes off a second after");
+    clock_stopped = 0;
+}
+
+/**
+ * A beep widget with power control is powered and a mixer that lists it has
+ * that input unmuted at 0 dB; a codec without one leaves the PIT alone to
+ * sound, with no verb.
+ */
+static void beep_other_codecs(void)
+{
+    const hda_report_t *r = hda_get_report();
+    unsigned before;
+    int i;
+
+    reset_model();
+    model_lenovo();
+    params[18][HDA_PARAM_AUDIO_CAPS] |= 1u << 10; /* Power Control */
+    params[21][HDA_PARAM_CONN_LIST] = 3;
+    connections[21][2] = 18;
+    check(hda_find_output(), "enumeration succeeds with a powered beep");
+    check(power[18] == 0x100 && in_amp[21][2][0] == (0x100 | 0x4A) &&
+              in_amp[21][2][1] == (0x100 | 0x4A),
+          "the widget is powered and the mixer's input from it unmuted at 0 dB");
+
+    reset_model();
+    check(hda_find_output(), "enumeration succeeds without a beep widget");
+    check(r->beep == 0 && hda_driver.beep_level(-1) == -ENODEV &&
+              hda_driver.beep(750, 0) == -ENODEV,
+          "a codec without a beep widget has no generator");
+    speaker_set_beep(hda_driver.beep_level(-1) >= 0 ? hda_driver.beep : NULL);
+    before = verbs;
+    speaker_tone(SPEAKER_CLOCK / 750, 100);
+    check(verbs == before && pit_count == SPEAKER_CLOCK / 750 && (port61 & 3) == 3,
+          "a tone sounds the PIT alone");
+    for (i = 0; i < 100; i++)
+        beep_ticks(1);
+    check((port61 & 3) == 0 && verbs == before, "and the tick ends it without a verb");
 }
 
 /**
@@ -2074,7 +2155,6 @@ static void row_beep(void)
     const hda_report_t *r = hda_get_report();
     struct speaker_counters c;
     unsigned before;
-    int i;
 
     row = "beep";
     reset_model();
@@ -2131,43 +2211,11 @@ static void row_beep(void)
     hda_driver.beep_level(100);
     beep_ticks(HDA_BEEP_IDLE_TICKS);
 
-    clock_stopped = 1;
-    check(hda_start(48000, AUDIO_S16LE, 2) == 0 && pin_ctl[23] == 0x40, "playback starts");
-    speaker_tone(SPEAKER_CLOCK / 1000, 100);
-    check(beep_ctl[18] == (0x100 | 12), "a tone of 1000 Hz during playback sends divider 12");
-    hda_stop();
-    check(pin_ctl[23] == 0x40 && r->beep_path, "a stop during the tone leaves the pin on");
-    beep_ticks(100);
-    check(beep_ctl[18] == 0x100 && pin_ctl[23] == 0x40, "the tick ends the tone");
-    beep_ticks(HDA_BEEP_IDLE_TICKS);
-    check(pin_ctl[23] == 0 && !r->beep_path, "and the pin goes off a second after");
-    clock_stopped = 0;
-
-    reset_model();
-    model_lenovo();
-    params[18][HDA_PARAM_AUDIO_CAPS] |= 1u << 10; /* Power Control */
-    params[21][HDA_PARAM_CONN_LIST] = 3;
-    connections[21][2] = 18;
-    check(hda_find_output(), "enumeration succeeds with a powered beep");
-    check(power[18] == 0x100 && in_amp[21][2][0] == (0x100 | 0x4A) &&
-              in_amp[21][2][1] == (0x100 | 0x4A),
-          "the widget is powered and the mixer's input from it unmuted at 0 dB");
-
-    reset_model();
-    check(hda_find_output(), "enumeration succeeds without a beep widget");
-    check(r->beep == 0 && hda_driver.beep_level(-1) == -ENODEV &&
-              hda_driver.beep(750, 0) == -ENODEV,
-          "a codec without a beep widget has no generator");
-    speaker_set_beep(hda_driver.beep_level(-1) >= 0 ? hda_driver.beep : NULL);
-    before = verbs;
-    speaker_tone(SPEAKER_CLOCK / 750, 100);
-    check(verbs == before && pit_count == SPEAKER_CLOCK / 750 && (port61 & 3) == 3,
-          "a tone sounds the PIT alone");
-    for (i = 0; i < 100; i++)
-        beep_ticks(1);
-    check((port61 & 3) == 0 && verbs == before, "and the tick ends it without a verb");
+    beep_during_playback();
+    beep_other_codecs();
 }
 
+/** Run codec and controller rows: 0 when every check passes, 1 otherwise. */
 int main(void)
 {
     row_rates();

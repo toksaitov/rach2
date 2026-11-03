@@ -262,8 +262,8 @@ static void iface_moved(struct wlan *wlan, const struct wlan_channel *channel)
 }
 
 /* An interface that learns of no ACK, which probes a silent AP. */
-static const struct wlan_mlme_ops iface_ops = {iface_tx, iface_state, iface_event, 0, 0,
-                                               iface_hold, iface_moved};
+static const struct wlan_mlme_ops iface_ops = {iface_tx, iface_state, iface_event, 0,
+                                               0,        iface_hold,  iface_moved};
 
 /** Note a null frame the station asks the data path to send. */
 static int iface_poll(struct wlan *wlan, uint64_t *cookie)
@@ -282,7 +282,7 @@ static uint64_t iface_heard(struct wlan *wlan)
 }
 
 /* An interface that reports ACKs, as the softMAC station over ath9k does. */
-static const struct wlan_mlme_ops poll_ops = {iface_tx,   iface_state, iface_event, iface_poll,
+static const struct wlan_mlme_ops poll_ops = {iface_tx,    iface_state, iface_event, iface_poll,
                                               iface_heard, iface_hold,  iface_moved};
 
 /** Compare n bytes. */
@@ -1085,6 +1085,42 @@ static int followed(unsigned frequency)
 }
 
 /**
+ * The end of channel_switch, which calls it on channel 6 after three
+ * moves: the public extended action sets a time that a beacon without the
+ * element calls off, and a switch 20 beacons away outwaits a silent AP,
+ * which is then probed and left on the new channel.
+ */
+static void channel_switch_timed(void)
+{
+    static const uint8_t ecsa1[4] = {0, 81, 1, 20}; /* back to 1 in 20 beacons */
+    uint8_t f[HDR + 6];
+
+    hdr(f, IEEE80211_STYPE_ACTION, sta, ap_a, ap_a);
+    f[HDR] = WLAN_CATEGORY_PUBLIC;
+    f[HDR + 1] = WLAN_PUB_ACTION_EXT_CHANSW_ANN;
+    k_memcpy(f + HDR + 2, ecsa1, 4);
+    f[HDR + 5] = 3;
+    CHECK(deliver(f, HDR + 6, 0) == 1);
+    CHECK(mlme.csa_channel && mlme.csa_channel->number == 1 && !held);
+    wait_ms(100);
+    CHECK(ap_beacon_with(ap_a, 0, 0, 0) == 0 && !mlme.csa_channel);
+    wait_ms(300);
+    CHECK(followed(2437) && moves == 3);
+
+    /* A switch 20 beacons away outwaits a silent AP. */
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_EXT_CHANSWITCH, ecsa1, 4) == 0);
+    wait_ms(2047);
+    CHECK(n_sent == 0 && mlme.state == WLAN_STA_ASSOCIATED && moves == 3);
+    wait_ms(1);
+    CHECK(followed(2412) && moves == 4);
+    wait_ms(2000);
+    CHECK(n_sent == 3 && mlme.state == WLAN_STA_ASSOCIATED);
+    wait_ms(500);
+    CHECK(mlme.state == WLAN_STA_NONE && n_seen == 1);
+    CHECK(seen[0].ev.type == WLAN_EVENT_DEAUTHENTICATE && seen[0].ev.frequency == 2412);
+}
+
+/**
  * The AP's channel switch: a Channel Switch Announcement of mode 1 in its
  * beacons holds transmit and moves the station at the count's end with no
  * leave; the AP then has the beacon-loss time on the new channel. An
@@ -1099,7 +1135,6 @@ static void channel_switch(void)
     static const uint8_t csa6_4[3] = {1, 6, 4};      /* the next beacon's count */
     static const uint8_t ecsa11[4] = {0, 81, 11, 0}; /* mode 0, class 81, channel 11, now */
     static const uint8_t csa14[3] = {0, 14, 2};      /* a channel the band lacks */
-    static const uint8_t ecsa1[4] = {0, 81, 1, 20};  /* back to 1 in 20 beacons */
     uint8_t f[HDR + 2 + 5];
     unsigned pos;
 
@@ -1140,29 +1175,7 @@ static void channel_switch(void)
 
     CHECK(ap_beacon_with(ap_a, WLAN_EID_CHANNEL_SWITCH, csa14, 3) == 0);
     CHECK(!mlme.csa_channel && moves == 3 && configured == 2437);
-
-    f[HDR] = WLAN_CATEGORY_PUBLIC;
-    f[HDR + 1] = WLAN_PUB_ACTION_EXT_CHANSW_ANN;
-    k_memcpy(f + HDR + 2, ecsa1, 4);
-    f[HDR + 5] = 3;
-    CHECK(deliver(f, HDR + 6, 0) == 1);
-    CHECK(mlme.csa_channel && mlme.csa_channel->number == 1 && !held);
-    wait_ms(100);
-    CHECK(ap_beacon_with(ap_a, 0, 0, 0) == 0 && !mlme.csa_channel);
-    wait_ms(300);
-    CHECK(followed(2437) && moves == 3);
-
-    /* A switch 20 beacons away outwaits a silent AP. */
-    CHECK(ap_beacon_with(ap_a, WLAN_EID_EXT_CHANSWITCH, ecsa1, 4) == 0);
-    wait_ms(2047);
-    CHECK(n_sent == 0 && mlme.state == WLAN_STA_ASSOCIATED && moves == 3);
-    wait_ms(1);
-    CHECK(followed(2412) && moves == 4);
-    wait_ms(2000);
-    CHECK(n_sent == 3 && mlme.state == WLAN_STA_ASSOCIATED);
-    wait_ms(500);
-    CHECK(mlme.state == WLAN_STA_NONE && n_seen == 1);
-    CHECK(seen[0].ev.type == WLAN_EVENT_DEAUTHENTICATE && seen[0].ev.frequency == 2412);
+    channel_switch_timed();
 }
 
 /** Stopping drops every state without frames or events. */
