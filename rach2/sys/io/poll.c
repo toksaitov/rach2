@@ -365,17 +365,21 @@ static void deadline_end(struct poll_deadline *d, long sec, long nsec)
  * most a second's, ends: the first tick at or after its end, measured from
  * where in the tick in progress the call is (`rtc_tick_phase`), so a nonzero
  * wait is never shorter than asked and at most a tick longer, unless a tick
- * is lost.
+ * is lost. A zero wait ends at the tick count itself (`tick_count`), which
+ * `deadline_reached` reads, and not at `rtc_tick_phase`'s, which counts a
+ * tick the timer has reached and not yet raised: that tick would put the
+ * deadline ahead, and the wait would sleep until it, where Linux's zero
+ * timeout never sleeps.
  */
 static uint64_t tick_deadline(uint64_t ticks, uint32_t us)
 {
     uint64_t now;
     uint32_t phase_ns;
 
-    rtc_tick_phase(&now, &phase_ns);
     if (ticks == 0 && us == 0) {
-        return now;
+        return tick_count();
     }
+    rtc_tick_phase(&now, &phase_ns);
     return now + ticks + (phase_ns / 1000u + us + (TICK_US - 1u)) / TICK_US;
 }
 

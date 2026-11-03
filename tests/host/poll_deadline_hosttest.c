@@ -20,7 +20,8 @@
  * up; and a `poll` of 1 ms, a `select` of 1 us and a `ppoll` of 1 ns end at
  * 1001. Begun four tenths into the tick, a `ppoll` of a tenth of a tick ends
  * at 1001 and one of seven tenths at 1002, and a `poll` of a tick at 1002. A
- * zero timeout ends at once, and a negative or null one has no deadline. The
+ * zero timeout ends at once, a tick the timer has reached and not yet raised
+ * notwithstanding, and a negative or null one has no deadline. The
  * longest `ppoll` timeout of the i686, begun nine tenths into a tick just
  * short of 2^32 ticks, ends 2^31 s and a tick later, past them, and is not
  * reached at the tick it began. A deadline is reached at its tick and not the
@@ -63,6 +64,10 @@ uint64_t tick_count(void)
 }
 static uint32_t phase_now_ns;
 
+/* A tick the timer has reached and not yet raised, which `rtc_tick_phase`
+ * counts and `tick_count` does not: 0 or 1. */
+static uint32_t pending_now;
+
 /* When not 0, the reading in nanoseconds the clock keeps after a lost tick
  * put the tick count behind it, which it reads until the count passes. */
 static int64_t mono_held_ns;
@@ -70,7 +75,7 @@ static int64_t mono_held_ns;
 /** The tick count and the place within the tick, as the deadlines read them. */
 void rtc_tick_phase(uint64_t *ticks, uint32_t *phase_ns)
 {
-    *ticks = kernel_ticks;
+    *ticks = kernel_ticks + pending_now;
     *phase_ns = phase_now_ns;
 }
 
@@ -173,6 +178,36 @@ static void held_clock(void)
     CHECK(deadline_passed(&d), "a ppoll of 2^40 s, which the tick cuts, ends at its tick alone");
 }
 
+/** The rows of a zero timeout begun while a tick is pending, which must be
+ * reached and passed at once, as a wait that does not sleep. */
+static void pending_tick(void)
+{
+    struct poll_deadline d;
+    struct poll_timespec ts;
+    struct poll_timeval tv;
+
+    kernel_ticks = 1000;
+    phase_now_ns = 0;
+    mono_held_ns = 0;
+    pending_now = 1;
+    poll_ms_deadline(0, &d);
+    CHECK(d.tick == 1000 && deadline_reached(d.tick) && deadline_passed(&d),
+          "a zero poll timeout begun with a tick pending ends at once");
+    ts.tv_sec = 0;
+    ts.tv_nsec = 0;
+    ts_deadline(&ts, &d);
+    CHECK(d.tick == 1000 && deadline_reached(d.tick) && deadline_passed(&d),
+          "a zero ppoll timeout begun with a tick pending ends at once");
+    tv.tv_sec = 0;
+    tv.tv_usec = 0;
+    poll_ms_deadline(tv_to_ms(&tv), &d);
+    CHECK(d.tick == 1000 && deadline_reached(d.tick) && deadline_passed(&d),
+          "a zero select timeout begun with a tick pending ends at once");
+    poll_ms_deadline(1, &d);
+    CHECK(d.tick == 1002, "a poll of 1 ms begun with a tick pending ends at the tick after it");
+    pending_now = 0;
+}
+
 /** Run every check; 0 when each passes, 1 otherwise. */
 int main(void)
 {
@@ -236,6 +271,7 @@ int main(void)
     CHECK(!deadline_reached(ts_tick(&ts, &has)),
           "and its deadline is not reached at the tick it began");
     held_clock();
+    pending_tick();
     if (failures) {
         return 1;
     }
