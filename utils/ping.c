@@ -537,11 +537,8 @@ static int send_request(int fd, const struct target *t, unsigned char *pkt, size
     return r < 0 ? errno : 0;
 }
 
-/** Count the round trip `rtt` in `t`, and print its line, of reply number
- * `n` from `from` of `size` ICMP bytes that arrived with the hop limit
- * `ttl`, -1 for unknown, unless `quiet`. */
-static void count_reply(struct tally *t, const char *from, long n, long long rtt, long size,
-                        int ttl, int quiet)
+/** Count a reply's round trip `rtt` in `t`. */
+static void count_reply(struct tally *t, long long rtt)
 {
     t->received++;
     t->sum += rtt;
@@ -552,16 +549,20 @@ static void count_reply(struct tally *t, const char *from, long n, long long rtt
     if (rtt > t->max) {
         t->max = rtt;
     }
-    if (!quiet) {
-        printf("%ld bytes from %s: icmp_seq=%ld", size, from, n);
-        if (ttl >= 0) {
-            printf(" ttl=%d", ttl);
-        }
-        fputs(" time=", stdout);
-        print_ms(rtt);
-        puts(" ms");
-        fflush(stdout);
+}
+
+/** Print the line of reply number `n` from `from`, of `size` ICMP bytes,
+ * that arrived with the hop limit `ttl`, -1 for unknown, after `rtt`. */
+static void print_reply(const char *from, long n, long long rtt, long size, int ttl)
+{
+    printf("%ld bytes from %s: icmp_seq=%ld", size, from, n);
+    if (ttl >= 0) {
+        printf(" ttl=%d", ttl);
     }
+    fputs(" time=", stdout);
+    print_ms(rtt);
+    puts(" ms");
+    fflush(stdout);
 }
 
 /**
@@ -622,8 +623,10 @@ static void take_replies(int fd, const struct target *to, const struct options *
         } else {
             inet_ntop(AF_INET, &((struct sockaddr_in *)&from)->sin_addr, text, sizeof(text));
         }
-        count_reply(t, text, sent_no[seq % WINDOW], now - sent_at[seq % WINDOW], (long)got, ttl,
-                    o->quiet);
+        count_reply(t, now - sent_at[seq % WINDOW]);
+        if (!o->quiet) {
+            print_reply(text, sent_no[seq % WINDOW], now - sent_at[seq % WINDOW], (long)got, ttl);
+        }
     }
 }
 
@@ -647,6 +650,23 @@ static long long linger_end(const struct options *o, const struct tally *t, long
         return -1;
     }
     return last + (o->timeout > 0 ? o->timeout : LINGER_US);
+}
+
+/**
+ * When, on the monotonic clock, a run from `start` wakes next: at `next`
+ * for the next request while `more` remain, then at the end of the wait
+ * for the replies out since the last request, at `last`, but never past a
+ * deadline. -1 for never.
+ */
+static long long wake_at(const struct options *o, const struct tally *t, long long start,
+                         long long last, long long next, int more)
+{
+    long long wake = more ? next : (o->deadline ? -1 : linger_end(o, t, last));
+
+    if (o->deadline && (wake < 0 || wake > start + o->deadline)) {
+        wake = start + o->deadline;
+    }
+    return wake;
 }
 
 /**
@@ -703,12 +723,9 @@ static int run(int fd, const struct target *to, const struct options *o, struct 
             take_replies(fd, to, o, t, buf, cap);
             continue;
         }
-        wake = more ? next : (o->deadline ? -1 : linger_end(o, t, last));
+        wake = wake_at(o, t, start, last, next, more);
         if (!more && !o->deadline && wake >= 0 && now >= wake) {
             break;
-        }
-        if (o->deadline && (wake < 0 || wake > start + o->deadline)) {
-            wake = start + o->deadline;
         }
         ms = wake < 0 ? -1 : (int)((wake - now + 999) / 1000);
         pfd.fd = fd;
