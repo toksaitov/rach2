@@ -59,6 +59,14 @@ drop_routes() {
 	done
 }
 
+# Whether the one default route through the interface is through gateway $1
+# at the interface's metric.
+only_route() {
+	/bin/busybox route -n | /bin/busybox awk -v gw="$1" -v m="$metric" -v i="$interface" '
+		$1 == "0.0.0.0" && $NF == i { n++; if ($2 == gw && $5 == m) ok = 1 }
+		END { exit !(n == 1 && ok) }'
+}
+
 case "$1" in
 	# A lost lease, or a link that went down, takes everything the lease
 	# gave: the address, the default route, whose gateway is the last
@@ -87,22 +95,27 @@ case "$1" in
 			/bin/busybox ifconfig "$interface" mtu "$mtu" || fail=1
 		fi
 
-		# Old default routes go before the new one.
-		drop_routes
-
 		# The lease decides the route, a lease that names none included:
 		# the old default route goes whether or not this one replaces it,
 		# because a gateway of the network this machine was on before is
 		# not a gateway here. A lease with no router leaves the machine with
 		# its subnet and nothing beyond it, as the lease says, and that is
 		# reported, because a machine reachable only from its own subnet
-		# looks like a machine that is down.
-		if [ -n "$router" ]; then
+		# looks like a machine that is down. A renewal whose router is that
+		# of the one default route in force keeps the route, so that no
+		# packet meets the moment between its removal and its return:
+		# wpa_action renews at once each time the station joins its network
+		# again.
+		if [ "$1" = renew ] && [ -n "$router" ] && only_route "${router%% *}"; then
+			:
+		elif [ -n "$router" ]; then
+			drop_routes
 			for r in $router; do
 				/bin/busybox route add default gw "$r" dev "$interface" metric "$metric" || fail=1
 				break
 			done
 		else
+			drop_routes
 			echo "udhcpc: the lease names no router: nothing off this subnet is reachable" >&2
 		fi
 

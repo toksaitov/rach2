@@ -2,16 +2,29 @@
 #
 # The script wpa_cli runs, as `wpa_cli -a`, when wpa_supplicant joins a
 # network or leaves one: `wpa_action IFACE CONNECTED` or `wpa_action IFACE
-# DISCONNECTED`. init(8) starts both programs on wlan0.
+# DISCONNECTED`. init(8) starts both programs on wlan0. wpa_cli runs it for
+# other events too, with the event as the second argument; those it ignores.
 #
 # A Wi-Fi interface's link is its association: the kernel reports carrier
 # while the station is associated, and the network after a disconnection may
 # be another, as when the machine is carried to another building. So the
-# lease follows the association. CONNECTED stops any DHCP client of IFACE
-# and starts a new one, which asks the network just joined for a lease at
-# once; DISCONNECTED stops it, and its script gives the lease up with the
-# address, the default route and the servers (udhcpc-default.script). The
-# card stays up throughout, since wpa_supplicant owns it, which is why
+# lease follows the network joined. CONNECTED starts a DHCP client on IFACE,
+# which asks the network just joined for a lease at once, and records the
+# network's id, wpa_cli's WPA_ID. DISCONNECTED leaves the client running for
+# up to HOLD seconds: a CONNECTED to the same network within them keeps the
+# client, the address and the connections that use it, and has the client
+# renew the lease at once (SIGUSR1), which the server confirms or, on a
+# network that is not the one it was, refuses, so that the client starts
+# over. A CONNECTED to another network, or none within HOLD seconds, stops
+# the client, and its script gives the lease up with the address, the
+# default route and the servers (udhcpc-default.script). The wait ends early
+# when wpa_supplicant stops trying, its state INTERFACE_DISABLED, as for a
+# blocked radio, or INACTIVE, with no network enabled. This is
+# NetworkManager's link timeout, which keeps a Wi-Fi connection while
+# wpa_supplicant joins its network again after a short break, such as an AP
+# that restarts, deauthenticates the station or is lost for a few beacons.
+#
+# The card stays up throughout, since wpa_supplicant owns it, which is why
 # ifplugd follows the cable alone: its action's `ifdown` would take the card
 # down under wpa_supplicant. IPv6 needs nothing here: the kernel makes the
 # addresses the routers advertise, and ndwatch(8), which init runs on wlan0
@@ -19,18 +32,29 @@
 #
 # wpa_cli runs this script for a move between two networks, whose ids
 # differ, but not for a roam between the access points of one network, so a
-# roam keeps the lease, the address and the connections that use it.
+# roam keeps the lease without it.
 #
 # The client is BusyBox's udhcpc, in the foreground of a process of its own
 # (`-f`), so that wpa_cli, which waits for this script, is not held while
 # the network answers. `-R` gives the lease up when the client is stopped.
-# Its pid is kept in /var/run/udhcpc.IFACE.pid, the file `ifup` uses.
+# Its pid is kept in /var/run/udhcpc.IFACE.pid, the file `ifup` uses, and
+# its network's id in /var/run/udhcpc.IFACE.net. A pending wait is the file
+# /var/run/wpa_action.IFACE.hold.TOKEN: whichever of the waiting process
+# and CONNECTED renames it first decides, the one to stop the client, the
+# other to keep it, since rename is atomic and wpa_cli runs one action at a
+# time but the waiting process beside them.
 
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 export PATH
 
+HOLD=15 # seconds a disconnection may last before the lease goes
+CTRL=/var/run/wpa_supplicant
+
 iface=$1
 pidfile=/var/run/udhcpc.$iface.pid
+netfile=/var/run/udhcpc.$iface.net
+hold=/var/run/wpa_action.$iface.hold
+ending=/var/run/wpa_action.$iface.ending
 
 # Stop IFACE's client, if one runs, and wait up to five seconds for its
 # script to give the lease up, so that a new client's lease cannot be taken
@@ -46,7 +70,65 @@ stop_dhcp() {
 			done
 		fi
 	fi
-	rm -f "$pidfile"
+	rm -f "$pidfile" "$netfile"
+}
+
+# Start a client of IFACE for the network WPA_ID.
+start_dhcp() {
+	/bin/busybox udhcpc -f -R -O mtu -i "$iface" -p "$pidfile" < /dev/null &
+	echo $! > "$pidfile"
+	echo "${WPA_ID-}" > "$netfile"
+}
+
+# Whether IFACE's client runs.
+running() {
+	[ -s "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null
+}
+
+# wpa_supplicant's state of IFACE, such as COMPLETED.
+state() {
+	wpa_cli -p "$CTRL" -i "$iface" status 2>/dev/null | sed -n 's/^wpa_state=//p'
+}
+
+# Wait for the disconnection whose file is "$hold.$1": stop the client when
+# no CONNECTED has taken the file within HOLD seconds, or once wpa_supplicant
+# stops trying.
+hold_wait() {
+	n=0
+	while [ $n -lt $HOLD ] && [ -e "$hold.$1" ]; do
+		case "$(state)" in
+			INTERFACE_DISABLED | INACTIVE) break ;;
+		esac
+		sleep 1
+		n=$((n + 1))
+	done
+	if mv "$hold.$1" "$ending.$1" 2>/dev/null; then
+		stop_dhcp
+		rm -f "$ending.$1"
+	fi
+}
+
+# Take the pending disconnection's file, if there is one, so that its wait
+# leaves the client alone; true when one was taken.
+hold_take() {
+	for f in "$hold".*; do
+		if mv "$f" "$f.taken" 2>/dev/null; then
+			rm -f "$f.taken"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# Wait up to six seconds for a wait that has begun to stop the client.
+hold_ended() {
+	n=0
+	for f in "$ending".*; do
+		while [ $n -lt 60 ] && [ -e "$f" ]; do
+			usleep 100000
+			n=$((n + 1))
+		done
+	done
 }
 
 case "$iface" in
@@ -58,12 +140,25 @@ esac
 
 case "$2" in
 	CONNECTED)
+		if running && [ -n "${WPA_ID-}" ] &&
+			[ "$(cat "$netfile" 2>/dev/null)" = "$WPA_ID" ] && hold_take; then
+			kill -USR1 "$(cat "$pidfile")" 2>/dev/null && exit 0
+		fi
+		# The old client stops before the wait's file goes, so that while
+		# the file is there the lease may yet change, and once it is gone
+		# the lease in force is the one this network keeps.
 		stop_dhcp
-		/bin/busybox udhcpc -f -R -O mtu -i "$iface" -p "$pidfile" < /dev/null &
-		echo $! > "$pidfile"
+		hold_take || hold_ended
+		start_dhcp
 		;;
 	DISCONNECTED)
-		stop_dhcp
+		rm -f "$hold".*
+		if running; then
+			: > "$hold.$$"
+			hold_wait $$ < /dev/null > /dev/null 2>&1 &
+		else
+			stop_dhcp
+		fi
 		;;
 esac
 exit 0
