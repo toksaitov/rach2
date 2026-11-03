@@ -1543,10 +1543,17 @@ static uint8_t in_boost[AUDIO_SOURCES];
  * `cap_lock`, with interrupts off; the stream operations take the lock to
  * change what it reads.
  */
-#define HDA_CAPTURE_TAG     2      /* the input stream's tag; playback's is 1 */
-#define HDA_CAPTURE_BUFFER  65536u /* bytes of the DMA buffer at most */
-#define HDA_CAPTURE_PERIOD  16384u /* bytes of one DMA period at most */
-#define HDA_CAPTURE_ENTRIES 32u    /* periods in the DMA buffer at most */
+#define HDA_CAPTURE_TAG       2      /* the input stream's tag; playback's is 1 */
+#define HDA_CAPTURE_BUFFER    65536u /* bytes of the DMA buffer at most */
+#define HDA_CAPTURE_PERIOD    16384u /* bytes of one DMA period at most */
+#define HDA_CAPTURE_ENTRIES   32u    /* periods in the DMA buffer at most */
+/* Microseconds a capture's start waits after formatting the converter, and
+ * again after unmuting the ADC's amplifier, before the DMA records. */
+#define HDA_CAPTURE_SETTLE_US 10000u
+/* The internal mic's boost at discovery, in dB: Linux under PipeWire sets
+ * the whole path to its top, +6 and +36 dB on the G50-70, where speech at 0
+ * dB peaks near -34 dBFS and would clip; 24 dB brings it near -10 dBFS. */
+#define HDA_INT_MIC_BOOST_DB  24u
 
 static volatile hda_bdl_entry_t cap_bdl[HDA_CAPTURE_ENTRIES] __attribute__((aligned(128)));
 static uint8_t cap_buffer[HDA_CAPTURE_BUFFER] __attribute__((aligned(128)));
@@ -1567,6 +1574,7 @@ static uint32_t cap_handed = 0;   /* frames handed to the reader */
 
 static void hda_service_capture(void);
 static void hda_capture_stop(audio_stream_t *s);
+static bool hda_input_ready(void);
 static void hda_find_jacks(void);
 
 /* The PCI subsystem, vendor in the high half, which names a machine's
@@ -1701,6 +1709,17 @@ static uint8_t hda_choose_adc(uint8_t pin, uint8_t other)
     return adc;
 }
 
+/** The step of an amplifier with capabilities `amp` nearest `db` above its
+ * 0 dB step, the offset, and within its steps. Steps are in quarters of a dB
+ * less one, in bits 22:16. */
+static uint8_t hda_amp_db(uint32_t amp, uint32_t db)
+{
+    uint32_t quarters = ((amp >> 16) & 0x7F) + 1;
+    uint32_t step = (amp & 0x7F) + (db * 4 + quarters / 2) / quarters;
+
+    return (uint8_t)(step < hda_amp_steps(amp) ? step : hda_amp_steps(amp));
+}
+
 /**
  * Choose the input path from the widgets in the report: the pins, the ADC
  * and the capture level. hda_find_output calls it once the report has every
@@ -1711,7 +1730,8 @@ static uint8_t hda_choose_adc(uint8_t pin, uint8_t other)
  * that pin, and of those it prefers one that reaches the other microphone
  * too, so that a later switch between the two needs only its connection
  * select. Each source's gain starts at the ADC's 0 dB step, the offset of
- * its input amplifier, and its boost at its pin's. On a machine of
+ * its input amplifier, and its boost at its pin's 0 dB step, but the
+ * internal mic's at HDA_INT_MIC_BOOST_DB. On a machine of
  * hda_inv_dmic_machines the internal mic is marked inverted.
  */
 static void hda_find_input(void)
@@ -1736,7 +1756,9 @@ static void hda_find_input(void)
             const hda_widget_report_t *p = hda_source_pin(i) ? hda_widget(hda_source_pin(i)) : NULL;
 
             in_gain[i] = (uint8_t)(hda_widget(adc_nid)->amp_in & 0x7F); /* Offset: 0 dB */
-            in_boost[i] = p ? (uint8_t)(p->amp_in & 0x7F) : 0;
+            in_boost[i] = !p                       ? 0
+                          : i == AUDIO_SRC_INT_MIC ? hda_amp_db(p->amp_in, HDA_INT_MIC_BOOST_DB)
+                                                   : (uint8_t)(p->amp_in & 0x7F);
         }
     }
 
@@ -2399,6 +2421,8 @@ static int hda_init(void)
     if (!hda_find_output()) {
         return -1;
     }
+    if (adc_nid)
+        hda_input_ready();
 
     if (hda_pci.irq > 0 && hda_pci.irq < 16) {
         register_isr_handler((uint8_t)IRQ_VECTOR(hda_pci.irq), hda_irq_handler, "hda");
@@ -3057,7 +3081,7 @@ static bool mic_program = false;    /* capture moved while its stream runs, and 
 static uint8_t mic_left = 0;        /* the pin capture moved from, whose input the
                                        route's programming turns off */
 
-static bool hda_input_program(int vmode);
+static bool hda_input_program(int vmode, bool live);
 static uint8_t hda_source_route(int source, bool take);
 
 /** Count a region outside the tick that programs the codec's pins; the tick
@@ -3229,7 +3253,7 @@ static bool hda_follow_mic(int vmode)
     }
     if (!mic_program)
         return true;
-    if (cap_running && !hda_input_program(vmode))
+    if (!hda_input_program(vmode, cap_running))
         return false;
     mic_program = false;
     mic_left = 0;
@@ -4099,26 +4123,49 @@ static uint32_t hda_in_amp_verb(uint32_t which, uint8_t index, uint8_t mute, uin
 }
 
 /**
+ * Set the ADC's input amplifier on the connection of the source recorded,
+ * in verbs of `vmode` (hda_put): to the source's gain when `live`, else
+ * muted where it can mute, at the source's gain still. With the inverted
+ * internal mic recorded, the right channel stays muted either way.
+ */
+static void hda_input_amp(int vmode, bool live, bool *ok)
+{
+    const hda_widget_report_t *a = hda_widget(adc_nid);
+    uint8_t mute_cap = (a->amp_in & 0x80000000u) ? 0x80 : 0;
+    uint8_t gain = in_gain[in_src] & 0x7F;
+    uint8_t muted = live ? in_gain[in_src] & 0x80 : mute_cap;
+
+    if (!(a->caps & (1u << 1))) /* In Amp Present */
+        return;
+    if (hda_report.input.inv_dmic && in_pin_nid == int_mic_nid) {
+        hda_put(adc_nid, hda_in_amp_verb(0x6000, in_conn_idx, muted, gain), vmode, ok);
+        hda_put(adc_nid, hda_in_amp_verb(0x5000, in_conn_idx, mute_cap, gain), vmode, ok);
+    } else {
+        hda_put(adc_nid, hda_in_amp_verb(0x7000, in_conn_idx, muted, gain), vmode, ok);
+    }
+}
+
+/**
  * Program the route from the source recorded to the ADC, in verbs of
  * `vmode` (hda_put): turn off the input of the pin capture left (mic_left),
- * select the pin, and enable its input. Return false when a verb failed.
+ * select the pin, and enable its input; then set the ADC's amplifier on the
+ * pin's connection (hda_input_amp), to the source's gain when `live` and
+ * muted otherwise. Return false when a verb failed.
  *
- * The ADC's input amplifier on the pin's connection is the source's gain,
- * and its others are muted; with the inverted internal mic its right
- * channel is muted too. A mixer or selector between passes the pin at 0 dB.
- * A microphone pin gets its bias, VREF 80% where its caps have it, else
- * 50%, else 100%; a line in gets none. The pin's own input amplifier, a
- * boost on most codecs, is the source's boost.
+ * The ADC's other connections are muted. A mixer or selector between passes
+ * the pin at 0 dB. A microphone pin gets its bias, VREF 80% where its caps
+ * have it, else 50%, else 100%; a line in gets none. The pin's own input
+ * amplifier, a boost on most codecs, is the source's boost. The ADC's
+ * amplifier comes last, so that whatever the pin's start sends arrives
+ * muted.
  */
-static bool hda_input_program(int vmode)
+static bool hda_input_program(int vmode, bool live)
 {
     const hda_widget_report_t *a = hda_widget(adc_nid);
     const hda_widget_report_t *p = hda_widget(in_pin_nid);
     const hda_widget_report_t *m = in_mid_nid ? hda_widget(in_mid_nid) : NULL;
     uint32_t vref = (p->pin_caps >> 8) & 0xFF; /* VRef Control: Hi-Z, 50%, ground, -, 80%, 100% */
     uint16_t pin_ctl = 0x20;                   /* In Enable */
-    uint8_t mute_cap = (a->amp_in & 0x80000000u) ? 0x80 : 0;
-    uint8_t gain = in_gain[in_src] & 0x7F, muted = in_gain[in_src] & 0x80;
     bool ok = true;
     int i;
 
@@ -4126,18 +4173,11 @@ static bool hda_input_program(int vmode)
         hda_put(mic_left, HDA_VERB_SET_PIN_CTRL | 0x00, vmode, &ok);
     if (a->conn_count > 1)
         hda_put(adc_nid, HDA_VERB_SET_CONN_SEL | in_conn_idx, vmode, &ok);
-    if (a->caps & (1u << 1)) { /* In Amp Present */
-        /* Amplifier input indices are four bits. */
-        for (i = 0; i < a->conn_count && i < 16; i++)
-            if (i != in_conn_idx && mute_cap)
-                hda_put(adc_nid, hda_in_amp_verb(0x7000, (uint8_t)i, 0x80, 0), vmode, &ok);
-        if (hda_report.input.inv_dmic && in_pin_nid == int_mic_nid) {
-            hda_put(adc_nid, hda_in_amp_verb(0x6000, in_conn_idx, muted, gain), vmode, &ok);
-            hda_put(adc_nid, hda_in_amp_verb(0x5000, in_conn_idx, mute_cap, gain), vmode, &ok);
-        } else {
-            hda_put(adc_nid, hda_in_amp_verb(0x7000, in_conn_idx, muted, gain), vmode, &ok);
-        }
-    }
+    /* Amplifier input indices are four bits. */
+    for (i = 0; (a->caps & (1u << 1)) && (a->amp_in & 0x80000000u) && i < a->conn_count && i < 16;
+         i++)
+        if (i != in_conn_idx)
+            hda_put(adc_nid, hda_in_amp_verb(0x7000, (uint8_t)i, 0x80, 0), vmode, &ok);
     if (m) {
         hda_put(m->nid, HDA_VERB_SET_POWER | 0x00, vmode, &ok);
         if (m->type == HDA_WIDGET_AUDIO_SEL)
@@ -4162,18 +4202,24 @@ static bool hda_input_program(int vmode)
         hda_put(in_pin_nid,
                 hda_in_amp_verb(0x7000, 0, in_boost[in_src] & 0x80, in_boost[in_src] & 0x7F), vmode,
                 &ok);
+    hda_input_amp(vmode, live, &ok);
     hda_report.input.pin_ctl = pin_ctl;
-    hda_report.input.level = gain;
+    hda_report.input.level = in_gain[in_src] & 0x7F;
     return ok;
 }
 
 /**
- * Program the input path for format word `fmt`: power the function group
- * and the ADC, give the ADC the format and the input stream's tag, and
- * program the route from the source recorded (hda_input_program). Return 0,
- * or -EIO when a verb failed; every verb is sent even so. The route's retry
- * flags, mic_program and mic_left, are cleared only on success, so that a
- * pin capture moved from is turned off at the next try.
+ * Program the input path for format word `fmt` in Linux's order for a
+ * capture's start, with the ADC's amplifier unmuted only once the converter
+ * runs: power the function group and the ADC, program the route with the
+ * amplifier muted (hda_input_program), give the ADC the input stream's tag
+ * and, 1 ms later, the format, as snd_hda_codec_setup_stream does; wait
+ * HDA_CAPTURE_SETTLE_US for the converter to settle, unmute the amplifier,
+ * and wait HDA_CAPTURE_SETTLE_US again, so that what the unmute sets off
+ * has passed before the DMA records. Return 0, or -EIO when a verb failed;
+ * every verb is sent even so. The route's retry flags, mic_program and
+ * mic_left, are cleared only on success, so that a pin capture moved from
+ * is turned off at the next try.
  */
 static int hda_capture_path(uint16_t fmt)
 {
@@ -4181,13 +4227,36 @@ static int hda_capture_path(uint16_t fmt)
 
     hda_put(audio_fg_nid, HDA_VERB_SET_POWER | 0x00, HDA_VERB_WAIT, &ok);
     hda_put(adc_nid, HDA_VERB_SET_POWER | 0x00, HDA_VERB_WAIT, &ok);
-    hda_put(adc_nid, HDA_VERB_SET_CONV_FMT | fmt, HDA_VERB_WAIT, &ok);
+    if (!hda_input_program(HDA_VERB_WAIT, false))
+        ok = false;
     hda_put(adc_nid, HDA_VERB_SET_CHANNEL | (HDA_CAPTURE_TAG << 4), HDA_VERB_WAIT, &ok);
-    if (!hda_input_program(HDA_VERB_WAIT) || !ok)
+    hda_delay(1000);
+    hda_put(adc_nid, HDA_VERB_SET_CONV_FMT | fmt, HDA_VERB_WAIT, &ok);
+    hda_delay_walclk_us(HDA_CAPTURE_SETTLE_US);
+    hda_input_amp(HDA_VERB_WAIT, true, &ok);
+    hda_delay_walclk_us(HDA_CAPTURE_SETTLE_US);
+    if (!ok)
         return -EIO;
     mic_program = false;
     mic_left = 0;
     return 0;
+}
+
+/**
+ * Make the input path ready for a capture that has not started: power the
+ * function group and the ADC and program the route with the ADC's
+ * amplifier muted (hda_input_program). Linux's codec init leaves its input
+ * pins on in the same way, so that a digital mic is clocked and a jack
+ * mic's bias steady long before a capture's start. Return false when a verb
+ * failed.
+ */
+static bool hda_input_ready(void)
+{
+    bool ok = true;
+
+    hda_put(audio_fg_nid, HDA_VERB_SET_POWER | 0x00, HDA_VERB_WAIT, &ok);
+    hda_put(adc_nid, HDA_VERB_SET_POWER | 0x00, HDA_VERB_WAIT, &ok);
+    return hda_input_program(HDA_VERB_WAIT, false) && ok;
 }
 
 /** Take the input stream for `s`: 0, -EBUSY while it is taken, or -ENODEV
@@ -4348,9 +4417,11 @@ static void hda_capture_stop(audio_stream_t *s)
     spin_unlock(&cap_lock);
     kirq_restore(flags);
     if (was && hda_base) {
+        bool ok = true;
+
         hda_jack_hold();
+        hda_input_amp(HDA_VERB_WAIT, false, &ok);
         hda_send_verb(codec_addr, adc_nid, HDA_VERB_SET_CHANNEL | 0);
-        hda_send_verb(codec_addr, in_pin_nid, HDA_VERB_SET_PIN_CTRL | 0x00);
         hda_jack_release();
     }
 }
@@ -4616,11 +4687,11 @@ static int hda_input_select(int source)
     if (!adc_nid)
         return -ENODEV;
     hda_jack_hold();
-    if (source != in_src && hda_source_route(source, true) && cap_running) {
+    if (source != in_src && hda_source_route(source, true)) {
         mic_left = from;
-        hda_input_program(HDA_VERB_WAIT);
-        mic_program = false;
-        mic_left = 0;
+        mic_program = !hda_input_program(HDA_VERB_WAIT, cap_running);
+        if (!mic_program)
+            mic_left = 0;
     }
     hda_jack_release();
     return in_src;
@@ -4653,7 +4724,7 @@ static int hda_input_level(int ctl, int source, int level)
             hda_report.input.level = in_gain[source] & 0x7F;
             if (cap_running) {
                 hda_jack_hold();
-                hda_input_program(HDA_VERB_WAIT);
+                hda_input_program(HDA_VERB_WAIT, true);
                 hda_jack_release();
             }
         }

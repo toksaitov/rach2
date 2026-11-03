@@ -56,6 +56,13 @@ static uint32_t model_pos; /* bytes into the DMA buffer */
 static int16_t played[1 << 17];
 static unsigned played_count;
 static unsigned clock_reads, console_writes;
+/* The verbs the codec took in order, each with the wall clock when it came,
+ * and how many it had taken, and the clock, when the input stream's
+ * descriptor was set running; run_at is ~0 until then. */
+#define VERB_LOG 512
+static uint32_t log_command[VERB_LOG], log_clock[VERB_LOG];
+static unsigned log_count, run_at;
+static uint32_t run_clock;
 static unsigned mmio_reads, mmio_writes;
 
 /** Report the row and assertion that failed. */
@@ -77,6 +84,10 @@ static uint32_t model_verb(uint32_t command)
     unsigned i, width, count;
 
     verbs++;
+    if (log_count < VERB_LOG) {
+        log_command[log_count] = command & 0xFFFFFFF;
+        log_clock[log_count++] = clock_value;
+    }
     check(!(command & (1u << 27)), "no indirect or truncated node verb");
     if ((verb & 0xFFF00) == HDA_VERB_GET_PARAM)
         return params[nid][offset & 31];
@@ -163,6 +174,14 @@ void hda_test_write(uint32_t offset, uint32_t value, int bits)
         }
         return;
     }
+    /* A reset of the input stream's descriptor zeroes its position, and its
+     * run bit set is logged. */
+    if (offset == 0x80 + HDA_SD_CTL && (value & HDA_SD_CTL_SRST))
+        k_memset(&mmio[0x80 + HDA_SD_LPIB], 0, 4);
+    if (offset == 0x80 + HDA_SD_CTL && (value & HDA_SD_CTL_RUN) && run_at == ~0u) {
+        run_at = log_count;
+        run_clock = clock_value;
+    }
     for (i = 0; i < bits / 8; i++)
         mmio[offset + i] = (uint8_t)(value >> (i * 8));
 }
@@ -183,6 +202,8 @@ static void reset_model(void)
     k_memset(channel, 0, sizeof(channel));
     k_memset(eapd, 0, sizeof(eapd));
     conn_reads = verbs = bad_offsets = sense_triggers = 0;
+    log_count = 0;
+    run_at = ~0u;
     cap_stream = NULL;
     cap_running = false;
     hda_subsystem = 0;
@@ -1164,7 +1185,7 @@ static void row_capture_path(void)
           "the other connections are muted");
     check(pin_ctl[26] == 0x20 && in->pin_ctl == 0x20,
           "the internal mic's input is on, with no vref");
-    check(in_amp[26][0][0] == 0x100, "the pin's boost is at 0 dB");
+    check(in_amp[26][0][0] == (0x100 | 2), "the internal mic's boost is at 24 dB, step 2");
     hda_driver.stream_close(&s);
     check(channel[19] == 0, "a close takes the stream's tag from the adc");
 
@@ -1186,6 +1207,89 @@ static void row_capture_path(void)
               "the left is recorded in both channels");
     }
     hda_driver.stream_close(&s);
+}
+
+/** The index in the verb log of the first verb from `from` on that is
+ * `verb` to `nid` under `mask`, or log_count when there is none. */
+static unsigned log_find(unsigned from, unsigned nid, uint32_t verb, uint32_t mask)
+{
+    unsigned i;
+
+    for (i = from; i < log_count; i++)
+        if ((log_command[i] >> 20) == nid && (log_command[i] & mask) == verb)
+            break;
+    return i;
+}
+
+/**
+ * A capture's start on the G50-70 in Linux's order. The path made ready at
+ * init leaves the internal mic's input on, its boost at 24 dB and ADC 19's
+ * amplifier muted. A start then powers the ADC, programs the route with the
+ * amplifier still muted, tags the ADC and formats it, as Linux's
+ * snd_hda_codec_setup_stream does, and unmutes the left channel only
+ * HDA_CAPTURE_SETTLE_US after the format; the descriptor runs
+ * HDA_CAPTURE_SETTLE_US after the unmute. A start after a capture that
+ * stopped part way resets the position, and the first period handed over
+ * is the first one recorded.
+ */
+static void row_capture_start(void)
+{
+    audio_stream_t s;
+    unsigned power, tag, format, unmute, i;
+    int muted = 1;
+
+    row = "capture-start";
+    reset_model();
+    model_lenovo();
+    hda_subsystem = 0x17AA3978;
+    check(hda_find_output(), "enumeration succeeds");
+    check(hda_input_ready() && pin_ctl[26] == 0x20 && in_amp[26][0][0] == (0x100 | 2) &&
+              in_amp[19][1][0] == (0x100 | 0x80 | 74) && in_amp[19][1][1] == (0x100 | 0x80 | 74) &&
+              selected[19] == 1 && channel[19] == 0,
+          "init leaves the mic on at 24 dB and the adc muted and untagged");
+    check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0, "capture set up");
+    log_count = 0;
+    check(hda_driver.stream_start(&s) == 0, "capture starts");
+    power = log_find(0, 19, HDA_VERB_SET_POWER, 0xFFFFF);
+    tag = log_find(0, 19, HDA_VERB_SET_CHANNEL | (HDA_CAPTURE_TAG << 4), 0xFFFFF);
+    format = log_find(0, 19, HDA_VERB_SET_CONV_FMT | 0x0011, 0xFFFFF);
+    unmute = log_find(0, 19, HDA_VERB_SET_AMP_GAIN | 0x6000 | (1u << 8) | 74, 0xFFFFF);
+    check(power < tag && tag < format && format < unmute && unmute < log_count,
+          "power, tag and format, then the unmute");
+    check(log_find(0, 26, HDA_VERB_SET_PIN_CTRL | 0x20, 0xFFFFF) < tag,
+          "the pin's input is on before the tag");
+    for (i = 0; i < unmute; i++)
+        if ((log_command[i] >> 20) == 19 && (log_command[i] & 0xF0000) == HDA_VERB_SET_AMP_GAIN &&
+            !(log_command[i] & 0x80))
+            muted = 0;
+    check(muted, "every amplifier of the adc is muted until the unmute");
+    check(log_clock[unmute] - log_clock[format] >= HDA_CAPTURE_SETTLE_US * 24u,
+          "the unmute waits for the converter to settle");
+    check(run_at == log_count && run_clock - log_clock[unmute] >= HDA_CAPTURE_SETTLE_US * 24u,
+          "the descriptor runs after the unmute has settled, with no verb after it");
+    check(in_amp[19][1][0] == (0x100 | 74) && in_amp[19][1][1] == (0x100 | 0x80 | 74),
+          "the left at 0 dB, the right muted");
+    move_input(4096 * 2 + 64);
+    clock_value += 24000 * 43;
+    hda_tick();
+    hda_driver.stream_stop(&s);
+    clock_stopped = 1;
+    k_memset(cap_buffer, 0x7F, sizeof(cap_buffer));
+    run_at = ~0u;
+    check(hda_driver.stream_start(&s) == 0 && hda_test_read(0x80 + HDA_SD_LPIB, 32) == 0,
+          "a second start resets the position the first left");
+    got_transfers = 0;
+    hda_tick();
+    check(got_transfers == 0, "nothing is handed over before the first period is recorded");
+    cap_buffer[0] = 0x21;
+    cap_buffer[1] = 0x43;
+    move_input(4096 + 64);
+    clock_value += 24000 * 22;
+    hda_tick();
+    check(got_transfers == 1 && got_first[0] == 0x21 && got_first[1] == 0x43,
+          "the first period handed over is the first recorded");
+    hda_driver.stream_close(&s);
+    clock_stopped = 0;
 }
 
 /**
@@ -1575,8 +1679,8 @@ static void row_jack_stop(void)
  * 0 dB and mutes the internal mic's, the jack mic is biased at VREF 80% and
  * the internal mic's input is off. An unplug moves it back. The mixer may
  * choose the internal mic with the plug in, which a steady jack leaves. A
- * plug while capture is stopped chooses the jack mic, and the next start
- * records it.
+ * stop leaves the pin's input on. A plug while capture is stopped routes
+ * the jack mic with its connection muted, and the next start records it.
  */
 static void row_jack_capture(void)
 {
@@ -1617,13 +1721,16 @@ static void row_jack_capture(void)
     poll_jacks(2);
     check(in->pin == 26, "and a steady jack leaves its choice");
     hda_driver.stream_stop(&s);
-    check(pin_ctl[26] == 0, "a stop turns the pin's input off");
+    check(pin_ctl[26] == 0x20 && channel[19] == 0 && (in_amp[19][1][0] & 0x80) &&
+              (in_amp[19][1][1] & 0x80),
+          "a stop mutes and untags the adc and leaves the pin's input on");
     sense[25] = 0;
     poll_jacks(2);
     sense[25] = 0x80000000;
     poll_jacks(2);
-    check(in->pin == 25 && selected[19] == 1 && pin_ctl[25] == 0,
-          "a plug while stopped chooses the jack mic and programs nothing");
+    check(in->pin == 25 && selected[19] == 2 && pin_ctl[25] == 0x24 && pin_ctl[26] == 0 &&
+              (in_amp[19][2][0] & 0x80),
+          "a plug while stopped routes the jack mic at once, muted");
     check(hda_driver.stream_start(&s) == 0 && selected[19] == 2 && pin_ctl[25] == 0x24,
           "the next start records it");
     hda_driver.stream_close(&s);
@@ -1682,7 +1789,8 @@ static void row_capture_fails(void)
  * not recorded stays muted; one selected while the stream runs is routed at
  * once, its gain unmuted, the other connection muted and the jack biased.
  * A boost is set on the pin, 0 mutes the gain, a line in the codec lacks is
- * refused, and a source selected while stopped waits for the next start.
+ * refused, and a source selected while stopped is routed at once with its
+ * connection muted until the next start.
  */
 static void row_input_controls(void)
 {
@@ -1699,8 +1807,9 @@ static void row_input_controls(void)
           "the two mics, a gain and a boost");
     check(hda_driver.input_select(-1) == AUDIO_SRC_INT_MIC, "the internal mic is recorded");
     check(hda_driver.input_level(AUDIO_IN_GAIN, AUDIO_SRC_INT_MIC, -1) == 93 &&
-              hda_driver.input_level(AUDIO_IN_BOOST, AUDIO_SRC_INT_MIC, -1) == 0,
-          "0 dB reads 93, the boost 0");
+              hda_driver.input_level(AUDIO_IN_BOOST, AUDIO_SRC_INT_MIC, -1) == 67 &&
+              hda_driver.input_level(AUDIO_IN_BOOST, AUDIO_SRC_MIC, -1) == 0,
+          "0 dB reads 93, the internal mic's boost of 24 dB 67, and the jack's 0");
     check(hda_driver.input_level(AUDIO_IN_GAIN, AUDIO_SRC_INT_MIC, 50) == 50 && in->level == 40,
           "50 is step 40");
     check(open_capture(&s, 48000, AUDIO_S16LE, 2, 4096) == 0 && hda_driver.stream_start(&s) == 0,
@@ -1726,8 +1835,9 @@ static void row_input_controls(void)
               hda_driver.input_select(AUDIO_SRC_LINE) == AUDIO_SRC_MIC,
           "no line in");
     hda_driver.stream_close(&s);
-    check(hda_driver.input_select(AUDIO_SRC_INT_MIC) == AUDIO_SRC_INT_MIC && selected[19] == 2,
-          "a source selected while stopped waits for the start");
+    check(hda_driver.input_select(AUDIO_SRC_INT_MIC) == AUDIO_SRC_INT_MIC && selected[19] == 1 &&
+              pin_ctl[26] == 0x20 && pin_ctl[25] == 0 && (in_amp[19][1][0] & 0x80),
+          "a source selected while stopped is routed at once, muted");
 
     row = "input-controls-none";
     reset_model();
@@ -1757,6 +1867,7 @@ int main(void)
     row_missed();
     row_shutdown();
     row_capture_path();
+    row_capture_start();
     row_capture_routes();
     row_capture_stream();
     row_capture_duplex();
