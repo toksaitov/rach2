@@ -29,7 +29,11 @@
  * maps its uid to itself, raises CAP_CHOWN ambient and execs this program,
  * whose image holds CAP_CHOWN effective, permitted and ambient though its
  * uid is not 0, as Linux gives it and as bubblewrap's --cap-add run by an
- * ordinary user needs.
+ * ordinary user needs. User 1000, in a user namespace whose map root writes
+ * with uid 0 and its own, keeps CAP_SETUID and CAP_SYS_ADMIN ambient and
+ * execs an image that holds them alone; that image calls setuid(0) and execs
+ * one of root, which has every capability again, as Linux gives a root
+ * image its bounding set, but under no_new_privs only the two it held.
  *
  * The calls go through syscall by number, since musl has no wrapper.
  *
@@ -75,13 +79,16 @@
 
 /* The capabilities the inheritable and ambient rows name, as bits of the
  * sets' first word. */
-#define CHOWN      (1u << 0)
-#define DAC        (1u << 1)
-#define SETPCAP    (1u << 8)
-#define NET_RAW    (1u << 13)
-#define CAP_CHOWN_ 0
-#define CAP_RAW_   13
-#define CAP_ADMIN_ 21
+#define CHOWN       (1u << 0)
+#define DAC         (1u << 1)
+#define SETUID      (1u << 7)
+#define SETPCAP     (1u << 8)
+#define ADMIN       (1u << 21)
+#define NET_RAW     (1u << 13)
+#define CAP_CHOWN_  0
+#define CAP_SETUID_ 7
+#define CAP_RAW_    13
+#define CAP_ADMIN_  21
 
 /* One 32-bit word of each set, as Linux's __user_cap_data_struct. */
 struct cap_data {
@@ -143,6 +150,8 @@ enum {
     EXEC_SHARED,
     EXEC_KEPT,
     EXEC_AMBIENT_USER,
+    EXEC_AMBIENT_ROOT,
+    EXEC_AMBIENT_NNP,
     TRACEME,
     TRACEME_LEADER,
     OWN_EXE,
@@ -186,6 +195,9 @@ static const struct {
     {"exec-shared", "an exec whose directories another process shares gave the capabilities back"},
     {"exec-kept", "an exec that regained nothing cleared the parent-death signal"},
     {"exec-ambient-user", "an exec of user 1000 did not keep its ambient capability"},
+    {"exec-ambient-root", "an exec of root after an ambient exec did not give every capability"},
+    {"exec-ambient-nnp",
+     "an exec of root under no_new_privs after an ambient exec gave capabilities it lacked"},
     {"traceme", "a child with capabilities made a parent without them its tracer"},
     {"traceme-leader", "a privileged child made its tracer a parent whose live thread was not"},
     {"own-exe", "a thread without capabilities could not read its own process's exe link"},
@@ -682,14 +694,52 @@ static int make_secret(void)
 }
 
 /**
+ * A stage of `ambient_root_finds` in the image of mode `mode`, which found
+ * the sets `d` when `found`: "amb-setuid" or "amb-setuid-nnp", whose uid is
+ * not 0 and whose sets are CAP_SETUID and CAP_SYS_ADMIN alone, effective,
+ * permitted, inheritable and ambient, sets no_new_privs for the second, calls
+ * setuid(0) and execs "amb-root" or "amb-root-nnp"; those, of uid 0, check
+ * every capability or the two alone, effective and permitted, and the two
+ * still ambient. Returns 0 when the image is so, else 1.
+ */
+static int ambient_root_stage(const char *mode, const struct cap_data *d, int found)
+{
+    int nnp = strstr(mode, "-nnp") != NULL;
+    unsigned want0 = nnp ? SETUID | ADMIN : 0xFFFFFFFFu;
+    unsigned want1 = nnp ? 0 : HIGH_WORD;
+
+    if (!found || d[0].inheritable != (SETUID | ADMIN) || d[1].inheritable != 0 ||
+        ambient(CAP_SETUID_) != 1 || ambient(CAP_ADMIN_) != 1 ||
+        !status_set_is("CapAmb", "0000000000200080")) {
+        return 1;
+    }
+    if (strncmp(mode, "amb-setuid", 10) == 0) {
+        if (getuid() == 0 || geteuid() == 0 || d[0].effective != (SETUID | ADMIN) ||
+            d[0].permitted != (SETUID | ADMIN) || d[1].effective != 0 || d[1].permitted != 0 ||
+            (nnp && prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) || setuid(0) != 0) {
+            return 1;
+        }
+        execl("/proc/self/exe", "capmusl", nnp ? "amb-root-nnp" : "amb-root", "0", (char *)NULL);
+        return 1;
+    }
+    return !(getuid() == 0 && geteuid() == 0 && d[0].effective == want0 &&
+             d[0].permitted == want0 && d[1].effective == want1 && d[1].permitted == want1 &&
+             status_set_is("CapPrm", nnp ? "0000000000200080" : "000001ffffffffff"));
+}
+
+/**
  * The image an exec row runs, which judges its sets by `mode`: "all",
  * "none", "undumpable" for every capability in an image that is not
  * dumpable, "kept" for none, the parent-death signal SIGUSR1 and a
  * dumpable image, "ambient" for CAP_CHOWN alone effective, permitted and
  * ambient, in capget, prctl and /proc/self/status, with CAP_CHOWN and
  * CAP_NET_RAW inheritable, or "ambient-user" for the same with CAP_CHOWN
- * alone inheritable and a uid that is not 0. It kills the process `other` names first, when it
- * names one. Its exit status: 0 when the image is as `mode` says; for
+ * alone inheritable and a uid that is not 0, or one of the three stages of
+ * `ambient_root_finds`: "amb-setuid" and "amb-setuid-nnp" for CAP_SETUID and
+ * CAP_SYS_ADMIN alone and a uid that is not 0, then setuid(0) and the exec of
+ * "amb-root" or "amb-root-nnp", every capability or those two alone, with
+ * uid 0 and the two ambient. It kills the process `other` names first, when
+ * it names one. Its exit status: 0 when the image is as `mode` says; for
  * "ambient" the row of `ambient_rows` that failed otherwise.
  */
 static int judge_image(const char *mode, const char *other)
@@ -720,6 +770,9 @@ static int judge_image(const char *mode, const char *other)
                  status_set_is("CapEff", "0000000000000001") &&
                  status_set_is("CapPrm", "0000000000000001") &&
                  status_set_is("CapAmb", "0000000000000001"));
+    }
+    if (strncmp(mode, "amb-", 4) == 0) {
+        return ambient_root_stage(mode, d, found);
     }
     if (strcmp(mode, "kept") == 0) {
         return !(found && none_of(d) && prctl(PR_GET_PDEATHSIG, &sig, 0, 0, 0) == 0 &&
@@ -893,6 +946,64 @@ static int ambient_kept_by_user(void)
 }
 
 /**
+ * The case of a bubblewrap run by an ordinary user that keeps CAP_SETUID and
+ * CAP_SYS_ADMIN: user 1000 makes a user namespace whose map root writes, uid
+ * 0 and 1000 each to itself, keeps the two inheritable and ambient, and
+ * execs an image whose uid is not 0 and which holds them alone, as
+ * `ambient_kept_by_user` checks; that image calls setuid(0) and execs this
+ * program as root, under no_new_privs when `nnp` says so, in the stages of
+ * `ambient_root_stage`. Linux gives that image of root every capability of
+ * its bounding set, and under no_new_privs keeps it to the two its caller
+ * held. Returns 1 when the last image found its sets so, and 0 otherwise.
+ */
+static int ambient_root_finds(int nnp)
+{
+    int ready[2], go[2], status, ok;
+    char path[40], map[48], c = 0;
+    pid_t pid;
+
+    if (pipe(ready) != 0) {
+        return 0;
+    }
+    if (pipe(go) != 0) {
+        close(ready[0]);
+        close(ready[1]);
+        return 0;
+    }
+    pid = fork();
+    if (pid == 0) {
+        close(ready[0]);
+        close(go[1]);
+        if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0 ||
+            prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || unshare(CLONE_NEWUSER) != 0 ||
+            write(ready[1], "r", 1) != 1 || read(go[0], &c, 1) != 1 || c != 'g' ||
+            set_first(SETUID | ADMIN, SETUID | ADMIN) != 0 ||
+            prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_SETUID_, 0, 0) != 0 ||
+            prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_ADMIN_, 0, 0) != 0) {
+            _exit(2);
+        }
+        execl("/proc/self/exe", "capmusl", nnp ? "amb-setuid-nnp" : "amb-setuid", "0",
+              (char *)NULL);
+        _exit(3);
+    }
+    close(ready[1]);
+    close(go[0]);
+    ok = pid > 0 && read(ready[0], &c, 1) == 1;
+    if (ok) {
+        snprintf(path, sizeof(path), "/proc/%d/uid_map", (int)pid);
+        snprintf(map, sizeof(map), "0 0 1\n%ld %ld 1\n", probe_id(1000), probe_id(1000));
+        ok = put(path, map) == 0;
+    }
+    if (ok) {
+        ok = write(go[1], "g", 1) == 1;
+    }
+    close(ready[0]);
+    close(go[1]);
+    return pid > 0 && waitpid(pid, &status, 0) == pid && ok && WIFEXITED(status) &&
+           WEXITSTATUS(status) == 0;
+}
+
+/**
  * Run the rows of the calls themselves, as root. Returns 0, or 1 after the
  * failure is printed.
  */
@@ -945,6 +1056,12 @@ static int later_rows(void)
     }
     if (!ambient_kept_by_user()) {
         return fail(EXEC_AMBIENT_USER);
+    }
+    if (!ambient_root_finds(0)) {
+        return fail(EXEC_AMBIENT_ROOT);
+    }
+    if (!ambient_root_finds(1)) {
+        return fail(EXEC_AMBIENT_NNP);
     }
     if (!traceme_refused()) {
         return fail(TRACEME);

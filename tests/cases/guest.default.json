@@ -4514,7 +4514,7 @@
     },
     {
       "case_id": "guest.default.capmusl",
-      "behavior": "capget and capset: root has every capability, the header's version answers as Linux's, capset keeps an inheritable set and PR_CAP_AMBIENT an ambient set with Linux's rules, an exec under no_new_privs keeps an ambient capability, and so does the exec of user 1000 in a user namespace of its own, a process that gave them up has none and is refused what they grant against a parent that has them, PTRACE_TRACEME toward a parent without them is EPERM, and an exec gives them back, undumpable, except under no_new_privs or with shared directories. It writes /tmp/capmusl.secret and re-executes itself through /proc/self/exe, so it needs no argument.",
+      "behavior": "capget and capset: root has every capability, the header's version answers as Linux's, capset keeps an inheritable set and PR_CAP_AMBIENT an ambient set with Linux's rules, an exec under no_new_privs keeps an ambient capability, and so does the exec of user 1000 in a user namespace of its own, an image of root after such an exec has its bounding set again but under no_new_privs only what its caller held, a process that gave them up has none and is refused what they grant against a parent that has them, PTRACE_TRACEME toward a parent without them is EPERM, and an exec gives them back, undumpable, except under no_new_privs or with shared directories. It writes /tmp/capmusl.secret and re-executes itself through /proc/self/exe, so it needs no argument.",
       "units": ["default", "musl/capmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -4552,6 +4552,8 @@
         {"assertion_id": "exec-shared", "checks": "An exec whose directories another process shares with CLONE_FS gives none back.", "source": "program"},
         {"assertion_id": "exec-kept", "checks": "The exec of a thread of user 1000 that gave up nothing keeps its parent-death signal and stays dumpable.", "source": "program"},
         {"assertion_id": "exec-ambient-user", "checks": "User 1000 in a user namespace of its own that maps its ids, keeping CAP_CHOWN alone inheritable and ambient, execs an image whose uid is not 0 and that holds CAP_CHOWN effective, permitted and ambient in capget, prctl and /proc/self/status.", "source": "program"},
+        {"assertion_id": "exec-ambient-root", "checks": "User 1000 in a user namespace whose map root writes with uid 0 and 1000 keeps CAP_SETUID and CAP_SYS_ADMIN inheritable and ambient and execs an image of uid 1000 that holds the two alone; it calls setuid(0) and execs an image of uid 0 that holds every capability, effective and permitted, with the two still ambient.", "source": "program"},
+        {"assertion_id": "exec-ambient-nnp", "checks": "The same under no_new_privs, set before the setuid(0): the image of uid 0 holds CAP_SETUID and CAP_SYS_ADMIN alone, effective, permitted and ambient, CapPrm 0000000000200080.", "source": "program"},
         {"assertion_id": "traceme", "checks": "PTRACE_TRACEME of a child with capabilities whose parent gave them up is EPERM.", "source": "program"},
         {"assertion_id": "traceme-leader", "checks": "PTRACE_TRACEME is EPERM when the parent's first thread ended with capabilities and its live thread gave them up.", "source": "program"},
         {"assertion_id": "own-exe", "checks": "A thread that gave up its capabilities reads its own process's exe link.", "source": "program"}
