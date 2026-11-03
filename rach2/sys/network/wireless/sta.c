@@ -16,10 +16,8 @@
  * frame takes the oldest entry, whose status is then not reported. */
 #define STA_TX_PENDING 4
 
-/* Elements a beacon is read for, after its 12 bytes of fixed fields. */
+/* A beacon's elements follow its 12 bytes of fixed fields. */
 #define BEACON_FIXED 12
-#define EID_CSA      37 /* Channel Switch Announcement: mode, channel, count */
-#define EID_ECSA     60 /* Extended CSA: mode, class, channel, count */
 
 /* A frame sent for nl80211, kept until its status comes. */
 struct sta_tx {
@@ -38,7 +36,7 @@ struct wlan_sta {
     struct sta_tx tx[STA_TX_PENDING];
     unsigned tx_next; /* the entry the next frame takes */
     int asked;        /* a leave now is one nl80211 or the interface asked for */
-    unsigned csa;     /* channel the AP's last logged switch named, zero for none */
+    unsigned csa;     /* channel the AP's last logged announcement named, zero for none */
     unsigned ds;      /* the AP's channel last logged as not the station's */
     uint8_t buf[IEEE80211_MAX_FRAME_LEN];
 };
@@ -357,8 +355,8 @@ static const uint8_t *find_elem(const uint8_t *ies, unsigned len, unsigned id, u
  * of its channel when it is not the station's: a channel switch it
  * announces, whose element gives the mode, the channel and the beacons left,
  * and a DS Parameter Set naming another channel, as a 2.4 GHz receiver hears
- * from a neighbouring one. The station does not follow a switch; it loses the
- * AP and joins again.
+ * from a neighbouring one. The MLME follows the switch, which sta_moved
+ * logs.
  */
 static void sta_watch_beacon(struct wlan *wlan, const uint8_t *f, unsigned len)
 {
@@ -373,13 +371,13 @@ static void sta_watch_beacon(struct wlan *wlan, const uint8_t *f, unsigned len)
     }
     ies = f + IEEE80211_HDRLEN + BEACON_FIXED;
     n = len - IEEE80211_HDRLEN - BEACON_FIXED;
-    csa = find_elem(ies, n, EID_CSA, 3);
-    ecsa = csa ? 0 : find_elem(ies, n, EID_ECSA, 4);
+    csa = find_elem(ies, n, WLAN_EID_CHANNEL_SWITCH, 3);
+    ecsa = csa ? 0 : find_elem(ies, n, WLAN_EID_EXT_CHANSWITCH, 4);
     if (csa || ecsa) {
         mode = csa ? csa[0] : ecsa[0];
         channel = csa ? csa[1] : ecsa[2];
         count = csa ? csa[2] : ecsa[3];
-        if (channel != s->csa) {
+        if (channel != s->csa && channel != m->channel->number) {
             s->csa = channel;
             klog(KLOG_INFO, "wlan",
                  "%s: channel switch: %02x:%02x:%02x:%02x:%02x:%02x: from %d to %d in %d beacons, "
@@ -418,6 +416,41 @@ static int sta_rx_mgmt(struct wlan *wlan, const uint8_t *frame, unsigned len, un
     return wlan_mlme_rx(&sta_of(wlan)->mlme, frame, len, flags);
 }
 
+/** Hold the data path's transmit while the AP's channel switch of mode 1
+ * is under way, or release it. */
+static void sta_hold(struct wlan *wlan, int held)
+{
+    wlan_data_stop_tx(wlan_data_of(wlan), held);
+}
+
+/**
+ * Follow the AP to channel after its switch, to which the MLME has tuned
+ * the radio and moved the BSS: the BSS table keeps the station's entry
+ * alone there, the registry and the data path take the new frequency, the
+ * switch is logged as `wlan: wlanN: switched: BSSID: to channel C`, and
+ * nl80211 reports it.
+ */
+static void sta_moved(struct wlan *wlan, const struct wlan_channel *channel)
+{
+    struct wlan_sta *s = sta_of(wlan);
+    const struct wlan_bss *b = s->mlme.bss;
+    struct wlan_event ev;
+
+    wlan_bss_moved(&wlan->bss_table, b);
+    wlan->frequency = channel->frequency;
+    wlan_data_set_frequency(wlan_data_of(wlan), channel->frequency);
+    s->csa = 0;
+    s->ds = 0;
+    klog(KLOG_INFO, "wlan", "%s: switched: %02x:%02x:%02x:%02x:%02x:%02x: to channel %d",
+         wlan->netdev.name, b->bssid[0], b->bssid[1], b->bssid[2], b->bssid[3], b->bssid[4],
+         b->bssid[5], (int)channel->number);
+    k_memset(&ev, 0, sizeof(ev));
+    ev.type = WLAN_EVENT_CH_SWITCH;
+    ev.frequency = channel->frequency;
+    k_memcpy(ev.peer, b->bssid, 6);
+    wlan_event(wlan, &ev);
+}
+
 /**
  * Commit the MLME's state through the registry, then give a connected data
  * path the management protection the association negotiated, which the
@@ -453,7 +486,7 @@ static uint64_t sta_heard(struct wlan *wlan)
 }
 
 static const struct wlan_mlme_ops mlme_ops = {wlan_data_mlme_tx, sta_state, sta_event, sta_poll,
-                                              sta_heard};
+                                              sta_heard, sta_hold, sta_moved};
 
 /* A softMAC station joins through authentication and association, which
  * nl80211 drives for CONNECT, so it has no connect or disconnect of its

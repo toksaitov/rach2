@@ -85,6 +85,12 @@ int wlan_bss_rx(struct wlan_bss_table *table, const struct wlan_band *band, cons
 struct wlan_bss *wlan_bss_find(struct wlan_bss_table *table, const uint8_t bssid[6],
                                unsigned frequency);
 
+/** Keep `bss`, an entry of the table whose frequency its holder has just
+ * changed to the AP's new channel, the only entry of its BSSID there: any
+ * other nobody holds goes, so that the AP's beacons on the new channel
+ * update `bss`. Worker only. */
+void wlan_bss_moved(struct wlan_bss_table *table, const struct wlan_bss *bss);
+
 /** Hold `bss`, so that neither aging nor eviction removes it: the MLME
  * holds the current BSS from authentication until it leaves. Worker only. */
 void wlan_bss_hold(struct wlan_bss *bss);

@@ -199,6 +199,9 @@ struct wlan_data {
      * queue waits for its next completion rather than for a new frame. */
     int txq_held;
     struct spinlock txq_lock;
+    /* The AP's channel switch of mode 1 stops the drain, which keeps the
+     * queue until the switch; worker only. */
+    int tx_stopped;
     struct wlan_data_work tx_work[2]; /* drain the queue; data.c sets run */
 
     /* What the radio reported from interrupts, under rxq_lock: received
@@ -359,6 +362,16 @@ void wlan_data_pop(struct wlan_data *d);
  * queued does not queue the drain, which the radio's next completion does.
  * Worker only. */
 void wlan_data_hold(struct wlan_data *d, int held);
+
+/** Stop sending queued data frames (`stopped` != 0), keeping them queued,
+ * while the AP's channel switch of mode 1 is under way, as mac80211 stops
+ * its queues for IEEE80211_QUEUE_STOP_REASON_CSA, or send them again. A
+ * disconnect ends the stop. Worker only. */
+void wlan_data_stop_tx(struct wlan_data *d, int stopped);
+
+/** Move the connection to `frequency` MHz, the AP's channel after a
+ * channel switch, which frames sent from now on name. Worker only. */
+void wlan_data_set_frequency(struct wlan_data *d, unsigned frequency);
 
 /** The length of a data or management frame's MAC header, Address 4, QoS
  * Control and HT Control included, or 0 when `len` bytes cannot hold it or

@@ -1,7 +1,8 @@
 /* The station's MLME: Open System and carried SAE authentication, association,
- * the connection monitor, deauthentication and SA Query. It follows the design
- * of Linux's net/mac80211/mlme.c (ieee80211_rx_mgmt_auth, ieee80211_send_assoc,
- * ieee80211_mgd_probe_ap and ieee80211_drop_unencrypted_mgmt). */
+ * the connection monitor, the AP's channel switch, deauthentication and SA
+ * Query. It follows the design of Linux's net/mac80211/mlme.c
+ * (ieee80211_rx_mgmt_auth, ieee80211_send_assoc, ieee80211_mgd_probe_ap,
+ * ieee80211_sta_process_chanswitch and ieee80211_drop_unencrypted_mgmt). */
 #include "mlme.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
@@ -10,7 +11,6 @@
 #define HDR IEEE80211_HDRLEN
 
 /* Action categories that are not robust, as Linux's ieee80211.h lists them. */
-#define CATEGORY_PUBLIC          4
 #define CATEGORY_HT              7
 #define CATEGORY_WNM_UNPROTECTED 11
 #define CATEGORY_SELF_PROTECTED  15
@@ -25,6 +25,7 @@
 #define AUTH_WAIT_ASSOC        5000 /* ms an authentication waits for ASSOCIATE */
 
 static void mlme_timeout(struct wlan_mlme *m);
+static void csa_switch(struct wlan_mlme *m);
 
 /** Read a little-endian 16-bit field. */
 static unsigned get16(const uint8_t *p)
@@ -81,6 +82,18 @@ static const struct wlan_channel *find_channel(const struct wlan_band *band, uns
 
     for (i = 0; i < band->n_channels && i < WLAN_RADIO_MAX_CHANNELS; ++i)
         if (band->channels[i].frequency == frequency &&
+            !(band->channels[i].flags & WLAN_CHANNEL_DISABLED))
+            return &band->channels[i];
+    return 0;
+}
+
+/** The band's usable channel numbered number, or NULL. */
+static const struct wlan_channel *find_number(const struct wlan_band *band, unsigned number)
+{
+    unsigned i;
+
+    for (i = 0; i < band->n_channels && i < WLAN_RADIO_MAX_CHANNELS; ++i)
+        if (band->channels[i].number == number &&
             !(band->channels[i].flags & WLAN_CHANNEL_DISABLED))
             return &band->channels[i];
     return 0;
@@ -170,6 +183,8 @@ static void drop(struct wlan_mlme *m)
         wlan_bss_put(m->bss);
     m->bss = 0;
     m->channel = 0;
+    m->csa_channel = 0;
+    m->csa_hold = 0;
     if (m->scan)
         wlan_scan_set_home(m->scan, 0, 0);
     m->waiting = 0;
@@ -619,13 +634,20 @@ int wlan_mlme_associate(struct wlan_mlme *m, const struct wlan_mlme_assoc *req)
     return err;
 }
 
-/** The milliseconds of WLAN_MLME_BEACON_LOSS of the AP's beacon intervals. */
-static unsigned loss_ms(const struct wlan_mlme *m)
+/** The milliseconds of n of the AP's beacon intervals, 100 TU when the
+ * AP gave none. */
+static unsigned beacons_ms(const struct wlan_mlme *m, unsigned n)
 {
     unsigned tu;
 
     tu = m->bss->beacon_interval ? m->bss->beacon_interval : 100;
-    return (unsigned)((uint32_t)WLAN_MLME_BEACON_LOSS * tu * 1024u / 1000u);
+    return (unsigned)((uint32_t)n * tu * 1024u / 1000u);
+}
+
+/** The milliseconds of WLAN_MLME_BEACON_LOSS of the AP's beacon intervals. */
+static unsigned loss_ms(const struct wlan_mlme *m)
+{
+    return beacons_ms(m, WLAN_MLME_BEACON_LOSS);
 }
 
 /** Take the association response's fields into the station's state and
@@ -765,7 +787,123 @@ static void monitor_answered(struct wlan_mlme *m)
     m->probes = 0;
     m->poll_cookie = 0;
     m->last_beacon = m->polled = tick_count();
+    arm(m, m->csa_channel ? m->csa_at : monitor_due(m));
+}
+
+/**
+ * Follow the AP to the channel it announced, keeping the association, its
+ * keys and the BSS, as mac80211's ieee80211_chswitch_work does. A software
+ * scan under way takes the radio back to the new channel when it ends;
+ * otherwise the radio is tuned now. The AP then has the beacon-loss time to
+ * be heard there.
+ */
+static void csa_switch(struct wlan_mlme *m)
+{
+    const struct wlan_channel *ch = m->csa_channel;
+
+    m->csa_channel = 0;
+    m->channel = ch;
+    m->bss->frequency = ch->frequency;
+    if (m->scan)
+        wlan_scan_set_home(m->scan, ch, m->scan->home_filters);
+    if (!m->scan || m->scan->state != WLAN_SCAN_SOFTWARE)
+        (void)m->radio->ops->config(m->radio, ch, m->scan ? m->scan->home_filters : 0);
+    m->ops->moved(m->wlan, ch);
+    if (m->csa_hold) {
+        m->csa_hold = 0;
+        m->ops->hold(m->wlan, 0);
+    }
+    m->probes = 0;
+    m->poll_cookie = 0;
+    m->last_beacon = m->polled = tick_count();
     arm(m, monitor_due(m));
+}
+
+/** Call off the switch under way, which the AP no longer announces, and
+ * watch the AP's beacons again. */
+static void csa_cancel(struct wlan_mlme *m)
+{
+    if (!m->csa_channel)
+        return;
+    m->csa_channel = 0;
+    if (m->csa_hold) {
+        m->csa_hold = 0;
+        m->ops->hold(m->wlan, 0);
+    }
+    arm(m, monitor_due(m));
+}
+
+/**
+ * Take the AP's announcement of a switch to channel number in count beacon
+ * intervals, mode 1 asking that the station send nothing until then, as
+ * mac80211's ieee80211_sta_process_chanswitch does. A later announcement
+ * sets the time again. An announcement of the station's own channel calls
+ * off a switch under way; one of a channel the band lacks is ignored, and an
+ * AP that leaves for it is lost by beacon loss. Until the switch the AP is
+ * not probed and the station does not leave it.
+ */
+static void csa_note(struct wlan_mlme *m, unsigned mode, unsigned number, unsigned count)
+{
+    const struct wlan_channel *ch;
+
+    if (m->state < WLAN_STA_ASSOCIATED || !m->channel)
+        return;
+    ch = find_number(m->band, number);
+    if (ch == m->channel) {
+        csa_cancel(m);
+        return;
+    }
+    if (!ch)
+        return;
+    m->csa_channel = ch;
+    m->csa_at = tick_count() + (count > 1 ? beacons_ms(m, count) : 0);
+    if (mode == 1 && !m->csa_hold) {
+        m->csa_hold = 1;
+        m->ops->hold(m->wlan, 1);
+    }
+    if (count > 1)
+        arm(m, m->csa_at);
+    else
+        csa_switch(m);
+}
+
+/** The payload of the first element id of the len bytes at ies, at least
+ * min bytes long, or NULL. */
+static const uint8_t *find_elem(const uint8_t *ies, unsigned len, unsigned id, unsigned min)
+{
+    unsigned pos;
+
+    for (pos = 0; pos + 2 <= len && pos + 2 + ies[pos + 1] <= len; pos += 2 + ies[pos + 1])
+        if (ies[pos] == id)
+            return ies[pos + 1] >= min ? ies + pos + 2 : 0;
+    return 0;
+}
+
+/**
+ * Take the switch announcement of the len bytes of elements at ies: a
+ * Channel Switch Announcement, mode, channel and count, or else an
+ * Extended one, mode, operating class, channel and count, whose class the
+ * 2.4 GHz band does not need. Returns whether either was there.
+ */
+static int csa_elems(struct wlan_mlme *m, const uint8_t *ies, unsigned len)
+{
+    const uint8_t *e;
+
+    if ((e = find_elem(ies, len, WLAN_EID_CHANNEL_SWITCH, 3)) != 0)
+        csa_note(m, e[0], e[1], e[2]);
+    else if ((e = find_elem(ies, len, WLAN_EID_EXT_CHANSWITCH, 4)) != 0)
+        csa_note(m, e[0], e[2], e[3]);
+    return e != 0;
+}
+
+/** Read the current AP's beacon or probe response for a switch it
+ * announces; a beacon without one calls off the switch under way. */
+static void csa_beacon(struct wlan_mlme *m, const uint8_t *f, unsigned len, unsigned stype)
+{
+    if (m->state < WLAN_STA_ASSOCIATED || !from_bss(m, f) || len < HDR + 12)
+        return;
+    if (!csa_elems(m, f + HDR + 12, len - HDR - 12) && stype == IEEE80211_STYPE_BEACON)
+        csa_cancel(m);
 }
 
 /**
@@ -773,12 +911,20 @@ static void monitor_answered(struct wlan_mlme *m)
  * idle period where the interface can poll, starts the questions; when
  * none is answered the station leaves. A poll's null frame that went
  * unacknowledged is asked again at once, from wlan_mlme_tx_status; one
- * whose status never came is asked again here, as a probe request is.
+ * whose status never came is asked again here, as a probe request is. A
+ * channel switch under way waits for its time instead.
  */
 static void monitor_timeout(struct wlan_mlme *m)
 {
     uint64_t now = tick_count(), due;
 
+    if (m->csa_channel) {
+        if (now >= m->csa_at)
+            csa_switch(m);
+        else
+            arm(m, m->csa_at);
+        return;
+    }
     if (!m->probes) {
         due = monitor_due(m);
         if (now < due) {
@@ -846,6 +992,8 @@ void wlan_mlme_tx_status(struct wlan_mlme *m, uint64_t cookie, int acked)
     m->poll_cookie = 0;
     if (acked)
         monitor_answered(m);
+    else if (m->csa_channel)
+        return; /* the switch, which resets the questions, comes first */
     else if (m->probes < WLAN_MLME_POLL_TRIES)
         monitor_ask(m);
     else
@@ -905,7 +1053,7 @@ static int robust(const uint8_t *f, unsigned stype)
     if (stype != IEEE80211_STYPE_ACTION)
         return 0;
     switch (f[HDR]) {
-    case CATEGORY_PUBLIC:
+    case WLAN_CATEGORY_PUBLIC:
     case CATEGORY_HT:
     case CATEGORY_WNM_UNPROTECTED:
     case CATEGORY_SELF_PROTECTED:
@@ -939,12 +1087,40 @@ static int rx_unprotected(struct wlan_mlme *m, const uint8_t *f, unsigned len, u
     return 1;
 }
 
+/**
+ * Take the AP's channel switch action frame: spectrum management's, whose
+ * elements follow the category and action, or the public Extended Channel
+ * Switch Announcement, whose mode, class, channel and count do. Returns 0
+ * for another action.
+ */
+static int rx_csa_action(struct wlan_mlme *m, const uint8_t *f, unsigned len)
+{
+    const uint8_t *p = f + HDR;
+
+    if (len < HDR + 2)
+        return 0;
+    if (p[0] == WLAN_CATEGORY_SPECTRUM_MGMT && p[1] == WLAN_ACTION_SPCT_CHL_SWITCH) {
+        if (from_bss(m, f))
+            (void)csa_elems(m, p + 2, len - HDR - 2);
+        return 1;
+    }
+    if (p[0] == WLAN_CATEGORY_PUBLIC && p[1] == WLAN_PUB_ACTION_EXT_CHANSW_ANN) {
+        if (from_bss(m, f) && len >= HDR + 6)
+            csa_note(m, p[2], p[4], p[5]);
+        return 1;
+    }
+    return 0;
+}
+
 /** Answer the AP's SA Query request with its transaction identifier, as
- * mac80211's ieee80211_process_sa_query_req does; pass on other actions. */
+ * mac80211's ieee80211_process_sa_query_req does, and take a channel
+ * switch; pass on other actions. */
 static int rx_action(struct wlan_mlme *m, const uint8_t *f, unsigned len)
 {
     uint8_t r[HDR + 4];
 
+    if (rx_csa_action(m, f, len))
+        return 1;
     if (f[HDR] != WLAN_CATEGORY_SA_QUERY || len < HDR + 4 ||
         f[HDR + 1] != WLAN_ACTION_SA_QUERY_REQUEST)
         return 0;
@@ -971,6 +1147,7 @@ int wlan_mlme_rx(struct wlan_mlme *m, const uint8_t *f, unsigned len, unsigned f
     stype = fc & IEEE80211_FCTL_STYPE;
     if (stype == IEEE80211_STYPE_BEACON || stype == IEEE80211_STYPE_PROBE_RESP) {
         monitor_seen(m, f);
+        csa_beacon(m, f, len, stype);
         return 0;
     }
     if (!(f[4] & 1) && !addr_eq(f + 4, m->radio->mac))

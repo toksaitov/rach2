@@ -201,6 +201,7 @@ void wlan_data_disconnect(struct wlan_data *d)
     d->txq_count = 0;
     d->txq_held = 0;
     spin_unlock_irqrestore(&d->txq_lock, flags);
+    d->tx_stopped = 0;
     wlan_data_clear_keys(d);
     d->connected = 0;
     d->bss = 0;
@@ -575,4 +576,22 @@ void wlan_data_hold(struct wlan_data *d, int held)
     flags = spin_lock_irqsave(&d->txq_lock);
     d->txq_held = held != 0;
     spin_unlock_irqrestore(&d->txq_lock, flags);
+}
+
+void wlan_data_stop_tx(struct wlan_data *d, int stopped)
+{
+    int was;
+
+    if (!d)
+        return;
+    was = d->tx_stopped;
+    d->tx_stopped = stopped != 0;
+    if (was && !stopped && d->connected && d->tx_work[0].work.run)
+        (void)wlan_data_kick(d->tx_work, 0);
+}
+
+void wlan_data_set_frequency(struct wlan_data *d, unsigned frequency)
+{
+    if (d && d->connected)
+        d->frequency = (uint16_t)frequency;
 }

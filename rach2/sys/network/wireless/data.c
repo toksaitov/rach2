@@ -44,7 +44,7 @@ static int data_tx_ethernet(struct wlan *wlan, const uint8_t *frame, unsigned le
  * full, stays at the head and the queue is held until a completion frees a
  * slot, as Linux's drivers stop the queue (ieee80211_stop_queue) and wake
  * it from their completions; any other refusal drops the frame and counts
- * it.
+ * it. A channel switch of mode 1 keeps the queue until the switch.
  */
 static void data_drain_tx(struct wlan_work *work)
 {
@@ -54,6 +54,8 @@ static void data_drain_tx(struct wlan_work *work)
     int rc;
 
     wlan_data_hold(d, 0);
+    if (d->tx_stopped)
+        return;
     while (wlan_data_peek(d, d->eth, &len)) {
         protocol = (uint16_t)((unsigned)d->eth[12] << 8 | d->eth[13]);
         if (!d->connected)

@@ -90,7 +90,8 @@ enum wlan_event_type {
     WLAN_EVENT_MIC_FAILURE,
     WLAN_EVENT_FRAME,
     WLAN_EVENT_TX_STATUS,
-    WLAN_EVENT_REG_CHANGE
+    WLAN_EVENT_REG_CHANGE,
+    WLAN_EVENT_CH_SWITCH /* the station followed its AP to frequency */
 };
 struct wlan_event {
     enum wlan_event_type type;

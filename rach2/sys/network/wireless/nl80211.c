@@ -47,6 +47,7 @@
 #define NL80211_CMD_GET_POWER_SAVE        62
 #define NL80211_CMD_UNPROT_DEAUTHENTICATE 70
 #define NL80211_CMD_UNPROT_DISASSOCIATE   71
+#define NL80211_CMD_CH_SWITCH_NOTIFY      88
 #define NL80211_CMD_GET_PROTOCOL_FEATURES 95
 #define NL80211_CMD_ABORT_SCAN            114
 
@@ -2701,6 +2702,30 @@ static void mic_event(struct sta *s, const struct wlan_event *ev)
     notify(&msg, buf, GROUP_MLME);
 }
 
+/** Send CH_SWITCH_NOTIFY: the station followed its AP to the channel at
+ * ev->frequency, as cfg80211_ch_switch_notify reports, so that
+ * wpa_supplicant moves its record of the association there. */
+static void ch_switch_event(struct sta *s, const struct wlan_event *ev)
+{
+    struct nl80211_status st;
+    struct genl_msg msg;
+    uint8_t *buf = msg_new(&msg);
+
+    if (!buf) {
+        return;
+    }
+    status_of(s, &st);
+    genl_msg_begin(&msg, &family, NL80211_CMD_CH_SWITCH_NOTIFY, 0, 0, 0);
+    put_ids(&msg, s);
+    nla_put_u32(&msg, NL80211_ATTR_WIPHY_FREQ, ev->frequency);
+    nla_put_u32(&msg, NL80211_ATTR_WIPHY_CHANNEL_TYPE,
+                st.ht ? NL80211_CHAN_HT20 : NL80211_CHAN_NO_HT);
+    nla_put_u32(&msg, NL80211_ATTR_CHANNEL_WIDTH,
+                st.ht ? NL80211_CHAN_WIDTH_20 : NL80211_CHAN_WIDTH_20_NOHT);
+    nla_put_u32(&msg, NL80211_ATTR_CENTER_FREQ1, ev->frequency);
+    notify(&msg, buf, GROUP_MLME);
+}
+
 /** Send REG_CHANGE: the radio's country narrowed the world domain. */
 static void reg_event(struct sta *s)
 {
@@ -2778,6 +2803,9 @@ static void nl_event(struct wlan *wlan, const struct wlan_event *ev)
         break;
     case WLAN_EVENT_REG_CHANGE:
         reg_event(s);
+        break;
+    case WLAN_EVENT_CH_SWITCH:
+        ch_switch_event(s, ev);
         break;
     default:
         break;

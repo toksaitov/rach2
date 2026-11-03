@@ -62,6 +62,21 @@ struct wlan_bss *wlan_bss_find(struct wlan_bss_table *table, const uint8_t bssid
     return 0;
 }
 
+void wlan_bss_moved(struct wlan_bss_table *table, const struct wlan_bss *bss)
+{
+    struct wlan_bss *b;
+    unsigned i;
+
+    for (i = 0; i < WLAN_MAX_BSS; ++i) {
+        b = table->slots[i];
+        if (b && b != bss && !b->refs && b->frequency == bss->frequency &&
+            same(b->bssid, bss->bssid, 6)) {
+            bss_remove(table, i);
+        }
+    }
+    table->generation++;
+}
+
 void wlan_bss_hold(struct wlan_bss *bss)
 {
     bss->refs++;

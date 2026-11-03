@@ -70,13 +70,17 @@
 #define WLAN_CAPABILITY_SHORT_SLOT_TIME 0x0400
 #define WLAN_AUTH_OPEN                  0
 #define WLAN_AUTH_SAE                   3
+#define WLAN_CATEGORY_SPECTRUM_MGMT     0
 #define WLAN_CATEGORY_BACK              3
+#define WLAN_CATEGORY_PUBLIC            4
 #define WLAN_CATEGORY_SA_QUERY          8
 #define WLAN_ACTION_ADDBA_REQ           0
 #define WLAN_ACTION_ADDBA_RESP          1
 #define WLAN_ACTION_DELBA               2
 #define WLAN_ACTION_SA_QUERY_REQUEST    0
 #define WLAN_ACTION_SA_QUERY_RESPONSE   1
+#define WLAN_ACTION_SPCT_CHL_SWITCH     4 /* spectrum management's CSA */
+#define WLAN_PUB_ACTION_EXT_CHANSW_ANN  4 /* public action's extended CSA */
 
 #define WLAN_EID_SSID             0
 #define WLAN_EID_SUPP_RATES       1
@@ -84,11 +88,13 @@
 #define WLAN_EID_TIM              5
 #define WLAN_EID_COUNTRY          7
 #define WLAN_EID_CHALLENGE        16
+#define WLAN_EID_CHANNEL_SWITCH   37 /* mode, new channel, count */
 #define WLAN_EID_ERP_INFO         42
 #define WLAN_EID_HT_CAPABILITY    45
 #define WLAN_EID_RSN              48
 #define WLAN_EID_EXT_SUPP_RATES   50
 #define WLAN_EID_TIMEOUT_INTERVAL 56
+#define WLAN_EID_EXT_CHANSWITCH   60 /* mode, operating class, new channel, count */
 #define WLAN_EID_HT_OPERATION     61
 #define WLAN_EID_MMIE             76
 #define WLAN_EID_EXT_CAPABILITY   127

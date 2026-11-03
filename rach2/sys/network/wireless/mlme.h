@@ -54,6 +54,16 @@ struct wlan_mlme_ops {
     /** The tick of the last unicast frame from the AP or ACK of a frame to
      * it, 0 for none; set with poll. */
     uint64_t (*heard)(struct wlan *wlan);
+    /** Hold the data path's transmit (held != 0) while the AP's channel
+     * switch of mode 1 is under way, or release it when the switch is done
+     * or the AP no longer announces it. A leave needs no release: the move
+     * to NONE disconnects the data path. */
+    void (*hold)(struct wlan *wlan, int held);
+    /** Follow the AP to channel, which the MLME has made the BSS's and
+     * tuned the radio to, as mac80211's ieee80211_chswitch_work does: the
+     * interface moves its own record of the channel and reports the
+     * switch. */
+    void (*moved)(struct wlan *wlan, const struct wlan_channel *channel);
 };
 
 /* nl80211's AUTHENTICATE. data is AUTH_DATA: for SAE the transaction number
@@ -88,8 +98,8 @@ struct wlan_mlme_timer {
 };
 
 /* The station's management state, in storage its interface owns. Fields
- * other code may read on the worker: state, bss, aid, mfp, qos, ht,
- * frame and frame_len. mlme.c alone writes any of them, but for
+ * other code may read on the worker: state, bss, channel, aid, mfp, qos,
+ * ht, frame and frame_len. mlme.c alone writes any of them, but for
  * beacon_losses, which the embedder may point at its counter after
  * wlan_mlme_init. */
 struct wlan_mlme {
@@ -121,6 +131,11 @@ struct wlan_mlme {
     uint32_t missed_beacons; /* beacon losses since the association */
     uint32_t *beacon_losses; /* the station dump's count, or NULL; the embedder's */
     uint64_t deadline;       /* tick of the next timeout, zero for none */
+    /* The AP's channel switch from its announcement to the switch: the
+     * channel it names, NULL for none, and the tick the switch is due. */
+    const struct wlan_channel *csa_channel;
+    uint64_t csa_at;
+    int csa_hold; /* the announcement's mode 1 holds the data path's transmit */
     struct wlan_mlme_timer timer[2];
     /* The last authentication or association request: retries send it
      * again, and nl80211 may report its elements with the association. */
@@ -187,6 +202,13 @@ int wlan_mlme_authorize(struct wlan_mlme *m, int authorized);
  * frame was handled or dropped, 0 when the caller passes it on: beacons and
  * probe responses to the BSS table, BlockAck to aggregation, other action
  * frames to nl80211's registrations. frame is borrowed until return.
+ *
+ * While associated, a Channel Switch Announcement or Extended Channel
+ * Switch Announcement of the AP, in a beacon, a probe response or an action
+ * frame, moves the station to the channel it names after count beacon
+ * intervals, at once for a count of 0 or 1, keeping the association and
+ * its keys; mode 1 holds the data path's transmit until then. A beacon
+ * without the element calls off the switch under way.
  */
 int wlan_mlme_rx(struct wlan_mlme *m, const uint8_t *frame, unsigned len, unsigned flags);
 
