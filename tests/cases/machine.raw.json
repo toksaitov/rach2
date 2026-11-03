@@ -301,6 +301,71 @@
       ],
       "timing": [],
       "native": {"plan": "none", "class": "boot", "reason": "the case logs in at the console of a boot of os-real of its own, which a native run cannot give"}
+    },
+    {
+      "case_id": "machine.raw.bindping",
+      "behavior": "The test user's in-house ping on os-real sends from the card named by -I and from the address named by -I, reaching the gateway either way, and refuses a card and an address the machine does not have as iputils does",
+      "units": ["raw"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"user": "test", "by-name": "/bin/ping -c 1 -I eth0 10.0.2.2", "by-address": "/bin/ping -c 1 -I 10.0.2.15 10.0.2.2", "no-device": "/bin/ping -c 1 -I eth9 10.0.2.2", "no-address": "/bin/ping -c 1 -I 10.0.2.99 10.0.2.2"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {
+        "program": "raw_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
+        "isolation": [{"fixture": "scratch"}],
+        "children": "none",
+        "cleanup": "libetude-case ends the machine"
+      },
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "guest",
+         "does": "boot os-real to its console's login prompt"},
+        {"step_id": "login", "stage": "execute", "machine": "guest",
+         "does": "log in as test with the password of test-password and wait for the prompt \"$ \""},
+        {"step_id": "name", "stage": "execute", "machine": "guest",
+         "does": "ping the gateway with -I eth0 and count its first line's source and its reply"},
+        {"step_id": "address", "stage": "execute", "machine": "guest",
+         "does": "ping the gateway with -I 10.0.2.15 and count its first line's source and its reply"},
+        {"step_id": "no-device", "stage": "execute", "machine": "guest",
+         "does": "ping the gateway with -I eth9 and count its diagnostic and its status of 2"},
+        {"step_id": "no-address", "stage": "execute", "machine": "guest",
+         "does": "ping the gateway with -I 10.0.2.99 and count its diagnostic and its status of 2"}
+      ],
+      "machines": [
+        {"machine_id": "guest",
+         "qemu": {"kernel": "kernel", "initrd": "os-real-image", "disks": [], "cpu": "max", "processors": 1,
+                  "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []},
+         "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "by-name", "checks": "/bin/ping -c 1 -I eth0 10.0.2.2 prints 'from 10.0.2.15 eth0: ' in its first line, the card's address learned through SO_BINDTODEVICE, and a reply with icmp_seq=1", "source": "scenario"},
+        {"assertion_id": "by-address", "checks": "/bin/ping -c 1 -I 10.0.2.15 10.0.2.2 prints 'from 10.0.2.15 : ' in its first line and a reply with icmp_seq=1", "source": "scenario"},
+        {"assertion_id": "no-device", "checks": "/bin/ping -c 1 -I eth9 10.0.2.2 prints the line 'ping: SO_BINDTODEVICE eth9: No such device' and exits 2", "source": "scenario"},
+        {"assertion_id": "no-address", "checks": "/bin/ping -c 1 -I 10.0.2.99 10.0.2.2 prints the line 'ping: bind: Cannot assign requested address' and exits 2", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 6}
+      ],
+      "bounds": {
+        "case": {"floor_us": 5000000, "initial_us": 300000000, "ceiling_us": 900000000},
+        "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 300000000},
+        "stages": {
+          "prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000},
+          "boot": {"floor_us": 1000000, "initial_us": 90000000, "ceiling_us": 300000000},
+          "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}
+        }
+      },
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0,
+                    "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "os-real-image", "node": "images/os-real.krffs", "per_architecture": true},
+        {"name": "test-password", "node": "tests/cases/machine/test-password", "per_architecture": false},
+        {"name": "raw_scenario", "node": "tests/cases/machine/raw_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case logs in at the console of a boot of os-real of its own, which a native run cannot give"}
     }
   ]
 }

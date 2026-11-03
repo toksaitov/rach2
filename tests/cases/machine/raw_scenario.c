@@ -89,6 +89,52 @@ struct session {
 };
 
 /**
+ * Boot os-real and log in at the console as `s->user` with the password of
+ * artifact `s->secret`, up to the shell's `s->prompt`, giving the machine in
+ * `*m` and the console's offset after the prompt in `*at`. Returns 0, or 1
+ * when the boot or the login did not get that far.
+ */
+static int login(struct etude_case *c, const struct session *s, struct etude_case_machine **m,
+                 uint64_t *at)
+{
+    struct etude_termination end;
+    char line[256];
+
+    if (etude_step(c, "boot") != ETUDE_OK || etude_boot(c, "guest", NULL, m, &end) != ETUDE_OK ||
+        etude_console_wait(*m, "rach2 login:", 0, at) != ETUDE_OK)
+        return 1;
+    snprintf(line, sizeof(line), "%s\r", s->user);
+    if (etude_step(c, "login") != ETUDE_OK || etude_type(*m, line) != ETUDE_OK ||
+        etude_console_wait(*m, "Password:", *at, at) != ETUDE_OK ||
+        password(c, s->secret, line, sizeof(line)) != 0 || etude_type(*m, line) != ETUDE_OK ||
+        etude_console_wait(*m, s->prompt, *at, at) != ETUDE_OK)
+        return 1;
+    return 0;
+}
+
+/**
+ * Run `s->command` as step `s->step` at the console of `m` from offset
+ * `*at`, and require `s->want` on the console after it as assertion `s->id`,
+ * advancing `*at` past it. Returns 0 once the assertion is made, or 1 when
+ * the case was stopped.
+ */
+static int run_row(struct etude_case *c, struct etude_case_machine *m, const struct session *s,
+                   uint64_t *at)
+{
+    char line[256];
+    enum etude_status st;
+
+    if (etude_step(c, s->step) != ETUDE_OK || etude_type(m, s->command) != ETUDE_OK)
+        return 1;
+    st = etude_console_wait(m, s->want, *at, at);
+    if (st == ETUDE_STOPPED)
+        return 1;
+    snprintf(line, sizeof(line), "the console never showed \"%s\"", s->want);
+    etude_assert(c, s->id, st == ETUDE_OK, line);
+    return 0;
+}
+
+/**
  * Boot os-real, log in at the console as `s->user` with the password of
  * artifact `s->secret`, run `s->command` at the shell's `s->prompt`, and
  * require `s->want` on the console after it as assertion `s->id`.
@@ -96,28 +142,11 @@ struct session {
 static int session(struct etude_case *c, const struct session *s)
 {
     struct etude_case_machine *m;
-    struct etude_termination end;
-    char line[256];
-    enum etude_status st;
     uint64_t at;
 
-    if (etude_step(c, "boot") != ETUDE_OK || etude_boot(c, "guest", NULL, &m, &end) != ETUDE_OK ||
-        etude_console_wait(m, "rach2 login:", 0, &at) != ETUDE_OK)
+    if (login(c, s, &m, &at) != 0)
         return 1;
-    snprintf(line, sizeof(line), "%s\r", s->user);
-    if (etude_step(c, "login") != ETUDE_OK || etude_type(m, line) != ETUDE_OK ||
-        etude_console_wait(m, "Password:", at, &at) != ETUDE_OK ||
-        password(c, s->secret, line, sizeof(line)) != 0 || etude_type(m, line) != ETUDE_OK ||
-        etude_console_wait(m, s->prompt, at, &at) != ETUDE_OK)
-        return 1;
-    if (etude_step(c, s->step) != ETUDE_OK || etude_type(m, s->command) != ETUDE_OK)
-        return 1;
-    st = etude_console_wait(m, s->want, at, &at);
-    if (st == ETUDE_STOPPED)
-        return 1;
-    snprintf(line, sizeof(line), "the console never showed \"%s\"", s->want);
-    etude_assert(c, s->id, st == ETUDE_OK, line);
-    return 0;
+    return run_row(c, m, s, &at);
 }
 
 /**
@@ -187,10 +216,54 @@ static int fastping(struct etude_case *c)
 }
 
 /**
+ * Log in as the test user and ping the gateway with -I, as iputils takes
+ * it: by the card's name and by its address, 10.0.2.15, which QEMU's user
+ * network leases, each of which must print the source in its first line and
+ * get the reply; and by a name and an address the machine does not have,
+ * each of which must print iputils' diagnostic and exit 2. Each row prints
+ * its count of the lines it requires after its own name, so that the echo
+ * of the command typed cannot match it.
+ */
+static int bindping(struct etude_case *c)
+{
+    static const struct session rows[] = {
+        {"test", "test-password", "$ ", "name",
+         "/bin/ping -c 1 -I eth0 10.0.2.2 | grep -c -e 'from 10.0.2.15 eth0: ' "
+         "-e 'icmp_seq=1 ttl=' | sed 's/^/bind-name: /'\r",
+         "bind-name: 2", "by-name"},
+        {"test", "test-password", "$ ", "address",
+         "/bin/ping -c 1 -I 10.0.2.15 10.0.2.2 | grep -c -e 'from 10.0.2.15 : ' "
+         "-e 'icmp_seq=1 ttl=' | sed 's/^/bind-address: /'\r",
+         "bind-address: 2", "by-address"},
+        {"test", "test-password", "$ ", "no-device",
+         "{ /bin/ping -c 1 -I eth9 10.0.2.2 2>&1; echo status $?; } | grep -c -x "
+         "-e 'ping: SO_BINDTODEVICE eth9: No such device' -e 'status 2' | "
+         "sed 's/^/bind-nodevice: /'\r",
+         "bind-nodevice: 2", "no-device"},
+        {"test", "test-password", "$ ", "no-address",
+         "{ /bin/ping -c 1 -I 10.0.2.99 10.0.2.2 2>&1; echo status $?; } | grep -c -x "
+         "-e 'ping: bind: Cannot assign requested address' -e 'status 2' | "
+         "sed 's/^/bind-noaddress: /'\r",
+         "bind-noaddress: 2", "no-address"}};
+    struct etude_case_machine *m;
+    uint64_t at;
+    size_t i;
+
+    if (login(c, &rows[0], &m, &at) != 0)
+        return 1;
+    for (i = 0; i < sizeof(rows) / sizeof(rows[0]); i++) {
+        if (run_row(c, m, &rows[i], &at) != 0 ||
+            etude_console_wait(m, rows[i].prompt, at, &at) == ETUDE_STOPPED)
+            return 1;
+    }
+    return 0;
+}
+
+/**
  * Run the case that the last part of the case's identity names: rawprobe
  * with its capture checked, rawprobe on a boot with an address and no
- * gateway, root's traceroute, the test user's ping, or the test user's
- * fifty pings of the loopback address.
+ * gateway, root's traceroute, the test user's ping, the test user's fifty
+ * pings of the loopback address, or the test user's pings with -I.
  */
 int etude_scenario(struct etude_case *c)
 {
@@ -206,6 +279,8 @@ int etude_scenario(struct etude_case *c)
         return userping(c);
     if (which != NULL && strcmp(which, ".fastping") == 0)
         return fastping(c);
+    if (which != NULL && strcmp(which, ".bindping") == 0)
+        return bindping(c);
     fprintf(stderr, "raw_scenario: %s is no case of machine.raw\n", etude_case_id(c));
     return 1;
 }
