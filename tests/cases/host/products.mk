@@ -104,8 +104,8 @@ $(PREFIX)/host-suite-probe: tests/cases/host/host_suite_probe.c
 	@mkdir -p $(@D)
 	$(SANITIZER_CC) $(PRODUCT_CFLAGS) -fsanitize=address,undefined \
 	    -fno-sanitize-recover=all -O1 -g -o $@ $^
-$(PREFIX)/doom_libc-%: ports/doom/crt0.c tests/host/fixtures/doom_libc.c \
-    $(wildcard ports/doom/include/*.h ports/doom/include/sys/*.h)
+$(PREFIX)/doom_libc-%: ports/doom/crt0.c ports/doom/format.c tests/host/fixtures/doom_libc.c \
+    $(wildcard ports/doom/include/*.h ports/doom/include/sys/*.h) ports/doom/format.h
 	@mkdir -p $(@D)
 	$*-elf-gcc -std=gnu99 -Os -ffreestanding -fno-pie -no-pie -nostdlib -static \
 	    -Wl,--build-id=none -Iports/doom/include $(filter %.c,$^) -o $@

@@ -62,8 +62,8 @@ build/tests/host-suite/vfs_unmount: $(HOST_KERNEL_FIXTURE_INPUTS) mk/host-fixtur
 	$(MAKE) -f mk/host-fixtures.mk HOSTCC="$(HOSTCC)" $@
 
 # The i686 freestanding Doom ABI runs on a matching small recovery helper.
-HOST_DOOM_LIBC_SRC = ports/doom/crt0.c tests/host/fixtures/doom_libc.c
-build/tests/fixtures/doom-libc-i686: $(HOST_DOOM_LIBC_SRC) $(wildcard ports/doom/include/*.h ports/doom/include/sys/*.h)
+HOST_DOOM_LIBC_SRC = ports/doom/crt0.c ports/doom/format.c tests/host/fixtures/doom_libc.c
+build/tests/fixtures/doom-libc-i686: $(HOST_DOOM_LIBC_SRC) ports/doom/format.h $(wildcard ports/doom/include/*.h ports/doom/include/sys/*.h)
 	@mkdir -p $(@D)
 	i686-elf-gcc -std=gnu99 -Os -ffreestanding -fno-pie -no-pie -nostdlib -static \
 	    -Wl,--build-id=none -Iports/doom/include $(HOST_DOOM_LIBC_SRC) -o $@

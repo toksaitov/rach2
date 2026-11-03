@@ -57,7 +57,7 @@ DOOM_SRC = \
 DOOM_OBJS = $(addprefix $(BUILD)/, $(DOOM_SRC:.c=.o))
 
 # The platform layer, the sound modules, the music player and SHA-1.
-LOCAL_SRC = doomgeneric_rach2.c i_pcsound.c opl3.c mus2mid.c midifile.c i_oplmusic.c sha1_fips.c
+LOCAL_SRC = doomgeneric_rach2.c format.c i_pcsound.c opl3.c mus2mid.c midifile.c i_oplmusic.c sha1_fips.c
 LOCAL_OBJS = $(addprefix $(BUILD)/, $(LOCAL_SRC:.c=.o))
 
 # All objects

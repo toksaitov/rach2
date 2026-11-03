@@ -59,15 +59,14 @@ int ferror(FILE *f);
 int fflush(FILE *f);
 
 /**
- * Format as the C library does and write the result to descriptor 1 in one
- * write. The flags, the width and the precision are read and ignored; ll
- * reads a long long; %f, %e, %g and their capitals print `<float>`; and an
- * unknown conversion prints '?' and takes an int. At most 1023 bytes are
- * written, and the bytes formatted are returned.
+ * Format as vsnprintf does and write the result to descriptor 1 in one
+ * write. At most 1023 bytes are written, and the bytes written are
+ * returned.
  */
 int printf(const char *fmt, ...);
 
-/** Format as vsnprintf does into 1024 bytes and write them in one write. */
+/** Format as vsnprintf does into 1024 bytes and write at most 1023 of
+ * them in one write; returns the bytes written, or -1 for a NULL `f`. */
 int fprintf(FILE *f, const char *fmt, ...);
 
 /** Write `s` and a newline in two writes; returns 0. */
@@ -151,18 +150,19 @@ static inline int getchar(void) { return fgetc(stdin); }
 
 int vfprintf(FILE *f, const char *fmt, va_list ap);
 
-/** vsnprintf with a size of 4096; the caller's buffer must hold the result. */
+/** vsnprintf with a size of INT_MAX; the caller's buffer must hold the
+ * result. */
 int sprintf(char *str, const char *fmt, ...);
 int snprintf(char *str, size_t size, const char *fmt, ...);
 
 /**
- * Format into `str`, of `size` bytes, and terminate it. %d, %u and %x take
- * a width, a precision and the 0 flag, %o a precision and the 0 flag, and
- * %s a width, right-aligned; the - flag is ignored. ll reads a long long,
- * %f, %e, %g and their capitals give `<float>`, and an unknown conversion
- * gives '?' and takes an int. Returns the characters stored, without the
- * terminator, rather than the length the whole result would need; a `size`
- * of 0 stores nothing and returns 0.
+ * Format into `str`, of `size` bytes, and terminate it, as glibc does:
+ * every flag, width and precision of d, i, u, o, x, X, c, s, p, n, f, F,
+ * e, E, g and G, floats rounded from their exact value, "(nil)" for a
+ * NULL pointer and an unknown conversion printed as written. %Lf formats
+ * a long double as a double. Returns the length of the whole result, as
+ * C99 does, which exceeds `size` - 1 when the result was cut; a `size` of
+ * 0 stores nothing. ../format.h has the formatter.
  */
 int vsnprintf(char *str, size_t size, const char *fmt, va_list ap);
 

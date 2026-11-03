@@ -12,6 +12,8 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include "include/ctype.h"
+#include "include/limits.h"
+#include "format.h"
 
 #if defined __x86_64__
 /* The numbers of rach2/sys/arch/x86_64/sysnr.h, which are Linux's. */
@@ -437,434 +439,23 @@ int tolower(int c)
 }
 
 /**
- * Write `n` in `base` to `buf`, with a '-' first when `n` is negative and
- * `base` is 10, and return the characters written. `buf` is not terminated,
- * and 32 bytes hold any long long.
- */
-static int format_signed(char *buf, long long n, int base)
-{
-    int i = 0;
-    int neg = 0;
-    unsigned long long un;
-    char tmp[32];
-    int ti = 0;
-
-    if (n < 0 && base == 10) {
-        neg = 1;
-        un = 0ULL - (unsigned long long)n;
-    } else {
-        un = (unsigned long long)n;
-    }
-
-    do {
-        int digit = un % base;
-        tmp[ti++] = (digit < 10) ? ('0' + digit) : ('a' + digit - 10);
-        un /= base;
-    } while (un);
-
-    if (neg) buf[i++] = '-';
-    while (ti > 0) buf[i++] = tmp[--ti];
-    return i;
-}
-
-/**
- * Write `un` in `base` to `buf`, in capital hexadecimal digits when
- * `uppercase` is set, and return the characters written. `buf` is not
- * terminated, and 32 bytes hold any unsigned long long.
- */
-static int format_unsigned(char *buf, unsigned long long un, int base, int uppercase)
-{
-    int i = 0;
-    char tmp[32];
-    int ti = 0;
-    const char *digits = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
-
-    do {
-        tmp[ti++] = digits[un % base];
-        un /= base;
-    } while (un);
-
-    while (ti > 0) buf[i++] = tmp[--ti];
-    return i;
-}
-
-/**
  * printf's work, which stdio.h describes: the output is formatted into a
  * buffer of 1024 bytes and written in one write, so that one call's line
- * reaches the console whole.
+ * reaches the console whole. Returns the bytes written.
  */
 int vprintf(const char *fmt, va_list ap)
 {
     char outbuf[1024];
-    int outlen = 0;
-    const char *p;
+    int len = format_vsnprintf(outbuf, sizeof(outbuf), fmt, ap);
 
-    for (p = fmt; *p; p++) {
-        int is_long = 0;
-
-        if (*p != '%') {
-            if (outlen < (int)sizeof(outbuf) - 1) outbuf[outlen++] = *p;
-            continue;
-        }
-        p++;
-
-        while (*p == '-' || *p == '+' || *p == ' ' || *p == '#' || *p == '0') {
-            p++;
-        }
-
-        while (*p >= '0' && *p <= '9') {
-            p++;
-        }
-
-        if (*p == '.') {
-            p++;
-            while (*p >= '0' && *p <= '9') {
-                p++;
-            }
-        }
-
-        if (*p == 'l') {
-            is_long = 1;
-            p++;
-            if (*p == 'l') { is_long = 2; p++; }
-        } else if (*p == 'h') {
-            p++;
-            if (*p == 'h') p++;
-        } else if (*p == 'j') {
-            is_long = sizeof(intmax_t) > sizeof(long) ? 2 : 1;
-            p++;
-        } else if (*p == 'z' || *p == 't') {
-            is_long = 1;  /* size_t and ptrdiff_t have the size of long */
-            p++;
-        }
-
-        switch (*p) {
-            case 'd':
-            case 'i': {
-                long long val = is_long == 2 ? va_arg(ap, long long)
-                    : is_long ? va_arg(ap, long) : va_arg(ap, int);
-                char tmp[32];
-                int len = format_signed(tmp, val, 10);
-                for (int j = 0; j < len && outlen < (int)sizeof(outbuf) - 1; j++)
-                    outbuf[outlen++] = tmp[j];
-                break;
-            }
-            case 'u': {
-                unsigned long long val = is_long == 2 ? va_arg(ap, unsigned long long)
-                    : is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
-                char tmp[32];
-                int len = format_unsigned(tmp, val, 10, 0);
-                for (int j = 0; j < len && outlen < (int)sizeof(outbuf) - 1; j++)
-                    outbuf[outlen++] = tmp[j];
-                break;
-            }
-            case 'o': {
-                unsigned long long val = is_long == 2 ? va_arg(ap, unsigned long long)
-                    : is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
-                char tmp[32];
-                int len = format_unsigned(tmp, val, 8, 0);
-                for (int j = 0; j < len && outlen < (int)sizeof(outbuf) - 1; j++)
-                    outbuf[outlen++] = tmp[j];
-                break;
-            }
-            case 'x':
-            case 'X': {
-                unsigned long long val = is_long == 2 ? va_arg(ap, unsigned long long)
-                    : is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
-                char tmp[32];
-                int len = format_unsigned(tmp, val, 16, *p == 'X');
-                for (int j = 0; j < len && outlen < (int)sizeof(outbuf) - 1; j++)
-                    outbuf[outlen++] = tmp[j];
-                break;
-            }
-            case 'p': {
-                uintptr_t val = (uintptr_t)va_arg(ap, void *);
-                char tmp[32];
-                int len;
-                if (outlen < (int)sizeof(outbuf) - 2) {
-                    outbuf[outlen++] = '0';
-                    outbuf[outlen++] = 'x';
-                }
-                len = format_unsigned(tmp, val, 16, 0);
-                for (int j = 0; j < len && outlen < (int)sizeof(outbuf) - 1; j++)
-                    outbuf[outlen++] = tmp[j];
-                break;
-            }
-            case 's': {
-                const char *s = va_arg(ap, const char *);
-                if (!s) s = "(null)";
-                while (*s && outlen < (int)sizeof(outbuf) - 1)
-                    outbuf[outlen++] = *s++;
-                break;
-            }
-            case 'c': {
-                char c = (char)va_arg(ap, int);
-                if (outlen < (int)sizeof(outbuf) - 1) outbuf[outlen++] = c;
-                break;
-            }
-            case 'f':
-            case 'g':
-            case 'e':
-            case 'F':
-            case 'G':
-            case 'E': {
-                (void)va_arg(ap, double);
-                const char *flt = "<float>";
-                for (int j = 0; flt[j] && outlen < (int)sizeof(outbuf) - 1; j++)
-                    outbuf[outlen++] = flt[j];
-                break;
-            }
-            case 'n':
-                *va_arg(ap, int *) = outlen;
-                break;
-            case '%':
-                if (outlen < (int)sizeof(outbuf) - 1) outbuf[outlen++] = '%';
-                break;
-            case '\0':
-                write(1, outbuf, outlen);
-                return outlen;
-            default:
-                (void)va_arg(ap, int);
-                if (outlen < (int)sizeof(outbuf) - 1) outbuf[outlen++] = '?';
-                break;
-        }
-    }
-
-    write(1, outbuf, outlen);
-    return outlen;
+    if (len > (int)sizeof(outbuf) - 1) len = sizeof(outbuf) - 1;
+    if (len > 0) write(1, outbuf, len);
+    return len;
 }
 
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap)
 {
-    char *out = buf;
-    char *end;
-    const char *p;
-
-    if (size == 0) return 0;
-    end = buf + size - 1;
-
-    for (p = fmt; *p && out < end; p++) {
-        int is_long = 0;
-        int zero_pad = 0;
-        int width = 0;
-        int precision = -1;  /* -1: none given */
-
-        if (*p != '%') {
-            *out++ = *p;
-            continue;
-        }
-        p++;
-
-        while (*p == '-' || *p == '+' || *p == ' ' || *p == '#' || *p == '0') {
-            if (*p == '0') zero_pad = 1;
-            p++;
-        }
-
-        while (*p >= '0' && *p <= '9') {
-            width = width * 10 + (*p - '0');
-            p++;
-        }
-
-        if (*p == '.') {
-            p++;
-            precision = 0;
-            while (*p >= '0' && *p <= '9') {
-                precision = precision * 10 + (*p - '0');
-                p++;
-            }
-        }
-
-        if (*p == 'l') {
-            is_long = 1;
-            p++;
-            if (*p == 'l') { is_long = 2; p++; }
-        } else if (*p == 'h') {
-            p++;
-            if (*p == 'h') p++;
-        } else if (*p == 'j') {
-            is_long = sizeof(intmax_t) > sizeof(long) ? 2 : 1;
-            p++;
-        } else if (*p == 'z' || *p == 't') {
-            is_long = 1;
-            p++;
-        }
-
-        switch (*p) {
-            case 'd':
-            case 'i': {
-                long long val = is_long == 2 ? va_arg(ap, long long)
-                    : is_long ? va_arg(ap, long) : va_arg(ap, int);
-                char tmp[32];
-                int i = 0;
-                int neg = 0;
-                unsigned long long uval;
-                int min_digits;
-                int num_len;
-
-                if (val < 0) {
-                    neg = 1;
-                    uval = 0ULL - (unsigned long long)val;
-                } else {
-                    uval = (unsigned long long)val;
-                }
-
-                do {
-                    tmp[i++] = '0' + (uval % 10);
-                    uval /= 10;
-                } while (uval);
-
-                num_len = i + neg;
-                min_digits = (precision >= 0) ? precision : (zero_pad ? (width - neg) : 0);
-
-                if (!zero_pad && width > 0) {
-                    int pad = width - (neg + (i > min_digits ? i : min_digits));
-                    while (pad-- > 0 && out < end) *out++ = ' ';
-                }
-
-                if (neg && out < end) *out++ = '-';
-
-                while (i < min_digits && out < end) {
-                    *out++ = '0';
-                    min_digits--;
-                }
-                while (i-- > 0 && out < end) *out++ = tmp[i];
-                break;
-            }
-            case 'u': {
-                unsigned long long val = is_long == 2 ? va_arg(ap, unsigned long long)
-                    : is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
-                char tmp[32];
-                int i = 0;
-                int min_digits;
-
-                do {
-                    tmp[i++] = '0' + (val % 10);
-                    val /= 10;
-                } while (val);
-
-                min_digits = (precision >= 0) ? precision : (zero_pad ? width : 0);
-
-                if (!zero_pad && width > 0) {
-                    int pad = width - (i > min_digits ? i : min_digits);
-                    while (pad-- > 0 && out < end) *out++ = ' ';
-                }
-
-                while (i < min_digits && out < end) {
-                    *out++ = '0';
-                    min_digits--;
-                }
-                while (i-- > 0 && out < end) *out++ = tmp[i];
-                break;
-            }
-            case 'o': {
-                unsigned long long val = is_long == 2 ? va_arg(ap, unsigned long long)
-                    : is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
-                char tmp[32];
-                int i = 0;
-                int min_digits;
-
-                do {
-                    tmp[i++] = '0' + (val & 7);
-                    val >>= 3;
-                } while (val);
-
-                min_digits = (precision >= 0) ? precision : (zero_pad ? width : 0);
-                while (i < min_digits && out < end) {
-                    *out++ = '0';
-                    min_digits--;
-                }
-                while (i-- > 0 && out < end) *out++ = tmp[i];
-                break;
-            }
-            case 'x':
-            case 'X': {
-                unsigned long long val = is_long == 2 ? va_arg(ap, unsigned long long)
-                    : is_long ? va_arg(ap, unsigned long) : va_arg(ap, unsigned int);
-                char tmp[32];
-                int i = 0;
-                int min_digits;
-                const char *hex = (*p == 'X') ? "0123456789ABCDEF" : "0123456789abcdef";
-
-                do {
-                    tmp[i++] = hex[val & 0xF];
-                    val >>= 4;
-                } while (val);
-
-                min_digits = (precision >= 0) ? precision : (zero_pad ? width : 0);
-
-                if (!zero_pad && width > 0) {
-                    int pad = width - (i > min_digits ? i : min_digits);
-                    while (pad-- > 0 && out < end) *out++ = ' ';
-                }
-
-                while (i < min_digits && out < end) {
-                    *out++ = '0';
-                    min_digits--;
-                }
-                while (i-- > 0 && out < end) *out++ = tmp[i];
-                break;
-            }
-            case 'p': {
-                uintptr_t val = (uintptr_t)va_arg(ap, void *);
-                char tmp[32];
-                int i = 0;
-
-                if (out < end) *out++ = '0';
-                if (out < end) *out++ = 'x';
-
-                do {
-                    tmp[i++] = "0123456789abcdef"[val & 0xF];
-                    val >>= 4;
-                } while (val);
-
-                while (i-- > 0 && out < end) *out++ = tmp[i];
-                break;
-            }
-            case 's': {
-                const char *s = va_arg(ap, const char *);
-                int slen, pad;
-                if (!s) s = "(null)";
-                slen = 0;
-                while (s[slen]) slen++;
-
-                pad = (width > slen) ? (width - slen) : 0;
-                while (pad-- > 0 && out < end) *out++ = ' ';
-
-                while (*s && out < end) *out++ = *s++;
-                break;
-            }
-            case 'c':
-                if (out < end) *out++ = (char)va_arg(ap, int);
-                break;
-            case 'f':
-            case 'g':
-            case 'e':
-            case 'F':
-            case 'G':
-            case 'E': {
-                (void)va_arg(ap, double);
-                const char *flt = "<float>";
-                while (*flt && out < end) *out++ = *flt++;
-                break;
-            }
-            case 'n':
-                *va_arg(ap, int *) = out - buf;
-                break;
-            case '%':
-                if (out < end) *out++ = '%';
-                break;
-            case '\0':
-                *out = '\0';
-                return out - buf;
-            default:
-                (void)va_arg(ap, int);
-                if (out < end) *out++ = '?';
-                break;
-        }
-    }
-
-    *out = '\0';
-    return out - buf;
+    return format_vsnprintf(buf, size, fmt, ap);
 }
 
 int snprintf(char *buf, size_t size, const char *fmt, ...)
@@ -884,7 +475,7 @@ int sprintf(char *buf, const char *fmt, ...)
     int ret;
 
     va_start(ap, fmt);
-    ret = vsnprintf(buf, 4096, fmt, ap);
+    ret = vsnprintf(buf, INT_MAX, fmt, ap);
     va_end(ap);
     return ret;
 }
@@ -1128,6 +719,7 @@ int vfprintf(FILE *f, const char *fmt, va_list ap)
     if (!f) return -1;
 
     len = vsnprintf(buf, sizeof(buf), fmt, ap);
+    if (len > (int)sizeof(buf) - 1) len = sizeof(buf) - 1;
     if (len > 0) {
         write(f->fd, buf, len);
     }
