@@ -94,3 +94,15 @@ What the steps found beyond the plan's checks:
 * Rach2 hands a program at most 1500 bytes of a datagram, though it reassembles larger ones: a raw socket's queue keeps 1500 bytes of each (`socket/raw.c`), as UDP's does (`SOCK_RECV_BUF_SIZE`), and `readv_dgram` reads one datagram through a 1500-byte buffer, reporting the whole length for `MSG_TRUNC`. The 4000-byte replies above reached the Python program as their first 1492 bytes past the ICMPv6 header. UDP refuses a payload past 1500 bytes on either family. The network Readme's Limits now say so; a program that wants a large datagram over IPv6, `ping -6 -s 4000` among them, needs them lifted.
 
 Afterwards the release's kernel was put back with `bootctl kernel`, booted, committed and copied to the fallback with `bootctl fallback`; read by their FAT chains both slots hold `8b9611b2...`, the saved entry is the candidate and no trial is armed. The volume was set with `mixer vol 1` after each boot; nothing played sound or took the screen.
+
+## The agents and term (task 23c)
+
+Checked in the owner's sitting of 2026-11-03 (#2275), times UTC+6, on the installed release be257af21 until 13:35 and then on a trial boot of milestone 71's head, df57f35a2, installed at 13:48 by `rach2-install --console term --update`. `dev-log/68-sound/proof.md` has the sound steps of the same sitting.
+
+| Step | System | Result | Issue |
+|---|---|---|---|
+| OpenCode on term on the Lenovo's screen | be257af21 | Passed, about 12:40: "Open Code works, no problems." | #1938 |
+| No flash, and vim's colours leave nothing behind | be257af21 | Passed, shortly before 12:40: "no flashes too. Colorscheme now works properly, just in vim." | #1941 |
+| The bell is heard | df57f35a2 | Passed by 16:24, through the codec's beep generator after #2381; the owner chose a soft chime in place of the 750 Hz tone, #2388. | #1941 |
+| A reinstall keeps every agent signed in | df57f35a2 | Passed: after the update every sign-in file was in /root with no push, and at 15:06 to 15:07 `claude auth status`, `codex login status` and `gh auth status` showed each signed in, and `agy -p`, `muse exec` and `opencode run` each answered. | #1940 |
+| Claude Code's sandboxed Bash | df57f35a2 | Failed at 15:08: bubblewrap stopped at `bwrap: capset failed: Invalid argument` and nothing ran. The kernel's fixes are #2384 (inheritable capabilities), #2385 (the workspace left behind) and #2386 (ambient capabilities across exec); the check runs again on the next trial. Muse's half passed on 2026-11-02. | #1939 |
