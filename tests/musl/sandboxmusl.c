@@ -50,7 +50,8 @@
  * itself, makes .bashrc in it, binds /dev/null over that and opens the
  * bound /dev/null with O_PATH, as bubblewrap does to find the mount it made.
  * Once the child is gone, and its namespace with it, the directory, its
- * file and the tmpfs can be removed.
+ * file and the tmpfs can be removed. When a step of this row fails, an
+ * atexit handler unmounts the tmpfs and removes the directory instead.
  *
  * The program runs itself in the modes `bset` and `regain`, named by its
  * first argument, as the image an exec row runs. With none it runs the
@@ -648,21 +649,53 @@ static int mask_file(void)
     return fd < 0 || close(fd) != 0;
 }
 
+/* What mask_row has made and not yet removed, for mask_cleanup. */
+static int mask_made;    /* MASKED was made by this run */
+static int mask_mounted; /* MASKED holds the tmpfs mask_row mounted */
+
+/** Remove the tmpfs on MASKED and the directory, as far as mask_row made
+ * them. atexit runs it, so that a row that fails leaves nothing behind;
+ * the child's binds went with its namespace. */
+static void mask_cleanup(void)
+{
+    if (mask_mounted && umount2(MASKED, MNT_DETACH) == 0) {
+        mask_mounted = 0;
+    }
+    if (mask_made && !mask_mounted && rmdir(MASKED) == 0) {
+        mask_made = 0;
+    }
+}
+
 /** Run the row of a masked file, the last. Returns 0, or 1 after the
  * failure is reported. */
 static int mask_row(void)
 {
-    if ((mkdir(MASKED, 0755) != 0 && errno != EEXIST) ||
-        mount("tmpfs", MASKED, "tmpfs", 0, NULL) != 0 || mkdir(MASKED_WS, 0755) != 0) {
+    if (atexit(mask_cleanup) != 0) {
+        return fail("atexit");
+    }
+    if (mkdir(MASKED, 0755) == 0) {
+        mask_made = 1;
+    } else if (errno != EEXIST) {
+        return fail("mount " MASKED);
+    }
+    if (mount("tmpfs", MASKED, "tmpfs", 0, NULL) != 0) {
+        return fail("mount " MASKED);
+    }
+    mask_mounted = 1;
+    if (mkdir(MASKED_WS, 0755) != 0) {
         return fail("mount " MASKED);
     }
     if (in_child(mask_file) != 0) {
         return fail("a file of a bound directory was not masked with /dev/null");
     }
-    if (unlink(MASKED_RC) != 0 || rmdir(MASKED_WS) != 0 || umount(MASKED) != 0 ||
-        rmdir(MASKED) != 0) {
+    if (unlink(MASKED_RC) != 0 || rmdir(MASKED_WS) != 0 || umount(MASKED) != 0) {
         return fail("the directory a namespace that ended bound could not be removed");
     }
+    mask_mounted = 0;
+    if (rmdir(MASKED) != 0) {
+        return fail("the directory a namespace that ended bound could not be removed");
+    }
+    mask_made = 0;
     report_held();
     return 0;
 }
