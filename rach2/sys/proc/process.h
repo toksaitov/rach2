@@ -382,6 +382,17 @@ struct process {
     uint32_t *fd_held;
     int fd_held_words;
     int fd_holding;
+    /* While the thread sleeps in `poll_wait` (io/poll.c), the queues it has
+     * records on and the records, `poll_n` of each, which a close by
+     * another thread may take off their queues (`close_fd`); NULL and 0 at
+     * any other time. */
+    struct wait_queue **poll_wqs;
+    struct wq_waiter *poll_recs;
+    uint32_t poll_n;
+    /* Set while the thread waits in epoll_wait on the set at descriptor
+     * `epoll_wait_fd`. */
+    int epoll_waiting;
+    int epoll_wait_fd;
     /* The system call filters seccomp(2) installed, newest first, which the
      * thread shares with the threads and children that inherit them, and
      * the mode, SECCOMP_MODE_ (seccomp.h); a fork passes both on and an

@@ -249,6 +249,17 @@ void wq_wake_all(wait_queue_t *wq)
     wq_wake(wq, WQ_ALL);
 }
 
+void wq_wake_proc(process_t *p)
+{
+    uint32_t flags = irq_save();
+
+    if (p->state == PROC_BLOCKED) {
+        p->woken = 1;
+        wq_ready(p);
+    }
+    irq_restore(flags);
+}
+
 uint32_t wq_wakes(const wait_queue_t *wq, uint32_t kinds)
 {
     uint32_t sum = 0;

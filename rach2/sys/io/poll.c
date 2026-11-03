@@ -235,6 +235,12 @@ static int deadline_passed(struct poll_deadline *d)
  * woke and nothing else could run, idles until the next interrupt, still on
  * every queue so a waker can find it, and leaves the queues after. On
  * return the process is on no queue and its timer wake is cleared.
+ *
+ * While it sleeps, the process's record names the queues and its records
+ * on them (`poll_wqs`), so that a close by another thread can take it off
+ * them all, with each queue set to NULL, before it frees what an epoll
+ * wait sleeps on (`epoll_waits_let_go`); the process looks at the arrays
+ * again only with the big lock, which that close holds.
  */
 int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d)
 {
@@ -277,6 +283,9 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d)
             recs[i].next = NULL;
             wq_poll_add(wqs[i], &recs[i]);
         }
+        current_proc->poll_wqs = wqs;
+        current_proc->poll_recs = recs;
+        current_proc->poll_n = n;
         if (d->set) {
             current_proc->wakeup_tick = d->tick ? d->tick : 1;
         }
@@ -292,6 +301,9 @@ int poll_wait(poll_scan_fn scan, void *ctx, uint32_t n, struct poll_deadline *d)
         for (i = 0; i < n; i++) {
             wq_poll_remove(wqs[i], &recs[i]);
         }
+        current_proc->poll_wqs = NULL;
+        current_proc->poll_recs = NULL;
+        current_proc->poll_n = 0;
         current_proc->state = PROC_RUNNING;
     }
 

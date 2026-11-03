@@ -138,6 +138,13 @@ A wait reports a registration only while the caller's descriptor at its
 number names its open file, since a wait sleeps only on what the
 caller's own descriptors keep open; Linux reports it through the open
 file whatever became of the number.
+A wait asleep does not keep those descriptors, as on Linux: a close of
+one, or a
+.Xr dup2 2
+onto it, by another thread sharing the descriptor table takes the wait
+off every queue it sleeps on, releases the descriptor at once, and wakes
+the wait to look at its set again, so that a pipe's write end closed in
+this way ends a read of the pipe with the end of file.
 .Xr poll 2
 and
 .Xr select 2

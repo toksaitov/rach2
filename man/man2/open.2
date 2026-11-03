@@ -339,6 +339,12 @@ to every thread, is not given to another descriptor, and
 .Xr dup2 2
 onto it gives
 .Er EBUSY .
+A wait asleep in
+.Xr epoll_wait 2
+is not such a call for the descriptors its set watches, since Linux's
+epoll keeps no reference to them: a close of one takes the wait off what
+it sleeps on and releases the descriptor at once, and the wait looks at
+its set again.
 .Pp
 Closing an ordinary descriptor for a file backing a loop device does
 not detach the device.

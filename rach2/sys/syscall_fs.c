@@ -25,6 +25,7 @@
 #include "proc/ns.h"
 #include "proc/elf.h"
 #include "proc/uimage.h"
+#include "proc/wait_queue.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
 #include "lib/ksignal.h"
@@ -3982,6 +3983,40 @@ static void fd_teardown(fd_table_t *table, int fd)
 }
 
 /**
+ * Let go of descriptor `fd` of `table` in each epoll_wait of another sharer
+ * that holds it and sleeps, so that a close releases it at once, as a
+ * close on Linux does while a thread waits in epoll_wait: the wait comes
+ * off every queue it sleeps on, each of which the release may free, with
+ * the queue forgotten (`poll_wait`), its hold on `fd` goes, and it is woken
+ * to scan its set again, through its own descriptors. The set's own
+ * descriptor stays held, since the wait reads the set until it ends. The
+ * caller holds the big lock, without which the waits do not look at their
+ * records.
+ */
+static void epoll_waits_let_go(const fd_table_t *table, int fd)
+{
+    process_t *t;
+    uint32_t i;
+
+    if (table->refs < 2) {
+        return;
+    }
+    for (t = proc_list; t; t = t->next) {
+        if (t == current_proc || t->fds != table || !t->epoll_waiting || !t->poll_wqs ||
+            t->epoll_wait_fd == fd || fd / 32 >= t->fd_holding ||
+            !(t->fd_held[fd / 32] & (1u << (fd % 32)))) {
+            continue;
+        }
+        for (i = 0; i < t->poll_n; i++) {
+            wq_poll_remove(t->poll_wqs[i], &t->poll_recs[i]);
+            t->poll_wqs[i] = NULL;
+        }
+        t->fd_held[fd / 32] &= ~(1u << (fd % 32));
+        wq_wake_proc(t);
+    }
+}
+
+/**
  * Close descriptor `fd` of the caller's table. The table's record locks on
  * the file go at once, as Linux drops them at every close. Then the entry
  * is released and its slot freed (`fd_teardown`), or, while a call of
@@ -3990,7 +4025,9 @@ static void fd_teardown(fd_table_t *table, int fd)
  * (`fd_holds_release`), which drops no locks: that may be the call of
  * another process sharing the table, or a call of the caller's own that
  * ends after it took a lock again. Linux keeps the file for such a call
- * through the reference `fdget` takes. 0, or -EBADF.
+ * through the reference `fdget` takes. An epoll_wait asleep does not keep
+ * the descriptors it watches (`epoll_waits_let_go`), since Linux's epoll
+ * takes no reference to them. 0, or -EBADF.
  */
 static int32_t close_fd(int fd)
 {
@@ -4001,6 +4038,7 @@ static int32_t close_fd(int fd)
         return -EBADF;
     }
     fd_close_locks(e);
+    epoll_waits_let_go(table, fd);
     if (fd_held_elsewhere(table, fd)) {
         e->flags |= FD_FLAG_CLOSING;
         return 0;
@@ -5492,7 +5530,8 @@ long sys_dup(isr_params_t *params)
  * EBUSY; or a call of another thread sharing the table holds its
  * descriptor, or the descriptor a close left to such a call, or a close of
  * it is still releasing it, where Linux replaces the descriptor and the
- * call or the close keeps its file.
+ * call or the close keeps its file. An epoll_wait asleep lets the
+ * descriptor go first (`epoll_waits_let_go`).
  */
 static int32_t dup_clear(int fd)
 {
@@ -5501,6 +5540,9 @@ static int32_t dup_clear(int fd)
 
     if (e->type == FD_TYPE_NONE && !e->ofd) {
         return 0;
+    }
+    if (e->type != FD_TYPE_NONE && !(e->flags & FD_FLAG_CLOSING)) {
+        epoll_waits_let_go(table, fd);
     }
     if (e->type == FD_TYPE_NONE || (e->flags & FD_FLAG_CLOSING) || fd_held_elsewhere(table, fd)) {
         return -EBUSY;

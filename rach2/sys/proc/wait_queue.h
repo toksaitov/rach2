@@ -109,6 +109,10 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds);
  * a change of every kind, such as a close. */
 void wq_wake_all(wait_queue_t *wq);
 
+/** Make `p` runnable if it is blocked, as a wake of a queue it is on would,
+ * for a waker that has taken it off its queues itself. */
+void wq_wake_proc(process_t *p);
+
 /** The wakes `wq` has counted of the kinds among `kinds`, summed. */
 uint32_t wq_wakes(const wait_queue_t *wq, uint32_t kinds);
 
