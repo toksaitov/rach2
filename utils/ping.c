@@ -2,8 +2,8 @@
  * Send ICMP and ICMPv6 echo requests and count the replies, as Linux's
  * iputils ping does.
  *
- * `ping [-nq46] [-c count] [-i interval] [-s size] [-t ttl] [-W timeout]
- * [-w deadline] host`, where `host` is an IPv4 address or a name, resolved
+ * `ping [-nq46] [-c count] [-I interface] [-i interval] [-s size] [-t ttl]
+ * [-W timeout] [-w deadline] host`, where `host` is an IPv4 address or a name, resolved
  * through `/etc/hosts`, or `/hosts` where there is no `/etc/hosts`, and then
  * DNS (see `resolv.c`), or an IPv6 address, with `%` and an interface's name
  * or index after a link-local one. `-6` requires an IPv6 address.
@@ -26,6 +26,16 @@
  * ping waits instead for the deadline or the count's replies, whichever
  * comes first. Then the statistics are printed, in the form iputils prints
  * them.
+ *
+ * `-I` takes, as iputils does, an address of this machine's, which the
+ * socket is bound to so that the requests leave from it: an IPv4 address, or
+ * an IPv6 one, which is any argument with a colon, with `%` and an interface
+ * after it naming the interface as well; or else an interface's name, to
+ * which the socket is bound with SO_BINDTODEVICE, so that the requests leave
+ * by that interface, from its address, and a link-local IPv6 host with no
+ * scope of its own is reached through it. The banner then names the source,
+ * which a UDP socket bound the same way and connected to the host reports,
+ * as iputils learns it.
  */
 
 #include <arpa/inet.h>
@@ -65,9 +75,13 @@
  * seconds. */
 #define LINGER_US 10000000LL
 
-#define USAGE                                                                                     \
-    "usage: ping [-nq46] [-c count] [-i interval] [-s size] [-t ttl] [-W timeout] [-w deadline] " \
-    "host\n"
+#define USAGE                                                                         \
+    "usage: ping [-nq46] [-c count] [-I interface] [-i interval] [-s size] [-t ttl] " \
+    "[-W timeout] [-w deadline] host\n"
+
+/* The port the probe of the source connects to, iputils' own; nothing is
+ * sent to it. */
+#define PROBE_PORT 1025
 
 /* What is pinged: an IPv4 address, or with `v6` set an IPv6 one and the
  * index of the interface it is reached by, 0 for none; `text` is the
@@ -77,6 +91,16 @@ struct target {
     unsigned int ip;
     unsigned char ip6[16];
     unsigned long scope;
+    char text[INET6_ADDRSTRLEN];
+};
+
+/* What `-I` named: the interface the socket is bound to, NULL for none; and
+ * with `bound` set the address it is bound to, IPv6 with `v6` set. `text` is
+ * the source the banner names. */
+struct source {
+    const char *device;
+    int bound, v6;
+    unsigned char addr[16];
     char text[INET6_ADDRSTRLEN];
 };
 
@@ -147,6 +171,7 @@ struct options {
     long count, size, ttl;
     long long interval, timeout, deadline;
     int quiet, v6;
+    const char *iface; /* -I's argument, or NULL */
 };
 
 /* What the run has seen: the requests sent and answered, and the round
@@ -172,7 +197,7 @@ static int parse(int argc, char **argv, struct options *o)
     int opt;
     char *end;
 
-    while ((opt = getopt(argc, argv, "c:i:s:t:W:w:nq46")) != -1) {
+    while ((opt = getopt(argc, argv, "c:I:i:s:t:W:w:nq46")) != -1) {
         switch (opt) {
         case 'c':
             o->count = strtol(optarg, &end, 10);
@@ -180,6 +205,9 @@ static int parse(int argc, char **argv, struct options *o)
                 fputs("ping: count must be a positive number\n", stderr);
                 return 2;
             }
+            break;
+        case 'I':
+            o->iface = optarg;
             break;
         case 'i':
             o->interval = parse_seconds(optarg);
@@ -306,6 +334,158 @@ static int resolve(const char *host, int v6, struct target *t)
 }
 
 /**
+ * The text of `err` as glibc gives it, which iputils' lines carry, where
+ * musl's differs; strerror's otherwise.
+ */
+static const char *message(int err)
+{
+    switch (err) {
+    case EADDRNOTAVAIL:
+        return "Cannot assign requested address";
+    case ENETUNREACH:
+        return "Network is unreachable";
+    default:
+        return strerror(err);
+    }
+}
+
+/**
+ * Read `-I`'s argument `arg` into `s` as iputils reads it: an IPv6 address
+ * when it has a colon, with `%` and the interface after it, an IPv4
+ * address, or else an interface's name. Returns 0, or the exit status 2
+ * after the diagnostic; an address of the other family than the host's is
+ * refused later, once the host is resolved.
+ */
+static int parse_source(const char *arg, struct source *s)
+{
+    char addr[INET6_ADDRSTRLEN];
+    const char *pct = strchr(arg, '%');
+    size_t n = pct ? (size_t)(pct - arg) : strlen(arg);
+
+    memset(s, 0, sizeof(*s));
+    if (strchr(arg, ':')) {
+        if (n >= sizeof(addr)) {
+            n = sizeof(addr) - 1;
+        }
+        memcpy(addr, arg, n);
+        addr[n] = '\0';
+        if (inet_pton(AF_INET6, addr, s->addr) != 1) {
+            fprintf(stderr, "ping: invalid source address: %s\n", arg);
+            return 2;
+        }
+        s->bound = s->v6 = 1;
+        s->device = pct ? pct + 1 : NULL;
+    } else if (inet_pton(AF_INET, arg, s->addr) == 1) {
+        s->bound = 1;
+    } else {
+        s->device = arg;
+    }
+    return 0;
+}
+
+/**
+ * Fill `sa` with the address of `t` at `port` and return its length, that of
+ * a sockaddr_in6 or a sockaddr_in.
+ */
+static socklen_t target_address(const struct target *t, unsigned int port, struct sockaddr_in6 *sa)
+{
+    struct sockaddr_in *sin = (struct sockaddr_in *)sa;
+
+    memset(sa, 0, sizeof(*sa));
+    if (t->v6) {
+        sa->sin6_family = AF_INET6;
+        sa->sin6_port = htons((unsigned short)port);
+        memcpy(&sa->sin6_addr, t->ip6, 16);
+        sa->sin6_scope_id = (unsigned int)t->scope;
+        return sizeof(*sa);
+    }
+    sin->sin_family = AF_INET;
+    sin->sin_port = htons((unsigned short)port);
+    sin->sin_addr.s_addr = htonl(t->ip);
+    return sizeof(*sin);
+}
+
+/**
+ * Bind `fd` to the interface `s` names, if any, with SO_BINDTODEVICE.
+ * Returns 0, or 2 after iputils' diagnostic.
+ */
+static int bind_device(int fd, const struct source *s)
+{
+    if (s->device && setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, s->device,
+                                (socklen_t)strlen(s->device) + 1) != 0) {
+        fprintf(stderr, "ping: SO_BINDTODEVICE %s: %s\n", s->device, message(errno));
+        return 2;
+    }
+    return 0;
+}
+
+/**
+ * Bind `fd`, the socket that pings `t`, as `-I` asked in `s`, and put the
+ * address the requests leave from in `s->text`: the bound address, or the
+ * one a UDP socket bound to the same interface and connected to `t` has.
+ * Returns 0, or the exit status 2 after the diagnostic.
+ */
+static int bind_source(int fd, const struct target *t, struct source *s)
+{
+    struct sockaddr_in6 sa;
+    struct sockaddr_in *sin = (struct sockaddr_in *)&sa;
+    socklen_t len;
+    int probe, err;
+
+    if (bind_device(fd, s) != 0) {
+        return 2;
+    }
+    if (s->bound) {
+        memset(&sa, 0, sizeof(sa));
+        if (s->v6) {
+            sa.sin6_family = AF_INET6;
+            memcpy(&sa.sin6_addr, s->addr, 16);
+            len = sizeof(sa);
+        } else {
+            sin->sin_family = AF_INET;
+            memcpy(&sin->sin_addr, s->addr, 4);
+            len = sizeof(*sin);
+        }
+        if (bind(fd, (struct sockaddr *)&sa, len) != 0) {
+            fprintf(stderr, "ping: bind: %s\n", message(errno));
+            return 2;
+        }
+        inet_ntop(s->v6 ? AF_INET6 : AF_INET, s->addr, s->text, sizeof(s->text));
+        return 0;
+    }
+    probe = socket(t->v6 ? AF_INET6 : AF_INET, SOCK_DGRAM, 0);
+    if (probe < 0) {
+        fprintf(stderr, "ping: socket: %s\n", message(errno));
+        return 2;
+    }
+    if (bind_device(probe, s) != 0) {
+        close(probe);
+        return 2;
+    }
+    len = target_address(t, PROBE_PORT, &sa);
+    if (connect(probe, (struct sockaddr *)&sa, len) != 0) {
+        err = errno;
+        close(probe);
+        fprintf(stderr, "ping: connect: %s\n", message(err));
+        return 2;
+    }
+    len = sizeof(sa);
+    if (getsockname(probe, (struct sockaddr *)&sa, &len) != 0) {
+        err = errno;
+        close(probe);
+        fprintf(stderr, "ping: getsockname: %s\n", message(err));
+        return 2;
+    }
+    close(probe);
+    if (t->v6) {
+        inet_ntop(AF_INET6, &sa.sin6_addr, s->text, sizeof(s->text));
+    } else {
+        inet_ntop(AF_INET, &sin->sin_addr, s->text, sizeof(s->text));
+    }
+    return 0;
+}
+
+/**
  * Open the ICMP datagram socket that pings `t` with the options `o`: its
  * hop limit set, and its receives asked to report each reply's. Returns
  * the descriptor, or -1 after the diagnostic.
@@ -338,8 +518,8 @@ static int open_socket(const struct target *t, const struct options *o)
  */
 static int send_request(int fd, const struct target *t, unsigned char *pkt, size_t len, long n)
 {
-    struct sockaddr_in sin;
-    struct sockaddr_in6 sin6;
+    struct sockaddr_in6 sa;
+    socklen_t salen = target_address(t, 0, &sa);
     unsigned int seq = (unsigned int)n & 0xFFFF;
     long long at = now_us();
     ssize_t r;
@@ -349,18 +529,7 @@ static int send_request(int fd, const struct target *t, unsigned char *pkt, size
     pkt[2] = pkt[3] = pkt[4] = pkt[5] = 0;
     pkt[6] = (unsigned char)(seq >> 8);
     pkt[7] = (unsigned char)seq;
-    if (t->v6) {
-        memset(&sin6, 0, sizeof(sin6));
-        sin6.sin6_family = AF_INET6;
-        memcpy(&sin6.sin6_addr, t->ip6, 16);
-        sin6.sin6_scope_id = (unsigned int)t->scope;
-        r = sendto(fd, pkt, len, 0, (struct sockaddr *)&sin6, sizeof(sin6));
-    } else {
-        memset(&sin, 0, sizeof(sin));
-        sin.sin_family = AF_INET;
-        sin.sin_addr.s_addr = htonl(t->ip);
-        r = sendto(fd, pkt, len, 0, (struct sockaddr *)&sin, sizeof(sin));
-    }
+    r = sendto(fd, pkt, len, 0, (struct sockaddr *)&sa, salen);
     sent_no[seq % WINDOW] = n;
     sent_at[seq % WINDOW] = at;
     answered[seq % WINDOW] = 0;
@@ -520,7 +689,7 @@ static int run(int fd, const struct target *to, const struct options *o, struct 
         if (more && now >= next) {
             err = send_request(fd, to, pkt, len, t->sent + 1);
             if (err != 0) {
-                fprintf(stderr, "ping: sendmsg: %s\n", strerror(err));
+                fprintf(stderr, "ping: sendmsg: %s\n", message(err));
                 if (t->sent == 0) {
                     free(pkt);
                     free(buf);
@@ -578,7 +747,8 @@ static void report(const char *host, const struct tally *t, long long us)
  * Resolve the host, ping it, and print the statistics. The status is 0 when
  * a reply came and, with both a count and a deadline given, the count's
  * worth came; 1 when fewer came; and 2 for a usage error, a name that does
- * not resolve, or a socket or first request the kernel refuses.
+ * not resolve, an interface or source address of `-I` the kernel refuses,
+ * or a socket or first request it refuses.
  */
 int main(int argc, char **argv)
 {
@@ -586,10 +756,12 @@ int main(int argc, char **argv)
     struct tally t;
     struct sigaction sa;
     struct target to;
+    struct source src;
     long long start;
     int rc, fd;
 
     memset(&o, 0, sizeof(o));
+    memset(&src, 0, sizeof(src));
     memset(&t, 0, sizeof(t));
     o.count = -1;
     o.interval = 1000000;
@@ -597,12 +769,18 @@ int main(int argc, char **argv)
     o.size = 56;
     o.ttl = 64;
     rc = parse(argc, argv, &o);
+    if (rc == 0 && o.iface) {
+        rc = parse_source(o.iface, &src);
+    }
+    if (rc == 0) {
+        rc = resolve(argv[optind], o.v6, &to);
+    }
     if (rc != 0) {
         return rc;
     }
-    rc = resolve(argv[optind], o.v6, &to);
-    if (rc != 0) {
-        return rc;
+    if (src.bound && src.v6 != to.v6) {
+        fprintf(stderr, "ping: %s: not an IPv%d address\n", o.iface, to.v6 ? 6 : 4);
+        return 2;
     }
     if (o.size > (to.v6 ? DATA_MAX6 : DATA_MAX)) {
         fprintf(stderr, "ping: invalid packet size: -s is at most %d\n",
@@ -613,15 +791,22 @@ int main(int argc, char **argv)
     if (fd < 0) {
         return 2;
     }
+    if (o.iface && bind_source(fd, &to, &src) != 0) {
+        close(fd);
+        return 2;
+    }
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = on_interrupt;
     sigaction(SIGINT, &sa, NULL);
 
+    printf(to.v6 ? "PING %s(%s) " : "PING %s (%s) ", argv[optind], to.text);
+    if (o.iface) {
+        printf("from %s %s: ", src.text, src.device ? src.device : "");
+    }
     if (to.v6) {
-        printf("PING %s(%s) %ld data bytes\n", argv[optind], to.text, o.size);
+        printf("%ld data bytes\n", o.size);
     } else {
-        printf("PING %s (%s) %ld(%ld) bytes of data.\n", argv[optind], to.text, o.size,
-               o.size + 28);
+        printf("%ld(%ld) bytes of data.\n", o.size, o.size + 28);
     }
     fflush(stdout);
     start = now_us();

@@ -8,6 +8,7 @@
 .Nm
 .Op Fl nq46
 .Op Fl c Ar count
+.Op Fl I Ar interface
 .Op Fl i Ar interval
 .Op Fl s Ar size
 .Op Fl t Ar ttl
@@ -95,6 +96,29 @@ The options are:
 Stop after
 .Ar count
 requests, once their replies have come or the wait for them is over.
+.It Fl I Ar interface
+Send from
+.Ar interface ,
+the name of an interface or an address of this machine's, as iputils
+takes it.
+A name binds the socket to the interface with
+.Dv SO_BINDTODEVICE
+.Pq Xr setsockopt 2 :
+the requests leave by it and from its address, even to a host the
+routing table reaches by another interface, which is then taken to be on
+this interface's link, and a link-local IPv6 host with no
+.Ql %
+is reached through it.
+An IPv4 address, or an IPv6 one, which is any argument with a colon,
+binds the socket to that address, so the requests leave from it; a
+.Ql %
+and an interface after an IPv6 address name the interface as well.
+The first line then names the source and the interface:
+.Pp
+.Dl PING 10.0.2.2 (10.0.2.2) from 10.0.2.15 eth0: 56(84) bytes of data.
+.Pp
+The source of a name is the one a UDP socket bound to the interface and
+connected to the host reports, as iputils learns it.
 .It Fl i Ar interval
 Send a request every
 .Ar interval
@@ -164,15 +188,28 @@ when
 .Ar count
 replies arrived.
 It returns 1 when they did not, and 2 for an option it does not take, a
-count or a time that is not a number, a host it cannot resolve, and a
-socket or first request the kernel refuses.
+count or a time that is not a number, a host it cannot resolve, an
+interface or source address of
+.Fl I
+the kernel refuses, and a socket or first request it refuses.
 .Sh EXAMPLES
 .Dl ping -c 3 192.168.0.1
 .Dl ping -c 2 -W 1 github.com
 .Dl ping -q -w 5 1.1.1.1
 .Dl ping -6 -c 2 ::1
 .Dl ping -c 2 ff02::1%eth0
+.Dl ping -c 2 -I wlan0 192.168.0.1
+.Dl ping -c 2 -I 10.0.2.15 10.0.2.2
 .Sh DIAGNOSTICS
+A reason is given in glibc's words, as iputils prints it, where musl's
+differ:
+.Ql Cannot assign requested address
+for
+.Er EADDRNOTAVAIL
+and
+.Ql Network is unreachable
+for
+.Er ENETUNREACH .
 .Bl -tag -width Ds
 .It Ql ping: HOST: cannot resolve the name
 The host is neither an address nor a name the files or DNS answer for.
@@ -183,6 +220,29 @@ was given with a host that is not an IPv6 address.
 The interface after
 .Ql %
 is neither an index nor the name of an interface.
+.It Ql ping: SO_BINDTODEVICE NAME: No such device
+The argument of
+.Fl I
+is neither an address nor the name of an interface.
+.It Ql ping: bind: Cannot assign requested address
+The address of
+.Fl I
+is not one of this machine's.
+.It Ql ping: ADDRESS: not an IPv4 address
+The address of
+.Fl I
+is of the other family than the host's;
+.Ql IPv6
+for an IPv6 host.
+.It Ql ping: invalid source address: ADDRESS
+The argument of
+.Fl I
+has a colon and is not an IPv6 address.
+.It Ql ping: connect: MESSAGE
+No route leaves by the interface of
+.Fl I ,
+as when it is down, or it has no address, so its source could not be
+learned.
 .It Ql ping: socket: MESSAGE
 The kernel would not open the ICMP datagram socket, for the reason
 .Xr strerror 3
@@ -198,4 +258,5 @@ sent and goes on.
 .Sh SEE ALSO
 .Xr busybox-networking 1 ,
 .Xr nc 1 ,
+.Xr setsockopt 2 ,
 .Xr socket 2
