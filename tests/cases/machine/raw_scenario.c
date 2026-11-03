@@ -163,9 +163,34 @@ static int userping(struct etude_case *c)
 }
 
 /**
+ * Log in as the test user and ping the loopback address fifty times, 10 ms
+ * apart, and then with no interval for a second. Each ping exits 0 only with
+ * its replies counted: the first with all fifty, which -w makes it require,
+ * and the second with one, which it counts only when it reads the replies
+ * waiting after each request, since with no interval it never waits in
+ * poll. The line the shell prints when both exit 0 is computed, so that the
+ * echo of the command typed cannot match it.
+ */
+static int fastping(struct etude_case *c)
+{
+    static const struct session s = {
+        "test",
+        "test-password",
+        "$ ",
+        "ping",
+        "/bin/ping -q -i 0.01 -c 50 -w 10 127.0.0.1 && "
+        "/bin/ping -q -i 0 -w 1 127.0.0.1 > /dev/null && echo fastping: $((6*7))\r",
+        "fastping: 42",
+        "all-replies"};
+
+    return session(c, &s);
+}
+
+/**
  * Run the case that the last part of the case's identity names: rawprobe
  * with its capture checked, rawprobe on a boot with an address and no
- * gateway, root's traceroute, or the test user's ping.
+ * gateway, root's traceroute, the test user's ping, or the test user's
+ * fifty pings of the loopback address.
  */
 int etude_scenario(struct etude_case *c)
 {
@@ -179,6 +204,8 @@ int etude_scenario(struct etude_case *c)
         return traceroute(c);
     if (which != NULL && strcmp(which, ".userping") == 0)
         return userping(c);
+    if (which != NULL && strcmp(which, ".fastping") == 0)
+        return fastping(c);
     fprintf(stderr, "raw_scenario: %s is no case of machine.raw\n", etude_case_id(c));
     return 1;
 }
