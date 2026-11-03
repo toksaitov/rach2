@@ -483,7 +483,9 @@ static long long linger_end(const struct options *o, const struct tally *t, long
  * Ping `to` with the options `o` through `fd`, counting in `t`, from
  * `start` on the monotonic clock. A request goes every interval until the
  * count is sent; then the run waits for the replies still out (`linger_end`),
- * or with a deadline for the deadline. Returns 0, or 2 when the first
+ * or with a deadline for the deadline. The replies waiting are taken after
+ * each request, as iputils does, so that an interval no longer than a send
+ * still counts them. Returns 0, or 2 when the first
  * request cannot be sent at all, as to an IPv6 address with no route.
  */
 static int run(int fd, const struct target *to, const struct options *o, struct tally *t,
@@ -528,6 +530,7 @@ static int run(int fd, const struct target *to, const struct options *o, struct 
             t->sent++;
             last = now;
             next = now + o->interval;
+            take_replies(fd, to, o, t, buf, cap);
             continue;
         }
         wake = more ? next : (o->deadline ? -1 : linger_end(o, t, last));
