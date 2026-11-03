@@ -13,11 +13,21 @@
 #include "../lib/kint.h"
 #include "../lib/kdef.h"
 
-/* Audio sample formats. */
+/*
+ * Audio sample formats. The drivers take U8 and S16LE; the wider ones are
+ * /dev/dsp's, which the virtual channels convert to 16 bits for the mix.
+ */
 typedef enum {
-    AUDIO_U8,   /* unsigned 8-bit (SB16 8-bit mode, Doom native) */
-    AUDIO_S16LE /* signed 16-bit little-endian (SB16 16-bit, HDA) */
+    AUDIO_U8,      /* unsigned 8-bit (SB16 8-bit mode, Doom native) */
+    AUDIO_S16LE,   /* signed 16-bit little-endian (SB16 16-bit, HDA) */
+    AUDIO_S24LE,   /* signed 24-bit in the low three bytes of four */
+    AUDIO_S24_3LE, /* signed 24-bit packed in three bytes */
+    AUDIO_S32LE    /* signed 32-bit little-endian */
 } audio_format_t;
+
+/* The bytes of one sample in format `f`. */
+#define AUDIO_SAMPLE_BYTES(f) \
+    ((f) == AUDIO_U8 ? 1u : (f) == AUDIO_S16LE ? 2u : (f) == AUDIO_S24_3LE ? 3u : 4u)
 
 /* Audio driver identity. */
 typedef enum {
@@ -67,7 +77,7 @@ typedef enum { AUDIO_PLAYBACK, AUDIO_CAPTURE } audio_dir_t;
 typedef struct audio_stream {
     audio_dir_t dir;
     uint32_t rate;           /* frames per second */
-    audio_format_t format;   /* AUDIO_U8 or AUDIO_S16LE */
+    audio_format_t format;   /* U8 or S16LE; the wider ones at vchan.c */
     int channels;            /* 1 or 2 */
     uint32_t period_bytes;   /* bytes of one period, a whole number of frames */
     uint32_t periods;        /* periods in the caller's buffer, at least 2 */

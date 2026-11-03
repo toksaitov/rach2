@@ -1,7 +1,7 @@
 /*
  * vchan.c: virtual playback channels (vchan.h): every playback open mixed
- * into the device's one stream, each converted to the mix's rate by an
- * integer linear resampler, and the sum clipped to 16 bits.
+ * into the device's one stream, each converted to 16 bits and to the mix's
+ * rate by an integer linear resampler, and the sum clipped to 16 bits.
  */
 
 #include "vchan.h"
@@ -18,6 +18,7 @@
 #define VCHAN_BLOCK    256u  /* frames of the mix made at a time */
 #define VCHAN_CHUNK    4096u /* frames of the mix a count advances by at a time */
 #define VCHAN_WEIGHT   14    /* bits of the resampler's weight between two frames */
+#define VCHAN_FRAME    8u    /* bytes of the widest frame, 32-bit stereo */
 
 /* The most frames a channel gives for a block: VCHAN_RATIO for each frame of
  * the mix, one more for the fraction, and the frame after the last. */
@@ -84,14 +85,21 @@ static struct {
     uint32_t made;
     uint32_t ended;
     struct spinlock lock;
-    int32_t sum[VCHAN_BLOCK * 2];    /* a block's sum, left and right */
-    uint8_t stage[VCHAN_STAGE * 4u]; /* a channel's frames for a block */
+    int32_t sum[VCHAN_BLOCK * 2];             /* a block's sum, left and right */
+    uint8_t stage[VCHAN_STAGE * VCHAN_FRAME]; /* a channel's frames for a block */
 } mix;
 
 /** The bytes of one frame of `s`. */
 static uint32_t vchan_frame_bytes(const audio_stream_t *s)
 {
-    return (uint32_t)s->channels * (s->format == AUDIO_S16LE ? 2u : 1u);
+    return (uint32_t)s->channels * AUDIO_SAMPLE_BYTES(s->format);
+}
+
+/** Whether a channel or reader may have `format`: any audio_format_t. */
+static int vchan_format_ok(audio_format_t format)
+{
+    return format == AUDIO_U8 || format == AUDIO_S16LE || format == AUDIO_S24LE ||
+           format == AUDIO_S24_3LE || format == AUDIO_S32LE;
 }
 
 /** The channel of stream `s`, or NULL. */
@@ -107,17 +115,33 @@ static struct vchan *vchan_find(const audio_stream_t *s)
     return NULL;
 }
 
-/** Put frame `p` of `s`'s format in `out` as 16-bit stereo: unsigned 8-bit
- * is moved to signed and widened, and a mono sample goes to both. */
+/**
+ * The sample at `p` in `format` as 16 bits: unsigned 8-bit is moved to
+ * signed and widened, and a wider sample keeps its top 16 bits, which
+ * rounds toward minus infinity. The top byte of 24 bits in four is ignored.
+ */
+static int16_t vchan_sample(audio_format_t format, const uint8_t *p)
+{
+    switch (format) {
+    case AUDIO_U8:
+        return (int16_t)(((int)p[0] - 128) * 256);
+    case AUDIO_S16LE:
+        return (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+    case AUDIO_S32LE:
+        return (int16_t)((uint16_t)p[2] | ((uint16_t)p[3] << 8));
+    case AUDIO_S24LE:
+    case AUDIO_S24_3LE:
+    default:
+        return (int16_t)((uint16_t)p[1] | ((uint16_t)p[2] << 8));
+    }
+}
+
+/** Put frame `p` of `s`'s format in `out` as 16-bit stereo; a mono sample
+ * goes to both. */
 static void vchan_frame(const audio_stream_t *s, const uint8_t *p, int16_t *out)
 {
-    if (s->format == AUDIO_S16LE) {
-        out[0] = (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
-        out[1] = s->channels == 2 ? (int16_t)((uint16_t)p[2] | ((uint16_t)p[3] << 8)) : out[0];
-    } else {
-        out[0] = (int16_t)(((int)p[0] - 128) * 256);
-        out[1] = s->channels == 2 ? (int16_t)(((int)p[1] - 128) * 256) : out[0];
-    }
+    out[0] = vchan_sample(s->format, p);
+    out[1] = s->channels == 2 ? vchan_sample(s->format, p + AUDIO_SAMPLE_BYTES(s->format)) : out[0];
 }
 
 /**
@@ -382,8 +406,8 @@ static int vchan_open(audio_stream_t *s)
  * of the mix plays, so that a `period` call is due at each of the mix's.
  * `device_periods` covers the frames the device's start takes from the
  * channel that starts the mix, up to VCHAN_START_MAX bytes. 0, or -EINVAL
- * for a stream not open or running, a format other than unsigned 8-bit or
- * signed 16-bit, a channel count other than 1 or 2, or no rate.
+ * for a stream not open or running, a format not in audio_format_t, a
+ * channel count other than 1 or 2, or no rate.
  */
 static int vchan_setup(audio_stream_t *s)
 {
@@ -393,8 +417,8 @@ static int vchan_setup(audio_stream_t *s)
     if (s->dir == AUDIO_CAPTURE) {
         return vchan_capture_setup(s);
     }
-    if (!c || c->running || s->rate == 0 || (s->format != AUDIO_U8 && s->format != AUDIO_S16LE) ||
-        s->channels < 1 || s->channels > 2) {
+    if (!c || c->running || s->rate == 0 || !vchan_format_ok(s->format) || s->channels < 1 ||
+        s->channels > 2) {
         return -EINVAL;
     }
     top = VCHAN_RATIO * mix.rate < VCHAN_RATE_MAX ? VCHAN_RATIO * mix.rate : VCHAN_RATE_MAX;
@@ -632,19 +656,33 @@ static void vchan_clock_period(audio_stream_t *s)
 }
 
 /** Stage the input frame `sample`, left and right, in reader `r`'s format,
- * and hand its period over and announce it when the frame completes it.
- * The caller holds input.lock. */
+ * and hand its period over and announce it when the frame completes it. A
+ * wider format has the 16 bits on top and zeros below. The caller holds
+ * input.lock. */
 static void vchan_capture_put(struct vchan_reader *r, const int16_t *sample)
 {
+    audio_format_t format = r->s->format;
+    uint8_t *p;
     int value, ch;
 
     for (ch = 0; ch < r->s->channels; ch++) {
         value = r->s->channels == 1 ? ((int)sample[0] + sample[1]) / 2 : sample[ch];
-        if (r->s->format == AUDIO_U8) {
-            r->buffer[r->used++] = (uint8_t)((value + 32768) / 256);
-        } else {
-            r->buffer[r->used++] = (uint8_t)((uint16_t)value & 255u);
-            r->buffer[r->used++] = (uint8_t)((uint16_t)value >> 8);
+        p = r->buffer + r->used;
+        r->used += AUDIO_SAMPLE_BYTES(format);
+        if (format == AUDIO_U8) {
+            p[0] = (uint8_t)((value + 32768) / 256);
+            continue;
+        }
+        if (format != AUDIO_S16LE) {
+            *p++ = 0;
+        }
+        if (format == AUDIO_S32LE) {
+            *p++ = 0;
+        }
+        p[0] = (uint8_t)((uint16_t)value & 255u);
+        p[1] = (uint8_t)((uint16_t)value >> 8);
+        if (format == AUDIO_S24LE) {
+            p[2] = value < 0 ? 0xFF : 0; /* the sign of 24 bits in four */
         }
     }
     r->frames++;
@@ -757,22 +795,27 @@ static int vchan_capture_open(audio_stream_t *s)
 }
 
 /** Grant a stopped reader its format and rate. The only reader may set a
- * stopped device's parameters; several readers convert independently from
- * the fixed input. 0, -EINVAL, or the device's setup error. */
+ * stopped device's parameters, and asks it for 16 bits for a wider format;
+ * several readers convert independently from the fixed input. 0, -EINVAL,
+ * or the device's setup error. */
 static int vchan_capture_setup(audio_stream_t *s)
 {
     struct vchan_reader *r = vchan_reader_find(s);
     audio_stream_t old = input.stream;
     audio_stream_t *m = &input.stream;
     uint32_t frame, max;
-    int rc;
+    int rc, wide;
 
-    if (!r || r->running || !s->rate || s->rate > VCHAN_RATE_MAX ||
-        (s->format != AUDIO_U8 && s->format != AUDIO_S16LE) || s->channels < 1 || s->channels > 2 ||
-        s->period_bytes > VCHAN_START_MAX)
+    if (!r || r->running || !s->rate || s->rate > VCHAN_RATE_MAX || !vchan_format_ok(s->format) ||
+        s->channels < 1 || s->channels > 2 || s->period_bytes > VCHAN_START_MAX)
         return -EINVAL;
     if (!input.loopback && !input.running && input.list == r && !r->next) {
+        wide = AUDIO_SAMPLE_BYTES(s->format) > 2;
         *m = *s;
+        if (wide) {
+            m->format = AUDIO_S16LE;
+            m->period_bytes = s->period_bytes / vchan_frame_bytes(s) * vchan_frame_bytes(m);
+        }
         m->transfer = vchan_capture_feed;
         m->period = vchan_clock_period;
         rc = input.hw->stream_setup(m);
@@ -781,9 +824,10 @@ static int vchan_capture_setup(audio_stream_t *s)
             return rc;
         }
         s->rate = m->rate;
-        s->format = m->format;
+        if (!wide)
+            s->format = m->format;
         s->channels = m->channels;
-        s->period_bytes = m->period_bytes;
+        s->period_bytes = m->period_bytes / vchan_frame_bytes(m) * vchan_frame_bytes(s);
     }
     if (!m->rate || m->rate > VCHAN_RATE_MAX)
         return -EIO;

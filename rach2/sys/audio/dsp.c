@@ -22,7 +22,9 @@
 /*
  * The requests are OSS's, with Linux's numbers (<linux/soundcard.h>):
  * _IOWR('P', n, int) for a value set and read back, _IOR for a value read,
- * and _IO for a command. SNDCTL_DSP_SAMPLESIZE is SETFMT's number.
+ * and _IO for a command. SNDCTL_DSP_SAMPLESIZE is SETFMT's number. Linux's
+ * header stops at AFMT_AC3; the wider formats have OSS 4's numbers, which
+ * ALSA's OSS emulation takes and cmus defines on Linux.
  */
 #define DSP_RESET       0x00005000u
 #define DSP_SYNC        0x00005001u
@@ -49,6 +51,10 @@
 #define AFMT_QUERY        0x00
 #define AFMT_U8           0x08
 #define AFMT_S16_LE       0x10
+#define AFMT_S32_LE       0x1000
+#define AFMT_S24_LE       0x8000 /* 24 bits in the low three bytes of four */
+#define AFMT_S24_PACKED   0x40000
+#define DSP_FORMATS       (AFMT_U8 | AFMT_S16_LE | AFMT_S24_LE | AFMT_S24_PACKED | AFMT_S32_LE)
 #define DSP_CAP_REVISION  1
 #define DSP_CAP_DUPLEX    0x100
 #define DSP_CAP_REALTIME  0x200
@@ -136,7 +142,7 @@ int dspdev_present(void)
 /** The bytes of one frame of `s`. */
 static uint32_t frame_bytes(const audio_stream_t *s)
 {
-    return (uint32_t)s->channels * (s->format == AUDIO_S16LE ? 2u : 1u);
+    return (uint32_t)s->channels * AUDIO_SAMPLE_BYTES(s->format);
 }
 
 /** The byte that is silence in `format`: the middle of unsigned 8-bit. */
@@ -716,7 +722,36 @@ static int32_t int_out(uintptr_t arg, int value)
 /** The stream's format as OSS's AFMT_ bit. */
 static int afmt(const audio_stream_t *s)
 {
-    return s->format == AUDIO_S16LE ? AFMT_S16_LE : AFMT_U8;
+    switch (s->format) {
+    case AUDIO_S16LE:
+        return AFMT_S16_LE;
+    case AUDIO_S24LE:
+        return AFMT_S24_LE;
+    case AUDIO_S24_3LE:
+        return AFMT_S24_PACKED;
+    case AUDIO_S32LE:
+        return AFMT_S32_LE;
+    case AUDIO_U8:
+    default:
+        return AFMT_U8;
+    }
+}
+
+/** The format of OSS's AFMT_ bit `value`, which DSP_FORMATS has. */
+static audio_format_t format_of(int value)
+{
+    switch (value) {
+    case AFMT_S16_LE:
+        return AUDIO_S16LE;
+    case AFMT_S24_LE:
+        return AUDIO_S24LE;
+    case AFMT_S24_PACKED:
+        return AUDIO_S24_3LE;
+    case AFMT_S32_LE:
+        return AUDIO_S32LE;
+    default:
+        return AUDIO_U8;
+    }
 }
 
 /**
@@ -755,8 +790,9 @@ static int32_t dsp_set(struct dsp *d, uint32_t request, uintptr_t arg)
         channels = query ? channels : value > 1 ? 2 : 1;
         break;
     default: /* DSP_SETFMT */
-        query = value != AFMT_U8 && value != AFMT_S16_LE;
-        format = query ? format : value == AFMT_U8 ? AUDIO_U8 : AUDIO_S16LE;
+        /* One bit of DSP_FORMATS sets the format; anything else is a query. */
+        query = value <= 0 || (value & (value - 1)) != 0 || (value & DSP_FORMATS) == 0;
+        format = query ? format : format_of(value);
         break;
     }
     rc = query ? 0 : dsp_configure(d, format, channels, rate);
@@ -893,7 +929,7 @@ int32_t dspdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     case DSP_SETFMT:
         return dsp_set(d, request, arg);
     case DSP_GETFMTS:
-        return int_out(arg, AFMT_U8 | AFMT_S16_LE);
+        return int_out(arg, DSP_FORMATS);
     case DSP_GETBLKSIZE:
         return int_out(arg, (int)main_chan(d)->stream.period_bytes);
     case DSP_SETFRAGMENT:
