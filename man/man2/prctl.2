@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 3, 2026
 .Dt PRCTL 2
 .Os
 .Sh NAME
@@ -90,18 +90,21 @@ It cannot be cleared.
 .It Dv PR_GET_NO_NEW_PRIVS No (39)
 With every other argument 0, return the no_new_privs bit.
 .It Dv PR_CAP_AMBIENT No (47)
-The ambient set, which on Linux keeps capabilities across an exec of a
-program by a thread that is not root, is always empty here.
-With the second argument
+The ambient set, the capabilities an exec keeps for the new image
+.Pq see Xr capget 2 .
+The second argument is the operation and the third a capability of 0 to
+40; the fourth and fifth must be 0.
 .Dv PR_CAP_AMBIENT_IS_SET
-(1) or
-.Dv PR_CAP_AMBIENT_LOWER
-(3) and a capability of 0 to 40 as the third, the call returns 0;
+(1) returns 1 when the capability is in the set and 0 when not.
 .Dv PR_CAP_AMBIENT_RAISE
-(2) fails with
-.Er EPERM ;
+(2) adds it, when the thread holds it and has it in its inheritable set.
+.Dv PR_CAP_AMBIENT_LOWER
+(3) takes it out.
 .Dv PR_CAP_AMBIENT_CLEAR_ALL
-(4), with the third argument 0, returns 0.
+(4), with the third argument 0 too, empties the set.
+bubblewrap raises each capability its
+.Fl -cap-add
+keeps, so that the command it runs holds it.
 .El
 .Pp
 The attributes follow the process as on Linux.
@@ -196,8 +199,10 @@ that its wait reaps them and counts the CPU time of the second, and that
 its children file lists each child while it is one; and that with the
 mark cleared they go to init instead.
 .Pa tests/musl/sandboxmusl.c
-reads and drops capabilities of the bounding set and checks the ambient
-operations.
+reads and drops capabilities of the bounding set, and
+.Pa tests/musl/capmusl.c
+raises, lowers and clears ambient capabilities and checks that an exec
+keeps them.
 .Sh ERRORS
 .Bl -tag -width "[EFAULT]"
 .It Bq Er EFAULT
@@ -208,7 +213,7 @@ written at the second argument.
 is none of those above, the signal is past 64, the dumpable value is
 neither 0 nor 1, or the arguments of the no_new_privs options are not as
 above, or a capability is past 40, or the ambient operation is none of the
-four.
+four or has an argument that must be 0 and is not.
 Every option Linux has and this kernel does not is refused this way, as
 Linux refuses an option it does not know.
 .It Bq Er EPERM
@@ -216,7 +221,9 @@ Linux refuses an option it does not know.
 by a thread without
 .Dv CAP_SETPCAP ,
 or
-.Dv PR_CAP_AMBIENT_RAISE .
+.Dv PR_CAP_AMBIENT_RAISE
+of a capability the thread does not hold or that is not in its
+inheritable set.
 .El
 .Sh SEE ALSO
 .Xr capget 2 ,

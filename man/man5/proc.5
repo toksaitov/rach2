@@ -1714,7 +1714,13 @@ CapBnd is the bounding set, which
 .Dv PR_CAPBSET_DROP
 of
 .Xr prctl 2
-narrows; CapInh and CapAmb are empty for every process.
+narrows; CapInh and CapAmb are the inheritable and ambient sets that
+.Xr capget 2
+and
+.Dv PR_CAP_AMBIENT
+of
+.Xr prctl 2
+keep.
 .It Pa /proc/PID/statm
 Seven sizes in pages: total, resident, shared, text, library, data with
 stack, and dirty; the third, fifth and seventh read 0.
