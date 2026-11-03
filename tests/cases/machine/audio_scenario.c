@@ -6,7 +6,10 @@
  * runs `audiotest -d`, whose scales through /dev/dsp wavcheck measures, or
  * runs `audiotest -r` or `-R`, which record through /dev/dsp, and for `-R`
  * wavcheck measures the notes QEMU fed the machine in what it read, or has
- * `audioclientsmusl signal` stop play(1) on a terminal of its own.
+ * `audioclientsmusl signal` stop play(1) on a terminal of its own, or has
+ * `audioclientsmusl resample` play at 96 kHz through the 48 kHz mix and
+ * read it back through loopback, where wavcheck requires a tone above the
+ * mix's Nyquist frequency to be gone and the scale to be whole.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -323,26 +326,32 @@ static void put32(unsigned char *p, unsigned long v)
 }
 
 /**
- * Rebuild the samples `audiotest -R` printed in `text` as a WAVE file of
- * one 16-bit channel at the rate it said it recorded at, at `path`. Each
- * line that begins with `data_line` holds bytes in hexadecimal; a kernel
- * record's prefix before it is skipped.
+ * Rebuild the samples of record `which`, counting from 0, that `audiotest
+ * -R` or audioclientsmusl printed in `text` as a WAVE file of one 16-bit
+ * channel at the rate it said it recorded at, at `path`. A record runs from
+ * the line that gives its rate to the next such line. Each line that begins
+ * with `data_line` holds bytes in hexadecimal; a kernel record's prefix
+ * before it is skipped.
  *
  * @return the bytes of samples written, or -1 having put why in `why`.
  */
-static long rebuild(const char *text, const char *path, char *why, size_t size)
+static long rebuild(const char *text, int which, const char *path, char *why, size_t size)
 {
     static const unsigned char fmt[] = {'f', 'm', 't', ' ', 16, 0, 0, 0, 1, 0, 1, 0};
     unsigned char header[44];
-    const char *at = strstr(text, rate_key), *line;
+    const char *at = strstr(text, rate_key), *line, *next;
     unsigned long rate, bytes = 0;
-    size_t len = strlen(text);
+    size_t len;
     FILE *f;
 
+    while (at != NULL && which-- > 0)
+        at = strstr(at + 1, rate_key);
     if (at == NULL || (rate = strtoul(at + strlen(rate_key), NULL, 10)) == 0) {
-        snprintf(why, size, "audiotest printed no rate");
+        snprintf(why, size, "the program printed no rate for the record");
         return -1;
     }
+    next = strstr(at + 1, rate_key);
+    len = next != NULL ? (size_t)(next - text) : strlen(text);
     f = fopen(path, "wb");
     if (f == NULL) {
         snprintf(why, size, "the recording's evidence cannot be written");
@@ -350,7 +359,7 @@ static long rebuild(const char *text, const char *path, char *why, size_t size)
     }
     memset(header, 0, sizeof(header));
     fwrite(header, 1, sizeof(header), f);
-    for (line = text; line < text + len;) {
+    for (line = at; line < text + len;) {
         const char *end = strchr(line, '\n'), *p;
         size_t start = lc_past_prefix(text, len, (size_t)(line - text));
 
@@ -430,7 +439,7 @@ static void tone(struct lc *l)
         return;
     }
     snprintf(path, sizeof(path), "%s", wav);
-    bytes = rebuild(text, path, detail, sizeof(detail));
+    bytes = rebuild(text, 0, path, detail, sizeof(detail));
     free(text);
     if (bytes < 0) {
         lc_assert(l, "notes", 0, detail);
@@ -502,7 +511,7 @@ static void clients(struct lc *l, const char *mode)
         return;
     }
     snprintf(path, sizeof(path), "%s", evidence);
-    bytes = rebuild(text, path, detail, sizeof(detail));
+    bytes = rebuild(text, 0, path, detail, sizeof(detail));
     free(text);
     if (bytes < 0) {
         lc_assert(l, "notes", 0, detail);
@@ -517,6 +526,93 @@ static void clients(struct lc *l, const char *mode)
     etude_progress(l->c, "wavcheck", 1);
     snprintf(detail, sizeof(detail), "wavcheck over %ld bytes of the captured mix", bytes);
     lc_assert(l, "notes", end.end == ETUDE_END_EXITED && end.value == 0, detail);
+}
+
+/* The evidence of each record of the resample case, by its index. */
+static const char *const record_name[] = {"tone.wav", "scale.wav"};
+
+/* The bytes of the path a record of the resample case is rebuilt at. */
+#define RECORD_PATH 1024
+
+/**
+ * Rebuild record `which` of `text` as its evidence, at the path `argv`
+ * gives as its third word, an array of RECORD_PATH bytes, run wavcheck with
+ * `argv` on it and report its verdict as assertion `id`. The wavcheck
+ * witness counts the records judged, so record `which` announces its run at
+ * `which` units and ends it at one more.
+ */
+static void judge_record(struct lc *l, const char *text, int which, char **argv, const char *id)
+{
+    struct etude_termination end;
+    enum etude_status st;
+    const char *name = record_name[which];
+    const char *evidence = etude_evidence(l->c, name);
+    char detail[200];
+    long bytes;
+
+    if (evidence == NULL || strlen(evidence) >= RECORD_PATH) {
+        lc_halt(l, ETUDE_REFUSED, name);
+        return;
+    }
+    snprintf(argv[2], RECORD_PATH, "%s", evidence);
+    bytes = rebuild(text, which, argv[2], detail, sizeof(detail));
+    if (bytes < 0) {
+        lc_assert(l, id, 0, detail);
+        return;
+    }
+    etude_progress(l->c, "wavcheck", (uint64_t)which);
+    st = etude_host(l->c, argv, "wavcheck", &end);
+    if (st != ETUDE_OK) {
+        lc_halt(l, st, "wavcheck");
+        return;
+    }
+    etude_progress(l->c, "wavcheck", (uint64_t)which + 1u);
+    snprintf(detail, sizeof(detail),
+             "wavcheck over %ld bytes of %s; its evidence wavcheck says why", bytes, name);
+    lc_assert(l, id, end.end == ETUDE_END_EXITED && end.value == 0, detail);
+}
+
+/**
+ * Run the resample case: `audioclientsmusl resample` plays a 30 kHz sine at
+ * 96 kHz and then the scale at 96 kHz, each while a loopback reader at the
+ * mix's 48 kHz records it. In the first record wavcheck requires the
+ * 18 kHz the sine would fold to to stay 80 dB below the sine's amplitude,
+ * 1.6 steps of 16 bits, and in the second the scale's five notes in order.
+ */
+static void resampled(struct lc *l)
+{
+    struct etude_case_machine *m;
+    uint64_t at = 0, from;
+    char path[RECORD_PATH], tool[] = "wavcheck", quiet[] = "quiet", scale[] = "scale";
+    char alias[] = "18000", limit[] = "1.6";
+    char n1[] = "262", n2[] = "294", n3[] = "330", n4[] = "349", n5[] = "392";
+    char *quiet_argv[] = {tool, quiet, path, alias, limit, NULL};
+    char *scale_argv[] = {tool, scale, path, n1, n2, n3, n4, n5, NULL};
+    char *text;
+
+    if (!lc_step(l, "play") || (m = lc_boot(l, "fixture")) == NULL ||
+        !lc_wait(l, m, "Type 'help'", &at, NULL) || !lc_wait(l, m, prompt, &at, NULL))
+        return;
+    from = at;
+    if (!lc_type(l, m, "exec /musl/audioclientsmusl resample\r") ||
+        !lc_wait(l, m, prompt, &at, NULL)) {
+        if (!l->stopped)
+            lc_assert(l, "clients", 0, l->why);
+        return;
+    }
+    lc_find(l, m, "clients", "audioclients: result: complete", from, 1);
+    text = lc_console(l, "fixture", from, at);
+    if (text == NULL || !lc_quit(l, m, NULL)) {
+        free(text);
+        return;
+    }
+    lc_find(l, m, "no-stall", "audio: stalled", 0, 0);
+    if (lc_step(l, "judge")) {
+        judge_record(l, text, 0, quiet_argv, "alias");
+        if (lc_ok(l))
+            judge_record(l, text, 1, scale_argv, "notes");
+    }
+    free(text);
 }
 
 /** Have `audioclientsmusl signal` stop play on a pseudo-terminal with one
@@ -559,6 +655,7 @@ int etude_scenario(struct etude_case *c)
     static const char *const client_assertions[] = {"clients", "no-stall", "notes", NULL};
     static const char *const tones[] = {"counted", "no-stall", "notes", NULL};
     static const char *const signals[] = {"ctrl-c", "ctrl-c-twice", "sigterm", "no-stall", NULL};
+    static const char *const resamples[] = {"clients", "no-stall", "alias", "notes", NULL};
     const char *name = case_name(c);
     struct lc l;
 
@@ -586,6 +683,9 @@ int etude_scenario(struct etude_case *c)
     } else if (strcmp(name, "signal") == 0) {
         lc_begin(&l, c, signals);
         stops(&l);
+    } else if (strcmp(name, "resample") == 0) {
+        lc_begin(&l, c, resamples);
+        resampled(&l);
     } else {
         return 1;
     }

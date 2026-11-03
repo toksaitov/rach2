@@ -1,7 +1,8 @@
 /*
- * Exercise concurrent OSS players, shared capture and sox_ng's loopback, and
- * stop play(1) on a terminal with Ctrl+C and SIGTERM. The machine case judges
- * the WAV samples printed as hexadecimal lines and the lines of the result.
+ * Exercise concurrent OSS players, shared capture, the mix's rate conversion
+ * and sox_ng's loopback, and stop play(1) on a terminal with Ctrl+C and
+ * SIGTERM. The machine case judges the WAV samples printed as hexadecimal
+ * lines and the lines of the result.
  */
 #include <sys/ioctl.h>
 #include <sys/soundcard.h>
@@ -23,6 +24,13 @@
  * still playing when a trial stops it. */
 #define LONG_RATE   8000
 #define LONG_FRAMES (LONG_RATE * 120)
+
+/* The rate the resample case plays at, twice the mix's, the tone it plays
+ * above the mix's Nyquist frequency, which would fold to 18000 Hz, and the
+ * tone's amplitude, 6 dB below full scale. */
+#define HIGH_RATE 96000
+#define HIGH_TONE 30000
+#define HIGH_AMP  16384
 
 /* A trial's wait for play, in seconds of the kernel's ticks. */
 #define TRIAL_SECONDS 30
@@ -80,18 +88,25 @@ static void transfer(int fd, void *buffer, size_t n, int writing)
     }
 }
 
-/** Open an OSS direction at 48 kHz, signed 16-bit mono, with small periods. */
-static int dsp(int flags)
+/** Open an OSS direction at `want` Hz, signed 16-bit mono, with small
+ * periods. */
+static int dsp_at(int flags, int want)
 {
-    int fd = open("/dev/dsp", flags), format = AFMT_S16_LE, channels = 1, rate = RATE;
+    int fd = open("/dev/dsp", flags), format = AFMT_S16_LE, channels = 1, rate = want;
     int fragment = (16 << 16) | 10;
 
     if (fd < 0 || ioctl(fd, SNDCTL_DSP_SETFMT, &format) < 0 ||
         ioctl(fd, SNDCTL_DSP_CHANNELS, &channels) < 0 || ioctl(fd, SNDCTL_DSP_SPEED, &rate) < 0 ||
         ioctl(fd, SNDCTL_DSP_SETFRAGMENT, &fragment) < 0 || format != AFMT_S16_LE ||
-        channels != 1 || rate != RATE)
+        channels != 1 || rate != want)
         fail("configure dsp");
     return fd;
+}
+
+/** Open an OSS direction at 48 kHz, signed 16-bit mono, with small periods. */
+static int dsp(int flags)
+{
+    return dsp_at(flags, RATE);
 }
 
 /** Reap child `slot` and require a successful exit. */
@@ -112,21 +127,28 @@ static void reap(unsigned slot)
     }
 }
 
-/** Make two seconds of a square wave, or a five-note scale when `hz` is 0. */
-static short *wave(unsigned hz)
+/** Make two seconds at `rate` of a square wave, or a five-note scale when
+ * `hz` is 0. */
+static short *wave_at(unsigned hz, unsigned rate)
 {
     static const unsigned scale[] = {262, 294, 330, 349, 392};
-    short *samples = malloc(FRAMES * sizeof(*samples));
-    unsigned i, phase = 0, frequency;
+    unsigned frames = 2 * rate, i, phase = 0, frequency;
+    short *samples = malloc(frames * sizeof(*samples));
 
     if (!samples)
         fail("allocate samples");
-    for (i = 0; i < FRAMES; i++) {
-        frequency = hz ? hz : scale[i / (FRAMES / 5)];
-        samples[i] = phase < RATE / 2 ? 6000 : -6000;
-        phase = (phase + frequency) % RATE;
+    for (i = 0; i < frames; i++) {
+        frequency = hz ? hz : scale[i / (frames / 5)];
+        samples[i] = phase < rate / 2 ? 6000 : -6000;
+        phase = (phase + frequency) % rate;
     }
     return samples;
+}
+
+/** Make two seconds at 48 kHz of a square wave, or the scale when `hz` is 0. */
+static short *wave(unsigned hz)
+{
+    return wave_at(hz, RATE);
 }
 
 /** Start a player held on pipe `gate` after opening its own DSP descriptor. */
@@ -164,7 +186,9 @@ static void dump(const unsigned char *samples, size_t bytes)
     char line[160];
     size_t at, i, used;
 
+    fflush(stdout);
     puts("audioclients: record: 16-bit mono at 48000 hz");
+    fflush(stdout);
     for (at = 0; at < bytes; at += 64) {
         memcpy(line, prefix, sizeof(prefix) - 1);
         used = sizeof(prefix) - 1;
@@ -239,6 +263,74 @@ static void clients(int loopback)
     reap(0);
     if (!loopback)
         reap(1);
+    puts("audioclients: result: complete");
+}
+
+/**
+ * Play `frames` of 16-bit mono `samples` at `rate` from a child of its own
+ * while a loopback reader at 48 kHz, started before it, reads `bytes`, and
+ * print what the reader read.
+ */
+static void capture_play(const short *samples, unsigned frames, int rate, size_t bytes)
+{
+    unsigned char *recorded = malloc(bytes);
+    int in = dsp(O_RDONLY), out, value = PCM_ENABLE_INPUT;
+    size_t at;
+
+    if (!recorded || ioctl(in, SNDCTL_DSP_SETTRIGGER, &value) < 0)
+        fail("start reader");
+    children[0] = fork();
+    if (children[0] < 0)
+        fail("fork player");
+    if (children[0] == 0) {
+        memset(children, 0, sizeof(children));
+        close(in);
+        out = dsp_at(O_WRONLY, rate);
+        transfer(out, (void *)samples, frames * sizeof(*samples), 1);
+        if (ioctl(out, SNDCTL_DSP_SYNC) < 0)
+            fail("drain player");
+        close(out);
+        _exit(0);
+    }
+    for (at = 0; at < bytes; at += 512)
+        transfer(in, recorded + at, 512, 0);
+    value = 0;
+    if (ioctl(in, SNDCTL_DSP_SETTRIGGER, &value) < 0)
+        fail("stop reader");
+    close(in);
+    reap(0);
+    dump(recorded, bytes);
+    free(recorded);
+}
+
+/**
+ * Play a second of a 30 kHz sine at 96 kHz, above the 48 kHz mix's Nyquist
+ * frequency, which the mix's filter removes and a converter without one
+ * folds to 18 kHz, and then the scale at 96 kHz, each read through loopback
+ * at the mix's rate over a second more than it plays and printed as a
+ * record of its own. The sine has five periods in 16 frames, so a table of
+ * one turn gives it without libm. It fades in and out over a tenth of a
+ * second, since a sine that starts or stops at once clicks, and the click
+ * lies in the band.
+ */
+static void resample(void)
+{
+    static const short turn[16] = {0, 6270,  11585,  15137,  HIGH_AMP, 15137,  11585,  6270,
+                                   0, -6270, -11585, -15137, -16384,   -15137, -11585, -6270};
+    short *tone = malloc(HIGH_RATE * sizeof(*tone)), *scale;
+    unsigned i, fade = HIGH_RATE / 10, gain;
+
+    if (!tone)
+        fail("allocate samples");
+    for (i = 0; i < HIGH_RATE; i++) {
+        gain = i < fade ? i : HIGH_RATE - 1 - i < fade ? HIGH_RATE - 1 - i : fade;
+        tone[i] = (short)(turn[(i * (HIGH_TONE / 6000)) % 16] * (int)gain / (int)fade);
+    }
+    capture_play(tone, HIGH_RATE, HIGH_RATE, 2 * RATE * sizeof(short));
+    free(tone);
+    scale = wave_at(0, HIGH_RATE);
+    capture_play(scale, 2 * HIGH_RATE, HIGH_RATE, 3 * RATE * sizeof(short));
+    free(scale);
     puts("audioclients: result: complete");
 }
 
@@ -585,6 +677,8 @@ int main(int argc, char **argv)
         clients(1);
     else if (strcmp(argv[1], "sox") == 0)
         sox();
+    else if (strcmp(argv[1], "resample") == 0)
+        resample();
     else if (strcmp(argv[1], "signal") == 0)
         signals();
     else
