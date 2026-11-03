@@ -12,10 +12,8 @@
 /* The table position past the last coefficient, in entries, 16.16. */
 #define RESAMPLE_END ((uint32_t)RESAMPLE_ZEROS * RESAMPLE_STEPS << 16)
 
-/* The window reaches RESAMPLE_ZEROS zero crossings of the lower rate each
- * side, RESAMPLE_RATIO times as many input frames at the largest ratio. */
-typedef char
-    resample_taps_fit[RESAMPLE_TAPS >= 2u * (RESAMPLE_ZEROS * RESAMPLE_RATIO + 1u) ? 1 : -1];
+/* The header's reach is the table's. */
+typedef char resample_reach_is_table[RESAMPLE_REACH == RESAMPLE_ZEROS ? 1 : -1];
 
 /* The table's positions, 16.16, must stay within 32 bits. */
 typedef char resample_end_fits[RESAMPLE_ZEROS * RESAMPLE_STEPS < 32768 ? 1 : -1];
@@ -23,8 +21,8 @@ typedef char resample_end_fits[RESAMPLE_ZEROS * RESAMPLE_STEPS < 32768 ? 1 : -1]
 /**
  * `n` over `d`, rounded down, where the quotient is below 2^32, and the
  * remainder in `*rest` unless it is NULL, by long division, so that no
- * 64-bit division reaches a helper of the compiler's. Only `resample_init`
- * divides.
+ * 64-bit division reaches a helper of the compiler's. Only the setup
+ * divides, never a frame's conversion.
  */
 static uint32_t resample_div(uint64_t n, uint32_t d, uint32_t *rest)
 {
@@ -46,13 +44,25 @@ static uint32_t resample_div(uint64_t n, uint32_t d, uint32_t *rest)
     return q;
 }
 
+/**
+ * The table entries an input frame from `in` to `out` frames per second
+ * moves, 16.16, and the filter's rate in `*low`: the lower of the two, or
+ * the input's over RESAMPLE_RATIO when that is higher. An input frame is
+ * low / in of one of the filter's frames.
+ */
+static uint32_t resample_step(uint32_t in, uint32_t out, uint32_t *low)
+{
+    *low = in < out ? in : out;
+    if (*low * RESAMPLE_RATIO < in) {
+        *low = (in + RESAMPLE_RATIO - 1u) / RESAMPLE_RATIO;
+    }
+    return resample_div((uint64_t)*low * RESAMPLE_STEPS << 16, in, NULL);
+}
+
 void resample_init(resampler_t *r, uint32_t in, uint32_t out)
 {
-    uint32_t low = in < out ? in : out;
+    uint32_t low;
 
-    if (low * RESAMPLE_RATIO < in) {
-        low = (in + RESAMPLE_RATIO - 1u) / RESAMPLE_RATIO;
-    }
     k_memset(r->ring, 0, sizeof(r->ring));
     r->in = in;
     r->out = out;
@@ -64,20 +74,24 @@ void resample_init(resampler_t *r, uint32_t in, uint32_t out)
         r->taps = r->owed = 1;
         return;
     }
-    /* The filter's band is the lower rate's: an input frame is low / in of
-       one of its frames, and the taps sum to in / low before the gain. A
-       conversion up has the gain 1, which `gain` 0 stands for. */
-    r->step = resample_div((uint64_t)low * RESAMPLE_STEPS << 16, in, NULL);
+    /* The taps sum to in / low before the gain; a conversion up has the
+       gain 1, which `gain` 0 stands for. */
+    r->step = resample_step(in, out, &low);
     r->gain = low < in ? resample_div((uint64_t)low << 32, in, NULL) : 0;
     r->move = resample_div((uint64_t)in * r->step, out, &r->move_rest);
     r->span = RESAMPLE_END / r->step + 1u;
     r->taps = 2u * r->span;
-    r->owed = r->span + 1u;
+    r->owed = 1u;
 }
 
 uint32_t resample_need(const resampler_t *r, uint32_t n)
 {
     return n == 0 ? 0 : r->owed + (r->phase + (n - 1u) * r->in) / r->out;
+}
+
+uint32_t resample_held(const resampler_t *r)
+{
+    return r->span > r->owed ? r->span - r->owed : 0;
 }
 
 void resample_put(resampler_t *r, const int32_t *frame)
@@ -91,35 +105,34 @@ void resample_put(resampler_t *r, const int32_t *frame)
 }
 
 /**
- * The coefficient at table position `pos`, 16.16 in entries and below
- * RESAMPLE_END, interpolated linearly between the two entries about it.
- */
-static int32_t resample_coef_at(uint32_t pos)
-{
-    const int32_t *t = resample_coef + (pos >> 16);
-
-    return t[0] + (int32_t)((int64_t)(t[1] - t[0]) * (int32_t)(pos & 0xFFFFu) / 65536);
-}
-
-/**
- * Sum `taps` coefficients times the frames' distance from `centre`, left
- * and right, into `acc`: the coefficients from table position `pos` on by
- * `step`, and the frames from `w` on by `dir`, until a position passes the
- * table. The products are of 30 and 24 bits, and the coefficients of a
- * window sum in magnitude to under 2^35 at the largest ratio, so the sum
- * stays under 2^60. Gives the taps summed.
+ * Sum the taps of one side of the window into `acc`, left and right: each
+ * frame's difference from `centre` times the coefficient at table position
+ * `pos`, 16.16 in entries, interpolated linearly between the two entries
+ * about it, the frames from `w` on by `dir` and the positions from `pos`
+ * on by `step`, until a position passes the table. The products are of 30
+ * and 24 bits, and the coefficients of a window sum in magnitude to under
+ * 2^35 at the largest ratio, so the sum stays under 2^60. The kernel builds
+ * without the compiler's optimizer, so the loop keeps its work in locals.
+ * Gives the taps summed.
  */
 static uint32_t resample_side(const int32_t (*w)[2], int dir, uint32_t pos, uint32_t step,
                               uint32_t taps, const int32_t *centre, int64_t *acc)
 {
+    int64_t left = acc[0], right = acc[1];
+    int32_t cl = centre[0], cr = centre[1], c;
+    const int32_t *t;
     uint32_t k;
-    int32_t c;
 
-    for (k = 0; k < taps && pos < RESAMPLE_END; k++, pos += step, w += dir) {
-        c = resample_coef_at(pos);
-        acc[0] += (int64_t)c * ((*w)[0] - centre[0]);
-        acc[1] += (int64_t)c * ((*w)[1] - centre[1]);
+    for (k = 0; k < taps && pos < RESAMPLE_END; k++) {
+        t = resample_coef + (pos >> 16);
+        c = t[0] + (int32_t)((int64_t)(t[1] - t[0]) * (int32_t)(pos & 0xFFFFu) / 65536);
+        left += (int64_t)c * ((*w)[0] - cl);
+        right += (int64_t)c * ((*w)[1] - cr);
+        pos += step;
+        w += dir;
     }
+    acc[0] = left;
+    acc[1] = right;
     return k;
 }
 

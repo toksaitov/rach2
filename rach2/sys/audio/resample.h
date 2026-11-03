@@ -11,19 +11,25 @@
  * a conversion down by more filters the band of the input rate over it. */
 #define RESAMPLE_RATIO 8u
 
-/* The most frames in the window, two for each zero crossing at the largest
- * ratio and one more each side (resample.c checks it against its table). */
-#define RESAMPLE_TAPS 930u
+/* The zero crossings of the lower rate the filter reaches each side
+ * (resample.c checks it against its table). */
+#define RESAMPLE_REACH 58u
+
+/* The most frames in the window: those the filter reaches each side at the
+ * largest ratio, and one more each side. */
+#define RESAMPLE_TAPS (2u * (RESAMPLE_RATIO * RESAMPLE_REACH + 1u))
 
 /*
  * A converter from `in` frames per second to `out`, with the input frames
- * it holds. Output frame k lies at input time k * in / out from the first
- * input frame. `phase` is the fraction of an input frame from the window's
- * centre frame to that time, in 1/out. The window is the last `taps` frames
- * put, oldest first at ring[head] and doubled at ring[head + taps], so that
- * it is always one run of the array. `owed` is the frames to put before the
- * next output frame can be made. At equal rates `span` is 0 and a frame
- * goes through unchanged.
+ * it holds. Output frame k lies at input time k * in / out - span from the
+ * first input frame: the output lags by `span` input frames, the frames the
+ * filter reaches past the output time, as any filtering resampler's does.
+ * `phase` is the fraction of an input frame from the window's centre frame
+ * to that time, in 1/out. The window is the last `taps` frames put, oldest
+ * first at ring[head] and doubled at ring[head + taps], so that it is always
+ * one run of the array. `owed` is the frames to put before the next output
+ * frame can be made. At equal rates `span` is 0 and a frame goes through
+ * unchanged.
  */
 typedef struct resampler {
     uint32_t in;
@@ -45,13 +51,20 @@ typedef struct resampler {
 
 /**
  * Set `r` to convert from `in` to `out` frames per second, both above 0,
- * with a window of silence. The first frame put is the one the first output
- * frame lies at, and the converter takes `span` frames past it first.
+ * with a window of silence. Each output frame takes the input frames up to
+ * its time, as a converter with no filter does, the first output frame the
+ * first input frame; the window's silence fills the lag.
  */
 void resample_init(resampler_t *r, uint32_t in, uint32_t out);
 
-/** The frames to put for the next `n` output frames, at most 65535. */
+/** The frames to put for the next `n` output frames, (n - 1) * in being
+ * below 2^32. */
 uint32_t resample_need(const resampler_t *r, uint32_t n);
+
+/** The input frames put, the window's silence among them, that lie after
+ * the next output frame's time, which wait in the window before they play:
+ * `span` less `owed`, and 0 when it copies. */
+uint32_t resample_held(const resampler_t *r);
 
 /** Put input frame `frame`, left and right, of 24 bits; `r->owed` is above
  * 0. */

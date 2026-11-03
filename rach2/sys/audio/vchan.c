@@ -1,11 +1,12 @@
 /*
  * vchan.c: virtual playback channels (vchan.h): every playback open mixed
  * into the device's one stream, each converted to 24 bits and to the mix's
- * rate by an integer linear resampler, and the sum clipped to the device's
- * width, 24 bits in 32 or 16 bits.
+ * rate by the windowed-sinc resampler (resample.h), and the sum clipped to
+ * the device's width, 24 bits in 32 or 16 bits.
  */
 
 #include "vchan.h"
+#include "resample.h"
 
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -18,7 +19,6 @@
 #define VCHAN_PERIOD   1024u   /* frames of the period the mix asks of the device */
 #define VCHAN_BLOCK    256u    /* frames of the mix made at a time */
 #define VCHAN_CHUNK    4096u   /* frames of the mix a count advances by at a time */
-#define VCHAN_WEIGHT   14      /* bits of the resampler's weight between two frames */
 #define VCHAN_FRAME    8u      /* bytes of the widest frame, 32-bit stereo */
 #define VCHAN_MAX      8388607 /* the largest sample of the mix, 2^23 - 1 */
 #define VCHAN_SUM_MAX                                         \
@@ -26,7 +26,7 @@
                   a channel's sample added cannot overflow it */
 
 /* The most frames a channel gives for a block: VCHAN_RATIO for each frame of
- * the mix, one more for the fraction, and the frame after the last. */
+ * the mix, and two more for the fraction and those owed from the last. */
 #define VCHAN_STAGE (VCHAN_BLOCK * VCHAN_RATIO + 2u)
 
 /* The most bytes a channel asks its caller to queue before its start: the
@@ -38,17 +38,13 @@
  * opened it. While `running` it is in the mix, which takes its first frame
  * at the first block made after the start, mix frame `at` then.
  *
- * The resampler steps through the channel's frames by its rate for each
- * frame of the mix, R being the mix's rate: `phase` is the distance from
- * `cur` toward the frame after it in 1/R of a frame, and a frame of the mix
- * is `cur` and that frame weighed by the distance. From the end of one block
- * to the start of the next, `phase` may be R or more: the steps past `cur`
- * wait for the frames the next block takes. `nxt` holds the frame after
- * `cur` once a block has taken it.
+ * `rs` converts the channel's frames, as 24-bit stereo, from its rate to the
+ * mix's, R; it holds the frames of its window between blocks.
  *
- * `played` and `frac` count the channel's frames the device has played by
- * mix frame `at`: the whole frames, and the fraction of the next in 1/R. The
- * mix's `period` moves them on.
+ * `played` and `frac` count the channel's frames the mix has reached by mix
+ * frame `at`: the whole frames, and the fraction of the next in 1/R. The
+ * mix's `period` moves them on. The device has played `rs.span` frames
+ * fewer, the frames the resampler's output lags by.
  */
 struct vchan {
     audio_stream_t *s;
@@ -57,17 +53,14 @@ struct vchan {
     int joined;       /* the mix has taken its first frame since the start */
     uint32_t frame;   /* bytes of one of its frames */
     uint32_t pframes; /* frames of its period */
-    uint32_t phase;
-    int has_nxt;    /* `nxt` holds the frame after `cur` */
-    int32_t cur[2]; /* samples of 24 bits (vchan_sample) */
-    int32_t nxt[2];
-    uint32_t taken; /* its frames taken by `transfer` since the start */
+    uint32_t taken;   /* its frames taken by `transfer` since the start */
     uint32_t at;
     uint32_t played;
     uint32_t frac;
     uint32_t process; /* the process that opened it, unchanged across fork */
     int volume;       /* its process PCM level, 0 to 100 */
-    uint32_t mark;    /* `played` at the end of its last period */
+    uint32_t mark;    /* the frames played at the end of its last period */
+    resampler_t rs;
 };
 
 /*
@@ -182,22 +175,6 @@ static int32_t vchan_narrow(int32_t v, int bits)
 }
 
 /**
- * `d` times `w` over 2^VCHAN_WEIGHT, rounded toward zero, for a difference
- * `d` of two samples of 24 bits and a weight `w` below 2^VCHAN_WEIGHT. The
- * product passes 32 bits, so the magnitude of `d` is split at bit 10: the
- * top part's product is under 2^28, and its low four bits, carried down, and
- * the low part's product sum to under 2^25.
- */
-static int32_t vchan_weigh(int32_t d, uint32_t w)
-{
-    uint32_t a = (uint32_t)(d < 0 ? -d : d);
-    uint32_t p = (a >> 10) * w;
-    uint32_t r = (p >> 4) + (((p & 15u) << 10) + (a & 1023u) * w) / (1u << VCHAN_WEIGHT);
-
-    return d < 0 ? -(int32_t)r : (int32_t)r;
-}
-
-/**
  * Advance the count of a channel at `rate` by `frames` frames of the mix:
  * `*whole` frames and `*frac` in 1/R of one. The steps of VCHAN_CHUNK keep
  * the product in 32 bits, the kernel having no 64-bit division.
@@ -215,39 +192,39 @@ static void vchan_advance(uint32_t *whole, uint32_t *frac, uint32_t frames, uint
     }
 }
 
-/** The frames of `c` played by mix frame `h`, which the count kept at
- * `c->at` reaches by `vchan_advance`; with `commit` the count moves to `h`.
- * The lock is held. */
+/** The frames of `c` played by mix frame `h`: those the count kept at
+ * `c->at` reaches by `vchan_advance`, less the frames its resampler lags
+ * by. With `commit` the count moves to `h`. The lock is held. */
 static uint32_t vchan_played(struct vchan *c, uint32_t h, int commit)
 {
     uint32_t whole = c->played, frac = c->frac;
 
-    if ((int32_t)(h - c->at) <= 0) {
-        return whole;
+    if ((int32_t)(h - c->at) > 0) {
+        vchan_advance(&whole, &frac, h - c->at, c->s->rate);
     }
-    vchan_advance(&whole, &frac, h - c->at, c->s->rate);
-    if (commit) {
+    if (commit && (int32_t)(h - c->at) > 0) {
         c->at = h;
         c->played = whole;
         c->frac = frac;
     }
-    return whole;
+    return whole > c->rs.span ? whole - c->rs.span : 0;
 }
 
 /**
  * Add `n` frames of channel `c`, at most VCHAN_BLOCK, to the block's sum.
- * The frames it reads are known before it makes any, as `cur` and the
- * highest a frame of the block interpolates toward, so that one `transfer`
- * takes them all; the caller's silence for frames it lacks is mixed like
- * data. A channel not yet joined takes its first frame and joins at the
- * block. The lock is held.
+ * The frames the block reads are known before it makes any, from the
+ * resampler, so that one `transfer` takes them all; the caller's silence for
+ * frames it lacks is mixed like data. A channel not yet joined starts its
+ * resampler and joins at the block: its first frame lies at the block's
+ * first, and the block takes the frames the resampler reaches past it too.
+ * The lock is held.
  */
 static void vchan_mix(struct vchan *c, uint32_t n)
 {
     audio_stream_t *s = c->s;
-    uint32_t rate = s->rate, top, need, k = 0, i, w;
+    uint32_t need, k = 0, i;
     int32_t *sum = mix.sum;
-    int32_t left, right, v;
+    int32_t frame[2], v;
     int ch;
 
     if (!c->joined) {
@@ -256,51 +233,26 @@ static void vchan_mix(struct vchan *c, uint32_t n)
         c->played = 0;
         c->frac = 0;
         c->mark = 0;
-        c->phase = 0;
-        c->has_nxt = 0;
-        s->transfer(s, mix.stage, c->frame);
-        vchan_frame(s, mix.stage, c->cur);
-        c->taken = 1;
+        c->taken = 0;
+        resample_init(&c->rs, s->rate, mix.rate);
     }
-    /* The block's last frame lies `top` frames of the channel past `cur`,
-       rounded up; `cur` and `nxt` are held already. */
-    top = (c->phase + (n - 1) * rate + mix.rate - 1) / mix.rate;
-    need = top > (uint32_t)c->has_nxt ? top - (uint32_t)c->has_nxt : 0;
+    need = resample_need(&c->rs, n);
     if (need > 0) {
         s->transfer(s, mix.stage, need * c->frame);
         c->taken += need;
     }
     for (i = 0; i < n; i++) {
-        while (c->phase >= mix.rate) {
-            c->phase -= mix.rate;
-            if (c->has_nxt) {
-                c->cur[0] = c->nxt[0];
-                c->cur[1] = c->nxt[1];
-                c->has_nxt = 0;
-            } else if (k < need) {
-                vchan_frame(s, mix.stage + k++ * c->frame, c->cur);
-            }
+        while (c->rs.owed > 0) {
+            vchan_frame(s, mix.stage + k++ * c->frame, frame);
+            resample_put(&c->rs, frame);
         }
-        left = c->cur[0];
-        right = c->cur[1];
-        if (c->phase != 0) {
-            if (!c->has_nxt && k < need) {
-                vchan_frame(s, mix.stage + k++ * c->frame, c->nxt);
-                c->has_nxt = 1;
-            }
-            if (c->has_nxt) {
-                w = (c->phase << VCHAN_WEIGHT) / mix.rate;
-                left += vchan_weigh(c->nxt[0] - left, w);
-                right += vchan_weigh(c->nxt[1] - right, w);
-            }
-        }
+        resample_get(&c->rs, frame);
         for (ch = 0; ch < 2; ch++) {
-            v = sum[2 * i + ch] + (ch ? right : left) * c->volume / 100;
+            v = sum[2 * i + ch] + frame[ch] * c->volume / 100;
             sum[2 * i + ch] = v > VCHAN_SUM_MAX    ? VCHAN_SUM_MAX
                               : v < -VCHAN_SUM_MAX ? -VCHAN_SUM_MAX
                                                    : v;
         }
-        c->phase += rate;
     }
 }
 
@@ -357,7 +309,7 @@ static void vchan_render(audio_stream_t *s, uint8_t *buf, size_t size)
  */
 static void vchan_period(audio_stream_t *s)
 {
-    uint32_t flags;
+    uint32_t flags, played;
     struct vchan *c;
 
     (void)s;
@@ -367,8 +319,8 @@ static void vchan_period(audio_stream_t *s)
         if (!c->running || !c->joined) {
             continue;
         }
-        (void)vchan_played(c, mix.ended, 1);
-        while (c->played - c->mark >= c->pframes) {
+        played = vchan_played(c, mix.ended, 1);
+        while (played - c->mark >= c->pframes) {
             c->mark += c->pframes;
             c->s->period(c->s);
         }
@@ -502,9 +454,8 @@ static int vchan_setup(audio_stream_t *s)
         return -EINVAL;
     }
     /* The device's start makes device_periods periods of the mix; the
-       channel gives its first frame and those its last frame reaches. */
+       channel gives its first frame and those up to its last frame. */
     vchan_advance(&first, &frac, mix.stream.device_periods * mix.period - 1, rate);
-    first += frac != 0;
     dev = (first + want - 1) / want;
     cap = VCHAN_START_MAX / (want * frame);
     if (dev > cap) {
@@ -670,19 +621,20 @@ static uint32_t vchan_delay(audio_stream_t *s)
     return taken - played;
 }
 
-/* Each reader owns its conversion phase and staging period. The input
- * stream stays at its first reader's settings once another reader opens. */
+/* Each reader owns its resampler and staging period. The input stream stays
+ * at its first reader's settings once another reader opens. */
 struct vchan_reader {
     audio_stream_t *s;
     struct vchan_reader *next;
     int running;
-    uint32_t origin; /* conversion phase when the reader joined */
-    uint32_t phase;  /* output rate accumulated against the input rate */
+    uint32_t origin; /* the position's phase when the reader joined, in
+                        1/input rate of a frame of the reader's */
     uint32_t skip;   /* frames in flight before this reader joined */
     uint32_t at;     /* input position when this reader started */
     uint32_t frames; /* frames handed to this reader since its start */
     uint32_t used;   /* bytes staged, less than its period */
     uint8_t *buffer; /* one period, at most VCHAN_START_MAX bytes */
+    resampler_t rs;  /* from the input's rate to the reader's */
 };
 
 static struct {
@@ -769,8 +721,9 @@ static void vchan_capture_put(struct vchan_reader *r, const int32_t *sample)
 
 /**
  * Convert the input frames at `buf` into each running reader's format and
- * rate. Each input frame is repeated or omitted by the reader's rational
- * phase, and each complete reader period is handed over and announced.
+ * rate. Each input frame goes through the reader's resampler, which gives
+ * the reader's frames as their window fills, and each complete reader
+ * period is handed over and announced.
  * Frames the device lost since the last call were among those a reader
  * that joined meanwhile was to skip, so they count against its skip.
  * Loopback feeds the clipped playback mix; a real input calls this from
@@ -779,14 +732,14 @@ static void vchan_capture_put(struct vchan_reader *r, const int32_t *sample)
 static void vchan_capture_feed(audio_stream_t *s, uint8_t *buf, size_t size)
 {
     struct vchan_reader *r;
-    uint32_t flags, i, n, frame, lost;
-    int32_t sample[2];
+    uint32_t flags, i, n, bytes, lost;
+    int32_t sample[2], frame[2];
 
     if (!input.running || (input.loopback ? s != &mix.stream : s != &input.stream))
         return;
     flags = spin_lock_irqsave(&input.lock);
-    frame = vchan_frame_bytes(s);
-    n = (uint32_t)size / frame;
+    bytes = vchan_frame_bytes(s);
+    n = (uint32_t)size / bytes;
     lost = input.loopback ? 0 : s->lost - input.lost;
     input.lost += lost;
     for (r = input.list; r; r = r->next) {
@@ -796,11 +749,11 @@ static void vchan_capture_feed(audio_stream_t *s, uint8_t *buf, size_t size)
         i = r->skip < n ? r->skip : n;
         r->skip -= i;
         for (; i < n; i++) {
-            vchan_frame(s, buf + i * frame, sample);
-            r->phase += r->s->rate;
-            while (r->phase >= s->rate) {
-                r->phase -= s->rate;
-                vchan_capture_put(r, sample);
+            vchan_frame(s, buf + i * bytes, sample);
+            resample_put(&r->rs, sample);
+            while (r->rs.owed == 0) {
+                resample_get(&r->rs, frame);
+                vchan_capture_put(r, frame);
             }
         }
     }
@@ -932,7 +885,7 @@ static int vchan_capture_start(audio_stream_t *s)
     uint32_t flags, frames, n, handed;
     int rc = 0;
 
-    if (!r)
+    if (!r || !input.stream.rate)
         return -EIO;
     r->at = input.running && !input.loopback ? input.hw->stream_position(&input.stream) : 0;
     flags = spin_lock_irqsave(&input.lock);
@@ -941,14 +894,14 @@ static int vchan_capture_start(audio_stream_t *s)
         r->at = handed;
     r->skip = input.running && !input.loopback ? r->at - handed : 0;
     r->running = 1;
-    r->phase = r->frames = r->used = 0;
+    r->origin = r->frames = r->used = 0;
     frames = input.running ? (input.loopback ? input.frames : r->at) % input.stream.rate : 0;
     while (frames) {
         n = frames < VCHAN_CHUNK ? frames : VCHAN_CHUNK;
-        r->phase = (r->phase + n * s->rate) % input.stream.rate;
+        r->origin = (r->origin + n * s->rate) % input.stream.rate;
         frames -= n;
     }
-    r->origin = r->phase;
+    resample_init(&r->rs, input.stream.rate, s->rate);
     spin_unlock_irqrestore(&input.lock, flags);
     if (!input.running) {
         input.frames = 0;

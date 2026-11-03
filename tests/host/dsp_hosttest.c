@@ -12,6 +12,7 @@
  * wide format has the 16 bits recorded on top of zeros.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/audio/resample.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/spinlock_host.c
  *
@@ -1424,20 +1425,24 @@ static int source(const uint8_t *in, uint32_t n, audio_format_t format, int chan
     return wide24(p, format);
 }
 
+/* The resampler the rows of the mix's rates model it with (resample.c). */
+static resampler_t model_rs;
+
 /**
  * One player of `n` frames of the pattern in `format`, `channels` and
- * `rate`, drained: each frame `k` of the mix is the player's frame at
- * k * rate / 48000, interpolated at 24 bits between the two around it by
- * the 14-bit weight of the fraction, as vchan.c's resampler makes it, and
- * narrowed to the model's 16 bits.
+ * `rate`, drained: the frames of the mix are those of a resampler of the
+ * row's own from `rate` to 48000 Hz fed the player's frames as 24 bits,
+ * silence after the last, each narrowed to the model's 16 bits, so that
+ * vchan.c's mix gives the resampler every frame in order, starting at the
+ * mix's first, and adds nothing.
  */
 static void resampled(const char *name, audio_format_t format, int channels, uint32_t rate,
                       uint32_t n)
 {
     uint32_t frame = (uint32_t)channels * AUDIO_SAMPLE_BYTES(format);
-    uint32_t k, i, ph, w;
-    unsigned long long t;
-    int ch, a, b, want, bad = 0;
+    uint32_t k, i = 0;
+    int32_t v[2];
+    int ch, want, bad = 0;
 
     begin(name);
     check(open_dsp(1) == 0, "open");
@@ -1450,15 +1455,16 @@ static void resampled(const char *name, audio_format_t format, int channels, uin
     close_dsp();
     check((unsigned long long)out_frames() * rate >= (unsigned long long)n * 48000,
           "the record covers every frame");
+    resample_init(&model_rs, rate, 48000);
     for (k = 0; k < out_frames() && !bad; k++) {
-        t = (unsigned long long)k * rate;
-        i = (uint32_t)(t / 48000);
-        ph = (uint32_t)(t % 48000);
-        w = (ph << 14) / 48000;
+        for (; model_rs.owed > 0; i++) {
+            v[0] = source(pattern, n, format, channels, i, 0);
+            v[1] = source(pattern, n, format, channels, i, 1);
+            resample_put(&model_rs, v);
+        }
+        resample_get(&model_rs, v);
         for (ch = 0; ch < 2; ch++) {
-            a = source(pattern, n, format, channels, i, ch);
-            b = source(pattern, n, format, channels, i + 1, ch);
-            want = narrow16(ph == 0 ? a : a + (int)((long long)(b - a) * w / 16384));
+            want = narrow16(v[ch]);
             if (out_sample(k, ch) != want) {
                 printf("dsp-hosttest: %s: frame %u channel %d is %d, not %d\n", row, k, ch,
                        out_sample(k, ch), want);
@@ -1466,7 +1472,7 @@ static void resampled(const char *name, audio_format_t format, int channels, uin
             }
         }
     }
-    check(!bad, "each frame of the mix interpolated from the player's");
+    check(!bad, "each frame of the mix the player's resampled");
 }
 
 /** Each format, channel count and rate converted to the mix's: up from
@@ -1595,9 +1601,10 @@ static void row_wide_readers(void)
 /**
  * cmus playing a 24-bit FLAC at 96000 Hz: FFmpeg's decoder gives 32-bit
  * samples, for which cmus asks S32_LE, and its fragment is a 25th of a
- * second's bytes. At twice the mix's rate each frame of the mix is every
- * second frame of the file: at its top 24 bits on a model of 24 bits, the
- * `wide` one, and rounded to 16 on one of 16. The model's DMA buffer has
+ * second's bytes. At twice the mix's rate each frame of the mix is the
+ * file's resampled from its top 24 bits, as a resampler of the row's own
+ * makes it: whole on a model of 24 bits, the `wide` one, and rounded to 16
+ * on one of 16. The model's DMA buffer has
  * four periods of the mix, as HDA's start takes, so that the mix's start
  * takes four of cmus's periods, which fill DSP_BUFFER_MAX: the buffer has a
  * period more, or cmus, which keeps one free, would wait for the start.
@@ -1605,7 +1612,8 @@ static void row_wide_readers(void)
 static void cmus_24(const char *name, int wide)
 {
     struct dsp_buf_info info;
-    uint32_t at = 0, n = 16384 * 8, k;
+    uint32_t at = 0, n = 16384 * 8, k, i;
+    int32_t v[2];
     int space, ch, shift = 0, bad = 0;
 
     begin(name);
@@ -1645,12 +1653,19 @@ static void cmus_24(const char *name, int wide)
     }
     close_dsp();
     check(out_frames() >= n / 16, "the whole file played");
-    for (k = 0; k < out_frames() && !bad; k++) {
+    resample_init(&model_rs, 96000, 48000);
+    for (k = 0, i = 0; k < out_frames() && !bad; k++) {
+        for (; model_rs.owed > 0; i++) {
+            v[0] = source(pattern, n / 8, AUDIO_S32LE, 2, i, 0);
+            v[1] = source(pattern, n / 8, AUDIO_S32LE, 2, i, 1);
+            resample_put(&model_rs, v);
+        }
+        resample_get(&model_rs, v);
         for (ch = 0; ch < 2; ch++) {
-            bad |= out_sample(k, ch) != heard(source(pattern, n / 8, AUDIO_S32LE, 2, 2 * k, ch));
+            bad |= out_sample(k, ch) != heard(v[ch]);
         }
     }
-    check(!bad, "each frame of the mix the file's, at 24 bits or rounded to 16");
+    check(!bad, "each frame of the mix the file's resampled, at 24 bits or rounded to 16");
 }
 
 /** cmus's 24-bit file on a model of 16 bits and on one of 24. */
@@ -1866,12 +1881,17 @@ static void row_reader_after_overrun(void)
 }
 
 /** A second reader converts stereo input to mono at half the rate without
- * changing the first reader's setup or samples. */
+ * changing the first reader's setup or samples: its frames are a resampler's
+ * of the row's own from 48000 Hz to 24000 Hz fed the input from its first
+ * frame, each the half of the two channels' sum, rounded toward zero, and
+ * narrowed to 16 bits as vchan.c narrows it. */
 static void row_reader_conversion(void)
 {
     struct wait_queue *wq;
     uint8_t mono[256];
-    uint32_t i;
+    uint32_t i, j = 0;
+    int32_t v[2];
+    int bad = 0;
 
     begin("reader conversion");
     check(open_dsp(0) == 0, "first reader");
@@ -1889,15 +1909,19 @@ static void row_reader_conversion(void)
     check(take(1024) == 1024 && recorded(0, 0, 1024), "first reader unchanged");
     check(dspdev_read(&other, (char __user *)mono, sizeof(mono)) == sizeof(mono),
           "second reader's converted period");
+    resample_init(&model_rs, 48000, 24000);
     for (i = 0; i < 128; i++) {
-        uint32_t at = (2 * i + 1) * 4;
-        int left = (int16_t)(uint16_t)(pattern[at] | pattern[at + 1] << 8);
-        int right = (int16_t)(uint16_t)(pattern[at + 2] | pattern[at + 3] << 8);
         int value = (int16_t)(uint16_t)(mono[2 * i] | mono[2 * i + 1] << 8);
 
-        check(value == (left + right + 1 + 65536) / 2 - 32768,
-              "mono from both channels at half rate, the half rounded up");
+        for (; model_rs.owed > 0; j++) {
+            v[0] = (int16_t)(uint16_t)(pattern[4 * j] | pattern[4 * j + 1] << 8) * 256;
+            v[1] = (int16_t)(uint16_t)(pattern[4 * j + 2] | pattern[4 * j + 3] << 8) * 256;
+            resample_put(&model_rs, v);
+        }
+        resample_get(&model_rs, v);
+        bad |= value != vchan_narrow((v[0] + v[1]) / 2, 16);
     }
+    check(!bad, "mono from both channels at half rate, resampled");
     dspdev_close(&other);
     close_dsp();
 }

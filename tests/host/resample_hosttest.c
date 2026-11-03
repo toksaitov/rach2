@@ -8,10 +8,10 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * The test includes resample.c whole. Output frame k lies at input time
- * k * in / out, so a sine put at the input comes out as the same sine
- * sampled at the output rate, with no delay; a row compares the output with
- * that sine directly. The host's libm is not linked, so the sine is a
- * series here.
+ * k * in / out - span, so a sine put at the input comes out as the same
+ * sine sampled at the output rate, later by the span; a row fits a sine of
+ * the frequency put, at any phase, to the output. The host's libm is not
+ * linked, so the sine is a series here.
  */
 #include "audio/resample.c"
 
@@ -239,17 +239,18 @@ static void row_stopband(void)
     printf("resample-hosttest: stopband: power at most %.3g\n", worst);
 }
 
-/** The first output frame whose taps all lie at or after input frame 0. */
+/** The first output frame whose taps all lie at or after input frame 0:
+ * its time, k * fin / fout - span, at least span. */
 static uint32_t pure_from(uint32_t fin, uint32_t fout)
 {
-    return (uint32_t)((uint64_t)(conv.span + 1u) * fout / fin) + 1u;
+    return (uint32_t)((uint64_t)(2u * conv.span + 1u) * fout / fin) + 1u;
 }
 
 /** The output frame past the last whose taps all lie within `nin` input
- * frames. */
+ * frames: its time below nin - span, its window's last frame nin - 1. */
 static uint32_t pure_to(uint32_t nin, uint32_t fin, uint32_t fout)
 {
-    return nin > conv.span + 1u ? (uint32_t)((uint64_t)(nin - conv.span - 1u) * fout / fin) : 0;
+    return (uint32_t)((uint64_t)(nin - 1u) * fout / fin);
 }
 
 /** A constant comes out exactly once the window holds it, at every ratio
@@ -287,15 +288,15 @@ static void row_dc(void)
  */
 static double reference(uint32_t k, int ch, uint32_t nin, uint32_t fin, uint32_t fout)
 {
-    uint64_t t = (uint64_t)k * fin;
-    int64_t i = (int64_t)(t / fout), n;
-    double phase = (double)(t % fout) / fout, low = fin < fout ? fin : fout, d, pos, c, sum = 0;
-    double centre, x;
+    int64_t t = (int64_t)k * fin - (int64_t)conv.span * fout, n;
+    int64_t i = (t - (t < 0 ? (int64_t)fout - 1 : 0)) / (int64_t)fout;
+    double phase = (double)(t - i * (int64_t)fout) / fout, low = fin < fout ? fin : fout;
+    double d, pos, c, sum = 0, centre, x;
     long e;
 
     if (low * RESAMPLE_RATIO < fin)
         low = (double)((fin + RESAMPLE_RATIO - 1u) / RESAMPLE_RATIO);
-    centre = i < (int64_t)nin ? in[i][ch] : 0;
+    centre = i >= 0 && i < (int64_t)nin ? in[i][ch] : 0;
     for (n = i - (int64_t)conv.span + 1; n <= i + (int64_t)conv.span; n++) {
         x = n >= 0 && n < (int64_t)nin ? in[n][ch] : 0;
         d = (double)(n - i) - phase;

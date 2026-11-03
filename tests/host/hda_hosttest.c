@@ -7,6 +7,7 @@
  * generator.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/audio/resample.c
  */
 #include "audio/hda.c"
 #include "audio/audio_proc.c"
@@ -300,16 +301,52 @@ static void row_rates(void)
     check(hda_rate_step(176400, 192000) == 60211, "high-rate ratio does not overflow");
 }
 
+/*
+ * The write path's conversion as row_underrun expects it: a resampler of
+ * the row's own over what was written, which puts the frames it owes while
+ * any remain and plays silence and holds while they do not, each frame
+ * rounded from 24 bits to 16, a half up.
+ */
+static struct {
+    resampler_t rs;
+    int16_t in[4096]; /* stereo frames written, one sample each side */
+    unsigned put;     /* frames put */
+    unsigned written; /* frames written */
+} ref;
+
+/** Render `frames` stereo frames of the model write path into `out`. */
+static void ref_render(int16_t *out, unsigned frames)
+{
+    int32_t v[2];
+    unsigned i;
+
+    for (i = 0; i < frames; i++) {
+        while (ref.rs.owed > 0 && ref.put < ref.written) {
+            v[0] = v[1] = ref.in[ref.put++ % 4096] * 256;
+            resample_put(&ref.rs, v);
+        }
+        if (ref.rs.owed > 0) {
+            out[2 * i] = out[2 * i + 1] = 0;
+            continue;
+        }
+        resample_get(&ref.rs, v);
+        out[2 * i] = (int16_t)((v[0] + 8388608 + 128) / 256 - 32768);
+        out[2 * i + 1] = (int16_t)((v[1] + 8388608 + 128) / 256 - 32768);
+    }
+}
+
 /**
- * Empty periods retain fractional phase without consuming later writes.
- * The 16.16 step for 44100 Hz input and 32000 Hz output is 90316.
+ * An empty period plays silence and holds the resampler, so the frames
+ * written after it are each converted in turn: the driver's output and the
+ * frames it leaves in the ring are the model's, through a period that runs
+ * dry and a refill after it, twice. 44100 Hz input plays at 32000 Hz.
  */
 static void row_underrun(void)
 {
-    int16_t output[8192];
+    static int16_t output[8192], expect[8192];
     uint8_t input[4096];
-    uint32_t phase = 0;
     unsigned i, pass;
+    int same;
 
     row = "underrun";
     reset_model();
@@ -318,32 +355,33 @@ static void row_underrun(void)
     check(hda_find_output(), "enumeration succeeds");
     check(hda_start(44100, AUDIO_S16LE, 2) == 0 && current_hw_sample_rate == 32000,
           "44100 input selects 32000 output");
-    for (i = 0; i < sizeof(input) / 4; i++) {
-        unsigned sample = 1000 + i;
-
-        input[4 * i] = input[4 * i + 2] = (uint8_t)sample;
-        input[4 * i + 1] = input[4 * i + 3] = (uint8_t)(sample >> 8);
-    }
+    resample_init(&ref.rs, 44100, 32000);
+    ref.put = ref.written = 0;
     for (pass = 0; pass < 2; pass++) {
         ring_render_to_hw_buffer(output, 4096);
-        phase = (phase + 4096u * 90316u) & 65535u;
+        ref_render(expect, 4096);
         check(ring_available() == 0, "period exhausts input");
-        if (pass == 0) {
-            for (i = 0; i < 8192; i++)
-                check(output[i] == 0, "empty period renders silence");
-        }
+        same = 1;
+        for (i = 0; i < 8192; i++)
+            same &= output[i] == expect[i];
+        check(same, "the period is the model's");
         check(output[8190] == 0 && output[8191] == 0, "empty tail renders silence");
+        for (i = 0; i < sizeof(input) / 4; i++) {
+            unsigned sample = 1000 + 7 * (ref.written % 1024) + 16 * pass;
+
+            ref.in[ref.written++ % 4096] = (int16_t)sample;
+            input[4 * i] = input[4 * i + 2] = (uint8_t)sample;
+            input[4 * i + 1] = input[4 * i + 3] = (uint8_t)(sample >> 8);
+        }
         check(hda_write(input, sizeof(input)) == (int)sizeof(input), "refill accepted");
         ring_render_to_hw_buffer(output, 16);
-        for (i = 0; i < 16; i++) {
-            int16_t sample = (int16_t)(1000 + (phase + i * 90316u) / 65536u);
-
-            check(output[2 * i] == sample && output[2 * i + 1] == sample,
-                  "refill samples preserve sample-hold order");
-        }
-        check(ring_available() == sizeof(input) - ((phase + 16u * 90316u) / 65536u) * 4,
+        ref_render(expect, 16);
+        same = 1;
+        for (i = 0; i < 32; i++)
+            same &= output[i] == expect[i];
+        check(same, "the refill's frames are the model's");
+        check(ring_available() == (ref.written - ref.put) * 4,
               "silence does not consume refill frames");
-        phase = (phase + 16u * 90316u) & 65535u;
     }
     hda_stop();
 }
@@ -883,9 +921,11 @@ static void row_periods(void)
 }
 
 /**
- * The delay is the ring's frames and the DMA's ahead of the position at the
- * caller's rate. Doom's 11025 Hz U8 mono plays at 44100 Hz, so a frame of
- * the DMA is a quarter of one of the caller's, rounded down.
+ * The delay is the ring's frames, the 58 the resampler holds past the time
+ * of its next frame, and the DMA's ahead of the position, at the caller's
+ * rate. Doom's 11025 Hz U8 mono plays at 44100 Hz, so a frame of the DMA is
+ * a quarter of one of the caller's, rounded down, and the filter reaches 59
+ * of the caller's frames each side.
  */
 static void row_delay(void)
 {
@@ -893,23 +933,25 @@ static void row_delay(void)
 
     row = "delay";
     model_start(1u << 5, 11025, AUDIO_U8, 1);
-    check(hda_delay_frames() == 768, "a start queues three periods of silence");
+    check(hda_delay_frames() == 768 + 58,
+          "a start queues three periods of silence, and 58 frames of the filter's");
     check(hda_write(doom, sizeof(doom)) == (int)sizeof(doom), "300 frames written");
-    check(hda_delay_frames() == 768 + 300, "the ring's frames add to the delay");
+    check(hda_delay_frames() == 768 + 58 + 300, "the ring's frames add to the delay");
     model_play(10000);
     check(model_pos == 1764, "10 ms are 441 frames");
-    check(hda_delay_frames() == 300 + (12288 - 1764) / 4 / 4, "the DMA's frames ahead count");
+    check(hda_delay_frames() == 300 + 58 + (12288 - 1764) / 4 / 4, "the DMA's frames ahead count");
     hda_tick();
     check(hw_fill_count == 0, "no period has ended");
     model_play(15000);
     check(model_pos == 4408, "25 ms are 1102 frames, into the second period");
-    check(hda_delay_frames() == 300 + (12288 - 4408) / 4 / 4, "before the refill");
+    check(hda_delay_frames() == 300 + 58 + (12288 - 4408) / 4 / 4, "before the refill");
     hda_tick();
     check(hw_fill_count == 1 && ring_available() == 44, "the first period takes 256 frames");
-    check(hda_delay_frames() == 44 + (4096 + 12288 - 4408) / 4 / 4,
+    check(resample_held(&hda_rs) == 58, "the filter holds 58 past the next frame's time");
+    check(hda_delay_frames() == 44 + 58 + (4096 + 12288 - 4408) / 4 / 4,
           "after it, the DMA's samples end a revolution after the second period's start");
     hda_read_queue();
-    check(hda_get_report()->queue.delay_ms == (44 + 2994 / 4) * 1000 / 11025,
+    check(hda_get_report()->queue.delay_ms == (44 + 58 + 2994 / 4) * 1000 / 11025,
           "/proc/audio gives the delay in milliseconds");
     hda_stop();
 }
