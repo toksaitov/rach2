@@ -5,6 +5,9 @@
  * from 0.90 to 1.00 of it, 58 zero crossings each side and 256 entries
  * between two, in Q30, ending in 0 at the last crossing.
  */
+#ifndef _RESAMPLE_COEF_H_
+#define _RESAMPLE_COEF_H_
+
 #define RESAMPLE_ZEROS 58
 #define RESAMPLE_STEPS 256
 
@@ -1867,3 +1870,5 @@ static const int32_t resample_coef[RESAMPLE_ZEROS * RESAMPLE_STEPS + 1] = {
     -1254,      -1316,      -1376,      -1437,      -1497,      -1556,      -1615,      -1673,
     0,
 };
+
+#endif /* _RESAMPLE_COEF_H_ */

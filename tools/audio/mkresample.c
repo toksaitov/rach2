@@ -60,6 +60,8 @@ int main(void)
            zeros, STEPS);
     printf(" * between two, in Q30, ending in 0 at the last crossing.\n");
     printf(" */\n");
+    printf("#ifndef _RESAMPLE_COEF_H_\n");
+    printf("#define _RESAMPLE_COEF_H_\n\n");
     printf("#define RESAMPLE_ZEROS %d\n", zeros);
     printf("#define RESAMPLE_STEPS %d\n\n", STEPS);
     printf("static const int32_t resample_coef[RESAMPLE_ZEROS * RESAMPLE_STEPS + 1] = {\n");
@@ -77,6 +79,7 @@ int main(void)
             printf("%s%-11s ", i % 8 == 0 ? "    " : "", entry);
         }
     }
-    printf("};\n");
+    printf("};\n\n");
+    printf("#endif /* _RESAMPLE_COEF_H_ */\n");
     return 0;
 }
