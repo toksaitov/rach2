@@ -236,13 +236,16 @@ static volatile uint32_t total_bytes_written = 0;
  * `stream_open` to `stream_close`, or NULL. While it is set, `start`,
  * `stop` and `write` are refused and the callback is not called.
  *
- * A stream plays as signed 16-bit stereo at hda_play_rate's rate, through
- * the resampler of the write path's step and phase (resample_step_fp,
- * resample_frac_fp). Its frames are taken by `transfer` into hda_stage,
- * at most HDA_STAGE_FRAMES frames of the DMA's at a time, and the stream's
- * rate is at most HDA_RATE_RATIO times the programmed one, so the frames of
- * one chunk fit the stage. stream_cur is the frame playing, already taken;
- * the next is taken when the phase passes it.
+ * A stream plays as stereo at hda_play_rate's rate, through the resampler
+ * of the write path's step and phase (resample_step_fp, resample_frac_fp):
+ * one in 32-bit samples as 24 bits in 32 (hda_play_setup grants it only
+ * where every DAC has 24 bits), and one in 8 or 16-bit samples as 16 bits.
+ * Its frames are taken by `transfer` into hda_stage, at most
+ * HDA_STAGE_FRAMES frames of the DMA's at a time, and the stream's rate is
+ * at most HDA_RATE_RATIO times the programmed one, so the frames of one
+ * chunk fit the stage. stream_cur is the frame playing, already taken, as
+ * the samples the DMA buffer holds; the next is taken when the phase passes
+ * it.
  *
  * stream_taken counts the frames taken since `stream_start`, wrapping, and
  * stream_in[] those each DMA period was filled with, from which
@@ -254,8 +257,8 @@ static volatile uint32_t total_bytes_written = 0;
 #define HDA_STAGE_FRAMES 256u
 #define HDA_RATE_RATIO   4u
 static audio_stream_t *play_stream = NULL;
-static uint8_t hda_stage[HDA_STAGE_FRAMES * HDA_RATE_RATIO * 4u];
-static int16_t stream_cur[2];
+static uint8_t hda_stage[HDA_STAGE_FRAMES * HDA_RATE_RATIO * 8u];
+static int32_t stream_cur[2];
 static volatile uint32_t stream_taken = 0;
 static volatile uint32_t stream_in[HDA_PERIODS];
 static volatile uint32_t stream_pos = 0;
@@ -524,14 +527,14 @@ static void fill_silence(volatile uint8_t *buffer, size_t size, bool is_signed);
 /** The bytes of one frame of the stream as the controller plays it. */
 static uint32_t hda_out_frame(void)
 {
-    return (current_hw_format == AUDIO_S16LE ? 2u : 1u) *
+    return AUDIO_SAMPLE_BYTES(current_hw_format) *
            (current_hw_channels > 0 ? (uint32_t)current_hw_channels : 1u);
 }
 
 /** The bytes of one frame as the caller writes it. */
 static uint32_t hda_in_frame(void)
 {
-    return (current_format == AUDIO_S16LE ? 2u : 1u) *
+    return AUDIO_SAMPLE_BYTES(current_format) *
            (current_channels > 0 ? (uint32_t)current_channels : 1u);
 }
 
@@ -539,8 +542,8 @@ static uint32_t hda_in_frame(void)
  * The bytes of a DMA period at `rate` frames per second of `frame` bytes:
  * the frame count nearest HDA_PERIOD_MS, rounded to the nearest multiple of
  * the 128 bytes a descriptor's address is aligned to, from 128 to
- * HDA_PERIOD_MAX. A frame is 1, 2 or 4 bytes, which divide 128, so a period
- * holds whole frames.
+ * HDA_PERIOD_MAX. A frame is 1, 2, 4 or 8 bytes, which divide 128, so a
+ * period holds whole frames.
  */
 static uint32_t hda_period_bytes(uint32_t rate, uint32_t frame)
 {
@@ -578,22 +581,44 @@ static uint32_t hda_frames_in(uint32_t frames, bool up)
     return frames * (step >> 16) + (frames * (step & 0xFFFFu) + (up ? 0xFFFFu : 0u)) / 65536u;
 }
 
-/** Put frame `p` of the stream's format in `out` as 16-bit stereo: unsigned
- * 8-bit is moved to signed and widened, and a mono sample goes to both. */
-static void hda_play_frame(const uint8_t *p, int16_t *out)
+/** The sample at `p` in the stream's format as the DMA buffer holds it:
+ * a 32-bit sample unchanged, a 16-bit one as it is, and unsigned 8-bit moved
+ * to signed and widened to 16 bits. */
+static int32_t hda_play_sample(const uint8_t *p)
 {
-    if (current_format == AUDIO_S16LE) {
-        out[0] = (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
-        out[1] = current_channels == 2 ? (int16_t)((uint16_t)p[2] | ((uint16_t)p[3] << 8)) : out[0];
-    } else {
-        out[0] = (int16_t)(((int)p[0] - 128) * 256);
-        out[1] = current_channels == 2 ? (int16_t)(((int)p[1] - 128) * 256) : out[0];
+    if (current_format == AUDIO_S32LE)
+        return (int32_t)((uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 |
+                         (uint32_t)p[3] << 24);
+    if (current_format == AUDIO_S16LE)
+        return (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+    return ((int)p[0] - 128) * 256;
+}
+
+/** Put frame `p` of the stream's format in `out` as the DMA buffer's
+ * stereo samples (hda_play_sample); a mono sample goes to both. */
+static void hda_play_frame(const uint8_t *p, int32_t *out)
+{
+    out[0] = hda_play_sample(p);
+    out[1] =
+        current_channels == 2 ? hda_play_sample(p + AUDIO_SAMPLE_BYTES(current_format)) : out[0];
+}
+
+/** Store sample `v` at `p` in the DMA buffer's format, 32 or 16 bits. */
+static void hda_play_store(uint8_t *p, int32_t v)
+{
+    uint32_t u = (uint32_t)v;
+
+    p[0] = (uint8_t)u;
+    p[1] = (uint8_t)(u >> 8);
+    if (current_hw_format == AUDIO_S32LE) {
+        p[2] = (uint8_t)(u >> 16);
+        p[3] = (uint8_t)(u >> 24);
     }
 }
 
 /**
- * Fill `frames` frames of 16-bit stereo at `dest` from the stream, and give
- * the frames of the stream taken for them.
+ * Fill `frames` stereo frames of the DMA buffer's format at `dest` from the
+ * stream, and give the frames of the stream taken for them.
  *
  * The resampler is the write path's: each frame at `dest` repeats
  * stream_cur, and the phase advances by resample_step_fp, taking the next
@@ -602,10 +627,11 @@ static void hda_play_frame(const uint8_t *p, int16_t *out)
  * them all; the caller's silence for frames it lacks is played like data.
  * Runs with interrupts off, from the service or `stream_start`.
  */
-static uint32_t hda_play_render(int16_t *dest, uint32_t frames)
+static uint32_t hda_play_render(uint8_t *dest, uint32_t frames)
 {
     audio_stream_t *s = play_stream;
     uint32_t frame = hda_in_frame();
+    uint32_t size = AUDIO_SAMPLE_BYTES(current_hw_format);
     uint32_t step = resample_step_fp ? resample_step_fp : 1u << 16;
     uint32_t frac = resample_frac_fp;
     uint32_t taken = 0;
@@ -618,9 +644,9 @@ static uint32_t hda_play_render(int16_t *dest, uint32_t frames)
         if (need > 0)
             s->transfer(s, hda_stage, need * frame);
         for (i = 0; i < chunk; i++) {
-            dest[0] = stream_cur[0];
-            dest[1] = stream_cur[1];
-            dest += 2;
+            hda_play_store(dest, stream_cur[0]);
+            hda_play_store(dest + size, stream_cur[1]);
+            dest += 2 * size;
             frac += step;
             while (frac >= 0x10000u) {
                 frac -= 0x10000u;
@@ -642,7 +668,7 @@ static void hda_fill_period(uint32_t index)
     int16_t *period = audio_buffer + index * period_bytes / 2u;
 
     if (play_stream)
-        stream_in[index] = hda_play_render(period, period_bytes / 4u);
+        stream_in[index] = hda_play_render((uint8_t *)period, period_bytes / hda_out_frame());
     else if (user_callback)
         user_callback(period, period_bytes);
     else
@@ -667,7 +693,7 @@ static uint32_t hda_play_delay(uint32_t pos)
     pos %= cbl;
     cur = pos / period_bytes;
     rest = (cur + 1) * period_bytes - pos;
-    frames = stream_in[cur] * (rest / 4u) / (period_bytes / 4u);
+    frames = stream_in[cur] * (rest / hda_out_frame()) / (period_bytes / hda_out_frame());
     ahead = (hw_period_last + 2 * HDA_PERIODS - cur - 1) % HDA_PERIODS;
     for (i = 1; i <= ahead; i++)
         frames += stream_in[(cur + i) % HDA_PERIODS];
@@ -751,7 +777,7 @@ static void hda_service_stream(void)
 
         missed_revolutions += missed;
         lpib_wraps += missed;
-        fill_silence(rest, size, current_hw_format == AUDIO_S16LE);
+        fill_silence(rest, size, current_hw_format != AUDIO_U8);
         hda_dma_sync_range(rest, size);
         if (play_stream) {
             stream_in[period] = 0;
@@ -2173,8 +2199,11 @@ static uint32_t hda_common_pcm(void)
 /**
  * Encode an exact codec-supported PCM format, or return 0xFFFF.
  *
- * The table index is the PCM rate bit. Both the stream descriptor and every
- * programmed converter receive this word; an unsupported rate is never
+ * The table index is the PCM rate bit. AUDIO_S32LE is 24 bits in a 32-bit
+ * container, the top 24 bits played, as Linux plays S32_LE to a codec of
+ * 24 bits; it needs the 24-bit size bit, 19, of the PCM sizes and rates
+ * word, and U8 and S16LE bits 16 and 17. Both the stream descriptor and
+ * every programmed converter receive this word; an unsupported rate is never
  * rounded here. Callback playback must match exactly because it has no
  * resampler. Write playback chooses a supported rate before encoding.
  */
@@ -2182,15 +2211,19 @@ static uint16_t hda_calc_format(uint32_t sample_rate, audio_format_t format, int
 {
     unsigned i;
     uint32_t pcm = hda_common_pcm();
-    uint32_t size_bit = format == AUDIO_S16LE ? (1u << 17) : (1u << 16);
+    uint32_t size_bit = format == AUDIO_S32LE   ? (1u << 19)
+                        : format == AUDIO_S16LE ? (1u << 17)
+                                                : (1u << 16);
+    uint16_t bits = format == AUDIO_S32LE   ? HDA_FMT_BITS_24
+                    : format == AUDIO_S16LE ? HDA_FMT_BITS_16
+                                            : HDA_FMT_BITS_8;
 
-    if ((format != AUDIO_U8 && format != AUDIO_S16LE) || channels < 1 || channels > 2 ||
-        !(pcm & size_bit))
+    if ((format != AUDIO_U8 && format != AUDIO_S16LE && format != AUDIO_S32LE) || channels < 1 ||
+        channels > 2 || !(pcm & size_bit))
         return 0xFFFF;
     for (i = 0; i < sizeof(hda_rates) / sizeof(hda_rates[0]); i++) {
         if (hda_rates[i].rate == sample_rate && (pcm & (1u << i)))
-            return hda_rates[i].format | (format == AUDIO_S16LE ? HDA_FMT_BITS_16 : 0) |
-                   (uint16_t)(channels - 1);
+            return hda_rates[i].format | bits | (uint16_t)(channels - 1);
     }
     return 0xFFFF;
 }
@@ -3368,7 +3401,8 @@ static void hda_out_buffers(int stream, uint16_t fmt)
         hda_play_frame(hda_stage, stream_cur);
         stream_taken = 1;
         for (i = 0; i < HDA_PERIODS; i++) {
-            stream_in[i] = hda_play_render(audio_buffer + i * period_bytes / 2u, period_bytes / 4u);
+            stream_in[i] = hda_play_render((uint8_t *)audio_buffer + i * period_bytes,
+                                           period_bytes / hda_out_frame());
         }
         stream_in[0]++;
     } else if (user_callback) {
@@ -4459,8 +4493,9 @@ static uint32_t hda_capture_position(void)
 /**
  * The rate the codec plays a stream of `rate` at: `rate` itself when every
  * DAC has it, else the lowest rate they have above it, else the highest
- * below; 0 when they have no 16-bit PCM. A stream always plays as 16-bit
- * stereo, so 44.1 and 48 kHz play exactly on any codec that has them.
+ * below; 0 when they have no 16-bit PCM. The rates are those of every
+ * sample size the DACs have, so a stream plays at the same rate in 16 bits
+ * or 24, and 44.1 and 48 kHz play exactly on any codec that has them.
  */
 static uint32_t hda_play_rate(uint32_t rate)
 {
@@ -4496,39 +4531,48 @@ static int hda_play_open(audio_stream_t *s)
 }
 
 /**
- * Grant `s` its format and channels, and the rate it asks for up to
- * HDA_RATE_RATIO times the rate it plays at (hda_play_rate), which is the
- * resampler's limit. The DMA's period is hda_period_bytes's at the rate
- * played, about 23 ms; the stream's period is the one asked for, cut to the
- * frames of the stream a DMA period plays, so that a `period` call is due at
- * least at every DMA period's end. `device_periods` covers the frames
- * `stream_start` takes for the three DMA periods and the frame playing.
- * 0, or -EINVAL for a stream that is not the open one or runs, a format
- * other than unsigned 8-bit or signed 16-bit, a channel count other than 1
- * or 2, or a codec with no 16-bit PCM.
+ * Grant `s` its channels and the rate it asks for up to HDA_RATE_RATIO
+ * times the rate it plays at (hda_play_rate), which is the resampler's
+ * limit. Unsigned 8-bit and signed 16-bit are granted as they are, and play
+ * as 16 bits; a wider format is granted AUDIO_S32LE, played as 24 bits in
+ * 32, when every DAC has 24 bits, and signed 16-bit otherwise, the period
+ * asked for keeping its frames. The DMA's period is hda_period_bytes's at
+ * the rate played, about 23 ms; the stream's period is the one asked for,
+ * cut to the frames of the stream a DMA period plays, so that a `period`
+ * call is due at least at every DMA period's end. `device_periods` covers
+ * the frames `stream_start` takes for the three DMA periods and the frame
+ * playing. 0, or -EINVAL for a stream that is not the open one or runs, a
+ * format not in audio_format_t, a channel count other than 1 or 2, or a
+ * codec with no 16-bit PCM.
  */
 static int hda_play_setup(audio_stream_t *s)
 {
     uint32_t hw, rate, step, dma, per, frame, want, first;
+    audio_format_t format = s->format;
 
-    if (s != play_stream || playing || s->rate == 0 ||
-        (s->format != AUDIO_U8 && s->format != AUDIO_S16LE) || s->channels < 1 || s->channels > 2)
+    if (s != play_stream || playing || s->rate == 0 || s->channels < 1 || s->channels > 2 ||
+        (format != AUDIO_U8 && format != AUDIO_S16LE && format != AUDIO_S24LE &&
+         format != AUDIO_S24_3LE && format != AUDIO_S32LE))
         return -EINVAL;
     hw = hda_play_rate(s->rate);
     if (!hw)
         return -EINVAL;
+    if (AUDIO_SAMPLE_BYTES(format) > 2u)
+        format = hda_common_pcm() & (1u << 19) ? AUDIO_S32LE : AUDIO_S16LE;
     rate = s->rate < HDA_RATE_RATIO * hw ? s->rate : HDA_RATE_RATIO * hw;
     step = hda_rate_step(rate, hw);
-    dma = hda_period_bytes(hw, 4) / 4u;
+    frame = 2u * (format == AUDIO_S32LE ? 4u : 2u);
+    dma = hda_period_bytes(hw, frame) / frame;
     per = (dma * step) >> 16;
-    frame = (uint32_t)s->channels * (s->format == AUDIO_S16LE ? 2u : 1u);
-    want = s->period_bytes / frame;
+    want = s->period_bytes / ((uint32_t)s->channels * AUDIO_SAMPLE_BYTES(s->format));
+    frame = (uint32_t)s->channels * AUDIO_SAMPLE_BYTES(format);
     if (want > per)
         want = per;
     if (want == 0)
         return -EINVAL;
     first = 1u + ((HDA_PERIODS * dma * step) >> 16);
     s->rate = rate;
+    s->format = format;
     s->period_bytes = want * frame;
     s->device_periods = (first + want - 1) / want;
     if (s->periods < s->device_periods)
@@ -4536,10 +4580,12 @@ static int hda_play_setup(audio_stream_t *s)
     return 0;
 }
 
-/** Start playback stream `s` with the parameters `stream_setup` granted: 0,
- * or -EIO when it is not the open stream or the device fails to start. */
+/** Start playback stream `s` with the parameters `stream_setup` granted, a
+ * stream of 32-bit samples as 24 bits in 32 and any other as 16 bits: 0, or
+ * -EIO when it is not the open stream or the device fails to start. */
 static int hda_play_start(audio_stream_t *s)
 {
+    audio_format_t format;
     uint32_t hw;
     uint16_t fmt;
 
@@ -4547,14 +4593,15 @@ static int hda_play_start(audio_stream_t *s)
         return -EIO;
     hda_halt();
     hw = hda_play_rate(s->rate);
-    fmt = hw ? hda_calc_format(hw, AUDIO_S16LE, 2) : 0xFFFF;
+    format = s->format == AUDIO_S32LE ? AUDIO_S32LE : AUDIO_S16LE;
+    fmt = hw ? hda_calc_format(hw, format, 2) : 0xFFFF;
     if (fmt == 0xFFFF)
         return -EIO;
     current_sample_rate = s->rate;
     current_format = s->format;
     current_channels = s->channels;
     current_hw_sample_rate = hw;
-    current_hw_format = AUDIO_S16LE;
+    current_hw_format = format;
     current_hw_channels = 2;
     resample_step_fp = hda_rate_step(s->rate, hw);
     resample_frac_fp = 0;

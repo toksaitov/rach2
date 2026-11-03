@@ -761,23 +761,31 @@ static int sb16_stream_open(audio_stream_t *s)
 }
 
 /**
- * Grant a stopped stream U8 or S16, mono or stereo, at 5000..44100 Hz.
- * Clamp its period to the static DMA half and round down to whole frames.
- * Return -EINVAL without changing the setup for invalid parameters.
+ * Grant a stopped stream U8 or S16, mono or stereo, at 5000..44100 Hz; a
+ * wider format is granted S16, its period keeping its frames. Clamp the
+ * period to the static DMA half and round down to whole frames. Return
+ * -EINVAL without changing the setup for invalid parameters.
  */
 static int sb16_stream_setup(audio_stream_t *s)
 {
-    uint32_t frame, bytes;
+    audio_format_t format = s->format;
+    uint32_t frame, bytes = s->period_bytes;
 
     if (s != play_stream || playing || !s->transfer ||
-        (s->format != AUDIO_U8 && s->format != AUDIO_S16LE) ||
+        (format != AUDIO_U8 && format != AUDIO_S16LE && format != AUDIO_S24LE &&
+         format != AUDIO_S24_3LE && format != AUDIO_S32LE) ||
         (s->channels != 1 && s->channels != 2))
         return -EINVAL;
-    frame = (s->format == AUDIO_S16LE ? 2u : 1u) * (uint32_t)s->channels;
-    bytes = s->period_bytes < SB16_PERIOD_MAX ? s->period_bytes : SB16_PERIOD_MAX;
+    if (AUDIO_SAMPLE_BYTES(format) > 2u) {
+        bytes = bytes / AUDIO_SAMPLE_BYTES(format) * 2u;
+        format = AUDIO_S16LE;
+    }
+    frame = (format == AUDIO_S16LE ? 2u : 1u) * (uint32_t)s->channels;
+    bytes = bytes < SB16_PERIOD_MAX ? bytes : SB16_PERIOD_MAX;
     bytes -= bytes % frame;
     if (bytes == 0)
         return -EINVAL;
+    s->format = format;
     s->rate = s->rate < 5000 ? 5000 : s->rate > 44100 ? 44100 : s->rate;
     s->period_bytes = bytes;
     if (s->periods < 2)

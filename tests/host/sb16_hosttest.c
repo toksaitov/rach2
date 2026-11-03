@@ -428,6 +428,12 @@ static void row_stream_setup(void)
     s.channels = 1;
     s.format = (audio_format_t)99;
     CHECK(sb16_driver.stream_setup(&s) == -EINVAL, "invalid format refused");
+    s.format = AUDIO_S32LE;
+    s.channels = 2;
+    s.period_bytes = 1024;
+    CHECK(sb16_driver.stream_setup(&s) == 0 && s.format == AUDIO_S16LE && s.period_bytes == 512,
+          "a wider format is granted 16 bits, its period keeping its frames");
+    s.channels = 1;
     s.format = AUDIO_U8;
     s.transfer = NULL;
     CHECK(sb16_driver.stream_setup(&s) == -EINVAL, "missing transfer refused");
