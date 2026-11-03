@@ -1358,7 +1358,7 @@
     },
     {
       "case_id": "machine.gnu.acpid",
-      "behavior": "init gives acpid and crond the PATH /sbin:/usr/sbin:/bin:/usr/bin, which /proc/PID/environ shows, and bash in acpid's environment finds util-linux's rfkill, which the airplane action runs, as /usr/sbin/rfkill.",
+      "behavior": "init gives acpid and crond the PATH /sbin:/usr/sbin:/bin:/usr/bin, which /proc/PID/environ shows, and bash in acpid's environment finds util-linux's rfkill, which the airplane action runs, as /sbin/rfkill, a link to /usr/sbin/rfkill.",
       "units": ["gnu_rows.sh row_acpid"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],

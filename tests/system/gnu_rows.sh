@@ -722,8 +722,9 @@ row_cron() {
 
 # init gives acpid and crond its path, with the sbin directories, so that in
 # acpid's environment bash finds util-linux's rfkill, which the airplane
-# action /etc/acpi/wifi runs. acpid is an applet of /bin/busybox, which is
-# its process's name, so pgrep finds it by the command line init gives it.
+# action /etc/acpi/wifi runs: /sbin comes first, and its rfkill is a link
+# to /usr/sbin/rfkill. acpid is an applet of /bin/busybox, which is its
+# process's name, so pgrep finds it by the command line init gives it.
 row_acpid() {
     local env
     same "the daemon" "$(pgrep -fx 'acpid -d' | wc -l)" "1"
@@ -731,9 +732,9 @@ row_acpid() {
     same "acpid's path" "$(sed -n 's/^PATH=//p' <<< "$env")" "/sbin:/usr/sbin:/bin:/usr/bin"
     same "crond's path" "$(tr '\0' '\n' < "/proc/$(pgrep -x crond)/environ" | sed -n 's/^PATH=//p')" \
         "/sbin:/usr/sbin:/bin:/usr/bin"
-    # shellcheck disable=SC2086 # one word for each variable
-    same "rfkill in acpid's environment" "$(env -i $env /bin/bash -c 'type -P rfkill')" \
-        "/usr/sbin/rfkill"
+    # shellcheck disable=SC2016,SC2086 # bash's dollars; a word per variable
+    same "rfkill in acpid's environment" \
+        "$(env -i $env /bin/bash -c 'readlink -f "$(type -P rfkill)"')" "/usr/sbin/rfkill"
 }
 
 # zip makes an archive of a tree, and unzip lists it and extracts it.
