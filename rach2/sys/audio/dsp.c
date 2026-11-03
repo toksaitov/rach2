@@ -68,10 +68,13 @@
  * DSP_PERIOD_MAX bytes, and there are at least two of them, at most as
  * many as DSP_BUFFER_MAX holds. Without SETFRAGMENT a period is the power of
  * two nearest a 43rd of a second, about 23 ms, and there are DSP_PERIODS.
+ * A playback buffer may take one period more, DSP_RING_MAX in all, so that
+ * it holds a period beyond the start (dsp_layout).
  */
 #define DSP_BUFFER_MAX 65536u
 #define DSP_PERIOD_MIN 128u
 #define DSP_PERIOD_MAX 16384u
+#define DSP_RING_MAX   (DSP_BUFFER_MAX + DSP_PERIOD_MAX)
 #define DSP_PERIOD_HZ  43u
 #define DSP_PERIODS    4u
 #define DSP_RATE_MIN   1000u
@@ -94,11 +97,12 @@ struct dsp_count_info {
 };
 
 /*
- * One direction of an open. `ring` holds DSP_BUFFER_MAX bytes, of which the
- * first `size` are the buffer in use, a circle of `used` bytes from `head`
- * on; it is NULL in a direction the open does not have. The program adds at
- * the tail and the driver's interrupt takes from the head (playback), or the
- * driver adds and the program takes (capture), each under the open's lock.
+ * One direction of an open. `ring` holds DSP_RING_MAX bytes for playback and
+ * DSP_BUFFER_MAX for capture, of which the first `size` are the buffer in
+ * use, a circle of `used` bytes from `head` on; it is NULL in a direction
+ * the open does not have. The program adds at the tail and the driver's
+ * interrupt takes from the head (playback), or the driver adds and the
+ * program takes (capture), each under the open's lock.
  * While `running` the driver's stream is started.
  */
 struct dsp_chan {
@@ -270,10 +274,13 @@ static void dsp_period(audio_stream_t *s)
 /**
  * Lay direction `c` out for its stream's format, channels and rate and for
  * SETFRAGMENT's request, and have the driver grant it. The stream must be
- * stopped and the buffer empty. A playback buffer holds at least the
- * driver's, `device_periods` periods, which the first start fills; a capture
- * buffer needs only two. 0; or the driver's error, or -EIO for a grant
- * outside the contract of `stream_setup`, with the stream as it was.
+ * stopped and the buffer empty. A playback buffer holds the driver's
+ * `device_periods` periods, which the first start takes, and at least one
+ * more, since a program may keep a period free and still wait for the start,
+ * as cmus does, which writes only as much as GETOSPACE's free periods less
+ * one; a capture buffer needs only two. 0; or the driver's error, or -EIO
+ * for a grant outside the contract of `stream_setup`, with the stream as it
+ * was.
  */
 static int dsp_layout(struct dsp *d, struct dsp_chan *c)
 {
@@ -305,10 +312,10 @@ static int dsp_layout(struct dsp *d, struct dsp_chan *c)
         c->stream = old;
         return rc;
     }
-    if (play && s->periods < s->device_periods) {
-        s->periods = s->device_periods;
-    }
     s->periods = clamp(s->periods, 2, DSP_BUFFER_MAX / s->period_bytes);
+    if (play && s->periods <= s->device_periods) {
+        s->periods = s->device_periods + 1;
+    }
     c->size = s->periods * s->period_bytes;
     if (play) {
         d->start = s->device_periods * s->period_bytes;
@@ -570,7 +577,7 @@ int32_t dspdev_open(fd_entry_t *e, int flags)
     }
     d = (struct dsp *)kzalloc(sizeof(*d));
     if (mode != 0) {
-        out = (uint8_t *)kmalloc(DSP_BUFFER_MAX);
+        out = (uint8_t *)kmalloc(DSP_RING_MAX);
     }
     if (mode != 1) {
         in = (uint8_t *)kmalloc(DSP_BUFFER_MAX);

@@ -40,7 +40,8 @@ Without
 a period is the power of two of bytes nearest a 43rd of a second, about
 23 ms, at least 128 bytes, and the buffer has four of them.
 The device starts playing once enough is queued to fill the periods of the
-driver's own buffer, or at
+driver's own buffer, which the buffer holds with at least one period more,
+or at
 .Dv SNDCTL_DSP_POST ,
 .Dv SNDCTL_DSP_SYNC
 or the last
@@ -144,11 +145,13 @@ differ where the device's converter has other rates.
 Ask for periods of 2 to the power of the low 16 bits bytes and for the
 number of them in the high 16 bits.
 A period is from 128 to 16384 bytes, and there are at least two and as many
-as 64 KiB hold.
+as 64 KiB hold, or one more for playback.
 A playback period is at most the frames, at the rate set, that one period of
 the mix plays: 1024 frames of the mix on HD Audio, and 512 on the Sound
 Blaster 16.
-The buffer holds at least the periods the mix takes at its start.
+A playback buffer holds the periods the mix takes at its start and at least
+one more, so that a program that keeps a period free, as cmus does, can
+queue the start.
 A recording period may be made smaller by the driver.
 .It Dv SNDCTL_DSP_GETBLKSIZE
 The bytes of a period.
