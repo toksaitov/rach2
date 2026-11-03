@@ -10,7 +10,7 @@
 # `last` then finds no session of root's, the counts of the whole machine in
 # procps, utillinux and chromium, and the write refused over the root in
 # disknode. The rows cron, shadow and ntpd change the
-# machine (`machine`).
+# machine (`machine`), and acpid reads the environment of root's daemons.
 
 case gnu/names -- system/gnu_rows.sh names x86_64 work=work home=home stage=. @net machine=native
 case gnu/glibc -- system/gnu_rows.sh glibc x86_64 work=work home=home stage=. @net machine=native

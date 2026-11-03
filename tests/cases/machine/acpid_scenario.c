@@ -1,9 +1,11 @@
 /*
  * acpid_scenario.c: the scenario of the acpid case (../machine.acpid.json).
- * os-real on an Intel HDA controller, logged in as root: BusyBox's acpid,
- * which init starts, runs mixer for the volume keys QMP presses on the PS/2
- * keyboard, and powers the machine off in order for the ACPI power button
- * that QMP's system_powerdown presses.
+ * os-real on an Intel HDA controller with one software Wi-Fi radio, logged
+ * in as root: BusyBox's acpid, which init starts with the sbin directories
+ * on its path, runs mixer for the volume keys QMP presses on the PS/2
+ * keyboard, its airplane action run in its environment blocks and unblocks
+ * the radio, and it powers the machine off in order for the ACPI power
+ * button that QMP's system_powerdown presses.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -95,10 +97,62 @@ static int press(struct guest *g, const char *qcode, const char *before, const c
     return 1;
 }
 
+/* The path init gives every service, BusyBox init's (utils/init.c). */
+#define SERVICE_PATH "/sbin:/usr/sbin:/bin:/usr/bin"
+
+/* The soft block of the Wi-Fi switches, one digit for each, as
+ * /etc/acpi/wifi reads them. */
+#define SOFT_BLOCKS                             \
+    "$(for s in /sys/class/rfkill/rfkill*; do " \
+    "[ \"$(cat $s/type)\" = wlan ] && cat $s/soft; done)"
+
+/**
+ * Report assertion `id`, that the PATH in the environment of the one
+ * process named `name` is SERVICE_PATH.
+ *
+ * @return 1 when the scenario can go on.
+ */
+static int service_path(struct guest *g, const char *name, const char *id)
+{
+    char command[256], got[128], detail[256];
+
+    snprintf(command, sizeof(command),
+             "echo P\"\"=$(tr '\\0' '\\n' < /proc/$(pidof %s)/environ | sed -n 's/^PATH=//p')\r",
+             name);
+    if (!ask(g, command, "P", got, sizeof(got)))
+        return 0;
+    snprintf(detail, sizeof(detail), "%s's PATH is '%s', not '%s'", name, got, SERVICE_PATH);
+    lc_assert(g->l, id, strcmp(got, SERVICE_PATH) == 0, detail);
+    return 1;
+}
+
+/**
+ * Run acpid's airplane action, /etc/acpi/wifi, in acpid's own environment
+ * and nothing else, and report assertion `id`, that the radio's switch then
+ * reads soft block `want`.
+ *
+ * @return 1 when the scenario can go on.
+ */
+static int airplane(struct guest *g, const char *want, const char *id)
+{
+    char got[64], detail[160];
+
+    if (!ask(g,
+             "env -i $(tr '\\0' ' ' < /proc/$(pidof acpid)/environ) /etc/acpi/wifi; "
+             "echo SOFT\"\"=$? " SOFT_BLOCKS "\r",
+             "SOFT", got, sizeof(got)))
+        return 0;
+    snprintf(detail, sizeof(detail), "the action's status and soft block are '%s', not '0 %s'", got,
+             want);
+    lc_assert(g->l, id, got[0] == '0' && got[1] == ' ' && strcmp(got + 2, want) == 0, detail);
+    return 1;
+}
+
 /**
  * Log in; see acpid running; set the volume to 50 and press the volume keys
- * and the mute key twice; then press the power button and wait for the
- * machine's end.
+ * and the mute key twice; read acpid's and update's paths, and run the
+ * airplane action twice in acpid's environment; then press the power button
+ * and wait for the machine's end.
  */
 static void real(struct lc *l)
 {
@@ -127,7 +181,15 @@ static void real(struct lc *l)
     if (!press(&g, "volumeup", "vol 50:50", "vol 55:55", "up") ||
         !press(&g, "volumedown", "vol 55:55", "vol 50:50", "down") ||
         !press(&g, "audiomute", "vol 50:50", "vol 0:0 muted", "mute") ||
-        !press(&g, "audiomute", "vol 0:0 muted", "vol 50:50", "unmute") || !lc_step(l, "power"))
+        !press(&g, "audiomute", "vol 0:0 muted", "vol 50:50", "unmute") || !lc_step(l, "wifi"))
+        return;
+    if (!service_path(&g, "acpid", "acpid-path") || !service_path(&g, "update", "update-path"))
+        return;
+    if (!ask(&g, "echo SOFT\"\"=" SOFT_BLOCKS "\r", "SOFT", got, sizeof(got)))
+        return;
+    snprintf(detail, sizeof(detail), "the Wi-Fi switches' soft blocks are '%s', not '0'", got);
+    lc_assert(l, "radio", strcmp(got, "0") == 0, detail);
+    if (!airplane(&g, "1", "blocked") || !airplane(&g, "0", "unblocked") || !lc_step(l, "power"))
         return;
     from = g.at;
     st = etude_qmp(g.m, "system_powerdown", NULL, &reply);
@@ -145,8 +207,9 @@ static void real(struct lc *l)
 
 int etude_scenario(struct etude_case *c)
 {
-    static const char *const ids[] = {"running", "set",         "up",       "down", "mute",
-                                      "unmute",  "powered-off", "in-order", NULL};
+    static const char *const ids[] = {"running",   "set",         "up",          "down",  "mute",
+                                      "unmute",    "acpid-path",  "update-path", "radio", "blocked",
+                                      "unblocked", "powered-off", "in-order",    NULL};
     struct lc l;
 
     lc_begin(&l, c, ids);

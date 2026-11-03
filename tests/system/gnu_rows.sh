@@ -720,6 +720,21 @@ row_cron() {
     su test -c 'crontab -r'
 }
 
+# init gives acpid and crond its path, with the sbin directories, so that in
+# acpid's environment bash finds util-linux's rfkill, which the airplane
+# action /etc/acpi/wifi runs.
+row_acpid() {
+    local env
+    same "the daemon" "$(pgrep -x acpid | wc -l)" "1"
+    env=$(tr '\0' '\n' < "/proc/$(pgrep -x acpid)/environ")
+    same "acpid's path" "$(sed -n 's/^PATH=//p' <<< "$env")" "/sbin:/usr/sbin:/bin:/usr/bin"
+    same "crond's path" "$(tr '\0' '\n' < "/proc/$(pgrep -x crond)/environ" | sed -n 's/^PATH=//p')" \
+        "/sbin:/usr/sbin:/bin:/usr/bin"
+    # shellcheck disable=SC2086 # one word for each variable
+    same "rfkill in acpid's environment" "$(env -i $env /bin/bash -c 'type -P rfkill')" \
+        "/usr/sbin/rfkill"
+}
+
 # zip makes an archive of a tree, and unzip lists it and extracts it.
 row_zip() {
     mkdir -p "$WORK/z/d"
