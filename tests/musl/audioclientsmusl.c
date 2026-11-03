@@ -18,7 +18,7 @@
 
 static pid_t children[3];
 static char workspace[256];
-static char files[2][300];
+static char files[3][300];
 
 /** Reap every child and remove the files on every exit, including failure. */
 static void cleanup(void)
@@ -240,7 +240,8 @@ static void put32(unsigned char *p, unsigned n)
         p[i] = (unsigned char)(n >> (8 * i));
 }
 
-/** Make a mono PCM WAV for play(1), then rec(1) records the playback mix. */
+/** Make a mono PCM WAV, convert it to a 24-bit FLAC with sox(1), and play the
+ * FLAC with play(1) while rec(1) records the playback mix. */
 static void sox(void)
 {
     unsigned char header[44] = {0};
@@ -269,6 +270,15 @@ static void sox(void)
     transfer(fd, samples, FRAMES * sizeof(*samples), 1);
     close(fd);
     free(samples);
+    children[2] = fork();
+    if (children[2] < 0)
+        fail("fork sox");
+    if (children[2] == 0) {
+        memset(children, 0, sizeof(children));
+        execl("/bin/sox", "sox", files[0], "-b", "24", files[2], (char *)NULL);
+        _exit(127);
+    }
+    reap(2);
     /* A reader primes the playback clock before rec and play start. The
      * parent waits for rec to create its output before starting play. */
     fd = dsp(O_RDONLY);
@@ -309,7 +319,7 @@ static void sox(void)
     if (children[1] == 0) {
         memset(children, 0, sizeof(children));
         close(fd);
-        execl("/bin/play", "play", "-q", files[0], (char *)NULL);
+        execl("/bin/play", "play", "-q", files[2], (char *)NULL);
         _exit(127);
     }
     close(fd);
@@ -347,6 +357,7 @@ int main(int argc, char **argv)
         fail("scratch directory");
     snprintf(files[0], sizeof(files[0]), "%s/played.wav", workspace);
     snprintf(files[1], sizeof(files[1]), "%s/recorded.raw", workspace);
+    snprintf(files[2], sizeof(files[2]), "%s/played.flac", workspace);
     if (argc != 2)
         return 1;
     if (setenv("AUDIODRIVER", "oss", 1) < 0)

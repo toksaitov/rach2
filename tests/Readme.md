@@ -116,7 +116,7 @@ The `default` suite boots the test image afresh for each program. Most run as gu
 
 The order of `default-probes` is the order in which the `selfbuild` cases run the programs in one boot of the test image, sharing its state: the credential probes that rewrite the account files run after the ones that read them, and `searchprobe`, which changes the modes of a staged tree, and `stickyprobe`, which makes and removes fixtures beside staged ones, run last.
 
-`musl/audioclientsmusl` belongs to the audio suite. It coordinates two OSS players by pipes, reads loopback through two capture opens, and runs sox_ng's `play` and `rec` on a generated WAV. Its exit handler reaps children and removes its private scratch directory. The audio machine cases judge its output with `wavcheck`.
+`musl/audioclientsmusl` belongs to the audio suite. It coordinates two OSS players by pipes, reads loopback through two capture opens, and converts a generated WAV to a 24-bit FLAC with sox_ng's `sox`, which its `play` plays while `rec` records. Its exit handler reaps children and removes its private scratch directory. The audio machine cases judge its output with `wavcheck`.
 
 ## Adding tests
 

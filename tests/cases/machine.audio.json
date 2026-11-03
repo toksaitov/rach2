@@ -529,7 +529,7 @@
     },
     {
       "case_id": "machine.audio.sox",
-      "behavior": "sox_ng play plays a WAV through OSS while rec records its scale through loopback",
+      "behavior": "sox_ng converts a WAV to a 24-bit FLAC, and play plays the FLAC through OSS while rec records its scale through loopback",
       "units": ["audio"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
@@ -567,7 +567,7 @@
     },
     {
       "case_id": "machine.audio.sb16.sox",
-      "behavior": "sox_ng play plays a WAV through OSS while rec records its scale through loopback",
+      "behavior": "sox_ng converts a WAV to a 24-bit FLAC, and play plays the FLAC through OSS while rec records its scale through loopback",
       "units": ["audio"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
