@@ -1249,6 +1249,19 @@ int vfs_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor, struct vf
     return -EIO;
 }
 
+/** No row sleeps in epoll_wait, so a close finds no poller to let go of. */
+void wq_poll_remove(wait_queue_t *wq, struct wq_waiter *w)
+{
+    (void)wq;
+    (void)w;
+}
+
+/** No row sleeps in epoll_wait, so nothing is woken for a closed hold. */
+void wq_wake_proc(process_t *p)
+{
+    (void)p;
+}
+
 /** Count a wake of the queue a parked call waits on. */
 void wq_wake_all(wait_queue_t *wq)
 {
