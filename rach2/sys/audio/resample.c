@@ -84,6 +84,16 @@ void resample_init(resampler_t *r, uint32_t in, uint32_t out)
     r->owed = 1u;
 }
 
+void resample_delay(resampler_t *r, uint32_t delay)
+{
+    if (r->span == 0) {
+        return;
+    }
+    r->owed += delay / r->out;
+    r->phase = delay % r->out;
+    r->at = resample_div((uint64_t)r->step * r->phase, r->out, &r->at_rest);
+}
+
 uint32_t resample_need(const resampler_t *r, uint32_t n)
 {
     return n == 0 ? 0 : r->owed + (r->phase + (n - 1u) * r->in) / r->out;

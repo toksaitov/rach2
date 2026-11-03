@@ -900,7 +900,11 @@ static int vchan_capture_start(audio_stream_t *s)
         r->origin = (r->origin + n * s->rate) % input.stream.rate;
         frames -= n;
     }
+    /* The reader's frames lie where those of a reader started at the
+       input's first frame do, the first of them `origin` / rate after the
+       last one before the join. */
     resample_init(&r->rs, input.stream.rate, s->rate);
+    resample_delay(&r->rs, r->origin ? input.stream.rate - r->origin : 0);
     spin_unlock_irqrestore(&input.lock, flags);
     if (!input.running) {
         input.frames = 0;

@@ -57,6 +57,14 @@ typedef struct resampler {
  */
 void resample_init(resampler_t *r, uint32_t in, uint32_t out);
 
+/**
+ * Move the first output frame of `r`, just set by resample_init, `delay` /
+ * out of an input frame later, `delay` being below `in`, so that a
+ * converter started at a later input frame makes its frames at the times of
+ * one started earlier. Changes nothing at equal rates.
+ */
+void resample_delay(resampler_t *r, uint32_t delay);
+
 /** The frames to put for the next `n` output frames, (n - 1) * in being
  * below 2^32. */
 uint32_t resample_need(const resampler_t *r, uint32_t n);
