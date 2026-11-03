@@ -66,6 +66,12 @@
 
 extern char **environ;
 
+/* The path of init and of every program it starts, BusyBox init's: the
+ * kernel gives init `/bin:/usr/bin:/`, and services such as acpid run actions
+ * that call sbin programs (rfkill, ifconfig, poweroff) by name. A console
+ * login sets its own from /etc/profile. */
+#define SERVICE_PATH "/sbin:/usr/sbin:/bin:/usr/bin"
+
 #ifdef INIT_CONSOLE_LOGIN
 /* The one program the console session may exec in this build. There is no
  * list and no fallback: a fall-through to a shell on any exec failure hands
@@ -1855,12 +1861,11 @@ static void report_backup_tables(void)
  * `ifup -a` would take eth0 as already configured and bring up nothing.
  *
  * `ifup` runs its commands, `ifconfig` and `udhcpc` among them, through
- * root's login shell, with the path it was given. BusyBox's ash runs its
+ * root's login shell, with init's path, SERVICE_PATH. BusyBox's ash runs its
  * applets by name whatever the path, but bash, root's login shell on the GNU
- * system, finds them only through the path, and init's has no `/sbin`, so
- * `ifup` gets the four directories of programs for its path. It is not given
- * a shell by `SHELL`, which it would also take: `check-setid` requires that
- * `init-metal` have no shell's path in it.
+ * system, finds them only through the path. `ifup` is not given a shell by
+ * `SHELL`, which it would also take: `check-setid` requires that `init-metal`
+ * have no shell's path in it.
  */
 static void configure_network(void)
 {
@@ -1879,7 +1884,6 @@ static void configure_network(void)
         argv[0] = (char *)"ifup";
         argv[1] = (char *)"-a";
         argv[2] = NULL;
-        (void)setenv("PATH", "/sbin:/usr/sbin:/bin:/usr/bin", 1);
         execv("/bin/ifup", argv);
         execv("/bin/busybox", argv); /* the applet, where there is no /bin/ifup */
         _exit(127);
@@ -3034,8 +3038,9 @@ static pid_t child_wait(int *status)
  *
  * The three shutdown handlers go in before the first child, so a request that
  * arrives early is answered and does not meet a terminating default, which for
- * pid 1 is a panic. Then the machine is set up (`set_up`), the login builds
- * choose the console session (`want_term`), and the keyboard is set.
+ * pid 1 is a panic. Then init's path becomes SERVICE_PATH, which every child
+ * inherits, the machine is set up (`set_up`), the login builds choose the
+ * console session (`want_term`), and the keyboard is set.
  *
  * Each turn respawns what is missing: the console session, whose failed fork
  * (a full process table) is retried after a second so the loop does not spin,
@@ -3078,6 +3083,7 @@ int main(void)
     unsigned turns = 0;
 
     catch_shutdown();
+    (void)setenv("PATH", SERVICE_PATH, 1);
     set_up();
 #ifdef INIT_CONSOLE_LOGIN
     want_term();

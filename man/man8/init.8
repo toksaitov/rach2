@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 3, 2026
 .Dt INIT 8
 .Os
 .Sh NAME
@@ -495,6 +495,22 @@ the second
 .Ic poweroff
 of a power button the firmware reports twice for one press, waits and is
 never answered.
+.Sh ENVIRONMENT
+.Bl -tag -width PATH
+.It Ev PATH
+.Nm
+sets its own to
+.Ql /sbin:/usr/sbin:/bin:/usr/bin ,
+as BusyBox's init does, in place of the kernel's
+.Ql /bin:/usr/bin:/ ,
+and every program it starts inherits it.
+So acpid's actions and the scripts of ifplugd, wpa_cli and udhcpc find
+.Xr rfkill 8 ,
+.Ic ifconfig
+and the other programs in the sbin directories by name.
+A console login's shell sets its own from
+.Pa /etc/profile .
+.El
 .Sh FILES
 .Bl -tag -width /etc/rach2/sshd.conf
 .It Pa /etc/acpi.map , Pa /etc/acpid.conf
