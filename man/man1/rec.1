@@ -37,6 +37,11 @@ Select the recording source and level with
 .Xr mixer 1 .
 The device determines which rates, sample formats and channel counts
 are available.
+.Pp
+The Lenovo G50-70's internal microphone is two digital microphones, one
+of them inverted, which cancel when mixed.
+As Linux does, the driver records the left one in both channels, so a
+stereo recording from it has two identical channels.
 .Sh ENVIRONMENT
 .Bl -tag -width AUDIODEV
 .It Ev AUDIODEV

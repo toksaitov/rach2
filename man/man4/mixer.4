@@ -46,7 +46,8 @@ on QEMU's duplex codec.
 .It Dv SOUND_MIXER_IGAIN
 The boost of each source's pin, its input amplifier before the converter:
 four steps of 12 dB on the G50-70, so that 33 is +12 dB.
-It starts at the pin's 0 dB step.
+It starts at the pin's 0 dB step, and the internal microphone's at
++24 dB, 67 on the G50-70.
 .El
 .Pp
 On HD Audio a percentage is that share of an amplifier's steps, from its
@@ -60,8 +61,8 @@ the microphone jack, else the line in, when it starts.
 While a microphone is the source, a plug in the microphone jack moves
 recording to the jack, and its removal back to the internal microphone;
 a source chosen here stays until the jack next changes.
-A change of a level or of the source takes effect at once while a stream
-records, and at the next start otherwise.
+A change of the source takes effect at once, and one of a level at once
+while a stream records and at the next start otherwise.
 .Pp
 .Xr init 8
 sets each channel of the device mask to the level kept from the last
