@@ -1011,7 +1011,7 @@
     },
     {
       "case_id": "machine.wifi.robust",
-      "behavior": "the installed system keeps network A through group rekeys, and its lease through a restart of the AP and a deauthentication, gives the lease up with the AP gone and joins again when it is back, and a roam with an SSH session kept, moves to and from network B, and lets the cable take and give back the default route and DNS",
+      "behavior": "the installed system keeps network A through group rekeys, and its lease through a restart of the AP, a deauthentication and a channel switch of both access points, gives the lease up with the AP gone and joins again when it is back, and a roam with an SSH session kept, moves to and from network B, and lets the cable take and give back the default route and DNS",
       "units": [
         "wifi",
         "wpa_supplicant",
@@ -1255,6 +1255,11 @@
         {
           "assertion_id": "deauth-kept",
           "checks": "through the deauthentication the station kept its lease, with no loss of wlan0's IPv4 address recorded, and the kernel logged that the AP deauthenticated it, with the reason",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "switch",
+          "checks": "as network A's access points switch channels with transmit held, the station follows its own: wpa_supplicant reports the switch and no disconnection, the kernel logs it with no leave and no loss of wlan0's IPv4 address, a ping running across it is answered, and the station keeps network A's routes and server and echoes",
           "source": "scenario"
         },
         {

@@ -723,8 +723,8 @@ static void rejoined(struct wifi *w, const char *id, long connected, int b, cons
 
 static void case_robust(struct wifi *w)
 {
-    char *text = NULL, buf[64], from[18], to[18];
-    long n, rekeys;
+    char *text = NULL, *console = NULL, *routes = NULL, buf[64], from[18], to[18];
+    long n, rekeys, left;
     uint64_t mark;
     int ok;
 
@@ -780,6 +780,38 @@ static void case_robust(struct wifi *w)
                text != NULL ? text : "");
     free(text);
     text = NULL;
+
+    /* Both access points of network A move, to channels 3 and 8, each
+     * announcing it five beacons ahead with transmit held, while a ping
+     * runs: the station follows its own without leaving it, and its lease
+     * and traffic go on. */
+    net_step(&w->u, "switch");
+    n = log_count(w, "CTRL-EVENT-CHANNEL-SWITCH");
+    left = log_count(w, "CTRL-EVENT-DISCONNECTED");
+    mark = w->sta.at;
+    sta(w, NULL, "ping -c 10 " GW_A " > /tmp/switch.ping 2>&1 &");
+    ap(w, NULL,
+       "hostapd_cli -p /run/hostapd -i wlan0 chan_switch 5 2422 ht blocktx; "
+       "hostapd_cli -p /run/hostapd -i wlan1 chan_switch 5 2447 ht blocktx");
+    n = n < 0 ? -1 : log_after(w, "CTRL-EVENT-CHANNEL-SWITCH", n);
+    sta(w, &text, "wait; cat /tmp/switch.ping; grep CTRL-EVENT-CHANNEL-SWITCH " LOG " | tail -1");
+    lease(w, 0);
+    console = net_text(&w->sta, mark, w->sta.at);
+    net_assert(&w->u, "switch",
+               n > 0 && log_count(w, "CTRL-EVENT-DISCONNECTED") == left &&
+                   (has(text, "freq=2422") || has(text, "freq=2447")) &&
+                   net_number_after(text, " packets transmitted, ") > 0 &&
+                   net_find(console, "wlan: wlan0: switched: 02:00:00:00:0*: to channel #") !=
+                       NULL &&
+                   !has(console, "wlan: wlan0: left:") && !has(console, "net: wlan0: IPv4 none") &&
+                   routed(w, 0, &routes) && echoed(w, ENDPOINT),
+               "the station did not follow its access point's channel switch with its lease and "
+               "traffic: %s %s",
+               text != NULL ? text : "", console != NULL ? console : "");
+    free(text);
+    free(console);
+    free(routes);
+    text = console = routes = NULL;
 
     net_step(&w->u, "gone");
     n = log_count(w, "CTRL-EVENT-DISCONNECTED");
