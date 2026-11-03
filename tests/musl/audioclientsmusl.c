@@ -1,12 +1,15 @@
 /*
- * Exercise concurrent OSS players, shared capture and sox_ng's loopback.
- * The machine case judges the WAV samples printed as hexadecimal lines.
+ * Exercise concurrent OSS players, shared capture and sox_ng's loopback, and
+ * stop play(1) on a terminal with Ctrl+C and SIGTERM. The machine case judges
+ * the WAV samples printed as hexadecimal lines and the lines of the result.
  */
 #include <sys/ioctl.h>
 #include <sys/soundcard.h>
+#include <sys/times.h>
 #include <sys/wait.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,6 +18,14 @@
 
 #define RATE   48000
 #define FRAMES (RATE * 2)
+
+/* The file the signal trials play: two minutes at 8000 Hz, which play is
+ * still playing when a trial stops it. */
+#define LONG_RATE   8000
+#define LONG_FRAMES (LONG_RATE * 120)
+
+/* A trial's wait for play, in seconds of the kernel's ticks. */
+#define TRIAL_SECONDS 30
 
 static pid_t children[3];
 static char workspace[256];
@@ -240,11 +251,35 @@ static void put32(unsigned char *p, unsigned n)
         p[i] = (unsigned char)(n >> (8 * i));
 }
 
+/** Write `frames` 16-bit mono `samples` at `rate` Hz as a PCM WAV at `path`. */
+static void write_wav(const char *path, const short *samples, unsigned frames, unsigned rate)
+{
+    unsigned char header[44] = {0};
+    int fd;
+
+    memcpy(header, "RIFF", 4);
+    put32(header + 4, 36 + frames * 2);
+    memcpy(header + 8, "WAVEfmt ", 8);
+    put32(header + 16, 16);
+    header[20] = header[22] = 1;
+    put32(header + 24, rate);
+    put32(header + 28, rate * 2);
+    header[32] = 2;
+    header[34] = 16;
+    memcpy(header + 36, "data", 4);
+    put32(header + 40, frames * 2);
+    fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0)
+        fail("create WAV");
+    transfer(fd, header, sizeof(header), 1);
+    transfer(fd, (void *)samples, frames * sizeof(*samples), 1);
+    close(fd);
+}
+
 /** Make a mono PCM WAV, convert it to a 24-bit FLAC with sox(1), and play the
  * FLAC with play(1) while rec(1) records the playback mix. */
 static void sox(void)
 {
-    unsigned char header[44] = {0};
     short *samples = wave(0);
     int fd, status;
     pid_t pid;
@@ -252,23 +287,7 @@ static void sox(void)
     unsigned char *recorded;
     size_t got;
 
-    memcpy(header, "RIFF", 4);
-    put32(header + 4, 36 + FRAMES * 2);
-    memcpy(header + 8, "WAVEfmt ", 8);
-    put32(header + 16, 16);
-    header[20] = header[22] = 1;
-    put32(header + 24, RATE);
-    put32(header + 28, RATE * 2);
-    header[32] = 2;
-    header[34] = 16;
-    memcpy(header + 36, "data", 4);
-    put32(header + 40, FRAMES * 2);
-    fd = open(files[0], O_WRONLY | O_CREAT | O_TRUNC, 0600);
-    if (fd < 0)
-        fail("create WAV");
-    transfer(fd, header, sizeof(header), 1);
-    transfer(fd, samples, FRAMES * sizeof(*samples), 1);
-    close(fd);
+    write_wav(files[0], samples, FRAMES, RATE);
     free(samples);
     children[2] = fork();
     if (children[2] < 0)
@@ -340,6 +359,204 @@ static void sox(void)
     puts("audioclients: result: complete");
 }
 
+/* What play has written to its terminal in the current trial. */
+static char said[65536];
+static size_t heard;
+
+/** Give the kernel's count of clock ticks since boot. */
+static clock_t ticks(void)
+{
+    struct tms t;
+
+    return times(&t);
+}
+
+/** Read what play wrote to terminal `master`, if anything, into `said`.
+ * @return 0 once `said` is full. */
+static int listen_once(int master, int wait_ms)
+{
+    struct pollfd p;
+    ssize_t n;
+
+    p.fd = master;
+    p.events = POLLIN;
+    p.revents = 0;
+    if (poll(&p, 1, wait_ms) < 0 && errno != EINTR)
+        fail("poll terminal");
+    if (!(p.revents & POLLIN))
+        return 1;
+    n = read(master, said + heard, sizeof(said) - 1 - heard);
+    if (n < 0 && errno != EINTR && errno != EAGAIN)
+        fail("read terminal");
+    if (n > 0)
+        heard += (size_t)n;
+    said[heard] = '\0';
+    return heard < sizeof(said) - 1;
+}
+
+/**
+ * Read play's terminal `master` until `text` appears at or after `*from`,
+ * and leave `*from` just past it; with `text` NULL, until play has exited,
+ * leaving its wait status in `*status`. The wait counts the kernel's ticks.
+ *
+ * @return 1 when it happened; 0 when play exited before `text`, the
+ * transcript filled, or TRIAL_SECONDS of ticks passed.
+ */
+static int hear(int master, const char *text, size_t *from, int *status)
+{
+    clock_t start = ticks(), limit = (clock_t)sysconf(_SC_CLK_TCK) * TRIAL_SECONDS;
+    const char *at;
+    pid_t pid;
+
+    while (ticks() - start < limit) {
+        if (text && (at = strstr(said + *from, text)) != NULL) {
+            *from = (size_t)(at - said) + strlen(text);
+            return 1;
+        }
+        pid = waitpid(children[0], status, WNOHANG);
+        if (pid < 0 && errno != EINTR)
+            fail("wait for play");
+        if (pid == children[0]) {
+            size_t before;
+
+            children[0] = 0;
+            do {
+                before = heard;
+            } while (listen_once(master, 0) && heard != before);
+            return text == NULL || strstr(said + *from, text) != NULL;
+        }
+        if (!listen_once(master, 100))
+            return 0;
+    }
+    return 0;
+}
+
+/** Count the occurrences of `text` in the trial's transcript. */
+static unsigned occurrences(const char *text)
+{
+    const char *at = said;
+    unsigned n = 0;
+
+    while ((at = strstr(at, text)) != NULL) {
+        n++;
+        at += strlen(text);
+    }
+    return n;
+}
+
+/** Report trial `name` as failed for `why`, with the end of the transcript,
+ * its control characters shown as dots. */
+static void failed(const char *name, const char *why)
+{
+    size_t at = heard > 300 ? heard - 300 : 0, i;
+    char tail[301];
+
+    for (i = 0; at + i < heard; i++)
+        tail[i] = (unsigned char)said[at + i] < ' ' ? '.' : said[at + i];
+    tail[i] = '\0';
+    printf("audioclients: %s: %s; the terminal said: %s\n", name, why, tail);
+}
+
+/**
+ * Run play(1) on `files[0]` with a new pseudo-terminal for its controlling
+ * terminal, as from an SSH session, and stop it by typing `keys` or by
+ * sending `signo`. Before the stop, a key play does not bind must draw one
+ * warning and let play go on.
+ *
+ * @return 1 when play printed "Aborted." and exited 0, as on Linux, where
+ * sox_ng's handler of SIGINT and SIGTERM sets a flag its play loop reads.
+ */
+static int trial(const char *name, const char *keys, int signo)
+{
+    struct winsize size = {24, 80, 0, 0};
+    int master, slave, status = 0, ok = 0;
+    const char *path;
+    size_t from = 0;
+
+    heard = 0;
+    said[0] = '\0';
+    master = posix_openpt(O_RDWR | O_NOCTTY);
+    if (master < 0 || grantpt(master) < 0 || unlockpt(master) < 0 ||
+        (path = ptsname(master)) == NULL)
+        fail("open a terminal");
+    slave = open(path, O_RDWR | O_NOCTTY);
+    if (slave < 0 || ioctl(slave, TIOCSWINSZ, &size) < 0)
+        fail("open the terminal's slave");
+    children[0] = fork();
+    if (children[0] < 0)
+        fail("fork play");
+    if (children[0] == 0) {
+        memset(children, 0, sizeof(children));
+        close(master);
+        if (setsid() < 0 || ioctl(slave, TIOCSCTTY, 0) < 0 || dup2(slave, 0) < 0 ||
+            dup2(slave, 1) < 0 || dup2(slave, 2) < 0)
+            _exit(126);
+        if (slave > 2)
+            close(slave);
+        execl("/bin/play", "play", files[0], (char *)NULL);
+        _exit(127);
+    }
+    /* Two status lines: play's flow runs, with its key reader on. */
+    if (!hear(master, "In:", &from, &status) || !hear(master, "In:", &from, &status)) {
+        failed(name, "play did not show its progress");
+    } else if (write(master, "x", 1) != 1) {
+        fail("type a key");
+    } else if (!hear(master, "doesn't do anything", &from, &status) ||
+               !hear(master, "In:", &from, &status)) {
+        failed(name, "play did not go on after one unbound key");
+    } else {
+        if (keys) {
+            if (write(master, keys, strlen(keys)) != (ssize_t)strlen(keys))
+                fail("type Ctrl+C");
+        } else if (kill(children[0], signo) < 0) {
+            fail("signal play");
+        }
+        if (!hear(master, NULL, &from, &status))
+            failed(name, "play did not exit");
+        else if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+            failed(name, "play did not exit 0");
+        else if (!strstr(said, "Aborted."))
+            failed(name, "play did not say Aborted.");
+        else if (occurrences("doesn't do anything") != 1)
+            failed(name, "play warned of a key more than once");
+        else
+            ok = 1;
+    }
+    if (children[0] > 0) {
+        kill(children[0], SIGKILL);
+        while (waitpid(children[0], NULL, 0) < 0 && errno == EINTR) {
+        }
+        children[0] = 0;
+    }
+    close(slave);
+    close(master);
+    if (ok)
+        printf("audioclients: result: %s stopped play\n", name);
+    return ok;
+}
+
+/** Stop play on a terminal with one Ctrl+C, two at once and SIGTERM. */
+static void signals(void)
+{
+    short *samples = malloc(LONG_FRAMES * sizeof(*samples));
+    unsigned i, phase = 0, passed = 0;
+
+    if (!samples)
+        fail("allocate samples");
+    for (i = 0; i < LONG_FRAMES; i++) {
+        samples[i] = phase < LONG_RATE / 2 ? 2000 : -2000;
+        phase = (phase + 440) % LONG_RATE;
+    }
+    write_wav(files[0], samples, LONG_FRAMES, LONG_RATE);
+    free(samples);
+    fflush(stdout);
+    passed += trial("ctrl-c", "\003", 0);
+    passed += trial("ctrl-c-twice", "\003\003", 0);
+    passed += trial("sigterm", NULL, SIGTERM);
+    if (passed == 3)
+        puts("audioclients: result: complete");
+}
+
 /** Run the machine case's requested mode, with cleanup installed first. */
 int main(int argc, char **argv)
 {
@@ -368,6 +585,8 @@ int main(int argc, char **argv)
         clients(1);
     else if (strcmp(argv[1], "sox") == 0)
         sox();
+    else if (strcmp(argv[1], "signal") == 0)
+        signals();
     else
         return 1;
     return 0;

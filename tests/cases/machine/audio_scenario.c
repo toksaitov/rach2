@@ -5,7 +5,8 @@
  * runs `audiotest -s`, which measures the queue across a writer's stall,
  * runs `audiotest -d`, whose scales through /dev/dsp wavcheck measures, or
  * runs `audiotest -r` or `-R`, which record through /dev/dsp, and for `-R`
- * wavcheck measures the notes QEMU fed the machine in what it read.
+ * wavcheck measures the notes QEMU fed the machine in what it read, or has
+ * `audioclientsmusl signal` stop play(1) on a terminal of its own.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -518,6 +519,34 @@ static void clients(struct lc *l, const char *mode)
     lc_assert(l, "notes", end.end == ETUDE_END_EXITED && end.value == 0, detail);
 }
 
+/** Have `audioclientsmusl signal` stop play on a pseudo-terminal with one
+ * Ctrl+C, with two at once and with SIGTERM, and report each stop it saw. */
+static void stops(struct lc *l)
+{
+    static const char *const trials[] = {"ctrl-c", "ctrl-c-twice", "sigterm", NULL};
+    struct etude_case_machine *m;
+    uint64_t at = 0, from;
+    char line[96];
+    unsigned i;
+
+    if (!lc_step(l, "play") || (m = lc_boot(l, "fixture")) == NULL ||
+        !lc_wait(l, m, "Type 'help'", &at, NULL) || !lc_wait(l, m, prompt, &at, NULL))
+        return;
+    from = at;
+    if (!lc_type(l, m, "exec /musl/audioclientsmusl signal\r") ||
+        !lc_wait(l, m, prompt, &at, NULL)) {
+        if (!l->stopped)
+            lc_assert(l, trials[0], 0, l->why);
+        return;
+    }
+    for (i = 0; trials[i]; i++) {
+        snprintf(line, sizeof(line), "audioclients: result: %s stopped play", trials[i]);
+        lc_find(l, m, trials[i], line, from, 1);
+    }
+    if (lc_quit(l, m, NULL))
+        lc_find(l, m, "no-stall", "audio: stalled", 0, 0);
+}
+
 int etude_scenario(struct etude_case *c)
 {
     static const char *const hdas[] = {"probe-before", "played", "probe-after", "messages",
@@ -529,6 +558,7 @@ int etude_scenario(struct etude_case *c)
     static const char *const records[] = {"counted", "no-stall", NULL};
     static const char *const client_assertions[] = {"clients", "no-stall", "notes", NULL};
     static const char *const tones[] = {"counted", "no-stall", "notes", NULL};
+    static const char *const signals[] = {"ctrl-c", "ctrl-c-twice", "sigterm", "no-stall", NULL};
     const char *name = case_name(c);
     struct lc l;
 
@@ -553,6 +583,9 @@ int etude_scenario(struct etude_case *c)
     } else if (strcmp(name, "tone") == 0) {
         lc_begin(&l, c, tones);
         tone(&l);
+    } else if (strcmp(name, "signal") == 0) {
+        lc_begin(&l, c, signals);
+        stops(&l);
     } else {
         return 1;
     }
