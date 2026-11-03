@@ -14103,13 +14103,17 @@ int32_t fs_socket_bind(const char *path, uint32_t mode, struct vfs_ref *ref, uin
 }
 
 /** Release the node's hold and the mount's count that `fs_socket_bind`
- * kept. */
+ * kept, and with the last count unmount the mount if no live namespace sees
+ * it, as the close of its last description does (`vfs_reap_detached`). */
 void fs_socket_unbind(struct vfs_ref *ref)
 {
     struct vfs_mount *mnt = ref->mnt;
 
     vfs_ref_put(ref);
     mnt->refs--;
+    if (mnt->refs == 0) {
+        vfs_reap_detached();
+    }
 }
 
 /**
