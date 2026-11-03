@@ -165,6 +165,10 @@ struct wlan_data {
      * reports; zero until one comes. */
     uint16_t tx_rate, rx_rate;
 
+    /* The tick of the last unicast frame received from the BSS or ACK of a
+     * frame sent, which the connection monitor reads; zero for none. */
+    uint64_t heard;
+
     /* Sequence numbers to send, per TID; WLAN_NON_QOS_TID counts non-QoS
      * data and management frames, as one counter. */
     uint16_t tx_seq[WLAN_NUM_TIDS];
@@ -315,6 +319,16 @@ int wlan_data_tx(struct wlan_data *d, uint8_t *frame, unsigned len, unsigned cap
  */
 int wlan_data_tx_mgmt(struct wlan_data *d, uint8_t *frame, unsigned len, unsigned cap,
                       unsigned frequency, int protect, uint64_t *cookie);
+
+/**
+ * Send the AP a null data frame, a QoS Null of TID 7 when the connection
+ * uses QoS, as mac80211's ieee80211_send_nullfunc builds it to ask whether
+ * the AP is there: unprotected, with the power management bit clear, at
+ * the lowest basic rate, on the voice queue, and without a sequence number
+ * when it is a QoS Null. Sets *cookie, if not NULL, to its transmit cookie.
+ * Worker only. Returns 0, -ENOTCONN, or the radio's error.
+ */
+int wlan_data_tx_null(struct wlan_data *d, uint64_t *cookie);
 
 /** Account for the transmit status of a frame whose cookie has
  * WLAN_DATA_COOKIE set, and pass it to rate selection. Worker only. */

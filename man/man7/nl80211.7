@@ -193,8 +193,10 @@ in
 another flag is
 .Er EINVAL .
 .It Dv GET_STATION
-Describes the access point: signal, byte and packet counts, inactive and
-connected time, beacon loss, rates and flags.
+Describes the access point: signal, byte and packet counts, retries and
+failures, inactive and connected time, beacon loss, rates and flags.
+The counts start at the association and take in every frame sent to the
+access point, management and null frames among them.
 Another address is
 .Er ENOENT .
 .It Dv GET_SURVEY

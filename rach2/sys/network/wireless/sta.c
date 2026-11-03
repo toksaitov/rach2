@@ -210,8 +210,9 @@ static int sta_mgmt_tx(struct wlan *wlan, const uint8_t *frame, unsigned len, un
     return 0;
 }
 
-/** Report the status of a frame sent for nl80211 under nl80211's cookie;
- * the data path calls it for every completion. */
+/** Report the status of a frame sent for nl80211 under nl80211's cookie,
+ * and give the MLME the status of its poll; the data path calls it for
+ * every completion. */
 static void sta_tx_status(struct wlan *wlan, const struct wlan_tx_status *status)
 {
     struct wlan_sta *s = sta_of(wlan);
@@ -219,6 +220,7 @@ static void sta_tx_status(struct wlan *wlan, const struct wlan_tx_status *status
     struct sta_tx *t;
     unsigned i;
 
+    wlan_mlme_tx_status(&s->mlme, status->cookie, (status->flags & WLAN_TX_ACKED) != 0);
     for (i = 0; i < STA_TX_PENDING; ++i) {
         t = &s->tx[i];
         if (t->cookie && t->cookie == status->cookie) {
@@ -284,8 +286,8 @@ static void sta_status(struct wlan *wlan, struct nl80211_status *out)
 /**
  * Log why the station left the AP of a DEAUTHENTICATE or DISASSOCIATE
  * event: the AP's frame with its reason, a leave that nl80211 or the
- * interface asked for, or beacon loss, the only leave the MLME makes of its
- * own.
+ * interface asked for, or an AP that answered none of the connection
+ * monitor's polls or probes, the only leave the MLME makes of its own.
  */
 static void sta_log_leave(struct wlan *wlan, const struct wlan_event *ev)
 {
@@ -298,22 +300,34 @@ static void sta_log_leave(struct wlan *wlan, const struct wlan_event *ev)
     } else if (sta_of(wlan)->asked) {
         why = "asked";
     } else {
-        why = "beacon loss";
+        why = "no answer from the AP";
     }
     klog(KLOG_INFO, "wlan", "%s: left: %02x:%02x:%02x:%02x:%02x:%02x: %s: reason %d",
          wlan->netdev.name, p[0], p[1], p[2], p[3], p[4], p[5], why, (int)ev->reason);
 }
 
-/** Take the MLME's events: note an association and open the port of one
- * made without a control port, log a leave, then pass the event on. */
+/** Take the MLME's events: note an association, start the station's
+ * counters from it, as Linux's station entry starts its own, open the port
+ * of one made without a control port, log a leave, then pass the event
+ * on. */
 static void sta_event(struct wlan *wlan, const struct wlan_event *ev)
 {
     struct wlan_sta *s = sta_of(wlan);
+    struct wlan_counters *c = &wlan->counters;
+    int32_t signal, noise;
+    unsigned quality;
 
     if (ev->type == WLAN_EVENT_ASSOCIATE && ev->frame && ev->status == WLAN_STATUS_SUCCESS) {
         s->assoc_at = tick_count();
         s->csa = 0;
         s->ds = 0;
+        signal = c->signal;
+        noise = c->noise;
+        quality = c->quality;
+        k_memset(c, 0, sizeof(*c));
+        c->signal = signal;
+        c->noise = noise;
+        c->quality = quality;
         if (!s->control_port) {
             (void)wlan_queue_work(&s->authorize_work, 0);
         }
@@ -424,7 +438,22 @@ static int sta_state(struct wlan *wlan, enum wlan_sta_state state, struct wlan_b
     return rc;
 }
 
-static const struct wlan_mlme_ops mlme_ops = {wlan_data_mlme_tx, sta_state, sta_event};
+/** Send the AP the null frame of a connection monitor's poll. */
+static int sta_poll(struct wlan *wlan, uint64_t *cookie)
+{
+    return wlan_data_tx_null(wlan_data_of(wlan), cookie);
+}
+
+/** The tick the data path last heard from the AP, for the monitor. */
+static uint64_t sta_heard(struct wlan *wlan)
+{
+    struct wlan_data *d = wlan_data_of(wlan);
+
+    return d ? d->heard : 0;
+}
+
+static const struct wlan_mlme_ops mlme_ops = {wlan_data_mlme_tx, sta_state, sta_event, sta_poll,
+                                              sta_heard};
 
 /* A softMAC station joins through authentication and association, which
  * nl80211 drives for CONNECT, so it has no connect or disconnect of its
@@ -460,6 +489,7 @@ int wlan_sta_attach(struct wlan *wlan)
     s->authorize_work.wlan = wlan;
     s->authorize_work.run = sta_authorize_run;
     wlan_mlme_init(&s->mlme, wlan, wlan->radio, &wlan->band, &wlan->scan, &mlme_ops);
+    s->mlme.beacon_losses = &wlan->counters.missed_beacons;
     wlan->mlme_priv = s;
     d->rx_mgmt = sta_rx_mgmt;
     d->tx_status = sta_tx_status;

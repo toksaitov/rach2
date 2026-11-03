@@ -4,6 +4,7 @@
 #include "data.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
+#include "../../timer.h"
 
 /* RFC 1042's LLC/SNAP header, then EAPOL's EtherType. */
 static const uint8_t eapol_snap[8] = {0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8e};
@@ -174,6 +175,7 @@ int wlan_data_connect(struct wlan_data *d, const struct wlan_bss *bss, int qos, 
     for (i = 0; i < WLAN_DATA_DEFRAG; ++i)
         d->defrag[i].len = 0;
     d->tx_rate = d->rx_rate = 0;
+    d->heard = 0;
     wlan_rate_connect(d, bss);
     d->connected = 1;
     return 0;
@@ -431,6 +433,54 @@ int wlan_data_tx_mgmt(struct wlan_data *d, uint8_t *frame, unsigned len, unsigne
     rc = d->radio->ops->tx(d->radio, frame, len, &info);
     if (rc)
         return rc;
+    d->counters->tx_packets++;
+    d->counters->tx_bytes += len;
+    if (cookie)
+        *cookie = info.cookie;
+    return 0;
+}
+
+int wlan_data_tx_null(struct wlan_data *d, uint64_t *cookie)
+{
+    uint8_t frame[IEEE80211_HDRLEN + IEEE80211_QOS_CTL_LEN];
+    struct wlan_tx_info info;
+    unsigned len = IEEE80211_HDRLEN;
+    uint16_t seq;
+    int rc;
+
+    if (!d || !d->connected)
+        return -ENOTCONN;
+    k_memset(frame, 0, sizeof(frame));
+    k_memcpy(frame + 4, d->bssid, 6);
+    k_memcpy(frame + 10, d->radio->mac, 6);
+    k_memcpy(frame + 16, d->bssid, 6);
+    k_memset(&info, 0, sizeof(info));
+    info.hw_key = -1;
+    seq = d->tx_seq[WLAN_NON_QOS_TID];
+    if (d->qos) {
+        /* 802.11-2020 10.3.2.14.2: a QoS Null takes no sequence number. */
+        set_frame_control(frame, IEEE80211_FTYPE_DATA | IEEE80211_STYPE_QOS_NULLFUNC |
+                                     IEEE80211_FCTL_TODS);
+        frame[IEEE80211_HDRLEN] = 7;
+        len += IEEE80211_QOS_CTL_LEN;
+    } else {
+        set_frame_control(frame,
+                          IEEE80211_FTYPE_DATA | IEEE80211_STYPE_NULLFUNC | IEEE80211_FCTL_TODS);
+        put_seq(d, frame, WLAN_NON_QOS_TID);
+    }
+    /* Outside every BlockAck session, as mac80211 never aggregates it. */
+    info.tid = WLAN_NON_QOS_TID;
+    info.ac = WLAN_AC_VO;
+    wlan_rate_select(d, frame, len, 1, info.rates);
+    info.cookie = next_cookie(d);
+    info.frequency = d->frequency;
+    rc = d->radio->ops->tx(d->radio, frame, len, &info);
+    if (rc) {
+        d->tx_seq[WLAN_NON_QOS_TID] = seq;
+        return rc;
+    }
+    d->counters->tx_packets++;
+    d->counters->tx_bytes += len;
     if (cookie)
         *cookie = info.cookie;
     return 0;
@@ -452,6 +502,8 @@ void wlan_data_tx_status(struct wlan_data *d, const struct wlan_tx_status *statu
         d->counters->tx_retries += attempts - 1;
     if (!(status->flags & (WLAN_TX_ACKED | WLAN_TX_FILTERED)))
         d->counters->tx_failed++;
+    else if ((status->flags & WLAN_TX_ACKED) && d->connected)
+        d->heard = tick_count();
     wlan_rate_status(d, status);
 }
 

@@ -478,6 +478,8 @@ int wlan_data_rx(struct wlan_data *d, uint8_t *frame, unsigned len,
     if (!(frame[4] & 1) ? !same(frame + 4, d->radio->mac, 6) : same(frame + 16, d->radio->mac, 6))
         return -EINVAL; /* not ours, or our own group frame come back */
     note_signal(d, status);
+    if (!(frame[4] & 1))
+        d->heard = tick_count();
     if (fc & IEEE80211_STYPE_NULLFUNC)
         return 0;
     if ((fc & IEEE80211_STYPE_QOS_DATA) && !(frame[4] & 1)) {

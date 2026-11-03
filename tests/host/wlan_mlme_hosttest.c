@@ -47,6 +47,10 @@ static enum wlan_sta_state states[32];
 static unsigned n_states;
 static int refuse_state = -1; /* a state the radio refuses to enter */
 static unsigned configured;   /* MHz of the last channel the radio took */
+static unsigned n_polls;      /* null frames the station asked for */
+static uint64_t poll_cookie;  /* the last one's */
+static uint64_t heard_at;     /* what the data path says it last heard */
+static uint32_t losses;       /* the station dump's beacon loss */
 
 static struct wlan_radio radio;
 static struct wlan_mlme mlme;
@@ -234,6 +238,26 @@ static int iface_state(struct wlan *wlan, enum wlan_sta_state state, struct wlan
 }
 
 static const struct wlan_mlme_ops iface_ops = {iface_tx, iface_state, iface_event};
+
+/** Note a null frame the station asks the data path to send. */
+static int iface_poll(struct wlan *wlan, uint64_t *cookie)
+{
+    (void)wlan;
+    ++n_polls;
+    *cookie = ++poll_cookie;
+    return 0;
+}
+
+/** When the data path last heard from the AP. */
+static uint64_t iface_heard(struct wlan *wlan)
+{
+    (void)wlan;
+    return heard_at;
+}
+
+/* An interface that reports ACKs, as the softMAC station over ath9k does. */
+static const struct wlan_mlme_ops poll_ops = {iface_tx, iface_state, iface_event, iface_poll,
+                                              iface_heard};
 
 /** Compare n bytes. */
 static int equal(const uint8_t *a, const uint8_t *b, unsigned n)
@@ -733,7 +757,7 @@ static void vanishing_ap(void)
     wait_ms(1);
     CHECK(n_sent == 1 && sent_is(&sent[0], IEEE80211_STYPE_PROBE_REQ, ap_a));
     CHECK(sent[0].f[HDR] == WLAN_EID_SSID && sent[0].f[HDR + 1] == 3);
-    CHECK(mlme.missed_beacons == WLAN_MLME_BEACON_LOSS);
+    CHECK(mlme.missed_beacons == 1);
     CHECK(ap_beacon(ap_a, IEEE80211_STYPE_PROBE_RESP) == 0 && mlme.probes == 0);
     wait_ms(715);
     CHECK(n_sent == 1);
@@ -751,6 +775,98 @@ static void vanishing_ap(void)
     CHECK(seen[0].ev.reason == WLAN_REASON_DISASSOC_DUE_TO_INACTIVITY && seen[0].has_frame);
     CHECK(bss_a.refs == 0 && queued() == 0 && states[n_states - 1] == WLAN_STA_NONE);
     CHECK(!scan.home && !mlme.channel);
+}
+
+/** Wait ms milliseconds in beacon intervals of 100 ms, the AP's beacon
+ * heard at the end of each. */
+static void beacons_for(unsigned ms)
+{
+    for (; ms >= 100; ms -= 100) {
+        wait_ms(100);
+        CHECK(ap_beacon(ap_a, IEEE80211_STYPE_BEACON) == 0);
+    }
+}
+
+/** An interface that reports ACKs: the station polls the AP with a null
+ * frame thirty seconds after it last heard from it, and seven beacon
+ * intervals after its last beacon, as mac80211 does on ath9k; an ACK or a
+ * beacon ends the poll, a frame not acknowledged is asked again at once,
+ * and two of them, or two whose status never came, end the association. */
+static void polled_ap(void)
+{
+    uint64_t t;
+
+    reset();
+    wlan_mlme_init(&mlme, 0, &radio, &radio.band, &scan, &poll_ops);
+    mlme.beacon_losses = &losses;
+    losses = 0;
+    n_polls = 0;
+    heard_at = 0;
+    connect_a(0);
+    t = now;
+
+    /* Idle: the AP's beacons alone do not count as hearing from it. */
+    beacons_for(29900);
+    CHECK(n_polls == 0 && n_sent == 0);
+    wait_ms(100);
+    CHECK(n_polls == 1 && n_sent == 0 && now == t + WLAN_MLME_IDLE_POLL);
+    CHECK(mlme.probes == 1 && mlme.missed_beacons == 0);
+    wlan_mlme_tx_status(&mlme, poll_cookie + 1, 1);
+    CHECK(mlme.probes == 1);
+    wlan_mlme_tx_status(&mlme, poll_cookie, 1);
+    CHECK(mlme.probes == 0 && mlme.poll_cookie == 0);
+
+    /* A unicast frame or an ACK the data path heard moves the next poll. */
+    beacons_for(20000);
+    heard_at = now;
+    beacons_for(29900);
+    CHECK(n_polls == 1);
+    wait_ms(100);
+    CHECK(n_polls == 2);
+
+    /* Not acknowledged: asked again at once; a beacon ends the poll. */
+    wlan_mlme_tx_status(&mlme, poll_cookie, 0);
+    CHECK(n_polls == 3 && mlme.probes == 2);
+    CHECK(ap_beacon(ap_a, IEEE80211_STYPE_BEACON) == 0 && mlme.probes == 0);
+    wlan_mlme_tx_status(&mlme, poll_cookie, 0);
+    CHECK(n_polls == 3 && mlme.state == WLAN_STA_ASSOCIATED);
+
+    /* Seven intervals without a beacon: a poll, and one beacon loss. */
+    wait_ms(715);
+    CHECK(n_polls == 3);
+    wait_ms(1);
+    CHECK(n_polls == 4 && mlme.missed_beacons == 1 && losses == 1);
+    wlan_mlme_tx_status(&mlme, poll_cookie, 1);
+    CHECK(mlme.probes == 0);
+    wait_ms(715);
+    CHECK(n_polls == 4);
+    wait_ms(1);
+    CHECK(n_polls == 5 && mlme.missed_beacons == 2 && losses == 2);
+
+    /* Two null frames not acknowledged: the station leaves, sending
+     * nothing. */
+    wlan_mlme_tx_status(&mlme, poll_cookie, 0);
+    CHECK(n_polls == 6 && mlme.state == WLAN_STA_ASSOCIATED);
+    wlan_mlme_tx_status(&mlme, poll_cookie, 0);
+    CHECK(n_polls == 6 && mlme.state == WLAN_STA_NONE && n_sent == 0);
+    CHECK(n_seen == 1 && seen[0].ev.type == WLAN_EVENT_DEAUTHENTICATE);
+    CHECK(seen[0].ev.locally_generated);
+    CHECK(seen[0].ev.reason == WLAN_REASON_DISASSOC_DUE_TO_INACTIVITY);
+    CHECK(bss_a.refs == 0 && queued() == 0);
+
+    /* Two polls whose status never comes end it too, 500 ms each. */
+    connect_a(0);
+    CHECK(mlme.missed_beacons == 0 && mlme.probes == 0);
+    wait_ms(716);
+    CHECK(n_polls == 7 && mlme.missed_beacons == 1);
+    wait_ms(WLAN_MLME_PROBE_TIMEOUT);
+    CHECK(n_polls == 8 && mlme.state == WLAN_STA_ASSOCIATED);
+    wait_ms(WLAN_MLME_PROBE_TIMEOUT - 1);
+    CHECK(mlme.state == WLAN_STA_ASSOCIATED);
+    wait_ms(1);
+    CHECK(n_polls == 8 && mlme.state == WLAN_STA_NONE && n_sent == 0);
+    CHECK(n_seen == 1 && seen[0].ev.type == WLAN_EVENT_DEAUTHENTICATE);
+    CHECK(seen[0].ev.reason == WLAN_REASON_DISASSOC_DUE_TO_INACTIVITY);
 }
 
 /** Under 802.11w: unprotected deauthentication and disassociation dropped
@@ -931,6 +1047,7 @@ int main(void)
     association_failures();
     reassociation();
     vanishing_ap();
+    polled_ap();
     protected_frames();
     plain_frames();
     sae_exchange();

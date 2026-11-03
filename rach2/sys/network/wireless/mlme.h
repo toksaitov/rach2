@@ -17,9 +17,11 @@
 #define WLAN_MLME_TRIES           3
 #define WLAN_MLME_COMEBACK_MAX    10000 /* longest assoc comeback honoured */
 #define WLAN_MLME_BEACON_LOSS     7     /* beacon intervals without a beacon */
+#define WLAN_MLME_IDLE_POLL       30000 /* without a unicast frame or ACK */
 #define WLAN_MLME_PROBE_TIMEOUT   500   /* each probe of a silent AP */
-#define WLAN_MLME_PROBE_TRIES     3
-#define WLAN_MLME_LISTEN_INTERVAL 5 /* beacon intervals */
+#define WLAN_MLME_PROBE_TRIES     3     /* probe requests, without poll */
+#define WLAN_MLME_POLL_TRIES      2     /* null frames, with poll */
+#define WLAN_MLME_LISTEN_INTERVAL 5     /* beacon intervals */
 
 #define WLAN_MLME_TX_PROTECT   0x01 /* robust frame under 802.11w */
 #define WLAN_MLME_RX_PROTECTED 0x01 /* decrypted by CCMP, or BIP's MMIE checked */
@@ -44,6 +46,14 @@ struct wlan_mlme_ops {
     /** Report an event; the registry passes wlan_event, which keeps mlme.c
      * free of a link-time dependence on nl80211, as scan.c is. */
     wlan_event_fn event;
+    /** Send the AP a null data frame at the lowest rate and set *cookie to
+     * its transmit cookie, whose status then comes to wlan_mlme_tx_status.
+     * Returns 0 or the data path's error. NULL for an interface that
+     * learns of no ACK, which probes a silent AP with probe requests. */
+    int (*poll)(struct wlan *wlan, uint64_t *cookie);
+    /** The tick of the last unicast frame from the AP or ACK of a frame to
+     * it, 0 for none; set with poll. */
+    uint64_t (*heard)(struct wlan *wlan);
 };
 
 /* nl80211's AUTHENTICATE. data is AUTH_DATA: for SAE the transaction number
@@ -79,7 +89,9 @@ struct wlan_mlme_timer {
 
 /* The station's management state, in storage its interface owns. Fields
  * other code may read on the worker: state, bss, aid, mfp, qos, ht,
- * frame and frame_len. mlme.c alone writes any of them. */
+ * frame and frame_len. mlme.c alone writes any of them, but for
+ * beacon_losses, which the embedder may point at its counter after
+ * wlan_mlme_init. */
 struct wlan_mlme {
     struct wlan *wlan;
     struct wlan_radio *radio;
@@ -102,10 +114,13 @@ struct wlan_mlme {
     int ht;                             /* both ends use HT */
     uint8_t rates[IEEE80211_MAX_RATES]; /* the AP's, 500 kbit/s units */
     unsigned n_rates;
-    uint64_t last_beacon; /* tick of the AP's last beacon or probe answer */
-    unsigned probes;      /* probes the AP has not answered */
-    uint32_t missed_beacons;
-    uint64_t deadline; /* tick of the next timeout, zero for none */
+    uint64_t last_beacon;    /* tick of the AP's last beacon or answer to a probe */
+    uint64_t polled;         /* tick of the association or the last answered poll */
+    unsigned probes;         /* probes or polls sent since the AP was last heard */
+    uint64_t poll_cookie;    /* of the null frame whose status is awaited, or 0 */
+    uint32_t missed_beacons; /* beacon losses since the association */
+    uint32_t *beacon_losses; /* the station dump's count, or NULL; the embedder's */
+    uint64_t deadline;       /* tick of the next timeout, zero for none */
     struct wlan_mlme_timer timer[2];
     /* The last authentication or association request: retries send it
      * again, and nl80211 may report its elements with the association. */
@@ -174,5 +189,9 @@ int wlan_mlme_authorize(struct wlan_mlme *m, int authorized);
  * frames to nl80211's registrations. frame is borrowed until return.
  */
 int wlan_mlme_rx(struct wlan_mlme *m, const uint8_t *frame, unsigned len, unsigned flags);
+
+/** Take the transmit status of a frame of cookie, acknowledged when acked
+ * is set; the MLME looks only at the null frame of its poll. */
+void wlan_mlme_tx_status(struct wlan_mlme *m, uint64_t cookie, int acked);
 
 #endif

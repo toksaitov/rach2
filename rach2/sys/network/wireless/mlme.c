@@ -1,5 +1,5 @@
 /* The station's MLME: Open System and carried SAE authentication, association,
- * beacon-loss monitoring, deauthentication and SA Query. It follows the design
+ * the connection monitor, deauthentication and SA Query. It follows the design
  * of Linux's net/mac80211/mlme.c (ieee80211_rx_mgmt_auth, ieee80211_send_assoc,
  * ieee80211_mgd_probe_ap and ieee80211_drop_unencrypted_mgmt). */
 #include "mlme.h"
@@ -181,6 +181,7 @@ static void drop(struct wlan_mlme *m)
     m->ht = 0;
     m->n_rates = 0;
     m->probes = 0;
+    m->poll_cookie = 0;
 }
 
 /** Report the end of a request with the AP's answer f, or with no frame
@@ -641,8 +642,10 @@ static int assoc_success(struct wlan_mlme *m, const uint8_t *f, const struct iee
     err = set_state(m, WLAN_STA_ASSOCIATED);
     if (err)
         return err;
-    m->last_beacon = tick_count();
+    m->last_beacon = m->polled = tick_count();
     m->probes = 0;
+    m->poll_cookie = 0;
+    m->missed_beacons = 0;
     arm(m, m->last_beacon + loss_ms(m));
     return 0;
 }
@@ -715,29 +718,84 @@ static void send_probe(struct wlan_mlme *m)
         m->ops->tx(m->wlan, f, HDR + used, 0);
 }
 
+/** The tick at which the connection monitor next asks whether the AP is
+ * there: after WLAN_MLME_BEACON_LOSS beacon intervals without a beacon, or,
+ * with a poll, WLAN_MLME_IDLE_POLL milliseconds without a unicast frame from
+ * the AP or an ACK of ours, as mac80211's beacon and connection monitor
+ * timers do. */
+static uint64_t monitor_due(const struct wlan_mlme *m)
+{
+    uint64_t loss = m->last_beacon + loss_ms(m), idle = m->polled, heard;
+
+    if (!m->ops->poll)
+        return loss;
+    heard = m->ops->heard ? m->ops->heard(m->wlan) : 0;
+    if (heard > idle)
+        idle = heard;
+    idle += WLAN_MLME_IDLE_POLL;
+    return idle < loss ? idle : loss;
+}
+
+/** Leave the AP that answered none of the probes or polls, reported as a
+ * local deauthentication with no frame sent. */
+static void monitor_lost(struct wlan_mlme *m)
+{
+    disconnect(m, IEEE80211_STYPE_DEAUTH, WLAN_REASON_DISASSOC_DUE_TO_INACTIVITY, 0);
+}
+
+/** Ask the AP whether it is there: a null frame, whose ACK is the answer,
+ * where the interface reports ACKs, as mac80211 does on a radio with
+ * REPORTS_TX_ACK_STATUS, and otherwise a probe request; then wait
+ * WLAN_MLME_PROBE_TIMEOUT for the answer. */
+static void monitor_ask(struct wlan_mlme *m)
+{
+    m->poll_cookie = 0;
+    if (!m->ops->poll)
+        send_probe(m);
+    else if (m->ops->poll(m->wlan, &m->poll_cookie) != 0)
+        m->poll_cookie = 0;
+    ++m->probes;
+    arm_in(m, WLAN_MLME_PROBE_TIMEOUT);
+}
+
+/** End the questions: the AP answered. Wait for the next beacon loss or
+ * idle period from now, as ieee80211_reset_ap_probe does. */
+static void monitor_answered(struct wlan_mlme *m)
+{
+    m->probes = 0;
+    m->poll_cookie = 0;
+    m->last_beacon = m->polled = tick_count();
+    arm(m, monitor_due(m));
+}
+
 /**
- * Watch the AP, after mac80211's connection monitor: beacons missing for
- * WLAN_MLME_BEACON_LOSS intervals start probes; when none is answered the
- * station leaves, reported as a local deauthentication with no frame sent.
+ * Watch the AP, after mac80211's connection monitor: beacon loss, or an
+ * idle period where the interface can poll, starts the questions; when
+ * none is answered the station leaves. A poll's null frame that went
+ * unacknowledged is asked again at once, from wlan_mlme_tx_status; one
+ * whose status never came is asked again here, as a probe request is.
  */
 static void monitor_timeout(struct wlan_mlme *m)
 {
-    uint64_t now;
+    uint64_t now = tick_count(), due;
 
-    now = tick_count();
-    if (!m->probes && now < m->last_beacon + loss_ms(m)) {
-        arm(m, m->last_beacon + loss_ms(m));
+    if (!m->probes) {
+        due = monitor_due(m);
+        if (now < due) {
+            arm(m, due);
+            return;
+        }
+        if (now >= m->last_beacon + loss_ms(m)) {
+            m->missed_beacons++;
+            if (m->beacon_losses)
+                ++*m->beacon_losses;
+        }
+    }
+    if (m->probes < (m->ops->poll ? WLAN_MLME_POLL_TRIES : WLAN_MLME_PROBE_TRIES)) {
+        monitor_ask(m);
         return;
     }
-    if (!m->probes)
-        m->missed_beacons += WLAN_MLME_BEACON_LOSS;
-    if (m->probes < WLAN_MLME_PROBE_TRIES) {
-        send_probe(m);
-        ++m->probes;
-        arm_in(m, WLAN_MLME_PROBE_TIMEOUT);
-        return;
-    }
-    disconnect(m, IEEE80211_STYPE_DEAUTH, WLAN_REASON_DISASSOC_DUE_TO_INACTIVITY, 0);
+    monitor_lost(m);
 }
 
 /** Take the deadline in the current state: retry, time out or monitor. */
@@ -771,16 +829,27 @@ static void mlme_timeout(struct wlan_mlme *m)
 }
 
 /** Note a beacon or probe response: from the current AP it shows the AP
- * is there, and ends any probing. */
+ * is there, and ends any questions. */
 static void monitor_seen(struct wlan_mlme *m, const uint8_t *f)
 {
     if (m->state < WLAN_STA_ASSOCIATED || !from_bss(m, f))
         return;
     m->last_beacon = tick_count();
-    if (m->probes) {
-        m->probes = 0;
-        arm(m, m->last_beacon + loss_ms(m));
-    }
+    if (m->probes)
+        monitor_answered(m);
+}
+
+void wlan_mlme_tx_status(struct wlan_mlme *m, uint64_t cookie, int acked)
+{
+    if (m->state < WLAN_STA_ASSOCIATED || !m->probes || !m->poll_cookie || cookie != m->poll_cookie)
+        return;
+    m->poll_cookie = 0;
+    if (acked)
+        monitor_answered(m);
+    else if (m->probes < WLAN_MLME_POLL_TRIES)
+        monitor_ask(m);
+    else
+        monitor_lost(m);
 }
 
 int wlan_mlme_deauthenticate(struct wlan_mlme *m, const uint8_t bssid[6], unsigned reason,

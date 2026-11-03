@@ -850,6 +850,62 @@ static void row_data(void)
     CHECK(wlan->state == WLAN_STA_AUTHORIZED);
 }
 
+/** Hear the AP's beacon every 100 ms for ms milliseconds; how many frames
+ * the radio sent meanwhile. */
+static unsigned beacons_for(unsigned ms)
+{
+    uint8_t f[IEEE80211_MAX_FRAME_LEN];
+    unsigned sent = 0;
+
+    for (; ms >= 100; ms -= 100) {
+        now += 100;
+        CHECK(hear(f, beacon(f)) > 0);
+        run_worker();
+        sent += drain();
+    }
+    return sent;
+}
+
+/** Check that f, len bytes, is the station's null frame to the AP, sent at
+ * 1 Mbit/s as mac80211's ieee80211_send_nullfunc sends it to a non-QoS AP:
+ * ToDS, unprotected, power management clear. */
+static void check_null(const uint8_t *f, unsigned len)
+{
+    CHECK(len == 24 && f[0] == 0x48 && f[1] == 0x01);
+    CHECK(same(f + 4, ap, 6) && same(f + 10, sta_mac, 6) && same(f + 16, ap, 6));
+    CHECK(get16be(rec + WLAN_RELAY_OFF_RATE) == 10);
+}
+
+/** Idle: thirty seconds after the AP was last heard the station polls it
+ * with a null frame, whose ACK ends the poll, as mac80211 does on a radio
+ * that reports ACKs; beacons that stop for seven intervals bring another.
+ * The station dump's counters count both frames and the beacon loss. */
+static void row_idle(void)
+{
+    uint8_t f[IEEE80211_MAX_FRAME_LEN];
+    struct wlan_counters *c = &wlan->counters;
+    uint32_t packets = c->tx_packets;
+    unsigned len;
+
+    CHECK(beacons_for(29900) == 0);
+    now += 100;
+    run_worker();
+    len = take(f);
+    check_null(f, len);
+    run_worker();
+    CHECK(drain() == 0 && wlan->state == WLAN_STA_AUTHORIZED);
+    CHECK(beacons_for(20000) == 0);
+
+    now += 716;
+    run_worker();
+    len = take(f);
+    check_null(f, len);
+    run_worker();
+    CHECK(drain() == 0 && wlan->state == WLAN_STA_AUTHORIZED);
+    CHECK(c->tx_packets == packets + 2 && c->tx_failed == 0 && c->missed_beacons == 1);
+    CHECK(beacons_for(100) == 0);
+}
+
 /** The interface goes down: the station deauthenticates, nl80211 reports
  * the disconnection, and the radio stops; up again, the radio starts. */
 static void row_down(void)
@@ -962,6 +1018,7 @@ int main(void)
         row_scan();
         row_join();
         row_data();
+        row_idle();
         row_down();
         row_rfkill();
         row_mfp();
