@@ -136,13 +136,13 @@ int netconf_is_broadcast(uint32_t ip);
  * A change of the address or the mask is logged, and it drops what the old
  * address made true. The ARP mappings of the interface go, but the permanent
  * ones, and those of every interface for the first, with the datagrams
- * waiting for one; each TCP connection opened from an address the machine
- * no longer has is aborted, with ENETRESET on its socket
- * (`tcp_local_addr_changed`); a gateway the new subnet does not have is
- * cleared; and the added routes whose gateway the interface no longer
- * reaches are removed (`netdev_route_prune`). The first interface's change
- * is copied to `net_ip_addr` and `net_ip_mask`. The other interfaces are not
- * touched.
+ * waiting for one; a gateway the new subnet does not have is cleared; and
+ * the added routes whose gateway the interface no longer reaches are
+ * removed (`netdev_route_prune`). A TCP connection opened from the old
+ * address is kept, as on Linux: its sends fail for want of a route until
+ * the address returns, and it ends only by its own timeout. The first
+ * interface's change is copied to `net_ip_addr` and `net_ip_mask`. The
+ * other interfaces are not touched.
  *
  * Takes `net_lock`.
  *
@@ -196,9 +196,8 @@ int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask);
  * Take the address `ip` from `nd`. The first, when `ip` is 0 or the first,
  * is replaced by the next address, as Linux's promote_secondaries has it, or
  * with none after it leaves the interface unconfigured, and the change drops
- * what `netconf_set_address` lists. For another address the TCP connections
- * opened from it are aborted and the added routes whose gateway only its
- * subnet reached are removed. EADDRNOTAVAIL for an address the interface
+ * what `netconf_set_address` lists. For another address the added routes
+ * whose gateway only its subnet reached are removed. EADDRNOTAVAIL for an address the interface
  * does not hold. Takes `net_lock`.
  */
 int netconf_del_address(struct netdev *nd, uint32_t ip);
@@ -225,9 +224,7 @@ int netconf_add_address6(struct netdev *nd, const uint8_t *addr, int prefix, int
 
 /**
  * Take the IPv6 address `addr` from `nd`, which leaves its solicited-node
- * group with it, and abort the TCP connections opened from an address the
- * machine no longer has (`tcp_local_addr_changed`), as a change of an IPv4
- * address does. Logged. Takes `net_lock`.
+ * group with it. Logged. Takes `net_lock`.
  *
  * @return 0, or a negative errno: ENODEV for a null interface, or
  *         EADDRNOTAVAIL for an address `nd` does not hold.

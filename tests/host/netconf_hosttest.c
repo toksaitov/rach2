@@ -33,14 +33,11 @@ extern int memcmp(const void *a, const void *b, __SIZE_TYPE__ n);
 #include "../../rach2/sys/klog.h"
 
 /* What an address change is supposed to cost, counted here. The kernel's own
-   ARP cache and TCB table are not linked into a host test, so these stand in
-   for them and the cases below require them to have been called. */
+   ARP cache is not linked into a host test, so this stands in for it and the
+   cases below require it to have been called. */
 static int arp_flushes;
-static int tcp_told;
-static int tcp_told_locked; /* TCP was last told under the network lock */
 
 void arp_flush(void);
-void tcp_local_addr_changed(void);
 
 /* The critical section the kernel takes against its receive interrupt. A host
    test has neither, so these stand in and count that the section was entered
@@ -72,14 +69,6 @@ void net_unlock(uint32_t flags)
 void arp_flush(void)
 {
     arp_flushes++;
-}
-
-/** Count that TCP was told of an address change, and note whether it was
- * told under the network lock. */
-void tcp_local_addr_changed(void)
-{
-    tcp_told++;
-    tcp_told_locked = lock_depth > 0;
 }
 
 static int fails;
@@ -271,12 +260,15 @@ void arp_forget_dev(struct netdev *nd);
 
 static int arp_forgets;
 static struct netdev *arp_forgot; /* the interface of the last forget */
+static int arp_forgot_locked;     /* the last forget was under the network lock */
 
-/** Count a forget of the mappings learned on `nd`, and record `nd`. */
+/** Count a forget of the mappings learned on `nd`, and record `nd` and
+ * whether the network lock was held. */
 void arp_forget_dev(struct netdev *nd)
 {
     arp_forgets++;
     arp_forgot = nd;
+    arp_forgot_locked = lock_depth > 0;
 }
 
 /** Put one interface where a fresh boot leaves it. */
@@ -394,29 +386,29 @@ static void configure_by_mac(void)
 }
 
 /**
- * Check that changing the second interface's address tells TCP under the
- * network lock, forgets only that interface's ARP mappings, clears its gateway
- * and leaves the first interface and the machine's address alone; and that
- * setting the address it has tells nothing.
+ * Check that changing the second interface's address forgets only that
+ * interface's ARP mappings, under the network lock, clears its gateway and
+ * leaves the first interface and the machine's address alone; and that
+ * setting the address it has forgets nothing.
  */
 static void secondary_address_change(void)
 {
     conf_reset();
     iface_reset(&other_iface, IP4(10, 0, 3, 7), IP4(255, 255, 255, 0), IP4(10, 0, 3, 1));
-    tcp_told = arp_forgets = arp_flushes = 0;
+    arp_forgets = arp_flushes = 0;
     CHECK(netconf_set_address(&other_iface, IP4(10, 0, 4, 7), IP4(255, 255, 255, 0)) == 0,
           "secondary address changes");
-    CHECK(tcp_told == 1 && tcp_told_locked,
-          "secondary address change notifies TCP under the network lock");
     CHECK(arp_forgets == 1 && arp_forgot == &other_iface && arp_flushes == 0,
           "secondary address change invalidates only its ARP mappings");
+    CHECK(arp_forgot_locked, "and invalidates them under the network lock");
     CHECK(other_iface.gateway == 0 && net_ip_addr == NET_IP_ADDR_DEFAULT &&
               net_ip_gateway == NET_IP_GATEWAY_DEFAULT,
           "secondary address change clears its gateway and preserves primary state");
-    CHECK(netconf_set_address(&other_iface, other_iface.ip, other_iface.mask) == 0 && tcp_told == 1,
-          "unchanged secondary address does not notify TCP");
-    CHECK(netconf_set_address(&other_iface, 0, 0) == 0 && tcp_told == 2,
-          "removing the secondary address notifies TCP");
+    CHECK(netconf_set_address(&other_iface, other_iface.ip, other_iface.mask) == 0 &&
+              arp_forgets == 1,
+          "unchanged secondary address forgets nothing");
+    CHECK(netconf_set_address(&other_iface, 0, 0) == 0 && arp_forgets == 2,
+          "removing the secondary address forgets its mappings");
 }
 
 /**
@@ -691,7 +683,6 @@ int main(void)
     net_ip_gateway = IP4(10, 0, 2, 2);
     iface_reset(&the_iface, net_ip_addr, net_ip_mask, net_ip_gateway);
     arp_flushes = 0;
-    tcp_told = 0;
 
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 20), IP4(255, 255, 255, 0)) == 0,
           "a host address on a real subnet is taken");
@@ -699,11 +690,9 @@ int main(void)
           "and is what the stack now has");
     CHECK(arp_flushes == 1, "the ARP cache is forgotten, since every entry was learned "
                             "by a machine at the old address");
-    CHECK(tcp_told == 1, "and every connection opened from the old address is told");
     CHECK(net_ip_gateway == 0, "a gateway that is no longer on this subnet is not a gateway");
 
     arp_flushes = 0;
-    tcp_told = 0;
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 0), IP4(255, 255, 255, 0)) == -EINVAL,
           "a network address is not a host");
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 255), IP4(255, 255, 255, 0)) == -EINVAL,
@@ -715,8 +704,7 @@ int main(void)
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 20), IP4(255, 0, 255, 0)) == -EINVAL,
           "a mask that is not a run of ones is refused");
     CHECK(net_ip_addr == IP4(192, 168, 90, 20), "the address is unchanged by all of that");
-    CHECK(arp_flushes == 0 && tcp_told == 0, "and nothing was told about a change "
-                                             "that did not happen");
+    CHECK(arp_flushes == 0, "and nothing was forgotten for a change that did not happen");
 
     arp_flushes = 0;
     CHECK(netconf_set_address(&the_iface, IP4(10, 1, 2, 3), 0) == 0,
@@ -754,21 +742,19 @@ int main(void)
           "leaving the pair that works");
 
     arp_flushes = 0;
-    tcp_told = 0;
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0, "the same address again");
     CHECK(net_ip_addr == IP4(192, 168, 1, 0) && net_ip_mask == IP4(255, 255, 0, 0),
           "leaves the pair in force");
-    CHECK(arp_flushes == 0 && tcp_told == 0, "and tells nothing, because nothing changed");
+    CHECK(arp_flushes == 0, "and forgets nothing, because nothing changed");
     CHECK(netconf_set_netmask(&the_iface, IP4(255, 255, 0, 0)) == 0, "and so does the same mask");
-    CHECK(arp_flushes == 0 && tcp_told == 0, "which is also nothing to tell");
+    CHECK(arp_flushes == 0, "which is also nothing to forget");
 
     arp_flushes = 0;
-    tcp_told = 0;
     CHECK(netconf_set_address(&the_iface, IP4(10, 0, 2, 15), IP4(255, 255, 255, 0)) == 0,
           "an ordinary address, settled");
     CHECK(netconf_set_address(&the_iface, IP4(10, 0, 2, 15), 0) == 0, "reapplied with no mask");
     CHECK(net_ip_mask == IP4(255, 255, 255, 0), "keeps the mask it had, not the classful one");
-    CHECK(tcp_told == 1, "and told nothing beyond the one real change");
+    CHECK(arp_flushes == 1, "and forgot nothing beyond the one real change");
 
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 1, 0), 0) == 0,
           "the waiting address again");
@@ -778,15 +764,13 @@ int main(void)
           "leaves the machine unconfigured, not answering for a network address");
 
     arp_flushes = 0;
-    tcp_told = 0;
     CHECK(netconf_set_address(&the_iface, IP4(192, 168, 90, 20), IP4(255, 255, 255, 0)) == 0,
           "a machine to unconfigure");
     arp_flushes = 0;
-    tcp_told = 0;
     CHECK(netconf_set_address(&the_iface, 0, 0) == 0, "an address of zero unconfigures");
     CHECK(net_ip_addr == 0 && net_ip_mask == 0,
           "taking the mask with it, since half a configuration is not one");
-    CHECK(arp_flushes == 1 && tcp_told == 1, "and that is a change like any other");
+    CHECK(arp_flushes == 1, "and that is a change like any other");
     CHECK(netconf_broadcast() == 0xFFFFFFFFu,
           "an unconfigured machine broadcasts to everyone or not at all");
 
@@ -810,7 +794,6 @@ int main(void)
               netconf_set_gateway(&the_iface, IP4(192, 168, 90, 1)) == 0,
           "the first interface is configured");
     arp_flushes = 0;
-    tcp_told = 0;
     arp_forgets = 0;
     arp_forgot = 0;
 
@@ -823,8 +806,7 @@ int main(void)
           "leaving the first interface where it was");
     CHECK(net_ip_addr == IP4(192, 168, 90, 20) && net_ip_gateway == IP4(192, 168, 90, 1),
           "and the machine's own address, which is the first interface's, with it");
-    CHECK(tcp_told == 1 && arp_flushes == 0,
-          "secondary configuration notifies TCP without flushing all ARP mappings");
+    CHECK(arp_flushes == 0, "secondary configuration does not flush all ARP mappings");
     CHECK(arp_forgets == 1 && arp_forgot == &other_iface,
           "and only the mappings learned on that interface are forgotten");
 

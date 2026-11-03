@@ -14,7 +14,6 @@
 #include "net.h"
 #include "driver/netdev.h"
 #include "arp/arp.h"
-#include "tcp/tcp.h"
 #include "ip6/ip6.h"
 #include "ip6/nd6.h"
 #include "../cmdline.h"
@@ -477,11 +476,10 @@ static int is_machine(const struct netdev *nd)
  *
  * A change, a new address or a new mask under an address, is logged, drops
  * the ARP mappings of the interface but the permanent ones (of every
- * interface, for the first) and the datagrams waiting for them, and aborts
- * the TCP connections whose local address the machine no longer has; a
- * connection on an address still held is kept. A gateway the subnet does
- * not have is cleared, change or not, and so are the added routes whose
- * gateway `nd` no longer reaches. The first interface's values are copied to
+ * interface, for the first) and the datagrams waiting for them; a TCP
+ * connection from the old address is kept (`tcp_ip_tx`). A gateway the
+ * subnet does not have is cleared, change or not, and so are the added
+ * routes whose gateway `nd` no longer reaches. The first interface's values are copied to
  * `net_ip_addr` and the two after it. The caller holds `net_lock`.
  */
 static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
@@ -510,7 +508,6 @@ static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
         } else {
             arp_forget_dev(nd);
         }
-        tcp_local_addr_changed();
     }
     if (nd->gateway != 0 &&
         (nd->ip == 0 || nd->mask == 0 || !netconf_gateway_ok(nd->gateway, nd->ip, nd->mask))) {
@@ -598,7 +595,6 @@ int netconf_del_address(struct netdev *nd, uint32_t ip)
         nd->mask2[i] = nd->mask2[i + 1];
     }
     nd->naddr2--;
-    tcp_local_addr_changed();
     netdev_route_prune(nd);
     net_unlock(flags);
     return 0;
@@ -620,7 +616,7 @@ int netconf_del_address(struct netdev *nd, uint32_t ip)
  *
  * The address in force repeated with no mask changes nothing, since a DHCP
  * client runs the same `ifconfig` at every renewal, and taking the address
- * down each time would abort every connection.
+ * down each time would drop the ARP mappings and stall every connection.
  */
 int netconf_set_address(struct netdev *nd, uint32_t ip, uint32_t mask)
 {
@@ -842,7 +838,6 @@ int netconf_del_address6(struct netdev *nd, const uint8_t *addr)
         nd->addr6[i] = nd->addr6[i + 1];
     }
     nd->naddr6--;
-    tcp_local_addr_changed();
     net_unlock(lock);
     klog(KLOG_INFO, "net", "%s: IPv6 %s removed", nd->name, text);
     return 0;

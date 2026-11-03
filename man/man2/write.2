@@ -335,10 +335,9 @@ or its path has too many symbolic links.
 A datagram payload exceeds 65507 bytes over IPv4 or 65527 over IPv6.
 .It Er ENAMETOOLONG
 A path in a loop-control command exceeds a resolver limit.
-.It Er ENETRESET
-A stream connection was ended by a network configuration change.
 .It Er ENETUNREACH
-No interface has a route to the datagram destination.
+No interface has a route to the datagram destination, or a stream
+connection timed out while its local address was gone.
 .It Er ENOBUFS
 The local datagram queue is full, or the network device cannot accept
 the outgoing frame.

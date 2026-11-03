@@ -363,8 +363,8 @@ A signal interrupted the wait.
 .It Er EINVAL
 .Fa msg Ns ->msg_iovlen
 exceeds 1024.
-.It Er ENETRESET
-A stream connection was ended by a network configuration change.
+.It Er ENETUNREACH
+A stream connection timed out while its local address was gone.
 .It Er ENOTSOCK
 .Fa fd
 does not refer to a socket.

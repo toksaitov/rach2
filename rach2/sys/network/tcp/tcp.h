@@ -248,6 +248,10 @@ struct tcb {
     int fin_pending;  /* a close or shutdown asked for a FIN after the data */
 
     uint32_t so_error; /* pending SO_ERROR (positive errno); 0 = none */
+    /* Why the last send since an acknowledgement found no route, ENETUNREACH
+     * for a source address the machine no longer has (positive errno), which
+     * a give-up reports in place of ETIMEDOUT; 0 = none. */
+    uint32_t soft_error;
 
     /* Retransmission and congestion control (RFC 6298 / RFC 5681). */
     uint32_t rto;        /* current retransmit timeout (ticks)     */
@@ -480,16 +484,6 @@ int tcp_is_connected(struct socket *sock);
  * `net_lock` itself.
  */
 void tcp_window_update(struct socket *sock);
-
-/**
- * Abort each connection opened from an address the machine does not have
- * (`ip_is_local`): a passive block still in its handshake is freed with its
- * socket, and any other is closed with ENETRESET, its socket woken, or is
- * freed when it has no socket. A listener and a CLOSED block are left as
- * they are. Called under `net_lock`, from netconf.c, when an interface's
- * address changes or goes.
- */
-void tcp_local_addr_changed(void);
 
 /** Move the connections and listeners of the network namespace `ns`, which
  * has ended, to `to`, a namespace no process is in, as its sockets go

@@ -581,7 +581,14 @@ static uint8_t tcp_sack_option(const struct tcb *tcb, uint8_t *opt)
  * Send the segment of `seg_len` bytes in `tcp_tx_buf` from `local_ip` to
  * `remote_ip` in the network namespace `ns`, counting it in `net_mib` when
  * IP takes it, and a reset among the resets. Returns what `ip_tx_from`
- * returned.
+ * returned, or -ENETUNREACH, counted in OutNoRoutes, when the machine no
+ * longer has `local_ip`.
+ *
+ * A connection keeps its address when the address goes, as on Linux, whose
+ * route lookup for a source the machine lacks fails with ENETUNREACH: its
+ * segments are refused here until the address returns, and IPv4's output
+ * is never reached, since it would put the machine's current source in
+ * place of the one the checksum covers.
  */
 static int tcp_ip_tx(const struct netns *ns, net_addr_t local_ip, net_addr_t remote_ip,
                      uint16_t seg_len)
@@ -589,6 +596,14 @@ static int tcp_ip_tx(const struct netns *ns, net_addr_t local_ip, net_addr_t rem
     const struct netns *was = ip_ns;
     int rc;
 
+    if (!net_addr_local(local_ip)) {
+        if (local_ip.family == AF_INET6) {
+            net_mib6.ip6_out_no_routes++;
+        } else {
+            net_mib.ip_out_no_routes++;
+        }
+        return -ENETUNREACH;
+    }
     ip_ns = ns;
     if (remote_ip.family == AF_INET6) {
         rc = ip6_tx(local_ip.v6, remote_ip.v6, (int)remote_ip.scope, IP6_NH_TCP, tcp_tx_buf,
@@ -604,6 +619,21 @@ static int tcp_ip_tx(const struct netns *ns, net_addr_t local_ip, net_addr_t rem
         if (tcp_tx_buf[13] & TCP_RST) {
             net_mib.tcp_out_rsts++;
         }
+    }
+    return rc;
+}
+
+/**
+ * Send the segment of `seg_len` bytes in `tcp_tx_buf` on `tcb`'s addresses
+ * (`tcp_ip_tx`), and keep a refusal for want of a route as the soft error
+ * the connection's give-up reports. Returns what `tcp_ip_tx` returned.
+ */
+static int tcp_tcb_tx(struct tcb *tcb, uint16_t seg_len)
+{
+    int rc = tcp_ip_tx(tcb->ns, tcb->local_ip, tcb->remote_ip, seg_len);
+
+    if (rc == -ENETUNREACH || rc == -EHOSTUNREACH) {
+        tcb->soft_error = (uint32_t)-rc;
     }
     return rc;
 }
@@ -673,7 +703,7 @@ static int tcp_emit_flags(struct tcb *tcb, uint8_t flags, uint32_t seq)
 
     seg_len = hdr_len;
     write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    rc = tcp_ip_tx(tcb->ns, tcb->local_ip, tcb->remote_ip, seg_len);
+    rc = tcp_tcb_tx(tcb, seg_len);
     if (rc == 0 && (flags & TCP_ACK)) {
         tcb->ack_owed = 0;
     }
@@ -919,7 +949,7 @@ static int tcp_output(struct tcb *tcb)
         seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
         write16be(tcp_tx_buf + 16,
                   tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-        if (tcp_ip_tx(tcb->ns, tcb->local_ip, tcb->remote_ip, seg_len) == -ENOBUFS) {
+        if (tcp_tcb_tx(tcb, seg_len) == -ENOBUFS) {
             tcb->tx_refused++;
             if (tcb->refused_since == 0) {
                 tcb->refused_since = TCP_NOW() + 1;
@@ -993,7 +1023,7 @@ static int tcp_resend(struct tcb *tcb, uint32_t seq, uint32_t most)
 
     seg_len = (uint16_t)(TCP_HDR_SIZE + send_len);
     write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    if (tcp_ip_tx(tcb->ns, tcb->local_ip, tcb->remote_ip, seg_len) == -ENOBUFS) {
+    if (tcp_tcb_tx(tcb, seg_len) == -ENOBUFS) {
         tcb->tx_refused++;
         if (tcb->refused_since == 0) {
             tcb->refused_since = TCP_NOW() + 1;
@@ -1424,7 +1454,7 @@ static int tcp_send_byte(struct tcb *tcb, uint32_t seq, uint32_t at)
     tcp_tx_buf[TCP_HDR_SIZE] = tcb->send_buf[at & (TCP_RING_SIZE - 1)];
 
     write16be(tcp_tx_buf + 16, tcp_checksum(tcb->local_ip, tcb->remote_ip, tcp_tx_buf, seg_len));
-    return tcp_ip_tx(tcb->ns, tcb->local_ip, tcb->remote_ip, seg_len);
+    return tcp_tcb_tx(tcb, seg_len);
 }
 
 /**
@@ -1443,59 +1473,10 @@ static void tcp_send_zwp(struct tcb *tcb)
 }
 
 /**
- * A connection's segments would carry a source the machine no longer has,
- * and the peer's answers would go to an address that is somebody else's, so
- * the connection is reset here and not left to time out; ENETRESET makes a
- * blocked read or write return. A block on an address the machine still
- * has is left alone: changing one card's address says nothing about the
- * connections on another, and 127/8 is always the machine's. A CLOSED block
- * has nothing to abort, and setting its error again would give a reader the
- * same reset twice. A listener keeps the address it was bound to, as on
- * Linux; one bound to any address answers whatever address the machine has,
- * so a server started before a lease arrived goes on accepting. A passive
- * block in SYN_RCVD has a socket that no descriptor or accept queue refers
- * to, so waking it would leave both for nothing to reclaim; it is freed with
- * its socket, as a reset frees it. Each block's successor is read before
- * the block can be freed.
- */
-void tcp_local_addr_changed(void)
-{
-    struct tcb *tcb, *next;
-
-    for (tcb = tcbs; tcb; tcb = next) {
-        next = tcb->next;
-        if (net_addr_local(tcb->local_ip) || tcb->state == TCP_CLOSED || tcb->state == TCP_LISTEN) {
-            continue;
-        }
-        klog(KLOG_INFO, "tcp", "address changed: aborting a connection opened from the old one");
-        if (tcb->state == TCP_SYN_RCVD && tcb->passive) {
-            struct socket *s = tcb->sock;
-
-            tcb->sock = NULL;
-            if (s) {
-                s->tcb = NULL;
-                socket_unref(s);
-            }
-            tcb_free(tcb);
-            continue;
-        }
-        tcb->state = TCP_CLOSED;
-        tcb->so_error = ENETRESET;
-        tcb->retx_flags = 0;
-        tcb->rto_timer = 0;
-        tcb->zwp_timer = 0;
-        if (tcb->sock) {
-            socket_tcp_connected(tcb->sock);
-            socket_tcp_fin(tcb->sock);
-        } else {
-            tcb_free(tcb);
-        }
-    }
-}
-
-/**
- * Abandon a connection that timed out: close it with ETIMEDOUT, which
- * SO_ERROR and POLLERR report, and wake any blocked call. A passive block in
+ * Abandon a connection that timed out: close it with ETIMEDOUT, or with the
+ * soft error of a send refused for want of a route since the last
+ * acknowledgement, as Linux reports `sk_err_soft`, which SO_ERROR and
+ * POLLERR report, and wake any blocked call. A passive block in
  * SYN_RCVD, whose handshake the peer never finished, has no descriptor and no
  * place on an accept queue, so it is freed here with its socket; any other
  * block is freed only when it has no socket. Nothing is logged: a timeout is
@@ -1515,7 +1496,7 @@ static void tcp_giveup(struct tcb *tcb)
         return;
     }
     tcb->state = TCP_CLOSED;
-    tcb->so_error = ETIMEDOUT;
+    tcb->so_error = tcb->soft_error ? tcb->soft_error : ETIMEDOUT;
     tcb->retx_flags = 0;
     tcb->rto_timer = 0;
     tcb->zwp_timer = 0;
@@ -1796,7 +1777,6 @@ void tcp_tick(void)
 {
     struct tcb *tcb, *next;
 
-    tcp_local_addr_changed();
     for (tcb = tcbs; tcb; tcb = next) {
         next = tcb->next;
 
@@ -2212,6 +2192,7 @@ static void tcp_ack_data(struct tcb *tcb, uint32_t ack_num)
 
     tcb->send_ack += (acked < ring) ? acked : ring;
     tcb->snd_una = ack_num;
+    tcb->soft_error = 0;
     tcb->dup_acks = 0;
     tcb->fast_pending = 0;
     if (tcb->recovering == TCP_RECOVER_RTO && (int32_t)(tcb->retx_nxt - ack_num) < 0) {
@@ -2852,6 +2833,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
             return;
 
         tcb->snd_una = ack_num;
+        tcb->soft_error = 0;
         tcb->snd_wnd = window;
         tcb->state = TCP_ESTABLISHED;
         tcb->retx_flags = 0;
@@ -2889,6 +2871,7 @@ static void tcp_rx_addr(net_addr_t src_ip, net_addr_t dst_ip, const uint8_t *dat
         tcb->irs = seq;
         tcb->rcv_nxt = seq + 1;
         tcb->snd_una = ack_num;
+        tcb->soft_error = 0;
         tcb->snd_wnd = window;
         tcp_take_options(tcb, data, hdr_len);
         tcb->state = TCP_ESTABLISHED;

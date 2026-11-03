@@ -72,6 +72,14 @@ and each doubles up to 120 seconds, 924.6 seconds, counted from the sending
 of what the first timeout found unacknowledged.
 This side's own timeout doubles only up to 60 seconds, so it sends more
 retransmissions in that time than Linux does.
+A connection whose local address goes, by a change of address or its
+removal, is kept, as on Linux: each segment it sends is refused for want
+of a route and counted lost, and its retransmissions resume the connection
+when the address returns.
+Given up first, it reports
+.Er ENETUNREACH
+in place of
+.Er ETIMEDOUT .
 .Dv TCP_USER_TIMEOUT ,
 a count of milliseconds, replaces that time, in the handshake as well, and
 ends the keepalive's probing that long after the last segment received;
@@ -145,7 +153,11 @@ A connection given up reports
 to a blocked call,
 .Dv SO_ERROR
 and
-.Xr poll 2 .
+.Xr poll 2 ,
+or
+.Er ENETUNREACH
+when a segment was refused for want of a route since the last
+acknowledgement, as when its local address is gone.
 .Sh SEE ALSO
 .Xr accept 2 ,
 .Xr connect 2 ,

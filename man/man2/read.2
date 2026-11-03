@@ -312,8 +312,8 @@ is blocked or ignored.
 .It Er EISDIR
 .Fn pread
 was given a descriptor on a directory.
-.It Er ENETRESET
-A stream connection was ended by a network configuration change.
+.It Er ENETUNREACH
+A stream connection timed out while its local address was gone.
 .It Er ENOTCONN
 The stream socket is not connected and has not been shut down.
 .It Er ENXIO

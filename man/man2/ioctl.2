@@ -539,11 +539,14 @@ for a mask that is not contiguous, is all ones, or makes the address a
 network or broadcast address, unconfigures the interface when the mask is
 provisional or an address is pending, and the address must be set again.
 Repeating the existing configured address leaves its mask unchanged.
-Changing any interface's address aborts TCP connections whose local
-address is no longer configured, with
-.Er ENETRESET .
-Connections whose address remains configured and listening sockets are
-preserved.
+Changing any interface's address leaves every TCP connection and
+listening socket as it is, as on Linux.
+A connection whose local address is no longer configured sends nothing
+until the address returns, when it resumes; if it does not return, the
+connection times out with
+.Er ENETUNREACH ;
+see
+.Xr tcp 7 .
 The change invalidates ARP mappings and clears a gateway that is no
 longer on the interface's subnet.
 .Pp

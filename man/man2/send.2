@@ -353,11 +353,9 @@ exceeds 1500 bytes or its path MTU, or a packet payload is empty or
 exceeds the interface's MTU, 1500 bytes.
 .It Bq Er ENETDOWN
 A packet send has no interface through which to transmit.
-.It Bq Er ENETRESET
-A pending TCP error reports that a local address change ended the
-connection.
 .It Bq Er ENETUNREACH
-No route exists for an IPv4 or IPv6 datagram.
+No route exists for an IPv4 or IPv6 datagram, or a pending TCP error
+reports that the connection timed out while its local address was gone.
 .It Bq Er ENOBUFS
 The local delivery queue is full or the link layer cannot accept an
 IPv4 or IPv6 datagram.
