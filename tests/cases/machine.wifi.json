@@ -1096,6 +1096,12 @@
           "does": "deauthenticate the station from both APs of network A, wait for it to join again, and read the station's console since the step began"
         },
         {
+          "step_id": "switch",
+          "stage": "execute",
+          "machine": "ap",
+          "does": "start a ping from the station, switch both APs of network A to channels 3 and 8 five beacons ahead with transmit held, wait for wpa_supplicant's channel switch event and the ping's end, and read the station's console since the step began"
+        },
+        {
           "step_id": "gone",
           "stage": "execute",
           "machine": "ap",
@@ -1308,7 +1314,7 @@
           "witness_id": "stage",
           "kind": "step",
           "means": "a step of the manifest has ended",
-          "limit": 11
+          "limit": 12
         }
       ],
       "bounds": {

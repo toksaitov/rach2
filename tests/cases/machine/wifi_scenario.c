@@ -794,7 +794,10 @@ static void case_robust(struct wifi *w)
        "hostapd_cli -p /run/hostapd -i wlan0 chan_switch 5 2422 ht blocktx; "
        "hostapd_cli -p /run/hostapd -i wlan1 chan_switch 5 2447 ht blocktx");
     n = n < 0 ? -1 : log_after(w, "CTRL-EVENT-CHANNEL-SWITCH", n);
-    sta(w, &text, "wait; cat /tmp/switch.ping; grep CTRL-EVENT-CHANNEL-SWITCH " LOG " | tail -1");
+    /* The shell's wait would wait for wsimrelay too. */
+    sta(w, &text,
+        "until grep -q 'packets transmitted' /tmp/switch.ping; do sleep 1; done; "
+        "cat /tmp/switch.ping; grep CTRL-EVENT-CHANNEL-SWITCH " LOG " | tail -1");
     lease(w, 0);
     console = net_text(&w->sta, mark, w->sta.at);
     net_assert(&w->u, "switch",
