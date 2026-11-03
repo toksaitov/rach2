@@ -34,6 +34,7 @@ LICENSES='musl|vendor/musl/Readme.md|MIT
 BusyBox|vendor/busybox/Readme.md|GPL 2 only
 Dropbear|vendor/dropbear/Readme.md|MIT-style
 sox_ng|vendor/sox_ng/Readme.md|GPL 2 only
+libFLAC|vendor/sox_ng/Readme.md|BSD 3-clause
 hostap|vendor/hostap/Readme.md|BSD 3-clause
 iw|vendor/iw/Readme.md|ISC
 OpenSSL|vendor/openssl/Readme.md|Apache 2.0
@@ -536,6 +537,7 @@ BEGIN {
     version["kbd"] = var("vendor/kbd/build_kbd.sh", "VERSION")
     version["Dropbear"] = var("vendor/dropbear/build_dropbear.sh", "VERSION")
     version["sox_ng"] = var("vendor/sox_ng/build_sox_ng.sh", "VERSION")
+    version["libFLAC"] = var("vendor/sox_ng/build_sox_ng.sh", "FLAC_VERSION")
     version["hostap"] = var("vendor/hostap/build_hostap.sh", "VERSION")
     version["iw"] = var("vendor/iw/build_iw.sh", "VERSION")
     version["OpenSSL"] = var("vendor/openssl/build_openssl.sh", "VERSION")
