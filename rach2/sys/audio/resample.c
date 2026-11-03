@@ -111,29 +111,53 @@ void resample_put(resampler_t *r, const int32_t *frame)
  * about it, the frames from `w` on by `dir` and the positions from `pos`
  * on by `step`, until a position passes the table. The products are of 30
  * and 24 bits, and the coefficients of a window sum in magnitude to under
- * 2^35 at the largest ratio, so the sum stays under 2^60. The kernel builds
- * without the compiler's optimizer, so the loop keeps its work in locals.
- * Gives the taps summed.
+ * 2^35 at the largest ratio, so the sum stays under 2^60. Gives the taps
+ * summed.
+ *
+ * When `pos` and `step` are whole entries, as every position of a
+ * conversion by a whole ratio down is, the coefficients are the entries
+ * themselves and the loop reads them without the interpolation's product.
+ * The kernel builds without the compiler's optimizer, which keeps every
+ * local in memory, so that each step of a loop waits for the store of the
+ * step before; GCC keeps a `register` local in a register even so.
  */
 static uint32_t resample_side(const int32_t (*w)[2], int dir, uint32_t pos, uint32_t step,
                               uint32_t taps, const int32_t *centre, int64_t *acc)
 {
-    int64_t left = acc[0], right = acc[1];
-    int32_t cl = centre[0], cr = centre[1], c;
-    const int32_t *t;
-    uint32_t k;
+    register int64_t left = acc[0], right = acc[1];
+    register const int32_t *x = w[0];
+    register uint32_t z = pos;
+    register int32_t c;
+    register const int32_t *t;
+    int32_t cl = centre[0], cr = centre[1];
+    int stride = 2 * dir;
+    uint32_t n, k;
 
-    for (k = 0; k < taps && pos < RESAMPLE_END; k++) {
-        t = resample_coef + (pos >> 16);
-        c = t[0] + (int32_t)((int64_t)(t[1] - t[0]) * (int32_t)(pos & 0xFFFFu) / 65536);
-        left += (int64_t)c * ((*w)[0] - cl);
-        right += (int64_t)c * ((*w)[1] - cr);
-        pos += step;
-        w += dir;
+    n = pos >= RESAMPLE_END ? 0 : (RESAMPLE_END - 1u - pos) / step + 1u;
+    if (n > taps) {
+        n = taps;
+    }
+    if (((z | step) & 0xFFFFu) == 0) {
+        for (t = resample_coef + (z >> 16), k = n; k > 0; k--) {
+            c = *t;
+            left += (int64_t)c * (x[0] - cl);
+            right += (int64_t)c * (x[1] - cr);
+            t += step >> 16;
+            x += stride;
+        }
+    } else {
+        for (k = n; k > 0; k--) {
+            t = resample_coef + (z >> 16);
+            c = t[0] + (int32_t)((int64_t)(t[1] - t[0]) * (int32_t)(z & 0xFFFFu) / 65536);
+            left += (int64_t)c * (x[0] - cl);
+            right += (int64_t)c * (x[1] - cr);
+            z += step;
+            x += stride;
+        }
     }
     acc[0] = left;
     acc[1] = right;
-    return k;
+    return n;
 }
 
 /**
