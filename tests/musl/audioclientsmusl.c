@@ -205,7 +205,7 @@ static void dump(const unsigned char *samples, size_t bytes)
  * loopback readers and require identical samples from both. */
 static void clients(int loopback)
 {
-    int gate[2], ready[2], in[2] = {-1, -1}, value = PCM_ENABLE_INPUT;
+    int gate[2], ready[2], in[2] = {-1, -1}, value = PCM_ENABLE_INPUT, ring = (64 << 16) | 10;
     char bytes[2] = {'g', 'g'};
     unsigned char *recorded[2] = {NULL, NULL};
     size_t at, n = FRAMES * sizeof(short);
@@ -217,7 +217,10 @@ static void clients(int loopback)
         for (i = 0; i < 2; i++) {
             in[i] = dsp(O_RDONLY);
             recorded[i] = malloc(n);
-            if (!recorded[i] || ioctl(in[i], SNDCTL_DSP_SETTRIGGER, &value) < 0)
+            /* 64 periods, 680 ms: a reader the host stalls behind the
+               SB16's bursts of 70 ms of the mix drops no frame. */
+            if (!recorded[i] || ioctl(in[i], SNDCTL_DSP_SETFRAGMENT, &ring) < 0 ||
+                ioctl(in[i], SNDCTL_DSP_SETTRIGGER, &value) < 0)
                 fail("start reader");
         }
     }
@@ -231,8 +234,9 @@ static void clients(int loopback)
     close(ready[0]);
     close(gate[1]);
     if (loopback) {
-        /* The first clock periods precede the player. Both readers start
-         * at the same boot position while only silence is being mixed. */
+        /* The first clock periods precede the player, and the second
+         * reader joins after the device's start took the first of them;
+         * both read silence until the player starts, which is skipped. */
         for (at = 0; at < n; at += 512) {
             transfer(in[0], recorded[0] + at, 512, 0);
             transfer(in[1], recorded[1] + at, 512, 0);
