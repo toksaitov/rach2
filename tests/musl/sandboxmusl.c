@@ -45,6 +45,13 @@
  * PR_CAP_AMBIENT_RAISE of CAP_CHOWN, which is not inheritable, fails with
  * EPERM and PR_CAP_AMBIENT_CLEAR_ALL succeeds.
  *
+ * A child in a mount namespace of its own masks a file as Claude Code's
+ * bubblewrap does: it binds /tmp/sbxb/ws, a directory of a tmpfs, over
+ * itself, makes .bashrc in it, binds /dev/null over that and opens the
+ * bound /dev/null with O_PATH, as bubblewrap does to find the mount it made.
+ * Once the child is gone, and its namespace with it, the directory, its
+ * file and the tmpfs can be removed.
+ *
  * The program runs itself in the modes `bset` and `regain`, named by its
  * first argument, as the image an exec row runs. With none it runs the
  * rows, prints "SANDBOXMUSL OK" and exits 0 on success, or prints
@@ -79,6 +86,12 @@
 #define OUTFILE  "/tmp/sbx.out"
 #define DETACHED "/tmp/sbxd"
 
+/* The tmpfs of the masking row, the directory it binds and the file it
+ * masks. */
+#define MASKED    "/tmp/sbxb"
+#define MASKED_WS MASKED "/ws"
+#define MASKED_RC MASKED_WS "/.bashrc"
+
 /* _LINUX_CAPABILITY_VERSION_3, whose data is two cap_data, and the
  * capabilities the rows name. */
 #define VERSION_3     0x20080522u
@@ -100,7 +113,7 @@ static const char *const rows[] = {
     "detach-put-old", "pivot-stacked",   "pivot-new-root", "write-outside",     "namespace-unseen",
     "proc-sys-user",  "detach-refusals", "detach-busy",    "detach-every-view", "detach-reaped",
     "bset-read",      "bset-drop-eperm", "bset-drop",      "bset-fork",         "bset-exec",
-    "capset-single",  "capset-chown",    "ambient",
+    "capset-single",  "capset-chown",    "ambient",        "mask-removed",
 };
 
 #define NROWS ((int)(sizeof(rows) / sizeof(rows[0])))
@@ -615,6 +628,45 @@ static int cap_rows(void)
     return 0;
 }
 
+/** In a child, in a mount namespace of its own that receives no mount back
+ * from the probe's: bind MASKED_WS over itself, make MASKED_RC through the
+ * bind, bind /dev/null over it and open that with O_PATH. The exit code is 0
+ * or 1. */
+static int mask_file(void)
+{
+    int fd;
+
+    if (unshare(CLONE_NEWNS) != 0 || mount(NULL, "/", NULL, MS_SLAVE | MS_REC, NULL) != 0 ||
+        mount(MASKED_WS, MASKED_WS, NULL, MS_BIND | MS_REC, NULL) != 0) {
+        return 1;
+    }
+    fd = open(MASKED_RC, O_WRONLY | O_CREAT, 0444);
+    if (fd < 0 || close(fd) != 0 || mount("/dev/null", MASKED_RC, NULL, MS_BIND, NULL) != 0) {
+        return 1;
+    }
+    fd = open(MASKED_RC, O_PATH);
+    return fd < 0 || close(fd) != 0;
+}
+
+/** Run the row of a masked file, the last. Returns 0, or 1 after the
+ * failure is reported. */
+static int mask_row(void)
+{
+    if ((mkdir(MASKED, 0755) != 0 && errno != EEXIST) ||
+        mount("tmpfs", MASKED, "tmpfs", 0, NULL) != 0 || mkdir(MASKED_WS, 0755) != 0) {
+        return fail("mount " MASKED);
+    }
+    if (in_child(mask_file) != 0) {
+        return fail("a file of a bound directory was not masked with /dev/null");
+    }
+    if (unlink(MASKED_RC) != 0 || rmdir(MASKED_WS) != 0 || umount(MASKED) != 0 ||
+        rmdir(MASKED) != 0) {
+        return fail("the directory a namespace that ended bound could not be removed");
+    }
+    report_held();
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     ssize_t n;
@@ -637,7 +689,7 @@ int main(int argc, char **argv)
     for (i = 0; i < NROWS; i++) {
         report_plan(rows[i]);
     }
-    if (sandbox_rows() != 0 || detach_rows() != 0 || cap_rows() != 0) {
+    if (sandbox_rows() != 0 || detach_rows() != 0 || cap_rows() != 0 || mask_row() != 0) {
         return 1;
     }
     report_end();
