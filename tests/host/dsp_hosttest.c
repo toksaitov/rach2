@@ -6,7 +6,8 @@
  * negotiation sequences of sox_ng's, FFmpeg's and cmus's OSS outputs and of
  * sox_ng's and FFmpeg's OSS inputs, and several opens playing at once: their
  * mix, its clipping, the conversion of each open's format and rate, and one
- * player closing while another plays.
+ * player closing while another plays. The 24 and 32-bit formats reach the
+ * mix with their top 16 bits, and a reader in them has its 16 bits on top.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
@@ -39,7 +40,7 @@ extern int memcmp(const void *a, const void *b, unsigned long n);
 /* The requests the rows use that dsp.c does not name. */
 #define DSP_SUBDIVIDE 0xC0045009u
 #define TIOCGWINSZ    0x5413u
-#define AFMT_S32_LE   0x1000
+#define AFMT_S16_BE   0x20 /* a format dsp.c lacks */
 
 #define MODEL_PERIOD_MAX 16384u
 #define MODEL_MIX_PERIOD 1024u /* bytes of the mix's period, 256 frames */
@@ -566,7 +567,9 @@ static void row_defaults(void)
     check(ask(DSP_GETTRIGGER, 0) == PCM_ENABLE_OUTPUT, "the trigger is on");
     check(ask(DSP_GETCAPS, 0) == (DSP_CAP_REVISION | DSP_CAP_REALTIME | DSP_CAP_TRIGGER),
           "realtime and trigger");
-    check(ask(DSP_GETFMTS, 0) == (AFMT_U8 | AFMT_S16_LE), "U8 and S16_LE");
+    check(ask(DSP_GETFMTS, 0) ==
+              (AFMT_U8 | AFMT_S16_LE | AFMT_S24_LE | AFMT_S24_PACKED | AFMT_S32_LE),
+          "U8, S16_LE, S24_LE, S24_PACKED and S32_LE");
     check(ask(OSS_GETVERSION, 0) == 0x030802, "Linux's OSS version");
     check(odelay() == 0, "nothing queued");
     check(open_other() == 0, "a second open succeeds");
@@ -615,7 +618,9 @@ static void row_ioctls(void)
     m.play_max = 4096;
     check(open_dsp(1) == 0, "open");
     check(ask(DSP_SETFMT, AFMT_S16_LE) == AFMT_S16_LE, "S16_LE set");
-    check(ask(DSP_SETFMT, AFMT_S32_LE) == AFMT_S16_LE, "another format keeps S16_LE");
+    check(ask(DSP_SETFMT, AFMT_S16_BE) == AFMT_S16_LE, "another format keeps S16_LE");
+    check(ask(DSP_SETFMT, AFMT_S16_LE | AFMT_S32_LE) == AFMT_S16_LE,
+          "a mask of two formats is a query");
     check(ask(DSP_CHANNELS, 6) == 2, "six channels give two");
     check(ask(DSP_STEREO, 0) == 0 && ask(DSP_CHANNELS, 0) == 1, "STEREO 0 is mono");
     check(ask(DSP_STEREO, 1) == 1 && ask(DSP_CHANNELS, 0) == 2, "STEREO 1 is stereo");
@@ -1124,7 +1129,7 @@ static void row_duplex_query(void)
     check(ask(DSP_SPEED, 0) == 48000, "SPEED 0 answers playback's rate");
     check(ask(DSP_CHANNELS, 0) == 2, "CHANNELS 0 answers its channels");
     check(ask(DSP_SETFMT, AFMT_QUERY) == AFMT_S16_LE, "AFMT_QUERY answers its format");
-    check(ask(DSP_SETFMT, AFMT_S32_LE) == AFMT_S16_LE, "a format the device lacks keeps it");
+    check(ask(DSP_SETFMT, AFMT_S16_BE) == AFMT_S16_LE, "a format the device lacks keeps it");
     check(odelay() == queued && ispace().bytes == held && m.running && cap.running &&
               m.stops == 0 && cap.stops == 0,
           "the queries stop nothing and keep both directions' data");
@@ -1314,6 +1319,34 @@ static void row_clipping(void)
           "the right held at the top, and within range below it");
 }
 
+/** OSS's AFMT_ bit for `format`. */
+static int afmt_bit(audio_format_t format)
+{
+    return format == AUDIO_U8        ? AFMT_U8
+           : format == AUDIO_S16LE   ? AFMT_S16_LE
+           : format == AUDIO_S24LE   ? AFMT_S24_LE
+           : format == AUDIO_S24_3LE ? AFMT_S24_PACKED
+                                     : AFMT_S32_LE;
+}
+
+/** The sample at `p` in the 24 or 32-bit `format` as 16 bits: its whole
+ * signed value over 2^8 or 2^16, rounded toward minus infinity. The top
+ * byte of 24 bits in four is not read. */
+static int wide16(const uint8_t *p, audio_format_t format)
+{
+    long long v = p[0] | p[1] << 8 | (long long)p[2] << 16;
+    long long d = 256;
+
+    if (format == AUDIO_S32LE) {
+        v |= (long long)p[3] << 24;
+        v -= v >= 0x80000000ll ? 0x100000000ll : 0;
+        d = 65536;
+    } else {
+        v -= v >= 0x800000ll ? 0x1000000ll : 0;
+    }
+    return (int)(v / d - (v % d < 0));
+}
+
 /** Frame `i` of the bytes `in`, in `format` with `channels`, as 16-bit
  * channel `ch`; silence past `n` frames. */
 static int source(const uint8_t *in, uint32_t n, audio_format_t format, int channels, uint32_t i,
@@ -1327,11 +1360,14 @@ static int source(const uint8_t *in, uint32_t n, audio_format_t format, int chan
     if (channels == 1) {
         ch = 0;
     }
+    p = in + AUDIO_SAMPLE_BYTES(format) * (i * (uint32_t)channels + (uint32_t)ch);
     if (format == AUDIO_U8) {
-        return ((int)in[i * (uint32_t)channels + (uint32_t)ch] - 128) * 256;
+        return ((int)p[0] - 128) * 256;
     }
-    p = in + 2 * (i * (uint32_t)channels + (uint32_t)ch);
-    return (int16_t)(uint16_t)(p[0] | p[1] << 8);
+    if (format == AUDIO_S16LE) {
+        return (int16_t)(uint16_t)(p[0] | p[1] << 8);
+    }
+    return wide16(p, format);
 }
 
 /**
@@ -1343,16 +1379,14 @@ static int source(const uint8_t *in, uint32_t n, audio_format_t format, int chan
 static void resampled(const char *name, audio_format_t format, int channels, uint32_t rate,
                       uint32_t n)
 {
-    uint32_t frame = (uint32_t)channels * (format == AUDIO_S16LE ? 2u : 1u);
+    uint32_t frame = (uint32_t)channels * AUDIO_SAMPLE_BYTES(format);
     uint32_t k, i, ph, w;
     unsigned long long t;
     int ch, a, b, want, bad = 0;
 
     begin(name);
     check(open_dsp(1) == 0, "open");
-    check(ask(DSP_SETFMT, format == AUDIO_U8 ? AFMT_U8 : AFMT_S16_LE) ==
-              (format == AUDIO_U8 ? AFMT_U8 : AFMT_S16_LE),
-          "the format granted");
+    check(ask(DSP_SETFMT, afmt_bit(format)) == afmt_bit(format), "the format granted");
     check(ask(DSP_CHANNELS, channels) == channels, "the channels granted");
     check(ask(DSP_SPEED, (int)rate) == (int)rate, "the rate granted");
     check(put(0, n * frame) == (int32_t)(n * frame), "every frame taken");
@@ -1382,7 +1416,8 @@ static void resampled(const char *name, audio_format_t format, int channels, uin
 
 /** Each format, channel count and rate converted to the mix's: up from
  * 8000 Hz unsigned 8-bit mono and from 22050 and 44100 Hz, and down from
- * 96000 and 192000 Hz, four times the mix's. */
+ * 96000 and 192000 Hz, four times the mix's; and the 24 and 32-bit formats
+ * at and around the mix's rate. */
 static void row_resampling(void)
 {
     resampled("resampling 8000 Hz U8 mono", AUDIO_U8, 1, 8000, 3000);
@@ -1390,6 +1425,155 @@ static void row_resampling(void)
     resampled("resampling 44100 Hz S16 stereo", AUDIO_S16LE, 2, 44100, 5000);
     resampled("resampling 96000 Hz U8 stereo", AUDIO_U8, 2, 96000, 9000);
     resampled("resampling 192000 Hz S16 stereo", AUDIO_S16LE, 2, 192000, 9000);
+    resampled("resampling 48000 Hz S24 mono", AUDIO_S24LE, 1, 48000, 3000);
+    resampled("resampling 44100 Hz S24 packed stereo", AUDIO_S24_3LE, 2, 44100, 5000);
+    resampled("resampling 96000 Hz S32 stereo", AUDIO_S32LE, 2, 96000, 9000);
+}
+
+/**
+ * The 24 and 32-bit formats at the mix's rate, stereo, each to the mix
+ * exactly: the largest sample gives 32767 and the most negative -32768, -1
+ * stays -1 and any other keeps its top 16 bits, rounded toward minus
+ * infinity. The top byte of 24 bits in four is not read, so a byte that is
+ * no sign there changes nothing.
+ */
+static void wide_exact(const char *name, audio_format_t format)
+{
+    static const long long s32[6] = {0x7FFFFFFFll, -0x80000000ll, -1,
+                                     0x12345678ll, -0x12345678ll, 0x0000FFFFll};
+    static const int want32[6] = {32767, -32768, -1, 0x1234, -0x1235, 0};
+    static const long long s24[6] = {0x7FFFFFll, -0x800000ll, -1,
+                                     0x123456ll, -0x123456ll, 0x0000FFll};
+    static const int want24[6] = {32767, -32768, -1, 0x1234, -0x1235, 0};
+    uint8_t buf[6 * 4];
+    uint32_t size = AUDIO_SAMPLE_BYTES(format), i, b;
+    unsigned long long u;
+    int wide = format == AUDIO_S32LE;
+
+    begin(name);
+    for (i = 0; i < 6; i++) {
+        u = (unsigned long long)(wide ? s32[i] : s24[i]);
+        for (b = 0; b < size; b++) {
+            buf[i * size + b] = (uint8_t)(u >> (8 * b));
+        }
+        if (format == AUDIO_S24LE) {
+            buf[i * size + 3] = 0x5A;
+        }
+    }
+    check(open_dsp(1) == 0, "open");
+    check(ask(DSP_SETFMT, afmt_bit(format)) == afmt_bit(format), "the format granted");
+    check(ask(DSP_CHANNELS, 2) == 2 && ask(DSP_SPEED, 48000) == 48000, "stereo at 48000 Hz");
+    check(dspdev_write(&entry, (const char __user *)buf, 6 * size) == (int32_t)(6 * size),
+          "three frames taken");
+    check(ask(DSP_SYNC, 0) == 0 && !m.running, "SYNC drains them");
+    close_dsp();
+    check(out_frames() >= 3, "the record holds them");
+    for (i = 0; i < 6 && out_frames() >= 3; i++) {
+        check(out_sample(i / 2, (int)(i % 2)) == (wide ? want32[i] : want24[i]),
+              "each sample is its top 16 bits");
+    }
+    for (i = 3; i < out_frames(); i++) {
+        check(out_sample(i, 0) == 0 && out_sample(i, 1) == 0, "then silence");
+    }
+}
+
+/** Each 24 and 32-bit format to the mix exactly. */
+static void row_wide_formats(void)
+{
+    wide_exact("S24_LE exactly", AUDIO_S24LE);
+    wide_exact("S24_PACKED exactly", AUDIO_S24_3LE);
+    wide_exact("S32_LE exactly", AUDIO_S32LE);
+}
+
+/**
+ * A reader in a 24 or 32-bit format: the device is asked for 16 bits, and
+ * each recorded sample reaches the reader on top of zeros, with the sign of
+ * 24 bits in four in its top byte.
+ */
+static void wide_reader(const char *name, audio_format_t format)
+{
+    uint32_t size = AUDIO_SAMPLE_BYTES(format), i, n;
+    const uint8_t *q, *r;
+    int bad = 0;
+
+    begin(name);
+    check(open_dsp(0) == 0, "open");
+    check(ask(DSP_SETFMT, afmt_bit(format)) == afmt_bit(format), "the format granted");
+    check(ask(DSP_CHANNELS, 2) == 2 && ask(DSP_SPEED, 48000) == 48000, "stereo at 48000 Hz");
+    check(cap.s->format == AUDIO_S16LE && cap.s->channels == 2 && cap.s->rate == 48000,
+          "the device is asked for 16-bit stereo");
+    n = 1024 * size;
+    check(take(n) == (int32_t)n, "a read of 1024 samples");
+    for (i = 0; i < 1024 && !bad; i++) {
+        q = pattern + 2 * i;
+        r = got + size * i;
+        bad = r[0] != 0 || (format == AUDIO_S32LE && r[1] != 0);
+        r += size - (format == AUDIO_S24LE ? 3 : 2);
+        bad |= r[0] != q[0] || r[1] != q[1];
+        if (format == AUDIO_S24LE) {
+            bad |= r[2] != (q[1] & 0x80 ? 0xFF : 0);
+        }
+    }
+    check(!bad, "each sample's 16 bits on top of zeros");
+    close_dsp();
+}
+
+/** Each 24 and 32-bit format read. */
+static void row_wide_readers(void)
+{
+    wide_reader("S24_LE reader", AUDIO_S24LE);
+    wide_reader("S24_PACKED reader", AUDIO_S24_3LE);
+    wide_reader("S32_LE reader", AUDIO_S32LE);
+}
+
+/**
+ * cmus playing a 24-bit FLAC at 96000 Hz: FFmpeg's decoder gives 32-bit
+ * samples, for which cmus asks S32_LE, and its fragment is a 25th of a
+ * second's bytes. At twice the mix's rate each frame of the mix is every
+ * second frame of the file, at its top 16 bits.
+ */
+static void row_cmus_24(void)
+{
+    struct dsp_buf_info info;
+    uint32_t at = 0, n = 16384 * 8, k;
+    int space, ch, shift = 0, bad = 0;
+
+    begin("cmus 24-bit");
+    m.play_max = 4096;
+    check(open_dsp(1) == 0, "open O_WRONLY");
+    check(ask(DSP_RESET, 0) == 0, "RESET");
+    check(ask(DSP_CHANNELS, 2) == 2, "CHANNELS");
+    check(ask(DSP_SETFMT, AFMT_S32_LE) == AFMT_S32_LE, "SAMPLESIZE of S32_LE is granted");
+    check(ask(DSP_SPEED, 96000) == 96000, "SPEED");
+    while (1 << shift < 96000 * 8 / 25) {
+        shift++;
+    }
+    shift--;
+    check(call(DSP_SETFRAGMENT, &(int){(32 << 16) + shift}) == 0, "SETFRAGMENT");
+    info = ospace();
+    check(info.fragsize == 16384 && info.fragstotal == 4, "periods of 16384, as many as fit");
+    while (at < n) {
+        info = ospace();
+        space = (info.fragments - 1) * info.fragsize;
+        if (space <= 0) {
+            model_tick();
+            continue;
+        }
+        if ((uint32_t)space > n - at) {
+            space = (int)(n - at);
+        }
+        space -= space % 8;
+        check(put(at, (uint32_t)space) == space, "a write of the room there is");
+        at += (uint32_t)space;
+    }
+    close_dsp();
+    check(out_frames() >= n / 16, "the whole file played");
+    for (k = 0; k < out_frames() && !bad; k++) {
+        for (ch = 0; ch < 2; ch++) {
+            bad |= out_sample(k, ch) != source(pattern, n / 8, AUDIO_S32LE, 2, 2 * k, ch);
+        }
+    }
+    check(!bad, "each frame of the mix the file's at its top 16 bits");
 }
 
 /**
@@ -1672,6 +1856,7 @@ int main(void)
     row_sox();
     row_ffmpeg();
     row_cmus();
+    row_cmus_24();
     row_capture_defaults();
     row_reading();
     row_overrun();
@@ -1684,6 +1869,8 @@ int main(void)
     row_mixing();
     row_clipping();
     row_resampling();
+    row_wide_formats();
+    row_wide_readers();
     row_close_while_playing();
     row_two_readers();
     row_reader_after_overrun();
