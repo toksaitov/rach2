@@ -486,7 +486,7 @@ static uint64_t sta_heard(struct wlan *wlan)
 }
 
 static const struct wlan_mlme_ops mlme_ops = {wlan_data_mlme_tx, sta_state, sta_event, sta_poll,
-                                              sta_heard, sta_hold, sta_moved};
+                                              sta_heard,         sta_hold,  sta_moved};
 
 /* A softMAC station joins through authentication and association, which
  * nl80211 drives for CONNECT, so it has no connect or disconnect of its
