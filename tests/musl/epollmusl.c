@@ -37,6 +37,12 @@
  * epoll_pwait2 takes a timeout of 2^31 seconds, and fails with EINVAL for
  * negative seconds.
  *
+ * A wait asleep in epoll_wait keeps none of the descriptors it watches, as
+ * on Linux: a pipe's write end that a process sharing the waiter's
+ * descriptor table removes from the set and closes, or replaces by dup2, is
+ * released at once, so a read of the pipe returns 0, and the wait reports
+ * each pipe's hangup.
+ *
  * An edge-triggered registration reports only the kinds of change its events
  * watch, as in Linux: an AF_UNIX stream end watched for output is not
  * reported again when a byte comes to it, nor when a read makes room in its
@@ -63,6 +69,7 @@
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <poll.h>
+#include <sched.h>
 #include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -195,6 +202,13 @@ enum {
     FORKED_ABOVE,
     FORKED_WAIT,
     FORKED_KEPT,
+    LET_GO_SETUP,
+    LET_GO_ASLEEP,
+    LET_GO_CLOSED,
+    LET_GO_DUP_ASLEEP,
+    LET_GO_DUP,
+    LET_GO_DUPPED,
+    LET_GO_HANGUPS,
     CHECKS
 };
 
@@ -313,6 +327,13 @@ static const struct {
     {"forked-above", "a child's add of five sets under a sixth, one number closed, was not ELOOP"},
     {"forked-wait", "a child's wait on the nested sets"},
     {"forked-kept", "a child's close and wait took the parent's registration of a set"},
+    {"let-go-setup", "setup for a close while a sharer of the table waits"},
+    {"let-go-asleep", "the child that shares the table was never seen asleep in epoll_wait"},
+    {"let-go-closed", "a pipe's write end closed while a sharer waited in epoll_wait was kept"},
+    {"let-go-dup-asleep", "the child was never seen asleep in epoll_wait again"},
+    {"let-go-dup", "a dup2 onto a descriptor a sharer's epoll_wait held failed"},
+    {"let-go-dupped", "a pipe's write end replaced by dup2 while a sharer waited was kept"},
+    {"let-go-hangups", "the sharer's wait was not told of both pipes' hangups"},
 };
 
 /** In the process that began the report, report every check before `check`
@@ -1419,6 +1440,97 @@ static int nested_forked(void)
     return 0;
 }
 
+/**
+ * Check that a wait asleep in epoll_wait keeps none of the descriptors it
+ * watches. A child made by clone with CLONE_FILES, which shares the table as
+ * a thread does, waits on a set of two pipes' read ends and write ends, the
+ * write ends' first edges taken already. Once the child is seen asleep, the
+ * parent removes the first write end from the set and closes it, and a read
+ * of the first pipe must return 0 at once; once the child is seen asleep
+ * again, the parent puts a copy of a descriptor of /dev/null in the second
+ * write end's place with dup2, and a read of the second pipe must return 0.
+ * The child must have the hangup of each read end. Returns 0, or 1 once the
+ * failure is reported.
+ */
+static int let_go(void)
+{
+    struct epoll_event ev, out;
+    int ep = epoll_create1(0);
+    int null = open("/dev/null", O_WRONLY);
+    int a[2], b[2], i, status, check = LET_GO_SETUP;
+    char byte;
+    pid_t pid;
+
+    if (ep < 0 || null < 0 || pipe(a) != 0 || pipe(b) != 0 ||
+        fcntl(a[0], F_SETFL, O_NONBLOCK) != 0 || fcntl(b[0], F_SETFL, O_NONBLOCK) != 0) {
+        return fail(LET_GO_SETUP);
+    }
+    memset(&ev, 0, sizeof(ev));
+    for (i = 0; i < 2; i++) {
+        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
+        ev.data.u32 = (uint32_t)a[i];
+        if (epoll_ctl(ep, EPOLL_CTL_ADD, a[i], &ev) != 0) {
+            return fail(LET_GO_SETUP);
+        }
+        ev.data.u32 = (uint32_t)b[i];
+        if (epoll_ctl(ep, EPOLL_CTL_ADD, b[i], &ev) != 0) {
+            return fail(LET_GO_SETUP);
+        }
+    }
+    while ((i = wait_one(ep, 0, &out)) == 1) {
+    }
+    if (i != 0) {
+        return fail(LET_GO_SETUP);
+    }
+    pid = (pid_t)syscall(SYS_clone, CLONE_FILES | SIGCHLD, 0, 0, 0, 0);
+    if (pid < 0) {
+        return fail(LET_GO_SETUP);
+    }
+    if (pid == 0) {
+        int hangups = 0;
+
+        while (hangups != 3) {
+            if (wait_one(ep, -1, &out) != 1 || !(out.events & EPOLLHUP)) {
+                _exit(1);
+            }
+            hangups |= out.data.u32 == (uint32_t)a[0] ? 1 : out.data.u32 == (uint32_t)b[0] ? 2 : 4;
+            if (hangups & 4) {
+                _exit(1);
+            }
+        }
+        _exit(0);
+    }
+    if (!seen_asleep(pid)) {
+        check = LET_GO_ASLEEP;
+    } else if (epoll_ctl(ep, EPOLL_CTL_DEL, a[1], NULL) != 0 || close(a[1]) != 0 ||
+               read(a[0], &byte, 1) != 0) {
+        check = LET_GO_CLOSED;
+    } else if (!seen_asleep(pid)) {
+        check = LET_GO_DUP_ASLEEP;
+    } else if (epoll_ctl(ep, EPOLL_CTL_DEL, b[1], NULL) != 0 || dup2(null, b[1]) != b[1]) {
+        check = LET_GO_DUP;
+    } else if (read(b[0], &byte, 1) != 0) {
+        check = LET_GO_DUPPED;
+    } else if (waitpid(pid, &status, 0) != pid || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        return fail(LET_GO_HANGUPS);
+    } else {
+        check = CHECKS;
+    }
+    if (check != CHECKS) {
+        i = errno;
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        errno = i;
+        return fail(check);
+    }
+    close(a[0]);
+    close(b[0]);
+    close(b[1]);
+    close(null);
+    close(ep);
+    return 0;
+}
+
 #if defined __x86_64__
 /**
  * Check that eventfd (284) and pipe (22), which the kernel serves as eventfd2
@@ -1495,7 +1607,7 @@ int main(int argc, char **argv)
         in_turn() || failed_copy() || long_timeout() || pipe_each_write() || unix_kinds() ||
         unix_shutdown_edge() || unix_own_room() || unix_accept_edge() || udp_arrival() ||
         tcp_arrival() || pty_signal_room() || nested_six() || nested_two_paths() ||
-        nested_forked()) {
+        nested_forked() || let_go()) {
         return 1;
     }
     report_at(CHECKS);

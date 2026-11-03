@@ -4565,7 +4565,7 @@
     },
     {
       "case_id": "guest.default.epollmusl",
-      "behavior": "eventfd counters with and without EFD_SEMAPHORE and their errors; epoll sets level-triggered, edge-triggered and one-shot, their errors, a child's write waking a wait with no timeout, nested sets with ELOOP for cycles and chains past five, EFAULT on a failed copy, epoll_pwait2's 64-bit timeout; and the edges Linux gives AF_UNIX, UDP, TCP, pipes and a pseudoterminal. It makes its own pipes, sockets and pseudoterminal and needs no argument.",
+      "behavior": "eventfd counters with and without EFD_SEMAPHORE and their errors; epoll sets level-triggered, edge-triggered and one-shot, their errors, a child's write waking a wait with no timeout, nested sets with ELOOP for cycles and chains past five, EFAULT on a failed copy, epoll_pwait2's 64-bit timeout; the edges Linux gives AF_UNIX, UDP, TCP, pipes and a pseudoterminal; and a close or dup2 by a sharer of the descriptor table that releases a pipe end at once while a wait sleeps in epoll_wait. It makes its own pipes, sockets and pseudoterminal and needs no argument.",
       "units": ["default", "musl/epollmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -4676,7 +4676,14 @@
         {"assertion_id": "forked-below", "checks": "The child, with its copy of the second set's number closed, gets ELOOP for a sixth set under the five.", "source": "program"},
         {"assertion_id": "forked-above", "checks": "It gets ELOOP for the five under a sixth.", "source": "program"},
         {"assertion_id": "forked-wait", "checks": "Its wait on the first set succeeds.", "source": "program"},
-        {"assertion_id": "forked-kept", "checks": "The parent's wait on the first set still reports a write to the pipe in the fifth.", "source": "program"}
+        {"assertion_id": "forked-kept", "checks": "The parent's wait on the first set still reports a write to the pipe in the fifth.", "source": "program"},
+        {"assertion_id": "let-go-setup", "checks": "A set of two pipes' read ends and write ends is made, the write ends' first edges are taken, and clone with CLONE_FILES makes a child that shares the descriptor table.", "source": "program"},
+        {"assertion_id": "let-go-asleep", "checks": "The child is seen asleep in epoll_wait on the set.", "source": "program"},
+        {"assertion_id": "let-go-closed", "checks": "Once the first write end is removed from the set and closed, a read of the first pipe returns 0 at once: the child's wait kept no hold on the write end.", "source": "program"},
+        {"assertion_id": "let-go-dup-asleep", "checks": "The child is seen asleep in epoll_wait again.", "source": "program"},
+        {"assertion_id": "let-go-dup", "checks": "dup2 of a descriptor of /dev/null onto the second write end, removed from the set, succeeds.", "source": "program"},
+        {"assertion_id": "let-go-dupped", "checks": "A read of the second pipe then returns 0 at once.", "source": "program"},
+        {"assertion_id": "let-go-hangups", "checks": "The child's wait reports the hangup of each read end and the child exits 0.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
