@@ -550,6 +550,60 @@ static void failed(const char *name, const char *why)
 }
 
 /**
+ * Start play(1) on `files[0]` in a new session whose controlling terminal
+ * is the pseudo-terminal `slave`, as from an SSH session; its pid goes in
+ * children[0]. `master` is the terminal's other side, which the child
+ * closes.
+ */
+static void start_play(int master, int slave)
+{
+    children[0] = fork();
+    if (children[0] < 0)
+        fail("fork play");
+    if (children[0] == 0) {
+        memset(children, 0, sizeof(children));
+        close(master);
+        if (setsid() < 0 || ioctl(slave, TIOCSCTTY, 0) < 0 || dup2(slave, 0) < 0 ||
+            dup2(slave, 1) < 0 || dup2(slave, 2) < 0)
+            _exit(126);
+        if (slave > 2)
+            close(slave);
+        execl("/bin/play", "play", files[0], (char *)NULL);
+        _exit(127);
+    }
+}
+
+/**
+ * Stop play, which trial `name` runs on the terminal `master`, by typing
+ * `keys`, or by sending `signo` when `keys` is null, and judge how it
+ * ended; `*from` and `*status` are hear's.
+ *
+ * @return 1 when play printed "Aborted." once, warned of the unbound key
+ * once, and exited 0; 0 after reporting the failure.
+ */
+static int stop_play(const char *name, int master, const char *keys, int signo, size_t *from,
+                     int *status)
+{
+    if (keys) {
+        if (write(master, keys, strlen(keys)) != (ssize_t)strlen(keys))
+            fail("type Ctrl+C");
+    } else if (kill(children[0], signo) < 0) {
+        fail("signal play");
+    }
+    if (!hear(master, NULL, from, status))
+        failed(name, "play did not exit");
+    else if (!WIFEXITED(*status) || WEXITSTATUS(*status) != 0)
+        failed(name, "play did not exit 0");
+    else if (!strstr(said, "Aborted."))
+        failed(name, "play did not say Aborted.");
+    else if (occurrences("doesn't do anything") != 1)
+        failed(name, "play warned of a key more than once");
+    else
+        return 1;
+    return 0;
+}
+
+/**
  * Run play(1) on `files[0]` with a new pseudo-terminal for its controlling
  * terminal, as from an SSH session, and stop it by typing `keys` or by
  * sending `signo`. Before the stop, a key play does not bind must draw one
@@ -574,46 +628,17 @@ static int trial(const char *name, const char *keys, int signo)
     slave = open(path, O_RDWR | O_NOCTTY);
     if (slave < 0 || ioctl(slave, TIOCSWINSZ, &size) < 0)
         fail("open the terminal's slave");
-    children[0] = fork();
-    if (children[0] < 0)
-        fail("fork play");
-    if (children[0] == 0) {
-        memset(children, 0, sizeof(children));
-        close(master);
-        if (setsid() < 0 || ioctl(slave, TIOCSCTTY, 0) < 0 || dup2(slave, 0) < 0 ||
-            dup2(slave, 1) < 0 || dup2(slave, 2) < 0)
-            _exit(126);
-        if (slave > 2)
-            close(slave);
-        execl("/bin/play", "play", files[0], (char *)NULL);
-        _exit(127);
-    }
+    start_play(master, slave);
     /* Two status lines: play's flow runs, with its key reader on. */
-    if (!hear(master, "In:", &from, &status) || !hear(master, "In:", &from, &status)) {
+    if (!hear(master, "In:", &from, &status) || !hear(master, "In:", &from, &status))
         failed(name, "play did not show its progress");
-    } else if (write(master, "x", 1) != 1) {
+    else if (write(master, "x", 1) != 1)
         fail("type a key");
-    } else if (!hear(master, "doesn't do anything", &from, &status) ||
-               !hear(master, "In:", &from, &status)) {
+    else if (!hear(master, "doesn't do anything", &from, &status) ||
+             !hear(master, "In:", &from, &status))
         failed(name, "play did not go on after one unbound key");
-    } else {
-        if (keys) {
-            if (write(master, keys, strlen(keys)) != (ssize_t)strlen(keys))
-                fail("type Ctrl+C");
-        } else if (kill(children[0], signo) < 0) {
-            fail("signal play");
-        }
-        if (!hear(master, NULL, &from, &status))
-            failed(name, "play did not exit");
-        else if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-            failed(name, "play did not exit 0");
-        else if (!strstr(said, "Aborted."))
-            failed(name, "play did not say Aborted.");
-        else if (occurrences("doesn't do anything") != 1)
-            failed(name, "play warned of a key more than once");
-        else
-            ok = 1;
-    }
+    else
+        ok = stop_play(name, master, keys, signo, &from, &status);
     if (children[0] > 0) {
         kill(children[0], SIGKILL);
         while (waitpid(children[0], NULL, 0) < 0 && errno == EINTR) {
