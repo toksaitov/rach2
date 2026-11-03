@@ -13,6 +13,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "format.h"
@@ -165,13 +166,61 @@ static uint64_t next_random(void)
     return x * 0x2545f4914f6cdd1dULL;
 }
 
-/** Compare every float format over `v`. */
+/**
+ * Format `v` with `fmt`, a g conversion with the '#' flag, as C99 7.19.6.1
+ * defines it: as e with precision P - 1 when the exponent X of that is below
+ * -4 or at least P, else as f with precision P - 1 - X, keeping the flags,
+ * the width and the text around the conversion. Return snprintf's result.
+ *
+ * Ubuntu 26.04's glibc 2.43 drops the zeros that a rounding carry into a new
+ * digit leaves, printing "1.e+06" for %#g of 999999.5 where the standard
+ * gives "1.00000e+06", but formats e and f right, so these rows are judged
+ * through them rather than through the host's g.
+ */
+static int alt_g_snprintf(char *buf, size_t size, const char *fmt, double v)
+{
+    char spec[64], e[64];
+    const char *conv = strpbrk(fmt + 1, "gG");
+    const char *dot = strchr(fmt, '.');
+    const char *x;
+    int p = 6, n;
+    int upper = *conv == 'G';
+
+    if (dot != NULL && dot < conv) {
+        p = atoi(dot + 1);
+        if (p == 0)
+            p = 1;
+    } else {
+        dot = conv;
+    }
+    snprintf(e, sizeof(e), "%.*e", p - 1, v);
+    x = strchr(e, 'e');
+    n = x != NULL ? atoi(x + 1) : 0; /* the infinities print alike in e and f */
+    if (n < -4 || n >= p)
+        sprintf(spec, "%.*s.%d%c%s", (int)(dot - fmt), fmt, p - 1, upper ? 'E' : 'e', conv + 1);
+    else
+        sprintf(spec, "%.*s.%d%c%s", (int)(dot - fmt), fmt, p - 1 - n, upper ? 'F' : 'f', conv + 1);
+    return snprintf(buf, size, spec, v);
+}
+
+/** Compare every float format over `v`; the '#' g rows against the
+ * standard's result. */
 static void float_rows(double v)
 {
     size_t f;
 
     for (f = 0; f < sizeof(float_formats) / sizeof(float_formats[0]); f++) {
-        ROW(float_formats[f], v);
+        const char *fmt = float_formats[f];
+
+        if (strchr(fmt, '#') != NULL && strpbrk(fmt + 1, "gG") != NULL) {
+            char got[1200], want[1200];
+            int gn = port_snprintf(got, sizeof(got), fmt, v);
+            int wn = alt_g_snprintf(want, sizeof(want), fmt, v);
+
+            same(fmt, got, gn, want, wn);
+        } else {
+            ROW(fmt, v);
+        }
     }
 }
 
