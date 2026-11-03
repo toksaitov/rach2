@@ -1463,6 +1463,19 @@ static int exec_fs_shared(void)
 }
 
 /**
+ * Whether the image `s` describes may run with an effective uid of root in
+ * the caller's user namespace, with the caller's or, where `mode` has the
+ * set-user-ID bit, the file owner's: either, since `exec_ids` may yet ignore
+ * the bit. A thread whose capabilities its last exec gave from the ambient
+ * set (`amb_granted`) regains others only in such an image.
+ */
+static int exec_root_image(const struct exec_state *s, uint32_t mode)
+{
+    return uid_seen(current_proc->euid) == 0 ||
+           ((mode & KRFFS_MODE_SUID) && uid_seen(s->id.uid) == 0);
+}
+
+/**
  * The ids the new image runs with, into `s`: the file owner's where a
  * set-id bit applies, the way privilege is regained, and the caller's
  * effective ids otherwise. `secure`, which is AT_SECURE, says whether the
@@ -1492,30 +1505,37 @@ static int exec_fs_shared(void)
  * and not inheritable stays lost. The ambient set is within the inheritable
  * set and the capabilities held, so every case keeps it; `exec_ambient`
  * then gives an image whose ids give none those of the ambient set. A
- * thread that holds those its last exec gave it so (`amb_granted`) has lost
- * the rest by its ambient set, not by its own choice, and so regains
- * nothing: an image of root has its bounding and inheritable sets, as the
- * image of a thread that never held a capability has them.
+ * thread that holds those its last exec gave it so (`amb_granted`) holds no
+ * others, and an image of root regains the rest as above, in the same three
+ * cases keeping to those it held, as Linux keeps it; an image whose ids give
+ * none, the next exec of a sandbox such as bubblewrap's, regains nothing and
+ * holds its ambient set again. An exec never gives the image a capability
+ * its caller's permitted set lacked under no_new_privs, a tracer that is not
+ * privileged or shared directories.
  */
 static void exec_ids(struct exec_state *s)
 {
     uint32_t mode = current_proc->no_new_privs ? 0u : s->id.mode;
     uint32_t root_lost[2], i;
+    int gains = 0;
 
     if (!ns_ids_mapped(proc_userns(current_proc), s->id.uid, s->id.gid)) {
         mode = 0;
     }
 
-    s->regains = 0;
     for (i = 0; i < 2; i++) {
-        uint32_t lost = current_proc->amb_granted ? 0u : current_proc->cap_lost[i];
+        uint32_t lost = current_proc->cap_lost[i];
 
         root_lost[i] = current_proc->bset_lost[i] & ~current_proc->cap_inh[i];
         s->cap_lost[i] = lost | root_lost[i];
         if (lost & ~root_lost[i]) {
-            s->regains = !current_proc->no_new_privs;
+            gains = 1;
         }
     }
+    if (current_proc->amb_granted && !exec_root_image(s, mode)) {
+        gains = 0;
+    }
+    s->regains = gains && !current_proc->no_new_privs;
     if ((mode != 0 && !proc_privileged(current_proc)) || s->regains) {
         if (exec_traced() || exec_fs_shared()) {
             mode = 0;

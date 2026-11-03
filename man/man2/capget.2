@@ -111,6 +111,8 @@ An image whose user IDs make it root holds those capabilities already;
 one whose user IDs do not holds the capabilities of the ambient set,
 effective and permitted, and no other, as on Linux, until its next exec
 or until its user IDs leave root.
+Such a thread is one that gave up the others: an exec once its user IDs
+make it root gives them back, in the same cases as above.
 A
 .Xr setuid 2 ,
 .Xr setreuid 2
@@ -147,7 +149,10 @@ gives them back; it checks the rules of the inheritable set, and that an
 exec under no_new_privs keeps an ambient capability, and so does the exec
 of user 1000 in a user namespace of its own, as bubblewrap's
 .Fl -cap-add
-needs when an ordinary user runs it.
+needs when an ordinary user runs it; and that after such an exec a
+.Xr setuid 2
+to root and an exec give the image the bounding set again, but under
+no_new_privs only the capabilities its caller held.
 .Pa tests/musl/sandboxmusl.c
 keeps
 .Dv CAP_SYS_ADMIN
