@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 3, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -108,6 +108,13 @@ A state changes when two readings in a row differ from it, or at a start's
 reading; a failed reading changes nothing.
 A change of the microphone jack moves capture between the internal and the
 jack microphone.
+.Pp
+On a codec with a beep widget the
+.Ql beep
+line gives its node, the divider of the tone it sounds, 0 when silent, 1
+while a tone turned the output pins on with no stream playing, and the
+tones it has begun; see
+.Xr console 4 .
 .Pp
 The stream line gives the last successful request and programmed rate,
 then controller, primary DAC and headphone DAC format words read back
@@ -306,6 +313,13 @@ request ended or replaced.
 .It Li speaker-divisor , speaker-ms
 The last tone's or sound's divisor of 1193182 Hz, and the last tone's
 length in milliseconds, 0 for a sound.
+.It Li speaker-beeps , speaker-beep-divider
+Tones and sounds the audio driver's beep generator began beside the PC
+speaker, and the divider it was last sent, 0 while it is silent; both stay
+0 on a machine whose driver has no generator.
+.It Li speaker-beep-retries
+Stops of the generator that the tick found the codec busy for and sent
+again at a later tick.
 .El
 .It Pa /proc/diskstats
 A line for each disk and each partition node, in Linux's twenty fields:

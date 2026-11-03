@@ -2,8 +2,8 @@
  * mixer: read or set the levels and the record source of /dev/mixer.
  *
  * `mixer` prints each channel of the device as `NAME L:R`, the left and the
- * right channel's percentage, by OSS's names (vol, pcm, line, mic, rec,
- * igain, monitor), with ` muted` after the volume while it is muted and
+ * right channel's percentage, by OSS's names (vol, pcm, speaker, line, mic,
+ * rec, igain, monitor), with ` muted` after the volume while it is muted and
  * ` rec` after the source recorded; `mixer NAME` prints one channel.
  * `mixer NAME N` sets both channels to N, `mixer NAME L:R` each its own,
  * and `mixer NAME +N` and `mixer NAME -N` move both by N, kept between 0

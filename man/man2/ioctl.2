@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 3, 2026
 .Dt IOCTL 2
 .Os
 .Sh NAME
@@ -415,6 +415,19 @@ A length or divisor of 0 silences the speaker.
 .Pp
 Each of the two ends the tone or sound before it, and a divisor whose
 pitch is not between 21 and 32766 Hz silences the speaker, as on Linux.
+Where the HD Audio codec has a beep generator, each request sounds it
+beside the PC speaker, as Linux sounds both: at 48000 / (4 x
+.Ar d )
+Hz, where the divider
+.Ar d
+is 12000 over the pitch, held between 1 and 255, so that 750 Hz sounds
+as 750 Hz, and silent while the
+.Dv SOUND_MIXER_SPEAKER
+level of
+.Xr mixer 4
+is 0.
+With no stream playing, a tone turns the codec's output pins on, and the
+kernel turns them off a second after the generator stops.
 Both return 0.
 .Pa /proc/console
 counts the tones and sounds; see

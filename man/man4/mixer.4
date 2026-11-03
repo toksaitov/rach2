@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 3, 2026
 .Dt MIXER 4
 .Os
 .Sh NAME
@@ -34,6 +34,16 @@ The console's
 .Dv AUDIO_SET_VOLUME
 sets the hardware master too.
 A master volume of 0 mutes HD Audio's amplifiers.
+.It Dv SOUND_MIXER_SPEAKER
+The level of the codec's beep generator, which the console's tones sound
+beside the PC speaker (see
+.Xr console 4 ) ,
+on HD Audio with a beep widget alone.
+It starts at the widget's 0 dB step, 100 on the G50-70, whose amplifier
+has seven steps of 4 dB and no mute.
+A level of 0 leaves the generator silent; any other reads as its step's,
+and at least 1.
+A change takes effect at the next tone.
 .It Dv SOUND_MIXER_MIC , SOUND_MIXER_MONITOR , SOUND_MIXER_LINE
 The levels of the microphone jack, the internal microphone and the line
 in, as FreeBSD names them, each scaled by the record level for the gain of
@@ -81,6 +91,8 @@ The channels, a mask of
 .Dv SOUND_MASK_VOLUME
 and
 .Dv SOUND_MASK_PCM ,
+.Dv SOUND_MASK_SPEAKER
+on a codec with a beep generator,
 and on a driver that records the sources' channels,
 .Dv SOUND_MASK_RECLEV
 and

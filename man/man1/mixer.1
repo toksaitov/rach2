@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 3, 2026
 .Dt MIXER 1
 .Os
 .Sh NAME
@@ -33,6 +33,9 @@ the volume;
 the level of the calling program's own playback, which for
 .Nm
 itself, playing nothing, reads 100 and does not change;
+.Cm speaker ,
+the level of the console's bell on a codec with a beep generator, such as
+the Lenovo G50-70's, where 0 silences it;
 .Cm mic ,
 .Cm monitor
 and
