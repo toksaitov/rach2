@@ -195,6 +195,15 @@ static void put_input(struct audio_text *t, const hda_input_report_t *in)
     put_ch(t, '\n');
 }
 
+/** The bits of each sample of stream format word `format`, from its BITS
+ * field, bits 6:4: 8, 16, 20, 24 or 32; 0 for a value the field lacks. */
+static uint32_t stream_bits(uint16_t format)
+{
+    static const uint8_t bits[8] = {8, 16, 20, 24, 32, 0, 0, 0};
+
+    return bits[(format >> 4) & 7u];
+}
+
 /**
  * Write /proc/audio's text into `buf`, of `cap` bytes, with no terminator:
  * the audio driver's name and the HDA driver's report (`hda_get_report`),
@@ -263,6 +272,7 @@ int audio_proc_text(char *buf, int cap)
     put_hex(t, r->dac_format, 4);
     put_str(t, " hp-format 0x");
     put_hex(t, r->hp_format, 4);
+    put_field(t, " bits ", r->programmed_rate ? stream_bits(r->stream_format) : 0);
     put_ch(t, '\n');
     for (i = 0; i < 2; i++) {
         const hda_caps_report_t *c = &r->caps[i];

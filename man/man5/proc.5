@@ -111,7 +111,10 @@ jack microphone.
 .Pp
 The stream line gives the last successful request and programmed rate,
 then controller, primary DAC and headphone DAC format words read back
-at setup.
+at setup, and
+.Ql bits ,
+the bits of each sample the controller's word plays: 16, or 24 for the
+mix on a codec whose DACs have 24 bits.
 Before any stream these fields are zero.
 Stopping clears
 .Ql playing
@@ -123,7 +126,7 @@ line gives the DAC, the node supplying its effective capabilities, and
 hexadecimal PCM and stream-format masks.
 PCM bits 0 through 11 correspond, in order, to 8000, 11025, 16000, 22050,
 32000, 44100, 48000, 88200, 96000, 176400, 192000 and 384000 Hz.
-PCM bits 16 and 17 indicate 8-bit and 16-bit samples.
+PCM bits 16 through 20 indicate 8, 16, 20, 24 and 32-bit samples.
 Stream-format bit 0 indicates PCM.
 .Pp
 The selected pins and mixer have
