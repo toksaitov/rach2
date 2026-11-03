@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 3, 2026
 .Dt CONSOLE 4
 .Os
 .Sh NAME
@@ -121,9 +121,11 @@ does not wait for
 .Dv VTIME :
 it reports the terminal readable with
 .Dv VMIN
-bytes, or always when
+bytes when
 .Dv VMIN
-is 0.
+is above 0 and
+.Dv VTIME
+is 0, and otherwise with one byte, as Linux does.
 Echo and signal generation are controlled by the terminal settings.
 With signal generation enabled, the interrupt and suspend characters,
 normally Ctrl-C and Ctrl-Z, send
