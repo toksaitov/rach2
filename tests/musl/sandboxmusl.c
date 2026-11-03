@@ -41,9 +41,9 @@
  * CAP_SYS_ADMIN alone a thread still unshares a mount namespace, cannot
  * widen its set and, after it gives that one up too, cannot mount; with
  * CAP_CHOWN alone it cannot mount, and an exec gives every capability back.
- * The ambient set is empty: PR_CAP_AMBIENT_IS_SET answers 0,
- * PR_CAP_AMBIENT_RAISE fails with EPERM and PR_CAP_AMBIENT_CLEAR_ALL
- * succeeds.
+ * The ambient set starts empty: PR_CAP_AMBIENT_IS_SET answers 0,
+ * PR_CAP_AMBIENT_RAISE of CAP_CHOWN, which is not inheritable, fails with
+ * EPERM and PR_CAP_AMBIENT_CLEAR_ALL succeeds.
  *
  * The program runs itself in the modes `bset` and `regain`, named by its
  * first argument, as the image an exec row runs. With none it runs the

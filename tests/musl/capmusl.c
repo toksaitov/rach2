@@ -3,9 +3,17 @@
  *
  * As root the probe has every one, 0 to 40, effective and permitted, and none
  * inheritable. An unknown version is EINVAL, and with no data 0, with version
- * 3 written back into the header; an inheritable capability is EINVAL, since
- * the kernel keeps no inheritable set; a header whose version ends a page
- * answers a question about the version. A child that gives them up, as
+ * 3 written back into the header; a header whose version ends a page answers
+ * a question about the version. A child of root keeps an inheritable set as
+ * Linux does: capget reports the one capset gave, and a thread without
+ * CAP_SETPCAP may keep an inheritable capability it does not hold but not add
+ * one. PR_CAP_AMBIENT_RAISE takes a capability both held and inheritable and
+ * refuses the others with EPERM; /proc/self/status shows the two sets;
+ * capset that takes a capability out of the inheritable set takes it out of
+ * the ambient set, and so does setuid to user 1000; and an exec under
+ * no_new_privs of a thread that kept CAP_CHOWN alone, ambient, gives the
+ * image CAP_CHOWN effective, permitted and ambient, as bubblewrap's --cap-add
+ * needs. A child that gives them up, as
  * Chromium's zygote does in each process it forks, has none, in capget and in
  * /proc/self/status, and so has a child it forks; it may not bind a port below
  * 1024 nor read a file only another user may, may not take them back, and may
@@ -61,6 +69,16 @@
 #define HIGH_WORD 0x1FFu /* capabilities 32 to 40 */
 #define SECRET    "/tmp/capmusl.secret"
 
+/* The capabilities the inheritable and ambient rows name, as bits of the
+ * sets' first word. */
+#define CHOWN      (1u << 0)
+#define DAC        (1u << 1)
+#define SETPCAP    (1u << 8)
+#define NET_RAW    (1u << 13)
+#define CAP_CHOWN_ 0
+#define CAP_RAW_   13
+#define CAP_ADMIN_ 21
+
 /* One 32-bit word of each set, as Linux's __user_cap_data_struct. */
 struct cap_data {
     unsigned effective;
@@ -96,6 +114,12 @@ enum {
     UNKNOWN_VERSION,
     VERSION_ENDS_PAGE,
     INHERITABLE_SET,
+    INHERITABLE_CAPPED,
+    AMBIENT_RAISE,
+    AMBIENT_STATUS,
+    AMBIENT_CAPSET,
+    AMBIENT_SETUID,
+    EXEC_AMBIENT,
     MAKE_SECRET,
     DROPPED_CHILD,
     GIVE_UP,
@@ -128,7 +152,14 @@ static const struct {
     {"no-data", "an unknown version with no data was not 0 with version 3 written back"},
     {"unknown-version", "an unknown version was not EINVAL"},
     {"version-ends-page", "a header whose version ends a page was not asked the version alone"},
-    {"inheritable-set", "an inheritable capability was not EINVAL"},
+    {"inheritable-set", "capget did not report the inheritable set capset gave"},
+    {"inheritable-capped",
+     "a thread without CAP_SETPCAP could not keep an inheritable capability or added one"},
+    {"ambient-raise", "PR_CAP_AMBIENT did not raise a capability held and inheritable alone"},
+    {"ambient-status", "/proc/self/status did not show the inheritable and ambient sets"},
+    {"ambient-capset", "capset that took a capability out of the inheritable set left it ambient"},
+    {"ambient-setuid", "setuid to user 1000 left the ambient set"},
+    {"exec-ambient", "an exec under no_new_privs did not keep the ambient capability"},
     {"secret", "the file only user 1000 may read"},
     {"dropped-child", "a child could not report"},
     {"give-up", "capset with every set empty failed"},
@@ -236,11 +267,13 @@ static int give_up(void)
     return set_caps(d);
 }
 
-/** Return 1 when /proc/self/status shows no effective capability, else 0. */
-static int status_has_none(void)
+/**
+ * Return 1 when /proc/self/status has the line of the set `name`, such as
+ * "CapEff", with the 16 hex digits `digits`, else 0.
+ */
+static int status_set_is(const char *name, const char *digits)
 {
-    char buf[2048];
-    const char *line;
+    char buf[4096], want[40];
     int fd = open("/proc/self/status", O_RDONLY);
     ssize_t n = fd < 0 ? -1 : read(fd, buf, sizeof(buf) - 1);
 
@@ -251,8 +284,20 @@ static int status_has_none(void)
         return 0;
     }
     buf[n] = '\0';
-    line = strstr(buf, "CapEff:\t");
-    return line && strncmp(line + 8, "0000000000000000\n", 17) == 0;
+    snprintf(want, sizeof(want), "%s:\t%s\n", name, digits);
+    return strstr(buf, want) != NULL;
+}
+
+/** Return 1 when /proc/self/status shows no effective capability, else 0. */
+static int status_has_none(void)
+{
+    return status_set_is("CapEff", "0000000000000000");
+}
+
+/** Return 1 when `cap` is in the ambient set, 0 when not, -1 on error. */
+static int ambient(int cap)
+{
+    return (int)prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, cap, 0, 0);
 }
 
 /**
@@ -633,9 +678,12 @@ static int make_secret(void)
 /**
  * The image an exec row runs, which judges its sets by `mode`: "all",
  * "none", "undumpable" for every capability in an image that is not
- * dumpable, or "kept" for none, the parent-death signal SIGUSR1 and a
- * dumpable image. It kills the process `other` names first, when it names
- * one. Its exit status: 0 when the image is as `mode` says.
+ * dumpable, "kept" for none, the parent-death signal SIGUSR1 and a
+ * dumpable image, or "ambient" for CAP_CHOWN alone effective, permitted and
+ * ambient, in capget, prctl and /proc/self/status, with CAP_CHOWN and
+ * CAP_NET_RAW inheritable. It kills the process `other` names first, when it
+ * names one. Its exit status: 0 when the image is as `mode` says; for
+ * "ambient" the row of `ambient_rows` that failed otherwise.
  */
 static int judge_image(const char *mode, const char *other)
 {
@@ -649,11 +697,138 @@ static int judge_image(const char *mode, const char *other)
     if (strcmp(mode, "undumpable") == 0) {
         return !(found && all_of(d) && prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) == 0);
     }
+    if (strcmp(mode, "ambient") == 0) {
+        return found && d[0].effective == CHOWN && d[0].permitted == CHOWN &&
+                       d[0].inheritable == (CHOWN | NET_RAW) && d[1].effective == 0 &&
+                       d[1].permitted == 0 && d[1].inheritable == 0 && ambient(CAP_CHOWN_) == 1 &&
+                       ambient(CAP_RAW_) == 0 && status_set_is("CapEff", "0000000000000001") &&
+                       status_set_is("CapAmb", "0000000000000001")
+                   ? 0
+                   : EXEC_AMBIENT - INHERITABLE_SET + 1;
+    }
     if (strcmp(mode, "kept") == 0) {
         return !(found && none_of(d) && prctl(PR_GET_PDEATHSIG, &sig, 0, 0, 0) == 0 &&
                  sig == SIGUSR1 && prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) == 1);
     }
     return !(found && (strcmp(mode, "all") == 0 ? all_of(d) : none_of(d)));
+}
+
+/**
+ * Set the caller's effective and permitted sets to `held` and its
+ * inheritable set to `inh`, each the first word, the second empty. Returns
+ * 0, or -1 with errno set.
+ */
+static int set_first(unsigned held, unsigned inh)
+{
+    struct cap_data d[2];
+
+    memset(d, 0, sizeof(d));
+    d[0].effective = d[0].permitted = held;
+    d[0].inheritable = inh;
+    return set_caps(d);
+}
+
+/** Return 1 when the prctl `rc` failed with `err`, else 0. */
+static int refused_with(int rc, int err)
+{
+    return rc == -1 && errno == err;
+}
+
+/**
+ * In a child of root, make CAP_CHOWN and CAP_NET_RAW inheritable and give up
+ * CAP_SETPCAP, CAP_DAC_OVERRIDE and CAP_NET_RAW. Returns 0, or 1 to 2 for
+ * the row of the inheritable set that failed.
+ */
+static int inheritable_rows(void)
+{
+    struct cap_data d[2];
+    unsigned rest = 0xFFFFFFFFu & ~(SETPCAP | DAC | NET_RAW);
+
+    if (get_caps(d) != 0) {
+        return 1;
+    }
+    d[0].inheritable = CHOWN | NET_RAW;
+    if (set_caps(d) != 0 || get_caps(d) != 0 || d[0].inheritable != (CHOWN | NET_RAW) ||
+        d[1].inheritable != 0) {
+        return 1;
+    }
+    d[0].effective = d[0].permitted = rest;
+    if (set_caps(d) != 0) {
+        return 2;
+    }
+    d[0].inheritable = CHOWN | NET_RAW | DAC;
+    if (!refused_with(set_caps(d), EPERM)) {
+        return 2;
+    }
+    return 0;
+}
+
+/**
+ * Run the rows of the inheritable and ambient sets in a child of root, which
+ * ends in the exec of this program in the mode "ambient". Its exit status: 0,
+ * or 1 and up for the row that failed, counted from INHERITABLE_SET.
+ */
+static int ambient_rows(void)
+{
+    unsigned rest = 0xFFFFFFFFu & ~(SETPCAP | DAC | NET_RAW);
+    pid_t pid;
+    int row = inheritable_rows(), status;
+
+    if (row != 0) {
+        return row;
+    }
+    if (!refused_with(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_ADMIN_, 0, 0), EPERM) ||
+        !refused_with(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_RAW_, 0, 0), EPERM) ||
+        !refused_with(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, 41, 0, 0), EINVAL) ||
+        !refused_with(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_CHOWN_, 1, 0), EINVAL) ||
+        prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_CHOWN_, 0, 0) != 0 ||
+        ambient(CAP_CHOWN_) != 1 || ambient(CAP_RAW_) != 0) {
+        return 3;
+    }
+    if (!status_set_is("CapInh", "0000000000002001") ||
+        !status_set_is("CapAmb", "0000000000000001")) {
+        return 4;
+    }
+    if (prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_LOWER, CAP_CHOWN_, 0, 0) != 0 ||
+        ambient(CAP_CHOWN_) != 0 ||
+        prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_CHOWN_, 0, 0) != 0 ||
+        set_first(rest, NET_RAW) != 0 || ambient(CAP_CHOWN_) != 0 ||
+        set_first(rest, CHOWN | NET_RAW) != 0 ||
+        prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_CHOWN_, 0, 0) != 0) {
+        return 5;
+    }
+    pid = fork();
+    if (pid == 0) {
+        _exit(setuid((uid_t)probe_id(1000)) == 0 && ambient(CAP_CHOWN_) == 0 ? 0 : 1);
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status) ||
+        WEXITSTATUS(status) != 0) {
+        return 6;
+    }
+    if (set_first(CHOWN, CHOWN | NET_RAW) != 0 || ambient(CAP_CHOWN_) != 1 ||
+        prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) {
+        return 7;
+    }
+    execl("/proc/self/exe", "capmusl", "ambient", "0", (char *)NULL);
+    return 7;
+}
+
+/**
+ * Run `ambient_rows` in a forked child. Returns 0, or the row that failed,
+ * counted from 1 at INHERITABLE_SET; 1 when the child did not report.
+ */
+static int in_ambient_child(void)
+{
+    pid_t pid = fork();
+    int status;
+
+    if (pid == 0) {
+        _exit(ambient_rows());
+    }
+    if (pid < 0 || waitpid(pid, &status, 0) != pid || !WIFEXITED(status)) {
+        return 1;
+    }
+    return WEXITSTATUS(status) <= EXEC_AMBIENT - INHERITABLE_SET + 1 ? WEXITSTATUS(status) : 1;
 }
 
 /**
@@ -664,6 +839,7 @@ static int call_rows(void)
 {
     unsigned h[2] = {0x12345678u, 0};
     struct cap_data d[2];
+    int row;
 
     if (get_caps(d) != 0 || !all_of(d)) {
         return fail(ROOT_ALL);
@@ -678,12 +854,9 @@ static int call_rows(void)
     if (!version_ends_page()) {
         return fail(VERSION_ENDS_PAGE);
     }
-    if (get_caps(d) != 0) {
-        return fail(ROOT_ALL);
-    }
-    d[0].inheritable = 1;
-    if (set_caps(d) != -1 || errno != EINVAL) {
-        return fail(INHERITABLE_SET);
+    row = in_ambient_child();
+    if (row != 0) {
+        return fail(INHERITABLE_SET + row - 1);
     }
     return 0;
 }

@@ -4514,7 +4514,7 @@
     },
     {
       "case_id": "guest.default.capmusl",
-      "behavior": "capget and capset: root has every capability, the header's version answers as Linux's, an inheritable capability is EINVAL, a process that gave them up has none and is refused what they grant against a parent that has them, PTRACE_TRACEME toward a parent without them is EPERM, and an exec gives them back, undumpable, except under no_new_privs or with shared directories. It writes /tmp/capmusl.secret and re-executes itself through /proc/self/exe, so it needs no argument.",
+      "behavior": "capget and capset: root has every capability, the header's version answers as Linux's, capset keeps an inheritable set and PR_CAP_AMBIENT an ambient set with Linux's rules, and an exec under no_new_privs keeps an ambient capability, a process that gave them up has none and is refused what they grant against a parent that has them, PTRACE_TRACEME toward a parent without them is EPERM, and an exec gives them back, undumpable, except under no_new_privs or with shared directories. It writes /tmp/capmusl.secret and re-executes itself through /proc/self/exe, so it needs no argument.",
       "units": ["default", "musl/capmusl"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -4526,7 +4526,13 @@
         {"assertion_id": "no-data", "checks": "Capget of an unknown version with no data is 0 and writes version 3 back.", "source": "program"},
         {"assertion_id": "unknown-version", "checks": "Capget of an unknown version with data is EINVAL.", "source": "program"},
         {"assertion_id": "version-ends-page", "checks": "Capget of a header whose version is the last four bytes of a page answers the version and reads no pid.", "source": "program"},
-        {"assertion_id": "inheritable-set", "checks": "Capset with an inheritable capability is EINVAL.", "source": "program"},
+        {"assertion_id": "inheritable-set", "checks": "A child of root makes CAP_CHOWN and CAP_NET_RAW inheritable with capset, and capget reports them.", "source": "program"},
+        {"assertion_id": "inheritable-capped", "checks": "Without CAP_SETPCAP, capset keeps the inheritable CAP_NET_RAW it no longer holds and refuses to add CAP_DAC_OVERRIDE, which it does not hold, with EPERM.", "source": "program"},
+        {"assertion_id": "ambient-raise", "checks": "PR_CAP_AMBIENT_RAISE is EPERM for CAP_SYS_ADMIN, held but not inheritable, and CAP_NET_RAW, inheritable but not held, EINVAL for capability 41 or a fourth argument not 0, and raises CAP_CHOWN, which IS_SET then reports.", "source": "program"},
+        {"assertion_id": "ambient-status", "checks": "/proc/self/status shows CapInh 0000000000002001 and CapAmb 0000000000000001.", "source": "program"},
+        {"assertion_id": "ambient-capset", "checks": "PR_CAP_AMBIENT_LOWER takes CAP_CHOWN out, and capset that takes it out of the inheritable set takes it out of the ambient set.", "source": "program"},
+        {"assertion_id": "ambient-setuid", "checks": "setuid to user 1000 empties the ambient set.", "source": "program"},
+        {"assertion_id": "exec-ambient", "checks": "An exec under no_new_privs of a root thread that kept CAP_CHOWN alone, ambient, gives the image CAP_CHOWN effective, permitted and ambient in capget, prctl and /proc/self/status, and the inheritable set it had.", "source": "program"},
         {"assertion_id": "secret", "checks": "/tmp/capmusl.secret is made, mode 0600 and owned by user 1000.", "source": "program"},
         {"assertion_id": "dropped-child", "checks": "The child that gives up its capabilities exits with a row's status.", "source": "program"},
         {"assertion_id": "give-up", "checks": "Capset with every set empty succeeds.", "source": "program"},
@@ -5322,7 +5328,7 @@
         {"assertion_id": "bset-exec", "checks": "an exec gives every capability but CAP_SYS_ADMIN, and the image cannot mount, unshare a mount namespace, pivot_root or take it back by capset", "source": "program"},
         {"assertion_id": "capset-single", "checks": "with CAP_SYS_ADMIN alone a thread unshares a mount namespace and cannot widen its set, and after giving it up cannot mount", "source": "program"},
         {"assertion_id": "capset-chown", "checks": "with CAP_CHOWN alone a thread cannot mount, and an exec gives every capability back", "source": "program"},
-        {"assertion_id": "ambient", "checks": "PR_CAP_AMBIENT_IS_SET answers 0, PR_CAP_AMBIENT_RAISE fails with EPERM and PR_CAP_AMBIENT_CLEAR_ALL succeeds", "source": "program"}
+        {"assertion_id": "ambient", "checks": "PR_CAP_AMBIENT_IS_SET answers 0, PR_CAP_AMBIENT_RAISE of CAP_CHOWN, which is not inheritable, fails with EPERM and PR_CAP_AMBIENT_CLEAR_ALL succeeds", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
