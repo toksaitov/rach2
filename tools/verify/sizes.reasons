@@ -258,7 +258,7 @@ rach2/sys/syscall_fs.c:sys_splice complexity 36 one system call's contract, its 
 rach2/sys/syscall_fs.c:sys_copy_file_range complexity 27 one system call's contract, its checks in the order the manual page lists the errors
 
 rach2/sys/syscall_net.c:do_connect complexity 32 one system call's contract, its checks in the order the manual page lists the errors
-rach2/sys/syscall_net.c:do_getsockopt complexity 54 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_net.c:do_getsockopt complexity 49 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_net.c:do_recvfrom complexity 29 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_recvmsg complexity 41 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_net.c:do_sendmsg complexity 40 one system call's contract, its checks in the order the manual page lists the errors

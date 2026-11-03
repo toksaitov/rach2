@@ -2609,6 +2609,42 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
     return 0;
 }
 
+/**
+ * getsockopt's SO_BINDTODEVICE: the name of the interface `sock` is bound
+ * to, with its NUL, or an empty name when it is bound to none, cut to the
+ * caller's capacity at `optlen_ptr`, which is given back the bytes written.
+ * Returns 0 or -EFAULT.
+ */
+static int32_t bound_device_get(const struct socket *sock, uintptr_t optval_ptr,
+                                uintptr_t optlen_ptr)
+{
+    char name[IFNAMSIZ];
+    uint32_t olen, give;
+    struct netdev *nd = netdev_by_index(sock->bound_device);
+
+    k_memset(name, 0, sizeof(name));
+    if (nd) {
+        k_strncpy(name, nd->name, sizeof(name) - 1);
+    }
+    if (!optval_ptr || !optlen_ptr) {
+        return -EFAULT;
+    }
+    if (copy_from_user(&olen, (const void __user *)optlen_ptr, sizeof(olen)) != 0) {
+        return -EFAULT;
+    }
+    give = (uint32_t)k_strlen(name) + 1u;
+    if (give > olen) {
+        give = olen;
+    }
+    if (give > 0 && copy_to_user((void __user *)optval_ptr, name, give) != 0) {
+        return -EFAULT;
+    }
+    if (copy_to_user((void __user *)optlen_ptr, &give, sizeof(give)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
 /** getsockopt: report the options programs read at setup: SO_ERROR (the
  * pending connection error, cleared by the read), SO_TYPE (the real socket
  * type), SO_REUSEADDR, SO_BROADCAST, SO_KEEPALIVE, SO_RCVBUF and
@@ -2662,31 +2698,7 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
         }
         net_unlock(flags);
     } else if (level == SOL_SOCKET && optname == SO_BINDTODEVICE) {
-        char name[IFNAMSIZ];
-        uint32_t give;
-        struct netdev *nd = netdev_by_index(entry->sock->bound_device);
-
-        k_memset(name, 0, sizeof(name));
-        if (nd) {
-            k_strncpy(name, nd->name, sizeof(name) - 1);
-        }
-        if (!optval_ptr || !optlen_ptr) {
-            return -EFAULT;
-        }
-        if (copy_from_user(&olen, (const void __user *)optlen_ptr, sizeof(olen)) != 0) {
-            return -EFAULT;
-        }
-        give = (uint32_t)k_strlen(name) + 1u;
-        if (give > olen) {
-            give = olen;
-        }
-        if (give > 0 && copy_to_user((void __user *)optval_ptr, name, give) != 0) {
-            return -EFAULT;
-        }
-        if (copy_to_user((void __user *)optlen_ptr, &give, sizeof(give)) != 0) {
-            return -EFAULT;
-        }
-        return 0;
+        return bound_device_get(entry->sock, optval_ptr, optlen_ptr);
     } else if (level == SOL_IP && optname == IP_TTL) {
         val = (int)entry->sock->ip_ttl;
     } else if (level == SOL_IP && optname == IP_HDRINCL) {
