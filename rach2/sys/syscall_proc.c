@@ -1491,7 +1491,11 @@ static int exec_fs_shared(void)
  * that applies set-id bits does. A capability dropped from the bounding set
  * and not inheritable stays lost. The ambient set is within the inheritable
  * set and the capabilities held, so every case keeps it; `exec_ambient`
- * then gives an image whose ids give none those of the ambient set.
+ * then gives an image whose ids give none those of the ambient set. A
+ * thread that holds those its last exec gave it so (`amb_granted`) has lost
+ * the rest by its ambient set, not by its own choice, and so regains
+ * nothing: an image of root has its bounding and inheritable sets, as the
+ * image of a thread that never held a capability has them.
  */
 static void exec_ids(struct exec_state *s)
 {
@@ -1504,9 +1508,11 @@ static void exec_ids(struct exec_state *s)
 
     s->regains = 0;
     for (i = 0; i < 2; i++) {
+        uint32_t lost = current_proc->amb_granted ? 0u : current_proc->cap_lost[i];
+
         root_lost[i] = current_proc->bset_lost[i] & ~current_proc->cap_inh[i];
-        s->cap_lost[i] = current_proc->cap_lost[i] | root_lost[i];
-        if (current_proc->cap_lost[i] & ~root_lost[i]) {
+        s->cap_lost[i] = lost | root_lost[i];
+        if (lost & ~root_lost[i]) {
             s->regains = !current_proc->no_new_privs;
         }
     }
