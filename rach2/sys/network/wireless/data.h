@@ -493,8 +493,9 @@ int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
  * rates; a BSS that names none of them leaves the lowest band rate. */
 void wlan_rate_connect(struct wlan_data *d, const struct wlan_bss *bss);
 
-/** Fill the rate series of a frame: the lowest basic rate alone when
- * `lowest` is set, else the radio's rate_ops, else the basic table. */
+/** Fill the rate series of a frame: the lowest basic rate alone, with ten
+ * tries, when `lowest` is set, else the radio's rate_ops, else the basic
+ * table. */
 void wlan_rate_select(struct wlan_data *d, const uint8_t *frame, unsigned len, int lowest,
                       struct wlan_tx_rate rates[WLAN_TX_RATE_SERIES]);
 

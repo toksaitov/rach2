@@ -8,6 +8,11 @@
  * likeliest to pass there. */
 static const uint8_t basic_counts[WLAN_TX_RATE_SERIES] = {2, 2, 2, 4};
 
+/* Attempts of a frame sent at the lowest rate alone, as mac80211's
+ * rate_control_send_low gives a management, EAPOL or null frame: the
+ * radio's max_rate_tries, which is 10 for ath9k. */
+#define LOWEST_TRIES 10
+
 /** The index of `rate`, in 500 kbit/s units, among the band's rates, or -1. */
 static int band_rate_index(const struct wlan_band *band, unsigned rate)
 {
@@ -114,7 +119,7 @@ void wlan_rate_select(struct wlan_data *d, const uint8_t *frame, unsigned len, i
     }
     index = slowest(band, d->rates_basic ? d->rates_basic : ((uint32_t)1 << band->n_rates) - 1);
     rates[n].index = (int16_t)(index < 0 ? 0 : index);
-    rates[n].count = basic_counts[WLAN_TX_RATE_SERIES - 1];
+    rates[n].count = lowest ? LOWEST_TRIES : basic_counts[WLAN_TX_RATE_SERIES - 1];
 }
 
 void wlan_rate_status(struct wlan_data *d, const struct wlan_tx_status *status)
