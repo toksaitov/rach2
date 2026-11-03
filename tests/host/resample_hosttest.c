@@ -3,7 +3,8 @@
  * and their images and aliases 80 dB down, sines above the lower rate's
  * Nyquist frequency attenuated by 80 dB, a constant kept exactly, a full
  * scale step held to 24 bits, the fixed-point output against the filter
- * computed in double, the history across blocks, equal rates copied, and the
+ * computed in double, the history across blocks, a converter started later
+ * delayed onto the frames of one started first, equal rates copied, and the
  * cost.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
@@ -395,6 +396,45 @@ static void row_blocks(void)
     }
 }
 
+/**
+ * A converter started at input frame `f` and delayed by resample_delay to
+ * the next time of one started at frame 0 makes that one's frames from
+ * there on, while the input before `f` and the frames its window reaches
+ * past it are silence, as two loopback readers of one mix need.
+ */
+static void row_delay(void)
+{
+    static int32_t whole[LEN * RESAMPLE_RATIO][2];
+    uint32_t i, j, k, n, p, f, t, len, first, origin;
+    int32_t zero[2] = {0, 0};
+    int ok;
+
+    row = "delay";
+    for (i = 0; i < NRATES; i++) {
+        len = row_len(rates[i][0]);
+        for (t = 0; t < 3; t++) {
+            f = t == 0 ? 1u : t == 1 ? 257u : len / 3u;
+            fill_sines(len, rates[i][0], 997u, 3001u, FULL / 3.0);
+            k_memset(in, 0, (f + RESAMPLE_TAPS) * sizeof(in[0]));
+            n = convert(len, rates[i][0], rates[i][1]);
+            k_memcpy(whole, out, n * sizeof(out[0]));
+            origin = (uint32_t)((uint64_t)f * rates[i][1] % rates[i][0]);
+            first = (uint32_t)(((uint64_t)f * rates[i][1] + rates[i][0] - 1u) / rates[i][0]);
+            resample_init(&conv, rates[i][0], rates[i][1]);
+            resample_delay(&conv, origin ? rates[i][0] - origin : 0);
+            ok = 1;
+            for (j = 0, p = f; first + j < n; j++) {
+                for (; conv.owed > 0; p++)
+                    resample_put(&conv, p < len ? in[p] : zero);
+                resample_get(&conv, out[0]);
+                k = first + j;
+                ok &= out[0][0] == whole[k][0] && out[0][1] == whole[k][1];
+            }
+            check(ok, "a converter started later makes the frames of one started first");
+        }
+    }
+}
+
 /** At equal rates every frame goes through unchanged, one put for each
  * frame made, and no multiply is made. */
 static void row_copy(void)
@@ -440,6 +480,7 @@ int main(void)
     row_dc();
     row_reference();
     row_blocks();
+    row_delay();
     row_copy();
     row_cost();
     printf("resample-hosttest: result: %s\n", failures ? "fail" : "pass");
