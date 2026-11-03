@@ -105,9 +105,12 @@ keeps what it had.
 A capability in neither set is not given by an exec, and a thread that
 holds it keeps it until it gives it up.
 An exec keeps the inheritable set.
-It keeps the ambient set, and the image holds those capabilities, when
-the image's user IDs make it root and it runs without set-user-ID or
-set-group-ID bits; otherwise the ambient set is emptied.
+It keeps the ambient set for an image that runs without set-user-ID or
+set-group-ID bits, and otherwise empties it.
+An image whose user IDs make it root holds those capabilities already;
+one whose user IDs do not holds the capabilities of the ambient set,
+effective and permitted, and no other, as on Linux, until its next exec
+or until its user IDs leave root.
 A
 .Xr setuid 2 ,
 .Xr setreuid 2
@@ -141,9 +144,10 @@ privileged, where Linux judges the credentials of the attach.
 .Pa tests/musl/capmusl.c
 gives up every capability and checks what is refused, and that an exec
 gives them back; it checks the rules of the inheritable set, and that an
-exec under no_new_privs keeps an ambient capability, as bubblewrap's
+exec under no_new_privs keeps an ambient capability, and so does the exec
+of user 1000 in a user namespace of its own, as bubblewrap's
 .Fl -cap-add
-needs.
+needs when an ordinary user runs it.
 .Pa tests/musl/sandboxmusl.c
 keeps
 .Dv CAP_SYS_ADMIN
@@ -187,8 +191,7 @@ names no thread.
 .Sh STANDARDS
 Linux keeps the effective set apart from the permitted one and checks
 each capability on its own.
-A thread whose user IDs are not root holds no capability here, so an exec
-of a program that does not run as root empties the ambient set, where
-Linux gives the program those capabilities.
+A thread whose user IDs are not root holds no capability here but those
+an exec gave it from the ambient set.
 .Dv PR_SET_KEEPCAPS
 and the securebits are not supported.
