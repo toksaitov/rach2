@@ -330,10 +330,19 @@ struct process {
      * passes both on (`fork_ids`). `nocaps` is set while CAP_SYS_ADMIN is
      * in `cap_lost`: the kernel's checks of privilege are whole, and a
      * thread without that capability is not privileged, whatever its ids
-     * (`proc_privileged`). `cap_store` keeps the three in step. */
+     * (`proc_privileged`). `cap_store` keeps the three in step.
+     * `cap_inh` and `cap_amb` are the inheritable and ambient sets, stored
+     * as the bits held, empty in a record of zeros. An exec keeps the
+     * inheritable set and adds it to the bounding set an image of root
+     * regains. The ambient set stays within the inheritable set and the
+     * capabilities held: capset narrows it with them, and an exec keeps it
+     * only for an image that holds them, without set-id bits. A fork passes
+     * both on, and making or joining a user namespace empties both. */
     uint32_t cap_lost[2];
     uint32_t bset_lost[2];
     uint32_t nocaps;
+    uint32_t cap_inh[2];
+    uint32_t cap_amb[2];
     /* Set while a parent that made this process with CLONE_VFORK waits for
      * it to call execve or end; cleared, and the parent woken, at the one or
      * the other (`proc_vfork_release`). */

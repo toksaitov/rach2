@@ -275,7 +275,8 @@ int cap_holds(const process_t *p, uint32_t cap);
 void cap_store(process_t *p, uint32_t lost0, uint32_t lost1);
 
 /** Give `p` every capability in its user namespace, whatever its ids there,
- * and a full bounding set, as making or joining one does on Linux. */
+ * a full bounding set and empty inheritable and ambient sets, as making or
+ * joining one does on Linux. */
 void ns_caps_fill(process_t *p);
 
 /**

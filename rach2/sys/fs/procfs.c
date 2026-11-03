@@ -1692,11 +1692,11 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
     ap_ch(t, '\n');
     ap_signal_sets(t, p);
     caps = (uint64_t)cap_word(p, 1) << 32 | cap_word(p, 0);
-    ap_set(t, "CapInh", 0);
+    ap_set(t, "CapInh", (uint64_t)p->cap_inh[1] << 32 | p->cap_inh[0]);
     ap_set(t, "CapPrm", caps);
     ap_set(t, "CapEff", caps);
     ap_set(t, "CapBnd", (uint64_t)(CAP_HIGH_WORD & ~p->bset_lost[1]) << 32 | ~p->bset_lost[0]);
-    ap_set(t, "CapAmb", 0);
+    ap_set(t, "CapAmb", (uint64_t)p->cap_amb[1] << 32 | p->cap_amb[0]);
     ap_str(t, "NoNewPrivs:\t");
     ap_u32(t, p->no_new_privs);
     ap_str(t, "\nSeccomp:\t");

@@ -948,6 +948,8 @@ void ns_caps_fill(process_t *p)
 {
     p->ns_granted = 1;
     p->bset_lost[0] = p->bset_lost[1] = 0;
+    p->cap_inh[0] = p->cap_inh[1] = 0;
+    p->cap_amb[0] = p->cap_amb[1] = 0;
     cap_store(p, 0, 0);
 }
 
@@ -1323,7 +1325,8 @@ static long setns_pidfd(process_t *self, const process_t *target, unsigned long 
 {
     struct ns_common *ns[NS_KINDS];
     struct userns *old = self->userns;
-    uint32_t cap_lost[2], bset_lost[2], nocaps = self->nocaps, granted = self->ns_granted;
+    uint32_t cap_lost[2], bset_lost[2], inh[2], amb[2];
+    uint32_t nocaps = self->nocaps, granted = self->ns_granted;
     int32_t err = 0;
     int k, joined = 0;
 
@@ -1340,6 +1343,8 @@ static long setns_pidfd(process_t *self, const process_t *target, unsigned long 
     cap_lost[1] = self->cap_lost[1];
     bset_lost[0] = self->bset_lost[0];
     bset_lost[1] = self->bset_lost[1];
+    k_memcpy(inh, self->cap_inh, sizeof(inh));
+    k_memcpy(amb, self->cap_amb, sizeof(amb));
     if (old) {
         ns_get(&old->c);
     }
@@ -1365,6 +1370,8 @@ static long setns_pidfd(process_t *self, const process_t *target, unsigned long 
         self->cap_lost[0] = cap_lost[0];
         self->cap_lost[1] = cap_lost[1];
         self->nocaps = nocaps;
+        k_memcpy(self->cap_inh, inh, sizeof(inh));
+        k_memcpy(self->cap_amb, amb, sizeof(amb));
     }
     if (old) {
         ns_put(&old->c);
