@@ -410,9 +410,11 @@ static void simple_case(struct dhcp_case *s)
     ish(s, "dhcpc -i eth0 -k", "net: eth0: IPv4 none");
     net_wait(&s->b, "stopped process");
     net_assert(&s->u, "released", 1, "");
-    n = received(s, "ping -c 4 -W 1 10.90.0.2");
-    net_assert(&s->u, "address-gone", n == 0,
-               "the gateway answered %ld pings after the client stopped", n);
+    /* With no address eth0 has no route, so ping's first send fails and it
+     * exits 2 with no summary, as Linux's does. */
+    net_line(&s->b, "ping -c 4 -W 1 10.90.0.2");
+    net_assert(&s->u, "address-gone", net_wait(&s->b, "Network is unreachable") == ETUDE_OK,
+               "ping did not report the gateway unreachable after the client stopped");
     ish(s, "netup -a", "lease of 10.90.0.20 netmask 255.255.0.0");
     net_assert(&s->u, "lease-again", 1, "");
     n = received(s, "ping -c 4 10.90.0.2");
