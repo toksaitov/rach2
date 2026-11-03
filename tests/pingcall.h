@@ -1,13 +1,13 @@
 /*
  * pingcall.h: the numbers of Rach2's ICMP echo, a system call no libc has a
- * wrapper for, shared by ping.c and the test probes.
+ * wrapper for, which the test probes make (probe.h).
  *
  * The echo is three sub-calls of socketcall(2), numbered clear of the BSD
  * sub-calls. Each argument is an unsigned long in the array whose address is
  * socketcall's second argument. The kernel sends the echo and the caller
  * sleeps until the reply, for up to four attempts of a second each; a signal
- * ends the wait with EINTR, and a second caller while one echo is in flight
- * gets EBUSY.
+ * ends the wait with EINTR. Each call has an echo identifier of its own, so
+ * calls run at once and each takes only its own reply.
  *
  * i386 has socketcall as call 102. x86-64 has no socketcall: the kernel takes
  * Rach2's at 400, a number Linux x86-64 leaves unassigned below the 424 from

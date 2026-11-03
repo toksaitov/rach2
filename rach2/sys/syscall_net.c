@@ -170,13 +170,13 @@ struct kernel_mmsghdr {
 #define SOCK_NONBLOCK 04000
 
 /* Rach2's ICMP echo sub-call of socketcall, numbered clear of Linux's
- * sub-calls; utils/pingcall.h has the same values for utils/ping.c, and the
- * probes use them too. SC_PING takes the destination. */
+ * sub-calls; tests/pingcall.h has the same values for the probes that make
+ * it. SC_PING takes the destination. */
 #define SC_PING      0x1000
-/* The same with the data size and hop limit, for ping's -s and -t. */
+/* The same with the data size and hop limit. */
 #define SC_PING_DATA 0x1001
 /* An IPv6 echo: the address of the 16-byte destination, its scope, the data
- * size and the hop limit, for ping's -6. */
+ * size and the hop limit. */
 #define SC_PING6     0x1002
 
 static int32_t dgram_send_opt(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port,

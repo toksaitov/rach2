@@ -764,7 +764,7 @@ static __inline__ unsigned probe_meminfo(const char *key)
 
 /* The socket operations of socketcall(2), by its numbers, and Rach2's ICMP
  * echo, SC_PING, SC_PING_DATA and SC_PING6, with its call (pingcall.h). */
-#include "../utils/pingcall.h"
+#include "pingcall.h"
 
 #define SC_SOCKET      1
 #define SC_BIND        2
