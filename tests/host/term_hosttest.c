@@ -4,7 +4,7 @@
  * commands that read the screen back, and from the commands to its input.
  *
  * host-deps: term/pty.c term/screen.c term/host.c term/draw.c term/font.c
- * host-deps: term/unifont.c term/keys.c term/keymap.c term/select.c
+ * host-deps: term/unifont.c term/keys.c term/keymap.c term/select.c term/bell.c
  * host-deps: tests/host/compat/fixdir_host.c
  * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-render.c
  * host-deps: build/host/libtsm-4.8.0/src/tsm/tsm-screen.c

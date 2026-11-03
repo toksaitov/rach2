@@ -32,10 +32,12 @@
 #define TERM_SCROLLBACK_MAX 100000
 
 /*
- * The bell: TERM_BELL_AUDIBLE sounds the speaker, TERM_BELL_VISUAL shows the
- * screen in inverse colors, and `bell = both` does both. The PC speaker has
- * no volume, so a soft beep is a short and low one; a program sets another
- * pitch and length with the Linux console's CSI 10 ; n ] and CSI 11 ; n ].
+ * The bell: TERM_BELL_AUDIBLE plays the chime of bell.c through /dev/dsp, or
+ * sounds the console's speaker when /dev/dsp cannot be opened,
+ * TERM_BELL_VISUAL shows the screen in inverse colors, and `bell = both`
+ * does both. The speaker has no volume, so its soft beep is a short and low
+ * one; a program sets another pitch and length with the Linux console's
+ * CSI 10 ; n ] and CSI 11 ; n ], and a length of 0 silences the chime too.
  */
 #define TERM_BELL_AUDIBLE 1u
 #define TERM_BELL_VISUAL  2u
@@ -662,6 +664,65 @@ void term_keys_reset(struct term_keys *k);
 
 /** Give back the keyboard's mode and the console's settings, and close it. */
 void term_keys_close(struct term_keys *k);
+
+/* ---- The chime (bell.c) ---- */
+
+#ifndef TERM_DSP_PATH
+#define TERM_DSP_PATH "/dev/dsp" /* a test gives another */
+#endif
+#define TERM_CHIME_RATE     48000 /* the chime's frames a second, mono */
+#define TERM_CHIME_FRAMES   28800 /* 0.6 s of them, of signed 16 bits */
+#define TERM_CHIME_LIMIT_MS 3000  /* /dev/dsp is closed this long after a bell */
+
+/*
+ * The audible bell. The chime is computed once, by term_bell_init; each bell
+ * opens /dev/dsp, which mixes it over what other programs play, writes the
+ * chime without blocking and closes the device once it has played.
+ */
+struct term_bell {
+    int16_t *pcm;   /* the chime, TERM_CHIME_FRAMES samples; NULL if none */
+    int fd;         /* /dev/dsp while a chime plays, or -1 */
+    size_t sent;    /* bytes of pcm written to fd */
+    uint64_t start; /* when the chime began, in ms of CLOCK_MONOTONIC */
+    uint64_t check; /* when to look whether it has played, or 0 */
+};
+
+/**
+ * Compute the chime into `out`, TERM_CHIME_FRAMES samples: at t seconds the
+ * sum of 880 Hz decaying as exp(-6t), 1760 Hz at 0.35 decaying as exp(-9t)
+ * and 2640 Hz at 0.12 decaying as exp(-14t), scaled by 0.35 / 1.47 of full
+ * scale, under a linear attack over the first 4 ms.
+ */
+void term_bell_chime(int16_t *out);
+
+/** Compute the chime; without memory for it every bell sounds the speaker. */
+void term_bell_init(struct term_bell *b);
+
+/**
+ * Play the chime through /dev/dsp without blocking. A bell while the chime
+ * plays is dropped. Returns 0, or a negative errno value when /dev/dsp
+ * cannot be opened or will not play the chime's format, when the caller
+ * sounds the speaker instead.
+ */
+int term_bell_ring(struct term_bell *b);
+
+/** The events to poll /dev/dsp for: POLLOUT while some of the chime waits. */
+short term_bell_events(const struct term_bell *b);
+
+/**
+ * Milliseconds until the chime should have played, when term_bell_service
+ * looks again, or -1 when none plays.
+ */
+int term_bell_timeout(const struct term_bell *b);
+
+/**
+ * Write what /dev/dsp takes of the chime, and close it once the chime has
+ * played or after TERM_CHIME_LIMIT_MS whatever it reports.
+ */
+void term_bell_service(struct term_bell *b);
+
+/** Close /dev/dsp, dropping what has not played, and free the chime. */
+void term_bell_close(struct term_bell *b);
 
 /* ---- Host mode (host.c) ---- */
 

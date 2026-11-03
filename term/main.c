@@ -233,6 +233,7 @@ struct term {
     struct term_select sel;
     struct term_screen screen;
     struct term_pty pty;
+    struct term_bell chime;
     const char *conf; /* the settings file, where a change of scale is kept */
     unsigned bell;    /* the bell's setting, TERM_BELL_* */
     unsigned cols;    /* the screen's size in cells */
@@ -313,19 +314,23 @@ static void follow_size(struct term *t)
 }
 
 /**
- * The poll's timeout in milliseconds, or -1 for none: drawing's, the bell's
- * end or the hold's bound, and while a held frame waits, TERM_HOLD_POLL_MS
- * at most. No frame is drawn while a descendant has the screen.
+ * The poll's timeout in milliseconds, or -1 for none: the chime's check,
+ * drawing's, the bell's end or the hold's bound, and while a held frame
+ * waits, TERM_HOLD_POLL_MS at most. No frame is drawn while a descendant has
+ * the screen, but the chime is followed.
  */
 static int poll_timeout(struct term *t)
 {
+    int chime = term_bell_timeout(&t->chime);
     int timeout;
 
     if (t->suspended)
-        return -1;
+        return chime;
     timeout = term_draw_timeout(&t->draw);
     if (t->dirty && term_screen_held(&t->screen) && (timeout < 0 || timeout > TERM_HOLD_POLL_MS))
         timeout = TERM_HOLD_POLL_MS;
+    if (chime >= 0 && (timeout < 0 || chime < timeout))
+        timeout = chime;
     return timeout;
 }
 
@@ -351,14 +356,15 @@ static int read_keys(struct term *t)
 }
 
 /**
- * Ring the bell as the settings say: sound the speaker at the tone the child
- * set or term's soft default, and show the screen in inverse colors. A
- * speaker that fails is not reported, since the bell is no error of the
- * child's.
+ * Ring the bell as the settings say: play the chime, or sound the speaker at
+ * the tone the child set or term's soft default when /dev/dsp cannot be
+ * opened, and show the screen in inverse colors. A length of 0 set by the
+ * child silences both sounds. A failure is not reported, since the bell is
+ * no error of the child's.
  */
 static void ring(struct term *t)
 {
-    if (t->bell & TERM_BELL_AUDIBLE)
+    if ((t->bell & TERM_BELL_AUDIBLE) && t->screen.bell_ms > 0 && term_bell_ring(&t->chime) < 0)
         term_keys_tone(&t->keys, t->screen.bell_hz, t->screen.bell_ms);
     if (t->bell & TERM_BELL_VISUAL)
         term_draw_bell(&t->draw);
@@ -382,8 +388,9 @@ static void present(struct term *t)
 }
 
 /**
- * The loop: poll the signal pipe, the master, the console and /fb, and
- * serve each, until the child exits or a signal ends term.
+ * The loop: poll the signal pipe, the master, the console, /fb and the
+ * chime's /dev/dsp, and serve each, until the child exits or a signal ends
+ * term.
  *
  * The keys are read before the output in each round, and the output a burst
  * at a time, so that typing reaches the child while it floods the screen. A
@@ -394,7 +401,7 @@ static void present(struct term *t)
  */
 static int loop(struct term *t, int sigfd)
 {
-    enum { P_SIG, P_MASTER, P_KEYS, P_FB, P_COUNT };
+    enum { P_SIG, P_MASTER, P_KEYS, P_FB, P_BELL, P_COUNT };
     struct pollfd p[P_COUNT];
     unsigned bits;
     int status;
@@ -409,6 +416,8 @@ static int loop(struct term *t, int sigfd)
         p[P_KEYS].events = POLLIN;
         p[P_FB].fd = t->draw.fd;
         p[P_FB].events = POLLIN;
+        p[P_BELL].events = term_bell_events(&t->chime);
+        p[P_BELL].fd = p[P_BELL].events ? t->chime.fd : -1;
         for (r = 0; r < P_COUNT; r++)
             p[r].revents = 0;
 
@@ -431,6 +440,8 @@ static int loop(struct term *t, int sigfd)
 
         if (p[P_FB].revents & POLLIN)
             read_fb_event(t);
+        if (p[P_BELL].revents || term_bell_timeout(&t->chime) == 0)
+            term_bell_service(&t->chime);
         /* Keys polled before the screen was lost are the descendant's. */
         if (!t->suspended && (p[P_KEYS].revents & (POLLIN | POLLHUP | POLLERR)) && read_keys(t) < 0)
             return 1;
@@ -478,6 +489,7 @@ static int run(const struct term_options *o, const struct term_conf *conf)
         fprintf(stderr, "term: signals: %s\n", strerror(-sigfd));
         return 1;
     }
+    term_bell_init(&t.chime);
     r = term_font_load(&t.font, conf->font, conf->scale);
     if (r < 0) {
         fprintf(stderr, "term: font: %s: %s\n", conf->font, strerror(-r));
@@ -533,6 +545,7 @@ out_font:
     term_font_free(&t.font);
 out_signals:
     term_signals_close();
+    term_bell_close(&t.chime);
     return status;
 }
 
