@@ -23,9 +23,15 @@ An open sets OSS's defaults, unsigned 8-bit mono at 8000 Hz, and each has
 its own settings, buffer and delay.
 .Pp
 The kernel mixes what every descriptor plays into one stream of the device:
-signed 16-bit stereo at 48000 Hz, or at 44100 Hz on the Sound Blaster 16.
-Each descriptor's samples are widened to 16-bit stereo and converted to that
-rate by linear interpolation, and the sum is held within 16 bits.
+stereo at 48000 Hz, of 24 bits on an HD Audio codec that has them and of
+16 bits on one that has not, or 16 bits at 44100 Hz on the Sound Blaster 16.
+Each descriptor's samples are converted to 24-bit stereo and to that rate by
+linear interpolation, and the sum is held within 24 bits and, on a device of
+16 bits, rounded to 16.
+The stream line of
+.Pa /proc/audio
+.Pq Xr proc 5
+gives the bits HD Audio plays.
 A descriptor that starts while others play joins the mix after what the
 driver's buffer already holds.
 When a descriptor stops, by
@@ -121,8 +127,8 @@ leaves the format as it is.
 The three wider formats have the numbers of OSS 4, which
 .In linux/soundcard.h
 lacks; a program defines them itself.
-Their samples are played and recorded at 16 bits: a played sample keeps its
-top 16 bits, and a recorded one has its 16 bits on top of zeros.
+A played sample keeps its top 24 bits, rounded to 16 on a device of 16
+bits; a recorded one has the 16 bits the device records on top of zeros.
 .It Dv SNDCTL_DSP_GETFMTS
 The five formats
 .Dv SNDCTL_DSP_SETFMT
@@ -257,4 +263,5 @@ Another request.
 .El
 .Sh SEE ALSO
 .Xr audiotest 1 ,
-.Xr mixer 4
+.Xr mixer 4 ,
+.Xr proc 5
