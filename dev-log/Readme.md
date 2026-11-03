@@ -1,6 +1,6 @@
 # dev-log
 
-This directory records how each Rach2 milestone was planned and built, with one subdirectory per milestone. Milestone 1 retains its prompts; later milestones retain their plans.
+This directory records how each Rach2 milestone was planned and built, with one subdirectory per milestone. Milestone 1 retains its prompts; later milestones retain their plans. `reflections.md` keeps the owner's reflections on the project and its direction, word for word, by date.
 
 A milestone runs from its `plan.md`. It stops only when the goal is met or when a phase remains impossible after three supported attempts. The latter result includes its evidence. The starting prompt is one line of fewer than thirty words that identifies the plan file, because the receiving interface truncates longer prompts.
 
