@@ -6,16 +6,19 @@
  * negotiation sequences of sox_ng's, FFmpeg's and cmus's OSS outputs and of
  * sox_ng's and FFmpeg's OSS inputs, and several opens playing at once: their
  * mix, its clipping, the conversion of each open's format and rate, and one
- * player closing while another plays. The 24 and 32-bit formats reach the
- * mix with their top 16 bits, and a reader in them has its 16 bits on top.
+ * player closing while another plays. The mix is of 24 bits: a model that
+ * plays 24 bits in 32 is given the 24-bit formats exactly and a sum clipped
+ * at 24 bits, and one of 16 bits each sample rounded to 16; a reader in a
+ * wide format has the 16 bits recorded on top of zeros.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/spinlock_host.c
  *
  * The test includes dsp.c and vchan.c whole. Playback reaches the model
- * through the mix, which the model plays as 16-bit stereo at 48000 Hz, so a
- * single open at that rate and format reaches it unchanged. The model
+ * through the mix, which the model plays as 16-bit stereo at 48000 Hz, or as
+ * 24 bits in 32 when a row asks, so a single open at that rate and format
+ * reaches it unchanged. The model
  * driver's DMA buffer has two periods, of 256 frames, unless a row asks for
  * more of either; a tick plays the one due, appends its bytes to `m.out`, refills it
  * through the stream's `transfer` and calls `period`, as a device's
@@ -64,7 +67,9 @@ static struct {
     uint32_t rate_min; /* the rates it grants */
     uint32_t rate_max;
     uint32_t period_max; /* the largest capture period it grants */
-    uint32_t play_max;   /* the largest playback period it grants */
+    uint32_t play_max;   /* the largest playback period it grants, in bytes
+                            of 16 bits; twice that of 32 */
+    int wide;            /* it plays 24 bits in 32, AUDIO_S32LE, not 16 */
     int refuse_open;     /* stream_open's error, or 0 */
     int refuse_start;    /* stream_start's error, or 0 */
     int starts, stops, closes;
@@ -206,18 +211,27 @@ static int model_open(audio_stream_t *s)
 
 /** Grant the rate within the model's range, a period no larger than its
  * limit for the direction, and a DMA buffer of `m.periods` periods for
- * playback, eight for capture. */
+ * playback, eight for capture. A wider playback format is granted 32 bits
+ * on a wide model and 16 otherwise, its period keeping its frames, as HDA
+ * grants it. */
 static int model_setup(audio_stream_t *s)
 {
     int in = s->dir == AUDIO_CAPTURE;
+    uint32_t max = in ? m.period_max : m.play_max;
 
     check(s == (in ? cap.s : m.s), "setup of the open stream");
     check(!(in ? cap.running : m.running), "setup while stopped");
-    check(s->format == AUDIO_U8 || s->format == AUDIO_S16LE, "a known format");
+    check(s->format == AUDIO_U8 || s->format == AUDIO_S16LE || (!in && s->format == AUDIO_S32LE),
+          "a known format");
     check(s->channels == 1 || s->channels == 2, "one or two channels");
+    if (!in && AUDIO_SAMPLE_BYTES(s->format) > 2) {
+        s->period_bytes = s->period_bytes / AUDIO_SAMPLE_BYTES(s->format) * (m.wide ? 4 : 2);
+        s->format = m.wide ? AUDIO_S32LE : AUDIO_S16LE;
+        max *= m.wide ? 2 : 1;
+    }
     s->rate = clamp(s->rate, m.rate_min, m.rate_max);
-    if (s->period_bytes > (in ? m.period_max : m.play_max)) {
-        s->period_bytes = in ? m.period_max : m.play_max;
+    if (s->period_bytes > max) {
+        s->period_bytes = max;
     }
     s->device_periods = in ? 8 : m.periods;
     return 0;
@@ -1207,24 +1221,59 @@ static int32_t put_wave(fd_entry_t *e, const int16_t *wave, uint32_t at, uint32_
     return dspdev_write(e, (const char __user *)(wave + 2 * at), frames * 4);
 }
 
-/** The frames in `m.out`, 16-bit stereo. */
+/** The frames in `m.out`, stereo of 16 bits, or of 32 on a wide model. */
 static uint32_t out_frames(void)
 {
-    return m.out_len / 4;
+    return m.out_len / (m.wide ? 8 : 4);
 }
 
-/** Sample `ch` of frame `f` of `m.out`. */
+/** Sample `ch` of frame `f` of `m.out`: of 16 bits, or the top 24 bits of
+ * 32 on a wide model. */
 static int out_sample(uint32_t f, int ch)
 {
-    const uint8_t *p = m.out + 4 * f + 2 * (uint32_t)ch;
+    const uint8_t *p;
 
+    if (m.wide) {
+        p = m.out + 8 * f + 4 * (uint32_t)ch;
+        return (int32_t)(uint32_t)(p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24) / 256;
+    }
+    p = m.out + 4 * f + 2 * (uint32_t)ch;
     return (int16_t)(uint16_t)(p[0] | p[1] << 8);
+}
+
+/** The low byte of sample `ch` of frame `f` of `m.out` on a wide model,
+ * which the codec does not play. */
+static int out_low(uint32_t f, int ch)
+{
+    return m.out[8 * f + 4 * (uint32_t)ch];
 }
 
 /** `v` held to 16 bits, as the mix clips. */
 static int clip16(int v)
 {
     return v < -32768 ? -32768 : v > 32767 ? 32767 : v;
+}
+
+/** `v` held to 24 bits, as the mix clips. */
+static int clip24(int v)
+{
+    return v < -0x800000 ? -0x800000 : v > 0x7FFFFF ? 0x7FFFFF : v;
+}
+
+/** The sample of 24 bits `v` as the mix gives a model of 16 bits: held to
+ * 24 bits, rounded to the nearest 16, a half up, and held to 16. */
+static int narrow16(int v)
+{
+    long long q = clip24(v) + 128;
+
+    return clip16((int)((q - (q % 256 + 256) % 256) / 256));
+}
+
+/** The sample of 24 bits `v` as the model of the row hears it: held to 24
+ * bits on a wide model, narrowed to 16 on another. */
+static int heard(int v)
+{
+    return m.wide ? clip24(v) : narrow16(v);
 }
 
 /** Sample `ch` of a player's frame `f` of `wave`, which has `n` frames and
@@ -1335,26 +1384,25 @@ static int afmt_bit(audio_format_t format)
                                      : AFMT_S32_LE;
 }
 
-/** The sample at `p` in the 24 or 32-bit `format` as 16 bits: its whole
- * signed value over 2^8 or 2^16, rounded toward minus infinity. The top
- * byte of 24 bits in four is not read. */
-static int wide16(const uint8_t *p, audio_format_t format)
+/** The sample at `p` in the 24 or 32-bit `format` as 24 bits: its whole
+ * signed value, or for 32 bits that over 2^8 rounded toward minus infinity,
+ * as a codec of 24 bits plays it. The top byte of 24 bits in four is not
+ * read. */
+static int wide24(const uint8_t *p, audio_format_t format)
 {
     long long v = p[0] | p[1] << 8 | (long long)p[2] << 16;
-    long long d = 256;
 
     if (format == AUDIO_S32LE) {
         v |= (long long)p[3] << 24;
         v -= v >= 0x80000000ll ? 0x100000000ll : 0;
-        d = 65536;
-    } else {
-        v -= v >= 0x800000ll ? 0x1000000ll : 0;
+        return (int)(v / 256 - (v % 256 < 0));
     }
-    return (int)(v / d - (v % d < 0));
+    return (int)(v - (v >= 0x800000ll ? 0x1000000ll : 0));
 }
 
-/** Frame `i` of the bytes `in`, in `format` with `channels`, as 16-bit
- * channel `ch`; silence past `n` frames. */
+/** Frame `i` of the bytes `in`, in `format` with `channels`, as channel `ch`
+ * of 24 bits, 8 and 16-bit samples widened exactly; silence past `n`
+ * frames. */
 static int source(const uint8_t *in, uint32_t n, audio_format_t format, int channels, uint32_t i,
                   int ch)
 {
@@ -1368,19 +1416,20 @@ static int source(const uint8_t *in, uint32_t n, audio_format_t format, int chan
     }
     p = in + AUDIO_SAMPLE_BYTES(format) * (i * (uint32_t)channels + (uint32_t)ch);
     if (format == AUDIO_U8) {
-        return ((int)p[0] - 128) * 256;
+        return ((int)p[0] - 128) * 65536;
     }
     if (format == AUDIO_S16LE) {
-        return (int16_t)(uint16_t)(p[0] | p[1] << 8);
+        return (int16_t)(uint16_t)(p[0] | p[1] << 8) * 256;
     }
-    return wide16(p, format);
+    return wide24(p, format);
 }
 
 /**
  * One player of `n` frames of the pattern in `format`, `channels` and
  * `rate`, drained: each frame `k` of the mix is the player's frame at
- * k * rate / 48000, interpolated between the two around it by the 14-bit
- * weight of the fraction, as vchan.c's resampler makes it.
+ * k * rate / 48000, interpolated at 24 bits between the two around it by
+ * the 14-bit weight of the fraction, as vchan.c's resampler makes it, and
+ * narrowed to the model's 16 bits.
  */
 static void resampled(const char *name, audio_format_t format, int channels, uint32_t rate,
                       uint32_t n)
@@ -1409,7 +1458,7 @@ static void resampled(const char *name, audio_format_t format, int channels, uin
         for (ch = 0; ch < 2; ch++) {
             a = source(pattern, n, format, channels, i, ch);
             b = source(pattern, n, format, channels, i + 1, ch);
-            want = ph == 0 ? a : a + (b - a) * (int)w / 16384;
+            want = narrow16(ph == 0 ? a : a + (int)((long long)(b - a) * w / 16384));
             if (out_sample(k, ch) != want) {
                 printf("dsp-hosttest: %s: frame %u channel %d is %d, not %d\n", row, k, ch,
                        out_sample(k, ch), want);
@@ -1438,25 +1487,30 @@ static void row_resampling(void)
 
 /**
  * The 24 and 32-bit formats at the mix's rate, stereo, each to the mix
- * exactly: the largest sample gives 32767 and the most negative -32768, -1
- * stays -1 and any other keeps its top 16 bits, rounded toward minus
- * infinity. The top byte of 24 bits in four is not read, so a byte that is
- * no sign there changes nothing.
+ * exactly. On a model of 24 bits in 32 a 24-bit sample reaches it whole
+ * and a 32-bit one as its top 24 bits, with a low byte of zero. On a model
+ * of 16 bits each is rounded to the nearest 16: the largest sample gives
+ * 32767 and the most negative -32768, -1 gives 0, 0xFF of 24 bits gives 1,
+ * and the others their top 16 bits, rounded. The top byte of 24 bits in
+ * four is not read, so a byte that is no sign there changes nothing.
  */
-static void wide_exact(const char *name, audio_format_t format)
+static void wide_exact(const char *name, audio_format_t format, int model_wide)
 {
     static const long long s32[6] = {0x7FFFFFFFll, -0x80000000ll, -1,
                                      0x12345678ll, -0x12345678ll, 0x0000FFFFll};
-    static const int want32[6] = {32767, -32768, -1, 0x1234, -0x1235, 0};
+    static const int want32[2][6] = {{32767, -32768, 0, 0x1234, -0x1234, 1},
+                                     {0x7FFFFF, -0x800000, -1, 0x123456, -0x123457, 0xFF}};
     static const long long s24[6] = {0x7FFFFFll, -0x800000ll, -1,
                                      0x123456ll, -0x123456ll, 0x0000FFll};
-    static const int want24[6] = {32767, -32768, -1, 0x1234, -0x1235, 0};
+    static const int want24[2][6] = {{32767, -32768, 0, 0x1234, -0x1234, 1},
+                                     {0x7FFFFF, -0x800000, -1, 0x123456, -0x123456, 0xFF}};
     uint8_t buf[6 * 4];
     uint32_t size = AUDIO_SAMPLE_BYTES(format), i, b;
     unsigned long long u;
     int wide = format == AUDIO_S32LE;
 
     begin(name);
+    m.wide = model_wide;
     for (i = 0; i < 6; i++) {
         u = (unsigned long long)(wide ? s32[i] : s24[i]);
         for (b = 0; b < size; b++) {
@@ -1475,20 +1529,26 @@ static void wide_exact(const char *name, audio_format_t format)
     close_dsp();
     check(out_frames() >= 3, "the record holds them");
     for (i = 0; i < 6 && out_frames() >= 3; i++) {
-        check(out_sample(i / 2, (int)(i % 2)) == (wide ? want32[i] : want24[i]),
-              "each sample is its top 16 bits");
+        check(out_sample(i / 2, (int)(i % 2)) ==
+                  (wide ? want32[model_wide][i] : want24[model_wide][i]),
+              model_wide ? "each sample is its top 24 bits" : "each sample rounded to 16 bits");
+        check(!model_wide || out_low(i / 2, (int)(i % 2)) == 0, "the byte below the 24 is 0");
     }
     for (i = 3; i < out_frames(); i++) {
         check(out_sample(i, 0) == 0 && out_sample(i, 1) == 0, "then silence");
     }
 }
 
-/** Each 24 and 32-bit format to the mix exactly. */
+/** Each 24 and 32-bit format to the mix exactly, on a model of 16 bits and
+ * on one of 24. */
 static void row_wide_formats(void)
 {
-    wide_exact("S24_LE exactly", AUDIO_S24LE);
-    wide_exact("S24_PACKED exactly", AUDIO_S24_3LE);
-    wide_exact("S32_LE exactly", AUDIO_S32LE);
+    wide_exact("S24_LE exactly", AUDIO_S24LE, 0);
+    wide_exact("S24_PACKED exactly", AUDIO_S24_3LE, 0);
+    wide_exact("S32_LE exactly", AUDIO_S32LE, 0);
+    wide_exact("S24_LE to 24 bits", AUDIO_S24LE, 1);
+    wide_exact("S24_PACKED to 24 bits", AUDIO_S24_3LE, 1);
+    wide_exact("S32_LE to 24 bits", AUDIO_S32LE, 1);
 }
 
 /**
@@ -1536,18 +1596,20 @@ static void row_wide_readers(void)
  * cmus playing a 24-bit FLAC at 96000 Hz: FFmpeg's decoder gives 32-bit
  * samples, for which cmus asks S32_LE, and its fragment is a 25th of a
  * second's bytes. At twice the mix's rate each frame of the mix is every
- * second frame of the file, at its top 16 bits. The model's DMA buffer has
+ * second frame of the file: at its top 24 bits on a model of 24 bits, the
+ * `wide` one, and rounded to 16 on one of 16. The model's DMA buffer has
  * four periods of the mix, as HDA's start takes, so that the mix's start
  * takes four of cmus's periods, which fill DSP_BUFFER_MAX: the buffer has a
  * period more, or cmus, which keeps one free, would wait for the start.
  */
-static void row_cmus_24(void)
+static void cmus_24(const char *name, int wide)
 {
     struct dsp_buf_info info;
     uint32_t at = 0, n = 16384 * 8, k;
     int space, ch, shift = 0, bad = 0;
 
-    begin("cmus 24-bit");
+    begin(name);
+    m.wide = wide;
     m.play_max = 4096;
     m.periods = 4;
     check(open_dsp(1) == 0, "open O_WRONLY");
@@ -1585,10 +1647,86 @@ static void row_cmus_24(void)
     check(out_frames() >= n / 16, "the whole file played");
     for (k = 0; k < out_frames() && !bad; k++) {
         for (ch = 0; ch < 2; ch++) {
-            bad |= out_sample(k, ch) != source(pattern, n / 8, AUDIO_S32LE, 2, 2 * k, ch);
+            bad |= out_sample(k, ch) != heard(source(pattern, n / 8, AUDIO_S32LE, 2, 2 * k, ch));
         }
     }
-    check(!bad, "each frame of the mix the file's at its top 16 bits");
+    check(!bad, "each frame of the mix the file's, at 24 bits or rounded to 16");
+}
+
+/** cmus's 24-bit file on a model of 16 bits and on one of 24. */
+static void row_cmus_24(void)
+{
+    cmus_24("cmus 24-bit to 16 bits", 0);
+    cmus_24("cmus 24-bit to 24 bits", 1);
+}
+
+/** Queue `frames` frames of S32_LE stereo, the samples of 24 bits `l` and
+ * `r` in their top 24 bits, on the open on `e`: the bytes taken. */
+static int32_t put_s32(fd_entry_t *e, int l, int r, uint32_t frames)
+{
+    static uint8_t buf[2048 * 8];
+    uint32_t i, b, u;
+
+    for (i = 0; i < 2 * frames && i < sizeof(buf) / 4; i++) {
+        u = (uint32_t)(i % 2 ? r : l) << 8;
+        for (b = 0; b < 4; b++) {
+            buf[4 * i + b] = (uint8_t)(u >> (8 * b));
+        }
+    }
+    return dspdev_write(e, (const char __user *)buf, frames * 8);
+}
+
+/**
+ * Two players of S32_LE at the mix's rate on a model of 24 bits, each of
+ * one frame repeated, A's (`al`, `ar`) and B's (`bl`, `br`), 2048 frames of
+ * each, B starting after A: every frame of the record is A's, their sum
+ * held to 24 bits, B's or silence, and the sum is among them.
+ */
+static void wide_sum(const char *name, int al, int ar, int bl, int br)
+{
+    uint32_t f, both = 0;
+    int l, r, bad = 0;
+
+    begin(name);
+    m.wide = 1;
+    check(open_dsp(1) == 0 && open_other() == 0, "two opens");
+    check(ask(DSP_SETFMT, AFMT_S32_LE) == AFMT_S32_LE && ask(DSP_CHANNELS, 2) == 2 &&
+              ask(DSP_SPEED, 48000) == 48000,
+          "A plays S32_LE stereo at 48000 Hz");
+    swap_opens();
+    check(ask(DSP_SETFMT, AFMT_S32_LE) == AFMT_S32_LE && ask(DSP_CHANNELS, 2) == 2 &&
+              ask(DSP_SPEED, 48000) == 48000,
+          "B too");
+    swap_opens();
+    check(put_s32(&entry, al, ar, 2048) == 2048 * 8 && m.running, "A starts the mix");
+    check(put_s32(&other, bl, br, 2048) == 2048 * 8, "B's frames taken");
+    check(m.s->format == AUDIO_S32LE, "the mix plays 32 bits");
+    check(ask(DSP_SYNC, 0) == 0, "A drains while B plays");
+    swap_opens();
+    check(ask(DSP_SYNC, 0) == 0 && !m.running, "B drains, and the mix stops");
+    dspdev_close(&entry);
+    swap_opens();
+    close_dsp();
+    for (f = 0; f < out_frames() && !bad; f++) {
+        l = out_sample(f, 0);
+        r = out_sample(f, 1);
+        if (l == clip24(al + bl) && r == clip24(ar + br)) {
+            both++;
+        } else {
+            bad = !(l == al && r == ar) && !(l == bl && r == br) && !(l == 0 && r == 0);
+        }
+        bad |= out_low(f, 0) != 0 || out_low(f, 1) != 0;
+    }
+    check(!bad, "each frame A's, the sum held to 24 bits, B's or silence");
+    check(both > 1000, "the two summed while both played");
+}
+
+/** Two sums past 24 bits held at the top and the bottom, and two within
+ * range unchanged. */
+static void row_wide_clipping(void)
+{
+    wide_sum("sum past 24 bits", 0x600000, -0x600000, 0x300000, -0x300000);
+    wide_sum("sum within 24 bits", 0x400000, 0x7FFFFF, -0x100001, -0x7FFFFF);
 }
 
 /**
@@ -1757,7 +1895,8 @@ static void row_reader_conversion(void)
         int right = (int16_t)(uint16_t)(pattern[at + 2] | pattern[at + 3] << 8);
         int value = (int16_t)(uint16_t)(mono[2 * i] | mono[2 * i + 1] << 8);
 
-        check(value == (left + right) / 2, "mono from both channels at half rate");
+        check(value == (left + right + 1 + 65536) / 2 - 32768,
+              "mono from both channels at half rate, the half rounded up");
     }
     dspdev_close(&other);
     close_dsp();
@@ -1885,6 +2024,7 @@ int main(void)
     row_clipping();
     row_resampling();
     row_wide_formats();
+    row_wide_clipping();
     row_wide_readers();
     row_close_while_playing();
     row_two_readers();

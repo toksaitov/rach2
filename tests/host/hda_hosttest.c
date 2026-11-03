@@ -1,11 +1,14 @@
 /**
  * HDA enumeration and stream programming against a model codec and MMIO,
- * and the driver's report as /proc/audio's text (audio_proc.c) gives it.
+ * the mix (vchan.c) played through the driver's stream at 24 bits on a codec
+ * that has them and at 16 on one that has not, and the driver's report as
+ * /proc/audio's text (audio_proc.c) gives it.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  */
 #include "audio/hda.c"
 #include "audio/audio_proc.c"
+#include "audio/vchan.c"
 
 extern int printf(const char *format, ...);
 extern char *strstr(const char *text, const char *needle);
@@ -987,6 +990,134 @@ const char *audio_get_driver_name(void)
     return "Intel HD Audio";
 }
 
+/** Allocate a channel of the mix, zeroed. */
+void *kzalloc(size_t size)
+{
+    void *p = kmalloc(size);
+
+    if (p)
+        k_memset(p, 0, size);
+    return p;
+}
+
+/* The driver the mix plays through: HDA's, as init_audio chooses it. */
+audio_driver_t *audio_hw = &hda_driver;
+audio_driver_t *audio;
+
+/** The process calling the audio interface: one, for the mix's rows. */
+uint32_t audio_process_id(void)
+{
+    return 1;
+}
+
+/** Install the dispatch driver as at boot. */
+void audio_set_dispatch(audio_driver_t *d)
+{
+    audio = d ? d : audio_hw;
+}
+
+/* The player the mix rows open on the mix: one stereo frame of S24_LE,
+ * repeated, whose top byte is no sign, which the mix does not read. */
+static const uint8_t mix_frame[8] = {0x56, 0x34, 0x12, 0xA5, 0xDF, 0xBC, 0x9A, 0x5A};
+
+/** The player's `transfer`: fill `size` bytes with its frame. */
+static void mix_transfer(audio_stream_t *s, uint8_t *buf, size_t size)
+{
+    size_t i;
+
+    (void)s;
+    for (i = 0; i < size; i++)
+        buf[i] = mix_frame[i % 8];
+}
+
+/** The player's `period`: nothing to wake. */
+static void mix_period(audio_stream_t *s)
+{
+    (void)s;
+}
+
+/** Little-endian `n`-byte word at byte `at` of the DMA buffer. */
+static uint32_t dma_word(uint32_t at, int n)
+{
+    const uint8_t *p = (const uint8_t *)audio_buffer + at;
+    uint32_t v = 0;
+    int i;
+
+    for (i = n - 1; i >= 0; i--)
+        v = v << 8 | p[i];
+    return v;
+}
+
+/**
+ * One player of S24_LE stereo at 48000 Hz on the mix over the driver, on a
+ * codec whose DACs have the sizes in `pcm_sizes`: with 24 bits the mix's
+ * stream is granted 32 bits, the stream format is 24 bits in 32 (0x0031),
+ * and each sample of the DMA buffer is the player's on top of a zero byte,
+ * exactly; with 16 alone it is granted 16 bits (0x0011), and each sample is
+ * the player's rounded to 16 bits. /proc/audio's stream line gives the bits.
+ */
+static void mix_through(uint32_t pcm_sizes)
+{
+    int wide = (pcm_sizes & (1u << 19)) != 0;
+    static char text[16384];
+    audio_stream_t s;
+    uint32_t i, frames;
+    int len, bad = 0;
+
+    reset_model();
+    params[1][0x0A] = pcm_sizes | 0x560; /* 44.1, 48, 96 and 192 kHz */
+    check(hda_find_output(), "enumeration succeeds");
+    dma_checked = true;
+    vchan_dispatch();
+    check(audio == &vchan_driver, "the mix is in front of the driver");
+    k_memset(&s, 0, sizeof(s));
+    s.dir = AUDIO_PLAYBACK;
+    s.rate = 48000;
+    s.format = AUDIO_S24LE;
+    s.channels = 2;
+    s.period_bytes = 4096;
+    s.periods = 4;
+    s.transfer = mix_transfer;
+    s.period = mix_period;
+    check(audio->stream_open(&s) == 0 && audio->stream_setup(&s) == 0, "the player is set up");
+    check(s.format == AUDIO_S24LE && s.rate == 48000, "the player keeps its format and rate");
+    check(play_stream == &mix.stream && mix.stream.format == (wide ? AUDIO_S32LE : AUDIO_S16LE),
+          wide ? "the mix's stream is granted 32 bits" : "the mix's stream is granted 16 bits");
+    check(audio->stream_start(&s) == 0 && playing, "the player starts the device");
+    check(hda_get_report()->stream_format == (wide ? 0x0031 : 0x0011) &&
+              converter_format[2] == (wide ? 0x0031 : 0x0011),
+          wide ? "the stream and the DAC play 24 bits in 32"
+               : "the stream and the DAC play 16 bits");
+    frames = period_bytes * HDA_PERIODS / (wide ? 8u : 4u);
+    check(frames > 1000, "the DMA buffer holds the periods");
+    for (i = 0; i < frames && !bad; i++) {
+        if (wide)
+            bad = dma_word(8 * i, 4) != 0x12345600u || dma_word(8 * i + 4, 4) != 0x9ABCDF00u;
+        else
+            bad = dma_word(4 * i, 2) != 0x1234u || dma_word(4 * i + 2, 2) != 0x9ABDu;
+    }
+    check(!bad, wide ? "each sample the player's 24 bits on a zero byte"
+                     : "each sample the player's rounded to 16 bits");
+    len = audio_proc_text(NULL, 0);
+    check(len > 0 && len < (int)sizeof(text) && audio_proc_text(text, len) == len, "report text");
+    text[len > 0 && len < (int)sizeof(text) ? len : 0] = 0;
+    check(strstr(text, wide ? " bits 24\n" : " bits 16\n") != NULL,
+          "the stream line gives the bits played");
+    audio->stream_close(&s);
+    check(!playing && play_stream == NULL && mix.list == NULL, "the close gives the device back");
+    audio_set_dispatch(NULL);
+}
+
+/** The mix on a codec of 16 and 24 bits, the Lenovo's word, and on one of
+ * 16 bits alone. */
+static void row_mix_width(void)
+{
+    row = "mix at 24 bits";
+    mix_through(0xA0000);
+    row = "mix at 16 bits";
+    mix_through(0x20000);
+}
+
 /** Only the first start after setup waits for the DMA check, which reads the
  * wall clock at each poll; a later start reads it twice, for the session's
  * start and the service's last reading. No start prints. */
@@ -1866,6 +1997,7 @@ int main(void)
     row_writer_stall();
     row_missed();
     row_shutdown();
+    row_mix_width();
     row_capture_path();
     row_capture_start();
     row_capture_routes();
@@ -1926,6 +2058,22 @@ int spin_trylock(struct spinlock *lock)
     return 1;
 }
 /** Give `lock` back. */
+/** Turn interrupts off and take `lock`: the interrupt state before. */
+uint32_t spin_lock_irqsave(struct spinlock *lock)
+{
+    uint32_t flags = kirq_save();
+
+    spin_lock(lock);
+    return flags;
+}
+
+/** Release `lock` and put interrupts back as `flags` says. */
+void spin_unlock_irqrestore(struct spinlock *lock, uint32_t flags)
+{
+    spin_unlock(lock);
+    kirq_restore(flags);
+}
+
 void spin_unlock(struct spinlock *lock)
 {
     lock->locked = 0;

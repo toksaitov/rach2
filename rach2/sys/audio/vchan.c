@@ -1,7 +1,8 @@
 /*
  * vchan.c: virtual playback channels (vchan.h): every playback open mixed
- * into the device's one stream, each converted to 16 bits and to the mix's
- * rate by an integer linear resampler, and the sum clipped to 16 bits.
+ * into the device's one stream, each converted to 24 bits and to the mix's
+ * rate by an integer linear resampler, and the sum clipped to the device's
+ * width, 24 bits in 32 or 16 bits.
  */
 
 #include "vchan.h"
@@ -14,11 +15,15 @@
 #define VCHAN_RATE_MIN 1000u   /* the lowest rate a channel is granted */
 #define VCHAN_RATE_MAX 192000u /* the highest, and at most VCHAN_RATIO times the mix's */
 #define VCHAN_RATIO    4u
-#define VCHAN_PERIOD   4096u /* bytes of the period the mix asks of the device */
-#define VCHAN_BLOCK    256u  /* frames of the mix made at a time */
-#define VCHAN_CHUNK    4096u /* frames of the mix a count advances by at a time */
-#define VCHAN_WEIGHT   14    /* bits of the resampler's weight between two frames */
-#define VCHAN_FRAME    8u    /* bytes of the widest frame, 32-bit stereo */
+#define VCHAN_PERIOD   1024u   /* frames of the period the mix asks of the device */
+#define VCHAN_BLOCK    256u    /* frames of the mix made at a time */
+#define VCHAN_CHUNK    4096u   /* frames of the mix a count advances by at a time */
+#define VCHAN_WEIGHT   14      /* bits of the resampler's weight between two frames */
+#define VCHAN_FRAME    8u      /* bytes of the widest frame, 32-bit stereo */
+#define VCHAN_MAX      8388607 /* the largest sample of the mix, 2^23 - 1 */
+#define VCHAN_SUM_MAX                                         \
+    1073741824 /* 2^30, within which the sum is held, so that \
+                  a channel's sample added cannot overflow it */
 
 /* The most frames a channel gives for a block: VCHAN_RATIO for each frame of
  * the mix, one more for the fraction, and the frame after the last. */
@@ -53,9 +58,9 @@ struct vchan {
     uint32_t frame;   /* bytes of one of its frames */
     uint32_t pframes; /* frames of its period */
     uint32_t phase;
-    int has_nxt; /* `nxt` holds the frame after `cur` */
-    int16_t cur[2];
-    int16_t nxt[2];
+    int has_nxt;    /* `nxt` holds the frame after `cur` */
+    int32_t cur[2]; /* samples of 24 bits (vchan_sample) */
+    int32_t nxt[2];
     uint32_t taken; /* its frames taken by `transfer` since the start */
     uint32_t at;
     uint32_t played;
@@ -66,8 +71,11 @@ struct vchan {
 };
 
 /*
- * The mix: the device's stream, 16-bit stereo at `rate`, between the first
- * channel's open and the last one's close, and the channels open. `made`
+ * The mix: the device's stream, stereo at `rate`, between the first
+ * channel's open and the last one's close, and the channels open. Its
+ * samples are AUDIO_S32LE, of which the device plays the top 24 bits, or
+ * AUDIO_S16LE, as the device granted; the sum is of samples of 24 bits,
+ * and is clipped to 24 bits and narrowed to the device's width. `made`
  * counts the frames of the mix made since the stream's start, and `ended`
  * those in the periods the device has ended since. `lock` keeps the list,
  * the channels' state and the counts between process context and the
@@ -80,6 +88,7 @@ static struct {
     audio_stream_t stream;
     uint32_t rate;   /* R */
     uint32_t period; /* frames of the stream's period */
+    uint32_t frame;  /* bytes of one of its frames, 8 or 4 */
     struct vchan *list;
     int running;
     uint32_t made;
@@ -115,33 +124,77 @@ static struct vchan *vchan_find(const audio_stream_t *s)
     return NULL;
 }
 
+/** The signed 24-bit sample whose three bytes, low first, are at `p`. */
+static int32_t vchan_s24(const uint8_t *p)
+{
+    uint32_t v = (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16;
+
+    return (int32_t)(v & 0x800000u ? v | 0xFF000000u : v);
+}
+
 /**
- * The sample at `p` in `format` as 16 bits: unsigned 8-bit is moved to
- * signed and widened, and a wider sample keeps its top 16 bits, which
- * rounds toward minus infinity. The top byte of 24 bits in four is ignored.
+ * The sample at `p` in `format` as 24 bits: unsigned 8-bit is moved to
+ * signed and widened, 8 and 16 bits exactly, and a 32-bit sample keeps its
+ * top 24 bits, as a codec of 24 bits plays it. The top byte of 24 bits in
+ * four is ignored.
  */
-static int16_t vchan_sample(audio_format_t format, const uint8_t *p)
+static int32_t vchan_sample(audio_format_t format, const uint8_t *p)
 {
     switch (format) {
     case AUDIO_U8:
-        return (int16_t)(((int)p[0] - 128) * 256);
+        return ((int32_t)p[0] - 128) * 65536;
     case AUDIO_S16LE:
-        return (int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+        return (int32_t)(int16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8)) * 256;
     case AUDIO_S32LE:
-        return (int16_t)((uint16_t)p[2] | ((uint16_t)p[3] << 8));
+        return vchan_s24(p + 1);
     case AUDIO_S24LE:
     case AUDIO_S24_3LE:
     default:
-        return (int16_t)((uint16_t)p[1] | ((uint16_t)p[2] << 8));
+        return vchan_s24(p);
     }
 }
 
-/** Put frame `p` of `s`'s format in `out` as 16-bit stereo; a mono sample
+/** Put frame `p` of `s`'s format in `out` as 24-bit stereo; a mono sample
  * goes to both. */
-static void vchan_frame(const audio_stream_t *s, const uint8_t *p, int16_t *out)
+static void vchan_frame(const audio_stream_t *s, const uint8_t *p, int32_t *out)
 {
     out[0] = vchan_sample(s->format, p);
     out[1] = s->channels == 2 ? vchan_sample(s->format, p + AUDIO_SAMPLE_BYTES(s->format)) : out[0];
+}
+
+/** `v` clipped to 24 bits. */
+static int32_t vchan_clip(int32_t v)
+{
+    return v < -VCHAN_MAX - 1 ? -VCHAN_MAX - 1 : v > VCHAN_MAX ? VCHAN_MAX : v;
+}
+
+/**
+ * Sample `v` of 24 bits narrowed to `bits` of 8 or 16 bits, signed: rounded
+ * to the nearest, a half up, and held to the range. The offset keeps the
+ * division's dividend positive, where C89 defines its rounding.
+ */
+static int32_t vchan_narrow(int32_t v, int bits)
+{
+    int32_t unit = (int32_t)1 << (24 - bits), top = (int32_t)1 << (bits - 1);
+    int32_t q = (vchan_clip(v) + VCHAN_MAX + 1 + unit / 2) / unit - top;
+
+    return q > top - 1 ? top - 1 : q;
+}
+
+/**
+ * `d` times `w` over 2^VCHAN_WEIGHT, rounded toward zero, for a difference
+ * `d` of two samples of 24 bits and a weight `w` below 2^VCHAN_WEIGHT. The
+ * product passes 32 bits, so the magnitude of `d` is split at bit 10: the
+ * top part's product is under 2^28, and its low four bits, carried down, and
+ * the low part's product sum to under 2^25.
+ */
+static int32_t vchan_weigh(int32_t d, uint32_t w)
+{
+    uint32_t a = (uint32_t)(d < 0 ? -d : d);
+    uint32_t p = (a >> 10) * w;
+    uint32_t r = (p >> 4) + (((p & 15u) << 10) + (a & 1023u) * w) / (1u << VCHAN_WEIGHT);
+
+    return d < 0 ? -(int32_t)r : (int32_t)r;
 }
 
 /**
@@ -194,7 +247,8 @@ static void vchan_mix(struct vchan *c, uint32_t n)
     audio_stream_t *s = c->s;
     uint32_t rate = s->rate, top, need, k = 0, i, w;
     int32_t *sum = mix.sum;
-    int32_t left, right;
+    int32_t left, right, v;
+    int ch;
 
     if (!c->joined) {
         c->joined = 1;
@@ -236,12 +290,16 @@ static void vchan_mix(struct vchan *c, uint32_t n)
             }
             if (c->has_nxt) {
                 w = (c->phase << VCHAN_WEIGHT) / mix.rate;
-                left += (c->nxt[0] - left) * (int32_t)w / (1 << VCHAN_WEIGHT);
-                right += (c->nxt[1] - right) * (int32_t)w / (1 << VCHAN_WEIGHT);
+                left += vchan_weigh(c->nxt[0] - left, w);
+                right += vchan_weigh(c->nxt[1] - right, w);
             }
         }
-        sum[2 * i] += left * c->volume / 100;
-        sum[2 * i + 1] += right * c->volume / 100;
+        for (ch = 0; ch < 2; ch++) {
+            v = sum[2 * i + ch] + (ch ? right : left) * c->volume / 100;
+            sum[2 * i + ch] = v > VCHAN_SUM_MAX    ? VCHAN_SUM_MAX
+                              : v < -VCHAN_SUM_MAX ? -VCHAN_SUM_MAX
+                                                   : v;
+        }
         c->phase += rate;
     }
 }
@@ -249,15 +307,15 @@ static void vchan_mix(struct vchan *c, uint32_t n)
 /**
  * The device stream's `transfer`, in the device's interrupt or its start:
  * make `size` bytes of the mix at `buf`, block by block, each the sum of
- * the channels running, clipped to 16 bits.
+ * the channels running, clipped to 24 bits and stored as the top 24 bits of
+ * 32 or narrowed to 16 (vchan_narrow).
  */
 static void vchan_render(audio_stream_t *s, uint8_t *buf, size_t size)
 {
-    uint32_t frames = (uint32_t)(size / 4u);
-    uint32_t flags, n, i;
+    uint32_t frames = (uint32_t)(size / mix.frame);
+    uint32_t flags, n, i, u;
     uint8_t *block;
     struct vchan *c;
-    int32_t v;
 
     (void)s;
     flags = spin_lock_irqsave(&mix.lock);
@@ -271,12 +329,21 @@ static void vchan_render(audio_stream_t *s, uint8_t *buf, size_t size)
         }
         block = buf;
         for (i = 0; i < 2 * n; i++) {
-            v = mix.sum[i] < -32768 ? -32768 : mix.sum[i] > 32767 ? 32767 : mix.sum[i];
-            buf[0] = (uint8_t)((uint16_t)v & 0xFFu);
-            buf[1] = (uint8_t)((uint16_t)v >> 8);
-            buf += 2;
+            if (mix.frame == 8u) {
+                u = (uint32_t)vchan_clip(mix.sum[i]);
+                buf[0] = 0;
+                buf[1] = (uint8_t)u;
+                buf[2] = (uint8_t)(u >> 8);
+                buf[3] = (uint8_t)(u >> 16);
+                buf += 4;
+            } else {
+                u = (uint32_t)vchan_narrow(mix.sum[i], 16);
+                buf[0] = (uint8_t)u;
+                buf[1] = (uint8_t)(u >> 8);
+                buf += 2;
+            }
         }
-        vchan_capture_feed(s, block, n * 4u);
+        vchan_capture_feed(s, block, n * mix.frame);
         mix.made += n;
         frames -= n;
     }
@@ -311,10 +378,10 @@ static void vchan_period(audio_stream_t *s)
 
 /**
  * Take the device's playback stream from `hw` for the mix and have it grant
- * 16-bit stereo at VCHAN_RATE, or the rate nearest it. 0; the driver's
- * error, as -EBUSY while the write path or another stream has the device;
- * or -EIO for a grant the mix cannot use. The stream is given back on an
- * error.
+ * 32-bit stereo at VCHAN_RATE, or 16-bit, and the rate nearest it. 0; the
+ * driver's error, as -EBUSY while the write path or another stream has the
+ * device; or -EIO for a grant the mix cannot use. The stream is given back
+ * on an error.
  */
 static int vchan_take(audio_driver_t *hw)
 {
@@ -324,9 +391,9 @@ static int vchan_take(audio_driver_t *hw)
     k_memset(m, 0, sizeof(*m));
     m->dir = AUDIO_PLAYBACK;
     m->rate = VCHAN_RATE;
-    m->format = AUDIO_S16LE;
+    m->format = AUDIO_S32LE;
     m->channels = 2;
-    m->period_bytes = VCHAN_PERIOD;
+    m->period_bytes = VCHAN_PERIOD * 8u;
     m->periods = 2;
     m->transfer = vchan_render;
     m->period = vchan_period;
@@ -335,9 +402,10 @@ static int vchan_take(audio_driver_t *hw)
         return rc;
     }
     rc = hw->stream_setup(m);
-    if (rc == 0 && (m->format != AUDIO_S16LE || m->channels != 2 || m->period_bytes < 4 ||
-                    m->period_bytes % 4 != 0 || m->rate < VCHAN_RATE_MIN || m->rate > VCHAN_RATE ||
-                    m->device_periods == 0)) {
+    if (rc == 0 &&
+        ((m->format != AUDIO_S32LE && m->format != AUDIO_S16LE) || m->channels != 2 ||
+         m->period_bytes < vchan_frame_bytes(m) || m->period_bytes % vchan_frame_bytes(m) != 0 ||
+         m->rate < VCHAN_RATE_MIN || m->rate > VCHAN_RATE || m->device_periods == 0)) {
         rc = -EIO;
     }
     if (rc != 0) {
@@ -346,7 +414,8 @@ static int vchan_take(audio_driver_t *hw)
     }
     mix.hw = hw;
     mix.rate = m->rate;
-    mix.period = m->period_bytes / 4u;
+    mix.frame = vchan_frame_bytes(m);
+    mix.period = m->period_bytes / mix.frame;
     mix.running = 0;
     return 0;
 }
@@ -655,34 +724,39 @@ static void vchan_clock_period(audio_stream_t *s)
     (void)s;
 }
 
-/** Stage the input frame `sample`, left and right, in reader `r`'s format,
- * and hand its period over and announce it when the frame completes it. A
- * wider format has the 16 bits on top and zeros below. The caller holds
- * input.lock. */
-static void vchan_capture_put(struct vchan_reader *r, const int16_t *sample)
+/** Stage the input frame `sample` of 24 bits, left and right, in reader
+ * `r`'s format, and hand its period over and announce it when the frame
+ * completes it. To 8 or 16 bits it is narrowed (vchan_narrow); a 32-bit
+ * sample has the 24 bits on top of zeros. The caller holds input.lock. */
+static void vchan_capture_put(struct vchan_reader *r, const int32_t *sample)
 {
     audio_format_t format = r->s->format;
     uint8_t *p;
-    int value, ch;
+    uint32_t value;
+    int ch;
 
     for (ch = 0; ch < r->s->channels; ch++) {
-        value = r->s->channels == 1 ? ((int)sample[0] + sample[1]) / 2 : sample[ch];
+        value = (uint32_t)(r->s->channels == 1 ? (sample[0] + sample[1]) / 2 : sample[ch]);
         p = r->buffer + r->used;
         r->used += AUDIO_SAMPLE_BYTES(format);
         if (format == AUDIO_U8) {
-            p[0] = (uint8_t)((value + 32768) / 256);
+            p[0] = (uint8_t)(vchan_narrow((int32_t)value, 8) + 128);
             continue;
         }
-        if (format != AUDIO_S16LE) {
-            *p++ = 0;
+        if (format == AUDIO_S16LE) {
+            value = (uint32_t)vchan_narrow((int32_t)value, 16);
+            p[0] = (uint8_t)value;
+            p[1] = (uint8_t)(value >> 8);
+            continue;
         }
         if (format == AUDIO_S32LE) {
             *p++ = 0;
         }
-        p[0] = (uint8_t)((uint16_t)value & 255u);
-        p[1] = (uint8_t)((uint16_t)value >> 8);
+        p[0] = (uint8_t)value;
+        p[1] = (uint8_t)(value >> 8);
+        p[2] = (uint8_t)(value >> 16);
         if (format == AUDIO_S24LE) {
-            p[2] = value < 0 ? 0xFF : 0; /* the sign of 24 bits in four */
+            p[3] = (uint8_t)(value >> 24); /* the sign of 24 bits in four */
         }
     }
     r->frames++;
@@ -706,7 +780,7 @@ static void vchan_capture_feed(audio_stream_t *s, uint8_t *buf, size_t size)
 {
     struct vchan_reader *r;
     uint32_t flags, i, n, frame, lost;
-    int16_t sample[2];
+    int32_t sample[2];
 
     if (!input.running || (input.loopback ? s != &mix.stream : s != &input.stream))
         return;
@@ -765,7 +839,7 @@ static int vchan_capture_open(audio_stream_t *s)
             input.clock.period = vchan_clock_period;
             rc = vchan_open(&input.clock);
             if (rc == 0) {
-                input.clock.period_bytes = mix.stream.period_bytes;
+                input.clock.period_bytes = mix.period * 4u;
                 input.clock.periods = 2;
                 rc = vchan_setup(&input.clock);
                 if (rc != 0)

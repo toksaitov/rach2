@@ -14,8 +14,11 @@
 #include "../lib/kdef.h"
 
 /*
- * Audio sample formats. The drivers take U8 and S16LE; the wider ones are
- * /dev/dsp's, which the virtual channels convert to 16 bits for the mix.
+ * Audio sample formats. The device drivers' write paths take U8 and S16LE.
+ * Their streams take any format and grant U8 or S16LE, or for a wider one
+ * S32LE on HDA where the codec has 24 bits, of which it plays the top 24,
+ * and S16LE elsewhere. The virtual channels take all five and convert them
+ * to 24 bits for the mix.
  */
 typedef enum {
     AUDIO_U8,      /* unsigned 8-bit (SB16 8-bit mode, Doom native) */
@@ -77,7 +80,7 @@ typedef enum { AUDIO_PLAYBACK, AUDIO_CAPTURE } audio_dir_t;
 typedef struct audio_stream {
     audio_dir_t dir;
     uint32_t rate;           /* frames per second */
-    audio_format_t format;   /* U8 or S16LE; the wider ones at vchan.c */
+    audio_format_t format;   /* any; a device grants U8, S16LE or S32LE */
     int channels;            /* 1 or 2 */
     uint32_t period_bytes;   /* bytes of one period, a whole number of frames */
     uint32_t periods;        /* periods in the caller's buffer, at least 2 */
