@@ -3,7 +3,7 @@
  * tools/audio/mkresample.c; do not edit. A Kaiser-windowed sinc of cutoff
  * 0.950 of the lower rate's Nyquist frequency, beta 8.9593, for 90 dB
  * from 0.90 to 1.00 of it, 58 zero crossings each side and 256 entries
- * between two, in Q30, and a zero entry past the last.
+ * between two, in Q30, ending in 0 at the last crossing.
  */
 #define RESAMPLE_ZEROS 58
 #define RESAMPLE_STEPS 256

@@ -49,6 +49,7 @@ int main(void)
     int zeros = (int)ceil(taps / 2.0);
     int i, n = zeros * STEPS;
     double x, u, h;
+    char entry[24];
 
     printf("/*\n");
     printf(" * resample_coef.h: the resampler's coefficients (resample.c), written by\n");
@@ -57,7 +58,7 @@ int main(void)
            ATTEN);
     printf(" * from %.2f to %.2f of it, %d zero crossings each side and %d entries\n", PASS, STOP,
            zeros, STEPS);
-    printf(" * between two, in Q30, and a zero entry past the last.\n");
+    printf(" * between two, in Q30, ending in 0 at the last crossing.\n");
     printf(" */\n");
     printf("#define RESAMPLE_ZEROS %d\n", zeros);
     printf("#define RESAMPLE_STEPS %d\n\n", STEPS);
@@ -67,8 +68,14 @@ int main(void)
         u = x / zeros;
         h = i == 0 ? cutoff : sin(pi * cutoff * x) / (pi * x);
         h = i == n ? 0.0 : h * bessel_i0(beta * sqrt(1.0 - u * u)) / bessel_i0(beta);
-        printf("%s%ld,%s", i % 6 == 0 ? "    " : " ", (long)floor(h * ONE + 0.5),
-               i % 6 == 5 || i == n ? "\n" : "");
+        /* clang-format's layout, eight entries a line in columns of 11,
+           so that the commit hook leaves the output as written. */
+        sprintf(entry, "%ld,", (long)floor(h * ONE + 0.5));
+        if (i % 8 == 7 || i == n) {
+            printf("%s%s\n", i % 8 == 0 ? "    " : "", entry);
+        } else {
+            printf("%s%-11s ", i % 8 == 0 ? "    " : "", entry);
+        }
     }
     printf("};\n");
     return 0;
