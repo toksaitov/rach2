@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "guest.ping.pingtest",
-      "behavior": "The kernel's ICMP echo gets the gateway's replies, times out at an address nobody answers, sleeps in a wait that holds its one slot, and refuses a data ping past 65507 bytes",
+      "behavior": "The kernel's ICMP echo gets the gateway's replies, times out at an address nobody answers, sleeps in a wait beside another ping, and refuses a data ping past 65507 bytes",
       "units": ["ping", "pingtest"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -23,7 +23,7 @@
         {"assertion_id": "gateway-replies", "checks": "three pings to the gateway each get a reply", "source": "program"},
         {"assertion_id": "silent-timeout", "checks": "a ping to an address nobody answers fails with ETIMEDOUT", "source": "program"},
         {"assertion_id": "child-in-ping", "checks": "the child writes its byte just before its ping, and /proc shows it asleep in the call", "source": "program"},
-        {"assertion_id": "busy", "checks": "while the child is in its call, the parent's ping of the loopback address answers EBUSY", "source": "program"},
+        {"assertion_id": "beside", "checks": "while the child is in its call, the parent's ping of the loopback address gets its reply", "source": "program"},
         {"assertion_id": "progress", "checks": "the parent's clock readings while the child waits span some time, so the wait sleeps", "source": "program"},
         {"assertion_id": "child-length", "checks": "the child reports the length of its call through the pipe", "source": "program"},
         {"assertion_id": "child-exit", "checks": "the child is reaped and exited normally", "source": "program"},

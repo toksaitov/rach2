@@ -13,21 +13,21 @@
  * measures its own call and reports the milliseconds through the pipe, and
  * the call may not return before four seconds of the kernel's ticks.
  *
- * Serialization. The child writes a byte just before its ping; the parent
+ * Concurrency. The child writes a byte just before its ping; the parent
  * reads it, waits until /proc shows the child asleep, which after the byte
- * it is only inside the call, holding the slot, and pings the loopback
- * address, which is refused with -EBUSY. A parent that took the slot first
- * would get its loopback reply and fail the row, and a child that ends
- * without being seen asleep fails it too.
+ * it is only inside the call, and pings the loopback address, which answers
+ * while the child's call still waits: each call has an echo record of its
+ * own, and a reply ends only the wait it answers. A child that ends without
+ * being seen asleep fails the row.
  *
  * The bound. The child exits 0 only when its ping returned -ETIMEDOUT, and 3
  * for any other answer, so a wrong errno is not a pass, and its call lasts at
  * least PING_MIN_MS. A lost wakeup leaves the probe waiting, and its case's
  * watchdog ends it.
  *
- * The release. After the reap the parent's own loopback ping returns a
- * round-trip time of 0 or more, which shows that the slot came back, and is
- * the one row in which the loopback echo answers.
+ * The end. After the reap the parent's own loopback ping returns a
+ * round-trip time of 0 or more, so the child's call left nothing behind
+ * that a later call meets.
  *
  * Last, the data ping (SC_PING_DATA) refuses 65508 bytes of data with
  * EMSGSIZE, and on x86-64 a size past 32 bits too, whose low word would be a
@@ -69,7 +69,6 @@ typedef unsigned int uint32_t;
 static uint32_t gateway_ip, silent_ip;
 
 /* What the kernel answers with, negated as a raw system call returns it. */
-#define PING_EBUSY     (-16)
 #define PING_ETIMEDOUT (-110)
 
 /* A ping at a dead address costs ICMP_PING_ATTEMPTS * ICMP_PING_WAIT (icmp.c),
@@ -82,7 +81,7 @@ static uint32_t gateway_ip, silent_ip;
 /* The assertions of the fork round, in the order the parent checks them. */
 enum {
     ROW_IN_PING,
-    ROW_BUSY,
+    ROW_BESIDE,
     ROW_PROGRESS,
     ROW_LENGTH,
     ROW_EXIT,
@@ -93,8 +92,8 @@ enum {
 };
 
 static const char *const wait_rows[WAIT_ROWS] = {
-    "child-in-ping",   "busy",       "progress", "child-length", "child-exit",
-    "child-etimedout", "wait-floor", "release",
+    "child-in-ping", "beside",          "progress",   "child-length",
+    "child-exit",    "child-etimedout", "wait-floor", "release",
 };
 
 /* The first row of the fork round that failed, WAIT_ROWS while none has,
@@ -508,14 +507,14 @@ void probe_main(unsigned long *sp)
         failed++;
     }
 
-    /* Test 3: progress, serialization, the bound and the release. */
-    print("Test 3: the wait sleeps, serializes, is bounded, and releases... ");
+    /* Test 3: progress, concurrency, the bound and the end. */
+    print("Test 3: the wait sleeps, runs beside another, is bounded, and ends... ");
     {
         int ready[2];
         int child;
         int status = 0;
         int reaped = -1;
-        int busy;
+        int beside;
         long began, ended, live_span = 0, last_live = 0;
         long child_ms = 0;
         int ok = 1;
@@ -541,11 +540,11 @@ void probe_main(unsigned long *sp)
                     wait_fails(ROW_IN_PING, why);
                 }
                 if (ok) {
-                    /* While the child is in its call, a ping is EBUSY. */
-                    busy = ping(LOOPBACK_IP);
-                    if (busy != PING_EBUSY) {
+                    /* While the child is in its call, a ping answers. */
+                    beside = ping(LOOPBACK_IP);
+                    if (beside < 0) {
                         ok = 0;
-                        why = wait_fails(ROW_BUSY, "a second ping was not refused");
+                        why = wait_fails(ROW_BESIDE, "a ping beside the child's got no reply");
                     }
                 }
                 /* Progress: the time the parent ran while the child waited. */
@@ -596,11 +595,11 @@ void probe_main(unsigned long *sp)
                                      "the wait ended before four seconds of the kernel's ticks");
                 }
                 if (ok) {
-                    /* The release: the slot is free again. */
+                    /* The end: a ping after the child's still answers. */
                     rtt = ping(LOOPBACK_IP);
                     if (rtt < 0) {
                         ok = 0;
-                        why = wait_fails(ROW_RELEASE, "the slot was not released");
+                        why = wait_fails(ROW_RELEASE, "a ping after the child's got no reply");
                     }
                 }
             }
