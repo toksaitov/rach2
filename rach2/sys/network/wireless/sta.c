@@ -6,6 +6,7 @@
 #include "mlme.h"
 #include "data.h"
 #include "nl80211.h"
+#include "../../klog.h"
 #include "../../timer.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
@@ -14,6 +15,11 @@
 /* Frames sent for FRAME whose transmit status nl80211 waits for. A fifth
  * frame takes the oldest entry, whose status is then not reported. */
 #define STA_TX_PENDING 4
+
+/* Elements a beacon is read for, after its 12 bytes of fixed fields. */
+#define BEACON_FIXED 12
+#define EID_CSA      37 /* Channel Switch Announcement: mode, channel, count */
+#define EID_ECSA     60 /* Extended CSA: mode, class, channel, count */
 
 /* A frame sent for nl80211, kept until its status comes. */
 struct sta_tx {
@@ -31,6 +37,9 @@ struct wlan_sta {
     uint64_t assoc_at;               /* tick of the last association */
     struct sta_tx tx[STA_TX_PENDING];
     unsigned tx_next; /* the entry the next frame takes */
+    int asked;        /* a leave now is one nl80211 or the interface asked for */
+    unsigned csa;     /* channel the AP's last logged switch named, zero for none */
+    unsigned ds;      /* the AP's channel last logged as not the station's */
     uint8_t buf[IEEE80211_MAX_FRAME_LEN];
 };
 
@@ -74,6 +83,7 @@ static int sta_abort_scan(struct wlan *wlan)
 static int sta_authenticate(struct wlan *wlan, const struct nl80211_auth *req)
 {
     struct wlan_mlme_auth a;
+    int rc;
 
     if (!wlan->started) {
         return -ENETDOWN;
@@ -87,7 +97,10 @@ static int sta_authenticate(struct wlan *wlan, const struct nl80211_auth *req)
     a.data_len = req->data_len;
     a.ies = req->ies;
     a.ies_len = req->ies_len;
-    return wlan_mlme_authenticate(&sta_of(wlan)->mlme, &a);
+    sta_of(wlan)->asked = 1;
+    rc = wlan_mlme_authenticate(&sta_of(wlan)->mlme, &a);
+    sta_of(wlan)->asked = 0;
+    return rc;
 }
 
 /** Associate with the BSS authenticated with; -ENOLINK when req names
@@ -120,13 +133,25 @@ static int sta_associate(struct wlan *wlan, const struct nl80211_assoc *req)
 /** Deauthenticate from bssid. */
 static int sta_deauthenticate(struct wlan *wlan, const uint8_t bssid[6], unsigned reason, int local)
 {
-    return wlan_mlme_deauthenticate(&sta_of(wlan)->mlme, bssid, reason, local);
+    struct wlan_sta *s = sta_of(wlan);
+    int rc;
+
+    s->asked = 1;
+    rc = wlan_mlme_deauthenticate(&s->mlme, bssid, reason, local);
+    s->asked = 0;
+    return rc;
 }
 
 /** Disassociate from bssid. */
 static int sta_disassociate(struct wlan *wlan, const uint8_t bssid[6], unsigned reason, int local)
 {
-    return wlan_mlme_disassociate(&sta_of(wlan)->mlme, bssid, reason, local);
+    struct wlan_sta *s = sta_of(wlan);
+    int rc;
+
+    s->asked = 1;
+    rc = wlan_mlme_disassociate(&s->mlme, bssid, reason, local);
+    s->asked = 0;
+    return rc;
 }
 
 /** Open or close the port to peer, which must be the AP. */
@@ -256,24 +281,126 @@ static void sta_status(struct wlan *wlan, struct nl80211_status *out)
     wlan_get_counters(wlan, &out->counters);
 }
 
+/**
+ * Log why the station left the AP of a DEAUTHENTICATE or DISASSOCIATE
+ * event: the AP's frame with its reason, a leave that nl80211 or the
+ * interface asked for, or beacon loss, the only leave the MLME makes of its
+ * own.
+ */
+static void sta_log_leave(struct wlan *wlan, const struct wlan_event *ev)
+{
+    const uint8_t *p = ev->peer;
+    const char *why;
+
+    if (!ev->locally_generated) {
+        why = ev->type == WLAN_EVENT_DEAUTHENTICATE ? "deauthenticated by the AP"
+                                                    : "disassociated by the AP";
+    } else if (sta_of(wlan)->asked) {
+        why = "asked";
+    } else {
+        why = "beacon loss";
+    }
+    klog(KLOG_INFO, "wlan", "%s: left: %02x:%02x:%02x:%02x:%02x:%02x: %s: reason %d",
+         wlan->netdev.name, p[0], p[1], p[2], p[3], p[4], p[5], why, (int)ev->reason);
+}
+
 /** Take the MLME's events: note an association and open the port of one
- * made without a control port, then pass the event on. */
+ * made without a control port, log a leave, then pass the event on. */
 static void sta_event(struct wlan *wlan, const struct wlan_event *ev)
 {
     struct wlan_sta *s = sta_of(wlan);
 
     if (ev->type == WLAN_EVENT_ASSOCIATE && ev->frame && ev->status == WLAN_STATUS_SUCCESS) {
         s->assoc_at = tick_count();
+        s->csa = 0;
+        s->ds = 0;
         if (!s->control_port) {
             (void)wlan_queue_work(&s->authorize_work, 0);
         }
     }
+    if (ev->type == WLAN_EVENT_DEAUTHENTICATE || ev->type == WLAN_EVENT_DISASSOCIATE) {
+        sta_log_leave(wlan, ev);
+    }
     wlan_event(wlan, ev);
 }
 
-/** Give the MLME a management frame the data path received. */
+/** The payload of the first element id of the len bytes at ies, at least
+ * min bytes long, or NULL. */
+static const uint8_t *find_elem(const uint8_t *ies, unsigned len, unsigned id, unsigned min)
+{
+    unsigned pos;
+
+    for (pos = 0; pos + 2 <= len && pos + 2 + ies[pos + 1] <= len; pos += 2 + ies[pos + 1]) {
+        if (ies[pos] == id) {
+            return ies[pos + 1] >= min ? ies + pos + 2 : 0;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Log, once each, what a beacon or probe response of the current AP says
+ * of its channel when it is not the station's: a channel switch it
+ * announces, whose element gives the mode, the channel and the beacons left,
+ * and a DS Parameter Set naming another channel, as a 2.4 GHz receiver hears
+ * from a neighbouring one. The station does not follow a switch; it loses the
+ * AP and joins again.
+ */
+static void sta_watch_beacon(struct wlan *wlan, const uint8_t *f, unsigned len)
+{
+    struct wlan_sta *s = sta_of(wlan);
+    const struct wlan_mlme *m = &s->mlme;
+    const uint8_t *ies, *csa, *ecsa, *ds;
+    unsigned n, mode, channel, count;
+
+    if (m->state < WLAN_STA_ASSOCIATED || !m->bss || !m->channel ||
+        len <= IEEE80211_HDRLEN + BEACON_FIXED || !same_addr(f + 16, m->bss->bssid)) {
+        return;
+    }
+    ies = f + IEEE80211_HDRLEN + BEACON_FIXED;
+    n = len - IEEE80211_HDRLEN - BEACON_FIXED;
+    csa = find_elem(ies, n, EID_CSA, 3);
+    ecsa = csa ? 0 : find_elem(ies, n, EID_ECSA, 4);
+    if (csa || ecsa) {
+        mode = csa ? csa[0] : ecsa[0];
+        channel = csa ? csa[1] : ecsa[2];
+        count = csa ? csa[2] : ecsa[3];
+        if (channel != s->csa) {
+            s->csa = channel;
+            klog(KLOG_INFO, "wlan",
+                 "%s: channel switch: %02x:%02x:%02x:%02x:%02x:%02x: from %d to %d in %d beacons, "
+                 "mode %d",
+                 wlan->netdev.name, f[16], f[17], f[18], f[19], f[20], f[21],
+                 (int)m->channel->number, (int)channel, (int)count, (int)mode);
+        }
+    } else {
+        s->csa = 0;
+    }
+    ds = find_elem(ies, n, WLAN_EID_DS_PARAMS, 1);
+    if (!ds || ds[0] == m->channel->number) {
+        s->ds = 0;
+    } else if (ds[0] != s->ds) {
+        s->ds = ds[0];
+        klog(KLOG_INFO, "wlan", "%s: beacon: %02x:%02x:%02x:%02x:%02x:%02x: on channel %d, not %d",
+             wlan->netdev.name, f[16], f[17], f[18], f[19], f[20], f[21], (int)ds[0],
+             (int)m->channel->number);
+    }
+}
+
+/** Give the MLME a management frame the data path received, after reading
+ * a beacon or probe response for sta_watch_beacon. */
 static int sta_rx_mgmt(struct wlan *wlan, const uint8_t *frame, unsigned len, unsigned flags)
 {
+    unsigned stype;
+
+    if (frame && len >= IEEE80211_HDRLEN) {
+        stype =
+            (frame[0] | (unsigned)frame[1] << 8) & (IEEE80211_FCTL_FTYPE | IEEE80211_FCTL_STYPE);
+        if (stype == (IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_BEACON) ||
+            stype == (IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_PROBE_RESP)) {
+            sta_watch_beacon(wlan, frame, len);
+        }
+    }
     return wlan_mlme_rx(&sta_of(wlan)->mlme, frame, len, flags);
 }
 
@@ -376,7 +503,9 @@ void wlan_sta_leave(struct wlan *wlan, int tell_ap)
     }
     wlan_cancel_work(&s->authorize_work);
     if (s->mlme.state != WLAN_STA_NONE && s->mlme.bss) {
+        s->asked = 1;
         (void)wlan_mlme_deauthenticate(&s->mlme, s->mlme.bss->bssid, WLAN_REASON_DEAUTH_LEAVING,
                                        !tell_ap);
+        s->asked = 0;
     }
 }
