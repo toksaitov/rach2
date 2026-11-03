@@ -1389,8 +1389,8 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # The os-real image: the BusyBox shell and tools, the Dropbear SSH server and
 # client, TinyCC and pdpmake, sox_ng, the Wi-Fi station and iw, Doom, the
 # manual, the sources under /src, and an /etc and /root tree. The image is
-# 27 MiB on i686 and 29 on x86-64, of which the tree with Doom's WAD takes
-# 24.9 MiB and 26.8 MiB, since x86-64's programs are larger; wpa_supplicant
+# 28 MiB on i686 and 29 on x86-64, of which the tree with Doom's WAD takes
+# 26.5 MiB on i686 and more on x86-64, whose programs are larger; wpa_supplicant
 # and its tools take 3.3 MiB and 4.4 of that, and the small /bin/sh launcher
 # keeps one copy of BusyBox beside sox_ng.
 # ACPICA's core is staged as an archive of 0.45 MiB to keep the tree small
@@ -1406,11 +1406,11 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 # takes from the window's top for the block requests, the page cache and the
 # drivers' buffers; the kernel stacks and the heap come from above the window
 # first. Booted by QEMU with 128 MiB, the kernel ends at 6.4 MiB on i686 and
-# 6.9 MiB on x86-64, the module follows it to 33.4 MiB and 35.9 MiB, the
-# boot's tables take 1.2 MiB and 0.6 MiB, and 29.4 MiB and 27.5 MiB are left
+# 6.9 MiB on x86-64, the module follows it to 34.4 MiB and 35.9 MiB, the
+# boot's tables take 1.2 MiB and 0.6 MiB, and 28.4 MiB and 27.5 MiB are left
 # for those frames. On i686 the frame table, 4 bytes for each 4 KiB frame
 # below the top of usable memory, is among the boot's tables, so a machine
-# with 4 GiB takes 3 MiB more of the window and leaves 26.4 MiB; the module
+# with 4 GiB takes 3 MiB more of the window and leaves 25.4 MiB; the module
 # is kept well below the window for that reason. The manual's aliases are a
 # table and not files, since the RAM root and a KRFFS disk walk every node on
 # a lookup and hundreds of alias files would make the self-build suite five
@@ -1420,7 +1420,7 @@ $(OS_SIMPLE_IMAGE): $(DEMO_CREDS) krffs/manifests/os-simple.manifest $(MANIFEST_
 ifeq ($(ARCH),x86_64)
 OS_REAL_MIB = 29
 else
-OS_REAL_MIB = 27
+OS_REAL_MIB = 28
 endif
 OS_REAL_FREE_KIB = 512
 OS_REAL_WAD_KIB = 4100
