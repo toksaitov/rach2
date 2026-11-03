@@ -119,9 +119,11 @@
 #
 # `archive M` archives the cards of the closed issues of milestone M and of
 # their closed subtasks, and prints the numbers it archived; release.sh runs
-# it once it has closed M. An open issue keeps its card. A card that cannot be
-# archived is reported on stderr and the rest go on, and the exit status is
-# then 1.
+# it once it has closed M. It archives too the closed issues of any closed
+# milestone and their closed subtasks, so that a card closed after its own
+# release goes at the next one. An open issue keeps its card. A card that
+# cannot be archived is reported on stderr and the rest go on, and the exit
+# status is then 1.
 #
 # `milestones` prints each open milestone, lowest number first, as a line
 # `milestone M: TITLE`, the line `  branch: NAME`, or `  branch: none`, the
@@ -651,7 +653,7 @@ archive()
     read_board all
     cards=$(printf '%s\n' "$board" | awk -F '\t' -v m="$1" '
         { id[NR] = $1; n[NR] = $3; closed[NR] = $4 == "CLOSED"; parent[NR] = $8
-          if ($9 == m) task[$3] = 1 }
+          if ($9 == m || $10 == "CLOSED") task[$3] = 1 }
         END {
             for (i = 1; i <= NR; i++)
                 if (closed[i] && (n[i] in task || parent[i] in task))
