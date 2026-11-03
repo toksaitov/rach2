@@ -721,11 +721,12 @@ static void rejoined(struct wifi *w, const char *id, long connected, int b, cons
     free(text);
 }
 
-static void case_robust(struct wifi *w)
+/** The robust case's first steps: the join of network A, and a group key
+ * the access point makes anew, which reaches the station. */
+static void robust_join(struct wifi *w)
 {
-    char *text = NULL, *console = NULL, *routes = NULL, buf[64], from[18], to[18];
-    long n, rekeys, left;
-    uint64_t mark;
+    char *text = NULL;
+    long rekeys;
     int ok;
 
     begin(w, "wpa2", "5");
@@ -752,7 +753,15 @@ static void case_robust(struct wifi *w)
                "after %ld rekeys the guest's broadcast or the echo failed: %s", rekeys,
                text != NULL ? text : "");
     free(text);
-    text = NULL;
+}
+
+/** The robust case's rejoins: a restart of the access points and a
+ * deauthentication each leave the station's lease in place. */
+static void robust_rejoins(struct wifi *w)
+{
+    char *text = NULL;
+    long n;
+    uint64_t mark;
 
     /* A rejoin of the same network keeps the lease: the kernel records no
      * loss of the address. */
@@ -779,7 +788,15 @@ static void case_robust(struct wifi *w)
                "the station gave its lease up, or logged no deauthentication: %s",
                text != NULL ? text : "");
     free(text);
-    text = NULL;
+}
+
+/** The robust case's channel switch of both access points of network A,
+ * which the station follows with its lease and traffic. */
+static void robust_switch(struct wifi *w)
+{
+    char *text = NULL, *console = NULL, *routes = NULL;
+    long n, left;
+    uint64_t mark;
 
     /* Both access points of network A move, to channels 3 and 8, each
      * announcing it five beacons ahead with transmit held, while a ping
@@ -814,7 +831,15 @@ static void case_robust(struct wifi *w)
     free(text);
     free(console);
     free(routes);
-    text = console = routes = NULL;
+}
+
+/** The robust case's loss of network A, its return, and a roam between
+ * its access points under an SSH session. */
+static void robust_roam(struct wifi *w)
+{
+    char *text = NULL, buf[64], from[18], to[18];
+    long n;
+    int ok;
 
     net_step(&w->u, "gone");
     n = log_count(w, "CTRL-EVENT-DISCONNECTED");
@@ -860,7 +885,15 @@ static void case_robust(struct wifi *w)
                "the roam from %s to %s lost the session or the lease: %s", from, to,
                text != NULL ? text : "");
     free(text);
-    text = NULL;
+}
+
+/** The robust case's move to network B and back, and a cable plugged in
+ * and out beside Wi-Fi. */
+static void robust_move(struct wifi *w)
+{
+    char *text = NULL;
+    long n;
+    int ok;
 
     /* Network B is known once joined; with A's access points gone, the
      * station moves back to it by itself, and to A when B goes. */
@@ -901,6 +934,17 @@ static void case_robust(struct wifi *w)
                "with the cable out the routes and servers were not Wi-Fi's alone: %s",
                text != NULL ? text : "");
     free(text);
+}
+
+/** The robust case: one session through rekeys, restarts, a channel switch,
+ * a roam, a move between networks and a cable. */
+static void case_robust(struct wifi *w)
+{
+    robust_join(w);
+    robust_rejoins(w);
+    robust_switch(w);
+    robust_roam(w);
+    robust_move(w);
 }
 
 /* ---- the rfkill case (16e) ---- */
