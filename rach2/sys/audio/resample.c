@@ -206,7 +206,7 @@ void resample_get(resampler_t *r, int32_t *frame)
         n += resample_side(w + 1, 1, r->step - fs, r->step, r->span, w[0], acc);
         frame[0] = resample_out(w[0][0], acc[0], r->gain);
         frame[1] = resample_out(w[0][1], acc[1], r->gain);
-        r->mults += 3u * n + 2u;
+        r->mults += (((fs | r->step) & 0xFFFFu) == 0 ? 2u : 3u) * n + 2u;
     }
     r->phase += r->in;
     r->at += r->move;
