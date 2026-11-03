@@ -1849,11 +1849,11 @@ static int32_t do_send(int fd, uintptr_t buf_ptr, int len, int flags)
  * Returns the bytes received or -errno, -EOPNOTSUPP for the query
  * descriptor, which takes only ioctls.
  *
- * A datagram or raw socket reads one message with no sender reported, which is what
- * `recv` is: `recvfrom` without the address. Failing it here would leave one
- * of the four ways of reading a socket disagreeing with the other three about
- * whether the same queued datagram exists. The receive writes into the buffer
- * `user_buffer_ok` checked.
+ * A datagram or raw socket reads one message with no sender reported, which is
+ * what `recv` is: `recvfrom` without the address. Failing it here would leave
+ * one of the four ways of reading a socket disagreeing with the other three
+ * about whether the same queued datagram exists. The receive writes into the
+ * buffer `user_buffer_ok` checked.
  */
 static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
 {
@@ -2433,17 +2433,19 @@ static int32_t icmp6_filter_get(struct socket *sock, uintptr_t optval_ptr, uintp
 }
 
 /**
- * setsockopt: keep SO_BROADCAST, SO_REUSEADDR and SO_KEEPALIVE, the hop
- * limit IP_TTL (1 to 255), SO_BINDTODEVICE, an interface by name or none
- * for an empty name, SO_RCVBUF, which Linux doubles and bounds by
- * SOCK_RCVBUF_MAX and SOCK_RCVBUF_MIN, IP_MTU_DISCOVER, an IP_PMTUDISC_*
- * value, IP_RECVTTL, which has a receive report the TTL (`put_rx_control`), and on a stream socket
- * the keepalive's TCP_KEEPIDLE, TCP_KEEPINTVL and TCP_KEEPCNT and TCP_USER_TIMEOUT
- * (`tcp_option_set`), and accept every other option with no effect, so that the setup of a forking
- * server that sets TCP_NODELAY succeeds; failing them would stop programs that set options a small
- * stack has no use for. Returns 0, or -EINVAL for a flag or hop limit shorter than an int, a hop
- * limit, IP_MTU_DISCOVER or TCP option out of range or a SO_BINDTODEVICE value of no bytes, -ENODEV
- * for an unknown interface, -EFAULT, or -ENOPROTOOPT for the two options below.
+ * setsockopt: keep SO_BROADCAST, SO_REUSEADDR and SO_KEEPALIVE, the hop limit
+ * IP_TTL (1 to 255), SO_BINDTODEVICE, an interface by name or none for an empty
+ * name, SO_RCVBUF, which Linux doubles and bounds by SOCK_RCVBUF_MAX and
+ * SOCK_RCVBUF_MIN, IP_MTU_DISCOVER, an IP_PMTUDISC_* value, IP_RECVTTL, which
+ * has a receive report the TTL (`put_rx_control`), and on a stream socket the
+ * keepalive's TCP_KEEPIDLE, TCP_KEEPINTVL and TCP_KEEPCNT and TCP_USER_TIMEOUT
+ * (`tcp_option_set`), and accept every other option with no effect, so that the
+ * setup of a forking server that sets TCP_NODELAY succeeds; failing them would
+ * stop programs that set options a small stack has no use for. Returns 0, or
+ * -EINVAL for a flag or hop limit shorter than an int, a hop limit,
+ * IP_MTU_DISCOVER or TCP option out of range or a SO_BINDTODEVICE value of no
+ * bytes, -ENODEV for an unknown interface, -EFAULT, or -ENOPROTOOPT for the two
+ * options below.
  *
  * Two options fail with -ENOPROTOOPT. A DHCP client sets PACKET_AUXDATA on a
  * packet socket so that it can be told the kernel has not checked a
@@ -2887,13 +2889,14 @@ static int32_t get_tx_control(const struct socket *sock, uintptr_t control, uint
  * Receive one datagram into a scatter list (recvmsg, socketcall 17).
  *
  * The DHCP client is what needs this: it reads its packet socket through
- * `recvmsg`, not `read` so that it can look for `PACKET_AUXDATA` in the
- * control data, and finding none it verifies the UDP checksum itself. So the
- * scatter half is the whole of the work here. The control buffer is answered
- * with a length of zero, the true answer, but on an AF_INET6 UDP or raw
- * socket that asked for IPV6_PKTINFO, IPV6_HOPLIMIT or IPV6_TCLASS, or an
- * AF_INET one that asked for IP_RECVTTL (`put_rx_control`); a message that does not fit sets
- * MSG_CTRUNC, and the buffer is checked with the others before the datagram is taken.
+ * `recvmsg`, not `read` so that it can look for `PACKET_AUXDATA` in the control
+ * data, and finding none it verifies the UDP checksum itself. So the scatter
+ * half is the whole of the work here. The control buffer is answered with a
+ * length of zero, the true answer, but on an AF_INET6 UDP or raw socket that
+ * asked for IPV6_PKTINFO, IPV6_HOPLIMIT or IPV6_TCLASS, or an AF_INET one that
+ * asked for IP_RECVTTL (`put_rx_control`); a message that does not fit sets
+ * MSG_CTRUNC, and the buffer is checked with the others before the datagram is
+ * taken.
  *
  * A datagram longer than the buffers is cut, and `msg_flags` says so with
  * MSG_TRUNC; with MSG_TRUNC in `flags` the call answers the datagram's whole

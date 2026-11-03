@@ -474,13 +474,13 @@ static int is_machine(const struct netdev *nd)
  * Put `ip`/`mask` in force on `nd`, with the costs `netconf_set_address`
  * lists.
  *
- * A change, a new address or a new mask under an address, is logged, drops
- * the ARP mappings of the interface but the permanent ones (of every
- * interface, for the first) and the datagrams waiting for them; a TCP
- * connection from the old address is kept (`tcp_ip_tx`). A gateway the
- * subnet does not have is cleared, change or not, and so are the added
- * routes whose gateway `nd` no longer reaches. The first interface's values are copied to
- * `net_ip_addr` and the two after it. The caller holds `net_lock`.
+ * A change, a new address or a new mask under an address, is logged, drops the
+ * ARP mappings of the interface but the permanent ones (of every interface, for
+ * the first) and the datagrams waiting for them; a TCP connection from the old
+ * address is kept (`tcp_ip_tx`). A gateway the subnet does not have is cleared,
+ * change or not, and so are the added routes whose gateway `nd` no longer
+ * reaches. The first interface's values are copied to `net_ip_addr` and the two
+ * after it. The caller holds `net_lock`.
  */
 static void addr_publish(struct netdev *nd, uint32_t ip, uint32_t mask)
 {

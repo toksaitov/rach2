@@ -134,17 +134,17 @@ void raw_unregister(struct socket *sock);
 void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len);
 
 /**
- * Offer the message of `len` bytes at `msg`, the payload of the IPv6
- * datagram whose fixed header is at `ip6h`, of next header `nh`, that came
- * in on the interface of index `ifindex`, to every AF_INET6 raw socket of
- * that protocol, under the rules of `raw_rx`. A socket of IPPROTO_ICMPV6
- * takes no message of a type its filter blocks (`raw_set_filter6`), nor one
- * too short to have a type, nor one whose checksum fails, which RFC 3542,
- * 3.1, has the kernel check; an ICMP datagram socket takes only its own
- * echo replies, whatever its filter. The hop limit and source are not checked, as
- * on Linux: a reader of neighbor discovery checks them itself. Each message
- * keeps its source, destination, hop limit and traffic class. Called with
- * interrupts off, from `ip6_rx`, before the kernel's own handler.
+ * Offer the message of `len` bytes at `msg`, the payload of the IPv6 datagram
+ * whose fixed header is at `ip6h`, of next header `nh`, that came in on the
+ * interface of index `ifindex`, to every AF_INET6 raw socket of that protocol,
+ * under the rules of `raw_rx`. A socket of IPPROTO_ICMPV6 takes no message of a
+ * type its filter blocks (`raw_set_filter6`), nor one too short to have a type,
+ * nor one whose checksum fails, which RFC 3542, 3.1, has the kernel check; an
+ * ICMP datagram socket takes only its own echo replies, whatever its filter.
+ * The hop limit and source are not checked, as on Linux: a reader of neighbor
+ * discovery checks them itself. Each message keeps its source, destination, hop
+ * limit and traffic class. Called with interrupts off, from `ip6_rx`, before
+ * the kernel's own handler.
  */
 void raw6_rx(int ifindex, const uint8_t *ip6h, uint8_t nh, const uint8_t *msg, uint16_t len);
 

@@ -179,16 +179,16 @@ typedef struct socket {
     int v6only; /* IPV6_V6ONLY; zero permits mapped IPv4 peers */
 
     /*
-     * The IPv6 options of an AF_INET6 socket, which its UDP and raw sends
-     * and its receives honour (syscall_net.c). `hops6` is IPV6_UNICAST_HOPS,
-     * -1 for the default of 64; `mhops6` IPV6_MULTICAST_HOPS, 1 unless set;
-     * `tclass6` IPV6_TCLASS, 0 to 255; `mif6` IPV6_MULTICAST_IF, the index of
-     * the interface a datagram to a group leaves by when its address names
-     * none, or 0; `mloop6` IPV6_MULTICAST_LOOP, whether such a datagram also
-     * comes back to this machine's members of the group; `rxopt` the
-     * SOCK_RX_* the receives answer with, of either family. `groups6` are the `ngroups6`
-     * groups IPV6_JOIN_GROUP made the socket a member of, each holding one
-     * join of the interface, which the socket's end gives back.
+     * The IPv6 options of an AF_INET6 socket, which its UDP and raw sends and
+     * its receives honour (syscall_net.c). `hops6` is IPV6_UNICAST_HOPS, -1 for
+     * the default of 64; `mhops6` IPV6_MULTICAST_HOPS, 1 unless set; `tclass6`
+     * IPV6_TCLASS, 0 to 255; `mif6` IPV6_MULTICAST_IF, the index of the
+     * interface a datagram to a group leaves by when its address names none, or
+     * 0; `mloop6` IPV6_MULTICAST_LOOP, whether such a datagram also comes back
+     * to this machine's members of the group; `rxopt` the SOCK_RX_* the
+     * receives answer with, of either family. `groups6` are the `ngroups6`
+     * groups IPV6_JOIN_GROUP made the socket a member of, each holding one join
+     * of the interface, which the socket's end gives back.
      */
     int16_t hops6;
     int16_t mhops6;

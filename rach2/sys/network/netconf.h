@@ -193,12 +193,12 @@ int netconf_set_gateway(struct netdev *nd, uint32_t gw);
 int netconf_add_address(struct netdev *nd, uint32_t ip, uint32_t mask);
 
 /**
- * Take the address `ip` from `nd`. The first, when `ip` is 0 or the first,
- * is replaced by the next address, as Linux's promote_secondaries has it, or
- * with none after it leaves the interface unconfigured, and the change drops
- * what `netconf_set_address` lists. For another address the added routes
- * whose gateway only its subnet reached are removed. EADDRNOTAVAIL for an address the interface
- * does not hold. Takes `net_lock`.
+ * Take the address `ip` from `nd`. The first, when `ip` is 0 or the first, is
+ * replaced by the next address, as Linux's promote_secondaries has it, or with
+ * none after it leaves the interface unconfigured, and the change drops what
+ * `netconf_set_address` lists. For another address the added routes whose
+ * gateway only its subnet reached are removed. EADDRNOTAVAIL for an address the
+ * interface does not hold. Takes `net_lock`.
  */
 int netconf_del_address(struct netdev *nd, uint32_t ip);
 

@@ -95,9 +95,9 @@ int icmp_ping(uint32_t dst_ip);
 
 /**
  * Send echo requests to `dst_ip` and wait for an answer: the round trip in
- * ticks, or -ETIMEDOUT when no request was answered, -EMSGSIZE for a `size` past
- * `ICMP_PING_DATA_MAX`, -ENOMEM when no block holds a request past one frame, or -EINTR when a
- * signal ended the wait.
+ * ticks, or -ETIMEDOUT when no request was answered, -EMSGSIZE for a `size`
+ * past `ICMP_PING_DATA_MAX`, -ENOMEM when no block holds a request past one
+ * frame, or -EINTR when a signal ended the wait.
  *
  * Up to four requests go, a second apart, each with its own sequence number.
  * Deadlines are measured from the current tick, including ticks whose
