@@ -139,7 +139,7 @@ LIBTSM_HOST_A = $(LIBTSM_HOST_STAGE)/lib/libtsm.a
 # SHA-256. They are named here and not found with $(wildcard), which would drop
 # a deleted tarball from the prerequisites and leave its stamp up to date; and
 # `distclean` derives the extracted source directories from them.
-SOX_NG_TARBALL = vendor/sox_ng/sox_ng-14.8.1.tar.gz
+SOX_NG_TARBALLS = vendor/sox_ng/sox_ng-14.8.1.tar.gz vendor/sox_ng/flac-1.5.0.tar.xz
 # OpenSSL's tarball is the GNU layer's download, which build_openssl.sh pins.
 LIBNL_TARBALL = vendor/libnl/libnl-3.12.0.tar.gz
 LIBNL_UAPI = $(addprefix vendor/libnl/linux-uapi/,asm/byteorder.h asm/errno.h asm/swab.h \
@@ -401,8 +401,9 @@ $(DROPBEAR_STAMP): vendor/dropbear/build_dropbear.sh vendor/dropbear/localoption
 	    echo "dropbear: result: done in $$(($$(date +%s)-t0))s"; fi
 	@test -s $(DROPBEAR_BIN) || { echo "dropbear: build produced no $(DROPBEAR_BIN)" >&2; exit 1; }
 
-# WAV and OSS are built in; the other entry points select modes of sox.
-$(SOX_NG_STAMP): vendor/sox_ng/build_sox_ng.sh $(VENDOR_COMMON) $(SOX_NG_TARBALL) \
+# WAV and OSS are built in, and FLAC through libFLAC, whose tarball is
+# beside sox_ng's; the other entry points select modes of sox.
+$(SOX_NG_STAMP): vendor/sox_ng/build_sox_ng.sh $(VENDOR_COMMON) $(SOX_NG_TARBALLS) \
                   vendor/sox_ng/mode.c \
                   $(LIBC_STAMP) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@ $(SOX_NG_OUTPUTS)
