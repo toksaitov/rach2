@@ -119,16 +119,21 @@ static double osc(uint32_t f, uint32_t k, uint32_t rate, int cosine)
     return tsin(2.0 * PI * m / (double)rate + (cosine ? PI / 2.0 : 0.0));
 }
 
+/* A sine fitted to output frames: its gain and the power left beside it. */
+struct fit {
+    double gain; /* the amplitude relative to the one expected, squared */
+    double rest; /* the power left once the sine is taken out, over its own */
+};
+
 /**
- * The amplitude of the sine of `f` Hz in channel `ch` of output frames
- * `from` to `to` at `rate`, relative to `amp`, squared, in `*gain`, and the
- * power of what is left once that sine is taken out, relative to the
- * sine's, in `*rest`. The sine and its cosine are fitted by least squares,
- * so the frames need not hold whole periods.
+ * The sine of `f` Hz in channel `ch` of output frames `from` to `to` at
+ * `rate`: its amplitude relative to `amp`, squared, and the power of what is
+ * left once it is taken out, relative to the sine's. The sine and its cosine
+ * are fitted by least squares, so the frames need not hold whole periods.
  */
-static void measure(uint32_t from, uint32_t to, int ch, uint32_t f, uint32_t rate, double amp,
-                    double *gain, double *rest)
+static struct fit measure(uint32_t from, uint32_t to, int ch, uint32_t f, uint32_t rate, double amp)
 {
+    struct fit fit;
     double s, c, y, ss = 0, cc = 0, sc = 0, ys = 0, yc = 0, a, b, det, e, power = 0;
     uint32_t k;
 
@@ -149,8 +154,9 @@ static void measure(uint32_t from, uint32_t to, int ch, uint32_t f, uint32_t rat
         e = out[k][ch] - a * osc(f, k, rate, 0) - b * osc(f, k, rate, 1);
         power += e * e;
     }
-    *gain = (a * a + b * b) / (amp * amp);
-    *rest = power / (double)(to - from) / ((a * a + b * b) / 2.0 + 1e-30);
+    fit.gain = (a * a + b * b) / (amp * amp);
+    fit.rest = power / (double)(to - from) / ((a * a + b * b) / 2.0 + 1e-30);
+    return fit;
 }
 
 /* The conversions the rows make: the mix's from each rate /dev/dsp takes
@@ -177,6 +183,7 @@ static void row_passband(void)
     static const double at[] = {0.0, 0.5, 0.85};
     uint32_t i, j, fin, fout, low, f, n;
     double gain, rest, worst = 0, lo = 1, hi = 1;
+    struct fit fit;
 
     row = "passband";
     for (i = 0; i < NRATES; i++) {
@@ -187,7 +194,9 @@ static void row_passband(void)
             f = j == 0 ? 1000u : (uint32_t)(at[j] * low / 2.0);
             fill_sines(row_len(fin), fin, f, f, FULL / 2.0);
             n = convert(row_len(fin), fin, fout);
-            measure(settle(n), n - settle(n), 0, f, fout, FULL / 2.0, &gain, &rest);
+            fit = measure(settle(n), n - settle(n), 0, f, fout, FULL / 2.0);
+            gain = fit.gain;
+            rest = fit.rest;
             check(gain > 0.97724 && gain < 1.02329, "a sine in the band is kept within 0.1 dB");
             check(rest < 1e-8, "what the conversion adds is 80 dB below the sine");
             lo = gain < lo ? gain : lo;
