@@ -226,6 +226,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "doom_format",
+          "checks": "tests/host/doom_format_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "doom_platform",
           "checks": "tests/host/doom_platform_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
