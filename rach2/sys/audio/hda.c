@@ -697,10 +697,10 @@ static void hda_fill_period(uint32_t index)
  * The frames of the stream taken and not yet played at byte `pos` of the DMA
  * buffer: those of each period filled ahead of the one playing, the part of
  * the one playing past `pos`, in proportion, and those hda_rs holds past
- * the time of its next frame, which play after them. The periods filled are those
- * from the one playing round to the one playing at the last service, as
- * hda_delay_at says. Interrupts are off, so that the service does not move
- * them between the reads.
+ * the time of its next frame, which play after them. The periods filled are
+ * those from the one playing round to the one playing at the last service,
+ * as hda_delay_at says. Interrupts are off, so that the service does not
+ * move them between the reads.
  */
 static uint32_t hda_play_delay(uint32_t pos)
 {
@@ -4587,9 +4587,10 @@ static int hda_play_open(audio_stream_t *s)
  * the rate played, about 23 ms; the stream's period is the one asked for,
  * cut to the frames of the stream a DMA period plays, so that a `period`
  * call is due at least at every DMA period's end. `device_periods` covers
- * the frames `stream_start` takes for the three DMA periods. 0, or -EINVAL for a stream that is not
- * the open one or runs, a format not in audio_format_t, a channel count other than 1 or 2, or a
- * codec with no 16-bit PCM.
+ * the frames `stream_start` takes for the three DMA periods. 0, or -EINVAL
+ * for a stream that is not the open one or runs, a format not in
+ * audio_format_t, a channel count other than 1 or 2, or a codec with no
+ * 16-bit PCM.
  */
 static int hda_play_setup(audio_stream_t *s)
 {
@@ -4604,7 +4605,7 @@ static int hda_play_setup(audio_stream_t *s)
     if (!hw)
         return -EINVAL;
     if (AUDIO_SAMPLE_BYTES(format) > 2u)
-        format = hda_common_pcm() & (1u << 19) ? AUDIO_S32LE : AUDIO_S16LE;
+        format = (hda_common_pcm() & (1u << 19)) ? AUDIO_S32LE : AUDIO_S16LE;
     rate = s->rate < HDA_RATE_RATIO * hw ? s->rate : HDA_RATE_RATIO * hw;
     step = hda_rate_step(rate, hw);
     frame = 2u * (format == AUDIO_S32LE ? 4u : 2u);
