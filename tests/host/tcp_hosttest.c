@@ -353,6 +353,7 @@ uint32_t krandom_u32(void)
 
 /* The counters /proc/net/snmp reports, which net_core.c defines. */
 struct net_mib net_mib;
+struct net_mib6 net_mib6;
 
 /* ---- the cases ---- */
 

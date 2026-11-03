@@ -284,6 +284,7 @@ int ip_tx_from(uint32_t src, uint32_t dst, uint8_t proto, const uint8_t *payload
 
 /* The counters /proc/net/snmp reports, which net_core.c defines. */
 struct net_mib net_mib;
+struct net_mib6 net_mib6;
 
 /* ---- the cases ---- */
 
