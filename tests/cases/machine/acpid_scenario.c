@@ -117,7 +117,7 @@ static int service_path(struct guest *g, const char *name, const char *id)
     char command[256], got[128], detail[256];
 
     snprintf(command, sizeof(command),
-             "echo P\"\"=$(tr '\\0' '\\n' < /proc/$(pidof %s)/environ | sed -n 's/^PATH=//p')\r",
+             "echo P\"\"=$(tr '\\0' '\\n' < /proc/$(pidof %s)/environ | sed -n 's,^PATH=,,p')\r",
              name);
     if (!ask(g, command, "P", got, sizeof(got)))
         return 0;

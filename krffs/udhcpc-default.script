@@ -62,6 +62,7 @@ drop_routes() {
 # Whether the one default route through the interface is through gateway $1
 # at the interface's metric.
 only_route() {
+	# shellcheck disable=SC2016 # the dollars are awk's
 	/bin/busybox route -n | /bin/busybox awk -v gw="$1" -v m="$metric" -v i="$interface" '
 		$1 == "0.0.0.0" && $NF == i { n++; if ($2 == gw && $5 == m) ok = 1 }
 		END { exit !(n == 1 && ok) }'
