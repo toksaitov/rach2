@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 3, 2026
 .Dt RECV 2
 .Os
 .Sh NAME
@@ -222,8 +222,15 @@ The message header, vector entries, nonempty data buffers, and the
 portion of the address buffer to be written are checked before input
 is consumed.
 .Pp
-An IPv4 or packet socket supplies no ancillary data: the control buffer
-is unused and
+An IPv4 raw or ICMP datagram socket that asked for it with
+.Dv IP_RECVTTL
+.Pq Xr setsockopt 2
+receives the datagram's TTL, an integer, at level
+.Dv IPPROTO_IP
+and type
+.Dv IP_TTL .
+Any other IPv4 socket, and a packet socket, supplies no ancillary data:
+the control buffer is unused and
 .Fa msg Ns ->msg_controllen
 is set to zero, and
 .Fa msg Ns ->msg_flags

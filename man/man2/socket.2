@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 3, 2026
 .Dt SOCKET 2
 .Os
 .Sh NAME
@@ -27,6 +27,22 @@ The supported combinations are:
 A TCP stream socket; protocol is zero or IPPROTO_TCP (6).
 .It Dv AF_INET , SOCK_DGRAM
 A UDP datagram socket; protocol is zero or IPPROTO_UDP (17).
+With
+.Dv IPPROTO_ICMP
+(1), an ICMP datagram socket, Linux's ping socket, which any user may
+open, as on a Linux whose
+.Ql net.ipv4.ping_group_range
+admits every group.
+The kernel gives it an echo identifier that no other such socket holds.
+It sends only echo requests (type 8, code 0, at least 8 bytes; others
+are
+.Er EINVAL ) ,
+into which the kernel writes its identifier and the checksum, and it
+receives only the echo replies that carry its identifier, the ICMP
+message without the IP header.
+.Dv SO_TYPE
+reports it as
+.Dv SOCK_DGRAM .
 .It Dv AF_INET , SOCK_RAW
 A raw ICMP socket when
 .Fa protocol
@@ -46,6 +62,10 @@ A UDP datagram socket; protocol is zero or IPPROTO_UDP (17).
 IPv6 sockets default to dual stack, with IPv4 peers represented by
 mapped addresses.
 Set IPV6_V6ONLY before binding to restrict one to IPv6.
+With
+.Dv IPPROTO_ICMPV6
+(58), an ICMPv6 datagram socket, as the IPv4 one above, whose echo
+request is type 128 and reply type 129.
 .It Dv AF_INET6 , SOCK_RAW
 A raw ICMPv6 socket when
 .Fa protocol

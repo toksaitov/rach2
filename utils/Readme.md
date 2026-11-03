@@ -12,7 +12,7 @@ A program's options and behavior are in its manual page, linked below. This sect
 
 ### Network programs
 
-* [ping(1)](../man/man1/ping.1) sends ICMP echo requests. The kernel sends each echo and waits for the reply through a private socket operation, [ping(2)](../man/man2/ping.2), reached through socketcall, call 102, on i686 and through call 400 on x86-64. Any account may run it. BusyBox's ping needs a raw ICMP socket, which only root may open, so BusyBox is built without it (`vendor/busybox/rach2.config`) and the BusyBox images stage this one.
+* [ping(1)](../man/man1/ping.1) sends ICMP echo requests, one an interval whether or not the last was answered, through an ICMP datagram socket, Linux's ping socket ([socket(2)](../man/man2/socket.2)), as iputils does. Any account may run it, and any number run at once. BusyBox's ping needs a raw ICMP socket, which only root may open, so BusyBox is built without it (`vendor/busybox/rach2.config`) and the BusyBox images stage this one.
 * [nc(1)](../man/man1/nc.1) is a TCP client.
 * [httpd(8)](../man/man8/httpd.8) answers every request with an HTTP/1.0 status page that shows the request as the network stack decoded it.
 * [dhcpc(8)](../man/man8/dhcpc.8) takes a DHCP lease and keeps it for as long as it runs.
@@ -152,7 +152,7 @@ make -C utils -f Makefile.linux
 
 ## Limits
 
-* Only the twelve file programs build for Linux. The others are built only against the ported musl, and several use interfaces only this kernel has, such as ping(2), the text commands of `/dev/loop-control`, `/dev/bootpart` and `/dev/grubcore`.
+* Only the twelve file programs build for Linux. The others are built only against the ported musl, and several use interfaces only this kernel has, such as the text commands of `/dev/loop-control`, `/dev/bootpart` and `/dev/grubcore`.
 * Every program is linked statically.
 * The file programs are much smaller than POSIX's; [busybox-coreutils(1)](../man/man1/busybox-coreutils.1) says what each does.
 * The network programs but ndwatch, and the resolver, use IPv4 only.

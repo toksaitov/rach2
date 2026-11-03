@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 3, 2026
 .Dt PING 2
 .Os
 .Sh NAME
@@ -82,12 +82,12 @@ A request to a next hop not in the ARP cache, or for IPv6 the neighbour
 cache, waits for the neighbour's answer and is sent when it comes.
 The caller sleeps while waiting, allowing other processes to run.
 .Pp
-Only one call may be in progress on the machine.
-A second caller receives
-.Er EBUSY
-without sending a request.
-The request slot is released on success, timeout, or interruption by
-a signal.
+Each call has an echo identifier of its own, which no other call in
+progress and no ICMP datagram socket
+.Pq Xr socket 2
+holds, so any number of calls run
+at once, from any processes, and a reply ends only the wait of the call
+it answers.
 .Pp
 On x86-64, which has no
 .Nm socketcall ,
@@ -114,19 +114,18 @@ The raw kernel interface returns the negative error number.
 .Sh EXAMPLES
 The call above, with
 .Va address
-set to 0x0a000202, is the operation used by
-.Pa utils/ping.c
-to reach 10.0.2.2.
+set to 0x0a000202, pings 10.0.2.2.
 .Pa tests/pingtest.c
-checks replies, timeout, refusal of concurrent calls, progress by
-another process during the wait, and release of the request slot.
+checks replies, timeout, a call beside another caller's, and progress
+by another process during the wait.
+.Xr ping 1
+does not use this call: it sends through an ICMP datagram socket, one
+request an interval.
 It runs in the separate ping suite, not the default suite.
 .Sh ERRORS
 .Bl -tag -width "[ETIMEDOUT]"
 .It Bq Er EADDRNOTAVAIL
 The interface of operation 0x1002 has no IPv6 address to send from.
-.It Bq Er EBUSY
-Another ping call is in progress.
 .It Bq Er EFAULT
 The argument words, or the IPv6 address, cannot be read from user
 memory.
@@ -151,4 +150,5 @@ Transmit errors are not returned separately by this operation.
 .El
 .Sh SEE ALSO
 .Xr ping 1 ,
+.Xr socket 2 ,
 .Xr socketcall 2

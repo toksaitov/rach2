@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 3, 2026
 .Dt ICMP6 7
 .Os
 .Sh NAME
@@ -21,11 +21,13 @@ It answers an echo request from the address it was sent to, or, sent to
 a group, from its own address on the link it came by, with the request's
 identifier, sequence and data, up to 65527 bytes, in fragments past the
 path MTU.
-An echo reply goes to the kernel's own ping
-.Pq Xr ping 2 ,
-which
+An echo reply goes to the holder of its identifier: the ICMPv6 datagram
+socket
+.Pq Xr socket 2
+that
 .Xr ping 1
-uses for an IPv6 address.
+uses for an IPv6 address, or a call of the kernel's own ping
+.Pq Xr ping 2 .
 A Packet Too Big that quotes a datagram this machine sent lowers the path
 MTU of its destination, never below 1280 bytes, for ten minutes.
 A destination unreachable, a time exceeded or a parameter problem is

@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 3, 2026
 .Dt SETSOCKOPT 2
 .Os
 .Sh NAME
@@ -180,6 +180,18 @@ At level
 set or get the IPv4 hop limit.
 Setting it requires an integer from 1 through 255.
 UDP and raw ICMP sends use the stored value.
+.It Dv IP_RECVTTL
+At level
+.Dv IPPROTO_IP ,
+set or get whether a
+.Xr recvmsg 2
+on an IPv4 raw or ICMP datagram socket answers with the datagram's TTL,
+a control message of level
+.Dv IPPROTO_IP
+and type
+.Dv IP_TTL
+holding an integer.
+A UDP socket keeps no TTL of its datagrams and answers with none.
 .It Dv IP_MTU_DISCOVER
 At level
 .Dv IPPROTO_IP ,
@@ -300,7 +312,8 @@ an
 .Dv SO_KEEPALIVE ,
 .Dv SO_RCVBUF ,
 .Dv IP_MTU_DISCOVER ,
-.Dv IP_TTL
+.Dv IP_TTL ,
+.Dv IP_RECVTTL
 or TCP keepalive or user timeout value is shorter than an integer; the hop
 limit is outside 1 through 255;
 .Dv IP_MTU_DISCOVER
