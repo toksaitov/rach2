@@ -13,8 +13,13 @@
  * wakes nothing. A datagram past one frame, as a reassembled one is, is
  * queued whole too, and once the queue holds more than the socket's budget
  * the next is dropped and logged. An ICMP datagram socket takes only the
- * echo replies that carry its identifier, without the IP header, and two
- * such sockets hold different identifiers.
+ * echo replies that carry its identifier and a good ICMP checksum, without
+ * the IP header, and two such sockets hold different identifiers. Its
+ * identifier is its port: a connect fixes it, and getsockname then reports
+ * it, its requests carry it and its replies reach it; a bind gives it the
+ * one asked for, which its requests then carry, unless another socket or a
+ * ping of the kernel's holds that one; and a second bind is refused. A raw
+ * socket takes an echo reply whatever its checksum.
  */
 #include "network/socket/raw.c"
 
@@ -62,6 +67,33 @@ void klog(int level, const char *subsystem, const char *format, ...)
 /* The identifiers icmp_echo_id hands out, one past the last. */
 static uint16_t next_id = 0x5243;
 
+/* The identifier a ping of the kernel's holds in this model. */
+#define KERNEL_PING_ID 0x7000
+
+/** Whether a ping of the kernel's holds `id`: KERNEL_PING_ID alone. */
+int icmp_ping_id_used(uint16_t id)
+{
+    return id == KERNEL_PING_ID;
+}
+
+/** The Internet checksum of the `len` bytes at `buf` (RFC 1071). */
+uint16_t ip_checksum(const uint8_t *buf, uint16_t len)
+{
+    uint32_t sum = 0;
+    uint16_t i;
+
+    for (i = 0; i + 1 < len; i = (uint16_t)(i + 2)) {
+        sum += (uint32_t)((buf[i] << 8) | buf[i + 1]);
+    }
+    if (len & 1) {
+        sum += (uint32_t)buf[len - 1] << 8;
+    }
+    while (sum >> 16) {
+        sum = (sum & 0xFFFFu) + (sum >> 16);
+    }
+    return (uint16_t)(~sum & 0xFFFFu);
+}
+
 /** A new echo identifier, as the kernel's allocator gives one: none of
  * this model's sockets holds the next. */
 uint16_t icmp_echo_id(void)
@@ -78,9 +110,12 @@ void wq_wake(wait_queue_t *wq, uint32_t kinds)
 }
 
 /** Fill `d`, 28 bytes, as an IPv4 datagram from 10.0.0.2 holding an
- * ICMP message of `type` with the echo identifier `id`. */
+ * ICMP message of `type` with the echo identifier `id` and a good
+ * checksum. */
 static void echo_datagram(uint8_t *d, uint8_t type, uint16_t id)
 {
+    uint16_t sum;
+
     uint32_t i;
 
     for (i = 0; i < 28; i++) {
@@ -94,6 +129,74 @@ static void echo_datagram(uint8_t *d, uint8_t type, uint16_t id)
     d[24] = (uint8_t)(id >> 8);
     d[25] = (uint8_t)id;
     d[27] = 7;
+    sum = ip_checksum(d + 20, 8);
+    d[22] = (uint8_t)(sum >> 8);
+    d[23] = (uint8_t)sum;
+}
+
+/** The echo identifier in the ICMP message at `m`. */
+static int id_of(const uint8_t *m)
+{
+    return (m[4] << 8) | m[5];
+}
+
+/** The rows of an ICMP datagram socket's identifier as its port: a
+ * connected socket's, a bound one's, and the checksum of a reply. */
+static void port_rows(void)
+{
+    static struct socket a, b, c, r;
+    static uint8_t d[28], req[8];
+    int ida;
+
+    a.rcvbuf = b.rcvbuf = c.rcvbuf = r.rcvbuf = SOCK_RCVBUF_MIN;
+    CHECK(raw_register(&a, 1, 1) == 0 && raw_register(&b, 1, 1) == 0 &&
+              raw_register(&c, 1, 1) == 0 && raw_register(&r, 1, 0) == 0,
+          "three ICMP datagram sockets and a raw one register");
+    ida = raw_echo_id(&a);
+    CHECK(raw_echo_port(&a) == 0, "an echo socket reports port 0 before a bind, send or connect");
+    CHECK(raw_echo_port(&r) == -1, "a raw socket has no echo port");
+
+    raw_echo_hold(&a); /* what connect does */
+    CHECK(raw_echo_port(&a) == ida, "a connected echo socket reports its identifier as its port");
+    req[0] = 8;
+    req[2] = req[3] = 0xEE;
+    CHECK(raw_echo_stamp(&a, req, (int)sizeof(req), 8) == 1 && id_of(req) == ida && req[2] == 0 &&
+              req[3] == 0,
+          "the connected socket's request carries its identifier, its checksum left to the send");
+    echo_datagram(d, 0, (uint16_t)ida);
+    raw_rx(1, d, sizeof(d));
+    CHECK(a.rq.count == 1, "the connected socket receives its reply");
+    CHECK(raw_echo_bind(&a, 0) == -EINVAL, "a connected socket's identifier is not bound again");
+
+    CHECK(raw_echo_bind(&b, 0x1234) == 0 && raw_echo_port(&b) == 0x1234 &&
+              raw_echo_id(&b) == 0x1234,
+          "a bind gives the identifier asked for, and getsockname reports it");
+    req[0] = 8;
+    CHECK(raw_echo_stamp(&b, req, (int)sizeof(req), 8) == 1 && id_of(req) == 0x1234,
+          "the requests of a bound socket carry the identifier bound");
+    echo_datagram(d, 0, 0x1234);
+    raw_rx(1, d, sizeof(d));
+    CHECK(b.rq.count == 1 && a.rq.count == 1,
+          "the reply to the identifier bound reaches its socket");
+    CHECK(raw_echo_bind(&b, 0x1235) == -EINVAL, "a second bind is refused");
+    CHECK(raw_echo_bind(&c, 0x1234) == -EADDRINUSE,
+          "a bind to another socket's identifier is refused");
+    CHECK(raw_echo_bind(&c, KERNEL_PING_ID) == -EADDRINUSE,
+          "a bind to the identifier of a kernel's ping is refused");
+    CHECK(raw_echo_port(&c) == 0, "a refused bind fixes nothing");
+    CHECK(raw_echo_bind(&r, 0x2000) == -EINVAL, "a raw socket binds no identifier");
+
+    echo_datagram(d, 0, 0x1234);
+    d[23] ^= 1;
+    raw_rx(1, d, sizeof(d));
+    CHECK(b.rq.count == 1, "an echo reply with a bad ICMP checksum is dropped");
+    CHECK(r.rq.count == 3, "a raw socket takes every echo reply, a bad checksum's too");
+    CHECK(raw_echo_stamp(&c, req, 7, 8) == -1 && raw_echo_port(&c) == raw_echo_id(&c),
+          "a send fixes the identifier even of a message refused");
+    raw_unregister(&a);
+    raw_unregister(&b);
+    raw_unregister(&c);
+    raw_unregister(&r);
 }
 
 /** The rows of two ICMP datagram sockets. */
@@ -166,6 +269,7 @@ int main(void)
     raw_unregister(&sock);
     CHECK(sock.rq.count == 0 && sock.rq.head == NULL, "unregistering frees what was queued");
     echo_rows();
+    port_rows();
     printf("raw-hosttest: result: %s: %d failures\n", failures ? "fail" : "pass", failures);
     return failures ? 1 : 0;
 }
