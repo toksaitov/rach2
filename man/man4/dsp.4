@@ -25,9 +25,16 @@ its own settings, buffer and delay.
 The kernel mixes what every descriptor plays into one stream of the device:
 stereo at 48000 Hz, of 24 bits on an HD Audio codec that has them and of
 16 bits on one that has not, or 16 bits at 44100 Hz on the Sound Blaster 16.
-Each descriptor's samples are converted to 24-bit stereo and to that rate by
-linear interpolation, and the sum is held within 24 bits and, on a device of
-16 bits, rounded to 16.
+Each descriptor's samples are converted to 24-bit stereo, and to that rate by
+a windowed-sinc filter, as FreeBSD's kernel converts them: what lies below 0.9
+of the lower rate's Nyquist frequency is kept within 0.1 dB, and what lies
+above it is attenuated by at least 80 dB, so that a rate converted down does
+not alias and one converted up has no images.
+The filter delays a converted descriptor by 59 frames of the lower of its
+rate and the mix's, 1.2 ms against 48000 Hz and 7.4 ms at 8000 Hz, which its
+delay and position count.
+At the mix's own rate a descriptor's samples reach the mix unchanged.
+The sum is held within 24 bits and, on a device of 16 bits, rounded to 16.
 The stream line of
 .Pa /proc/audio
 .Pq Xr proc 5
@@ -221,7 +228,7 @@ on the descriptor.
 .El
 The first capture reader configures the stopped input.
 With several readers open, its settings stay fixed and each reader converts
-from them to its own format, channels and rate, repeating or omitting frames.
+from them to its own format, channels and rate, through the same filter.
 A slow reader loses only its own frames.
 The last running reader stops the input, and the last close releases it.
 .Pp

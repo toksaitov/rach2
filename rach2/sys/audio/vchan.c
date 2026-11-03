@@ -215,8 +215,7 @@ static uint32_t vchan_played(struct vchan *c, uint32_t h, int commit)
  * The frames the block reads are known before it makes any, from the
  * resampler, so that one `transfer` takes them all; the caller's silence for
  * frames it lacks is mixed like data. A channel not yet joined starts its
- * resampler and joins at the block: its first frame lies at the block's
- * first, and the block takes the frames the resampler reaches past it too.
+ * resampler, whose window of silence fills the lag, and joins at the block.
  * The lock is held.
  */
 static void vchan_mix(struct vchan *c, uint32_t n)
