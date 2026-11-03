@@ -183,8 +183,9 @@ unusedStructMember:*tests/musl/waitidmusl.c
 # between are the layout.
 unusedStructMember:*tests/musl/ndwatchmusl.c
 
-# The probes reach the kernel through inline assembly, which cppcheck does not
-# read, so an array a system call fills looks to it like one nothing writes.
+# The probes and tools/audio/resamplebench.c reach the kernel through inline
+# assembly, which cppcheck does not read, so an array a system call fills
+# looks to it like one nothing writes.
 # The framebuffer palette in devprobe is the other half of that: 768 bytes of
 # zeroes is what the row hands the kernel, so nothing assigns it here.
 constVariable:*tests/bootprobe.c
@@ -193,6 +194,7 @@ constVariable:*tests/exitprobe.c
 constVariable:*tests/limitprobe.c
 constVariable:*tests/loopdevprobe.c
 constVariable:*tests/sigprobe.c
+constVariable:*tools/audio/resamplebench.c
 unassignedVariable:*tests/devprobe.c
 unassignedVariable:*tests/loopprobe.c
 unassignedVariable:*tests/procprobe.c

@@ -243,6 +243,22 @@ static void advance(resampler_t *r)
     }
 }
 
+/** Make the next output frame of `conv` through the loop `how`, as row
+ * names it, with the polyphase row's step `g`. */
+static void get_frame(uint32_t g, int how, int32_t *frame)
+{
+    if (how == 0) {
+        resample_get(&conv, frame);
+        return;
+    }
+    if (how == 1) {
+        get_poly(&conv, g, frame);
+    } else {
+        get_interp(&conv, frame);
+    }
+    advance(&conv);
+}
+
 /**
  * Convert SECONDS of output from `in` to `out` frames per second through
  * the loop `how`, 0 for the kernel's, 1 for the polyphase row and 2 for the
@@ -268,16 +284,7 @@ static uint32_t row(uint32_t in, uint32_t out, uint32_t g, int how)
                     resample_put(&conv, input[at]);
                     at = at + 1u == INPUT ? 0 : at + 1u;
                 }
-                if (how == 0) {
-                    resample_get(&conv, frame);
-                } else {
-                    if (how == 1) {
-                        get_poly(&conv, g, frame);
-                    } else {
-                        get_interp(&conv, frame);
-                    }
-                    advance(&conv);
-                }
+                get_frame(g, how, frame);
                 sink += frame[0] ^ frame[1];
             }
         }
