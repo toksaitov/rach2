@@ -25,7 +25,11 @@
  * exec gives them back, and the image is then not dumpable, except under
  * no_new_privs or with another process sharing its directories; the exec of a
  * thread of user 1000 that gave up the none it had keeps its parent-death
- * signal and stays dumpable.
+ * signal and stays dumpable. User 1000, in a user namespace of its own that
+ * maps its uid to itself, raises CAP_CHOWN ambient and execs this program,
+ * whose image holds CAP_CHOWN effective, permitted and ambient though its
+ * uid is not 0, as Linux gives it and as bubblewrap's --cap-add run by an
+ * ordinary user needs.
  *
  * The calls go through syscall by number, since musl has no wrapper.
  *
@@ -138,6 +142,7 @@ enum {
     EXEC_NNP,
     EXEC_SHARED,
     EXEC_KEPT,
+    EXEC_AMBIENT_USER,
     TRACEME,
     TRACEME_LEADER,
     OWN_EXE,
@@ -180,6 +185,7 @@ static const struct {
     {"exec-nnp", "an exec under no_new_privs gave the capabilities back"},
     {"exec-shared", "an exec whose directories another process shares gave the capabilities back"},
     {"exec-kept", "an exec that regained nothing cleared the parent-death signal"},
+    {"exec-ambient-user", "an exec of user 1000 did not keep its ambient capability"},
     {"traceme", "a child with capabilities made a parent without them its tracer"},
     {"traceme-leader", "a privileged child made its tracer a parent whose live thread was not"},
     {"own-exe", "a thread without capabilities could not read its own process's exe link"},
@@ -679,9 +685,10 @@ static int make_secret(void)
  * The image an exec row runs, which judges its sets by `mode`: "all",
  * "none", "undumpable" for every capability in an image that is not
  * dumpable, "kept" for none, the parent-death signal SIGUSR1 and a
- * dumpable image, or "ambient" for CAP_CHOWN alone effective, permitted and
+ * dumpable image, "ambient" for CAP_CHOWN alone effective, permitted and
  * ambient, in capget, prctl and /proc/self/status, with CAP_CHOWN and
- * CAP_NET_RAW inheritable. It kills the process `other` names first, when it
+ * CAP_NET_RAW inheritable, or "ambient-user" for the same with CAP_CHOWN
+ * alone inheritable and a uid that is not 0. It kills the process `other` names first, when it
  * names one. Its exit status: 0 when the image is as `mode` says; for
  * "ambient" the row of `ambient_rows` that failed otherwise.
  */
@@ -705,6 +712,14 @@ static int judge_image(const char *mode, const char *other)
                        status_set_is("CapAmb", "0000000000000001")
                    ? 0
                    : EXEC_AMBIENT - INHERITABLE_SET + 1;
+    }
+    if (strcmp(mode, "ambient-user") == 0) {
+        return !(found && getuid() != 0 && geteuid() != 0 && d[0].effective == CHOWN &&
+                 d[0].permitted == CHOWN && d[0].inheritable == CHOWN && d[1].effective == 0 &&
+                 d[1].permitted == 0 && d[1].inheritable == 0 && ambient(CAP_CHOWN_) == 1 &&
+                 status_set_is("CapEff", "0000000000000001") &&
+                 status_set_is("CapPrm", "0000000000000001") &&
+                 status_set_is("CapAmb", "0000000000000001"));
     }
     if (strcmp(mode, "kept") == 0) {
         return !(found && none_of(d) && prctl(PR_GET_PDEATHSIG, &sig, 0, 0, 0) == 0 &&
@@ -832,6 +847,52 @@ static int in_ambient_child(void)
 }
 
 /**
+ * Write the string `text` to the file `path`, as a user namespace's map
+ * files take it. Returns 0, or -1 on failure.
+ */
+static int put(const char *path, const char *text)
+{
+    int fd = open(path, O_WRONLY);
+    ssize_t len = (ssize_t)strlen(text);
+    int ok = fd >= 0 && write(fd, text, (size_t)len) == len;
+
+    if (fd >= 0) {
+        close(fd);
+    }
+    return ok ? 0 : -1;
+}
+
+/**
+ * The exec of user 1000 in a user namespace of its own that maps its ids to
+ * themselves, as bubblewrap's --unshare-user makes it: the namespace gives
+ * it every capability there, it keeps CAP_CHOWN alone, inheritable and
+ * ambient, and the image, whose uid is not 0, finds CAP_CHOWN effective,
+ * permitted and ambient. Returns 1 when it did, and 0 otherwise.
+ */
+static int ambient_kept_by_user(void)
+{
+    pid_t pid = fork();
+    int status;
+
+    if (pid == 0) {
+        char map[32];
+
+        snprintf(map, sizeof(map), "%ld %ld 1\n", probe_id(1000), probe_id(1000));
+        if (setgid((gid_t)probe_id(1000)) != 0 || setuid((uid_t)probe_id(1000)) != 0 ||
+            prctl(PR_SET_DUMPABLE, 1, 0, 0, 0) != 0 || unshare(CLONE_NEWUSER) != 0 ||
+            put("/proc/self/uid_map", map) != 0 || put("/proc/self/setgroups", "deny") != 0 ||
+            put("/proc/self/gid_map", map) != 0 || set_first(CHOWN, CHOWN) != 0 ||
+            prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_CHOWN_, 0, 0) != 0) {
+            _exit(2);
+        }
+        execl("/proc/self/exe", "capmusl", "ambient-user", "0", (char *)NULL);
+        _exit(3);
+    }
+    return pid > 0 && waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+           WEXITSTATUS(status) == 0;
+}
+
+/**
  * Run the rows of the calls themselves, as root. Returns 0, or 1 after the
  * failure is printed.
  */
@@ -881,6 +942,9 @@ static int later_rows(void)
     }
     if (!nothing_regained()) {
         return fail(EXEC_KEPT);
+    }
+    if (!ambient_kept_by_user()) {
+        return fail(EXEC_AMBIENT_USER);
     }
     if (!traceme_refused()) {
         return fail(TRACEME);
