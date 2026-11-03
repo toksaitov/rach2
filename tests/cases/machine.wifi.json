@@ -1011,7 +1011,7 @@
     },
     {
       "case_id": "machine.wifi.robust",
-      "behavior": "the installed system keeps network A through group rekeys, a restart of the AP, a deauthentication, the AP gone and back, and a roam with an SSH session kept, moves to and from network B, and lets the cable take and give back the default route and DNS",
+      "behavior": "the installed system keeps network A through group rekeys, and its lease through a restart of the AP and a deauthentication, gives the lease up with the AP gone and joins again when it is back, and a roam with an SSH session kept, moves to and from network B, and lets the cable take and give back the default route and DNS",
       "units": [
         "wifi",
         "wpa_supplicant",
@@ -1087,19 +1087,19 @@
           "step_id": "restart",
           "stage": "execute",
           "machine": "ap",
-          "does": "wifiap start wpa2 again and wait for the station to join again"
+          "does": "wifiap start wpa2 again, wait for the station to join again, and read the station's console since the step began"
         },
         {
           "step_id": "deauth",
           "stage": "execute",
           "machine": "ap",
-          "does": "deauthenticate the station from both APs of network A and wait for it to join again"
+          "does": "deauthenticate the station from both APs of network A, wait for it to join again, and read the station's console since the step began"
         },
         {
           "step_id": "gone",
           "stage": "execute",
           "machine": "ap",
-          "does": "wifiap stop a, wait for the disconnection and read the routes, then start it and wait for the station to join again"
+          "does": "wifiap stop a, wait for the disconnection and for the lease to be given up and read the routes, then start it and wait for the station to join again"
         },
         {
           "step_id": "roam",
@@ -1243,13 +1243,23 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "restart-kept",
+          "checks": "through the restart the station kept its lease: the kernel recorded no loss of wlan0's IPv4 address",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "deauth",
           "checks": "after the deauthentication the station joins again, with network A's routes and server, and echoes",
           "source": "scenario"
         },
         {
+          "assertion_id": "deauth-kept",
+          "checks": "through the deauthentication the station kept its lease, with no loss of wlan0's IPv4 address recorded, and the kernel logged that the AP deauthenticated it, with the reason",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "gone",
-          "checks": "with network A gone the station disconnects and has no route on wlan0",
+          "checks": "with network A gone the station disconnects, gives its lease up and has no route on wlan0",
           "source": "scenario"
         },
         {
@@ -1443,7 +1453,7 @@
           "step_id": "block",
           "stage": "execute",
           "machine": "station",
-          "does": "rfkill block wifi, wait for the disconnection and read rfkill list, iw dev wlan0 link and the routes"
+          "does": "rfkill block wifi, wait for the disconnection and for the lease to be given up, and read rfkill list, iw dev wlan0 link and the routes"
         },
         {
           "step_id": "unblock",

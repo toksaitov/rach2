@@ -16,9 +16,10 @@
  * 10.0.2.2, where hostpeer echoes on port 3.
  *
  * Every row is judged by what the machines count and say, never by the
- * clock: the kernel's record of each lease on the station's console,
- * wpa_supplicant's events in init's service log, the bytes an echo brings
- * back, the replies a ping counts, and the guest's hostapd. A shell loop
+ * clock: the routes and servers each lease gives, the kernel's records on
+ * the station's console, wpa_supplicant's events in init's service log, the
+ * bytes an echo brings back, the replies a ping counts, and the guest's
+ * hostapd. A shell loop
  * that waits for an event sleeps a second between looks; the step's bound
  * ends a wait whose event never comes.
  */
@@ -44,8 +45,6 @@
 #define ADDR_B   "192.168.72.50"
 #define GW_A     "192.168.71.1"
 #define GW_B     "192.168.72.1"
-#define LEASE_A  "net: wlan0: IPv4 " ADDR_A "/24"
-#define LEASE_B  "net: wlan0: IPv4 " ADDR_B "/24"
 #define STATION  "02:77:73:00:00:00"
 #define ENDPOINT "endpoint.wifi.test"
 
@@ -69,8 +68,6 @@ struct wifi {
     struct net_boot ap, sta;
     struct etude_case_service *endpoint;
     unsigned sta_boots; /* the station's boots so far */
-    unsigned leases_a;  /* LEASE_A's records seen on the station's console */
-    unsigned leases_b;  /* LEASE_B's */
     char password[128]; /* root's, the demo password */
     char port[4][16];   /* the case's ports, as text */
 };
@@ -162,22 +159,38 @@ static long dialog(struct wifi *w, const char *command, const char *const qa[], 
 }
 
 /**
- * Wait until the station's console has had the kernel's record of a lease
- * of network A, or of B with `b`, once more than so far, and count it; then
- * until the lease script, which runs after the address is set, has put the
- * default route on wlan0 and the network's server in resolv.conf.
+ * Wait until the station's lease of network A, or of B with `b`, is in
+ * force: the lease script, which runs after the address is set, has put the
+ * default route through the network's router on wlan0 and its server in
+ * resolv.conf, and wpa_action has no disconnection pending, whose end may
+ * yet stop the client. A rejoin of the same network keeps the lease it had.
  */
 static void lease(struct wifi *w, int b)
 {
-    uint64_t at;
-    unsigned *n = b ? &w->leases_b : &w->leases_a;
+    const char *gw = b ? GW_B : GW_A;
 
-    if (net_times(&w->sta, b ? LEASE_B : LEASE_A, *n + 1, &at) == ETUDE_OK)
-        (*n)++;
     sta(w, NULL,
-        "until route -n | grep -q '^0\\.0\\.0\\.0 .* wlan0$' && "
-        "grep -q '^nameserver %s$' /etc/resolv.conf; do sleep 1; done",
-        b ? GW_B : GW_A);
+        "until route -n | grep -q '^0\\.0\\.0\\.0 *%s .* wlan0$' && "
+        "grep -q '^nameserver %s$' /etc/resolv.conf && "
+        "! ls /var/run/wpa_action.wlan0.hold.* > /dev/null 2>&1; do sleep 1; done",
+        gw, gw);
+}
+
+/** Wait until wlan0 has no default route, as once its lease is given up. */
+static void unrouted(struct wifi *w)
+{
+    sta(w, NULL, "while route -n | grep -q '^0\\.0\\.0\\.0 .* wlan0$'; do sleep 1; done");
+}
+
+/** Say whether the kernel has recorded on the station's console, since the
+ * offset `from`, that wlan0 lost its IPv4 address. */
+static int dropped(struct wifi *w, uint64_t from)
+{
+    char *text = net_text(&w->sta, from, w->sta.at);
+    int lost = has(text, "net: wlan0: IPv4 none");
+
+    free(text);
+    return lost;
 }
 
 /**
@@ -289,7 +302,6 @@ static void station(struct wifi *w, const char *step)
     net_step(&w->u, step);
     net_boot(&w->sta, &w->u, "station", ++w->sta_boots, NULL);
     cable(w, 0);
-    w->leases_a = w->leases_b = 0;
     net_login(&w->sta, "root", w->password, ROOT_PROMPT);
     sta(w, NULL, "ifconfig eth1 10.0.4.15 netmask 255.255.255.0 up");
     sta(w, NULL, "/sbin/wsimrelay -b 10.0.4.15 10.0.4.2 %s > /tmp/wsimrelay.log 2>&1 &",
@@ -713,6 +725,7 @@ static void case_robust(struct wifi *w)
 {
     char *text = NULL, buf[64], from[18], to[18];
     long n, rekeys;
+    uint64_t mark;
     int ok;
 
     begin(w, "wpa2", "5");
@@ -741,22 +754,38 @@ static void case_robust(struct wifi *w)
     free(text);
     text = NULL;
 
+    /* A rejoin of the same network keeps the lease: the kernel records no
+     * loss of the address. */
     net_step(&w->u, "restart");
     n = log_count(w, "CTRL-EVENT-CONNECTED");
+    mark = w->sta.at;
     ap(w, NULL, "wifiap start wpa2 5");
     rejoined(w, "restart", n, 0, "the access points restarted");
+    net_assert(&w->u, "restart-kept", !dropped(w, mark),
+               "the station gave its lease up as the access points restarted");
 
     net_step(&w->u, "deauth");
     n = log_count(w, "CTRL-EVENT-CONNECTED");
+    mark = w->sta.at;
     ap(w, NULL,
        "hostapd_cli -p /run/hostapd -i wlan0 deauthenticate " STATION "; "
        "hostapd_cli -p /run/hostapd -i wlan1 deauthenticate " STATION);
     rejoined(w, "deauth", n, 0, "a deauthentication");
+    text = net_text(&w->sta, mark, w->sta.at);
+    net_assert(&w->u, "deauth-kept",
+               !has(text, "net: wlan0: IPv4 none") &&
+                   net_find(text, "wlan: wlan0: left: 02:00:00:00:0*: deauthenticated by the AP: "
+                                  "reason #") != NULL,
+               "the station gave its lease up, or logged no deauthentication: %s",
+               text != NULL ? text : "");
+    free(text);
+    text = NULL;
 
     net_step(&w->u, "gone");
     n = log_count(w, "CTRL-EVENT-DISCONNECTED");
     ap(w, NULL, "wifiap stop a");
     n = n < 0 ? -1 : log_after(w, "CTRL-EVENT-DISCONNECTED", n);
+    unrouted(w);
     sta(w, &text, "route -n");
     net_assert(&w->u, "gone", n > 0 && !has(text, "wlan0"),
                "the station kept a route on network A once it was gone: %s",
@@ -859,6 +888,7 @@ static void case_rfkill(struct wifi *w)
     n = log_count(w, "CTRL-EVENT-DISCONNECTED");
     sta(w, NULL, "rfkill block wifi");
     n = n < 0 ? -1 : log_after(w, "CTRL-EVENT-DISCONNECTED", n);
+    unrouted(w);
     sta(w, &text, "rfkill list; iw dev wlan0 link; route -n");
     net_assert(&w->u, "blocked",
                n > 0 && has(text, "Soft blocked: yes") && has(text, "Not connected") &&
