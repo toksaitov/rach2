@@ -33,11 +33,15 @@ The images with Wi-Fi have
 .Pa /etc/zzz.d/wifi :
 before the suspend, a station joined to a network leaves it with
 .Ql wpa_cli disconnect ,
-so that the access point and the DHCP client are told at once, since
-wpa_supplicant could not answer the access point's rekeys while it is held;
+so that the access point is told at once, since wpa_supplicant could not
+answer the access point's rekeys while it is held;
 after it,
 .Ql wpa_cli reconnect
 lets wpa_supplicant join the best known network in range.
+The DHCP client keeps the lease through a short suspend that ends on the
+same network, and renews it, as
+.Xr init 8
+says.
 A station that was not joined is left as it was.
 .Sh FILES
 .Bl -tag -width Ds

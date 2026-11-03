@@ -162,9 +162,14 @@ The action starts BusyBox's
 .Xr udhcpc 1
 on
 .Ql wlan0
-when the station joins a network and stops it, giving the lease up, when
-it leaves one; a roam between the access points of one network keeps the
-lease.
+when the station joins a network.
+When it leaves one, the client keeps running for up to 15 seconds: a
+rejoin of the same network within them keeps the lease, which the client
+renews at once, and the connections that use it, as NetworkManager keeps a
+connection through a short break.
+A move to another network, no rejoin in time, a blocked radio or no
+network left enabled stops the client, which gives the lease up.
+A roam between the access points of one network keeps the lease.
 ifplugd does not follow
 .Ql wlan0 ,
 since its action's

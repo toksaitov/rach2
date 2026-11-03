@@ -6,10 +6,11 @@
 #
 # While the processes are held wpa_supplicant cannot answer the access
 # point's rekeys, so the station would be dropped with nobody told. Leaving
-# first tells the access point and wpa_action(8)'s DHCP client at once, and
-# `reconnect` after lets wpa_supplicant join the best known network in
-# range, which may be another if the machine was carried away. A station
-# that was not joined is left as it was.
+# first tells the access point at once, and `reconnect` after lets
+# wpa_supplicant join the best known network in range, which may be another
+# if the machine was carried away; wpa_action keeps the lease on the same
+# network and takes a new one on another. A station that was not joined is
+# left as it was.
 
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 export PATH
