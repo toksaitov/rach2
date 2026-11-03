@@ -51,6 +51,10 @@ static unsigned n_polls;      /* null frames the station asked for */
 static uint64_t poll_cookie;  /* the last one's */
 static uint64_t heard_at;     /* what the data path says it last heard */
 static uint32_t losses;       /* the station dump's beacon loss */
+static int held;              /* the data path's transmit is held */
+static unsigned holds;        /* calls of the interface's hold */
+static unsigned moved_to;     /* MHz of the interface's last moved */
+static unsigned moves;        /* calls of the interface's moved */
 
 static struct wlan_radio radio;
 static struct wlan_mlme mlme;
@@ -237,7 +241,29 @@ static int iface_state(struct wlan *wlan, enum wlan_sta_state state, struct wlan
     return 0;
 }
 
-static const struct wlan_mlme_ops iface_ops = {iface_tx, iface_state, iface_event};
+/** Hold or release the data path's transmit, as the softMAC station does;
+ * a hold is released before another comes. */
+static void iface_hold(struct wlan *wlan, int h)
+{
+    (void)wlan;
+    CHECK(held != h);
+    held = h;
+    ++holds;
+}
+
+/** Note the channel the station followed its AP to, which the MLME has
+ * tuned the radio to and given the BSS first. */
+static void iface_moved(struct wlan *wlan, const struct wlan_channel *channel)
+{
+    (void)wlan;
+    CHECK(configured == channel->frequency && mlme.bss->frequency == channel->frequency);
+    moved_to = channel->frequency;
+    ++moves;
+}
+
+/* An interface that learns of no ACK, which probes a silent AP. */
+static const struct wlan_mlme_ops iface_ops = {iface_tx, iface_state, iface_event, 0, 0,
+                                               iface_hold, iface_moved};
 
 /** Note a null frame the station asks the data path to send. */
 static int iface_poll(struct wlan *wlan, uint64_t *cookie)
@@ -256,8 +282,8 @@ static uint64_t iface_heard(struct wlan *wlan)
 }
 
 /* An interface that reports ACKs, as the softMAC station over ath9k does. */
-static const struct wlan_mlme_ops poll_ops = {iface_tx, iface_state, iface_event, iface_poll,
-                                              iface_heard};
+static const struct wlan_mlme_ops poll_ops = {iface_tx,   iface_state, iface_event, iface_poll,
+                                              iface_heard, iface_hold,  iface_moved};
 
 /** Compare n bytes. */
 static int equal(const uint8_t *a, const uint8_t *b, unsigned n)
@@ -373,6 +399,8 @@ static void reset(void)
     n_sent = n_seen = n_states = 0;
     refuse_state = -1;
     configured = 0;
+    held = 0;
+    holds = moved_to = moves = 0;
     now = 1000;
     make_radio();
     make_bss(&bss_a, ap_a, 2412);
@@ -438,6 +466,23 @@ static int ap_beacon(const uint8_t *ap, unsigned stype)
     f[HDR + 8] = 100;
     pos = HDR + 12;
     elem(f, &pos, WLAN_EID_SSID, (const uint8_t *)"lab", 3);
+    return deliver(f, pos, 0);
+}
+
+/** A beacon of ap that carries element id with the n bytes of p, or
+ * none when n is zero. */
+static int ap_beacon_with(const uint8_t *ap, unsigned id, const uint8_t *p, unsigned n)
+{
+    uint8_t f[HDR + 12 + 5 + 2 + 8];
+    unsigned pos;
+
+    hdr(f, IEEE80211_STYPE_BEACON, group, ap, ap);
+    k_memset(f + HDR, 0, 12);
+    f[HDR + 8] = 100;
+    pos = HDR + 12;
+    elem(f, &pos, WLAN_EID_SSID, (const uint8_t *)"lab", 3);
+    if (n)
+        elem(f, &pos, id, p, n);
     return deliver(f, pos, 0);
 }
 
@@ -1028,6 +1073,98 @@ static void sae_endings(void)
     CHECK(last_event()->ev.type == WLAN_EVENT_AUTHENTICATE);
 }
 
+/** The station's state after a switch to frequency: still associated
+ * with ap_a, nothing sent and nothing reported, the radio, the BSS, the
+ * channel and the scan's home moved, and transmit no longer held. */
+static int followed(unsigned frequency)
+{
+    return mlme.state == WLAN_STA_ASSOCIATED && mlme.bss == &bss_a && bss_a.refs == 1 &&
+           n_sent == 0 && n_seen == 0 && configured == frequency && bss_a.frequency == frequency &&
+           mlme.channel && mlme.channel->frequency == frequency && scan.home == mlme.channel &&
+           moved_to == frequency && !held;
+}
+
+/**
+ * The AP's channel switch: a Channel Switch Announcement of mode 1 in its
+ * beacons holds transmit and moves the station at the count's end with no
+ * leave; the AP then has the beacon-loss time on the new channel. An
+ * extended announcement of count 0 and the spectrum-management action
+ * frame of count 1 move it at once; the public extended action sets a time
+ * that a beacon without the element calls off. A channel the band lacks is
+ * ignored. While a switch waits, a silent AP is neither probed nor left.
+ */
+static void channel_switch(void)
+{
+    static const uint8_t csa6[3] = {1, 6, 5};        /* mode 1, channel 6, 5 beacons */
+    static const uint8_t csa6_4[3] = {1, 6, 4};      /* the next beacon's count */
+    static const uint8_t ecsa11[4] = {0, 81, 11, 0}; /* mode 0, class 81, channel 11, now */
+    static const uint8_t csa14[3] = {0, 14, 2};      /* a channel the band lacks */
+    static const uint8_t ecsa1[4] = {0, 81, 1, 20};  /* back to 1 in 20 beacons */
+    uint8_t f[HDR + 2 + 5];
+    unsigned pos;
+
+    reset();
+    connect_a(0);
+    CHECK(configured == 2412);
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_CHANNEL_SWITCH, csa6, 3) == 0);
+    CHECK(held && holds == 1 && mlme.csa_channel && mlme.csa_channel->number == 6);
+    CHECK(configured == 2412 && moves == 0);
+    wait_ms(102);
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_CHANNEL_SWITCH, csa6_4, 3) == 0);
+    CHECK(holds == 1 && mlme.csa_at == now + 409);
+    wait_ms(408);
+    CHECK(moves == 0 && held && configured == 2412);
+    wait_ms(1);
+    CHECK(followed(2437) && moves == 1 && holds == 2 && !mlme.csa_channel);
+    /* The AP heard on channel 6 keeps the association; its loss leaves. */
+    wait_ms(700);
+    CHECK(ap_beacon_with(ap_a, 0, 0, 0) == 0 && n_sent == 0);
+    wait_ms(716);
+    CHECK(n_sent == 1 && sent_is(&sent[0], IEEE80211_STYPE_PROBE_REQ, ap_a));
+    CHECK(ap_beacon(ap_a, IEEE80211_STYPE_PROBE_RESP) == 0 && mlme.probes == 0);
+    n_sent = 0;
+
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_EXT_CHANSWITCH, ecsa11, 4) == 0);
+    CHECK(followed(2462) && moves == 2 && holds == 2);
+    /* The AP's beacons on channel 11 may still name it: nothing changes. */
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_EXT_CHANSWITCH, ecsa11, 4) == 0 && moves == 2);
+
+    hdr(f, IEEE80211_STYPE_ACTION, sta, ap_a, ap_a);
+    f[HDR] = WLAN_CATEGORY_SPECTRUM_MGMT;
+    f[HDR + 1] = WLAN_ACTION_SPCT_CHL_SWITCH;
+    pos = HDR + 2;
+    elem(f, &pos, WLAN_EID_CHANNEL_SWITCH, csa6, 3);
+    f[pos - 1] = 1;
+    CHECK(deliver(f, pos, 0) == 1);
+    CHECK(followed(2437) && moves == 3 && holds == 4);
+
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_CHANNEL_SWITCH, csa14, 3) == 0);
+    CHECK(!mlme.csa_channel && moves == 3 && configured == 2437);
+
+    f[HDR] = WLAN_CATEGORY_PUBLIC;
+    f[HDR + 1] = WLAN_PUB_ACTION_EXT_CHANSW_ANN;
+    k_memcpy(f + HDR + 2, ecsa1, 4);
+    f[HDR + 5] = 3;
+    CHECK(deliver(f, HDR + 6, 0) == 1);
+    CHECK(mlme.csa_channel && mlme.csa_channel->number == 1 && !held);
+    wait_ms(100);
+    CHECK(ap_beacon_with(ap_a, 0, 0, 0) == 0 && !mlme.csa_channel);
+    wait_ms(300);
+    CHECK(followed(2437) && moves == 3);
+
+    /* A switch 20 beacons away outwaits a silent AP. */
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_EXT_CHANSWITCH, ecsa1, 4) == 0);
+    wait_ms(2047);
+    CHECK(n_sent == 0 && mlme.state == WLAN_STA_ASSOCIATED && moves == 3);
+    wait_ms(1);
+    CHECK(followed(2412) && moves == 4);
+    wait_ms(2000);
+    CHECK(n_sent == 3 && mlme.state == WLAN_STA_ASSOCIATED);
+    wait_ms(500);
+    CHECK(mlme.state == WLAN_STA_NONE && n_seen == 1);
+    CHECK(seen[0].ev.type == WLAN_EVENT_DEAUTHENTICATE && seen[0].ev.frequency == 2412);
+}
+
 /** Stopping drops every state without frames or events. */
 static void stopping(void)
 {
@@ -1052,6 +1189,7 @@ int main(void)
     plain_frames();
     sae_exchange();
     sae_endings();
+    channel_switch();
     stopping();
     if (failures)
         return 1;

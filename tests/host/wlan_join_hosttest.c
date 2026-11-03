@@ -4,8 +4,9 @@
  * softMAC station, the data path and nl80211, with /dev/wsim as the medium.
  * The rows ask what wpa_supplicant asks of an open network: a scan,
  * Open System authentication, association with a control port and its
- * authorization; then an IP datagram goes each way, the interface goes down
- * and comes up again, and an rfkill block ends the association.
+ * authorization; then an IP datagram goes each way, the AP switches its
+ * channel twice and the station follows it, the interface goes down and
+ * comes up again, and an rfkill block ends the association.
  *
  * host-deps: rach2/sys/network/wireless/wiphy.c
  * host-deps: rach2/sys/network/wireless/wlan.c
@@ -76,6 +77,8 @@ static const uint8_t ap[6] = {0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0x01};
 static const uint8_t host[6] = {0x02, 0x10, 0x20, 0x30, 0x40, 0x50};
 static const uint8_t sta_mac[6] = {0x02, 0x77, 0x73, 0, 0, 0}; /* wsim0 */
 static const char ssid[] = "lab";
+static unsigned freq = FREQ;    /* the AP's channel now, in MHz */
+static unsigned ap_channel = 6; /* and its number */
 
 /* ---- the machine around the code ---- */
 
@@ -551,7 +554,7 @@ static unsigned take(uint8_t *f)
     flags = get16be(rec + WLAN_RELAY_OFF_FLAGS);
     len = get16be(rec + WLAN_RELAY_OFF_FRAME_LEN);
     CHECK(rec[WLAN_RELAY_OFF_TYPE] == WLAN_RELAY_FRAME && (flags & WLAN_RELAY_F_TX));
-    CHECK(get16be(rec + WLAN_RELAY_OFF_FREQUENCY) == FREQ);
+    CHECK(get16be(rec + WLAN_RELAY_OFF_FREQUENCY) == freq);
     k_memcpy(f, rec + WLAN_RELAY_HEADER_LEN, len);
     record_header(status, WLAN_RELAY_TX_STATUS,
                   WLAN_RELAY_F_TX |
@@ -580,7 +583,7 @@ static unsigned drain(void)
 static int32_t hear(const uint8_t *f, unsigned len)
 {
     record_header(rec, WLAN_RELAY_FRAME, 0, len);
-    put16be(rec + WLAN_RELAY_OFF_FREQUENCY, FREQ);
+    put16be(rec + WLAN_RELAY_OFF_FREQUENCY, freq);
     put16be(rec + WLAN_RELAY_OFF_RATE, 10);
     put16be(rec + WLAN_RELAY_OFF_SIGNAL, (unsigned)(-40 & 0xffff));
     k_memcpy(rec + WLAN_RELAY_HEADER_LEN, f, len);
@@ -603,8 +606,11 @@ static unsigned mgmt(uint8_t *f, unsigned fc, const uint8_t *da)
 static unsigned ap_elems(uint8_t *f, unsigned n)
 {
     static const uint8_t rates[6] = {1, 4, 0x82, 0x84, 0x8b, 0x96};
-    static const uint8_t ds[3] = {3, 1, 6};
+    uint8_t ds[3];
 
+    ds[0] = WLAN_EID_DS_PARAMS;
+    ds[1] = 1;
+    ds[2] = (uint8_t)ap_channel;
     f[n++] = 0;
     f[n++] = (uint8_t)(sizeof(ssid) - 1);
     k_memcpy(f + n, ssid, sizeof(ssid) - 1);
@@ -906,6 +912,76 @@ static void row_idle(void)
     CHECK(beacons_for(100) == 0);
 }
 
+/** Whether the station is still joined to the AP, authorized, on freq,
+ * with the AP's one entry of the BSS table there, and has reported no
+ * leave since n_events was cleared. */
+static int still_joined(void)
+{
+    return wlan->state == WLAN_STA_AUTHORIZED && wlan->frequency == freq && wlan->bss &&
+           wlan->bss->frequency == freq && wlan->bss_table.count == 1 &&
+           wlan_data_of(wlan)->frequency == freq &&
+           !find_event(GROUP_MLME, NL80211_CMD_DEAUTHENTICATE) &&
+           !find_event(GROUP_MLME, NL80211_CMD_DISCONNECT);
+}
+
+/**
+ * The AP announces in its beacons a switch to channel 11 in three beacons,
+ * mode 1: the datagram sent meanwhile waits, and at the count's end the
+ * radio is on channel 11, the datagram goes out there, nl80211 reports
+ * CH_SWITCH_NOTIFY and nothing is left. The AP's beacons there keep its
+ * entry. Its public Extended Channel Switch Announcement of count 0 then
+ * takes the station back to channel 6 at once.
+ */
+static void row_switch(void)
+{
+    static const uint8_t csa[5] = {WLAN_EID_CHANNEL_SWITCH, 3, 1, 11, 3};
+    uint8_t f[IEEE80211_MAX_FRAME_LEN], e[64];
+    unsigned len;
+
+    n_events = 0;
+    len = beacon(f);
+    k_memcpy(f + len, csa, sizeof(csa));
+    CHECK(hear(f, len + sizeof(csa)) > 0);
+    run_worker();
+    CHECK(wlan_data_of(wlan)->tx_stopped);
+    CHECK(iface->ops->tx(iface->dev, e, (uint16_t)ether(e, host, sta_mac, 0x0800)) == NETDEV_TX_OK);
+    run_worker();
+    CHECK(drain() == 0);
+    now += 306; /* three beacons are 307 ms */
+    run_worker();
+    CHECK(drain() == 0 && wlan->frequency == FREQ);
+    now += 1;
+    freq = 2462;
+    run_worker();
+    CHECK(!wlan_data_of(wlan)->tx_stopped && still_joined());
+    len = take(f);
+    CHECK(len == 24 + 8 + sizeof(ip_payload) && (f[0] & 0x0c) == 0x08);
+    CHECK(find_event(GROUP_MLME, NL80211_CMD_CH_SWITCH_NOTIFY) != 0);
+    CHECK(tb[NL80211_ATTR_WIPHY_FREQ] && nla_get_u32(tb[NL80211_ATTR_WIPHY_FREQ]) == freq);
+    CHECK(tb[NL80211_ATTR_IFINDEX] && nla_get_u32(tb[NL80211_ATTR_IFINDEX]) == IFINDEX);
+    ap_channel = 11;
+    CHECK(hear(f, beacon(f)) > 0);
+    run_worker();
+    CHECK(still_joined());
+
+    n_events = 0;
+    len = mgmt(f, 0xd0, sta_mac);
+    f[len++] = WLAN_CATEGORY_PUBLIC;
+    f[len++] = WLAN_PUB_ACTION_EXT_CHANSW_ANN;
+    f[len++] = 0;  /* mode */
+    f[len++] = 81; /* operating class */
+    f[len++] = 6;
+    f[len++] = 0; /* count */
+    CHECK(hear(f, len) > 0);
+    freq = FREQ;
+    ap_channel = 6;
+    run_worker();
+    CHECK(still_joined() && find_event(GROUP_MLME, NL80211_CMD_CH_SWITCH_NOTIFY) != 0);
+    CHECK(hear(f, beacon(f)) > 0);
+    run_worker();
+    CHECK(still_joined() && drain() == 0);
+}
+
 /** The interface goes down: the station deauthenticates, nl80211 reports
  * the disconnection, and the radio stops; up again, the radio starts. */
 static void row_down(void)
@@ -1019,6 +1095,7 @@ int main(void)
         row_join();
         row_data();
         row_idle();
+        row_switch();
         row_down();
         row_rfkill();
         row_mfp();
