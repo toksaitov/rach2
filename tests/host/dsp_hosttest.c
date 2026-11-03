@@ -19,10 +19,10 @@
  * The test includes dsp.c and vchan.c whole. Playback reaches the model
  * through the mix, which the model plays as 16-bit stereo at 48000 Hz, or as
  * 24 bits in 32 when a row asks, so a single open at that rate and format
- * reaches it unchanged. The model
- * driver's DMA buffer has two periods, of 256 frames, unless a row asks for
- * more of either; a tick plays the one due, appends its bytes to `m.out`, refills it
- * through the stream's `transfer` and calls `period`, as a device's
+ * reaches it unchanged. The model driver's DMA buffer has two periods, of 256
+ * frames, unless a row asks for more of either; a tick plays the one due,
+ * appends its bytes to `m.out`, refills it through the stream's `transfer`
+ * and calls `period`, as a device's
  * interrupt would. Its capture stream records the pattern in order: a tick
  * hands the next period over through `transfer` and calls `period`. A wait runs
  * ticks until its condition holds, or ends with a signal when a row asks for

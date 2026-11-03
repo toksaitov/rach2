@@ -3,10 +3,11 @@
  * iputils ping does.
  *
  * `ping [-nq46] [-c count] [-I interface] [-i interval] [-s size] [-t ttl]
- * [-W timeout] [-w deadline] host`, where `host` is an IPv4 address or a name, resolved
- * through `/etc/hosts`, or `/hosts` where there is no `/etc/hosts`, and then
- * DNS (see `resolv.c`), or an IPv6 address, with `%` and an interface's name
- * or index after a link-local one. `-6` requires an IPv6 address.
+ * [-W timeout] [-w deadline] host`, where `host` is an IPv4 address or a
+ * name, resolved through `/etc/hosts`, or `/hosts` where there is no
+ * `/etc/hosts`, and then DNS (see `resolv.c`), or an IPv6 address, with `%`
+ * and an interface's name or index after a link-local one. `-6` requires an
+ * IPv6 address.
  *
  * The requests go through an ICMP datagram socket, socket(AF_INET,
  * SOCK_DGRAM, IPPROTO_ICMP) or its IPv6 form, which any user may open: the

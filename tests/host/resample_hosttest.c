@@ -3,7 +3,8 @@
  * and their images and aliases 80 dB down, sines above the lower rate's
  * Nyquist frequency attenuated by 80 dB, a constant kept exactly, a full
  * scale step held to 24 bits, the fixed-point output against the filter
- * computed in double, the history across blocks, equal rates copied, and the cost.
+ * computed in double, the history across blocks, equal rates copied, and the
+ * cost.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *

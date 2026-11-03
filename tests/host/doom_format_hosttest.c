@@ -275,7 +275,7 @@ static void call_rows(void)
         same("stars", got, gn, want, wn);
     }
 
-    /* C99's return: the whole length, with the stored part cut and terminated */
+    /* C99's return: the whole length, the stored part cut and terminated */
     memset(buf, 'z', sizeof(buf));
     n = port_snprintf(buf, 5, "%s-%d", "abcdef", 12);
     same("cut", buf, n, "abcd", 9);
