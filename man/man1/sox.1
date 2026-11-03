@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 3, 2026
 .Dt SOX 1
 .Os
 .Sh NAME
@@ -16,7 +16,9 @@
 .Nm
 reads audio, applies effects, and writes the result.
 This system builds sox_ng with static musl, built-in WAV and OSS support,
-and no external codec libraries or FFmpeg decoder.
+and FLAC through libFLAC; it has no other external codec library and no
+FFmpeg decoder.
+It reads FLAC of 8, 16, 24 or 32 bits a sample and writes 8, 16 or 24.
 Use
 .Xr play 1
 and
@@ -52,7 +54,7 @@ or
 .Cm unsigned-integer .
 .It Fl t Ar type
 Set the format explicitly, such as
-.Cm wav , raw
+.Cm wav , flac , raw
 or
 .Cm oss .
 .It Fl S
@@ -78,6 +80,12 @@ Convert a WAV to mono at 44100 Hz:
 sox stereo.wav -r 44100 mono.wav channels 1
 .Ed
 .Pp
+Compress a WAV to FLAC, and decode it again:
+.Bd -literal -offset indent
+sox take.wav take.flac
+sox take.flac back.wav
+.Ed
+.Pp
 Keep the first five seconds at half volume:
 .Bd -literal -offset indent
 sox input.wav output.wav trim 0 5 vol 0.5
@@ -89,7 +97,8 @@ sox input.wav output.wav trim 0 5 vol 0.5
 .Xr soxi 1 ,
 .Xr dsp 4
 .Sh LIMITS
-External MP3, FLAC, Ogg Vorbis and Opus codecs are disabled.
+External MP3, Ogg Vorbis and Opus codecs are disabled, and so is Ogg FLAC;
+plain FLAC is available.
 Use the GNU root's
 .Xr ffmpeg 1
 for those formats.

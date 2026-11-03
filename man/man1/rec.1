@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 3, 2026
 .Dt REC 1
 .Os
 .Sh NAME
@@ -15,7 +15,9 @@ runs sox_ng in recording mode.
 It reads from the OSS sound device,
 .Pa /dev/dsp
 by default, and writes an audio file.
-WAV is built in; external codec libraries are disabled.
+It writes WAV, FLAC and the other formats that
+.Xr sox 1
+lists, chosen by the output file's suffix.
 Options and effects are those of
 .Xr sox 1 .
 .Pp
@@ -54,6 +56,11 @@ Record five seconds of signed 16-bit stereo WAV at 48000 Hz,
 showing the level:
 .Bd -literal -offset indent
 rec -S -r 48000 -c 2 -b 16 take.wav trim 0 5
+.Ed
+.Pp
+Record ten seconds straight to FLAC:
+.Bd -literal -offset indent
+rec -r 48000 -c 2 -b 16 take.flac trim 0 10
 .Ed
 .Sh SEE ALSO
 .Xr mixer 1 ,

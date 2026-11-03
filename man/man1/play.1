@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 3, 2026
 .Dt PLAY 1
 .Os
 .Sh NAME
@@ -15,7 +15,12 @@ runs sox_ng in playback mode.
 It reads audio files and writes to the OSS sound device,
 .Pa /dev/dsp
 by default.
-WAV is built in; external codec libraries are disabled.
+It plays WAV, FLAC and the other formats that
+.Xr sox 1
+lists; MP3, Ogg Vorbis and Opus are not among them.
+A 24-bit or 32-bit file goes to the device as 32-bit samples, which
+.Xr dsp 4
+mixes at 16 bits.
 Options and effects are those of
 .Xr sox 1 .
 .Fl S
@@ -44,6 +49,7 @@ Default options, processed before the command line.
 .Sh EXAMPLES
 .Bd -literal -offset indent
 play take.wav
+play music.flac
 play take.wav trim 0 5 vol 0.5
 .Ed
 .Sh SEE ALSO

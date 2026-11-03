@@ -276,6 +276,7 @@ The third-party code of the repository, each with the version the build pins, it
 | BusyBox | 1.36.1 | GPL 2 only | [vendor/busybox/Readme.md](../vendor/busybox/Readme.md) |
 | Dropbear | 2022.83 | MIT-style | [vendor/dropbear/Readme.md](../vendor/dropbear/Readme.md) |
 | sox_ng | 14.8.1 | GPL 2 only | [vendor/sox_ng/Readme.md](../vendor/sox_ng/Readme.md) |
+| libFLAC | 1.5.0 | BSD 3-clause | [vendor/sox_ng/Readme.md](../vendor/sox_ng/Readme.md) |
 | hostap | 2.12 | BSD 3-clause | [vendor/hostap/Readme.md](../vendor/hostap/Readme.md) |
 | iw | 6.17 | ISC | [vendor/iw/Readme.md](../vendor/iw/Readme.md) |
 | OpenSSL | 4.0.2 | Apache 2.0 | [vendor/openssl/Readme.md](../vendor/openssl/Readme.md) |
