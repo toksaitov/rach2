@@ -109,20 +109,20 @@ void resample_put(resampler_t *r, const int32_t *frame)
  * frame's difference from `centre` times the coefficient at table position
  * `pos`, 16.16 in entries, interpolated linearly between the two entries
  * about it, the frames from `w` on by `dir` and the positions from `pos`
- * on by `step`, until a position passes the table. The products are of 30
- * and 24 bits, and the coefficients of a window sum in magnitude to under
- * 2^35 at the largest ratio, so the sum stays under 2^60. Gives the taps
- * summed.
+ * on by r->step, until a position passes the table or r->span taps are
+ * summed. The products are of 30 and 24 bits, and the coefficients of a
+ * window sum in magnitude to under 2^35 at the largest ratio, so the sum
+ * stays under 2^60. Gives the taps summed.
  *
- * When `pos` and `step` are whole entries, as every position of a
+ * When `pos` and the step are whole entries, as every position of a
  * conversion by a whole ratio down is, the coefficients are the entries
  * themselves and the loop reads them without the interpolation's product.
  * The kernel builds without the compiler's optimizer, which keeps every
  * local in memory, so that each step of a loop waits for the store of the
  * step before; GCC keeps a `register` local in a register even so.
  */
-static uint32_t resample_side(const int32_t (*w)[2], int dir, uint32_t pos, uint32_t step,
-                              uint32_t taps, const int32_t *centre, int64_t *acc)
+static uint32_t resample_side(const resampler_t *r, const int32_t (*w)[2], int dir, uint32_t pos,
+                              const int32_t *centre, int64_t *acc)
 {
     register int64_t left = acc[0], right = acc[1];
     register const int32_t *x = w[0];
@@ -131,14 +131,15 @@ static uint32_t resample_side(const int32_t (*w)[2], int dir, uint32_t pos, uint
     register const int32_t *t;
     int32_t cl = centre[0], cr = centre[1];
     int stride = 2 * dir;
-    uint32_t n, k;
+    uint32_t step = r->step, n, k;
 
     n = pos >= RESAMPLE_END ? 0 : (RESAMPLE_END - 1u - pos) / step + 1u;
-    if (n > taps) {
-        n = taps;
+    if (n > r->span) {
+        n = r->span;
     }
     if (((z | step) & 0xFFFFu) == 0) {
-        for (t = resample_coef + (z >> 16), k = n; k > 0; k--) {
+        t = resample_coef + (z >> 16);
+        for (k = n; k > 0; k--) {
             c = *t;
             left += (int64_t)c * (x[0] - cl);
             right += (int64_t)c * (x[1] - cr);
@@ -185,9 +186,11 @@ static int32_t resample_out(int32_t centre, int64_t acc, uint32_t gain)
  * w[span - 1]. A frame m frames before the centre is m + phase / out input
  * frames from that time, one m frames after it m - phase / out, each in the
  * table's entries `step` times that; `at` is step * phase / out, which
- * moves with `phase` exactly, with its remainder in `at_rest`. The filter is applied to each
- * frame's difference from the centre frame and the centre frame added back, which gives the centre
- * frame whatever the coefficients of a phase sum to, so that a constant input comes out unchanged.
+ * moves with `phase` exactly, with its remainder in `at_rest`. The filter
+ * is applied to each frame's difference from the centre frame and the
+ * centre frame added back, which gives the centre frame whatever the
+ * coefficients of a phase sum to, so that a constant input comes out
+ * unchanged.
  */
 void resample_get(resampler_t *r, int32_t *frame)
 {
@@ -202,8 +205,8 @@ void resample_get(resampler_t *r, int32_t *frame)
         fs = r->at;
         acc[0] = acc[1] = 0;
         w += r->span - 1u;
-        n = resample_side(w, -1, fs, r->step, r->span, w[0], acc);
-        n += resample_side(w + 1, 1, r->step - fs, r->step, r->span, w[0], acc);
+        n = resample_side(r, w, -1, fs, w[0], acc);
+        n += resample_side(r, w + 1, 1, r->step - fs, w[0], acc);
         frame[0] = resample_out(w[0][0], acc[0], r->gain);
         frame[1] = resample_out(w[0][1], acc[1], r->gain);
         r->mults += (((fs | r->step) & 0xFFFFu) == 0 ? 2u : 3u) * n + 2u;
