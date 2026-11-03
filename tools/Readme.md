@@ -339,14 +339,14 @@ A stick image is a hybrid ISO from `mkiso.sh`, padded to a 1 MiB boundary and fo
 
 ### The resampler: `audio/`
 
-    cc -ansi -O2 -o build/tmp/mkresample tools/audio/mkresample.c -lm
-    build/tmp/mkresample > rach2/sys/audio/resample_coef.h
+    make build/tools/audio/mkresample
+    build/tools/audio/mkresample > rach2/sys/audio/resample_coef.h
 
-[mkresample.c](audio/mkresample.c) writes the coefficient table of the kernel's resampler, a Kaiser-windowed sinc designed by Kaiser's formulas as FreeBSD's `feeder_rate_mkfilter.awk` designs feeder_rate's: the passband to 0.90 of the lower rate's Nyquist frequency, 90 dB from 1.00 of it, 58 zero crossings each side and 256 entries between two, in Q30. The output is committed, since the kernel also builds on Rach2 from its own directory, and another system's libm may round a coefficient differently; no build step runs the program. [rach2/sys/audio/Readme.md](../rach2/sys/audio/Readme.md) describes the resampler that reads the table.
+[mkresample.c](audio/mkresample.c) writes the coefficient table of the kernel's resampler, a Kaiser-windowed sinc designed by Kaiser's formulas as FreeBSD's `feeder_rate_mkfilter.awk` designs feeder_rate's: the passband to 0.90 of the lower rate's Nyquist frequency, 90 dB from 1.00 of it, 58 zero crossings each side and 256 entries between two, in Q30. The output is committed, since the kernel also builds on Rach2 from its own directory, and another system's libm may round a coefficient differently; `all` neither builds nor runs the program, and the rule in [mk/audio-tools.mk](../mk/audio-tools.mk) is there for this command and for the compilation database. [rach2/sys/audio/Readme.md](../rach2/sys/audio/Readme.md) describes the resampler that reads the table.
 
     sh tools/audio/resamplebench.sh [i686] [x86_64]
 
-[resamplebench.c](audio/resamplebench.c) times the kernel's resampler per stereo frame at 96 to 48 kHz and at 44.1 to 48 kHz, beside FreeBSD's `feeder_rate` sinc loops, the polyphase one and the interpolating one, written again over the same table, window and gain. [resamplebench.sh](audio/resamplebench.sh) builds it with the i686 and x86-64 kernel compilers at no optimization and with the kernel's code generation flags, the small code model in place of the kernel's, as a freestanding program that reaches Linux by its system calls alone, under `build/tmp/resamplebench`, and runs each build on the host, which for i686 must run 32-bit programs. Each row is the fastest of five passes of two seconds of output, in nanoseconds a frame and milliseconds a second of sound, and the kernel's time as a multiple of the other row's.
+[resamplebench.c](audio/resamplebench.c) times the kernel's resampler per stereo frame at 96 to 48 kHz and at 44.1 to 48 kHz, beside FreeBSD's `feeder_rate` sinc loops, the polyphase one and the interpolating one, written again over the same table, window and gain. [resamplebench.sh](audio/resamplebench.sh) builds it with the i686 and x86-64 kernel compilers at no optimization and with the kernel's code generation flags, the small code model in place of the kernel's, as a freestanding program that reaches Linux by its system calls alone, as `build/tools/audio/resamplebench-ARCH` by the rules of [mk/audio-tools.mk](../mk/audio-tools.mk), and runs each build on the host, which for i686 must run 32-bit programs. Each row is the fastest of five passes of two seconds of output, in nanoseconds a frame and milliseconds a second of sound, and the kernel's time as a multiple of the other row's.
 
 ### Working an installed machine from the host
 

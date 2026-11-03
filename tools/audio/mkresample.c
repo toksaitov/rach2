@@ -3,8 +3,8 @@
  * the kernel's resampler, a Kaiser-windowed sinc sampled RESAMPLE_STEPS times
  * between each two zero crossings, in Q30.
  *
- * Usage: cc -ansi -O2 -o mkresample tools/audio/mkresample.c -lm
- *        ./mkresample > rach2/sys/audio/resample_coef.h
+ * Usage: make build/tools/audio/mkresample
+ *        build/tools/audio/mkresample > rach2/sys/audio/resample_coef.h
  *
  * The filter is designed as FreeBSD's sys/tools/sound/feeder_rate_mkfilter.awk
  * designs feeder_rate's: Kaiser's formulas give the window's beta from the

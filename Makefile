@@ -1849,6 +1849,7 @@ include mk/term.mk
 include mk/esctest2.mk
 include mk/images.mk
 include mk/unifont.mk
+include mk/audio-tools.mk
 include mk/etude-image.mk
 include mk/gnu.mk
 include mk/gnu-extra.mk
@@ -1920,7 +1921,7 @@ COLLECTION_TOOLS = build/tests/cases/host/host_checks_scenario \
     build/tests/cases/gnu/sntpserver build/tests/system/fakeapi_test \
     build/tools/dev/native-deploy $(ARCH_BUILD)/tests/cases/host/image-channel-fixture \
     $(ARCH_BUILD)/tests/cases/machine/installer-repair-fixture \
-    $(WIFI_MKCPIO) $(WIFI_HWSIMRELAY)
+    $(WIFI_MKCPIO) $(WIFI_HWSIMRELAY) $(AUDIO_MKRESAMPLE) $(AUDIO_RESAMPLEBENCH)
 ifeq ($(OS),Windows_NT)
 # Native link outputs depend on the wrapper that publishes their stable paths.
 $(HOST_TOOLS) $(filter-out $(ARCH_BUILD)/tests/cases/host/image-channel-fixture \
