@@ -34,7 +34,9 @@ default.
 .It Va bell
 What the bell does:
 .Li audible
-sounds the PC speaker,
+plays a soft chime through
+.Pa /dev/dsp ,
+or sounds the PC speaker when it cannot be opened,
 .Li visual
 shows the screen in inverse colors for a tenth of a second,
 .Li both
@@ -43,13 +45,15 @@ does both and
 neither;
 .Li audible
 by default.
-The speaker has no volume, so the beep is soft by being short and low,
+The chime rings at the mixer's level.
+The speaker has no volume, so its beep is soft by being short and low,
 40 ms at 750 Hz, unless the program sets another pitch with
 .Ql "ESC [ 10 ; N ]" ,
 in hertz, or length with
 .Ql "ESC [ 11 ; N ]" ,
 in milliseconds, as on Linux's console; a length of 0, or of 2000 or
-more, is silent, and either with no N gives the default back.
+more, is silent, the chime's as well as the beep's, and either with no N
+gives the default back.
 .El
 .Pp
 Ctrl+Shift+Page Up and Ctrl+Shift+Page Down in

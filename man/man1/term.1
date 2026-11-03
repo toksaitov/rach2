@@ -117,16 +117,23 @@ exits.
 A paste sends it with each LF as CR and with ESC left out, bracketed
 under mode 2004.
 .Pp
-The bell, BEL, sounds a short soft beep on the PC speaker through
-.Pa /dev/console ,
-or shows the screen in inverse colors, or both or neither, as the
-settings'
+The bell, BEL, plays a soft chime of 880 Hz through
+.Pa /dev/dsp ,
+mixed over what other programs play there, or shows the screen in
+inverse colors, or both or neither, as the settings'
 .Va bell
-says; a program sets the beep's pitch and length with Linux's
+says.
+A bell while the chime plays is dropped.
+When
+.Pa /dev/dsp
+cannot be opened, as on a machine whose only sound is the PC speaker,
+the bell is a short soft beep on the speaker through
+.Pa /dev/console ;
+a program sets the beep's pitch and length with Linux's
 .Ql "ESC [ 10 ; N ]"
 and
-.Ql "ESC [ 11 ; N ]" ;
-see
+.Ql "ESC [ 11 ; N ]" ,
+and a length of 0 silences the chime as well; see
 .Xr term.conf 5 .
 .Pp
 .Xr showkey 1
@@ -157,6 +164,8 @@ The packed font.
 The framebuffer.
 .It Pa /dev/console
 The keyboard and the speaker.
+.It Pa /dev/dsp
+The chime.
 .El
 .Sh EXIT STATUS
 .Nm
@@ -168,5 +177,6 @@ It exits with 1 when it cannot start, or when SIGTERM, SIGHUP, SIGINT or
 SIGQUIT ends it, which hangs the program up, and with 2 for a wrong usage.
 .Sh SEE ALSO
 .Xr console 4 ,
+.Xr dsp 4 ,
 .Xr term.conf 5 ,
 .Xr init 8
