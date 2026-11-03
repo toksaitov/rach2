@@ -18,9 +18,11 @@ by default.
 It plays WAV, FLAC and the other formats that
 .Xr sox 1
 lists; MP3, Ogg Vorbis and Opus are not among them.
-A 24-bit or 32-bit file goes to the device as 32-bit samples, which
+A 24-bit or 32-bit file goes to the device as 32-bit samples, of which
 .Xr dsp 4
-mixes at 16 bits.
+mixes the top 24 bits in a 32-bit sum.
+The mix plays 24 bits on an HD Audio codec that has them, and 16 bits
+on any other codec and on the Sound Blaster 16.
 Options and effects are those of
 .Xr sox 1 .
 .Fl S
