@@ -248,15 +248,16 @@ void icmp_time_exceeded(const uint8_t *dgram, uint16_t len, uint8_t code)
 
 /**
  * Give an echo reply to the ping in flight that waits for it: over IPv4
- * from `src_ip`, or with `v6` set over IPv6 from the 16 bytes at `src6`,
- * with the identifier `id` and sequence `seq`, `len` ICMP bytes that
+ * from `src_ip` when `src6` is null, or over IPv6 from the 16 bytes at
+ * `src6`, with the identifier `id` and sequence `seq`, `len` ICMP bytes that
  * arrived with the hop limit `ttl`. A reply no caller waits for is
  * ignored. Called with interrupts off.
  */
-static void ping_answer(int v6, uint32_t src_ip, const uint8_t *src6, uint16_t id, uint16_t seq,
+static void ping_answer(uint32_t src_ip, const uint8_t *src6, uint16_t id, uint16_t seq,
                         uint16_t len, uint8_t ttl)
 {
     struct icmp_pinger *p;
+    int v6 = src6 != 0;
 
     for (p = pingers; p; p = p->next) {
         if (p->id != id || p->seq_wait != seq || p->v6 != v6) {
@@ -318,7 +319,7 @@ void icmp_rx(uint32_t src_ip, uint32_t dst_ip, uint8_t ttl, const uint8_t *data,
         uint16_t seq = read16be(data + 6);
 
         net_mib.icmp_in_echo_reps++;
-        ping_answer(0, src_ip, 0, id, seq, len, ttl);
+        ping_answer(src_ip, 0, id, seq, len, ttl);
     }
 }
 
@@ -326,7 +327,7 @@ void icmp_rx(uint32_t src_ip, uint32_t dst_ip, uint8_t ttl, const uint8_t *data,
  * peer is matched only when the request went to one host. */
 void icmp_ping_reply6(const uint8_t *src, uint16_t id, uint16_t seq, uint16_t len, uint8_t hlim)
 {
-    ping_answer(1, 0, src, id, seq, len, hlim);
+    ping_answer(0, src, id, seq, len, hlim);
 }
 
 /**
