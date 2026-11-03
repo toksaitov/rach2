@@ -175,7 +175,8 @@ static void float_rows(double v)
     }
 }
 
-int main(void)
+/** The integer, string, pointer and character rows. */
+static void integer_rows(void)
 {
     static const int ints[] = {0,    1,      -1,    7,      42,      -42,       255,
                                1000, -32768, 65535, 123456, -987654, INT32_MAX, INT32_MIN};
@@ -190,9 +191,7 @@ int main(void)
         "E1M1",
         "a string of more than eighty characters, which the width of %79s leaves as it is"};
     size_t f, v;
-    int i;
-    char buf[64];
-    int n;
+    char buf[1];
 
     for (f = 0; f < sizeof(int_formats) / sizeof(int_formats[0]); f++)
         for (v = 0; v < sizeof(ints) / sizeof(ints[0]); v++)
@@ -216,6 +215,14 @@ int main(void)
     ROW("%5c|", 'x');
     ROW("%-5c|", 'x');
     ROW("100%% %d", 5);
+}
+
+/** The float rows: the table's values and their negations, the infinities,
+ * random bit patterns, and integers and short fractions. */
+static void float_sweep(void)
+{
+    size_t v;
+    int i;
 
     for (v = 0; v < sizeof(float_values) / sizeof(float_values[0]); v++) {
         float_rows(float_values[v]);
@@ -239,6 +246,14 @@ int main(void)
         float_rows(d);
         float_rows((double)(int64_t)(next_random() % 4097) / 64.0);
     }
+}
+
+/** The rows of whole calls: Doom's lines, stars, and C99's return when the
+ * buffer is short. */
+static void call_rows(void)
+{
+    char buf[64];
+    int i, n;
 
     {
         /* g_game.c's timedemo line */
@@ -270,8 +285,11 @@ int main(void)
     same("size 0", "", n, "", 5);
     n = port_snprintf(buf, sizeof(buf), "ab%ncd", &i);
     same("%n", buf, i, "abcd", 2);
+}
 
-    /* glibc's text where hosts differ */
+/** The rows whose text is glibc's where hosts differ. */
+static void fixed_rows(void)
+{
     FIXED("%p", (void *)0, "(nil)");
     FIXED("%7p|", (void *)0, "  (nil)|");
     FIXED("%s", (char *)0, "(null)");
@@ -285,7 +303,14 @@ int main(void)
     FIXED("%7.2G|", NAN, "    NAN|");
     FIXED("%-6e|", NAN, "nan   |");
     FIXED("%010g", NAN, "       nan");
+}
 
+int main(void)
+{
+    integer_rows();
+    float_sweep();
+    call_rows();
+    fixed_rows();
     if (fails) {
         fprintf(stderr, "doom_format_hosttest: %d of %d rows failed\n", fails, rows);
         return 1;
