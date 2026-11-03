@@ -1441,6 +1441,54 @@ static int nested_forked(void)
 }
 
 /**
+ * Add both ends of the pipes `a` and `b` to the set `ep`, edge-triggered,
+ * each with its descriptor for its data, and take the write ends' first
+ * edges. Returns 0, or -1 on failure.
+ */
+static int watch_pipes(int ep, const int *a, const int *b)
+{
+    struct epoll_event ev, out;
+    int i;
+
+    memset(&ev, 0, sizeof(ev));
+    for (i = 0; i < 2; i++) {
+        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
+        ev.data.u32 = (uint32_t)a[i];
+        if (epoll_ctl(ep, EPOLL_CTL_ADD, a[i], &ev) != 0) {
+            return -1;
+        }
+        ev.data.u32 = (uint32_t)b[i];
+        if (epoll_ctl(ep, EPOLL_CTL_ADD, b[i], &ev) != 0) {
+            return -1;
+        }
+    }
+    while ((i = wait_one(ep, 0, &out)) == 1) {
+    }
+    return i == 0 ? 0 : -1;
+}
+
+/**
+ * Wait on the set `ep` for the hangups of the read ends `a0` and `b0`, and
+ * nothing else. Returns 0 when both came, and 1 otherwise.
+ */
+static int await_hangups(int ep, int a0, int b0)
+{
+    struct epoll_event out;
+    int hangups = 0;
+
+    while (hangups != 3) {
+        if (wait_one(ep, -1, &out) != 1 || !(out.events & EPOLLHUP)) {
+            return 1;
+        }
+        hangups |= out.data.u32 == (uint32_t)a0 ? 1 : out.data.u32 == (uint32_t)b0 ? 2 : 4;
+        if (hangups & 4) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
  * Check that a wait asleep in epoll_wait keeps none of the descriptors it
  * watches. A child made by clone with CLONE_FILES, which shares the table as
  * a thread does, waits on a set of two pipes' read ends and write ends, the
@@ -1454,7 +1502,6 @@ static int nested_forked(void)
  */
 static int let_go(void)
 {
-    struct epoll_event ev, out;
     int ep = epoll_create1(0);
     int null = open("/dev/null", O_WRONLY);
     int a[2], b[2], i, status, check = LET_GO_SETUP;
@@ -1465,21 +1512,7 @@ static int let_go(void)
         fcntl(a[0], F_SETFL, O_NONBLOCK) != 0 || fcntl(b[0], F_SETFL, O_NONBLOCK) != 0) {
         return fail(LET_GO_SETUP);
     }
-    memset(&ev, 0, sizeof(ev));
-    for (i = 0; i < 2; i++) {
-        ev.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP | EPOLLET;
-        ev.data.u32 = (uint32_t)a[i];
-        if (epoll_ctl(ep, EPOLL_CTL_ADD, a[i], &ev) != 0) {
-            return fail(LET_GO_SETUP);
-        }
-        ev.data.u32 = (uint32_t)b[i];
-        if (epoll_ctl(ep, EPOLL_CTL_ADD, b[i], &ev) != 0) {
-            return fail(LET_GO_SETUP);
-        }
-    }
-    while ((i = wait_one(ep, 0, &out)) == 1) {
-    }
-    if (i != 0) {
+    if (watch_pipes(ep, a, b) != 0) {
         return fail(LET_GO_SETUP);
     }
     pid = (pid_t)syscall(SYS_clone, CLONE_FILES | SIGCHLD, 0, 0, 0, 0);
@@ -1487,18 +1520,7 @@ static int let_go(void)
         return fail(LET_GO_SETUP);
     }
     if (pid == 0) {
-        int hangups = 0;
-
-        while (hangups != 3) {
-            if (wait_one(ep, -1, &out) != 1 || !(out.events & EPOLLHUP)) {
-                _exit(1);
-            }
-            hangups |= out.data.u32 == (uint32_t)a[0] ? 1 : out.data.u32 == (uint32_t)b[0] ? 2 : 4;
-            if (hangups & 4) {
-                _exit(1);
-            }
-        }
-        _exit(0);
+        _exit(await_hangups(ep, a[0], b[0]));
     }
     if (!seen_asleep(pid)) {
         check = LET_GO_ASLEEP;
