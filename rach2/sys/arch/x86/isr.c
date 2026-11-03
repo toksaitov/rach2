@@ -615,11 +615,18 @@ void isr_paranoid_router(isr_params_t *params)
 /**
  * The return to the interrupted code, after its router: deliver a signal
  * pending for a return to user mode, and give back the big lock the router
- * took. Interrupts are off. A forked child's first return comes here too,
+ * took; a tick the router took without the lock returns as it came.
+ * Interrupts are off. A forked child's first return comes here too,
  * with the depth its fork gave it.
  */
 void isr_leave(isr_params_t *params)
 {
+    struct percpu *cpu = this_cpu();
+
+    if (cpu->tick_unlocked) {
+        cpu->tick_unlocked = 0;
+        return;
+    }
     if (FRAME_USER(params)) {
         debugreg_deliver();
     }
@@ -688,10 +695,27 @@ static void irq_dispatch(isr_params_t *params)
  * its system call's exit (`sched_preempt`): woken only at the next tick, a
  * disk's caller that slept for its command would get one command a
  * scheduler round. The tick's own handler makes its switch itself.
+ *
+ * The tick of a processor past the first only charges the tick and
+ * switches, and when another processor holds the big lock it does neither:
+ * it is ended and counted on this processor's record and returns, and the
+ * next tick that finds the lock free charges the ticks since
+ * (`sched_account_tick`). Waiting for the lock would take from this
+ * processor's user code all the time the holder keeps it, the mix's every
+ * block of a sound converted in the device's interrupt among them.
  */
 void _irq_router(isr_params_t *params)
 {
-    bkl_enter();
+    struct percpu *cpu = this_cpu();
+
+    if (params->vector != IRQ_VECTOR(0) || arch_cpu_id() == 0) {
+        bkl_enter();
+    } else if (!bkl_try_enter()) {
+        lapic_eoi();
+        cpu->ticks_unlocked++;
+        cpu->tick_unlocked = 1;
+        return;
+    }
     irq_count++;
     if (params->vector >= 32 && params->vector < 64) {
         vector_count[params->vector - 32]++;
@@ -732,6 +756,19 @@ void _irq_router(isr_params_t *params)
     }
 }
 
+/** The ticks of every processor that found the big lock held, which
+ * `_irq_router` counts on their records instead of `irq_count`. */
+static uint32_t isr_ticks_unlocked(void)
+{
+    uint32_t sum = 0;
+    int i;
+
+    for (i = 0; i < NR_CPUS; i++) {
+        sum += cpu_table[i].ticks_unlocked;
+    }
+    return sum;
+}
+
 /**
  * The count of interrupts taken on `vector`, for /proc/interrupts.
  *
@@ -744,7 +781,7 @@ uint32_t isr_vector_count(int vector)
     if (vector < 32 || vector >= 64) {
         return 0;
     }
-    return vector_count[vector - 32];
+    return vector_count[vector - 32] + (vector == IRQ_VECTOR(0) ? isr_ticks_unlocked() : 0u);
 }
 
 /**
@@ -764,7 +801,7 @@ const char *isr_vector_name(int vector, int slot)
 /** Every interrupt routed since the boot, for /proc/stat's `intr` line. */
 uint32_t isr_interrupt_total(void)
 {
-    return irq_count;
+    return irq_count + isr_ticks_unlocked();
 }
 
 const char *isr_vector_source(int vector)

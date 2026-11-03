@@ -29,6 +29,16 @@ static volatile uint32_t kernel_gen;
 /* The processors online, the boot processor counted (`smp_cpu_count`). */
 static int cpus_online = 1;
 
+/** Drop every translation of `cpu`, which has just taken the big lock, if a
+ * kernel mapping changed since it last held it. */
+static void bkl_flush(struct percpu *cpu)
+{
+    if (cpu->kernel_gen != kernel_gen) {
+        cpu->kernel_gen = kernel_gen;
+        arch_space_load(arch_space_root());
+    }
+}
+
 /**
  * Spin until the big lock is free and take it, answering this processor's
  * requests meanwhile, since the holder may be waiting for the answer to its
@@ -43,10 +53,7 @@ static void bkl_acquire(struct percpu *cpu)
             arch_relax();
         }
     }
-    if (cpu->kernel_gen != kernel_gen) {
-        cpu->kernel_gen = kernel_gen;
-        arch_space_load(arch_space_root());
-    }
+    bkl_flush(cpu);
 }
 
 void bkl_enter(void)
@@ -59,6 +66,20 @@ void bkl_enter(void)
     }
     cpu->bkl_depth++;
     kirq_restore(flags);
+}
+
+int bkl_try_enter(void)
+{
+    struct percpu *cpu = this_cpu();
+
+    if (cpu->bkl_depth == 0) {
+        if (bkl_word || arch_atomic_xchg(&bkl_word, 1u) != 0) {
+            return 0;
+        }
+        bkl_flush(cpu);
+    }
+    cpu->bkl_depth++;
+    return 1;
 }
 
 void bkl_exit(void)

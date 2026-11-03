@@ -57,6 +57,8 @@ struct percpu {
     volatile uint64_t busy_ticks;               /* ticks that found it running code */
     volatile uint64_t user_ticks;               /* of those, ticks that found it in user mode */
     uint32_t accounted_tick;                    /* low word of the global tick its counts reach */
+    int tick_unlocked;                          /* the tick under way took no big lock */
+    volatile uint32_t ticks_unlocked;           /* ticks that found the big lock held */
 };
 
 extern struct percpu cpu_table[NR_CPUS];

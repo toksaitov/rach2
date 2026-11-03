@@ -31,6 +31,11 @@ struct page_dir;
  * last held it. */
 void bkl_enter(void);
 
+/** Take the big lock as `bkl_enter` does when it is free or this processor
+ * holds it, and return 1; return 0 at once, taking nothing, when another
+ * processor holds it. Interrupts are off. */
+int bkl_try_enter(void);
+
 /** Give back what `bkl_enter` took, the lock itself on the outermost; a
  * panic when this processor does not hold it. */
 void bkl_exit(void);
