@@ -106,17 +106,26 @@ or a format the device lacks, changes nothing and empties nothing.
 The requests:
 .Bl -tag -width SNDCTL_DSP_SETFRAGMENT
 .It Dv SNDCTL_DSP_SETFMT , SNDCTL_DSP_SAMPLESIZE
-Set
-.Dv AFMT_U8
-or
+Set one of
+.Dv AFMT_U8 ,
 .Dv AFMT_S16_LE ,
-and give back the format in use; another format, or
+.Dv AFMT_S24_LE
+(0x8000, signed 24 bits in the low three bytes of four),
+.Dv AFMT_S24_PACKED
+(0x40000, three bytes) and
+.Dv AFMT_S32_LE
+(0x1000), and give back the format in use; another value, a mask of several, or
 .Dv AFMT_QUERY ,
 leaves the format as it is.
+The three wider formats have the numbers of OSS 4, which
+.In linux/soundcard.h
+lacks; a program defines them itself.
+Their samples are played and recorded at 16 bits: a played sample keeps its
+top 16 bits, and a recorded one has its 16 bits on top of zeros.
 .It Dv SNDCTL_DSP_GETFMTS
-.Dv AFMT_U8
-and
-.Dv AFMT_S16_LE .
+The five formats
+.Dv SNDCTL_DSP_SETFMT
+takes.
 .It Dv SNDCTL_DSP_CHANNELS
 Set one channel, or two for any larger count, and give back the count in use;
 0 asks for it.
