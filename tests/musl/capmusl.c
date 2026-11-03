@@ -694,6 +694,24 @@ static int make_secret(void)
 }
 
 /**
+ * The first stage of `ambient_root_finds`, in the image that found the sets
+ * `d`: its uid is not 0 and its sets are CAP_SETUID and CAP_SYS_ADMIN
+ * alone, effective and permitted; it sets no_new_privs when `nnp`, calls
+ * setuid(0) and execs "amb-root" or "amb-root-nnp". Returns 1 when it
+ * cannot.
+ */
+static int ambient_setuid_stage(const struct cap_data *d, int nnp)
+{
+    if (getuid() == 0 || geteuid() == 0 || d[0].effective != (SETUID | ADMIN) ||
+        d[0].permitted != (SETUID | ADMIN) || d[1].effective != 0 || d[1].permitted != 0 ||
+        (nnp && prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) || setuid(0) != 0) {
+        return 1;
+    }
+    execl("/proc/self/exe", "capmusl", nnp ? "amb-root-nnp" : "amb-root", "0", (char *)NULL);
+    return 1;
+}
+
+/**
  * A stage of `ambient_root_finds` in the image of mode `mode`, which found
  * the sets `d` when `found`: "amb-setuid" or "amb-setuid-nnp", whose uid is
  * not 0 and whose sets are CAP_SETUID and CAP_SYS_ADMIN alone, effective,
@@ -714,17 +732,40 @@ static int ambient_root_stage(const char *mode, const struct cap_data *d, int fo
         return 1;
     }
     if (strncmp(mode, "amb-setuid", 10) == 0) {
-        if (getuid() == 0 || geteuid() == 0 || d[0].effective != (SETUID | ADMIN) ||
-            d[0].permitted != (SETUID | ADMIN) || d[1].effective != 0 || d[1].permitted != 0 ||
-            (nnp && prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0) || setuid(0) != 0) {
-            return 1;
-        }
-        execl("/proc/self/exe", "capmusl", nnp ? "amb-root-nnp" : "amb-root", "0", (char *)NULL);
-        return 1;
+        return ambient_setuid_stage(d, nnp);
     }
     return !(getuid() == 0 && geteuid() == 0 && d[0].effective == want0 &&
              d[0].permitted == want0 && d[1].effective == want1 && d[1].permitted == want1 &&
              status_set_is("CapPrm", nnp ? "0000000000200080" : "000001ffffffffff"));
+}
+
+/**
+ * Whether the sets `d` are those of the image mode "ambient": CAP_CHOWN
+ * alone effective, permitted and ambient, in capget, prctl and
+ * /proc/self/status, with CAP_CHOWN and CAP_NET_RAW inheritable.
+ */
+static int ambient_image(const struct cap_data *d)
+{
+    return d[0].effective == CHOWN && d[0].permitted == CHOWN &&
+           d[0].inheritable == (CHOWN | NET_RAW) && d[1].effective == 0 && d[1].permitted == 0 &&
+           d[1].inheritable == 0 && ambient(CAP_CHOWN_) == 1 && ambient(CAP_RAW_) == 0 &&
+           status_set_is("CapEff", "0000000000000001") &&
+           status_set_is("CapAmb", "0000000000000001");
+}
+
+/**
+ * Whether the sets `d` are those of the image mode "ambient-user": a uid
+ * that is not 0, and CAP_CHOWN alone effective, permitted, inheritable and
+ * ambient.
+ */
+static int ambient_user_image(const struct cap_data *d)
+{
+    return getuid() != 0 && geteuid() != 0 && d[0].effective == CHOWN && d[0].permitted == CHOWN &&
+           d[0].inheritable == CHOWN && d[1].effective == 0 && d[1].permitted == 0 &&
+           d[1].inheritable == 0 && ambient(CAP_CHOWN_) == 1 &&
+           status_set_is("CapEff", "0000000000000001") &&
+           status_set_is("CapPrm", "0000000000000001") &&
+           status_set_is("CapAmb", "0000000000000001");
 }
 
 /**
@@ -755,21 +796,10 @@ static int judge_image(const char *mode, const char *other)
         return !(found && all_of(d) && prctl(PR_GET_DUMPABLE, 0, 0, 0, 0) == 0);
     }
     if (strcmp(mode, "ambient") == 0) {
-        return found && d[0].effective == CHOWN && d[0].permitted == CHOWN &&
-                       d[0].inheritable == (CHOWN | NET_RAW) && d[1].effective == 0 &&
-                       d[1].permitted == 0 && d[1].inheritable == 0 && ambient(CAP_CHOWN_) == 1 &&
-                       ambient(CAP_RAW_) == 0 && status_set_is("CapEff", "0000000000000001") &&
-                       status_set_is("CapAmb", "0000000000000001")
-                   ? 0
-                   : EXEC_AMBIENT - INHERITABLE_SET + 1;
+        return found && ambient_image(d) ? 0 : EXEC_AMBIENT - INHERITABLE_SET + 1;
     }
     if (strcmp(mode, "ambient-user") == 0) {
-        return !(found && getuid() != 0 && geteuid() != 0 && d[0].effective == CHOWN &&
-                 d[0].permitted == CHOWN && d[0].inheritable == CHOWN && d[1].effective == 0 &&
-                 d[1].permitted == 0 && d[1].inheritable == 0 && ambient(CAP_CHOWN_) == 1 &&
-                 status_set_is("CapEff", "0000000000000001") &&
-                 status_set_is("CapPrm", "0000000000000001") &&
-                 status_set_is("CapAmb", "0000000000000001"));
+        return !(found && ambient_user_image(d));
     }
     if (strncmp(mode, "amb-", 4) == 0) {
         return ambient_root_stage(mode, d, found);
@@ -832,19 +862,15 @@ static int inheritable_rows(void)
 }
 
 /**
- * Run the rows of the inheritable and ambient sets in a child of root, which
- * ends in the exec of this program in the mode "ambient". Its exit status: 0,
- * or 1 and up for the row that failed, counted from INHERITABLE_SET.
+ * The rows of the ambient set, in a child of root whose permitted set is
+ * `rest`, with CAP_CHOWN and CAP_NET_RAW inheritable: PR_CAP_AMBIENT's
+ * raise and its refusals, the sets in /proc/self/status, the lower, and the
+ * loss of the ambient set to a capset that drops its inheritable bit.
+ * Returns 0, or 3 to 5 for the row that failed, ending with CAP_CHOWN
+ * ambient again.
  */
-static int ambient_rows(void)
+static int ambient_set_rows(unsigned rest)
 {
-    unsigned rest = 0xFFFFFFFFu & ~(SETPCAP | DAC | NET_RAW);
-    pid_t pid;
-    int row = inheritable_rows(), status;
-
-    if (row != 0) {
-        return row;
-    }
     if (!refused_with(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_ADMIN_, 0, 0), EPERM) ||
         !refused_with(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_RAW_, 0, 0), EPERM) ||
         !refused_with(prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, 41, 0, 0), EINVAL) ||
@@ -864,6 +890,26 @@ static int ambient_rows(void)
         set_first(rest, CHOWN | NET_RAW) != 0 ||
         prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_RAISE, CAP_CHOWN_, 0, 0) != 0) {
         return 5;
+    }
+    return 0;
+}
+
+/**
+ * Run the rows of the inheritable and ambient sets in a child of root, which
+ * ends in the exec of this program in the mode "ambient". Its exit status: 0,
+ * or 1 and up for the row that failed, counted from INHERITABLE_SET.
+ */
+static int ambient_rows(void)
+{
+    unsigned rest = 0xFFFFFFFFu & ~(SETPCAP | DAC | NET_RAW);
+    pid_t pid;
+    int row = inheritable_rows(), status;
+
+    if (row == 0) {
+        row = ambient_set_rows(rest);
+    }
+    if (row != 0) {
+        return row;
     }
     pid = fork();
     if (pid == 0) {
