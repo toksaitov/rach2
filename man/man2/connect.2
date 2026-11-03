@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 3, 2026
 .Dt CONNECT 2
 .Os
 .Sh NAME
@@ -135,7 +135,16 @@ disconnects a datagram socket and leaves its local binding in place.
 Only the two-byte family is needed for this request.
 A stream socket cannot be disconnected this way.
 Raw sockets and packet sockets do not support
-.Fn connect .
+.Fn connect ,
+but for an ICMP datagram socket, which connects as Linux's ping socket
+does: the peer is recorded, a send with no address goes to it, the port
+given is kept only for
+.Xr getpeername 2 ,
+and the socket's echo identifier is fixed.
+Echo replies are still taken from any host that sends one with the
+identifier, as on Linux.
+.Dv AF_UNSPEC
+disconnects it.
 .Ss Local connections
 A destination in 127/8 is this machine, as on Linux, by way of
 .Li lo :
@@ -211,7 +220,7 @@ A TCP control block could not be allocated.
 .Fa fd
 does not refer to a socket.
 .It Bq Er EOPNOTSUPP
-The socket is raw, belongs to
+The socket is raw but not an ICMP datagram socket, belongs to
 .Dv AF_PACKET ,
 or is neither a supported datagram nor stream socket.
 .El

@@ -38,8 +38,16 @@ It sends only echo requests (type 8, code 0, at least 8 bytes; others
 are
 .Er EINVAL ) ,
 into which the kernel writes its identifier and the checksum, and it
-receives only the echo replies that carry its identifier, the ICMP
-message without the IP header.
+receives only the echo replies that carry its identifier and a good ICMP
+checksum, the ICMP message without the IP header.
+The identifier is its port: a bind may name one, and getsockname reports
+it, as
+.Xr bind 2
+and
+.Xr getsockname 2
+say; it may connect, as
+.Xr connect 2
+says.
 .Dv SO_TYPE
 reports it as
 .Dv SOCK_DGRAM .

@@ -281,9 +281,8 @@ Musl implements
 through
 .Fn recvfrom
 with null address pointers.
-The direct kernel operation 10 accepts streams and datagrams but rejects
-all raw sockets; the musl wrapper can receive raw ICMP data through
-operation 12.
+The direct kernel operation 10 accepts streams, datagram and raw
+sockets, and rejects only the ioctl-only raw descriptor.
 .Pp
 x86-64 has no
 .Nm recv
@@ -369,8 +368,7 @@ A stream connection timed out while its local address was gone.
 .Fa fd
 does not refer to a socket.
 .It Er EOPNOTSUPP
-A raw socket was passed to kernel operation 10, an ioctl-only socket
-was passed to recvfrom, or an IPv4 socket other than
+An ioctl-only socket was passed to kernel operation 10 or to recvfrom, or an IPv4 socket other than
 .Dv SOCK_DGRAM
 was passed to recvmsg.
 .It Er ENOTCONN

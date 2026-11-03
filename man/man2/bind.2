@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 3, 2026
 .Dt BIND 2
 .Os
 .Sh NAME
@@ -72,6 +72,11 @@ of at least 24 bytes, whose address is ::, ::1 or an address an
 interface holds, and gives
 .Er EADDRNOTAVAIL
 for another.
+An ICMP datagram socket of either family binds an address under the same
+rules, and its port is its echo identifier, as on Linux: a nonzero port
+gives the socket that identifier, and zero keeps the one the kernel gave
+it.
+The first bind, send or connect fixes the identifier.
 The raw socket used only for interface queries rejects binding.
 .Ss IPv6 sockets
 TCP and UDP take a sockaddr_in6 of at least 24 bytes.
@@ -139,6 +144,9 @@ A UDP port cannot be shared, or a bind to port zero finds no free
 ephemeral port or no memory for its binding.
 A TCP port already has a live listener at an address that meets the one
 asked for, or no ephemeral port is free for a bind to port zero.
+Another ICMP datagram socket, or a call of
+.Xr ping 2
+in progress, holds the echo identifier asked for.
 .It Er EADDRNOTAVAIL
 The address is not zero, not in
 .Ql 127/8 ,
@@ -151,7 +159,8 @@ The socketcall argument array or the required address bytes cannot be read.
 .It Er EINVAL
 The address length is negative or less than eight bytes, a packet
 address is shorter than 20 bytes, or a packet protocol is neither zero,
-IPv4, ARP, IPv6 nor EAPOL.
+IPv4, ARP, IPv6 nor EAPOL; or the socket is an ICMP datagram socket
+whose echo identifier a bind, send or connect has already fixed.
 .It Er ENOBUFS
 Memory for a packet-socket binding cannot be allocated.
 .It Er ENODEV

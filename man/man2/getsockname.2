@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 3, 2026
 .Dt GETSOCKNAME 2
 .Os
 .Sh NAME
@@ -27,6 +27,10 @@ An IPv6 stream or datagram socket reports the same endpoint information
 in a 28-byte sockaddr_in6, with a scope id for a link-scoped address and
 mapped IPv4 addresses for IPv4 connections.
 The port is the socket's bound or ephemeral port.
+An ICMP datagram socket reports its address in the same way and its echo
+identifier as the port, once a bind, send or connect has fixed it, and
+port zero before, as Linux does; once connected it has a peer for
+.Fn getpeername .
 An accepted connection reports the address the peer connected to, and a
 connection to 127.0.0.1 reports 127.0.0.1.
 .Pp
@@ -110,7 +114,7 @@ was called on a socket with no connected peer.
 .Fa fd
 does not refer to a socket.
 .It Bq Er EOPNOTSUPP
-The socket is a raw socket.
+The socket is a raw socket other than an ICMP datagram socket.
 .El
 .Sh SEE ALSO
 .Xr accept 2 ,

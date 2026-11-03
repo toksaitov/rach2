@@ -73,6 +73,8 @@ times each round trip on the monotonic clock, to the microsecond, from
 the request's send to its reply, and counts a reply against its own
 sequence number however late it comes, while the request is among the
 last 4096 sent; a second reply to one request is not counted.
+The replies waiting are read after each request, as iputils reads them,
+so an interval shorter than a send takes still counts every reply.
 The hop limit of a reply comes from
 .Dv IP_RECVTTL ,
 or
