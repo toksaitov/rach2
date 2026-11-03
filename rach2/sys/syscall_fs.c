@@ -7066,6 +7066,7 @@ static int32_t open_path(const char *name, int flags)
 
         vfs_walk_unlock(locked);
         vfs_ref_release(&ref);
+        vfs_name_put(entry);
         rc = synth_open_path(&vpc, name, flags);
         synth_dir_record(rc, permanent, name);
         return rc;
