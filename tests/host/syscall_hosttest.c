@@ -150,6 +150,20 @@ static int sibling_runs;
         }                                                   \
     } while (0)
 
+/** No row makes an ICMP datagram socket, which alone has an echo port. */
+int raw_echo_port(struct socket *s)
+{
+    (void)s;
+    return -1;
+}
+
+/** No row connects an ICMP datagram socket. */
+void raw_echo_hold(struct socket *s)
+{
+    (void)s;
+    CHECK(0, "no row connects an ICMP datagram socket");
+}
+
 /** Whether [addr, addr + len) lies in the model's user memory, `user`;
  * address 0 does not. */
 int user_range_ok(uintptr_t addr, size_t len)

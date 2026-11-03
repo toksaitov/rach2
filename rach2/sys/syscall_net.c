@@ -852,6 +852,11 @@ static int cut_off(const struct socket *s)
  * filters nothing afterwards; an address the machine does not have is
  * -EADDRNOTAVAIL rather than accepted and ignored. The query descriptor
  * binds to nothing (-EOPNOTSUPP).
+ *
+ * An ICMP datagram socket binds an address as a raw one does, and the port
+ * is its echo identifier, which `raw_echo_bind` takes: -EINVAL when a bind,
+ * send or connect has fixed it already, -EADDRINUSE when another holds it.
+ * The address is kept only once the identifier is taken.
  */
 static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
 {
@@ -924,6 +929,11 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
         if (entry->sock->type == SOCK_RAW) {
             if (!net_addr_any(addr) && !net_addr_local(addr))
                 return -EADDRNOTAVAIL;
+            if (raw_echo_port(entry->sock) >= 0) {
+                rc = raw_echo_bind(entry->sock, port);
+                if (rc)
+                    return rc;
+            }
             entry->sock->local_ip = addr;
             return 0;
         }
@@ -932,32 +942,9 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
 }
 
 /**
- * Make the message of `len` bytes at `msg`, which an ICMP datagram socket
- * `sock` sends, the socket's echo request: its type must be `request` and
- * its code 0, and its identifier becomes the socket's and its checksum 0,
- * for the send to sum. Any other socket's message is left alone. Returns 1
- * for a message stamped, 0 for another socket's, or -1 for a message
- * shorter than an echo's 8-byte header or of another type, which the send
- * refuses with EINVAL, as Linux does.
- */
-static int echo_stamp(struct socket *sock, uint8_t *msg, int len, uint8_t request)
-{
-    int id = raw_echo_id(sock);
-
-    if (id < 0) {
-        return 0;
-    }
-    if (len < 8 || msg[0] != request || msg[1] != 0) {
-        return -1;
-    }
-    write16be(msg + 2, 0);
-    write16be(msg + 4, (uint16_t)id);
-    return 1;
-}
-
-/**
  * Send the ICMPv6 message of `len` bytes at `buf_ptr` from the raw socket
- * `sock` to the sockaddr_in6 at `sa_ptr`, in the scope of its scope id.
+ * `sock` to the sockaddr_in6 at `sa_ptr`, in the scope of its scope id, or
+ * with no address from a connected ICMP datagram socket to its peer.
  * The kernel sums the message, as Linux does for ICMPv6 whatever the
  * caller wrote, since the pseudo-header holds the source it chooses. The
  * socket's IPv6 options apply as they do to UDP (`udp_tx`): a group is sent
@@ -969,7 +956,7 @@ static int echo_stamp(struct socket *sock, uint8_t *msg, int len, uint8_t reques
  * toward the address, as `ip6_tx_whole` says, whatever the options.
  *
  * An ICMP datagram socket sends only an echo request, with its own
- * identifier written in (`echo_stamp`).
+ * identifier written in (`raw_echo_stamp`).
  *
  * Returns `len`, the error of `sockaddr_in6_in`, `icmp6_send` or
  * `ip6_tx_whole`, -EINVAL for a message too short to hold its checksum, or
@@ -990,9 +977,14 @@ static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uint
     int whole = sock->protocol == IPPROTO_RAW;
     int scope, r, tclass;
 
-    r = sockaddr_in6_in(sa_ptr, addrlen, dst, &scope);
-    if (r != 0) {
-        return r;
+    if (sa_ptr) {
+        r = sockaddr_in6_in(sa_ptr, addrlen, dst, &scope);
+        if (r != 0) {
+            return r;
+        }
+    } else {
+        net_addr_to6(sock->remote_ip, dst);
+        scope = (int)sock->remote_ip.scope;
     }
     if (!scope && ip6_link_scoped(dst)) {
         scope = sock->bound_device;
@@ -1033,7 +1025,7 @@ static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uint
     }
     if (copy_from_user(buf, (const void __user *)buf_ptr, (uint32_t)len) != 0) {
         r = -EFAULT;
-    } else if (echo_stamp(sock, buf, len, ICMP6_ECHO_REQUEST) < 0) {
+    } else if (raw_echo_stamp(sock, buf, len, ICMP6_ECHO_REQUEST) < 0) {
         r = -EINVAL;
     } else {
         netflags = net_lock();
@@ -1176,9 +1168,12 @@ static int32_t netlink_addr_to_user(const uint8_t *nl, uintptr_t sa_ptr, uintptr
  * this layer supplies the IPv4 header and rewrites nothing, since a program
  * sending a wrong checksum on purpose is testing something. An ICMP
  * datagram socket sends only an echo request, whose identifier and checksum
- * the kernel writes (`echo_stamp`), and -EINVAL for any other message, as
- * on Linux. A message past one frame leaves in fragments under the socket's IP_MTU_DISCOVER, up to
- * the largest IPv4 payload. An AF_INET6 one sends as `raw6_sendto` says.
+ * the kernel writes (`raw_echo_stamp`), and -EINVAL for any other message, as
+ * on Linux; with no address a connected one sends to its peer. A raw send
+ * with no address and no peer is -EDESTADDRREQ, and one with an address
+ * shorter than a sockaddr_in -EINVAL. A message past one frame leaves in
+ * fragments under the socket's IP_MTU_DISCOVER, up to the largest IPv4
+ * payload. An AF_INET6 one sends as `raw6_sendto` says.
  * The copy into `raw_send_buf`, or a block of the heap, runs with interrupts
  * on, since bringing in the caller's pages may sleep; the send then holds the
  * network lock against a receive
@@ -1223,23 +1218,30 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
         uint32_t raw_dst;
         int r, echo;
 
-        if (!sa_ptr || addrlen < SOCKADDR_MIN) {
+        if (!sa_ptr && !entry->sock->connected) {
             return -EDESTADDRREQ;
+        }
+        if (sa_ptr && addrlen < SOCKADDR_MIN) {
+            return -EINVAL;
         }
         if (entry->sock->family == AF_INET6) {
             return raw6_sendto(entry->sock, buf_ptr, len, sa_ptr, addrlen, opt);
         }
-        k_memset(raw_sa, 0, sizeof(raw_sa));
-        if (copy_from_user(raw_sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
-            return -EFAULT;
-        }
-        if ((uint16_t)((uint16_t)raw_sa[0] | ((uint16_t)raw_sa[1] << 8)) != AF_INET) {
-            return -EAFNOSUPPORT;
+        if (sa_ptr) {
+            k_memset(raw_sa, 0, sizeof(raw_sa));
+            if (copy_from_user(raw_sa, (const void __user *)sa_ptr, SOCKADDR_MIN) != 0) {
+                return -EFAULT;
+            }
+            if ((uint16_t)((uint16_t)raw_sa[0] | ((uint16_t)raw_sa[1] << 8)) != AF_INET) {
+                return -EAFNOSUPPORT;
+            }
+            raw_dst = SC_BE32(raw_sa + 4);
+        } else {
+            raw_dst = entry->sock->remote_ip.v4;
         }
         if (len > IP_PAYLOAD_MAX) {
             return -EMSGSIZE;
         }
-        raw_dst = SC_BE32(raw_sa + 4);
         msg = raw_send_buf;
         if (len > (int)sizeof(raw_send_buf)) {
             msg = kmalloc((size_t)len);
@@ -1249,7 +1251,7 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
         }
         if (copy_from_user(msg, (const void __user *)buf_ptr, (uint32_t)len) != 0) {
             r = -EFAULT;
-        } else if ((echo = echo_stamp(entry->sock, msg, len, ICMP_ECHO_REQUEST)) < 0) {
+        } else if ((echo = raw_echo_stamp(entry->sock, msg, len, ICMP_ECHO_REQUEST)) < 0) {
             r = -EINVAL;
         } else {
             uint32_t netflags = net_lock();
@@ -1501,6 +1503,60 @@ static int accept_ready(void *arg)
 }
 
 /**
+ * connect(2) on the ICMP datagram socket `sock`: record the peer of the
+ * sockaddr at `sa_ptr`, of `addrlen` bytes, to which a send with no address
+ * goes, and fix the socket's echo identifier, as Linux's ip4_datagram_connect
+ * and ip6_datagram_connect do for a ping socket. The port is kept for
+ * getpeername and means nothing else. AF_UNSPEC lets go of the peer. A
+ * reply is taken from any host, as on Linux, whose ping_lookup matches the
+ * identifier alone. Returns 0, -EINVAL for an address too short, -EAFNOSUPPORT
+ * for one of another family, an IPv4-mapped one among them, the error of
+ * `net_addr_source` for one no route reaches, or -EFAULT.
+ */
+static int32_t connect_echo(struct socket *sock, uintptr_t sa_ptr, int addrlen)
+{
+    net_addr_t dst, from;
+    uint16_t port, family;
+    uint8_t sa[2];
+    uint32_t held;
+    int rc;
+
+    if (addrlen < 2) {
+        return -EINVAL;
+    }
+    if (copy_from_user(sa, (const void __user *)sa_ptr, 2) != 0) {
+        return -EFAULT;
+    }
+    family = (uint16_t)((uint16_t)sa[0] | ((uint16_t)sa[1] << 8));
+    if (family == 0) {
+        sock->connected = 0;
+        sock->remote_ip = sock->family == AF_INET6 ? net_addr6(ip6_any, 0) : net_addr4(0);
+        sock->remote_port = 0;
+        return 0;
+    }
+    rc = inet_endpoint_in(sock, sa_ptr, addrlen, 0, &dst, &port);
+    if (rc) {
+        return rc;
+    }
+    if (dst.family != sock->family) {
+        return -EAFNOSUPPORT;
+    }
+    held = net_lock();
+    rc = net_addr_source(sock->local_ip, dst, &from);
+    if (rc == 0) {
+        sock->remote_ip = dst;
+        sock->remote_port = port;
+        sock->connected = 1;
+    }
+    net_unlock(held);
+    if (rc < 0) {
+        return rc;
+    }
+    raw_echo_hold(sock);
+    return 0;
+}
+
+/**
  * connect(2): start the TCP handshake to the sockaddr. A blocking socket waits
  * it out (-EINTR on a signal, -ECONNREFUSED when the handshake fails or times
  * out); a non-blocking one returns 0 or -EINPROGRESS, and the caller polls
@@ -1510,7 +1566,9 @@ static int accept_ready(void *arg)
  * The descriptor is resolved before its argument is read, so that a call on
  * something that is not a socket reports that instead of whatever was wrong
  * with an address it was never going to use. A raw or packet socket
- * has no peer to connect to (-EOPNOTSUPP): a packet socket is bound to an
+ * has no peer to connect to (-EOPNOTSUPP), but for an ICMP datagram socket,
+ * which connects as a datagram socket does, as Linux's ping socket does
+ * (`connect_echo`): a packet socket is bound to an
  * interface and sends to a hardware address each time, and the datagram path
  * would put it in the UDP port table, which its teardown never unbinds from.
  *
@@ -1558,7 +1616,7 @@ static int32_t do_connect(int fd, uintptr_t sa_ptr, int addrlen)
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
     }
-    if (entry->sock->type == SOCK_RAW) {
+    if (entry->sock->type == SOCK_RAW && raw_echo_port(entry->sock) < 0) {
         return -EOPNOTSUPP;
     }
     if (entry->sock->family == AF_NETLINK) {
@@ -1569,6 +1627,9 @@ static int32_t do_connect(int fd, uintptr_t sa_ptr, int addrlen)
     }
     if (cut_off(entry->sock)) {
         return -ENETUNREACH;
+    }
+    if (entry->sock->type == SOCK_RAW) {
+        return connect_echo(entry->sock, sa_ptr, addrlen);
     }
 
     k_memset(sa, 0, sizeof(sa));
@@ -1782,9 +1843,10 @@ static int32_t do_send(int fd, uintptr_t buf_ptr, int len, int flags)
  * recv(2): read from a connected stream socket, or one message from a
  * datagram socket. Honors MSG_PEEK, MSG_DONTWAIT and O_NONBLOCK, and on a
  * datagram socket MSG_TRUNC, which answers the datagram's whole length.
- * Returns the bytes received or -errno, -EOPNOTSUPP for a raw socket.
+ * Returns the bytes received or -errno, -EOPNOTSUPP for the query
+ * descriptor, which takes only ioctls.
  *
- * A datagram socket reads one message with no sender reported, which is what
+ * A datagram or raw socket reads one message with no sender reported, which is what
  * `recv` is: `recvfrom` without the address. Failing it here would leave one
  * of the four ways of reading a socket disagreeing with the other three about
  * whether the same queued datagram exists. The receive writes into the buffer
@@ -1804,12 +1866,12 @@ static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
     }
-    if (entry->sock->type == SOCK_RAW) {
+    if (sock_is_query(entry->sock)) {
         return -EOPNOTSUPP;
     }
     nonblock = (flags & MSG_DONTWAIT) || (entry->ofd && (entry->ofd->status_flags & OFD_NONBLOCK));
 
-    if (entry->sock->type == SOCK_DGRAM) {
+    if (entry->sock->type == SOCK_DGRAM || entry->sock->type == SOCK_RAW) {
         int how = (peek ? SOCK_RECV_PEEK : 0) | ((flags & MSG_TRUNC) ? SOCK_RECV_TRUNC : 0);
 
         if (nonblock) {
@@ -1839,19 +1901,28 @@ static int32_t do_recv(int fd, uintptr_t buf_ptr, int len, int flags)
  * sockaddr_nl. Unlike accept and recvfrom, which take a null address as no
  * address to report (`copy_sockaddr_to_user`), getsockname needs both
  * pointers, and is -EFAULT without them. Returns 0 or -errno, -EOPNOTSUPP for
- * a raw socket.
+ * a raw socket but an ICMP datagram socket, which reports its address as a
+ * datagram socket does and its echo identifier as the port once a bind,
+ * send or connect has fixed it, 0 before (`raw_echo_port`), as Linux does.
  */
 static int32_t do_getsockname(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
     uint32_t flags;
     net_addr_t local_ip;
+    uint16_t local_port;
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
     }
+    local_port = entry->sock->local_port;
     if (entry->sock->type == SOCK_RAW) {
-        return -EOPNOTSUPP;
+        int echo = raw_echo_port(entry->sock);
+
+        if (echo < 0) {
+            return -EOPNOTSUPP;
+        }
+        local_port = (uint16_t)echo;
     }
     if (!sa_ptr || !salen_ptr) {
         return -EFAULT;
@@ -1907,8 +1978,7 @@ static int32_t do_getsockname(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
         local_ip = entry->sock->local_ip;
     }
     net_unlock(flags);
-    return copy_sockaddr_to_user(sa_ptr, salen_ptr, entry->sock->local_port, local_ip,
-                                 entry->sock->family);
+    return copy_sockaddr_to_user(sa_ptr, salen_ptr, local_port, local_ip, entry->sock->family);
 }
 
 /** getpeername: the connected peer's address (an established stream socket
@@ -1916,7 +1986,8 @@ static int32_t do_getsockname(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
  * once its handshake completes, and not as a listener, in SYN_SENT or once
  * closed; a datagram socket has one, with no handshake, once connected, and a
  * netlink socket's is the kernel. Returns 0, -ENOTCONN with no peer, -EFAULT
- * without both pointers, or -EOPNOTSUPP for a raw socket. */
+ * without both pointers, or -EOPNOTSUPP for a raw socket but a connected
+ * ICMP datagram socket, which reports its peer as a datagram socket does. */
 static int32_t do_getpeername(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
@@ -1924,7 +1995,7 @@ static int32_t do_getpeername(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
     }
-    if (entry->sock->type == SOCK_RAW) {
+    if (entry->sock->type == SOCK_RAW && raw_echo_port(entry->sock) < 0) {
         return -EOPNOTSUPP;
     }
     if (entry->sock->family == AF_NETLINK) {
@@ -1937,7 +2008,7 @@ static int32_t do_getpeername(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
         nl[0] = (uint8_t)AF_NETLINK; /* the kernel, port id 0 */
         return netlink_addr_to_user(nl, sa_ptr, salen_ptr);
     }
-    if (entry->sock->type == SOCK_DGRAM) {
+    if (entry->sock->type == SOCK_DGRAM || entry->sock->type == SOCK_RAW) {
         if (!entry->sock->connected) {
             return -ENOTCONN;
         }

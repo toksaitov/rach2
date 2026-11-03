@@ -53,8 +53,16 @@ struct net_rxinfo;
  * kernel's holds (`icmp_echo_id`). It sends only echo requests, each with
  * its identifier written over the caller's and summed by the kernel, and it
  * receives only the echo replies that carry that identifier, the ICMP
- * message alone over either family. Any number of them run at once, and
- * each sees only its own replies.
+ * message alone over either family, an IPv4 one only when its ICMP
+ * checksum holds. Any number of them run at once, and each sees only its
+ * own replies.
+ *
+ * As on Linux (net/ipv4/ping.c), the identifier is the socket's port: bind
+ * takes a nonzero one from `sin_port` or `sin6_port`, or keeps the one the
+ * socket has for 0, and the first bind, send or connect fixes it, after
+ * which getsockname reports it and a second bind is EINVAL. Before then
+ * getsockname reports port 0. A connected one sends to its peer without an
+ * address and reads with recv.
  */
 
 /**
@@ -75,6 +83,37 @@ int raw_echo_id(struct socket *sock);
  * under `net_lock`. */
 int raw_echo_id_used(uint16_t id);
 
+/**
+ * bind(2)'s part for the ICMP datagram socket `sock`: give it the echo
+ * identifier `id`, or for 0 keep the one it has, and fix it. Returns 0,
+ * -EINVAL for a socket whose identifier a bind, send or connect has fixed
+ * already, or that is no ICMP datagram socket, or -EADDRINUSE for an
+ * identifier another such socket or a ping of the kernel's holds. Takes
+ * `net_lock` itself.
+ */
+int raw_echo_bind(struct socket *sock, uint16_t id);
+
+/** Fix the echo identifier of the ICMP datagram socket `sock`, as a connect
+ * does on Linux; any other socket is left alone. Takes `net_lock` itself. */
+void raw_echo_hold(struct socket *sock);
+
+/** The port getsockname reports for the ICMP datagram socket `sock`: its
+ * echo identifier once fixed, 0 before; -1 for any other socket. Takes
+ * `net_lock` itself. */
+int raw_echo_port(struct socket *sock);
+
+/**
+ * Make the message of `len` bytes at `msg`, which the ICMP datagram socket
+ * `sock` sends, the socket's echo request: its type must be `request` and
+ * its code 0, and its identifier becomes the socket's, which the send
+ * fixes, and its checksum 0, for the send to sum. Any other socket's
+ * message is left alone. Returns 1 for a message stamped, 0 for another
+ * socket's, or -1 for a message shorter than an echo's 8-byte header or of
+ * another type, which the send refuses with EINVAL, as Linux does. Takes
+ * `net_lock` itself.
+ */
+int raw_echo_stamp(struct socket *sock, uint8_t *msg, int len, uint8_t request);
+
 /** Remove a socket's registration and free the datagrams it has queued,
  * when its last reference goes (`socket_unref`). Takes `net_lock` itself. */
 void raw_unregister(struct socket *sock);
@@ -85,7 +124,8 @@ void raw_unregister(struct socket *sock);
  * `data` is the whole datagram, header included, reassembled if it came in
  * fragments, and `total_len` its length; one shorter than an IP header is
  * ignored. Each socket queues it whole on its own queue (`sock_dgq`), an
- * ICMP datagram socket only its own echo reply and without the header, and
+ * ICMP datagram socket only its own echo reply, without the header and
+ * only with a good ICMP checksum, and
  * one whose budget is spent drops it, the newest, the first such drop
  * logged. Called with interrupts
  * off, from `ip_rx`, after the datagram has been accepted for this machine

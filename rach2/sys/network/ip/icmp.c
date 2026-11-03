@@ -100,17 +100,23 @@ static struct icmp_pinger *pingers;
  * past the last identifier handed out. */
 static uint16_t echo_id_next = 0x5243;
 
+int icmp_ping_id_used(uint16_t id)
+{
+    struct icmp_pinger *p;
+
+    for (p = pingers; p && p->id != id; p = p->next) {
+    }
+    return p != NULL;
+}
+
 uint16_t icmp_echo_id(void)
 {
     uint32_t tries;
 
     for (tries = 0; tries < 0x10000u; tries++) {
         uint16_t id = echo_id_next++;
-        struct icmp_pinger *p;
 
-        for (p = pingers; p && p->id != id; p = p->next) {
-        }
-        if (!p && !raw_echo_id_used(id)) {
+        if (!icmp_ping_id_used(id) && !raw_echo_id_used(id)) {
             return id;
         }
     }

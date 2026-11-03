@@ -155,6 +155,39 @@ int raw_echo_id(struct socket *s)
     return -1;
 }
 
+/** No row makes an ICMP datagram socket, which alone has an echo port. */
+int raw_echo_port(struct socket *s)
+{
+    (void)s;
+    return -1;
+}
+
+/** No row binds an ICMP datagram socket. */
+int raw_echo_bind(struct socket *s, uint16_t id)
+{
+    (void)s;
+    (void)id;
+    CHECK(0, "no row binds an echo identifier");
+    return -EINVAL;
+}
+
+/** No row connects an ICMP datagram socket. */
+void raw_echo_hold(struct socket *s)
+{
+    (void)s;
+    CHECK(0, "no row connects an ICMP datagram socket");
+}
+
+/** No row makes an ICMP datagram socket, so no message is stamped. */
+int raw_echo_stamp(struct socket *s, uint8_t *msg, int len, uint8_t request)
+{
+    (void)s;
+    (void)msg;
+    (void)len;
+    (void)request;
+    return 0;
+}
+
 /** No row makes an IPv6 raw socket, which alone has an IPv6 source. */
 int raw_head_src6(struct socket *s, uint8_t *src)
 {

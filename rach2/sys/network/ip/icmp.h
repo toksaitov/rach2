@@ -86,6 +86,10 @@ void icmp_time_exceeded(const uint8_t *dgram, uint16_t len, uint8_t code);
  */
 uint16_t icmp_echo_id(void);
 
+/** Whether a ping of the kernel's in flight holds the echo identifier
+ * `id`. Called under `net_lock`. */
+int icmp_ping_id_used(uint16_t id);
+
 /** `icmp_ping_data` with no data and the hop limit `IP_TTL_DEFAULT`. */
 int icmp_ping(uint32_t dst_ip);
 

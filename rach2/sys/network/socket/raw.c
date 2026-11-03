@@ -42,6 +42,7 @@ struct raw_binding {
     int v6;
     int echo;
     uint16_t echo_id;
+    int echo_bound;                   /* whether a bind, send or connect has fixed `echo_id` */
     uint8_t filter6[RAW_FILTER6_LEN]; /* bit t of byte t / 8 blocks type t */
     struct raw_last last;
 };
@@ -130,6 +131,92 @@ int raw_echo_id_used(uint16_t id)
     return 0;
 }
 
+/** Whether a socket other than `b`'s, or a ping of the kernel's, holds the
+ * echo identifier `id`. Called under `net_lock`. */
+static int echo_id_taken(const struct raw_binding *b, uint16_t id)
+{
+    const struct raw_binding *o;
+
+    for (o = raws; o; o = o->next) {
+        if (o != b && o->echo && o->echo_id == id) {
+            return 1;
+        }
+    }
+    return icmp_ping_id_used(id);
+}
+
+int raw_echo_bind(struct socket *sock, uint16_t id)
+{
+    struct raw_binding *b;
+    uint32_t flags = net_lock();
+    int r = 0;
+
+    b = binding_of(sock);
+    if (!b || !b->echo || b->echo_bound) {
+        r = -EINVAL;
+    } else if (id != 0 && id != b->echo_id && echo_id_taken(b, id)) {
+        r = -EADDRINUSE;
+    } else {
+        if (id != 0) {
+            b->echo_id = id;
+        }
+        b->echo_bound = 1;
+    }
+    net_unlock(flags);
+    return r;
+}
+
+void raw_echo_hold(struct socket *sock)
+{
+    struct raw_binding *b;
+    uint32_t flags = net_lock();
+
+    b = binding_of(sock);
+    if (b && b->echo) {
+        b->echo_bound = 1;
+    }
+    net_unlock(flags);
+}
+
+int raw_echo_port(struct socket *sock)
+{
+    struct raw_binding *b;
+    uint32_t flags = net_lock();
+    int port = -1;
+
+    b = binding_of(sock);
+    if (b && b->echo) {
+        port = b->echo_bound ? (int)b->echo_id : 0;
+    }
+    net_unlock(flags);
+    return port;
+}
+
+int raw_echo_stamp(struct socket *sock, uint8_t *msg, int len, uint8_t request)
+{
+    struct raw_binding *b;
+    uint32_t flags;
+    uint16_t id;
+
+    flags = net_lock();
+    b = binding_of(sock);
+    if (!b || !b->echo) {
+        net_unlock(flags);
+        return 0;
+    }
+    b->echo_bound = 1;
+    id = b->echo_id;
+    net_unlock(flags);
+    if (len < 8 || msg[0] != request || msg[1] != 0) {
+        return -1;
+    }
+    msg[2] = 0;
+    msg[3] = 0;
+    msg[4] = (uint8_t)(id >> 8);
+    msg[5] = (uint8_t)id;
+    return 1;
+}
+
 int raw_echo_id(struct socket *sock)
 {
     struct raw_binding *b;
@@ -163,7 +250,7 @@ static void raw_queue(struct raw_binding *b, const struct sock_dgram *meta, cons
 
 /** Whether the ICMP message of `len` bytes at `msg` is an echo reply,
  * of type `reply`, to the ICMP datagram socket of `b`: one that carries
- * its identifier. */
+ * its identifier. The checksum is the caller's to judge. */
 static int raw_echo_answer(const struct raw_binding *b, const uint8_t *msg, uint32_t len,
                            uint8_t reply)
 {
@@ -174,12 +261,16 @@ static int raw_echo_answer(const struct raw_binding *b, const uint8_t *msg, uint
 /** `ip_rx` runs with interrupts off, so the list and the queues are touched
  * without taking `net_lock`. Only the sockets of the datagram's network
  * namespace, `ip_ns`, take it. An ICMP datagram socket takes only the echo
- * replies that carry its identifier, without the IP header. */
+ * replies that carry its identifier and whose ICMP checksum holds, without
+ * the IP header, as Linux's icmp_rcv drops a message with a bad checksum
+ * before a ping socket sees it; a raw socket takes the datagram whatever
+ * its checksum, as on Linux. */
 void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
 {
     struct sock_dgram meta;
     struct raw_binding *b;
     uint32_t ihl;
+    int sum_ok = -1; /* the ICMP checksum's verdict, -1 until it is needed */
 
     if (total_len < IP_HDR_SIZE) {
         return;
@@ -201,7 +292,12 @@ void raw_rx(uint8_t proto, const uint8_t *data, uint16_t total_len)
             raw_queue(b, &meta, data, total_len);
         } else if (ihl >= IP_HDR_SIZE && ihl <= total_len &&
                    raw_echo_answer(b, data + ihl, total_len - ihl, ICMP_ECHO_REPLY)) {
-            raw_queue(b, &meta, data + ihl, total_len - ihl);
+            if (sum_ok < 0) {
+                sum_ok = ip_checksum(data + ihl, (uint16_t)(total_len - ihl)) == 0;
+            }
+            if (sum_ok) {
+                raw_queue(b, &meta, data + ihl, total_len - ihl);
+            }
         }
     }
 }
