@@ -16,8 +16,8 @@
  * The test includes dsp.c and vchan.c whole. Playback reaches the model
  * through the mix, which the model plays as 16-bit stereo at 48000 Hz, so a
  * single open at that rate and format reaches it unchanged. The model
- * driver's DMA buffer has two periods, of 256 frames unless a row asks for
- * more; a tick plays the one due, appends its bytes to `m.out`, refills it
+ * driver's DMA buffer has two periods, of 256 frames, unless a row asks for
+ * more of either; a tick plays the one due, appends its bytes to `m.out`, refills it
  * through the stream's `transfer` and calls `period`, as a device's
  * interrupt would. Its capture stream records the pattern in order: a tick
  * hands the next period over through `transfer` and calls `period`. A wait runs
@@ -43,6 +43,7 @@ extern int memcmp(const void *a, const void *b, unsigned long n);
 #define AFMT_S16_BE   0x20 /* a format dsp.c lacks */
 
 #define MODEL_PERIOD_MAX 16384u
+#define MODEL_DMA_MAX    4u    /* the most periods of the model's DMA buffer */
 #define MODEL_MIX_PERIOD 1024u /* bytes of the mix's period, 256 frames */
 #define MODEL_OUT        (1u << 20)
 #define PATTERN          (1u << 18)
@@ -57,8 +58,9 @@ static struct {
     int running;
     uint32_t position; /* frames played since the start */
     uint32_t given;    /* frames transferred since the start */
-    uint8_t dma[2][MODEL_PERIOD_MAX];
-    int next;          /* the DMA period played next */
+    uint8_t dma[MODEL_DMA_MAX][MODEL_PERIOD_MAX];
+    uint32_t periods;  /* periods of the DMA buffer, 2 to MODEL_DMA_MAX */
+    uint32_t next;     /* the DMA period played next */
     uint32_t rate_min; /* the rates it grants */
     uint32_t rate_max;
     uint32_t period_max; /* the largest capture period it grants */
@@ -173,8 +175,8 @@ static void model_tick(void)
         m.out_len += n;
     }
     m.position += n / model_frame();
-    model_fill(m.next);
-    m.next ^= 1;
+    model_fill((int)m.next);
+    m.next = (m.next + 1) % m.periods;
     m.ticks++;
     m.s->period(m.s);
 }
@@ -203,8 +205,8 @@ static int model_open(audio_stream_t *s)
 }
 
 /** Grant the rate within the model's range, a period no larger than its
- * limit for the direction, and a DMA buffer of two periods for playback,
- * eight for capture. */
+ * limit for the direction, and a DMA buffer of `m.periods` periods for
+ * playback, eight for capture. */
 static int model_setup(audio_stream_t *s)
 {
     int in = s->dir == AUDIO_CAPTURE;
@@ -217,12 +219,14 @@ static int model_setup(audio_stream_t *s)
     if (s->period_bytes > (in ? m.period_max : m.play_max)) {
         s->period_bytes = in ? m.period_max : m.play_max;
     }
-    s->device_periods = in ? 8 : 2;
+    s->device_periods = in ? 8 : m.periods;
     return 0;
 }
 
 static int model_start(audio_stream_t *s)
 {
+    uint32_t i;
+
     if (s->dir == AUDIO_CAPTURE) {
         check(s == cap.s && !cap.running, "start of the stopped capture stream");
         check(!masked, "a capture start with interrupts on, outside the open's lock");
@@ -244,8 +248,9 @@ static int model_start(audio_stream_t *s)
     m.given = 0;
     m.next = 0;
     m.starts++;
-    model_fill(0);
-    model_fill(1);
+    for (i = 0; i < m.periods; i++) {
+        model_fill((int)i);
+    }
     return 0;
 }
 
@@ -403,6 +408,7 @@ static void begin(const char *name)
     m.rate_max = 48000;
     m.period_max = MODEL_PERIOD_MAX;
     m.play_max = MODEL_MIX_PERIOD;
+    m.periods = 2;
     audio = &model;
     audio_hw = &model;
     signal_after = -1;
@@ -637,15 +643,15 @@ static void row_ioctls(void)
     check(ask(DSP_SPEED, 48000) == 48000, "48000 Hz again");
     check(call(DSP_SETFRAGMENT, &(int){0x0004000A}) == 0, "four periods of 1024 bytes");
     info = ospace();
-    check(ask(DSP_GETBLKSIZE, 0) == 1024 && info.fragstotal == 8 && info.bytes == 8192,
-          "the buffer is raised to the eight periods the mix's start takes");
+    check(ask(DSP_GETBLKSIZE, 0) == 1024 && info.fragstotal == 9 && info.bytes == 9216,
+          "the buffer is raised to the eight periods the mix's start takes and one more");
     check(call(DSP_SETFRAGMENT, &(int){0x7FFF0004}) == 0, "the most periods of 16 bytes");
     info = ospace();
     check(ask(DSP_GETBLKSIZE, 0) == (int)DSP_PERIOD_MIN &&
               info.fragstotal == (int)(DSP_BUFFER_MAX / DSP_PERIOD_MIN),
           "the smallest period, as many as the buffer holds");
     check(call(DSP_SETFRAGMENT, &(int){0x0001000C}) == 0, "one period of 4096 bytes");
-    check(ospace().fragstotal == 2, "two periods at least");
+    check(ospace().fragstotal == 3, "the two periods the mix's start takes and one more");
     check(call(DSP_SETFRAGMENT, &(int){0x0002001F}) == 0, "periods of 2^31 bytes");
     check(ask(DSP_GETBLKSIZE, 0) == 4096, "the frames of one period of the mix");
     check(ask(DSP_SPEED, 24000) == 24000, "24000 Hz");
@@ -1530,7 +1536,10 @@ static void row_wide_readers(void)
  * cmus playing a 24-bit FLAC at 96000 Hz: FFmpeg's decoder gives 32-bit
  * samples, for which cmus asks S32_LE, and its fragment is a 25th of a
  * second's bytes. At twice the mix's rate each frame of the mix is every
- * second frame of the file, at its top 16 bits.
+ * second frame of the file, at its top 16 bits. The model's DMA buffer has
+ * four periods of the mix, as HDA's start takes, so that the mix's start
+ * takes four of cmus's periods, which fill DSP_BUFFER_MAX: the buffer has a
+ * period more, or cmus, which keeps one free, would wait for the start.
  */
 static void row_cmus_24(void)
 {
@@ -1540,6 +1549,7 @@ static void row_cmus_24(void)
 
     begin("cmus 24-bit");
     m.play_max = 4096;
+    m.periods = 4;
     check(open_dsp(1) == 0, "open O_WRONLY");
     check(ask(DSP_RESET, 0) == 0, "RESET");
     check(ask(DSP_CHANNELS, 2) == 2, "CHANNELS");
@@ -1551,10 +1561,15 @@ static void row_cmus_24(void)
     shift--;
     check(call(DSP_SETFRAGMENT, &(int){(32 << 16) + shift}) == 0, "SETFRAGMENT");
     info = ospace();
-    check(info.fragsize == 16384 && info.fragstotal == 4, "periods of 16384, as many as fit");
+    check(info.fragsize == 16384 && info.fragstotal == 5,
+          "periods of 16384, the four the mix's start takes and one more");
     while (at < n) {
         info = ospace();
         space = (info.fragments - 1) * info.fragsize;
+        if (space <= 0 && !m.running) {
+            check(0, "the start before cmus runs out of room");
+            break;
+        }
         if (space <= 0) {
             model_tick();
             continue;
