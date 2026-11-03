@@ -377,14 +377,14 @@ int n_tty_readable(const struct n_tty *t)
         }
         return t->eof ? 1 : 0;
     } else {
-        unsigned int vmin = t->tio.c_cc[VMIN];
+        unsigned int need = t->tio.c_cc[VMIN];
         if (t->eof) {
             return raw_pending(t) > 0 ? (int)raw_pending(t) : 1;
         }
-        if (vmin == 0) {
-            return 1;
+        if (need == 0 || t->tio.c_cc[VTIME] != 0) {
+            need = 1;
         }
-        return raw_pending(t) >= vmin ? (int)raw_pending(t) : 0;
+        return raw_pending(t) >= need ? (int)raw_pending(t) : 0;
     }
 }
 

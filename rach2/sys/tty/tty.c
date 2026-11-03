@@ -428,6 +428,9 @@ void tty_set_termios(struct tty *t, const struct ktermios *kt, int flush_input)
     wq_wake(t->space_wq, WQ_ROOM);
     if (readable) {
         wq_wake(&t->input_wq, WQ_DATA);
+    } else {
+        /* A read blocked under the old VMIN or VTIME tests the new ones. */
+        wq_wake(&t->input_wq, 0);
     }
     kirq_restore(flags);
 }

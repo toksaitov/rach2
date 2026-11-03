@@ -644,13 +644,18 @@ int main(void)
     n = n_tty_read(&t, buf, sizeof(buf));
     CHECK(n == 3 && buf[0] == 'a' && buf[1] == 'b' && buf[2] == 'c');
 
-    /* VMIN == 0: a polling read never blocks (readable even when empty). */
+    /* VMIN == 0: a read never blocks, but poll, as Linux's does, sees the
+     * terminal readable only once a byte is queued. */
     n_tty_init(&t);
     cap_reset(&cp);
     t.tio.c_lflag &= ~(ICANON | ISIG | ECHO);
     t.tio.c_cc[VMIN] = 0;
+    CHECK(n_tty_readable(&t) == 0);
+    CHECK(n_tty_read(&t, buf, sizeof(buf)) == 0); /* nothing to return */
+    feed(&t, &cp, 'k');
     CHECK(n_tty_readable(&t) == 1);
-    CHECK(n_tty_read(&t, buf, sizeof(buf)) == 0); /* ...but nothing to return */
+    n = n_tty_read(&t, buf, sizeof(buf));
+    CHECK(n == 1 && buf[0] == 'k');
 
     /* A read's own test, n_tty_read_ready, in POSIX's four cases of VMIN
      * and VTIME, with its timer run out or not. VMIN 0, VTIME 0: at once. */
@@ -675,10 +680,10 @@ int main(void)
     t.tio.c_cc[VMIN] = 0;
     t.tio.c_cc[VTIME] = 2;
     CHECK(n_tty_read_timer(&t) == N_TTY_TIMER_READ);
-    CHECK(n_tty_read_ready(&t, 8, 0) == 0 && n_tty_readable(&t) != 0);
+    CHECK(n_tty_read_ready(&t, 8, 0) == 0 && n_tty_readable(&t) == 0);
     CHECK(n_tty_read_ready(&t, 8, 1) != 0);
     feed(&t, &cp, 'a');
-    CHECK(n_tty_read_ready(&t, 8, 0) != 0);
+    CHECK(n_tty_read_ready(&t, 8, 0) != 0 && n_tty_readable(&t) == 1);
     /* VMIN 18, VTIME 1, as kbd's showkey sets them: 18 bytes, or fewer
      * once the timer runs out after one; none waits for the first. */
     n_tty_init(&t);
@@ -689,6 +694,7 @@ int main(void)
     CHECK(n_tty_read_ready(&t, 18, 1) == 0);
     feed(&t, &cp, 'a');
     CHECK(n_tty_read_ready(&t, 18, 0) == 0 && n_tty_read_ready(&t, 18, 1) != 0);
+    CHECK(n_tty_readable(&t) == 1); /* VTIME set: poll wants one byte */
     for (i = 1; i < 18; i++) {
         feed(&t, &cp, 'a');
     }

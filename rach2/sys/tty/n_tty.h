@@ -154,9 +154,11 @@ void n_tty_receive(struct n_tty *t, unsigned char c, n_tty_out_fn out, void *ctx
  * In canonical mode any queued byte is readable, and a pending EOF is too (the
  * read returns 0). In raw mode a pending EOF (a hangup: the master closed) is
  * readable as well, so a blocked reader drains the queue and then returns 0
- * instead of waiting for VMIN bytes that will never arrive; otherwise VMIN 0
- * is always readable and VMIN > 0 is readable once at least VMIN bytes are
- * there. VTIME has no part in it; a read's own test is `n_tty_read_ready`.
+ * instead of waiting for VMIN bytes that will never arrive; otherwise it is
+ * readable with VMIN bytes when VMIN is above 0 and VTIME is 0, and otherwise
+ * with one byte, as Linux's input_available_p has it, so a program that polls
+ * a VMIN 0 terminal for keys sees none until one comes. A read's own test is
+ * `n_tty_read_ready`.
  */
 int n_tty_readable(const struct n_tty *t);
 
