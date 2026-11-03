@@ -749,7 +749,11 @@ static int no_reader(const char *path)
     return errno == ENXIO;
 }
 
-/** A step past its bound is ended, with what it started. */
+/**
+ * A step past its bound is ended, with what it started. The bound holds for
+ * every step and only the artifacts' recipe hangs, so it is long enough that
+ * the steps before it end within it on a loaded host.
+ */
 static void test_bound(void)
 {
     char *goals[] = {"build/images/h.img", NULL};
@@ -760,11 +764,12 @@ static void test_bound(void)
 
     make_tree("bound", tree, sizeof(tree));
     opts_for(&o, tree, "bound", goals);
-    o.seconds = 1;
+    o.seconds = 10;
     run(&o, &r);
     CHECK(r.status == 1, "bound: failed");
-    CHECK(has_line(r.out, "etude prepare: result: failed: artifacts: it ran past its bound of 1 s"),
-          "bound: the result");
+    CHECK(
+        has_line(r.out, "etude prepare: result: failed: artifacts: it ran past its bound of 10 s"),
+        "bound: the result");
     CHECK(no_reader(in(path, sizeof(path), tree, "hang.fifo")), "bound: its recipe ended");
     show(&r, before);
 }
