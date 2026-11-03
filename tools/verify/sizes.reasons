@@ -174,8 +174,8 @@ rach2/sys/network/ip/icmp.c:ping_run params 7 the parameters are one echo's dest
 rach2/sys/network/ip/ip.c:ip_header params 8 the parameters are the fields of one IPv4 header, in the header's order
 rach2/sys/network/ip/ip.c:ip_fragment_to params 7 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
 rach2/sys/network/ip/ip.c:ip_fragment params 9 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
-rach2/sys/network/ip/ip.c:ip_tx_opts params 7 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
-rach2/sys/network/ip/ip.c:ip_tx_opts complexity 30 one datagram's transmit: its route, source, options and fragments in the order the RFC takes them
+rach2/sys/network/ip/ip.c:ip_tx_opts params 8 the parameters are the fields of one packet or descriptor; a struct for them would be filled and unpacked once
+rach2/sys/network/ip/ip.c:ip_tx_opts complexity 26 one datagram's transmit: its route, source, options and fragments in the order the RFC takes them
 
 rach2/sys/network/ip/ipfrag.c:ip_frag_input complexity 28 a parser over an external format, one check per field in the format's order
 

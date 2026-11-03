@@ -986,8 +986,8 @@ static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uint
         net_addr_to6(sock->remote_ip, dst);
         scope = (int)sock->remote_ip.scope;
     }
-    if (!scope && ip6_link_scoped(dst)) {
-        scope = sock->bound_device;
+    if (!scope) {
+        scope = sock->bound_device; /* SO_BINDTODEVICE, for any destination */
     }
     if (opt && opt->ifindex) {
         if (scope && scope != opt->ifindex) {
@@ -1171,7 +1171,9 @@ static int32_t netlink_addr_to_user(const uint8_t *nl, uintptr_t sa_ptr, uintptr
  * the kernel writes (`raw_echo_stamp`), and -EINVAL for any other message, as
  * on Linux; with no address a connected one sends to its peer. A raw send
  * with no address and no peer is -EDESTADDRREQ, and one with an address
- * shorter than a sockaddr_in -EINVAL. A message past one frame leaves in
+ * shorter than a sockaddr_in -EINVAL. A raw or ICMP datagram socket sends
+ * from the address it is bound to, if any, and by the card SO_BINDTODEVICE
+ * names, if any (`ip_tx_opts`). A message past one frame leaves in
  * fragments under the socket's IP_MTU_DISCOVER, up to the largest IPv4
  * payload. An AF_INET6 one sends as `raw6_sendto` says.
  * The copy into `raw_send_buf`, or a block of the heap, runs with interrupts
@@ -1259,8 +1261,9 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
             if (echo) {
                 write16be(msg + 2, ip_checksum(msg, (uint16_t)len));
             }
-            r = ip_tx_opts(0, raw_dst, (uint8_t)entry->sock->protocol, msg, (uint16_t)len,
-                           entry->sock->ip_ttl, entry->sock->pmtudisc);
+            r = ip_tx_opts(entry->sock->local_ip.v4, raw_dst, (uint8_t)entry->sock->protocol, msg,
+                           (uint16_t)len, entry->sock->ip_ttl, entry->sock->pmtudisc,
+                           entry->sock->bound_device);
             raw_count_sent(entry->sock, r, msg, len);
             net_unlock(netflags);
         }
@@ -1542,7 +1545,7 @@ static int32_t connect_echo(struct socket *sock, uintptr_t sa_ptr, int addrlen)
         return -EAFNOSUPPORT;
     }
     held = net_lock();
-    rc = net_addr_source(sock->local_ip, dst, &from);
+    rc = net_addr_source(sock->local_ip, dst, sock->bound_device, &from);
     if (rc == 0) {
         sock->remote_ip = dst;
         sock->remote_port = port;
@@ -1657,7 +1660,7 @@ static int32_t do_connect(int fd, uintptr_t sa_ptr, int addrlen)
     if (entry->sock->type == SOCK_DGRAM) {
         net_addr_t from;
         uint32_t held = net_lock();
-        rc = net_addr_source(entry->sock->local_ip, dst_ip, &from);
+        rc = net_addr_source(entry->sock->local_ip, dst_ip, entry->sock->bound_device, &from);
         if (rc < 0) {
             net_unlock(held);
             return rc;
@@ -1969,7 +1972,8 @@ static int32_t do_getsockname(int fd, uintptr_t sa_ptr, uintptr_t salen_ptr)
     if (entry->sock->tcb) {
         local_ip = entry->sock->tcb->local_ip;
     } else if (net_addr_any(entry->sock->local_ip) && entry->sock->connected) {
-        int rc = net_addr_source(entry->sock->local_ip, entry->sock->remote_ip, &local_ip);
+        int rc = net_addr_source(entry->sock->local_ip, entry->sock->remote_ip,
+                                 entry->sock->bound_device, &local_ip);
         if (rc < 0) {
             net_unlock(flags);
             return rc;

@@ -1959,7 +1959,7 @@ int tcp_connect(struct socket *sock, net_addr_t dst_ip, uint16_t dst_port)
     int rc;
 
     flags = net_lock();
-    rc = net_addr_source(sock->local_ip, dst_ip, &from);
+    rc = net_addr_source(sock->local_ip, dst_ip, 0, &from);
     if (rc < 0) {
         net_unlock(flags);
         return rc;

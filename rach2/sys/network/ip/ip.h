@@ -67,6 +67,10 @@ int ip_is_local(uint32_t ip);
  * interface's address (`net_ip_addr`) when no route reaches `dst`. */
 uint32_t ip_source(uint32_t dst);
 
+/** `ip_source` by the route `netdev_route_on` chooses for `ifindex`, the
+ * card a socket is bound to, or any card for 0. */
+uint32_t ip_source_on(uint32_t dst, int ifindex);
+
 /**
  * Check the IPv4 datagram of `len` bytes at `data` and give it to its
  * protocol. `from_loopback` is nonzero only for a datagram from the loopback
@@ -150,17 +154,20 @@ int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
 /**
  * Send the `plen` bytes at `payload` as a datagram of protocol `proto` from
  * `src` to `dst_ip`, with the hop limit `ttl`, under `pmtudisc`, an
- * IP_PMTUDISC_* value. `src` is one of this machine's addresses, which a
- * connection or a bound socket keeps; 0, or an address that is not this
- * machine's (`ip_is_local`), takes the one `ip_source` chooses.
+ * IP_PMTUDISC_* value, by the card of index `ifindex`, that of the
+ * sender's SO_BINDTODEVICE, or by any card for 0. `src` is one of this
+ * machine's addresses, which a connection or a bound socket keeps; 0, or an
+ * address that is not this machine's (`ip_is_local`), takes the one
+ * `ip_source_on` chooses.
  *
  * A datagram to 127/8 or to an address an interface holds goes onto the
  * loopback ring, whose MTU is `lo`'s, 65536 bytes, so that it never needs
  * fragments; `ip_loop_drain_from` delivers it later. A broadcast, to
  * 255.255.255.255 or a subnet's broadcast address, goes to the all-ones
  * station address by the card on that subnet, or the first card for
- * 255.255.255.255. Any other datagram leaves by the route `netdev_route`
- * chooses, to the next hop's station address from ARP; on a miss an ARP
+ * 255.255.255.255, or by `ifindex` when it is not 0. Any other datagram
+ * leaves by the route `netdev_route_on` chooses for `ifindex`, to the next
+ * hop's station address from ARP; on a miss an ARP
  * request goes out and the datagram waits for the reply in one of
  * IP_HOLD_SLOTS slots, for at most three seconds (ip.c). A datagram past
  * the path MTU (`ip_path_mtu`), or the interface's under
@@ -185,7 +192,7 @@ int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
  * interrupts off (`net_lock` in a system call).
  */
 int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
-               uint8_t ttl, int pmtudisc);
+               uint8_t ttl, int pmtudisc, int ifindex);
 
 /* The interface a held datagram leaves by. */
 struct netdev;

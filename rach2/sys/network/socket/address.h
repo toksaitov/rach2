@@ -26,10 +26,12 @@ int net_addr_equal(net_addr_t a, net_addr_t b);
 void net_addr_to6(net_addr_t a, uint8_t *out);
 /** Whether the address belongs to this machine and is usable now. */
 int net_addr_local(net_addr_t a);
-/** Choose a usable source and route for dst, respecting a bound source.
+/** Choose a usable source and route for dst, respecting a bound source and
+ * the card of index `ifindex` a socket is bound to with SO_BINDTODEVICE, 0
+ * for any, which an IPv6 `dst` with a scope of its own does not consult.
  * Returns zero or a negative errno before a transport allocates state.
  * The caller holds net_lock. */
-int net_addr_source(net_addr_t bound, net_addr_t dst, net_addr_t *src);
+int net_addr_source(net_addr_t bound, net_addr_t dst, int ifindex, net_addr_t *src);
 /** Whether the card a datagram to `dst` leaves by reports its link down,
  * so that what it refuses says nothing of the path; 0 for an address no
  * card routes to and for one of this machine's. The caller holds net_lock. */

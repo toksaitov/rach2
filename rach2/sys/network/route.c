@@ -131,6 +131,11 @@ static struct netdev *dev_of(int index)
 
 struct netdev *netdev_route(uint32_t dst, uint32_t *via)
 {
+    return netdev_route_on(dst, 0, via);
+}
+
+struct netdev *netdev_route_on(uint32_t dst, int ifindex, uint32_t *via)
+{
     struct netdev_rt r, best;
     struct netdev *out = 0;
     int n;
@@ -139,13 +144,23 @@ struct netdev *netdev_route(uint32_t dst, uint32_t *via)
     for (n = 0; netdev_route_at(n, &r); n++) {
         struct netdev *nd = dev_of(r.ifindex);
 
-        if (!nd || !nd->up || (dst & r.mask) != r.dst) {
+        if (!nd || !nd->up || (dst & r.mask) != r.dst || (ifindex && r.ifindex != ifindex)) {
             continue;
         }
         if (!out || r.mask > best.mask || (r.mask == best.mask && r.metric < best.metric)) {
             best = r;
             out = nd;
         }
+    }
+    if (!out && ifindex) {
+        /* Linux's rule for a socket bound to a card: with no route of the
+         * card's, the destination is taken to be on its link. */
+        out = dev_of(ifindex);
+        if (out && out->up) {
+            *via = dst;
+            return out;
+        }
+        out = 0;
     }
     if (!out) {
         netdev_route_misses++;

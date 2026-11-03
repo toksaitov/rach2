@@ -230,13 +230,15 @@ static struct netdev the_iface = {
 static struct netdev second_iface;
 static int ifaces = 1;
 
-static int route_available = 1; /* netdev_route finds a route while set */
-static unsigned route_queries;  /* the routes netdev_route was asked for */
+static int route_available = 1; /* netdev_route_on finds a route while set */
+static unsigned route_queries;  /* the routes netdev_route_on was asked for */
 
-/** Return the interface a datagram to `dst` leaves by, with `dst` itself as
- * the next hop in `*via`, or NULL when `route_available` is clear. */
-struct netdev *netdev_route(uint32_t dst, uint32_t *via)
+/** Return the interface a datagram to `dst` leaves by, whatever `ifindex`,
+ * with `dst` itself as the next hop in `*via`, or NULL when
+ * `route_available` is clear. */
+struct netdev *netdev_route_on(uint32_t dst, int ifindex, uint32_t *via)
 {
+    (void)ifindex;
     route_queries++;
     *via = dst;
     return route_available ? &the_iface : 0;
@@ -751,12 +753,12 @@ static void test_tx_errors(void)
           "fragments",
           ip_tx(0x0A000202u, IP_PROTO_ICMP, big, 1490, IP_TTL_DEFAULT) == 0 && tx_frames == 4);
     CHECK("but under IP_PMTUDISC_DO it is -EMSGSIZE",
-          ip_tx_opts(0, 0x0A000202u, IP_PROTO_ICMP, big, 1490, IP_TTL_DEFAULT, IP_PMTUDISC_DO) ==
+          ip_tx_opts(0, 0x0A000202u, IP_PROTO_ICMP, big, 1490, IP_TTL_DEFAULT, IP_PMTUDISC_DO, 0) ==
               -EMSGSIZE);
     CHECK("and reaches no driver", tx_frames == 4);
     CHECK("under IP_PMTUDISC_DONT a datagram within the MTU leaves without DF",
-          ip_tx_opts(0, 0x0A000202u, IP_PROTO_ICMP, big, 100, IP_TTL_DEFAULT, IP_PMTUDISC_DONT) ==
-                  0 &&
+          ip_tx_opts(0, 0x0A000202u, IP_PROTO_ICMP, big, 100, IP_TTL_DEFAULT, IP_PMTUDISC_DONT,
+                     0) == 0 &&
               tx_frames == 5 && read16be(ip_tx_buf + 6) == 0);
     arp_known = 0;
 }

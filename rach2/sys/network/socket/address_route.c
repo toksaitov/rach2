@@ -27,7 +27,7 @@ int net_addr_local(net_addr_t a)
 }
 
 /** Resolve a route and source before a connect or checksum calculation. */
-int net_addr_source(net_addr_t bound, net_addr_t dst, net_addr_t *src)
+int net_addr_source(net_addr_t bound, net_addr_t dst, int ifindex, net_addr_t *src)
 {
     struct netdev *nd;
     uint8_t via[16], from[16];
@@ -36,7 +36,7 @@ int net_addr_source(net_addr_t bound, net_addr_t dst, net_addr_t *src)
     if (!net_addr_any(bound) && bound.family != dst.family)
         return -ENETUNREACH;
     if (dst.family == AF_INET6) {
-        nd = ip6_route(dst.v6, (int)dst.scope, via);
+        nd = ip6_route(dst.v6, dst.scope ? (int)dst.scope : ifindex, via);
         if (!nd)
             return -ENETUNREACH;
         if (!net_addr_any(bound)) {
@@ -53,9 +53,9 @@ int net_addr_source(net_addr_t bound, net_addr_t dst, net_addr_t *src)
         *src = net_addr6(from, nd->loopback ? dst.scope : (uint32_t)nd->index);
         return 0;
     }
-    if (!ip_is_local(dst.v4) && !netdev_route(dst.v4, &via4))
+    if (!ip_is_local(dst.v4) && !netdev_route_on(dst.v4, ifindex, &via4))
         return -ENETUNREACH;
-    *src = net_addr_any(bound) ? net_addr4(ip_source(dst.v4)) : bound;
+    *src = net_addr_any(bound) ? net_addr4(ip_source_on(dst.v4, ifindex)) : bound;
     if (!net_addr_local(*src))
         return -EADDRNOTAVAIL;
     if (IP_IS_LOOPBACK(src->v4) && !ip_is_local(dst.v4))

@@ -76,7 +76,12 @@ The kernel stores the named interface's index.
 Getting it returns that interface's name when set, or an empty string
 when clear, including the terminating
 null byte if space permits.
-The setting does not restrict socket traffic to an interface.
+A UDP, raw or ICMP datagram socket bound to an interface sends by it
+alone: only its routes are looked up, and a destination none of them
+covers is taken to be on its link, as on Linux.
+An address of the machine's own is still reached through loopback.
+The setting does not restrict what the socket receives, and a TCP
+socket does not consult it.
 .It Dv SO_RCVBUF
 Set the bytes a datagram socket's receive queue may hold, as Linux does:
 the value, at most 212992, is doubled to cover each datagram's record, and

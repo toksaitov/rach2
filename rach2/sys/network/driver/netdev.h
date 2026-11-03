@@ -395,6 +395,17 @@ struct netdev *netdev_by_name(const char *name);
  */
 struct netdev *netdev_route(uint32_t dst, uint32_t *via);
 
+/**
+ * `netdev_route` among the routes of the card of index `ifindex` alone, as
+ * for a socket bound to it with SO_BINDTODEVICE; any card's when it is 0.
+ * When none of the card's routes covers `dst`, the card is returned with
+ * `dst` as the next hop, as Linux takes the destination of a bound socket
+ * to be on the link when the table has no route for it there. NULL when no
+ * route covers `dst` with `ifindex` 0, or when `ifindex` names no card that
+ * is up; `lo` is no card, so a socket bound to it reaches only itself.
+ */
+struct netdev *netdev_route_on(uint32_t dst, int ifindex, uint32_t *via);
+
 /* A route as a reader of the table sees it: packets for `dst`/`mask` leave
  * by the interface of index `ifindex`, to `gw`, or straight to themselves
  * on the link when it is 0, from `src`. `kind` is NETDEV_RT_LINK for the

@@ -1454,9 +1454,10 @@ int main(void)
 }
 
 /** Supply an IPv4 source for the fixture's immediate handshake. */
-int net_addr_source(net_addr_t bound, net_addr_t dst, net_addr_t *src)
+int net_addr_source(net_addr_t bound, net_addr_t dst, int ifindex, net_addr_t *src)
 {
     (void)dst;
+    (void)ifindex;
     *src = bound;
     return 0;
 }

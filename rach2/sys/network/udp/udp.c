@@ -264,6 +264,8 @@ static int udp_route6(const struct socket *sock, net_addr_t *dst, const struct n
             return -ENODEV;
         }
         dst->scope = (uint32_t)opt->ifindex;
+    } else if (!dst->scope && sock->bound_device) {
+        dst->scope = (uint32_t)sock->bound_device; /* SO_BINDTODEVICE */
     } else if (!dst->scope && ip6_is_multicast(dst->v6) && sock->mif6) {
         dst->scope = (uint32_t)sock->mif6; /* a group of wider scope */
     }
@@ -274,9 +276,9 @@ static int udp_route6(const struct socket *sock, net_addr_t *dst, const struct n
         if (!net_addr_local(src)) {
             return -EINVAL;
         }
-        return net_addr_source(src, *dst, from);
+        return net_addr_source(src, *dst, 0, from);
     }
-    return net_addr_source(sock->local_ip, *dst, from);
+    return net_addr_source(sock->local_ip, *dst, 0, from);
 }
 
 /**
@@ -313,7 +315,7 @@ int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, cons
     if (dst_ip.family == AF_INET6) {
         r = udp_route6(sock, &dst_ip, opt, &from);
     } else {
-        r = net_addr_source(sock->local_ip, dst_ip, &from);
+        r = net_addr_source(sock->local_ip, dst_ip, sock->bound_device, &from);
     }
     if (r < 0) {
         net_unlock(flags);
@@ -347,8 +349,8 @@ int udp_tx(const struct socket *sock, net_addr_t dst_ip, uint16_t dst_port, cons
 
             write16be(buf + 6, sum ? sum : 0xffff);
         }
-        r = ip_tx_opts(from.v4, dst_ip.v4, IP_PROTO_UDP, buf, udp_len, sock->ip_ttl,
-                       sock->pmtudisc);
+        r = ip_tx_opts(from.v4, dst_ip.v4, IP_PROTO_UDP, buf, udp_len, sock->ip_ttl, sock->pmtudisc,
+                       sock->bound_device);
     }
     ip_ns = was;
     if (r == 0 && dst_ip.family == AF_INET6) {

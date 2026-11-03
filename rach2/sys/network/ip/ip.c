@@ -449,25 +449,30 @@ int ip_is_local(uint32_t ip)
 
 uint32_t ip_source(uint32_t dst)
 {
+    return ip_source_on(dst, 0);
+}
+
+uint32_t ip_source_on(uint32_t dst, int ifindex)
+{
     uint32_t via;
     struct netdev *out;
 
     if (IP_IS_LOOPBACK(dst)) {
         return IP_LOOPBACK_ADDR;
     }
-    out = netdev_route(dst, &via);
+    out = netdev_route_on(dst, netdev_owns(dst) ? 0 : ifindex, &via);
     return out ? netdev_source(out, via) : net_ip_addr;
 }
 
 int ip_tx(uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen, uint8_t ttl)
 {
-    return ip_tx_opts(0, dst_ip, proto, payload, plen, ttl, IP_PMTUDISC_WANT);
+    return ip_tx_opts(0, dst_ip, proto, payload, plen, ttl, IP_PMTUDISC_WANT, 0);
 }
 
 int ip_tx_from(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
                uint8_t ttl)
 {
-    return ip_tx_opts(src, dst_ip, proto, payload, plen, ttl, IP_PMTUDISC_WANT);
+    return ip_tx_opts(src, dst_ip, proto, payload, plen, ttl, IP_PMTUDISC_WANT, 0);
 }
 
 /** Write a 20-byte header into `buf`: a datagram of `total_len` bytes with
@@ -589,6 +594,41 @@ static int ip_fragment(struct netdev *out, uint32_t route_ip, uint32_t src, uint
 }
 
 /**
+ * Choose the card a datagram from `src` to `dst` leaves by, as `ip_tx_opts`
+ * says, into `*out`, NULL for the loopback ring, and its next hop into
+ * `*hop`. An address of this machine's is reached through the loopback ring
+ * whatever card `ifindex` names, as on Linux. Returns 0, -EINVAL for a
+ * source in 127/8 and a destination that is not this machine's, or
+ * -ENETUNREACH with no route, counted in OutNoRoutes.
+ */
+static int ip_tx_route(uint32_t src, uint32_t dst, int ifindex, struct netdev **out, uint32_t *hop)
+{
+    if (IP_IS_LOOPBACK(dst)) {
+        *out = 0;
+        *hop = dst;
+        return 0;
+    }
+    if (IP_IS_LOOPBACK(src) && !netdev_owns(dst)) {
+        return -EINVAL;
+    }
+    if (netdev_is_broadcast(dst)) {
+        *out = ifindex ? netdev_route_on(dst, ifindex, hop) : ip_broadcast_iface(dst);
+        *hop = dst;
+        if (!ifindex || *out) {
+            return 0;
+        }
+    } else {
+        *out = netdev_route_on(dst, netdev_owns(dst) ? 0 : ifindex, hop);
+        if (*out) {
+            return 0;
+        }
+        klog(KLOG_WARN, "ip", "tx: no route: refused a datagram no interface reaches");
+    }
+    net_mib.ip_out_no_routes++;
+    return -ENETUNREACH;
+}
+
+/**
  * The interface is chosen first, since its address is the datagram's source
  * and the only address a reply can come back to; a datagram to 127/8 needs
  * no route. A datagram to this machine never touches ARP or the wire, and
@@ -608,13 +648,13 @@ static int ip_fragment(struct netdev *out, uint32_t route_ip, uint32_t src, uint
  * ENOBUFS.
  */
 int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payload, uint16_t plen,
-               uint8_t ttl, int pmtudisc)
+               uint8_t ttl, int pmtudisc, int ifindex)
 {
     uint32_t total_len = (uint32_t)IP_HDR_SIZE + plen;
     uint32_t route_ip, mtu;
     uint16_t df;
     struct netdev *out;
-    int local;
+    int local, r;
 
     if (plen > IP_PAYLOAD_MAX) {
         klog(KLOG_WARN, "ip", "tx: payload of %d bytes is too large, refused", (int)plen);
@@ -628,21 +668,9 @@ int ip_tx_opts(uint32_t src, uint32_t dst_ip, uint8_t proto, const uint8_t *payl
         return -ENETUNREACH;
     }
 
-    if (IP_IS_LOOPBACK(dst_ip)) {
-        out = 0;
-        route_ip = dst_ip;
-    } else if (IP_IS_LOOPBACK(src) && !netdev_owns(dst_ip)) {
-        return -EINVAL;
-    } else if (netdev_is_broadcast(dst_ip)) {
-        out = ip_broadcast_iface(dst_ip);
-        route_ip = dst_ip;
-    } else {
-        out = netdev_route(dst_ip, &route_ip);
-        if (!out) {
-            net_mib.ip_out_no_routes++;
-            klog(KLOG_WARN, "ip", "tx: no route: refused a datagram no interface reaches");
-            return -ENETUNREACH;
-        }
+    r = ip_tx_route(src, dst_ip, ifindex, &out, &route_ip);
+    if (r < 0) {
+        return r;
     }
     if (src == 0 || !ip_is_local(src)) {
         src = IP_IS_LOOPBACK(dst_ip) ? IP_LOOPBACK_ADDR

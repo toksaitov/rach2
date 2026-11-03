@@ -845,8 +845,9 @@ int main(void)
 }
 
 /** Use the first model interface for an unbound IPv4 datagram socket. */
-int net_addr_source(net_addr_t bound, net_addr_t dst, net_addr_t *src)
+int net_addr_source(net_addr_t bound, net_addr_t dst, int ifindex, net_addr_t *src)
 {
+    (void)ifindex;
     *src = net_addr_any(bound) ? net_addr4(ip_source(dst.v4)) : bound;
     return 0;
 }

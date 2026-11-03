@@ -6,8 +6,9 @@
 #include "network/driver/netdev.h"
 
 /** Resolve every model peer through the fixture's one IPv4 interface. */
-int net_addr_source(net_addr_t bound, net_addr_t dst, net_addr_t *src)
+int net_addr_source(net_addr_t bound, net_addr_t dst, int ifindex, net_addr_t *src)
 {
+    (void)ifindex;
     *src = net_addr_any(bound) ? net_addr4(ip_source(dst.v4)) : bound;
     return 0;
 }
