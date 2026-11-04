@@ -4,7 +4,7 @@
 # and on this computer, as the Resources section of AGENTS.md allows.
 # release.sh and stop.sh run it, and the manager whenever space runs low.
 #
-# Usage: sweep.sh
+# Usage: sweep.sh [-a]
 #
 # It runs `tidy` from lib.sh in this checkout, which removes its landed
 # worktrees and branches that no process and no run evidence or loop state
@@ -29,7 +29,9 @@
 # `build/tests` unchanged for two weeks. The caches, the build copies of the
 # release and of Windows, and the tooling work disks stay. Each removal, and
 # each step's total, is a line on stdout. Each step that reaches the host stops
-# itself after ten minutes.
+# itself after ten minutes. With -a, which stop.sh passes once nothing runs,
+# what has lain unused for a day or less goes too, so that the checks of age of
+# a day count for nothing; the two weeks of `build/runs` and `build/tests` stay.
 
 TESTING=testing
 
@@ -58,7 +60,7 @@ outputs()
         printf '%s\n' "$stale"
         for h in $HOMES; do
             b=$h/rach2/build
-            printf '%s\n' "[ -s $b/flow/claude/session ] || stale 1 $b/images/* $b/x86_64/images/*" \
+            printf '%s\n' "[ -s $b/flow/claude/session ] || stale $days $b/images/* $b/x86_64/images/*" \
                 "$b/i686/images/* $b/tests/* $b/x86_64/tests/* $b/i686/tests/* $b/tmp/*" |
                 paste -s -d ' ' -
             echo "stale 14 $b/runs/*"
@@ -69,7 +71,8 @@ outputs()
         printf '%s\n' "$stale"
         echo 'b=/d/rach2/build'
         # shellcheck disable=SC2016 # the dollars are the remote shell's
-        echo 'stale 1 $b/tests/rach2-collection.* $b/tooling/job-* $b/images/cases/* $b/x86_64/images/cases/* $b/tmp/*'
+        echo "stale $days \$b/tests/rach2-collection.* \$b/tooling/job-* \$b/images/cases/*" \
+            '$b/x86_64/images/cases/* $b/tmp/*'
     } | perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
         'bash -s' 2>&1 | tr -d '\000\r' | sed 's/^/windows: /'
     eval "$stale"
@@ -93,6 +96,10 @@ clones()
 
 main()
 {
+    age=86400 days=1
+    if [ "${1:-}" = -a ]; then
+        age=0 days=0
+    fi
     repo=$(cd "$(dirname "$0")/../.." && pwd)
     cd "$repo" || exit 1
     git fetch -q origin || echo "sweep: the fetch failed; master's stems may be old"
@@ -105,7 +112,7 @@ main()
     clones
     stems=$(stems origin/master | tr '\n' ' ')
     # shellcheck disable=SC2086 # the stems are a word each
-    perl "$(dirname "$0")/scratch.pl" -d "$repo/build/tmp" 86400 $stems 2>&1 |
+    perl "$(dirname "$0")/scratch.pl" -d "$repo/build/tmp" "$age" $stems 2>&1 |
         sed "s/^/$(hostname -s): /"
     dirs='-d /tmp'
     for h in $HOMES; do
@@ -113,7 +120,7 @@ main()
     done
     perl -e 'alarm shift; exec @ARGV' 600 \
         ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
-        "MSYS_NO_PATHCONV=1 wsl.exe -u root -- perl - $dirs 86400 $stems" \
+        "MSYS_NO_PATHCONV=1 wsl.exe -u root -- perl - $dirs $age $stems" \
         < "$(dirname "$0")/scratch.pl" 2>&1 | sed "s/^/$TESTING: /"
     # shellcheck disable=SC2119 # leftovers takes -n, not the sweep's arguments
     leftovers 2>&1 | grep -v ': leftovers: keeps '

@@ -156,13 +156,13 @@ landed()
 # clone's .claude/worktrees or build/worktrees goes when its HEAD has landed,
 # or `closed_task` finds its task closed, since a rebased task's commit is not
 # master's; no process has its working directory in it, as a loop has in the
-# worktree it runs in, and `git worktree remove` takes it without force, which it
-# refuses for a worktree with changes, untracked files or a lock, as Claude
+# worktree it runs in, and `git worktree remove` takes it without force, which
+# it refuses for a worktree with changes, untracked files or a lock, as Claude
 # Code keeps on a helper's worktree while the helper runs, and only when
 # `disposable` finds nothing ignored in it but build output, which goes with
-# it. A branch goes when it has landed, unless it is master or a branch
-# checked out here or in a worktree, which git refuses to delete. Each
-# removal is logged.
+# it. A branch goes when it has landed, unless it is master or a branch checked
+# out here or in a worktree, which git refuses to delete. Each removal is
+# logged.
 tidy()
 {
     top=$(git rev-parse --show-toplevel) || return 1
@@ -200,21 +200,33 @@ closed_task()
 # hold run evidence and loop state, the compilation database and clangd's
 # cache, the vendored projects' trees and stamps (not the GNU downloads), the
 # krffs files that make writes from the committed key pairs, Python's caches
-# Finder's .DS_Store files, and a Doom WAD equal to the main working tree's.
-# Another key, a password, any other WAD, a person's notes or any file under
-# build/runs or build/flow keeps the worktree.
+# Finder's .DS_Store files, and a Doom WAD or GNU downloads equal to the main
+# working tree's. Another key, a password, any other WAD, a person's notes or
+# any file under build/runs or build/flow keeps the worktree.
 disposable()
 {
     ignored=$(git -C "$1" ls-files --others --ignored --exclude-standard --directory) || return 1
+    main=$(primary "$1")
     wad=ports/doom/doom1.wad
-    if cmp -s "$1/$wad" "$(primary "$1")/$wad"; then
+    if cmp -s "$1/$wad" "$main/$wad"; then
         ignored=$(printf '%s\n' "$ignored" | grep -v -x "$wad")
+    fi
+    if downloaded "$1" "$main"; then
+        ignored=$(printf '%s\n' "$ignored" | grep -v '^vendor/gnu/downloads')
     fi
     ! printf '%s\n' "$ignored" |
         grep -v -E '^(build/|\.cache/|compile_commands\.json$|vendor/)|(^|/)(__pycache__/|\.DS_Store$)|^krffs/(authorized_keys|recovery_authorized_keys|test_authorized_keys|shadow|rach2_(demo|test)_password)$' |
         grep -q . &&
         ! printf '%s\n' "$ignored" | grep -q '^vendor/gnu/downloads' &&
         ! find "$1/build/runs" "$1/build/flow" ! -type d 2> /dev/null | grep -q .
+}
+
+# downloaded W MAIN: succeed when MAIN has each file of the GNU downloads of W.
+downloaded()
+{
+    (cd "$1/vendor/gnu/downloads" 2> /dev/null && find . -type f) | while read -r f; do
+        cmp -s "$1/vendor/gnu/downloads/$f" "$2/vendor/gnu/downloads/$f" || exit 1
+    done
 }
 
 # cwds: print the working directory of each process that this user may read,
@@ -286,13 +298,13 @@ leftovers()
     done
     out=$({ cat "$here/leftovers.pl"; echo __END__; printf '%s\n' "$text"; } |
         perl -e 'alarm shift; exec @ARGV' 600 ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" \
-        "MSYS_NO_PATHCONV=1 wsl.exe -u root -- perl - ${1:-} -l -m $master$keep 86400 $HOMES" 2>&1)
+        "MSYS_NO_PATHCONV=1 wsl.exe -u root -- perl - ${1:-} -l -m $master$keep ${age:-86400} $HOMES" 2>&1)
     rc=$?
     printf '%s\n' "$out" | sed "s/^/$TESTING: /"
     [ "$rc" -eq 0 ] || echo "$TESTING: leftovers: failed with status $rc"
     out=$({ cat "$here/leftovers.pl"; echo __END__; printf '%s\n' "$text"; } |
         perl -e 'alarm shift; exec @ARGV' 600 perl - ${1:+"$1"} -m "$master" \
-        -r "$(git rev-parse --absolute-git-dir)" 86400 "$HOME/Desktop" 2>&1)
+        -r "$(git rev-parse --absolute-git-dir)" "${age:-86400}" "$HOME/Desktop" 2>&1)
     rc=$?
     printf '%s\n' "$out" | sed "s/^/$(hostname -s): /"
     [ "$rc" -eq 0 ] || echo "$(hostname -s): leftovers: failed with status $rc"

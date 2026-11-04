@@ -43,10 +43,10 @@
 # * a copy's worktree is not locked, no failed test's directory in it is kept
 #   for an open issue or a process, git status finds nothing uncommitted or
 #   untracked in it, every file git ignores in it is build output that the
-#   build makes again or a Doom WAD that the main working tree has too, and a
-#   merge of its HEAD into SHA would leave SHA's tree as it is, unless it is a
-#   linked worktree on a branch, which keeps its commits when the worktree
-#   goes;
+#   build makes again, or a Doom WAD or GNU download that the main working
+#   tree has too, and a merge of its HEAD into SHA would leave SHA's tree as
+#   it is, unless it is a linked worktree on a branch, which keeps its commits
+#   when the worktree goes;
 # * a copy with a repository of its own, which goes with it, has no stash and
 #   no linked worktree, and a merge of each of its refs into SHA, but the
 #   remote-tracking ones, whose work the remote has, would leave SHA's tree
@@ -221,14 +221,21 @@ sub git {
     return $out;
 }
 
-# wad COPY: whether the Doom WAD of the worktree COPY is one that the main
-# working tree around COPY has too, so that the copy can go.
-sub wad {
-    my $copy = shift;
-    my $wad = 'ports/doom/doom1.wad';
+# spare COPY PATH: whether PATH, as git ls-files prints an ignored file or
+# directory of the worktree COPY, is the Doom WAD or the GNU downloads and the
+# main working tree around COPY has each file of it, so that the copy can go.
+sub spare {
+    my ($copy, $path) = @_;
+    return 0 unless $path =~ m{^(?:ports/doom/doom1\.wad$|vendor/gnu/downloads)};
     (my $main = $copy) =~ s{/(?:build|\.claude)/worktrees/[^/]+$}{} or return 0;
-    my ($a, $b) = (-s "$copy/$wad", -s "$main/$wad");
-    return defined $a && defined $b && $a == $b;
+    $path =~ s{/$}{};
+    my $same = 1;
+    find({ no_chdir => 1, wanted => sub {
+        return unless -f;
+        my ($a, $b) = (-s _, -s $main . substr($_, length $copy));
+        $same = 0 unless defined $b && $a == $b;
+    } }, "$copy/$path");
+    return $same;
 }
 
 # built PATH: whether PATH, as git ls-files prints an ignored file or
@@ -273,7 +280,7 @@ sub unmerged {
     return 'git cannot list its ignored files' unless defined $ignored;
     for (split /\0/, $ignored) {
         return "its ignored $_ is not build output"
-            unless built($_) or ($_ eq 'ports/doom/doom1.wad' and wad($p));
+            unless built($_) or spare($p, $_);
     }
     return if $own ne $common and defined git($p, {}, 'symbolic-ref', '-q', 'HEAD');
     my @tips = ($head);

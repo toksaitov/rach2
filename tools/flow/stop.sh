@@ -1,5 +1,5 @@
 #!/bin/sh
-# shellcheck disable=SC2016,SC2009,SC2028 # scripts for other shells; ps sees all
+# shellcheck disable=SC2016,SC2009,SC2028 # other shells' scripts; ps sees all
 #
 # stop.sh: stop the factory on every machine and leave nothing of it behind.
 #
@@ -12,10 +12,10 @@
 # left running on the Mac, in WSL and on Windows: QEMU guests, test runs, the
 # worker scripts and the board's watches. On Windows it looks only at programs
 # under D:\rach2, so that Hyper-V and its machines are never touched. Then it
-# brings the board up to date, runs sweep.sh, and prints what is still there:
-# a line `stop: left: MACHINE: WHAT` for each process and each claim of the
-# admission ledger. It ends with `stop: everything is stopped` and status 0,
-# or `stop: N left` and status 1.
+# brings the board up to date, runs sweep.sh, with -a unless a release still
+# runs, and prints what is still there: a line `stop: left: MACHINE: WHAT` for
+# each process and each claim of the admission ledger. It ends with
+# `stop: everything is stopped` and status 0, or `stop: N left` and status 1.
 #
 # -n changes nothing and prints only what runs now, in the same form. A running
 # release is left alone and counts as left, since it costs hours to repeat;
@@ -180,5 +180,9 @@ stragglers
 [ -z "$github" ] || runners
 sh "$here/board.sh" 'done' > /dev/null 2>&1 || echo "stop: board.sh done failed"
 sh "$here/board.sh" archive > /dev/null 2>&1 || echo "stop: board.sh archive failed"
-sh "$here/sweep.sh"
+if running | grep -q 'release\.sh'; then
+    sh "$here/sweep.sh"
+else
+    sh "$here/sweep.sh" -a
+fi
 left
