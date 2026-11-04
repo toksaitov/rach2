@@ -157,7 +157,7 @@ runfiles()
             END {
                 gib = total / 1073741824
                 printf "github: %.2f GiB of run files", gib
-                print gib > 1 ? "; warning: above 1 GiB" : ""
+                print (gib > 1 ? "; warning: above 1 GiB" : "")
             }'
     else
         echo "github: run files: did not answer"

@@ -270,8 +270,9 @@ send()
 # send_git: make the copy's `.git` a repository of its own at this worktree's
 # commit. A worktree's `.git` is a file that names its git directory on this
 # machine, a path the host does not have. The copy gets instead the shared
-# repository, without its worktrees' records or the main tree's HEAD and
-# index, and then this worktree's HEAD and index. The repository goes as the
+# repository, without its worktrees' records, its stash, whose one home is
+# this clone, or the main tree's HEAD and index, and then this worktree's HEAD
+# and index. The repository goes as the
 # directory a symbolic link named `.git` leads to, which rsync's -k sends as
 # a directory, so that it replaces a `.git` file an older sync left there.
 send_git()
@@ -281,7 +282,8 @@ send_git()
     mkdir "$hold/stage"
     ln -s "$common" "$hold/stage/.git"
     send -k --filter='+ /.git/' --filter='- /.git/HEAD' \
-        --filter='- /.git/index' --filter='- /.git/worktrees/' --filter='- /*' \
+        --filter='- /.git/index' --filter='- /.git/worktrees/' \
+        --filter='- /.git/refs/stash' --filter='- /.git/logs/refs/stash' --filter='- /*' \
         "$hold/stage/" "$HOST:$DEST/"
     send "$gitdir/HEAD" "$gitdir/index" "$HOST:$DEST/.git/"
 }
@@ -297,7 +299,8 @@ sync_tree()
             "$REPO/" "$HOST:$DEST/"
         send_git
     else
-        send --filter='P /ports/doom/doom1.wad' \
+        send --filter='- /.git/refs/stash' --filter='- /.git/logs/refs/stash' \
+            --filter='P /ports/doom/doom1.wad' \
             --filter='+ /ports/doom/doom1.wad' --filter=':- .gitignore' \
             "$REPO/" "$HOST:$DEST/"
     fi
