@@ -287,7 +287,7 @@ leftovers()
         --json title,body,comments --jq '.[] | .title, .body, .comments[].body') ||
         { echo "leftovers: the open issues cannot be read"; return 1; }
     keep=
-    # shellcheck disable=SC2016,SC2046 # sed's dollar; the copies are a word each
+    # shellcheck disable=SC2016,SC2046 # sed's dollar; a copy is a word each
     for c in /home/testing/rach2 $(sed -n 's/^COPY=\$OWNER/\/home\/testing\/rach2/p
         s/^PREPARE_COPY=\$OWNER/\/home\/testing\/rach2/p' "$here/release.sh") \
         $(for f in "$(primary .)"/build/flow/*/copy; do
