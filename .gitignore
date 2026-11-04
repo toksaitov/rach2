@@ -20,6 +20,8 @@ build/
 # Worktrees Claude Code makes for its subagents; each is a checkout of this
 # repository, not part of it.
 .claude/worktrees/
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
 
 # Compiled Python that an interpreter run without -B writes beside a script;
 # the tests run Python with -B, and a stray one must not stop a loop's clone
