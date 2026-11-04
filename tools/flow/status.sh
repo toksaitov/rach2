@@ -5,7 +5,8 @@
 # Usage: status.sh
 #        status.sh sizes
 #
-# It moves every closed card to Done with `board.sh done`, then prints
+# It moves every closed card to Done with `board.sh done`, archives those of
+# finished milestones with `board.sh archive`, then prints
 # master's newest commit; the open milestones, with their branches,
 # their counts of tasks and the tasks In progress with their assignees, as
 # `board.sh milestones` gives them; a line for each worker loop that
@@ -41,6 +42,10 @@
 # malformed has a line `NAME KIND: did not answer`; the verdict is then
 # `resources: unknown`, or a low or critical one that ends `; unknown: NAME
 # KIND ... did not answer`.
+#
+# After the verdict comes the total of the run files that GitHub keeps for the
+# repository, the artifacts of full.yml, with a warning above 1 GiB, since the
+# owner's account must not be seen to abuse GitHub's storage.
 #
 # `sizes` prints the sizes of the build trees, the GNU caches, the ci checkouts,
 # the loops' state, the copies under `build/worktrees` and /tmp on the testing
@@ -142,13 +147,31 @@ resources()
         }'
 }
 
+# runfiles: print the total the header names, or that it cannot be read.
+runfiles()
+{
+    if bytes=$(gh api --paginate "repos/$REPO/actions/artifacts?per_page=100" \
+        --jq '.artifacts[] | select(.expired | not) | .size_in_bytes' 2> /dev/null); then
+        printf '%s\n' "$bytes" | awk '
+            { total += $1 }
+            END {
+                gib = total / 1073741824
+                printf "github: %.2f GiB of run files", gib
+                print gib > 1 ? "; warning: above 1 GiB" : ""
+            }'
+    else
+        echo "github: run files: did not answer"
+    fi
+}
+
 # sizes: print the sizes the header names, in GiB, largest first.
 sizes()
 {
     echo "== sizes on the testing host, in GiB"
-    printf '%s\n' 'du -sxk /home/*/rach2*/build /home/*/rach2*/build/vendor/gnu \
-        /home/*/rach2*/build/x86_64/vendor/gnu /home/*/rach2/build/flow \
-        /home/*/rach2/build/worktrees/* /home/ghrunner/rach2-ci-*/_work /tmp 2> /dev/null | sort -rn |
+    # du counts a directory once, so the trees inside build have a du of their own.
+    printf '%s\n' '{ du -sxk /home/*/rach2*/build /home/ghrunner/rach2-ci-*/_work /tmp
+        du -sxk /home/*/rach2*/build/vendor/gnu /home/*/rach2*/build/x86_64/vendor/gnu
+        du -sxk /home/*/rach2/build/flow /home/*/rach2/build/worktrees/*; } 2> /dev/null | sort -rn |
         awk '"'"'{ printf "%7.1f %s\n", $1 / 1048576, $2 }'"'" |
         ssh -o BatchMode=yes -o ConnectTimeout=10 "$TESTING" 'wsl.exe -u root -- sh -s' 2>&1
     echo "== sizes here, in GiB"
@@ -192,6 +215,7 @@ fi
 echo "== master $(git ls-remote "https://github.com/$REPO" refs/heads/master | cut -c 1-8)  $(date -u '+%F %T') UTC"
 echo "== milestones"
 sh "$(dirname "$0")/board.sh" 'done' > /dev/null 2>&1 || echo "status: board.sh done failed"
+sh "$(dirname "$0")/board.sh" archive > /dev/null 2>&1 || echo "status: board.sh archive failed"
 sh "$(dirname "$0")/board.sh" milestones 2>&1
 echo "== workers"
 workers=$(loops)
@@ -215,3 +239,4 @@ else
 fi
 echo "== resources"
 resources
+runfiles

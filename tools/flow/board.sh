@@ -15,7 +15,7 @@
 #        board.sh card M PARENT TITLE
 #        board.sh step N progress|pass|fail TEXT
 #        board.sh check [HELD...]
-#        board.sh archive M
+#        board.sh archive [M]
 #        board.sh milestones
 #        board.sh watch [FILE]
 #
@@ -117,11 +117,12 @@
 # disagrees, and an open milestone whose cards are all closed. status.sh runs
 # it on every check.
 #
-# `archive M` archives the cards of the closed issues of milestone M and of
+# `archive [M]` archives the cards of the closed issues of milestone M and of
 # their closed subtasks, and prints the numbers it archived; release.sh runs
 # it once it has closed M. It archives too the closed issues of any closed
-# milestone and their closed subtasks, so that a card closed after its own
-# release goes at the next one. An open issue keeps its card. A card that
+# milestone, those of no milestone, and their closed subtasks; status.sh and
+# stop.sh run it with no M on every look, so that a card closed after its own
+# release leaves the board at once. An open issue keeps its card. A card that
 # cannot be archived is reported on stderr and the rest go on, and the exit
 # status is then 1.
 #
@@ -851,7 +852,7 @@ case "$1" in
     card) [ -n "$4" ] || exit 2; board_ids=$(ids); card "$2" "$3" "$4" ;;
     step) [ -n "$3" ] || exit 2; board_ids=$(ids); step "$2" "$3" "$4" ;;
     check) shift; check "$@" ;;
-    archive) [ -n "$2" ] || exit 2; archive "$2" ;;
+    archive) archive "$2" ;;
     milestones) milestones ;;
     watch) watch "$2" ;;
     *) sed -n 's/^# Usage: /usage: /p; s/^#        /       /p' "$0" >&2; exit 2 ;;
