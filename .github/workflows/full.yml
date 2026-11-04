@@ -148,7 +148,7 @@ jobs:
         with:
           name: full-native-evidence
           path: ${{ runner.temp }}/native-evidence
-          retention-days: 14
+          retention-days: 3
 
       - name: Upload the i686 logs
         if: ${{ always() && steps.retention.outcome == 'success' }}
@@ -160,7 +160,7 @@ jobs:
           path: |
             ${{ env.ETUDE_RESULTS }}/full-i686
             !${{ env.ETUDE_RESULTS }}/full-i686/kept/*/copies
-          retention-days: 14
+          retention-days: 3
 
       - name: Upload the x86_64 logs
         if: ${{ always() && steps.retention.outcome == 'success' }}
@@ -172,7 +172,7 @@ jobs:
           path: |
             ${{ env.ETUDE_RESULTS }}/full-x86_64
             !${{ env.ETUDE_RESULTS }}/full-x86_64/kept/*/copies
-          retention-days: 14
+          retention-days: 3
 
       - name: Write down the failures
         id: report
@@ -189,4 +189,4 @@ jobs:
           name: failures
           path: ${{ runner.temp }}/failures
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 3

@@ -13,7 +13,7 @@
 
 ## Results
 
-A run keeps, for 14 days, the artifacts `failures` (FILE above, which release.sh fetches with `gh run download ID --name failures`), `full-i686` and `full-x86_64` (each architecture's directory), and with the native entry `full-native-evidence`. The run's conclusion is `success` only when both architectures passed. The workflow files no issue and sets no commit status.
+A run keeps, for 3 days, the artifacts `failures` (FILE above, which release.sh fetches with `gh run download ID --name failures`), `full-i686` and `full-x86_64` (each architecture's directory), and with the native entry `full-native-evidence`. The run's conclusion is `success` only when both architectures passed. The workflow files no issue and sets no commit status.
 
 ## Design
 
