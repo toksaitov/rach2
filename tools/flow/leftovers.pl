@@ -43,9 +43,10 @@
 # * a copy's worktree is not locked, no failed test's directory in it is kept
 #   for an open issue or a process, git status finds nothing uncommitted or
 #   untracked in it, every file git ignores in it is build output that the
-#   build makes again or a Doom WAD that the main working tree has too, and a merge of its HEAD into SHA would leave SHA's tree
-#   as it is, unless it is a linked worktree on a branch, which keeps its
-#   commits when the worktree goes;
+#   build makes again or a Doom WAD that the main working tree has too, and a
+#   merge of its HEAD into SHA would leave SHA's tree as it is, unless it is a
+#   linked worktree on a branch, which keeps its commits when the worktree
+#   goes;
 # * a copy with a repository of its own, which goes with it, has no stash and
 #   no linked worktree, and a merge of each of its refs into SHA, but the
 #   remote-tracking ones, whose work the remote has, would leave SHA's tree
