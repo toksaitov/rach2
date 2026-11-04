@@ -154,8 +154,9 @@ landed()
 
 # tidy: remove what finished work left in the clone. A worktree under the
 # clone's .claude/worktrees or build/worktrees goes when its HEAD has landed,
-# no process has its working directory in it, as a loop has in the worktree
-# it runs in, and `git worktree remove` takes it without force, which it
+# or `closed_task` finds its task closed, since a rebased task's commit is not
+# master's; no process has its working directory in it, as a loop has in the
+# worktree it runs in, and `git worktree remove` takes it without force, which it
 # refuses for a worktree with changes, untracked files or a lock, as Claude
 # Code keeps on a helper's worktree while the helper runs, and only when
 # `disposable` finds nothing ignored in it but build output, which goes with
@@ -168,8 +169,9 @@ tidy()
     busy=$(cwds)
     git worktree list --porcelain | sed -n 's/^worktree //p' | while read -r w; do
         case $w in "$top"/.claude/worktrees/*|"$top"/build/worktrees/*) ;; *) continue ;; esac
-        head=$(git -C "$w" rev-parse -q --verify HEAD) && landed "$head" && disposable "$w" &&
-            ! inside "$w" "$busy" &&
+        head=$(git -C "$w" rev-parse -q --verify HEAD) || continue
+        landed "$head" || closed_task "$w" "$head" || continue
+        disposable "$w" && ! inside "$w" "$busy" &&
             git worktree remove "$w" 2> /dev/null && log "tidy: removed the worktree $w"
     done
     git worktree prune
@@ -181,17 +183,31 @@ tidy()
     done
 }
 
+# closed_task W HEAD: succeed when W, a worktree named tN or task-N, was made
+# for the task N and that issue is closed. A detached W's commit HEAD gets the
+# branch done/N, so that removing W leaves it on a branch.
+closed_task()
+{
+    n=$(basename "$1" | sed -n 's/^t\(ask-\)\{0,1\}\([0-9][0-9]*\)$/\2/p')
+    [ -n "$n" ] || return 1
+    [ "$(gh issue view "$n" --repo toksaitov/rach2 --json state --jq .state 2> /dev/null)" = CLOSED ] ||
+        return 1
+    git -C "$1" symbolic-ref -q HEAD > /dev/null || git branch -f "done/$n" "$2"
+}
+
 # disposable W: succeed when every ignored file of the worktree W is output
 # that a build makes again: build/ but for build/runs and build/flow, which
 # hold run evidence and loop state, the compilation database and clangd's
-# cache, the vendored projects' trees and stamps (not the GNU downloads), and
-# Finder's .DS_Store files. A key, a password, the Doom WAD, a person's notes
-# or any file under build/runs or build/flow keeps the worktree.
+# cache, the vendored projects' trees and stamps (not the GNU downloads), the
+# krffs files that make writes from the committed key pairs, Python's caches
+# and Finder's .DS_Store files. Another key, a password, the Doom WAD, a
+# person's notes or any file under build/runs or build/flow keeps the worktree.
 disposable()
 {
     ignored=$(git -C "$1" ls-files --others --ignored --exclude-standard --directory) || return 1
     ! printf '%s\n' "$ignored" |
-        grep -v -E '^(build/|\.cache/|compile_commands\.json$|vendor/)|(^|/)\.DS_Store$' | grep -q . &&
+        grep -v -E '^(build/|\.cache/|compile_commands\.json$|vendor/)|(^|/)(__pycache__/|\.DS_Store$)|^krffs/(authorized_keys|recovery_authorized_keys|test_authorized_keys|shadow|rach2_(demo|test)_password)$' |
+        grep -q . &&
         ! printf '%s\n' "$ignored" | grep -q '^vendor/gnu/downloads' &&
         ! find "$1/build/runs" "$1/build/flow" ! -type d 2> /dev/null | grep -q .
 }
@@ -239,8 +255,9 @@ HOMES='/home/testing /home/toksaitov-a /home/toksaitov-d /home/toksaitov-m /home
 # and here for the Desktop, which has the owner's checkout and the worktrees
 # and copies made beside it. Each run gets the text of the open issues,
 # master's commit from this clone, and the copies to keep: the default copy
-# of testing.sh, the release's, and each loop's that the file `copy` of a
-# state directory under build/flow of this clone's main working tree names.
+# of testing.sh, the release's and its preparation's, and each loop's that the
+# file `copy` of a state directory under build/flow of this clone's main
+# working tree names, unless STATE/stop says that the loop has ended.
 # Print the lines of each run with its machine's name first; fail, and run
 # neither, when master or the issues cannot be read. -n removes nothing and
 # lists what would go.
@@ -254,8 +271,11 @@ leftovers()
         { echo "leftovers: the open issues cannot be read"; return 1; }
     keep=
     # shellcheck disable=SC2046 # the copies are a path a word
-    for c in /home/testing/rach2 "$(sed -n 's/^COPY=//p' "$here/release.sh")" \
-        $(cat "$(primary .)"/build/flow/*/copy 2> /dev/null); do
+    for c in /home/testing/rach2 $(sed -n 's/^COPY=\$OWNER/\/home\/testing\/rach2/p
+        s/^PREPARE_COPY=\$OWNER/\/home\/testing\/rach2/p' "$here/release.sh") \
+        $(for f in "$(primary .)"/build/flow/*/copy; do
+            [ -e "${f%/copy}/stop" ] || cat "$f" 2> /dev/null
+        done); do
         case $c in ''|/*[!A-Za-z0-9/._-]*|*/..*|[!/]*) continue ;; esac
         keep="$keep -k $c"
     done

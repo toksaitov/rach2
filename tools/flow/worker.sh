@@ -31,7 +31,7 @@
 # process group of the session that is running in `session`, the clone's path in
 # `repo`, and in `copy` the copy on the testing host that RACH2_TESTING_COPY
 # names for testing.sh, if any; `touch STATE/stop` ends the loop after the
-# session that is running. Sessions run with RACH2_MIN_FREE_GIB at 40 unless the
+# session that is running; tools/flow/stop.sh stops the session as well. Sessions run with RACH2_MIN_FREE_GIB at 40 unless the
 # environment gives another, so that a build they start stops before it fills
 # the disk. Codex reads at most DOC_BYTES of AGENTS.md, since its own limit,
 # 32 KiB, cuts the file short.

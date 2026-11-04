@@ -177,8 +177,8 @@
 # * close: the record says `closing`; SHA is pushed to master by
 #   fast-forward, `git push origin SHA:refs/heads/master`, milestone M and
 #   each N of -c are closed, their cards are archived with `board.sh archive`,
-#   and the last
-#   line printed is `release: passed SHA`. A start of the script that finds
+#   sweep.sh removes what the release left, with its output kept beside the
+#   record, and the last line printed is `release: passed SHA`. A start of the script that finds
 #   a record with `closing` that did not end finishes that release first,
 #   whatever M and SHA it was given.
 #
@@ -2142,6 +2142,8 @@ main()
     elif ! { cd "$repo" && git worktree remove --force "$state/wt" && git worktree prune; }; then
         say "the worktree $state/wt could not be removed"
     fi
+    (cd "$repo" && sh tools/flow/sweep.sh) > "$state/$old.sweep" 2>&1 ||
+        say "the sweep failed; $state/$old.sweep has its output"
     finish "passed $sha"
 }
 

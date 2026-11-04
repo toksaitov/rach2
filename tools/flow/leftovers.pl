@@ -19,9 +19,9 @@
 #
 # * failed: an entry of `build/tests/failed` in HOME/rach2 or a copy beside
 #   it, which tests/run keeps for a test that failed;
-# * copy: a directory HOME/rach2-* or HOME/rach2/.claude/worktrees/* with a
-#   `.git` of its own, which is a clone, a copy that tools/dev/testing.sh
-#   made or a git worktree;
+# * copy: a directory HOME/rach2-*, HOME/rach2/.claude/worktrees/* or
+#   HOME/rach2/build/worktrees/* with a `.git` of its own, which is a clone, a
+#   copy that tools/dev/testing.sh made or a git worktree;
 # * loose: with -l, an entry of HOME named as scratch is: `tmp.` and ten
 #   letters or digits, as mktemp(1) names one, or `rach2`, more of a name, a
 #   dot and six to eight letters, digits or underscores, as the templates of
@@ -44,7 +44,8 @@
 #   for an open issue or a process, git status finds nothing uncommitted or
 #   untracked in it, every file git ignores in it is build output that the
 #   build makes again, and a merge of its HEAD into SHA would leave SHA's tree
-#   as it is;
+#   as it is, unless it is a linked worktree on a branch, which keeps its
+#   commits when the worktree goes;
 # * a copy with a repository of its own, which goes with it, has no stash and
 #   no linked worktree, and a merge of each of its refs into SHA, but the
 #   remote-tracking ones, whose work the remote has, would leave SHA's tree
@@ -228,7 +229,8 @@ sub built {
     my $p = shift;
     return 0 if $p =~ m{^vendor/gnu/downloads};
     return $p =~ m{^(?:build/|\.cache/|compile_commands\.json$|vendor/)|(?:^|/)(?:__pycache__/|\.DS_Store$)|
-        ^krffs/(?:authorized_keys|test_authorized_keys|shadow|rach2_(?:demo|test)_password)$}x;
+        ^krffs/(?:authorized_keys|recovery_authorized_keys|test_authorized_keys|shadow|
+        rach2_(?:demo|test)_password)$}x;
 }
 
 my $scratch = abs_path(tempdir('rach2-leftovers.XXXXXX', TMPDIR => 1, CLEANUP => 1));
@@ -261,6 +263,7 @@ sub unmerged {
     for (split /\0/, $ignored) {
         return "its ignored $_ is not build output" unless built($_);
     }
+    return if $own ne $common and defined git($p, {}, 'symbolic-ref', '-q', 'HEAD');
     my @tips = ($head);
     if ($own eq $common) {
         my $refs = git($p, {}, 'for-each-ref', '--format=%(objectname) %(refname)');
@@ -367,6 +370,8 @@ for my $h (@homes) {
     my $wts = "$h/rach2/.claude/worktrees";
     my @copies = grep { $_ ne "$h/rach2" } @trees;
     push @copies, map { "$wts/$_" } entries($wts) if -d $wts and !-l $wts and !-l "$h/rach2/.claude";
+    my $built = "$h/rach2/build/worktrees";
+    push @copies, map { "$built/$_" } entries($built) if -d $built and !-l $built;
     my %why = map { ($_ => scalar verdict('copy', $_)) } grep { -e "$_/.git" and !-l "$_/.git" } @copies;
     for my $c (grep { !defined $why{$_} } keys %why) {
         $why{$c} = "it changed within $age seconds" if fresh($c);
