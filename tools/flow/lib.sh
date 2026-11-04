@@ -200,11 +200,16 @@ closed_task()
 # hold run evidence and loop state, the compilation database and clangd's
 # cache, the vendored projects' trees and stamps (not the GNU downloads), the
 # krffs files that make writes from the committed key pairs, Python's caches
-# and Finder's .DS_Store files. Another key, a password, the Doom WAD, a
-# person's notes or any file under build/runs or build/flow keeps the worktree.
+# Finder's .DS_Store files, and a Doom WAD equal to the main working tree's.
+# Another key, a password, any other WAD, a person's notes or any file under
+# build/runs or build/flow keeps the worktree.
 disposable()
 {
     ignored=$(git -C "$1" ls-files --others --ignored --exclude-standard --directory) || return 1
+    wad=ports/doom/doom1.wad
+    if cmp -s "$1/$wad" "$(primary "$1")/$wad"; then
+        ignored=$(printf '%s\n' "$ignored" | grep -v -x "$wad")
+    fi
     ! printf '%s\n' "$ignored" |
         grep -v -E '^(build/|\.cache/|compile_commands\.json$|vendor/)|(^|/)(__pycache__/|\.DS_Store$)|^krffs/(authorized_keys|recovery_authorized_keys|test_authorized_keys|shadow|rach2_(demo|test)_password)$' |
         grep -q . &&

@@ -43,7 +43,7 @@
 # * a copy's worktree is not locked, no failed test's directory in it is kept
 #   for an open issue or a process, git status finds nothing uncommitted or
 #   untracked in it, every file git ignores in it is build output that the
-#   build makes again, and a merge of its HEAD into SHA would leave SHA's tree
+#   build makes again or a Doom WAD that the main working tree has too, and a merge of its HEAD into SHA would leave SHA's tree
 #   as it is, unless it is a linked worktree on a branch, which keeps its
 #   commits when the worktree goes;
 # * a copy with a repository of its own, which goes with it, has no stash and
@@ -220,6 +220,16 @@ sub git {
     return $out;
 }
 
+# wad COPY: whether the Doom WAD of the worktree COPY is one that the main
+# working tree around COPY has too, so that the copy can go.
+sub wad {
+    my $copy = shift;
+    my $wad = 'ports/doom/doom1.wad';
+    (my $main = $copy) =~ s{/(?:build|\.claude)/worktrees/[^/]+$}{} or return 0;
+    my ($a, $b) = (-s "$copy/$wad", -s "$main/$wad");
+    return defined $a && defined $b && $a == $b;
+}
+
 # built PATH: whether PATH, as git ls-files prints an ignored file or
 # directory, is output that the build makes again: build/, the compilation
 # database and clangd's cache, the vendored projects' trees and stamps but not
@@ -261,7 +271,8 @@ sub unmerged {
     my $ignored = git($p, {}, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory');
     return 'git cannot list its ignored files' unless defined $ignored;
     for (split /\0/, $ignored) {
-        return "its ignored $_ is not build output" unless built($_);
+        return "its ignored $_ is not build output"
+            unless built($_) or ($_ eq 'ports/doom/doom1.wad' and wad($p));
     }
     return if $own ne $common and defined git($p, {}, 'symbolic-ref', '-q', 'HEAD');
     my @tips = ($head);
