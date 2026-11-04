@@ -178,9 +178,9 @@
 #   fast-forward, `git push origin SHA:refs/heads/master`, milestone M and
 #   each N of -c are closed, their cards are archived with `board.sh archive`,
 #   sweep.sh removes what the release left, with its output kept beside the
-#   record, and the last line printed is `release: passed SHA`. A start of the script that finds
-#   a record with `closing` that did not end finishes that release first,
-#   whatever M and SHA it was given.
+#   record, and the last line printed is `release: passed SHA`. A start of the
+#   script that finds a record with `closing` that did not end finishes that
+#   release first, whatever M and SHA it was given.
 #
 # The machine must report the station address RACH2_MACHINE_MAC,
 # 28:d2:44:7e:e0:af by default, and its disk the serial RACH2_MACHINE_SERIAL,

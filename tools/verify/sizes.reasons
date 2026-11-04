@@ -630,6 +630,7 @@ tests/musl/addusermusl.c:check_concurrent complexity 53 a test's rows, each a ca
 tests/musl/addusermusl.c:check_created complexity 27 a test's rows, each a case, read as one table
 tests/musl/addusermusl.c:check_refusals complexity 27 a test's rows, each a case, read as one table
 
+tests/musl/audioclientsmusl.c:clients complexity 26 a test's rows, each a case, read as one table
 tests/musl/authmusl.c:main complexity 34 a test's rows, each a case, read as one table
 
 tests/musl/callsmusl.c:copies complexity 49 a test's rows, each a case, read as one table

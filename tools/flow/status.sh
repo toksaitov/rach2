@@ -168,7 +168,7 @@ runfiles()
 sizes()
 {
     echo "== sizes on the testing host, in GiB"
-    # du counts a directory once, so the trees inside build have a du of their own.
+    # du counts a directory once, so nested trees have a du of their own.
     printf '%s\n' '{ du -sxk /home/*/rach2*/build /home/ghrunner/rach2-ci-*/_work /tmp
         du -sxk /home/*/rach2*/build/vendor/gnu /home/*/rach2*/build/x86_64/vendor/gnu
         du -sxk /home/*/rach2/build/flow /home/*/rach2/build/worktrees/*; } 2> /dev/null | sort -rn |
