@@ -50,7 +50,8 @@
 # * a copy with a repository of its own, which goes with it, has no stash and
 #   no linked worktree, and a merge of each of its refs into SHA, but the
 #   remote-tracking ones, whose work the remote has, would leave SHA's tree
-#   as it is too.
+#   as it is too, unless `build/.sync.lock` in it shows that tools/dev/testing.sh
+#   sent it, since those refs and stash are the sending clone's.
 #
 # Git reads a copy with no hook or file system monitor, and as the copy's
 # owner when this runs as root, so that a filter the copy configures runs
@@ -284,7 +285,7 @@ sub unmerged {
     }
     return if $own ne $common and defined git($p, {}, 'symbolic-ref', '-q', 'HEAD');
     my @tips = ($head);
-    if ($own eq $common) {
+    if ($own eq $common and !-e "$p/build/.sync.lock") {
         my $refs = git($p, {}, 'for-each-ref', '--format=%(objectname) %(refname)');
         return 'git cannot list its refs' unless defined $refs;
         return 'it has a stash' if $refs =~ m{ refs/stash$}m;
