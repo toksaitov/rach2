@@ -479,6 +479,7 @@ static int setup(struct release *r, struct fixture *f)
         return 0;
     flow_put(f, "tree/krffs/rach2_demo_ed25519", "");
     flow_put(f, "tree/tools/flow/board.sh", "# native board fixture\n");
+    flow_put(f, "tree/tools/flow/sweep.sh", "# native sweep fixture\n");
     for (i = 0; i < 7; i++)
         if (!fx_mock(f, mock[i]))
             return 0;
@@ -590,7 +591,8 @@ static int archived(struct release *r, const char *prefix)
     if (!d)
         return 0;
     while ((e = readdir(d)))
-        if (!strncmp(e->d_name, prefix, strlen(prefix)) && !strstr(e->d_name, ".sha256")) {
+        if (!strncmp(e->d_name, prefix, strlen(prefix)) && !strstr(e->d_name, ".sha256") &&
+            !strstr(e->d_name, ".sweep")) {
             snprintf(r->retired, sizeof(r->retired), "%s/state/%s", r->f->work, e->d_name);
             count++;
         }

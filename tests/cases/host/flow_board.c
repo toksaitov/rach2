@@ -844,6 +844,14 @@ static int archive_rows(struct fixture *f)
          ok;
     if (!use(f, board_main))
         return 0;
+    call(f, "archive", NULL, NULL);
+    ok = fx_check(f,
+                  !f->status && is_field("54", F_ARCHIVED, "archived") &&
+                      is_field("60", F_ARCHIVED, "archived") && is_field("51", F_ARCHIVED, ""),
+                  "archive-finished") &&
+         ok;
+    if (!use(f, board_main))
+        return 0;
     fx_env("BOARD_TEST_FAIL", "archive51");
     call(f, "archive", "1", NULL);
     ok = fx_check(f,
