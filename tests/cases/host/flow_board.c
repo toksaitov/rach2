@@ -823,6 +823,18 @@ static int milestones_rows(struct fixture *f)
     return milestone_rows(f) && ok;
 }
 
+/** Check that `archive` with no milestone takes those of closed milestones. */
+static int archive_finished(struct fixture *f)
+{
+    if (!use(f, board_main))
+        return 0;
+    call(f, "archive", NULL, NULL);
+    return fx_check(f,
+                    !f->status && is_field("54", F_ARCHIVED, "archived") &&
+                        is_field("60", F_ARCHIVED, "archived") && is_field("51", F_ARCHIVED, ""),
+                    "archive-finished");
+}
+
 static int archive_rows(struct fixture *f)
 {
     int ok = 1;
@@ -841,14 +853,6 @@ static int archive_rows(struct fixture *f)
     call(f, "archive", "4", NULL);
     ok = fx_check(f, !f->status && !strcmp(f->out, "54 60 \n") && is_field("43", F_ARCHIVED, ""),
                   "archive-closed-milestone") &&
-         ok;
-    if (!use(f, board_main))
-        return 0;
-    call(f, "archive", NULL, NULL);
-    ok = fx_check(f,
-                  !f->status && is_field("54", F_ARCHIVED, "archived") &&
-                      is_field("60", F_ARCHIVED, "archived") && is_field("51", F_ARCHIVED, ""),
-                  "archive-finished") &&
          ok;
     if (!use(f, board_main))
         return 0;
@@ -925,6 +929,7 @@ int flow_board(struct fixture *f)
     ok = small_rows(f) && ok;
     ok = milestones_rows(f) && ok;
     ok = archive_rows(f) && ok;
+    ok = archive_finished(f) && ok;
     ok = large_row(f) && ok;
     return ok;
 }
