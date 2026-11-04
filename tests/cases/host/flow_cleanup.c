@@ -140,11 +140,12 @@ static int leftovers_origin(struct fixture *f)
     snprintf(origin, sizeof(origin), "%s/origin.git", f->work);
     G("init", "-q", "--bare", "-b", "master", origin);
     G("init", "-q", "-b", "master");
-    snprintf(p, sizeof(p), "%s/.gitignore", cwd);
-    fx_text(p, "build/\n*.wad\n.claude/worktrees/\nvendor/gnu/downloads/\n");
-    snprintf(p, sizeof(p), "%s/a", cwd);
-    fx_text(p, "a\n");
-    G("add", ".gitignore", "a");
+    flow_put(f, "seed/.gitignore",
+             "build/\n*.wad\n.claude/worktrees/\n.claude/scheduled_tasks.lock\n"
+             "vendor/gnu/downloads/\n");
+    flow_put(f, "seed/a", "a\n");
+    flow_put(f, "seed/.claude/settings.json", "{}\n");
+    G("add", ".gitignore", "a", ".claude/settings.json");
     G("commit", "-q", "-m", "Add a");
     G("remote", "add", "origin", origin);
     G("switch", "-q", "-c", "1-picked");
@@ -162,6 +163,18 @@ static int leftovers_origin(struct fixture *f)
     G("commit", "-q", "-m", "Add m");
     G("cherry-pick", "1-picked");
     G("push", "-q", "origin", "master");
+    return 1;
+}
+/** Add the main clone's linked worktrees; return 0 when git fails. */
+static int leftovers_worktrees(struct fixture *f)
+{
+    char cwd[4096];
+    snprintf(cwd, sizeof(cwd), "%s/home.noindex/rach2", f->work);
+    G("worktree", "add", "-q", "--detach", ".claude/worktrees/clean");
+    G("worktree", "add", "-q", "--detach", ".claude/worktrees/locked");
+    G("worktree", "lock", ".claude/worktrees/locked");
+    G("worktree", "add", "-q", "--detach", ".claude/worktrees/spare");
+    G("worktree", "add", "-q", "--detach", ".claude/worktrees/lone");
     return 1;
 }
 static int leftovers_setup(struct fixture *f)
@@ -221,6 +234,7 @@ static int leftovers_setup(struct fixture *f)
     snprintf(cwd, sizeof(cwd), "%s/home.noindex/rach2-stashed", f->work);
     G("stash", "-q");
     flow_put(f, "home.noindex/rach2-sent/build/.sync.lock", "");
+    flow_put(f, "home.noindex/rach2-sent/.claude/scheduled_tasks.lock", "");
     flow_put(f, "home.noindex/rach2-sent/a", "stashed\n");
     snprintf(cwd, sizeof(cwd), "%s/home.noindex/rach2-sent", f->work);
     G("stash", "-q");
@@ -233,12 +247,8 @@ static int leftovers_setup(struct fixture *f)
     snprintf(cwd, sizeof(cwd), "%s/home.noindex/rach2-linked", f->work);
     fx_remove(flow_path(f, "linked"));
     G("worktree", "add", "-q", "--detach", flow_path(f, "linked"));
-    snprintf(cwd, sizeof(cwd), "%s/home.noindex/rach2", f->work);
-    G("worktree", "add", "-q", "--detach", ".claude/worktrees/clean");
-    G("worktree", "add", "-q", "--detach", ".claude/worktrees/locked");
-    G("worktree", "lock", ".claude/worktrees/locked");
-    G("worktree", "add", "-q", "--detach", ".claude/worktrees/spare");
-    G("worktree", "add", "-q", "--detach", ".claude/worktrees/lone");
+    if (!leftovers_worktrees(f))
+        return 0;
     flow_put(f, "home.noindex/rach2/vendor/gnu/downloads/p.tar.gz", "pinned\n");
     flow_put(f, "home.noindex/rach2/.claude/worktrees/spare/vendor/gnu/downloads/p.tar.gz",
              "pinned\n");

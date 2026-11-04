@@ -244,12 +244,13 @@ sub spare {
 # directory, is output that the build makes again: build/, the compilation
 # database and clangd's cache, the vendored projects' trees and stamps but not
 # the GNU downloads, the krffs files that make writes from the committed key
-# pairs, Python's caches and Finder's .DS_Store files.
+# pairs, Python's caches, Finder's .DS_Store files and the lock of a session's
+# scheduled tasks.
 sub built {
     my $p = shift;
     return 0 if $p =~ m{^vendor/gnu/downloads};
     return $p =~ m{^(?:build/|\.cache/|compile_commands\.json$|vendor/)|(?:^|/)(?:__pycache__/|\.DS_Store$)|
-        ^krffs/(?:authorized_keys|recovery_authorized_keys|test_authorized_keys|shadow|
+        ^\.claude/scheduled_tasks\.lock$|^krffs/(?:authorized_keys|recovery_authorized_keys|test_authorized_keys|shadow|
         rach2_(?:demo|test)_password)$}x;
 }
 

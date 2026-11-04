@@ -215,7 +215,7 @@ disposable()
         ignored=$(printf '%s\n' "$ignored" | grep -v '^vendor/gnu/downloads')
     fi
     ! printf '%s\n' "$ignored" |
-        grep -v -E '^(build/|\.cache/|compile_commands\.json$|vendor/)|(^|/)(__pycache__/|\.DS_Store$)|^krffs/(authorized_keys|recovery_authorized_keys|test_authorized_keys|shadow|rach2_(demo|test)_password)$' |
+        grep -v -E '^(build/|\.cache/|compile_commands\.json$|vendor/)|(^|/)(__pycache__/|\.DS_Store$)|^\.claude/scheduled_tasks\.lock$|^krffs/(authorized_keys|recovery_authorized_keys|test_authorized_keys|shadow|rach2_(demo|test)_password)$' |
         grep -q . &&
         ! printf '%s\n' "$ignored" | grep -q '^vendor/gnu/downloads' &&
         ! find "$1/build/runs" "$1/build/flow" ! -type d 2> /dev/null | grep -q .
