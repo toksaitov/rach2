@@ -3,8 +3,7 @@
 int ext2_fixture_tree(const char *root);
 int ext2_fixture_image(const char *image, int block, int inode, const char *features,
                        unsigned long mib, const char *tree);
-int ext2_fixture_image_groups(const char *image, int block, int inode, const char *features,
-                              unsigned long mib, const char *tree, unsigned long per_group);
+void ext2_fixture_groups(unsigned long n);
 int ext2_fixture_debugfs(const char *image, const char *request, int write, const char *output);
 int ext2_fixture_fsck(const char *image, const char *flags, const char *output);
 int ext2_fixture_capture_child(void);

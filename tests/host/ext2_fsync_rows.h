@@ -120,7 +120,10 @@ static int fsync_mount(unsigned long per_group)
     int rc;
 
     wbytes = (uint64_t)16 << 20;
-    if (!ext2_fixture_image_groups(wimg, 4096, 128, PROFILE, 16, fix_path("tree"), per_group)) {
+    ext2_fixture_groups(per_group);
+    rc = ext2_fixture_image(wimg, 4096, 128, PROFILE, 16, fix_path("tree"));
+    ext2_fixture_groups(0);
+    if (!rc) {
         printf("ext2_hosttest: mke2fs failed for %s\n", wimg);
         exit(1);
     }

@@ -81,16 +81,19 @@ int ext2_fixture_tree(const char *root)
     return 1;
 }
 
-int ext2_fixture_image(const char *image, int block, int inode, const char *features,
-                       unsigned long mib, const char *tree)
+/* The blocks in each group of the images made next (mke2fs -g), or 0 for
+ * mke2fs's own count. */
+static unsigned long per_group;
+
+/** Give the images made next `n` blocks in each group, so that a small
+ * volume can have many groups; 0 restores mke2fs's own count. */
+void ext2_fixture_groups(unsigned long n)
 {
-    return ext2_fixture_image_groups(image, block, inode, features, mib, tree, 0);
+    per_group = n;
 }
 
-/** `ext2_fixture_image` with `per_group` blocks in each group (mke2fs -g), or
- * mke2fs's own count for 0, so that a small volume can have many groups. */
-int ext2_fixture_image_groups(const char *image, int block, int inode, const char *features,
-                              unsigned long mib, const char *tree, unsigned long per_group)
+int ext2_fixture_image(const char *image, int block, int inode, const char *features,
+                       unsigned long mib, const char *tree)
 {
     char bs[32], is[32], size[32], group[32], log[4096];
     const char *argv[18];
