@@ -1396,7 +1396,7 @@
     },
     {
       "case_id": "machine.wifi.rfkill",
-      "behavior": "rfkill block stops the installed system's radio and leaves the network, and unblock joins it again",
+      "behavior": "rfkill block stops the installed system's radio and closes wlan0, so that wpa_supplicant stops scanning, and unblock joins the network again by itself",
       "units": [
         "wifi",
         "wpa_supplicant",
@@ -1464,13 +1464,13 @@
           "step_id": "block",
           "stage": "execute",
           "machine": "station",
-          "does": "rfkill block wifi, wait for the disconnection and for the lease to be given up, and read rfkill list, iw dev wlan0 link and the routes"
+          "does": "rfkill block wifi, wait for the disconnection, for the lease to be given up and for wpa_supplicant to say the interface is disabled, and read rfkill list, iw dev wlan0 link, the routes and the operstate of wlan0"
         },
         {
           "step_id": "unblock",
           "stage": "execute",
           "machine": "station",
-          "does": "rfkill unblock wifi and wait for the station to join again"
+          "does": "rfkill unblock wifi and wait for wpa_supplicant to bring wlan0 up and join again by itself"
         }
       ],
       "machines": [
@@ -1587,7 +1587,12 @@
         },
         {
           "assertion_id": "blocked",
-          "checks": "rfkill list says soft blocked, iw says not connected, there is no default route on wlan0, and wpa_supplicant is not COMPLETED",
+          "checks": "rfkill list says soft blocked, iw says not connected, there is no default route on wlan0, and wlan0 is down",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "quiet",
+          "checks": "wpa_supplicant's state is INTERFACE_DISABLED, and the block has added at most 20 lines to the service log and no CTRL-EVENT-SCAN-FAILED",
           "source": "scenario"
         },
         {

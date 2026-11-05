@@ -213,6 +213,18 @@ static long log_after(struct wifi *w, const char *what, long n)
     return count;
 }
 
+/** Give how many lines LOG has, or -1. */
+static long log_lines(struct wifi *w)
+{
+    char *text = NULL;
+    long count = -1;
+
+    if (sta(w, &text, "echo COUNT=$(wc -l < " LOG ")") >= 0)
+        count = net_number_after(text, "COUNT=");
+    free(text);
+    return count;
+}
+
 /** Give how many lines of LOG have `what`, or -1. */
 static long log_count(struct wifi *w, const char *what)
 {
@@ -949,10 +961,22 @@ static void case_robust(struct wifi *w)
 
 /* ---- the rfkill case (16e) ---- */
 
+/* The most lines the block may add to LOG: wpa_supplicant's reports of the
+ * block, the disconnection and the disabled interface, and wpa_action's and
+ * udhcpc's as the lease is given up, 11 in all on wsim. A radio left
+ * scanning adds a failed scan a second. */
+#define BLOCK_LINES 20
+
+/**
+ * Block the radio, unblock it, and see the station join again by itself.
+ * The block closes wlan0, as Linux's does, and wpa_supplicant, seeing the
+ * interface go down, says it is disabled and stops scanning; at the
+ * release it brings the interface up and joins.
+ */
 static void case_rfkill(struct wifi *w)
 {
     char *text = NULL, buf[64];
-    long n;
+    long n, lines, scans, added;
     int ok;
 
     begin(w, "wpa2", NULL);
@@ -965,17 +989,27 @@ static void case_rfkill(struct wifi *w)
 
     net_step(&w->u, "block");
     n = log_count(w, "CTRL-EVENT-DISCONNECTED");
+    scans = log_count(w, "CTRL-EVENT-SCAN-FAILED");
+    lines = log_lines(w);
     sta(w, NULL, "rfkill block wifi");
     n = n < 0 ? -1 : log_after(w, "CTRL-EVENT-DISCONNECTED", n);
     unrouted(w);
-    sta(w, &text, "rfkill list; iw dev wlan0 link; route -n");
+    sta(w, NULL,
+        "until wpa_cli -i wlan0 status | grep -q '^wpa_state=INTERFACE_DISABLED$'; do sleep 1; "
+        "done");
+    sta(w, &text, "rfkill list; iw dev wlan0 link; route -n; cat /sys/class/net/wlan0/operstate");
     net_assert(&w->u, "blocked",
                n > 0 && has(text, "Soft blocked: yes") && has(text, "Not connected") &&
-                   net_count(text, "0.0.0.0*wlan0") == 0 &&
-                   strcmp(state(w, buf, sizeof(buf), NULL), "COMPLETED") != 0,
+                   net_count(text, "0.0.0.0*wlan0") == 0 && has(text, "\ndown"),
                "the block left the radio on: %s", text != NULL ? text : "");
     free(text);
     text = NULL;
+    added = lines < 0 ? -1 : log_lines(w) - lines;
+    net_assert(&w->u, "quiet",
+               added >= 0 && added <= BLOCK_LINES && scans >= 0 &&
+                   log_count(w, "CTRL-EVENT-SCAN-FAILED") == scans &&
+                   strcmp(state(w, buf, sizeof(buf), NULL), "INTERFACE_DISABLED") == 0,
+               "the block added %ld lines to the log, or a failed scan", added);
 
     net_step(&w->u, "unblock");
     n = log_count(w, "CTRL-EVENT-CONNECTED");
