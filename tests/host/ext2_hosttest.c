@@ -3072,6 +3072,7 @@ static void sync_unlocked_row(void)
     if (!node || !handle) {
         return;
     }
+    vfs_ns_unlock(&mnt); /* mount_rw left it held; the calls below take their own */
     flush_pause = flush_depth_note;
     check(OPS->write(&mnt, handle, "one", 3, 0) == 3, "the first write is taken");
     flush_depth = -1;
@@ -3090,6 +3091,7 @@ static void sync_unlocked_row(void)
               memcmp(text, "onetwo", sizeof(text)) == 0 && read_depth == 0,
           "a read fetches a missing block with the namespace lock let go");
     read_pause = 0;
+    vfs_ns_lock(&mnt);
     OPS->release(&mnt, handle);
     OPS->put(&mnt, node);
     check(unmount_rw() == 0, "the unlocked-sync volume unmounts");
