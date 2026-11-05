@@ -1439,16 +1439,6 @@ static int prepare_rows(struct release *r)
                    !fx_exists(flow_path(f, "state/record")),
                "-p names the part that failed and the lines that say why") &&
          ok;
-    run(r,
-        &(struct release_row){
-            .git = "yes", .machines = MAC WINDOWS, .testing = "pass", .preparing = 1, .only = 1});
-    ok = check(r,
-               !f->status && strstr(f->out, "release: prepare: passed " H "\n") &&
-                   strstr(f->out, "release: prepare: wsl: passed\n") &&
-                   !strstr(f->out, "release: prepare: windows:") &&
-                   !strstr(f->out, "release: prepare: mac:") && !called(r, "routine-prepare"),
-               "-p -o prepares only WSL") &&
-         ok;
     return ok;
 }
 /** -o leaves out the Mac and Windows, which the machines file names. */
@@ -1468,6 +1458,16 @@ static int only_rows(struct release *r)
                    count(flow_path(f, "calls"), "^dispatch ") == 1 && !called(r, " run routine-") &&
                    !fx_has(record(r), "\nmac started") && !fx_has(record(r), "\nwindows started"),
                "-o leaves out the Mac and Windows and says so in the record") &&
+         ok;
+    run(r,
+        &(struct release_row){
+            .git = "yes", .machines = MAC WINDOWS, .testing = "pass", .preparing = 1, .only = 1});
+    ok = check(r,
+               !f->status && strstr(f->out, "release: prepare: passed " H "\n") &&
+                   strstr(f->out, "release: prepare: wsl: passed\n") &&
+                   !strstr(f->out, "release: prepare: windows:") &&
+                   !strstr(f->out, "release: prepare: mac:") && !called(r, "routine-prepare"),
+               "-p -o prepares only WSL") &&
          ok;
     snprintf(text, sizeof(text),
              "milestone 7\nsha %s\nbranch %s\nchosen %s\nonly wsl lenovo\ntouched %s\ndispatched "
