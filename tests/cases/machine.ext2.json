@@ -721,10 +721,10 @@
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {"program": "ext2_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["root-disk"]}], "children": "none", "cleanup": "libetude-case ends the machine and removes the disk copy, which it keeps after a failure"},
       "steps": [
-        {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk with rach2.blocklag=3, log in as root at the console, run /lockwaitprobe lag and end the machine"}
+        {"step_id": "row", "stage": "execute", "machine": "root", "does": "boot os-real on a copy of the root disk with rach2.blocklag=3 and twelve of the lag's five-second deadline periods, its flushes kept from the host, log in as root at the console, run /lockwaitprobe lag and end the machine"}
       ],
       "machines": [
-        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": ["root-disk"], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.blocklag=3"]}, "console": "serial", "qmp": true, "helper": false}
+        {"machine_id": "root", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "root-disk", "flush": false}], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": ["rach2.root=ext2", "rach2.blocklag=3", "rach2.lagperiods=12"]}, "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
         {"assertion_id": "said-ok", "checks": "lockwaitprobe says LOCKWAITPROBE OK and never LOCKWAITPROBE FAIL: the slow read waited for at least 32 of the lag device's answers, the child's rounds on the other file were at least as many, and /proc/fs/lockwait has its mount line", "source": "scenario"}
@@ -751,7 +751,7 @@
         {"name": "ext2_scenario", "node": "tests/cases/machine/ext2_scenario", "per_architecture": false}
       ],
       "timing": [
-        {"kind": "injected_delay", "where": "rach2/sys/block/lag.c:228-229", "assumes": "the lag device answers each request of disk 0's partitions three hundredths of a second late as the stimulus, so that the slow read sleeps on each of its blocks while the child runs; the case judges the lag device's count of answers and the child's count of rounds, never elapsed time", "uncertainty_us": null}
+        {"kind": "injected_delay", "where": "rach2/sys/block/lag.c:228-229", "assumes": "the lag device answers each request of disk 0's partitions three hundredths of a second late as the stimulus, so that the slow read sleeps on each of its blocks while the child runs; the case judges the lag device's count of answers and the child's count of rounds, never elapsed time; the deadline is twelve periods of five seconds and the disk's flushes do not reach the host, so that a busy host's slow write does not stall the device", "uncertainty_us": null}
       ],
       "native": {"plan": "none", "class": "boot", "reason": "the lag device over disk 0 is set on the kernel's boot line"}
     },
