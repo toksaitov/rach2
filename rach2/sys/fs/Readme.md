@@ -84,8 +84,10 @@ A KRFFS root on a disk partition is on no mount's device, so no `fsync`, `sync` 
 | KRFFS root on a RAM module | nothing | no disk | no |
 | KRFFS root through the window, on a RAM module | every dirty page, into the module | no disk | no |
 | KRFFS root on a disk partition | every dirty page of the window | by each page's write | yes |
-| KRFFS volume, FAT32, exFAT | every dirty buffer of the device | yes | yes |
-| ext2 | every pending file of the mount, then every dirty buffer of the device | yes | yes |
+| KRFFS volume | the file's dirty blocks and its header | yes | yes |
+| FAT32, exFAT | the file's dirty blocks, then the dirty blocks no one file owns | yes | yes |
+| ext2, a regular file | the mount's pending files, then the bitmaps and descriptors dirtied for the file, its dirty blocks and its inode's table block | yes | yes |
+| ext2, any other file | the mount's pending files, then every dirty buffer of the device | yes | yes |
 | tmpfs, memfd | nothing | no disk | no |
 
 `sync` writes every file's shared mappings; then, for each active mount on a device, runs the type's `sync`, writes the device's dirty buffers and flushes the device; then writes the page cache, waiting up to 30 seconds of ticks for pages under a write. It returns 0 whatever failed; a failed write leaves its buffer dirty and the mounts on its device read-only ([vfs.Readme.md](vfs.Readme.md)). `syncfs` is `sync` once it has checked its descriptor. A successful `umount2` has run the type's `sync` and `prepare_unmount`, written the buffer cache and flushed the device; a failure leaves the volume mounted.
@@ -95,7 +97,7 @@ The kernel writes back nothing on a timer: [update(8)](../../../man/man8/update.
 ## Limits
 
 * A KRFFS root on a disk puts each page on the medium with its own write, so a `sync` of many dirty pages waits for a cache flush or a write with force unit access per page, where the buffer cache on an AHCI or NVMe disk writes its run unflushed and flushes once.
-* `fdatasync` has its own call and its own operation in `vfs_ops`, which no type has yet, so it does what `fsync` does: on every type that writes anything but a KRFFS volume, both write the whole device or the whole page cache, not the one file, and a change of times alone goes too. `syncfs` writes what `sync` writes and, like it, reports no failure.
+* `fdatasync` has its own call and its own operation in `vfs_ops`, which only ext2 has, leaving out an inode whose times alone changed; on the other types it does what `fsync` does. Neither call is narrowed to the one file on a KRFFS root, where it writes the whole page cache, or for an ext2 directory, where it writes the whole device. `syncfs` writes what `sync` writes and, like it, reports no failure.
 * `reboot(2)` writes no volume placed by `mount(2)`.
 * No file system shares extents or keeps a map of its holes: `FICLONE` is `EOPNOTSUPP`, `copy_file_range` copies every byte, and `SEEK_HOLE` finds only the end of a file.
 * No file system keeps extended attributes: getting, setting and removing one answer `EOPNOTSUPP`, and a list is empty. There are no ACLs, file capabilities, per-user quotas or journal. Of the types that store files, only ext2 and tmpfs have hard links and symbolic links.

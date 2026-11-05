@@ -64,14 +64,18 @@ Failed writes and stores made during a write remain dirty for a later flush.
 On a mounted KRFFS volume it writes only the named file: the blocks its
 writes and truncations left dirty, which follow it when it moves, and
 its header, which holds its length, mode, owner and times.
-The FAT32, exFAT, and ext2 implementations flush the device's dirty
-buffers, rather than only the named file's data.
+On FAT32 and exFAT it writes the file's dirty blocks and then the
+dirty blocks no one file owns.
+On ext2 it writes, for a regular file, the bitmaps and descriptors
+dirtied for the file, its data and pointer blocks, and its inode's
+table block, which holds other inodes too; for any other file, the
+device's dirty buffers.
 A mounted KRFFS volume made read-only after a failed write writes every
 pending buffer of the device instead.
 A failed retry is returned to the caller; the device is flushed only
 after writeback succeeds.
 .Pp
-On ext2, fsync drains all pending inodes on the mount in dependency order.
+On ext2, fsync first drains all pending inodes on the mount in dependency order.
 The first delayed write or flush error remains observable by every later
 fsync until unmount, including after close, reopen and successful retry.
 A retry can finish an unmount, but the volume remains marked invalid.
@@ -81,8 +85,10 @@ runs the file system's fdatasync operation where it has one, and
 otherwise does what
 .Fn fsync
 does.
-No file system has one yet, so it has the same behavior, metadata
-included.
+Only ext2 has one: it leaves out the inode's table block when only the
+inode's times have changed since an earlier call wrote the block, and
+writes it after a change of the size, block map, mode, owner or link
+count.
 .Pp
 The i386 system call numbers are 36 for
 .Fn sync ,
