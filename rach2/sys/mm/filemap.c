@@ -209,10 +209,11 @@ static void dshare_put(struct dshare *ds)
 
 /**
  * Write page `i` of `ds` back through `m`'s copy of the descriptor, by way
- * of `buf`, a page from the heap, since the write sleeps. The mount's
- * namespace lock is held from before the file's size is read to the end of
- * the write, so a truncation, which takes it too, runs wholly before or
- * after: the write never reaches past the size it leaves, and the page,
+ * of `buf`, a page from the heap, since the write sleeps. The file's lock
+ * (`vfs_node_lock`: the mount's namespace lock, or the file's own on a type
+ * that sets `file_locked`) is held from before the file's size is read to
+ * the end of the write, so a truncation, which takes it too, runs wholly
+ * before or after: the write never reaches past the size it leaves, and the page,
  * looked up after the size is read and copied with nothing between that
  * sleeps, is one a truncation has not freed. A file a loop device stands on
  * is not written, as write(2) does not write it. 0, -EBUSY, or the write's
@@ -222,6 +223,7 @@ static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i, u
 {
     struct vfs_mount *mnt = m->entry.ofd->vmnt;
     uint64_t at = (uint64_t)i * PAGE_SIZE;
+    struct vfs_ref file;
     struct vfs_stat st;
     uintptr_t phys;
     uint8_t *page;
@@ -229,7 +231,9 @@ static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i, u
     int32_t n;
     int rc = 0;
 
-    vfs_ns_lock(mnt);
+    file.mnt = mnt;
+    file.node = m->entry.ofd->vnode;
+    vfs_node_lock(&file);
     if (loop_backs(mnt, m->entry.ofd->vnode)) {
         rc = -EBUSY;
     } else if (vfs_getattr(mnt, m->entry.ofd->vnode, &st) != 0) {
@@ -248,7 +252,7 @@ static int dshare_write_page(struct dshare *ds, struct filemap *m, uint32_t i, u
             }
         }
     }
-    vfs_ns_unlock(mnt);
+    vfs_node_unlock(&file);
     return rc;
 }
 

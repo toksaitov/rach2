@@ -394,7 +394,10 @@ const char *loop_backing(int index, int *autoclear)
  * The first reference keeps the mount active while the lock waits. Its node
  * may move during that wait, so only the second resolution supplies the node
  * to open. A path moved to another mount answers EBUSY. Success keeps the
- * lock through open and publication.
+ * lock through open and publication. On a type that sets `file_locked`,
+ * whose nodes do not move, the lock is the file's own (`vfs_node_lock`),
+ * taken on the first resolution's node. The caller gives the lock back with
+ * `vfs_node_unlock`.
  */
 static int loop_resolve(const char *path, struct vfs_ref *ref)
 {
@@ -405,6 +408,11 @@ static int loop_resolve(const char *path, struct vfs_ref *ref)
     rc = vfs_resolve(0, path, 0, &first, 0, 0);
     if (rc != 0) {
         return rc;
+    }
+    if (vfs_file_locked(first.mnt)) {
+        *ref = first;
+        vfs_node_lock(ref);
+        return 0;
     }
     mnt = first.mnt;
     vfs_ns_lock(mnt);
@@ -509,31 +517,31 @@ int loop_attach(int index, const char *path, int writable)
     }
     rc = vfs_getattr(ref.mnt, ref.node, &st);
     if (rc != 0) {
-        vfs_ns_unlock(ref.mnt);
+        vfs_node_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return rc;
     }
     if ((st.mode & 0170000u) != 0100000u) {
-        vfs_ns_unlock(ref.mnt);
+        vfs_node_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return -EINVAL; /* only a regular file is an image */
     }
     if (st.size == 0 || st.size % BLOCK_SECTOR_SIZE != 0) {
-        vfs_ns_unlock(ref.mnt);
+        vfs_node_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return -EINVAL; /* whole sectors only */
     }
     if (loop_backs(ref.mnt, ref.node) || filemap_disk_mapped(ref.mnt, st.ino)) {
-        vfs_ns_unlock(ref.mnt);
+        vfs_node_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return -EBUSY;
     }
     if (block_depth(ref.mnt->dev) + 1 > BLOCK_MAX_DEPTH) {
-        vfs_ns_unlock(ref.mnt);
+        vfs_node_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return -ELOOP; /* deeper than the four buffers a process may hold */
@@ -541,7 +549,7 @@ int loop_attach(int index, const char *path, int writable)
 
     rc = vfs_open_node(ref.mnt, ref.node, writable ? 2 : 0, &handle);
     if (rc != 0) {
-        vfs_ns_unlock(ref.mnt);
+        vfs_node_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return rc;
@@ -549,7 +557,7 @@ int loop_attach(int index, const char *path, int writable)
     rc = loop_prepare(&ref, handle, &st);
     if (rc != 0) {
         vfs_release(ref.mnt, handle);
-        vfs_ns_unlock(ref.mnt);
+        vfs_node_unlock(&ref);
         vfs_ref_release(&ref);
         loop_unclaim(loop);
         return rc;
@@ -580,7 +588,7 @@ int loop_attach(int index, const char *path, int writable)
     loop->dev.backing = ref.mnt->dev;
     loop->dev.drvdata = loop;
 
-    vfs_ns_unlock(ref.mnt);
+    vfs_node_unlock(&ref);
 
     klog(KLOG_INFO, "loop", "loop%d: %s, %d bytes, %s", index, loop->path, (int)st.size,
          loop->writable ? "read-write" : "read-only");

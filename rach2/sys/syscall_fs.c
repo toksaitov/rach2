@@ -568,6 +568,90 @@ static int32_t fsize_refused(uint64_t end)
 }
 
 /**
+ * Take the lock of the file the description `ofd` is open on for a write or
+ * a change of its size, on a type that sets `file_locked` (`vfs_node_lock`), into
+ * `file`: 1 when taken, which `file_unlock` gives back, and 0 on any other
+ * type, whose description lock and namespace lock cover the change. The
+ * caller holds the description's lock, which comes first.
+ */
+static int file_lock(const struct open_file *ofd, struct vfs_ref *file)
+{
+    file->mnt = ofd->vmnt;
+    file->node = ofd->vnode;
+    if (!vfs_file_locked(ofd->vmnt)) {
+        return 0;
+    }
+    vfs_node_lock(file);
+    return 1;
+}
+
+/** Give back the lock `file_lock` took when `own` says it did. */
+static void file_unlock(const struct vfs_ref *file, int own)
+{
+    if (own) {
+        vfs_node_unlock(file);
+    }
+}
+
+/* The most times a write brings its buffer in again with no byte moved
+ * between, before it answers -EFAULT. */
+#define WRITE_REFAULTS 8
+
+/**
+ * The writes of `file_write`: `count` bytes of `buf` from `*pos`, which
+ * moves past each piece written, the bytes copied into the pages shared
+ * mappings hold when `mapped` (`filemap_file_written`). Returns the bytes
+ * written, or the first write's error when none were.
+ *
+ * On a type that sets `file_locked`, `own`, the caller holds the file's
+ * lock, `file`, and the file system copies from `buf` only while its pages
+ * are present (`vm_resident`), answering a short count at the first that is
+ * not, since a fault under the lock could wait for another file's lock. The
+ * lock then goes while the rest of the buffer is brought in, and the write
+ * goes on from the byte it reached, at the file's end again under O_APPEND.
+ */
+static int32_t file_write_pieces(fd_entry_t *entry, const struct vfs_ref *file, int own, int mapped,
+                                 const char __user *buf, uint32_t count, uint64_t *pos)
+{
+    struct open_file *ofd = entry->ofd;
+    uintptr_t from = (__force uintptr_t)buf;
+    uint32_t done = 0;
+    int refaults = 0;
+    int32_t n;
+
+    for (;;) {
+        n = vfs_write(ofd->vmnt, ofd->fhandle, (const char *)(from + done), count - done, *pos);
+        if (n > 0) {
+            if (mapped) {
+                filemap_file_written(entry, *pos, (uint32_t)n);
+            }
+            done += (uint32_t)n;
+            *pos += (uint64_t)n;
+            refaults = 0;
+        }
+        if (!own || n < 0 || done == count || vm_resident(from + done, count - done, 0)) {
+            break;
+        }
+        vfs_node_unlock(file);
+        n = ++refaults <= WRITE_REFAULTS && vm_prefault_range(from + done, count - done, 0)
+                ? 0
+                : -EFAULT;
+        vfs_node_lock(file);
+        if (n != 0) {
+            break;
+        }
+        if (ofd->status_flags & OFD_APPEND) {
+            struct vfs_stat vst;
+
+            if (vfs_getattr(ofd->vmnt, ofd->vnode, &vst) == 0) {
+                *pos = vst.size;
+            }
+        }
+    }
+    return done > 0 ? (int32_t)done : n;
+}
+
+/**
  * Write `count` bytes of user buffer `buf` to the file of a mounted type or
  * of the KRFFS root that `entry` is open on: at the description's offset,
  * which moves past what was written, or at `*at` for pwrite64, which leaves
@@ -575,13 +659,17 @@ static int32_t fsize_refused(uint64_t end)
  *
  * Returns the bytes written, or a negative errno: -EBADF for a descriptor
  * not open for writing or not on a file of a mount, -EFAULT, -EBUSY, -EFBIG,
- * or the file system's error. Takes the description's lock, and the mount's
- * namespace lock for a file shared mappings hold; may sleep.
+ * or the file system's error. Takes the description's lock, then the file's
+ * (`vfs_node_lock`) on a type that sets `file_locked`, from before the size
+ * O_APPEND reads to after the write, and the mount's namespace lock on
+ * another type for a file shared mappings hold; may sleep.
  *
  * With O_APPEND every write lands at the current end of the file, whatever
  * the offset says and whatever `at` asks for, as Linux's pwrite does. The
  * file system reads the user buffer directly, so its pages are range-checked
- * and faulted in first. A file that backs a loop device is reached through
+ * and faulted in first, and on a type that sets `file_locked` brought in
+ * again with the file's lock let go when one goes while the write sleeps
+ * (`file_write_pieces`). A file that backs a loop device is reached through
  * that device and nowhere else, since the file system mounted on it may not
  * have its image change underneath, and is -EBUSY: that is asked before the
  * description is locked and again under the lock, since an attachment can
@@ -591,8 +679,8 @@ static int32_t fsize_refused(uint64_t end)
  * writer is exempt: that is the CAP_FSETID analogue, without which any root
  * process disarms /bin/su by rewriting it. A file whose pages shared
  * mappings hold in memory has the bytes written copied into them under the
- * mount's namespace lock, held from before the write, so that no write-back
- * of the pages comes between the two (`filemap_file_written`). Under
+ * file's lock, held from before the write, so that no write-back of the
+ * pages comes between the two (`filemap_file_written`). Under
  * RLIMIT_FSIZE a write that would pass the limit writes what fits, and one
  * that starts at it fails (`fsize_refused`).
  */
@@ -600,9 +688,10 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
                           const uint64_t *at)
 {
     struct open_file *ofd = entry->ofd;
+    struct vfs_ref file;
     uint64_t pos;
     int32_t written;
-    int mapped;
+    int mapped, own;
 
     if (!(entry->flags & FD_FLAG_WRITE)) {
         return -EBADF;
@@ -617,7 +706,9 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
         return -EBUSY;
     }
     fd_ofd_lock(ofd);
+    own = file_lock(ofd, &file);
     if (loop_backs(ofd->vmnt, ofd->vnode)) {
+        file_unlock(&file, own);
         fd_ofd_unlock(ofd);
         return -EBUSY;
     }
@@ -630,6 +721,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
         }
     }
     if (count > 0 && fsize_refused(pos + 1) != 0) {
+        file_unlock(&file, own);
         fd_ofd_unlock(ofd);
         return -EFBIG;
     }
@@ -638,15 +730,12 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
         count = (uint32_t)(current_proc->rlim[RLIM_FSIZE].cur - pos);
     }
     mapped = filemap_disk_mapped(ofd->vmnt, ofd->ino);
-    if (mapped) {
-        vfs_ns_lock(ofd->vmnt);
+    if (mapped && !own) {
+        vfs_node_lock(&file);
     }
-    written = vfs_write(ofd->vmnt, ofd->fhandle, (const char __force *)buf, count, pos);
-    if (written > 0 && mapped) {
-        filemap_file_written(entry, pos, (uint32_t)written);
-    }
-    if (mapped) {
-        vfs_ns_unlock(ofd->vmnt);
+    written = file_write_pieces(entry, &file, own, mapped, buf, count, &pos);
+    if (mapped && !own) {
+        vfs_node_unlock(&file);
     }
     if (written > 0) {
         if (!cred_privileged()) {
@@ -657,9 +746,10 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
             }
         }
         if (!at) {
-            ofd->offset = pos + (uint64_t)written;
+            ofd->offset = pos;
         }
     }
+    file_unlock(&file, own);
     fd_ofd_unlock(ofd);
     if (written > 0 && inotify_watches) {
         inotify_desc(ofd, IN_MODIFY);
@@ -785,11 +875,15 @@ static int size_guarded(struct vfs_mount *mnt, void *node);
  * device is asked before the description is locked and again under the lock,
  * since an attachment can publish itself while this call waits for it. Shared
  * mappings of the file lose the pages past the new end
- * (`filemap_file_truncated`).
+ * (`filemap_file_truncated`), under the file's lock on a type that sets
+ * `file_locked` (`file_lock`), so that no write-back of a mapped page past
+ * the new end comes between the two.
  */
 long ksys_ftruncate(int fd, long long length)
 {
     fd_entry_t *entry;
+    struct vfs_ref file;
+    int own;
     int rc;
 
     if (!current_proc) {
@@ -818,7 +912,9 @@ long ksys_ftruncate(int fd, long long length)
         return -EBUSY;
     }
     fd_ofd_lock(entry->ofd);
+    own = file_lock(entry->ofd, &file);
     if (loop_backs(entry->ofd->vmnt, entry->ofd->vnode)) {
+        file_unlock(&file, own);
         fd_ofd_unlock(entry->ofd);
         return -EBUSY;
     }
@@ -830,9 +926,15 @@ long ksys_ftruncate(int fd, long long length)
             vfs_kill_setid(entry->ofd->vmnt, entry->ofd->vnode);
         }
     }
+    if (rc == 0 && own) {
+        filemap_file_truncated(entry->ofd->vmnt, entry->ofd->ino, (uint64_t)length);
+    }
+    file_unlock(&file, own);
     fd_ofd_unlock(entry->ofd);
     if (rc == 0) {
-        filemap_file_truncated(entry->ofd->vmnt, entry->ofd->ino, (uint64_t)length);
+        if (!own) {
+            filemap_file_truncated(entry->ofd->vmnt, entry->ofd->ino, (uint64_t)length);
+        }
         if (inotify_watches) {
             inotify_desc(entry->ofd, IN_MODIFY);
         }
@@ -2677,6 +2779,52 @@ static int node_make(const struct vfs_ref *parent, const char *leaf, uint32_t mo
     return rc;
 }
 
+/* What `dir_recheck` checks again under a directory's lock. */
+#define RECHECK_WRITE 1 /* write and search permission on the directory */
+#define RECHECK_MOUNT 2 /* a mount on the name is -EBUSY */
+#define RECHECK_NEW   4 /* a mount on the name is -EEXIST, for a new name */
+#define RECHECK_ROOT  8 /* a process root or a bind's root at the name is -EBUSY */
+
+/**
+ * Check again, under the lock of the directory `parent` (`vfs_node_lock`),
+ * what a caller checked of it and of its name `leaf` before it took the
+ * lock, the checks `what` names, on a type that sets `file_locked`, whose
+ * walk held nothing, so that a chmod, a mount or a chroot that ran while
+ * the caller slept is seen. 0 on any other type, whose walk or namespace
+ * lock kept them, or the first refusal.
+ */
+static int32_t dir_recheck(const struct vfs_ref *parent, const char *leaf, int what)
+{
+    int32_t rc = 0;
+
+    if (!vfs_file_locked(parent->mnt)) {
+        return 0;
+    }
+    if (what & RECHECK_WRITE) {
+        rc = cred_access_ref(parent, CRED_W | CRED_X, 0);
+    }
+    if (rc == 0 && (what & (RECHECK_MOUNT | RECHECK_NEW)) &&
+        vfs_leaf_mount(parent->mnt, parent->node, leaf)) {
+        rc = (what & RECHECK_NEW) ? -EEXIST : -EBUSY;
+    }
+    if (rc == 0 && (what & RECHECK_ROOT) && vfs_leaf_root(parent->mnt, parent->node, leaf)) {
+        rc = -EBUSY;
+    }
+    return rc;
+}
+
+/**
+ * Take the lock of the directory `parent` for a change to its name `leaf`
+ * (`vfs_node_lock`) and check again under it what `what` names
+ * (`dir_recheck`). Returns 0 or the refusal; the lock is held either way,
+ * and the caller gives it back with `vfs_node_unlock`.
+ */
+static int32_t dir_lock(const struct vfs_ref *parent, const char *leaf, int what)
+{
+    vfs_node_lock(parent);
+    return dir_recheck(parent, leaf, what);
+}
+
 /**
  * The missing-file half of O_CREAT: hold the parent of `name`, check its
  * write bit, and make the node under the namespace lock with `node_make`,
@@ -2687,10 +2835,13 @@ static int node_make(const struct vfs_ref *parent, const char *leaf, uint32_t mo
  * -EROFS under /dev or /proc or on a read-only mount, the permission's, or
  * the type's.
  *
- * The create runs under the parent mount's namespace lock on every type.
- * The walk takes that lock only on a type that sets `ns_serialised`, and
- * there success keeps it through the registration of the open handle; on
- * another type it is taken around `node_make` alone and given back at once.
+ * The create runs under the parent's lock on every type (`vfs_node_lock`):
+ * the mount's namespace lock, or the directory's own on a type that sets
+ * `file_locked`. The walk takes the namespace lock only on a type that sets
+ * `ns_serialised`, and there success keeps it through the registration of
+ * the open handle; on another type the lock is taken around `node_make`
+ * alone and given back at once, and on a type that sets `file_locked` the
+ * write permission is checked again under it (`dir_lock`).
  */
 static int open_create(const char *name, int flags, uint32_t mode, struct vfs_ref *ref,
                        struct vfs_name **entry)
@@ -2724,9 +2875,11 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
         return rc;
     }
     if (!held) {
-        vfs_ns_lock(parent.mnt);
+        rc = dir_lock(&parent, leafname, RECHECK_WRITE);
     }
-    rc = node_make(&parent, leafname, mode, 0, &made);
+    if (rc == 0) {
+        rc = node_make(&parent, leafname, mode, 0, &made);
+    }
     if (rc == 0 && entry && !mnt_is_root(parent.mnt)) {
         rc = vfs_name_capture(&parent, leafname, entry);
         if (rc != 0) {
@@ -2739,7 +2892,7 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
         }
     }
     if (!held) {
-        vfs_ns_unlock(parent.mnt);
+        vfs_node_unlock(&parent);
     }
     if (rc == -EEXIST && !(flags & O_EXCL)) {
         vfs_walk_unlock(parent.mnt);
@@ -3086,6 +3239,9 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
     vfs_desc_open(ref->mnt);
     vfs_leave(ref->mnt);
     if (flags & O_TRUNC) {
+        struct vfs_ref file;
+        int own = file_lock(entry->ofd, &file);
+
         rc = vfs_truncate(ref->mnt, entry->ofd->fhandle, 0);
         if (rc == 0 && !cred_privileged()) {
             if (mnt_is_root(ref->mnt)) {
@@ -3094,6 +3250,10 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
                 vfs_kill_setid(ref->mnt, entry->ofd->vnode);
             }
         }
+        if (rc == 0 && own) {
+            filemap_file_truncated(ref->mnt, entry->ofd->ino, 0);
+        }
+        file_unlock(&file, own);
         if (rc != 0) {
             fd_free(current_proc->fds, fd);
             return rc;
@@ -3874,8 +4034,8 @@ static void open_done(int fd, const char *name, int flags)
                 (e->flags & FD_FLAG_WRITE) && e->type == FD_TYPE_FILE;
     ofd->watch_flags = OFD_WATCH_OPEN | ((e->flags & FD_FLAG_WRITE) ? OFD_WATCH_WRITE : 0u) |
                        (e->type == FD_TYPE_DIR ? OFD_WATCH_DIR : 0u);
-    if (truncated) {
-        filemap_file_truncated(ofd->vmnt, ofd->ino, 0);
+    if (truncated && !vfs_file_locked(ofd->vmnt)) {
+        filemap_file_truncated(ofd->vmnt, ofd->ino, 0); /* else under the file's lock */
     }
     if (!inotify_watches) {
         return;
@@ -8556,7 +8716,7 @@ static int32_t do_chmod(const char *name, uint32_t mode, int dir)
     if (!mnt_is_root(ref.mnt)) {
         struct vfs_stat vst;
 
-        vfs_ns_lock(ref.mnt);
+        vfs_node_lock(&ref);
         rc = vfs_getattr(ref.mnt, ref.node, &vst);
         if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
             rc = -EPERM;
@@ -8568,7 +8728,7 @@ static int32_t do_chmod(const char *name, uint32_t mode, int dir)
             vst.mode = mode;
             rc = vfs_setattr(ref.mnt, ref.node, VFS_SET_MODE, &vst);
         }
-        vfs_ns_unlock(ref.mnt);
+        vfs_node_unlock(&ref);
         vfs_walk_unlock(ref.mnt);
         if (rc == 0) {
             attr_told(name, ref.mnt, ref.node, IN_ATTRIB, 0);
@@ -8724,14 +8884,14 @@ static int32_t do_chown(const char *name, uint32_t uid, uint32_t gid, int follow
         struct vfs_stat vst;
         int what;
 
-        vfs_ns_lock(ref.mnt);
+        vfs_node_lock(&ref);
         rc = vfs_getattr(ref.mnt, ref.node, &vst);
         what = 0;
         if (rc == 0) {
             what = vfs_chown_plan(&vst, uid, gid);
             rc = what < 0 ? what : (what ? vfs_setattr(ref.mnt, ref.node, what, &vst) : 0);
         }
-        vfs_ns_unlock(ref.mnt);
+        vfs_node_unlock(&ref);
         vfs_walk_unlock(ref.mnt);
         if (rc == 0 && chown_asks(uid, gid)) {
             attr_told(name, ref.mnt, ref.node, IN_ATTRIB, what == 0);
@@ -8834,10 +8994,13 @@ long sys_fchmod(isr_params_t *params)
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
         entry->ofd->vmnt && entry->ofd->vnode) {
+        struct vfs_ref file;
         struct vfs_stat vst;
         int rc;
 
-        vfs_ns_lock(entry->ofd->vmnt);
+        file.mnt = entry->ofd->vmnt;
+        file.node = entry->ofd->vnode;
+        vfs_node_lock(&file);
         rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
         if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
             rc = -EPERM;
@@ -8849,7 +9012,7 @@ long sys_fchmod(isr_params_t *params)
             vst.mode = mode;
             rc = vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, VFS_SET_MODE, &vst);
         }
-        vfs_ns_unlock(entry->ofd->vmnt);
+        vfs_node_unlock(&file);
         if (rc == 0) {
             attr_told_desc(entry->ofd, IN_ATTRIB, 0);
         }
@@ -9050,11 +9213,14 @@ static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
     }
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->ofd &&
         entry->ofd->vmnt && entry->ofd->vnode) {
+        struct vfs_ref file;
         struct vfs_stat vst;
         int what = 0;
         int rc;
 
-        vfs_ns_lock(entry->ofd->vmnt);
+        file.mnt = entry->ofd->vmnt;
+        file.node = entry->ofd->vnode;
+        vfs_node_lock(&file);
         rc = vfs_getattr(entry->ofd->vmnt, entry->ofd->vnode, &vst);
         if (rc == 0) {
             what = vfs_chown_plan(&vst, uid, gid);
@@ -9062,7 +9228,7 @@ static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid)
                      ? what
                      : (what ? vfs_setattr(entry->ofd->vmnt, entry->ofd->vnode, what, &vst) : 0);
         }
-        vfs_ns_unlock(entry->ofd->vmnt);
+        vfs_node_unlock(&file);
         if (rc == 0 && chown_asks(uid, gid)) {
             attr_told_desc(entry->ofd, IN_ATTRIB, what == 0);
         }
@@ -9173,10 +9339,11 @@ static int32_t truncate_checks(const struct vfs_ref *ref)
  */
 static int32_t truncate_path(const char *path, long long length, int dir)
 {
-    struct vfs_ref ref;
+    struct vfs_ref ref, file;
     struct vfs_mount *locked;
     struct open_file *desc = NULL;
     int32_t rc;
+    int own;
 
     if (length >= 0 && fsize_refused((uint64_t)length) != 0) {
         return -EFBIG;
@@ -9205,6 +9372,7 @@ static int32_t truncate_path(const char *path, long long length, int dir)
     vfs_desc_open(ref.mnt);
     vfs_leave(ref.mnt);
     fd_ofd_lock(desc);
+    own = file_lock(desc, &file);
     rc = -EBUSY;
     if (!loop_backs(desc->vmnt, desc->vnode)) {
         rc = vfs_truncate(desc->vmnt, desc->fhandle, (uint64_t)length);
@@ -9226,6 +9394,7 @@ static int32_t truncate_path(const char *path, long long length, int dir)
             }
         }
     }
+    file_unlock(&file, own);
     fd_ofd_unlock(desc);
     fd_ofd_unref(desc);
     vfs_walk_unlock(locked);
@@ -9403,8 +9572,9 @@ static int32_t new_name_taken(const struct vfs_ref *parent, const char *leaf, co
  * (`new_name_taken`); another mount, EXDEV; a source in /dev, /proc or /sys
  * or on the KRFFS root, whose types have no links, and a directory, EPERM;
  * a read-only mount, EROFS; and the parent's write permission. The type
- * makes the link under the namespace lock, and one without links answers
- * EPERM.
+ * makes the link under the parent's lock (`vfs_node_lock`), and under the
+ * source's after it on a type that sets `file_locked`, and one without links
+ * answers EPERM.
  */
 static int32_t do_link(const char *oldname, const char *newname, int follow, int olddir, int newend)
 {
@@ -9441,9 +9611,19 @@ static int32_t do_link(const char *oldname, const char *newname, int follow, int
         rc = (int32_t)cred_access_ref(&parent, CRED_W, 0);
     }
     if (rc == 0) {
-        vfs_ns_lock(parent.mnt);
-        rc = vfs_link(parent.mnt, parent.node, leaf, src.node);
-        vfs_ns_unlock(parent.mnt);
+        int own = vfs_file_locked(parent.mnt);
+
+        rc = dir_lock(&parent, leaf, RECHECK_WRITE | RECHECK_NEW);
+        if (own) {
+            vfs_node_lock(&src);
+        }
+        if (rc == 0) {
+            rc = vfs_link(parent.mnt, parent.node, leaf, src.node);
+        }
+        if (own) {
+            vfs_node_unlock(&src);
+        }
+        vfs_node_unlock(&parent);
     }
 out:
     vfs_ref_release(&parent);
@@ -9460,7 +9640,7 @@ out:
  * new name that exists (`new_name_taken`); then -EROFS in /dev, /proc and
  * /sys and on a read-only mount, -EPERM on the KRFFS root and on a type
  * without symbolic links, and the directory's write permission. The type
- * makes the link under the namespace lock.
+ * makes the link under the directory's lock (`dir_lock`).
  */
 static int32_t do_symlink(const char *target, const char *newname, int end)
 {
@@ -9491,9 +9671,11 @@ static int32_t do_symlink(const char *target, const char *newname, int end)
         rc = (int32_t)cred_access_ref(&parent, CRED_W, 0);
     }
     if (rc == 0) {
-        vfs_ns_lock(parent.mnt);
-        rc = vfs_symlink(parent.mnt, parent.node, leaf, target);
-        vfs_ns_unlock(parent.mnt);
+        rc = dir_lock(&parent, leaf, RECHECK_WRITE | RECHECK_NEW);
+        if (rc == 0) {
+            rc = vfs_symlink(parent.mnt, parent.node, leaf, target);
+        }
+        vfs_node_unlock(&parent);
     }
     vfs_ref_release(&parent);
     return rc;
@@ -11710,7 +11892,11 @@ static int32_t unlink_root_name(const struct vfs_ref *parent, const char *leaf, 
  * The walk keeps the parent's namespace lock, where its type takes one,
  * until the name is gone: on the KRFFS root the holder count of
  * `unlink_root_name` is right only under that lock, which an open holds
- * until it has published its descriptor.
+ * until it has published its descriptor. On a type that sets `file_locked`
+ * the removal holds the directory's lock and then the file's
+ * (`vfs_child_lock`), so that the sticky and immutable checks see the file
+ * the removal takes, and the permission and the mounts are checked again
+ * under them (`dir_recheck`).
  */
 static int32_t unlink_named(const char *path, int end)
 {
@@ -11744,17 +11930,24 @@ static int32_t unlink_named(const char *path, int end)
     } else if (mnt_is_root(vfs_mount_base(parent.mnt))) {
         rc = unlink_root_name(&parent, leaf, end == PATH_END_SLASH);
     } else {
-        vfs_ns_lock(parent.mnt);
-        if (end == PATH_END_SLASH) {
+        struct vfs_ref victim;
+
+        vfs_node_lock(&parent);
+        rc = vfs_child_lock(&parent, leaf, &victim);
+        if (rc == 0) {
+            rc = dir_recheck(&parent, leaf, RECHECK_WRITE | RECHECK_MOUNT);
+        }
+        if (rc == 0 && end == PATH_END_SLASH) {
             rc = leaf_dir_check(&parent, leaf);
             rc = rc == 0 ? -EISDIR : rc;
-        } else {
+        } else if (rc == 0) {
             rc = cred_remove_ref(&parent, leaf);
             if (rc == 0) {
                 rc = vfs_unlink_name(parent.mnt, parent.node, leaf);
             }
         }
-        vfs_ns_unlock(parent.mnt);
+        vfs_child_unlock(&victim);
+        vfs_node_unlock(&parent);
     }
     vfs_walk_unlock(parent.mnt);
     vfs_ref_release(&parent);
@@ -11901,7 +12094,10 @@ out:
  * file system, which refuses it as it refuses a full volume (ENOSPC on the
  * KRFFS root) or a failing one (EIO on a KRFFS volume). A name that exists
  * in /dev, /proc or /sys is -EEXIST too, before the -EROFS of a name that
- * does not, as on Linux. Returns 0 or a negative errno.
+ * does not, as on Linux. On a type that sets `file_locked` the walk holds
+ * nothing, and the directory's own lock covers the creation alone, with the
+ * permission and the mounts checked again under it (`dir_lock`), so a name
+ * made meanwhile is the type's -EEXIST. Returns 0 or a negative errno.
  */
 static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t mode,
                         const char *path)
@@ -11919,10 +12115,12 @@ static int32_t mkdir_in(const struct vfs_ref *parent, const char *leaf, uint32_t
     if (!mnt_is_root(parent->mnt)) {
         rc = cred_access_ref(parent, CRED_W, 0);
         if (rc == 0) {
-            vfs_ns_lock(parent->mnt);
-            rc = vfs_mkdir(parent->mnt, parent->node, leaf,
-                           mode & 07777u & ~current_proc->fs->umask);
-            vfs_ns_unlock(parent->mnt);
+            rc = dir_lock(parent, leaf, RECHECK_WRITE | RECHECK_NEW);
+            if (rc == 0) {
+                rc = vfs_mkdir(parent->mnt, parent->node, leaf,
+                               mode & 07777u & ~current_proc->fs->umask);
+            }
+            vfs_node_unlock(parent);
         }
         return rc;
     }
@@ -12089,9 +12287,11 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
         rc = -EPERM;
     }
     if (rc == 0) {
-        vfs_ns_lock(parent.mnt);
-        rc = node_make(&parent, leaf, mode, dev, &made);
-        vfs_ns_unlock(parent.mnt);
+        rc = dir_lock(&parent, leaf, RECHECK_WRITE | RECHECK_NEW);
+        if (rc == 0) {
+            rc = node_make(&parent, leaf, mode, dev, &made);
+        }
+        vfs_node_unlock(&parent);
         if (rc == 0 && parent.mnt->type->ops->put) {
             parent.mnt->type->ops->put(parent.mnt, made);
         }
@@ -12232,7 +12432,11 @@ static int32_t rmdir_root_name(const struct vfs_ref *parent, const char *leaf)
  *
  * The walk keeps the parent's namespace lock, where its type takes one,
  * until the directory is gone: on the KRFFS root the use `rmdir_root_name`
- * finds is right only under that lock.
+ * finds is right only under that lock. On a type that sets `file_locked`
+ * the removal holds the parent's lock and then the victim's
+ * (`vfs_child_lock`), under which it looks again for a mount on the victim,
+ * which a mount places under the victim's lock too, and for a root there
+ * (`dir_recheck`).
  */
 static int32_t do_rmdir(const char *pathbuf)
 {
@@ -12260,12 +12464,21 @@ static int32_t do_rmdir(const char *pathbuf)
     } else if (mnt_is_root(parent.mnt)) {
         rc = rmdir_root_name(&parent, leaf);
     } else {
-        vfs_ns_lock(parent.mnt);
-        rc = cred_remove_ref(&parent, leaf);
+        struct vfs_ref victim;
+
+        vfs_node_lock(&parent);
+        rc = vfs_child_lock(&parent, leaf, &victim);
+        if (rc == 0) {
+            rc = dir_recheck(&parent, leaf, RECHECK_WRITE | RECHECK_MOUNT | RECHECK_ROOT);
+        }
+        if (rc == 0) {
+            rc = cred_remove_ref(&parent, leaf);
+        }
         if (rc == 0) {
             rc = vfs_rmdir(parent.mnt, parent.node, leaf);
         }
-        vfs_ns_unlock(parent.mnt);
+        vfs_child_unlock(&victim);
+        vfs_node_unlock(&parent);
     }
     vfs_walk_unlock(parent.mnt);
     vfs_ref_release(&parent);
@@ -12330,9 +12543,9 @@ long sys_unlinkat(isr_params_t *params)
  * The refusal RENAME_NOREPLACE adds to a rename: -ENOENT for a source that is
  * not there, as the rename would answer, then -EEXIST for a new name that is,
  * a mount point being there for either, before the EBUSY a mount point is
- * otherwise, as on Linux. The caller holds the mount's namespace lock from
- * this check through the rename, and every namespace change takes that
- * lock, so no name can appear between the two.
+ * otherwise, as on Linux. The caller holds the rename's locks from this
+ * check through the rename (`vfs_rename_lock`), and every change of a name
+ * takes its directory's, so no name can appear between the two.
  */
 static int32_t rename_noreplace(const struct vfs_ref *opar, const char *oleaf,
                                 const struct vfs_ref *npar, const char *nleaf)
@@ -12430,20 +12643,35 @@ static int32_t rename_root_names(const struct vfs_ref *opar, const char *oleaf,
 
 /**
  * Rename `oleaf` in `opar` to `nleaf` in `npar` on a mounted type: the
- * other half of `do_rename`, which holds the mount's namespace lock from the
- * first lookup through the rename. RENAME_NOREPLACE in `flags` refuses a new
- * name that exists with -EEXIST; a source that is not a directory is
- * -ENOTDIR when either name had a slash after it, `slash`; then the removal
- * rules of `cred_remove_ref` for both names, and the type's own answers.
+ * other half of `do_rename`, which holds the rename's locks
+ * (`vfs_rename_lock`) from the first lookup through the rename: the mount's
+ * namespace lock, or on a type that sets `file_locked` the mount's rename
+ * lock, both directories' and the nodes of both names, under which the
+ * write permission on both directories and the mounts on both names are
+ * checked again (`dir_recheck`), since the walks held nothing.
+ * RENAME_NOREPLACE in `flags` refuses a new name that exists with -EEXIST;
+ * a source that is not a directory is -ENOTDIR when either name had a slash
+ * after it, `slash`; then the removal rules of `cred_remove_ref` for both
+ * names, and the type's own answers.
  */
 static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *oleaf,
                                     const struct vfs_ref *npar, const char *nleaf, int flags,
                                     int slash)
 {
+    struct vfs_rename_hold h;
     int32_t rc;
 
-    vfs_ns_lock(opar->mnt);
-    rc = (flags & RENAME_NOREPLACE) ? rename_noreplace(opar, oleaf, npar, nleaf) : 0;
+    rc = vfs_rename_lock(opar, oleaf, npar, nleaf, &h);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = dir_recheck(opar, oleaf, RECHECK_WRITE | RECHECK_MOUNT);
+    if (rc == 0) {
+        rc = dir_recheck(npar, nleaf, RECHECK_WRITE | RECHECK_MOUNT);
+    }
+    if (rc == 0 && (flags & RENAME_NOREPLACE)) {
+        rc = rename_noreplace(opar, oleaf, npar, nleaf);
+    }
     if (rc == 0 && slash) {
         rc = leaf_dir_check(opar, oleaf);
     }
@@ -12456,7 +12684,7 @@ static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *olea
     if (rc == 0) {
         rc = vfs_rename(opar->mnt, opar->node, oleaf, npar->node, nleaf);
     }
-    vfs_ns_unlock(opar->mnt);
+    vfs_rename_unlock(&h);
     return rc;
 }
 
@@ -12498,11 +12726,12 @@ static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *olea
  * path copy does.
  *
  * Both names are walked without the namespace lock, which is taken for the
- * lookups and the rename that follow. A walk takes the lock of each mount it
- * looks in, as ext2's lookup does, so a rename that walked its new name
- * holding the lock of the old one would hold one mount's lock while it waited
- * for another's, and two renames, or a rename and a read through a loop
- * device, could wait for each other. On the KRFFS root the holder count of
+ * lookups and the rename that follow, or on a type that sets `file_locked`
+ * the rename's locks of `vfs_rename_lock`. A walk takes the lock of each
+ * mount it looks in, as ext2's lookup does, so a rename that walked its new
+ * name holding the lock of the old one would hold one mount's lock while it
+ * waited for another's, and two renames, or a rename and a read through a
+ * loop device, could wait for each other. On the KRFFS root the holder count of
  * the replaced file is right only under the lock, which an open holds until
  * it has published its descriptor.
  */
@@ -12563,9 +12792,13 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
     if (vfs_leaf_mount(opar.mnt, opar.node, oleaf) || vfs_leaf_mount(npar.mnt, npar.node, nleaf)) {
         rc = -EBUSY;
         if (flags & RENAME_NOREPLACE) {
-            vfs_ns_lock(opar.mnt);
-            rc = rename_noreplace(&opar, oleaf, &npar, nleaf);
-            vfs_ns_unlock(opar.mnt);
+            struct vfs_rename_hold h;
+
+            rc = vfs_rename_lock(&opar, oleaf, &npar, nleaf, &h);
+            if (rc == 0) {
+                rc = rename_noreplace(&opar, oleaf, &npar, nleaf);
+                vfs_rename_unlock(&h);
+            }
             if (rc == 0) {
                 rc = -EBUSY;
             }
@@ -12699,7 +12932,7 @@ static int utime_nsec_valid(long nsec)
  * alone. A tv_nsec out of range is -EINVAL, as on Linux. A synthetic file has
  * no stored times and is -EROFS; the KRFFS root's times are not changed and
  * the call succeeds. On another type the read, the check and the store are
- * one step under the mount's namespace lock, as for chmod and chown.
+ * one step under the file's lock (`vfs_node_lock`), as for chmod and chown.
  */
 static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime_spec *times)
 {
@@ -12723,7 +12956,7 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime
 
         ref.mnt = mnt;
         ref.node = node;
-        vfs_ns_lock(mnt);
+        vfs_node_lock(&ref);
         rc = vfs_getattr(mnt, node, &vst);
         if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
             rc = now_both ? cred_access_ref(&ref, CRED_W, 0) : -EPERM;
@@ -12745,7 +12978,7 @@ static int32_t utimes_node(struct vfs_mount *mnt, void *node, const struct utime
         if (rc == 0) {
             rc = vfs_setattr(mnt, node, what, &vst);
         }
-        vfs_ns_unlock(mnt);
+        vfs_node_unlock(&ref);
         return rc;
     }
     if (kn == krffs_fs->node) {
@@ -12816,6 +13049,7 @@ static uint32_t utimes_events(const struct utime_spec *times)
 static int32_t utimes_fd(int fd, const struct utime_spec *times, int empty)
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
+    struct vfs_ref file;
     struct vfs_mount *mnt;
     int32_t rc;
 
@@ -12829,13 +13063,15 @@ static int32_t utimes_fd(int fd, const struct utime_spec *times, int empty)
         return -EBADF;
     }
     mnt = entry->ofd->vmnt;
-    vfs_ns_lock(mnt);
+    file.mnt = mnt;
+    file.node = entry->ofd->vnode;
+    vfs_node_lock(&file);
     if (entry->node && fd_node_check(entry) != 0) {
         rc = -EBADF;
     } else {
         rc = utimes_node(mnt, entry->ofd->vnode, times);
     }
-    vfs_ns_unlock(mnt);
+    vfs_node_unlock(&file);
     if (rc == 0) {
         attr_told_desc(entry->ofd, utimes_events(times), mnt_is_root(mnt));
     }
@@ -14194,23 +14430,28 @@ int32_t fs_socket_lookup(const char *path, struct vfs_mount **mnt, uint32_t *ino
 /**
  * Write a shared file mapping's bytes back: -ENODEV for a descriptor that
  * is not open on a file. It takes the mount's namespace lock, which a type
- * that moves a file's bytes needs, and not the description's lock, as
- * `fs_read_at` does.
+ * that moves a file's bytes needs, or the file's own on a type that sets
+ * `file_locked`, and not the description's lock, as `fs_read_at` does.
  */
 int32_t fs_write_at(fd_entry_t *e, const void *buf, uint32_t count, uint64_t off)
 {
     struct open_file *ofd = e->ofd;
+    struct vfs_ref file;
     int32_t n;
+    int locked;
 
     if (e->type != FD_TYPE_FILE || !ofd || !ofd->vmnt) {
         return -ENODEV;
     }
-    if (ofd->vmnt->type->ns_serialised) {
-        vfs_ns_lock(ofd->vmnt);
+    file.mnt = ofd->vmnt;
+    file.node = ofd->vnode;
+    locked = ofd->vmnt->type->ns_serialised || vfs_file_locked(ofd->vmnt);
+    if (locked) {
+        vfs_node_lock(&file);
     }
     n = vfs_write(ofd->vmnt, ofd->fhandle, buf, count, off);
-    if (ofd->vmnt->type->ns_serialised) {
-        vfs_ns_unlock(ofd->vmnt);
+    if (locked) {
+        vfs_node_unlock(&file);
     }
     return n;
 }
