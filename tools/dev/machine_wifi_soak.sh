@@ -60,9 +60,10 @@
 #   * a drop is a CTRL-EVENT-DISCONNECTED, counted by reason and by
 #     locally_generated, and its rejoin time runs to the next
 #     CTRL-EVENT-CONNECTED;
-#   * tx retries and failures are summed over associations, since the
-#     station's counters start again at each, from the samples, so a run of
-#     drops can leave out up to 5 s of each;
+#   * tx retries, tx failures and received frames dropped, replays among
+#     them, are summed over associations, since the station's counters start
+#     again at each, from the samples, so a run of drops can leave out up to
+#     5 s of each;
 #   * the longest ping gap is the longest time between two replies with
 #     requests unanswered between them, and the longest stall the longest
 #     between two replies in sequence, in which ping itself did not run;
@@ -255,8 +256,9 @@ sampler()
     while [ ! -e "$dir/stop" ]; do
         iw dev "$iface" station dump 2> /dev/null | awk '
             /tx packets:/ { t = $3 } /tx retries:/ { r = $3 } /tx failed:/ { f = $3 }
-            /beacon loss:/ { b = $3 } /signal:/ { s = $2 }
-            END { print "tx=" t + 0, "retries=" r + 0, "failed=" f + 0, "bl=" b + 0, "signal=" s }' |
+            /beacon loss:/ { b = $3 } /rx drop misc:/ { d = $4 } /signal:/ { s = $2 }
+            END { print "tx=" t + 0, "retries=" r + 0, "failed=" f + 0, "bl=" b + 0,
+                "drop=" d + 0, "signal=" s }' |
             stamp >> "$dir/samples"
         sleep 5
     done
@@ -355,6 +357,7 @@ table()
             printf "tx retries               %d (%.1f%%)\n", r, t ? 100 * r / t : 0
             printf "tx failed                %d\n", total["failed"] + last["failed"]
             printf "missed beacons counted   %d\n", total["bl"] + last["bl"]
+            printf "rx frames dropped        %d\n", total["drop"] + last["drop"]
         }' "$dir/samples"
     awk '!seen[$0]++' "$dir/kernel.raw" > "$dir/kernel"
     printf 'beacon-loss lines        %d\n' "$(grep -c ': beacon loss: ' "$dir/kernel")"
