@@ -164,10 +164,15 @@ struct ext2_node {
  * (`em_strict`): through to the medium; through to the device without its
  * flush, which a later flush covers; and through to the medium on any
  * mount, for the superblock's counts and state. 0, and the first two on any
- * other mount, leave the bytes dirty in the cache for `sync`. */
+ * other mount, leave the bytes dirty in the cache for `sync`. On any mount
+ * WRITE_FIRST and WRITE_AFTER leave them dirty in the cache's two classes,
+ * a `first` block reaching the device before any `after` one (bcache.h):
+ * `punch` clears pointers first and bits after. */
 #define WRITE_THROUGH   1
 #define WRITE_UNFLUSHED 2
 #define WRITE_DURABLE   3
+#define WRITE_FIRST     4
+#define WRITE_AFTER     5
 
 /*
  * The file-write batch's limits: the bytes it takes, its data and metadata
@@ -252,15 +257,11 @@ struct ext2_mount {
     const char *readonly_why;
     /* The file-write batch, set up when the mount becomes writable. */
     struct ext2_writeback *wb;
-    /* Nonzero while `punch` has a batch of frees open: the bitmap bytes,
-     * descriptors and pointer slots it touches are marked dirty and written
-     * together at its end, the bitmaps and descriptors after the pointers,
-     * so no pointer on the disk names a block whose bit is clear. `noted` is
-     * the bitmap and descriptor blocks noted so far, `noted_count` how many;
-     * when the table is full a sync empties it, which keeps the order. */
-    int batch;
-    uint64_t noted[16];
-    int noted_count;
+    /* The thread ID of the process planning under `em->meta`, or -1: its
+     * read of a block the cache lacks fails with -EAGAIN and leaves the
+     * block in `missed`, for it to fetch with the lock let go. */
+    int planner;
+    uint32_t missed;
     uint32_t alloc_hint;     /* the block after the last one given out */
     uint8_t *gd;             /* the group descriptors, `groups * 32` bytes, from the heap */
     struct ext2_node *nodes; /* the nodes in memory, from the heap, linked both ways */
@@ -502,6 +503,7 @@ static void em_locks_init(struct ext2_mount *em)
     em->reap = 0;
     em->writers = 0;
     em->closing = 0;
+    em->planner = -1;
 }
 
 /** Whether ext2's own locks act, which they do once the type record sets
@@ -738,12 +740,59 @@ static struct ext2_image *writeback_find(struct ext2_mount *em, uint32_t block)
 
 /* ---- bytes off the volume, through the cache ---- */
 
+/* The plans of one piece or allocation that may meet a block the cache
+ * lacks and start again; the next reads it under `em->meta`. */
+#define PLAN_TRIES 8
+
+/** The thread ID that `em->planner` and the sleeping locks name the caller
+ * by, 0 before the first process. */
+static int plan_caller(void)
+{
+    return current_proc ? (int)current_proc->pid : 0;
+}
+
+/**
+ * Cache block `blk` of the volume, held, as `bcache_get` gives it. While the
+ * caller plans under `em->meta` (`em->planner`), a block the cache lacks is
+ * not read: NULL with `*rc` -EAGAIN and the block in `em->missed`, for the
+ * planner to fetch with the lock let go. NULL with -EIO for a failed read.
+ */
+static struct bbuf *volume_get(struct ext2_mount *em, uint64_t blk, int *rc)
+{
+    struct bbuf *b;
+
+    if (em->planner == plan_caller() && !bcache_cached(em->dev, blk)) {
+        em->missed = (uint32_t)blk;
+        *rc = -EAGAIN;
+        return 0;
+    }
+    b = bcache_get(em->dev, blk);
+    *rc = b ? 0 : -EIO;
+    return b;
+}
+
+/** Bring cache block `blk` into the cache when neither it nor the batch has
+ * it, sleeping on the disk; the caller holds no buffer and not `em->meta`.
+ * A failed read is left for the caller's own read to meet. */
+static void volume_fetch(struct ext2_mount *em, uint64_t blk)
+{
+    struct bbuf *b;
+
+    if (writeback_find(em, (uint32_t)blk) || bcache_cached(em->dev, blk)) {
+        return;
+    }
+    b = bcache_get(em->dev, blk);
+    if (b) {
+        bcache_release(b);
+    }
+}
+
 /**
  * Copy `len` bytes at byte offset `off` of the volume into `dst`, one cache
  * block at a time, from the batch's image of a block when it has one, since
  * the batch's writes are not in the cache yet. The offset is 64 bits, so the
- * volume's size is the block layer's business and not this reader's. 0, or
- * -EIO.
+ * volume's size is the block layer's business and not this reader's. 0,
+ * -EIO, or -EAGAIN for a block the cache lacks under a plan (`volume_get`).
  */
 static int read_bytes(struct ext2_mount *em, uint64_t off, void *dst, uint32_t len)
 {
@@ -755,6 +804,7 @@ static int read_bytes(struct ext2_mount *em, uint64_t off, void *dst, uint32_t l
         uint32_t take = BCACHE_BLOCK_BYTES - in;
         struct bbuf *b;
         struct ext2_image *pending;
+        int rc;
 
         if (take > len) {
             take = len;
@@ -767,9 +817,9 @@ static int read_bytes(struct ext2_mount *em, uint64_t off, void *dst, uint32_t l
             len -= take;
             continue;
         }
-        b = bcache_get(em->dev, blk);
+        b = volume_get(em, blk, &rc);
         if (!b) {
-            return -EIO;
+            return rc;
         }
         if (in + take > b->bytes) {
             bcache_release(b);
@@ -1078,8 +1128,6 @@ static void ext2_hold(struct vfs_mount *mnt, void *node)
 static int release_inode(struct ext2_mount *em, struct ext2_node *n);
 static int sb_store(struct ext2_mount *em);
 static int sb_note(struct ext2_mount *em);
-static int meta_deferred(struct ext2_mount *em, uint64_t at);
-static int meta_noted(const struct ext2_mount *em, uint64_t blk);
 
 static void mark_error(struct ext2_mount *em);
 
@@ -2357,9 +2405,12 @@ static void em_balance(struct ext2_mount *em)
 /**
  * Copy `len` bytes from `src`, or zeros for NULL, to byte offset `off` of
  * the volume, written the way `sync` says (WRITE_THROUGH and the rest), or
- * left dirty with 0. Inside a batch a write left to the cache is dirtied in
- * the batch's order: after when its block is noted, and first otherwise. A
- * whole block is not read first, since nothing of it survives. 0, or -errno.
+ * left dirty with 0. A whole block is not read first, since nothing of it
+ * survives. A block the file-write batch has an image of gets the bytes in
+ * its image too, in the same step as the buffer, so that the drain, which
+ * copies the image over the cache's block, keeps them: an inode stored into
+ * a table block the batch holds, a bit beside the batch's reservations, a
+ * descriptor or the superblock's counts. 0, or -errno.
  */
 static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uint32_t len, int sync)
 {
@@ -2369,6 +2420,7 @@ static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uin
         uint64_t blk = off >> BCACHE_BLOCK_SHIFT;
         uint32_t at = (uint32_t)off & (BCACHE_BLOCK_BYTES - 1);
         uint32_t take = BCACHE_BLOCK_BYTES - at;
+        struct ext2_image *pending;
         struct bbuf *b;
         int rc = 0;
 
@@ -2389,12 +2441,16 @@ static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uin
         } else {
             k_memset(b->data + at, 0, take);
         }
+        pending = writeback_find(em, (uint32_t)blk);
+        if (pending) {
+            k_memcpy(pending->data + at, b->data + at, take);
+        }
         if (sync == WRITE_DURABLE || (sync == WRITE_THROUGH && em_strict(em))) {
             rc = bcache_write(b);
-        } else if (sync && em_strict(em)) {
+        } else if (sync == WRITE_UNFLUSHED && em_strict(em)) {
             rc = bcache_write_unflushed(b);
-        } else if (em->batch) {
-            bcache_dirty_ordered(b, meta_noted(em, blk) ? BCACHE_ORDER_AFTER : BCACHE_ORDER_FIRST);
+        } else if (sync == WRITE_FIRST || sync == WRITE_AFTER) {
+            bcache_dirty_ordered(b, sync == WRITE_FIRST ? BCACHE_ORDER_FIRST : BCACHE_ORDER_AFTER);
         } else {
             bcache_dirty(b);
         }
@@ -2408,16 +2464,23 @@ static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uin
     return 0;
 }
 
-/** Drain the batch before a change of attributes or of the namespace, so
- * that no block is freed or reused while an older write is pending: 0,
- * -EROFS on a read-only mount, or the drain's -errno. The lock it takes is
- * let go again; the caller holds it for the change. */
+/**
+ * Whether a change of attributes or of the namespace may be made: 0, -EROFS
+ * on a read-only mount, or the drain's -errno. A strict mount drains the
+ * batch first, so that the change's writes through reach the medium after
+ * the file data and pointers an inode it stores names. A mount that writes
+ * back does not: `write_bytes` keeps the batch's images current, and
+ * `punch` drains a batch that holds the file it frees. The lock it takes is
+ * let go again; the caller holds it for the change.
+ */
 static int assert_writable(struct vfs_mount *mnt, struct ext2_mount *em)
 {
-    int rc;
+    int rc = 0;
 
     vfs_ns_lock(mnt);
-    rc = writeback_drain(em);
+    if (em_strict(em)) {
+        rc = writeback_drain(em);
+    }
     if (rc == 0 && (!em->writable || (mnt->flags & VFS_MS_RDONLY))) {
         rc = -EROFS;
     }
@@ -2496,10 +2559,14 @@ static void inode_encode(const struct ext2_mount *em, const struct ext2_node *n,
  * what it had, and the encoder writes only the fields this driver keeps. A
  * fresh inode is written over its whole slot, so that a large slot loses the
  * attributes a freed inode kept in it; any other store writes the part of the
- * slot the encoder covers. Inside a batch the write is left for the batch's
- * end. A regular file of 2 GiB or more sets `large_file` first. A store while
- * the file-write batch holds inodes is a panic, since it must come after their
- * drain. 0, or -errno.
+ * slot the encoder covers. A regular file of 2 GiB or more sets `large_file`
+ * first.
+ *
+ * An inode the file-write batch holds is stored from the node, whose pointers
+ * may name blocks the batch has not put in the cache yet. That is sound on a
+ * mount that writes back, which promises no order, and a strict mount drains
+ * the batch before any store but the batch's own (`assert_writable`). 0, or
+ * -errno.
  */
 static int inode_write(struct ext2_mount *em, const struct ext2_node *n, int fresh, int how)
 {
@@ -2508,9 +2575,6 @@ static int inode_write(struct ext2_mount *em, const struct ext2_node *n, int fre
     uint32_t len = em->inode_size > EXT2_GOOD_OLD ? EXT2_LARGE : EXT2_GOOD_OLD;
     int rc;
 
-    if (em->wb && em->wb->count) {
-        k_panic("ext2: inode store before writeback drain");
-    }
     if (fresh) {
         len = em->inode_size;
         k_memset(raw, 0, len);
@@ -2528,7 +2592,7 @@ static int inode_write(struct ext2_mount *em, const struct ext2_node *n, int fre
             return rc;
         }
     }
-    return write_bytes(em, at, raw, len, em->batch ? 0 : how);
+    return write_bytes(em, at, raw, len, how);
 }
 
 /** Write inode `n` as `inode_write` does with WRITE_THROUGH: the fields this
@@ -2550,79 +2614,24 @@ static int inode_times_later(struct ext2_mount *em, const struct ext2_node *d)
     return inode_write(em, d, 0, 0);
 }
 
-/** Write the primary descriptor of group `g` with WRITE_THROUGH, or leave it
- * for the batch to write when one is open; the backup tables are not
- * written. 0, or -errno. */
-static int gd_store(struct ext2_mount *em, uint32_t g)
+/** Write the primary descriptor of group `g` in the way `how` says; the
+ * backup tables are not written. 0, or -errno. */
+static int gd_write(struct ext2_mount *em, uint32_t g, int how)
 {
     uint64_t at = (uint64_t)(em->first_data + 1) * em->block_size + (uint64_t)g * 32;
 
-    return write_bytes(em, at, em->gd + g * 32, 32, !meta_deferred(em, at));
+    return write_bytes(em, at, em->gd + g * 32, 32, how);
 }
 
 /**
- * Whether a write of a bitmap or descriptor at byte `at` may wait for the
- * end of the batch, its block noted once: only inside a batch. A full table
- * of noted blocks is emptied by a sync first, which keeps the order; when
- * that sync fails the block is written at once.
+ * `gd_write` with WRITE_THROUGH. While the batch holds blocks the descriptor
+ * counts them taken and the cache's bitmap does not yet show them: a stop
+ * then leaves a free count below the bitmap's, which the mount's check
+ * recounts and e2fsck repairs.
  */
-static int meta_deferred(struct ext2_mount *em, uint64_t at)
+static int gd_store(struct ext2_mount *em, uint32_t g)
 {
-    uint64_t blk = at >> BCACHE_BLOCK_SHIFT;
-    int i;
-
-    if (!em->batch) {
-        return 0;
-    }
-    for (i = 0; i < em->noted_count; i++) {
-        if (em->noted[i] == blk) {
-            return 1;
-        }
-    }
-    if (em->noted_count == (int)(sizeof(em->noted) / sizeof(em->noted[0]))) {
-        if (em_sync(em) != 0) {
-            return 0;
-        }
-        em->noted_count = 0;
-    }
-    em->noted[em->noted_count++] = blk;
-    return 1;
-}
-
-/** Whether `blk` is one of the bitmap and descriptor blocks the batch has
- * noted to write after the pointers. */
-static int meta_noted(const struct ext2_mount *em, uint64_t blk)
-{
-    int i;
-
-    for (i = 0; i < em->noted_count; i++) {
-        if (em->noted[i] == blk) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-/**
- * The end of a batch. On a mount with `sync` or `dirsync` a sync writes
- * the pointer blocks and inode before the bitmaps and descriptors; on any
- * other mount the blocks stay dirty for the sync, and the cache is balanced
- * (`em_balance`). The cache keeps the order while the batch is open, the
- * pointers dirtied `first` and the noted blocks `after`, so an eviction
- * under pressure writes the blocks that must go first before the one it
- * chose, and a sync does the same. 0, or -errno.
- */
-static int batch_end(struct ext2_mount *em)
-{
-    int rc;
-
-    em->batch = 0;
-    em->noted_count = 0;
-    rc = em_sync(em);
-    if (rc == 0) {
-        em_balance(em);
-    }
-    return rc;
+    return gd_write(em, g, WRITE_THROUGH);
 }
 
 /** Record a fault met while reading: the error bit set, and written when the
@@ -2714,7 +2723,8 @@ static int bit_first_clear(struct ext2_mount *em, uint32_t bitmap_block, uint32_
 }
 
 /** Set bit `index` of the bitmap in block `bitmap_block` to `value`, written
- * in the way `how` says unless a batch defers it; 0, or -errno. */
+ * in the way `how` says; 0, or -errno. The caller holds `em->meta`, so that
+ * no other change of the byte comes between its read and its write. */
 static int bit_write(struct ext2_mount *em, uint32_t bitmap_block, uint32_t index, int value,
                      int how)
 {
@@ -2730,7 +2740,7 @@ static int bit_write(struct ext2_mount *em, uint32_t bitmap_block, uint32_t inde
     } else {
         byte = (uint8_t)(byte & ~(1u << (index % 8)));
     }
-    return write_bytes(em, at, &byte, 1, meta_deferred(em, at) ? 0 : how);
+    return write_bytes(em, at, &byte, 1, how);
 }
 
 /** `bit_write` with WRITE_THROUGH. */
@@ -2772,7 +2782,9 @@ static int may_use_reserved(void)
  * returned, so that no pointer ever names a free block, and the block after
  * it becomes the mount's hint. 0, -ENOSPC when none is free or only the
  * reserved blocks are and the caller is not privileged, or -errno. The
- * caller holds `em->meta`.
+ * caller holds `em->meta`. Under a plan (`volume_get`) a bitmap the cache
+ * lacks is -EAGAIN, met before the first change, since every read of the
+ * search and of the chosen bit's byte comes before its write.
  */
 static int block_alloc(struct ext2_mount *em, uint32_t hint, uint32_t *out)
 {
@@ -2995,20 +3007,88 @@ static int attr_release(struct ext2_mount *em, uint32_t ino, uint32_t b)
     return block_free(em, b);
 }
 
-/* ---- the block map, written ---- */
+/**
+ * Bring into the cache, with `em->meta` let go, the bitmap block and the
+ * descriptor block of the group that holds block `hint`, which an
+ * allocation from that hint reads first.
+ */
+static void group_fetch(struct ext2_mount *em, uint32_t hint)
+{
+    uint32_t g;
+
+    if (hint < em->first_data || hint >= em->blocks) {
+        hint = em->first_data;
+    }
+    g = (hint - em->first_data) / em->bpg;
+    volume_fetch(em, le32(em->gd + g * 32));
+    volume_fetch(em, em->first_data + 1 + (g * 32) / BCACHE_BLOCK_BYTES);
+}
 
 /**
- * Free the blocks of `n` from data index `keep` on below the pointer
- * `*slot`, of `level` (0 for a data block) and covering the data from index
- * `base`, from the end. Each pointer is cleared, at `slot_at` on the volume
- * or, for 0, in the inode, which is stored, and then its block freed, so the
- * pointer goes to the disk before the bit; a pointer block whose children
- * are all gone goes the same way. `*emptied` says whether the pointer is now
- * 0. `n->blocks` is kept current; the caller stores the inode. 0, or -errno,
- * -EIO for a pointer block out of range.
+ * Allocate one block from `hint` into `*out` by `block_alloc`, under
+ * `em->meta`, which waits on the disk only for a block evicted again since
+ * its fetch. The hint's group is fetched first with the lock let go, and a
+ * search that meets another bitmap the cache lacks lets the lock go, fetches
+ * it and starts again, PLAN_TRIES times before it reads under the lock. The
+ * caller holds the lock of the node it allocates for and not `em->meta`. 0,
+ * or the errors of `block_alloc`.
+ */
+static int alloc_block(struct ext2_mount *em, uint32_t hint, uint32_t *out)
+{
+    uint32_t missed;
+    int tries, rc;
+
+    group_fetch(em, hint);
+    for (tries = 0;; tries++) {
+        meta_lock(em);
+        em->planner = tries < PLAN_TRIES ? plan_caller() : -1;
+        rc = block_alloc(em, hint, out);
+        em->planner = -1;
+        missed = em->missed;
+        meta_unlock(em);
+        if (rc != -EAGAIN) {
+            return rc;
+        }
+        volume_fetch(em, missed);
+    }
+}
+
+/* ---- the block map, written ---- */
+
+/* The blocks a free of a file collects before it frees them, and the
+ * collection when the heap has no room for that many. */
+#define PUNCH_BLOCKS 512
+#define PUNCH_SMALL  16
+
+/*
+ * One `punch`'s blocks, on its caller's stack: the `count` blocks whose
+ * pointers are cleared and whose bits are not, of the `cap` that `blocks`
+ * holds. Each punch has its own, so that two of them, of two files and
+ * interleaved at their disk waits, share nothing but the cache's order.
+ */
+struct punch_list {
+    uint32_t *blocks;
+    int count, cap;
+};
+
+/* `punch_level`'s answer when the list is full: the walk stops, the blocks
+ * listed are freed, and it starts again from the end. */
+#define PUNCH_FULL 1
+
+/**
+ * Clear the pointers of `n`'s blocks from data index `keep` on below the
+ * pointer `*slot`, of `level` (0 for a data block) and covering the data
+ * from index `base`, from the end, and list each block whose pointer is
+ * cleared in `list`. A pointer is cleared at `slot_at` on the volume,
+ * dirtied `first`, or for 0 in the inode in memory, which the caller stores;
+ * a pointer block whose children are all gone goes the same way. No bit
+ * changes here. `*emptied` says whether the pointer is now 0, and
+ * `n->blocks` is kept current. 0, PUNCH_FULL when the list has no room for
+ * the next block, or -errno, -EIO for a pointer block out of range.
  */
 static int punch_level(struct ext2_mount *em, struct ext2_node *n, uint32_t *slot, uint64_t slot_at,
-                       int level, uint32_t base, uint32_t keep, int *emptied)
+                       int level, uint32_t base, uint32_t keep, struct punch_list *list,
+                       int *emptied)
 {
     uint32_t b = *slot;
     uint32_t per = em->block_size / 4;
@@ -3050,7 +3130,7 @@ static int punch_level(struct ext2_mount *em, struct ext2_node *n, uint32_t *slo
             if (child == 0) {
                 continue;
             }
-            rc = punch_level(em, n, &child, at, level - 1, child_base, keep, &gone);
+            rc = punch_level(em, n, &child, at, level - 1, child_base, keep, list, &gone);
             if (rc != 0) {
                 return rc;
             }
@@ -3063,24 +3143,19 @@ static int punch_level(struct ext2_mount *em, struct ext2_node *n, uint32_t *slo
             return 0;
         }
     }
-    *slot = 0;
+    if (list->count == list->cap) {
+        return PUNCH_FULL;
+    }
     if (slot_at != 0) {
         uint8_t zero[4] = {0, 0, 0, 0};
 
-        rc = write_bytes(em, slot_at, zero, 4, !em->batch);
-        if (rc != 0) {
-            return rc;
-        }
-    } else {
-        rc = inode_store(em, n);
+        rc = write_bytes(em, slot_at, zero, 4, WRITE_FIRST);
         if (rc != 0) {
             return rc;
         }
     }
-    rc = block_free(em, b);
-    if (rc != 0) {
-        return rc;
-    }
+    *slot = 0;
+    list->blocks[list->count++] = b;
     if (n->blocks >= sectors) {
         n->blocks -= sectors;
     }
@@ -3088,14 +3163,13 @@ static int punch_level(struct ext2_mount *em, struct ext2_node *n, uint32_t *slo
     return 0;
 }
 
-/** Free `n`'s blocks from data index `keep` on, by `punch_level`: the
- * triple, double and single indirect trees first, then the direct blocks
- * from the last. 0, or -errno. */
-static int punch_from(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
+/** Clear `n`'s pointers from data index `keep` on by `punch_level`, listing
+ * their blocks: the triple, double and single indirect trees first, then the
+ * direct blocks from the last. 0, PUNCH_FULL, or -errno. */
+static int punch_from(struct ext2_mount *em, struct ext2_node *n, uint32_t keep,
+                      struct punch_list *list)
 {
     uint32_t per = em->block_size / 4;
-    uint32_t base = EXT2_NDIR;
-    uint32_t span = per;
     int level, i, rc, gone;
 
     for (level = 3; level >= 1; level--) {
@@ -3107,17 +3181,16 @@ static int punch_from(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
             lspan *= per;
         }
         if (lbase + lspan > keep && n->block[EXT2_NDIR + level - 1] != 0) {
-            rc = punch_level(em, n, &n->block[EXT2_NDIR + level - 1], 0, level, lbase, keep, &gone);
+            rc = punch_level(em, n, &n->block[EXT2_NDIR + level - 1], 0, level, lbase, keep, list,
+                             &gone);
             if (rc != 0) {
                 return rc;
             }
         }
     }
-    (void)base;
-    (void)span;
     for (i = (int)EXT2_NDIR - 1; i >= (int)keep && i >= 0; i--) {
         if (n->block[i] != 0) {
-            rc = punch_level(em, n, &n->block[i], 0, 0, (uint32_t)i, keep, &gone);
+            rc = punch_level(em, n, &n->block[i], 0, 0, (uint32_t)i, keep, list, &gone);
             if (rc != 0) {
                 return rc;
             }
@@ -3127,28 +3200,145 @@ static int punch_from(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
 }
 
 /**
- * Free the blocks of `n` from data index `keep` on, the pointers from the
- * end, in one batch: each pointer slot, bitmap byte and descriptor changes
- * in the cache as it is reached and is written once at the end, the
- * pointer blocks and the inode before the bitmaps and descriptors. Freed
- * one by one and written through, a shrink would cost three requests a
- * block. A failure inside the batch still writes what it marked, in the
- * same order. A device that failed a write is -EIO and not written to
- * again: the batch's blocks go to the cache first and would reach the
- * device at the sync that ends it, past the check a write through makes.
- * 0, or -errno.
+ * Free the `list->count` blocks of `list`, whose pointers are cleared, a
+ * group at a time: the group's bitmap and descriptor block fetched with
+ * `em->meta` let go, then under it each bit cleared and the counts raised,
+ * the bitmap and descriptor dirtied `after`, so that they reach the device
+ * after every pointer and inode dirtied `first`. The list is emptied. A
+ * block that may not hold data is skipped with a record and makes the
+ * answer -EIO. 0, or -errno.
+ */
+static int punch_free(struct ext2_mount *em, struct punch_list *list)
+{
+    int rc = 0, i;
+
+    while (list->count > 0) {
+        uint32_t g, first = list->blocks[0];
+        uint8_t *gd;
+        int freed = 0, left = 0;
+
+        if (!data_block_ok(em, first)) {
+            klog(KLOG_WARN, "ext2", "free of block %d, which is out of range", (int)first);
+            list->blocks[0] = list->blocks[--list->count];
+            rc = -EIO;
+            continue;
+        }
+        g = (first - em->first_data) / em->bpg;
+        gd = em->gd + g * 32;
+        group_fetch(em, first);
+        meta_lock(em);
+        for (i = 0; i < list->count; i++) {
+            uint32_t b = list->blocks[i];
+            int err;
+
+            if (!data_block_ok(em, b) || (b - em->first_data) / em->bpg != g) {
+                list->blocks[left++] = b;
+                continue;
+            }
+            err = bit_write(em, le32(gd + 0), (b - em->first_data) % em->bpg, 0, WRITE_AFTER);
+            if (err != 0) {
+                rc = rc != 0 ? rc : err;
+                continue;
+            }
+            LE16_PUT(gd + 12, le16(gd + 12) + 1);
+            em->free_blocks++;
+            freed = 1;
+        }
+        list->count = left;
+        if (freed) {
+            int err = gd_write(em, g, WRITE_AFTER);
+
+            rc = rc != 0 ? rc : err;
+        }
+        meta_unlock(em);
+    }
+    return rc;
+}
+
+/** Whether the file-write batch holds node `n`, whose pending pieces may
+ * name blocks a free of `n` would give up. */
+static int writeback_holds(const struct ext2_mount *em, const struct ext2_node *n)
+{
+    int i;
+
+    for (i = 0; em->wb && i < em->wb->count; i++) {
+        if (em->wb->nodes[i] == n) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Free the blocks of `n` from data index `keep` on, in two phases a round,
+ * under `n`'s lock. First up to PUNCH_BLOCKS pointers are cleared from the
+ * end and the inode stored, all dirtied `first`, their blocks collected on
+ * the caller's stack; then those blocks are freed a group at a time with
+ * their bitmaps and descriptors dirtied `after` (`punch_free`). The cache
+ * writes every `first` block before any `after` one, whichever path writes
+ * (bcache.h), so no pointer on the disk names a block whose bit is clear;
+ * two punches of two files keep that by the same two classes and share
+ * nothing else. A strict mount syncs between the phases and after the last.
+ * Freed one by one and written through, a shrink would cost three requests
+ * a block.
+ *
+ * A batch that holds `n` is drained first, so that no block is freed while a
+ * pending piece names it. A failure still frees what its round listed, in
+ * the same order, once the inode is stored and a strict mount's sync has
+ * put the pointers on the medium; otherwise the blocks stay taken, lost
+ * blocks for e2fsck, and the free counts stay exact. A device that failed a write is -EIO and not
+ * written to again: the blocks go to the cache first and would reach the device at the sync that
+ * ends the round, past the check a write through makes. The caller holds `n`'s lock and not
+ * `em->meta`. 0, or -errno.
  */
 static int punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
 {
-    int rc, end;
+    uint32_t small[PUNCH_SMALL];
+    struct punch_list list;
+    int rc, err;
 
+    assert_node_locked(em, n);
     if (em->dev->flags & BLOCK_WRITE_FAILED) {
         return -EIO;
     }
-    em->batch = 1;
-    rc = punch_from(em, n, keep);
-    end = batch_end(em);
-    return rc != 0 ? rc : end;
+    if (writeback_holds(em, n)) {
+        rc = writeback_drain(em);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    list.blocks = kmalloc(PUNCH_BLOCKS * sizeof(uint32_t));
+    list.cap = list.blocks ? PUNCH_BLOCKS : PUNCH_SMALL;
+    if (!list.blocks) {
+        list.blocks = small;
+    }
+    do {
+        list.count = 0;
+        rc = punch_from(em, n, keep, &list);
+        if (list.count == 0) {
+            break;
+        }
+        err = inode_write(em, n, 0, WRITE_FIRST);
+        if (err == 0) {
+            err = em_sync(em);
+        }
+        if (err == 0) {
+            err = punch_free(em, &list);
+        }
+        if (err == 0) {
+            err = em_sync(em);
+        }
+        if (err != 0 && rc >= 0) {
+            rc = err;
+        }
+    } while (rc == PUNCH_FULL);
+    if (list.blocks != small) {
+        kfree(list.blocks);
+    }
+    if (rc == 0) {
+        em_balance(em);
+    }
+    return rc;
 }
 
 /**
@@ -3158,8 +3348,9 @@ static int punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
  * pointer cannot reach the disk over what the block held before; an inode
  * that has that pointer is stored at once. A data block's pointer is
  * written after the block is in the bitmap. `n->blocks` and the inode's own
- * pointers change in memory; the caller stores the inode with them. 0,
- * -EFBIG past the triple indirect's reach, -ENOSPC, or -errno.
+ * pointers change in memory; the caller stores the inode with them, and
+ * holds `n`'s lock and not `em->meta`. 0, -EFBIG past the triple indirect's
+ * reach, -ENOSPC, or -errno.
  */
 static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index, uint32_t *out,
                      int *fresh)
@@ -3167,6 +3358,7 @@ static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
     uint32_t per = em->block_size / 4;
     uint32_t sectors = em->block_size / 512;
     uint32_t *slot;
+    uint32_t held;        /* a slot's value, read from its pointer block */
     uint64_t slot_at = 0; /* 0: the slot is in the inode */
     uint32_t hint = em->alloc_hint;
     int level, rc;
@@ -3200,7 +3392,7 @@ static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
                 div *= per;
             }
             if (*slot == 0) {
-                rc = block_alloc(em, hint, &b);
+                rc = alloc_block(em, hint, &b);
                 if (rc != 0) {
                     return rc;
                 }
@@ -3236,12 +3428,8 @@ static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
             if (rc != 0) {
                 return rc;
             }
-            {
-                static uint32_t held; /* the slot's value, read from the block */
-
-                held = le32(ptr);
-                slot = &held;
-            }
+            held = le32(ptr);
+            slot = &held;
             rest %= div;
             level--;
         }
@@ -3249,7 +3437,7 @@ static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
     if (*slot == 0) {
         uint32_t b;
 
-        rc = block_alloc(em, hint, &b);
+        rc = alloc_block(em, hint, &b);
         if (rc != 0) {
             return rc;
         }
@@ -3276,9 +3464,10 @@ static int map_alloc(struct ext2_mount *em, struct ext2_node *n, uint32_t index,
  * The batch's image of metadata block `block` at stage `stage`: the one it
  * has, or a new one in the next free page, zeroed with `blank` and a copy of
  * the cache's block otherwise, not yet marked changed. NULL with `*rc` set:
- * -EIO for an image the batch has at another stage or a failed read, and
- * -ENOMEM for a full table. A piece that fails gives back the new images it
- * took (`writeback_piece`); an image the batch had is not changed here.
+ * -EIO for an image the batch has at another stage or a failed read,
+ * -ENOMEM for a full table, and -EAGAIN for a block the cache lacks under a
+ * plan (`volume_get`). A piece that fails gives back the new images it took
+ * (`writeback_try`); an image the batch had is not changed here.
  */
 static struct ext2_image *writeback_meta(struct ext2_mount *em, uint32_t block, int stage,
                                          int blank, int *rc)
@@ -3307,9 +3496,8 @@ static struct ext2_image *writeback_meta(struct ext2_mount *em, uint32_t block, 
     if (blank) {
         k_memset(im->data, 0, BCACHE_BLOCK_BYTES);
     } else {
-        b = bcache_get(em->dev, block);
+        b = volume_get(em, block, rc);
         if (!b) {
-            *rc = -EIO;
             return 0;
         }
         k_memcpy(im->data, b->data, BCACHE_BLOCK_BYTES);
@@ -3532,12 +3720,12 @@ static int writeback_plan(struct ext2_mount *em, struct ext2_node *n, uint64_t o
 /** The batch's image of the plan's data block: the one it has, or a new one,
  * zeroed for a new block or one the piece of `len` bytes writes whole, and
  * a copy of the cache's block otherwise. 0, -ENOMEM when the table is full,
- * or -EIO. */
+ * -EIO, or -EAGAIN under a plan (`volume_get`). */
 static int writeback_prepare_data(struct ext2_mount *em, uint32_t len, struct ext2_write_plan *plan)
 {
     struct ext2_writeback *wb = em->wb;
     struct ext2_image *data;
-    int i;
+    int i, rc;
 
     for (i = 0; i < wb->datas && wb->data[i].block != plan->block; i++) {
     }
@@ -3548,19 +3736,20 @@ static int writeback_prepare_data(struct ext2_mount *em, uint32_t len, struct ex
             return -ENOMEM;
         }
         data = &wb->data[i];
+        if (!plan->fresh && len != BCACHE_BLOCK_BYTES) {
+            b = volume_get(em, plan->block, &rc);
+            if (!b) {
+                return rc;
+            }
+            k_memcpy(wb->slot[i], b->data, BCACHE_BLOCK_BYTES);
+            bcache_release(b);
+        } else {
+            k_memset(wb->slot[i], 0, BCACHE_BLOCK_BYTES);
+        }
         data->block = plan->block;
         data->stage = WB_DATA;
         data->data = wb->slot[i];
-        if (plan->fresh || len == BCACHE_BLOCK_BYTES) {
-            k_memset(data->data, 0, BCACHE_BLOCK_BYTES);
-        } else {
-            b = bcache_get(em->dev, plan->block);
-            if (!b) {
-                return -EIO;
-            }
-            k_memcpy(data->data, b->data, BCACHE_BLOCK_BYTES);
-            bcache_release(b);
-        }
+        data->dirty = 0;
         wb->datas++;
     }
     plan->data = &wb->data[i];
@@ -3622,21 +3811,45 @@ static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_
 }
 
 /**
- * Accept one piece of a write, `len` bytes from `src` at `offset` of `n`
- * within one block: planned, its data image prepared, and committed. No
- * image readers see changes until every read and reservation has
- * succeeded, and a piece that fails gives back the images it took. A
- * removed device, one that failed a write, or a mount made read-only is
- * -EIO. 0, or -errno.
+ * Bring into the cache, with no lock but `n`'s held, what the plan of the
+ * piece of `len` bytes at `offset` of `n` reads: the inode's table block, the
+ * pointer path, the data block of a partial write, the hint's group's bitmap
+ * and descriptor block, and the superblock when the file reaches 2 GiB
+ * without `large_file`. A hint only: what is evicted again before the plan
+ * costs it a restart.
  */
-static int writeback_piece(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
-                           const uint8_t *src, uint32_t len)
+static void writeback_fetch(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
+                            uint32_t len)
+{
+    uint32_t block = 0;
+
+    volume_fetch(em, inode_offset(em, n->ino) >> BCACHE_BLOCK_SHIFT);
+    if (block_at(em, n, (uint32_t)(offset >> 12), &block) == 0 && block != 0 &&
+        len != BCACHE_BLOCK_BYTES) {
+        volume_fetch(em, block);
+    }
+    group_fetch(em, em->alloc_hint);
+    if (offset + len >= 0x80000000u && !(em->ro_compat & EXT2_RO_LARGE_FILE)) {
+        volume_fetch(em, 0);
+    }
+}
+
+/**
+ * Plan, prepare and commit one piece, as `writeback_piece` says, under
+ * `em->meta`. A failure gives back the images the piece took before it
+ * returns, in the same step as the plan: once the lock goes, other writers
+ * change the tables and the counts. 0, or -errno, -EAGAIN for a block the
+ * cache lacks under a plan.
+ */
+static int writeback_try(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
+                         const uint8_t *src, uint32_t len)
 {
     struct ext2_writeback *wb = em->wb;
     struct ext2_write_plan plan;
     int old_metas = wb->metas, old_datas = wb->datas;
     int rc;
 
+    assert_meta_locked(em);
     k_memset(&plan, 0, sizeof(plan));
     rc = writeback_plan(em, n, offset, len, &plan);
     if (rc != 0) {
@@ -3656,6 +3869,42 @@ fail:
     wb->metas = old_metas;
     wb->datas = old_datas;
     return rc;
+}
+
+/**
+ * Accept one piece of a write, `len` bytes from `src` at `offset` of `n`
+ * within one block: planned, its data image prepared, and committed. No
+ * image readers see changes until every read and reservation has
+ * succeeded, and a piece that fails gives back the images it took. A
+ * removed device, one that failed a write, or a mount made read-only is
+ * -EIO.
+ *
+ * What the plan reads is fetched first with `em->meta` let go
+ * (`writeback_fetch`). Under the lock the plan reads only what the cache
+ * has; a block it lacks gives the piece back, lets the lock go, fetches the
+ * block and starts again, and after PLAN_TRIES such starts the plan reads
+ * under the lock, one request. The caller holds `n`'s lock and not
+ * `em->meta`. 0, or -errno.
+ */
+static int writeback_piece(struct ext2_mount *em, struct ext2_node *n, uint64_t offset,
+                           const uint8_t *src, uint32_t len)
+{
+    uint32_t missed;
+    int tries, rc;
+
+    writeback_fetch(em, n, offset, len);
+    for (tries = 0;; tries++) {
+        meta_lock(em);
+        em->planner = tries < PLAN_TRIES ? plan_caller() : -1;
+        rc = writeback_try(em, n, offset, src, len);
+        em->planner = -1;
+        missed = em->missed;
+        meta_unlock(em);
+        if (rc != -EAGAIN) {
+            return rc;
+        }
+        volume_fetch(em, missed);
+    }
 }
 
 /**
@@ -3679,31 +3928,61 @@ static int writeback_error(struct ext2_mount *em, int rc)
     return rc;
 }
 
+/** The batch's changed images at or past the stage a drain is at: the
+ * buffers a drain takes from the cache. */
+static uint32_t writeback_dirty(const struct ext2_writeback *wb)
+{
+    uint32_t n = 0;
+    int i;
+
+    for (i = 0; i < wb->datas; i++) {
+        n += wb->data[i].dirty && wb->data[i].stage >= wb->stage;
+    }
+    for (i = 0; i < wb->metas; i++) {
+        n += wb->meta[i].dirty && wb->meta[i].stage >= wb->stage;
+    }
+    return n;
+}
+
 /**
- * Write the batch out, stage by stage, under the mount's namespace lock: the
- * inodes encoded into their table images, then each stage's changed images
- * copied into the cache, from the allocation bitmaps and descriptors through
- * the data, the pointer blocks and the superblock to the inode tables. On a
- * strict mount each stage is synced and flushed before the next enters the
- * cache, so that a sync or an eviction can write only a stage whose
- * dependencies are on the medium; on any other mount the stages stay dirty
- * in the cache for the sync. No buffer is held across a sync, which may
- * reach a backing file. At the end the batch is emptied, its inodes' holds
- * put, and the cache balanced (`em_balance`).
+ * Write the batch out, stage by stage, under `em->meta`: the inodes encoded
+ * into their table images, then each stage's changed images copied into the
+ * cache, from the allocation bitmaps and descriptors through the data, the
+ * pointer blocks and the superblock to the inode tables. No buffer is held
+ * across a sync, which may reach a backing file.
  *
- * A failure keeps the images and the stage, so that the next drain resumes
- * there, and is recorded by `writeback_error`; a removed device fails at
- * once. 0, or -errno.
+ * On a mount that writes back the copies are all the work: the cache first
+ * writes dirty victims with no lock taken until it can give a buffer for
+ * each copy without a write (`bcache_reserve`), so that the lock waits on
+ * the disk only for what others took meanwhile. A strict mount holds the
+ * lock across its ordered writes, as its option asks: each stage is synced
+ * and flushed before the next enters the cache, so that a sync or an
+ * eviction can write only a stage whose dependencies are on the medium.
+ *
+ * At the end the batch is emptied, and with the lock let go its inodes'
+ * holds are put and the cache balanced (`em_balance`). A failure keeps the
+ * images and the stage, so that the next drain resumes there, and is
+ * recorded by `writeback_error`; a removed device fails at once. The caller
+ * holds no `em->meta`. 0, or -errno.
  */
 static int writeback_drain(struct ext2_mount *em)
 {
     struct ext2_writeback *wb = em->wb;
+    struct ext2_node *held[EXT2_WB_NODES];
     int i, count, rc;
 
     if (em->dev->flags & BLOCK_GONE) {
         return writeback_error(em, -EIO);
     }
     if (!wb || !wb->count) {
+        return 0;
+    }
+    if (!em_strict(em)) {
+        (void)bcache_reserve(em->dev, writeback_dirty(wb));
+    }
+    meta_lock(em);
+    if (!wb->count) {
+        meta_unlock(em);
         return 0;
     }
     for (i = 0; i < wb->count; i++) {
@@ -3750,16 +4029,22 @@ static int writeback_drain(struct ext2_mount *em)
         }
     }
     count = wb->count;
+    for (i = 0; i < count; i++) {
+        held[i] = wb->nodes[i];
+    }
     wb->count = wb->datas = wb->metas = 0;
     wb->bytes = 0;
     wb->stage = 0;
+    meta_unlock(em);
     for (i = 0; i < count; i++) {
-        ext2_put(em->mnt, wb->nodes[i]);
+        ext2_put(em->mnt, held[i]);
     }
     em_balance(em);
     return 0;
 fail:
-    return writeback_error(em, rc);
+    rc = writeback_error(em, rc);
+    meta_unlock(em);
+    return rc;
 }
 
 /**
