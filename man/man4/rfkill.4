@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 5, 2026
 .Dt RFKILL 4
 .Os
 .Sh NAME
@@ -26,11 +26,26 @@ and the hard block, which a key or a switch of the machine sets and only
 the machine clears.
 The radio runs while neither is set.
 .Pp
-A block stops the radio: a scan in progress is aborted, the station leaves
-its network and the interface loses its carrier.
-When the last block is lifted, a radio that ran, or that was asked to start
-while blocked, starts again.
-A radio stopped before the block stays stopped.
+A block stops a Wi-Fi radio and takes its interface down, as Linux's does:
+a scan in progress is aborted, the station leaves its network without a
+frame, and the interface's
+.Dv IFF_UP
+falls, which
+.Xr wpa_supplicant 8
+reads over rtnetlink as the interface disabled, so that it stops scanning.
+While a block is set the interface does not come up:
+.Dv SIOCSIFFLAGS
+and
+.Dv RTM_NEWLINK
+fail with
+.Er ERFKILL .
+When the last block is lifted the interface stays down until
+.Xr wpa_supplicant 8 ,
+told by the
+.Dv RFKILL_OP_CHANGE
+event, brings it up and joins its network again.
+An interface brought up after that event, before the kernel has finished
+lifting the block, starts its radio when it has.
 .Pp
 The interface is that of Linux, so that
 .Xr rfkill 8 ,

@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 5, 2026
 .Dt RFKILL 8
 .Os
 .Sh NAME
@@ -73,7 +73,9 @@ prints.
 .Sh EXIT STATUS
 .Ex -std
 .Sh EXAMPLES
-Stop and restart every Wi-Fi radio:
+Stop every Wi-Fi radio, taking its interface down, and let
+.Xr wpa_supplicant 8
+bring the interface up and join again:
 .Bd -literal -offset indent
 rfkill block wifi
 rfkill unblock wifi

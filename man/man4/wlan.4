@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 5, 2026
 .Dt WLAN 4
 .Os Rach2
 .Sh NAME
@@ -12,6 +12,9 @@ with an Ethernet interface named
 The interface is initially down.
 Bringing it up starts the radio; taking it down ends a scan, deauthenticates
 from the access point and stops the radio.
+While the radio's switch is blocked the interface does not come up, and
+bringing it up fails with
+.Er ERFKILL .
 While it is down, a scan, an authentication, an association or a management
 frame asked for through
 .Xr nl80211 7
@@ -28,8 +31,10 @@ EAPOL and management frames use the lowest basic rate.
 Each radio has a switch of
 .Xr rfkill 4 ,
 .Li phyN ,
-whose block leaves the network and stops the radio, and whose release starts
-it again if it ran.
+whose block leaves the network, stops the radio and takes the interface
+down, as Linux's does; after the release
+.Xr wpa_supplicant 8
+brings the interface up again.
 .Pp
 The station converts Ethernet II frames to three-address 802.11 data frames
 with LLC/SNAP headers.
@@ -73,4 +78,5 @@ A link whose final component is the registered radio driver name.
 .Xr wsim 4 ,
 .Xr proc 5 ,
 .Xr sysfs 5 ,
-.Xr nl80211 7
+.Xr nl80211 7 ,
+.Xr wpa_supplicant 8
