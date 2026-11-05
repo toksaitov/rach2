@@ -84,23 +84,17 @@ int ext2_fixture_tree(const char *root)
 int ext2_fixture_image(const char *image, int block, int inode, const char *features,
                        unsigned long mib, const char *tree)
 {
-    char bs[32], is[32], size[32], log[4096];
-    const char *argv[] = {host_tool_path("mke2fs"),
-                          "-q",
-                          "-F",
-                          "-t",
-                          "ext2",
-                          "-b",
-                          bs,
-                          "-I",
-                          is,
-                          "-O",
-                          features,
-                          "-d",
-                          tree,
-                          image,
-                          size,
-                          NULL};
+    return ext2_fixture_image_groups(image, block, inode, features, mib, tree, 0);
+}
+
+/** `ext2_fixture_image` with `per_group` blocks in each group (mke2fs -g), or
+ * mke2fs's own count for 0, so that a small volume can have many groups. */
+int ext2_fixture_image_groups(const char *image, int block, int inode, const char *features,
+                              unsigned long mib, const char *tree, unsigned long per_group)
+{
+    char bs[32], is[32], size[32], group[32], log[4096];
+    const char *argv[18];
+    unsigned n = 0;
     const char *previous = getenv("E2FSPROGS_FAKE_TIME");
     char *saved = previous ? strdup(previous) : NULL;
     FILE *f;
@@ -110,7 +104,28 @@ int ext2_fixture_image(const char *image, int block, int inode, const char *feat
     snprintf(bs, sizeof bs, "%d", block);
     snprintf(is, sizeof is, "%d", inode);
     snprintf(size, sizeof size, "%luM", mib);
+    snprintf(group, sizeof group, "%lu", per_group);
     snprintf(log, sizeof log, "%s.mkfs.out", image);
+    argv[n++] = host_tool_path("mke2fs");
+    argv[n++] = "-q";
+    argv[n++] = "-F";
+    argv[n++] = "-t";
+    argv[n++] = "ext2";
+    argv[n++] = "-b";
+    argv[n++] = bs;
+    argv[n++] = "-I";
+    argv[n++] = is;
+    argv[n++] = "-O";
+    argv[n++] = features;
+    if (per_group) {
+        argv[n++] = "-g";
+        argv[n++] = group;
+    }
+    argv[n++] = "-d";
+    argv[n++] = tree;
+    argv[n++] = image;
+    argv[n++] = size;
+    argv[n] = NULL;
     remove(image);
     f = fopen(image, "wb");
     if (!f || fclose(f) || setenv("E2FSPROGS_FAKE_TIME", "1", 1)) {

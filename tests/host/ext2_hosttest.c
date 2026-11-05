@@ -3488,6 +3488,7 @@ static void overlap_punch_row(void)
 #include "ext2_batch_lifecycle.h"
 #include "ext2_node_rows.h"
 #include "ext2_lock_rows.h"
+#include "ext2_fsync_rows.h"
 
 /* The host heap's limit on one allocation, 0 for none, and the page
  * allocations it grants before it fails, -1 for no limit
@@ -4880,8 +4881,10 @@ static void hardlink_check_rows(void)
  * and run the rows: the reads at 4 KiB blocks with 128- and 256-byte inodes
  * and at 2 KiB, the 1 KiB levels, the failures, the write sequences, the
  * order rows, the writer's failures, the dirty volumes, the matrix and the
- * batch rows. `--times-only` runs only timestamps; `--hardlinks-only` runs
- * only the hard-link check rows; `--capture-only` checks independent tool
+ * batch rows, the node rows and the fsync rows. `--times-only` runs only
+ * timestamps; `--hardlinks-only` runs only the hard-link check rows;
+ * `--node-only` and `--fsync-only` run only those rows; `--capture-only`
+ * checks independent tool
  * output capture alone. Returns 0,
  * and calls `fix_passed`, when every row passed.
  */
@@ -4905,6 +4908,11 @@ int main(int argc, char **argv)
 
     if (argc == 2 && streq(argv[1], "--node-only")) {
         node_rows();
+        goto finish;
+    }
+
+    if (argc == 2 && streq(argv[1], "--fsync-only")) {
+        fsync_rows();
         goto finish;
     }
 
@@ -4935,6 +4943,7 @@ int main(int argc, char **argv)
     matrix_rows();
     batch_rows();
     node_rows();
+    fsync_rows();
 
 finish:
     if (image) {
