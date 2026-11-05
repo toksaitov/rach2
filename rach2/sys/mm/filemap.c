@@ -61,11 +61,12 @@ static struct filemap *maps;
 static struct dshare *dshares;
 
 /**
- * Whether a page of a file on `mnt` can be read with interrupts off and
- * outside any system call. A file in memory or on the KRFFS root can, and so
- * can one on a disk the block layer polls there. A loop device, which reads
- * through the file system that holds its file and sleeps its caller, and a
- * USB stick, which answers only through its interrupts, cannot.
+ * Whether a page of a file on `mnt` can be read with interrupts off, for a
+ * thread inside a call that cannot sleep. A file in memory or on the KRFFS
+ * root can, and so can one on a disk the block layer polls there. A loop
+ * device, which reads through the file system that holds its file and sleeps
+ * its caller, and a USB stick, which answers only through its interrupts,
+ * cannot.
  */
 static int filemap_fault_readable(const struct vfs_mount *mnt)
 {
@@ -80,33 +81,37 @@ static int filemap_fault_readable(const struct vfs_mount *mnt)
 
 /**
  * Read page `pgoff` of the file `m` maps into `page`: the count read, or a
- * negative errno. A file on a device that cannot be read with interrupts
- * off (`filemap_fault_readable`) is read as a system call reads it. A thread
- * outside every call, faulting from user mode or writing a signal's frame
- * on its way back there, is marked in a call and runs with interrupts on
- * for the read, as `terminate_current_process` runs a process's end, so the
- * device may sleep it and the timer does not switch away in the middle; the
- * fault holds the file across the read and looks its region up again after
- * (`file_fault`). A thread inside a call with interrupts off cannot sleep,
- * and its read fails with EIO.
+ * negative errno. A file on a device is read as a system call reads it,
+ * since a polled read would stop the whole kernel for as long as the disk
+ * takes. A thread outside every call, faulting from user mode or writing a
+ * signal's frame on its way back there, is marked in a call and runs with
+ * interrupts on for the read, as `terminate_current_process` runs a
+ * process's end, so the device may sleep it and the timer does not switch
+ * away in the middle; the fault holds the file across the read and looks its
+ * region up again after (`file_fault`). A thread inside a call with
+ * interrupts off cannot sleep: it reads a device in place where
+ * `filemap_fault_readable` allows, and its read fails with EIO elsewhere.
  */
 static int32_t filemap_read(struct filemap *m, uint8_t *page, uint32_t pgoff)
 {
+    const struct vfs_mount *mnt = m->entry.ofd ? m->entry.ofd->vmnt : NULL;
+    uint32_t flags = 0;
     int entered = 0;
     int32_t got;
 
-    if (!filemap_fault_readable(m->entry.ofd ? m->entry.ofd->vmnt : NULL) &&
-        !(kirq_enabled() && proc_in_syscall())) {
-        if (!current_proc || current_proc->in_syscall) {
+    if (!(kirq_enabled() && proc_in_syscall())) {
+        if (mnt && mnt->dev && current_proc && !current_proc->in_syscall) {
+            current_proc->in_syscall = 1;
+            flags = kirq_save();
+            arch_irq_enable();
+            entered = 1;
+        } else if (!filemap_fault_readable(mnt)) {
             return -EIO;
         }
-        current_proc->in_syscall = 1;
-        arch_irq_enable();
-        entered = 1;
     }
     got = fs_read_at(&m->entry, page, PAGE_SIZE, (uint64_t)pgoff * PAGE_SIZE);
     if (entered) {
-        arch_irq_disable();
+        kirq_restore(flags);
         current_proc->in_syscall = 0;
     }
     return got;
