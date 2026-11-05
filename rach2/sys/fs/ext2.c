@@ -5,7 +5,7 @@
  * The locks, from the outermost:
  *
  *   lock         scope      covers                          waits on the disk
- *   em->rename   mount      the ancestry of a directory's   for the walk up
+ *   rename       mount      the ancestry of a directory's   for the walk up
  *                           move to another parent          `..` alone
  *   node lock    one inode  its attributes, block map and   for that file's
  *                           a directory's entries           own requests
@@ -14,23 +14,38 @@
  *                                                           after its fetch
  *   buffer       one block  the cache's rules (bcache.h)    for one request
  *
- * They are taken in that order: `em->rename`, then directories, then other
- * inodes, then `em->meta`, then buffers. Related directories go ancestor
- * first, which `is_below` decides under `em->rename`; unrelated ones, and
- * every inode after the directories, go by inode number. A strict mount
- * holds `em->meta` across its ordered writes, as `sync` asks.
+ * They are taken in that order: the rename lock, then directories, then
+ * other inodes, then `em->meta`, then buffers. The rename lock is the
+ * mount's (`vfs_mount.rename`), which the VFS takes for a rename between
+ * two directories before it orders and locks them (`vfs_rename_lock`), so
+ * `ext2_rename` and `is_below` run with it held. Related directories go
+ * ancestor first; unrelated ones, and every inode after the directories,
+ * go by inode number. A strict mount holds `em->meta` across its ordered
+ * writes, as `sync` asks.
  *
- * The three count in their holder's `file_locks` (process.h), so that
- * reclaim under any of them does not enter a file system. They act only
- * once the type record sets `file_locked`. Until then the VFS holds the
- * mount's namespace lock around every change and every description's use
- * (`ns_serialised`), `node_lock` and `meta_lock` take nothing, and
- * `assert_node_locked` and `assert_meta_locked` check the mount's lock.
+ * The VFS takes a directory's lock around a change of its entries and a
+ * file's around a write, a truncation and a change of attributes, and the
+ * lock of the node a name names in unlink, rmdir and rename; the operations
+ * here take the same locks again by depth, and those of the nodes they
+ * reach themselves. A reader takes its node's lock alone and lets it go
+ * around a block the cache lacks. A copy to or from a user buffer under a
+ * node lock runs in one step with a `vm_resident` that passed; a page not
+ * present is brought in with the locks let go, or, when the caller holds a
+ * file lock of its own, ends the call short (`user_refault`).
+ *
+ * The node lock and `em->meta` count in their holder's `file_locks`
+ * (process.h), so that reclaim under either does not enter a file system.
+ * They act only once the type record sets `file_locked`. Until then the VFS
+ * holds the mount's namespace lock around every change and every
+ * description's use (`ns_serialised`), `node_lock` and `meta_lock` take
+ * nothing, and `assert_node_locked` and `assert_meta_locked` check the
+ * mount's lock.
  */
 
 #include "ext2.h"
 
 #include "../mm/kheap.h"
+#include "../mm/paging.h"
 
 #include "../block/block.h"
 #include "../klog.h"
@@ -283,10 +298,9 @@ struct ext2_mount {
         uint32_t dir, block;
     } lookup_hint[EXT2_LOOKUP_HINTS];
     int lookup_next;
-    /* The allocator's lock (`meta_lock`) and the lock of a directory's
-     * move to another parent, as the comment at the top of the file says. */
+    /* The allocator's lock (`meta_lock`), as the comment at the top of the
+     * file says. */
     struct sleep_lock meta;
-    struct sleep_lock rename;
     /* Where a caller sleeps for a node that is loading or dying, and a
      * writer for admission while `closing` is set. */
     wait_queue_t node_wq;
@@ -303,7 +317,6 @@ struct ext2_mount {
 /* The kinds of ext2's locks, as `sleep_lock_records` lists them. */
 static struct sleep_lock_record node_record = SLEEP_LOCK_RECORD("ext2 node");
 static struct sleep_lock_record meta_record = SLEEP_LOCK_RECORD("ext2 meta");
-static struct sleep_lock_record rename_record = SLEEP_LOCK_RECORD("ext2 rename");
 
 /* The nodes every mount's hash has read in its searches, for /proc/stat. */
 static uint32_t node_visits;
@@ -498,7 +511,6 @@ static struct ext2_mount *em_of(struct vfs_mount *mnt)
 static void em_locks_init(struct ext2_mount *em)
 {
     sleep_lock_init(&em->meta, &meta_record, SLEEP_LOCK_FILE);
-    sleep_lock_init(&em->rename, &rename_record, SLEEP_LOCK_FILE);
     wait_queue_init(&em->node_wq);
     em->reap = 0;
     em->writers = 0;
@@ -1481,8 +1493,9 @@ static int lookup_slot(const struct ext2_mount *em, uint32_t dir)
 }
 
 /**
- * The `lookup` of `vfs_ops`: `name` in directory `dir`, the mount's root when
- * it is NULL. 0 with the node held, -ENOTDIR, -ENOENT, -ENOMEM, or -EIO.
+ * Find `name` in directory `d`, whose lock the caller holds, for a lookup:
+ * 1 with the inode it names in `*ino` and the entry's byte in `*at`, 0 when
+ * it is absent, or -EIO.
  *
  * A directory of this format has no index, so the lookup reads entries
  * until it finds the name. It starts at the block where the last lookup in
@@ -1492,22 +1505,13 @@ static int lookup_slot(const struct ext2_mount *em, uint32_t dir)
  * n names is listed in time proportional to n and not to n squared. A block
  * starts an entry whatever was written since, since no entry crosses one.
  */
-static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
+static int dir_lookup(struct ext2_mount *em, const struct ext2_node *d, const char *name,
+                      uint32_t *ino, uint32_t *at)
 {
-    struct ext2_mount *em = em_of(mnt);
-    struct ext2_node *d = dir ? dir : mnt->root;
-    uint32_t start = 0, cursor, limit, at;
+    uint32_t start = 0, cursor, limit;
     struct ext2_window w;
     int pass, slot;
 
-    if ((d->mode & S_IFMT_) != S_IFDIR_) {
-        return -ENOTDIR;
-    }
-    if (name[0] == '.' && name[1] == '\0') {
-        d->refs++;
-        *node = d;
-        return 0;
-    }
     slot = lookup_slot(em, d->ino);
     if (slot >= 0 && ((uint64_t)em->lookup_hint[slot].block << em->block_shift) < d->size) {
         start = em->lookup_hint[slot].block << em->block_shift;
@@ -1520,7 +1524,7 @@ static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
             struct ext2_scan sc;
             int got;
 
-            at = cursor;
+            *at = cursor;
             got = dir_scan_in(em, d, &w, &cursor, &sc);
             if (got < 0) {
                 window_close(&w);
@@ -1530,32 +1534,92 @@ static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
                 break;
             }
             if (sc.ino != 0 && names_equal(sc.name, name)) {
-                struct ext2_node *n;
-                int rc;
-
                 if (slot < 0) {
                     slot = em->lookup_next;
                     em->lookup_next = (em->lookup_next + 1) % EXT2_LOOKUP_HINTS;
                     em->lookup_hint[slot].dir = d->ino;
                 }
-                em->lookup_hint[slot].block = at >> em->block_shift;
+                em->lookup_hint[slot].block = *at >> em->block_shift;
                 window_close(&w);
-                if (sc.ino == d->ino) {
-                    d->refs++;
-                    *node = d;
-                    return 0;
-                }
-                n = node_for(em, sc.ino, &rc);
-                if (!n) {
-                    return rc;
-                }
-                *node = n;
-                return 0;
+                *ino = sc.ino;
+                return 1;
             }
         }
     }
     window_close(&w);
-    return -ENOENT;
+    return 0;
+}
+
+/** Whether the entry at byte `at` of directory `d` still names inode `ino`
+ * as `name`, read under `d`'s lock: 1, 0, or -EIO. */
+static int dir_names_at(struct ext2_mount *em, struct ext2_node *d, uint32_t at, const char *name,
+                        uint32_t ino)
+{
+    struct ext2_scan sc;
+    uint32_t cursor = at;
+    int got;
+
+    node_lock(d);
+    got = dir_scan(em, d, &cursor, &sc);
+    node_unlock(d);
+    return got <= 0 ? got : sc.ino == ino && names_equal(sc.name, name);
+}
+
+/**
+ * The `lookup` of `vfs_ops`: `name` in directory `dir`, the mount's root when
+ * it is NULL. 0 with the node held, not locked; -ENOTDIR, -ENOENT, -ENOMEM,
+ * or -EIO.
+ *
+ * The entry is found under the directory's lock, which the caller may hold
+ * already, and the node is had with the lock let go, so that the read of a
+ * cold inode holds up no other lookup in the directory and a second lookup
+ * of the name waits on the load itself (`node_for`). When the lock did go,
+ * the entry is read again under it: a name removed or moved meanwhile, whose
+ * inode may have been freed or given to another file, is looked up anew.
+ */
+static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **node)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *d = dir ? dir : mnt->root;
+    struct ext2_node *n;
+    uint32_t ino = 0, at = 0;
+    int rc, kept;
+
+    if ((d->mode & S_IFMT_) != S_IFDIR_) {
+        return -ENOTDIR;
+    }
+    for (;;) {
+        if (name[0] == '.' && name[1] == '\0') {
+            rc = 1;
+            ino = d->ino;
+        } else {
+            node_lock(d);
+            rc = dir_lookup(em, d, name, &ino, &at);
+            node_unlock(d);
+        }
+        if (rc <= 0) {
+            return rc < 0 ? rc : -ENOENT;
+        }
+        if (ino == d->ino) {
+            d->refs++;
+            *node = d;
+            return 0;
+        }
+        kept = !em_file_locked() || sleep_lock_held(&d->lock);
+        n = node_for(em, ino, &rc);
+        if (!n) {
+            return rc;
+        }
+        rc = kept ? 1 : dir_names_at(em, d, at, name, ino);
+        if (rc == 1) {
+            *node = n;
+            return 0;
+        }
+        ext2_put(mnt, n);
+        if (rc < 0) {
+            return rc;
+        }
+    }
 }
 
 /* ---- attributes ---- */
@@ -1638,43 +1702,187 @@ static void ext2_release(struct vfs_mount *mnt, void *handle)
     vfs_ns_unlock(mnt);
 }
 
+/* The most times a read or a write brings the pages of a user buffer in
+ * again with no byte moved between, before it answers -EFAULT, and the most
+ * blocks a read fetches for one piece with the locks let go: the three
+ * pointer levels and the data block. */
+#define EXT2_REFAULTS 8
+#define EXT2_FETCHES  4
+
 /**
- * Bring the block that holds byte `at` of `n` into the cache with the
- * mount's namespace lock let go, when the cache lacks it, so that a disk
- * that takes seconds holds up no other call on the mount. The block is only
- * a hint here: the caller, under the lock again, looks the file up anew, and
- * a block freed or evicted meanwhile costs it a read under the lock. Whether
- * the lock was let go, after which `n` may have changed.
+ * Bring in the pages of the user buffer [addr, addr + len) that a copy
+ * under node `n`'s lock found absent (`vm_resident`), with `n`'s lock and
+ * the mount's let go around the faults, since a fault under a file lock
+ * could wait for another file's; `write` is nonzero for a buffer the copy
+ * fills. Returns 1 once the pages are in, after which `n` may have
+ * changed; 0, with nothing let go, when the caller holds a file lock of
+ * its own, `n`'s or another's, which this cannot give back, so that the
+ * call ends short and its caller brings the pages in; or -EFAULT for
+ * pages that cannot be had.
  */
-static int read_fetch(struct vfs_mount *mnt, const struct ext2_node *n, uint64_t at)
+static int user_refault(struct vfs_mount *mnt, struct ext2_node *n, const void *addr, uint32_t len,
+                        int write)
+{
+    int mine = sleep_lock_held(&n->lock) ? 1 : 0;
+    int rc;
+
+    if (current_proc && (current_proc->file_locks != mine || n->lock.depth > 1)) {
+        return 0;
+    }
+    vfs_ns_unlock(mnt);
+    node_unlock(n);
+    rc = vm_prefault_range((uintptr_t)addr, len, write) ? 1 : -EFAULT;
+    node_lock(n);
+    vfs_ns_lock(mnt);
+    return rc;
+}
+
+/**
+ * The first block on the way to byte `at` of `n` that neither the cache
+ * nor the batch has, a pointer block or the data block, into `*blk` as a
+ * block of the cache: 1, or 0 when the way is had whole, ends in a hole, or
+ * meets a fault, which the read under the lock then reports. Reads only
+ * pointer blocks the cache has, so it waits on the disk only for one
+ * evicted after the look.
+ */
+static int read_missing(struct ext2_mount *em, const struct ext2_node *n, uint64_t at,
+                        uint64_t *blk)
+{
+    uint32_t per = em->block_size / 4;
+    uint32_t index = (uint32_t)(at >> em->block_shift);
+    uint32_t b, span = per, div = 1;
+    int level, i;
+
+    if (index < EXT2_NDIR) {
+        b = n->block[index];
+        level = 0;
+    } else {
+        index -= EXT2_NDIR;
+        for (level = 1; level <= 3 && index >= span; level++) {
+            index -= span;
+            span *= per;
+        }
+        if (level > 3) {
+            return 0;
+        }
+        b = n->block[EXT2_NDIR + level - 1];
+        for (i = 1; i < level; i++) {
+            div *= per;
+        }
+    }
+    for (;;) {
+        uint64_t off = (uint64_t)b * em->block_size;
+        uint8_t ptr[4];
+
+        if (b == 0 || !data_block_ok(em, b)) {
+            return 0;
+        }
+        *blk = off >> BCACHE_BLOCK_SHIFT;
+        if (!writeback_find(em, (uint32_t)*blk) && !bcache_cached(em->dev, *blk)) {
+            return 1;
+        }
+        if (level == 0) {
+            return 0;
+        }
+        if (read_bytes(em, off + (uint64_t)(index / div) * 4, ptr, 4) != 0) {
+            return 0;
+        }
+        b = le32(ptr);
+        index %= div;
+        div /= per;
+        level--;
+    }
+}
+
+/**
+ * Bring the first block on the way to byte `at` of `n` that the cache
+ * lacks into it, with `n`'s lock and the mount's let go, so that a disk
+ * that takes seconds holds up no other call on the file. The block is only
+ * a hint here: the caller, under the locks again, looks the file up anew,
+ * and a block freed or evicted meanwhile costs it a read under them.
+ * Whether the locks were let go, after which `n` may have changed.
+ */
+static int read_fetch(struct vfs_mount *mnt, struct ext2_node *n, uint64_t at)
 {
     struct ext2_mount *em = em_of(mnt);
     uint64_t blk;
     struct bbuf *b;
-    uint32_t block;
 
-    if (block_at(em, n, (uint32_t)(at >> em->block_shift), &block) != 0 || block == 0) {
-        return 0;
-    }
-    blk = ((uint64_t)block * em->block_size) >> BCACHE_BLOCK_SHIFT;
-    if (writeback_find(em, (uint32_t)blk) || bcache_cached(em->dev, blk)) {
+    if (!read_missing(em, n, at, &blk)) {
         return 0;
     }
     vfs_ns_unlock(mnt);
+    node_unlock(n);
     b = bcache_get(em->dev, blk);
     if (b) {
         bcache_release(b);
     }
+    node_lock(n);
     vfs_ns_lock(mnt);
     return 1;
 }
 
 /**
+ * Copy `len` bytes of `n`'s data at `at`, inside one block, into `dst`, a
+ * hole as zeros. The block, or the batch's image of it, is had first, and
+ * the check that `dst` is present (`vm_resident`) and the copy follow it
+ * with no sleep between, so that a page of a user buffer that went is found
+ * before the copy and not by a fault under `n`'s lock. 0; -EFAULT, with
+ * nothing copied, for a page of `dst` that is not present; or the errors of
+ * `block_at`.
+ */
+static int read_piece(struct ext2_mount *em, const struct ext2_node *n, uint64_t at, uint8_t *dst,
+                      uint32_t len)
+{
+    struct ext2_image *pending;
+    struct bbuf *buf;
+    uint64_t off;
+    uint32_t b, in;
+    int rc = block_at(em, n, (uint32_t)(at >> em->block_shift), &b);
+
+    if (rc != 0) {
+        return rc;
+    }
+    if (b == 0) {
+        if (!vm_resident((uintptr_t)dst, len, 1)) {
+            return -EFAULT;
+        }
+        k_memset(dst, 0, len);
+        return 0;
+    }
+    off = (uint64_t)b * em->block_size + ((uint32_t)at & (em->block_size - 1));
+    in = (uint32_t)off & (BCACHE_BLOCK_BYTES - 1);
+    pending = writeback_find(em, (uint32_t)(off >> BCACHE_BLOCK_SHIFT));
+    if (pending) {
+        if (!vm_resident((uintptr_t)dst, len, 1)) {
+            return -EFAULT;
+        }
+        k_memcpy(dst, pending->data + in, len);
+        return 0;
+    }
+    buf = bcache_get(em->dev, off >> BCACHE_BLOCK_SHIFT);
+    if (!buf) {
+        return -EIO;
+    }
+    if (in + len > buf->bytes) {
+        rc = -EIO;
+    } else if (!vm_resident((uintptr_t)dst, len, 1)) {
+        rc = -EFAULT;
+    } else {
+        k_memcpy(dst, buf->data + in, len);
+    }
+    bcache_release(buf);
+    return rc;
+}
+
+/**
  * The `read` of `vfs_ops`: up to `count` bytes at `offset`, ending at the
  * size, the batch's pending writes included and a hole read as zeros, under
- * the mount's namespace lock, which a block the cache lacks lets go
- * (`read_fetch`); the access time does not change. The bytes read, -EISDIR,
- * or -EIO.
+ * the node's lock, which a block the cache lacks on the way to the data
+ * lets go (`read_fetch`); the access time does not change. A page of the
+ * buffer that is not present at the copy is brought in with the lock let
+ * go (`user_refault`), or ends the read short when the caller holds a file
+ * lock. The bytes read, -EISDIR, -EFAULT, or -EIO.
  */
 static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
                          uint64_t offset)
@@ -1683,31 +1891,48 @@ static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
     struct ext2_node *n = handle;
     uint8_t *out = buf;
     uint32_t done = 0;
-    int rc = 0, fetched = 0;
+    int rc = 0, fetches = 0, refaults = 0;
 
     if ((n->mode & S_IFMT_) == S_IFDIR_) {
         return -EISDIR;
     }
+    node_lock(n);
     vfs_ns_lock(mnt);
     while (rc == 0 && done < count && offset + done < n->size) {
         uint64_t at = offset + done;
         uint32_t take = em->block_size - ((uint32_t)at & (em->block_size - 1));
 
-        if (!fetched && read_fetch(mnt, n, at)) {
-            fetched = 1;
+        if (fetches < EXT2_FETCHES && read_fetch(mnt, n, at)) {
+            fetches++;
             continue;
         }
-        fetched = 0;
         if (take > count - done) {
             take = count - done;
         }
         if (take > n->size - at) {
             take = (uint32_t)(n->size - at);
         }
-        rc = read_data(em, n, at, out + done, take);
-        done += take;
+        rc = read_piece(em, n, at, out + done, take);
+        if (rc == -EFAULT) {
+            rc = ++refaults <= EXT2_REFAULTS ? user_refault(mnt, n, out + done, take, 1) : -EFAULT;
+            if (rc == 1) {
+                rc = 0;
+                fetches = 0;
+                continue;
+            }
+            break;
+        }
+        if (rc == 0) {
+            done += take;
+            fetches = 0;
+            refaults = 0;
+        }
     }
     vfs_ns_unlock(mnt);
+    node_unlock(n);
+    if (rc == -EFAULT && done > 0) {
+        rc = 0;
+    }
     return rc != 0 ? rc : (int32_t)done;
 }
 
@@ -1725,22 +1950,13 @@ static int ext2_dtype(uint32_t ft)
 }
 
 /**
- * The `readdir` of `vfs_ops`: the next entry with an inode of directory
- * `handle` at `*cursor`, a byte offset, `.` and `..` included. Its type comes
- * from the entry's file-type byte when the volume has the filetype feature,
- * and from the inode's mode otherwise, which costs a read of the inode. 1
- * with `ent` filled, 0 at the end, -ENOTDIR, -ENOENT for a directory removed
- * while held, or -EIO.
+ * The entry after byte `*cursor` of directory `d` that names an inode, for
+ * `ext2_readdir`, whose caller holds `d`'s lock: 1 with `ent` filled and the
+ * cursor past it, 0 at the end, -ENOENT for a removed directory, or -EIO.
  */
-static int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
-                        struct vfs_dirent *ent)
+static int dir_next(struct ext2_mount *em, struct ext2_node *d, uint32_t *cursor,
+                    struct vfs_dirent *ent)
 {
-    struct ext2_mount *em = em_of(mnt);
-    struct ext2_node *d = handle;
-
-    if ((d->mode & S_IFMT_) != S_IFDIR_) {
-        return -ENOTDIR;
-    }
     if (d->unlinked) {
         return -ENOENT;
     }
@@ -1775,23 +1991,36 @@ static int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
 }
 
 /**
- * The `readlink` of `vfs_ops`: a symbolic link's target, from the inode's
- * pointer words when it is shorter than sixty bytes and the inode has no
- * blocks, from its first block otherwise, with a terminating NUL. Returns
- * the length; -ENAMETOOLONG when `cap` cannot hold it; -EINVAL for a node
- * that is not a link; or -EIO for a size of a block or more, a link of 60
- * bytes or more without blocks, a long link without its block, or a failed
- * read.
+ * The `readdir` of `vfs_ops`: the next entry with an inode of directory
+ * `handle` at `*cursor`, a byte offset, `.` and `..` included. Its type comes
+ * from the entry's file-type byte when the volume has the filetype feature,
+ * and from the inode's mode otherwise, which costs a read of the inode. 1
+ * with `ent` filled, 0 at the end, -ENOTDIR, -ENOENT for a directory removed
+ * while held, or -EIO. Takes the directory's lock (`dir_next`).
  */
-static int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
+static int ext2_readdir(struct vfs_mount *mnt, void *handle, uint32_t *cursor,
+                        struct vfs_dirent *ent)
 {
-    struct ext2_mount *em = em_of(mnt);
-    struct ext2_node *n = node;
+    struct ext2_node *d = handle;
+    int rc;
+
+    if ((d->mode & S_IFMT_) != S_IFDIR_) {
+        return -ENOTDIR;
+    }
+    node_lock(d);
+    rc = dir_next(em_of(mnt), d, cursor, ent);
+    node_unlock(d);
+    return rc;
+}
+
+/**
+ * The target of symbolic link `n` into `buf`, as `ext2_readlink` gives it,
+ * for a caller that holds `n`'s lock.
+ */
+static int link_target(struct ext2_mount *em, const struct ext2_node *n, char *buf, uint32_t cap)
+{
     uint32_t len;
 
-    if ((n->mode & S_IFMT_) != S_IFLNK_) {
-        return -EINVAL;
-    }
     if (n->size >= em->block_size) {
         return -EIO;
     }
@@ -1821,6 +2050,29 @@ static int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t 
     }
     buf[len] = '\0';
     return (int)len;
+}
+
+/**
+ * The `readlink` of `vfs_ops`: a symbolic link's target, from the inode's
+ * pointer words when it is shorter than sixty bytes and the inode has no
+ * blocks, from its first block otherwise, with a terminating NUL. Returns
+ * the length; -ENAMETOOLONG when `cap` cannot hold it; -EINVAL for a node
+ * that is not a link; or -EIO for a size of a block or more, a link of 60
+ * bytes or more without blocks, a long link without its block, or a failed
+ * read. Takes the link's lock (`link_target`).
+ */
+static int ext2_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
+{
+    struct ext2_node *n = node;
+    int rc;
+
+    if ((n->mode & S_IFMT_) != S_IFLNK_) {
+        return -EINVAL;
+    }
+    node_lock(n);
+    rc = link_target(em_of(mnt), n, buf, cap);
+    node_unlock(n);
+    return rc;
 }
 
 /** The blocks the volume's own structures take: those before the first
@@ -2088,13 +2340,78 @@ struct ext2_path_level {
     uint32_t ino, cursor, length;
 };
 
+/**
+ * The entry of directory `d`, whose lock the caller holds, that names inode
+ * `ino` by a name other than `.` and `..`, into `sc`: 1, 0 when it has none,
+ * or -EIO.
+ */
+static int dir_name_of(struct ext2_mount *em, const struct ext2_node *d, uint32_t ino,
+                       struct ext2_scan *sc)
+{
+    uint32_t cursor = 0;
+
+    for (;;) {
+        int got = dir_scan(em, d, &cursor, sc);
+
+        if (got <= 0) {
+            return got;
+        }
+        if (sc->ino == ino && !names_equal(sc->name, ".") && !names_equal(sc->name, "..")) {
+            return 1;
+        }
+    }
+}
+
+/** Whether node `d`, whose lock the caller holds, is a directory with a
+ * name, whose entries may be read: one freed and given to another file
+ * after a walk read its number is not. */
+static int dir_live(const struct ext2_node *d)
+{
+    return (d->mode & S_IFMT_) == S_IFDIR_ && !d->unlinked;
+}
+
+/**
+ * One step of the walk for a file's name: the next entry of directory
+ * inode `ino` after byte `*cursor`, into `sc`, read under the directory's
+ * lock with the node held, and whether the inode it names is a directory,
+ * into `*is_dir`. 1, 0 at the directory's end, or -errno. The lock is let
+ * go before the next step, so the walk holds one directory at a time.
+ */
+static int path_step(struct ext2_mount *em, uint32_t ino, uint32_t *cursor, struct ext2_scan *sc,
+                     int *is_dir)
+{
+    int got;
+    struct ext2_node *d = node_for(em, ino, &got);
+
+    if (!d) {
+        return got;
+    }
+    *is_dir = 0;
+    node_lock(d);
+    got = dir_live(d) ? dir_scan(em, d, cursor, sc) : 0;
+    if (got > 0 && sc->ino != 0) {
+        if (em->incompat & EXT2_INCOMPAT_FILETYPE) {
+            *is_dir = sc->type == EXT2_FT_DIR;
+        } else {
+            struct ext2_node child;
+
+            got = inode_load(em, sc->ino, &child);
+            got = got != 0 ? got : 1;
+            *is_dir = got == 1 && (child.mode & S_IFMT_) == S_IFDIR_;
+        }
+    }
+    node_unlock(d);
+    ext2_put(em->mnt, d);
+    return got;
+}
+
 /** Find one live name of `wanted` below the root. Directories have no hard
  * links except . and .., which are not descended. The stack is on the heap,
- * bounded by the path capacity, and no recursive kernel stack is used. */
+ * bounded by the path capacity, and no recursive kernel stack is used; the
+ * walk holds one directory's lock at a time (`path_step`). */
 static int ext2_file_path(struct ext2_mount *em, uint32_t wanted, char *buf, uint32_t cap)
 {
     struct ext2_path_level *levels;
-    struct ext2_node dir, child;
     struct ext2_scan sc;
     uint32_t depth = 0, limit = cap / 2;
     int rc = -ENOENT, clipped = 0;
@@ -2115,13 +2432,9 @@ static int ext2_file_path(struct ext2_mount *em, uint32_t wanted, char *buf, uin
     for (;;) {
         struct ext2_path_level *at = &levels[depth];
         uint32_t length = at->length;
-        int got;
+        int got, is_dir;
 
-        rc = inode_load(em, at->ino, &dir);
-        if (rc != 0) {
-            break;
-        }
-        got = dir_scan(em, &dir, &at->cursor, &sc);
+        got = path_step(em, at->ino, &at->cursor, &sc, &is_dir);
         if (got < 0) {
             rc = got;
             break;
@@ -2148,14 +2461,7 @@ static int ext2_file_path(struct ext2_mount *em, uint32_t wanted, char *buf, uin
             rc = 0;
             break;
         }
-        if ((em->incompat & EXT2_INCOMPAT_FILETYPE) && sc.type != EXT2_FT_DIR) {
-            continue;
-        }
-        rc = inode_load(em, sc.ino, &child);
-        if (rc != 0) {
-            break;
-        }
-        if ((child.mode & S_IFMT_) != S_IFDIR_) {
+        if (!is_dir) {
             continue;
         }
         if (length + sc.name_len + 1 >= cap || depth + 1 == limit) {
@@ -2175,75 +2481,89 @@ static int ext2_file_path(struct ext2_mount *em, uint32_t wanted, char *buf, uin
 }
 
 /**
+ * The parent of directory `cur`, held, into `*parent`, by its `..` entry,
+ * read under `cur`'s lock; the node is had with the lock let go, as a
+ * lookup has it, and the caller checks under the parent's own lock that it
+ * is a directory still. 0, -ENOENT for a removed directory or one without
+ * `..`, or -errno.
+ */
+static int dir_parent(struct ext2_mount *em, struct ext2_node *cur, struct ext2_node **parent)
+{
+    struct ext2_scan sc;
+    uint32_t cursor = 0;
+    int rc = 0;
+
+    node_lock(cur);
+    while (!cur->unlinked) {
+        rc = dir_scan(em, cur, &cursor, &sc);
+        if (rc <= 0 || (sc.ino != 0 && names_equal(sc.name, ".."))) {
+            break;
+        }
+    }
+    node_unlock(cur);
+    if (rc == 1) {
+        *parent = node_for(em, sc.ino, &rc);
+    } else if (rc == 0) {
+        rc = -ENOENT;
+    }
+    return rc;
+}
+
+/**
  * The `path` of `vfs_ops`: a regular file uses the bounded directory walk
  * above. A directory finds the parent by its `..` entry and the name by the
- * parent's entry that names the child's inode, up to the root. 0;
- * -ENAMETOOLONG past `cap` or PATH_DEPTH levels; -ENOENT without a live name;
- * -ENOMEM for the walk's stack; or the directory reader's error.
+ * parent's entry that names the child's inode, up to the root, with one
+ * directory's lock held at a time and each node on the way held. 0;
+ * -ENAMETOOLONG past `cap` or PATH_DEPTH levels; -ENOENT without a live
+ * name; -ENOMEM for the walk's stack; or the directory reader's error.
  */
 static int ext2_path(struct vfs_mount *mnt, void *node, char *buf, uint32_t cap)
 {
     struct ext2_mount *em = em_of(mnt);
     struct ext2_node *n = node;
-    struct ext2_node cur;
+    struct ext2_node *cur = n;
     uint32_t len = 0;
-    int depth;
+    int depth, rc = 0;
 
     if ((n->mode & S_IFMT_) != S_IFDIR_) {
         return n->nlink ? ext2_file_path(em, n->ino, buf, cap) : -ENOENT;
     }
     buf[0] = '\0';
-    cur = *n;
-    for (depth = 0; cur.ino != EXT2_ROOT_INO && depth < PATH_DEPTH; depth++) {
-        struct ext2_node parent;
+    for (depth = 0; cur->ino != EXT2_ROOT_INO && depth < PATH_DEPTH; depth++) {
+        struct ext2_node *parent = 0;
         struct ext2_scan sc;
-        uint32_t cursor = 0;
-        uint32_t child = cur.ino;
-        int found = 0, rc;
+        uint32_t child = cur->ino;
 
-        for (;;) {
-            int got = dir_scan(em, &cur, &cursor, &sc);
-
-            if (got < 0) {
-                return got;
-            }
-            if (got == 0) {
-                return -ENOENT;
-            }
-            if (sc.ino != 0 && names_equal(sc.name, "..")) {
-                break;
-            }
+        rc = dir_parent(em, cur, &parent);
+        if (cur != n) {
+            ext2_put(mnt, cur);
         }
-        rc = inode_load(em, sc.ino, &parent);
+        cur = parent;
         if (rc != 0) {
-            return rc;
+            break;
         }
-        cursor = 0;
-        for (;;) {
-            int got = dir_scan(em, &parent, &cursor, &sc);
-
-            if (got < 0) {
-                return got;
-            }
-            if (got == 0) {
-                break;
-            }
-            if (sc.ino == child && !names_equal(sc.name, ".") && !names_equal(sc.name, "..")) {
-                found = 1;
-                break;
-            }
+        node_lock(cur);
+        rc = dir_live(cur) ? dir_name_of(em, cur, child, &sc) : 0;
+        node_unlock(cur);
+        if (rc <= 0) {
+            rc = rc < 0 ? rc : -ENOENT;
+            break;
         }
-        if (!found) {
-            return -ENOENT;
-        }
+        rc = 0;
         if (len + sc.name_len + 1 >= cap) {
-            return -ENAMETOOLONG;
+            rc = -ENAMETOOLONG;
+            break;
         }
         k_memmove(buf + sc.name_len + 1, buf, len + 1);
         buf[0] = '/';
         k_memcpy(buf + 1, sc.name, sc.name_len);
         len += sc.name_len + 1;
-        cur = parent;
+    }
+    if (cur && cur != n) {
+        ext2_put(mnt, cur);
+    }
+    if (rc != 0) {
+        return rc;
     }
     if (depth == PATH_DEPTH) {
         return -ENAMETOOLONG;
@@ -3863,6 +4183,10 @@ static int writeback_try(struct ext2_mount *em, struct ext2_node *n, uint64_t of
         rc = -EIO;
         goto fail;
     }
+    if (!vm_resident((uintptr_t)src, len, 0)) {
+        rc = -EFAULT;
+        goto fail;
+    }
     writeback_commit(em, n, offset, src, len, &plan);
     return 0;
 fail:
@@ -3877,7 +4201,9 @@ fail:
  * image readers see changes until every read and reservation has
  * succeeded, and a piece that fails gives back the images it took. A
  * removed device, one that failed a write, or a mount made read-only is
- * -EIO.
+ * -EIO. `src` may be a user buffer: the check that its pages are present
+ * runs in the step of the commit, which copies it, and a page that is not
+ * is -EFAULT with nothing committed.
  *
  * What the plan reads is fetched first with `em->meta` let go
  * (`writeback_fetch`). Under the lock the plan reads only what the cache
@@ -4428,9 +4754,18 @@ static int dir_set_dotdot(struct ext2_mount *em, const struct ext2_node *d, uint
     }
 }
 
-/** Whether directory inode `ino` is `ancestor` or below it, into `*below`,
+/**
+ * Whether directory inode `ino` is `ancestor` or below it, into `*below`,
  * by the `..` entries from `ino` up to the root: 0, -ELOOP past PATH_DEPTH
- * levels, -EIO for a directory without `..`, or -errno. */
+ * levels, -EIO for a directory without `..`, or -errno.
+ *
+ * The caller holds the mount's rename lock, under which no directory
+ * changes its parent, and may hold the locks of directories on the way;
+ * so the walk reads copies of the inodes and takes no lock, since one of
+ * an ancestor would come after its descendant's. An entry is changed in
+ * one step between sleeps, so a `..` read while another call adds a name
+ * beside it is whole.
+ */
 static int is_below(struct ext2_mount *em, uint32_t ino, uint32_t ancestor, int *below)
 {
     int depth;
@@ -4469,15 +4804,6 @@ static int is_below(struct ext2_mount *em, uint32_t ino, uint32_t ancestor, int 
         ino = sc.ino;
     }
     return -ELOOP;
-}
-
-/** The node in memory of inode `ino` when something holds it, or NULL; no
- * hold is taken. */
-static struct ext2_node *node_held(struct ext2_mount *em, uint32_t ino)
-{
-    struct ext2_node *n = node_find(em, ino);
-
-    return n && n->refs > 0 ? n : 0;
 }
 
 /** Bring byte offset `at` of the volume's block into the cache with no lock
@@ -4623,8 +4949,8 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
  * The `setattr` of `vfs_ops`: the permission bits, the owner, the group, the
  * access and modification times and the flags chattr may change, as `what`
  * selects, with the change time set to the present and the inode stored.
- * The batch is drained first. Takes the mount's namespace lock. 0, -EROFS,
- * or -errno.
+ * The batch is drained first. Takes the node's lock, which the caller may
+ * hold already, and the mount's namespace lock. 0, -EROFS, or -errno.
  */
 static int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
@@ -4632,10 +4958,12 @@ static int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struc
     struct ext2_node *n = node;
     int rc;
 
+    node_lock(n);
     vfs_ns_lock(mnt);
     rc = assert_writable(mnt, em);
     if (rc != 0) {
         vfs_ns_unlock(mnt);
+        node_unlock(n);
         return rc;
     }
     if (what & VFS_SET_MODE) {
@@ -4659,6 +4987,7 @@ static int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struc
     stamp(n, T_CTIME);
     rc = inode_store(em, n);
     vfs_ns_unlock(mnt);
+    node_unlock(n);
     return rc;
 }
 
@@ -4680,8 +5009,9 @@ static int past_limit(const struct ext2_mount *em, const char *op, uint64_t offs
 
 /**
  * The `truncate` of `vfs_ops`: the size of regular file `handle` made
- * `size`, under the mount's namespace lock, the batch drained first; both
- * directions set the modification and change times.
+ * `size`, under the node's lock, which the caller may hold already, and the
+ * mount's namespace lock, the batch drained first; both directions set the
+ * modification and change times.
  *
  * A shrink writes the smaller size first, then zeroes the tail of the last
  * block kept, so that a later growth over it reads zeros and not what was
@@ -4703,10 +5033,12 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     if (size > em->file_limit) {
         return past_limit(em, "truncate", size);
     }
+    node_lock(n);
     vfs_ns_lock(mnt);
     rc = assert_writable(mnt, em);
     if (rc != 0) {
         vfs_ns_unlock(mnt);
+        node_unlock(n);
         return rc;
     }
     assert_node_locked(em, n);
@@ -4741,6 +5073,7 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         }
     }
     vfs_ns_unlock(mnt);
+    node_unlock(n);
     return rc;
 }
 
@@ -4884,7 +5217,8 @@ static int writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t 
 
 /**
  * The `write` of `vfs_ops`: `count` bytes from `buf` at `offset`, through
- * the file-write batch, under the mount's namespace lock, which this takes.
+ * the file-write batch, under the node's lock, which the caller may hold
+ * already, and the mount's namespace lock, which this takes.
  *
  * ENOSPC is decided first, for the whole write (`writeback_space`). An
  * overwrite inside the file's blocks or a contiguous append joins the batch
@@ -4893,18 +5227,24 @@ static int writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t 
  * and a piece that finds its tables full drains it and is tried once more. A
  * write that fails after some of its bytes were accepted returns their
  * count; a failure of the batch's I/O stays recorded for `fsync`, after a
- * close and a retry too. Returns the bytes accepted, -EISDIR, -EFBIG,
- * -EROFS, -ENOSPC, or -errno.
+ * close and a retry too.
+ *
+ * A page of `buf` not present at a piece's commit is brought in with the
+ * locks let go, and the rest of the write is decided again from there; when
+ * the caller holds the file's lock, or another, which this cannot give
+ * back, the write ends short at that piece, 0 bytes for the first, and the
+ * caller brings the page in (`user_refault`). Returns the bytes accepted,
+ * -EISDIR, -EFBIG, -EROFS, -ENOSPC, -EFAULT, or -errno.
  */
 static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                           uint64_t offset)
 {
     struct ext2_mount *em = em_of(mnt);
-    struct ext2_writeback *wb = em->wb;
+    struct ext2_writeback *wb;
     struct ext2_node *n = handle;
     const uint8_t *in = buf;
     uint32_t done = 0;
-    int rc = 0, synchronous;
+    int rc = 0, synchronous, refaults = 0;
 
     if ((n->mode & S_IFMT_) == S_IFDIR_) {
         return -EISDIR;
@@ -4915,17 +5255,20 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
     if (offset > em->file_limit || count > em->file_limit - offset) {
         return past_limit(em, "write", offset);
     }
+    node_lock(n);
     vfs_ns_lock(mnt);
     assert_node_locked(em, n);
+again:
+    wb = em->wb;
     if (!em->writable || (mnt->flags & VFS_MS_RDONLY)) {
         rc = -EROFS;
         goto out;
     }
-    rc = writeback_space(em, n, offset, count);
+    rc = writeback_space(em, n, offset + done, count - done);
     if (rc != 0) {
         goto out;
     }
-    rc = writeback_contiguous(em, n, offset, count);
+    rc = writeback_contiguous(em, n, offset + done, count - done);
     if (rc < 0) {
         goto out;
     }
@@ -4956,10 +5299,18 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
                 rc = writeback_piece(em, n, at, in + done, take);
             }
         }
+        if (rc == -EFAULT) {
+            rc = ++refaults <= EXT2_REFAULTS ? user_refault(mnt, n, in + done, take, 0) : -EFAULT;
+            if (rc == 1) {
+                goto again;
+            }
+            goto out;
+        }
         if (rc != 0) {
             goto out;
         }
         done += take;
+        refaults = 0;
         if (synchronous || wb->bytes == EXT2_WB_BYTES) {
             rc = writeback_drain(em);
             if (rc != 0) {
@@ -4975,10 +5326,11 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
     }
     rc = 0;
 out:
-    if (rc == -EIO && wb && wb->count) {
+    if (rc == -EIO && em->wb && em->wb->count) {
         (void)writeback_error(em, rc);
     }
     vfs_ns_unlock(mnt);
+    node_unlock(n);
     return done ? (int32_t)done : rc;
 }
 
@@ -4988,8 +5340,10 @@ out:
  * block the file has is written only past its size, and without
  * FALLOC_FL_KEEP_SIZE the size grows to the range's end; with it the range
  * stops at the size. A punched hole and any other mode are -EOPNOTSUPP, as
- * Linux's ext2 returns for every mode. 0, -ENODEV for a file that is not
- * regular, -EFBIG, -ENOMEM, or the errors of `ext2_write`.
+ * Linux's ext2 returns for every mode. The node's lock is held throughout,
+ * so that the size and the map do not change between the look at a block
+ * and its write. 0, -ENODEV for a file that is not regular, -EFBIG,
+ * -ENOMEM, or the errors of `ext2_write`.
  */
 static int ext2_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
                           uint64_t len)
@@ -5009,12 +5363,13 @@ static int ext2_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, ui
     if (end > em->file_limit) {
         return past_limit(em, "fallocate", offset);
     }
-    if ((mode & 0x01u) && end > n->size) {
-        end = n->size;
-    }
     zero = kzalloc(em->block_size);
     if (!zero) {
         return -ENOMEM;
+    }
+    node_lock(n);
+    if ((mode & 0x01u) && end > n->size) {
+        end = n->size;
     }
     while (at < end && rc == 0) {
         uint32_t take = em->block_size - ((uint32_t)at & (em->block_size - 1));
@@ -5037,8 +5392,54 @@ static int ext2_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, ui
         }
         at += take;
     }
+    node_unlock(n);
     kfree(zero);
     return rc;
+}
+
+/**
+ * The node of inode `ino`, which an entry of a directory whose lock the
+ * caller holds names, held and locked, into `*out`: the one node every
+ * holder of the inode shares (`node_for`), never a copy, so that a change
+ * made here is the one an open file sees. The VFS locks the node of the
+ * name in unlink, rmdir and rename before it calls the type, and this takes
+ * that lock again by depth. 0, or the errors of `node_for`.
+ */
+static int child_take(struct ext2_mount *em, uint32_t ino, struct ext2_node **out)
+{
+    int rc;
+    struct ext2_node *c = node_for(em, ino, &rc);
+
+    if (!c) {
+        return rc;
+    }
+    node_lock(c);
+    *out = c;
+    return 0;
+}
+
+/** Give back the lock and the hold of a node `child_take` gave. */
+static void child_give(struct ext2_mount *em, struct ext2_node *c)
+{
+    node_unlock(c);
+    ext2_put(em->mnt, c);
+}
+
+/**
+ * Mark node `c`, whose lock the caller holds and whose link count is 0,
+ * as having no name, with its change time set: freed at once when the
+ * caller's is its only hold, since nothing else can reach it, and
+ * otherwise stored with its count of 0, for e2fsck to read it as deleted
+ * after a crash, and freed at its last put. 0, or -errno.
+ */
+static int child_unlinked(struct ext2_mount *em, struct ext2_node *c)
+{
+    stamp(c, T_CTIME);
+    c->unlinked = 1;
+    if (c->refs == 1) {
+        return release_inode(em, c);
+    }
+    return inode_store(em, c);
 }
 
 /**
@@ -5047,9 +5448,10 @@ static int ext2_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, ui
  * whole, then the entry that names it, then the directory's times into the
  * cache. A failure to add the entry frees the inode; a failure to store the
  * times sets the error bit and is not the call's, since the entry is there.
- * The batch is drained first. The caller holds the mount's namespace lock.
- * 0 with the node held, -EEXIST, -ENAMETOOLONG, -EROFS, -ENOSPC, -ENOMEM,
- * or -errno.
+ * The batch is drained first. The caller holds the directory's lock, and
+ * the new node's is held until it is named. 0 with the node held, -ENOENT
+ * for a removed directory, -EEXIST, -ENAMETOOLONG, -EROFS, -ENOSPC,
+ * -ENOMEM, or -errno.
  */
 static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                        void **node)
@@ -5066,6 +5468,9 @@ static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint3
         return rc;
     }
     assert_node_locked(em, d);
+    if (d->unlinked) {
+        return -ENOENT;
+    }
     if (k_strlen(name) > EXT2_NAME_MAX) {
         return -ENAMETOOLONG;
     }
@@ -5080,10 +5485,12 @@ static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint3
     if (rc != 0) {
         return rc;
     }
+    node_lock(n);
     rc = dir_add(em, d, name, n->ino, 1);
     if (rc != 0) {
         n->nlink = 0;
         release_inode(em, n);
+        node_unlock(n);
         node_unhold(em, n);
         return rc;
     }
@@ -5092,6 +5499,7 @@ static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint3
     if (rc != 0) {
         mark_error(em);
     }
+    node_unlock(n);
     *node = n;
     return 0;
 }
@@ -5103,8 +5511,8 @@ static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint3
  * device's number is where Linux keeps it: the old encoding, a byte each of
  * major and minor, in the first pointer word when both fit, and the new
  * encoding in the second word otherwise, with the first zero. The caller
- * holds the mount's namespace lock. 0 with the node held, -EINVAL for
- * another kind, or the errors of `ext2_create`.
+ * holds the directory's lock. 0 with the node held, -EINVAL for another
+ * kind, or the errors of `ext2_create`.
  */
 static int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode,
                       uint32_t rdev, void **node)
@@ -5125,6 +5533,9 @@ static int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32
         return rc;
     }
     assert_node_locked(em, d);
+    if (d->unlinked) {
+        return -ENOENT;
+    }
     if (k_strlen(name) > EXT2_NAME_MAX) {
         return -ENAMETOOLONG;
     }
@@ -5139,6 +5550,7 @@ static int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (rc != 0) {
         return rc;
     }
+    node_lock(n);
     if (type == S_IFCHR_ || type == S_IFBLK_) {
         uint32_t major = (rdev >> 8) & 0xFFFu;
         uint32_t minor = (rdev & 0xFFu) | ((rdev >> 12) & 0xFFF00u);
@@ -5156,6 +5568,7 @@ static int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (rc != 0) {
         n->nlink = 0;
         release_inode(em, n);
+        node_unlock(n);
         node_unhold(em, n);
         return rc;
     }
@@ -5164,24 +5577,24 @@ static int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (rc != 0) {
         mark_error(em);
     }
+    node_unlock(n);
     *node = n;
     return 0;
 }
 
 /**
  * The `unlink` of `vfs_ops`: the entry `name` in `dir` removed, then the
- * directory's times, then the inode's link count lowered. The inode goes
- * with its last name when nothing holds it (`release_inode`), and at the
- * last put otherwise, its count of zero stored meanwhile, so that after a
- * crash e2fsck and the check read it as deleted. The batch is drained
- * first. The caller holds the mount's namespace lock. 0, -ENOENT, -EISDIR,
- * -EROFS, or -errno.
+ * directory's times, then the inode's link count lowered, on the node every
+ * holder shares, under its lock (`child_take`). The inode goes with its last
+ * name when nothing else holds it, and at the last put otherwise, its count
+ * of zero stored meanwhile, so that after a crash e2fsck and the check read
+ * it as deleted (`child_unlinked`). The batch is drained first. The caller
+ * holds the directory's lock. 0, -ENOENT, -EISDIR, -EROFS, or -errno.
  */
 static int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct ext2_mount *em = em_of(mnt);
     struct ext2_node *d = dir ? dir : mnt->root;
-    struct ext2_node loaded;
     struct ext2_node *n;
     struct ext2_scan sc;
     uint32_t at, prev;
@@ -5199,38 +5612,28 @@ static int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     if (rc == 0) {
         return -ENOENT;
     }
-    n = node_held(em, sc.ino);
-    if (!n) {
-        rc = inode_load(em, sc.ino, &loaded);
-        if (rc != 0) {
-            return rc;
-        }
-        n = &loaded;
-    }
-    if ((n->mode & S_IFMT_) == S_IFDIR_) {
-        return -EISDIR;
-    }
-    rc = dir_remove_at(em, d, at, prev, &sc);
+    rc = child_take(em, sc.ino, &n);
     if (rc != 0) {
         return rc;
     }
-    stamp(d, T_MTIME | T_CTIME);
-    rc = inode_times_later(em, d);
-    if (rc != 0) {
-        return rc;
+    rc = (n->mode & S_IFMT_) == S_IFDIR_ ? -EISDIR : dir_remove_at(em, d, at, prev, &sc);
+    if (rc == 0) {
+        stamp(d, T_MTIME | T_CTIME);
+        rc = inode_times_later(em, d);
     }
-    if (n->nlink > 0) {
-        n->nlink--;
-    }
-    stamp(n, T_CTIME);
-    if (n->nlink == 0) {
-        if (n == &loaded) {
-            return release_inode(em, n);
+    if (rc == 0) {
+        if (n->nlink > 0) {
+            n->nlink--;
         }
-        n->unlinked = 1;
-        return inode_store(em, n);
+        if (n->nlink == 0) {
+            rc = child_unlinked(em, n);
+        } else {
+            stamp(n, T_CTIME);
+            rc = inode_store(em, n);
+        }
     }
-    return inode_store(em, n);
+    child_give(em, n);
+    return rc;
 }
 
 /**
@@ -5240,8 +5643,9 @@ static int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
  * parent's entry last; a stop before the inode leaves a set bit with
  * nothing behind it. A failure frees the new inode, and lowers the parent's
  * count again when the entry was not written. The batch is drained first.
- * The caller holds the mount's namespace lock. 0, -EEXIST, -EMLINK at 65000
- * links, -ENAMETOOLONG, -EROFS, -ENOSPC, -ENOMEM, or -errno.
+ * The caller holds the parent's lock, and the new directory's is held
+ * until it is named. 0, -ENOENT for a removed parent, -EEXIST, -EMLINK at
+ * 65000 links, -ENAMETOOLONG, -EROFS, -ENOSPC, -ENOMEM, or -errno.
  */
 static int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
@@ -5258,6 +5662,9 @@ static int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32
         return rc;
     }
     assert_node_locked(em, d);
+    if (d->unlinked) {
+        return -ENOENT;
+    }
     if (k_strlen(name) > EXT2_NAME_MAX) {
         return -ENAMETOOLONG;
     }
@@ -5275,6 +5682,7 @@ static int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (rc != 0) {
         return rc;
     }
+    node_lock(n);
     rc = map_alloc(em, n, 0, &b, &fresh);
     if (rc == 0) {
         rc = write_bytes(em, (uint64_t)b * em->block_size, 0, em->block_size, 0);
@@ -5313,28 +5721,35 @@ static int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (rc != 0) {
         n->nlink = 0;
         release_inode(em, n);
+        node_unlock(n);
+        node_unhold(em, n);
+        return rc;
     }
+    node_unlock(n);
     node_unhold(em, n);
-    return rc;
+    return 0;
 }
 
 /**
  * The `rmdir` of `vfs_ops`: the empty directory `name` in `dir` removed: the
- * entry, then the parent's count lowered, then the inode freed. One that a
- * working directory or an open description holds keeps its inode and its
- * blocks until its last put, as an open file does; nothing can be added to
- * it, and a listing of it is -ENOENT, as on Linux. The batch is drained
- * first. The caller holds the mount's namespace lock. 0, -ENOENT, -ENOTDIR,
- * -ENOTEMPTY, -EROFS, or -errno.
+ * entry, then the parent's count lowered, then the inode freed. The
+ * directory's own lock is held from the check that it is empty until it is
+ * marked as having no name, with a link count of 0, so that no entry is
+ * added to it meanwhile (`dir_add`) and a mount on it is refused after
+ * (`vfs_cover_lock`). One that a working directory or an open description
+ * holds keeps its inode and its blocks until its last put, as an open file
+ * does; nothing can be added to it, and a listing of it is -ENOENT, as on
+ * Linux. The batch is drained first. The caller holds the parent's lock.
+ * 0, -ENOENT, -ENOTDIR, -ENOTEMPTY, -EROFS, or -errno.
  */
 static int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
     struct ext2_mount *em = em_of(mnt);
     struct ext2_node *d = dir ? dir : mnt->root;
-    struct ext2_node loaded, *held;
+    struct ext2_node *c;
     struct ext2_scan sc;
     uint32_t at, prev;
-    int rc, empty;
+    int rc, empty = 0;
 
     rc = assert_writable(mnt, em);
     if (rc != 0) {
@@ -5348,75 +5763,51 @@ static int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     if (rc == 0) {
         return -ENOENT;
     }
-    rc = inode_load(em, sc.ino, &loaded);
+    rc = child_take(em, sc.ino, &c);
     if (rc != 0) {
         return rc;
     }
-    if ((loaded.mode & S_IFMT_) != S_IFDIR_) {
-        return -ENOTDIR;
+    rc = (c->mode & S_IFMT_) != S_IFDIR_ ? -ENOTDIR : dir_is_empty(em, c, &empty);
+    if (rc == 0 && !empty) {
+        rc = -ENOTEMPTY;
     }
-    rc = dir_is_empty(em, &loaded, &empty);
-    if (rc != 0) {
-        return rc;
+    if (rc == 0) {
+        rc = dir_remove_at(em, d, at, prev, &sc);
     }
-    if (!empty) {
-        return -ENOTEMPTY;
+    if (rc == 0) {
+        c->nlink = 0;
+        c->unlinked = 1;
+        if (d->nlink > 2) {
+            d->nlink--;
+        }
+        stamp(d, T_MTIME | T_CTIME);
+        rc = inode_store(em, d);
     }
-    held = node_held(em, sc.ino);
-    rc = dir_remove_at(em, d, at, prev, &sc);
-    if (rc != 0) {
-        return rc;
+    if (rc == 0) {
+        rc = child_unlinked(em, c);
     }
-    if (d->nlink > 2) {
-        d->nlink--;
-    }
-    stamp(d, T_MTIME | T_CTIME);
-    rc = inode_store(em, d);
-    if (rc != 0) {
-        return rc;
-    }
-    if (held) {
-        held->nlink = 0;
-        held->unlinked = 1;
-        stamp(held, T_CTIME);
-        return inode_store(em, held);
-    }
-    loaded.nlink = 0;
-    return release_inode(em, &loaded);
+    child_give(em, c);
+    return rc;
 }
 
 /**
- * The `link` of `vfs_ops`: a new name `name` in `dir` for the file `node`:
- * the count raised first, then the name written, so that a stop between
- * leaves a count one too high, which is a count repair; then the
- * directory's times. A failure to write the name lowers the count again.
- * The batch is drained first. The caller holds the mount's namespace lock.
- * 0, -EPERM for a directory, -EMLINK at 65000 links, -ENAMETOOLONG,
- * -EEXIST, -EROFS, -ENOSPC, or -errno.
+ * The name `name` in directory `d` for the file `n`, for `ext2_link`, whose
+ * caller holds both locks: the count raised and stored, then the name
+ * written, then the directory's times. 0, -ENOENT for a file with no name
+ * left, -EMLINK, -EEXIST, or -errno.
  */
-static int ext2_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
+static int link_add(struct ext2_mount *em, struct ext2_node *d, const char *name,
+                    struct ext2_node *n)
 {
-    struct ext2_mount *em = em_of(mnt);
-    struct ext2_node *d = dir ? dir : mnt->root;
-    struct ext2_node *n = node;
     struct ext2_scan sc;
     uint32_t at, prev;
     int rc;
 
-    rc = assert_writable(mnt, em);
-    if (rc != 0) {
-        return rc;
-    }
-    assert_node_locked(em, d);
-    assert_node_locked(em, n);
-    if ((n->mode & S_IFMT_) == S_IFDIR_) {
-        return -EPERM;
+    if (n->unlinked || n->nlink == 0) {
+        return -ENOENT;
     }
     if (n->nlink >= 65000) {
         return -EMLINK;
-    }
-    if (k_strlen(name) > EXT2_NAME_MAX) {
-        return -ENAMETOOLONG;
     }
     rc = dir_find(em, d, name, &at, &prev, &sc);
     if (rc < 0) {
@@ -5443,11 +5834,49 @@ static int ext2_link(struct vfs_mount *mnt, void *dir, const char *name, void *n
 }
 
 /**
+ * The `link` of `vfs_ops`: a new name `name` in `dir` for the file `node`:
+ * the count raised first, then the name written, so that a stop between
+ * leaves a count one too high, which is a count repair; then the
+ * directory's times. A failure to write the name lowers the count again.
+ * The batch is drained first. The caller holds the directory's lock and
+ * the file's, which this takes again. 0, -EPERM for a directory, -ENOENT
+ * for a removed directory or a file with no name left, -EMLINK at 65000
+ * links, -ENAMETOOLONG, -EEXIST, -EROFS, -ENOSPC, or -errno.
+ */
+static int ext2_link(struct vfs_mount *mnt, void *dir, const char *name, void *node)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *d = dir ? dir : mnt->root;
+    struct ext2_node *n = node;
+    int rc;
+
+    rc = assert_writable(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    assert_node_locked(em, d);
+    if ((n->mode & S_IFMT_) == S_IFDIR_) {
+        return -EPERM;
+    }
+    if (d->unlinked) {
+        return -ENOENT;
+    }
+    if (k_strlen(name) > EXT2_NAME_MAX) {
+        return -ENAMETOOLONG;
+    }
+    node_lock(n);
+    rc = link_add(em, d, name, n);
+    node_unlock(n);
+    return rc;
+}
+
+/**
  * The `symlink` of `vfs_ops`: a link `name` in `dir` to `target`. A target
  * shorter than 60 bytes is kept in the inode's pointer words, and a longer
  * one in a block of its own, written first; then the inode, then the entry,
  * then the directory's times. A failure frees the inode. The batch is
- * drained first. The caller holds the mount's namespace lock. 0,
+ * drained first. The caller holds the directory's lock, and the link's is
+ * held until it is named. 0, -ENOENT for a removed directory,
  * -ENAMETOOLONG for a name past 255 bytes or for a target that is empty or
  * of a block or more, -EEXIST, -EROFS, -ENOSPC, -ENOMEM, or -errno.
  */
@@ -5466,6 +5895,9 @@ static int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, cons
         return rc;
     }
     assert_node_locked(em, d);
+    if (d->unlinked) {
+        return -ENOENT;
+    }
     if (k_strlen(name) > EXT2_NAME_MAX) {
         return -ENAMETOOLONG;
     }
@@ -5483,6 +5915,7 @@ static int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, cons
     if (rc != 0) {
         return rc;
     }
+    node_lock(n);
     if (tlen < EXT2_FAST_LINK) {
         uint32_t i;
 
@@ -5515,181 +5948,145 @@ static int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, cons
     if (rc != 0) {
         n->nlink = 0;
         release_inode(em, n);
+        node_unlock(n);
+        node_unhold(em, n);
+        return rc;
     }
+    node_unlock(n);
     node_unhold(em, n);
-    return rc;
+    return 0;
 }
 
 /**
- * The `rename` of `vfs_ops`: `oldname` in `olddir` to `newname` in `newdir`,
- * either directory NULL for the root. The batch is drained first, and the
- * caller holds the mount's namespace lock.
+ * Whether the rename of node `n` from directory `od` over `victim` in
+ * directory `nd`, `victim` NULL for a new name, may go on, decided before
+ * either node's lock is taken: 0; -EISDIR or -ENOTDIR for a directory and
+ * a file; -EINVAL for a directory moved below itself; -ENOTEMPTY for a
+ * victim directory above `od`, which holds it; or the errors of `is_below`.
  *
- * A file: the count raised, the new entry written, the old entry removed,
- * the count lowered, so that the file has a name at every stop. A
- * destination file is replaced by rewriting its entry to the source's
- * inode, after which the victim loses a count and goes as an unlink's does.
- * A directory moves by a new entry, its `..` rewritten, the new parent's
- * count raised, the old entry removed and the old parent's count lowered; a
- * destination directory must be empty and goes first, as rmdir's does. The
- * old entry is found again before it is removed, since a removal in the
- * same directory may have moved it. Two names of one file change nothing.
- *
- * Returns 0; -ENOENT for a missing source or a removed destination
- * directory, which takes no entry; -EISDIR, -ENOTDIR, -ENOTEMPTY; -EINVAL
- * for a directory moved below itself, found by a walk up `..` before any
- * write; -EMLINK; -ENAMETOOLONG; -EROFS; -ENOSPC; or -errno.
+ * The VFS leaves a node unlocked in the last two cases, since a directory
+ * above the other one would be locked after its descendant, so they are
+ * found here first, by walks up `..` under the mount's rename lock. A
+ * file's or a directory's type does not change while it is held.
  */
-static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
-                       const char *newname)
+static int rename_check(struct ext2_mount *em, struct ext2_node *od, struct ext2_node *nd,
+                        struct ext2_node *n, struct ext2_node *victim)
 {
-    struct ext2_mount *em = em_of(mnt);
-    struct ext2_node *od = olddir ? olddir : mnt->root;
-    struct ext2_node *nd = newdir ? newdir : mnt->root;
-    struct ext2_node loaded, victim_loaded;
-    struct ext2_node *n, *victim = 0;
-    struct ext2_scan osc, nsc;
-    uint32_t oat, oprev, nat, nprev;
-    int rc, have_new, is_dir;
+    int is_dir = (n->mode & S_IFMT_) == S_IFDIR_;
+    int below, rc;
 
-    rc = assert_writable(mnt, em);
-    if (rc != 0) {
-        return rc;
-    }
-    assert_node_locked(em, od);
-    assert_node_locked(em, nd);
-    if (k_strlen(newname) > EXT2_NAME_MAX) {
-        return -ENAMETOOLONG;
-    }
-    if (nd->unlinked) {
-        return -ENOENT;
-    }
-    rc = dir_find(em, od, oldname, &oat, &oprev, &osc);
-    if (rc < 0) {
-        return rc;
-    }
-    if (rc == 0) {
-        return -ENOENT;
-    }
-    have_new = dir_find(em, nd, newname, &nat, &nprev, &nsc);
-    if (have_new < 0) {
-        return have_new;
-    }
-    if (have_new && nsc.ino == osc.ino) {
-        return 0;
-    }
-    n = node_held(em, osc.ino);
-    if (!n) {
-        rc = inode_load(em, osc.ino, &loaded);
-        if (rc != 0) {
-            return rc;
-        }
-        n = &loaded;
-    }
-    is_dir = (n->mode & S_IFMT_) == S_IFDIR_;
-    if (have_new) {
-        int victim_dir;
+    if (victim) {
+        int victim_dir = (victim->mode & S_IFMT_) == S_IFDIR_;
 
-        victim = node_held(em, nsc.ino);
-        if (!victim) {
-            rc = inode_load(em, nsc.ino, &victim_loaded);
-            if (rc != 0) {
-                return rc;
-            }
-            victim = &victim_loaded;
-        }
-        victim_dir = (victim->mode & S_IFMT_) == S_IFDIR_;
         if (victim_dir && !is_dir) {
             return -EISDIR;
         }
         if (!victim_dir && is_dir) {
             return -ENOTDIR;
         }
-        if (victim_dir) {
-            int empty;
+    }
+    if (!is_dir || od == nd) {
+        return 0;
+    }
+    rc = is_below(em, nd->ino, n->ino, &below);
+    if (rc != 0 || below) {
+        return rc != 0 ? rc : -EINVAL;
+    }
+    if (victim) {
+        rc = is_below(em, od->ino, victim->ino, &below);
+        if (rc != 0 || below) {
+            return rc != 0 ? rc : -ENOTEMPTY;
+        }
+    }
+    return 0;
+}
 
-            rc = dir_is_empty(em, victim, &empty);
-            if (rc != 0) {
-                return rc;
-            }
-            if (!empty) {
-                return -ENOTEMPTY;
-            }
-        }
-    }
-    if (is_dir && od != nd) {
-        int below;
+/**
+ * The rename of directory `n` from `oldname` in `od` to `newname` in `nd`,
+ * over the empty directory `victim` at `nsc`, `nat` and `nprev` when it is
+ * not NULL, for `ext2_rename`, whose caller holds every lock: the victim
+ * removed as rmdir removes it, then the new entry, then `..` rewritten and
+ * the new parent's count raised when the parents differ, then the old entry
+ * removed and the old parent's count lowered. 0, -ENOENT, -EMLINK, or
+ * -errno.
+ */
+static int rename_dir(struct ext2_mount *em, struct ext2_node *od, const char *oldname,
+                      struct ext2_node *nd, const char *newname, struct ext2_node *n,
+                      struct ext2_node *victim, const struct ext2_scan *nsc, uint32_t nat,
+                      uint32_t nprev)
+{
+    struct ext2_scan osc;
+    uint32_t oat, oprev;
+    int rc;
 
-        rc = is_below(em, nd->ino, n->ino, &below);
+    if (od != nd && nd->nlink >= 65000) {
+        return -EMLINK;
+    }
+    if (victim) {
+        rc = dir_remove_at(em, nd, nat, nprev, nsc);
         if (rc != 0) {
             return rc;
         }
-        if (below) {
-            return -EINVAL;
+        victim->nlink = 0;
+        victim->unlinked = 1;
+        if (nd->nlink > 2) {
+            nd->nlink--;
         }
-        if (nd->nlink >= 65000) {
-            return -EMLINK;
+        rc = inode_store(em, nd);
+        if (rc == 0) {
+            rc = child_unlinked(em, victim);
+        }
+        if (rc != 0) {
+            return rc;
         }
     }
-    if (is_dir) {
-        if (have_new) {
-            rc = dir_remove_at(em, nd, nat, nprev, &nsc);
-            if (rc != 0) {
-                return rc;
-            }
-            if (nd->nlink > 2) {
-                nd->nlink--;
-            }
-            rc = inode_store(em, nd);
-            if (rc != 0) {
-                return rc;
-            }
-            victim->nlink = 0;
-            if (victim == &victim_loaded) {
-                rc = release_inode(em, victim);
-            } else {
-                victim->unlinked = 1;
-                stamp(victim, T_CTIME);
-                rc = inode_store(em, victim);
-            }
-            if (rc != 0) {
-                return rc;
-            }
-            rc = dir_find(em, od, oldname, &oat, &oprev, &osc);
-            if (rc <= 0) {
-                return rc < 0 ? rc : -ENOENT;
-            }
-        }
-        rc = dir_add(em, nd, newname, n->ino, 2);
-        if (rc != 0) {
-            return rc;
-        }
-        if (od != nd) {
-            rc = dir_set_dotdot(em, n, nd->ino);
-            if (rc != 0) {
-                return rc;
-            }
-            nd->nlink++;
-            stamp(nd, T_MTIME | T_CTIME);
-            rc = inode_store(em, nd);
-            if (rc != 0) {
-                return rc;
-            }
-        }
-        rc = dir_find(em, od, oldname, &oat, &oprev, &osc);
-        if (rc <= 0) {
-            return rc < 0 ? rc : -ENOENT;
-        }
-        rc = dir_remove_at(em, od, oat, oprev, &osc);
-        if (rc != 0) {
-            return rc;
-        }
-        if (od != nd && od->nlink > 2) {
-            od->nlink--;
-        }
-        stamp(od, T_MTIME | T_CTIME);
-        return inode_store(em, od);
+    rc = dir_add(em, nd, newname, n->ino, 2);
+    if (rc != 0) {
+        return rc;
     }
+    if (od != nd) {
+        rc = dir_set_dotdot(em, n, nd->ino);
+        if (rc != 0) {
+            return rc;
+        }
+        nd->nlink++;
+        stamp(nd, T_MTIME | T_CTIME);
+        rc = inode_store(em, nd);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    rc = dir_find(em, od, oldname, &oat, &oprev, &osc);
+    if (rc <= 0) {
+        return rc < 0 ? rc : -ENOENT;
+    }
+    rc = dir_remove_at(em, od, oat, oprev, &osc);
+    if (rc != 0) {
+        return rc;
+    }
+    if (od != nd && od->nlink > 2) {
+        od->nlink--;
+    }
+    stamp(od, T_MTIME | T_CTIME);
+    return inode_store(em, od);
+}
+
+/**
+ * The rename of file `n` from `oldname` in `od` to `newname` in `nd`, over
+ * the file `victim` at `nat` when it is not NULL, for `ext2_rename`, whose
+ * caller holds every lock: the count raised, the new entry written or the
+ * victim's entry pointed at `n`, the victim's count lowered as unlink
+ * lowers it, the old entry removed and the count lowered again. 0, -ENOENT,
+ * or -errno.
+ */
+static int rename_file(struct ext2_mount *em, struct ext2_node *od, const char *oldname,
+                       struct ext2_node *nd, const char *newname, struct ext2_node *n,
+                       struct ext2_node *victim, uint32_t nat)
+{
+    struct ext2_scan osc;
+    uint32_t oat, oprev;
+    int rc;
+
     n->nlink++;
     stamp(n, T_CTIME);
     rc = inode_store(em, n);
@@ -5697,7 +6094,7 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
         n->nlink--;
         return rc;
     }
-    if (have_new) {
+    if (victim) {
         uint64_t off;
         uint8_t raw[4];
 
@@ -5717,15 +6114,10 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
         if (victim->nlink > 0) {
             victim->nlink--;
         }
-        stamp(victim, T_CTIME);
         if (victim->nlink == 0) {
-            if (victim == &victim_loaded) {
-                rc = release_inode(em, victim);
-            } else {
-                victim->unlinked = 1;
-                rc = inode_store(em, victim);
-            }
+            rc = child_unlinked(em, victim);
         } else {
+            stamp(victim, T_CTIME);
             rc = inode_store(em, victim);
         }
         if (rc != 0) {
@@ -5759,6 +6151,115 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
         nd->ctime = time_fit(nd, EXT2_CTIME_EXTRA + 4, od->mtime.sec, od->mtime.nsec);
         rc = inode_store(em, nd);
     }
+    return rc;
+}
+
+/**
+ * The `rename` of `vfs_ops`: `oldname` in `olddir` to `newname` in `newdir`,
+ * either directory NULL for the root. The batch is drained first. The
+ * caller holds both directories' locks, and for a move between two of them
+ * the mount's rename lock, under which no directory changes its parent.
+ *
+ * The source's and the victim's nodes are those every holder shares, had
+ * with the directories' locks held, so that each is the inode its entry
+ * names. The cases the VFS leaves unlocked are refused first
+ * (`rename_check`); then both are locked, the lower inode number first,
+ * which takes again the locks the VFS took, and a victim directory is
+ * checked empty under its own lock.
+ *
+ * A file: the count raised, the new entry written, the old entry removed,
+ * the count lowered, so that the file has a name at every stop. A
+ * destination file is replaced by rewriting its entry to the source's
+ * inode, after which the victim loses a count and goes as an unlink's does.
+ * A directory moves by a new entry, its `..` rewritten, the new parent's
+ * count raised, the old entry removed and the old parent's count lowered; a
+ * destination directory must be empty and goes first, as rmdir's does. The
+ * old entry is found again before it is removed, since a removal in the
+ * same directory may have moved it. Two names of one file change nothing.
+ *
+ * Returns 0; -ENOENT for a missing source or a removed destination
+ * directory, which takes no entry; -EISDIR, -ENOTDIR, -ENOTEMPTY; -EINVAL
+ * for a directory moved below itself, found by a walk up `..` before any
+ * write; -EMLINK; -ENAMETOOLONG; -EROFS; -ENOSPC; or -errno.
+ */
+static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
+                       const char *newname)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *od = olddir ? olddir : mnt->root;
+    struct ext2_node *nd = newdir ? newdir : mnt->root;
+    struct ext2_node *n, *victim = 0, *first, *second;
+    struct ext2_scan osc, nsc;
+    uint32_t oat, oprev, nat = 0, nprev = 0;
+    int rc, have_new;
+
+    rc = assert_writable(mnt, em);
+    if (rc != 0) {
+        return rc;
+    }
+    assert_node_locked(em, od);
+    assert_node_locked(em, nd);
+    if (od != nd && em_file_locked()) {
+        sleep_lock_assert(&mnt->rename, "ext2: a move between directories outside the rename lock");
+    }
+    if (k_strlen(newname) > EXT2_NAME_MAX) {
+        return -ENAMETOOLONG;
+    }
+    if (nd->unlinked) {
+        return -ENOENT;
+    }
+    rc = dir_find(em, od, oldname, &oat, &oprev, &osc);
+    if (rc <= 0) {
+        return rc < 0 ? rc : -ENOENT;
+    }
+    have_new = dir_find(em, nd, newname, &nat, &nprev, &nsc);
+    if (have_new < 0) {
+        return have_new;
+    }
+    if (have_new && nsc.ino == osc.ino) {
+        return 0;
+    }
+    n = node_for(em, osc.ino, &rc);
+    if (!n) {
+        return rc;
+    }
+    if (have_new) {
+        victim = node_for(em, nsc.ino, &rc);
+        if (!victim) {
+            ext2_put(mnt, n);
+            return rc;
+        }
+    }
+    rc = rename_check(em, od, nd, n, victim);
+    if (rc == 0) {
+        first = victim && victim->ino < n->ino ? victim : n;
+        second = first == n ? victim : n;
+        node_lock(first);
+        if (second) {
+            node_lock(second);
+        }
+        if (victim && (victim->mode & S_IFMT_) == S_IFDIR_) {
+            int empty;
+
+            rc = dir_is_empty(em, victim, &empty);
+            if (rc == 0 && !empty) {
+                rc = -ENOTEMPTY;
+            }
+        }
+        if (rc == 0 && (n->mode & S_IFMT_) == S_IFDIR_) {
+            rc = rename_dir(em, od, oldname, nd, newname, n, victim, &nsc, nat, nprev);
+        } else if (rc == 0) {
+            rc = rename_file(em, od, oldname, nd, newname, n, victim, nat);
+        }
+        if (second) {
+            node_unlock(second);
+        }
+        node_unlock(first);
+    }
+    if (victim) {
+        ext2_put(mnt, victim);
+    }
+    ext2_put(mnt, n);
     return rc;
 }
 
