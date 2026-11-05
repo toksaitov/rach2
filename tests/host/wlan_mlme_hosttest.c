@@ -797,14 +797,14 @@ static void vanishing_ap(void)
         CHECK(ap_beacon(ap_a, IEEE80211_STYPE_BEACON) == 0);
     }
     CHECK(n_sent == 0 && queued() == 1);
-    wait_ms(715);
+    wait_ms(1739);
     CHECK(n_sent == 0);
     wait_ms(1);
     CHECK(n_sent == 1 && sent_is(&sent[0], IEEE80211_STYPE_PROBE_REQ, ap_a));
     CHECK(sent[0].f[HDR] == WLAN_EID_SSID && sent[0].f[HDR + 1] == 3);
     CHECK(mlme.missed_beacons == 1);
     CHECK(ap_beacon(ap_a, IEEE80211_STYPE_PROBE_RESP) == 0 && mlme.probes == 0);
-    wait_ms(715);
+    wait_ms(1739);
     CHECK(n_sent == 1);
     wait_ms(1);
     CHECK(n_sent == 2);
@@ -833,8 +833,8 @@ static void beacons_for(unsigned ms)
 }
 
 /** An interface that reports ACKs: the station polls the AP with a null
- * frame thirty seconds after it last heard from it, and seven beacon
- * intervals after its last beacon, as mac80211 does on ath9k; an ACK or a
+ * frame thirty seconds after it last heard from it, as mac80211 does on
+ * ath9k, and seventeen beacon intervals after its last beacon; an ACK or a
  * beacon ends the poll, a frame not acknowledged is asked again at once,
  * and two of them, or two whose status never came, end the association. */
 static void polled_ap(void)
@@ -876,14 +876,15 @@ static void polled_ap(void)
     wlan_mlme_tx_status(&mlme, poll_cookie, 0);
     CHECK(n_polls == 3 && mlme.state == WLAN_STA_ASSOCIATED);
 
-    /* Seven intervals without a beacon: a poll, and one beacon loss. */
-    wait_ms(715);
+    /* Seventeen intervals without a beacon, 1740 ms: a poll, and one
+     * beacon loss. */
+    wait_ms(1739);
     CHECK(n_polls == 3);
     wait_ms(1);
     CHECK(n_polls == 4 && mlme.missed_beacons == 1 && losses == 1);
     wlan_mlme_tx_status(&mlme, poll_cookie, 1);
     CHECK(mlme.probes == 0);
-    wait_ms(715);
+    wait_ms(1739);
     CHECK(n_polls == 4);
     wait_ms(1);
     CHECK(n_polls == 5 && mlme.missed_beacons == 2 && losses == 2);
@@ -902,7 +903,7 @@ static void polled_ap(void)
     /* Two polls whose status never comes end it too, 500 ms each. */
     connect_a(0);
     CHECK(mlme.missed_beacons == 0 && mlme.probes == 0);
-    wait_ms(716);
+    wait_ms(1740);
     CHECK(n_polls == 7 && mlme.missed_beacons == 1);
     wait_ms(WLAN_MLME_PROBE_TIMEOUT);
     CHECK(n_polls == 8 && mlme.state == WLAN_STA_ASSOCIATED);
@@ -1113,9 +1114,11 @@ static void channel_switch_timed(void)
     CHECK(n_sent == 0 && mlme.state == WLAN_STA_ASSOCIATED && moves == 3);
     wait_ms(1);
     CHECK(followed(2412) && moves == 4);
-    wait_ms(2000);
+    wait_ms(2740);
     CHECK(n_sent == 3 && mlme.state == WLAN_STA_ASSOCIATED);
-    wait_ms(500);
+    wait_ms(499);
+    CHECK(mlme.state == WLAN_STA_ASSOCIATED);
+    wait_ms(1);
     CHECK(mlme.state == WLAN_STA_NONE && n_seen == 1);
     CHECK(seen[0].ev.type == WLAN_EVENT_DEAUTHENTICATE && seen[0].ev.frequency == 2412);
 }
@@ -1154,7 +1157,7 @@ static void channel_switch(void)
     /* The AP heard on channel 6 keeps the association; its loss leaves. */
     wait_ms(700);
     CHECK(ap_beacon_with(ap_a, 0, 0, 0) == 0 && n_sent == 0);
-    wait_ms(716);
+    wait_ms(1740);
     CHECK(n_sent == 1 && sent_is(&sent[0], IEEE80211_STYPE_PROBE_REQ, ap_a));
     CHECK(ap_beacon(ap_a, IEEE80211_STYPE_PROBE_RESP) == 0 && mlme.probes == 0);
     n_sent = 0;

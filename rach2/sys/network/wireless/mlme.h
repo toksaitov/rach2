@@ -16,7 +16,7 @@
 #define WLAN_MLME_ASSOC_TIMEOUT   200  /* each of 3 tries */
 #define WLAN_MLME_TRIES           3
 #define WLAN_MLME_COMEBACK_MAX    10000 /* longest assoc comeback honoured */
-#define WLAN_MLME_BEACON_LOSS     7     /* beacon intervals without a beacon */
+#define WLAN_MLME_BEACON_LOSS     17    /* beacon intervals without a beacon */
 #define WLAN_MLME_IDLE_POLL       30000 /* without a unicast frame or ACK */
 #define WLAN_MLME_PROBE_TIMEOUT   500   /* each probe of a silent AP */
 #define WLAN_MLME_PROBE_TRIES     3     /* probe requests, without poll */

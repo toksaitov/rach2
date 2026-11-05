@@ -884,7 +884,8 @@ static void check_null(const uint8_t *f, unsigned len)
 
 /** Idle: thirty seconds after the AP was last heard the station polls it
  * with a null frame, whose ACK ends the poll, as mac80211 does on a radio
- * that reports ACKs; beacons that stop for seven intervals bring another.
+ * that reports ACKs; beacons that stop for seventeen intervals, 1740 ms,
+ * bring another.
  * The station dump's counters count both frames and the beacon loss. */
 static void row_idle(void)
 {
@@ -902,7 +903,10 @@ static void row_idle(void)
     CHECK(drain() == 0 && wlan->state == WLAN_STA_AUTHORIZED);
     CHECK(beacons_for(20000) == 0);
 
-    now += 716;
+    now += 1739;
+    run_worker();
+    CHECK(drain() == 0);
+    now += 1;
     run_worker();
     len = take(f);
     check_null(f, len);
