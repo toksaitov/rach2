@@ -7,9 +7,9 @@
  * flip. Two calls stand for two processes and take turns, the second a
  * parked call (compat/park_host.c): a row hands over at a disk request, and
  * a wait that cannot end yet hands back.
- * Files are empty, since the batch and `punch` do not yet run under
- * `em->meta`, and a row's first process holds a directory's lock around a
- * change, as the VFS does.
+ * Files are empty, and a row's first process holds a directory's lock
+ * around a change, as the VFS does; the rows of the batch and of `punch`
+ * under `em->meta` are in ext2_hosttest.c.
  */
 #ifndef EXT2_NODE_ROWS_H_
 #define EXT2_NODE_ROWS_H_

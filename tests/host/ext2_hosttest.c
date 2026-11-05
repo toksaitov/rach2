@@ -33,6 +33,7 @@
  */
 #include "../../rach2/sys/fs/ext2.h"
 #include "../../rach2/sys/fs/bcache.h"
+#include "../../rach2/sys/fs/sleeplock.h"
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/proc/process.h"
 #include "fixdir_host.h"
@@ -285,6 +286,7 @@ static int read_fails;
 static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
     (void)d;
+    current_proc->disk_waits++; /* the wait the block layer counts */
     if (read_pause) {
         read_pause();
     }
@@ -404,6 +406,7 @@ static void wlog_reset(void)
 static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
     (void)d;
+    current_proc->disk_waits++;
     if (write_pause) {
         write_pause();
     }
@@ -3194,6 +3197,268 @@ static void sync_unlocked_row(void)
     check(unmount_rw() == 0, "the unlocked-sync volume unmounts");
 }
 
+/**
+ * On a mount that writes back, calls that store inodes and change names
+ * leave a pending write in the batch, and their writes into a block the
+ * batch holds reach its image too: a create whose inode shares the pending
+ * file's table block, a mkdir, a chmod and a rename of the pending file,
+ * and an append after them. The drain at the close keeps every one, read
+ * back before and after a remount, and the volume is clean.
+ */
+static void held_block_row(void)
+{
+    static unsigned char data[4 * 4096];
+    void *a, *b, *handle = 0;
+    struct vfs_stat st;
+    int rc;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    rw_flags = 0;
+    rc = mount_rw();
+    check(rc == 0, "the held-block volume mounts without dirsync");
+    if (rc != 0) {
+        rw_flags = VFS_MS_DIRSYNC;
+        return;
+    }
+    memset(data, 0x4d, sizeof(data));
+    memset(data + 12288, 0x4e, 4096);
+    a = make_file(mnt.root, "held-a", &rc);
+    check(a && OPS->open(&mnt, a, 2, &handle) == 0 &&
+              OPS->write(&mnt, handle, data, 12288, 0) == 12288,
+          "three blocks of a file wait in the batch");
+    b = a ? make_file(mnt.root, "held-b", &rc) : 0;
+    check(b != 0 && OPS->mkdir(&mnt, mnt.root, "held-c", 0755) == 0,
+          "a create beside it and a mkdir");
+    memset(&st, 0, sizeof(st));
+    st.mode = 0600;
+    check(a && OPS->setattr(&mnt, a, VFS_SET_MODE, &st) == 0 &&
+              OPS->rename(&mnt, mnt.root, "held-a", mnt.root, "held-a2") == 0,
+          "a chmod and a rename of the pending file");
+    check(handle && OPS->write(&mnt, handle, data + 12288, 4096, 12288) == 4096,
+          "and an append after them");
+    check(file_is("/held-a2", data, sizeof(data)), "the pending file reads whole");
+    if (handle) {
+        OPS->release(&mnt, handle);
+    }
+    if (a) {
+        OPS->put(&mnt, a);
+    }
+    if (b) {
+        OPS->put(&mnt, b);
+    }
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "the held-block volume unmounts clean");
+    rc = mount_rw();
+    rw_flags = VFS_MS_DIRSYNC;
+    check(rc == 0 && file_is("/held-a2", data, sizeof(data)) && file_is("/held-b", data, 0),
+          "and after a remount both files read back");
+    a = rc == 0 ? walk("/held-a2", &rc) : 0;
+    check(a && OPS->getattr(&mnt, a, &st) == 0 && (st.mode & 07777) == 0600, "with the chmod kept");
+    if (a) {
+        OPS->put(&mnt, a);
+    }
+    b = walk("/held-c", &rc);
+    check(b != 0, "and the directory there");
+    if (b) {
+        OPS->put(&mnt, b);
+    }
+    check(unmount_rw() == 0, "the held-block volume unmounts again");
+}
+
+/** The holds of `em->meta`, every mount's, that crossed a disk request. */
+static uint32_t meta_crossings(void)
+{
+    const struct sleep_lock_record *r;
+
+    for (r = sleep_lock_records(); r; r = r->next) {
+        if (streq(r->kind, "ext2 meta")) {
+            return r->crossings;
+        }
+    }
+    return 0;
+}
+
+/**
+ * On a mount that writes back and a type that sets `file_locked`, under a
+ * cache of 16 buffers that another file's blocks have filled with dirty
+ * ones, a write of eight blocks and the fsync that drains them: the cache
+ * writes the victims before the drain takes `em->meta`, so that no hold of
+ * it crosses a disk request, and both files read back after a remount on a
+ * clean volume.
+ */
+static void drain_victims_row(void)
+{
+    static unsigned char other[16 * 4096], data[8 * 4096];
+    void *x, *y, *handle = 0;
+    uint32_t freed, crossed;
+    int rc;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    if (bcache_resident() > 16) {
+        bcache_shrink(bcache_resident() - 16, 0, &freed);
+    }
+    bcache_set_limit(16);
+    rw_flags = 0;
+    rc = mount_rw();
+    check(rc == 0, "the drain volume mounts without dirsync under 16 buffers");
+    if (rc != 0) {
+        rw_flags = VFS_MS_DIRSYNC;
+        bcache_set_limit(0);
+        return;
+    }
+    memset(other, 0x61, sizeof(other));
+    memset(data, 0x62, sizeof(data));
+    x = make_file(mnt.root, "victims", &rc);
+    check(x && write_at(x, other, sizeof(other), 0) == 0,
+          "sixteen blocks of one file are dirty in the cache");
+    y = make_file(mnt.root, "drained", &rc);
+    check(y && OPS->open(&mnt, y, 2, &handle) == 0, "another file is open");
+    vfs_ext2_type.file_locked = 1;
+    crossed = meta_crossings();
+    if (handle) {
+        OPS->lock_node(&mnt, y);
+        check(OPS->write(&mnt, handle, data, sizeof(data), 0) == (int32_t)sizeof(data),
+              "eight blocks of it wait in the batch");
+        OPS->unlock_node(&mnt, y);
+        check(OPS->fsync(&mnt, handle) == 0, "and an fsync drains them past the victims");
+    }
+    check(meta_crossings() == crossed, "with em->meta held across no disk request");
+    vfs_ext2_type.file_locked = 0;
+    if (handle) {
+        OPS->release(&mnt, handle);
+    }
+    if (x) {
+        OPS->put(&mnt, x);
+    }
+    if (y) {
+        OPS->put(&mnt, y);
+    }
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "the drain volume unmounts clean");
+    rc = mount_rw();
+    rw_flags = VFS_MS_DIRSYNC;
+    check(rc == 0 && file_is("/victims", other, sizeof(other)) &&
+              file_is("/drained", data, sizeof(data)),
+          "and after a remount both files read back");
+    check(unmount_rw() == 0, "the drain volume unmounts again");
+    bcache_set_limit(0);
+}
+
+/* The description of the second file of `overlap_punch_row`, and 1 once
+ * process B's truncate of it succeeded or -1 once it failed. */
+static void *overlap_handle;
+static int overlap_done;
+
+/** At the first truncate's first disk request, its read of the indirect
+ * block, give process B the turn. */
+static void overlap_turn(void)
+{
+    read_pause = 0;
+    pass_turn();
+}
+
+/** Process B of `overlap_punch_row`: the second file truncated to nothing
+ * under its lock. */
+static void overlap_second(void)
+{
+    void *y = overlap_handle;
+
+    OPS->lock_node(&mnt, y);
+    overlap_done = OPS->truncate(&mnt, overlap_handle, 0) == 0 ? 1 : -1;
+    OPS->unlock_node(&mnt, y);
+}
+
+/**
+ * Two truncates of two files of twenty blocks, on a mount that writes back
+ * and a type that sets `file_locked`: process B's runs whole while process
+ * A's waits for its indirect block. Neither holds `em->meta` across a disk
+ * request, each free keeps its own list, and the cache's two classes keep
+ * the order of both: at the sync every write of the files' inode table
+ * block comes before the first of the block bitmap and of the descriptors,
+ * so no pointer on the disk names a block whose bit is clear, and the
+ * volume is clean with both files empty.
+ */
+static void overlap_punch_row(void)
+{
+    static unsigned char data[20 * 4096];
+    uint64_t table[2], bm[4];
+    void *x, *y, *handle = 0;
+    struct vfs_stat st;
+    uint32_t crossed;
+    int rc, synced, logged, nbm, ok;
+    char cmd[64];
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    rw_flags = 0;
+    rc = mount_rw();
+    rw_flags = VFS_MS_DIRSYNC;
+    check(rc == 0, "the overlap volume mounts without dirsync");
+    if (rc != 0) {
+        return;
+    }
+    memset(data, 0x3c, sizeof(data));
+    x = make_file(mnt.root, "punch-x", &rc);
+    y = x ? make_file(mnt.root, "punch-y", &rc) : 0;
+    check(x && y && write_at(x, data, sizeof(data), 0) == 0 &&
+              write_at(y, data, sizeof(data), 0) == 0,
+          "two files of twenty blocks, past the direct pointers");
+    overlap_handle = 0;
+    check(x && y && OPS->open(&mnt, x, 2, &handle) == 0 &&
+              OPS->open(&mnt, y, 2, &overlap_handle) == 0,
+          "and a description of each");
+    check(OPS->sync(&mnt) == 0 && bcache_sync(&dev) == 0 && bcache_invalidate(&dev) == 0,
+          "both reach the disk and leave the cache");
+    memset(&st, 0, sizeof(st));
+    st.mode = 0600;
+    check(x && y && OPS->setattr(&mnt, x, VFS_SET_MODE, &st) == 0 &&
+              OPS->setattr(&mnt, y, VFS_SET_MODE, &st) == 0 && OPS->getattr(&mnt, x, &st) == 0,
+          "their inodes' block is read again");
+    if (!handle || !overlap_handle) {
+        (void)unmount_rw();
+        return;
+    }
+    overlap_done = 0;
+    sleeps = 0;
+    wlog_reset();
+    vfs_ext2_type.file_locked = 1;
+    crossed = meta_crossings();
+    read_pause = overlap_turn;
+    start_turns(overlap_second);
+    OPS->lock_node(&mnt, x);
+    rc = OPS->truncate(&mnt, handle, 0);
+    OPS->unlock_node(&mnt, x);
+    finish_turns();
+    read_pause = 0;
+    check(rc == 0 && overlap_done == 1 && sleeps == 0,
+          "one truncate runs whole while the other waits for its indirect block");
+    check(meta_crossings() == crossed, "and neither holds em->meta across a disk request");
+    vfs_ext2_type.file_locked = 0;
+    check(OPS->sync(&mnt) == 0, "the two frees sync");
+    synced = wlog_n;
+    OPS->release(&mnt, handle);
+    OPS->release(&mnt, overlap_handle);
+    OPS->put(&mnt, x);
+    OPS->put(&mnt, y);
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "the overlap volume unmounts clean");
+    snprintf(cmd, sizeof(cmd), "imap <%lu>", (unsigned long)st.ino);
+    ok = debugfs_numbers(cmd, "located at block ", table, 2) == 1;
+    nbm = debugfs_numbers("stats", "block bitmap at ", bm, 4);
+    check(ok && nbm >= 1 && !wlog_overflow, "debugfs names the inode table block and the bitmap");
+    logged = wlog_n;
+    wlog_n = synced;
+    ok = ok && nbm >= 1 && last_write_of(table[0]) >= 0 && first_write_of(bm[0]) >= 0 &&
+         last_write_of(table[0]) < first_write_of(bm[0]) &&
+         last_write_of(table[0]) < first_write_of(1);
+    wlog_n = logged;
+    check(ok, "the inodes reached the disk before the bitmap and the descriptors");
+    wlog_reset();
+    rc = mount_rw();
+    check(rc == 0 && file_is("/punch-x", data, 0) && file_is("/punch-y", data, 0),
+          "and both files are empty after a remount");
+    check(unmount_rw() == 0, "the overlap volume unmounts again");
+}
+
 #include "ext2_batch_cases.h"
 #include "ext2_batch_lifecycle.h"
 #include "ext2_node_rows.h"
@@ -3262,7 +3527,9 @@ static void remount_nomem_row(void)
  * ext2_batch_lifecycle.h, `batch_rows_under` and the cross-call order rows
  * at 16 and 512 buffers, from blocks 11, 1035 and 2059, then the default
  * mount, an rmdir of a held directory, a remount, a remount the heap cannot
- * give a batch, and the failed drain and flush rows.
+ * give a batch, the failed drain and flush rows, the unlocked sync, and on a
+ * mount that writes back a batch kept across namespace calls, a drain past
+ * dirty victims and two interleaved truncates.
  */
 static void batch_rows(void)
 {
@@ -3299,6 +3566,9 @@ static void batch_rows(void)
     batch_flush_error_row(5, 1);
     batch_flush_error_row(6, 1);
     sync_unlocked_row();
+    held_block_row();
+    drain_victims_row();
+    overlap_punch_row();
 }
 
 /**
