@@ -215,6 +215,31 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return 0;
 }
 
+/* The bytes of a user buffer a row has made absent, [gone_from, gone_to),
+   which `vm_resident` calls not present until `vm_prefault_range` brings
+   them in, and the prefaults asked for. Empty, every buffer is present. */
+static uintptr_t gone_from, gone_to;
+static int prefaults;
+
+/** Whether [addr, addr + len) misses the absent bytes. */
+int vm_resident(uintptr_t addr, uintptr_t len, int write)
+{
+    (void)write;
+    return addr >= gone_to || addr + len <= gone_from;
+}
+
+/** Count the prefault and bring the absent bytes in when the range meets
+ * them; always 1. */
+int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
+{
+    (void)write;
+    prefaults++;
+    if (addr < gone_to && addr + len > gone_from) {
+        gone_from = gone_to = 0;
+    }
+    return 1;
+}
+
 /** Return 0: the caller never holds the namespace lock here. */
 int vfs_ns_held_by_caller(void)
 {
@@ -3462,6 +3487,7 @@ static void overlap_punch_row(void)
 #include "ext2_batch_cases.h"
 #include "ext2_batch_lifecycle.h"
 #include "ext2_node_rows.h"
+#include "ext2_lock_rows.h"
 
 /* The host heap's limit on one allocation, 0 for none, and the page
  * allocations it grants before it fails, -1 for no limit
@@ -3569,6 +3595,7 @@ static void batch_rows(void)
     held_block_row();
     drain_victims_row();
     overlap_punch_row();
+    lock_rows();
 }
 
 /**

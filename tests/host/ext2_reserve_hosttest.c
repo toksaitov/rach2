@@ -183,6 +183,24 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return -1;
 }
 
+/** Return 1: every buffer of this test is present. */
+int vm_resident(uintptr_t addr, uintptr_t len, int write)
+{
+    (void)addr;
+    (void)len;
+    (void)write;
+    return 1;
+}
+
+/** Return 1: nothing here is ever absent. */
+int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
+{
+    (void)addr;
+    (void)len;
+    (void)write;
+    return 1;
+}
+
 /** Return 0: no hold of a sleeping lock here is timed. */
 uint32_t timer_now_us(void)
 {
