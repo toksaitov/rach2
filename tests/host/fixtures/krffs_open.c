@@ -179,6 +179,10 @@ static void dcache_forget(struct vfs_mount *mnt, void *dir, const char *name)
     (void)name;
 }
 
+/** The name cache keeps nothing for later. */
+static void dcache_drain(void)
+{}
+
 /** No fixture mount is detached, so a closed description reaps nothing. */
 static void reap_if_detached(const struct vfs_mount *mnt)
 {
@@ -199,6 +203,32 @@ const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
     (void)mnt;
     (void)node;
     return NULL;
+}
+
+/** No fixture name is a mount point. */
+struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *name)
+{
+    (void)mnt;
+    (void)node;
+    (void)name;
+    return NULL;
+}
+
+/** No fixture directory is a process's root. */
+int vfs_leaf_root(struct vfs_mount *mnt, void *node, const char *name)
+{
+    (void)mnt;
+    (void)node;
+    (void)name;
+    return 0;
+}
+
+/** No fixture file is mapped. */
+static void filemap_file_truncated(const struct vfs_mount *mnt, uint64_t ino, uint64_t size)
+{
+    (void)mnt;
+    (void)ino;
+    (void)size;
 }
 
 /** Both fixture processes have root's credentials. */

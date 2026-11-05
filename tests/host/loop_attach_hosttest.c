@@ -4,6 +4,7 @@
  *
  * host-deps: rach2/sys/block/chain.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/nodelock_none.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * The test includes the kernel's krffs.c and loop.c. The KRFFS core moves

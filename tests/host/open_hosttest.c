@@ -7,6 +7,7 @@
  * host-deps: tests/host/compat/vfs_name_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/park_host.c
+ * host-deps: rach2/sys/fs/nodelock.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * The rows check:
@@ -40,7 +41,11 @@
  *   return;
  * - the release of the last holder of a file of the KRFFS root that lost
  *   its name, by each path a descriptor or a file mapping ends on, while
- *   another process's allocation on the root runs in the reclaim's sleep.
+ *   another process's allocation on the root runs in the reclaim's sleep;
+ * - on a model type that sets `file_locked`, with the node locks of
+ *   rach2/sys/fs/nodelock.c, the order of the locks a create, an unlink,
+ *   an rmdir and a rename in one directory and between two take, and a
+ *   mount against an rmdir of the directory it covers.
  *
  * The static declarations before the includes make the unused exports of
  * the three sources private, so the compiler drops them and the hardware
@@ -310,6 +315,19 @@ static wait_queue_t ns_queue;
  * way. */
 static void (*in_reclaim)(void);
 static int reclaiming, reclaim_parked, extents_taken, extents_in_reclaim;
+
+/* The model of a type that sets `file_locked`, defined before `main`. */
+static struct vfs_mount fl_mount;
+static int fl_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **found);
+static int fl_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st);
+static int fl_resolve(const char *path, int flags, struct vfs_ref *out, char *leaf,
+                      uint32_t leafcap);
+static struct vfs_mount *fl_leaf_mount(void *at, const char *name);
+static int fl_make(void *dir, const char *name, int isdir);
+static int fl_remove(void *dir, const char *name, int isdir);
+static int fl_move(void *olddir, const char *oldname, void *newdir, const char *newname);
+static void fl_note(const char *token);
+static int fl_holds(void *at);
 
 /** Record every failed invariant. */
 static void check(int ok, const char *what)
@@ -629,6 +647,9 @@ struct vfs_mount *vfs_root_mount(void)
  * moves the file, runs then. */
 int vfs_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
 {
+    if (mnt == &fl_mount) {
+        return fl_getattr(mnt, at, st);
+    }
     if (ns_depth == 0) {
         run_waiting();
     }
@@ -750,6 +771,9 @@ void vfs_release(struct vfs_mount *mnt, void *at)
 /** Record reference cleanup on failed open. */
 void vfs_ref_release(struct vfs_ref *ref)
 {
+    if (ref->mnt == &fl_mount) {
+        return;
+    }
     check(ref->mnt == &mount, "failed open releases resolution");
     dropped++;
 }
@@ -1379,6 +1403,9 @@ int vfs_resolve(const struct vfs_ref *start, const char *path, int flags, struct
 
     (void)start;
     check(ns_depth == 0, "a walk starts with no namespace lock held");
+    if (__builtin_strncmp(path, "/fl/", 4) == 0) {
+        return fl_resolve(path, flags, out, leaf, leafcap);
+    }
     if (!(flags & VFS_WALK_PARENT)) {
         if ((flags & VFS_WALK_LOCK) && mount.type->ns_serialised) {
             vfs_ns_lock(&mount);
@@ -1441,9 +1468,9 @@ const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 /** No name is a mount point. */
 struct vfs_mount *vfs_leaf_mount(struct vfs_mount *mnt, void *node, const char *name)
 {
-    (void)mnt;
-    (void)node;
-    (void)name;
+    if (mnt == &fl_mount) {
+        return fl_leaf_mount(node, name);
+    }
     return 0;
 }
 
@@ -1668,6 +1695,11 @@ static void changed_in_lookup_hold(void)
 int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
 {
     (void)mode;
+    if (mnt == &fl_mount) {
+        check(fl_holds(dir), "a mkdir holds its parent's lock");
+        fl_note("mkdir");
+        return fl_make(dir, name, 1);
+    }
     check(mnt == &mount && dir == &root_dir, "the mkdir is in the root directory");
     changed_in_lookup_hold();
     if (made_dir.name[0] != '\0' && __builtin_strcmp((const char *)made_dir.name, name) == 0) {
@@ -1683,6 +1715,10 @@ int vfs_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t mode)
  * syscall layer have passed. */
 int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 {
+    if (mnt == &fl_mount) {
+        check(fl_holds(dir), "an rmdir holds its parent's lock");
+        return fl_remove(dir, name, 1);
+    }
     check(mnt == &mount && dir == &root_dir && __builtin_strcmp(name, "made") == 0,
           "the rmdir removes the name it was given");
     changed_in_lookup_hold();
@@ -1694,6 +1730,10 @@ int vfs_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
 /** Free the file an unlink takes the name of, as the root does. */
 int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
 {
+    if (mnt == &fl_mount) {
+        check(fl_holds(dir), "an unlink holds its parent's lock");
+        return fl_remove(dir, name, 0);
+    }
     check(mnt == &mount && dir == &root_dir && __builtin_strcmp(name, "kept") == 0,
           "the unlink removes the name it was given");
     changed_in_lookup_hold();
@@ -1706,6 +1746,10 @@ int vfs_unlink_name(struct vfs_mount *mnt, void *dir, const char *name)
 int vfs_rename(struct vfs_mount *mnt, void *olddir, const char *oldname, void *newdir,
                const char *newname)
 {
+    if (mnt == &fl_mount) {
+        check(fl_holds(olddir) && fl_holds(newdir), "a rename holds both directories' locks");
+        return fl_move(olddir, oldname, newdir, newname);
+    }
     check(mnt == &mount && olddir == &root_dir && newdir == &root_dir &&
               __builtin_strcmp(oldname, "src") == 0 && __builtin_strcmp(newname, "kept") == 0,
           "the rename moves the names it was given");
@@ -3172,6 +3216,456 @@ int block_depth(block_device_t *device)
 }
 
 /** Run every row. Returns 0 when every check passed, 1 otherwise. */
+/*
+ * The model of a type that sets `file_locked`, mounted at /fl: a tree of
+ * directories and files whose locks write each take and give to `fl_log`,
+ * "L" and "U" with the inode number, and an "o" before the token of the
+ * other process. The mount's rename lock writes "R" and "r", a look for a
+ * mount on a name "M", and each change its name. A lock another process
+ * holds is waited for by parking, logged as "W".
+ */
+struct fl_node {
+    const char *name; /* "" for a node not made yet or removed */
+    uint32_t ino;
+    int parent; /* the index of the directory it is in, -1 for the root */
+    int dir;
+    uint32_t nlink;
+    process_t *holder;
+    int depth;
+};
+
+/* The tree: / (2), /a (10), /b (5), /a/c (7), /a/x (20), /a/z (15),
+ * /b/d (30, empty), /b/w (12), and a slot for what a row makes (40). */
+enum { FL_ROOT, FL_A, FL_B, FL_C, FL_X, FL_Z, FL_D, FL_W, FL_NEW, FL_NODES };
+static const struct fl_node fl_tree[FL_NODES] = {
+    {"/", 2, -1, 1, 4, 0, 0},    {"a", 10, FL_ROOT, 1, 3, 0, 0}, {"b", 5, FL_ROOT, 1, 3, 0, 0},
+    {"c", 7, FL_A, 1, 2, 0, 0},  {"x", 20, FL_A, 0, 1, 0, 0},    {"z", 15, FL_A, 0, 1, 0, 0},
+    {"d", 30, FL_B, 1, 2, 0, 0}, {"w", 12, FL_B, 0, 1, 0, 0},    {"", 40, -1, 0, 0, 0, 0},
+};
+static struct fl_node fl_nodes[FL_NODES];
+static char fl_log[512];
+/* The node a mount covers, or NULL; the call another process makes when the
+ * row's call first looks `fl_hook_name` up, or while its change sleeps; and
+ * what the other process's mount answered. */
+static struct fl_node *fl_mounted;
+static const char *fl_hook_name;
+static void (*fl_on_lookup)(void);
+static void (*fl_in_change)(void);
+static int fl_mount_rc;
+static struct vfs_mount fl_child;
+/* The names a row's change gives a node, kept past the call's buffers. */
+static char fl_made_name[VFS_NAME_MAX + 1], fl_moved_name[VFS_NAME_MAX + 1];
+
+/** Append `token` and a space to the log. */
+static void fl_note(const char *token)
+{
+    uint32_t at = (uint32_t)k_strlen(fl_log);
+
+    if (at + k_strlen(token) + 2 < sizeof(fl_log)) {
+        k_strncpy(fl_log + at, token, sizeof(fl_log) - at);
+        at += (uint32_t)k_strlen(token);
+        fl_log[at] = ' ';
+        fl_log[at + 1] = '\0';
+    }
+}
+
+/** Log `kind` with the inode number of `n`, marked for the other process. */
+static void fl_note_node(char kind, const struct fl_node *n)
+{
+    char token[16];
+    int at = 0;
+    uint32_t v = n->ino, div = 1;
+
+    if (current_proc == &other) {
+        token[at++] = 'o';
+    }
+    token[at++] = kind;
+    while (v / div >= 10) {
+        div *= 10;
+    }
+    for (; div > 0; div /= 10) {
+        token[at++] = (char)('0' + (v / div) % 10);
+    }
+    token[at] = '\0';
+    fl_note(token);
+}
+
+/** The node of `n`'s name in the directory `dir`, or NULL. */
+static struct fl_node *fl_child_named(const struct fl_node *dir, const char *name)
+{
+    int i;
+
+    for (i = 0; i < FL_NODES; i++) {
+        if (fl_nodes[i].parent >= 0 && &fl_nodes[fl_nodes[i].parent] == dir &&
+            fl_nodes[i].name[0] != '\0' && __builtin_strcmp(fl_nodes[i].name, name) == 0) {
+            return &fl_nodes[i];
+        }
+    }
+    return 0;
+}
+
+/** The type's lookup, `..` and `.` included; the first lookup of
+ * `fl_hook_name` by the row's process runs `fl_on_lookup`, as if the read of
+ * the directory slept. */
+static int fl_lookup(struct vfs_mount *mnt, void *dir, const char *name, void **found)
+{
+    struct fl_node *d = dir ? dir : &fl_nodes[FL_ROOT];
+    struct fl_node *n;
+    void (*hook)(void) = fl_on_lookup;
+
+    check(mnt == &fl_mount, "a lookup of the file-locked model is on its mount");
+    if (hook && current_proc == &proc && __builtin_strcmp(name, fl_hook_name) == 0) {
+        fl_on_lookup = 0;
+        hook();
+    }
+    if (__builtin_strcmp(name, ".") == 0) {
+        n = d;
+    } else if (__builtin_strcmp(name, "..") == 0) {
+        n = d->parent >= 0 ? &fl_nodes[d->parent] : d;
+    } else {
+        n = fl_child_named(d, name);
+    }
+    if (!n) {
+        return -ENOENT;
+    }
+    *found = n;
+    return 0;
+}
+
+/** A directory of mode 0777, or a file of 0666, owned by root. */
+static int fl_getattr(struct vfs_mount *mnt, void *at, struct vfs_stat *st)
+{
+    const struct fl_node *n = at ? at : &fl_nodes[FL_ROOT];
+
+    (void)mnt;
+    k_memset(st, 0, sizeof(*st));
+    st->ino = n->ino;
+    st->nlink = n->nlink;
+    st->mode = n->dir ? 040777u : 0100666u;
+    return 0;
+}
+
+/** Take the lock of `at`, parking while another process holds it. */
+static void fl_lock_node(struct vfs_mount *mnt, void *at)
+{
+    struct fl_node *n = at;
+
+    (void)mnt;
+    while (n->holder && n->holder != current_proc) {
+        fl_note_node('W', n);
+        if (!park_active()) {
+            printf("open-hosttest: fail: a node lock wait that nothing can end\n");
+            exit(1);
+        }
+        park();
+    }
+    fl_note_node('L', n);
+    n->holder = current_proc;
+    n->depth++;
+}
+
+/** Give back one take of the lock of `at`. */
+static void fl_unlock_node(struct vfs_mount *mnt, void *at)
+{
+    struct fl_node *n = at;
+
+    (void)mnt;
+    check(n->holder == current_proc && n->depth > 0, "a node lock is given back by its holder");
+    fl_note_node('U', n);
+    if (--n->depth == 0) {
+        n->holder = 0;
+    }
+}
+
+static const struct vfs_ops fl_ops = {.lookup = fl_lookup,
+                                      .getattr = fl_getattr,
+                                      .lock_node = fl_lock_node,
+                                      .unlock_node = fl_unlock_node};
+static const struct vfs_type fl_type = {"flocked", 0, &fl_ops, 0, 0, 0, 1};
+
+/** The rename lock of the model's mount: logged, never contended. */
+void sleep_lock_take(struct sleep_lock *l)
+{
+    check(l == &fl_mount.rename, "the rename lock is the mount's");
+    fl_note("R");
+}
+
+/** Give back the rename lock. */
+void sleep_lock_give(struct sleep_lock *l)
+{
+    check(l == &fl_mount.rename, "the rename lock is the mount's");
+    fl_note("r");
+}
+
+/** The model's locks need no setting up. */
+void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int flags)
+{
+    (void)l;
+    (void)record;
+    (void)flags;
+}
+
+/** The model keeps no name cache. */
+void dcache_drain(void)
+{}
+
+/** Walk a path below /fl to its node, or to its parent and last name with
+ * VFS_WALK_PARENT, holding nothing, as a walk on a file-locked type does. */
+static int fl_resolve(const char *path, int flags, struct vfs_ref *out, char *leaf,
+                      uint32_t leafcap)
+{
+    struct fl_node *n = &fl_nodes[FL_ROOT];
+    char name[VFS_NAME_MAX + 1];
+    const char *p = path + 3;
+
+    for (;;) {
+        uint32_t len = 0;
+
+        while (*p == '/') {
+            p++;
+        }
+        while (p[len] && p[len] != '/') {
+            len++;
+        }
+        check(len > 0 && len <= VFS_NAME_MAX, "a model path names something");
+        k_memcpy(name, p, len);
+        name[len] = '\0';
+        p += len;
+        if (*p == '\0' && (flags & VFS_WALK_PARENT)) {
+            k_strncpy(leaf, name, leafcap);
+            break;
+        }
+        n = fl_child_named(n, name);
+        if (!n) {
+            return -ENOENT;
+        }
+        if (*p == '\0') {
+            break;
+        }
+    }
+    out->mnt = &fl_mount;
+    out->node = n;
+    return 0;
+}
+
+/** Look for a mount on `name` in the model's directory `at`. */
+static struct vfs_mount *fl_leaf_mount(void *at, const char *name)
+{
+    fl_note("M");
+    return fl_mounted && fl_child_named(at, name) == fl_mounted ? &fl_child : 0;
+}
+
+/** Make `name` in the directory `dir`. */
+static int fl_make(void *dir, const char *name, int isdir)
+{
+    struct fl_node *d = dir;
+
+    if (fl_child_named(d, name)) {
+        return -EEXIST;
+    }
+    k_strncpy(fl_made_name, name, sizeof(fl_made_name));
+    fl_nodes[FL_NEW].name = fl_made_name;
+    fl_nodes[FL_NEW].parent = (int)(d - fl_nodes);
+    fl_nodes[FL_NEW].dir = isdir;
+    fl_nodes[FL_NEW].nlink = isdir ? 2 : 1;
+    return 0;
+}
+
+/** Whether the calling process holds the lock of the model's node `at`. */
+static int fl_holds(void *at)
+{
+    return ((struct fl_node *)at)->holder == current_proc;
+}
+
+/** Run what the row has happen while a change sleeps for the disk. */
+static void fl_change_sleeps(void)
+{
+    void (*run)(void) = fl_in_change;
+
+    fl_in_change = 0;
+    if (run) {
+        check(!park_run(run), "the other process waits for the lock the change holds");
+        current_proc = &proc;
+    }
+}
+
+/** Remove the empty directory or the file `name` of `dir`. */
+static int fl_remove(void *dir, const char *name, int isdir)
+{
+    struct fl_node *n = fl_child_named(dir, name);
+
+    if (!n) {
+        return -ENOENT;
+    }
+    if (n->dir != isdir) {
+        return isdir ? -ENOTDIR : -EISDIR;
+    }
+    check(n->holder == current_proc, "a removal holds the lock of what it removes");
+    fl_note(isdir ? "rmdir" : "unlink");
+    fl_change_sleeps();
+    n->name = "";
+    n->nlink = 0;
+    return 0;
+}
+
+/** Move `oldname` of `olddir` to `newname` of `newdir`, replacing what has
+ * that name: EINVAL for a directory moved below itself, as the type answers
+ * it. */
+static int fl_move(void *olddir, const char *oldname, void *newdir, const char *newname)
+{
+    struct fl_node *n = fl_child_named(olddir, oldname);
+    struct fl_node *to = fl_child_named(newdir, newname);
+    struct fl_node *up = newdir;
+
+    fl_note("rename");
+    if (!n) {
+        return -ENOENT;
+    }
+    for (; up; up = up->parent >= 0 ? &fl_nodes[up->parent] : 0) {
+        if (up == n) {
+            return -EINVAL;
+        }
+    }
+    if (to && to != n) {
+        to->name = "";
+        to->nlink = 0;
+    }
+    k_strncpy(fl_moved_name, newname, sizeof(fl_moved_name));
+    n->name = fl_moved_name;
+    n->parent = (int)((struct fl_node *)newdir - fl_nodes);
+    return 0;
+}
+
+/** A fresh tree, an empty log and no mount on it, for a row on /fl. */
+static void fl_row_begin(void)
+{
+    row_begin();
+    k_memcpy(fl_nodes, fl_tree, sizeof(fl_nodes));
+    k_memset(&fl_mount, 0, sizeof(fl_mount));
+    fl_mount.type = &fl_type;
+    fl_mount.root = &fl_nodes[FL_ROOT];
+    fl_log[0] = '\0';
+    fl_mounted = 0;
+    fl_on_lookup = 0;
+    fl_in_change = 0;
+    fl_mount_rc = 1;
+    k_memset(&row_fs, 0, sizeof(row_fs));
+    proc.fs = &row_fs;
+}
+
+/** Require the log `want` and every node lock given back. */
+static void fl_row_end(const char *want, const char *what)
+{
+    int i;
+
+    if (__builtin_strcmp(fl_log, want) != 0) {
+        printf("open-hosttest: lock order: got \"%s\", want \"%s\"\n", fl_log, want);
+    }
+    check(__builtin_strcmp(fl_log, want) == 0, what);
+    for (i = 0; i < FL_NODES; i++) {
+        check(fl_nodes[i].holder == 0 && fl_nodes[i].depth == 0, "every node lock given back");
+    }
+    proc.fs = 0;
+    row_end();
+}
+
+/** The other process's mount on /fl/b/d, from its cover lock to its place,
+ * as `vfs_do_mount` takes them. */
+static void fl_mount_on_d(void)
+{
+    struct vfs_ref d;
+
+    current_proc = &other;
+    d.mnt = &fl_mount;
+    d.node = &fl_nodes[FL_D];
+    fl_mount_rc = vfs_cover_lock(&d);
+    if (fl_mount_rc == 0) {
+        fl_mounted = &fl_nodes[FL_D];
+    }
+    vfs_node_unlock(&d);
+    current_proc = &proc;
+}
+
+/**
+ * The order of the locks a system call takes on a type that sets
+ * `file_locked`: a create the parent's; an unlink and an rmdir the parent's
+ * and then the victim's, with the mounts looked for again under both; a
+ * rename in one directory that directory's and then both names' nodes by
+ * inode number; a rename between two directories the mount's rename lock,
+ * then the directory above the other first even when its number is higher,
+ * or the lower number first when neither is above, then the nodes; and a
+ * directory moved below itself leaves its own node unlocked, since its lock
+ * would come after a directory below it.
+ */
+static void file_locked_orders(void)
+{
+    fl_row_begin();
+    check(do_mkdir("/fl/b/n", 0777) == 0 && fl_nodes[FL_NEW].parent == FL_B,
+          "a mkdir on a file-locked type makes the directory");
+    fl_row_end("M L5 M mkdir U5 ", "a create locks its parent alone");
+
+    fl_row_begin();
+    check(unlink_named("/fl/b/w", 0) == 0 && fl_nodes[FL_W].nlink == 0,
+          "an unlink on a file-locked type removes the file");
+    fl_row_end("M L5 L12 M unlink U12 U5 ", "an unlink locks the parent, then the file");
+
+    fl_row_begin();
+    check(do_rmdir("/fl/b/d") == 0 && fl_nodes[FL_D].nlink == 0,
+          "an rmdir on a file-locked type removes the directory");
+    fl_row_end("M L5 L30 M rmdir U30 U5 ", "an rmdir locks the parent, then the victim");
+
+    fl_row_begin();
+    check(do_rename("/fl/a/x", "/fl/a/z", 0, 0) == 0 && fl_nodes[FL_X].parent == FL_A,
+          "a rename in one directory moves the name");
+    fl_row_end("M M L10 L15 L20 M M rename U20 U15 U10 ",
+               "a rename in one directory locks it, then both nodes by number");
+
+    fl_row_begin();
+    check(do_rename("/fl/a/x", "/fl/a/c/y", 0, 0) == 0 && fl_nodes[FL_X].parent == FL_C,
+          "a rename to a directory below moves the name");
+    fl_row_end("M M R L10 L7 L20 M M rename U20 U7 U10 r ",
+               "a rename to a directory below locks the one above first");
+
+    fl_row_begin();
+    check(do_rename("/fl/a/z", "/fl/b/v", 0, 0) == 0 && fl_nodes[FL_Z].parent == FL_B,
+          "a rename between unrelated directories moves the name");
+    fl_row_end("M M R L5 L10 L15 M M rename U15 U10 U5 r ",
+               "a rename between unrelated directories locks the lower number first");
+
+    fl_row_begin();
+    check(do_rename("/fl/a", "/fl/a/c/q", 0, 0) == -EINVAL && fl_nodes[FL_A].parent == FL_ROOT,
+          "a directory moved below itself is EINVAL");
+    fl_row_end("M M R L2 L7 M M rename U7 U2 r ",
+               "a directory moved below itself is left unlocked");
+}
+
+/**
+ * A mount against an rmdir of the directory it covers, on a type that sets
+ * `file_locked`: a mount placed while the rmdir looked the victim up is
+ * found under the victim's lock (EBUSY), and a mount that asks while the
+ * rmdir holds the victim waits for its lock, then finds the directory gone
+ * (ENOENT).
+ */
+static void file_locked_mount_rmdir(void)
+{
+    fl_row_begin();
+    fl_hook_name = "d";
+    fl_on_lookup = fl_mount_on_d;
+    check(do_rmdir("/fl/b/d") == -EBUSY && fl_nodes[FL_D].nlink == 2 && fl_mount_rc == 0,
+          "an rmdir finds under the victim's lock a mount placed while it looked");
+    fl_row_end("M L5 oL30 oU30 L30 M U30 U5 ", "the rmdir looks for the mount under both locks");
+
+    fl_row_begin();
+    fl_in_change = fl_mount_on_d;
+    check(do_rmdir("/fl/b/d") == 0 && fl_mount_rc == 1,
+          "an rmdir removes the directory a mount waits for");
+    current_proc = &other;
+    check(park_resume(), "the mount ends once the rmdir gives the victim back");
+    current_proc = &proc;
+    check(fl_mount_rc == -ENOENT && !fl_mounted, "a mount of a removed directory is ENOENT");
+    fl_row_end("M L5 L30 M rmdir oW30 U30 U5 oL30 oU30 ", "the mount waits for the victim's lock");
+}
+
 int main(void)
 {
     mount.type = &mounted_type;
@@ -3200,6 +3694,8 @@ int main(void)
     log_seek_range();
     orphan_reclaims();
     mapping_reclaims();
+    file_locked_orders();
+    file_locked_mount_rmdir();
     if (!failures) {
         printf("open-hosttest: result: pass: mounted truncation, loop handles and root removals\n");
     }

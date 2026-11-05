@@ -5,6 +5,7 @@
  * host-deps: tests/host/compat/vfs_name_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/nodelock_none.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * `syscall_fs.c` is included whole, its unused exports private so that the
@@ -518,6 +519,24 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
 
 /** A user buffer of the model passes the range check. */
 int user_buffer_ok(uintptr_t addr, size_t len, int write)
+{
+    (void)addr;
+    (void)len;
+    (void)write;
+    return 1;
+}
+
+/** Every page of a model buffer is present. */
+int vm_resident(uintptr_t addr, uintptr_t len, int write)
+{
+    (void)addr;
+    (void)len;
+    (void)write;
+    return 1;
+}
+
+/** Every page of a model buffer is brought in. */
+int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
     (void)addr;
     (void)len;
