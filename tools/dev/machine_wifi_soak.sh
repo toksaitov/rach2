@@ -20,12 +20,14 @@
 # given, a network wpa_supplicant already knows, and for SECONDS it runs:
 #
 #   * RACH2_SOAK_WRITERS writers, 6 unless given, each of which writes a
-#     file of 6000 MiB of random bytes, flushes it, removes it and starts
-#     again, and a `sync` loop. The files are under /tmp, on the root file
-#     system, beside the service log wpa_supplicant writes. This load can
-#     keep programs that need the disk, a new SSH login among them, waiting
-#     for minutes, so the run stops it with what is already in memory: shell
-#     builtins and files in /dev/shm.
+#     file of 6000 MiB of zeros, flushes it, removes it and starts again, and
+#     a `sync` loop; 0 runs no load at all, for a control. The zeros come from
+#     /dev/zero because a read of /dev/urandom spends its time in the kernel
+#     under the big lock and so loads the processors, not the disk. The files
+#     are under /tmp, on the root file system, beside the service log
+#     wpa_supplicant writes. This load can keep programs that need the disk,
+#     a new SSH login among them, waiting for minutes, so the run stops it
+#     with what is already in memory: shell builtins and files in /dev/shm.
 #   * a ping of the gateway through wlan0, five times a second, whose
 #     replies are stamped on arrival;
 #   * a logger of every event wpa_supplicant reports, each stamped on arrival;
@@ -189,7 +191,7 @@ joined()
 writer()
 {
     while [ ! -e "$dir/stop" ]; do
-        dd if=/dev/urandom of="$load/w$1" bs=1M count=6000 conv=fsync 2> /dev/null &
+        dd if=/dev/zero of="$load/w$1" bs=1M count=6000 conv=fsync 2> /dev/null &
         echo $! > "$dir/dd$1"
         wait $!
         rm -f "$load/w$1"
@@ -286,7 +288,7 @@ table()
         }' "$dir/events"
     # A counter falls when an association begins.
     awk '{
-            for (i = 3; i <= NF; i++) {
+            for (i = 2; i <= NF; i++) {
                 split($i, a, "=")
                 if (a[1] == "signal") continue
                 v = a[2] + 0
@@ -388,6 +390,7 @@ soak()
     t0=$1
     echo "wifi-soak: load: $writers writers and sync, $seconds s, from uptime $t0 at $(date -u '+%H:%M:%S UTC'), ping $gateway"
     pinger &
+    pinging=$!
     sampler &
     kernelwatch &
     i=0
@@ -395,12 +398,13 @@ soak()
         writer "$i" &
         i=$((i + 1))
     done
-    syncer &
+    [ "$writers" -eq 0 ] || syncer &
     sleep "$seconds"
     stopload
     disk1=$(statnum latency_disk_us)
     stats1=$(diskline)
     echo "wifi-soak: load stopped at uptime $(cut -d ' ' -f 1 /proc/uptime)"
+    wait "$pinging"
     wait_writers
     dmesg | grep -E 'wlan|ath9k|80211' >> "$dir/kernel.raw"
     echo "wifi-soak: table: $seconds s"
