@@ -15,17 +15,18 @@
  * host-deps: tests/host/ath9k_model.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c
  *
- * The test stands in for the parts it does not link: hw.c's reset is a
- * warm reset of the model followed by mac.c's queue set-up, as
- * ath9k_hw_reset ends; the station's receive and transmit status are
- * recorded; the worker's queue is a list the test runs; the clock is a
- * counter. The rows push frames through both receive FIFOs and the
- * transmit queues and their status ring, check each descriptor's words
- * against ath9k's, install keys and read the cache's registers, raise
- * each interrupt cause, and make the chip hang each way recover.c looks
- * for, then check that a reset brought back the queues, the filter, the
- * receive buffers, the interrupts and the keys. It exits with the count of
- * failed checks, at most 255.
+ * The test stands in for the parts it does not link: hw.c's reset gives
+ * a channel with no noise floor the quiet noise level, resets the model
+ * warm and sets up mac.c's queues, as ath9k_hw_reset ends; the station's
+ * receive and transmit status are recorded; the worker's queue is a list
+ * the test runs; the clock is a counter. The rows push frames through both
+ * receive FIFOs and the transmit queues and their status ring, check each
+ * descriptor's words against ath9k's, check a frame's and an ACK's signal
+ * against the noise level, install keys and read the cache's registers,
+ * raise each interrupt cause, and make the chip hang each way recover.c
+ * looks for, then check that a reset brought back the queues, the filter,
+ * the receive buffers, the interrupts and the keys. It exits with the
+ * count of failed checks, at most 255.
  */
 #include "ath9k_model.h"
 #include "irq.h"
@@ -874,6 +875,56 @@ static void test_tx(void)
 }
 
 /* ------------------------------------------------------------------ */
+/* The signal.                                                          */
+/* ------------------------------------------------------------------ */
+
+/** Receive a beacon at RSSI 40 and send a QoS data frame on BE whose ACK
+ * comes back at RSSI 30, and check that the frame's signal is `noise` + 40
+ * and the ACK's `noise` + 30, in dBm. */
+static void check_signal(int noise)
+{
+    uint8_t f[400];
+    struct wlan_tx_info info;
+    struct ar9003_txs st;
+    unsigned len;
+
+    rx_count = txs_count = 0;
+    len = beacon(f, 100);
+    CHECK(receive(0, f, len, 0x1b, 40, 0) == 0);
+    interrupt();
+    CHECK(rx_count == 1 && rx_st[0].signal == noise + 40);
+
+    len = qos_data(f, 200, 0);
+    info = tx_info(WLAN_AC_BE, 90);
+    CHECK(ath9k_tx(&ah, f, len, &info) == 0);
+    k_memset(&st, 0, sizeof(st));
+    st.status3 = AR_FrmXmitOK;
+    st.status7 = SM(30, AR_TxRSSICombined);
+    CHECK(ath9k_model_tx_complete(&model, ah.tx.q[WLAN_AC_BE].qnum, &st) != 0);
+    interrupt();
+    CHECK(txs_count == 1 && txs[0].flags == WLAN_TX_ACKED && txs[0].ack_signal == noise + 30);
+}
+
+/** The signal of a frame and of an ACK is the RSSI over the noise level, as
+ * ath9k_process_rssi gives it, not over the raw noise floor: the first
+ * noise floor result of a quiet channel, -117 dBm, leaves both readings as
+ * they were, and a floor of -95 dBm, 9 dB beyond the threshold of 6 dB
+ * over the nominal -110 dBm, raises them by 9 dB. The calibration's fields
+ * are set as ath9k_nf_read leaves them, which ath9k_phy_hosttest checks. */
+static void test_signal(void)
+{
+    setup(1);
+    CHECK(ah.cal.noise_floor == 0 && ah.cal.noise == -95);
+    check_signal(-95);
+    ah.cal.noise_floor = -117;
+    ah.cal.noise = -95;
+    check_signal(-95);
+    ah.cal.noise_floor = -95;
+    ah.cal.noise = -95 + 9;
+    check_signal(-95 + 9);
+}
+
+/* ------------------------------------------------------------------ */
 /* Keys.                                                                */
 /* ------------------------------------------------------------------ */
 
@@ -1451,6 +1502,7 @@ int main(void)
 {
     test_rx();
     test_tx();
+    test_signal();
     test_keys();
     test_recover();
     test_attach();
