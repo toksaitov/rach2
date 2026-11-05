@@ -73,7 +73,6 @@ rach2/sys/arch/x86/board.c:board_init lines 101 a hardware sequence, the registe
 
 rach2/sys/display/vga_gfx.c:vga_set_mode params 9 the parameters are the fields of one command; a struct for them would be filled and unpacked once
 
-rach2/sys/fs/bcache.c:sync_batches nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/bcache.c:get complexity 35 one file system operation over the on-disk format, each step a rule of the format
 
 rach2/sys/fs/dcache.c:keep params 7 the parameters are one lookup's directory, name, hash and answer, and the generation it was made under

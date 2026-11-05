@@ -429,6 +429,229 @@ static void write_through_rows(void)
     bcache_invalidate(&wide);
 }
 
+/** Dirty block `blk` of `dev` for `owner`, with the place `order`. */
+static void dirty_for(block_device_t *dev, uint64_t blk, uint64_t owner, int order)
+{
+    struct bbuf *b = bcache_get_blank(dev, blk);
+
+    b->data[0] = 0xC0;
+    bcache_dirty_owned(b, owner);
+    bcache_dirty_ordered(b, order);
+    bcache_release(b);
+}
+
+/** Whether block `blk` of `dev`, which is in the cache, is dirty. */
+static int dirty_now(block_device_t *dev, uint64_t blk)
+{
+    struct bbuf *b = bcache_get(dev, blk);
+    int dirty = b && b->dirty;
+
+    bcache_release(b);
+    return dirty;
+}
+
+/** A panic row's call: hold block 4 of `fake`, dirty, and write it alone. */
+static void sync_block_it(void *arg)
+{
+    struct bbuf *b = bcache_get_blank(&fake, 4);
+
+    (void)arg;
+    bcache_dirty(b);
+    bcache_sync_block(&fake, 4);
+}
+
+/**
+ * Check `bcache_sync_owned` beside a large dirty neighbour, on `vast` made a
+ * write-through disk.
+ *
+ * Owner 7 has blocks 50 to 52 and 54, and owner 9 every other block up to
+ * 250, more than a sync's stack batch. The owned sync makes two requests,
+ * which hold only 7's blocks though 53 lies between and a run could cross
+ * it, no flush, and leaves 9's blocks dirty. A plain mark keeps a tag, the
+ * last tag stands, and a write clears it. An `after` of the owner's goes
+ * after a `first` of nobody's, which keeps its flush.
+ */
+static void owned_rows(void)
+{
+    struct bbuf *b;
+    uint64_t i;
+
+    bcache_invalidate(&vast);
+    bcache_set_limit(300);
+    vast.flags |= BLOCK_WRITE_THROUGH;
+    for (i = 1; i <= 250; i++) {
+        dirty_for(&vast, i, (i >= 50 && i <= 52) || i == 54 ? 7 : 9, 0);
+    }
+    writes_made = 0;
+    blockmax_flushes = 0;
+    check(bcache_sync_owned(&vast, 7) == 0 && writes_made == 2 && writes_lba[0] == 50 * 8 &&
+              writes_lba[1] == 54 * 8 && last_write_count == 8,
+          "an owned sync writes that owner's blocks in two requests");
+    check(blockmax_flushes == 0 && blockmax_last_flags == BLOCK_REQ_NOFLUSH,
+          "without the disk's flush");
+    check(dirty_now(&vast, 49) && dirty_now(&vast, 53) && dirty_now(&vast, 55),
+          "and leaves the neighbours dirty");
+    check(!dirty_now(&vast, 50) && !dirty_now(&vast, 54), "with its own blocks clean");
+    writes_made = 0;
+    check(bcache_sync_owned(&vast, 7) == 0 && writes_made == 0,
+          "an owned sync with nothing dirty writes nothing");
+    check(bcache_sync_owned(&vast, 8) == 0 && writes_made == 0, "nor does one of another owner");
+    check(bcache_sync(&vast) == 0 && writes_made == 4 && !dirty_now(&vast, 250),
+          "and a sync of the device writes the rest, in runs of up to half the cache");
+
+    b = bcache_get(&vast, 60);
+    bcache_dirty_owned(b, 7);
+    bcache_dirty(b);
+    bcache_release(b);
+    b = bcache_get(&vast, 61);
+    bcache_dirty_owned(b, 7);
+    bcache_dirty_owned(b, 9);
+    bcache_release(b);
+    writes_made = 0;
+    check(bcache_sync_owned(&vast, 7) == 0 && writes_made == 1 && writes_lba[0] == 60 * 8 &&
+              last_write_count == 8 && dirty_now(&vast, 61),
+          "a plain dirty mark keeps the owner, and the last owner given stands");
+    check(bcache_sync_owned(&vast, 9) == 0 && writes_made == 2, "so its blocks go with that one");
+    b = bcache_get(&vast, 60);
+    bcache_dirty(b);
+    bcache_release(b);
+    writes_made = 0;
+    check(bcache_sync_owned(&vast, 7) == 0 && writes_made == 0 && dirty_now(&vast, 60),
+          "a write clears the owner");
+    bcache_sync(&vast);
+
+    dirty_for(&vast, 70, 7, BCACHE_ORDER_AFTER);
+    dirty_for(&vast, 80, 9, BCACHE_ORDER_FIRST);
+    dirty_for(&vast, 90, 0, BCACHE_ORDER_FIRST);
+    dirty_for(&vast, 91, 9, 0);
+    writes_made = 0;
+    watch_blk = 80;
+    watch_flags = BLOCK_REQ_NOFLUSH;
+    check(bcache_sync_owned(&vast, 7) == 0 && writes_made == 3 && writes_lba[2] == 70 * 8,
+          "an owned `after` follows every `first` of the device, whoever owns it");
+    check(watch_flags == 0 && dirty_now(&vast, 91), "with its flush, and leaves the rest");
+    watch_blk = 0;
+    bcache_sync(&vast);
+    vast.flags &= ~BLOCK_WRITE_THROUGH;
+    bcache_invalidate(&vast);
+}
+
+/**
+ * Check `bcache_sync_block`, the write of one shared block, on `vast` made a
+ * write-through disk. An `after` goes after the device's firsts, and the
+ * neighbours stay dirty; a clean block and one not in the cache write
+ * nothing; a `first` keeps the disk's flush and a plain block has none; a
+ * failed write answers its errno and stays dirty, and a block the caller
+ * holds panics.
+ */
+static void shared_rows(void)
+{
+    struct bbuf *b;
+
+    vast.flags |= BLOCK_WRITE_THROUGH;
+    dirty_for(&vast, 20, 0, BCACHE_ORDER_AFTER);
+    dirty_for(&vast, 21, 0, 0);
+    dirty_for(&vast, 30, 0, BCACHE_ORDER_FIRST);
+    dirty_for(&vast, 31, 0, BCACHE_ORDER_FIRST);
+    writes_made = 0;
+    blockmax_flushes = 0;
+    check(bcache_sync_block(&vast, 20) == 0 && writes_made == 3 && writes_lba[2] == 20 * 8,
+          "a shared `after` is written after the device's firsts");
+    check(last_write_count == 8 && !dirty_now(&vast, 20) && dirty_now(&vast, 21),
+          "alone, with its neighbour left dirty");
+    writes_made = 0;
+    check(bcache_sync_block(&vast, 20) == 0 && bcache_sync_block(&vast, 300) == 0 &&
+              writes_made == 0,
+          "a clean block and one not in the cache write nothing");
+    check(bcache_sync_block(&vast, 21) == 0 && writes_made == 1 &&
+              blockmax_last_flags == BLOCK_REQ_NOFLUSH && blockmax_flushes == 0,
+          "a plain shared block is written without the flush");
+    dirty_for(&vast, 32, 0, BCACHE_ORDER_FIRST);
+    check(bcache_sync_block(&vast, 32) == 0 && blockmax_last_flags == 0, "and a `first` with it");
+    b = bcache_get(&vast, 21);
+    bcache_dirty(b);
+    bcache_release(b);
+    fail_writes = 1;
+    check(bcache_sync_block(&vast, 21) == -5 && dirty_now(&vast, 21),
+          "a failed write answers its errno and stays dirty");
+    fail_writes = 0;
+    vast.flags &= ~(BLOCK_WRITE_THROUGH | BLOCK_WRITE_FAILED);
+    check(bcache_sync_block(&vast, 21) == 0 && !dirty_now(&vast, 21),
+          "and the next write takes it");
+    bcache_invalidate(&vast);
+    panic_row(sync_block_it, 0, "a sync while holding", "a write of a block the caller holds");
+}
+
+/**
+ * Check `bcache_reserve` on a cache of 16 buffers, emptied first.
+ *
+ * With room nothing is written. A cache of dirty blocks is written from the
+ * oldest, in runs, until the misses asked for find a clean buffer, and those
+ * misses then write nothing; a request past the limit is cut to it. A dirty
+ * buffer in front of clean ones is written, since a miss takes the oldest.
+ * An `after` waits for its device's firsts. A failed write ends the call.
+ */
+static void reserve_rows(void)
+{
+    uint32_t written = 0;
+    struct bbuf *b;
+    uint64_t i;
+
+    bcache_invalidate(&wide);
+    bcache_invalidate(&vast);
+    bcache_invalidate(&fake);
+    bcache_invalidate(&other);
+    bcache_set_limit(16);
+    bcache_shrink(4096, 0, &written);
+    check(bcache_resident() == 0, "the reserve rows start from an empty cache");
+    writes_made = 0;
+    check(bcache_reserve(&wide, 4) == 4 && writes_made == 0, "the room to grow is ready");
+
+    for (i = 0; i < 16; i++) {
+        dirty_for(&wide, i, 0, 0);
+    }
+    check(bcache_reserve(&wide, 0) == 0 && writes_made == 0, "a reserve of none writes nothing");
+    check(bcache_reserve(&wide, 4) == 4 && writes_made == 1 && last_write_count == 8 * 8,
+          "a reserve of four writes one run of dirty victims");
+    for (i = 0; i < 4; i++) {
+        b = bcache_get_blank(&wide, 100 + i);
+        bcache_release(b);
+    }
+    check(writes_made == 1, "and four misses then write nothing");
+    check(dirty_now(&wide, 8) && dirty_now(&wide, 15), "with the later blocks left dirty");
+    check(bcache_reserve(&wide, 1000) == 16 && !dirty_now(&wide, 15),
+          "a reserve past the limit is cut to the limit");
+
+    for (i = 40; i < 56; i++) {
+        dirty_for(&wide, i, 0, 0);
+    }
+    bcache_sync(&wide);
+    dirty_for(&wide, 40, 0, BCACHE_ORDER_AFTER);
+    dirty_for(&wide, 50, 0, BCACHE_ORDER_FIRST);
+    writes_made = 0;
+    check(bcache_reserve(&wide, 15) == 15 && writes_made == 2 && writes_lba[0] == 50 * 8 &&
+              writes_lba[1] == 40 * 8,
+          "a reserve writes an `after` that is in the way after its device's firsts");
+
+    dirty_for(&wide, 41, 0, 0);
+    fail_writes = 1;
+    failed_dev = 0;
+    check(bcache_reserve(&wide, 16) == 15 && failed_dev == &wide,
+          "a failed write ends a reserve with the count it reached");
+    fail_writes = 0;
+    wide.flags &= ~BLOCK_WRITE_FAILED;
+    bcache_sync(&wide);
+    bcache_invalidate(&wide);
+}
+
+/** The rows of a file's own writeback and of the reserve. */
+static void writeback_rows(void)
+{
+    owned_rows();
+    shared_rows();
+    reserve_rows();
+}
+
 /**
  * Run the rows in order, and return the count of failed checks, at most 255.
  *
@@ -500,7 +723,8 @@ static void write_through_rows(void)
  * read run is bounded to half the cache, and its last blocks evict its own
  * first blocks, not the caller's block, though that is the least recently
  * released. A write run of 40 blank dirty blocks goes out in two runs of
- * 20, not one that holds every buffer while the request sleeps.
+ * 20, not one that holds every buffer while the request sleeps. The rows of
+ * a file's own writeback and of the reserve end the run (`writeback_rows`).
  */
 int main(void)
 {
@@ -1092,7 +1316,7 @@ int main(void)
     check(bcache_sync(&vast) == 0 && writes_made == 2 && writes_lba[0] == 8 &&
               writes_lba[1] == 8 + 20 * 8 && last_write_count == 20 * 8,
           "and are written in two runs of twenty");
-    bcache_invalidate(&vast);
+    writeback_rows();
 
     if (fails == 0) {
         printf("bcache_hosttest: OK\n");
