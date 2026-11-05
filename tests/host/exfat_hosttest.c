@@ -1649,6 +1649,150 @@ static void durability_rows(void)
     durability_row(2, "a file is written and the volume unmounted");
 }
 
+/* The neighbour of `neighbour_rows`: a file of this many cache blocks. */
+#define NEIGHBOUR_BLOCKS 64u
+
+static unsigned char neighbour[NEIGHBOUR_BLOCKS * BCACHE_BLOCK_BYTES];
+static uint64_t neighbour_at[NEIGHBOUR_BLOCKS];
+
+/** The block of the image that begins with the cache block's bytes at `what`;
+ *  the test fails when none does. */
+static uint64_t block_of(const unsigned char *what)
+{
+    uint64_t blk;
+
+    for (blk = 0; blk < image_sectors / BCACHE_BLOCK_SECTORS; blk++) {
+        if (memcmp(image + blk * BCACHE_BLOCK_BYTES, what, BCACHE_BLOCK_BYTES) == 0) {
+            return blk;
+        }
+    }
+    check(0, "the bytes the neighbour row wrote are in the image");
+    return 0;
+}
+
+/** How many of the neighbour's blocks are dirty in the cache. */
+static uint32_t neighbour_dirty(void)
+{
+    uint32_t i, dirty = 0;
+
+    for (i = 0; i < NEIGHBOUR_BLOCKS; i++) {
+        struct bbuf *b = bcache_get(&dev, neighbour_at[i]);
+
+        dirty += b && b->dirty ? 1 : 0;
+        if (b) {
+            bcache_release(b);
+        }
+    }
+    return dirty;
+}
+
+/** Find the neighbour's blocks in the image, which allocation around the
+ *  fixture's files leaves in pieces. */
+static void neighbour_find(void)
+{
+    uint32_t n = 0;
+    uint64_t blk;
+
+    for (blk = 0; blk < image_sectors / BCACHE_BLOCK_SECTORS && n < NEIGHBOUR_BLOCKS; blk++) {
+        if (memcmp(image + blk * BCACHE_BLOCK_BYTES, neighbour, BCACHE_BLOCK_BYTES) == 0) {
+            neighbour_at[n++] = blk;
+        }
+    }
+    check(n == NEIGHBOUR_BLOCKS, "every block of the neighbour is in the image");
+}
+
+/**
+ * A file's writes and fsync beside a neighbour of 64 dirty blocks, half of them
+ * tagged for another file and half with no tag: the driver leaves no dirty
+ * block behind an operation, so the row makes them through the cache. The
+ * write costs what it costs alone, `fsync` writes the file's one dirty block
+ * and no other, also after a rename, and a stop right after, with the
+ * neighbour's new bytes lost, leaves a volume the host's walk allows, the file
+ * whole and the neighbour as it was.
+ */
+static void neighbour_rows(void)
+{
+    uint32_t heap, first, i;
+    uint64_t own;
+    void *a, *b, *n;
+    struct bbuf *buf;
+    int err;
+
+    fill_pattern();
+    memset(neighbour, 0x5A, sizeof(neighbour));
+    bcache_set_limit(4 * NEIGHBOUR_BLOCKS);
+    load("--junk");
+    if (mount_rw() != 0) {
+        check(0, "the neighbour row's volume mounts");
+        return;
+    }
+    b = make_file(mnt.root, "neighbour.bin");
+    a = make_file(mnt.root, "own.bin");
+    check(a && b && write_at(b, neighbour, sizeof(neighbour), 0) == 0 &&
+              write_at(a, pattern, BCACHE_BLOCK_BYTES, 0) == 0,
+          "the file and its neighbour are written");
+    neighbour_find();
+    own = block_of(pattern);
+    heap = image[88] | (image[89] << 8) | (image[90] << 16) | ((uint32_t)image[91] << 24);
+    check(image[109] == 3 && heap % BCACHE_BLOCK_SECTORS == 0,
+          "the row's clusters are cache blocks");
+    first = (uint32_t)(own * BCACHE_BLOCK_SECTORS - heap) / BCACHE_BLOCK_SECTORS + 2;
+    for (i = 0; i < NEIGHBOUR_BLOCKS; i++) {
+        buf = bcache_get(&dev, neighbour_at[i]);
+        memset(buf->data, 0xA5, BCACHE_BLOCK_BYTES);
+        if (i % 2 != 0) {
+            bcache_dirty_owned(buf, 99);
+        } else {
+            bcache_dirty(buf);
+        }
+        bcache_release(buf);
+    }
+    writes_made = 0;
+    check(write_at(a, pattern, BCACHE_BLOCK_BYTES, BCACHE_BLOCK_BYTES) == 0 && writes_made <= 5,
+          "a write that grows the file makes its five writes beside the neighbour");
+    check(neighbour_dirty() == NEIGHBOUR_BLOCKS, "and leaves the neighbour dirty");
+    buf = bcache_get(&dev, own);
+    buf->data[0] ^= 0xFF;
+    pattern[0] = buf->data[0];
+    bcache_dirty_owned(buf, first);
+    bcache_release(buf);
+    check(OPS->rename(&mnt, mnt.root, "own.bin", mnt.root, "renamed.bin") == 0,
+          "the file is renamed");
+    writes_made = 0;
+    check(OPS->fsync(&mnt, a) == 0 && writes_made == 1,
+          "fsync writes the file's one dirty block, by its tag from before the rename");
+    check(neighbour_dirty() == NEIGHBOUR_BLOCKS, "and leaves the neighbour dirty");
+    devmodel_snapshot(&model, DEVMODEL_KEEP_NONE, snap);
+    check(OPS->sync(&mnt) == 0 && neighbour_dirty() == 0, "the mount's sync writes the rest");
+    OPS->put(&mnt, a);
+    OPS->put(&mnt, b);
+    unmount_image();
+    check(run_check_on(snap, check_out, sizeof(check_out)) >= 0 && findings_allowed(check_out),
+          "a stop after the fsync leaves a volume the walk allows");
+    load_snapshot(snap);
+    if (mount_image(VFS_MS_RDONLY, "") != 0) {
+        check(0, "the medium after the stop mounts");
+        return;
+    }
+    n = walk("/renamed.bin", &err);
+    check(n != 0 && read_all(n, back, sizeof(back)) == 2 * BCACHE_BLOCK_BYTES &&
+              memcmp(back, pattern, BCACHE_BLOCK_BYTES) == 0,
+          "and the file is whole on the medium");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    n = walk("/neighbour.bin", &err);
+    check(n != 0 && read_all(n, back, sizeof(back)) == (long)sizeof(neighbour) &&
+              memcmp(back, neighbour, sizeof(neighbour)) == 0,
+          "with the neighbour's old bytes beside it");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    unmount_image();
+    bcache_set_limit(0);
+    fill_pattern();
+}
+
 /** The clusters the bitmap in `img` says are in use; on the fixture's
  *  volumes the bitmap is cluster 2, the first of the heap. */
 static uint32_t used_clusters(const unsigned char *img)
@@ -2454,6 +2598,7 @@ int main(void)
     full_set_rows();
     scan_cost_rows();
     durability_rows();
+    neighbour_rows();
     free_durability_row();
     matrix_pass();
     dirty_rows();

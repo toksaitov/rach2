@@ -26,7 +26,7 @@
  *     --cfg-short --cluster8 --cluster8-past-end --menu-short --menu-odd
  *     --no-menu --vfs --active-second --unmasked --dir-loop
  *     --lost-chain --overlong-chain --bad-dotdot --dup-name --fsinfo
- *     --fsinfo-wrong --junk --dirty --dirty-surplus --dirty-orphan
+ *     --fsinfo-wrong --junk --junk8 --dirty --dirty-surplus --dirty-orphan
  *     --dirty-mirror --dirty-cross --dirty-surplus-cross --dirty-empty-chain
  *
  * `mkfatfixture --check <image> [offset-sectors] [--list]` walks a volume
@@ -35,7 +35,8 @@
  * four clusters longer than its size, a `..` naming the wrong directory, a
  * name twice in one directory, and FSInfo with the right or a wrong count
  * and hint. `--junk` is the FSInfo volume with every free cluster full of
- * bytes that would read as entries, for the writer's tests. The `--dirty`
+ * bytes that would read as entries, for the writer's tests, and `--junk8` is
+ * that volume at eight sectors per cluster. The `--dirty`
  * family carries the dirty flag over a clean volume, a chain two clusters
  * past its size, orphan long-name entries, a mirror one entry behind, a
  * cross-link, and a file of size zero that keeps its cluster, which is
@@ -991,7 +992,7 @@ static int build_fat(const char *option)
     opt = option ? option : "";
     opt_known = 0;
 
-    spc = (is("--cluster8") || is("--cluster8-past-end")) ? 8 : DEFAULT_SPC;
+    spc = (is("--cluster8") || is("--cluster8-past-end") || is("--junk8")) ? 8 : DEFAULT_SPC;
     cbytes = spc * SECTOR;
     clusters = (TOTAL - DATA_START) / spc;
     slot_clusters = KERNEL_CLUSTERS / spc;
@@ -1139,7 +1140,7 @@ static int build_fat(const char *option)
         memcpy(img + (size_t)RESERVED * SECTOR, fat, (size_t)FATSZ * SECTOR);
         memcpy(img + (size_t)(RESERVED + FATSZ) * SECTOR, fat2, (size_t)FATSZ * SECTOR);
     }
-    if (is("--fsinfo") || is("--fsinfo-wrong") || is("--junk")) {
+    if (is("--fsinfo") || is("--fsinfo-wrong") || is("--junk") || is("--junk8")) {
         /* FSInfo in sector 1: the free count and the hint, right or wrong. */
         unsigned char *fi = img + SECTOR;
         unsigned long c, freecount = 0;
@@ -1157,7 +1158,7 @@ static int build_fat(const char *option)
 
 #define CLUSTER_OFF(c) ((size_t)(DATA_START + ((c) - 2) * spc) * SECTOR)
 
-    if (is("--junk")) {
+    if (is("--junk") || is("--junk8")) {
         unsigned long c;
 
         for (c = 2; c < clusters + 2; c++)

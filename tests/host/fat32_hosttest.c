@@ -2287,6 +2287,10 @@ static void judge_stop(int i, const char *stage)
     }
 }
 
+/* The volume of a pass of the matrix: 512-byte clusters, whose data blocks are
+   shared between files, or 4 KiB clusters, which are each one file's. */
+static const char *matrix_fixture = "--junk";
+
 /**
  * One pass of the interruption matrix: every sequence stopped after each
  * of its writes, and at each stop the states the medium can be in, with
@@ -2308,7 +2312,7 @@ static void matrix_pass(void)
     for (i = 0; i < (int)(sizeof(sequences) / sizeof(sequences[0])); i++) {
         int n, barriers, b;
 
-        load("--junk");
+        load(matrix_fixture);
         stop_after = -1;
         writes_made = 0;
         if (mount_rw("") != 0) {
@@ -2323,7 +2327,7 @@ static void matrix_pass(void)
         for (k = 1; k <= n; k++) {
             char stage[60];
 
-            load("--junk");
+            load(matrix_fixture);
             writes_made = 0;
             stop_after = k;
             if (mount_rw("") != 0) {
@@ -2342,7 +2346,7 @@ static void matrix_pass(void)
             char what[200];
             int failed_at, j;
 
-            load("--junk");
+            load(matrix_fixture);
             writes_made = 0;
             stop_after = -1;
             model.fail_barrier = b;
@@ -2369,7 +2373,7 @@ static void matrix_pass(void)
             }
             total++;
             for (j = 0; j <= 3; j++) {
-                load("--junk");
+                load(matrix_fixture);
                 writes_made = 0;
                 stop_after = failed_at + j;
                 model.fail_barrier = b;
@@ -2454,7 +2458,157 @@ static void durability_rows(void)
     durability_row(2, "a file is written and the volume unmounted");
 }
 
-/** Run the matrix with short names, then with long names. */
+/* The neighbour of `neighbour_rows`: a file of this many cache blocks. */
+#define NEIGHBOUR_BLOCKS 64u
+
+static unsigned char neighbour[NEIGHBOUR_BLOCKS * BCACHE_BLOCK_BYTES];
+static uint64_t neighbour_at[NEIGHBOUR_BLOCKS];
+static unsigned char neighbour_back[NEIGHBOUR_BLOCKS * BCACHE_BLOCK_BYTES];
+
+/** The block of the image that begins with the cache block's bytes at `what`;
+ * the test fails when none does. */
+static uint64_t block_of(const unsigned char *what)
+{
+    uint64_t blk;
+
+    for (blk = 0; blk < IMG_BYTES / BCACHE_BLOCK_BYTES; blk++) {
+        if (__builtin_memcmp(image + blk * BCACHE_BLOCK_BYTES, what, BCACHE_BLOCK_BYTES) == 0) {
+            return blk;
+        }
+    }
+    check(0, "the bytes the neighbour row wrote are in the image");
+    return 0;
+}
+
+/** How many of the neighbour's blocks are dirty in the cache. */
+static uint32_t neighbour_dirty(void)
+{
+    uint32_t i, dirty = 0;
+
+    for (i = 0; i < NEIGHBOUR_BLOCKS; i++) {
+        struct bbuf *b = bcache_get(&dev, neighbour_at[i]);
+
+        dirty += b && b->dirty ? 1 : 0;
+        if (b) {
+            bcache_release(b);
+        }
+    }
+    return dirty;
+}
+
+/** Find the neighbour's blocks in the image, which allocation around the
+ * fixture's files leaves in pieces. */
+static void neighbour_find(void)
+{
+    uint32_t n = 0;
+    uint64_t blk;
+
+    for (blk = 0; blk < IMG_BYTES / BCACHE_BLOCK_BYTES && n < NEIGHBOUR_BLOCKS; blk++) {
+        if (__builtin_memcmp(image + blk * BCACHE_BLOCK_BYTES, neighbour, BCACHE_BLOCK_BYTES) ==
+            0) {
+            neighbour_at[n++] = blk;
+        }
+    }
+    check(n == NEIGHBOUR_BLOCKS, "every block of the neighbour is in the image");
+}
+
+/**
+ * A file's writes and fsync beside a neighbour of 64 dirty blocks, half of them
+ * tagged for another file and half with no tag: the driver leaves no dirty
+ * block behind an operation, so the row makes them through the cache. The
+ * write costs what it costs alone, `fsync` writes the file's one dirty block
+ * and no other, also after a rename, and a stop right after, with the
+ * neighbour's new bytes lost, leaves a volume the host's walk allows, the file
+ * whole and the neighbour as it was.
+ */
+static void neighbour_rows(void)
+{
+    uint32_t data_start, first, i;
+    uint64_t own;
+    void *a, *b, *n;
+    struct bbuf *buf;
+    int err;
+
+    fill_pattern();
+    __builtin_memset(neighbour, 0x5A, sizeof(neighbour));
+    bcache_set_limit(4 * NEIGHBOUR_BLOCKS);
+    load("--junk8");
+    if (mount_rw("") != 0) {
+        check(0, "the neighbour row's volume mounts");
+        return;
+    }
+    b = make_file(mnt.root, nm("N1.TXT"));
+    a = make_file(mnt.root, nm("A1.TXT"));
+    check(a && b && write_at(b, neighbour, sizeof(neighbour), 0) == 0 &&
+              write_at(a, pattern, sizeof(pattern), 0) == 0,
+          "the file and its neighbour are written");
+    neighbour_find();
+    own = block_of(pattern);
+    data_start = (uint32_t)(image[14] | image[15] << 8) +
+                 image[16] * (uint32_t)(image[36] | image[37] << 8 | image[38] << 16);
+    check(data_start % BCACHE_BLOCK_SECTORS == 0, "the row's clusters are cache blocks");
+    first = (uint32_t)(own * BCACHE_BLOCK_SECTORS - data_start) / BCACHE_BLOCK_SECTORS + 2;
+    for (i = 0; i < NEIGHBOUR_BLOCKS; i++) {
+        buf = bcache_get(&dev, neighbour_at[i]);
+        __builtin_memset(buf->data, 0xA5, BCACHE_BLOCK_BYTES);
+        if (i % 2 != 0) {
+            bcache_dirty_owned(buf, 99);
+        } else {
+            bcache_dirty(buf);
+        }
+        bcache_release(buf);
+    }
+    writes_made = 0;
+    check(write_at(a, pattern, sizeof(pattern), sizeof(pattern)) == 0 && writes_made <= 6,
+          "a write that grows the file makes its six writes beside the neighbour");
+    check(neighbour_dirty() == NEIGHBOUR_BLOCKS, "and leaves the neighbour dirty");
+    buf = bcache_get(&dev, own);
+    buf->data[0] ^= 0xFF;
+    pattern[0] = buf->data[0];
+    bcache_dirty_owned(buf, first);
+    bcache_release(buf);
+    check(OPS->rename(&mnt, mnt.root, nm("A1.TXT"), mnt.root, nm("A2.TXT")) == 0,
+          "the file is renamed");
+    writes_made = 0;
+    check(OPS->fsync(&mnt, a) == 0 && writes_made == 1,
+          "fsync writes the file's one dirty block, by its tag from before the rename");
+    check(neighbour_dirty() == NEIGHBOUR_BLOCKS, "and leaves the neighbour dirty");
+    devmodel_snapshot(&model, DEVMODEL_KEEP_NONE, snap);
+    check(OPS->sync(&mnt) == 0 && neighbour_dirty() == 0, "the mount's sync writes the rest");
+    OPS->put(&mnt, a);
+    OPS->put(&mnt, b);
+    OPS->put(&mnt, mnt.root);
+    OPS->unmount(&mnt);
+    check(mkfatfixture_check(snap, IMG_BYTES, 0, check_out, sizeof(check_out)) <= 1 &&
+              findings_allowed(check_out),
+          "a stop after the fsync leaves a volume the walk allows");
+    load_snapshot(snap);
+    if (mount_image("") != 0) {
+        check(0, "the medium after the stop mounts");
+        return;
+    }
+    n = walk(nm("/A2.TXT"), &err);
+    check(n != 0 && read_all(n, back, sizeof(back)) == 8192 &&
+              __builtin_memcmp(back, pattern, sizeof(pattern)) == 0,
+          "and the file is whole on the medium");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    n = walk(nm("/N1.TXT"), &err);
+    check(n != 0 &&
+              read_all(n, neighbour_back, sizeof(neighbour_back)) == (long)sizeof(neighbour) &&
+              __builtin_memcmp(neighbour_back, neighbour, sizeof(neighbour)) == 0,
+          "with the neighbour's old bytes beside it");
+    if (n) {
+        OPS->put(&mnt, n);
+    }
+    unmount_image();
+    bcache_set_limit(0);
+    fill_pattern();
+}
+
+/** Run the matrix with short names, then with long names, then on clusters of
+ * a cache block. */
 static void matrix_rows(void)
 {
     fill_pattern();
@@ -2463,6 +2617,9 @@ static void matrix_rows(void)
     long_names = 1;
     matrix_pass();
     long_names = 0;
+    matrix_fixture = "--junk8";
+    matrix_pass();
+    matrix_fixture = "--junk";
 }
 
 /**
@@ -2593,6 +2750,7 @@ int main(void)
     dirty_rows();
     matrix_rows();
     durability_rows();
+    neighbour_rows();
     if (fails == 0) {
         printf("fat32_hosttest: OK\n");
         fix_passed();
