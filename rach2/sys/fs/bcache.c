@@ -777,6 +777,11 @@ again:
     return wrote;
 }
 
+int bcache_cached(block_device_t *dev, uint64_t blk)
+{
+    return index_find(dev, blk) != 0;
+}
+
 struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
 {
     return get(dev, blk, 0, 0);

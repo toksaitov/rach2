@@ -694,6 +694,7 @@ static void ext2_hold(struct vfs_mount *mnt, void *node)
 
 static int release_inode(struct ext2_mount *em, struct ext2_node *n);
 static int sb_store(struct ext2_mount *em);
+static int sb_note(struct ext2_mount *em);
 static int meta_deferred(struct ext2_mount *em, uint64_t at);
 static int meta_noted(const struct ext2_mount *em, uint64_t blk);
 
@@ -1135,35 +1136,76 @@ static void ext2_release(struct vfs_mount *mnt, void *handle)
 }
 
 /**
+ * Bring the block that holds byte `at` of `n` into the cache with the
+ * mount's namespace lock let go, when the cache lacks it, so that a disk
+ * that takes seconds holds up no other call on the mount. The block is only
+ * a hint here: the caller, under the lock again, looks the file up anew, and
+ * a block freed or evicted meanwhile costs it a read under the lock. Whether
+ * the lock was let go, after which `n` may have changed.
+ */
+static int read_fetch(struct vfs_mount *mnt, const struct ext2_node *n, uint64_t at)
+{
+    struct ext2_mount *em = em_of(mnt);
+    uint64_t blk;
+    struct bbuf *b;
+    uint32_t block;
+
+    if (block_at(em, n, (uint32_t)(at >> em->block_shift), &block) != 0 || block == 0) {
+        return 0;
+    }
+    blk = ((uint64_t)block * em->block_size) >> BCACHE_BLOCK_SHIFT;
+    if (writeback_find(em, (uint32_t)blk) || bcache_cached(em->dev, blk)) {
+        return 0;
+    }
+    vfs_ns_unlock(mnt);
+    b = bcache_get(em->dev, blk);
+    if (b) {
+        bcache_release(b);
+    }
+    vfs_ns_lock(mnt);
+    return 1;
+}
+
+/**
  * The `read` of `vfs_ops`: up to `count` bytes at `offset`, ending at the
  * size, the batch's pending writes included and a hole read as zeros, under
- * the mount's namespace lock; the access time does not change. The bytes
- * read, -EISDIR, or -EIO.
+ * the mount's namespace lock, which a block the cache lacks lets go
+ * (`read_fetch`); the access time does not change. The bytes read, -EISDIR,
+ * or -EIO.
  */
 static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_t count,
                          uint64_t offset)
 {
     struct ext2_mount *em = em_of(mnt);
     struct ext2_node *n = handle;
-    int rc;
+    uint8_t *out = buf;
+    uint32_t done = 0;
+    int rc = 0, fetched = 0;
 
     if ((n->mode & S_IFMT_) == S_IFDIR_) {
         return -EISDIR;
     }
     vfs_ns_lock(mnt);
-    if (offset >= n->size) {
-        vfs_ns_unlock(mnt);
-        return 0;
+    while (rc == 0 && done < count && offset + done < n->size) {
+        uint64_t at = offset + done;
+        uint32_t take = em->block_size - ((uint32_t)at & (em->block_size - 1));
+
+        if (!fetched && read_fetch(mnt, n, at)) {
+            fetched = 1;
+            continue;
+        }
+        fetched = 0;
+        if (take > count - done) {
+            take = count - done;
+        }
+        if (take > n->size - at) {
+            take = (uint32_t)(n->size - at);
+        }
+        rc = read_data(em, n, at, out + done, take);
+        done += take;
     }
-    if (count > n->size - offset) {
-        count = (uint32_t)(n->size - offset);
-    }
-    rc = read_data(em, n, offset, buf, count);
     vfs_ns_unlock(mnt);
-    if (rc != 0) {
-        return rc;
-    }
-    return (int32_t)count;
+    return rc != 0 ? rc : (int32_t)done;
 }
 
 /**
@@ -1318,11 +1360,33 @@ static int ext2_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 }
 
 /**
- * The `sync` of `vfs_ops`: the batch drained, the device's dirty buffers
- * written, on a writable mount the superblock's free counts and state
- * written, and the disk's cache flushed, under the mount's namespace lock.
- * Returns this sync's result, with a failure recorded as the batch's error;
- * the mount's first failure is what `fsync` reports.
+ * Write the device's dirty buffers and flush the disk's cache with the
+ * mount's namespace lock let go, as `vfs_sync_all` does, so that a disk that
+ * takes seconds holds up no other call on the mount; a change made meanwhile
+ * is the next sync's. A failure is recorded as the batch's error. 0, or
+ * -errno.
+ */
+static int em_write_out(struct vfs_mount *mnt)
+{
+    struct ext2_mount *em = em_of(mnt);
+    int rc;
+
+    vfs_ns_unlock(mnt);
+    rc = bcache_sync(em->dev);
+    if (rc == 0) {
+        rc = block_flush(em->dev);
+    }
+    vfs_ns_lock(mnt);
+    return rc != 0 ? writeback_error(em, rc) : 0;
+}
+
+/**
+ * The `sync` of `vfs_ops`: the batch drained and, on a writable mount, the
+ * superblock's free counts and state stored, each under the mount's
+ * namespace lock, then the device's dirty buffers written and the disk's
+ * cache flushed without it (`em_write_out`). Returns this sync's result,
+ * with a failure recorded as the batch's error; the mount's first failure
+ * is what `fsync` reports.
  */
 static int ext2_sync(struct vfs_mount *mnt)
 {
@@ -1331,18 +1395,10 @@ static int ext2_sync(struct vfs_mount *mnt)
 
     vfs_ns_lock(mnt);
     rc = writeback_drain(em);
-    if (rc == 0) {
-        rc = bcache_sync(em->dev);
-    }
     if (rc == 0 && em->writable && !(mnt->flags & VFS_MS_RDONLY)) {
-        rc = sb_store(em);
+        rc = sb_note(em);
     }
-    if (rc == 0) {
-        rc = block_flush(em->dev);
-    }
-    if (rc != 0) {
-        (void)writeback_error(em, rc);
-    }
+    rc = rc != 0 ? writeback_error(em, rc) : em_write_out(mnt);
     vfs_ns_unlock(mnt);
     return rc;
 }
@@ -2110,21 +2166,35 @@ static void mark_error(struct ext2_mount *em)
     }
 }
 
-/** Write the superblock's free counts and its state to the medium, on any
- * mount (WRITE_DURABLE); 0, or -errno. */
-static int sb_store(struct ext2_mount *em)
+/** Write the superblock's free counts and its state as `write_bytes` does
+ * with `sync`; 0, or -errno. */
+static int sb_write(struct ext2_mount *em, int sync)
 {
     uint8_t raw[8];
     int rc;
 
     LE32_PUT(raw, (uint32_t)em->free_blocks);
     LE32_PUT(raw + 4, (uint32_t)em->free_inodes);
-    rc = write_bytes(em, 1024 + 12, raw, 8, WRITE_DURABLE);
+    rc = write_bytes(em, 1024 + 12, raw, 8, sync);
     if (rc != 0) {
         return rc;
     }
     LE16_PUT(raw, em->state);
-    return write_bytes(em, 1024 + 58, raw, 2, WRITE_DURABLE);
+    return write_bytes(em, 1024 + 58, raw, 2, sync);
+}
+
+/** Write the superblock's free counts and its state to the medium, on any
+ * mount; 0, or -errno. */
+static int sb_store(struct ext2_mount *em)
+{
+    return sb_write(em, WRITE_DURABLE);
+}
+
+/** Leave the superblock's free counts and its state dirty in the cache, for
+ * the sync that follows; 0, or -errno. */
+static int sb_note(struct ext2_mount *em)
+{
+    return sb_write(em, 0);
 }
 
 /**
@@ -3858,11 +3928,11 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 }
 
 /**
- * The `fsync` of `vfs_ops`: the batch drained, the device's dirty buffers
- * written and the disk's cache flushed, whatever file `handle` is, under
- * the mount's namespace lock. A failure is recorded as the batch's error,
- * and the mount's first failure, of this call or any before, is what it
- * returns; 0 when there has been none.
+ * The `fsync` of `vfs_ops`: the batch drained under the mount's namespace
+ * lock, then the device's dirty buffers written and the disk's cache flushed
+ * without it (`em_write_out`), whatever file `handle` is. A failure is
+ * recorded as the batch's error, and the mount's first failure, of this call
+ * or any before, is what it returns; 0 when there has been none.
  */
 static int ext2_fsync(struct vfs_mount *mnt, void *handle)
 {
@@ -3872,15 +3942,7 @@ static int ext2_fsync(struct vfs_mount *mnt, void *handle)
     (void)handle;
     vfs_ns_lock(mnt);
     rc = writeback_drain(em);
-    if (rc == 0) {
-        rc = bcache_sync(em->dev);
-    }
-    if (rc == 0) {
-        rc = block_flush(em->dev);
-    }
-    if (rc != 0) {
-        (void)writeback_error(em, rc);
-    }
+    rc = rc != 0 ? writeback_error(em, rc) : em_write_out(mnt);
     if (mnt->write_error) {
         rc = mnt->write_error;
     }

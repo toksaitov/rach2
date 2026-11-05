@@ -159,6 +159,14 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     }
 }
 
+/** Every block of the volume is in memory. */
+int bcache_cached(block_device_t *dev, uint64_t block)
+{
+    (void)dev;
+    (void)block;
+    return 1;
+}
+
 /**
  * Block `block` of the volume in memory; a block outside it fails a row and
  * gives NULL.

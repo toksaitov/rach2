@@ -70,6 +70,7 @@ extern void free(void *p);
 static struct vfs_mount mnt;
 static void (*namespace_ready)(void);
 static void (*flush_pause)(void);
+static void (*read_pause)(void);
 
 process_t proc_a;
 struct percpu cpu_table[NR_CPUS] = {{.current = &proc_a}};
@@ -194,6 +195,9 @@ static uint64_t image_sectors;
 static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
     (void)d;
+    if (read_pause) {
+        read_pause();
+    }
     if (lba + count > image_sectors) {
         return -5;
     }
@@ -3034,6 +3038,63 @@ static void batch_flush_error_row(int barrier, int large)
            fails - initial_failures);
 }
 
+/* The namespace lock's depth at the last flush and the last read of the
+ * device, -1 before one. */
+static int flush_depth, read_depth;
+
+/** Note the depth of the namespace lock at a read of the device. */
+static void read_depth_note(void)
+{
+    read_depth = mnt.ns_depth;
+}
+
+/** Note the depth of the namespace lock at a flush. */
+static void flush_depth_note(void)
+{
+    flush_depth = mnt.ns_depth;
+}
+
+/**
+ * `sync`, `fsync` and a read of a block the cache lacks wait for the disk
+ * with the namespace lock let go, so that a slow disk holds up no other call.
+ */
+static void sync_unlocked_row(void)
+{
+    char text[6];
+    void *node, *handle = 0;
+    int rc;
+
+    wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
+    use_image(wimg, wbytes);
+    check(mount_rw() == 0, "the unlocked-sync volume mounts");
+    node = make_file(mnt.root, "sync-unlocked", &rc);
+    check(node && OPS->open(&mnt, node, 2, &handle) == 0, "the unlocked-sync handle opens");
+    if (!node || !handle) {
+        return;
+    }
+    flush_pause = flush_depth_note;
+    check(OPS->write(&mnt, handle, "one", 3, 0) == 3, "the first write is taken");
+    flush_depth = -1;
+    check(OPS->fsync(&mnt, handle) == 0 && flush_depth == 0,
+          "fsync flushes the disk with the namespace lock let go");
+    check(OPS->write(&mnt, handle, "two", 3, 3) == 3, "the second write is taken");
+    flush_depth = -1;
+    check(OPS->sync(&mnt) == 0 && flush_depth == 0,
+          "sync flushes the disk with the namespace lock let go");
+    flush_pause = 0;
+    check(mnt.ns_depth == 0, "sync and fsync leave the namespace lock free");
+    check(bcache_invalidate(&dev) == 0, "the cache gives the file's block up");
+    read_pause = read_depth_note;
+    read_depth = -1;
+    check(OPS->read(&mnt, handle, text, sizeof(text), 0) == sizeof(text) &&
+              memcmp(text, "onetwo", sizeof(text)) == 0 && read_depth == 0,
+          "a read fetches a missing block with the namespace lock let go");
+    read_pause = 0;
+    OPS->release(&mnt, handle);
+    OPS->put(&mnt, node);
+    check(unmount_rw() == 0, "the unlocked-sync volume unmounts");
+}
+
 #include "ext2_batch_cases.h"
 #include "ext2_batch_lifecycle.h"
 
@@ -3137,6 +3198,7 @@ static void batch_rows(void)
     }
     batch_flush_error_row(5, 1);
     batch_flush_error_row(6, 1);
+    sync_unlocked_row();
 }
 
 /**

@@ -160,6 +160,10 @@ int bcache_write_unflushed(struct bbuf *b);
  */
 int bcache_sync(block_device_t *dev);
 
+/** Whether `dev`'s block `blk` is in the cache, so that a `bcache_get` of it
+ * reads nothing unless it is taken for another block first. */
+int bcache_cached(block_device_t *dev, uint64_t blk);
+
 /** `bcache_sync` without the disk's flush: every write is answered and has
  * reached the device, in the same order, and on a write-through disk the
  * writes may still be in its own cache until the caller's next
