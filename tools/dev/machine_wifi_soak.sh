@@ -46,6 +46,11 @@
 # the loaded disk. All times are the seconds of /proc/uptime, the clock of
 # dmesg. The run ends with one table:
 #
+#   * the counts of events come from the part of the service log that the
+#     run added, which has every line in order but no times, since
+#     wpa_supplicant detaches a logger it cannot reach, as it did during a
+#     baseline. The table says how often. The times come from the stamped
+#     events, so they cover only what the logger heard;
 #   * a renewal is pairwise when a `Key negotiation completed` line has no
 #     association before it since the last such line, and group for `Group
 #     rekeying completed`;
@@ -58,8 +63,7 @@
 #   * the longest ping gap is the longest time between two replies with
 #     requests unanswered between them, and the longest stall the longest
 #     between two replies in sequence, in which ping itself did not run;
-#   * a renewal's time runs from the request to the completion, and one
-#     left unfinished was asked for and ended in a drop or the run's end;
+#   * a renewal's time runs from the request to the completion;
 #   * wpa_cli gives up on wpa_supplicant when it does not answer a PING;
 #   * the longest disk request is /proc/stat's latency_disk_us, the longest
 #     since boot, so that it is the run's only when it grew during the run,
@@ -261,57 +265,60 @@ pinger()
 # Print the table from the logs. T0 is the uptime at which the load began.
 table()
 {
-    awk -v t0="$t0" '
-        $1 < t0 { next }
-        /Associated with|Trying to associate/ { assoc = 1 }
-        /WPA: Sending EAPOL-Key Request/ { if (!asked) asked = $1 }
+    sed -n "$((lines0 + 1)),\$p" /var/log/services > "$dir/service"
+    awk '/Associated with/ { assoc = 1 }
         /WPA: Key negotiation completed/ {
-            if (assoc) {
-                joins++
-            } else {
-                pairwise++
-                if (asked) {
-                    d = $1 - asked; took += d; timed++
-                    if (d > slowest) slowest = d
-                }
-            }
-            asked = 0; assoc = 0
+            if (assoc) joins++; else pairwise++
+            assoc = 0
         }
         /WPA: Group rekeying completed/ { group++ }
+        /CTRL-EVENT-CONNECTED/ { down = 0 }
+        /Detach monitor/ { detached++ }
         /CTRL-EVENT-DISCONNECTED/ {
             r = "?"; l = 0
-            for (i = 2; i <= NF; i++) {
+            for (i = 1; i <= NF; i++) {
                 if ($i ~ /^reason=/) { r = $i; sub(/^reason=/, "", r) }
                 if ($i == "locally_generated=1") l = 1
             }
             k = "reason " r (l ? " locally_generated=1" : " from the AP")
             if (!(k in drops)) order[++n] = k
-            drops[k]++; all++
-            if (asked) unfinished++
-            asked = 0
-            if (!down) { down = 1; at = $1 }
+            drops[k]++; all++; down = 1
         }
+        END {
+            printf "renewals pairwise        %d\n", pairwise
+            printf "renewals group           %d\n", group
+            printf "rejoins                  %d\n", joins
+            printf "drops                    %d\n", all
+            for (i = 1; i <= n; i++)
+                printf "  %-22s %d\n", order[i], drops[order[i]]
+            if (down)
+                printf "down at the end\n"
+            printf "logger detached          %d\n", detached
+        }' "$dir/service"
+    awk -v t0="$t0" '
+        $1 < t0 { next }
+        /Associated with/ { assoc = 1 }
+        /WPA: Sending EAPOL-Key Request/ { if (!asked) asked = $1 }
+        /WPA: Key negotiation completed/ {
+            if (asked && !assoc) {
+                d = $1 - asked; took += d; timed++
+                if (d > slowest) slowest = d
+            }
+            asked = 0; assoc = 0
+        }
+        /CTRL-EVENT-DISCONNECTED/ { asked = 0; if (!down) { down = 1; at = $1 } }
         /CTRL-EVENT-CONNECTED/ && down {
             down = 0; d = $1 - at; sum += d; rejoins++
             if (d > worst) worst = d
             if (rejoins == 1 || d < best) best = d
         }
         END {
-            printf "renewals pairwise        %d\n", pairwise
-            printf "renewals group           %d\n", group
             if (timed)
-                printf "renewal seconds          %d: mean %.2f, most %.2f\n",
+                printf "renewal seconds          %d timed: mean %.2f, most %.2f\n",
                     timed, took / timed, slowest
-            printf "renewals left unfinished %d\n", unfinished + (asked ? 1 : 0)
-            printf "joins                    %d\n", joins
-            printf "drops                    %d\n", all
-            for (i = 1; i <= n; i++)
-                printf "  %-22s %d\n", order[i], drops[order[i]]
             if (rejoins)
-                printf "rejoin seconds           %d: least %.2f, mean %.2f, most %.2f\n",
+                printf "rejoin seconds           %d timed: least %.2f, mean %.2f, most %.2f\n",
                     rejoins, best, sum / rejoins, worst
-            if (down)
-                printf "still down at the end    since %s\n", at
         }' "$dir/events"
     # A counter falls when an association begins.
     awk '{
@@ -418,6 +425,7 @@ soak()
     rootdisk=$(awk '$2 == "/" && $1 ~ /^\/dev\// {
         sub(/^\/dev\//, "", $1); sub(/p[0-9]+$/, "", $1); print $1 }' /proc/mounts)
     gave0=$(gaveup)
+    lines0=$(wc -l < /var/log/services)
     disk0=$(statnum latency_disk_us)
     stats0=$(diskline)
     set -- $(cat /proc/uptime)
