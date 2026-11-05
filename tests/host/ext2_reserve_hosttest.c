@@ -4,6 +4,7 @@
  * byte is taken, and the reserved blocks kept from a caller who is not root.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/fs/sleeplock.c
  *
  * The test includes ext2.c whole. The mount, a group of 64 blocks and an
  * inode are built in memory, over a cache model with one buffer for each
@@ -140,6 +141,34 @@ int fat_walk_marked(uint32_t block)
 {
     (void)block;
     k_panic("unexpected mount check");
+    return 0;
+}
+
+/** Clear a wait queue. */
+void wait_queue_init(wait_queue_t *wq)
+{
+    k_memset(wq, 0, sizeof(*wq));
+}
+
+/** Do nothing: no process sleeps in this test. */
+void wq_wake_all(wait_queue_t *wq)
+{
+    (void)wq;
+}
+
+/** Fail the test: a wait here would never end, since no other process runs. */
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    (void)cond;
+    (void)arg;
+    check(0, "nothing sleeps");
+    return -1;
+}
+
+/** Return 0: no hold of a sleeping lock here is timed. */
+uint32_t timer_now_us(void)
+{
     return 0;
 }
 

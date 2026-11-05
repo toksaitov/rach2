@@ -10,6 +10,7 @@
  * host-cflags: -I tools/etude/include
  * host-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/block/chain.c rach2/sys/fs/fd.c rach2/sys/fs/lock.c
+ * host-deps: rach2/sys/fs/sleeplock.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
@@ -158,6 +159,11 @@ void vfs_device_failed(block_device_t *d, uint64_t lba, int rc)
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     return wq_wait_event(wq, cond, arg);
+}
+/** Return 0: no hold of a sleeping lock here is timed. */
+uint32_t timer_now_us(void)
+{
+    return 0;
 }
 /** Take the mount's namespace lock for the current process, recursively. */
 void vfs_ns_lock(struct vfs_mount *mnt)
