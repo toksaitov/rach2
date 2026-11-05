@@ -3,8 +3,8 @@
 # release.sh: release milestone M at commit SHA: test SHA with a full run on
 # each machine, install it on the Lenovo, move master to it and close M.
 #
-# Usage: release.sh [-r] [-c N]... [-s STATE] M SHA
-#        release.sh -p [-s STATE] M SHA
+# Usage: release.sh [-r] [-o] [-c N]... [-s STATE] M SHA
+#        release.sh -p [-o] [-s STATE] M SHA
 #        release.sh -a MACHINE [-s STATE] M SHA
 #
 # M is the number of a GitHub milestone, whose description names its branch
@@ -101,6 +101,11 @@
 #   and GNU builds stay in each machine's step store. It takes the release's
 #   lock and STATE/again.lock, and waits while a release's run on the Mac, or
 #   a Windows run of -a, still runs.
+# * -o: only WSL and the Lenovo: the release, or -p, leaves out the Mac and
+#   Windows, whatever the machines file names, and files no cards for them.
+#   The record says `only wsl lenovo`. Every later start of the same release,
+#   -r among them, takes -o again; the owner decides when a release may skip
+#   them.
 # * -a MACHINE: while the release of M runs, or after it ended on a failure,
 #   start the failed run of MACHINE, mac or windows, again at SHA, a commit of
 #   M's branch that contains the record's SHA; it need not contain
@@ -230,8 +235,8 @@ COPY=$OWNER/build/worktrees/release
 ARCH_DIR=build/x86_64
 RECOVERY_IMAGE=images/rach2-recovery-with-key.krffs
 WSL='MSYS_NO_PATHCONV=1 wsl.exe -- bash -s'
-USAGE='usage: release.sh [-r] [-c N]... [-s STATE] M SHA
-       release.sh -p [-s STATE] M SHA
+USAGE='usage: release.sh [-r] [-o] [-c N]... [-s STATE] M SHA
+       release.sh -p [-o] [-s STATE] M SHA
        release.sh -a MACHINE [-s STATE] M SHA'
 PREPARE_COPY=$OWNER/build/worktrees/prepare
 # The commands that put the testing host's Doom WAD in a copy there. Git
@@ -911,9 +916,13 @@ setting()
         "$repo/tools/flow/machines"
 }
 
-# has MACHINE: succeed when the machines file has a setting for MACHINE.
+# has MACHINE: succeed when the machines file has a setting for MACHINE and
+# -o does not leave it out.
 has()
 {
+    case $1 in
+        mac|windows) [ -z "$only" ] || return 1 ;;
+    esac
     awk -v m="$1" '$1 == m { found = 1 } END { exit !found }' "$repo/tools/flow/machines"
 }
 
@@ -1894,7 +1903,8 @@ main()
     restart=
     detached=
     also=
-    while getopts a:c:m:prs:w: o; do
+    only=
+    while getopts a:c:m:oprs:w: o; do
         case $o in
             a) restart=$OPTARG ;;
             c)
@@ -1903,6 +1913,7 @@ main()
                 esac
                 also="$also $OPTARG" ;;
             m) macrun=$OPTARG ;;
+            o) only=1 ;;
             p) prepare=1 ;;
             r) rerun=1 ;;
             s) state=$OPTARG ;;
@@ -1912,7 +1923,7 @@ main()
     done
     shift $((OPTIND - 1))
     if [ $# -ne 2 ] || { [ -n "$prepare" ] && [ -n "$rerun$also" ]; } ||
-        { [ -n "$restart" ] && [ -n "$prepare$rerun$macrun$detached$also" ]; }; then
+        { [ -n "$restart" ] && [ -n "$prepare$rerun$macrun$detached$also$only" ]; }; then
         echo "$USAGE" >&2
         exit 2
     fi
@@ -1989,6 +2000,7 @@ main()
             printf 'milestone %s\nsha %s\nbranch %s\nchosen %s\n' "$milestone" "$sha" "$branch" \
                 "$(date -u '+%FT%TZ')"
             for n in $also; do printf 'also %s\n' "$n"; done
+            [ -z "$only" ] || echo 'only wsl lenovo'
             [ -z "$kept" ] || printf '%s\n' "$kept"
             [ -z "$old" ] || ! grep -qx "milestone $milestone" "$state/record" ||
                 grep -q '^closed ' "$state/record" || grep '^card ' "$state/record"

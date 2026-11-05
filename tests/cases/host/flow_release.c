@@ -460,7 +460,7 @@ struct release_row {
         *failures, *milestone, *ancestor, *master, *push, *lenovo, *prepare, *hold, *testing,
         *cmdline;
     const char *again; /* the machine of -a, or NULL for a release */
-    int rerun, preparing;
+    int rerun, preparing, only;
 };
 
 static int setup(struct release *r, struct fixture *f)
@@ -557,6 +557,8 @@ static void run(struct release *r, const struct release_row *spec)
         a[n++] = "-r";
     if (spec->preparing)
         a[n++] = "-p";
+    if (spec->only)
+        a[n++] = "-o";
     if (spec->again) {
         a[n++] = "-a";
         a[n++] = spec->again;
@@ -1437,6 +1439,37 @@ static int prepare_rows(struct release *r)
                    !fx_exists(flow_path(f, "state/record")),
                "-p names the part that failed and the lines that say why") &&
          ok;
+    run(r,
+        &(struct release_row){
+            .git = "yes", .machines = MAC WINDOWS, .testing = "pass", .preparing = 1, .only = 1});
+    ok = check(r,
+               !f->status && strstr(f->out, "release: prepare: passed " H "\n") &&
+                   strstr(f->out, "release: prepare: wsl: passed\n") &&
+                   !strstr(f->out, "release: prepare: windows:") &&
+                   !strstr(f->out, "release: prepare: mac:") && !called(r, "routine-prepare"),
+               "-p -o prepares only WSL") &&
+         ok;
+    return ok;
+}
+/** -o leaves out the Mac and Windows, which the machines file names. */
+static int only_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    int ok = 1;
+    run(r, &(struct release_row){.record = r->ended,
+                                 .sha = C,
+                                 .git = "yes",
+                                 .runs = "none",
+                                 .machines = MAC WINDOWS,
+                                 .only = 1});
+    ok = check(r,
+               f->status == 75 && fx_has(record(r), "\nonly wsl lenovo\n") &&
+                   count(flow_path(f, "calls"), "^dispatch ") == 1 && !called(r, " run routine-") &&
+                   !fx_has(record(r), "\nmac started") && !fx_has(record(r), "\nwindows started"),
+               "-o leaves out the Mac and Windows and says so in the record") &&
+         ok;
+    run(r, &(struct release_row){.git = "yes", .again = "mac", .only = 1});
+    ok = check(r, f->status == 2 && !fx_exists(record(r)), "-o with -a is refused") && ok;
     return ok;
 }
 /** Succeed once `path` holds `text`, waiting up to ten seconds for a run that
@@ -1584,6 +1617,7 @@ int flow_release(struct fixture *f)
     ok = lenovo_rows(&r) && ok;
     ok = mac_rows(&r) && ok;
     ok = prepare_rows(&r) && ok;
+    ok = only_rows(&r) && ok;
     ok = restart_refusal_rows(&r) && ok;
     ok = restart_mac_rows(&r) && ok;
     ok = restart_windows_row(&r) && ok;
