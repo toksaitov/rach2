@@ -73,10 +73,12 @@ int sysfs_net_wiphy(int index)
 }
 
 /** The switch named by the `len` bytes at `name`: 3 for rfkill3, phy7's,
- *  and -1 for any other. */
+ *  2 for rfkill2, of no radio, and -1 for any other. */
 int rfkill_lookup(const char *name, int len)
 {
-    return len == 7 && name[0] == 'r' && name[5] == 'l' && name[6] == '3' ? 3 : -1;
+    if (len != 7 || name[0] != 'r' || name[5] != 'l')
+        return -1;
+    return name[6] == '3' ? 3 : name[6] == '2' ? 2 : -1;
 }
 
 /** rfkill3 belongs to phy7. */
@@ -259,6 +261,12 @@ static void sys_wireless(void)
     CHECK(eq(path, "/sys/class/ieee80211/phy7"));
     CHECK(synth_classify("sys/class/rfkill/rfkill3/device/name", &vp) == VNODE_SYS_FILE &&
           vp.sysent == SYSFS_WLAN_PHY && vp.procfile == 1);
+    CHECK(synth_classify("sys/class/rfkill/rfkill2/device", &vp) == VNODE_SYS_LINK &&
+          vp.sysent == SYSFS_RFKILL && vp.syskey == 2);
+    synth_sys_path(vp.sysent, vp.syskey, path, sizeof(path));
+    CHECK(eq(path, "/sys/class/rfkill/rfkill2"));
+    CHECK(synth_classify("sys/class/rfkill/rfkill2/device/name", &vp) == VNODE_SYS_FILE &&
+          vp.sysent == SYSFS_RFKILL && vp.syskey == 2);
     CHECK(synth_classify("sys/class/rfkill/rfkill3/type/x", &vp) == VNODE_ENOTDIR);
     CHECK(synth_classify("sys/class/rfkill/rfkill3/bogus", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("sys/class/rfkill/rfkill4", &vp) == VNODE_ENOENT);

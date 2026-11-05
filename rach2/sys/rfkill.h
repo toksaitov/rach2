@@ -127,7 +127,8 @@ int rfkill_present(int index);
 int rfkill_lookup(const char *name, int len);
 
 /** The radio switch `index` belongs to, or -1 for none or no switch: the
- * target of /sys/class/rfkill/rfkillN/device. */
+ * target of /sys/class/rfkill/rfkillN/device, which is the switch itself
+ * when it has no radio. */
 int rfkill_phy(int index);
 
 /** Write attribute `attr` (RFKILL_ATTR_*) of switch `index` into `out` of

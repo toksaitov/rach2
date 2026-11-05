@@ -1309,13 +1309,18 @@ static int synth_classify_sys_block(const struct comp *c, int n, int dev, struct
 
 /** Classify the components `c` of `n` in the directory of radio switch
  * `index`: its attributes, and `device`, the link to its radio, through
- * which the radio's directory is reached as /sys/class/ieee80211 has it. */
+ * which the radio's directory is reached as /sys/class/ieee80211 has it. A
+ * switch of no radio is its own device, since wpa_supplicant gives up on
+ * /dev/rfkill when realpath fails on any Wi-Fi switch's `device`. */
 static int synth_classify_rfkill(const struct comp *c, int n, int index, struct vpath *vp)
 {
     int phy = rfkill_phy(index);
 
-    if (n >= 1 && comp_eq(c[0], "device") && phy >= 0) {
-        synth_classify_phy(c + 1, n - 1, phy, vp);
+    if (n >= 1 && comp_eq(c[0], "device")) {
+        if (phy >= 0)
+            synth_classify_phy(c + 1, n - 1, phy, vp);
+        else
+            synth_classify_rfkill(c + 1, n - 1, index, vp);
         if (n == 1)
             vp->kind = VNODE_SYS_LINK;
         return vp->kind;

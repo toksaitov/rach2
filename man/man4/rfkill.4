@@ -166,6 +166,12 @@ For a radio's switch, a link to the radio,
 the directory
 .Pa /sys/class/net/wlanN/phy80211
 leads to as well.
+For a switch of no radio, such as
+.Ql ideapad_wlan ,
+a link to the switch's own directory.
+wpa_supplicant reads this link of every Wi-Fi switch to find its radio's,
+and without one it would not watch
+.Pa /dev/rfkill .
 .El
 .Sh EXAMPLES
 Block every Wi-Fi radio, then lift the block:

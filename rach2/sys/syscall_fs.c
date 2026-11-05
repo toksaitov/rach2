@@ -6226,7 +6226,9 @@ static void synth_sys_identity(const struct vpath *vp, struct kstat *kst, int fo
         kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 1 + vp->procfile);
     } else if (vp->kind == VNODE_SYS_LINK && !follow) {
         kst->st_mode = 0120777; /* S_IFLNK | 0777 */
-        kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, SYSFS_IS_BLOCK(vp->sysent) ? 0xFF : 2);
+        kst->st_ino =
+            sysfs_ino(vp->sysent, vp->syskey,
+                      SYSFS_IS_BLOCK(vp->sysent) || vp->sysent == SYSFS_RFKILL ? 0xFF : 2);
     } else {
         kst->st_mode = S_IFDIR | 0555;
         kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 0);
@@ -13322,7 +13324,7 @@ static int synth_sys_cpu_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype
  * directory for each radio, a radio's its attributes and `device`, the
  * device its `driver` link and the driver's directory, which is empty,
  * /sys/class/rfkill a directory for each switch, and a switch's its
- * attributes and a `device` link to its radio.
+ * attributes and a `device` link to its radio, or to itself when it has none.
  */
 static int synth_sys_radio_dirent(int node, int key, int n, char *name, uint64_t *ino,
                                   uint8_t *dtype)
@@ -13369,8 +13371,10 @@ static int synth_sys_radio_dirent(int node, int key, int n, char *name, uint64_t
         if (sysfs_attr(node, n))
             return synth_entry(sysfs_attr(node, n), sysfs_ino(node, key, 1 + n), DT_REG, name, ino,
                                dtype);
-        return synth_entry(n == RFKILL_ATTRS && rfkill_phy(key) >= 0 ? "device" : NULL,
-                           sysfs_ino(SYSFS_WLAN_PHY, rfkill_phy(key), 2), DT_LNK, name, ino, dtype);
+        return synth_entry(n == RFKILL_ATTRS ? "device" : NULL,
+                           rfkill_phy(key) >= 0 ? sysfs_ino(SYSFS_WLAN_PHY, rfkill_phy(key), 2)
+                                                : sysfs_ino(SYSFS_RFKILL, key, 0xFF),
+                           DT_LNK, name, ino, dtype);
     }
     return 0;
 }
