@@ -95,7 +95,7 @@ The kernel writes back nothing on a timer: [update(8)](../../../man/man8/update.
 ## Limits
 
 * A KRFFS root on a disk puts each page on the medium with its own write, so a `sync` of many dirty pages waits for a cache flush or a write with force unit access per page, where the buffer cache on an AHCI or NVMe disk writes its run unflushed and flushes once.
-* `fdatasync` has its own call and its own operation in `vfs_ops`, which no type has yet, so it does what `fsync` does: on every type that writes anything, both write the whole device or the whole page cache, not the one file, and a change of times alone goes too. `syncfs` writes what `sync` writes and, like it, reports no failure.
+* `fdatasync` has its own call and its own operation in `vfs_ops`, which no type has yet, so it does what `fsync` does: on every type that writes anything but a KRFFS volume, both write the whole device or the whole page cache, not the one file, and a change of times alone goes too. `syncfs` writes what `sync` writes and, like it, reports no failure.
 * `reboot(2)` writes no volume placed by `mount(2)`.
 * No file system shares extents or keeps a map of its holes: `FICLONE` is `EOPNOTSUPP`, `copy_file_range` copies every byte, and `SEEK_HOLE` finds only the end of a file.
 * No file system keeps extended attributes: getting, setting and removing one answer `EOPNOTSUPP`, and a list is empty. There are no ACLs, file capabilities, per-user quotas or journal. Of the types that store files, only ext2 and tmpfs have hard links and symbolic links.

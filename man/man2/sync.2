@@ -61,10 +61,13 @@ That flush does nothing on a direct RAM root.
 An in-flight page write keeps its slot and frame reserved.
 A competing page-cache flush skips that page and reports an error for retry.
 Failed writes and stores made during a write remain dirty for a later flush.
-The mounted KRFFS, FAT32, exFAT, and ext2 implementations flush the
-device's dirty buffers, rather than only the named file's data.
-A mounted KRFFS volume made read-only after a failed write still attempts
-pending buffer writes.
+On a mounted KRFFS volume it writes only the named file: the blocks its
+writes and truncations left dirty, which follow it when it moves, and
+its header, which holds its length, mode, owner and times.
+The FAT32, exFAT, and ext2 implementations flush the device's dirty
+buffers, rather than only the named file's data.
+A mounted KRFFS volume made read-only after a failed write writes every
+pending buffer of the device instead.
 A failed retry is returned to the caller; the device is flushed only
 after writeback succeeds.
 .Pp
