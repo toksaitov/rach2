@@ -22,14 +22,13 @@
  * finds a fault; a remount to writable checks it the same way, and is
  * -EROFS then.
  *
- * `ns_serialised` is set: every operation that changes the volume runs
- * under the mount's namespace lock, and the VFS takes the same lock around
- * a description's reads and writes, since a mount keeps a batch of file
- * writes across calls. Of the operations it leaves out `lookup_rest`, `pin`
- * and `unpin`.
+ * `file_locked` is set and `ns_serialised` clear: the operations lock each
+ * inode on its own (`lock_node`), the mount's allocator apart, and the VFS
+ * takes a file's or a directory's lock, not the mount's, around a change,
+ * so that a slow request on one file holds up only that file's callers. Of
+ * the operations it leaves out `lookup_rest`, `pin` and `unpin`.
  */
-/* Writable: a host test's row sets `file_locked` for itself. */
-extern struct vfs_type vfs_ext2_type;
+extern const struct vfs_type vfs_ext2_type;
 
 /** The nodes in memory that every ext2 mount's search for an inode by its
  * number has read since boot, for /proc/stat: one or two for each search

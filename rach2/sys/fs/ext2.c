@@ -35,11 +35,9 @@
  *
  * The node lock and `em->meta` count in their holder's `file_locks`
  * (process.h), so that reclaim under either does not enter a file system.
- * They act only once the type record sets `file_locked`. Until then the VFS
- * holds the mount's namespace lock around every change and every
- * description's use (`ns_serialised`), `node_lock` and `meta_lock` take
- * nothing, and `assert_node_locked` and `assert_meta_locked` check the
- * mount's lock.
+ * The type record sets `file_locked` and leaves `ns_serialised` clear, so
+ * the mount's namespace lock covers nothing here: a slow request on one
+ * file holds up only the callers that need that file's lock.
  */
 
 #include "ext2.h"
@@ -542,31 +540,6 @@ static void em_locks_init(struct ext2_mount *em)
     em->planner = -1;
 }
 
-/** Whether ext2's own locks act, which they do once the type record sets
- * `file_locked`; until then the mount's namespace lock covers everything
- * they would. */
-static int em_file_locked(void)
-{
-    return vfs_ext2_type.file_locked;
-}
-
-/** Take the mount's namespace lock on a type that has not set `file_locked`,
- * where it covers what a node's state and ext2's own locks cover after. */
-static void em_serial_lock(struct ext2_mount *em)
-{
-    if (!em_file_locked()) {
-        vfs_ns_lock(em->mnt);
-    }
-}
-
-/** Give back what `em_serial_lock` took. */
-static void em_serial_unlock(struct ext2_mount *em)
-{
-    if (!em_file_locked()) {
-        vfs_ns_unlock(em->mnt);
-    }
-}
-
 /** Whether the caller holds a node's lock or an allocator's, of any mount,
  * under which it may not free an inode or wait for one. */
 static int file_locks_held(void)
@@ -574,47 +547,27 @@ static int file_locks_held(void)
     return current_proc && current_proc->file_locks > 0;
 }
 
-/** Panic unless the calling process holds the mount's namespace lock. */
-static void assert_locked(struct vfs_mount *mnt)
-{
-    int me = current_proc ? (int)current_proc->pid : 0;
-
-    if (mnt->ns.holder != me || mnt->ns.depth == 0) {
-        k_panic("ext2: a mutation outside the mount's lock");
-    }
-}
-
 /**
  * Take the lock of node `n`, which covers its attributes, its block map and
  * a directory's entries, sleeping while another process holds it; the
  * holder takes it again by depth. The caller holds `n`, and takes no node
  * lock after `em->meta` and none against the order at the top of the file.
- * Nothing on a mount whose type does not set `file_locked`.
  */
 static void node_lock(struct ext2_node *n)
 {
-    if (em_file_locked()) {
-        sleep_lock_take(&n->lock);
-    }
+    sleep_lock_take(&n->lock);
 }
 
 /** Give back one take of `n`'s lock, as `node_lock` took it. */
 static void node_unlock(struct ext2_node *n)
 {
-    if (em_file_locked()) {
-        sleep_lock_give(&n->lock);
-    }
+    sleep_lock_give(&n->lock);
 }
 
-/** Panic unless the caller may change node `n`: it holds `n`'s lock, or,
- * before the type sets `file_locked`, the mount's namespace lock. */
-static void assert_node_locked(struct ext2_mount *em, const struct ext2_node *n)
+/** Panic unless the caller may change node `n`: it holds `n`'s lock. */
+static void assert_node_locked(const struct ext2_node *n)
 {
-    if (em_file_locked()) {
-        sleep_lock_assert(&n->lock, "ext2: a change of an inode outside its lock");
-    } else {
-        assert_locked(em->mnt);
-    }
+    sleep_lock_assert(&n->lock, "ext2: a change of an inode outside its lock");
 }
 
 /**
@@ -622,34 +575,24 @@ static void assert_node_locked(struct ext2_mount *em, const struct ext2_node *n)
  * the free counts, sleeping while another process holds it; the holder
  * takes it again by depth. Taken after every node lock the caller needs,
  * and held across a disk wait only for one block evicted after its fetch,
- * or by a strict mount for its ordered writes. Nothing on a mount whose
- * type does not set `file_locked`.
+ * or by a strict mount for its ordered writes.
  */
 static void meta_lock(struct ext2_mount *em)
 {
-    if (em_file_locked()) {
-        sleep_lock_take(&em->meta);
-    }
+    sleep_lock_take(&em->meta);
 }
 
 /** Give back one take of `em->meta`, as `meta_lock` took it. */
 static void meta_unlock(struct ext2_mount *em)
 {
-    if (em_file_locked()) {
-        sleep_lock_give(&em->meta);
-    }
+    sleep_lock_give(&em->meta);
 }
 
 /** Panic unless the caller may change the allocator's state: it holds
- * `em->meta`, or, before the type sets `file_locked`, the mount's namespace
- * lock. */
+ * `em->meta`. */
 static void assert_meta_locked(struct ext2_mount *em)
 {
-    if (em_file_locked()) {
-        sleep_lock_assert(&em->meta, "ext2: an allocation outside em->meta");
-    } else {
-        assert_locked(em->mnt);
-    }
+    sleep_lock_assert(&em->meta, "ext2: an allocation outside em->meta");
 }
 
 /** The wait condition of `em_enter`: admission is open on the mount `arg`. */
@@ -703,14 +646,10 @@ static void em_reap(struct ext2_mount *em);
  * and for every final put, reaping what is left on the mount's list, since
  * the thread that left a node there may do nothing more on this mount. The
  * caller holds no file lock, and a later remount waits for this one's
- * `em_open`. Nothing on a type without `file_locked`, whose writers and
- * remounts are ordered by the mount's namespace lock.
+ * `em_open`.
  */
 static void em_close(struct ext2_mount *em)
 {
-    if (!em_file_locked()) {
-        return;
-    }
     while (em->closing) {
         wq_wait_event_nointr(&em->node_wq, em_admitting, em);
     }
@@ -1119,7 +1058,6 @@ static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
 {
     struct ext2_node *n, *fresh = 0;
 
-    em_serial_lock(em);
     *rc = 0;
     for (;;) {
         n = node_find(em, ino);
@@ -1143,14 +1081,11 @@ static struct ext2_node *node_for(struct ext2_mount *em, uint32_t ino, int *rc)
     }
     if (n || *rc != 0) {
         kfree(fresh);
-        n = n ? node_join(em, n, rc) : 0;
-        em_serial_unlock(em);
-        return n;
+        return n ? node_join(em, n, rc) : 0;
     }
     node_publish(em, fresh, ino);
     *rc = inode_load(em, ino, fresh);
     node_settle(em, fresh, *rc);
-    em_serial_unlock(em);
     return *rc == 0 ? fresh : 0;
 }
 
@@ -1239,10 +1174,8 @@ static void em_reap(struct ext2_mount *em)
 
 /**
  * The `put` of `vfs_ops`: drop a hold on `node`, and free the node with the
- * last, in one step, since a reference changes only between sleeps. On a
- * type without `file_locked` it runs under the mount's namespace lock, so
- * that an operation holding a pointer to the node across a sleep finds it
- * as it left it.
+ * last, in one step, since a reference changes only between sleeps; it
+ * takes no lock but those of an unlinked inode's free.
  *
  * An unlinked inode keeps its blocks until its last holder goes, which is
  * what makes an open unlinked file work, and a put of one by a caller with
@@ -1255,7 +1188,6 @@ static void ext2_put(struct vfs_mount *mnt, void *node)
     struct ext2_node *n = node;
     struct ext2_mount *em = em_of(mnt);
 
-    em_serial_lock(em);
     if (n->unlinked && !file_locks_held() && em->wb && em->wb->count) {
         (void)writeback_drain(em);
     }
@@ -1270,7 +1202,6 @@ static void ext2_put(struct vfs_mount *mnt, void *node)
         }
     }
     em_reap(em);
-    em_serial_unlock(em);
 }
 
 /* ---- block mapping ---- */
@@ -1629,7 +1560,7 @@ static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
             *node = d;
             return 0;
         }
-        kept = !em_file_locked() || sleep_lock_held(&d->lock);
+        kept = sleep_lock_held(&d->lock);
         n = node_for(em, ino, &rc);
         if (!n) {
             return rc;
@@ -1650,8 +1581,9 @@ static int ext2_lookup(struct vfs_mount *mnt, void *dir, const char *name, void 
 
 /**
  * The `getattr` of `vfs_ops`: the inode's fields as the node has them, with
- * `i_blocks`, the generation and the flags lsattr sees, under the mount's
- * namespace lock. A device's numbers are in the old encoding in the first
+ * `i_blocks`, the generation and the flags lsattr sees, copied in one step
+ * with no lock, since a change of a node is made between sleeps. A device's
+ * numbers are in the old encoding in the first
  * pointer word, major and minor a byte each, or in the new one in the second
  * when the first is zero, and `rdev` packs them as the kernel does. Always
  * 0.
@@ -1660,7 +1592,7 @@ static int ext2_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     struct ext2_node *n = node;
 
-    vfs_ns_lock(mnt);
+    (void)mnt;
     k_memset(st, 0, sizeof(*st));
     st->mode = n->mode;
     st->uid = n->uid;
@@ -1693,7 +1625,6 @@ static int ext2_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
     st->flags = n->flags & EXT2_FL_USER_VISIBLE;
     st->generation = n->generation;
     st->flags_known = 1;
-    vfs_ns_unlock(mnt);
     return 0;
 }
 
@@ -1717,13 +1648,11 @@ static int ext2_open(struct vfs_mount *mnt, void *node, int flags, void **handle
 
 /** The `release` of `vfs_ops`, at a description's last close: the batch
  * drained, a failure kept for the next `fsync`, and the hold `ext2_open`
- * took put, under the mount's namespace lock. */
+ * took put. */
 static void ext2_release(struct vfs_mount *mnt, void *handle)
 {
-    vfs_ns_lock(mnt);
     (void)writeback_drain(em_of(mnt));
     ext2_put(mnt, handle);
-    vfs_ns_unlock(mnt);
 }
 
 /* The most times a read or a write brings the pages of a user buffer in
@@ -1735,17 +1664,16 @@ static void ext2_release(struct vfs_mount *mnt, void *handle)
 
 /**
  * Bring in the pages of the user buffer [addr, addr + len) that a copy
- * under node `n`'s lock found absent (`vm_resident`), with `n`'s lock and
- * the mount's let go around the faults, since a fault under a file lock
- * could wait for another file's; `write` is nonzero for a buffer the copy
+ * under node `n`'s lock found absent (`vm_resident`), with `n`'s lock let
+ * go around the faults, since a fault under a file lock could wait for
+ * another file's; `write` is nonzero for a buffer the copy
  * fills. Returns 1 once the pages are in, after which `n` may have
  * changed; 0, with nothing let go, when the caller holds a file lock of
  * its own, `n`'s or another's, which this cannot give back, so that the
  * call ends short and its caller brings the pages in; or -EFAULT for
  * pages that cannot be had.
  */
-static int user_refault(struct vfs_mount *mnt, struct ext2_node *n, const void *addr, uint32_t len,
-                        int write)
+static int user_refault(struct ext2_node *n, const void *addr, uint32_t len, int write)
 {
     int mine = sleep_lock_held(&n->lock) ? 1 : 0;
     int rc;
@@ -1753,11 +1681,9 @@ static int user_refault(struct vfs_mount *mnt, struct ext2_node *n, const void *
     if (current_proc && (current_proc->file_locks != mine || n->lock.depth > 1)) {
         return 0;
     }
-    vfs_ns_unlock(mnt);
     node_unlock(n);
     rc = vm_prefault_range((uintptr_t)addr, len, write) ? 1 : -EFAULT;
     node_lock(n);
-    vfs_ns_lock(mnt);
     return rc;
 }
 
@@ -1820,11 +1746,12 @@ static int read_missing(struct ext2_mount *em, const struct ext2_node *n, uint64
 
 /**
  * Bring the first block on the way to byte `at` of `n` that the cache
- * lacks into it, with `n`'s lock and the mount's let go, so that a disk
- * that takes seconds holds up no other call on the file. The block is only
- * a hint here: the caller, under the locks again, looks the file up anew,
- * and a block freed or evicted meanwhile costs it a read under them.
- * Whether the locks were let go, after which `n` may have changed.
+ * lacks into it, with `n`'s lock let go, so that a disk that takes seconds
+ * holds up no other call on the file. The block is only a hint here: the
+ * caller, under the lock again, looks the file up anew, and a block freed
+ * or evicted meanwhile costs it a read under it. Whether the lock was let
+ * go, after which `n` may have changed; a caller that took it more than
+ * once keeps it across the fetch.
  */
 static int read_fetch(struct vfs_mount *mnt, struct ext2_node *n, uint64_t at)
 {
@@ -1835,14 +1762,12 @@ static int read_fetch(struct vfs_mount *mnt, struct ext2_node *n, uint64_t at)
     if (!read_missing(em, n, at, &blk)) {
         return 0;
     }
-    vfs_ns_unlock(mnt);
     node_unlock(n);
     b = bcache_get(em->dev, blk);
     if (b) {
         bcache_release(b);
     }
     node_lock(n);
-    vfs_ns_lock(mnt);
     return 1;
 }
 
@@ -1921,7 +1846,6 @@ static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
         return -EISDIR;
     }
     node_lock(n);
-    vfs_ns_lock(mnt);
     while (rc == 0 && done < count && offset + done < n->size) {
         uint64_t at = offset + done;
         uint32_t take = em->block_size - ((uint32_t)at & (em->block_size - 1));
@@ -1938,7 +1862,7 @@ static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
         }
         rc = read_piece(em, n, at, out + done, take);
         if (rc == -EFAULT) {
-            rc = ++refaults <= EXT2_REFAULTS ? user_refault(mnt, n, out + done, take, 1) : -EFAULT;
+            rc = ++refaults <= EXT2_REFAULTS ? user_refault(n, out + done, take, 1) : -EFAULT;
             if (rc == 1) {
                 rc = 0;
                 fetches = 0;
@@ -1952,7 +1876,6 @@ static int32_t ext2_read(struct vfs_mount *mnt, void *handle, void *buf, uint32_
             refaults = 0;
         }
     }
-    vfs_ns_unlock(mnt);
     node_unlock(n);
     if (rc == -EFAULT && done > 0) {
         rc = 0;
@@ -2139,10 +2062,10 @@ static int ext2_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 }
 
 /**
- * Write the device's dirty buffers and flush the disk's cache with the
- * mount's namespace lock let go, as `vfs_sync_all` does, so that a disk that
- * takes seconds holds up no other call on the mount; a change made meanwhile
- * is the next sync's. A failure is recorded as the batch's error. 0, or
+ * Write the device's dirty buffers and flush the disk's cache, with no lock
+ * of the mount held, as `vfs_sync_all` does, so that a disk that takes
+ * seconds holds up no other call on the mount; a change made meanwhile is
+ * the next sync's. A failure is recorded as the batch's error. 0, or
  * -errno.
  */
 static int em_write_out(struct vfs_mount *mnt)
@@ -2150,38 +2073,35 @@ static int em_write_out(struct vfs_mount *mnt)
     struct ext2_mount *em = em_of(mnt);
     int rc;
 
-    vfs_ns_unlock(mnt);
     rc = bcache_sync(em->dev);
     if (rc == 0) {
         rc = block_flush(em->dev);
     }
-    vfs_ns_lock(mnt);
     return rc != 0 ? writeback_error(em, rc) : 0;
 }
 
 /**
  * The `sync` of `vfs_ops`: the batch drained, the final puts left on
  * `em->reap` done, and, on a writable mount, the superblock's free counts
- * and state stored, each under the mount's namespace lock, then the device's
- * dirty buffers written and the disk's cache flushed without it
- * (`em_write_out`). Returns this sync's result,
- * with a failure recorded as the batch's error; the mount's first failure
- * is what `fsync` reports.
+ * and state left dirty under `em->meta`, then the device's dirty buffers
+ * written and the disk's cache flushed with no lock held (`em_write_out`).
+ * The caller holds no file lock. Returns this sync's result, with a failure
+ * recorded as the batch's error; the mount's first failure is what `fsync`
+ * reports.
  */
 static int ext2_sync(struct vfs_mount *mnt)
 {
     struct ext2_mount *em = em_of(mnt);
     int rc;
 
-    vfs_ns_lock(mnt);
     rc = writeback_drain(em);
     em_reap(em);
     if (rc == 0 && em->writable && !(mnt->flags & VFS_MS_RDONLY)) {
+        meta_lock(em);
         rc = sb_note(em);
+        meta_unlock(em);
     }
-    rc = rc != 0 ? writeback_error(em, rc) : em_write_out(mnt);
-    vfs_ns_unlock(mnt);
-    return rc;
+    return rc != 0 ? writeback_error(em, rc) : em_write_out(mnt);
 }
 
 /**
@@ -2220,7 +2140,8 @@ static int ext2_prepare_unmount(struct vfs_mount *mnt)
  * The `abort_unmount` of `vfs_ops`: on a writable mount, the valid bit that
  * `ext2_prepare_unmount` set is cleared again in the superblock and the
  * device synced and flushed, since the unmount is not happening. A failure
- * is recorded as the batch's error. Under the mount's namespace lock.
+ * is recorded as the batch's error. The state changes under `em->meta`,
+ * and the sync and the flush run with no lock held.
  */
 static void ext2_abort_unmount(struct vfs_mount *mnt)
 {
@@ -2231,7 +2152,6 @@ static void ext2_abort_unmount(struct vfs_mount *mnt)
     if (!em->writable) {
         return;
     }
-    vfs_ns_lock(mnt);
     meta_lock(em);
     em->state &= ~EXT2_VALID_FS;
     em->valid_cleared = 1;
@@ -2252,7 +2172,6 @@ static void ext2_abort_unmount(struct vfs_mount *mnt)
     if (rc != 0) {
         (void)writeback_error(em, rc);
     }
-    vfs_ns_unlock(mnt);
 }
 
 static int writeback_init(struct ext2_mount *em);
@@ -2289,6 +2208,10 @@ static int remount_readonly(struct vfs_mount *mnt, struct ext2_mount *em)
  * is set up when the mount has none, and the valid bit is cleared on the
  * medium. 0, -EROFS for a volume whose features or check keep it read-only,
  * -ENOMEM for a batch the heap cannot give, or -errno.
+ *
+ * The check holds no lock: admission is closed (`em_close`) and the mount
+ * is read-only, so no writer, allocation or free of an inode changes what
+ * it reads. The state and the batch change under `em->meta`.
  */
 static int remount_writable(struct ext2_mount *em)
 {
@@ -2298,7 +2221,6 @@ static int remount_writable(struct ext2_mount *em)
     if (em->readonly_why) {
         return -EROFS;
     }
-    em_serial_lock(em);
     if (!(em->state & EXT2_VALID_FS) || (em->state & EXT2_ERROR_FS)) {
         rc = ext2_check_volume(em, &why);
         if (rc == 0 && why) {
@@ -2306,6 +2228,7 @@ static int remount_writable(struct ext2_mount *em)
             rc = -EROFS;
         }
     }
+    meta_lock(em);
     if (rc == 0 && !em->wb) {
         rc = writeback_init(em);
     } else if (rc == 0) {
@@ -2316,7 +2239,7 @@ static int remount_writable(struct ext2_mount *em)
         em->valid_cleared = 1;
         em->writable = 1;
     }
-    em_serial_unlock(em);
+    meta_unlock(em);
     return rc;
 }
 
@@ -2856,21 +2779,19 @@ static int write_bytes(struct ext2_mount *em, uint64_t off, const void *src, uin
  * batch first, so that the change's writes through reach the medium after
  * the file data and pointers an inode it stores names. A mount that writes
  * back does not: `write_bytes` keeps the batch's images current, and
- * `punch` drains a batch that holds the file it frees. The lock it takes is
- * let go again; the caller holds it for the change.
+ * `punch` drains a batch that holds the file it frees. The caller holds the
+ * node lock the change needs.
  */
 static int assert_writable(struct vfs_mount *mnt, struct ext2_mount *em)
 {
     int rc = 0;
 
-    vfs_ns_lock(mnt);
     if (em_strict(em)) {
         rc = writeback_drain(em);
     }
     if (rc == 0 && (!em->writable || (mnt->flags & VFS_MS_RDONLY))) {
         rc = -EROFS;
     }
-    vfs_ns_unlock(mnt);
     return rc;
 }
 
@@ -3713,7 +3634,7 @@ static int punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
     struct punch_list list;
     int rc, err;
 
-    assert_node_locked(em, n);
+    assert_node_locked(n);
     if (em->dev->flags & BLOCK_WRITE_FAILED) {
         return -EIO;
     }
@@ -5062,8 +4983,8 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
  * The `setattr` of `vfs_ops`: the permission bits, the owner, the group, the
  * access and modification times and the flags chattr may change, as `what`
  * selects, with the change time set to the present and the inode stored.
- * The batch is drained first. Takes the node's lock, which the caller may
- * hold already, and the mount's namespace lock. 0, -EROFS, or -errno.
+ * A strict mount drains the batch first (`assert_writable`). Takes the
+ * node's lock, which the caller may hold already. 0, -EROFS, or -errno.
  */
 static int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
@@ -5072,10 +4993,8 @@ static int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struc
     int rc;
 
     node_lock(n);
-    vfs_ns_lock(mnt);
     rc = assert_writable(mnt, em);
     if (rc != 0) {
-        vfs_ns_unlock(mnt);
         node_unlock(n);
         return rc;
     }
@@ -5099,7 +5018,6 @@ static int ext2_setattr(struct vfs_mount *mnt, void *node, int what, const struc
     }
     stamp(n, T_CTIME);
     rc = inode_store(em, n);
-    vfs_ns_unlock(mnt);
     node_unlock(n);
     return rc;
 }
@@ -5122,9 +5040,8 @@ static int past_limit(const struct ext2_mount *em, const char *op, uint64_t offs
 
 /**
  * The `truncate` of `vfs_ops`: the size of regular file `handle` made
- * `size`, under the node's lock, which the caller may hold already, and the
- * mount's namespace lock, the batch drained first; both directions set the
- * modification and change times.
+ * `size`, under the node's lock, which the caller may hold already; both
+ * directions set the modification and change times.
  *
  * A shrink writes the smaller size first, then zeroes the tail of the last
  * block kept, so that a later growth over it reads zeros and not what was
@@ -5147,14 +5064,12 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         return past_limit(em, "truncate", size);
     }
     node_lock(n);
-    vfs_ns_lock(mnt);
     rc = assert_writable(mnt, em);
     if (rc != 0) {
-        vfs_ns_unlock(mnt);
         node_unlock(n);
         return rc;
     }
-    assert_node_locked(em, n);
+    assert_node_locked(n);
     if (size < n->size) {
         uint32_t keep = (uint32_t)((size + em->block_size - 1) >> em->block_shift);
 
@@ -5186,24 +5101,24 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
             rc = inode_store(em, n);
         }
     }
-    vfs_ns_unlock(mnt);
     node_unlock(n);
     return rc;
 }
 
 /**
- * Write what regular file `n` left dirty, with the mount's namespace lock
- * let go, and flush the disk's cache: the shared blocks dirtied for it, then
- * its own data and pointer blocks (`bcache_sync_owned`), then its inode's
- * table block, which `data_only` leaves out unless a field but the times
- * changed (`n->dirty_meta`). A bitmap's or descriptor's bit is so on the
- * device before a pointer to its block, as a strict mount orders them, and
- * a bitmap a free dirtied `after` waits for the device's `first` pointers
+ * Write what regular file `n` left dirty, with no lock held, and flush the
+ * disk's cache: the shared blocks dirtied for it, then its own data and
+ * pointer blocks (`bcache_sync_owned`), then its inode's table block, which
+ * `data_only` leaves out unless a field but the times changed
+ * (`n->dirty_meta`). A bitmap's or descriptor's bit is so on the device
+ * before a pointer to its block, as a strict mount orders them, and a
+ * bitmap a free dirtied `after` waits for the device's `first` pointers
  * (`bcache_sync_block`). A list that overflowed, or a node freed with its
  * list (`em->shared_lost`), makes it the whole device's `bcache_sync`. The
- * caller holds the lock and has drained the batch. A failure is recorded as
- * the batch's error and leaves the next call the whole device. 0, or
- * -errno.
+ * list is taken and emptied in one step, so a block dirtied for `n` during
+ * the writes is the next call's. The caller has drained the batch. A
+ * failure is recorded as the batch's error and leaves the next call the
+ * whole device. 0, or -errno.
  */
 static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_only)
 {
@@ -5220,7 +5135,6 @@ static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_o
     if (with_table) {
         n->dirty_meta = 0;
     }
-    vfs_ns_unlock(mnt);
     if (whole) {
         rc = bcache_sync(em->dev);
     }
@@ -5236,7 +5150,6 @@ static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_o
     if (rc == 0) {
         rc = block_flush(em->dev);
     }
-    vfs_ns_lock(mnt);
     if (rc != 0) {
         n->shared_over = 1;
         n->dirty_meta |= with_table;
@@ -5246,9 +5159,9 @@ static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_o
 }
 
 /**
- * The body of `fsync` and `fdatasync`: the batch drained under the mount's
- * namespace lock, then a regular file's blocks written as `node_write_out`
- * says, `data_only` for `fdatasync`. Any other file, a mount that is not
+ * The body of `fsync` and `fdatasync`: the batch drained under `em->meta`,
+ * then a regular file's blocks written as `node_write_out` says,
+ * `data_only` for `fdatasync`. Any other file, a mount that is not
  * writable, and the sync of a whole mount (a NULL `handle`) write the
  * device's dirty buffers instead (`em_write_out`): a directory's entries
  * are not tagged as its own. A failure is recorded as the batch's error,
@@ -5261,7 +5174,6 @@ static int file_sync(struct vfs_mount *mnt, void *handle, int data_only)
     struct ext2_node *n = handle;
     int rc;
 
-    vfs_ns_lock(mnt);
     rc = writeback_drain(em);
     if (rc != 0) {
         rc = writeback_error(em, rc);
@@ -5274,7 +5186,6 @@ static int file_sync(struct vfs_mount *mnt, void *handle, int data_only)
     if (mnt->write_error) {
         rc = mnt->write_error;
     }
-    vfs_ns_unlock(mnt);
     return rc;
 }
 
@@ -5409,7 +5320,7 @@ static int writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t 
 /**
  * The `write` of `vfs_ops`: `count` bytes from `buf` at `offset`, through
  * the file-write batch, under the node's lock, which the caller may hold
- * already, and the mount's namespace lock, which this takes.
+ * already.
  *
  * ENOSPC is decided first, for the whole write (`writeback_space`). An
  * overwrite inside the file's blocks or a contiguous append joins the batch
@@ -5447,8 +5358,7 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
         return past_limit(em, "write", offset);
     }
     node_lock(n);
-    vfs_ns_lock(mnt);
-    assert_node_locked(em, n);
+    assert_node_locked(n);
 again:
     wb = em->wb;
     if (!em->writable || (mnt->flags & VFS_MS_RDONLY)) {
@@ -5491,7 +5401,7 @@ again:
             }
         }
         if (rc == -EFAULT) {
-            rc = ++refaults <= EXT2_REFAULTS ? user_refault(mnt, n, in + done, take, 0) : -EFAULT;
+            rc = ++refaults <= EXT2_REFAULTS ? user_refault(n, in + done, take, 0) : -EFAULT;
             if (rc == 1) {
                 goto again;
             }
@@ -5520,7 +5430,6 @@ out:
     if (rc == -EIO && em->wb && em->wb->count) {
         (void)writeback_error(em, rc);
     }
-    vfs_ns_unlock(mnt);
     node_unlock(n);
     return done ? (int32_t)done : rc;
 }
@@ -5570,9 +5479,7 @@ static int ext2_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, ui
         if (take > end - at) {
             take = (uint32_t)(end - at);
         }
-        vfs_ns_lock(mnt);
         rc = block_at(em, n, (uint32_t)(at >> em->block_shift), &b);
-        vfs_ns_unlock(mnt);
         if (b != 0 && from < n->size) {
             from = n->size;
         }
@@ -5658,7 +5565,7 @@ static int ext2_create(struct vfs_mount *mnt, void *dir, const char *name, uint3
     if (rc != 0) {
         return rc;
     }
-    assert_node_locked(em, d);
+    assert_node_locked(d);
     if (d->unlinked) {
         return -ENOENT;
     }
@@ -5723,7 +5630,7 @@ static int ext2_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (rc != 0) {
         return rc;
     }
-    assert_node_locked(em, d);
+    assert_node_locked(d);
     if (d->unlinked) {
         return -ENOENT;
     }
@@ -5795,7 +5702,7 @@ static int ext2_unlink(struct vfs_mount *mnt, void *dir, const char *name)
     if (rc != 0) {
         return rc;
     }
-    assert_node_locked(em, d);
+    assert_node_locked(d);
     rc = dir_find(em, d, name, &at, &prev, &sc);
     if (rc < 0) {
         return rc;
@@ -5852,7 +5759,7 @@ static int ext2_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32
     if (rc != 0) {
         return rc;
     }
-    assert_node_locked(em, d);
+    assert_node_locked(d);
     if (d->unlinked) {
         return -ENOENT;
     }
@@ -5946,7 +5853,7 @@ static int ext2_rmdir(struct vfs_mount *mnt, void *dir, const char *name)
     if (rc != 0) {
         return rc;
     }
-    assert_node_locked(em, d);
+    assert_node_locked(d);
     rc = dir_find(em, d, name, &at, &prev, &sc);
     if (rc < 0) {
         return rc;
@@ -6045,7 +5952,7 @@ static int ext2_link(struct vfs_mount *mnt, void *dir, const char *name, void *n
     if (rc != 0) {
         return rc;
     }
-    assert_node_locked(em, d);
+    assert_node_locked(d);
     if ((n->mode & S_IFMT_) == S_IFDIR_) {
         return -EPERM;
     }
@@ -6085,7 +5992,7 @@ static int ext2_symlink(struct vfs_mount *mnt, void *dir, const char *name, cons
     if (rc != 0) {
         return rc;
     }
-    assert_node_locked(em, d);
+    assert_node_locked(d);
     if (d->unlinked) {
         return -ENOENT;
     }
@@ -6388,9 +6295,9 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
     if (rc != 0) {
         return rc;
     }
-    assert_node_locked(em, od);
-    assert_node_locked(em, nd);
-    if (od != nd && em_file_locked()) {
+    assert_node_locked(od);
+    assert_node_locked(nd);
+    if (od != nd) {
         sleep_lock_assert(&mnt->rename, "ext2: a move between directories outside the rename lock");
     }
     if (k_strlen(newname) > EXT2_NAME_MAX) {
@@ -7693,4 +7600,4 @@ static const struct vfs_ops ext2_ops = {
     ext2_unlock_node,
 };
 
-struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 1, 0, 1, 0};
+const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1};
