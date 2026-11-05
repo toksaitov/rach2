@@ -1625,17 +1625,17 @@ int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t o
     return rc;
 }
 
-int vfs_fsync(struct vfs_mount *mnt, void *handle)
+/** The body of `vfs_fsync` and `vfs_fdatasync`: the type's operation `op`, or
+ * the device's sync for a type with neither, then the device's flush. */
+static int sync_handle(struct vfs_mount *mnt, void *handle,
+                       int (*op)(struct vfs_mount *mnt, void *handle))
 {
     int rc;
 
-    if (vfs_mount_gone(mnt)) {
-        return -EIO;
-    }
-    if (!mnt->type->ops->fsync) {
+    if (!op) {
         rc = mnt->dev ? bcache_sync(mnt->dev) : 0;
     } else {
-        rc = mnt->type->ops->fsync(mount_base(mnt), handle);
+        rc = op(mount_base(mnt), handle);
     }
     if (rc == 0 && mnt->dev) {
         rc = block_flush(mnt->dev);
@@ -1644,6 +1644,24 @@ int vfs_fsync(struct vfs_mount *mnt, void *handle)
         }
     }
     return rc;
+}
+
+int vfs_fsync(struct vfs_mount *mnt, void *handle)
+{
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
+    return sync_handle(mnt, handle, mnt->type->ops->fsync);
+}
+
+int vfs_fdatasync(struct vfs_mount *mnt, void *handle)
+{
+    const struct vfs_ops *ops = mnt->type->ops;
+
+    if (vfs_mount_gone(mnt)) {
+        return -EIO;
+    }
+    return sync_handle(mnt, handle, ops->fdatasync ? ops->fdatasync : ops->fsync);
 }
 
 void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
@@ -2592,6 +2610,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* unpin */
     0,                           /* remount */
     0,                           /* fallocate */
+    0,                           /* fdatasync */
 };
 
 /** The constructor of the root's entry: the mount's root is the image's root
@@ -3084,6 +3103,7 @@ static const struct vfs_ops devfs_vops = {
     0, /* unpin */
     0, /* remount */
     0, /* fallocate */
+    0, /* fdatasync */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -3119,6 +3139,7 @@ static const struct vfs_ops procfs_vops = {
     0, /* unpin */
     0, /* remount */
     0, /* fallocate */
+    0, /* fdatasync */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -3154,6 +3175,7 @@ static const struct vfs_ops sysfs_vops = {
     0, /* unpin */
     0, /* remount */
     0, /* fallocate */
+    0, /* fdatasync */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the

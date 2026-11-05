@@ -293,7 +293,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_MOUNT] = sys_mount;
     table[SYS_UMOUNT2] = sys_umount2;
     table[SYS_PIVOT_ROOT] = sys_pivot_root;
-    table[SYS_FDATASYNC] = sys_fsync;
+    table[SYS_FDATASYNC] = sys_fdatasync;
     table[SYS_LINK] = sys_link;
     table[SYS_LINKAT] = sys_linkat;
     table[SYS_SYMLINK] = sys_symlink;

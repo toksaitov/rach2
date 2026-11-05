@@ -275,6 +275,10 @@ struct vfs_ops {
      * common layer answers with -EOPNOTSUPP. */
     int (*fallocate)(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
                      uint64_t len);
+    /* fdatasync(2): as `fsync`, but a change of the file's times alone need
+     * not reach the medium. NULL for a type with nothing to leave out, whose
+     * `fsync` then answers. */
+    int (*fdatasync)(struct vfs_mount *mnt, void *handle);
 };
 
 /* One file-system kind: the name mount(2) takes and /proc/filesystems
@@ -807,6 +811,9 @@ int vfs_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t o
  * dirty buffers, then the device's flush, a failure of which makes the
  * device's mounts read-only (`vfs_device_failed`). 0 or a negative errno. */
 int vfs_fsync(struct vfs_mount *mnt, void *handle);
+/** `vfs_fsync` by the type's fdatasync, or by its fsync for a type without
+ * one. 0 or a negative errno. */
+int vfs_fdatasync(struct vfs_mount *mnt, void *handle);
 /** The type's getattr, or -EINVAL for a type without one. */
 int vfs_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st);
 /** The type's setattr of the fields `what` gives: 0, -EBUSY for a size

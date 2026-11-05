@@ -1649,7 +1649,8 @@ columns instead of 80.
 .Bl -tag -width Ds
 .It Fl d
 Request a data-only flush.
-On Rach2, fdatasync uses the same handler as fsync and also flushes metadata.
+On Rach2, no file system has an fdatasync operation yet, so fdatasync does
+what fsync does and also flushes metadata.
 .El
 .Ss head
 .Bl -tag -width Ds
@@ -2028,7 +2029,8 @@ Use the System V checksum algorithm with 512-byte blocks.
 .Bl -tag -width Ds
 .It Fl d
 Request a data-only flush.
-On Rach2, fdatasync uses the same handler as fsync and also flushes metadata.
+On Rach2, no file system has an fdatasync operation yet, so fdatasync does
+what fsync does and also flushes metadata.
 .It Fl f
 Request a flush of the file systems containing the files.
 Rach2's syncfs flushes every file system, as sync does.

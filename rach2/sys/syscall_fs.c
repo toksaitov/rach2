@@ -4136,13 +4136,13 @@ long sys_close(isr_params_t *params)
 }
 
 /**
- * Flush a file's data to stable storage (fsync(2); also serves fdatasync).
+ * The body of fsync(2) and fdatasync(2), whose argument is fd.
  *
- * Its argument is fd. Any open descriptor but an O_PATH one is accepted,
- * whatever its type. A descriptor of a file or directory of a mount, the
- * KRFFS root among them, writes back the pages shared mappings of the file
- * hold (`filemap_sync_file`) and goes to the type's fsync (`vfs_fsync`). Any
- * other writes back every dirty page of the disk-backed window (`pc_sync`):
+ * Any open descriptor but an O_PATH one is accepted, whatever its type. A
+ * descriptor of a file or directory of a mount, the KRFFS root among them,
+ * writes back the pages shared mappings of the file hold
+ * (`filemap_sync_file`) and goes to the type by `sync_op`. Any other writes
+ * back every dirty page of the disk-backed window (`pc_sync`):
  * the whole cache and not one file's pages, which does more than the call
  * asks. When KRFFS is the RAM module the cache is empty, so that flush does
  * nothing and the call only checks the descriptor. Returns 0, -EBADF for a
@@ -4150,7 +4150,7 @@ long sys_close(isr_params_t *params)
  * writes its host key with the open/write/fsync/rename idiom and treats an
  * fsync error as fatal, so the error must reach the program.
  */
-long sys_fsync(isr_params_t *params)
+static long sync_fd(isr_params_t *params, int (*sync_op)(struct vfs_mount *mnt, void *handle))
 {
     int fd = (int)SC_ARG(params, 0);
 
@@ -4165,7 +4165,7 @@ long sys_fsync(isr_params_t *params)
         }
         if (e->ofd && e->ofd->vmnt) {
             int32_t mapped = filemap_sync_file(e->ofd->vmnt, e->ofd->ino);
-            int32_t rc = vfs_fsync(e->ofd->vmnt, e->ofd->fhandle);
+            int32_t rc = sync_op(e->ofd->vmnt, e->ofd->fhandle);
 
             return mapped != 0 ? -EIO : rc;
         }
@@ -4174,6 +4174,20 @@ long sys_fsync(isr_params_t *params)
         return -EIO;
     }
     return 0;
+}
+
+/** Flush a file and its attributes to stable storage (fsync(2)), by the
+ * type's fsync (`vfs_fsync`). Returns as `sync_fd` does. */
+long sys_fsync(isr_params_t *params)
+{
+    return sync_fd(params, vfs_fsync);
+}
+
+/** Flush a file's data to stable storage (fdatasync(2)), by the type's
+ * fdatasync (`vfs_fdatasync`). Returns as `sync_fd` does. */
+long sys_fdatasync(isr_params_t *params)
+{
+    return sync_fd(params, vfs_fdatasync);
 }
 
 /**

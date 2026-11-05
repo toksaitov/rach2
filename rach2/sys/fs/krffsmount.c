@@ -1166,6 +1166,7 @@ static const struct vfs_ops krffs_volume_ops = {
     kv_unpin,
     0, /* remount */
     0, /* fallocate */
+    0, /* fdatasync */
 };
 
 /**

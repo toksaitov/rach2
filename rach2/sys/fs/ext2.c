@@ -6013,6 +6013,7 @@ static const struct vfs_ops ext2_ops = {
     0, /* unpin */
     ext2_remount,
     ext2_fallocate,
+    0, /* fdatasync */
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 1, 0, 1};

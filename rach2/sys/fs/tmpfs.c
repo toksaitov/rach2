@@ -1280,6 +1280,7 @@ static const struct vfs_ops tmpfs_ops = {
     0, /* unpin */
     tmpfs_remount,
     tmpfs_fallocate,
+    0, /* fdatasync */
 };
 
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1, 0};

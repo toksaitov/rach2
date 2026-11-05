@@ -4383,6 +4383,7 @@ static const struct vfs_ops exfat_ops = {
     0,                         /* unpin */
     0,                         /* remount */
     0,                         /* fallocate */
+    0,                         /* fdatasync */
 };
 
 const struct vfs_type vfs_exfat_type = {"exfat", ex_mount, &exfat_ops, 0, 0, 0};

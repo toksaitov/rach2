@@ -74,9 +74,12 @@ fsync until unmount, including after close, reopen and successful retry.
 A retry can finish an unmount, but the volume remains marked invalid.
 .Pp
 .Fn fdatasync
-uses the same handler as
+runs the file system's fdatasync operation where it has one, and
+otherwise does what
 .Fn fsync
-and has the same behavior.
+does.
+No file system has one yet, so it has the same behavior, metadata
+included.
 .Pp
 The i386 system call numbers are 36 for
 .Fn sync ,

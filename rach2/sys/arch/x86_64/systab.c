@@ -198,7 +198,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_FCNTL] = sys_fcntl64;
     table[SYS_FLOCK] = sys_flock;
     table[SYS_FSYNC] = sys_fsync;
-    table[SYS_FDATASYNC] = sys_fsync;
+    table[SYS_FDATASYNC] = sys_fdatasync;
     table[SYS_TRUNCATE] = sys_truncate;
     table[SYS_FTRUNCATE] = sys_ftruncate;
     table[SYS_GETCWD] = sys_getcwd;

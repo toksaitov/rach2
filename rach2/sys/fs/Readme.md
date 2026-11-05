@@ -75,7 +75,7 @@ A directory is never an orphan: `rmdir` fails with `EBUSY` on one that a descrip
 
 ### Durability
 
-The boot line chooses the root and how KRFFS reaches it ([../../Readme.md](../../Readme.md), [krffs.Readme.md](krffs.Readme.md)). `fsync` writes back the file's shared mappings (`filemap_sync_file`) and then calls the type's `fsync` through `vfs_fsync`, which flushes the disk's write cache after a type on a block device has written. A descriptor with no mount, a pipe or a device, writes the page cache.
+The boot line chooses the root and how KRFFS reaches it ([../../Readme.md](../../Readme.md), [krffs.Readme.md](krffs.Readme.md)). `fsync` writes back the file's shared mappings (`filemap_sync_file`) and then calls the type's `fsync` through `vfs_fsync`, as `fdatasync` does through `vfs_fdatasync`, by the type's `fdatasync` or else its `fsync`, which flushes the disk's write cache after a type on a block device has written. A descriptor with no mount, a pipe or a device, writes the page cache.
 
 A KRFFS root on a disk partition is on no mount's device, so no `fsync`, `sync` or `reboot(2)` calls `block_flush` for it. Its pages leave through the disk driver's polled `write`, which returns only when they are on the medium: ATA and AHCI end each write with a cache flush, and NVMe sends the write with force unit access, flushing too while the disk has writes answered unflushed ([../block/Readme.md](../block/Readme.md)).
 
@@ -95,7 +95,7 @@ The kernel writes back nothing on a timer: [update(8)](../../../man/man8/update.
 ## Limits
 
 * A KRFFS root on a disk puts each page on the medium with its own write, so a `sync` of many dirty pages waits for a cache flush or a write with force unit access per page, where the buffer cache on an AHCI or NVMe disk writes its run unflushed and flushes once.
-* `fsync` and `fdatasync` are one call, and on every type that writes anything they write the whole device or the whole page cache, not the one file. `syncfs` writes what `sync` writes and, like it, reports no failure.
+* `fdatasync` has its own call and its own operation in `vfs_ops`, which no type has yet, so it does what `fsync` does: on every type that writes anything, both write the whole device or the whole page cache, not the one file, and a change of times alone goes too. `syncfs` writes what `sync` writes and, like it, reports no failure.
 * `reboot(2)` writes no volume placed by `mount(2)`.
 * No file system shares extents or keeps a map of its holes: `FICLONE` is `EOPNOTSUPP`, `copy_file_range` copies every byte, and `SEEK_HOLE` finds only the end of a file.
 * No file system keeps extended attributes: getting, setting and removing one answer `EOPNOTSUPP`, and a list is empty. There are no ACLs, file capabilities, per-user quotas or journal. Of the types that store files, only ext2 and tmpfs have hard links and symbolic links.

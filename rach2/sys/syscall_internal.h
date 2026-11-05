@@ -333,6 +333,7 @@ long sys_openat(isr_params_t *params);
 long sys_close(isr_params_t *params);
 
 long sys_fsync(isr_params_t *params);
+long sys_fdatasync(isr_params_t *params);
 
 long sys_sync(isr_params_t *params);
 

@@ -97,6 +97,7 @@ static long sys_open(isr_params_t *params);
 static long sys_openat(isr_params_t *params);
 static long sys_close(isr_params_t *params);
 static long sys_fsync(isr_params_t *params);
+static long sys_fdatasync(isr_params_t *params);
 static long sys_sync(isr_params_t *params);
 static long sys_syncfs(isr_params_t *params);
 static long sys_lseek(isr_params_t *params);
@@ -1012,6 +1013,14 @@ void lock_close(const struct lock_key *key)
 
 /** The fsync of a file whose shared mapping is synced, which no row makes. */
 int vfs_fsync(struct vfs_mount *mnt, void *handle)
+{
+    (void)mnt;
+    (void)handle;
+    return 0;
+}
+
+/** The fdatasync of a file, which no row makes. */
+int vfs_fdatasync(struct vfs_mount *mnt, void *handle)
 {
     (void)mnt;
     (void)handle;
