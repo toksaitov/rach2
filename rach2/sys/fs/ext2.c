@@ -4485,9 +4485,7 @@ static struct ext2_node *node_held(struct ext2_mount *em, uint32_t ino)
  * that read. */
 static void block_fetch(struct ext2_mount *em, uint64_t at)
 {
-    uint8_t byte;
-
-    (void)read_bytes(em, at, &byte, 1);
+    volume_fetch(em, at >> BCACHE_BLOCK_SHIFT);
 }
 
 /** Fetch what freeing the inode of `n` reads under `em->meta`: its inode
