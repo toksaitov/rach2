@@ -742,6 +742,9 @@ static int on_worker(struct sta *sta, hop_fn fn, void *arg)
         return rc;
     }
     (void)wq_wait_event_nointr(&hop_wq, hop_done, &h);
+    /* The queue reads this record as running until the worker is back from
+     * hop_run, and the next hop of this call chain has the same address. */
+    wlan_cancel_work(&h.work);
     return h.rc;
 }
 
