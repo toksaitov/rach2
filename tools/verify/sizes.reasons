@@ -548,7 +548,6 @@ tests/host/rtl8168_hosttest.c:main complexity 99 a test's rows, each a case, rea
 tests/host/rtl8168_hosttest.c:main lines 692 a test's rows, each a case, read as one table
 
 tests/host/synthfs_hosttest.c:main complexity 41 a test's rows, each a case, read as one table
-tests/host/synthfs_hosttest.c:sys_wireless complexity 26 a test's rows, each a case, read as one table
 
 tests/host/syscall_hosttest.c:clock_ids complexity 32 a test's rows, each a case, read as one table
 tests/host/syscall_hosttest.c:clock_sleeps lines 104 a test's rows, each a case, read as one table
@@ -586,7 +585,6 @@ tests/host/wlan_data_hosttest.c:check_blockack complexity 42 a test's rows, each
 tests/host/wlan_dev_hosttest.c:station complexity 40 a test's rows, each a case, read as one table
 tests/host/wlan_dev_hosttest.c:station lines 117 a test's rows, each a case, read as one table
 tests/host/wlan_dev_hosttest.c:blocking complexity 37 a test's rows, each a case, read as one table
-tests/host/wlan_dev_hosttest.c:removal complexity 29 a test's rows, each a case, read as one table
 
 tests/host/wlan_mlme_hosttest.c:open_association complexity 26 a test's rows, each a case, read as one table
 

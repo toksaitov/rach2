@@ -240,6 +240,15 @@ static void sys_wireless(void)
     CHECK(eq(path, "/sys/class/ieee80211/phy7/device/wsim"));
     CHECK(synth_classify("sys/class/ieee80211/phy7/device/wsim", &vp) == VNODE_SYS_DIR);
     CHECK(synth_classify("sys/class/net/eth0/phy80211", &vp) == VNODE_ENOENT);
+}
+
+/** The rfkill class: a switch's directory, its attributes, and the `device`
+ * link to its radio, or to itself when it has none. */
+static void sys_rfkill(void)
+{
+    struct vpath vp;
+    char path[128];
+
     CHECK(synth_classify("sys/class/rfkill", &vp) == VNODE_SYS_DIR &&
           vp.sysent == SYSFS_CLASS_RFKILL);
     CHECK(synth_classify("sys/class/rfkill/rfkill3", &vp) == VNODE_SYS_DIR &&
@@ -493,7 +502,7 @@ static void ipv6_conf(void)
 /**
  * The rows of the root, /dev and /proc, then those of `bounds`,
  * `past_a_file`, `past_a_name`, `paths`, `sys_tree`, `sys_class`,
- * `sys_wireless`, `sys_cpus` and `ipv6_conf`:
+ * `sys_wireless`, `sys_rfkill`, `sys_cpus` and `ipv6_conf`:
  *
  * - the empty path and ordinary names are the KRFFS root's, "devices" and
  *   "proconsul" among them, which only begin as "dev" and "proc" do;
@@ -603,6 +612,7 @@ int main(void)
     sys_tree();
     sys_class();
     sys_wireless();
+    sys_rfkill();
     sys_cpus();
     ipv6_conf();
     return fails > 255 ? 255 : fails;
