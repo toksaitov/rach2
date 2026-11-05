@@ -682,16 +682,16 @@ full_failed()
 # characters and ends it with `...`, so a long title matches by that prefix.
 full()
 {
-    only=$(sed -n 's/^again full //p' "$state/record")
+    listed=$(sed -n 's/^again full //p' "$state/record")
     # shellcheck disable=SC2046 # the result is two words
     set -- $(grep -E '^run [0-9]+ (success|failure)$' "$state/record" | tail -n 1)
     case ${3-} in
-        success) mark full "run $2${only:+, of $only only}"; return 0 ;;
+        success) mark full "run $2${listed:+, of $listed only}"; return 0 ;;
         failure) full_failed "$2"; return 0 ;;
     esac
     title="Release tests of $(echo "$sha" | cut -c 1-8) for milestone $milestone"
     # shellcheck disable=SC2086 # the suites are words
-    [ -z "$only" ] || title="$title: again only $(plain $only)"
+    [ -z "$listed" ] || title="$title: again only $(plain $listed)"
     while :; do
         run=$(net gh run list --repo "$REPO" --workflow full.yml --limit 50 \
             --json databaseId,displayTitle,status,conclusion,createdAt \
@@ -712,7 +712,7 @@ full()
             fi
             note "run $1 $3"
             case $3 in
-                success) mark full "run $1${only:+, of $only only}"; return 0 ;;
+                success) mark full "run $1${listed:+, of $listed only}"; return 0 ;;
                 failure) full_failed "$1"; return 0 ;;
             esac
             say "full: run $1 ended $3"
@@ -729,10 +729,10 @@ full()
         fi
         note "dispatched $(date +%s)"
         set -- -f sha="$sha" -f title="$title"
-        [ -z "$only" ] || set -- "$@" -f suites="$only"
+        [ -z "$listed" ] || set -- "$@" -f suites="$listed"
         net gh workflow run full.yml --repo "$REPO" --ref "$branch" "$@" ||
             later "the full run could not be started"
-        say "full: started a run of $sha${only:+ for $only only}"
+        say "full: started a run of $sha${listed:+ for $listed only}"
         sleep 30
     done
 }

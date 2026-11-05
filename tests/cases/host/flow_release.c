@@ -1455,6 +1455,7 @@ static int prepare_rows(struct release *r)
 static int only_rows(struct release *r)
 {
     struct fixture *f = r->f;
+    char text[1000];
     int ok = 1;
     run(r, &(struct release_row){.record = r->ended,
                                  .sha = C,
@@ -1467,6 +1468,21 @@ static int only_rows(struct release *r)
                    count(flow_path(f, "calls"), "^dispatch ") == 1 && !called(r, " run routine-") &&
                    !fx_has(record(r), "\nmac started") && !fx_has(record(r), "\nwindows started"),
                "-o leaves out the Mac and Windows and says so in the record") &&
+         ok;
+    snprintf(text, sizeof(text),
+             "milestone 7\nsha %s\nbranch %s\nchosen %s\nonly wsl lenovo\ntouched %s\ndispatched "
+             "1760054400\nrun 101 failure\n",
+             H, BRANCH, T, T);
+    run(r, &(struct release_row){.record = text,
+                                 .git = "yes",
+                                 .machines = MAC WINDOWS,
+                                 .failures = "i686:fs\n",
+                                 .only = 1});
+    ok = check(r,
+               f->status == 1 && fx_has(record(r), "\nfailed tests: full run 101: i686:fs") &&
+                   !called(r, " run routine-") && !fx_has(record(r), "\nmac started") &&
+                   !fx_has(record(r), "\nwindows started"),
+               "-o leaves them out after a full run that failed") &&
          ok;
     run(r, &(struct release_row){.git = "yes", .again = "mac", .only = 1});
     ok = check(r, f->status == 2 && !fx_exists(record(r)), "-o with -a is refused") && ok;
