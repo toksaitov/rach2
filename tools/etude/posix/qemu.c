@@ -8,6 +8,11 @@
  */
 #include <errno.h>
 #include <fcntl.h>
+#ifndef _WIN32
+#include <poll.h>
+#include <pthread.h>
+#include <signal.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,6 +71,7 @@ static void socket_in_pump(struct socket_in *in, int fd)
 
 /* The most console bytes one pass of the loop reads of a machine. */
 #define CONSOLE_PASS_MAX 65536
+#define CONSOLE_PUMP_MAX (64u * 1024 * 1024) /* a pump past this stops reading */
 
 /* The bytes kept for QEMU's command line. */
 #define QEMU_LINE_BYTES 16384
@@ -109,6 +115,9 @@ struct etude_machine {
     etude_socket console, qmp;               /* QEMU's connections; -1 once closed */
     struct socket_in console_in, qmp_in;     /* their reading sides */
     int console_file;
+#ifndef _WIN32
+    struct console_pump *pump; /* keeps the console socket read; NULL before */
+#endif
     char *audio_path;
     int audio_created, audio_temporary;
     struct etude_proc *proc;
@@ -243,9 +252,136 @@ static void close_channel(etude_socket *fd, struct socket_in *in)
     close_socket_fd(fd);
 }
 
+#ifndef _WIN32
+/*
+ * A thread that keeps a console socket read while the loop is held. The loop
+ * writes each console byte to a file, and a loaded file system holds that write
+ * for seconds. The socket fills after a few hundred unread bytes, as QEMU sends
+ * one byte at a time, and QEMU's UART then stops the guest's kernel, which
+ * waits for it with nothing else running. The bytes wait here instead. Both
+ * sides read under the lock, so the bytes stay in order, and the loop can
+ * read to the moment of an event as it does without a pump.
+ */
+struct console_pump {
+    pthread_t thread;
+    pthread_mutex_t lock;
+    int fd;
+    int wake[2]; /* a byte in it wakes the loop */
+    char *bytes; /* read from the socket, not yet taken by the loop */
+    size_t len, cap;
+    int closed; /* the socket has given its end */
+};
+
+/** Read the socket until it would wait; the lock is held. */
+static void pump_fill(struct console_pump *p)
+{
+    char *grown;
+    size_t cap;
+    ssize_t n;
+
+    while (!p->closed && p->len < CONSOLE_PUMP_MAX) {
+        if (p->cap - p->len < 4096) {
+            cap = p->cap != 0 ? p->cap * 2 : 65536;
+            grown = realloc(p->bytes, cap);
+            if (grown == NULL)
+                return;
+            p->bytes = grown;
+            p->cap = cap;
+        }
+        n = read(p->fd, p->bytes + p->len, p->cap - p->len);
+        if (n < 0 && errno == EINTR)
+            continue;
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            return;
+        if (n <= 0)
+            p->closed = 1;
+        else
+            p->len += (size_t)n;
+    }
+}
+
+/** Read the socket whenever it has bytes, until it ends. */
+static void *pump_main(void *arg)
+{
+    struct console_pump *p = arg;
+    struct pollfd fd;
+    char wake = 0;
+    int full = 0, closed = 0, ready;
+
+    fd.fd = p->fd;
+    fd.events = POLLIN;
+    while (!closed) {
+        (void)poll(full ? NULL : &fd, full ? 0 : 1, full ? 100 : -1);
+        pthread_mutex_lock(&p->lock);
+        pump_fill(p);
+        full = p->len >= CONSOLE_PUMP_MAX;
+        closed = p->closed;
+        ready = p->len > 0 || closed;
+        pthread_mutex_unlock(&p->lock);
+        if (ready && write(p->wake[1], &wake, 1) < 0 && errno != EAGAIN)
+            return NULL;
+    }
+    return NULL;
+}
+
+/** Start the machine's pump, with every signal blocked in its thread, so that
+ * signals still reach the loop. Without one the loop reads the socket itself. */
+static void pump_start(struct etude_machine *m)
+{
+    struct console_pump *p = calloc(1, sizeof(*p));
+    sigset_t all, old;
+    int e, i;
+
+    if (p == NULL)
+        return;
+    if (pipe(p->wake) != 0) {
+        free(p);
+        return;
+    }
+    for (i = 0; i < 2; i++) {
+        fcntl(p->wake[i], F_SETFD, FD_CLOEXEC);
+        fcntl(p->wake[i], F_SETFL, O_NONBLOCK);
+    }
+    p->fd = m->console;
+    pthread_mutex_init(&p->lock, NULL);
+    sigfillset(&all);
+    pthread_sigmask(SIG_SETMASK, &all, &old);
+    e = pthread_create(&p->thread, NULL, pump_main, p);
+    pthread_sigmask(SIG_SETMASK, &old, NULL);
+    if (e != 0) {
+        pthread_mutex_destroy(&p->lock);
+        close(p->wake[0]);
+        close(p->wake[1]);
+        free(p);
+        return;
+    }
+    m->pump = p;
+}
+
+/** End the machine's pump; the bytes the loop did not take go with it. */
+static void pump_end(struct etude_machine *m)
+{
+    struct console_pump *p = m->pump;
+
+    if (p == NULL)
+        return;
+    shutdown(p->fd, SHUT_RD);
+    pthread_join(p->thread, NULL);
+    pthread_mutex_destroy(&p->lock);
+    close(p->wake[0]);
+    close(p->wake[1]);
+    free(p->bytes);
+    free(p);
+    m->pump = NULL;
+}
+#endif
+
 /** Remove the machine's sockets and close what is open. */
 static void machine_close(struct etude_machine *m)
 {
+#ifndef _WIN32
+    pump_end(m);
+#endif
     close_socket_fd(&m->console_listen);
     close_socket_fd(&m->qmp_listen);
     close_channel(&m->console, &m->console_in);
@@ -654,10 +790,43 @@ static void console_keep(struct etude_machine *m, const char *buf, size_t n)
     }
 }
 
+#ifndef _WIN32
+/** Keep all that the pump holds and what the socket has now, and close the
+ * console when it has ended. */
+static void pump_take(struct etude_machine *m)
+{
+    struct console_pump *p = m->pump;
+    char drain[64], *bytes;
+    size_t n;
+    int closed;
+
+    while (read(p->wake[0], drain, sizeof(drain)) > 0) {
+    }
+    pthread_mutex_lock(&p->lock);
+    pump_fill(p);
+    bytes = p->bytes;
+    n = p->len;
+    closed = p->closed;
+    p->bytes = NULL;
+    p->len = p->cap = 0;
+    pthread_mutex_unlock(&p->lock);
+    if (n > 0)
+        console_keep(m, bytes, n);
+    free(bytes);
+    if (closed) {
+        pump_end(m);
+        close_channel(&m->console, &m->console_in);
+        m->r.console.closed = 1;
+        m->changed = 1;
+    }
+}
+#endif
+
 /**
  * Read what the console has written, until it would wait or ends, or after
  * `limit` bytes, so that a console that never pauses leaves the other
- * machines served; 0 sets no limit.
+ * machines served; 0 sets no limit. A pump takes no limit, as CONSOLE_PUMP_MAX
+ * bounds what it holds.
  */
 static void console_read(struct etude_machine *m, size_t limit)
 {
@@ -665,6 +834,12 @@ static void console_read(struct etude_machine *m, size_t limit)
     size_t total = 0;
     ssize_t n;
 
+#ifndef _WIN32
+    if (m->pump != NULL) {
+        pump_take(m);
+        return;
+    }
+#endif
     while (m->console >= 0 && (limit == 0 || total < limit)) {
         n = socket_read(&m->console_in, m->console, buf, sizeof(buf));
         if (n < 0 && errno == EINTR)
@@ -1022,6 +1197,10 @@ static void machine_serve(struct etude_machine *m)
     if (m->finished)
         return;
     take_connection(&m->console_listen, &m->console, &m->console_in, m->console_path);
+#ifndef _WIN32
+    if (m->console >= 0 && m->pump == NULL)
+        pump_start(m);
+#endif
     take_connection(&m->qmp_listen, &m->qmp, &m->qmp_in, m->qmp_path);
     console_read(m, CONSOLE_PASS_MAX);
     console_write(m);
@@ -1091,7 +1270,17 @@ static size_t watch_set(struct etude_qemu *q, struct etude_watch *w, uint64_t *s
             w[n].fd = m->qmp_listen;
             w[n++].events = ETUDE_WATCH_IN;
         }
-        if (m->console >= 0) {
+#ifndef _WIN32
+        if (m->pump != NULL) {
+            w[n].fd = m->pump->wake[0];
+            w[n++].events = ETUDE_WATCH_IN;
+            if (m->input_len > 0) {
+                w[n].fd = m->console;
+                w[n++].events = ETUDE_WATCH_OUT;
+            }
+        } else
+#endif
+            if (m->console >= 0) {
             w[n].fd = m->console;
             w[n++].events = ETUDE_WATCH_IN | (m->input_len > 0 ? ETUDE_WATCH_OUT : 0);
         }
@@ -1209,7 +1398,7 @@ static int watch_once(struct etude_qemu *q, uint64_t until, struct etude_watch *
     size_t i, n;
     int own = 0;
 
-    w = malloc((4 * unfinished(q) + cn + 1) * sizeof(*w));
+    w = malloc((5 * unfinished(q) + cn + 1) * sizeof(*w));
     if (w == NULL)
         return -1;
     n = watch_set(q, w, &soonest);
