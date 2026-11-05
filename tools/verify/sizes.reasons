@@ -92,7 +92,7 @@ rach2/sys/fs/exfat.c:ex_truncate complexity 30 one file system operation over th
 rach2/sys/fs/exfat.c:ex_truncate lines 121 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:ex_truncate nesting 5 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:ex_write complexity 36 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/exfat.c:ex_write lines 129 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/exfat.c:ex_write lines 124 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:free_slots nesting 6 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:set_read complexity 50 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/exfat.c:set_read lines 139 one file system operation over the on-disk format, each step a rule of the format
@@ -118,7 +118,7 @@ rach2/sys/fs/fat32.c:fat_rename lines 149 one file system operation over the on-
 rach2/sys/fs/fat32.c:fat_truncate complexity 35 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:fat_truncate lines 121 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:fat_write complexity 33 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/fat32.c:fat_write lines 112 one file system operation over the on-disk format, each step a rule of the format
+rach2/sys/fs/fat32.c:fat_write lines 111 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:walk_dir complexity 45 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:walk_dir lines 137 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:walk_dir nesting 5 one file system operation over the on-disk format, each step a rule of the format

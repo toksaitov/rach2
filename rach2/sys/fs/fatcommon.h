@@ -14,6 +14,15 @@
 /** The most UTF-16 units in a name. */
 #define FAT_NAME_UNITS 255
 
+/* Both drivers tag a dirty data block with its file's first cluster, which
+ * stays with the file through a rename and a reopen. `FAT_OWNER_SHARED`, which
+ * no first cluster is, tags everything else a barrier must write: the map
+ * blocks, and a data block when clusters and cache blocks do not line up, so
+ * that two files can share it. `FAT_THROUGH` asks for a write now, with no
+ * tag. */
+#define FAT_THROUGH      0u
+#define FAT_OWNER_SHARED 1u
+
 /**
  * Convert the UTF-8 name `name` to UTF-16 in `units`, which has room for
  * `FAT_NAME_UNITS`, and check that FAT can store it.

@@ -1782,7 +1782,7 @@ static int ex_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags, 
  * in one. Directory entries, a join of a chain and the boot sector's state
  * are written through with `bcache_write`; the bits and FAT entries of
  * clusters allocated or freed together are set in the cache and reach the
- * disk at the `sync_disk` that comes before anything refers to them.
+ * disk at the barrier that comes before anything refers to them.
  */
 
 /** Panic unless the calling process holds the mount's namespace lock, which
@@ -1823,16 +1823,42 @@ static int sync_disk(struct ex_mount *em)
     return rc != 0 ? rc : block_flush(em->dev);
 }
 
+/** The owner of a dirty data block of the file whose first cluster is `first`:
+ * `first`, or `FAT_OWNER_SHARED` when a block can hold two clusters. */
+static uint32_t file_owner(const struct ex_mount *em, uint32_t first)
+{
+    if (cluster_bytes(em) < BCACHE_BLOCK_BYTES || em->heap_offset % BCACHE_BLOCK_SECTORS != 0) {
+        return FAT_OWNER_SHARED;
+    }
+    return first;
+}
+
+/**
+ * The barrier of one file: write the dirty blocks of the file whose first
+ * cluster is `first`, then the shared blocks, among them every bit and FAT
+ * entry set in the cache, then flush the device. Other files' dirty blocks
+ * stay dirty; `first` 0 is no file. 0, or the first failure's -errno.
+ */
+static int sync_file(struct ex_mount *em, uint32_t first)
+{
+    int rc = first != 0 ? bcache_sync_owned(em->dev, file_owner(em, first)) : 0;
+
+    if (rc == 0) {
+        rc = bcache_sync_owned(em->dev, FAT_OWNER_SHARED);
+    }
+    return rc != 0 ? rc : block_flush(em->dev);
+}
+
 /**
  * Copy `len` bytes from `src`, or zeros for NULL, to byte offset `off` of the
- * device through the cache: each block written through to the device with
- * `through`, or left dirty for a later sync without. A whole block is not
- * read first, since its bytes are all replaced and a blank buffer's zeros
+ * device through the cache: each block written through to the device for an
+ * `owner` of `FAT_THROUGH`, or left dirty for that owner. A whole block is
+ * not read first, since its bytes are all replaced and a blank buffer's zeros
  * are the zero fill. A write to the block of the mount's directory copy
  * empties the copy. 0, or -errno.
  */
 static int ex_write_bytes(struct ex_mount *em, uint64_t off, const void *src, uint32_t len,
-                          int through)
+                          uint32_t owner)
 {
     const uint8_t *in = src;
 
@@ -1863,10 +1889,10 @@ static int ex_write_bytes(struct ex_mount *em, uint64_t off, const void *src, ui
         if (em->dir_block_held && em->dir_block == blk) {
             em->dir_block_held = 0;
         }
-        if (through) {
+        if (owner == FAT_THROUGH) {
             rc = bcache_write(b);
         } else {
-            bcache_dirty(b);
+            bcache_dirty_owned(b, owner);
         }
         bcache_release(b);
         if (rc != 0) {
@@ -1892,7 +1918,7 @@ static int fat_set(struct ex_mount *em, uint32_t c, uint32_t value, int through)
     raw[1] = (uint8_t)(value >> 8);
     raw[2] = (uint8_t)(value >> 16);
     raw[3] = (uint8_t)(value >> 24);
-    return ex_write_bytes(em, off, raw, 4, through);
+    return ex_write_bytes(em, off, raw, 4, through ? FAT_THROUGH : FAT_OWNER_SHARED);
 }
 
 /** Set the bitmap bit of cluster `c` to `on`, found through the bitmap's
@@ -1918,7 +1944,7 @@ static int bit_set(struct ex_mount *em, uint32_t c, int on, int through)
         byte &= (uint8_t)~(1u << ((c - 2) % 8));
     }
     return ex_write_bytes(em, cluster_offset(em, cl) + (at & (cluster_bytes(em) - 1)), &byte, 1,
-                          through);
+                          through ? FAT_THROUGH : FAT_OWNER_SHARED);
 }
 
 /** Take one free cluster, first-fit from the hint with one wrap, into
@@ -2038,14 +2064,16 @@ static int room_for(struct ex_mount *em, uint32_t n)
 /**
  * Take a run of `n` clusters, chained through the FAT, ended and joined to
  * nothing, its first and last clusters in `*first` and `*last`. `zero` 1
- * fills them with zeros in the cache, 2 writes the zeros through, and 0
- * leaves their bytes. ENOSPC is decided before any write, and a failure
- * gives back what was taken. The run's bits and FAT entries are set in the
- * cache: a caller that writes its data first syncs before it joins the run,
- * and a run whose zeros are written through, a directory's, is joined at
- * once, so its sync is here. 0, -ENOSPC, or -errno.
+ * fills them with zeros in the cache, tagged for the file whose first cluster
+ * is `file`, or for the run's first when `file` is 0, 2 writes the zeros
+ * through, and 0 leaves their bytes. ENOSPC is decided before any write,
+ * and a failure gives back what was taken. The run's bits and FAT entries
+ * are set in the cache: a caller that writes its data first syncs before it
+ * joins the run, and a run whose zeros are written through, a directory's,
+ * is joined at once, so its sync is here. 0, -ENOSPC, or -errno.
  */
-static int alloc_run(struct ex_mount *em, uint32_t n, int zero, uint32_t *first, uint32_t *last)
+static int alloc_run(struct ex_mount *em, uint32_t n, int zero, uint32_t file, uint32_t *first,
+                     uint32_t *last)
 {
     uint32_t prev = 0, i;
     int rc = 0;
@@ -2069,7 +2097,10 @@ static int alloc_run(struct ex_mount *em, uint32_t n, int zero, uint32_t *first,
             break;
         }
         if (zero) {
-            rc = ex_write_bytes(em, cluster_offset(em, c), 0, cluster_bytes(em), zero == 2);
+            uint32_t owner = file != 0 ? file : (prev != 0 ? *first : c);
+
+            rc = ex_write_bytes(em, cluster_offset(em, c), 0, cluster_bytes(em),
+                                zero == 2 ? FAT_THROUGH : file_owner(em, owner));
         }
         if (rc == 0) {
             rc = fat_set(em, c, EX_EOC, 0);
@@ -2143,7 +2174,7 @@ static int dir_write(struct ex_mount *em, struct ex_node *d, uint32_t index, con
             take = count;
         }
         rc = ex_write_bytes(em, cluster_offset(em, c) + (uint64_t)(index % per) * 32, raw,
-                            take * 32, 1);
+                            take * 32, FAT_THROUGH);
         if (rc != 0) {
             return rc;
         }
@@ -2447,7 +2478,7 @@ static int dir_grow_publish(struct ex_mount *em, struct ex_node *d)
             return rc == -ENXIO ? -EIO : rc;
         }
     }
-    rc = alloc_run(em, 1, 2, &newc, &unused);
+    rc = alloc_run(em, 1, 2, 0, &newc, &unused);
     if (rc != 0) {
         return rc;
     }
@@ -2814,7 +2845,7 @@ static int ex_mkdir(struct vfs_mount *mnt, void *dir, const char *name, uint32_t
     if (rc == 1) {
         return -EEXIST;
     }
-    rc = alloc_run(em, 1, 2, &c, &unused);
+    rc = alloc_run(em, 1, 2, 0, &c, &unused);
     if (rc != 0) {
         return rc;
     }
@@ -3251,10 +3282,10 @@ out:
 }
 
 /** Copy `count` bytes from `buf`, or zeros for NULL, to offset `off` of
- * node `n`'s data, through its chain, into the cache for a later sync; 0,
- * or -errno. */
-static int put_file_bytes(struct ex_mount *em, struct ex_node *n, uint64_t off, const uint8_t *buf,
-                          uint32_t count)
+ * node `n`'s data, through its chain, into the cache for a later sync of
+ * the file whose first cluster is `file`; 0, or -errno. */
+static int put_file_bytes(struct ex_mount *em, struct ex_node *n, uint32_t file, uint64_t off,
+                          const uint8_t *buf, uint32_t count)
 {
     uint32_t cbytes = cluster_bytes(em);
 
@@ -3272,7 +3303,7 @@ static int put_file_bytes(struct ex_mount *em, struct ex_node *n, uint64_t off, 
         if (rc != 0) {
             return rc == -ENXIO ? -EIO : rc;
         }
-        rc = ex_write_bytes(em, cluster_offset(em, c) + in, buf, take, 0);
+        rc = ex_write_bytes(em, cluster_offset(em, c) + in, buf, take, file_owner(em, file));
         if (rc != 0) {
             return rc;
         }
@@ -3328,7 +3359,7 @@ static void stamp_mtime(struct ex_node *n)
  * gap within the file's old clusters, the part inside the last of them
  * included, in pieces of 1 GiB, since the gap can be longer than a 32-bit
  * count; the new run's zeros are its own fill. The bytes go into the cache,
- * and `sync_disk` puts them and the zeros on the disk; then the run is
+ * and `sync_file` puts them and the zeros on the disk; then the run is
  * joined to the chain with one FAT entry and a flush, and the new lengths
  * and modification time published.
  *
@@ -3350,8 +3381,9 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     struct ex_node *n = handle;
     uint32_t cbytes = cluster_bytes(em);
     uint64_t have, needed, end;
-    uint32_t run_first = 0, run_last = 0, tail = 0;
+    uint32_t run_first = 0, run_last = 0, tail = 0, file;
     int joined = 0;
+    struct ex_node run; /* the walk over the new run */
     int rc;
 
     if (n->is_dir) {
@@ -3384,12 +3416,16 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
             rc = chain_convert(em, n);
         }
         if (rc == 0) {
-            rc = alloc_run(em, (uint32_t)want, 1, &run_first, &run_last);
+            rc = alloc_run(em, (uint32_t)want, 1, have > 0 ? n->first : 0, &run_first, &run_last);
         }
         if (rc != 0) {
             goto out;
         }
     }
+    k_memset(&run, 0, sizeof(run));
+    run.first = run_first;
+    run.length = (uint64_t)(needed - have) * cbytes;
+    file = have > 0 ? n->first : run_first;
     if (offset > n->valid && have > 0) {
         uint64_t gap_end = have * cbytes < offset ? have * cbytes : offset;
 
@@ -3400,7 +3436,7 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
                 uint64_t left = gap_end - at;
                 uint32_t piece = left > 0x40000000u ? 0x40000000u : (uint32_t)left;
 
-                rc = put_file_bytes(em, n, at, 0, piece);
+                rc = put_file_bytes(em, n, file, at, 0, piece);
                 if (rc != 0) {
                     goto undo;
                 }
@@ -3412,28 +3448,18 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
         uint64_t room = have * cbytes - offset; /* up to 2^32 at the limit */
         uint32_t part = room > count ? count : (uint32_t)room;
 
-        rc = put_file_bytes(em, n, offset, buf, part);
+        rc = put_file_bytes(em, n, file, offset, buf, part);
         if (rc == 0 && part < count) {
-            struct ex_node run;
-
-            k_memset(&run, 0, sizeof(run));
-            run.first = run_first;
-            run.length = (uint64_t)(needed - have) * cbytes;
-            rc = put_file_bytes(em, &run, offset + part - have * cbytes,
+            rc = put_file_bytes(em, &run, file, offset + part - have * cbytes,
                                 (const uint8_t *)buf + part, count - part);
         }
     } else {
-        struct ex_node run;
-
-        k_memset(&run, 0, sizeof(run));
-        run.first = run_first;
-        run.length = (uint64_t)(needed - have) * cbytes;
-        rc = put_file_bytes(em, &run, offset - have * cbytes, buf, count);
+        rc = put_file_bytes(em, &run, file, offset - have * cbytes, buf, count);
     }
     if (rc != 0) {
         goto undo;
     }
-    rc = sync_disk(em);
+    rc = sync_file(em, file);
     if (rc != 0) {
         goto undo;
     }
@@ -3532,12 +3558,12 @@ static int ex_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
                 rc = chain_convert(em, n);
             }
             if (rc == 0) {
-                rc = alloc_run(em, (uint32_t)want, 0, &run_first, &run_last);
+                rc = alloc_run(em, (uint32_t)want, 0, 0, &run_first, &run_last);
             }
             if (rc != 0) {
                 goto out;
             }
-            rc = sync_disk(em);
+            rc = sync_file(em, 0);
             if (rc != 0) {
                 free_chain(em, run_first, 0, 0);
                 goto out;
@@ -3686,15 +3712,17 @@ static int ex_setattr(struct vfs_mount *mnt, void *node, int what, const struct 
     return rc;
 }
 
-/** The `fsync` of `vfs_ops`: `sync_disk` of the whole volume, under the
- * mount's namespace lock; 0, or -errno. */
+/** The `fsync` of `vfs_ops`: the file's dirty blocks and the shared ones
+ * written back and flushed under the mount's namespace lock, other files'
+ * left dirty; its set was written through by the change that made it. 0, or
+ * -errno. */
 static int ex_fsync(struct vfs_mount *mnt, void *handle)
 {
+    struct ex_node *n = handle;
     int rc;
 
-    (void)handle;
     vfs_ns_lock(mnt);
-    rc = sync_disk(em_of(mnt));
+    rc = sync_file(em_of(mnt), n->first);
     vfs_ns_unlock(mnt);
     return rc;
 }
@@ -3724,13 +3752,13 @@ static int write_boot_state(struct ex_mount *em, int dirty)
     } else {
         percent = 0xFF; /* the specification's "not known" */
     }
-    rc = ex_write_bytes(em, 112, &percent, 1, 1);
+    rc = ex_write_bytes(em, 112, &percent, 1, FAT_THROUGH);
     if (rc != 0) {
         return rc;
     }
     flags[0] = (uint8_t)((em->active_fat & 1) | (dirty ? 2 : 0));
     flags[1] = 0;
-    return ex_write_bytes(em, 106, flags, 2, 1);
+    return ex_write_bytes(em, 106, flags, 2, FAT_THROUGH);
 }
 
 /** The `sync` of `vfs_ops`: on a writable mount that set VolumeDirty,
