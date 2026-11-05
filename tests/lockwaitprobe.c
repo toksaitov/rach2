@@ -25,7 +25,7 @@
  * each choosing its calls from a seed of its own. A call may find a name
  * gone or taken by another worker; any other error fails. Then every file
  * left reads whole, the mount is still writable, and the volume unmounts,
- * after which the host's `e2fsck -fn` judges it.
+ * after which `e2fsck -fn` judges it.
  *
  * Prints "LOCKWAITPROBE OK" and exits 0, or "LOCKWAITPROBE FAIL: " and the
  * reason and exits 1.
@@ -78,21 +78,22 @@ static void sys_exit(int status)
     __builtin_unreachable();
 }
 
-/** The length of the string `s`. */
-static size_t strlen(const char *s)
-{
-    size_t n = 0;
+/* The line being made for standard output, written whole at its newline so
+ * that the kernel's own lines on the console cannot fall inside it. */
+static char line[512];
+static unsigned line_len;
 
-    while (s[n]) {
-        n++;
-    }
-    return n;
-}
-
-/** Write `s` to standard output. */
+/** Add `s` to the line, writing the line out at each newline and when it
+ * is full. */
 static void out(const char *s)
 {
-    syscall3(SYS_WRITE, 1, (long)s, (long)strlen(s));
+    for (; *s; s++) {
+        line[line_len++] = *s;
+        if (*s == '\n' || line_len == sizeof(line)) {
+            syscall3(SYS_WRITE, 1, (long)line, (long)line_len);
+            line_len = 0;
+        }
+    }
 }
 
 /** Write `n` in decimal to standard output. */
