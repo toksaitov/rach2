@@ -162,8 +162,8 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 /** Take the mount's namespace lock for the current process, recursively. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
-    mnt->ns_holder = (int)current_proc->pid;
-    mnt->ns_depth++;
+    mnt->ns.holder = (int)current_proc->pid;
+    mnt->ns.depth++;
 }
 /**
  * Release one level of the namespace lock. At the last level, clear the
@@ -172,13 +172,13 @@ void vfs_ns_lock(struct vfs_mount *mnt)
  */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
-    if (mnt->ns_depth > 0) {
-        mnt->ns_depth--;
+    if (mnt->ns.depth > 0) {
+        mnt->ns.depth--;
     }
-    if (mnt->ns_depth == 0) {
+    if (mnt->ns.depth == 0) {
         void (*ready)(void) = namespace_ready;
 
-        mnt->ns_holder = -1;
+        mnt->ns.holder = -1;
         namespace_ready = 0;
         if (ready) {
             ready();
@@ -413,7 +413,7 @@ static int mount_flags(uint32_t flags)
     mnt.type = &vfs_ext2_type;
     mnt.dev = &dev;
     mnt.flags = flags;
-    mnt.ns_holder = -1;
+    mnt.ns.holder = -1;
     rc = vfs_ext2_type.mount(&mnt, &dev, flags, "");
     return rc;
 }
@@ -1262,7 +1262,7 @@ static int mount_rw(void)
     mnt.type = &vfs_ext2_type;
     mnt.dev = &dev;
     mnt.flags = rw_flags;
-    mnt.ns_holder = -1;
+    mnt.ns.holder = -1;
     rc = vfs_ext2_type.mount(&mnt, &dev, rw_flags, "");
     if (rc == 0) {
         vfs_ns_lock(&mnt);
@@ -3045,13 +3045,13 @@ static int flush_depth, read_depth;
 /** Note the depth of the namespace lock at a read of the device. */
 static void read_depth_note(void)
 {
-    read_depth = mnt.ns_depth;
+    read_depth = mnt.ns.depth;
 }
 
 /** Note the depth of the namespace lock at a flush. */
 static void flush_depth_note(void)
 {
-    flush_depth = mnt.ns_depth;
+    flush_depth = mnt.ns.depth;
 }
 
 /**
@@ -3083,7 +3083,7 @@ static void sync_unlocked_row(void)
     check(OPS->sync(&mnt) == 0 && flush_depth == 0,
           "sync flushes the disk with the namespace lock let go");
     flush_pause = 0;
-    check(mnt.ns_depth == 0, "sync and fsync leave the namespace lock free");
+    check(mnt.ns.depth == 0, "sync and fsync leave the namespace lock free");
     check(bcache_invalidate(&dev) == 0, "the cache gives the file's block up");
     read_pause = read_depth_note;
     read_depth = -1;

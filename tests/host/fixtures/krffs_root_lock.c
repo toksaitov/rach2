@@ -5,7 +5,8 @@
  * The rule of `mk/host-fixtures.mk` extracts from `rach2/sys/fs/vfs.c`,
  * unchanged, the root adapter's five data operations, `kfs_read`,
  * `kfs_write`, `kfs_truncate`, `kfs_fsync` and `kfs_readdir`, the bodies they
- * call, and the namespace lock they take, and compiles them here over the
+ * call, and the namespace lock they take with the sleeping lock of
+ * `rach2/sys/fs/sleeplock.c` under it, and compiles them here over the
  * real KRFFS core, with the thread glue of `krffs_open_threads.c`.
  * In the kernel each body reaches the image through the page cache's window,
  * where a copy can fault and the fill sleeps in the disk driver. Without the
@@ -97,7 +98,7 @@ static void at_image(void)
         return;
     }
     reached++;
-    if (mount.ns_depth <= 0 || mount.ns_holder != (int)current_proc->pid) {
+    if (mount.ns.depth <= 0 || mount.ns.holder != (int)current_proc->pid) {
         unlocked++;
     }
 }
@@ -138,7 +139,7 @@ void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
     (void)from;
     (void)to;
     repoints++;
-    check_op(mnt->ns_depth > 0 && mnt->ns_holder == (int)current_proc->pid, "kfs_write",
+    check_op(mnt->ns.depth > 0 && mnt->ns.holder == (int)current_proc->pid, "kfs_write",
              "repoints a moved file's holders under the mount's lock");
 }
 
@@ -183,6 +184,21 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
+}
+
+/** The clock, which the lock reads for its record of holds; these rows
+ * make no disk wait, so no hold is recorded. */
+uint32_t timer_now_us(void)
+{
+    return 0;
+}
+
+/** A panic of the lock, a give by a thread that does not hold it: print
+ * it and exit 2. */
+void k_panic(const char *message)
+{
+    printf("krffs-root-lock: fail: panic: %s\n", message);
+    exit(2);
 }
 
 /**
@@ -236,7 +252,7 @@ static void setup(void)
     writer.pid = 1;
     waiter.pid = 2;
     current_proc = &writer;
-    mount.ns_holder = -1;
+    mount.ns.holder = -1;
 }
 
 /** Watch the image for the operation `op`. */
@@ -252,7 +268,7 @@ static void judge(const char *op)
     under_test = NULL;
     check_op(reached > 0, op, "reaches the image");
     check_op(unlocked == 0, op, "holds the mount's lock wherever it reaches the image");
-    check_op(mount.ns_depth == 0 && mount.ns_holder == -1, op,
+    check_op(mount.ns.depth == 0 && mount.ns.holder == -1, op,
              "leaves the mount's lock free when it returns");
 }
 
@@ -336,7 +352,7 @@ static void line_row(void)
     }
     check_op(ntaken == 2 && taken[0] == 'W' && taken[1] == 'H', "vfs_ns_lock",
              "serves a waiter before a holder that let the lock go and asked again");
-    check_op(mount.ns_depth == 0 && mount.ns_holder == -1, "vfs_ns_lock",
+    check_op(mount.ns.depth == 0 && mount.ns.holder == -1, "vfs_ns_lock",
              "leaves the lock free when both are done");
     line_row_runs = 0;
 }

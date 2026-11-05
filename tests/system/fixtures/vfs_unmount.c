@@ -55,7 +55,7 @@ struct vfs_mount {
     struct vfs_mount *parent;
     void *root, *covered;
     const char *covered_path;
-    int state, refs, inprogress, ns_wq, claim, opens, releases;
+    int state, refs, inprogress, drain_wq, claim, opens, releases;
     uint32_t ns_hidden;
     struct vfs_mount *bind_of;
 };

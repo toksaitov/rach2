@@ -512,9 +512,9 @@ static void batch_stage_pause(void)
         return;
     }
     flush_pause = 0;
-    check(mnt.ns_depth > 0 && mnt.ns_holder == (int)current_proc->pid,
+    check(mnt.ns.depth > 0 && mnt.ns.holder == (int)current_proc->pid,
           "a draining generation retains mount ownership across I/O");
-    if (mnt.ns_depth == 0 || mnt.ns_holder != (int)current_proc->pid) {
+    if (mnt.ns.depth == 0 || mnt.ns.holder != (int)current_proc->pid) {
         return;
     }
     namespace_ready = batch_stage_waiters;

@@ -130,7 +130,7 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
  */
 void vfs_repoint(struct vfs_mount *mnt, const void *from, void *to)
 {
-    check(depth > 0 || mnt->ns_depth > 0, "relocation holds mount lock");
+    check(depth > 0 || mnt->ns.depth > 0, "relocation holds mount lock");
     fd_ofd_repoint(mnt, from, to);
 }
 

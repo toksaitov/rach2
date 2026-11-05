@@ -146,16 +146,16 @@ int fat_walk_marked(uint32_t block)
 /** Take the namespace lock for the test's process, recursively. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
-    mnt->ns_holder = (int)process.pid;
-    mnt->ns_depth++;
+    mnt->ns.holder = (int)process.pid;
+    mnt->ns.depth++;
 }
 
 /** Release one level of the namespace lock; a release with none held fails. */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
-    check(mnt->ns_depth > 0, "namespace lock is balanced");
-    if (--mnt->ns_depth == 0) {
-        mnt->ns_holder = -1;
+    check(mnt->ns.depth > 0, "namespace lock is balanced");
+    if (--mnt->ns.depth == 0) {
+        mnt->ns.holder = -1;
     }
 }
 

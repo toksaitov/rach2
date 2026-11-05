@@ -35,9 +35,9 @@ ifeq ($(OS),Windows_NT)
 endif
 -include $(HOST_FIXTURE_PREFIX)/chown-sources/00-chown_plan.o.d
 
-$(HOST_FIXTURE_PREFIX)/krffs_open-sources/vfs_open.inc: rach2/sys/fs/vfs.c $(HOST_EXTRACT)
+$(HOST_FIXTURE_PREFIX)/krffs_open-sources/vfs_open.inc: rach2/sys/fs/vfs.c rach2/sys/fs/sleeplock.c $(HOST_EXTRACT)
 	@mkdir -p $(@D)
-	$(HOST_EXTRACT) $@ -f rach2/sys/fs/vfs.c vfs_mount_gone mount_base mount_rdonly vfs_ref_hold vfs_ref_put vfs_enter vfs_leave ns_my_turn vfs_ns_lock vfs_ns_unlock in_groups may_search toward_cwd mount_covering path_last mount_named_at mount_named named_in_rest climbs node_put walk_lock walk_unlock vfs_walk_unlock ref_move_node walk_move walk_cross walk_root root_current dotdot_stays walk_leaf walk_pages walk_splice walk_link walk_last_comp walk_is_link walk_rest_len walk_name_root walk_name_add walk_name_text walk_name_end 'struct walk_record' walk_record_entry walk_record_clear walk_record_move walk_release walk_finish resolve_path vfs_resolve_entry vfs_resolve vfs_ref_release vfs_desc_open vfs_desc_close vfs_getattr vfs_open_node vfs_release vfs_truncate vfs_create
+	$(HOST_EXTRACT) $@ -f rach2/sys/fs/sleeplock.c 'struct sleep_turn' sleep_caller sleep_my_turn sleep_lock_take sleep_record_hold sleep_lock_give sleep_lock_held -f rach2/sys/fs/vfs.c vfs_mount_gone mount_base mount_rdonly vfs_ref_hold vfs_ref_put vfs_enter vfs_leave vfs_ns_lock vfs_ns_unlock in_groups may_search toward_cwd mount_covering path_last mount_named_at mount_named named_in_rest climbs node_put walk_lock walk_unlock vfs_walk_unlock ref_move_node walk_move walk_cross walk_root root_current dotdot_stays walk_leaf walk_pages walk_splice walk_link walk_last_comp walk_is_link walk_rest_len walk_name_root walk_name_add walk_name_text walk_name_end 'struct walk_record' walk_record_entry walk_record_clear walk_record_move walk_release walk_finish resolve_path vfs_resolve_entry vfs_resolve vfs_ref_release vfs_desc_open vfs_desc_close vfs_getattr vfs_open_node vfs_release vfs_truncate vfs_create
 
 $(HOST_FIXTURE_PREFIX)/krffs_open-sources/syscall_open.inc: rach2/sys/syscall_fs.c rach2/sys/syscall_internal.h rach2/sys/syscall_fs.c $(HOST_EXTRACT)
 	@mkdir -p $(@D)
@@ -57,9 +57,9 @@ ifeq ($(OS),Windows_NT)
 endif
 -include $(HOST_FIXTURE_PREFIX)/krffs_open-sources/00-krffs_open.o.d $(HOST_FIXTURE_PREFIX)/krffs_open-sources/01-fd.o.d $(HOST_FIXTURE_PREFIX)/krffs_open-sources/02-vfs_name_none.o.d $(HOST_FIXTURE_PREFIX)/krffs_open-sources/03-kstring.o.d $(HOST_FIXTURE_PREFIX)/krffs_open-sources/04-kctypes.o.d $(HOST_FIXTURE_PREFIX)/krffs_open-sources/05-krffs_open_threads.o.d
 
-$(HOST_FIXTURE_PREFIX)/krffs_root_lock-sources/kfs_data.inc: rach2/sys/fs/vfs.c $(HOST_EXTRACT)
+$(HOST_FIXTURE_PREFIX)/krffs_root_lock-sources/kfs_data.inc: rach2/sys/fs/vfs.c rach2/sys/fs/sleeplock.c $(HOST_EXTRACT)
 	@mkdir -p $(@D)
-	$(HOST_EXTRACT) $@ -f rach2/sys/fs/vfs.c 'struct ns_turn' mount_base ns_my_turn vfs_ns_lock vfs_ns_unlock kfs_read_locked kfs_write_locked kfs_truncate_locked kfs_fsync_locked kfs_readdir_locked kfs_read kfs_write kfs_truncate kfs_fsync kfs_readdir
+	$(HOST_EXTRACT) $@ -f rach2/sys/fs/sleeplock.c 'struct sleep_turn' sleep_caller sleep_my_turn sleep_lock_take sleep_record_hold sleep_lock_give sleep_lock_held -f rach2/sys/fs/vfs.c mount_base vfs_ns_lock vfs_ns_unlock kfs_read_locked kfs_write_locked kfs_truncate_locked kfs_fsync_locked kfs_readdir_locked kfs_read kfs_write kfs_truncate kfs_fsync kfs_readdir
 
 $(HOST_FIXTURE_PREFIX)/krffs_root_lock: tests/host/fixtures/krffs_root_lock.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c tests/host/fixtures/krffs_open_threads.c $(HOST_FIXTURE_PREFIX)/krffs_root_lock-sources/kfs_data.inc $(HOST_EXTRACT) rach2/sys/fs/vfs.c $(HOST_KERNEL_FIXTURE_INPUTS)
 	@mkdir -p $(HOST_FIXTURE_PREFIX)/krffs_root_lock-sources

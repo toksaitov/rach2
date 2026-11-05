@@ -130,14 +130,14 @@ void vfs_device_failed(block_device_t *dev, uint64_t lba, int rc)
 /** Take the mount's namespace lock for the current process, recursively. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
-    mnt->ns_holder = (int)current_proc->pid;
-    mnt->ns_depth++;
+    mnt->ns.holder = (int)current_proc->pid;
+    mnt->ns.depth++;
 }
 /** Let go of one level of the mount's namespace lock. */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
-    if (--mnt->ns_depth == 0) {
-        mnt->ns_holder = -1;
+    if (--mnt->ns.depth == 0) {
+        mnt->ns.holder = -1;
     }
 }
 
@@ -313,7 +313,7 @@ static int mount_image(uint32_t flags, const char *options)
     mnt.type = &vfs_exfat_type;
     mnt.dev = &dev;
     mnt.flags = flags;
-    mnt.ns_holder = -1;
+    mnt.ns.holder = -1;
     return vfs_exfat_type.mount(&mnt, &dev, flags, options);
 }
 
@@ -845,7 +845,7 @@ static int mount_rw(void)
     mnt.type = &vfs_exfat_type;
     mnt.dev = &dev;
     mnt.flags = 0;
-    mnt.ns_holder = -1;
+    mnt.ns.holder = -1;
     if (vfs_exfat_type.mount(&mnt, &dev, 0, "") != 0) {
         return -1;
     }

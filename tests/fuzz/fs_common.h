@@ -77,18 +77,18 @@ void vfs_device_failed(block_device_t *d, uint64_t lba, int rc)
 /** Take the namespace lock of `mnt` for the current process, once more. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
-    mnt->ns_holder = (int)current_proc->pid;
-    mnt->ns_depth++;
+    mnt->ns.holder = (int)current_proc->pid;
+    mnt->ns.depth++;
 }
 
 /** Release one level of the namespace lock of `mnt`. */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
-    if (mnt->ns_depth > 0) {
-        mnt->ns_depth--;
+    if (mnt->ns.depth > 0) {
+        mnt->ns.depth--;
     }
-    if (mnt->ns_depth == 0) {
-        mnt->ns_holder = -1;
+    if (mnt->ns.depth == 0) {
+        mnt->ns.holder = -1;
     }
 }
 
@@ -164,7 +164,7 @@ static void fs_exercise(const struct vfs_type *type)
     __builtin_memset(&mnt, 0, sizeof(mnt));
     mnt.type = type;
     mnt.dev = &fs_dev;
-    mnt.ns_holder = -1;
+    mnt.ns.holder = -1;
     fs_dev.sector_size = 512;
     fs_dev.sector_count = fs_image_bytes / 512;
     (void)bcache_invalidate(&fs_dev);

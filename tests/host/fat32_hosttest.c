@@ -255,7 +255,7 @@ static int mount_image(const char *options)
     mnt.type = &vfs_vfat_type;
     mnt.dev = &dev;
     mnt.flags = VFS_MS_RDONLY;
-    mnt.ns_holder = -1;
+    mnt.ns.holder = -1;
     rc = vfs_vfat_type.mount(&mnt, &dev, VFS_MS_RDONLY, options);
     if (rc == 0) {
         vfs_ns_lock(&mnt);
@@ -833,7 +833,7 @@ static int mount_rw(const char *options)
     mnt.type = &vfs_vfat_type;
     mnt.dev = &dev;
     mnt.flags = 0;
-    mnt.ns_holder = -1;
+    mnt.ns.holder = -1;
     rc = vfs_vfat_type.mount(&mnt, &dev, 0, options);
     if (rc == 0) {
         vfs_ns_lock(&mnt);
@@ -1833,7 +1833,7 @@ static void interleaved_rows(void)
     __builtin_memset(&mnt_b, 0, sizeof(mnt_b));
     mnt_b.type = &vfs_vfat_type;
     mnt_b.dev = &dev_b;
-    mnt_b.ns_holder = -1;
+    mnt_b.ns.holder = -1;
     check(vfs_vfat_type.mount(&mnt_b, &dev_b, 0, "") == 0, "and a second on a device of its own");
     vfs_ns_lock(&mnt_b);
     interleaved = 0;
@@ -2526,16 +2526,16 @@ static int ns_locked;
  */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
-    mnt->ns_holder = (int)current_proc->pid;
-    mnt->ns_depth++;
+    mnt->ns.holder = (int)current_proc->pid;
+    mnt->ns.depth++;
     ns_locked++;
 }
 
 /** Release one level of the namespace lock. */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
-    if (--mnt->ns_depth == 0) {
-        mnt->ns_holder = -1;
+    if (--mnt->ns.depth == 0) {
+        mnt->ns.holder = -1;
     }
     ns_locked--;
 }

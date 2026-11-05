@@ -2,7 +2,8 @@
  * Open mounted KRFFS at the flush that publishes a relocated node.
  *
  * The rule of mk/host-fixtures.mk extracts complete resolver and open
- * functions unchanged.
+ * functions unchanged, with the namespace lock and the sleeping lock of
+ * fs/sleeplock.c under it.
  * The block model and allocator are shared with krffsmount_hosttest.c.
  * Host threads switch only at the publication flush and namespace-lock wait.
  */
@@ -31,11 +32,6 @@ static struct fs_struct dirs;
 static int opened_fd, publication_seen, lock_waits, opening_flags, before_publication;
 
 #define VFS_IS_DIR(mode) (((mode) & 0170000u) == 0040000u)
-/* A waiter's place in the line for the namespace lock, as fs/vfs.c has it. */
-struct ns_turn {
-    struct vfs_mount *mnt;
-    uint32_t place;
-};
 
 /** Print `message` and exit 2: a lock or reference invariant of the kernel
  * code failed. */
@@ -43,6 +39,13 @@ void k_panic(const char *message)
 {
     printf("krffs-open: panic: %s\n", message);
     exit(2);
+}
+
+/** The clock, which the lock reads for its record of holds; these rows
+ * make no disk wait, so no hold is recorded. */
+uint32_t timer_now_us(void)
+{
+    return 0;
 }
 
 /** No device is removed in these rows. */
@@ -412,7 +415,7 @@ static void publication_open(int flags, int before)
     check(fd_table_init(reader.fds) == 0, "reader descriptor table");
     mount_table[0] = &mount;
     mount.state = VFS_ACTIVE;
-    mount.ns_holder = -1;
+    mount.ns.holder = -1;
     hole = create("hole");
     fd = do_open("hole", 2, 0);
     check(fd >= 0, "open free-extent fixture");
@@ -472,7 +475,7 @@ static void publication_open(int flags, int before)
     fd_free(reader.fds, opened_fd);
     fd_table_free(reader.fds);
     teardown();
-    check(mount.refs == 0 && mount.inprogress == 0 && mount.ns_depth == 0,
+    check(mount.refs == 0 && mount.inprogress == 0 && mount.ns.depth == 0,
           "open releases every mount reference and lock");
 }
 
@@ -491,24 +494,24 @@ static void locked_walks(void)
     writer.fs = &dirs;
     mount_table[0] = &mount;
     mount.state = VFS_ACTIVE;
-    mount.ns_holder = -1;
+    mount.ns.holder = -1;
     fd = do_open("created", 2 | O_CREAT | O_EXCL, 0644);
-    check(fd >= 0 && mount.ns_depth == 0 && mount.inprogress == 0,
+    check(fd >= 0 && mount.ns.depth == 0 && mount.inprogress == 0,
           "creating open registers and releases lock");
     if (fd >= 0) {
         fd_free(writer.fds, fd);
     }
-    check(do_open("created", O_CREAT | O_EXCL, 0644) == -EEXIST && mount.ns_depth == 0,
+    check(do_open("created", O_CREAT | O_EXCL, 0644) == -EEXIST && mount.ns.depth == 0,
           "exclusive open error releases lock");
-    check(do_open("created", O_DIRECTORY, 0) == -ENOTDIR && mount.ns_depth == 0,
+    check(do_open("created", O_DIRECTORY, 0) == -ENOTDIR && mount.ns.depth == 0,
           "directory open error releases lock");
-    check(do_open("absent", 0, 0) == -ENOENT && mount.ns_depth == 0, "missing path releases lock");
-    check(do_open("created/child", 0, 0) == -ENOTDIR && mount.ns_depth == 0,
+    check(do_open("absent", 0, 0) == -ENOENT && mount.ns.depth == 0, "missing path releases lock");
+    check(do_open("created/child", 0, 0) == -ENOTDIR && mount.ns.depth == 0,
           "non-directory prefix releases lock");
     mount.flags |= VFS_MS_RDONLY;
-    check(do_open("created", 2, 0) == -EROFS && mount.ns_depth == 0,
+    check(do_open("created", 2, 0) == -EROFS && mount.ns.depth == 0,
           "read-only open error releases lock");
-    check(do_open("absent", O_CREAT, 0644) == -EROFS && mount.ns_depth == 0,
+    check(do_open("absent", O_CREAT, 0644) == -EROFS && mount.ns.depth == 0,
           "read-only creation error releases lock");
     mount.flags = 0;
     vfs_ns_lock(&mount);
@@ -521,21 +524,21 @@ static void locked_walks(void)
     mount_table[1] = &child;
     mount_slots = 2;
     check(vfs_resolve(NULL, "covered/created", VFS_WALK_LOCK, &ref, NULL, 0) == 0 &&
-              ref.mnt == &child && child.ns_depth == 1 && mount.ns_depth == 0,
+              ref.mnt == &child && child.ns.depth == 1 && mount.ns.depth == 0,
           "covered mount receives the resolution lock");
     vfs_ns_unlock(ref.mnt);
     vfs_ref_release(&ref);
     check(vfs_resolve(NULL, "covered/../created", VFS_WALK_LOCK, &ref, NULL, 0) == 0 &&
-              ref.mnt == &mount && mount.ns_depth == 1 && child.ns_depth == 0,
+              ref.mnt == &mount && mount.ns.depth == 1 && child.ns.depth == 0,
           "parent climb transfers the resolution lock");
     vfs_ns_unlock(ref.mnt);
     vfs_ref_release(&ref);
     check(vfs_resolve(NULL, "covered/absent", VFS_WALK_LOCK, &ref, NULL, 0) == -ENOENT &&
-              mount.ns_depth == 0 && child.ns_depth == 0 && child.inprogress == 0,
+              mount.ns.depth == 0 && child.ns.depth == 0 && child.inprogress == 0,
           "failed walk releases the child mount lock and reference");
     mount_slots = 1;
     teardown();
-    check(mount.inprogress == 0 && mount.ns_depth == 0, "failed opens release all references");
+    check(mount.inprogress == 0 && mount.ns.depth == 0, "failed opens release all references");
 }
 
 /** Run the opens at relocation publication, then the locked walks once
