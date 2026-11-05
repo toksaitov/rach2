@@ -378,6 +378,13 @@ void dcache_forget_mount(struct vfs_mount *mnt)
     }
 }
 
+void dcache_drain(void)
+{
+    if (pending) {
+        drain();
+    }
+}
+
 void dcache_counts(struct dcache_counts *c)
 {
     c->hits = hits;

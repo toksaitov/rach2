@@ -338,6 +338,11 @@ struct vfs_mount {
     /* The namespace lock (`vfs_ns_lock`), and the queue on which an
      * unmount waits for `inprogress` to drain. */
     struct sleep_lock ns;
+    /* On a type that sets `file_locked`, the lock a rename between two
+     * directories takes before either directory's (`vfs_rename_lock`), so
+     * that no other such rename changes which is above the other while it
+     * asks. A bind's is its base's. */
+    struct sleep_lock rename;
     wait_queue_t drain_wq;
     void *root; /* the mount's root node, held for the mount's life */
     void *priv;
@@ -585,6 +590,89 @@ int vfs_ns_held_other(const struct vfs_mount *mnt);
 void vfs_ns_lock(struct vfs_mount *mnt);
 /** Release one taking of the lock; the last one lets the next waiter in. */
 void vfs_ns_unlock(struct vfs_mount *mnt);
+
+/**
+ * Whether `mnt`, or the file system a bind shows, locks each file on its own
+ * (`vfs_type.file_locked`): 1 or 0.
+ */
+int vfs_file_locked(const struct vfs_mount *mnt);
+
+/**
+ * Take the lock that covers a change to the node `ref`: the node's own on a
+ * type that sets `file_locked`, through the type's `lock_node`, and the
+ * mount's namespace lock on any other. A NULL node is the mount's root.
+ * The holder may take it again. Sleeps until the lock is free; a signal
+ * does not end the wait.
+ *
+ * Node locks go in this order: a mount's rename lock, then directories,
+ * an ancestor before what is below it and unrelated ones by inode number,
+ * then the other nodes by inode number. A walk holds none while it looks
+ * names up, so a caller that checked something before it took the lock of
+ * a directory checks it again under the lock.
+ */
+void vfs_node_lock(const struct vfs_ref *ref);
+/** Give back one take of the lock `vfs_node_lock` took for `ref`. */
+void vfs_node_unlock(const struct vfs_ref *ref);
+
+/**
+ * Hold and lock the node named `name` in the directory `dir`, whose lock
+ * (`vfs_node_lock`) the caller holds, into `child`, on a type that sets
+ * `file_locked`, so that a check of the node's owner or flags and the change
+ * it allows see one node. 0 with `child->node` NULL on any other type and
+ * for a name the directory does not have, 0 with the node held and locked,
+ * or the lookup's error. The caller gives both back with
+ * `vfs_child_unlock`.
+ */
+int vfs_child_lock(const struct vfs_ref *dir, const char *name, struct vfs_ref *child);
+/** Unlock and put what `vfs_child_lock` gave `child`, if anything, and
+ * leave `child->node` NULL. */
+void vfs_child_unlock(struct vfs_ref *child);
+
+/*
+ * The locks a rename holds (`vfs_rename_lock`): its directories' and the
+ * nodes its names have. A node is NULL for none.
+ */
+struct vfs_rename_hold {
+    struct vfs_mount *renaming; /* the mount whose rename lock is held, or NULL */
+    struct vfs_ref dir[2];      /* the directories, in the order locked */
+    struct vfs_ref child[2];    /* the nodes of the names, in the order locked */
+};
+
+/**
+ * Lock for a rename of `oleaf` in the directory `opar` to `nleaf` in `npar`,
+ * both on one mount, which the caller walked to with nothing held, into
+ * `h`. On a type without `file_locked` this is the mount's namespace lock.
+ *
+ * On one with it, two directories take the mount's rename lock first and
+ * find which is above the other by walking up from each through `..`, then
+ * lock the one above first, or the lower inode number first when neither
+ * is; then the nodes of both names, by inode number, each once. A node of a
+ * name that is a directory above the other directory is left unlocked,
+ * since the rename is refused (EINVAL for the source, ENOTEMPTY for the
+ * target) and its lock would come after a directory below it. A name that
+ * changed while the locks were taken starts the order again. Returns 0 with
+ * the locks held, or the walk's error with none. The caller looks both
+ * names up again under the locks and gives them back with
+ * `vfs_rename_unlock`.
+ */
+int vfs_rename_lock(const struct vfs_ref *opar, const char *oleaf, const struct vfs_ref *npar,
+                    const char *nleaf, struct vfs_rename_hold *h);
+/** Give back what `vfs_rename_lock` took into `h`. */
+void vfs_rename_unlock(struct vfs_rename_hold *h);
+
+/** Make the rename lock of `m` a free one, of the kind `rename`. */
+void vfs_rename_lock_init(struct vfs_mount *m);
+
+/**
+ * Take the lock of the directory `tref` that a mount or a bind is about to
+ * cover (`vfs_node_lock`), and answer -ENOENT when, on a type that sets
+ * `file_locked`, the directory lost its last name before the lock was had:
+ * its `rmdir` holds the same lock while it looks for a mount on it, so the
+ * two cannot pass each other. 0 otherwise, and on any other type, where the
+ * parent's namespace lock orders the two. The lock is held either way; the
+ * caller gives it back with `vfs_node_unlock` once the mount is placed.
+ */
+int vfs_cover_lock(const struct vfs_ref *tref);
 
 /**
  * Release what a `VFS_WALK_LOCK` walk took on `mnt`, if anything.

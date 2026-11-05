@@ -207,10 +207,12 @@ void vfs_leave(struct vfs_mount *mnt)
 /* The record of every mount's namespace lock (sleeplock.h). */
 static struct sleep_lock_record mount_lock_record = SLEEP_LOCK_RECORD("mount");
 
-/** Make the namespace lock of `m` a free one, and its drain queue empty. */
+/** Make the namespace and rename locks of `m` free ones, and its drain
+ * queue empty. */
 static void mount_lock_init(struct vfs_mount *m)
 {
     sleep_lock_init(&m->ns, &mount_lock_record, 0);
+    vfs_rename_lock_init(m);
     wait_queue_init(&m->drain_wq);
 }
 
@@ -3615,7 +3617,9 @@ static int covered_already(const struct vfs_ref *tref)
  * `parent`, recorded at `canon` and from `source`, with `flags`, mounting
  * and seen in the caller's mount namespace: the parts every mount has.
  * It counts on its parent and keeps the covered node's hold, which the
- * caller has taken. NULL when no slot can be had. Under the parent's lock.
+ * caller has taken. NULL when no slot can be had. Under the covered node's
+ * lock (`vfs_node_lock`), the parent's namespace lock on a type without
+ * `file_locked`.
  */
 static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
                                      const struct vfs_type *t, const char *canon,
@@ -3646,7 +3650,10 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
 
 /**
  * The covered check and the reservation of the slot are made under the
- * parent's namespace lock, so that no namespace change runs between them.
+ * covered directory's lock (`vfs_node_lock`), so that no namespace change
+ * there runs between them: the parent's namespace lock, or on a type that
+ * sets `file_locked` the directory's own, under which its `rmdir` looks for
+ * a mount on it and a mount looks for its removal (`vfs_cover_lock`).
  * The slot is taken before the constructor runs, because the constructor
  * may sleep on the device and another process could remove or rename the
  * target meanwhile: the slot keeps the covered node's hold, which the walk
@@ -3700,28 +3707,31 @@ int vfs_do_mount(const char *source, const char *target, const char *type, uint3
     if (rc != 0) {
         return rc;
     }
-    vfs_ns_lock(tref.mnt);
-    if (covered_already(&tref)) {
-        vfs_ns_unlock(tref.mnt);
+    rc = vfs_cover_lock(&tref);
+    if (rc == 0 && covered_already(&tref)) {
+        rc = -EBUSY;
+    }
+    if (rc != 0) {
+        vfs_node_unlock(&tref);
         vfs_ref_release(&tref);
-        return -EBUSY;
+        return rc;
     }
     rc = mount_source(t, source, &dev, &flags, &claim);
     if (rc != 0) {
-        vfs_ns_unlock(tref.mnt);
+        vfs_node_unlock(&tref);
         vfs_ref_release(&tref);
         return rc;
     }
     m = mount_place(tref.mnt, tref.node, t, canon, source, flags);
     if (!m) {
         devfs_release_claim(claim);
-        vfs_ns_unlock(tref.mnt);
+        vfs_node_unlock(&tref);
         vfs_ref_release(&tref);
         return -ENOMEM;
     }
     m->dev = dev;
     m->claim = claim;
-    vfs_ns_unlock(tref.mnt);
+    vfs_node_unlock(&tref);
     vfs_leave(tref.mnt);
 
     vfs_ns_lock(m);
@@ -3849,14 +3859,17 @@ static void bind_fill(struct vfs_mount *m, struct vfs_mount *from, void *root, c
  * A bind of the mount `c` under `parent`, a bind already, at `canon`: its
  * covered node and root held again for the new record, which shows what `c`
  * shows. NULL when no slot can be had. The caller holds no lock; this takes
- * `parent`'s around the placing.
+ * the covered node's (`vfs_node_lock`) around the placing.
  */
 static struct vfs_mount *bind_child(struct vfs_mount *c, struct vfs_mount *parent,
                                     const char *canon)
 {
+    struct vfs_ref cov;
     struct vfs_mount *b;
 
-    vfs_ns_lock(parent);
+    cov.mnt = parent;
+    cov.node = c->covered;
+    vfs_node_lock(&cov);
     b = mount_place(parent, c->covered, c->type, canon, mount_base(c)->source, c->flags);
     if (b) {
         if (c->covered && c->parent->type->ops->hold) {
@@ -3868,7 +3881,7 @@ static struct vfs_mount *bind_child(struct vfs_mount *c, struct vfs_mount *paren
         bind_fill(b, c, c->root, c->bind_of ? c->bind_root : "/");
         b->state = VFS_ACTIVE;
     }
-    vfs_ns_unlock(parent);
+    vfs_node_unlock(&cov);
     return b;
 }
 
@@ -3960,7 +3973,7 @@ static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *tar
 {
     struct vfs_mount *m;
     char full[VFS_COVERED_PATH_MAX], inner[VFS_COVERED_PATH_MAX], canon[VFS_COVERED_PATH_MAX];
-    int dir = 1, nameless = 0, busy;
+    int dir = 1, nameless = 0, busy, gone;
     int rc;
 
     rc = bind_source(sref, full, inner, sreal, &dir);
@@ -3973,18 +3986,19 @@ static int bind_refs(struct vfs_ref *sref, struct vfs_ref *tref, const char *tar
         vfs_ref_release(sref);
         return rc;
     }
-    vfs_ns_lock(tref->mnt);
+    gone = vfs_cover_lock(tref);
     busy = nameless ? mount_named(tref->mnt, tref->mnt->root, path_last(canon)) != 0
                     : covered_already(tref);
-    m = busy ? NULL
-             : mount_place(tref->mnt, nameless ? NULL : tref->node, sref->mnt->type, canon,
-                           vfs_mount_base(sref->mnt)->source, sref->mnt->flags);
-    rc = m ? 0 : busy ? -EBUSY : -ENOMEM;
+    gone = nameless ? 0 : gone;
+    m = busy || gone ? NULL
+                     : mount_place(tref->mnt, nameless ? NULL : tref->node, sref->mnt->type, canon,
+                                   vfs_mount_base(sref->mnt)->source, sref->mnt->flags);
+    rc = m ? 0 : busy ? -EBUSY : gone ? gone : -ENOMEM;
     if (m) {
         bind_fill(m, sref->mnt, sref->node, inner);
         m->state = VFS_ACTIVE;
     }
-    vfs_ns_unlock(tref->mnt);
+    vfs_node_unlock(tref);
     if (rc != 0) {
         vfs_ref_release(tref);
         vfs_ref_release(sref);

@@ -75,6 +75,11 @@ void dcache_forget_dir(struct vfs_mount *mnt, void *key);
  * sleep. */
 void dcache_forget_mount(struct vfs_mount *mnt);
 
+/** Put the entries given back while their caller held a lock that kept
+ * their puts for later, as far as the caller's own locks let it; the VFS
+ * calls it when a caller gives back its last file lock. May sleep. */
+void dcache_drain(void);
+
 /** The counters, into `c`. */
 void dcache_counts(struct dcache_counts *c);
 
