@@ -287,13 +287,11 @@ struct ext2_mount {
     /* Nodes whose final put was left for `em_reap`, linked by `reap_next`;
      * each keeps a hold on the mount. */
     struct ext2_node *reap;
-    /* Writers admitted by `em_enter` and not yet gone, and nonzero while a
-     * remount keeps new ones out. */
-    uint32_t writers;
-    int closing;
+    uint32_t writers; /* admitted by `em_enter` and not yet gone */
+    int closing;      /* nonzero while a remount keeps new writers out */
 };
 
-/* The kinds of ext2's locks, as /proc/fs/lockwait lists them. */
+/* The kinds of ext2's locks, as `sleep_lock_records` lists them. */
 static struct sleep_lock_record node_record = SLEEP_LOCK_RECORD("ext2 node");
 static struct sleep_lock_record meta_record = SLEEP_LOCK_RECORD("ext2 meta");
 static struct sleep_lock_record rename_record = SLEEP_LOCK_RECORD("ext2 rename");
