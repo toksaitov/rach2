@@ -53,8 +53,11 @@
 #include "../../rach2/sys/rfkill.h"
 #include "../../rach2/sys/fs/fd.h"
 #include "../../rach2/sys/lib/kirq.h"
+#include <stdarg.h>
 
 extern int printf(const char *format, ...);
+extern int strcmp(const char *a, const char *b);
+extern int vsnprintf(char *str, __SIZE_TYPE__ size, const char *format, va_list ap);
 
 static unsigned failures;
 #define CHECK(x)                                                                 \
@@ -135,11 +138,18 @@ int kcmdline_value(const char *key, char *out, unsigned int cap)
     return 0;
 }
 
+static char logged[256]; /* the last log line, without its subsystem */
+
+/** Keep the last log line, which a row may check. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
+    va_list ap;
+
     (void)level;
     (void)subsystem;
-    (void)format;
+    va_start(ap, format);
+    vsnprintf(logged, sizeof(logged), format, ap);
+    va_end(ap);
 }
 
 /** The worker thread's part: run what is due until nothing is left. */
@@ -885,8 +895,9 @@ static void check_null(const uint8_t *f, unsigned len)
 /** Idle: thirty seconds after the AP was last heard the station polls it
  * with a null frame, whose ACK ends the poll, as mac80211 does on a radio
  * that reports ACKs; beacons that stop for seventeen intervals, 1740 ms,
- * bring another.
- * The station dump's counters count both frames and the beacon loss. */
+ * bring another, and so does the AP that answers it but sends no beacon.
+ * The station dump's counters count the frames and the beacon losses, and
+ * each loss logs the last beacon's age, which the ACK does not reset. */
 static void row_idle(void)
 {
     uint8_t f[IEEE80211_MAX_FRAME_LEN];
@@ -908,11 +919,23 @@ static void row_idle(void)
     CHECK(drain() == 0);
     now += 1;
     run_worker();
+    CHECK(!strcmp(logged, "wlan0: beacon loss: 02:aa:bb:cc:dd:01: beacon 1740 ms ago, heard "
+                          "21740 ms ago, signal -40 dBm, retries 0, failed 0, losses 1"));
     len = take(f);
     check_null(f, len);
     run_worker();
     CHECK(drain() == 0 && wlan->state == WLAN_STA_AUTHORIZED);
     CHECK(c->tx_packets == packets + 2 && c->tx_failed == 0 && c->missed_beacons == 1);
+
+    now += 1740;
+    run_worker();
+    CHECK(!strcmp(logged, "wlan0: beacon loss: 02:aa:bb:cc:dd:01: beacon 3480 ms ago, heard "
+                          "1740 ms ago, signal -40 dBm, retries 0, failed 0, losses 2"));
+    len = take(f);
+    check_null(f, len);
+    run_worker();
+    CHECK(drain() == 0 && wlan->state == WLAN_STA_AUTHORIZED);
+    CHECK(c->tx_packets == packets + 3 && c->missed_beacons == 2);
     CHECK(beacons_for(100) == 0);
 }
 

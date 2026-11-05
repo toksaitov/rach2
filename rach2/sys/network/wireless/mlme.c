@@ -664,7 +664,7 @@ static int assoc_success(struct wlan_mlme *m, const uint8_t *f, const struct iee
     err = set_state(m, WLAN_STA_ASSOCIATED);
     if (err)
         return err;
-    m->last_beacon = m->polled = tick_count();
+    m->last_beacon = m->polled = m->beacon_at = tick_count();
     m->probes = 0;
     m->poll_cookie = 0;
     m->missed_beacons = 0;
@@ -935,6 +935,8 @@ static void monitor_timeout(struct wlan_mlme *m)
             m->missed_beacons++;
             if (m->beacon_losses)
                 ++*m->beacon_losses;
+            if (m->ops->beacon_loss)
+                m->ops->beacon_loss(m->wlan, (unsigned)(now - m->beacon_at));
         }
     }
     if (m->probes < (m->ops->poll ? WLAN_MLME_POLL_TRIES : WLAN_MLME_PROBE_TRIES)) {
@@ -974,13 +976,15 @@ static void mlme_timeout(struct wlan_mlme *m)
     }
 }
 
-/** Note a beacon or probe response: from the current AP it shows the AP
- * is there, and ends any questions. */
-static void monitor_seen(struct wlan_mlme *m, const uint8_t *f)
+/** Note a beacon or probe response, stype: from the current AP it shows
+ * the AP is there, and ends any questions. */
+static void monitor_seen(struct wlan_mlme *m, const uint8_t *f, unsigned stype)
 {
     if (m->state < WLAN_STA_ASSOCIATED || !from_bss(m, f))
         return;
     m->last_beacon = tick_count();
+    if (stype == IEEE80211_STYPE_BEACON)
+        m->beacon_at = m->last_beacon;
     if (m->probes)
         monitor_answered(m);
 }
@@ -1146,7 +1150,7 @@ int wlan_mlme_rx(struct wlan_mlme *m, const uint8_t *f, unsigned len, unsigned f
         return 0;
     stype = fc & IEEE80211_FCTL_STYPE;
     if (stype == IEEE80211_STYPE_BEACON || stype == IEEE80211_STYPE_PROBE_RESP) {
-        monitor_seen(m, f);
+        monitor_seen(m, f, stype);
         csa_beacon(m, f, len, stype);
         return 0;
     }
