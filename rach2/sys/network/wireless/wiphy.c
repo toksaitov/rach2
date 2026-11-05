@@ -161,15 +161,20 @@ static void wlan_request_unlink(struct wlan *wlan, struct wlan_request *req)
 /**
  * Start the radio as its interface comes up, and leave the network and stop
  * it as the interface goes down, as cfg80211 does on dev_open and dev_close.
- * A radio blocked by rfkill lets the interface come up and starts once the
- * block lifts. A worker that failed to start is made again first: without
- * one the interface stays down with -ENOMEM, and the way down stops the
- * radio itself instead of waiting. Process context without net_lock; the
- * driver's start may sleep, and the way down waits for the worker. Returns
- * 0, -ENOMEM, the driver's error from its start, or -ENODEV when the radio
- * was removed meanwhile, in which case nothing of it may be touched: removal
- * waits for the worker to run the way down and for the start to return, but
- * not for the caller.
+ * The switch's blocks refuse the way up with -ERFKILL, as Linux's do, also
+ * when one is set while the driver's start sleeps. A release whose block the
+ * worker has not yet cleared lets the interface up, and the worker starts
+ * the radio as it clears the block, so that an up which follows the
+ * release's CHANGE event at once is not lost. A worker that failed to start
+ * is made again first: without one the interface stays down with -ENOMEM.
+ * The way down stops the radio itself, instead of waiting, when there is no
+ * worker or the block is applied: the block has left the network already,
+ * and its worker closes the interface through here. Process context without
+ * net_lock; the driver's start may sleep, and the way down may wait for the
+ * worker. Returns 0, -ENOMEM, -ERFKILL, the driver's error from its start,
+ * or -ENODEV when the radio was removed meanwhile, in which case nothing of
+ * it may be touched: removal waits for the worker to run the way down and
+ * for the start to return, but not for the caller.
  */
 static int wireless_set_up(void *dev, int up)
 {
@@ -179,6 +184,8 @@ static int wireless_set_up(void *dev, int up)
 
     if (wlan->removing)
         return 0;
+    if (up && (wlan->soft_blocked || wlan->hw_blocked))
+        return -ERFKILL;
     worker = wlan_work_start() == 0;
     if (up && !worker)
         return -ENOMEM;
@@ -197,7 +204,11 @@ static int wireless_set_up(void *dev, int up)
             wq_wake_all(&request_wq);
             return -ENODEV;
         }
-    } else if (worker && wlan_queue_work(&req.work, 0) == 0) {
+        if (rc == 0 && (wlan->soft_blocked || wlan->hw_blocked)) {
+            wlan_stop(wlan);
+            rc = -ERFKILL;
+        }
+    } else if (worker && !wlan->blocked && wlan_queue_work(&req.work, 0) == 0) {
         (void)wq_wait_event_nointr(&request_wq, wlan_down_done, &req);
         if (req.gone)
             return -ENODEV;
@@ -213,11 +224,17 @@ static const struct netdev_ops wireless_ops = {"wireless",    0, wireless_tx, 0,
                                                wireless_link, 0, 0,           0, wireless_set_up};
 
 /**
- * Apply on the worker the block the switch and the driver ask for. A block
- * aborts a scan, which then reports its abort, and stops the radio,
- * remembering whether it ran or was asked to start; the release starts it
- * again. Loops until the block applied is the one asked for, since either
- * may change while the driver's stop or start sleeps.
+ * Apply on the worker the block the switch and the driver ask for, as
+ * Linux's cfg80211_rfkill_set_block does. A block aborts a scan, which then
+ * reports its abort, has the station leave without a frame, stops the radio
+ * and closes the interface, so that wpa_supplicant sees IFF_UP fall over
+ * rtnetlink and stops scanning; the interface's way down finds the block
+ * applied and stops nothing more, so the worker does not wait for itself.
+ * The release starts the radio only when an up came between the release
+ * and this call; otherwise the interface stays down until wpa_supplicant,
+ * told by the switch's CHANGE event, brings it up. Loops until the block
+ * applied is the one asked for, with the interface down while blocked,
+ * since either may change while the driver's stop or start sleeps.
  */
 static void wlan_rfkill_apply(struct wlan_work *work)
 {
@@ -226,22 +243,24 @@ static void wlan_rfkill_apply(struct wlan_work *work)
 
     for (;;) {
         want = wlan->soft_blocked || wlan->hw_blocked;
-        if (wlan->removing || want == wlan->blocked)
+        if (wlan->removing)
             return;
-        if (want) {
-            resume = wlan->started || wlan->resume;
+        if (want && (!wlan->blocked || wlan->netdev.up)) {
             if (wlan_scan_running(&wlan->scan))
                 (void)wlan_scan_abort(&wlan->scan);
             wlan_sta_leave(wlan, 0);
             wlan_stop(wlan);
             wlan->blocked = 1;
-            wlan->resume = resume;
-        } else {
+            if (netconf_set_up(&wlan->netdev, 0) != 0)
+                return;
+        } else if (!want && wlan->blocked) {
             resume = wlan->resume;
             wlan->blocked = 0;
             wlan->resume = 0;
             if (resume)
                 (void)wlan_start(wlan);
+        } else {
+            return;
         }
     }
 }

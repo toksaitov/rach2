@@ -270,12 +270,19 @@ void wlan_cancel_work(struct wlan_work *work)
     }
 }
 
-/** Run the model worker's queue until it is empty; returns the runs. */
+/** Run the model worker's queue until it is empty; returns the runs. The
+ * worker is one thread, so a record that waits for it from inside it
+ * would wait for ever: that is a failure, and runs nothing. */
 static unsigned run_work(void)
 {
+    static int in_work;
     struct wlan_work *work;
     unsigned ran = 0, i;
 
+    CHECK(!in_work);
+    if (in_work)
+        return 0;
+    in_work = 1;
     while (work_count) {
         work = work_queue[0];
         for (i = 1; i < work_count; ++i)
@@ -285,6 +292,7 @@ static unsigned run_work(void)
         work->run(work);
         ++ran;
     }
+    in_work = 0;
     return ran;
 }
 
@@ -733,9 +741,9 @@ static int shows(int index, int attr, const char *text)
     return len == (int)k_strlen(text) && memcmp(out, text, (unsigned long)len) == 0;
 }
 
-/** The radio's switch: a soft block stops it and its release starts it, a
- * hard block the driver reports does the same, and a radio stopped or
- * never started stays down when the block lifts. */
+/** The radio's switch: a soft block stops it on the worker, a hard block
+ * the driver reports does the same, a start refused while blocked happens
+ * when the block lifts, and a radio stopped stays down. */
 static void blocking(void)
 {
     struct wlan_radio radio;
@@ -795,6 +803,68 @@ static void blocking(void)
 static void call_set_up(void)
 {
     call_rc = netconf_set_up(call_nd, call_up);
+}
+
+/** A block closes the interface on the worker, which does not wait for
+ * itself, and refuses to bring it up, as Linux does; the release leaves it
+ * down. An up that comes after the release's CHANGE, before the worker has
+ * applied it, starts the radio when the worker does, and a block while the
+ * driver's start sleeps refuses that up. */
+static void closing(void)
+{
+    struct wlan_radio radio;
+    struct wlan *wlan = 0;
+    struct netdev *nd;
+    unsigned before_starts = starts, before_stops = stops;
+    int index;
+
+    setup(&radio, 7);
+    CHECK(wlan_register_radio(&radio, &wlan) == 0 && wlan);
+    if (!wlan)
+        return;
+    nd = &wlan->netdev;
+    index = (int)rfkill_index(wlan->rfkill);
+    CHECK(netconf_set_up(nd, 1) == 0 && nd->up && wlan->started);
+    /* The soft block closes the interface without the way down's wait. */
+    wlan->scan.state = WLAN_SCAN_SOFTWARE;
+    CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "1", 1) == 0 && run_work() == 1);
+    CHECK(!nd->up && !wlan->started && wlan->blocked && wlan->scan.state == WLAN_SCAN_IDLE);
+    CHECK(stops == before_stops + 1 && work_count == 0 && !wlan->busy && !wlan->requests);
+    CHECK(netconf_set_up(nd, 1) == -ERFKILL && !nd->up && !wlan->started);
+    CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "0", 1) == 0 && run_work() == 1);
+    CHECK(!wlan->blocked && !nd->up && !wlan->started && starts == before_starts + 1);
+    CHECK(netconf_set_up(nd, 1) == 0 && nd->up && wlan->started && starts == before_starts + 2);
+    /* So does the hard block, and an up between its release and the
+     * worker starts the radio as the worker clears the block. */
+    wlan_radio_rfkill(&radio, 1);
+    CHECK(run_work() == 1 && !nd->up && !wlan->started && wlan->blocked);
+    CHECK(netconf_set_up(nd, 1) == -ERFKILL && !nd->up);
+    wlan_radio_rfkill(&radio, 0);
+    CHECK(work_count == 1 && wlan->blocked);
+    CHECK(netconf_set_up(nd, 1) == 0 && nd->up && !wlan->started);
+    CHECK(run_work() == 1 && !wlan->blocked && nd->up && wlan->started);
+    CHECK(starts == before_starts + 3 && stops == before_stops + 2);
+    /* A block, its release, an up and a block again before the worker
+     * runs: the interface ends down, and the release starts nothing. */
+    CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "1", 1) == 0 && run_work() == 1);
+    CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "0", 1) == 0);
+    CHECK(netconf_set_up(nd, 1) == 0 && nd->up && !wlan->started);
+    CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "1", 1) == 0 && work_count == 2);
+    CHECK(run_work() == 2 && !nd->up && !wlan->started && wlan->blocked && !wlan->resume);
+    CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "0", 1) == 0 && run_work() == 1);
+    CHECK(!wlan->blocked && !nd->up && !wlan->started && starts == before_starts + 3);
+    /* A block while the driver's start sleeps: the up is refused, and the
+     * radio the start left running is stopped. */
+    call_nd = nd;
+    call_up = 1;
+    park_in_start = 1;
+    CHECK(park_run(call_set_up) == 0 && wlan->busy == 1 && !wlan->started);
+    CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "1", 1) == 0 && run_work() == 1);
+    CHECK(wlan->blocked && park_waiting());
+    CHECK(park_resume() == 1 && call_rc == -ERFKILL && !nd->up && !wlan->started);
+    CHECK(starts == before_starts + 4 && stops == before_stops + 4 && !wlan->busy);
+    wlan_unregister_radio(wlan);
+    CHECK(netdev_count() == 0);
 }
 
 /** Bring an interface up and down, then remove its radio while another
@@ -975,6 +1045,7 @@ int main(void)
 {
     station();
     blocking();
+    closing();
     removal();
     worker_absent();
     conversion();

@@ -6,7 +6,8 @@
  * Open System authentication, association with a control port and its
  * authorization; then an IP datagram goes each way, the AP switches its
  * channel twice and the station follows it, the interface goes down and
- * comes up again, and an rfkill block ends the association.
+ * comes up again, and an rfkill block ends the association and closes the
+ * interface.
  *
  * host-deps: rach2/sys/network/wireless/wiphy.c
  * host-deps: rach2/sys/network/wireless/wlan.c
@@ -152,10 +153,29 @@ void klog(int level, const char *subsystem, const char *format, ...)
     va_end(ap);
 }
 
+/* Whether the model worker is running a record. */
+static int in_worker;
+
+/** Run one due record as the worker thread would; returns whether one ran.
+ * The worker is one thread, so a record that waits for it from inside it
+ * would wait for ever: that is a failure, and runs nothing. */
+static int run_due(void)
+{
+    int ran;
+
+    CHECK(!in_worker);
+    if (in_worker)
+        return 0;
+    in_worker = 1;
+    ran = wlan_work_run_due(now);
+    in_worker = 0;
+    return ran;
+}
+
 /** The worker thread's part: run what is due until nothing is left. */
 static void run_worker(void)
 {
-    while (wlan_work_run_due(now)) {
+    while (run_due()) {
     }
 }
 
@@ -195,7 +215,7 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     (void)wq;
     CHECK(lock_depth == 0);
     while (!cond(arg)) {
-        if (!wlan_work_run_due(now)) {
+        if (!run_due()) {
             CHECK(!"a waited request never ran");
             return 0;
         }
@@ -1034,8 +1054,11 @@ static void row_down(void)
     CHECK(netconf_set_up(iface, 1) == 0 && wlan->started);
 }
 
-/** Joined again, an rfkill block leaves the network without a frame and
- * stops the radio; the release starts it again. */
+/** Joined again, an rfkill block leaves the network without a frame, stops
+ * the radio and closes the interface, from the worker without waiting for
+ * it; the release leaves the interface down, and the radio starts when
+ * wpa_supplicant brings the interface up, at the release's CHANGE event,
+ * before the worker has cleared the block. */
 static void row_rfkill(void)
 {
     static const uint8_t auth_ok[6] = {0, 0, 2, 0, 0, 0};
@@ -1059,10 +1082,12 @@ static void row_rfkill(void)
     n_events = 0;
     CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "1", 1) == 0);
     run_worker();
-    CHECK(wlan->blocked && !wlan->started && wlan->state == WLAN_STA_NONE);
+    CHECK(wlan->blocked && !wlan->started && wlan->state == WLAN_STA_NONE && !iface->up);
     CHECK(find_event(GROUP_MLME, NL80211_CMD_DEAUTHENTICATE) != 0);
     CHECK(drain() == 0);
+    CHECK(netconf_set_up(iface, 1) == -ERFKILL && !iface->up);
     CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "0", 1) == 0);
+    CHECK(netconf_set_up(iface, 1) == 0 && iface->up && !wlan->started);
     run_worker();
     CHECK(!wlan->blocked && wlan->started && iface->up);
 }
