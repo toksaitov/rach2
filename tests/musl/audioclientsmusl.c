@@ -17,8 +17,11 @@
 #include <string.h>
 #include <unistd.h>
 
-#define RATE   48000
-#define FRAMES (RATE * 2)
+#define RATE           48000
+#define FRAMES         (RATE * 2)
+/* A loopback read holds the scale with a second to spare: a host that holds
+ * the player back leaves holes in the mix, which push the last note later. */
+#define CAPTURE_FRAMES (RATE * 3)
 
 /* The file the signal trials play: two minutes at 8000 Hz, which play is
  * still playing when a trial stops it. */
@@ -208,7 +211,7 @@ static void clients(int loopback)
     int gate[2], ready[2], in[2] = {-1, -1}, value = PCM_ENABLE_INPUT, ring = (64 << 16) | 10;
     char bytes[2] = {'g', 'g'};
     unsigned char *recorded[2] = {NULL, NULL};
-    size_t at, n = FRAMES * sizeof(short);
+    size_t at, n = CAPTURE_FRAMES * sizeof(short);
     unsigned i;
 
     if (pipe(gate) < 0 || pipe(ready) < 0)
