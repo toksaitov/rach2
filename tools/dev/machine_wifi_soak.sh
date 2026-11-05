@@ -23,7 +23,8 @@
 #     file of 6000 MiB of zeros, flushes it, removes it and starts again, and
 #     a `sync` loop; 0 runs no load at all, for a control. The zeros come from
 #     /dev/zero because a read of /dev/urandom spends its time in the kernel
-#     under the big lock and so loads the processors, not the disk. The files
+#     under the big lock and so loads the processors, not the disk;
+#     RACH2_SOAK_SOURCE names another source, for that heavier load. The files
 #     are under /tmp, on the root file system, beside the service log
 #     wpa_supplicant writes. This load can keep programs that need the disk,
 #     a new SSH login among them, waiting for minutes, so the run stops it
@@ -54,7 +55,12 @@
 #   * tx retries and failures are summed over associations, since the
 #     station's counters start again at each, from the samples, so a run of
 #     drops can leave out up to 5 s of each;
-#   * the longest ping gap is the longest time between two replies;
+#   * the longest ping gap is the longest time between two replies with
+#     requests unanswered between them, and the longest stall the longest
+#     between two replies in sequence, in which ping itself did not run;
+#   * a renewal's time runs from the request to the completion, and one
+#     left unfinished was asked for and ended in a drop or the run's end;
+#   * wpa_cli gives up on wpa_supplicant when it does not answer a PING;
 #   * the longest disk request is /proc/stat's latency_disk_us, the longest
 #     since boot, so that it is the run's only when it grew during the run,
 #     which the table says.
@@ -100,7 +106,7 @@ host()
     }
     "$@" 'cat > /dev/shm/wifi-soak.sh' < "$self" || exit 1
     env=
-    for v in NETWORK WRITERS REKEY; do
+    for v in NETWORK WRITERS REKEY SOURCE; do
         eval "x=\${RACH2_SOAK_$v:-}"
         [ -z "$x" ] || env="$env RACH2_SOAK_$v='$x'"
     done
@@ -168,6 +174,12 @@ diskline()
     done < /proc/diskstats
 }
 
+# How often the service log says wpa_cli gave up on wpa_supplicant.
+gaveup()
+{
+    grep -c 'did not reply to PING' /var/log/services
+}
+
 # Wait up to 90 s for the network, with an address and a gateway.
 joined()
 {
@@ -191,7 +203,7 @@ joined()
 writer()
 {
     while [ ! -e "$dir/stop" ]; do
-        dd if=/dev/zero of="$load/w$1" bs=1M count=6000 conv=fsync 2> /dev/null &
+        dd if="$source" of="$load/w$1" bs=1M count=6000 conv=fsync 2> /dev/null &
         echo $! > "$dir/dd$1"
         wait $!
         rm -f "$load/w$1"
@@ -252,9 +264,18 @@ table()
     awk -v t0="$t0" '
         $1 < t0 { next }
         /Associated with|Trying to associate/ { assoc = 1 }
+        /WPA: Sending EAPOL-Key Request/ { if (!asked) asked = $1 }
         /WPA: Key negotiation completed/ {
-            if (assoc) joins++; else pairwise++
-            assoc = 0
+            if (assoc) {
+                joins++
+            } else {
+                pairwise++
+                if (asked) {
+                    d = $1 - asked; took += d; timed++
+                    if (d > slowest) slowest = d
+                }
+            }
+            asked = 0; assoc = 0
         }
         /WPA: Group rekeying completed/ { group++ }
         /CTRL-EVENT-DISCONNECTED/ {
@@ -266,6 +287,8 @@ table()
             k = "reason " r (l ? " locally_generated=1" : " from the AP")
             if (!(k in drops)) order[++n] = k
             drops[k]++; all++
+            if (asked) unfinished++
+            asked = 0
             if (!down) { down = 1; at = $1 }
         }
         /CTRL-EVENT-CONNECTED/ && down {
@@ -276,6 +299,10 @@ table()
         END {
             printf "renewals pairwise        %d\n", pairwise
             printf "renewals group           %d\n", group
+            if (timed)
+                printf "renewal seconds          %d: mean %.2f, most %.2f\n",
+                    timed, took / timed, slowest
+            printf "renewals left unfinished %d\n", unfinished + (asked ? 1 : 0)
             printf "joins                    %d\n", joins
             printf "drops                    %d\n", all
             for (i = 1; i <= n; i++)
@@ -305,15 +332,20 @@ table()
         }' "$dir/samples"
     awk '!seen[$0]++' "$dir/kernel.raw" > "$dir/kernel"
     printf 'beacon-loss lines        %d\n' "$(grep -c ': beacon loss: ' "$dir/kernel")"
+    printf 'wpa_cli gave up          %d\n' "$(($(gaveup) - gave0))"
     awk '/ packets transmitted, / { sent += $2; got += $5 }
         / icmp_seq=/ {
-            if (prev && $1 - prev > gap) gap = $1 - prev
-            prev = $1
+            s = $0; sub(/.*icmp_seq=/, "", s); s += 0
+            d = $1 - prev
+            if (prev && s == seq + 1 && d > stall) stall = d
+            if (prev && s != seq + 1 && d > gap) { gap = d; from = prev }
+            prev = $1; seq = s
         }
         END {
             printf "ping                     %d sent, %d answered, %.2f%% lost\n",
                 sent, got, sent ? 100 * (sent - got) / sent : 0
-            printf "longest ping gap         %.2f s\n", gap
+            printf "longest ping gap         %.2f s of unanswered requests, from %s\n", gap, from
+            printf "longest ping stall       %.2f s with no request sent\n", stall
         }' "$dir/ping"
     printf 'longest disk request     %s us, %s\n' "$disk1" "$([ "$disk1" -gt "$disk0" ] &&
         echo 'in this run' || echo "before this run; the run's own was no longer")"
@@ -358,6 +390,7 @@ soak()
     network=${RACH2_SOAK_NETWORK:-TDA-NET}
     writers=${RACH2_SOAK_WRITERS:-6}
     rekey=${RACH2_SOAK_REKEY:-120}
+    source=${RACH2_SOAK_SOURCE:-/dev/zero}
     id=
     trap finish EXIT
     trap 'exit 129' HUP
@@ -384,11 +417,12 @@ soak()
     }
     rootdisk=$(awk '$2 == "/" && $1 ~ /^\/dev\// {
         sub(/^\/dev\//, "", $1); sub(/p[0-9]+$/, "", $1); print $1 }' /proc/mounts)
+    gave0=$(gaveup)
     disk0=$(statnum latency_disk_us)
     stats0=$(diskline)
     set -- $(cat /proc/uptime)
     t0=$1
-    echo "wifi-soak: load: $writers writers and sync, $seconds s, from uptime $t0 at $(date -u '+%H:%M:%S UTC'), ping $gateway"
+    echo "wifi-soak: load: $writers writers from $source and sync, $seconds s, from uptime $t0 at $(date -u '+%H:%M:%S UTC'), ping $gateway"
     pinger &
     pinging=$!
     sampler &
