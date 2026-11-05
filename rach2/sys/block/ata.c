@@ -356,6 +356,15 @@ static int ata_can_sleep(void)
     return ata_interrupts_on() && proc_in_syscall() && sched_is_enabled();
 }
 
+/** Count a sleep for the drive or the channel in the caller's `disk_waits`,
+ * by which a sleeping lock held across it is recorded (fs/sleeplock.h). */
+static void ata_count_wait(void)
+{
+    if (current_proc) {
+        current_proc->disk_waits++;
+    }
+}
+
 /** The condition a caller waiting for the channel waits on: no owner. */
 static int ata_free(void *arg)
 {
@@ -364,16 +373,19 @@ static int ata_free(void *arg)
 
 /**
  * Take the channel for one command sequence. A caller that can sleep waits
- * on the channel's queue until no one owns it. Returns 1 with the channel
- * owned, or 0 when another owns it still, as it may for a caller that
- * cannot sleep, who then waits for the drive alone and uses the data port.
+ * on the channel's queue until no one owns it, which counts in its
+ * `disk_waits` as a wait for the disk (proc/process.h). Returns 1 with the
+ * channel owned, or 0 when another owns it still, as it may for a caller
+ * that cannot sleep, who then waits for the drive alone and uses the data
+ * port.
  */
 static int ata_acquire(struct ata_channel *ch)
 {
     uint32_t flags;
 
-    if (ata_can_sleep()) {
+    if (ata_can_sleep() && !ata_free(ch)) {
         wq_wait_event_nointr(&ch->wq, ata_free, ch);
+        ata_count_wait();
     }
     flags = kirq_save();
     if (ch->owner) {
@@ -435,10 +447,11 @@ static void ata_pause(void)
 /**
  * Wait until the drive's status shows `want`; an error, or a drive that
  * never answers, is `-EIO`. A few polls first, then a sleep on the
- * channel's queue where sleeping is allowed and a polled wait where it is
- * not, whose reads past the first few hundred are each preceded by a
- * pause off the device. A polled wait that gives up says so, since the
- * caller's answer to it may be a panic with no record of its own.
+ * channel's queue where sleeping is allowed, which counts in the caller's
+ * `disk_waits` (proc/process.h), and a polled wait where it is not, whose
+ * reads past the first few hundred are each preceded by a pause off the
+ * device. A polled wait that gives up says so, since the caller's answer
+ * to it may be a panic with no record of its own.
  */
 static int ata_wait_for(struct ata_channel *ch, int want)
 {
@@ -476,6 +489,7 @@ static int ata_wait_for(struct ata_channel *ch, int want)
     ch->sleepers++;
     wq_wait_event_nointr(&ch->wq, ata_wait_cond, &w);
     ch->sleepers--;
+    ata_count_wait();
     return w.rc;
 }
 
