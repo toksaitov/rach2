@@ -179,6 +179,14 @@ static int rx_decrypt(struct wlan_data *d, uint8_t *frame, unsigned *len, unsign
         d->counters->rx_decrypt_errors++;
         return -ENOKEY;
     }
+    /* The frame was opened under a key since replaced, and carries that
+     * key's number: taken here it would set this key's counter ahead of the
+     * AP's, and every frame would be a replay until the AP caught up. */
+    if (!group && (status->flags & WLAN_RX_DECRYPTED) && status->hw_key >= 0 &&
+        status->hw_key != k->key.hw_slot) {
+        d->counters->rx_dropped++;
+        return -ESTALE;
+    }
     if (k->key.cipher == WLAN_CIPHER_SUITE_TKIP)
         rc = tkip_open(k, frame, len, hdrlen, status, &c->pn);
     else

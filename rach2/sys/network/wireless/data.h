@@ -400,8 +400,9 @@ uint32_t wlan_crc32(const uint8_t *data, unsigned len);
  * changed in place. Worker only. Returns 0 when the frame was taken, held
  * or handed on, or a negative errno when it was dropped, which the
  * counters record: -ENOTCONN, -EINVAL, -EALREADY for a duplicate,
- * -ENOKEY, -EBADMSG for a failed check, -ESTALE for a replay, -EACCES for
- * unprotected data on a protected network.
+ * -ENOKEY, -EBADMSG for a failed check, -ESTALE for a replay or a frame the
+ * radio opened under a key since replaced, -EACCES for unprotected data on
+ * a protected network.
  */
 int wlan_data_rx(struct wlan_data *d, uint8_t *frame, unsigned len,
                  const struct wlan_rx_status *status);
@@ -484,6 +485,11 @@ int wlan_ba_rx_reorder(struct wlan_data *d, const uint8_t *frame, unsigned len,
 /** Move the TID's window to `ssn`, as a BlockAckReq asks, handing on what
  * it passes. */
 void wlan_ba_rx_bar(struct wlan_data *d, unsigned tid, unsigned ssn);
+
+/** Hand on, in order, all that the sessions' buffers hold, and move each
+ * head past the last frame held, for a pairwise key about to be replaced:
+ * the sessions go on. */
+void wlan_ba_rx_flush(struct wlan_data *d);
 
 /** End the TID's session, handing on what its buffer holds in order when
  * `flush` is set and dropping it otherwise, and tell the radio. */

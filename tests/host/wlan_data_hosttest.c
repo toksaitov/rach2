@@ -947,6 +947,57 @@ static unsigned got_sn(unsigned i)
     return ((unsigned)got[i % 8][22] | (unsigned)got[i % 8][23] << 8) >> 4;
 }
 
+/** A frame the radio opened, stripped, under key slot `slot` with `pn`. */
+static int rx_opened(unsigned sn, int slot, uint64_t pn)
+{
+    uint8_t f[200], body[40];
+    struct wlan_rx_status hw = rxs;
+    unsigned len;
+
+    hw.flags = WLAN_RX_DECRYPTED | WLAN_RX_IV_STRIPPED | WLAN_RX_MIC_STRIPPED;
+    hw.hw_key = slot;
+    hw.pn = pn;
+    payload(body, sizeof(body), sn);
+    len = ap_frame(f, sta, 1, 0, sn, 0, 0, body, sizeof(body));
+    return wlan_data_rx(d, f, len, &hw);
+}
+
+/** A pairwise key replaced with frames under way: one the radio opened
+ * under the old slot must not move the new key's counter, whose frames
+ * start again from 1, and the reordering buffers empty first, under the
+ * old key, with their sessions kept. */
+static void check_rekey_slot(void)
+{
+    uint8_t f[64];
+    unsigned len, n;
+
+    setup(1);
+    takes_keys = 1;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
+    len = addba_req(f, 0, 8, 100);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    CHECK(rx_opened(100, 0, 440) == 0 && n_got == 1);
+    /* 101 is lost; 102 and 103 wait for it. */
+    CHECK(rx_opened(102, 0, 442) == 0 && rx_opened(103, 0, 443) == 0);
+    CHECK(n_got == 1 && d->ba[0].stored == 2);
+    wlan_ba_rx_flush(d);
+    CHECK(n_got == 3 && got_sn(1) == 102 && got_sn(2) == 103);
+    CHECK(d->ba[0].active && d->ba[0].stored == 0 && d->ba[0].head == 104);
+    CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 443);
+
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    CHECK(wlan_data_pairwise_key(d, 0)->key.hw_slot == 1);
+    n = counters.rx_dropped;
+    CHECK(rx_opened(104, 0, 444) == -ESTALE && n_got == 3);
+    CHECK(counters.rx_dropped == n + 1 && counters.rx_replays == 0);
+    CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 0);
+    CHECK(rx_opened(105, 1, 1) == 0 && n_got == 4);
+    CHECK(rx_opened(106, 1, 2) == 0 && n_got == 5);
+    CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 2);
+    /* A true replay under the new key stays one. */
+    CHECK(rx_opened(107, 1, 2) == -ESTALE && counters.rx_replays == 1);
+}
+
 /** BlockAck: ADDBA answered, reordering, BlockAckReq, a moved window, the
  * timeout, DELBA, and refusals. */
 static void check_blockack(void)
@@ -1232,6 +1283,7 @@ int main(void)
     check_tkip();
     check_rekey();
     check_blockack();
+    check_rekey_slot();
     check_mgmt();
     check_amsdu();
     check_rates();

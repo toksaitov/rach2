@@ -103,6 +103,20 @@ static int ba_start(struct wlan_data *d, unsigned tid, unsigned ssn, unsigned wi
     return 0;
 }
 
+void wlan_ba_rx_flush(struct wlan_data *d)
+{
+    struct wlan_ba_rx *ba;
+    unsigned tid;
+
+    for (tid = 0; tid < 8; ++tid) {
+        ba = &d->ba[tid];
+        while (ba->active && ba->stored) {
+            release_slot(d, ba, ba->head);
+            ba->head = (uint16_t)((ba->head + 1) & SN_MASK);
+        }
+    }
+}
+
 void wlan_ba_rx_stop(struct wlan_data *d, unsigned tid, int flush)
 {
     struct wlan_ba_rx *ba;

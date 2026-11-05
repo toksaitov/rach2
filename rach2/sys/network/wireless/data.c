@@ -82,9 +82,8 @@ static void data_drain_tx(struct wlan_work *work)
  * selection learns of them before it picks again, then received frames.
  * A completion frees a slot of the radio's ring, so a held transmit queue
  * is drained again once the completions are taken. */
-static void data_drain_rx(struct wlan_work *work)
+static void data_take_rx(struct wlan_data *d)
 {
-    struct wlan_data *d = ((struct wlan_data_work *)work)->data;
     struct wlan_tx_status status;
     struct wlan_data_rxq *q;
     uint32_t flags;
@@ -119,6 +118,12 @@ static void data_drain_rx(struct wlan_work *work)
     /* The worker alone sets txq_held, so it reads it without the lock. */
     if (completed && d->txq_held)
         (void)wlan_data_kick(d->tx_work, 0);
+}
+
+/** The receive queue's work: take what the radio queued. */
+static void data_drain_rx(struct wlan_work *work)
+{
+    data_take_rx(((struct wlan_data_work *)work)->data);
 }
 
 int wlan_data_attach(struct wlan *wlan, wlan_data_event_fn event)
@@ -295,11 +300,32 @@ void wlan_data_state(struct wlan *wlan, const struct wlan_bss *bss, enum wlan_st
     }
 }
 
+/**
+ * Install `key`. Before a pairwise key goes in, what the radio already
+ * opened goes up under the key that opened it: the frames queued and those
+ * in the reordering buffers, which carry the old key's numbers. Linux's
+ * ath9k hands its frames up with no queue between, and mac80211 empties the
+ * reordering buffers by ending the BlockAck sessions in
+ * ieee80211_pairwise_rekey; here the sessions go on. A frame still in the
+ * radio's ring meets the check in rx.c's rx_decrypt. Returns as
+ * wlan_data_install_key does, or -ENOTCONN when a frame so taken ended the
+ * connection.
+ */
 int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
 {
     struct wlan_data *d = wlan_data_of(wlan);
+    int connected;
 
-    return d ? wlan_data_install_key(d, key) : -ENODEV;
+    if (!d)
+        return -ENODEV;
+    if (key && (key->flags & WLAN_KEY_PAIRWISE)) {
+        connected = d->connected;
+        data_take_rx(d);
+        wlan_ba_rx_flush(d);
+        if (connected && !d->connected)
+            return -ENOTCONN;
+    }
+    return wlan_data_install_key(d, key);
 }
 
 int wlan_remove_key(struct wlan *wlan, const uint8_t peer[6], unsigned index)
