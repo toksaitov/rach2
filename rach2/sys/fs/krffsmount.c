@@ -1212,6 +1212,8 @@ static const struct vfs_ops krffs_volume_ops = {
     0, /* remount */
     0, /* fallocate */
     0, /* fdatasync */
+    0, /* lock_node */
+    0, /* unlock_node */
 };
 
 /**
@@ -1336,5 +1338,5 @@ static int krffs_volume_mount(struct vfs_mount *mnt, block_device_t *dev, uint32
     return 0;
 }
 
-const struct vfs_type vfs_krffs_volume_type = {"krffs", krffs_volume_mount, &krffs_volume_ops, 1, 0,
-                                               0};
+const struct vfs_type vfs_krffs_volume_type = {
+    "krffs", krffs_volume_mount, &krffs_volume_ops, 1, 0, 0, 0};

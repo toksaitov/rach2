@@ -524,6 +524,29 @@ static int range_ready(struct mm *mm, uintptr_t start, uintptr_t end, int write)
 }
 
 /**
+ * A kernel address, below USER_ADDR_MIN or at USER_ADDR_MAX and above, is
+ * the kernel's own memory, which a file system's caller passes for a read
+ * into a page or a program's image, and is always present; a user pointer
+ * there never gets past `user_range_ok`. A range that starts in user space
+ * and ends past it is not resident.
+ */
+int vm_resident(uintptr_t addr, uintptr_t len, int write)
+{
+    uintptr_t end = addr + len;
+
+    if (len == 0 || (current_proc && proc_window_covers(current_proc, addr, len))) {
+        return 1;
+    }
+    if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX) {
+        return 1;
+    }
+    if (end < addr || end > USER_ADDR_MAX || !current_proc || !current_proc->mm) {
+        return 0;
+    }
+    return range_ready(current_proc->mm, addr, end, write);
+}
+
+/**
  * The resolution of one page may sleep, reading a file or writing a cache
  * back, and another thread may meanwhile unmap or protect a page already
  * brought in, which the kernel would then touch and fault on with no way to

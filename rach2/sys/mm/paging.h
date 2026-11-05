@@ -241,6 +241,19 @@ int map_user_frame(page_dir_t *dir, uintptr_t virt, uintptr_t phys, pte_t flags)
 int vm_prefault_range(uintptr_t addr, uintptr_t len, int write);
 
 /**
+ * Whether every page of [addr, addr + len) of the current process is
+ * present and allows the access, a write when `write` is nonzero, found by
+ * walking the page tables with no fault and no sleep: 1 or 0. It is 1 for
+ * an empty range, for a range the thread opened to the checks
+ * (`user_window_open`) and for a kernel address. A copy to or from a user
+ * buffer under a file lock runs in the same step as a 1, with no sleep
+ * between, since under the big lock nothing can unmap the range inside
+ * that step; on a 0 the caller lets its locks go and brings the pages in
+ * (`vm_prefault_range`).
+ */
+int vm_resident(uintptr_t addr, uintptr_t len, int write);
+
+/**
  * Bring in the pages of [start, end) of the current process's regions as
  * faults would, for mmap's MAP_POPULATE: those of a private writable region
  * for a write, the others for a read. It stops at the first page that cannot

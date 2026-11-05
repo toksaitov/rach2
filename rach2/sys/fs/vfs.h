@@ -49,6 +49,7 @@
 
 #include "../block/block.h"
 #include "../proc/wait_queue.h"
+#include "sleeplock.h"
 
 #define VFS_COVERED_PATH_MAX 256 /* NUL included; ENAMETOOLONG past it */
 #define VFS_NAME_MAX         255 /* one component, NUL not counted */
@@ -279,6 +280,12 @@ struct vfs_ops {
      * not reach the medium. NULL for a type with nothing to leave out, whose
      * `fsync` then answers. */
     int (*fdatasync)(struct vfs_mount *mnt, void *handle);
+    /* Take and give back the sleeping lock of the held node `node`
+     * (sleeplock.h), for a type that sets `file_locked`; the lock covers
+     * the node's attributes, its block map and a directory's entries. NULL
+     * for any other type, whose changes the mount's namespace lock covers. */
+    void (*lock_node)(struct vfs_mount *mnt, void *node);
+    void (*unlock_node)(struct vfs_mount *mnt, void *node);
 };
 
 /* One file-system kind: the name mount(2) takes and /proc/filesystems
@@ -305,6 +312,11 @@ struct vfs_type {
      * for byte, and whose namespace changes only through the wrappers of
      * vfs.c. */
     int name_cache;
+    /* Nonzero for a type that locks each file on its own (`lock_node`) in
+     * place of the mount's namespace lock: a change locks the nodes it
+     * changes, so that a slow request for one file stops only that file's
+     * users. */
+    int file_locked;
 };
 
 /* One table entry. `covered` is the held node of the directory this mount
@@ -323,12 +335,9 @@ struct vfs_mount {
     char covered_path[VFS_COVERED_PATH_MAX];
     uint32_t refs;
     uint32_t inprogress;
-    int ns_holder;       /* pid holding the namespace lock, or -1 */
-    int ns_depth;        /* how many times the holder has taken it */
-    uint32_t ns_next;    /* the next place in the line for the lock */
-    uint32_t ns_serving; /* the place whose turn it is */
-    wait_queue_t ns_wq;
-    void *root; /* the mount's root node, held for the mount's life */
+    struct sleep_lock ns;  /* the namespace lock, `vfs_ns_lock` */
+    wait_queue_t drain_wq; /* where an unmount waits for `inprogress` to drain */
+    void *root;            /* the mount's root node, held for the mount's life */
     void *priv;
     /* What the unmount record reports: every open matched by a release. */
     uint32_t opens;
@@ -551,7 +560,8 @@ int vfs_enter(struct vfs_mount *mnt);
 void vfs_leave(struct vfs_mount *mnt);
 
 /**
- * Whether the calling process holds the namespace lock of any mount.
+ * Whether the calling process holds the namespace lock of any mount, or a
+ * file lock (`file_locks` in process.h).
  *
  * The buffer cache checks it before it writes back a buffer of a device
  * that is a file, a loop device: that write takes the lock of the mount
@@ -559,9 +569,9 @@ void vfs_leave(struct vfs_mount *mnt);
  * could wait for that lock while its holder waits for the caller's.
  */
 int vfs_ns_held_by_caller(void);
-/** Whether the calling process holds the namespace lock of a mount whose
- * base is not that of `mnt`; the name cache puts a node of `mnt` only when
- * it does not (dcache.h). */
+/** Whether the calling process holds a file lock, or the namespace lock of
+ * a mount whose base is not that of `mnt`; the name cache puts a node of
+ * `mnt` only when it holds neither (dcache.h). */
 int vfs_ns_held_other(const struct vfs_mount *mnt);
 
 /** Take the namespace lock of `mnt`, which a bind shares with its base,

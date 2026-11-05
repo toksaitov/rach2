@@ -415,6 +415,16 @@ static int req_done(void *arg)
     return r->state != BLOCK_REQ_IN_FLIGHT;
 }
 
+/** Sleep until `r` is no longer in flight, and count the wait the caller
+ * finished, which a file lock held across it records (fs/sleeplock.h). */
+static void req_wait(struct block_request *r)
+{
+    while (!req_done(r)) {
+        wq_wait_event_nointr(&pool_wq, req_done, r);
+    }
+    current_proc->disk_waits++;
+}
+
 /**
  * One request of at most the device's `max_sectors` on a sleeping device.
  *
@@ -450,9 +460,7 @@ static int req_run_one(block_device_t *device, int write, uint64_t lba, uint32_t
         wq_wake_all(&pool_wq);
         return -EIO;
     }
-    while (!req_done(r)) {
-        wq_wait_event_nointr(&pool_wq, req_done, r);
-    }
+    req_wait(r);
     flags = irq_save();
     if (r->state == BLOCK_REQ_QUARANTINED) {
         release_total++;
@@ -543,6 +551,7 @@ static int transfer_caller_sync(block_device_t *device, int write, uint64_t lba,
     if (!kirq_enabled() || !current_proc || !current_proc->in_syscall) {
         k_panic("block: a sleeping device was reached outside syscall context");
     }
+    current_proc->disk_waits++; /* the device sleeps the caller in the call */
     if (!write) {
         return device->read ? device->read(device, lba, count, buffer) : -EIO;
     }
@@ -649,6 +658,7 @@ int block_flush(block_device_t *device)
         k_panic("block: a sleeping device was reached outside syscall context");
     }
     if (device->flags & BLOCK_CALLER_SYNC) {
+        current_proc->disk_waits++;
         return device->flush(device, 0); /* answers in this call, no request */
     }
     r = req_take(device, 1, 0, 1, 1, 0);
@@ -663,9 +673,7 @@ int block_flush(block_device_t *device)
         wq_wake_all(&pool_wq);
         return -EIO;
     }
-    while (!req_done(r)) {
-        wq_wait_event_nointr(&pool_wq, req_done, r);
-    }
+    req_wait(r);
     flags = irq_save();
     if (r->state == BLOCK_REQ_QUARANTINED) {
         release_total++;

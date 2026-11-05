@@ -446,6 +446,14 @@ struct process {
      * membership. */
     struct process *timer_prev, *timer_next;
     int timer_linked;
+    /* The waits for the disk this thread has finished in the block layer,
+     * modulo 2^32, which a sleeping lock compares across a hold to tell
+     * whether the hold crossed one (fs/sleeplock.h); and the file locks it
+     * holds, a node's and a mount's allocator lock, under which the buffer
+     * cache and the name cache must not enter a file system (fs/vfs.h's
+     * `vfs_ns_held_by_caller`). */
+    uint32_t disk_waits;
+    int file_locks;
 };
 
 typedef struct process process_t;

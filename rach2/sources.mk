@@ -42,6 +42,7 @@ C_SRC_SHARED = kernel.c \
     sys/block/lag.c \
     sys/fs/bcache.c \
     sys/fs/vfs.c \
+    sys/fs/sleeplock.c \
     sys/fs/name.c \
     sys/fs/dcache.c \
     sys/fs/fat32.c \

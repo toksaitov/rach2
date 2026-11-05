@@ -1603,7 +1603,7 @@ static void assert_locked(struct vfs_mount *mnt)
 {
     int me = current_proc ? (int)current_proc->pid : 0;
 
-    if (mnt->ns_holder != me || mnt->ns_depth == 0) {
+    if (mnt->ns.holder != me || mnt->ns.depth == 0) {
         k_panic("vfat: a mutation outside the mount's lock");
     }
 }
@@ -3238,6 +3238,8 @@ static const struct vfs_ops vfat_ops = {
     0,                           /* remount */
     0,                           /* fallocate */
     0,                           /* fdatasync */
+    0,                           /* lock_node */
+    0,                           /* unlock_node */
 };
 
-const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops, 0, 0, 0};
+const struct vfs_type vfs_vfat_type = {"vfat", fat_mount, &vfat_ops, 0, 0, 0, 0};

@@ -1944,7 +1944,7 @@ static void assert_locked(struct vfs_mount *mnt)
 {
     int me = current_proc ? (int)current_proc->pid : 0;
 
-    if (mnt->ns_holder != me || mnt->ns_depth == 0) {
+    if (mnt->ns.holder != me || mnt->ns.depth == 0) {
         k_panic("ext2: a mutation outside the mount's lock");
     }
 }
@@ -6014,6 +6014,8 @@ static const struct vfs_ops ext2_ops = {
     ext2_remount,
     ext2_fallocate,
     0, /* fdatasync */
+    0, /* lock_node */
+    0, /* unlock_node */
 };
 
-const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 1, 0, 1};
+const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 1, 0, 1, 0};

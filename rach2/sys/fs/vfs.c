@@ -189,8 +189,8 @@ int vfs_enter(struct vfs_mount *mnt)
     return 0;
 }
 
-/** The unmount waits for the count to reach zero on the queue of the
- * namespace lock, `ns_wq`. A leave without an enter panics. */
+/** The unmount waits for the count to reach zero on `drain_wq`. A leave
+ * without an enter panics. */
 void vfs_leave(struct vfs_mount *mnt)
 {
     if (mnt->inprogress == 0) {
@@ -198,34 +198,31 @@ void vfs_leave(struct vfs_mount *mnt)
     }
     mnt->inprogress--;
     if (mnt->inprogress == 0 && mnt->state == VFS_UNMOUNTING) {
-        wq_wake_all(&mnt->ns_wq);
+        wq_wake_all(&mnt->drain_wq);
     }
 }
 
 /* The namespace lock. */
 
-/* A waiter's place in the line for the namespace lock of `mnt`. */
-struct ns_turn {
-    struct vfs_mount *mnt;
-    uint32_t place;
-};
+/* The record of every mount's namespace lock (sleeplock.h). */
+static struct sleep_lock_record mount_lock_record = SLEEP_LOCK_RECORD("mount");
 
-/** The wait condition of `vfs_ns_lock`: the lock is free and the place of
- * `arg`, a `struct ns_turn`, is the one served. */
-static int ns_my_turn(void *arg)
+/** Make the namespace lock of `m` a free one, and its drain queue empty. */
+static void mount_lock_init(struct vfs_mount *m)
 {
-    const struct ns_turn *t = arg;
-    return t->mnt->ns_holder == -1 && t->mnt->ns_serving == t->place;
+    sleep_lock_init(&m->ns, &mount_lock_record, 0);
+    wait_queue_init(&m->drain_wq);
 }
 
 int vfs_ns_held_by_caller(void)
 {
-    int me = current_proc ? (int)current_proc->pid : 0;
     int i;
 
+    if (current_proc && current_proc->file_locks > 0) {
+        return 1;
+    }
     for (i = 0; i < mount_slots; i++) {
-        if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i]->ns_holder == me &&
-            mounts[i]->ns_depth > 0) {
+        if (mounts[i] && mounts[i]->state != VFS_FREE && sleep_lock_held(&mounts[i]->ns)) {
             return 1;
         }
     }
@@ -234,58 +231,31 @@ int vfs_ns_held_by_caller(void)
 
 int vfs_ns_held_other(const struct vfs_mount *mnt)
 {
-    int me = current_proc ? (int)current_proc->pid : 0;
     const struct vfs_mount *base = vfs_mount_base(mnt);
     int i;
 
+    if (current_proc && current_proc->file_locks > 0) {
+        return 1;
+    }
     for (i = 0; i < mount_slots; i++) {
         if (mounts[i] && mounts[i]->state != VFS_FREE && mounts[i] != base &&
-            mounts[i]->ns_holder == me && mounts[i]->ns_depth > 0) {
+            sleep_lock_held(&mounts[i]->ns)) {
             return 1;
         }
     }
     return 0;
 }
 
-/**
- * The callers are served in the order they asked. A caller takes a place in
- * the line and waits until the lock is free and its place is served, so a
- * process that releases the lock and asks again waits behind everyone who
- * asked meanwhile: a writer that locks for every call cannot take the lock
- * back before a waiter has had it, and so cannot starve the waiter. The
- * order costs no switch of its own; releasing the lock does not yield. A
- * caller that holds the lock takes it again without a place.
- */
+/** A bind's lock is its base's (`mount_base`); the lock itself is
+ * sleeplock.h's. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
-    int me = current_proc ? (int)current_proc->pid : 0;
-    struct ns_turn turn;
-
-    mnt = mount_base(mnt);
-    if (mnt->ns_holder == me && mnt->ns_depth > 0) {
-        mnt->ns_depth++;
-        return;
-    }
-    turn.mnt = mnt;
-    turn.place = mnt->ns_next++;
-    while (!ns_my_turn(&turn)) {
-        wq_wait_event_nointr(&mnt->ns_wq, ns_my_turn, &turn);
-    }
-    mnt->ns_holder = me;
-    mnt->ns_depth = 1;
+    sleep_lock_take(&mount_base(mnt)->ns);
 }
 
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
-    mnt = mount_base(mnt);
-    if (mnt->ns_depth > 1) {
-        mnt->ns_depth--;
-        return;
-    }
-    mnt->ns_depth = 0;
-    mnt->ns_holder = -1;
-    mnt->ns_serving++;
-    wq_wake_all(&mnt->ns_wq);
+    sleep_lock_give(&mount_base(mnt)->ns);
 }
 
 /* The permission the resolver checks. */
@@ -2611,6 +2581,8 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* remount */
     0,                           /* fallocate */
     0,                           /* fdatasync */
+    0,                           /* lock_node */
+    0,                           /* unlock_node */
 };
 
 /** The constructor of the root's entry: the mount's root is the image's root
@@ -2628,7 +2600,7 @@ static int kfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags,
     return 0;
 }
 
-const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops, 1, 0, 0};
+const struct vfs_type vfs_krffs_type = {"krffs", kfs_mount, &krffs_ops, 1, 0, 0, 0};
 
 /* The three synthetic types, of /dev, /proc and /sys. */
 
@@ -3104,6 +3076,8 @@ static const struct vfs_ops devfs_vops = {
     0, /* remount */
     0, /* fallocate */
     0, /* fdatasync */
+    0, /* lock_node */
+    0, /* unlock_node */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -3140,6 +3114,8 @@ static const struct vfs_ops procfs_vops = {
     0, /* remount */
     0, /* fallocate */
     0, /* fdatasync */
+    0, /* lock_node */
+    0, /* unlock_node */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -3176,6 +3152,8 @@ static const struct vfs_ops sysfs_vops = {
     0, /* remount */
     0, /* fallocate */
     0, /* fdatasync */
+    0, /* lock_node */
+    0, /* unlock_node */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the
@@ -3216,9 +3194,9 @@ static int sysfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flag
     return synth_mount_root(mnt, dev, flags, "sys");
 }
 
-const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops, 0, 1, 0};
-const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops, 0, 1, 0};
-const struct vfs_type vfs_sysfs_type = {"sysfs", sysfs_mount, &sysfs_vops, 0, 1, 0};
+const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops, 0, 1, 0, 0};
+const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops, 0, 1, 0, 0};
+const struct vfs_type vfs_sysfs_type = {"sysfs", sysfs_mount, &sysfs_vops, 0, 1, 0, 0};
 
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 {
@@ -3281,11 +3259,7 @@ static void install(int idx, const struct vfs_type *type, const char *path,
     k_strncpy(m->covered_path, path, sizeof(m->covered_path));
     m->refs = 0;
     m->inprogress = 0;
-    m->ns_holder = -1;
-    m->ns_depth = 0;
-    m->ns_next = 0;
-    m->ns_serving = 0;
-    wait_queue_init(&m->ns_wq);
+    mount_lock_init(m);
     m->priv = 0;
     m->opens = 0;
     m->releases = 0;
@@ -3372,8 +3346,7 @@ int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const c
     m->type = type;
     m->dev = dev;
     m->state = VFS_MOUNTING;
-    m->ns_holder = -1;
-    wait_queue_init(&m->ns_wq);
+    mount_lock_init(m);
     m->claim = claim;
     k_strncpy(m->covered_path, "/", sizeof(m->covered_path));
     k_strncpy(m->source, source, sizeof(m->source));
@@ -3660,8 +3633,7 @@ static struct vfs_mount *mount_place(struct vfs_mount *parent, void *covered,
     m->state = VFS_MOUNTING;
     m->parent = parent;
     m->covered = covered;
-    m->ns_holder = -1;
-    wait_queue_init(&m->ns_wq);
+    mount_lock_init(m);
     m->claim = -1;
     m->ns_hidden = ~ns_bit();
     m->seq = ++mount_seq;
@@ -4539,7 +4511,7 @@ static int unmount_mount(struct vfs_mount *m)
 
     m->state = VFS_UNMOUNTING;
     while (m->inprogress > 0) {
-        wq_wait_event_nointr(&m->ns_wq, drained, m);
+        wq_wait_event_nointr(&m->drain_wq, drained, m);
     }
     if (m->refs > 0) {
         m->state = VFS_ACTIVE;
