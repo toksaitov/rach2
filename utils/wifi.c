@@ -72,9 +72,10 @@
  * as long. */
 #define SSID_TEXT 132
 
-/* Seconds to wait for a reply, a scan, the server's certificate and a
- * connection. */
+/* Seconds to wait for a reply, a save, which waits for the disk, a scan, the
+ * server's certificate and a connection. */
 #define REPLY_WAIT   10
+#define SAVE_WAIT    120
 #define SCAN_WAIT    20
 #define PROBE_WAIT   45
 #define CONNECT_WAIT 60
@@ -280,7 +281,8 @@ static int ctrl_request(struct ctrl *c, const char *req, char *reply, size_t siz
         complain("sending to wpa_supplicant: %s", strerror(errno));
         return -1;
     }
-    n = ctrl_read(c->cmd, reply, size, now() + REPLY_WAIT);
+    n = ctrl_read(c->cmd, reply, size,
+                  now() + (strcmp(req, "SAVE_CONFIG") == 0 ? SAVE_WAIT : REPLY_WAIT));
     if (n == 0 && !interrupted) {
         complain("wpa_supplicant did not answer");
     }
