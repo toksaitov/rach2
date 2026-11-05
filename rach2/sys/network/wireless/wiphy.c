@@ -234,10 +234,11 @@ static const struct netdev_ops wireless_ops = {"wireless",    0, wireless_tx, 0,
  * applied and stops nothing more, so the worker does not wait for itself.
  * The release starts the radio only when an up came between the release
  * and this call, or the release came while the stop slept and the
- * interface is still up; otherwise the interface stays down until wpa_supplicant,
- * told by the switch's CHANGE event, brings it up. Loops until the block
- * applied is the one asked for, with the interface down while blocked,
- * since either may change while the driver's stop or start sleeps.
+ * interface is still up; otherwise the interface stays down until
+ * wpa_supplicant, told by the switch's CHANGE event, brings it up. Loops
+ * until the block applied is the one asked for, with the interface down
+ * while blocked, since either may change while the driver's stop or start
+ * sleeps.
  */
 static void wlan_rfkill_apply(struct wlan_work *work)
 {
