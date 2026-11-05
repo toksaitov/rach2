@@ -335,9 +335,11 @@ struct vfs_mount {
     char covered_path[VFS_COVERED_PATH_MAX];
     uint32_t refs;
     uint32_t inprogress;
-    struct sleep_lock ns;  /* the namespace lock, `vfs_ns_lock` */
-    wait_queue_t drain_wq; /* where an unmount waits for `inprogress` to drain */
-    void *root;            /* the mount's root node, held for the mount's life */
+    /* The namespace lock (`vfs_ns_lock`), and the queue on which an
+     * unmount waits for `inprogress` to drain. */
+    struct sleep_lock ns;
+    wait_queue_t drain_wq;
+    void *root; /* the mount's root node, held for the mount's life */
     void *priv;
     /* What the unmount record reports: every open matched by a release. */
     uint32_t opens;

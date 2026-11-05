@@ -20,14 +20,14 @@ struct sleep_turn {
 };
 
 /** The calling thread's ID, 0 before the first process runs. */
-static int caller(void)
+static int sleep_caller(void)
 {
     return current_proc ? (int)current_proc->pid : 0;
 }
 
 /** The wait condition of `sleep_lock_take`: the lock is free and the place
  * of `arg`, a `struct sleep_turn`, is the one served. */
-static int my_turn(void *arg)
+static int sleep_my_turn(void *arg)
 {
     const struct sleep_turn *t = arg;
 
@@ -65,7 +65,7 @@ void sleep_lock_init(struct sleep_lock *l, struct sleep_lock_record *record, int
  */
 void sleep_lock_take(struct sleep_lock *l)
 {
-    int me = caller();
+    int me = sleep_caller();
     struct sleep_turn turn;
 
     if (l->holder == me && l->depth > 0) {
@@ -74,8 +74,8 @@ void sleep_lock_take(struct sleep_lock *l)
     }
     turn.lock = l;
     turn.place = l->next++;
-    while (!my_turn(&turn)) {
-        wq_wait_event_nointr(&l->wq, my_turn, &turn);
+    while (!sleep_my_turn(&turn)) {
+        wq_wait_event_nointr(&l->wq, sleep_my_turn, &turn);
     }
     l->holder = me;
     l->depth = 1;
@@ -89,7 +89,7 @@ void sleep_lock_take(struct sleep_lock *l)
 /** Count the hold of `l` that is ending in its record when its holder
  * finished a disk wait during it. The clock wraps after 71 minutes, so a
  * longer hold reads short. */
-static void record_hold(struct sleep_lock *l)
+static void sleep_record_hold(struct sleep_lock *l)
 {
     struct sleep_lock_record *r = l->record;
     uint32_t held;
@@ -115,7 +115,7 @@ void sleep_lock_give(struct sleep_lock *l)
         l->depth--;
         return;
     }
-    record_hold(l);
+    sleep_record_hold(l);
     if ((l->flags & SLEEP_LOCK_FILE) && current_proc) {
         current_proc->file_locks--;
     }
@@ -127,7 +127,7 @@ void sleep_lock_give(struct sleep_lock *l)
 
 int sleep_lock_held(const struct sleep_lock *l)
 {
-    return l->depth > 0 && l->holder == caller();
+    return l->depth > 0 && l->holder == sleep_caller();
 }
 
 void sleep_lock_assert(const struct sleep_lock *l, const char *message)

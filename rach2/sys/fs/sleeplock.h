@@ -42,22 +42,24 @@ struct sleep_lock_record {
 #define SLEEP_LOCK_FILE 1
 
 /*
- * One lock. A caller takes a place in line (`next`) and waits until the
- * lock is free and its place is the one served (`serving`), so a process
- * that gives the lock back and asks again waits behind everyone who asked
- * meanwhile. The holder may take it again, which raises `depth`. A hold
- * lasts from the first take to the last give; `taken_us` and `taken_waits`
- * are its start, by the clock and by the holder's count of disk waits.
+ * One lock. `holder` is the holder's thread ID, 0 for a holder before the
+ * first process, and -1 when the lock is free; `depth` counts the holder's
+ * takes. A caller takes a place in line (`next`) and waits until the lock
+ * is free and its place is the one served (`serving`), so a process that
+ * gives the lock back and asks again waits behind everyone who asked
+ * meanwhile. A hold lasts from the first take to the last give;
+ * `taken_us` and `taken_waits` are its start, by `timer_now_us` and by
+ * the holder's `disk_waits`.
  */
 struct sleep_lock {
-    int holder;                       /* the holder's thread ID, 0 before any, -1 if free */
-    int depth;                        /* how many times the holder has taken it */
-    uint32_t next;                    /* the next place in the line */
-    uint32_t serving;                 /* the place whose turn it is */
-    uint32_t taken_us;                /* timer_now_us() at the first take */
-    uint32_t taken_waits;             /* the holder's disk_waits at the first take */
+    int holder;
+    int depth;
+    uint32_t next;
+    uint32_t serving;
+    uint32_t taken_us;
+    uint32_t taken_waits;
     int flags;                        /* SLEEP_LOCK_FILE or 0 */
-    struct sleep_lock_record *record; /* its kind's record, or NULL */
+    struct sleep_lock_record *record; /* its kind's, or NULL */
     wait_queue_t wq;
 };
 
