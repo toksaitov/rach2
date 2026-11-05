@@ -12,7 +12,7 @@
 * agy and Muse Code, signed in only in the owner's accounts on the Mac, answer questions and give second opinions, as the `second-opinion` skill says: when stuck, or when a hard question or a disagreement between Codex and Fable needs another view. Their limits are low: one job at a time, a narrow prompt, the default model and effort unless the problem is hard, and few or no subagents.
 * When work goes to a worker session, Codex, agy or Muse Code, give it the milestone, the files, the claims the work must make true and what would prove it done, and check every claim in what comes back against the code before using it.
 * Never report that a delegated job is running without reading its state in the same turn.
-* The chat keeps every message of the owner's, those typed while it was busy among them, in `build/flow/coordinator/requests/owner-messages.md`, and a ledger of each request with its status and evidence in `ledger.md` beside it, and updates both whenever the owner asks for something. The chat and the manager read the ledger after each compaction, and a request it marks missing becomes a task.
+* After each compaction the chat and the manager recover the owner's messages from the session transcripts under `~/.claude/projects/`, and a request not yet done becomes a task.
 * While the owner discusses options, change nothing until the owner says to do it.
 * Tell the owner in the same turn of a delay of a day or more, a cost the owner has not seen, or anything that goes against what the owner asked.
 * Show research the owner asked for whole, and say which of its findings the plan follows and which it sets aside, and why.
