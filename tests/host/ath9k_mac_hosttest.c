@@ -311,13 +311,16 @@ void ath9k_cal_start(struct ath9k *ah)
 static int hw_reset_rc;
 static unsigned hw_resets, cold_resets;
 
-/** hw.c's reset as far as this test needs it: a warm reset of the MAC and
- * baseband, which loses the PCU's registers and the FIFOs, and the queues
- * set up again, as ath9k_hw_reset ends. */
+/** hw.c's reset as far as this test needs it: the noise level of a channel
+ * with no noise floor yet, as ath9k_cal_set_channel gives it, a warm reset
+ * of the MAC and baseband, which loses the PCU's registers and the FIFOs,
+ * and the queues set up again, as ath9k_hw_reset ends. */
 int ath9k_hw_reset(struct ath9k *ah, const struct wlan_channel *chan)
 {
     (void)chan;
     hw_resets++;
+    if (!ah->cal.noise_floor)
+        ah->cal.noise = -95;
     if (hw_reset_rc)
         return hw_reset_rc;
     REG_WRITE(ah, AR_RTC_RC, AR_RTC_RC_MAC_WARM);

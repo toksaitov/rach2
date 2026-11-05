@@ -13,10 +13,8 @@
 #include "../../../lib/kerrno.h"
 #include "../../../lib/kstring.h"
 
-/* ath9k's mac.h: the noise floor ath9k assumes before a measurement, an
- * RSSI the chip could not read, and the phy error that a later subframe's
- * good delimiter shows to be harmless. */
-#define DEFAULT_NOISE_FLOOR -95
+/* ath9k's mac.h: an RSSI the chip could not read, and the phy error that a
+ * later subframe's good delimiter shows to be harmless. */
 #define RSSI_BAD            -128
 #define PHYERR_OFDM_RESTART 39
 
@@ -314,7 +312,7 @@ static int deliver(struct ath9k *ah, uint8_t *buf, int hp)
         beacon_signal(ah, frame, len, rssi);
     if (rssi == RSSI_BAD)
         rssi = 0;
-    st.signal = (int16_t)((ah->cal.noise_floor ? ah->cal.noise_floor : DEFAULT_NOISE_FLOOR) + rssi);
+    st.signal = (int16_t)(ah->cal.noise + rssi); /* ath9k_process_rssi */
     st.rate = (int16_t)ath9k_rate_index(ah, MS(rxs->status1, AR_RxRate), &st.rate_flags);
     if (rxs->status4 & AR_GI)
         st.rate_flags |= WLAN_RATE_SHORT_GI;

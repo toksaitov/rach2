@@ -515,7 +515,7 @@ void ath9k_tx_report(struct ath9k *ah, const struct ath9k_tx_slot *s,
 
         st.flags = WLAN_TX_ACKED;
         if (ts && !(s->info.flags & WLAN_TX_NO_ACK))
-            st.ack_signal = (int16_t)((ah->cal.noise_floor ? ah->cal.noise_floor : -95) + rssi);
+            st.ack_signal = (int16_t)(ah->cal.noise + rssi);
     } else {
         ah->stats.tx_failed++;
         if (ts && (ts->status3 & AR_Filtered))
