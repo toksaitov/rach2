@@ -28,7 +28,7 @@
  * writes across calls. Of the operations it leaves out `lookup_rest`, `pin`
  * and `unpin`.
  */
-extern const struct vfs_type vfs_ext2_type;
+extern struct vfs_type vfs_ext2_type;
 
 /** The nodes in memory that every ext2 mount's search for an inode by its
  * number has read since boot, for /proc/stat: one or two for each search
