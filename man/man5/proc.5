@@ -488,6 +488,10 @@ while HOLDS is 0.
 The kind
 .Ql mount
 is the namespace lock of each mounted volume.
+The kind
+.Ql rename
+is the lock a volume whose type locks each file takes around a rename
+between two directories.
 A test that slows the disk reads it to see that no lock was held across
 another file's request.
 .It Pa /proc/interrupts
