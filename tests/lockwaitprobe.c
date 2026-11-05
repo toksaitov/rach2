@@ -14,8 +14,8 @@
  * lag device's answers (`lag-completions` in /proc/disk), and the child
  * must have finished at least one round for each of them: a slow request
  * on one file leaves the users of another file of the same mount running.
- * The kernel counts both; the clock is not read. Then /proc/fs/lockwait is
- * printed and must have its `mount` line.
+ * The kernel counts both; the clock is not read. /proc/fs/lockwait is
+ * printed before the counts are judged, and must have its `mount` line.
  *
  * `lockwaitprobe stress`, with the same volume and no lag: a child takes the
  * machine's free memory and the buffer cache's, but for a sixteenth of the
@@ -414,6 +414,7 @@ static void run_lag(void)
     out(", rounds on near ");
     out_num(rounds1 - rounds0);
     out("\n");
+    show_lockwait();
     if (got != (long)SLOW_BYTES) {
         fail_rc("the read of slow", got);
     }
@@ -444,7 +445,6 @@ static void run_lag(void)
     syscall1(SYS_UNLINK, (long)"/lw/near");
     unmount_volume("/lw");
     syscall1(SYS_RMDIR, (long)"/lw");
-    show_lockwait();
     out("LOCKWAITPROBE OK\n");
 }
 
