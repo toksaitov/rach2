@@ -402,6 +402,10 @@ static void past_a_file(void)
           eq(vp.name, "input/event3"));
     CHECK(synth_classify("proc/acpi", &vp) == VNODE_PROC_ACPI_DIR);
     CHECK(synth_classify("proc/acpi/call", &vp) == VNODE_PROC_ACPI_CALL);
+    CHECK(synth_classify("proc/fs", &vp) == VNODE_PROC_FS_DIR);
+    CHECK(synth_classify("proc/fs/lockwait", &vp) == VNODE_PROC_FS_LOCKWAIT);
+    CHECK(synth_classify("proc/fs/other", &vp) == VNODE_ENOENT);
+    CHECK(synth_classify("proc/fs/lockwait/x", &vp) == VNODE_ENOTDIR);
     CHECK(synth_classify("proc/acpi/call/x", &vp) == VNODE_ENOTDIR);
     CHECK(synth_classify("proc/acpi/wakeup", &vp) == VNODE_ENOENT);
     CHECK(synth_classify("proc/5/maps/x", &vp) == VNODE_ENOTDIR && vp.pid == 5);

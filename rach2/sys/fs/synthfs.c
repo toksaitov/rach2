@@ -414,6 +414,8 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
         synth_put(out, cap, &pos, "/dev/input");
     } else if (kind == VNODE_PROC_ACPI_DIR) {
         synth_put(out, cap, &pos, "/proc/acpi");
+    } else if (kind == VNODE_PROC_FS_DIR) {
+        synth_put(out, cap, &pos, "/proc/fs");
     } else if (kind == VNODE_PROC_DIR) {
         synth_put(out, cap, &pos, "/proc");
     } else if (kind == VNODE_PROC_NET_DIR) {
@@ -1592,6 +1594,13 @@ static int synth_classify_proc(const struct comp *c, int n, struct vpath *vp)
                    : !comp_eq(c[2], "call") ? VNODE_ENOENT
                    : n == 3                 ? VNODE_PROC_ACPI_CALL
                                             : VNODE_ENOTDIR;
+        return vp->kind;
+    }
+    if (comp_eq(c[1], "fs")) {
+        vp->kind = n == 2                       ? VNODE_PROC_FS_DIR
+                   : !comp_eq(c[2], "lockwait") ? VNODE_ENOENT
+                   : n == 3                     ? VNODE_PROC_FS_LOCKWAIT
+                                                : VNODE_ENOTDIR;
         return vp->kind;
     }
     if (comp_eq(c[1], "self")) {

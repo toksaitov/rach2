@@ -1139,6 +1139,17 @@ uint32_t procfs_ino_acpicall(void)
     return 0;
 }
 
+/** The inode numbers of /proc/fs and its lockwait, which no row reads: 0. */
+uint32_t procfs_ino_fsdir(void)
+{
+    return 0;
+}
+
+uint32_t procfs_ino_lockwait(void)
+{
+    return 0;
+}
+
 /** The inode number of a /proc/sysvipc file, which no row reads: 0. */
 uint32_t procfs_ino_sysvipc(int origin)
 {

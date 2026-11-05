@@ -74,6 +74,8 @@ enum vnode_kind {
     VNODE_INPUT_DIR,         /* /dev/input: the event devices, each a VNODE_DEV */
     VNODE_PROC_ACPI_DIR,     /* /proc/acpi: the directory of call */
     VNODE_PROC_ACPI_CALL,    /* /proc/acpi/call: an ACPI method evaluated by its path */
+    VNODE_PROC_FS_DIR,       /* /proc/fs: the directory of lockwait */
+    VNODE_PROC_FS_LOCKWAIT,  /* /proc/fs/lockwait: each kind of lock's longest disk wait */
     VNODE_ENOENT,            /* under a synthetic mount, but no such entry */
     VNODE_ENOTDIR            /* under a synthetic mount, a non-dir used as a directory */
 };
@@ -160,6 +162,8 @@ const char *synth_ns_name(int kind);
 /* /proc/net/netstat, the last of `synth_net_file`'s. */
 #define SYNTH_PROC_NETNETSTAT  64
 #define SYNTH_PROC_NETWIRELESS 65
+/* /proc/fs/lockwait, the record of the sleeping locks (fs/sleeplock.h). */
+#define SYNTH_PROC_LOCKWAIT    66
 
 /* The pid of /proc/self and /dev/fd, which procfs takes as the caller's
  * (`procfs_resolve_pid`). */

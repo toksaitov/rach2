@@ -212,6 +212,9 @@ uint32_t procfs_ino_sysvipc(int origin);
 /** The inodes of /proc/acpi and of /proc/acpi/call. */
 uint32_t procfs_ino_acpidir(void);
 uint32_t procfs_ino_acpicall(void);
+/** The inodes of /proc/fs and of /proc/fs/lockwait. */
+uint32_t procfs_ino_fsdir(void);
+uint32_t procfs_ino_lockwait(void);
 
 /** Whether `e`, a descriptor of type FD_TYPE_PROC, is open on a file of
  * /sys, which fstat and fstatfs report as sysfs's. */

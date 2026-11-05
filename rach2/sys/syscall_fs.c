@@ -2320,6 +2320,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_PROC_NET_TCP:
     case VNODE_PROC_NET_FILE:
     case VNODE_PROC_SYSVIPC:
+    case VNODE_PROC_FS_LOCKWAIT:
     case VNODE_SYS_FILE:
         return procfs_open(vp, flags);
     case VNODE_PROC_DISK:
@@ -2331,6 +2332,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
     case VNODE_INPUT_DIR:
     case VNODE_PROC_DIR:
     case VNODE_PROC_ACPI_DIR:
+    case VNODE_PROC_FS_DIR:
     case VNODE_PROC_NET_DIR:
     case VNODE_PROC_NET_STAT_DIR:
     case VNODE_PROC_SYSVIPC_DIR:
@@ -5649,7 +5651,8 @@ static int synth_kind_is_dir(int kind)
            kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_SYS_DIR || kind == VNODE_SYS_DIR ||
            kind == VNODE_SYS_LINK || kind == VNODE_PROC_SYSVIPC_DIR ||
            kind == VNODE_PROC_NET_STAT_DIR || kind == VNODE_PROC_NS_DIR ||
-           kind == VNODE_PROC_FDINFO_DIR || kind == VNODE_INPUT_DIR || kind == VNODE_PROC_ACPI_DIR;
+           kind == VNODE_PROC_FDINFO_DIR || kind == VNODE_INPUT_DIR ||
+           kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR;
 }
 
 /**
@@ -6627,6 +6630,13 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
         kst->st_mode = S_IFREG | 0600;
         kst->st_ino = procfs_ino_acpicall();
         return 0;
+    case VNODE_PROC_FS_DIR:
+        kst->st_dev = PROCFS_FSID;
+        kst->st_mode = S_IFDIR | 0555;
+        kst->st_ino = procfs_ino_fsdir();
+        return 0;
+    case VNODE_PROC_FS_LOCKWAIT:
+        return synth_proc_stat(kst, procfs_ino_lockwait());
     case VNODE_SYS_DIR:
     case VNODE_SYS_LINK:
     case VNODE_SYS_FILE:
@@ -13698,6 +13708,10 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
     if (kind == VNODE_PROC_ACPI_DIR) {
         return synth_entry(n == 0 ? "call" : NULL, procfs_ino_acpicall(), DT_REG, name, ino, dtype);
     }
+    if (kind == VNODE_PROC_FS_DIR) {
+        return synth_entry(n == 0 ? "lockwait" : NULL, procfs_ino_lockwait(), DT_REG, name, ino,
+                           dtype);
+    }
     if (kind == VNODE_PTS_DIR) {
         int i, c = 0;
         for (i = 0; i < pty_index_limit(); i++) {
@@ -13764,6 +13778,7 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
                        {"net", procfs_ino_netdir, DT_DIR},
                        {"sysvipc", procfs_ino_sysvipcdir, DT_DIR},
                        {"acpi", procfs_ino_acpidir, DT_DIR},
+                       {"fs", procfs_ino_fsdir, DT_DIR},
                        {"sys", procfs_ino_sysdir, DT_DIR},
                        {"self", procfs_ino_dir, DT_LNK},
                        {"usb", procfs_ino_usb, DT_REG},

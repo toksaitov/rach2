@@ -1124,6 +1124,8 @@ NO_PROC_INO(procfs_ino_netstatdir)
 NO_PROC_INO(procfs_ino_sysvipcdir)
 NO_PROC_INO(procfs_ino_acpidir)
 NO_PROC_INO(procfs_ino_acpicall)
+NO_PROC_INO(procfs_ino_fsdir)
+NO_PROC_INO(procfs_ino_lockwait)
 
 /** Fail the row: no row stats a file of /proc. */
 uint32_t procfs_ino_sysvipc(int origin)

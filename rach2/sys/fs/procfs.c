@@ -53,6 +53,7 @@
 #include "vfs.h"
 #include "name.h"
 #include "lock.h"
+#include "sleeplock.h"
 #include "tmpfs.h"
 #include "cpuinfo.h"
 #include "../ipc/sysv.h"
@@ -125,6 +126,8 @@
 #define PROCFS_INO_NET         0x120u /* and the other files of /proc/net after it, by slot */
 #define PROCFS_INO_ACPI        0x1F0u /* /proc/acpi */
 #define PROCFS_INO_ACPI_CALL   0x1F1u
+#define PROCFS_INO_FS          0x1F2u /* /proc/fs */
+#define PROCFS_INO_LOCKWAIT    0x1F3u
 
 /* Inode namespace for /sys: a fixed directory by its node, with its
  * attribute files 256 apart above it; a PCI function's directory by its
@@ -164,6 +167,7 @@ static const struct procfs_global procfs_globals[] = {
     {VNODE_PROC_NET_ARP, SYNTH_PROC_NETARP, PROCFS_INO_NETARP},
     {VNODE_PROC_NET_TCP, SYNTH_PROC_NETTCP, PROCFS_INO_NETTCP},
     {VNODE_PROC_ACPI_CALL, SYNTH_PROC_ACPI_CALL, PROCFS_INO_ACPI_CALL},
+    {VNODE_PROC_FS_LOCKWAIT, SYNTH_PROC_LOCKWAIT, PROCFS_INO_LOCKWAIT},
     {VNODE_PROC_UPTIME, SYNTH_PROC_UPTIME, PROCFS_INO_UPTIME},
     {VNODE_PROC_STAT_SYS, SYNTH_PROC_STATSYS, PROCFS_INO_STATSYS},
     {VNODE_PROC_MEMINFO, SYNTH_PROC_MEMINFO, PROCFS_INO_MEMINFO},
@@ -281,6 +285,9 @@ static const char *procfs_kind_name(const struct vpath *vp)
     }
     if (vp->kind == VNODE_PROC_LOCKS) {
         return "/proc/locks";
+    }
+    if (vp->kind == VNODE_PROC_FS_LOCKWAIT) {
+        return "/proc/fs/lockwait";
     }
     if (vp->kind == VNODE_PROC_SYS_FILE) {
         return "/proc/sys";
@@ -1929,6 +1936,8 @@ static const char *procfs_global_fd_path(int origin)
         return "/proc/swaps";
     case SYNTH_PROC_LOCKS:
         return "/proc/locks";
+    case SYNTH_PROC_LOCKWAIT:
+        return "/proc/fs/lockwait";
     case SYNTH_PROC_SYSVIPC:
         return "/proc/sysvipc/shm";
     case SYNTH_PROC_SYSVIPC + 1:
@@ -2388,6 +2397,16 @@ uint32_t procfs_ino_acpidir(void)
 uint32_t procfs_ino_acpicall(void)
 {
     return PROCFS_INO_ACPI_CALL;
+}
+
+uint32_t procfs_ino_fsdir(void)
+{
+    return PROCFS_INO_FS;
+}
+
+uint32_t procfs_ino_lockwait(void)
+{
+    return PROCFS_INO_LOCKWAIT;
 }
 
 uint32_t procfs_fd_ino(struct fd_entry *e)
@@ -3358,6 +3377,36 @@ static int procfs_gen_locks(struct procfs_text *t)
         }
     }
     kfree(rows);
+    return t->nomem ? -ENOMEM : t->len;
+}
+
+/**
+ * Render /proc/fs/lockwait: a line for each kind of sleeping lock, in the
+ * order the kinds were first used (`sleep_lock_records`), with its name, the
+ * holds of it that crossed a disk wait, the longest of them in microseconds,
+ * and that hold's thread ID and name, or 0 and `-` while there was none. The
+ * name is last, since a process may put a space in it. The records change
+ * only between sleeps, so one pass under the big lock reads them whole.
+ */
+static int procfs_gen_lockwait(struct procfs_text *t)
+{
+    const struct sleep_lock_record *r;
+    char comm[sizeof(r->longest_comm) + 1];
+
+    for (r = sleep_lock_records(); r; r = r->next) {
+        k_memcpy(comm, r->longest_comm, sizeof(r->longest_comm));
+        comm[sizeof(r->longest_comm)] = '\0';
+        ap_str(t, r->kind);
+        ap_ch(t, ' ');
+        ap_u32(t, r->crossings);
+        ap_ch(t, ' ');
+        ap_u32(t, r->longest_us);
+        ap_ch(t, ' ');
+        ap_u32(t, r->longest_pid);
+        ap_ch(t, ' ');
+        ap_str(t, comm[0] ? comm : "-");
+        ap_ch(t, '\n');
+    }
     return t->nomem ? -ENOMEM : t->len;
 }
 
@@ -6827,7 +6876,7 @@ static int procfs_needs_pid(int kind)
         VNODE_PROC_MOUNTS,    VNODE_PROC_USB,        VNODE_PROC_AUDIO,      VNODE_PROC_FILESYSTEMS,
         VNODE_PROC_LOOP,      VNODE_PROC_INTERRUPTS, VNODE_PROC_CONSOLE,    VNODE_PROC_NET_ROUTE,
         VNODE_PROC_NET_ARP,   VNODE_PROC_NET_TCP,    VNODE_PROC_NET_FILE,   VNODE_SYS_FILE,
-        VNODE_PROC_SYSVIPC,   VNODE_PROC_ACPI_CALL};
+        VNODE_PROC_SYSVIPC,   VNODE_PROC_ACPI_CALL,  VNODE_PROC_FS_LOCKWAIT};
     uint32_t i;
 
     for (i = 0; i < sizeof(global) / sizeof(global[0]); i++) {
@@ -6889,6 +6938,8 @@ static int procfs_gen_text(struct procfs_text *t, const struct vpath *vp, int pi
         len = procfs_gen_slabinfo(t);
     } else if (vp->kind == VNODE_PROC_LOCKS) {
         len = procfs_gen_locks(t);
+    } else if (vp->kind == VNODE_PROC_FS_LOCKWAIT) {
+        len = procfs_gen_lockwait(t);
     } else if (vp->kind == VNODE_PROC_SWAPS) {
         /* Linux's header, and no area under it, there being no swap. */
         ap_str(t, "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n");

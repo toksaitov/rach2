@@ -1,4 +1,4 @@
-.Dd November 3, 2026
+.Dd November 6, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -472,6 +472,24 @@ for a type that stands on no device:
 .Ql nodev tmpfs
 and
 .Ql nodev mqueue .
+.It Pa /proc/fs/lockwait
+One line for each kind of sleeping lock the kernel has used, in the order
+of first use:
+.Dl KIND HOLDS LONGEST_US PID NAME
+A hold counts when its holder finished a wait for the disk while it held
+the lock.
+HOLDS is the number of such holds since boot, modulo 2^32; LONGEST_US is
+the longest of them in microseconds, which reads short past 71 minutes;
+PID and NAME are that hold's thread ID and name, or
+.Ql 0
+and
+.Ql -
+while HOLDS is 0.
+The kind
+.Ql mount
+is the namespace lock of each mounted volume.
+A test that slows the disk reads it to see that no lock was held across
+another file's request.
 .It Pa /proc/interrupts
 One line per device vector, numbered 32 through 63, with a nonzero
 interrupt count:
