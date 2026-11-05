@@ -48,11 +48,12 @@ static unsigned work_count;
 static uint8_t sent[IEEE80211_MAX_FRAME_LEN], queued[ETH_HDR_SIZE + ETH_MTU];
 static unsigned sent_len, queued_len;
 static unsigned run_work(void);
-/* A second process's interface request, run on a stack of its own by
- * `park_run` (compat/park_host.c), and whether the stub radio's next start
- * sleeps, parking that request until it is resumed. */
+/* A second process's interface request, or the model worker, run on a
+ * stack of its own by `park_run` (compat/park_host.c), and whether the stub
+ * radio's next start or stop sleeps, parking that call until it is resumed. */
 static struct netdev *call_nd;
-static int call_up, call_rc, park_in_start;
+static int call_up, call_rc, park_in_start, park_in_stop;
+static unsigned work_ran; /* the runs of the parked model worker */
 int park_run(void (*fn)(void));
 int park_resume(void);
 int park_active(void);
@@ -513,11 +514,15 @@ static int radio_start(struct wlan_radio *radio)
     return start_error;
 }
 
-/** Stop only outside net_lock. */
+/** Stop only outside net_lock, sleeping once when asked. */
 static void radio_stop(struct wlan_radio *radio)
 {
     (void)radio;
     CHECK(lock_depth == 0);
+    if (park_in_stop && park_active()) {
+        park_in_stop = 0;
+        park();
+    }
     ++stops;
 }
 
@@ -805,11 +810,18 @@ static void call_set_up(void)
     call_rc = netconf_set_up(call_nd, call_up);
 }
 
+/** The model worker, run on the parked stack so that its stop may sleep. */
+static void call_work(void)
+{
+    work_ran = run_work();
+}
+
 /** A block closes the interface on the worker, which does not wait for
  * itself, and refuses to bring it up, as Linux does; the release leaves it
  * down. An up that comes after the release's CHANGE, before the worker has
  * applied it, starts the radio when the worker does, and a block while the
- * driver's start sleeps refuses that up. */
+ * driver's start sleeps refuses that up. A release while the block's stop
+ * sleeps leaves the interface up and starts the radio again. */
 static void closing(void)
 {
     struct wlan_radio radio;
@@ -863,14 +875,28 @@ static void closing(void)
     CHECK(wlan->blocked && park_waiting());
     CHECK(park_resume() == 1 && call_rc == -ERFKILL && !nd->up && !wlan->started);
     CHECK(starts == before_starts + 4 && stops == before_stops + 4 && !wlan->busy);
+    /* A release while the worker's stop for the block sleeps: the up that
+     * follows its CHANGE finds the interface up and does nothing, so the
+     * worker leaves the interface up and starts the radio. */
+    CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "0", 1) == 0 && run_work() == 1);
+    CHECK(netconf_set_up(nd, 1) == 0 && nd->up && wlan->started && starts == before_starts + 5);
+    CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "1", 1) == 0 && work_count == 1);
+    park_in_stop = 1;
+    CHECK(park_run(call_work) == 0 && park_waiting() && !wlan->started);
+    CHECK(rfkill_store(index, RFKILL_ATTR_SOFT, "0", 1) == 0 && work_count == 1);
+    CHECK(netconf_set_up(nd, 1) == 0 && nd->up);
+    CHECK(park_resume() == 1 && work_ran == 2 && stops == before_stops + 5);
+    CHECK(nd->up && wlan->started && !wlan->blocked && !wlan->resume && !wlan->busy);
+    CHECK(starts == before_starts + 6 && work_count == 0);
     wlan_unregister_radio(wlan);
     CHECK(netdev_count() == 0);
 }
 
 /** Bring an interface up and down, then remove its radio while another
- * process's request sleeps: a way down waiting for the worker, then a way up
- * inside the driver's start. Removal lets each finish on the live radio, and
- * the request answers -ENODEV without touching the freed interface. */
+ * process's request sleeps: a way down waiting for the worker, a way up
+ * inside the driver's start, and a way up inside the stop that a block
+ * during the start asks for. Removal lets each finish on the live radio,
+ * and the request answers -ENODEV without touching the freed interface. */
 static void removal(void)
 {
     struct wlan_radio radio;
@@ -913,6 +939,26 @@ static void removal(void)
     CHECK(call_rc == -ENODEV && starts == before_starts + 3);
     CHECK(stops == before_stops + 3 && radio.wlan == 0 && !netdev_by_index(index));
     CHECK(netdev_count() == 0);
+
+    setup(&radio, 8);
+    wlan = 0;
+    CHECK(wlan_register_radio(&radio, &wlan) == 0 && wlan);
+    if (!wlan)
+        return;
+    call_nd = &wlan->netdev;
+    index = call_nd->index;
+    call_up = 1;
+    park_in_start = 1;
+    CHECK(park_run(call_set_up) == 0 && wlan->busy == 1);
+    CHECK(rfkill_store((int)rfkill_index(wlan->rfkill), RFKILL_ATTR_SOFT, "1", 1) == 0);
+    park_in_stop = 1;
+    CHECK(park_resume() == 0 && wlan->busy == 1 && starts == before_starts + 4);
+    wlan_unregister_radio(wlan);
+    CHECK(!park_waiting());
+    if (park_waiting())
+        (void)park_resume();
+    CHECK(call_rc == -ENODEV && stops == before_stops + 4 && radio.wlan == 0);
+    CHECK(!netdev_by_index(index) && netdev_count() == 0 && work_count == 0);
 }
 
 /** While the worker cannot be started, the interface stays down with

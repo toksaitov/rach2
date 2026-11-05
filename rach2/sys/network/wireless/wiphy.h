@@ -34,9 +34,9 @@ struct wlan {
     volatile unsigned hw_blocked;
     /* The interface's requests to come up or go down in flight, each on
      * its caller's stack, and how many of them removal waits for: a way
-     * down the worker has not yet run, or a driver start not yet returned.
-     * Removal marks each record gone, so that its caller, waking, touches
-     * nothing of the freed radio. */
+     * down the worker has not yet run, or a driver start or stop not yet
+     * returned. Removal marks each record gone, so that its caller, waking,
+     * touches nothing of the freed radio. */
     struct wlan_request *requests;
     unsigned busy;
     /* Each private pointer is owned by the named component. */
