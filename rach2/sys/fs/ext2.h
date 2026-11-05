@@ -28,6 +28,7 @@
  * writes across calls. Of the operations it leaves out `lookup_rest`, `pin`
  * and `unpin`.
  */
+/* Writable: a host test's row sets `file_locked` for itself. */
 extern struct vfs_type vfs_ext2_type;
 
 /** The nodes in memory that every ext2 mount's search for an inode by its

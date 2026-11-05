@@ -10,7 +10,7 @@
  * host-cflags: -I tools/etude/include
  * host-deps: rach2/sys/fs/ext2.c rach2/sys/fs/bcache.c rach2/sys/fs/fatcommon.c
  * host-deps: rach2/sys/block/chain.c rach2/sys/fs/fd.c rach2/sys/fs/lock.c
- * host-deps: rach2/sys/fs/sleeplock.c
+ * host-deps: rach2/sys/fs/sleeplock.c tests/host/compat/park_host.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/pressure_host.c tests/host/compat/fixdir_host.c
@@ -64,6 +64,12 @@ extern void *memset(void *s, int c, unsigned long n);
 extern void *malloc(unsigned long n);
 extern void free(void *p);
 
+/* compat/park_host.c: a second process's call, run inside a sleep of the
+   first, on a stack of its own. */
+extern int park_run(void (*fn)(void));
+extern int park_resume(void);
+extern void park(void);
+
 #define SEEK_SET_ 0
 
 /* ---- stubs for what the driver and the cache reach outside themselves ---- */
@@ -72,8 +78,11 @@ static struct vfs_mount mnt;
 static void (*namespace_ready)(void);
 static void (*flush_pause)(void);
 static void (*read_pause)(void);
+static void (*write_pause)(void);
 
 process_t proc_a;
+/* The second process of a row in which two threads take turns. */
+static process_t proc_b = {.pid = 2};
 struct percpu cpu_table[NR_CPUS] = {{.current = &proc_a}};
 /* The one thread, which the descriptor table's growth walks. */
 process_t *proc_list = &proc_a;
@@ -121,18 +130,88 @@ void wait_queue_init(wait_queue_t *wq)
 {
     __builtin_memset(wq, 0, sizeof(*wq));
 }
-/** Do nothing: no process sleeps in this test. */
+/** Do nothing: a sleeper looks at its condition at each turn it is given. */
 void wq_wake_all(wait_queue_t *wq)
 {
     (void)wq;
 }
-/** Return -1 at once, as an interrupted wait does: no other process runs. */
+
+/* The waits that slept, and how many turns one may give before the row is a
+   deadlock, which would otherwise spin. */
+static int sleeps;
+#define WAIT_TURNS 100000
+
+/* A row of two processes: process A is the test's own stack and process B
+   a parked call (compat/park_host.c), which `start_turns` arms and A's first
+   turn starts. Only one runs, and each runs until it gives the turn. */
+static void (*second_body)(void);
+static int second_armed, second_started, second_inside;
+
+/** Give the other process of a row the turn, and be this one again when it
+ * comes back or process B has ended. */
+static void pass_turn(void)
+{
+    process_t *me = current_proc;
+    int ended;
+
+    if (second_inside) {
+        park();
+    } else if (second_armed) {
+        current_proc = &proc_b;
+        second_inside = 1;
+        ended = second_started ? park_resume() : park_run(second_body);
+        second_inside = 0;
+        second_started = 1;
+        second_armed = !ended;
+    }
+    current_proc = me;
+}
+
+/** Whether a row has a process B that has not ended. */
+static int turns_active(void)
+{
+    return second_armed;
+}
+
+/** Arm `body` as process B, which runs at the first turn it is given. */
+static void start_turns(void (*body)(void))
+{
+    second_body = body;
+    second_armed = 1;
+    second_started = 0;
+}
+
+/** Give turns until process B has ended, starting it if none was given. */
+static void finish_turns(void)
+{
+    while (second_armed) {
+        pass_turn();
+    }
+}
+
+/**
+ * Return -1 at once, as an interrupted wait does, when no other process
+ * runs; in a row of two, give turns until `cond` holds, and panic when it
+ * never does.
+ */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
+    int turns = 0;
+
     (void)wq;
-    (void)cond;
-    (void)arg;
-    return -1;
+    if (!turns_active()) {
+        return -1;
+    }
+    if (!cond(arg)) {
+        sleeps++;
+    }
+    while (!cond(arg)) {
+        if (++turns > WAIT_TURNS || !turns_active()) {
+            k_panic("a wait that nothing ends");
+        }
+        pass_turn();
+    }
+    return 0;
 }
 
 /** Return 0: the caller never holds the namespace lock here. */
@@ -155,9 +234,12 @@ void vfs_device_failed(block_device_t *d, uint64_t lba, int rc)
         mnt.flags |= VFS_MS_RDONLY;
     }
 }
-/** As `wq_wait_event`. */
+/** As `wq_wait_event`, and a panic for a wait no other process can end. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
+    if (!turns_active() && !cond(arg)) {
+        k_panic("a wait with no other process");
+    }
     return wq_wait_event(wq, cond, arg);
 }
 /** Return 0: no hold of a sleeping lock here is timed. */
@@ -196,6 +278,8 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
 
 static void *image;
 static uint64_t image_sectors;
+/* Reads to fail, for a row: each one reads nothing. */
+static int read_fails;
 
 /** Read `count` sectors of the image file at `lba`; 0, or -5 (EIO). */
 static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
@@ -203,6 +287,10 @@ static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
     (void)d;
     if (read_pause) {
         read_pause();
+    }
+    if (read_fails > 0) {
+        read_fails--;
+        return -5;
     }
     if (lba + count > image_sectors) {
         return -5;
@@ -316,6 +404,9 @@ static void wlog_reset(void)
 static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
     (void)d;
+    if (write_pause) {
+        write_pause();
+    }
     if (lba + count > image_sectors) {
         return -5;
     }
@@ -3105,6 +3196,7 @@ static void sync_unlocked_row(void)
 
 #include "ext2_batch_cases.h"
 #include "ext2_batch_lifecycle.h"
+#include "ext2_node_rows.h"
 
 /* The host heap's limit on one allocation, 0 for none, and the page
  * allocations it grants before it fails, -1 for no limit
@@ -4514,6 +4606,11 @@ int main(int argc, char **argv)
         goto finish;
     }
 
+    if (argc == 2 && streq(argv[1], "--node-only")) {
+        node_rows();
+        goto finish;
+    }
+
     if (argc == 2 && streq(argv[1], "--times-only")) {
         time_row(128, PROFILE);
         time_row(256, PROFILE_LARGE);
@@ -4540,6 +4637,7 @@ int main(int argc, char **argv)
     attr_rows();
     matrix_rows();
     batch_rows();
+    node_rows();
 
 finish:
     if (image) {
