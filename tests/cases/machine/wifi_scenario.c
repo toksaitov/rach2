@@ -819,13 +819,16 @@ static void robust_switch(struct wifi *w)
     left = log_count(w, "CTRL-EVENT-DISCONNECTED");
     mark = w->sta.at;
     sta(w, NULL, "ping -c 10 " GW_A " > /tmp/switch.ping 2>&1 &");
+    sta(w, NULL, "echo $! > /tmp/switch.pid");
     ap(w, NULL,
        "hostapd_cli -p /run/hostapd -i wlan0 chan_switch 5 2422 ht blocktx; "
        "hostapd_cli -p /run/hostapd -i wlan1 chan_switch 5 2447 ht blocktx");
     n = n < 0 ? -1 : log_after(w, "CTRL-EVENT-CHANNEL-SWITCH", n);
-    /* The shell's wait would wait for wsimrelay too. */
+    /* The shell's wait would wait for wsimrelay too. BusyBox's ping ends with
+     * no totals on a failed send, and the file then says why. */
     sta(w, &text,
-        "until grep -q 'packets transmitted' /tmp/switch.ping; do sleep 1; done; "
+        "until grep -q 'packets transmitted' /tmp/switch.ping || "
+        "[ ! -d /proc/$(cat /tmp/switch.pid) ]; do sleep 1; done; "
         "cat /tmp/switch.ping; grep CTRL-EVENT-CHANNEL-SWITCH " LOG " | tail -1");
     lease(w, 0);
     console = net_text(&w->sta, mark, w->sta.at);
