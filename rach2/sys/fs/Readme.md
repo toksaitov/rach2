@@ -109,5 +109,5 @@ The kernel writes back nothing on a timer: [update(8)](../../../man/man8/update.
 * `tests/run fdlock` boots a KRFFS disk root for `fdstale` and for concurrent offsets of a raw disk window.
 * `tests/run persist` boots a copy of a KRFFS disk on IDE twice, cuts the first boot off once the file is written, `fsync`ed and `sync`ed, and requires the file to be read back on the second.
 * `tests/run diskfull` fills the KRFFS root of the test image until a write fails with `ENOSPC` after bytes were written, and requires the space back after an unlink.
-* `tests/run host` runs `fd_hosttest` (descriptions, each sharer's descriptor limit, the errors of an allocation) and `open_hosttest` (opens and truncations, the close of a descriptor whose release sleeps, the key of a file's locks, and the release of a KRFFS root orphan).
+* `tests/run host` runs `fd_hosttest` (descriptions, each sharer's descriptor limit, the errors of an allocation) and `open_hosttest` (opens and truncations, the close of a descriptor whose release sleeps, the key of a file's locks, the order of the node locks on a `file_locked` type, and the release of a KRFFS root orphan).
 * `/musl/catfile` and `/musl/ofdmusl` are staged on the test image and run by no suite.
