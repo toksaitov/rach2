@@ -42,6 +42,9 @@ struct krffs_volume {
     krffs_mount_t fs;         /* the region, which is the whole device */
     int writable;             /* set at mount; VFS_MS_RDONLY in mnt->flags stops writes later */
     struct krffs_open *opens; /* the open records, one per node */
+    /* The open file a write or truncate under the mount's lock is for, whose
+     * record tags the blocks the backend dirties meanwhile; NULL otherwise. */
+    struct krffs_open *writer;
 };
 
 /** The volume of the mount `mnt`. */
@@ -115,9 +118,17 @@ static int volume_read(void *ctx, uint64_t offset, void *buffer, uint32_t size)
     return 0;
 }
 
+/** The buffer cache's owner of the blocks an open file's operations dirty:
+ * its record, which follows the node through every move. */
+static uint64_t owner_of(const struct krffs_open *o)
+{
+    return (uint64_t)(uintptr_t)o;
+}
+
 /**
  * Copy `size` bytes of `buffer` to `offset` of the volume `ctx`, into the
- * cache's buffers, which it marks dirty. 0, or -1 for a volume mounted
+ * cache's buffers, which it marks dirty, as blocks of `vol->writer` while a
+ * write or truncate of an open file runs. 0, or -1 for a volume mounted
  * read-only, a block the cache cannot give, or bytes past the end of the
  * device.
  *
@@ -151,7 +162,11 @@ static int volume_write(void *ctx, uint64_t offset, const void *buffer, uint32_t
             return -1;
         }
         k_memcpy(b->data + within, in, take);
-        bcache_dirty(b);
+        if (vol->writer) {
+            bcache_dirty_owned(b, owner_of(vol->writer));
+        } else {
+            bcache_dirty(b);
+        }
         bcache_release(b);
         in += take;
         offset += take;
@@ -567,7 +582,9 @@ static int32_t kv_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
         vfs_ns_unlock(mnt);
         return -EFBIG;
     }
+    vol->writer = handle;
     written = krffs_write_at(&vol->fs, &at, buf, count, (uint32_t)offset);
+    vol->writer = NULL;
     if (at != KRFFS_NO_NODE && at != was) {
         open_moved(vol, was, at);
         vfs_repoint(mnt, handle_of(was), handle_of(at));
@@ -607,7 +624,9 @@ static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
         uint64_t was = follow_moves(handle);
         uint64_t now = was;
 
+        vol->writer = handle;
         rc = krffs_truncate_node_at(&vol->fs, now, (uint32_t)size, &now);
+        vol->writer = NULL;
         if (now != KRFFS_NO_NODE && now != was) {
             open_moved(vol, was, now);
             vfs_repoint(mnt, handle_of(was), handle_of(now));
@@ -621,18 +640,43 @@ static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 }
 
 /**
- * Write pending buffers under the mount lock, including on a read-only mount.
+ * Write what an open file left dirty, under the mount lock: the blocks its
+ * writes and truncations dirtied, then the blocks of its header. The caller,
+ * `vfs_fsync`, flushes the device after.
  *
- * A failed write can make the mount read-only while dirty buffers remain.
- * Return a writeback error to the caller.
+ * Every write of the core that changes the ring or stores data ends at a
+ * sync point, which writes the whole device, so what an operation leaves
+ * dirty is header fields: the file's length, size and times, and the
+ * backward link of the node after a shrunk one. The header is written by its
+ * offset, whatever tag its block has, because a change of mode, owner or
+ * times dirties it outside a write and a neighbour's write may retag its
+ * block. A NULL handle, a sync of the whole volume, and a mount a failed
+ * write made read-only write every dirty buffer of the device, since a sync
+ * point that failed leaves blocks of any file dirty, the failed one too.
+ *
+ * Returns 0 or the writeback's -errno, with the buffers that failed still
+ * dirty.
  */
 static int kv_fsync(struct vfs_mount *mnt, void *handle)
 {
+    struct krffs_volume *vol = vol_of(mnt);
+    struct krffs_open *o = handle;
+    uint64_t at;
+    uint64_t blk;
     int rc;
 
-    (void)handle;
     vfs_ns_lock(mnt);
-    rc = bcache_sync(vol_of(mnt)->dev);
+    if (!o || !vol->writable || (mnt->flags & VFS_MS_RDONLY)) {
+        rc = bcache_sync(vol->dev);
+        vfs_ns_unlock(mnt);
+        return rc;
+    }
+    at = follow_moves(o);
+    rc = bcache_sync_owned(vol->dev, owner_of(o));
+    for (blk = at / BCACHE_BLOCK_BYTES;
+         rc == 0 && blk <= (at + sizeof(krffs_node_t) - 1) / BCACHE_BLOCK_BYTES; blk++) {
+        rc = bcache_sync_block(vol->dev, blk);
+    }
     vfs_ns_unlock(mnt);
     return rc;
 }
@@ -1052,7 +1096,8 @@ static int kv_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
     return 0;
 }
 
-/** Write pending buffers under the mount lock, even after a write failure. */
+/** Write every dirty buffer of the volume under the mount lock, even after a
+ * write failure. */
 static int kv_sync(struct vfs_mount *mnt)
 {
     return kv_fsync(mnt, NULL);

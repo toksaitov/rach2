@@ -3,7 +3,7 @@
  * over rach2/sys/fs/krffs.c, with the descriptor table of fd.c: relocation,
  * O_PATH pins, writeback errors, the order of the clean flag, and the error
  * a failed creation returns, a directory whose identifier another directory
- * has among them.
+ * has among them, and an fsync that writes one file.
  *
  * host-deps: tests/host/compat/vfs_name_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/fs/lock.c rach2/sys/lib/kstring.c
@@ -43,6 +43,8 @@ static void (*waiting)(void);
 static int failures, depth, sync_error, flush_error, sync_calls, flush_calls;
 static int check_clean_order, clean_writes, reuse_fd, truncating;
 static int fail_after_move, syncs_after_free, fail_flush_at;
+/* Blocks copied from the cache to the device cache, by any of the syncs. */
+static int block_writes;
 static void (*flush_hook)(void);
 static void *original;
 static char payload[8192];
@@ -190,10 +192,59 @@ void bcache_release(struct bbuf *b)
     (void)b;
 }
 
-/** Record a pending cache write. */
+/** Record a pending cache write; a tag the block has stays. */
 void bcache_dirty(struct bbuf *b)
 {
     b->dirty = 1;
+}
+
+/** Record a pending cache write of a block of `owner` alone. */
+void bcache_dirty_owned(struct bbuf *b, uint64_t owner)
+{
+    b->dirty = 1;
+    b->owner = owner;
+}
+
+/** Copy block `i` to the device cache, clear its mark and tag, and count it
+ * in `block_writes`. */
+static void write_block(unsigned i)
+{
+    k_memcpy(device + i * BCACHE_BLOCK_BYTES, buffers[i].data, BCACHE_BLOCK_BYTES);
+    buffers[i].dirty = 0;
+    buffers[i].owner = 0;
+    block_writes++;
+}
+
+/** Write the dirty blocks tagged `owner`, or every dirty block for 0, with
+ * no flush; -EIO with nothing written under `sync_error`. */
+int bcache_sync_owned(block_device_t *dev, uint64_t owner)
+{
+    unsigned i;
+
+    check(dev == &disk, "owned sync of the volume's device");
+    if (sync_error) {
+        return -EIO;
+    }
+    for (i = 0; i < IMAGE_BLOCKS; i++) {
+        if (buffers[i].dirty && (owner == 0 || buffers[i].owner == owner)) {
+            write_block(i);
+        }
+    }
+    return 0;
+}
+
+/** Write block `blk` if it is dirty, whatever its tag, with no flush; -EIO
+ * under `sync_error`. */
+int bcache_sync_block(block_device_t *dev, uint64_t blk)
+{
+    check(dev == &disk && blk < IMAGE_BLOCKS, "block sync in volume");
+    if (sync_error) {
+        return -EIO;
+    }
+    if (blk < IMAGE_BLOCKS && buffers[blk].dirty) {
+        write_block((unsigned)blk);
+    }
+    return 0;
 }
 
 /**
@@ -226,8 +277,7 @@ int bcache_sync(block_device_t *dev)
                       "earlier data reaches medium before clean flag");
                 clean_writes++;
             }
-            k_memcpy(device + i * BCACHE_BLOCK_BYTES, buffers[i].data, BCACHE_BLOCK_BYTES);
-            buffers[i].dirty = 0;
+            write_block(i);
         }
     }
     return 0;
@@ -271,7 +321,7 @@ static void setup(void)
     waiting = NULL;
     flush_hook = NULL;
     fail_flush_at = 0;
-    fail_after_move = syncs_after_free = 0;
+    fail_after_move = syncs_after_free = block_writes = 0;
     root->magic = space->magic = KRFFS_FILE_SYSTEM_MAGIC;
     root->type = KRFFS_ROOT_NODE;
     root->mode = 0755;
@@ -819,6 +869,137 @@ static void refusals(void)
     teardown();
 }
 
+/** The cache block that holds byte `at` of the volume. */
+static unsigned block_of(uint64_t at)
+{
+    return (unsigned)(at / BCACHE_BLOCK_BYTES);
+}
+
+/**
+ * An fsync writes one file. `one` and `other` each fill blocks of their own;
+ * a chmod dirties `other`'s header and eight of its data blocks are left
+ * dirty as a neighbour's writeback, and a write to `one` that changes no
+ * length leaves its header dirty after the core's sync point. The fsync of
+ * `one` writes its header block alone and leaves every block of `other`
+ * dirty; the sync of the volume then writes them.
+ */
+static void owned_fsync(void)
+{
+    struct vfs_stat st;
+    void *one, *other;
+    unsigned i, first;
+    int fd_one, fd_other;
+
+    setup();
+    one = create("one");
+    fd_one = open_node(one);
+    k_memset(payload, 'O', sizeof(payload));
+    check(kv_write(&mount, table.entries[fd_one].ofd->fhandle, payload, 4096, 0) == 4096,
+          "fsync row: seed one");
+    other = create("other");
+    fd_other = open_node(other);
+    for (i = 0; i < 4; i++) {
+        check(kv_write(&mount, table.entries[fd_other].ofd->fhandle, payload, sizeof(payload),
+                       i * sizeof(payload)) == (int)sizeof(payload),
+              "fsync row: seed other");
+    }
+    one = table.entries[fd_one].ofd->vnode;
+    other = table.entries[fd_other].ofd->vnode;
+    check(block_of(offset_of(&mount, one) + sizeof(krffs_node_t) - 1) <
+              block_of(offset_of(&mount, other)),
+          "fsync row: one's header shares no block with other");
+    first = block_of(offset_of(&mount, other) + sizeof(krffs_node_t)) + 1;
+    check(kv_write(&mount, table.entries[fd_one].ofd->fhandle, "o", 1, 0) == 1,
+          "fsync row: overwrite one");
+    st.mode = 0600;
+    check(kv_setattr(&mount, other, VFS_SET_MODE, &st) == 0, "fsync row: chmod other");
+    for (i = first; i < first + 8; i++) {
+        buffers[i].dirty = 1;
+    }
+    check(buffers[block_of(offset_of(&mount, one))].dirty, "write leaves one's header dirty");
+    block_writes = 0;
+    check(kv_fsync(&mount, table.entries[fd_one].ofd->fhandle) == 0, "fsync of one succeeds");
+    check(block_writes == 1 && !buffers[block_of(offset_of(&mount, one))].dirty,
+          "fsync of one writes its header block alone");
+    check(buffers[block_of(offset_of(&mount, other))].dirty, "fsync of one leaves other's header");
+    for (i = first; i < first + 8; i++) {
+        check(buffers[i].dirty, "fsync of one leaves other's data blocks");
+    }
+    block_writes = 0;
+    check(kv_sync(&mount) == 0 && block_writes == 9, "sync of the volume writes the rest");
+    teardown();
+}
+
+/**
+ * The tag follows the file. `target` moves when it grows past `wall`, a
+ * filler takes its old place, and `tail` is made after it. A shrink then
+ * leaves the backward link of `tail` dirty, tagged by the target's open
+ * record. The fsync of `target` through the description it had before the
+ * move writes that block and its new header, and leaves the header of
+ * `bystander`, dirtied by a chmod, in a block of its own.
+ */
+static void owned_across_move(void)
+{
+    struct vfs_stat st;
+    void *bystander;
+    uint64_t at, link;
+    int fd, fd_tail, fd_fill;
+
+    setup();
+    bystander = create("bystander");
+    fd = open_node(create("target"));
+    k_memset(payload, 'M', sizeof(payload));
+    check(kv_write(&mount, table.entries[fd].ofd->fhandle, payload, 4000, 0) == 4000,
+          "move row: seed target");
+    create("wall");
+    check(kv_write(&mount, table.entries[fd].ofd->fhandle, payload, 4096, 2 * 4096) == 4096,
+          "move row: grow target to 3 blocks");
+    at = offset_of(&mount, table.entries[fd].ofd->vnode);
+    check(at > 4096, "move row: target moved past the first block");
+    fd_fill = open_node(create("filler"));
+    check(kv_truncate(&mount, table.entries[fd_fill].ofd->fhandle, 4000) == 0,
+          "move row: filler takes the old place");
+    fd_tail = open_node(create("tail"));
+    link = offset_of(&mount, table.entries[fd_tail].ofd->vnode);
+    check(link == at + sizeof(krffs_node_t) + 3 * 4096, "move row: tail follows target");
+    check(kv_truncate(&mount, table.entries[fd].ofd->fhandle, 100) == 0 &&
+              offset_of(&mount, table.entries[fd].ofd->vnode) == at,
+          "move row: shrink in place");
+    check(buffers[block_of(link)].dirty &&
+              buffers[block_of(link)].owner == owner_of(table.entries[fd].ofd->fhandle),
+          "shrink tags tail's backward link with target's record");
+    st.mode = 0600;
+    check(kv_setattr(&mount, bystander, VFS_SET_MODE, &st) == 0, "move row: chmod bystander");
+    check(block_of(offset_of(&mount, bystander)) != block_of(at) &&
+              block_of(offset_of(&mount, bystander)) != block_of(link),
+          "move row: bystander's header is in a block of its own");
+    check(kv_fsync(&mount, table.entries[fd].ofd->fhandle) == 0, "move row: fsync of target");
+    check(!buffers[block_of(at)].dirty && !buffers[block_of(link)].dirty,
+          "fsync after a move writes the new header and the tagged link");
+    check(buffers[block_of(offset_of(&mount, bystander))].dirty,
+          "fsync after a move leaves an unrelated header");
+    teardown();
+}
+
+/**
+ * A mount a failed write made read-only syncs the whole device at an fsync
+ * of one file, since the failed sync point may have left any file's blocks
+ * dirty: a block of nobody's is written with the file's header.
+ */
+static void owned_after_failure(void)
+{
+    int fd;
+
+    setup();
+    fd = open_node(create("lone"));
+    check(kv_write(&mount, table.entries[fd].ofd->fhandle, "x", 1, 0) == 1, "failure row: seed");
+    buffers[IMAGE_BLOCKS - 1].dirty = 1;
+    mount.flags |= VFS_MS_RDONLY;
+    check(kv_fsync(&mount, table.entries[fd].ofd->fhandle) == 0 && !buffers[IMAGE_BLOCKS - 1].dirty,
+          "fsync on a mount made read-only writes every dirty block");
+    teardown();
+}
+
 /**
  * Do nothing: fd.c reports a description's close to inotify, and no row
  * watches.
@@ -840,8 +1021,9 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
  * an O_PATH pin, a failed relocation of each kind, the unmount's order of
  * writes, a failed clean flush, the errors of a creation, an owner across a
  * block, a taken identifier, a working directory, the refusals of unlink,
- * rename and rmdir, and the group of a node made in a set-group-ID
- * directory. Returns 1 when a row failed, else 0.
+ * rename and rmdir, the group of a node made in a set-group-ID
+ * directory, and an fsync that writes one file, across a move and after a
+ * failed write. Returns 1 when a row failed, else 0.
  */
 int main(void)
 {
@@ -859,6 +1041,9 @@ int main(void)
     working_directory();
     refusals();
     setgid_group();
+    owned_fsync();
+    owned_across_move();
+    owned_after_failure();
     if (!failures) {
         printf("krffsmount-hosttest: result: pass: relocation and durability\n");
     }
