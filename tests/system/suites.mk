@@ -788,7 +788,9 @@ $(call together,$(KRFFSMOUNT_DISKS)): tests/system/krffsvol.sh $(MKMBR)
 # `tests/run ext2`: the ext2 driver booted: the probes as init on an ext2 root,
 # ext2probe's link, cost, name-cache and lookup rows on a fixture volume the
 # host's mke2fs wrote, and os-real on its ext2 root, written, killed, checked,
-# damaged and repaired by recovery's e2fsck. They are the machine cases of
+# damaged and repaired by recovery's e2fsck, with a slow read under the lag
+# device beside another file's calls and four writers under memory pressure
+# judged by e2fsck. They are the machine cases of
 # tests/cases/machine.ext2.json, which etude runs, and have no target here. The
 # cases boot private copies of the three disks below.
 #
@@ -814,7 +816,7 @@ $(IMAGES_DIR)/ext2-fixture.disk: tests/system/mkext2fixture.sh $(MKMBR) | prefli
 # and the programs run beside it are test programs, not in the shipped image,
 # so debugfs writes each into the volume at the root under its own name; it
 # writes a file with the mode of the host's copy, so each mode is set after.
-EXT2_ROOT_PROGRAMS = modeprobe suidhelper zombieprobe musl/lchownmusl musl/direntmusl
+EXT2_ROOT_PROGRAMS = modeprobe suidhelper zombieprobe musl/lchownmusl musl/direntmusl lockwaitprobe
 $(IMAGES_DIR)/ext2-root.disk: $(DEMO_CREDS) krffs/manifests/os-real.manifest $(MANIFEST_DEPS_os_real) \
                               $(filter $(addprefix %/,$(EXT2_ROOT_PROGRAMS)),$(MANIFEST_DEPS_test)) \
                               tools/image/mkext2.sh $(IMAGE_TOOLS) $(MAN_ALL) $(MKMBR) \

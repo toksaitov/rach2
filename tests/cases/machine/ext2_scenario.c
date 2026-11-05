@@ -3,9 +3,10 @@
  * `probe-NAME` run a probe as init on an ext2 root staged from the test
  * manifest; `links`, `cost`, `names` and `lookup` run ext2probe's rows on the
  * fixture volume the host's mke2fs wrote; `rewrite`, `append`, `setid`,
- * `lchown`, `dirent`, `zombie` and `busy` each boot os-real on a fresh copy of
- * its ext2 root; and `repair` takes one copy of that root through a kill, the
- * mount's check, a lost block, a fault, recovery's e2fsck and a clean boot.
+ * `lchown`, `dirent`, `zombie`, `busy`, `lockwait` and `stress` each boot
+ * os-real on a fresh copy of its ext2 root; and `repair` takes one copy of
+ * that root through a kill, the mount's check, a lost block, a fault,
+ * recovery's e2fsck and a clean boot.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -458,21 +459,21 @@ static void state(struct lc *l, const char *id, int want)
 }
 
 /**
- * Run the host's `e2fsck -fn` on the root disk's first partition, keeping
- * its output as evidence `output`, and set `*said` when `text`, if not
- * NULL, is in what it wrote.
+ * Run the host's `e2fsck -fn` on the root disk's partition at `part`, PART1
+ * or PART2, keeping its output as evidence `output`, and set `*said` when
+ * `text`, if not NULL, is in what it wrote.
  *
  * @return its exit status; -1 when it did not exit; -2 when it did not run,
  *         after which the scenario cannot go on.
  */
-static int e2fsck(struct lc *l, const char *output, const char *text, int *said)
+static int e2fsck(struct lc *l, const char *part, const char *output, const char *text, int *said)
 {
     char name[] = "e2fsck", flags[] = "-fn", vol[1100], err[64];
     char *argv[] = {name, flags, vol, NULL};
     char *out, *errs;
     struct etude_termination end;
 
-    if (!lc_ok(l) || !volume(l, "root-disk", PART1, vol, sizeof(vol)) ||
+    if (!lc_ok(l) || !volume(l, "root-disk", part, vol, sizeof(vol)) ||
         !host(l, argv, output, &end))
         return -2;
     if (text != NULL) {
@@ -750,6 +751,41 @@ static void busy(struct lc *l)
 }
 
 /**
+ * Run case `lockwait` or `stress`: lockwaitprobe's mode `name` on the root,
+ * whose lines are printed for a person. Assertion `said-ok`; for `stress`,
+ * `unmounted`, that the poweroff after it unmounts the root, and
+ * `stress-e2fsck`, that the host's e2fsck -fn finds the second partition,
+ * which the probe filled, clean.
+ */
+static void lockwait(struct lc *l, const char *name)
+{
+    struct boot b;
+    char line[64];
+    char *w;
+
+    snprintf(line, sizeof(line), "/lockwaitprobe %s; echo LOCKWAIT\"\"END\r", name);
+    if (!lc_step(l, "row") || !start(l, "root", 1, &b))
+        return;
+    w = run(l, &b, line, "LOCKWAITEND");
+    if (w != NULL) {
+        lc_assert(l, "said-ok",
+                  strstr(w, "LOCKWAITPROBE OK") != NULL && strstr(w, "LOCKWAITPROBE FAIL") == NULL,
+                  "lockwaitprobe did not say LOCKWAITPROBE OK alone");
+        print_lines(w, "LOCKWAITPROBE ");
+        free(w);
+    }
+    if (strcmp(name, "stress") != 0) {
+        lc_quit(l, b.m, NULL);
+        return;
+    }
+    w = poweroff(l, &b);
+    seen(l, w, "unmounted", "shutdown: root: unmounted");
+    free(w);
+    if (lc_step(l, "check"))
+        fsck_status(l, "stress-e2fsck", e2fsck(l, PART2, "stress.e2fsck", NULL, NULL), 0);
+}
+
+/**
  * The first boot of case `repair`: the root mounts writable and takes a
  * write, its partition node refuses one, and the machine is ended with the
  * root unclean. Assertions `first-mounted`, `first-write`, `node-refused`,
@@ -859,7 +895,7 @@ static void dirty(struct lc *l)
     free(w);
     lc_find(l, b.m, "dirty-checked", "ext2: check: clean", 0, 1);
     state(l, "dirty-valid", 1);
-    fsck_status(l, "dirty-e2fsck", e2fsck(l, "dirty.e2fsck", NULL, NULL), 0);
+    fsck_status(l, "dirty-e2fsck", e2fsck(l, PART1, "dirty.e2fsck", NULL, NULL), 0);
 }
 
 /**
@@ -885,7 +921,7 @@ static void lost(struct lc *l)
     lc_find(l, b.m, "lost-record", "ext2: check: 1 lost blocks, 0 orphan inodes, kept for e2fsck",
             0, 1);
     state(l, "lost-error-bit", 2);
-    status = e2fsck(l, "lost.e2fsck", "Block bitmap differences", &said);
+    status = e2fsck(l, PART1, "lost.e2fsck", "Block bitmap differences", &said);
     fsck_status(l, "lost-e2fsck", status, 4);
     if (status != -2)
         lc_assert(l, "lost-bitmap", said, "e2fsck does not name the block bitmap's differences");
@@ -978,7 +1014,7 @@ static void recover(struct lc *l)
     lc_find(l, b.m, "repair-root", "init: e2fsck: /dev/disk0p1: status 1", 0, 1);
     lc_find(l, b.m, "repair-second", "init: e2fsck: /dev/disk0p2: status 0", 0, 1);
     lc_find(l, b.m, "repair-copy", "init: e2fsck: /dev/disk1p1: status 1", 0, 1);
-    fsck_status(l, "repair-e2fsck", e2fsck(l, "repair.e2fsck", NULL, NULL), 0);
+    fsck_status(l, "repair-e2fsck", e2fsck(l, PART1, "repair.e2fsck", NULL, NULL), 0);
     state(l, "repair-valid", 1);
     if (digest(l, &after))
         lc_assert(l, "repair-changed", after != before, "the repair changed nothing on the disk");
@@ -1011,6 +1047,7 @@ int etude_scenario(struct etude_case *c)
     static const char *const row_ids[] = {"said-ok", NULL};
     static const char *const zombie_ids[] = {"said-ok", "unmounted", NULL};
     static const char *const busy_ids[] = {"writing", "unmounted", NULL};
+    static const char *const stress_ids[] = {"said-ok", "unmounted", "stress-e2fsck", NULL};
     static const char *const repair_ids[] = {
         "first-mounted",   "first-write",     "node-refused",    "root-before-usb",
         "first-unchecked", "loop-ext2",       "loop-ext2-read",  "loop-vfat",
@@ -1057,6 +1094,11 @@ int etude_scenario(struct etude_case *c)
     if (strcmp(name, "busy") == 0) {
         lc_begin(&l, c, busy_ids);
         busy(&l);
+        return lc_finish(&l);
+    }
+    if (strcmp(name, "lockwait") == 0 || strcmp(name, "stress") == 0) {
+        lc_begin(&l, c, strcmp(name, "stress") == 0 ? stress_ids : row_ids);
+        lockwait(&l, strcmp(name, "stress") == 0 ? "stress" : "lag");
         return lc_finish(&l);
     }
     if (strcmp(name, "repair") != 0)
