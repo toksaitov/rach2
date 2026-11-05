@@ -1,7 +1,8 @@
 /**
  * ext2_reserve_hosttest.c: the blocks a write of rach2/sys/fs/ext2.c
  * reserves: the count it needs, pointer blocks included, decided before any
- * byte is taken, and the reserved blocks kept from a caller who is not root.
+ * byte is taken, and the reserved blocks kept from a caller who is not root;
+ * and what the batch and the allocator read and write under em->meta.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/fs/sleeplock.c
@@ -9,7 +10,9 @@
  * The test includes ext2.c whole. The mount, a group of 64 blocks and an
  * inode are built in memory, over a cache model with one buffer for each
  * block, so that the writer runs without a volume made by mke2fs and
- * without the mount's check, whose calls panic here.
+ * without the mount's check, whose calls panic here. The model can say a
+ * block is not cached, and keep saying so for a number of reads, as a cache
+ * that evicts a block again after its fetch would.
  */
 #include "fs/vfs.h"
 #include "fs/ext2.c"
@@ -27,13 +30,27 @@ static uint8_t storage[(EXT2_WB_DATA + EXT2_WB_META) * 4096];
 static struct bbuf buffers[TEST_BLOCKS];
 static struct ext2_mount volume;
 static struct ext2_writeback batch;
-static struct ext2_node file;
+static struct ext2_node file, other;
 static struct vfs_mount mount;
 static block_device_t device;
 static uint8_t descriptors[32], payload[8192], result[8192];
 static process_t process;
 struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 static int failures, writes;
+
+/* The cache model's state: whether each block is missing from the cache, and
+ * how many more reads leave it missing; the misses plans met; the order
+ * class each block was last dirtied with and the dirty marks without one;
+ * the calls of `bcache_reserve`, the buffers the last asked for, and the
+ * event count at it and at the first blank get after it; and a hook run
+ * once at the next read of a missing block. */
+static int uncached[TEST_BLOCKS], refetch[TEST_BLOCKS];
+static int misses;
+static int order_of[TEST_BLOCKS], unordered[TEST_BLOCKS];
+static int reserve_calls;
+static uint32_t reserve_n;
+static int events, reserve_at, blank_at;
+static void (*fetch_hook)(void);
 
 /** Count and print a failed row. */
 static void check(int ok, const char *what)
@@ -188,28 +205,65 @@ void vfs_ns_unlock(struct vfs_mount *mnt)
     }
 }
 
-/** Every block of the volume is in memory. */
+/** Whether block `block` is in the cache, as the model says; a block it
+ * lacks asked by the planner counts in `misses`. */
 int bcache_cached(block_device_t *dev, uint64_t block)
 {
     (void)dev;
-    (void)block;
+    if (block < TEST_BLOCKS && uncached[block]) {
+        misses += volume.planner == (int)process.pid;
+        return 0;
+    }
     return 1;
 }
 
 /**
  * Block `block` of the volume in memory; a block outside it fails a row and
- * gives NULL.
+ * gives NULL. A read of a block the model calls missing fails a row when
+ * the caller plans, runs `fetch_hook` once, and leaves the block missing
+ * for `refetch` more reads.
  */
 struct bbuf *bcache_get(block_device_t *dev, uint64_t block)
 {
     check(dev == &device && block < TEST_BLOCKS, "cache access is in the volume");
-    return block < TEST_BLOCKS ? &buffers[block] : NULL;
+    if (block >= TEST_BLOCKS) {
+        return NULL;
+    }
+    if (uncached[block]) {
+        void (*hook)(void) = fetch_hook;
+
+        check(volume.planner != (int)process.pid, "a plan reads no block the cache lacks");
+        if (refetch[block] > 0) {
+            refetch[block]--;
+        } else {
+            uncached[block] = 0;
+        }
+        fetch_hook = 0;
+        if (hook) {
+            hook();
+        }
+    }
+    return &buffers[block];
 }
 
-/** As `bcache_get`, for a block the writer overwrites whole. */
+/** As `bcache_get`, for a block the writer overwrites whole; the first after
+ * a `bcache_reserve` is noted in `blank_at`. */
 struct bbuf *bcache_get_blank(block_device_t *dev, uint64_t block)
 {
+    if (reserve_at && !blank_at) {
+        blank_at = ++events;
+    }
     return bcache_get(dev, block);
+}
+
+/** Note the call and the buffers asked for; the model has every one. */
+uint32_t bcache_reserve(block_device_t *dev, uint32_t n)
+{
+    (void)dev;
+    reserve_calls++;
+    reserve_n = n;
+    reserve_at = ++events;
+    return n;
 }
 
 /** Do nothing: the model evicts no block. */
@@ -218,18 +272,19 @@ void bcache_release(struct bbuf *buffer)
     (void)buffer;
 }
 
-/** Count a write to the cache in `writes`. */
+/** Count a write to the cache in `writes`, and one without an order class
+ * in `unordered`. */
 void bcache_dirty(struct bbuf *buffer)
 {
-    (void)buffer;
     writes++;
+    unordered[buffer - buffers]++;
 }
 
-/** Count the write, as `bcache_dirty`; the model keeps no order. */
+/** Count the write and note its block's class in `order_of`. */
 void bcache_dirty_ordered(struct bbuf *buffer, int order)
 {
-    (void)order;
-    bcache_dirty(buffer);
+    writes++;
+    order_of[buffer - buffers] = order;
 }
 
 /** Count the write, which succeeds. */
@@ -287,6 +342,15 @@ static void reset(uint32_t available)
     k_memset(disk, 0, sizeof(disk));
     k_memset(&volume, 0, sizeof(volume));
     k_memset(&file, 0, sizeof(file));
+    k_memset(&other, 0, sizeof(other));
+    k_memset(uncached, 0, sizeof(uncached));
+    k_memset(refetch, 0, sizeof(refetch));
+    k_memset(order_of, 0, sizeof(order_of));
+    k_memset(unordered, 0, sizeof(unordered));
+    misses = reserve_calls = 0;
+    reserve_n = 0;
+    events = reserve_at = blank_at = 0;
+    fetch_hook = 0;
     k_memset(&mount, 0, sizeof(mount));
     k_memset(&batch, 0, sizeof(batch));
     k_memset(descriptors, 0, sizeof(descriptors));
@@ -321,9 +385,15 @@ static void reset(uint32_t available)
         batch.slot[i] = storage + i * 4096;
     }
     mount.priv = &volume;
+    mount.ns.holder = -1;
+    em_locks_init(&volume);
+    volume.alloc_hint = 0;
     file.ino = 12;
     file.mode = S_IFREG_ | 0600;
     file.refs = file.nlink = 1;
+    other.ino = 13;
+    other.mode = S_IFREG_ | 0640;
+    other.refs = other.nlink = 1;
     process.euid = 1000;
     process.pid = 1;
     writes = 0;
@@ -419,6 +489,7 @@ static void reservation_rows(void)
     int metas, datas;
 
     reset(11);
+    vfs_ns_lock(&mount);
     check(writeback_piece(&volume, &file, 0, payload, 4096) == 0, "accept an earlier piece");
     before = file;
     remaining = (uint32_t)volume.free_blocks;
@@ -432,12 +503,143 @@ static void reservation_rows(void)
     check(writeback_drain(&volume) == 0 && read_data(&volume, &file, 0, result, 4096) == 0 &&
               memcmp(result, payload, 4096) == 0,
           "earlier piece survives a refused reservation");
+    vfs_ns_unlock(&mount);
 
     reset(2);
     process.euid = 0;
+    vfs_ns_lock(&mount);
     check(writeback_piece(&volume, &file, (uint64_t)1036 * 4096, payload, 4096) == -ENOSPC &&
               volume.free_blocks == 2 && batch.count == 0,
           "root cannot reserve more blocks than are free");
+    vfs_ns_unlock(&mount);
+}
+
+/** Whether block `b`'s bit is set in the model disk's block bitmap. */
+static int bit_on(uint32_t b)
+{
+    return (disk[2][b / 8] >> (b % 8)) & 1u;
+}
+
+/**
+ * A plan under em->meta reads no block the cache lacks. The bitmap is
+ * fetched before the plan and gone again when the plan asks for it: the
+ * piece gives back the image it took, fetches the bitmap with the lock let
+ * go and starts again, once, and ends with one image of each block. A
+ * bitmap the cache keeps losing is met PLAN_TRIES times, and then the plan
+ * reads it under the lock, one request.
+ */
+static void miss_rows(void)
+{
+    reset(20);
+    uncached[2] = 1;
+    refetch[2] = 1;
+    check(ext2_write(&mount, &file, payload, 4096, 0) == 4096, "a piece whose bitmap is evicted");
+    check(misses == 1, "meets the miss once and restarts");
+    check(batch.metas == 3 && batch.datas == 1 && batch.count == 1,
+          "and keeps one image of each block it took");
+    check(writeback_drain(&volume) == 0 && bit_on(TEST_BLOCKS - 20) &&
+              read_data(&volume, &file, 0, result, 4096) == 0 && memcmp(result, payload, 4096) == 0,
+          "and the restarted piece drains and reads back");
+
+    reset(20);
+    uncached[2] = 1;
+    refetch[2] = 1000;
+    check(ext2_write(&mount, &file, payload, 4096, 0) == 4096 && misses == PLAN_TRIES,
+          "a bitmap the cache keeps losing is met PLAN_TRIES times");
+    check(batch.metas == 3 && writeback_drain(&volume) == 0 &&
+              read_data(&volume, &file, 0, result, 4096) == 0 && memcmp(result, payload, 4096) == 0,
+          "and the last plan reads it under the lock");
+}
+
+/**
+ * A write into a block the batch holds reaches the batch's image too, so
+ * that the drain, which copies the image over the cache's block, keeps it:
+ * another inode stored into the pending inode's table block, and a block
+ * allocated beside the batch's reservation in its bitmap and descriptor.
+ */
+static void held_block_rows(void)
+{
+    uint32_t b = 0;
+    uint64_t at = (uint64_t)(other.ino - 1) * 128;
+    struct ext2_image *im;
+
+    reset(20);
+    check(ext2_write(&mount, &file, payload, 4096, 0) == 4096 && batch.count == 1,
+          "a pending piece holds the inode table's block");
+    other.size = 77;
+    vfs_ns_lock(&mount);
+    check(inode_store(&volume, &other) == 0, "another inode of that block is stored");
+    im = writeback_find(&volume, 4);
+    check(im && le16(im->data + at) == other.mode && le32(im->data + at + 4) == 77,
+          "into the batch's image as well as the cache");
+    check(alloc_block(&volume, volume.alloc_hint, &b) == 0 && b == TEST_BLOCKS - 19,
+          "a block is allocated beside the batch's reservation");
+    vfs_ns_unlock(&mount);
+    check(writeback_drain(&volume) == 0, "the batch drains");
+    check(le16(disk[4] + at) == other.mode && le32(disk[4] + at + 4) == 77 &&
+              le32(disk[4] + (file.ino - 1) * 128 + 4) == 4096,
+          "and the table block has both inodes");
+    check(bit_on(TEST_BLOCKS - 20) && bit_on(TEST_BLOCKS - 19) && le16(disk[1] + 12) == 18 &&
+              volume.free_blocks == 18,
+          "and the bitmap and descriptor both allocations");
+}
+
+/**
+ * A drain on a mount that writes back has the cache make room for its
+ * copies, one buffer each, before it takes em->meta and copies.
+ */
+static void drain_reserve_row(void)
+{
+    reset(20);
+    check(ext2_write(&mount, &file, payload, 4096, 0) == 4096, "a pending piece of four images");
+    check(writeback_drain(&volume) == 0 && reserve_calls == 1 && reserve_n == 4,
+          "a drain reserves a buffer for each changed image");
+    check(reserve_at != 0 && blank_at > reserve_at, "before its first copy");
+}
+
+/* The nested punch's file, freed while the outer punch fetches a bitmap. */
+static void punch_other(void)
+{
+    check(punch(&volume, &other, 0) == 0, "the nested punch frees its blocks");
+}
+
+/**
+ * Two punches of two files, the second run while the first fetches its
+ * bitmap with em->meta let go, as two processes would interleave at that
+ * disk wait. Each keeps its own list: every block of both files is freed,
+ * the counts come back whole, and the inode table block is dirtied first
+ * and the bitmap and descriptor after, with no mark outside the two
+ * classes, so that no pointer on the disk names a block whose bit is clear.
+ */
+static void overlap_punch_row(void)
+{
+    int i;
+
+    reset(20);
+    check(ext2_write(&mount, &file, payload, 8192, 0) == 8192 &&
+              ext2_write(&mount, &other, payload, 8192, 0) == 8192 && writeback_drain(&volume) == 0,
+          "two files of two blocks each");
+    check(volume.free_blocks == 16, "take four blocks");
+    k_memset(order_of, 0, sizeof(order_of));
+    k_memset(unordered, 0, sizeof(unordered));
+    uncached[2] = 1;
+    fetch_hook = punch_other;
+    vfs_ns_lock(&mount);
+    check(punch(&volume, &file, 0) == 0 && !fetch_hook, "the outer punch frees its blocks");
+    vfs_ns_unlock(&mount);
+    check(volume.free_blocks == 20 && le16(disk[1] + 12) == 20 && file.blocks == 0 &&
+              other.blocks == 0,
+          "and the counts are whole");
+    for (i = 0; i < 4; i++) {
+        uint32_t b = TEST_BLOCKS - 20 + (uint32_t)i;
+
+        check(!bit_on(b), "each block's bit is clear");
+    }
+    check(file.block[0] == 0 && file.block[1] == 0 && other.block[0] == 0 && other.block[1] == 0,
+          "and no pointer names one");
+    check(order_of[4] == BCACHE_ORDER_FIRST && order_of[2] == BCACHE_ORDER_AFTER &&
+              order_of[1] == BCACHE_ORDER_AFTER && !unordered[1] && !unordered[2] && !unordered[4],
+          "the inodes go first and the bitmap and descriptor after");
 }
 
 /** Run the rows; 0 when every row passed. */
@@ -446,8 +648,13 @@ int main(void)
     boundary_rows();
     existing_rows();
     reservation_rows();
+    miss_rows();
+    held_block_rows();
+    drain_reserve_row();
+    overlap_punch_row();
     if (!failures) {
-        printf("ext2-reserve-hosttest: result: pass: boundaries and reservation quotas\n");
+        printf("ext2-reserve-hosttest: result: pass: boundaries, reservation quotas, plans and "
+               "frees under em->meta\n");
     }
     return failures != 0;
 }
