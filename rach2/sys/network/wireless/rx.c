@@ -430,11 +430,12 @@ static void seal(struct wlan_data *d, const struct wlan_rx_status *status, uint6
 }
 
 /**
- * Note the start of a pairwise key's renewal in the opened `frame` of `len`
- * bytes: message 1 of a 4-way handshake, an EAPOL-Key frame, 802.11-2020
- * Figure 12-35, with the Pairwise and Ack bits and no MIC, on a connection
- * that has a pairwise key. A group key's messages have no Pairwise bit, and a
- * first join has no key. A repeat keeps the first message's tick.
+ * Note the start of a pairwise key's renewal in the `frame` of `len` bytes,
+ * opened under a key, so that nobody but the AP can start the wait: message 1
+ * of a 4-way handshake, an EAPOL-Key frame, 802.11-2020 Figure 12-35, with
+ * the Pairwise and Ack bits and no MIC, on a connection that has a pairwise
+ * key. A group key's messages have no Pairwise bit, and a first join has no
+ * key. A repeat keeps the first message's tick.
  */
 static void note_renewal(struct wlan_data *d, const uint8_t *frame, unsigned len, unsigned hdrlen,
                          uint64_t arrived)
@@ -506,9 +507,10 @@ int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
             return rc;
         c.key->key.rx_pn[idx] = c.pn;
     }
-    if (c.key)
+    if (c.key) {
         seal(d, status, arrived);
-    note_renewal(d, frame, len, hdrlen, arrived);
+        note_renewal(d, frame, len, hdrlen, arrived);
+    }
 
     if (qos && (frame[IEEE80211_HDRLEN] & IEEE80211_QOS_CTL_A_MSDU_PRESENT))
         return rx_amsdu(d, frame, len, hdrlen);

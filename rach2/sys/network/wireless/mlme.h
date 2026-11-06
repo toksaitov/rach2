@@ -19,6 +19,7 @@
 #define WLAN_MLME_BEACON_LOSS     17    /* beacon intervals without a beacon */
 #define WLAN_MLME_IDLE_POLL       30000 /* without a unicast frame or ACK */
 #define WLAN_MLME_KEY_WAIT        10000 /* a renewal's message 1 to its key */
+#define WLAN_MLME_CSA_LOOK        2000  /* longest look-away in a countdown */
 #define WLAN_MLME_PROBE_TIMEOUT   500   /* each probe of a silent AP */
 #define WLAN_MLME_PROBE_TRIES     3     /* null frames, or probe requests */
 #define WLAN_MLME_LISTEN_INTERVAL 5     /* beacon intervals */

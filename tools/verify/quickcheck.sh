@@ -195,21 +195,26 @@ manual() {
         echo 'rach2/syscalls.md: not what make syscalls writes; run it' >>"$OUT"
 }
 
-# registry: the suites' list, and with a built etude their inventory.
+# registry: the suites' list, and with an etude newer than its source, of this
+# tree or of the clone it is a worktree of, their inventory and their waits.
 registry() {
-    touched '^tests/(registry|cases/|system/suites\.m[dk])' || return 0
+    touched '^tests/' || return 0
     [ -f "$TREE/tests/registry" ] || return 0
     awk -F'|' '!/^#/ && NF > 1 { print $1 }' "$TREE/tests/registry" | sort | uniq -d |
         sed 's|^|tests/registry: |' | found 'a suite is named twice'
-    _etude=$REPO/build/tools/etude/etude
-    if [ ! -x "$_etude" ]; then
-        warn 'no built etude here; the suites inventory and their waits were not judged'
+    _main=$(cd "$REPO" && cd "$(git rev-parse --git-common-dir)/.." && pwd)
+    for _etude in "$REPO/build/tools/etude/etude" "$_main/build/tools/etude/etude" ''; do
+        [ -x "$_etude" ] || continue
+        [ -n "$(find "$REPO/tools/etude" -name '*.[ch]' -newer "$_etude" | head -n 1)" ] || break
+    done
+    if [ -z "$_etude" ]; then
+        warn 'no etude built from this source; the suites inventory and their waits were not judged'
         return 0
     fi
+    ETUDE=$_etude SUITECHECK_ROOT=$TREE run sh "$REPO/tools/verify/suitecheck.sh"
     "$_etude" run -t "$TREE" inventory >"$WORK/inventory.md" 2>/dev/null
     cmp -s "$WORK/inventory.md" "$TREE/tests/system/suites.md" ||
         echo 'tests/system/suites.md: not the output of tests/run inventory; regenerate it' >>"$OUT"
-    SUITECHECK_ROOT=$TREE run sh "$REPO/tools/verify/suitecheck.sh"
 }
 
 # whole: the checks of the whole tree whose inputs changed.

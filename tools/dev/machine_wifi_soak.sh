@@ -324,6 +324,7 @@ watch_replies()
     said=
     while [ ! -e "$dir/stop" ]; do
         sleep 10
+        [ ! -e "$dir/stop" ] || return
         read -r up _ < /proc/uptime
         last=$(awk -v t="$t0" '/ seq=/ { t = $1 } END { print t }' "$dir/ping")
         away=$(awk -v u="$up" -v l="$last" 'BEGIN { print int(u - l) }')
@@ -437,10 +438,9 @@ table()
     awk '!seen[$0]++' "$dir/kernel.raw" > "$dir/kernel"
     printf 'beacon-loss lines        %d\n' "$(grep -c ': beacon loss: ' "$dir/kernel")"
     printf 'wpa_cli gave up          %d\n' "$(gaveup)"
-    awk '/ seq=/ { if (p && $1 - p > 1) away += $1 - p; p = $1 }
-        { end = $1 }
-        END { printf "seconds without a reply  %d\n", away + (p ? end - p : end) }' "$dir/ping"
-    awk '{ end = $1 }
+    awk -v p="$t0" -v end="$ended" '/ seq=/ { if ($1 - p > 1) away += $1 - p; p = $1 }
+        END { printf "seconds without a reply  %d\n", away + end - p }' "$dir/ping"
+    awk -v t0="$t0" -v end="$ended" '
         / packets transmitted, / { sent += $2; got += $5; asked = heard = 0 }
         / ping: sendto: / { sent += asked; got += heard; asked = heard = 0 }
         / seq=/ {
@@ -451,7 +451,8 @@ table()
             prev = $1; seq = s; asked = s + 1; heard++
         }
         END {
-            if (prev && end - prev > gap) { gap = end - prev; from = prev }
+            if (!prev) prev = t0
+            if (end - prev > gap) { gap = end - prev; from = prev }
             sent += asked; got += heard
             printf "ping                     %d sent, %d answered, %.2f%% lost\n",
                 sent, got, sent ? 100 * (sent - got) / sent : 0
@@ -550,10 +551,15 @@ soak()
     watch_replies "$sleeping" &
     wait "$sleeping"
     stopload
+    ended=$(cut -d ' ' -f 1 /proc/uptime)
     disk1=$(statnum latency_disk_us)
     stats1=$(diskline)
     echo "wifi-soak: load stopped at uptime $(cut -d ' ' -f 1 /proc/uptime)"
-    [ -e "$dir/dead" ] || wait "$pinging"
+    if [ -e "$dir/dead" ]; then
+        kill "$pinging" 2> /dev/null
+        pkill -x ping
+    fi
+    wait "$pinging"
     wait_writers
     dmesg | grep -E 'wlan|ath9k|80211' >> "$dir/kernel.raw"
     sleep 2

@@ -71,6 +71,17 @@ RECOVERY_KEYS_FILE=boot/recovery_authorized_keys
 SLOT_BYTES=4194304
 
 # Prints MESSAGE on stdout as `rach2-install: MESSAGE`, a note of progress.
+# keep_copy SRC DST: copy a kept file, or a directory such as var/lib/backlight
+# whole, to DST, making DST's directory.
+keep_copy() {
+    mkdir -p "$(dirname "$2")" || return 1
+    if [ -d "$1" ]; then
+        rm -rf "$2" && cp -R "$1" "$2"
+    else
+        cp "$1" "$2"
+    fi
+}
+
 say() { echo "$ME: $1"; }
 # Text addressed to the person, with no `rach2-install: ` in front of it. The
 # prefix is for a diagnostic, which says which program is reporting a fault; a
@@ -397,9 +408,8 @@ write_archive() { # write_archive ROOTDIR [MARK]
     mkdir -p "$next_archive/etc/rach2" ||
         die "the archive directory could not be made on the recovery partition"
     for f in $CONFIG_FILES; do
-        if [ -f "$1/$f" ]; then
-            { mkdir -p "$next_archive/$(dirname "$f")" &&
-                cp "$1/$f" "$next_archive/$f"; } || die "$f could not be archived"
+        if [ -e "$1/$f" ]; then
+            keep_copy "$1/$f" "$next_archive/$f" || die "$f could not be archived"
         fi
     done
     if [ -d "$1/etc/dropbear" ]; then
@@ -940,18 +950,16 @@ whole configuration archived on its recovery partition; its accounts are not the
         fi
         say "$from_archive; taking the configuration saved on the recovery partition"
         for f in $CONFIG_FILES; do
-            if [ -f "$archive/$f" ]; then
-                mkdir -p "$keep/$(dirname "$f")"
-                cp "$archive/$f" "$keep/$f" || die "$f could not be taken from the archive"
+            if [ -e "$archive/$f" ]; then
+                keep_copy "$archive/$f" "$keep/$f" || die "$f could not be taken from the archive"
             fi
         done
         restore_archive_keys || die "the archived keys and homes could not be restored"
     elif [ -z "$kept_entry" ]; then
         say "copying this machine's accounts, policy and keys off the root"
         for f in $CONFIG_FILES; do
-            if [ -f "$TARGET_MNT/$f" ]; then
-                mkdir -p "$keep/$(dirname "$f")"
-                cp "$TARGET_MNT/$f" "$keep/$f" || die "$f could not be kept"
+            if [ -e "$TARGET_MNT/$f" ]; then
+                keep_copy "$TARGET_MNT/$f" "$keep/$f" || die "$f could not be kept"
             fi
         done
         # The archive is a copy of the root's own files; a difference is
@@ -1106,13 +1114,15 @@ whole configuration archived on its recovery partition; its accounts are not the
     keep_image_accounts "$TARGET_MNT" "$keep" ||
         die "the image's system accounts could not be kept beside the machine's"
     for f in $CONFIG_FILES; do
-        if [ -f "$keep/$f" ]; then
-            mkdir -p "$TARGET_MNT/$(dirname "$f")"
-            cp "$keep/$f" "$TARGET_MNT/$f" || die "$f could not be put back"
+        if [ -e "$keep/$f" ]; then
+            keep_copy "$keep/$f" "$TARGET_MNT/$f" || die "$f could not be put back"
         fi
     done
     chmod 600 "$TARGET_MNT/etc/shadow" || die "the shadow file's mode could not be set"
     # The archive's FAT file system keeps no mode, and this file has passphrases.
+    if [ -f "$TARGET_MNT/etc/machine-id" ]; then
+        chmod 444 "$TARGET_MNT/etc/machine-id" || die "the machine id's mode could not be set"
+    fi
     if [ -f "$TARGET_MNT/etc/wpa_supplicant/wlan0.conf" ]; then
         chmod 600 "$TARGET_MNT/etc/wpa_supplicant/wlan0.conf" ||
             die "the saved networks' mode could not be set"

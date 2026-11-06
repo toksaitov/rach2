@@ -1093,8 +1093,9 @@ static void check_renewal_wait(void)
     takes_keys = 1;
     CHECK(rx_clear_key(100, 0x008a) == 0 && n_got == 1 && d->renewing == 0); /* a first join */
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
-    CHECK(rx_key(101, 1, 0x1382) == 0 && d->renewing == 0); /* group message 1 */
-    CHECK(rx_key(102, 2, 0x13ca) == 0 && d->renewing == 0); /* message 3 */
+    CHECK(rx_clear_key(105, 0x008a) == 0 && d->renewing == 0); /* forged, in clear */
+    CHECK(rx_key(101, 1, 0x1382) == 0 && d->renewing == 0);    /* group message 1 */
+    CHECK(rx_key(102, 2, 0x13ca) == 0 && d->renewing == 0);    /* message 3 */
     CHECK(rx_key(103, 3, 0x008a) == 0 && d->renewing == now);
     began = now;
     now += 1000;
