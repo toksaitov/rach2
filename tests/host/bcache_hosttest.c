@@ -669,6 +669,17 @@ static void shared_rows(void)
           "as a clean block and one not in the cache are");
     check(dirty_now(&vast, 32), "and a `first` marked after the `after` is left for later");
     bcache_sync(&vast);
+    dirty_for(&vast, 33, 0, 0);
+    dirty_for(&vast, 20, 0, BCACHE_ORDER_AFTER);
+    dirty_for(&vast, 30, 0, BCACHE_ORDER_FIRST);
+    b = bcache_get(&vast, 33);
+    bcache_dirty_ordered(b, BCACHE_ORDER_FIRST);
+    bcache_release(b);
+    writes_made = 0;
+    check(bcache_sync_block(&vast, 20) == 0 && writes_made == 2 && writes_lba[0] == 33 * 8,
+          "a block that joins the firsts keeps its place, dirty since before the `after`");
+    check(dirty_now(&vast, 30), "ahead of a `first` marked after the `after`");
+    bcache_sync(&vast);
     bcache_invalidate(&vast);
     panic_row(sync_block_it, 0, "a sync while holding", "a write of a block the caller holds");
 }
