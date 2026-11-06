@@ -2097,6 +2097,7 @@ static int ext2_sync(struct vfs_mount *mnt)
     rc = writeback_drain(em);
     em_reap(em);
     if (rc == 0 && em->writable && !(mnt->flags & VFS_MS_RDONLY)) {
+        volume_fetch(em, 0);
         meta_lock(em);
         rc = sb_note(em);
         meta_unlock(em);
@@ -4848,13 +4849,22 @@ static void block_fetch(struct ext2_mount *em, uint64_t at)
     volume_fetch(em, at >> BCACHE_BLOCK_SHIFT);
 }
 
+/** Fetch the block of the volume that holds group `g`'s descriptor, which
+ * `gd_store` writes in part and so reads first. */
+static void gd_fetch(struct ext2_mount *em, uint32_t g)
+{
+    block_fetch(em, (uint64_t)(em->first_data + 1) * em->block_size + (uint64_t)g * 32);
+}
+
 /** Fetch what freeing the inode of `n` reads under `em->meta`: its inode
- * bitmap, and its attribute block with that block's bitmap. */
+ * bitmap and its group's descriptor, and its attribute block with that
+ * block's bitmap. */
 static void inode_blocks_fetch(struct ext2_mount *em, const struct ext2_node *n)
 {
     uint32_t g = (n->ino - 1) / em->ipg;
 
     block_fetch(em, (uint64_t)le32(em->gd + g * 32 + 4) * em->block_size);
+    gd_fetch(em, g);
     if (n->file_acl != 0 && data_block_ok(em, n->file_acl)) {
         g = (n->file_acl - em->first_data) / em->bpg;
         block_fetch(em, (uint64_t)n->file_acl * em->block_size);
@@ -4921,6 +4931,9 @@ static int release_inode(struct ext2_mount *em, struct ext2_node *n)
  * keeps. The node is made before `em->meta`, whose holder should not wait
  * on the heap, and is published N_LOADING under it, so that no gap lets
  * another caller see the number with no node; it goes N_LIVE once written.
+ * The parent's group's inode bitmap and descriptor are fetched before
+ * `em->meta`, so that its holder waits on the disk only when the parent's
+ * group is full or a block was evicted again.
  * 0, -ENOSPC, -ENOMEM, or -errno; a failure frees the inode.
  */
 static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_t mode, int store,
@@ -4936,6 +4949,7 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
         return -ENOMEM;
     }
     block_fetch(em, (uint64_t)le32(em->gd + (parent_ino - 1) / em->ipg * 32 + 4) * em->block_size);
+    gd_fetch(em, (parent_ino - 1) / em->ipg);
     meta_lock(em);
     rc = inode_alloc(em, parent_ino, is_dir, n);
     meta_unlock(em);
