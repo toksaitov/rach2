@@ -50,6 +50,7 @@ static unsigned configured;   /* MHz of the last channel the radio took */
 static unsigned n_polls;      /* null frames the station asked for */
 static uint64_t poll_cookie;  /* the last one's */
 static uint64_t heard_at;     /* what the data path says it last heard */
+static uint64_t sealed_at;    /* and when it last opened a frame of the AP's */
 static uint32_t losses;       /* the station dump's beacon loss */
 static int held;              /* the data path's transmit is held */
 static unsigned holds;        /* calls of the interface's hold */
@@ -281,9 +282,17 @@ static uint64_t iface_heard(struct wlan *wlan)
     return heard_at;
 }
 
+/** When the data path last opened a protected frame from the AP. */
+static uint64_t iface_sealed(struct wlan *wlan)
+{
+    (void)wlan;
+    return sealed_at;
+}
+
 /* An interface that reports ACKs, as the softMAC station over ath9k does. */
-static const struct wlan_mlme_ops poll_ops = {iface_tx,    iface_state, iface_event, iface_poll,
-                                              iface_heard, iface_hold,  iface_moved};
+static const struct wlan_mlme_ops poll_ops = {iface_tx,    iface_state, iface_event,
+                                              iface_poll,  iface_heard, iface_hold,
+                                              iface_moved, 0,           iface_sealed};
 
 /** Compare n bytes. */
 static int equal(const uint8_t *a, const uint8_t *b, unsigned n)
@@ -1192,27 +1201,163 @@ static void channel_switch(void)
     channel_switch_timed();
 }
 
-/** An AP that moves unannounced is followed by its DS Parameter Set, from
- * the first beacon that names another channel; one whose element was wrong
- * from the start stays where it was heard. */
-static void channel_moved(void)
-{
-    static const uint8_t ds1 = 1, ds6 = 6;
+static const uint8_t ds1 = 1, ds6 = 6;
 
+/** Connect to ap_a through an interface that reports ACKs, its first
+ * beacon naming channel 1. */
+static void connect_polled(void)
+{
     reset();
+    wlan_mlme_init(&mlme, 0, &radio, &radio.band, &scan, &poll_ops);
+    n_polls = 0;
+    heard_at = sealed_at = 0;
     connect_a(0);
     moves = 0;
     CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds1, 1) == 0 && moves == 0);
+}
+
+/** Beacons of ap_a that name *ds for ms milliseconds. */
+static void ds_beacons(const uint8_t *ds, unsigned ms)
+{
+    for (; ms >= 100; ms -= 100) {
+        wait_ms(100);
+        CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, ds, 1) == 0);
+    }
+}
+
+/** Leave the AP's polls without an ACK, three in all, starting from the
+ * one sent, with beacons that name channel 6 between them. */
+static void polls_fail(void)
+{
+    unsigned i;
+
+    for (i = 0; i < WLAN_MLME_PROBE_TRIES - 1; ++i) {
+        wlan_mlme_tx_status(&mlme, poll_cookie, 0);
+        ds_beacons(&ds6, WLAN_MLME_PROBE_TIMEOUT);
+    }
+    wlan_mlme_tx_status(&mlme, poll_cookie, 0);
+}
+
+/** An interface without ACKs has no proof, and stays on its channel. */
+static void ds_no_acks(void)
+{
+    reset();
+    connect_a(0);
+    moves = 0;
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds1, 1) == 0);
     CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds6, 1) == 0);
+    wait_ms(0);
+    CHECK(moves == 0 && configured == 2412);
+}
+
+/** A beacon is not protected: the AP that answers a poll stays where it is,
+ * and the next beacon of the true channel ends the question. */
+static void ds_copied_beacon(void)
+{
+    uint64_t t;
+
+    connect_polled();
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds6, 1) == 0);
+    wait_ms(0);
+    CHECK(moves == 0 && configured == 2412 && n_polls == 1);
+    wlan_mlme_tx_status(&mlme, poll_cookie, 1);
+    CHECK(mlme.probes == 0 && moves == 0);
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds1, 1) == 0);
+    t = now;
+    ds_beacons(&ds1, WLAN_MLME_DS_RETRY + 1000);
+    CHECK(n_polls == 1 && moves == 0 && configured == 2412);
+    /* A beacon alone never answers the question that the beacons raised. */
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds6, 1) == 0);
+    wait_ms(0);
+    CHECK(n_polls == 2 && mlme.probes == 1);
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds6, 1) == 0);
+    CHECK(mlme.probes == 1 && moves == 0);
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds1, 1) == 0);
+    CHECK(now >= t && moves == 0);
+}
+
+/** An AP that really moved: an ACK that gets through asks again later, and
+ * polls left unanswered follow the beacons; a protected frame on the new
+ * channel keeps the station there. */
+static void ds_moved_ap(void)
+{
+    connect_polled();
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds6, 1) == 0);
+    wait_ms(0);
+    CHECK(n_polls == 1);
+    wlan_mlme_tx_status(&mlme, poll_cookie, 1);
+    ds_beacons(&ds6, WLAN_MLME_DS_RETRY - 100);
+    CHECK(n_polls == 1 && moves == 0);
+    ds_beacons(&ds6, 100);
+    CHECK(n_polls == 2 && moves == 0);
+    polls_fail();
     CHECK(followed(2437) && moves == 1);
-    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds6, 1) == 0 && moves == 1);
+    ds_beacons(&ds6, 1000);
+    sealed_at = now;
+    ds_beacons(&ds6, WLAN_MLME_DS_PROOF);
+    CHECK(moves == 1 && configured == 2437 && !mlme.ds_home);
+    CHECK(mlme.state == WLAN_STA_ASSOCIATED);
+}
+
+/** Beacons on the new channel prove nothing: without a protected frame the
+ * station goes back, and asks again only after a while. */
+static void ds_no_proof(void)
+{
+    connect_polled();
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds6, 1) == 0);
+    wait_ms(0);
+    polls_fail();
+    CHECK(followed(2437) && moves == 1);
+    ds_beacons(&ds6, WLAN_MLME_DS_PROOF - 100);
+    CHECK(moves == 1);
+    heard_at = now;
+    wlan_mlme_tx_status(&mlme, poll_cookie, 1);
+    ds_beacons(&ds6, 100);
+    CHECK(followed(2412) && moves == 2 && !mlme.ds_home);
+    n_polls = 0;
+    ds_beacons(&ds6, WLAN_MLME_DS_RETRY - 100);
+    CHECK(n_polls == 0 && moves == 2);
+    ds_beacons(&ds6, 100);
+    CHECK(n_polls == 1 && moves == 2);
+}
+
+/** Nothing at all on the new channel: back as soon as the polls there go
+ * unanswered, and an AP silent on its own channel too is left. */
+static void ds_nothing_there(void)
+{
+    connect_polled();
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds6, 1) == 0);
+    wait_ms(0);
+    polls_fail();
+    CHECK(followed(2437) && moves == 1);
+    wait_ms(1740);
+    wait_ms(1500);
+    CHECK(followed(2412) && moves == 2 && mlme.state == WLAN_STA_ASSOCIATED);
+    wait_ms(1740);
+    wait_ms(1500);
+    CHECK(mlme.state == WLAN_STA_NONE && moves == 2 && !mlme.ds_home && !mlme.ds_channel);
+}
+
+/** An AP that moves unannounced is followed by its DS Parameter Set once
+ * the polls show it gone; one whose element was wrong from the start stays
+ * where it was heard. */
+static void channel_moved(void)
+{
+    ds_no_acks();
+    ds_copied_beacon();
+    ds_moved_ap();
+    ds_no_proof();
+    ds_nothing_there();
 
     reset();
+    wlan_mlme_init(&mlme, 0, &radio, &radio.band, &scan, &poll_ops);
+    n_polls = 0;
     connect_a(0);
     moves = 0;
     CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds6, 1) == 0 && moves == 0);
     CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds6, 1) == 0 && moves == 0);
-    CHECK(configured == 2412);
+    wait_ms(0);
+    CHECK(configured == 2412 && n_polls == 0);
 }
 
 /** Stopping drops every state without frames or events. */

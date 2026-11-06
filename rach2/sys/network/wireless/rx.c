@@ -469,6 +469,8 @@ int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
             return rc;
         c.key->key.rx_pn[idx] = c.pn;
     }
+    if (c.key)
+        d->sealed = tick_count();
 
     if (qos && (frame[IEEE80211_HDRLEN] & IEEE80211_QOS_CTL_A_MSDU_PRESENT))
         return rx_amsdu(d, frame, len, hdrlen);
@@ -667,6 +669,7 @@ int wlan_data_rx_mgmt(struct wlan_data *d, uint8_t *frame, unsigned *len,
                       const struct wlan_rx_status *status)
 {
     unsigned fc, hdrlen, n;
+    int rc;
 
     if (!d || !frame || !len || !status || *len > IEEE80211_MAX_FRAME_LEN)
         return -EINVAL;
@@ -683,6 +686,10 @@ int wlan_data_rx_mgmt(struct wlan_data *d, uint8_t *frame, unsigned *len,
     }
     note_signal(d, status);
     if ((fc & IEEE80211_FCTL_PROTECTED) || (status->flags & WLAN_RX_DECRYPTED))
-        return rx_mgmt_ccmp(d, frame, len, hdrlen, status);
-    return rx_mgmt_bip(d, frame, len, hdrlen);
+        rc = rx_mgmt_ccmp(d, frame, len, hdrlen, status);
+    else
+        rc = rx_mgmt_bip(d, frame, len, hdrlen);
+    if (rc == WLAN_DATA_PROTECTED)
+        d->sealed = tick_count();
+    return rc;
 }

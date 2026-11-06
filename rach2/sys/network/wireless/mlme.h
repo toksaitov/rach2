@@ -21,6 +21,8 @@
 #define WLAN_MLME_PROBE_TIMEOUT   500   /* each probe of a silent AP */
 #define WLAN_MLME_PROBE_TRIES     3     /* null frames, or probe requests */
 #define WLAN_MLME_LISTEN_INTERVAL 5     /* beacon intervals */
+#define WLAN_MLME_DS_RETRY        5000  /* between rounds of polls on a DS hint */
+#define WLAN_MLME_DS_PROOF        10000 /* for a protected frame after a DS move */
 
 #define WLAN_MLME_TX_PROTECT   0x01 /* robust frame under 802.11w */
 #define WLAN_MLME_RX_PROTECTED 0x01 /* decrypted by CCMP, or BIP's MMIE checked */
@@ -68,6 +70,11 @@ struct wlan_mlme_ops {
      * station logs the loss to show why the AP goes silent, and #2407
      * removes it. */
     void (*beacon_loss)(struct wlan *wlan, unsigned age);
+    /** The tick of the last frame from the AP that proves it: one opened
+     * under a key, or, with no key in place, what heard reports; 0 for
+     * none. NULL for an interface that cannot tell, which then never moves
+     * on a beacon's word. */
+    uint64_t (*sealed)(struct wlan *wlan);
 };
 
 /* nl80211's AUTHENTICATE. data is AUTH_DATA: for SAE the transaction number
@@ -142,6 +149,15 @@ struct wlan_mlme {
     uint64_t csa_at;
     int csa_hold;       /* the announcement's mode 1 holds the data path's transmit */
     unsigned ds_number; /* the AP's channel by its last DS Parameter Set, or 0 */
+    /* A DS Parameter Set is not protected, so the channel it names is a
+     * hint: ds_channel holds it, NULL for none, while beacons name it and
+     * polls may start at ds_ask. A move on it leaves the channel in ds_home
+     * at tick ds_moved, until a protected frame proves the move or the
+     * station goes back. */
+    const struct wlan_channel *ds_channel;
+    uint64_t ds_ask;
+    const struct wlan_channel *ds_home;
+    uint64_t ds_moved;
     struct wlan_mlme_timer timer[2];
     /* The last authentication or association request: retries send it
      * again, and nl80211 may report its elements with the association. */

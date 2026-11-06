@@ -477,6 +477,20 @@ static int sta_poll(struct wlan *wlan, uint64_t *cookie)
     return wlan_data_tx_null(wlan_data_of(wlan), cookie);
 }
 
+/** The tick of the last frame that proves the AP, for a move on a beacon's
+ * word: a frame opened under a key once the station has a pairwise key,
+ * since an ACK carries no address and a clear frame no proof, and until then
+ * what the monitor hears. */
+static uint64_t sta_sealed(struct wlan *wlan)
+{
+    struct wlan_data *d = wlan_data_of(wlan);
+
+    if (!d) {
+        return 0;
+    }
+    return d->privacy && wlan_data_pairwise_key(d, d->tx_pairwise) ? d->sealed : d->heard;
+}
+
 /** The tick the data path last heard from the AP, for the monitor. */
 static uint64_t sta_heard(struct wlan *wlan)
 {
@@ -513,9 +527,9 @@ static void sta_beacon_loss(struct wlan *wlan, unsigned age)
          (unsigned)c->tx_failed, (unsigned)c->missed_beacons);
 }
 
-static const struct wlan_mlme_ops mlme_ops = {wlan_data_mlme_tx, sta_state,      sta_event,
-                                              sta_poll,          sta_heard,      sta_hold,
-                                              sta_moved,         sta_beacon_loss};
+static const struct wlan_mlme_ops mlme_ops = {wlan_data_mlme_tx, sta_state,       sta_event,
+                                              sta_poll,          sta_heard,       sta_hold,
+                                              sta_moved,         sta_beacon_loss, sta_sealed};
 
 /* A softMAC station joins through authentication and association, which
  * nl80211 drives for CONNECT, so it has no connect or disconnect of its

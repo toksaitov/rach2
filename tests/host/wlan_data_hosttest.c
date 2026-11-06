@@ -1028,7 +1028,11 @@ static void check_rekey_tids(void)
     for (i = 1; i < 200; ++i)
         CHECK(rx_opened_tid(1, i, 1, i) == 0);
     n = n_got;
+    CHECK(d->sealed == now);
+    d->sealed = 0;
+    CHECK(rx_sn(102) == -EACCES && d->sealed == 0); /* in clear proves nothing */
     CHECK(rx_opened_tid(0, 101, 1, 200) == 0 && n_got == n + 1);
+    CHECK(d->sealed == now);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 200);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[1] == 199);
 }

@@ -185,6 +185,8 @@ static void drop(struct wlan_mlme *m)
     m->channel = 0;
     m->csa_channel = 0;
     m->csa_hold = 0;
+    m->ds_channel = 0;
+    m->ds_home = 0;
     if (m->scan)
         wlan_scan_set_home(m->scan, 0, 0);
     m->waiting = 0;
@@ -669,6 +671,8 @@ static int assoc_success(struct wlan_mlme *m, const uint8_t *f, const struct iee
     m->poll_cookie = 0;
     m->missed_beacons = 0;
     m->ds_number = 0;
+    m->ds_channel = 0;
+    m->ds_home = 0;
     arm(m, m->last_beacon + loss_ms(m));
     return 0;
 }
@@ -745,10 +749,10 @@ static void send_probe(struct wlan_mlme *m)
  * there: after WLAN_MLME_BEACON_LOSS beacon intervals without a beacon, or,
  * with a poll, WLAN_MLME_IDLE_POLL milliseconds without a unicast frame from
  * the AP or an ACK of ours, as mac80211's beacon and connection monitor
- * timers do. */
+ * timers do. A hint of another channel or a move on one comes due sooner. */
 static uint64_t monitor_due(const struct wlan_mlme *m)
 {
-    uint64_t loss = m->last_beacon + loss_ms(m), idle = m->polled, heard;
+    uint64_t loss = m->last_beacon + loss_ms(m), idle = m->polled, heard, due;
 
     if (!m->ops->poll)
         return loss;
@@ -756,13 +760,57 @@ static uint64_t monitor_due(const struct wlan_mlme *m)
     if (heard > idle)
         idle = heard;
     idle += WLAN_MLME_IDLE_POLL;
-    return idle < loss ? idle : loss;
+    due = idle < loss ? idle : loss;
+    if (m->ds_channel && m->ds_ask < due)
+        due = m->ds_ask;
+    if (m->ds_home && m->ds_moved + WLAN_MLME_DS_PROOF < due)
+        due = m->ds_moved + WLAN_MLME_DS_PROOF;
+    return due;
 }
 
-/** Leave the AP that answered none of the probes or polls, reported as a
- * local deauthentication with no frame sent. */
+/** Move to the channel the AP's beacons name, since it answers no poll
+ * here, keeping the way back until a protected frame arrives there. */
+static void ds_move(struct wlan_mlme *m)
+{
+    m->ds_home = m->channel;
+    m->ds_moved = tick_count();
+    m->csa_channel = m->ds_channel;
+    csa_switch(m);
+}
+
+/**
+ * End a move on a hint: a protected frame since it proves the AP is here,
+ * and without one the station goes back. An AP on the new channel whose link
+ * stayed quiet asks again from the old one, after WLAN_MLME_DS_RETRY. Returns
+ * whether the move stands.
+ */
+static int ds_settle(struct wlan_mlme *m)
+{
+    const struct wlan_channel *home = m->ds_home;
+
+    m->ds_home = 0;
+    if (m->ops->sealed(m->wlan) > m->ds_moved)
+        return 1;
+    m->ds_number = home->number;
+    m->ds_ask = tick_count() + WLAN_MLME_DS_RETRY;
+    m->csa_channel = home;
+    csa_switch(m);
+    return 0;
+}
+
+/**
+ * The AP answered none of the probes or polls: settle a move on a hint,
+ * follow a hint that stands, and otherwise leave, reported as a local
+ * deauthentication with no frame sent.
+ */
 static void monitor_lost(struct wlan_mlme *m)
 {
+    if (m->ds_home && !ds_settle(m))
+        return;
+    if (m->ds_channel) {
+        ds_move(m);
+        return;
+    }
     disconnect(m, IEEE80211_STYPE_DEAUTH, WLAN_REASON_DISASSOC_DUE_TO_INACTIVITY, 0);
 }
 
@@ -788,6 +836,7 @@ static void monitor_answered(struct wlan_mlme *m)
     m->probes = 0;
     m->poll_cookie = 0;
     m->last_beacon = m->polled = tick_count();
+    m->ds_ask = m->last_beacon + WLAN_MLME_DS_RETRY;
     arm(m, m->csa_channel ? m->csa_at : monitor_due(m));
 }
 
@@ -803,6 +852,7 @@ static void csa_switch(struct wlan_mlme *m)
     const struct wlan_channel *ch = m->csa_channel;
 
     m->csa_channel = 0;
+    m->ds_channel = 0;
     m->channel = ch;
     m->bss->frequency = ch->frequency;
     if (m->scan)
@@ -898,23 +948,39 @@ static int csa_elems(struct wlan_mlme *m, const uint8_t *ies, unsigned len)
 }
 
 /**
- * Follow an AP that moved without announcing it, as an access point on
+ * Note an AP that moved without announcing it, as an access point on
  * automatic channel selection does: from the next channel its beacons are
  * still heard, and their DS Parameter Set names where it is, while its ACKs
- * reach the station too seldom for the link to work or to fail. Only a
- * change away from the station's channel counts, so that an AP whose element
- * was wrong from the start is left alone.
+ * reach the station too seldom for the link to work or to fail. Anyone can
+ * send such a beacon, so it only starts the questions: the move comes when
+ * the polls go unanswered here, and a beacon does not answer them (see
+ * monitor_seen). An ACK that does come asks again after WLAN_MLME_DS_RETRY,
+ * while the beacons still name that channel. Only a change away from the
+ * station's channel counts, so that an AP whose element was wrong from the
+ * start is left alone.
  */
 static void ds_elem(struct wlan_mlme *m, const uint8_t *ies, unsigned len)
 {
     const uint8_t *e = find_elem(ies, len, WLAN_EID_DS_PARAMS, 1);
     unsigned was = m->ds_number;
+    uint64_t now = tick_count();
 
     if (!e || !m->channel)
         return;
     m->ds_number = e[0];
-    if (was == m->channel->number && e[0] != was && !m->csa_channel)
-        csa_note(m, 0, e[0], 0);
+    if (e[0] == m->channel->number) {
+        m->ds_channel = 0;
+        return;
+    }
+    if (!m->ds_channel && (was != m->channel->number || m->csa_channel || m->ds_home ||
+                           !m->ops->poll || !m->ops->sealed))
+        return;
+    m->ds_channel = find_number(m->band, e[0]);
+    if (!m->ds_channel || was != m->channel->number || m->probes || m->csa_channel)
+        return;
+    if (m->ds_ask < now)
+        m->ds_ask = now;
+    arm(m, monitor_due(m));
 }
 
 /** Read the current AP's beacon or probe response for a switch it
@@ -948,6 +1014,8 @@ static void monitor_timeout(struct wlan_mlme *m)
             arm(m, m->csa_at);
         return;
     }
+    if (m->ds_home && now >= m->ds_moved + WLAN_MLME_DS_PROOF && !ds_settle(m))
+        return;
     if (!m->probes) {
         due = monitor_due(m);
         if (now < due) {
@@ -1000,7 +1068,8 @@ static void mlme_timeout(struct wlan_mlme *m)
 }
 
 /** Note a beacon or probe response, stype: from the current AP it shows
- * the AP is there, and ends any questions. */
+ * the AP is there, and ends any questions, but for those a hint of another
+ * channel raised, which only the AP's ACK answers. */
 static void monitor_seen(struct wlan_mlme *m, const uint8_t *f, unsigned stype)
 {
     if (m->state < WLAN_STA_ASSOCIATED || !from_bss(m, f))
@@ -1008,7 +1077,7 @@ static void monitor_seen(struct wlan_mlme *m, const uint8_t *f, unsigned stype)
     m->last_beacon = tick_count();
     if (stype == IEEE80211_STYPE_BEACON)
         m->beacon_at = m->last_beacon;
-    if (m->probes)
+    if (m->probes && !m->ds_channel)
         monitor_answered(m);
 }
 

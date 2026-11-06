@@ -177,6 +177,10 @@ struct wlan_data {
      * frame sent, which the connection monitor reads; zero for none. */
     uint64_t heard;
 
+    /* The tick of the last frame from the BSS opened under a key, which a
+     * move on a beacon's word needs for proof; zero for none. */
+    uint64_t sealed;
+
     /* Sequence numbers to send, per TID; WLAN_NON_QOS_TID counts non-QoS
      * data and management frames, as one counter. */
     uint16_t tx_seq[WLAN_NUM_TIDS];
