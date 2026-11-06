@@ -552,7 +552,7 @@ struct sync_scope {
     int reclaim;          /* it leaves what a reclaim may not write (`write_barred`) */
 };
 
-/** Whether `b` is a block its device wants written last (`bcache_sync_last`). */
+/** Whether `b` is a block its device writes last (`bcache_sync_last`). */
 static int block_last(const struct bbuf *b)
 {
     return b->dev->sync_last && b->dev->sync_last(b->dev->sync_last_arg, b->blk);
