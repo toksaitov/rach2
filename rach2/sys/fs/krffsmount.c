@@ -639,20 +639,67 @@ static int kv_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     return rc == 0 ? 0 : -EIO;
 }
 
+/** Write the cache blocks that hold bytes `at` to `at + len - 1` of the
+ * volume, whatever their tags; 0 or the first write's -errno. */
+static int sync_bytes(struct krffs_volume *vol, uint64_t at, uint64_t len)
+{
+    uint64_t blk;
+    int rc = 0;
+
+    for (blk = at / BCACHE_BLOCK_BYTES; rc == 0 && blk <= (at + len - 1) / BCACHE_BLOCK_BYTES;
+         blk++) {
+        rc = bcache_sync_block(vol->dev, blk);
+    }
+    return rc;
+}
+
+/**
+ * Write the backward link a resize of the node at `at` may have left dirty:
+ * that of the node after the free node that follows it, which a shrink and a
+ * grow with a surplus fix after their last sync point. Nothing when the next
+ * node is not free, since every change of the ring between them ends at a
+ * sync point. 0, -EIO for a header that cannot be read, or the write's
+ * -errno.
+ */
+static int sync_link_after(struct krffs_volume *vol, uint64_t at)
+{
+    krffs_node_t head;
+    uint64_t next;
+
+    if (krffs_head(&vol->fs, at, &head) != 0) {
+        return -EIO;
+    }
+    next = krffs_next_offset(&vol->fs, at, &head);
+    if (next == 0) {
+        return 0;
+    }
+    if (krffs_head(&vol->fs, next, &head) != 0) {
+        return -EIO;
+    }
+    if (head.type != KRFFS_FREE_NODE) {
+        return 0;
+    }
+    return sync_bytes(vol, krffs_next_offset(&vol->fs, next, &head) + KRFFS_FIELD_PREVIOUS,
+                      sizeof(head.previous_node_size));
+}
+
 /**
  * Write what an open file left dirty, under the mount lock: the blocks its
- * writes and truncations dirtied, then the blocks of its header. The caller,
- * `vfs_fsync`, flushes the device after.
+ * writes and truncations dirtied, then the blocks of its header, then the
+ * backward link its last resize fixed. The caller, `vfs_fsync`, flushes the
+ * device after.
  *
  * Every write of the core that changes the ring or stores data ends at a
  * sync point, which writes the whole device, so what an operation leaves
  * dirty is header fields: the file's length, size and times, and the
- * backward link of the node after a shrunk one. The header is written by its
- * offset, whatever tag its block has, because a change of mode, owner or
- * times dirties it outside a write and a neighbour's write may retag its
- * block. A NULL handle, a sync of the whole volume, and a mount a failed
- * write made read-only write every dirty buffer of the device, since a sync
- * point that failed leaves blocks of any file dirty, the failed one too.
+ * backward link of the node after a shrunk one. The header and the link are
+ * written by their offsets, whatever tags their blocks have: a change of
+ * mode, owner or times dirties the header outside a write, a neighbour's
+ * write or truncate retags a block, and a file closed and opened again has
+ * a new record and so a new tag. A NULL handle, a sync of the whole volume,
+ * and a mount a failed write made read-only write every dirty buffer of the
+ * device, since a sync point that failed leaves blocks of any file dirty,
+ * the failed one too.
  *
  * Returns 0 or the writeback's -errno, with the buffers that failed still
  * dirty.
@@ -662,7 +709,6 @@ static int kv_fsync(struct vfs_mount *mnt, void *handle)
     struct krffs_volume *vol = vol_of(mnt);
     struct krffs_open *o = handle;
     uint64_t at;
-    uint64_t blk;
     int rc;
 
     vfs_ns_lock(mnt);
@@ -673,9 +719,11 @@ static int kv_fsync(struct vfs_mount *mnt, void *handle)
     }
     at = follow_moves(o);
     rc = bcache_sync_owned(vol->dev, owner_of(o));
-    for (blk = at / BCACHE_BLOCK_BYTES;
-         rc == 0 && blk <= (at + sizeof(krffs_node_t) - 1) / BCACHE_BLOCK_BYTES; blk++) {
-        rc = bcache_sync_block(vol->dev, blk);
+    if (rc == 0) {
+        rc = sync_bytes(vol, at, sizeof(krffs_node_t));
+    }
+    if (rc == 0) {
+        rc = sync_link_after(vol, at);
     }
     vfs_ns_unlock(mnt);
     return rc;

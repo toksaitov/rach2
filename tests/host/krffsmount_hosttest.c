@@ -982,6 +982,61 @@ static void owned_across_move(void)
 }
 
 /**
+ * The link a shrink leaves dirty is written by its offset. `a` shrinks and
+ * leaves the backward link of `b`, the next file, dirty under `a`'s record.
+ * Then the tag is lost: with `reopen` 0, a truncate of `b` to the size it
+ * has, which resizes nothing and reaches no sync point, retags the block as
+ * `b`'s; with `reopen` 1, `a` is closed and opened again, under a new record
+ * while `other`, made before the shrink, since a creation reaches a sync
+ * point, holds the old one's memory. The fsync of `a` writes the
+ * link all the same.
+ */
+static void shrink_link(int reopen)
+{
+    void *a, *other;
+    uint64_t at, link;
+    struct krffs_open *was;
+    int fd_a, fd_b;
+
+    setup();
+    a = create("a");
+    fd_a = open_node(a);
+    k_memset(payload, 'S', sizeof(payload));
+    check(kv_write(&mount, table.entries[fd_a].ofd->fhandle, payload, 4000, 0) == 4000,
+          "link row: seed a");
+    fd_b = open_node(create("b"));
+    other = create("other");
+    at = offset_of(&mount, table.entries[fd_a].ofd->vnode);
+    link = offset_of(&mount, table.entries[fd_b].ofd->vnode) + KRFFS_FIELD_PREVIOUS;
+    check(link - KRFFS_FIELD_PREVIOUS == at + sizeof(krffs_node_t) + 4000, "link row: b follows a");
+    check(block_of(link) != block_of(at) &&
+              block_of(link) != block_of(at + sizeof(krffs_node_t) - 1),
+          "link row: b's link is not in a's header block");
+    check(kv_truncate(&mount, table.entries[fd_a].ofd->fhandle, 100) == 0, "link row: shrink a");
+    was = table.entries[fd_a].ofd->fhandle;
+    check(buffers[block_of(link)].dirty && buffers[block_of(link)].owner == owner_of(was),
+          "link row: the shrink leaves b's link dirty under a's record");
+    if (!reopen) {
+        check(kv_truncate(&mount, table.entries[fd_b].ofd->fhandle, 0) == 0 &&
+                  buffers[block_of(link)].dirty &&
+                  buffers[block_of(link)].owner == owner_of(table.entries[fd_b].ofd->fhandle),
+              "link row: a truncate of b to its size retags the link as b's");
+    } else {
+        fd_free(&table, fd_a);
+        open_node(other);
+        fd_a = open_node(a);
+        if (table.entries[fd_a].ofd->fhandle == was) {
+            /* The allocator gave the old record back: the tag still holds. */
+            teardown();
+            return;
+        }
+    }
+    check(kv_fsync(&mount, table.entries[fd_a].ofd->fhandle) == 0, "link row: fsync of a");
+    check(!buffers[block_of(link)].dirty, "fsync of a shrunk file writes the next file's link");
+    teardown();
+}
+
+/**
  * A mount a failed write made read-only syncs the whole device at an fsync
  * of one file, since the failed sync point may have left any file's blocks
  * dirty: a block of nobody's is written with the file's header.
@@ -1022,8 +1077,9 @@ const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
  * writes, a failed clean flush, the errors of a creation, an owner across a
  * block, a taken identifier, a working directory, the refusals of unlink,
  * rename and rmdir, the group of a node made in a set-group-ID
- * directory, and an fsync that writes one file, across a move and after a
- * failed write. Returns 1 when a row failed, else 0.
+ * directory, and an fsync that writes one file, across a move, with the
+ * link a shrink leaves after its tag is lost, and after a failed write.
+ * Returns 1 when a row failed, else 0.
  */
 int main(void)
 {
@@ -1043,6 +1099,8 @@ int main(void)
     setgid_group();
     owned_fsync();
     owned_across_move();
+    shrink_link(0);
+    shrink_link(1);
     owned_after_failure();
     if (!failures) {
         printf("krffsmount-hosttest: result: pass: relocation and durability\n");
