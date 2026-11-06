@@ -292,6 +292,19 @@ uint32_t bcache_reserve(block_device_t *dev, uint32_t n);
  * reads nothing unless it is taken for another block first. */
 int bcache_cached(block_device_t *dev, uint64_t blk);
 
+/** Whether `dev`'s block `blk` is in the cache and held, by a write, a fill
+ * or a caller, so that a `bcache_get` of it would sleep until the holder
+ * lets it go, the length of a disk request when that is a write or a fill. */
+int bcache_busy(block_device_t *dev, uint64_t blk);
+
+/**
+ * Sleep until nobody holds `dev`'s block `blk`, or at once when the cache
+ * lacks it; nothing is read. For a caller about to take a lock under which
+ * it would otherwise wait on the holder's disk request. The caller holds no
+ * buffer, and may find the block held again by the time it looks.
+ */
+void bcache_wait_unheld(block_device_t *dev, uint64_t blk);
+
 /** `bcache_sync` without the disk's flush: every write is answered and has
  * reached the device, in the same order, and on a write-through disk the
  * writes may still be in its own cache until the caller's next

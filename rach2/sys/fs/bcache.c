@@ -1130,6 +1130,23 @@ int bcache_cached(block_device_t *dev, uint64_t blk)
     return index_find(dev, blk) != 0;
 }
 
+int bcache_busy(block_device_t *dev, uint64_t blk)
+{
+    struct bbuf *b = index_find(dev, blk);
+
+    return b != 0 && b->holder != -1;
+}
+
+void bcache_wait_unheld(block_device_t *dev, uint64_t blk)
+{
+    struct bbuf *b;
+
+    while ((b = index_find(dev, blk)) != 0 && b->holder != -1) {
+        stat_waits++;
+        wait_unheld(b);
+    }
+}
+
 struct bbuf *bcache_get(block_device_t *dev, uint64_t blk)
 {
     return get(dev, blk, 0, 0);
