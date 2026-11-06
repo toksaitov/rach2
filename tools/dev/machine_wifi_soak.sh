@@ -120,11 +120,13 @@ host()
     "$@" "$env setsid sh /dev/shm/wifi-soak.sh run $seconds \
         > /dev/shm/wifi-soak.out 2>&1 < /dev/null & echo \$! > /dev/shm/wifi-soak.pid" ||
         exit 1
+    # shellcheck disable=SC2016 # the dollars are the machine's shell's
     "$@" 'read p < /dev/shm/wifi-soak.pid
         tail -f /dev/shm/wifi-soak.out & t=$!
         while kill -0 "$p" 2> /dev/null; do sleep 1; done
         sleep 2
         kill "$t"' | tee "$out/out"
+    # shellcheck disable=SC2016 # the dollars are the machine's shell's
     ended=$("$@" 'read p < /dev/shm/wifi-soak.pid
         if kill -0 "$p" 2> /dev/null; then echo no; else echo yes; fi')
     [ "$ended" = yes ] || {
@@ -182,10 +184,9 @@ statnum()
 # The line of /proc/diskstats of the disk $rootdisk, with builtins alone.
 diskline()
 {
-    while read -r l; do
-        set -- $l
-        if [ "$3" = "$rootdisk" ]; then
-            echo "$l"
+    while read -r major minor name rest; do
+        if [ "$name" = "$rootdisk" ]; then
+            echo "$major $minor $name $rest"
             return
         fi
     done < /proc/diskstats
@@ -441,8 +442,7 @@ soak()
     lines0=$(wc -l < /var/log/services)
     disk0=$(statnum latency_disk_us)
     stats0=$(diskline)
-    set -- $(cat /proc/uptime)
-    t0=$1
+    read -r t0 _ < /proc/uptime
     echo "wifi-soak: load: $writers writers from $source and sync, $seconds s, from uptime $t0 at $(date -u '+%H:%M:%S UTC'), ping $gateway"
     pinger &
     pinging=$!
