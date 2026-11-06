@@ -37,7 +37,13 @@
 #   * a logger of every event wpa_supplicant reports, each stamped on arrival;
 #   * a sampler of `iw dev wlan0 station dump` every 5 s, of the kernel's
 #     Wi-Fi lines every 30 s, and of each interface's received packets every
-#     second.
+#     second;
+#   * a watch of the ping's replies, every 10 s, which says so at once when
+#     none has come for 30 s and again when they return. After
+#     RACH2_SOAK_SILENCE seconds without one, 300 unless given, it keeps the
+#     state of the link in $dir/dead and ends the run early, since nothing
+#     the rest of a dead run measures is worth its time. The table follows,
+#     and the run exits 1.
 #
 # The AP's own group rekey may be an hour or more apart, so the network's
 # wpa_ptk_rekey is set to RACH2_SOAK_REKEY seconds, 120 unless given, in
@@ -76,14 +82,18 @@
 #   * the longest ping gap is the longest time between two replies with
 #     requests unanswered between them, and the longest stall the longest
 #     between two replies in sequence, in which ping itself did not run;
+#   * the seconds without a reply sum every wait of over 1 s between replies
+#     and from the last reply to the end of the ping's log, so they count
+#     a link that never came back, as the gap does not;
 #   * a renewal's time runs from the request to the completion;
 #   * wpa_cli gives up on wpa_supplicant when it does not answer a PING;
 #   * the longest disk request is /proc/stat's latency_disk_us, the longest
 #     since boot, so that it is the run's only when it grew during the run,
 #     which the table says.
 #
-# Exit 0 when the run reached its end, 1 when a step failed, 2 on a usage
-# error. Exit 0 says nothing of the link: the table does.
+# Exit 0 when the run reached its end, 1 when a step failed or the replies
+# stopped for good, 2 on a usage error. Exit 0 says nothing else of the link:
+# the table does.
 set -u
 
 ctrl=/var/run/wpa_supplicant
@@ -123,7 +133,7 @@ host()
     }
     "$@" 'cat > /dev/shm/wifi-soak.sh' < "$self" || exit 1
     env=
-    for v in NETWORK WRITERS REKEY SOURCE; do
+    for v in NETWORK WRITERS REKEY SOURCE SILENCE; do
         eval "x=\${RACH2_SOAK_$v:-}"
         [ -z "$x" ] || env="$env RACH2_SOAK_$v='$x'"
     done
@@ -306,6 +316,37 @@ netwatch()
     done
 }
 
+# Say when the ping's replies stop and return, and end the run, by stopping
+# the wait $1, when they stay away for $silence seconds.
+watch_replies()
+{
+    said=
+    while [ ! -e "$dir/stop" ]; do
+        sleep 10
+        read -r up _ < /proc/uptime
+        last=$(awk -v t="$t0" '/ seq=/ { t = $1 } END { print t }' "$dir/ping")
+        away=$(awk -v u="$up" -v l="$last" 'BEGIN { print int(u - l) }')
+        if [ "$away" -ge 30 ] && [ -z "$said" ]; then
+            echo "wifi-soak: silent: no ping reply since uptime $last"
+            said=1
+        elif [ "$away" -lt 30 ] && [ -n "$said" ]; then
+            echo "wifi-soak: replies again at uptime $up"
+            said=
+        fi
+        if [ "$away" -ge "$silence" ]; then
+            {
+                cli status | grep -E '^(bssid|wpa_state|ip_address)='
+                iw dev "$iface" station dump
+                cat /proc/net/wireless
+                tail -n 20 "$dir/events"
+            } > "$dir/dead" 2>&1
+            echo "wifi-soak: failed: no ping reply for $away s; the link's state is in dead"
+            kill "$1"
+            return
+        fi
+    done
+}
+
 pinger()
 {
     end=$(($(date +%s) + seconds))
@@ -395,6 +436,9 @@ table()
     awk '!seen[$0]++' "$dir/kernel.raw" > "$dir/kernel"
     printf 'beacon-loss lines        %d\n' "$(grep -c ': beacon loss: ' "$dir/kernel")"
     printf 'wpa_cli gave up          %d\n' "$(gaveup)"
+    awk '/ seq=/ { if (p && $1 - p > 1) away += $1 - p; p = $1 }
+        { end = $1 }
+        END { printf "seconds without a reply  %d\n", away + (p ? end - p : end) }' "$dir/ping"
     awk '/ packets transmitted, / { sent += $2; got += $5; asked = heard = 0; prev = 0 }
         / ping: sendto: / { sent += asked; got += heard; asked = heard = 0 }
         / seq=/ {
@@ -455,6 +499,7 @@ soak()
     writers=${RACH2_SOAK_WRITERS:-6}
     rekey=${RACH2_SOAK_REKEY:-120}
     source=${RACH2_SOAK_SOURCE:-/dev/zero}
+    silence=${RACH2_SOAK_SILENCE:-300}
     id=
     trap finish EXIT
     trap 'exit 129' HUP
@@ -497,17 +542,21 @@ soak()
         i=$((i + 1))
     done
     [ "$writers" -eq 0 ] || syncer &
-    sleep "$seconds"
+    sleep "$seconds" &
+    sleeping=$!
+    watch_replies "$sleeping" &
+    wait "$sleeping"
     stopload
     disk1=$(statnum latency_disk_us)
     stats1=$(diskline)
     echo "wifi-soak: load stopped at uptime $(cut -d ' ' -f 1 /proc/uptime)"
-    wait "$pinging"
+    [ -e "$dir/dead" ] || wait "$pinging"
     wait_writers
     dmesg | grep -E 'wlan|ath9k|80211' >> "$dir/kernel.raw"
     sleep 2
     echo "wifi-soak: table: $seconds s"
     table | tee "$dir/table"
+    [ ! -e "$dir/dead" ] || exit 1
     finish
     echo 'wifi-soak: end'
 }
