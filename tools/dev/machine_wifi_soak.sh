@@ -50,11 +50,14 @@
 # the loaded disk. All times are the seconds of /proc/uptime, the clock of
 # dmesg. The run ends with one table:
 #
-#   * the counts of events come from the part of the service log that the
-#     run added, which has every line in order but no times, since
+#   * the counts of events come from the lines the service log gained
+#     during the run, which have no times but are all there in order, since
 #     wpa_supplicant detaches a logger it cannot reach, as it did during a
-#     baseline. The table says how often. The times come from the stamped
-#     events, so they cover only what the logger heard;
+#     baseline. The table says how often. BusyBox tail -F copies them to
+#     $dir/service as they come, since init empties the log at its limit,
+#     and a line written within a second of that can be lost, so each count
+#     is a lower bound. The times come from the stamped events, so they
+#     cover only what the logger heard;
 #   * a renewal is pairwise when a `Key negotiation completed` line has no
 #     association before it since the last such line, and group for `Group
 #     rekeying completed`;
@@ -204,10 +207,11 @@ diskline()
     done < /proc/diskstats
 }
 
-# How often the service log says wpa_cli gave up on wpa_supplicant.
+# How often the run's part of the service log says wpa_cli gave up on
+# wpa_supplicant.
 gaveup()
 {
-    grep -c 'did not reply to PING' /var/log/services
+    grep -c 'did not reply to PING' "$dir/service"
 }
 
 # Wait up to 90 s for the network, with an address and a gateway.
@@ -316,7 +320,6 @@ pinger()
 # Print the table from the logs. T0 is the uptime at which the load began.
 table()
 {
-    sed -n "$((lines0 + 1)),\$p" /var/log/services > "$dir/service"
     awk '/Associated with/ { assoc = 1 }
         /WPA: Key negotiation completed/ {
             if (assoc) joins++; else pairwise++
@@ -391,7 +394,7 @@ table()
         }' "$dir/samples"
     awk '!seen[$0]++' "$dir/kernel.raw" > "$dir/kernel"
     printf 'beacon-loss lines        %d\n' "$(grep -c ': beacon loss: ' "$dir/kernel")"
-    printf 'wpa_cli gave up          %d\n' "$(($(gaveup) - gave0))"
+    printf 'wpa_cli gave up          %d\n' "$(gaveup)"
     awk '/ packets transmitted, / { sent += $2; got += $5; asked = heard = 0; prev = 0 }
         / ping: sendto: / { sent += asked; got += heard; asked = heard = 0 }
         / seq=/ {
@@ -478,8 +481,7 @@ soak()
     }
     rootdisk=$(awk '$2 == "/" && $1 ~ /^\/dev\// {
         sub(/^\/dev\//, "", $1); sub(/p[0-9]+$/, "", $1); print $1 }' /proc/mounts)
-    gave0=$(gaveup)
-    lines0=$(wc -l < /var/log/services)
+    tail -n 0 -F /var/log/services > "$dir/service" 2> /dev/null &
     disk0=$(statnum latency_disk_us)
     stats0=$(diskline)
     read -r t0 _ < /proc/uptime
@@ -503,6 +505,7 @@ soak()
     wait "$pinging"
     wait_writers
     dmesg | grep -E 'wlan|ath9k|80211' >> "$dir/kernel.raw"
+    sleep 2
     echo "wifi-soak: table: $seconds s"
     table | tee "$dir/table"
     finish
