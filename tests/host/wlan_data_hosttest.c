@@ -1045,6 +1045,63 @@ static void check_rekey_tids(void)
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[1] == 199);
 }
 
+/** Write an EAPOL-Key payload of `info` at `body`. */
+static void key_body(uint8_t *body, unsigned len, unsigned info)
+{
+    k_memset(body, 0, len);
+    k_memcpy(body, eapol_snap, 8);
+    body[9] = 3;
+    body[12] = 2;
+    body[13] = (uint8_t)(info >> 8);
+    body[14] = (uint8_t)info;
+}
+
+/** Key frame `info` from the AP, opened by the radio under slot 0. */
+static int rx_key(unsigned sn, uint64_t pn, unsigned info)
+{
+    uint8_t f[200], body[40];
+    struct wlan_rx_status hw = rxs;
+    unsigned len;
+
+    hw.flags = WLAN_RX_DECRYPTED | WLAN_RX_IV_STRIPPED | WLAN_RX_MIC_STRIPPED;
+    hw.hw_key = 0;
+    hw.pn = pn;
+    key_body(body, sizeof(body), info);
+    len = ap_frame(f, sta, 1, 0, sn, 0, 0, body, sizeof(body));
+    return wlan_data_rx(d, f, len, &hw);
+}
+
+/** Key frame `info` from the AP in clear. */
+static int rx_clear_key(unsigned sn, unsigned info)
+{
+    uint8_t f[200], body[40];
+    unsigned len;
+
+    key_body(body, sizeof(body), info);
+    len = ap_frame(f, sta, 1, 0, sn, 0, 0, body, sizeof(body));
+    return wlan_data_rx(d, f, len, &rxs);
+}
+
+/** Message 1 on a connection with a pairwise key starts the wait for the
+ * renewed key, and its repeats leave the tick; a group key's message, or the
+ * later messages with their MIC, do not, and the new key ends it. */
+static void check_renewal_wait(void)
+{
+    uint64_t began;
+
+    setup(1);
+    takes_keys = 1;
+    CHECK(rx_clear_key(100, 0x008a) == 0 && n_got == 1 && d->renewing == 0); /* a first join */
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
+    CHECK(rx_key(101, 1, 0x1382) == 0 && d->renewing == 0); /* group message 1 */
+    CHECK(rx_key(102, 2, 0x13ca) == 0 && d->renewing == 0); /* message 3 */
+    CHECK(rx_key(103, 3, 0x008a) == 0 && d->renewing == now);
+    began = now;
+    now += 1000;
+    CHECK(rx_key(104, 4, 0x008a) == 0 && d->renewing == began);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0 && d->renewing == 0);
+}
+
 /** A frame opened under a key proves the AP on the connection's channel
  * from its reception: one the reordering buffer held across a channel move
  * proves nothing there, nor does one heard on the old channel after it; one
@@ -1371,6 +1428,7 @@ int main(void)
     check_blockack();
     check_rekey_slot();
     check_rekey_tids();
+    check_renewal_wait();
     check_sealed_move();
     check_mgmt();
     check_amsdu();

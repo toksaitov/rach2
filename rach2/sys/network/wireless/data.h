@@ -178,9 +178,9 @@ struct wlan_data {
      * frame sent, which the connection monitor reads; zero for none. */
     uint64_t heard;
 
-    /* The tick of the last unicast frame received from the BSS alone; zero
-     * for none. */
-    uint64_t received;
+    /* The tick the BSS's message 1 reached a connection that has a pairwise
+     * key, until a pairwise key goes in; zero for none. */
+    uint64_t renewing;
 
     /* The tick at which the last frame from the BSS opened under a key was
      * received on the connection's channel, which a move on a beacon's word

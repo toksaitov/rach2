@@ -127,6 +127,8 @@ int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
     if (!d || !key || !key_valid(key))
         return -EINVAL;
     pairwise = (key->flags & WLAN_KEY_PAIRWISE) != 0;
+    if (pairwise)
+        d->renewing = 0;
     old = key_entry(d, pairwise, key->index);
     if (old->gen && old->key.cipher == key->cipher && old->key.len == key->len &&
         same(old->key.data, key->data, key->len) &&

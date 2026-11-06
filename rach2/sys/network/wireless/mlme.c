@@ -757,7 +757,7 @@ static void send_probe(struct wlan_mlme *m)
  * sooner. */
 static uint64_t monitor_due(const struct wlan_mlme *m)
 {
-    uint64_t loss = m->last_beacon + loss_ms(m), idle = m->polled, heard, rx, quiet, due;
+    uint64_t loss = m->last_beacon + loss_ms(m), idle = m->polled, heard, due;
 
     if (!m->ops->poll)
         return loss;
@@ -765,12 +765,6 @@ static uint64_t monitor_due(const struct wlan_mlme *m)
     if (heard > idle)
         idle = heard;
     idle += WLAN_MLME_IDLE_POLL;
-    rx = m->ops->received ? m->ops->received(m->wlan) : 0;
-    if (m->ops->received && heard > rx) {
-        quiet = (rx > m->polled ? rx : m->polled) + WLAN_MLME_QUIET_POLL;
-        if (quiet < idle)
-            idle = quiet;
-    }
     due = idle < loss ? idle : loss;
     if (m->ds_channel && m->ds_ask < due)
         due = m->ds_ask;
@@ -1018,6 +1012,11 @@ static void monitor_timeout(struct wlan_mlme *m)
 {
     uint64_t now = tick_count(), due;
 
+    due = m->ops->renewing ? m->ops->renewing(m->wlan) : 0;
+    if (due && now >= due + WLAN_MLME_KEY_WAIT) {
+        disconnect(m, IEEE80211_STYPE_DEAUTH, WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT, 1);
+        return;
+    }
     if (m->csa_channel) {
         if (now >= m->csa_at)
             csa_switch(m);

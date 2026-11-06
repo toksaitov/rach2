@@ -499,12 +499,12 @@ static uint64_t sta_heard(struct wlan *wlan)
     return d ? d->heard : 0;
 }
 
-/** The tick the data path last received a unicast frame, for the monitor. */
-static uint64_t sta_received(struct wlan *wlan)
+/** The tick a renewal began whose key is not in yet, for the monitor. */
+static uint64_t sta_renewing(struct wlan *wlan)
 {
     struct wlan_data *d = wlan_data_of(wlan);
 
-    return d ? d->received : 0;
+    return d ? d->renewing : 0;
 }
 
 /**
@@ -537,7 +537,7 @@ static void sta_beacon_loss(struct wlan *wlan, unsigned age)
 
 static const struct wlan_mlme_ops mlme_ops = {
     wlan_data_mlme_tx, sta_state, sta_event,       sta_poll,   sta_heard,
-    sta_hold,          sta_moved, sta_beacon_loss, sta_sealed, sta_received};
+    sta_hold,          sta_moved, sta_beacon_loss, sta_sealed, sta_renewing};
 
 /* A softMAC station joins through authentication and association, which
  * nl80211 drives for CONNECT, so it has no connect or disconnect of its

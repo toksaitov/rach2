@@ -10,6 +10,11 @@
 static const uint8_t rfc1042[6] = {0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00};
 static const uint8_t eapol_snap[8] = {0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8e};
 
+/* Key Information bits of an EAPOL-Key frame. */
+#define EAPOL_KEY_PAIRWISE 0x0008
+#define EAPOL_KEY_ACK      0x0080
+#define EAPOL_KEY_MIC      0x0100
+
 /* What a decryption found, for the checks after reassembly. */
 struct rx_crypt {
     struct wlan_data_key *key; /* NULL for a frame that came in clear */
@@ -424,6 +429,28 @@ static void seal(struct wlan_data *d, const struct wlan_rx_status *status, uint6
         d->sealed = arrived;
 }
 
+/**
+ * Note the start of a pairwise key's renewal in the opened `frame` of `len`
+ * bytes: message 1 of a 4-way handshake, an EAPOL-Key frame, 802.11-2020
+ * Figure 12-35, with the Pairwise and Ack bits and no MIC, on a connection
+ * that has a pairwise key. A group key's messages have no Pairwise bit, and a
+ * first join has no key. A repeat keeps the first message's tick.
+ */
+static void note_renewal(struct wlan_data *d, const uint8_t *frame, unsigned len, unsigned hdrlen,
+                         uint64_t arrived)
+{
+    const uint8_t *p = frame + hdrlen;
+    unsigned info;
+
+    if ((frame[4] & 1) || d->renewing || len < hdrlen + 8 + 7 || !same(p, eapol_snap, 8) ||
+        p[9] != 3 || !wlan_data_pairwise_key(d, d->tx_pairwise))
+        return;
+    info = (unsigned)p[13] << 8 | p[14];
+    if ((info & (EAPOL_KEY_PAIRWISE | EAPOL_KEY_ACK | EAPOL_KEY_MIC)) ==
+        (EAPOL_KEY_PAIRWISE | EAPOL_KEY_ACK))
+        d->renewing = arrived;
+}
+
 int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
                       const struct wlan_rx_status *status, uint64_t arrived)
 {
@@ -481,6 +508,7 @@ int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
     }
     if (c.key)
         seal(d, status, arrived);
+    note_renewal(d, frame, len, hdrlen, arrived);
 
     if (qos && (frame[IEEE80211_HDRLEN] & IEEE80211_QOS_CTL_A_MSDU_PRESENT))
         return rx_amsdu(d, frame, len, hdrlen);
@@ -527,7 +555,7 @@ int wlan_data_rx(struct wlan_data *d, uint8_t *frame, unsigned len,
         return -EINVAL; /* not ours, or our own group frame come back */
     note_signal(d, status);
     if (!(frame[4] & 1))
-        d->heard = d->received = tick_count();
+        d->heard = tick_count();
     if (fc & IEEE80211_STYPE_NULLFUNC)
         return 0;
     if ((fc & IEEE80211_STYPE_QOS_DATA) && !(frame[4] & 1)) {
