@@ -3366,7 +3366,7 @@ static void process_command(const char *cmd)
         console_puts("Triggering page fault at 0xA0000000...");
         *bad_ptr = 0xDEADBEEF;
     } else if (str_equal(cmd, "badop")) {
-        __asm__ __volatile__(".byte 0x0f, 0x0b"); /* ud2 */
+        arch_invalid_opcode();
     } else if (str_equal(cmd, "halt")) {
         kernel_shutdown(POWER_HALT);
     } else if (str_equal(cmd, "poweroff")) {

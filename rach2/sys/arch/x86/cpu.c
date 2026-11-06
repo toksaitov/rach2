@@ -21,6 +21,11 @@ void arch_irq_disable(void)
     __asm__ __volatile__("cli" : : : "memory");
 }
 
+void arch_invalid_opcode(void)
+{
+    __asm__ __volatile__(".byte 0x0f, 0x0b"); /* ud2 */
+}
+
 /** `sti` takes effect after the instruction that follows it, so an interrupt
  * pending at the `sti` is taken once `hlt` has begun waiting, and wakes it. */
 void arch_idle(void)

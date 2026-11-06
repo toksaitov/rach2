@@ -94,6 +94,9 @@ void arch_irq_enable(void);
 /** Hold off interrupts on this processor. */
 void arch_irq_disable(void);
 
+/** Execute an invalid opcode, for the shell's `badop` probe. */
+void arch_invalid_opcode(void);
+
 /** Allow interrupts and wait for one, as one step, so that an interrupt
  * that arrives between the two cannot be slept through; interrupts are on
  * when this returns. */
