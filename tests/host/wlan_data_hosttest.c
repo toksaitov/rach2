@@ -948,19 +948,27 @@ static unsigned got_sn(unsigned i)
 }
 
 /** A frame of `tid` the radio opened, stripped, under key slot `slot` with
- * `pn`. */
-static int rx_opened_tid(unsigned tid, unsigned sn, int slot, uint64_t pn)
+ * `pn`, heard on `frequency` MHz. */
+static int rx_opened_on(unsigned frequency, unsigned tid, unsigned sn, int slot, uint64_t pn)
 {
     uint8_t f[200], body[40];
     struct wlan_rx_status hw = rxs;
     unsigned len;
 
+    hw.frequency = (uint16_t)frequency;
     hw.flags = WLAN_RX_DECRYPTED | WLAN_RX_IV_STRIPPED | WLAN_RX_MIC_STRIPPED;
     hw.hw_key = slot;
     hw.pn = pn;
     payload(body, sizeof(body), sn);
     len = ap_frame(f, sta, 1, tid, sn, 0, 0, body, sizeof(body));
     return wlan_data_rx(d, f, len, &hw);
+}
+
+/** A frame of `tid` the radio opened on the connection's channel; as
+ * rx_opened_on. */
+static int rx_opened_tid(unsigned tid, unsigned sn, int slot, uint64_t pn)
+{
+    return rx_opened_on(rxs.frequency, tid, sn, slot, pn);
 }
 
 /** A frame of TID 0 the radio opened; as rx_opened_tid. */
@@ -1035,6 +1043,45 @@ static void check_rekey_tids(void)
     CHECK(d->sealed == now);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 200);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[1] == 199);
+}
+
+/** A frame opened under a key proves the AP on the connection's channel
+ * from its reception: one the reordering buffer held across a channel move
+ * proves nothing there, nor does one heard on the old channel after it; one
+ * received on the new channel does. */
+static void check_sealed_move(void)
+{
+    uint8_t f[64];
+    unsigned len;
+    uint64_t moved;
+
+    setup(1);
+    takes_keys = 1;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
+    len = addba_req(f, 0, 8, 100);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    CHECK(rx_opened(100, 0, 1) == 0 && n_got == 1 && d->sealed == now);
+    /* 101 is lost; 102 waits for it from before the move. */
+    now += 10;
+    CHECK(rx_opened(102, 0, 3) == 0 && n_got == 1 && d->ba[0].stored == 1);
+    now += 10;
+    moved = now;
+    wlan_data_set_frequency(d, 2437);
+    now += 10;
+    /* The BlockAckReq gives up on 101 and lets 102 go. */
+    k_memset(f, 0, 20);
+    f[0] = IEEE80211_FTYPE_CTL | IEEE80211_STYPE_BACK_REQ;
+    k_memcpy(f + 4, sta, 6);
+    k_memcpy(f + 10, bssid, 6);
+    f[16] = 0x04; /* compressed bitmap, TID 0 */
+    f[18] = (uint8_t)(103 << 4);
+    f[19] = (uint8_t)(103 >> 4);
+    CHECK(rx(f, 20) == 0 && n_got == 2 && got_sn(1) == 102 && d->ba[0].stored == 0);
+    CHECK(d->sealed < moved);
+    now += 10;
+    CHECK(rx_opened_on(2412, 0, 103, 0, 4) == 0 && n_got == 3 && d->sealed < moved);
+    now += 10;
+    CHECK(rx_opened_on(2437, 0, 104, 0, 5) == 0 && n_got == 4 && d->sealed == now);
 }
 
 /** BlockAck: ADDBA answered, reordering, BlockAckReq, a moved window, the
@@ -1324,6 +1371,7 @@ int main(void)
     check_blockack();
     check_rekey_slot();
     check_rekey_tids();
+    check_sealed_move();
     check_mgmt();
     check_amsdu();
     check_rates();

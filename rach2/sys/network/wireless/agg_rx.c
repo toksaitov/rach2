@@ -38,7 +38,7 @@ static void release_slot(struct wlan_data *d, struct wlan_ba_rx *ba, unsigned sn
         return;
     ba->slot[sn % WLAN_BA_MAX_WINDOW] = 0;
     ba->stored--;
-    (void)wlan_data_rx_mpdu(d, f->frame, f->len, &f->status);
+    (void)wlan_data_rx_mpdu(d, f->frame, f->len, &f->status, f->arrived);
     kfree(f);
 }
 

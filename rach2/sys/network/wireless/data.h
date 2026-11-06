@@ -178,8 +178,11 @@ struct wlan_data {
      * frame sent, which the connection monitor reads; zero for none. */
     uint64_t heard;
 
-    /* The tick of the last frame from the BSS opened under a key, which a
-     * move on a beacon's word needs for proof; zero for none. */
+    /* The tick at which the last frame from the BSS opened under a key was
+     * received on the connection's channel, which a move on a beacon's word
+     * needs for proof; zero for none. A frame the reordering buffer held
+     * counts from its reception, and one heard on another channel not at
+     * all. */
     uint64_t sealed;
 
     /* Sequence numbers to send, per TID; WLAN_NON_QOS_TID counts non-QoS
@@ -535,9 +538,10 @@ void wlan_ba_tx_check(struct wlan_data *d, unsigned tid, int eapol);
 void wlan_ba_tx_stop(struct wlan_data *d, unsigned tid, int delba);
 
 /** The second half of receive, for each MPDU the reordering buffer lets go:
- * duplicates, decryption, reassembly and delivery. Defined in rx.c. */
+ * duplicates, decryption, reassembly and delivery. `arrived` is the tick the
+ * frame came in, which a frame held for reordering keeps. Defined in rx.c. */
 int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
-                      const struct wlan_rx_status *status);
+                      const struct wlan_rx_status *status, uint64_t arrived);
 
 /* rate.c */
 

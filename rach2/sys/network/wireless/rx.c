@@ -414,8 +414,18 @@ static int rx_michael(struct wlan_data *d, const uint8_t *frame, unsigned *len, 
     return 0;
 }
 
+/** Take a frame from the BSS opened under a key, which came in at tick
+ * `arrived`, as proof that the AP is on the connection's channel: only a
+ * frame received on that channel counts, and from its reception, not its
+ * delivery, so that one held across a channel move proves nothing there. */
+static void seal(struct wlan_data *d, const struct wlan_rx_status *status, uint64_t arrived)
+{
+    if (status->frequency == d->frequency && arrived > d->sealed)
+        d->sealed = arrived;
+}
+
 int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
-                      const struct wlan_rx_status *status)
+                      const struct wlan_rx_status *status, uint64_t arrived)
 {
     unsigned fc = frame_control(frame), hdrlen = wlan_data_hdrlen(frame, len);
     unsigned seqctl, idx = WLAN_NON_QOS_TID, priority = 0;
@@ -470,7 +480,7 @@ int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
         c.key->key.rx_pn[idx] = c.pn;
     }
     if (c.key)
-        d->sealed = tick_count();
+        seal(d, status, arrived);
 
     if (qos && (frame[IEEE80211_HDRLEN] & IEEE80211_QOS_CTL_A_MSDU_PRESENT))
         return rx_amsdu(d, frame, len, hdrlen);
@@ -528,7 +538,7 @@ int wlan_data_rx(struct wlan_data *d, uint8_t *frame, unsigned len,
                 return rc;
         }
     }
-    return wlan_data_rx_mpdu(d, frame, len, status);
+    return wlan_data_rx_mpdu(d, frame, len, status, tick_count());
 }
 
 int wlan_data_robust_mgmt(const uint8_t *frame, unsigned len)
@@ -690,6 +700,6 @@ int wlan_data_rx_mgmt(struct wlan_data *d, uint8_t *frame, unsigned *len,
     else
         rc = rx_mgmt_bip(d, frame, len, hdrlen);
     if (rc == WLAN_DATA_PROTECTED)
-        d->sealed = tick_count();
+        seal(d, status, tick_count());
     return rc;
 }
