@@ -354,6 +354,22 @@ int bcache_sync_block(block_device_t *dev, uint64_t blk)
     return 0;
 }
 
+/** Return 0: the model starts every write at once. */
+int bcache_sync_block_ready(block_device_t *dev, uint64_t blk)
+{
+    (void)dev;
+    (void)blk;
+    return 0;
+}
+
+/** Do nothing: the model's syncs write nothing, in no order. */
+void bcache_sync_last(block_device_t *dev, int (*last)(void *arg, uint64_t blk), void *arg)
+{
+    (void)dev;
+    (void)last;
+    (void)arg;
+}
+
 /** Return 0: the rows never fill the cache with dirty buffers. */
 int bcache_dirty_heavy(void)
 {

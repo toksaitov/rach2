@@ -363,6 +363,9 @@ static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
    leaves it as a machine stopped after the Nth write would. */
 static int writes_made;
 static int stop_after = -1;
+/* The one block whose writes fail, or -1: a request that covers it fails and
+ * every other goes through, unlike `stop_after`'s stop. */
+static int64_t fail_block = -1;
 
 /* The writes in the order the device saw them, for the rows that read that
    order: each one's first sector and its length, and, while `wlog_capture`
@@ -470,6 +473,10 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
         return -5;
     }
     if (stop_after >= 0 && writes_made >= stop_after) {
+        return -5;
+    }
+    if (fail_block >= 0 && (uint64_t)fail_block >= request_block &&
+        (uint64_t)fail_block < request_block + request_blocks) {
         return -5;
     }
     writes_made++;

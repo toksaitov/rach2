@@ -4,8 +4,9 @@
  * that writes back: what an fsync beside a large dirty file writes, a stop
  * right after one, and beside a neighbour in its inode table block that
  * allocated, the whole device once a file's list of shared blocks overflows
- * or goes with its node, an fdatasync after a change of times alone, and a
- * second call made while the first waits for the disk.
+ * or goes with its node, an fdatasync after a change of times alone, a
+ * second call made while the first waits for the disk, a neighbour's batch
+ * that fills during that wait, and one block that fails.
  */
 #ifndef EXT2_FSYNC_ROWS_H_
 #define EXT2_FSYNC_ROWS_H_
@@ -567,6 +568,192 @@ static void fsync_beside_row(const struct beside_row *row)
     }
 }
 
+/* The neighbour's handle and node, and its bytes, for process B of a row of
+   `fsync_pending_row`, the file's table block, and what B did. */
+static void *pending_handle, *pending_node;
+static unsigned char pending_bytes[20 * 4096];
+static uint64_t pending_table;
+static int pending_fired, pending_ended;
+
+/** The neighbour's bytes once its growth is on the medium. */
+static const unsigned char *pending_whole(void)
+{
+    static unsigned char whole[21 * 4096];
+
+    memset(whole, 0x3A, 4096);
+    __builtin_memcpy(whole + 4096, pending_bytes, sizeof(pending_bytes));
+    return whole;
+}
+
+/** Process B: the neighbour grows by twenty blocks, which stay in the batch's
+ * images, and a change of its mode stores its inode. */
+static void pending_second(void)
+{
+    struct vfs_stat st;
+
+    memset(&st, 0, sizeof(st));
+    st.mode = 0640;
+    OPS->write(&mnt, pending_handle, pending_bytes, sizeof(pending_bytes), 4096);
+    OPS->setattr(&mnt, pending_node, VFS_SET_MODE, &st);
+}
+
+/** At process A's first request past the table block, of the file's data,
+ * whose buffer B has no use for, give B the turn. */
+static void pending_pause(void)
+{
+    if (current_proc != &proc_a || second_inside || pending_fired ||
+        request_block <= pending_table) {
+        return;
+    }
+    pending_fired = 1;
+    pass_turn();
+    pending_ended = !turns_active();
+}
+
+/**
+ * A neighbour's batch that fills while a sync sleeps: process A's fsync of
+ * the file, or sync of the device, stops at the file's data, process B
+ * appends to a neighbour in the table block and chmods it, and A goes on. A
+ * stop after A's call finds no pointer to a block whose data and bit are in
+ * the batch's images: `device` leaves them there, and an fsync drains them
+ * and writes them first.
+ */
+static void fsync_pending_row(int device)
+{
+    static unsigned char own[2 * 4096];
+    void *a, *b, *ha = 0, *hb = 0;
+    int rc, a_rc;
+
+    if (!fsync_mount(0)) {
+        return;
+    }
+    memset(own, 0x3A, sizeof(own));
+    memset(pending_bytes, 0xA3, sizeof(pending_bytes));
+    a = make_file(mnt.root, "own", &rc);
+    b = make_file(mnt.root, "next", &rc);
+    check(a && b && write_at(a, own, 4096, 0) == 0 && write_at(b, own, 4096, 0) == 0 &&
+              OPS->sync(&mnt) == 0 && OPS->open(&mnt, a, 2, &ha) == 0 &&
+              OPS->open(&mnt, b, 2, &hb) == 0,
+          "two files of one block are on the medium");
+    if (!a || !b || !ha || !hb) {
+        return;
+    }
+    check(OPS->write(&mnt, ha, own, 4096, 4096) == 4096, "the file grows by a block");
+    pending_handle = hb;
+    pending_node = b;
+    pending_table = fsync_table_block(fsync_ino(b));
+    pending_fired = pending_ended = 0;
+    write_pause = pending_pause;
+    start_turns(pending_second);
+    a_rc = device ? OPS->sync(&mnt) : OPS->fsync(&mnt, ha);
+    write_pause = 0;
+    finish_turns();
+    check(pending_fired && pending_ended && a_rc == 0,
+          device ? "a neighbour's batch fills during a sync, which succeeds"
+                 : "a neighbour's batch fills during an fsync, which succeeds");
+    OPS->release(&mnt, hb);
+    if (fsync_stop_judge(ha, a, b)) {
+        check(file_is("/own", own, sizeof(own)), "and the synced file reads back whole");
+        check(device ? file_is("/next", own, 4096) : file_is("/next", pending_whole(), 21 * 4096),
+              device ? "and the neighbour as it was on the medium" : "and the neighbour whole");
+        unmount_image();
+    }
+}
+
+/* The file process B syncs and what it did, for `fsync_failed_row`. */
+static void *failed_handle;
+static int failed_rc, failed_fired, failed_ended;
+static const char *failed_slept;
+
+/** Process B: an fsync of the neighbour. */
+static void failed_second(void)
+{
+    failed_rc = OPS->fsync(&mnt, failed_handle);
+}
+
+/** At process A's first request, give B the turn and note its wait. */
+static void failed_pause(void)
+{
+    if (current_proc != &proc_a || second_inside || failed_fired) {
+        return;
+    }
+    failed_fired = 1;
+    pass_turn();
+    failed_ended = !turns_active();
+    failed_slept = second_wait;
+}
+
+/**
+ * One block that fails, with every other write going through. A file grew by
+ * twenty blocks in a table block it shares with a neighbour, and the highest
+ * of them fails. Either the file's fsync fails with the neighbour's fsync
+ * waiting on its list, or a sync of the device fails with nobody waiting.
+ * The calls end in -EIO, a retry of the device while the block still fails
+ * too, and no write has reached the table block. Once the block heals, a
+ * sync writes the table block after it and the stop reads back whole.
+ */
+static void fsync_failed_row(int device)
+{
+    static unsigned char own[4096], next[20 * 4096];
+    void *a, *b, *ha = 0, *hb = 0;
+    uint64_t table, blk;
+    int rc, a_rc;
+
+    if (!fsync_mount(0)) {
+        return;
+    }
+    memset(own, 0x3A, sizeof(own));
+    memset(next, 0xA3, sizeof(next));
+    a = make_file(mnt.root, "own", &rc);
+    b = make_file(mnt.root, "next", &rc);
+    check(a && b && write_at(a, own, sizeof(own), 0) == 0 && OPS->sync(&mnt) == 0 &&
+              OPS->open(&mnt, a, 2, &ha) == 0 && OPS->open(&mnt, b, 2, &hb) == 0,
+          "a file of one block and an empty neighbour are on the medium");
+    if (!a || !b || !ha || !hb) {
+        return;
+    }
+    check(write_at(b, next, sizeof(next), 0) == 0, "the neighbour grows by twenty blocks");
+    table = fsync_table_block(fsync_ino(b));
+    fsync_note();
+    for (blk = 0; blk < FSYNC_BLOCKS; blk++) {
+        if (fsync_owner[blk] == fsync_ino(b)) {
+            fail_block = (int64_t)blk;
+        }
+    }
+    check(fail_block > (int64_t)table, "its blocks lie past the table block");
+    wlog_reset();
+    failed_handle = ha;
+    failed_rc = failed_fired = failed_ended = 0;
+    failed_slept = 0;
+    if (device) {
+        a_rc = OPS->sync(&mnt);
+    } else {
+        write_pause = failed_pause;
+        start_turns(failed_second);
+        a_rc = OPS->fsync(&mnt, hb);
+        write_pause = 0;
+        finish_turns();
+        check(failed_fired && !failed_ended && failed_slept &&
+                  streq(failed_slept, "ext2 node state"),
+              "the neighbour's fsync waits for the file's list");
+        check(failed_rc == -EIO, "and fails with it");
+    }
+    check(a_rc == -EIO, "the call fails");
+    check(!fsync_written(table), "and the table block stays off the medium");
+    check(OPS->sync(&mnt) == -EIO && OPS->fsync(&mnt, ha) == -EIO && !fsync_written(table),
+          "and a retry of the device, with the block still failing, leaves it off too");
+    fail_block = -1;
+    wlog_reset();
+    check(OPS->sync(&mnt) == 0, "a sync after the block heals succeeds");
+    check(fsync_written(table) && first_write_of(table) == wlog_n - 1,
+          "and writes the table block last");
+    OPS->release(&mnt, hb);
+    if (fsync_stop_judge(ha, a, b)) {
+        check(file_is("/next", next, sizeof(next)), "with the file whole");
+        unmount_image();
+    }
+}
+
 /** The rows of one file's fsync and fdatasync, under a cache of 8192
  * buffers, so that no row's dirty blocks reach the quarter of the limit at
  * which a drain writes the device's (`em_balance`). */
@@ -594,6 +781,10 @@ static void fsync_rows(void)
             fsync_beside_row(&rows[i]);
         }
     }
+    fsync_pending_row(0);
+    fsync_pending_row(1);
+    fsync_failed_row(0);
+    fsync_failed_row(1);
     bcache_set_limit(0);
 }
 

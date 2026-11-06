@@ -691,6 +691,7 @@ static void em_open(struct ext2_mount *em)
 }
 
 static int writeback_drain(struct ext2_mount *em);
+static int writeback_keeps(struct ext2_mount *em, const struct ext2_node *n);
 
 /** Give back a write batch and every buffer page it holds; NULL is nothing. */
 static void writeback_free(struct ext2_writeback *wb)
@@ -2345,6 +2346,32 @@ static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *optio
     return rc;
 }
 
+/**
+ * Whether `blk`, a block of the cache, is in the inode table of its group: a
+ * sync writes those last (`bcache_sync_last`), since an inode names blocks
+ * and a failed write of one must leave no pointer to it on the device. A
+ * table outside its group, which mke2fs does not make without `flex_bg`,
+ * keeps the device's order.
+ */
+static int block_in_table(void *arg, uint64_t blk)
+{
+    const struct ext2_mount *em = arg;
+    uint64_t table;
+    uint32_t g;
+
+    if (blk < em->first_data) {
+        return 0;
+    }
+    g = (uint32_t)((blk - em->first_data) / em->bpg);
+    if (g >= em->groups) {
+        return 0;
+    }
+    table = le32(em->gd + g * 32 + 8);
+    return blk >= table &&
+           blk < table + ((uint64_t)em->ipg * em->inode_size + BCACHE_BLOCK_BYTES - 1) /
+                             BCACHE_BLOCK_BYTES;
+}
+
 /** The `unmount` of `vfs_ops`: the mount's nodes, batch, descriptors and
  * record freed; a batch still pending on a removed device is recorded as a
  * failure first. */
@@ -2352,6 +2379,7 @@ static void ext2_unmount(struct vfs_mount *mnt)
 {
     struct ext2_mount *em = em_of(mnt);
 
+    bcache_sync_last(em->dev, 0, 0);
     if ((em->dev->flags & BLOCK_GONE) && em->wb && em->wb->count) {
         (void)writeback_error(em, -EIO);
     }
@@ -2971,13 +2999,14 @@ static void inode_encode_noting(const struct ext2_mount *em, struct ext2_node *n
  * slot the encoder covers. A regular file of 2 GiB or more sets `large_file`
  * first.
  *
- * An inode the file-write batch holds is stored from the node, whose pointers
- * may name blocks the batch has not put in the cache yet. That is sound on a
- * mount that writes back, which promises no order, and a strict mount drains
- * the batch before any store but the batch's own (`assert_writable`). A
- * change of a field but the times sets `n->dirty_meta`, and the superblock
- * is listed among `n`'s shared blocks when `large_file` is set for it. 0,
- * or -errno.
+ * An inode the file-write batch holds stays in the node on a mount that
+ * writes back (`writeback_keeps`): its pointers may name blocks the batch has
+ * not put in the cache yet, and the table block in the cache goes to the
+ * device with any neighbour's sync. The drain encodes the node. A strict
+ * mount drains the batch before any store but the batch's own
+ * (`assert_writable`). A change of a field but the times sets
+ * `n->dirty_meta`, and the superblock is listed among `n`'s shared blocks
+ * when `large_file` is set for it. 0, or -errno.
  */
 static int inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, int how)
 {
@@ -3005,6 +3034,9 @@ static int inode_write(struct ext2_mount *em, struct ext2_node *n, int fresh, in
         if (rc != 0) {
             return rc;
         }
+    }
+    if (!fresh && writeback_keeps(em, n)) {
+        return 0;
     }
     return write_bytes(em, at, raw, len, how);
 }
@@ -3715,6 +3747,25 @@ static int writeback_holds(const struct ext2_mount *em, const struct ext2_node *
         }
     }
     return 0;
+}
+
+/**
+ * Whether a drain still to come stores inode `n`, on a mount that writes
+ * back. A drain under way has encoded its nodes and may be asleep over a
+ * buffer, so it is waited for, under `em->meta`, and the answer holds until
+ * the caller sleeps.
+ */
+static int writeback_keeps(struct ext2_mount *em, const struct ext2_node *n)
+{
+    int kept;
+
+    if (em_strict(em) || !writeback_holds(em, n)) {
+        return 0;
+    }
+    meta_lock(em);
+    kept = writeback_holds(em, n);
+    meta_unlock(em);
+    return kept;
 }
 
 /**
@@ -5242,9 +5293,10 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
     return rc;
 }
 
-/* The nodes of a table block an `fsync` writes for, one at a time, before
- * it writes the whole device instead: twice the most a block holds, since
- * another process may list blocks for a node already written. */
+/* The rounds an `fsync` makes before it writes the whole device instead,
+ * each over a node of its table block, the batch or a wait for the cache:
+ * twice the most a block holds, since another process may list blocks for a
+ * node already written. */
 #define EXT2_TABLE_TRIES 64
 
 /**
@@ -5253,8 +5305,9 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
  * emptied in one step, so a block dirtied for `n` during the writes is the
  * next call's, and a failure leaves `n`'s next `fsync` the whole device.
  * `n->writing` shows the blocks to other callers until they are written:
- * they wait for it (`node_writes_wait`) before they count on them. 0, or
- * -errno.
+ * they wait for it (`node_writes_wait`) before they count on them, and find
+ * a failure recorded when they wake. The caller has no batch pending, since
+ * what the list names may be in its images. 0, or -errno.
  */
 static int node_blocks_write(struct ext2_mount *em, struct ext2_node *n)
 {
@@ -5273,6 +5326,7 @@ static int node_blocks_write(struct ext2_mount *em, struct ext2_node *n)
     }
     if (rc != 0) {
         n->shared_over = 1;
+        rc = writeback_error(em, rc);
     }
     n->writing--;
     if (n->writing == 0) {
@@ -5327,44 +5381,100 @@ static struct ext2_node *table_unsynced(struct ext2_mount *em, uint32_t ino)
 }
 
 /**
+ * Empty the batch and wait out another call's write of `n`'s list, until
+ * neither slept, so that the caller's `node_blocks_write` of `n` runs in the
+ * same step as the last check. A mount's failure stops it. A list that keeps
+ * being written, or a batch that keeps being filled, past EXT2_TABLE_TRIES
+ * sets `*whole`. 0, or -errno.
+ */
+static int node_write_ready(struct ext2_mount *em, struct ext2_node *n, int *whole)
+{
+    int tries, rc;
+
+    for (tries = 0; tries < EXT2_TABLE_TRIES; tries++) {
+        if (em->mnt->write_error) {
+            return em->mnt->write_error;
+        }
+        if (em->wb && em->wb->count) {
+            rc = writeback_drain(em);
+            if (rc != 0) {
+                return rc;
+            }
+        } else if (n->writing) {
+            node_writes_wait(em, n);
+        } else {
+            return 0;
+        }
+    }
+    *whole = 1;
+    return 0;
+}
+
+/**
  * Put on the device what the inodes in `n`'s table block depend on, before
  * that block is written, with a hold on each node: its shared and own
  * blocks are written here, or, while another call writes them, waited for.
+ *
+ * Every round that sleeps starts over, and the last one sleeps at nothing:
+ * the batch is empty, no neighbour has a list and the cache starts the write
+ * of `table` without a wait (`bcache_sync_block_ready`), so that the
+ * caller's `bcache_sync_block` runs in the same step as those checks. A
+ * failure on the mount, here or in a call this one waited for, is returned
+ * first: the block would publish a pointer to what failed.
+ *
  * A neighbour's block is tagged only when it is a regular file's, so
  * another kind of file sets `*whole`. So do a list that overflowed, a list
  * lost with its node or still going to a write of the whole device, whose
  * blocks only such a write of our own finds and waits for (bcache.h), and a
- * table block whose nodes keep listing more. 0, or -errno.
+ * table block that keeps being dirtied past EXT2_TABLE_TRIES. Such a write
+ * puts the table blocks last and takes no pointer from the batch's images
+ * (`inode_write`), so it needs no round of its own. 0, or -errno.
  */
-static int table_neighbours_write(struct ext2_mount *em, struct ext2_node *n, int *whole)
+static int table_write_ready(struct ext2_mount *em, struct ext2_node *n, uint64_t table, int *whole)
 {
-    int tries, rc = 0;
+    int tries, rc;
 
-    for (tries = 0; rc == 0; tries++) {
+    for (tries = 0; tries < EXT2_TABLE_TRIES; tries++) {
         struct ext2_node *m;
 
+        if (em->mnt->write_error) {
+            return em->mnt->write_error;
+        }
+        if (em->wb && em->wb->count) {
+            rc = writeback_drain(em);
+            if (rc != 0) {
+                return rc;
+            }
+            continue;
+        }
         if (em->shared_lost || em->device_lost) {
-            *whole = 1;
             break;
         }
         m = table_unsynced(em, n->ino);
         if (!m) {
-            break;
+            rc = bcache_sync_block_ready(em->dev, table);
+            if (rc <= 0) {
+                return rc;
+            }
+            continue;
         }
-        if (tries == EXT2_TABLE_TRIES || m->shared_over || m->unlisted ||
-            (m->mode & S_IFMT_) != S_IFREG_) {
-            *whole = 1;
+        if (m->shared_over || m->unlisted || (m->mode & S_IFMT_) != S_IFREG_) {
             break;
         }
         m->refs++;
+        rc = 0;
         if (m->writing) {
             node_writes_wait(em, m);
         } else {
             rc = node_blocks_write(em, m);
         }
         ext2_put(em->mnt, m);
+        if (rc != 0) {
+            return rc;
+        }
     }
-    return rc;
+    *whole = 1;
+    return 0;
 }
 
 /**
@@ -5378,37 +5488,38 @@ static int table_neighbours_write(struct ext2_mount *em, struct ext2_node *n, in
  * (`bcache_sync_block`).
  *
  * Another call's write of `n`'s list is waited for first, so that this one
- * returns with those blocks on the device. The table block holds other
- * inodes as they are in memory, so `table_neighbours_write` goes before it:
- * a stop after the call finds no neighbour's pointer to a block that is free
- * or unwritten.
+ * returns with those blocks on the device (`node_write_ready`). The table
+ * block holds other inodes as they are in memory, so `table_write_ready`
+ * goes before it: a stop after the call finds no neighbour's pointer to a
+ * block that is free or unwritten, and after a failure no table block goes
+ * out.
  *
  * A list that overflowed, or went with its node or to a write of the whole
  * device under way, makes it the whole device's `bcache_sync`, as a table
- * block's neighbours may. The caller has drained the batch. A failure is
- * recorded as the batch's error and leaves the next call the whole device.
- * 0, or -errno.
+ * block's neighbours may. A failure is recorded as the batch's error and
+ * leaves the next call the whole device. 0, or -errno.
  */
 static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_only)
 {
     struct ext2_mount *em = em_of(mnt);
     uint64_t table = inode_offset(em, n->ino) >> BCACHE_BLOCK_SHIFT;
-    int whole, with_table, rc = 0;
+    int whole = 0, with_table, device, rc;
 
-    node_writes_wait(em, n);
-    whole = n->shared_over || n->unlisted || em->shared_lost || em->device_lost;
+    rc = node_write_ready(em, n, &whole);
+    whole |= n->shared_over || n->unlisted || em->shared_lost || em->device_lost;
     with_table = !data_only || n->dirty_meta || n->table_writing;
     if (with_table) {
         n->dirty_meta = 0;
         n->table_writing++;
     }
-    if (!whole) {
+    if (rc == 0 && !whole) {
         rc = node_blocks_write(em, n);
     }
-    if (!whole && rc == 0 && with_table) {
-        rc = table_neighbours_write(em, n, &whole);
+    if (rc == 0 && !whole && with_table) {
+        rc = table_write_ready(em, n, table, &whole);
     }
-    if (whole) {
+    device = rc == 0 && whole;
+    if (device) {
         device_write_begin(em);
         rc = bcache_sync(em->dev);
     } else if (rc == 0 && with_table) {
@@ -5417,7 +5528,7 @@ static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_o
     if (rc == 0) {
         rc = block_flush(em->dev);
     }
-    if (whole) {
+    if (device) {
         device_write_end(em);
     }
     if (with_table) {
@@ -7690,6 +7801,9 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     }
     mnt->priv = em;
     mnt->root = root;
+    if (em->block_size == BCACHE_BLOCK_BYTES) {
+        bcache_sync_last(dev, block_in_table, em);
+    }
     klog(KLOG_INFO, "ext2", "mounted: %d blocks of %d, %d inodes, %d groups%s", (int)em->blocks,
          (int)em->block_size, (int)em->inodes, (int)em->groups, em->writable ? "" : ", read-only");
     return 0;
