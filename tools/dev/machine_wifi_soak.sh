@@ -289,7 +289,7 @@ netwatch()
             esac
         done < /proc/net/dev
         replies=-
-        while read -r proto a b c d e _; do
+        while read -r proto a _ _ _ e _; do
             [ "$proto" = Icmp: ] && [ "$a" != InMsgs ] && replies=$e
         done < /proc/net/snmp
         echo "$up eth0=$eth wlan0=$wl echoreps=$replies" >> "$dir/net"
