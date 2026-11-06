@@ -254,28 +254,36 @@ static void batch_metadata_row(void)
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "metadata limits leave a clean volume");
 }
 
-/* The description `batch_queued_writer` writes through. */
+/* The description `batch_queued_writer` writes through, and 1 once its
+   write is done. */
 static void *handoff_handle;
+static int handoff_done;
 
-/**
- * Write a byte at 4096 as another process, called when the namespace lock
- * is released; the write must be admitted.
- */
+/** Process B of `batch_handoff_row`: a byte written at 4096 of the file
+ * whose setattr process A is making. */
 static void batch_queued_writer(void)
 {
     unsigned char byte = 0x63;
-    uint32_t pid = current_proc->pid;
 
-    current_proc->pid = pid + 1;
     check(OPS->write(&mnt, handoff_handle, &byte, 1, 4096) == 1,
-          "the queued writer is admitted after namespace release");
-    current_proc->pid = pid;
+          "the queued writer is admitted after the setattr");
+    handoff_done = 1;
+}
+
+/** At the setattr's first write to the disk, give process B the turn. */
+static void batch_handoff_turn(void)
+{
+    if (current_proc == &proc_a) {
+        write_pause = 0;
+        pass_turn();
+    }
 }
 
 /**
- * A setattr keeps the mount's lock from the drain of a pending append
- * through the store of the inode, so a writer queued on the lock runs only
- * after it: the file ends with the new mode and the writer's byte.
+ * A setattr keeps the file's lock from the drain of a pending append
+ * through the store of the inode, so a writer of the same file that comes
+ * during the drain's writes waits for it: the file ends with the new mode
+ * and the writer's byte.
  */
 static void batch_handoff_row(void)
 {
@@ -286,7 +294,7 @@ static void batch_handoff_row(void)
 
     wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
     use_image(wimg, wbytes);
-    check(mount_rw() == 0, "the namespace handoff volume mounts");
+    check(mount_rw() == 0, "the handoff volume mounts");
     node = make_file(mnt.root, "handoff", &rc);
     check(node && OPS->open(&mnt, node, 2, &handoff_handle) == 0, "the handoff handle opens");
     if (!node || !handoff_handle) {
@@ -294,21 +302,24 @@ static void batch_handoff_row(void)
     }
     memset(data, 0x31, sizeof(data));
     check(OPS->write(&mnt, handoff_handle, data, sizeof(data), 0) == sizeof(data),
-          "an append precedes the competing namespace operation");
-    vfs_ns_unlock(&mnt);
-    namespace_ready = batch_queued_writer;
+          "an append precedes the competing write");
+    handoff_done = 0;
+    sleeps = 0;
+    write_pause = batch_handoff_turn;
+    start_turns(batch_queued_writer);
     memset(&st, 0, sizeof(st));
     st.mode = 0600;
-    check(OPS->setattr(&mnt, node, VFS_SET_MODE, &st) == 0,
-          "setattr retains the mount lock from drain through store");
-    check(!namespace_ready && OPS->getattr(&mnt, node, &st) == 0 && st.size == 4097 &&
+    check(OPS->setattr(&mnt, node, VFS_SET_MODE, &st) == 0 && handoff_done == 0 && sleeps > 0,
+          "setattr keeps the file's lock from the drain through the store");
+    write_pause = 0;
+    finish_turns();
+    check(handoff_done && OPS->getattr(&mnt, node, &st) == 0 && st.size == 4097 &&
               (st.mode & 0777) == 0600,
           "the queued writer follows the completed attribute change");
-    vfs_ns_lock(&mnt);
     OPS->release(&mnt, handoff_handle);
     OPS->put(&mnt, node);
     handoff_handle = 0;
-    check(unmount_rw() == 0 && e2fsck_clean(wimg), "namespace handoff leaves a clean volume");
+    check(unmount_rw() == 0 && e2fsck_clean(wimg), "the handoff leaves a clean volume");
 }
 
 /**
@@ -475,57 +486,47 @@ static void batch_reuse_row(void)
 static void *stage_writer, *stage_attribute;
 static int stage_target, stage_seen, stage_ran;
 
-/**
- * Run the queued work as another process, called when the draining owner
- * releases the namespace lock: a write and a setattr, both of which must
- * succeed.
- */
+/** Process B of the stage rows: a write of another file and a setattr of a
+ * third, both of which must succeed. */
 static void batch_stage_waiters(void)
 {
     unsigned char byte = 0x51;
     struct vfs_stat st;
-    uint32_t pid = current_proc->pid;
 
-    current_proc->pid = pid + 1;
     check(OPS->write(&mnt, stage_writer, &byte, 1, 0) == 1,
           "the queued writer enters after the frozen generation finishes");
-    vfs_ns_lock(&mnt);
     memset(&st, 0, sizeof(st));
     st.mode = 0600;
     check(OPS->setattr(&mnt, stage_attribute, VFS_SET_MODE, &st) == 0,
           "the queued attribute change follows the drain");
-    vfs_ns_unlock(&mnt);
     stage_ran++;
-    current_proc->pid = pid;
 }
 
 /**
- * At the flush numbered `stage_target`, check that the draining process
- * still holds the namespace lock, queue `batch_stage_waiters` for its
- * release, and check that the queued work has not changed the file.
+ * At the flush numbered `stage_target` of process A, give process B the
+ * turn, and check that it found the drain's `em->meta` held and changed
+ * nothing.
  */
 static void batch_stage_pause(void)
 {
     struct vfs_stat st;
 
-    if (++stage_seen != stage_target) {
+    if (current_proc != &proc_a || ++stage_seen != stage_target) {
         return;
     }
     flush_pause = 0;
-    check(mnt.ns.depth > 0 && mnt.ns.holder == (int)current_proc->pid,
-          "a draining generation retains mount ownership across I/O");
-    if (mnt.ns.depth == 0 || mnt.ns.holder != (int)current_proc->pid) {
-        return;
-    }
-    namespace_ready = batch_stage_waiters;
-    check(OPS->getattr(&mnt, stage_writer, &st) == 0 && st.size == 0 && stage_ran == 0,
+    sleeps = 0;
+    pass_turn();
+    check(sleeps > 0 && stage_ran == 0, "a strict drain keeps em->meta across its flushes");
+    check(OPS->getattr(&mnt, stage_writer, &st) == 0 && st.size == 0,
           "a queued writer cannot change the frozen generation");
 }
 
 /**
  * For each of the first five flushes of a drain that crosses an indirect
- * level, queue a writer and a setattr at that flush: both must run once,
- * after the drain finishes, and the volume must end clean.
+ * level, a writer of another file and a setattr of a third come at that
+ * flush: both must wait for the drain and run once after it, and the
+ * volume must end clean.
  */
 static void batch_stage_rows(void)
 {
@@ -551,16 +552,14 @@ static void batch_stage_rows(void)
                   OPS->write(&mnt, handle, bytes, 4096, 1035ull * 4096) == 4096 &&
                   OPS->write(&mnt, handle, bytes + 4096, 4096, 1036ull * 4096) == 4096,
               "the frozen generation crosses an indirect level");
-        vfs_ns_unlock(&mnt);
         stage_seen = stage_ran = 0;
         stage_target = barrier;
         flush_pause = batch_stage_pause;
+        start_turns(batch_stage_waiters);
         check(OPS->fsync(&mnt, handle) == 0, "a paused drain finishes");
         flush_pause = 0;
-        check(stage_ran == 1 && !namespace_ready,
-              "both waiters run after the selected stage completes");
-        namespace_ready = 0;
-        vfs_ns_lock(&mnt);
+        finish_turns();
+        check(stage_ran == 1, "both waiters run after the selected stage completes");
         OPS->release(&mnt, handle);
         OPS->put(&mnt, node);
         OPS->release(&mnt, stage_writer);

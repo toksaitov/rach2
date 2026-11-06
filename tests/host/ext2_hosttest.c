@@ -76,7 +76,6 @@ extern void park(void);
 /* ---- stubs for what the driver and the cache reach outside themselves ---- */
 
 static struct vfs_mount mnt;
-static void (*namespace_ready)(void);
 static void (*flush_pause)(void);
 static void (*read_pause)(void);
 static void (*write_pause)(void);
@@ -142,6 +141,36 @@ void wq_wake_all(wait_queue_t *wq)
 static int sleeps;
 #define WAIT_TURNS 100000
 
+/* The kind of the first wait process B slept in since `start_turns`, or
+   NULL while it has slept in none, and for a buffer's, its block. */
+static const char *second_wait;
+static uint64_t second_wait_block;
+/* The blocks of the cache the last request of the device moved, the first
+   and the count. */
+static uint64_t request_block, request_blocks;
+
+/**
+ * The kind of the wait on `wq` with argument `arg`: a sleeping lock's kind
+ * (sleeplock.h), whose wait passes a `struct sleep_turn` that begins with
+ * the lock; "buffer" for the hold of a cache buffer, whose wait passes the
+ * buffer; "ext2 node state" for anything else, which in ext2.c is a node's
+ * load or death, or the admission of a remount. Each argument here is a
+ * structure of at least a pointer. A buffer's block goes in `*block`.
+ */
+static const char *wait_kind(wait_queue_t *wq, void *arg, uint64_t *block)
+{
+    const struct sleep_lock *l = arg ? *(struct sleep_lock *const *)arg : 0;
+
+    if (l && (uintptr_t)l + __builtin_offsetof(struct sleep_lock, wq) == (uintptr_t)wq) {
+        return l->record ? l->record->kind : "sleep lock";
+    }
+    if (arg && (uintptr_t)arg + __builtin_offsetof(struct bbuf, wq) == (uintptr_t)wq) {
+        *block = ((const struct bbuf *)arg)->blk;
+        return "buffer";
+    }
+    return "ext2 node state";
+}
+
 /* A row of two processes: process A is the test's own stack and process B
    a parked call (compat/park_host.c), which `start_turns` arms and A's first
    turn starts. Only one runs, and each runs until it gives the turn. */
@@ -180,6 +209,7 @@ static void start_turns(void (*body)(void))
     second_body = body;
     second_armed = 1;
     second_started = 0;
+    second_wait = 0;
 }
 
 /** Give turns until process B has ended, starting it if none was given. */
@@ -199,12 +229,14 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     int turns = 0;
 
-    (void)wq;
     if (!turns_active()) {
         return -1;
     }
     if (!cond(arg)) {
         sleeps++;
+        if (current_proc == &proc_b && !second_wait) {
+            second_wait = wait_kind(wq, arg, &second_wait_block);
+        }
     }
     while (!cond(arg)) {
         if (++turns > WAIT_TURNS || !turns_active()) {
@@ -273,37 +305,27 @@ uint32_t timer_now_us(void)
 {
     return 0;
 }
-/** Take the mount's namespace lock for the current process, recursively. */
+/** Panic: fd.c takes the mount's namespace lock only on a type that sets
+ * `ns_serialised`, which ext2 does not. */
 void vfs_ns_lock(struct vfs_mount *mnt)
 {
-    mnt->ns.holder = (int)current_proc->pid;
-    mnt->ns.depth++;
+    (void)mnt;
+    k_panic("the namespace lock taken on ext2");
 }
-/**
- * Release one level of the namespace lock. At the last level, clear the
- * holder and call `namespace_ready` once, if a row set it, so that a row can
- * act at the moment the lock is free.
- */
+/** Panic, as `vfs_ns_lock` does. */
 void vfs_ns_unlock(struct vfs_mount *mnt)
 {
-    if (mnt->ns.depth > 0) {
-        mnt->ns.depth--;
-    }
-    if (mnt->ns.depth == 0) {
-        void (*ready)(void) = namespace_ready;
-
-        mnt->ns.holder = -1;
-        namespace_ready = 0;
-        if (ready) {
-            ready();
-        }
-    }
+    (void)mnt;
+    k_panic("the namespace lock given back on ext2");
 }
 
 /* ---- the image file as a block device ---- */
 
 static void *image;
 static uint64_t image_sectors;
+/* The volume in memory in place of the image file, while a row sets it
+   (ext2_pair_rows.h), so that a row can start again from a copy cheaply. */
+static unsigned char *ram_image;
 /* Reads to fail, for a row: each one reads nothing. */
 static int read_fails;
 
@@ -312,6 +334,8 @@ static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
 {
     (void)d;
     current_proc->disk_waits++; /* the wait the block layer counts */
+    request_block = lba / (BCACHE_BLOCK_BYTES / 512);
+    request_blocks = (count + BCACHE_BLOCK_BYTES / 512 - 1) / (BCACHE_BLOCK_BYTES / 512);
     if (read_pause) {
         read_pause();
     }
@@ -321,6 +345,10 @@ static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
     }
     if (lba + count > image_sectors) {
         return -5;
+    }
+    if (ram_image) {
+        __builtin_memcpy(buf, ram_image + lba * 512, count * 512);
+        return 0;
     }
     if (fseek(image, (long)(lba * 512), SEEK_SET_) != 0 ||
         fread(buf, 1, count * 512, image) != count * 512) {
@@ -432,6 +460,8 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
 {
     (void)d;
     current_proc->disk_waits++;
+    request_block = lba / (BCACHE_BLOCK_BYTES / 512);
+    request_blocks = (count + BCACHE_BLOCK_BYTES / 512 - 1) / (BCACHE_BLOCK_BYTES / 512);
     if (write_pause) {
         write_pause();
     }
@@ -455,6 +485,10 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
         wlog_n++;
     } else {
         wlog_overflow = 1;
+    }
+    if (ram_image) {
+        __builtin_memcpy(ram_image + lba * 512, buf, count * 512);
+        return 0;
     }
     if (fseek(image, (long)(lba * 512), SEEK_SET_) != 0 ||
         fwrite(buf, 1, count * 512, image) != count * 512) {
@@ -527,9 +561,193 @@ static void use_image(const char *path, uint64_t bytes)
     }
 }
 
-#define OPS (vfs_ext2_type.ops)
+/* The driver's own operations, and those the rows call: the same, but for
+   a change of names, which runs under its directory's lock as the VFS calls
+   it (`held_ops_init`). */
+#define EXT2_OPS (vfs_ext2_type.ops)
+#define OPS      (&held_ops)
 
-/** Mount the device with `flags` on a cleared `mnt`; the mount's result. */
+static struct vfs_ops held_ops;
+
+/** The directory `dir` names, the root for NULL. */
+static void *held_dir(struct vfs_mount *m, void *dir)
+{
+    return dir ? dir : m->root;
+}
+
+/** Whether directory `a` is `b` or below it, by the `..` entries from `a`
+ * up to the root; the walk holds no lock while it looks. */
+static int held_below(struct vfs_mount *m, void *a, void *b)
+{
+    void *cur = a, *up;
+    int depth;
+
+    EXT2_OPS->hold(m, cur);
+    for (depth = 0; depth < 256; depth++) {
+        int at = cur == b, top = cur == m->root;
+
+        if (at || top || EXT2_OPS->lookup(m, cur, "..", &up) != 0) {
+            EXT2_OPS->put(m, cur);
+            return at;
+        }
+        EXT2_OPS->put(m, cur);
+        cur = up;
+    }
+    EXT2_OPS->put(m, cur);
+    return 0;
+}
+
+/** The inode number of `node`, 0 when getattr fails. */
+static uint64_t held_ino(struct vfs_mount *m, void *node)
+{
+    struct vfs_stat st;
+
+    return EXT2_OPS->getattr(m, node, &st) == 0 ? st.ino : 0;
+}
+
+/** The `create` of `held_ops`: the driver's, under `dir`'s lock. */
+static int held_create(struct vfs_mount *m, void *dir, const char *name, uint32_t mode, void **node)
+{
+    void *d = held_dir(m, dir);
+    int rc;
+
+    EXT2_OPS->lock_node(m, d);
+    rc = EXT2_OPS->create(m, dir, name, mode, node);
+    EXT2_OPS->unlock_node(m, d);
+    return rc;
+}
+
+/** The `unlink` of `held_ops`: the driver's, under `dir`'s lock. */
+static int held_unlink(struct vfs_mount *m, void *dir, const char *name)
+{
+    void *d = held_dir(m, dir);
+    int rc;
+
+    EXT2_OPS->lock_node(m, d);
+    rc = EXT2_OPS->unlink(m, dir, name);
+    EXT2_OPS->unlock_node(m, d);
+    return rc;
+}
+
+/** The `mkdir` of `held_ops`: the driver's, under `dir`'s lock. */
+static int held_mkdir(struct vfs_mount *m, void *dir, const char *name, uint32_t mode)
+{
+    void *d = held_dir(m, dir);
+    int rc;
+
+    EXT2_OPS->lock_node(m, d);
+    rc = EXT2_OPS->mkdir(m, dir, name, mode);
+    EXT2_OPS->unlock_node(m, d);
+    return rc;
+}
+
+/** The `rmdir` of `held_ops`: the driver's, under `dir`'s lock. */
+static int held_rmdir(struct vfs_mount *m, void *dir, const char *name)
+{
+    void *d = held_dir(m, dir);
+    int rc;
+
+    EXT2_OPS->lock_node(m, d);
+    rc = EXT2_OPS->rmdir(m, dir, name);
+    EXT2_OPS->unlock_node(m, d);
+    return rc;
+}
+
+/**
+ * The `rename` of `held_ops`: the driver's, under both directories' locks,
+ * taken as `vfs_rename_lock` takes them: the mount's rename lock first when
+ * they differ, then the ancestor before its descendant, and unrelated ones
+ * by inode number.
+ */
+static int held_rename(struct vfs_mount *m, void *olddir, const char *oldname, void *newdir,
+                       const char *newname)
+{
+    void *od = held_dir(m, olddir), *nd = held_dir(m, newdir), *first = od, *second = nd;
+    int rc;
+
+    if (od != nd) {
+        sleep_lock_take(&m->rename);
+        if (held_below(m, od, nd) ||
+            (!held_below(m, nd, od) && held_ino(m, nd) < held_ino(m, od))) {
+            first = nd;
+            second = od;
+        }
+    }
+    EXT2_OPS->lock_node(m, first);
+    if (second != first) {
+        EXT2_OPS->lock_node(m, second);
+    }
+    rc = EXT2_OPS->rename(m, olddir, oldname, newdir, newname);
+    if (second != first) {
+        EXT2_OPS->unlock_node(m, second);
+    }
+    EXT2_OPS->unlock_node(m, first);
+    if (od != nd) {
+        sleep_lock_give(&m->rename);
+    }
+    return rc;
+}
+
+/** The `link` of `held_ops`: the driver's, under `dir`'s lock and then the
+ * node's. */
+static int held_link(struct vfs_mount *m, void *dir, const char *name, void *node)
+{
+    void *d = held_dir(m, dir);
+    int rc;
+
+    EXT2_OPS->lock_node(m, d);
+    EXT2_OPS->lock_node(m, node);
+    rc = EXT2_OPS->link(m, dir, name, node);
+    EXT2_OPS->unlock_node(m, node);
+    EXT2_OPS->unlock_node(m, d);
+    return rc;
+}
+
+/** The `symlink` of `held_ops`: the driver's, under `dir`'s lock. */
+static int held_symlink(struct vfs_mount *m, void *dir, const char *name, const char *target)
+{
+    void *d = held_dir(m, dir);
+    int rc;
+
+    EXT2_OPS->lock_node(m, d);
+    rc = EXT2_OPS->symlink(m, dir, name, target);
+    EXT2_OPS->unlock_node(m, d);
+    return rc;
+}
+
+/** The `mknod` of `held_ops`: the driver's, under `dir`'s lock. */
+static int held_mknod(struct vfs_mount *m, void *dir, const char *name, uint32_t mode,
+                      uint32_t rdev, void **node)
+{
+    void *d = held_dir(m, dir);
+    int rc;
+
+    EXT2_OPS->lock_node(m, d);
+    rc = EXT2_OPS->mknod(m, dir, name, mode, rdev, node);
+    EXT2_OPS->unlock_node(m, d);
+    return rc;
+}
+
+/** Make `held_ops` the driver's operations with the namespace calls
+ * wrapped, before the first row. */
+static void held_ops_init(void)
+{
+    held_ops = *EXT2_OPS;
+    held_ops.create = held_create;
+    held_ops.unlink = held_unlink;
+    held_ops.mkdir = held_mkdir;
+    held_ops.rmdir = held_rmdir;
+    held_ops.rename = held_rename;
+    held_ops.link = held_link;
+    held_ops.symlink = held_symlink;
+    held_ops.mknod = held_mknod;
+}
+
+/* The kind of the mount's rename lock, as nodelock.c names it. */
+static struct sleep_lock_record rename_record = SLEEP_LOCK_RECORD("rename");
+
+/** Mount the device with `flags` on a cleared `mnt`, its rename lock free;
+ * the mount's result. */
 static int mount_flags(uint32_t flags)
 {
     int rc;
@@ -539,6 +757,7 @@ static int mount_flags(uint32_t flags)
     mnt.dev = &dev;
     mnt.flags = flags;
     mnt.ns.holder = -1;
+    sleep_lock_init(&mnt.rename, &rename_record, 0);
     rc = vfs_ext2_type.mount(&mnt, &dev, flags, "");
     return rc;
 }
@@ -1374,25 +1593,10 @@ static void refusal_rows(void)
  * for; `default_mount_row` judges a mount without it. */
 static uint32_t rw_flags = VFS_MS_DIRSYNC;
 
-/**
- * Mount the device read-write with `rw_flags` and take the namespace lock,
- * which the test holds in place of the system call layer while the mount is
- * up. Returns the mount's result.
- */
+/** Mount the device read-write with `rw_flags`; the mount's result. */
 static int mount_rw(void)
 {
-    int rc;
-
-    __builtin_memset(&mnt, 0, sizeof(mnt));
-    mnt.type = &vfs_ext2_type;
-    mnt.dev = &dev;
-    mnt.flags = rw_flags;
-    mnt.ns.holder = -1;
-    rc = vfs_ext2_type.mount(&mnt, &dev, rw_flags, "");
-    if (rc == 0) {
-        vfs_ns_lock(&mnt);
-    }
-    return rc;
+    return mount_flags(rw_flags);
 }
 
 /**
@@ -3163,25 +3367,25 @@ static void batch_flush_error_row(int barrier, int large)
            fails - initial_failures);
 }
 
-/* The namespace lock's depth at the last flush and the last read of the
- * device, -1 before one. */
-static int flush_depth, read_depth;
+/* The file locks the calling process held at the last flush and the last
+ * read of the device, -1 before one. */
+static int flush_locks, read_locks;
 
-/** Note the depth of the namespace lock at a read of the device. */
-static void read_depth_note(void)
+/** Note the file locks held at a read of the device. */
+static void read_locks_note(void)
 {
-    read_depth = mnt.ns.depth;
+    read_locks = current_proc->file_locks;
 }
 
-/** Note the depth of the namespace lock at a flush. */
-static void flush_depth_note(void)
+/** Note the file locks held at a flush. */
+static void flush_locks_note(void)
 {
-    flush_depth = mnt.ns.depth;
+    flush_locks = current_proc->file_locks;
 }
 
 /**
  * `sync`, `fsync` and a read of a block the cache lacks wait for the disk
- * with the namespace lock let go, so that a slow disk holds up no other call.
+ * with no file lock held, so that a slow disk holds up no other call.
  */
 static void sync_unlocked_row(void)
 {
@@ -3197,26 +3401,23 @@ static void sync_unlocked_row(void)
     if (!node || !handle) {
         return;
     }
-    vfs_ns_unlock(&mnt); /* mount_rw left it held; the calls below take their own */
-    flush_pause = flush_depth_note;
+    flush_pause = flush_locks_note;
     check(OPS->write(&mnt, handle, "one", 3, 0) == 3, "the first write is taken");
-    flush_depth = -1;
-    check(OPS->fsync(&mnt, handle) == 0 && flush_depth == 0,
-          "fsync flushes the disk with the namespace lock let go");
+    flush_locks = -1;
+    check(OPS->fsync(&mnt, handle) == 0 && flush_locks == 0,
+          "fsync flushes the disk with no file lock held");
     check(OPS->write(&mnt, handle, "two", 3, 3) == 3, "the second write is taken");
-    flush_depth = -1;
-    check(OPS->sync(&mnt) == 0 && flush_depth == 0,
-          "sync flushes the disk with the namespace lock let go");
+    flush_locks = -1;
+    check(OPS->sync(&mnt) == 0 && flush_locks == 0, "sync flushes the disk with no file lock held");
     flush_pause = 0;
-    check(mnt.ns.depth == 0, "sync and fsync leave the namespace lock free");
+    check(proc_a.file_locks == 0, "sync and fsync leave no file lock held");
     check(bcache_invalidate(&dev) == 0, "the cache gives the file's block up");
-    read_pause = read_depth_note;
-    read_depth = -1;
+    read_pause = read_locks_note;
+    read_locks = -1;
     check(OPS->read(&mnt, handle, text, sizeof(text), 0) == sizeof(text) &&
-              memcmp(text, "onetwo", sizeof(text)) == 0 && read_depth == 0,
-          "a read fetches a missing block with the namespace lock let go");
+              memcmp(text, "onetwo", sizeof(text)) == 0 && read_locks == 0,
+          "a read fetches a missing block with the file's lock let go");
     read_pause = 0;
-    vfs_ns_lock(&mnt);
     OPS->release(&mnt, handle);
     OPS->put(&mnt, node);
     check(unmount_rw() == 0, "the unlocked-sync volume unmounts");
@@ -3304,12 +3505,11 @@ static uint32_t meta_crossings(void)
 }
 
 /**
- * On a mount that writes back and a type that sets `file_locked`, under a
- * cache of 16 buffers that another file's blocks have filled with dirty
- * ones, a write of eight blocks and the fsync that drains them: the cache
- * writes the victims before the drain takes `em->meta`, so that no hold of
- * it crosses a disk request, and both files read back after a remount on a
- * clean volume.
+ * On a mount that writes back, under a cache of 16 buffers that another
+ * file's blocks have filled with dirty ones, a write of eight blocks and
+ * the fsync that drains them: the cache writes the victims before the drain
+ * takes `em->meta`, so that no hold of it crosses a disk request, and both
+ * files read back after a remount on a clean volume.
  */
 static void drain_victims_row(void)
 {
@@ -3339,7 +3539,6 @@ static void drain_victims_row(void)
           "sixteen blocks of one file are dirty in the cache");
     y = make_file(mnt.root, "drained", &rc);
     check(y && OPS->open(&mnt, y, 2, &handle) == 0, "another file is open");
-    vfs_ext2_type.file_locked = 1;
     crossed = meta_crossings();
     if (handle) {
         OPS->lock_node(&mnt, y);
@@ -3349,7 +3548,6 @@ static void drain_victims_row(void)
         check(OPS->fsync(&mnt, handle) == 0, "and an fsync drains them past the victims");
     }
     check(meta_crossings() == crossed, "with em->meta held across no disk request");
-    vfs_ext2_type.file_locked = 0;
     if (handle) {
         OPS->release(&mnt, handle);
     }
@@ -3394,14 +3592,13 @@ static void overlap_second(void)
 }
 
 /**
- * Two truncates of two files of twenty blocks, on a mount that writes back
- * and a type that sets `file_locked`: process B's runs whole while process
- * A's waits for its indirect block. Neither holds `em->meta` across a disk
- * request, each free keeps its own list, and the cache's two classes keep
- * the order of both: at the sync every write of the files' inode table
- * block comes before the first of the block bitmap and of the descriptors,
- * so no pointer on the disk names a block whose bit is clear, and the
- * volume is clean with both files empty.
+ * Two truncates of two files of twenty blocks, on a mount that writes back:
+ * process B's runs whole while process A's waits for its indirect block.
+ * Neither holds `em->meta` across a disk request, each free keeps its own
+ * list, and the cache's two classes keep the order of both: at the sync every write of the files'
+ * inode table block comes before the first of the block bitmap and of the descriptors, so no
+ * pointer on the disk names a block whose bit is clear, and the volume is clean with both files
+ * empty.
  */
 static void overlap_punch_row(void)
 {
@@ -3446,7 +3643,6 @@ static void overlap_punch_row(void)
     overlap_done = 0;
     sleeps = 0;
     wlog_reset();
-    vfs_ext2_type.file_locked = 1;
     crossed = meta_crossings();
     read_pause = overlap_turn;
     start_turns(overlap_second);
@@ -3458,7 +3654,6 @@ static void overlap_punch_row(void)
     check(rc == 0 && overlap_done == 1 && sleeps == 0,
           "one truncate runs whole while the other waits for its indirect block");
     check(meta_crossings() == crossed, "and neither holds em->meta across a disk request");
-    vfs_ext2_type.file_locked = 0;
     check(OPS->sync(&mnt) == 0, "the two frees sync");
     synced = wlog_n;
     OPS->release(&mnt, handle);
@@ -3489,6 +3684,7 @@ static void overlap_punch_row(void)
 #include "ext2_node_rows.h"
 #include "ext2_lock_rows.h"
 #include "ext2_fsync_rows.h"
+#include "ext2_pair_rows.h"
 
 /* The host heap's limit on one allocation, 0 for none, and the page
  * allocations it grants before it fails, -1 for no limit
@@ -3532,7 +3728,6 @@ static void remount_nomem_row(void)
     wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
     use_image(wimg, wbytes);
     check(mount_ro() == 0, "the remount volume mounts read-only");
-    vfs_ns_lock(&mnt);
     kheap_host_pages_left = 1;
     rc = OPS->remount(&mnt, rw_flags, NULL);
     kheap_host_pages_left = -1;
@@ -4894,6 +5089,7 @@ int main(int argc, char **argv)
 
     if (argc == 3 && streq(argv[1], "-fn") && streq(argv[2], "--capture-child"))
         return ext2_fixture_capture_child();
+    held_ops_init();
     wimg = fix_path("w.ext2");
     check(ext2_fixture_capture_test(argv[0], fix_path("")),
           "e2fsck diagnostics stay separate from stdout repair questions");
@@ -4913,6 +5109,11 @@ int main(int argc, char **argv)
 
     if (argc == 2 && streq(argv[1], "--fsync-only")) {
         fsync_rows();
+        goto finish;
+    }
+
+    if (argc == 2 && streq(argv[1], "--pairs-only")) {
+        pair_rows();
         goto finish;
     }
 
@@ -4944,6 +5145,7 @@ int main(int argc, char **argv)
     batch_rows();
     node_rows();
     fsync_rows();
+    pair_rows();
 
 finish:
     if (image) {

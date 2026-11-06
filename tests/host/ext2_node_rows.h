@@ -1,15 +1,14 @@
 /*
  * ext2_node_rows.h: rows of ext2_hosttest.c, which includes this file, for
- * the life of a node in rach2/sys/fs/ext2.c on a type that sets
- * `file_locked`: a second caller on a loading node, a failed load with a
- * sleeper, a node that dies under a lookup, a last put under another lock,
- * an inode number in the hash, a remount that closes admission, and an error
- * flip. Two calls stand for two processes and take turns, the second a
- * parked call (compat/park_host.c): a row hands over at a disk request, and
- * a wait that cannot end yet hands back.
- * Files are empty, and a row's first process holds a directory's lock
- * around a change, as the VFS does; the rows of the batch and of `punch`
- * under `em->meta` are in ext2_hosttest.c.
+ * the life of a node in rach2/sys/fs/ext2.c under its node locks: a second
+ * caller on a loading node, a failed load with a sleeper, a node that dies
+ * under a lookup, a last put under another lock, an inode number in the
+ * hash, a remount that closes admission, and an error flip. Two calls stand
+ * for two processes and take turns, the second a parked call
+ * (compat/park_host.c): a row hands over at a disk request, and a wait that
+ * cannot end yet hands back. Files are empty, and a row's first process
+ * holds a directory's lock around a change, as the VFS does; the rows of
+ * the batch and of `punch` under `em->meta` are in ext2_hosttest.c.
  */
 #ifndef EXT2_NODE_ROWS_H_
 #define EXT2_NODE_ROWS_H_
@@ -59,8 +58,8 @@ static uint64_t row_free_inodes(void)
 
 /**
  * Start a row: a new volume mounted writable with the empty files "one" and
- * "two", the cache emptied so that the first look at either reads the disk,
- * and `file_locked` set. 1, or 0 for a volume that did not mount.
+ * "two", the cache emptied so that the first look at either reads the
+ * disk. 1, or 0 for a volume that did not mount.
  */
 static int node_row_begin(const char *what)
 {
@@ -81,7 +80,6 @@ static int node_row_begin(const char *what)
         OPS->put(&mnt, f);
     }
     check(OPS->sync(&mnt) == 0 && bcache_invalidate(&dev) == 0, "the row's cache is emptied");
-    vfs_ext2_type.file_locked = 1;
     sleeps = 0;
     row_done = 0;
     row_seen = 0;
@@ -90,11 +88,9 @@ static int node_row_begin(const char *what)
     return mnt.root != 0;
 }
 
-/** End a row: back under the mount's lock, unmounted, and the volume clean
- * when `clean` asks for that. */
+/** End a row: unmounted, and the volume clean when `clean` asks for that. */
 static void node_row_end(int clean, const char *what)
 {
-    vfs_ext2_type.file_locked = 0;
     if (clean) {
         check(unmount_rw() == 0 && e2fsck_clean(wimg), what);
     } else {
@@ -188,7 +184,6 @@ static void dying_node_row(void)
     check(ext2_fixture_debugfs(wimg, "ln one alias", 1, 0), "a second name is made");
     use_image(wimg, wbytes);
     check(mount_rw() == 0, "the dying volume mounts again");
-    vfs_ext2_type.file_locked = 1;
     sleeps = 0;
     row_done = 0;
     row_seen = 0;
