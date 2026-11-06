@@ -929,16 +929,18 @@ static int datagram_peers(void)
 }
 
 /**
- * Check that a send waiting for room in a full datagram queue fails with
- * EPIPE when the receiver shuts down reading. The send has no timeout, and
- * the shutdown comes once it is seen asleep; a wake the kernel misses leaves
- * the send asleep, and the case's watchdog ends it. Returns 0, or 1 after the
- * failure is printed.
+ * Check that a datagram queue holds at least 512 messages, as on a Linux
+ * system under systemd, and that a send waiting for room in a full one
+ * fails with EPIPE when the receiver shuts down reading. The send has no
+ * timeout, and the shutdown comes once it is seen asleep; a wake the kernel
+ * misses leaves the send asleep, and the case's watchdog ends it. Returns 0,
+ * or 1 after the failure is printed.
  */
 static int full_receiver_shut(void)
 {
     int sv[2];
     int status = 0;
+    int queued = 0;
     pid_t pid;
 
     if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
@@ -946,9 +948,13 @@ static int full_receiver_shut(void)
     }
     row_held();
     while (send(sv[0], "f", 1, MSG_DONTWAIT) == 1) {
+        queued++;
     }
     if (errno != EAGAIN) {
         return fail("a full datagram queue was not EAGAIN");
+    }
+    if (queued < 512) {
+        return fail("a datagram queue held fewer messages than a Linux system's 512");
     }
     row_held();
     pid = fork();

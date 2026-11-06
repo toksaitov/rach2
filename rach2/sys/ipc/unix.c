@@ -30,11 +30,14 @@
 #define SUN_PATH_OFF 2
 
 /* Policy: the bytes a socket's receive queue takes before a sender waits,
- * Linux's default buffer size, and the datagrams it takes, Linux's
- * net.unix.max_dgram_qlen. A stream send is queued in pieces of at most
- * UNIX_CHUNK bytes, so a reader drains the first while the rest waits. */
+ * Linux's default buffer size, and the datagrams it takes, the value
+ * systemd gives Linux's net.unix.max_dgram_qlen at boot, whose kernel default
+ * is 10. wpa_supplicant drops an event and detaches its monitor at a full
+ * queue, and wpa_cli reads none while its action runs, so 10 lose events in a
+ * two-second action. A stream send is queued in pieces of at most UNIX_CHUNK
+ * bytes, so a reader drains the first while the rest waits. */
 #define UNIX_BUF        212992u
-#define UNIX_DGRAM_QLEN 10u
+#define UNIX_DGRAM_QLEN 512u
 #define UNIX_CHUNK      65536u
 /* Format: the descriptors one message may have, Linux's SCM_MAX_FD. */
 #define UNIX_MAX_FDS    253u
