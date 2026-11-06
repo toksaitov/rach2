@@ -222,7 +222,7 @@ hold_wait() {
 			fi
 			dhcp_unlock
 		fi
-		if [ $n -lt $HOLD ]; then
+		if [ "$n" -lt $HOLD ]; then
 			sleep 1
 		else
 			sleep $LOOK
