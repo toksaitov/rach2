@@ -1450,17 +1450,46 @@ static int add_network(struct ctrl *c, const unsigned char *ssid, int ssid_len, 
 }
 
 /**
+ * Save the new network `id`, named `name` and enabled, then join it, and
+ * drop it and save again when the join fails. The save comes first because
+ * wpa_supplicant reads no frame while it waits for the disk, which takes
+ * seconds under load: after the join it would fall among the first key
+ * exchanges, which the access point gives up after 3.5 s. A save that fails
+ * leaves the file as it was. Returns the command's exit status.
+ */
+static int join_new(struct ctrl *c, const char *name, int id, struct cert *cert)
+{
+    char why[256];
+
+    if (ctrl_ok(c, "SAVE_CONFIG") != 0) {
+        complain("%s: the network could not be saved, and is not kept", name);
+        drop(c, id);
+        return 1;
+    }
+    if (select_wait(c, id, 0, cert, why, sizeof(why)) != 0) {
+        complain("%s: %s; the network is not kept", name, why);
+        drop(c, id);
+        if (ctrl_ok(c, "SAVE_CONFIG") != 0) {
+            complain("%s: the saved networks could not be written without it", name);
+        }
+        return 1;
+    }
+    printf("wifi: connected to %s\n", name);
+    return 0;
+}
+
+/**
  * `wifi connect NAME`: join the known network `name`, or add it from the
  * scan, asking its passphrase or its identity and password, probe an
  * enterprise network's certificate and pin it on the user's yes, and save
- * the networks once it is joined. `methods` and `phase2` are the EAP methods
- * of a new enterprise network.
+ * the networks before it is joined. `methods` and `phase2` are the EAP
+ * methods of a new enterprise network.
  */
 static int cmd_connect(struct ctrl *c, const char *name, const char *methods, const char *phase2)
 {
     static struct bss bss[BSS_MAX];
     static struct eap a;
-    char why[256], pass[256];
+    char pass[256];
     unsigned char ssid[64];
     struct cert cert;
     int i, id, ssid_len;
@@ -1511,21 +1540,16 @@ static int cmd_connect(struct ctrl *c, const char *name, const char *methods, co
         memset(&a, 0, sizeof(a));
         return 1;
     }
-    if (sec == SEC_ENTERPRISE && pin_enterprise(c, id, name, &a, &cert) != 0) {
-        return 1;
-    }
-
-    if (select_wait(c, id, 0, &cert, why, sizeof(why)) != 0) {
-        complain("%s: %s; the network is not kept", name, why);
+    /* ADD_NETWORK makes a network disabled; a saved one must not be. */
+    if (sec == SEC_ENTERPRISE) {
+        if (pin_enterprise(c, id, name, &a, &cert) != 0) {
+            return 1;
+        }
+    } else if (ctrl_ok(c, "ENABLE_NETWORK %d no-connect", id) != 0) {
         drop(c, id);
         return 1;
     }
-    if (ctrl_ok(c, "SAVE_CONFIG") != 0) {
-        complain("%s: connected, but the network could not be saved", name);
-        return 1;
-    }
-    printf("wifi: connected to %s\n", name);
-    return 0;
+    return join_new(c, name, id, &cert);
 }
 
 /** Print the usage to standard error and return 2. */

@@ -18,14 +18,15 @@
  *
  * The rows: the scan, listed once per network at its strongest access
  * point, the strongest first; a personal network joined, written with
- * bgscan and saved, and the other networks enabled again; a refused
- * passphrase, whose network is not kept; an enterprise network probed and
- * pinned on yes, with no password sent before the yes; one refused on no,
- * removed, and given no password; a pinned network whose server presents
- * another certificate, which is refused and kept, and whose reason `wifi
- * status` finds in the log through the EAP failure that follows it, and a
- * later attempt's refused password; the known networks listed with a pin;
- * a network forgotten; and the decoding of a name.
+ * bgscan and saved before the join, and the other networks enabled again; a
+ * refused passphrase, whose network is removed and saved again; an
+ * enterprise network probed, pinned on yes and saved before the join, with
+ * no password sent before the yes; one refused on no, removed, and given
+ * no password; a pinned network whose server presents another certificate,
+ * which is refused and kept, and whose reason `wifi status` finds in the
+ * log through the EAP failure that follows it, and a later attempt's
+ * refused password; the known networks listed with a pin; a network
+ * forgotten; and the decoding of a name.
  *
  * The test runs in its directory, so that the sockets' relative paths fit
  * sun_path. Each message stays under 2048 bytes, macOS's largest datagram on
@@ -404,6 +405,14 @@ static long at(const char *what)
     return p ? (long)(p - requests) : -1;
 }
 
+/** Whether `then` is in the requests at or after the first `first`. */
+static int after(const char *first, const char *then)
+{
+    long i = at(first);
+
+    return i >= 0 && strstr(requests + i, then) != 0;
+}
+
 /** `wifi scan`: one line per network, the strongest first, at the
  * strongest access point, with no hidden network and no second `home`. */
 static void row_scan(void)
@@ -447,12 +456,18 @@ static void row_personal(void)
     CHECK(at("SELECT_NETWORK 1\n") >= 0 &&
               at("SELECT_NETWORK 1\n") < at("ENABLE_NETWORK 0 no-connect"),
           "personal: the other network enabled again after the select");
-    CHECK(at("ENABLE_NETWORK 0 no-connect") < at("SAVE_CONFIG"), "personal: saved once joined");
+    CHECK(at("ENABLE_NETWORK 1 no-connect") >= 0 &&
+              at("ENABLE_NETWORK 1 no-connect") < at("SAVE_CONFIG") &&
+              at("SAVE_CONFIG") < at("SELECT_NETWORK 1\n"),
+          "personal: enabled and saved before the select");
+    CHECK(!after("SELECT_NETWORK 1\n", "SAVE_CONFIG"), "personal: no save after the select");
     CHECK(at("REMOVE_NETWORK") < 0, "personal: nothing removed");
 
     CHECK(run(args, "wrong password\n", known, HASH1) == 1, "wrong passphrase: exits 1");
     CHECK(at("REMOVE_NETWORK 1\n") >= 0, "wrong passphrase: the network is not kept");
-    CHECK(at("SAVE_CONFIG") < 0, "wrong passphrase: nothing saved");
+    CHECK(at("SAVE_CONFIG") >= 0 && at("SAVE_CONFIG") < at("SELECT_NETWORK 1\n") &&
+              after("REMOVE_NETWORK 1\n", "SAVE_CONFIG"),
+          "wrong passphrase: saved before the select, and again once removed");
     CHECK(at("ENABLE_NETWORK 0 no-connect") >= 0, "wrong passphrase: the other network enabled");
 
     CHECK(run(args, "short\n", known, HASH1) == 1, "short passphrase: exits 1");
@@ -488,7 +503,9 @@ static void row_enterprise(void)
           "yes: the anonymous identity");
     CHECK(at("SET_NETWORK 0 domain_suffix_match 756e692e6578616d706c65\n") >= 0,
           "yes: the server domain");
-    CHECK(at("SAVE_CONFIG") > password, "yes: saved once joined");
+    CHECK(at("SAVE_CONFIG") > password && at("SAVE_CONFIG") > at("ENABLE_NETWORK 0 no-connect") &&
+              after("SAVE_CONFIG", "SELECT_NETWORK 0\n"),
+          "yes: saved once pinned, before the join's select");
     CHECK(strstr(out, "subject: /C=KG/CN=radius.uni.example\n") != 0, "yes: the subject shown");
     CHECK(strstr(out, "name:    DNS:radius.uni.example\n") != 0, "yes: the name shown");
     CHECK(strstr(out, "SHA-256: 5A:1B:C1:29:62:05:E6:FD:BE:39:79:72:8E:FE:39:20\n"

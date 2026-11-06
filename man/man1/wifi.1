@@ -78,14 +78,19 @@ password, an anonymous identity and a server domain it asks for.
 A passphrase has 8 to 63 printable characters, or is a key of 64 hex
 digits.
 .Pp
+A new network is saved before it is joined: wpa_supplicant reads no frame
+while it writes its configuration, which can wait seconds for the disk,
+and an access point drops a station that misses a key exchange for a few
+seconds.
+If the save fails, the network is removed and not joined.
 While it connects, the other known networks are disabled, and they are
 enabled again when it ends.
 Once the station is joined,
 .Nm
-has wpa_supplicant save its networks, and prints
+prints
 .Ql wifi: connected to Ar name .
 A new network that cannot be joined, for a wrong passphrase or no answer
-in a minute, is not kept.
+in a minute, is removed and the networks are saved again without it.
 .Pp
 Every network is added with
 .Ql bgscan="simple:30:-65:300" :
@@ -239,3 +244,10 @@ added.
 Enterprise networks that want a client certificate (EAP-TLS) are added by
 hand in
 .Pa /etc/wpa_supplicant/wlan0.conf .
+.Pp
+.Cm forget
+of a network while the station is joined to another, and
+.Cm connect
+to a new network while it is joined to another, save with the link up.
+A save that waits seconds for the disk can then miss a key exchange of
+the network joined, whose access point drops the station.
