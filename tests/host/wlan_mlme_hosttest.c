@@ -50,7 +50,7 @@ static unsigned configured;   /* MHz of the last channel the radio took */
 static unsigned n_polls;      /* null frames the station asked for */
 static uint64_t poll_cookie;  /* the last one's */
 static uint64_t heard_at;     /* what the data path says it last heard */
-static uint64_t received_at;  /* and when that was a frame, not an ACK */
+static uint64_t renewing_at;  /* a renewal's key not in yet, since then */
 static uint64_t sealed_at;    /* and when it last opened a frame of the AP's */
 static uint32_t losses;       /* the station dump's beacon loss */
 static int held;              /* the data path's transmit is held */
@@ -290,17 +290,17 @@ static uint64_t iface_sealed(struct wlan *wlan)
     return sealed_at;
 }
 
-/** When the data path last received a unicast frame from the AP. */
-static uint64_t iface_received(struct wlan *wlan)
+/** When a renewal began whose key is not in yet. */
+static uint64_t iface_renewing(struct wlan *wlan)
 {
     (void)wlan;
-    return received_at;
+    return renewing_at;
 }
 
 /* An interface that reports ACKs, as the softMAC station over ath9k does. */
 static const struct wlan_mlme_ops poll_ops = {iface_tx,     iface_state,   iface_event, iface_poll,
                                               iface_heard,  iface_hold,    iface_moved, 0,
-                                              iface_sealed, iface_received};
+                                              iface_sealed, iface_renewing};
 
 /** Compare n bytes. */
 static int equal(const uint8_t *a, const uint8_t *b, unsigned n)
@@ -868,7 +868,7 @@ static void polled_idle(void)
 
     /* A unicast frame or an ACK the data path heard moves the next poll. */
     beacons_for(20000);
-    heard_at = received_at = now;
+    heard_at = now;
     beacons_for(29900);
     CHECK(n_polls == 1);
     wait_ms(100);
@@ -951,20 +951,18 @@ static void polled_ap(void)
     mlme.beacon_losses = &losses;
     losses = 0;
     n_polls = 0;
-    heard_at = received_at = 0;
+    heard_at = 0;
     connect_a(0);
     polled_idle();
     polled_answered();
     polled_lost();
 }
 
-/** An AP that let the station go: its radio ACKs and its beacons go on, and
- * nothing else comes back. The station asks within WLAN_MLME_QUIET_POLL and
- * one beacon-loss period of the check, not thirty seconds on; frames back
- * keep the thirty seconds. */
-static void quiet_ap(void)
+/** An AP that gave a renewal up: its radio ACKs and its beacons go on, and
+ * the key never comes. The station leaves with reason 15 within one
+ * beacon-loss period of WLAN_MLME_KEY_WAIT; a key in time ends the wait. */
+static void lost_renewal(void)
 {
-    uint64_t t;
     unsigned ms;
 
     reset();
@@ -972,26 +970,23 @@ static void quiet_ap(void)
     mlme.beacon_losses = &losses;
     losses = 0;
     n_polls = 0;
-    heard_at = received_at = 0;
+    heard_at = 0;
+    renewing_at = 0;
     connect_a(0);
-    heard_at = received_at = t = now;
-    for (ms = 0; ms < WLAN_MLME_QUIET_POLL - 100; ms += 100) {
+    renewing_at = now;
+    for (ms = 0; ms < WLAN_MLME_KEY_WAIT - 100; ms += 100)
         beacons_for(100);
-        heard_at = now;
-    }
-    CHECK(n_polls == 0);
-    for (ms = 0; ms < 2000 && !n_polls; ms += 100) {
+    CHECK(mlme.state == WLAN_STA_ASSOCIATED);
+    renewing_at = 0;
+    for (ms = 0; ms < 3000; ms += 100)
         beacons_for(100);
-        heard_at = now;
-    }
-    CHECK(n_polls == 1 && now - t < WLAN_MLME_QUIET_POLL + 2000);
-    wlan_mlme_tx_status(&mlme, poll_cookie, 1);
-    CHECK(mlme.probes == 0);
-    for (ms = 0; ms < 25000; ms += 100) {
+    CHECK(mlme.state == WLAN_STA_ASSOCIATED);
+    renewing_at = now;
+    for (ms = 0; ms < WLAN_MLME_KEY_WAIT + 2000; ms += 100)
         beacons_for(100);
-        heard_at = received_at = now;
-    }
-    CHECK(n_polls == 1);
+    CHECK(mlme.state == WLAN_STA_NONE);
+    CHECK(last_event()->ev.reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT);
+    renewing_at = 0;
 }
 
 /** Under 802.11w: unprotected deauthentication and disassociation dropped
@@ -1269,7 +1264,7 @@ static void connect_polled(void)
     reset();
     wlan_mlme_init(&mlme, 0, &radio, &radio.band, &scan, &poll_ops);
     n_polls = 0;
-    heard_at = received_at = sealed_at = 0;
+    heard_at = sealed_at = 0;
     connect_a(0);
     moves = 0;
     CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds1, 1) == 0 && moves == 0);
@@ -1369,7 +1364,7 @@ static void ds_no_proof(void)
     CHECK(followed(2437) && moves == 1);
     ds_beacons(&ds6, WLAN_MLME_DS_PROOF - 100);
     CHECK(moves == 1);
-    heard_at = received_at = now;
+    heard_at = now;
     wlan_mlme_tx_status(&mlme, poll_cookie, 1);
     ds_beacons(&ds6, 100);
     CHECK(followed(2412) && moves == 2 && !mlme.ds_home);
@@ -1439,7 +1434,7 @@ int main(void)
     reassociation();
     vanishing_ap();
     polled_ap();
-    quiet_ap();
+    lost_renewal();
     protected_frames();
     plain_frames();
     sae_exchange();

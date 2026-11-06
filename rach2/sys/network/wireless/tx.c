@@ -175,8 +175,9 @@ int wlan_data_connect(struct wlan_data *d, const struct wlan_bss *bss, int qos, 
     for (i = 0; i < WLAN_DATA_DEFRAG; ++i)
         d->defrag[i].len = 0;
     d->tx_rate = d->rx_rate = 0;
-    d->heard = d->received = 0;
+    d->heard = 0;
     d->sealed = 0;
+    d->renewing = 0;
     wlan_rate_connect(d, bss);
     d->connected = 1;
     return 0;
