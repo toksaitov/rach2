@@ -35,8 +35,9 @@
 #   * a ping of the gateway through wlan0, five times a second, whose
 #     replies are stamped on arrival;
 #   * a logger of every event wpa_supplicant reports, each stamped on arrival;
-#   * a sampler of `iw dev wlan0 station dump` every 5 s, and of the kernel's
-#     Wi-Fi lines every 30 s.
+#   * a sampler of `iw dev wlan0 station dump` every 5 s, of the kernel's
+#     Wi-Fi lines every 30 s, and of each interface's received packets every
+#     second.
 #
 # The AP's own group rekey may be an hour or more apart, so the network's
 # wpa_ptk_rekey is set to RACH2_SOAK_REKEY seconds, 120 unless given, in
@@ -272,6 +273,30 @@ kernelwatch()
     done
 }
 
+# Each second, the packets received on each interface and the echo replies
+# the kernel took from any of them, with builtins alone. A router may answer
+# on the wire for wlan0's address, since either interface answers an ARP
+# request for it; ping through wlan0 then sees nothing while these go on.
+netwatch()
+{
+    while [ ! -e "$dir/stop" ]; do
+        read -r up _ < /proc/uptime
+        eth=- wl=-
+        while read -r name _ packets _; do
+            case "$name" in
+            eth0:) eth=$packets ;;
+            wlan0:) wl=$packets ;;
+            esac
+        done < /proc/net/dev
+        replies=-
+        while read -r proto a b c d e _; do
+            [ "$proto" = Icmp: ] && [ "$a" != InMsgs ] && replies=$e
+        done < /proc/net/snmp
+        echo "$up eth0=$eth wlan0=$wl echoreps=$replies" >> "$dir/net"
+        sleep 1
+    done
+}
+
 pinger()
 {
     end=$(($(date +%s) + seconds))
@@ -456,6 +481,7 @@ soak()
     pinging=$!
     sampler &
     kernelwatch &
+    netwatch &
     i=0
     while [ "$i" -lt "$writers" ]; do
         writer "$i" &
