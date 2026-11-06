@@ -8,13 +8,16 @@
 #
 # The first form runs on the host: it sends this file to the machine at
 # ADDRESS, 192.168.0.106 unless given, starts the second form there in a
-# session of its own, follows its output over SSH, and keeps it with the
-# run's logs in build/runs/wifi-soak-TIME. SSH uses the wired link, so a drop
-# does not cut the session that watches it; a machine that hangs leaves here
-# whatever it had printed. Each SSH command waits up to 10 minutes for a
-# login and for an answer, since the load can hold them up that long.
-# RACH2_MACHINE_MAC names the station address the
-# machine must report, 28:d2:44:7e:e0:af by default, the Lenovo's cable.
+# session of its own, follows its output over SSH until the soak's process
+# ends, and keeps it with the run's logs in build/runs/wifi-soak-TIME. The
+# follower is BusyBox tail -f, which has no --pid, beside a loop that waits
+# for the process with kill -0; the logs are fetched and removed only once the
+# process is gone. SSH uses the wired link, so a drop does not cut the session
+# that watches it; a machine that hangs leaves here whatever it had printed,
+# and its logs stay on it. Each SSH command waits up to 10 minutes for a login
+# and for an answer, since the load can hold them up that long.
+# RACH2_MACHINE_MAC names the station address the machine must report,
+# 28:d2:44:7e:e0:af by default, the Lenovo's cable.
 #
 # The second form is the soak. It joins RACH2_SOAK_NETWORK, TDA-NET unless
 # given, a network wpa_supplicant already knows, and for SECONDS it runs:
@@ -117,8 +120,18 @@ host()
     "$@" "$env setsid sh /dev/shm/wifi-soak.sh run $seconds \
         > /dev/shm/wifi-soak.out 2>&1 < /dev/null & echo \$! > /dev/shm/wifi-soak.pid" ||
         exit 1
-    "$@" 'read p < /dev/shm/wifi-soak.pid; tail -f --pid="$p" /dev/shm/wifi-soak.out' |
-        tee "$out/out"
+    "$@" 'read p < /dev/shm/wifi-soak.pid
+        tail -f /dev/shm/wifi-soak.out & t=$!
+        while kill -0 "$p" 2> /dev/null; do sleep 1; done
+        sleep 2
+        kill "$t"' | tee "$out/out"
+    ended=$("$@" 'read p < /dev/shm/wifi-soak.pid
+        if kill -0 "$p" 2> /dev/null; then echo no; else echo yes; fi')
+    [ "$ended" = yes ] || {
+        echo "wifi-soak: failed: the soak did not end or the machine did not answer; its logs are on the machine" >&2
+        exit 1
+    }
+    "$@" 'cat /dev/shm/wifi-soak.out' > "$out/out" || exit 1
     "$@" 'cd /dev/shm/wifi-soak && tar cf - .' | tar xf - -C "$out" || {
         echo "wifi-soak: failed: the logs did not come back; they are on the machine" >&2
         exit 1
