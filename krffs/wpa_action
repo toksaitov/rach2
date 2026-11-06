@@ -11,11 +11,10 @@
 # lease follows the network joined. CONNECTED starts a DHCP client on IFACE,
 # which asks the network just joined for a lease at once, and records the
 # network's id, wpa_cli's WPA_ID. DISCONNECTED leaves the client running for
-# up to HOLD seconds: a CONNECTED to the same network within them keeps the
-# client, the address and the connections that use it, and has the client
-# renew the lease at once (SIGUSR1), which the server confirms or, on a
-# network that is not the one it was, refuses, so that the client starts
-# over. A CONNECTED to another network, or none within HOLD seconds, stops
+# up to HOLD seconds: a CONNECTED to the same network keeps the client, the
+# address and the connections that use it, and has the client renew the
+# lease at once (SIGUSR1), which the server confirms or, on a network that
+# is not the one it was, refuses, so that the client starts over. A CONNECTED to another network, or none within HOLD seconds, stops
 # the client, and its script gives the lease up with the address, the
 # default route and the servers (udhcpc-default.script). The wait ends early
 # when wpa_supplicant stops trying, its state INTERFACE_DISABLED, as for a
@@ -23,6 +22,14 @@
 # NetworkManager's link timeout, which keeps a Wi-Fi connection while
 # wpa_supplicant joins its network again after a short break, such as an AP
 # that restarts, deauthenticates the station or is lost for a few beacons.
+#
+# wpa_cli can lose an event on a loaded machine: it reads its socket late,
+# wpa_supplicant finds the socket full, drops the event and detaches it, and
+# init starts another wpa_cli, which has not seen it. So a CONNECTED keeps a
+# client of the same network with or without a wait pending, and the wait
+# asks the state itself, and after HOLD seconds goes on asking, every LOOK
+# seconds, until the station has joined or stopped trying: a state of
+# COMPLETED twice over stands for the CONNECTED.
 #
 # The card stays up throughout, since wpa_supplicant owns it, which is why
 # ifplugd follows the cable alone: its action's `ifdown` would take the card
@@ -42,12 +49,15 @@
 # /var/run/wpa_action.IFACE.hold.TOKEN: whichever of the waiting process
 # and CONNECTED renames it first decides, the one to stop the client, the
 # other to keep it, since rename is atomic and wpa_cli runs one action at a
-# time but the waiting process beside them.
+# time but the waiting process beside them. The file stays through a stop at
+# HOLD seconds, for the wait goes on; a CONNECTED that comes during the stop
+# waits for it.
 
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 export PATH
 
 HOLD=15 # seconds a disconnection may last before the lease goes
+LOOK=10 # seconds between looks at the state once the lease has gone
 CTRL=/var/run/wpa_supplicant
 
 iface=$1
@@ -90,16 +100,36 @@ state() {
 	wpa_cli -p "$CTRL" -i "$iface" status 2>/dev/null | sed -n 's/^wpa_state=//p'
 }
 
+# The id of the network IFACE has joined.
+network_id() {
+	wpa_cli -p "$CTRL" -i "$iface" status 2>/dev/null | sed -n 's/^id=//p'
+}
+
 # Wait for the disconnection whose file is "$hold.$1": stop the client when
-# no CONNECTED has taken the file within HOLD seconds, or once wpa_supplicant
-# stops trying.
+# no CONNECTED has taken the file within HOLD seconds, and go on until one
+# does, or the station is seen to have joined, or wpa_supplicant stops trying.
 hold_wait() {
 	n=0
-	while [ $n -lt $HOLD ] && [ -e "$hold.$1" ]; do
+	joined=0
+	while [ -e "$hold.$1" ]; do
 		case "$(state)" in
 			INTERFACE_DISABLED | INACTIVE) break ;;
+			COMPLETED) joined=$((joined + 1)) ;;
+			*) joined=0 ;;
 		esac
-		sleep 1
+		if [ $joined -ge 2 ]; then
+			WPA_ID=$(network_id) connected
+			return
+		fi
+		if [ $n -eq $HOLD ] && mv "$hold.$1" "$ending.$1" 2>/dev/null; then
+			stop_dhcp
+			mv "$ending.$1" "$hold.$1"
+		fi
+		if [ $n -lt $HOLD ]; then
+			sleep 1
+		else
+			sleep $LOOK
+		fi
 		n=$((n + 1))
 	done
 	if mv "$hold.$1" "$ending.$1" 2>/dev/null; then
@@ -120,6 +150,14 @@ hold_take() {
 	return 1
 }
 
+# Whether a wait has begun to stop the client.
+waiting_ended() {
+	for f in "$ending".*; do
+		[ -e "$f" ] && return 0
+	done
+	return 1
+}
+
 # Wait up to six seconds for a wait that has begun to stop the client.
 hold_ended() {
 	n=0
@@ -131,6 +169,23 @@ hold_ended() {
 	done
 }
 
+# The station joined the network WPA_ID: keep the client through a rejoin of
+# the same network, whether or not its disconnection was heard, or start one
+# for this network. A new client under load can take minutes to have a lease.
+connected() {
+	if running && [ -n "${WPA_ID-}" ] && ! waiting_ended &&
+		[ "$(cat "$netfile" 2>/dev/null)" = "$WPA_ID" ]; then
+		hold_take
+		kill -USR1 "$(cat "$pidfile")" 2>/dev/null && exit 0
+	fi
+	# The old client stops before the wait's file goes, so that while
+	# the file is there the lease may yet change, and once it is gone
+	# the lease in force is the one this network keeps.
+	stop_dhcp
+	hold_take || hold_ended
+	start_dhcp
+}
+
 case "$iface" in
 	'' | */*)
 		echo "wpa_action: usage: wpa_action IFACE CONNECTED|DISCONNECTED" >&2
@@ -140,25 +195,13 @@ esac
 
 case "$2" in
 	CONNECTED)
-		if running && [ -n "${WPA_ID-}" ] &&
-			[ "$(cat "$netfile" 2>/dev/null)" = "$WPA_ID" ] && hold_take; then
-			kill -USR1 "$(cat "$pidfile")" 2>/dev/null && exit 0
-		fi
-		# The old client stops before the wait's file goes, so that while
-		# the file is there the lease may yet change, and once it is gone
-		# the lease in force is the one this network keeps.
-		stop_dhcp
-		hold_take || hold_ended
-		start_dhcp
+		connected
 		;;
 	DISCONNECTED)
 		rm -f "$hold".*
-		if running; then
-			: > "$hold.$$"
-			hold_wait $$ < /dev/null > /dev/null 2>&1 &
-		else
-			stop_dhcp
-		fi
+		running || stop_dhcp
+		: > "$hold.$$"
+		hold_wait $$ < /dev/null > /dev/null 2>&1 &
 		;;
 esac
 exit 0
