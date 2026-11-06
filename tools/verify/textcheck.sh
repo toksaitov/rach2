@@ -107,7 +107,7 @@ doc_files() {
 # Every in-house shell script, as tools/verify/scripts.sh lists them for the
 # ShellCheck step, and the make files.
 script_files() {
-    sh tools/verify/scripts.sh
+    [ ! -f tools/verify/scripts.sh ] || sh tools/verify/scripts.sh
     ls ./Makefile 2>/dev/null
     prune_find '(' -name '*.mk' -o -name 'Makefile' -o -name 'Makefile.*' ')' -print
 }
@@ -182,7 +182,7 @@ config_files() {
     # docstring or a message. pyprose.py parses each file to tell these from
     # the other strings, so that a command the program runs or generates may
     # end its options with "--".
-    py_files | pick | sort -u | python3 tools/verify/pyprose.py \
+    py_files | pick | sort -u | python3 "$REPO/tools/verify/pyprose.py" \
         || echo "tools/verify/pyprose.py:0:  [check did not finish]"
 
     # A spaced "--" on any line of a configuration file. None of these

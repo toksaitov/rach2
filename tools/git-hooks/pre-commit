@@ -2,9 +2,8 @@
 #
 # pre-commit: format the staged in-house C files with the clang-format
 # version tools/setup/judges records, stage the result, and refuse the commit
-# when a staged C function is past a size limit of tools/verify/sizecheck.c,
-# or a staged file breaks the comment width or the terms of
-# tools/verify/prosecheck.c.
+# when the staged files fail the size limits, the comment width, the banned
+# terms or the fast style checks of tools/verify/quickcheck.sh.
 #
 # tools/verify/hookcheck.sh does the work; its header says how.
 #

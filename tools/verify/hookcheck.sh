@@ -16,7 +16,7 @@
 # tools/verify/sizes.reasons, and refuses the commit, with status 1, when a
 # function is past a limit or a reasons entry of those files is stale. The
 # checker is compiled from this tree's source with `cc` on each commit. The
-# complexity is judged when the recorded pmccabe is on PATH or under
+# complexity is judged when a pmccabe is on PATH or under
 # build/host-tools/native, where `make host-pmccabe` builds it, and is left
 # to `tests/run style` otherwise, with a warning that says so. Without `cc`
 # the sizes are not judged, with a warning.
@@ -26,8 +26,16 @@
 # read the whole staged tree, as the style cases do, so that vendored and
 # skipped files count as they do there, and a finding in a staged file
 # refuses the commit. A finding in a file the commit does not touch is left
-# for its author. The rest of `tests/run style`, `make -C rach2 check-arch`
-# among it, runs at the end of a milestone.
+# for its author. tools/verify/quickcheck.sh then runs the rest of the style
+# checks that take seconds, and a rough reading of the added lines. Every
+# check runs, so that one refusal lists all there is to fix.
+#
+# `push`, which tools/git-hooks/pre-push runs, judges what a push gives a
+# milestone branch in the same way, since a rebase runs no commit hook: the
+# files that differ are refused if unformatted, and quickcheck.sh also links
+# the host tests and runs cppcheck and Clang's warnings. A push to any other
+# branch passes, so that unfinished work can always be saved. `range BASE TIP`
+# judges the same by hand, as before a release's preparation.
 #
 # `format FILE ...` formats the files, relative to the root of the tree, in
 # place with the recorded version.
@@ -43,7 +51,7 @@
 # `testing`, or the one RACH2_STYLE_HOST names; an empty name means none.
 # With no recorded clang-format anywhere, the script warns and goes on.
 #
-# Usage: hookcheck.sh commit | format FILE ...
+# Usage: hookcheck.sh commit | push | range BASE TIP | format FILE ...
 #
 set -u
 
@@ -69,22 +77,25 @@ stage_formatted() {
     done <"$WORK/cfiles"
 }
 
-# local_pmccabe: print the command of the recorded pmccabe, on PATH or
-# under the tree's build/host-tools/native.
+# local_pmccabe: print the command of the recorded pmccabe, on PATH or under
+# the build/host-tools/native of this tree or of the clone it is a worktree
+# of, or else of any pmccabe on PATH, which counts the same for this rough use.
 local_pmccabe() {
-    for _c in pmccabe "$TOP/build/host-tools/native/bin/pmccabe"; do
+    _main=$(cd "$(git rev-parse --git-common-dir)/.." && pwd)
+    for _c in pmccabe "$TOP/build/host-tools/native/bin/pmccabe" \
+        "$_main/build/host-tools/native/bin/pmccabe"; do
         command -v "$_c" >/dev/null 2>&1 || continue
         if [ "$("$_c" -V </dev/null 2>&1 | head -n 1)" = "$PMCCABE_JUDGED" ]; then
             echo "$_c"
             return 0
         fi
     done
-    return 1
+    command -v pmccabe
 }
 
 # sizes: judge the staged C files in $WORK/tree by sizecheck, against the
 # entries of the staged reasons file for those files alone, since an entry
-# of a file not read would be called stale. Exits 1 on a finding.
+# of a file not read would be called stale. Sets REFUSED on a finding.
 sizes() {
     grep '\.c$' "$WORK/cfiles" >"$WORK/sizefiles" || return 0
     if ! command -v cc >/dev/null 2>&1; then
@@ -115,7 +126,7 @@ sizes() {
         1)
             grep -v ' finding(s)$' "$WORK/sizes.out" >&2
             echo 'hookcheck: refused: the staged C files break the size limits of tools/verify/sizecheck.c; split the function, or correct its entry in tools/verify/sizes.reasons' >&2
-            exit 1
+            REFUSED=1
             ;;
         *)
             cat "$WORK/sizes.out" >&2
@@ -126,7 +137,7 @@ sizes() {
 
 # prose: judge $WORK/tree by prosecheck's `columns` and `banned`, and keep the
 # findings of the staged files, each of which begins with its path and a
-# colon. Exits 1 on one.
+# colon. Sets REFUSED on one.
 prose() {
     if ! command -v cc >/dev/null 2>&1; then
         echo 'hookcheck: warning: no cc here to build tools/verify/prosecheck.c; the prose was not judged' >&2
@@ -142,21 +153,38 @@ prose() {
     [ -s "$WORK/prose.bad" ] || return 0
     sort -u "$WORK/prose.bad" >&2
     echo 'hookcheck: refused: the staged files break the comment width or the terms of tools/verify/prosecheck.c' >&2
-    exit 1
+    REFUSED=1
+}
+
+# quick: run tools/verify/quickcheck.sh, with $1 its option if any, over the
+# change that $WORK/files and $WORK/diff name. Sets REFUSED on a finding.
+quick() {
+    TMPDIR=$WORK sh "$REPO/tools/verify/quickcheck.sh" ${1:+"$1"} "$WORK/tree" "$WORK/files" \
+        "$WORK/cfiles" "$WORK/diff"
+    case $? in
+        0) ;;
+        1)
+            echo 'hookcheck: refused: the change breaks the style checks listed above' >&2
+            REFUSED=1
+            ;;
+        *) echo 'hookcheck: warning: tools/verify/quickcheck.sh could not run' >&2 ;;
+    esac
 }
 
 case $MODE in
-    commit) [ "$#" -eq 0 ] ;;
+    commit | push) [ "$#" -eq 0 ] ;;
+    range) [ "$#" -eq 2 ] ;;
     format) [ "$#" -gt 0 ] ;;
     *) false ;;
-esac || { echo 'hookcheck: usage: hookcheck.sh commit | format FILE ...' >&2; exit 2; }
+esac || { echo 'hookcheck: usage: hookcheck.sh commit | push | range BASE TIP | format FILE ...' >&2; exit 2; }
+REFUSED=0
 
 # unready TEXT: say that the formatting cannot be set up, for TEXT; a commit
-# goes on unformatted, and `format` fails.
+# goes on unformatted, a push goes on, and `format` fails.
 unready() {
     echo "hookcheck: warning: $1; the files were not formatted" >&2
-    [ "$MODE" = commit ] && exit 0
-    exit 2
+    [ "$MODE" = format ] && exit 2
+    exit 0
 }
 
 TOP=$(git rev-parse --show-toplevel) || unready 'no work tree'
@@ -277,14 +305,70 @@ formatted() {
     return 1
 }
 
+# list_c: list the in-house C files of $WORK/files in $WORK/cfiles.
+list_c() {
+    : >"$WORK/cfiles"
+    grep -q '\.[ch]$' "$WORK/files" || return 0
+    c_files "$WORK/tree" "$WORK/files" >"$WORK/cfiles"
+}
+
+# unformatted: refuse the files of $WORK/cfiles that $WORK/fmt holds formatted
+# otherwise, in a change already committed.
+unformatted() {
+    while IFS= read -r f; do
+        cmp -s "$WORK/tree/$f" "$WORK/fmt/$f" && continue
+        echo "$f: not formatted; run sh tools/verify/hookcheck.sh format $f" >&2
+        REFUSED=1
+    done <"$WORK/cfiles"
+}
+
+# judge BASE TIP: judge what TIP changes from BASE, in a copy of TIP.
+judge() {
+    _index=$WORK/index
+    rm -rf "$WORK/tree" "$_index"
+    if ! GIT_INDEX_FILE=$_index git read-tree "$2" ||
+        ! GIT_INDEX_FILE=$_index git checkout-index -a --prefix="$WORK/tree/"; then
+        unready "$2 cannot be copied"
+    fi
+    git diff --name-only --diff-filter=d "$1" "$2" >"$WORK/files" ||
+        unready 'the changed files cannot be listed'
+    [ -s "$WORK/files" ] || return 0
+    git diff -U0 -M --no-color --no-ext-diff --no-prefix "$1" "$2" >"$WORK/diff"
+    list_c
+    if [ -s "$WORK/cfiles" ]; then
+        if ! copy_out "$WORK/tree" "$WORK/cfiles"; then
+            echo 'hookcheck: warning: cannot copy the C files; their format was not judged' >&2
+        elif formatted; then
+            unformatted
+        fi
+        sizes
+    fi
+    prose
+    quick -p
+}
+
+# base_of REMOTE TIP: print where the milestone branch stands, or where TIP
+# left master when the branch is new or its head is not here.
+base_of() {
+    case $1 in
+        *[!0]*)
+            if git cat-file -e "$1^{commit}" 2>/dev/null; then
+                echo "$1"
+                return 0
+            fi
+            ;;
+    esac
+    git merge-base origin/master "$2"
+}
+
 case $MODE in
     commit)
         git diff --cached --name-only --diff-filter=d >"$WORK/files" ||
             unready 'the staged files cannot be listed'
         [ -s "$WORK/files" ] || exit 0
         git checkout-index -a --prefix="$WORK/tree/" || unready 'the index cannot be copied'
-        if grep -q '\.[ch]$' "$WORK/files" && c_files "$WORK/tree" "$WORK/files" >"$WORK/cfiles" &&
-            [ -s "$WORK/cfiles" ]; then
+        list_c
+        if [ -s "$WORK/cfiles" ]; then
             if ! copy_out "$WORK/tree" "$WORK/cfiles"; then
                 echo 'hookcheck: warning: cannot copy the staged C files; they were not formatted' >&2
             elif formatted; then
@@ -293,6 +377,25 @@ case $MODE in
             sizes
         fi
         prose
+        git diff --cached -U0 -M --no-color --no-ext-diff --no-prefix >"$WORK/diff"
+        quick
+        ;;
+    push)
+        while read -r _ _tip _ref _remote; do
+            case $_ref in
+                refs/heads/milestone/*) ;;
+                *) continue ;;
+            esac
+            case $_tip in
+                *[!0]*) ;;
+                *) continue ;;
+            esac
+            _base=$(base_of "$_remote" "$_tip") || unready "no base for $_ref"
+            judge "$_base" "$_tip"
+        done
+        ;;
+    range)
+        judge "$1" "$2"
         ;;
     format)
         printf '%s\n' "$@" >"$WORK/files"
@@ -304,4 +407,4 @@ case $MODE in
         done
         ;;
 esac
-exit 0
+exit "$REFUSED"

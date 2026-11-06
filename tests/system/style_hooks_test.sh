@@ -6,7 +6,9 @@
 # file with unstaged changes, or one whose formatting cannot be set up, must
 # be committed as staged, with a warning; a commit of other files must pass
 # untouched; and a function past a size limit, a comment past 80 columns or a
-# banned term in a staged file must be refused. Without the recorded
+# banned term in a staged file must be refused, as must what
+# tools/verify/quickcheck.sh finds, a commit message outside the rule, and a
+# push of an unformatted file to a milestone branch. Without the recorded
 # clang-format the hook formats nothing, and the first check fails.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
@@ -66,7 +68,7 @@ TMPDIR=$WORK/plain/tmp git commit -q -m 'Add a third C file' 2>"$WORK/unready.er
 git show HEAD:tools/c.c | cmp -s - "$WORK/c.c" || fail "the C file was not committed as staged when the formatting could not be set up"
 grep -q 'hookcheck: warning: no scratch directory' "$WORK/unready.err" || { cat "$WORK/unready.err" >&2; fail "the hook did not warn that it could not set up the formatting"; }
 # A commit of other files passes, and the hook leaves them as they are.
-printf '# Notes\n\nA claim \342\200\224 and its reason.\n' >tools/notes.md
+printf '# Notes\n\nA claim and its reason.\n' >tools/notes.md
 cp tools/notes.md "$WORK/notes.md"
 git add tools/notes.md
 git commit -q -m 'Add the notes' 2>"$WORK/notes.err" || { cat "$WORK/notes.err" >&2; fail "a commit of a Markdown file was refused"; }
@@ -111,5 +113,54 @@ rm tools/n.c
 printf 'notes\n' >tools/other.md
 git add tools/other.md
 git commit -q -m 'Add a note beside a wide comment' 2>"$WORK/other.err" || { cat "$WORK/other.err" >&2; fail "a finding in an unstaged file refused the commit"; }
+
+# One refusal lists the findings of quickcheck.sh, each with its line: the
+# conventions, ShellCheck, a function with no block, a file with no opening
+# comment, the register rule and the message form.
+mkdir tools/verify
+cp "$REPO/tools/verify/scripts.sh" tools/verify/scripts.sh
+git add tools/verify
+git commit -q -m 'Add the list of scripts' 2>"$WORK/list.err" || { cat "$WORK/list.err" >&2; fail "the list of scripts was refused"; }
+printf '/* q.c: a fixture. */\n\n/** One. */\nint one(void)\n{\n    return 1; // one\n}\n\nint two(void)\n{\n    return 2;\n}\n' >tools/q.c
+printf '/* q.h: a fixture. */\nint one(void);\n' >tools/q.h
+printf 'int three(void);\n' >tools/r.h
+# shellcheck disable=SC2016 # the fixture's own variable
+printf '#!/bin/sh\n# s.sh: a fixture.\necho $1\n' >tools/s.sh
+printf '/* u.c: a fixture. */\n/* It is hon''est. */\n/* This is not a lock, it is a queue. */\n' >tools/u.c
+printf "#!/bin/sh\n# v.sh: a fixture.\necho 'Something failed' >&2\n" >tools/v.sh
+git add tools/q.c tools/q.h tools/r.h tools/s.sh tools/u.c tools/v.sh
+head=$(git rev-parse HEAD)
+! git commit -q -m 'Add the slips' 2>"$WORK/quick.err" || fail "the slips were committed"
+[ "$(git rev-parse HEAD)" = "$head" ] || fail "the refused commit moved HEAD"
+for want in 'tools/q.c:6: a // comment' 'tools/q.c:9: a function with no /\*\* block' \
+    'tools/q.h: no header guard' 'tools/r.h:1: a source file begins with a comment' \
+    'tools/s.sh:3:.*SC2086' 'tools/u.c:2: a word the register rule forbids' \
+    'tools/u.c:3: a "not X, it is Y" reversal' 'tools/v.sh:3: a message outside'; do
+    grep -q "^$want" "$WORK/quick.err" || { cat "$WORK/quick.err" >&2; fail "no finding $want"; }
+done
+git reset -q
+rm tools/q.c tools/q.h tools/r.h tools/s.sh tools/u.c tools/v.sh
+
+# A commit message is one line in the imperative, with no trailing period.
+printf 'text\n' >tools/m.txt
+git add tools/m.txt
+for msg in 'Add a period.' 'Added the past tense' 'Adding a gerund' 'Adds a third person' \
+    'add no capital' "$(printf 'Add two lines\n\nThe second.')"; do
+    ! git commit -q -m "$msg" 2>"$WORK/msg.err" || fail "the message \"$msg\" was committed"
+    grep -q '^commit-msg: refused: ' "$WORK/msg.err" || { cat "$WORK/msg.err" >&2; fail "no refusal of \"$msg\""; }
+done
+git commit -q -m 'Bring in the text' 2>"$WORK/msg.err" || { cat "$WORK/msg.err" >&2; fail "a good message was refused"; }
+
+# A push of an unformatted file to a milestone branch is refused, as a rebase
+# leaves one, and a push to another branch passes.
+git init -q --bare "$WORK/origin.git"
+git remote add origin "$WORK/origin.git"
+git push -q origin master 2>"$WORK/push.err" || { cat "$WORK/push.err" >&2; fail "the push to master was refused"; }
+printf '/* p.c: a fixture. */\nint  p( void ){return 0;}\n' >tools/p.c
+git add tools/p.c
+git -c core.hooksPath=/dev/null commit -q -m 'Add a file as a rebase leaves it'
+! git push -q origin HEAD:refs/heads/milestone/1-test 2>"$WORK/push.err" || fail "the unformatted file reached a milestone branch"
+grep -q '^tools/p.c: not formatted' "$WORK/push.err" || { cat "$WORK/push.err" >&2; fail "the hook did not name the unformatted file"; }
+git push -q origin HEAD:refs/heads/task/1 2>"$WORK/push.err" || { cat "$WORK/push.err" >&2; fail "the push to a task branch was refused"; }
 
 echo "style-hooks-test: passed: formatted and staged a C file, kept a file with unstaged changes, committed a file it could not format, passed a Markdown file, refused a function past a size limit, a wide comment and a banned term"

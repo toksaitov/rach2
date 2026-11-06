@@ -14,8 +14,7 @@ int build_commit_msg(struct fixture *f)
         int status = fx_run(f, args, f->work, NULL, NULL);
         fx_check(f,
                  status == r->status &&
-                     (!status ||
-                      (f->err && strstr(f->err, "commit-msg: refused: attribution on line "))),
+                     (!status || (f->err && strstr(f->err, "commit-msg: refused: "))),
                  r->name);
     }
     return !f->failed;

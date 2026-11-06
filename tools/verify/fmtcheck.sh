@@ -15,14 +15,18 @@
 # the rest, is a finding here. The check reads the string literals of the
 # calls to klog, klog_v, console_printf and k_printf in rach2/.
 #
-# Usage: fmtcheck.sh
+# FILE arguments, relative to the tree's root, limit the check to those files.
+#
+# Usage: fmtcheck.sh [FILE ...]
 set -u
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO" || exit 1
 
 findings=0
-for f in $(find rach2 -name '*.c' -o -name '*.h' | sort); do
+# shellcheck disable=SC2046 # one path a line, none with a space
+[ "$#" -gt 0 ] || set -- $(find rach2 -name '*.c' -o -name '*.h' | sort)
+for f; do
     # A `%` outside the quotes of a message call is the remainder operator.
     awk -v file="$f" '
         /klog[ ]*\(|klog_v[ ]*\(|console_printf[ ]*\(|k_printf[ ]*\(/ { inCall = 1 }

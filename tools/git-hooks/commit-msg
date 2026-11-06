@@ -1,6 +1,7 @@
 #!/bin/sh
 #
-# commit-msg: refuse a commit message with an attribution line.
+# commit-msg: refuse a commit message with an attribution line, or one that
+# is not one line in the imperative.
 #
 # AGENTS.md allows no attribution of any kind in a commit message, and a
 # tool's default can add one anyway: Claude Code ends a message with a
@@ -10,6 +11,13 @@
 # starts with "Generated with Claude Code", after at most one run of bytes
 # outside printable ASCII such as an emoji, or a trailer whose value ends with
 # <noreply@anthropic.com>. It prints the first such line and its number.
+#
+# AGENTS.md asks for one line, with no trailing period, that begins with a
+# verb in the imperative. Comment lines and what follows the scissors line
+# of `git commit -v` are not the message. The verb is judged roughly: a
+# capital letter, and no ending of `-ed`, `-ing` or a lone `-s`, which the
+# past tense, the gerund and the third person have, with the verbs that end
+# so listed.
 #
 # Every line is read, and every pattern starts in the first column with a
 # letter, digit or byte outside printable ASCII. A sentence that only
@@ -29,16 +37,40 @@ if [ "$#" -ne 1 ] || [ ! -f "$1" ] || [ ! -r "$1" ]; then
     echo 'commit-msg: usage: commit-msg FILE' >&2
     exit 2
 fi
+# The message: its lines, up to the scissors line, without comments, and with
+# the blank lines git would strip from its end.
+body=$(sed -e '/^# -* >8 -*$/,$d' -e '/^#/d' "$1" | sed -e '/./,$!d')
+subject=$(printf '%s\n' "$body" | head -n 1)
+verb=${subject%%[[:space:]]*}
+refuse() {
+    printf 'commit-msg: refused: %s: %s\n' "$1" "$subject" >&2
+    exit 1
+}
 found=$(LC_ALL=C grep -n -i -E \
     -e '^(co-authored-by|claude-session|signed-off-by)[[:space:]]*:' \
     -e '^([^ -~]+[[:space:]]+)?generated with \[?claude code([[:space:]]|]|$)' \
     -e '^[[:alnum:]][[:alnum:]-]*:[[:space:]]*[^<>]*<noreply@anthropic\.com>[[:space:]]*$' \
     "$1")
 case $? in
-    0) ;;
-    1) exit 0 ;;
+    0)
+        first=$(printf '%s\n' "$found" | head -n 1)
+        printf 'commit-msg: refused: attribution on line %s: %s\n' "${first%%:*}" "${first#*:}" >&2
+        exit 1
+        ;;
+    1) ;;
     *) echo 'commit-msg: cannot check the message' >&2; exit 2 ;;
 esac
-first=$(printf '%s\n' "$found" | head -n 1)
-printf 'commit-msg: refused: attribution on line %s: %s\n' "${first%%:*}" "${first#*:}" >&2
-exit 1
+[ -n "$subject" ] || exit 0
+case $body in
+    *"
+"*[![:space:]]*) refuse 'the message is one line' ;;
+esac
+case $subject in
+    *.) refuse 'a trailing period' ;;
+    [!A-Z]*) refuse 'it begins with a verb in the imperative, with a capital' ;;
+esac
+case $verb in
+    Bring | Ring | Ping | String | Spring | Embed | Feed | Seed | Need | Speed | Shred | Alias) ;;
+    *ing | *ed | *[!su]s) refuse 'it begins with a verb in the imperative' ;;
+esac
+exit 0

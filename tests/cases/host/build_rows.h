@@ -7,12 +7,16 @@ struct message_row {
 };
 static const struct message_row message_rows[] = {
     {"plain", "Describe the three-partition disk in the demo Readme\n", 0},
-    {"body", "Move the sync detail to the tools Readme\n\nThe policy says what to do.\n", 0},
     {"mention",
-     "Refuse a Co-Authored-By trailer\n\nA Claude-Session link is refused too.\n"
-     "Remove noreply@anthropic.com from commit messages.\n"
-     "Reject the generated with Claude Code footer.\n",
+     "Refuse a Co-Authored-By trailer, a Claude-Session link, noreply@anthropic.com "
+     "and the generated with Claude Code footer\n",
      0},
+    {"body", "Move the sync detail to the tools Readme\n\nThe policy says what to do.\n", 1},
+    {"period", "Move the sync detail to the tools Readme.\n", 1},
+    {"past", "Moved the sync detail to the tools Readme\n", 1},
+    {"gerund", "Moving the sync detail to the tools Readme\n", 1},
+    {"third", "Moves the sync detail to the tools Readme\n", 1},
+    {"lowercase", "move the sync detail to the tools Readme\n", 1},
     {"verbose",
      "Subject\n\n# ------------------------ >8 ------------------------\n"
      "# Do not modify or remove the line above.\n"

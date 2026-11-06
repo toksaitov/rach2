@@ -1,0 +1,10 @@
+#!/bin/sh
+#
+# pre-push: refuse a push whose new commits on a milestone branch fail the
+# checks of the commit hook, or link no longer in a host test. A rebase runs
+# no commit hook, so this is where a rebased task is judged. Other branches
+# pass, so that unfinished work can always be saved.
+#
+# tools/verify/hookcheck.sh does the work; its header says how.
+#
+exec sh "$(dirname "$0")/../verify/hookcheck.sh" push

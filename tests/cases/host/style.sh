@@ -279,7 +279,7 @@ case_shellcheck() {
     else
         fail scripts-listed "tools/verify/scripts.sh failed or listed nothing"
     fi
-    _legacy='^(rach2|krffs)/[^/]*\.sh$'
+    _legacy=$(legacy_scripts)
     grep -vE "$_legacy" "$VDIR/_scripts.txt" >"$VDIR/_scripts_strict.txt"
     grep -E "$_legacy" "$VDIR/_scripts.txt" >"$VDIR/_scripts_legacy.txt"
     _sc=0
@@ -344,8 +344,7 @@ unflagged() {
     _opts='^[[:space:]]*set([[:space:]]+([-+][A-Za-z]+|[-+]o[[:space:]]+[a-z]+))*[[:space:]]+'
     _sigs='([[:space:]]+[A-Z0-9]+)*[[:space:]]+(EXIT|0)([[:space:]]+[A-Z0-9]+)*[[:space:]]*$'
     # shellcheck disable=SC2016
-    sh "$REPO/tools/verify/scripts.sh" \
-        | grep -E '^(tools|krffs)/|^tests/system/accept/su_command\.sh$' \
+    grep -E '^(tools|krffs)/|^tests/system/accept/su_command\.sh$' \
         | while IFS= read -r f; do
             if grep -qE "${_opts}(-[A-Za-z]*e[A-Za-z]*|-o[[:space:]]+errexit)([[:space:];]|\$)" "$f" &&
                 grep -qE "${_opts}(-[A-Za-z]*u[A-Za-z]*|-o[[:space:]]+nounset)([[:space:];]|\$)" "$f" &&
@@ -362,31 +361,50 @@ unflagged() {
 # idle wait only through the scheduler's helpers, no end-of-options marker
 # before a process group in kill, and a `finished` flag where bash 3.2 needs
 # one.
+# line_comments: print the `//` comments of the files named on standard input.
+line_comments() {
+    xargs grep -HnE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://'
+}
+
+# unguarded: print the headers named on standard input that have no guard.
+unguarded() {
+    grep '\.h$' | while read -r h; do
+        grep -qE '^[[:space:]]*#[[:space:]]*ifndef[[:space:]]+[A-Za-z0-9_]+' "$h" ||
+            grep -qE '^[[:space:]]*#[[:space:]]*pragma[[:space:]]+once' "$h" || echo "$h"
+    done
+}
+
+# group_kills: print the lines of the scripts named on standard input that
+# give `kill` an end-of-options marker before a process group. dash, the
+# testing host's /bin/sh, fails on `--` in its kill builtin with "Illegal
+# number: -", so `kill -TERM -- "-$child"` signals nothing, and a trap that
+# stops a test's process group that way waits for the group to end by itself.
+# After a signal option a negative pid is already a pid, so the form is
+# `kill -TERM "-$child"`.
+group_kills() {
+    xargs grep -HnE 'kill[^|;&#]*[[:space:]]--[[:space:]]+"?-' 2>/dev/null \
+        | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'
+}
+
+# legacy_scripts: print the pattern of the scripts ShellCheck judges with the
+# two checks of unset and unquoted variables left off.
+legacy_scripts() {
+    echo '^(rach2|krffs)/[^/]*\.sh$'
+}
+
 case_conventions() {
     built ascii "$ASCIISCAN" || ASCIISCAN=false
-    found no-line-comments "a // comment" \
-        "$(inhouse_ch | xargs grep -nE '(^|[^:"])//' 2>/dev/null | grep -vE 'https?://|://')"
+    found no-line-comments "a // comment" "$(inhouse_ch | line_comments)"
     if [ "$ASCIISCAN" != false ]; then
         found ascii "non-ASCII bytes in" \
             "$(inhouse_ch | while read -r f; do "$ASCIISCAN" "$f" >/dev/null || echo "$f"; done | sort -u)"
     fi
-    found header-guards "no header guard in" "$(inhouse_ch | grep '\.h$' | while read -r h; do
-        grep -qE '^[[:space:]]*#[[:space:]]*ifndef[[:space:]]+[A-Za-z0-9_]+' "$h" ||
-            grep -qE '^[[:space:]]*#[[:space:]]*pragma[[:space:]]+once' "$h" || echo "$h"
-    done)"
+    found header-guards "no header guard in" "$(inhouse_ch | unguarded)"
     found idle-wait "an idle wait outside idle_wait_irq_off/on" "$(idle_waits)"
-    # dash, the testing host's /bin/sh, fails on `--` in its kill builtin with
-    # "Illegal number: -", so `kill -TERM -- "-$child"` signals nothing, and a
-    # trap that stops a test's process group that way waits for the group to
-    # end by itself. After a signal option a negative pid is already a pid, so
-    # the form is `kill -TERM "-$child"`. The scripts read are the ones the
-    # ShellCheck case checks.
     found group-kill "kill with an end-of-options marker before a process group, which dash refuses" \
-        "$(sh "$REPO/tools/verify/scripts.sh" \
-            | xargs grep -nE 'kill[^|;&#]*[[:space:]]--[[:space:]]+"?-' 2>/dev/null \
-            | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#')"
+        "$(sh "$REPO/tools/verify/scripts.sh" | group_kills)"
     found exit-flag "set -eu and an EXIT trap with no finished flag, which bash 3.2 lets exit 0" \
-        "$(unflagged)"
+        "$(sh "$REPO/tools/verify/scripts.sh" | unflagged)"
 }
 
 # clang-format over every in-house C file and header, with --Werror so that a
