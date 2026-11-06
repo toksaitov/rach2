@@ -3718,6 +3718,7 @@ static void overlap_punch_row(void)
 #include "ext2_node_rows.h"
 #include "ext2_lock_rows.h"
 #include "ext2_fsync_rows.h"
+#include "ext2_order_rows.h"
 #include "ext2_pair_rows.h"
 
 /* The host heap's limit on one allocation, 0 for none, and the page
@@ -5146,6 +5147,11 @@ int main(int argc, char **argv)
         goto finish;
     }
 
+    if (argc == 2 && streq(argv[1], "--order-only")) {
+        writeback_order_rows();
+        goto finish;
+    }
+
     if (argc == 2 && streq(argv[1], "--pairs-only")) {
         pair_rows();
         goto finish;
@@ -5179,6 +5185,7 @@ int main(int argc, char **argv)
     batch_rows();
     node_rows();
     fsync_rows();
+    writeback_order_rows();
     pair_rows();
 
 finish:

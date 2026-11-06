@@ -317,6 +317,14 @@ void bcache_dirty_owned(struct bbuf *buffer, uint64_t owner)
     bcache_dirty(buffer);
 }
 
+/** Count the write as `bcache_dirty` does; the model keeps no level. */
+void bcache_dirty_pointer(struct bbuf *buffer, uint64_t owner, int level)
+{
+    (void)owner;
+    (void)level;
+    bcache_dirty(buffer);
+}
+
 /** Count the write, which succeeds. */
 int bcache_write(struct bbuf *buffer)
 {
