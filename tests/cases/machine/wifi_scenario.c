@@ -422,6 +422,45 @@ static int join_psk(struct wifi *w, const char *name, const char *psk, char **te
 
 /* ---- the wpa2 case (16a) ---- */
 
+/** Say whether `text` has `a`, then `b` after it, then `c` after that. */
+static int in_order(const char *text, const char *a, const char *b, const char *c)
+{
+    const char *at = text != NULL ? strstr(text, a) : NULL;
+
+    at = at != NULL ? strstr(at + strlen(a), b) : NULL;
+    return at != NULL && strstr(at + strlen(b), c) != NULL;
+}
+
+/**
+ * Join network A with a wrong passphrase, which wifi(1) saves before the
+ * select and, once the join fails, removes and saves again: assertion
+ * `refused`. wpa_supplicant logs the save and the select at debug level.
+ */
+static void wrong_passphrase(struct wifi *w)
+{
+    char *text = NULL, *conf = NULL;
+    long lines, status;
+
+    lines = log_lines(w);
+    sta(w, NULL, "wpa_cli -i wlan0 log_level debug > /dev/null");
+    status = join_psk(w, NET_A, "not-" PSK_A, &text);
+    sta(w, NULL, "wpa_cli -i wlan0 log_level info > /dev/null");
+    sta(w, &conf,
+        "echo NETWORKS=$(grep -c 'network=' /etc/wpa_supplicant/wlan0.conf); "
+        "tail -n +%ld " LOG " | grep -E 'SAVE_CONFIG - Configuration updated|SELECT_NETWORK id='",
+        lines + 1);
+    net_assert(&w->u, "refused",
+               lines >= 0 && status != 0 && has(text, "refused the passphrase") &&
+                   has(conf, "NETWORKS=0") &&
+                   in_order(conf, "SAVE_CONFIG - Configuration updated",
+                            "SELECT_NETWORK id=", "SAVE_CONFIG - Configuration updated"),
+               "a refused passphrase was kept, or not saved before the select and after the "
+               "removal: %s %s",
+               text != NULL ? text : "", conf != NULL ? conf : "");
+    free(text);
+    free(conf);
+}
+
 static void case_wpa2(struct wifi *w)
 {
     char *text = NULL, buf[64];
@@ -434,6 +473,7 @@ static void case_wpa2(struct wifi *w)
                "wifi scan did not list both networks: %s", text != NULL ? text : "");
     free(text);
     text = NULL;
+    wrong_passphrase(w);
     ok = join_psk(w, NET_A, PSK_A, &text) == 0;
     net_assert(&w->u, "join", ok, "wifi connect said: %s", text != NULL ? text : "");
     free(text);

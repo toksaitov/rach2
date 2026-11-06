@@ -5,7 +5,7 @@
   "cases": [
     {
       "case_id": "machine.wifi.wpa2",
-      "behavior": "the installed system joins WPA2-Personal network A with wifi connect, takes a lease, resolves the endpoint through the AP's DNS, pings the AP and echoes 256 KiB to the host through it, and iw and /proc/net/wireless describe the radio and the link",
+      "behavior": "the installed system keeps no network that a wrong passphrase failed to join, joins WPA2-Personal network A with wifi connect, takes a lease, resolves the endpoint through the AP's DNS, pings the AP and echoes 256 KiB to the host through it, and iw and /proc/net/wireless describe the radio and the link",
       "units": [
         "wifi",
         "wpa_supplicant",
@@ -68,7 +68,7 @@
           "step_id": "join",
           "stage": "execute",
           "machine": "station",
-          "does": "wifi scan, then wifi connect rach2-net with its passphrase, wait for the kernel's record of the lease 192.168.71.50, and read route -n and resolv.conf"
+          "does": "wifi scan, wifi connect rach2-net with a wrong passphrase under wpa_supplicant's debug log and read the networks saved and the log, then wifi connect rach2-net with its passphrase, wait for the kernel's record of the lease 192.168.71.50, and read route -n and resolv.conf"
         },
         {
           "step_id": "traffic",
@@ -193,6 +193,11 @@
         {
           "assertion_id": "scan",
           "checks": "wifi scan lists rach2-net with WPA2 and rach2-other",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "refused",
+          "checks": "wifi connect with a wrong passphrase fails saying the network refused it, the saved file has no network, and the log has a save, the select and a save after it, in that order",
           "source": "scenario"
         },
         {
