@@ -133,7 +133,12 @@ host()
         echo "wifi-soak: failed: the soak did not end or the machine did not answer; its logs are on the machine" >&2
         exit 1
     }
-    "$@" 'cat /dev/shm/wifi-soak.out' > "$out/out" || exit 1
+    "$@" 'cat /dev/shm/wifi-soak.out' > "$out/out.fetch" || {
+        rm -f "$out/out.fetch"
+        echo "wifi-soak: failed: the output did not come back; what was followed is in $out/out" >&2
+        exit 1
+    }
+    mv "$out/out.fetch" "$out/out" || exit 1
     "$@" 'cd /dev/shm/wifi-soak && tar cf - .' | tar xf - -C "$out" || {
         echo "wifi-soak: failed: the logs did not come back; they are on the machine" >&2
         exit 1
