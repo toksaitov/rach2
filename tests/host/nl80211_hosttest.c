@@ -464,6 +464,19 @@ static int called(struct wlan *wlan, enum call_kind kind)
     return rc;
 }
 
+/** Send the request to a station that answers -EINPROGRESS once, as a key
+ * that waits for the queue does: the call comes again. Returns as rq_send. */
+static int rq_send_waiting(void)
+{
+    int rc;
+
+    next_rc = -EINPROGRESS;
+    n_calls = 0;
+    rc = rq_send();
+    CHECK(n_calls == 2);
+    return rc;
+}
+
 static int st_scan(struct wlan *wlan, const struct wlan_scan_request *r)
 {
     last.scan = *r;
@@ -1298,10 +1311,7 @@ static void join_wpa2(void)
     rq_u8(NL80211_KEY_IDX, 0);
     rq_end(nest);
     rq_put(NL80211_ATTR_MAC, ap1, 6);
-    next_rc = -EINPROGRESS;
-    n_calls = 0;
-    CHECK(rq_send() == 0);
-    CHECK(n_calls == 2); /* a key that waits for the queue comes again */
+    CHECK(rq_send_waiting() == 0);
     CHECK(last.kind == CALL_ADD_KEY && last.key.flags == WLAN_KEY_PAIRWISE);
     CHECK(same(last.key.peer, ap1, 6) && last.key.index == 0 && last.key.len == 16);
     CHECK(last.key.cipher == WLAN_CIPHER_SUITE_CCMP && same(last.key.data, tk, 16));

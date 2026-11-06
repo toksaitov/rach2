@@ -714,10 +714,10 @@ static int hop_done(void *arg)
 /**
  * Run fn(sta, arg) on the wireless worker from tick due, 0 for now, and
  * return its result, sleeping until it has run. arg stays the caller's. The
- * handler must not use sta afterwards unless the result is not -ENODEV: nl80211_detach ends a
- * waiting request with -ENODEV and frees the station. A worker that failed
- * to start is made again first; -ENOMEM when it still cannot be, since no
- * request may wait for a worker that does not exist.
+ * handler must not use sta afterwards unless the result is not -ENODEV:
+ * nl80211_detach ends a waiting request with -ENODEV and frees the station. A
+ * worker that failed to start is made again first; -ENOMEM when it still
+ * cannot be, since no request may wait for a worker that does not exist.
  */
 static int on_worker_at(struct sta *sta, hop_fn fn, void *arg, uint64_t due)
 {

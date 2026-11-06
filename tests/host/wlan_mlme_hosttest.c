@@ -841,24 +841,11 @@ static void beacons_for(unsigned ms)
     }
 }
 
-/** An interface that reports ACKs: the station polls the AP with a null
- * frame thirty seconds after it last heard from it, as mac80211 does on
- * ath9k, and seventeen beacon intervals after its last beacon; an ACK or a
- * beacon ends the poll, a frame not acknowledged is asked again 500 ms
- * later, and three of them, or three whose status never came, end the
- * association. */
-static void polled_ap(void)
+/** The first polls of polled_ap: thirty seconds idle, an ACK ending the
+ * poll, and what the data path heard moving the next one. */
+static void polled_idle(void)
 {
-    uint64_t t;
-
-    reset();
-    wlan_mlme_init(&mlme, 0, &radio, &radio.band, &scan, &poll_ops);
-    mlme.beacon_losses = &losses;
-    losses = 0;
-    n_polls = 0;
-    heard_at = 0;
-    connect_a(0);
-    t = now;
+    uint64_t t = now;
 
     /* Idle: the AP's beacons alone do not count as hearing from it. */
     beacons_for(29900);
@@ -878,7 +865,12 @@ static void polled_ap(void)
     CHECK(n_polls == 1);
     wait_ms(100);
     CHECK(n_polls == 2);
+}
 
+/** Polls of polled_ap that an answer or a beacon ends: a frame not
+ * acknowledged asked again, and a beacon loss. */
+static void polled_answered(void)
+{
     /* Not acknowledged: asked again 500 ms on; a beacon ends the poll. */
     wlan_mlme_tx_status(&mlme, poll_cookie, 0);
     CHECK(n_polls == 2 && mlme.probes == 1);
@@ -902,9 +894,12 @@ static void polled_ap(void)
     CHECK(n_polls == 4);
     wait_ms(1);
     CHECK(n_polls == 5 && mlme.missed_beacons == 2 && losses == 2);
+}
 
-    /* Three null frames not acknowledged: the station leaves, sending
-     * nothing. */
+/** The end of polled_ap: three null frames not acknowledged leave the AP,
+ * sending nothing, and so do three whose status never comes. */
+static void polled_lost(void)
+{
     wlan_mlme_tx_status(&mlme, poll_cookie, 0);
     wait_ms(WLAN_MLME_PROBE_TIMEOUT);
     CHECK(n_polls == 6 && mlme.state == WLAN_STA_ASSOCIATED);
@@ -933,6 +928,26 @@ static void polled_ap(void)
     CHECK(n_polls == 10 && mlme.state == WLAN_STA_NONE && n_sent == 0);
     CHECK(n_seen == 1 && seen[0].ev.type == WLAN_EVENT_DEAUTHENTICATE);
     CHECK(seen[0].ev.reason == WLAN_REASON_DISASSOC_DUE_TO_INACTIVITY);
+}
+
+/** An interface that reports ACKs: the station polls the AP with a null
+ * frame thirty seconds after it last heard from it, as mac80211 does on
+ * ath9k, and seventeen beacon intervals after its last beacon; an ACK or a
+ * beacon ends the poll, a frame not acknowledged is asked again 500 ms
+ * later, and three of them, or three whose status never came, end the
+ * association. */
+static void polled_ap(void)
+{
+    reset();
+    wlan_mlme_init(&mlme, 0, &radio, &radio.band, &scan, &poll_ops);
+    mlme.beacon_losses = &losses;
+    losses = 0;
+    n_polls = 0;
+    heard_at = 0;
+    connect_a(0);
+    polled_idle();
+    polled_answered();
+    polled_lost();
 }
 
 /** Under 802.11w: unprotected deauthentication and disassociation dropped
