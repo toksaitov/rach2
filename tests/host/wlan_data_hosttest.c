@@ -991,11 +991,19 @@ static void check_rekey_slot(void)
     CHECK(rx_opened(104, 0, 444) == -ESTALE && n_got == 3);
     CHECK(counters.rx_dropped == n + 1 && counters.rx_replays == 0);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 0);
+    /* The AP's queue, the old count under the new key, moves no counter. */
+    CHECK(rx_opened(104, 1, 445) == -ESTALE && n_got == 3);
+    CHECK(counters.rx_dropped == n + 2 && counters.rx_replays == 0);
+    CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 0);
     CHECK(rx_opened(105, 1, 1) == 0 && n_got == 4);
     CHECK(rx_opened(106, 1, 2) == 0 && n_got == 5);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 2);
     /* A true replay under the new key stays one. */
     CHECK(rx_opened(107, 1, 2) == -ESTALE && counters.rx_replays == 1);
+    /* Once the AP's queue has gone, a number that far on is the new key's. */
+    now += WLAN_DATA_REKEY_SETTLE;
+    CHECK(rx_opened(107, 1, 446) == 0 && n_got == 6);
+    CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 446);
 }
 
 /** BlockAck: ADDBA answered, reordering, BlockAckReq, a moved window, the

@@ -25,6 +25,12 @@
  * mac80211 keeps them (IEEE80211_FRAGMENT_MAX and its two seconds). */
 #define WLAN_DATA_DEFRAG        4
 #define WLAN_DATA_FRAG_TIMEOUT  2000
+/* After a pairwise key is replaced: how long, in ms, how near the old key's
+ * count and how far past the new key's a number must lie to be the old
+ * count's. The jump is the widest BlockAck window. */
+#define WLAN_DATA_REKEY_SETTLE  2000
+#define WLAN_DATA_REKEY_NEAR    256
+#define WLAN_DATA_REKEY_JUMP    64
 #define WLAN_DATA_MAX_FRAGS     16
 /* A reordering buffer holds at most 64 MPDUs, and releases a frame that
  * waited 100 ms past a hole, mac80211's HT_RX_REORDER_BUF_TIMEOUT. */
@@ -64,6 +70,8 @@ struct wlan_data_key {
     struct wlan_key key;    /* the installed copy, with its counters */
     struct wlan_aes128 aes; /* CCMP or BIP schedule; unused for TKIP */
     uint64_t rx_mgmt_pn;    /* replay counter of robust management frames */
+    uint64_t old_pn;        /* highest count of the key this one replaced */
+    uint64_t old_until;     /* tick when a number near old_pn stops being that key's */
     unsigned gen;           /* zero while the entry is empty, else unique */
 };
 

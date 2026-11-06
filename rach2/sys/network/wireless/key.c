@@ -3,6 +3,7 @@
 #include "data.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
+#include "../../timer.h"
 
 static const uint8_t broadcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
 
@@ -120,6 +121,7 @@ static void flush_defrag(struct wlan_data *d)
 int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
 {
     struct wlan_data_key *old, fresh;
+    unsigned tid;
     int pairwise, rc;
 
     if (!d || !key || !key_valid(key))
@@ -158,6 +160,12 @@ int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
             (void)key_from_radio(d, &fresh);
             wipe(&fresh, sizeof(fresh));
             return rc;
+        }
+        if (pairwise) {
+            for (tid = 0; tid < WLAN_NUM_TIDS; tid++)
+                if (old->key.rx_pn[tid] > fresh.old_pn)
+                    fresh.old_pn = old->key.rx_pn[tid];
+            fresh.old_until = tick_count() + WLAN_DATA_REKEY_SETTLE;
         }
     }
     fresh.gen = ++d->key_gen;
