@@ -162,6 +162,10 @@ void bkl_take(int depth)
     (void)depth;
 }
 
+/** Nothing: there is no big lock. */
+void bkl_yield(void)
+{}
+
 /** Nothing: there is no other processor to wake. */
 void smp_kick(int cpu)
 {
