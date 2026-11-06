@@ -691,6 +691,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "panic",
+          "checks": "tests/host/panic_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "partition",
           "checks": "tests/host/partition_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

@@ -83,7 +83,7 @@ Every disk is a `struct block_device`, a sector count and a table of functions. 
 
 ### The log, the panic and the library
 
-`klog` builds a record whole, at most 256 bytes, and gives it to the ring, the screen, COM1 and netconsole in turn; a record raised by an interrupt during another's output waits in a queue for all but the ring (`sys/klog.h`). `k_panic` (`sys/panic.c`) asks the other processors to stop, writes `panic: stopped:` and the reason everywhere at once, and halts. `sys/latency.c` keeps the longest delays that `/proc/stat` reports. `sys/lib/` is the library every part uses: fixed-width integers, the string functions, the one text formatter, spinlocks and [the random generator](sys/lib/krandom.Readme.md).
+`klog` builds a record whole, at most 256 bytes, and gives it to the ring, the screen, COM1 and netconsole in turn; a record raised by an interrupt during another's output waits in a queue for all but the ring (`sys/klog.h`). `k_panic` (`sys/panic.c`) asks the other processors to stop, draws the panic picture, shows on its last rows the last `KLOG_CRIT` record, which holds a fault's vector and address, and `panic: running: pid N NAME` for the running process, on the screen alone, writes `panic: stopped:` and the reason everywhere at once, and halts. The report fits at 80 by 24 and scrolls nothing. `sys/latency.c` keeps the longest delays that `/proc/stat` reports. `sys/lib/` is the library every part uses: fixed-width integers, the string functions, the one text formatter, spinlocks and [the random generator](sys/lib/krandom.Readme.md).
 
 ## Building
 
