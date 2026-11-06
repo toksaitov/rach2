@@ -23,7 +23,7 @@
  * -EROFS then.
  *
  * `file_locked` is set and `ns_serialised` clear: the operations lock each
- * inode on its own (`lock_node`), the mount's allocator apart, and the VFS
+ * inode on its own (`node_lock`), the mount's allocator apart, and the VFS
  * takes a file's or a directory's lock, not the mount's, around a change,
  * so that a slow request on one file holds up only that file's callers. Of
  * the operations it leaves out `lookup_rest`, `pin` and `unpin`.
