@@ -142,7 +142,9 @@ void wlan_unregister_radio(struct wlan *wlan);
 int wlan_queue_work(struct wlan_work *work, uint64_t due);
 
 /** Cancel a queued work and wait for a running callback; process context,
- * no net_lock, may sleep. Must not be called by that callback itself. */
+ * no net_lock, may sleep. Must not be called by that callback itself. With
+ * scheduling off, as in a shutdown's stop of the cards, it does not wait:
+ * a callback the worker was switched away from never runs again. */
 void wlan_cancel_work(struct wlan_work *work);
 
 /** Emit an event to nl80211 synchronously, borrowing event and frame only
