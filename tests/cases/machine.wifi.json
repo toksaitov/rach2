@@ -1096,6 +1096,18 @@
           "does": "deauthenticate the station from both APs of network A, wait for it to join again, and read the station's console since the step began"
         },
         {
+          "step_id": "pending",
+          "stage": "execute",
+          "machine": "station",
+          "does": "stop the guest's dnsmasq, run the station's wpa_action for two rejoins, resume dnsmasq and wait for the renewal's answer"
+        },
+        {
+          "step_id": "one-client",
+          "stage": "execute",
+          "machine": "station",
+          "does": "three times, stop the DHCP client, run wpa_action for a disconnection and for a CONNECTED a second later, as its wait sees the join, and count the clients"
+        },
+        {
           "step_id": "switch",
           "stage": "execute",
           "machine": "ap",
@@ -1264,6 +1276,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "pending-kept",
+          "checks": "a rejoin inside the wait for an earlier renewal's answer keeps the lease: the kernel recorded no loss of wlan0's IPv4 address",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "one-client",
+          "checks": "a CONNECTED and a wait that sees the join at the same moment start one DHCP client between them",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "switch",
           "checks": "as network A's access points switch channels with transmit held, the station follows its own: wpa_supplicant reports the switch and no disconnection, the kernel logs it with no leave and no loss of wlan0's IPv4 address, a ping running across it is answered, and the station keeps network A's routes and server and echoes",
           "source": "scenario"
@@ -1314,7 +1336,7 @@
           "witness_id": "stage",
           "kind": "step",
           "means": "a step of the manifest has ended",
-          "limit": 12
+          "limit": 14
         }
       ],
       "bounds": {

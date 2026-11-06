@@ -126,6 +126,9 @@ case "$1" in
 		# file when a write fails, rather than publishing a resolver with
 		# nothing in it.
 		resolv_lines | "$MERGE" "$interface.dhcp" || fail=1
+
+		# A renewal wpa_action asked for has its answer.
+		rm -f "/var/run/udhcpc.$interface.renew"
 		;;
 esac
 

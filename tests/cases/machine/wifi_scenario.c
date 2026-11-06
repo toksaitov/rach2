@@ -767,8 +767,9 @@ static void robust_join(struct wifi *w)
     free(text);
 }
 
-/** The robust case's rejoins: a restart of the access points and a
- * deauthentication each leave the station's lease in place. */
+/** The robust case's rejoins: a restart of the access points, a
+ * deauthentication and a rejoin inside a renewal each leave the station's
+ * lease in place, and a join seen twice at once starts one DHCP client. */
 static void robust_rejoins(struct wifi *w)
 {
     char *text = NULL;
@@ -798,6 +799,40 @@ static void robust_rejoins(struct wifi *w)
                    net_find(text, "wlan: wlan0: left: 02:00:00:00:0*: deauthenticated by the AP: "
                                   "reason #") != NULL,
                "the station gave its lease up, or logged no deauthentication: %s",
+               text != NULL ? text : "");
+    free(text);
+    text = NULL;
+
+    /* Two rejoins while the server cannot answer the first's renewal:
+     * udhcpc gives its address up at a second SIGUSR1 inside the first's
+     * wait, so the second must send none. */
+    net_step(&w->u, "pending");
+    mark = w->sta.at;
+    ap(w, NULL, "pkill -STOP dnsmasq");
+    sta(w, NULL,
+        "WPA_ID=$(cat /var/run/udhcpc.wlan0.net); export WPA_ID; "
+        "for i in 1 2; do /etc/wpa_supplicant/wpa_action wlan0 DISCONNECTED; "
+        "/etc/wpa_supplicant/wpa_action wlan0 CONNECTED; done");
+    ap(w, NULL, "pkill -CONT dnsmasq");
+    sta(w, NULL, "while [ -e /var/run/udhcpc.wlan0.renew ]; do sleep 1; done");
+    lease(w, 0);
+    net_assert(&w->u, "pending-kept", !dropped(w, mark),
+               "the station gave its lease up at a rejoin inside a renewal");
+
+    /* With no client running, a CONNECTED and a wait that has seen the
+     * join act at the same moment, a second after the disconnection, and
+     * must start one client between them. */
+    net_step(&w->u, "one-client");
+    sta(w, &text,
+        "WPA_ID=$(cat /var/run/udhcpc.wlan0.net); export WPA_ID; "
+        "for i in 1 2 3; do p=$(cat /var/run/udhcpc.wlan0.pid); kill $p; "
+        "while kill -0 $p 2> /dev/null; do usleep 100000; done; "
+        "/etc/wpa_supplicant/wpa_action wlan0 DISCONNECTED; sleep 1; "
+        "/etc/wpa_supplicant/wpa_action wlan0 CONNECTED; sleep 2; "
+        "echo CLIENTS=$(ps | grep -c '[u]dhcpc -f -R'); done");
+    lease(w, 0);
+    n = net_count(text, "CLIENTS=1");
+    net_assert(&w->u, "one-client", n == 3, "a join started two clients: %s",
                text != NULL ? text : "");
     free(text);
 }
