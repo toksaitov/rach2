@@ -252,6 +252,30 @@ static void console_updates(struct etude_case *c, struct drive *d)
     }
 }
 
+/** Puts a saved network and a kept mixer level on the installed root, for
+ * check_settings to find after the update. */
+static void place_settings(struct drive *d)
+{
+    drive_send(d, "mount -t ext2 /dev/disk0p3 /old && mkdir -p /old/var/lib "
+                  "/old/etc/wpa_supplicant && echo stick-net > "
+                  "/old/etc/wpa_supplicant/wlan0.conf && echo 'vol 1:1' > /old/var/lib/mixer "
+                  "&& umount /old && echo SETTINGS\"\"PLACED || "
+                  "{ echo STICK\"\"FAIL: settings; poweroff -f; }");
+    drive_expect(d, "SETTINGSPLACED");
+}
+
+/** Requires the update to have kept what place_settings wrote, the saved
+ * networks with mode 600 since they hold passphrases. */
+static void check_settings(struct drive *d)
+{
+    drive_send(d, "mount -t ext2 /dev/disk0p3 /old && grep -qx stick-net "
+                  "/old/etc/wpa_supplicant/wlan0.conf && "
+                  "test $(stat -c %%a /old/etc/wpa_supplicant/wlan0.conf) = 600 && "
+                  "grep -qx 'vol 1:1' /old/var/lib/mixer && umount /old && "
+                  "echo SETTINGS\"\"KEPT || { echo STICK\"\"FAIL: settings check; poweroff -f; }");
+    drive_expect(d, "SETTINGSKEPT");
+}
+
 /**
  * Save the partitions and update the root without changing its menu, then
  * update twice with term requested, keeping the recovery lines and leaving
@@ -301,6 +325,7 @@ static int boot_update(struct etude_case *c, struct state *s)
                    "/old/etc/vconsole.conf && umount /old && echo KEYMAP\"\"PLACED || "
                    "{ echo STICK\"\"FAIL: keymap; poweroff -f; }");
     drive_expect(&d, "KEYMAPPLACED");
+    place_settings(&d);
     drive_send(&d, "mkdir -p /bootcheck && mount -t vfat /dev/disk0p1 /bootcheck && "
                    "cp /bootcheck/boot/grub/grub.cfg /tmp/menu.before && "
                    "umount /bootcheck && echo MENU\"\"SAVED");
@@ -325,6 +350,7 @@ static int boot_update(struct etude_case *c, struct state *s)
                "&& umount /old && echo KEYMAP\"\"KEPT || "
                "{ echo STICK\"\"FAIL: keymap check; poweroff -f; }");
     drive_expect(&d, "KEYMAPKEPT");
+    check_settings(&d);
     updated = !d.failed;
     drive_send(&d, "bootctl --target /dev/disk0p1 status");
     drive_expect(&d, "saved_entry: recovery");

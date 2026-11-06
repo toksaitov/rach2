@@ -27,11 +27,12 @@
 #
 # `--update` writes a root file system image into the root partition of a
 # machine that is already installed, without moving its partitions. The account
-# files, the SSH policy, the console's keymap, the server's host keys, the
-# accounts' own keys and the home directories, root's among them, are copied
-# off the root first and written back afterwards, so a password changed after
-# the install is still the machine's password and an agent signed in there is
-# still signed in. The root is grown again
+# files, the SSH policy, the console's keymap, the saved Wi-Fi networks, the
+# machine's identifiers, its kept sound and backlight levels, the server's host
+# keys, the accounts' own keys and the home directories, root's among them, are
+# copied off the root first and written back afterwards, so a password changed
+# after the install is still the machine's password, a saved network still
+# joins, and an agent signed in there is still signed in. The root is grown again
 # into its partition. The machine is saved to its recovery system for the whole
 # of the write and the new root is armed for one trial boot, so an update cut
 # off by a power cut, or one that does not come up, costs a reboot into recovery
@@ -57,8 +58,11 @@ TARGET_MNT=/mnt/install-root
 RECOVERY_MNT=/mnt/install-recovery
 BOOT_MNT=/mnt/install-boot
 # The machine's own files an update keeps and the archive holds: the accounts,
-# the SSH policy and the console's keymap, which init reads.
-CONFIG_FILES="etc/passwd etc/group etc/shadow etc/rach2/sshd.conf etc/vconsole.conf"
+# the SSH policy, the console's keymap, the networks wifi(1) has saved, the
+# machine's identifiers and the levels init keeps across a reboot.
+CONFIG_FILES="etc/passwd etc/group etc/shadow etc/rach2/sshd.conf etc/vconsole.conf
+etc/wpa_supplicant/wlan0.conf etc/machine-id var/lib/ipv6-stable-secret
+var/lib/backlight var/lib/mixer var/lib/mixer.mute"
 ARCHIVE_NEEDS="etc/passwd etc/group etc/shadow"
 # The recovery system's key, on the recovery partition, where its init reads it.
 RECOVERY_KEYS_FILE=boot/recovery_authorized_keys
@@ -394,7 +398,8 @@ write_archive() { # write_archive ROOTDIR [MARK]
         die "the archive directory could not be made on the recovery partition"
     for f in $CONFIG_FILES; do
         if [ -f "$1/$f" ]; then
-            cp "$1/$f" "$next_archive/$f" || die "$f could not be archived"
+            { mkdir -p "$next_archive/$(dirname "$f")" &&
+                cp "$1/$f" "$next_archive/$f"; } || die "$f could not be archived"
         fi
     done
     if [ -d "$1/etc/dropbear" ]; then
@@ -1107,6 +1112,11 @@ whole configuration archived on its recovery partition; its accounts are not the
         fi
     done
     chmod 600 "$TARGET_MNT/etc/shadow" || die "the shadow file's mode could not be set"
+    # The archive's FAT file system keeps no mode, and this file has passphrases.
+    if [ -f "$TARGET_MNT/etc/wpa_supplicant/wlan0.conf" ]; then
+        chmod 600 "$TARGET_MNT/etc/wpa_supplicant/wlan0.conf" ||
+            die "the saved networks' mode could not be set"
+    fi
     if [ -d "$keep/etc/dropbear" ]; then
         rm -rf "$TARGET_MNT/etc/dropbear" || die "the image's host keys could not be removed"
         cp -a "$keep/etc/dropbear" "$TARGET_MNT/etc/dropbear" ||

@@ -172,10 +172,16 @@ prints, as
 .El
 .Pp
 If the installer finds a recovery partition, it archives the three account
-files, the SSH policy and
+files, the SSH policy,
 .Pa /etc/vconsole.conf ,
-where the root has one, under
-.Pa rach2-config-a/etc .
+the saved networks in
+.Pa /etc/wpa_supplicant/wlan0.conf ,
+.Pa /etc/machine-id ,
+and from
+.Pa /var/lib
+the sound and backlight levels and the IPv6 secret, where the root has them,
+under the same paths in
+.Pa rach2-config-a .
 Dropbear's host keys go in
 .Pa rach2-config-a/etc/dropbear ,
 and OpenSSH's, which a GNU root's server has, in
@@ -249,6 +255,7 @@ and accepts only
 Before replacing a readable root, the installer copies its account files,
 SSH policy,
 .Pa /etc/vconsole.conf ,
+saved Wi-Fi networks, machine identifiers, kept sound and backlight levels,
 server host keys, account keys, including root's keys, the
 home directories under
 .Pa /home
