@@ -2,9 +2,9 @@
  * ext2_fsync_rows.h: rows of ext2_hosttest.c, which includes this file, for
  * the `fsync` and `fdatasync` of one file in rach2/sys/fs/ext2.c on a mount
  * that writes back: what an fsync beside a large dirty file writes, a stop
- * right after one, the whole device once a file's list of shared blocks
- * overflows or goes with its node, and an fdatasync after a change of
- * times alone.
+ * right after one, and beside a neighbour in its inode table block that
+ * allocated, the whole device once a file's list of shared blocks overflows
+ * or goes with its node, and an fdatasync after a change of times alone.
  */
 #ifndef EXT2_FSYNC_ROWS_H_
 #define EXT2_FSYNC_ROWS_H_
@@ -136,12 +136,36 @@ static int fsync_mount(unsigned long per_group)
 }
 
 /**
+ * Make 32 empty files and put them again, so that the next inode made is
+ * in another table block than the last inode made before them.
+ */
+static void fsync_pad(void)
+{
+    int i, rc;
+
+    for (i = 0; i < 32; i++) {
+        char name[4];
+        void *f;
+
+        name[0] = 'p';
+        name[1] = (char)('a' + i / 26);
+        name[2] = (char)('a' + i % 26);
+        name[3] = 0;
+        f = make_file(mnt.root, name, &rc);
+        check(f != 0, "an empty file between two table blocks is made");
+        if (f) {
+            OPS->put(&mnt, f);
+        }
+    }
+}
+
+/**
  * An fsync of a file that grew by four blocks, beside a neighbour of 150
- * dirty blocks and the indirect block that names most of them: it writes
- * the file's blocks in one run, on a device that takes 32 blocks at once,
- * its bitmap and descriptor block and its inode's table block, four
- * requests, and leaves every block of the neighbour dirty. Both
- * files' writes are drained into the cache first by a close, which writes
+ * dirty blocks and the indirect block that names most of them, in another
+ * table block: it writes the file's blocks in one run, on a device that
+ * takes 32 blocks at once, its bitmap and descriptor block and its inode's
+ * table block, four requests, and leaves every block of the neighbour
+ * dirty. Both files' writes are drained into the cache first by a close, which writes
  * nothing, so the row sees which blocks were dirty and for whom.
  */
 static void fsync_neighbour_row(void)
@@ -157,6 +181,7 @@ static void fsync_neighbour_row(void)
     }
     nshared = debugfs_numbers("stats", "block bitmap at ", shared, 32);
     a = make_file(mnt.root, "own", &rc);
+    fsync_pad();
     b = make_file(mnt.root, "next", &rc);
     memset(next, 0x3C, sizeof(next));
     memset(own, 0xC3, sizeof(own));
@@ -201,6 +226,41 @@ static void fsync_neighbour_row(void)
 }
 
 /**
+ * Stop the device right after an fsync of open file `h` of node `a` beside
+ * node `b`, so that nothing else reaches it, and judge the stop: e2fsck
+ * finds the volume clean and the driver's check mounts a copy writable and
+ * clean, which the caller reads and unmounts. Whether it mounted.
+ */
+static int fsync_stop_judge(void *h, void *a, void *b)
+{
+    int status;
+
+    stop_after = writes_made;
+    bcache_device_gone(&dev);
+    OPS->release(&mnt, h);
+    OPS->put(&mnt, a);
+    OPS->put(&mnt, b);
+    OPS->put(&mnt, mnt.root);
+    OPS->unmount(&mnt);
+    mnt.root = 0;
+    stop_after = -1;
+    dev.flags = BLOCK_FAULT_SAFE;
+    use_image(wimg, wbytes);
+    status = e2fsck_status(wimg);
+    check(status == 0, "e2fsck -fn finds the stop clean");
+    if (status != 0) {
+        ext2_fixture_head(fix_path("fsck.out"), 20);
+    }
+    last_check[0] = 0;
+    check(copy_file(wimg, fix_path("check.ext2")), "the stop is copied for the check");
+    use_image(fix_path("check.ext2"), wbytes);
+    status =
+        mount_image() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 && streq(last_check, "check: clean");
+    check(status, "the driver's check mounts the stop writable and clean");
+    return status;
+}
+
+/**
  * A stop right after an fsync: a file of four blocks grows by twenty and its
  * neighbour's forty blocks are rewritten, then the file is synced and the
  * device goes, so that nothing else reaches it. e2fsck finds the volume
@@ -211,7 +271,7 @@ static void fsync_stop_row(void)
 {
     static unsigned char old[40 * 4096], newer[40 * 4096], own[24 * 4096];
     void *a, *b, *h = 0;
-    int rc, status;
+    int rc;
 
     if (!fsync_mount(0)) {
         return;
@@ -232,30 +292,53 @@ static void fsync_stop_row(void)
               OPS->write(&mnt, h, own + 4 * 4096, 20 * 4096, 4 * 4096) == 20 * 4096,
           "the neighbour is rewritten and the file grows by twenty blocks");
     check(OPS->fsync(&mnt, h) == 0, "the file is synced");
-    stop_after = writes_made;
-    bcache_device_gone(&dev);
-    OPS->release(&mnt, h);
-    OPS->put(&mnt, a);
-    OPS->put(&mnt, b);
-    OPS->put(&mnt, mnt.root);
-    OPS->unmount(&mnt);
-    mnt.root = 0;
-    stop_after = -1;
-    dev.flags = BLOCK_FAULT_SAFE;
-    use_image(wimg, wbytes);
-    status = e2fsck_status(wimg);
-    check(status == 0, "e2fsck -fn finds the stop clean");
-    if (status != 0) {
-        ext2_fixture_head(fix_path("fsck.out"), 20);
-    }
-    last_check[0] = 0;
-    check(copy_file(wimg, fix_path("check.ext2")), "the stop is copied for the check");
-    use_image(fix_path("check.ext2"), wbytes);
-    check(mount_image() == 0 && (mnt.flags & VFS_MS_RDONLY) == 0 &&
-              streq(last_check, "check: clean"),
-          "the driver's check mounts the stop writable and clean");
+    fsync_stop_judge(h, a, b);
     check(file_is("/own", own, sizeof(own)) && file_is("/next", old, sizeof(old)),
           "with the file whole and the neighbour's old bytes");
+    unmount_image();
+}
+
+/**
+ * A stop right after an fsync of an unchanged file, beside a file of its
+ * inode table block that grew by twenty blocks, one of them a pointer block:
+ * the table block puts the neighbour's pointers on the device, so its
+ * bitmap, descriptor and blocks go first, and the stop reads back whole.
+ * The same beside a new directory, whose entries carry no tag, which writes
+ * the whole device.
+ */
+static void fsync_table_row(int directory)
+{
+    static unsigned char own[4096], next[20 * 4096];
+    void *a, *b, *h = 0;
+    int rc;
+
+    if (!fsync_mount(0)) {
+        return;
+    }
+    memset(own, 0x3A, sizeof(own));
+    memset(next, 0xA3, sizeof(next));
+    a = make_file(mnt.root, "own", &rc);
+    b = make_file(mnt.root, "next", &rc);
+    check(a && b && write_at(a, own, sizeof(own), 0) == 0 && OPS->sync(&mnt) == 0 &&
+              OPS->open(&mnt, a, 2, &h) == 0,
+          "a file of one block and an empty neighbour are on the medium");
+    if (!a || !b || !h) {
+        return;
+    }
+    if (directory) {
+        OPS->lock_node(&mnt, mnt.root);
+        check(OPS->mkdir(&mnt, mnt.root, "made", 0755) == 0, "a new directory is beside the file");
+        OPS->unlock_node(&mnt, mnt.root);
+    } else {
+        check(write_at(b, next, sizeof(next), 0) == 0, "the neighbour grows by twenty blocks");
+    }
+    check(OPS->fsync(&mnt, h) == 0, "the unchanged file is synced");
+    if (!fsync_stop_judge(h, a, b)) {
+        unmount_image();
+        return;
+    }
+    check(file_is("/own", own, sizeof(own)), "with the file whole");
+    check(directory || file_is("/next", next, sizeof(next)), "and the neighbour whole");
     unmount_image();
 }
 
@@ -372,6 +455,8 @@ static void fsync_rows(void)
     bcache_set_limit(8192);
     printf("ext2-fsync: cache of %u buffers\n", (unsigned)bcache_capacity());
     fsync_neighbour_row();
+    fsync_table_row(0);
+    fsync_table_row(1);
     fsync_stop_row();
     fsync_whole_row();
     fsync_data_row();
