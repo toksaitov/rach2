@@ -1112,8 +1112,7 @@ again:
         int rc;
 
         stat_visits++;
-        if (b->dev != dev || b->holder != -1 || write_barred(b) ||
-            (names_blocks(b) && way_to(b))) {
+        if (b->dev != dev || b->holder != -1 || write_barred(b) || (names_blocks(b) && way_to(b))) {
             continue;
         }
         rc = write_one(b, 0);
@@ -1609,10 +1608,9 @@ static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope,
                 rc = 1;
             } else {
                 check_sync_holds(next, dev);
-                rc = write_run(next, &last,
-                               next->order == BCACHE_ORDER_FIRST ? scope->first_flags
-                                                                 : scope->flags,
-                               scope);
+                rc = write_run(
+                    next, &last,
+                    next->order == BCACHE_ORDER_FIRST ? scope->first_flags : scope->flags, scope);
             }
             if (rc < 0) {
                 return rc;

@@ -11,9 +11,10 @@
 /**
  * Report `str` as the reason the kernel stops, and stop it: begin the panic
  * (`k_panic_begin`), draw the panic picture over the screen, show under it the
- * last `KLOG_CRIT` record (`klog_show_crit`), on the screen alone, write the record `panic:
- * stopped: STR` at `KLOG_CRIT` to every destination at once, and halt this processor with
- * interrupts off. From any context; it does not return.
+ * last `KLOG_CRIT` record (`klog_show_crit`), on the screen alone, write the
+ * record `panic: stopped: STR` at `KLOG_CRIT` to every destination at once, and
+ * halt this processor with interrupts off. From any context; it does not
+ * return.
  */
 void k_panic(const char *str) K_NORETURN;
 

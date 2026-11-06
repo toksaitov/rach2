@@ -30,11 +30,12 @@
  * head. A datagram send waiting for room fails with EPIPE when the receiver
  * shuts down reading. A datagram queue whose messages each carry 253
  * descriptors fills with EAGAIN at fewer than 64 messages, since each is
- * charged its descriptors as well as its byte. A stream whose peer's queue is full polls writable
- * once it is shut down for writing, and the write then fails with EPIPE. A recvfrom given an
- * address and no length pointer fails with EFAULT and leaves the message for the next receive. A
- * descriptor of a KRFFS file in /tmp, sent before a write moves the file and received after the
- * sender's close and the unlink, has the file's size and reads its bytes.
+ * charged its descriptors as well as its byte. A stream whose peer's queue is
+ * full polls writable once it is shut down for writing, and the write then
+ * fails with EPIPE. A recvfrom given an address and no length pointer fails
+ * with EFAULT and leaves the message for the next receive. A descriptor of a
+ * KRFFS file in /tmp, sent before a write moves the file and received after
+ * the sender's close and the unlink, has the file's size and reads its bytes.
  *
  * It prints "UNIXMUSL OK" and exits 0 on success, or prints "UNIXMUSL FAIL
  * (detail: errno N)" and exits 1 at the first failure. Ids 1000 and 65534 are
