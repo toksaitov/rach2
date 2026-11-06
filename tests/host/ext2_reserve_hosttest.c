@@ -289,6 +289,13 @@ void bcache_dirty_ordered(struct bbuf *buffer, int order)
     order_of[buffer - buffers] = order;
 }
 
+/** Count the write as `bcache_dirty` does; the model keeps no owner. */
+void bcache_dirty_owned(struct bbuf *buffer, uint64_t owner)
+{
+    (void)owner;
+    bcache_dirty(buffer);
+}
+
 /** Count the write, which succeeds. */
 int bcache_write(struct bbuf *buffer)
 {
@@ -314,6 +321,22 @@ int bcache_sync(block_device_t *dev)
 int bcache_sync_unflushed(block_device_t *dev)
 {
     (void)dev;
+    return 0;
+}
+
+/** Succeed: the model has nothing to sync. */
+int bcache_sync_owned(block_device_t *dev, uint64_t owner)
+{
+    (void)dev;
+    (void)owner;
+    return 0;
+}
+
+/** Succeed: the model has nothing to sync. */
+int bcache_sync_block(block_device_t *dev, uint64_t blk)
+{
+    (void)dev;
+    (void)blk;
     return 0;
 }
 
