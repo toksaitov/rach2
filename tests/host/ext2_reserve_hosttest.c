@@ -53,6 +53,7 @@ static int misses;
 static int busy[TEST_BLOCKS], busy_waits, busy_gets;
 static int order_of[TEST_BLOCKS], unordered[TEST_BLOCKS];
 static int reserve_calls;
+static int dirty_heavy, unflushed_syncs;
 static uint32_t reserve_n;
 static int events, reserve_at, blank_at;
 static void (*fetch_hook)(void);
@@ -377,10 +378,11 @@ int bcache_sync(block_device_t *dev)
     return 0;
 }
 
-/** Succeed: the model has nothing to sync. */
+/** Count a write-back of the cache; the model has nothing to sync. */
 int bcache_sync_unflushed(block_device_t *dev)
 {
     (void)dev;
+    unflushed_syncs++;
     return 0;
 }
 
@@ -418,10 +420,10 @@ void bcache_sync_last(block_device_t *dev, int (*last)(void *arg, uint64_t blk),
     (void)arg;
 }
 
-/** Return 0: the rows never fill the cache with dirty buffers. */
+/** Return what balance_rows sets; the other rows leave the cache light. */
 int bcache_dirty_heavy(void)
 {
-    return 0;
+    return dirty_heavy;
 }
 
 /** Succeed: the model's device has no cache. */
@@ -736,6 +738,33 @@ static void drain_reserve_row(void)
     check(reserve_at != 0 && blank_at > reserve_at, "before its first copy");
 }
 
+/**
+ * A cache full of dirty buffers is written back by those who wrote them: a
+ * process that wrote less than its share pays nothing, as one that only
+ * closes or exits does, and a writer past its share pays once.
+ */
+static void balance_rows(void)
+{
+    reset(20);
+    unflushed_syncs = 0;
+    process.fs_written = EXT2_BALANCE_SHARE;
+    em_balance(&volume);
+    check(unflushed_syncs == 0 && process.fs_written == 0,
+          "a light cache writes nothing back and forgets the share");
+    dirty_heavy = 1;
+    em_balance(&volume);
+    check(unflushed_syncs == 0, "a process that wrote nothing pays for no other's writes");
+    process.fs_written = EXT2_BALANCE_SHARE - 1;
+    em_balance(&volume);
+    check(unflushed_syncs == 0 && process.fs_written == EXT2_BALANCE_SHARE - 1,
+          "nor does one short of its share");
+    process.fs_written = EXT2_BALANCE_SHARE;
+    em_balance(&volume);
+    check(unflushed_syncs == 1 && process.fs_written == 0,
+          "a writer past its share writes back once and begins a new share");
+    dirty_heavy = 0;
+}
+
 /* The nested punch's file, freed while the outer punch fetches a bitmap. */
 static void punch_other(void)
 {
@@ -898,6 +927,7 @@ int main(void)
     busy_rows();
     held_block_rows();
     drain_reserve_row();
+    balance_rows();
     overlap_punch_row();
     inode_rows();
     admission_rows();
