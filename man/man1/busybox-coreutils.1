@@ -1649,8 +1649,11 @@ columns instead of 80.
 .Bl -tag -width Ds
 .It Fl d
 Request a data-only flush.
-On Rach2, no file system has an fdatasync operation yet, so fdatasync does
-what fsync does and also flushes metadata.
+On ext2, fdatasync leaves out the inode's table block when only the file's
+times have changed; on every other file system it does what fsync does and
+also flushes metadata, as
+.Xr sync 2
+says.
 .El
 .Ss head
 .Bl -tag -width Ds
@@ -2029,8 +2032,11 @@ Use the System V checksum algorithm with 512-byte blocks.
 .Bl -tag -width Ds
 .It Fl d
 Request a data-only flush.
-On Rach2, no file system has an fdatasync operation yet, so fdatasync does
-what fsync does and also flushes metadata.
+On ext2, fdatasync leaves out the inode's table block when only the file's
+times have changed; on every other file system it does what fsync does and
+also flushes metadata, as
+.Xr sync 2
+says.
 .It Fl f
 Request a flush of the file systems containing the files.
 Rach2's syncfs flushes every file system, as sync does.
