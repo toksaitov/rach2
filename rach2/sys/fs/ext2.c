@@ -181,6 +181,15 @@ struct ext2_node {
      * `fsync` always writes it. */
     uint32_t shared[EXT2_NODE_SHARED];
     int nshared, shared_over;
+    /* Writes under way of blocks taken off the list (`node_blocks_write`),
+     * which wake `node_wq` as the last ends. */
+    int writing;
+    /* Calls under way that write its table block: `fdatasync` writes that
+     * block too while one is, since it cleared `dirty_meta` at its start. */
+    int table_writing;
+    /* Its list went to a write of the whole device that may not have reached
+     * it yet (`device_write_begin`). */
+    int unlisted;
     /* Set when a store changes a field of the inode other than its times,
      * and when the node is made, and cleared as an `fsync` writes the
      * table block: `fdatasync` writes that block only while it is set. */
@@ -329,6 +338,8 @@ struct ext2_mount {
     /* A node with shared blocks listed was freed, so the next `fsync` of
      * any file writes the whole device. */
     int shared_lost;
+    int device_writes; /* writes of the whole device under way */
+    int device_lost;   /* one of them took over `shared_lost` */
 };
 
 /* The kinds of ext2's locks, as `sleep_lock_records` lists them. */
@@ -460,7 +471,7 @@ static void node_drop(struct ext2_mount *em, struct ext2_node *n)
     if (n->next) {
         n->next->prev = n->prev;
     }
-    if (n->state == N_LIVE && !n->unlinked && (n->nshared || n->shared_over)) {
+    if (n->state == N_LIVE && !n->unlinked && (n->nshared || n->shared_over || n->unlisted)) {
         em->shared_lost = 1;
     }
     em->node_count--;
@@ -2083,23 +2094,47 @@ static int ext2_statfs(struct vfs_mount *mnt, struct vfs_statfs *st)
 }
 
 /**
- * Empty every node's list of shared blocks, for a write of the whole device
+ * Empty every node's list of shared blocks for a write of the whole device
  * that starts now, which puts all of them on the device: a list left behind
  * would make the next `fsync` beside its node write that file for nothing
- * (`table_unsynced`). A pending batch keeps the lists, since what they name
- * may be in its images and not yet in the cache.
+ * (`table_unsynced`). The node keeps `unlisted` and a list lost with its
+ * node `device_lost` until `device_write_end`, so that an `fsync` meanwhile
+ * does not take their blocks for written. A pending batch keeps the lists,
+ * since what they name may be in its images and not yet in the cache.
  */
-static void nodes_unlist(struct ext2_mount *em)
+static void device_write_begin(struct ext2_mount *em)
 {
     struct ext2_node *n;
 
+    em->device_writes++;
     if (em->wb && em->wb->count) {
         return;
     }
     for (n = em->nodes; n; n = n->next) {
+        n->unlisted |= n->nshared || n->shared_over;
         n->nshared = n->shared_over = 0;
     }
+    em->device_lost |= em->shared_lost;
     em->shared_lost = 0;
+}
+
+/**
+ * End a write of the whole device. The last one ending has put what the
+ * lists named on the device, or failed, which leaves the mount read-only,
+ * so that every later `fsync` writes the device and reports the failure.
+ */
+static void device_write_end(struct ext2_mount *em)
+{
+    struct ext2_node *n;
+
+    em->device_writes--;
+    if (em->device_writes) {
+        return;
+    }
+    for (n = em->nodes; n; n = n->next) {
+        n->unlisted = 0;
+    }
+    em->device_lost = 0;
 }
 
 /**
@@ -2114,11 +2149,12 @@ static int em_write_out(struct vfs_mount *mnt)
     struct ext2_mount *em = em_of(mnt);
     int rc;
 
-    nodes_unlist(em);
+    device_write_begin(em);
     rc = bcache_sync(em->dev);
     if (rc == 0) {
         rc = block_flush(em->dev);
     }
+    device_write_end(em);
     return rc != 0 ? writeback_error(em, rc) : 0;
 }
 
@@ -5215,8 +5251,10 @@ static int ext2_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
  * Write the shared blocks listed for `n`, then its own data and pointer
  * blocks (`bcache_sync_owned`), with no lock held. The list is taken and
  * emptied in one step, so a block dirtied for `n` during the writes is the
- * next call's, and a failure leaves `n`'s next `fsync` the whole device. 0,
- * or -errno.
+ * next call's, and a failure leaves `n`'s next `fsync` the whole device.
+ * `n->writing` shows the blocks to other callers until they are written:
+ * they wait for it (`node_writes_wait`) before they count on them. 0, or
+ * -errno.
  */
 static int node_blocks_write(struct ext2_mount *em, struct ext2_node *n)
 {
@@ -5226,6 +5264,7 @@ static int node_blocks_write(struct ext2_mount *em, struct ext2_node *n)
 
     k_memcpy(shared, n->shared, sizeof(shared));
     n->nshared = 0;
+    n->writing++;
     for (i = 0; rc == 0 && i < count; i++) {
         rc = bcache_sync_block(em->dev, shared[i]);
     }
@@ -5235,15 +5274,34 @@ static int node_blocks_write(struct ext2_mount *em, struct ext2_node *n)
     if (rc != 0) {
         n->shared_over = 1;
     }
+    n->writing--;
+    if (n->writing == 0) {
+        wq_wake_all(&em->node_wq);
+    }
     return rc;
+}
+
+/** The wait condition of `node_writes_wait`. */
+static int node_not_writing(void *arg)
+{
+    return ((const struct ext2_node *)arg)->writing == 0;
+}
+
+/** Wait for the `node_blocks_write` under way of `n`, which the caller
+ * holds. No lock is held: such a write waits only for the disk. */
+static void node_writes_wait(struct ext2_mount *em, struct ext2_node *n)
+{
+    while (n->writing) {
+        wq_wait_event_nointr(&em->node_wq, node_not_writing, n);
+    }
 }
 
 /**
  * A node with an inode in the same block of the cache as inode `ino`'s, or
- * of `ino` itself, that still lists shared blocks, or NULL. A write of that
- * block puts its inode on the device, pointers and all, so what the inode
- * depends on must go first. A dying node is left out: its inode is going,
- * and a failed one has no inode.
+ * of `ino` itself, whose shared blocks are listed or not yet written, or
+ * NULL. A write of that block puts its inode on the device, pointers and
+ * all, so what the inode depends on must go first. A dying node is left
+ * out: its inode is going, and a failed one has no inode.
  */
 static struct ext2_node *table_unsynced(struct ext2_mount *em, uint32_t ino)
 {
@@ -5259,7 +5317,8 @@ static struct ext2_node *table_unsynced(struct ext2_mount *em, uint32_t ino)
     for (i = first; i <= last; i++) {
         struct ext2_node *m = node_find(em, i);
 
-        if (m && (m->state == N_LIVE || m->state == N_LOADING) && (m->nshared || m->shared_over) &&
+        if (m && (m->state == N_LIVE || m->state == N_LOADING) &&
+            (m->nshared || m->shared_over || m->writing || m->unlisted) &&
             inode_offset(em, i) >> BCACHE_BLOCK_SHIFT == table) {
             return m;
         }
@@ -5268,64 +5327,101 @@ static struct ext2_node *table_unsynced(struct ext2_mount *em, uint32_t ino)
 }
 
 /**
+ * Put on the device what the inodes in `n`'s table block depend on, before
+ * that block is written, with a hold on each node: its shared and own
+ * blocks are written here, or, while another call writes them, waited for.
+ * A neighbour's block is tagged only when it is a regular file's, so
+ * another kind of file sets `*whole`. So do a list that overflowed, a list
+ * lost with its node or still going to a write of the whole device, whose
+ * blocks only such a write of our own finds and waits for (bcache.h), and a
+ * table block whose nodes keep listing more. 0, or -errno.
+ */
+static int table_neighbours_write(struct ext2_mount *em, struct ext2_node *n, int *whole)
+{
+    int tries, rc = 0;
+
+    for (tries = 0; rc == 0; tries++) {
+        struct ext2_node *m;
+
+        if (em->shared_lost || em->device_lost) {
+            *whole = 1;
+            break;
+        }
+        m = table_unsynced(em, n->ino);
+        if (!m) {
+            break;
+        }
+        if (tries == EXT2_TABLE_TRIES || m->shared_over || m->unlisted ||
+            (m->mode & S_IFMT_) != S_IFREG_) {
+            *whole = 1;
+            break;
+        }
+        m->refs++;
+        if (m->writing) {
+            node_writes_wait(em, m);
+        } else {
+            rc = node_blocks_write(em, m);
+        }
+        ext2_put(em->mnt, m);
+    }
+    return rc;
+}
+
+/**
  * Write what regular file `n` left dirty, with no lock held, and flush the
  * disk's cache: its shared blocks and its own (`node_blocks_write`), then
  * its inode's table block, which `data_only` leaves out unless a field but
- * the times changed (`n->dirty_meta`). A bitmap's or descriptor's bit is so
- * on the device before a pointer to its block, as a strict mount orders
- * them, and a bitmap a free dirtied `after` waits for the device's `first`
- * pointers (`bcache_sync_block`).
+ * the times changed (`n->dirty_meta`) or another call's write of that block
+ * is under way. A bitmap's or descriptor's bit is so on the device before a
+ * pointer to its block, as a strict mount orders them, and a bitmap a free
+ * dirtied `after` waits for the device's `first` pointers
+ * (`bcache_sync_block`).
  *
- * The table block holds other inodes as they are in memory, so each that
- * lists shared blocks has them and its own blocks written first, with a hold
- * on its node: a stop after the call finds no neighbour's pointer to a block
- * that is free or unwritten. A neighbour's block is tagged only when it is a
- * regular file's, so another kind of file makes it the whole device.
+ * Another call's write of `n`'s list is waited for first, so that this one
+ * returns with those blocks on the device. The table block holds other
+ * inodes as they are in memory, so `table_neighbours_write` goes before it:
+ * a stop after the call finds no neighbour's pointer to a block that is free
+ * or unwritten.
  *
- * A list that overflowed, a node freed with its list (`em->shared_lost`) or
- * a table block whose nodes keep listing more makes it the whole device's
- * `bcache_sync`. The caller has drained the batch. A failure is recorded as
- * the batch's error and leaves the next call the whole device. 0, or
- * -errno.
+ * A list that overflowed, or went with its node or to a write of the whole
+ * device under way, makes it the whole device's `bcache_sync`, as a table
+ * block's neighbours may. The caller has drained the batch. A failure is
+ * recorded as the batch's error and leaves the next call the whole device.
+ * 0, or -errno.
  */
 static int node_write_out(struct vfs_mount *mnt, struct ext2_node *n, int data_only)
 {
     struct ext2_mount *em = em_of(mnt);
     uint64_t table = inode_offset(em, n->ino) >> BCACHE_BLOCK_SHIFT;
-    int whole = n->shared_over || em->shared_lost;
-    int with_table = !data_only || n->dirty_meta;
-    int tries, rc = 0;
+    int whole, with_table, rc = 0;
 
-    em->shared_lost = 0;
+    node_writes_wait(em, n);
+    whole = n->shared_over || n->unlisted || em->shared_lost || em->device_lost;
+    with_table = !data_only || n->dirty_meta || n->table_writing;
     if (with_table) {
         n->dirty_meta = 0;
+        n->table_writing++;
     }
     if (!whole) {
         rc = node_blocks_write(em, n);
     }
-    for (tries = 0; !whole && rc == 0 && with_table; tries++) {
-        struct ext2_node *m = table_unsynced(em, n->ino);
-
-        if (!m) {
-            break;
-        }
-        if (tries == EXT2_TABLE_TRIES || m->shared_over || (m->mode & S_IFMT_) != S_IFREG_) {
-            whole = 1;
-            break;
-        }
-        m->refs++;
-        rc = node_blocks_write(em, m);
-        ext2_put(em->mnt, m);
+    if (!whole && rc == 0 && with_table) {
+        rc = table_neighbours_write(em, n, &whole);
     }
     if (whole) {
-        n->nshared = n->shared_over = 0;
-        nodes_unlist(em);
+        device_write_begin(em);
         rc = bcache_sync(em->dev);
     } else if (rc == 0 && with_table) {
         rc = bcache_sync_block(em->dev, table);
     }
     if (rc == 0) {
         rc = block_flush(em->dev);
+    }
+    if (whole) {
+        device_write_end(em);
+    }
+    if (with_table) {
+        n->table_writing--;
     }
     if (rc != 0) {
         n->shared_over = 1;

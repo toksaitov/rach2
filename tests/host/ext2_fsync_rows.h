@@ -4,7 +4,8 @@
  * that writes back: what an fsync beside a large dirty file writes, a stop
  * right after one, and beside a neighbour in its inode table block that
  * allocated, the whole device once a file's list of shared blocks overflows
- * or goes with its node, and an fdatasync after a change of times alone.
+ * or goes with its node, an fdatasync after a change of times alone, and a
+ * second call made while the first waits for the disk.
  */
 #ifndef EXT2_FSYNC_ROWS_H_
 #define EXT2_FSYNC_ROWS_H_
@@ -447,6 +448,125 @@ static void fsync_data_row(void)
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "the fdatasync volume unmounts clean");
 }
 
+/* A row of two calls. Process A makes `sync` or an fsync of the file that
+   grew, process B an fsync of its neighbour in the table block or an
+   fdatasync of that file; `what` names it and `want` the wait B must be in
+   at A's request. */
+struct beside_row {
+    const char *what;
+    const char *want;
+    int device;   /* process A syncs the device, not the file */
+    int same;     /* process B's call is an fdatasync of the grown file */
+    int at_table; /* B runs at the write of the table block, not the first */
+    int fail;     /* A's first write fails, once B has run */
+};
+
+/* The run under way: the row, B's handle and result, the table block, and
+   what B did at A's request: whether it ran, had ended, the kind of its
+   wait, whether the table block was then on the medium, and, when it had
+   ended, whether e2fsck found the medium as it stood then clean. */
+static const struct beside_row *beside;
+static void *beside_handle;
+static uint64_t beside_table;
+static int beside_rc, beside_fired, beside_ended, beside_table_written, beside_fsck;
+static const char *beside_slept;
+
+/** Process B: its call. */
+static void beside_second(void)
+{
+    beside_rc =
+        beside->same ? OPS->fdatasync(&mnt, beside_handle) : OPS->fsync(&mnt, beside_handle);
+}
+
+/** Whether e2fsck finds a copy of the medium, as it stands, clean. */
+static int beside_medium_clean(void)
+{
+    int status;
+
+    fflush(image);
+    check(copy_file(wimg, fix_path("beside.ext2")), "the medium is copied for e2fsck");
+    status = e2fsck_status(fix_path("beside.ext2"));
+    if (status != 0) {
+        ext2_fixture_head(fix_path("fsck.out"), 20);
+    }
+    return status == 0;
+}
+
+/** At the request the row names, give process B the turn and note what it
+ * did. */
+static void beside_pause(void)
+{
+    if (current_proc != &proc_a || second_inside || beside_fired ||
+        (beside->at_table && request_block != beside_table)) {
+        return;
+    }
+    beside_fired = 1;
+    pass_turn();
+    beside_ended = !turns_active();
+    beside_slept = second_wait;
+    beside_table_written = fsync_written(beside_table) && !beside->at_table;
+    beside_fsck = !beside_ended || beside_medium_clean();
+    if (beside->fail) {
+        stop_after = writes_made;
+    }
+}
+
+/**
+ * Two calls at once: process A's call, stopped at a disk wait with the file
+ * that grew unwritten, must not let process B's call return, or write the
+ * table block that points at that file's blocks, before those blocks are
+ * written. Then both end, with the first failure when the row has one, and a
+ * stop leaves a volume e2fsck and the driver's check find clean.
+ */
+static void fsync_beside_row(const struct beside_row *row)
+{
+    static unsigned char own[4096], next[20 * 4096];
+    char what[160];
+    void *a, *b, *ha = 0, *hb = 0;
+    int rc, a_rc;
+
+    if (!fsync_mount(0)) {
+        return;
+    }
+    memset(own, 0x3A, sizeof(own));
+    memset(next, 0xA3, sizeof(next));
+    a = make_file(mnt.root, "own", &rc);
+    b = make_file(mnt.root, "next", &rc);
+    check(a && b && write_at(a, own, sizeof(own), 0) == 0 && OPS->sync(&mnt) == 0 &&
+              OPS->open(&mnt, a, 2, &ha) == 0 && OPS->open(&mnt, b, 2, &hb) == 0,
+          "a file of one block and an empty neighbour are on the medium");
+    if (!a || !b || !ha || !hb) {
+        return;
+    }
+    check(OPS->write(&mnt, hb, next, sizeof(next), 0) == (int32_t)sizeof(next),
+          "the neighbour grows by twenty blocks");
+    wlog_reset();
+    beside = row;
+    beside_handle = row->same ? hb : ha;
+    beside_table = fsync_table_block(fsync_ino(b));
+    beside_rc = beside_fired = beside_ended = beside_table_written = 0;
+    beside_slept = 0;
+    beside_fsck = 1;
+    write_pause = beside_pause;
+    start_turns(beside_second);
+    a_rc = row->device ? OPS->sync(&mnt) : OPS->fsync(&mnt, hb);
+    write_pause = 0;
+    finish_turns();
+    snprintf(what, sizeof(what), "%s: waits for %s, not %s", row->what, row->want,
+             beside_ended ? "nothing" : (beside_slept ? beside_slept : "anything"));
+    check(beside_fired && !beside_ended && beside_slept && streq(beside_slept, row->want), what);
+    check(!beside_table_written && beside_fsck, "and the medium points at no unwritten block");
+    check(row->fail ? a_rc == -EIO && beside_rc == -EIO && !fsync_written(beside_table)
+                    : a_rc == 0 && beside_rc == 0,
+          "and both calls end with the right result");
+    OPS->release(&mnt, hb);
+    stop_after = -1;
+    if (fsync_stop_judge(ha, a, b)) {
+        check(row->fail || file_is("/next", next, sizeof(next)), "with the neighbour whole");
+        unmount_image();
+    }
+}
+
 /** The rows of one file's fsync and fdatasync, under a cache of 8192
  * buffers, so that no row's dirty blocks reach the quarter of the limit at
  * which a drain writes the device's (`em_balance`). */
@@ -460,6 +580,20 @@ static void fsync_rows(void)
     fsync_stop_row();
     fsync_whole_row();
     fsync_data_row();
+    {
+        static const struct beside_row rows[] = {
+            {"an fsync beside a list being written", "ext2 node state", 0, 0, 0, 0},
+            {"a failing fsync beside a list being written", "ext2 node state", 0, 0, 0, 1},
+            {"an fdatasync of a list being written", "ext2 node state", 0, 1, 0, 0},
+            {"an fdatasync of a table block being written", "buffer", 0, 1, 1, 0},
+            {"an fsync beside a sync of the device", "buffer", 1, 0, 0, 0},
+        };
+        int i;
+
+        for (i = 0; i < (int)(sizeof(rows) / sizeof(rows[0])); i++) {
+            fsync_beside_row(&rows[i]);
+        }
+    }
     bcache_set_limit(0);
 }
 

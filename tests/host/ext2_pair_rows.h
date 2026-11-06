@@ -13,7 +13,8 @@
  * beside another such rename sleeps on the mount's rename lock. On any
  * layout B may instead sleep on the buffer of a block that A's request is
  * moving, which the cache holds for that one request (bcache.h), and on no
- * other buffer.
+ * other buffer. An fsync beside an fsync may sleep on the other's list of
+ * blocks being written, whose inode may share its table block.
  *
  * The volume lives in memory (`ram_image`) and starts each run from one
  * copy, with the cache empty; the mount writes back, as a default mount
@@ -455,6 +456,14 @@ static int pair_run(const struct pair_op *a, const struct pair_op *b, int layout
    slept on a node lock, on the rename lock and on a buffer of the request. */
 static int pair_requests, pair_node_waits, pair_rename_waits, pair_buffer_waits;
 
+/** Whether B, an fsync beside fsync `a`, sleeps on `a`'s list being written
+ * (`node_writes_wait`). */
+static int pair_list_wait(const struct pair_op *a, const struct pair_op *b)
+{
+    return a->run == pair_fsync && b->run == pair_fsync && !pair_ended && pair_slept &&
+           streq(pair_slept, "ext2 node state");
+}
+
 /**
  * Run `a` against `b` on `layout` at each disk request of `a` in turn and
  * judge what B did at each against `want`: NULL for an end, or the kind of
@@ -481,7 +490,7 @@ static void pair_row(const struct pair_op *a, const struct pair_op *b, int layou
             check(0, what);
             good = 0;
         }
-        if (!pair_in_flight &&
+        if (!pair_in_flight && !pair_list_wait(a, b) &&
             (want ? (pair_ended || !pair_slept || !streq(pair_slept, want)) : !pair_ended)) {
             snprintf(what, sizeof(what), "%s then %s %s at request %d, of block %lu: %s, not %s",
                      a->name, b->name, layouts[layout], k, (unsigned long)pair_block,

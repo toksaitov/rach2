@@ -52,6 +52,7 @@ extern int fseek(void *f, long off, int whence);
 extern unsigned long fread(void *buf, unsigned long size, unsigned long n, void *f);
 extern unsigned long fwrite(const void *buf, unsigned long size, unsigned long n, void *f);
 extern int fclose(void *f);
+extern int fflush(void *f);
 extern char *fgets(char *s, int n, void *f);
 extern char *strstr(const char *s, const char *needle);
 extern unsigned long strlen(const char *s);
