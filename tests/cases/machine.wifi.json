@@ -1011,7 +1011,7 @@
     },
     {
       "case_id": "machine.wifi.robust",
-      "behavior": "the installed system keeps network A through group rekeys, and its lease through a restart of the AP, a deauthentication and a channel switch of both access points, gives the lease up with the AP gone and joins again when it is back, and a roam with an SSH session kept, moves to and from network B, and lets the cable take and give back the default route and DNS",
+      "behavior": "the installed system keeps network A through group rekeys, and its lease through a restart of the AP, a deauthentication, a rejoin with the DHCP server silent and a channel switch of both access points, gives the lease up at its end and with the AP gone and joins again when it is back, takes another subnet's address at a rejoin of the same name, and a roam with an SSH session kept, moves to and from network B, and lets the cable take and give back the default route and DNS",
       "units": [
         "wifi",
         "wpa_supplicant",
@@ -1106,6 +1106,24 @@
           "stage": "execute",
           "machine": "station",
           "does": "three times, stop the DHCP client, run wpa_action for a disconnection and for a CONNECTED a second later, as its wait sees the join, and count the clients"
+        },
+        {
+          "step_id": "silent",
+          "stage": "execute",
+          "machine": "station",
+          "does": "stop the guest's dnsmasq, deauthenticate the station from both APs of network A, wait for it to join again, wait 20 s past its renewal, and ping the AP"
+        },
+        {
+          "step_id": "expired",
+          "stage": "execute",
+          "machine": "station",
+          "does": "mark the lease ended in the file the lease script keeps, wait for the lease to be given up, resume dnsmasq and wait for a new lease"
+        },
+        {
+          "step_id": "subnet",
+          "stage": "execute",
+          "machine": "ap",
+          "does": "restart dnsmasq with a third range, move br0 to 192.168.73.1/24, deauthenticate the station, wait for its route through the new router, then move br0 back, deauthenticate it again and wait for its lease of network A"
         },
         {
           "step_id": "switch",
@@ -1286,6 +1304,31 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "silent-kept",
+          "checks": "with the DHCP server silent for 20 s across a rejoin of the same network and the renewal unanswered, the kernel recorded no loss of wlan0's IPv4 address and the AP answers a ping",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "expired",
+          "checks": "with the lease's end past and the renewal unanswered, the station gives its address and route up",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "expired-back",
+          "checks": "once the server answers again the station has a lease, its routes and server, and echoes",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "subnet",
+          "checks": "a rejoin of the same name on another subnet gives the station that subnet's address, router and server, and the new router answers a ping",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "subnet-back",
+          "checks": "a rejoin once the network is back on its first subnet gives the station that subnet's lease, routes and server, and it echoes",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "switch",
           "checks": "as network A's access points switch channels with transmit held, the station follows its own: wpa_supplicant reports the switch and no disconnection, the kernel logs it with no leave and no loss of wlan0's IPv4 address, a ping running across it is answered, and the station keeps network A's routes and server and echoes",
           "source": "scenario"
@@ -1336,7 +1379,7 @@
           "witness_id": "stage",
           "kind": "step",
           "means": "a step of the manifest has ended",
-          "limit": 14
+          "limit": 17
         }
       ],
       "bounds": {
@@ -1493,6 +1536,12 @@
           "stage": "execute",
           "machine": "station",
           "does": "rfkill unblock wifi and wait for wpa_supplicant to bring wlan0 up and join again by itself"
+        },
+        {
+          "step_id": "silent-block",
+          "stage": "execute",
+          "machine": "station",
+          "does": "stop the guest's dnsmasq, deauthenticate the station, wait 14 s past its renewal, rfkill block wifi and wait for the lease to be given up, then resume dnsmasq, unblock and wait for the lease"
         }
       ],
       "machines": [
@@ -1621,6 +1670,16 @@
           "assertion_id": "unblocked",
           "checks": "after the unblock the station joins again, with network A's routes and server, and echoes",
           "source": "scenario"
+        },
+        {
+          "assertion_id": "silent-block",
+          "checks": "a block while a rejoin's renewal has no answer gives the address and route up",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "silent-unblocked",
+          "checks": "after that block's unblock the station joins again, with network A's routes and server, and echoes",
+          "source": "scenario"
         }
       ],
       "branches": [],
@@ -1633,7 +1692,7 @@
           "witness_id": "stage",
           "kind": "step",
           "means": "a step of the manifest has ended",
-          "limit": 6
+          "limit": 7
         }
       ],
       "bounds": {
