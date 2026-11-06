@@ -55,7 +55,7 @@ int park_active(void);
 int park_waiting(void);
 void park(void);
 void wlan_cancel_work(struct wlan_work *work);
-static int park_in_cancel;          /* the parked handler's next cancel sleeps */
+static int park_in_cancel;          /* the parked handler's cancel sleeps */
 static int park_in_wait;            /* and its next wait, once it has */
 static int handler_first;           /* it wakes before the detachment */
 static struct wlan_work *cancelled; /* the work that cancel sleeps for */

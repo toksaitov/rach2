@@ -158,9 +158,9 @@ int nl80211_attach(struct wlan *wlan, struct wlan_radio *radio, const struct wla
 
 /**
  * Forget wlan: requests waiting for the worker, and those made while it
- * runs, end with -ENODEV, and its frame registrations and connection go. Call before the station's
- * work is drained, from process context under the kernel lock, not on the worker; may sleep. The
- * family stays registered.
+ * runs, end with -ENODEV, and its frame registrations and connection go.
+ * Call before the station's work is drained, from process context under the
+ * kernel lock, not on the worker; may sleep. The family stays registered.
  */
 void nl80211_detach(struct wlan *wlan);
 
