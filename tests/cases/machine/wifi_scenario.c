@@ -55,8 +55,25 @@
     "hostapd_cli -p /run/hostapd -i wlan0 deauthenticate " STATION "; " \
     "hostapd_cli -p /run/hostapd -i wlan1 deauthenticate " STATION
 
-/* The file that stands while the station's renewal has no answer. */
-#define RENEWING "/var/run/udhcpc.wlan0.renew"
+/* The station's commands that wait until the probe wpa_action started at a
+ * rejoin has ended: the action that starts it holds the lock while it
+ * writes the probe's pid, and the probe's file may outlive it. */
+#define PROBE_ENDED                                                  \
+    "flock /var/run/wpa_action.wlan0.lock true; "                    \
+    "while kill -0 $(cat /var/run/udhcpc.wlan0.probe 2> /dev/null) " \
+    "2> /dev/null; do sleep 1; done"
+
+/* The station's commands that print PROBES= and the probes that run. */
+#define PROBES "echo PROBES=$(ps | grep -c '[u]dhcpc -n -q')"
+
+/* The guest's commands that stop dnsmasq, which may be held, and start it
+ * again with the configuration %s. */
+#define DNSMASQ_AGAIN                      \
+    "pkill -CONT dnsmasq; pkill dnsmasq; " \
+    "while pkill -0 dnsmasq; do sleep 1; done; dnsmasq -C %s"
+
+/* The guest's count of the leases dnsmasq has granted the station. */
+#define ACKS "$(grep -c 'DHCPACK.* " STATION "' /run/wifiap/dnsmasq.log)"
 
 /* The enterprise network's accounts and its two certificates. */
 #define EAP_USER   "student"
@@ -778,8 +795,9 @@ static void robust_join(struct wifi *w)
 }
 
 /** The robust case's rejoins: a restart of the access points, a
- * deauthentication and a rejoin inside a renewal each leave the station's
- * lease in place, and a join seen twice at once starts one DHCP client. */
+ * deauthentication and a rejoin inside another's probe each leave the
+ * station's lease in place, and a join seen twice at once starts one DHCP
+ * client. */
 static void robust_rejoins(struct wifi *w)
 {
     char *text = NULL;
@@ -811,21 +829,24 @@ static void robust_rejoins(struct wifi *w)
     free(text);
     text = NULL;
 
-    /* Two rejoins while the server cannot answer the first's renewal:
-     * udhcpc gives its address up at a second SIGUSR1 inside the first's
-     * wait, so the second must send none. */
+    /* Two rejoins while the server cannot answer the first's probe: the
+     * second takes the first's place, and neither touches the lease. */
     net_step(&w->u, "pending");
     mark = w->sta.at;
     ap(w, NULL, "pkill -STOP dnsmasq");
-    sta(w, NULL,
+    sta(w, &text,
         "WPA_ID=$(cat /var/run/udhcpc.wlan0.net); export WPA_ID; "
         "for i in 1 2; do /etc/wpa_supplicant/wpa_action wlan0 DISCONNECTED; "
-        "/etc/wpa_supplicant/wpa_action wlan0 CONNECTED; done");
+        "/etc/wpa_supplicant/wpa_action wlan0 CONNECTED; done; " PROBES);
     ap(w, NULL, "pkill -CONT dnsmasq");
-    sta(w, NULL, "while [ -e " RENEWING " ]; do sleep 1; done");
+    sta(w, NULL, PROBE_ENDED);
     lease(w, 0);
-    net_assert(&w->u, "pending-kept", !dropped(w, mark),
-               "the station gave its lease up at a rejoin inside a renewal");
+    net_assert(&w->u, "pending-kept", !dropped(w, mark) && has(text, "PROBES=1"),
+               "the station gave its lease up at a rejoin inside a probe, or ran other "
+               "than one probe: %s",
+               text != NULL ? text : "");
+    free(text);
+    text = NULL;
 
     /* With no client running, a CONNECTED and a wait that has seen the
      * join act at the same moment, a second after the disconnection, and
@@ -847,8 +868,9 @@ static void robust_rejoins(struct wifi *w)
 
 /**
  * Stop the guest's DHCP server, have the station leave network A and join it
- * again, and wait until the station's renewal has gone `seconds` unanswered.
- * Say whether it joined and the renewal still waits.
+ * again, and wait until the probe of that rejoin has ended unanswered and
+ * `seconds` more have passed. Say whether it joined and still runs the DHCP
+ * client it ran before.
  */
 static int silent_rejoin(struct wifi *w, int seconds)
 {
@@ -858,46 +880,62 @@ static int silent_rejoin(struct wifi *w, int seconds)
 
     n = log_count(w, "CTRL-EVENT-CONNECTED");
     ap(w, NULL, "pkill -STOP dnsmasq");
+    sta(w, NULL, "cp /var/run/udhcpc.wlan0.pid /tmp/client.pid");
     ap(w, NULL, DEAUTH);
     n = n < 0 ? -1 : log_after(w, "CTRL-EVENT-CONNECTED", n);
     sta(w, &text,
-        "until [ -e " RENEWING " ]; do sleep 1; done; sleep %d; "
-        "[ -e " RENEWING " ] && echo WAI\"\"TING",
+        "while ls /var/run/wpa_action.wlan0.hold.* > /dev/null 2>&1; do sleep 1; done; " PROBE_ENDED
+        "; sleep %d; "
+        "cmp -s /var/run/udhcpc.wlan0.pid /tmp/client.pid && echo SA\"\"ME",
         seconds);
-    ok = n > 0 && has(text, "WAITING");
+    ok = n > 0 && has(text, "SAME");
     free(text);
     return ok;
 }
 
-/** The robust case's rejoin with the DHCP server silent: the address stays
- * while the lease has time left, past the 12 s udhcpc gives a renewal, and
- * goes when it has none. */
+/** The robust case's rejoin with the DHCP server silent: the client, its
+ * lease and the address stay, the probe's asking unanswered; and the end of
+ * a lease the server does not renew, which the client's own timers give
+ * up. */
 static void robust_silent(struct wifi *w)
 {
+    char *text = NULL;
     uint64_t mark;
+    long acks;
     int ok;
 
     net_step(&w->u, "silent");
     mark = w->sta.at;
     ok = silent_rejoin(w, 20);
     net_assert(&w->u, "silent-kept", ok && !dropped(w, mark) && pinged(w, GW_A) > 0,
-               "with the server silent for 20 s across a rejoin the station lost its address");
+               "with the server silent for 20 s across a rejoin the station lost its address "
+               "or its client");
 
-    /* The lease's end comes now: the client's next failed round sees it. */
+    /* A lease of two minutes, dnsmasq's shortest, which the client renews
+     * at once and the server then does not: the client's timers end it. */
     net_step(&w->u, "expired");
-    sta(w, NULL, "echo 0 > /var/run/udhcpc.wlan0.expiry");
+    mark = w->sta.at;
+    ap(w, NULL,
+       "sed '/^dhcp-range=set:a,/s/,1h$/,2m/' /etc/wifiap/dnsmasq.conf > /run/wifiap/short.conf");
+    ap(w, NULL, DNSMASQ_AGAIN, "/run/wifiap/short.conf");
+    ap(w, &text, "echo ACKS=" ACKS);
+    acks = net_number_after(text, "ACKS=");
+    free(text);
+    sta(w, NULL, "kill -USR1 $(cat /var/run/udhcpc.wlan0.pid)");
+    ap(w, NULL, "until [ " ACKS " -gt %ld ]; do sleep 1; done", acks);
+    ap(w, NULL, "pkill -STOP dnsmasq");
     unrouted(w);
-    net_assert(&w->u, "expired", dropped(w, mark),
+    net_assert(&w->u, "expired", acks >= 0 && dropped(w, mark),
                "the station kept its address past the lease's end");
-    ap(w, NULL, "pkill -CONT dnsmasq");
-    sta(w, NULL, "while [ -e " RENEWING " ]; do sleep 1; done");
+    ap(w, NULL, DNSMASQ_AGAIN, "/etc/wifiap/dnsmasq.conf");
     lease(w, 0);
     net_assert(&w->u, "expired-back", echoed(w, ENDPOINT),
                "the station did not take a lease again once the server answered");
 }
 
 /** The robust case's rejoin of network A on another subnet, whose server
- * refuses the old address, and of the first subnet again. The address the
+ * offers the rejoin's probe another address, and of the first subnet
+ * again. The address the
  * guest gives the bridge and the range it takes from dnsmasq's command line
  * move the network without a change to the guest. */
 static void robust_subnet(struct wifi *w)
@@ -1092,9 +1130,8 @@ static void case_robust(struct wifi *w)
 
 /* ---- the rfkill case (16e) ---- */
 
-/** Block the radio while a rejoin's renewal has no answer past the 12 s
- * udhcpc gives it, which gives the address up all the same, and bring the
- * station back. */
+/** Block the radio after a rejoin whose probe the server left unanswered,
+ * which gives the address up all the same, and bring the station back. */
 static void rfkill_silent(struct wifi *w)
 {
     uint64_t mark;
@@ -1107,11 +1144,11 @@ static void rfkill_silent(struct wifi *w)
     sta(w, NULL, "rfkill block wifi");
     unrouted(w);
     net_assert(&w->u, "silent-block", ok && dropped(w, mark),
-               "a block during an unanswered renewal left the address");
+               "a block after a rejoin with the server silent left the address");
     n = log_count(w, "CTRL-EVENT-CONNECTED");
     ap(w, NULL, "pkill -CONT dnsmasq");
     sta(w, NULL, "rfkill unblock wifi");
-    rejoined(w, "silent-unblocked", n, 0, "rfkill unblock after a block in a renewal");
+    rejoined(w, "silent-unblocked", n, 0, "rfkill unblock after a block with the server silent");
 }
 
 /* The most lines the block may add to LOG: wpa_supplicant's reports of the

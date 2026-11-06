@@ -1099,7 +1099,7 @@
           "step_id": "pending",
           "stage": "execute",
           "machine": "station",
-          "does": "stop the guest's dnsmasq, run the station's wpa_action for two rejoins, resume dnsmasq and wait for the renewal's answer"
+          "does": "stop the guest's dnsmasq, run the station's wpa_action for two rejoins and count its probes, resume dnsmasq and wait for the probe to end"
         },
         {
           "step_id": "one-client",
@@ -1111,13 +1111,13 @@
           "step_id": "silent",
           "stage": "execute",
           "machine": "station",
-          "does": "stop the guest's dnsmasq, deauthenticate the station from both APs of network A, wait for it to join again, wait 20 s past its renewal, and ping the AP"
+          "does": "stop the guest's dnsmasq, deauthenticate the station from both APs of network A, wait for it to join again and for its probe to end, wait 20 s, and ping the AP"
         },
         {
           "step_id": "expired",
           "stage": "execute",
           "machine": "station",
-          "does": "mark the lease ended in the file the lease script keeps, wait for the lease to be given up, resume dnsmasq and wait for a new lease"
+          "does": "start dnsmasq again with network A's leases two minutes long, have the station renew, stop dnsmasq and wait for the lease to be given up, then start dnsmasq as it was and wait for a new lease"
         },
         {
           "step_id": "subnet",
@@ -1295,7 +1295,7 @@
         },
         {
           "assertion_id": "pending-kept",
-          "checks": "a rejoin inside the wait for an earlier renewal's answer keeps the lease: the kernel recorded no loss of wlan0's IPv4 address",
+          "checks": "a rejoin while an earlier rejoin's probe still asks keeps the lease, with no loss of wlan0's IPv4 address recorded, and leaves one probe running",
           "source": "scenario"
         },
         {
@@ -1305,12 +1305,12 @@
         },
         {
           "assertion_id": "silent-kept",
-          "checks": "with the DHCP server silent for 20 s across a rejoin of the same network and the renewal unanswered, the kernel recorded no loss of wlan0's IPv4 address and the AP answers a ping",
+          "checks": "with the DHCP server silent for 20 s across a rejoin of the same network and the probe unanswered, the station keeps the DHCP client it had, the kernel recorded no loss of wlan0's IPv4 address and the AP answers a ping",
           "source": "scenario"
         },
         {
           "assertion_id": "expired",
-          "checks": "with the lease's end past and the renewal unanswered, the station gives its address and route up",
+          "checks": "with the server silent past the end of a two-minute lease, the station's DHCP client gives its address and route up by its own timers",
           "source": "scenario"
         },
         {
@@ -1320,7 +1320,7 @@
         },
         {
           "assertion_id": "subnet",
-          "checks": "a rejoin of the same name on another subnet gives the station that subnet's address, router and server, and the new router answers a ping",
+          "checks": "a rejoin of the same name on another subnet, whose probe is offered another address, gives the station that subnet's address, router and server, and the new router answers a ping",
           "source": "scenario"
         },
         {
@@ -1541,7 +1541,7 @@
           "step_id": "silent-block",
           "stage": "execute",
           "machine": "station",
-          "does": "stop the guest's dnsmasq, deauthenticate the station, wait 14 s past its renewal, rfkill block wifi and wait for the lease to be given up, then resume dnsmasq, unblock and wait for the lease"
+          "does": "stop the guest's dnsmasq, deauthenticate the station, wait for its probe to end and 14 s more, rfkill block wifi and wait for the lease to be given up, then resume dnsmasq, unblock and wait for the lease"
         }
       ],
       "machines": [
@@ -1673,7 +1673,7 @@
         },
         {
           "assertion_id": "silent-block",
-          "checks": "a block while a rejoin's renewal has no answer gives the address and route up",
+          "checks": "a block after a rejoin with the DHCP server silent gives the address and route up",
           "source": "scenario"
         },
         {
