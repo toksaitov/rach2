@@ -297,6 +297,8 @@ static void sta_log_leave(struct wlan *wlan, const struct wlan_event *ev)
                                                     : "disassociated by the AP";
     } else if (sta_of(wlan)->asked) {
         why = "asked";
+    } else if (ev->reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT) {
+        why = "key renewal not finished";
     } else {
         why = "no answer from the AP";
     }
