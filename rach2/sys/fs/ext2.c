@@ -2359,10 +2359,10 @@ static int block_in_table(void *arg, uint64_t blk)
     uint64_t table;
     uint32_t g;
 
-    if (blk < em->first_data) {
+    if (blk < em->first_data || blk >= em->blocks) {
         return 0;
     }
-    g = (uint32_t)((blk - em->first_data) / em->bpg);
+    g = ((uint32_t)blk - em->first_data) / em->bpg;
     if (g >= em->groups) {
         return 0;
     }
