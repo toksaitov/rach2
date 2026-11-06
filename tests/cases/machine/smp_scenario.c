@@ -3,15 +3,20 @@
  * processors. Cases `smpmusl-1`, `smpmusl-4` and `maxcpus-2` run smpmusl
  * with the processors each boot has; `preempt` and `usermode` run the debug
  * shell's preemption test and ring-3 payload on two; `nmi` raises an NMI on
- * both of two, which stops the machine as a fault of the machine; and
- * `build` compiles the ish sources four times over on the installed system
- * with four, and checks that every processor's user ticks grew.
+ * both of two, which stops the machine as a fault of the machine, and
+ * `exception` runs an invalid opcode in the kernel, each read on the screen
+ * after its panic; and `build` compiles the ish sources four times over on
+ * the installed system with four, and checks that every processor's user
+ * ticks grew.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "lifecycle.h"
+
+/* The VGA's text cells: 80 by 25, and two bytes each at 0xB8000. */
+#define SCREEN_CELLS (80 * 25)
 
 /* The test account's shell prompt on the installed system. */
 static const char prompt[] = "$ ";
@@ -138,12 +143,94 @@ static void usermode(struct lc *l)
 }
 
 /**
+ * Read the VGA's text cells with QMP's pmemsave into `cells`, 80 by 25
+ * characters run together and NUL-ended, so that a record that wraps is still
+ * one string. A panic that does not scroll leaves row 0 at the adapter's
+ * front. @return 1 when they were read.
+ */
+static int read_screen(struct lc *l, struct etude_case_machine *m, char *cells)
+{
+    unsigned char raw[SCREEN_CELLS * 2];
+    char args[8300], path[4096], *reply = NULL;
+    const char *ev = etude_evidence(l->c, "screen.vga");
+    enum etude_status st;
+    FILE *f;
+    size_t i, n;
+
+    if (ev == NULL || strlen(ev) >= sizeof(path)) {
+        lc_halt(l, ETUDE_FAILED, "the screen's path");
+        return 0;
+    }
+    strcpy(path, ev);
+    n = (size_t)snprintf(args, sizeof(args), "{\"val\": 753664, \"size\": %d, \"filename\": \"",
+                         SCREEN_CELLS * 2);
+    for (i = 0; path[i] != '\0' && n < sizeof(args) - 8; i++) {
+        if (path[i] == '\\' || path[i] == '"')
+            args[n++] = '\\';
+        args[n++] = path[i];
+    }
+    snprintf(args + n, sizeof(args) - n, "\"}");
+    st = etude_qmp(m, "pmemsave", args, &reply);
+    free(reply);
+    if (st != ETUDE_OK) {
+        lc_halt(l, st, "QMP's pmemsave");
+        return 0;
+    }
+    f = fopen(path, "rb");
+    n = f != NULL ? fread(raw, 1, sizeof(raw), f) : 0;
+    if (f != NULL)
+        fclose(f);
+    if (n != sizeof(raw)) {
+        lc_halt(l, ETUDE_FAILED, "the read of the screen's memory");
+        return 0;
+    }
+    for (i = 0; i < SCREEN_CELLS; i++)
+        cells[i] = raw[i * 2] != '\0' ? (char)raw[i * 2] : ' ';
+    cells[SCREEN_CELLS] = '\0';
+    return 1;
+}
+
+/**
+ * End a panicked machine: read its screen, as `panic_screen` says, while it
+ * still runs, quit it, and report `one-report` and `one-panic`, that no second
+ * `report` follows byte `reported` and no second panic byte `panicked`.
+ */
+static void read_panic_then_quit(struct lc *l, struct etude_case_machine *m, const char *cause,
+                                 const char *reason, const char *report, uint64_t reported,
+                                 uint64_t panicked)
+{
+    char cells[SCREEN_CELLS + 1], detail[SCREEN_CELLS + 64];
+    const char *at, *running = NULL, *stopped = NULL, *pc = NULL;
+
+    if (!read_screen(l, m, cells))
+        return;
+    at = strstr(cells, cause);
+    if (at != NULL) {
+        at += strlen(cause);
+        pc = strstr(at, " 0x");
+        running = strstr(at, "panic: running: pid ");
+    }
+    if (running != NULL)
+        stopped = strstr(running, "panic: stopped: ");
+    snprintf(detail, sizeof(detail), "the screen has: %s", cells);
+    lc_assert(l, "screen-cause", at != NULL && pc != NULL && (running == NULL || pc < running),
+              detail);
+    lc_assert(l, "screen-stopped",
+              stopped != NULL && strncmp(stopped + 16, reason, strlen(reason)) == 0, detail);
+    if (lc_quit(l, m, NULL)) {
+        lc_find(l, m, "screen-only", "panic: running: ", 0, 0);
+        lc_find(l, m, "one-report", report, reported, 0);
+        lc_find(l, m, "one-panic", "panic: stopped: ", panicked, 0);
+    }
+}
+
+/**
  * Run case `nmi`: QMP's inject-nmi raises an NMI on both processors at the
  * debug shell. The first to take it reports a fault of the machine and
  * panics, and the other stops without a word; the panic is recorded as the
  * boot's end, which `etude.fault` judges against the machine's declared
- * fault. Assertions `online`, `reported`, `panicked`, `halted`, `one-report`
- * and `one-panic`.
+ * fault. Assertions `online`, `reported`, `panicked`, `halted`, those of
+ * `read_panic_then_quit`.
  */
 static void nmi(struct lc *l)
 {
@@ -175,10 +262,44 @@ static void nmi(struct lc *l)
         return;
     }
     lc_halted(l, m, 2, "halted");
-    if (lc_quit(l, m, NULL)) {
-        lc_find(l, m, "one-report", "hardware fault: ", reported, 0);
-        lc_find(l, m, "one-panic", "panic: stopped: ", panicked, 0);
+    if (!lc_ok(l))
+        return;
+    read_panic_then_quit(l, m, "isr: hardware fault: non-maskable interrupt (vector 2,",
+                         "the machine reported a fault", "hardware fault: ", reported, panicked);
+}
+
+/**
+ * Run case `exception`: the debug shell's `badop` runs an invalid opcode in
+ * the kernel, which is a kernel exception, and the machine stops as in
+ * `nmi`. Assertions as `nmi`'s.
+ */
+static void exception(struct lc *l)
+{
+    struct etude_case_machine *m;
+    uint64_t at, reported, panicked;
+    enum etude_status st;
+
+    if ((m = lc_shell(l, "exception", "fixture", &at)) == NULL)
+        return;
+    online(l, m, 2);
+    if (!lc_ok(l) || !lc_type(l, m, "badop\r"))
+        return;
+    reported = at;
+    if (!lc_wait(l, m, "isr: kernel exception: invalid opcode", &reported, "reported"))
+        return;
+    panicked = reported;
+    if (!lc_wait(l, m, "panic: stopped: unrecoverable CPU exception", &panicked, "panicked"))
+        return;
+    st = etude_fault(m, ETUDE_END_PANIC);
+    if (st != ETUDE_OK) {
+        lc_halt(l, st, "the record of the kernel's panic");
+        return;
     }
+    lc_halted(l, m, 2, "halted");
+    if (!lc_ok(l))
+        return;
+    read_panic_then_quit(l, m, "isr: kernel exception: invalid opcode (vector 6,",
+                         "unrecoverable CPU exception", "kernel exception: ", reported, panicked);
 }
 
 /**
@@ -285,8 +406,9 @@ int etude_scenario(struct etude_case *c)
     static const char *const smpmusl_ids[] = {"online", "exit", "said-ok", NULL};
     static const char *const preempt_ids[] = {"online", "ended", "passed", NULL};
     static const char *const usermode_ids[] = {"online", "exit", "wrote", NULL};
-    static const char *const nmi_ids[] = {"online",     "reported",  "panicked", "halted",
-                                          "one-report", "one-panic", NULL};
+    static const char *const nmi_ids[] = {
+        "online",         "reported",    "panicked",   "halted",    "screen-cause",
+        "screen-stopped", "screen-only", "one-report", "one-panic", NULL};
     static const char *const build_ids[] = {"online", "login", "nproc", "sixteen", "grew", NULL};
     const char *name = case_name(c);
     struct lc l;
@@ -303,6 +425,9 @@ int etude_scenario(struct etude_case *c)
     } else if (strcmp(name, "nmi") == 0) {
         lc_begin(&l, c, nmi_ids);
         nmi(&l);
+    } else if (strcmp(name, "exception") == 0) {
+        lc_begin(&l, c, nmi_ids);
+        exception(&l);
     } else if (strcmp(name, "build") == 0) {
         lc_begin(&l, c, build_ids);
         build(&l);
