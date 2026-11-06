@@ -127,6 +127,22 @@ jobs:
           }
           sh ports/doom/fetch_wad.sh
 
+      # The style cases that need no build run first, so that a slip in the
+      # sources ends the run in minutes. The suite's own run has them too,
+      # beside the cases that read what the build makes.
+      - name: Check the sources before the build
+        if: ${{ inputs.suites == '' || contains(inputs.suites, ':style') }}
+        env:
+          ARCH: i686 x86_64
+        run: |
+          RACH2_CASES=
+          for c in assignments clang-format conventions cppcheck devlog links \
+              messages registry shellcheck sizes sources text waits; do
+              RACH2_CASES="$RACH2_CASES host.style.$c"
+          done
+          export RACH2_CASES
+          tests/run style
+
       - name: Build and test both architectures
         env:
           ARCH: i686 x86_64
