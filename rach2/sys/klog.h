@@ -108,6 +108,19 @@ uint32_t klog_read_from(char *buf, uint32_t cap, uint32_t *at);
  */
 void klog_deliver_directly(void);
 
+/** How many characters `klog_show_crit` would show, without its newline; 0
+ * before the first `KLOG_CRIT` record. */
+uint32_t klog_crit_len(void);
+
+/**
+ * Show the last `KLOG_CRIT` record again on the screen, and nowhere else,
+ * from the cursor and on a line of its own: for a panic, whose picture has
+ * cleared the record that says why. It takes no lock and allocates nothing.
+ * Every other `KLOG_CRIT` record but `panic: stopped:` comes just before the
+ * machine stops, so the one kept is the cause when one was logged.
+ */
+void klog_show_crit(void);
+
 /**
  * Set the lowest-priority record the screen shows.
  *

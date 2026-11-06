@@ -3033,6 +3033,7 @@ static void process_command(const char *cmd)
         console_puts("  netping             - Ping the gateway");
         console_puts("  netbad              - Ping an unreachable host (timeout demo)");
         console_puts("  fault               - Trigger page fault (panic)");
+        console_puts("  badop               - Run an invalid opcode (panic)");
         console_puts("  halt                - Halt the CPU");
         console_puts("  poweroff            - Power the machine off");
         console_puts("  reboot              - Restart the machine");
@@ -3364,6 +3365,8 @@ static void process_command(const char *cmd)
         volatile uint32_t *bad_ptr = (volatile uint32_t *)0xA0000000;
         console_puts("Triggering page fault at 0xA0000000...");
         *bad_ptr = 0xDEADBEEF;
+    } else if (str_equal(cmd, "badop")) {
+        __asm__ __volatile__(".byte 0x0f, 0x0b"); /* ud2 */
     } else if (str_equal(cmd, "halt")) {
         kernel_shutdown(POWER_HALT);
     } else if (str_equal(cmd, "poweroff")) {

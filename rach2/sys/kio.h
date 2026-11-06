@@ -66,6 +66,13 @@
  */
 void k_putc(char c);
 
+/**
+ * Forget any escape sequence or UTF-8 character that `k_putc` is part way
+ * through, which would otherwise take the bytes that come next: for a panic,
+ * which may stop a program's write between two bytes of one.
+ */
+void k_terminal_restart(void);
+
 /** The console's columns and rows, which its terminal reports as its window
  * size: 80 by 25 on the VGA's text mode, and on a framebuffer what the
  * screen holds. */

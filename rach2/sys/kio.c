@@ -958,6 +958,12 @@ static void vt_csi_byte(char c)
     }
 }
 
+void k_terminal_restart(void)
+{
+    vt_state = VT_NORMAL;
+    vt_utf_left = 0;
+}
+
 void k_console_size(unsigned int *cols, unsigned int *rows)
 {
     *cols = textcon_cols;

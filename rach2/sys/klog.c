@@ -177,6 +177,11 @@ static void klog_build(struct klog_record *r, int level, const char *subsystem, 
     r->len = (uint32_t)(build_at - r->text);
 }
 
+/* The last `KLOG_CRIT` record, kept whole beside the ring, where a record
+   from another processor could follow it, for `klog_show_crit`; its `len` is
+   0 before the first. */
+static struct klog_record last_crit;
+
 /* ---- destination 1: the ring ---- */
 
 static char ring[KLOG_RING_SIZE];
@@ -595,6 +600,9 @@ void klog_v(int level, const char *subsystem, const char *format, va_list ap)
     }
     flags = kirq_save();
     klog_build(&r, level, subsystem, format, ap);
+    if (level == KLOG_CRIT) {
+        last_crit = r;
+    }
     nested = klog_delivering || console_writing;
     if (nested) {
         pending_put(&r);
@@ -673,6 +681,24 @@ void klog_deliver_directly(void)
     klog_delivering = 0;
     console_writing = 0;
     kirq_restore(flags);
+}
+
+uint32_t klog_crit_len(void)
+{
+    return last_crit.len == 0 ? 0 : last_crit.len - last_crit.body - 1;
+}
+
+/**
+ * The screen was cleared for the panic, so no line of the console's is open
+ * on it, and the record goes to the screen alone: the other destinations
+ * have had it.
+ */
+void klog_show_crit(void)
+{
+    screen_line_open = 0;
+    if (last_crit.len != 0) {
+        dest_screen(&last_crit);
+    }
 }
 
 /**
