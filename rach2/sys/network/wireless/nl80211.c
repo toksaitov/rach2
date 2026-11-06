@@ -321,6 +321,7 @@ struct sta {
     struct reg regs[MAX_REGS];
     unsigned n_regs;
     struct hop *hops; /* requests queued or running on the worker */
+    int detaching;    /* nl80211_detach has begun: no hop is queued or run */
 };
 
 /* A request carried to the worker: run calls fn there and wakes the
@@ -701,7 +702,7 @@ static void hop_run(struct wlan_work *work)
 {
     struct hop *h = (struct hop *)work;
 
-    h->rc = h->fn(h->sta, h->arg);
+    h->rc = h->sta->detaching ? -ENODEV : h->fn(h->sta, h->arg);
     h->done = 1;
     wq_wake_all(&hop_wq);
 }
@@ -717,10 +718,11 @@ static int hop_done(void *arg)
  * return its result, sleeping until it has run. arg stays the caller's. The
  * handler must not use sta afterwards when the result is -ENODEV:
  * nl80211_detach ends a request that is waiting, or has run while its handler
- * has not yet woken, with -ENODEV and frees the station. Any other result
- * leaves sta live until the handler next sleeps. A
- * worker that failed to start is made again first; -ENOMEM when it still
- * cannot be, since no request may wait for a worker that does not exist.
+ * has not yet woken, with -ENODEV and frees the station, and refuses with
+ * -ENODEV one made or due to run once it has begun. Any other result leaves
+ * sta live until the handler next sleeps. A worker that failed to start is
+ * made again first; -ENOMEM when it still cannot be, since no request may
+ * wait for a worker that does not exist.
  */
 static int on_worker_at(struct sta *sta, hop_fn fn, void *arg, uint64_t due)
 {
@@ -730,6 +732,9 @@ static int on_worker_at(struct sta *sta, hop_fn fn, void *arg, uint64_t due)
     rc = wlan_work_start();
     if (rc) {
         return rc;
+    }
+    if (sta->detaching) {
+        return -ENODEV;
     }
     k_memset(&h, 0, sizeof(h));
     h.work.wlan = sta->wlan;
@@ -2923,7 +2928,10 @@ void nl80211_detach(struct wlan *wlan)
         }
     }
     ++generation;
-    wlan_cancel_work(&s->conn_work);
+    /* Set before the first wait, so that a handler that runs during one
+     * links no new hop, perhaps at the address of one ended here, and a hop
+     * already queued runs nothing that could queue conn_work again. */
+    s->detaching = 1;
     while (s->hops) {
         struct hop *h = s->hops;
 
@@ -2935,6 +2943,7 @@ void nl80211_detach(struct wlan *wlan)
             h->done = 1;
         }
     }
+    wlan_cancel_work(&s->conn_work);
     wq_wake_all(&hop_wq);
     kfree(s->conn);
     kfree(s);
