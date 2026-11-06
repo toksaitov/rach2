@@ -824,6 +824,121 @@ static void follow_rows(void)
     bcache_invalidate(&vast);
 }
 
+/** Dirty block `blk` of `dev` as a pointer block of `owner` at `level`. */
+static void dirty_pointer_for(block_device_t *dev, uint64_t blk, uint64_t owner, int level)
+{
+    struct bbuf *b = bcache_get_blank(dev, blk);
+
+    b->data[0] = 0xC1;
+    bcache_dirty_pointer(b, owner, level);
+    bcache_release(b);
+}
+
+/** Give the held-and-released block `blk` of `dev` the place `order`. */
+static void order_again(block_device_t *dev, uint64_t blk, int order)
+{
+    struct bbuf *b = bcache_get(dev, blk);
+
+    bcache_dirty_ordered(b, order);
+    bcache_release(b);
+}
+
+/**
+ * Check the order of pointer blocks (`bcache_dirty_pointer`) on `vast`.
+ *
+ * A sync writes owner 7's data block before the indirect block that names
+ * it and that before the double indirect block above, though their numbers
+ * run the other way, and another owner's block in block order. A pointer
+ * block does not wait for data dirtied after its last mark. The shared
+ * tree, owner 0, as a directory's, waits for the shared blocks and not a
+ * file's.
+ */
+static void pointer_order_rows(void)
+{
+    bcache_invalidate(&vast);
+    dirty_for(&vast, 72, 7, 0);
+    dirty_pointer_for(&vast, 61, 7, 1);
+    dirty_pointer_for(&vast, 50, 7, 2);
+    dirty_for(&vast, 55, 9, 0);
+    writes_made = 0;
+    check(bcache_sync(&vast) == 0 && writes_made == 4 && writes_lba[0] == 72 * 8 &&
+              writes_lba[1] == 61 * 8 && writes_lba[2] == 50 * 8 && writes_lba[3] == 55 * 8,
+          "data goes before its indirect block and that before the double indirect, by any "
+          "numbers");
+
+    dirty_pointer_for(&vast, 61, 7, 1);
+    dirty_for(&vast, 72, 7, 0);
+    writes_made = 0;
+    check(bcache_sync_block(&vast, 61) == 0 && writes_made == 1 && dirty_now(&vast, 72),
+          "a pointer block does not wait for data dirtied after its last mark");
+    bcache_sync(&vast);
+
+    dirty_for(&vast, 90, 7, 0);
+    dirty_for(&vast, 73, 0, 0);
+    dirty_pointer_for(&vast, 62, 0, 1);
+    writes_made = 0;
+    check(bcache_sync_block(&vast, 62) == 0 && writes_made == 2 && writes_lba[0] == 73 * 8 &&
+              writes_lba[1] == 62 * 8 && dirty_now(&vast, 90),
+          "a shared pointer block waits for the shared blocks and not a file's");
+    bcache_sync(&vast);
+}
+
+/**
+ * Check how a pointer block waits on `vast`. A failed data write keeps its
+ * pointer block off the device, by a sync and by a shrink, until it heals.
+ * A shrink passes over a pointer block that waits and writes what it names
+ * first. An `after` waits for a pointer block marked `first`, and that for
+ * its data. An owned mark makes a pointer block a leaf again.
+ */
+static void pointer_wait_rows(void)
+{
+    uint32_t written = 0;
+    struct bbuf *b;
+
+    dirty_for(&vast, 75, 7, 0);
+    dirty_pointer_for(&vast, 63, 7, 1);
+    fail_lba = 75 * 8;
+    check(bcache_sync(&vast) == -5 && dirty_now(&vast, 63) && dirty_now(&vast, 75),
+          "a failed data write keeps its pointer block off the device");
+    bcache_shrink(BCACHE_BUFFERS, 1, &written);
+    check(written == 0 && dirty_now(&vast, 63), "and no shrink writes it");
+    fail_lba = 0;
+    writes_made = 0;
+    check(bcache_sync(&vast) == 0 && writes_made == 2 && writes_lba[0] == 75 * 8 &&
+              writes_lba[1] == 63 * 8,
+          "once it heals they go in order");
+    vast.flags &= ~BLOCK_WRITE_FAILED;
+
+    dirty_for(&vast, 76, 7, 0);
+    dirty_pointer_for(&vast, 64, 7, 1);
+    (void)dirty_now(&vast, 76);
+    writes_made = 0;
+    written = 0;
+    bcache_shrink(BCACHE_BUFFERS, 1, &written);
+    check(written == 2 && writes_made == 2 && writes_lba[0] == 76 * 8 && writes_lba[1] == 64 * 8,
+          "a shrink passes over a waiting pointer block and writes what it names first");
+
+    dirty_for(&vast, 78, 7, 0);
+    dirty_pointer_for(&vast, 66, 7, 1);
+    order_again(&vast, 66, BCACHE_ORDER_FIRST);
+    dirty_for(&vast, 41, 0, BCACHE_ORDER_AFTER);
+    writes_made = 0;
+    check(bcache_sync_block(&vast, 41) == 0 && writes_made == 3 && writes_lba[0] == 78 * 8 &&
+              writes_lba[1] == 66 * 8 && writes_lba[2] == 41 * 8,
+          "an `after` waits for a `first` pointer block, and that for its data");
+
+    dirty_for(&vast, 77, 7, 0);
+    dirty_pointer_for(&vast, 65, 7, 1);
+    b = bcache_get(&vast, 65);
+    bcache_dirty_owned(b, 7);
+    bcache_release(b);
+    writes_made = 0;
+    check(bcache_sync_block(&vast, 65) == 0 && writes_made == 1 && dirty_now(&vast, 77),
+          "an owned mark makes a pointer block a leaf again");
+    bcache_sync(&vast);
+    bcache_invalidate(&vast);
+}
+
 /**
  * Check `bcache_reserve` on a cache of 16 buffers, emptied first.
  *
@@ -972,13 +1087,16 @@ static void barred_rows(void)
 }
 
 /** The rows of a file's own writeback, of the blocks written last and what
- * they name, of the reserve and of a reclaim after a failed write. */
+ * they name, of pointer blocks, of the reserve and of a reclaim after a
+ * failed write. */
 static void writeback_rows(void)
 {
     owned_rows();
     shared_rows();
     last_rows();
     follow_rows();
+    pointer_order_rows();
+    pointer_wait_rows();
     reserve_rows();
     barred_rows();
 }

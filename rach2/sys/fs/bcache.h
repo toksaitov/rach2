@@ -70,6 +70,9 @@ struct bbuf {
     int order;              /* BCACHE_ORDER_FIRST, BCACHE_ORDER_AFTER or 0 */
     uint64_t owner;         /* the one file this dirty block is written for,
                              * or 0 for a shared block; clear while clean */
+    int level;              /* its height among its owner's pointer blocks:
+                             * 1 names data, 0 is no pointer block; clear
+                             * while clean (`bcache_dirty_pointer`) */
     uint64_t dirtied;       /* the count of dirty marks when it last went
                              * dirty; 0 while clean */
     uint64_t touched;       /* the count at its last dirty mark */
@@ -135,7 +138,8 @@ void bcache_dirty_ordered(struct bbuf *b, int order);
 /**
  * Mark a held buffer for writeback as a block of `owner` alone, chosen by
  * the file system, such as a file's inode: its data and pointer blocks. An
- * owner of 0 makes the block shared again.
+ * owner of 0 makes the block shared again. Either way it is no pointer
+ * block (`bcache_dirty_pointer`) after the mark.
  *
  * The tag lasts until the buffer is written, and the last one given stands;
  * a later `bcache_dirty` or `bcache_dirty_ordered` leaves it and its place
@@ -146,6 +150,24 @@ void bcache_dirty_ordered(struct bbuf *b, int order);
  * with 0. Panics when the caller does not hold the buffer.
  */
 void bcache_dirty_owned(struct bbuf *b, uint64_t owner);
+
+/**
+ * Mark a held buffer for writeback as a pointer block of `owner`, as
+ * `bcache_dirty_owned` does, at `level` in its tree: 1 for a block that
+ * names data, 2 for one that names such blocks, and so on. An `owner` of 0
+ * is the tree of the shared blocks, such as a directory's.
+ *
+ * Such a block reaches the device, by any path, only after every dirty
+ * block of the same owner below its level that went dirty before its last
+ * mark, unless that one is an `after` or of the class `bcache_sync_last`
+ * names: a block's data before the pointer to it, and a pointer block
+ * before the one above it. The file system marks the children first.
+ * Eviction, the shrink, the reserve and a write after a failure treat it
+ * as they treat a block written last. The level lasts until the write or a
+ * later `bcache_dirty_owned`, which makes the block a leaf again. Panics
+ * when the caller does not hold the buffer.
+ */
+void bcache_dirty_pointer(struct bbuf *b, uint64_t owner, int level);
 
 /**
  * Write a held buffer through to the device now, in the caller's order: no

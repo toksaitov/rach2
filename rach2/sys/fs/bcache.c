@@ -341,6 +341,7 @@ static void set_clean(struct bbuf *b)
     }
     b->dirty = 0;
     b->owner = 0;
+    b->level = 0;
     b->dirtied = 0;
     ndirty--;
     if (b->dirty_prev) {
@@ -580,21 +581,32 @@ static int last_names(const struct bbuf *t, uint64_t owner)
     return !dev->sync_names || dev->sync_names(dev->sync_last_arg, t->blk, owner);
 }
 
+/** Whether `b` names other blocks, which reach the device before it: a
+ * block its device writes last, or a pointer block (`bcache_dirty_pointer`). */
+static int names_blocks(const struct bbuf *b)
+{
+    return b->level > 0 || block_last(b);
+}
+
 /** Whether `b` waits for other dirty blocks before its write: an `after`,
- * or a block its device writes last. */
+ * or a block that names others. */
 static int follows(const struct bbuf *b)
 {
-    return b->order == BCACHE_ORDER_AFTER || block_last(b);
+    return b->order == BCACHE_ORDER_AFTER || names_blocks(b);
 }
 
 /**
  * Whether the dirty block `d` must reach the device before `b`, which
  * `follows`, with `last` saying whether `b` is a block written last. Only a
  * block dirty since before `b`'s last mark can be what that mark wrote into
- * `b`: a `first` before an `after`, and before a block written last any
- * block it may name, one not of its class nor an `after`, shared or of an
- * owner the block names. The chains end there: what a block written last
- * waits for waits for nothing, and a `first` waits for that alone.
+ * `b`: a `first` before an `after`; before a block written last any block
+ * it may name, one not of its class nor an `after`, shared or of an owner
+ * the block names; and before a pointer block that is no `after` a block of
+ * its owner below its level, of neither class.
+ *
+ * Each rule leads to a higher rank: a pointer block's level, then the class
+ * written last, then the `after` class. So a chain of waits has at most
+ * six blocks and never comes back to one.
  */
 static int must_precede(const struct bbuf *d, const struct bbuf *b, int last)
 {
@@ -604,8 +616,13 @@ static int must_precede(const struct bbuf *d, const struct bbuf *b, int last)
     if (b->order == BCACHE_ORDER_AFTER && d->order == BCACHE_ORDER_FIRST) {
         return 1;
     }
-    return last && d->order != BCACHE_ORDER_AFTER && !block_last(d) &&
-           (d->owner == 0 || last_names(b, d->owner));
+    if (d->order == BCACHE_ORDER_AFTER || block_last(d)) {
+        return 0;
+    }
+    if (last) {
+        return d->owner == 0 || last_names(b, d->owner);
+    }
+    return b->order != BCACHE_ORDER_AFTER && d->owner == b->owner && d->level < b->level;
 }
 
 /** The earliest dirtied block that must reach the device before the dirty
@@ -643,10 +660,10 @@ static struct bbuf *way_to(const struct bbuf *b)
 
 /** Whether a write of `b` is kept from an eviction, a shrink or a reserve:
  * its own last write failed, or a write of its device did and it is a block
- * that device wants written last, which may name the block that failed. */
+ * that names others, which may name the block that failed. */
 static int write_barred(const struct bbuf *b)
 {
-    return b->write_failed || ((b->dev->flags & BLOCK_WRITE_FAILED) && block_last(b));
+    return b->write_failed || ((b->dev->flags & BLOCK_WRITE_FAILED) && names_blocks(b));
 }
 
 /** Whether a write of `scope` leaves `b` for a later one: the reclaim's
@@ -942,8 +959,8 @@ struct first_ask {
 /**
  * Whether a miss for a block of `filling` may take `b`. Not one that is held
  * or kept for a fill, nor a dirty one whose last write failed, whose write
- * the caller may not make (`victim_may_be_written`), a block written last
- * that waits for another (`way_to`), or an `after` whose device has a
+ * the caller may not make (`victim_may_be_written`), a block that names
+ * others and waits for one (`way_to`), or an `after` whose device has a
  * `first` that cannot be written now.
  */
 static int victim_fit(const struct bbuf *b, block_device_t *filling, struct first_ask *ask)
@@ -957,7 +974,7 @@ static int victim_fit(const struct bbuf *b, block_device_t *filling, struct firs
     if (write_barred(b) || !victim_may_be_written(b->dev, filling)) {
         return 0;
     }
-    if (block_last(b) && way_to(b)) {
+    if (names_blocks(b) && way_to(b)) {
         return 0;
     }
     if (b->order != BCACHE_ORDER_AFTER) {
@@ -1004,7 +1021,7 @@ static struct bbuf *victim_find(block_device_t *filling)
 
 /**
  * Whether one of `dev`'s dirty `first` buffers cannot be written now: held,
- * barred (`write_barred`), or a block written last that waits for another.
+ * barred (`write_barred`), or a block that names others and waits for one.
  * An `after` buffer of the device is then not a victim, since its write
  * might pass the first: a reclaim does not ask which firsts it follows.
  */
@@ -1015,7 +1032,7 @@ static int firsts_pending(const block_device_t *dev)
     for (b = dirties; b; b = b->dirty_next) {
         stat_visits++;
         if (b->dev == dev && b->dirty && b->order == BCACHE_ORDER_FIRST &&
-            (b->holder != -1 || write_barred(b) || (block_last(b) && way_to(b)))) {
+            (b->holder != -1 || write_barred(b) || (names_blocks(b) && way_to(b)))) {
             return 1;
         }
     }
@@ -1029,7 +1046,7 @@ static int firsts_pending(const block_device_t *dev)
  * -errno, which marks that buffer and leaves the rest. Every write sleeps,
  * so the scan starts over after each one. A barred buffer (`write_barred`),
  * which may become barred while an earlier write sleeps, is left, and so is
- * a block written last that waits for another.
+ * a block that names others and waits for one.
  */
 static int write_firsts(block_device_t *dev)
 {
@@ -1042,7 +1059,7 @@ again:
 
         stat_visits++;
         if (b->dev != dev || !b->dirty || b->order != BCACHE_ORDER_FIRST || b->holder != -1 ||
-            write_barred(b) || (block_last(b) && way_to(b))) {
+            write_barred(b) || (names_blocks(b) && way_to(b))) {
             continue;
         }
         rc = write_one(b, 0);
@@ -1302,6 +1319,15 @@ void bcache_dirty_owned(struct bbuf *b, uint64_t owner)
     bcache_dirty(b);
     if (b) {
         b->owner = owner;
+        b->level = 0;
+    }
+}
+
+void bcache_dirty_pointer(struct bbuf *b, uint64_t owner, int level)
+{
+    bcache_dirty_owned(b, owner);
+    if (b) {
+        b->level = level;
     }
 }
 
@@ -1775,7 +1801,7 @@ static struct bbuf *shrink_dirty(void)
         if (write_barred(b) || !victim_may_be_written(b->dev, 0)) {
             continue;
         }
-        if ((block_last(b) && way_to(b)) ||
+        if ((names_blocks(b) && way_to(b)) ||
             (b->order == BCACHE_ORDER_AFTER && firsts_pending(b->dev))) {
             continue;
         }
