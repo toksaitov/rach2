@@ -32,7 +32,7 @@
         {"assertion_id": "layout", "checks": "the sealed disk's boot and recovery partitions are each 64 MiB at a mebibyte boundary", "source": "scenario"},
         {"assertion_id": "usb", "checks": "the stick boots by USB, and its mounted volume has the sealed disk and the root image at its length", "source": "scenario"},
         {"assertion_id": "saved", "checks": "the stick boots by IDE, its volume has room for both partitions, and each is saved to it whole", "source": "scenario"},
-        {"assertion_id": "update", "checks": "`rach2-install --update` from the stick keeps the group the root had, a file in root's home with its mode 600 and the root's /etc/vconsole.conf, and removes the file the image lacks", "source": "scenario"},
+        {"assertion_id": "update", "checks": "`rach2-install --update` from the stick keeps the group the root had, a file in root's home with its mode 600, the root's /etc/vconsole.conf, its saved networks with their mode 600 and its kept mixer levels, and removes the file the image lacks", "source": "scenario"},
         {"assertion_id": "armed", "checks": "the update leaves recovery as the saved entry and the candidate as the next", "source": "scenario"},
         {"assertion_id": "menu-kept", "checks": "an update without --console keeps grub.cfg byte for byte", "source": "scenario"},
         {"assertion_id": "console-menu", "checks": "two --console term updates give each installed-root line one token, keep recovery lines byte for byte, and leave the same menu after the second update", "source": "scenario"},
