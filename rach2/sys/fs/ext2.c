@@ -610,7 +610,8 @@ static int em_admitting(void *arg)
  * It may hold node locks while it waits, so an admitted writer takes no
  * lock beyond those it held when it was admitted, but a new or dying
  * inode's: the remount waits for every admitted writer, and one that slept
- * on a lock held by a writer that waits here would never end.
+ * on a lock held by a writer that waits here would never end. A change of
+ * one file, which not every caller locks, is admitted by `em_enter_node`.
  */
 static void em_enter(struct ext2_mount *em)
 {
@@ -618,6 +619,14 @@ static void em_enter(struct ext2_mount *em)
         wq_wait_event_nointr(&em->node_wq, em_admitting, em);
     }
     em->writers++;
+}
+
+/** Take node `n`'s lock, which the caller may hold already, and admit a
+ * writer of it, in that order (`em_enter`). */
+static void em_enter_node(struct ext2_mount *em, struct ext2_node *n)
+{
+    node_lock(n);
+    em_enter(em);
 }
 
 /** End a writer `em_enter` admitted, waking a remount that waits for the
@@ -5487,9 +5496,10 @@ static int writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t 
  * the caller holds the file's lock, or another, which this cannot give
  * back, the write ends short at that piece, 0 bytes for the first, and the
  * caller brings the page in (`user_refault`). Returns the bytes accepted,
- * -EISDIR, -EFBIG, -EROFS, -ENOSPC, -EFAULT, or -errno.
+ * -EISDIR, -EFBIG, -EROFS, -ENOSPC, -EFAULT, or -errno. The caller holds the
+ * node's lock.
  */
-static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
+static int32_t file_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                           uint64_t offset)
 {
     struct ext2_mount *em = em_of(mnt);
@@ -5508,7 +5518,6 @@ static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, 
     if (offset > em->file_limit || count > em->file_limit - offset) {
         return past_limit(em, "write", offset);
     }
-    node_lock(n);
     assert_node_locked(n);
 again:
     wb = em->wb;
@@ -5581,8 +5590,20 @@ out:
     if (rc == -EIO && em->wb && em->wb->count) {
         (void)writeback_error(em, rc);
     }
-    node_unlock(n);
     return done ? (int32_t)done : rc;
+}
+
+/** `file_write` under the lock of node `handle`, which the caller may hold
+ * already. */
+static int32_t ext2_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
+                          uint64_t offset)
+{
+    int32_t n;
+
+    node_lock(handle);
+    n = file_write(mnt, handle, buf, count, offset);
+    node_unlock(handle);
+    return n;
 }
 
 /**
@@ -7576,37 +7597,46 @@ static void em_finish(struct ext2_mount *em)
     em_reap(em);
 }
 
-/** The `setattr` of `vfs_ops`: `ext2_setattr`, admitted. */
+/** End an operation `em_enter_node` admitted, with the lock it took. */
+static void em_finish_node(struct ext2_mount *em, struct ext2_node *n)
+{
+    em_leave(em);
+    node_unlock(n);
+    em_reap(em);
+}
+
+/** The `setattr` of `vfs_ops`: `ext2_setattr`, admitted under the node's lock. */
 static int admit_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
     int rc;
 
-    em_enter(em_of(mnt));
+    em_enter_node(em_of(mnt), node);
     rc = ext2_setattr(mnt, node, what, st);
-    em_finish(em_of(mnt));
+    em_finish_node(em_of(mnt), node);
     return rc;
 }
 
-/** The `write` of `vfs_ops`: `ext2_write`, admitted. */
+/** The `write` of `vfs_ops`: `file_write`, admitted under the node's lock. */
 static int32_t admit_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t count,
                            uint64_t offset)
 {
     int32_t rc;
 
-    em_enter(em_of(mnt));
-    rc = ext2_write(mnt, handle, buf, count, offset);
-    em_finish(em_of(mnt));
+    em_enter_node(em_of(mnt), handle);
+    rc = file_write(mnt, handle, buf, count, offset);
+    em_finish_node(em_of(mnt), handle);
     return rc;
 }
 
-/** The `truncate` of `vfs_ops`: `ext2_truncate`, admitted. */
+/** The `truncate` of `vfs_ops`: `ext2_truncate`, admitted under the node's
+ * lock. */
 static int admit_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
 {
     int rc;
 
-    em_enter(em_of(mnt));
+    em_enter_node(em_of(mnt), handle);
     rc = ext2_truncate(mnt, handle, size);
-    em_finish(em_of(mnt));
+    em_finish_node(em_of(mnt), handle);
     return rc;
 }
 
@@ -7701,15 +7731,16 @@ static int admit_mknod(struct vfs_mount *mnt, void *dir, const char *name, uint3
     return rc;
 }
 
-/** The `fallocate` of `vfs_ops`: `ext2_fallocate`, admitted. */
+/** The `fallocate` of `vfs_ops`: `ext2_fallocate`, admitted under the node's
+ * lock. */
 static int admit_fallocate(struct vfs_mount *mnt, void *handle, uint32_t mode, uint64_t offset,
                            uint64_t length)
 {
     int rc;
 
-    em_enter(em_of(mnt));
+    em_enter_node(em_of(mnt), handle);
     rc = ext2_fallocate(mnt, handle, mode, offset, length);
-    em_finish(em_of(mnt));
+    em_finish_node(em_of(mnt), handle);
     return rc;
 }
 
