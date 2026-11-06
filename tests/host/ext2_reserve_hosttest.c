@@ -207,22 +207,6 @@ uint32_t timer_now_us(void)
     return 0;
 }
 
-/** Take the namespace lock for the test's process, recursively. */
-void vfs_ns_lock(struct vfs_mount *mnt)
-{
-    mnt->ns.holder = (int)process.pid;
-    mnt->ns.depth++;
-}
-
-/** Release one level of the namespace lock; a release with none held fails. */
-void vfs_ns_unlock(struct vfs_mount *mnt)
-{
-    check(mnt->ns.depth > 0, "namespace lock is balanced");
-    if (--mnt->ns.depth == 0) {
-        mnt->ns.holder = -1;
-    }
-}
-
 /** Whether block `block` is in the cache, as the model says; a block it
  * lacks asked by the planner counts in `misses`. */
 int bcache_cached(block_device_t *dev, uint64_t block)
@@ -405,6 +389,8 @@ static void reset(uint32_t available)
     mount.priv = &volume;
     mount.ns.holder = -1;
     em_locks_init(&volume);
+    sleep_lock_init(&file.lock, &node_record, SLEEP_LOCK_FILE);
+    sleep_lock_init(&other.lock, &node_record, SLEEP_LOCK_FILE);
     volume.alloc_hint = 0;
     file.ino = 12;
     file.mode = S_IFREG_ | 0600;
@@ -444,6 +430,7 @@ static void boundary_rows(void)
         before = file;
         k_memcpy(saved, disk, sizeof(saved));
         rc = ext2_write(&mount, &file, payload, sizeof(payload), offset);
+        before.lock = file.lock; /* its place counters move with each take */
         check(rc == -ENOSPC && writes == 0 && volume.free_blocks == 8 + rows[i].needed - 1 &&
                   memcmp(&before, &file, sizeof(file)) == 0 &&
                   memcmp(saved, disk, sizeof(saved)) == 0 && batch.count == 0,
@@ -507,7 +494,8 @@ static void reservation_rows(void)
     int metas, datas;
 
     reset(11);
-    vfs_ns_lock(&mount);
+    node_lock(&file);
+    meta_lock(&volume);
     check(writeback_piece(&volume, &file, 0, payload, 4096) == 0, "accept an earlier piece");
     before = file;
     remaining = (uint32_t)volume.free_blocks;
@@ -521,15 +509,18 @@ static void reservation_rows(void)
     check(writeback_drain(&volume) == 0 && read_data(&volume, &file, 0, result, 4096) == 0 &&
               memcmp(result, payload, 4096) == 0,
           "earlier piece survives a refused reservation");
-    vfs_ns_unlock(&mount);
+    meta_unlock(&volume);
+    node_unlock(&file);
 
     reset(2);
     process.euid = 0;
-    vfs_ns_lock(&mount);
+    node_lock(&file);
+    meta_lock(&volume);
     check(writeback_piece(&volume, &file, (uint64_t)1036 * 4096, payload, 4096) == -ENOSPC &&
               volume.free_blocks == 2 && batch.count == 0,
           "root cannot reserve more blocks than are free");
-    vfs_ns_unlock(&mount);
+    meta_unlock(&volume);
+    node_unlock(&file);
 }
 
 /** Whether block `b`'s bit is set in the model disk's block bitmap. */
@@ -585,14 +576,16 @@ static void held_block_rows(void)
     check(ext2_write(&mount, &file, payload, 4096, 0) == 4096 && batch.count == 1,
           "a pending piece holds the inode table's block");
     other.size = 77;
-    vfs_ns_lock(&mount);
+    node_lock(&other);
     check(inode_store(&volume, &other) == 0, "another inode of that block is stored");
+    node_unlock(&other);
     im = writeback_find(&volume, 4);
     check(im && le16(im->data + at) == other.mode && le32(im->data + at + 4) == 77,
           "into the batch's image as well as the cache");
+    meta_lock(&volume);
     check(alloc_block(&volume, volume.alloc_hint, &b) == 0 && b == TEST_BLOCKS - 19,
           "a block is allocated beside the batch's reservation");
-    vfs_ns_unlock(&mount);
+    meta_unlock(&volume);
     check(writeback_drain(&volume) == 0, "the batch drains");
     check(le16(disk[4] + at) == other.mode && le32(disk[4] + at + 4) == 77 &&
               le32(disk[4] + (file.ino - 1) * 128 + 4) == 4096,
@@ -618,7 +611,9 @@ static void drain_reserve_row(void)
 /* The nested punch's file, freed while the outer punch fetches a bitmap. */
 static void punch_other(void)
 {
+    node_lock(&other);
     check(punch(&volume, &other, 0) == 0, "the nested punch frees its blocks");
+    node_unlock(&other);
 }
 
 /**
@@ -642,9 +637,9 @@ static void overlap_punch_row(void)
     k_memset(unordered, 0, sizeof(unordered));
     uncached[2] = 1;
     fetch_hook = punch_other;
-    vfs_ns_lock(&mount);
+    node_lock(&file);
     check(punch(&volume, &file, 0) == 0 && !fetch_hook, "the outer punch frees its blocks");
-    vfs_ns_unlock(&mount);
+    node_unlock(&file);
     check(volume.free_blocks == 20 && le16(disk[1] + 12) == 20 && file.blocks == 0 &&
               other.blocks == 0,
           "and the counts are whole");
