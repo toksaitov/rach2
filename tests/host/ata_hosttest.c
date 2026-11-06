@@ -671,6 +671,10 @@ int wq_active(const wait_queue_t *wq)
 
 #include "../../rach2/sys/block/ata.c"
 
+/** The caller, whose sleeps `ata_count_wait` counts. */
+static process_t caller;
+struct percpu cpu_table[NR_CPUS] = {{.current = &caller}};
+
 /** The channel's bounce buffer. */
 static uint8_t *model_bounce(void)
 {

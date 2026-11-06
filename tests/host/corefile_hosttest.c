@@ -1527,7 +1527,7 @@ static int32_t append_across_refault(uint32_t first, uint32_t grown)
     grown_len = grown;
     self.rlim[RLIM_FSIZE].cur = APPEND_LIMIT;
     vfs_node_lock(&ref);
-    n = file_write_pieces(&entry, &ref, 1, 0, (const char __user *)buf, sizeof(buf), &pos);
+    n = file_write_pieces(&entry, &ref, 0, (const char __user *)buf, sizeof(buf), &pos);
     vfs_node_unlock(&ref);
     self.rlim[RLIM_FSIZE].cur = was;
     check(grown_len == 0, "the append brought its buffer in once");
