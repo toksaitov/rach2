@@ -162,14 +162,23 @@ static int tkip_open(struct wlan_data_key *k, uint8_t *frame, unsigned *len, uns
  * count of the key k replaced. An AP that encrypts what it had queued with
  * the new key sends such a number just before it starts again from 1: taken,
  * it would set k's counter far ahead of the AP's, and every frame would be a
- * replay until the AP caught up. A true number of k cannot lie this far past
- * k's counter unless a window of frames was lost, and then only for the
- * seconds of WLAN_DATA_REKEY_SETTLE.
+ * replay until the AP caught up. The sender keeps one count across TIDs (tx.c
+ * as well), so the distance is from the highest number seen on any: a true
+ * number of k cannot lie this far past it unless a window of frames was lost,
+ * and then only for the seconds of WLAN_DATA_REKEY_SETTLE.
  */
-static int pn_of_old_key(const struct wlan_data_key *k, uint64_t pn, unsigned idx)
+static int pn_of_old_key(const struct wlan_data_key *k, uint64_t pn)
 {
-    return tick_count() < k->old_until && pn > k->key.rx_pn[idx] + WLAN_DATA_REKEY_JUMP &&
-           pn + WLAN_DATA_REKEY_NEAR > k->old_pn && pn <= k->old_pn + WLAN_DATA_REKEY_NEAR;
+    uint64_t high = 0;
+    unsigned tid;
+
+    if (tick_count() >= k->old_until)
+        return 0;
+    for (tid = 0; tid < WLAN_NUM_TIDS; tid++)
+        if (k->key.rx_pn[tid] > high)
+            high = k->key.rx_pn[tid];
+    return pn > high + WLAN_DATA_REKEY_JUMP && pn + WLAN_DATA_REKEY_NEAR > k->old_pn &&
+           pn <= k->old_pn + WLAN_DATA_REKEY_NEAR;
 }
 
 static int rx_decrypt(struct wlan_data *d, uint8_t *frame, unsigned *len, unsigned hdrlen,
@@ -214,7 +223,7 @@ static int rx_decrypt(struct wlan_data *d, uint8_t *frame, unsigned *len, unsign
         d->counters->rx_replays++;
         return -ESTALE;
     }
-    if (!group && pn_of_old_key(k, c->pn, idx)) {
+    if (!group && pn_of_old_key(k, c->pn)) {
         d->counters->rx_dropped++;
         return -ESTALE;
     }

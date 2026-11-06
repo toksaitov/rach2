@@ -947,8 +947,9 @@ static unsigned got_sn(unsigned i)
     return ((unsigned)got[i % 8][22] | (unsigned)got[i % 8][23] << 8) >> 4;
 }
 
-/** A frame the radio opened, stripped, under key slot `slot` with `pn`. */
-static int rx_opened(unsigned sn, int slot, uint64_t pn)
+/** A frame of `tid` the radio opened, stripped, under key slot `slot` with
+ * `pn`. */
+static int rx_opened_tid(unsigned tid, unsigned sn, int slot, uint64_t pn)
 {
     uint8_t f[200], body[40];
     struct wlan_rx_status hw = rxs;
@@ -958,8 +959,14 @@ static int rx_opened(unsigned sn, int slot, uint64_t pn)
     hw.hw_key = slot;
     hw.pn = pn;
     payload(body, sizeof(body), sn);
-    len = ap_frame(f, sta, 1, 0, sn, 0, 0, body, sizeof(body));
+    len = ap_frame(f, sta, 1, tid, sn, 0, 0, body, sizeof(body));
     return wlan_data_rx(d, f, len, &hw);
+}
+
+/** A frame of TID 0 the radio opened; as rx_opened_tid. */
+static int rx_opened(unsigned sn, int slot, uint64_t pn)
+{
+    return rx_opened_tid(0, sn, slot, pn);
 }
 
 /** A pairwise key replaced with frames under way: one the radio opened
@@ -992,18 +999,38 @@ static void check_rekey_slot(void)
     CHECK(counters.rx_dropped == n + 1 && counters.rx_replays == 0);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 0);
     /* The AP's queue, the old count under the new key, moves no counter. */
-    CHECK(rx_opened(104, 1, 445) == -ESTALE && n_got == 3);
-    CHECK(counters.rx_dropped == n + 2 && counters.rx_replays == 0);
+    CHECK(rx_opened(105, 1, 445) == -ESTALE && n_got == 3);
+    CHECK(rx_opened(106, 1, 446) == -ESTALE && n_got == 3);
+    CHECK(counters.rx_dropped == n + 3 && counters.rx_replays == 0);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 0);
-    CHECK(rx_opened(105, 1, 1) == 0 && n_got == 4);
-    CHECK(rx_opened(106, 1, 2) == 0 && n_got == 5);
+    CHECK(rx_opened(107, 1, 1) == 0 && n_got == 4);
+    CHECK(rx_opened(108, 1, 2) == 0 && n_got == 5);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 2);
     /* A true replay under the new key stays one. */
-    CHECK(rx_opened(107, 1, 2) == -ESTALE && counters.rx_replays == 1);
+    CHECK(rx_opened(109, 1, 2) == -ESTALE && counters.rx_replays == 1);
     /* Once the AP's queue has gone, a number that far on is the new key's. */
     now += WLAN_DATA_REKEY_SETTLE;
-    CHECK(rx_opened(107, 1, 446) == 0 && n_got == 6);
+    CHECK(rx_opened(110, 1, 446) == 0 && n_got == 6);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 446);
+}
+
+/** The sender's count is shared across TIDs: a TID's first frame under the
+ * new key follows the count that another TID has carried, and is taken. */
+static void check_rekey_tids(void)
+{
+    unsigned i, n;
+
+    setup(1);
+    takes_keys = 1;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
+    CHECK(rx_opened_tid(0, 100, 0, 443) == 0);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    for (i = 1; i < 200; ++i)
+        CHECK(rx_opened_tid(1, i, 1, i) == 0);
+    n = n_got;
+    CHECK(rx_opened_tid(0, 101, 1, 200) == 0 && n_got == n + 1);
+    CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 200);
+    CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[1] == 199);
 }
 
 /** BlockAck: ADDBA answered, reordering, BlockAckReq, a moved window, the
@@ -1292,6 +1319,7 @@ int main(void)
     check_rekey();
     check_blockack();
     check_rekey_slot();
+    check_rekey_tids();
     check_mgmt();
     check_amsdu();
     check_rates();
