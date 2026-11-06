@@ -190,15 +190,28 @@ static int read_screen(struct lc *l, struct etude_case_machine *m, char *cells)
     return 1;
 }
 
+/** The lines of one panic on the screen and in the log. */
+struct panic_text {
+    const char *cause;  /* the report's text up to its address */
+    const char *reason; /* what follows `panic: stopped: ` */
+    const char *report; /* the report as the log has it */
+};
+
+static const struct panic_text nmi_text = {"isr: hardware fault: non-maskable interrupt (vector 2,",
+                                           "the machine reported a fault", "hardware fault: "};
+static const struct panic_text exception_text = {"isr: kernel exception: invalid opcode (vector 6,",
+                                                 "unrecoverable CPU exception",
+                                                 "kernel exception: "};
+
 /**
  * End a panicked machine: read its screen, as `panic_screen` says, while it
  * still runs, quit it, and report `one-report` and `one-panic`, that no second
  * `report` follows byte `reported` and no second panic byte `panicked`.
  */
-static void read_panic_then_quit(struct lc *l, struct etude_case_machine *m, const char *cause,
-                                 const char *reason, const char *report, uint64_t reported,
-                                 uint64_t panicked)
+static void read_panic_then_quit(struct lc *l, struct etude_case_machine *m,
+                                 const struct panic_text *t, uint64_t reported, uint64_t panicked)
 {
+    const char *cause = t->cause, *reason = t->reason, *report = t->report;
     char cells[SCREEN_CELLS + 1], detail[SCREEN_CELLS + 64];
     const char *at, *running = NULL, *stopped = NULL, *pc = NULL;
 
@@ -264,8 +277,7 @@ static void nmi(struct lc *l)
     lc_halted(l, m, 2, "halted");
     if (!lc_ok(l))
         return;
-    read_panic_then_quit(l, m, "isr: hardware fault: non-maskable interrupt (vector 2,",
-                         "the machine reported a fault", "hardware fault: ", reported, panicked);
+    read_panic_then_quit(l, m, &nmi_text, reported, panicked);
 }
 
 /**
@@ -298,8 +310,7 @@ static void exception(struct lc *l)
     lc_halted(l, m, 2, "halted");
     if (!lc_ok(l))
         return;
-    read_panic_then_quit(l, m, "isr: kernel exception: invalid opcode (vector 6,",
-                         "unrecoverable CPU exception", "kernel exception: ", reported, panicked);
+    read_panic_then_quit(l, m, &exception_text, reported, panicked);
 }
 
 /**
