@@ -668,6 +668,7 @@ static int assoc_success(struct wlan_mlme *m, const uint8_t *f, const struct iee
     m->probes = 0;
     m->poll_cookie = 0;
     m->missed_beacons = 0;
+    m->ds_number = 0;
     arm(m, m->last_beacon + loss_ms(m));
     return 0;
 }
@@ -896,14 +897,36 @@ static int csa_elems(struct wlan_mlme *m, const uint8_t *ies, unsigned len)
     return e != 0;
 }
 
+/**
+ * Follow an AP that moved without announcing it, as an access point on
+ * automatic channel selection does: from the next channel its beacons are
+ * still heard, and their DS Parameter Set names where it is, while its ACKs
+ * reach the station too seldom for the link to work or to fail. Only a
+ * change away from the station's channel counts, so that an AP whose element
+ * was wrong from the start is left alone.
+ */
+static void ds_elem(struct wlan_mlme *m, const uint8_t *ies, unsigned len)
+{
+    const uint8_t *e = find_elem(ies, len, WLAN_EID_DS_PARAMS, 1);
+    unsigned was = m->ds_number;
+
+    if (!e || !m->channel)
+        return;
+    m->ds_number = e[0];
+    if (was == m->channel->number && e[0] != was && !m->csa_channel)
+        csa_note(m, 0, e[0], 0);
+}
+
 /** Read the current AP's beacon or probe response for a switch it
- * announces; a beacon without one calls off the switch under way. */
+ * announces, or one it made; a beacon without an announcement calls off the
+ * switch under way. */
 static void csa_beacon(struct wlan_mlme *m, const uint8_t *f, unsigned len, unsigned stype)
 {
     if (m->state < WLAN_STA_ASSOCIATED || !from_bss(m, f) || len < HDR + 12)
         return;
     if (!csa_elems(m, f + HDR + 12, len - HDR - 12) && stype == IEEE80211_STYPE_BEACON)
         csa_cancel(m);
+    ds_elem(m, f + HDR + 12, len - HDR - 12);
 }
 
 /**

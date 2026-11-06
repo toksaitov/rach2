@@ -1192,6 +1192,29 @@ static void channel_switch(void)
     channel_switch_timed();
 }
 
+/** An AP that moves unannounced is followed by its DS Parameter Set, from
+ * the first beacon that names another channel; one whose element was wrong
+ * from the start stays where it was heard. */
+static void channel_moved(void)
+{
+    static const uint8_t ds1 = 1, ds6 = 6;
+
+    reset();
+    connect_a(0);
+    moves = 0;
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds1, 1) == 0 && moves == 0);
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds6, 1) == 0);
+    CHECK(followed(2437) && moves == 1);
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds6, 1) == 0 && moves == 1);
+
+    reset();
+    connect_a(0);
+    moves = 0;
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds6, 1) == 0 && moves == 0);
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_DS_PARAMS, &ds6, 1) == 0 && moves == 0);
+    CHECK(configured == 2412);
+}
+
 /** Stopping drops every state without frames or events. */
 static void stopping(void)
 {
@@ -1217,6 +1240,7 @@ int main(void)
     sae_exchange();
     sae_endings();
     channel_switch();
+    channel_moved();
     stopping();
     if (failures)
         return 1;

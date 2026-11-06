@@ -140,7 +140,8 @@ struct wlan_mlme {
      * channel it names, NULL for none, and the tick the switch is due. */
     const struct wlan_channel *csa_channel;
     uint64_t csa_at;
-    int csa_hold; /* the announcement's mode 1 holds the data path's transmit */
+    int csa_hold;       /* the announcement's mode 1 holds the data path's transmit */
+    unsigned ds_number; /* the AP's channel by its last DS Parameter Set, or 0 */
     struct wlan_mlme_timer timer[2];
     /* The last authentication or association request: retries send it
      * again, and nl80211 may report its elements with the association. */
