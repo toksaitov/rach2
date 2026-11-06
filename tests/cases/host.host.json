@@ -1103,13 +1103,13 @@
       "bounds": {
         "case": {
           "floor_us": 1000000,
-          "initial_us": 1800000000,
-          "ceiling_us": 3600000000
+          "initial_us": 5400000000,
+          "ceiling_us": 7200000000
         },
         "gap": {
           "floor_us": 1000000,
-          "initial_us": 1800000000,
-          "ceiling_us": 3600000000
+          "initial_us": 5400000000,
+          "ceiling_us": 7200000000
         },
         "stages": {
           "boot": {
