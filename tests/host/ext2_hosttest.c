@@ -312,6 +312,9 @@ static uint64_t host_ticks;
 
 /** The tick count, one more at each look, so that a wait with a deadline
  * ends after a bounded number of turns. */
+void sched_service_point(void)
+{}
+
 uint64_t tick_count(void)
 {
     return ++host_ticks;

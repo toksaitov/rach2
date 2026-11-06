@@ -223,6 +223,9 @@ uint32_t timer_now_us(void)
 
 /** Return 0: no row closes the mount, whose wait for its writers alone
  * reads the clock. */
+void sched_service_point(void)
+{}
+
 uint64_t tick_count(void)
 {
     return 0;

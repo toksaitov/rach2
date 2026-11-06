@@ -51,6 +51,7 @@
 #include "../lib/kstring.h"
 #include "../panic.h"
 #include "../proc/process.h"
+#include "../proc/sched.h"
 #include "../rtc.h"
 #include "../timer.h"
 #include "bcache.h"
@@ -3951,8 +3952,10 @@ static int writeback_keeps(struct ext2_mount *em, const struct ext2_node *n)
  * blocks for e2fsck, and the free counts stay exact. A device that failed a
  * write is -EIO and not written to again: the blocks go to the cache first
  * and would reach the device at the sync that ends the round, past the check
- * a write through makes. The caller holds `n`'s lock and not `em->meta`. 0,
- * or -errno.
+ * a write through makes. A round ends at a service point, since a file of
+ * gigabytes in the cache frees with no sleep and what is ready on the
+ * processor waits for it. The caller holds `n`'s lock and not `em->meta`.
+ * 0, or -errno.
  */
 static int punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
 {
@@ -3994,6 +3997,7 @@ static int punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
         if (err != 0 && rc >= 0) {
             rc = err;
         }
+        sched_service_point();
     } while (rc == PUNCH_FULL);
     if (list.blocks != small) {
         kfree(list.blocks);
