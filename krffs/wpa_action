@@ -27,7 +27,7 @@
 # station or is lost for a few beacons.
 #
 # A network of the same name may be on another subnet, as when the machine
-# is carried to another building of one organisation. So a CONNECTED that
+# is carried to another building of one campus. So a CONNECTED that
 # keeps the client starts a probe beside it: a second udhcpc that asks the
 # network for the address in use (`-r`), once, with a short retry, and quits
 # (`-n -q`), whose script, udhcpc-probe.script, configures nothing and runs
