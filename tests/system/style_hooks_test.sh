@@ -70,4 +70,12 @@ cp tools/notes.md "$WORK/notes.md"
 git add tools/notes.md
 git commit -q -m 'Add the notes' 2>"$WORK/notes.err" || { cat "$WORK/notes.err" >&2; fail "a commit of a Markdown file was refused"; }
 git show HEAD:tools/notes.md | cmp -s - "$WORK/notes.md" || fail "the hook changed a Markdown file"
-echo "style-hooks-test: passed: formatted and staged a C file, kept a file with unstaged changes, committed a file it could not format, passed a Markdown file"
+# A function past a size limit is refused, and nothing is committed.
+printf '/* d.c: a fixture. */\nint k(int a, int b, int c, int d, int e, int f, int g)\n{\n    return a + b + c + d + e + f + g;\n}\n' >tools/d.c
+git add tools/d.c
+head=$(git rev-parse HEAD)
+! git commit -q -m 'Add a long signature' 2>"$WORK/sizes.err" || fail "a function of seven parameters was committed"
+[ "$(git rev-parse HEAD)" = "$head" ] || fail "the refused commit moved HEAD"
+grep -q '^sizecheck: tools/d.c:k: params 7' "$WORK/sizes.err" || { cat "$WORK/sizes.err" >&2; fail "the hook did not name the function past the limit"; }
+grep -q '^hookcheck: refused: ' "$WORK/sizes.err" || { cat "$WORK/sizes.err" >&2; fail "the hook did not say that it refused the commit"; }
+echo "style-hooks-test: passed: formatted and staged a C file, kept a file with unstaged changes, committed a file it could not format, passed a Markdown file, refused a function past a size limit"

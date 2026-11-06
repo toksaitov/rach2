@@ -1,6 +1,6 @@
 #!/bin/sh
 #
-# hookcheck.sh: the formatting of the git hook pre-commit, and a command that
+# hookcheck.sh: the checks of the git hook pre-commit, and a command that
 # formats files by hand.
 #
 # `commit`, which tools/git-hooks/pre-commit runs, formats each staged
@@ -8,17 +8,26 @@
 # with the clang-format version tools/setup/judges records, writes the result
 # over the file and stages it. A file whose staged text needs formatting and
 # that also has unstaged changes is left as it is, with a warning, since
-# formatting it would overwrite those changes. The hook refuses nothing: when
-# the formatting cannot be set up, as on a full disk, the commit goes on
-# unformatted with a warning, and the rest of `tests/run style` runs at the
-# end of a milestone.
+# formatting it would overwrite those changes. When the formatting cannot be
+# set up, as on a full disk, the commit goes on unformatted with a warning.
+#
+# It then judges the staged C files, as they will be committed, by the size
+# limits of tools/verify/sizecheck.c, against the staged
+# tools/verify/sizes.reasons, and refuses the commit, with status 1, when a
+# function is past a limit or a reasons entry of those files is stale. The
+# checker is compiled from this tree's source with `cc` on each commit. The
+# complexity is judged when the recorded pmccabe is on PATH or under
+# build/host-tools/native, where `make host-pmccabe` builds it, and is left
+# to `tests/run style` otherwise, with a warning that says so. Without `cc`
+# the sizes are not judged, with a warning. The rest of `tests/run style`,
+# `make -C rach2 check-arch` among it, runs at the end of a milestone.
 #
 # `format FILE ...` formats the files, relative to the root of the tree, in
 # place with the recorded version.
 #
-# The formatting reads the staged files, with the tree's .clang-format, from
-# a private directory under TMPDIR, or the tree's build/tmp when TMPDIR is
-# unset, so that it judges what is committed and not the working files.
+# The checks read the staged files, with the tree's .clang-format, from a
+# private directory under TMPDIR, or the tree's build/tmp when TMPDIR is
+# unset, so that they judge what is committed and not the working files.
 #
 # The recorded clang-format is `clang-format` or `clang-format-N` on PATH, N
 # its major version, whose first line of `--version` is the record's. When
@@ -34,6 +43,80 @@ set -u
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 MODE=${1-}
 [ "$#" -gt 0 ] && shift
+# stage_formatted: write each file of $WORK/cfiles that $WORK/fmt holds
+# formatted over the working file, stage it, and copy it into $WORK/tree, so
+# that the tree there is what the commit will hold.
+stage_formatted() {
+    while IFS= read -r f; do
+        cmp -s "$WORK/tree/$f" "$WORK/fmt/$f" && continue
+        if ! git diff --quiet -- "$f"; then
+            echo "hookcheck: warning: $f is not formatted and has unstaged changes; it was committed as it is" >&2
+            continue
+        fi
+        if cat "$WORK/fmt/$f" >"$f" && git add -- "$f"; then
+            cat "$WORK/fmt/$f" >"$WORK/tree/$f"
+            echo "style: formatted $f" >&2
+        else
+            echo "hookcheck: warning: the formatted $f could not be staged" >&2
+        fi
+    done <"$WORK/cfiles"
+}
+
+# local_pmccabe: print the command of the recorded pmccabe, on PATH or
+# under the tree's build/host-tools/native.
+local_pmccabe() {
+    for _c in pmccabe "$TOP/build/host-tools/native/bin/pmccabe"; do
+        command -v "$_c" >/dev/null 2>&1 || continue
+        if [ "$("$_c" -V </dev/null 2>&1 | head -n 1)" = "$PMCCABE_JUDGED" ]; then
+            echo "$_c"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# sizes: judge the staged C files in $WORK/tree by sizecheck, against the
+# entries of the staged reasons file for those files alone, since an entry
+# of a file not read would be called stale. Exits 1 on a finding.
+sizes() {
+    grep '\.c$' "$WORK/cfiles" >"$WORK/sizefiles" || return 0
+    if ! command -v cc >/dev/null 2>&1; then
+        echo 'hookcheck: warning: no cc here to build tools/verify/sizecheck.c; the sizes were not judged' >&2
+        return 0
+    fi
+    if ! cc -o "$WORK/sizecheck" "$REPO/tools/verify/sizecheck.c" >"$WORK/cc.err" 2>&1; then
+        cat "$WORK/cc.err" >&2
+        echo 'hookcheck: warning: tools/verify/sizecheck.c did not compile; the sizes were not judged' >&2
+        return 0
+    fi
+    _reasons=$WORK/tree/tools/verify/sizes.reasons
+    [ -f "$_reasons" ] || _reasons=$REPO/tools/verify/sizes.reasons
+    awk -F: 'NR == FNR { want[$0] = 1; next } $1 in want' "$WORK/sizefiles" "$_reasons" \
+        >"$WORK/reasons"
+    set --
+    if _pm=$(local_pmccabe); then
+        # shellcheck disable=SC2046 # one path a line, none with a space
+        (cd "$WORK/tree" && "$_pm" $(cat "$WORK/sizefiles")) >"$WORK/pmccabe.txt" 2>/dev/null
+        set -- --pmccabe "$WORK/pmccabe.txt"
+    else
+        echo "hookcheck: warning: complexity not judged; pmccabe ${PMCCABE_JUDGED##* } is not on PATH or under build/host-tools/native; run \`make host-pmccabe\` to build it there" >&2
+    fi
+    # shellcheck disable=SC2046 # one path a line, none with a space
+    (cd "$WORK/tree" && "$WORK/sizecheck" "$@" "$WORK/reasons" $(cat "$WORK/sizefiles")) >"$WORK/sizes.out" 2>&1
+    case $? in
+        0) return 0 ;;
+        1)
+            grep -v ' finding(s)$' "$WORK/sizes.out" >&2
+            echo 'hookcheck: refused: the staged C files break the size limits of tools/verify/sizecheck.c; split the function, or correct its entry in tools/verify/sizes.reasons' >&2
+            exit 1
+            ;;
+        *)
+            cat "$WORK/sizes.out" >&2
+            echo 'hookcheck: warning: sizecheck could not read the staged files; the sizes were not judged' >&2
+            ;;
+    esac
+}
+
 case $MODE in
     commit) [ "$#" -eq 0 ] ;;
     format) [ "$#" -gt 0 ] ;;
@@ -51,6 +134,7 @@ unready() {
 TOP=$(git rev-parse --show-toplevel) || unready 'no work tree'
 cd "$TOP" || unready "cannot enter $TOP"
 JUDGED=$(sed -n 's/^clang-format: //p' "$REPO/tools/setup/judges")
+PMCCABE_JUDGED=$(sed -n 's/^pmccabe: //p' "$REPO/tools/setup/judges")
 HOST=${RACH2_STYLE_HOST-testing}
 
 WORK=
@@ -173,20 +257,12 @@ case $MODE in
         git checkout-index -a --prefix="$WORK/tree/" || unready 'the index cannot be copied'
         c_files "$WORK/tree" "$WORK/files" >"$WORK/cfiles" || exit 0
         [ -s "$WORK/cfiles" ] || exit 0
-        copy_out "$WORK/tree" "$WORK/cfiles" || { echo 'hookcheck: warning: cannot copy the staged C files; they were not formatted' >&2; exit 0; }
-        formatted || exit 0
-        while IFS= read -r f; do
-            cmp -s "$WORK/tree/$f" "$WORK/fmt/$f" && continue
-            if ! git diff --quiet -- "$f"; then
-                echo "hookcheck: warning: $f is not formatted and has unstaged changes; it was committed as it is" >&2
-                continue
-            fi
-            if cat "$WORK/fmt/$f" >"$f" && git add -- "$f"; then
-                echo "style: formatted $f" >&2
-            else
-                echo "hookcheck: warning: the formatted $f could not be staged" >&2
-            fi
-        done <"$WORK/cfiles"
+        if ! copy_out "$WORK/tree" "$WORK/cfiles"; then
+            echo 'hookcheck: warning: cannot copy the staged C files; they were not formatted' >&2
+        elif formatted; then
+            stage_formatted
+        fi
+        sizes
         ;;
     format)
         printf '%s\n' "$@" >"$WORK/files"
