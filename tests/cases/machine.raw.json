@@ -140,7 +140,7 @@
       "units": ["raw"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"user": "root", "command": "/bin/ping -c 1 10.0.2.2 > /dev/null; traceroute -n -q 1 -m 2 8.8.8.8", "expected": " 1  10.0.2.2"}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"user": "root", "command": "ping -c 1 10.0.2.2 > /dev/null; traceroute -n -q 1 -m 2 8.8.8.8", "expected": " 1  10.0.2.2"}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "raw_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
@@ -192,11 +192,11 @@
     },
     {
       "case_id": "machine.raw.userping",
-      "behavior": "The test user's in-house ping on os-real gets the gateway's echo reply, with the hop limit it arrived with",
+      "behavior": "The test user's BusyBox ping on os-real gets the gateway's echo reply, with the hop limit it arrived with",
       "units": ["raw"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"user": "test", "command": "/bin/ping -c 1 10.0.2.2", "expected": "icmp_seq=1 ttl=255 time="}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"user": "test", "command": "ping -c 1 10.0.2.2", "expected": "seq=0 ttl=255 time="}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "raw_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
@@ -219,7 +219,7 @@
          "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
-        {"assertion_id": "reply", "checks": "the ordinary user's /bin/ping -c 1 10.0.2.2 prints a reply line with icmp_seq=1 and ttl=255", "source": "scenario"}
+        {"assertion_id": "reply", "checks": "the ordinary user's ping -c 1 10.0.2.2 prints a reply line with seq=0 and ttl=255", "source": "scenario"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
@@ -248,11 +248,11 @@
     },
     {
       "case_id": "machine.raw.fastping",
-      "behavior": "The test user's in-house ping on os-real counts every reply of fifty requests sent 10 ms apart to the loopback address, and replies to requests sent with no interval at all",
+      "behavior": "The test user's BusyBox ping on os-real counts every reply of fifty requests sent 10 ms apart to the loopback address, and replies to requests sent with no interval at all",
       "units": ["raw"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"user": "test", "command": "/bin/ping -q -i 0.01 -c 50 -w 10 127.0.0.1 && /bin/ping -q -i 0 -w 1 127.0.0.1 > /dev/null && echo fastping: $((6*7))", "expected": "fastping: 42"}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"user": "test", "command": "ping -q -i 0.01 -c 50 -w 10 127.0.0.1 && ping -q -i 0 -w 1 127.0.0.1 > /dev/null && echo fastping: $((6*7))", "expected": "fastping: 42"}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "raw_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
@@ -275,7 +275,7 @@
          "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
-        {"assertion_id": "all-replies", "checks": "the ordinary user's /bin/ping -q -i 0.01 -c 50 -w 10 127.0.0.1 exits 0, which it does only with all 50 replies, and /bin/ping -q -i 0 -w 1 127.0.0.1 exits 0, which it does only with a reply counted, as it is only if ping reads the replies waiting after each request", "source": "scenario"}
+        {"assertion_id": "all-replies", "checks": "the ordinary user's ping -q -i 0.01 -c 50 -w 10 127.0.0.1 exits 0, which it does only with all 50 replies, and ping -q -i 0 -w 1 127.0.0.1 exits 0 at its deadline, which it reaches only if an interval of 0 keeps the timer running, and only with a reply counted", "source": "scenario"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
@@ -304,11 +304,11 @@
     },
     {
       "case_id": "machine.raw.bindping",
-      "behavior": "The test user's in-house ping on os-real sends from the card named by -I and from the address named by -I, reaching the gateway either way, and refuses a card and an address the machine does not have as iputils does",
+      "behavior": "The test user's BusyBox ping on os-real sends from the card named by -I and from the address named by -I, reaching the gateway either way, and refuses a card and an address the machine does not have",
       "units": ["raw"],
       "domain": "machine",
       "architectures": ["i686", "x86_64"],
-      "workload": {"arguments": [], "inputs": {"user": "test", "by-name": "/bin/ping -c 1 -I eth0 10.0.2.2", "by-address": "/bin/ping -c 1 -I 10.0.2.15 10.0.2.2", "no-device": "/bin/ping -c 1 -I eth9 10.0.2.2", "no-address": "/bin/ping -c 1 -I 10.0.2.99 10.0.2.2"}, "repetitions": 1, "seed": null},
+      "workload": {"arguments": [], "inputs": {"user": "test", "by-name": "ping -c 1 -I eth0 10.0.2.2", "by-address": "ping -c 1 -I 10.0.2.15 10.0.2.2", "no-device": "ping -c 1 -I eth9 10.0.2.2", "no-address": "ping -c 1 -I 10.0.2.99 10.0.2.2"}, "repetitions": 1, "seed": null},
       "requirements": {"host_api": "c", "tools": [], "features": {}},
       "execution": {
         "program": "raw_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user",
@@ -322,13 +322,13 @@
         {"step_id": "login", "stage": "execute", "machine": "guest",
          "does": "log in as test with the password of test-password and wait for the prompt \"$ \""},
         {"step_id": "name", "stage": "execute", "machine": "guest",
-         "does": "ping the gateway with -I eth0 and count its first line's source and its reply"},
+         "does": "ping the gateway with -I eth0 and count its first line and its reply"},
         {"step_id": "address", "stage": "execute", "machine": "guest",
          "does": "ping the gateway with -I 10.0.2.15 and count its first line's source and its reply"},
         {"step_id": "no-device", "stage": "execute", "machine": "guest",
-         "does": "ping the gateway with -I eth9 and count its diagnostic and its status of 2"},
+         "does": "ping the gateway with -I eth9 and count its diagnostic and its status of 1"},
         {"step_id": "no-address", "stage": "execute", "machine": "guest",
-         "does": "ping the gateway with -I 10.0.2.99 and count its diagnostic and its status of 2"}
+         "does": "ping the gateway with -I 10.0.2.99 and count its diagnostic and its status of 1"}
       ],
       "machines": [
         {"machine_id": "guest",
@@ -337,10 +337,10 @@
          "console": "serial", "qmp": true, "helper": false}
       ],
       "assertions": [
-        {"assertion_id": "by-name", "checks": "/bin/ping -c 1 -I eth0 10.0.2.2 prints 'from 10.0.2.15 eth0: ' in its first line, the card's address learned through SO_BINDTODEVICE, and a reply with icmp_seq=1", "source": "scenario"},
-        {"assertion_id": "by-address", "checks": "/bin/ping -c 1 -I 10.0.2.15 10.0.2.2 prints 'from 10.0.2.15 : ' in its first line and a reply with icmp_seq=1", "source": "scenario"},
-        {"assertion_id": "no-device", "checks": "/bin/ping -c 1 -I eth9 10.0.2.2 prints the line 'ping: SO_BINDTODEVICE eth9: No such device' and exits 2", "source": "scenario"},
-        {"assertion_id": "no-address", "checks": "/bin/ping -c 1 -I 10.0.2.99 10.0.2.2 prints the line 'ping: bind: Cannot assign requested address' and exits 2", "source": "scenario"}
+        {"assertion_id": "by-name", "checks": "ping -c 1 -I eth0 10.0.2.2 prints its first line and a reply with seq=0, through a socket bound with SO_BINDTODEVICE", "source": "scenario"},
+        {"assertion_id": "by-address", "checks": "ping -c 1 -I 10.0.2.15 10.0.2.2 prints ' from 10.0.2.15: ' in its first line and a reply with seq=0", "source": "scenario"},
+        {"assertion_id": "no-device", "checks": "ping -c 1 -I eth9 10.0.2.2 prints the line \"ping: bad address 'eth9'\" and exits 1", "source": "scenario"},
+        {"assertion_id": "no-address", "checks": "ping -c 1 -I 10.0.2.99 10.0.2.2 prints the line 'ping: bind: Address not available' and exits 1", "source": "scenario"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},

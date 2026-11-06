@@ -62,7 +62,6 @@ file 0755 /bin/busybox build/vendor/busybox/busybox
 file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
-file 0755 /bin/ping build/utils/ping
 file 0755 /bin/dmesg krffs/dmesg.script
 file 0755 /bin/man krffs/man.script
 file 0755 /bin/loopctl build/utils/loopctl

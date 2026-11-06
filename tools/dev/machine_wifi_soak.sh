@@ -65,6 +65,11 @@
 #     them, are summed over associations, since the station's counters start
 #     again at each, from the samples, so a run of drops can leave out up to
 #     5 s of each;
+#   * ping's own totals count what it sent and what was answered. BusyBox's
+#     ping ends with no totals at a send that fails, as it does with no route
+#     to the gateway, and goes on after a second; such a run counts up to its
+#     last reply. The requests of a run are numbered from 0 and one run lasts
+#     at most 2147 s, the longest -w BusyBox takes;
 #   * the longest ping gap is the longest time between two replies with
 #     requests unanswered between them, and the longest stall the longest
 #     between two replies in sequence, in which ping itself did not run;
@@ -387,15 +392,17 @@ table()
     awk '!seen[$0]++' "$dir/kernel.raw" > "$dir/kernel"
     printf 'beacon-loss lines        %d\n' "$(grep -c ': beacon loss: ' "$dir/kernel")"
     printf 'wpa_cli gave up          %d\n' "$(($(gaveup) - gave0))"
-    awk '/ packets transmitted, / { sent += $2; got += $5 }
-        / icmp_seq=/ {
-            s = $0; sub(/.*icmp_seq=/, "", s); s += 0
+    awk '/ packets transmitted, / { sent += $2; got += $5; asked = heard = 0; prev = 0 }
+        / ping: sendto: / { sent += asked; got += heard; asked = heard = 0 }
+        / seq=/ {
+            s = $0; sub(/.* seq=/, "", s); s += 0
             d = $1 - prev
             if (prev && s == seq + 1 && d > stall) stall = d
             if (prev && s != seq + 1 && d > gap) { gap = d; from = prev }
-            prev = $1; seq = s
+            prev = $1; seq = s; asked = s + 1; heard++
         }
         END {
+            sent += asked; got += heard
             printf "ping                     %d sent, %d answered, %.2f%% lost\n",
                 sent, got, sent ? 100 * (sent - got) / sent : 0
             printf "longest ping gap         %.2f s of unanswered requests, from %s\n", gap, from

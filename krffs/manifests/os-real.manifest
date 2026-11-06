@@ -42,10 +42,6 @@ file 0755 /bin/sh build/vendor/sox_ng/sh
 file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
-# The project's ping, which a bare `ping` finds because BusyBox's applet is
-# not built: that one opens a raw socket, which only root may open here, and
-# this one asks the kernel to send the echo, so any account can run it.
-file 0755 /bin/ping build/utils/ping
 # dmesg, which prints the kernel's log from `/dev/bootlog`, a device root can
 # read (krffs/dmesg.script). BusyBox's applet, which reads the same records
 # through syslog(2) but takes only -c, -n, -s and -r, is turned off; the

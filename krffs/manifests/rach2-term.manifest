@@ -31,7 +31,6 @@ file 04755:0:0 /bin/su build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/passwd build/vendor/busybox/busybox-suid
 file 04755:0:0 /bin/login build/vendor/busybox/busybox-suid
 
-file 0755 /bin/ping build/utils/ping
 # dmesg, which prints the kernel's log from /dev/bootlog
 # (krffs/dmesg.script).
 file 0755 /bin/dmesg krffs/dmesg.script

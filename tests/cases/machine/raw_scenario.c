@@ -164,7 +164,7 @@ static int traceroute(struct etude_case *c)
         "root-password",
         "# ",
         "traceroute",
-        "/bin/ping -c 1 10.0.2.2 > /dev/null; traceroute -n -q 1 -m 2 8.8.8.8\r",
+        "ping -c 1 10.0.2.2 > /dev/null; traceroute -n -q 1 -m 2 8.8.8.8\r",
         " 1  10.0.2.2",
         "first-hop"};
 
@@ -172,20 +172,16 @@ static int traceroute(struct etude_case *c)
 }
 
 /**
- * Log in as the test user and ping the gateway with the in-house ping, the
- * one an ordinary account runs: busybox's needs a raw socket, which is
- * root's, and is not built for that reason. Its reply line has the hop limit
- * the reply arrived with, 255 from the emulator's gateway, which answers with
- * the most there is.
+ * Log in as the test user and ping the gateway with BusyBox's ping, which
+ * for an ordinary account falls back from a raw socket, which is root's, to
+ * an ICMP datagram socket. Its reply line has the hop limit the reply arrived
+ * with, 255 from the emulator's gateway, which answers with the most there
+ * is, read from IP_RECVTTL, since that socket gives no IPv4 header.
  */
 static int userping(struct etude_case *c)
 {
-    static const struct session s = {"test",
-                                     "test-password",
-                                     "$ ",
-                                     "ping",
-                                     "/bin/ping -c 1 10.0.2.2\r",
-                                     "icmp_seq=1 ttl=255 time=",
+    static const struct session s = {"test", "test-password",        "$ ",
+                                     "ping", "ping -c 1 10.0.2.2\r", "seq=0 ttl=255 time=",
                                      "reply"};
 
     return session(c, &s);
@@ -195,10 +191,10 @@ static int userping(struct etude_case *c)
  * Log in as the test user and ping the loopback address fifty times, 10 ms
  * apart, and then with no interval for a second. Each ping exits 0 only with
  * its replies counted: the first with all fifty, which -w makes it require,
- * and the second with one, which it counts only when it reads the replies
- * waiting after each request, since with no interval it never waits in
- * poll. The line the shell prints when both exit 0 is computed, so that the
- * echo of the command typed cannot match it.
+ * and the second with one, which it reaches only when an interval of 0 keeps
+ * the timer that sends the requests and checks -w running. The line the shell
+ * prints when both exit 0 is computed, so that the echo of the command typed
+ * cannot match it.
  */
 static int fastping(struct etude_case *c)
 {
@@ -207,8 +203,8 @@ static int fastping(struct etude_case *c)
         "test-password",
         "$ ",
         "ping",
-        "/bin/ping -q -i 0.01 -c 50 -w 10 127.0.0.1 && "
-        "/bin/ping -q -i 0 -w 1 127.0.0.1 > /dev/null && echo fastping: $((6*7))\r",
+        "ping -q -i 0.01 -c 50 -w 10 127.0.0.1 && "
+        "ping -q -i 0 -w 1 127.0.0.1 > /dev/null && echo fastping: $((6*7))\r",
         "fastping: 42",
         "all-replies"};
 
@@ -216,33 +212,33 @@ static int fastping(struct etude_case *c)
 }
 
 /**
- * Log in as the test user and ping the gateway with -I, as iputils takes
- * it: by the card's name and by its address, 10.0.2.15, which QEMU's user
- * network leases, each of which must print the source in its first line and
- * get the reply; and by a name and an address the machine does not have,
- * each of which must print iputils' diagnostic and exit 2. Each row prints
- * its count of the lines it requires after its own name, so that the echo
- * of the command typed cannot match it.
+ * Log in as the test user and ping the gateway with -I: by the card's name,
+ * which must leave the first line as it is and get the reply, and by its
+ * address, 10.0.2.15, which QEMU's user network leases, which must print the
+ * source in its first line and get the reply; and by a name and an address the
+ * machine does not have, each of which must print BusyBox's diagnostic and
+ * exit 1. Each row prints its count of the lines it requires after its own
+ * name, so that the echo of the command typed cannot match it.
  */
 static int bindping(struct etude_case *c)
 {
     static const struct session rows[] = {
         {"test", "test-password", "$ ", "name",
-         "/bin/ping -c 1 -I eth0 10.0.2.2 | grep -c -e 'from 10.0.2.15 eth0: ' "
-         "-e 'icmp_seq=1 ttl=' | sed 's/^/bind-name: /'\r",
+         "ping -c 1 -I eth0 10.0.2.2 | grep -c -e '^PING 10.0.2.2 (10.0.2.2): ' "
+         "-e 'seq=0 ttl=' | sed 's/^/bind-name: /'\r",
          "bind-name: 2", "by-name"},
         {"test", "test-password", "$ ", "address",
-         "/bin/ping -c 1 -I 10.0.2.15 10.0.2.2 | grep -c -e 'from 10.0.2.15 : ' "
-         "-e 'icmp_seq=1 ttl=' | sed 's/^/bind-address: /'\r",
+         "ping -c 1 -I 10.0.2.15 10.0.2.2 | grep -c -e ' from 10.0.2.15: ' "
+         "-e 'seq=0 ttl=' | sed 's/^/bind-address: /'\r",
          "bind-address: 2", "by-address"},
         {"test", "test-password", "$ ", "no-device",
-         "{ /bin/ping -c 1 -I eth9 10.0.2.2 2>&1; echo status $?; } | grep -c -x "
-         "-e 'ping: SO_BINDTODEVICE eth9: No such device' -e 'status 2' | "
+         "{ ping -c 1 -I eth9 10.0.2.2 2>&1; echo status $?; } | grep -c -x "
+         "-e \"ping: bad address 'eth9'\" -e 'status 1' | "
          "sed 's/^/bind-nodevice: /'\r",
          "bind-nodevice: 2", "no-device"},
         {"test", "test-password", "$ ", "no-address",
-         "{ /bin/ping -c 1 -I 10.0.2.99 10.0.2.2 2>&1; echo status $?; } | grep -c -x "
-         "-e 'ping: bind: Cannot assign requested address' -e 'status 2' | "
+         "{ ping -c 1 -I 10.0.2.99 10.0.2.2 2>&1; echo status $?; } | grep -c -x "
+         "-e 'ping: bind: Address not available' -e 'status 1' | "
          "sed 's/^/bind-noaddress: /'\r",
          "bind-noaddress: 2", "no-address"}};
     struct etude_case_machine *m;
