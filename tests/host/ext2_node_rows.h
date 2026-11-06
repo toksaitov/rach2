@@ -3,7 +3,8 @@
  * the life of a node in rach2/sys/fs/ext2.c under its node locks: a second
  * caller on a loading node, a failed load with a sleeper, a node that dies
  * under a lookup, a last put under another lock, an inode number in the
- * hash, a remount that closes admission, and an error flip. Two calls stand
+ * hash, a remount that closes admission, a shutdown that closes it for good
+ * with a bound on its wait, and an error flip. Two calls stand
  * for two processes and take turns, the second a parked call
  * (compat/park_host.c): a row hands over at a disk request, and a wait that
  * cannot end yet hands back. Files are empty, and a row's first process
@@ -386,6 +387,148 @@ static void remount_admission_row(void)
     node_row_end(1, "the admission volume unmounts clean");
 }
 
+/* A shutdown row's watch of the superblock: whether a write set its valid
+   bit, and whether one did so while the row's writer was inside. While
+   `row_stuck` is set, the writer's disk does not answer. */
+static int valid_written, valid_inside, row_stuck;
+
+/** Note a write that carries the superblock's state with the valid bit set,
+ * and whether the second process had ended its call by then. */
+static void watch_valid(uint64_t lba, uint32_t count, const void *buf)
+{
+    if (lba <= 2 && lba + count > 2 && (((const unsigned char *)buf)[(2 - lba) * 512 + 58] & 1)) {
+        valid_written = 1;
+        if (!row_done) {
+            valid_inside = 1;
+        }
+    }
+}
+
+/** Give the turn away at this read until the row lets the disk answer. */
+static void stuck_at_read(void)
+{
+    read_pause = 0;
+    while (row_stuck) {
+        pass_turn();
+    }
+}
+
+/** The second process writes 3000 bytes to the file in slot 0 under its
+ * lock, as the VFS does, into slot 1. */
+static void write_second(void)
+{
+    OPS->lock_node(&mnt, row_nodes[0]);
+    row_rc[1] = OPS->write(&mnt, row_nodes[0], pattern, 3000, 0);
+    OPS->unlock_node(&mnt, row_nodes[0]);
+    row_done = 1;
+}
+
+/** Whether the image's superblock has its valid bit set. */
+static int image_valid(void)
+{
+    unsigned char sb[2];
+
+    return host_read(wimg, sb, 2, 1024 + 58) == 2 && (sb[0] & 1) != 0;
+}
+
+/**
+ * A shutdown that finds a writer inside a disk wait closes admission and
+ * waits for it before it writes the valid bit, so the volume it leaves is
+ * clean and holds the write; the write is what a shutdown that only
+ * prepared the unmount would let change the volume after the bit.
+ */
+static void shutdown_waits_row(void)
+{
+    void *n = 0;
+    int rc;
+
+    if (!node_row_begin("the shutdown volume mounts")) {
+        return;
+    }
+    check(OPS->lookup(&mnt, mnt.root, "one", &n) == 0 && n != 0, "the file is open");
+    if (!n) {
+        return;
+    }
+    row_nodes[0] = n;
+    read_pause = turn_at_read;
+    start_turns(write_second);
+    pass_turn();
+    check(!row_done && read_pause == 0, "the writer waits on the disk");
+    valid_written = valid_inside = 0;
+    write_watch = watch_valid;
+    rc = OPS->shutdown(&mnt, tick_count() + 1000);
+    write_watch = 0;
+    check(rc == 0 && row_done && row_rc[1] == 3000,
+          "the shutdown waited for the writer and marked the volume clean");
+    check(valid_written && !valid_inside, "the valid bit was written once no writer was left");
+    check(image_valid() && e2fsck_clean(wimg), "and the volume on the disk is clean as it stops");
+    finish_turns();
+    OPS->put(&mnt, n);
+    node_row_end(1, "the shutdown volume unmounts clean");
+}
+
+/**
+ * A writer whose disk never answers holds a shutdown only to its deadline,
+ * after which the volume is left as it is, its valid bit clear, so that the
+ * next mount checks it.
+ */
+static void shutdown_bounded_row(void)
+{
+    void *n = 0;
+    int rc;
+
+    if (!node_row_begin("the bounded shutdown volume mounts")) {
+        return;
+    }
+    check(OPS->lookup(&mnt, mnt.root, "one", &n) == 0 && n != 0, "the file is open");
+    if (!n) {
+        return;
+    }
+    row_nodes[0] = n;
+    row_stuck = 1;
+    read_pause = stuck_at_read;
+    start_turns(write_second);
+    pass_turn();
+    check(!row_done && read_pause == 0, "the writer waits on a disk that does not answer");
+    valid_written = valid_inside = 0;
+    write_watch = watch_valid;
+    rc = OPS->shutdown(&mnt, tick_count() + 50);
+    write_watch = 0;
+    check(rc == -EBUSY && !row_done, "the shutdown ended at its deadline with the writer inside");
+    check(sleeps > 0 && !valid_written && !image_valid(),
+          "and left the valid bit clear for the next mount's check");
+    row_stuck = 0;
+    finish_turns();
+    check(row_rc[1] == 3000, "the writer ends once its disk answers");
+    OPS->put(&mnt, n);
+    node_row_end(1, "the bounded shutdown volume unmounts clean");
+}
+
+/**
+ * A removed file still open at a shutdown is a change still owed, its
+ * inode's free at the last put: the volume is synced, its valid bit left
+ * clear.
+ */
+static void shutdown_unlinked_row(void)
+{
+    void *n = 0;
+
+    if (!node_row_begin("the unlinked shutdown volume mounts")) {
+        return;
+    }
+    check(OPS->lookup(&mnt, mnt.root, "one", &n) == 0 && n != 0, "the file is open");
+    if (!n) {
+        return;
+    }
+    OPS->lock_node(&mnt, mnt.root);
+    check(OPS->unlink(&mnt, mnt.root, "one") == 0, "and removed");
+    OPS->unlock_node(&mnt, mnt.root);
+    check(OPS->shutdown(&mnt, tick_count() + 50) == -EBUSY && !image_valid(),
+          "a shutdown with a removed file open leaves the valid bit clear");
+    OPS->put(&mnt, n);
+    node_row_end(1, "the unlinked shutdown volume unmounts clean");
+}
+
 /** The second process syncs into a flush that fails, which flips the mount. */
 static void failed_sync_second(void)
 {
@@ -435,6 +578,9 @@ static void node_rows(void)
     inode_skip_row();
     remount_waits_row();
     remount_admission_row();
+    shutdown_waits_row();
+    shutdown_bounded_row();
+    shutdown_unlinked_row();
     error_flip_row();
     rw_flags = saved;
 }

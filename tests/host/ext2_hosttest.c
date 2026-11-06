@@ -306,6 +306,16 @@ uint32_t timer_now_us(void)
 {
     return 0;
 }
+
+/* The clock of a deadline, in ticks. */
+static uint64_t host_ticks;
+
+/** The tick count, one more at each look, so that a wait with a deadline
+ * ends after a bounded number of turns. */
+uint64_t tick_count(void)
+{
+    return ++host_ticks;
+}
 /** Panic: fd.c takes the mount's namespace lock only on a type that sets
  * `ns_serialised`, which ext2 does not. */
 void vfs_ns_lock(struct vfs_mount *mnt)
@@ -379,6 +389,8 @@ static unsigned char *wlog_data[WLOG_MAX];
 static int wlog_n, wlog_capture, wlog_overflow;
 static int flush_calls, flush_fail_at = -1;
 static int flush_log[WLOG_MAX], flush_n;
+/* Called with each write that lands, before it lands, while a row sets it. */
+static void (*write_watch)(uint64_t lba, uint32_t count, const void *buf);
 
 /** The device's request limit, or `BLOCK_REQ_SECTORS` when it sets none. */
 uint32_t block_max_sectors(block_device_t *device)
@@ -478,6 +490,9 @@ static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void
     if (fail_block >= 0 && (uint64_t)fail_block >= request_block &&
         (uint64_t)fail_block < request_block + request_blocks) {
         return -5;
+    }
+    if (write_watch) {
+        write_watch(lba, count, buf);
     }
     writes_made++;
     if (wlog_n < WLOG_MAX) {

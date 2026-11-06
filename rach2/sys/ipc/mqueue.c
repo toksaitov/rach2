@@ -1195,6 +1195,7 @@ static const struct vfs_ops mqfs_ops = {
     0, /* fdatasync */
     0, /* lock_node */
     0, /* unlock_node */
+    0, /* shutdown */
 };
 
 const struct vfs_type vfs_mqueue_type = {"mqueue", mqfs_mount, &mqfs_ops, 0, 1, 0, 0};

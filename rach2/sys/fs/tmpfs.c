@@ -1283,6 +1283,7 @@ static const struct vfs_ops tmpfs_ops = {
     0, /* fdatasync */
     0, /* lock_node */
     0, /* unlock_node */
+    0, /* shutdown */
 };
 
 const struct vfs_type vfs_tmpfs_type = {"tmpfs", tmpfs_mount, &tmpfs_ops, 1, 1, 0, 0};

@@ -1757,6 +1757,23 @@ static int krffs_disk_mark_clean(void)
     return 0;
 }
 
+/* How long a shutdown waits for the writers inside the root before it
+   leaves the volume unclean, in milliseconds: a write that a slow disk
+   holds up ends well within it, and a dead disk's never does. */
+#define SHUTDOWN_WRITERS_MS 10000
+
+/* Whether a shutdown has begun; a second caller sleeps on `shutdown_wq`,
+   which nothing wakes, until the machine stops. */
+static int shutdown_started;
+static wait_queue_t shutdown_wq;
+
+/** The wait condition of a second shutdown: never true. */
+static int shutdown_never(void *arg)
+{
+    (void)arg;
+    return 0;
+}
+
 /**
  * The one way out of a running Rach2, from the debug shell or from
  * reboot(2).
@@ -1765,14 +1782,25 @@ static int krffs_disk_mark_clean(void)
  * runs the firmware's `\_PTS(5)` there, whose methods may wait on the
  * embedded controller.
  *
- * A root of a type other than KRFFS is unmounted first, as mount(2)'s are:
- * its namespace lock taken, its buffers written and its valid bit set, so
- * that the next mount does not check it. This is done with scheduling still
- * on, since another process may hold the lock or a buffer, or be next in the
- * lock's line, and only that process can give them up: a shutdown that
- * waited for it with scheduling off would wait for ever on an idle machine.
- * The lock is never given back, so no process changes the root once its
- * valid bit is set, and a second caller waits on it for good.
+ * The first caller goes on, and a second one sleeps for good
+ * (`shutdown_started`).
+ *
+ * A root of a type other than KRFFS is unmounted first: its buffers written
+ * and its valid bit set, so that the next mount does not check it, once no
+ * process is left that could change it after. An ext2 root closes itself to
+ * new writers and waits for those inside (`shutdown` of `vfs_ops`), since
+ * its writers take node locks and not the mount's; a writer stuck in a disk
+ * wait that SIGKILL cannot end would otherwise change the volume after its
+ * valid bit was written, and lose those changes at the power off. The wait
+ * ends after SHUTDOWN_WRITERS_MS, holding no lock, so that a disk that never
+ * answers cannot keep the machine up; the valid bit then stays clear and the
+ * next mount checks the volume. A type without that operation has its
+ * namespace lock taken and never given back, which keeps its writers out,
+ * and is prepared as mount(2) prepares an unmount. Either is done with
+ * scheduling still on, since another process may hold a lock or a buffer
+ * the unmount needs, or be a writer it waits for, and only that process
+ * can let it go: a shutdown that waited for it with scheduling off would
+ * wait for ever on an idle machine.
  *
  * Scheduling is disabled next, so that a second caller cannot exist: the
  * timer does not switch away from a system call (`in_syscall`),
@@ -1808,12 +1836,24 @@ void kernel_shutdown(int how)
     struct vfs_mount *root = 0;
     int unmounted = 0;
 
+    if (shutdown_started) {
+        for (;;) {
+            (void)wq_wait_event_nointr(&shutdown_wq, shutdown_never, 0);
+        }
+    }
+    shutdown_started = 1;
     power_prepare(how);
     if (!_krffs_on_disk && vfs_root_mounted() && vfs_root_mount()->type != &vfs_krffs_type) {
+        const struct vfs_ops *ops;
+
         root = vfs_root_mount();
-        vfs_ns_lock(root);
-        unmounted =
-            !root->type->ops->prepare_unmount || root->type->ops->prepare_unmount(root) == 0;
+        ops = root->type->ops;
+        if (ops->shutdown) {
+            unmounted = ops->shutdown(root, tick_count() + MS_TO_TICKS(SHUTDOWN_WRITERS_MS)) == 0;
+        } else {
+            vfs_ns_lock(root);
+            unmounted = !ops->prepare_unmount || ops->prepare_unmount(root) == 0;
+        }
     }
     sched_disable();
 

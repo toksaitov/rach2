@@ -52,6 +52,7 @@
 #include "../panic.h"
 #include "../proc/process.h"
 #include "../rtc.h"
+#include "../timer.h"
 #include "bcache.h"
 #include "fatcommon.h"
 #include "sleeplock.h"
@@ -679,6 +680,74 @@ static void em_close(struct ext2_mount *em)
         wq_wait_event_nointr(&em->node_wq, em_settled, em);
         em_reap(em);
     }
+}
+
+/* A shutdown's wait on the mount `em`, which ends at the tick `deadline`
+   whatever else holds. */
+struct em_deadline {
+    struct ext2_mount *em;
+    uint64_t deadline;
+};
+
+/** The wait condition of a shutdown's first wait: no remount keeps the
+ * mount `arg` closed, or its deadline has come. */
+static int em_open_by(void *arg)
+{
+    const struct em_deadline *d = arg;
+
+    return !d->em->closing || tick_count() >= d->deadline;
+}
+
+/** The wait condition of a shutdown's second wait: `em_settled`, or the
+ * deadline has come. */
+static int em_settled_by(void *arg)
+{
+    const struct em_deadline *d = arg;
+
+    return em_settled(d->em) || tick_count() >= d->deadline;
+}
+
+/** Sleep on the mount's queue until `cond(d)`, with the timer armed for
+ * `d->deadline` before each wait, since a signal's wake disarms it. */
+static void em_wait_until(struct em_deadline *d, wq_cond_fn cond)
+{
+    if (current_proc) {
+        current_proc->wakeup_tick = d->deadline != 0 ? d->deadline : 1u;
+    }
+    (void)wq_wait_event_nointr(&d->em->node_wq, cond, d);
+    if (current_proc) {
+        current_proc->wakeup_tick = 0;
+    }
+}
+
+/**
+ * Close the mount to new writers for good, for a power off, and wait until
+ * the tick `deadline` for a remount under way and then for the writers
+ * inside and every final put, as `em_close` does. Admission is never opened
+ * again: a writer that comes later sleeps at the gate until the machine
+ * stops. 0 when no writer is left, or -EBUSY at the deadline, with the
+ * mount closed only when no remount was still under way. The caller holds
+ * no file lock.
+ */
+static int em_close_until(struct ext2_mount *em, uint64_t deadline)
+{
+    struct em_deadline d;
+
+    d.em = em;
+    d.deadline = deadline;
+    while (em->closing && tick_count() < deadline) {
+        em_wait_until(&d, em_open_by);
+    }
+    if (em->closing) {
+        return -EBUSY;
+    }
+    em->closing = 1;
+    em_reap(em);
+    while (em->writers && tick_count() < deadline) {
+        em_wait_until(&d, em_settled_by);
+        em_reap(em);
+    }
+    return em->writers ? -EBUSY : 0;
 }
 
 /** Let writers in again after `em_close`. */
@@ -2344,6 +2413,42 @@ static int ext2_remount(struct vfs_mount *mnt, uint32_t flags, const char *optio
     }
     em_open(em);
     return rc;
+}
+
+/**
+ * The `shutdown` of `vfs_ops`, for the root at a power off: admission closed
+ * for good and the writers inside waited for until the tick `deadline`
+ * (`em_close_until`), then `ext2_prepare_unmount`, in the remount's order,
+ * so that no writer changes the volume once its valid bit is written.
+ *
+ * At the deadline nothing more is done and -EBUSY returned: a writer still
+ * inside may hold `em->meta`, a node lock or a buffer, and waits on a disk
+ * that may never answer, so a sync could wait for ever. The valid bit stays
+ * clear on the medium, where a writable mount put it, and the next mount
+ * checks the volume. A removed file still open, whose inode only its last
+ * put frees, is -EBUSY too, after a sync: marked valid, the volume would
+ * keep that inode for good.
+ */
+static int ext2_shutdown(struct vfs_mount *mnt, uint64_t deadline)
+{
+    struct ext2_mount *em = em_of(mnt);
+    struct ext2_node *n;
+    int rc;
+
+    if (em_close_until(em, deadline) != 0) {
+        klog(KLOG_WARN, "ext2", "shutdown: %d writers still inside; the volume stays unclean",
+             (int)em->writers);
+        return -EBUSY;
+    }
+    for (n = em->nodes; n; n = n->next) {
+        if (n->unlinked && em->writable && !(mnt->flags & VFS_MS_RDONLY)) {
+            klog(KLOG_WARN, "ext2", "shutdown: inode %d removed but open; the volume stays unclean",
+                 (int)n->ino);
+            rc = ext2_sync(mnt);
+            return rc != 0 ? rc : -EBUSY;
+        }
+    }
+    return ext2_prepare_unmount(mnt);
 }
 
 /**
@@ -8042,6 +8147,7 @@ static const struct vfs_ops ext2_ops = {
     ext2_fdatasync,
     ext2_lock_node,
     ext2_unlock_node,
+    ext2_shutdown,
 };
 
 const struct vfs_type vfs_ext2_type = {"ext2", ext2_mount, &ext2_ops, 0, 0, 1, 1};

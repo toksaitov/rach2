@@ -2585,6 +2585,7 @@ static const struct vfs_ops krffs_ops = {
     0,                           /* fdatasync */
     0,                           /* lock_node */
     0,                           /* unlock_node */
+    0,                           /* shutdown */
 };
 
 /** The constructor of the root's entry: the mount's root is the image's root
@@ -3080,6 +3081,7 @@ static const struct vfs_ops devfs_vops = {
     0, /* fdatasync */
     0, /* lock_node */
     0, /* unlock_node */
+    0, /* shutdown */
 };
 
 static const struct vfs_ops procfs_vops = {
@@ -3118,6 +3120,7 @@ static const struct vfs_ops procfs_vops = {
     0, /* fdatasync */
     0, /* lock_node */
     0, /* unlock_node */
+    0, /* shutdown */
 };
 
 static const struct vfs_ops sysfs_vops = {
@@ -3156,6 +3159,7 @@ static const struct vfs_ops sysfs_vops = {
     0, /* fdatasync */
     0, /* lock_node */
     0, /* unlock_node */
+    0, /* shutdown */
 };
 
 /** The constructor of a synthetic mount: its root is a node of the
