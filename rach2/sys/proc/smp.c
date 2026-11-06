@@ -22,6 +22,17 @@
  * the records: the one whose `bkl_depth` is above 0. */
 static volatile unsigned int bkl_word;
 
+/* The processor that has waited long enough to go next, as its number plus
+ * one, 0 for none (`bkl_acquire`). */
+static volatile unsigned int bkl_claim;
+
+/* The spins after which a waiter claims the big lock, and the times a waiter
+ * sees the lock free and unclaimed by it before it passes over the claim. The
+ * second covers a claimant that does not run, since under a hypervisor a
+ * virtual processor can be off the machine. */
+#define BKL_CLAIM_AFTER 4096u
+#define BKL_PASS_AFTER  (1u << 16)
+
 /* Counts the changes of kernel mappings; a processor that has seen fewer
  * drops its translations when it next takes the big lock. */
 static volatile uint32_t kernel_gen;
@@ -44,14 +55,35 @@ static void bkl_flush(struct percpu *cpu)
  * requests meanwhile, since the holder may be waiting for the answer to its
  * own. Then drop every translation if a kernel mapping changed since this
  * processor last held the lock. Interrupts are off.
+ *
+ * An exchange alone favours the processor that last had the lock's cache
+ * line, such as the holder's hyperthread, and can pass over the others for
+ * seconds, while a process queued on a spinning processor waits as long. So a
+ * waiter past `BKL_CLAIM_AFTER` spins claims the lock, and the others leave it
+ * to the claimant.
  */
 static void bkl_acquire(struct percpu *cpu)
 {
-    while (arch_atomic_xchg(&bkl_word, 1u) != 0) {
-        while (bkl_word) {
-            smp_service();
-            arch_relax();
+    unsigned int me = (unsigned int)arch_cpu_id() + 1u;
+    uint32_t spins = 0, passed = 0;
+
+    for (;;) {
+        unsigned int claim = bkl_claim;
+
+        if (!bkl_word && (claim == 0 || claim == me || ++passed >= BKL_PASS_AFTER) &&
+            arch_atomic_xchg(&bkl_word, 1u) == 0) {
+            break;
         }
+        smp_service();
+        arch_relax();
+        if (spins < BKL_CLAIM_AFTER) {
+            spins++;
+        } else if (claim == 0) {
+            (void)arch_atomic_cmpxchg(&bkl_claim, 0u, me);
+        }
+    }
+    if (bkl_claim == me) {
+        (void)arch_atomic_cmpxchg(&bkl_claim, me, 0u);
     }
     bkl_flush(cpu);
 }
@@ -73,7 +105,7 @@ int bkl_try_enter(void)
     struct percpu *cpu = this_cpu();
 
     if (cpu->bkl_depth == 0) {
-        if (bkl_word || arch_atomic_xchg(&bkl_word, 1u) != 0) {
+        if (bkl_word || bkl_claim || arch_atomic_xchg(&bkl_word, 1u) != 0) {
             return 0;
         }
         bkl_flush(cpu);
@@ -115,6 +147,16 @@ void bkl_take(int depth)
     if (depth > 0) {
         bkl_acquire(cpu);
         cpu->bkl_depth = depth;
+    }
+}
+
+void bkl_yield(void)
+{
+    struct percpu *cpu = this_cpu();
+    unsigned int claim = bkl_claim;
+
+    if (cpu->bkl_depth > 0 && claim != 0 && claim != (unsigned int)arch_cpu_id() + 1u) {
+        bkl_take(bkl_drop());
     }
 }
 

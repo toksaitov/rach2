@@ -321,7 +321,9 @@ void sched_set_affinity(process_t *p, uint64_t mask)
  * the outgoing process before its registers are saved; the depth this
  * processor had in it goes with the outgoing process, and the incoming one
  * gets its own back. The run queues' lock is let go before the switch,
- * since the incoming process does not return here to let it go.
+ * since the incoming process does not return here to let it go. Past the
+ * switch a processor waiting its turn for the big lock gets it
+ * (`bkl_yield`).
  *
  * The floating-point registers are the one part of the processor
  * `switch_context` does not touch. They are saved into the outgoing record
@@ -435,6 +437,7 @@ void schedule(void)
 
     switch_context(old, next);
 
+    bkl_yield();
     kirq_restore(saved_flags);
 }
 

@@ -33,8 +33,18 @@ void bkl_enter(void);
 
 /** Take the big lock as `bkl_enter` does when it is free or this processor
  * holds it, and return 1; return 0 at once, taking nothing, when another
- * processor holds it. Interrupts are off. */
+ * processor holds it or waits for its turn. Interrupts are off. */
 int bkl_try_enter(void);
+
+/**
+ * Let a processor that has claimed the big lock have it, and take it back at
+ * the same depth; nothing when none has. `schedule` calls
+ * this for the process it has just resumed, whose kernel state may be seen as
+ * at any sleep: a processor that goes from one process inside the kernel to
+ * the next never returns to user mode and would keep the lock across a whole
+ * run queue. Interrupts are off.
+ */
+void bkl_yield(void);
 
 /** Give back what `bkl_enter` took, the lock itself on the outermost; a
  * panic when this processor does not hold it. */
