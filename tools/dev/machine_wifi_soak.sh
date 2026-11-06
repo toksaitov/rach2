@@ -80,8 +80,9 @@
 #     last reply. The requests of a run are numbered from 0 and one run lasts
 #     at most 2147 s, the longest -w BusyBox takes;
 #   * the longest ping gap is the longest time between two replies with
-#     requests unanswered between them, and the longest stall the longest
-#     between two replies in sequence, in which ping itself did not run;
+#     requests unanswered between them, across ping's runs, or from the last
+#     reply to the end of its log, and the longest stall the longest between
+#     two replies in sequence, in which ping itself did not run;
 #   * the seconds without a reply sum every wait of over 1 s between replies
 #     and from the last reply to the end of the ping's log, so they count
 #     a link that never came back, as the gap does not;
@@ -439,7 +440,8 @@ table()
     awk '/ seq=/ { if (p && $1 - p > 1) away += $1 - p; p = $1 }
         { end = $1 }
         END { printf "seconds without a reply  %d\n", away + (p ? end - p : end) }' "$dir/ping"
-    awk '/ packets transmitted, / { sent += $2; got += $5; asked = heard = 0; prev = 0 }
+    awk '{ end = $1 }
+        / packets transmitted, / { sent += $2; got += $5; asked = heard = 0 }
         / ping: sendto: / { sent += asked; got += heard; asked = heard = 0 }
         / seq=/ {
             s = $0; sub(/.* seq=/, "", s); s += 0
@@ -449,6 +451,7 @@ table()
             prev = $1; seq = s; asked = s + 1; heard++
         }
         END {
+            if (prev && end - prev > gap) { gap = end - prev; from = prev }
             sent += asked; got += heard
             printf "ping                     %d sent, %d answered, %.2f%% lost\n",
                 sent, got, sent ? 100 * (sent - got) / sent : 0
