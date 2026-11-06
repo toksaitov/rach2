@@ -1,0 +1,212 @@
+Rach2: let any account run ping.
+
+Only a privileged process may open a raw ICMP socket, here as on Linux, so
+upstream's ping is root's. When socket(2) refuses one with EPERM, this patch
+opens an ICMP datagram socket, Linux's ping socket, and the applet follows
+what that socket does: the kernel writes the identifier and the checksum,
+delivers only this socket's replies, and gives them without the IPv4 header,
+so the reply's TTL comes from IP_RECVTTL and the ICMPv6 filter and checksum
+offset are left unset.
+
+ping6 asks for RFC 3542's IPV6_RECVHOPLIMIT in place of RFC 2292's option,
+which the kernel does not keep, so that a reply's hop limit is printed. An
+interval of 0, which stopped the interval timer and with it the requests and
+the check of -w, becomes the shortest the timer takes.
+
+diff -ruN a/networking/ping.c b/networking/ping.c
+--- a/networking/ping.c
++++ b/networking/ping.c
+@@ -156,12 +156,6 @@
+ 
+ #if ENABLE_PING6
+ # include <netinet/icmp6.h>
+-/* I see RENUMBERED constants in bits/in.h - !!?
+- * What a fuck is going on with libc? Is it a glibc joke? */
+-# ifdef IPV6_2292HOPLIMIT
+-#  undef IPV6_HOPLIMIT
+-#  define IPV6_HOPLIMIT IPV6_2292HOPLIMIT
+-# endif
+ #endif
+ 
+ #if defined(__FreeBSD__)
+@@ -208,6 +202,11 @@
+ 	pingsock = 0,
+ };
+ 
++/* Set when the socket is an ICMP datagram socket. The kernel then writes the
++ * echo identifier and the checksum, hands the socket only its own replies,
++ * and gives them without the IPv4 header. */
++static smallint icmp_dgram;
++
+ static void
+ #if ENABLE_PING6
+ create_icmp_socket(len_and_sockaddr *lsa)
+@@ -217,12 +216,22 @@
+ #endif
+ {
+ 	int sock;
++	int af = AF_INET;
++	int proto = 1; /* 1 == ICMP */
+ #if ENABLE_PING6
+-	if (lsa->u.sa.sa_family == AF_INET6)
+-		sock = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
+-	else
++	if (lsa->u.sa.sa_family == AF_INET6) {
++		af = AF_INET6;
++		proto = IPPROTO_ICMPV6;
++	}
+ #endif
+-		sock = socket(AF_INET, SOCK_RAW, 1); /* 1 == ICMP */
++	sock = socket(af, SOCK_RAW, proto);
++#if ENABLE_FEATURE_FANCY_PING
++	/* A raw socket is root's; any account may open a datagram one. */
++	if (sock < 0 && errno == EPERM) {
++		sock = socket(af, SOCK_DGRAM, proto);
++		icmp_dgram = 1;
++	}
++#endif
+ 	if (sock < 0) {
+ 		if (errno == EPERM)
+ 			bb_simple_error_msg_and_die(bb_msg_perm_denied_are_you_root);
+@@ -689,22 +698,25 @@
+ 	puts(dupmsg);
+ 	fflush_all();
+ }
+-static int unpack4(char *buf, int sz, struct sockaddr_in *from)
++static int unpack4(char *buf, int sz, struct sockaddr_in *from, int ttl)
+ {
+ 	struct icmp *icmppkt;
+-	struct iphdr *iphdr;
+-	int hlen;
++	int hlen = 0;
+ 
+ 	/* discard if too short */
+ 	if (sz < (datalen + ICMP_MINLEN))
+ 		return 0;
+ 
+ 	/* check IP header */
+-	iphdr = (struct iphdr *) buf;
+-	hlen = iphdr->ihl << 2;
++	if (!icmp_dgram) {
++		struct iphdr *iphdr = (struct iphdr *) buf;
++
++		hlen = iphdr->ihl << 2;
++		ttl = iphdr->ttl;
++	}
+ 	sz -= hlen;
+ 	icmppkt = (struct icmp *) (buf + hlen);
+-	if (icmppkt->icmp_id != myid)
++	if (!icmp_dgram && icmppkt->icmp_id != myid)
+ 		return 0;				/* not our ping */
+ 
+ 	if (icmppkt->icmp_type == ICMP_ECHOREPLY) {
+@@ -715,7 +727,7 @@
+ 			tp = (uint32_t *) icmppkt->icmp_data;
+ 		unpack_tail(sz, tp,
+ 			inet_ntoa(*(struct in_addr *) &from->sin_addr.s_addr),
+-			recv_seq, iphdr->ttl);
++			recv_seq, ttl);
+ 		return 1;
+ 	}
+ 	if (icmppkt->icmp_type != ICMP_ECHO) {
+@@ -736,7 +748,7 @@
+ 		return 0;
+ 
+ 	icmppkt = (struct icmp6_hdr *) packet;
+-	if (icmppkt->icmp6_id != myid)
++	if (!icmp_dgram && icmppkt->icmp6_id != myid)
+ 		return 0;				/* not our ping */
+ 
+ 	if (icmppkt->icmp6_type == ICMP6_ECHO_REPLY) {
+@@ -763,6 +775,10 @@
+ static void ping4(len_and_sockaddr *lsa)
+ {
+ 	int sockopt;
++	struct msghdr msg;
++	struct sockaddr_in from;
++	struct iovec iov;
++	char control_buf[CMSG_SPACE(sizeof(int))];
+ 
+ 	pingaddr.sin = lsa->u.sin;
+ 	if (source_lsa) {
+@@ -786,26 +802,42 @@
+ 		setsockopt_int(pingsock, IPPROTO_IP, IP_MULTICAST_TTL, opt_ttl);
+ 	}
+ 
++	/* a datagram socket has no IP header to read the ttl from */
++	if (icmp_dgram)
++		setsockopt_1(pingsock, IPPROTO_IP, IP_RECVTTL);
++
+ 	signal(SIGINT, print_stats_and_exit);
+ 
++	msg.msg_name = &from;
++	msg.msg_namelen = sizeof(from);
++	msg.msg_iov = &iov;
++	msg.msg_iovlen = 1;
++	msg.msg_control = control_buf;
++	iov.iov_base = G.rcv_packet;
++	iov.iov_len = G.sizeof_rcv_packet;
++
+ 	/* start the ping's going ... */
+  send_ping:
+ 	sendping4(0);
+ 
+ 	/* listen for replies */
+ 	while (1) {
+-		struct sockaddr_in from;
+-		socklen_t fromlen = (socklen_t) sizeof(from);
++		struct cmsghdr *mp;
++		int ttl = -1;
+ 		int c;
+ 
+-		c = recvfrom(pingsock, G.rcv_packet, G.sizeof_rcv_packet, 0,
+-				(struct sockaddr *) &from, &fromlen);
++		msg.msg_controllen = sizeof(control_buf);
++		c = recvmsg(pingsock, &msg, 0);
+ 		if (c < 0) {
+ 			if (errno != EINTR)
+ 				bb_simple_perror_msg("recvfrom");
+ 			continue;
+ 		}
+-		c = unpack4(G.rcv_packet, c, &from);
++		for (mp = CMSG_FIRSTHDR(&msg); mp; mp = CMSG_NXTHDR(&msg, mp)) {
++			if (mp->cmsg_level == IPPROTO_IP && mp->cmsg_type == IP_TTL)
++				move_from_unaligned_int(ttl, CMSG_DATA(mp));
++		}
++		c = unpack4(G.rcv_packet, c, &from, ttl);
+ 		if (pingcount && G.nreceived >= pingcount)
+ 			break;
+ 		if (c && (option_mask32 & OPT_A)) {
+@@ -827,7 +859,7 @@
+ 		xbind(pingsock, &source_lsa->u.sa, source_lsa->len);
+ 
+ #ifdef ICMP6_FILTER
+-	{
++	if (!icmp_dgram) {
+ 		struct icmp6_filter filt;
+ 		if (!(option_mask32 & OPT_VERBOSE)) {
+ 			ICMP6_FILTER_SETBLOCKALL(&filt);
+@@ -851,10 +883,11 @@
+ 
+ 	sockopt = offsetof(struct icmp6_hdr, icmp6_cksum);
+ 	BUILD_BUG_ON(offsetof(struct icmp6_hdr, icmp6_cksum) != 2);
+-	setsockopt_int(pingsock, SOL_RAW, IPV6_CHECKSUM, sockopt);
++	if (!icmp_dgram)
++		setsockopt_int(pingsock, SOL_RAW, IPV6_CHECKSUM, sockopt);
+ 
+ 	/* request ttl info to be returned in ancillary data */
+-	setsockopt_1(pingsock, SOL_IPV6, IPV6_HOPLIMIT);
++	setsockopt_1(pingsock, SOL_IPV6, IPV6_RECVHOPLIMIT);
+ 
+ 	if (if_index)
+ 		pingaddr.sin6.sin6_scope_id = if_index;
+@@ -971,6 +1004,9 @@
+ 	if (interval > INT_MAX/1000000)
+ 		interval = INT_MAX/1000000;
+ 	G.interval_us = interval * 1000000;
++	/* a timer of zero would never send the next request or check -w */
++	if (G.interval_us == 0)
++		G.interval_us = 1;
+ 
+ 	myid = (uint16_t) getpid();
+ 	/* we can use native-endian ident, but other Unix ping/traceroute

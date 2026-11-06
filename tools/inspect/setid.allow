@@ -275,11 +275,10 @@ init init-shell
 
 # The applets the main busybox must not have. The first six need the set-id
 # bit this binary is staged without, so an applet of that name would run in
-# place of the set-id build's copy and fail. `ping6` and `traceroute6` need
-# IPv6 this stack does not have. `ping` and `dmesg` would run from the
-# applet table in place of the files staged under the same names: /bin/ping
-# is the in-house program an ordinary account can run, and /bin/dmesg
-# prints /dev/bootlog. The sentinel is an applet that must be present,
+# place of the set-id build's copy and fail. `traceroute6` needs a raw
+# socket and is not built. `dmesg` would run from the applet table in place
+# of the file staged under the same name, which prints /dev/bootlog. The
+# sentinel is an applet that must be present,
 # because a check that only looks for absences passes just as well on a
 # header it failed to understand.
 forbidden-applet su
@@ -288,8 +287,6 @@ forbidden-applet login
 forbidden-applet vlock
 forbidden-applet wall
 forbidden-applet crontab
-forbidden-applet ping
-forbidden-applet ping6
 forbidden-applet traceroute6
 forbidden-applet dmesg
 applet-sentinel cat
