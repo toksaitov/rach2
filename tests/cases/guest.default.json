@@ -4968,6 +4968,8 @@
         {"assertion_id": "full-eagain", "checks": "a send to the full queue fails with EAGAIN", "source": "program"},
         {"assertion_id": "full-asleep", "checks": "a blocking send is seen asleep waiting for room", "source": "program"},
         {"assertion_id": "full-epipe", "checks": "the waiting send fails with EPIPE when the receiver shuts down reading", "source": "program"},
+        {"assertion_id": "fds-eagain", "checks": "a datagram queue of one-byte messages, each with 253 descriptors, fills with EAGAIN", "source": "program"},
+        {"assertion_id": "fds-charged", "checks": "the queue is full at fewer than 64 such messages, since each is charged its descriptors", "source": "program"},
         {"assertion_id": "chain-build", "checks": "a chain of a thousand datagram pairs is made, each pair queued in the pair before", "source": "program"},
         {"assertion_id": "chain-closed", "checks": "the chain closes from its head and a pair can be made after it", "source": "program"},
         {"assertion_id": "names-bind", "checks": "two datagram sockets bind to names", "source": "program"},

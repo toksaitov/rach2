@@ -28,12 +28,13 @@
  * its queued messages, and the peer it left gets ECONNRESET. A chain of a
  * thousand datagram pairs, each queued in the pair before, closes from its
  * head. A datagram send waiting for room fails with EPIPE when the receiver
- * shuts down reading. A stream whose peer's queue is full polls writable once
- * it is shut down for writing, and the write then fails with EPIPE. A recvfrom
- * given an address and no length pointer fails with EFAULT and leaves the
- * message for the next receive. A descriptor of a KRFFS file in /tmp, sent
- * before a write moves the file and received after the sender's close and the
- * unlink, has the file's size and reads its bytes.
+ * shuts down reading. A datagram queue whose messages each carry 253
+ * descriptors fills with EAGAIN at fewer than 64 messages, since each is
+ * charged its descriptors as well as its byte. A stream whose peer's queue is full polls writable
+ * once it is shut down for writing, and the write then fails with EPIPE. A recvfrom given an
+ * address and no length pointer fails with EFAULT and leaves the message for the next receive. A
+ * descriptor of a KRFFS file in /tmp, sent before a write moves the file and received after the
+ * sender's close and the unlink, has the file's size and reads its bytes.
  *
  * It prints "UNIXMUSL OK" and exits 0 on success, or prints "UNIXMUSL FAIL
  * (detail: errno N)" and exits 1 at the first failure. Ids 1000 and 65534 are
@@ -134,6 +135,8 @@ static const char *const assertion_id[] = {"stream-pair",
                                            "full-eagain",
                                            "full-asleep",
                                            "full-epipe",
+                                           "fds-eagain",
+                                           "fds-charged",
                                            "chain-build",
                                            "chain-closed",
                                            "names-bind",
@@ -980,6 +983,65 @@ static int full_receiver_shut(void)
 }
 
 /**
+ * Check that a datagram queue charges a message its descriptors: messages of
+ * one byte, each with 253 copies of a pipe's end, Linux's SCM_MAX_FD, fill
+ * the queue with EAGAIN at fewer than 64, where a count of messages alone
+ * would take 512 of them and some 130000 descriptors. Returns 0, or 1 after
+ * the failure is printed.
+ */
+static int full_with_fds(void)
+{
+    enum { FDS = 253 };
+    union {
+        struct cmsghdr h;
+        char buf[CMSG_SPACE(FDS * sizeof(int))];
+    } ctl;
+    struct msghdr msg;
+    struct iovec iov;
+    struct cmsghdr *c;
+    int sv[2], p[2], fds[FDS];
+    int i, queued = 0;
+    char byte = 'D';
+
+    if (pipe(p) != 0 || socketpair(AF_UNIX, SOCK_DGRAM, 0, sv) != 0) {
+        return fail("a datagram pair and a pipe to fill it with");
+    }
+    for (i = 0; i < FDS; i++) {
+        fds[i] = p[0];
+    }
+    memset(&msg, 0, sizeof(msg));
+    memset(&ctl, 0, sizeof(ctl));
+    iov.iov_base = &byte;
+    iov.iov_len = 1;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = ctl.buf;
+    msg.msg_controllen = sizeof(ctl.buf);
+    c = CMSG_FIRSTHDR(&msg);
+    c->cmsg_level = SOL_SOCKET;
+    c->cmsg_type = SCM_RIGHTS;
+    c->cmsg_len = CMSG_LEN(sizeof(fds));
+    memcpy(CMSG_DATA(c), fds, sizeof(fds));
+    while (queued < 1024 && sendmsg(sv[0], &msg, MSG_DONTWAIT) == 1) {
+        queued++;
+    }
+    if (queued == 1024 || errno != EAGAIN) {
+        return fail("a datagram queue of messages with descriptors was not EAGAIN when full");
+    }
+    row_held();
+    if (queued == 0 || queued >= 64) {
+        printf("unixmusl: %d messages of %d descriptors were queued\n", queued, FDS);
+        return fail("a datagram queue did not charge its messages' descriptors");
+    }
+    row_held();
+    close(sv[0]);
+    close(sv[1]);
+    close(p[0]);
+    close(p[1]);
+    return 0;
+}
+
+/**
  * Check that a chain of a thousand datagram pairs, each pair's two sockets
  * queued in the pair before and closed in the caller, closes from its head;
  * a kernel that nested a close for each pair would run off its stack.
@@ -1303,8 +1365,8 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);
     if (stream_pair() || message_pairs() || rights_and_creds() || thread_creds() || named() ||
         listening() || backlog_growth() || datagram_peers() || full_receiver_shut() ||
-        chain_close() || datagram_names() || waiting() || shut_writable() || recvfrom_no_length() ||
-        moved_in_flight() || short_control()) {
+        full_with_fds() || chain_close() || datagram_names() || waiting() || shut_writable() ||
+        recvfrom_no_length() || moved_in_flight() || short_control()) {
         return 1;
     }
     report_end();

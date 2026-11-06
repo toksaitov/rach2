@@ -32,10 +32,13 @@
 /* Policy: the bytes a socket's receive queue takes before a sender waits,
  * Linux's default buffer size, and the datagrams it takes, the value
  * systemd gives Linux's net.unix.max_dgram_qlen at boot, whose kernel default
- * is 10. wpa_supplicant drops an event and detaches its monitor at a full
- * queue, and wpa_cli reads none while its action runs, so 10 lose events in a
- * two-second action. A stream send is queued in pieces of at most UNIX_CHUNK
- * bytes, so a reader drains the first while the rest waits. */
+ * is 10. A message is charged its record and descriptor array beside its
+ * bytes, as Linux charges an skb's true size, so that 512 small messages
+ * still fit and a queue of messages with descriptors fills by bytes first.
+ * wpa_supplicant drops an event and detaches its monitor at a full queue, and
+ * wpa_cli reads none while its action runs, so 10 lose events in a two-second
+ * action. A stream send is queued in pieces of at most UNIX_CHUNK bytes, so a
+ * reader drains the first while the rest waits. */
 #define UNIX_BUF        212992u
 #define UNIX_DGRAM_QLEN 512u
 #define UNIX_CHUNK      65536u
@@ -121,6 +124,7 @@ struct unix_msg {
     struct unix_msg *next;
     uint32_t len;
     uint32_t off;
+    uint32_t charge; /* what it holds of its queue's `rq_charge`, in bytes */
     struct unix_cred cred;
     struct unix_name from;
     uint32_t nfds;
@@ -155,7 +159,9 @@ struct unix_sock {
     struct unix_sock *peer;
     struct unix_msg *rq_head;
     struct unix_msg *rq_tail;
-    uint32_t rq_bytes; /* bytes queued and not yet read */
+    uint32_t rq_bytes;  /* bytes queued and not yet read */
+    uint32_t rq_charge; /* those bytes and the queued messages' records and
+                           descriptor arrays, which `rcvbuf` bounds */
     uint32_t rq_count;
     int shut; /* SHUT_RCV and SHUT_SEND */
     int err;  /* a pending positive errno, for SO_ERROR or the next call */
@@ -569,20 +575,23 @@ int unix_inflight_holds(const void *node)
     return chain_holds(reap_head, node);
 }
 
-/** Whether `s`'s receive queue is full: at `rcvbuf` bytes, or for a
- * datagram or sequenced-packet socket at more than UNIX_DGRAM_QLEN messages
+/** Whether `s`'s receive queue is full: at `rcvbuf` bytes charged, or for
+ * a datagram or sequenced-packet socket at more than UNIX_DGRAM_QLEN messages
  * as well. */
 static int queue_full(const struct unix_sock *s)
 {
     if (s->type == SOCK_STREAM) {
-        return s->rq_bytes >= s->rcvbuf;
+        return s->rq_charge >= s->rcvbuf;
     }
-    return s->rq_count > UNIX_DGRAM_QLEN || s->rq_bytes >= s->rcvbuf;
+    return s->rq_count > UNIX_DGRAM_QLEN || s->rq_charge >= s->rcvbuf;
 }
 
-/** Append `m` to `s`'s receive queue and wake its waiters for data. */
+/** Append `m`, with its descriptors attached, to `s`'s receive queue,
+ * charging it its record, bytes and descriptor array, and wake its waiters
+ * for data. */
 static void enqueue(struct unix_sock *s, struct unix_msg *m)
 {
+    m->charge = (uint32_t)sizeof(*m) + m->len + m->nfds * (uint32_t)sizeof(fd_entry_t);
     m->next = NULL;
     if (s->rq_tail) {
         s->rq_tail->next = m;
@@ -591,6 +600,7 @@ static void enqueue(struct unix_sock *s, struct unix_msg *m)
     }
     s->rq_tail = m;
     s->rq_bytes += m->len;
+    s->rq_charge += m->charge;
     s->rq_count++;
     wq_wake(&s->wq, WQ_DATA);
 }
@@ -624,6 +634,7 @@ static struct unix_msg *dequeue(struct unix_sock *s)
         s->rq_tail = NULL;
     }
     s->rq_bytes -= m->len - m->off;
+    s->rq_charge -= m->charge;
     s->rq_count--;
     if (was_full && !queue_full(s)) {
         wake_writers(s);
@@ -1941,8 +1952,8 @@ static int32_t send_conn(struct unix_sock *s, int nonblock, const struct kernel_
         }
         chunk = total - done;
         if (s->type == SOCK_STREAM) {
-            if (chunk > p->rcvbuf - p->rq_bytes) {
-                chunk = p->rcvbuf - p->rq_bytes;
+            if (chunk > p->rcvbuf - p->rq_charge) {
+                chunk = p->rcvbuf - p->rq_charge;
             }
             if (chunk > UNIX_CHUNK) {
                 chunk = UNIX_CHUNK;
@@ -2173,7 +2184,9 @@ static void stream_consume(struct unix_sock *s, struct unix_msg *m, uint32_t chu
     int was_full = queue_full(s);
 
     m->off += chunk;
+    m->charge -= chunk;
     s->rq_bytes -= chunk;
+    s->rq_charge -= chunk;
     if (m->off == m->len) {
         msg_free(dequeue(s));
     }
