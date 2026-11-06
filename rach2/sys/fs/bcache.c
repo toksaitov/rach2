@@ -19,13 +19,19 @@
 #include "../panic.h"
 #include "../proc/process.h"
 
+/* Dirty buffers linked both ways, the latest to go dirty at the head. */
+struct dirty_list {
+    struct bbuf *head;
+    struct bbuf *tail;
+};
+
 static struct bbuf *bufs;     /* every buffer, newest first, linked both ways */
 static uint32_t nbufs;        /* how many */
 static struct bbuf *lru_head; /* the keyed buffers, least recently released first */
 static struct bbuf *lru_tail;
 static struct bbuf *empties;      /* the buffers keyed to nothing */
-static struct bbuf *dirties;      /* the dirty buffers, the latest to go dirty first */
-static struct bbuf *dirties_tail; /* and the earliest */
+static struct dirty_list dirties; /* the dirty buffers but the firsts */
+static struct dirty_list firsts;  /* the dirty buffers of the first class */
 static uint32_t ndirty;           /* how many */
 static uint64_t marks;            /* counts the dirty marks, for `dirtied` and `touched` */
 static struct bbuf *kernel_held;  /* held with no process current */
@@ -304,16 +310,70 @@ static void lru_add_tail(struct bbuf *b)
 }
 
 /*
- * The dirty list. A buffer is on it while it is dirty and at no other time,
- * so a sync and the ordered writes read the few buffers waiting to be
- * written and not the whole cache, which on a machine with memory is tens
- * of thousands of buffers. A buffer joins it at the head when it goes
- * dirty, so the list runs from the latest `dirtied` to the earliest, and a
- * walk for the blocks dirty since before a mark starts at the tail.
+ * The dirty lists. A buffer is on one while it is dirty and at no other
+ * time, so a sync and the ordered writes read the buffers waiting to be
+ * written and not the whole cache, which on a machine with memory is
+ * hundreds of thousands of buffers. Each list runs from the latest
+ * `dirtied` to the earliest, so a walk for the blocks dirty since before a
+ * mark starts at the tail. Those of the first class have a list of their
+ * own: they are few, and a look for them comes before every write of an
+ * `after` and for every dirty victim, with the big lock held, while a
+ * writer can have the rest of the cache dirty.
  */
 
-/** Mark `b` dirty, stamped with the next count of marks, and put it on the
- * dirty list, where it is once. */
+/** The dirty list `b` belongs on, by its class. */
+static struct dirty_list *dirty_list_of(const struct bbuf *b)
+{
+    return b->order == BCACHE_ORDER_FIRST ? &firsts : &dirties;
+}
+
+/** Put the dirty `b` on its list, once, in its place by `dirtied`: at the
+ * head for a buffer that has just gone dirty. */
+static void dirty_link(struct bbuf *b)
+{
+    struct dirty_list *list = dirty_list_of(b);
+    struct bbuf *prev = 0, *next = list->head;
+
+    while (next && next->dirtied > b->dirtied) {
+        stat_visits++;
+        prev = next;
+        next = next->dirty_next;
+    }
+    b->dirty_prev = prev;
+    b->dirty_next = next;
+    if (prev) {
+        prev->dirty_next = b;
+    } else {
+        list->head = b;
+    }
+    if (next) {
+        next->dirty_prev = b;
+    } else {
+        list->tail = b;
+    }
+}
+
+/** Take `b` off its dirty list. */
+static void dirty_unlink(struct bbuf *b)
+{
+    struct dirty_list *list = dirty_list_of(b);
+
+    if (b->dirty_prev) {
+        b->dirty_prev->dirty_next = b->dirty_next;
+    } else {
+        list->head = b->dirty_next;
+    }
+    if (b->dirty_next) {
+        b->dirty_next->dirty_prev = b->dirty_prev;
+    } else {
+        list->tail = b->dirty_prev;
+    }
+    b->dirty_prev = 0;
+    b->dirty_next = 0;
+}
+
+/** Mark `b` dirty, stamped with the next count of marks, and put it on its
+ * dirty list. */
 static void set_dirty(struct bbuf *b)
 {
     b->touched = ++marks;
@@ -323,17 +383,10 @@ static void set_dirty(struct bbuf *b)
     b->dirty = 1;
     b->dirtied = b->touched;
     ndirty++;
-    b->dirty_prev = 0;
-    b->dirty_next = dirties;
-    if (dirties) {
-        dirties->dirty_prev = b;
-    } else {
-        dirties_tail = b;
-    }
-    dirties = b;
+    dirty_link(b);
 }
 
-/** Mark `b` clean and take it off the dirty list. */
+/** Mark `b` clean and take it off its dirty list. */
 static void set_clean(struct bbuf *b)
 {
     if (!b->dirty) {
@@ -344,18 +397,7 @@ static void set_clean(struct bbuf *b)
     b->level = 0;
     b->dirtied = 0;
     ndirty--;
-    if (b->dirty_prev) {
-        b->dirty_prev->dirty_next = b->dirty_next;
-    } else {
-        dirties = b->dirty_next;
-    }
-    if (b->dirty_next) {
-        b->dirty_next->dirty_prev = b->dirty_prev;
-    } else {
-        dirties_tail = b->dirty_prev;
-    }
-    b->dirty_prev = 0;
-    b->dirty_next = 0;
+    dirty_unlink(b);
 }
 
 /** Take `b` off the index and the release order, keyed to nothing, and put
@@ -625,25 +667,37 @@ static int must_precede(const struct bbuf *d, const struct bbuf *b, int last)
     return b->order != BCACHE_ORDER_AFTER && d->owner == b->owner && d->level < b->level;
 }
 
-/** The earliest dirtied block that must reach the device before the dirty
- * block `b` (`must_precede`), or NULL. The walk reads the dirty list from
- * its tail as far as `b`'s last mark. */
-static struct bbuf *first_before(const struct bbuf *b)
+/** The earliest dirtied block of `list` that must reach the device before
+ * the dirty block `b` (`must_precede`), or NULL. The walk reads the list
+ * from its tail as far as `b`'s last mark. */
+static struct bbuf *earliest_before(const struct dirty_list *list, const struct bbuf *b, int last)
 {
     struct bbuf *d;
-    int last;
 
-    if (!b->dirty || !follows(b)) {
-        return 0;
-    }
-    last = block_last(b);
-    for (d = dirties_tail; d && d->dirtied <= b->touched; d = d->dirty_prev) {
+    for (d = list->tail; d && d->dirtied <= b->touched; d = d->dirty_prev) {
         stat_visits++;
         if (must_precede(d, b, last)) {
             return d;
         }
     }
     return 0;
+}
+
+/** The earliest dirtied block that must reach the device before the dirty
+ * block `b` (`must_precede`), or NULL. An `after` alone waits only for the
+ * first class; a block that names others reads the other list too. */
+static struct bbuf *first_before(const struct bbuf *b)
+{
+    struct bbuf *d, *e;
+    int last;
+
+    if (!b->dirty || !follows(b)) {
+        return 0;
+    }
+    last = block_last(b);
+    d = earliest_before(&firsts, b, last);
+    e = names_blocks(b) ? earliest_before(&dirties, b, last) : 0;
+    return !d || (e && e->dirtied < d->dirtied) ? e : d;
 }
 
 /** The block to write next on the way to `b`: what `b` waits for, or what
@@ -1029,9 +1083,9 @@ static int firsts_pending(const block_device_t *dev)
 {
     const struct bbuf *b;
 
-    for (b = dirties; b; b = b->dirty_next) {
+    for (b = firsts.head; b; b = b->dirty_next) {
         stat_visits++;
-        if (b->dev == dev && b->dirty && b->order == BCACHE_ORDER_FIRST &&
+        if (b->dev == dev &&
             (b->holder != -1 || write_barred(b) || (names_blocks(b) && way_to(b)))) {
             return 1;
         }
@@ -1054,12 +1108,12 @@ static int write_firsts(block_device_t *dev)
     int wrote = 0;
 
 again:
-    for (b = dirties; b; b = b->dirty_next) {
+    for (b = firsts.head; b; b = b->dirty_next) {
         int rc;
 
         stat_visits++;
-        if (b->dev != dev || !b->dirty || b->order != BCACHE_ORDER_FIRST || b->holder != -1 ||
-            write_barred(b) || (names_blocks(b) && way_to(b))) {
+        if (b->dev != dev || b->holder != -1 || write_barred(b) ||
+            (names_blocks(b) && way_to(b))) {
             continue;
         }
         rc = write_one(b, 0);
@@ -1309,9 +1363,16 @@ void bcache_dirty(struct bbuf *b)
 void bcache_dirty_ordered(struct bbuf *b, int order)
 {
     bcache_dirty(b);
-    if (b) {
-        b->order = order;
+    if (!b) {
+        return;
     }
+    if ((b->order == BCACHE_ORDER_FIRST) == (order == BCACHE_ORDER_FIRST)) {
+        b->order = order;
+        return;
+    }
+    dirty_unlink(b);
+    b->order = order;
+    dirty_link(b);
 }
 
 void bcache_dirty_owned(struct bbuf *b, uint64_t owner)
@@ -1363,9 +1424,9 @@ static struct bbuf *first_dirty(const block_device_t *dev)
 {
     struct bbuf *b;
 
-    for (b = dirties; b; b = b->dirty_next) {
+    for (b = firsts.head; b; b = b->dirty_next) {
         stat_visits++;
-        if (b->dev == dev && b->dirty && b->order == BCACHE_ORDER_FIRST) {
+        if (b->dev == dev) {
             return b;
         }
     }
@@ -1453,22 +1514,31 @@ static int sync_wants(const struct bbuf *b, int pass, const struct sync_scope *s
 static int gather_dirty(block_device_t *dev, int pass, const struct sync_scope *scope,
                         uint64_t from, uint64_t *out, int cap)
 {
-    const struct bbuf *b;
+    const struct bbuf *b = firsts.head;
+    int rest = pass != 0;
     int n = 0, i;
 
-    for (b = dirties; b; b = b->dirty_next) {
-        stat_visits++;
-        if (b->dev != dev || !sync_wants(b, pass, scope) || b->blk < from) {
+    for (;;) {
+        if (!b) {
+            if (!rest) {
+                break;
+            }
+            rest = 0;
+            b = dirties.head;
             continue;
         }
-        if (n < cap) {
-            out[n] = b->blk;
-            batch_sift_up(out, n);
-            n++;
-        } else if (b->blk < out[0]) {
-            out[0] = b->blk;
-            batch_sift_down(out, n, 0);
+        stat_visits++;
+        if (b->dev == dev && sync_wants(b, pass, scope) && b->blk >= from) {
+            if (n < cap) {
+                out[n] = b->blk;
+                batch_sift_up(out, n);
+                n++;
+            } else if (b->blk < out[0]) {
+                out[0] = b->blk;
+                batch_sift_down(out, n, 0);
+            }
         }
+        b = b->dirty_next;
     }
     for (i = n - 1; i > 0; i--) {
         uint64_t highest = out[0];
@@ -1499,13 +1569,15 @@ static void check_sync_holds(const struct bbuf *b, block_device_t *dev)
  * as `sync_pass` describes.
  *
  * The batch is gathered again from the start when a scan past the last
- * block written finds nothing, for what a wait passed over, and after every
- * wait, which leaves it stale. A block written, emptied or keyed again while
- * the batch's writes slept is skipped. A block that waits for others goes
- * after them (`write_run`). A sync that holds the last blocks leaves the
- * afters too while any `first` is dirty, since their firsts may be among
- * the last blocks. Each block owed is written once, and one dirtied again
- * since is not owed, so the pass ends whatever other writers do.
+ * block written finds nothing, for what a wait passed over. After a wait
+ * the batch goes on from the same block, since a gather reads every dirty
+ * buffer with the big lock held. A block written, emptied or keyed again
+ * while the batch's writes slept is skipped. A block that waits for others
+ * goes after them (`write_run`). A sync that holds the last blocks leaves
+ * the afters too while any `first` is dirty, since their firsts may be
+ * among the last blocks, and gathers again after a wait to see them. Each
+ * block owed is written once, and one dirtied again since is not owed, so
+ * the pass ends whatever other writers do.
  */
 static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope, uint64_t *batch,
                         int cap)
@@ -1534,7 +1606,11 @@ static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope,
             }
             if (next->holder != -1 && next->holder != caller_pid()) {
                 wait_unheld(next);
-                break;
+                if (scope->hold) {
+                    break;
+                }
+                i--;
+                continue;
             }
             check_sync_holds(next, dev);
             rc = write_run(next, &last,
@@ -1544,7 +1620,11 @@ static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope,
                 return rc;
             }
             if (rc > 0) {
-                break;
+                if (scope->hold) {
+                    break;
+                }
+                i--;
+                continue;
             }
             from = last + 1;
         }
@@ -1556,11 +1636,14 @@ static uint32_t owned_dirty(uint64_t owner)
 {
     const struct bbuf *b;
     uint32_t n = 0;
+    int list;
 
-    for (b = dirties; b; b = b->dirty_next) {
-        stat_visits++;
-        if (b->owner == owner) {
-            n++;
+    for (list = 0; list < 2; list++) {
+        for (b = list ? dirties.head : firsts.head; b; b = b->dirty_next) {
+            stat_visits++;
+            if (b->owner == owner) {
+                n++;
+            }
         }
     }
     return n;
