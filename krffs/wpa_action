@@ -14,15 +14,17 @@
 # up to HOLD seconds: a CONNECTED to the same network keeps the client, the
 # address and the connections that use it, and has the client renew the
 # lease at once (SIGUSR1), which the server confirms or, on a network that
-# is not the one it was, refuses, so that the client starts over. A
-# CONNECTED to another network, or none within HOLD seconds, stops the
-# client, and its script gives the lease up with the address, the default
-# route and the servers (udhcpc-default.script). The wait ends early when
-# wpa_supplicant stops trying, its state INTERFACE_DISABLED, as for a blocked
-# radio, or INACTIVE, with no network enabled. This is NetworkManager's link
-# timeout, which keeps a Wi-Fi connection while wpa_supplicant joins its
-# network again after a short break, such as an AP that restarts,
-# deauthenticates the station or is lost for a few beacons.
+# is not the one it was, refuses, so that the client starts over. A server
+# that does not answer costs nothing: the client's script keeps the address
+# to the end of the lease. A CONNECTED to another network, or none within
+# HOLD seconds, stops the client, and its script gives the lease up with the
+# address, the default route and the servers (udhcpc-default.script). The
+# wait ends early when wpa_supplicant stops trying, its state
+# INTERFACE_DISABLED, as for a blocked radio, or INACTIVE, with no network
+# enabled. This is NetworkManager's link timeout, which keeps a Wi-Fi
+# connection while wpa_supplicant joins its network again after a short
+# break, such as an AP that restarts, deauthenticates the station or is lost
+# for a few beacons.
 #
 # wpa_cli can lose an event on a loaded machine: it reads its socket late,
 # wpa_supplicant finds the socket full, drops the event and detaches it, and
@@ -52,7 +54,8 @@
 # address up and start over. A rejoin inside them needs no signal, since
 # the client then asks again by broadcast, three times, 3 seconds apart. So
 # CONNECTED signals only when /var/run/udhcpc.IFACE.renew is absent, which
-# stands from a signal until the client's script has the lease.
+# stands from a signal until the client's script has the lease or a server
+# refuses it, and tells that script to keep the address meanwhile.
 #
 # wpa_cli runs one action at a time, but the waiting process runs beside
 # them, so whatever looks at the client or the wait and acts on it holds
@@ -88,8 +91,10 @@ dhcp_unlock() {
 
 # Stop IFACE's client, if one runs, and wait up to five seconds for its
 # script to give the lease up, so that a new client's lease cannot be taken
-# away by the old one's ending.
+# away by the old one's ending. A renewal pending would have the script keep
+# the address, so it goes first.
 stop_dhcp() {
+	rm -f "$renewing"
 	if [ -s "$pidfile" ]; then
 		pid=$(cat "$pidfile")
 		if kill "$pid" 2>/dev/null; then
@@ -100,7 +105,7 @@ stop_dhcp() {
 			done
 		fi
 	fi
-	rm -f "$pidfile" "$netfile" "$renewing"
+	rm -f "$pidfile" "$netfile"
 }
 
 # Start a client of IFACE for the network WPA_ID.

@@ -1,4 +1,4 @@
-.Dd November 3, 2026
+.Dd November 6, 2026
 .Dt INIT 8
 .Os
 .Sh NAME
@@ -167,6 +167,9 @@ When it leaves one, the client keeps running for up to 15 seconds: a
 rejoin of the same network within them keeps the lease, which the client
 renews at once, and the connections that use it, as NetworkManager keeps a
 connection through a short break.
+A server that does not answer that renewal leaves the address in place
+until the lease ends, within half a minute of its end; a server that refuses
+it, as on another subnet of the same name, ends the lease at once.
 A move to another network, no rejoin in time, a blocked radio or no
 network left enabled stops the client, which gives the lease up.
 A roam between the access points of one network keeps the lease.
