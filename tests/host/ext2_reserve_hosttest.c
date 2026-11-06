@@ -269,9 +269,9 @@ void bcache_wait_unheld(block_device_t *dev, uint64_t block)
 /**
  * Block `block` of the volume in memory; a block outside it fails a row and
  * gives NULL. A get of a block another process holds waits for it, and
- * counts in `busy_gets` when the caller holds em->meta. A read of a block the model calls missing
- * fails a row when the caller plans, runs `fetch_hook` once, and leaves the block missing for
- * `refetch` more reads.
+ * counts in `busy_gets` when the caller holds em->meta. A read of a block the
+ * model calls missing fails a row when the caller plans, runs `fetch_hook`
+ * once, and leaves the block missing for `refetch` more reads.
  */
 struct bbuf *bcache_get(block_device_t *dev, uint64_t block)
 {
