@@ -138,8 +138,11 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     }
     while (!cond(arg)) {
         if (!wlan_work_run_due(now)) {
-            CHECK(!"a waited request never ran");
-            return 0;
+            if (!wlan_work_next_due()) {
+                CHECK(!"a waited request never ran");
+                return 0;
+            }
+            now = wlan_work_next_due();
         }
     }
     return 0;
@@ -1295,7 +1298,10 @@ static void join_wpa2(void)
     rq_u8(NL80211_KEY_IDX, 0);
     rq_end(nest);
     rq_put(NL80211_ATTR_MAC, ap1, 6);
+    next_rc = -EINPROGRESS;
+    n_calls = 0;
     CHECK(rq_send() == 0);
+    CHECK(n_calls == 2); /* a key that waits for the queue comes again */
     CHECK(last.kind == CALL_ADD_KEY && last.key.flags == WLAN_KEY_PAIRWISE);
     CHECK(same(last.key.peer, ap1, 6) && last.key.index == 0 && last.key.len == 16);
     CHECK(last.key.cipher == WLAN_CIPHER_SUITE_CCMP && same(last.key.data, tk, 16));

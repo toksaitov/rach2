@@ -1,7 +1,8 @@
 /* Check the wireless transmit queue's back-pressure: a radio whose ring is
  * full holds the queue's frames until its completions free slots, in order
- * and with none dropped, the queue keeps its last slots for EAPOL, and
- * another refusal and a stop still drop frames.
+ * and with none dropped, the queue keeps its last slots for EAPOL, another
+ * refusal and a stop still drop frames, and a pairwise key waits for what was
+ * queued before it.
  * host-deps: rach2/sys/network/wireless/data.c
  * host-deps: rach2/sys/network/wireless/tx.c
  * host-deps: rach2/sys/network/wireless/rx.c
@@ -183,6 +184,9 @@ static struct slot ring[RING];
 static unsigned ring_count;
 static unsigned marks[64]; /* the marks of the frames the radio took, in order */
 static unsigned seqs[64];  /* and their sequence numbers */
+static int slots[64];      /* and the key slots they went under */
+static int takes_keys;     /* set_key puts keys in slots */
+static unsigned next_slot;
 static unsigned n_taken, refusals;
 static unsigned refuse_mark = 0xffff; /* a frame refused with -EIO */
 
@@ -191,7 +195,8 @@ static unsigned refuse_mark = 0xffff; /* a frame refused with -EIO */
 static int radio_tx(struct wlan_radio *radio, const uint8_t *frame, unsigned len,
                     const struct wlan_tx_info *info)
 {
-    unsigned mark = len > MPDU_MARK ? frame[MPDU_MARK] : 0xffff;
+    unsigned at = MPDU_MARK + (frame[1] & 0x40 ? WLAN_CCMP_HDR_LEN : 0);
+    unsigned mark = len > at ? frame[at] : 0xffff;
 
     (void)radio;
     if (mark == refuse_mark)
@@ -206,6 +211,7 @@ static int radio_tx(struct wlan_radio *radio, const uint8_t *frame, unsigned len
     ++ring_count;
     if (n_taken < 64) {
         marks[n_taken] = mark;
+        slots[n_taken] = info->flags & WLAN_TX_HW_KEY ? info->hw_key : -1;
         seqs[n_taken] = ring[ring_count - 1].seq;
     }
     ++n_taken;
@@ -251,8 +257,22 @@ static int radio_config(struct wlan_radio *radio, const struct wlan_channel *cha
     return 0;
 }
 
+/** Give each key the next slot when takes_keys is set; removing is free. */
+static int radio_set_key(struct wlan_radio *radio, int enable, const uint8_t peer[6],
+                         const struct wlan_key *key, int *slot)
+{
+    (void)radio;
+    (void)peer;
+    (void)key;
+    if (!takes_keys)
+        return -EOPNOTSUPP;
+    if (enable)
+        *slot = (int)next_slot++;
+    return 0;
+}
+
 static const struct wlan_radio_ops ops = {
-    radio_start, radio_stop, radio_config, radio_tx, 0, 0, 0, 0, 0, 0};
+    radio_start, radio_stop, radio_config, radio_tx, radio_set_key, 0, 0, 0, 0, 0};
 
 /** Fail what the ring holds, as a stop must. */
 static void radio_stop(struct wlan_radio *r)
@@ -338,6 +358,8 @@ static void setup(void)
     CHECK(wlan_data_of(&wlan)->connected);
     ring_count = n_taken = refusals = 0;
     refuse_mark = 0xffff;
+    takes_keys = 0;
+    next_slot = 0;
 }
 
 /* --- The checks. --- */
@@ -488,12 +510,132 @@ static void check_stop(void)
     wlan_data_detach(&wlan);
 }
 
+/** Install the pairwise key of the AP whose first byte is `fill` through
+ * the interface's path. */
+static int pairwise(unsigned fill)
+{
+    struct wlan_key k;
+
+    k_memset(&k, 0, sizeof(k));
+    k.cipher = WLAN_CIPHER_SUITE_CCMP;
+    k.flags = WLAN_KEY_PAIRWISE;
+    k.len = 16;
+    k.hw_slot = -1;
+    k_memset(k.data, (int)fill, 16);
+    k_memcpy(k.peer, bssid, 6);
+    return wlan_install_key(&wlan, &k);
+}
+
+/** A protected station whose key took slot 0. */
+static void setup_keyed(void)
+{
+    setup();
+    takes_keys = 1;
+    radio.hw_ciphers = WLAN_CIPHER_HW_CCMP;
+    wlan_data_of(&wlan)->privacy = 1;
+    CHECK(pairwise(1) == 0);
+    CHECK(wlan_data_of(&wlan)->pairwise[0].key.hw_slot == 0);
+}
+
+/**
+ * A key renewal behind a full ring: message 4 waits in the queue with data
+ * before it, the key waits for both, what comes after the key stays for the
+ * new key, and the install ends once they have gone.
+ */
+static void check_rekey_ring(void)
+{
+    unsigned i;
+
+    setup_keyed();
+    for (i = 0; i < RING + 1; ++i)
+        CHECK(send(i) == 0);
+    CHECK(send_type(50, 0x888e) == 0);
+    run_work();
+    CHECK(ring_count == RING && waiting() == 2);
+    CHECK(pairwise(2) == -EINPROGRESS);
+    CHECK(wlan_data_of(&wlan)->pairwise[0].key.hw_slot == 0);
+    CHECK(send(60) == 0);
+    complete(1, 1);
+    run_work();
+    CHECK(pairwise(2) == -EINPROGRESS);
+    complete(1, 1);
+    run_work();
+    CHECK(n_taken == RING + 2 && marks[RING + 1] == 50 && slots[RING + 1] == 0);
+    CHECK(waiting() == 1);
+    CHECK(pairwise(2) == 0);
+    CHECK(wlan_data_of(&wlan)->pairwise[0].key.hw_slot == 1);
+    complete(1, 1);
+    run_work();
+    CHECK(n_taken == RING + 3 && marks[RING + 2] == 60 && slots[RING + 2] == 1);
+    wlan_data_detach(&wlan);
+}
+
+/** A channel switch's hold keeps the queue, and the key waits for it. */
+static void check_rekey_hold(void)
+{
+    setup_keyed();
+    wlan_data_stop_tx(wlan_data_of(&wlan), 1);
+    CHECK(send_type(50, 0x888e) == 0);
+    run_work();
+    CHECK(waiting() == 1);
+    CHECK(pairwise(2) == -EINPROGRESS);
+    wlan_data_stop_tx(wlan_data_of(&wlan), 0);
+    run_work();
+    CHECK(n_taken == 1 && marks[0] == 50 && slots[0] == 0);
+    CHECK(pairwise(2) == 0);
+    wlan_data_detach(&wlan);
+}
+
+/** A dead link does not hold the key past WLAN_DATA_REKEY_WAIT, and what
+ * is left goes under the new one. */
+static void check_rekey_bound(void)
+{
+    unsigned i;
+
+    setup_keyed();
+    for (i = 0; i < RING + 1; ++i)
+        CHECK(send(i) == 0);
+    run_work();
+    CHECK(pairwise(2) == -EINPROGRESS);
+    now += WLAN_DATA_REKEY_WAIT - 1;
+    CHECK(pairwise(2) == -EINPROGRESS);
+    now += 1;
+    CHECK(pairwise(2) == 0);
+    CHECK(wlan_data_of(&wlan)->pairwise[0].key.hw_slot == 1);
+    complete(RING, 1);
+    run_work();
+    CHECK(n_taken == RING + 1 && marks[RING] == RING && slots[RING] == 1);
+    wlan_data_detach(&wlan);
+}
+
+/** A connection lost during the wait ends the install with -ENOTCONN. */
+static void check_rekey_lost(void)
+{
+    unsigned i;
+
+    setup_keyed();
+    for (i = 0; i < RING + 1; ++i)
+        CHECK(send(i) == 0);
+    run_work();
+    CHECK(pairwise(2) == -EINPROGRESS);
+    wlan_data_disconnect(wlan_data_of(&wlan));
+    CHECK(pairwise(2) == -ENOTCONN);
+    CHECK(!wlan_data_of(&wlan)->pairwise[0].gen);
+    complete(RING, 1);
+    run_work();
+    wlan_data_detach(&wlan);
+}
+
 int main(void)
 {
     check_hold();
     check_eapol_room();
     check_other_refusal();
     check_stop();
+    check_rekey_ring();
+    check_rekey_hold();
+    check_rekey_bound();
+    check_rekey_lost();
     if (failures) {
         printf("wlan_txq_hosttest: %u failures\n", failures);
         return failures > 255 ? 255 : (int)failures;

@@ -31,6 +31,7 @@
 #define WLAN_DATA_REKEY_SETTLE  2000
 #define WLAN_DATA_REKEY_NEAR    256
 #define WLAN_DATA_REKEY_JUMP    64
+#define WLAN_DATA_REKEY_WAIT    1000 /* ms a pairwise key waits for the queue */
 #define WLAN_DATA_MAX_FRAGS     16
 /* A reordering buffer holds at most 64 MPDUs, and releases a frame that
  * waited 100 ms past a hole, mac80211's HT_RX_REORDER_BUF_TIMEOUT. */
@@ -210,7 +211,13 @@ struct wlan_data {
     /* Under txq_lock: the radio refused the head with -ENOBUFS, so the
      * queue waits for its next completion rather than for a new frame. */
     int txq_held;
+    /* Under txq_lock: the frames that were queued when a pairwise key came
+     * and have still to go under the key it replaces. */
+    unsigned txq_rekey;
     struct spinlock txq_lock;
+    /* The tick a pairwise key stops waiting for them, or 0 when none waits;
+     * worker only. */
+    uint64_t rekey_due;
     /* The AP's channel switch of mode 1 stops the drain, which keeps the
      * queue until the switch; worker only. */
     int tx_stopped;

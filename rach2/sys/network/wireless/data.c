@@ -44,7 +44,8 @@ static int data_tx_ethernet(struct wlan *wlan, const uint8_t *frame, unsigned le
  * full, stays at the head and the queue is held until a completion frees a
  * slot, as Linux's drivers stop the queue (ieee80211_stop_queue) and wake
  * it from their completions; any other refusal drops the frame and counts
- * it. A channel switch of mode 1 keeps the queue until the switch.
+ * it. A channel switch of mode 1 keeps the queue until the switch, and a
+ * pairwise key on its way keeps what came after it for that key.
  */
 static void data_send_tx(struct wlan_data *d)
 {
@@ -55,7 +56,7 @@ static void data_send_tx(struct wlan_data *d)
     wlan_data_hold(d, 0);
     if (d->tx_stopped)
         return;
-    while (wlan_data_peek(d, d->eth, &len)) {
+    while (!(d->rekey_due && !d->txq_rekey) && wlan_data_peek(d, d->eth, &len)) {
         protocol = (uint16_t)((unsigned)d->eth[12] << 8 | d->eth[13]);
         if (!d->connected)
             rc = -ENOTCONN;
@@ -305,6 +306,37 @@ void wlan_data_state(struct wlan *wlan, const struct wlan_bss *bss, enum wlan_st
     }
 }
 
+/** Mark what the queue holds as the frames a pairwise key waits for, unless
+ * it waits already. */
+static void rekey_mark(struct wlan_data *d)
+{
+    uint32_t flags;
+
+    if (d->rekey_due)
+        return;
+    d->rekey_due = tick_count() + WLAN_DATA_REKEY_WAIT;
+    flags = spin_lock_irqsave(&d->txq_lock);
+    d->txq_rekey = d->txq_count;
+    spin_unlock_irqrestore(&d->txq_lock, flags);
+}
+
+/** Whether a pairwise key must wait on: frames it was marked behind remain
+ * and WLAN_DATA_REKEY_WAIT has not passed. Otherwise the mark goes. */
+static int rekey_waits(struct wlan_data *d)
+{
+    uint32_t flags;
+    int waits;
+
+    flags = spin_lock_irqsave(&d->txq_lock);
+    waits = d->txq_rekey != 0 && tick_count() < d->rekey_due;
+    if (!waits)
+        d->txq_rekey = 0;
+    spin_unlock_irqrestore(&d->txq_lock, flags);
+    if (!waits)
+        d->rekey_due = 0;
+    return waits;
+}
+
 /**
  * Install `key`. Before a pairwise key goes in, what the radio already
  * opened goes up under the key that opened it: the frames queued and those
@@ -314,26 +346,36 @@ void wlan_data_state(struct wlan *wlan, const struct wlan_bss *bss, enum wlan_st
  * ieee80211_pairwise_rekey; here the sessions go on. A frame still in the
  * radio's ring meets the check in rx.c's rx_decrypt. What waits to be sent
  * goes out under the old key too, message 4 of the renewal among them,
- * which the AP could not read under the new one, unless the radio's ring
- * stays full. Returns as wlan_data_install_key does, or -ENOTCONN when a
- * frame so taken ended the connection.
+ * which the AP could not read under the new one. A full ring or a channel
+ * switch can keep it queued: then nothing changes and this returns
+ * -EINPROGRESS, for the caller to come again, as mac80211 flushes its queues
+ * in ieee80211_pairwise_rekey, until the frames have gone or
+ * WLAN_DATA_REKEY_WAIT has passed on a dead link. Otherwise returns as
+ * wlan_data_install_key does, or -ENOTCONN when the connection ended.
  */
 int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
 {
     struct wlan_data *d = wlan_data_of(wlan);
-    int connected;
+    int connected, rc;
 
     if (!d)
         return -ENODEV;
-    if (key && (key->flags & WLAN_KEY_PAIRWISE)) {
-        connected = d->connected;
-        data_take_rx(d);
-        data_send_tx(d);
-        wlan_ba_rx_flush(d);
-        if (connected && !d->connected)
-            return -ENOTCONN;
-    }
-    return wlan_data_install_key(d, key);
+    if (!key || !(key->flags & WLAN_KEY_PAIRWISE))
+        return wlan_data_install_key(d, key);
+    connected = d->connected || d->rekey_due;
+    data_take_rx(d);
+    if (d->connected)
+        rekey_mark(d);
+    data_send_tx(d);
+    wlan_ba_rx_flush(d);
+    if (rekey_waits(d))
+        return -EINPROGRESS;
+    if (connected && !d->connected)
+        return -ENOTCONN;
+    rc = wlan_data_install_key(d, key);
+    if (d->connected)
+        (void)wlan_data_kick(d->tx_work, 0);
+    return rc;
 }
 
 int wlan_remove_key(struct wlan *wlan, const uint8_t peer[6], unsigned index)

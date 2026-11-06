@@ -712,14 +712,14 @@ static int hop_done(void *arg)
 }
 
 /**
- * Run fn(sta, arg) on the wireless worker and return its result, sleeping
- * until it has run. arg stays the caller's. The handler must not use sta
- * afterwards unless the result is not -ENODEV: nl80211_detach ends a
+ * Run fn(sta, arg) on the wireless worker from tick due, 0 for now, and
+ * return its result, sleeping until it has run. arg stays the caller's. The
+ * handler must not use sta afterwards unless the result is not -ENODEV: nl80211_detach ends a
  * waiting request with -ENODEV and frees the station. A worker that failed
  * to start is made again first; -ENOMEM when it still cannot be, since no
  * request may wait for a worker that does not exist.
  */
-static int on_worker(struct sta *sta, hop_fn fn, void *arg)
+static int on_worker_at(struct sta *sta, hop_fn fn, void *arg, uint64_t due)
 {
     struct hop h;
     int rc;
@@ -736,7 +736,7 @@ static int on_worker(struct sta *sta, hop_fn fn, void *arg)
     h.arg = arg;
     h.next = sta->hops;
     sta->hops = &h;
-    rc = wlan_queue_work(&h.work, 0);
+    rc = wlan_queue_work(&h.work, due);
     if (rc) {
         hop_unlink(&h);
         return rc;
@@ -746,6 +746,12 @@ static int on_worker(struct sta *sta, hop_fn fn, void *arg)
      * hop_run, and the next hop of this call chain has the same address. */
     wlan_cancel_work(&h.work);
     return h.rc;
+}
+
+/** Run fn(sta, arg) on the wireless worker now, as on_worker_at. */
+static int on_worker(struct sta *sta, hop_fn fn, void *arg)
+{
+    return on_worker_at(sta, fn, arg, 0);
 }
 
 /* ---- GET_WIPHY ---- */
@@ -1914,6 +1920,8 @@ static int get_key(const struct genl_info *info, struct key_args *k)
     return 0;
 }
 
+#define NEW_KEY_RETRY 10 /* ms between tries of a key that waits */
+
 /** Install a key on the worker. */
 static int new_key_hop(struct sta *s, void *arg)
 {
@@ -1924,7 +1932,10 @@ static int new_key_hop(struct sta *s, void *arg)
  * NEW_KEY: a pairwise key (index 0 or 1, the AP's address in MAC), a group
  * key (index 0 to 3) or an integrity key (4 or 5), of TKIP, CCMP or
  * BIP-CMAC-128, with the receive counter the authenticator gave in KEY_SEQ,
- * little-endian. The key bytes are erased from the stack once installed.
+ * little-endian. A pairwise key that must wait for the transmit queue is
+ * tried again every NEW_KEY_RETRY milliseconds, so that the caller, and with
+ * it the rest of the handshake, follows the key in. The key bytes are erased
+ * from the stack once installed.
  */
 static int new_key(const struct genl_info *info)
 {
@@ -1965,6 +1976,9 @@ static int new_key(const struct genl_info *info)
         k.key.rx_pn[i] = pn;
     }
     rc = on_worker(s, new_key_hop, &k);
+    while (rc == -EINPROGRESS) {
+        rc = on_worker_at(s, new_key_hop, &k, tick_count() + NEW_KEY_RETRY);
+    }
     k_memset(&k.key, 0, sizeof(k.key));
     return rc;
 }

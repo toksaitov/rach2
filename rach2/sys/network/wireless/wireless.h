@@ -151,7 +151,10 @@ void wlan_event(struct wlan *wlan, const struct wlan_event *event);
 
 /** Install a copy of key, or atomically replace the same peer/index key.
  * Worker only, no net_lock; 0 or negative errno. Keep old key on failure.
- * Reinstalling identical key bytes must preserve PN/replay counters. */
+ * Reinstalling identical key bytes must preserve PN/replay counters. A
+ * pairwise key waits for what is queued to be sent: -EINPROGRESS asks the
+ * caller to come again, from outside the worker's callback, until another
+ * result ends it, which takes at most WLAN_DATA_REKEY_WAIT milliseconds. */
 int wlan_install_key(struct wlan *wlan, const struct wlan_key *key);
 
 /** Remove peer/index key and erase its bytes after hardware removal.

@@ -201,6 +201,7 @@ void wlan_data_disconnect(struct wlan_data *d)
     d->txq_head = 0;
     d->txq_count = 0;
     d->txq_held = 0;
+    d->txq_rekey = 0;
     spin_unlock_irqrestore(&d->txq_lock, flags);
     d->tx_stopped = 0;
     wlan_data_clear_keys(d);
@@ -566,6 +567,8 @@ void wlan_data_pop(struct wlan_data *d)
     if (d->txq_count) {
         d->txq_head = (d->txq_head + 1) % WLAN_DATA_TX_QUEUE;
         d->txq_count--;
+        if (d->txq_rekey)
+            d->txq_rekey--;
     }
     spin_unlock_irqrestore(&d->txq_lock, flags);
 }
