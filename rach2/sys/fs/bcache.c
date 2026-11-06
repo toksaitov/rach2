@@ -24,8 +24,10 @@ static uint32_t nbufs;        /* how many */
 static struct bbuf *lru_head; /* the keyed buffers, least recently released first */
 static struct bbuf *lru_tail;
 static struct bbuf *empties;      /* the buffers keyed to nothing */
-static struct bbuf *dirties;      /* the dirty buffers, in no order */
+static struct bbuf *dirties;      /* the dirty buffers, the latest to go dirty first */
+static struct bbuf *dirties_tail; /* and the earliest */
 static uint32_t ndirty;           /* how many */
+static uint64_t marks;            /* counts the dirty marks, for `dirtied` and `touched` */
 static struct bbuf *kernel_held;  /* held with no process current */
 static block_device_t *ahead_dev; /* the device and block a sequential reader */
 static uint64_t ahead_next;       /* reaches next; a miss there fills a run */
@@ -305,21 +307,28 @@ static void lru_add_tail(struct bbuf *b)
  * The dirty list. A buffer is on it while it is dirty and at no other time,
  * so a sync and the ordered writes read the few buffers waiting to be
  * written and not the whole cache, which on a machine with memory is tens
- * of thousands of buffers.
+ * of thousands of buffers. A buffer joins it at the head when it goes
+ * dirty, so the list runs from the latest `dirtied` to the earliest, and a
+ * walk for the blocks dirty since before a mark starts at the tail.
  */
 
-/** Mark `b` dirty and put it on the dirty list, where it is once. */
+/** Mark `b` dirty, stamped with the next count of marks, and put it on the
+ * dirty list, where it is once. */
 static void set_dirty(struct bbuf *b)
 {
+    b->touched = ++marks;
     if (b->dirty) {
         return;
     }
     b->dirty = 1;
+    b->dirtied = b->touched;
     ndirty++;
     b->dirty_prev = 0;
     b->dirty_next = dirties;
     if (dirties) {
         dirties->dirty_prev = b;
+    } else {
+        dirties_tail = b;
     }
     dirties = b;
 }
@@ -332,6 +341,7 @@ static void set_clean(struct bbuf *b)
     }
     b->dirty = 0;
     b->owner = 0;
+    b->dirtied = 0;
     ndirty--;
     if (b->dirty_prev) {
         b->dirty_prev->dirty_next = b->dirty_next;
@@ -340,6 +350,8 @@ static void set_clean(struct bbuf *b)
     }
     if (b->dirty_next) {
         b->dirty_next->dirty_prev = b->dirty_prev;
+    } else {
+        dirties_tail = b->dirty_prev;
     }
     b->dirty_prev = 0;
     b->dirty_next = 0;
@@ -545,6 +557,7 @@ static void wait_unheld(struct bbuf *b)
 /* What a sync writes and how. */
 struct sync_scope {
     uint64_t owner;       /* the owner whose blocks it writes, or 0 for all */
+    uint64_t since;       /* the last `dirtied` it owes, or 0 for any */
     uint32_t flags;       /* the request flags of a run */
     uint32_t first_flags; /* those of a run of `first` buffers */
     int hold;             /* it leaves the device's last blocks for a later sync */
@@ -558,6 +571,76 @@ static int block_last(const struct bbuf *b)
     return b->dev->sync_last && b->dev->sync_last(b->dev->sync_last_arg, b->blk);
 }
 
+/** Whether the block `t` of the class `block_last` names may name blocks
+ * tagged `owner` (`bcache_sync_last`). */
+static int last_names(const struct bbuf *t, uint64_t owner)
+{
+    block_device_t *dev = t->dev;
+
+    return !dev->sync_names || dev->sync_names(dev->sync_last_arg, t->blk, owner);
+}
+
+/** Whether `b` waits for other dirty blocks before its write: an `after`,
+ * or a block its device writes last. */
+static int follows(const struct bbuf *b)
+{
+    return b->order == BCACHE_ORDER_AFTER || block_last(b);
+}
+
+/**
+ * Whether the dirty block `d` must reach the device before `b`, which
+ * `follows`, with `last` saying whether `b` is a block written last. Only a
+ * block dirty since before `b`'s last mark can be what that mark wrote into
+ * `b`: a `first` before an `after`, and before a block written last any
+ * block it may name, one not of its class nor an `after`, shared or of an
+ * owner the block names. The chains end there: what a block written last
+ * waits for waits for nothing, and a `first` waits for that alone.
+ */
+static int must_precede(const struct bbuf *d, const struct bbuf *b, int last)
+{
+    if (d == b || d->dev != b->dev || d->dirtied > b->touched) {
+        return 0;
+    }
+    if (b->order == BCACHE_ORDER_AFTER && d->order == BCACHE_ORDER_FIRST) {
+        return 1;
+    }
+    return last && d->order != BCACHE_ORDER_AFTER && !block_last(d) &&
+           (d->owner == 0 || last_names(b, d->owner));
+}
+
+/** The earliest dirtied block that must reach the device before the dirty
+ * block `b` (`must_precede`), or NULL. The walk reads the dirty list from
+ * its tail as far as `b`'s last mark. */
+static struct bbuf *first_before(const struct bbuf *b)
+{
+    struct bbuf *d;
+    int last;
+
+    if (!b->dirty || !follows(b)) {
+        return 0;
+    }
+    last = block_last(b);
+    for (d = dirties_tail; d && d->dirtied <= b->touched; d = d->dirty_prev) {
+        stat_visits++;
+        if (must_precede(d, b, last)) {
+            return d;
+        }
+    }
+    return 0;
+}
+
+/** The block to write next on the way to `b`: what `b` waits for, or what
+ * that waits for in turn, or NULL when `b` may be written now. */
+static struct bbuf *way_to(const struct bbuf *b)
+{
+    struct bbuf *d = first_before(b), *e;
+
+    while (d && (e = first_before(d)) != 0) {
+        d = e;
+    }
+    return d;
+}
+
 /** Whether a write of `b` is kept from an eviction, a shrink or a reserve:
  * its own last write failed, or a write of its device did and it is a block
  * that device wants written last, which may name the block that failed. */
@@ -566,7 +649,8 @@ static int write_barred(const struct bbuf *b)
     return b->write_failed || ((b->dev->flags & BLOCK_WRITE_FAILED) && block_last(b));
 }
 
-/** Whether a write of `scope` leaves `b` for a later one. */
+/** Whether a write of `scope` leaves `b` for a later one: the reclaim's
+ * barred blocks, and the blocks a sync's first round holds back. */
 static int sync_leaves(const struct bbuf *b, const struct sync_scope *scope)
 {
     if (scope->reclaim && write_barred(b)) {
@@ -598,24 +682,109 @@ static int write_buffer_flags(struct bbuf *b, uint32_t flags)
     return 0;
 }
 
-/** Write the unheld buffer `b` alone, held across the write, with the
- * request `flags`, and wake whoever waits for it. */
-static int write_one(struct bbuf *b, uint32_t flags)
-{
-    int rc;
-
-    hold(b);
-    rc = write_buffer_flags(b, flags);
-    unhold(b);
-    wq_wake_all(&b->wq);
-    return rc;
-}
-
 /** The request flags of a write that leaves `dev`'s own cache to a later
  * flush; 0 on a disk that has no such write. */
 static uint32_t unflushed_flags(block_device_t *dev)
 {
     return (block_flags(dev) & BLOCK_WRITE_THROUGH) ? BLOCK_REQ_NOFLUSH : 0;
+}
+
+/** Put what a write-through disk under `dev` holds in its cache on the
+ * medium, before a block that must follow what went before it; a disk with
+ * nothing unflushed answers at once. A failure is recorded as a failed
+ * write's. 0, or -errno. */
+static int order_flush(block_device_t *dev)
+{
+    int rc;
+
+    if (!unflushed_flags(dev)) {
+        return 0;
+    }
+    rc = block_flush(dev);
+    if (rc != 0) {
+        klog(KLOG_WARN, "bcache", "write: flush failed (%d)", rc);
+        dev->flags |= BLOCK_WRITE_FAILED;
+        vfs_device_failed(dev, 0, rc);
+    }
+    return rc;
+}
+
+/** Let go of `b`, held by the caller, and wake whoever waits for it. */
+static void let_go(struct bbuf *b)
+{
+    unhold(b);
+    wq_wake_all(&b->wq);
+}
+
+static int write_one(struct bbuf *b, uint32_t flags);
+static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
+                     const struct sync_scope *scope);
+
+/**
+ * Write the unheld dirty buffer `b`, which `follows`, after what it waits
+ * for, with the request `flags`.
+ *
+ * `b` is held from the first look until its write ends, so that nothing is
+ * stored in it meanwhile and what it waits for cannot grow. The blocks are
+ * written the earliest dirtied first (`way_to`), each in a run of its
+ * neighbours when it waits for nothing itself; then, on a
+ * write-through disk, the flush; then `b`. One of them held by another
+ * process lets `b` go for the wait, since that holder may be waiting for
+ * `b`, and the caller looks again. At most two buffers are held at once:
+ * `b`, and the `first` an `after` waits for while it is written.
+ *
+ * @return 0 with `b` written; 1 after a wait, with `b` unwritten; or the
+ *         -errno of a failed write or flush, which leaves `b` dirty, or
+ *         -EIO for a block the caller holds itself.
+ */
+static int write_follower(struct bbuf *b, uint32_t flags)
+{
+    struct sync_scope any;
+    struct bbuf *d;
+    uint64_t end;
+    int rc = 0;
+
+    k_memset(&any, 0, sizeof(any));
+
+    hold(b);
+    while (rc == 0 && (d = way_to(b)) != 0) {
+        if (d->holder == caller_pid()) {
+            rc = -EIO;
+        } else if (d->holder != -1) {
+            let_go(b);
+            wait_unheld(d);
+            return 1;
+        } else if (follows(d)) {
+            rc = write_one(d, 0);
+        } else {
+            rc = write_run(d, &end, d->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(b->dev),
+                           &any);
+        }
+    }
+    if (rc == 0) {
+        rc = order_flush(b->dev);
+    }
+    if (rc == 0) {
+        rc = write_buffer_flags(b, flags);
+    }
+    let_go(b);
+    return rc;
+}
+
+/** Write the unheld buffer `b` alone, held across the write, with the
+ * request `flags`, and wake whoever waits for it; one that `follows` goes
+ * after what it waits for (`write_follower`), which may answer 1. */
+static int write_one(struct bbuf *b, uint32_t flags)
+{
+    int rc;
+
+    if (follows(b)) {
+        return write_follower(b, flags);
+    }
+    hold(b);
+    rc = write_buffer_flags(b, flags);
+    let_go(b);
+    return rc;
 }
 
 /* The staging buffer a run of blocks is written or read through, the most
@@ -632,12 +801,56 @@ static struct bbuf *fill_keep;
 #define RUN_BLOCKS (BLOCK_REQ_MAX_SECTORS / BCACHE_BLOCK_SECTORS)
 
 /**
+ * Gather in `run` the blocks a run from `first` writes (`write_run`):
+ * `first`, then the dirty, unheld blocks after it that `scope` takes, of its
+ * place in the order and its kind, as far as one request moves and half the
+ * cache, while the staging buffer is free. Returns how many, at least 1.
+ */
+static int run_gather(struct bbuf *first, struct bbuf **run, const struct sync_scope *scope)
+{
+    block_device_t *dev = first->dev;
+    uint32_t most = block_max_sectors(dev) / BCACHE_BLOCK_SECTORS;
+    int n = 1;
+
+    run[0] = first;
+    if (most > RUN_BLOCKS) {
+        most = RUN_BLOCKS;
+    }
+    if (most > bcache_limit() / 2u) {
+        most = bcache_limit() / 2u;
+    }
+    if (!run_stage && most > 1 && !run_stage_busy) {
+        run_stage = kalloc_pages_try(RUN_BLOCKS * BCACHE_BLOCK_BYTES / PAGE_SIZE, 0);
+    }
+    if (run_stage_busy || (follows(first) && way_to(first))) {
+        most = 1;
+    }
+    while ((uint32_t)n < most && run_stage && run[n - 1]->bytes == BCACHE_BLOCK_BYTES) {
+        struct bbuf *b = index_find(dev, first->blk + (uint64_t)n);
+
+        if (!b || !b->dirty || b->holder != -1 || b->order != first->order ||
+            (scope->owner && b->owner != scope->owner) || sync_leaves(b, scope) ||
+            follows(b) != follows(first) || (follows(b) && way_to(b))) {
+            break;
+        }
+        run[n++] = b;
+    }
+    return n;
+}
+
+/**
  * Write `first` and the dirty, unheld blocks that follow it on its device
  * in one request, with the request `flags`, so that a file written back
  * goes to the disk in runs and not a page at a time. `*last` receives the
  * last block written. A run stops at a block `scope` leaves out: of another
  * owner, so that one file's sync takes no neighbour's blocks with it, one
  * its device wants written last, or one a reclaim may not write.
+ *
+ * A run of blocks that wait for others (`follows`) holds only those whose
+ * way is clear, which `first`'s is, and no block of the other kind, since
+ * one request reaches the device as a whole; it is held while a
+ * write-through disk is flushed before it. A `first` that waits is written
+ * after what it waits for and alone (`write_one`), which may answer 1.
  *
  * A run is as long as the device takes at once and at most half the cache,
  * as a read run is: its buffers are held across the request's sleep and let
@@ -653,38 +866,27 @@ static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
 {
     struct bbuf *run[RUN_BLOCKS];
     block_device_t *dev = first->dev;
-    uint32_t most = block_max_sectors(dev) / BCACHE_BLOCK_SECTORS, bytes = 0;
-    int n = 1, i, rc;
+    uint32_t bytes = 0;
+    int n, i, rc;
 
-    run[0] = first;
-    if (most > RUN_BLOCKS) {
-        most = RUN_BLOCKS;
-    }
-    if (most > bcache_limit() / 2u) {
-        most = bcache_limit() / 2u;
-    }
-    if (!run_stage && most > 1 && !run_stage_busy) {
-        run_stage = kalloc_pages_try(RUN_BLOCKS * BCACHE_BLOCK_BYTES / PAGE_SIZE, 0);
-    }
-    if (run_stage_busy) {
-        most = 1;
-    }
-    while ((uint32_t)n < most && run_stage && run[n - 1]->bytes == BCACHE_BLOCK_BYTES) {
-        struct bbuf *b = index_find(dev, first->blk + (uint64_t)n);
-
-        if (!b || !b->dirty || b->holder != -1 || b->order != first->order ||
-            (scope->owner && b->owner != scope->owner) || sync_leaves(b, scope)) {
-            break;
-        }
-        run[n++] = b;
-    }
+    n = run_gather(first, run, scope);
+    *last = first->blk;
     if (n == 1) {
-        *last = first->blk;
         return write_one(first, flags);
     }
     run_stage_busy = 1;
     for (i = 0; i < n; i++) {
         hold(run[i]);
+    }
+    rc = follows(first) ? order_flush(dev) : 0;
+    if (rc != 0) {
+        run_stage_busy = 0;
+        for (i = 0; i < n; i++) {
+            let_go(run[i]);
+        }
+        return rc;
+    }
+    for (i = 0; i < n; i++) {
         k_memcpy(run_stage + bytes, run[i]->data, run[i]->bytes);
         bytes += run[i]->bytes;
     }
@@ -704,8 +906,7 @@ static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
             run[i]->write_failed = 0;
             run[i]->order = 0;
         }
-        unhold(run[i]);
-        wq_wake_all(&run[i]->wq);
+        let_go(run[i]);
     }
     if (rc == 0) {
         write_gen++;
@@ -741,8 +942,9 @@ struct first_ask {
 /**
  * Whether a miss for a block of `filling` may take `b`. Not one that is held
  * or kept for a fill, nor a dirty one whose last write failed, whose write
- * the caller may not make (`victim_may_be_written`), or an `after` whose
- * device has a `first` that cannot be written now.
+ * the caller may not make (`victim_may_be_written`), a block written last
+ * that waits for another (`way_to`), or an `after` whose device has a
+ * `first` that cannot be written now.
  */
 static int victim_fit(const struct bbuf *b, block_device_t *filling, struct first_ask *ask)
 {
@@ -753,6 +955,9 @@ static int victim_fit(const struct bbuf *b, block_device_t *filling, struct firs
         return 1;
     }
     if (write_barred(b) || !victim_may_be_written(b->dev, filling)) {
+        return 0;
+    }
+    if (block_last(b) && way_to(b)) {
         return 0;
     }
     if (b->order != BCACHE_ORDER_AFTER) {
@@ -798,9 +1003,10 @@ static struct bbuf *victim_find(block_device_t *filling)
 }
 
 /**
- * Whether one of `dev`'s dirty `first` buffers cannot be written now, held
- * or barred (`write_barred`). An `after` buffer of the device is then not a
- * victim, since its write would pass the first.
+ * Whether one of `dev`'s dirty `first` buffers cannot be written now: held,
+ * barred (`write_barred`), or a block written last that waits for another.
+ * An `after` buffer of the device is then not a victim, since its write
+ * might pass the first: a reclaim does not ask which firsts it follows.
  */
 static int firsts_pending(const block_device_t *dev)
 {
@@ -809,7 +1015,7 @@ static int firsts_pending(const block_device_t *dev)
     for (b = dirties; b; b = b->dirty_next) {
         stat_visits++;
         if (b->dev == dev && b->dirty && b->order == BCACHE_ORDER_FIRST &&
-            (b->holder != -1 || write_barred(b))) {
+            (b->holder != -1 || write_barred(b) || (block_last(b) && way_to(b)))) {
             return 1;
         }
     }
@@ -818,14 +1024,14 @@ static int firsts_pending(const block_device_t *dev)
 
 /**
  * Write `dev`'s unheld dirty `first` buffers, each held across its write,
- * before an `after` buffer of the device is written. Returns 0 with nothing
- * to write, 1 when something was written, and the first failure's -errno,
- * which marks that buffer and leaves the rest. Every write sleeps, so the
- * scan starts over after each one. A buffer whose last write failed is left;
- * with `reclaim` set, for a write no sync asked for, so is every barred one
- * (`write_barred`), which may become barred while an earlier write sleeps.
+ * before a reclaim writes an `after` buffer of the device. Returns 0 with
+ * nothing to write, 1 when something was written, and the first failure's
+ * -errno, which marks that buffer and leaves the rest. Every write sleeps,
+ * so the scan starts over after each one. A barred buffer (`write_barred`),
+ * which may become barred while an earlier write sleeps, is left, and so is
+ * a block written last that waits for another.
  */
-static int write_firsts(block_device_t *dev, int reclaim)
+static int write_firsts(block_device_t *dev)
 {
     struct bbuf *b;
     int wrote = 0;
@@ -836,11 +1042,11 @@ again:
 
         stat_visits++;
         if (b->dev != dev || !b->dirty || b->order != BCACHE_ORDER_FIRST || b->holder != -1 ||
-            (reclaim ? write_barred(b) : b->write_failed)) {
+            write_barred(b) || (block_last(b) && way_to(b))) {
             continue;
         }
         rc = write_one(b, 0);
-        if (rc != 0) {
+        if (rc < 0) {
             return rc;
         }
         wrote = 1;
@@ -931,10 +1137,10 @@ again:
         if (!victim->dirty) {
             break;
         }
-        if (victim->order == BCACHE_ORDER_AFTER && write_firsts(victim->dev, 1) != 0) {
+        if (victim->order == BCACHE_ORDER_AFTER && write_firsts(victim->dev) != 0) {
             goto again;
         }
-        if (write_one(victim, 0) == 0) {
+        if (write_one(victim, 0) >= 0) {
             goto again;
         }
     }
@@ -1140,32 +1346,6 @@ static struct bbuf *first_dirty(const block_device_t *dev)
     return 0;
 }
 
-/**
- * Clear the way for a write of one of `dev`'s `after` buffers: wait for a
- * `first` another process holds, or write the device's firsts. Returns 0
- * when it has none, 1 after a wait or a write, which sleep, so that the
- * caller looks again, and a -errno on a failed write, or -EIO when the only
- * firsts left are ones whose writes failed or that the caller holds.
- */
-static int clear_firsts(block_device_t *dev)
-{
-    struct bbuf *f = first_dirty(dev);
-    int rc;
-
-    if (!f) {
-        return 0;
-    }
-    if (f->holder != -1 && f->holder != caller_pid()) {
-        wait_unheld(f);
-        return 1;
-    }
-    rc = write_firsts(dev, 0);
-    if (rc == 0) {
-        return -EIO;
-    }
-    return rc;
-}
-
 /* The dirty blocks one walk of the dirty buffers gathers for a sync when
  * the heap has no room for a batch of all of them: a walk per run written
  * would read every dirty buffer for every run. This batch is on the stack,
@@ -1221,10 +1401,12 @@ static void batch_sift_up(uint64_t *heap, int at)
     }
 }
 
-/** Whether pass `pass` of a sync of `scope` writes `b`. */
+/** Whether pass `pass` of a sync of `scope` writes `b`: dirty since before
+ * the sync began, of its owner, and not left for a later sync. */
 static int sync_wants(const struct bbuf *b, int pass, const struct sync_scope *scope)
 {
     return b->dirty && (pass != 0 || b->order == BCACHE_ORDER_FIRST) &&
+           (!scope->since || b->dirtied <= scope->since) &&
            (!scope->owner || b->owner == scope->owner) && !sync_leaves(b, scope);
 }
 
@@ -1292,11 +1474,12 @@ static void check_sync_holds(const struct bbuf *b, block_device_t *dev)
  *
  * The batch is gathered again from the start when a scan past the last
  * block written finds nothing, for what a wait passed over, and after every
- * wait or write of the `first` buffers, which sleep and leave it stale. A
- * block written, emptied or keyed again while the batch's writes slept is
- * skipped. In pass 1, an `after` has the way cleared first (`clear_firsts`).
- * A sync that holds the last blocks clears no way: their firsts are not its
- * to write, so while any `first` is dirty it leaves the afters too.
+ * wait, which leaves it stale. A block written, emptied or keyed again while
+ * the batch's writes slept is skipped. A block that waits for others goes
+ * after them (`write_run`). A sync that holds the last blocks leaves the
+ * afters too while any `first` is dirty, since their firsts may be among
+ * the last blocks. Each block owed is written once, and one dirtied again
+ * since is not owed, so the pass ends whatever other writers do.
  */
 static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope, uint64_t *batch,
                         int cap)
@@ -1323,15 +1506,6 @@ static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope,
             if (!next || !sync_wants(next, pass, scope) || next->blk < from) {
                 continue;
             }
-            if (pass == 1 && next->order == BCACHE_ORDER_AFTER) {
-                rc = scope->hold ? first_dirty(dev) != 0 : clear_firsts(dev);
-                if (rc < 0) {
-                    return rc;
-                }
-                if (rc > 0) {
-                    break;
-                }
-            }
             if (next->holder != -1 && next->holder != caller_pid()) {
                 wait_unheld(next);
                 break;
@@ -1340,8 +1514,11 @@ static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope,
             rc = write_run(next, &last,
                            next->order == BCACHE_ORDER_FIRST ? scope->first_flags : scope->flags,
                            scope);
-            if (rc != 0) {
+            if (rc < 0) {
                 return rc;
+            }
+            if (rc > 0) {
+                break;
             }
             from = last + 1;
         }
@@ -1411,33 +1588,37 @@ static int sync_passes(block_device_t *dev, struct sync_scope *scope)
 static int sync_device(block_device_t *dev, int durable);
 
 /*
- * A `first` dirtied while the second pass slept is written before the next
- * `after` of the device, whatever their block numbers, so the order the
- * marks promise holds across the writes' sleeps. A dirty buffer another
- * process holds is waited for, not passed over, since a sync that returned
- * over one would report clean what is still in flight. The place reached is
- * kept as a block number, since a buffer let go of during a wait can be
- * given to another block.
+ * A block that waits for others is written after them, whatever their block
+ * numbers, and is held from the look that finds its way clear until its
+ * write ends, so the order the marks promise holds across the writes'
+ * sleeps. A dirty buffer another process holds is waited for, not passed
+ * over, since a sync that returned over one would report clean what is still
+ * in flight. The place reached is kept as a block number, since a buffer let
+ * go of during a wait can be given to another block.
  *
  * On a write-through disk a `first` buffer is written with the disk's flush,
- * so it is on the medium before an `after` is written, by this sync, another
- * or a reclaim. The other writes leave the disk's cache to one flush at the
- * sync's end, which makes the sync durable when it returns, even when a
+ * and a block that waits for others has the disk flushed before it, so what
+ * it waits for is on the medium first, whether this sync, another or a
+ * reclaim wrote it. The other writes leave the disk's cache to one flush at
+ * the sync's end, which makes the sync durable when it returns, even when a
  * write failed.
  *
  * On a device that names blocks to write last (`bcache_sync_last`), the
  * passes run twice: without those blocks, then, when that went well, with
  * them. A failure so leaves them dirty, and the `after` blocks with them
- * while a `first` is among them.
+ * while a `first` is among them; and what one waits for is mostly written
+ * by then, in the first round's runs.
  */
 int bcache_sync(block_device_t *dev)
 {
     return sync_device(dev, 1);
 }
 
-void bcache_sync_last(block_device_t *dev, int (*last)(void *arg, uint64_t blk), void *arg)
+void bcache_sync_last(block_device_t *dev, int (*last)(void *arg, uint64_t blk),
+                      int (*names)(void *arg, uint64_t blk, uint64_t owner), void *arg)
 {
     dev->sync_last = last;
+    dev->sync_names = names;
     dev->sync_last_arg = arg;
 }
 
@@ -1457,6 +1638,7 @@ static int sync_device(block_device_t *dev, int durable)
     int rc, flushed;
 
     k_memset(&scope, 0, sizeof(scope));
+    scope.since = marks;
     scope.flags = unflushed_flags(dev);
     scope.first_flags = durable ? 0 : scope.flags;
     scope.hold = dev->sync_last != 0;
@@ -1486,13 +1668,17 @@ int bcache_sync_owned(block_device_t *dev, uint64_t owner)
 
     k_memset(&scope, 0, sizeof(scope));
     scope.owner = owner;
+    scope.since = marks;
     scope.flags = unflushed_flags(dev);
     return sync_passes(dev, &scope);
 }
 
+/* What the block waits for is written here one block a call, and not held:
+ * the caller looks at its own state between the calls. */
 int bcache_sync_block_ready(block_device_t *dev, uint64_t blk)
 {
-    struct bbuf *b = index_find(dev, blk);
+    struct bbuf *b = index_find(dev, blk), *d;
+    int rc;
 
     if (!b || !b->dirty) {
         return 0;
@@ -1501,27 +1687,42 @@ int bcache_sync_block_ready(block_device_t *dev, uint64_t blk)
         wait_unheld(b);
         return 1;
     }
-    return b->order == BCACHE_ORDER_AFTER ? clear_firsts(dev) : 0;
+    d = way_to(b);
+    if (!d) {
+        return 0;
+    }
+    if (d->holder == caller_pid()) {
+        return -EIO;
+    }
+    if (d->holder != -1) {
+        wait_unheld(d);
+        return 1;
+    }
+    rc = write_one(d, d->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(dev));
+    return rc < 0 ? rc : 1;
 }
 
+/* A block that waits is held while what it waits for is written
+ * (`write_follower`), so a steady writer cannot keep the call: what the
+ * block waits for stops growing. A wait for another holder looks again. */
 int bcache_sync_block(block_device_t *dev, uint64_t blk)
 {
     for (;;) {
-        int rc = bcache_sync_block_ready(dev, blk);
-        struct bbuf *b;
+        struct bbuf *b = index_find(dev, blk);
+        int rc;
 
-        if (rc < 0) {
-            return rc;
-        }
-        if (rc > 0) {
-            continue;
-        }
-        b = index_find(dev, blk);
         if (!b || !b->dirty) {
             return 0;
         }
+        if (b->holder != -1 && b->holder != caller_pid()) {
+            wait_unheld(b);
+            continue;
+        }
         check_sync_holds(b, dev);
-        return write_one(b, b->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(dev));
+        rc = write_one(b, b->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(dev));
+        if (rc <= 0) {
+            return rc;
+        }
     }
 }
 
@@ -1574,7 +1775,8 @@ static struct bbuf *shrink_dirty(void)
         if (write_barred(b) || !victim_may_be_written(b->dev, 0)) {
             continue;
         }
-        if (b->order == BCACHE_ORDER_AFTER && firsts_pending(b->dev)) {
+        if ((block_last(b) && way_to(b)) ||
+            (b->order == BCACHE_ORDER_AFTER && firsts_pending(b->dev))) {
             continue;
         }
         return b;
@@ -1627,7 +1829,7 @@ uint32_t bcache_shrink(uint32_t want, int can_write, uint32_t *written)
         if (!b) {
             break;
         }
-        if (b->order == BCACHE_ORDER_AFTER && write_firsts(b->dev, 1) != 0) {
+        if (b->order == BCACHE_ORDER_AFTER && write_firsts(b->dev) != 0) {
             continue;
         }
         rc = write_one(b, 0);
@@ -1689,7 +1891,7 @@ uint32_t bcache_reserve(block_device_t *dev, uint32_t n)
     uint32_t want = n < limit ? n : limit;
     uint32_t ready = 0;
     int budget = (int)want * 2;
-    const struct sync_scope reclaim = {0, 0, 0, 0, 0, 1};
+    const struct sync_scope reclaim = {0, 0, 0, 0, 0, 0, 1};
 
     for (;;) {
         struct bbuf *b = reserve_walk(dev, want, &ready);
@@ -1700,7 +1902,7 @@ uint32_t bcache_reserve(block_device_t *dev, uint32_t n)
             return ready;
         }
         if (b->order == BCACHE_ORDER_AFTER) {
-            rc = write_firsts(b->dev, 1);
+            rc = write_firsts(b->dev);
             if (rc < 0) {
                 return ready;
             }
@@ -1710,7 +1912,7 @@ uint32_t bcache_reserve(block_device_t *dev, uint32_t n)
         }
         rc = write_run(b, &last, b->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(b->dev),
                        &reclaim);
-        if (rc != 0) {
+        if (rc < 0) {
             return ready;
         }
     }

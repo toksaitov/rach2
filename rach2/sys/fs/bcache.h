@@ -44,8 +44,8 @@
 #define BCACHE_BLOCK_BYTES   (BCACHE_BLOCK_SECTORS * BLOCK_SECTOR_SIZE)
 #define BCACHE_HOLD_MAX      4
 /* A dirty buffer's place in its device's writeback: a `first` buffer reaches
- * the device before any `after` buffer of the device does, whichever path
- * writes; 0 is no place. The marks clear with the write. */
+ * the device before any `after` buffer of the device marked after it,
+ * whichever path writes; 0 is no place. The marks clear with the write. */
 #define BCACHE_ORDER_FIRST   1
 #define BCACHE_ORDER_AFTER   2
 
@@ -70,6 +70,9 @@ struct bbuf {
     int order;              /* BCACHE_ORDER_FIRST, BCACHE_ORDER_AFTER or 0 */
     uint64_t owner;         /* the one file this dirty block is written for,
                              * or 0 for a shared block; clear while clean */
+    uint64_t dirtied;       /* the count of dirty marks when it last went
+                             * dirty; 0 while clean */
+    uint64_t touched;       /* the count at its last dirty mark */
     wait_queue_t wq;        /* who waits for the hold to end */
     struct bbuf *hold_next; /* the next buffer its holder holds */
     struct bbuf *lru_prev;  /* the keyed buffers in release order, oldest first */
@@ -114,33 +117,39 @@ void bcache_dirty(struct bbuf *b);
 /**
  * Mark a held buffer for writeback with a place in its device's order.
  *
- * A `BCACHE_ORDER_FIRST` buffer reaches the device before any
- * `BCACHE_ORDER_AFTER` buffer of the same device does, whichever path
- * writes: a sync writes the firsts before the rest, in separate requests,
- * and an eviction or the memory reclaim that chose an `after` buffer writes
- * the device's firsts before it, or passes it over while one of them is
- * held or failed its write. The marks clear with the write. When ext2 frees
- * a file's blocks its pointer blocks and inode are first and its bitmaps and
- * descriptors after, so no pointer on the disk names a block whose bit is
- * clear, however the cache is pressed while the free runs.
+ * A `BCACHE_ORDER_FIRST` buffer reaches the device before a
+ * `BCACHE_ORDER_AFTER` buffer of the same device whose last mark came after
+ * the first went dirty, whichever path writes: a sync writes the firsts
+ * before the rest, in separate requests, and writes those an `after` waits
+ * for before it; an eviction or the memory reclaim that chose an `after`
+ * buffer writes every first of its device before it, or passes it over
+ * while one of them is held, failed its write or waits itself
+ * (`bcache_sync_last`). On a write-through disk the flush comes between. The
+ * marks clear with the write. When ext2 frees a file's blocks its pointer
+ * blocks and inode are first and its bitmaps and descriptors after, so no
+ * pointer on the disk names a block whose bit is clear, however the cache is
+ * pressed while the free runs.
  */
 void bcache_dirty_ordered(struct bbuf *b, int order);
 
 /**
- * Mark a held buffer for writeback as a block of `owner` alone, nonzero and
- * chosen by the file system, such as a file's inode: its data and pointer
- * blocks. A shared block keeps owner 0.
+ * Mark a held buffer for writeback as a block of `owner` alone, chosen by
+ * the file system, such as a file's inode: its data and pointer blocks. An
+ * owner of 0 makes the block shared again.
  *
  * The tag lasts until the buffer is written, and the last one given stands;
  * a later `bcache_dirty` or `bcache_dirty_ordered` leaves it and its place
  * stays. A tag gone stale, as on a block freed and used again, costs one
- * needless write by `bcache_sync_owned`. Panics when the caller does not
- * hold the buffer.
+ * needless write by `bcache_sync_owned`, and a block a device writes last
+ * (`bcache_sync_last`) may then be kept waiting for it, or not wait for it,
+ * so a file system that uses the block again for something shared marks it
+ * with 0. Panics when the caller does not hold the buffer.
  */
 void bcache_dirty_owned(struct bbuf *b, uint64_t owner);
 
 /**
- * Write a held buffer through to the device now.
+ * Write a held buffer through to the device now, in the caller's order: no
+ * block it would wait for in a sync is written first.
  *
  * @return 0 with the buffer clean; the write's -errno with it dirty and the
  *         failure recorded; or -EROFS without a write once a write on the
@@ -160,10 +169,14 @@ int bcache_write(struct bbuf *b);
 int bcache_write_unflushed(struct bbuf *b);
 
 /**
- * Write `dev`'s dirty buffers, the `first` ones in a pass of their own and
- * then the rest, each pass in ascending block order and in runs, with a
- * `first` dirtied meanwhile still before the next `after`, and on a
- * write-through disk end with a flush.
+ * Write the buffers of `dev` that were dirty when the call began, the
+ * `first` ones in a pass of their own and then the rest, each pass in
+ * ascending block order and in runs, and on a write-through disk end with a
+ * flush. A block that must wait for others goes after them: an `after` after
+ * the firsts it follows, and a block the device writes last
+ * (`bcache_sync_last`) after the blocks it may name, whenever they were
+ * dirtied. A buffer dirtied first after the call began is the next call's,
+ * so that a steady writer does not keep the sync.
  *
  * A dirty buffer another process holds is waited for. The caller holds no
  * buffer of the device, and none that would forbid writing it; a caller
@@ -176,25 +189,36 @@ int bcache_write_unflushed(struct bbuf *b);
 int bcache_sync(block_device_t *dev);
 
 /**
- * Name the blocks of `dev` a sync writes after every other: `last(arg, blk)`
- * is 1 for such a block, and NULL names none. A file system's blocks that
- * point at others so stay dirty when a write of those fails, in
- * `bcache_sync` and `bcache_sync_unflushed`, whoever calls them. Once a
- * write of the device has failed, no eviction, shrink or reserve writes one
- * of them: not alone, not in a run, and not ahead of an `after`, which stays
- * dirty with it. A sync still retries them. `last` runs under the walks of
- * the dirty buffers and must not sleep; the caller clears it before `arg`
- * goes.
+ * Name the blocks of `dev` that point at others, such as ext2's inode
+ * tables, which a sync writes after every other: `last(arg, blk)` is 1 for
+ * such a block, and NULL names none. `names(arg, blk, owner)` is 1 when that
+ * block may point at the blocks tagged `owner` (`bcache_dirty_owned`); NULL
+ * says yes to every owner.
+ *
+ * Such a block reaches the device, by any path, only after every dirty
+ * block it may name: one of the device that is not of the class, not an
+ * `after`, shared or of an owner it names, and dirty since before the
+ * block's last mark. A write of the device that fails so keeps every such
+ * block marked since off the device, and the `after` blocks that wait for
+ * it. A sync writes what one waits for first, holding it so that nothing is
+ * stored in it meanwhile; an eviction, shrink or reserve passes it over
+ * until nothing is left to wait for, and once a write of the device has
+ * failed writes none of them: not alone, not in a run, and not ahead of an
+ * `after`, which stays dirty with it. On a write-through disk the flush
+ * comes between. A sync still retries them. The callbacks run under the
+ * walks of the dirty buffers and must not sleep; the caller clears them
+ * before `arg` goes.
  */
-void bcache_sync_last(block_device_t *dev, int (*last)(void *arg, uint64_t blk), void *arg);
+void bcache_sync_last(block_device_t *dev, int (*last)(void *arg, uint64_t blk),
+                      int (*names)(void *arg, uint64_t blk, uint64_t owner), void *arg);
 
 /**
  * Write `owner`'s dirty buffers on `dev` and no others, as `bcache_sync` does
  * in its passes and rules, in runs that hold only that owner's blocks, and
  * without the flush that ends a sync: dirty neighbours stay dirty and the
  * caller flushes. A run of `first` buffers keeps its flush, and a block of
- * the `after` class goes after all of the device's firsts. An `owner` of 0
- * writes every dirty buffer of the device.
+ * the `after` class goes after the device's firsts it follows, whoever
+ * owns them. An `owner` of 0 writes every dirty buffer of the device.
  *
  * @return 0, or the first failure's -errno with that buffer and the rest
  *         still dirty for the next call.
@@ -204,10 +228,12 @@ int bcache_sync_owned(block_device_t *dev, uint64_t owner);
 /**
  * Write one shared block of `dev` if it is in the cache and dirty, alone and
  * without the flush that ends a sync, and with the flush for a `first`. A
- * block of the `after` class goes after all of the device's firsts, whoever
- * dirtied them, which a file's sync needs before a shared bitmap or
- * descriptor. A holder of the block is waited for, and the caller's holds
- * are bound as for `bcache_sync`.
+ * block of the `after` class goes after the device's firsts it follows,
+ * whoever dirtied them, which a file's sync needs before a shared bitmap or
+ * descriptor, and a block the device writes last after the blocks it may
+ * name (`bcache_sync_last`), with the flush between on a write-through
+ * disk. A holder of the block is waited for, and the caller's holds are
+ * bound as for `bcache_sync`.
  *
  * @return 0, also for a block that is clean or gone from the cache, or the
  *         first failure's -errno with its buffer still dirty.
@@ -216,12 +242,13 @@ int bcache_sync_block(block_device_t *dev, uint64_t blk);
 
 /**
  * Clear the way for `bcache_sync_block` of the same block, for a caller that
- * must check something in the same step as the start of the write.
+ * must check something in the same step as that call takes the block: it
+ * writes what the block waits for, one write a call.
  *
- * @return 0 when a `bcache_sync_block` now starts its write without a sleep,
- *         or finds nothing to write; 1 after a wait or a write, which slept,
- *         so that the caller checks again and calls this again; or the
- *         -errno of a failed write.
+ * @return 0 when a `bcache_sync_block` now takes the block without a sleep
+ *         and holds it until its write ends, or finds nothing to write; 1
+ *         after a wait or a write, which slept, so that the caller checks
+ *         again and calls this again; or the -errno of a failed write.
  */
 int bcache_sync_block_ready(block_device_t *dev, uint64_t blk);
 

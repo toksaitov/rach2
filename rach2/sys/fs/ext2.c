@@ -2452,8 +2452,9 @@ static int ext2_shutdown(struct vfs_mount *mnt, uint64_t deadline)
 }
 
 /**
- * Whether `blk`, a block of the cache, is in the inode table of its group: a
- * sync writes those last (`bcache_sync_last`), since an inode names blocks
+ * Whether `blk`, a block of the cache, is in the inode table of its group:
+ * the cache writes one only after the blocks it names (`bcache_sync_last`,
+ * `table_names`), and a sync writes them last, since an inode names blocks
  * and a failed write of one must leave no pointer to it on the device. A
  * table outside its group, which mke2fs does not make without `flex_bg`,
  * keeps the device's order.
@@ -2477,6 +2478,36 @@ static int block_in_table(void *arg, uint64_t blk)
                              BCACHE_BLOCK_BYTES;
 }
 
+static uint64_t inode_offset(const struct ext2_mount *em, uint32_t ino);
+
+/**
+ * Whether the table block `blk` may name a block tagged `owner`, a data or
+ * pointer block of inode `owner` (`write_owned`), that the device lacks:
+ * that inode is in it and its node has allocated or freed since its blocks
+ * were last written, by the test `table_unsynced` makes, or is not in
+ * memory while a list was lost. A block a file overwrote in place is named
+ * on the device already. The cache writes such a block before the table
+ * block, as it does every shared block dirtied before it. Runs under the
+ * cache's walks, and sleeps nowhere.
+ */
+static int table_names(void *arg, uint64_t blk, uint64_t owner)
+{
+    struct ext2_mount *em = arg;
+    struct ext2_node *m;
+
+    if (owner == 0 || owner > em->inodes) {
+        return 1;
+    }
+    if (inode_offset(em, (uint32_t)owner) >> BCACHE_BLOCK_SHIFT != blk) {
+        return 0;
+    }
+    m = node_find(em, (uint32_t)owner);
+    if (!m) {
+        return em->shared_lost || em->device_lost;
+    }
+    return m->nshared || m->shared_over || m->writing || m->unlisted;
+}
+
 /** The `unmount` of `vfs_ops`: the mount's nodes, batch, descriptors and
  * record freed; a batch still pending on a removed device is recorded as a
  * failure first. */
@@ -2484,7 +2515,7 @@ static void ext2_unmount(struct vfs_mount *mnt)
 {
     struct ext2_mount *em = em_of(mnt);
 
-    bcache_sync_last(em->dev, 0, 0);
+    bcache_sync_last(em->dev, 0, 0, 0);
     if ((em->dev->flags & BLOCK_GONE) && em->wb && em->wb->count) {
         (void)writeback_error(em, -EIO);
     }
@@ -2913,7 +2944,8 @@ static void node_share_group(struct ext2_mount *em, struct ext2_node *n, uint32_
  * Copy `len` bytes from `src`, or zeros for NULL, to byte offset `off` of
  * the volume, written the way `sync` says (WRITE_THROUGH and the rest), or
  * left dirty with 0, tagged as a block of inode `owner` alone when that is
- * nonzero (`bcache_dirty_owned`), for a data or pointer block of a file. A
+ * nonzero (`bcache_dirty_owned`), for a data or pointer block of a file,
+ * and as shared otherwise, which clears a tag a freed block kept. A
  * whole block is not read first, since nothing of it survives. A block the
  * file-write batch has an image of gets the bytes in its image too, in the
  * same step as the buffer, so that the drain, which copies the image over
@@ -2960,11 +2992,11 @@ static int write_owned(struct ext2_mount *em, uint32_t owner, uint64_t off, cons
         } else if (sync == WRITE_UNFLUSHED && em_strict(em)) {
             rc = bcache_write_unflushed(b);
         } else if (sync == WRITE_FIRST || sync == WRITE_AFTER) {
-            if (owner) {
+            bcache_dirty_ordered(b, sync == WRITE_FIRST ? BCACHE_ORDER_FIRST : BCACHE_ORDER_AFTER);
+            if (b->owner != owner) {
                 bcache_dirty_owned(b, owner);
             }
-            bcache_dirty_ordered(b, sync == WRITE_FIRST ? BCACHE_ORDER_FIRST : BCACHE_ORDER_AFTER);
-        } else if (owner) {
+        } else if (owner || b->owner) {
             bcache_dirty_owned(b, owner);
         } else {
             bcache_dirty(b);
@@ -4638,7 +4670,7 @@ static int writeback_drain(struct ext2_mount *em)
                 goto fail;
             }
             k_memcpy(b->data, im->data, BCACHE_BLOCK_BYTES);
-            if (im->owner) {
+            if (im->owner || b->owner) {
                 bcache_dirty_owned(b, im->owner);
             } else {
                 bcache_dirty(b);
@@ -5588,9 +5620,9 @@ static int table_write_ready(struct ext2_mount *em, struct ext2_node *n, uint64_
  * its inode's table block, which `data_only` leaves out unless a field but
  * the times changed (`n->dirty_meta`) or another call's write of that block
  * is under way. A bitmap's or descriptor's bit is so on the device before a
- * pointer to its block, as a strict mount orders them, and a bitmap a free
- * dirtied `after` waits for the device's `first` pointers
- * (`bcache_sync_block`).
+ * pointer to its block, as a strict mount orders them; a bitmap a free
+ * dirtied `after` waits for the `first` pointers and inodes marked before
+ * it, and a table block for the blocks it names (`bcache_sync_block`).
  *
  * Another call's write of `n`'s list is waited for first, so that this one
  * returns with those blocks on the device (`node_write_ready`). The table
@@ -7932,7 +7964,7 @@ static int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags
         kfree(em->gd);
         kfree(em);
     } else if (em->block_size == BCACHE_BLOCK_BYTES) {
-        bcache_sync_last(dev, block_in_table, em);
+        bcache_sync_last(dev, block_in_table, table_names, em);
     }
     return rc;
 }
