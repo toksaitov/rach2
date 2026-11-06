@@ -756,7 +756,7 @@ static void fsync_failed_row(int device)
 
 /** The rows of one file's fsync and fdatasync, under a cache of 8192
  * buffers, so that no row's dirty blocks reach the quarter of the limit at
- * which a drain writes the device's (`em_balance`). */
+ * which a writer's drain writes the device's (`em_balance`). */
 static void fsync_rows(void)
 {
     bcache_set_limit(8192);

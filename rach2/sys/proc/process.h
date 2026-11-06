@@ -451,9 +451,11 @@ struct process {
      * whether the hold crossed one (fs/sleeplock.h); and the file locks it
      * holds, a node's and a mount's allocator lock, under which the buffer
      * cache and the name cache must not enter a file system (fs/vfs.h's
-     * `vfs_ns_held_by_caller`). */
+     * `vfs_ns_held_by_caller`); and the bytes it has written to ext2 files
+     * since it last had to write the cache back (`em_balance`). */
     uint32_t disk_waits;
     int file_locks;
+    uint32_t fs_written;
 };
 
 typedef struct process process_t;

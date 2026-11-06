@@ -229,15 +229,17 @@ struct ext2_node {
  * at a time from those that name data up (WB_LEAF to WB_LEAF + 2), the
  * superblock's `large_file` flag, and the inode table blocks.
  */
-#define EXT2_WB_BYTES (1024u * 1024u)
-#define EXT2_WB_DATA  256
-#define EXT2_WB_META  32
-#define EXT2_WB_NODES 16
-#define WB_ALLOC      0
-#define WB_DATA       1
-#define WB_LEAF       2
-#define WB_FEATURE    5
-#define WB_INODE      6
+#define EXT2_WB_BYTES      (1024u * 1024u)
+/* What a process writes before em_balance asks it to write back. */
+#define EXT2_BALANCE_SHARE (1024u * 1024u)
+#define EXT2_WB_DATA       256
+#define EXT2_WB_META       32
+#define EXT2_WB_NODES      16
+#define WB_ALLOC           0
+#define WB_DATA            1
+#define WB_LEAF            2
+#define WB_FEATURE         5
+#define WB_INODE           6
 
 /* The batch's private copy of a cache block it changes: the block, its
  * stage, whether the batch has changed it, the file it is of, and its
@@ -2939,12 +2941,22 @@ static int em_sync(struct ext2_mount *em)
 /** On a mount that writes back, write the device's dirty buffers in runs,
  * without the disk's flush, once the cache is heavy with them, as Linux
  * makes a writer write back when its dirty pages pass a share of memory: a
- * block left to an eviction goes to the disk alone. The operation that
- * called it is done in the cache, so a failed write is not its failure; the
- * cache records it against the device, as it records an eviction's. */
+ * block left to an eviction goes to the disk alone. Only a process that has
+ * itself written EXT2_BALANCE_SHARE bytes since it last did so pays, as
+ * Linux throttles each task by its own rate: a drain runs on whoever comes
+ * next, and a program that exits or logs a line would otherwise write what
+ * others dirtied, for seconds. The operation that called it is done in the
+ * cache, so a failed write is not its failure; the cache records it against
+ * the device, as it records an eviction's. */
 static void em_balance(struct ext2_mount *em)
 {
-    if (!em_strict(em) && bcache_dirty_heavy()) {
+    if (em_strict(em) || !current_proc) {
+        return;
+    }
+    if (!bcache_dirty_heavy()) {
+        current_proc->fs_written = 0;
+    } else if (current_proc->fs_written >= EXT2_BALANCE_SHARE) {
+        current_proc->fs_written = 0;
         (void)bcache_sync_unflushed(em->dev);
     }
 }
@@ -4514,6 +4526,9 @@ static void writeback_commit(struct ext2_mount *em, struct ext2_node *n, uint64_
     stamp(n, T_MTIME | T_CTIME);
     plan->table->dirty = 1;
     wb->bytes += len;
+    if (current_proc) {
+        current_proc->fs_written += len;
+    }
 }
 
 /**
