@@ -8,7 +8,6 @@
 #include "display/blank.h"
 #include "klog.h"
 #include "lib/kstring.h"
-#include "proc/process.h"
 #include "proc/smp.h"
 
 /* The panic picture, 80 columns by 25 rows, a background color for each
@@ -186,24 +185,24 @@ static unsigned int text_rows(size_t chars)
 
 /**
  * Place the cursor for the report of `str`, which is `klog_show_crit`'s
- * record, a line for the process and the line `k_panic` writes, on the
- * picture's last rows or as far above them as the report needs. Its last line
- * ends with a newline and the last row stays free for it, since a scroll would
- * move the picture. `last` is the picture's last row.
+ * record and the line `k_panic` writes, on the picture's last rows or as far
+ * above them as the report needs. Its last line ends with a newline and the
+ * last row stays free for it, since a scroll would move the picture. `last` is
+ * the picture's last row.
  *
- * The console has 24 rows or more, and a report at most seven: three for a
- * record, one for the process and three for `str`, which a record cuts too.
+ * The console has 24 rows or more, and a report at most six: three for a
+ * record and three for `str`, which a record cuts too.
  */
 static void place_report(const char *str, unsigned int last)
 {
     size_t reason = sizeof("panic: stopped: ") - 1 + k_strlen(str);
     uint32_t cause = klog_crit_len();
-    unsigned int rows = 1;
+    unsigned int rows;
 
     if (reason > KLOG_RECORD_MAX) {
         reason = KLOG_RECORD_MAX;
     }
-    rows += text_rows(reason);
+    rows = text_rows(reason);
     if (cause != 0) {
         rows += text_rows(cause);
     }
@@ -218,8 +217,10 @@ static void place_report(const char *str, unsigned int last)
  * The picture is drawn before the record because drawing clears the screen,
  * and a record printed first would be wiped by it; the record before the panic
  * that says why was wiped too, so `klog_show_crit` shows it again above the
- * panic's own, with the process that was running. Those two reach the screen
- * alone. Everything that can fail comes after: the record reaches the ring
+ * panic's own, on the screen alone. The report reads no process: the running
+ * one may be half torn down, with its pages unmapped, and its name is a string
+ * a user set, which may hold an escape sequence that clears the screen.
+ * Everything that can fail comes after: the record reaches the ring
  * before it is offered to the serial port and the wire, so a port that never
  * drains or a controller that never came up cannot take the record with it.
  * Both of those paths are bounded, which is why a panic can afford to use them
@@ -230,8 +231,6 @@ static void place_report(const char *str, unsigned int last)
  */
 void k_panic(const char *str)
 {
-    const process_t *p;
-
     k_panic_begin();
     k_terminal_restart();
     place_report(str, draw_fail_image());
@@ -240,10 +239,6 @@ void k_panic(const char *str)
 
     klog_deliver_directly();
     klog_show_crit();
-    p = current_proc;
-    if (p != NULL) {
-        k_printf("panic: running: pid %d %s\n", (int)p->pid, p->comm);
-    }
     klog(KLOG_CRIT, "panic", "stopped: %s", str);
 
     k_stop();

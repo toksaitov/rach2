@@ -277,10 +277,8 @@ static void _exception_handler(isr_params_t *params)
     klog(KLOG_CRIT, "isr", "kernel exception: %s (vector %d, err 0x%x, rip 0x%lx)", name,
          (uint32_t)params->vector, (uint32_t)params->error_code, (unsigned long)params->rip);
 #else
-    klog(KLOG_CRIT, "isr",
-         "kernel exception: %s (vector %d, err 0x%x, "
-         "eip 0x%x)\n",
-         name, params->vector, params->error_code, params->eip);
+    klog(KLOG_CRIT, "isr", "kernel exception: %s (vector %d, err 0x%x, eip 0x%x)", name,
+         params->vector, params->error_code, params->eip);
 #endif
     k_panic("unrecoverable CPU exception in kernel mode");
 }

@@ -52,6 +52,7 @@ bool vga_graphics_mode = false;
 #include "kio.c"
 #include "klog.c"
 #include "panic.c"
+#include "proc/process.h"
 
 struct percpu cpu_table[NR_CPUS];
 volatile uint64_t kernel_ticks;
@@ -181,7 +182,7 @@ static void restart(void)
     k_cls();
     cpu_table[0].current = &running;
     running.pid = 42;
-    k_memcpy(running.comm, "wpa_supplicant", 15);
+    k_memcpy(running.comm, "\033[2J\033[H", 8);
 }
 
 /** Stop with `reason`, and read the screen. */
@@ -211,7 +212,7 @@ static int stayed(void)
 /** Check the report of the two routes on the screen as it is set. */
 static void both_routes(const char *what)
 {
-    const char *cause, *proc, *reason;
+    const char *cause, *reason;
 
     restart();
     klog(KLOG_CRIT, "isr",
@@ -219,12 +220,11 @@ static void both_routes(const char *what)
     stop("unrecoverable CPU exception in kernel mode");
     cause = strstr(shown, "isr: kernel exception: invalid opcode (vector 6,");
     CHECK(cause != 0, what);
-    proc = cause != 0 ? strstr(cause, "panic: running: pid 42 wpa_supplicant") : 0;
-    CHECK(proc != 0, what);
-    reason = proc != 0 ? strstr(proc, "panic: stopped: unrecoverable CPU") : 0;
+    reason = cause != 0 ? strstr(cause, "panic: stopped: unrecoverable CPU") : 0;
     CHECK(reason != 0, what);
     CHECK(stayed(), what);
-    CHECK(strstr(wire, "panic: running") == 0, "the process line reaches the screen alone");
+    CHECK(strstr(shown, "pid 42") == 0 && strstr(wire, "pid 42") == 0,
+          "the report reads no process, whose name clears the screen");
     CHECK(strstr(wire, "kernel exception") == strstr(wire, "isr: kernel") + 5,
           "the port has the record once");
     CHECK(strstr(strstr(wire, "kernel exception") + 1, "kernel exception") == 0, "and only once");
@@ -242,8 +242,8 @@ static void both_routes(const char *what)
     CHECK(stayed(), what);
 }
 
-/** The longest record and reason, a panic with no record, one with no
- * process, one in the middle of a line, and one inside an escape string. */
+/** The longest record and reason, a panic with no record, one in the middle
+ * of a line, and one inside an escape string. */
 static void edges(void)
 {
     static char lengthy[1024];
@@ -263,12 +263,6 @@ static void edges(void)
     CHECK(strstr(shown, "isr:") == 0 && stayed(), "shows its reason alone");
 
     restart();
-    cpu_table[0].current = 0;
-    stop("no process");
-    CHECK(strstr(shown, "panic: running") == 0, "no process, no line of it");
-    CHECK(strstr(shown, "panic: stopped: no process") != 0, "and the reason is still there");
-
-    restart();
     console_putc('>');
     klog(KLOG_CRIT, "isr", "kernel exception: after a prompt");
     stop("open line");
@@ -279,8 +273,9 @@ static void edges(void)
     while (*escape != '\0') {
         k_putc(*escape++);
     }
+    klog(KLOG_CRIT, "isr", "kernel exception: inside an escape string");
     stop("inside an escape string");
-    CHECK(strstr(shown, "panic: running: pid 42") != 0,
+    CHECK(strstr(shown, "isr: kernel exception: inside an escape string") != 0,
           "a half-read escape string takes none of the report");
     CHECK(strstr(shown, "panic: stopped: inside an escape string") != 0, "or of the reason");
 }
