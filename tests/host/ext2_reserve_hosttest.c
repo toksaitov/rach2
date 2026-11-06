@@ -2,7 +2,8 @@
  * ext2_reserve_hosttest.c: the blocks a write of rach2/sys/fs/ext2.c
  * reserves: the count it needs, pointer blocks included, decided before any
  * byte is taken, and the reserved blocks kept from a caller who is not root;
- * and what the batch and the allocator read and write under em->meta.
+ * what the batch and the allocator read and write under em->meta; and that a
+ * change of a file is admitted only once it has the file's lock.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/fs/sleeplock.c
@@ -51,6 +52,11 @@ static int reserve_calls;
 static uint32_t reserve_n;
 static int events, reserve_at, blank_at;
 static void (*fetch_hook)(void);
+
+/* A hook run once in place of the next sleep, which gives back the lock
+ * another process holds, and the writers admitted at that sleep. */
+static void (*wait_hook)(void);
+static int writers_at_wait;
 
 /** Count and print a failed row. */
 static void check(int ok, const char *what)
@@ -173,13 +179,21 @@ void wq_wake_all(wait_queue_t *wq)
     (void)wq;
 }
 
-/** Fail the test: a wait here would never end, since no other process runs. */
+/** Fail the test, unless a row armed `wait_hook`: any other wait here would
+ * never end, since no other process runs. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
+    void (*hook)(void) = wait_hook;
+
     (void)wq;
     (void)cond;
     (void)arg;
-    check(0, "nothing sleeps");
+    wait_hook = 0;
+    check(hook != 0, "nothing sleeps");
+    if (hook) {
+        hook();
+        return 0;
+    }
     return -1;
 }
 
@@ -678,6 +692,111 @@ static void overlap_punch_row(void)
           "the inodes go first and the bitmap and descriptor after");
 }
 
+/* The descriptors of `inode_rows`' volume: group 128's, the first with a free
+ * inode, is in the second block of the table. */
+#define WIDE_GROUPS 129u
+static uint8_t wide_descriptors[WIDE_GROUPS * 32];
+
+/**
+ * Point the volume at `WIDE_GROUPS` groups of 32 inodes, of which only group
+ * 128 has any free, with its inode bitmap in block 6 and its table in block
+ * 7, and name in `file` a directory of the first group, whose group is full.
+ */
+static void wide_volume(void)
+{
+    reset(20);
+    k_memset(wide_descriptors, 0, sizeof(wide_descriptors));
+    LE32_PUT(wide_descriptors + 128 * 32 + 4, 6);
+    LE32_PUT(wide_descriptors + 128 * 32 + 8, 7);
+    LE16_PUT(wide_descriptors + 128 * 32 + 14, 5);
+    volume.gd = wide_descriptors;
+    volume.groups = WIDE_GROUPS;
+    volume.ipg = 32;
+    volume.inodes = WIDE_GROUPS * 32;
+    volume.first_ino = 11;
+    volume.free_inodes = 5;
+    k_memset(disk[6], 0, sizeof(disk[6]));
+    k_memset(disk[7], 0, sizeof(disk[7]));
+}
+
+/**
+ * A new inode whose parent's group is full looks in another group, whose
+ * inode bitmap and descriptor block the cache lacks. Neither is read under
+ * em->meta: the search lets the lock go and fetches each, starting again,
+ * and the bit and count reach the second block of descriptors. A bitmap the
+ * cache keeps losing is met PLAN_TRIES times, and then read under the lock.
+ */
+static void inode_rows(void)
+{
+    struct ext2_node *n = 0;
+
+    wide_volume();
+    uncached[2] = 1;
+    uncached[6] = 1;
+    check(inode_new(&volume, &file, S_IFREG_ | 0600, 1, &n) == 0 && n && n->ino == 128 * 32 + 1,
+          "an inode comes from a group two cold blocks away");
+    check(misses == 2, "whose bitmap and descriptor block a search meets and fetches");
+    check((disk[6][0] & 1) && volume.free_inodes == 4 && le16(disk[2] + 14) == 4,
+          "and the bit and the counts reach them");
+    nodes_free(&volume);
+
+    wide_volume();
+    uncached[6] = 1;
+    refetch[6] = 1000;
+    check(inode_new(&volume, &file, S_IFREG_ | 0600, 1, &n) == 0 && misses == PLAN_TRIES,
+          "a bitmap the cache keeps losing is met PLAN_TRIES times");
+    check(disk[6][0] & 1, "and the last search reads it under the lock");
+    nodes_free(&volume);
+}
+
+/** Be the process that holds `file`'s lock and give it back, once the
+ * writer that sleeps on it was seen. */
+static void lock_holder_gives(void)
+{
+    writers_at_wait = (int)volume.writers;
+    process.pid = 2;
+    node_unlock(&file);
+    process.pid = 1;
+}
+
+/** Hold `file`'s lock as another process, for the next sleep to give back. */
+static void lock_held_elsewhere(void)
+{
+    reset(20);
+    process.pid = 2;
+    node_lock(&file);
+    process.pid = 1;
+    wait_hook = lock_holder_gives;
+    writers_at_wait = -1;
+}
+
+/**
+ * A change of one file, which not every caller locks, sleeps on the file's
+ * lock before admission and not after. Admitted first, it would count as a
+ * writer while it slept on a lock whose holder, an unlink before its own
+ * admission, waits for a remount that waits for the writers.
+ */
+static void admission_rows(void)
+{
+    struct vfs_stat st;
+
+    k_memset(&st, 0, sizeof(st));
+    lock_held_elsewhere();
+    check(admit_fallocate(&mount, &file, 0, 0, 4096) == 0 && writers_at_wait == 0,
+          "a fallocate sleeps on the file's lock before admission");
+    lock_held_elsewhere();
+    check(admit_write(&mount, &file, payload, 4096, 0) == 4096 && writers_at_wait == 0,
+          "a write sleeps on the file's lock before admission");
+    lock_held_elsewhere();
+    check(admit_truncate(&mount, &file, 4096) == 0 && writers_at_wait == 0,
+          "a truncate sleeps on the file's lock before admission");
+    lock_held_elsewhere();
+    st.mode = 0640;
+    check(admit_setattr(&mount, &file, VFS_SET_MODE, &st) == 0 && writers_at_wait == 0,
+          "a change of attributes sleeps on the file's lock before admission");
+    check(volume.writers == 0 && process.file_locks == 0, "and each leaves the mount and the lock");
+}
+
 /** Run the rows; 0 when every row passed. */
 int main(void)
 {
@@ -688,9 +807,11 @@ int main(void)
     held_block_rows();
     drain_reserve_row();
     overlap_punch_row();
+    inode_rows();
+    admission_rows();
     if (!failures) {
         printf("ext2-reserve-hosttest: result: pass: boundaries, reservation quotas, plans and "
-               "frees under em->meta\n");
+               "frees under em->meta, and admission\n");
     }
     return failures != 0;
 }
