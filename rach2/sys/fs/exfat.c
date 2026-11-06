@@ -3347,6 +3347,28 @@ static void stamp_mtime(struct ex_node *n)
     n->moff = 0x80;
 }
 
+/** Zero the gap a write at `offset` leaves past `n`'s valid length, as far as
+ * the file's `held` bytes of clusters reach, into the chain from `file`, in
+ * pieces of 1 GiB, since the gap can be longer than a 32-bit count. */
+static int zero_gap(struct ex_mount *em, struct ex_node *n, uint32_t file, uint64_t held,
+                    uint64_t offset)
+{
+    uint64_t gap_end = held < offset ? held : offset;
+    uint64_t at = n->valid;
+
+    while (at < gap_end) {
+        uint64_t left = gap_end - at;
+        uint32_t piece = left > 0x40000000u ? 0x40000000u : (uint32_t)left;
+        int rc = put_file_bytes(em, n, file, at, 0, piece);
+
+        if (rc != 0) {
+            return rc;
+        }
+        at += piece;
+    }
+    return 0;
+}
+
 /**
  * The `write` of `vfs_ops`: `count` bytes from `buf` at `offset`, under the
  * mount's namespace lock, which this takes.
@@ -3426,23 +3448,9 @@ static int32_t ex_write(struct vfs_mount *mnt, void *handle, const void *buf, ui
     run.first = run_first;
     run.length = (uint64_t)(needed - have) * cbytes;
     file = have > 0 ? n->first : run_first;
-    if (offset > n->valid && have > 0) {
-        uint64_t gap_end = have * cbytes < offset ? have * cbytes : offset;
-
-        if (gap_end > n->valid) {
-            uint64_t at = n->valid;
-
-            while (at < gap_end) {
-                uint64_t left = gap_end - at;
-                uint32_t piece = left > 0x40000000u ? 0x40000000u : (uint32_t)left;
-
-                rc = put_file_bytes(em, n, file, at, 0, piece);
-                if (rc != 0) {
-                    goto undo;
-                }
-                at += piece;
-            }
-        }
+    rc = zero_gap(em, n, file, have * cbytes, offset);
+    if (rc != 0) {
+        goto undo;
     }
     if (offset < have * cbytes) {
         uint64_t room = have * cbytes - offset; /* up to 2^32 at the limit */

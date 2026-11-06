@@ -175,30 +175,48 @@ static uint64_t name_ino(struct vfs_mount *base, void *dir, const char *name)
     return ino;
 }
 
+/* The two names of a rename, in the mount `base`. */
+struct rename_names {
+    struct vfs_mount *base;
+    const struct vfs_ref *opar;
+    const char *oleaf;
+    const struct vfs_ref *npar;
+    const char *nleaf;
+};
+
+/* What the rename's order was decided on: `skip`, bit 1 leaving the source's
+ * node unlocked and bit 2 the target's, and the inode numbers of the two
+ * names, 0 for a name not there. */
+struct rename_seen {
+    int skip;
+    uint64_t cino, tino;
+};
+
 /**
  * The order in which the rename's two directories, inodes `oino` and
- * `nino`, lock, into `h->dir`, under the rename lock of `base`, and which
- * names' nodes stay unlocked, `*skip` bit 1 for the source and 2 for the
- * target, with the inode numbers of the names that decision was made on,
- * `*cino` and `*tino`, 0 for a name not there. 0 or the climb's error.
+ * `nino`, lock, into `h->dir`, under the rename lock of `r->base`, and what
+ * that order was decided on, into `seen`. 0 or the climb's error.
  */
-static int rename_order(struct vfs_mount *base, const struct vfs_ref *opar, const char *oleaf,
-                        const struct vfs_ref *npar, const char *nleaf, uint64_t oino, uint64_t nino,
-                        struct vfs_rename_hold *h, int *skip, uint64_t *cino, uint64_t *tino)
+static int rename_order(const struct rename_names *r, uint64_t oino, uint64_t nino,
+                        struct vfs_rename_hold *h, struct rename_seen *seen)
 {
-    int nup, oup;
+    struct vfs_mount *base = r->base;
+    const struct vfs_ref *opar = r->opar;
+    const struct vfs_ref *npar = r->npar;
+    int nup = 0;
+    int oup = 0;
     int rc;
 
-    *cino = name_ino(base, ref_node(opar), oleaf);
-    *tino = name_ino(base, ref_node(npar), nleaf);
-    rc = climb_meets(base, ref_node(npar), oino, *cino, &nup);
+    seen->cino = name_ino(base, ref_node(opar), r->oleaf);
+    seen->tino = name_ino(base, ref_node(npar), r->nleaf);
+    rc = climb_meets(base, ref_node(npar), oino, seen->cino, &nup);
     if (rc == 0) {
-        rc = climb_meets(base, ref_node(opar), nino, *tino, &oup);
+        rc = climb_meets(base, ref_node(opar), nino, seen->tino, &oup);
     }
     if (rc != 0) {
         return rc;
     }
-    *skip = ((nup & 2) ? 1 : 0) | ((oup & 2) ? 2 : 0);
+    seen->skip = ((nup & 2) ? 1 : 0) | ((oup & 2) ? 2 : 0);
     if ((nup & 1) || (!(oup & 1) && oino < nino)) {
         h->dir[0] = *opar;
         h->dir[1] = *npar;
@@ -236,25 +254,26 @@ static void rename_child(struct vfs_mount *base, const struct vfs_ref *dir, cons
 
 /**
  * Under the rename's directory locks, lock the nodes of its names that
- * `skip` does not leave out, each once, into `h->child`: a directory before
- * a file, as every other call that holds a directory and a file takes them,
- * else by inode number.
+ * `seen->skip` does not leave out, each once, into `h->child`: a directory
+ * before a file, as every other call that holds a directory and a file
+ * takes them, else by inode number.
  * Returns 0, or, for a rename between two directories, 1 with nothing
- * locked here when a name's node is not the one, `cino` or `tino`, the
- * order was decided on, as when another process renamed a directory above
- * the other one to that name within its own directory meanwhile.
+ * locked here when a name's node is not the one the order was decided on,
+ * as when another process renamed a directory above the other one to that
+ * name within its own directory meanwhile.
  */
-static int rename_children(struct vfs_mount *base, const struct vfs_ref *opar, const char *oleaf,
-                           const struct vfs_ref *npar, const char *nleaf, struct vfs_rename_hold *h,
-                           int skip, uint64_t cino, uint64_t tino)
+static int rename_children(const struct rename_names *r, struct vfs_rename_hold *h,
+                           const struct rename_seen *seen)
 {
+    struct vfs_mount *base = r->base;
+    int skip = seen->skip;
     struct vfs_ref c, t, tmp;
     uint64_t c2, t2;
     int cdir, tdir;
 
-    rename_child(base, opar, oleaf, &c, &c2, &cdir);
-    rename_child(base, npar, nleaf, &t, &t2, &tdir);
-    if (h->renaming && (c2 != cino || t2 != tino)) {
+    rename_child(base, r->opar, r->oleaf, &c, &c2, &cdir);
+    rename_child(base, r->npar, r->nleaf, &t, &t2, &tdir);
+    if (h->renaming && (c2 != seen->cino || t2 != seen->tino)) {
         if (c.node) {
             put_node(base, c.node);
         }
@@ -291,10 +310,16 @@ int vfs_rename_lock(const struct vfs_ref *opar, const char *oleaf, const struct 
                     const char *nleaf, struct vfs_rename_hold *h)
 {
     struct vfs_mount *base = base_of(opar->mnt);
-    uint64_t oino = 0, nino = 0, cino = 0, tino = 0;
-    int skip;
+    uint64_t oino = 0, nino = 0;
+    struct rename_names r;
+    struct rename_seen seen;
     int rc;
 
+    r.base = base;
+    r.opar = opar;
+    r.oleaf = oleaf;
+    r.npar = npar;
+    r.nleaf = nleaf;
     for (;;) {
         k_memset(h, 0, sizeof(*h));
         h->dir[0] = *opar;
@@ -309,11 +334,11 @@ int vfs_rename_lock(const struct vfs_ref *opar, const char *oleaf, const struct 
         if (rc != 0) {
             return rc;
         }
-        skip = 0;
+        k_memset(&seen, 0, sizeof(seen));
         if (oino != nino) {
             sleep_lock_take(&base->rename);
             h->renaming = base;
-            rc = rename_order(base, opar, oleaf, npar, nleaf, oino, nino, h, &skip, &cino, &tino);
+            rc = rename_order(&r, oino, nino, h, &seen);
             if (rc != 0) {
                 sleep_lock_give(&base->rename);
                 return rc;
@@ -323,7 +348,7 @@ int vfs_rename_lock(const struct vfs_ref *opar, const char *oleaf, const struct 
         if (h->dir[1].mnt) {
             vfs_node_lock(&h->dir[1]);
         }
-        if (rename_children(base, opar, oleaf, npar, nleaf, h, skip, cino, tino) == 0) {
+        if (rename_children(&r, h, &seen) == 0) {
             return 0;
         }
         vfs_rename_unlock(h);

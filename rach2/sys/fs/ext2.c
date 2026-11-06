@@ -370,7 +370,7 @@ static void node_hash_grow(struct ext2_mount *em)
     if (!table) {
         return;
     }
-    if (em->node_buckets * 2u != size) {
+    if (em->node_buckets >= size) {
         kfree(table); /* the heap slept, and another caller grew the hash */
         return;
     }
@@ -3469,6 +3469,15 @@ struct punch_list {
  * listed are freed, and it starts again from the end. */
 #define PUNCH_FULL 1
 
+/* One walk of `punch_level`: the file `n` of `em` cut from data index `keep`
+ * on, its blocks going into `list`. */
+struct punch_walk {
+    struct ext2_mount *em;
+    struct ext2_node *n;
+    uint32_t keep;
+    struct punch_list *list;
+};
+
 /**
  * Clear the pointers of `n`'s blocks from data index `keep` on below the
  * pointer `*slot`, of `level` (0 for a data block) and covering the data
@@ -3480,10 +3489,13 @@ struct punch_list {
  * `n->blocks` is kept current. 0, PUNCH_FULL when the list has no room for
  * the next block, or -errno, -EIO for a pointer block out of range.
  */
-static int punch_level(struct ext2_mount *em, struct ext2_node *n, uint32_t *slot, uint64_t slot_at,
-                       int level, uint32_t base, uint32_t keep, struct punch_list *list,
-                       int *emptied)
+static int punch_level(const struct punch_walk *w, uint32_t *slot, uint64_t slot_at, int level,
+                       uint32_t base, int *emptied)
 {
+    struct ext2_mount *em = w->em;
+    struct ext2_node *n = w->n;
+    struct punch_list *list = w->list;
+    uint32_t keep = w->keep;
     uint32_t b = *slot;
     uint32_t per = em->block_size / 4;
     uint32_t span = 1;
@@ -3524,7 +3536,7 @@ static int punch_level(struct ext2_mount *em, struct ext2_node *n, uint32_t *slo
             if (child == 0) {
                 continue;
             }
-            rc = punch_level(em, n, &child, at, level - 1, child_base, keep, list, &gone);
+            rc = punch_level(w, &child, at, level - 1, child_base, &gone);
             if (rc != 0) {
                 return rc;
             }
@@ -3564,8 +3576,13 @@ static int punch_from(struct ext2_mount *em, struct ext2_node *n, uint32_t keep,
                       struct punch_list *list)
 {
     uint32_t per = em->block_size / 4;
+    struct punch_walk w;
     int level, i, rc, gone;
 
+    w.em = em;
+    w.n = n;
+    w.keep = keep;
+    w.list = list;
     for (level = 3; level >= 1; level--) {
         uint32_t lbase = EXT2_NDIR, lspan = per;
         int l;
@@ -3575,8 +3592,7 @@ static int punch_from(struct ext2_mount *em, struct ext2_node *n, uint32_t keep,
             lspan *= per;
         }
         if (lbase + lspan > keep && n->block[EXT2_NDIR + level - 1] != 0) {
-            rc = punch_level(em, n, &n->block[EXT2_NDIR + level - 1], 0, level, lbase, keep, list,
-                             &gone);
+            rc = punch_level(&w, &n->block[EXT2_NDIR + level - 1], 0, level, lbase, &gone);
             if (rc != 0) {
                 return rc;
             }
@@ -3584,7 +3600,7 @@ static int punch_from(struct ext2_mount *em, struct ext2_node *n, uint32_t keep,
     }
     for (i = (int)EXT2_NDIR - 1; i >= (int)keep && i >= 0; i--) {
         if (n->block[i] != 0) {
-            rc = punch_level(em, n, &n->block[i], 0, 0, (uint32_t)i, keep, list, &gone);
+            rc = punch_level(&w, &n->block[i], 0, 0, (uint32_t)i, &gone);
             if (rc != 0) {
                 return rc;
             }
@@ -3682,10 +3698,11 @@ static int writeback_holds(const struct ext2_mount *em, const struct ext2_node *
  * pending piece names it. A failure still frees what its round listed, in
  * the same order, once the inode is stored and a strict mount's sync has
  * put the pointers on the medium; otherwise the blocks stay taken, lost
- * blocks for e2fsck, and the free counts stay exact. A device that failed a write is -EIO and not
- * written to again: the blocks go to the cache first and would reach the device at the sync that
- * ends the round, past the check a write through makes. The caller holds `n`'s lock and not
- * `em->meta`. 0, or -errno.
+ * blocks for e2fsck, and the free counts stay exact. A device that failed a
+ * write is -EIO and not written to again: the blocks go to the cache first
+ * and would reach the device at the sync that ends the round, past the check
+ * a write through makes. The caller holds `n`'s lock and not `em->meta`. 0,
+ * or -errno.
  */
 static int punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
 {
@@ -5477,6 +5494,44 @@ static int writeback_space(struct ext2_mount *em, struct ext2_node *n, uint64_t 
     return 0;
 }
 
+/** Put one piece of a write into the batch, after a drain when its bytes
+ * would overflow the batch's room, and a drain and a second try when the
+ * batch's tables are full: `writeback_piece`'s answer or the drain's error. */
+static int writeback_fit(struct ext2_mount *em, struct ext2_node *n, uint64_t at, const uint8_t *in,
+                         uint32_t take)
+{
+    struct ext2_writeback *wb = em->wb;
+    int rc;
+
+    if (take > EXT2_WB_BYTES - wb->bytes) {
+        rc = writeback_drain(em);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    rc = writeback_piece(em, n, at, in, take);
+    if (rc == -ENOMEM && wb->count) {
+        rc = writeback_drain(em);
+        if (rc == 0) {
+            rc = writeback_piece(em, n, at, in, take);
+        }
+    }
+    return rc;
+}
+
+/** Drain the batch after a piece when the write is `synchronous` or the
+ * batch's bytes, images or inodes have run out. 0 or the drain's error. */
+static int writeback_room(struct ext2_mount *em, int synchronous)
+{
+    const struct ext2_writeback *wb = em->wb;
+
+    if (synchronous || wb->bytes == EXT2_WB_BYTES || wb->datas == EXT2_WB_DATA ||
+        wb->metas == EXT2_WB_META || wb->count == EXT2_WB_NODES) {
+        return writeback_drain(em);
+    }
+    return 0;
+}
+
 /**
  * The `write` of `vfs_ops`: `count` bytes from `buf` at `offset`, through
  * the file-write batch, under the node's lock, which the caller may hold
@@ -5503,7 +5558,6 @@ static int32_t file_write(struct vfs_mount *mnt, void *handle, const void *buf, 
                           uint64_t offset)
 {
     struct ext2_mount *em = em_of(mnt);
-    struct ext2_writeback *wb;
     struct ext2_node *n = handle;
     const uint8_t *in = buf;
     uint32_t done = 0;
@@ -5520,7 +5574,6 @@ static int32_t file_write(struct vfs_mount *mnt, void *handle, const void *buf, 
     }
     assert_node_locked(n);
 again:
-    wb = em->wb;
     if (!em->writable || (mnt->flags & VFS_MS_RDONLY)) {
         rc = -EROFS;
         goto out;
@@ -5547,19 +5600,7 @@ again:
         if (take > count - done) {
             take = count - done;
         }
-        if (take > EXT2_WB_BYTES - wb->bytes) {
-            rc = writeback_drain(em);
-            if (rc != 0) {
-                goto out;
-            }
-        }
-        rc = writeback_piece(em, n, at, in + done, take);
-        if (rc == -ENOMEM && wb->count) {
-            rc = writeback_drain(em);
-            if (rc == 0) {
-                rc = writeback_piece(em, n, at, in + done, take);
-            }
-        }
+        rc = writeback_fit(em, n, at, in + done, take);
         if (rc == -EFAULT) {
             rc = ++refaults <= EXT2_REFAULTS ? user_refault(n, in + done, take, 0) : -EFAULT;
             if (rc == 1) {
@@ -5572,17 +5613,9 @@ again:
         }
         done += take;
         refaults = 0;
-        if (synchronous || wb->bytes == EXT2_WB_BYTES) {
-            rc = writeback_drain(em);
-            if (rc != 0) {
-                goto out;
-            }
-        }
-        if (wb->datas == EXT2_WB_DATA || wb->metas == EXT2_WB_META || wb->count == EXT2_WB_NODES) {
-            rc = writeback_drain(em);
-            if (rc != 0) {
-                goto out;
-            }
+        rc = writeback_room(em, synchronous);
+        if (rc != 0) {
+            goto out;
         }
     }
     rc = 0;
@@ -6271,20 +6304,31 @@ static int rename_check(struct ext2_mount *em, struct ext2_node *od, struct ext2
     return 0;
 }
 
+/* The two names of one `ext2_rename`, each with its directory. */
+struct ext2_rename_names {
+    struct ext2_mount *em;
+    struct ext2_node *od;
+    const char *oldname;
+    struct ext2_node *nd;
+    const char *newname;
+};
+
 /**
- * The rename of directory `n` from `oldname` in `od` to `newname` in `nd`,
- * over the empty directory `victim` at `nsc`, `nat` and `nprev` when it is
- * not NULL, for `ext2_rename`, whose caller holds every lock: the victim
- * removed as rmdir removes it, then the new entry, then `..` rewritten and
- * the new parent's count raised when the parents differ, then the old entry
- * removed and the old parent's count lowered. 0, -ENOENT, -EMLINK, or
+ * The rename of directory `n` from `r->oldname` in `r->od` to `r->newname`
+ * in `r->nd`, over the empty directory `victim` at `nsc`, `nat` and `nprev`
+ * when it is not NULL, for `ext2_rename`, whose caller holds every lock: the
+ * victim removed as rmdir removes it, then the new entry, then `..` rewritten
+ * and the new parent's count raised when the parents differ, then the old
+ * entry removed and the old parent's count lowered. 0, -ENOENT, -EMLINK, or
  * -errno.
  */
-static int rename_dir(struct ext2_mount *em, struct ext2_node *od, const char *oldname,
-                      struct ext2_node *nd, const char *newname, struct ext2_node *n,
+static int rename_dir(const struct ext2_rename_names *r, struct ext2_node *n,
                       struct ext2_node *victim, const struct ext2_scan *nsc, uint32_t nat,
                       uint32_t nprev)
 {
+    struct ext2_mount *em = r->em;
+    struct ext2_node *od = r->od;
+    struct ext2_node *nd = r->nd;
     struct ext2_scan osc;
     uint32_t oat, oprev;
     int rc;
@@ -6310,7 +6354,7 @@ static int rename_dir(struct ext2_mount *em, struct ext2_node *od, const char *o
             return rc;
         }
     }
-    rc = dir_add(em, nd, newname, n->ino, 2);
+    rc = dir_add(em, nd, r->newname, n->ino, 2);
     if (rc != 0) {
         return rc;
     }
@@ -6326,7 +6370,7 @@ static int rename_dir(struct ext2_mount *em, struct ext2_node *od, const char *o
             return rc;
         }
     }
-    rc = dir_find(em, od, oldname, &oat, &oprev, &osc);
+    rc = dir_find(em, od, r->oldname, &oat, &oprev, &osc);
     if (rc <= 0) {
         return rc < 0 ? rc : -ENOENT;
     }
@@ -6342,17 +6386,19 @@ static int rename_dir(struct ext2_mount *em, struct ext2_node *od, const char *o
 }
 
 /**
- * The rename of file `n` from `oldname` in `od` to `newname` in `nd`, over
- * the file `victim` at `nat` when it is not NULL, for `ext2_rename`, whose
- * caller holds every lock: the count raised, the new entry written or the
- * victim's entry pointed at `n`, the victim's count lowered as unlink
- * lowers it, the old entry removed and the count lowered again. 0, -ENOENT,
- * or -errno.
+ * The rename of file `n` from `r->oldname` in `r->od` to `r->newname` in
+ * `r->nd`, over the file `victim` at `nat` when it is not NULL, for
+ * `ext2_rename`, whose caller holds every lock: the count raised, the new
+ * entry written or the victim's entry pointed at `n`, the victim's count
+ * lowered as unlink lowers it, the old entry removed and the count lowered
+ * again. 0, -ENOENT, or -errno.
  */
-static int rename_file(struct ext2_mount *em, struct ext2_node *od, const char *oldname,
-                       struct ext2_node *nd, const char *newname, struct ext2_node *n,
+static int rename_file(const struct ext2_rename_names *r, struct ext2_node *n,
                        struct ext2_node *victim, uint32_t nat)
 {
+    struct ext2_mount *em = r->em;
+    struct ext2_node *od = r->od;
+    struct ext2_node *nd = r->nd;
     struct ext2_scan osc;
     uint32_t oat, oprev;
     int rc;
@@ -6394,14 +6440,14 @@ static int rename_file(struct ext2_mount *em, struct ext2_node *od, const char *
             return rc;
         }
     } else {
-        rc = dir_add(em, nd, newname, n->ino, ftype_of(n->mode));
+        rc = dir_add(em, nd, r->newname, n->ino, ftype_of(n->mode));
         if (rc != 0) {
             n->nlink--;
             (void)inode_store(em, n);
             return rc;
         }
     }
-    rc = dir_find(em, od, oldname, &oat, &oprev, &osc);
+    rc = dir_find(em, od, r->oldname, &oat, &oprev, &osc);
     if (rc <= 0) {
         return rc < 0 ? rc : -ENOENT;
     }
@@ -6459,10 +6505,16 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
     struct ext2_node *od = olddir ? olddir : mnt->root;
     struct ext2_node *nd = newdir ? newdir : mnt->root;
     struct ext2_node *n, *victim = 0, *first, *second;
+    struct ext2_rename_names names;
     struct ext2_scan osc, nsc;
     uint32_t oat, oprev, nat = 0, nprev = 0;
     int rc, have_new;
 
+    names.em = em;
+    names.od = od;
+    names.oldname = oldname;
+    names.nd = nd;
+    names.newname = newname;
     rc = assert_writable(mnt, em);
     if (rc != 0) {
         return rc;
@@ -6517,9 +6569,9 @@ static int ext2_rename(struct vfs_mount *mnt, void *olddir, const char *oldname,
             }
         }
         if (rc == 0 && (n->mode & S_IFMT_) == S_IFDIR_) {
-            rc = rename_dir(em, od, oldname, nd, newname, n, victim, &nsc, nat, nprev);
+            rc = rename_dir(&names, n, victim, &nsc, nat, nprev);
         } else if (rc == 0) {
-            rc = rename_file(em, od, oldname, nd, newname, n, victim, nat);
+            rc = rename_file(&names, n, victim, nat);
         }
         if (second) {
             node_unlock(second);
@@ -7605,7 +7657,8 @@ static void em_finish_node(struct ext2_mount *em, struct ext2_node *n)
     em_reap(em);
 }
 
-/** The `setattr` of `vfs_ops`: `ext2_setattr`, admitted under the node's lock. */
+/** The `setattr` of `vfs_ops`: `ext2_setattr`, admitted under the node's
+ * lock. */
 static int admit_setattr(struct vfs_mount *mnt, void *node, int what, const struct vfs_stat *st)
 {
     int rc;

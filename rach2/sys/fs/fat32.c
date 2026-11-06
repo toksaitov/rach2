@@ -1722,6 +1722,19 @@ static int extend_chain(struct fat_mount *fm, uint32_t first, uint32_t have, uin
     return alloc_run(fm, needed - have, 1, have > 0 ? first : 0, run_first, run_last);
 }
 
+/** Zero the gap a write at `offset` leaves past `n`'s size, as far as the
+ * file's `held` bytes of clusters reach, into the chain from `file`. */
+static int zero_gap(struct fat_mount *fm, struct fat_node *n, uint32_t file, uint64_t held,
+                    uint64_t offset)
+{
+    uint64_t gap_end = held < offset ? held : offset;
+
+    if (gap_end <= n->size) {
+        return 0;
+    }
+    return put_file_bytes(fm, n, file, n->size, 0, (uint32_t)(gap_end - n->size));
+}
+
 /**
  * The `write` operation, in the order of fat32.Readme.md: a new run of
  * clusters is taken joined to nothing and zero-filled, the bytes go into
@@ -1780,15 +1793,9 @@ static int32_t fat_write(struct vfs_mount *mnt, void *handle, const void *buf, u
     }
     run.first = run_first;
     file = have > 0 ? n->first : run_first;
-    if (offset > n->size && have > 0) {
-        uint64_t gap_end = (uint64_t)have * cbytes < offset ? (uint64_t)have * cbytes : offset;
-
-        if (gap_end > n->size) {
-            rc = put_file_bytes(fm, n, file, n->size, 0, (uint32_t)(gap_end - n->size));
-            if (rc != 0) {
-                goto undo;
-            }
-        }
+    rc = zero_gap(fm, n, file, (uint64_t)have * cbytes, offset);
+    if (rc != 0) {
+        goto undo;
     }
     if (offset < (uint64_t)have * cbytes) {
         uint32_t part = (uint32_t)((uint64_t)have * cbytes - offset);
@@ -1849,6 +1856,26 @@ undo:
     }
 out:
     vfs_ns_unlock(mnt);
+    return rc;
+}
+
+/** Join the run from `run_first` to the tail of `n`'s `have` clusters and
+ * flush the join, the tail ended again when the flush fails. 0 or -errno. */
+static int join_run(struct fat_mount *fm, struct fat_node *n, uint32_t have, uint32_t run_first)
+{
+    uint32_t tail;
+    int rc;
+
+    rc = chain_at(fm, n, n->first, have - 1, &tail);
+    if (rc == 0) {
+        rc = fat_set(fm, tail, run_first);
+    }
+    if (rc == 0) {
+        rc = block_flush(fm->dev);
+        if (rc != 0) {
+            (void)fat_set(fm, tail, FAT_EOC_MIN);
+        }
+    }
     return rc;
 }
 
@@ -1920,18 +1947,7 @@ static int fat_truncate(struct vfs_mount *mnt, void *handle, uint64_t size)
             }
         }
         if (run_first != 0 && have > 0) {
-            uint32_t tail;
-
-            rc = chain_at(fm, n, n->first, have - 1, &tail);
-            if (rc == 0) {
-                rc = fat_set(fm, tail, run_first);
-            }
-            if (rc == 0) {
-                rc = block_flush(fm->dev);
-                if (rc != 0) {
-                    (void)fat_set(fm, tail, FAT_EOC_MIN);
-                }
-            }
+            rc = join_run(fm, n, have, run_first);
             if (rc != 0) {
                 free_chain(fm, run_first);
                 goto out;

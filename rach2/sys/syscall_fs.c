@@ -584,10 +584,10 @@ static uint32_t fsize_fit(uint64_t pos, uint32_t count)
 
 /**
  * Take the lock of the file the description `ofd` is open on for a write or
- * a change of its size, on a type that sets `file_locked` (`vfs_node_lock`), into
- * `file`: 1 when taken, which `file_unlock` gives back, and 0 on any other
- * type, whose description lock and namespace lock cover the change. The
- * caller holds the description's lock, which comes first.
+ * a change of its size, on a type that sets `file_locked` (`vfs_node_lock`),
+ * into `file`: 1 when taken, which `file_unlock` gives back, and 0 on any
+ * other type, whose description lock and namespace lock cover the change.
+ * The caller holds the description's lock, which comes first.
  */
 static int file_lock(const struct open_file *ofd, struct vfs_ref *file)
 {
@@ -618,17 +618,18 @@ static void file_unlock(const struct vfs_ref *file, int own)
  * mappings hold when `mapped` (`filemap_file_written`). Returns the bytes
  * written, or the first write's error when none were.
  *
- * On a type that sets `file_locked`, `own`, the caller holds the file's
- * lock, `file`, and the file system copies from `buf` only while its pages
- * are present (`vm_resident`), answering a short count at the first that is
- * not, since a fault under the lock could wait for another file's lock. The
- * lock then goes while the rest of the buffer is brought in, and the write
- * goes on from the byte it reached, at the file's end again under O_APPEND,
- * where another writer may have moved it meanwhile: the rest is cut again to
- * what RLIMIT_FSIZE lets through (`fsize_fit`), and a write that finds the
- * end at the limit stops there, -EFBIG when it has moved no byte.
+ * On a type that sets `file_locked`, `held` is the file whose lock the
+ * caller holds, NULL on another type, and the file system copies from `buf`
+ * only while its pages are present (`vm_resident`), answering a short count
+ * at the first that is not, since a fault under the lock could wait for
+ * another file's lock. The lock then goes while the rest of the buffer is
+ * brought in, and the write goes on from the byte it reached, at the file's
+ * end again under O_APPEND, where another writer may have moved it
+ * meanwhile: the rest is cut again to what RLIMIT_FSIZE lets through
+ * (`fsize_fit`), and a write that finds the end at the limit stops there,
+ * -EFBIG when it has moved no byte.
  */
-static int32_t file_write_pieces(fd_entry_t *entry, const struct vfs_ref *file, int own, int mapped,
+static int32_t file_write_pieces(fd_entry_t *entry, const struct vfs_ref *held, int mapped,
                                  const char __user *buf, uint32_t count, uint64_t *pos)
 {
     struct open_file *ofd = entry->ofd;
@@ -647,14 +648,14 @@ static int32_t file_write_pieces(fd_entry_t *entry, const struct vfs_ref *file, 
             *pos += (uint64_t)n;
             refaults = 0;
         }
-        if (!own || n < 0 || done == count || vm_resident(from + done, count - done, 0)) {
+        if (!held || n < 0 || done == count || vm_resident(from + done, count - done, 0)) {
             break;
         }
-        vfs_node_unlock(file);
+        vfs_node_unlock(held);
         n = ++refaults <= WRITE_REFAULTS && vm_prefault_range(from + done, count - done, 0)
                 ? 0
                 : -EFAULT;
-        vfs_node_lock(file);
+        vfs_node_lock(held);
         if (n != 0) {
             break;
         }
@@ -753,7 +754,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
     if (mapped && !own) {
         vfs_node_lock(&file);
     }
-    written = file_write_pieces(entry, &file, own, mapped, buf, count, &pos);
+    written = file_write_pieces(entry, own ? &file : NULL, mapped, buf, count, &pos);
     if (mapped && !own) {
         vfs_node_unlock(&file);
     }
@@ -2868,7 +2869,7 @@ static int open_create(const char *name, int flags, uint32_t mode, struct vfs_re
 {
     struct vfs_ref parent;
     char leafname[VFS_NAME_MAX + 1];
-    void *made;
+    void *made = NULL;
     int held;
     int rc;
 
@@ -3186,6 +3187,34 @@ static int open_root_node(struct vfs_ref *ref, int flags)
 }
 
 /**
+ * O_TRUNC of the description `ofd`, open on the mount `mnt`: the file cut to
+ * nothing under its lock, the set-id bits cleared for a caller without
+ * privilege and the pages of its shared mappings let go. 0 or the file
+ * system's error. May sleep, and takes `ofd` because the descriptor table
+ * may move meanwhile.
+ */
+static int open_truncate(struct open_file *ofd, struct vfs_mount *mnt)
+{
+    struct vfs_ref file;
+    int own = file_lock(ofd, &file);
+    int rc;
+
+    rc = vfs_truncate(mnt, ofd->fhandle, 0);
+    if (rc == 0 && !cred_privileged()) {
+        if (mnt_is_root(mnt)) {
+            cred_kill_setid(ofd->vnode);
+        } else {
+            vfs_kill_setid(mnt, ofd->vnode);
+        }
+    }
+    if (rc == 0 && own) {
+        filemap_file_truncated(mnt, ofd->ino, 0);
+    }
+    file_unlock(&file, own);
+    return rc;
+}
+
+/**
  * The descriptor for an opened node, in the slot `fd` the open reserved,
  * with `name`, the path without its leading slash, recorded for a node of a
  * mounted type (`ofd_record_path`): a directory opens as a FD_TYPE_DIR (its
@@ -3259,21 +3288,7 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
     vfs_desc_open(ref->mnt);
     vfs_leave(ref->mnt);
     if (flags & O_TRUNC) {
-        struct vfs_ref file;
-        int own = file_lock(entry->ofd, &file);
-
-        rc = vfs_truncate(ref->mnt, entry->ofd->fhandle, 0);
-        if (rc == 0 && !cred_privileged()) {
-            if (mnt_is_root(ref->mnt)) {
-                cred_kill_setid(entry->ofd->vnode);
-            } else {
-                vfs_kill_setid(ref->mnt, entry->ofd->vnode);
-            }
-        }
-        if (rc == 0 && own) {
-            filemap_file_truncated(ref->mnt, entry->ofd->ino, 0);
-        }
-        file_unlock(&file, own);
+        rc = open_truncate(entry->ofd, ref->mnt);
         if (rc != 0) {
             fd_free(current_proc->fds, fd);
             return rc;
@@ -12277,7 +12292,7 @@ static int32_t do_mknod(const char *path, uint32_t mode, uint32_t dev, int end)
     uint32_t type = mode & S_IFMT;
     struct vfs_ref parent;
     char leaf[VFS_NAME_MAX + 1];
-    void *made;
+    void *made = NULL;
     int32_t rc;
 
     rc = new_name_parent(path, &parent, leaf, sizeof(leaf));
@@ -12708,6 +12723,22 @@ static int32_t rename_mounted_names(const struct vfs_ref *opar, const char *olea
     return rc;
 }
 
+/** RENAME_NOREPLACE when a name of the rename is a mount point: -EEXIST when
+ * the new name is there, -EBUSY otherwise, or the locks' error. */
+static int32_t rename_on_mount(const struct vfs_ref *opar, const char *oleaf,
+                               const struct vfs_ref *npar, const char *nleaf)
+{
+    struct vfs_rename_hold h;
+    int32_t rc;
+
+    rc = vfs_rename_lock(opar, oleaf, npar, nleaf, &h);
+    if (rc == 0) {
+        rc = rename_noreplace(opar, oleaf, npar, nleaf);
+        vfs_rename_unlock(&h);
+    }
+    return rc == 0 ? -EBUSY : rc;
+}
+
 /**
  * Rename `old_buf` to `new_buf`, both absolute canonical paths: the core of
  * rename(2), renameat(2) and renameat2(2), whose RENAME_NOREPLACE in `flags`
@@ -12810,19 +12841,7 @@ static int32_t do_rename(const char *old_buf, const char *new_buf, int flags, in
         goto out;
     }
     if (vfs_leaf_mount(opar.mnt, opar.node, oleaf) || vfs_leaf_mount(npar.mnt, npar.node, nleaf)) {
-        rc = -EBUSY;
-        if (flags & RENAME_NOREPLACE) {
-            struct vfs_rename_hold h;
-
-            rc = vfs_rename_lock(&opar, oleaf, &npar, nleaf, &h);
-            if (rc == 0) {
-                rc = rename_noreplace(&opar, oleaf, &npar, nleaf);
-                vfs_rename_unlock(&h);
-            }
-            if (rc == 0) {
-                rc = -EBUSY;
-            }
-        }
+        rc = (flags & RENAME_NOREPLACE) ? rename_on_mount(&opar, oleaf, &npar, nleaf) : -EBUSY;
         goto out;
     }
     if (!mnt_is_root(vfs_mount_base(opar.mnt))) {

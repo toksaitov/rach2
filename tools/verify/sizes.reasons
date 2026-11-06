@@ -104,11 +104,9 @@ rach2/sys/fs/ext2.c:dirent_write params 7 the parameters are one level's cursor 
 rach2/sys/fs/ext2.c:ext2_mount_on complexity 73 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:ext2_mount_on lines 183 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:ext2_rename complexity 63 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/ext2.c:ext2_rename lines 216 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:ext2_write complexity 30 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:map_alloc lines 108 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/ext2.c:map_alloc nesting 5 one file system operation over the on-disk format, each step a rule of the format
-rach2/sys/fs/ext2.c:punch_level params 8 the parameters are one level's cursor in a recursive walk
 
 rach2/sys/fs/fat32.c:fat_check_volume lines 104 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/fat32.c:fat_mount_on complexity 43 one file system operation over the on-disk format, each step a rule of the format
@@ -134,10 +132,10 @@ rach2/sys/fs/krffs.c:krffs_repair_at nesting 5 one file system operation over th
 rach2/sys/fs/krffs.c:krffs_resize_at complexity 27 one file system operation over the on-disk format, each step a rule of the format
 rach2/sys/fs/krffs.c:krffs_walk_err complexity 27 one file system operation over the on-disk format, each step a rule of the format
 
-rach2/sys/fs/procfs.c:procfs_kind_name complexity 31 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_kind_name complexity 32 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_open complexity 64 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/procfs.c:procfs_sysctl_write complexity 28 a dispatcher, one arm per command, read as a table
-rach2/sys/fs/procfs.c:procfs_gen_text complexity 34 a dispatcher, one arm per command, read as a table
+rach2/sys/fs/procfs.c:procfs_gen_text complexity 35 a dispatcher, one arm per command, read as a table
 
 rach2/sys/fs/synthfs.c:synth_classify_pid complexity 26 a dispatcher, one arm per command, read as a table
 rach2/sys/fs/synthfs.c:synth_sys_path complexity 30 a dispatcher, one arm per command, read as a table
@@ -242,9 +240,9 @@ rach2/sys/syscall_fs.c:do_readlink complexity 33 a dispatcher, one arm per comma
 rach2/sys/syscall_fs.c:fstat_fill complexity 40 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:fstat_fill lines 125 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:readv_dgram params 7 the parameters are the parts of one receive's answer; a struct for them would be filled and unpacked once
-rach2/sys/syscall_fs.c:synth_dirent_at complexity 31 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_dirent_at lines 137 a dispatcher, one arm per command, read as a table
-rach2/sys/syscall_fs.c:synth_stat lines 261 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_dirent_at complexity 33 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_dirent_at lines 142 a dispatcher, one arm per command, read as a table
+rach2/sys/syscall_fs.c:synth_stat lines 268 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:sys_fcntl64 lines 111 a dispatcher, one arm per command, read as a table
 rach2/sys/syscall_fs.c:sys_readv complexity 29 one system call's contract, its checks in the order the manual page lists the errors
 rach2/sys/syscall_fs.c:utimes_node complexity 42 one system call's contract, its checks in the order the manual page lists the errors

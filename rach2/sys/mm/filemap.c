@@ -218,8 +218,8 @@ static void dshare_put(struct dshare *ds)
  * (`vfs_node_lock`: the mount's namespace lock, or the file's own on a type
  * that sets `file_locked`) is held from before the file's size is read to
  * the end of the write, so a truncation, which takes it too, runs wholly
- * before or after: the write never reaches past the size it leaves, and the page,
- * looked up after the size is read and copied with nothing between that
+ * before or after: the write never reaches past the size it leaves, and the
+ * page, looked up after the size is read and copied with nothing between that
  * sleeps, is one a truncation has not freed. A file a loop device stands on
  * is not written, as write(2) does not write it. 0, -EBUSY, or the write's
  * error.
