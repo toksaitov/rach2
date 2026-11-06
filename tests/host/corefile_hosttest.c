@@ -1,6 +1,6 @@
 /**
  * corefile_hosttest.c: the core file `fs_core_file` writes, its descriptor
- * and its limit.
+ * and its limit, and the limit of an append that brings its buffer in again.
  *
  * host-deps: tests/host/compat/vfs_name_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
@@ -28,6 +28,12 @@
  * before the zero at its end, the zero must not be written, the file must end
  * with the last page written and the call must answer EFBIG; with one byte
  * more, the zero is written at the file's last byte.
+ *
+ * The append rows call `file_write_pieces` as a type that sets
+ * `file_locked` has it, with the file's lock held: the model's first write
+ * moves a few bytes and the rest of the buffer is not resident, and while
+ * it is brought in with the lock let go another writer moves the file's end
+ * to the limit or near it, so the rest must be cut again to RLIMIT_FSIZE.
  */
 #include "isr.h"
 #include "lib/kuser.h"
@@ -185,6 +191,11 @@ static uint32_t file_len, file_written;
 static void (*meanwhile)(void);
 static int32_t sharer_write, sharer_dup;
 static int sharer_writes;
+/* The most bytes the model's next write moves, -1 for every byte asked;
+ * and the length another writer gives the file while a buffer is brought in,
+ * 0 for no such writer, whose buffer is then resident. */
+static int32_t write_cap;
+static uint32_t grown_len;
 
 /** Record every failed invariant. */
 static void check(int ok, const char *what)
@@ -509,6 +520,10 @@ int32_t vfs_write(struct vfs_mount *mnt, void *handle, const void *buf, uint32_t
     if (offset + count > sizeof(file)) {
         return -EFBIG;
     }
+    if (write_cap >= 0 && count > (uint32_t)write_cap) {
+        count = (uint32_t)write_cap;
+    }
+    write_cap = -1;
     k_memcpy(file + offset, buf, count);
     if (offset + count > file_len) {
         file_len = (uint32_t)(offset + count);
@@ -526,21 +541,28 @@ int user_buffer_ok(uintptr_t addr, size_t len, int write)
     return 1;
 }
 
-/** Every page of a model buffer is present. */
+/** Every page of a model buffer is present, but for an append row's until
+ * it is brought in. */
 int vm_resident(uintptr_t addr, uintptr_t len, int write)
 {
     (void)addr;
     (void)len;
     (void)write;
-    return 1;
+    return grown_len == 0;
 }
 
-/** Every page of a model buffer is brought in. */
+/** Every page of a model buffer is brought in, while an append row's other
+ * writer moves the file's end with the file's lock let go. */
 int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
 {
     (void)addr;
     (void)len;
     (void)write;
+    if (grown_len != 0) {
+        check(ns_depth == 0, "a buffer is brought in with the file's lock let go");
+        file_len = grown_len;
+        grown_len = 0;
+    }
     return 1;
 }
 
@@ -1385,6 +1407,8 @@ static void row_begin(void)
     sharer_write = sharer_dup = 0;
     sharer_writes = 0;
     meanwhile = 0;
+    write_cap = -1;
+    grown_len = 0;
     current_proc = &self;
 }
 
@@ -1470,6 +1494,71 @@ static void trailing_zero_limit(void)
     row_end();
 }
 
+/* The limit of the append rows, and the bytes their first write moves. */
+#define APPEND_LIMIT 64u
+#define APPEND_FIRST 8u
+
+/**
+ * Append 32 bytes as a type that sets `file_locked` does, with the file's
+ * lock held and RLIMIT_FSIZE at APPEND_LIMIT: the first write moves
+ * `first` bytes, and while the rest is brought in another writer makes the
+ * file `grown` bytes long. Returns what `file_write_pieces` answered.
+ */
+static int32_t append_across_refault(uint32_t first, uint32_t grown)
+{
+    static const char buf[32] = "the bytes of an appending write";
+    struct open_file ofd;
+    fd_entry_t entry;
+    struct vfs_ref ref;
+    unsigned long was = self.rlim[RLIM_FSIZE].cur;
+    uint64_t pos = 0;
+    int32_t n;
+
+    k_memset(&ofd, 0, sizeof(ofd));
+    k_memset(&entry, 0, sizeof(entry));
+    ofd.vmnt = &mount;
+    ofd.vnode = &core_node;
+    ofd.fhandle = &core_node;
+    ofd.status_flags = OFD_APPEND;
+    entry.ofd = &ofd;
+    ref.mnt = &mount;
+    ref.node = &core_node;
+    write_cap = (int32_t)first;
+    grown_len = grown;
+    self.rlim[RLIM_FSIZE].cur = APPEND_LIMIT;
+    vfs_node_lock(&ref);
+    n = file_write_pieces(&entry, &ref, 1, 0, (const char __user *)buf, sizeof(buf), &pos);
+    vfs_node_unlock(&ref);
+    self.rlim[RLIM_FSIZE].cur = was;
+    check(grown_len == 0, "the append brought its buffer in once");
+    return n;
+}
+
+/**
+ * An append whose buffer is brought in again, while another writer moves the
+ * file's end, writes no byte past RLIMIT_FSIZE: the rest is cut to what fits
+ * from the new end, the write stops at an end at the limit with the bytes it
+ * moved, and one that moved none answers EFBIG.
+ */
+static void append_refault_limit(void)
+{
+    row_begin();
+    check(append_across_refault(APPEND_FIRST, APPEND_LIMIT - 4u) == (int32_t)APPEND_FIRST + 4,
+          "an append retried near the limit writes what fits from the new end");
+    check(file_len == APPEND_LIMIT, "and the file ends at the limit");
+    row_end();
+    row_begin();
+    check(append_across_refault(APPEND_FIRST, APPEND_LIMIT) == (int32_t)APPEND_FIRST,
+          "an append retried at the limit answers the bytes it moved");
+    check(file_len == APPEND_LIMIT, "and writes no byte past it");
+    row_end();
+    row_begin();
+    check(append_across_refault(0, APPEND_LIMIT) == -EFBIG,
+          "an append that moved no byte before the end reached the limit is EFBIG");
+    check(file_len == APPEND_LIMIT, "and writes nothing");
+    row_end();
+}
+
 /** A mount is its own base here: no row makes a bind mount. */
 const struct vfs_mount *vfs_mount_base(const struct vfs_mount *m)
 {
@@ -1513,9 +1602,10 @@ int main(void)
     mount.type = &model_type;
     sharer_finds_no_descriptor();
     trailing_zero_limit();
+    append_refault_limit();
     if (!failures) {
-        printf("corefile-hosttest: result: pass: the core file's descriptor and its trailing "
-               "zero under the limit\n");
+        printf("corefile-hosttest: result: pass: the core file's descriptor, its trailing "
+               "zero under the limit, and an append's limit across a refault\n");
     }
     return failures != 0;
 }

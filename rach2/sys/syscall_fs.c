@@ -567,6 +567,21 @@ static int32_t fsize_refused(uint64_t end)
     return -EFBIG;
 }
 
+/** The part of `count` bytes written at `pos` that the caller's
+ * RLIMIT_FSIZE lets the file take: `count`, less, or 0 from the limit on. */
+static uint32_t fsize_fit(uint64_t pos, uint32_t count)
+{
+    unsigned long limit = current_proc->rlim[RLIM_FSIZE].cur;
+
+    if (limit == RLIM_INFINITY) {
+        return count;
+    }
+    if (pos >= limit) {
+        return 0;
+    }
+    return (uint64_t)count > limit - pos ? (uint32_t)(limit - pos) : count;
+}
+
 /**
  * Take the lock of the file the description `ofd` is open on for a write or
  * a change of its size, on a type that sets `file_locked` (`vfs_node_lock`), into
@@ -608,7 +623,10 @@ static void file_unlock(const struct vfs_ref *file, int own)
  * are present (`vm_resident`), answering a short count at the first that is
  * not, since a fault under the lock could wait for another file's lock. The
  * lock then goes while the rest of the buffer is brought in, and the write
- * goes on from the byte it reached, at the file's end again under O_APPEND.
+ * goes on from the byte it reached, at the file's end again under O_APPEND,
+ * where another writer may have moved it meanwhile: the rest is cut again to
+ * what RLIMIT_FSIZE lets through (`fsize_fit`), and a write that finds the
+ * end at the limit stops there, -EFBIG when it has moved no byte.
  */
 static int32_t file_write_pieces(fd_entry_t *entry, const struct vfs_ref *file, int own, int mapped,
                                  const char __user *buf, uint32_t count, uint64_t *pos)
@@ -646,6 +664,11 @@ static int32_t file_write_pieces(fd_entry_t *entry, const struct vfs_ref *file, 
             if (vfs_getattr(ofd->vmnt, ofd->vnode, &vst) == 0) {
                 *pos = vst.size;
             }
+            if (fsize_fit(*pos, count - done) == 0) {
+                n = done > 0 ? 0 : fsize_refused(*pos + 1);
+                break;
+            }
+            count = done + fsize_fit(*pos, count - done);
         }
     }
     return done > 0 ? (int32_t)done : n;
@@ -725,10 +748,7 @@ static int32_t file_write(fd_entry_t *entry, const char __user *buf, uint32_t co
         fd_ofd_unlock(ofd);
         return -EFBIG;
     }
-    if (current_proc->rlim[RLIM_FSIZE].cur != RLIM_INFINITY &&
-        (uint64_t)count > current_proc->rlim[RLIM_FSIZE].cur - pos) {
-        count = (uint32_t)(current_proc->rlim[RLIM_FSIZE].cur - pos);
-    }
+    count = fsize_fit(pos, count);
     mapped = filemap_disk_mapped(ofd->vmnt, ofd->ino);
     if (mapped && !own) {
         vfs_node_lock(&file);
