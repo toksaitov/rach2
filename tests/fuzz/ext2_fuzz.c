@@ -13,6 +13,17 @@
 #include "fs_common.h"
 #include "fuzz.h"
 
+/** 0: no input closes the mount, whose wait for its writers alone reads the
+ * clock. */
+uint64_t tick_count(void)
+{
+    return 0;
+}
+
+/** Nothing: there is no scheduler here. */
+void sched_service_point(void)
+{}
+
 /** Return 0: no hold of a sleeping lock is timed here. */
 uint32_t timer_now_us(void)
 {

@@ -221,11 +221,12 @@ uint32_t timer_now_us(void)
     return 0;
 }
 
-/** Return 0: no row closes the mount, whose wait for its writers alone
- * reads the clock. */
+/** Nothing: there is no scheduler here. */
 void sched_service_point(void)
 {}
 
+/** Return 0: no row closes the mount, whose wait for its writers alone
+ * reads the clock. */
 uint64_t tick_count(void)
 {
     return 0;
