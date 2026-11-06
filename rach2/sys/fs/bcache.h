@@ -176,6 +176,17 @@ int bcache_write_unflushed(struct bbuf *b);
 int bcache_sync(block_device_t *dev);
 
 /**
+ * Name the blocks of `dev` a sync writes after every other: `last(arg, blk)`
+ * is 1 for such a block, and NULL names none. A file system's blocks that
+ * point at others so stay dirty when a write of those fails, in
+ * `bcache_sync` and `bcache_sync_unflushed`, whoever calls them. Once a
+ * write of the device has failed an eviction takes none of them either.
+ * `last` runs under the walks of the dirty buffers and must not sleep; the
+ * caller clears it before `arg` goes.
+ */
+void bcache_sync_last(block_device_t *dev, int (*last)(void *arg, uint64_t blk), void *arg);
+
+/**
  * Write `owner`'s dirty buffers on `dev` and no others, as `bcache_sync` does
  * in its passes and rules, in runs that hold only that owner's blocks, and
  * without the flush that ends a sync: dirty neighbours stay dirty and the
@@ -200,6 +211,17 @@ int bcache_sync_owned(block_device_t *dev, uint64_t owner);
  *         first failure's -errno with its buffer still dirty.
  */
 int bcache_sync_block(block_device_t *dev, uint64_t blk);
+
+/**
+ * Clear the way for `bcache_sync_block` of the same block, for a caller that
+ * must check something in the same step as the start of the write.
+ *
+ * @return 0 when a `bcache_sync_block` now starts its write without a sleep,
+ *         or finds nothing to write; 1 after a wait or a write, which slept,
+ *         so that the caller checks again and calls this again; or the
+ *         -errno of a failed write.
+ */
+int bcache_sync_block_ready(block_device_t *dev, uint64_t blk);
 
 /**
  * Write dirty victims until the next `n` misses for blocks of `dev` can have

@@ -542,6 +542,35 @@ static void wait_unheld(struct bbuf *b)
     b->waiters--;
 }
 
+/* What a sync writes and how. */
+struct sync_scope {
+    uint64_t owner;       /* the owner whose blocks it writes, or 0 for all */
+    uint32_t flags;       /* the request flags of a run */
+    uint32_t first_flags; /* those of a run of `first` buffers */
+    int hold;             /* it leaves the device's last blocks for a later sync */
+    int hold_afters;      /* and its `after` blocks, which a `first` left must precede */
+};
+
+/** Whether `b` is a block its device wants written last (`bcache_sync_last`). */
+static int block_last(const struct bbuf *b)
+{
+    return b->dev->sync_last && b->dev->sync_last(b->dev->sync_last_arg, b->blk);
+}
+
+/** Whether a sync of `scope` leaves `b` for a later one. */
+static int sync_leaves(const struct bbuf *b, const struct sync_scope *scope)
+{
+    return scope->hold && (block_last(b) || (scope->hold_afters && b->order == BCACHE_ORDER_AFTER));
+}
+
+/** Whether a write of `b` is kept from an eviction or a shrink: its own last
+ * write failed, or a write of its device did and it is a block that device
+ * wants written last, which may name the block that failed. */
+static int write_barred(const struct bbuf *b)
+{
+    return b->write_failed || ((b->dev->flags & BLOCK_WRITE_FAILED) && block_last(b));
+}
+
 /** Write the buffer `b` to the device with the request `flags`. A failure
  * is recorded against the device, through `vfs_device_failed`, and leaves
  * the buffer dirty and marked failed. */
@@ -602,8 +631,9 @@ static struct bbuf *fill_keep;
  * Write `first` and the dirty, unheld blocks that follow it on its device
  * in one request, with the request `flags`, so that a file written back
  * goes to the disk in runs and not a page at a time. `*last` receives the
- * last block written. With `owner` nonzero the run stops at a block of any
- * other owner, so that one file's sync takes no neighbour's blocks with it.
+ * last block written. A run stops at a block `scope` leaves out: of another
+ * owner, so that one file's sync takes no neighbour's blocks with it, or one
+ * its device wants written last.
  *
  * A run is as long as the device takes at once and at most half the cache,
  * as a read run is: its buffers are held across the request's sleep and let
@@ -614,7 +644,8 @@ static struct bbuf *fill_keep;
  * `write_buffer_flags` does. A run of one, or a device that takes a page,
  * is `write_buffer_flags`.
  */
-static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags, uint64_t owner)
+static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags,
+                     const struct sync_scope *scope)
 {
     struct bbuf *run[RUN_BLOCKS];
     block_device_t *dev = first->dev;
@@ -638,7 +669,7 @@ static int write_run(struct bbuf *first, uint64_t *last, uint32_t flags, uint64_
         struct bbuf *b = index_find(dev, first->blk + (uint64_t)n);
 
         if (!b || !b->dirty || b->holder != -1 || b->order != first->order ||
-            (owner && b->owner != owner)) {
+            (scope->owner && b->owner != scope->owner) || sync_leaves(b, scope)) {
             break;
         }
         run[n++] = b;
@@ -717,7 +748,7 @@ static int victim_fit(const struct bbuf *b, block_device_t *filling, struct firs
     if (!b->dirty) {
         return 1;
     }
-    if (b->write_failed || !victim_may_be_written(b->dev, filling)) {
+    if (write_barred(b) || !victim_may_be_written(b->dev, filling)) {
         return 0;
     }
     if (b->order != BCACHE_ORDER_AFTER) {
@@ -1139,13 +1170,6 @@ static int clear_firsts(block_device_t *dev)
  * the heap, which holds 131072 blocks. */
 #define SYNC_BATCH_PAGES 256u
 
-/* What a sync writes and how. */
-struct sync_scope {
-    uint64_t owner;       /* the owner whose blocks it writes, or 0 for all */
-    uint32_t flags;       /* the request flags of a run */
-    uint32_t first_flags; /* those of a run of `first` buffers */
-};
-
 /**
  * Move the entry at `at` of the max-heap `heap` of `n` blocks down to its
  * place. Each level is a step of a sync's bookkeeping, counted as a visit.
@@ -1191,11 +1215,11 @@ static void batch_sift_up(uint64_t *heap, int at)
     }
 }
 
-/** Whether pass `pass` of a sync of `owner`, 0 for every owner, writes `b`. */
-static int sync_wants(const struct bbuf *b, int pass, uint64_t owner)
+/** Whether pass `pass` of a sync of `scope` writes `b`. */
+static int sync_wants(const struct bbuf *b, int pass, const struct sync_scope *scope)
 {
     return b->dirty && (pass != 0 || b->order == BCACHE_ORDER_FIRST) &&
-           (!owner || b->owner == owner);
+           (!scope->owner || b->owner == scope->owner) && !sync_leaves(b, scope);
 }
 
 /**
@@ -1212,15 +1236,15 @@ static int sync_wants(const struct bbuf *b, int pass, uint64_t owner)
  * blocks in descending order, and each of them would shift a sorted batch
  * whole.
  */
-static int gather_dirty(block_device_t *dev, int pass, uint64_t owner, uint64_t from, uint64_t *out,
-                        int cap)
+static int gather_dirty(block_device_t *dev, int pass, const struct sync_scope *scope,
+                        uint64_t from, uint64_t *out, int cap)
 {
     const struct bbuf *b;
     int n = 0, i;
 
     for (b = dirties; b; b = b->dirty_next) {
         stat_visits++;
-        if (b->dev != dev || !sync_wants(b, pass, owner) || b->blk < from) {
+        if (b->dev != dev || !sync_wants(b, pass, scope) || b->blk < from) {
             continue;
         }
         if (n < cap) {
@@ -1265,16 +1289,19 @@ static void check_sync_holds(const struct bbuf *b, block_device_t *dev)
  * wait or write of the `first` buffers, which sleep and leave it stale. A
  * block written, emptied or keyed again while the batch's writes slept is
  * skipped. In pass 1, an `after` has the way cleared first (`clear_firsts`).
+ * A sync that holds the last blocks clears no way: their firsts are not its
+ * to write, so while any `first` is dirty it leaves the afters too.
  */
-static int sync_batches(block_device_t *dev, int pass, const struct sync_scope *scope,
-                        uint64_t *batch, int cap)
+static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope, uint64_t *batch,
+                        int cap)
 {
     uint64_t from = 0;
 
     for (;;) {
-        int n = gather_dirty(dev, pass, scope->owner, from, batch, cap);
-        int i;
+        int n, i;
 
+        scope->hold_afters = scope->hold && first_dirty(dev);
+        n = gather_dirty(dev, pass, scope, from, batch, cap);
         if (n == 0) {
             if (from == 0) {
                 return 0;
@@ -1287,10 +1314,14 @@ static int sync_batches(block_device_t *dev, int pass, const struct sync_scope *
             uint64_t last;
             int rc;
 
-            if (!next || !sync_wants(next, pass, scope->owner) || next->blk < from) {
+            if (!next || !sync_wants(next, pass, scope) || next->blk < from) {
                 continue;
             }
-            if (pass == 1 && next->order == BCACHE_ORDER_AFTER) {
+            if (pass == 1 && next->order == BCACHE_ORDER_AFTER && scope->hold) {
+                if (first_dirty(dev)) {
+                    break;
+                }
+            } else if (pass == 1 && next->order == BCACHE_ORDER_AFTER) {
                 rc = clear_firsts(dev);
                 if (rc < 0) {
                     return rc;
@@ -1306,7 +1337,7 @@ static int sync_batches(block_device_t *dev, int pass, const struct sync_scope *
             check_sync_holds(next, dev);
             rc = write_run(next, &last,
                            next->order == BCACHE_ORDER_FIRST ? scope->first_flags : scope->flags,
-                           scope->owner);
+                           scope);
             if (rc != 0) {
                 return rc;
             }
@@ -1341,7 +1372,7 @@ static uint32_t owned_dirty(uint64_t owner)
  * the room it gathers `SYNC_BATCH` blocks a walk. An owner's sync sizes the
  * batch to the owner's blocks, however many its neighbours have dirty.
  */
-static int sync_pass(block_device_t *dev, int pass, const struct sync_scope *scope)
+static int sync_pass(block_device_t *dev, int pass, struct sync_scope *scope)
 {
     uint64_t small[SYNC_BATCH];
     uint64_t *batch = 0;
@@ -1368,7 +1399,7 @@ static int sync_pass(block_device_t *dev, int pass, const struct sync_scope *sco
 }
 
 /** The two passes of a sync. */
-static int sync_passes(block_device_t *dev, const struct sync_scope *scope)
+static int sync_passes(block_device_t *dev, struct sync_scope *scope)
 {
     int rc = sync_pass(dev, 0, scope);
 
@@ -1391,10 +1422,21 @@ static int sync_device(block_device_t *dev, int durable);
  * or a reclaim. The other writes leave the disk's cache to one flush at the
  * sync's end, which makes the sync durable when it returns, even when a
  * write failed.
+ *
+ * On a device that names blocks to write last (`bcache_sync_last`), the
+ * passes run twice: without those blocks, then, when that went well, with
+ * them. A failure so leaves them dirty, and the `after` blocks with them
+ * while a `first` is among them.
  */
 int bcache_sync(block_device_t *dev)
 {
     return sync_device(dev, 1);
+}
+
+void bcache_sync_last(block_device_t *dev, int (*last)(void *arg, uint64_t blk), void *arg)
+{
+    dev->sync_last = last;
+    dev->sync_last_arg = arg;
 }
 
 int bcache_sync_unflushed(block_device_t *dev)
@@ -1412,10 +1454,15 @@ static int sync_device(block_device_t *dev, int durable)
     struct sync_scope scope;
     int rc, flushed;
 
-    scope.owner = 0;
+    k_memset(&scope, 0, sizeof(scope));
     scope.flags = unflushed_flags(dev);
     scope.first_flags = durable ? 0 : scope.flags;
+    scope.hold = dev->sync_last != 0;
     rc = sync_passes(dev, &scope);
+    if (rc == 0 && scope.hold) {
+        scope.hold = 0;
+        rc = sync_passes(dev, &scope);
+    }
     if (!through || !durable) {
         return rc;
     }
@@ -1435,33 +1482,41 @@ int bcache_sync_owned(block_device_t *dev, uint64_t owner)
 {
     struct sync_scope scope;
 
+    k_memset(&scope, 0, sizeof(scope));
     scope.owner = owner;
     scope.flags = unflushed_flags(dev);
-    scope.first_flags = 0;
     return sync_passes(dev, &scope);
+}
+
+int bcache_sync_block_ready(block_device_t *dev, uint64_t blk)
+{
+    struct bbuf *b = index_find(dev, blk);
+
+    if (!b || !b->dirty) {
+        return 0;
+    }
+    if (b->holder != -1 && b->holder != caller_pid()) {
+        wait_unheld(b);
+        return 1;
+    }
+    return b->order == BCACHE_ORDER_AFTER ? clear_firsts(dev) : 0;
 }
 
 int bcache_sync_block(block_device_t *dev, uint64_t blk)
 {
     for (;;) {
-        struct bbuf *b = index_find(dev, blk);
-        int rc;
+        int rc = bcache_sync_block_ready(dev, blk);
+        struct bbuf *b;
 
-        if (!b || !b->dirty) {
-            return 0;
+        if (rc < 0) {
+            return rc;
         }
-        if (b->holder != -1 && b->holder != caller_pid()) {
-            wait_unheld(b);
+        if (rc > 0) {
             continue;
         }
-        if (b->order == BCACHE_ORDER_AFTER) {
-            rc = clear_firsts(dev);
-            if (rc < 0) {
-                return rc;
-            }
-            if (rc > 0) {
-                continue;
-            }
+        b = index_find(dev, blk);
+        if (!b || !b->dirty) {
+            return 0;
         }
         check_sync_holds(b, dev);
         return write_one(b, b->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(dev));
@@ -1514,7 +1569,7 @@ static struct bbuf *shrink_dirty(void)
         if (!b->dirty || b->holder != -1 || b->waiters > 0) {
             continue;
         }
-        if (b->write_failed || !victim_may_be_written(b->dev, 0)) {
+        if (write_barred(b) || !victim_may_be_written(b->dev, 0)) {
             continue;
         }
         if (b->order == BCACHE_ORDER_AFTER && firsts_pending(b->dev)) {
@@ -1631,6 +1686,7 @@ uint32_t bcache_reserve(block_device_t *dev, uint32_t n)
     uint32_t want = n < limit ? n : limit;
     uint32_t ready = 0;
     int budget = (int)want * 2;
+    const struct sync_scope every = {0, 0, 0, 0, 0};
 
     for (;;) {
         struct bbuf *b = reserve_walk(dev, want, &ready);
@@ -1649,7 +1705,8 @@ uint32_t bcache_reserve(block_device_t *dev, uint32_t n)
                 continue;
             }
         }
-        rc = write_run(b, &last, b->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(b->dev), 0);
+        rc = write_run(b, &last, b->order == BCACHE_ORDER_FIRST ? 0 : unflushed_flags(b->dev),
+                       &every);
         if (rc != 0) {
             return ready;
         }

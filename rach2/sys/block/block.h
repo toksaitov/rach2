@@ -96,6 +96,10 @@ struct block_device {
      * one device's buffer may take another's. */
     block_device_t *backing;
     void *drvdata;
+    /* The blocks a sync of the buffer cache writes last, and its argument
+     * (`bcache_sync_last`). NULL names none. */
+    int (*sync_last)(void *arg, uint64_t blk);
+    void *sync_last_arg;
     /* A `BLOCK_WRITE_THROUGH` disk answered a write without its flush, and
      * no flush has reached the disk since. Set and cleared by its driver. */
     volatile int unflushed;

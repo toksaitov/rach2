@@ -147,6 +147,8 @@ static uint64_t fill_during_write;
 /* The fault injector: report success and write nothing at write number
    `drop_at`; write only `tear_bytes` at write number `tear_at`. */
 static int drop_at = -1, tear_at = -1, tear_bytes;
+/* The one sector whose write fails, or 0, unlike `fail_writes`' every write. */
+static uint64_t fail_lba;
 /* Two interleavings. `write_during_fill` is a block written through the
    cache, synced and dropped from it while a run read that covers it is
    inside the device, as another process's write lands during the fill's
@@ -230,7 +232,7 @@ static int fake_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
  */
 static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
-    if (fail_writes) {
+    if (fail_writes || (fail_lba && lba == fail_lba)) {
         return -5;
     }
     if (gone_during_write) {
@@ -585,8 +587,84 @@ static void shared_rows(void)
     vast.flags &= ~(BLOCK_WRITE_THROUGH | BLOCK_WRITE_FAILED);
     check(bcache_sync_block(&vast, 21) == 0 && !dirty_now(&vast, 21),
           "and the next write takes it");
+    dirty_for(&vast, 20, 0, BCACHE_ORDER_AFTER);
+    dirty_for(&vast, 30, 0, BCACHE_ORDER_FIRST);
+    writes_made = 0;
+    check(bcache_sync_block_ready(&vast, 30) == 0 && writes_made == 0,
+          "a `first` is ready for its write at once");
+    check(bcache_sync_block_ready(&vast, 20) == 1 && writes_made == 1 && dirty_now(&vast, 20),
+          "an `after` has the way cleared, which sleeps, and is not written");
+    check(bcache_sync_block_ready(&vast, 20) == 0 && writes_made == 1, "and then it is ready");
+    check(bcache_sync_block(&vast, 20) == 0 && bcache_sync_block_ready(&vast, 20) == 0 &&
+              bcache_sync_block_ready(&vast, 300) == 0 && writes_made == 2,
+          "as a clean block and one not in the cache are");
     bcache_invalidate(&vast);
     panic_row(sync_block_it, 0, "a sync while holding", "a write of a block the caller holds");
+}
+
+/** Name blocks 40 and 41 of `last_rows` as those a sync writes last. */
+static int last_block(void *arg, uint64_t blk)
+{
+    (void)arg;
+    return blk == 40 || blk == 41;
+}
+
+/**
+ * Check `bcache_sync_last` on `vast`: a sync writes blocks 40 and 41 after
+ * the rest, in a request of their own though the blocks beside them are
+ * dirty. A block that fails keeps them dirty and an eviction from them, until
+ * it heals. An `after` waits with them while they hold a `first`, and goes
+ * right after the rest when they do not.
+ */
+static void last_rows(void)
+{
+    uint32_t written = 0;
+
+    bcache_invalidate(&vast);
+    bcache_sync_last(&vast, last_block, 0);
+    dirty_for(&vast, 39, 0, 0);
+    dirty_for(&vast, 40, 0, 0);
+    dirty_for(&vast, 41, 0, 0);
+    dirty_for(&vast, 42, 0, 0);
+    writes_made = 0;
+    check(bcache_sync(&vast) == 0 && writes_made == 3 && writes_lba[0] == 39 * 8 &&
+              writes_lba[1] == 42 * 8 && writes_lba[2] == 40 * 8,
+          "a sync writes the last blocks after the rest, in their own request");
+    dirty_for(&vast, 39, 0, 0);
+    dirty_for(&vast, 40, 0, 0);
+    dirty_for(&vast, 42, 0, 0);
+    fail_lba = 42 * 8;
+    check(bcache_sync(&vast) == -5 && !dirty_now(&vast, 39) && dirty_now(&vast, 40),
+          "a block that fails keeps them dirty");
+    check(bcache_sync(&vast) == -5 && dirty_now(&vast, 40), "and so does a retry that fails");
+    bcache_shrink(BCACHE_BUFFERS, 1, &written);
+    check(written == 0 && bcache_cached(&vast, 40) && dirty_now(&vast, 40),
+          "and no shrink writes them after the failure");
+    fail_lba = 0;
+    writes_made = 0;
+    check(bcache_sync(&vast) == 0 && writes_made == 2 && writes_lba[0] == 42 * 8 &&
+              writes_lba[1] == 40 * 8,
+          "once it heals they go after it");
+    dirty_for(&vast, 38, 0, 0);
+    dirty_for(&vast, 39, 0, BCACHE_ORDER_AFTER);
+    dirty_for(&vast, 40, 0, BCACHE_ORDER_FIRST);
+    fail_lba = 38 * 8;
+    check(bcache_sync(&vast) == -5 && dirty_now(&vast, 39) && dirty_now(&vast, 40),
+          "an `after` stays dirty with a `first` among them");
+    fail_lba = 0;
+    writes_made = 0;
+    check(bcache_sync(&vast) == 0 && writes_made == 3 && writes_lba[0] == 38 * 8 &&
+              writes_lba[1] == 40 * 8 && writes_lba[2] == 39 * 8,
+          "and goes after that `first`");
+    dirty_for(&vast, 39, 0, BCACHE_ORDER_AFTER);
+    dirty_for(&vast, 40, 0, 0);
+    writes_made = 0;
+    check(bcache_sync(&vast) == 0 && writes_made == 2 && writes_lba[0] == 39 * 8 &&
+              writes_lba[1] == 40 * 8,
+          "with no `first` among them it goes before them");
+    bcache_sync_last(&vast, 0, 0);
+    vast.flags &= ~BLOCK_WRITE_FAILED;
+    bcache_invalidate(&vast);
 }
 
 /**
@@ -656,6 +734,7 @@ static void writeback_rows(void)
 {
     owned_rows();
     shared_rows();
+    last_rows();
     reserve_rows();
 }
 
