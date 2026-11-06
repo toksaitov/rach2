@@ -342,11 +342,7 @@ void schedule(void)
     int me;
     int kick = -1;
 
-    if (!_sched_enabled) {
-        return;
-    }
-
-    if (!current_proc) {
+    if (!_sched_enabled || !current_proc) {
         return;
     }
 

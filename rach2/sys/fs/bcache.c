@@ -1598,7 +1598,7 @@ static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope,
         }
         for (i = 0; i < n; i++) {
             struct bbuf *next = index_find(dev, batch[i]);
-            uint64_t last;
+            uint64_t last = 0;
             int rc;
 
             if (!next || !sync_wants(next, pass, scope) || next->blk < from) {
@@ -1606,23 +1606,21 @@ static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope,
             }
             if (next->holder != -1 && next->holder != caller_pid()) {
                 wait_unheld(next);
-                if (scope->hold) {
-                    break;
-                }
-                i--;
-                continue;
+                rc = 1;
+            } else {
+                check_sync_holds(next, dev);
+                rc = write_run(next, &last,
+                               next->order == BCACHE_ORDER_FIRST ? scope->first_flags
+                                                                 : scope->flags,
+                               scope);
             }
-            check_sync_holds(next, dev);
-            rc = write_run(next, &last,
-                           next->order == BCACHE_ORDER_FIRST ? scope->first_flags : scope->flags,
-                           scope);
             if (rc < 0) {
                 return rc;
             }
+            if (rc > 0 && scope->hold) {
+                break;
+            }
             if (rc > 0) {
-                if (scope->hold) {
-                    break;
-                }
                 i--;
                 continue;
             }
