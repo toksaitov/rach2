@@ -149,6 +149,8 @@ static uint64_t fill_during_write;
 static int drop_at = -1, tear_at = -1, tear_bytes;
 /* The one sector whose write fails, or 0, unlike `fail_writes`' every write. */
 static uint64_t fail_lba;
+/* Another process's write of the device fails while the next write sleeps. */
+static int failed_during_write;
 /* Two interleavings. `write_during_fill` is a block written through the
    cache, synced and dropped from it while a run read that covers it is
    inside the device, as another process's write lands during the fill's
@@ -223,6 +225,7 @@ static int fake_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
  *
  * Fails with -5 (EIO) when `fail_writes` is set. Before the copy it runs the
  * hooks that are set, each once: `gone_during_write` marks the device gone,
+ * `failed_during_write` marks it as having failed a write,
  * `first_during_sync` dirties that block as a `first` with 0xF1 as
  * `hook_proc`, and `fill_during_write` keys that block blank with 0xAB. It
  * records the request flags of `watch_blk`'s write, the LBAs of the first
@@ -238,6 +241,10 @@ static int fake_write(block_device_t *d, uint64_t lba, uint32_t count, const voi
     if (gone_during_write) {
         gone_during_write = 0;
         bcache_device_gone(d);
+    }
+    if (failed_during_write) {
+        failed_during_write = 0;
+        d->flags |= BLOCK_WRITE_FAILED;
     }
     if (first_during_sync) {
         uint64_t blk = first_during_sync;
@@ -729,13 +736,100 @@ static void reserve_rows(void)
     bcache_invalidate(&wide);
 }
 
-/** The rows of a file's own writeback and of the reserve. */
+/** Leave `wide` as a sync stopped by a failed write of block 38 leaves it:
+ * 39 dirty and `order`, and 40, a block written last, dirty and `last`. */
+static void failed_at_38(int order, int last)
+{
+    uint32_t written = 0;
+
+    dirty_for(&wide, 38, 0, 0);
+    dirty_for(&wide, 39, 0, order);
+    dirty_for(&wide, 40, 0, last);
+    fail_lba = 38 * 8;
+    check(bcache_sync(&wide) == -5, "the sync stops at the block that fails");
+    bcache_shrink(4096, 0, &written);
+    writes_made = 0;
+}
+
+/**
+ * Check what a reclaim may write on `wide` once a write has failed, on the
+ * cache of 16 buffers `reserve_rows` left. A block written last, barred
+ * then, stays dirty: a shrink, a reserve and an eviction each leave the
+ * `first` an `after` would take with it, and a block no check bars carries
+ * it into no run. One barred while an earlier `first` is being written stays
+ * too. A sync still retries it.
+ */
+static void barred_rows(void)
+{
+    uint32_t written = 0;
+    struct bbuf *b;
+    uint64_t i;
+
+    bcache_invalidate(&wide);
+    bcache_sync_last(&wide, last_block, 0);
+
+    failed_at_38(BCACHE_ORDER_AFTER, BCACHE_ORDER_FIRST);
+    bcache_shrink(BCACHE_BUFFERS, 1, &written);
+    check(writes_made == 0 && dirty_now(&wide, 39) && dirty_now(&wide, 40),
+          "a shrink writes no `after` ahead of a barred `first`");
+
+    failed_at_38(BCACHE_ORDER_AFTER, BCACHE_ORDER_FIRST);
+    check(bcache_reserve(&wide, 16) == 13 && writes_made == 0 && dirty_now(&wide, 39) &&
+              dirty_now(&wide, 40),
+          "and neither does a reserve");
+
+    fail_lba = 0;
+    check(bcache_sync(&wide) == 0 && writes_made == 3 && writes_lba[0] == 38 * 8 &&
+              writes_lba[1] == 40 * 8 && writes_lba[2] == 39 * 8,
+          "a sync still retries it, in order");
+
+    failed_at_38(0, 0);
+    check(bcache_reserve(&wide, 16) == 14 && writes_made == 1 && writes_lba[0] == 39 * 8 &&
+              last_write_count == 8 && dirty_now(&wide, 40),
+          "a reserve's run leaves a barred block beside it");
+    fail_lba = 0;
+    check(bcache_sync(&wide) == 0, "and a sync writes it");
+
+    failed_at_38(BCACHE_ORDER_AFTER, BCACHE_ORDER_FIRST);
+    for (i = 50; i < 63; i++) {
+        dirty_for(&wide, i, 0, BCACHE_ORDER_AFTER);
+    }
+    writes_made = 0;
+    b = bcache_get_blank(&wide, 100);
+    check(!b && writes_made == 0 && dirty_now(&wide, 39) && dirty_now(&wide, 40),
+          "a miss on a cache of such blocks evicts none");
+    if (b) {
+        bcache_release(b);
+    }
+    fail_lba = 0;
+    check(bcache_sync(&wide) == 0, "until a sync has written them");
+
+    wide.flags &= ~BLOCK_WRITE_FAILED;
+    dirty_for(&wide, 39, 0, BCACHE_ORDER_AFTER);
+    dirty_for(&wide, 40, 0, BCACHE_ORDER_FIRST);
+    dirty_for(&wide, 30, 0, BCACHE_ORDER_FIRST);
+    failed_during_write = 1;
+    writes_made = 0;
+    bcache_shrink(BCACHE_BUFFERS, 1, &written);
+    check(writes_made == 1 && writes_lba[0] == 30 * 8 && dirty_now(&wide, 39) &&
+              dirty_now(&wide, 40),
+          "a `first` barred while an earlier one is written stays dirty");
+    check(bcache_sync(&wide) == 0, "and a sync writes it");
+
+    bcache_sync_last(&wide, 0, 0);
+    wide.flags &= ~BLOCK_WRITE_FAILED;
+    bcache_invalidate(&wide);
+}
+
+/** The rows of a file's own writeback, of the reserve and of a reclaim after
+ * a failed write. */
 static void writeback_rows(void)
 {
     owned_rows();
     shared_rows();
     last_rows();
     reserve_rows();
+    barred_rows();
 }
 
 /**
@@ -810,7 +904,8 @@ static void writeback_rows(void)
  * first blocks, not the caller's block, though that is the least recently
  * released. A write run of 40 blank dirty blocks goes out in two runs of
  * 20, not one that holds every buffer while the request sleeps. The rows of
- * a file's own writeback and of the reserve end the run (`writeback_rows`).
+ * a file's own writeback, of the reserve and of a reclaim after a failed
+ * write end the run (`writeback_rows`).
  */
 int main(void)
 {

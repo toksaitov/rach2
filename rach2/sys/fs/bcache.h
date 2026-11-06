@@ -180,9 +180,11 @@ int bcache_sync(block_device_t *dev);
  * is 1 for such a block, and NULL names none. A file system's blocks that
  * point at others so stay dirty when a write of those fails, in
  * `bcache_sync` and `bcache_sync_unflushed`, whoever calls them. Once a
- * write of the device has failed an eviction takes none of them either.
- * `last` runs under the walks of the dirty buffers and must not sleep; the
- * caller clears it before `arg` goes.
+ * write of the device has failed, no eviction, shrink or reserve writes one
+ * of them: not alone, not in a run, and not ahead of an `after`, which stays
+ * dirty with it. A sync still retries them. `last` runs under the walks of
+ * the dirty buffers and must not sleep; the caller clears it before `arg`
+ * goes.
  */
 void bcache_sync_last(block_device_t *dev, int (*last)(void *arg, uint64_t blk), void *arg);
 
