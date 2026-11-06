@@ -966,6 +966,39 @@ static void robust_subnet(struct wifi *w)
     rejoined(w, "subnet-back", n, 0, "network A went back to its first subnet");
 }
 
+/**
+ * The robust case's rejoin of a network moved to another subnet, whose offer
+ * comes while the lock is held: the commands stand for an action that starts
+ * the probe and goes on holding the lock until the probe has ended, the
+ * longest a holder can. The answer waits for the lock and acts then.
+ */
+static void robust_busy(struct wifi *w)
+{
+    char *text = NULL;
+    long n;
+
+    net_step(&w->u, "subnet-busy");
+    ap(w, NULL, "ip addr add " GW_C "/24 dev br0; ip addr del " GW_A "/24 dev br0");
+    sta(w, NULL,
+        "(exec 9> /var/run/wpa_action.wlan0.lock; flock 9; "
+        "a=$(ifconfig wlan0 | sed -n 's/.*inet addr:\\([0-9.]*\\).*/\\1/p'); "
+        "/bin/busybox udhcpc -n -q -f -t 3 -T 2 -r $a -i wlan0 "
+        "-s /usr/share/udhcpc/probe.script < /dev/null 9>&- & "
+        "echo $! > /var/run/udhcpc.wlan0.probe; wait $!)");
+    sta(w, &text,
+        "until route -n | grep -q '^0\\.0\\.0\\.0 *" GW_C " .* wlan0$' && "
+        "grep -q '^nameserver " GW_C "$' /etc/resolv.conf; do sleep 1; done; ifconfig wlan0");
+    net_assert(&w->u, "subnet-busy", has(text, ADDR_C) && pinged(w, GW_C) > 0,
+               "the station lost the offer of another subnet that came under the lock: %s",
+               text != NULL ? text : "");
+    free(text);
+
+    n = log_count(w, "CTRL-EVENT-CONNECTED");
+    ap(w, NULL, "ip addr add " GW_A "/24 dev br0; ip addr del " GW_C "/24 dev br0");
+    ap(w, NULL, DEAUTH);
+    rejoined(w, "subnet-busy-back", n, 0, "network A went back to its first subnet");
+}
+
 /** The robust case's channel switch of both access points of network A,
  * which the station follows with its lease and traffic. */
 static void robust_switch(struct wifi *w)
@@ -1123,6 +1156,7 @@ static void case_robust(struct wifi *w)
     robust_rejoins(w);
     robust_silent(w);
     robust_subnet(w);
+    robust_busy(w);
     robust_switch(w);
     robust_roam(w);
     robust_move(w);

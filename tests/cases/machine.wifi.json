@@ -1011,7 +1011,7 @@
     },
     {
       "case_id": "machine.wifi.robust",
-      "behavior": "the installed system keeps network A through group rekeys, and its lease through a restart of the AP, a deauthentication, a rejoin with the DHCP server silent and a channel switch of both access points, gives the lease up at its end and with the AP gone and joins again when it is back, takes another subnet's address at a rejoin of the same name, and a roam with an SSH session kept, moves to and from network B, and lets the cable take and give back the default route and DNS",
+      "behavior": "the installed system keeps network A through group rekeys, and its lease through a restart of the AP, a deauthentication, a rejoin with the DHCP server silent and a channel switch of both access points, gives the lease up at its end and with the AP gone and joins again when it is back, takes another subnet's address at a rejoin of the same name, also when the offer comes while wpa_action's lock is held, and a roam with an SSH session kept, moves to and from network B, and lets the cable take and give back the default route and DNS",
       "units": [
         "wifi",
         "wpa_supplicant",
@@ -1124,6 +1124,12 @@
           "stage": "execute",
           "machine": "ap",
           "does": "restart dnsmasq with a third range, move br0 to 192.168.73.1/24, deauthenticate the station, wait for its route through the new router, then move br0 back, deauthenticate it again and wait for its lease of network A"
+        },
+        {
+          "step_id": "subnet-busy",
+          "stage": "execute",
+          "machine": "station",
+          "does": "move br0 to 192.168.73.1/24, hold wpa_action's lock across a probe from its start to its end, wait for the station's route through the new router, then move br0 back, deauthenticate the station and wait for its lease of network A"
         },
         {
           "step_id": "switch",
@@ -1329,6 +1335,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "subnet-busy",
+          "checks": "an offer of another subnet's address that comes while wpa_action's lock is held acts once the lock is free: the station takes that subnet's address, router and server, and the new router answers a ping",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "subnet-busy-back",
+          "checks": "a rejoin once the network is back on its first subnet gives the station that subnet's lease, routes and server, and it echoes",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "switch",
           "checks": "as network A's access points switch channels with transmit held, the station follows its own: wpa_supplicant reports the switch and no disconnection, the kernel logs it with no leave and no loss of wlan0's IPv4 address, a ping running across it is answered, and the station keeps network A's routes and server and echoes",
           "source": "scenario"
@@ -1379,7 +1395,7 @@
           "witness_id": "stage",
           "kind": "step",
           "means": "a step of the manifest has ended",
-          "limit": 17
+          "limit": 18
         }
       ],
       "bounds": {

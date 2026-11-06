@@ -72,11 +72,10 @@
 # descriptor 9. A pending wait is the file
 # /var/run/wpa_action.IFACE.hold.TOKEN, and a wait acts only while its file
 # is there: a CONNECTED that comes first removes it. The file stays through
-# a stop at HOLD seconds, for the wait goes on. A probe acts only while the
-# probe's file names it, and only when it can take the lock at once:
-# whoever holds it is changing the client or the wait, and stops the probe,
-# which would otherwise wait on that holder while the holder waits for it to
-# end.
+# a stop at HOLD seconds, for the wait goes on. A probe's answer acts only
+# while the probe's file names it, and waits for the lock in a process of its
+# own, for a holder may be stopping the probe, and the probe ends only when
+# its script has returned.
 
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 export PATH
@@ -161,12 +160,11 @@ start_probe() {
 }
 
 # The probe whose pid is $1 has ended its asking, with the address $2
-# offered, or none when no server answered. Unless the lock is busy or a
-# newer probe or a stop has taken its place, restart the client when the
-# offer is not the address in use.
+# offered, or none when no server answered. Take the lock, and unless a newer
+# probe or a stop has taken its place, restart the client when the offer is
+# not the address in use.
 probed() {
-	exec 9> "$lock"
-	flock -n 9 || return 0
+	dhcp_lock
 	[ "$(cat "$probefile" 2>/dev/null)" = "$1" ] || return 0
 	rm -f "$probefile"
 	if [ -z "$2" ] || ! running; then
@@ -273,7 +271,7 @@ case "$2" in
 		hold_wait $$ < /dev/null > /dev/null 2>&1 &
 		;;
 	PROBED)
-		probed "$3" "${4-}"
+		probed "$3" "${4-}" < /dev/null &
 		;;
 esac
 exit 0
