@@ -2153,6 +2153,7 @@ static void ext2_abort_unmount(struct vfs_mount *mnt)
     if (!em->writable) {
         return;
     }
+    volume_fetch(em, 0);
     meta_lock(em);
     em->state &= ~EXT2_VALID_FS;
     em->valid_cleared = 1;
