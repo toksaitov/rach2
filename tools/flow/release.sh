@@ -542,7 +542,10 @@ reboot_into()
         where || fail "$step" "the machine answered as another machine"
         if [ -n "$now" ] && [ "$up" -lt $(($(date +%s) - asked)) ]; then
             case $now in
-                "$1"*) return 0 ;;
+                "$1"*)
+                    # HDA starts at 100, and the owner works beside the machine.
+                    lenovo 'mixer vol 1' > /dev/null 2>&1 || say "lenovo: its volume could not be set"
+                    return 0 ;;
                 *) fail "$step" "the machine came up running $now, not $1" ;;
             esac
         fi
@@ -1473,6 +1476,14 @@ screen_back()
     login=''
 }
 
+# route_address HOST: print this computer's address on the interface that
+# reaches HOST, which DHCP may change between releases, or nothing.
+route_address()
+{
+    route -n get "$1" 2> /dev/null | awk '$1 == "interface:" { print $2 }' |
+        while read -r interface; do ipconfig getifaddr "$interface"; done
+}
+
 # lenovo_run: run the native cases on the trial boot, every case or those of
 # the record's `again lenovo` line, with native-deploy from this computer, and
 # mark it done or end the release on its failure.
@@ -1487,7 +1498,8 @@ lenovo_run()
     target=$(setting lenovo target)
     staged=$target/p-$(digest tests/native/prepared.tar.gz | cut -c 1-16)
     if ! lenovo "test -f $staged/archive.sha256" > /dev/null 2>&1; then
-        id=milestone$milestone-$(echo "$sha" | cut -c 1-12)-lenovo-stage-$(date -u '+%m%d-%H%M%S')
+        # native-deploy refuses a run's name past 48 characters.
+        id=milestone$milestone-$(echo "$sha" | cut -c 1-12)-stage-$(date -u '+%m%d-%H%M%S')
         build/tools/dev/native-deploy stage "$files/../tests/native/prepared" "$address" candidate \
             "$files/../rach2/kernel" "$repo/krffs/rach2_demo_ed25519" "$target" "$id" \
             "$state/$id" > "$state/$id.out" 2>&1 ||
@@ -1495,12 +1507,15 @@ lenovo_run()
         say "lenovo: staged $staged"
     fi
     screen_free
+    peer=$(setting lenovo peer)
+    [ "$peer" != route ] || peer=$(route_address "$address")
+    [ -n "$peer" ] || fail lenovo "this computer has no address on the way to $address"
     id=milestone$milestone-$(echo "$sha" | cut -c 1-12)-lenovo-$(date -u '+%m%d-%H%M%S')
     note "lenovo started $id"
     # shellcheck disable=SC2086 # the cases are words
     if build/tools/dev/native-deploy run "$files/../tests/native/prepared" "$address" candidate \
         "$files/../rach2/kernel" "$repo/krffs/rach2_demo_ed25519" "$target" "$id" \
-        "$state/$id" --hostpeer build/tools/dev/native-hostpeer --peer "$(setting lenovo peer)" \
+        "$state/$id" --hostpeer build/tools/dev/native-hostpeer --peer "$peer" \
         --echo-port "$(setting lenovo echo-port)" --network "$(setting lenovo network)" \
         --interface "$(setting lenovo interface)" --gateway "$(setting lenovo gateway)" \
         --far "$(setting lenovo far)" --empty "$(setting lenovo empty)" \
@@ -1511,13 +1526,13 @@ lenovo_run()
         return 0
     fi
     screen_back
-    log=''
+    collection=''
     for f in "$state/$id"/collection-*.out; do
-        [ ! -f "$f" ] || log=$f
+        [ ! -f "$f" ] || collection=$f
     done
     # shellcheck disable=SC2046 # the cases are words
-    failure lenovo "$id" $({ [ -z "$log" ] ||
-        sed -n 's/^native: \([^:]*\): \([a-z]*\).*/\1 \2/p' "$log"; } |
+    failure lenovo "$id" $({ [ -z "$collection" ] ||
+        sed -n 's/^native: \([^:]*\): \([a-z]*\).*/\1 \2/p' "$collection"; } |
         awk '$1 != "result" && $2 != "pass" { print $1 }' | grep . || echo runner)
 }
 

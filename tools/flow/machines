@@ -36,10 +36,12 @@ windows env USERCHECK_SYSTEM_PATH=C:/Windows/System32
 windows env TMPDIR=D:/rach2/build/release/tmp
 
 # The Lenovo: the native cases on its trial boot, which native-deploy starts
-# from the Mac at `peer` on the machine's network; the other values are the
-# options of `native-deploy run` of the same names (tests/native/Readme.md).
+# from the Mac on the machine's network; `peer` is that address, or `route`
+# for the one release.sh reads off the route to the machine. The other values
+# are the options of `native-deploy run` of the same names
+# (tests/native/Readme.md).
 lenovo target /var/native
-lenovo peer 192.168.0.100
+lenovo peer route
 lenovo echo-port 55090
 lenovo network 192.168.0.106/24
 lenovo interface eth0
