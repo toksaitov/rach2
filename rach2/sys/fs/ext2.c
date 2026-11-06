@@ -746,6 +746,18 @@ static struct bbuf *volume_get(struct ext2_mount *em, uint64_t blk, int *rc)
     return b;
 }
 
+/** Whether a plan may go on to write a block it read none of: -EAGAIN with
+ * cache block `blk` in `em->missed`, under a plan, when neither the cache nor
+ * the batch has it, and 0 otherwise. */
+static int plan_has(struct ext2_mount *em, uint32_t blk)
+{
+    if (em->planner == plan_caller() && !writeback_find(em, blk) && !bcache_cached(em->dev, blk)) {
+        em->missed = blk;
+        return -EAGAIN;
+    }
+    return 0;
+}
+
 /** Bring cache block `blk` into the cache when neither it nor the batch has
  * it, sleeping on the disk; the caller holds no buffer and not `em->meta`.
  * A failed read is left for the caller's own read to meet. */
@@ -2980,6 +2992,13 @@ static int gd_write(struct ext2_mount *em, uint32_t g, int how)
     return write_bytes(em, at, em->gd + g * 32, 32, how);
 }
 
+/** The block of the cache that holds group `g`'s descriptor. */
+static uint32_t gd_cache_block(const struct ext2_mount *em, uint32_t g)
+{
+    return (uint32_t)(((uint64_t)(em->first_data + 1) * em->block_size + (uint64_t)g * 32) >>
+                      BCACHE_BLOCK_SHIFT);
+}
+
 /**
  * `gd_write` with WRITE_THROUGH. While the batch holds blocks the descriptor
  * counts them taken and the cache's bitmap does not yet show them: a stop
@@ -3239,7 +3258,10 @@ static int block_free(struct ext2_mount *em, uint32_t b)
  * initialised and names it, in that order. The bit and the counts have no
  * order between them, so the bitmap's write leaves the disk's cache to the
  * flush of the descriptor's, which puts both on the medium before the inode
- * is written. 0, -ENOSPC, or -errno, with `n->ino` nonzero when `n` was
+ * is written. Under a plan (`volume_get`) a bitmap or descriptor block the
+ * cache lacks is -EAGAIN, met before `n` is published and anything changes;
+ * from there the plan is over, so a block evicted meanwhile is read under
+ * the lock. 0, -ENOSPC, or -errno, with `n->ino` nonzero when `n` was
  * published. The caller holds `em->meta`.
  */
 static int inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, struct ext2_node *n)
@@ -3279,6 +3301,11 @@ static int inode_alloc(struct ext2_mount *em, uint32_t parent_ino, int is_dir, s
         if (i >= limit) {
             continue;
         }
+        rc = plan_has(em, gd_cache_block(em, g));
+        if (rc != 0) {
+            return rc;
+        }
+        em->planner = -1;
         node_publish(em, n, base + i + 1);
         node_share_group(em, n, g, 4);
         rc = bit_write(em, le32(gd + 4), i, 1, WRITE_UNFLUSHED);
@@ -4954,8 +4981,10 @@ static int release_inode(struct ext2_mount *em, struct ext2_node *n)
  * on the heap, and is published N_LOADING under it, so that no gap lets
  * another caller see the number with no node; it goes N_LIVE once written.
  * The parent's group's inode bitmap and descriptor are fetched before
- * `em->meta`, so that its holder waits on the disk only when the parent's
- * group is full or a block was evicted again.
+ * `em->meta`, and a search that meets another group's that the cache lacks
+ * lets the lock go, fetches it and starts again, PLAN_TRIES times before it
+ * reads under the lock, so that the holder waits on the disk only for a
+ * block evicted again.
  * 0, -ENOSPC, -ENOMEM, or -errno; a failure frees the inode.
  */
 static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_t mode, int store,
@@ -4964,7 +4993,8 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
     uint32_t parent_ino = dir->ino;
     int is_dir = (mode & S_IFMT_) == S_IFDIR_;
     struct ext2_node *n = node_make();
-    int rc;
+    uint32_t missed;
+    int tries, rc;
 
     if (!n) {
         klog(KLOG_WARN, "ext2", "node: no memory");
@@ -4972,9 +5002,18 @@ static int inode_new(struct ext2_mount *em, const struct ext2_node *dir, uint32_
     }
     block_fetch(em, (uint64_t)le32(em->gd + (parent_ino - 1) / em->ipg * 32 + 4) * em->block_size);
     gd_fetch(em, (parent_ino - 1) / em->ipg);
-    meta_lock(em);
-    rc = inode_alloc(em, parent_ino, is_dir, n);
-    meta_unlock(em);
+    for (tries = 0;; tries++) {
+        meta_lock(em);
+        em->planner = tries < PLAN_TRIES ? plan_caller() : -1;
+        rc = inode_alloc(em, parent_ino, is_dir, n);
+        em->planner = -1;
+        missed = em->missed;
+        meta_unlock(em);
+        if (rc != -EAGAIN) {
+            break;
+        }
+        volume_fetch(em, missed);
+    }
     if (rc != 0) {
         if (n->ino != 0) {
             node_settle(em, n, rc);
