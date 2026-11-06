@@ -3599,8 +3599,8 @@ static void fl_mount_on_d(void)
  * then the directory above the other first even when its number is higher,
  * or the lower number first when neither is above, then the nodes, a
  * directory before a file, as a link holds its directory and then its
- * source; and a directory moved below itself leaves its own node unlocked, since its lock
- * would come after a directory below it.
+ * source; and a directory moved below itself leaves its own node unlocked,
+ * since its lock would come after a directory below it.
  */
 static void file_locked_orders(void)
 {

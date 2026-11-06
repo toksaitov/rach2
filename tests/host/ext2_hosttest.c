@@ -3591,24 +3591,44 @@ static void overlap_second(void)
     OPS->unlock_node(&mnt, y);
 }
 
+/** Whether the writes up to the log's mark `synced` put inode `ino`'s table
+ * block on the disk before the first write of the block bitmap and of the
+ * descriptors, on the image of the unmounted volume. */
+static int inodes_first(uint64_t ino, int synced)
+{
+    uint64_t table[2], bm[4];
+    char cmd[64];
+    int logged, nbm, ok;
+
+    snprintf(cmd, sizeof(cmd), "imap <%lu>", (unsigned long)ino);
+    ok = debugfs_numbers(cmd, "located at block ", table, 2) == 1;
+    nbm = debugfs_numbers("stats", "block bitmap at ", bm, 4);
+    check(ok && nbm >= 1 && !wlog_overflow, "debugfs names the inode table block and the bitmap");
+    logged = wlog_n;
+    wlog_n = synced;
+    ok = ok && nbm >= 1 && last_write_of(table[0]) >= 0 && first_write_of(bm[0]) >= 0 &&
+         last_write_of(table[0]) < first_write_of(bm[0]) &&
+         last_write_of(table[0]) < first_write_of(1);
+    wlog_n = logged;
+    return ok;
+}
+
 /**
  * Two truncates of two files of twenty blocks, on a mount that writes back:
  * process B's runs whole while process A's waits for its indirect block.
  * Neither holds `em->meta` across a disk request, each free keeps its own
- * list, and the cache's two classes keep the order of both: at the sync every write of the files'
- * inode table block comes before the first of the block bitmap and of the descriptors, so no
- * pointer on the disk names a block whose bit is clear, and the volume is clean with both files
- * empty.
+ * list, and the cache's two classes keep the order of both: at the sync every
+ * write of the files' inode table block comes before the first of the block
+ * bitmap and of the descriptors, so no pointer on the disk names a block
+ * whose bit is clear, and the volume is clean with both files empty.
  */
 static void overlap_punch_row(void)
 {
     static unsigned char data[20 * 4096];
-    uint64_t table[2], bm[4];
     void *x, *y, *handle = 0;
     struct vfs_stat st;
     uint32_t crossed;
-    int rc, synced, logged, nbm, ok;
-    char cmd[64];
+    int rc, synced;
 
     wbytes = build_image(wimg, 4096, 128, PROFILE, 16, "tree");
     use_image(wimg, wbytes);
@@ -3661,17 +3681,8 @@ static void overlap_punch_row(void)
     OPS->put(&mnt, x);
     OPS->put(&mnt, y);
     check(unmount_rw() == 0 && e2fsck_clean(wimg), "the overlap volume unmounts clean");
-    snprintf(cmd, sizeof(cmd), "imap <%lu>", (unsigned long)st.ino);
-    ok = debugfs_numbers(cmd, "located at block ", table, 2) == 1;
-    nbm = debugfs_numbers("stats", "block bitmap at ", bm, 4);
-    check(ok && nbm >= 1 && !wlog_overflow, "debugfs names the inode table block and the bitmap");
-    logged = wlog_n;
-    wlog_n = synced;
-    ok = ok && nbm >= 1 && last_write_of(table[0]) >= 0 && first_write_of(bm[0]) >= 0 &&
-         last_write_of(table[0]) < first_write_of(bm[0]) &&
-         last_write_of(table[0]) < first_write_of(1);
-    wlog_n = logged;
-    check(ok, "the inodes reached the disk before the bitmap and the descriptors");
+    check(inodes_first(st.ino, synced),
+          "the inodes reached the disk before the bitmap and the descriptors");
     wlog_reset();
     rc = mount_rw();
     check(rc == 0 && file_is("/punch-x", data, 0) && file_is("/punch-y", data, 0),

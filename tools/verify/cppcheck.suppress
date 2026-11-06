@@ -192,6 +192,7 @@ constVariable:*tests/bootprobe.c
 constVariable:*tests/devprobe.c
 constVariable:*tests/exitprobe.c
 constVariable:*tests/limitprobe.c
+constVariable:*tests/lockwaitprobe.c
 constVariable:*tests/loopdevprobe.c
 constVariable:*tests/sigprobe.c
 constVariable:*tools/audio/resamplebench.c

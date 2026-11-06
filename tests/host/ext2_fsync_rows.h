@@ -165,8 +165,8 @@ static void fsync_pad(void)
  * table block: it writes the file's blocks in one run, on a device that
  * takes 32 blocks at once, its bitmap and descriptor block and its inode's
  * table block, four requests, and leaves every block of the neighbour
- * dirty. Both files' writes are drained into the cache first by a close, which writes
- * nothing, so the row sees which blocks were dirty and for whom.
+ * dirty. Both files' writes are drained into the cache first by a close,
+ * which writes nothing, so the row sees which blocks were dirty and for whom.
  */
 static void fsync_neighbour_row(void)
 {

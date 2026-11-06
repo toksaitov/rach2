@@ -325,7 +325,8 @@ static void *pump_main(void *arg)
 }
 
 /** Start the machine's pump, with every signal blocked in its thread, so that
- * signals still reach the loop. Without one the loop reads the socket itself. */
+ * signals still reach the loop. Without one the loop reads the socket
+ * itself. */
 static void pump_start(struct etude_machine *m)
 {
     struct console_pump *p = calloc(1, sizeof(*p));

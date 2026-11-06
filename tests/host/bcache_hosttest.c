@@ -460,6 +460,34 @@ static void sync_block_it(void *arg)
     bcache_sync_block(&fake, 4);
 }
 
+/** Check the owner tag of `owned_rows` under the plain marks: a plain mark
+ * keeps it, the last tag given stands, and a write clears it. */
+static void owned_mark_rows(void)
+{
+    struct bbuf *b;
+
+    b = bcache_get(&vast, 60);
+    bcache_dirty_owned(b, 7);
+    bcache_dirty(b);
+    bcache_release(b);
+    b = bcache_get(&vast, 61);
+    bcache_dirty_owned(b, 7);
+    bcache_dirty_owned(b, 9);
+    bcache_release(b);
+    writes_made = 0;
+    check(bcache_sync_owned(&vast, 7) == 0 && writes_made == 1 && writes_lba[0] == 60 * 8 &&
+              last_write_count == 8 && dirty_now(&vast, 61),
+          "a plain dirty mark keeps the owner, and the last owner given stands");
+    check(bcache_sync_owned(&vast, 9) == 0 && writes_made == 2, "so its blocks go with that one");
+    b = bcache_get(&vast, 60);
+    bcache_dirty(b);
+    bcache_release(b);
+    writes_made = 0;
+    check(bcache_sync_owned(&vast, 7) == 0 && writes_made == 0 && dirty_now(&vast, 60),
+          "a write clears the owner");
+    bcache_sync(&vast);
+}
+
 /**
  * Check `bcache_sync_owned` beside a large dirty neighbour, on `vast` made a
  * write-through disk.
@@ -473,7 +501,6 @@ static void sync_block_it(void *arg)
  */
 static void owned_rows(void)
 {
-    struct bbuf *b;
     uint64_t i;
 
     bcache_invalidate(&vast);
@@ -498,27 +525,7 @@ static void owned_rows(void)
     check(bcache_sync_owned(&vast, 8) == 0 && writes_made == 0, "nor does one of another owner");
     check(bcache_sync(&vast) == 0 && writes_made == 4 && !dirty_now(&vast, 250),
           "and a sync of the device writes the rest, in runs of up to half the cache");
-
-    b = bcache_get(&vast, 60);
-    bcache_dirty_owned(b, 7);
-    bcache_dirty(b);
-    bcache_release(b);
-    b = bcache_get(&vast, 61);
-    bcache_dirty_owned(b, 7);
-    bcache_dirty_owned(b, 9);
-    bcache_release(b);
-    writes_made = 0;
-    check(bcache_sync_owned(&vast, 7) == 0 && writes_made == 1 && writes_lba[0] == 60 * 8 &&
-              last_write_count == 8 && dirty_now(&vast, 61),
-          "a plain dirty mark keeps the owner, and the last owner given stands");
-    check(bcache_sync_owned(&vast, 9) == 0 && writes_made == 2, "so its blocks go with that one");
-    b = bcache_get(&vast, 60);
-    bcache_dirty(b);
-    bcache_release(b);
-    writes_made = 0;
-    check(bcache_sync_owned(&vast, 7) == 0 && writes_made == 0 && dirty_now(&vast, 60),
-          "a write clears the owner");
-    bcache_sync(&vast);
+    owned_mark_rows();
 
     dirty_for(&vast, 70, 7, BCACHE_ORDER_AFTER);
     dirty_for(&vast, 80, 9, BCACHE_ORDER_FIRST);
