@@ -252,14 +252,16 @@ static void console_updates(struct etude_case *c, struct drive *d)
     }
 }
 
-/** Puts a saved network and a kept mixer level on the installed root, for
- * check_settings to find after the update. */
+/** Puts a saved network, a kept mixer level, a kept backlight level and a
+ * machine id on the installed root, for check_settings to find after the
+ * update. */
 static void place_settings(struct drive *d)
 {
     drive_send(d, "mount -t ext2 /dev/disk0p3 /old && mkdir -p /old/var/lib "
-                  "/old/etc/wpa_supplicant && echo stick-net > "
+                  "/old/etc/wpa_supplicant /old/var/lib/backlight && echo stick-net > "
                   "/old/etc/wpa_supplicant/wlan0.conf && echo 'vol 1:1' > /old/var/lib/mixer "
-                  "&& umount /old && echo SETTINGS\"\"PLACED || "
+                  "&& echo 7 > /old/var/lib/backlight/stick && echo stick-id > "
+                  "/old/etc/machine-id && umount /old && echo SETTINGS\"\"PLACED || "
                   "{ echo STICK\"\"FAIL: settings; poweroff -f; }");
     drive_expect(d, "SETTINGSPLACED");
 }
@@ -271,7 +273,10 @@ static void check_settings(struct drive *d)
     drive_send(d, "mount -t ext2 /dev/disk0p3 /old && grep -qx stick-net "
                   "/old/etc/wpa_supplicant/wlan0.conf && "
                   "test $(stat -c %%a /old/etc/wpa_supplicant/wlan0.conf) = 600 && "
-                  "grep -qx 'vol 1:1' /old/var/lib/mixer && umount /old && "
+                  "grep -qx 'vol 1:1' /old/var/lib/mixer && "
+                  "grep -qx 7 /old/var/lib/backlight/stick && grep -qx stick-id "
+                  "/old/etc/machine-id && test $(stat -c %%a /old/etc/machine-id) = 444 && "
+                  "umount /old && "
                   "echo SETTINGS\"\"KEPT || { echo STICK\"\"FAIL: settings check; poweroff -f; }");
     drive_expect(d, "SETTINGSKEPT");
 }

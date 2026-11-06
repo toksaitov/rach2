@@ -84,6 +84,28 @@ grep -q '^hookcheck: refused: ' "$WORK/sizes.err" || { cat "$WORK/sizes.err" >&2
 git reset -q
 rm -f tools/d.c
 
+# A test with a bound on a duration is refused, whatever part of tests/ it is
+# in, by the etude this tree or its main clone has built.
+mkdir -p tests/host tests/system
+: >tests/registry
+: >tests/system/intervals
+: >tests/system/unconverted
+: >tests/system/suites.mk
+printf '/* a.c: a fixture. */\nint a(void)\n{\n    return 0;\n}\n' >tests/a.c
+printf '/* b.c: a fixture. */\nint b(unsigned ms)\n{\n    return ms < 3000;\n}\n' >tests/host/b.c
+git add tests
+head=$(git rev-parse HEAD)
+if ! git commit -q -m 'Add a bound on a duration' 2>"$WORK/bound.err"; then
+    [ "$(git rev-parse HEAD)" = "$head" ] || fail "the refused bound moved HEAD"
+    grep -q 'tests/host/b.c:4: .*an upper bound on a duration' "$WORK/bound.err" ||
+        { cat "$WORK/bound.err" >&2; fail "the hook did not name the bound"; }
+else
+    grep -q 'no etude built from this source' "$WORK/bound.err" || fail "a bound on a duration was committed"
+    git reset -q --soft HEAD~1
+fi
+git reset -q
+rm -rf tests
+
 # A comment of 81 columns in a staged file is refused, in C and in shell, and
 # a term the register rule bans too; 80 columns are not. A finding in a file
 # the commit does not stage is left alone.

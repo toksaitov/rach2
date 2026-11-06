@@ -745,16 +745,22 @@ static void send_probe(struct wlan_mlme *m)
         m->ops->tx(m->wlan, f, HDR + used, 0);
 }
 
+/** The tick to look next in a channel switch's countdown, which can outlast
+ * a renewal's WLAN_MLME_KEY_WAIT. */
+static uint64_t csa_next(const struct wlan_mlme *m)
+{
+    uint64_t soon = tick_count() + WLAN_MLME_CSA_LOOK;
+
+    return m->csa_at < soon ? m->csa_at : soon;
+}
+
 /** The tick at which the connection monitor next asks whether the AP is
  * there: after WLAN_MLME_BEACON_LOSS beacon intervals without a beacon, or,
  * with a poll, WLAN_MLME_IDLE_POLL milliseconds without a unicast frame from
  * the AP or an ACK of ours, as mac80211's beacon and connection monitor
- * timers do. An AP that dropped the station silently, as one does when a key
- * renewal runs out of time, still ACKs at its radio and goes on sending its
- * beacons, and answers only a null frame, with a deauthentication; so frames
- * ACKed with nothing back for WLAN_MLME_QUIET_POLL milliseconds ask sooner
- * than mac80211 would. A hint of another channel or a move on one comes due
- * sooner. */
+ * timers do. A hint of another channel or a move on one comes due sooner.
+ * The timer fires at least every beacon-loss period, so a renewal's
+ * WLAN_MLME_KEY_WAIT needs no time of its own here. */
 static uint64_t monitor_due(const struct wlan_mlme *m)
 {
     uint64_t loss = m->last_beacon + loss_ms(m), idle = m->polled, heard, due;
@@ -842,7 +848,7 @@ static void monitor_answered(struct wlan_mlme *m)
     m->poll_cookie = 0;
     m->last_beacon = m->polled = tick_count();
     m->ds_ask = m->last_beacon + WLAN_MLME_DS_RETRY;
-    arm(m, m->csa_channel ? m->csa_at : monitor_due(m));
+    arm(m, m->csa_channel ? csa_next(m) : monitor_due(m));
 }
 
 /**
@@ -918,7 +924,7 @@ static void csa_note(struct wlan_mlme *m, unsigned mode, unsigned number, unsign
         m->ops->hold(m->wlan, 1);
     }
     if (count > 1)
-        arm(m, m->csa_at);
+        arm(m, csa_next(m));
     else
         csa_switch(m);
 }
@@ -1021,7 +1027,7 @@ static void monitor_timeout(struct wlan_mlme *m)
         if (now >= m->csa_at)
             csa_switch(m);
         else
-            arm(m, m->csa_at);
+            arm(m, csa_next(m));
         return;
     }
     if (m->ds_home && now >= m->ds_moved + WLAN_MLME_DS_PROOF && !ds_settle(m))
