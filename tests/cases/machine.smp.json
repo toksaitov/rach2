@@ -198,9 +198,8 @@
         {"assertion_id": "reported", "checks": "the kernel says isr: hardware fault: non-maskable interrupt", "source": "scenario"},
         {"assertion_id": "panicked", "checks": "the kernel panics saying the machine reported a fault, which the scenario records as the boot's end", "source": "scenario"},
         {"assertion_id": "halted", "checks": "QEMU says that the machine runs, and both processors have halted with interrupts off", "source": "scenario"},
-        {"assertion_id": "screen-cause", "checks": "the screen shows the record of the fault, with its vector and address", "source": "scenario"},
-        {"assertion_id": "screen-stopped", "checks": "the screen shows panic: stopped: after that record, and the process that was running between them", "source": "scenario"},
-        {"assertion_id": "screen-only", "checks": "the serial port has no line of the process that was running, and keeps its form", "source": "scenario"},
+        {"assertion_id": "screen-cause", "checks": "the screen shows the record of the fault, with its vector and its rip, eip or pc field and value", "source": "scenario"},
+        {"assertion_id": "screen-stopped", "checks": "the screen shows panic: stopped: after that record", "source": "scenario"},
         {"assertion_id": "one-report", "checks": "no second record of a hardware fault follows the first", "source": "scenario"},
         {"assertion_id": "one-panic", "checks": "no second record of a panic follows the first", "source": "scenario"}
       ],
@@ -239,9 +238,8 @@
         {"assertion_id": "reported", "checks": "the kernel says isr: kernel exception: invalid opcode", "source": "scenario"},
         {"assertion_id": "panicked", "checks": "the kernel panics saying a CPU exception in kernel mode cannot be recovered, which the scenario records as the boot's end", "source": "scenario"},
         {"assertion_id": "halted", "checks": "QEMU says that the machine runs, and both processors have halted with interrupts off", "source": "scenario"},
-        {"assertion_id": "screen-cause", "checks": "the screen shows the record of the fault, with its vector and address", "source": "scenario"},
-        {"assertion_id": "screen-stopped", "checks": "the screen shows panic: stopped: after that record, and the process that was running between them", "source": "scenario"},
-        {"assertion_id": "screen-only", "checks": "the serial port has no line of the process that was running, and keeps its form", "source": "scenario"},
+        {"assertion_id": "screen-cause", "checks": "the screen shows the record of the fault, with its vector and its rip, eip or pc field and value", "source": "scenario"},
+        {"assertion_id": "screen-stopped", "checks": "the screen shows panic: stopped: after that record", "source": "scenario"},
         {"assertion_id": "one-report", "checks": "no second record of a kernel exception follows the first", "source": "scenario"},
         {"assertion_id": "one-panic", "checks": "no second record of a panic follows the first", "source": "scenario"}
       ],

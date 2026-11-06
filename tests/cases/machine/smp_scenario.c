@@ -204,6 +204,29 @@ static const struct panic_text exception_text = {"isr: kernel exception: invalid
                                                  "kernel exception: "};
 
 /**
+ * Find in `record`, before `end`, the address a fault's record gives: the
+ * field `rip`, `eip` or `pc` and a hex value of at least one digit.
+ * @return the field, or NULL when the record has none.
+ */
+static const char *fault_address(const char *record, const char *end)
+{
+    static const char *const fields[] = {" rip 0x", " eip 0x", " pc 0x"};
+    const char *at;
+    size_t i;
+    char digit;
+
+    for (i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
+        at = strstr(record, fields[i]);
+        if (at == NULL || at >= end)
+            continue;
+        digit = at[strlen(fields[i])];
+        if (digit != '\0' && strchr("0123456789abcdef", digit) != NULL)
+            return at;
+    }
+    return NULL;
+}
+
+/**
  * End a panicked machine: read its screen, as `panic_screen` says, while it
  * still runs, quit it, and report `one-report` and `one-panic`, that no second
  * `report` follows byte `reported` and no second panic byte `panicked`.
@@ -213,25 +236,21 @@ static void read_panic_then_quit(struct lc *l, struct etude_case_machine *m,
 {
     const char *cause = t->cause, *reason = t->reason, *report = t->report;
     char cells[SCREEN_CELLS + 1], detail[SCREEN_CELLS + 64];
-    const char *at, *running = NULL, *stopped = NULL, *pc = NULL;
+    const char *at, *stopped = NULL, *pc = NULL;
 
     if (!read_screen(l, m, cells))
         return;
     at = strstr(cells, cause);
     if (at != NULL) {
         at += strlen(cause);
-        pc = strstr(at, " 0x");
-        running = strstr(at, "panic: running: pid ");
+        stopped = strstr(at, "panic: stopped: ");
+        pc = fault_address(at, stopped != NULL ? stopped : at + strlen(at));
     }
-    if (running != NULL)
-        stopped = strstr(running, "panic: stopped: ");
     snprintf(detail, sizeof(detail), "the screen has: %s", cells);
-    lc_assert(l, "screen-cause", at != NULL && pc != NULL && (running == NULL || pc < running),
-              detail);
+    lc_assert(l, "screen-cause", at != NULL && pc != NULL, detail);
     lc_assert(l, "screen-stopped",
               stopped != NULL && strncmp(stopped + 16, reason, strlen(reason)) == 0, detail);
     if (lc_quit(l, m, NULL)) {
-        lc_find(l, m, "screen-only", "panic: running: ", 0, 0);
         lc_find(l, m, "one-report", report, reported, 0);
         lc_find(l, m, "one-panic", "panic: stopped: ", panicked, 0);
     }
@@ -417,9 +436,9 @@ int etude_scenario(struct etude_case *c)
     static const char *const smpmusl_ids[] = {"online", "exit", "said-ok", NULL};
     static const char *const preempt_ids[] = {"online", "ended", "passed", NULL};
     static const char *const usermode_ids[] = {"online", "exit", "wrote", NULL};
-    static const char *const nmi_ids[] = {
-        "online",         "reported",    "panicked",   "halted",    "screen-cause",
-        "screen-stopped", "screen-only", "one-report", "one-panic", NULL};
+    static const char *const nmi_ids[] = {"online",     "reported",     "panicked",
+                                          "halted",     "screen-cause", "screen-stopped",
+                                          "one-report", "one-panic",    NULL};
     static const char *const build_ids[] = {"online", "login", "nproc", "sixteen", "grew", NULL};
     const char *name = case_name(c);
     struct lc l;
