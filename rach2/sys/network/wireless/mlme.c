@@ -909,10 +909,10 @@ static void csa_beacon(struct wlan_mlme *m, const uint8_t *f, unsigned len, unsi
 /**
  * Watch the AP, after mac80211's connection monitor: beacon loss, or an
  * idle period where the interface can poll, starts the questions; when
- * none is answered the station leaves. A poll's null frame that went
- * unacknowledged is asked again at once, from wlan_mlme_tx_status; one
- * whose status never came is asked again here, as a probe request is. A
- * channel switch under way waits for its time instead.
+ * none is answered the station leaves. Each question, a poll's null frame
+ * as a probe request, is asked again here, WLAN_MLME_PROBE_TIMEOUT after the
+ * last, so that the tries span a silence of the medium instead of falling
+ * in one. A channel switch under way waits for its time instead.
  */
 static void monitor_timeout(struct wlan_mlme *m)
 {
@@ -939,7 +939,7 @@ static void monitor_timeout(struct wlan_mlme *m)
                 m->ops->beacon_loss(m->wlan, (unsigned)(now - m->beacon_at));
         }
     }
-    if (m->probes < (m->ops->poll ? WLAN_MLME_POLL_TRIES : WLAN_MLME_PROBE_TRIES)) {
+    if (m->probes < WLAN_MLME_PROBE_TRIES) {
         monitor_ask(m);
         return;
     }
@@ -998,9 +998,7 @@ void wlan_mlme_tx_status(struct wlan_mlme *m, uint64_t cookie, int acked)
         monitor_answered(m);
     else if (m->csa_channel)
         return; /* the switch, which resets the questions, comes first */
-    else if (m->probes < WLAN_MLME_POLL_TRIES)
-        monitor_ask(m);
-    else
+    else if (m->probes >= WLAN_MLME_PROBE_TRIES)
         monitor_lost(m);
 }
 

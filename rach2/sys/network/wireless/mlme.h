@@ -19,8 +19,7 @@
 #define WLAN_MLME_BEACON_LOSS     17    /* beacon intervals without a beacon */
 #define WLAN_MLME_IDLE_POLL       30000 /* without a unicast frame or ACK */
 #define WLAN_MLME_PROBE_TIMEOUT   500   /* each probe of a silent AP */
-#define WLAN_MLME_PROBE_TRIES     3     /* probe requests, without poll */
-#define WLAN_MLME_POLL_TRIES      2     /* null frames, with poll */
+#define WLAN_MLME_PROBE_TRIES     3     /* null frames, or probe requests */
 #define WLAN_MLME_LISTEN_INTERVAL 5     /* beacon intervals */
 
 #define WLAN_MLME_TX_PROTECT   0x01 /* robust frame under 802.11w */

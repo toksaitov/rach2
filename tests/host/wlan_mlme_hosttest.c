@@ -835,8 +835,9 @@ static void beacons_for(unsigned ms)
 /** An interface that reports ACKs: the station polls the AP with a null
  * frame thirty seconds after it last heard from it, as mac80211 does on
  * ath9k, and seventeen beacon intervals after its last beacon; an ACK or a
- * beacon ends the poll, a frame not acknowledged is asked again at once,
- * and two of them, or two whose status never came, end the association. */
+ * beacon ends the poll, a frame not acknowledged is asked again 500 ms
+ * later, and three of them, or three whose status never came, end the
+ * association. */
 static void polled_ap(void)
 {
     uint64_t t;
@@ -869,8 +870,12 @@ static void polled_ap(void)
     wait_ms(100);
     CHECK(n_polls == 2);
 
-    /* Not acknowledged: asked again at once; a beacon ends the poll. */
+    /* Not acknowledged: asked again 500 ms on; a beacon ends the poll. */
     wlan_mlme_tx_status(&mlme, poll_cookie, 0);
+    CHECK(n_polls == 2 && mlme.probes == 1);
+    wait_ms(WLAN_MLME_PROBE_TIMEOUT - 1);
+    CHECK(n_polls == 2);
+    wait_ms(1);
     CHECK(n_polls == 3 && mlme.probes == 2);
     CHECK(ap_beacon(ap_a, IEEE80211_STYPE_BEACON) == 0 && mlme.probes == 0);
     wlan_mlme_tx_status(&mlme, poll_cookie, 0);
@@ -889,28 +894,34 @@ static void polled_ap(void)
     wait_ms(1);
     CHECK(n_polls == 5 && mlme.missed_beacons == 2 && losses == 2);
 
-    /* Two null frames not acknowledged: the station leaves, sending
+    /* Three null frames not acknowledged: the station leaves, sending
      * nothing. */
     wlan_mlme_tx_status(&mlme, poll_cookie, 0);
+    wait_ms(WLAN_MLME_PROBE_TIMEOUT);
     CHECK(n_polls == 6 && mlme.state == WLAN_STA_ASSOCIATED);
     wlan_mlme_tx_status(&mlme, poll_cookie, 0);
-    CHECK(n_polls == 6 && mlme.state == WLAN_STA_NONE && n_sent == 0);
+    wait_ms(WLAN_MLME_PROBE_TIMEOUT);
+    CHECK(n_polls == 7 && mlme.state == WLAN_STA_ASSOCIATED);
+    wlan_mlme_tx_status(&mlme, poll_cookie, 0);
+    CHECK(n_polls == 7 && mlme.state == WLAN_STA_NONE && n_sent == 0);
     CHECK(n_seen == 1 && seen[0].ev.type == WLAN_EVENT_DEAUTHENTICATE);
     CHECK(seen[0].ev.locally_generated);
     CHECK(seen[0].ev.reason == WLAN_REASON_DISASSOC_DUE_TO_INACTIVITY);
     CHECK(bss_a.refs == 0 && queued() == 0);
 
-    /* Two polls whose status never comes end it too, 500 ms each. */
+    /* Three polls whose status never comes end it too, 500 ms each. */
     connect_a(0);
     CHECK(mlme.missed_beacons == 0 && mlme.probes == 0);
     wait_ms(1740);
-    CHECK(n_polls == 7 && mlme.missed_beacons == 1);
+    CHECK(n_polls == 8 && mlme.missed_beacons == 1);
     wait_ms(WLAN_MLME_PROBE_TIMEOUT);
-    CHECK(n_polls == 8 && mlme.state == WLAN_STA_ASSOCIATED);
+    CHECK(n_polls == 9 && mlme.state == WLAN_STA_ASSOCIATED);
+    wait_ms(WLAN_MLME_PROBE_TIMEOUT);
+    CHECK(n_polls == 10 && mlme.state == WLAN_STA_ASSOCIATED);
     wait_ms(WLAN_MLME_PROBE_TIMEOUT - 1);
     CHECK(mlme.state == WLAN_STA_ASSOCIATED);
     wait_ms(1);
-    CHECK(n_polls == 8 && mlme.state == WLAN_STA_NONE && n_sent == 0);
+    CHECK(n_polls == 10 && mlme.state == WLAN_STA_NONE && n_sent == 0);
     CHECK(n_seen == 1 && seen[0].ev.type == WLAN_EVENT_DEAUTHENTICATE);
     CHECK(seen[0].ev.reason == WLAN_REASON_DISASSOC_DUE_TO_INACTIVITY);
 }
