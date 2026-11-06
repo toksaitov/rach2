@@ -324,12 +324,14 @@ struct sta {
 };
 
 /* A request carried to the worker: run calls fn there and wakes the
- * handler, which waits on `done`. The record is on the handler's stack. */
+ * handler, which waits on `done`. The record is on the handler's stack and
+ * stays in sta->hops until the handler is back, so that a detachment in
+ * between ends it. */
 typedef int (*hop_fn)(struct sta *sta, void *arg);
 struct hop {
     struct wlan_work work; /* first: hop_run finds the record from it */
     struct hop *next;      /* in sta->hops */
-    struct sta *sta;
+    struct sta *sta;       /* NULL once nl80211_detach has ended it */
     hop_fn fn;
     void *arg;
     int rc;
@@ -700,7 +702,6 @@ static void hop_run(struct wlan_work *work)
     struct hop *h = (struct hop *)work;
 
     h->rc = h->fn(h->sta, h->arg);
-    hop_unlink(h);
     h->done = 1;
     wq_wake_all(&hop_wq);
 }
@@ -714,8 +715,10 @@ static int hop_done(void *arg)
 /**
  * Run fn(sta, arg) on the wireless worker from tick due, 0 for now, and
  * return its result, sleeping until it has run. arg stays the caller's. The
- * handler must not use sta afterwards unless the result is not -ENODEV:
- * nl80211_detach ends a waiting request with -ENODEV and frees the station. A
+ * handler must not use sta afterwards when the result is -ENODEV:
+ * nl80211_detach ends a request that is waiting, or has run while its handler
+ * has not yet woken, with -ENODEV and frees the station. Any other result
+ * leaves sta live until the handler next sleeps. A
  * worker that failed to start is made again first; -ENOMEM when it still
  * cannot be, since no request may wait for a worker that does not exist.
  */
@@ -745,6 +748,9 @@ static int on_worker_at(struct sta *sta, hop_fn fn, void *arg, uint64_t due)
     /* The queue reads this record as running until the worker is back from
      * hop_run, and the next hop of this call chain has the same address. */
     wlan_cancel_work(&h.work);
+    if (h.sta) {
+        hop_unlink(&h);
+    }
     return h.rc;
 }
 
@@ -2922,8 +2928,9 @@ void nl80211_detach(struct wlan *wlan)
         struct hop *h = s->hops;
 
         wlan_cancel_work(&h->work);
-        if (s->hops == h && !h->done) {
+        if (s->hops == h) {
             hop_unlink(h);
+            h->sta = 0;
             h->rc = -ENODEV;
             h->done = 1;
         }

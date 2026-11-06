@@ -38,7 +38,8 @@ static uint64_t now = 1000;
 static uint32_t irq_flag = 1;
 static int privileged = 1;
 static int lock_depth;
-static int detach_in_wait; /* the next wait detaches the second station */
+static int detach_in_wait;   /* the next wait detaches the second station */
+static int detach_after_run; /* and after its request has run */
 
 uint64_t tick_count(void)
 {
@@ -127,7 +128,8 @@ void wlan_event(struct wlan *wlan, const struct wlan_event *event)
 
 /** Stand in for the sleep of a handler waiting on the worker: run the
  * worker until the condition holds. A row may detach the second station
- * first, as an unregistration would while the request waits. */
+ * first, as an unregistration would while the request waits, or after, as
+ * one would before the woken handler runs again. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
@@ -144,6 +146,10 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
             }
             now = wlan_work_next_due();
         }
+    }
+    if (detach_after_run) {
+        detach_after_run = 0;
+        nl80211_detach(WLAN2);
     }
     return 0;
 }
@@ -2050,9 +2056,10 @@ static void reg_mic_power(void)
  * detachment, and the attachment's refusals. */
 static void attachment(void)
 {
+    static const uint8_t k16[16] = {1};
     uint32_t before = generation;
     struct netdev extra[4];
-    unsigned i;
+    unsigned i, nest;
 
     k_memset(&radio2, 0, sizeof(radio2));
     radio2.index = 1;
@@ -2088,6 +2095,25 @@ static void attachment(void)
     rq_u32(NL80211_ATTR_IFINDEX, 3);
     CHECK(rq_send() == -ENODEV);
     nl80211_detach(WLAN2); /* again: nothing */
+
+    /* The station goes after a key that waits has had its first try and
+     * before its handler wakes: the request ends with -ENODEV, and the
+     * retry never reaches the freed station. */
+    CHECK(nl80211_attach(WLAN2, &radio2, &band, &nd2, &table2, &station_ops) == 0);
+    rq_begin(NL80211_CMD_NEW_KEY, 0);
+    rq_u32(NL80211_ATTR_IFINDEX, 3);
+    nest = rq_nest(NL80211_ATTR_KEY);
+    rq_put(NL80211_KEY_DATA, k16, 16);
+    rq_u32(NL80211_KEY_CIPHER, WLAN_CIPHER_SUITE_CCMP);
+    rq_u8(NL80211_KEY_IDX, 0);
+    rq_end(nest);
+    rq_put(NL80211_ATTR_MAC, ap1, 6);
+    n_calls = 0;
+    next_rc = -EINPROGRESS;
+    detach_after_run = 1;
+    CHECK(rq_send() == -ENODEV);
+    CHECK(n_calls == 1 && wlan_work_next_due() == 0 && !detach_after_run);
+    next_rc = 0;
 
     k_memset(extra, 0, sizeof(extra));
     for (i = 0; i < MAX_STATIONS - 1; ++i) {
