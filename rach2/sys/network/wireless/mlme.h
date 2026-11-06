@@ -18,6 +18,7 @@
 #define WLAN_MLME_COMEBACK_MAX    10000 /* longest assoc comeback honoured */
 #define WLAN_MLME_BEACON_LOSS     17    /* beacon intervals without a beacon */
 #define WLAN_MLME_IDLE_POLL       30000 /* without a unicast frame or ACK */
+#define WLAN_MLME_QUIET_POLL      5000  /* ACKs, but no unicast frame back */
 #define WLAN_MLME_PROBE_TIMEOUT   500   /* each probe of a silent AP */
 #define WLAN_MLME_PROBE_TRIES     3     /* null frames, or probe requests */
 #define WLAN_MLME_LISTEN_INTERVAL 5     /* beacon intervals */
@@ -75,6 +76,10 @@ struct wlan_mlme_ops {
      * none. NULL for an interface that cannot tell, which then never moves
      * on a beacon's word. */
     uint64_t (*sealed)(struct wlan *wlan);
+    /** The tick of the last unicast frame from the AP alone, 0 for none, to
+     * tell an AP that answers from one whose radio only ACKs. NULL for an
+     * interface that cannot tell. */
+    uint64_t (*received)(struct wlan *wlan);
 };
 
 /* nl80211's AUTHENTICATE. data is AUTH_DATA: for SAE the transaction number
