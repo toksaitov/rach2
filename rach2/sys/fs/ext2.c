@@ -599,7 +599,8 @@ static void assert_node_locked(const struct ext2_node *n)
  * the free counts, sleeping while another process holds it; the holder
  * takes it again by depth. Taken after every node lock the caller needs,
  * and held across a disk wait only for one block evicted after its fetch,
- * or by a strict mount for its ordered writes.
+ * or held by another's write PLAN_TRIES times over, or by a strict mount
+ * for its ordered writes.
  */
 static void meta_lock(struct ext2_mount *em)
 {
@@ -828,17 +829,27 @@ static int plan_caller(void)
     return current_proc ? (int)current_proc->pid : 0;
 }
 
+/** Whether the planner must give block `blk` back to fetch it with
+ * `em->meta` let go: the cache lacks it, or another process holds it, a
+ * sync or an fsync writing it among them, whose request the get would wait
+ * out under the lock. */
+static int plan_lacks(struct ext2_mount *em, uint64_t blk)
+{
+    return !bcache_cached(em->dev, blk) || bcache_busy(em->dev, blk);
+}
+
 /**
  * Cache block `blk` of the volume, held, as `bcache_get` gives it. While the
- * caller plans under `em->meta` (`em->planner`), a block the cache lacks is
- * not read: NULL with `*rc` -EAGAIN and the block in `em->missed`, for the
- * planner to fetch with the lock let go. NULL with -EIO for a failed read.
+ * caller plans under `em->meta` (`em->planner`), a block the cache lacks or
+ * another holds is not waited for: NULL with `*rc` -EAGAIN and the block in
+ * `em->missed`, for the planner to fetch with the lock let go. NULL with
+ * -EIO for a failed read.
  */
 static struct bbuf *volume_get(struct ext2_mount *em, uint64_t blk, int *rc)
 {
     struct bbuf *b;
 
-    if (em->planner == plan_caller() && !bcache_cached(em->dev, blk)) {
+    if (em->planner == plan_caller() && plan_lacks(em, blk)) {
         em->missed = (uint32_t)blk;
         *rc = -EAGAIN;
         return 0;
@@ -850,10 +861,12 @@ static struct bbuf *volume_get(struct ext2_mount *em, uint64_t blk, int *rc)
 
 /** Whether a plan may go on to write a block it read none of: -EAGAIN with
  * cache block `blk` in `em->missed`, under a plan, when neither the cache nor
- * the batch has it, and 0 otherwise. */
+ * the batch has it or another process holds it in the cache, and 0
+ * otherwise. */
 static int plan_has(struct ext2_mount *em, uint32_t blk)
 {
-    if (em->planner == plan_caller() && !writeback_find(em, blk) && !bcache_cached(em->dev, blk)) {
+    if (em->planner == plan_caller() &&
+        ((!writeback_find(em, blk) && !bcache_cached(em->dev, blk)) || bcache_busy(em->dev, blk))) {
         em->missed = blk;
         return -EAGAIN;
     }
@@ -861,12 +874,14 @@ static int plan_has(struct ext2_mount *em, uint32_t blk)
 }
 
 /** Bring cache block `blk` into the cache when neither it nor the batch has
- * it, sleeping on the disk; the caller holds no buffer and not `em->meta`.
- * A failed read is left for the caller's own read to meet. */
+ * it, and wait until no other process holds it, sleeping on the disk; the
+ * caller holds no buffer and not `em->meta`. A failed read is left for the
+ * caller's own read to meet. */
 static void volume_fetch(struct ext2_mount *em, uint64_t blk)
 {
     struct bbuf *b;
 
+    bcache_wait_unheld(em->dev, blk);
     if (writeback_find(em, (uint32_t)blk) || bcache_cached(em->dev, blk)) {
         return;
     }
@@ -4578,8 +4593,9 @@ fail:
  *
  * What the plan reads is fetched first with `em->meta` let go
  * (`writeback_fetch`). Under the lock the plan reads only what the cache
- * has; a block it lacks gives the piece back, lets the lock go, fetches the
- * block and starts again, and after PLAN_TRIES such starts the plan reads
+ * has and nobody holds; a block it lacks or another holds gives the piece
+ * back, lets the lock go, fetches the block or waits for it and starts
+ * again, and after PLAN_TRIES such starts the plan reads
  * under the lock, one request. The caller holds `n`'s lock and not
  * `em->meta`. 0, or -errno.
  */
@@ -4655,6 +4671,52 @@ static void drain_mark(struct bbuf *b, const struct ext2_image *im)
     }
 }
 
+/** Whether another process holds in the cache a block the drain will copy
+ * into, a changed image at or past the drain's stage, as a sync or an
+ * fsync does while it writes the block; the first such block goes in
+ * `*blk`. The caller holds `em->meta`. */
+static int drain_busy(struct ext2_mount *em, uint32_t *blk)
+{
+    struct ext2_writeback *wb = em->wb;
+    const struct ext2_image *im;
+    int i;
+
+    for (i = 0; i < wb->datas + wb->metas; i++) {
+        im = i < wb->datas ? &wb->data[i] : &wb->meta[i - wb->datas];
+        if (im->dirty && im->stage >= wb->stage && bcache_busy(em->dev, im->block)) {
+            *blk = im->block;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * Take `em->meta` for a drain once no other process holds a block it will
+ * copy into, waiting for each such block with the lock let go, PLAN_TRIES
+ * times before the drain waits under it; a strict mount takes it at once.
+ * Returns 1 with the lock held, or 0 without it when the batch emptied
+ * meanwhile.
+ */
+static int drain_lock(struct ext2_mount *em)
+{
+    uint32_t busy;
+    int tries;
+
+    for (tries = 0;; tries++) {
+        meta_lock(em);
+        if (!em->wb->count) {
+            meta_unlock(em);
+            return 0;
+        }
+        if (em_strict(em) || tries >= PLAN_TRIES || !drain_busy(em, &busy)) {
+            return 1;
+        }
+        meta_unlock(em);
+        bcache_wait_unheld(em->dev, busy);
+    }
+}
+
 /**
  * Write the batch out, stage by stage, under `em->meta`: the inodes encoded
  * into their table images, then each stage's changed images copied into the
@@ -4667,8 +4729,11 @@ static void drain_mark(struct bbuf *b, const struct ext2_image *im)
  *
  * On a mount that writes back the copies are all the work: the cache first
  * writes dirty victims with no lock taken until it can give a buffer for
- * each copy without a write (`bcache_reserve`), so that the lock waits on
- * the disk only for what others took meanwhile. A strict mount holds the
+ * each copy without a write (`bcache_reserve`), and a block another process
+ * holds, which a sync or an fsync holds for the length of its write, is
+ * waited for with the lock let go, PLAN_TRIES times before the drain waits
+ * under it; so the lock waits on the disk only for what others took
+ * meanwhile. A strict mount holds the
  * lock across its ordered writes, as its option asks: each stage is synced
  * and flushed before the next enters the cache, so that a sync or an
  * eviction can write only a stage whose dependencies are on the medium.
@@ -4694,9 +4759,7 @@ static int writeback_drain(struct ext2_mount *em)
     if (!em_strict(em)) {
         (void)bcache_reserve(em->dev, writeback_dirty(wb));
     }
-    meta_lock(em);
-    if (!wb->count) {
-        meta_unlock(em);
+    if (!drain_lock(em)) {
         return 0;
     }
     for (i = 0; i < wb->count; i++) {
@@ -5286,8 +5349,9 @@ static int release_inode(struct ext2_mount *em, struct ext2_node *n)
  * on the heap, and is published N_LOADING under it, so that no gap lets
  * another caller see the number with no node; it goes N_LIVE once written.
  * The parent's group's inode bitmap and descriptor are fetched before
- * `em->meta`, and a search that meets another group's that the cache lacks
- * lets the lock go, fetches it and starts again, PLAN_TRIES times before it
+ * `em->meta`, and a search that meets another group's that the cache lacks,
+ * or a block another process holds, lets the lock go, fetches it or waits
+ * for it and starts again, PLAN_TRIES times before it
  * reads under the lock, so that the holder waits on the disk only for a
  * block evicted again.
  * 0, -ENOSPC, -ENOMEM, or -errno; a failure frees the inode.

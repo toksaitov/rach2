@@ -40,13 +40,17 @@ struct percpu cpu_table[NR_CPUS] = {{.current = &process}};
 static int failures, writes;
 
 /* The cache model's state: whether each block is missing from the cache, and
- * how many more reads leave it missing; the misses plans met; the order
+ * how many more reads leave it missing; the misses plans met; whether each
+ * block is held by another process, as a sync holds one it writes, the
+ * waits for such a block with em->meta let go and the gets of one under
+ * em->meta, which would wait out the holder's write there; the order
  * class each block was last dirtied with and the dirty marks without one;
  * the calls of `bcache_reserve`, the buffers the last asked for, and the
  * event count at it and at the first blank get after it; and a hook run
  * once at the next read of a missing block. */
 static int uncached[TEST_BLOCKS], refetch[TEST_BLOCKS];
 static int misses;
+static int busy[TEST_BLOCKS], busy_waits, busy_gets;
 static int order_of[TEST_BLOCKS], unordered[TEST_BLOCKS];
 static int reserve_calls;
 static uint32_t reserve_n;
@@ -244,17 +248,40 @@ int bcache_cached(block_device_t *dev, uint64_t block)
     return 1;
 }
 
+/** Whether another process holds block `block`, as the model says. */
+int bcache_busy(block_device_t *dev, uint64_t block)
+{
+    (void)dev;
+    return block < TEST_BLOCKS && busy[block];
+}
+
+/** Wait for block `block`'s holder, counted in `busy_waits` when it held
+ * one; the holder is done after it. */
+void bcache_wait_unheld(block_device_t *dev, uint64_t block)
+{
+    (void)dev;
+    if (block < TEST_BLOCKS && busy[block]) {
+        busy_waits += !sleep_lock_held(&volume.meta);
+        busy[block] = 0;
+    }
+}
+
 /**
  * Block `block` of the volume in memory; a block outside it fails a row and
- * gives NULL. A read of a block the model calls missing fails a row when
- * the caller plans, runs `fetch_hook` once, and leaves the block missing
- * for `refetch` more reads.
+ * gives NULL. A get of a block another process holds waits for it, and
+ * counts in `busy_gets` when the caller holds em->meta. A read of a block the model calls missing
+ * fails a row when the caller plans, runs `fetch_hook` once, and leaves the block missing for
+ * `refetch` more reads.
  */
 struct bbuf *bcache_get(block_device_t *dev, uint64_t block)
 {
     check(dev == &device && block < TEST_BLOCKS, "cache access is in the volume");
     if (block >= TEST_BLOCKS) {
         return NULL;
+    }
+    if (busy[block]) {
+        busy_gets += sleep_lock_held(&volume.meta);
+        busy[block] = 0;
     }
     if (uncached[block]) {
         void (*hook)(void) = fetch_hook;
@@ -421,6 +448,8 @@ static void reset(uint32_t available)
     k_memset(&other, 0, sizeof(other));
     k_memset(uncached, 0, sizeof(uncached));
     k_memset(refetch, 0, sizeof(refetch));
+    k_memset(busy, 0, sizeof(busy));
+    busy_waits = busy_gets = 0;
     k_memset(order_of, 0, sizeof(order_of));
     k_memset(unordered, 0, sizeof(unordered));
     misses = reserve_calls = 0;
@@ -635,6 +664,31 @@ static void miss_rows(void)
 }
 
 /**
+ * A block another process holds, as a sync or an fsync holds one for the
+ * length of its write, is waited for with em->meta let go and never under
+ * it: by a plan that meets the bitmap held, which starts again, and by a
+ * drain whose bitmap and inode table blocks are held when it would copy.
+ */
+static void busy_rows(void)
+{
+    reset(20);
+    busy[2] = 1;
+    check(ext2_write(&mount, &file, payload, 4096, 0) == 4096 && busy_waits == 1 && busy_gets == 0,
+          "a plan waits for a held bitmap with em->meta let go");
+    check(writeback_drain(&volume) == 0 && bit_on(TEST_BLOCKS - 20) &&
+              read_data(&volume, &file, 0, result, 4096) == 0 && memcmp(result, payload, 4096) == 0,
+          "and the restarted piece drains and reads back");
+
+    reset(20);
+    check(ext2_write(&mount, &file, payload, 4096, 0) == 4096, "a pending piece");
+    busy[2] = busy[4] = 1;
+    check(writeback_drain(&volume) == 0 && busy_waits == 2 && busy_gets == 0,
+          "a drain waits for its held blocks with em->meta let go");
+    check(bit_on(TEST_BLOCKS - 20) && le32(disk[4] + (file.ino - 1) * 128 + 4) == 4096,
+          "and then copies the bitmap and the inode");
+}
+
+/**
  * A write into a block the batch holds reaches the batch's image too, so
  * that the drain, which copies the image over the cache's block, keeps it:
  * another inode stored into the pending inode's table block, and a block
@@ -841,6 +895,7 @@ int main(void)
     existing_rows();
     reservation_rows();
     miss_rows();
+    busy_rows();
     held_block_rows();
     drain_reserve_row();
     overlap_punch_row();
