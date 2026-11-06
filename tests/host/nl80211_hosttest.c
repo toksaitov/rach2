@@ -6,8 +6,13 @@
  * host-deps: rach2/sys/network/wireless/elems.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
+ * host-deps: tests/host/compat/park_host.c
  */
+/* nl80211's cancellations go through cancel_hook below, which stands in for
+ * the worker's wait for a callback that is running. */
+#define wlan_cancel_work cancel_hook
 #include "../../rach2/sys/network/wireless/nl80211.c"
+#undef wlan_cancel_work
 #include "../../rach2/sys/network/socket/netlink.h"
 #include "../../rach2/sys/network/net.h"
 #include "../../rach2/sys/lib/kirq.h"
@@ -40,6 +45,20 @@ static int privileged = 1;
 static int lock_depth;
 static int detach_in_wait;   /* the next wait detaches the second station */
 static int detach_after_run; /* and after its request has run */
+
+/* A request's handler runs on a stack of its own by `park_run`
+ * (compat/park_host.c) when a row needs it to sleep while a detachment
+ * runs. */
+int park_run(void (*fn)(void));
+int park_resume(void);
+int park_active(void);
+int park_waiting(void);
+void park(void);
+void wlan_cancel_work(struct wlan_work *work);
+static int park_in_cancel;          /* the parked handler's next cancel sleeps */
+static int park_in_wait;            /* and its next wait, once it has */
+static int handler_first;           /* it wakes before the detachment */
+static struct wlan_work *cancelled; /* the work that cancel sleeps for */
 
 uint64_t tick_count(void)
 {
@@ -126,14 +145,44 @@ void wlan_event(struct wlan *wlan, const struct wlan_event *event)
     }
 }
 
+/**
+ * Stand in for wlan_cancel_work, whose wait for a running callback the
+ * host build leaves out. A row may say that the worker, switched away after
+ * it woke the parked handler and before it ended that request's callback,
+ * is still inside it: the handler then parks in its cancel, and a
+ * detachment that cancels the same work waits as well. When the callback
+ * ends, the handler runs first if the row says so, up to its next sleep or
+ * its end, and then the detachment goes on.
+ */
+void cancel_hook(struct wlan_work *work)
+{
+    wlan_cancel_work(work);
+    if (park_in_cancel && park_active()) {
+        park_in_cancel = 0;
+        cancelled = work;
+        park_in_wait = 1;
+        park();
+    } else if (work == cancelled && !park_active()) {
+        cancelled = 0;
+        if (handler_first) {
+            (void)park_resume();
+        }
+    }
+}
+
 /** Stand in for the sleep of a handler waiting on the worker: run the
  * worker until the condition holds. A row may detach the second station
  * first, as an unregistration would while the request waits, or after, as
- * one would before the woken handler runs again. */
+ * one would before the woken handler runs again. A parked handler may give
+ * the processor back first. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
     (void)wq;
     CHECK(lock_depth == 0);
+    if (park_in_wait && park_active()) {
+        park_in_wait = 0;
+        park();
+    }
     if (detach_in_wait) {
         detach_in_wait = 0;
         nl80211_detach(WLAN2);
@@ -2052,6 +2101,60 @@ static void reg_mic_power(void)
     CHECK(rq_send() == 0);
 }
 
+static int key_rc; /* what the parked NEW_KEY returned */
+
+/** Send the request as the parked handler. */
+static void send_parked(void)
+{
+    key_rc = rq_send();
+}
+
+/**
+ * The second station goes while a waiting key's first try has run and both
+ * its handler and the detachment wait in their cancellations for the worker
+ * to end that try's callback. Whichever wakes first, the request ends with
+ * -ENODEV and leaves nothing queued for the freed station. When the handler
+ * wakes first, its retry is refused at once, before the detachment goes on:
+ * a retry linked meanwhile may have the address of the hop it follows, and
+ * the detachment would end it with its work still queued, for the worker to
+ * run on the freed station.
+ */
+static void detach_in_cancel(void)
+{
+    static const uint8_t k16[16] = {1};
+    unsigned order, nest;
+    int queued;
+
+    for (order = 0; order < 2; ++order) {
+        CHECK(nl80211_attach(WLAN2, &radio2, &band, &nd2, &table2, &station_ops) == 0);
+        rq_begin(NL80211_CMD_NEW_KEY, 0);
+        rq_u32(NL80211_ATTR_IFINDEX, 3);
+        nest = rq_nest(NL80211_ATTR_KEY);
+        rq_put(NL80211_KEY_DATA, k16, 16);
+        rq_u32(NL80211_KEY_CIPHER, WLAN_CIPHER_SUITE_CCMP);
+        rq_u8(NL80211_KEY_IDX, 0);
+        rq_end(nest);
+        rq_put(NL80211_ATTR_MAC, ap1, 6);
+        n_calls = 0;
+        next_rc = -EINPROGRESS;
+        key_rc = 1;
+        park_in_cancel = 1;
+        handler_first = order == 0;
+        CHECK(park_run(send_parked) == 0 && cancelled != 0);
+        nl80211_detach(WLAN2);
+        queued = wlan_work_next_due() != 0;
+        CHECK(!queued);
+        CHECK(!handler_first || (!park_waiting() && key_rc == -ENODEV));
+        if (park_waiting()) {
+            CHECK(park_resume() == 1);
+        }
+        CHECK(key_rc == -ENODEV && n_calls == 1 && cancelled == 0);
+        CHECK(!queued && wlan_work_next_due() == 0);
+        park_in_wait = 0;
+        next_rc = 0;
+    }
+}
+
 /** A second interface: both listed, a request to it ended by its
  * detachment, and the attachment's refusals. */
 static void attachment(void)
@@ -2114,6 +2217,8 @@ static void attachment(void)
     CHECK(rq_send() == -ENODEV);
     CHECK(n_calls == 1 && wlan_work_next_due() == 0 && !detach_after_run);
     next_rc = 0;
+
+    detach_in_cancel();
 
     k_memset(extra, 0, sizeof(extra));
     for (i = 0; i < MAX_STATIONS - 1; ++i) {
