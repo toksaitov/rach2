@@ -7801,9 +7801,6 @@ static int ext2_mount_on(struct ext2_mount *em, struct vfs_mount *mnt, block_dev
     }
     mnt->priv = em;
     mnt->root = root;
-    if (em->block_size == BCACHE_BLOCK_BYTES) {
-        bcache_sync_last(dev, block_in_table, em);
-    }
     klog(KLOG_INFO, "ext2", "mounted: %d blocks of %d, %d inodes, %d groups%s", (int)em->blocks,
          (int)em->block_size, (int)em->inodes, (int)em->groups, em->writable ? "" : ", read-only");
     return 0;
@@ -7829,6 +7826,8 @@ static int ext2_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flags
         writeback_free(em->wb);
         kfree(em->gd);
         kfree(em);
+    } else if (em->block_size == BCACHE_BLOCK_BYTES) {
+        bcache_sync_last(dev, block_in_table, em);
     }
     return rc;
 }

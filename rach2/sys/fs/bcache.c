@@ -1317,12 +1317,8 @@ static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope,
             if (!next || !sync_wants(next, pass, scope) || next->blk < from) {
                 continue;
             }
-            if (pass == 1 && next->order == BCACHE_ORDER_AFTER && scope->hold) {
-                if (first_dirty(dev)) {
-                    break;
-                }
-            } else if (pass == 1 && next->order == BCACHE_ORDER_AFTER) {
-                rc = clear_firsts(dev);
+            if (pass == 1 && next->order == BCACHE_ORDER_AFTER) {
+                rc = scope->hold ? first_dirty(dev) != 0 : clear_firsts(dev);
                 if (rc < 0) {
                     return rc;
                 }
