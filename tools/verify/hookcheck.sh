@@ -19,8 +19,15 @@
 # complexity is judged when the recorded pmccabe is on PATH or under
 # build/host-tools/native, where `make host-pmccabe` builds it, and is left
 # to `tests/run style` otherwise, with a warning that says so. Without `cc`
-# the sizes are not judged, with a warning. The rest of `tests/run style`,
-# `make -C rach2 check-arch` among it, runs at the end of a milestone.
+# the sizes are not judged, with a warning.
+#
+# Every commit, whatever it stages, is then judged by the `columns` and
+# `banned` checks of tools/verify/prosecheck.c, compiled the same way. They
+# read the whole staged tree, as the style cases do, so that vendored and
+# skipped files count as they do there, and a finding in a staged file
+# refuses the commit. A finding in a file the commit does not touch is left
+# for its author. The rest of `tests/run style`, `make -C rach2 check-arch`
+# among it, runs at the end of a milestone.
 #
 # `format FILE ...` formats the files, relative to the root of the tree, in
 # place with the recorded version.
@@ -115,6 +122,27 @@ sizes() {
             echo 'hookcheck: warning: sizecheck could not read the staged files; the sizes were not judged' >&2
             ;;
     esac
+}
+
+# prose: judge $WORK/tree by prosecheck's `columns` and `banned`, and keep the
+# findings of the staged files, each of which begins with its path and a
+# colon. Exits 1 on one.
+prose() {
+    if ! command -v cc >/dev/null 2>&1; then
+        echo 'hookcheck: warning: no cc here to build tools/verify/prosecheck.c; the prose was not judged' >&2
+        return 0
+    fi
+    if ! cc -o "$WORK/prosecheck" "$REPO/tools/verify/prosecheck.c" >"$WORK/cc.err" 2>&1; then
+        cat "$WORK/cc.err" >&2
+        echo 'hookcheck: warning: tools/verify/prosecheck.c did not compile; the prose was not judged' >&2
+        return 0
+    fi
+    (cd "$WORK/tree" && "$WORK/prosecheck" columns; "$WORK/prosecheck" banned) >"$WORK/prose.out" 2>&1
+    awk -F: 'NR == FNR { want[$0] = 1; next } $1 in want' "$WORK/files" "$WORK/prose.out" >"$WORK/prose.bad"
+    [ -s "$WORK/prose.bad" ] || return 0
+    sort -u "$WORK/prose.bad" >&2
+    echo 'hookcheck: refused: the staged files break the comment width or the terms of tools/verify/prosecheck.c' >&2
+    exit 1
 }
 
 case $MODE in
@@ -253,16 +281,18 @@ case $MODE in
     commit)
         git diff --cached --name-only --diff-filter=d >"$WORK/files" ||
             unready 'the staged files cannot be listed'
-        grep -q '\.[ch]$' "$WORK/files" || exit 0
+        [ -s "$WORK/files" ] || exit 0
         git checkout-index -a --prefix="$WORK/tree/" || unready 'the index cannot be copied'
-        c_files "$WORK/tree" "$WORK/files" >"$WORK/cfiles" || exit 0
-        [ -s "$WORK/cfiles" ] || exit 0
-        if ! copy_out "$WORK/tree" "$WORK/cfiles"; then
-            echo 'hookcheck: warning: cannot copy the staged C files; they were not formatted' >&2
-        elif formatted; then
-            stage_formatted
+        if grep -q '\.[ch]$' "$WORK/files" && c_files "$WORK/tree" "$WORK/files" >"$WORK/cfiles" &&
+            [ -s "$WORK/cfiles" ]; then
+            if ! copy_out "$WORK/tree" "$WORK/cfiles"; then
+                echo 'hookcheck: warning: cannot copy the staged C files; they were not formatted' >&2
+            elif formatted; then
+                stage_formatted
+            fi
+            sizes
         fi
-        sizes
+        prose
         ;;
     format)
         printf '%s\n' "$@" >"$WORK/files"

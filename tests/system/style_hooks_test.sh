@@ -4,9 +4,10 @@
 # core.hooksPath names this tree's hooks. A commit of a misformatted C file
 # must commit it formatted and leave it staged as committed; a misformatted C
 # file with unstaged changes, or one whose formatting cannot be set up, must
-# be committed as staged, with a warning; and a commit of other files must
-# pass untouched. Without the recorded clang-format the hook formats nothing,
-# and the first check fails.
+# be committed as staged, with a warning; a commit of other files must pass
+# untouched; and a function past a size limit, a comment past 80 columns or a
+# banned term in a staged file must be refused. Without the recorded
+# clang-format the hook formats nothing, and the first check fails.
 set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 WORK=
@@ -78,4 +79,37 @@ head=$(git rev-parse HEAD)
 [ "$(git rev-parse HEAD)" = "$head" ] || fail "the refused commit moved HEAD"
 grep -q '^sizecheck: tools/d.c:k: params 7' "$WORK/sizes.err" || { cat "$WORK/sizes.err" >&2; fail "the hook did not name the function past the limit"; }
 grep -q '^hookcheck: refused: ' "$WORK/sizes.err" || { cat "$WORK/sizes.err" >&2; fail "the hook did not say that it refused the commit"; }
-echo "style-hooks-test: passed: formatted and staged a C file, kept a file with unstaged changes, committed a file it could not format, passed a Markdown file, refused a function past a size limit"
+git reset -q
+rm -f tools/d.c
+
+# A comment of 81 columns in a staged file is refused, in C and in shell, and
+# a term the register rule bans too; 80 columns are not. A finding in a file
+# the commit does not stage is left alone.
+wide=$(printf '%074d' 0)
+: >CLAUDE.md
+printf '/* w.c: a fixture. */\n/* %s */\n' "$wide" >tools/w.c
+git add CLAUDE.md tools/w.c
+git commit -q -m 'Add a comment of 80 columns' 2>"$WORK/w80.err" || { cat "$WORK/w80.err" >&2; fail "a comment of 80 columns was refused"; }
+printf '/* w.c: a fixture. */\n/* %s0 */\n' "$wide" >tools/w.c
+git add tools/w.c
+head=$(git rev-parse HEAD)
+! git commit -q -m 'Widen a comment' 2>"$WORK/w81.err" || fail "a comment of 81 columns was committed"
+[ "$(git rev-parse HEAD)" = "$head" ] || fail "the refused commit moved HEAD"
+grep -q '^tools/w.c:2: comment line is 81 columns$' "$WORK/w81.err" || { cat "$WORK/w81.err" >&2; fail "the hook did not name the wide comment"; }
+git reset -q
+printf '#!/bin/sh\n# %s\n' "$wide$wide" >tools/w.sh
+git add tools/w.sh
+! git commit -q -m 'Add a wide script' 2>"$WORK/wsh.err" || fail "a wide comment in a script was committed"
+git reset -q
+rm tools/w.sh
+printf '/* n.c: a fixture, load-''bearing. */\n' >tools/n.c
+git add tools/n.c
+! git commit -q -m 'Add a banned term' 2>"$WORK/term.err" || fail "a banned term was committed"
+grep -q '^hookcheck: refused: ' "$WORK/term.err" || { cat "$WORK/term.err" >&2; fail "the hook did not refuse the banned term"; }
+git reset -q
+rm tools/n.c
+printf 'notes\n' >tools/other.md
+git add tools/other.md
+git commit -q -m 'Add a note beside a wide comment' 2>"$WORK/other.err" || { cat "$WORK/other.err" >&2; fail "a finding in an unstaged file refused the commit"; }
+
+echo "style-hooks-test: passed: formatted and staged a C file, kept a file with unstaged changes, committed a file it could not format, passed a Markdown file, refused a function past a size limit, a wide comment and a banned term"
