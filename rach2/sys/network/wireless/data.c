@@ -46,9 +46,8 @@ static int data_tx_ethernet(struct wlan *wlan, const uint8_t *frame, unsigned le
  * it from their completions; any other refusal drops the frame and counts
  * it. A channel switch of mode 1 keeps the queue until the switch.
  */
-static void data_drain_tx(struct wlan_work *work)
+static void data_send_tx(struct wlan_data *d)
 {
-    struct wlan_data *d = ((struct wlan_data_work *)work)->data;
     unsigned len, n;
     uint16_t protocol;
     int rc;
@@ -76,6 +75,12 @@ static void data_drain_tx(struct wlan_work *work)
             net_unlock(flags);
         }
     }
+}
+
+/** The transmit queue's work: send what the adapter queued. */
+static void data_drain_tx(struct wlan_work *work)
+{
+    data_send_tx(((struct wlan_data_work *)work)->data);
 }
 
 /** Take what the radio reported: completions first, so that rate
@@ -307,9 +312,11 @@ void wlan_data_state(struct wlan *wlan, const struct wlan_bss *bss, enum wlan_st
  * ath9k hands its frames up with no queue between, and mac80211 empties the
  * reordering buffers by ending the BlockAck sessions in
  * ieee80211_pairwise_rekey; here the sessions go on. A frame still in the
- * radio's ring meets the check in rx.c's rx_decrypt. Returns as
- * wlan_data_install_key does, or -ENOTCONN when a frame so taken ended the
- * connection.
+ * radio's ring meets the check in rx.c's rx_decrypt. What waits to be sent
+ * goes out under the old key too, message 4 of the renewal among them,
+ * which the AP could not read under the new one, unless the radio's ring
+ * stays full. Returns as wlan_data_install_key does, or -ENOTCONN when a
+ * frame so taken ended the connection.
  */
 int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
 {
@@ -321,6 +328,7 @@ int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
     if (key && (key->flags & WLAN_KEY_PAIRWISE)) {
         connected = d->connected;
         data_take_rx(d);
+        data_send_tx(d);
         wlan_ba_rx_flush(d);
         if (connected && !d->connected)
             return -ENOTCONN;
