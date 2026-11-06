@@ -749,10 +749,15 @@ static void send_probe(struct wlan_mlme *m)
  * there: after WLAN_MLME_BEACON_LOSS beacon intervals without a beacon, or,
  * with a poll, WLAN_MLME_IDLE_POLL milliseconds without a unicast frame from
  * the AP or an ACK of ours, as mac80211's beacon and connection monitor
- * timers do. A hint of another channel or a move on one comes due sooner. */
+ * timers do. An AP that dropped the station silently, as one does when a key
+ * renewal runs out of time, still ACKs at its radio and goes on sending its
+ * beacons, and answers only a null frame, with a deauthentication; so frames
+ * ACKed with nothing back for WLAN_MLME_QUIET_POLL milliseconds ask sooner
+ * than mac80211 would. A hint of another channel or a move on one comes due
+ * sooner. */
 static uint64_t monitor_due(const struct wlan_mlme *m)
 {
-    uint64_t loss = m->last_beacon + loss_ms(m), idle = m->polled, heard, due;
+    uint64_t loss = m->last_beacon + loss_ms(m), idle = m->polled, heard, rx, quiet, due;
 
     if (!m->ops->poll)
         return loss;
@@ -760,6 +765,12 @@ static uint64_t monitor_due(const struct wlan_mlme *m)
     if (heard > idle)
         idle = heard;
     idle += WLAN_MLME_IDLE_POLL;
+    rx = m->ops->received ? m->ops->received(m->wlan) : 0;
+    if (m->ops->received && heard > rx) {
+        quiet = (rx > m->polled ? rx : m->polled) + WLAN_MLME_QUIET_POLL;
+        if (quiet < idle)
+            idle = quiet;
+    }
     due = idle < loss ? idle : loss;
     if (m->ds_channel && m->ds_ask < due)
         due = m->ds_ask;

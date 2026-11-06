@@ -499,6 +499,14 @@ static uint64_t sta_heard(struct wlan *wlan)
     return d ? d->heard : 0;
 }
 
+/** The tick the data path last received a unicast frame, for the monitor. */
+static uint64_t sta_received(struct wlan *wlan)
+{
+    struct wlan_data *d = wlan_data_of(wlan);
+
+    return d ? d->received : 0;
+}
+
 /**
  * Log a beacon loss, the AP's last beacon age milliseconds ago, with what
  * may show why the AP went silent: when the data path last heard a unicast
@@ -527,9 +535,9 @@ static void sta_beacon_loss(struct wlan *wlan, unsigned age)
          (unsigned)c->tx_failed, (unsigned)c->missed_beacons);
 }
 
-static const struct wlan_mlme_ops mlme_ops = {wlan_data_mlme_tx, sta_state,       sta_event,
-                                              sta_poll,          sta_heard,       sta_hold,
-                                              sta_moved,         sta_beacon_loss, sta_sealed};
+static const struct wlan_mlme_ops mlme_ops = {
+    wlan_data_mlme_tx, sta_state, sta_event,       sta_poll,   sta_heard,
+    sta_hold,          sta_moved, sta_beacon_loss, sta_sealed, sta_received};
 
 /* A softMAC station joins through authentication and association, which
  * nl80211 drives for CONNECT, so it has no connect or disconnect of its
