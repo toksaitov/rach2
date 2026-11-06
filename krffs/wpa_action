@@ -4,6 +4,7 @@
 # network or leaves one: `wpa_action IFACE CONNECTED` or `wpa_action IFACE
 # DISCONNECTED`. init(8) starts both programs on wlan0. wpa_cli runs it for
 # other events too, with the event as the second argument; those it ignores.
+# The probe's script runs it as `wpa_action IFACE PROBED PID [ADDRESS]`.
 #
 # A Wi-Fi interface's link is its association: the kernel reports carrier
 # while the station is associated, and the network after a disconnection may
@@ -12,19 +13,32 @@
 # which asks the network just joined for a lease at once, and records the
 # network's id, wpa_cli's WPA_ID. DISCONNECTED leaves the client running for
 # up to HOLD seconds: a CONNECTED to the same network keeps the client, the
-# address and the connections that use it, and has the client renew the
-# lease at once (SIGUSR1), which the server confirms or, on a network that
-# is not the one it was, refuses, so that the client starts over. A server
-# that does not answer costs nothing: the client's script keeps the address
-# to the end of the lease. A CONNECTED to another network, or none within
-# HOLD seconds, stops the client, and its script gives the lease up with the
-# address, the default route and the servers (udhcpc-default.script). The
-# wait ends early when wpa_supplicant stops trying, its state
-# INTERFACE_DISABLED, as for a blocked radio, or INACTIVE, with no network
-# enabled. This is NetworkManager's link timeout, which keeps a Wi-Fi
-# connection while wpa_supplicant joins its network again after a short
-# break, such as an AP that restarts, deauthenticates the station or is lost
-# for a few beacons.
+# address and the connections that use it, and sends the client nothing, so
+# that its lease and its timers are its own: it renews at half the lease and
+# gives the address up when a server refuses it or the lease ends, and a
+# server that does not answer meanwhile costs nothing. A CONNECTED to
+# another network, or none within HOLD seconds, stops the client, and its
+# script gives the lease up with the address, the default route and the
+# servers (udhcpc-default.script). The wait ends early when wpa_supplicant
+# stops trying, its state INTERFACE_DISABLED, as for a blocked radio, or
+# INACTIVE, with no network enabled. This is NetworkManager's link timeout,
+# which keeps a Wi-Fi connection while wpa_supplicant joins its network again
+# after a short break, such as an AP that restarts, deauthenticates the
+# station or is lost for a few beacons.
+#
+# A network of the same name may be on another subnet, as when the machine
+# is carried to another building of one organisation. So a CONNECTED that
+# keeps the client starts a probe beside it: a second udhcpc that asks the
+# network for the address in use (`-r`), once, with a short retry, and quits
+# (`-n -q`), whose script, udhcpc-probe.script, configures nothing and runs
+# this one with what was offered. An offer of another address restarts the
+# client, as a change of network does; an offer of the same address, or a
+# server that does not answer, changes nothing. The probe gives nothing
+# back, having no `-R`: the lease it was offered is the client's own, both
+# being asked for by the card's address. Two clients on one interface each
+# get every DHCP frame from their own packet socket and drop the replies
+# whose transaction is not theirs. One probe runs at most, and a CONNECTED,
+# a DISCONNECTED or a stop of the client stops the one there is.
 #
 # wpa_cli can lose an event on a loaded machine: it reads its socket late,
 # wpa_supplicant finds the socket full, drops the event and detaches it, and
@@ -49,20 +63,20 @@
 # (`-f`), so that wpa_cli, which waits for this script, is not held while
 # the network answers. `-R` gives the lease up when the client is stopped.
 # Its pid is kept in /var/run/udhcpc.IFACE.pid, the file `ifup` uses, and
-# its network's id in /var/run/udhcpc.IFACE.net. udhcpc waits 3 seconds for
-# the answer to SIGUSR1, and a second SIGUSR1 within them has it give the
-# address up and start over. A rejoin inside them needs no signal, since
-# the client then asks again by broadcast, three times, 3 seconds apart. So
-# CONNECTED signals only when /var/run/udhcpc.IFACE.renew is absent, which
-# stands from a signal until the client's script has the lease or a server
-# refuses it, and tells that script to keep the address meanwhile.
+# its network's id in /var/run/udhcpc.IFACE.net. The probe's pid is kept in
+# /var/run/udhcpc.IFACE.probe while its answer may still act.
 #
-# wpa_cli runs one action at a time, but the waiting process runs beside
-# them, so whatever looks at the client or the wait and acts on it holds
-# flock(1)'s lock on /var/run/wpa_action.IFACE.lock, on descriptor 9. A
-# pending wait is the file /var/run/wpa_action.IFACE.hold.TOKEN, and a wait
-# acts only while its file is there: a CONNECTED that comes first removes
-# it. The file stays through a stop at HOLD seconds, for the wait goes on.
+# wpa_cli runs one action at a time, but the waiting process and the probe
+# run beside them, so whatever looks at the client, the wait or the probe
+# and acts on it holds flock(1)'s lock on /var/run/wpa_action.IFACE.lock, on
+# descriptor 9. A pending wait is the file
+# /var/run/wpa_action.IFACE.hold.TOKEN, and a wait acts only while its file
+# is there: a CONNECTED that comes first removes it. The file stays through
+# a stop at HOLD seconds, for the wait goes on. A probe acts only while the
+# probe's file names it, and only when it can take the lock at once:
+# whoever holds it is changing the client or the wait, and stops the probe,
+# which would otherwise wait on that holder while the holder waits for it to
+# end.
 
 PATH=/sbin:/usr/sbin:/bin:/usr/bin
 export PATH
@@ -70,11 +84,12 @@ export PATH
 HOLD=15 # seconds a disconnection may last before the lease goes
 LOOK=10 # seconds between looks at the state once the lease has gone
 CTRL=/var/run/wpa_supplicant
+PROBE_SCRIPT=/usr/share/udhcpc/probe.script
 
 iface=$1
 pidfile=/var/run/udhcpc.$iface.pid
 netfile=/var/run/udhcpc.$iface.net
-renewing=/var/run/udhcpc.$iface.renew
+probefile=/var/run/udhcpc.$iface.probe
 hold=/var/run/wpa_action.$iface.hold
 lock=/var/run/wpa_action.$iface.lock
 
@@ -89,14 +104,11 @@ dhcp_unlock() {
 	exec 9>&-
 }
 
-# Stop IFACE's client, if one runs, and wait up to five seconds for its
-# script to give the lease up, so that a new client's lease cannot be taken
-# away by the old one's ending. A renewal pending would have the script keep
-# the address, so it goes first.
-stop_dhcp() {
-	rm -f "$renewing"
-	if [ -s "$pidfile" ]; then
-		pid=$(cat "$pidfile")
+# Stop the process whose pid is in the file $1, if it runs, wait up to five
+# seconds for it to end, and remove the file.
+stop_pid() {
+	if [ -s "$1" ]; then
+		pid=$(cat "$1")
 		if kill "$pid" 2>/dev/null; then
 			n=0
 			while [ $n -lt 50 ] && kill -0 "$pid" 2>/dev/null; do
@@ -105,7 +117,21 @@ stop_dhcp() {
 			done
 		fi
 	fi
-	rm -f "$pidfile" "$netfile"
+	rm -f "$1"
+}
+
+# Stop IFACE's probe, if one runs. The caller holds the lock.
+stop_probe() {
+	stop_pid "$probefile"
+}
+
+# Stop IFACE's client and its probe, and wait for the client's script to
+# give the lease up, so that a new client's lease cannot be taken away by
+# the old one's ending. The caller holds the lock.
+stop_dhcp() {
+	stop_probe
+	stop_pid "$pidfile"
+	rm -f "$netfile"
 }
 
 # Start a client of IFACE for the network WPA_ID.
@@ -115,11 +141,44 @@ start_dhcp() {
 	echo "${WPA_ID-}" > "$netfile"
 }
 
-# Have IFACE's client renew its lease, unless it waits for a renewal's answer.
-renew() {
-	[ -e "$renewing" ] && return 0
-	: > "$renewing"
-	kill -USR1 "$(cat "$pidfile")" 2>/dev/null
+# Set `addr` to IFACE's IPv4 address, or to nothing when it has none.
+address() {
+	addr=$(/bin/busybox ifconfig "$iface" 2>/dev/null |
+		sed -n 's/.*inet addr:\([0-9.]*\).*/\1/p')
+}
+
+# Ask the network IFACE has joined whether the address in use is still its
+# own, in the background, in place of a probe already running. A client
+# with no address yet is still asking, and needs no probe. The caller holds
+# the lock.
+start_probe() {
+	stop_probe
+	address
+	[ -n "$addr" ] || return 0
+	/bin/busybox udhcpc -n -q -f -t 3 -T 2 -r "$addr" -i "$iface" -s "$PROBE_SCRIPT" \
+		< /dev/null 9>&- &
+	echo $! > "$probefile"
+}
+
+# The probe whose pid is $1 has ended its asking, with the address $2
+# offered, or none when no server answered. Unless the lock is busy or a
+# newer probe or a stop has taken its place, restart the client when the
+# offer is not the address in use.
+probed() {
+	exec 9> "$lock"
+	flock -n 9 || return 0
+	[ "$(cat "$probefile" 2>/dev/null)" = "$1" ] || return 0
+	rm -f "$probefile"
+	if [ -z "$2" ] || ! running; then
+		return 0
+	fi
+	address
+	if [ -n "$addr" ] && [ "$addr" != "$2" ]; then
+		echo "wpa_action: $iface: the network offers $2, not $addr: starting over" >&2
+		WPA_ID=$(cat "$netfile" 2>/dev/null)
+		stop_dhcp
+		start_dhcp
+	fi
 }
 
 # Whether IFACE's client runs.
@@ -178,18 +237,18 @@ hold_wait() {
 }
 
 # The station joined the network WPA_ID: keep the client through a rejoin of
-# the same network, whether or not its disconnection was heard, or start one
-# for this network. A new client under load can take minutes to have a lease.
-# The caller holds the lock.
+# the same network, whether or not its disconnection was heard, and probe
+# for another subnet, or start a client for this network. A new client
+# under load can take minutes to have a lease. The caller holds the lock.
 connected() {
+	rm -f "$hold".*
 	if running && [ -n "${WPA_ID-}" ] &&
 		[ "$(cat "$netfile" 2>/dev/null)" = "$WPA_ID" ]; then
-		rm -f "$hold".*
-		renew && return 0
+		start_probe
+	else
+		stop_dhcp
+		start_dhcp
 	fi
-	stop_dhcp
-	rm -f "$hold".*
-	start_dhcp
 }
 
 case "$iface" in
@@ -207,10 +266,14 @@ case "$2" in
 	DISCONNECTED)
 		dhcp_lock
 		rm -f "$hold".*
+		stop_probe
 		running || stop_dhcp
 		: > "$hold.$$"
 		dhcp_unlock
 		hold_wait $$ < /dev/null > /dev/null 2>&1 &
+		;;
+	PROBED)
+		probed "$3" "${4-}"
 		;;
 esac
 exit 0

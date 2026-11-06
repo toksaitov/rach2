@@ -164,12 +164,16 @@ on
 .Ql wlan0
 when the station joins a network.
 When it leaves one, the client keeps running for up to 15 seconds: a
-rejoin of the same network within them keeps the lease, which the client
-renews at once, and the connections that use it, as NetworkManager keeps a
+rejoin of the same network within them keeps the client, its lease and its
+timers, and the connections that use the lease, as NetworkManager keeps a
 connection through a short break.
-A server that does not answer that renewal leaves the address in place
-until the lease ends, within half a minute of its end; a server that refuses
-it, as on another subnet of the same name, ends the lease at once.
+The client renews at half the lease and gives the address up when the lease
+ends or a server refuses it; a server that is silent meanwhile changes
+nothing.
+At such a rejoin a second client asks the network once for the address in
+use and configures nothing; an offer of another address, as on another
+subnet of the same name, restarts the client, as a move to another network
+does.
 A move to another network, no rejoin in time, a blocked radio or no
 network left enabled stops the client, which gives the lease up.
 A roam between the access points of one network keeps the lease.

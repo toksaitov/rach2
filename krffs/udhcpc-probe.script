@@ -1,0 +1,27 @@
+#!/bin/sh
+#
+# The script of the probe wpa_action starts beside a Wi-Fi interface's DHCP
+# client when the station joins the same network again: a second udhcpc,
+# run with `-n -q`, that asks the network once for the address in use and
+# quits. It configures nothing: the client in force keeps the address, the
+# route and the servers. It hands what was offered to wpa_action, which
+# restarts the client when the offer is another address, as on a network of
+# the same name on another subnet.
+#
+# `bound` carries the offer, which the server has granted to the card's
+# address, the client's own. `leasefail` ends the asking with no answer, and
+# `-n` has the probe quit after it. udhcpc runs this with `deconfig` before
+# it asks, and with `nak` when a server refuses what it offered, before it
+# asks again; neither is the probe's answer. wpa_action knows the probe by
+# its pid, this script's parent.
+
+# shellcheck disable=SC2154 # udhcpc passes the lease in the environment
+case "$1" in
+	bound)
+		exec /etc/wpa_supplicant/wpa_action "$interface" PROBED "$PPID" "$ip"
+		;;
+	leasefail)
+		exec /etc/wpa_supplicant/wpa_action "$interface" PROBED "$PPID"
+		;;
+esac
+exit 0

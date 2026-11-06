@@ -230,6 +230,7 @@ file 04755:0:0 /usr/bin/gpasswd build/vendor/gnu/setid/gpasswd
 dir 0755 /usr/share
 dir 0755 /usr/share/udhcpc
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
+file 0755 /usr/share/udhcpc/probe.script krffs/udhcpc-probe.script
 # The script udhcpc6 runs for a DHCPv6 lease, which turns it into an address
 # and resolvers (busybox-networking(1)).
 file 0755 /usr/share/udhcpc/default6.script krffs/udhcpc6-default.script

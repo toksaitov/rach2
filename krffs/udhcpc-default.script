@@ -14,20 +14,13 @@
 # resolver than the lease before it. The interfaces file runs udhcpc with `-O
 # mtu`, so a lease may carry an MTU, which is applied too.
 #
-# wpa_action has the client renew at a rejoin of the same network (SIGUSR1).
-# After that signal udhcpc counts the lease as 30 s long and runs `deconfig` 12
-# s later if no server answers, with up to an hour left, and no option or
-# signal changes that. NetworkManager keeps a lease to its end, so this script
-# does too: while /var/run/udhcpc.IFACE.renew stands, which wpa_action makes
-# with the signal and removes before it stops the client, a `deconfig` before
-# the end of the lease changes nothing. The client goes on asking by broadcast,
-# and `bound` replaces the address once a server answers, on whatever subnet it
-# is. `nak` is a server's refusal, which ends the wait, so that the `deconfig`
-# after it gives the address up at once. The lease's end is kept in
-# /var/run/udhcpc.IFACE.expiry, in seconds of /proc/uptime, which no change of
-# the clock moves. The client has no timer for a lease it has given up, so
-# `leasefail`, which ends each round of its asking, some 30 s apart, gives the
-# address up once that end has passed.
+# The client keeps the lease's timers and this script obeys them: udhcpc
+# renews at half the lease, and runs `deconfig` when a server refuses the
+# lease (`nak`, which needs nothing here) and when the lease ends with no
+# server's answer. wpa_action sends the client nothing at a rejoin of the
+# same Wi-Fi network, so these stay the client's own; the probe it starts
+# there has a script of its own, udhcpc-probe.script, which configures
+# nothing.
 #
 # A machine may hold a lease on the cable and one on Wi-Fi at once, so each
 # interface's default route is its own: the script adds and removes only the
@@ -42,8 +35,6 @@
 
 # shellcheck disable=SC2154 # udhcpc passes the lease in the environment
 MERGE=/usr/share/udhcpc/resolv.script
-RENEWING=/var/run/udhcpc.$interface.renew
-EXPIRY=/var/run/udhcpc.$interface.expiry
 
 fail=0
 
@@ -85,42 +76,14 @@ only_route() {
 		END { exit !(n == 1 && ok) }'
 }
 
-# Set `now` to the whole seconds since boot.
-uptime_now() {
-	read -r now _ < /proc/uptime
-	now=${now%%.*}
-}
-
-# Whether a renewal wpa_action asked for has no answer yet and the lease it
-# renews has time left.
-kept() {
-	[ -e "$RENEWING" ] && [ -s "$EXPIRY" ] || return 1
-	uptime_now
-	[ "$now" -lt "$(cat "$EXPIRY")" ]
-}
-
-# Take away everything the lease gave: the address, the default route, whose
-# gateway is the last network's, and the servers.
-give_up() {
-	/bin/busybox ifconfig "$interface" 0.0.0.0 || fail=1
-	drop_routes
-	: | "$MERGE" "$interface.dhcp" || fail=1
-	rm -f "$EXPIRY"
-}
-
 case "$1" in
+	# A lost lease, or a client that stops, takes everything the lease
+	# gave: the address, the default route, whose gateway is the last
+	# network's, and the servers.
 	deconfig)
-		kept || give_up
-		;;
-
-	leasefail)
-		if [ -e "$EXPIRY" ]; then
-			kept || give_up
-		fi
-		;;
-
-	nak)
-		rm -f "$RENEWING"
+		/bin/busybox ifconfig "$interface" 0.0.0.0 || fail=1
+		drop_routes
+		: | "$MERGE" "$interface.dhcp" || fail=1
 		;;
 
 	bound|renew)
@@ -147,13 +110,10 @@ case "$1" in
 		# not a gateway here. A lease with no router leaves the machine with
 		# its subnet and nothing beyond it, as the lease says, and that is
 		# reported, because a machine reachable only from its own subnet
-		# looks like a machine that is down. A lease whose router is that
+		# looks like a machine that is down. A renewal whose router is that
 		# of the one default route in force keeps the route, so that no
-		# packet meets the moment between its removal and its return:
-		# wpa_action renews at once each time the station joins its network
-		# again, and a server that answers late gives a new lease to a
-		# client that kept its address.
-		if [ -n "$router" ] && only_route "${router%% *}"; then
+		# packet meets the moment between its removal and its return.
+		if [ "$1" = renew ] && [ -n "$router" ] && only_route "${router%% *}"; then
 			:
 		elif [ -n "$router" ]; then
 			drop_routes
@@ -172,12 +132,6 @@ case "$1" in
 		# file when a write fails, rather than publishing a resolver with
 		# nothing in it.
 		resolv_lines | "$MERGE" "$interface.dhcp" || fail=1
-
-		# A lease with no time in it is taken for udhcpc's default, an
-		# hour. A renewal wpa_action asked for has its answer.
-		uptime_now
-		echo "$((now + ${lease:-3600}))" > "$EXPIRY"
-		rm -f "$RENEWING"
 		;;
 esac
 

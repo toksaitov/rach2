@@ -120,6 +120,7 @@ dir 0755 /usr/share/udhcpc
 # The script udhcpc runs when a lease arrives or ends, which turns the lease
 # into an address, a route and a resolver.
 file 0755 /usr/share/udhcpc/default.script krffs/udhcpc-default.script
+file 0755 /usr/share/udhcpc/probe.script krffs/udhcpc-probe.script
 # The script udhcpc6 runs for a DHCPv6 lease, which turns it into an address
 # and resolvers (busybox-networking(1)).
 file 0755 /usr/share/udhcpc/default6.script krffs/udhcpc6-default.script
