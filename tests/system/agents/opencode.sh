@@ -15,7 +15,8 @@
 # allows. Last, the memory and time to start of the client of
 # `opencode session list --standalone` and of its private server are sampled,
 # `--standalone` leaves no process, and the same command run without it leaves
-# the background service, one process, which `opencode service stop` ends.
+# the background service, one process, which `opencode service stop` ends,
+# though the client may have to ask twice while the service starts.
 # The row lists sessions, not models: the server answers the list of models
 # only once its plugins are active and gives up after 5 seconds, less than
 # they take to start under QEMU without acceleration. The row prints what it
@@ -229,7 +230,16 @@ row() {
         "and $peak_server KiB in its server"
     exited "opencode session list --standalone: the processes left" left
 
-    output "opencode session list" oc "$WORK/home" "$WORK/tmp" session list
+    # The client gives up on the service it starts after a wait of its own,
+    # which a loaded host under QEMU without acceleration can outlast. The
+    # service goes on starting, so the client asks again once it has.
+    if ! OUT=$(oc "$WORK/home" "$WORK/tmp" session list 2>&1); then
+        until [ -e "$WORK/home/.local/state/opencode/service.json" ]; do
+            # interval: the service's record is looked for every second
+            sleep 1
+        done
+        output "opencode session list" oc "$WORK/home" "$WORK/tmp" session list
+    fi
     same "opencode session list" "$OUT" ""
     got=$(left)
     same "the processes left by opencode session list" "$(printf '%s\n' "$got" | wc -l)" 1
