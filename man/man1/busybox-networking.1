@@ -1,4 +1,4 @@
-.Dd November 2, 2026
+.Dd November 6, 2026
 .Dt BUSYBOX-NETWORKING 1
 .Os
 .Sh NAME
@@ -301,9 +301,12 @@ IPv6 options in the applets do not provide IPv6 on this kernel.
 See
 .Xr socketcall 2 .
 .Pp
-On os-real,
-.Xr ping 1
-is the project's program, not a BusyBox applet.
+.Nm ping
+and
+.Nm ping6
+are BusyBox's applets, patched so that any account can run them, and have
+their own page,
+.Xr ping 1 .
 The
 .Nm httpd
 and

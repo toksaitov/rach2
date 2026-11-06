@@ -119,8 +119,8 @@ set to 0x0a000202, pings 10.0.2.2.
 checks replies, timeout, a call beside another caller's, and progress
 by another process during the wait.
 .Xr ping 1
-does not use this call: it sends through an ICMP datagram socket, one
-request an interval.
+does not use this call: it sends through a raw socket as root and an ICMP
+datagram socket otherwise, one request an interval.
 It runs in the separate ping suite, not the default suite.
 .Sh ERRORS
 .Bl -tag -width "[ETIMEDOUT]"

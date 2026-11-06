@@ -12,7 +12,7 @@ A program's options and behavior are in its manual page, linked below. This sect
 
 ### Network programs
 
-* [ping(1)](../man/man1/ping.1) sends ICMP echo requests, one an interval whether or not the last was answered, through an ICMP datagram socket, Linux's ping socket ([socket(2)](../man/man2/socket.2)), as iputils does. Any account may run it, and any number run at once. BusyBox's ping needs a raw ICMP socket, which only root may open, so BusyBox is built without it (`vendor/busybox/rach2.config`) and the BusyBox images stage this one.
+* [ping(1)](../man/man1/ping.1) sends ICMP echo requests, one an interval whether or not the last was answered, through an ICMP datagram socket, Linux's ping socket ([socket(2)](../man/man2/socket.2)), as iputils does. Any account may run it, and any number run at once. os-simple alone stages it; the images with BusyBox use BusyBox's applet, which falls back to the same socket ([vendor/busybox](../vendor/busybox/Readme.md)).
 * [nc(1)](../man/man1/nc.1) is a TCP client.
 * [httpd(8)](../man/man8/httpd.8) answers every request with an HTTP/1.0 status page that shows the request as the network stack decoded it.
 * [dhcpc(8)](../man/man8/dhcpc.8) takes a DHCP lease and keeps it for as long as it runs.
@@ -70,10 +70,10 @@ The BusyBox images take `su`, `passwd` and `login` from BusyBox's set-id build i
 The manifests in `krffs/manifests/` choose. They give the i686 paths under `build/`; for x86-64 the stager reads the same files from `build/x86_64/` (`RACH2_PATH_MAP` in the root `Makefile`).
 
 * `os-simple.manifest`: every program of `UTILITIES` into `/bin`, by one `exec-dir` line; `login` and `adduser`; `su` and `passwd` set-uid root, mode 04755; `init-login` as `/sbin/init`.
-* `os-real.manifest` (os-real in RAM, as an ext2 root and on its disks) and `grub-test.manifest`: `audiotest`, `ping`, `loopctl`, `mixer`, `update`, `bootctl` and `init-login`, and this directory's source at `/src/utils`.
+* `os-real.manifest` (os-real in RAM, as an ext2 root and on its disks) and `grub-test.manifest`: `audiotest`, `loopctl`, `mixer`, `update`, `bootctl` and `init-login`, and this directory's source at `/src/utils`.
 * `rach2-metal-disk.manifest` (the sealed disk's root) and `os-real-gnu.manifest` (the GNU root): the same, with `init-metal`.
-* `rach2-metal.manifest` and `rach2-term.manifest` (the term stick's root): `audiotest`, `ping`, `loopctl`, `mixer`, `update` and `init-metal`.
-* `rach2-recovery.manifest`: `ping`, `reflash`, `bootctl`, `growroot`, `growset`, `growboot`, `diskctl`, `mixer`, `update`, `init-recovery`, `rach2-install` and `rach2-recover`.
+* `rach2-metal.manifest` and `rach2-term.manifest` (the term stick's root): `audiotest`, `loopctl`, `mixer`, `update` and `init-metal`.
+* `rach2-recovery.manifest`: `reflash`, `bootctl`, `growroot`, `growset`, `growboot`, `diskctl`, `mixer`, `update`, `init-recovery`, `rach2-install` and `rach2-recover`.
 * `test.manifest`: `echo`, and at the root of the image `sudo`, `su` and `passwd` set-uid root, `adduser`, `adduser-crash` and `login`.
 * `login-test-strict.manifest`, `login-test-shell.manifest` and `shutdown-test.manifest`: `init-login`, `init-shell`, and `init-shell` with `su`.
 
@@ -169,7 +169,7 @@ A suite below runs as `tests/run NAME`.
 * `default` runs the test image's probes of `sudo` (`tests/sudoprobe.c`) and of `su`, `passwd`, `adduser`, `adduser-crash` and `login` (`tests/musl/pwauthmusl.c`, `passwdmusl.c`, `addusermusl.c` and `loginmusl.c`), and of `ndwatch` (`tests/musl/ndwatchmusl.c`), which requires it to refuse an advertisement whose hop limit is not 255 and to go on after its netlink socket overflows.
 * `login` requires `init-login` on an image without `/bin/login` to refuse the console, and `init-shell` to give a root shell.
 * `account` logs in at os-simple's console with `login`, makes an account with `adduser`, becomes it with `su` and changes a password with `passwd`.
-* `dhcp` brings os-simple up with `netup -a` and `dhcpc`; `raw` runs `ping` as an ordinary account on os-real; `ext2` attaches an ext2 and a FAT32 image with `loopctl`.
+* `dhcp` brings os-simple up with `netup -a` and `dhcpc`; `raw` runs BusyBox's `ping` as an ordinary account on os-real, and `dhcp` this one on os-simple; `ext2` attaches an ext2 and a FAT32 image with `loopctl`.
 * `termconsole` boots a disk whose menu carries `rach2.console=term` under OVMF and SeaBIOS, logs in at `term`'s screen with keys pressed through QMP, reads `term`'s replies to DA1, XTVERSION, DECRQM and the Kitty query, sees a clear after the alternate screen erase in libtsm's default colors, runs Doom inside `term` under OVMF, and kills `term` to see `init` report it and start the kernel console's login.
 * `metal` reaches `init-metal`'s SSH server with nobody at the console, and again after it is killed; `servicelog` checks init's service log; `shutdown` stops the machine through `init-shell`'s SIGUSR1, SIGUSR2 and SIGTERM, and requires a `halt` run through `su` as an ordinary account to be refused.
 * `install`, `menu` and `grub` drive `bootctl`'s kernel, menu and GRUB verbs. `grow` runs `growroot` and `diskctl shrink` on the recovery system and checks its writes with the host build of `growset`, and runs `growboot` on the host.

@@ -594,8 +594,9 @@ $(SERVICELOG_ROOT_DISK): tests/system/mkrootdisk.sh tools/setup/e2fsprogs_path.s
 # mutes and unmutes, and QMP's system_powerdown powers the machine off through
 # init. They are the cases of tests/cases/machine.acpid.json, which etude
 # runs, and have no target here.
-# `tests/run raw`: the raw ICMP socket, which is what `ping` and `traceroute`
-# are. Its cases, each in a boot of its own, are in
+# `tests/run raw`: the raw ICMP socket, which is what `traceroute` and root's
+# `ping` are, and BusyBox's `ping` as an ordinary account, over the ICMP
+# datagram socket. Its cases, each in a boot of its own, are in
 # tests/cases/machine.raw.json, which etude runs, and have no target here.
 # `tests/run netif`: the interface ioctls, which is how a program sets this
 # machine's address, and machines with two cards. Its cases are in

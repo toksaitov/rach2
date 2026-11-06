@@ -32,7 +32,6 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `mixer` | [mixer(1)](man1/mixer.1) | in-house | yes | yes |
 | `mke2fs` | [mke2fs(8)](man8/mke2fs.8) | e2fsprogs |  |  |
 | `passwd` | [passwd(1)](man1/passwd.1) | BusyBox (`busybox-suid`) | in-house | yes |
-| `ping` | [ping(1)](man1/ping.1) | in-house | yes | yes |
 | `play` | [play(1)](man1/play.1) | sox_ng (`mode`) |  |  |
 | `rec` | [rec(1)](man1/rec.1) | sox_ng (`mode`) |  |  |
 | `setleds` | [setleds(1)](man1/setleds.1) | kbd |  | yes |
@@ -78,6 +77,7 @@ The programs os-simple or the recovery image stages that os-real does not, with 
 | `nc` | [nc(1)](man1/nc.1) | in-house |  |
 | `ndwatch` | [ndwatch(8)](man8/ndwatch.8) | in-house | in-house |
 | `netup` | [netup(8)](man8/netup.8) | in-house |  |
+| `ping` | [ping(1)](man1/ping.1) | in-house |  |
 | `pwd` | [busybox-coreutils(1)](man1/busybox-coreutils.1) | in-house |  |
 | `rach2-install` | [rach2-install(8)](man8/rach2-install.8) |  | in-house |
 | `rach2-recover` | [rach2-recover(8)](man8/rach2-recover.8) |  | in-house |
@@ -91,7 +91,7 @@ The programs os-simple or the recovery image stages that os-real does not, with 
 
 ### BusyBox applets
 
-The `/bin/busybox` of os-real, the recovery image and the GNU root has 324 applets. Its ash finds an applet before it searches `PATH`, so a KRFFS image, which has no symbolic links, needs no file for each applet ([BusyBox](../vendor/busybox/Readme.md)); on the GNU root, where `/bin/sh` is bash, each applet that no port provides is a link to `/bin/busybox`. Each row is a page and the applets it covers.
+The `/bin/busybox` of os-real, the recovery image and the GNU root has 326 applets. Its ash finds an applet before it searches `PATH`, so a KRFFS image, which has no symbolic links, needs no file for each applet ([BusyBox](../vendor/busybox/Readme.md)); on the GNU root, where `/bin/sh` is bash, each applet that no port provides is a link to `/bin/busybox`. Each row is a page and the applets it covers.
 
 | Page | Applets |
 | --- | --- |
@@ -121,6 +121,7 @@ The `/bin/busybox` of os-real, the recovery image and the GNU root has 324 apple
 | [init(8)](man8/init.8) | `init` |
 | [mount(8)](man8/mount.8) | `mount`, `umount` |
 | [nc(1)](man1/nc.1) | `nc` |
+| [ping(1)](man1/ping.1) | `ping`, `ping6` |
 | [rfkill(8)](man8/rfkill.8) | `rfkill` |
 | [sh(1)](man1/sh.1) | `busybox`, `sh` |
 
