@@ -2467,15 +2467,17 @@ static int wifi_wanted(void)
 
 /**
  * Start wpa_supplicant on `WIFI_IFACE` when `wifi_wanted`, in the foreground
- * with the nl80211 driver. `-W` holds it until a monitor attaches to its
- * control socket, which `start_wpa_cli` starts once the socket is there, so
- * that wpa_cli sees the first connection. It runs with a umask of 077, since
- * it writes the networks' passphrases into `WPA_CONF` when wifi(1) saves
- * them.
+ * with the nl80211 driver, each line of its log stamped with the time (`-t`),
+ * by which a drop is matched to the AP's log. `-W` holds it until a monitor
+ * attaches to its control socket, which `start_wpa_cli` starts once the
+ * socket is there, so that wpa_cli sees the first connection. It runs with a
+ * umask of 077, since it writes the networks' passphrases into `WPA_CONF`
+ * when wifi(1) saves them.
  */
 static void start_wpa_supplicant(struct service *s)
 {
     static char *const argv[] = {(char *)"wpa_supplicant",
+                                 (char *)"-t",
                                  (char *)"-W",
                                  (char *)"-D",
                                  (char *)"nl80211",

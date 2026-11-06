@@ -145,9 +145,9 @@ and
 whatever the boot line says, it supervises
 .Xr wpa_supplicant 8 ,
 run as
-.Ql wpa_supplicant -W -D nl80211 -i wlan0 -c /etc/wpa_supplicant/wlan0.conf
+.Ql wpa_supplicant -t -W -D nl80211 -i wlan0 -c /etc/wpa_supplicant/wlan0.conf
 with a umask of 077, since it writes the networks' passphrases into its
-configuration;
+configuration, each line of its log beginning with the time in seconds;
 .Xr wpa_cli 8 ,
 run as
 .Ql wpa_cli -i wlan0 -p /var/run/wpa_supplicant -a /etc/wpa_supplicant/wpa_action
