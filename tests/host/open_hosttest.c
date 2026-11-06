@@ -3509,8 +3509,9 @@ static int fl_remove(void *dir, const char *name, int isdir)
 }
 
 /** Move `oldname` of `olddir` to `newname` of `newdir`, replacing what has
- * that name: EINVAL for a directory moved below itself, as the type answers
- * it. */
+ * that name: EINVAL for a directory moved below itself, ENOTDIR for a
+ * directory moved over a file and EISDIR for a file moved over a directory,
+ * as the type answers them. */
 static int fl_move(void *olddir, const char *oldname, void *newdir, const char *newname)
 {
     struct fl_node *n = fl_child_named(olddir, oldname);
@@ -3520,6 +3521,9 @@ static int fl_move(void *olddir, const char *oldname, void *newdir, const char *
     fl_note("rename");
     if (!n) {
         return -ENOENT;
+    }
+    if (to && to->dir != n->dir) {
+        return n->dir ? -ENOTDIR : -EISDIR;
     }
     for (; up; up = up->parent >= 0 ? &fl_nodes[up->parent] : 0) {
         if (up == n) {
@@ -3593,8 +3597,9 @@ static void fl_mount_on_d(void)
  * rename in one directory that directory's and then both names' nodes by
  * inode number; a rename between two directories the mount's rename lock,
  * then the directory above the other first even when its number is higher,
- * or the lower number first when neither is above, then the nodes; and a
- * directory moved below itself leaves its own node unlocked, since its lock
+ * or the lower number first when neither is above, then the nodes, a
+ * directory before a file, as a link holds its directory and then its
+ * source; and a directory moved below itself leaves its own node unlocked, since its lock
  * would come after a directory below it.
  */
 static void file_locked_orders(void)
@@ -3637,6 +3642,12 @@ static void file_locked_orders(void)
           "a directory moved below itself is EINVAL");
     fl_row_end("M M R L2 L7 M M rename U7 U2 r ",
                "a directory moved below itself is left unlocked");
+
+    fl_row_begin();
+    check(do_rename("/fl/b/d", "/fl/b/w", 0, 0) == -ENOTDIR && fl_nodes[FL_D].parent == FL_B,
+          "a directory renamed over a file is ENOTDIR");
+    fl_row_end("M M L5 L30 L12 M M rename U12 U30 U5 ",
+               "a rename locks a directory before a file of a lower number");
 }
 
 /**

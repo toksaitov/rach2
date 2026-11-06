@@ -210,30 +210,35 @@ static int rename_order(struct vfs_mount *base, const struct vfs_ref *opar, cons
 }
 
 /** Look `name` up in the locked directory `dir` and hold the node into
- * `out`, with its inode number in `*ino`; `out->node` NULL and `*ino` 0
- * for a name that is not there. */
+ * `out`, with its inode number in `*ino` and whether it is a directory in
+ * `*isdir`; `out->node` NULL and `*ino` 0 for a name that is not there. */
 static void rename_child(struct vfs_mount *base, const struct vfs_ref *dir, const char *name,
-                         struct vfs_ref *out, uint64_t *ino)
+                         struct vfs_ref *out, uint64_t *ino, int *isdir)
 {
+    struct vfs_stat st;
     void *found;
 
     out->mnt = dir->mnt;
     out->node = NULL;
     *ino = 0;
+    *isdir = 0;
     if (base->type->ops->lookup(base, ref_node(dir), name, &found) != 0) {
         return;
     }
-    if (node_ino(base, found, ino) != 0) {
+    if (base->type->ops->getattr(base, found, &st) != 0) {
         put_node(base, found);
-        *ino = 0;
         return;
     }
+    *ino = st.ino;
+    *isdir = (st.mode & 0170000u) == 0040000u;
     out->node = found;
 }
 
 /**
  * Under the rename's directory locks, lock the nodes of its names that
- * `skip` does not leave out, by inode number, each once, into `h->child`.
+ * `skip` does not leave out, each once, into `h->child`: a directory before
+ * a file, as every other call that holds a directory and a file takes them,
+ * else by inode number.
  * Returns 0, or, for a rename between two directories, 1 with nothing
  * locked here when a name's node is not the one, `cino` or `tino`, the
  * order was decided on, as when another process renamed a directory above
@@ -245,9 +250,10 @@ static int rename_children(struct vfs_mount *base, const struct vfs_ref *opar, c
 {
     struct vfs_ref c, t, tmp;
     uint64_t c2, t2;
+    int cdir, tdir;
 
-    rename_child(base, opar, oleaf, &c, &c2);
-    rename_child(base, npar, nleaf, &t, &t2);
+    rename_child(base, opar, oleaf, &c, &c2, &cdir);
+    rename_child(base, npar, nleaf, &t, &t2, &tdir);
     if (h->renaming && (c2 != cino || t2 != tino)) {
         if (c.node) {
             put_node(base, c.node);
@@ -265,7 +271,7 @@ static int rename_children(struct vfs_mount *base, const struct vfs_ref *opar, c
         put_node(base, t.node);
         t.node = NULL;
     }
-    if (c.node && t.node && t2 < c2) {
+    if (c.node && t.node && (tdir != cdir ? tdir : t2 < c2)) {
         tmp = c;
         c = t;
         t = tmp;
