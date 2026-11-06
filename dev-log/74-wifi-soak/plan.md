@@ -31,9 +31,9 @@ Files: `rach2/sys/fs/ext2.c`, `rach2/sys/proc/process.h`, `rach2/sys/network/wir
 * A root update keeps the saved Wi-Fi networks and the machine's identifiers.
 * A soak watches ping's replies, ends a dead run after 300 s without one, and counts the seconds without a reply.
 
-Done when the soak on this head is clean and the full WSL run passes on it, and `machine.installer` proves the root update's keeps.
+Done when the full WSL run passes on the final head, that head is installed on the Lenovo, `machine.installer` has proved the root update's keeps, and a long soak on the installed final image is clean. A soak on a one-boot trial of the kernel is early proof of the kernel and closes nothing.
 
-## Left named
+## Open
 
-* `wpa_cli reassociate` takes 11 s on the first join after a scan: the supplicant sends reason 2 and joins in 5 ms, one frame fails to decrypt, and the handshake waits out its 10 s. A deauth from the kernel first did not change it. Rejoining after a disconnect takes 20 ms.
+* `wpa_cli reassociate` takes 11 s on the first join after a scan: the supplicant sends reason 2 and joins in 5 ms, one frame fails to decrypt, and the handshake waits out its 10 s. Rejoining after a disconnect takes 20 ms. Open, and held for this milestone: it stays out only if Linux on the Lenovo shows the same, measured.
 * Reason 4 at 12552.11 stays a counted drop: the access point moved channel with no announcement seen, and no new search is made before leaving. That mac80211 acts the same comes from its source and was not measured here.
