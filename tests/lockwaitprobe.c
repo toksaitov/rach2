@@ -678,11 +678,15 @@ static void run_stress(void)
         fail("fork");
     }
     if (memory == 0) {
+        syscall1(SYS_CLOSE, ready[0]);
         hog(ready[1]);
     }
+    /* The child's exit before its word gives EOF only with this end closed. */
+    syscall1(SYS_CLOSE, ready[1]);
     if (syscall3(SYS_READ, ready[0], (long)&m, 1) != 1) {
         fail_rc("the memory child", wait_status(memory));
     }
+    syscall1(SYS_CLOSE, ready[0]);
     out("LOCKWAITPROBE stress: free under pressure, kB ");
     out_num(counter("/proc/meminfo", "MemFree:"));
     out("\n");
