@@ -17,6 +17,7 @@
 
 #include "ath9k.h"
 #include "../../../lib/kerrno.h"
+#include "../../../lib/kirq.h"
 #include "../../../lib/kstring.h"
 
 /* An entry's MIC half, 64 above it (ath's key.c). */
@@ -222,35 +223,35 @@ static int make_copy(struct ath9k_key *k, const uint8_t peer[6], const struct wl
     return 0;
 }
 
-/**
- * Finish the use of entry `slot` by the frames accepted for transmit
- * before the entry changes, as radio.h asks of a removal: let them go out
- * with the key they were accepted with, and when they have not in 20 ms,
- * reset the chip, whose drain reports them failed. A stopped chip has
- * none.
- */
-static void finish_use(struct ath9k *ah, int slot)
-{
-    if (ah->bus.started && ath9k_tx_flush_key(ah, slot) != 0)
-        (void)ath9k_reset(ah, ATH9K_RESET_TX_HANG);
-}
-
-/** Clear entry `slot`, in use, and forget its copy, once no frame names
- * it. */
-static void forget(struct ath9k *ah, int slot)
+/** Clear entry `slot`, which no frame names, and forget its copy. */
+static void clear_entry(struct ath9k *ah, int slot)
 {
     struct ath9k_key *k = &ah->keys.entry[slot];
     int tkip = k->type == AR_KEYTABLE_TYPE_TKIP;
 
-    finish_use(ah, slot);
     /* A stopped chip sleeps, and the next start's restore clears the whole
      * cache. */
     if (ah->bus.started)
         reset_entry(ah, (unsigned)slot, tkip);
     if (tkip)
         ah->keys.entry[slot + MIC_OFFSET].used = ATH9K_KEY_FREE;
+    if (k->used == ATH9K_KEY_DYING)
+        ah->keys.dying--;
     k_memset(k, 0, sizeof(*k));
     ah->keys.freed = (unsigned)slot;
+}
+
+/**
+ * Clear entry `slot` for a key that takes it in place, so at once: the
+ * frames that name it get 20 ms to go out with the key they were accepted
+ * with, and then the chip is reset, whose drain reports them failed. A
+ * stopped chip has none.
+ */
+static void forget(struct ath9k *ah, int slot)
+{
+    if (ah->bus.started && ath9k_tx_flush_key(ah, slot) != 0)
+        (void)ath9k_reset(ah, ATH9K_RESET_TX_HANG);
+    clear_entry(ah, slot);
 }
 
 /**
@@ -271,7 +272,7 @@ int ath9k_key_set(struct ath9k *ah, const uint8_t peer[6], const struct wlan_key
         if (key->index >= AR_RSVD_KEYTABLE_ENTRIES)
             return -EOPNOTSUPP;
         idx = (int)key->index;
-        if (ah->keys.entry[idx].used == ATH9K_KEY_USED)
+        if (ah->keys.entry[idx].used != ATH9K_KEY_FREE)
             forget(ah, idx);
     } else {
         if (key->index != 0)
@@ -289,17 +290,23 @@ int ath9k_key_set(struct ath9k *ah, const uint8_t peer[6], const struct wlan_key
 }
 
 /**
- * Clear entry `slot` and forget its copy, after the frames that name it
- * are finished; an entry not in use is left. With `key`, the entry is
- * cleared only while it holds `key` for `peer`: a group key installed at
- * the same index replaces the old one in place, so that the removal of
- * the old key, which the station makes after the install, leaves the new.
+ * Clear entry `slot` and forget its copy, as ath9k_set_key does at
+ * DISABLE_KEY. Frames that name it keep it: it leaves the address search
+ * now, so that it opens nothing more, and its key stays for them until
+ * ath9k_key_reap, since a frame sent with a cleared entry would leave
+ * without the encryption it was accepted for. An entry not in use is left.
+ * With `key`, the entry is cleared only while it holds `key` for `peer`: a
+ * group key installed at the same index replaces the old one in place, so
+ * that the removal of the old key, which the station makes after the
+ * install, leaves the new.
  */
 void ath9k_key_clear(struct ath9k *ah, int slot, const uint8_t peer[6], const struct wlan_key *key)
 {
     struct ath9k_key copy;
     const uint8_t *a, *b;
+    uint32_t flags;
     unsigned i;
+    int named;
 
     if (slot < 0 || slot >= AR_KEY_CACHE_SIZE || ah->keys.entry[slot].used != ATH9K_KEY_USED)
         return;
@@ -312,18 +319,38 @@ void ath9k_key_clear(struct ath9k *ah, int slot, const uint8_t peer[6], const st
             if (a[i] != b[i])
                 return;
     }
-    forget(ah, slot);
+    flags = kirq_save();
+    named = ah->bus.started && ath9k_tx_names_key(ah, slot);
+    if (named) {
+        ah->keys.entry[slot].used = ATH9K_KEY_DYING;
+        ah->keys.dying++;
+        write_mac(ah, (unsigned)slot, 0);
+    } else {
+        clear_entry(ah, slot);
+    }
+    kirq_restore(flags);
+}
+
+void ath9k_key_reap(struct ath9k *ah)
+{
+    unsigned i;
+
+    for (i = 0; ah->keys.dying && i < AR_KEY_CACHE_SIZE; i++)
+        if (ah->keys.entry[i].used == ATH9K_KEY_DYING && !ath9k_tx_names_key(ah, (int)i))
+            clear_entry(ah, (int)i);
 }
 
 /**
  * Clear all 128 entries, as ath9k's ath9k_cmn_init_crypto does, then
  * write each key the copy holds, so that a reset that lost the cache
- * leaves the station's keys where its frames name them.
+ * leaves the station's keys where its frames name them. The drain before
+ * a reset or a start left no frame, so no dying entry stays.
  */
 void ath9k_key_restore(struct ath9k *ah)
 {
     unsigned i;
 
+    ath9k_key_reap(ah);
     for (i = 0; i < AR_KEY_CACHE_SIZE; i++)
         reset_entry(ah, i, 0);
     for (i = 0; i < AR_KEY_CACHE_SIZE; i++)

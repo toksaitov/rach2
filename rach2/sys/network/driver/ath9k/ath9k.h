@@ -854,9 +854,12 @@ struct ath9k_key {
     uint8_t mic[16]; /* TKIP: the receive MIC key, then the transmit one */
 };
 
-#define ATH9K_KEY_FREE 0
-#define ATH9K_KEY_USED 1
-#define ATH9K_KEY_MIC  2 /* the MIC half of the TKIP key at this index - 64 */
+#define ATH9K_KEY_FREE  0
+#define ATH9K_KEY_USED  1
+#define ATH9K_KEY_MIC   2 /* the MIC half of the TKIP key at this index - 64 */
+/* Removed while frames still name it: out of the chip's address search, its
+ * key in place, and not free until the last of them has finished. */
+#define ATH9K_KEY_DYING 3
 
 /* key.c's: the cache's 128 entries (AR_KEY_CACHE_SIZE). The first
  * AR_RSVD_KEYTABLE_ENTRIES are the group keys by key index, as ath9k
@@ -864,6 +867,7 @@ struct ath9k_key {
 struct ath9k_keys {
     struct ath9k_key entry[AR_KEY_CACHE_SIZE];
     unsigned freed; /* the entry last cleared, which a new pairwise key skips */
+    unsigned dying; /* the entries in ATH9K_KEY_DYING */
 };
 
 /* A record of the periodic hang check. A record cannot be queued while its
@@ -1318,6 +1322,10 @@ int ath9k_tx_ok(const struct ar9003_txs *ts, int ack);
  * for at most 20 ms; 0, or -ETIMEDOUT while one still does. Worker. */
 int ath9k_tx_flush_key(struct ath9k *ah, int keyix);
 
+/** Whether a frame accepted for transmit names key entry `keyix`.
+ * Interrupts off. */
+int ath9k_tx_names_key(struct ath9k *ah, int keyix);
+
 /** The radio.band.rates index of the chip's rate code `code`, or its MCS
  * index with WLAN_RATE_MCS in *flags, and WLAN_RATE_SHORT_PREAMBLE for a
  * CCK rate with a short preamble; -1 for a rate the band lacks. */
@@ -1348,13 +1356,19 @@ int ath9k_tx_own(struct ath9k *ah, const uint8_t *frame, unsigned len,
  * -EOPNOTSUPP for a cipher the cache does not do. Worker. */
 int ath9k_key_set(struct ath9k *ah, const uint8_t peer[6], const struct wlan_key *key, int *slot);
 
-/** Clear entry `slot` once no accepted frame names it; with `key`, only
- * while the entry holds `key` for `peer`, not a key that replaced it.
- * Worker. */
+/** Clear entry `slot`, at once when no accepted frame names it, or else
+ * take it out of the address search and leave it to ath9k_key_reap; with
+ * `key`, only while the entry holds `key` for `peer`, not a key that
+ * replaced it. Worker. */
 void ath9k_key_clear(struct ath9k *ah, int slot, const uint8_t peer[6], const struct wlan_key *key);
 
-/** Clear the whole cache, then write back each entry in use. Worker,
- * after a reset. */
+/** Clear the dying entries no frame names any more. Interrupts off, from
+ * the completions that end those frames. */
+void ath9k_key_reap(struct ath9k *ah);
+
+/** Clear the whole cache, then write back each entry in use; a dying entry
+ * goes, since what restarts the chip has drained its frames. Worker, after
+ * a reset. */
 void ath9k_key_restore(struct ath9k *ah);
 
 /* intr.c */

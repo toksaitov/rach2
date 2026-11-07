@@ -660,12 +660,12 @@ unsigned ath9k_tx_service(struct ath9k *ah)
     ath9k_ampdu_bar(ah);
     for (ac = 0; ac < ATH9K_TX_QUEUES; ac++)
         kick(ah, &ah->tx.q[ac]);
+    if (ah->keys.dying)
+        ath9k_key_reap(ah);
     return n;
 }
 
-/** Whether a frame accepted for transmit names key entry `keyix`.
- * Interrupts off. */
-static int names_key(struct ath9k *ah, int keyix)
+int ath9k_tx_names_key(struct ath9k *ah, int keyix)
 {
     unsigned ac, i;
 
@@ -681,8 +681,8 @@ static int names_key(struct ath9k *ah, int keyix)
 
 /**
  * Wait for the frames accepted for transmit that name key entry `keyix` to
- * finish, as mac80211 flushes the queues before it replaces a pairwise
- * key: serve the status ring, which also pushes the frames still waiting,
+ * finish, before a group key takes the entry in place: serve the status
+ * ring, which also pushes the frames still waiting,
  * every KEY_FLUSH_STEP microseconds for at most KEY_FLUSH_US. Returns 0
  * once no frame names the entry, or -ETIMEDOUT.
  */
@@ -694,10 +694,10 @@ int ath9k_tx_flush_key(struct ath9k *ah, int keyix)
 
     for (;;) {
         flags = kirq_save();
-        busy = names_key(ah, keyix);
+        busy = ath9k_tx_names_key(ah, keyix);
         if (busy) {
             (void)ath9k_tx_service(ah);
-            busy = names_key(ah, keyix);
+            busy = ath9k_tx_names_key(ah, keyix);
         }
         kirq_restore(flags);
         if (!busy)

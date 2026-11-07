@@ -1067,30 +1067,57 @@ static void keys_slot_moves(const struct wlan_key *ccmp, const uint8_t *ap)
     ath9k_key_clear(&ah, c, ap, ccmp);
 }
 
-/** A pairwise key replaced while frames that name it wait: the one sent
- * by keys_tx and eight more on BE, eight in the FIFO and one behind. The
- * removal serves the eight the chip finished, which pushes the ninth
- * with the key still in place; that one never finishes, so after 20 ms
- * the chip is reset, which reports it failed, and only then is the
- * entry cleared, with no frame left that names it. */
-static void keys_pairwise_replace(const struct wlan_key *ccmp, int slot, uint32_t mac1)
+/** Send `n` frames on BE from number `first` with the key at `slot`. */
+static void keys_send(int slot, unsigned first, unsigned n)
 {
     uint8_t f[200];
-    unsigned len;
     struct wlan_tx_info info;
-    struct wlan_key next = *ccmp;
-    struct ar9003_txs st;
-    unsigned i, base = txs_count;
-    uint64_t usec;
-    int s4 = -1;
+    unsigned len = qos_data(f, 100, 1) + 8 + 8, i;
 
-    len = qos_data(f, 100, 1) + 8 + 8;
-    for (i = 0; i < 8; i++) {
-        info = tx_info(WLAN_AC_BE, 10 + i);
+    for (i = 0; i < n; i++) {
+        info = tx_info(WLAN_AC_BE, first + i);
         info.flags = WLAN_TX_HW_KEY;
         info.hw_key = slot;
         CHECK(ath9k_tx(&ah, f, len, &info) == 0);
     }
+}
+
+/** Whether entry `slot` is dying: the address gone from the chip's search,
+ * its key and type in place. */
+static int key_dying(int slot, const struct wlan_key *key)
+{
+    return ah.keys.entry[slot].used == ATH9K_KEY_DYING &&
+           ath9k_model_peek(&model, AR_KEYTABLE_MAC0(slot)) == 0 &&
+           ath9k_model_peek(&model, AR_KEYTABLE_MAC1(slot)) == AR_KEYTABLE_VALID &&
+           ath9k_model_peek(&model, AR_KEYTABLE_TYPE(slot)) == AR_KEYTABLE_TYPE_CCM &&
+           ath9k_model_peek(&model, AR_KEYTABLE_KEY0(slot)) ==
+               (uint32_t)(key->data[0] | key->data[1] << 8 | key->data[2] << 16 |
+                          (uint32_t)key->data[3] << 24);
+}
+
+/** Whether entry `slot` is free and clear in the chip. */
+static int key_gone(int slot)
+{
+    return ah.keys.entry[slot].used == ATH9K_KEY_FREE &&
+           ath9k_model_peek(&model, AR_KEYTABLE_TYPE(slot)) == AR_KEYTABLE_TYPE_CLR &&
+           ath9k_model_peek(&model, AR_KEYTABLE_KEY0(slot)) == 0;
+}
+
+/** A pairwise key replaced behind an upload: the frame sent by keys_tx and
+ * eight more on BE, eight in the FIFO and one behind. The removal spends no
+ * time and resets nothing; the entry leaves the address search with its key
+ * in place, is not given to another key, and a second removal changes
+ * nothing. The ninth frame is pushed with the key still there, and the
+ * completion that ends it clears the entry. */
+static void keys_pairwise_replace(const struct wlan_key *ccmp, int slot, uint32_t mac1)
+{
+    struct wlan_key next = *ccmp, third = *ccmp;
+    struct ar9003_txs st;
+    unsigned i, base = txs_count;
+    uint64_t usec;
+    int s4 = -1, s5 = -1;
+
+    keys_send(slot, 10, 8);
     CHECK(ah.tx.q[WLAN_AC_BE].count == 9 && model.tx[1].count == ATH9K_TX_FIFO_DEPTH);
     k_memset(&st, 0, sizeof(st));
     st.status3 = AR_FrmXmitOK;
@@ -1100,30 +1127,92 @@ static void keys_pairwise_replace(const struct wlan_key *ccmp, int slot, uint32_
     CHECK(ath9k_key_set(&ah, ap, &next, &s4) == 0 && s4 != slot);
     usec = model.usec;
     ath9k_key_clear(&ah, slot, ap, ccmp);
-    CHECK(model.usec - usec >= 20000);
-    CHECK(txs_count == base + 9 && ah.stats.resets[ATH9K_RESET_TX_HANG] == 1);
-    for (i = 0; i < 9 && base + i < MAX_TXS; i++)
-        CHECK(txs[base + i].flags == (i < 8 ? WLAN_TX_ACKED : 0));
-    CHECK(ah.tx.q[WLAN_AC_BE].count == 0 && model.tx[1].count == 0);
-    CHECK(ah.keys.entry[slot].used == ATH9K_KEY_FREE);
-    CHECK(ath9k_model_peek(&model, AR_KEYTABLE_TYPE(slot)) == AR_KEYTABLE_TYPE_CLR);
-    CHECK(entry_is((unsigned)s4, &next, AR_KEYTABLE_TYPE_CCM, mac1));
+    CHECK(model.usec == usec);
+    CHECK(ah.stats.resets[ATH9K_RESET_TX_HANG] == 0 && txs_count == base);
+    CHECK(key_dying(slot, ccmp) && ah.keys.dying == 1);
+    ath9k_key_clear(&ah, slot, ap, ccmp);
+    ath9k_key_clear(&ah, slot, ap, 0);
+    CHECK(key_dying(slot, ccmp) && ah.keys.dying == 1);
+    third.data[0] ^= 0x0f;
+    CHECK(ath9k_key_set(&ah, ap, &third, &s5) == 0 && s5 != slot && s5 != s4);
+    ath9k_key_clear(&ah, s5, ap, &third);
+    CHECK(key_gone(s5));
 
-    /* A frame of the new key the chip finished goes out before its
-     * removal, which needs no reset. */
-    info = tx_info(WLAN_AC_BE, 20);
-    info.flags = WLAN_TX_HW_KEY;
-    info.hw_key = s4;
-    CHECK(ath9k_tx(&ah, f, len, &info) == 0);
+    CHECK(ath9k_tx_service(&ah) == 8);
+    CHECK(txs_count == base + 8 && ah.tx.q[WLAN_AC_BE].count == 1);
+    CHECK(key_dying(slot, ccmp));
     CHECK(ath9k_model_tx_complete(&model, 1, &st) != 0);
+    CHECK(ath9k_tx_service(&ah) == 1);
+    CHECK(txs_count == base + 9 && ah.tx.q[WLAN_AC_BE].count == 0);
+    for (i = 0; i < 9 && base + i < MAX_TXS; i++)
+        CHECK(txs[base + i].flags == WLAN_TX_ACKED);
+    CHECK(key_gone(slot) && ah.keys.dying == 0);
+    CHECK(ah.stats.resets[ATH9K_RESET_TX_HANG] == 0);
+    CHECK(entry_is((unsigned)s4, &next, AR_KEYTABLE_TYPE_CCM, mac1));
     ath9k_key_clear(&ah, s4, ap, &next);
-    CHECK(txs_count == base + 10 && base + 9 < MAX_TXS && txs[base + 9].flags == WLAN_TX_ACKED);
-    CHECK(ah.stats.resets[ATH9K_RESET_TX_HANG] == 1 && ah.keys.entry[s4].used == ATH9K_KEY_FREE);
+    CHECK(key_gone(s4));
+}
+
+/** A chip that stops completing keeps no entry: the hang check finds the
+ * frame that names a dying entry, and its reset fails the frame and frees
+ * the entry. So does a restart after a stop, whose drain left no frame. */
+static void keys_dying_hang(const struct wlan_key *ccmp)
+{
+    unsigned base = txs_count;
+    int slot = -1;
+
+    CHECK(ath9k_key_set(&ah, ap, ccmp, &slot) == 0);
+    keys_send(slot, 30, 1);
+    ath9k_key_clear(&ah, slot, ap, ccmp);
+    CHECK(key_dying(slot, ccmp));
+    (void)ath9k_hang_check(&ah);
+    CHECK(ath9k_hang_check(&ah) == ATH9K_RESET_TX_HANG);
+    CHECK(txs_count == base + 1 && base < MAX_TXS && txs[base].flags == 0);
+    CHECK(key_gone(slot) && ah.keys.dying == 0);
+
+    CHECK(ath9k_key_set(&ah, ap, ccmp, &slot) == 0);
+    keys_send(slot, 31, 1);
+    ath9k_key_clear(&ah, slot, ap, ccmp);
+    CHECK(key_dying(slot, ccmp));
+    ath9k_tx_drain(&ah);
+    ah.bus.started = 0;
+    ath9k_key_clear(&ah, slot, ap, ccmp);
+    CHECK(ah.keys.entry[slot].used == ATH9K_KEY_DYING);
+    ah.bus.started = 1;
+    ath9k_key_restore(&ah);
+    CHECK(key_gone(slot) && ah.keys.dying == 0);
+    CHECK(ath9k_reset(&ah, ATH9K_RESET_CAL) == 0);
+}
+
+/** A group key at the index of a dying entry cannot wait: the frame the
+ * chip has finished is served, and the new key has the entry, which leaves
+ * dying. */
+static void keys_group_dying(const struct wlan_key *gtk)
+{
+    struct wlan_key next = *gtk;
+    struct ar9003_txs st;
+    int slot = -1, again = -1;
+    unsigned base = txs_count;
+
+    next.data[0] ^= 0xff;
+    CHECK(ath9k_key_set(&ah, bcast, gtk, &slot) == 0);
+    keys_send(slot, 40, 1);
+    ath9k_key_clear(&ah, slot, bcast, gtk);
+    CHECK(ah.keys.entry[slot].used == ATH9K_KEY_DYING && ah.keys.dying == 1);
+    k_memset(&st, 0, sizeof(st));
+    st.status3 = AR_FrmXmitOK;
+    CHECK(ath9k_model_tx_complete(&model, 1, &st) != 0);
+    CHECK(ath9k_key_set(&ah, bcast, &next, &again) == 0 && again == slot);
+    CHECK(txs_count == base + 1 && ah.keys.dying == 0);
+    CHECK(ah.keys.entry[slot].used == ATH9K_KEY_USED);
+    CHECK(ah.stats.resets[ATH9K_RESET_TX_HANG] == 1);
+    ath9k_key_clear(&ah, slot, bcast, &next);
 }
 
 /** The key cache on a card without messages: CCMP, TKIP and group keys
  * installed, then the rows of keys_rx, keys_tx, keys_clear,
- * keys_group_replace and keys_pairwise_replace. */
+ * keys_group_replace, keys_pairwise_replace, keys_dying_hang and
+ * keys_group_dying. */
 static void test_keys(void)
 {
     struct wlan_key ccmp = make_key(WLAN_CIPHER_SUITE_CCMP, 0, WLAN_KEY_PAIRWISE, ap);
@@ -1175,6 +1264,8 @@ static void test_keys(void)
     keys_clear(&tkip, s2);
     keys_group_replace();
     keys_pairwise_replace(&ccmp, slot, mac1);
+    keys_dying_hang(&ccmp);
+    keys_group_dying(&gtk);
     keys_slot_moves(&ccmp, ap);
 }
 
