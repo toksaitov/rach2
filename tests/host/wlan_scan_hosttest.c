@@ -107,9 +107,26 @@ static void radio_stop(struct wlan_radio *r)
     (void)r;
 }
 
+static char ask_log[256]; /* what the scan did with its association, in order */
+static unsigned ask_n;
+static unsigned config_fail; /* a frequency that does not tune */
+
+/** Add a letter to the log. */
+static void ask_note(char c)
+{
+    if (ask_n + 1 < sizeof(ask_log)) {
+        ask_log[ask_n++] = c;
+        ask_log[ask_n] = 0;
+    }
+}
+
 static int radio_config(struct wlan_radio *r, const struct wlan_channel *channel, unsigned filters)
 {
     (void)r;
+    if (channel->frequency == config_fail) {
+        return -EIO;
+    }
+    ask_note(filters & WLAN_FILTER_OTHER_BSS ? 'T' : 'H');
     tuned = channel;
     tuned_filters = filters;
     if (n_configs < 64) {
@@ -550,6 +567,193 @@ static void abort_scan(void)
     CHECK(!scan.home && scan.home_filters == 0);
 }
 
+static int ask_busy, ask_idle, ask_waiting;
+
+/** The station's side: S stop, Z the null frame that says it sleeps, B back. */
+static int ask(struct wlan *wlan, enum wlan_scan_ask what)
+{
+    (void)wlan;
+    switch (what) {
+    case WLAN_SCAN_ASK_JOINED:
+        return 1;
+    case WLAN_SCAN_ASK_BUSY:
+        return ask_busy;
+    case WLAN_SCAN_ASK_IDLE:
+        return ask_idle;
+    case WLAN_SCAN_ASK_WAITING:
+        return ask_waiting;
+    case WLAN_SCAN_ASK_STOP:
+        ask_note('S');
+        break;
+    case WLAN_SCAN_ASK_SLEEP:
+        ask_note('Z');
+        break;
+    case WLAN_SCAN_ASK_BACK:
+        ask_note('B');
+        break;
+    }
+    return 0;
+}
+
+/** A scan with the association's answers set, from home on channel 6. */
+static void away_start(int busy, int idle, int waiting)
+{
+    struct wlan_scan_request r;
+
+    setup(&soft_ops);
+    wlan_scan_set_home(&scan, &band.channels[5], WLAN_FILTER_CONTROL);
+    scan.ask = ask;
+    ask_busy = busy;
+    ask_idle = idle;
+    ask_waiting = waiting;
+    ask_n = 0;
+    ask_log[0] = 0;
+    make_request(&r, 1, "");
+    CHECK(wlan_scan_start(&scan, &r) == 0);
+}
+
+/** Whether the log keeps order: the AP told only with the queue stopped, a
+ * channel tuned only with the AP told, a stop always undone, and after the AP
+ * was told the radio home before the AP hears of it. */
+static int away_well_formed(void)
+{
+    unsigned i, stage = 0;
+
+    for (i = 0; i < ask_n; ++i) {
+        switch (ask_log[i]) {
+        case 'S':
+            if (stage != 0) {
+                return 0;
+            }
+            stage = 1;
+            break;
+        case 'Z':
+            if (stage != 1) {
+                return 0;
+            }
+            stage = 2;
+            break;
+        case 'T':
+            if (stage != 2) {
+                return 0;
+            }
+            break;
+        case 'B':
+            if (stage == 0 || (stage == 2 && (i == 0 || ask_log[i - 1] != 'H'))) {
+                return 0;
+            }
+            stage = 0;
+            break;
+        default:
+            break;
+        }
+    }
+    return stage == 0;
+}
+
+/**
+ * An associated station's scan: the queue stops and the AP is told before
+ * any tuning, each trip keeps within WLAN_SCAN_AWAY_MS, each ends at home
+ * with the AP told, and every channel is visited. With frames waiting a trip
+ * is one channel. Probes go only on the channels scanned.
+ */
+static void away_scan(void)
+{
+    uint64_t t0 = now;
+    unsigned i, trips = 0;
+
+    away_start(0, 1, 0);
+    CHECK(WLAN_SCAN_AWAY_MS >= 2 * WLAN_SCAN_ACTIVE_DWELL_MS);
+    advance(1);
+    CHECK(scan.away == WLAN_SCAN_AWAY && same(ask_log, "SZT", 3));
+    advance(13 * WLAN_SCAN_HOME_MS + 2000);
+    CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 1 && scan.away == WLAN_SCAN_HOME);
+    CHECK(scan.channels_tuned == 13 && n_tx == 11 && tuned == &band.channels[5]);
+    CHECK(tuned_filters == WLAN_FILTER_CONTROL && away_well_formed());
+    for (i = 0; i < ask_n; ++i) {
+        trips += ask_log[i] == 'B';
+    }
+    CHECK(trips >= 4 && trips < 13);
+    CHECK(now > t0 + 551);
+    CHECK(ask_log[ask_n - 1] == 'B');
+
+    away_start(0, 1, 1);
+    advance(13 * WLAN_SCAN_HOME_MS + 2000);
+    CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 1 && scan.channels_tuned == 13);
+    trips = 0;
+    for (i = 0; i < ask_n; ++i) {
+        trips += ask_log[i] == 'B';
+    }
+    CHECK(trips == 13 && away_well_formed());
+}
+
+/**
+ * What keeps a scan at home. A radio that does not finish tunes nowhere and
+ * tells the AP nothing, and after WLAN_SCAN_TRIES the scan is aborted with
+ * the queue running. A connection that needs the channel stops nothing; once
+ * it is free the scan goes on.
+ */
+static void away_refused(void)
+{
+    unsigned i;
+
+    away_start(0, 0, 0);
+    advance(WLAN_SCAN_TRIES * (WLAN_SCAN_FLUSH_MS + WLAN_SCAN_HOME_MS) + 10);
+    CHECK(count_events(WLAN_EVENT_SCAN_ABORTED) == 1 && !wlan_scan_running(&scan));
+    CHECK(scan.channels_tuned == 0 && n_tx == 0);
+    for (i = 0; i < ask_n; ++i) {
+        CHECK(ask_log[i] != 'Z' && ask_log[i] != 'T');
+    }
+    CHECK(away_well_formed());
+
+    away_start(1, 1, 0);
+    advance((WLAN_SCAN_TRIES - 2) * WLAN_SCAN_HOME_MS);
+    CHECK(ask_n == 0 && scan.channels_tuned == 0 && wlan_scan_running(&scan));
+    ask_busy = 0;
+    advance(WLAN_SCAN_HOME_MS + 1);
+    CHECK(same(ask_log, "SZT", 3));
+    advance(13 * WLAN_SCAN_HOME_MS + 2000);
+    CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 1 && away_well_formed());
+}
+
+/** An abort, a home that does not tune, and a frame that must go now each
+ * bring the scan back with the queue running. */
+static void away_abort(void)
+{
+    away_start(0, 1, 0);
+    advance(10);
+    CHECK(scan.away == WLAN_SCAN_AWAY);
+    CHECK(wlan_scan_abort(&scan) == 0);
+    advance(1);
+    CHECK(count_events(WLAN_EVENT_SCAN_ABORTED) == 1 && scan.away == WLAN_SCAN_HOME);
+    CHECK(tuned == &band.channels[5] && away_well_formed());
+
+    away_start(0, 1, 0);
+    advance(10);
+    config_fail = 2437;
+    CHECK(wlan_scan_abort(&scan) == 0);
+    advance(1);
+    config_fail = 0;
+    CHECK(count_events(WLAN_EVENT_SCAN_ABORTED) == 1 && ask_log[ask_n - 1] == 'B');
+
+    away_start(0, 1, 0);
+    advance(10);
+    wlan_scan_go_home(&scan);
+    CHECK(scan.away == WLAN_SCAN_HOME && tuned == &band.channels[5]);
+    CHECK(wlan_scan_abort(&scan) == 0);
+    advance(1);
+    CHECK(count_events(WLAN_EVENT_SCAN_ABORTED) == 1 && !wlan_scan_running(&scan));
+    CHECK(away_well_formed());
+
+    away_start(0, 1, 0);
+    scan.n_frequencies = 1;
+    config_fail = 2437;
+    advance(500);
+    config_fail = 0;
+    CHECK(count_events(WLAN_EVENT_SCAN_ABORTED) == 1 && count_events(WLAN_EVENT_SCAN_DONE) == 0);
+    CHECK(ask_log[ask_n - 1] == 'B');
+}
+
 /** Requests the scan refuses, each leaving it idle. */
 static void refusals(void)
 {
@@ -801,6 +1005,9 @@ int main(void)
     directed_scan();
     passive_scan();
     abort_scan();
+    away_scan();
+    away_refused();
+    away_abort();
     refusals();
     hardware_scan();
     bss_fields();

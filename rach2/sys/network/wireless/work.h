@@ -9,6 +9,14 @@
  * beacon at the usual interval of 102.4 ms on a passive one. */
 #define WLAN_SCAN_ACTIVE_DWELL_MS  30
 #define WLAN_SCAN_PASSIVE_DWELL_MS 110
+/* While associated, as mac80211 does: a trip off the channel keeps within
+ * WLAN_SCAN_AWAY_MS and is followed by WLAN_SCAN_HOME_MS at home. A departure
+ * waits WLAN_SCAN_FLUSH_MS for the radio to finish what it accepted, and
+ * after WLAN_SCAN_TRIES failures in a row the scan is aborted. */
+#define WLAN_SCAN_AWAY_MS          125
+#define WLAN_SCAN_HOME_MS          200
+#define WLAN_SCAN_FLUSH_MS         100
+#define WLAN_SCAN_TRIES            5
 
 /* A BSS not heard from for this long leaves the table unless it is held,
  * cfg80211's IEEE80211_SCAN_RESULT_EXPIRE. */
@@ -114,6 +122,26 @@ struct wlan_bss *wlan_bss_next(struct wlan_bss_table *table, unsigned *cursor);
 
 enum wlan_scan_state { WLAN_SCAN_IDLE, WLAN_SCAN_SOFTWARE, WLAN_SCAN_HARDWARE };
 
+/* Where a software scan stands with its association: at home; with the
+ * transmit queue stopped while the radio finishes what it accepted; with the
+ * AP told of the absence, while that frame goes out; or on another channel. */
+enum wlan_scan_away { WLAN_SCAN_HOME, WLAN_SCAN_STOPPING, WLAN_SCAN_TELLING, WLAN_SCAN_AWAY };
+
+/* What a software scan asks of the station that may be associated. */
+enum wlan_scan_ask {
+    WLAN_SCAN_ASK_JOINED,  /* 1 while an AP must be told of an absence */
+    WLAN_SCAN_ASK_BUSY,    /* 1 while the connection needs the channel */
+    WLAN_SCAN_ASK_STOP,    /* stop the transmit queue and the radio's own */
+    WLAN_SCAN_ASK_IDLE,    /* 1 when the radio has finished what it accepted */
+    WLAN_SCAN_ASK_SLEEP,   /* tell the AP the station sleeps */
+    WLAN_SCAN_ASK_WAITING, /* 1 while frames wait to be sent */
+    WLAN_SCAN_ASK_BACK     /* tell the AP it wakes; restart what was stopped */
+};
+
+/** Answer a scan's question or do what it asks; the answer of an order is 0.
+ * Worker only. */
+typedef int (*wlan_scan_ask_fn)(struct wlan *wlan, enum wlan_scan_ask what);
+
 /* One of the scan's work records, which finds its scan from the work. */
 struct wlan_scan_work {
     struct wlan_work work;
@@ -150,6 +178,11 @@ struct wlan_scan {
     uint16_t sequence;       /* the last probe request's sequence number */
     uint32_t probes_sent;    /* probe requests the radio accepted */
     uint32_t channels_tuned; /* channels the software scan visited */
+    wlan_scan_ask_fn ask;    /* the station's, or NULL when nothing listens */
+    enum wlan_scan_away away;
+    uint64_t left;     /* the tick this trip left home */
+    uint64_t flush_by; /* the tick a departure stops waiting */
+    unsigned tries;    /* departures failed in a row */
 };
 
 /** Attach `scan` to its radio, its band after the regulatory rules and its
@@ -197,6 +230,10 @@ int wlan_scan_running(const struct wlan_scan *scan);
  * channel is borrowed until it is set again. Worker only. */
 void wlan_scan_set_home(struct wlan_scan *scan, const struct wlan_channel *channel,
                         unsigned filters);
+
+/** Bring a software scan home at once, for a frame that must reach the AP
+ * now; the abort that has to follow ends it. Worker only. */
+void wlan_scan_go_home(struct wlan_scan *scan);
 
 /** The registry's `wlan_radio_scan_done` calls it for the radio's scan: it
  * records the outcome and queues the completion. IRQ-safe under the kernel

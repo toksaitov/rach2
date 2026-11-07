@@ -189,6 +189,9 @@ static int radio_config(struct wlan_radio *radio, const struct wlan_channel *cha
     }
     quiesce(ah);
     rc = bring_up(ah, channel);
+    /* A channel with nothing on it says nothing of the receive path. */
+    ah->recover.window = tick_count();
+    ah->recover.rx_active = 0;
     if (rc == 0) {
         ah->recover.failures = 0;
         return 0;
@@ -198,6 +201,14 @@ static int radio_config(struct wlan_radio *radio, const struct wlan_channel *cha
         ah->recover.failures++;
     ah->recover.reason = ATH9K_RESET_CHANNEL;
     return rc;
+}
+
+/** radio.h's tx_idle. */
+static int radio_tx_idle(struct wlan_radio *radio, int hold)
+{
+    struct ath9k *ah = radio->priv;
+
+    return ah->bus.started ? ath9k_tx_idle(ah, hold) : 1;
 }
 
 /** radio.h's tx. */
@@ -293,8 +304,8 @@ static int radio_get_tsf(struct wlan_radio *radio, uint64_t *tsf)
 
 /* Scanning is the station layer's, in software. */
 const struct wlan_radio_ops ath9k_radio_ops = {
-    radio_start,     radio_stop,         radio_config, radio_tx, radio_set_key,
-    radio_sta_state, radio_ampdu_action, NULL,         NULL,     radio_get_tsf};
+    radio_start,        radio_stop, radio_config, radio_tx,      radio_set_key, radio_sta_state,
+    radio_ampdu_action, NULL,       NULL,         radio_get_tsf, radio_tx_idle};
 
 /* ------------------------------------------------------------------ */
 /* The probe.                                                          */

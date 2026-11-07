@@ -359,8 +359,8 @@ static int wsim_get_tsf(struct wlan_radio *radio, uint64_t *tsf)
 
 /* No key slots, so the station encrypts in software, and no scan of its
  * own, BlockAck or station notification: those are left NULL. */
-static const struct wlan_radio_ops wsim_ops = {wsim_start, wsim_stop, wsim_config, wsim_tx, 0, 0, 0,
-                                               0,          0,         wsim_get_tsf};
+static const struct wlan_radio_ops wsim_ops = {
+    wsim_start, wsim_stop, wsim_config, wsim_tx, 0, 0, 0, 0, 0, wsim_get_tsf, 0};
 
 /**
  * Make radio `index`, register it and enter it in the table, held, so that

@@ -895,7 +895,12 @@ static void test_give_up(void)
     CHECK(MS(dc[0]->ctl13, AR_XmitDataTries0) == 2 && MS(dc[0]->ctl13, AR_XmitDataTries1) == 2);
     CHECK(MS(dc[0]->ctl13, AR_XmitDataTries2) == 2 && MS(dc[0]->ctl13, AR_XmitDataTries3) == 0);
     txs_before = txs_count;
+    /* A scan that has told the AP the station sleeps holds the BlockAckReq
+     * back; the end of the hold sends it. */
+    ah.tx.hold = 1;
     (void)finish(1, AR_ExcessiveRetries | SM(1, AR_DataFailCnt), SM(2, AR_FinalTxIdx), 0, 0, 0);
+    CHECK(ah.ampdu.bars == 0 && ah.ampdu.tid[0].bar_owed);
+    CHECK(ath9k_tx_idle(&ah, 0) == 0);
     CHECK(reported(cookie, &st) == 1 && st.flags == 0 && st.rates[2].count == 2);
     CHECK(st.rates[3].index == -1);
     CHECK(counters.tx_failed == 1 && ah.ampdu.sw_retries == 3);
@@ -967,6 +972,8 @@ static void test_gaps(void)
     ath9k_tx_drain(&ah);
     CHECK(txs_count == 4 && counters.tx_failed == 4 && ah.ampdu.tid[0].bar_owed);
     ath9k_mac_init_queues(&ah);
+    CHECK(ath9k_tx_idle(&ah, 1) == 1);
+    ah.tx.hold = 0;
     s = d->tx_seq[0];
     CHECK(send(0, 100, 0) == 0);
     CHECK(ah.ampdu.bars == 1 && model.tx[1].count == 2 && chain_of(1, 1, dc, 40) == 1);

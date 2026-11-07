@@ -196,6 +196,7 @@ static int slots[64];      /* and the key slots they went under */
 static int takes_keys;     /* set_key puts keys in slots */
 static unsigned next_slot;
 static unsigned n_taken, refusals;
+static unsigned fc_seen;              /* the frame control of the frame last taken */
 static unsigned refuse_mark = 0xffff; /* a frame refused with -EIO */
 
 /** Take a frame while the ring has room, as ath9k_tx does: -ENOBUFS when
@@ -207,6 +208,7 @@ static int radio_tx(struct wlan_radio *radio, const uint8_t *frame, unsigned len
     unsigned mark = len > at ? frame[at] : 0xffff;
 
     (void)radio;
+    fc_seen = (unsigned)frame[0] | (unsigned)frame[1] << 8;
     if (mark == refuse_mark)
         return -EIO;
     if (ring_count == RING) {
@@ -641,6 +643,42 @@ static int receive(void)
     return wlan_radio_rx(&radio, f, sizeof(f), &st);
 }
 
+/** A scan's stop and a channel switch's end apart, whichever ends first: the
+ * drain runs only when neither stops it, and a null frame carries the power
+ * management bit it was asked for. */
+static void check_stop_reasons(void)
+{
+    struct wlan_data *d;
+
+    setup();
+    d = wlan_data_of(&wlan);
+    wlan_data_stop_scan(d, 1);
+    wlan_data_stop_tx(d, 1);
+    CHECK(send(0) == 0);
+    CHECK(wlan_data_waiting(d));
+    run_work();
+    wlan_data_stop_tx(d, 0);
+    run_work();
+    CHECK(n_taken == 0 && waiting() == 1);
+    wlan_data_stop_tx(d, 1);
+    wlan_data_stop_scan(d, 0);
+    run_work();
+    CHECK(n_taken == 0 && waiting() == 1);
+    wlan_data_stop_tx(d, 0);
+    run_work();
+    CHECK(n_taken == 1 && waiting() == 0 && !wlan_data_waiting(d));
+    complete(1, 1);
+    run_work();
+    refuse_mark = 0xfffe; /* a null frame is too short to carry a mark */
+    CHECK(wlan_data_tx_sleep(d, 1) == 0);
+    CHECK(fc_seen & IEEE80211_FCTL_PM);
+    CHECK(wlan_data_tx_sleep(d, 0) == 0);
+    CHECK(!(fc_seen & IEEE80211_FCTL_PM));
+    CHECK(wlan_data_tx_null(d, 0) == 0);
+    CHECK(!(fc_seen & IEEE80211_FCTL_PM));
+    wlan_data_detach(&wlan);
+}
+
 /** Answers wait for no end to a stream of received frames: the worker sends
  * what is queued every WLAN_DATA_RX_BATCH frames. */
 static void check_rx_sends(void)
@@ -988,6 +1026,7 @@ int main(void)
     check_eapol_room();
     check_upload_room();
     check_ack_room();
+    check_stop_reasons();
     check_rx_sends();
     check_rx_full();
     check_other_refusal();

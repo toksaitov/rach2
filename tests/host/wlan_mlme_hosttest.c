@@ -993,6 +993,46 @@ static void lost_renewal(void)
     renewing_at = 0;
 }
 
+/** While a scan is away the monitor asks nothing and counts no silence, a
+ * renewal's limit still runs, and the return counts the silence from then.
+ * The connection needs the channel during a question or a renewal. */
+static void away_keeps_quiet(void)
+{
+    reset();
+    wlan_mlme_init(&mlme, 0, &radio, &radio.band, &scan, &poll_ops);
+    mlme.beacon_losses = &losses;
+    losses = 0;
+    n_polls = 0;
+    heard_at = 0;
+    renewing_at = 0;
+    connect_a(0);
+    CHECK(!wlan_mlme_busy(&mlme));
+    mlme.probes = 1;
+    CHECK(wlan_mlme_busy(&mlme));
+    mlme.probes = 0;
+    scan.away = WLAN_SCAN_AWAY;
+    wait_ms(4000);
+    CHECK(n_polls == 0 && losses == 0 && mlme.state == WLAN_STA_ASSOCIATED);
+    scan.away = WLAN_SCAN_HOME;
+    wlan_mlme_scan_back(&mlme);
+    wait_ms(1700);
+    CHECK(n_polls == 0 && losses == 0);
+    wait_ms(3000);
+    CHECK(n_polls != 0);
+
+    reset();
+    wlan_mlme_init(&mlme, 0, &radio, &radio.band, &scan, &poll_ops);
+    connect_a(0);
+    renewing_at = now;
+    CHECK(wlan_mlme_busy(&mlme));
+    scan.away = WLAN_SCAN_AWAY;
+    wait_ms(WLAN_MLME_KEY_WAIT + 2000);
+    CHECK(mlme.state == WLAN_STA_NONE);
+    CHECK(last_event()->ev.reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT);
+    scan.away = WLAN_SCAN_HOME;
+    renewing_at = 0;
+}
+
 /** A countdown to a channel switch, far off, does not put off a renewal's
  * limit: the timer looks in on it. */
 static void lost_renewal_in_countdown(void)
@@ -1487,6 +1527,7 @@ int main(void)
     vanishing_ap();
     polled_ap();
     lost_renewal();
+    away_keeps_quiet();
     lost_renewal_in_countdown();
     lost_renewal_in_announcements();
     protected_frames();

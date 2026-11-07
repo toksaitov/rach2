@@ -70,6 +70,42 @@ static int sta_scan(struct wlan *wlan, const struct wlan_scan_request *request)
     return wlan_scan_start(&wlan->scan, request);
 }
 
+/** A scan's question or order; see enum wlan_scan_ask. */
+static int sta_scan_ask(struct wlan *wlan, enum wlan_scan_ask what)
+{
+    struct wlan_mlme *m = &sta_of(wlan)->mlme;
+    struct wlan_data *d = wlan_data_of(wlan);
+    const struct wlan_radio_ops *ops = wlan->radio->ops;
+
+    switch (what) {
+    case WLAN_SCAN_ASK_JOINED:
+        return m->state != WLAN_STA_NONE;
+    case WLAN_SCAN_ASK_BUSY:
+        return wlan_mlme_busy(m);
+    case WLAN_SCAN_ASK_STOP:
+        wlan_data_stop_scan(d, 1);
+        break;
+    case WLAN_SCAN_ASK_IDLE:
+        return !ops->tx_idle || ops->tx_idle(wlan->radio, 1);
+    case WLAN_SCAN_ASK_SLEEP:
+        (void)wlan_data_tx_sleep(d, 1);
+        break;
+    case WLAN_SCAN_ASK_WAITING:
+        return wlan_data_waiting(d);
+    case WLAN_SCAN_ASK_BACK:
+        (void)wlan_data_tx_sleep(d, 0);
+        if (ops->tx_idle) {
+            (void)ops->tx_idle(wlan->radio, 0);
+        }
+        wlan_mlme_scan_back(m);
+        wlan_data_stop_scan(d, 0);
+        break;
+    default:
+        break;
+    }
+    return 0;
+}
+
 /** Abort the running scan. */
 static int sta_abort_scan(struct wlan *wlan)
 {
@@ -577,6 +613,7 @@ int wlan_sta_attach(struct wlan *wlan)
     wlan_mlme_init(&s->mlme, wlan, wlan->radio, &wlan->band, &wlan->scan, &mlme_ops);
     s->mlme.beacon_losses = &wlan->counters.missed_beacons;
     wlan->mlme_priv = s;
+    wlan->scan.ask = sta_scan_ask;
     d->rx_mgmt = sta_rx_mgmt;
     d->tx_status = sta_tx_status;
     rc = nl80211_attach(wlan, wlan->radio, &wlan->band, &wlan->netdev, &wlan->bss_table,
@@ -584,6 +621,7 @@ int wlan_sta_attach(struct wlan *wlan)
     if (rc) {
         d->rx_mgmt = 0;
         d->tx_status = 0;
+        wlan->scan.ask = 0;
         wlan->mlme_priv = 0;
         kfree(s);
     }
@@ -606,6 +644,7 @@ void wlan_sta_detach(struct wlan *wlan)
     }
     wlan_cancel_work(&s->authorize_work);
     wlan_mlme_stop(&s->mlme);
+    wlan->scan.ask = 0;
     wlan->mlme_priv = 0;
     kfree(s);
 }

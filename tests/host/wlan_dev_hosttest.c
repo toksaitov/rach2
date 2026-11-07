@@ -303,6 +303,12 @@ int wlan_scan_running(const struct wlan_scan *scan)
     return scan->state != WLAN_SCAN_IDLE;
 }
 
+/** Send a scan home: nothing scans here. */
+void wlan_scan_go_home(struct wlan_scan *scan)
+{
+    (void)scan;
+}
+
 /** Abort the model scan at once. */
 int wlan_scan_abort(struct wlan_scan *scan)
 {

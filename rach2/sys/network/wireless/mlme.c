@@ -872,7 +872,7 @@ static void csa_switch(struct wlan_mlme *m)
     m->bss->frequency = ch->frequency;
     if (m->scan)
         wlan_scan_set_home(m->scan, ch, m->scan->home_filters);
-    if (!m->scan || m->scan->state != WLAN_SCAN_SOFTWARE)
+    if (!m->scan || m->scan->state != WLAN_SCAN_SOFTWARE || m->scan->away != WLAN_SCAN_AWAY)
         (void)m->radio->ops->config(m->radio, ch, m->scan ? m->scan->home_filters : 0);
     m->ops->moved(m->wlan, ch);
     if (m->csa_hold) {
@@ -1034,6 +1034,11 @@ static void monitor_timeout(struct wlan_mlme *m)
             arm(m, csa_next(m));
         return;
     }
+    /* What cannot be heard from another channel proves nothing. */
+    if (m->scan && m->scan->away != WLAN_SCAN_HOME) {
+        arm_in(m, WLAN_MLME_PROBE_TIMEOUT);
+        return;
+    }
     if (m->ds_home && now >= m->ds_moved + WLAN_MLME_DS_PROOF && !ds_settle(m))
         return;
     if (!m->probes) {
@@ -1055,6 +1060,22 @@ static void monitor_timeout(struct wlan_mlme *m)
         return;
     }
     monitor_lost(m);
+}
+
+int wlan_mlme_busy(const struct wlan_mlme *m)
+{
+    if (m->state < WLAN_STA_ASSOCIATED)
+        return m->state != WLAN_STA_NONE;
+    return m->probes || m->csa_channel || (m->ops->renewing && m->ops->renewing(m->wlan));
+}
+
+void wlan_mlme_scan_back(struct wlan_mlme *m)
+{
+    if (m->state < WLAN_STA_ASSOCIATED)
+        return;
+    m->poll_cookie = 0;
+    m->last_beacon = m->polled = tick_count();
+    arm(m, m->csa_channel ? csa_next(m) : monitor_due(m));
 }
 
 /** Take the deadline in the current state: retry, time out or monitor. */

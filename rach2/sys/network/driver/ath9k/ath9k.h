@@ -824,6 +824,7 @@ struct ath9k_tx {
     uint32_t status_bus;
     unsigned status_index; /* the next entry the chip will write */
     uint8_t running;       /* frames are pushed to the chip */
+    uint8_t hold;          /* a scan leaves: no BlockAckReq of the driver's */
 };
 
 /* mac.c's: the interrupt mask and the PCU's settings. */
@@ -1326,6 +1327,11 @@ int ath9k_tx_flush_key(struct ath9k *ah, int keyix);
 /** Whether a frame accepted for transmit names key entry `keyix`.
  * Interrupts off. */
 int ath9k_tx_names_key(struct ath9k *ah, int keyix);
+
+/** Say whether every accepted frame has finished, dropping none. `hold` != 0
+ * keeps BlockAckReqs owed from being queued, for a scan that has told the AP
+ * the station sleeps; 0 ends that and queues them. */
+int ath9k_tx_idle(struct ath9k *ah, int hold);
 
 /** The radio.band.rates index of the chip's rate code `code`, or its MCS
  * index with WLAN_RATE_MCS in *flags, and WLAN_RATE_SHORT_PREAMBLE for a

@@ -1,7 +1,9 @@
 /* Scanning: the radio's own scan, or a software scan that tunes to each
  * channel in turn, probes where the regulatory rules allow it and listens
- * for a dwell. Follows the design of Linux's net/mac80211/scan.c; the code
- * is Rach2's. */
+ * for a dwell. An associated station leaves as mac80211's offchannel.c does:
+ * the queue stopped and the radio finished, the AP told, then short trips
+ * with a stay at home between them. Follows the design of Linux's
+ * net/mac80211/scan.c; the code is Rach2's. */
 #include "work.h"
 #include "../../timer.h"
 #include "../../lib/kerrno.h"
@@ -49,15 +51,43 @@ static void scan_queue_step(struct wlan_scan *scan, uint64_t delay)
     (void)wlan_queue_work(&step->work, delay ? tick_count() + delay : 0);
 }
 
+/** Ask the station, if one listens. */
+static int scan_ask(struct wlan_scan *scan, enum wlan_scan_ask what)
+{
+    return scan->ask ? scan->ask(scan->wlan, what) : 0;
+}
+
+/** Undo a departure, however far it went. Returns the tuning's result. */
+static int scan_return(struct wlan_scan *scan)
+{
+    int rc = 0;
+
+    if (scan->away == WLAN_SCAN_AWAY && scan->home) {
+        rc = scan->radio->ops->config(scan->radio, scan->home, scan->home_filters);
+    }
+    if (scan->away != WLAN_SCAN_HOME) {
+        (void)scan_ask(scan, WLAN_SCAN_ASK_BACK);
+    }
+    scan->away = WLAN_SCAN_HOME;
+    return rc;
+}
+
 /** End the scan: the software scan returns the radio to its home channel,
  * BSSs gone stale leave the table, and the outcome is reported last, so
- * that its listener may start another scan. Worker only. */
+ * that its listener may start another scan. A failure to return is an
+ * aborted scan. Worker only. */
 static void scan_finish(struct wlan_scan *scan, int aborted)
 {
     struct wlan_radio *radio = scan->radio;
 
     if (scan->state == WLAN_SCAN_SOFTWARE && scan->home) {
-        (void)radio->ops->config(radio, scan->home, scan->home_filters);
+        if (radio->ops->config(radio, scan->home, scan->home_filters) != 0) {
+            aborted = 1;
+        }
+    }
+    if (scan->away != WLAN_SCAN_HOME) {
+        (void)scan_ask(scan, WLAN_SCAN_ASK_BACK);
+        scan->away = WLAN_SCAN_HOME;
     }
     scan->state = WLAN_SCAN_IDLE;
     scan->start_pending = 0;
@@ -183,6 +213,91 @@ static void scan_begin(struct wlan_scan *scan)
     scan_queue_step(scan, 0);
 }
 
+/** The ticks to stay on `channel`. */
+static uint64_t scan_dwell(const struct wlan_scan *scan, const struct wlan_channel *channel)
+{
+    int active = scan->request.n_ssids && !(channel->flags & WLAN_CHANNEL_PASSIVE);
+
+    return MS_TO_TICKS(active ? WLAN_SCAN_ACTIVE_DWELL_MS : WLAN_SCAN_PASSIVE_DWELL_MS);
+}
+
+/** Give a departure up: a stay at home, or the end of the scan once
+ * WLAN_SCAN_TRIES of them have failed in a row. */
+static void scan_stay(struct wlan_scan *scan)
+{
+    (void)scan_return(scan);
+    if (++scan->tries >= WLAN_SCAN_TRIES) {
+        scan_finish(scan, 1);
+        return;
+    }
+    scan_queue_step(scan, MS_TO_TICKS(WLAN_SCAN_HOME_MS));
+}
+
+/**
+ * Go on with a departure from home, as ieee80211_offchannel_stop_vifs does:
+ * stop the queue, let the radio finish, tell the AP with a null frame and
+ * let that go too, for tuning fails whatever the radio holds. A radio that
+ * cannot finish keeps its frames, and the scan tries again later. Returns 1
+ * when the radio may tune, and otherwise 0 with the next step arranged.
+ */
+static int scan_leave(struct wlan_scan *scan)
+{
+    uint64_t now = tick_count();
+
+    if (scan->away == WLAN_SCAN_HOME) {
+        if (scan_ask(scan, WLAN_SCAN_ASK_BUSY)) {
+            scan_stay(scan);
+            return 0;
+        }
+        (void)scan_ask(scan, WLAN_SCAN_ASK_STOP);
+        scan->away = WLAN_SCAN_STOPPING;
+        scan->flush_by = now + MS_TO_TICKS(WLAN_SCAN_FLUSH_MS);
+    }
+    if (scan->away == WLAN_SCAN_STOPPING) {
+        if (!scan_ask(scan, WLAN_SCAN_ASK_IDLE)) {
+            if (now >= scan->flush_by) {
+                scan_stay(scan);
+            } else {
+                scan_queue_step(scan, 1);
+            }
+            return 0;
+        }
+        (void)scan_ask(scan, WLAN_SCAN_ASK_SLEEP);
+        scan->away = WLAN_SCAN_TELLING;
+        scan->flush_by = now + MS_TO_TICKS(WLAN_SCAN_FLUSH_MS);
+    }
+    if (!scan_ask(scan, WLAN_SCAN_ASK_IDLE) && now < scan->flush_by) {
+        scan_queue_step(scan, 1);
+        return 0;
+    }
+    scan->away = WLAN_SCAN_AWAY;
+    scan->left = now;
+    scan->tries = 0;
+    return 1;
+}
+
+/** Decide, for an associated station, whether the scan may go on to
+ * `channel` now, as ieee80211_scan_state_decision does: a trip ends when
+ * frames wait or the next channel would take it past WLAN_SCAN_AWAY_MS.
+ * Returns 1 to tune, and otherwise 0 with the next step arranged. */
+static int scan_may_tune(struct wlan_scan *scan, const struct wlan_channel *channel)
+{
+    uint64_t limit = scan->left + MS_TO_TICKS(WLAN_SCAN_AWAY_MS);
+
+    if (!scan_ask(scan, WLAN_SCAN_ASK_JOINED)) {
+        return 1;
+    }
+    if (scan->away != WLAN_SCAN_AWAY) {
+        return scan_leave(scan);
+    }
+    if (scan_ask(scan, WLAN_SCAN_ASK_WAITING) || tick_count() + scan_dwell(scan, channel) > limit) {
+        (void)scan_return(scan);
+        scan_queue_step(scan, MS_TO_TICKS(WLAN_SCAN_HOME_MS));
+        return 0;
+    }
+    return 1;
+}
+
 /** A step of the scan on the worker: begin it, or tune to the next channel,
  * probe it if it is active and come back after its dwell, or finish. */
 static void scan_step(struct wlan_work *work)
@@ -203,7 +318,11 @@ static void scan_step(struct wlan_work *work)
         scan_finish(scan, scan->abort);
         return;
     }
-    channel = scan_channel(scan, scan->frequencies[scan->next++]);
+    channel = scan_channel(scan, scan->frequencies[scan->next]);
+    if (channel && !scan_may_tune(scan, channel)) {
+        return;
+    }
+    scan->next++;
     if (!channel ||
         radio->ops->config(radio, channel, scan->home_filters | WLAN_FILTER_OTHER_BSS) != 0) {
         scan_finish(scan, 1);
@@ -214,8 +333,7 @@ static void scan_step(struct wlan_work *work)
     if (active) {
         scan_send_probes(scan, channel);
     }
-    scan_queue_step(scan,
-                    MS_TO_TICKS(active ? WLAN_SCAN_ACTIVE_DWELL_MS : WLAN_SCAN_PASSIVE_DWELL_MS));
+    scan_queue_step(scan, scan_dwell(scan, channel));
 }
 
 /** The radio's scan has ended, or an abort asks to cancel it. Worker only. */
@@ -276,6 +394,7 @@ void wlan_scan_detach(struct wlan_scan *scan)
     scan->state = WLAN_SCAN_IDLE;
     scan->start_pending = 0;
     scan->abort = 0;
+    scan->away = WLAN_SCAN_HOME;
 }
 
 int wlan_scan_running(const struct wlan_scan *scan)
@@ -345,6 +464,8 @@ int wlan_scan_start(struct wlan_scan *scan, const struct wlan_scan_request *requ
     scan->hw_aborted = 0;
     scan->probes_sent = 0;
     scan->channels_tuned = 0;
+    scan->tries = 0;
+    scan->away = WLAN_SCAN_HOME;
     scan->start_pending = 1;
     scan_queue_step(scan, 0);
     return 0;
@@ -377,6 +498,11 @@ void wlan_scan_set_home(struct wlan_scan *scan, const struct wlan_channel *chann
 {
     scan->home = channel;
     scan->home_filters = channel ? filters : 0;
+}
+
+void wlan_scan_go_home(struct wlan_scan *scan)
+{
+    (void)scan_return(scan);
 }
 
 void wlan_scan_hw_done(struct wlan_scan *scan, int aborted)

@@ -241,6 +241,16 @@ int wlan_mlme_authorize(struct wlan_mlme *m, int authorized);
  */
 int wlan_mlme_rx(struct wlan_mlme *m, const uint8_t *frame, unsigned len, unsigned flags);
 
+/** Say whether the connection needs the channel now, so that a scan must not
+ * leave it: a join under way, a question to the AP, a channel switch or a key
+ * renewal. */
+int wlan_mlme_busy(const struct wlan_mlme *m);
+
+/** A scan has come home: count the monitor's silence from now, as
+ * ieee80211_offchannel_ps_disable resets the beacon and connection monitors.
+ * Worker only. */
+void wlan_mlme_scan_back(struct wlan_mlme *m);
+
 /** Take the transmit status of a frame of cookie, acknowledged when acked
  * is set; the MLME looks only at the null frame of its poll. */
 void wlan_mlme_tx_status(struct wlan_mlme *m, uint64_t cookie, int acked);

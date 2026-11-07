@@ -125,8 +125,10 @@ static void wlan_down_run(struct wlan_work *work)
     struct wlan_request *req = (struct wlan_request *)work;
     struct wlan *wlan = work->wlan;
 
-    if (wlan_scan_running(&wlan->scan))
+    if (wlan_scan_running(&wlan->scan)) {
         (void)wlan_scan_abort(&wlan->scan);
+        wlan_scan_go_home(&wlan->scan); /* the deauthentication must reach the AP */
+    }
     wlan_sta_leave(wlan, 1);
     wlan_stop(wlan);
     --wlan->busy;

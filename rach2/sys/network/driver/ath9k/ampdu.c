@@ -454,6 +454,8 @@ void ath9k_ampdu_bar(struct ath9k *ah)
     unsigned i, ctl;
     uint32_t flags;
 
+    if (ah->tx.hold)
+        return;
     for (i = 0; i < 8; i++) {
         struct ath9k_tid *t = &ah->ampdu.tid[i];
 

@@ -665,6 +665,19 @@ unsigned ath9k_tx_service(struct ath9k *ah)
     return n;
 }
 
+int ath9k_tx_idle(struct ath9k *ah, int hold)
+{
+    unsigned ac;
+
+    ah->tx.hold = hold != 0;
+    if (!hold)
+        ath9k_ampdu_bar(ah);
+    for (ac = 0; ac < ATH9K_TX_QUEUES; ac++)
+        if (ah->tx.q[ac].count)
+            return 0;
+    return 1;
+}
+
 int ath9k_tx_names_key(struct ath9k *ah, int keyix)
 {
     unsigned ac, i;

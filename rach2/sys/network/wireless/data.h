@@ -33,6 +33,10 @@
 #define WLAN_DATA_RX_BATCH      8
 #define WLAN_DATA_STATUS_QUEUE  256
 #define WLAN_DATA_ETH_MAX       1514
+/* Why the transmit drain is stopped, as mac80211 keeps its queue stop reasons
+ * apart: a channel switch of mode 1 and a scan's absence end separately. */
+#define WLAN_DATA_STOP_CSA      1
+#define WLAN_DATA_STOP_SCAN     2
 /* MSDUs being reassembled at once, and how long one may take, as Linux's
  * mac80211 keeps them (IEEE80211_FRAGMENT_MAX and its two seconds). */
 #define WLAN_DATA_DEFRAG        4
@@ -253,7 +257,7 @@ struct wlan_data {
     uint8_t ba_blocked;   /* a pairwise key is replacing: no session starts */
     /* The AP's channel switch of mode 1 stops the drain, which keeps the
      * queue until the switch; worker only. */
-    int tx_stopped;
+    int tx_stopped;                   /* WLAN_DATA_STOP_*: why the drain sends nothing */
     struct wlan_data_work tx_work[2]; /* drain the queue; data.c sets run */
 
     /* What the radio reported from interrupts, under rxq_lock: received
@@ -386,6 +390,12 @@ int wlan_data_tx_mgmt(struct wlan_data *d, uint8_t *frame, unsigned len, unsigne
  */
 int wlan_data_tx_null(struct wlan_data *d, uint64_t *cookie);
 
+/** Send the AP a null frame like the monitor's with the power management bit
+ * of `asleep`, as ieee80211_send_nullfunc tells it of an absence, so that it
+ * buffers what it has for the station. Worker only. Returns as
+ * wlan_data_tx_null does. */
+int wlan_data_tx_sleep(struct wlan_data *d, int asleep);
+
 /** Account for the transmit status of a frame whose cookie has
  * WLAN_DATA_COOKIE set, and pass it to rate selection. Worker only. */
 void wlan_data_tx_status(struct wlan_data *d, const struct wlan_tx_status *status);
@@ -428,6 +438,14 @@ void wlan_data_hold(struct wlan_data *d, int held);
  * its queues for IEEE80211_QUEUE_STOP_REASON_CSA, or send them again. A
  * disconnect ends the stop. Worker only. */
 void wlan_data_stop_tx(struct wlan_data *d, int stopped);
+
+/** Stop sending queued data frames (`stopped` != 0), keeping them queued, for
+ * a scan's absence, as mac80211's IEEE80211_QUEUE_STOP_REASON_OFFCHANNEL, or
+ * send them again unless a channel switch still stops them. */
+void wlan_data_stop_scan(struct wlan_data *d, int stopped);
+
+/** Say whether frames wait in the transmit queue. */
+int wlan_data_waiting(struct wlan_data *d);
 
 /** Move the connection to `frequency` MHz, the AP's channel after a
  * channel switch, which frames sent from now on name. Worker only. */

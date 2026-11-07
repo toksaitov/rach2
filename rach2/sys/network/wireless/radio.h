@@ -150,6 +150,11 @@ struct wlan_radio_ops {
     void (*scan_cancel)(struct wlan_radio *radio);
     /** Read TSF in microseconds into *tsf, or return -EOPNOTSUPP. */
     int (*get_tsf)(struct wlan_radio *radio, uint64_t *tsf);
+    /** Return 1 when every accepted frame has finished, dropping none, and
+     * else 0. `hold` != 0 keeps the radio from sending frames of its own, as
+     * a BlockAckReq, which would leave after the AP was told the station
+     * sleeps; 0 ends that. NULL means nothing is held and all has finished. */
+    int (*tx_idle)(struct wlan_radio *radio, int hold);
 };
 
 /* Borrowed callbacks on the wireless worker, no net_lock; may not sleep. */

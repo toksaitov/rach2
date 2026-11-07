@@ -1090,7 +1090,9 @@ static void cal_run(struct wlan_work *work)
 
     if (!cal->running)
         return;
-    if (!ah->mac.irq_on || ah->recover.resetting || ah->recover.pending) {
+    /* A scan's channels say nothing of the home channel's. */
+    if (!ah->mac.irq_on || ah->recover.resetting || ah->recover.pending ||
+        (ah->rx.filters & WLAN_FILTER_OTHER_BSS)) {
         cal_queue(cal, now + ATH9K_ANI_MS);
         return;
     }

@@ -451,7 +451,9 @@ int wlan_data_tx_mgmt(struct wlan_data *d, uint8_t *frame, unsigned len, unsigne
     return 0;
 }
 
-int wlan_data_tx_null(struct wlan_data *d, uint64_t *cookie)
+/** Send the null frame of wlan_data_tx_null, with `pm` set in its frame
+ * control. */
+static int send_null(struct wlan_data *d, uint64_t *cookie, unsigned pm)
 {
     uint8_t frame[IEEE80211_HDRLEN + IEEE80211_QOS_CTL_LEN];
     struct wlan_tx_info info;
@@ -471,12 +473,12 @@ int wlan_data_tx_null(struct wlan_data *d, uint64_t *cookie)
     if (d->qos) {
         /* 802.11-2020 10.3.2.14.2: a QoS Null takes no sequence number. */
         set_frame_control(frame, IEEE80211_FTYPE_DATA | IEEE80211_STYPE_QOS_NULLFUNC |
-                                     IEEE80211_FCTL_TODS);
+                                     IEEE80211_FCTL_TODS | pm);
         frame[IEEE80211_HDRLEN] = 7;
         len += IEEE80211_QOS_CTL_LEN;
     } else {
-        set_frame_control(frame,
-                          IEEE80211_FTYPE_DATA | IEEE80211_STYPE_NULLFUNC | IEEE80211_FCTL_TODS);
+        set_frame_control(frame, IEEE80211_FTYPE_DATA | IEEE80211_STYPE_NULLFUNC |
+                                     IEEE80211_FCTL_TODS | pm);
         put_seq(d, frame, WLAN_NON_QOS_TID);
     }
     /* Outside every BlockAck session, as mac80211 never aggregates it. */
@@ -495,6 +497,16 @@ int wlan_data_tx_null(struct wlan_data *d, uint64_t *cookie)
     if (cookie)
         *cookie = info.cookie;
     return 0;
+}
+
+int wlan_data_tx_null(struct wlan_data *d, uint64_t *cookie)
+{
+    return send_null(d, cookie, 0);
+}
+
+int wlan_data_tx_sleep(struct wlan_data *d, int asleep)
+{
+    return send_null(d, 0, asleep ? IEEE80211_FCTL_PM : 0);
 }
 
 void wlan_data_tx_status(struct wlan_data *d, const struct wlan_tx_status *status)
@@ -654,16 +666,33 @@ void wlan_data_hold(struct wlan_data *d, int held)
     spin_unlock_irqrestore(&d->txq_lock, flags);
 }
 
-void wlan_data_stop_tx(struct wlan_data *d, int stopped)
+/** Set or clear one reason the drain is stopped, and send what waits once
+ * none is left. */
+static void stop_for(struct wlan_data *d, int reason, int stopped)
 {
     int was;
 
     if (!d)
         return;
     was = d->tx_stopped;
-    d->tx_stopped = stopped != 0;
-    if (was && !stopped && d->connected && d->tx_work[0].work.run)
+    d->tx_stopped = stopped ? was | reason : was & ~reason;
+    if (was && !d->tx_stopped && d->connected && d->tx_work[0].work.run)
         (void)wlan_data_kick(d->tx_work, 0);
+}
+
+void wlan_data_stop_tx(struct wlan_data *d, int stopped)
+{
+    stop_for(d, WLAN_DATA_STOP_CSA, stopped);
+}
+
+void wlan_data_stop_scan(struct wlan_data *d, int stopped)
+{
+    stop_for(d, WLAN_DATA_STOP_SCAN, stopped);
+}
+
+int wlan_data_waiting(struct wlan_data *d)
+{
+    return d && d->txq_count != 0;
 }
 
 void wlan_data_set_frequency(struct wlan_data *d, unsigned frequency)
