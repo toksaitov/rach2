@@ -329,6 +329,7 @@ static void sta_status(struct wlan *wlan, struct nl80211_status *out)
  */
 static void sta_log_leave(struct wlan *wlan, const struct wlan_event *ev)
 {
+    const struct wlan_counters *c = &wlan->counters;
     const uint8_t *p = ev->peer;
     const char *why;
 
@@ -343,8 +344,11 @@ static void sta_log_leave(struct wlan *wlan, const struct wlan_event *ev)
     } else {
         why = "no answer from the AP";
     }
-    klog(KLOG_INFO, "wlan", "%s: left: %02x:%02x:%02x:%02x:%02x:%02x: %s: reason %d",
-         wlan->netdev.name, p[0], p[1], p[2], p[3], p[4], p[5], why, (int)ev->reason);
+    klog(KLOG_INFO, "wlan",
+         "%s: left: %02x:%02x:%02x:%02x:%02x:%02x: %s: reason %d: "
+         "decrypt errors %u, duplicates %u, replays %u, dropped %u",
+         wlan->netdev.name, p[0], p[1], p[2], p[3], p[4], p[5], why, (int)ev->reason,
+         c->rx_decrypt_errors, c->rx_duplicates, c->rx_replays, c->rx_dropped);
 }
 
 /** Take the MLME's events: note an association, start the station's
