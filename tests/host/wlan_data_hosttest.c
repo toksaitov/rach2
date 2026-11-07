@@ -1200,6 +1200,38 @@ static void check_ba_stale(void)
     CHECK(rx_sn(8) == 0 && n_got == n + 3);
 }
 
+/**
+ * The AP's numbers begin again under a session whose head stands far ahead,
+ * at 1900 with a window of 64 and nothing held: its frames from 0 upward,
+ * each with a valid PN, are dropped as duplicates until the 64th of them,
+ * which ends the session with a DELBA and goes on outside it.
+ */
+static void check_ba_far_behind(void)
+{
+    uint8_t f[IEEE80211_MAX_FRAME_LEN], body[40];
+    unsigned len, sn;
+    int rc;
+
+    setup(1);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
+    len = addba_req(f, 0, 64, 1900);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    CHECK(d->ba[0].active && d->ba[0].head == 1900 && d->ba[0].window == 64);
+    CHECK(d->ba[0].stored == 0);
+    n_sent = 0;
+    for (sn = 0; sn < 64; ++sn) {
+        payload(body, sizeof(body), sn);
+        len = ap_frame(f, sta, 1, 0, sn, 0, 0, body, sizeof(body));
+        ap_ccmp(&ap_ptk, f, &len, sn + 1, 0);
+        rc = rx(f, len);
+        if (sn < 63)
+            CHECK(rc == -EALREADY && d->ba[0].active && n_got == 0 && n_sent == 0);
+    }
+    CHECK(rc == 0 && !d->ba[0].active && n_got == 1 && got_sn(0) == 63);
+    CHECK(counters.rx_duplicates == 63 && counters.rx_replays == 0);
+    CHECK(n_sent == 1 && sent_delba(0, 0x0000, WLAN_REASON_UNSPECIFIED));
+}
+
 /** A pairwise key in the radio replaced ends the sessions each way with a
  * DELBA, as ieee80211_pairwise_rekey does. A first key, the same key again
  * and a software key end none, and a request under way gets its DELBA too,
@@ -1969,6 +2001,7 @@ int main(void)
     check_rekey_sessions();
     check_addba_again();
     check_ba_stale();
+    check_ba_far_behind();
     check_ba_idle();
     check_rekey_tids();
     check_renewal_wait();
