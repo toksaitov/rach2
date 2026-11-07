@@ -137,6 +137,7 @@ enum wlan_scan_ask {
     WLAN_SCAN_ASK_STOP,    /* stop the transmit queue and the radio's own */
     WLAN_SCAN_ASK_IDLE,    /* 1 when the radio has finished what it accepted */
     WLAN_SCAN_ASK_SLEEP,   /* tell the AP the station sleeps */
+    WLAN_SCAN_ASK_TOLD,    /* 1 the AP took that, -1 it did not, 0 not known */
     WLAN_SCAN_ASK_WAITING, /* 1 while frames wait to be sent */
     WLAN_SCAN_ASK_BACK     /* tell the AP it wakes; restart what was stopped */
 };
@@ -183,6 +184,7 @@ struct wlan_scan {
     uint32_t channels_tuned; /* channels the software scan visited */
     wlan_scan_ask_fn ask;    /* the station's, or NULL when nothing listens */
     enum wlan_scan_away away;
+    int off_home;      /* the radio was tuned off the home channel */
     uint64_t left;     /* the tick this trip left home */
     uint64_t flush_by; /* the tick a departure stops waiting */
     unsigned tries;    /* departures failed in a row */

@@ -198,6 +198,7 @@ static unsigned next_slot;
 static unsigned n_taken, refusals;
 static unsigned fc_seen;              /* the frame control of the frame last taken */
 static unsigned refuse_mark = 0xffff; /* a frame refused with -EIO */
+static unsigned refuse_next;          /* how many frames more are */
 
 /** Take a frame while the ring has room, as ath9k_tx does: -ENOBUFS when
  * it is full, and -EIO for the frame the test marks bad. */
@@ -211,6 +212,10 @@ static int radio_tx(struct wlan_radio *radio, const uint8_t *frame, unsigned len
     fc_seen = (unsigned)frame[0] | (unsigned)frame[1] << 8;
     if (mark == refuse_mark)
         return -EIO;
+    if (refuse_next) {
+        --refuse_next;
+        return -EIO;
+    }
     if (ring_count == RING) {
         ++refusals;
         return -ENOBUFS;
@@ -679,6 +684,71 @@ static void check_stop_reasons(void)
     wlan_data_detach(&wlan);
 }
 
+/** A power save null frame goes once more when it fails, with its own bit,
+ * and says how it ended: told, waiting or failed. A frame replaced by a later
+ * one has no say, and nothing is told while the station has no AP. */
+static void check_sleep_status(void)
+{
+    struct wlan_data *d;
+    unsigned sent;
+
+    setup();
+    d = wlan_data_of(&wlan);
+    refuse_mark = 0xfffe;
+    CHECK(wlan_data_tx_sleep(d, 1) == 0);
+    CHECK(wlan_data_sleep_told(d) == 0);
+    complete(1, 1);
+    run_work();
+    CHECK(wlan_data_sleep_told(d) == 1 && ring_count == 0);
+
+    sent = n_taken;
+    CHECK(wlan_data_tx_sleep(d, 1) == 0);
+    complete(1, 0);
+    run_work();
+    CHECK(n_taken == sent + 2 && (fc_seen & IEEE80211_FCTL_PM));
+    CHECK(wlan_data_sleep_told(d) == 0);
+    complete(1, 1);
+    run_work();
+    CHECK(wlan_data_sleep_told(d) == 1 && n_taken == sent + 2);
+
+    sent = n_taken;
+    CHECK(wlan_data_tx_sleep(d, 0) == 0);
+    complete(1, 0);
+    run_work();
+    CHECK(n_taken == sent + 2 && !(fc_seen & IEEE80211_FCTL_PM));
+    complete(1, 0);
+    run_work();
+    CHECK(wlan_data_sleep_told(d) == -1 && n_taken == sent + 2 && ring_count == 0);
+
+    sent = n_taken;
+    CHECK(wlan_data_tx_sleep(d, 1) == 0);
+    CHECK(wlan_data_tx_sleep(d, 0) == 0);
+    complete(1, 0);
+    run_work();
+    CHECK(n_taken == sent + 2 && wlan_data_sleep_told(d) == 0);
+    complete(1, 1);
+    run_work();
+    CHECK(wlan_data_sleep_told(d) == 1 && ring_count == 0);
+
+    sent = n_taken;
+    refuse_next = 1;
+    CHECK(wlan_data_tx_sleep(d, 0) == 0);
+    CHECK(n_taken == sent + 1 && wlan_data_sleep_told(d) == 0);
+    complete(1, 1);
+    run_work();
+    CHECK(wlan_data_sleep_told(d) == 1);
+
+    refuse_next = 2;
+    CHECK(wlan_data_tx_sleep(d, 1) == -EIO);
+    CHECK(wlan_data_sleep_told(d) == -1 && refuse_next == 0 && ring_count == 0);
+
+    d->connected = 0;
+    CHECK(wlan_data_tx_sleep(d, 1) == -ENOTCONN);
+    CHECK(wlan_data_sleep_told(d) == 1);
+    d->connected = 1;
+    wlan_data_detach(&wlan);
+}
+
 /** Answers wait for no end to a stream of received frames: the worker sends
  * what is queued every WLAN_DATA_RX_BATCH frames. */
 static void check_rx_sends(void)
@@ -1027,6 +1097,7 @@ int main(void)
     check_upload_room();
     check_ack_room();
     check_stop_reasons();
+    check_sleep_status();
     check_rx_sends();
     check_rx_full();
     check_other_refusal();

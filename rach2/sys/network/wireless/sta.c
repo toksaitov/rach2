@@ -92,6 +92,8 @@ static int sta_scan_ask(struct wlan *wlan, enum wlan_scan_ask what)
     case WLAN_SCAN_ASK_SLEEP:
         (void)wlan_data_tx_sleep(d, 1);
         break;
+    case WLAN_SCAN_ASK_TOLD:
+        return wlan_data_sleep_told(d);
     case WLAN_SCAN_ASK_WAITING:
         return wlan_data_waiting(d);
     case WLAN_SCAN_ASK_BACK:

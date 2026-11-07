@@ -225,6 +225,14 @@ struct wlan_data {
     uint16_t tx_seq[WLAN_NUM_TIDS];
     uint64_t next_cookie;
 
+    /* The last power save null frame: its cookie until its status comes,
+     * its power management bit, whether it may go once more, and whether
+     * the AP acknowledged it. */
+    uint64_t sleep_cookie;
+    uint16_t sleep_pm;
+    uint8_t sleep_again;
+    uint8_t sleep_acked;
+
     /* The last sequence control received, per TID, for the duplicate check;
      * 0xffff before any. */
     uint16_t rx_seq[WLAN_NUM_TIDS];
@@ -400,9 +408,16 @@ int wlan_data_tx_null(struct wlan_data *d, uint64_t *cookie);
 
 /** Send the AP a null frame like the monitor's with the power management bit
  * of `asleep`, as ieee80211_send_nullfunc tells it of an absence, so that it
- * buffers what it has for the station. Worker only. Returns as
- * wlan_data_tx_null does. */
+ * buffers what it has for the station. A frame the radio refuses or the AP
+ * does not acknowledge goes once more, where Linux leaves it; a wake that
+ * fails twice is mended by the next data frame, whose bit is clear too.
+ * Worker only. Returns as wlan_data_tx_null does, for the last attempt. */
 int wlan_data_tx_sleep(struct wlan_data *d, int asleep);
+
+/** How the last wlan_data_tx_sleep ended: 1 when the AP acknowledged it or
+ * there is no AP to tell, -1 when each attempt failed, 0 while the status
+ * is awaited. Worker only. */
+int wlan_data_sleep_told(const struct wlan_data *d);
 
 /** Account for the transmit status of a frame whose cookie has
  * WLAN_DATA_COOKIE set, and pass it to rate selection. Worker only. */

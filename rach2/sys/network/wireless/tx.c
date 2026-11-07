@@ -507,7 +507,43 @@ int wlan_data_tx_null(struct wlan_data *d, uint64_t *cookie)
 
 int wlan_data_tx_sleep(struct wlan_data *d, int asleep)
 {
-    return send_null(d, 0, asleep ? IEEE80211_FCTL_PM : 0);
+    int rc;
+
+    if (!d)
+        return -ENOTCONN;
+    d->sleep_pm = asleep ? IEEE80211_FCTL_PM : 0;
+    d->sleep_again = 1;
+    d->sleep_acked = 0;
+    d->sleep_cookie = 0;
+    rc = send_null(d, &d->sleep_cookie, d->sleep_pm);
+    if (rc && rc != -ENOTCONN) {
+        d->sleep_again = 0;
+        rc = send_null(d, &d->sleep_cookie, d->sleep_pm);
+    }
+    return rc;
+}
+
+int wlan_data_sleep_told(const struct wlan_data *d)
+{
+    if (!d->connected)
+        return 1;
+    if (d->sleep_cookie)
+        return 0;
+    return d->sleep_acked ? 1 : -1;
+}
+
+/** Take the status of the last power save null frame, and send a frame that
+ * failed once more. */
+static void sleep_status(struct wlan_data *d, const struct wlan_tx_status *status)
+{
+    if (!d->sleep_cookie || status->cookie != d->sleep_cookie)
+        return;
+    d->sleep_cookie = 0;
+    d->sleep_acked = (status->flags & WLAN_TX_ACKED) != 0;
+    if (d->sleep_acked || !d->sleep_again)
+        return;
+    d->sleep_again = 0;
+    (void)send_null(d, &d->sleep_cookie, d->sleep_pm);
 }
 
 void wlan_data_tx_status(struct wlan_data *d, const struct wlan_tx_status *status)
@@ -536,6 +572,7 @@ void wlan_data_tx_status(struct wlan_data *d, const struct wlan_tx_status *statu
         d->heard = tick_count();
     wlan_data_renewal_status(d, status);
     wlan_rate_status(d, status);
+    sleep_status(d, status);
 }
 
 /* How wlan_data_queue treats a frame by what its sender does on a refusal. */

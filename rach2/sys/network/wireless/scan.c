@@ -62,8 +62,9 @@ static int scan_return(struct wlan_scan *scan)
 {
     int rc = 0;
 
-    if (scan->away == WLAN_SCAN_AWAY && scan->home) {
+    if (scan->off_home && scan->home) {
         rc = scan->radio->ops->config(scan->radio, scan->home, scan->home_filters);
+        scan->off_home = rc != 0;
     }
     if (scan->away != WLAN_SCAN_HOME) {
         (void)scan_ask(scan, WLAN_SCAN_ASK_BACK);
@@ -72,19 +73,21 @@ static int scan_return(struct wlan_scan *scan)
     return rc;
 }
 
-/** End the scan: the software scan returns the radio to its home channel,
- * BSSs gone stale leave the table, and the outcome is reported last, so
- * that its listener may start another scan. A failure to return is an
- * aborted scan. Worker only. */
+/** End the scan: a software scan that left returns the radio to its home
+ * channel, BSSs gone stale leave the table, and the outcome is reported
+ * last, so that its listener may start another scan. A failure to return is
+ * an aborted scan. A radio that never left is not tuned, since a retune
+ * destroys what it holds. Worker only. */
 static void scan_finish(struct wlan_scan *scan, int aborted)
 {
     struct wlan_radio *radio = scan->radio;
 
-    if (scan->state == WLAN_SCAN_SOFTWARE && scan->home) {
+    if (scan->state == WLAN_SCAN_SOFTWARE && scan->off_home && scan->home) {
         if (radio->ops->config(radio, scan->home, scan->home_filters) != 0) {
             aborted = 1;
         }
     }
+    scan->off_home = 0;
     if (scan->away != WLAN_SCAN_HOME) {
         (void)scan_ask(scan, WLAN_SCAN_ASK_BACK);
         scan->away = WLAN_SCAN_HOME;
@@ -236,13 +239,17 @@ static void scan_stay(struct wlan_scan *scan)
 /**
  * Go on with a departure from home, as ieee80211_offchannel_stop_vifs does:
  * stop the queue, let the radio finish, tell the AP with a null frame and
- * let that go too, for tuning fails whatever the radio holds. A radio that
- * cannot finish keeps its frames, and the scan tries again later. Returns 1
+ * let that go too, for tuning destroys whatever the radio holds. A radio that
+ * cannot finish keeps its frames, and the scan tries again later. A null
+ * frame the AP did not take leaves the station at home the same way, and one
+ * still unfinished at the limit ends the scan with the radio untouched. Linux
+ * neither reads that frame's status nor keeps it past its flush. Returns 1
  * when the radio may tune, and otherwise 0 with the next step arranged.
  */
 static int scan_leave(struct wlan_scan *scan)
 {
     uint64_t now = tick_count();
+    int told;
 
     if (scan->away == WLAN_SCAN_HOME) {
         if (scan_ask(scan, WLAN_SCAN_ASK_BUSY)) {
@@ -266,8 +273,17 @@ static int scan_leave(struct wlan_scan *scan)
         scan->away = WLAN_SCAN_TELLING;
         scan->flush_by = now + MS_TO_TICKS(WLAN_SCAN_FLUSH_MS);
     }
-    if (!scan_ask(scan, WLAN_SCAN_ASK_IDLE) && now < scan->flush_by) {
-        scan_queue_step(scan, 1);
+    told = scan_ask(scan, WLAN_SCAN_ASK_TOLD);
+    if (told < 0) {
+        scan_stay(scan);
+        return 0;
+    }
+    if (!told || !scan_ask(scan, WLAN_SCAN_ASK_IDLE)) {
+        if (now >= scan->flush_by) {
+            scan_finish(scan, 1);
+        } else {
+            scan_queue_step(scan, 1);
+        }
         return 0;
     }
     scan->away = WLAN_SCAN_AWAY;
@@ -323,6 +339,7 @@ static void scan_step(struct wlan_work *work)
         return;
     }
     scan->next++;
+    scan->off_home |= channel != 0;
     if (!channel ||
         radio->ops->config(radio, channel, scan->home_filters | WLAN_FILTER_OTHER_BSS) != 0) {
         scan_finish(scan, 1);
@@ -466,6 +483,7 @@ int wlan_scan_start(struct wlan_scan *scan, const struct wlan_scan_request *requ
     scan->channels_tuned = 0;
     scan->tries = 0;
     scan->away = WLAN_SCAN_HOME;
+    scan->off_home = 0;
     scan->start_pending = 1;
     scan_queue_step(scan, 0);
     return 0;

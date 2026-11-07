@@ -635,6 +635,8 @@ static void abort_scan(void)
 }
 
 static int ask_busy, ask_idle, ask_waiting;
+static int ask_told;  /* the answer to WLAN_SCAN_ASK_TOLD */
+static int ask_stuck; /* the null frame that says it sleeps does not finish */
 
 /** The station's side: S stop, Z the null frame that says it sleeps, B back. */
 static int ask(struct wlan *wlan, enum wlan_scan_ask what)
@@ -654,7 +656,12 @@ static int ask(struct wlan *wlan, enum wlan_scan_ask what)
         break;
     case WLAN_SCAN_ASK_SLEEP:
         ask_note('Z');
+        if (ask_stuck) {
+            ask_idle = 0;
+        }
         break;
+    case WLAN_SCAN_ASK_TOLD:
+        return ask_told;
     case WLAN_SCAN_ASK_BACK:
         ask_note('B');
         break;
@@ -673,6 +680,8 @@ static void away_start(int busy, int idle, int waiting)
     ask_busy = busy;
     ask_idle = idle;
     ask_waiting = waiting;
+    ask_told = 1;
+    ask_stuck = 0;
     ask_n = 0;
     ask_log[0] = 0;
     make_request(&r, 1, "");
@@ -680,8 +689,8 @@ static void away_start(int busy, int idle, int waiting)
 }
 
 /** Whether the log keeps order: the AP told only with the queue stopped, a
- * channel tuned only with the AP told, a stop always undone, and after the AP
- * was told the radio home before the AP hears of it. */
+ * channel tuned only with the AP told, a stop always undone, and after a
+ * channel was tuned the radio home before the AP hears of it. */
 static int away_well_formed(void)
 {
     unsigned i, stage = 0;
@@ -701,12 +710,13 @@ static int away_well_formed(void)
             stage = 2;
             break;
         case 'T':
-            if (stage != 2) {
+            if (stage != 2 && stage != 3) {
                 return 0;
             }
+            stage = 3;
             break;
         case 'B':
-            if (stage == 0 || (stage == 2 && (i == 0 || ask_log[i - 1] != 'H'))) {
+            if (stage == 0 || (stage == 3 && (i == 0 || ask_log[i - 1] != 'H'))) {
                 return 0;
             }
             stage = 0;
@@ -767,7 +777,7 @@ static void away_refused(void)
     away_start(0, 0, 0);
     advance(WLAN_SCAN_TRIES * (WLAN_SCAN_FLUSH_MS + WLAN_SCAN_HOME_MS) + 10);
     CHECK(count_events(WLAN_EVENT_SCAN_ABORTED) == 1 && !wlan_scan_running(&scan));
-    CHECK(scan.channels_tuned == 0 && n_tx == 0);
+    CHECK(scan.channels_tuned == 0 && n_tx == 0 && n_configs == 0);
     for (i = 0; i < ask_n; ++i) {
         CHECK(ask_log[i] != 'Z' && ask_log[i] != 'T');
     }
@@ -781,6 +791,50 @@ static void away_refused(void)
     CHECK(same(ask_log, "SZT", 3));
     advance(13 * WLAN_SCAN_HOME_MS + 2000);
     CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 1 && away_well_formed());
+}
+
+/**
+ * The null frame that tells the AP. One still unfinished at the limit, after
+ * the radio first said it had finished, is never tuned over: the scan ends
+ * aborted with the radio untouched and the queue running. One whose status
+ * comes late within the limit lets the trip go. One the AP did not take keeps
+ * the station home with the queue running, and the scan tries again.
+ */
+static void away_tell(void)
+{
+    away_start(0, 1, 0);
+    ask_stuck = 1;
+    advance(WLAN_SCAN_FLUSH_MS + 2);
+    CHECK(count_events(WLAN_EVENT_SCAN_ABORTED) == 1 && !wlan_scan_running(&scan));
+    CHECK(ask_n == 3 && same(ask_log, "SZB", 3));
+    CHECK(n_configs == 0 && scan.channels_tuned == 0 && scan.away == WLAN_SCAN_HOME);
+    CHECK(away_well_formed());
+
+    away_start(0, 1, 0);
+    ask_told = 0;
+    advance(WLAN_SCAN_FLUSH_MS - 10);
+    CHECK(ask_n == 2 && n_configs == 0 && wlan_scan_running(&scan));
+    ask_told = 1;
+    advance(2);
+    CHECK(same(ask_log, "SZT", 3) && scan.away == WLAN_SCAN_AWAY);
+    advance(13 * WLAN_SCAN_HOME_MS + 2000);
+    CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 1 && away_well_formed());
+
+    away_start(0, 1, 0);
+    ask_told = -1;
+    advance(2);
+    CHECK(ask_n == 3 && same(ask_log, "SZB", 3) && n_configs == 0);
+    CHECK(wlan_scan_running(&scan));
+    ask_told = 1;
+    advance(13 * WLAN_SCAN_HOME_MS + 2000);
+    CHECK(count_events(WLAN_EVENT_SCAN_DONE) == 1 && scan.channels_tuned == 13);
+    CHECK(away_well_formed());
+
+    away_start(0, 1, 0);
+    ask_told = -1;
+    advance(WLAN_SCAN_TRIES * WLAN_SCAN_HOME_MS + 10);
+    CHECK(count_events(WLAN_EVENT_SCAN_ABORTED) == 1 && !wlan_scan_running(&scan));
+    CHECK(n_configs == 0 && scan.channels_tuned == 0 && away_well_formed());
 }
 
 /** An abort, a home that does not tune, and a frame that must go now each
@@ -1075,6 +1129,7 @@ int main(void)
     abort_scan();
     away_scan();
     away_refused();
+    away_tell();
     away_abort();
     refusals();
     hardware_scan();
