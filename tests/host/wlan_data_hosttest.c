@@ -1117,14 +1117,39 @@ static void check_rekey_slot(void)
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 2);
     /* A true replay under the new key stays one. */
     CHECK(rx_opened(109, 1, 2) == -ESTALE && counters.rx_replays == 1);
-    /* A true loss of over 64 frames at the key's start: what follows drops,
-     * and only until the settle ends. */
+    /* A true loss of over 64 frames at the start of a key whose old count
+     * was small: what follows drops, and only until the settle ends. */
     CHECK(rx_opened(109, 1, 300) == -ESTALE && n_got == 5);
     CHECK(rx_opened(109, 1, 301) == -ESTALE && n_got == 5);
     /* Once the AP's queue has gone, a number that far on is the new key's. */
     now += WLAN_DATA_REKEY_SETTLE;
     CHECK(rx_opened(110, 1, 446) == 0 && n_got == 6);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 446);
+}
+
+/** A key replaced on a busy link: the old count is large, so a true number
+ * after a burst lost at the new key's start is told from the AP's queue by
+ * how far it lies below the old count, and is taken at once. */
+static void check_rekey_back(void)
+{
+    const uint64_t old = 100000;
+    unsigned far;
+
+    setup(1);
+    takes_keys = 1;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
+    CHECK(rx_opened(100, 0, old) == 0 && n_got == 1);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    far = counters.rx_old_far;
+    CHECK(rx_opened(101, 1, 5000) == 0 && n_got == 2);
+    CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 5000);
+    /* The queue, at either side of the old count, moves nothing. */
+    CHECK(rx_opened(102, 1, old - 322) == -ESTALE && n_got == 2);
+    CHECK(rx_opened(102, 1, old + 322) == -ESTALE && n_got == 2);
+    CHECK(rx_opened(102, 1, old - WLAN_DATA_REKEY_BACK + 1) == -ESTALE && n_got == 2);
+    CHECK(counters.rx_old_far == far + 3);
+    CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 5000);
+    CHECK(rx_opened(102, 1, old - WLAN_DATA_REKEY_BACK) == 0 && n_got == 3);
 }
 
 /** Whether sent frame `i` is a DELBA of `params` and `reason`. */
@@ -2640,6 +2665,7 @@ int main(void)
     check_rekey();
     check_blockack();
     check_rekey_slot();
+    check_rekey_back();
     check_rekey_sessions();
     check_addba_again();
     check_ba_stale();

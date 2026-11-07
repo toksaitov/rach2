@@ -170,12 +170,14 @@ static int tkip_open(struct wlan_data_key *k, uint8_t *frame, unsigned *len, uns
  * it would set k's counter far ahead of the AP's, and every frame would be a
  * replay until the AP caught up. The sender keeps one count across TIDs (tx.c
  * as well), so the distance is from the highest number seen on any: a true
- * number of k cannot lie this far past it unless a window of frames was lost,
- * and then only for the seconds of WLAN_DATA_REKEY_SETTLE. The AP's queue
- * can lie anywhere against old_pn, the highest number seen on any TID: its
- * numbers run past that by however many frames it held, or below it by as
- * many when one frame jumped the queue, hundreds under a download, so old_pn
- * bounds nothing.
+ * number of k lies this far past it only if a window of frames was lost.
+ * The AP's queue runs past old_pn, the highest number seen under the old key,
+ * by however many frames it held, or below it by as many when one frame
+ * jumped the queue, so old_pn bounds it above by nothing and below by
+ * WLAN_DATA_REKEY_BACK. A true number after such a loss lies under that
+ * bound once old_pn is large, as it is on a busy link, and is taken at once.
+ * On a quiet link the two counts overlap, and frames drop for the seconds of
+ * WLAN_DATA_REKEY_SETTLE at most.
  */
 static int pn_of_old_key(const struct wlan_data_key *k, uint64_t pn)
 {
@@ -187,7 +189,7 @@ static int pn_of_old_key(const struct wlan_data_key *k, uint64_t pn)
     for (tid = 0; tid < WLAN_NUM_TIDS; tid++)
         if (k->key.rx_pn[tid] > high)
             high = k->key.rx_pn[tid];
-    return pn > high + WLAN_DATA_REKEY_JUMP;
+    return pn > high + WLAN_DATA_REKEY_JUMP && pn + WLAN_DATA_REKEY_BACK > k->old_pn;
 }
 
 static int rx_decrypt(struct wlan_data *d, uint8_t *frame, unsigned *len, unsigned hdrlen,

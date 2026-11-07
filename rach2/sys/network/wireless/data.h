@@ -51,10 +51,13 @@
 #define WLAN_DATA_FRAG_TIMEOUT  2000
 /* After a pairwise key is replaced: how long, in ms, a number this far past
  * the new key's is the old count's, the jump being the widest BlockAck
- * window, and how far from the old key's last wlan_rx_old_far counts one. */
+ * window; how far below the old key's last it no longer is, the deepest queue
+ * of an AP, some 2 s of air; and how far from that last number
+ * wlan_rx_old_far counts one. */
 #define WLAN_DATA_REKEY_SETTLE  2000
 #define WLAN_DATA_REKEY_NEAR    256
 #define WLAN_DATA_REKEY_JUMP    64
+#define WLAN_DATA_REKEY_BACK    8192
 /* Replays of one TID in a row, none taken, that doubt its counter. */
 #define WLAN_DATA_REPLAY_RUN    32
 /* The ms a pairwise key waits for the queue: the AP gives a renewal up some
@@ -111,7 +114,7 @@ struct wlan_data_key {
     struct wlan_aes128 aes;            /* CCMP or BIP schedule; unused for TKIP */
     uint64_t rx_mgmt_pn;               /* replay counter of robust management frames */
     uint64_t old_pn;                   /* highest count of the key this one replaced */
-    uint64_t old_until;                /* tick when a number near old_pn stops being that key's */
+    uint64_t old_until;                /* tick when old-count numbers stop being dropped */
     uint8_t replay_run[WLAN_NUM_TIDS]; /* by TID: replays since a frame was taken */
     unsigned gen;                      /* zero while the entry is empty, else unique */
 };
