@@ -644,6 +644,10 @@ void wlan_data_renewal_rescued(struct wlan_data *d);
  */
 int wlan_data_renewal_ask(struct wlan_data *d, int gateway);
 
+/** Note that the question of wlan_data_renewal_ask left: only then can an ARP
+ * reply answer it. Worker only. */
+void wlan_data_renewal_asked(struct wlan_data *d);
+
 /** The installed group or integrity key in slot `index`, or NULL. */
 struct wlan_data_key *wlan_data_group_key(struct wlan_data *d, unsigned index);
 

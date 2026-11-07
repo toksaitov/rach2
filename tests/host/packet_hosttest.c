@@ -178,12 +178,13 @@ int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac)
 
 struct arp_stats arp_stats;
 
-/** Count an ARP request sent. */
-void arp_request(struct netdev *nd, uint32_t ip)
+/** Count an ARP request sent and return 0, NETDEV_TX_OK. */
+int arp_request(struct netdev *nd, uint32_t ip)
 {
     (void)nd;
     (void)ip;
     arp_requests++;
+    return 0;
 }
 
 uint32_t net_ip_gateway = 0x0A000202u;

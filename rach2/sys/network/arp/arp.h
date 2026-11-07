@@ -82,10 +82,11 @@ int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac_out);
 /**
  * Broadcast a request on `nd` for the station address of `target_ip`, from
  * `nd`'s station address and its address on the subnet of `target_ip`
- * (`netdev_source`); nothing for a NULL `nd`. The request is built in a
+ * (`netdev_source`). Returns NETDEV_TX_OK when the card took it, or
+ * ethernet_tx's refusal, as for a NULL `nd`. The request is built in a
  * buffer of this file's, so the caller has interrupts off.
  */
-void arp_request(struct netdev *nd, uint32_t target_ip);
+int arp_request(struct netdev *nd, uint32_t target_ip);
 
 /* One row of the cache, copied out for a reader. */
 struct arp_row {

@@ -20,6 +20,7 @@
 #define WLAN_MLME_IDLE_POLL       30000 /* without a unicast frame or ACK */
 #define WLAN_MLME_KEY_WAIT        10000 /* for a renewal's key, then its proof */
 #define WLAN_MLME_ASK_WAIT        2000  /* for the answer to a renewal's question */
+#define WLAN_MLME_ASK_AGAIN       100   /* after a question the queue refused */
 #define WLAN_MLME_CSA_LOOK        2000  /* longest look-away in a countdown */
 #define WLAN_MLME_PROBE_TIMEOUT   500   /* each probe of a silent AP */
 #define WLAN_MLME_PROBE_TRIES     3     /* null frames, or probe requests */
@@ -89,10 +90,11 @@ struct wlan_mlme_ops {
      * so that a silence the AP's radio ACKs through is bounded. Returns 1
      * when the question went, and it goes again WLAN_MLME_ASK_WAIT later
      * unless renewing then reads 0, up to the end of WLAN_MLME_KEY_WAIT and
-     * a last WLAN_MLME_ASK_WAIT; 0 when the renewal has no question, and the
-     * station leaves at the end of WLAN_MLME_KEY_WAIT; -1 when the interface
-     * ended the renewal, owing nothing. NULL for an interface that asks
-     * nothing. */
+     * a last WLAN_MLME_ASK_WAIT; 2 when the card refused it, which asked
+     * nothing, and it goes again WLAN_MLME_ASK_AGAIN later inside the same
+     * bound; 0 when the renewal has no question, and the station leaves at
+     * the end of WLAN_MLME_KEY_WAIT; -1 when the interface ended the renewal,
+     * owing nothing. NULL for an interface that asks nothing. */
     int (*ask)(struct wlan *wlan);
 };
 
@@ -181,6 +183,7 @@ struct wlan_mlme {
      * when it is at or past the tick renewing reads. */
     uint64_t renew_asked;
     uint64_t renew_silent; /* the renewal that ask said has no question */
+    uint64_t renew_again;  /* when to ask after a refusal, 0 for no such time */
     struct wlan_mlme_timer timer[2];
     /* The last authentication or association request: retries send it
      * again, and nl80211 may report its elements with the association. */

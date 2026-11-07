@@ -570,8 +570,10 @@ static int sta_ask(struct wlan *wlan)
     flags = net_lock();
     gateway = netdev_default_gateway(&wlan->netdev);
     rc = wlan_data_renewal_ask(d, gateway != 0);
-    if (rc > 0)
-        arp_request(&wlan->netdev, gateway);
+    if (rc > 0 && arp_request(&wlan->netdev, gateway) != NETDEV_TX_OK)
+        rc = 2;
+    else if (rc > 0)
+        wlan_data_renewal_asked(d);
     net_unlock(flags);
     return rc;
 }

@@ -1042,6 +1042,31 @@ static int rx_arp_reply(unsigned sn, int slot, uint64_t pn)
     return rx_arp(2, sn, slot, pn);
 }
 
+/** The gateway's ARP reply as an A-MSDU's second subframe, behind a frame for
+ * the station; as rx_arp. */
+static int rx_arp_amsdu(unsigned sn, int slot, uint64_t pn)
+{
+    static const uint8_t arp[16] = {0xaa, 0xaa, 0x03, 0, 0, 0, 0x08, 0x06, 0, 1, 8, 0, 6, 4, 0, 2};
+    uint8_t f[200], body[100];
+    struct wlan_rx_status hw = rxs;
+    unsigned len;
+
+    hw.flags = WLAN_RX_DECRYPTED | WLAN_RX_IV_STRIPPED | WLAN_RX_MIC_STRIPPED;
+    hw.hw_key = slot;
+    hw.pn = pn;
+    k_memset(body, 0, sizeof(body));
+    k_memcpy(body, sta, 6);
+    k_memcpy(body + 6, far, 6);
+    body[13] = 30;
+    k_memcpy(body + 44, sta, 6);
+    k_memcpy(body + 50, far, 6);
+    body[57] = 36;
+    k_memcpy(body + 58, arp, sizeof(arp));
+    len = ap_frame(f, sta, 1, 0, sn, 0, 0, body, 94);
+    f[24] |= IEEE80211_QOS_CTL_A_MSDU_PRESENT;
+    return wlan_data_rx(d, f, len, &hw);
+}
+
 /** A frame of TID 0 the radio opened; as rx_opened_tid. */
 static int rx_opened(unsigned sn, int slot, uint64_t pn)
 {
@@ -1693,8 +1718,10 @@ static int mon_ask(struct wlan *wlan)
 
     (void)wlan;
     rc = wlan_data_renewal_ask(d, 1);
-    if (rc > 0)
+    if (rc > 0) {
         ++mon_asks;
+        wlan_data_renewal_asked(d);
+    }
     return rc;
 }
 
@@ -1852,7 +1879,10 @@ static void check_renewal_idle(void)
     now += 5000;
     CHECK(rx_opened(105, 1, 1) == 0 && wlan_data_renewal(d, 0) == acked);
     CHECK(wlan_data_renewal_ask(d, 1) == 1);
-    CHECK(rx_arp_reply(106, 1, 2) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
+    /* A question that did not leave has no answer. */
+    CHECK(rx_arp_reply(106, 1, 2) == 0 && d->renewing != 0);
+    wlan_data_renewal_asked(d);
+    CHECK(rx_arp_reply(107, 1, 3) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
 }
 
 /** The same idle renewal under the real monitor, whose beacons and ACKed
@@ -1899,6 +1929,17 @@ static void check_renewal_idle_monitor(void)
     n = mon_asks;
     mon_beacons(2 * WLAN_MLME_KEY_WAIT);
     CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_asks == n && mon_leaves == 0);
+
+    /* The reply as an A-MSDU's second subframe. */
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    mon_connect();
+    mon_beacons(60000);
+    send_data();
+    status_of(n_sent - 1, WLAN_TX_ACKED);
+    mon_beacons(5000);
+    CHECK(mon_asks != 0 && rx_arp_amsdu(105, 1, 1) == 0 && d->renewing == 0);
 
     /* A frame before any data. */
     renewal_to_message4();
@@ -1977,6 +2018,7 @@ static void check_renewal_traffic(void)
     CHECK(rx_opened(104, 0, 444) == -ESTALE && d->renewing != 0);
     CHECK(rx_opened(105, 1, 1) == 0 && d->renewing != 0);
     CHECK(wlan_data_renewal_ask(d, 1) == 1);
+    wlan_data_renewal_asked(d);
     CHECK(rx_arp_reply(106, 1, 2) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
 
     /* A protected management frame under the key shows the AP has it, and
@@ -2099,6 +2141,7 @@ static void check_renewal_question(void)
 
     renewal_to_silence();
     CHECK(wlan_data_renewal_ask(d, 1) == 1 && d->renewing != 0);
+    wlan_data_renewal_asked(d);
     now += 1000;
     CHECK(rx_opened(104, 0, 444) == -ESTALE && d->renewing != 0 && counters.rescue_saved == 0);
     CHECK(rx_opened(105, 1, 1) == 0 && d->renewing != 0 && counters.rescue_saved == 0);
@@ -2111,6 +2154,7 @@ static void check_renewal_question(void)
     /* No answer: the leave is silent's, and nothing is saved. */
     renewal_to_silence();
     CHECK(wlan_data_renewal_ask(d, 1) == 1);
+    wlan_data_renewal_asked(d);
     now += WLAN_MLME_ASK_WAIT;
     CHECK(wlan_data_renewal(d, &cause) != 0 && cause == WLAN_RESCUE_SILENT);
     wlan_data_renewal_rescued(d);
@@ -2127,6 +2171,7 @@ static void check_renewal_question(void)
     /* The route goes after the question: the renewal ends with it. */
     renewal_to_silence();
     CHECK(wlan_data_renewal_ask(d, 1) == 1);
+    wlan_data_renewal_asked(d);
     CHECK(wlan_data_renewal_ask(d, 0) == -1 && d->renewing == 0 && d->renew_asked == 0);
 
     /* A proof with no question saves nothing. */

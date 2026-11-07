@@ -1134,6 +1134,34 @@ static void renewal_question_unanswered(void)
     renewing_at = 0;
 }
 
+/** A question the card refused asked nothing: it goes again after
+ * WLAN_MLME_ASK_AGAIN, not WLAN_MLME_ASK_WAIT, and once one leaves the wait
+ * is the usual one. With none able to leave the bound still holds. */
+static void renewal_question_refused(void)
+{
+    uint64_t began;
+    unsigned n;
+
+    asking_renewal(2);
+    beacons_for(3000);
+    n = n_asks;
+    CHECK(n >= 5 && mlme.state == WLAN_STA_ASSOCIATED);
+    ask_result = 1;
+    beacons_for(1000);
+    CHECK(n_asks == n + 1);
+    renewing_at = 0;
+
+    asking_renewal(2);
+    began = now;
+    beacons_for(WLAN_MLME_KEY_WAIT - 1000);
+    CHECK(mlme.state == WLAN_STA_ASSOCIATED && n_seen == 0);
+    beacons_for(2000);
+    CHECK(mlme.state == WLAN_STA_NONE && n_seen == 1);
+    CHECK(now <= began + WLAN_MLME_KEY_WAIT + 2000);
+    CHECK(last_event()->ev.reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT);
+    renewing_at = 0;
+}
+
 /** An answer to the question, which ends the renewal, keeps the station;
  * the next renewal asks again from its own start. */
 static void renewal_question_answered(void)
@@ -1674,6 +1702,7 @@ int main(void)
     away_keeps_quiet();
     unproved_renewal();
     renewal_question_unanswered();
+    renewal_question_refused();
     renewal_question_answered();
     renewal_question_none();
     lost_renewal_in_countdown();

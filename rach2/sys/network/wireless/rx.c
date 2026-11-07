@@ -433,21 +433,33 @@ static void seal(struct wlan_data *d, const struct wlan_rx_status *status, uint6
         d->sealed = arrived;
 }
 
+/** Whether the `len` bytes at `p`, LLC/SNAP first, are an ARP reply. */
+static int is_arp_reply(const uint8_t *p, unsigned len)
+{
+    return len >= 8 + 8 && same(p, arp_snap, 8) && p[14] == 0 && p[15] == 2;
+}
+
 /**
  * Whether the `frame` of `len` bytes, opened under a key, carries an ARP
- * reply, operation 2 of RFC 826, alone or as an A-MSDU's first subframe. An
+ * reply, operation 2 of RFC 826, alone or as any subframe of an A-MSDU. An
  * AP that sends one has passed on our request, which is more than its own
  * frames or its radio's ACKs can show.
  */
 static int arp_reply(const uint8_t *frame, unsigned len, unsigned hdrlen, int qos)
 {
-    const uint8_t *p = frame + hdrlen;
+    unsigned off = hdrlen, sub;
 
-    if (qos && (frame[IEEE80211_HDRLEN] & IEEE80211_QOS_CTL_A_MSDU_PRESENT)) {
-        p += 14;
-        hdrlen += 14;
+    if (!qos || !(frame[IEEE80211_HDRLEN] & IEEE80211_QOS_CTL_A_MSDU_PRESENT))
+        return is_arp_reply(frame + hdrlen, len - hdrlen);
+    while (off + 14 <= len) {
+        sub = (unsigned)frame[off + 12] << 8 | frame[off + 13];
+        if (off + 14 + sub > len)
+            return 0;
+        if (is_arp_reply(frame + off + 14, sub))
+            return 1;
+        off += (14 + sub + 3) & ~3u;
     }
-    return len >= hdrlen + 8 + 8 && same(p, arp_snap, 8) && p[14] == 0 && p[15] == 2;
+    return 0;
 }
 
 /**

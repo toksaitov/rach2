@@ -266,8 +266,12 @@ int wlan_data_renewal_ask(struct wlan_data *d, int gateway)
         wlan_data_renewal_end(d);
         return -1;
     }
-    d->renew_asked = 1;
     return 1;
+}
+
+void wlan_data_renewal_asked(struct wlan_data *d)
+{
+    d->renew_asked = 1;
 }
 
 /** Drop every MSDU being reassembled, since a new key must not complete a

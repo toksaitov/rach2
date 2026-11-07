@@ -317,7 +317,7 @@ int arp_lookup(struct netdev *nd, uint32_t ip, uint8_t *mac_out)
 
 /** The target's station address goes as zeros, since it is what the
  * request asks for. */
-void arp_request(struct netdev *nd, uint32_t target_ip)
+int arp_request(struct netdev *nd, uint32_t target_ip)
 {
     static const uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
     static const uint8_t zero_mac[6] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -328,14 +328,14 @@ void arp_request(struct netdev *nd, uint32_t target_ip)
     arp_req_buf[5] = 4;
     write16be(arp_req_buf + 6, ARP_OP_REQUEST);
     if (!nd) {
-        return;
+        return NETDEV_TX_DROPPED;
     }
     k_memcpy(arp_req_buf + 8, nd->mac, 6);
     write32be(arp_req_buf + 14, netdev_source(nd, target_ip));
     k_memcpy(arp_req_buf + 18, zero_mac, 6);
     write32be(arp_req_buf + 24, target_ip);
 
-    ethernet_tx(nd, broadcast, ETH_TYPE_ARP, arp_req_buf, 28);
+    return ethernet_tx(nd, broadcast, ETH_TYPE_ARP, arp_req_buf, 28);
 }
 
 int arp_snapshot(struct arp_row *out, int max)
