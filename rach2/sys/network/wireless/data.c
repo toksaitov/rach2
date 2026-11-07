@@ -262,6 +262,14 @@ void wlan_radio_tx_status(struct wlan_radio *radio, const struct wlan_tx_status 
     (void)wlan_data_kick(d->rx_work, 0);
 }
 
+void wlan_radio_ba_stop(struct wlan_radio *radio, unsigned tid)
+{
+    struct wlan_data *d = radio ? wlan_data_of(radio->wlan) : 0;
+
+    if (d && tid < 8 && d->ba_tx[tid].state == WLAN_BA_TX_ACTIVE)
+        wlan_ba_tx_stop(d, tid, 1);
+}
+
 void wlan_data_dispatch(struct wlan_data *d, uint8_t *frame, unsigned len,
                         const struct wlan_rx_status *status)
 {

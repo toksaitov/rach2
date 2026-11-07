@@ -1055,9 +1055,11 @@ static void radio_test_config(struct wlan_radio *radio)
  * and the association narrows the filter and starts the receive window. */
 static void radio_test_parts(struct wlan_radio *radio)
 {
-    static const char *const misc[] = {
-        "tx",        "key_set",       "key_clear", "mac_set_bssid", "mac_set_filter",
-        "ampdu_sta", "mac_set_bssid", "ampdu_sta", "ampdu_action",  NULL};
+    static const char *const misc[] = {"tx",           "key_set",
+                                       "key_clear",    "mac_set_bssid",
+                                       "ampdu_sta",    "mac_set_filter",
+                                       "ampdu_sta",    "mac_set_bssid",
+                                       "ampdu_action", NULL};
     const struct wlan_radio_ops *ops = radio->ops;
     const uint8_t *frame = radio_frame;
     struct wlan_bss bss;

@@ -30,7 +30,8 @@
  *   AR_INTR_ASYNC_CAUSE reads AR_INTR_MAC_IRQ while any is raised.
  * - Receive: AR_CR reads AR_CR_RXE after a write of it and until a write of
  *   AR_CR_RXD. A write of AR_HP_RXDP or AR_LP_RXDP pushes a buffer's bus
- *   address on that FIFO; ath9k_model_rx fills the oldest.
+ *   address on that FIFO; ath9k_model_rx fills the oldest. AR_RX_FILTER
+ *   keeps a BlockAckReq out unless it asks for one.
  * - Transmit: a write of AR_QTXDP(q) pushes a descriptor chain on queue
  *   q's FIFO and AR_QSTS(q) counts the chains there; AR_Q_TXE reads the
  *   queues that hold one. A write of AR_Q_TXD empties the queues it names.
@@ -140,6 +141,7 @@ struct ath9k_model {
     unsigned unmapped;   /* accesses outside the window */
     unsigned dma_faults; /* bus addresses the dma hook refused */
     unsigned overruns;   /* pushes onto a full FIFO, which were dropped */
+    unsigned filtered;   /* frames AR_RX_FILTER kept out */
 };
 
 /** The model's register access, for `struct ath9k`'s io; its context is
@@ -187,7 +189,10 @@ uint32_t ath9k_model_last_write(const struct ath9k_model *m, uint32_t reg, uint3
  * clear, the length in AR_DataLen and AR_RxDone set, the frame after it,
  * and AR_ISR_HP_RXOK or AR_ISR_LP_RXOK raised. Returns 0, -1 when the
  * FIFO is empty, or -2 when the frame does not fit or the buffer cannot be
- * mapped.
+ * mapped. A BlockAckReq takes no buffer unless AR_RX_FILTER holds
+ * ATH9K_RX_FILTER_COMP_BAR, ATH9K_RX_FILTER_CONTROL or
+ * ATH9K_RX_FILTER_PROM: it counts in `filtered` and returns 0, as the air
+ * loses it.
  */
 int ath9k_model_rx(struct ath9k_model *m, int hp, const uint8_t *frame, unsigned len,
                    const struct ar9003_rxs *status);

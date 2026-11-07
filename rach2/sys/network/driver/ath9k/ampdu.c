@@ -103,6 +103,14 @@ static struct ath9k_tid *session_of(struct ath9k *ah, const struct ath9k_tx_slot
     return t;
 }
 
+/** Whether slot `s` is in the window of its TID's session, which goes on. */
+static int tracked(const struct ath9k *ah, const struct ath9k_tx_slot *s)
+{
+    const struct ath9k_tid *t = &ah->ampdu.tid[s->info.tid & 7];
+
+    return s->ba && t->active && s->gen == t->gen;
+}
+
 /** Owe the recipient a BlockAckReq once the window has passed `seq`. */
 static void owe_bar(struct ath9k_tid *t, unsigned seq)
 {
@@ -358,23 +366,48 @@ int ath9k_ampdu_owns(const struct ath9k *ah, const struct ath9k_txq *q)
 }
 
 /**
+ * The frames of chain `c`, the oldest of `q`, that its status acknowledged,
+ * a bit for each place past the head: an aggregate's by the `ba` bitmap from
+ * `seq_st` when `has_ba`, and a frame alone by `ok`.
+ */
+static uint32_t chain_acks(struct ath9k_txq *q, const struct ath9k_tx_chain *c, int ok, int has_ba,
+                           unsigned seq_st, const uint32_t ba[2])
+{
+    uint32_t acks = 0;
+    unsigned i, bit;
+
+    for (i = 0; i < c->n; i++) {
+        bit = sn_sub(slot_at(q, i)->seq, seq_st);
+        if (c->aggr ? has_ba && bit < ATH9K_BA_WINDOW && ((ba[bit >> 5] >> (bit & 31)) & 1) : ok)
+            acks |= (uint32_t)1 << i;
+    }
+    return acks;
+}
+
+/**
  * Finish the oldest chain of `q`, as ath_tx_complete_aggr does. The chain
  * succeeded when ath9k_tx_ok says so; an aggregate that succeeded carries
  * the BlockAck's bitmap from its starting number, and one with no bitmap
- * asks for a reset, as ath9k does for a station. A frame is acknowledged
- * by its bit, or, sent alone, by the chain's success. A frame of its
+ * asks for a reset, as ath9k does for a station, unless its session has
+ * ended, since a recipient past a DELBA answers with a plain ACK. A frame
+ * is acknowledged by its bit, or, sent alone, by the chain's success, and
+ * an acknowledged frame of the session lets a BlockAckReq go again. A
+ * frame of its
  * session that was not has the chain's attempts added to its own, and
  * while they are fewer than ATH9K_BA_MAX_TRIES it stays in the ring for
  * another push, its Retry bit set; then it is given up, and the recipient
  * is owed a BlockAckReq past it. A frame of a session that has
  * ended goes nowhere again. The first frame finished carries the chain's
- * tries to rate control, as ath9k's rc_update does; the rest report none.
+ * tries and its counts of MPDUs to rate control, as ath9k's rc_update does,
+ * and the rest report none; when none finishes, a report with no frame
+ * carries them, which ath9k leaves out, so that rate control counts every
+ * aggregate that failed whole.
  */
 void ath9k_ampdu_status(struct ath9k *ah, struct ath9k_txq *q, const struct ar9003_txs *ts)
 {
-    const struct ath9k_tx_chain *c = &q->chain[q->chain_head];
+    struct ath9k_tx_chain *c = &q->chain[q->chain_head];
     unsigned n = c->n, i, final, attempts, seq_st;
-    uint32_t keep = 0, ba[2] = {0, 0};
+    uint32_t keep = 0, acks, ba[2] = {0, 0};
     int ok, has_ba, rates = ATH9K_TX_RATES;
 
     ok = ath9k_tx_ok(ts, 1);
@@ -383,7 +416,7 @@ void ath9k_ampdu_status(struct ath9k *ah, struct ath9k_txq *q, const struct ar90
     if (has_ba) {
         ba[0] = ts->status5;
         ba[1] = ts->status6;
-    } else if (c->aggr && ok) {
+    } else if (c->aggr && ok && tracked(ah, slot_at(q, 0))) {
         ath9k_reset_schedule(ah, ATH9K_RESET_TX_ERROR);
     }
     final = MS(ts->status8, AR_FinalTxIdx);
@@ -391,26 +424,27 @@ void ath9k_ampdu_status(struct ath9k *ah, struct ath9k_txq *q, const struct ar90
     for (i = 0; i < final && i < WLAN_TX_RATE_SERIES; i++)
         attempts += c->rates[i].count;
 
+    acks = chain_acks(q, c, ok, has_ba, seq_st, ba);
+    c->acked = 0;
+    for (i = 0; i < n; i++)
+        c->acked += (acks >> i) & 1;
     for (i = 0; i < n; i++) {
         struct ath9k_tx_slot *s = slot_at(q, i);
         struct ath9k_tid *t = &ah->ampdu.tid[s->info.tid & 7];
-        unsigned bit = sn_sub(s->seq, seq_st);
-        int tracked = s->ba && t->active && s->gen == t->gen, acked;
+        int in_window = tracked(ah, s), acked = (acks >> i) & 1;
 
-        if (c->aggr)
-            acked = has_ba && bit < ATH9K_BA_WINDOW && ((ba[bit >> 5] >> (bit & 31)) & 1);
-        else
-            acked = ok;
-        if (!acked && tracked)
+        if (acked && in_window)
+            t->bar_hold = 0;
+        if (!acked && in_window)
             s->tries = (uint8_t)(s->tries + attempts > 255 ? 255 : s->tries + attempts);
-        if (!acked && tracked && s->tries < ATH9K_BA_MAX_TRIES) {
+        if (!acked && in_window && s->tries < ATH9K_BA_MAX_TRIES) {
             s->fc |= IEEE80211_FCTL_RETRY;
             s->buf[1] |= IEEE80211_FCTL_RETRY >> 8;
             ah->ampdu.sw_retries++;
             keep |= (uint32_t)1 << i;
             continue;
         }
-        if (tracked) {
+        if (in_window) {
             done(t, s->seq);
             if (!acked)
                 owe_bar(t, s->seq + 1);
@@ -418,6 +452,8 @@ void ath9k_ampdu_status(struct ath9k *ah, struct ath9k_txq *q, const struct ar90
         ath9k_tx_report(ah, s, c, ts, (acked ? ATH9K_TX_ACKED : 0) | rates);
         rates = 0;
     }
+    if (rates)
+        ath9k_tx_report_tries(ah, c, ts);
     ath9k_tx_retire(ah, q, keep);
 }
 
@@ -428,6 +464,7 @@ void ath9k_ampdu_drain(struct ath9k *ah)
     for (i = 0; i < 8; i++) {
         struct ath9k_tid *t = &ah->ampdu.tid[i];
 
+        t->bar_sent = 0;
         if (!t->active || !t->out)
             continue;
         t->out = 0;
@@ -436,14 +473,42 @@ void ath9k_ampdu_drain(struct ath9k *ah)
     }
 }
 
+/** Forget TID session `t`'s BlockAckReqs, at the session's start or end. */
+static void bar_clear(struct ath9k_tid *t)
+{
+    t->bar_owed = 0;
+    t->bar_sent = 0;
+    t->bar_hold = 0;
+    t->bar_fails = 0;
+}
+
+/** The worker's side of a session's end: the station sends the DELBA. */
+static void stop_run(struct wlan_work *w)
+{
+    struct ath9k *ah =
+        (struct ath9k *)(void *)((char *)w - offsetof(struct ath9k, ampdu.stop_work));
+    uint32_t flags = kirq_save();
+    unsigned ending = ah->ampdu.ending, i;
+
+    ah->ampdu.ending = 0;
+    kirq_restore(flags);
+    for (i = 0; i < 8; i++)
+        if ((ending >> i) & 1)
+            wlan_radio_ba_stop(&ah->radio, i);
+}
+
 /**
  * Queue a BlockAckReq for each session the window has carried past the
  * number it owes one for, as ath_send_bar does: its starting number is the
  * window's start, before which every frame is done, so it skips the frames
  * given up and passes over none still to be sent. It goes on its TID's
- * queue behind every frame there, at the band's lowest rate. One that finds
- * no room stays owed. Each is chosen and queued with interrupts off, as
- * the windows are moved.
+ * queue behind every frame there, at the band's lowest rate, one at a time;
+ * its cookie names the session. It stays owed until its status: one that
+ * finds no room is tried again, and one that failed waits for an
+ * acknowledged frame, as mac80211's bar_pending does, since the recipient
+ * has heard nothing else meanwhile. Each is chosen and queued with
+ * interrupts off, as the windows are moved. A session ath9k_ampdu_bar_done
+ * ended goes to the worker from here, which any completion reaches.
  */
 void ath9k_ampdu_bar(struct ath9k *ah)
 {
@@ -462,7 +527,8 @@ void ath9k_ampdu_bar(struct ath9k *ah)
         /* A completion between the check and the queueing could owe a
          * later BlockAckReq that this one would wipe out. */
         flags = kirq_save();
-        if (!t->active || !t->bar_owed || sn_less(t->seq_start, t->bar_seq)) {
+        if (!t->active || !t->bar_owed || t->bar_sent || t->bar_hold ||
+            sn_less(t->seq_start, t->bar_seq)) {
             kirq_restore(flags);
             continue;
         }
@@ -482,13 +548,47 @@ void ath9k_ampdu_bar(struct ath9k *ah)
         info.ac = tid_ac[i];
         info.tid = (uint8_t)i;
         info.hw_key = -1;
-        t->bar_owed = 0;
-        if (ath9k_tx_own(ah, f, sizeof(f), &info) != 0)
-            t->bar_owed = 1;
-        else
+        info.cookie = t->gen;
+        if (ath9k_tx_own(ah, f, sizeof(f), &info) == 0) {
+            t->bar_sent = 1;
             ah->ampdu.bars++;
+        }
         kirq_restore(flags);
     }
+    if (ah->ampdu.ending) {
+        ah->ampdu.stop_work.wlan = ah->radio.wlan;
+        ah->ampdu.stop_work.run = stop_run;
+        (void)wlan_queue_work(&ah->ampdu.stop_work, 0);
+    }
+}
+
+/**
+ * Take a BlockAckReq's status. Acknowledged, it pays what was owed, unless
+ * a later frame given up has moved the debt past its starting number.
+ * Failed, it stays owed, and at ATH9K_BAR_MAX_TRIES in a row the session
+ * ends here at once, its DELBA to follow on the worker. The status of a
+ * session that has ended counts for nothing.
+ */
+void ath9k_ampdu_bar_done(struct ath9k *ah, const struct ath9k_tx_slot *s, int ok)
+{
+    unsigned tid = s->info.tid & 7, ssn = ((unsigned)s->buf[18] | (unsigned)s->buf[19] << 8) >> 4;
+    struct ath9k_tid *t = &ah->ampdu.tid[tid];
+
+    if (!t->active || s->info.cookie != t->gen)
+        return;
+    t->bar_sent = 0;
+    if (ok) {
+        t->bar_fails = 0;
+        if (!sn_less(ssn, t->bar_seq))
+            t->bar_owed = 0;
+        return;
+    }
+    t->bar_hold = 1;
+    if (++t->bar_fails < ATH9K_BAR_MAX_TRIES)
+        return;
+    t->active = 0;
+    bar_clear(t);
+    ah->ampdu.ending |= (uint8_t)(1u << tid);
 }
 
 /** ath9k_parse_mpdudensity: the microseconds of an HT Capabilities
@@ -511,6 +611,7 @@ void ath9k_ampdu_sta(struct ath9k *ah, const struct wlan_bss *bss)
             flags = kirq_save();
             ah->ampdu.max_len = (uint16_t)((1u << (13 + (params & 3))) - 1);
             ah->ampdu.density = (uint8_t)density_us(params >> 2);
+            ah->mac.ht = 1;
             kirq_restore(flags);
             return;
         }
@@ -519,6 +620,7 @@ void ath9k_ampdu_sta(struct ath9k *ah, const struct wlan_bss *bss)
     flags = kirq_save();
     ah->ampdu.max_len = CAUTIOUS_LEN;
     ah->ampdu.density = CAUTIOUS_DENSITY;
+    ah->mac.ht = 0;
     kirq_restore(flags);
 }
 
@@ -546,7 +648,7 @@ int ath9k_ampdu_action(struct ath9k *ah, enum wlan_ampdu_action action, const ui
     flags = kirq_save();
     if (action == WLAN_AMPDU_TX_STOP) {
         t->active = 0;
-        t->bar_owed = 0;
+        bar_clear(t);
         kirq_restore(flags);
         return 0;
     }
@@ -564,7 +666,7 @@ int ath9k_ampdu_action(struct ath9k *ah, enum wlan_ampdu_action action, const ui
     t->window = (uint16_t)(window > ATH9K_BA_WINDOW ? ATH9K_BA_WINDOW : window);
     t->seq_start = t->seq_next = (uint16_t)(ssn & SN_MASK);
     t->out = 0;
-    t->bar_owed = 0;
+    bar_clear(t);
     kirq_restore(flags);
     return 0;
 }

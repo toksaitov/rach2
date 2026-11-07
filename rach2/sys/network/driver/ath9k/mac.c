@@ -318,9 +318,9 @@ int ath9k_mac_rx_stop(struct ath9k *ah)
  * Turn WLAN_FILTER_* into ath9k's filter bits, as ath_calcrxfilter does
  * for one station: frames to the station, broadcast and multicast; the
  * BSS's beacons alone once associated, and every beacon otherwise or
- * when another BSS's frames are asked for; the AR9462 design's control
- * wrapper. While receive is stopped the bits are kept, not written; the
- * next start writes them.
+ * when another BSS's frames are asked for; the compressed BlockAckReqs of
+ * an HT BSS; the AR9462 design's control wrapper. While receive is stopped
+ * the bits are kept, not written; the next start writes them.
  */
 void ath9k_mac_set_filter(struct ath9k *ah, unsigned filters)
 {
@@ -334,6 +334,8 @@ void ath9k_mac_set_filter(struct ath9k *ah, unsigned filters)
         bits |= ATH9K_RX_FILTER_MYBEACON;
     else
         bits |= ATH9K_RX_FILTER_BEACON;
+    if (ah->mac.associated && ah->mac.ht)
+        bits |= ATH9K_RX_FILTER_COMP_BAR;
     if (filters & WLAN_FILTER_OTHER_BSS)
         bits |= ATH9K_RX_FILTER_MCAST_BCAST_ALL;
     if (ah->hw.chip && (ah->hw.chip->caps & ATH9K_CHIP_JUPITER))

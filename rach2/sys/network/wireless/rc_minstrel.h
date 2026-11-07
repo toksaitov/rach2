@@ -7,7 +7,7 @@
 #define WLAN_MINSTREL_RATES (WLAN_RADIO_MAX_RATES + 8)
 
 struct wlan_minstrel_rate {
-    unsigned attempts, successes; /* this window; one success per ACK */
+    unsigned attempts, successes; /* this window, by MPDU */
     unsigned probability;         /* EWMA, 0 to 1024 */
     unsigned measured;            /* a completed window supplied attempts */
 };

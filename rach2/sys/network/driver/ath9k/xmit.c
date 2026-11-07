@@ -473,7 +473,8 @@ int ath9k_tx(struct ath9k *ah, const uint8_t *frame, unsigned len, const struct 
     return rc;
 }
 
-/** Queue a frame of the driver's own, whose status nobody is told. */
+/** Queue a frame of the driver's own, a BlockAckReq, whose status goes to
+ * ath9k_ampdu_bar_done alone. */
 int ath9k_tx_own(struct ath9k *ah, const uint8_t *frame, unsigned len,
                  const struct wlan_tx_info *info)
 {
@@ -481,35 +482,58 @@ int ath9k_tx_own(struct ath9k *ah, const uint8_t *frame, unsigned len,
 }
 
 /**
- * Report slot `s` finished with status `ts` of its chain, as
- * ath_tx_rc_status reads it: with ATH9K_TX_RATES, the series before the
- * last one tried used all their tries, the last its failures and the one
- * that ended it, and later ones none; without it, no tries, which rate
- * control passes over. ATH9K_TX_ACKED marks it acknowledged, and a frame
- * that was not is counted failed and marked filtered when the chip
- * filtered it. `ts` may be NULL for a frame that never went out.
+ * Fill `st` with the tries status `ts` gives `chain`, as ath_tx_rc_status
+ * reads them: the series before the last one tried used all their tries,
+ * the last its failures and the one that ended it, and later ones none. A
+ * session's chain adds its MPDUs and those acknowledged, which rate control
+ * weighs the tries by. Count the underruns and the retries.
+ */
+static void report_tries(struct ath9k *ah, struct wlan_tx_status *st,
+                         const struct ath9k_tx_chain *chain, const struct ar9003_txs *ts)
+{
+    unsigned final = MS(ts->status8, AR_FinalTxIdx), i, tries = 0;
+
+    for (i = 0; i < WLAN_TX_RATE_SERIES; i++) {
+        if (i > final) {
+            st->rates[i].index = -1;
+            continue;
+        }
+        st->rates[i] = chain->rates[i];
+        if (i == final)
+            st->rates[i].count = (uint8_t)(MS(ts->status3, AR_DataFailCnt) + 1);
+        tries += st->rates[i].count;
+    }
+    if (chain->ba) {
+        st->ampdu_len = chain->n;
+        st->ampdu_ack_len = chain->acked;
+    }
+    if (ts->status3 & (AR_FIFOUnderrun | AR_TxDataUnderrun | AR_TxDelimUnderrun))
+        ah->stats.tx_underrun++;
+    if (tries > 1)
+        ah->stats.tx_retries += tries - 1;
+}
+
+/**
+ * Report slot `s` finished with status `ts` of its chain: with
+ * ATH9K_TX_RATES, the chain's tries; without it, none, which rate control
+ * passes over. ATH9K_TX_ACKED marks it acknowledged, and a frame that was
+ * not is counted failed and marked filtered when the chip filtered it. `ts`
+ * may be NULL for a frame that never went out.
  */
 void ath9k_tx_report(struct ath9k *ah, const struct ath9k_tx_slot *s,
                      const struct ath9k_tx_chain *chain, const struct ar9003_txs *ts, unsigned how)
 {
     struct wlan_tx_status st;
-    unsigned final, i, tries = 0;
+    unsigned i;
 
     if (s->own)
         return;
     k_memset(&st, 0, sizeof(st));
     st.cookie = s->info.cookie;
-    final = ts ? MS(ts->status8, AR_FinalTxIdx) : 0;
-    for (i = 0; i < WLAN_TX_RATE_SERIES; i++) {
-        if (!(how & ATH9K_TX_RATES) || !ts || i > final) {
-            st.rates[i].index = -1;
-            continue;
-        }
-        st.rates[i] = chain->rates[i];
-        if (i == final)
-            st.rates[i].count = (uint8_t)(MS(ts->status3, AR_DataFailCnt) + 1);
-        tries += st.rates[i].count;
-    }
+    for (i = 0; i < WLAN_TX_RATE_SERIES; i++)
+        st.rates[i].index = -1;
+    if ((how & ATH9K_TX_RATES) && ts)
+        report_tries(ah, &st, chain, ts);
     if (how & ATH9K_TX_ACKED) {
         int rssi = ts ? (int8_t)MS(ts->status7, AR_TxRSSICombined) : 0;
 
@@ -521,13 +545,19 @@ void ath9k_tx_report(struct ath9k *ah, const struct ath9k_tx_slot *s,
         if (ts && (ts->status3 & AR_Filtered))
             st.flags = WLAN_TX_FILTERED;
     }
-    if (ts && (how & ATH9K_TX_RATES) &&
-        (ts->status3 & (AR_FIFOUnderrun | AR_TxDataUnderrun | AR_TxDelimUnderrun)))
-        ah->stats.tx_underrun++;
     if (ts)
         ah->stats.tx_frames++;
-    if (tries > 1)
-        ah->stats.tx_retries += tries - 1;
+    wlan_radio_tx_status(&ah->radio, &st);
+}
+
+void ath9k_tx_report_tries(struct ath9k *ah, const struct ath9k_tx_chain *chain,
+                           const struct ar9003_txs *ts)
+{
+    struct wlan_tx_status st;
+
+    k_memset(&st, 0, sizeof(st));
+    report_tries(ah, &st, chain, ts);
+    st.flags = WLAN_TX_NO_FRAME | ((ts->status3 & AR_Filtered) ? WLAN_TX_FILTERED : 0);
     wlan_radio_tx_status(&ah->radio, &st);
 }
 
@@ -604,13 +634,15 @@ int ath9k_tx_ok(const struct ar9003_txs *ts, int ack)
  * Finish queue `q`'s oldest chain, a single frame outside any session:
  * acknowledged when ath9k_tx_ok says it went out, with an ACK unless it
  * asked for none or its receiver is a group address, which the chip
- * expects none from.
+ * expects none from. The driver's own frame tells ampdu.c.
  */
 static void complete(struct ath9k *ah, struct ath9k_txq *q, const struct ar9003_txs *ts)
 {
     struct ath9k_tx_slot *s = slot_at(q, 0);
     int ok = ath9k_tx_ok(ts, !(s->info.flags & WLAN_TX_NO_ACK) && !(s->buf[4] & 0x01));
 
+    if (s->own)
+        ath9k_ampdu_bar_done(ah, s, ok);
     ath9k_tx_report(ah, s, &q->chain[q->chain_head], ts,
                     ATH9K_TX_RATES | (ok ? ATH9K_TX_ACKED : 0));
     ath9k_tx_retire(ah, q, 0);

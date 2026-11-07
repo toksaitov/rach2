@@ -240,11 +240,12 @@ static int radio_set_key(struct wlan_radio *radio, int enable, const uint8_t pee
  * radio.h's sta_state: the BSSID from the first authentication to the
  * return to NONE, as mac80211's BSS change gives it to ath9k; whether the
  * station is associated, which narrows the beacon filter to the BSS's,
- * starts noise immunity's average of the AP's beacons again and lets
- * recover.c judge the receive path, from a window that starts at the
- * association; and the AP's A-MPDU limits from association, as ath9k's
- * sta_add takes them. The station layer gives no association ID here, so
- * the chip's stays 0, which only a station in power save would need.
+ * lets an HT BSS's compressed BlockAckReqs in, starts noise immunity's
+ * average of the AP's beacons again and lets recover.c judge the receive
+ * path, from a window that starts at the association; and the AP's A-MPDU
+ * limits from association, as ath9k's sta_add takes them, before the filter
+ * is written. The station layer gives no association ID here, so the chip's
+ * stays 0, which only a station in power save would need.
  */
 static int radio_sta_state(struct wlan_radio *radio, const struct wlan_bss *bss,
                            enum wlan_sta_state old_state, enum wlan_sta_state new_state)
@@ -264,6 +265,10 @@ static int radio_sta_state(struct wlan_radio *radio, const struct wlan_bss *bss,
         ah->ani.beacon_rssi = 0;
     }
     ah->mac.associated = associated;
+    if (new_state == WLAN_STA_NONE)
+        ath9k_ampdu_sta(ah, NULL);
+    if (new_state == WLAN_STA_ASSOCIATED && bss)
+        ath9k_ampdu_sta(ah, bss);
     if (!ah->bus.started) {
         /* The chip sleeps; the next start's reset writes what is kept. */
         if (new_state == WLAN_STA_NONE)
@@ -277,10 +282,6 @@ static int radio_sta_state(struct wlan_radio *radio, const struct wlan_bss *bss,
     } else if (changed) {
         ath9k_mac_set_filter(ah, ah->rx.filters);
     }
-    if (new_state == WLAN_STA_NONE)
-        ath9k_ampdu_sta(ah, NULL);
-    if (new_state == WLAN_STA_ASSOCIATED && bss)
-        ath9k_ampdu_sta(ah, bss);
     return 0;
 }
 

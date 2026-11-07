@@ -10,7 +10,8 @@
  * the 4-way handshake's EAPOL frames, the pairwise and group keys put in
  * the key cache, encrypted traffic both ways under load with BlockAck
  * aggregation and Minstrel choosing the rate, a stuck queue reset under
- * that load with the keys written back, and the AP's restart, after which
+ * that load with the keys written back, the AP's compressed BlockAckReq
+ * releasing a frame held behind a hole, and the AP's restart, after which
  * the station joins again; and last `ip link set wlan0 down`. It runs
  * twice, in two processes: with the card's messages, and polled from the
  * tick as `rach2.ath9k_nomsi` leaves it.
@@ -487,9 +488,11 @@ int wlan_radio_rx(struct wlan_radio *radio, const uint8_t *frame, unsigned len,
 void wlan_radio_tx_status(struct wlan_radio *radio, const struct wlan_tx_status *status)
 {
     (void)radio;
-    tx_statuses++;
-    if (!(status->flags & WLAN_TX_ACKED))
-        tx_failed++;
+    if (!(status->flags & WLAN_TX_NO_FRAME)) {
+        tx_statuses++;
+        if (!(status->flags & WLAN_TX_ACKED))
+            tx_failed++;
+    }
     if (!station_on)
         return;
     if (statq_count == STATQ) {
@@ -497,6 +500,12 @@ void wlan_radio_tx_status(struct wlan_radio *radio, const struct wlan_tx_status 
         return;
     }
     statq[(statq_head + statq_count++) % STATQ] = *status;
+}
+
+void wlan_radio_ba_stop(struct wlan_radio *radio, unsigned tid)
+{
+    (void)radio;
+    (void)tid;
 }
 
 void wlan_radio_rfkill(struct wlan_radio *radio, int blocked)
@@ -786,6 +795,7 @@ static struct {
     struct ar9003_rxs status;
 } airq[AIRQ];
 static unsigned airq_head, airq_count;
+static int ap_qos_tid = -1; /* the AP's data frames are QoS frames of this TID */
 
 /* What the AP is and has heard. */
 static struct {
@@ -901,19 +911,26 @@ static void ap_data(unsigned ethertype, const uint8_t *payload, unsigned n, int 
     unsigned at = 0, fc = 0x0208; /* data, FromDS */
     uint32_t s11 = 0;
 
+    if (ap_qos_tid >= 0) {
+        /* The QoS control and the chip's padding to 4 bytes. */
+        fc |= IEEE80211_STYPE_QOS_DATA;
+        k_memset(b, 0, 4);
+        b[0] = (uint8_t)ap_qos_tid;
+        at = 4;
+    }
     if (protect) {
         uint64_t pn = group ? ++ap.gtx_pn : ++ap.tx_pn;
 
         fc |= IEEE80211_FCTL_PROTECTED;
-        b[0] = (uint8_t)pn;
-        b[1] = (uint8_t)(pn >> 8);
-        b[2] = 0;
-        b[3] = (uint8_t)(0x20 | (group ? 1 : 0) << 6);
-        b[4] = (uint8_t)(pn >> 16);
-        b[5] = (uint8_t)(pn >> 24);
-        b[6] = (uint8_t)(pn >> 32);
-        b[7] = (uint8_t)(pn >> 40);
-        at = 8;
+        b[at] = (uint8_t)pn;
+        b[at + 1] = (uint8_t)(pn >> 8);
+        b[at + 2] = 0;
+        b[at + 3] = (uint8_t)(0x20 | (group ? 1 : 0) << 6);
+        b[at + 4] = (uint8_t)(pn >> 16);
+        b[at + 5] = (uint8_t)(pn >> 24);
+        b[at + 6] = (uint8_t)(pn >> 32);
+        b[at + 7] = (uint8_t)(pn >> 40);
+        at += 8;
         /* A pairwise entry is found by the transmitter's address; a group
          * key by the key index, which recv.c reads from the header. */
         if (!group)
@@ -930,6 +947,21 @@ static void ap_data(unsigned ethertype, const uint8_t *payload, unsigned n, int 
         ap.sent_data++;
     }
     ap_queue(fc, group ? bcast : card.radio.mac, b, at, s11);
+}
+
+/** Queue the AP's compressed BlockAckReq of `tid` from number `ssn`. */
+static void ap_bar(unsigned tid, unsigned ssn)
+{
+    uint8_t *f;
+
+    ap_queue(0x0084, card.radio.mac, 0, 0, 0);
+    f = airq[(airq_head + airq_count - 1) % AIRQ].frame;
+    f[16] = 0x04;
+    f[17] = (uint8_t)(tid << 4);
+    f[18] = (uint8_t)(ssn << 4);
+    f[19] = (uint8_t)(ssn >> 4);
+    k_memset(f + 20, 0, 4);
+    airq[(airq_head + airq_count - 1) % AIRQ].len = 24;
 }
 
 /** Put the AP's queued frames into the receive FIFO while it has room
@@ -1168,6 +1200,10 @@ static void ap_finish(unsigned q)
 static int station_deliver(struct wlan_data *d, const uint8_t *frame, unsigned len)
 {
     (void)d;
+    if (frame[0] & IEEE80211_STYPE_QOS_DATA) {
+        frame += 2;
+        len -= 2;
+    }
     if (len < 24 + 9 || memcmp(frame + 24, snap, 6) != 0) {
         delivered_bad++;
         return 0;
@@ -1208,7 +1244,7 @@ static void station_run(void)
         uint8_t *f = rxq[rxq_head].frame;
         unsigned len = rxq[rxq_head].len, fc = (unsigned)f[0] | (unsigned)f[1] << 8;
 
-        if ((fc & 0x0c) == 0x08) {
+        if ((fc & 0x0c) != 0x00) {
             (void)wlan_data_rx(&data, f, len, &rxq[rxq_head].status);
         } else if ((fc & 0x0c) == 0x00 && memcmp(f + 4, card.radio.mac, 6) == 0) {
             if ((fc & 0xf0) == 0xb0)
@@ -1594,6 +1630,43 @@ static void ap_bss(void)
     bss.ies_len = sizeof(ies);
 }
 
+/** A frame held behind a hole leaves at once on the AP's compressed
+ * BlockAckReq, well before the reordering timeout: TID 5's session opens
+ * at number 104, 104 is lost and 105 arrives, and the AP's BlockAckReq of
+ * 106 reaches the station only if the chip's filter lets it. */
+static void held_frame(void)
+{
+    static const uint8_t ip[40] = {0x45};
+    uint8_t r[9];
+    unsigned params = 0x0002 | 5u << 2 | 64u << 6, ssn = 104, ip0, kept = model.filtered;
+
+    r[0] = WLAN_CATEGORY_BACK;
+    r[1] = WLAN_ACTION_ADDBA_REQ;
+    r[2] = 1;
+    r[3] = (uint8_t)params;
+    r[4] = (uint8_t)(params >> 8);
+    r[5] = r[6] = 0;
+    r[7] = (uint8_t)(ssn << 4);
+    r[8] = (uint8_t)(ssn >> 4);
+    ap_mgmt(0x00d0, r, sizeof(r));
+    run_for(2);
+    CHECK(data.ba[5].active && data.ba[5].head == ssn);
+
+    ip0 = delivered_ip;
+    ap.seq = (uint16_t)(ssn + 1);
+    ap_qos_tid = 5;
+    ap_data(0x0800, ip, sizeof(ip), 1, 0, pairwise_slot());
+    ap_qos_tid = -1;
+    run_for(2);
+    CHECK(data.ba[5].stored == 1 && delivered_ip == ip0);
+
+    ap_bar(5, ssn + 2);
+    run_for(2);
+    CHECK(model.filtered == kept);
+    CHECK(data.ba[5].stored == 0 && data.ba[5].head == ssn + 2);
+    CHECK(delivered_ip == ip0 + 1 && delivered_bad == 0);
+}
+
 /** Task 10's path on the trial boot, after the scan and its reset. */
 static void connect_and_soak(void)
 {
@@ -1604,6 +1677,7 @@ static void connect_and_soak(void)
     ap_bss();
     station_on = 1;
     join();
+    CHECK(ath9k_model_peek(&model, AR_RX_FILTER) & ATH9K_RX_FILTER_COMP_BAR);
 
     /* Traffic both ways, during which the station asks for a BlockAck
      * session, aggregates, and Minstrel finds MCS 5. */
@@ -1642,7 +1716,9 @@ static void connect_and_soak(void)
     CHECK(bssid_is(ap_mac));
     CHECK(model.rxe);
     model_clean("the reset under load");
+    CHECK(ath9k_model_peek(&model, AR_RX_FILTER) & ATH9K_RX_FILTER_COMP_BAR);
     clean_traffic(1000, "the traffic after the reset");
+    held_frame();
 
     /* The receiver stops hearing while the AP beacons: a window of the
      * hang check without a frame a second, judged since the station is
@@ -1659,17 +1735,19 @@ static void connect_and_soak(void)
     /* The AP restarts: nothing gets through for five seconds and no
      * beacon comes, so the MLME drops the connection, which clears the
      * keys and the BSSID; then the AP is back, and the station joins
-     * again and carries traffic. */
+     * again and carries traffic. Rate control has fallen to single
+     * frames by then, and the queue needs its tail to empty. */
     for (i = 0, held = 0; i < ATH9K_RESET_REASONS; i++)
         held += card.stats.resets[i];
     ap.on = 0;
-    traffic(5000, 300);
+    traffic(5000, 800);
     CHECK(taken > 0 && failed_send == 0);
     for (i = 0; i < ATH9K_RESET_REASONS; i++)
         held -= card.stats.resets[i];
     CHECK(held == 0);
     CHECK(station_state(WLAN_STA_NONE) == 0);
     CHECK(!data.connected && card.ani.beacon_rssi == 0);
+    CHECK(!(ath9k_model_peek(&model, AR_RX_FILTER) & ATH9K_RX_FILTER_COMP_BAR));
     if (slot >= 0)
         CHECK(entry_holds((unsigned)slot, 0, 0));
     CHECK(entry_holds(1, 0, 0));

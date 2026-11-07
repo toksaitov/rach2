@@ -279,5 +279,7 @@ void ath9k_recover_stop(struct ath9k *ah)
     wlan_cancel_work(&ah->recover.work[0].work);
     wlan_cancel_work(&ah->recover.work[1].work);
     wlan_cancel_work(&ah->recover.reset_work);
+    wlan_cancel_work(&ah->ampdu.stop_work);
+    ah->ampdu.ending = 0;
     ah->recover.pending = 0;
 }

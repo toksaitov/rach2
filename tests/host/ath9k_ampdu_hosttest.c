@@ -14,6 +14,7 @@
  * host-deps: rach2/sys/network/wireless/key.c
  * host-deps: rach2/sys/network/wireless/agg_rx.c
  * host-deps: rach2/sys/network/wireless/rate.c
+ * host-deps: rach2/sys/network/wireless/rc_minstrel.c
  * host-deps: rach2/sys/network/wireless/elems.c
  * host-deps: rach2/sys/network/wireless/crypto/aes.c
  * host-deps: rach2/sys/network/wireless/crypto/ccmp.c
@@ -32,12 +33,15 @@
  * timeout, the aggregates' descriptors, lengths and delimiters, the
  * limits of the window, the TXOP and the AP, the holes a BlockAck leaves
  * sent again before new frames, a frame given up and the BlockAckReq past
- * it, a number skipped, an aggregate with no BlockAck, the drain of a
- * reset, and the boot option that turns aggregation off. It exits with
- * the count of failed checks, at most 255.
+ * it, a number skipped, an aggregate with no BlockAck, one answered with
+ * a plain ACK after the DELBA of a renewal, the MPDUs rate control counts,
+ * a BlockAckReq that fails, the filter's compressed BlockAckReqs, the
+ * drain of a reset, and the boot option that turns aggregation off. It
+ * exits with the count of failed checks, at most 255.
  */
 #include "ath9k_model.h"
 #include "network/wireless/data.h"
+#include "network/wireless/rc_minstrel.h"
 #include "lib/kerrno.h"
 #include "lib/kstring.h"
 #include "mm/kheap.h"
@@ -198,16 +202,28 @@ static const uint8_t far[6] = {0x02, 0x99, 0x99, 0x99, 0x99, 0x99};
 #define MAX_TXS 512
 static struct wlan_tx_status txs[MAX_TXS];
 static unsigned txs_count, rated;
+static unsigned no_frame; /* statuses that report no frame, for rate control */
 
 void wlan_radio_tx_status(struct wlan_radio *radio, const struct wlan_tx_status *status)
 {
     (void)radio;
+    if (status->flags & WLAN_TX_NO_FRAME) {
+        no_frame++;
+        wlan_data_tx_status(d, status);
+        return;
+    }
     if (txs_count < MAX_TXS)
         txs[txs_count] = *status;
     txs_count++;
     if (status->rates[0].index >= 0)
         rated++;
     wlan_data_tx_status(d, status);
+}
+
+void wlan_radio_ba_stop(struct wlan_radio *radio, unsigned tid)
+{
+    (void)radio;
+    wlan_ba_tx_stop(d, tid, 1);
 }
 
 /** The times the cookie `cookie` was reported, and its last status. */
@@ -241,13 +257,21 @@ static void rc_select(struct wlan_radio *radio, const struct wlan_bss *peer, con
     rates[0].count = rates[1].count = rates[2].count = rates[3].count = 2;
 }
 
+/* Rate control's account is Minstrel's own, though the test picks the
+ * rates; it takes every series the test sends. */
+static struct wlan_minstrel minstrel;
+static const struct wlan_rate_ops *minstrel_ops;
+
 static void rc_status(struct wlan_radio *radio, const struct wlan_tx_status *status)
 {
-    (void)radio;
-    (void)status;
+    minstrel_ops->status(radio, status);
 }
 
 static const struct wlan_rate_ops rc_ops = {rc_select, rc_status};
+
+/* Minstrel's counts of MCS `mcs` in this window. */
+#define MCS_ATTEMPTS(mcs)  (minstrel.rates[WLAN_RADIO_MAX_RATES + (mcs)].attempts)
+#define MCS_SUCCESSES(mcs) (minstrel.rates[WLAN_RADIO_MAX_RATES + (mcs)].successes)
 
 /* The radio's operations: the driver's transmit and BlockAck, keys in
  * software, and nothing to start or tune. */
@@ -336,7 +360,7 @@ static void setup(void)
 
     k_memset(&ah, 0, sizeof(ah));
     pages_used = 0;
-    txs_count = rated = 0;
+    txs_count = rated = no_frame = 0;
     resets = 0;
     noampdu = 0;
     ath9k_model_init(&model, chip, chip->revs[0].mac_rev);
@@ -352,6 +376,9 @@ static void setup(void)
     ah.radio.band.ht_supported = 1;
     ah.radio.ops = &ops;
     ah.radio.priv = &ah;
+    wlan_minstrel_init(&ah.radio, &minstrel);
+    minstrel_ops = ah.radio.rate_ops;
+    minstrel.supported = 0xffffffffu;
     ah.radio.rate_ops = &rc_ops;
     k_memcpy(ah.radio.mac, station, 6);
     CHECK(ath9k_tx_init(&ah) == 0);
@@ -907,7 +934,7 @@ static void test_give_up(void)
 
     /* The window moved past it, and a BlockAckReq for its successor went
      * out on its queue, compressed, of TID 0, at 1 Mbit/s. */
-    CHECK(ah.ampdu.bars == 1 && !ah.ampdu.tid[0].bar_owed && model.tx[1].count == 1);
+    CHECK(ah.ampdu.bars == 1 && ah.ampdu.tid[0].bar_owed && model.tx[1].count == 1);
     CHECK(chain_of(1, 0, dc, 4) == 1);
     f = frame_of(dc[0]);
     CHECK(f != 0);
@@ -917,9 +944,242 @@ static void test_give_up(void)
         CHECK(f[16] == 0x04 && f[17] == 0x00 && ssn == ((s0 + 1) & 0xfff));
         CHECK((dc[0]->ctl11 & AR_FrameLen) == 24 && MS(dc[0]->ctl14, AR_XmitRate0) == 0x1b);
     }
-    /* Its status is the driver's own. */
+    /* Its status is the driver's own, and pays what was owed. */
     (void)finish_ok(1);
     CHECK(txs_count == txs_before + 1 && ah.tx.q[WLAN_AC_BE].count == 0);
+    CHECK(!ah.ampdu.tid[0].bar_owed);
+}
+
+/** Send one frame of TID 0 and fail every try, leaving its BlockAckReq
+ * queued. */
+static void give_one_up(void)
+{
+    unsigned i;
+
+    CHECK(send(0, 500, 0) == 0);
+    for (i = 0; i < 4; i++)
+        (void)finish(1, AR_ExcessiveRetries | SM(1, AR_DataFailCnt), SM(3, AR_FinalTxIdx), 0, 0, 0);
+}
+
+/** Fail queue `q`'s oldest chain at every try of the first series. */
+static void fail_chain(unsigned q)
+{
+    (void)finish(q, AR_ExcessiveRetries | SM(12, AR_DataFailCnt), 0, 0, 0, 0);
+}
+
+/* A BlockAckReq that fails stays owed: the next one waits for a frame
+ * acknowledged, and goes at the window's start of then. */
+static void test_bar_fails(void)
+{
+    struct ath9k_tid *t = &ah.ampdu.tid[0];
+    struct ar9003_txc *dc[4];
+    const uint8_t *f;
+    unsigned ssn;
+
+    setup();
+    establish(64);
+    give_one_up();
+    CHECK(ah.ampdu.bars == 1 && t->bar_owed && t->bar_sent && model.tx[1].count == 1);
+    fail_chain(1);
+    CHECK(ah.ampdu.bars == 1 && t->bar_owed && !t->bar_sent && t->bar_hold);
+    CHECK(model.tx[1].count == 0 && t->active);
+
+    /* No frame of the session acknowledged, no BlockAckReq: another tried
+     * and failed leaves it waiting. */
+    CHECK(send(0, 100, 0) == 0);
+    (void)finish(1, AR_ExcessiveRetries | SM(1, AR_DataFailCnt), SM(3, AR_FinalTxIdx), 0, 0, 0);
+    CHECK(ah.ampdu.bars == 1 && t->bar_hold);
+
+    /* That frame acknowledged, the repair goes again, past it. */
+    (void)finish_ok(1);
+    CHECK(ah.ampdu.bars == 2 && t->bar_sent && !t->bar_hold && model.tx[1].count == 1);
+    CHECK(chain_of(1, 0, dc, 4) == 1);
+    f = frame_of(dc[0]);
+    CHECK(f && f[0] == 0x84);
+    if (f) {
+        ssn = ((unsigned)f[18] | (unsigned)f[19] << 8) >> 4;
+        CHECK(ssn == t->seq_start);
+    }
+    (void)finish_ok(1);
+    CHECK(!t->bar_owed && !t->bar_sent && !t->bar_fails);
+    CHECK(ah.tx.q[WLAN_AC_BE].count == 0);
+}
+
+/* A frame given up while a BlockAckReq waits owes another, which the first's
+ * acknowledgement does not pay; a reset that drops one is no failure. */
+static void test_bar_debt(void)
+{
+    struct ath9k_tid *t = &ah.ampdu.tid[0];
+    unsigned i;
+
+    setup();
+    establish(64);
+    CHECK(send(0, 500, 0) == 0);
+    CHECK(send(0, 500, 0) == 0);
+    for (i = 0; i < 8; i++)
+        (void)finish(1, AR_ExcessiveRetries | SM(1, AR_DataFailCnt), SM(3, AR_FinalTxIdx), 0, 0, 0);
+    CHECK(ah.ampdu.bars == 1 && t->bar_sent && t->bar_owed);
+    (void)finish_ok(1);
+    CHECK(ah.ampdu.bars == 2 && t->bar_sent && t->bar_owed);
+    (void)finish_ok(1);
+    CHECK(!t->bar_owed && !t->bar_sent && ah.tx.q[WLAN_AC_BE].count == 0);
+
+    /* A reset drops one on its way: it is no failure, and it goes again. */
+    give_one_up();
+    CHECK(t->bar_sent && model.tx[1].count == 1);
+    (void)ath9k_mac_abort_tx(&ah);
+    ath9k_tx_drain(&ah);
+    CHECK(t->bar_owed && !t->bar_sent && !t->bar_fails);
+    ath9k_mac_init_queues(&ah);
+    ath9k_ampdu_bar(&ah);
+    CHECK(t->bar_sent && model.tx[1].count == 1);
+    (void)finish_ok(1);
+    CHECK(!t->bar_owed);
+}
+
+/* Each failure in a row counts, whatever is acknowledged between; the
+ * last ends the session here, and the station's DELBA follows. */
+static void test_bar_limit(void)
+{
+    struct ath9k_tid *t = &ah.ampdu.tid[0];
+    const uint8_t *f;
+    unsigned i;
+
+    setup();
+    establish(64);
+    give_one_up();
+    for (i = 1; i < ATH9K_BAR_MAX_TRIES; i++) {
+        fail_chain(1);
+        CHECK(t->active && t->bar_fails == i && !t->bar_sent && model.tx[1].count == 0);
+        CHECK(send(0, 100, 0) == 0);
+        (void)finish_ok(1);
+        CHECK(t->bar_sent && model.tx[1].count == 1);
+    }
+    fail_chain(1);
+    CHECK(!t->active && !t->bar_owed && !t->bar_sent && !t->bar_fails);
+    CHECK(ah.ampdu.ending == 1 && d->ba_tx[0].state == WLAN_BA_TX_ACTIVE);
+    CHECK(ah.ampdu.stop_work.run != 0);
+    ah.ampdu.stop_work.run(&ah.ampdu.stop_work);
+    CHECK(ah.ampdu.ending == 0 && d->ba_tx[0].state == WLAN_BA_TX_IDLE);
+    f = action_sent();
+    CHECK(f && f[1] == WLAN_ACTION_DELBA);
+    finish_all();
+}
+
+/* A BlockAckReq of an older session says nothing of a newer one. */
+static void test_bar_old_session(void)
+{
+    struct ath9k_tid *t = &ah.ampdu.tid[0];
+
+    setup();
+    establish(64);
+    give_one_up();
+    CHECK(t->bar_sent);
+    CHECK(delba(0, 0) == 0 && !t->active);
+    CHECK(ath9k_ampdu_action(&ah, WLAN_AMPDU_TX_START, ap, 0, d->tx_seq[0], 64) == 0);
+    CHECK(!t->bar_sent && !t->bar_owed);
+    fail_chain(1);
+    CHECK(!t->bar_fails && !t->bar_hold && t->active);
+}
+
+/* An aggregate of two members on the FIFO's oldest chain, behind which
+ * nothing waits. */
+static void two_members(void)
+{
+    struct ar9003_txc *dc[4];
+    unsigned i;
+
+    for (i = 0; i < 4; i++)
+        CHECK(send(0, 1000, 0) == 0);
+    (void)finish_ok(1);
+    (void)finish_ok(1);
+    CHECK(chain_of(1, 0, dc, 4) == 2 && (dc[0]->ctl12 & AR_IsAggr));
+    k_memset(minstrel.rates, 0, sizeof(minstrel.rates));
+}
+
+/* Rate control counts each series' tries for every MPDU it carried, and
+ * the MPDUs acknowledged on the last series tried, as ath_tx_rc_status
+ * gives them to minstrel_ht_tx_status: one of two, none of two, where no
+ * frame finishes and a status with no frame carries them. */
+static void test_rate_losses(void)
+{
+    struct ar9003_txc *dc[4];
+    unsigned i, seq, before;
+
+    setup();
+    establish(64);
+
+    /* Two tries of MCS 7 failed, and two of MCS 5, of which the second
+     * brought a BlockAck for one member. */
+    two_members();
+    CHECK(chain_of(1, 0, dc, 4) == 2);
+    seq = seq_of(dc[0]);
+    before = txs_count;
+    (void)finish(1, AR_FrmXmitOK | SM(1, AR_DataFailCnt), SM(1, AR_FinalTxIdx), 1, seq, 1);
+    CHECK(txs_count == before + 1 && no_frame == 0);
+    CHECK(txs[before].ampdu_len == 2 && txs[before].ampdu_ack_len == 1);
+    CHECK(MCS_ATTEMPTS(7) == 4 && MCS_SUCCESSES(7) == 0);
+    CHECK(MCS_ATTEMPTS(5) == 4 && MCS_SUCCESSES(5) == 1);
+    CHECK(ah.tx.q[WLAN_AC_BE].count == 1);
+
+    /* The member left, sent again alone, is one MPDU. */
+    (void)finish_ok(1);
+    CHECK(txs_count == before + 2 && txs[before + 1].ampdu_len == 1);
+    CHECK(MCS_ATTEMPTS(7) == 5 && MCS_SUCCESSES(7) == 1);
+    CHECK(ah.tx.q[WLAN_AC_BE].count == 0);
+
+    /* Every try of the three series failed: both members stay, and rate
+     * control still hears of six tries for each. */
+    two_members();
+    before = txs_count;
+    (void)finish(1, AR_ExcessiveRetries | SM(1, AR_DataFailCnt), SM(2, AR_FinalTxIdx), 0, 0, 0);
+    CHECK(txs_count == before && no_frame == 1);
+    CHECK(ah.tx.q[WLAN_AC_BE].count == 2);
+    for (i = 3; i < 8; i += 2)
+        CHECK(MCS_ATTEMPTS(i) == 4 && MCS_SUCCESSES(i) == 0);
+    CHECK(counters.tx_failed == 0);
+
+    /* A push the chip filtered says nothing of the rate. */
+    k_memset(minstrel.rates, 0, sizeof(minstrel.rates));
+    (void)finish(1, AR_Filtered, 0, 0, 0, 0);
+    CHECK(no_frame == 2 && MCS_ATTEMPTS(7) == 0);
+    finish_all();
+    CHECK(ah.tx.q[WLAN_AC_BE].count == 0);
+}
+
+/* A renewal's DELBA leaves an aggregate on the air, and the AP, whose
+ * session has gone, answers it with a plain ACK. Nothing is wrong with the
+ * chip: no reset, and its frames go nowhere again. */
+static void test_plain_ack(void)
+{
+    struct ar9003_txc *dc[40];
+    unsigned i;
+
+    setup();
+    establish(64);
+    for (i = 0; i < 10; i++)
+        CHECK(send(0, 1000, 0) == 0);
+    (void)finish_ok(1);
+    CHECK(chain_of(1, 1, dc, 40) == 8);
+    CHECK(wlan_ba_rekey(d) == 0 && !ah.ampdu.tid[0].active);
+    (void)finish_ok(1);
+    (void)finish(1, AR_FrmXmitOK, 0, 0, 0, 0);
+    CHECK(resets == 0);
+    CHECK(counters.tx_failed == 8 && ah.tx.q[WLAN_AC_BE].count == 0 && ah.ampdu.sw_retries == 0);
+    finish_all();
+}
+
+/* The filter asks for compressed BlockAckReqs only of an HT BSS. */
+static void test_filter(void)
+{
+    setup();
+    ah.mac.associated = 1;
+    ath9k_mac_set_filter(&ah, 0);
+    CHECK(ah.rx.hw_filter & ATH9K_RX_FILTER_COMP_BAR);
+    ap_ies(0, 0);
+    ath9k_ampdu_sta(&ah, &bss);
+    ath9k_mac_set_filter(&ah, 0);
+    CHECK(!(ah.rx.hw_filter & ATH9K_RX_FILTER_COMP_BAR));
 }
 
 /* An aggregate that went out but had no BlockAck asks for a reset, and its
@@ -1028,6 +1288,13 @@ int main(void)
     test_aggregate();
     test_limits();
     test_give_up();
+    test_bar_fails();
+    test_bar_debt();
+    test_bar_limit();
+    test_bar_old_session();
+    test_rate_losses();
+    test_plain_ack();
+    test_filter();
     test_no_blockack();
     test_gaps();
     test_stop_retry();

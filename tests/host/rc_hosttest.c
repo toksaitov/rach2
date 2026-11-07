@@ -153,6 +153,7 @@ static void complete(const struct wlan_tx_rate *rates, unsigned ceiling, int onl
     status.cookie = 1;
     status.flags = 0;
     status.ack_signal = -50;
+    status.ampdu_len = status.ampdu_ack_len = 0;
     for (i = 0; i < WLAN_TX_RATE_SERIES; ++i) {
         status.rates[i].index = -1;
         status.rates[i].flags = status.rates[i].count = 0;

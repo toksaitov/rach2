@@ -28,6 +28,7 @@ struct wlan_radio;
 #define WLAN_TX_HW_KEY           0x02
 #define WLAN_TX_ACKED            0x01
 #define WLAN_TX_FILTERED         0x02
+#define WLAN_TX_NO_FRAME         0x04
 #define WLAN_RX_DECRYPTED        0x01
 #define WLAN_RX_MIC_ERROR        0x02
 #define WLAN_RX_FCS_ERROR        0x04
@@ -87,8 +88,13 @@ struct wlan_tx_info {
 struct wlan_tx_status {
     uint64_t cookie;
     struct wlan_tx_rate rates[WLAN_TX_RATE_SERIES]; /* actual attempts */
-    uint8_t flags;      /* WLAN_TX_ACKED, WLAN_TX_FILTERED; neither means failed */
-    int16_t ack_signal; /* dBm, 0 if unavailable */
+    uint8_t flags;         /* WLAN_TX_ACKED, WLAN_TX_FILTERED; neither, failed.
+                            * WLAN_TX_NO_FRAME: for rate control alone, the
+                            * tries of a push whose frames all stay */
+    int16_t ack_signal;    /* dBm, 0 if unavailable */
+    uint8_t ampdu_len;     /* the MPDUs `rates` carried; 0 for one frame, judged
+                            * by flags */
+    uint8_t ampdu_ack_len; /* those acknowledged */
 };
 struct wlan_rx_status {
     uint64_t tsf;       /* microseconds at start of reception, 0 if unavailable */
@@ -115,7 +121,8 @@ struct wlan_radio_ops {
     /** Tune to channel (20 MHz) and set WLAN_FILTER_* receive filters. */
     int (*config)(struct wlan_radio *radio, const struct wlan_channel *channel, unsigned filters);
     /** Copy an MPDU without FCS and info before returning 0; report exactly
-     * one later wlan_radio_tx_status, including failures. A negative return
+     * one later wlan_radio_tx_status, including failures, besides any with
+     * WLAN_TX_NO_FRAME, which report no frame. A negative return
      * accepts nothing and must produce no status. -ENOBUFS says the ring is
      * full, only while it holds frames whose statuses will come: the
      * station keeps the frame and tries again after the next status. Never
@@ -200,6 +207,11 @@ int wlan_radio_rx_full(struct wlan_radio *radio);
 /** Queue a completion, copying status; IRQ-safe under the kernel lock.
  * A completion must not be lost when the RX queue is full. */
 void wlan_radio_tx_status(struct wlan_radio *radio, const struct wlan_tx_status *status);
+
+/** End the transmit BlockAck session of `tid` with a DELBA, for a radio
+ * that can no longer repair the session's window. Nothing happens unless
+ * the session is active. Worker. */
+void wlan_radio_ba_stop(struct wlan_radio *radio, unsigned tid);
 
 /** Queue one scan completion (aborted != 0 on cancellation); IRQ-safe under
  * the kernel lock. The worker emits the matching nl80211 scan event. */

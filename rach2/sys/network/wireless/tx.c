@@ -513,7 +513,13 @@ void wlan_data_tx_status(struct wlan_data *d, const struct wlan_tx_status *statu
 {
     unsigned i, attempts = 0;
 
-    if (!d || !status || !(status->cookie & WLAN_DATA_COOKIE))
+    if (!d || !status)
+        return;
+    if (status->flags & WLAN_TX_NO_FRAME) {
+        wlan_rate_status(d, status);
+        return;
+    }
+    if (!(status->cookie & WLAN_DATA_COOKIE))
         return;
     for (i = 0; i < WLAN_TX_RATE_SERIES && status->rates[i].index >= 0; ++i)
         attempts += status->rates[i].count;

@@ -244,15 +244,20 @@ static void minstrel_select(struct wlan_radio *radio, const struct wlan_bss *pee
     append_rate(radio, &sr, low, 0);
 }
 
-/** Account actual retries; only the final attempted series earns one ACK. */
+/**
+ * Account actual retries, as minstrel_ht_tx_status does: each series tried
+ * cost its tries for every MPDU it carried, and only the final series earns
+ * the MPDUs acknowledged. A status with no ampdu_len is one frame.
+ */
 static void minstrel_status(struct wlan_radio *radio, const struct wlan_tx_status *status)
 {
     struct wlan_minstrel *s = radio->rate_priv;
-    unsigned i, n = 0, ids[WLAN_TX_RATE_SERIES], index, p;
+    unsigned i, n = 0, ids[WLAN_TX_RATE_SERIES], index, p, mpdus, acked;
     const struct wlan_tx_rate *r;
     struct wlan_minstrel_rate *rate;
 
-    if ((status->flags & WLAN_TX_FILTERED) || (status->flags & ~(WLAN_TX_ACKED | WLAN_TX_FILTERED)))
+    if ((status->flags & WLAN_TX_FILTERED) ||
+        (status->flags & ~(WLAN_TX_ACKED | WLAN_TX_FILTERED | WLAN_TX_NO_FRAME)))
         return;
     for (i = 0; i < WLAN_TX_RATE_SERIES; ++i) {
         r = &status->rates[i];
@@ -279,10 +284,11 @@ static void minstrel_status(struct wlan_radio *radio, const struct wlan_tx_statu
     }
     if (!n)
         return;
+    mpdus = status->ampdu_len ? status->ampdu_len : 1;
+    acked = status->ampdu_len ? status->ampdu_ack_len : (status->flags & WLAN_TX_ACKED) != 0;
     for (i = 0; i < n; ++i)
-        s->rates[ids[i]].attempts += status->rates[i].count;
-    if (status->flags & WLAN_TX_ACKED)
-        s->rates[ids[n - 1]].successes++;
+        s->rates[ids[i]].attempts += status->rates[i].count * mpdus;
+    s->rates[ids[n - 1]].successes += acked;
     if (++s->completed < RC_WINDOW)
         return;
     s->completed = 0;

@@ -404,6 +404,12 @@ int ath9k_model_rx(struct ath9k_model *m, int hp, const uint8_t *frame, unsigned
     unsigned i;
     uint32_t bus;
 
+    if (len >= 2 && frame[0] == 0x84 && frame[1] == 0 &&
+        !(m->reg[AR_RX_FILTER / 4] &
+          (ATH9K_RX_FILTER_COMP_BAR | ATH9K_RX_FILTER_CONTROL | ATH9K_RX_FILTER_PROM))) {
+        m->filtered++;
+        return 0;
+    }
     if (f->count == 0)
         return -1;
     if (sizeof(rxs) + len > ATH9K_RX_BUF_LEN || len > AR_DataLen)

@@ -297,6 +297,12 @@ void wlan_radio_tx_status(struct wlan_radio *radio, const struct wlan_tx_status 
     txs_count++;
 }
 
+void wlan_radio_ba_stop(struct wlan_radio *radio, unsigned tid)
+{
+    (void)radio;
+    (void)tid;
+}
+
 static unsigned ant_calls;
 
 void ath9k_ant_rx(struct ath9k *ah, const struct ar9003_rxs *rxs)
