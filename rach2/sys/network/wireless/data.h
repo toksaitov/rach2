@@ -65,6 +65,10 @@
  * waited 100 ms past a hole, mac80211's HT_RX_REORDER_BUF_TIMEOUT. */
 #define WLAN_BA_MAX_WINDOW      64
 #define WLAN_BA_TIMEOUT         100
+/* Frames over a window behind the head end a session that has taken none
+ * for this many ms, as a window of them in a row does, so that a slow link
+ * whose AP numbers its frames from the start again is not cut off for long. */
+#define WLAN_BA_STALE_WAIT      2000
 /* A transmit session's ADDBA request waits a second for its response, and
  * a request declined or unanswered waits 15 seconds for the next, as
  * mac80211's ADDBA_RESP_INTERVAL and HT_AGG_RETRIES_PERIOD have it. */
@@ -139,7 +143,12 @@ struct wlan_ba_rx {
     uint8_t token;    /* the dialog token of the request that started it */
     uint16_t timeout; /* the AP's, in TU; 0 for none */
     uint64_t last_rx; /* tick of the session's last frame or BlockAckReq */
+    uint64_t taken;   /* tick of the last frame taken, or of the start */
     uint16_t stale;   /* frames since the last one taken, over a window behind */
+    /* The head before a frame over a window ahead moved it, until a frame in
+     * the new window proves the move; jumped is 0 when none is unproved. */
+    uint16_t jumped_from;
+    uint8_t jumped;
 };
 
 /* One TID's BlockAck transmit session, which the station originates. */
@@ -647,8 +656,12 @@ int wlan_data_rx_action(struct wlan_data *d, const uint8_t *frame, unsigned len,
  * WLAN_BA_TIMEOUT. A frame before the head is a duplicate and moves
  * neither the head nor the session's idle time. Once a window's worth of
  * frames more than a window behind the head has come with none taken
- * between, the AP's numbers began again without a DELBA: the session ends
- * with a DELBA of its own, and the frame goes on as one outside it. Returns
+ * between, or one such frame WLAN_BA_STALE_WAIT after the last taken, the
+ * AP's numbers began again without a DELBA: the session ends with a DELBA of
+ * its own, and the frame goes on as one outside it. A frame over a window
+ * ahead moves the head unproved until a frame lands inside the new window;
+ * meanwhile a frame of the window it left ends the session the same way at
+ * once. Returns
  * 1 when the TID has no session and the caller hands the frame on itself,
  * 0 when the buffer took it, or a negative errno for a duplicate or a lost
  * allocation. Worker only.

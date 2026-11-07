@@ -1233,6 +1233,91 @@ static void check_ba_far_behind(void)
     CHECK(n_sent == 1 && sent_delba(0, 0x0000, WLAN_REASON_UNSPECIFIED));
 }
 
+/** The AP's numbers begin again on a slow link: frames far behind the
+ * head at 2 a second, none taken, end the session at the first that comes
+ * WLAN_BA_STALE_WAIT after the last frame taken, where a window of them
+ * would take 32 s. */
+static void check_ba_stale_time(void)
+{
+    uint8_t f[64];
+    unsigned len, i, n;
+    uint64_t taken;
+
+    setup(1);
+    d->privacy = 0;
+    len = addba_req(f, 0, 64, 1000);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    for (i = 1000; i < 1010; ++i)
+        CHECK(rx_sn(i) == 0);
+    taken = now;
+    n = n_got;
+    n_sent = 0;
+    for (i = 0; d->ba[0].active && i < 64; ++i) {
+        now += 500;
+        if (now - taken < WLAN_BA_STALE_WAIT)
+            CHECK(rx_sn(i) == -EALREADY && n_sent == 0);
+        else
+            CHECK(rx_sn(i) == 0);
+    }
+    CHECK(!d->ba[0].active && now == taken + WLAN_BA_STALE_WAIT);
+    CHECK(n_sent == 1 && sent_delba(0, 0x0000, WLAN_REASON_UNSPECIFIED));
+    CHECK(n_got == n + 1 && got_sn(n) == 3);
+}
+
+/** A frame over a window ahead moves the head before any key opens it, as
+ * mac80211's ieee80211_sta_manage_reorder_buf does. Another counter's frame,
+ * 3000 against a head of 1001, so moves it unproved, and the AP's next
+ * frame, 1001 of the window it left, ends the session at once: both go on,
+ * none is dropped. Frames at its leading edge prove nothing, being moves
+ * themselves; one inside the new window proves it, after which 1001 is only
+ * a frame far behind. Numbers that begin again from 0 with the
+ * head above 2048 move it the same way and lose nothing. */
+static void check_ba_jump(void)
+{
+    uint8_t f[64];
+    unsigned len, n, dups;
+
+    setup(1);
+    d->privacy = 0;
+    len = addba_req(f, 0, 64, 1000);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    CHECK(rx_sn(1000) == 0 && d->ba[0].head == 1001);
+    n = n_got;
+    dups = counters.rx_duplicates;
+    n_sent = 0;
+    CHECK(rx_sn(3000) == 0 && d->ba[0].head == 3000 - 63 && d->ba[0].stored == 1);
+    CHECK(rx_sn(1001) == 0 && !d->ba[0].active);
+    CHECK(n_sent == 1 && sent_delba(0, 0x0000, WLAN_REASON_UNSPECIFIED));
+    CHECK(n_got == n + 2 && got_sn(n) == 3000 && got_sn(n + 1) == 1001);
+    CHECK(rx_sn(1002) == 0 && n_got == n + 3 && counters.rx_duplicates == dups);
+
+    setup(1);
+    d->privacy = 0;
+    len = addba_req(f, 0, 64, 1000);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    CHECK(rx_sn(1000) == 0);
+    n_sent = 0;
+    CHECK(rx_sn(3000) == 0 && rx_sn(3001) == 0 && d->ba[0].jumped);
+    CHECK(rx_sn(2990) == 0 && !d->ba[0].jumped);
+    CHECK(rx_sn(1001) == -EALREADY && d->ba[0].active && n_sent == 0);
+    wlan_ba_rx_flush(d);
+
+    setup(1);
+    d->privacy = 0;
+    len = addba_req(f, 0, 64, 3000);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    CHECK(rx_sn(3000) == 0);
+    n = n_got;
+    dups = counters.rx_duplicates;
+    n_sent = 0;
+    CHECK(rx_sn(0) == 0 && rx_sn(1) == 0 && rx_sn(2) == 0 && d->ba[0].stored == 3);
+    now += WLAN_BA_TIMEOUT;
+    run_work();
+    CHECK(n_got == n + 3 && got_sn(n) == 0 && got_sn(n + 2) == 2 && d->ba[0].head == 3);
+    CHECK(rx_sn(3) == 0 && n_got == n + 4 && d->ba[0].active && n_sent == 0);
+    CHECK(counters.rx_duplicates == dups);
+}
+
 /** A pairwise key in the radio replaced ends the sessions each way with a
  * DELBA, as ieee80211_pairwise_rekey does. A first key, the same key again
  * and a software key end none, and a request under way gets its DELBA too,
@@ -2337,6 +2422,8 @@ int main(void)
     check_addba_again();
     check_ba_stale();
     check_ba_far_behind();
+    check_ba_stale_time();
+    check_ba_jump();
     check_ba_idle();
     check_rekey_tids();
     check_renewal_wait();

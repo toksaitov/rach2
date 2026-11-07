@@ -102,6 +102,7 @@ static int ba_start(struct wlan_data *d, unsigned tid, unsigned ssn, unsigned wi
     ba->active = 1;
     ba->head = (uint16_t)(ssn & SN_MASK);
     ba->window = (uint16_t)window;
+    ba->taken = tick_count();
     return 0;
 }
 
@@ -140,6 +141,16 @@ void wlan_ba_rx_stop(struct wlan_data *d, unsigned tid, int flush)
         (void)radio->ops->ampdu_action(radio, WLAN_AMPDU_RX_STOP, d->bssid, tid, 0, 0);
 }
 
+/** Whether `sn`, behind the head, lies in the window an unproved jump left.
+ * A conforming AP sends nothing there once its own window has passed it, so
+ * such a frame says that the jump came from a frame of another counter, as
+ * an EAPOL frame numbered apart from the data may be. */
+static int left_by_jump(const struct wlan_ba_rx *ba, unsigned sn)
+{
+    return ba->jumped && !sn_less(sn, ba->jumped_from) &&
+           sn_less(sn, (ba->jumped_from + ba->window) & SN_MASK);
+}
+
 int wlan_ba_rx_reorder(struct wlan_data *d, const uint8_t *frame, unsigned len,
                        const struct wlan_rx_status *status, unsigned tid)
 {
@@ -155,9 +166,9 @@ int wlan_ba_rx_reorder(struct wlan_data *d, const uint8_t *frame, unsigned len,
         return 1; /* fragments are never aggregated */
     sn = seqctl >> 4;
     if (sn_less(sn, ba->head)) {
-        /* A retry lies at most a window behind the head; a window of
-         * frames further back says that the AP's numbers began again. */
-        if (sn_less(sn, (ba->head - ba->window) & SN_MASK) && ++ba->stale >= ba->window) {
+        if (left_by_jump(ba, sn) ||
+            (sn_less(sn, (ba->head - ba->window) & SN_MASK) &&
+             (++ba->stale >= ba->window || tick_count() - ba->taken >= WLAN_BA_STALE_WAIT))) {
             (void)send_delba(d, tid, 0, WLAN_REASON_UNSPECIFIED);
             wlan_ba_rx_stop(d, tid, 1);
             return 1;
@@ -167,8 +178,15 @@ int wlan_ba_rx_reorder(struct wlan_data *d, const uint8_t *frame, unsigned len,
     }
     ba->stale = 0;
     ba->last_rx = tick_count();
-    if (!sn_less(sn, (ba->head + ba->window) & SN_MASK))
+    ba->taken = ba->last_rx;
+    if (!sn_less(sn, (ba->head + ba->window) & SN_MASK)) {
+        if (!ba->jumped)
+            ba->jumped_from = ba->head;
+        ba->jumped = 1;
         release_until(d, ba, (sn - ba->window + 1) & SN_MASK);
+    } else {
+        ba->jumped = 0;
+    }
     if (!ba->active)
         return 1;
     if (ba->slot[sn % WLAN_BA_MAX_WINDOW]) {
