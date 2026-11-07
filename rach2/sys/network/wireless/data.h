@@ -230,6 +230,7 @@ struct wlan_data {
      * worker only. */
     uint64_t rekey_due;
     uint64_t ba_stop_due; /* tick wlan_ba_rekey stops waiting for room; 0 unset */
+    uint8_t ba_blocked;   /* a pairwise key is replacing: no session starts */
     /* The AP's channel switch of mode 1 stops the drain, which keeps the
      * queue until the switch; worker only. */
     int tx_stopped;
@@ -556,8 +557,9 @@ void wlan_ba_rx_idle(struct wlan_work *work);
  * a transmit session may be asked for again with the next frame.
  * Returns 0, or -EINPROGRESS when a DELBA found the radio's queue full:
  * the session stays for the caller to come again, for at most
- * WLAN_DATA_REKEY_WAIT, after which it ends with its DELBA unsent. Worker
- * only. */
+ * WLAN_DATA_REKEY_WAIT, after which it ends with its DELBA unsent. No session
+ * starts either way until the key is in (`ba_blocked`), as WLAN_STA_BLOCK_BA
+ * has it. Worker only. */
 int wlan_ba_rekey(struct wlan_data *d);
 
 /** The second half of receive, for each MPDU the reordering buffer lets go:

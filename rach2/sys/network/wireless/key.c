@@ -150,6 +150,7 @@ int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
         if (pairwise) {
             d->tx_pairwise = key->index;
             d->renewing = 0;
+            d->ba_blocked = 0;
         }
         return 0;
     }
@@ -167,6 +168,8 @@ int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
         wlan_aes128_setkey(&fresh.aes, key->data);
     rc = replace_in_radio(d, &fresh, old, pairwise);
     if (rc) {
+        if (rc != -EINPROGRESS)
+            d->ba_blocked = 0;
         wipe(&fresh, sizeof(fresh));
         return rc;
     }
@@ -175,6 +178,7 @@ int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
         if (rc) {
             (void)key_from_radio(d, &fresh);
             wipe(&fresh, sizeof(fresh));
+            d->ba_blocked = 0;
             return rc;
         }
         if (pairwise) {
@@ -193,6 +197,7 @@ int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
     if (pairwise) {
         d->tx_pairwise = key->index;
         d->renewing = 0;
+        d->ba_blocked = 0;
     }
     flush_defrag(d);
     return 0;

@@ -294,7 +294,7 @@ void wlan_ba_tx_check(struct wlan_data *d, unsigned tid, int eapol)
     unsigned params;
     uint8_t p[9];
 
-    if (tid >= 8 || eapol || !d->connected || !d->qos || d->ba_tx_off ||
+    if (tid >= 8 || eapol || !d->connected || !d->qos || d->ba_tx_off || d->ba_blocked ||
         !radio->ops->ampdu_action || !radio->band.ht_supported || wlan_data_ac(tid) == WLAN_AC_VO)
         return;
     b = &d->ba_tx[tid];
@@ -389,6 +389,7 @@ int wlan_ba_rekey(struct wlan_data *d)
     unsigned tid;
     int late;
 
+    d->ba_blocked = 1;
     if (!d->ba_stop_due)
         d->ba_stop_due = tick_count() + WLAN_DATA_REKEY_WAIT;
     late = tick_count() >= d->ba_stop_due;
@@ -450,10 +451,10 @@ static void addba_resp_rx(struct wlan_data *d, unsigned token, unsigned status, 
 
 /**
  * Answer the AP's ADDBA request at `p`, a Block Ack action frame's body, as
- * __ieee80211_start_rx_ba_session does: delayed BlockAck, a TID of 8 or more
- * or no QoS is declined; the same token keeps the session, since the AP lost
- * our answer and the window it has stands, unless the timeout changed; any
- * other starts the session afresh.
+ * __ieee80211_start_rx_ba_session does. Delayed BlockAck, a TID of 8 or
+ * more, no QoS or a renewal under way is declined. The same token keeps
+ * the session, since the AP lost our answer and its window stands, unless
+ * the timeout changed; any other token starts the session afresh.
  */
 static void addba_req_rx(struct wlan_data *d, const uint8_t *p, int protected)
 {
@@ -465,7 +466,7 @@ static void addba_req_rx(struct wlan_data *d, const uint8_t *p, int protected)
 
     if (!window || window > WLAN_BA_MAX_WINDOW)
         window = WLAN_BA_MAX_WINDOW;
-    if (tid >= 8 || !(params & 0x0002) || !d->qos) {
+    if (tid >= 8 || !(params & 0x0002) || !d->qos || d->ba_blocked) {
         status = WLAN_STATUS_REQUEST_DECLINED;
     } else if (d->ba[tid].active && d->ba[tid].token == p[2]) {
         if (d->ba[tid].timeout != timeout)
