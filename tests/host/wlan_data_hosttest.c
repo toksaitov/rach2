@@ -1278,7 +1278,7 @@ static void check_ba_stale(void)
 
 /**
  * The AP's numbers begin again under a session whose head stands far ahead,
- * at 1900 with a window of 64 and nothing held: its frames from 0 upward,
+ * at 1901 with a window of 64 and nothing held: its frames from 0 upward,
  * each with a valid PN, are dropped as duplicates until the 64th of them,
  * which ends the session with a DELBA and goes on outside it.
  */
@@ -1295,17 +1295,40 @@ static void check_ba_far_behind(void)
     CHECK(d->ba[0].active && d->ba[0].head == 1900 && d->ba[0].window == 64);
     CHECK(d->ba[0].stored == 0);
     n_sent = 0;
+    payload(body, sizeof(body), 1900);
+    len = ap_frame(f, sta, 1, 0, 1900, 0, 0, body, sizeof(body));
+    ap_ccmp(&ap_ptk, f, &len, 1, 0);
+    CHECK(rx(f, len) == 0 && n_got == 1 && d->ba[0].head == 1901);
     for (sn = 0; sn < 64; ++sn) {
         payload(body, sizeof(body), sn);
         len = ap_frame(f, sta, 1, 0, sn, 0, 0, body, sizeof(body));
-        ap_ccmp(&ap_ptk, f, &len, sn + 1, 0);
+        ap_ccmp(&ap_ptk, f, &len, sn + 2, 0);
         rc = rx(f, len);
         if (sn < 63)
-            CHECK(rc == -EALREADY && d->ba[0].active && n_got == 0 && n_sent == 0);
+            CHECK(rc == -EALREADY && d->ba[0].active && n_got == 1 && n_sent == 0);
     }
-    CHECK(rc == 0 && !d->ba[0].active && n_got == 1 && got_sn(0) == 63);
+    CHECK(rc == 0 && !d->ba[0].active && n_got == 2 && got_sn(1) == 63);
     CHECK(counters.rx_duplicates == 63 && counters.rx_replays == 0);
     CHECK(n_sent == 1 && sent_delba(0, 0x0000, WLAN_REASON_UNSPECIFIED));
+}
+
+/** Frames the AP sent before a session, which its ADDBA's number stands
+ * ahead of, go on as frames outside it until one at or past that number
+ * comes, as in mac80211's ieee80211_sta_manage_reorder_buf; after that one
+ * they are duplicates. */
+static void check_ba_before_start(void)
+{
+    uint8_t f[64];
+    unsigned len;
+
+    setup(1);
+    d->privacy = 0;
+    len = addba_req(f, 0, 8, 100);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    CHECK(rx_sn(97) == 0 && n_got == 1 && rx_sn(99) == 0 && n_got == 2);
+    CHECK(counters.rx_duplicates == 0 && d->ba[0].head == 100);
+    CHECK(rx_sn(100) == 0 && n_got == 3 && d->ba[0].head == 101);
+    CHECK(rx_sn(98) == -EALREADY && n_got == 3 && counters.rx_duplicates == 1);
 }
 
 /** The AP's numbers begin again on a slow link: frames far behind the
@@ -2550,6 +2573,7 @@ int main(void)
     check_addba_again();
     check_ba_stale();
     check_ba_far_behind();
+    check_ba_before_start();
     check_ba_stale_time();
     check_ba_jump();
     check_ba_idle();

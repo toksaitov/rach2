@@ -165,6 +165,11 @@ int wlan_ba_rx_reorder(struct wlan_data *d, const uint8_t *frame, unsigned len,
     if ((seqctl & 0xf) || (frame[1] & (IEEE80211_FCTL_MOREFRAGS >> 8)))
         return 1; /* fragments are never aggregated */
     sn = seqctl >> 4;
+    if (!ba->started) {
+        if (sn_less(sn, ba->head))
+            return 1; /* sent before the session, as mac80211 passes it */
+        ba->started = 1;
+    }
     if (sn_less(sn, ba->head)) {
         if (left_by_jump(ba, sn) ||
             (sn_less(sn, (ba->head - ba->window) & SN_MASK) &&

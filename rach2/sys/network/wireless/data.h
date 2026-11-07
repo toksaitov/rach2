@@ -149,6 +149,7 @@ struct wlan_ba_rx {
      * the new window proves the move; jumped is 0 when none is unproved. */
     uint16_t jumped_from;
     uint8_t jumped;
+    uint8_t started; /* a frame at or past the first number has come */
 };
 
 /* One TID's BlockAck transmit session, which the station originates. */
@@ -670,8 +671,10 @@ int wlan_data_rx_action(struct wlan_data *d, const uint8_t *frame, unsigned len,
  * Put a QoS data MPDU through its TID's reordering buffer: hand on, in
  * order of sequence number, every frame the window lets go, and hold the
  * rest until their holes fill, the window moves past them, or they wait
- * WLAN_BA_TIMEOUT. A frame before the head is a duplicate and moves
- * neither the head nor the session's idle time. Once a window's worth of
+ * WLAN_BA_TIMEOUT. Until a frame at or past the session's first number
+ * comes, one before it was sent before the session and goes on outside it,
+ * as mac80211's does. After that a frame before the head is a duplicate and
+ * moves neither the head nor the session's idle time. Once a window's worth of
  * frames more than a window behind the head has come with none taken
  * between, or one such frame WLAN_BA_STALE_WAIT after the last taken, the
  * AP's numbers began again without a DELBA: the session ends with a DELBA of
