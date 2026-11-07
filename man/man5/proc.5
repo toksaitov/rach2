@@ -1193,6 +1193,10 @@ Times a radio found the wireless receive queue full and left a frame in its
 own buffers.
 .It Li wlan_rx_wait_most
 Longest time received frames waited for the wireless worker, in milliseconds.
+.It Li wlan_tx_status_lost
+Transmit completions the wireless data path had no room for.
+Each frame's has a slot, so a nonzero count means a radio reported more than
+it can hold.
 .It Li wlan_rescue_key
 Renewals of a pairwise key the station left because no key went in within 10
 seconds of the access point's first message.

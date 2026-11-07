@@ -205,7 +205,10 @@ int wlan_radio_rx(struct wlan_radio *radio, const uint8_t *frame, unsigned len,
 int wlan_radio_rx_full(struct wlan_radio *radio);
 
 /** Queue a completion, copying status; IRQ-safe under the kernel lock.
- * A completion must not be lost when the RX queue is full. */
+ * A completion must not be lost when the RX queue is full: a frame's status
+ * has a slot for each frame the radio can hold, and a report of tries alone
+ * (WLAN_TX_NO_FRAME) that finds its own queue full is merged into a queued
+ * one of the same series. What finds no room is counted in tx_status_lost. */
 void wlan_radio_tx_status(struct wlan_radio *radio, const struct wlan_tx_status *status);
 
 /** End the transmit BlockAck session of `tid` with a DELBA, for a radio

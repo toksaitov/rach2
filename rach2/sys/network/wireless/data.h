@@ -26,12 +26,20 @@
 /* Received frames and transmit completions waiting for the worker. The
  * receive queue holds what one service of ath9k's two FIFOs can hand up; a
  * radio stops reading when it is full, so that a frame it has acknowledged
- * waits in the radio's buffers. The completion queue is longer than any
- * radio's transmit queue, so that no completion is lost. */
+ * waits in the radio's buffers. The completion queue holds one status per
+ * frame and is as long as ath9k's four rings of ATH9K_TX_RING frames, so that
+ * no frame's status is lost. A report of tries alone (WLAN_TX_NO_FRAME) goes
+ * to a queue of its own, where one that finds it full is merged into another,
+ * so that it never takes a frame's place. */
 #define WLAN_DATA_RX_QUEUE      144
 /* Received frames the worker takes before it sends what is queued. */
 #define WLAN_DATA_RX_BATCH      8
+/* Frames and completions one call of the receive work takes before it queues
+ * itself again behind the work then due, so that a steady stream holds up no
+ * timer. */
+#define WLAN_DATA_RX_BUDGET     32
 #define WLAN_DATA_STATUS_QUEUE  256
+#define WLAN_DATA_TRIES_QUEUE   16
 #define WLAN_DATA_ETH_MAX       1514
 /* Why the transmit drain is stopped, as mac80211 keeps its queue stop reasons
  * apart: a channel switch of mode 1 and a scan's absence end separately. */
@@ -284,6 +292,8 @@ struct wlan_data {
     uint64_t rxq_since; /* the tick the oldest frame queued, or the last taken */
     struct wlan_tx_status statq[WLAN_DATA_STATUS_QUEUE];
     unsigned statq_head, statq_count;
+    struct wlan_tx_status triesq[WLAN_DATA_TRIES_QUEUE]; /* WLAN_TX_NO_FRAME */
+    unsigned triesq_head, triesq_count;
     struct spinlock rxq_lock;
     struct wlan_data_work rx_work[2]; /* drain both queues */
 

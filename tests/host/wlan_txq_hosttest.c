@@ -2,7 +2,9 @@
  * full holds the queue's frames until its completions free slots, in order
  * and with none dropped, the queue keeps its last slots for EAPOL, another
  * refusal and a stop still drop frames, a pairwise key waits for what was
- * queued before it, and the receive queue holds a pass of a radio's buffers.
+ * queued before it, the receive queue holds a pass of a radio's buffers, a
+ * stream of received frames holds up no timer, and no frame's completion is
+ * lost to a report of tries alone.
  * host-deps: rach2/sys/network/wireless/data.c
  * host-deps: rach2/sys/network/wireless/tx.c
  * host-deps: rach2/sys/network/wireless/rx.c
@@ -57,6 +59,8 @@ static const uint8_t far[6] = {0x02, 0, 0, 0, 0, 0xbb};
 
 static uint64_t now;
 static struct wlan_work *queued[8];
+static unsigned long order[8], next_order; /* the order records were queued */
+static struct wlan_work *running;          /* the record whose callback runs */
 
 /** The network lock: nothing to exclude on one thread. */
 uint32_t net_lock(void)
@@ -82,24 +86,26 @@ void kirq_restore(uint32_t flags)
     (void)flags;
 }
 
-/** The kernel's tick, which the test leaves still. */
+/** The kernel's tick, which only a row that models time moves. */
 uint64_t tick_count(void)
 {
     return now;
 }
 
-/** Queue work as work.c does, refusing a record already queued. */
+/** Queue work as work.c does, refusing a record already queued or running;
+ * immediate work is due at the tick it was queued. */
 int wlan_queue_work(struct wlan_work *work, uint64_t due)
 {
     unsigned i;
 
-    if (work->pending)
+    if (work->pending || work == running)
         return -EBUSY;
     for (i = 0; i < 8; ++i) {
         if (!queued[i]) {
             queued[i] = work;
+            order[i] = next_order++;
             work->pending = 1;
-            work->due = due;
+            work->due = due ? due : now;
             return 0;
         }
     }
@@ -140,12 +146,39 @@ static void run_work(void)
         if (i == 8)
             return;
         w = queued[i];
-        for (; i < 7; ++i)
+        for (; i < 7; ++i) {
             queued[i] = queued[i + 1];
+            order[i] = order[i + 1];
+        }
         queued[7] = 0;
         w->pending = 0;
+        running = w;
         w->run(w);
+        running = 0;
     }
+}
+
+/** Run the earliest due record, by due tick and then by the order queued,
+ * as wlan_work_run_due does; 0 when none is due. */
+static int run_due(void)
+{
+    struct wlan_work *w;
+    unsigned i, at = 8;
+
+    for (i = 0; i < 8; ++i)
+        if (queued[i] && queued[i]->due <= now &&
+            (at == 8 || queued[i]->due < queued[at]->due ||
+             (queued[i]->due == queued[at]->due && order[i] < order[at])))
+            at = i;
+    if (at == 8)
+        return 0;
+    w = queued[at];
+    queued[at] = 0;
+    w->pending = 0;
+    running = w;
+    w->run(w);
+    running = 0;
+    return 1;
 }
 
 /** Beacons go to a BSS table this test does not keep. */
@@ -796,6 +829,171 @@ static void check_rx_full(void)
     wlan_data_detach(&wlan);
 }
 
+/* The flood of check_rx_bound: frames taken, frames the radio queued, and
+ * how many were taken when the timer ran. */
+static unsigned flood_taken, flood_queued, flood_at_timer;
+
+/** The hook on each flooded frame: the radio has the next one ready by the
+ * time the worker takes this one, and a tick passes. */
+static int flood(struct wlan *w, const uint8_t *frame, unsigned len, unsigned flags)
+{
+    (void)w;
+    (void)frame;
+    (void)len;
+    (void)flags;
+    ++flood_taken;
+    if (flood_queued < 500) {
+        CHECK(receive() == 0);
+        ++flood_queued;
+    }
+    ++now;
+    return 1;
+}
+
+/** A timer of the worker's, which notes how far the flood had gone. */
+static void flood_timer(struct wlan_work *w)
+{
+    (void)w;
+    flood_at_timer = flood_taken;
+}
+
+/**
+ * A steady stream holds up no timer: the radio queues one frame for each the
+ * worker takes, a tick for each, until 500, and a timer comes due during the
+ * first call of the receive work. It runs before the stream ends, behind no
+ * more than a budget of frames past its deadline, and every frame is taken.
+ */
+static void check_rx_bound(void)
+{
+    struct wlan_work timer;
+
+    setup();
+    now = 0;
+    wlan_data_of(&wlan)->rx_mgmt = flood;
+    flood_taken = flood_at_timer = 0;
+    k_memset(&timer, 0, sizeof(timer));
+    timer.run = flood_timer;
+    CHECK(wlan_queue_work(&timer, 10) == 0);
+    CHECK(receive() == 0);
+    flood_queued = 1;
+    while (run_due())
+        ;
+    CHECK(flood_taken == 500 && !timer.pending);
+    CHECK(flood_at_timer >= 10 && flood_at_timer <= 10 + WLAN_DATA_RX_BUDGET);
+    CHECK(pending() == 0);
+    now = 0;
+    wlan_data_detach(&wlan);
+}
+
+/* What the data path passed on: frames' statuses by cookie, and the attempts
+ * of reports of tries alone as rate control charges them. */
+static uint8_t status_seen[256];
+static unsigned statuses, tries_reports, tries_attempts, tries_mpdus;
+
+/** Rate control's status: sum what a report of tries alone charges. */
+static void rate_status(struct wlan_radio *r, const struct wlan_tx_status *st)
+{
+    unsigned i, mpdus = st->ampdu_len ? st->ampdu_len : 1;
+
+    (void)r;
+    if (!(st->flags & WLAN_TX_NO_FRAME))
+        return;
+    ++tries_reports;
+    tries_mpdus += mpdus;
+    for (i = 0; i < WLAN_TX_RATE_SERIES && st->rates[i].index >= 0; ++i)
+        tries_attempts += st->rates[i].count * mpdus;
+}
+
+static const struct wlan_rate_ops rate_ops = {0, rate_status};
+
+/** The station's hook on every completion: note each frame's. */
+static void status_hook(struct wlan *w, const struct wlan_tx_status *st)
+{
+    (void)w;
+    if (st->flags & WLAN_TX_NO_FRAME)
+        return;
+    ++statuses;
+    if ((st->cookie & 0xff) < 256 && (st->cookie & WLAN_DATA_COOKIE))
+        status_seen[st->cookie & 0xff]++;
+}
+
+/** Report frame `n`'s status, failed, as ath9k's interrupt handler does. */
+static void frame_status(unsigned n)
+{
+    struct wlan_tx_status st;
+    unsigned i;
+
+    k_memset(&st, 0, sizeof(st));
+    st.cookie = WLAN_DATA_COOKIE | n;
+    for (i = 0; i < WLAN_TX_RATE_SERIES; ++i)
+        st.rates[i].index = -1;
+    st.rates[0].index = 0;
+    st.rates[0].count = 1;
+    wlan_radio_tx_status(&radio, &st);
+}
+
+/** Report a push of `mpdus` that failed whole, every frame kept for another
+ * try, at `rate` four times and the lowest rate twice, as
+ * ath9k_tx_report_tries does. */
+static void push_failed(unsigned mpdus, int rate)
+{
+    struct wlan_tx_status st;
+    unsigned i;
+
+    k_memset(&st, 0, sizeof(st));
+    st.flags = WLAN_TX_NO_FRAME;
+    for (i = 0; i < WLAN_TX_RATE_SERIES; ++i)
+        st.rates[i].index = -1;
+    st.rates[0].index = (int16_t)rate;
+    st.rates[0].count = 4;
+    st.rates[0].flags = WLAN_RATE_MCS;
+    st.rates[1].index = 0;
+    st.rates[1].count = 2;
+    st.ampdu_len = (uint8_t)mpdus;
+    wlan_radio_tx_status(&radio, &st);
+}
+
+/**
+ * Every frame's status arrives though the worker was away while the radio's
+ * four rings of 64 emptied, behind a push that failed whole: the report of
+ * its tries takes no frame's place, and rate control sees them. Reports of
+ * tries alone past their own queue are merged with exact attempts, and one
+ * with nothing to merge with is counted lost.
+ */
+static void check_status_full(void)
+{
+    struct wlan_data *d;
+    unsigned i, ok = 1;
+
+    setup();
+    d = wlan_data_of(&wlan);
+    radio.rate_ops = &rate_ops;
+    d->tx_status = status_hook;
+    k_memset(status_seen, 0, sizeof(status_seen));
+    statuses = tries_reports = tries_attempts = tries_mpdus = 0;
+    push_failed(20, 7);
+    for (i = 0; i < 4 * 64; ++i)
+        frame_status(i);
+    run_work();
+    for (i = 0; i < 256; ++i)
+        ok &= status_seen[i] == 1;
+    CHECK(statuses == 256 && ok);
+    CHECK(tries_reports == 1 && tries_mpdus == 20 && tries_attempts == 6 * 20);
+    CHECK(wlan.counters.tx_failed == 256 && wlan.counters.tx_status_lost == 0);
+
+    statuses = tries_reports = tries_attempts = tries_mpdus = 0;
+    for (i = 0; i < WLAN_DATA_TRIES_QUEUE + 3; ++i)
+        push_failed(10, 7);
+    push_failed(10, 5);
+    run_work();
+    CHECK(tries_reports == WLAN_DATA_TRIES_QUEUE);
+    CHECK(tries_mpdus == 10 * (WLAN_DATA_TRIES_QUEUE + 3));
+    CHECK(tries_attempts == 6 * 10 * (WLAN_DATA_TRIES_QUEUE + 3));
+    CHECK(wlan.counters.tx_status_lost == 1);
+    radio.rate_ops = 0;
+    wlan_data_detach(&wlan);
+}
+
 /** A refusal other than a full ring drops that frame, counted, and the
  * frames behind it go. */
 static void check_other_refusal(void)
@@ -1100,6 +1298,8 @@ int main(void)
     check_sleep_status();
     check_rx_sends();
     check_rx_full();
+    check_rx_bound();
+    check_status_full();
     check_other_refusal();
     check_stop();
     check_rekey_ring();

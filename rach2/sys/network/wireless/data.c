@@ -85,26 +85,58 @@ static void data_drain_tx(struct wlan_work *work)
     data_send_tx(((struct wlan_data_work *)work)->data);
 }
 
-/** Take what the radio reported: completions first, so that rate
- * selection learns of them before it picks again, then received frames.
- * A completion frees a slot of the radio's ring, so a held transmit queue
- * is drained again once the completions are taken. A stream of received
- * frames can keep this loop from ending, and the worker runs one job at a
- * time, so the loop sends what is queued every WLAN_DATA_RX_BATCH frames. */
-static void data_take_rx(struct wlan_data *d)
+/** Take the oldest queued report, a frame's status before a report of tries
+ * alone, into `*status`; rxq_lock is held. Returns 0 when neither waits. */
+static int status_take(struct wlan_data *d, struct wlan_tx_status *status)
+{
+    if (d->statq_count) {
+        *status = d->statq[d->statq_head];
+        d->statq_head = (d->statq_head + 1) % WLAN_DATA_STATUS_QUEUE;
+        d->statq_count--;
+        return 1;
+    }
+    if (d->triesq_count) {
+        *status = d->triesq[d->triesq_head];
+        d->triesq_head = (d->triesq_head + 1) % WLAN_DATA_TRIES_QUEUE;
+        d->triesq_count--;
+        return 1;
+    }
+    return 0;
+}
+
+/**
+ * Take what the radio reported: completions first, so that rate selection
+ * learns of them before it picks again, then received frames. A completion
+ * frees a slot of the radio's ring, so a held transmit queue is drained
+ * again once the completions are taken. The worker runs one job at a time,
+ * so the loop sends what is queued every WLAN_DATA_RX_BATCH frames.
+ *
+ * With a `budget`, it takes at most that many frames and completions, and
+ * returns 1 when more wait, for the caller to queue the work again; a stream
+ * of received frames would otherwise keep it from ending. With none, it
+ * takes every completion and the frames queued at the call, as a pairwise
+ * key needs, and returns 0.
+ */
+static int data_take_rx(struct wlan_data *d, unsigned budget)
 {
     struct wlan_tx_status status;
     struct wlan_data_rxq *q;
     uint32_t flags;
-    unsigned taken = 0;
-    int completed = 0;
+    unsigned taken = 0, items = 0, frames;
+    int completed = 0, more = 0;
 
+    flags = spin_lock_irqsave(&d->rxq_lock);
+    frames = budget ? budget : d->rxq_count;
+    spin_unlock_irqrestore(&d->rxq_lock, flags);
     for (;;) {
         flags = spin_lock_irqsave(&d->rxq_lock);
-        if (d->statq_count) {
-            status = d->statq[d->statq_head];
-            d->statq_head = (d->statq_head + 1) % WLAN_DATA_STATUS_QUEUE;
-            d->statq_count--;
+        if (budget && items == budget) {
+            more = d->statq_count || d->triesq_count || d->rxq_count;
+            spin_unlock_irqrestore(&d->rxq_lock, flags);
+            break;
+        }
+        ++items;
+        if (status_take(d, &status)) {
             spin_unlock_irqrestore(&d->rxq_lock, flags);
             wlan_data_tx_status(d, &status);
             if (d->tx_status)
@@ -112,7 +144,7 @@ static void data_take_rx(struct wlan_data *d)
             completed = 1;
             continue;
         }
-        if (!d->rxq_count) {
+        if (!d->rxq_count || taken == frames) {
             spin_unlock_irqrestore(&d->rxq_lock, flags);
             break;
         }
@@ -134,12 +166,23 @@ static void data_take_rx(struct wlan_data *d)
     /* The worker alone sets txq_held, so it reads it without the lock. */
     if (completed && d->txq_held)
         (void)wlan_data_kick(d->tx_work, 0);
+    return more;
 }
 
-/** The receive queue's work: take what the radio queued. */
+/** The receive queue's work: take a budget of what the radio queued, and
+ * for the rest queue the other record behind the work due now, moving it
+ * there when an interrupt queued it at an earlier tick. A kick between the
+ * cancel and the queueing finds the running record busy and queues the other
+ * itself, so no frame waits without its work queued. */
 static void data_drain_rx(struct wlan_work *work)
 {
-    data_take_rx(((struct wlan_data_work *)work)->data);
+    struct wlan_data *d = ((struct wlan_data_work *)work)->data;
+    struct wlan_work *other = &d->rx_work[work == &d->rx_work[0].work].work;
+
+    if (!data_take_rx(d, WLAN_DATA_RX_BUDGET))
+        return;
+    wlan_cancel_work(other);
+    (void)wlan_queue_work(other, 0);
 }
 
 int wlan_data_attach(struct wlan *wlan, wlan_data_event_fn event)
@@ -189,6 +232,7 @@ void wlan_data_detach(struct wlan *wlan)
     flags = spin_lock_irqsave(&d->rxq_lock);
     d->rxq_count = 0;
     d->statq_count = 0;
+    d->triesq_count = 0;
     spin_unlock_irqrestore(&d->rxq_lock, flags);
     wlan_data_disconnect(d);
     wlan->data_priv = 0;
@@ -243,10 +287,46 @@ int wlan_radio_rx_full(struct wlan_radio *radio)
     return full;
 }
 
+/**
+ * Fold `from`, a report of tries alone, into `into`, another, as one report
+ * of the MPDUs of both: rate control charges each series its count for each
+ * MPDU, and credits the last series with those acknowledged. Each count
+ * becomes the mean of the two weighted by their MPDUs, which is exact when
+ * they agree, as for two pushes that failed whole. Returns 0, or -1 when the
+ * two tried different series or the MPDUs would not fit in ampdu_len.
+ */
+static int tries_merge(struct wlan_tx_status *into, const struct wlan_tx_status *from)
+{
+    unsigned i, a, b, acked;
+
+    if ((into->flags ^ from->flags) & WLAN_TX_FILTERED)
+        return -1;
+    for (i = 0; i < WLAN_TX_RATE_SERIES; ++i)
+        if (into->rates[i].index != from->rates[i].index ||
+            (into->rates[i].index >= 0 && into->rates[i].flags != from->rates[i].flags))
+            return -1;
+    a = into->ampdu_len ? into->ampdu_len : 1;
+    b = from->ampdu_len ? from->ampdu_len : 1;
+    if (a + b > 255)
+        return -1;
+    acked = (into->ampdu_len ? into->ampdu_ack_len : (into->flags & WLAN_TX_ACKED) != 0) +
+            (from->ampdu_len ? from->ampdu_ack_len : (from->flags & WLAN_TX_ACKED) != 0);
+    for (i = 0; i < WLAN_TX_RATE_SERIES && into->rates[i].index >= 0; ++i)
+        into->rates[i].count =
+            (uint8_t)((into->rates[i].count * a + from->rates[i].count * b + (a + b) / 2) /
+                      (a + b));
+    into->ampdu_len = (uint8_t)(a + b);
+    into->ampdu_ack_len = (uint8_t)acked;
+    into->flags &= (uint8_t)~WLAN_TX_ACKED;
+    return 0;
+}
+
 void wlan_radio_tx_status(struct wlan_radio *radio, const struct wlan_tx_status *status)
 {
     struct wlan_data *d;
     uint32_t flags;
+    unsigned i;
+    int lost = 1;
 
     if (!radio || !status)
         return;
@@ -254,10 +334,23 @@ void wlan_radio_tx_status(struct wlan_radio *radio, const struct wlan_tx_status 
     if (!d)
         return;
     flags = spin_lock_irqsave(&d->rxq_lock);
-    if (d->statq_count < WLAN_DATA_STATUS_QUEUE) {
-        d->statq[(d->statq_head + d->statq_count) % WLAN_DATA_STATUS_QUEUE] = *status;
-        d->statq_count++;
+    if (!(status->flags & WLAN_TX_NO_FRAME)) {
+        if (d->statq_count < WLAN_DATA_STATUS_QUEUE) {
+            d->statq[(d->statq_head + d->statq_count) % WLAN_DATA_STATUS_QUEUE] = *status;
+            d->statq_count++;
+            lost = 0;
+        }
+    } else if (d->triesq_count < WLAN_DATA_TRIES_QUEUE) {
+        d->triesq[(d->triesq_head + d->triesq_count) % WLAN_DATA_TRIES_QUEUE] = *status;
+        d->triesq_count++;
+        lost = 0;
+    } else {
+        for (i = WLAN_DATA_TRIES_QUEUE; lost && i-- > 0;)
+            if (tries_merge(&d->triesq[(d->triesq_head + i) % WLAN_DATA_TRIES_QUEUE], status) == 0)
+                lost = 0;
     }
+    if (lost)
+        d->counters->tx_status_lost++;
     spin_unlock_irqrestore(&d->rxq_lock, flags);
     (void)wlan_data_kick(d->rx_work, 0);
 }
@@ -408,7 +501,7 @@ int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
     if (!key || !(key->flags & WLAN_KEY_PAIRWISE))
         return wlan_data_install_key(d, key);
     joined = d->connected || d->install_wait;
-    data_take_rx(d);
+    (void)data_take_rx(d, 0);
     if (d->connected && !d->install_wait)
         rekey_mark(d);
     data_send_tx(d);
