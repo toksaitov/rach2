@@ -1,6 +1,6 @@
 ---
 name: second-opinion
-description: Ask agy (Gemini 4 Argon) or Muse Code (Muse Wonder Full) a question or for a review through their headless modes. Use when stuck, or when a hard question needs another view beside Codex and Fable.
+description: Ask agy (Gemini 4 Argon) or Muse Code (Muse Wonder Full) a question or for a review through their headless modes. Use when Codex and Fable leave a question open or disagree.
 ---
 
 # agy and Muse Code
