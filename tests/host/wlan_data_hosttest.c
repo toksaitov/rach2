@@ -95,6 +95,7 @@ static unsigned set_keys; /* installs into slots */
 static unsigned del_keys; /* removals from slots */
 static int slot_used[8];
 static unsigned ampdu_starts, ampdu_stops;
+static int radio_full; /* radio_tx refuses each frame */
 static unsigned rate_selects, rate_statuses;
 
 /** Record a transmitted frame. */
@@ -104,6 +105,8 @@ static int radio_tx(struct wlan_radio *radio, const uint8_t *frame, unsigned len
     struct sent *s = &sent[n_sent % 16];
 
     (void)radio;
+    if (radio_full)
+        return -ENOBUFS;
     k_memcpy(s->frame, frame, len);
     s->len = len;
     s->info = *info;
@@ -1065,6 +1068,36 @@ static void check_rekey_sessions(void)
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
     CHECK(d->ba[0].active);
+
+    /* A full queue holds the key and the session until the DELBA goes. */
+    setup(1);
+    takes_keys = 1;
+    len = addba_req(f, 0, 8, 100);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
+    n_sent = 0;
+    radio_full = 1;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == -EINPROGRESS);
+    CHECK(d->ba[0].active && wlan_data_pairwise_key(d, 0)->key.hw_slot == 0);
+    now += WLAN_DATA_REKEY_WAIT - 1;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == -EINPROGRESS);
+    radio_full = 0;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    CHECK(n_sent == 1 && sent_delba(0, 0x0000, 36) && !d->ba[0].active);
+    CHECK(wlan_data_pairwise_key(d, 0)->key.hw_slot == 1 && d->ba_stop_due == 0);
+
+    /* It holds them no longer than the limit. */
+    setup(1);
+    takes_keys = 1;
+    len = addba_req(f, 0, 8, 100);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
+    radio_full = 1;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == -EINPROGRESS);
+    now += WLAN_DATA_REKEY_WAIT;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    radio_full = 0;
+    CHECK(!d->ba[0].active && wlan_data_pairwise_key(d, 0)->key.hw_slot == 1);
 }
 
 /** The sender's count is shared across TIDs: a TID's first frame under the

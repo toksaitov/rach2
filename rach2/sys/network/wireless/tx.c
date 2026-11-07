@@ -204,6 +204,7 @@ void wlan_data_disconnect(struct wlan_data *d)
     d->txq_held = 0;
     d->txq_rekey = 0;
     spin_unlock_irqrestore(&d->txq_lock, flags);
+    d->ba_stop_due = 0;
     d->tx_stopped = 0;
     wlan_data_clear_keys(d);
     d->connected = 0;

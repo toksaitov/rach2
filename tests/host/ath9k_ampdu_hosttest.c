@@ -978,6 +978,29 @@ static void test_gaps(void)
     CHECK(ah.tx.q[WLAN_AC_BE].count == 0);
 }
 
+/* A session stopped with an aggregate on the air: a subframe the BlockAck
+ * missed goes nowhere again, as ath_tx_complete_aggr fails it when the TID
+ * is no longer active, and those it acknowledged are done. */
+static void test_stop_retry(void)
+{
+    struct ar9003_txc *dc[40];
+    unsigned i, s0;
+
+    setup();
+    establish(64);
+    for (i = 0; i < 10; i++)
+        CHECK(send(0, 1000, 0) == 0);
+    CHECK(chain_of(1, 0, dc, 40) == 1);
+    s0 = seq_of(dc[0]);
+    (void)finish_ok(1);
+    CHECK(chain_of(1, 1, dc, 40) == 8);
+    CHECK(delba(0, 0) == 0 && !ah.ampdu.tid[0].active);
+    (void)finish_ok(1);
+    (void)finish(1, AR_FrmXmitOK, 0, 1, (s0 + 2) & 0xfff, 0xff & ~(uint64_t)0x08);
+    CHECK(ah.ampdu.sw_retries == 0 && counters.tx_failed == 1);
+    CHECK(model.tx[1].count == 0 && ah.tx.q[WLAN_AC_BE].count == 0);
+}
+
 int main(void)
 {
     test_request();
@@ -988,6 +1011,7 @@ int main(void)
     test_give_up();
     test_no_blockack();
     test_gaps();
+    test_stop_retry();
     kfree(d);
     if (fails)
         printf("ath9k_ampdu_hosttest: %u failed\n", fails);
