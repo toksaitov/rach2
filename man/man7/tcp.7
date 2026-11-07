@@ -92,7 +92,7 @@ reports its link down, so a cable out for a minute ends nothing.
 A path that drops segments larger than some size without reporting it, a
 black hole, is detected as RFC 4821 and Linux's
 .Pa tcp_mtu_probing
-1 detect it.
+1 detect it, when that mode is set.
 The third timeout in a row of more than a floor of data, 536 bytes on IPv4
 and 1220 on IPv6, sent on a link that is up, lowers the segment size to 1024
 bytes, and each further timeout halves it, never below the floor.
@@ -103,8 +103,9 @@ probe goes at once, and its loss lowers the top of the search below it.
 A search that has closed to within 8 bytes starts again from the top ten
 minutes later.
 .Pa /proc/sys/net/ipv4/tcp_mtu_probing
-sets the mode: 0 does neither, 1, the default, starts the search at a black
-hole, and 2 starts every connection at 1024 bytes and probes upward.
+sets the mode: 0, the default, does neither, since a stall of a radio link
+times out as a black hole does, 1 starts the search at a black hole, and 2
+starts every connection at 1024 bytes and probes upward.
 A router's report that a segment was too big lowers the size and the top of
 the search at once.
 .Ss Options

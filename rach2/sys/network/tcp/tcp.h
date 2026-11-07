@@ -125,8 +125,10 @@
 
 /*
  * Path MTU black-hole detection, as Linux's `tcp_mtu_probing` (RFC 4821).
- * Mode 1, the default here, starts it when a full-size segment has timed
- * out TCP_RETRIES1 times in a row: the segment size falls to
+ * Mode 0, the default as on Linux, does neither, since a stall of a radio
+ * link times out as a black hole does and would leave a flow on small
+ * segments for TCP_PROBE_INTERVAL. Mode 1 starts it when a full-size segment
+ * has timed out TCP_RETRIES1 times in a row: the segment size falls to
  * TCP_BASE_MSS, and halves at each further timeout, down to the floor of
  * TCP_MSS_DEFAULT on IPv4 and TCP_MSS_FLOOR6 on IPv6. Once started, a probe
  * of the size halfway to the largest the path may carry is sent from new
@@ -135,9 +137,9 @@
  * TCP_MTU_PROBE_THRESH bytes starts again from the top after
  * TCP_PROBE_INTERVAL, as does one TCP_PROBE_INTERVAL after a timeout
  * lowered the size. Mode 2 starts every connection at TCP_BASE_MSS and
- * probes upward; mode 0 does neither.
+ * probes upward.
  */
-#define TCP_MTU_PROBING_DEFAULT 1
+#define TCP_MTU_PROBING_DEFAULT 0
 #define TCP_RETRIES1            3
 #define TCP_BASE_MSS            1024u
 #define TCP_MSS_FLOOR6          1220u

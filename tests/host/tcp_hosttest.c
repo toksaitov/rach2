@@ -1100,6 +1100,7 @@ static void blackhole_rows(void)
     unsigned k;
 
     reset_all();
+    CHECK("no detection by default", TCP_MTU_PROBING_DEFAULT == 0);
     tcp_mtu_probing = 0;
     conn = open_conn(&sock, 101, &peer_seq, &lport);
     CHECK("4000 bytes go", tcp_send(&sock, bytes, 4000) == 4000);
