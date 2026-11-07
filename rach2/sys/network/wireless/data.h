@@ -597,9 +597,12 @@ uint64_t wlan_data_renewal(struct wlan_data *d, enum wlan_rescue *cause);
 /** Forget the renewal under way, as a new connection does. */
 void wlan_data_renewal_end(struct wlan_data *d);
 
-/** Take a unicast frame opened under `k`: under the renewal's key, it is
- * the proof that ends the renewal. Worker only. */
-void wlan_data_renewal_proved(struct wlan_data *d, const struct wlan_data_key *k);
+/** Take a unicast frame opened under `k`. Under the renewal's key it shows
+ * that the AP took message 4, so that no EAPOL frame is owed any more; it
+ * says nothing of whether the AP takes our frames under the key. `answer`,
+ * an ARP reply that follows the question of wlan_data_renewal_ask, does, and
+ * ends the renewal. Worker only. */
+void wlan_data_renewal_proved(struct wlan_data *d, const struct wlan_data_key *k, int answer);
 
 /** Note a data frame of `cookie` the radio took: EAPOL, set in `eapol`, is
  * the renewal's message 2 or 4 when sent before the key, or after it while
@@ -618,16 +621,17 @@ void wlan_data_renewal_status(struct wlan_data *d, const struct wlan_tx_status *
 void wlan_data_renewal_rescued(struct wlan_data *d);
 
 /**
- * Settle a renewal whose wait ran out, before the station leaves on it. A
- * silent AP, WLAN_RESCUE_SILENT, may only lack traffic to answer: a one-way
- * stream sends the AP nothing to reply to. So with a gateway the caller asks
- * it a question whose answer comes as a unicast frame under the new key, and
+ * Settle a renewal under way. Once the AP has ACKed data under the new key,
+ * WLAN_RESCUE_SILENT, only a reply to something the station sent shows that
+ * the AP passes our frames on, since its radio ACKs before the replay check
+ * and its own frames need nothing from us. So with a gateway the caller asks
+ * it a question whose answer comes as an ARP reply under the new key, and
  * wlan_data_renewal_proved counts that answer in rescue_saved. Without one
  * there is nobody to ask and nothing shows the link wrong: the renewal ends.
  *
- * Returns 1 when the caller is to ask the gateway now, 0 when the station
- * leaves as before, for the other causes, and -1 when the renewal is over
- * and nothing is owed. Worker only.
+ * Returns 1 when the caller is to ask the gateway now, 0 when the renewal
+ * has no question, for the other causes, and -1 when the renewal is over and
+ * nothing is owed. Worker only.
  */
 int wlan_data_renewal_ask(struct wlan_data *d, int gateway);
 

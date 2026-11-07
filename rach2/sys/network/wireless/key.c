@@ -173,11 +173,14 @@ void wlan_data_renewal_end(struct wlan_data *d)
     d->renew_asked = 0;
 }
 
-void wlan_data_renewal_proved(struct wlan_data *d, const struct wlan_data_key *k)
+void wlan_data_renewal_proved(struct wlan_data *d, const struct wlan_data_key *k, int answer)
 {
-    if (d->renewed && k == wlan_data_pairwise_key(d, d->tx_pairwise)) {
-        if (d->renew_asked)
-            d->counters->rescue_saved++;
+    if (!d->renewed || k != wlan_data_pairwise_key(d, d->tx_pairwise))
+        return;
+    d->eapol_cookie = 0;
+    d->eapol_failed = 0;
+    if (answer && d->renew_asked) {
+        d->counters->rescue_saved++;
         wlan_data_renewal_end(d);
     }
 }

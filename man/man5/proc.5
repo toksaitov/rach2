@@ -1205,11 +1205,11 @@ Renewals the station left because message 4 failed under the old key and no
 frame opened under the new key within 10 seconds.
 .It Li wlan_rescue_silent
 Renewals the station left because the access point acknowledged data under
-the new key, sent no unicast frame under it within 10 seconds, and did not
-pass on the gateway's answer to an ARP request within 2 seconds more.
+the new key and did not pass on the gateway's answer to the ARP requests the
+station sent within 10 seconds, and 2 seconds more for the last.
 .It Li wlan_rescue_saved
-Renewals silent for 10 seconds that the station kept because the gateway's
-answer to its ARP request came under the new key.
+Renewals that ended on the gateway's answer to an ARP request under the new
+key, which proves that the access point passes the station's frames on.
 .It Li loopback_dropped
 Datagrams dropped because the loopback ring was full.
 .It Li loopback_peak

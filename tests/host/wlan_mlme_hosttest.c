@@ -1112,49 +1112,43 @@ static void asking_renewal(int result)
     renewing_at = now;
 }
 
-/** A renewal's question goes once, at WLAN_MLME_KEY_WAIT and not before,
- * though beacons come; with no answer the station leaves with reason 15
- * WLAN_MLME_ASK_WAIT later, and not before. */
+/** A renewal's question goes at its start and again each WLAN_MLME_ASK_WAIT,
+ * though beacons come; with no answer the station leaves with reason 15 once
+ * WLAN_MLME_KEY_WAIT has run out, and not before. */
 static void renewal_question_unanswered(void)
 {
     uint64_t began;
 
     asking_renewal(1);
     began = now;
-    beacons_for(WLAN_MLME_KEY_WAIT - 100);
-    wait_ms(99);
-    CHECK(n_asks == 0 && mlme.state == WLAN_STA_ASSOCIATED);
-    wait_ms(1);
-    CHECK(n_asks == 1 && asked_at == began + WLAN_MLME_KEY_WAIT);
-    CHECK(mlme.state == WLAN_STA_ASSOCIATED && n_seen == 0);
-    CHECK(ap_beacon(ap_a, IEEE80211_STYPE_BEACON) == 0);
-    beacons_for(WLAN_MLME_ASK_WAIT - 100);
-    wait_ms(99);
+    beacons_for(3000);
     CHECK(n_asks == 1 && mlme.state == WLAN_STA_ASSOCIATED && n_seen == 0);
-    wait_ms(1);
-    CHECK(mlme.state == WLAN_STA_NONE && n_seen == 1 && n_asks == 1);
-    CHECK(now == began + WLAN_MLME_KEY_WAIT + WLAN_MLME_ASK_WAIT);
+    CHECK(asked_at <= began + WLAN_MLME_ASK_WAIT);
+    beacons_for(WLAN_MLME_KEY_WAIT - 3000);
+    CHECK(n_asks == 5 && mlme.state == WLAN_STA_ASSOCIATED && n_seen == 0);
+    beacons_for(WLAN_MLME_ASK_WAIT);
+    CHECK(mlme.state == WLAN_STA_NONE && n_seen == 1 && n_asks == 5);
+    CHECK(now <= began + WLAN_MLME_KEY_WAIT + WLAN_MLME_ASK_WAIT);
     CHECK(last_event()->ev.type == WLAN_EVENT_DEAUTHENTICATE);
     CHECK(last_event()->ev.reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT);
     renewing_at = 0;
 }
 
 /** An answer to the question, which ends the renewal, keeps the station;
- * the next renewal asks again at its own limit. */
+ * the next renewal asks again from its own start. */
 static void renewal_question_answered(void)
 {
     uint64_t began;
 
     asking_renewal(1);
-    beacons_for(WLAN_MLME_KEY_WAIT);
+    beacons_for(3000);
     CHECK(n_asks == 1 && mlme.state == WLAN_STA_ASSOCIATED);
-    beacons_for(WLAN_MLME_ASK_WAIT - 1000);
     renewing_at = 0;
     beacons_for(3 * WLAN_MLME_ASK_WAIT);
     CHECK(n_asks == 1 && mlme.state == WLAN_STA_ASSOCIATED && n_seen == 0);
     renewing_at = began = now;
-    beacons_for(WLAN_MLME_KEY_WAIT);
-    CHECK(n_asks == 2 && asked_at == began + WLAN_MLME_KEY_WAIT);
+    beacons_for(3000);
+    CHECK(n_asks == 2 && asked_at <= began + WLAN_MLME_ASK_WAIT);
     CHECK(mlme.state == WLAN_STA_ASSOCIATED);
     renewing_at = 0;
 }
@@ -1167,7 +1161,7 @@ static void renewal_question_none(void)
     uint64_t began;
 
     asking_renewal(-1);
-    beacons_for(WLAN_MLME_KEY_WAIT);
+    beacons_for(3000);
     CHECK(n_asks == 1 && renewing_at == 0);
     beacons_for(3 * WLAN_MLME_KEY_WAIT);
     CHECK(n_asks == 1 && mlme.state == WLAN_STA_ASSOCIATED && n_seen == 0);
@@ -1176,9 +1170,9 @@ static void renewal_question_none(void)
     began = now;
     beacons_for(WLAN_MLME_KEY_WAIT - 100);
     wait_ms(99);
-    CHECK(n_asks == 0 && mlme.state == WLAN_STA_ASSOCIATED);
+    CHECK(n_asks == 1 && mlme.state == WLAN_STA_ASSOCIATED);
     wait_ms(1);
-    CHECK(n_asks == 1 && mlme.state == WLAN_STA_NONE && now == began + WLAN_MLME_KEY_WAIT);
+    CHECK(n_asks == 2 && mlme.state == WLAN_STA_NONE && now == began + WLAN_MLME_KEY_WAIT);
     CHECK(last_event()->ev.reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT);
     renewing_at = 0;
 }

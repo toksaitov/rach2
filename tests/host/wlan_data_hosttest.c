@@ -999,6 +999,31 @@ static int rx_opened_tid(unsigned tid, unsigned sn, int slot, uint64_t pn)
     return rx_opened_on(rxs.frequency, tid, sn, slot, pn);
 }
 
+/** An ARP message of operation `op`, which the radio opened under key slot
+ * `slot` with `pn`. */
+static int rx_arp(unsigned op, unsigned sn, int slot, uint64_t pn)
+{
+    static const uint8_t arp[16] = {0xaa, 0xaa, 0x03, 0, 0, 0, 0x08, 0x06, 0, 1, 8, 0, 6, 4, 0, 0};
+    uint8_t f[200], body[36];
+    struct wlan_rx_status hw = rxs;
+    unsigned len;
+
+    hw.flags = WLAN_RX_DECRYPTED | WLAN_RX_IV_STRIPPED | WLAN_RX_MIC_STRIPPED;
+    hw.hw_key = slot;
+    hw.pn = pn;
+    k_memset(body, 0, sizeof(body));
+    k_memcpy(body, arp, sizeof(arp));
+    body[15] = (uint8_t)op;
+    len = ap_frame(f, sta, 1, 0, sn, 0, 0, body, sizeof(body));
+    return wlan_data_rx(d, f, len, &hw);
+}
+
+/** The gateway's ARP reply; as rx_arp. */
+static int rx_arp_reply(unsigned sn, int slot, uint64_t pn)
+{
+    return rx_arp(2, sn, slot, pn);
+}
+
 /** A frame of TID 0 the radio opened; as rx_opened_tid. */
 static int rx_opened(unsigned sn, int slot, uint64_t pn)
 {
@@ -1764,7 +1789,7 @@ static void check_renewal_message4(void)
     keyed = now;
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
     CHECK(wlan_data_renewal(d, &cause) == keyed && cause == WLAN_RESCUE_MESSAGE4);
-    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
+    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing != 0 && wlan_data_renewal(d, 0) == 0);
 
     /* A status that never comes bounds the renewal as a failure does. */
     renewal_to_message4();
@@ -1800,19 +1825,22 @@ static void check_renewal_idle(void)
     acked = now;
     CHECK(wlan_data_renewal(d, &cause) == acked && cause == WLAN_RESCUE_SILENT);
     now += 5000;
-    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
+    CHECK(rx_opened(105, 1, 1) == 0 && wlan_data_renewal(d, 0) == acked);
+    CHECK(wlan_data_renewal_ask(d, 1) == 1);
+    CHECK(rx_arp_reply(106, 1, 2) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
 }
 
 /** The same idle renewal under the real monitor, whose beacons and ACKed
  * polls go on as the forgetful AP's do: idle for 60 s it neither asks nor
- * leaves; data ACKed then and answered by nothing under the key asks the
- * gateway at WLAN_MLME_KEY_WAIT and leaves with reason 15 at
- * WLAN_MLME_ASK_WAIT after, once, as a silent rescue. A reply under the key
- * at any time, before the data or during the wait, ends the renewal and
- * the station stays. */
+ * leaves; data ACKed then asks the gateway and asks again each
+ * WLAN_MLME_ASK_WAIT, and with no ARP reply the station leaves with reason 15
+ * at WLAN_MLME_KEY_WAIT, once, as a silent rescue, whatever else the AP sends
+ * under the key. A reply during the wait ends the renewal and the station
+ * stays; a frame before any data ends nothing. */
 static void check_renewal_idle_monitor(void)
 {
     uint64_t acked;
+    unsigned n;
 
     renewal_to_message4();
     status_of(1, WLAN_TX_ACKED);
@@ -1824,11 +1852,12 @@ static void check_renewal_idle_monitor(void)
     send_data();
     status_of(n_sent - 1, WLAN_TX_ACKED);
     acked = now;
-    mon_beacons(WLAN_MLME_KEY_WAIT - 200);
-    CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_asks == 0);
+    mon_beacons(WLAN_MLME_KEY_WAIT - 1000);
+    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing != 0);
+    CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_asks >= 4);
     mon_beacons(WLAN_MLME_ASK_WAIT + 2000);
-    CHECK(mon_asks == 1 && mon_leaves == 1 && mon_reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT);
-    CHECK(now <= acked + WLAN_MLME_KEY_WAIT + WLAN_MLME_ASK_WAIT + 200);
+    CHECK(mon_leaves == 1 && mon_reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT);
+    CHECK(now <= acked + WLAN_MLME_KEY_WAIT + WLAN_MLME_ASK_WAIT + 2000);
     CHECK(counters.rescues[WLAN_RESCUE_SILENT] == 1 && counters.rescue_saved == 0);
     CHECK(counters.rescues[WLAN_RESCUE_KEY] == 0 && counters.rescues[WLAN_RESCUE_MESSAGE4] == 0);
 
@@ -1841,21 +1870,25 @@ static void check_renewal_idle_monitor(void)
     send_data();
     status_of(n_sent - 1, WLAN_TX_ACKED);
     mon_beacons(5000);
-    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0);
+    CHECK(mon_asks != 0 && rx_arp_reply(105, 1, 1) == 0 && d->renewing == 0);
+    n = mon_asks;
     mon_beacons(2 * WLAN_MLME_KEY_WAIT);
-    CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_asks == 0 && mon_leaves == 0);
+    CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_asks == n && mon_leaves == 0);
 
-    /* The reply before any data. */
+    /* A frame before any data. */
     renewal_to_message4();
     status_of(1, WLAN_TX_ACKED);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
     mon_connect();
     mon_beacons(60000);
-    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0);
+    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing != 0);
     send_data();
     status_of(n_sent - 1, WLAN_TX_ACKED);
+    mon_beacons(WLAN_MLME_ASK_WAIT + 1000);
+    CHECK(mon_asks != 0 && rx_arp_reply(106, 1, 2) == 0 && d->renewing == 0);
+    n = mon_asks;
     mon_beacons(2 * WLAN_MLME_KEY_WAIT);
-    CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_asks == 0 && mon_leaves == 0);
+    CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_asks == n && mon_leaves == 0);
 }
 
 /** A held message 4 sends twice, the second after the AP repeats message
@@ -1917,14 +1950,17 @@ static void check_renewal_traffic(void)
     CHECK(wlan_data_renewal(d, &cause) == acked && cause == WLAN_RESCUE_SILENT);
     now += 500;
     CHECK(rx_opened(104, 0, 444) == -ESTALE && d->renewing != 0);
-    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
+    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing != 0);
+    CHECK(wlan_data_renewal_ask(d, 1) == 1);
+    CHECK(rx_arp_reply(106, 1, 2) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
 
-    /* A protected management frame under the key is proof too. */
+    /* A protected management frame under the key shows the AP has it, and
+     * no more. */
     renewal_to_message4();
     status_of(1, WLAN_TX_ACKED);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
-    wlan_data_renewal_proved(d, wlan_data_pairwise_key(d, d->tx_pairwise));
-    CHECK(d->renewing == 0);
+    wlan_data_renewal_proved(d, wlan_data_pairwise_key(d, d->tx_pairwise), 0);
+    CHECK(d->renewing != 0);
 }
 
 /** A renewal whose data the AP ACKs and answers with nothing, the silent
@@ -2029,10 +2065,9 @@ static void renewal_to_silence(void)
 }
 
 /** The question before a silent renewal's leave: asked only for that cause
- * and only with a gateway. Its answer, a unicast frame under the new key,
- * ends the renewal and counts one saved; with none the leave counts as
- * silent. Without a gateway the renewal ends with nothing owed. Message 4's
- * and the key's causes ask nothing, gateway or not. */
+ * and only with a gateway. Its answer, an ARP reply under the new key, and
+ * no other frame, ends the renewal and counts one saved; with none the leave
+ * counts as silent. Without a gateway the renewal ends with nothing owed. */
 static void check_renewal_question(void)
 {
     enum wlan_rescue cause = WLAN_RESCUE_KEY;
@@ -2041,7 +2076,9 @@ static void check_renewal_question(void)
     CHECK(wlan_data_renewal_ask(d, 1) == 1 && d->renewing != 0);
     now += 1000;
     CHECK(rx_opened(104, 0, 444) == -ESTALE && d->renewing != 0 && counters.rescue_saved == 0);
-    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
+    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing != 0 && counters.rescue_saved == 0);
+    CHECK(rx_arp(1, 106, 1, 2) == 0 && d->renewing != 0 && counters.rescue_saved == 0);
+    CHECK(rx_arp_reply(107, 1, 3) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
     CHECK(counters.rescue_saved == 1 && d->renew_asked == 0);
     CHECK(counters.rescues[WLAN_RESCUE_KEY] == 0 && counters.rescues[WLAN_RESCUE_MESSAGE4] == 0 &&
           counters.rescues[WLAN_RESCUE_SILENT] == 0);
@@ -2064,7 +2101,14 @@ static void check_renewal_question(void)
 
     /* A proof with no question saves nothing. */
     renewal_to_silence();
-    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0 && counters.rescue_saved == 0);
+    CHECK(rx_arp_reply(105, 1, 1) == 0 && d->renewing != 0 && counters.rescue_saved == 0);
+}
+
+/** A renewal that owes no answer to a question: message 4's and the key's
+ * causes ask nothing, gateway or not. */
+static void check_renewal_no_question(void)
+{
+    enum wlan_rescue cause = WLAN_RESCUE_KEY;
 
     /* Message 4 failed: no question, gateway or not. */
     renewal_to_message4();
@@ -2241,6 +2285,7 @@ static unsigned ap_mgmt(uint8_t *f, unsigned stype, const uint8_t *da, unsigned 
 static void check_mgmt(void)
 {
     uint8_t f[256], g[256];
+    struct wlan_rx_status hw;
     unsigned len, glen, keyid;
     uint64_t pn, cookie = 0;
 
@@ -2278,6 +2323,14 @@ static void check_mgmt(void)
     CHECK(f[24] == 1 && f[25] == 2 && !(f[1] & (IEEE80211_FCTL_PROTECTED >> 8)));
     CHECK(wlan_data_rx_mgmt(d, g, &glen, &rxs) == -ESTALE);
     /* Management frames keep their own counter: data at a lower PN passes. */
+    CHECK(wlan_data_pairwise_key(d, 0)->rx_mgmt_pn == 3);
+    /* One the radio opened under a slot since left, with its high number. */
+    len = ap_mgmt(f, IEEE80211_STYPE_DEAUTH, sta, 2);
+    hw = rxs;
+    hw.flags = WLAN_RX_DECRYPTED | WLAN_RX_IV_STRIPPED | WLAN_RX_MIC_STRIPPED;
+    hw.hw_key = 7;
+    hw.pn = 500;
+    CHECK(wlan_data_rx_mgmt(d, f, &len, &hw) == -ESTALE);
     CHECK(wlan_data_pairwise_key(d, 0)->rx_mgmt_pn == 3);
     /* A protected probe response is no robust frame. */
     len = ap_mgmt(f, IEEE80211_STYPE_PROBE_RESP, sta, 12);
@@ -2435,6 +2488,7 @@ int main(void)
     check_renewal_silent();
     check_renewal_group();
     check_renewal_question();
+    check_renewal_no_question();
     check_sealed_move();
     check_mgmt();
     check_amsdu();

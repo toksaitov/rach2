@@ -8,6 +8,7 @@
 #include "../../timer.h"
 
 static const uint8_t rfc1042[6] = {0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00};
+static const uint8_t arp_snap[8] = {0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00, 0x08, 0x06};
 static const uint8_t eapol_snap[8] = {0xaa, 0xaa, 0x03, 0x00, 0x00, 0x00, 0x88, 0x8e};
 
 /* Key Information bits of an EAPOL-Key frame. */
@@ -430,12 +431,30 @@ static void seal(struct wlan_data *d, const struct wlan_rx_status *status, uint6
 }
 
 /**
+ * Whether the `frame` of `len` bytes, opened under a key, carries an ARP
+ * reply, operation 2 of RFC 826, alone or as an A-MSDU's first subframe. An
+ * AP that sends one has passed on our request, which is more than its own
+ * frames or its radio's ACKs can show.
+ */
+static int arp_reply(const uint8_t *frame, unsigned len, unsigned hdrlen, int qos)
+{
+    const uint8_t *p = frame + hdrlen;
+
+    if (qos && (frame[IEEE80211_HDRLEN] & IEEE80211_QOS_CTL_A_MSDU_PRESENT)) {
+        p += 14;
+        hdrlen += 14;
+    }
+    return len >= hdrlen + 8 + 8 && same(p, arp_snap, 8) && p[14] == 0 && p[15] == 2;
+}
+
+/**
  * Note the start of a pairwise key's renewal in the `frame` of `len` bytes,
  * opened under a key, so that nobody but the AP can start the wait: message 1
  * of a 4-way handshake, an EAPOL-Key frame, 802.11-2020 Figure 12-35, with
  * the Pairwise and Ack bits and no MIC, on a connection that has a pairwise
  * key. A group key's messages have no Pairwise bit, and a first join has no
- * key. A repeat keeps the first message's tick.
+ * key. A repeat keeps the first message's tick, and a renewal whose key went
+ * in and that still stands, as on an idle link, gives way to the new one.
  */
 static void note_renewal(struct wlan_data *d, const uint8_t *frame, unsigned len, unsigned hdrlen,
                          uint64_t arrived)
@@ -443,12 +462,16 @@ static void note_renewal(struct wlan_data *d, const uint8_t *frame, unsigned len
     const uint8_t *p = frame + hdrlen;
     unsigned info;
 
-    if ((frame[4] & 1) || d->renewing || len < hdrlen + 8 + 7 || !same(p, eapol_snap, 8) ||
-        p[9] != 3 || !wlan_data_pairwise_key(d, d->tx_pairwise))
+    if ((frame[4] & 1) || len < hdrlen + 8 + 7 || !same(p, eapol_snap, 8) || p[9] != 3 ||
+        !wlan_data_pairwise_key(d, d->tx_pairwise))
         return;
     info = (unsigned)p[13] << 8 | p[14];
-    if ((info & (EAPOL_KEY_PAIRWISE | EAPOL_KEY_ACK | EAPOL_KEY_MIC)) ==
+    if ((info & (EAPOL_KEY_PAIRWISE | EAPOL_KEY_ACK | EAPOL_KEY_MIC)) !=
         (EAPOL_KEY_PAIRWISE | EAPOL_KEY_ACK))
+        return;
+    if (d->renewed)
+        wlan_data_renewal_end(d);
+    if (!d->renewing)
         d->renewing = arrived;
 }
 
@@ -509,7 +532,7 @@ int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
     }
     if (c.key) {
         seal(d, status, arrived);
-        wlan_data_renewal_proved(d, c.key);
+        wlan_data_renewal_proved(d, c.key, arp_reply(frame, len, hdrlen, qos));
         note_renewal(d, frame, len, hdrlen, arrived);
     }
 
@@ -651,6 +674,13 @@ static int rx_mgmt_ccmp(struct wlan_data *d, uint8_t *frame, unsigned *len, unsi
         d->counters->rx_decrypt_errors++;
         return -ENOKEY;
     }
+    /* As rx_decrypt: opened under a key since replaced, its number is that
+     * key's, and it shows nothing of this one. */
+    if ((status->flags & WLAN_RX_DECRYPTED) && status->hw_key >= 0 &&
+        status->hw_key != k->key.hw_slot) {
+        d->counters->rx_dropped++;
+        return -ESTALE;
+    }
     rc = ccmp_open(k, frame, &n, hdrlen, status, &pn);
     if (rc) {
         d->counters->rx_decrypt_errors++;
@@ -661,7 +691,7 @@ static int rx_mgmt_ccmp(struct wlan_data *d, uint8_t *frame, unsigned *len, unsi
         return -ESTALE;
     }
     k->rx_mgmt_pn = pn;
-    wlan_data_renewal_proved(d, k);
+    wlan_data_renewal_proved(d, k, 0);
     *len = n;
     return WLAN_DATA_PROTECTED;
 }

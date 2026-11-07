@@ -746,38 +746,48 @@ static void send_probe(struct wlan_mlme *m)
 }
 
 /** The tick the renewal of the pairwise key under way next needs the
- * monitor, 0 for none: when its WLAN_MLME_KEY_WAIT runs out, or, once the
- * question went, WLAN_MLME_ASK_WAIT after it. */
+ * monitor, 0 for none: WLAN_MLME_ASK_WAIT after its last question, its start
+ * for its first, or the end of its WLAN_MLME_KEY_WAIT when it has none. */
 static uint64_t renewal_next(const struct wlan_mlme *m)
 {
     uint64_t due = m->ops->renewing ? m->ops->renewing(m->wlan) : 0;
 
     if (!due)
         return 0;
-    if (m->renew_asked >= due + WLAN_MLME_KEY_WAIT)
+    if (m->renew_asked >= due)
         return m->renew_asked + WLAN_MLME_ASK_WAIT;
-    return due + WLAN_MLME_KEY_WAIT;
+    return m->renew_silent == due ? due + WLAN_MLME_KEY_WAIT : due;
 }
 
 /**
- * Settle the renewal under way at `now`, the monitor's time: once its
- * WLAN_MLME_KEY_WAIT has run out, ask the interface's question, once; leave
- * when there is none, or when it went WLAN_MLME_ASK_WAIT ago and the
- * renewal stands. Returns whether the station leaves.
+ * Settle the renewal under way at `now`, the monitor's time: ask the
+ * interface's question from the renewal's start and again each
+ * WLAN_MLME_ASK_WAIT, since one lost frame must not end a connection. Leave
+ * when WLAN_MLME_KEY_WAIT has run out and the last question has had its
+ * WLAN_MLME_ASK_WAIT, or at once then when the renewal has no question.
+ * Returns whether the station leaves.
  */
 static int renewal_lapsed(struct wlan_mlme *m, uint64_t now)
 {
     uint64_t due = m->ops->renewing ? m->ops->renewing(m->wlan) : 0;
-    int asked;
+    int asked, over = now >= due + WLAN_MLME_KEY_WAIT;
 
-    if (!due || now < due + WLAN_MLME_KEY_WAIT)
+    if (!due)
         return 0;
-    if (m->renew_asked >= due + WLAN_MLME_KEY_WAIT)
-        return now >= m->renew_asked + WLAN_MLME_ASK_WAIT;
+    if (m->renew_asked >= due) {
+        if (now < m->renew_asked + WLAN_MLME_ASK_WAIT)
+            return 0;
+        if (over)
+            return 1;
+    } else if (!over && m->renew_silent == due) {
+        return 0;
+    }
     asked = m->ops->ask ? m->ops->ask(m->wlan) : 0;
     if (asked > 0)
         m->renew_asked = now;
-    return asked == 0;
+    else if (asked == 0)
+        m->renew_silent = due;
+    return asked == 0 && over;
 }
 
 /** The tick to look next in a channel switch's countdown, which can outlast

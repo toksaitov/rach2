@@ -84,13 +84,15 @@ struct wlan_mlme_ops {
      * radio ACKs and nothing here times the handshake out. NULL for an
      * interface that cannot tell. */
     uint64_t (*renewing)(struct wlan *wlan);
-    /** Ask, for a renewal whose WLAN_MLME_KEY_WAIT ran out, a question whose
-     * answer must come under the new key, so that a link that only sends is
-     * not taken for one the AP forgot. Returns 1 when the question went, and
-     * the station leaves WLAN_MLME_ASK_WAIT later unless renewing then reads
-     * 0; 0 when the renewal has no question, and the station leaves now; -1
-     * when the interface ended the renewal, owing nothing. Called at most
-     * once a renewal. NULL for an interface that asks nothing. */
+    /** Ask, for a renewal under way, a question whose answer must come under
+     * the new key and that only an AP that passes on our frames can bring,
+     * so that a silence the AP's radio ACKs through is bounded. Returns 1
+     * when the question went, and it goes again WLAN_MLME_ASK_WAIT later
+     * unless renewing then reads 0, up to the end of WLAN_MLME_KEY_WAIT and
+     * a last WLAN_MLME_ASK_WAIT; 0 when the renewal has no question, and the
+     * station leaves at the end of WLAN_MLME_KEY_WAIT; -1 when the interface
+     * ended the renewal, owing nothing. NULL for an interface that asks
+     * nothing. */
     int (*ask)(struct wlan *wlan);
 };
 
@@ -176,9 +178,9 @@ struct wlan_mlme {
     const struct wlan_channel *ds_home;
     uint64_t ds_moved;
     /* The tick the ask op last asked: it belongs to the renewal under way
-     * when it is at or past that renewal's WLAN_MLME_KEY_WAIT, since a
-     * question is asked only then. */
+     * when it is at or past the tick renewing reads. */
     uint64_t renew_asked;
+    uint64_t renew_silent; /* the renewal that ask said has no question */
     struct wlan_mlme_timer timer[2];
     /* The last authentication or association request: retries send it
      * again, and nl80211 may report its elements with the association. */
