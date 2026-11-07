@@ -1590,7 +1590,7 @@ static void check_renewal_question(void)
     now += 1000;
     CHECK(rx_opened(104, 0, 444) == -ESTALE && d->renewing != 0 && counters.rescue_saved == 0);
     CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
-    CHECK(counters.rescue_saved == 1);
+    CHECK(counters.rescue_saved == 1 && d->renew_asked == 0);
     CHECK(counters.rescues[WLAN_RESCUE_KEY] == 0 && counters.rescues[WLAN_RESCUE_MESSAGE4] == 0 &&
           counters.rescues[WLAN_RESCUE_SILENT] == 0);
 
@@ -1606,6 +1606,7 @@ static void check_renewal_question(void)
      * under the key saves nothing. */
     renewal_to_silence();
     CHECK(wlan_data_renewal_ask(d, 0) == -1 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
+    CHECK(d->renew_asked == 0);
     CHECK(rx_opened(105, 1, 1) == 0 && counters.rescue_saved == 0);
     CHECK(counters.rescues[WLAN_RESCUE_SILENT] == 0);
 
