@@ -211,13 +211,13 @@ struct wlan_data {
     uint64_t heard;
 
     /* The tick the BSS's message 1 reached a connection that has a pairwise
-     * key, until the new key is proved or the link settles idle; zero for
+     * key, until the new key is proved or the connection ends; zero for
      * none. wlan_data_renewal reads it with the fields below. */
     uint64_t renewing;
     uint64_t renewed;      /* the tick the renewal's key went in; zero before */
     uint64_t renew_cookie; /* next_cookie then: later data went under the key */
     uint64_t renew_acked;  /* the tick the first of those was ACKed; zero before */
-    uint64_t eapol_cookie; /* the last EAPOL frame under the old key, unreported */
+    uint64_t eapol_cookie; /* the renewal's last EAPOL frame, unreported */
     int eapol_failed;      /* that frame came back without an ACK */
     int renew_asked;       /* the gateway was asked for an answer under the key */
 
@@ -570,14 +570,14 @@ struct wlan_data_key *wlan_data_pairwise_key(struct wlan_data *d, unsigned index
  * that runs out would be:
  *
  *   * before the key, message 1's tick, WLAN_RESCUE_KEY;
- *   * after it, when the last EAPOL frame under the old key failed or has
- *     no status yet, the key's tick, WLAN_RESCUE_MESSAGE4;
+ *   * after it, when the renewal's last EAPOL frame failed or has no
+ *     status yet, the key's tick, WLAN_RESCUE_MESSAGE4;
  *   * after it, the tick the AP first ACKed data under the key,
  *     WLAN_RESCUE_SILENT.
  *
- * A key in for WLAN_MLME_KEY_WAIT with message 4 ACKed and no data ACKed
- * under it is an idle link that owes nothing: the renewal ends here. Worker
- * only.
+ * A key with message 4 ACKed and no data ACKed under it is an idle link,
+ * which owes nothing however long it stays idle; the renewal stays recorded,
+ * so that the first data ACKed under the key starts the wait. Worker only.
  */
 uint64_t wlan_data_renewal(struct wlan_data *d, enum wlan_rescue *cause);
 
@@ -588,13 +588,15 @@ void wlan_data_renewal_end(struct wlan_data *d);
  * the proof that ends the renewal. Worker only. */
 void wlan_data_renewal_proved(struct wlan_data *d, const struct wlan_data_key *k);
 
-/** Note a data frame of `cookie` the radio took: EAPOL under the old key, set
- * in `eapol`, is the renewal's message 2 or 4. Worker only. */
+/** Note a data frame of `cookie` the radio took: EAPOL, set in `eapol`, is
+ * the renewal's message 2 or 4 when sent before the key, or after it while
+ * message 4's failure stands or its status is owed, so that a later message
+ * 4 that is acknowledged clears the failure. Worker only. */
 void wlan_data_renewal_sent(struct wlan_data *d, uint64_t cookie, int eapol);
 
 /** Note the status of a frame of the data path for the renewal under way:
- * the last EAPOL frame under the old key, or the first data ACKed under the
- * new one. Worker only. */
+ * the renewal's last EAPOL frame, or the first data ACKed under the new key.
+ * Worker only. */
 void wlan_data_renewal_status(struct wlan_data *d, const struct wlan_tx_status *status);
 
 /** Count the rescue wlan_data_renewal names, as the station leaves on it;

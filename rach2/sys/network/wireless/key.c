@@ -154,8 +154,6 @@ uint64_t wlan_data_renewal(struct wlan_data *d, enum wlan_rescue *cause)
             why = WLAN_RESCUE_SILENT;
             from = d->renew_acked;
         } else {
-            if (tick_count() >= d->renewed + WLAN_MLME_KEY_WAIT)
-                wlan_data_renewal_end(d);
             return 0;
         }
     }
@@ -186,7 +184,7 @@ void wlan_data_renewal_proved(struct wlan_data *d, const struct wlan_data_key *k
 
 void wlan_data_renewal_sent(struct wlan_data *d, uint64_t cookie, int eapol)
 {
-    if (eapol && d->renewing && !d->renewed) {
+    if (eapol && d->renewing && (!d->renewed || d->eapol_failed || d->eapol_cookie)) {
         d->eapol_cookie = cookie;
         d->eapol_failed = 0;
     }
