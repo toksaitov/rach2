@@ -27,6 +27,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `drill` (full tier; needs qemu, ssh, gzip, mformat, mmd, mcopy, mke2fs, debugfs, e2fsck; 128 MiB): the recovery drill, boots of one disk that carries the same three partitions the sealed disk has.
 * `account` (full tier; needs qemu; 128 MiB): accounts created, authenticated, changed and deleted on both images, since both have account tools and they are different code.
 * `large` (full tier; needs qemu, mke2fs, e2fsck, mformat, either hdiutil and newfs_exfat or mkfs.exfat and fsck.exfat; 128 MiB): a file of 256 MiB on ext2 and on exFAT, written, read back after a remount, sought, sized, truncated, appended and shared between two descriptors, a mebibyte written astride the 4 GiB line of a sparse ext2 file, and a write past each format's limit refused by name.
+* `punch` (full tier; needs qemu, mke2fs, debugfs, e2fsck; 512 MiB): large files freed on an ext2 volume beside allocation, writes, syncs and memory pressure on four processors, judged after the machine without that kernel.
 * `usb` (core tier; needs qemu; 128 MiB): the USB stack, from a port to a keystroke, the cases of tests/cases/machine.usb.json, each a boot of its own.
 * `keyboard` (full tier; needs qemu; 128 MiB): the console's keyboard through the keymap, with kbd's tools, on QEMU's PS/2 keyboard and on its USB keyboard.
 * `raw` (full tier; needs qemu; 128 MiB): the raw ICMP socket, which is what `traceroute` and root's `ping` are, and BusyBox's `ping` as an ordinary account, over the ICMP datagram socket.
