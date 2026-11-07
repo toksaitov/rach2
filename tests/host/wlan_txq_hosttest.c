@@ -1375,8 +1375,9 @@ static unsigned addba_resp(uint8_t *f, unsigned token)
 /**
  * Frames of a TID whose ADDBA request is out wait at the head of the queue,
  * with their numbers unspent, and those behind them; the AP's answer sends
- * them, and with no answer they go at WLAN_BA_TX_RESPONSE. A frame sent ahead
- * of the session would lie below the first number of the AP's window.
+ * them, and with no answer a DELBA stops the request at WLAN_BA_TX_RESPONSE
+ * and they follow it. A frame sent ahead of the session would lie below the
+ * first number of the AP's window.
  */
 static void check_ba_request_holds(void)
 {

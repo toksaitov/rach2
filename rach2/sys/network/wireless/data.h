@@ -717,9 +717,10 @@ void wlan_ba_tx_check(struct wlan_data *d, unsigned tid, int eapol);
  * reaches the AP outside it and leaves a hole that the window stops at; as
  * mac80211 keeps a TID's frames in tid_tx->pending until the session is
  * operational, the frame stays queued and keeps that number. A request
- * unanswered for WLAN_BA_TX_RESPONSE is over, and a pairwise key on its way
- * waits for nothing, since it ends the session before it can start. Worker
- * only.
+ * unanswered for WLAN_BA_TX_RESPONSE is stopped with a DELBA, as mac80211's
+ * ieee80211_stop_tx_ba_session does, since the AP may have taken it and lost
+ * only its answer, and a pairwise key on its way waits for nothing, since it
+ * ends the session before it can start. Worker only.
  */
 uint64_t wlan_ba_tx_waits(struct wlan_data *d, unsigned tid);
 

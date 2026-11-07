@@ -657,7 +657,8 @@ static void test_request(void)
     CHECK(model.tx[3].count == 0 && d->ba_tx[0].state == WLAN_BA_TX_IDLE);
 }
 
-/* A refusal and a request unanswered wait 15 seconds; a DELBA ends it. */
+/* A refusal and a request unanswered wait 15 seconds, the second after a
+ * DELBA of ours; a DELBA ends a session. */
 static void test_refusal(void)
 {
     const uint8_t *req;
@@ -679,10 +680,13 @@ static void test_refusal(void)
     CHECK(model.tx[3].count == 1 && d->ba_tx[0].state == WLAN_BA_TX_REQUESTED);
     finish_all();
 
-    /* No answer in a second: the next frame gives up and waits again. */
+    /* No answer in a second: the next frame ends the request with a DELBA,
+     * since the AP may have taken it, and waits again. */
     now += WLAN_BA_TX_RESPONSE;
     CHECK(send(0, 100, 0) == 0);
-    CHECK(model.tx[3].count == 0 && d->ba_tx[0].state == WLAN_BA_TX_IDLE);
+    req = action_sent();
+    CHECK(req && req[1] == WLAN_ACTION_DELBA && req[2] == 0x00 && req[3] == 0x08 && req[4] == 37);
+    CHECK(d->ba_tx[0].state == WLAN_BA_TX_IDLE);
     CHECK(d->ba_tx[0].retry_at == now + WLAN_BA_TX_RETRY);
     finish_all();
 
