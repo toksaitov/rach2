@@ -73,10 +73,14 @@
 /* Set in every transmit cookie the data path makes, so that whoever routes
  * transmit status can tell its frames from the scan's and the MLME's. */
 #define WLAN_DATA_COOKIE        ((uint64_t)1 << 61)
-#define WLAN_DATA_COOKIE_DATA                                           \
-    ((uint64_t)1 << 60) /* a data frame, whose rate the station reports \
-                         */
-#define WLAN_PN_MAX 0xffffffffffffULL
+/* A data frame, whose rate the station reports. */
+#define WLAN_DATA_COOKIE_DATA   ((uint64_t)1 << 60)
+/* A data frame to a group address, whose ACK says nothing of whether the AP
+ * reads the sender's pairwise key: the AP ACKs it before it relays it. */
+#define WLAN_DATA_COOKIE_GROUP  ((uint64_t)1 << 59)
+/* The bits of a cookie that count the data path's frames. */
+#define WLAN_DATA_COOKIE_COUNT  (WLAN_DATA_COOKIE_GROUP - 1)
+#define WLAN_PN_MAX             0xffffffffffffULL
 
 /* What wlan_data_rx_mgmt found: a frame that arrived protected and passed
  * its check, now plaintext, or one that arrived without protection. */
@@ -216,7 +220,7 @@ struct wlan_data {
     uint64_t renewing;
     uint64_t renewed;      /* the tick the renewal's key went in; zero before */
     uint64_t renew_cookie; /* next_cookie then: later data went under the key */
-    uint64_t renew_acked;  /* the tick the first of those was ACKed; zero before */
+    uint64_t renew_acked;  /* the tick the first unicast one was ACKed; zero before */
     uint64_t eapol_cookie; /* the renewal's last EAPOL frame, unreported */
     int eapol_failed;      /* that frame came back without an ACK */
     int renew_asked;       /* the gateway was asked for an answer under the key */
@@ -595,7 +599,8 @@ void wlan_data_renewal_proved(struct wlan_data *d, const struct wlan_data_key *k
 void wlan_data_renewal_sent(struct wlan_data *d, uint64_t cookie, int eapol);
 
 /** Note the status of a frame of the data path for the renewal under way:
- * the renewal's last EAPOL frame, or the first data ACKed under the new key.
+ * the renewal's last EAPOL frame, or the first unicast data ACKed under the
+ * new key: a group frame's ACK starts no wait, since the AP ACKs it unread.
  * Worker only. */
 void wlan_data_renewal_status(struct wlan_data *d, const struct wlan_tx_status *status);
 

@@ -199,8 +199,10 @@ void wlan_data_renewal_status(struct wlan_data *d, const struct wlan_tx_status *
     if (status->cookie == d->eapol_cookie) {
         d->eapol_cookie = 0;
         d->eapol_failed = !acked;
-    } else if (acked && d->renewed && !d->renew_acked && (status->cookie & WLAN_DATA_COOKIE_DATA) &&
-               (status->cookie & (WLAN_DATA_COOKIE_DATA - 1)) > d->renew_cookie) {
+    } else if (acked && d->renewed && !d->renew_acked &&
+               (status->cookie & (WLAN_DATA_COOKIE_DATA | WLAN_DATA_COOKIE_GROUP)) ==
+                   WLAN_DATA_COOKIE_DATA &&
+               (status->cookie & WLAN_DATA_COOKIE_COUNT) > d->renew_cookie) {
         d->renew_acked = tick_count();
     }
 }

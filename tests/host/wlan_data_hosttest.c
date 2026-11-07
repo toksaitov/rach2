@@ -1885,6 +1885,47 @@ static void check_renewal_silent(void)
     CHECK(d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
 }
 
+/** An idle desktop's renewal: message 4 ACKed and the key in, then only
+ * multicast out, which the AP ACKs as it takes the frame to relay, and only
+ * group-keyed frames in. The group frame's ACK says nothing of the new
+ * pairwise key, so under the real monitor nothing is asked and the station
+ * stays past the limit and the question's wait. */
+static void check_renewal_group(void)
+{
+    static const uint8_t mdns[6] = {0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb};
+    uint8_t f[200], body[40];
+    unsigned len, i;
+
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    takes_keys = 0;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 1, 0, gtk2, 16, 0) == 0);
+    takes_keys = 1;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    mon_connect();
+    len = sta_frame(f, ipv4_snap, 100);
+    k_memcpy(f + 16, mdns, 6);
+    CHECK(wlan_data_tx(d, f, len, sizeof(f), 0) == 0);
+    CHECK(sent[(n_sent - 1) % 16].info.cookie & WLAN_DATA_COOKIE_GROUP);
+    status_of(n_sent - 1, WLAN_TX_ACKED);
+    CHECK(d->renew_acked == 0 && wlan_data_renewal(d, 0) == 0);
+    payload(body, sizeof(body), 7);
+    for (i = 0; i < (WLAN_MLME_KEY_WAIT + WLAN_MLME_ASK_WAIT + 1000) / 100; ++i) {
+        mon_beacons(100);
+        len = ap_frame(f, bcast, 0, 0, 200 + i, 0, 0, body, sizeof(body));
+        ap_ccmp(&ap_gtk2, f, &len, 1 + i, 1);
+        CHECK(rx(f, len) == 0);
+    }
+    CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_asks == 0 && mon_leaves == 0);
+    CHECK(d->renewing != 0 && d->renew_acked == 0);
+    CHECK(counters.rescues[WLAN_RESCUE_SILENT] == 0);
+
+    /* Unicast data ACKed after it still starts the wait. */
+    send_data();
+    status_of(n_sent - 1, WLAN_TX_ACKED);
+    CHECK(d->renew_acked == now);
+}
+
 /** Bring a renewal to a silent AP: message 4 ACKed, the key in, and data
  * under it ACKed WLAN_MLME_KEY_WAIT ago with no answer. */
 static void renewal_to_silence(void)
@@ -2305,6 +2346,7 @@ int main(void)
     check_renewal_message4_again();
     check_renewal_traffic();
     check_renewal_silent();
+    check_renewal_group();
     check_renewal_question();
     check_sealed_move();
     check_mgmt();

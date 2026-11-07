@@ -46,7 +46,7 @@ static void put_seq(struct wlan_data *d, uint8_t *frame, unsigned index)
 /** A fresh transmit cookie of the data path. */
 static uint64_t next_cookie(struct wlan_data *d)
 {
-    d->next_cookie = (d->next_cookie + 1) & (WLAN_DATA_COOKIE_DATA - 1);
+    d->next_cookie = (d->next_cookie + 1) & WLAN_DATA_COOKIE_COUNT;
     if (!d->next_cookie)
         d->next_cookie = 1;
     return WLAN_DATA_COOKIE | d->next_cookie;
@@ -379,6 +379,9 @@ int wlan_data_tx(struct wlan_data *d, uint8_t *frame, unsigned len, unsigned cap
     if (rc == 0) {
         wlan_rate_select(d, frame, len, eapol, info.rates);
         info.cookie = next_cookie(d) | (eapol ? 0 : WLAN_DATA_COOKIE_DATA);
+        /* Address 3 of a ToDS frame is its destination. */
+        if (frame[16] & 1)
+            info.cookie |= WLAN_DATA_COOKIE_GROUP;
         info.frequency = d->frequency;
         rc = d->radio->ops->tx(d->radio, frame, len, &info);
     }
