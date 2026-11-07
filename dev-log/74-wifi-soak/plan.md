@@ -41,6 +41,13 @@ Added after the trials on the Lenovo; each is one commit on the milestone branch
 * BlockAck around a key change: a DELBA for an ADDBA under way, a repeated ADDBA keeps its window, the AP's timeout is kept and an idle session ends with reason 39, no session starts while a key changes, and the old key leaves the radio before the new one goes in, in another slot.
 * A pairwise key waits up to 4 s for message 4 to leave under the old key, the time the AP keeps trying.
 
+## Results so far
+
+* File system stress, `machine.punch`: real kernel on 4 processors, 2.63 GiB written and 2.56 GiB freed by 8 processes, 30 cuts and about 6900 syncs, with 26268 service points inside a punch. e2fsck clean and 0 of 154 kept files differ, by a reader that shares no code with the driver.
+* Linux on the Lenovo, same access point, same load, 3620 s on channel 2437: 21 renewals, 0 drops, median 47 ms, worst 67 ms; 2 gaps over 1 s, at the load's start and at a reassociation made by hand; 6 of 17718 replies lost.
+* wpa_supplicant does not retry a renewal request and arms the next renewal only after a completed one. One request sent during Linux's 20/40 MHz coexistence scan failed, and renewals ended for that connection with the link up. The trial then ran at 110 s, whose first line-up with the 300 s scan is at 3300 s.
+* Letting a tick wait for the big lock did not end the late worker: on channel 2437 in 820 s it still waited up to 599 ms, with disk within 1% of the baseline.
+
 ## Open
 
 * All 5 silences of over 60 s or drops by the AP before 17d2ddd85 came out of renewals the logger timed at 0.5 s or more. Those times are the logger's. On Rach2 they are now read from the kernel's stamps and on Linux from `wpa_supplicant -t`.
