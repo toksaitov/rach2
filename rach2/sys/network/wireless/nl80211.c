@@ -259,8 +259,9 @@
 #define GROUP_VENDOR 4
 
 #define MAX_STATIONS NETDEV_MAX
-#define MAX_REGS     32 /* frame registrations of one interface */
-#define MAX_MATCH    64 /* bytes of a registration's match */
+#define MAX_REGS     32  /* frame registrations of one interface */
+#define LEAVE_SETTLE 150 /* ms from a frame of leaving to a join of that AP */
+#define MAX_MATCH    64  /* bytes of a registration's match */
 #define MSG_BUF      8192
 /* Messages of a split GET_WIPHY: basics, band, commands, frame types. */
 #define WIPHY_PARTS  4
@@ -314,6 +315,9 @@ struct sta {
     /* Associated, as the last CONNECT event said, with `ap`. */
     int connected;
     uint8_t ap[6];
+    /* The AP last left with a frame, and the tick of leaving, 0 for none. */
+    uint8_t left_ap[6];
+    uint64_t left_at;
     /* The elements of the last ASSOCIATE, the REQ_IE of its events. */
     uint8_t req_ie[NL80211_MAX_IE];
     unsigned req_ie_len;
@@ -1289,6 +1293,27 @@ static int get_ssid(const struct genl_info *info, struct wlan_ssid *ssid)
     return 0;
 }
 
+/** Remember that a frame of leaving went to ap, for join_due. */
+static void note_leave(struct sta *s, const uint8_t *ap)
+{
+    k_memcpy(s->left_ap, ap, 6);
+    s->left_at = tick_count();
+}
+
+/**
+ * The tick a join with bssid, or with any AP when NULL, may start, 0 for
+ * now. An access point that has just been left loses a join sent within
+ * milliseconds of the deauthentication, and the station waits out its
+ * timeouts, about 11 s, so a join with the AP just left waits LEAVE_SETTLE.
+ */
+static uint64_t join_due(const struct sta *s, const uint8_t *bssid)
+{
+    if (!s->left_at || (bssid && !same_addr(s->left_ap, bssid))) {
+        return 0;
+    }
+    return s->left_at + LEAVE_SETTLE;
+}
+
 /** Authenticate on the worker. */
 static int auth_hop(struct sta *s, void *arg)
 {
@@ -1352,7 +1377,7 @@ static int authenticate(const struct genl_info *info)
         a.ies = nla_data(info->attrs[NL80211_ATTR_IE]);
         a.ies_len = nla_len(info->attrs[NL80211_ATTR_IE]);
     }
-    return on_worker(s, auth_hop, &a);
+    return on_worker_at(s, auth_hop, &a, join_due(s, a.bssid));
 }
 
 /** Whether nl80211 offers cipher suite c for data, not management. */
@@ -1489,9 +1514,14 @@ struct leave_args {
 static int leave_hop(struct sta *s, void *arg)
 {
     const struct leave_args *a = arg;
+    int rc;
 
-    return a->disassoc ? s->ops->disassociate(s->wlan, a->bssid, a->reason, a->local)
-                       : s->ops->deauthenticate(s->wlan, a->bssid, a->reason, a->local);
+    rc = a->disassoc ? s->ops->disassociate(s->wlan, a->bssid, a->reason, a->local)
+                     : s->ops->deauthenticate(s->wlan, a->bssid, a->reason, a->local);
+    if (!rc && !a->local) {
+        note_leave(s, a->bssid);
+    }
+    return rc;
 }
 
 /** DEAUTHENTICATE and DISASSOCIATE: the AP's address and a reason, which
@@ -1777,7 +1807,7 @@ static int nl_connect(const struct genl_info *info)
         return rc;
     }
     c->step = CONN_AUTH;
-    rc = on_worker(s, connect_hop, c);
+    rc = on_worker_at(s, connect_hop, c, join_due(s, c->want_bssid ? c->want : 0));
     if (rc) {
         kfree(c);
     }
@@ -1791,6 +1821,7 @@ static int disconnect_hop(struct sta *s, void *arg)
 {
     unsigned reason = *(const unsigned *)arg;
     struct conn *c = s->conn;
+    int rc;
 
     if (s->ops->disconnect) {
         return s->ops->disconnect(s->wlan, reason);
@@ -1807,7 +1838,11 @@ static int disconnect_hop(struct sta *s, void *arg)
     if (!s->connected) {
         return -ENOTCONN;
     }
-    return s->ops->deauthenticate(s->wlan, s->ap, reason, 0);
+    rc = s->ops->deauthenticate(s->wlan, s->ap, reason, 0);
+    if (!rc) {
+        note_leave(s, s->ap);
+    }
+    return rc;
 }
 
 /** DISCONNECT, with REASON_CODE or 3, leaving the network. */

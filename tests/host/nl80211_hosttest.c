@@ -1508,6 +1508,54 @@ static void leave_and_timeouts(void)
     CHECK(!stations[0]->connected);
 }
 
+/** Send DEAUTHENTICATE for ap1, sending the frame unless local. */
+static void leave_ap1(int local)
+{
+    rq_begin(NL80211_CMD_DEAUTHENTICATE, 0);
+    rq_u32(NL80211_ATTR_IFINDEX, 2);
+    rq_put(NL80211_ATTR_MAC, ap1, 6);
+    rq_u16(NL80211_ATTR_REASON_CODE, 3);
+    if (local) {
+        rq_flag(NL80211_ATTR_LOCAL_STATE_CHANGE);
+    }
+    CHECK(rq_send() == 0);
+}
+
+/** A join with the AP just left waits LEAVE_SETTLE from the frame of
+ * leaving; a later join and one with another AP do not wait. */
+static void join_after_leave(void)
+{
+    uint64_t left;
+
+    now += LEAVE_SETTLE;
+    leave_ap1(0);
+    left = now;
+    now += 5;
+    auth_request(NL80211_AUTHTYPE_OPEN_SYSTEM);
+    CHECK(rq_send() == 0 && last.kind == CALL_AUTH);
+    CHECK(now == left + LEAVE_SETTLE);
+
+    left = now;
+    auth_request(NL80211_AUTHTYPE_OPEN_SYSTEM);
+    CHECK(rq_send() == 0 && now == left); /* the wait has passed */
+
+    leave_ap1(0);
+    left = now;
+    rq_begin(NL80211_CMD_AUTHENTICATE, 0);
+    rq_u32(NL80211_ATTR_IFINDEX, 2);
+    rq_put(NL80211_ATTR_MAC, ap2, 6);
+    rq_u32(NL80211_ATTR_WIPHY_FREQ, 2437);
+    rq_put(NL80211_ATTR_SSID, "lab", 3);
+    rq_u32(NL80211_ATTR_AUTH_TYPE, NL80211_AUTHTYPE_OPEN_SYSTEM);
+    CHECK(rq_send() == 0 && now == left);
+
+    now += LEAVE_SETTLE;
+    leave_ap1(1); /* no frame went out */
+    left = now;
+    auth_request(NL80211_AUTHTYPE_OPEN_SYSTEM);
+    CHECK(rq_send() == 0 && now == left);
+}
+
 /** The refusals of AUTHENTICATE and ASSOCIATE. */
 static void auth_assoc_refused(void)
 {
@@ -2353,6 +2401,7 @@ int main(void)
     scan();
     join_wpa2();
     leave_and_timeouts();
+    join_after_leave();
     auth_assoc_refused();
     join_sae();
     keys();
