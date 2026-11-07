@@ -1059,7 +1059,8 @@ static void test_bar_limit(void)
     CHECK(!t->active && !t->bar_owed && !t->bar_sent && !t->bar_fails);
     CHECK(ah.ampdu.ending == 1 && d->ba_tx[0].state == WLAN_BA_TX_ACTIVE);
     CHECK(ah.ampdu.stop_work.run != 0);
-    ah.ampdu.stop_work.run(&ah.ampdu.stop_work);
+    if (ah.ampdu.stop_work.run)
+        ah.ampdu.stop_work.run(&ah.ampdu.stop_work);
     CHECK(ah.ampdu.ending == 0 && d->ba_tx[0].state == WLAN_BA_TX_IDLE);
     f = action_sent();
     CHECK(f && f[1] == WLAN_ACTION_DELBA);
@@ -1127,6 +1128,12 @@ static void test_rate_losses(void)
     CHECK(txs_count == before + 2 && txs[before + 1].ampdu_len == 1);
     CHECK(MCS_ATTEMPTS(7) == 5 && MCS_SUCCESSES(7) == 1);
     CHECK(ah.tx.q[WLAN_AC_BE].count == 0);
+
+    /* Both members acknowledged at the first try. */
+    two_members();
+    before = txs_count;
+    (void)finish_ok(1);
+    CHECK(txs_count == before + 2 && MCS_ATTEMPTS(7) == 2 && MCS_SUCCESSES(7) == 2);
 
     /* Every try of the three series failed: both members stay, and rate
      * control still hears of six tries for each. */
