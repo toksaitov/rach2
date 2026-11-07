@@ -81,8 +81,10 @@
 #     at most 2147 s, the longest -w BusyBox takes;
 #   * the longest ping gap is the longest time between two replies with
 #     requests unanswered between them, across ping's runs, or from the last
-#     reply to the end of its log, and the longest stall the longest between
-#     two replies in sequence, in which ping itself did not run;
+#     reply to the end of its log, and the longest wait the longest between
+#     two replies in sequence;
+#   * the worst reply is the longest time ping reports for one, which counts
+#     a frame held and a ping that ran late alike;
 #   * the seconds without a reply sum every wait of over 1 s between replies
 #     and from the last reply to the end of the ping's log, so they count
 #     a link that never came back, as the gap does not;
@@ -445,6 +447,9 @@ table()
         / ping: sendto: / { sent += asked; got += heard; asked = heard = 0 }
         / seq=/ {
             s = $0; sub(/.* seq=/, "", s); s += 0
+            ms = $0; sub(/.* time=/, "", ms); ms += 0
+            if (ms > worst) worst = ms
+            if (ms > 1000) late++
             d = $1 - prev
             if (prev && s == seq + 1 && d > stall) stall = d
             if (prev && s != seq + 1 && d > gap) { gap = d; from = prev }
@@ -457,7 +462,8 @@ table()
             printf "ping                     %d sent, %d answered, %.2f%% lost\n",
                 sent, got, sent ? 100 * (sent - got) / sent : 0
             printf "longest ping gap         %.2f s of unanswered requests, from %s\n", gap, from
-            printf "longest ping stall       %.2f s with no request sent\n", stall
+            printf "longest ping wait        %.2f s between replies in sequence\n", stall
+            printf "worst reply              %.2f ms, %d over 1 s\n", worst, late
         }' "$dir/ping"
     printf 'longest disk request     %s us, %s\n' "$disk1" "$([ "$disk1" -gt "$disk0" ] &&
         echo 'in this run' || echo "before this run; the run's own was no longer")"
