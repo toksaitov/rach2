@@ -120,7 +120,8 @@ struct wlan_radio_ops {
     void (*stop)(struct wlan_radio *radio);
     /** Tune to channel (20 MHz) and set WLAN_FILTER_* receive filters. The
      * channel the radio is on already changes only the filters and keeps
-     * every frame queued, which the scan of the home channel relies on. */
+     * every frame queued, unless a failed reset left the radio off; the scan
+     * of the home channel relies on it. */
     int (*config)(struct wlan_radio *radio, const struct wlan_channel *channel, unsigned filters);
     /** Copy an MPDU without FCS and info before returning 0; report exactly
      * one later wlan_radio_tx_status, including failures, besides any with
