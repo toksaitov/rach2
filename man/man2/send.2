@@ -357,8 +357,11 @@ A packet send has no interface through which to transmit.
 No route exists for an IPv4 or IPv6 datagram, or a pending TCP error
 reports that the connection timed out while its local address was gone.
 .It Bq Er ENOBUFS
-The local delivery queue is full or the link layer cannot accept an
-IPv4 or IPv6 datagram.
+The link layer cannot accept a packet socket's frame.
+A UDP or raw datagram that a full queue loses is sent as far as the
+caller can tell: the call returns its length, as on Linux without
+.Dv IP_RECVERR ,
+which this kernel does not have.
 .It Bq Er ENODEV
 A packet destination, or the
 .Dv IPV6_PKTINFO
