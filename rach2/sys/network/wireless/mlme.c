@@ -746,11 +746,15 @@ static void send_probe(struct wlan_mlme *m)
 }
 
 /** The tick to look next in a channel switch's countdown, which can outlast
- * a renewal's WLAN_MLME_KEY_WAIT. */
+ * a renewal's WLAN_MLME_KEY_WAIT: at the latest that limit, since each
+ * announcement sets the timer again. */
 static uint64_t csa_next(const struct wlan_mlme *m)
 {
     uint64_t soon = tick_count() + WLAN_MLME_CSA_LOOK;
+    uint64_t due = m->ops->renewing ? m->ops->renewing(m->wlan) : 0;
 
+    if (due && due + WLAN_MLME_KEY_WAIT < soon)
+        soon = due + WLAN_MLME_KEY_WAIT;
     return m->csa_at < soon ? m->csa_at : soon;
 }
 

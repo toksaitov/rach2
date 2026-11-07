@@ -1015,6 +1015,32 @@ static void lost_renewal_in_countdown(void)
     renewing_at = 0;
 }
 
+/** Announcements of a switch in every beacon do not put off a renewal's
+ * limit either, though each sets the countdown's time again. */
+static void lost_renewal_in_announcements(void)
+{
+    static const uint8_t far[3] = {0, 6, 255}; /* mode 0, channel 6, 255 beacons */
+    unsigned ms;
+
+    reset();
+    wlan_mlme_init(&mlme, 0, &radio, &radio.band, &scan, &poll_ops);
+    mlme.beacon_losses = &losses;
+    losses = 0;
+    heard_at = 0;
+    renewing_at = 0;
+    connect_a(0);
+    CHECK(ap_beacon_with(ap_a, WLAN_EID_CHANNEL_SWITCH, far, 3) == 0 && mlme.csa_channel);
+    renewing_at = now;
+    for (ms = 0; ms < WLAN_MLME_KEY_WAIT + 200 && mlme.state != WLAN_STA_NONE; ms += 100) {
+        wait_ms(100);
+        if (mlme.state != WLAN_STA_NONE)
+            (void)ap_beacon_with(ap_a, WLAN_EID_CHANNEL_SWITCH, far, 3);
+    }
+    CHECK(mlme.state == WLAN_STA_NONE);
+    CHECK(last_event()->ev.reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT);
+    renewing_at = 0;
+}
+
 /** Under 802.11w: unprotected deauthentication and disassociation dropped
  * and reported, an SA Query answered only when protected, and a protected
  * deauthentication taken. */
@@ -1462,6 +1488,7 @@ int main(void)
     polled_ap();
     lost_renewal();
     lost_renewal_in_countdown();
+    lost_renewal_in_announcements();
     protected_frames();
     plain_frames();
     sae_exchange();
