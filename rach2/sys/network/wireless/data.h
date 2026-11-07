@@ -233,10 +233,10 @@ struct wlan_data {
     /* The tick a pairwise key stops waiting for them, or 0 when none waits;
      * worker only. */
     uint64_t rekey_due;
-    /* The connection a pairwise key waiting for -EINPROGRESS's end was asked
-     * for, or 0: one that ended takes no key. Worker only. */
-    uint32_t install_conn;
-    uint32_t conn_id;     /* counts connections from 1 */
+    /* A pairwise key returned -EINPROGRESS and has one wait, which the end
+     * of the connection ends; nl80211, the only caller, holds the supplicant
+     * until it returns, so no new connection comes first. Worker only. */
+    int install_wait;
     uint64_t ba_stop_due; /* tick wlan_ba_rekey stops waiting for room; 0 unset */
     uint8_t ba_blocked;   /* a pairwise key is replacing: no session starts */
     /* The AP's channel switch of mode 1 stops the drain, which keeps the

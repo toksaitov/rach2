@@ -363,20 +363,20 @@ int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
     if (!key || !(key->flags & WLAN_KEY_PAIRWISE))
         return wlan_data_install_key(d, key);
     data_take_rx(d);
-    if (d->connected)
+    if (d->connected && !d->install_wait)
         rekey_mark(d);
     data_send_tx(d);
     wlan_ba_rx_flush(d);
     if (rekey_waits(d)) {
-        d->install_conn = d->install_conn ? d->install_conn : d->conn_id;
+        d->install_wait = 1;
         return -EINPROGRESS;
     }
-    if (d->install_conn && (!d->connected || d->install_conn != d->conn_id)) {
-        d->install_conn = 0;
+    if (d->install_wait && !d->connected) {
+        d->install_wait = 0;
         return -ENOTCONN;
     }
     rc = wlan_data_install_key(d, key);
-    d->install_conn = rc == -EINPROGRESS ? d->conn_id : 0;
+    d->install_wait = rc == -EINPROGRESS;
     if (d->connected)
         (void)wlan_data_kick(d->tx_work, 0);
     return rc;
