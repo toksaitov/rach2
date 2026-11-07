@@ -1107,8 +1107,10 @@ static void check_rekey_slot(void)
     CHECK(rx_opened(106, 1, 446) == -ESTALE && n_got == 3);
     /* A download's queue runs hundreds of numbers past the old key's last. */
     CHECK(rx_opened(106, 1, 443 + 2000) == -ESTALE && n_got == 3);
-    CHECK(counters.rx_dropped == n + 4 && counters.rx_replays == 0);
-    CHECK(counters.rx_old_far == 1);
+    /* Or lies hundreds below it, behind a frame that jumped the queue. */
+    CHECK(rx_opened(106, 1, 100) == -ESTALE && n_got == 3);
+    CHECK(counters.rx_dropped == n + 5 && counters.rx_replays == 0);
+    CHECK(counters.rx_old_far == 2);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 0);
     CHECK(rx_opened(107, 1, 1) == 0 && n_got == 4);
     CHECK(rx_opened(108, 1, 2) == 0 && n_got == 5);

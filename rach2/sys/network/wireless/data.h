@@ -49,9 +49,9 @@
  * mac80211 keeps them (IEEE80211_FRAGMENT_MAX and its two seconds). */
 #define WLAN_DATA_DEFRAG        4
 #define WLAN_DATA_FRAG_TIMEOUT  2000
-/* After a pairwise key is replaced: how long, in ms, how near the old key's
- * count and how far past the new key's a number must lie to be the old
- * count's. The jump is the widest BlockAck window. */
+/* After a pairwise key is replaced: how long, in ms, a number this far past
+ * the new key's is the old count's, the jump being the widest BlockAck
+ * window, and how far from the old key's last wlan_rx_old_far counts one. */
 #define WLAN_DATA_REKEY_SETTLE  2000
 #define WLAN_DATA_REKEY_NEAR    256
 #define WLAN_DATA_REKEY_JUMP    64
