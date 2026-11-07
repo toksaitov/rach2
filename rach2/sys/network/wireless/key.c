@@ -141,16 +141,16 @@ int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
     if (!d || !key || !key_valid(key))
         return -EINVAL;
     pairwise = (key->flags & WLAN_KEY_PAIRWISE) != 0;
-    if (pairwise)
-        d->renewing = 0;
     old = key_entry(d, pairwise, key->index);
     if (old->gen && old->key.cipher == key->cipher && old->key.len == key->len &&
         same(old->key.data, key->data, key->len) &&
         (!pairwise || same(old->key.peer, key->peer, 6))) {
         /* The same key again keeps its counters, so that a replayed
          * handshake message cannot reset them (KRACK, 2017). */
-        if (pairwise)
+        if (pairwise) {
             d->tx_pairwise = key->index;
+            d->renewing = 0;
+        }
         return 0;
     }
     k_memset(&fresh, 0, sizeof(fresh));
@@ -190,8 +190,10 @@ int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
     wipe(old, sizeof(*old));
     *old = fresh;
     wipe(&fresh, sizeof(fresh));
-    if (pairwise)
+    if (pairwise) {
         d->tx_pairwise = key->index;
+        d->renewing = 0;
+    }
     flush_defrag(d);
     return 0;
 }
