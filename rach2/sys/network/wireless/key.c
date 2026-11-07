@@ -1,6 +1,7 @@
 /* The key table: pairwise, group and integrity keys with their counters,
  * kept in software and, when the radio takes them, in its key slots. */
 #include "data.h"
+#include "mlme.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../timer.h"
@@ -129,6 +130,87 @@ static int replace_in_radio(struct wlan_data *d, struct wlan_data_key *fresh,
     return key_to_radio(d, fresh);
 }
 
+/** Note that the renewal under way has its key, so that data sent from here
+ * goes under it. The renewal itself ends only on wlan_data_renewal's terms:
+ * a key taken by the radio says nothing of whether the AP has it. */
+static void renewal_keyed(struct wlan_data *d)
+{
+    if (d->renewing && !d->renewed) {
+        d->renewed = tick_count();
+        d->renew_cookie = d->next_cookie;
+    }
+}
+
+uint64_t wlan_data_renewal(struct wlan_data *d, enum wlan_rescue *cause)
+{
+    enum wlan_rescue why = WLAN_RESCUE_KEY;
+    uint64_t from = d->renewing;
+
+    if (d->renewed) {
+        if (d->eapol_failed || d->eapol_cookie) {
+            why = WLAN_RESCUE_MESSAGE4;
+            from = d->renewed;
+        } else if (d->renew_acked) {
+            why = WLAN_RESCUE_SILENT;
+            from = d->renew_acked;
+        } else {
+            if (tick_count() >= d->renewed + WLAN_MLME_KEY_WAIT)
+                wlan_data_renewal_end(d);
+            return 0;
+        }
+    }
+    if (cause)
+        *cause = why;
+    return from;
+}
+
+void wlan_data_renewal_end(struct wlan_data *d)
+{
+    d->renewing = 0;
+    d->renewed = 0;
+    d->renew_cookie = 0;
+    d->renew_acked = 0;
+    d->eapol_cookie = 0;
+    d->eapol_failed = 0;
+}
+
+void wlan_data_renewal_proved(struct wlan_data *d, const struct wlan_data_key *k)
+{
+    if (d->renewed && k == wlan_data_pairwise_key(d, d->tx_pairwise))
+        wlan_data_renewal_end(d);
+}
+
+void wlan_data_renewal_sent(struct wlan_data *d, uint64_t cookie, int eapol)
+{
+    if (eapol && d->renewing && !d->renewed) {
+        d->eapol_cookie = cookie;
+        d->eapol_failed = 0;
+    }
+}
+
+void wlan_data_renewal_status(struct wlan_data *d, const struct wlan_tx_status *status)
+{
+    int acked = (status->flags & WLAN_TX_ACKED) != 0;
+
+    if (!d->renewing)
+        return;
+    if (status->cookie == d->eapol_cookie) {
+        d->eapol_cookie = 0;
+        d->eapol_failed = !acked;
+    } else if (acked && d->renewed && !d->renew_acked && (status->cookie & WLAN_DATA_COOKIE_DATA) &&
+               (status->cookie & (WLAN_DATA_COOKIE_DATA - 1)) > d->renew_cookie) {
+        d->renew_acked = tick_count();
+    }
+}
+
+void wlan_data_renewal_rescued(struct wlan_data *d)
+{
+    enum wlan_rescue cause;
+
+    if (wlan_data_renewal(d, &cause))
+        d->counters->rescues[cause]++;
+}
+
 /** Drop every MSDU being reassembled, since a new key must not complete a
  * frame begun under the old one (the fragment cache attack of 2021). */
 static void flush_defrag(struct wlan_data *d)
@@ -156,7 +238,7 @@ int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
          * handshake message cannot reset them (KRACK, 2017). */
         if (pairwise) {
             d->tx_pairwise = key->index;
-            d->renewing = 0;
+            renewal_keyed(d);
             d->ba_blocked = 0;
         }
         return 0;
@@ -203,7 +285,7 @@ int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
     wipe(&fresh, sizeof(fresh));
     if (pairwise) {
         d->tx_pairwise = key->index;
-        d->renewing = 0;
+        renewal_keyed(d);
         d->ba_blocked = 0;
     }
     flush_defrag(d);

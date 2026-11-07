@@ -19,6 +19,7 @@
  * host-deps: tests/host/compat/spinlock_host.c
  */
 #include "network/wireless/data.h"
+#include "network/wireless/mlme.h"
 #include "network/net.h"
 #include "lib/kerrno.h"
 #include "lib/kstring.h"
@@ -1311,19 +1312,25 @@ static void key_body(uint8_t *body, unsigned len, unsigned info)
     body[14] = (uint8_t)info;
 }
 
-/** Key frame `info` from the AP, opened by the radio under slot 0. */
-static int rx_key(unsigned sn, uint64_t pn, unsigned info)
+/** Key frame `info` from the AP, opened by the radio under `slot`. */
+static int rx_key_slot(unsigned sn, int slot, uint64_t pn, unsigned info)
 {
     uint8_t f[200], body[40];
     struct wlan_rx_status hw = rxs;
     unsigned len;
 
     hw.flags = WLAN_RX_DECRYPTED | WLAN_RX_IV_STRIPPED | WLAN_RX_MIC_STRIPPED;
-    hw.hw_key = 0;
+    hw.hw_key = slot;
     hw.pn = pn;
     key_body(body, sizeof(body), info);
     len = ap_frame(f, sta, 1, 0, sn, 0, 0, body, sizeof(body));
     return wlan_data_rx(d, f, len, &hw);
+}
+
+/** Key frame `info` from the AP, opened by the radio under slot 0. */
+static int rx_key(unsigned sn, uint64_t pn, unsigned info)
+{
+    return rx_key_slot(sn, 0, pn, info);
 }
 
 /** Key frame `info` from the AP in clear. */
@@ -1339,7 +1346,7 @@ static int rx_clear_key(unsigned sn, unsigned info)
 
 /** Message 1 on a connection with a pairwise key starts the wait for the
  * renewed key, and its repeats leave the tick; a group key's message, or the
- * later messages with their MIC, do not, and the new key ends it. */
+ * later messages with their MIC, do not. The new key does not end it. */
 static void check_renewal_wait(void)
 {
     uint64_t began;
@@ -1355,7 +1362,201 @@ static void check_renewal_wait(void)
     began = now;
     now += 1000;
     CHECK(rx_key(104, 4, 0x008a) == 0 && d->renewing == began);
-    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0 && d->renewing == 0);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0 && d->renewing == began);
+    CHECK(d->renewed == now);
+    /* The same key again is no new key, and proves nothing. */
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0 && d->renewing == began);
+}
+
+/** Report the transmit status of sent frame `i`. */
+static void status_of(unsigned i, unsigned flags)
+{
+    struct wlan_tx_status st;
+
+    k_memset(&st, 0, sizeof(st));
+    st.cookie = sent[i].info.cookie;
+    st.flags = (uint8_t)flags;
+    st.rates[0].index = -1;
+    wlan_data_tx_status(d, &st);
+}
+
+/** Send one data frame. */
+static void send_data(void)
+{
+    uint8_t f[200];
+    unsigned len = sta_frame(f, ipv4_snap, 100);
+
+    CHECK(wlan_data_tx(d, f, len, sizeof(f), 0) == 0);
+}
+
+/** Send one EAPOL frame. */
+static void send_eapol(void)
+{
+    uint8_t f[200];
+    unsigned len = sta_frame(f, eapol_snap, 60);
+
+    CHECK(wlan_data_tx(d, f, len, sizeof(f), 7) == 0);
+}
+
+/** Send a poll's null frame, which the AP ACKs. */
+static void acked_poll(void)
+{
+    CHECK(wlan_data_tx_null(d, 0) == 0);
+    status_of(n_sent - 1, WLAN_TX_ACKED);
+}
+
+/** Bring a renewal to message 4 in the ring, unreported: sent frame 1. */
+static void renewal_to_message4(void)
+{
+    setup(1);
+    takes_keys = 1;
+    now += 1000;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
+    CHECK(rx_key(103, 3, 0x008a) == 0 && d->renewing == now);
+    send_eapol();
+    status_of(0, WLAN_TX_ACKED);
+    send_eapol();
+    CHECK(n_sent == 2);
+}
+
+/** Message 4 accepted, then failed with too many retries, and the key in:
+ * beacons and ACKed polls prove nothing, and the wait from the key runs out
+ * into one rescue of its cause. A frame under the old key proves nothing
+ * either, while the first under the new one does, since only the ACK may
+ * have been lost. */
+static void check_renewal_message4(void)
+{
+    enum wlan_rescue cause = WLAN_RESCUE_KEY;
+    uint64_t keyed;
+
+    renewal_to_message4();
+    now += 5;
+    keyed = now;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    now += 20;
+    status_of(1, 0);
+    CHECK(wlan_data_renewal(d, &cause) == keyed && cause == WLAN_RESCUE_MESSAGE4);
+    acked_poll();
+    now += 9000;
+    acked_poll();
+    CHECK(rx_opened(104, 0, 444) == -ESTALE);
+    CHECK(wlan_data_renewal(d, &cause) == keyed && cause == WLAN_RESCUE_MESSAGE4);
+    wlan_data_renewal_rescued(d);
+    CHECK(counters.rescues[WLAN_RESCUE_MESSAGE4] == 1);
+    CHECK(counters.rescues[WLAN_RESCUE_KEY] == 0 && counters.rescues[WLAN_RESCUE_SILENT] == 0);
+
+    /* A failure before the key counts as one after it. */
+    renewal_to_message4();
+    status_of(1, 0);
+    keyed = now;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    CHECK(wlan_data_renewal(d, &cause) == keyed && cause == WLAN_RESCUE_MESSAGE4);
+    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
+
+    /* A status that never comes bounds the renewal as a failure does. */
+    renewal_to_message4();
+    keyed = now;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    now += WLAN_MLME_KEY_WAIT;
+    CHECK(wlan_data_renewal(d, &cause) == keyed && cause == WLAN_RESCUE_MESSAGE4);
+}
+
+/** A clean renewal on an idle link: message 4 ACKed, nothing sent under the
+ * key. Polls and time owe nothing, so the wait never starts, and once the
+ * key has stood for WLAN_MLME_KEY_WAIT the renewal is over. */
+static void check_renewal_idle(void)
+{
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    CHECK(wlan_data_renewal(d, 0) == 0 && d->renewing != 0);
+    now += WLAN_MLME_KEY_WAIT - 1;
+    acked_poll();
+    CHECK(wlan_data_renewal(d, 0) == 0 && d->renewing != 0 && d->renew_acked == 0);
+    now += 1;
+    CHECK(wlan_data_renewal(d, 0) == 0 && d->renewing == 0);
+    now += 100000;
+    send_data();
+    status_of(n_sent - 1, WLAN_TX_ACKED);
+    CHECK(wlan_data_renewal(d, 0) == 0);
+}
+
+/** A clean renewal with traffic: the first unicast frame opened under the
+ * new key ends it, whatever came before, and an old key's frame does not. A
+ * frame still in the ring from before the key starts no wait. */
+static void check_renewal_traffic(void)
+{
+    enum wlan_rescue cause = WLAN_RESCUE_KEY;
+    uint64_t acked;
+
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    send_data();
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    status_of(2, WLAN_TX_ACKED);
+    CHECK(d->renew_acked == 0 && wlan_data_renewal(d, 0) == 0);
+    now += 1000;
+    send_data();
+    CHECK(wlan_data_renewal(d, 0) == 0);
+    status_of(3, 0);
+    CHECK(wlan_data_renewal(d, 0) == 0);
+    send_data();
+    status_of(4, WLAN_TX_ACKED);
+    acked = now;
+    CHECK(wlan_data_renewal(d, &cause) == acked && cause == WLAN_RESCUE_SILENT);
+    now += 500;
+    CHECK(rx_opened(104, 0, 444) == -ESTALE && d->renewing != 0);
+    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
+
+    /* A protected management frame under the key is proof too. */
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    wlan_data_renewal_proved(d, wlan_data_pairwise_key(d, d->tx_pairwise));
+    CHECK(d->renewing == 0);
+}
+
+/** A renewal whose data the AP ACKs and answers with nothing, the silent
+ * link of run 052426: the wait from the first ACK runs out into one rescue
+ * of its cause, and later ACKs do not move it. The next renewal's message
+ * 1, opened under the new key, ends this one and starts its own. */
+static void check_renewal_silent(void)
+{
+    enum wlan_rescue cause = WLAN_RESCUE_KEY;
+    uint64_t acked;
+
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    now += 200;
+    send_data();
+    status_of(2, WLAN_TX_ACKED);
+    acked = now;
+    now += 9000;
+    send_data();
+    status_of(3, WLAN_TX_ACKED);
+    acked_poll();
+    CHECK(wlan_data_renewal(d, &cause) == acked && cause == WLAN_RESCUE_SILENT);
+    wlan_data_renewal_rescued(d);
+    CHECK(counters.rescues[WLAN_RESCUE_SILENT] == 1);
+    CHECK(counters.rescues[WLAN_RESCUE_KEY] == 0 && counters.rescues[WLAN_RESCUE_MESSAGE4] == 0);
+
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    send_data();
+    status_of(2, WLAN_TX_ACKED);
+    now += 100;
+    CHECK(rx_key_slot(106, 1, 1, 0x008a) == 0 && d->renewing == now);
+    CHECK(d->renewed == 0 && d->renew_acked == 0);
+
+    /* A renewal with no key at all still counts as that. */
+    wlan_data_renewal_rescued(d);
+    CHECK(counters.rescues[WLAN_RESCUE_KEY] == 1);
+
+    /* A new connection forgets it. */
+    CHECK(wlan_data_connect(d, &bss, 1, 1, 0) == 0);
+    CHECK(d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
 }
 
 /** A frame opened under a key proves the AP on the connection's channel
@@ -1690,6 +1891,10 @@ int main(void)
     check_ba_idle();
     check_rekey_tids();
     check_renewal_wait();
+    check_renewal_message4();
+    check_renewal_idle();
+    check_renewal_traffic();
+    check_renewal_silent();
     check_sealed_move();
     check_mgmt();
     check_amsdu();

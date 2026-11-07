@@ -320,8 +320,8 @@ static void sta_status(struct wlan *wlan, struct nl80211_status *out)
 /**
  * Log why the station left the AP of a DEAUTHENTICATE or DISASSOCIATE
  * event: the AP's frame with its reason, a leave that nl80211 or the
- * interface asked for, or an AP that answered none of the connection
- * monitor's polls or probes, the only leave the MLME makes of its own.
+ * interface asked for, a renewal's rescue, which it counts, or an AP that
+ * answered none of the connection monitor's polls or probes.
  */
 static void sta_log_leave(struct wlan *wlan, const struct wlan_event *ev)
 {
@@ -335,6 +335,7 @@ static void sta_log_leave(struct wlan *wlan, const struct wlan_event *ev)
         why = "asked";
     } else if (ev->reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT) {
         why = "key renewal not finished";
+        wlan_data_renewal_rescued(wlan_data_of(wlan));
     } else {
         why = "no answer from the AP";
     }
@@ -350,20 +351,18 @@ static void sta_event(struct wlan *wlan, const struct wlan_event *ev)
 {
     struct wlan_sta *s = sta_of(wlan);
     struct wlan_counters *c = &wlan->counters;
-    int32_t signal, noise;
-    unsigned quality;
+    struct wlan_counters was;
 
     if (ev->type == WLAN_EVENT_ASSOCIATE && ev->frame && ev->status == WLAN_STATUS_SUCCESS) {
         s->assoc_at = tick_count();
         s->csa = 0;
         s->ds = 0;
-        signal = c->signal;
-        noise = c->noise;
-        quality = c->quality;
+        was = *c;
         k_memset(c, 0, sizeof(*c));
-        c->signal = signal;
-        c->noise = noise;
-        c->quality = quality;
+        c->signal = was.signal;
+        c->noise = was.noise;
+        c->quality = was.quality;
+        k_memcpy(c->rescues, was.rescues, sizeof(c->rescues));
         if (!s->control_port) {
             (void)wlan_queue_work(&s->authorize_work, 0);
         }
@@ -537,12 +536,13 @@ static uint64_t sta_heard(struct wlan *wlan)
     return d ? d->heard : 0;
 }
 
-/** The tick a renewal began whose key is not in yet, for the monitor. */
+/** The tick a renewal's wait for its key or its proof began, for the
+ * monitor. */
 static uint64_t sta_renewing(struct wlan *wlan)
 {
     struct wlan_data *d = wlan_data_of(wlan);
 
-    return d ? d->renewing : 0;
+    return d ? wlan_data_renewal(d, 0) : 0;
 }
 
 /**

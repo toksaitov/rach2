@@ -180,7 +180,7 @@ int wlan_data_connect(struct wlan_data *d, const struct wlan_bss *bss, int qos, 
     d->tx_rate = d->rx_rate = 0;
     d->heard = 0;
     d->sealed = 0;
-    d->renewing = 0;
+    wlan_data_renewal_end(d);
     d->install_wait = 0;
     wlan_rate_connect(d, bss);
     d->connected = 1;
@@ -391,6 +391,7 @@ int wlan_data_tx(struct wlan_data *d, uint8_t *frame, unsigned len, unsigned cap
     }
     d->counters->tx_packets++;
     d->counters->tx_bytes += len;
+    wlan_data_renewal_sent(d, info.cookie, eapol);
     if (d->qos)
         wlan_ba_tx_check(d, tid, eapol);
     return 0;
@@ -533,6 +534,7 @@ void wlan_data_tx_status(struct wlan_data *d, const struct wlan_tx_status *statu
         d->counters->tx_failed++;
     else if ((status->flags & WLAN_TX_ACKED) && d->connected)
         d->heard = tick_count();
+    wlan_data_renewal_status(d, status);
     wlan_rate_status(d, status);
 }
 

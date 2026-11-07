@@ -2731,13 +2731,15 @@ static void ap_cpu_ticks(struct procfs_text *t, uint64_t user, uint64_t busy, ui
 
 /** Render what the wireless queues counted, summed over the radios: the
  * frames a full transmit queue refused, by kind, and the looks at a full
- * receive queue; and the longest wait of any radio's received frames. */
+ * receive queue; the longest wait of any radio's received frames; and the
+ * renewals of a pairwise key that ended in leaving the AP, by cause. */
 static void procfs_wlan_refused(struct procfs_text *t)
 {
     struct wlan_counters c;
     struct wlan *wlan;
     uint32_t tcp = 0, ack = 0, other = 0, held = 0, wait = 0;
-    unsigned i;
+    uint32_t rescues[WLAN_RESCUES] = {0, 0, 0};
+    unsigned i, r;
 
     for (i = 0; (wlan = wlan_at(i)) != 0; ++i) {
         wlan_get_counters(wlan, &c);
@@ -2746,6 +2748,8 @@ static void procfs_wlan_refused(struct procfs_text *t)
         other += c.tx_refused_other;
         held += c.rx_held;
         wait = c.rx_wait_most > wait ? c.rx_wait_most : wait;
+        for (r = 0; r < WLAN_RESCUES; ++r)
+            rescues[r] += c.rescues[r];
     }
     ap_str(t, "\nwlan_refused_tcp ");
     ap_u32(t, tcp);
@@ -2757,6 +2761,12 @@ static void procfs_wlan_refused(struct procfs_text *t)
     ap_u32(t, held);
     ap_str(t, "\nwlan_rx_wait_most ");
     ap_u32(t, wait);
+    ap_str(t, "\nwlan_rescue_key ");
+    ap_u32(t, rescues[WLAN_RESCUE_KEY]);
+    ap_str(t, "\nwlan_rescue_message4 ");
+    ap_u32(t, rescues[WLAN_RESCUE_MESSAGE4]);
+    ap_str(t, "\nwlan_rescue_silent ");
+    ap_u32(t, rescues[WLAN_RESCUE_SILENT]);
 }
 
 /**

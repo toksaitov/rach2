@@ -1033,6 +1033,47 @@ static void away_keeps_quiet(void)
     renewing_at = 0;
 }
 
+/** A key the AP cannot be shown to have: message 4 failed, or its data goes
+ * unanswered. Beacons and ACKed polls do not end the wait, and the station
+ * leaves once, with reason 15; nothing owed never leaves. */
+static void unproved_renewal(void)
+{
+    unsigned ms, seen_before;
+
+    reset();
+    wlan_mlme_init(&mlme, 0, &radio, &radio.band, &scan, &poll_ops);
+    mlme.beacon_losses = &losses;
+    losses = 0;
+    n_polls = 0;
+    heard_at = 0;
+    renewing_at = 0;
+    connect_a(0);
+    for (ms = 0; ms < 2 * WLAN_MLME_IDLE_POLL; ms += 100) {
+        beacons_for(100);
+        if (mlme.probes)
+            wlan_mlme_tx_status(&mlme, poll_cookie, 1);
+    }
+    CHECK(mlme.state == WLAN_STA_ASSOCIATED && n_polls > 0);
+    renewing_at = now;
+    n_polls = 0;
+    for (ms = 0; ms < WLAN_MLME_KEY_WAIT - 100; ms += 100) {
+        beacons_for(100);
+        heard_at = now;
+        if (mlme.probes)
+            wlan_mlme_tx_status(&mlme, poll_cookie, 1);
+    }
+    CHECK(mlme.state == WLAN_STA_ASSOCIATED);
+    seen_before = n_seen;
+    for (ms = 0; ms < KEY_IN_TIME_SPAN && mlme.state != WLAN_STA_NONE; ms += 100)
+        beacons_for(100);
+    CHECK(mlme.state == WLAN_STA_NONE && n_seen == seen_before + 1);
+    CHECK(last_event()->ev.type == WLAN_EVENT_DEAUTHENTICATE);
+    CHECK(last_event()->ev.reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT);
+    wait_ms(2 * WLAN_MLME_KEY_WAIT);
+    CHECK(n_seen == seen_before + 1);
+    renewing_at = 0;
+}
+
 /** A countdown to a channel switch, far off, does not put off a renewal's
  * limit: the timer looks in on it. */
 static void lost_renewal_in_countdown(void)
@@ -1528,6 +1569,7 @@ int main(void)
     polled_ap();
     lost_renewal();
     away_keeps_quiet();
+    unproved_renewal();
     lost_renewal_in_countdown();
     lost_renewal_in_announcements();
     protected_frames();

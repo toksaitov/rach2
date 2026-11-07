@@ -509,6 +509,7 @@ int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
     }
     if (c.key) {
         seal(d, status, arrived);
+        wlan_data_renewal_proved(d, c.key);
         note_renewal(d, frame, len, hdrlen, arrived);
     }
 
@@ -660,6 +661,7 @@ static int rx_mgmt_ccmp(struct wlan_data *d, uint8_t *frame, unsigned *len, unsi
         return -ESTALE;
     }
     k->rx_mgmt_pn = pn;
+    wlan_data_renewal_proved(d, k);
     *len = n;
     return WLAN_DATA_PROTECTED;
 }

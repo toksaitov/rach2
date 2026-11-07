@@ -66,6 +66,14 @@ struct wlan_key {
     uint64_t tx_pn;                 /* low 48 bits, never wraps */
     uint64_t rx_pn[WLAN_NUM_TIDS];  /* per-TID replay counters; index 16 non-QoS */
 };
+/* Why a renewal of the pairwise key ended in leaving the AP. */
+enum wlan_rescue {
+    WLAN_RESCUE_KEY,      /* no key went in */
+    WLAN_RESCUE_MESSAGE4, /* message 4 failed, or never reported */
+    WLAN_RESCUE_SILENT,   /* the AP ACKed the new key's frames and sent none */
+    WLAN_RESCUES
+};
+
 struct wlan_counters {
     int32_t signal;   /* mBm, last received frame */
     int32_t noise;    /* mBm, 0 if unavailable */
@@ -78,8 +86,9 @@ struct wlan_counters {
     /* Frames the full transmit queue refused: TCP data, which TCP sends
      * again, and the others, which are lost. */
     uint32_t tx_refused_tcp, tx_refused_ack, tx_refused_other;
-    uint32_t rx_held;      /* looks at a full receive queue, which leave the frame */
-    uint32_t rx_wait_most; /* the worker's longest wait for a queued frame, ticks */
+    uint32_t rx_held;               /* looks at a full receive queue, which leave the frame */
+    uint32_t rx_wait_most;          /* the worker's longest wait for a queued frame, ticks */
+    uint32_t rescues[WLAN_RESCUES]; /* by cause; an association keeps them */
 };
 
 enum wlan_event_type {

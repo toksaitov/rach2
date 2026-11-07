@@ -1193,6 +1193,15 @@ Times a radio found the wireless receive queue full and left a frame in its
 own buffers.
 .It Li wlan_rx_wait_most
 Longest time received frames waited for the wireless worker, in milliseconds.
+.It Li wlan_rescue_key
+Renewals of a pairwise key the station left because no key went in within 10
+seconds of the access point's first message.
+.It Li wlan_rescue_message4
+Renewals the station left because message 4 failed under the old key and no
+frame opened under the new key within 10 seconds.
+.It Li wlan_rescue_silent
+Renewals the station left because the access point acknowledged data under
+the new key and sent no unicast frame under it within 10 seconds.
 .It Li loopback_dropped
 Datagrams dropped because the loopback ring was full.
 .It Li loopback_peak
