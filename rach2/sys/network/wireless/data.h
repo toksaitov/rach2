@@ -544,7 +544,8 @@ void wlan_ba_tx_stop(struct wlan_data *d, unsigned tid, int delba);
 
 /** End every BlockAck session, each way, with a DELBA, as mac80211's
  * ieee80211_pairwise_rekey does before a pairwise key in the radio is
- * replaced; a transmit session may be asked for again with the next frame.
+ * replaced, and a request under way, which the AP may have taken, the same;
+ * a transmit session may be asked for again with the next frame.
  * Returns 0, or -EINPROGRESS when a DELBA found the radio's queue full:
  * the session stays for the caller to come again, for at most
  * WLAN_DATA_REKEY_WAIT, after which it ends with its DELBA unsent. Worker

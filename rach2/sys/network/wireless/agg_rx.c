@@ -368,7 +368,7 @@ int wlan_ba_rekey(struct wlan_data *d)
             wlan_ba_rx_stop(d, tid, 1);
         }
         state = d->ba_tx[tid].state;
-        if (state == WLAN_BA_TX_ACTIVE &&
+        if (state != WLAN_BA_TX_IDLE &&
             send_delba(d, tid, 1, WLAN_REASON_QSTA_NOT_USE) == -ENOBUFS && !late)
             return -EINPROGRESS;
         if (state != WLAN_BA_TX_IDLE) {

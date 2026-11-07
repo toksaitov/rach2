@@ -1036,7 +1036,8 @@ static int sent_delba(unsigned i, unsigned params, unsigned reason)
 
 /** A pairwise key in the radio replaced ends the sessions each way with a
  * DELBA, as ieee80211_pairwise_rekey does. A first key, the same key again
- * and a software key end none, and a request under way is forgotten. */
+ * and a software key end none, and a request under way gets its DELBA too,
+ * since the AP may have taken it and its answer would be ignored. */
 static void check_rekey_sessions(void)
 {
     uint8_t f[64];
@@ -1056,7 +1057,8 @@ static void check_rekey_sessions(void)
     CHECK(n_sent == 0 && d->ba[0].active);
 
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
-    CHECK(n_sent == 2 && sent_delba(0, 0x0000, 36) && sent_delba(1, 0x0800, 37));
+    CHECK(n_sent == 3 && sent_delba(0, 0x0000, 36) && sent_delba(1, 0x0800, 37));
+    CHECK(sent_delba(2, 0x3800, 37));
     CHECK(!d->ba[0].active && d->ba_tx[0].state == WLAN_BA_TX_IDLE);
     CHECK(d->ba_tx[0].retry_at == 0);
     CHECK(d->ba_tx[3].state == WLAN_BA_TX_IDLE && d->ba_tx[3].retry_at == 0);
