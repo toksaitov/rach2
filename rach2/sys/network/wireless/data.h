@@ -401,6 +401,10 @@ int wlan_data_queue(struct wlan_data *d, const uint8_t *frame, unsigned len);
  * when the queue is empty. */
 int wlan_data_peek(struct wlan_data *d, uint8_t *out, unsigned *len);
 
+/** Say whether an EAPOL frame waits in the transmit queue. A pairwise key
+ * must not go in over one: it was written for the key in place. */
+int wlan_data_eapol_queued(struct wlan_data *d);
+
 /** Take the oldest frame off the transmit queue, if any. Worker only, so
  * that nothing but a disconnect changes the head between a peek and a pop. */
 void wlan_data_pop(struct wlan_data *d);

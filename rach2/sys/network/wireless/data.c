@@ -351,8 +351,13 @@ static int rekey_waits(struct wlan_data *d)
  * keep it queued: then nothing changes and this returns -EINPROGRESS, for
  * the caller to come again, as mac80211 flushes its queues in
  * ieee80211_pairwise_rekey, until the frames have gone or
- * WLAN_DATA_REKEY_WAIT has passed on a dead link. Otherwise returns as
- * wlan_data_install_key does, or -ENOTCONN when the connection ended.
+ * WLAN_DATA_REKEY_WAIT has passed on a dead link. Data still queued then
+ * goes under the new key, but EAPOL is written for the key it was queued
+ * under: message 4 under the new key is lost on the AP, whose repeats of
+ * message 3 are lost here, on a link that still looks up. So -ETIMEDOUT
+ * leaves the old key in, and wpa_supplicant deauthenticates and joins
+ * again. Otherwise returns as wlan_data_install_key does, or -ENOTCONN when
+ * the connection ended.
  */
 int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
 {
@@ -377,6 +382,10 @@ int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
     if (d->install_wait && !d->connected) {
         d->install_wait = 0;
         return -ENOTCONN;
+    }
+    if (d->connected && wlan_data_eapol_queued(d)) {
+        d->install_wait = 0;
+        return -ETIMEDOUT;
     }
     old = wlan_data_pairwise_key(d, key->index);
     if (old)

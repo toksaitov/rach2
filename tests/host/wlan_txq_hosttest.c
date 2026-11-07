@@ -708,6 +708,52 @@ static void check_rekey_bound(void)
     wlan_data_detach(&wlan);
 }
 
+/** Message 4 still queued past the wait keeps the old key: under the new
+ * one the AP could not read it, and the link would look up with no renewal
+ * done. The install fails, for wpa_supplicant to join again. */
+static void check_rekey_eapol_full_ring(void)
+{
+    unsigned i;
+
+    setup_keyed();
+    for (i = 0; i < RING; ++i)
+        CHECK(send(i) == 0);
+    CHECK(send_type(RING, 0x888e) == 0);
+    run_work();
+    CHECK(wlan_data_eapol_queued(wlan_data_of(&wlan)));
+    CHECK(pairwise(2) == -EINPROGRESS);
+    now += WLAN_DATA_REKEY_WAIT;
+    CHECK(pairwise(2) == -ETIMEDOUT);
+    CHECK(wlan_data_of(&wlan)->pairwise[0].key.hw_slot == 0);
+    CHECK(!wlan_data_of(&wlan)->install_wait);
+    complete(RING, 1);
+    run_work();
+    CHECK(n_taken == RING + 1 && marks[RING] == RING && slots[RING] == 0);
+    CHECK(!wlan_data_eapol_queued(wlan_data_of(&wlan)));
+    wlan_data_detach(&wlan);
+}
+
+/** A channel switch of mode 1 that outlasts the wait keeps message 4 queued
+ * the same way, with the ring empty. */
+static void check_rekey_eapol_stopped(void)
+{
+    struct wlan_data *d;
+
+    setup_keyed();
+    d = wlan_data_of(&wlan);
+    wlan_data_stop_tx(d, 1);
+    CHECK(send_type(0, 0x888e) == 0);
+    run_work();
+    CHECK(pairwise(2) == -EINPROGRESS);
+    now += WLAN_DATA_REKEY_WAIT;
+    CHECK(pairwise(2) == -ETIMEDOUT);
+    CHECK(d->pairwise[0].key.hw_slot == 0);
+    wlan_data_stop_tx(d, 0);
+    run_work();
+    CHECK(n_taken == 1 && marks[0] == 0 && slots[0] == 0);
+    wlan_data_detach(&wlan);
+}
+
 /** A connection lost during the wait ends the install with -ENOTCONN. */
 static void check_rekey_lost(void)
 {
@@ -797,6 +843,8 @@ int main(void)
     check_rekey_ring();
     check_rekey_hold();
     check_rekey_bound();
+    check_rekey_eapol_full_ring();
+    check_rekey_eapol_stopped();
     check_rekey_lost();
     check_rekey_lost_delba();
     check_rekey_one_wait();
