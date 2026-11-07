@@ -3,9 +3,9 @@
 #include "work.h"
 #include "../../lib/kerrno.h"
 #include "../../lib/spinlock.h"
+#include "../../timer.h"
 #ifndef RACH2_HOSTTEST
 #include "../../klog.h"
-#include "../../timer.h"
 #include "../../arch/arch.h"
 #include "../../lib/kirq.h"
 #include "../../proc/percpu.h"
@@ -14,7 +14,9 @@
 #include "../../proc/wait_queue.h"
 #endif
 
-/* Pending work in order of due tick, equal ticks in the order queued. */
+/* Pending work in order of due tick, equal ticks in the order queued.
+ * Immediate work is due at the tick it was queued, so that it goes behind a
+ * timer already overdue instead of ahead of every timer. */
 static struct wlan_work *queue;
 /* The work whose callback runs now, compared and never dereferenced, since
  * its owner may reuse it once the callback returns. */
@@ -54,6 +56,8 @@ int wlan_queue_work(struct wlan_work *work, uint64_t due)
         spin_unlock_irqrestore(&queue_lock, flags);
         return -EBUSY;
     }
+    if (!due)
+        due = tick_count();
     work->due = due;
     work->pending = 1;
     for (link = &queue; *link && (*link)->due <= due; link = &(*link)->next) {
@@ -125,8 +129,13 @@ unsigned wlan_work_run_due(uint64_t now)
     struct wlan_work *work;
     unsigned ran = 0;
     uint32_t flags;
+    uint64_t tick;
 
     for (;;) {
+        /* Immediate work queued by a callback is due at the tick then. */
+        tick = tick_count();
+        if (tick > now)
+            now = tick;
         flags = spin_lock_irqsave(&queue_lock);
         work = queue;
         if (!work || work->due > now) {

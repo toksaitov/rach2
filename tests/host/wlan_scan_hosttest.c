@@ -354,11 +354,17 @@ static unsigned count_events(enum wlan_event_type type)
 
 static char order[16];
 static unsigned n_order;
-static struct wlan_work wa, wb, wc, wd, we;
+static struct wlan_work wa, wb, wc, wd, we, wf, wg, wt;
 
+/** Record which work ran. */
 static void note(struct wlan_work *w)
 {
-    order[n_order++] = w == &wa ? 'a' : w == &wb ? 'b' : w == &wc ? 'c' : w == &wd ? 'd' : 'e';
+    order[n_order++] = w == &wa   ? 'a'
+                       : w == &wb ? 'b'
+                       : w == &wc ? 'c'
+                       : w == &wd ? 'd'
+                       : w == &wg ? 'g'
+                                  : 'e';
 }
 
 /** d queues e for now, which runs in the same pass, and tries itself. */
@@ -380,7 +386,7 @@ static void queue_order(void)
     CHECK(wlan_queue_work(&wc, now + 3) == 0);
     CHECK(wlan_work_next_due() == now + 3);
     CHECK(wlan_queue_work(&wd, 0) == 0);
-    CHECK(wlan_work_next_due() == 1);
+    CHECK(wlan_work_next_due() == now);
     CHECK(wlan_queue_work(&wb, now + 1) == -EBUSY);
     CHECK(wlan_queue_work(0, 0) == -EINVAL);
     CHECK(wlan_work_run_due(now + 4) == 4);
@@ -392,6 +398,67 @@ static void queue_order(void)
     wlan_cancel_work(&wa);
     CHECK(wlan_queue_work(&wa, now) == 0);
     CHECK(wlan_work_run_due(now) == 1 && order[4] == 'a');
+}
+
+static unsigned bounces, timer_at;
+
+/** f and g queue each other for the tick now, 50 times in all, as the
+ * receive and status work of a busy link do. */
+static void bounce(struct wlan_work *w)
+{
+    ++bounces;
+    if (bounces < 50)
+        CHECK(wlan_queue_work(w == &wf ? &wg : &wf, 0) == 0);
+}
+
+/** The timer notes how many bounces ran before it. */
+static void timer_note(struct wlan_work *w)
+{
+    (void)w;
+    timer_at = bounces;
+}
+
+/** A callback that takes a tick queues g for the tick now. */
+static void slow(struct wlan_work *w)
+{
+    note(w);
+    ++now;
+    CHECK(wlan_queue_work(&wg, 0) == 0);
+}
+
+/** Immediate work is due at the tick it was queued: work that queues more at
+ * once lets a timer already due run after a bounded number of callbacks, and
+ * the pass reads the tick again, so that immediate work queued a tick later
+ * runs in it too. */
+static void queue_overdue(void)
+{
+    wf.run = wg.run = bounce;
+    wt.run = timer_note;
+    bounces = 0;
+    timer_at = ~0u;
+    CHECK(wlan_queue_work(&wt, now + 2) == 0);
+    CHECK(wlan_queue_work(&wf, 0) == 0);
+    now += 5;
+    CHECK(wlan_work_run_due(now) == 51);
+    CHECK(bounces == 50 && timer_at == 1);
+    CHECK(wlan_work_next_due() == 0);
+
+    /* Equal ticks keep their order, immediate or not. */
+    wa.run = wb.run = wc.run = note;
+    n_order = 0;
+    CHECK(wlan_queue_work(&wb, 0) == 0);
+    CHECK(wlan_queue_work(&wa, now) == 0);
+    CHECK(wlan_queue_work(&wc, 0) == 0);
+    CHECK(wlan_work_run_due(now) == 3);
+    CHECK(n_order == 3 && same(order, "bac", 3));
+
+    wd.run = slow;
+    wg.run = note;
+    n_order = 0;
+    CHECK(wlan_queue_work(&wd, 0) == 0);
+    CHECK(wlan_work_run_due(now) == 2);
+    CHECK(n_order == 2 && same(order, "dg", 2));
+    CHECK(wlan_work_next_due() == 0);
 }
 
 /* ---- scans ---- */
@@ -1001,6 +1068,7 @@ static void bss_aging(void)
 int main(void)
 {
     queue_order();
+    queue_overdue();
     full_scan();
     directed_scan();
     passive_scan();

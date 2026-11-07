@@ -43,16 +43,19 @@ int wlan_work_start(void);
 void wlan_work_threads_start(void);
 
 /**
- * Run, in the order of their due ticks, every queued work due at `now`,
- * including work those callbacks queue for `now` or earlier. Work with
- * equal due ticks runs in the order it was queued. The worker thread calls
- * it with the kernel lock; the host test calls it to stand in for the
- * thread. Returns the number of callbacks run.
+ * Run, in the order of their due ticks, every queued work due at `now` or
+ * at the tick, whichever is later, read again before each callback, and so
+ * the work those callbacks queue for that time or earlier. Work with equal
+ * due ticks runs in the order it was queued. Since immediate work is due at
+ * the tick it was queued, work that queues more at once never holds up a
+ * timer already due: that timer runs before any callback queued after it
+ * came due. The worker thread calls it with the kernel lock; the host test
+ * calls it to stand in for the thread. Returns the number of callbacks run.
  */
 unsigned wlan_work_run_due(uint64_t now);
 
-/** The due tick of the earliest queued work, 1 for immediate work, or 0
- * when nothing is queued. IRQ-safe. */
+/** The due tick of the earliest queued work, 1 for work due at tick 0, or
+ * 0 when nothing is queued. IRQ-safe. */
 uint64_t wlan_work_next_due(void);
 
 /* The table of BSSs heard, owned by the worker. Entries are allocated one

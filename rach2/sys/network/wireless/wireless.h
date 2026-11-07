@@ -122,7 +122,7 @@ struct wlan_work {
     /** Run on the wireless worker with the kernel lock, no net_lock.
      * May sleep; callback owns work again after it returns. */
     void (*run)(struct wlan_work *work);
-    uint64_t due;     /* absolute millisecond tick; zero means immediately */
+    uint64_t due;     /* absolute millisecond tick; 0 asks for the tick now */
     unsigned pending; /* private to work.c */
 };
 
@@ -141,9 +141,10 @@ int wlan_register_radio(struct wlan_radio *radio, struct wlan **out);
  * this call returns. */
 void wlan_unregister_radio(struct wlan *wlan);
 
-/** Queue work for absolute tick due, or immediately at zero; IRQ-safe under
- * the kernel lock, no net_lock. Return 0 or -EBUSY if already pending/running.
- * Caller initializes wlan and run; queue owns next, due and pending. */
+/** Queue work for absolute tick due, or at zero for the tick now, behind
+ * any work already due by then; IRQ-safe under the kernel lock, no net_lock.
+ * Return 0 or -EBUSY if already pending/running. Caller initializes wlan and
+ * run; queue owns next, due and pending. */
 int wlan_queue_work(struct wlan_work *work, uint64_t due);
 
 /** Cancel a queued work and wait for a running callback; process context,
