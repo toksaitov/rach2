@@ -97,7 +97,8 @@
 #     lost;
 #   * the renewal rescues are the leaves with reason 15 the kernel made since
 #     boot, by cause: no key went in, message 4 failed, or the AP stayed silent
-#     under the new key;
+#     under the new key; saved counts the silent renewals kept because the
+#     gateway answered an ARP request under the new key;
 #   * the packets on one key, the receive errors, duplicates and replays come
 #     from the kernel's line at each pairwise key, so they stop at the last
 #     renewal and are summed over associations as the samples are;
@@ -515,9 +516,9 @@ table()
     printf 'refused other frames     %s\n' "$(statnum wlan_refused_other)"
     printf 'rx queue full            %s\n' "$(statnum wlan_rx_held)"
     printf 'longest rx wait          %s ms\n' "$(statnum wlan_rx_wait_most)"
-    printf 'renewal rescues          %s no key, %s message 4, %s silent\n' \
+    printf 'renewal rescues          %s no key, %s message 4, %s silent, %s saved\n' \
         "$(statnum wlan_rescue_key)" "$(statnum wlan_rescue_message4)" \
-        "$(statnum wlan_rescue_silent)"
+        "$(statnum wlan_rescue_silent)" "$(statnum wlan_rescue_saved)"
     printf 'longest timer gap        %s us\n' "$(statnum latency_timer_us)"
     printf '%s\n%s\n' "$stats0" "$stats1" | awk '
         NR == 1 { w = $8; s = $10; m = $11 }

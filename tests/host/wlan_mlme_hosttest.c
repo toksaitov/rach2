@@ -52,6 +52,9 @@ static uint64_t poll_cookie;  /* the last one's */
 static uint64_t heard_at;     /* what the data path says it last heard */
 static uint64_t renewing_at;  /* a renewal's key not in yet, since then */
 static uint64_t sealed_at;    /* and when it last opened a frame of the AP's */
+static int ask_result;        /* what the interface's renewal question returns */
+static unsigned n_asks;       /* calls of the interface's ask */
+static uint64_t asked_at;     /* the tick of the last */
 static uint32_t losses;       /* the station dump's beacon loss */
 static int held;              /* the data path's transmit is held */
 static unsigned holds;        /* calls of the interface's hold */
@@ -301,6 +304,24 @@ static uint64_t iface_renewing(struct wlan *wlan)
 static const struct wlan_mlme_ops poll_ops = {iface_tx,     iface_state,   iface_event, iface_poll,
                                               iface_heard,  iface_hold,    iface_moved, 0,
                                               iface_sealed, iface_renewing};
+
+/** Ask the renewal's question, as the softMAC station asks the gateway:
+ * ask_result says what came of it, and -1 ends the renewal as the station
+ * does when it has no gateway. */
+static int iface_ask(struct wlan *wlan)
+{
+    (void)wlan;
+    ++n_asks;
+    asked_at = now;
+    if (ask_result < 0)
+        renewing_at = 0;
+    return ask_result;
+}
+
+/* That interface with the renewal's question. */
+static const struct wlan_mlme_ops ask_ops = {iface_tx,     iface_state,    iface_event, iface_poll,
+                                             iface_heard,  iface_hold,     iface_moved, 0,
+                                             iface_sealed, iface_renewing, iface_ask};
 
 /** Compare n bytes. */
 static int equal(const uint8_t *a, const uint8_t *b, unsigned n)
@@ -1074,6 +1095,94 @@ static void unproved_renewal(void)
     renewing_at = 0;
 }
 
+/** Connect an interface with the renewal's question, whose ask gives
+ * `result`, and start a renewal whose limit runs from now under beacons. */
+static void asking_renewal(int result)
+{
+    reset();
+    wlan_mlme_init(&mlme, 0, &radio, &radio.band, &scan, &ask_ops);
+    mlme.beacon_losses = &losses;
+    losses = 0;
+    n_polls = 0;
+    heard_at = 0;
+    renewing_at = 0;
+    ask_result = result;
+    n_asks = 0;
+    connect_a(0);
+    renewing_at = now;
+}
+
+/** A renewal's question goes once, at WLAN_MLME_KEY_WAIT and not before,
+ * though beacons come; with no answer the station leaves with reason 15
+ * WLAN_MLME_ASK_WAIT later, and not before. */
+static void renewal_question_unanswered(void)
+{
+    uint64_t began;
+
+    asking_renewal(1);
+    began = now;
+    beacons_for(WLAN_MLME_KEY_WAIT - 100);
+    wait_ms(99);
+    CHECK(n_asks == 0 && mlme.state == WLAN_STA_ASSOCIATED);
+    wait_ms(1);
+    CHECK(n_asks == 1 && asked_at == began + WLAN_MLME_KEY_WAIT);
+    CHECK(mlme.state == WLAN_STA_ASSOCIATED && n_seen == 0);
+    CHECK(ap_beacon(ap_a, IEEE80211_STYPE_BEACON) == 0);
+    beacons_for(WLAN_MLME_ASK_WAIT - 100);
+    wait_ms(99);
+    CHECK(n_asks == 1 && mlme.state == WLAN_STA_ASSOCIATED && n_seen == 0);
+    wait_ms(1);
+    CHECK(mlme.state == WLAN_STA_NONE && n_seen == 1 && n_asks == 1);
+    CHECK(now == began + WLAN_MLME_KEY_WAIT + WLAN_MLME_ASK_WAIT);
+    CHECK(last_event()->ev.type == WLAN_EVENT_DEAUTHENTICATE);
+    CHECK(last_event()->ev.reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT);
+    renewing_at = 0;
+}
+
+/** An answer to the question, which ends the renewal, keeps the station;
+ * the next renewal asks again at its own limit. */
+static void renewal_question_answered(void)
+{
+    uint64_t began;
+
+    asking_renewal(1);
+    beacons_for(WLAN_MLME_KEY_WAIT);
+    CHECK(n_asks == 1 && mlme.state == WLAN_STA_ASSOCIATED);
+    beacons_for(WLAN_MLME_ASK_WAIT - 1000);
+    renewing_at = 0;
+    beacons_for(3 * WLAN_MLME_ASK_WAIT);
+    CHECK(n_asks == 1 && mlme.state == WLAN_STA_ASSOCIATED && n_seen == 0);
+    renewing_at = began = now;
+    beacons_for(WLAN_MLME_KEY_WAIT);
+    CHECK(n_asks == 2 && asked_at == began + WLAN_MLME_KEY_WAIT);
+    CHECK(mlme.state == WLAN_STA_ASSOCIATED);
+    renewing_at = 0;
+}
+
+/** A renewal the question ends, as one with no gateway does, leaves no
+ * station; one with no question, a failed message 4 or a key that never
+ * came, leaves at its limit as before. */
+static void renewal_question_none(void)
+{
+    uint64_t began;
+
+    asking_renewal(-1);
+    beacons_for(WLAN_MLME_KEY_WAIT);
+    CHECK(n_asks == 1 && renewing_at == 0);
+    beacons_for(3 * WLAN_MLME_KEY_WAIT);
+    CHECK(n_asks == 1 && mlme.state == WLAN_STA_ASSOCIATED && n_seen == 0);
+
+    asking_renewal(0);
+    began = now;
+    beacons_for(WLAN_MLME_KEY_WAIT - 100);
+    wait_ms(99);
+    CHECK(n_asks == 0 && mlme.state == WLAN_STA_ASSOCIATED);
+    wait_ms(1);
+    CHECK(n_asks == 1 && mlme.state == WLAN_STA_NONE && now == began + WLAN_MLME_KEY_WAIT);
+    CHECK(last_event()->ev.reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT);
+    renewing_at = 0;
+}
+
 /** A countdown to a channel switch, far off, does not put off a renewal's
  * limit: the timer looks in on it. */
 static void lost_renewal_in_countdown(void)
@@ -1570,6 +1679,9 @@ int main(void)
     lost_renewal();
     away_keeps_quiet();
     unproved_renewal();
+    renewal_question_unanswered();
+    renewal_question_answered();
+    renewal_question_none();
     lost_renewal_in_countdown();
     lost_renewal_in_announcements();
     protected_frames();

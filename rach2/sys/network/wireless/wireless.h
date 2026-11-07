@@ -89,6 +89,7 @@ struct wlan_counters {
     uint32_t rx_held;               /* looks at a full receive queue, which leave the frame */
     uint32_t rx_wait_most;          /* the worker's longest wait for a queued frame, ticks */
     uint32_t rescues[WLAN_RESCUES]; /* by cause; an association keeps them */
+    uint32_t rescue_saved;          /* silent renewals the gateway's answer proved; kept too */
 };
 
 enum wlan_event_type {

@@ -745,16 +745,51 @@ static void send_probe(struct wlan_mlme *m)
         m->ops->tx(m->wlan, f, HDR + used, 0);
 }
 
+/** The tick the renewal of the pairwise key under way next needs the
+ * monitor, 0 for none: when its WLAN_MLME_KEY_WAIT runs out, or, once the
+ * question went, WLAN_MLME_ASK_WAIT after it. */
+static uint64_t renewal_next(const struct wlan_mlme *m)
+{
+    uint64_t due = m->ops->renewing ? m->ops->renewing(m->wlan) : 0;
+
+    if (!due)
+        return 0;
+    if (m->renew_asked >= due + WLAN_MLME_KEY_WAIT)
+        return m->renew_asked + WLAN_MLME_ASK_WAIT;
+    return due + WLAN_MLME_KEY_WAIT;
+}
+
+/**
+ * Settle the renewal under way at `now`, the monitor's time: once its
+ * WLAN_MLME_KEY_WAIT has run out, ask the interface's question, once; leave
+ * when there is none, or when it went WLAN_MLME_ASK_WAIT ago and the
+ * renewal stands. Returns whether the station leaves.
+ */
+static int renewal_lapsed(struct wlan_mlme *m, uint64_t now)
+{
+    uint64_t due = m->ops->renewing ? m->ops->renewing(m->wlan) : 0;
+    int asked;
+
+    if (!due || now < due + WLAN_MLME_KEY_WAIT)
+        return 0;
+    if (m->renew_asked >= due + WLAN_MLME_KEY_WAIT)
+        return now >= m->renew_asked + WLAN_MLME_ASK_WAIT;
+    asked = m->ops->ask ? m->ops->ask(m->wlan) : 0;
+    if (asked > 0)
+        m->renew_asked = now;
+    return asked == 0;
+}
+
 /** The tick to look next in a channel switch's countdown, which can outlast
- * a renewal's WLAN_MLME_KEY_WAIT: at the latest that limit, since each
- * announcement sets the timer again. */
+ * a renewal's wait: at the latest that wait's end, since each announcement
+ * sets the timer again. */
 static uint64_t csa_next(const struct wlan_mlme *m)
 {
     uint64_t soon = tick_count() + WLAN_MLME_CSA_LOOK;
-    uint64_t due = m->ops->renewing ? m->ops->renewing(m->wlan) : 0;
+    uint64_t due = renewal_next(m);
 
-    if (due && due + WLAN_MLME_KEY_WAIT < soon)
-        soon = due + WLAN_MLME_KEY_WAIT;
+    if (due && due < soon)
+        soon = due;
     return m->csa_at < soon ? m->csa_at : soon;
 }
 
@@ -762,13 +797,15 @@ static uint64_t csa_next(const struct wlan_mlme *m)
  * there: after WLAN_MLME_BEACON_LOSS beacon intervals without a beacon, or,
  * with a poll, WLAN_MLME_IDLE_POLL milliseconds without a unicast frame from
  * the AP or an ACK of ours, as mac80211's beacon and connection monitor
- * timers do. A hint of another channel or a move on one comes due sooner.
- * The timer fires at least every beacon-loss period, so a renewal's
- * WLAN_MLME_KEY_WAIT needs no time of its own here. */
+ * timers do. A hint of another channel or a move on one comes due sooner,
+ * and so does the renewal under way, whose question goes at its time. */
 static uint64_t monitor_due(const struct wlan_mlme *m)
 {
     uint64_t loss = m->last_beacon + loss_ms(m), idle = m->polled, heard, due;
+    uint64_t renewal = renewal_next(m);
 
+    if (renewal && renewal < loss)
+        loss = renewal;
     if (!m->ops->poll)
         return loss;
     heard = m->ops->heard ? m->ops->heard(m->wlan) : 0;
@@ -1022,8 +1059,7 @@ static void monitor_timeout(struct wlan_mlme *m)
 {
     uint64_t now = tick_count(), due;
 
-    due = m->ops->renewing ? m->ops->renewing(m->wlan) : 0;
-    if (due && now >= due + WLAN_MLME_KEY_WAIT) {
+    if (renewal_lapsed(m, now)) {
         disconnect(m, IEEE80211_STYPE_DEAUTH, WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT, 1);
         return;
     }

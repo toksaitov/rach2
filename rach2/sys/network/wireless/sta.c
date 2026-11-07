@@ -6,6 +6,8 @@
 #include "mlme.h"
 #include "data.h"
 #include "nl80211.h"
+#include "../net.h"
+#include "../arp/arp.h"
 #include "../../klog.h"
 #include "../../timer.h"
 #include "../../lib/kerrno.h"
@@ -363,6 +365,7 @@ static void sta_event(struct wlan *wlan, const struct wlan_event *ev)
         c->noise = was.noise;
         c->quality = was.quality;
         k_memcpy(c->rescues, was.rescues, sizeof(c->rescues));
+        c->rescue_saved = was.rescue_saved;
         if (!s->control_port) {
             (void)wlan_queue_work(&s->authorize_work, 0);
         }
@@ -546,6 +549,30 @@ static uint64_t sta_renewing(struct wlan *wlan)
 }
 
 /**
+ * Ask the interface's gateway for its station address, for the monitor, as
+ * a renewal's question: the request goes under the new key, and the reply
+ * comes back as a unicast frame under it only if the AP has the key. The
+ * worker hands frames to the Ethernet layer under net_lock, as received
+ * frames reach it, and arp_request needs interrupts off for its buffer.
+ */
+static int sta_ask(struct wlan *wlan)
+{
+    struct wlan_data *d = wlan_data_of(wlan);
+    uint32_t flags, gateway;
+    int rc;
+
+    if (!d)
+        return 0;
+    flags = net_lock();
+    gateway = wlan->netdev.gateway;
+    rc = wlan_data_renewal_ask(d, gateway != 0);
+    if (rc > 0)
+        arp_request(&wlan->netdev, gateway);
+    net_unlock(flags);
+    return rc;
+}
+
+/**
  * Log a beacon loss, the AP's last beacon age milliseconds ago, with what
  * may show why the AP went silent: when the data path last heard a unicast
  * frame or an ACK from it, or the association when it heard none, the
@@ -574,8 +601,8 @@ static void sta_beacon_loss(struct wlan *wlan, unsigned age)
 }
 
 static const struct wlan_mlme_ops mlme_ops = {
-    wlan_data_mlme_tx, sta_state, sta_event,       sta_poll,   sta_heard,
-    sta_hold,          sta_moved, sta_beacon_loss, sta_sealed, sta_renewing};
+    wlan_data_mlme_tx, sta_state,       sta_event,  sta_poll,     sta_heard, sta_hold,
+    sta_moved,         sta_beacon_loss, sta_sealed, sta_renewing, sta_ask};
 
 /* A softMAC station joins through authentication and association, which
  * nl80211 drives for CONNECT, so it has no connect or disconnect of its

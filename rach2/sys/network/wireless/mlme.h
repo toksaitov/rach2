@@ -19,6 +19,7 @@
 #define WLAN_MLME_BEACON_LOSS     17    /* beacon intervals without a beacon */
 #define WLAN_MLME_IDLE_POLL       30000 /* without a unicast frame or ACK */
 #define WLAN_MLME_KEY_WAIT        10000 /* for a renewal's key, then its proof */
+#define WLAN_MLME_ASK_WAIT        2000  /* for the answer to a renewal's question */
 #define WLAN_MLME_CSA_LOOK        2000  /* longest look-away in a countdown */
 #define WLAN_MLME_PROBE_TIMEOUT   500   /* each probe of a silent AP */
 #define WLAN_MLME_PROBE_TRIES     3     /* null frames, or probe requests */
@@ -83,6 +84,14 @@ struct wlan_mlme_ops {
      * radio ACKs and nothing here times the handshake out. NULL for an
      * interface that cannot tell. */
     uint64_t (*renewing)(struct wlan *wlan);
+    /** Ask, for a renewal whose WLAN_MLME_KEY_WAIT ran out, a question whose
+     * answer must come under the new key, so that a link that only sends is
+     * not taken for one the AP forgot. Returns 1 when the question went, and
+     * the station leaves WLAN_MLME_ASK_WAIT later unless renewing then reads
+     * 0; 0 when the renewal has no question, and the station leaves now; -1
+     * when the interface ended the renewal, owing nothing. Called at most
+     * once a renewal. NULL for an interface that asks nothing. */
+    int (*ask)(struct wlan *wlan);
 };
 
 /* nl80211's AUTHENTICATE. data is AUTH_DATA: for SAE the transaction number
@@ -166,6 +175,10 @@ struct wlan_mlme {
     uint64_t ds_ask;
     const struct wlan_channel *ds_home;
     uint64_t ds_moved;
+    /* The tick the ask op last asked: it belongs to the renewal under way
+     * when it is at or past that renewal's WLAN_MLME_KEY_WAIT, since a
+     * question is asked only then. */
+    uint64_t renew_asked;
     struct wlan_mlme_timer timer[2];
     /* The last authentication or association request: retries send it
      * again, and nl80211 may report its elements with the association. */

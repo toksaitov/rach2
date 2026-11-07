@@ -211,6 +211,7 @@ struct wlan_data {
     uint64_t renew_acked;  /* the tick the first of those was ACKed; zero before */
     uint64_t eapol_cookie; /* the last EAPOL frame under the old key, unreported */
     int eapol_failed;      /* that frame came back without an ACK */
+    int renew_asked;       /* the gateway was asked for an answer under the key */
 
     /* The tick at which the last frame from the BSS opened under a key was
      * received on the connection's channel, which a move on a beacon's word
@@ -574,6 +575,20 @@ void wlan_data_renewal_status(struct wlan_data *d, const struct wlan_tx_status *
 /** Count the rescue wlan_data_renewal names, as the station leaves on it;
  * the renewal stands until the next connection. Worker only. */
 void wlan_data_renewal_rescued(struct wlan_data *d);
+
+/**
+ * Settle a renewal whose wait ran out, before the station leaves on it. A
+ * silent AP, WLAN_RESCUE_SILENT, may only lack traffic to answer: a one-way
+ * stream sends the AP nothing to reply to. So with a gateway the caller asks
+ * it a question whose answer comes as a unicast frame under the new key, and
+ * wlan_data_renewal_proved counts that answer in rescue_saved. Without one
+ * there is nobody to ask and nothing shows the link wrong: the renewal ends.
+ *
+ * Returns 1 when the caller is to ask the gateway now, 0 when the station
+ * leaves as before, for the other causes, and -1 when the renewal is over
+ * and nothing is owed. Worker only.
+ */
+int wlan_data_renewal_ask(struct wlan_data *d, int gateway);
 
 /** The installed group or integrity key in slot `index`, or NULL. */
 struct wlan_data_key *wlan_data_group_key(struct wlan_data *d, unsigned index);

@@ -1559,6 +1559,86 @@ static void check_renewal_silent(void)
     CHECK(d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
 }
 
+/** Bring a renewal to a silent AP: message 4 ACKed, the key in, and data
+ * under it ACKed WLAN_MLME_KEY_WAIT ago with no answer. */
+static void renewal_to_silence(void)
+{
+    enum wlan_rescue cause = WLAN_RESCUE_KEY;
+    uint64_t acked;
+
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    send_data();
+    status_of(2, WLAN_TX_ACKED);
+    acked = now;
+    now += WLAN_MLME_KEY_WAIT;
+    CHECK(wlan_data_renewal(d, &cause) == acked && cause == WLAN_RESCUE_SILENT);
+}
+
+/** The question before a silent renewal's leave: asked only for that cause
+ * and only with a gateway. Its answer, a unicast frame under the new key,
+ * ends the renewal and counts one saved; with none the leave counts as
+ * silent. Without a gateway the renewal ends with nothing owed. Message 4's
+ * and the key's causes ask nothing, gateway or not. */
+static void check_renewal_question(void)
+{
+    enum wlan_rescue cause = WLAN_RESCUE_KEY;
+
+    renewal_to_silence();
+    CHECK(wlan_data_renewal_ask(d, 1) == 1 && d->renewing != 0);
+    now += 1000;
+    CHECK(rx_opened(104, 0, 444) == -ESTALE && d->renewing != 0 && counters.rescue_saved == 0);
+    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
+    CHECK(counters.rescue_saved == 1);
+    CHECK(counters.rescues[WLAN_RESCUE_KEY] == 0 && counters.rescues[WLAN_RESCUE_MESSAGE4] == 0 &&
+          counters.rescues[WLAN_RESCUE_SILENT] == 0);
+
+    /* No answer: the leave is silent's, and nothing is saved. */
+    renewal_to_silence();
+    CHECK(wlan_data_renewal_ask(d, 1) == 1);
+    now += WLAN_MLME_ASK_WAIT;
+    CHECK(wlan_data_renewal(d, &cause) != 0 && cause == WLAN_RESCUE_SILENT);
+    wlan_data_renewal_rescued(d);
+    CHECK(counters.rescues[WLAN_RESCUE_SILENT] == 1 && counters.rescue_saved == 0);
+
+    /* No gateway: nobody to ask, and the renewal is over; a later frame
+     * under the key saves nothing. */
+    renewal_to_silence();
+    CHECK(wlan_data_renewal_ask(d, 0) == -1 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
+    CHECK(rx_opened(105, 1, 1) == 0 && counters.rescue_saved == 0);
+    CHECK(counters.rescues[WLAN_RESCUE_SILENT] == 0);
+
+    /* A proof with no question saves nothing. */
+    renewal_to_silence();
+    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0 && counters.rescue_saved == 0);
+
+    /* Message 4 failed: no question, gateway or not. */
+    renewal_to_message4();
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    status_of(1, 0);
+    now += WLAN_MLME_KEY_WAIT;
+    CHECK(wlan_data_renewal(d, &cause) != 0 && cause == WLAN_RESCUE_MESSAGE4);
+    CHECK(wlan_data_renewal_ask(d, 1) == 0 && wlan_data_renewal_ask(d, 0) == 0);
+    CHECK(d->renew_asked == 0 && d->renewing != 0);
+    wlan_data_renewal_rescued(d);
+    CHECK(counters.rescues[WLAN_RESCUE_MESSAGE4] == 1);
+
+    /* No key: no question either. */
+    renewal_to_message4();
+    now += WLAN_MLME_KEY_WAIT;
+    CHECK(wlan_data_renewal(d, &cause) != 0 && cause == WLAN_RESCUE_KEY);
+    CHECK(wlan_data_renewal_ask(d, 1) == 0 && wlan_data_renewal_ask(d, 0) == 0);
+    CHECK(d->renew_asked == 0 && d->renewing != 0);
+
+    /* An idle link owes nothing, and has nothing to ask. */
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    now += WLAN_MLME_KEY_WAIT;
+    CHECK(wlan_data_renewal_ask(d, 1) == -1 && d->renew_asked == 0);
+}
+
 /** A frame opened under a key proves the AP on the connection's channel
  * from its reception: one the reordering buffer held across a channel move
  * proves nothing there, nor does one heard on the old channel after it; one
@@ -1895,6 +1975,7 @@ int main(void)
     check_renewal_idle();
     check_renewal_traffic();
     check_renewal_silent();
+    check_renewal_question();
     check_sealed_move();
     check_mgmt();
     check_amsdu();

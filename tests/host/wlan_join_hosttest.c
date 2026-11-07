@@ -339,6 +339,14 @@ int arp_forget(struct netdev *nd, uint32_t ip)
     return 0;
 }
 
+/** No renewal here runs out, so the station asks no gateway. */
+void arp_request(struct netdev *nd, uint32_t target_ip)
+{
+    (void)target_ip;
+    CHECK(nd == iface && lock_depth == 1);
+    CHECK(!"a renewal's question");
+}
+
 /** Keep the frame the interface hands up, as Ethernet's receive would see
  * it. */
 void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)

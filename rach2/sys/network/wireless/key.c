@@ -172,12 +172,16 @@ void wlan_data_renewal_end(struct wlan_data *d)
     d->renew_acked = 0;
     d->eapol_cookie = 0;
     d->eapol_failed = 0;
+    d->renew_asked = 0;
 }
 
 void wlan_data_renewal_proved(struct wlan_data *d, const struct wlan_data_key *k)
 {
-    if (d->renewed && k == wlan_data_pairwise_key(d, d->tx_pairwise))
+    if (d->renewed && k == wlan_data_pairwise_key(d, d->tx_pairwise)) {
+        if (d->renew_asked)
+            d->counters->rescue_saved++;
         wlan_data_renewal_end(d);
+    }
 }
 
 void wlan_data_renewal_sent(struct wlan_data *d, uint64_t cookie, int eapol)
@@ -209,6 +213,22 @@ void wlan_data_renewal_rescued(struct wlan_data *d)
 
     if (wlan_data_renewal(d, &cause))
         d->counters->rescues[cause]++;
+}
+
+int wlan_data_renewal_ask(struct wlan_data *d, int gateway)
+{
+    enum wlan_rescue cause;
+
+    if (!wlan_data_renewal(d, &cause))
+        return -1;
+    if (cause != WLAN_RESCUE_SILENT)
+        return 0;
+    if (!gateway) {
+        wlan_data_renewal_end(d);
+        return -1;
+    }
+    d->renew_asked = 1;
+    return 1;
 }
 
 /** Drop every MSDU being reassembled, since a new key must not complete a
