@@ -1097,9 +1097,190 @@ static void barred_rows(void)
     bcache_invalidate(&wide);
 }
 
+/* What another process does at a service point, while a row sets it, and how
+ * many service points have passed. */
+static void (*service_hook)(void);
+static int service_points;
+
+/** Count the point and run `service_hook`, which stands for what runs when
+ * the big lock is let go there. */
+void sched_service_point(void)
+{
+    service_points++;
+    if (service_hook) {
+        service_hook();
+    }
+}
+
+/* The device of the sort rows: more blocks than a sort passes between two
+ * service points, 4096, and a batch of them, so that a sort reaches one. It
+ * keeps no bytes, only the order of its writes. */
+#define SORT_BLOCKS 4200u
+#define SORT_AFTER  2000u /* an `after`, inside the batch */
+#define SORT_LAST   4300u /* a block written last, past the batch's plain ones */
+#define SORT_FIRST  4400u /* the `first` a service point dirties, of that class too */
+#define SORT_NEXT   4500u /* a plain block the service point writes and drops */
+#define SORT_DEVICE 4600u
+static uint32_t sort_at[SORT_DEVICE];
+static uint32_t sort_writes;
+
+/** Record that the write numbered next in `sort_writes` carries each block
+ * of its range. */
+static int sort_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
+{
+    uint64_t blk;
+
+    (void)d;
+    (void)buf;
+    sort_writes++;
+    for (blk = lba / 8; blk < (lba + count) / 8 && blk < SORT_DEVICE; blk++) {
+        sort_at[blk] = sort_writes;
+    }
+    return 0;
+}
+
+/** The read of the sort device, which no row makes. */
+static int sort_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
+{
+    (void)d;
+    (void)lba;
+    (void)count;
+    (void)buf;
+    check(0, "the sort rows read nothing");
+    return -5;
+}
+
+static block_device_t sorted = {
+    512, SORT_DEVICE * 8u, BLOCK_FAULT_SAFE, 0, 0, 2048, sort_read, sort_write, 0, 0, 0, 0};
+
+/** Say that no block written last names the plain blocks' owner, 9, so that
+ * only the sync's hold, and no block's wait, keeps them ahead. */
+static int sort_names(void *arg, uint64_t blk, uint64_t owner)
+{
+    (void)arg;
+    (void)blk;
+    return owner != 9;
+}
+
+/** Name the blocks `SORT_LAST` and `SORT_FIRST` as those a sync writes last. */
+static int sort_last(void *arg, uint64_t blk)
+{
+    (void)arg;
+    return blk == SORT_LAST || blk == SORT_FIRST;
+}
+
+/**
+ * What a punch of another process does at the service point of the first
+ * sort, once: a pointer cleared in a block written last, dirtied `first`,
+ * and the bitmap's `after` marked after it, the older dirty block
+ * `SORT_AFTER`.
+ */
+static void sort_first_hook(void)
+{
+    struct process *was = current_proc;
+
+    service_hook = 0;
+    current_proc = hook_proc;
+    dirty_for(&sorted, SORT_FIRST, 0, BCACHE_ORDER_FIRST);
+    dirty_for(&sorted, SORT_AFTER, 0, BCACHE_ORDER_AFTER);
+    current_proc = was;
+}
+
+/** What a sync of one block does at the service point of a sort, once: it
+ * writes `SORT_NEXT`, which the sort's batch holds, and the cache lets the
+ * buffer go. */
+static void sort_taken_hook(void)
+{
+    struct process *was = current_proc;
+
+    service_hook = 0;
+    current_proc = hook_proc;
+    check(bcache_sync_block(&sorted, SORT_NEXT) == 0 && sort_at[SORT_NEXT] == 1,
+          "the service point writes a block of the batch");
+    current_proc = was;
+}
+
+/** Empty the sort device, mark `SORT_BLOCKS` plain blocks of owner 9 dirty
+ * from block 0, and `SORT_NEXT`, and set the cache to hold them with room to
+ * spare. */
+static void sort_setup(void)
+{
+    uint32_t i;
+
+    bcache_set_limit(SORT_DEVICE + 64);
+    __builtin_memset(sort_at, 0, sizeof(sort_at));
+    sort_writes = 0;
+    for (i = 0; i < SORT_BLOCKS; i++) {
+        dirty_for(&sorted, i, 9, 0);
+    }
+    dirty_for(&sorted, SORT_NEXT, 9, 0);
+}
+
+/** The last write of any of the plain blocks the sort rows dirty. */
+static uint32_t sort_plain_end(void)
+{
+    uint32_t i, end = 0;
+
+    for (i = 0; i < SORT_BLOCKS; i++) {
+        if (i != SORT_AFTER && sort_at[i] > end) {
+            end = sort_at[i];
+        }
+    }
+    return end;
+}
+
+/**
+ * The sort of a sync's batch lets the big lock go at its service points
+ * (`gather_dirty`), past the sync's look at the dirty `first` blocks. A
+ * `first` dirtied there, of the class written last, with an `after` marked
+ * behind it, is one the sync that holds the last blocks must see: it sorts
+ * again without that `after`, writes every plain block, and only then takes
+ * the `first`, then the `after` and the last block, which go in that order.
+ * The plain blocks are of an owner no block written last names, so that only
+ * the hold keeps them ahead: without the second sort the `after` in the batch
+ * would take the `first` to the device among them.
+ *
+ * A block a service point writes while it is in the batch is not written
+ * again.
+ */
+static void sort_rows(void)
+{
+    uint32_t plain_end;
+
+    hook_proc = &proc_b;
+    bcache_sync_last(&sorted, sort_last, sort_names, 0);
+    sort_setup();
+    dirty_for(&sorted, SORT_AFTER, 0, BCACHE_ORDER_AFTER);
+    dirty_for(&sorted, SORT_LAST, 0, 0);
+    service_points = 0;
+    service_hook = sort_first_hook;
+    check(bcache_sync(&sorted) == 0, "a sync over a sort that a `first` is dirtied in ends");
+    plain_end = sort_plain_end();
+    check(service_hook == 0 && service_points == 2,
+          "the batch is gathered and sorted again past the `first`, two service points in all");
+    check(plain_end != 0 && sort_at[SORT_AFTER] > plain_end,
+          "the `after` is left out of the second batch and follows every plain block");
+    check(plain_end != 0 && sort_at[SORT_FIRST] > plain_end,
+          "the `first`, of the class written last, follows every plain block");
+    check(sort_at[SORT_AFTER] > sort_at[SORT_FIRST], "the `after` follows the `first`");
+    check(sort_at[SORT_LAST] > sort_at[SORT_FIRST], "and so does the block written last");
+    check(sort_at[SORT_LAST] != sort_at[SORT_AFTER], "in a request of its own");
+
+    sort_setup();
+    service_points = 0;
+    service_hook = sort_taken_hook;
+    check(bcache_sync(&sorted) == 0, "a sync over a sort that takes a block of its batch ends");
+    check(service_hook == 0 && service_points == 1 && sort_at[SORT_NEXT] == 1,
+          "and leaves that block as the service point wrote it, with no second write");
+    check(sort_plain_end() != 0 && bcache_sync(&sorted) == 0 && bcache_invalidate(&sorted) == 0,
+          "the sort rows leave nothing dirty");
+    bcache_sync_last(&sorted, 0, 0, 0);
+    bcache_set_limit(BCACHE_BUFFERS);
+}
+
 /** The rows of a file's own writeback, of the blocks written last and what
- * they name, of pointer blocks, of the reserve and of a reclaim after a
- * failed write. */
+ * they name, of pointer blocks, of the reserve, of a reclaim after a failed
+ * write and of a sort's service point. */
 static void writeback_rows(void)
 {
     owned_rows();
@@ -1110,11 +1291,8 @@ static void writeback_rows(void)
     pointer_wait_rows();
     reserve_rows();
     barred_rows();
+    sort_rows();
 }
-
-/** One thread here, with no lock to pass and nothing to switch to. */
-void sched_service_point(void)
-{}
 
 /**
  * Run the rows in order, and return the count of failed checks, at most 255.
@@ -1191,7 +1369,7 @@ void sched_service_point(void)
  * released. A write run of 40 blank dirty blocks goes out in two runs of
  * 20, not one that holds every buffer while the request sleeps. The rows of
  * a file's own writeback, of the blocks written last and what they name, of
- * the reserve and of a reclaim after a failed write end the run
+ * the reserve, of a reclaim after a failed write and of a sort end the run
  * (`writeback_rows`).
  */
 int main(void)
