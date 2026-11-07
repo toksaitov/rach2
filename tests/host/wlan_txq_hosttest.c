@@ -1372,6 +1372,31 @@ static unsigned addba_resp(uint8_t *f, unsigned token)
     return 33;
 }
 
+/** An unanswered request's DELBA that finds the ring full goes again, for one
+ * more response time, and after that the session stops without it. */
+static void check_ba_no_room(void)
+{
+    struct wlan_data *d;
+    unsigned i;
+
+    setup_keyed();
+    d = wlan_data_of(&wlan);
+    d->ba_tx[0].state = WLAN_BA_TX_ACTIVE;
+    refuse_mark = 0xfffe; /* a short frame reads as 0xffff */
+    for (i = 0; i < RING; ++i)
+        CHECK(send(i) == 0);
+    run_work();
+    d->ba_tx[0].state = WLAN_BA_TX_REQUESTED;
+    d->ba_tx[0].since = now - WLAN_BA_TX_RESPONSE;
+    CHECK(wlan_ba_tx_waits(d, 0) == now + WLAN_BA_TX_AGAIN);
+    CHECK(d->ba_tx[0].state == WLAN_BA_TX_REQUESTED);
+    now += WLAN_BA_TX_RESPONSE;
+    CHECK(wlan_ba_tx_waits(d, 0) == 0 && d->ba_tx[0].state == WLAN_BA_TX_IDLE);
+    complete(RING, 1);
+    run_work();
+    wlan_data_detach(&wlan);
+}
+
 /**
  * Frames of a TID whose ADDBA request is out wait at the head of the queue,
  * with their numbers unspent, and those behind them; the AP's answer sends
@@ -1450,6 +1475,7 @@ int main(void)
     check_rekey_delba_hold();
     check_rekey_delba_first();
     check_ba_request_holds();
+    check_ba_no_room();
     check_rekey_one_wait();
     check_rekey_gone();
     if (failures) {

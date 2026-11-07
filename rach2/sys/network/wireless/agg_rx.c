@@ -347,7 +347,10 @@ uint64_t wlan_ba_tx_waits(struct wlan_data *d, unsigned tid)
         return 0;
     b = &d->ba_tx[tid];
     if (now - b->since >= WLAN_BA_TX_RESPONSE) {
-        wlan_ba_tx_stop(d, tid, 1);
+        if (send_delba(d, tid, 1, WLAN_REASON_QSTA_NOT_USE) == -ENOBUFS &&
+            now - b->since < 2 * WLAN_BA_TX_RESPONSE)
+            return now + WLAN_BA_TX_AGAIN;
+        wlan_ba_tx_stop(d, tid, 0);
         return 0;
     }
     return d->rekey_due ? 0 : b->since + WLAN_BA_TX_RESPONSE;

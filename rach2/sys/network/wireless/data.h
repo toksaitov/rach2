@@ -76,6 +76,7 @@
  * mac80211's ADDBA_RESP_INTERVAL and HT_AGG_RETRIES_PERIOD have it. */
 #define WLAN_BA_TX_RESPONSE     1000
 #define WLAN_BA_TX_RETRY        15000
+#define WLAN_BA_TX_AGAIN        10 /* after a DELBA that found no room */
 /* Set in every transmit cookie the data path makes, so that whoever routes
  * transmit status can tell its frames from the scan's and the MLME's. */
 #define WLAN_DATA_COOKIE        ((uint64_t)1 << 61)
@@ -106,13 +107,13 @@ typedef void (*wlan_data_event_fn)(struct wlan *wlan, const struct wlan_event *e
 
 /* An installed key with what the data path keeps beside it. */
 struct wlan_data_key {
-    struct wlan_key key;    /* the installed copy, with its counters */
-    struct wlan_aes128 aes; /* CCMP or BIP schedule; unused for TKIP */
-    uint64_t rx_mgmt_pn;    /* replay counter of robust management frames */
-    uint64_t old_pn;        /* highest count of the key this one replaced */
-    uint64_t old_until;     /* tick when a number near old_pn stops being that key's */
+    struct wlan_key key;               /* the installed copy, with its counters */
+    struct wlan_aes128 aes;            /* CCMP or BIP schedule; unused for TKIP */
+    uint64_t rx_mgmt_pn;               /* replay counter of robust management frames */
+    uint64_t old_pn;                   /* highest count of the key this one replaced */
+    uint64_t old_until;                /* tick when a number near old_pn stops being that key's */
     uint8_t replay_run[WLAN_NUM_TIDS]; /* by TID: replays since a frame was taken */
-    unsigned gen;           /* zero while the entry is empty, else unique */
+    unsigned gen;                      /* zero while the entry is empty, else unique */
 };
 
 /* An MSDU being reassembled. */
@@ -736,8 +737,9 @@ void wlan_ba_tx_check(struct wlan_data *d, unsigned tid, int eapol);
  * operational, the frame stays queued and keeps that number. A request
  * unanswered for WLAN_BA_TX_RESPONSE is stopped with a DELBA, as mac80211's
  * ieee80211_stop_tx_ba_session does, since the AP may have taken it and lost
- * only its answer, and a pairwise key on its way waits for nothing, since it
- * ends the session before it can start. Worker only.
+ * only its answer, tried again for one more WLAN_BA_TX_RESPONSE while the
+ * DELBA finds no room, and a pairwise key on its way waits for nothing, since
+ * it ends the session before it can start. Worker only.
  */
 uint64_t wlan_ba_tx_waits(struct wlan_data *d, unsigned tid);
 
