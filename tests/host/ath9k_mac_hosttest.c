@@ -654,6 +654,25 @@ static void rx_drops(void)
         ah.mac.msi = (uint8_t)was;
     }
 
+    /* No room is kept for a key message: a message 3 behind a data frame
+     * waits with it in the FIFO and comes whole, in its turn. */
+    n = rx_count;
+    CHECK(n + 2 <= MAX_RX);
+    len = beacon(f, 60);
+    rx_full = 1;
+    CHECK(receive(0, f, len, 0x1b, 10, 0) == 0);
+    k_memset(f, 0, sizeof(f));
+    f[0] = 0x08;
+    f[1] = 0x02;
+    k_memcpy(f + 24, "\xaa\xaa\x03\x00\x00\x00\x88\x8e\x02\x03", 10);
+    CHECK(receive(0, f, 60, 0x1b, 10, 0) == 0);
+    ath9k_tick(&ah);
+    CHECK(rx_count == n && ah.rx.held[1]);
+    rx_full = 0;
+    ath9k_tick(&ah);
+    CHECK(rx_count == n + 2 && !ah.rx.held[1]);
+    CHECK(rx_len[n + 1] == 60 && k_memcmp(rx_frame[n + 1], f, 60) == 0);
+
     /* The ring wraps: three FIFOs' worth through the high-priority one. */
     n = rx_count;
     for (len = 0; len < 3 * ATH9K_RX_HP_DEPTH; len++) {
