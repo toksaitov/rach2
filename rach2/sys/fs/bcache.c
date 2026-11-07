@@ -1616,6 +1616,11 @@ static int sync_batches(block_device_t *dev, int pass, struct sync_scope *scope,
 
         scope->hold_afters = scope->hold && first_dirty(dev);
         n = gather_dirty(dev, pass, scope, from, batch, cap);
+        /* The sort passed service points, where a `first` may have been
+         * dirtied behind the choice above. */
+        if (scope->hold && !scope->hold_afters && first_dirty(dev)) {
+            continue;
+        }
         if (n == 0) {
             if (from == 0) {
                 return 0;
