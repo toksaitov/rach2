@@ -155,6 +155,7 @@
 #define WLAN_REASON_CIPHER_SUITE_REJECTED          24
 #define WLAN_REASON_QSTA_LEAVE_QBSS                36
 #define WLAN_REASON_QSTA_NOT_USE                   37
+#define WLAN_REASON_QSTA_TIMEOUT                   39
 
 /* Suite selectors are host integers; their wire bytes are big endian. */
 #define WLAN_CIPHER_SUITE_TKIP      0x000fac02u

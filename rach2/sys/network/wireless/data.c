@@ -174,6 +174,7 @@ void wlan_data_detach(struct wlan *wlan)
         wlan_cancel_work(&d->tx_work[i].work);
         wlan_cancel_work(&d->rx_work[i].work);
         wlan_cancel_work(&d->ba_work[i].work);
+        wlan_cancel_work(&d->ba_idle_work[i].work);
     }
     flags = spin_lock_irqsave(&d->rxq_lock);
     d->rxq_count = 0;

@@ -152,6 +152,7 @@ int wlan_ba_rx_reorder(struct wlan_data *d, const uint8_t *frame, unsigned len,
     if ((seqctl & 0xf) || (frame[1] & (IEEE80211_FCTL_MOREFRAGS >> 8)))
         return 1; /* fragments are never aggregated */
     sn = seqctl >> 4;
+    ba->last_rx = tick_count();
     if (sn_less(sn, ba->head)) {
         d->counters->rx_duplicates++;
         return -EALREADY;
@@ -192,6 +193,7 @@ void wlan_ba_rx_bar(struct wlan_data *d, unsigned tid, unsigned ssn)
     if (tid >= 8 || !d->ba[tid].active)
         return;
     ba = &d->ba[tid];
+    ba->last_rx = tick_count();
     ssn &= SN_MASK;
     if (sn_less(ssn, ba->head))
         return;
@@ -225,6 +227,13 @@ void wlan_ba_rx_timeout(struct wlan_work *work)
         }
     }
     arm_timeout(d);
+}
+
+/** The tick receive session `ba` has been idle too long: its timeout, in TU
+ * of 1024 us, past its last frame. */
+static uint64_t idle_due(const struct wlan_ba_rx *ba)
+{
+    return ba->last_rx + (uint64_t)ba->timeout * 1024 / 1000;
 }
 
 /** Send the AP a Block Ack action frame whose body is the `n` bytes of
@@ -336,6 +345,28 @@ static int send_delba(struct wlan_data *d, unsigned tid, int initiator, unsigned
     return send_back(d, p, sizeof(p), d->mfp);
 }
 
+void wlan_ba_rx_idle(struct wlan_work *work)
+{
+    struct wlan_data *d = ((struct wlan_data_work *)work)->data;
+    uint64_t now = tick_count(), next = 0;
+    unsigned tid;
+
+    for (tid = 0; tid < 8; ++tid) {
+        struct wlan_ba_rx *ba = &d->ba[tid];
+
+        if (!ba->active || !ba->timeout)
+            continue;
+        if (now >= idle_due(ba)) {
+            (void)send_delba(d, tid, 0, WLAN_REASON_QSTA_TIMEOUT);
+            wlan_ba_rx_stop(d, tid, 1);
+        } else if (!next || idle_due(ba) < next) {
+            next = idle_due(ba);
+        }
+    }
+    if (next)
+        (void)wlan_data_kick(d->ba_idle_work, next);
+}
+
 void wlan_ba_tx_stop(struct wlan_data *d, unsigned tid, int delba)
 {
     struct wlan_radio *radio = d->radio;
@@ -417,9 +448,46 @@ static void addba_resp_rx(struct wlan_data *d, unsigned token, unsigned status, 
     b->window = (uint16_t)window;
 }
 
+/**
+ * Answer the AP's ADDBA request at `p`, a Block Ack action frame's body, as
+ * __ieee80211_start_rx_ba_session does: delayed BlockAck, a TID of 8 or more
+ * or no QoS is declined; the same token keeps the session, since the AP lost
+ * our answer and the window it has stands, unless the timeout changed; any
+ * other starts the session afresh.
+ */
+static void addba_req_rx(struct wlan_data *d, const uint8_t *p, int protected)
+{
+    unsigned params = (unsigned)p[3] | (unsigned)p[4] << 8;
+    unsigned ssn = ((unsigned)p[7] | (unsigned)p[8] << 8) >> 4;
+    unsigned tid = params >> 2 & 0xf, window = params >> 6;
+    unsigned timeout = (unsigned)p[5] | (unsigned)p[6] << 8;
+    unsigned status = WLAN_STATUS_SUCCESS;
+
+    if (!window || window > WLAN_BA_MAX_WINDOW)
+        window = WLAN_BA_MAX_WINDOW;
+    if (tid >= 8 || !(params & 0x0002) || !d->qos) {
+        status = WLAN_STATUS_REQUEST_DECLINED;
+    } else if (d->ba[tid].active && d->ba[tid].token == p[2]) {
+        if (d->ba[tid].timeout != timeout)
+            status = WLAN_STATUS_REQUEST_DECLINED;
+    } else {
+        wlan_ba_rx_stop(d, tid, 1);
+        if (ba_start(d, tid, ssn, window) != 0) {
+            status = WLAN_STATUS_REQUEST_DECLINED;
+        } else {
+            d->ba[tid].token = p[2];
+            d->ba[tid].timeout = (uint16_t)timeout;
+            d->ba[tid].last_rx = tick_count();
+            if (timeout)
+                (void)wlan_data_kick(d->ba_idle_work, idle_due(&d->ba[tid]));
+        }
+    }
+    addba_resp(d, p[2], status, tid & 0xf, window, timeout, protected);
+}
+
 int wlan_data_rx_action(struct wlan_data *d, const uint8_t *frame, unsigned len, int protected)
 {
-    unsigned hdrlen, params, tid, window, ssn, status, timeout;
+    unsigned hdrlen, params;
     const uint8_t *p;
 
     if (!d || !frame)
@@ -439,30 +507,7 @@ int wlan_data_rx_action(struct wlan_data *d, const uint8_t *frame, unsigned len,
     case WLAN_ACTION_ADDBA_REQ:
         if (len < hdrlen + 9)
             return -EINVAL;
-        params = (unsigned)p[3] | (unsigned)p[4] << 8;
-        ssn = ((unsigned)p[7] | (unsigned)p[8] << 8) >> 4;
-        tid = params >> 2 & 0xf;
-        window = params >> 6;
-        if (!window || window > WLAN_BA_MAX_WINDOW)
-            window = WLAN_BA_MAX_WINDOW;
-        timeout = (unsigned)p[5] | (unsigned)p[6] << 8;
-        status = WLAN_STATUS_SUCCESS;
-        if (tid >= 8 || !(params & 0x0002) || !d->qos) {
-            status = WLAN_STATUS_REQUEST_DECLINED; /* delayed BlockAck, or no QoS */
-        } else if (d->ba[tid].active && d->ba[tid].token == p[2]) {
-            /* The AP lost our answer: the window it has stands. */
-            if (d->ba[tid].timeout != timeout)
-                status = WLAN_STATUS_REQUEST_DECLINED;
-        } else {
-            wlan_ba_rx_stop(d, tid, 1);
-            if (ba_start(d, tid, ssn, window) != 0) {
-                status = WLAN_STATUS_REQUEST_DECLINED;
-            } else {
-                d->ba[tid].token = p[2];
-                d->ba[tid].timeout = (uint16_t)timeout;
-            }
-        }
-        addba_resp(d, p[2], status, tid & 0xf, window, timeout, protected);
+        addba_req_rx(d, p, protected);
         return 0;
     case WLAN_ACTION_DELBA:
         if (len < hdrlen + 6)

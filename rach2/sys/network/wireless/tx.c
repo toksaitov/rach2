@@ -141,6 +141,9 @@ void wlan_data_init(struct wlan_data *d, struct wlan *wlan, struct wlan_radio *r
         d->ba_work[i].work.wlan = wlan;
         d->ba_work[i].work.run = wlan_ba_rx_timeout;
         d->ba_work[i].data = d;
+        d->ba_idle_work[i].work.wlan = wlan;
+        d->ba_idle_work[i].work.run = wlan_ba_rx_idle;
+        d->ba_idle_work[i].data = d;
         d->tx_work[i].work.wlan = wlan;
         d->tx_work[i].data = d;
     }
