@@ -1157,7 +1157,7 @@ static void check_rekey_sessions(void)
     radio_full = 1;
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == -EINPROGRESS);
     CHECK(d->ba[0].active && wlan_data_pairwise_key(d, 0)->key.hw_slot == 0);
-    now += WLAN_DATA_REKEY_WAIT - 1;
+    now += WLAN_DATA_BA_WAIT - 1;
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == -EINPROGRESS);
     /* Meanwhile no session starts, either way. */
     CHECK(d->ba_blocked);
@@ -1182,7 +1182,7 @@ static void check_rekey_sessions(void)
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
     radio_full = 1;
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == -EINPROGRESS);
-    now += WLAN_DATA_REKEY_WAIT;
+    now += WLAN_DATA_BA_WAIT;
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
     radio_full = 0;
     CHECK(!d->ba[0].active && wlan_data_pairwise_key(d, 0)->key.hw_slot == 1);

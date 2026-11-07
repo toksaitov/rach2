@@ -156,7 +156,8 @@ void wlan_event(struct wlan *wlan, const struct wlan_event *event);
  * Reinstalling identical key bytes must preserve PN/replay counters. A
  * pairwise key waits for what is queued to be sent: -EINPROGRESS asks the
  * caller to come again, from outside the worker's callback, until another
- * result ends it, which takes at most WLAN_DATA_REKEY_WAIT milliseconds. */
+ * result ends it, which takes at most WLAN_DATA_REKEY_WAIT and
+ * WLAN_DATA_BA_WAIT milliseconds. */
 int wlan_install_key(struct wlan *wlan, const struct wlan_key *key);
 
 /** Remove peer/index key and erase its bytes after hardware removal.

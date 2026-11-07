@@ -391,7 +391,7 @@ int wlan_ba_rekey(struct wlan_data *d)
 
     d->ba_blocked = 1;
     if (!d->ba_stop_due)
-        d->ba_stop_due = tick_count() + WLAN_DATA_REKEY_WAIT;
+        d->ba_stop_due = tick_count() + WLAN_DATA_BA_WAIT;
     late = tick_count() >= d->ba_stop_due;
     for (tid = 0; tid < 8; ++tid) {
         if (d->ba[tid].active) {
