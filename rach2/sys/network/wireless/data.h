@@ -127,6 +127,7 @@ struct wlan_ba_rx {
     uint8_t token;    /* the dialog token of the request that started it */
     uint16_t timeout; /* the AP's, in TU; 0 for none */
     uint64_t last_rx; /* tick of the session's last frame or BlockAckReq */
+    uint16_t stale;   /* frames since the last one taken, over a window behind */
 };
 
 /* One TID's BlockAck transmit session, which the station originates. */
@@ -553,9 +554,14 @@ int wlan_data_rx_action(struct wlan_data *d, const uint8_t *frame, unsigned len,
  * Put a QoS data MPDU through its TID's reordering buffer: hand on, in
  * order of sequence number, every frame the window lets go, and hold the
  * rest until their holes fill, the window moves past them, or they wait
- * WLAN_BA_TIMEOUT. Returns 1 when the TID has no session and the caller
- * hands the frame on itself, 0 when the buffer took it, or a negative
- * errno for a duplicate or a lost allocation. Worker only.
+ * WLAN_BA_TIMEOUT. A frame before the head is a duplicate and moves
+ * neither the head nor the session's idle time. Once a window's worth of
+ * frames more than a window behind the head has come with none taken
+ * between, the AP's numbers began again without a DELBA: the session ends
+ * with a DELBA of its own, and the frame goes on as one outside it. Returns
+ * 1 when the TID has no session and the caller hands the frame on itself,
+ * 0 when the buffer took it, or a negative errno for a duplicate or a lost
+ * allocation. Worker only.
  */
 int wlan_ba_rx_reorder(struct wlan_data *d, const uint8_t *frame, unsigned len,
                        const struct wlan_rx_status *status, unsigned tid);

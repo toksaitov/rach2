@@ -1143,6 +1143,62 @@ static void check_ba_idle(void)
     CHECK(d->ba[0].active);
 }
 
+/** Duplicates alone keep no session: they do not put off its idle timeout,
+ * and when the AP numbers its frames from the start again with no DELBA,
+ * a window of frames that far behind the head ends the session with one,
+ * where they would otherwise be dropped until the AP's numbers reached the
+ * head. Retries, at most a window behind, never end it. */
+static void check_ba_stale(void)
+{
+    uint8_t f[64];
+    unsigned len, i, n, dups;
+
+    setup(1);
+    d->privacy = 0;
+    len = addba_req(f, 0, 8, 100);
+    f[29] = 100; /* 102 ms */
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    for (i = 100; i < 120; ++i)
+        CHECK(rx_sn(i) == 0);
+    CHECK(d->ba[0].head == 120);
+    n_sent = 0;
+    for (i = 0; i < 3; ++i) {
+        now += 30;
+        run_work();
+        CHECK(rx_sn(115) == -EALREADY && d->ba[0].active);
+    }
+    now += 12;
+    run_work();
+    CHECK(!d->ba[0].active && n_sent == 1 && sent_delba(0, 0x0000, 39));
+
+    setup(1);
+    d->privacy = 0;
+    len = addba_req(f, 0, 8, 100);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    for (i = 100; i < 120; ++i)
+        CHECK(rx_sn(i) == 0);
+    n = n_got;
+    dups = counters.rx_duplicates;
+    n_sent = 0;
+    /* Retries of the window behind the head, however many. */
+    for (i = 0; i < 40; ++i)
+        CHECK(rx_sn(112 + i % 8) == -EALREADY);
+    CHECK(d->ba[0].active && n_sent == 0 && d->ba[0].stale == 0);
+    /* Seven from the start, a frame taken, seven more: still a session. */
+    for (i = 0; i < 7; ++i)
+        CHECK(rx_sn(i) == -EALREADY);
+    CHECK(rx_sn(120) == 0 && d->ba[0].stale == 0);
+    for (i = 0; i < 7; ++i)
+        CHECK(rx_sn(i) == -EALREADY);
+    CHECK(d->ba[0].active && n_sent == 0 && n_got == n + 1);
+    CHECK(counters.rx_duplicates == dups + 54);
+    /* The eighth in a row ends it, and goes on outside it. */
+    CHECK(rx_sn(7) == 0 && !d->ba[0].active);
+    CHECK(n_sent == 1 && sent_delba(0, 0x0000, WLAN_REASON_UNSPECIFIED));
+    CHECK(n_got == n + 2 && got_sn(n + 1) == 7 && counters.rx_duplicates == dups + 54);
+    CHECK(rx_sn(8) == 0 && n_got == n + 3);
+}
+
 /** A pairwise key in the radio replaced ends the sessions each way with a
  * DELBA, as ieee80211_pairwise_rekey does. A first key, the same key again
  * and a software key end none, and a request under way gets its DELBA too,
@@ -1630,6 +1686,7 @@ int main(void)
     check_rekey_slot();
     check_rekey_sessions();
     check_addba_again();
+    check_ba_stale();
     check_ba_idle();
     check_rekey_tids();
     check_renewal_wait();

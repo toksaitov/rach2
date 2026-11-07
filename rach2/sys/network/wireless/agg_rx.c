@@ -12,6 +12,8 @@
 
 #define SN_MASK 0xfff
 
+static int send_delba(struct wlan_data *d, unsigned tid, int initiator, unsigned reason);
+
 /** Whether sequence number a comes before b, modulo 4096. */
 static int sn_less(unsigned a, unsigned b)
 {
@@ -152,11 +154,19 @@ int wlan_ba_rx_reorder(struct wlan_data *d, const uint8_t *frame, unsigned len,
     if ((seqctl & 0xf) || (frame[1] & (IEEE80211_FCTL_MOREFRAGS >> 8)))
         return 1; /* fragments are never aggregated */
     sn = seqctl >> 4;
-    ba->last_rx = tick_count();
     if (sn_less(sn, ba->head)) {
+        /* A retry lies at most a window behind the head; a window of
+         * frames further back says that the AP's numbers began again. */
+        if (sn_less(sn, (ba->head - ba->window) & SN_MASK) && ++ba->stale >= ba->window) {
+            (void)send_delba(d, tid, 0, WLAN_REASON_UNSPECIFIED);
+            wlan_ba_rx_stop(d, tid, 1);
+            return 1;
+        }
         d->counters->rx_duplicates++;
         return -EALREADY;
     }
+    ba->stale = 0;
+    ba->last_rx = tick_count();
     if (!sn_less(sn, (ba->head + ba->window) & SN_MASK))
         release_until(d, ba, (sn - ba->window + 1) & SN_MASK);
     if (!ba->active)
