@@ -183,13 +183,28 @@ static int32_t dgram_send_opt(struct socket *sock, net_addr_t dst_ip, uint16_t d
                               const uint8_t *buf, uint16_t len, const struct net_txopt *opt);
 
 /**
+ * Answer a send of `len` bytes that IP or UDP answered with `r`: `len`, or
+ * `r` when it is an error other than -ENOBUFS.
+ *
+ * -ENOBUFS says that a full driver queue or loopback ring lost the datagram.
+ * A datagram may be lost on the way in any case, and the sender's own timer
+ * covers it. Linux, whose device queue stands in front of its driver, tells
+ * a raw or UDP socket nothing of it without IP_RECVERR, and BusyBox ping
+ * exits at the first error from sendto.
+ */
+static int32_t dgram_sent(int r, int32_t len)
+{
+    return r < 0 && r != -ENOBUFS ? r : len;
+}
+
+/**
  * Send the `len` bytes at `buf` as one UDP datagram from `sock` to `dst_ip`
  * and `dst_port`, checking the destination first, and binding the socket to
  * an ephemeral port when it has none. Returns `len`, or the socket's pending
  * error, -EACCES for a broadcast address without `SO_BROADCAST`, -EMSGSIZE
  * past 65,507 IPv4 or 65,527 IPv6 bytes (`UDP_PAYLOAD_MAX`), -EAGAIN when
- * no ephemeral port is free, or the error of `udp_tx`, which is reported
- * rather than counted as bytes sent.
+ * no ephemeral port is free, or the error of `udp_tx` that `dgram_sent`
+ * reports.
  *
  * A datagram to a broadcast address reaches every machine on the wire, so a
  * program must set `SO_BROADCAST` on the socket before it can send one: a
@@ -222,11 +237,7 @@ static int32_t dgram_send_opt(struct socket *sock, net_addr_t dst_ip, uint16_t d
     if (sock->local_port == 0 && udp_bind_ephemeral(sock) == 0) {
         return -EAGAIN;
     }
-    r = udp_tx(sock, dst_ip, dst_port, buf, len, opt);
-    if (r < 0) {
-        return r;
-    }
-    return (int32_t)len;
+    return dgram_sent(udp_tx(sock, dst_ip, dst_port, buf, len, opt), (int32_t)len);
 }
 
 /* The raw send buffer: one frame, filled from the caller's memory in a
@@ -958,15 +969,15 @@ static int32_t do_bind(int fd, uintptr_t sa_ptr, int addrlen)
  * An ICMP datagram socket sends only an echo request, with its own
  * identifier written in (`raw_echo_stamp`).
  *
- * Returns `len`, the error of `sockaddr_in6_in`, `icmp6_send` or
- * `ip6_tx_whole`, -EINVAL for a message too short to hold its checksum, or
- * from an ICMP datagram socket one that is no echo request, a
- * source in `opt` that is not this machine's or an interface that
- * disagrees with the address's scope,
- * -EMSGSIZE past the largest payload, 65535 bytes, or past one 1500-byte
- * datagram for IPPROTO_RAW, -ENOMEM when no block holds a message past
- * `raw_send_buf`, or -EFAULT. The copy runs with interrupts on, and the
- * send under the network lock, as an IPv4 raw send does.
+ * Returns `len`, the error of `sockaddr_in6_in`, or the error of `icmp6_send`
+ * or `ip6_tx_whole` that `dgram_sent` reports, -EINVAL for a message too
+ * short to hold its checksum, or from an ICMP datagram socket one that is no
+ * echo request, a source in `opt` that is not this machine's or an interface
+ * that disagrees with the address's scope, -EMSGSIZE past the largest
+ * payload, 65535 bytes, or past one 1500-byte datagram for IPPROTO_RAW,
+ * -ENOMEM when no block holds a message past `raw_send_buf`, or -EFAULT. The
+ * copy runs with interrupts on, and the send under the network lock, as an
+ * IPv4 raw send does.
  */
 static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uintptr_t sa_ptr,
                            int addrlen, const struct net_txopt *opt)
@@ -1043,7 +1054,7 @@ static int32_t raw6_sendto(struct socket *sock, uintptr_t buf_ptr, int len, uint
     if (buf != raw_send_buf) {
         kfree(buf);
     }
-    return r < 0 ? r : (int32_t)len;
+    return dgram_sent(r, (int32_t)len);
 }
 
 /**
@@ -1270,10 +1281,7 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
         if (msg != raw_send_buf) {
             kfree(msg);
         }
-        if (r < 0) {
-            return r;
-        }
-        return (int32_t)len;
+        return dgram_sent(r, (int32_t)len);
     }
 
     if (entry->sock->type == SOCK_STREAM) {

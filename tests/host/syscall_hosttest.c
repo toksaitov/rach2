@@ -1,8 +1,8 @@
 /**
  * Host test of system calls of syscall.c and syscall_net.c: a connect whose
- * handshake ended, the clocks past 2^32 ticks and their resolutions, and the
- * sleeps and the interval timer, with their deadlines, masks, remainders,
- * clamps and checks of arguments.
+ * handshake ended, a datagram a full queue lost, the clocks past 2^32 ticks
+ * and their resolutions, and the sleeps and the interval timer, with their
+ * deadlines, masks, remainders, clamps and checks of arguments.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/network/socket/address.c rach2/sys/network/ip6/addr6.c
@@ -70,6 +70,7 @@ extern int printf(const char *format, ...);
 extern int dprintf(int fd, const char *format, ...);
 
 static process_t proc;
+static int udp_answer; /* what `udp_tx` answers */
 struct percpu cpu_table[NR_CPUS] = {{.current = &proc}};
 
 /** Every socket here is in the first network namespace. */
@@ -395,6 +396,33 @@ uint16_t udp_bind_ephemeral(struct socket *s)
 {
     (void)s;
     return 0;
+}
+
+/** No datagram socket here holds a pending error. */
+int socket_dgram_error(struct socket *s)
+{
+    (void)s;
+    return 0;
+}
+
+/** No address here is a broadcast address. */
+int netconf_is_broadcast(uint32_t ip)
+{
+    (void)ip;
+    return 0;
+}
+
+/** Answer as the row says: the result of IP's send. */
+int udp_tx(const struct socket *s, net_addr_t ip, uint16_t port, const uint8_t *payload,
+           uint16_t plen, const struct net_txopt *opt)
+{
+    (void)s;
+    (void)ip;
+    (void)port;
+    (void)payload;
+    (void)plen;
+    (void)opt;
+    return udp_answer;
 }
 
 /** Give `s` the test's control block, in the state `completion` at once
@@ -1432,6 +1460,32 @@ static void clock_sleeps(void)
 }
 
 /** Run every row; 0 when each passes, 1 otherwise. */
+/**
+ * A UDP send answers its length when a full queue lost the datagram, as
+ * Linux does without IP_RECVERR, and any other error of IP's as it stands.
+ * BusyBox ping exits at the first error from sendto, so a radio queue that
+ * fills for a moment must not reach it.
+ */
+static void queue_full(void)
+{
+    static const uint8_t data[64];
+    struct socket s;
+    net_addr_t dst;
+
+    k_memset(&s, 0, sizeof(s));
+    k_memset(&dst, 0, sizeof(dst));
+    dst.family = AF_INET;
+    s.local_port = 1024;
+    udp_answer = -ENOBUFS;
+    CHECK(dgram_send(&s, dst, 7, data, sizeof(data)) == 64, "a lost datagram is sent");
+    udp_answer = 0;
+    CHECK(dgram_send(&s, dst, 7, data, sizeof(data)) == 64, "a datagram is sent");
+    udp_answer = -ENETUNREACH;
+    CHECK(dgram_send(&s, dst, 7, data, sizeof(data)) == -ENETUNREACH, "no route is an error");
+    CHECK(dgram_sent(-ENOBUFS, 8) == 8, "a raw datagram lost is sent");
+    CHECK(dgram_sent(-EMSGSIZE, 8) == -EMSGSIZE, "a raw datagram too long is an error");
+}
+
 int main(void)
 {
     proc.tg = &group;
@@ -1439,6 +1493,7 @@ int main(void)
     other.tg = &other_group;
     other_group.leader = &other;
     connects();
+    queue_full();
     clocks();
     clock_ids();
     clock_sleeps();
@@ -1449,7 +1504,7 @@ int main(void)
     timer_first_expiry();
     if (failures)
         return 1;
-    printf("syscall-test: pass: connect, clocks, sleeps and timer\n");
+    printf("syscall-test: pass: connect, datagram, clocks, sleeps and timer\n");
     return 0;
 }
 

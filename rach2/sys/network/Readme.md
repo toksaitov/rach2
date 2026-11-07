@@ -76,7 +76,7 @@ The routing table (`route.c`) is the routes the interfaces imply, each address's
 
 A UDP, raw or ICMP datagram socket bound to a card with `SO_BINDTODEVICE` sends by that card alone (`netdev_route_on`): the lookup takes only its routes, and when none covers the destination, the destination is taken to be on the card's link, as Linux takes it, so that `ping -I wlan0 192.168.0.1` reaches a host on wlan0's network while eth0 holds the default route. A card that is down is `ENETUNREACH`, and an address of this machine's still goes onto the loopback ring. The source, connect and getsockname follow the same route. An IPv6 datagram of such a socket leaves by the card as if its address had the card's scope. The binding does not filter what the socket receives, and TCP does not consult it.
 
-`ethernet_tx` adds the header with the interface's station address, and refuses a payload over 1500 bytes or an IPv4, IPv6 or ARP payload over the interface's MTU, IPv4, IPv6 and ARP on an interface that is down, and every frame for a card whose link is down; each refusal counts as a transmit drop. A refusal reaches a UDP or raw sender as `ENOBUFS`, and TCP keeps the segment to send again.
+`ethernet_tx` adds the header with the interface's station address, and refuses a payload over 1500 bytes or an IPv4, IPv6 or ARP payload over the interface's MTU, IPv4, IPv6 and ARP on an interface that is down, and every frame for a card whose link is down; each refusal counts as a transmit drop. TCP keeps a refused segment to send again. A UDP or raw sender is told nothing of a refusal (`dgram_sent` in `syscall_net.c`), as on Linux without `IP_RECVERR`: the datagram is lost, as it may be on the way, and a packet socket alone sees `ENOBUFS`.
 
 ### Addresses and ARP
 
