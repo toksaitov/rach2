@@ -323,6 +323,40 @@ static int send(unsigned mark)
     return send_type(mark, 0x0800);
 }
 
+/** Queue frame number `mark` over IP as protocol `proto` with `data` bytes
+ * after a 20-byte header, IPv6 if `v6`, padded to Ethernet's least. */
+static int send_ip(unsigned mark, unsigned proto, unsigned data, int v6)
+{
+    uint8_t eth[ETH_HDR_SIZE + 128];
+    unsigned ip = v6 ? 40 : 20;
+    unsigned len = ETH_HDR_SIZE + ip + 20 + data;
+
+    k_memset(eth, 0, sizeof(eth));
+    k_memcpy(eth, far, 6);
+    k_memcpy(eth + 6, sta, 6);
+    if (v6) {
+        eth[12] = 0x86;
+        eth[13] = 0xdd;
+        eth[14] = 0x60;
+        eth[19] = (uint8_t)(20 + data);
+        eth[20] = (uint8_t)proto;
+    } else {
+        eth[12] = 0x08;
+        eth[14] = 0x45;
+        eth[17] = (uint8_t)(ip + 20 + data);
+        eth[23] = (uint8_t)proto;
+    }
+    eth[ETH_HDR_SIZE + ip + 12] = 0x50; /* TCP's data offset: 20 bytes */
+    eth[ETH_MARK] = (uint8_t)mark;
+    return wlan.tx_ethernet(&wlan, eth, len < 60 ? 60 : len);
+}
+
+/** Queue TCP data, frame number `mark`. */
+static int send_tcp(unsigned mark)
+{
+    return send_ip(mark, 6, 64, 0);
+}
+
 /** The frames the adapter's queue holds. */
 static unsigned waiting(void)
 {
@@ -373,11 +407,11 @@ static void setup(void)
 /* --- The checks. --- */
 
 /**
- * Eighteen frames into a ring of four behind the fourteen slots of the
- * queue that data may take: the ring fills, the queue holds the rest
- * without a drain queued per frame, the nineteenth is refused to its
- * sender, and completions one at a time send all eighteen in order with
- * consecutive sequence numbers.
+ * Frames into a ring of four behind the slots of the queue that data
+ * other than TCP's may take: the ring fills, the queue holds the rest
+ * without a drain queued per frame, the next is refused to its sender,
+ * and completions one at a time send them all in order with consecutive
+ * sequence numbers.
  */
 static void check_hold(void)
 {
@@ -463,6 +497,64 @@ static void check_eapol_room(void)
     CHECK(marks[total] == 100 && marks[total + 1] == 101);
     CHECK(waiting() == 0);
     CHECK(wlan.netdev.tx_dropped == 0);
+    wlan_data_detach(&wlan);
+}
+
+/**
+ * Other traffic behind a bulk upload: TCP data stops at its fourteen slots,
+ * as many as it had before the eight others were added, and is refused,
+ * counted as TCP's. ICMP, UDP, ARP and a bare acknowledgement, on IPv4 and
+ * IPv6, go in behind it, and a padded acknowledgement is no data. Only when
+ * those slots are full is one refused, counted as other, and EAPOL then has
+ * its own two. All go in order.
+ */
+static void check_upload_room(void)
+{
+    unsigned i, want, tcp = 14, total = RING + tcp;
+
+    setup();
+    CHECK(WLAN_DATA_TX_QUEUE - WLAN_DATA_TX_EAPOL - WLAN_DATA_TX_OTHER == tcp);
+    for (i = 0; i < tcp; ++i)
+        CHECK(send_tcp(i) == 0);
+    run_work();
+    for (; i < total; ++i)
+        CHECK(send_tcp(i) == 0);
+    CHECK(waiting() == tcp);
+    CHECK(send_tcp(total) == -ENOBUFS);
+    CHECK(send_ip(total, 6, 64, 1) == -ENOBUFS);
+    CHECK(wlan.counters.tx_refused_tcp == 2);
+    CHECK(wlan.counters.tx_refused_other == 0);
+
+    CHECK(send_ip(100, 1, 16, 0) == 0);  /* ICMP */
+    CHECK(send_ip(101, 17, 16, 0) == 0); /* UDP */
+    CHECK(send_ip(102, 6, 0, 0) == 0);   /* a bare acknowledgement */
+    CHECK(send_ip(103, 6, 0, 1) == 0);   /* and on IPv6 */
+    CHECK(send_ip(104, 58, 16, 1) == 0); /* ICMPv6 */
+    CHECK(send_ip(105, 17, 16, 1) == 0); /* UDP on IPv6 */
+    CHECK(send_type(106, 0x0806) == 0);  /* ARP */
+    CHECK(send(107) == 0);
+    CHECK(waiting() == tcp + WLAN_DATA_TX_OTHER);
+    CHECK(send(108) == -ENOBUFS);
+    CHECK(wlan.counters.tx_refused_other == 1);
+    CHECK(wlan.counters.tx_refused_tcp == 2);
+
+    CHECK(send_type(109, 0x888e) == 0);
+    CHECK(send_type(110, 0x888e) == 0);
+    CHECK(send_type(111, 0x888e) == -ENOBUFS);
+    CHECK(wlan.counters.tx_refused_other == 2);
+    CHECK(waiting() == WLAN_DATA_TX_QUEUE);
+
+    while (ring_count) {
+        complete(1, 1);
+        run_work();
+    }
+    want = total + WLAN_DATA_TX_OTHER + WLAN_DATA_TX_EAPOL;
+    CHECK(n_taken == want);
+    for (i = 0; i < total; ++i)
+        CHECK(marks[i] == i);
+    for (i = 0; i < WLAN_DATA_TX_OTHER + WLAN_DATA_TX_EAPOL; ++i)
+        CHECK(marks[total + i] == 100 + i + (i >= WLAN_DATA_TX_OTHER ? 1 : 0));
+    CHECK(waiting() == 0);
     wlan_data_detach(&wlan);
 }
 
@@ -699,6 +791,7 @@ int main(void)
 {
     check_hold();
     check_eapol_room();
+    check_upload_room();
     check_other_refusal();
     check_stop();
     check_rekey_ring();

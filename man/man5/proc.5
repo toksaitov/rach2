@@ -1180,6 +1180,11 @@ Longest wait for a block request slot, in microseconds.
 .It Li latency_console_us
 Longest delay from a console line becoming readable to its being read,
 in microseconds.
+.It Li wlan_refused_tcp
+TCP data segments a full wireless transmit queue refused, which TCP sends
+again.
+.It Li wlan_refused_other
+Other frames a full wireless transmit queue refused, which are lost.
 .It Li loopback_dropped
 Datagrams dropped because the loopback ring was full.
 .It Li loopback_peak

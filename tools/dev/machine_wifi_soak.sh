@@ -23,7 +23,7 @@
 # given, a network wpa_supplicant already knows, and for SECONDS it runs:
 #
 #   * RACH2_SOAK_WRITERS writers, 6 unless given, each of which writes a
-#     file of 6000 MiB of zeros, flushes it, removes it and starts again, and
+#     file of 1000 MiB of zeros, flushes it, removes it and starts again, and
 #     a `sync` loop; 0 runs no load at all, for a control. The zeros come from
 #     /dev/zero because a read of /dev/urandom spends its time in the kernel
 #     under the big lock and so loads the processors, not the disk;
@@ -92,6 +92,9 @@
 #   * wpa_cli gives up on wpa_supplicant when it does not answer a PING;
 #   * the rm and sync seconds time each rm of a writer's file and each sync of
 #     the load, an rm at the end of the run of a file cut short among them;
+#   * the frames refused are those of the wireless transmit queue, by kind,
+#     since boot: TCP data, which TCP sends again, and the others, which are
+#     lost;
 #   * the packets on one key, the receive errors, duplicates and replays come
 #     from the kernel's line at each pairwise key, so they stop at the last
 #     renewal and are summed over associations as the samples are;
@@ -255,7 +258,7 @@ joined()
 writer()
 {
     while [ ! -e "$dir/stop" ]; do
-        dd if="$source" of="$load/w$1" bs=1M count=6000 conv=fsync 2> /dev/null &
+        dd if="$source" of="$load/w$1" bs=1M count=1000 conv=fsync 2> /dev/null &
         echo $! > "$dir/dd$1"
         wait $!
         read -r begun _ < /proc/uptime
@@ -325,7 +328,11 @@ netwatch()
         while read -r proto a _ _ _ e _; do
             [ "$proto" = Icmp: ] && [ "$a" != InMsgs ] && replies=$e
         done < /proc/net/snmp
-        echo "$up eth0=$eth wlan0=$wl echoreps=$replies" >> "$dir/net"
+        crypt=-
+        while read -r name _ _ _ _ _ c _; do
+            [ "$name" = wlan0: ] && crypt=$c
+        done < /proc/net/wireless
+        echo "$up eth0=$eth wlan0=$wl echoreps=$replies crypt=$crypt" >> "$dir/net"
         sleep 1
     done
 }
@@ -498,6 +505,8 @@ table()
     printf 'longest disk request     %s us, %s\n' "$disk1" "$([ "$disk1" -gt "$disk0" ] &&
         echo 'in this run' || echo "before this run; the run's own was no longer")"
     printf 'longest slot wait        %s us\n' "$(statnum latency_diskwait_us)"
+    printf 'refused tcp data         %s\n' "$(statnum wlan_refused_tcp)"
+    printf 'refused other frames     %s\n' "$(statnum wlan_refused_other)"
     printf 'longest timer gap        %s us\n' "$(statnum latency_timer_us)"
     printf '%s\n%s\n' "$stats0" "$stats1" | awk '
         NR == 1 { w = $8; s = $10; m = $11 }
@@ -533,15 +542,6 @@ finish()
         cli set_network "$id" wpa_ptk_rekey 0 > /dev/null
         cli enable_network all > /dev/null
     }
-}
-
-# Wait for the writers' files to go, so that the table's commands find the
-# disk free.
-wait_writers()
-{
-    while [ -n "$(ls "$load")" ]; do
-        sleep 1
-    done
 }
 
 soak()
@@ -591,6 +591,7 @@ soak()
     i=0
     while [ "$i" -lt "$writers" ]; do
         writer "$i" &
+        writing="${writing:-} $!"
         i=$((i + 1))
     done
     [ "$writers" -eq 0 ] || syncer &
@@ -608,7 +609,11 @@ soak()
         pkill -x ping
     fi
     wait "$pinging"
-    wait_writers
+    # The writers' last rm frees the disk for the table's commands and is
+    # timed, and the file goes from the directory before rm ends.
+    for p in ${writing:-}; do
+        wait "$p"
+    done
     dmesg | grep -E 'wlan|ath9k|80211' >> "$dir/kernel.raw"
     sleep 2
     echo "wifi-soak: table: $seconds s"

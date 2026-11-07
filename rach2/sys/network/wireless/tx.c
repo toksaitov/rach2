@@ -518,12 +518,39 @@ void wlan_data_tx_status(struct wlan_data *d, const struct wlan_tx_status *statu
     wlan_rate_status(d, status);
 }
 
+/**
+ * Say whether Ethernet frame `frame` of `len` bytes is a TCP segment that
+ * carries data, which TCP keeps and sends again at once if it is refused. A
+ * bare acknowledgement is not sent again, and a SYN, a FIN or a reset only
+ * after a timeout. The lengths come from the IP header, since an Ethernet
+ * frame may be padded.
+ */
+static int frame_is_tcp_data(const uint8_t *frame, unsigned len)
+{
+    unsigned type = (unsigned)frame[12] << 8 | frame[13];
+    unsigned ip, total, tcp;
+
+    if (type == 0x0800 && len >= 34 && frame[23] == 6) {
+        ip = (frame[14] & 0x0fu) * 4u;
+        total = (unsigned)frame[16] << 8 | frame[17];
+    } else if (type == 0x86dd && len >= 54 && frame[20] == 6) {
+        ip = 40;
+        total = ((unsigned)frame[18] << 8 | frame[19]) + 40u;
+    } else {
+        return 0;
+    }
+    if (len < 14 + ip + 20)
+        return 0;
+    tcp = (unsigned)(frame[14 + ip + 12] >> 4) * 4u;
+    return total > ip + tcp;
+}
+
 int wlan_data_queue(struct wlan_data *d, const uint8_t *frame, unsigned len)
 {
     struct wlan_data_txq *q;
     uint32_t flags;
     unsigned room;
-    int held;
+    int held, tcp;
 
     if (!d || !frame || len < 14 || len > WLAN_DATA_ETH_MAX)
         return -EINVAL;
@@ -532,8 +559,15 @@ int wlan_data_queue(struct wlan_data *d, const uint8_t *frame, unsigned len)
     room = WLAN_DATA_TX_QUEUE;
     if (frame[12] != 0x88 || frame[13] != 0x8e)
         room -= WLAN_DATA_TX_EAPOL;
+    tcp = frame_is_tcp_data(frame, len);
+    if (tcp)
+        room -= WLAN_DATA_TX_OTHER;
     flags = spin_lock_irqsave(&d->txq_lock);
     if (d->txq_count >= room) {
+        if (tcp)
+            d->counters->tx_refused_tcp++;
+        else
+            d->counters->tx_refused_other++;
         spin_unlock_irqrestore(&d->txq_lock, flags);
         return -ENOBUFS;
     }

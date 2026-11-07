@@ -75,6 +75,9 @@ struct wlan_counters {
     uint32_t rx_duplicates, rx_fragments, rx_dropped;
     uint32_t rx_decrypt_errors, rx_replays, rx_mic_errors;
     uint32_t tx_retries, tx_failed, missed_beacons;
+    /* Frames the full transmit queue refused: TCP data, which TCP sends
+     * again, and the others, which are lost. */
+    uint32_t tx_refused_tcp, tx_refused_other;
 };
 
 enum wlan_event_type {

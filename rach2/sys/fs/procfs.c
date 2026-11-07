@@ -2729,6 +2729,26 @@ static void ap_cpu_ticks(struct procfs_text *t, uint64_t user, uint64_t busy, ui
     ap_str(t, " 0 0 0 0 0 0\n");
 }
 
+/** Render the frames a full transmit queue refused, summed over the radios:
+ * TCP data, then all the others. */
+static void procfs_wlan_refused(struct procfs_text *t)
+{
+    struct wlan_counters c;
+    struct wlan *wlan;
+    uint32_t tcp = 0, other = 0;
+    unsigned i;
+
+    for (i = 0; (wlan = wlan_at(i)) != 0; ++i) {
+        wlan_get_counters(wlan, &c);
+        tcp += c.tx_refused_tcp;
+        other += c.tx_refused_other;
+    }
+    ap_str(t, "\nwlan_refused_tcp ");
+    ap_u32(t, tcp);
+    ap_str(t, "\nwlan_refused_other ");
+    ap_u32(t, other);
+}
+
 /**
  * Render /proc/stat: the tick counters, the interrupt total, the boot epoch,
  * the process counts, and this kernel's own counters: the sleeps a signal
@@ -2829,6 +2849,7 @@ static int procfs_gen_statsys(struct procfs_text *t)
     ap_u32(t, latency_max(LAT_DISK_WAIT));
     ap_str(t, "\nlatency_console_us ");
     ap_u32(t, latency_max(LAT_CONSOLE));
+    procfs_wlan_refused(t);
     ap_str(t, "\nloopback_dropped ");
     ap_u32(t, ip_loop_dropped());
     ap_str(t, "\nloopback_peak ");
