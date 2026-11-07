@@ -80,6 +80,8 @@ static struct vfs_mount mnt;
 static void (*flush_pause)(void);
 static void (*read_pause)(void);
 static void (*write_pause)(void);
+/* What another process does at a service point, while a row sets it. */
+static void (*service_pause)(void);
 
 process_t proc_a;
 /* The second process of a row in which two threads take turns. */
@@ -310,11 +312,17 @@ uint32_t timer_now_us(void)
 /* The clock of a deadline, in ticks. */
 static uint64_t host_ticks;
 
+/** Run `service_pause`, which stands for what runs when the big lock is let
+ * go at a service point. */
+void sched_service_point(void)
+{
+    if (service_pause) {
+        service_pause();
+    }
+}
+
 /** The tick count, one more at each look, so that a wait with a deadline
  * ends after a bounded number of turns. */
-void sched_service_point(void)
-{}
-
 uint64_t tick_count(void)
 {
     return ++host_ticks;
@@ -3723,6 +3731,7 @@ static void overlap_punch_row(void)
 #include "ext2_fsync_rows.h"
 #include "ext2_order_rows.h"
 #include "ext2_pair_rows.h"
+#include "ext2_service_rows.h"
 
 /* The host heap's limit on one allocation, 0 for none, and the page
  * allocations it grants before it fails, -1 for no limit
@@ -5116,8 +5125,8 @@ static void hardlink_check_rows(void)
  * order rows, the writer's failures, the dirty volumes, the matrix and the
  * batch rows, the node rows and the fsync rows. `--times-only` runs only
  * timestamps; `--hardlinks-only` runs only the hard-link check rows;
- * `--node-only` and `--fsync-only` run only those rows; `--capture-only`
- * checks independent tool
+ * `--node-only`, `--fsync-only` and `--service-only` run only those rows;
+ * `--capture-only` checks independent tool
  * output capture alone. Returns 0,
  * and calls `fix_passed`, when every row passed.
  */
@@ -5160,6 +5169,11 @@ int main(int argc, char **argv)
         goto finish;
     }
 
+    if (argc == 2 && streq(argv[1], "--service-only")) {
+        service_rows();
+        goto finish;
+    }
+
     if (argc == 2 && streq(argv[1], "--times-only")) {
         time_row(128, PROFILE);
         time_row(256, PROFILE_LARGE);
@@ -5190,6 +5204,7 @@ int main(int argc, char **argv)
     fsync_rows();
     writeback_order_rows();
     pair_rows();
+    service_rows();
 
 finish:
     if (image) {
