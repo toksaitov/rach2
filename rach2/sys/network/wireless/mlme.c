@@ -766,14 +766,16 @@ static uint64_t renewal_next(const struct wlan_mlme *m)
  * Settle the renewal under way at `now`, the monitor's time: ask the
  * interface's question from the renewal's start and again each
  * WLAN_MLME_ASK_WAIT, since one lost frame must not end a connection, and a
- * question the card refused after WLAN_MLME_ASK_AGAIN, since it asked
- * nothing. Leave when WLAN_MLME_KEY_WAIT has run out and the last question
- * has had its WLAN_MLME_ASK_WAIT, or at once then when the renewal has no
- * question or none could go. Returns whether the station leaves.
+ * question the card refused after WLAN_MLME_ASK_AGAIN, or at the end of
+ * WLAN_MLME_KEY_WAIT if that comes first, since it asked nothing. Leave when
+ * WLAN_MLME_KEY_WAIT has run out and the last question has had its
+ * WLAN_MLME_ASK_WAIT, or at once then when the renewal has no question or
+ * none could go. Returns whether the station leaves.
  */
 static int renewal_lapsed(struct wlan_mlme *m, uint64_t now)
 {
     uint64_t due = m->ops->renewing ? m->ops->renewing(m->wlan) : 0;
+    uint64_t again = now + WLAN_MLME_ASK_AGAIN;
     int asked, over = now >= due + WLAN_MLME_KEY_WAIT;
 
     if (!due || now < m->renew_again)
@@ -787,11 +789,13 @@ static int renewal_lapsed(struct wlan_mlme *m, uint64_t now)
         return 0;
     }
     m->renew_again = 0;
+    if (again > due + WLAN_MLME_KEY_WAIT)
+        again = due + WLAN_MLME_KEY_WAIT;
     asked = m->ops->ask ? m->ops->ask(m->wlan) : 0;
     if (asked == 1)
         m->renew_asked = now;
     else if (asked == 2)
-        m->renew_again = now + WLAN_MLME_ASK_AGAIN;
+        m->renew_again = again;
     else if (asked == 0)
         m->renew_silent = due;
     return (asked == 0 || asked == 2) && over;

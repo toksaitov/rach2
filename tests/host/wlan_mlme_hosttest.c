@@ -1160,6 +1160,22 @@ static void renewal_question_refused(void)
     CHECK(now <= began + WLAN_MLME_KEY_WAIT + 2000);
     CHECK(last_event()->ev.reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT);
     renewing_at = 0;
+
+    /* A refusal just short of the end: the next try comes no later. */
+    asking_renewal(2);
+    renewing_at -= 30;
+    began = renewing_at;
+    beacons_for(WLAN_MLME_KEY_WAIT - 300);
+    while (asked_at + WLAN_MLME_ASK_AGAIN < began + WLAN_MLME_KEY_WAIT)
+        wait_ms(5);
+    CHECK(asked_at < began + WLAN_MLME_KEY_WAIT);
+    ask_result = 1;
+    wait_ms(200);
+    CHECK(asked_at <= began + WLAN_MLME_KEY_WAIT);
+    beacons_for(WLAN_MLME_ASK_WAIT);
+    CHECK(mlme.state == WLAN_STA_NONE);
+    CHECK(now <= began + WLAN_MLME_KEY_WAIT + WLAN_MLME_ASK_WAIT + 200);
+    renewing_at = 0;
 }
 
 /** An answer to the question, which ends the renewal, keeps the station;
