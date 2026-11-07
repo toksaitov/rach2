@@ -647,6 +647,24 @@ static void check_rekey_one_wait(void)
     wlan_data_detach(&wlan);
 }
 
+/** A connection that ends in a key's wait leaves no wait behind for the next
+ * one, whose frames, message 2 among them, go out. */
+static void check_rekey_gone(void)
+{
+    unsigned i;
+
+    setup_keyed();
+    for (i = 0; i < RING + 1; ++i)
+        CHECK(send(i) == 0);
+    run_work();
+    CHECK(pairwise(2) == -EINPROGRESS);
+    wlan_data_disconnect(wlan_data_of(&wlan));
+    CHECK(wlan_data_of(&wlan)->rekey_due == 0);
+    complete(RING, 1);
+    run_work();
+    wlan_data_detach(&wlan);
+}
+
 /** A connection lost while a DELBA waits for room in the ring ends the
  * install with -ENOTCONN too, after the queue's wait has ended. */
 static void check_rekey_lost_delba(void)
@@ -681,6 +699,7 @@ int main(void)
     check_rekey_lost();
     check_rekey_lost_delba();
     check_rekey_one_wait();
+    check_rekey_gone();
     if (failures) {
         printf("wlan_txq_hosttest: %u failures\n", failures);
         return failures > 255 ? 255 : (int)failures;

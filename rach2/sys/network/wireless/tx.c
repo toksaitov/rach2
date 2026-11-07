@@ -194,6 +194,7 @@ void wlan_data_disconnect(struct wlan_data *d)
 
     if (!d)
         return;
+    d->rekey_due = 0;
     for (i = 0; i < 8; ++i) {
         wlan_ba_rx_stop(d, i, 0);
         wlan_ba_tx_stop(d, i, 0);
