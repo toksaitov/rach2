@@ -2117,6 +2117,11 @@ static void check_renewal_question(void)
     CHECK(rx_opened(105, 1, 1) == 0 && counters.rescue_saved == 0);
     CHECK(counters.rescues[WLAN_RESCUE_SILENT] == 0);
 
+    /* The route goes after the question: the renewal ends with it. */
+    renewal_to_silence();
+    CHECK(wlan_data_renewal_ask(d, 1) == 1);
+    CHECK(wlan_data_renewal_ask(d, 0) == -1 && d->renewing == 0 && d->renew_asked == 0);
+
     /* A proof with no question saves nothing. */
     renewal_to_silence();
     CHECK(rx_arp_reply(105, 1, 1) == 0 && d->renewing != 0 && counters.rescue_saved == 0);

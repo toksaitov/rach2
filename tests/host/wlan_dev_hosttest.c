@@ -1144,8 +1144,45 @@ static void regulatory(void)
 }
 
 /** Run allocation-free conversions and the model station; create no files. */
+/**
+ * A renewal's question goes to the card's default gateway, which a DHCP client
+ * adds as a route of a metric of its own: the lowest such route answers, a
+ * gateway the card holds comes first, neither another card's route nor a
+ * route to a subnet counts, and a route changed or removed changes the answer.
+ */
+static void check_default_gateway(void)
+{
+    static struct netdev card, other;
+
+    card.ip = other.ip = 0xc0000205u;
+    card.mask = other.mask = 0xffffff00u;
+    CHECK(netdev_default_gateway(&card) == 0);
+    CHECK(netdev_route_add(&other, 0, 0, 0xc0000209u, 5, 0) == 0);
+    CHECK(netdev_route_add(&card, 0xc6336400u, 0xffffff00u, 0xc0000208u, 1, 0) == 0);
+    CHECK(netdev_default_gateway(&card) == 0);
+    CHECK(netdev_route_add(&card, 0, 0, 0xc0000201u, 600, 0) == 0);
+    CHECK(netdev_default_gateway(&card) == 0xc0000201u);
+    CHECK(netdev_route_add(&card, 0, 0, 0xc0000202u, 100, 0) == 0);
+    CHECK(netdev_route_add(&card, 0, 0, 0xc0000203u, 700, 0) == 0);
+    CHECK(netdev_default_gateway(&card) == 0xc0000202u);
+    card.gateway = 0xc0000204u;
+    CHECK(netdev_default_gateway(&card) == 0xc0000204u);
+    card.gateway = 0;
+    CHECK(netdev_route_add(&card, 0, 0, 0xc0000206u, 100, 1) == 0);
+    CHECK(netdev_default_gateway(&card) == 0xc0000206u);
+    CHECK(netdev_route_del(&card, 0, 0, 0xc0000206u) == 0);
+    CHECK(netdev_default_gateway(&card) == 0xc0000201u);
+    CHECK(netdev_route_del(&card, 0, 0, 0xc0000201u) == 0);
+    CHECK(netdev_default_gateway(&card) == 0xc0000203u);
+    CHECK(netdev_route_del(&card, 0, 0, 0) == 0);
+    CHECK(netdev_default_gateway(&card) == 0);
+    CHECK(netdev_route_del(&card, 0xc6336400u, 0xffffff00u, 0) == 0);
+    CHECK(netdev_route_del(&other, 0, 0, 0) == 0);
+}
+
 int main(void)
 {
+    check_default_gateway();
     station();
     blocking();
     closing();

@@ -551,8 +551,9 @@ static uint64_t sta_renewing(struct wlan *wlan)
 }
 
 /**
- * Ask the interface's gateway for its station address, for the monitor, as
- * a renewal's question: the request goes under the new key, and the reply
+ * Ask the gateway of the interface's default route for its station address,
+ * for the monitor, as a renewal's question, read afresh each time since the
+ * route may change: the request goes under the new key, and the reply
  * comes back as a unicast frame under it only if the AP has the key. The
  * worker hands frames to the Ethernet layer under net_lock, as received
  * frames reach it, and arp_request needs interrupts off for its buffer.
@@ -566,7 +567,7 @@ static int sta_ask(struct wlan *wlan)
     if (!d)
         return 0;
     flags = net_lock();
-    gateway = wlan->netdev.gateway;
+    gateway = netdev_default_gateway(&wlan->netdev);
     rc = wlan_data_renewal_ask(d, gateway != 0);
     if (rc > 0)
         arp_request(&wlan->netdev, gateway);

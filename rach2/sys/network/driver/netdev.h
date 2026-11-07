@@ -448,6 +448,11 @@ int netdev_route_add(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw
  * there is none. Call under net_lock. */
 int netdev_route_del(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw);
 
+/** The gateway of `nd`'s default route: its own, else that of its added
+ * default route of the lowest metric, as a DHCP client adds at a metric of
+ * its own; 0 for none. Call under net_lock. */
+uint32_t netdev_default_gateway(const struct netdev *nd);
+
 /** Drop the added routes of `nd` whose gateway its subnets no longer have,
  * as Linux drops a route whose next hop an address change made unreachable.
  * Call under net_lock. */

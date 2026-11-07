@@ -339,6 +339,13 @@ int arp_forget(struct netdev *nd, uint32_t ip)
     return 0;
 }
 
+/** Model netdev_default_gateway: no row here has a route. */
+uint32_t netdev_default_gateway(const struct netdev *nd)
+{
+    (void)nd;
+    return 0;
+}
+
 /** No renewal here runs out, so the station asks no gateway. */
 void arp_request(struct netdev *nd, uint32_t target_ip)
 {

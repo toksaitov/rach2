@@ -213,6 +213,24 @@ int netdev_route_add(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw
     return 0;
 }
 
+uint32_t netdev_default_gateway(const struct netdev *nd)
+{
+    uint32_t gw = nd->gateway, metric = 0;
+    int i;
+
+    if (gw != 0) {
+        return gw;
+    }
+    for (i = 0; i < NETDEV_ROUTES; i++) {
+        if (added[i].nd == nd && added[i].mask == 0 && added[i].gw != 0 &&
+            (gw == 0 || added[i].metric < metric)) {
+            gw = added[i].gw;
+            metric = added[i].metric;
+        }
+    }
+    return gw;
+}
+
 int netdev_route_del(struct netdev *nd, uint32_t dst, uint32_t mask, uint32_t gw)
 {
     int i;
