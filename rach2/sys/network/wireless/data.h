@@ -641,7 +641,9 @@ void wlan_data_renewal_status(struct wlan_data *d, const struct wlan_tx_status *
  * set a TID's counter above the AP's, an old count past the settle, which
  * nothing but a new key would lower. The renewal's question and its bound
  * settle it, and only an answer on `tid` counts, since another TID's frame
- * says nothing of this one. Nothing for a renewal under way. Worker only. */
+ * says nothing of this one. A renewal left idle, its key in and no data
+ * ACKed, takes the same clock. Nothing once a renewal's clock runs. A frame
+ * taken on `tid` ends the doubt. Worker only. */
 void wlan_data_renewal_doubted(struct wlan_data *d, unsigned tid);
 
 /** Count the rescue wlan_data_renewal names, as the station leaves on it;
@@ -655,11 +657,12 @@ void wlan_data_renewal_rescued(struct wlan_data *d);
  * and its own frames need nothing from us. So with a gateway the caller asks
  * it a question whose answer comes as an ARP reply under the new key, and
  * wlan_data_renewal_proved counts that answer in rescue_saved. Without one
- * there is nobody to ask and nothing shows the link wrong: the renewal ends.
+ * there is nobody to ask and nothing shows the link wrong: the renewal ends,
+ * unless a run of replays doubts it, when the caller's bound decides.
  *
  * Returns 1 when the caller is to ask the gateway now, 0 when the renewal
- * has no question, for the other causes, and -1 when the renewal is over and
- * nothing is owed. Worker only.
+ * has no question, for the other causes or a doubt with no gateway, and -1
+ * when the renewal is over and nothing is owed. Worker only.
  */
 int wlan_data_renewal_ask(struct wlan_data *d, int gateway);
 

@@ -247,6 +247,8 @@ static int rx_decrypt(struct wlan_data *d, uint8_t *frame, unsigned *len, unsign
     if (k->key.cipher == WLAN_CIPHER_SUITE_CCMP)
         k->key.rx_pn[idx] = c->pn;
     k->replay_run[idx] = 0;
+    if (!group && d->renew_doubt == idx + 1)
+        d->renew_doubt = 0;
     c->key = k;
     c->mic_stripped = (status->flags & WLAN_RX_DECRYPTED) && (status->flags & WLAN_RX_MIC_STRIPPED);
     c->mic_error = (status->flags & WLAN_RX_MIC_ERROR) != 0;

@@ -250,8 +250,10 @@ void wlan_data_renewal_status(struct wlan_data *d, const struct wlan_tx_status *
 
 void wlan_data_renewal_doubted(struct wlan_data *d, unsigned tid)
 {
-    if (!d->renewing) {
-        d->renewing = d->renewed = d->renew_acked = tick_count();
+    if (!d->renewing)
+        d->renewing = d->renewed = tick_count();
+    if (d->renewed && !d->renew_acked) {
+        d->renew_acked = tick_count();
         d->renew_doubt = tid + 1;
     }
 }
@@ -272,11 +274,12 @@ int wlan_data_renewal_ask(struct wlan_data *d, int gateway)
         return -1;
     if (cause != WLAN_RESCUE_SILENT)
         return 0;
-    if (!gateway) {
-        wlan_data_renewal_end(d);
-        return -1;
-    }
-    return 1;
+    if (gateway)
+        return 1;
+    if (d->renew_doubt)
+        return 0;
+    wlan_data_renewal_end(d);
+    return -1;
 }
 
 void wlan_data_renewal_asked(struct wlan_data *d)
