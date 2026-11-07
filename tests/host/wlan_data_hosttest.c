@@ -1761,8 +1761,8 @@ static uint64_t mon_renewing(struct wlan *wlan)
     return wlan_data_renewal(d, 0);
 }
 
-/** The renewal's question with a gateway, as sta_ask asks it; the row
- * gives the answer, or none. */
+/** The renewal's question as sta_ask asks it, with a default route or none
+ * as mon_gateway says; the row gives the answer, or none. */
 static int mon_ask(struct wlan *wlan)
 {
     int rc;
@@ -2041,6 +2041,9 @@ static void check_replay_run_monitor(void)
     for (i = 0; i < WLAN_DATA_REPLAY_RUN; ++i)
         CHECK(rx_opened_tid(1, 241 + i, 1, 3 + i) == -ESTALE);
     CHECK(d->renewing != 0);
+    n = mon_asks;
+    mon_beacons(5000);
+    CHECK(d->renewing == 0 && mon_asks == n);
     mon_beacons(WLAN_MLME_KEY_WAIT + WLAN_MLME_ASK_WAIT + 2000);
     CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_leaves == 0 && d->renewing == 0);
     CHECK(counters.rescues[WLAN_RESCUE_SILENT] == 0);
@@ -2069,6 +2072,7 @@ static void check_renewal_tkip(void)
     len = ap_frame(f, sta, 1, 1, 300, 0, 0, msdu, sizeof(msdu));
     ap_tkip(f, &len, 26, 2, 0);
     CHECK(rx(f, len) == -EBADMSG && d->renewing != 0);
+    CHECK(counters.rx_mic_errors == 1 && counters.rx_decrypt_errors == 0);
     len = ap_frame(f, sta, 1, 0, 301, 0, 0, msdu, sizeof(msdu));
     ap_tkip(f, &len, 26, 3, 0);
     CHECK(rx(f, len) == 0 && d->renewing == 0);
