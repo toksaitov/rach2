@@ -776,6 +776,9 @@ static void set_associated(const uint8_t *bssid, enum wlan_sta_state state)
     status_now.counters.rx_bytes = 1000;
     status_now.counters.tx_bytes = 2000;
     status_now.counters.missed_beacons = 3;
+    status_now.counters.rx_dropped = 4;
+    status_now.counters.rx_replays = 5;
+    status_now.counters.rx_duplicates = 6;
 }
 
 static void setup(void)
@@ -1306,6 +1309,16 @@ static void auth_request(unsigned type)
     rq_u32(NL80211_ATTR_AUTH_TYPE, type);
 }
 
+/** The station's beacon loss, and its drop count, which holds its dropped,
+ * replayed and duplicate frames, as Linux's rx_stats.dropped holds
+ * duplicates. */
+static void check_losses(const struct nlattr *const *t)
+{
+    CHECK(u32_of(t[NL80211_STA_INFO_BEACON_LOSS]) == 3);
+    CHECK(t[NL80211_STA_INFO_RX_DROP_MISC] &&
+          nla_get_u64(t[NL80211_STA_INFO_RX_DROP_MISC]) == 4 + 5 + 6);
+}
+
 /** wpa_supplicant's SME joining WPA2-PSK: authentication, association,
  * the keys and the port, then the AP's deauthentication. */
 static void join_wpa2(void)
@@ -1423,7 +1436,7 @@ static void join_wpa2(void)
           u32_of(t[NL80211_STA_INFO_TX_BYTES]) == 2000);
     CHECK(u32_of(t[NL80211_STA_INFO_INACTIVE_TIME]) == 20);
     CHECK(u32_of(t[NL80211_STA_INFO_CONNECTED_TIME]) == 2);
-    CHECK(u32_of(t[NL80211_STA_INFO_BEACON_LOSS]) == 3);
+    check_losses(t);
     CHECK(t[NL80211_STA_INFO_BSS_PARAM] != 0);
     CHECK(t[NL80211_STA_INFO_STA_FLAGS] && nla_len(t[NL80211_STA_INFO_STA_FLAGS]) == 8 &&
           (get32(nla_data(t[NL80211_STA_INFO_STA_FLAGS]) + 4) & 1u << NL80211_STA_FLAG_AUTHORIZED));

@@ -58,6 +58,10 @@ A station's
 is the rate of its last data frame the access point acknowledged, and its
 .Sy rx bitrate
 that of the last frame it received from the access point.
+Its
+.Sy rx drop misc
+counts the frames it received and dropped, replays and duplicates among
+them.
 .It Cm dev Ar ifname Cm connect Ar ssid Op Ar freq
 Join an open network.
 A secured network is joined with

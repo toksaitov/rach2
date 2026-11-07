@@ -2194,7 +2194,9 @@ static void put_station(struct genl_msg *msg, struct sta *s, const struct nl8021
     nla_put_u32(msg, NL80211_STA_INFO_TX_RETRIES, n->tx_retries);
     nla_put_u32(msg, NL80211_STA_INFO_TX_FAILED, n->tx_failed);
     nla_put_u32(msg, NL80211_STA_INFO_BEACON_LOSS, n->missed_beacons);
-    nla_put_u64(msg, NL80211_STA_INFO_RX_DROP_MISC, (uint64_t)n->rx_dropped + n->rx_replays);
+    /* Linux counts its duplicates in rx_stats.dropped, which this reports. */
+    nla_put_u64(msg, NL80211_STA_INFO_RX_DROP_MISC,
+                (uint64_t)n->rx_dropped + n->rx_replays + n->rx_duplicates);
     if (n->signal) {
         /* The signal is a signed byte of dBm; the counters keep mBm. */
         nla_put_u8(msg, NL80211_STA_INFO_SIGNAL, (uint8_t)(int8_t)(n->signal / 100));
