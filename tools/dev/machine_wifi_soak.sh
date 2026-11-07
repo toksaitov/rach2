@@ -439,6 +439,9 @@ table()
         }' "$dir/samples"
     awk '!seen[$0]++' "$dir/kernel.raw" > "$dir/kernel"
     printf 'beacon-loss lines        %d\n' "$(grep -c ': beacon loss: ' "$dir/kernel")"
+    printf 'chip resets              %d' "$(grep -c 'ath9k: reset: ' "$dir/kernel")"
+    sed -n 's/.*ath9k: reset: \([^:]*\):.*/\1/p' "$dir/kernel" | sort | uniq -c |
+        awk '{ printf ", %s %d", $2, $1 } END { print "" }'
     printf 'wpa_cli gave up          %d\n' "$(gaveup)"
     awk -v p="$t0" -v end="$ended" '/ seq=/ { if ($1 - p > 1) away += $1 - p; p = $1 }
         END { printf "seconds without a reply  %d\n", away + end - p }' "$dir/ping"
