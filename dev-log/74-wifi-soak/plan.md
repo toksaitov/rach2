@@ -33,7 +33,17 @@ Files: `rach2/sys/fs/ext2.c`, `rach2/sys/proc/process.h`, `rach2/sys/network/wir
 
 Done when the full WSL run passes on the final head, that head is installed on the Lenovo, `machine.installer` has proved the root update's keeps, and a long soak on the installed final image is clean. A soak on a one-boot trial of the kernel is early proof of the kernel and closes nothing.
 
+Added after the trials on the Lenovo; each is one commit on the milestone branch:
+
+* A join waits 150 ms after a forced deauthentication, since the TP-Link lost a frame sent 5 ms after it. A rejoin takes 0.73 to 0.79 s; Linux takes 2.61 to 2.77 s.
+* A datagram send hides `ENOBUFS`, as Linux does without `IP_RECVERR`, so a full queue no longer ends ping.
+* The delete and sync work gives up the big lock at bounded points: every 1024 visits in `punch_level`, after each round of `punch`, and every 4096 blocks of a sync's sort. On a trial the longest hold fell from 527 ms to 20 ms, holds of 30 ms or more from 2065 to 0, and lock waits of 100 ms or more from 40 to 0.
+* BlockAck around a key change: a DELBA for an ADDBA under way, a repeated ADDBA keeps its window, the AP's timeout is kept and an idle session ends with reason 39, no session starts while a key changes, and the old key leaves the radio before the new one goes in, in another slot.
+* A pairwise key waits up to 4 s for message 4 to leave under the old key, the time the AP keeps trying.
+
 ## Open
 
-* `wpa_cli reassociate` takes 11 s on the first join after a scan: the supplicant sends reason 2 and joins in 5 ms, one frame fails to decrypt, and the handshake waits out its 10 s. Rejoining after a disconnect takes 20 ms. Open, and held for this milestone: it stays out only if Linux on the Lenovo shows the same, measured.
-* Reason 4 at 12552.11 stays a counted drop: the access point moved channel with no announcement seen, and no new search is made before leaving. That mac80211 acts the same comes from its source and was not measured here.
+* All 5 silences of over 60 s or drops by the AP before 17d2ddd85 came out of renewals the logger timed at 0.5 s or more. Those times are the logger's. On Rach2 they are now read from the kernel's stamps and on Linux from `wpa_supplicant -t`.
+* The worst renewal of the last trial had message 1 wait 312 ms for the worker, whose wake was late with the big lock free. wpa_supplicant answered within 9 ms.
+* Reason 4 at 12552.11 stays a counted drop: the access point moved channel with no announcement seen, and no new search is made before leaving. It is not closed as Linux's behaviour: that comes from its source, not measured here.
+* Message 3 late rests on three tries, 4.7 s to 21.7 s after the freeze, and its trigger is unknown.
