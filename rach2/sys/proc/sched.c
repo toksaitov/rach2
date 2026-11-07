@@ -783,8 +783,7 @@ void idle_wait_irq_on(void)
 
     this_cpu()->idle_wait = 1;
     depth = bkl_drop();
-    arch_idle();
-    arch_irq_disable();
+    arch_idle_masked();
     bkl_take(depth);
     this_cpu()->idle_wait = 0;
     kirq_restore(flags);

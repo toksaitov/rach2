@@ -91,10 +91,6 @@ void kirq_restore(uint32_t flags)
 }
 
 /** Return at once: no row waits for an interrupt. */
-void arch_idle(void)
-{}
-
-/** Return at once, as `arch_idle` does. */
 void arch_idle_masked(void)
 {}
 

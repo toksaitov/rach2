@@ -98,11 +98,8 @@ void arch_irq_disable(void);
 void arch_invalid_opcode(void);
 
 /** Allow interrupts and wait for one, as one step, so that an interrupt
- * that arrives between the two cannot be slept through; interrupts are on
+ * that arrives between the two cannot be slept through; interrupts are off
  * when this returns. */
-void arch_idle(void);
-
-/** As `arch_idle`, then hold interrupts off again before returning. */
 void arch_idle_masked(void);
 
 /** Hold interrupts off and stop this processor for good. */

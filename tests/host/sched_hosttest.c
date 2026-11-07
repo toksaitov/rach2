@@ -60,10 +60,6 @@ void kirq_restore(uint32_t flags)
 }
 
 /** Nothing: no row waits for an interrupt. */
-void arch_idle(void)
-{}
-
-/** Nothing: no row waits for an interrupt. */
 void arch_idle_masked(void)
 {}
 

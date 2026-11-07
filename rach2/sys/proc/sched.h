@@ -103,8 +103,8 @@ uint32_t sched_work_count(unsigned int index);
  *
  * Every idle wait in the kernel goes through one of these two, and the style
  * check (tests/cases/host/style.sh) fails on a `sti; hlt`, or a call of
- * `arch_idle` or `arch_idle_masked`, anywhere else: a site added later left
- * unmarked would report its idle time as busy, and nothing would say so.
+ * `arch_idle_masked`, anywhere else: a site added later left unmarked would
+ * report its idle time as busy, and nothing would say so.
  * They differ only in the interrupt flag they leave behind, which the callers
  * do not agree on: a wait that must re-check a condition with interrupts off
  * needs the `cli`, and one that returns to ordinary work does not.

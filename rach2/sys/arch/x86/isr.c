@@ -86,6 +86,9 @@ void isr_local_router(isr_params_t *params);
 
 void isr_leave(isr_params_t *params);
 
+/* The `cli` after the halt in `arch_idle_masked` (cpu.c). */
+extern char arch_idle_resume[];
+
 void isr_paranoid_router(isr_params_t *params);
 
 /*
@@ -702,17 +705,17 @@ static void irq_dispatch(isr_params_t *params)
  * processor's user code all the time the holder keeps it, such as the sound
  * mix's, which converts a channel's rate in the device's interrupt.
  *
- * An interrupt that ends an idle wait's halt resumes with interrupts off, as
- * the wait goes on past the halt. Otherwise a tick already pending at the
+ * An interrupt that ended a halt, which it knows by the frame's address,
+ * resumes with interrupts off. Otherwise a tick already pending at the
  * `iret`, which a wait for the big lock longer than a tick makes likely,
- * arrives before the wait's next instruction, and the processor stays in
+ * arrives before the `cli` that follows the halt, and the processor stays in
  * this router, still marked idle, with ready work on its queue.
  */
 void _irq_router(isr_params_t *params)
 {
     struct percpu *cpu = this_cpu();
 
-    if (cpu->idle_wait) {
+    if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
     }
     if (params->vector != IRQ_VECTOR(0) || arch_cpu_id() == 0) {

@@ -28,14 +28,15 @@ void arch_invalid_opcode(void)
 
 /** `sti` takes effect after the instruction that follows it, so an interrupt
  * pending at the `sti` is taken once `hlt` has begun waiting, and wakes it. */
-void arch_idle(void)
-{
-    __asm__ __volatile__("sti; hlt" : : : "memory");
-}
-
 void arch_idle_masked(void)
 {
-    __asm__ __volatile__("sti; hlt; cli" : : : "memory");
+    __asm__ __volatile__("sti; hlt\n"
+                         ".globl arch_idle_resume\n"
+                         "arch_idle_resume:\n"
+                         "\tcli"
+                         :
+                         :
+                         : "memory");
 }
 
 void arch_stop(void)

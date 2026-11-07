@@ -311,19 +311,19 @@ found() {
 # timer tells an idle tick from a busy one, and let the big lock go for the
 # halt. A process that waits in the kernel this way stays current, so nothing
 # else says which tick was which. The halt itself is the architecture's
-# `arch_idle` and `arch_idle_masked`, in sys/arch/*/cpu.c. A `sti; hlt`
-# written anywhere else, or a call of either outside the helpers, would count
-# its idle time as busy and hold the big lock through the halt, and no test
+# `arch_idle_masked`, in sys/arch/*/cpu.c. A `sti; hlt` written anywhere
+# else, or a call of it outside the helpers, would count its idle time as
+# busy and hold the big lock through the halt, and no test
 # would find it, so the check fails on both. A `cli; hlt` that stops the
 # machine for good and a halt in early boot, before the scheduler accounts
 # anything, are not idle waits and are not looked for. The check reads asm
 # statements and the kernel's calls, not comments, and leaves out a host
-# test's stubs of the two and the declarations in headers.
+# test's stub of it and the declaration in a header.
 idle_waits() {
     inhouse_ch | grep -vE 'sys/arch/[^/]+/cpu\.c$' \
         | xargs grep -nE '__asm__[^;]*"[^"]*sti;[[:space:]]*hlt' 2>/dev/null
     inhouse_ch | grep -E '^rach2/' | grep -vE 'sys/proc/sched\.c$|sys/arch/[^/]+/cpu\.c$' \
-        | xargs grep -nE '(^|[^_[:alnum:]])arch_idle(_masked)?[[:space:]]*\(' 2>/dev/null \
+        | xargs grep -nE '(^|[^_[:alnum:]])arch_idle_masked[[:space:]]*\(' 2>/dev/null \
         | grep -vE '^[^:]+\.h:'
 }
 
