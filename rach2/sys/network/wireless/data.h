@@ -541,6 +541,12 @@ void wlan_ba_tx_check(struct wlan_data *d, unsigned tid, int eapol);
  * the originator. Worker only. */
 void wlan_ba_tx_stop(struct wlan_data *d, unsigned tid, int delba);
 
+/** End every BlockAck session, each way, with a DELBA, as mac80211's
+ * ieee80211_pairwise_rekey does before a pairwise key in the radio is
+ * replaced; a transmit session may be asked for again with the next frame.
+ * Worker only. */
+void wlan_ba_rekey(struct wlan_data *d);
+
 /** The second half of receive, for each MPDU the reordering buffer lets go:
  * duplicates, decryption, reassembly and delivery. `arrived` is the tick the
  * frame came in, which a frame held for reordering keeps. Defined in rx.c. */

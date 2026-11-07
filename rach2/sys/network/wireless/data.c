@@ -341,15 +341,14 @@ static int rekey_waits(struct wlan_data *d)
  * Install `key`. Before a pairwise key goes in, what the radio already
  * opened goes up under the key that opened it: the frames queued and those
  * in the reordering buffers, which carry the old key's numbers. Linux's
- * ath9k hands its frames up with no queue between, and mac80211 empties the
- * reordering buffers by ending the BlockAck sessions in
- * ieee80211_pairwise_rekey; here the sessions go on. A frame still in the
- * radio's ring meets the check in rx.c's rx_decrypt. What waits to be sent
- * goes out under the old key too, message 4 of the renewal among them,
- * which the AP could not read under the new one. A full ring or a channel
- * switch can keep it queued: then nothing changes and this returns
- * -EINPROGRESS, for the caller to come again, as mac80211 flushes its queues
- * in ieee80211_pairwise_rekey, until the frames have gone or
+ * ath9k hands its frames up with no queue between; a key in the radio also
+ * ends the BlockAck sessions (wlan_ba_rekey). A frame still in the radio's
+ * ring meets the check in rx.c's rx_decrypt. What waits to be sent goes out
+ * under the old key too, message 4 of the renewal among them, which the AP
+ * could not read under the new one. A full ring or a channel switch can
+ * keep it queued: then nothing changes and this returns -EINPROGRESS, for
+ * the caller to come again, as mac80211 flushes its queues in
+ * ieee80211_pairwise_rekey, until the frames have gone or
  * WLAN_DATA_REKEY_WAIT has passed on a dead link. Otherwise returns as
  * wlan_data_install_key does, or -ENOTCONN when the connection ended.
  */
