@@ -4023,7 +4023,7 @@ static int punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
         if (list.count == 0) {
             break;
         }
-        err = inode_write(em, n, 0, WRITE_FIRST);
+        err = em->dev->flags & BLOCK_WRITE_FAILED ? -EIO : inode_write(em, n, 0, WRITE_FIRST);
         if (err == 0) {
             err = em_sync(em);
         }
