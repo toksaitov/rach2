@@ -28,6 +28,7 @@
 /* The scheduler's switch from an interrupt handler (proc/sched.h), which
  * lets a process a device's interrupt woke run. */
 extern void sched_preempt(void);
+extern int sched_tick_waits(void);
 
 /* The saved flags register of a frame: EFLAGS, or RFLAGS on x86-64. */
 #if defined(__x86_64__)
@@ -703,7 +704,10 @@ static void irq_dispatch(isr_params_t *params)
  * next tick that finds the lock free charges the ticks since
  * (`sched_account_tick`). Waiting for the lock would take from this
  * processor's user code all the time the holder keeps it, such as the sound
- * mix's, which converts a channel's rate in the device's interrupt.
+ * mix's, which converts a channel's rate in the device's interrupt. It does
+ * wait once `sched_tick_waits` says that a process on this processor's queue
+ * has waited long enough: with the lock always held no tick would end the
+ * running process's slice, and a busy processor does not steal.
  *
  * An interrupt that ended a halt, which it knows by the frame's address,
  * resumes with interrupts off. Otherwise a tick already pending at the
@@ -721,10 +725,13 @@ void _irq_router(isr_params_t *params)
     if (params->vector != IRQ_VECTOR(0) || arch_cpu_id() == 0) {
         bkl_enter();
     } else if (!bkl_try_enter()) {
-        lapic_eoi();
-        cpu->ticks_unlocked++;
-        cpu->tick_unlocked = 1;
-        return;
+        if (!sched_tick_waits()) {
+            lapic_eoi();
+            cpu->ticks_unlocked++;
+            cpu->tick_unlocked = 1;
+            return;
+        }
+        bkl_enter();
     }
     irq_count++;
     if (params->vector >= 32 && params->vector < 64) {

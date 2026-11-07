@@ -85,6 +85,10 @@ void sched_forget(process_t *p)
     spin_unlock_irqrestore(&sched_lock, flags);
 }
 
+/* The ticks in a row a processor passes without the big lock while a process
+ * waits on its queue, in ms: a slice's end may wait this long for the lock. */
+#define SCHED_TICK_PASSES 4u
+
 uint32_t sched_work_count(unsigned int index)
 {
     return index == 0 ? pick_count : index == 1 ? pick_steps : 0;
@@ -650,10 +654,25 @@ void sched_account_tick(int user)
     uint32_t now = (uint32_t)kernel_ticks;
     uint32_t ticks = now - cpu->accounted_tick;
 
+    cpu->ticks_passed = 0;
     cpu->accounted_tick = now;
     while (ticks-- > 0) {
         sched_account_one(cpu, user);
     }
+}
+
+int sched_tick_waits(void)
+{
+    struct percpu *cpu = this_cpu();
+    uint32_t flags = spin_lock_irqsave(&sched_lock);
+    int queued = run_queues[arch_cpu_id()].count != 0;
+
+    spin_unlock_irqrestore(&sched_lock, flags);
+    if (!queued) {
+        cpu->ticks_passed = 0;
+        return 0;
+    }
+    return ++cpu->ticks_passed >= SCHED_TICK_PASSES;
 }
 
 /* The load averages, Linux's: in fixed point, sampled every LOAD_FREQ

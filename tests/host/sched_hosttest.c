@@ -456,6 +456,28 @@ static void ready_lists(void)
     CHECK(run_queues[0].count == 5, "removal is idempotent");
 }
 
+/** A tick that finds the big lock held passes while nothing is queued, and
+ * waits for the lock at the last of SCHED_TICK_PASSES with work queued. */
+static void tick_waits(void)
+{
+    unsigned int i;
+
+    setup();
+    CHECK(run_queues[0].count > 0, "work is queued");
+    for (i = 1; i < SCHED_TICK_PASSES; i++) {
+        CHECK(!sched_tick_waits(), "the first ticks pass");
+    }
+    CHECK(sched_tick_waits(), "the last one waits");
+    sched_account_tick(1);
+    CHECK(!sched_tick_waits(), "a tick that had the lock starts the count again");
+    while (run_queues[0].head) {
+        sched_forget(run_queues[0].head);
+    }
+    for (i = 0; i < SCHED_TICK_PASSES * 2; i++) {
+        CHECK(!sched_tick_waits(), "with nothing queued no tick waits");
+    }
+}
+
 /** Affinity moves queued work, and an idle processor steals eligible work. */
 static void migration(void)
 {
@@ -486,6 +508,7 @@ static void migration(void)
 /** Run every row; 0 when each passes, 1 otherwise. */
 int main(void)
 {
+    tick_waits();
     priority();
     fairness();
     states();

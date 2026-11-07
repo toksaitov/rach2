@@ -149,6 +149,14 @@ void sched_cpu_ticks(int c, uint64_t *user, uint64_t *busy, uint64_t *idle);
  * processor's timer tick alone. */
 void sched_account_tick(int user);
 
+/**
+ * Whether a tick of this processor that found the big lock held must wait
+ * for the lock: true at the `SCHED_TICK_PASSES`th such tick in a row with a
+ * process on this processor's queue, which only the tick's switch would let
+ * run. Called with interrupts off.
+ */
+int sched_tick_waits(void);
+
 /** Fold the processes running or ready to run into the load averages every
  * five seconds and a tick (`sched_loadavg`). Called by the boot
  * processor's timer tick alone. */

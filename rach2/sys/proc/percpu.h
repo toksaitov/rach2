@@ -59,6 +59,7 @@ struct percpu {
     uint32_t accounted_tick;                    /* low word of the global tick its counts reach */
     int tick_unlocked;                          /* the tick under way took no big lock */
     volatile uint32_t ticks_unlocked;           /* ticks that found the big lock held */
+    uint32_t ticks_passed;                      /* of those in a row, with work queued */
 };
 
 extern struct percpu cpu_table[NR_CPUS];
