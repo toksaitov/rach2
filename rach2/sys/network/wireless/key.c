@@ -108,18 +108,25 @@ static int key_from_radio(struct wlan_data *d, struct wlan_data_key *k)
     return 0;
 }
 
-/** Put `fresh` in the radio in place of `old`, once the BlockAck sessions
- * have ended when it replaces a pairwise key in the radio. Returns as
- * wlan_ba_rekey does when the sessions must wait, else as key_to_radio
- * does. */
+/** Put `fresh` in the radio in place of `old`. A pairwise key in the radio
+ * ends the BlockAck sessions and leaves first, as ieee80211_key_replace has
+ * it, so that the cache never holds two entries for one peer, which the chip
+ * would choose between; the removal waits for the frames that name it, and
+ * radio.h keeps the new key off its slot, which is how rx.c knows a frame
+ * opened under the old key. Returns as wlan_ba_rekey does when the sessions
+ * must wait, else as key_from_radio or key_to_radio does. */
 static int replace_in_radio(struct wlan_data *d, struct wlan_data_key *fresh,
-                            const struct wlan_data_key *old, int pairwise)
+                            struct wlan_data_key *old, int pairwise)
 {
-    int rc = 0;
+    if (pairwise && old->gen && old->key.hw_slot >= 0) {
+        int rc = wlan_ba_rekey(d);
 
-    if (pairwise && old->gen && old->key.hw_slot >= 0)
-        rc = wlan_ba_rekey(d);
-    return rc ? rc : key_to_radio(d, fresh);
+        if (rc == 0)
+            rc = key_from_radio(d, old);
+        if (rc)
+            return rc;
+    }
+    return key_to_radio(d, fresh);
 }
 
 /** Drop every MSDU being reassembled, since a new key must not complete a

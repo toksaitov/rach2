@@ -125,7 +125,9 @@ struct wlan_radio_ops {
               const struct wlan_tx_info *info);
     /** Install (enable != 0) or remove a key; set *slot on install.
      * -EOPNOTSUPP selects software; other errors fail installation. Removal
-     * must finish use of the slot before return. key and peer are borrowed. */
+     * must finish use of the slot before return, and the next pairwise key
+     * takes another slot, since rx.c tells a frame the old key opened by
+     * its slot. key and peer are borrowed. */
     int (*set_key)(struct wlan_radio *radio, int enable, const uint8_t peer[6],
                    const struct wlan_key *key, int *slot);
     /** Tell the driver of an AP state change, before committing the change.

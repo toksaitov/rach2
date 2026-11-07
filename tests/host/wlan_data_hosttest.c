@@ -90,9 +90,11 @@ struct sent {
 
 static struct sent sent[16];
 static unsigned n_sent;
-static int takes_keys;    /* set_key puts keys in slots */
-static unsigned set_keys; /* installs into slots */
-static unsigned del_keys; /* removals from slots */
+static int takes_keys;       /* set_key puts keys in slots */
+static unsigned set_keys;    /* installs into slots */
+static int slot_left = -1;   /* the slot last emptied */
+static int slot_pairwise[8]; /* slot in use holds a pairwise key */
+static unsigned del_keys;    /* removals from slots */
 static int slot_used[8];
 static unsigned ampdu_starts, ampdu_stops;
 static int radio_full; /* radio_tx refuses each frame */
@@ -126,14 +128,21 @@ static int radio_set_key(struct wlan_radio *radio, int enable, const uint8_t pee
     if (!enable) {
         CHECK(*slot >= 0 && *slot < 8 && slot_used[*slot]);
         slot_used[*slot] = 0;
+        slot_left = *slot;
         ++del_keys;
         return 0;
     }
     if (!takes_keys)
         return -EOPNOTSUPP;
+    /* One entry for a peer at a time, and not the slot just left (radio.h). */
+    if (!(peer[0] & 1)) {
+        for (i = 0; i < 8; ++i)
+            CHECK(!slot_used[i] || !slot_pairwise[i]);
+    }
     for (i = 0; i < 8; ++i) {
-        if (!slot_used[i]) {
+        if (!slot_used[i] && i != slot_left) {
             slot_used[i] = 1;
+            slot_pairwise[i] = !(peer[0] & 1);
             *slot = i;
             ++set_keys;
             return 0;
@@ -339,6 +348,8 @@ static void setup(int qos)
     n_sent = n_got = n_events = 0;
     takes_keys = 0;
     set_keys = del_keys = 0;
+    slot_left = -1;
+    k_memset(slot_pairwise, 0, sizeof(slot_pairwise));
     k_memset(slot_used, 0, sizeof(slot_used));
     for (i = 0; i < 8; ++i)
         queued[i] = 0;

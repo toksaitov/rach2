@@ -863,6 +863,7 @@ struct ath9k_key {
  * keeps them in a station; a TKIP key at index i has its MIC keys at i + 64. */
 struct ath9k_keys {
     struct ath9k_key entry[AR_KEY_CACHE_SIZE];
+    unsigned freed; /* the entry last cleared, which a new pairwise key skips */
 };
 
 /* A record of the periodic hang check. A record cannot be queued while its
