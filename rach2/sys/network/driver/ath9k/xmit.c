@@ -702,7 +702,7 @@ int ath9k_tx_idle(struct ath9k *ah, int hold)
     unsigned ac;
 
     ah->tx.hold = hold != 0;
-    if (!hold)
+    if (!hold && ah->tx.running)
         ath9k_ampdu_bar(ah);
     for (ac = 0; ac < ATH9K_TX_QUEUES; ac++)
         if (ah->tx.q[ac].count)

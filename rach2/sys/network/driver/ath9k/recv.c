@@ -6,7 +6,10 @@
  * It follows ath9k's recv.c and ar9003_mac.c's ath9k_hw_process_rxdesc_edma
  * (Linux v6.16). Every buffer belongs to the chip from the start of receive
  * to its stop: a buffer the service reads is pushed back at once, so each
- * FIFO is a ring the chip fills in the order the driver pushed it.
+ * FIFO is a ring the chip fills in the order the driver pushed it. A stop
+ * for a retune or a recovery keeps the completed buffers at the ring's head,
+ * and the next start pushes only the others, so that the ring's order holds
+ * and those frames are read first, once.
  */
 
 #include "ath9k.h"
@@ -96,10 +99,13 @@ static void give(struct ath9k *ah, int hp, unsigned i)
 }
 
 /**
- * Push every buffer, high-priority FIFO first, and start receiving, as
- * ath_edma_start_recv does. The chip must be fresh from a reset, which
- * forgets what was pushed before. Returns 0, or -ENOMEM before
- * ath9k_rx_init.
+ * Push every buffer but those ath9k_rx_stop kept, high-priority FIFO first,
+ * and start receiving, as ath_edma_start_recv does. The chip must be fresh
+ * from a reset, which forgets what was pushed before. The pushes go on
+ * from the last kept buffer round the ring, so that the chip fills the
+ * buffers in the ring's order; a FIFO with kept buffers is marked held, for
+ * the tick to read them, since no cause is raised for them. Returns 0, or
+ * -ENOMEM before ath9k_rx_init.
  */
 int ath9k_rx_start(struct ath9k *ah)
 {
@@ -108,14 +114,18 @@ int ath9k_rx_start(struct ath9k *ah)
 
     for (hp = 1; hp >= 0; hp--) {
         struct ath9k_rx_fifo *fifo = fifo_of(ah, hp);
+        unsigned f = hp ? 0 : 1;
 
         if (fifo->depth == 0 || !fifo->buf[0])
             return -ENOMEM;
-        fifo->head = 0;
-        fifo->count = fifo->depth;
-        for (i = 0; i < fifo->depth; i++)
-            give(ah, hp, i);
-        ah->rx.discard[hp ? 0 : 1] = 0;
+        if (!fifo->kept) {
+            fifo->head = 0;
+            ah->rx.discard[f] = 0;
+        }
+        fifo->count = fifo->depth - fifo->kept;
+        for (i = fifo->kept; i < fifo->depth; i++)
+            give(ah, hp, (fifo->head + i) % fifo->depth);
+        ah->rx.held[f] = fifo->kept != 0;
     }
     ah->rx.running = 1;
     ath9k_mac_rx_start(ah);
@@ -124,17 +134,43 @@ int ath9k_rx_start(struct ath9k *ah)
 
 /**
  * Stop receiving and take the buffers back, as ath_stoprecv does. The
- * buffers stay allocated for the next start. Returns 0, or -ETIMEDOUT
- * when the receive DMA did not stop, which asks for a reset.
+ * buffers stay allocated for the next start. ath9k drops the completed
+ * buffers not yet read, which the chip has acknowledged, a key message
+ * among them; here, with `keep` != 0, as for a retune or a recovery, they
+ * stay at the head of their ring for the next start, each stamped with the
+ * channel it came on. With `keep` 0, as for a stop, each is counted in
+ * rx_dropped and its status cleared, so that a second stop counts it no
+ * more. Returns 0, or -ETIMEDOUT when the receive DMA did not stop, which
+ * asks for a reset.
  */
-int ath9k_rx_stop(struct ath9k *ah)
+int ath9k_rx_stop(struct ath9k *ah, int keep)
 {
+    unsigned f, done;
     int rc;
 
     ah->rx.running = 0;
     rc = ath9k_mac_rx_stop(ah);
-    ah->rx.fifo[0].count = 0;
-    ah->rx.fifo[1].count = 0;
+    k_barrier();
+    for (f = 0; f < 2; f++) {
+        struct ath9k_rx_fifo *fifo = &ah->rx.fifo[f];
+
+        fifo->count = 0;
+        for (done = 0; done < fifo->depth; done++) {
+            unsigned slot = (fifo->head + done) % fifo->depth;
+            struct ar9003_rxs *rxs = (struct ar9003_rxs *)(void *)fifo->buf[slot];
+
+            if (!rxs || !(rxs->status11 & AR_RxDone))
+                break;
+            if (!keep) {
+                k_memset(rxs, 0, sizeof(*rxs));
+                ah->stats.rx_dropped++;
+            } else if (done >= fifo->kept) {
+                fifo->frequency[slot] = ah->phy.channel.frequency;
+                fifo->noise[slot] = ah->cal.noise;
+            }
+        }
+        fifo->kept = keep ? done : 0;
+    }
     return rc;
 }
 
@@ -253,9 +289,10 @@ static int rx_accept(struct ath9k *ah, uint32_t s11, int *decrypt_error)
  * station, since the chip's verdict on it has false positives. A frame
  * longer than a buffer continues in the next; ath9k chains them, but
  * nothing the station asks for is that long, so the whole chain is
- * dropped. Returns 1 when a frame went up, else 0.
+ * dropped. `frequency` and `noise` are those of the channel the frame came
+ * on. Returns 1 when a frame went up, else 0.
  */
-static int deliver(struct ath9k *ah, uint8_t *buf, int hp)
+static int deliver(struct ath9k *ah, uint8_t *buf, int hp, unsigned frequency, int noise)
 {
     const struct ar9003_rxs *rxs = (const struct ar9003_rxs *)(const void *)buf;
     struct wlan_rx_status st;
@@ -306,13 +343,13 @@ static int deliver(struct ath9k *ah, uint8_t *buf, int hp)
     }
 
     st.tsf = extend_tsf(ah, rxs->status3);
-    st.frequency = ah->phy.channel.frequency;
+    st.frequency = (uint16_t)frequency;
     rssi = (int8_t)MS(rxs->status5, AR_RxRSSICombined);
     if (s11 & AR_RxFrameOK)
         beacon_signal(ah, frame, len, rssi);
     if (rssi == RSSI_BAD)
         rssi = 0;
-    st.signal = (int16_t)(ah->cal.noise + rssi); /* ath9k_process_rssi */
+    st.signal = (int16_t)(noise + rssi); /* ath9k_process_rssi */
     st.rate = (int16_t)ath9k_rate_index(ah, MS(rxs->status1, AR_RxRate), &st.rate_flags);
     if (rxs->status4 & AR_GI)
         st.rate_flags |= WLAN_RATE_SHORT_GI;
@@ -333,7 +370,8 @@ static int deliver(struct ath9k *ah, uint8_t *buf, int hp)
  * unread. At most a FIFO's depth of buffers are read, so that a chip
  * filling them as fast as they return cannot hold the handler. A frame the
  * station has no room for stays in the FIFO, which the chip has acknowledged
- * it from, and the tick reads on.
+ * it from, and the tick reads on. A buffer kept across a reset is read with
+ * the channel it came on.
  */
 unsigned ath9k_rx_service(struct ath9k *ah, int hp)
 {
@@ -366,10 +404,17 @@ unsigned ath9k_rx_service(struct ath9k *ah, int hp)
                 ah->rx.tsf_low = (uint32_t)tsf;
                 tsf_read = 1;
             }
-            n += (unsigned)deliver(ah, fifo->buf[slot], hp);
+            if (fifo->kept)
+                n += (unsigned)deliver(ah, fifo->buf[slot], hp, fifo->frequency[slot],
+                                       fifo->noise[slot]);
+            else
+                n += (unsigned)deliver(ah, fifo->buf[slot], hp, ah->phy.channel.frequency,
+                                       ah->cal.noise);
         } else {
             ah->stats.rx_dropped++;
         }
+        if (fifo->kept)
+            fifo->kept--;
         fifo->head = (slot + 1) % fifo->depth;
         give(ah, hp, slot);
     }

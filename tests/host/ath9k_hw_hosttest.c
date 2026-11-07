@@ -575,10 +575,14 @@ int ath9k_rx_start(struct ath9k *ah)
     return 0;
 }
 
-int ath9k_rx_stop(struct ath9k *ah)
+/* The `keep` of the last receive stop: -1 before any. */
+static int rx_keep = -1;
+
+int ath9k_rx_stop(struct ath9k *ah, int keep)
 {
     (void)ah;
     note("rx_stop");
+    rx_keep = keep;
     return 0;
 }
 
@@ -624,10 +628,10 @@ int ath9k_key_set(struct ath9k *ah, const uint8_t peer[6], const struct wlan_key
     return 0;
 }
 
+/** xmit.c's tx_idle as far as the hold goes. */
 int ath9k_tx_idle(struct ath9k *ah, int hold)
 {
-    (void)ah;
-    (void)hold;
+    ah->tx.hold = hold != 0;
     return 1;
 }
 
@@ -1001,10 +1005,11 @@ static void radio_test_start(struct wlan_radio *radio)
 
 /** The started radio's channel changes. The same channel is the filter
  * alone; another a reset onto it with DMA stopped around it, warm since the
- * chip is awake and idle. A retune whose calibration fails, after the
- * synthesizer took the channel, leaves the chip off: the same channel again
- * is a full reset, not the filter alone, until one succeeds, and a start of
- * the started radio after such a failure resets again. */
+ * chip is awake and idle, which keeps the received frames not yet read. A
+ * retune whose calibration fails, after the synthesizer took the channel,
+ * leaves the chip off: the same channel again is a full reset, not the
+ * filter alone, until one succeeds, and a start of the started radio after
+ * such a failure resets again. */
 static void radio_test_config(struct wlan_radio *radio)
 {
     static const char *const retune[] = {
@@ -1022,7 +1027,7 @@ static void radio_test_config(struct wlan_radio *radio)
     notes_clear();
     ath9k_model_log_clear(&model);
     CHECK(ops->config(radio, &radio->band.channels[0], 7) == 0);
-    CHECK(calls_are(retune));
+    CHECK(calls_are(retune) && rx_keep == 1);
     CHECK(tuned == 2412 && card.phy.channel.frequency == 2412);
     cold = ath9k_model_find(&model, 0, ATH9K_MODEL_WRITE, AR_RTC_RC);
     CHECK(cold >= 0 && model.log[cold].value == AR_RTC_RC_MAC_WARM);
@@ -1092,8 +1097,10 @@ static void radio_test_parts(struct wlan_radio *radio)
     CHECK(calls_are(misc));
 }
 
-/** The stop: the work and DMA stopped, then a cold reset and full sleep;
- * twice is once. A start that fails then leaves the radio stopped and the
+/** The stop: the work and DMA stopped, the received frames not yet read
+ * dropped, a scan's hold on BlockAckReqs ended, then a cold reset and full
+ * sleep; twice is once. The end of a hold reaches a stopped radio, which
+ * takes no hold. A start that fails then leaves the radio stopped and the
  * chip asleep, and the next start resets it cold again. */
 static void radio_test_stop(struct wlan_radio *radio)
 {
@@ -1103,11 +1110,15 @@ static void radio_test_stop(struct wlan_radio *radio)
     const struct wlan_radio_ops *ops = radio->ops;
     int dis, cold;
 
+    CHECK(ops->tx_idle(radio, 1) == 1 && card.tx.hold);
     notes_clear();
     ath9k_model_log_clear(&model);
     ops->stop(radio);
-    CHECK(calls_are(stop));
-    CHECK(!card.bus.started);
+    CHECK(calls_are(stop) && rx_keep == 0);
+    CHECK(!card.bus.started && !card.tx.hold);
+    card.tx.hold = 1;
+    CHECK(ops->tx_idle(radio, 0) == 1 && !card.tx.hold);
+    CHECK(ops->tx_idle(radio, 1) == 1 && !card.tx.hold);
     CHECK(ath9k_model_last_write(&model, AR_RTC_RC, 0) == 0);
     cold = ath9k_model_find(&model, 0, ATH9K_MODEL_WRITE, AR_RTC_RC);
     CHECK(cold >= 0 && model.log[cold].value == (AR_RTC_RC_MAC_WARM | AR_RTC_RC_MAC_COLD));

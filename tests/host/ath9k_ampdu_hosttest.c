@@ -35,9 +35,10 @@
  * sent again before new frames, a frame given up and the BlockAckReq past
  * it, a number skipped, an aggregate with no BlockAck, one answered with
  * a plain ACK after the DELBA of a renewal, the MPDUs rate control counts,
- * a BlockAckReq that fails, the filter's compressed BlockAckReqs, the
- * drain of a reset, and the boot option that turns aggregation off. It
- * exits with the count of failed checks, at most 255.
+ * a BlockAckReq that fails, one held by a scan across a stop and restart,
+ * the filter's compressed BlockAckReqs, the drain of a reset, and the boot
+ * option that turns aggregation off. It exits with the count of failed
+ * checks, at most 255.
  */
 #include "ath9k_model.h"
 #include "network/wireless/data.h"
@@ -1037,6 +1038,40 @@ static void test_bar_debt(void)
     CHECK(!t->bar_owed);
 }
 
+/* A radio switched off while a scan holds BlockAckReqs back: the stop's
+ * end of the hold, pci.c's ath9k_tx_idle after the drain, queues nothing on
+ * the stopped radio, and after the restart and a new association the
+ * session's BlockAckReq owed goes out at once. */
+static void test_bar_after_stop(void)
+{
+    struct ath9k_tid *t = &ah.ampdu.tid[0];
+
+    setup();
+    establish(64);
+    CHECK(ath9k_tx_idle(&ah, 1) == 1 && ah.tx.hold);
+    give_one_up();
+    CHECK(t->bar_owed && !t->bar_sent && ah.ampdu.bars == 0);
+
+    /* The stop. */
+    (void)ath9k_mac_abort_tx(&ah);
+    ath9k_tx_drain(&ah);
+    CHECK(ath9k_tx_idle(&ah, 0) == 1 && !ah.tx.hold);
+    CHECK(ah.ampdu.bars == 0 && model.tx[1].count == 0 && !t->bar_sent);
+    wlan_data_disconnect(d);
+    ath9k_ampdu_sta(&ah, NULL);
+    CHECK(!t->active);
+
+    /* The restart, the association and a frame given up. */
+    ath9k_mac_init_queues(&ah);
+    ath9k_ampdu_sta(&ah, &bss);
+    CHECK(wlan_data_connect(d, &bss, 1, 0, 0) == 0);
+    establish(64);
+    give_one_up();
+    CHECK(t->bar_owed && t->bar_sent && ah.ampdu.bars == 1 && model.tx[1].count == 1);
+    (void)finish_ok(1);
+    CHECK(!t->bar_owed && !t->bar_sent);
+}
+
 /* Each failure in a row counts, whatever is acknowledged between; the
  * last ends the session here, and the station's DELBA follows. */
 static void test_bar_limit(void)
@@ -1297,6 +1332,7 @@ int main(void)
     test_give_up();
     test_bar_fails();
     test_bar_debt();
+    test_bar_after_stop();
     test_bar_limit();
     test_bar_old_session();
     test_rate_losses();

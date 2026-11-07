@@ -261,6 +261,7 @@ static unsigned run_work(void)
 static uint8_t rx_frame[MAX_RX][2048];
 static unsigned rx_len[MAX_RX];
 static struct wlan_rx_status rx_st[MAX_RX];
+static struct wlan_rx_status rx_last; /* the last frame's, past MAX_RX too */
 static unsigned rx_count;
 static int rx_refuse, rx_full;
 
@@ -281,6 +282,7 @@ int wlan_radio_rx(struct wlan_radio *radio, const uint8_t *frame, unsigned len,
         rx_len[rx_count] = len;
         rx_st[rx_count] = *status;
     }
+    rx_last = *status;
     rx_count++;
     return 0;
 }
@@ -578,6 +580,64 @@ static void rx_qos(void)
     CHECK(model.rx[0].count == ATH9K_RX_HP_DEPTH);
 }
 
+/** Retune to `frequency`, whose noise level is `noise`, as pci.c's config
+ * does: interrupts and DMA stopped, the received frames not yet read kept,
+ * a reset onto the channel, receive started again and interrupts on. */
+static void retune(unsigned frequency, int noise)
+{
+    struct wlan_channel ch = ah.phy.channel;
+
+    ch.frequency = (uint16_t)frequency;
+    ath9k_mac_intr_disable(&ah);
+    (void)ath9k_mac_abort_tx(&ah);
+    CHECK(ath9k_rx_stop(&ah, 1) == 0);
+    ath9k_tx_drain(&ah);
+    CHECK(ath9k_hw_reset(&ah, &ch) == 0);
+    ah.phy.channel = ch;
+    ah.cal.noise = (int16_t)noise;
+    ath9k_mac_set_filter(&ah, ah.rx.filters);
+    CHECK(ath9k_rx_start(&ah) == 0);
+    ath9k_mac_intr_enable(&ah);
+}
+
+/**
+ * Two frames held in the FIFO for want of room, then `reset`, which is a
+ * retune or a recovery, before the next read. Unless the reset drops them,
+ * the tick delivers each once, with the channel it came on, after which the
+ * chip holds every buffer again; a dropped one is counted in rx_dropped.
+ */
+static void rx_held_across(const uint8_t *f, unsigned len, int retuned, enum ath9k_reset_reason why)
+{
+    unsigned n = rx_count, dropped = ah.stats.rx_dropped, freq = ah.phy.channel.frequency;
+    int noise = ah.cal.noise, keep = retuned || why != ATH9K_RESET_FATAL;
+
+    rx_full = 1;
+    CHECK(receive(0, f, len, 0x1b, 10, 0) == 0);
+    CHECK(receive(0, f, len, 0x1b, 12, 0) == 0);
+    ath9k_tick(&ah);
+    CHECK(rx_count == n && ah.rx.held[1]);
+    if (retuned)
+        retune(freq == 2437 ? 2412 : 2437, -90);
+    else
+        CHECK(ath9k_reset(&ah, why) == 0);
+    CHECK(model.rx[1].count == ATH9K_RX_LP_DEPTH - (keep ? 2 : 0));
+    CHECK(ah.rx.fifo[1].kept == (keep ? 2u : 0u) && ah.rx.held[1] == keep);
+    rx_full = 0;
+    ath9k_tick(&ah);
+    ath9k_tick(&ah);
+    CHECK(rx_count == n + (keep ? 2 : 0) && !ah.rx.held[1] && ah.rx.fifo[1].kept == 0);
+    CHECK(ah.stats.rx_dropped == dropped + (keep ? 0 : 2));
+    CHECK(model.rx[1].count == ATH9K_RX_LP_DEPTH);
+    if (keep)
+        CHECK(rx_last.frequency == freq && rx_last.signal == noise + 12);
+
+    /* The next frame came on the channel the radio is on now. */
+    CHECK(receive(0, f, len, 0x1b, 10, 0) == 0);
+    interrupt();
+    CHECK(rx_count == n + (keep ? 3 : 1) && rx_last.frequency == ah.phy.channel.frequency);
+    CHECK(rx_last.signal == ah.cal.noise + 10);
+}
+
 /** The frames receive drops or counts: errors, a frame over two buffers,
  * one the station refuses, and the ring's wrap. */
 static void rx_drops(void)
@@ -685,7 +745,8 @@ static void rx_drops(void)
 }
 
 /** Receive on a card with messages: a beacon on the low-priority FIFO at
- * 1 Mbit/s, then the rows of rx_beacon_rssi, rx_qos and rx_drops. */
+ * 1 Mbit/s, then the rows of rx_beacon_rssi, rx_qos and rx_drops, and
+ * frames held across resets. */
 static void test_rx(void)
 {
     uint8_t f[100];
@@ -714,6 +775,13 @@ static void test_rx(void)
     rx_beacon_rssi(f, len);
     rx_qos();
     rx_drops();
+
+    /* Held frames outlast a retune, there and back, and a recovery; the
+     * reset of a fatal error drops them, counted. */
+    rx_held_across(f, len, 1, ATH9K_RESET_REASONS);
+    rx_held_across(f, len, 1, ATH9K_RESET_REASONS);
+    rx_held_across(f, len, 0, ATH9K_RESET_BB_HANG);
+    rx_held_across(f, len, 0, ATH9K_RESET_FATAL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1562,7 +1630,7 @@ static void recover_failed(const struct wlan_key *ccmp, int slot, uint32_t mac1)
 
     /* The filter is kept while receive is stopped (f0b2c30a2029): the chip
      * holds none, and the next start writes the one asked for meanwhile. */
-    CHECK(ath9k_rx_stop(&ah) == 0);
+    CHECK(ath9k_rx_stop(&ah, 1) == 0);
     CHECK(ath9k_model_peek(&model, AR_RX_FILTER) == 0);
     ath9k_model_log_clear(&model);
     ath9k_mac_set_filter(&ah, WLAN_FILTER_PROMISC);

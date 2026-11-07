@@ -101,17 +101,21 @@ static int bring_up(struct ath9k *ah, const struct wlan_channel *chan)
 }
 
 /** Stop interrupts and DMA, failing every frame accepted for transmit, as
- * ath9k_stop and ath_reset_internal do before a reset. */
-static void quiesce(struct ath9k *ah)
+ * ath9k_stop and ath_reset_internal do before a reset. `keep` != 0 keeps the
+ * received frames the station has not read for the next start; 0 drops
+ * them, counted. */
+static void quiesce(struct ath9k *ah, int keep)
 {
     ath9k_mac_intr_disable(ah);
     ath9k_mac_abort_tx(ah);
-    ath9k_rx_stop(ah);
+    (void)ath9k_rx_stop(ah, keep);
     ath9k_tx_drain(ah);
 }
 
-/** radio.h's stop: the periodic work off, DMA stopped, accepted frames
- * failed, and the chip in full sleep. Safe twice and after a failed start. */
+/** radio.h's stop: the periodic work off, DMA stopped, accepted frames and
+ * unread received ones dropped, a scan's hold on BlockAckReqs ended, since
+ * the scan ends with the radio, and the chip in full sleep. Safe twice and
+ * after a failed start. */
 static void radio_stop(struct wlan_radio *radio)
 {
     struct ath9k *ah = radio->priv;
@@ -126,7 +130,8 @@ static void radio_stop(struct wlan_radio *radio)
     ah->mac.associated = 0;
     ath9k_recover_stop(ah);
     ath9k_cal_stop(ah);
-    quiesce(ah);
+    quiesce(ah, 0);
+    (void)ath9k_tx_idle(ah, 0);
     ath9k_hw_disable(ah);
 }
 
@@ -153,7 +158,7 @@ static int radio_start(struct wlan_radio *radio)
     rc = bring_up(ah, start_channel(ah));
     if (rc != 0) {
         klog(KLOG_ERR, "ath9k", "start: failed: %d", rc);
-        quiesce(ah);
+        quiesce(ah, 0);
         ath9k_hw_disable(ah);
         return rc;
     }
@@ -166,7 +171,9 @@ static int radio_start(struct wlan_radio *radio)
 /**
  * radio.h's config: a new channel is a full reset onto it with the
  * receive path stopped and started around it, which fails the frames
- * queued for transmit; a new filter alone is written as it is. A stopped
+ * queued for transmit and keeps the received frames not yet read, to be
+ * read in their turn on the new channel; a new filter alone is written as
+ * it is. A stopped
  * radio keeps both for its start. A reset that fails leaves the chip off
  * and counts in recover.failures, as one of recover.c's does, so that the
  * hang check tries it again and so does the next config, whatever its
@@ -187,7 +194,7 @@ static int radio_config(struct wlan_radio *radio, const struct wlan_channel *cha
         ath9k_mac_set_filter(ah, filters);
         return 0;
     }
-    quiesce(ah);
+    quiesce(ah, 1);
     rc = bring_up(ah, channel);
     /* A channel with nothing on it says nothing of the receive path. */
     ah->recover.window = tick_count();
@@ -203,12 +210,15 @@ static int radio_config(struct wlan_radio *radio, const struct wlan_channel *cha
     return rc;
 }
 
-/** radio.h's tx_idle. */
+/** radio.h's tx_idle. A stopped radio has no frames, but the end of a
+ * scan's hold still reaches the driver, which queues nothing while stopped. */
 static int radio_tx_idle(struct wlan_radio *radio, int hold)
 {
     struct ath9k *ah = radio->priv;
 
-    return ah->bus.started ? ath9k_tx_idle(ah, hold) : 1;
+    if (!ah->bus.started && hold)
+        return 1;
+    return ath9k_tx_idle(ah, hold);
 }
 
 /** radio.h's tx. */

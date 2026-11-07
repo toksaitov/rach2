@@ -754,11 +754,14 @@ struct ath9k_ani {
 
 /* One receive FIFO's buffers, in the order pushed to the chip. */
 struct ath9k_rx_fifo {
-    uint8_t *buf[ATH9K_RX_LP_DEPTH]; /* a page each, ATH9K_RX_BUF_LEN used */
-    uint32_t bus[ATH9K_RX_LP_DEPTH]; /* their bus addresses */
-    unsigned depth;                  /* ATH9K_RX_HP_DEPTH or _LP_DEPTH */
-    unsigned head;                   /* the oldest buffer the chip holds */
-    unsigned count;                  /* buffers the chip holds */
+    uint8_t *buf[ATH9K_RX_LP_DEPTH];       /* a page each, ATH9K_RX_BUF_LEN used */
+    uint32_t bus[ATH9K_RX_LP_DEPTH];       /* their bus addresses */
+    uint16_t frequency[ATH9K_RX_LP_DEPTH]; /* a kept buffer's channel, MHz */
+    int16_t noise[ATH9K_RX_LP_DEPTH];      /* and that channel's noise level */
+    unsigned depth;                        /* ATH9K_RX_HP_DEPTH or _LP_DEPTH */
+    unsigned head;                         /* the oldest buffer not read */
+    unsigned count;                        /* buffers the chip holds */
+    unsigned kept;                         /* completed buffers from head kept across a reset */
 };
 
 /* recv.c's: the high- and low-priority FIFOs (ath9k's ath_rx_edma). */
@@ -1293,10 +1296,13 @@ int ath9k_rx_init(struct ath9k *ah);
  * is stopped. Attach. */
 void ath9k_rx_free(struct ath9k *ah);
 
-/** Give every buffer to the chip and start receiving; stop, taking the
- * buffers back. Worker. */
+/** Give every buffer but those kept to the chip and start receiving.
+ * Worker. */
 int ath9k_rx_start(struct ath9k *ah);
-int ath9k_rx_stop(struct ath9k *ah);
+
+/** Stop receiving and take the buffers back; the completed ones are kept
+ * for the next start with `keep` != 0, else dropped and counted. Worker. */
+int ath9k_rx_stop(struct ath9k *ah, int keep);
 
 /** Hand each completed buffer of FIFO `hp` to wlan_radio_rx and give it
  * back to the chip. Interrupt. Returns the frames delivered. */
@@ -1342,7 +1348,8 @@ int ath9k_tx_names_key(struct ath9k *ah, int keyix);
 
 /** Say whether every accepted frame has finished, dropping none. `hold` != 0
  * keeps BlockAckReqs owed from being queued, for a scan that has told the AP
- * the station sleeps; 0 ends that and queues them. */
+ * the station sleeps; 0 ends that and queues them, or on a stopped radio
+ * leaves them owed for the next start. */
 int ath9k_tx_idle(struct ath9k *ah, int hold);
 
 /** The radio.band.rates index of the chip's rate code `code`, or its MCS
