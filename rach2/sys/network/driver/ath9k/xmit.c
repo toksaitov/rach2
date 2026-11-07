@@ -518,7 +518,7 @@ static void report_tries(struct ath9k *ah, struct wlan_tx_status *st,
  * ATH9K_TX_RATES, the chain's tries; without it, none, which rate control
  * passes over. ATH9K_TX_ACKED marks it acknowledged, and a frame that was
  * not is counted failed and marked filtered when the chip filtered it. `ts`
- * may be NULL for a frame that never went out.
+ * and `chain` may be NULL for a frame that never went out.
  */
 void ath9k_tx_report(struct ath9k *ah, const struct ath9k_tx_slot *s,
                      const struct ath9k_tx_chain *chain, const struct ar9003_txs *ts, unsigned how)
@@ -532,7 +532,7 @@ void ath9k_tx_report(struct ath9k *ah, const struct ath9k_tx_slot *s,
     st.cookie = s->info.cookie;
     for (i = 0; i < WLAN_TX_RATE_SERIES; i++)
         st.rates[i].index = -1;
-    if ((how & ATH9K_TX_RATES) && ts)
+    if ((how & ATH9K_TX_RATES) && ts && chain)
         report_tries(ah, &st, chain, ts);
     if (how & ATH9K_TX_ACKED) {
         int rssi = ts ? (int8_t)MS(ts->status7, AR_TxRSSICombined) : 0;
