@@ -31,7 +31,11 @@
 #define WLAN_DATA_REKEY_SETTLE  2000
 #define WLAN_DATA_REKEY_NEAR    256
 #define WLAN_DATA_REKEY_JUMP    64
-#define WLAN_DATA_REKEY_WAIT    1000 /* ms a pairwise key waits for the queue */
+/* The ms a pairwise key waits for the queue: the AP gives a renewal up some
+ * 4 s after its first message, and until then message 4 must leave under
+ * the old key, since the AP cannot read it under the new one. */
+#define WLAN_DATA_REKEY_WAIT    4000
+#define WLAN_DATA_BA_WAIT       1000 /* ms a key waits for a DELBA to queue */
 #define WLAN_DATA_MAX_FRAGS     16
 /* A reordering buffer holds at most 64 MPDUs, and releases a frame that
  * waited 100 ms past a hole, mac80211's HT_RX_REORDER_BUF_TIMEOUT. */
@@ -557,7 +561,7 @@ void wlan_ba_rx_idle(struct wlan_work *work);
  * a transmit session may be asked for again with the next frame.
  * Returns 0, or -EINPROGRESS when a DELBA found the radio's queue full:
  * the session stays for the caller to come again, for at most
- * WLAN_DATA_REKEY_WAIT, after which it ends with its DELBA unsent. No session
+ * WLAN_DATA_BA_WAIT, after which it ends with its DELBA unsent. No session
  * starts either way until the key is in (`ba_blocked`), as WLAN_STA_BLOCK_BA
  * has it. Worker only. */
 int wlan_ba_rekey(struct wlan_data *d);
