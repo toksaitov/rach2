@@ -86,6 +86,10 @@ static void boot_checksum(unsigned char *region)
     }
 }
 
+/** One thread here, with no lock to pass and nothing to switch to. */
+void sched_service_point(void)
+{}
+
 /**
  * Build the seed volume on the first call, scatter the input into a copy of
  * it, recompute both boot checksums and exercise the driver over the result.

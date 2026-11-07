@@ -65,6 +65,10 @@ static void scatter(const unsigned char *data, unsigned long size, unsigned long
     __builtin_memset(fs_image + at + have, 0, len - have);
 }
 
+/** One thread here, with no lock to pass and nothing to switch to. */
+void sched_service_point(void)
+{}
+
 /**
  * Build the seed volume on the first call, scatter the input into a copy of
  * it and exercise the driver over the result.
