@@ -46,7 +46,9 @@ static int data_tx_ethernet(struct wlan *wlan, const uint8_t *frame, unsigned le
  * slot, as Linux's drivers stop the queue (ieee80211_stop_queue) and wake
  * it from their completions; any other refusal drops the frame and counts
  * it. A channel switch of mode 1 keeps the queue until the switch, and a
- * pairwise key on its way keeps what came after it for that key.
+ * pairwise key on its way keeps what came after it for that key until the key
+ * is in, whatever holds it up: every frame sent under the old key is one more
+ * that can cross the AP's change of key.
  */
 static void data_send_tx(struct wlan_data *d)
 {
@@ -57,7 +59,8 @@ static void data_send_tx(struct wlan_data *d)
     wlan_data_hold(d, 0);
     if (d->tx_stopped)
         return;
-    while (!(d->rekey_due && !d->txq_rekey) && wlan_data_peek(d, d->eth, &len)) {
+    while ((d->txq_rekey || !(d->rekey_due || d->install_wait)) &&
+           wlan_data_peek(d, d->eth, &len)) {
         protocol = (uint16_t)((unsigned)d->eth[12] << 8 | d->eth[13]);
         if (!d->connected)
             rc = -ENOTCONN;

@@ -1288,6 +1288,36 @@ static void check_rekey_lost_delba(void)
     wlan_data_detach(&wlan);
 }
 
+/**
+ * A key held up by a DELBA that cannot queue, its marked frames gone: what
+ * came after them stays queued for the key, though the ring frees a slot,
+ * and goes under it once the key is in.
+ */
+static void check_rekey_delba_hold(void)
+{
+    unsigned i, n;
+
+    setup_keyed();
+    wlan_data_of(&wlan)->ba_tx[0].state = WLAN_BA_TX_ACTIVE;
+    refuse_mark = 0xfffe; /* a short frame reads as 0xffff */
+    for (i = 0; i < RING; ++i)
+        CHECK(send(i) == 0);
+    run_work();
+    CHECK(pairwise(2) == -EINPROGRESS);
+    n = n_taken;
+    CHECK(send(20) == 0);
+    complete(1, 1);
+    run_work();
+    CHECK(n_taken == n && waiting() == 1);
+    complete(2, 1);
+    CHECK(pairwise(2) == 0);
+    run_work();
+    CHECK(waiting() == 0 && marks[n_taken - 1] == 20);
+    complete(RING - 1, 1);
+    run_work();
+    wlan_data_detach(&wlan);
+}
+
 int main(void)
 {
     check_hold();
@@ -1310,6 +1340,7 @@ int main(void)
     check_rekey_lost_first();
     check_rekey_lost();
     check_rekey_lost_delba();
+    check_rekey_delba_hold();
     check_rekey_one_wait();
     check_rekey_gone();
     if (failures) {
