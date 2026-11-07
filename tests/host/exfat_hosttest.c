@@ -2584,6 +2584,10 @@ static void dirty_rows(void)
     }
 }
 
+/** One thread here, with no lock to pass and nothing to switch to. */
+void sched_service_point(void)
+{}
+
 /** Run every row. Returns 0 when every check passed, and 1 otherwise. */
 int main(void)
 {

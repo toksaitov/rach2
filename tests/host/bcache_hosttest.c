@@ -1112,6 +1112,10 @@ static void writeback_rows(void)
     barred_rows();
 }
 
+/** One thread here, with no lock to pass and nothing to switch to. */
+void sched_service_point(void)
+{}
+
 /**
  * Run the rows in order, and return the count of failed checks, at most 255.
  *

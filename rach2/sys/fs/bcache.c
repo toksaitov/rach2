@@ -18,6 +18,7 @@
 #include "../mm/pressure.h"
 #include "../panic.h"
 #include "../proc/process.h"
+#include "../proc/sched.h"
 
 /* Dirty buffers linked both ways, the latest to go dirty at the head. */
 struct dirty_list {
@@ -1458,6 +1459,8 @@ static struct bbuf *first_dirty(const block_device_t *dev)
 /* The most pages a sync asks of the heap for its batch: a reserve run of
  * the heap, which holds 131072 blocks. */
 #define SYNC_BATCH_PAGES 256u
+/* The blocks of a large batch sorted between service points; a power of 2. */
+#define SYNC_SORT_STEP   4096
 
 /**
  * Move the entry at `at` of the max-heap `heap` of `n` blocks down to its
@@ -1526,6 +1529,11 @@ static int sync_wants(const struct bbuf *b, int pass, const struct sync_scope *s
  * list has its newest buffer first, so a file written in order lists its
  * blocks in descending order, and each of them would shift a sorted batch
  * whole.
+ *
+ * Sorting a batch of 100,000 blocks is tens of milliseconds, so it passes
+ * service points: the numbers in `out` are the caller's alone, and the
+ * writes that follow them sleep in any case. The walk of the dirty lists
+ * has none, since a list may change under a saved link.
  */
 static int gather_dirty(block_device_t *dev, int pass, const struct sync_scope *scope,
                         uint64_t from, uint64_t *out, int cap)
@@ -1562,6 +1570,9 @@ static int gather_dirty(block_device_t *dev, int pass, const struct sync_scope *
         out[0] = out[i];
         out[i] = highest;
         batch_sift_down(out, i, 0);
+        if ((i & (SYNC_SORT_STEP - 1)) == 0) {
+            sched_service_point();
+        }
     }
     return n;
 }

@@ -2729,6 +2729,10 @@ int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return wq_wait_event(wq, cond, arg);
 }
 
+/** One thread here, with no lock to pass and nothing to switch to. */
+void sched_service_point(void)
+{}
+
 /**
  * Run every row. Returns 0 when every row passed and 1 otherwise. The count of
  * failures would make a poor status, since an exit status keeps its low eight

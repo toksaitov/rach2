@@ -493,11 +493,27 @@ void sched_take_preempt(void)
  * by a keystroke then waits for the loop. The switch is taken here as the
  * exit would take it: interrupts off, and the request cleared before the
  * switch.
+ *
+ * `schedule` passes the big lock on only past a real switch, and a call on
+ * a processor with nothing else queued has none to make, so the lock goes
+ * first to any processor that has claimed it (`bkl_yield`). The tick skips
+ * a processor while another holds the lock, so a call that shares the lock
+ * would seldom see a request: what is queued here counts as one. The caller
+ * is at a point where it could have slept.
  */
 void sched_service_point(void)
 {
     uint32_t flags = kirq_save();
 
+    bkl_yield();
+    if (current_proc && current_proc != this_cpu()->idle) {
+        uint32_t held = spin_lock_irqsave(&sched_lock);
+
+        if (run_queues[arch_cpu_id()].count > 0) {
+            current_proc->need_resched = 1;
+        }
+        spin_unlock_irqrestore(&sched_lock, held);
+    }
     sched_take_preempt();
     kirq_restore(flags);
 }

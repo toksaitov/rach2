@@ -398,6 +398,10 @@ static void region_row(void)
     kheap_host_region_pages = KHEAP_FLOOR / PAGE_SIZE;
 }
 
+/** One thread here, with no lock to pass and nothing to switch to. */
+void sched_service_point(void)
+{}
+
 /** Run the rows in order, each on the cache the one before it left, and
  *  print the counts. Returns 0 when every check passed and 1 otherwise. */
 int main(void)

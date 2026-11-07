@@ -3712,6 +3712,9 @@ static int alloc_block(struct ext2_mount *em, uint32_t hint, uint32_t *out)
  * collection when the heap has no room for that many. */
 #define PUNCH_BLOCKS 512
 #define PUNCH_SMALL  16
+/* The pointer slots one walk reads between service points: the list fills
+ * by blocks freed, and a sparse tree reads many empty slots for each. */
+#define PUNCH_VISITS 1024
 
 /*
  * One `punch`'s blocks, on its caller's stack: the `count` blocks whose
@@ -3735,6 +3738,7 @@ struct punch_walk {
     struct ext2_node *n;
     uint32_t keep;
     struct punch_list *list;
+    uint32_t visits; /* slots read since the last service point */
 };
 
 /**
@@ -3745,10 +3749,13 @@ struct punch_walk {
  * dirtied `first`, or for 0 in the inode in memory, which the caller stores;
  * a pointer block whose children are all gone goes the same way. No bit
  * changes here. `*emptied` says whether the pointer is now 0, and
- * `n->blocks` is kept current. 0, PUNCH_FULL when the list has no room for
- * the next block, or -errno, -EIO for a pointer block out of range.
+ * `n->blocks` is kept current. A slot's read may sleep, so a service point
+ * before it asks nothing more of the walk: every removal so far is whole,
+ * and the listed blocks stay taken until the round frees them. 0, PUNCH_FULL
+ * when the list has no room for the next block, or -errno, -EIO for a
+ * pointer block out of range.
  */
-static int punch_level(const struct punch_walk *w, uint32_t *slot, uint64_t slot_at, int level,
+static int punch_level(struct punch_walk *w, uint32_t *slot, uint64_t slot_at, int level,
                        uint32_t base, int *emptied)
 {
     struct ext2_mount *em = w->em;
@@ -3786,6 +3793,10 @@ static int punch_level(const struct punch_walk *w, uint32_t *slot, uint64_t slot
             if (child_base + span / per <= keep) {
                 all_gone = 0;
                 break; /* everything below this slot stays */
+            }
+            if (++w->visits >= PUNCH_VISITS) {
+                w->visits = 0;
+                sched_service_point();
             }
             rc = read_bytes(em, at, ptr, 4);
             if (rc != 0) {
@@ -3842,6 +3853,7 @@ static int punch_from(struct ext2_mount *em, struct ext2_node *n, uint32_t keep,
     w.n = n;
     w.keep = keep;
     w.list = list;
+    w.visits = 0;
     for (level = 3; level >= 1; level--) {
         uint32_t lbase = EXT2_NDIR, lspan = per;
         int l;
@@ -3981,8 +3993,8 @@ static int writeback_keeps(struct ext2_mount *em, const struct ext2_node *n)
  * and would reach the device at the sync that ends the round, past the check
  * a write through makes. A round ends at a service point, since a file of
  * gigabytes in the cache frees with no sleep and what is ready on the
- * processor waits for it. The caller holds `n`'s lock and not `em->meta`.
- * 0, or -errno.
+ * processor waits for it; a device that failed meanwhile stops the next
+ * round. The caller holds `n`'s lock and not `em->meta`. 0, or -errno.
  */
 static int punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
 {
@@ -4025,6 +4037,9 @@ static int punch(struct ext2_mount *em, struct ext2_node *n, uint32_t keep)
             rc = err;
         }
         sched_service_point();
+        if (rc == PUNCH_FULL && (em->dev->flags & BLOCK_WRITE_FAILED)) {
+            rc = -EIO;
+        }
     } while (rc == PUNCH_FULL);
     if (list.blocks != small) {
         kfree(list.blocks);
