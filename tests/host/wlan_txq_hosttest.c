@@ -1122,8 +1122,8 @@ static void check_rekey_hold(void)
     wlan_data_detach(&wlan);
 }
 
-/** A dead link does not hold the key past WLAN_DATA_REKEY_WAIT, and what
- * is left goes under the new one. */
+/** Data with no EAPOL frame behind it holds no key up, and goes under the
+ * new one, since a frame under the old key can cross the AP's change. */
 static void check_rekey_bound(void)
 {
     unsigned i;
@@ -1132,10 +1132,7 @@ static void check_rekey_bound(void)
     for (i = 0; i < RING + 1; ++i)
         CHECK(send(i) == 0);
     run_work();
-    CHECK(pairwise(2) == -EINPROGRESS);
-    now += WLAN_DATA_REKEY_WAIT - 1;
-    CHECK(pairwise(2) == -EINPROGRESS);
-    now += 1;
+    CHECK(waiting() == 1);
     CHECK(pairwise(2) == 0);
     CHECK(wlan_data_of(&wlan)->pairwise[0].key.hw_slot == 1);
     complete(RING, 1);
@@ -1215,8 +1212,9 @@ static void check_rekey_lost(void)
     unsigned i;
 
     setup_keyed();
-    for (i = 0; i < RING + 1; ++i)
+    for (i = 0; i < RING; ++i)
         CHECK(send(i) == 0);
+    CHECK(send_type(50, 0x888e) == 0);
     run_work();
     CHECK(pairwise(2) == -EINPROGRESS);
     wlan_data_disconnect(wlan_data_of(&wlan));
@@ -1255,8 +1253,9 @@ static void check_rekey_gone(void)
     unsigned i;
 
     setup_keyed();
-    for (i = 0; i < RING + 1; ++i)
+    for (i = 0; i < RING; ++i)
         CHECK(send(i) == 0);
+    CHECK(send_type(50, 0x888e) == 0);
     run_work();
     CHECK(pairwise(2) == -EINPROGRESS);
     wlan_data_disconnect(wlan_data_of(&wlan));
@@ -1318,6 +1317,35 @@ static void check_rekey_delba_hold(void)
     wlan_data_detach(&wlan);
 }
 
+/**
+ * A new key ends a transmit session at its first call, ahead of the wait for
+ * message 4, since a session's retries are frames of the old key; the same
+ * key again, as a replayed message 3 gives it, ends nothing.
+ */
+static void check_rekey_delba_first(void)
+{
+    setup_keyed();
+    wlan_data_of(&wlan)->ba_tx[0].state = WLAN_BA_TX_ACTIVE;
+    wlan_data_stop_tx(wlan_data_of(&wlan), 1);
+    CHECK(send_type(50, 0x888e) == 0);
+    run_work();
+    CHECK(pairwise(1) == -EINPROGRESS);
+    CHECK(wlan_data_of(&wlan)->ba_tx[0].state == WLAN_BA_TX_ACTIVE);
+    wlan_data_stop_tx(wlan_data_of(&wlan), 0);
+    run_work();
+    CHECK(pairwise(1) == 0);
+    CHECK(wlan_data_of(&wlan)->ba_tx[0].state == WLAN_BA_TX_ACTIVE);
+    wlan_data_stop_tx(wlan_data_of(&wlan), 1);
+    CHECK(send_type(51, 0x888e) == 0);
+    run_work();
+    CHECK(pairwise(2) == -EINPROGRESS);
+    CHECK(wlan_data_of(&wlan)->ba_tx[0].state == WLAN_BA_TX_IDLE);
+    wlan_data_stop_tx(wlan_data_of(&wlan), 0);
+    run_work();
+    CHECK(pairwise(2) == 0);
+    wlan_data_detach(&wlan);
+}
+
 int main(void)
 {
     check_hold();
@@ -1341,6 +1369,7 @@ int main(void)
     check_rekey_lost();
     check_rekey_lost_delba();
     check_rekey_delba_hold();
+    check_rekey_delba_first();
     check_rekey_one_wait();
     check_rekey_gone();
     if (failures) {

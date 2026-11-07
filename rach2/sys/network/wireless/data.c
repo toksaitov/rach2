@@ -439,8 +439,10 @@ void wlan_data_state(struct wlan *wlan, const struct wlan_bss *bss, enum wlan_st
     }
 }
 
-/** Mark what the queue holds as the frames a pairwise key waits for, unless
- * it waits already. */
+/** Mark what a pairwise key waits for, unless it waits already: the queue up
+ * to its last EAPOL frame, the renewal's message 4 and what is ahead of it.
+ * Data behind that stays for the new key, as Linux's tainted key sends no
+ * more, since each frame under the old key can cross the AP's change. */
 static void rekey_mark(struct wlan_data *d)
 {
     uint32_t flags;
@@ -449,7 +451,7 @@ static void rekey_mark(struct wlan_data *d)
         return;
     d->rekey_due = tick_count() + WLAN_DATA_REKEY_WAIT;
     flags = spin_lock_irqsave(&d->txq_lock);
-    d->txq_rekey = d->txq_count;
+    d->txq_rekey = wlan_data_eapol_end(d);
     spin_unlock_irqrestore(&d->txq_lock, flags);
 }
 
@@ -476,12 +478,12 @@ static int rekey_waits(struct wlan_data *d)
  * in the reordering buffers, which carry the old key's numbers. Linux's
  * ath9k hands its frames up with no queue between; a key in the radio also
  * ends the BlockAck sessions (wlan_ba_rekey). A frame still in the radio's
- * ring meets the check in rx.c's rx_decrypt. What waits to be sent goes out
- * under the old key too, message 4 of the renewal among them, which the AP
- * could not read under the new one. A full ring or a channel switch can
- * keep it queued: then nothing changes and this returns -EINPROGRESS, for
- * the caller to come again, as mac80211 flushes its queues in
- * ieee80211_pairwise_rekey, until the frames have gone or
+ * ring meets the check in rx.c's rx_decrypt. The queue as far as its last
+ * EAPOL frame goes out under the old key too, for message 4 of the renewal,
+ * which the AP could not read under the new one. A full ring or a channel
+ * switch can keep it queued: then nothing changes and this returns
+ * -EINPROGRESS, for the caller to come again, as mac80211 flushes its queues
+ * in ieee80211_pairwise_rekey, until the frames have gone or
  * WLAN_DATA_REKEY_WAIT has passed on a dead link. Data still queued then
  * goes under the new key, but EAPOL is written for the key it was queued
  * under: message 4 under the new key is lost on the AP, whose repeats of
@@ -505,8 +507,13 @@ int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
         return wlan_data_install_key(d, key);
     joined = d->connected || d->install_wait;
     (void)data_take_rx(d, 0);
-    if (d->connected && !d->install_wait)
+    if (d->connected && !d->install_wait) {
         rekey_mark(d);
+        /* Now, ahead of the wait: a session's retries are old-key frames,
+         * and replace_in_radio comes back for a DELBA that found no room. */
+        if (wlan_data_key_replaces(d, key))
+            (void)wlan_ba_rekey(d);
+    }
     data_send_tx(d);
     wlan_ba_rx_flush(d);
     if (rekey_waits(d)) {
@@ -519,6 +526,7 @@ int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
     }
     if (d->connected && wlan_data_eapol_queued(d)) {
         d->install_wait = 0;
+        d->ba_blocked = 0;
         return -ETIMEDOUT;
     }
     old = wlan_data_pairwise_key(d, key->index);

@@ -466,6 +466,14 @@ int wlan_data_queue(struct wlan_data *d, const uint8_t *frame, unsigned len);
  * when the queue is empty. */
 int wlan_data_peek(struct wlan_data *d, uint8_t *out, unsigned *len);
 
+/** Say whether installing pairwise key `key` replaces a different key in the
+ * radio, which ends the BlockAck sessions. */
+int wlan_data_key_replaces(struct wlan_data *d, const struct wlan_key *key);
+
+/** Return how many frames of the transmit queue, from its head, end with its
+ * last EAPOL frame, 0 with none. txq_lock is held. */
+unsigned wlan_data_eapol_end(const struct wlan_data *d);
+
 /** Say whether an EAPOL frame waits in the transmit queue. A pairwise key
  * must not go in over one: it was written for the key in place. */
 int wlan_data_eapol_queued(struct wlan_data *d);

@@ -109,6 +109,25 @@ static int key_from_radio(struct wlan_data *d, struct wlan_data_key *k)
     return 0;
 }
 
+/** Whether `key` is the one `old` holds already, as a replayed message 3
+ * gives it. */
+static int key_same(const struct wlan_data_key *old, const struct wlan_key *key, int pairwise)
+{
+    return old->gen && old->key.cipher == key->cipher && old->key.len == key->len &&
+           same(old->key.data, key->data, key->len) &&
+           (!pairwise || same(old->key.peer, key->peer, 6));
+}
+
+int wlan_data_key_replaces(struct wlan_data *d, const struct wlan_key *key)
+{
+    const struct wlan_data_key *old;
+
+    if (!key_valid(key) || !(key->flags & WLAN_KEY_PAIRWISE))
+        return 0;
+    old = key_entry(d, 1, key->index);
+    return old->gen && old->key.hw_slot >= 0 && !key_same(old, key, 1);
+}
+
 /** Put `fresh` in the radio in place of `old`. A pairwise key in the radio
  * ends the BlockAck sessions and leaves first, as ieee80211_key_replace has
  * it, so that the cache never holds two entries for one peer, which the chip
@@ -271,9 +290,7 @@ int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
         return -EINVAL;
     pairwise = (key->flags & WLAN_KEY_PAIRWISE) != 0;
     old = key_entry(d, pairwise, key->index);
-    if (old->gen && old->key.cipher == key->cipher && old->key.len == key->len &&
-        same(old->key.data, key->data, key->len) &&
-        (!pairwise || same(old->key.peer, key->peer, 6))) {
+    if (key_same(old, key, pairwise)) {
         /* The same key again keeps its counters, so that a replayed
          * handshake message cannot reset them (KRACK, 2017). */
         if (pairwise) {

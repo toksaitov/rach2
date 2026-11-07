@@ -675,18 +675,26 @@ int wlan_data_peek(struct wlan_data *d, uint8_t *out, unsigned *len)
     return 1;
 }
 
-int wlan_data_eapol_queued(struct wlan_data *d)
+unsigned wlan_data_eapol_end(const struct wlan_data *d)
 {
     const uint8_t *frame;
+    unsigned i, end = 0;
+
+    for (i = 0; i < d->txq_count; ++i) {
+        frame = d->txq[(d->txq_head + i) % WLAN_DATA_TX_QUEUE].frame;
+        if (frame[12] == 0x88 && frame[13] == 0x8e)
+            end = i + 1;
+    }
+    return end;
+}
+
+int wlan_data_eapol_queued(struct wlan_data *d)
+{
     uint32_t flags;
-    unsigned i;
-    int found = 0;
+    int found;
 
     flags = spin_lock_irqsave(&d->txq_lock);
-    for (i = 0; i < d->txq_count && !found; ++i) {
-        frame = d->txq[(d->txq_head + i) % WLAN_DATA_TX_QUEUE].frame;
-        found = frame[12] == 0x88 && frame[13] == 0x8e;
-    }
+    found = wlan_data_eapol_end(d) != 0;
     spin_unlock_irqrestore(&d->txq_lock, flags);
     return found;
 }
