@@ -233,7 +233,7 @@ void wlan_ba_rx_timeout(struct wlan_work *work)
  * of 1024 us, past its last frame. */
 static uint64_t idle_due(const struct wlan_ba_rx *ba)
 {
-    return ba->last_rx + (uint64_t)ba->timeout * 1024 / 1000;
+    return ba->last_rx + (uint32_t)ba->timeout * 1024u / 1000u;
 }
 
 /** Set the idle timer for the earliest receive session to go idle, in place
