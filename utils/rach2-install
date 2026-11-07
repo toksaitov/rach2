@@ -1127,6 +1127,10 @@ whole configuration archived on its recovery partition; its accounts are not the
         chmod 600 "$TARGET_MNT/etc/wpa_supplicant/wlan0.conf" ||
             die "the saved networks' mode could not be set"
     fi
+    if [ -f "$TARGET_MNT/var/lib/ipv6-stable-secret" ]; then
+        chmod 600 "$TARGET_MNT/var/lib/ipv6-stable-secret" ||
+            die "the stable secret's mode could not be set"
+    fi
     if [ -d "$keep/etc/dropbear" ]; then
         rm -rf "$TARGET_MNT/etc/dropbear" || die "the image's host keys could not be removed"
         cp -a "$keep/etc/dropbear" "$TARGET_MNT/etc/dropbear" ||

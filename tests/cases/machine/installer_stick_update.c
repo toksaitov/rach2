@@ -261,7 +261,8 @@ static void place_settings(struct drive *d)
                   "/old/etc/wpa_supplicant /old/var/lib/backlight && echo stick-net > "
                   "/old/etc/wpa_supplicant/wlan0.conf && echo 'vol 1:1' > /old/var/lib/mixer "
                   "&& echo 7 > /old/var/lib/backlight/stick && echo stick-id > "
-                  "/old/etc/machine-id && umount /old && echo SETTINGS\"\"PLACED || "
+                  "/old/etc/machine-id && echo stick-secret > /old/var/lib/ipv6-stable-secret "
+                  "&& umount /old && echo SETTINGS\"\"PLACED || "
                   "{ echo STICK\"\"FAIL: settings; poweroff -f; }");
     drive_expect(d, "SETTINGSPLACED");
 }
@@ -276,6 +277,7 @@ static void check_settings(struct drive *d)
                   "grep -qx 'vol 1:1' /old/var/lib/mixer && "
                   "grep -qx 7 /old/var/lib/backlight/stick && grep -qx stick-id "
                   "/old/etc/machine-id && test $(stat -c %%a /old/etc/machine-id) = 444 && "
+                  "test $(stat -c %%a /old/var/lib/ipv6-stable-secret) = 600 && "
                   "umount /old && "
                   "echo SETTINGS\"\"KEPT || { echo STICK\"\"FAIL: settings check; poweroff -f; }");
     drive_expect(d, "SETTINGSKEPT");
