@@ -147,6 +147,14 @@ static int taken(const struct ath9k *ah, unsigned i)
     return ah->keys.entry[i].used != ATH9K_KEY_FREE;
 }
 
+/** Whether a pairwise key may take entry `i`: free, and not the entry its
+ * predecessor just left, so that a frame in the receive ring that names it
+ * cannot pass for one the new key opened (radio.h). */
+static int open_entry(const struct ath9k *ah, unsigned i)
+{
+    return !taken(ah, i) && i != ah->keys.freed;
+}
+
 /**
  * A free entry for a pairwise key of `type`, as ath_reserve_key_cache_slot
  * chooses with the MIC keys combined: TKIP needs an entry below 64 whose
@@ -160,19 +168,19 @@ static int reserve(const struct ath9k *ah, unsigned type)
 
     for (i = AR_RSVD_KEYTABLE_ENTRIES; i < MIC_OFFSET; i++) {
         if (type == AR_KEYTABLE_TYPE_TKIP) {
-            if (!taken(ah, i) && !taken(ah, i + MIC_OFFSET))
+            if (open_entry(ah, i) && !taken(ah, i + MIC_OFFSET))
                 return (int)i;
             continue;
         }
-        if (!taken(ah, i) && taken(ah, i + MIC_OFFSET))
+        if (open_entry(ah, i) && taken(ah, i + MIC_OFFSET))
             return (int)i;
-        if (taken(ah, i) && !taken(ah, i + MIC_OFFSET))
+        if (taken(ah, i) && open_entry(ah, i + MIC_OFFSET))
             return (int)(i + MIC_OFFSET);
     }
     if (type == AR_KEYTABLE_TYPE_TKIP)
         return -1;
     for (i = AR_RSVD_KEYTABLE_ENTRIES; i < AR_KEY_CACHE_SIZE; i++)
-        if (!taken(ah, i) && !(i >= MIC_OFFSET && i < MIC_OFFSET + AR_RSVD_KEYTABLE_ENTRIES))
+        if (open_entry(ah, i) && !(i >= MIC_OFFSET && i < MIC_OFFSET + AR_RSVD_KEYTABLE_ENTRIES))
             return (int)i;
     return -1;
 }
@@ -242,6 +250,7 @@ static void forget(struct ath9k *ah, int slot)
     if (tkip)
         ah->keys.entry[slot + MIC_OFFSET].used = ATH9K_KEY_FREE;
     k_memset(k, 0, sizeof(*k));
+    ah->keys.freed = (unsigned)slot;
 }
 
 /**

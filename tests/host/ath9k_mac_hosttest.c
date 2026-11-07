@@ -1052,6 +1052,21 @@ static void keys_group_replace(void)
     CHECK(ath9k_model_peek(&model, AR_KEYTABLE_TYPE(2)) == AR_KEYTABLE_TYPE_CLR);
 }
 
+/** A pairwise key cleared and then replaced, in the station's order, takes
+ * another entry, and the next takes the first again: a frame that names the
+ * cleared entry is known by it (radio.h). */
+static void keys_slot_moves(const struct wlan_key *ccmp, const uint8_t *ap)
+{
+    int a, b, c;
+
+    CHECK(ath9k_key_set(&ah, ap, ccmp, &a) == 0);
+    ath9k_key_clear(&ah, a, ap, ccmp);
+    CHECK(ath9k_key_set(&ah, ap, ccmp, &b) == 0 && b != a);
+    ath9k_key_clear(&ah, b, ap, ccmp);
+    CHECK(ath9k_key_set(&ah, ap, ccmp, &c) == 0 && c != b);
+    ath9k_key_clear(&ah, c, ap, ccmp);
+}
+
 /** A pairwise key replaced while frames that name it wait: the one sent
  * by keys_tx and eight more on BE, eight in the FIFO and one behind. The
  * removal serves the eight the chip finished, which pushes the ninth
@@ -1160,6 +1175,7 @@ static void test_keys(void)
     keys_clear(&tkip, s2);
     keys_group_replace();
     keys_pairwise_replace(&ccmp, slot, mac1);
+    keys_slot_moves(&ccmp, ap);
 }
 
 /* ------------------------------------------------------------------ */
