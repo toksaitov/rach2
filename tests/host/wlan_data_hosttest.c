@@ -246,6 +246,18 @@ uint64_t tick_count(void)
 }
 
 /** Queue work as work.c does, refusing a record already queued. */
+void wlan_cancel_work(struct wlan_work *work)
+{
+    unsigned i;
+
+    for (i = 0; i < 8; ++i) {
+        if (queued[i] == work) {
+            queued[i] = 0;
+            work->pending = 0;
+        }
+    }
+}
+
 int wlan_queue_work(struct wlan_work *work, uint64_t due)
 {
     unsigned i;
@@ -1099,6 +1111,27 @@ static void check_ba_idle(void)
     now += 102;
     run_work();
     CHECK(!d->ba[0].active && n_sent == 1 && sent_delba(0, 0x0000, 39));
+
+    /* A short timeout behind two long ones is not held up by them. */
+    setup(1);
+    d->privacy = 0;
+    len = addba_req(f, 1, 8, 100);
+    f[29] = 0;
+    f[30] = 0xea; /* 60 s */
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0 && d->ba[1].timeout == 0xea00);
+    len = addba_req(f, 2, 8, 100);
+    f[26] = 8;
+    f[29] = 0;
+    f[30] = 0xeb;
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0 && d->ba[2].timeout == 0xeb00);
+    len = addba_req(f, 0, 8, 100);
+    f[26] = 9;
+    f[29] = 100;
+    f[30] = 0;
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0 && d->ba[0].timeout == 100);
+    now += 102;
+    run_work();
+    CHECK(!d->ba[0].active && d->ba[1].active && d->ba[2].active);
 
     /* Without a timeout a session stays however long it is idle. */
     setup(1);

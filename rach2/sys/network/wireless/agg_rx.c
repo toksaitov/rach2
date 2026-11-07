@@ -236,6 +236,25 @@ static uint64_t idle_due(const struct wlan_ba_rx *ba)
     return ba->last_rx + (uint64_t)ba->timeout * 1024 / 1000;
 }
 
+/** Set the idle timer for the earliest receive session to go idle, in place
+ * of what is queued, since a later due would hold up an earlier one. */
+static void ba_idle_arm(struct wlan_data *d)
+{
+    uint64_t next = 0;
+    unsigned tid;
+
+    for (tid = 0; tid < 8; ++tid) {
+        const struct wlan_ba_rx *ba = &d->ba[tid];
+
+        if (ba->active && ba->timeout && (!next || idle_due(ba) < next))
+            next = idle_due(ba);
+    }
+    wlan_cancel_work(&d->ba_idle_work[0].work);
+    wlan_cancel_work(&d->ba_idle_work[1].work);
+    if (next)
+        (void)wlan_data_kick(d->ba_idle_work, next);
+}
+
 /** Send the AP a Block Ack action frame whose body is the `n` bytes of
  * `body`, at most 9, protected when `protect` is set. Returns
  * wlan_data_tx_mgmt's answer. */
@@ -348,7 +367,7 @@ static int send_delba(struct wlan_data *d, unsigned tid, int initiator, unsigned
 void wlan_ba_rx_idle(struct wlan_work *work)
 {
     struct wlan_data *d = ((struct wlan_data_work *)work)->data;
-    uint64_t now = tick_count(), next = 0;
+    uint64_t now = tick_count();
     unsigned tid;
 
     for (tid = 0; tid < 8; ++tid) {
@@ -359,12 +378,9 @@ void wlan_ba_rx_idle(struct wlan_work *work)
         if (now >= idle_due(ba)) {
             (void)send_delba(d, tid, 0, WLAN_REASON_QSTA_TIMEOUT);
             wlan_ba_rx_stop(d, tid, 1);
-        } else if (!next || idle_due(ba) < next) {
-            next = idle_due(ba);
         }
     }
-    if (next)
-        (void)wlan_data_kick(d->ba_idle_work, next);
+    ba_idle_arm(d);
 }
 
 void wlan_ba_tx_stop(struct wlan_data *d, unsigned tid, int delba)
@@ -480,7 +496,7 @@ static void addba_req_rx(struct wlan_data *d, const uint8_t *p, int protected)
             d->ba[tid].timeout = (uint16_t)timeout;
             d->ba[tid].last_rx = tick_count();
             if (timeout)
-                (void)wlan_data_kick(d->ba_idle_work, idle_due(&d->ba[tid]));
+                ba_idle_arm(d);
         }
     }
     addba_resp(d, p[2], status, tid & 0xf, window, timeout, protected);
