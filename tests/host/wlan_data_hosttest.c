@@ -1148,10 +1148,20 @@ static void check_rekey_sessions(void)
     CHECK(d->ba[0].active && wlan_data_pairwise_key(d, 0)->key.hw_slot == 0);
     now += WLAN_DATA_REKEY_WAIT - 1;
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == -EINPROGRESS);
+    /* Meanwhile no session starts, either way. */
+    CHECK(d->ba_blocked);
     radio_full = 0;
+    len = addba_req(f, 3, 8, 100);
+    n_sent = 0;
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0 && !d->ba[3].active);
+    CHECK(n_sent == 1 && sent[0].frame[27] == WLAN_STATUS_REQUEST_DECLINED);
+    n_sent = 0;
+    wlan_ba_tx_check(d, 1, 0);
+    CHECK(n_sent == 0 && d->ba_tx[1].state == WLAN_BA_TX_IDLE);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
     CHECK(n_sent == 1 && sent_delba(0, 0x0000, 36) && !d->ba[0].active);
     CHECK(wlan_data_pairwise_key(d, 0)->key.hw_slot == 1 && d->ba_stop_due == 0);
+    CHECK(!d->ba_blocked);
 
     /* It holds them no longer than the limit. */
     setup(1);
