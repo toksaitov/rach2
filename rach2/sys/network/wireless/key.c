@@ -207,15 +207,17 @@ void wlan_data_renewal_end(struct wlan_data *d)
     d->eapol_cookie = 0;
     d->eapol_failed = 0;
     d->renew_asked = 0;
+    d->renew_doubt = 0;
 }
 
-void wlan_data_renewal_proved(struct wlan_data *d, const struct wlan_data_key *k, int answer)
+void wlan_data_renewal_proved(struct wlan_data *d, const struct wlan_data_key *k, int answer,
+                              unsigned tid)
 {
     if (!d->renewed || k != wlan_data_pairwise_key(d, d->tx_pairwise))
         return;
     d->eapol_cookie = 0;
     d->eapol_failed = 0;
-    if (answer && d->renew_asked) {
+    if (answer && d->renew_asked && (!d->renew_doubt || d->renew_doubt == tid + 1)) {
         d->counters->rescue_saved++;
         wlan_data_renewal_end(d);
     }
@@ -246,10 +248,12 @@ void wlan_data_renewal_status(struct wlan_data *d, const struct wlan_tx_status *
     }
 }
 
-void wlan_data_renewal_doubted(struct wlan_data *d)
+void wlan_data_renewal_doubted(struct wlan_data *d, unsigned tid)
 {
-    if (!d->renewing)
+    if (!d->renewing) {
         d->renewing = d->renewed = d->renew_acked = tick_count();
+        d->renew_doubt = tid + 1;
+    }
 }
 
 void wlan_data_renewal_rescued(struct wlan_data *d)

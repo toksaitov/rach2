@@ -230,7 +230,7 @@ static int rx_decrypt(struct wlan_data *d, uint8_t *frame, unsigned *len, unsign
         d->counters->rx_replays++;
         if (!group && ++k->replay_run[idx] >= WLAN_DATA_REPLAY_RUN) {
             k->replay_run[idx] = 0;
-            wlan_data_renewal_doubted(d);
+            wlan_data_renewal_doubted(d, idx);
         }
         return -ESTALE;
     }
@@ -552,7 +552,7 @@ int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
     }
     if (c.key) {
         seal(d, status, arrived);
-        wlan_data_renewal_proved(d, c.key, arp_reply(frame, len, hdrlen, qos));
+        wlan_data_renewal_proved(d, c.key, arp_reply(frame, len, hdrlen, qos), idx);
         note_renewal(d, frame, len, hdrlen, arrived);
     }
 
@@ -711,7 +711,7 @@ static int rx_mgmt_ccmp(struct wlan_data *d, uint8_t *frame, unsigned *len, unsi
         return -ESTALE;
     }
     k->rx_mgmt_pn = pn;
-    wlan_data_renewal_proved(d, k, 0);
+    wlan_data_renewal_proved(d, k, 0, 0);
     *len = n;
     return WLAN_DATA_PROTECTED;
 }

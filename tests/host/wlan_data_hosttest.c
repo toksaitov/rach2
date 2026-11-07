@@ -1946,6 +1946,37 @@ static void check_replay_run(void)
     CHECK(counters.rescues[WLAN_RESCUE_SILENT] == 1);
 }
 
+/** A run of replays on one TID doubts that TID alone: the gateway's answer
+ * on another says nothing of it, and one on the doubted TID ends the doubt. */
+static void check_replay_run_tid(void)
+{
+    unsigned i;
+
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    send_data();
+    status_of(n_sent - 1, WLAN_TX_ACKED);
+    CHECK(wlan_data_renewal_ask(d, 1) == 1);
+    wlan_data_renewal_asked(d);
+    CHECK(rx_arp_reply(200, 1, 1) == 0 && d->renewing == 0);
+    now += WLAN_DATA_REKEY_SETTLE;
+    CHECK(rx_opened_tid(1, 201, 1, 5000) == 0);
+    for (i = 0; i < WLAN_DATA_REPLAY_RUN; ++i)
+        CHECK(rx_opened_tid(1, 202 + i, 1, 3 + i) == -ESTALE);
+    CHECK(d->renewing != 0);
+    wlan_data_renewal_asked(d);
+    CHECK(rx_arp_reply(240, 1, 2) == 0 && d->renewing != 0);
+    wlan_data_renewal_end(d);
+
+    CHECK(rx_opened(241, 1, 5000) == 0);
+    for (i = 0; i < WLAN_DATA_REPLAY_RUN; ++i)
+        CHECK(rx_opened(242 + i, 1, 3 + i) == -ESTALE);
+    CHECK(d->renewing != 0);
+    wlan_data_renewal_asked(d);
+    CHECK(rx_arp_reply(280, 1, 5001) == 0 && d->renewing == 0);
+}
+
 /** The same idle renewal under the real monitor, whose beacons and ACKed
  * polls go on as the forgetful AP's do: idle for 60 s it neither asks nor
  * leaves; data ACKed then asks the gateway and asks again each
@@ -2087,7 +2118,7 @@ static void check_renewal_traffic(void)
     renewal_to_message4();
     status_of(1, WLAN_TX_ACKED);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
-    wlan_data_renewal_proved(d, wlan_data_pairwise_key(d, d->tx_pairwise), 0);
+    wlan_data_renewal_proved(d, wlan_data_pairwise_key(d, d->tx_pairwise), 0, 0);
     CHECK(d->renewing != 0);
 }
 
@@ -2621,6 +2652,7 @@ int main(void)
     check_renewal_idle();
     check_renewal_idle_monitor();
     check_replay_run();
+    check_replay_run_tid();
     check_renewal_message4_again();
     check_renewal_traffic();
     check_renewal_silent();

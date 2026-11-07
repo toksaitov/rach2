@@ -238,6 +238,7 @@ struct wlan_data {
     uint64_t eapol_cookie; /* the renewal's last EAPOL frame, unreported */
     int eapol_failed;      /* that frame came back without an ACK */
     int renew_asked;       /* the gateway was asked for an answer under the key */
+    unsigned renew_doubt;  /* the TID a run of replays doubts, plus 1; 0 for none */
 
     /* The tick at which the last frame from the BSS opened under a key was
      * received on the connection's channel, which a move on a beacon's word
@@ -615,8 +616,10 @@ void wlan_data_renewal_end(struct wlan_data *d);
  * that the AP took message 4, so that no EAPOL frame is owed any more; it
  * says nothing of whether the AP takes our frames under the key. `answer`,
  * an ARP reply that follows the question of wlan_data_renewal_ask, does, and
- * ends the renewal. Worker only. */
-void wlan_data_renewal_proved(struct wlan_data *d, const struct wlan_data_key *k, int answer);
+ * ends the renewal, if it came on `tid`, the TID of the frame, when a run of
+ * replays doubts that TID. Worker only. */
+void wlan_data_renewal_proved(struct wlan_data *d, const struct wlan_data_key *k, int answer,
+                              unsigned tid);
 
 /** Note a data frame of `cookie` the radio took: EAPOL, set in `eapol`, is
  * the renewal's message 2 or 4 when sent before the key, or after it while
@@ -634,8 +637,9 @@ void wlan_data_renewal_status(struct wlan_data *d, const struct wlan_tx_status *
  * under: a run of WLAN_DATA_REPLAY_RUN replays with none taken says a frame
  * set a TID's counter above the AP's, an old count past the settle, which
  * nothing but a new key would lower. The renewal's question and its bound
- * settle it. Nothing for a renewal under way. Worker only. */
-void wlan_data_renewal_doubted(struct wlan_data *d);
+ * settle it, and only an answer on `tid` counts, since another TID's frame
+ * says nothing of this one. Nothing for a renewal under way. Worker only. */
+void wlan_data_renewal_doubted(struct wlan_data *d, unsigned tid);
 
 /** Count the rescue wlan_data_renewal names, as the station leaves on it;
  * the renewal stands until the next connection. Worker only. */
