@@ -1346,6 +1346,84 @@ static void check_rekey_delba_first(void)
     wlan_data_detach(&wlan);
 }
 
+/** Run what is due now, and leave what is not. */
+static void run_due_all(void)
+{
+    while (run_due())
+        ;
+}
+
+/** Build the AP's ADDBA response of TID 0 to token `token` in `f`, with
+ * status 0. Returns its length. */
+static unsigned addba_resp(uint8_t *f, unsigned token)
+{
+    unsigned params = 0x0002 | 64 << 6;
+
+    k_memset(f, 0, 33);
+    f[0] = IEEE80211_FTYPE_MGMT | IEEE80211_STYPE_ACTION;
+    k_memcpy(f + 4, sta, 6);
+    k_memcpy(f + 10, bssid, 6);
+    k_memcpy(f + 16, bssid, 6);
+    f[24] = WLAN_CATEGORY_BACK;
+    f[25] = WLAN_ACTION_ADDBA_RESP;
+    f[26] = (uint8_t)token;
+    f[29] = (uint8_t)params;
+    f[30] = (uint8_t)(params >> 8);
+    return 33;
+}
+
+/**
+ * Frames of a TID whose ADDBA request is out wait at the head of the queue,
+ * with their numbers unspent, and those behind them; the AP's answer sends
+ * them, and with no answer they go at WLAN_BA_TX_RESPONSE. A frame sent ahead
+ * of the session would lie below the first number of the AP's window.
+ */
+static void check_ba_request_holds(void)
+{
+    struct wlan_data *d;
+    uint8_t f[40];
+    unsigned len;
+
+    setup();
+    d = wlan_data_of(&wlan);
+    d->ba_tx[0].state = WLAN_BA_TX_REQUESTED;
+    d->ba_tx[0].token = 9;
+    d->ba_tx[0].since = now;
+    CHECK(send(1) == 0 && send(2) == 0);
+    run_due_all();
+    CHECK(n_taken == 0 && waiting() == 2);
+    len = addba_resp(f, 9);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    run_due_all();
+    CHECK(d->ba_tx[0].state == WLAN_BA_TX_IDLE);
+    CHECK(n_taken == 2 && marks[0] == 1 && waiting() == 0);
+    complete(2, 1);
+
+    d->ba_tx[0].state = WLAN_BA_TX_REQUESTED;
+    d->ba_tx[0].since = now;
+    CHECK(send(3) == 0);
+    run_due_all();
+    CHECK(n_taken == 2 && waiting() == 1);
+    now += WLAN_BA_TX_RESPONSE - 1;
+    run_due_all();
+    CHECK(n_taken == 2);
+    now += 1;
+    run_due_all();
+    CHECK(n_taken == 3 && d->ba_tx[0].state == WLAN_BA_TX_IDLE);
+    complete(1, 1);
+    run_due_all();
+
+    /* A pairwise key on its way waits for nothing. */
+    d->ba_tx[0].state = WLAN_BA_TX_REQUESTED;
+    d->ba_tx[0].since = now;
+    d->rekey_due = now + 1000;
+    CHECK(wlan_ba_tx_waits(d, 0) == 0 && d->ba_tx[0].state == WLAN_BA_TX_REQUESTED);
+    d->rekey_due = 0;
+    CHECK(wlan_ba_tx_waits(d, 0) == now + WLAN_BA_TX_RESPONSE);
+    wlan_ba_tx_stop(d, 0, 0);
+    wlan_data_detach(&wlan);
+}
+
 int main(void)
 {
     check_hold();
@@ -1370,6 +1448,7 @@ int main(void)
     check_rekey_lost_delba();
     check_rekey_delba_hold();
     check_rekey_delba_first();
+    check_ba_request_holds();
     check_rekey_one_wait();
     check_rekey_gone();
     if (failures) {

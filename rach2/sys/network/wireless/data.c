@@ -48,12 +48,15 @@ static int data_tx_ethernet(struct wlan *wlan, const uint8_t *frame, unsigned le
  * it. A channel switch of mode 1 keeps the queue until the switch, and a
  * pairwise key on its way keeps what came after it for that key until the key
  * is in, whatever holds it up: every frame sent under the old key is one more
- * that can cross the AP's change of key.
+ * that can cross the AP's change of key. A head frame whose TID has asked for
+ * a BlockAck session waits, with what is behind it, for the AP's answer or
+ * the end of wlan_ba_tx_waits.
  */
 static void data_send_tx(struct wlan_data *d)
 {
-    unsigned len, n;
+    unsigned len, n, tid;
     uint16_t protocol;
+    uint64_t due;
     int rc;
 
     wlan_data_hold(d, 0);
@@ -62,12 +65,18 @@ static void data_send_tx(struct wlan_data *d)
     while ((d->txq_rekey || !(d->rekey_due || d->install_wait)) &&
            wlan_data_peek(d, d->eth, &len)) {
         protocol = (uint16_t)((unsigned)d->eth[12] << 8 | d->eth[13]);
+        tid = wlan_data_priority(d->eth, len);
+        due = wlan_ba_tx_waits(d, tid);
+        if (due) {
+            (void)wlan_data_kick(d->ba_wait_work, due);
+            return;
+        }
         if (!d->connected)
             rc = -ENOTCONN;
         else if (!wlan_port_allowed(d->wlan, protocol))
             rc = -EACCES;
         else if ((rc = wlan_encap(d->eth, len, d->bssid, 0, d->buf, sizeof(d->buf), &n)) == 0)
-            rc = wlan_data_tx(d, d->buf, n, sizeof(d->buf), wlan_data_priority(d->eth, len));
+            rc = wlan_data_tx(d, d->buf, n, sizeof(d->buf), tid);
         if (rc == -ENOBUFS) {
             wlan_data_hold(d, 1);
             return;
@@ -211,6 +220,9 @@ int wlan_data_attach(struct wlan *wlan, wlan_data_event_fn event)
         d->rx_work[i].work.wlan = wlan;
         d->rx_work[i].work.run = data_drain_rx;
         d->rx_work[i].data = d;
+        d->ba_wait_work[i].work.wlan = wlan;
+        d->ba_wait_work[i].work.run = data_drain_tx;
+        d->ba_wait_work[i].data = d;
     }
     wlan->data_priv = d;
     wlan->tx_ethernet = data_tx_ethernet;
@@ -231,6 +243,7 @@ void wlan_data_detach(struct wlan *wlan)
         wlan_cancel_work(&d->rx_work[i].work);
         wlan_cancel_work(&d->ba_work[i].work);
         wlan_cancel_work(&d->ba_idle_work[i].work);
+        wlan_cancel_work(&d->ba_wait_work[i].work);
     }
     flags = spin_lock_irqsave(&d->rxq_lock);
     d->rxq_count = 0;

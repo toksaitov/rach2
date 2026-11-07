@@ -195,6 +195,14 @@ void wlan_data_disconnect(struct wlan_data *d)
     if (!d)
         return;
     d->rekey_due = 0;
+    /* The queue goes first: a session's end wakes what waits in it, and
+     * wlan_data_detach has cancelled the drain for good. */
+    flags = spin_lock_irqsave(&d->txq_lock);
+    d->txq_head = 0;
+    d->txq_count = 0;
+    d->txq_held = 0;
+    d->txq_rekey = 0;
+    spin_unlock_irqrestore(&d->txq_lock, flags);
     for (i = 0; i < 8; ++i) {
         wlan_ba_rx_stop(d, i, 0);
         wlan_ba_tx_stop(d, i, 0);
@@ -203,12 +211,6 @@ void wlan_data_disconnect(struct wlan_data *d)
     d->ba_tx_off = 0;
     for (i = 0; i < WLAN_DATA_DEFRAG; ++i)
         d->defrag[i].len = 0;
-    flags = spin_lock_irqsave(&d->txq_lock);
-    d->txq_head = 0;
-    d->txq_count = 0;
-    d->txq_held = 0;
-    d->txq_rekey = 0;
-    spin_unlock_irqrestore(&d->txq_lock, flags);
     d->ba_stop_due = 0;
     d->ba_blocked = 0;
     d->tx_stopped = 0;

@@ -333,6 +333,31 @@ static int bss_ht(const struct wlan_bss *bss)
     return 0;
 }
 
+uint64_t wlan_ba_tx_waits(struct wlan_data *d, unsigned tid)
+{
+    struct wlan_ba_tx *b;
+    uint64_t now = tick_count();
+
+    if (tid >= 8 || d->ba_tx[tid].state != WLAN_BA_TX_REQUESTED)
+        return 0;
+    b = &d->ba_tx[tid];
+    if (now - b->since >= WLAN_BA_TX_RESPONSE) {
+        b->state = WLAN_BA_TX_IDLE;
+        b->retry_at = now + WLAN_BA_TX_RETRY;
+        return 0;
+    }
+    return d->rekey_due ? 0 : b->since + WLAN_BA_TX_RESPONSE;
+}
+
+/** Send what wlan_ba_tx_waits held, once the TID's request has its answer.
+ * A queue with nothing in it has nothing to wake, and a frame queued after
+ * this reading queues the drain itself. */
+static void ba_tx_wake(struct wlan_data *d)
+{
+    if (d->txq_count)
+        (void)wlan_data_kick(d->tx_work, 0);
+}
+
 void wlan_ba_tx_check(struct wlan_data *d, unsigned tid, int eapol)
 {
     struct wlan_radio *radio = d->radio;
@@ -346,10 +371,7 @@ void wlan_ba_tx_check(struct wlan_data *d, unsigned tid, int eapol)
         return;
     b = &d->ba_tx[tid];
     now = tick_count();
-    if (b->state == WLAN_BA_TX_REQUESTED && now - b->since >= WLAN_BA_TX_RESPONSE) {
-        b->state = WLAN_BA_TX_IDLE;
-        b->retry_at = now + WLAN_BA_TX_RETRY;
-    }
+    (void)wlan_ba_tx_waits(d, tid);
     if (b->state != WLAN_BA_TX_IDLE || now < b->retry_at || !bss_ht(d->bss) ||
         (d->privacy && !wlan_data_pairwise_key(d, d->tx_pairwise)))
         return;
@@ -425,6 +447,7 @@ void wlan_ba_tx_stop(struct wlan_data *d, unsigned tid, int delba)
         (void)send_delba(d, tid, 1, WLAN_REASON_QSTA_NOT_USE);
     b->state = WLAN_BA_TX_IDLE;
     b->retry_at = tick_count() + WLAN_BA_TX_RETRY;
+    ba_tx_wake(d);
 }
 
 int wlan_ba_rekey(struct wlan_data *d)
@@ -478,6 +501,7 @@ static void addba_resp_rx(struct wlan_data *d, unsigned token, unsigned status, 
         !radio->ops->ampdu_action) {
         b->state = WLAN_BA_TX_IDLE;
         b->retry_at = tick_count() + WLAN_BA_TX_RETRY;
+        ba_tx_wake(d);
         return;
     }
     if (window > WLAN_BA_MAX_WINDOW)
@@ -491,6 +515,7 @@ static void addba_resp_rx(struct wlan_data *d, unsigned token, unsigned status, 
     }
     b->state = WLAN_BA_TX_ACTIVE;
     b->window = (uint16_t)window;
+    ba_tx_wake(d);
 }
 
 /**

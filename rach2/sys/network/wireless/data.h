@@ -270,6 +270,7 @@ struct wlan_data {
     struct wlan_ba_rx ba[8];               /* by TID; 8 to 15 never start a session */
     struct wlan_data_work ba_work[2];      /* the reordering timeout */
     struct wlan_data_work ba_idle_work[2]; /* the sessions' inactivity timeout */
+    struct wlan_data_work ba_wait_work[2]; /* the end of a request's wait, on queued frames */
     struct wlan_ba_tx ba_tx[8];            /* the transmit sessions, by TID */
     uint8_t ba_tx_token;                   /* the last dialog token used */
     uint8_t ba_tx_off;                     /* the radio refused one; none until reconnection */
@@ -708,6 +709,19 @@ void wlan_ba_rx_timeout(struct wlan_work *work);
  * sequence number. Worker only.
  */
 void wlan_ba_tx_check(struct wlan_data *d, unsigned tid, int eapol);
+
+/**
+ * Return the tick at which a data frame of TID `tid` stops waiting for the
+ * answer to the TID's ADDBA request, or 0 when it need not wait. The AP's
+ * window starts at the request's number, so a frame sent before the session
+ * reaches the AP outside it and leaves a hole that the window stops at; as
+ * mac80211 keeps a TID's frames in tid_tx->pending until the session is
+ * operational, the frame stays queued and keeps that number. A request
+ * unanswered for WLAN_BA_TX_RESPONSE is over, and a pairwise key on its way
+ * waits for nothing, since it ends the session before it can start. Worker
+ * only.
+ */
+uint64_t wlan_ba_tx_waits(struct wlan_data *d, unsigned tid);
 
 /** End the TID's transmit session, telling the radio, and wait
  * WLAN_BA_TX_RETRY before asking again; `delba` sends the AP a DELBA as
