@@ -419,7 +419,7 @@ static void addba_resp_rx(struct wlan_data *d, unsigned token, unsigned status, 
 
 int wlan_data_rx_action(struct wlan_data *d, const uint8_t *frame, unsigned len, int protected)
 {
-    unsigned hdrlen, params, tid, window, ssn, status;
+    unsigned hdrlen, params, tid, window, ssn, status, timeout;
     const uint8_t *p;
 
     if (!d || !frame)
@@ -445,16 +445,24 @@ int wlan_data_rx_action(struct wlan_data *d, const uint8_t *frame, unsigned len,
         window = params >> 6;
         if (!window || window > WLAN_BA_MAX_WINDOW)
             window = WLAN_BA_MAX_WINDOW;
+        timeout = (unsigned)p[5] | (unsigned)p[6] << 8;
         status = WLAN_STATUS_SUCCESS;
         if (tid >= 8 || !(params & 0x0002) || !d->qos) {
             status = WLAN_STATUS_REQUEST_DECLINED; /* delayed BlockAck, or no QoS */
+        } else if (d->ba[tid].active && d->ba[tid].token == p[2]) {
+            /* The AP lost our answer: the window it has stands. */
+            if (d->ba[tid].timeout != timeout)
+                status = WLAN_STATUS_REQUEST_DECLINED;
         } else {
             wlan_ba_rx_stop(d, tid, 1);
-            if (ba_start(d, tid, ssn, window) != 0)
+            if (ba_start(d, tid, ssn, window) != 0) {
                 status = WLAN_STATUS_REQUEST_DECLINED;
+            } else {
+                d->ba[tid].token = p[2];
+                d->ba[tid].timeout = (uint16_t)timeout;
+            }
         }
-        addba_resp(d, p[2], status, tid & 0xf, window, (unsigned)p[5] | (unsigned)p[6] << 8,
-                   protected);
+        addba_resp(d, p[2], status, tid & 0xf, window, timeout, protected);
         return 0;
     case WLAN_ACTION_DELBA:
         if (len < hdrlen + 6)

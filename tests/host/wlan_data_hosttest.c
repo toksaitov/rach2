@@ -1034,6 +1034,37 @@ static int sent_delba(unsigned i, unsigned params, unsigned reason)
            p[3] == params >> 8 && p[4] == reason;
 }
 
+/** An ADDBA request repeated, as an AP does when our answer was lost, keeps
+ * the session and is answered again, as __ieee80211_start_rx_ba_session does:
+ * a window moved back would throw away what follows as duplicates. */
+static void check_addba_again(void)
+{
+    uint8_t f[64];
+    unsigned len;
+
+    setup(1);
+    d->privacy = 0;
+    len = addba_req(f, 0, 8, 100);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0 && rx_sn(100) == 0);
+    CHECK(d->ba[0].head == 101);
+    n_sent = 0;
+    ampdu_starts = 0;
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    CHECK(n_sent == 1 && sent[0].frame[27] == 0 && ampdu_starts == 0 && d->ba[0].head == 101);
+    /* The same token with another timeout is declined; the window stands. */
+    f[29] = 100;
+    n_sent = 0;
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    CHECK(n_sent == 1 && sent[0].frame[27] == WLAN_STATUS_REQUEST_DECLINED);
+    CHECK(d->ba[0].active && d->ba[0].head == 101);
+    /* A new token is a new session. */
+    f[26] = 8;
+    n_sent = 0;
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    CHECK(n_sent == 1 && sent[0].frame[27] == 0 && ampdu_starts == 1 && d->ba[0].head == 100);
+    CHECK(d->ba[0].timeout == 100);
+}
+
 /** A pairwise key in the radio replaced ends the sessions each way with a
  * DELBA, as ieee80211_pairwise_rekey does. A first key, the same key again
  * and a software key end none, and a request under way gets its DELBA too,
@@ -1270,6 +1301,7 @@ static void check_blockack(void)
     CHECK(n_got == 7 && got_sn(6) == 120 && d->ba[0].head == 121 && d->ba[0].stored == 0);
     /* Sequence numbers wrap. */
     len = addba_req(f, 0, 64, 4094);
+    f[26] = 8; /* a new session, by its token */
     CHECK(wlan_data_rx_action(d, f, len, 0) == 0 && d->ba[0].head == 4094);
     CHECK(rx_sn(0) == 0 && rx_sn(4095) == 0 && n_got == 7);
     CHECK(rx_sn(4094) == 0 && n_got == 10 && got_sn(9) == 0);
@@ -1509,6 +1541,7 @@ int main(void)
     check_blockack();
     check_rekey_slot();
     check_rekey_sessions();
+    check_addba_again();
     check_rekey_tids();
     check_renewal_wait();
     check_sealed_move();

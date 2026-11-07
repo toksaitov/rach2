@@ -101,9 +101,11 @@ struct wlan_ba_frame {
 struct wlan_ba_rx {
     struct wlan_ba_frame *slot[WLAN_BA_MAX_WINDOW]; /* by SN mod 64 */
     unsigned active;
-    uint16_t head;   /* the next SN to hand on, 12 bits */
-    uint16_t window; /* 1 to WLAN_BA_MAX_WINDOW */
-    unsigned stored; /* frames held */
+    uint16_t head;    /* the next SN to hand on, 12 bits */
+    uint16_t window;  /* 1 to WLAN_BA_MAX_WINDOW */
+    unsigned stored;  /* frames held */
+    uint8_t token;    /* the dialog token of the request that started it */
+    uint16_t timeout; /* the AP's, in TU; 0 for none */
 };
 
 /* One TID's BlockAck transmit session, which the station originates. */
