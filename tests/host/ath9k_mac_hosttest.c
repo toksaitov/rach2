@@ -1186,19 +1186,25 @@ static void keys_slot_moves(const struct wlan_key *ccmp, const uint8_t *ap)
     ath9k_key_clear(&ah, c, ap, ccmp);
 }
 
-/** Send `n` frames on BE from number `first` with the key at `slot`. */
-static void keys_send(int slot, unsigned first, unsigned n)
+/** Send `n` frames on `ac` from number `first` with the key at `slot`. */
+static void keys_send_on(unsigned ac, int slot, unsigned first, unsigned n)
 {
     uint8_t f[200];
     struct wlan_tx_info info;
     unsigned len = qos_data(f, 100, 1) + 8 + 8, i;
 
     for (i = 0; i < n; i++) {
-        info = tx_info(WLAN_AC_BE, first + i);
+        info = tx_info(ac, first + i);
         info.flags = WLAN_TX_HW_KEY;
         info.hw_key = slot;
         CHECK(ath9k_tx(&ah, f, len, &info) == 0);
     }
+}
+
+/** Send `n` frames on BE from number `first` with the key at `slot`. */
+static void keys_send(int slot, unsigned first, unsigned n)
+{
+    keys_send_on(WLAN_AC_BE, slot, first, n);
 }
 
 /** Whether entry `slot` is dying: the address gone from the chip's search,
@@ -1226,14 +1232,16 @@ static int key_gone(int slot)
  * eight more on BE, eight in the FIFO and one behind. The removal spends no
  * time and resets nothing; the entry leaves the address search with its key
  * in place, is not given to another key, and a second removal changes
- * nothing. The ninth frame is pushed with the key still there, and the
- * completion that ends it clears the entry. */
+ * nothing. The ninth frame, not pushed, is dropped as its key's last, which
+ * clears the entry: a frame the old key sends now could cross the AP's change
+ * of key. */
 static void keys_pairwise_replace(const struct wlan_key *ccmp, int slot, uint32_t mac1)
 {
     struct wlan_key next = *ccmp, third = *ccmp;
     struct ar9003_txs st;
     unsigned i, base = txs_count;
     uint64_t usec;
+    uint32_t stale, failed;
     int s4 = -1, s5 = -1;
 
     keys_send(slot, 10, 8);
@@ -1257,19 +1265,50 @@ static void keys_pairwise_replace(const struct wlan_key *ccmp, int slot, uint32_
     ath9k_key_clear(&ah, s5, ap, &third);
     CHECK(key_gone(s5));
 
+    /* The eight in the FIFO finish; the ninth, not pushed, is not sent. */
+    stale = ah.stats.tx_stale;
+    failed = ah.stats.tx_failed;
     CHECK(ath9k_tx_service(&ah) == 8);
-    CHECK(txs_count == base + 8 && ah.tx.q[WLAN_AC_BE].count == 1);
-    CHECK(key_dying(slot, ccmp));
-    CHECK(ath9k_model_tx_complete(&model, 1, &st) != 0);
-    CHECK(ath9k_tx_service(&ah) == 1);
     CHECK(txs_count == base + 9 && ah.tx.q[WLAN_AC_BE].count == 0);
-    for (i = 0; i < 9 && base + i < MAX_TXS; i++)
+    for (i = 0; i < 8 && base + i < MAX_TXS; i++)
         CHECK(txs[base + i].flags == WLAN_TX_ACKED);
+    CHECK(base + 8 < MAX_TXS && txs[base + 8].flags == WLAN_TX_FILTERED);
+    CHECK(ah.stats.tx_stale == stale + 1 && ah.stats.tx_failed == failed);
+    CHECK(model.tx[1].count == 0);
     CHECK(key_gone(slot) && ah.keys.dying == 0);
     CHECK(ah.stats.resets[ATH9K_RESET_TX_HANG] == 0);
     CHECK(entry_is((unsigned)s4, &next, AR_KEYTABLE_TYPE_CCM, mac1));
     ath9k_key_clear(&ah, s4, ap, &next);
     CHECK(key_gone(s4));
+}
+
+/** A voice frame behind the FIFO stays through its key's removal and goes out
+ * under it: message 4 of the renewal may be one, which the AP can read under
+ * no other key. */
+static void keys_voice_stays(const struct wlan_key *ccmp)
+{
+    struct wlan_key k = *ccmp;
+    const struct ath9k_txq *q = &ah.tx.q[WLAN_AC_VO];
+    struct ar9003_txs st;
+    unsigned i, base = txs_count;
+    int slot = -1;
+
+    k.data[0] ^= 0x55;
+    CHECK(ath9k_key_set(&ah, ap, &k, &slot) == 0);
+    keys_send_on(WLAN_AC_VO, slot, 30, 9);
+    CHECK(q->count == 9 && model.tx[q->qnum].count == ATH9K_TX_FIFO_DEPTH);
+    ath9k_key_clear(&ah, slot, ap, &k);
+    CHECK(key_dying(slot, &k));
+    k_memset(&st, 0, sizeof(st));
+    st.status3 = AR_FrmXmitOK;
+    for (i = 0; i < 8; i++)
+        CHECK(ath9k_model_tx_complete(&model, q->qnum, &st) != 0);
+    CHECK(ath9k_tx_service(&ah) == 8 && q->count == 1 && model.tx[q->qnum].count == 1);
+    CHECK(ath9k_model_tx_complete(&model, q->qnum, &st) != 0);
+    CHECK(ath9k_tx_service(&ah) == 1 && q->count == 0);
+    CHECK(txs_count == base + 9 && key_gone(slot));
+    for (i = 0; i < 9 && base + i < MAX_TXS; i++)
+        CHECK(txs[base + i].flags == WLAN_TX_ACKED);
 }
 
 /** A reap does not move what the next pairwise key skips: entry `b`, which
@@ -1415,6 +1454,7 @@ static void test_keys(void)
     keys_clear(&tkip, s2);
     keys_group_replace();
     keys_pairwise_replace(&ccmp, slot, mac1);
+    keys_voice_stays(&ccmp);
     keys_reap_keeps_freed(&ccmp);
     keys_dying_hang(&ccmp);
     keys_group_dying(&gtk);

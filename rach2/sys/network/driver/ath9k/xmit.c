@@ -361,6 +361,38 @@ static void tx_desc(struct ath9k *ah, struct ath9k_txq *q, const struct ath9k_tx
     d->ctl22 = SM(MAX_RATE_POWER, AR_XmitPower3);
 }
 
+/** Exchange the slots `i` and `j` places past `q`'s head. */
+static void swap_slots(struct ath9k_txq *q, unsigned i, unsigned j)
+{
+    struct ath9k_tx_slot t = *slot_at(q, i);
+
+    *slot_at(q, i) = *slot_at(q, j);
+    *slot_at(q, j) = t;
+}
+
+/**
+ * Drop the frames next to be pushed of queue `q` that name a key entry since
+ * cleared, as mac80211 drops the frames of a tainted key and ath9k_set_key
+ * flushes at DISABLE_KEY. Each could cross the AP's change of key; a sender
+ * sends it again under the new one. Voice frames stay, since message 4 may
+ * be among them. Reported filtered, which counts as no failure of the link.
+ */
+static void drop_stale(struct ath9k *ah, struct ath9k_txq *q)
+{
+    while (q->queued < q->count) {
+        const struct ath9k_tx_slot *s = slot_at(q, q->queued);
+        unsigned i;
+
+        if (s->keyix < 0 || s->info.ac == WLAN_AC_VO ||
+            ah->keys.entry[s->keyix].used != ATH9K_KEY_DYING)
+            return;
+        ath9k_tx_report(ah, s, 0, 0, ATH9K_TX_STALE);
+        for (i = q->queued; i + 1 < q->count; i++)
+            swap_slots(q, i, i + 1);
+        q->count--;
+    }
+}
+
 /**
  * Push queue `q`'s accepted frames to its FIFO while it has room for a
  * chain: ampdu.c says how many frames the next chain takes, a frame alone
@@ -368,10 +400,13 @@ static void tx_desc(struct ath9k *ah, struct ath9k_txq *q, const struct ath9k_tx
  */
 static void kick(struct ath9k *ah, struct ath9k_txq *q)
 {
-    while (q->chains < ATH9K_TX_FIFO_DEPTH && q->queued < q->count) {
+    for (;;) {
         struct ath9k_tx_chain *c = &q->chain[(q->chain_head + q->chains) % ATH9K_TX_FIFO_DEPTH];
         unsigned n, i, aggr_len = 0;
 
+        drop_stale(ah, q);
+        if (q->chains >= ATH9K_TX_FIFO_DEPTH || q->queued >= q->count)
+            break;
         n = ath9k_ampdu_form(ah, q, &aggr_len, c->rates);
         if (n == 0)
             break;
@@ -534,7 +569,10 @@ void ath9k_tx_report(struct ath9k *ah, const struct ath9k_tx_slot *s,
         st.rates[i].index = -1;
     if ((how & ATH9K_TX_RATES) && ts && chain)
         report_tries(ah, &st, chain, ts);
-    if (how & ATH9K_TX_ACKED) {
+    if (how & ATH9K_TX_STALE) {
+        st.flags = WLAN_TX_FILTERED;
+        ah->stats.tx_stale++;
+    } else if (how & ATH9K_TX_ACKED) {
         int rssi = ts ? (int8_t)MS(ts->status7, AR_TxRSSICombined) : 0;
 
         st.flags = WLAN_TX_ACKED;
@@ -559,15 +597,6 @@ void ath9k_tx_report_tries(struct ath9k *ah, const struct ath9k_tx_chain *chain,
     report_tries(ah, &st, chain, ts);
     st.flags = WLAN_TX_NO_FRAME | ((ts->status3 & AR_Filtered) ? WLAN_TX_FILTERED : 0);
     wlan_radio_tx_status(&ah->radio, &st);
-}
-
-/** Exchange the slots `i` and `j` places past `q`'s head. */
-static void swap_slots(struct ath9k_txq *q, unsigned i, unsigned j)
-{
-    struct ath9k_tx_slot t = *slot_at(q, i);
-
-    *slot_at(q, i) = *slot_at(q, j);
-    *slot_at(q, j) = t;
 }
 
 /** Reverse the order of the slots `from` to `to` - 1 places past the head. */

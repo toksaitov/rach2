@@ -982,6 +982,7 @@ struct ath9k_stats {
     uint32_t tx_failed;
     uint32_t tx_retries;
     uint32_t tx_underrun;
+    uint32_t tx_stale; /* data dropped unsent, its key replaced */
     uint32_t beacon_miss;
     uint32_t resets[ATH9K_RESET_REASONS];
 };
@@ -1360,6 +1361,7 @@ int ath9k_rate_index(const struct ath9k *ah, unsigned code, uint8_t *flags);
 /* The outcome of a frame xmit.c reports, for ath9k_tx_report. */
 #define ATH9K_TX_ACKED 0x01 /* acknowledged, by an ACK or a BlockAck */
 #define ATH9K_TX_RATES 0x02 /* report the chain's tries, for rate control */
+#define ATH9K_TX_STALE 0x04 /* never sent: its key was replaced */
 
 /** Report slot `s` finished, ATH9K_TX_* in `how`, with status `ts` of
  * `chain`, and count it; the driver's own frames go to nobody. Interrupt. */
