@@ -69,6 +69,9 @@ typedef struct cpu_regs cpu_regs_t;
 #define FRAME_SP(p)   ((p)->user_esp)
 #define FRAME_USER(p) (((p)->cs & 3u) == 3u)
 
+/* Resume the frame with interrupts off: clear IF in its saved flags. */
+#define FRAME_IRQ_OFF(p) ((p)->eflags &= ~0x200u)
+
 #define PAGE_SHIFT 12
 #define PAGE_SIZE  0x1000
 

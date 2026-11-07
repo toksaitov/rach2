@@ -701,11 +701,20 @@ static void irq_dispatch(isr_params_t *params)
  * (`sched_account_tick`). Waiting for the lock would take from this
  * processor's user code all the time the holder keeps it, such as the sound
  * mix's, which converts a channel's rate in the device's interrupt.
+ *
+ * An interrupt that ends an idle wait's halt resumes with interrupts off, as
+ * the wait goes on past the halt. Otherwise a tick already pending at the
+ * `iret`, which a wait for the big lock longer than a tick makes likely,
+ * arrives before the wait's next instruction, and the processor stays in
+ * this router, still marked idle, with ready work on its queue.
  */
 void _irq_router(isr_params_t *params)
 {
     struct percpu *cpu = this_cpu();
 
+    if (cpu->idle_wait) {
+        FRAME_IRQ_OFF(params);
+    }
     if (params->vector != IRQ_VECTOR(0) || arch_cpu_id() == 0) {
         bkl_enter();
     } else if (!bkl_try_enter()) {
