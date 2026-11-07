@@ -229,17 +229,20 @@ struct ext2_node {
  * at a time from those that name data up (WB_LEAF to WB_LEAF + 2), the
  * superblock's `large_file` flag, and the inode table blocks.
  */
-#define EXT2_WB_BYTES      (1024u * 1024u)
+#define EXT2_WB_BYTES       (1024u * 1024u)
 /* What a process writes before em_balance asks it to write back. */
-#define EXT2_BALANCE_SHARE (1024u * 1024u)
-#define EXT2_WB_DATA       256
-#define EXT2_WB_META       32
-#define EXT2_WB_NODES      16
-#define WB_ALLOC           0
-#define WB_DATA            1
-#define WB_LEAF            2
-#define WB_FEATURE         5
-#define WB_INODE           6
+#define EXT2_BALANCE_SHARE  (1024u * 1024u)
+/* The blocks a write or a drain handles between two offers of the big lock:
+ * at some 58 us a block, the 15 ms of a whole batch becomes about 1 ms. */
+#define EXT2_SERVICE_BLOCKS 16u
+#define EXT2_WB_DATA        256
+#define EXT2_WB_META        32
+#define EXT2_WB_NODES       16
+#define WB_ALLOC            0
+#define WB_DATA             1
+#define WB_LEAF             2
+#define WB_FEATURE          5
+#define WB_INODE            6
 
 /* The batch's private copy of a cache block it changes: the block, its
  * stage, whether the batch has changed it, the file it is of, and its
@@ -4763,7 +4766,10 @@ static int drain_lock(struct ext2_mount *em)
  * holds, which a sync or an fsync holds for the length of its write, is
  * waited for with the lock let go, PLAN_TRIES times before the drain waits
  * under it; so the lock waits on the disk only for what others took
- * meanwhile. A strict mount holds the
+ * meanwhile. Every EXT2_SERVICE_BLOCKS copies the drain offers the big lock,
+ * with no buffer held: the point is the one where the next `bcache_get_blank`
+ * may sleep, and `em->meta` keeps the batch while others run. A strict mount
+ * holds the
  * lock across its ordered writes, as its option asks: each stage is synced
  * and flushed before the next enters the cache, so that a sync or an
  * eviction can write only a stage whose dependencies are on the medium.
@@ -4778,6 +4784,7 @@ static int writeback_drain(struct ext2_mount *em)
 {
     struct ext2_writeback *wb = em->wb;
     struct ext2_node *held[EXT2_WB_NODES];
+    uint32_t copied = 0;
     int i, count, rc;
 
     if (em->dev->flags & BLOCK_GONE) {
@@ -4825,6 +4832,9 @@ static int writeback_drain(struct ext2_mount *em)
             drain_mark(b, im);
             bcache_release(b);
             wrote = 1;
+            if (++copied % EXT2_SERVICE_BLOCKS == 0) {
+                sched_service_point();
+            }
         }
         if (wrote) {
             rc = em_sync(em);
@@ -6034,7 +6044,10 @@ static int writeback_room(struct ext2_mount *em, int synchronous)
  * overwrite inside the file's blocks or a contiguous append joins the batch
  * a block at a time; any other write drains the batch before it and after
  * each block. The batch drains too when its bytes, images or inodes run out,
- * and a piece that finds its tables full drains it and is tried once more. A
+ * and a piece that finds its tables full drains it and is tried once more.
+ * Every EXT2_SERVICE_BLOCKS pieces the write offers the big lock: the node's
+ * lock stays held, `em->meta` is not, no plan is held, and the next piece
+ * looks at the user's page again, as it does after a drain that slept. A
  * write that fails after some of its bytes were accepted returns their
  * count; a failure of the batch's I/O stays recorded for `fsync`, after a
  * close and a retry too.
@@ -6053,7 +6066,7 @@ static int32_t file_write(struct vfs_mount *mnt, void *handle, const void *buf, 
     struct ext2_mount *em = em_of(mnt);
     struct ext2_node *n = handle;
     const uint8_t *in = buf;
-    uint32_t done = 0;
+    uint32_t done = 0, pieces = 0;
     int rc = 0, synchronous, refaults = 0;
 
     if ((n->mode & S_IFMT_) == S_IFDIR_) {
@@ -6109,6 +6122,9 @@ again:
         rc = writeback_room(em, synchronous);
         if (rc != 0) {
             goto out;
+        }
+        if (++pieces % EXT2_SERVICE_BLOCKS == 0 && done < count) {
+            sched_service_point();
         }
     }
     rc = 0;

@@ -383,6 +383,7 @@ static int img_read(block_device_t *d, uint64_t lba, uint32_t count, void *buf)
    crash: the writes after that many fail without touching the image, which
    leaves it as a machine stopped after the Nth write would. */
 static int writes_made;
+static int write_attempts; /* writes asked of the device, refused ones too */
 static int stop_after = -1;
 /* The one block whose writes fail, or -1: a request that covers it fails and
  * every other goes through, unlike `stop_after`'s stop. */
@@ -486,6 +487,7 @@ static void wlog_reset(void)
 static int img_write(block_device_t *d, uint64_t lba, uint32_t count, const void *buf)
 {
     (void)d;
+    write_attempts++;
     current_proc->disk_waits++;
     request_block = lba / (BCACHE_BLOCK_BYTES / 512);
     request_blocks = (count + BCACHE_BLOCK_BYTES / 512 - 1) / (BCACHE_BLOCK_BYTES / 512);
