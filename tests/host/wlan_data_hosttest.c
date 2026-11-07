@@ -1065,6 +1065,40 @@ static void check_addba_again(void)
     CHECK(d->ba[0].timeout == 100);
 }
 
+/** A session given a timeout ends with a DELBA once it is idle that long,
+ * and a frame puts that off. */
+static void check_ba_idle(void)
+{
+    uint8_t f[64];
+    unsigned len;
+
+    setup(1);
+    d->privacy = 0;
+    len = addba_req(f, 0, 8, 100);
+    f[29] = 100; /* 102 ms */
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0 && d->ba[0].timeout == 100);
+    CHECK(sent[0].frame[31] == 100); /* echoed */
+    now += 60;
+    run_work();
+    CHECK(rx_sn(100) == 0 && d->ba[0].head == 101);
+    now += 60;
+    run_work();
+    CHECK(d->ba[0].active);
+    n_sent = 0;
+    now += 102;
+    run_work();
+    CHECK(!d->ba[0].active && n_sent == 1 && sent_delba(0, 0x0000, 39));
+
+    /* Without a timeout a session stays however long it is idle. */
+    setup(1);
+    d->privacy = 0;
+    len = addba_req(f, 0, 8, 100);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    now += 1000000;
+    run_work();
+    CHECK(d->ba[0].active);
+}
+
 /** A pairwise key in the radio replaced ends the sessions each way with a
  * DELBA, as ieee80211_pairwise_rekey does. A first key, the same key again
  * and a software key end none, and a request under way gets its DELBA too,
@@ -1542,6 +1576,7 @@ int main(void)
     check_rekey_slot();
     check_rekey_sessions();
     check_addba_again();
+    check_ba_idle();
     check_rekey_tids();
     check_renewal_wait();
     check_sealed_move();

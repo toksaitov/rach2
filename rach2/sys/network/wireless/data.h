@@ -106,6 +106,7 @@ struct wlan_ba_rx {
     unsigned stored;  /* frames held */
     uint8_t token;    /* the dialog token of the request that started it */
     uint16_t timeout; /* the AP's, in TU; 0 for none */
+    uint64_t last_rx; /* tick of the session's last frame or BlockAckReq */
 };
 
 /* One TID's BlockAck transmit session, which the station originates. */
@@ -209,11 +210,12 @@ struct wlan_data {
     unsigned key_gen; /* last generation given to a key */
 
     struct wlan_defrag defrag[WLAN_DATA_DEFRAG];
-    struct wlan_ba_rx ba[8];          /* by TID; 8 to 15 never start a session */
-    struct wlan_data_work ba_work[2]; /* the reordering timeout */
-    struct wlan_ba_tx ba_tx[8];       /* the transmit sessions, by TID */
-    uint8_t ba_tx_token;              /* the last dialog token used */
-    uint8_t ba_tx_off;                /* the radio refused one; none until reconnection */
+    struct wlan_ba_rx ba[8];               /* by TID; 8 to 15 never start a session */
+    struct wlan_data_work ba_work[2];      /* the reordering timeout */
+    struct wlan_data_work ba_idle_work[2]; /* the sessions' inactivity timeout */
+    struct wlan_ba_tx ba_tx[8];            /* the transmit sessions, by TID */
+    uint8_t ba_tx_token;                   /* the last dialog token used */
+    uint8_t ba_tx_off;                     /* the radio refused one; none until reconnection */
 
     struct wlan_data_txq txq[WLAN_DATA_TX_QUEUE];
     unsigned txq_head, txq_count; /* under txq_lock */
@@ -543,6 +545,10 @@ void wlan_ba_tx_check(struct wlan_data *d, unsigned tid, int eapol);
  * WLAN_BA_TX_RETRY before asking again; `delba` sends the AP a DELBA as
  * the originator. Worker only. */
 void wlan_ba_tx_stop(struct wlan_data *d, unsigned tid, int delba);
+
+/** End with a DELBA each receive session idle for the timeout the AP asked
+ * for, as mac80211's sta_rx_agg_session_timer_expired does. Worker only. */
+void wlan_ba_rx_idle(struct wlan_work *work);
 
 /** End every BlockAck session, each way, with a DELBA, as mac80211's
  * ieee80211_pairwise_rekey does before a pairwise key in the radio is
