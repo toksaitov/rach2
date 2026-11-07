@@ -130,6 +130,23 @@ static int replace_in_radio(struct wlan_data *d, struct wlan_data_key *fresh,
     return key_to_radio(d, fresh);
 }
 
+/**
+ * Start pairwise key `fresh` from the send count of `old`, the key it
+ * replaces. A frame of the old key that crosses the AP's change of key can
+ * raise the AP's counter for the new key, which then takes no frame of ours
+ * until the numbers pass it, as item 2 of Linux's 62872a9b9a10 has it: a
+ * silence the AP's radio ACKs through, which only the next key ends. A
+ * receiver asks only for rising numbers, and the caller reads the count after
+ * the DELBAs, which take numbers too. TKIP's count feeds its per-packet key,
+ * and stays out of this.
+ */
+static void carry_send_count(struct wlan_data_key *fresh, const struct wlan_data_key *old)
+{
+    if (old->gen && old->key.cipher == WLAN_CIPHER_SUITE_CCMP &&
+        fresh->key.cipher == WLAN_CIPHER_SUITE_CCMP && old->key.tx_pn > fresh->key.tx_pn)
+        fresh->key.tx_pn = old->key.tx_pn;
+}
+
 /** Note that the renewal under way has its key, so that data sent from here
  * goes under it. The renewal itself ends only on wlan_data_renewal's terms:
  * a key taken by the radio says nothing of whether the AP has it. */
@@ -300,6 +317,8 @@ int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
             fresh.old_until = tick_count() + WLAN_DATA_REKEY_SETTLE;
         }
     }
+    if (pairwise)
+        carry_send_count(&fresh, old);
     fresh.gen = ++d->key_gen;
     if (!fresh.gen)
         fresh.gen = ++d->key_gen;

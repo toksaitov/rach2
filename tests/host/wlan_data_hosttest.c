@@ -493,6 +493,7 @@ static void check_keys(void)
 {
     struct wlan_key k;
     struct wlan_data_key *p;
+    uint8_t other[32];
 
     setup(1);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tkip_key, 32, 0) == -EINVAL);
@@ -520,8 +521,25 @@ static void check_keys(void)
      * counters. */
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
     CHECK(p->key.tx_pn == 77 && p->key.rx_pn[3] == 55);
+    /* A new key sends on from the old one's number, and receives afresh. */
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk2, 16, 0) == 0);
-    CHECK(p->key.tx_pn == 0 && p->key.rx_pn[3] == 0);
+    CHECK(p->key.tx_pn == 77 && p->key.rx_pn[3] == 0);
+    /* A higher number from the caller stands. */
+    k_memset(&k, 0, sizeof(k));
+    k.cipher = WLAN_CIPHER_SUITE_CCMP;
+    k.flags = WLAN_KEY_PAIRWISE;
+    k_memcpy(k.peer, bssid, 6);
+    k_memcpy(k.data, gtk1, 16);
+    k.len = 16;
+    k.hw_slot = -1;
+    k.tx_pn = 1000;
+    CHECK(wlan_data_install_key(d, &k) == 0 && p->key.tx_pn == 1000);
+    /* TKIP's count stays its own, each way. */
+    CHECK(install(WLAN_CIPHER_SUITE_TKIP, 0, 1, tkip_key, 32, 0) == 0 && p->key.tx_pn == 0);
+    p->key.tx_pn = 77;
+    k_memcpy(other, tkip_key, 32);
+    other[0] ^= 1;
+    CHECK(install(WLAN_CIPHER_SUITE_TKIP, 0, 1, other, 32, 0) == 0 && p->key.tx_pn == 0);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 1, 0, gtk1, 16, 9) == 0);
     CHECK(wlan_data_default_key(d, 1, 0) == 0 && d->default_group == 1);
     CHECK(install(WLAN_CIPHER_SUITE_AES_CMAC, 4, 0, igtk, 16, 0) == 0);
