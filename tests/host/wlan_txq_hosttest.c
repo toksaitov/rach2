@@ -161,6 +161,14 @@ int wlan_bss_rx(struct wlan_bss_table *table, const struct wlan_band *band, cons
     return 0;
 }
 
+/** Drop a log line; the rows here judge the frames. */
+void klog(int level, const char *subsystem, const char *format, ...)
+{
+    (void)level;
+    (void)subsystem;
+    (void)format;
+}
+
 /** Received Ethernet frames go nowhere; the test sends only. */
 void ethernet_rx(struct netdev *nd, const uint8_t *data, uint16_t len)
 {

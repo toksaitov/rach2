@@ -5,6 +5,7 @@
 #include "wiphy.h"
 #include "../net.h"
 #include "../../lib/kerrno.h"
+#include "../../klog.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
 #include "../../timer.h"
@@ -356,6 +357,8 @@ static int rekey_waits(struct wlan_data *d)
 int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
 {
     struct wlan_data *d = wlan_data_of(wlan);
+    const struct wlan_data_key *old;
+    unsigned last = 0;
     int rc;
 
     if (!d)
@@ -375,10 +378,18 @@ int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
         d->install_wait = 0;
         return -ENOTCONN;
     }
+    old = wlan_data_pairwise_key(d, key->index);
+    if (old)
+        last = (unsigned)old->key.tx_pn;
     rc = wlan_data_install_key(d, key);
     d->install_wait = rc == -EINPROGRESS;
     if (d->connected)
         (void)wlan_data_kick(d->tx_work, 0);
+    if (rc == 0)
+        klog(KLOG_INFO, "wlan",
+             "%s: key: pairwise: last pn %u, decrypt errors %u, duplicates %u, replays %u",
+             wlan->netdev.name, last, d->counters->rx_decrypt_errors, d->counters->rx_duplicates,
+             d->counters->rx_replays);
     return rc;
 }
 

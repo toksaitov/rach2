@@ -90,6 +90,11 @@
 #     a link that never came back, as the gap does not;
 #   * a renewal's time runs from the request to the completion;
 #   * wpa_cli gives up on wpa_supplicant when it does not answer a PING;
+#   * the rm and sync seconds time each rm of a writer's file and each sync of
+#     the load, an rm at the end of the run of a file cut short among them;
+#   * the packets on one key, the receive errors, duplicates and replays come
+#     from the kernel's line at each pairwise key, so they stop at the last
+#     renewal and are summed over associations as the samples are;
 #   * the longest disk request is /proc/stat's latency_disk_us, the longest
 #     since boot, so that it is the run's only when it grew during the run,
 #     which the table says.
@@ -253,14 +258,20 @@ writer()
         dd if="$source" of="$load/w$1" bs=1M count=6000 conv=fsync 2> /dev/null &
         echo $! > "$dir/dd$1"
         wait $!
+        read -r begun _ < /proc/uptime
         rm -f "$load/w$1"
+        read -r ended _ < /proc/uptime
+        echo "$begun $ended" >> "$dir/rm"
     done
 }
 
 syncer()
 {
     while [ ! -e "$dir/stop" ]; do
+        read -r begun _ < /proc/uptime
         sync
+        read -r ended _ < /proc/uptime
+        echo "$begun $ended" >> "$dir/sync"
     done
 }
 
@@ -443,6 +454,22 @@ table()
     sed -n 's/.*ath9k: reset: \([^:]*\):.*/\1/p' "$dir/kernel" | sort | uniq -c |
         awk '{ printf ", %s %d", $2, $1 } END { print "" }'
     printf 'wpa_cli gave up          %d\n' "$(gaveup)"
+    timed rm "$dir/rm"
+    timed sync "$dir/sync"
+    sed -n 's/.*key: pairwise: last pn \([0-9]*\), decrypt errors \([0-9]*\), duplicates \([0-9]*\), replays \([0-9]*\).*/\1 \2 \3 \4/p' "$dir/kernel" |
+        awk '{
+                if ($1 > pn) pn = $1
+                for (i = 2; i <= 4; i++) {
+                    if ($i < last[i]) total[i] += last[i]
+                    last[i] = $i
+                }
+            }
+            END {
+                printf "most packets on one key  %d\n", pn
+                printf "rx decrypt errors        %d\n", total[2] + last[2]
+                printf "rx duplicates            %d\n", total[3] + last[3]
+                printf "rx replays               %d\n", total[4] + last[4]
+            }'
     awk -v p="$t0" -v end="$ended" '/ seq=/ { if ($1 - p > 1) away += $1 - p; p = $1 }
         END { printf "seconds without a reply  %d\n", away + end - p }' "$dir/ping"
     awk -v t0="$t0" -v end="$ended" '
@@ -478,6 +505,18 @@ table()
             w = $8 - w; printf "disk writes              %d, %.1f GiB, mean %.2f ms\n",
                 w, ($10 - s) / 2097152, w ? ($11 - m) / w : 0
         }'
+}
+
+# Say how long the commands that FILE times took, from its lines of start and
+# end, as NAME.
+timed()
+{
+    [ -s "$2" ] || return 0
+    awk -v name="$1 seconds" '{
+            d = $2 - $1; sum += d; n++
+            if (d > most) most = d
+        }
+        END { printf "%-24s %d timed: mean %.2f, most %.2f\n", name, n, sum / n, most }' "$2"
 }
 
 # Stop the load and leave the network's settings as they were.
