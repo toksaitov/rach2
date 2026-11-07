@@ -27,6 +27,7 @@ musl/clockloadmusl the emulator stopped by the host and the clocks compared with
 musl/creddisk three boots of one disk image after _exit
 musl/ip6optmusl fixed UDP ports, and a group joined and sent to on the card, eth0, of a machine of its own
 musl/keygennoent a processor without RDSEED and RDRAND, by QEMU's -cpu qemu64
+musl/punchmusl an empty disk the host formats before the boot and judges after it
 musl/saltnoent a processor without RDSEED and RDRAND, by QEMU's -cpu qemu64
 musl/sandboxmusl pivot_root, whose new root is a mount's root, as the test image's root is and a private root made by chroot is not
 musl/ndwatchmusl router advertisements sent on the card, eth0, and a second ndwatch on it, on a link of its own
