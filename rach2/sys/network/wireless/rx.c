@@ -234,7 +234,7 @@ static int rx_decrypt(struct wlan_data *d, uint8_t *frame, unsigned *len, unsign
         d->counters->rx_replays++;
         if (!group && ++k->replay_run[idx] >= WLAN_DATA_REPLAY_RUN) {
             k->replay_run[idx] = 0;
-            wlan_data_renewal_doubted(d, idx);
+            wlan_data_renewal_doubted(d);
         }
         return -ESTALE;
     }
@@ -247,8 +247,6 @@ static int rx_decrypt(struct wlan_data *d, uint8_t *frame, unsigned *len, unsign
     if (k->key.cipher == WLAN_CIPHER_SUITE_CCMP)
         k->key.rx_pn[idx] = c->pn;
     k->replay_run[idx] = 0;
-    if (!group && d->renew_doubt == idx + 1)
-        d->renew_doubt = 0;
     c->key = k;
     c->mic_stripped = (status->flags & WLAN_RX_DECRYPTED) && (status->flags & WLAN_RX_MIC_STRIPPED);
     c->mic_error = (status->flags & WLAN_RX_MIC_ERROR) != 0;
@@ -558,7 +556,7 @@ int wlan_data_rx_mpdu(struct wlan_data *d, uint8_t *frame, unsigned len,
     }
     if (c.key) {
         seal(d, status, arrived);
-        wlan_data_renewal_proved(d, c.key, arp_reply(frame, len, hdrlen, qos), idx);
+        wlan_data_renewal_proved(d, c.key, arp_reply(frame, len, hdrlen, qos));
         note_renewal(d, frame, len, hdrlen, arrived);
     }
 
@@ -717,7 +715,7 @@ static int rx_mgmt_ccmp(struct wlan_data *d, uint8_t *frame, unsigned *len, unsi
         return -ESTALE;
     }
     k->rx_mgmt_pn = pn;
-    wlan_data_renewal_proved(d, k, 0, 0);
+    wlan_data_renewal_proved(d, k, 0);
     *len = n;
     return WLAN_DATA_PROTECTED;
 }

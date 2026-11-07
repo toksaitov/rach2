@@ -1973,8 +1973,10 @@ static void check_replay_run(void)
     CHECK(counters.rescues[WLAN_RESCUE_SILENT] == 1);
 }
 
-/** A run of replays on one TID doubts that TID alone: the gateway's answer
- * on another says nothing of it, and one on the doubted TID ends the doubt. */
+/** Replays alone never make the station leave. A run on an idle TID is
+ * answered by the gateway on another, with no route the run's renewal ends at
+ * its question, and a reply that is itself a replay proves nothing, so that
+ * the bound of check_replay_run stands for a TID the AP's queue set high. */
 static void check_replay_run_tid(void)
 {
     unsigned i;
@@ -1991,36 +1993,20 @@ static void check_replay_run_tid(void)
     CHECK(rx_opened_tid(1, 201, 1, 5000) == 0);
     for (i = 0; i < WLAN_DATA_REPLAY_RUN; ++i)
         CHECK(rx_opened_tid(1, 202 + i, 1, 3 + i) == -ESTALE);
-    CHECK(d->renewing != 0);
+    CHECK(d->renewing != 0 && wlan_data_renewal_ask(d, 1) == 1);
     wlan_data_renewal_asked(d);
-    CHECK(rx_arp_reply(240, 1, 2) == 0 && d->renewing != 0);
-    wlan_data_renewal_end(d);
+    CHECK(rx_arp_reply(240, 1, 5001) == 0 && d->renewing == 0);
 
-    CHECK(rx_opened(241, 1, 5000) == 0);
     for (i = 0; i < WLAN_DATA_REPLAY_RUN; ++i)
-        CHECK(rx_opened(242 + i, 1, 3 + i) == -ESTALE);
-    CHECK(d->renewing != 0);
+        CHECK(rx_opened_tid(1, 241 + i, 1, 3 + i) == -ESTALE);
+    CHECK(d->renewing != 0 && wlan_data_renewal_ask(d, 0) == -1 && d->renewing == 0);
+
+    CHECK(rx_opened(280, 1, 9000) == 0);
+    for (i = 0; i < WLAN_DATA_REPLAY_RUN; ++i)
+        CHECK(rx_opened(281 + i, 1, 3 + i) == -ESTALE);
+    CHECK(d->renewing != 0 && wlan_data_renewal_ask(d, 1) == 1);
     wlan_data_renewal_asked(d);
-    CHECK(rx_arp_reply(280, 1, 5001) == 0 && d->renewing == 0);
-
-    /* A frame taken on the doubted TID ends the doubt, and any answer then
-     * proves the link. */
-    CHECK(rx_opened_tid(1, 281, 1, 6000) == 0);
-    for (i = 0; i < WLAN_DATA_REPLAY_RUN; ++i)
-        CHECK(rx_opened_tid(1, 282 + i, 1, 3 + i) == -ESTALE);
-    CHECK(d->renewing != 0 && d->renew_doubt == 2);
-    CHECK(rx_opened_tid(1, 320, 1, 6001) == 0 && d->renew_doubt == 0);
-    wlan_data_renewal_asked(d);
-    CHECK(rx_arp_reply(321, 1, 6002) == 0 && d->renewing == 0);
-
-    /* With no route the doubt has no question, and the renewal stays for the
-     * monitor to bound. */
-    CHECK(rx_opened_tid(1, 322, 1, 7000) == 0);
-    for (i = 0; i < WLAN_DATA_REPLAY_RUN; ++i)
-        CHECK(rx_opened_tid(1, 323 + i, 1, 3 + i) == -ESTALE);
-    CHECK(wlan_data_renewal_ask(d, 0) == 0 && d->renewing != 0);
-    wlan_data_renewal_end(d);
-    CHECK(wlan_data_renewal_ask(d, 0) == -1);
+    CHECK(rx_arp_reply(320, 1, 5002) == -ESTALE && d->renewing != 0);
 }
 
 /** A renewal left idle, its key in place and no data sent, is what a run of
@@ -2039,7 +2025,7 @@ static void check_replay_run_idle(void)
     for (i = 0; i < WLAN_DATA_REPLAY_RUN; ++i)
         CHECK(rx_opened(201 + i, 1, 3 + i) == -ESTALE);
     at = now;
-    CHECK(wlan_data_renewal(d, 0) == at && d->renew_doubt == 1);
+    CHECK(wlan_data_renewal(d, 0) == at);
 }
 
 /** The same idle renewal under the real monitor, whose beacons and ACKed
@@ -2183,7 +2169,7 @@ static void check_renewal_traffic(void)
     renewal_to_message4();
     status_of(1, WLAN_TX_ACKED);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
-    wlan_data_renewal_proved(d, wlan_data_pairwise_key(d, d->tx_pairwise), 0, 0);
+    wlan_data_renewal_proved(d, wlan_data_pairwise_key(d, d->tx_pairwise), 0);
     CHECK(d->renewing != 0);
 }
 
