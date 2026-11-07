@@ -1654,6 +1654,7 @@ static void acked_poll(void)
 static struct wlan_mlme mon;
 static struct wlan_scan mon_scan;
 static unsigned mon_asks;      /* renewal questions the monitor asked */
+static int mon_gateway;        /* whether the interface has a default route */
 static unsigned mon_leaves;    /* deauthentications it reported */
 static unsigned mon_reason;    /* the last one's reason */
 static uint64_t mon_poll;      /* the cookie of the poll awaiting its ACK */
@@ -1767,7 +1768,7 @@ static int mon_ask(struct wlan *wlan)
     int rc;
 
     (void)wlan;
-    rc = wlan_data_renewal_ask(d, 1);
+    rc = wlan_data_renewal_ask(d, mon_gateway);
     if (rc > 0) {
         ++mon_asks;
         wlan_data_renewal_asked(d);
@@ -1823,6 +1824,7 @@ static void mon_connect(void)
     CHECK(mon_rx(IEEE80211_STYPE_ASSOC_RESP, sta, resp, sizeof(resp)) == 1);
     CHECK(mon.state == WLAN_STA_ASSOCIATED);
     mon_asks = mon_leaves = mon_reason = 0;
+    mon_gateway = 1;
     mon_poll = 0;
 }
 
@@ -2007,6 +2009,69 @@ static void check_replay_run_tid(void)
     CHECK(d->renewing != 0 && wlan_data_renewal_ask(d, 1) == 1);
     wlan_data_renewal_asked(d);
     CHECK(rx_arp_reply(320, 1, 5002) == -ESTALE && d->renewing != 0);
+}
+
+/** Under the real monitor replays alone never make the station leave: a run
+ * on an idle TID is answered by the gateway on TID 0, and with no route the
+ * run's renewal ends at its first question. */
+static void check_replay_run_monitor(void)
+{
+    unsigned i, n;
+
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    send_data();
+    status_of(n_sent - 1, WLAN_TX_ACKED);
+    CHECK(wlan_data_renewal_ask(d, 1) == 1);
+    wlan_data_renewal_asked(d);
+    CHECK(rx_arp_reply(200, 1, 1) == 0 && d->renewing == 0);
+    now += WLAN_DATA_REKEY_SETTLE;
+    mon_connect();
+    CHECK(rx_opened_tid(1, 201, 1, 5000) == 0);
+    for (i = 0; i < WLAN_DATA_REPLAY_RUN; ++i)
+        CHECK(rx_opened_tid(1, 202 + i, 1, 3 + i) == -ESTALE);
+    mon_beacons(5000);
+    CHECK(mon_asks != 0 && rx_arp_reply(240, 1, 5001) == 0 && d->renewing == 0);
+    n = mon_asks;
+    mon_beacons(2 * WLAN_MLME_KEY_WAIT);
+    CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_asks == n && mon_leaves == 0);
+
+    mon_gateway = 0;
+    for (i = 0; i < WLAN_DATA_REPLAY_RUN; ++i)
+        CHECK(rx_opened_tid(1, 241 + i, 1, 3 + i) == -ESTALE);
+    CHECK(d->renewing != 0);
+    mon_beacons(WLAN_MLME_KEY_WAIT + WLAN_MLME_ASK_WAIT + 2000);
+    CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_leaves == 0 && d->renewing == 0);
+    CHECK(counters.rescues[WLAN_RESCUE_SILENT] == 0);
+}
+
+/** Under TKIP the gateway's answer counts only once Michael has passed: one
+ * whose priority was changed on the way fails it and leaves the renewal
+ * open, and the true one ends it. */
+static void check_renewal_tkip(void)
+{
+    static const uint8_t arp[16] = {0xaa, 0xaa, 0x03, 0, 0, 0, 0x08, 0x06, 0, 1, 8, 0, 6, 4, 0, 2};
+    uint8_t f[IEEE80211_MAX_FRAME_LEN], msdu[44];
+    unsigned len;
+
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    CHECK(install(WLAN_CIPHER_SUITE_TKIP, 0, 1, tkip_key, 32, 0) == 0);
+    now += WLAN_DATA_REKEY_SETTLE;
+    send_data();
+    status_of(n_sent - 1, WLAN_TX_ACKED);
+    CHECK(wlan_data_renewal_ask(d, 1) == 1);
+    wlan_data_renewal_asked(d);
+    k_memset(msdu, 0, sizeof(msdu));
+    k_memcpy(msdu, arp, sizeof(arp));
+    wlan_tkip_michael(tkip_key + 24, sta, far, 0, msdu, 36, msdu + 36);
+    len = ap_frame(f, sta, 1, 1, 300, 0, 0, msdu, sizeof(msdu));
+    ap_tkip(f, &len, 26, 2, 0);
+    CHECK(rx(f, len) == -EBADMSG && d->renewing != 0);
+    len = ap_frame(f, sta, 1, 0, 301, 0, 0, msdu, sizeof(msdu));
+    ap_tkip(f, &len, 26, 3, 0);
+    CHECK(rx(f, len) == 0 && d->renewing == 0);
 }
 
 /** A renewal left idle, its key in place and no data sent, is what a run of
@@ -2706,6 +2771,8 @@ int main(void)
     check_replay_run();
     check_replay_run_tid();
     check_replay_run_idle();
+    check_replay_run_monitor();
+    check_renewal_tkip();
     check_renewal_message4_again();
     check_renewal_traffic();
     check_renewal_silent();
