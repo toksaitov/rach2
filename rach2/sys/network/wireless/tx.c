@@ -181,6 +181,7 @@ int wlan_data_connect(struct wlan_data *d, const struct wlan_bss *bss, int qos, 
     d->heard = 0;
     d->sealed = 0;
     d->renewing = 0;
+    d->conn_id = d->conn_id + 1 ? d->conn_id + 1 : 1;
     wlan_rate_connect(d, bss);
     d->connected = 1;
     return 0;

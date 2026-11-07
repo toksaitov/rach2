@@ -356,23 +356,27 @@ static int rekey_waits(struct wlan_data *d)
 int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
 {
     struct wlan_data *d = wlan_data_of(wlan);
-    int connected, rc;
+    int rc;
 
     if (!d)
         return -ENODEV;
     if (!key || !(key->flags & WLAN_KEY_PAIRWISE))
         return wlan_data_install_key(d, key);
-    connected = d->connected || d->rekey_due;
     data_take_rx(d);
     if (d->connected)
         rekey_mark(d);
     data_send_tx(d);
     wlan_ba_rx_flush(d);
-    if (rekey_waits(d))
+    if (rekey_waits(d)) {
+        d->install_conn = d->install_conn ? d->install_conn : d->conn_id;
         return -EINPROGRESS;
-    if (connected && !d->connected)
+    }
+    if (d->install_conn && (!d->connected || d->install_conn != d->conn_id)) {
+        d->install_conn = 0;
         return -ENOTCONN;
+    }
     rc = wlan_data_install_key(d, key);
+    d->install_conn = rc == -EINPROGRESS ? d->conn_id : 0;
     if (d->connected)
         (void)wlan_data_kick(d->tx_work, 0);
     return rc;
