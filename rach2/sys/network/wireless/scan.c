@@ -77,7 +77,8 @@ static int scan_return(struct wlan_scan *scan)
  * channel, BSSs gone stale leave the table, and the outcome is reported
  * last, so that its listener may start another scan. A failure to return is
  * an aborted scan. A radio that never left is not tuned, since a retune
- * destroys what it holds. Worker only. */
+ * destroys what it holds; one that scanned only its home channel gets back
+ * its filter alone. Worker only. */
 static void scan_finish(struct wlan_scan *scan, int aborted)
 {
     struct wlan_radio *radio = scan->radio;
@@ -295,12 +296,18 @@ static int scan_leave(struct wlan_scan *scan)
 /** Decide, for an associated station, whether the scan may go on to
  * `channel` now, as ieee80211_scan_state_decision does: a trip ends when
  * frames wait or the next channel would take it past WLAN_SCAN_AWAY_MS.
+ * The home channel, reached from home, is scanned there with the queue
+ * running and the AP not told, as mac80211 scans its operating channel
+ * alone: the radio's receive filter changes and its channel does not.
  * Returns 1 to tune, and otherwise 0 with the next step arranged. */
 static int scan_may_tune(struct wlan_scan *scan, const struct wlan_channel *channel)
 {
     uint64_t limit = scan->left + MS_TO_TICKS(WLAN_SCAN_AWAY_MS);
 
     if (!scan_ask(scan, WLAN_SCAN_ASK_JOINED)) {
+        return 1;
+    }
+    if (scan->away == WLAN_SCAN_HOME && scan->home && channel->frequency == scan->home->frequency) {
         return 1;
     }
     if (scan->away != WLAN_SCAN_AWAY) {

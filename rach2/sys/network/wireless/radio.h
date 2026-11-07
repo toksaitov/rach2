@@ -118,7 +118,9 @@ struct wlan_radio_ops {
     /** Stop DMA and callbacks, completing accepted tx as failed before return.
      * Safe twice and after a failed start; caller then drains queued work. */
     void (*stop)(struct wlan_radio *radio);
-    /** Tune to channel (20 MHz) and set WLAN_FILTER_* receive filters. */
+    /** Tune to channel (20 MHz) and set WLAN_FILTER_* receive filters. The
+     * channel the radio is on already changes only the filters and keeps
+     * every frame queued, which the scan of the home channel relies on. */
     int (*config)(struct wlan_radio *radio, const struct wlan_channel *channel, unsigned filters);
     /** Copy an MPDU without FCS and info before returning 0; report exactly
      * one later wlan_radio_tx_status, including failures, besides any with

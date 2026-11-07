@@ -184,7 +184,7 @@ struct wlan_scan {
     uint32_t channels_tuned; /* channels the software scan visited */
     wlan_scan_ask_fn ask;    /* the station's, or NULL when nothing listens */
     enum wlan_scan_away away;
-    int off_home;      /* the radio was tuned off the home channel */
+    int off_home;      /* the radio was tuned off home, or given the scan's filter */
     uint64_t left;     /* the tick this trip left home */
     uint64_t flush_by; /* the tick a departure stops waiting */
     unsigned tries;    /* departures failed in a row */
