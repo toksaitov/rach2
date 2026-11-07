@@ -26,8 +26,8 @@ The rules are kept short on purpose; their history is in commit messages and `de
 * The chat is the owner's own Claude Code session on the Mac. It answers the owner and carries out the owner's orders, and does no long work. It starts the manager, passes the owner's orders on, and tells the owner of big incidents in the chat and on the owner's phone.
 * The manager is a Claude Code session on the Mac that the chat starts. It plans each milestone, watches the workers, writes its share of the code through up to three worker loops of its own, and integrates, tests and releases. It reports to the chat by message.
 * The workers are the worker loops, `tools/flow/worker.sh`: one in each of the five research assistants' accounts on the testing host, and on the Mac the owner's Codex loop and the manager's own. They take tasks from the board by themselves.
-* Codex and a Claude Fable subagent review each milestone's plan; Codex reviews the whole milestone at its end.
-* agy (Gemini 4 Argon) and Muse Code (Muse Wonder Full) are signed in only in the owner's accounts on the Mac, on basic plans with low limits. An agent there asks one of them when it is stuck or a hard question needs a second opinion, sparingly, and checks the answer against the code.
+* Codex and a Claude Fable subagent review each milestone's plan; Codex reviews the whole milestone at its end. When the chat or the manager is stuck, or a question has gone two tries without a cause, it asks Codex Astra first and then Fable, at xhigh, before a third try, and checks the answers against the code.
+* agy (Gemini 4 Argon) and Muse Code (Muse Wonder Full) are signed in only in the owner's accounts on the Mac, on basic plans with low limits. An agent there asks one of them, sparingly, for what Codex and Fable leave open or disagree on, and checks the answer against the code.
 
 ## Milestones
 
