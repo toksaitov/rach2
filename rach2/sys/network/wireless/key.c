@@ -108,6 +108,17 @@ static int key_from_radio(struct wlan_data *d, struct wlan_data_key *k)
     return 0;
 }
 
+/** Put `fresh` in the radio in place of `old`, once the BlockAck sessions
+ * have ended when it replaces a pairwise key in the radio. Returns as
+ * key_to_radio does. */
+static int replace_in_radio(struct wlan_data *d, struct wlan_data_key *fresh,
+                            const struct wlan_data_key *old, int pairwise)
+{
+    if (pairwise && old->gen && old->key.hw_slot >= 0)
+        wlan_ba_rekey(d);
+    return key_to_radio(d, fresh);
+}
+
 /** Drop every MSDU being reassembled, since a new key must not complete a
  * frame begun under the old one (the fragment cache attack of 2021). */
 static void flush_defrag(struct wlan_data *d)
@@ -151,7 +162,7 @@ int wlan_data_install_key(struct wlan_data *d, const struct wlan_key *key)
     fresh.rx_mgmt_pn = fresh.key.rx_pn[WLAN_NON_QOS_TID];
     if (key->cipher != WLAN_CIPHER_SUITE_TKIP)
         wlan_aes128_setkey(&fresh.aes, key->data);
-    rc = key_to_radio(d, &fresh);
+    rc = replace_in_radio(d, &fresh, old, pairwise);
     if (rc) {
         wipe(&fresh, sizeof(fresh));
         return rc;

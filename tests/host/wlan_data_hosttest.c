@@ -980,7 +980,7 @@ static int rx_opened(unsigned sn, int slot, uint64_t pn)
 /** A pairwise key replaced with frames under way: one the radio opened
  * under the old slot must not move the new key's counter, whose frames
  * start again from 1, and the reordering buffers empty first, under the
- * old key, with their sessions kept. */
+ * old key. */
 static void check_rekey_slot(void)
 {
     uint8_t f[64];
@@ -1020,6 +1020,51 @@ static void check_rekey_slot(void)
     now += WLAN_DATA_REKEY_SETTLE;
     CHECK(rx_opened(110, 1, 446) == 0 && n_got == 6);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 446);
+}
+
+/** Whether sent frame `i` is a DELBA of `params` and `reason`. */
+static int sent_delba(unsigned i, unsigned params, unsigned reason)
+{
+    const uint8_t *p = sent[i].frame + 24;
+
+    return p[0] == WLAN_CATEGORY_BACK && p[1] == WLAN_ACTION_DELBA && p[2] == (params & 0xff) &&
+           p[3] == params >> 8 && p[4] == reason;
+}
+
+/** A pairwise key in the radio replaced ends the sessions each way with a
+ * DELBA, as ieee80211_pairwise_rekey does. A first key, the same key again
+ * and a software key end none, and a request under way is forgotten. */
+static void check_rekey_sessions(void)
+{
+    uint8_t f[64];
+    unsigned len;
+
+    setup(1);
+    takes_keys = 1;
+    len = addba_req(f, 0, 8, 100);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0 && d->ba[0].active);
+    d->ba_tx[0].state = WLAN_BA_TX_ACTIVE;
+    d->ba_tx[3].state = WLAN_BA_TX_REQUESTED;
+    d->ba_tx[5].retry_at = now + 1000; /* a refusal's wait stands */
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
+    CHECK(d->ba[0].active && d->ba_tx[0].state == WLAN_BA_TX_ACTIVE);
+    n_sent = 0;
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
+    CHECK(n_sent == 0 && d->ba[0].active);
+
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    CHECK(n_sent == 2 && sent_delba(0, 0x0000, 36) && sent_delba(1, 0x0800, 37));
+    CHECK(!d->ba[0].active && d->ba_tx[0].state == WLAN_BA_TX_IDLE);
+    CHECK(d->ba_tx[0].retry_at == 0);
+    CHECK(d->ba_tx[3].state == WLAN_BA_TX_IDLE && d->ba_tx[3].retry_at == 0);
+    CHECK(d->ba_tx[5].retry_at == now + 1000);
+
+    setup(1);
+    len = addba_req(f, 0, 8, 100);
+    CHECK(wlan_data_rx_action(d, f, len, 0) == 0);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, tk, 16, 0) == 0);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    CHECK(d->ba[0].active);
 }
 
 /** The sender's count is shared across TIDs: a TID's first frame under the
@@ -1428,6 +1473,7 @@ int main(void)
     check_rekey();
     check_blockack();
     check_rekey_slot();
+    check_rekey_sessions();
     check_rekey_tids();
     check_renewal_wait();
     check_sealed_move();

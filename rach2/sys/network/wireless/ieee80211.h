@@ -153,6 +153,8 @@
 #define WLAN_REASON_INVALID_RSN_IE_CAP             22
 #define WLAN_REASON_IEEE8021X_FAILED               23
 #define WLAN_REASON_CIPHER_SUITE_REJECTED          24
+#define WLAN_REASON_QSTA_LEAVE_QBSS                36
+#define WLAN_REASON_QSTA_NOT_USE                   37
 
 /* Suite selectors are host integers; their wire bytes are big endian. */
 #define WLAN_CIPHER_SUITE_TKIP      0x000fac02u
