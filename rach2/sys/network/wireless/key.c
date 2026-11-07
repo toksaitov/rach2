@@ -110,13 +110,16 @@ static int key_from_radio(struct wlan_data *d, struct wlan_data_key *k)
 
 /** Put `fresh` in the radio in place of `old`, once the BlockAck sessions
  * have ended when it replaces a pairwise key in the radio. Returns as
- * key_to_radio does. */
+ * wlan_ba_rekey does when the sessions must wait, else as key_to_radio
+ * does. */
 static int replace_in_radio(struct wlan_data *d, struct wlan_data_key *fresh,
                             const struct wlan_data_key *old, int pairwise)
 {
+    int rc = 0;
+
     if (pairwise && old->gen && old->key.hw_slot >= 0)
-        wlan_ba_rekey(d);
-    return key_to_radio(d, fresh);
+        rc = wlan_ba_rekey(d);
+    return rc ? rc : key_to_radio(d, fresh);
 }
 
 /** Drop every MSDU being reassembled, since a new key must not complete a

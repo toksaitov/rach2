@@ -225,6 +225,7 @@ struct wlan_data {
     /* The tick a pairwise key stops waiting for them, or 0 when none waits;
      * worker only. */
     uint64_t rekey_due;
+    uint64_t ba_stop_due; /* tick wlan_ba_rekey stops waiting for room; 0 unset */
     /* The AP's channel switch of mode 1 stops the drain, which keeps the
      * queue until the switch; worker only. */
     int tx_stopped;
@@ -544,8 +545,11 @@ void wlan_ba_tx_stop(struct wlan_data *d, unsigned tid, int delba);
 /** End every BlockAck session, each way, with a DELBA, as mac80211's
  * ieee80211_pairwise_rekey does before a pairwise key in the radio is
  * replaced; a transmit session may be asked for again with the next frame.
- * Worker only. */
-void wlan_ba_rekey(struct wlan_data *d);
+ * Returns 0, or -EINPROGRESS when a DELBA found the radio's queue full:
+ * the session stays for the caller to come again, for at most
+ * WLAN_DATA_REKEY_WAIT, after which it ends with its DELBA unsent. Worker
+ * only. */
+int wlan_ba_rekey(struct wlan_data *d);
 
 /** The second half of receive, for each MPDU the reordering buffer lets go:
  * duplicates, decryption, reassembly and delivery. `arrived` is the tick the

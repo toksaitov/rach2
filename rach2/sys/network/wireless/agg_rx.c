@@ -320,8 +320,9 @@ void wlan_ba_tx_check(struct wlan_data *d, unsigned tid, int eapol)
 }
 
 /** Tell the AP that TID `tid`'s session ends, as 802.11-2020 9.6.4.4 has it:
- * `initiator` when this station is the session's originator. */
-static void send_delba(struct wlan_data *d, unsigned tid, int initiator, unsigned reason)
+ * `initiator` when this station is the session's originator. Returns
+ * send_back's answer. */
+static int send_delba(struct wlan_data *d, unsigned tid, int initiator, unsigned reason)
 {
     unsigned params = (initiator ? 0x0800u : 0) | tid << 12;
     uint8_t p[6];
@@ -332,7 +333,7 @@ static void send_delba(struct wlan_data *d, unsigned tid, int initiator, unsigne
     p[3] = (uint8_t)(params >> 8);
     p[4] = (uint8_t)reason;
     p[5] = 0;
-    (void)send_back(d, p, sizeof(p), d->mfp);
+    return send_back(d, p, sizeof(p), d->mfp);
 }
 
 void wlan_ba_tx_stop(struct wlan_data *d, unsigned tid, int delba)
@@ -346,27 +347,37 @@ void wlan_ba_tx_stop(struct wlan_data *d, unsigned tid, int delba)
     if (b->state == WLAN_BA_TX_ACTIVE && radio->ops->ampdu_action)
         (void)radio->ops->ampdu_action(radio, WLAN_AMPDU_TX_STOP, d->bssid, tid, 0, 0);
     if (delba)
-        send_delba(d, tid, 1, WLAN_REASON_QSTA_NOT_USE);
+        (void)send_delba(d, tid, 1, WLAN_REASON_QSTA_NOT_USE);
     b->state = WLAN_BA_TX_IDLE;
     b->retry_at = tick_count() + WLAN_BA_TX_RETRY;
 }
 
-void wlan_ba_rekey(struct wlan_data *d)
+int wlan_ba_rekey(struct wlan_data *d)
 {
     enum wlan_ba_tx_state state;
     unsigned tid;
+    int late;
 
+    if (!d->ba_stop_due)
+        d->ba_stop_due = tick_count() + WLAN_DATA_REKEY_WAIT;
+    late = tick_count() >= d->ba_stop_due;
     for (tid = 0; tid < 8; ++tid) {
         if (d->ba[tid].active) {
-            send_delba(d, tid, 0, WLAN_REASON_QSTA_LEAVE_QBSS);
+            if (send_delba(d, tid, 0, WLAN_REASON_QSTA_LEAVE_QBSS) == -ENOBUFS && !late)
+                return -EINPROGRESS;
             wlan_ba_rx_stop(d, tid, 1);
         }
         state = d->ba_tx[tid].state;
+        if (state == WLAN_BA_TX_ACTIVE &&
+            send_delba(d, tid, 1, WLAN_REASON_QSTA_NOT_USE) == -ENOBUFS && !late)
+            return -EINPROGRESS;
         if (state != WLAN_BA_TX_IDLE) {
-            wlan_ba_tx_stop(d, tid, state == WLAN_BA_TX_ACTIVE);
+            wlan_ba_tx_stop(d, tid, 0);
             d->ba_tx[tid].retry_at = 0;
         }
     }
+    d->ba_stop_due = 0;
+    return 0;
 }
 
 /**
