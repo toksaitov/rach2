@@ -2739,7 +2739,7 @@ static void procfs_wlan_refused(struct procfs_text *t)
     struct wlan_counters c;
     struct wlan *wlan;
     uint32_t tcp = 0, ack = 0, other = 0, held = 0, wait = 0, lost = 0;
-    uint32_t rescues[WLAN_RESCUES] = {0, 0, 0}, saved = 0;
+    uint32_t rescues[WLAN_RESCUES] = {0, 0, 0}, saved = 0, far = 0;
     unsigned i, r;
 
     for (i = 0; (wlan = wlan_at(i)) != 0; ++i) {
@@ -2753,6 +2753,7 @@ static void procfs_wlan_refused(struct procfs_text *t)
         for (r = 0; r < WLAN_RESCUES; ++r)
             rescues[r] += c.rescues[r];
         saved += c.rescue_saved;
+        far += c.rx_old_far;
     }
     ap_str(t, "\nwlan_refused_tcp ");
     ap_u32(t, tcp);
@@ -2774,6 +2775,8 @@ static void procfs_wlan_refused(struct procfs_text *t)
     ap_u32(t, rescues[WLAN_RESCUE_SILENT]);
     ap_str(t, "\nwlan_rescue_saved ");
     ap_u32(t, saved);
+    ap_str(t, "\nwlan_rx_old_far ");
+    ap_u32(t, far);
 }
 
 /**

@@ -91,6 +91,7 @@ struct wlan_counters {
     uint32_t tx_status_lost;        /* completions a full queue could not take */
     uint32_t rescues[WLAN_RESCUES]; /* by cause; an association keeps them */
     uint32_t rescue_saved;          /* silent renewals the gateway's answer proved; kept too */
+    uint32_t rx_old_far;            /* old-key numbers past old_pn + 256; kept too */
 };
 
 enum wlan_event_type {

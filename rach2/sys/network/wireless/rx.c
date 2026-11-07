@@ -171,7 +171,9 @@ static int tkip_open(struct wlan_data_key *k, uint8_t *frame, unsigned *len, uns
  * replay until the AP caught up. The sender keeps one count across TIDs (tx.c
  * as well), so the distance is from the highest number seen on any: a true
  * number of k cannot lie this far past it unless a window of frames was lost,
- * and then only for the seconds of WLAN_DATA_REKEY_SETTLE.
+ * and then only for the seconds of WLAN_DATA_REKEY_SETTLE. The AP's queue
+ * runs on past old_pn by however many frames it held, hundreds under a
+ * download, so nothing above old_pn bounds the test.
  */
 static int pn_of_old_key(const struct wlan_data_key *k, uint64_t pn)
 {
@@ -183,8 +185,7 @@ static int pn_of_old_key(const struct wlan_data_key *k, uint64_t pn)
     for (tid = 0; tid < WLAN_NUM_TIDS; tid++)
         if (k->key.rx_pn[tid] > high)
             high = k->key.rx_pn[tid];
-    return pn > high + WLAN_DATA_REKEY_JUMP && pn + WLAN_DATA_REKEY_NEAR > k->old_pn &&
-           pn <= k->old_pn + WLAN_DATA_REKEY_NEAR;
+    return pn > high + WLAN_DATA_REKEY_JUMP && pn + WLAN_DATA_REKEY_NEAR > k->old_pn;
 }
 
 static int rx_decrypt(struct wlan_data *d, uint8_t *frame, unsigned *len, unsigned hdrlen,
@@ -231,6 +232,8 @@ static int rx_decrypt(struct wlan_data *d, uint8_t *frame, unsigned *len, unsign
     }
     if (!group && pn_of_old_key(k, c->pn)) {
         d->counters->rx_dropped++;
+        if (c->pn > k->old_pn + WLAN_DATA_REKEY_NEAR)
+            d->counters->rx_old_far++;
         return -ESTALE;
     }
     if (k->key.cipher == WLAN_CIPHER_SUITE_CCMP)

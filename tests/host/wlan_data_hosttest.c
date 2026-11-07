@@ -1080,13 +1080,20 @@ static void check_rekey_slot(void)
     /* The AP's queue, the old count under the new key, moves no counter. */
     CHECK(rx_opened(105, 1, 445) == -ESTALE && n_got == 3);
     CHECK(rx_opened(106, 1, 446) == -ESTALE && n_got == 3);
-    CHECK(counters.rx_dropped == n + 3 && counters.rx_replays == 0);
+    /* A download's queue runs hundreds of numbers past the old key's last. */
+    CHECK(rx_opened(106, 1, 443 + 2000) == -ESTALE && n_got == 3);
+    CHECK(counters.rx_dropped == n + 4 && counters.rx_replays == 0);
+    CHECK(counters.rx_old_far == 1);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 0);
     CHECK(rx_opened(107, 1, 1) == 0 && n_got == 4);
     CHECK(rx_opened(108, 1, 2) == 0 && n_got == 5);
     CHECK(wlan_data_pairwise_key(d, 0)->key.rx_pn[0] == 2);
     /* A true replay under the new key stays one. */
     CHECK(rx_opened(109, 1, 2) == -ESTALE && counters.rx_replays == 1);
+    /* A true loss of over 64 frames at the key's start: what follows drops,
+     * and only until the settle ends. */
+    CHECK(rx_opened(109, 1, 300) == -ESTALE && n_got == 5);
+    CHECK(rx_opened(109, 1, 301) == -ESTALE && n_got == 5);
     /* Once the AP's queue has gone, a number that far on is the new key's. */
     now += WLAN_DATA_REKEY_SETTLE;
     CHECK(rx_opened(110, 1, 446) == 0 && n_got == 6);

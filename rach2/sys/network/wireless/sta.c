@@ -368,6 +368,7 @@ static void sta_event(struct wlan *wlan, const struct wlan_event *ev)
         c->quality = was.quality;
         k_memcpy(c->rescues, was.rescues, sizeof(c->rescues));
         c->rescue_saved = was.rescue_saved;
+        c->rx_old_far = was.rx_old_far;
         if (!s->control_port) {
             (void)wlan_queue_work(&s->authorize_work, 0);
         }

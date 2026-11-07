@@ -1210,6 +1210,10 @@ station sent within 10 seconds, and 2 seconds more for the last.
 .It Li wlan_rescue_saved
 Renewals that ended on the gateway's answer to an ARP request under the new
 key, which proves that the access point passes the station's frames on.
+.It Li wlan_rx_old_far
+Frames dropped in the 2 seconds after a new pairwise key because their packet
+numbers ran on from the old key's by more than 256: the access point's queue,
+sent under the new key with the old count.
 .It Li loopback_dropped
 Datagrams dropped because the loopback ring was full.
 .It Li loopback_peak
