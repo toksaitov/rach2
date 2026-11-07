@@ -246,6 +246,12 @@ void wlan_data_renewal_status(struct wlan_data *d, const struct wlan_tx_status *
     }
 }
 
+void wlan_data_renewal_doubted(struct wlan_data *d)
+{
+    if (!d->renewing)
+        d->renewing = d->renewed = d->renew_acked = tick_count();
+}
+
 void wlan_data_renewal_rescued(struct wlan_data *d)
 {
     enum wlan_rescue cause;

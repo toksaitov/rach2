@@ -55,6 +55,8 @@
 #define WLAN_DATA_REKEY_SETTLE  2000
 #define WLAN_DATA_REKEY_NEAR    256
 #define WLAN_DATA_REKEY_JUMP    64
+/* Replays of one TID in a row, none taken, that doubt its counter. */
+#define WLAN_DATA_REPLAY_RUN    32
 /* The ms a pairwise key waits for the queue: the AP gives a renewal up some
  * 4 s after its first message, and until then message 4 must leave under
  * the old key, since the AP cannot read it under the new one. */
@@ -109,6 +111,7 @@ struct wlan_data_key {
     uint64_t rx_mgmt_pn;    /* replay counter of robust management frames */
     uint64_t old_pn;        /* highest count of the key this one replaced */
     uint64_t old_until;     /* tick when a number near old_pn stops being that key's */
+    uint8_t replay_run[WLAN_NUM_TIDS]; /* by TID: replays since a frame was taken */
     unsigned gen;           /* zero while the entry is empty, else unique */
 };
 
@@ -625,6 +628,13 @@ void wlan_data_renewal_sent(struct wlan_data *d, uint64_t cookie, int eapol);
  * new key: a group frame's ACK starts no wait, since the AP ACKs it unread.
  * Worker only. */
 void wlan_data_renewal_status(struct wlan_data *d, const struct wlan_tx_status *status);
+
+/** Treat the key as a renewal's that the AP ACKs and may not pass frames
+ * under: a run of WLAN_DATA_REPLAY_RUN replays with none taken says a frame
+ * set a TID's counter above the AP's, an old count past the settle, which
+ * nothing but a new key would lower. The renewal's question and its bound
+ * settle it. Nothing for a renewal under way. Worker only. */
+void wlan_data_renewal_doubted(struct wlan_data *d);
 
 /** Count the rescue wlan_data_renewal names, as the station leaves on it;
  * the renewal stands until the next connection. Worker only. */
