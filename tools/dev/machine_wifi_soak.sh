@@ -374,8 +374,10 @@ pinger()
     end=$(($(date +%s) + seconds))
     while :; do
         left=$((end - $(date +%s)))
-        [ "$left" -gt 0 ] || break
-        ping -I "$iface" -i 0.2 -w "$left" "$gateway" 2>&1
+        [ "$left" -gt 0 ] && [ ! -e "$dir/dead" ] || break
+        ping -I "$iface" -i 0.2 -w "$left" "$gateway" 2>&1 &
+        echo "$!" > "$dir/pinger"
+        wait "$!"
         sleep 1
     done | stamp > "$dir/ping"
 }
@@ -506,7 +508,10 @@ table()
         echo 'in this run' || echo "before this run; the run's own was no longer")"
     printf 'longest slot wait        %s us\n' "$(statnum latency_diskwait_us)"
     printf 'refused tcp data         %s\n' "$(statnum wlan_refused_tcp)"
+    printf 'refused bare acks        %s\n' "$(statnum wlan_refused_ack)"
     printf 'refused other frames     %s\n' "$(statnum wlan_refused_other)"
+    printf 'rx queue full            %s\n' "$(statnum wlan_rx_held)"
+    printf 'longest rx wait          %s ms\n' "$(statnum wlan_rx_wait_most)"
     printf 'longest timer gap        %s us\n' "$(statnum latency_timer_us)"
     printf '%s\n%s\n' "$stats0" "$stats1" | awk '
         NR == 1 { w = $8; s = $10; m = $11 }
@@ -605,8 +610,7 @@ soak()
     stats1=$(diskline)
     echo "wifi-soak: load stopped at uptime $(cut -d ' ' -f 1 /proc/uptime)"
     if [ -e "$dir/dead" ]; then
-        kill "$pinging" 2> /dev/null
-        pkill -x ping
+        kill "$(cat "$dir/pinger")" 2> /dev/null
     fi
     wait "$pinging"
     # The writers' last rm frees the disk for the table's commands and is
