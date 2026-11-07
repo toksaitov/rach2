@@ -9,6 +9,7 @@
  * host-deps: rach2/sys/network/wireless/agg_rx.c
  * host-deps: rach2/sys/network/wireless/rate.c
  * host-deps: rach2/sys/network/wireless/elems.c
+ * host-deps: rach2/sys/network/wireless/mlme.c
  * host-deps: rach2/sys/network/wireless/crypto/aes.c
  * host-deps: rach2/sys/network/wireless/crypto/ccmp.c
  * host-deps: rach2/sys/network/wireless/crypto/bip.c
@@ -1406,7 +1407,7 @@ static void status_of(unsigned i, unsigned flags)
     struct wlan_tx_status st;
 
     k_memset(&st, 0, sizeof(st));
-    st.cookie = sent[i].info.cookie;
+    st.cookie = sent[i % 16].info.cookie;
     st.flags = (uint8_t)flags;
     st.rates[0].index = -1;
     wlan_data_tx_status(d, &st);
@@ -1435,6 +1436,201 @@ static void acked_poll(void)
 {
     CHECK(wlan_data_tx_null(d, 0) == 0);
     status_of(n_sent - 1, WLAN_TX_ACKED);
+}
+
+/* --- The connection monitor of mlme.c over this data path, wired as sta.c
+ * wires it, against an AP whose beacons and ACKs go on. --- */
+
+static struct wlan_mlme mon;
+static struct wlan_scan mon_scan;
+static unsigned mon_asks;      /* renewal questions the monitor asked */
+static unsigned mon_leaves;    /* deauthentications it reported */
+static unsigned mon_reason;    /* the last one's reason */
+static uint64_t mon_poll;      /* the cookie of the poll awaiting its ACK */
+static unsigned mon_poll_sent; /* that null frame's index in sent */
+
+/** Hold a BSS, as bss.c does. */
+void wlan_bss_hold(struct wlan_bss *b)
+{
+    b->refs++;
+}
+
+/** Drop a hold, as bss.c does. */
+void wlan_bss_put(struct wlan_bss *b)
+{
+    CHECK(b->refs != 0);
+    if (b->refs)
+        b->refs--;
+}
+
+/** Keep the scan's home channel, which the MLME sets. */
+void wlan_scan_set_home(struct wlan_scan *s, const struct wlan_channel *channel, unsigned filters)
+{
+    (void)filters;
+    s->home = channel;
+}
+
+/** Take a management frame; the rows script the AP's answers. */
+static int mon_tx(struct wlan *wlan, const uint8_t *frame, unsigned len, unsigned flags)
+{
+    (void)wlan;
+    (void)frame;
+    (void)len;
+    (void)flags;
+    return 0;
+}
+
+/** Take every state. */
+static int mon_state(struct wlan *wlan, enum wlan_sta_state state, struct wlan_bss *b)
+{
+    (void)wlan;
+    (void)state;
+    (void)b;
+    return 0;
+}
+
+/** Count a leave, and its rescue as sta_log_leave does. */
+static void mon_event(struct wlan *wlan, const struct wlan_event *ev)
+{
+    (void)wlan;
+    if (ev->type != WLAN_EVENT_DEAUTHENTICATE)
+        return;
+    ++mon_leaves;
+    mon_reason = ev->reason;
+    if (ev->locally_generated && ev->reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT)
+        wlan_data_renewal_rescued(d);
+}
+
+/** Send a poll's null frame, as sta_poll does. */
+static int mon_poll_op(struct wlan *wlan, uint64_t *cookie)
+{
+    int rc;
+
+    (void)wlan;
+    rc = wlan_data_tx_null(d, cookie);
+    if (rc == 0) {
+        mon_poll = *cookie;
+        mon_poll_sent = n_sent - 1;
+    }
+    return rc;
+}
+
+/** What the data path last heard, as sta_heard reads it. */
+static uint64_t mon_heard(struct wlan *wlan)
+{
+    (void)wlan;
+    return d->heard;
+}
+
+/** Nothing to hold. */
+static void mon_hold(struct wlan *wlan, int held)
+{
+    (void)wlan;
+    (void)held;
+}
+
+/** Nothing to move. */
+static void mon_moved(struct wlan *wlan, const struct wlan_channel *channel)
+{
+    (void)wlan;
+    (void)channel;
+}
+
+/** The last frame opened under a key, as sta_sealed reads it. */
+static uint64_t mon_sealed(struct wlan *wlan)
+{
+    (void)wlan;
+    return d->sealed;
+}
+
+/** The renewal's wait, as sta_renewing reads it. */
+static uint64_t mon_renewing(struct wlan *wlan)
+{
+    (void)wlan;
+    return wlan_data_renewal(d, 0);
+}
+
+/** The renewal's question with a gateway, as sta_ask asks it; the row
+ * gives the answer, or none. */
+static int mon_ask(struct wlan *wlan)
+{
+    int rc;
+
+    (void)wlan;
+    rc = wlan_data_renewal_ask(d, 1);
+    if (rc > 0)
+        ++mon_asks;
+    return rc;
+}
+
+static const struct wlan_mlme_ops mon_ops = {mon_tx,     mon_state,    mon_event, mon_poll_op,
+                                             mon_heard,  mon_hold,     mon_moved, 0,
+                                             mon_sealed, mon_renewing, mon_ask};
+
+/** Give the monitor a management frame of `stype` from the AP to `da`,
+ * its fixed fields `fixed` bytes of `head`, then the BSS's elements. */
+static int mon_rx(unsigned stype, const uint8_t *da, const uint8_t *head, unsigned fixed)
+{
+    uint8_t f[IEEE80211_HDRLEN + 12 + sizeof(bss.ies)];
+    unsigned pos = IEEE80211_HDRLEN;
+
+    k_memset(f, 0, IEEE80211_HDRLEN);
+    f[0] = (uint8_t)(IEEE80211_FTYPE_MGMT | stype);
+    k_memcpy(f + 4, da, 6);
+    k_memcpy(f + 10, bssid, 6);
+    k_memcpy(f + 16, bssid, 6);
+    k_memcpy(f + pos, head, fixed);
+    pos += fixed;
+    k_memcpy(f + pos, bss.ies, bss.ies_len);
+    pos += bss.ies_len;
+    return wlan_mlme_rx(&mon, f, pos, 0);
+}
+
+/** Bring the monitor to ASSOCIATED with the data path's BSS by Open
+ * System, on a data path that setup made. */
+static void mon_connect(void)
+{
+    static const uint8_t auth[6] = {0, 0, 2, 0, 0, 0};
+    static const uint8_t resp[6] = {0x11, 0, 0, 0, 0x01, 0xc0};
+    struct wlan_mlme_auth a;
+    struct wlan_mlme_assoc r;
+
+    k_memcpy(bss.ssid, "wifi", 4);
+    bss.ssid_len = 4;
+    bss.beacon_interval = 100;
+    k_memset(&mon_scan, 0, sizeof(mon_scan));
+    wlan_mlme_init(&mon, 0, &radio, &radio.band, &mon_scan, &mon_ops);
+    k_memset(&a, 0, sizeof(a));
+    a.bss = &bss;
+    a.algorithm = WLAN_AUTH_OPEN;
+    CHECK(wlan_mlme_authenticate(&mon, &a) == 0);
+    CHECK(mon_rx(IEEE80211_STYPE_AUTH, sta, auth, sizeof(auth)) == 1);
+    k_memset(&r, 0, sizeof(r));
+    r.bss = &bss;
+    CHECK(wlan_mlme_associate(&mon, &r) == 0);
+    CHECK(mon_rx(IEEE80211_STYPE_ASSOC_RESP, sta, resp, sizeof(resp)) == 1);
+    CHECK(mon.state == WLAN_STA_ASSOCIATED);
+    mon_asks = mon_leaves = mon_reason = 0;
+    mon_poll = 0;
+}
+
+/** Run the monitor for `ms` in beacon intervals of 100 ms, the AP's beacon
+ * heard at the end of each and each poll ACKed, until the station leaves. */
+static void mon_beacons(unsigned ms)
+{
+    static const uint8_t fixed[12] = {0, 0, 0, 0, 0, 0, 0, 0, 100, 0, 0x11, 0};
+
+    for (; ms >= 100 && mon.state == WLAN_STA_ASSOCIATED; ms -= 100) {
+        now += 100;
+        run_work();
+        if (mon_poll) {
+            status_of(mon_poll_sent, WLAN_TX_ACKED);
+            wlan_mlme_tx_status(&mon, mon_poll, 1);
+            mon_poll = 0;
+        }
+        if (mon.state == WLAN_STA_ASSOCIATED)
+            CHECK(mon_rx(IEEE80211_STYPE_BEACON, bcast, fixed, sizeof(fixed)) == 0);
+    }
 }
 
 /** Bring a renewal to message 4 in the ring, unreported: sent frame 1. */
@@ -1494,10 +1690,14 @@ static void check_renewal_message4(void)
 }
 
 /** A clean renewal on an idle link: message 4 ACKed, nothing sent under the
- * key. Polls and time owe nothing, so the wait never starts, and once the
- * key has stood for WLAN_MLME_KEY_WAIT the renewal is over. */
+ * key. Polls and time owe nothing, so the wait never starts, however long
+ * the link stays idle, and the renewal stays recorded: the first data ACKed
+ * under the key, a minute later, starts the wait. */
 static void check_renewal_idle(void)
 {
+    enum wlan_rescue cause = WLAN_RESCUE_KEY;
+    uint64_t acked;
+
     renewal_to_message4();
     status_of(1, WLAN_TX_ACKED);
     CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
@@ -1506,11 +1706,105 @@ static void check_renewal_idle(void)
     acked_poll();
     CHECK(wlan_data_renewal(d, 0) == 0 && d->renewing != 0 && d->renew_acked == 0);
     now += 1;
-    CHECK(wlan_data_renewal(d, 0) == 0 && d->renewing == 0);
+    CHECK(wlan_data_renewal(d, 0) == 0 && d->renewing != 0);
     now += 100000;
+    acked_poll();
+    CHECK(wlan_data_renewal(d, 0) == 0 && d->renewing != 0 && d->renew_acked == 0);
     send_data();
     status_of(n_sent - 1, WLAN_TX_ACKED);
-    CHECK(wlan_data_renewal(d, 0) == 0);
+    acked = now;
+    CHECK(wlan_data_renewal(d, &cause) == acked && cause == WLAN_RESCUE_SILENT);
+    now += 5000;
+    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0 && wlan_data_renewal(d, 0) == 0);
+}
+
+/** The same idle renewal under the real monitor, whose beacons and ACKed
+ * polls go on as the forgetful AP's do: idle for 60 s it neither asks nor
+ * leaves; data ACKed then and answered by nothing under the key asks the
+ * gateway at WLAN_MLME_KEY_WAIT and leaves with reason 15 at
+ * WLAN_MLME_ASK_WAIT after, once, as a silent rescue. A reply under the key
+ * at any time, before the data or during the wait, ends the renewal and
+ * the station stays. */
+static void check_renewal_idle_monitor(void)
+{
+    uint64_t acked;
+
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    mon_connect();
+    mon_beacons(60000);
+    CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_asks == 0 && mon_leaves == 0);
+    CHECK(d->renewing != 0 && d->renew_acked == 0 && !wlan_mlme_busy(&mon));
+    send_data();
+    status_of(n_sent - 1, WLAN_TX_ACKED);
+    acked = now;
+    mon_beacons(WLAN_MLME_KEY_WAIT - 200);
+    CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_asks == 0);
+    mon_beacons(WLAN_MLME_ASK_WAIT + 2000);
+    CHECK(mon_asks == 1 && mon_leaves == 1 && mon_reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT);
+    CHECK(now <= acked + WLAN_MLME_KEY_WAIT + WLAN_MLME_ASK_WAIT + 200);
+    CHECK(counters.rescues[WLAN_RESCUE_SILENT] == 1 && counters.rescue_saved == 0);
+    CHECK(counters.rescues[WLAN_RESCUE_KEY] == 0 && counters.rescues[WLAN_RESCUE_MESSAGE4] == 0);
+
+    /* The reply during the wait. */
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    mon_connect();
+    mon_beacons(60000);
+    send_data();
+    status_of(n_sent - 1, WLAN_TX_ACKED);
+    mon_beacons(5000);
+    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0);
+    mon_beacons(2 * WLAN_MLME_KEY_WAIT);
+    CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_asks == 0 && mon_leaves == 0);
+
+    /* The reply before any data. */
+    renewal_to_message4();
+    status_of(1, WLAN_TX_ACKED);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    mon_connect();
+    mon_beacons(60000);
+    CHECK(rx_opened(105, 1, 1) == 0 && d->renewing == 0);
+    send_data();
+    status_of(n_sent - 1, WLAN_TX_ACKED);
+    mon_beacons(2 * WLAN_MLME_KEY_WAIT);
+    CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_asks == 0 && mon_leaves == 0);
+}
+
+/** A held message 4 sends twice, the second after the AP repeats message
+ * 3: the first failed and the key went in, and the second, acknowledged,
+ * clears the failure, so the idle link under the real monitor stays. A
+ * second that fails too still leaves on message 4. */
+static void check_renewal_message4_again(void)
+{
+    enum wlan_rescue cause = WLAN_RESCUE_KEY;
+
+    renewal_to_message4();
+    status_of(1, 0);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    CHECK(wlan_data_renewal(d, &cause) != 0 && cause == WLAN_RESCUE_MESSAGE4);
+    mon_connect();
+    mon_beacons(600);
+    send_eapol();
+    CHECK(wlan_data_renewal(d, &cause) != 0 && cause == WLAN_RESCUE_MESSAGE4);
+    status_of(n_sent - 1, WLAN_TX_ACKED);
+    CHECK(wlan_data_renewal(d, 0) == 0 && d->eapol_failed == 0);
+    mon_beacons(WLAN_MLME_KEY_WAIT + WLAN_MLME_ASK_WAIT + 1000);
+    CHECK(mon.state == WLAN_STA_ASSOCIATED && mon_asks == 0 && mon_leaves == 0);
+    CHECK(counters.rescues[WLAN_RESCUE_MESSAGE4] == 0);
+
+    renewal_to_message4();
+    status_of(1, 0);
+    CHECK(install(WLAN_CIPHER_SUITE_CCMP, 0, 1, gtk1, 16, 0) == 0);
+    mon_connect();
+    mon_beacons(600);
+    send_eapol();
+    status_of(n_sent - 1, 0);
+    mon_beacons(WLAN_MLME_KEY_WAIT + 1000);
+    CHECK(mon_asks == 0 && mon_leaves == 1 && mon_reason == WLAN_REASON_4WAY_HANDSHAKE_TIMEOUT);
+    CHECK(counters.rescues[WLAN_RESCUE_MESSAGE4] == 1);
 }
 
 /** A clean renewal with traffic: the first unicast frame opened under the
@@ -2007,6 +2301,8 @@ int main(void)
     check_renewal_wait();
     check_renewal_message4();
     check_renewal_idle();
+    check_renewal_idle_monitor();
+    check_renewal_message4_again();
     check_renewal_traffic();
     check_renewal_silent();
     check_renewal_question();
