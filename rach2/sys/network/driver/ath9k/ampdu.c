@@ -392,12 +392,11 @@ static uint32_t chain_acks(struct ath9k_txq *q, const struct ath9k_tx_chain *c, 
  * ended, since a recipient past a DELBA answers with a plain ACK. A frame
  * is acknowledged by its bit, or, sent alone, by the chain's success, and
  * an acknowledged frame of the session lets a BlockAckReq go again. A
- * frame of its
- * session that was not has the chain's attempts added to its own, and
- * while they are fewer than ATH9K_BA_MAX_TRIES it stays in the ring for
- * another push, its Retry bit set; then it is given up, and the recipient
- * is owed a BlockAckReq past it. A frame of a session that has
- * ended goes nowhere again. The first frame finished carries the chain's
+ * frame of its session that was not has the chain's attempts added to its
+ * own, and while they are fewer than ATH9K_BA_MAX_TRIES it stays in the ring
+ * for another push, its Retry bit set; then it is given up, and the recipient
+ * is owed a BlockAckReq past it. A frame of a session that has ended goes
+ * nowhere again. The first frame finished carries the chain's
  * tries and its counts of MPDUs to rate control, as ath9k's rc_update does,
  * and the rest report none; when none finishes, a report with no frame
  * carries them, which ath9k leaves out, so that rate control counts every
