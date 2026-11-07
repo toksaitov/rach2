@@ -16,6 +16,8 @@
  * whose exit status says whether the panic came and named the rule.
  */
 
+#include <setjmp.h>
+
 #include "../../rach2/sys/fs/sleeplock.h"
 #include "../../rach2/sys/proc/process.h"
 #include "../../rach2/sys/proc/percpu.h"
@@ -142,14 +144,14 @@ static struct sleep_lock_record rec_two = SLEEP_LOCK_RECORD("two");
 static struct sleep_lock lock, file_lock, other;
 
 /* Where `a_barred` returns to: the take that A abandons in `a_gives`. */
-static void *barred[5];
+static jmp_buf barred;
 
 /** A step as process A, waiting again for the lock it gave: abandon the
  * take, since B, which has the place before it, cannot run until A's
  * step ends. */
 static void a_barred(void)
 {
-    __builtin_longjmp(barred, 1);
+    longjmp(barred, 1);
 }
 
 /** A step as process A: give `lock` back, and ask for it again at once,
@@ -162,7 +164,7 @@ static void a_gives(void)
     check(lock.holder == -1 && lock.serving == 1 && lock.next == 2,
           "A's give leaves the lock free with B's place the one served");
     script(a_barred);
-    if (__builtin_setjmp(barred) == 0) {
+    if (setjmp(barred) == 0) {
         sleep_lock_take(&lock);
         check(0, "A, asking again before B has run, waits behind B");
         sleep_lock_give(&lock);
