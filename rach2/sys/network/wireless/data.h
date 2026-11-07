@@ -12,18 +12,25 @@
 #define WLAN_DATA_IGTK_FIRST    4
 /* Frames waiting in the transmit queue; a full queue refuses the next. Its
  * last WLAN_DATA_TX_EAPOL slots take only EAPOL, so that a handshake's reply
- * finds room behind a bulk transfer, as Linux's voice queue gives it. The
- * WLAN_DATA_TX_OTHER slots before them take no TCP data: TCP keeps a refused
- * segment and sends it again, and any other frame refused is lost, so a bulk
- * upload stops at 14 and leaves a ping, a lookup or an acknowledgement room,
- * as Linux's per-flow queues do. */
+ * finds room behind a bulk transfer, as Linux's voice queue gives it. A frame
+ * whose sender sends it again may be refused early, and any other refused is
+ * lost: so the WLAN_DATA_TX_OTHER slots before those take no bare
+ * acknowledgement, which TCP sends afresh on its next tick, and the
+ * WLAN_DATA_TX_ACK before them take no TCP data, which TCP keeps. A bulk
+ * transfer each way stops at 14 and 18 and leaves a ping or a lookup room, as
+ * Linux's per-flow queues do. */
 #define WLAN_DATA_TX_QUEUE      24
 #define WLAN_DATA_TX_EAPOL      2
-#define WLAN_DATA_TX_OTHER      8
+#define WLAN_DATA_TX_OTHER      4
+#define WLAN_DATA_TX_ACK        4
 /* Received frames and transmit completions waiting for the worker. The
- * completion queue is longer than any radio's transmit queue, so that no
- * completion is lost. */
-#define WLAN_DATA_RX_QUEUE      32
+ * receive queue holds what one service of ath9k's two FIFOs can hand up; a
+ * radio stops reading when it is full, so that a frame it has acknowledged
+ * waits in the radio's buffers. The completion queue is longer than any
+ * radio's transmit queue, so that no completion is lost. */
+#define WLAN_DATA_RX_QUEUE      144
+/* Received frames the worker takes before it sends what is queued. */
+#define WLAN_DATA_RX_BATCH      8
 #define WLAN_DATA_STATUS_QUEUE  256
 #define WLAN_DATA_ETH_MAX       1514
 /* MSDUs being reassembled at once, and how long one may take, as Linux's
@@ -254,6 +261,7 @@ struct wlan_data {
      * and transmit completions. */
     struct wlan_data_rxq *rxq; /* WLAN_DATA_RX_QUEUE slots */
     unsigned rxq_head, rxq_count;
+    uint64_t rxq_since; /* the tick the oldest frame queued, or the last taken */
     struct wlan_tx_status statq[WLAN_DATA_STATUS_QUEUE];
     unsigned statq_head, statq_count;
     struct spinlock rxq_lock;
@@ -391,9 +399,10 @@ int wlan_data_kick(struct wlan_data_work work[2], uint64_t due);
  * the adapter's tx_ethernet calls it with net_lock, so it never sleeps.
  * The drain is not queued while the queue is held. Returns 0, -EINVAL,
  * -ENOTCONN or -ENOBUFS when the queue is full, which for a frame other
- * than EAPOL is when only the WLAN_DATA_TX_EAPOL slots are left, and for TCP
- * data when the WLAN_DATA_TX_OTHER slots are left too. A refusal is counted
- * in tx_refused_tcp or tx_refused_other. */
+ * than EAPOL is when only the WLAN_DATA_TX_EAPOL slots are left, for a bare
+ * TCP acknowledgement when the WLAN_DATA_TX_OTHER slots are left too, and for
+ * TCP data when the WLAN_DATA_TX_ACK slots are left as well. A refusal is
+ * counted in tx_refused_tcp, tx_refused_ack or tx_refused_other. */
 int wlan_data_queue(struct wlan_data *d, const uint8_t *frame, unsigned len);
 
 /** Copy the oldest frame of the transmit queue into `out`, of

@@ -290,8 +290,9 @@ void ath9k_intr(struct ath9k *ah)
  * The tick: the causes, served as the handler serves them, for a card
  * without messages, whose interrupts stay on since no line carries them;
  * on one with messages, a look at the rings for what a missed message
- * left there. Nothing while interrupts are off, which covers every start,
- * reset and retune.
+ * left there, as on any card for frames the station had no room for, which
+ * raise no cause of their own. Nothing while interrupts are off, which
+ * covers every start, reset and retune.
  */
 void ath9k_tick(struct ath9k *ah)
 {
@@ -301,7 +302,8 @@ void ath9k_tick(struct ath9k *ah)
         return;
     if (!ah->mac.msi) {
         (void)serve(ah);
-        return;
+        if (!ah->rx.held[0] && !ah->rx.held[1])
+            return;
     }
     if (serve_rings(ah, AR_ISR_HP_RXOK | AR_ISR_LP_RXOK | AR_ISR_TXOK, 0))
         ah->stats.tick_work++;

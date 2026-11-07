@@ -764,6 +764,7 @@ struct ath9k_rx {
     uint32_t hw_filter;           /* the ATH9K_RX_FILTER_* those make */
     uint8_t running;
     uint8_t discard[2]; /* dropping the rest of a frame that spans buffers */
+    uint8_t held[2];    /* a frame left in the FIFO, for the tick to read */
     uint32_t tsf_high;  /* the TSF's upper half at the last service */
     uint32_t tsf_low;   /* and its lower half, to extend a status's stamp */
 };
@@ -866,7 +867,7 @@ struct ath9k_key {
  * keeps them in a station; a TKIP key at index i has its MIC keys at i + 64. */
 struct ath9k_keys {
     struct ath9k_key entry[AR_KEY_CACHE_SIZE];
-    unsigned freed; /* the entry last cleared, which a new pairwise key skips */
+    unsigned freed; /* the entry a key left last, which a new pairwise key skips */
     unsigned dying; /* the entries in ATH9K_KEY_DYING */
 };
 

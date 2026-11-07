@@ -186,6 +186,12 @@ struct wlan_radio {
 int wlan_radio_rx(struct wlan_radio *radio, const uint8_t *frame, unsigned len,
                   const struct wlan_rx_status *status);
 
+/** Say whether the receive queue is full, for a radio to leave its next frame
+ * in its own buffers and read it on a later tick. A frame a radio has
+ * acknowledged is the AP's to forget, so it must not be dropped for want of a
+ * slot. Counts a full queue in rx_held; IRQ-safe under the kernel lock. */
+int wlan_radio_rx_full(struct wlan_radio *radio);
+
 /** Queue a completion, copying status; IRQ-safe under the kernel lock.
  * A completion must not be lost when the RX queue is full. */
 void wlan_radio_tx_status(struct wlan_radio *radio, const struct wlan_tx_status *status);

@@ -262,7 +262,13 @@ static uint8_t rx_frame[MAX_RX][2048];
 static unsigned rx_len[MAX_RX];
 static struct wlan_rx_status rx_st[MAX_RX];
 static unsigned rx_count;
-static int rx_refuse;
+static int rx_refuse, rx_full;
+
+int wlan_radio_rx_full(struct wlan_radio *radio)
+{
+    (void)radio;
+    return rx_full;
+}
 
 int wlan_radio_rx(struct wlan_radio *radio, const uint8_t *frame, unsigned len,
                   const struct wlan_rx_status *status)
@@ -382,7 +388,7 @@ static void setup(int msi)
     pages_freed = 0;
     fail_alloc_at = -1;
     rx_count = txs_count = 0;
-    rx_refuse = 0;
+    rx_refuse = rx_full = 0;
     hw_reset_rc = 0;
     hw_resets = cold_resets = 0;
     sync_cause = 0;
@@ -571,7 +577,7 @@ static void rx_qos(void)
 static void rx_drops(void)
 {
     uint8_t f[100];
-    unsigned len, n;
+    unsigned len, n, msi;
 
     /* A CRC error and a phy error are dropped and counted; their buffers
      * go back. A phy restart after a good delimiter is not an error. */
@@ -621,6 +627,26 @@ static void rx_drops(void)
     interrupt();
     CHECK(ah.stats.rx_dropped >= 1 && model.rx[1].count == ATH9K_RX_LP_DEPTH);
     rx_refuse = 0;
+
+    /* A full queue leaves the frame in the FIFO, for the tick to read, with
+     * messages or without, when no cause is raised for it. */
+    for (msi = 0; msi < 2; msi++) {
+        unsigned was = ah.mac.msi, dropped = ah.stats.rx_dropped;
+
+        n = rx_count;
+        ah.mac.msi = (uint8_t)msi;
+        rx_full = 1;
+        CHECK(receive(0, f, len, 0x1b, 10, 0) == 0);
+        ath9k_tick(&ah);
+        CHECK(rx_count == n && ah.rx.held[1]);
+        CHECK(model.rx[1].count == ATH9K_RX_LP_DEPTH - 1);
+        rx_full = 0;
+        ath9k_tick(&ah);
+        CHECK(rx_count == n + 1 && !ah.rx.held[1]);
+        CHECK(model.rx[1].count == ATH9K_RX_LP_DEPTH);
+        CHECK(ah.stats.rx_dropped == dropped);
+        ah.mac.msi = (uint8_t)was;
+    }
 
     /* The ring wraps: three FIFOs' worth through the high-priority one. */
     n = rx_count;
@@ -1153,6 +1179,38 @@ static void keys_pairwise_replace(const struct wlan_key *ccmp, int slot, uint32_
     CHECK(key_gone(s4));
 }
 
+/** A reap does not move what the next pairwise key skips: entry `b`, which
+ * the current key left a moment ago, stays closed to the key after it when
+ * the older entry `a`, dying until now, is freed in between by an interrupt,
+ * so that a frame in the receive ring that names `b` cannot pass for one the
+ * new key opened. */
+static void keys_reap_keeps_freed(const struct wlan_key *ccmp)
+{
+    struct wlan_key k = *ccmp;
+    struct ar9003_txs st;
+    int a = -1, b = -1, c = -1;
+
+    CHECK(ath9k_key_set(&ah, ap, &k, &a) == 0);
+    keys_send(a, 50, 1);
+    k.data[0] ^= 0xff;
+    CHECK(ath9k_key_set(&ah, ap, &k, &b) == 0 && b != a);
+    k.data[0] ^= 0xff;
+    ath9k_key_clear(&ah, a, ap, &k);
+    CHECK(key_dying(a, ccmp));
+    k.data[0] ^= 0xff;
+    ath9k_key_clear(&ah, b, ap, &k);
+    CHECK(key_gone(b));
+    k_memset(&st, 0, sizeof(st));
+    st.status3 = AR_FrmXmitOK;
+    CHECK(ath9k_model_tx_complete(&model, 1, &st) != 0);
+    CHECK(ath9k_tx_service(&ah) == 1);
+    CHECK(key_gone(a));
+    k.data[0] ^= 0x0f;
+    CHECK(ath9k_key_set(&ah, ap, &k, &c) == 0 && c != b);
+    ath9k_key_clear(&ah, c, ap, &k);
+    CHECK(key_gone(c));
+}
+
 /** A chip that stops completing keeps no entry: the hang check finds the
  * frame that names a dying entry, and its reset fails the frame and frees
  * the entry. So does a restart after a stop, whose drain left no frame. */
@@ -1264,6 +1322,7 @@ static void test_keys(void)
     keys_clear(&tkip, s2);
     keys_group_replace();
     keys_pairwise_replace(&ccmp, slot, mac1);
+    keys_reap_keeps_freed(&ccmp);
     keys_dying_hang(&ccmp);
     keys_group_dying(&gtk);
     keys_slot_moves(&ccmp, ap);

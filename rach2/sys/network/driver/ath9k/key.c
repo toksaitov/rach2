@@ -238,7 +238,6 @@ static void clear_entry(struct ath9k *ah, int slot)
     if (k->used == ATH9K_KEY_DYING)
         ah->keys.dying--;
     k_memset(k, 0, sizeof(*k));
-    ah->keys.freed = (unsigned)slot;
 }
 
 /**
@@ -320,6 +319,7 @@ void ath9k_key_clear(struct ath9k *ah, int slot, const uint8_t peer[6], const st
                 return;
     }
     flags = kirq_save();
+    ah->keys.freed = (unsigned)slot;
     named = ah->bus.started && ath9k_tx_names_key(ah, slot);
     if (named) {
         ah->keys.entry[slot].used = ATH9K_KEY_DYING;

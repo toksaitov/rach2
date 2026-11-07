@@ -77,7 +77,9 @@ struct wlan_counters {
     uint32_t tx_retries, tx_failed, missed_beacons;
     /* Frames the full transmit queue refused: TCP data, which TCP sends
      * again, and the others, which are lost. */
-    uint32_t tx_refused_tcp, tx_refused_other;
+    uint32_t tx_refused_tcp, tx_refused_ack, tx_refused_other;
+    uint32_t rx_held;      /* looks at a full receive queue, which leave the frame */
+    uint32_t rx_wait_most; /* the worker's longest wait for a queued frame, ticks */
 };
 
 enum wlan_event_type {

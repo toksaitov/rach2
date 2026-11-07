@@ -1,8 +1,8 @@
 /* Check the wireless transmit queue's back-pressure: a radio whose ring is
  * full holds the queue's frames until its completions free slots, in order
  * and with none dropped, the queue keeps its last slots for EAPOL, another
- * refusal and a stop still drop frames, and a pairwise key waits for what was
- * queued before it.
+ * refusal and a stop still drop frames, a pairwise key waits for what was
+ * queued before it, and the receive queue holds a pass of a radio's buffers.
  * host-deps: rach2/sys/network/wireless/data.c
  * host-deps: rach2/sys/network/wireless/tx.c
  * host-deps: rach2/sys/network/wireless/rx.c
@@ -324,8 +324,9 @@ static int send(unsigned mark)
 }
 
 /** Queue frame number `mark` over IP as protocol `proto` with `data` bytes
- * after a 20-byte header, IPv6 if `v6`, padded to Ethernet's least. */
-static int send_ip(unsigned mark, unsigned proto, unsigned data, int v6)
+ * after a 20-byte header whose flags byte is `flags`, IPv6 if `v6`, padded to
+ * Ethernet's least. */
+static int send_flags(unsigned mark, unsigned proto, unsigned data, int v6, unsigned flags)
 {
     uint8_t eth[ETH_HDR_SIZE + 128];
     unsigned ip = v6 ? 40 : 20;
@@ -347,8 +348,15 @@ static int send_ip(unsigned mark, unsigned proto, unsigned data, int v6)
         eth[23] = (uint8_t)proto;
     }
     eth[ETH_HDR_SIZE + ip + 12] = 0x50; /* TCP's data offset: 20 bytes */
+    eth[ETH_HDR_SIZE + ip + 13] = (uint8_t)flags;
     eth[ETH_MARK] = (uint8_t)mark;
     return wlan.tx_ethernet(&wlan, eth, len < 60 ? 60 : len);
+}
+
+/** Queue frame number `mark` over IP with an acknowledgement's flags. */
+static int send_ip(unsigned mark, unsigned proto, unsigned data, int v6)
+{
+    return send_flags(mark, proto, data, v6, 0x10);
 }
 
 /** Queue TCP data, frame number `mark`. */
@@ -502,7 +510,7 @@ static void check_eapol_room(void)
 
 /**
  * Other traffic behind a bulk upload: TCP data stops at its fourteen slots,
- * as many as it had before the eight others were added, and is refused,
+ * as many as it had before the others were added, and is refused,
  * counted as TCP's. ICMP, UDP, ARP and a bare acknowledgement, on IPv4 and
  * IPv6, go in behind it, and a padded acknowledgement is no data. Only when
  * those slots are full is one refused, counted as other, and EAPOL then has
@@ -510,10 +518,11 @@ static void check_eapol_room(void)
  */
 static void check_upload_room(void)
 {
+    unsigned others = WLAN_DATA_TX_OTHER + WLAN_DATA_TX_ACK;
     unsigned i, want, tcp = 14, total = RING + tcp;
 
     setup();
-    CHECK(WLAN_DATA_TX_QUEUE - WLAN_DATA_TX_EAPOL - WLAN_DATA_TX_OTHER == tcp);
+    CHECK(WLAN_DATA_TX_QUEUE - WLAN_DATA_TX_EAPOL - others == tcp);
     for (i = 0; i < tcp; ++i)
         CHECK(send_tcp(i) == 0);
     run_work();
@@ -533,7 +542,7 @@ static void check_upload_room(void)
     CHECK(send_ip(105, 17, 16, 1) == 0); /* UDP on IPv6 */
     CHECK(send_type(106, 0x0806) == 0);  /* ARP */
     CHECK(send(107) == 0);
-    CHECK(waiting() == tcp + WLAN_DATA_TX_OTHER);
+    CHECK(waiting() == tcp + others);
     CHECK(send(108) == -ENOBUFS);
     CHECK(wlan.counters.tx_refused_other == 1);
     CHECK(wlan.counters.tx_refused_tcp == 2);
@@ -548,13 +557,134 @@ static void check_upload_room(void)
         complete(1, 1);
         run_work();
     }
-    want = total + WLAN_DATA_TX_OTHER + WLAN_DATA_TX_EAPOL;
+    want = total + others + WLAN_DATA_TX_EAPOL;
     CHECK(n_taken == want);
     for (i = 0; i < total; ++i)
         CHECK(marks[i] == i);
-    for (i = 0; i < WLAN_DATA_TX_OTHER + WLAN_DATA_TX_EAPOL; ++i)
-        CHECK(marks[total + i] == 100 + i + (i >= WLAN_DATA_TX_OTHER ? 1 : 0));
+    for (i = 0; i < others + WLAN_DATA_TX_EAPOL; ++i)
+        CHECK(marks[total + i] == 100 + i + (i >= others ? 1 : 0));
     CHECK(waiting() == 0);
+    wlan_data_detach(&wlan);
+}
+
+/**
+ * Who stops where behind data and acknowledgements each way. Bare
+ * acknowledgements stop at 18, counted as theirs, and leave the frames that
+ * nobody sends again room: ICMP, UDP, a SYN, a FIN, a reset, a FIN that
+ * carries data, and a one-byte probe, whose sender ignores a refusal. Two
+ * bytes are data, on either IP.
+ */
+static void check_ack_room(void)
+{
+    unsigned i, ack = 14 + WLAN_DATA_TX_ACK;
+
+    setup();
+    for (i = 0; i < RING; ++i)
+        CHECK(send_tcp(i) == 0);
+    run_work();
+    for (i = 0; i < 14; ++i)
+        CHECK(send_tcp(i) == 0);
+    CHECK(send_ip(20, 6, 2, 0) == -ENOBUFS);
+    CHECK(send_ip(21, 6, 2, 1) == -ENOBUFS);
+    CHECK(wlan.counters.tx_refused_tcp == 2);
+    for (i = 14; i < ack; ++i)
+        CHECK(send_ip(30, 6, 0, 0) == 0);
+    CHECK(send_ip(31, 6, 0, 0) == -ENOBUFS);
+    CHECK(send_ip(32, 6, 0, 1) == -ENOBUFS);
+    CHECK(wlan.counters.tx_refused_ack == 2);
+    CHECK(wlan.counters.tx_refused_other == 0);
+    CHECK(send_ip(33, 1, 16, 0) == 0);         /* ICMP */
+    CHECK(send_flags(34, 6, 0, 0, 0x02) == 0); /* a SYN */
+    CHECK(send_flags(35, 6, 0, 0, 0x11) == 0); /* a FIN */
+    CHECK(send_ip(36, 6, 1, 0) == 0);          /* a probe */
+    CHECK(waiting() == WLAN_DATA_TX_QUEUE - WLAN_DATA_TX_EAPOL);
+    CHECK(send_flags(37, 6, 0, 0, 0x14) == -ENOBUFS);  /* a reset */
+    CHECK(send_flags(38, 6, 64, 0, 0x11) == -ENOBUFS); /* a FIN with data */
+    CHECK(wlan.counters.tx_refused_tcp == 2);
+    CHECK(wlan.counters.tx_refused_ack == 2);
+    CHECK(wlan.counters.tx_refused_other == 2);
+    wlan_data_detach(&wlan);
+}
+
+/* A received frame's hook: what the test has it do. */
+static unsigned hook_calls, hook_taken_at_9;
+static int hook_sends, hook_disconnects;
+
+/** The MLME's hook on a management frame: answer it with a frame, as TCP
+ * answers a segment, or end the connection, as a deauthentication does. */
+static int hook(struct wlan *w, const uint8_t *frame, unsigned len, unsigned flags)
+{
+    (void)frame;
+    (void)len;
+    (void)flags;
+    if (++hook_calls == 9)
+        hook_taken_at_9 = n_taken;
+    if (hook_sends)
+        (void)send(hook_calls);
+    if (hook_disconnects)
+        wlan_data_disconnect(wlan_data_of(w));
+    return 1;
+}
+
+/** Queue a deauthentication from the AP as the radio would. */
+static int receive(void)
+{
+    struct wlan_rx_status st;
+    uint8_t f[26];
+
+    k_memset(f, 0, sizeof(f));
+    k_memset(&st, 0, sizeof(st));
+    f[0] = 0xc0;
+    k_memcpy(f + 4, sta, 6);
+    k_memcpy(f + 10, bssid, 6);
+    k_memcpy(f + 16, bssid, 6);
+    return wlan_radio_rx(&radio, f, sizeof(f), &st);
+}
+
+/** Answers wait for no end to a stream of received frames: the worker sends
+ * what is queued every WLAN_DATA_RX_BATCH frames. */
+static void check_rx_sends(void)
+{
+    unsigned i;
+
+    setup();
+    wlan_data_of(&wlan)->rx_mgmt = hook;
+    hook_calls = hook_taken_at_9 = 0;
+    hook_sends = 1;
+    hook_disconnects = 0;
+    for (i = 0; i < 2 * WLAN_DATA_RX_BATCH + 1; ++i)
+        CHECK(receive() == 0);
+    run_work();
+    CHECK(hook_calls == 2 * WLAN_DATA_RX_BATCH + 1);
+    CHECK(hook_taken_at_9 >= 1);
+    hook_sends = 0;
+    wlan_data_detach(&wlan);
+}
+
+/** The receive queue holds a pass of both of ath9k's FIFOs, says when it is
+ * full, as a radio asks before it reads a frame, and times the worker. */
+static void check_rx_full(void)
+{
+    unsigned i;
+
+    setup();
+    wlan_data_of(&wlan)->rx_mgmt = hook;
+    hook_calls = 0;
+    hook_sends = hook_disconnects = 0;
+    CHECK(WLAN_DATA_RX_QUEUE >= 128 + 16);
+    for (i = 0; i < WLAN_DATA_RX_QUEUE; ++i) {
+        CHECK(!wlan_radio_rx_full(&radio));
+        CHECK(receive() == 0);
+    }
+    CHECK(wlan.counters.rx_held == 0);
+    CHECK(wlan_radio_rx_full(&radio));
+    CHECK(wlan.counters.rx_held == 1);
+    CHECK(wlan.counters.rx_dropped == 0);
+    now += 7;
+    run_work();
+    CHECK(hook_calls == WLAN_DATA_RX_QUEUE);
+    CHECK(wlan.counters.rx_wait_most == 7);
+    CHECK(!wlan_radio_rx_full(&radio));
     wlan_data_detach(&wlan);
 }
 
@@ -754,6 +884,25 @@ static void check_rekey_eapol_stopped(void)
     wlan_data_detach(&wlan);
 }
 
+/** A deauthentication among the frames the first try takes ends the install:
+ * the key must not outlive the connection, or the next one's EAPOL goes under
+ * it. */
+static void check_rekey_lost_first(void)
+{
+    setup_keyed();
+    wlan_data_of(&wlan)->rx_mgmt = hook;
+    hook_calls = 0;
+    hook_sends = 0;
+    hook_disconnects = 1;
+    CHECK(receive() == 0);
+    CHECK(pairwise(2) == -ENOTCONN);
+    CHECK(hook_calls == 1);
+    CHECK(!wlan_data_of(&wlan)->pairwise[0].gen);
+    hook_disconnects = 0;
+    run_work();
+    wlan_data_detach(&wlan);
+}
+
 /** A connection lost during the wait ends the install with -ENOTCONN. */
 static void check_rekey_lost(void)
 {
@@ -838,6 +987,9 @@ int main(void)
     check_hold();
     check_eapol_room();
     check_upload_room();
+    check_ack_room();
+    check_rx_sends();
+    check_rx_full();
     check_other_refusal();
     check_stop();
     check_rekey_ring();
@@ -845,6 +997,7 @@ int main(void)
     check_rekey_bound();
     check_rekey_eapol_full_ring();
     check_rekey_eapol_stopped();
+    check_rekey_lost_first();
     check_rekey_lost();
     check_rekey_lost_delba();
     check_rekey_one_wait();

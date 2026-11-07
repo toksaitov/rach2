@@ -518,17 +518,23 @@ void wlan_data_tx_status(struct wlan_data *d, const struct wlan_tx_status *statu
     wlan_rate_status(d, status);
 }
 
+/* How wlan_data_queue treats a frame by what its sender does on a refusal. */
+enum frame_class { FRAME_OTHER, FRAME_TCP_DATA, FRAME_TCP_ACK };
+
 /**
- * Say whether Ethernet frame `frame` of `len` bytes is a TCP segment that
- * carries data, which TCP keeps and sends again at once if it is refused. A
- * bare acknowledgement is not sent again, and a SYN, a FIN or a reset only
- * after a timeout. The lengths come from the IP header, since an Ethernet
- * frame may be padded.
+ * Class Ethernet frame `frame` of `len` bytes. A TCP segment of more than one
+ * byte with neither SYN, FIN nor reset is FRAME_TCP_DATA: TCP keeps it and
+ * sends it again at once. One with no data and those flags clear is
+ * FRAME_TCP_ACK: TCP sends a fresh one on its next tick. Anything else is
+ * FRAME_OTHER: a keepalive or zero-window probe, one byte long, whose sender
+ * ignores a refusal, a SYN, a FIN or a reset, sent again only after a
+ * timeout, and every other protocol. The lengths come from the IP header,
+ * since an Ethernet frame may be padded.
  */
-static int frame_is_tcp_data(const uint8_t *frame, unsigned len)
+static enum frame_class frame_class(const uint8_t *frame, unsigned len)
 {
     unsigned type = (unsigned)frame[12] << 8 | frame[13];
-    unsigned ip, total, tcp;
+    unsigned ip, total, tcp, data;
 
     if (type == 0x0800 && len >= 34 && frame[23] == 6) {
         ip = (frame[14] & 0x0fu) * 4u;
@@ -537,20 +543,24 @@ static int frame_is_tcp_data(const uint8_t *frame, unsigned len)
         ip = 40;
         total = ((unsigned)frame[18] << 8 | frame[19]) + 40u;
     } else {
-        return 0;
+        return FRAME_OTHER;
     }
-    if (len < 14 + ip + 20)
-        return 0;
+    if (len < 14 + ip + 20 || frame[14 + ip + 13] & 0x07)
+        return FRAME_OTHER;
     tcp = (unsigned)(frame[14 + ip + 12] >> 4) * 4u;
-    return total > ip + tcp;
+    if (total < ip + tcp)
+        return FRAME_OTHER;
+    data = total - ip - tcp;
+    return data == 0 ? FRAME_TCP_ACK : data > 1 ? FRAME_TCP_DATA : FRAME_OTHER;
 }
 
 int wlan_data_queue(struct wlan_data *d, const uint8_t *frame, unsigned len)
 {
     struct wlan_data_txq *q;
     uint32_t flags;
+    enum frame_class class;
     unsigned room;
-    int held, tcp;
+    int held;
 
     if (!d || !frame || len < 14 || len > WLAN_DATA_ETH_MAX)
         return -EINVAL;
@@ -559,13 +569,17 @@ int wlan_data_queue(struct wlan_data *d, const uint8_t *frame, unsigned len)
     room = WLAN_DATA_TX_QUEUE;
     if (frame[12] != 0x88 || frame[13] != 0x8e)
         room -= WLAN_DATA_TX_EAPOL;
-    tcp = frame_is_tcp_data(frame, len);
-    if (tcp)
+    class = frame_class(frame, len);
+    if (class != FRAME_OTHER)
         room -= WLAN_DATA_TX_OTHER;
+    if (class == FRAME_TCP_DATA)
+        room -= WLAN_DATA_TX_ACK;
     flags = spin_lock_irqsave(&d->txq_lock);
     if (d->txq_count >= room) {
-        if (tcp)
+        if (class == FRAME_TCP_DATA)
             d->counters->tx_refused_tcp++;
+        else if (class == FRAME_TCP_ACK)
+            d->counters->tx_refused_ack++;
         else
             d->counters->tx_refused_other++;
         spin_unlock_irqrestore(&d->txq_lock, flags);

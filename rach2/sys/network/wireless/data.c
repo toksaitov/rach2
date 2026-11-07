@@ -88,12 +88,15 @@ static void data_drain_tx(struct wlan_work *work)
 /** Take what the radio reported: completions first, so that rate
  * selection learns of them before it picks again, then received frames.
  * A completion frees a slot of the radio's ring, so a held transmit queue
- * is drained again once the completions are taken. */
+ * is drained again once the completions are taken. A stream of received
+ * frames can keep this loop from ending, and the worker runs one job at a
+ * time, so the loop sends what is queued every WLAN_DATA_RX_BATCH frames. */
 static void data_take_rx(struct wlan_data *d)
 {
     struct wlan_tx_status status;
     struct wlan_data_rxq *q;
     uint32_t flags;
+    unsigned taken = 0;
     int completed = 0;
 
     for (;;) {
@@ -113,6 +116,8 @@ static void data_take_rx(struct wlan_data *d)
             spin_unlock_irqrestore(&d->rxq_lock, flags);
             break;
         }
+        if (tick_count() - d->rxq_since > d->counters->rx_wait_most)
+            d->counters->rx_wait_most = (uint32_t)(tick_count() - d->rxq_since);
         q = &d->rxq[d->rxq_head];
         spin_unlock_irqrestore(&d->rxq_lock, flags);
         /* The slot stays the worker's until the head moves past it. */
@@ -120,7 +125,11 @@ static void data_take_rx(struct wlan_data *d)
         flags = spin_lock_irqsave(&d->rxq_lock);
         d->rxq_head = (d->rxq_head + 1) % WLAN_DATA_RX_QUEUE;
         d->rxq_count--;
+        d->rxq_since = tick_count();
         spin_unlock_irqrestore(&d->rxq_lock, flags);
+        /* What these frames made TCP answer waits only for this. */
+        if (++taken % WLAN_DATA_RX_BATCH == 0)
+            data_send_tx(d);
     }
     /* The worker alone sets txq_held, so it reads it without the lock. */
     if (completed && d->txq_held)
@@ -206,6 +215,8 @@ int wlan_radio_rx(struct wlan_radio *radio, const uint8_t *frame, unsigned len,
         spin_unlock_irqrestore(&d->rxq_lock, flags);
         return -ENOBUFS;
     }
+    if (!d->rxq_count)
+        d->rxq_since = tick_count();
     q = &d->rxq[(d->rxq_head + d->rxq_count) % WLAN_DATA_RX_QUEUE];
     q->status = *status;
     q->len = len;
@@ -214,6 +225,22 @@ int wlan_radio_rx(struct wlan_radio *radio, const uint8_t *frame, unsigned len,
     spin_unlock_irqrestore(&d->rxq_lock, flags);
     (void)wlan_data_kick(d->rx_work, 0);
     return 0;
+}
+
+int wlan_radio_rx_full(struct wlan_radio *radio)
+{
+    struct wlan_data *d = wlan_data_of(radio->wlan);
+    uint32_t flags;
+    int full;
+
+    if (!d)
+        return 0;
+    flags = spin_lock_irqsave(&d->rxq_lock);
+    full = d->rxq_count == WLAN_DATA_RX_QUEUE;
+    if (full)
+        d->counters->rx_held++;
+    spin_unlock_irqrestore(&d->rxq_lock, flags);
+    return full;
 }
 
 void wlan_radio_tx_status(struct wlan_radio *radio, const struct wlan_tx_status *status)
@@ -357,19 +384,22 @@ static int rekey_waits(struct wlan_data *d)
  * message 3 are lost here, on a link that still looks up. So -ETIMEDOUT
  * leaves the old key in, and wpa_supplicant deauthenticates and joins
  * again. Otherwise returns as wlan_data_install_key does, or -ENOTCONN when
- * the connection ended.
+ * the connection ended during the call, the deauthentication in the frames
+ * taken here among its causes: the key would outlive the connection it was
+ * meant for, and EAPOL of the next would go under it.
  */
 int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
 {
     struct wlan_data *d = wlan_data_of(wlan);
     const struct wlan_data_key *old;
     unsigned last = 0;
-    int rc;
+    int rc, joined;
 
     if (!d)
         return -ENODEV;
     if (!key || !(key->flags & WLAN_KEY_PAIRWISE))
         return wlan_data_install_key(d, key);
+    joined = d->connected || d->install_wait;
     data_take_rx(d);
     if (d->connected && !d->install_wait)
         rekey_mark(d);
@@ -379,7 +409,7 @@ int wlan_install_key(struct wlan *wlan, const struct wlan_key *key)
         d->install_wait = 1;
         return -EINPROGRESS;
     }
-    if (d->install_wait && !d->connected) {
+    if (joined && !d->connected) {
         d->install_wait = 0;
         return -ENOTCONN;
     }

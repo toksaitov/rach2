@@ -331,14 +331,18 @@ static int deliver(struct ath9k *ah, uint8_t *buf, int hp)
  * give each buffer back, as ath_rx_tasklet with ath_edma_get_buffers does.
  * A buffer whose status does not carry the chip's vendor ID is given back
  * unread. At most a FIFO's depth of buffers are read, so that a chip
- * filling them as fast as they return cannot hold the handler.
+ * filling them as fast as they return cannot hold the handler. A frame the
+ * station has no room for stays in the FIFO, which the chip has acknowledged
+ * it from, and the tick reads on.
  */
 unsigned ath9k_rx_service(struct ath9k *ah, int hp)
 {
     struct ath9k_rx_fifo *fifo = fifo_of(ah, hp);
+    uint8_t *held = &ah->rx.held[hp ? 0 : 1];
     unsigned n = 0, i;
     int tsf_read = 0;
 
+    *held = 0;
     if (!ah->rx.running)
         return 0;
     for (i = 0; i < fifo->depth; i++) {
@@ -348,6 +352,10 @@ unsigned ath9k_rx_service(struct ath9k *ah, int hp)
         k_barrier();
         if (!(rxs->status11 & AR_RxDone))
             break;
+        if (wlan_radio_rx_full(&ah->radio)) {
+            *held = 1;
+            break;
+        }
         if (MS(rxs->ds_info, AR_DescId) == ATH9K_VENDOR_ID) {
             if (rxs->ds_info & (AR_TxRxDesc | AR_CtrlStat))
                 break;

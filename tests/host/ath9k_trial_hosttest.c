@@ -458,6 +458,12 @@ static struct wlan_tx_status statq[STATQ];
 static unsigned statq_head, statq_count, statq_lost;
 static int station_on; /* the data path takes what the radio hands up */
 
+int wlan_radio_rx_full(struct wlan_radio *radio)
+{
+    (void)radio;
+    return 0;
+}
+
 int wlan_radio_rx(struct wlan_radio *radio, const uint8_t *frame, unsigned len,
                   const struct wlan_rx_status *status)
 {

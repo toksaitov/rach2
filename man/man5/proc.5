@@ -1183,8 +1183,16 @@ in microseconds.
 .It Li wlan_refused_tcp
 TCP data segments a full wireless transmit queue refused, which TCP sends
 again.
+.It Li wlan_refused_ack
+Bare TCP acknowledgements a full wireless transmit queue refused, which TCP
+sends afresh on its next tick.
 .It Li wlan_refused_other
 Other frames a full wireless transmit queue refused, which are lost.
+.It Li wlan_rx_held
+Times a radio found the wireless receive queue full and left a frame in its
+own buffers.
+.It Li wlan_rx_wait_most
+Longest time received frames waited for the wireless worker, in milliseconds.
 .It Li loopback_dropped
 Datagrams dropped because the loopback ring was full.
 .It Li loopback_peak
