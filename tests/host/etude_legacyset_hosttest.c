@@ -261,8 +261,9 @@ static char guest_evidence[PATH_MAX];
 static char guest_bin[PATH_MAX]; /* the wrapper of QEMU, first on the path */
 static char real_path[8192];
 
-/* The form of a machine case of the fixture, with its identity, its
- * machine's `critical` member, or nothing, and its local ports. */
+/* The form of a machine case of the fixture, with its identity, its step's
+ * stage, its machine's `critical` member, or nothing, a further witness of
+ * its progress, or nothing, and its local ports. */
 static const char machine_form[] =
     "{\"case_id\": \"%s\", \"behavior\": \"The fixture's scenario keeps a console as its case "
     "says\",\n"
@@ -274,7 +275,7 @@ static const char machine_form[] =
     "  \"privileges\": \"an ordinary user\", \"isolation\": [{\"fixture\": \"scratch\"},\n"
     "  {\"fixture\": \"disk\", \"names\": [\"disk\"]}], \"children\": \"none\",\n"
     "  \"cleanup\": \"nothing outside its scratch directory\"},\n"
-    " \"steps\": [{\"step_id\": \"boot\", \"stage\": \"execute\", \"machine\": \"vm\",\n"
+    " \"steps\": [{\"step_id\": \"boot\", \"stage\": \"%s\", \"machine\": \"vm\",\n"
     "  \"does\": \"boot the machine and keep its console\"}],\n"
     " \"machines\": [{\"machine_id\": \"vm\", \"qemu\": {\"kernel\": \"kernel\",\n"
     "  \"initrd\": null,"
@@ -286,7 +287,7 @@ static const char machine_form[] =
     " \"branches\": [], \"termination\": {\"end\": \"exited\", \"value\": 0},\n"
     " \"progress\": [{\"witness_id\": \"stage\", \"kind\": \"step\", \"means\": \"a step has "
     "ended\",\n"
-    "  \"limit\": 1}],\n"
+    "  \"limit\": 1}%s],\n"
     " \"bounds\": {\"case\": {\"floor_us\": 100000, \"initial_us\": 30000000, \"ceiling_us\": "
     "30000000},\n"
     "  \"gap\": {\"floor_us\": 100000, \"initial_us\": 20000000, \"ceiling_us\": 20000000},\n"
@@ -304,17 +305,27 @@ static const char machine_form[] =
     " \"timing\": [], \"native\": {\"plan\": \"none\", \"class\": \"boot\",\n"
     "  \"reason\": \"the fixture's machine is a stand-in\"}}";
 
-/* The machine cases of the family `machine`, each with its machine's
- * `critical` member and its local ports. */
+/* A quiet witness that the fixture's scenario never announces. */
+#define QUIET_WITNESS                                                                      \
+    ",\n  {\"witness_id\": \"settle\", \"kind\": \"quiet\", \"means\": \"the machine has " \
+    "settled\",\n  \"limit\": null, \"bound\": {\"floor_us\": 100000, \"initial_us\": "    \
+    "10000000, \"ceiling_us\": 10000000}}"
+
+/* The machine cases of the family `machine`, each with its step's stage, its
+ * machine's `critical` member, a further witness of its progress and its
+ * local ports. The step of `clean` runs in the execute stage and has the
+ * case's bound; that of `panic` runs in another stage and that of `allowed`
+ * in a case with a quiet witness, and each has the gap. */
 static const struct {
-    const char *id, *critical;
+    const char *id, *stage, *critical, *witness;
     unsigned ports;
-} machine_cases[] = {{"fixture.machine.clean", "", 2},
-                     {"fixture.machine.panic", "", 0},
-                     {"fixture.machine.allowed", ", \"critical\": \"init: exited\"", 1},
-                     {"fixture.machine.lost", "", 0},
-                     {"fixture.machine.noconsole", "", 0},
-                     {"fixture.machine.many", "", 0}};
+} machine_cases[] = {
+    {"fixture.machine.clean", "execute", "", "", 2},
+    {"fixture.machine.panic", "boot", "", "", 0},
+    {"fixture.machine.allowed", "execute", ", \"critical\": \"init: exited\"", QUIET_WITNESS, 1},
+    {"fixture.machine.lost", "execute", "", "", 0},
+    {"fixture.machine.noconsole", "execute", "", "", 0},
+    {"fixture.machine.many", "execute", "", "", 0}};
 
 enum { MACHINE_COUNT = sizeof(machine_cases) / sizeof(machine_cases[0]) };
 
@@ -942,7 +953,8 @@ static int machine_text(char *buf, size_t size)
                  " \"summary\": \"Machine cases of the set driver's fixture\",\n \"cases\": [");
     for (i = 0; k >= 0 && (size_t)k < size && i < n; i++) {
         k += snprintf(buf + k, size - (size_t)k, machine_form, machine_cases[i].id,
-                      machine_cases[i].critical, machine_cases[i].ports);
+                      machine_cases[i].stage, machine_cases[i].critical, machine_cases[i].witness,
+                      machine_cases[i].ports);
         if (k >= 0 && (size_t)k < size)
             k += snprintf(buf + k, size - (size_t)k, i + 1 < n ? ",\n" : "]}\n");
     }
@@ -2598,9 +2610,14 @@ static void test_machine(void)
                "\"tools\":{\"legacy-fixture\":\"%s/qemu/legacy-fixture" LEGACY_EXE "\"}", tree);
     CHECK(invocation_has(&r, "fixture.machine.clean.r0", text) &&
               invocation_has(&r, "fixture.machine.clean.r0", "\"accel\":\"tcg\"") &&
-              invocation_has(&r, "fixture.machine.clean.r0", "\"steps\":{\"boot\":20000000}") &&
               invocation_has(&r, "fixture.machine.clean.r0", "\"cleanup_us\":7000000"),
-          "invocation: the tools, the accelerator and the bounds");
+          "invocation: the tools, the accelerator and the cleanup's bound");
+    CHECK(invocation_has(&r, "fixture.machine.clean.r0", "\"steps\":{\"boot\":30000000}"),
+          "invocation: an execute step bounded by the case");
+    CHECK(invocation_has(&r, "fixture.machine.panic.r0", "\"steps\":{\"boot\":20000000}"),
+          "invocation: a step of another stage bounded by the gap");
+    CHECK(invocation_has(&r, "fixture.machine.allowed.r0", "\"steps\":{\"boot\":20000000}"),
+          "invocation: an execute step of a case with a quiet witness bounded by the gap");
     CHECK(invocation_has(&r, "fixture.machine.clean.r0",
                          "\"ovmf_i686\":null,\"ovmf_x86_64\":\"/firmware/OVMF_CODE_4M.fd\""),
           "invocation: the firmware RACH2_OVMF_CODE names");
