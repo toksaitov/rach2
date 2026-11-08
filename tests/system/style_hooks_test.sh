@@ -138,7 +138,7 @@ git commit -q -m 'Add a note beside a wide comment' 2>"$WORK/other.err" || { cat
 
 # One refusal lists the findings of quickcheck.sh, each with its line: the
 # conventions, ShellCheck, a function with no block, a file with no opening
-# comment, the register rule and the message form.
+# comment, the register rule, the message form and a merge's conflict markers.
 mkdir tools/verify
 cp "$REPO/tools/verify/scripts.sh" tools/verify/scripts.sh
 git add tools/verify
@@ -150,18 +150,20 @@ printf 'int three(void);\n' >tools/r.h
 printf '#!/bin/sh\n# s.sh: a fixture.\necho $1\n' >tools/s.sh
 printf '/* u.c: a fixture. */\n/* It is hon''est. */\n/* This is not a lock, it is a queue. */\n' >tools/u.c
 printf "#!/bin/sh\n# v.sh: a fixture.\necho 'Something failed' >&2\n" >tools/v.sh
-git add tools/q.c tools/q.h tools/r.h tools/s.sh tools/u.c tools/v.sh
+printf 'notes\n<<<<<<< ours\none\n=======\ntwo\n>>>>>>> theirs\n' >tools/x.md
+git add tools/q.c tools/q.h tools/r.h tools/s.sh tools/u.c tools/v.sh tools/x.md
 head=$(git rev-parse HEAD)
 ! git commit -q -m 'Add the slips' 2>"$WORK/quick.err" || fail "the slips were committed"
 [ "$(git rev-parse HEAD)" = "$head" ] || fail "the refused commit moved HEAD"
 for want in 'tools/q.c:6: a // comment' 'tools/q.c:9: a function with no /\*\* block' \
     'tools/q.h: no header guard' 'tools/r.h:1: a source file begins with a comment' \
     'tools/s.sh:3:.*SC2086' 'tools/u.c:2: a word the register rule forbids' \
-    'tools/u.c:3: a "not X, it is Y" reversal' 'tools/v.sh:3: a message outside'; do
+    'tools/u.c:3: a "not X, it is Y" reversal' 'tools/v.sh:3: a message outside' \
+    'tools/x.md:2: a conflict marker' 'tools/x.md:4: a conflict marker' 'tools/x.md:6: a conflict marker'; do
     grep -q "^$want" "$WORK/quick.err" || { cat "$WORK/quick.err" >&2; fail "no finding $want"; }
 done
 git reset -q
-rm tools/q.c tools/q.h tools/r.h tools/s.sh tools/u.c tools/v.sh
+rm tools/q.c tools/q.h tools/r.h tools/s.sh tools/u.c tools/v.sh tools/x.md
 
 # A commit message is one line in the imperative, with no trailing period.
 printf 'text\n' >tools/m.txt

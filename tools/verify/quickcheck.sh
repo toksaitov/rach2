@@ -10,12 +10,14 @@
 # one, 2 when it cannot run. A tool that is missing is left out with a
 # warning: the check stays in `tests/run style`.
 #
-# Over the files the change touches, the checks are those of the style cases
-# `conventions`, `shellcheck` and `text`, kernel-format's `fmtcheck.sh`, and
-# `make -C rach2 check-arch` narrowed to the shared kernel files. A whole
-# check of the tree runs when its inputs changed: `check_sources.sh`,
-# `probecheck.sh` and `nativecheck.sh`, guestcheck, `linkcheck.sh`, mancheck
-# and rach2/syscalls.md, the dev-log index, and with a built etude the suite
+# Over the files the change touches, a line that begins `<<<<<<< ` or
+# `>>>>>>> `, or is `=======` alone, is refused as a merge's conflict marker,
+# and the checks are those of the style cases `conventions`, `shellcheck` and
+# `text`, kernel-format's `fmtcheck.sh`, and `make -C rach2 check-arch`
+# narrowed to the shared kernel files. A whole check of the tree runs when
+# its inputs changed: `check_sources.sh`, `probecheck.sh` and
+# `nativecheck.sh`, guestcheck, `linkcheck.sh`, mancheck and
+# rach2/syscalls.md, the dev-log index, and with a built etude the suite
 # inventory and `suitecheck.sh`.
 #
 # The rough reading judges only the lines the change adds, since older code
@@ -142,6 +144,14 @@ text() {
     in_tree fmtcheck.sh || return 0
     xargs sh "$TREE/tools/verify/fmtcheck.sh" <"$WORK/kfiles" >"$WORK/fmt.out" 2>&1 ||
         grep -v ' file(s) with a conversion' "$WORK/fmt.out" >>"$OUT"
+}
+
+# markers: find the conflict markers a merge leaves in the changed files.
+markers() {
+    while IFS= read -r f; do
+        [ -f "$TREE/$f" ] || continue
+        grep -nIE '^(<<<<<<< |=======$|>>>>>>> )' "$TREE/$f" | cut -d: -f1 | sed "s|^|$f:|"
+    done <"$FILES" | found 'a conflict marker'
 }
 
 # arch_layer: `make -C rach2 check-arch` over the changed shared kernel files.
@@ -425,6 +435,7 @@ fi
 conventions
 scripts
 text
+markers
 arch_layer
 manual
 registry
