@@ -589,8 +589,8 @@ static int sta_ask(struct wlan *wlan)
  * signal of the last frame received, and the transmit retries, failures
  * and beacon losses since the association, as `wlan: wlanN: beacon loss:
  * BSSID: beacon A ms ago, heard H ms ago, signal S dBm, retries R, failed
- * F, losses L`. Temporary, to judge the pattern of the drops; #2407
- * removes it.
+ * F, losses L`. It shows the pattern of a drop: whether the AP went
+ * silent, the signal fell or the frames failed.
  */
 static void sta_beacon_loss(struct wlan *wlan, unsigned age)
 {
