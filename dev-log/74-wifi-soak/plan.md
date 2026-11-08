@@ -65,6 +65,45 @@ Added after the trials on the Lenovo; each is one commit on the milestone branch
 * The final kernel on a trial boot, channel 2442, 70 Mbit/s of UDP beside a download at rekey 20 and then the download alone: 33 keys, 0 silences, 0 leaves, at most 12 replays a key, worst ping gap 2.02 s, which fell 8 s after its key. A hold of message 1 for 800 ms, 7 renewals: all saved, no ping lost. A hold of 6 s, 3 renewals: all 3 rescued by the key rule, gaps of 7.06 to 12.55 s, of which rejoining took 6.4 s in the longest. Installed, 5 keys: 0 silences, 0 drops.
 * Linux 6.18.58 on the same machine and access point, with the same disk load, went silent at renewals in every loaded stage. At rekey 120: 120.8 s from a renewal to the next under download, 53.2 s ended by a drop with reason 1 and 120.5 s under both ways, 57.9 s and a drop under upload with scans. At rekey 20 under download, 7 silences of 20 to 21 s in 15 keys, each until the next key. Under the UDP load, one gap of 262 s. Its tx failed count is in Rach2's range. Alpine's kernel has no mac80211 debugfs, so its replay counters could not be read and the cause there is unproved.
 
+## Release
+
+Milestone 74 was released as milestone 11 on GitHub on 2026-11-08 at 4d096f0a1, with the full WSL run only (`-o`). Each failure below was fixed in its own commit, reviewed by Codex before any run of it, and only the failed part ran again.
+
+* The full run failed `machine.punch` on both architectures: the watchdog bounded the delete's two phases as one step. A round of `punch` now counts as the case's progress, a scenario's execution step is bounded by the case, and a case with a quiet witness keeps the gap as each step's bound. The rerun of `machine.punch` alone passed.
+* The preparation's host suite failed `etude_legacyset_hosttest`: its row expected the gap as the bound of every step. The row now expects the case's bound for an execute step, and the gap for a step of another stage and for a case with a quiet witness. The manager's watch read only the preparation's summary and missed the failure for a while, until it was set to read the host's own log for `result: failed` and `FAIL:`.
+* Two smaller faults found on the way were fixed beside these: the commit hook now refuses a merge's conflict markers, and the release reads an incomplete suite from a broken Windows summary as failed.
+* The Lenovo's native run on f072401ab failed at its runner: the Mac's datagram peer ended on its first `sendto` with "No route to host". The peer now keeps sending each second through such a send and names the error once. Codex found that `dgramprobe` could then pass with every outside send lost, so its native run now must receive the outsider's datagram before the connect.
+* On 4d096f0a1 `dgramprobe` was incomplete, 1 of 254 cases: the outsider's datagram never came. The cause is macOS Local Network privacy, not the code and not ARP. A program built here and started from the manager's tmux is charged to the app that runs the manager, which has no Local Network permission, so its sends to a LAN address fail with `EHOSTUNREACH`; Apple's `ssh` and `nc` are exempt. The same send started from the chat's shell reached the Lenovo. The rerun of `dgramprobe` alone, started from a tmux server of the chat's, passed, and the release passed at 12:44 UTC+6.
+
+## The final soak
+
+On the installed 4d096f0a1, from the installed slot, no tracer, 3620 s from 06:48 UTC, 6 writers of 1000 MiB from /dev/zero and sync, wpa_ptk_rekey 120, the access point TDA-NET on 2427 MHz and then 2457 MHz. It exited 0. #2473 is closed.
+
+| Reading | Value |
+|---|---|
+| Drops, by every reason | 0 |
+| Rejoins | 0 |
+| Renewals | 30 pairwise, 0 group, mean 0.07 s, most 0.20 s |
+| Renewal rescues | 0, with 30 saved |
+| `wpa_cli` gave up | 0 |
+| Ping | 17860 sent, 17852 answered, 0.04% lost |
+| Seconds without a reply | 2 |
+| Longest ping gap | 1.96 s, the soak's own ping restart |
+| Longest gap of the link | 1.21 s, at the AP's channel switch |
+| Longest wait in sequence | 0.59 s |
+| Worst reply | 268.81 ms |
+| tx retries | 609 of 18277, 3.3% |
+| tx failed | 10 |
+| rx decrypt errors, replays | 0, 0 |
+| rx duplicates | 92 |
+| Chip resets | 0 |
+| Disk written | 245.5 GiB in 1225544 writes |
+| Longest disk request | 928866 us |
+
+* The 1.96 s gap is the pinger, not the link: BusyBox ping ended its 2147 s run at 2718.35, the script slept 1 s, and the next run answered from 2720.10, with no request unanswered.
+* The access point moved the channel from 2427 to 2457 MHz at 1174.27, `CTRL-EVENT-CHANNEL-SWITCH`; the station followed with no disconnect, and 5 requests went unanswered.
+* The card's references for the longest stall were 0.64 s on the trial and 0.37 s on Linux.
+
 ## Open
 
 * The download gave 3.68 MB/s and 4.02 MB/s on the final kernel, against 5.13 MB/s at 00:26 on the kernel before. The change between them is renewal state only, and neither run was on a known quiet link.
@@ -73,3 +112,4 @@ Added after the trials on the Lenovo; each is one commit on the milestone branch
 * The worst renewal of the last trial had message 1 wait 312 ms for the worker, whose wake was late with the big lock free. wpa_supplicant answered within 9 ms.
 * Reason 4 at 12552.11 stays a counted drop: the access point moved channel with no announcement seen, and no new search is made before leaving. It is not closed as Linux's behaviour: that comes from its source, not measured here.
 * Message 3 late rests on three tries, 4.7 s to 21.7 s after the freeze, and its trigger is unknown.
+* A release started from the manager's tmux on the Mac fails `dgramprobe` while the app that runs the manager lacks Local Network permission. Until the owner grants it, the Lenovo's part runs from a tmux server started from the chat's shell.
