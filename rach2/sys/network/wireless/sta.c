@@ -582,37 +582,9 @@ static int sta_ask(struct wlan *wlan)
     return rc;
 }
 
-/**
- * Log a beacon loss, the AP's last beacon age milliseconds ago, with what
- * may show why the AP went silent: when the data path last heard a unicast
- * frame or an ACK from it, or the association when it heard none, the
- * signal of the last frame received, and the transmit retries, failures
- * and beacon losses since the association, as `wlan: wlanN: beacon loss:
- * BSSID: beacon A ms ago, heard H ms ago, signal S dBm, retries R, failed
- * F, losses L`. It shows the pattern of a drop: whether the AP went
- * silent, the signal fell or the frames failed.
- */
-static void sta_beacon_loss(struct wlan *wlan, unsigned age)
-{
-    struct wlan_sta *s = sta_of(wlan);
-    const struct wlan_counters *c = &wlan->counters;
-    const uint8_t *b = s->mlme.bss->bssid;
-    uint64_t heard = sta_heard(wlan);
-
-    if (heard < s->assoc_at) {
-        heard = s->assoc_at;
-    }
-    klog(KLOG_INFO, "wlan",
-         "%s: beacon loss: %02x:%02x:%02x:%02x:%02x:%02x: beacon %u ms ago, heard %u ms ago, "
-         "signal %d dBm, retries %u, failed %u, losses %u",
-         wlan->netdev.name, b[0], b[1], b[2], b[3], b[4], b[5], age,
-         (unsigned)(tick_count() - heard), (int)(c->signal / 100), (unsigned)c->tx_retries,
-         (unsigned)c->tx_failed, (unsigned)c->missed_beacons);
-}
-
-static const struct wlan_mlme_ops mlme_ops = {
-    wlan_data_mlme_tx, sta_state,       sta_event,  sta_poll,     sta_heard, sta_hold,
-    sta_moved,         sta_beacon_loss, sta_sealed, sta_renewing, sta_ask};
+static const struct wlan_mlme_ops mlme_ops = {wlan_data_mlme_tx, sta_state, sta_event, sta_poll,
+                                              sta_heard,         sta_hold,  sta_moved, sta_sealed,
+                                              sta_renewing,      sta_ask};
 
 /* A softMAC station joins through authentication and association, which
  * nl80211 drives for CONNECT, so it has no connect or disconnect of its

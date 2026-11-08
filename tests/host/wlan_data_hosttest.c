@@ -1776,9 +1776,9 @@ static int mon_ask(struct wlan *wlan)
     return rc;
 }
 
-static const struct wlan_mlme_ops mon_ops = {mon_tx,     mon_state,    mon_event, mon_poll_op,
-                                             mon_heard,  mon_hold,     mon_moved, 0,
-                                             mon_sealed, mon_renewing, mon_ask};
+static const struct wlan_mlme_ops mon_ops = {mon_tx,       mon_state, mon_event, mon_poll_op,
+                                             mon_heard,    mon_hold,  mon_moved, mon_sealed,
+                                             mon_renewing, mon_ask};
 
 /** Give the monitor a management frame of `stype` from the AP to `da`,
  * its fixed fields `fixed` bytes of `head`, then the BSS's elements. */

@@ -301,9 +301,9 @@ static uint64_t iface_renewing(struct wlan *wlan)
 }
 
 /* An interface that reports ACKs, as the softMAC station over ath9k does. */
-static const struct wlan_mlme_ops poll_ops = {iface_tx,     iface_state,   iface_event, iface_poll,
-                                              iface_heard,  iface_hold,    iface_moved, 0,
-                                              iface_sealed, iface_renewing};
+static const struct wlan_mlme_ops poll_ops = {iface_tx,    iface_state,  iface_event,
+                                              iface_poll,  iface_heard,  iface_hold,
+                                              iface_moved, iface_sealed, iface_renewing};
 
 /** Ask the renewal's question, as the softMAC station asks the gateway:
  * ask_result says what came of it, and -1 ends the renewal as the station
@@ -319,9 +319,9 @@ static int iface_ask(struct wlan *wlan)
 }
 
 /* That interface with the renewal's question. */
-static const struct wlan_mlme_ops ask_ops = {iface_tx,     iface_state,    iface_event, iface_poll,
-                                             iface_heard,  iface_hold,     iface_moved, 0,
-                                             iface_sealed, iface_renewing, iface_ask};
+static const struct wlan_mlme_ops ask_ops = {iface_tx,       iface_state, iface_event, iface_poll,
+                                             iface_heard,    iface_hold,  iface_moved, iface_sealed,
+                                             iface_renewing, iface_ask};
 
 /** Compare n bytes. */
 static int equal(const uint8_t *a, const uint8_t *b, unsigned n)

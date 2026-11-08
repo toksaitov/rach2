@@ -54,11 +54,9 @@
 #include "../../rach2/sys/rfkill.h"
 #include "../../rach2/sys/fs/fd.h"
 #include "../../rach2/sys/lib/kirq.h"
-#include <stdarg.h>
 
 extern int printf(const char *format, ...);
 extern int strcmp(const char *a, const char *b);
-extern int vsnprintf(char *str, __SIZE_TYPE__ size, const char *format, va_list ap);
 
 static unsigned failures;
 #define CHECK(x)                                                                 \
@@ -139,18 +137,12 @@ int kcmdline_value(const char *key, char *out, unsigned int cap)
     return 0;
 }
 
-static char logged[256]; /* the last log line, without its subsystem */
-
-/** Keep the last log line, which a row may check. */
+/** Drop a log line; no row checks one. */
 void klog(int level, const char *subsystem, const char *format, ...)
 {
-    va_list ap;
-
     (void)level;
     (void)subsystem;
-    va_start(ap, format);
-    vsnprintf(logged, sizeof(logged), format, ap);
-    va_end(ap);
+    (void)format;
 }
 
 /* Whether the model worker is running a record. */
@@ -932,8 +924,7 @@ static void check_null(const uint8_t *f, unsigned len)
  * with a null frame, whose ACK ends the poll, as mac80211 does on a radio
  * that reports ACKs; beacons that stop for seventeen intervals, 1740 ms,
  * bring another, and so does the AP that answers it but sends no beacon.
- * The station dump's counters count the frames and the beacon losses, and
- * each loss logs the last beacon's age, which the ACK does not reset. */
+ * The station dump's counters count the frames and the beacon losses. */
 static void row_idle(void)
 {
     uint8_t f[IEEE80211_MAX_FRAME_LEN];
@@ -955,8 +946,6 @@ static void row_idle(void)
     CHECK(drain() == 0);
     now += 1;
     run_worker();
-    CHECK(!strcmp(logged, "wlan0: beacon loss: 02:aa:bb:cc:dd:01: beacon 1740 ms ago, heard "
-                          "21740 ms ago, signal -40 dBm, retries 0, failed 0, losses 1"));
     len = take(f);
     check_null(f, len);
     run_worker();
@@ -965,8 +954,6 @@ static void row_idle(void)
 
     now += 1740;
     run_worker();
-    CHECK(!strcmp(logged, "wlan0: beacon loss: 02:aa:bb:cc:dd:01: beacon 3480 ms ago, heard "
-                          "1740 ms ago, signal -40 dBm, retries 0, failed 0, losses 2"));
     len = take(f);
     check_null(f, len);
     run_worker();

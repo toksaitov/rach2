@@ -69,11 +69,6 @@ struct wlan_mlme_ops {
      * interface moves its own record of the channel and reports the
      * switch. */
     void (*moved)(struct wlan *wlan, const struct wlan_channel *channel);
-    /** Note a beacon loss as the questions start, the AP's last beacon
-     * age milliseconds ago; NULL to note nothing. Temporary: the softMAC
-     * station logs the loss to show why the AP goes silent, and #2407
-     * removes it. */
-    void (*beacon_loss)(struct wlan *wlan, unsigned age);
     /** The tick of the last frame from the AP that proves it: one opened
      * under a key, or, with no key in place, what heard reports; 0 for
      * none. NULL for an interface that cannot tell, which then never moves
@@ -157,7 +152,6 @@ struct wlan_mlme {
     uint8_t rates[IEEE80211_MAX_RATES]; /* the AP's, 500 kbit/s units */
     unsigned n_rates;
     uint64_t last_beacon;    /* tick of the AP's last beacon or answer to a probe */
-    uint64_t beacon_at;      /* its last beacon's tick, or the association's; for beacon_loss */
     uint64_t polled;         /* tick of the association or the last answered poll */
     unsigned probes;         /* probes or polls sent since the AP was last heard */
     uint64_t poll_cookie;    /* of the null frame whose status is awaited, or 0 */

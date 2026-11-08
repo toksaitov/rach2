@@ -465,7 +465,6 @@ table()
             printf "rx frames dropped        %d\n", total["drop"] + last["drop"]
         }' "$dir/samples"
     awk '!seen[$0]++' "$dir/kernel.raw" > "$dir/kernel"
-    printf 'beacon-loss lines        %d\n' "$(grep -c ': beacon loss: ' "$dir/kernel")"
     printf 'chip resets              %d' "$(grep -c 'ath9k: reset: ' "$dir/kernel")"
     sed -n 's/.*ath9k: reset: \([^:]*\):.*/\1/p' "$dir/kernel" | sort | uniq -c |
         awk '{ printf ", %s %d", $2, $1 } END { print "" }'
