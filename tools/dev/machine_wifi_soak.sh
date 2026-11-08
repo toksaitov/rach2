@@ -88,8 +88,9 @@
 #   * the worst reply is the longest time ping reports for one, which counts
 #     a frame held and a ping that ran late alike;
 #   * the seconds without a reply sum every wait of over 1 s between replies,
-#     but for such a pause, and from the last reply to the end of the ping's
-#     log, so they count a link that never came back, as the gap does not;
+#     but for such a pause, and from the last reply to the end of the load,
+#     when ping's last reply came before it, so they count a link that never
+#     came back, as the gap does not;
 #   * a renewal's time runs from the request to the completion;
 #   * wpa_cli gives up on wpa_supplicant when it does not answer a PING;
 #   * the rm and sync seconds time each rm of a writer's file and each sync of
@@ -508,7 +509,8 @@ table()
             prev = $1; seq = s; asked = s + 1; heard++; cut = 0
         }
         END {
-            printf "seconds without a reply  %d\n", away + end - (prev ? prev : t0)
+            d = end - (prev ? prev : t0)
+            printf "seconds without a reply  %d\n", away + (d > 0 ? d : 0)
             if (!prev) prev = t0
             if (end - prev > gap) { gap = end - prev; from = prev }
             sent += asked; got += heard
