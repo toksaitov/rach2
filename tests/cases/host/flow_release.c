@@ -114,22 +114,33 @@ static int sh_mock(int argc, char **argv)
 /**
  * Answer `gh api -X`, the milestone's closing, and `gh api --paginate` of a
  * milestone's open issues, which RELEASE_TEST_OPEN gives as `N:A B` for
- * milestone N; any other milestone has none.
+ * milestone N; any other milestone has none. An item `pA` is a pull request,
+ * left out only when the query's --jq selects on pull_request as gh would,
+ * and `garbage` stands for an error body that gh printed to stdout.
  */
 static int gh_api(int argc, char **argv)
 {
     const char *open = ev("RELEASE_TEST_OPEN"), *m;
+    int prs = 1, i;
     size_t n;
     if (argc > 3 && !strcmp(argv[2], "-X"))
         return strcmp(ev("RELEASE_TEST_CLOSE"), "fail") == 0;
     if (argc < 4 || strcmp(argv[2], "--paginate") || !(m = strstr(argv[3], "/issues?milestone=")))
         return 1;
+    for (i = 4; i + 1 < argc; i++)
+        if (!strcmp(argv[i], "--jq") && strstr(argv[i + 1], "select(.pull_request == null)"))
+            prs = 0;
     m += strlen("/issues?milestone=");
     n = strcspn(m, "&");
     if (!strncmp(open, m, n) && open[n] == ':')
         for (open += n + 1; *open; open += strspn(open, " ")) {
             n = strcspn(open, " ");
-            printf("%.*s\n", (int)n, open);
+            if (!strncmp(open, "garbage", n))
+                printf("{\"message\":\"unavailable\"}\n");
+            else if (*open != 'p')
+                printf("%.*s\n", (int)n, open);
+            else if (prs)
+                printf("%.*s\n", (int)n - 1, open + 1);
             open += n;
         }
     return 0;
@@ -737,6 +748,19 @@ static int open_rows(struct release *r)
                    called(r, "^board archive 8$") &&
                    ended_with(r, "release: passed " H "; milestone 8 stays open for #5"),
                "a joined milestone with an open issue stays open while M closes") &&
+         ok;
+    run(r, &(struct release_row){.record = r->finished, .git = "yes", .open = "7:p13"});
+    ok = check(r,
+               !f->status && called(r, "^gh api -X PATCH repos/toksaitov/rach2/milestones/7 ") &&
+                   ended_with(r, "release: passed " H),
+               "an open pull request does not keep the milestone open") &&
+         ok;
+    snprintf(cards, sizeof(cards), "%sclosing %s\n", r->finished, T);
+    run(r, &(struct release_row){.record = cards, .git = "yes", .open = "7:garbage"});
+    ok = check(r,
+               f->status == 75 && fx_same(flow_path(f, "before"), record(r)) &&
+                   !called(r, "^gh api -X PATCH repos/toksaitov/rach2/milestones/7 "),
+               "an answer that is not a list of issues waits with the record unchanged") &&
          ok;
     return ok;
 }

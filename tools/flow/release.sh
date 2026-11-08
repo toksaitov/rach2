@@ -1889,13 +1889,23 @@ preflight()
         fail preflight "a trial is armed on the machine"
 }
 
+# open_query N: write the numbers of milestone N's open issues, not pull
+# requests, to $state/open, afresh at each try, since net keeps no output of
+# a failed one.
+open_query()
+{
+    gh api --paginate "repos/$REPO/issues?milestone=$1&state=open&per_page=100" \
+        --jq '.[] | select(.pull_request == null) | .number' > "$state/open"
+}
+
 # open_issues N: print the open issues of milestone N, as `#A #B`, but for
 # the release's own cards, which the close passes after it; fail when they
-# cannot be read.
+# cannot be read, or when what came back is not a list of numbers.
 open_issues()
 {
-    o=$(net gh api --paginate "repos/$REPO/issues?milestone=$1&state=open&per_page=100" \
-        --jq '.[] | select(.pull_request == null) | .number') || return 1
+    net open_query "$1" || return 1
+    o=$(cat "$state/open") && rm -f "$state/open" || return 1
+    ! printf '%s\n' "$o" | grep -qv '^[0-9]*$' || return 1
     for i in $o; do
         grep -q "^card [a-z]* $i\$" "$state/record" || echo "$i"
     done | sort -n | sed 's/^/#/' | tr '\n' ' ' | sed 's/ $//'
