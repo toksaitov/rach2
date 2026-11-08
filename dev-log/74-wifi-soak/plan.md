@@ -67,10 +67,10 @@ Added after the trials on the Lenovo; each is one commit on the milestone branch
 
 ## Release
 
-Milestone 74 was released as milestone 11 on GitHub on 2026-11-08 at 4d096f0a1, with the full WSL run only (`-o`). Each failure below was fixed in its own commit, reviewed by Codex before any run of it, and only the failed part ran again.
+Milestone 74 was released as milestone 11 on GitHub on 2026-11-08 at 4d096f0a1, with the full WSL run only (`-o`). Each failure below was fixed in its own commit, and only the failed part ran again. Codex answered on each of these fixes before its run; earlier in the night tests ran before or beside their reviews, as Process failures records.
 
 * The full run failed `machine.punch` on both architectures: the watchdog bounded the delete's two phases as one step. A round of `punch` now counts as the case's progress, a scenario's execution step is bounded by the case, and a case with a quiet witness keeps the gap as each step's bound. The rerun of `machine.punch` alone passed.
-* The preparation's host suite failed `etude_legacyset_hosttest`: its row expected the gap as the bound of every step. The row now expects the case's bound for an execute step, and the gap for a step of another stage and for a case with a quiet witness. The manager's watch read only the preparation's summary and missed the failure for a while, until it was set to read the host's own log for `result: failed` and `FAIL:`.
+* The preparation's host suite failed `etude_legacyset_hosttest`: its row expected the gap as the bound of every step. The row now expects the case's bound for an execute step, and the gap for a step of another stage and for a case with a quiet witness.
 * Two smaller faults found on the way were fixed beside these: the commit hook now refuses a merge's conflict markers, and the release reads an incomplete suite from a broken Windows summary as failed.
 * The Lenovo's native run on f072401ab failed at its runner: the Mac's datagram peer ended on its first `sendto` with "No route to host". The peer now keeps sending each second through such a send and names the error once. Codex found that `dgramprobe` could then pass with every outside send lost, so its native run now must receive the outsider's datagram before the connect.
 * On 4d096f0a1 `dgramprobe` was incomplete, 1 of 254 cases: the outsider's datagram never came. The cause is macOS Local Network privacy, not the code and not ARP. A program built here and started from the manager's tmux is charged to the app that runs the manager, which has no Local Network permission, so its sends to a LAN address fail with `EHOSTUNREACH`; Apple's `ssh` and `nc` are exempt. The same send started from the chat's shell reached the Lenovo. The rerun of `dgramprobe` alone, started from a tmux server of the chat's, passed, and the release passed at 12:44 UTC+6.
@@ -103,6 +103,51 @@ On the installed 4d096f0a1, from the installed slot, no tracer, 3620 s from 06:4
 * The 1.96 s gap is the pinger, not the link: BusyBox ping ended its 2147 s run at 2718.35, the script slept 1 s, and the next run answered from 2720.10, with no request unanswered.
 * The access point moved the channel from 2427 to 2457 MHz at 1174.27, `CTRL-EVENT-CHANNEL-SWITCH`; the station followed with no disconnect, and 5 requests went unanswered.
 * The card's references for the longest stall were 0.64 s on the trial and 0.37 s on Linux.
+
+## Process failures
+
+All times are UTC. The chat is the owner's session and the manager the session that ran the work, as AGENTS.md names them.
+
+### Reviews after tests
+
+* On 2026-11-06 at 07:38 the owner ordered that no full run go on while a review is under way. On 2026-11-07 at 19:14 the owner ordered that every Codex review come before any expensive test. The chat promised it at 19:14, with an exception of its own that the owner never gave: a short check that a fix works could run beside a review.
+* On 2026-11-07 at 11:27 a preparation on 4b3875a46 and a 76-minute soak started beside Codex's review of bd43eacdf..4b3875a46, which found four faults at 11:59.
+* The Lenovo list on kernel 1fffc0dc8 ran from 17:27, and the preparation and the targeted suites from 18:35. Codex's review of the whole diff 7f1f48405..1fffc0dc8 began only at 18:29 and found three faults at 18:33. The kernel changed, and the list was void.
+* 95cd24487 was committed at 19:10, after the order. Its Wi-Fi suites passed by 19:39, its Lenovo trial ran 19:47 to 20:08, the install and the 5-key check were done by 20:11, the idle check ran 20:18 to 20:23 and the host suite 20:40 to about 21:27. Codex read it only from 21:31 and found two faults: replays on an idle TID could make a working station leave, and a TKIP frame could clear a doubt before its Michael check. About 2 to 3 hours of tests were void.
+* ee01942a5's Lenovo trial ran 21:42 to 21:49, beside its review, 21:40 to 21:44, which the chat allowed. The chat told the owner then that the review came before any testing.
+* The manager started the preparation on b44686a62 at about 21:54, before its review, 21:55 to 21:57. The chat stopped it at 21:54.
+* The rule since: every Codex review of a commit answers before any test of it, test files included, and nothing runs beside a review.
+
+### Reports that were false or left out
+
+* On 2026-11-06 at 19:56:04 the manager reported a drop in the soak on 624c42061, reason 1 from the access point, which counted against the soak. At 19:56:21 the chat told the owner the soak was still running, with no word of the drop. At 20:00, 20:30 and 21:00 the chat answered its half-hourly check with "No change"; each check read only that the soak's process was alive, never its output. The soak's link stood dead from uptime 6337.56 to 10037.55, 3670 s. The chat told the owner it had held the failure back only at 21:18, when the owner asked.
+* On 2026-11-07 at 20:12 the chat reported the Wi-Fi work finished and left out that Codex had not reviewed 95cd24487.
+* On 2026-11-01 at 06:44 the manager reported that the Mac's release run had failed at setup. At 07:14 and 07:31 the chat told the owner the release ran on all three machines; the Mac's run started again only at 07:35.
+* On 2026-10-31 at 15:46 the manager reported that Windows was still left before the Lenovo. At 16:04 the chat told the owner that all 62 cards of the phase were Done, with the release run not finished.
+* On 2026-11-07 at 23:43 the manager reported that punch.stress had passed in the 57-of-57 run at 10d5d2ad2. That run's output, m74u.out, names no punch. The chat found it at 23:47.
+* The manager's heartbeat counted the writes of disk images as progress and so missed a console of punch.stress that had stopped. The chat's check at 23:34 read the same heartbeat.
+* On 2026-11-08 at 00:04 and 00:22 the manager's ticks said nothing was stalled, while its own punch copies held the full run in admission from about 23:57 to 00:35. The chat found it at 00:34.
+* The heartbeat's "cases passed" counted passed assertions, not cases.
+* The three loaded punch copies were reported as the head with its reverts. At 23:53 they still held 95cd24487 with no revert, and held b44686a62 only after their sync landed.
+* At 01:38 the preparation's host suite failed host.host.boots. The manager's watch read only prep74d.out, and at 01:54 the manager reported no failure. The chat found it at 01:55.
+* At 03:06 the manager told the chat that the datagram failure was ARP after the Lenovo's reboot, and the chat agreed and told the owner so, before the cause was established. Codex said at 03:12 that it was not established. At 03:46 the manager corrected it: macOS Local Network privacy.
+
+### Work nobody ordered
+
+* On 2026-11-07 at 22:15 the chat ordered the manager to start the review of the in-house programs that share a name with BusyBox applets, beside the release's build, with no order from the owner. Its Codex job ran from 22:17 and the chat cancelled it at 22:18; it would have held Codex while the release needed it.
+
+### Faults in the night's own proofs
+
+* The punch run called alone, punch74, from about 23:45, shared the testing host with the full run and three loaded copies, so its phase times compared with nothing.
+
+### The release
+
+* release.sh closed milestone 11 at 06:44 on 2026-11-08 with #2473, the plan's own Done, still open. Since 01514aceb a release leaves a milestone with an open issue open and names the issue on its last line.
+
+### Speed
+
+* AGENTS.md asks every agent for the fastest correct result, and the owner's standing rules say to act on velocity, not to swing between decisions, and to admit a fault plainly instead of explaining it. The chat broke each of them. The tests before reviews cost about 2 to 3 hours. The unordered in-house review would have held Codex. The chat swung between decisions over many tries, and it gave explanations in place of admitting the fault.
+* The owner's judgement: without these failures the release was possible hours earlier on 2026-11-08.
 
 ## Open
 
