@@ -36,6 +36,8 @@
  * punch_scenario.c, which hashes each from the disk image without this
  * kernel. The hash is FNV-1a over each block that is not all zeros in order,
  * its number in eight bytes and then its bytes up to the end of the file.
+ * The first sparse process prints `PUNCH ROUND PHASE N` at the end of each
+ * of its rounds, which the scenario counts as the case's progress.
  *
  * The counts are fixed; nothing here reads a clock. Prints `PUNCH OK` and
  * exits 0, or prints `PUNCH FAIL: ` with the file and block, and exits 1.
@@ -632,6 +634,9 @@ static void work(struct job *job, enum role role, int fast)
         default:
             press_round(job);
             break;
+        }
+        if (job->who == 0) {
+            say("PUNCH ROUND %d %u\n", job->phase, r + 1);
         }
     }
     send_tally(job);

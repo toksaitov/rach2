@@ -196,6 +196,12 @@
           "kind": "step",
           "means": "a step of the manifest has ended",
           "limit": 6
+        },
+        {
+          "witness_id": "round",
+          "kind": "counter",
+          "means": "punchmusl's first sparse process has ended one more round, on either mount",
+          "limit": 9
         }
       ],
       "bounds": {

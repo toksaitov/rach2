@@ -385,6 +385,34 @@ static void make_volume(struct lc *l, char *path)
 }
 
 /**
+ * Wait after `*at` for the line that hands the debug shell back, and report
+ * each `PUNCH ROUND` line before it as one more unit of the witness `round`,
+ * so that the watchdog's gap bounds a round of punchmusl instead of both
+ * phases. Leaves `*at` at the start of the line that hands the shell back.
+ *
+ * @return 1, or 0 when a wait or a read of the console failed, after which
+ *         the scenario cannot go on.
+ */
+static int wait_rounds(struct lc *l, struct etude_case_machine *m, uint64_t *at)
+{
+    uint64_t start, seen = 0;
+    char *line;
+    int back;
+
+    do {
+        start = *at;
+        if (!lc_wait(l, m, "\n", at, NULL) || (line = lc_console(l, "stress", start, *at)) == NULL)
+            return 0;
+        if (strstr(line, "PUNCH ROUND ") != NULL)
+            etude_progress(l->c, "round", ++seen);
+        back = strstr(line, ", returning to kernel shell") != NULL;
+        free(line);
+    } while (!back);
+    *at = start;
+    return 1;
+}
+
+/**
  * Boot the machine, run punchmusl and end the machine. Assertions `exit` and
  * `said-ok`, and the lines it printed for a person.
  *
@@ -394,13 +422,20 @@ static void make_volume(struct lc *l, char *path)
 static char *stress(struct lc *l)
 {
     struct etude_case_machine *m;
-    uint64_t at;
+    uint64_t at, from;
     const char *failed, *total;
     char why[200], *w;
 
     if ((m = lc_shell(l, "stress", "stress", &at)) == NULL)
         return NULL;
-    w = lc_run(l, m, "stress", "exec /musl/punchmusl /dev/disk0p1 " ROUNDS "\r", &at, "exit");
+    from = at;
+    if (!lc_type(l, m, "exec /musl/punchmusl /dev/disk0p1 " ROUNDS "\r") ||
+        !wait_rounds(l, m, &at)) {
+        if (!l->stopped)
+            lc_assert(l, "exit", 0, l->why);
+        return NULL;
+    }
+    w = lc_handback(l, m, "stress", from, &at, "exit");
     if (w == NULL)
         return NULL;
     failed = strstr(w, "PUNCH FAIL");
