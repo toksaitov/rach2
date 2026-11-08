@@ -111,12 +111,28 @@ static int sh_mock(int argc, char **argv)
     execv(argv[0], argv);
     return 127;
 }
-/** Answer `gh api -X`, the milestone's closing. */
+/**
+ * Answer `gh api -X`, the milestone's closing, and `gh api --paginate` of a
+ * milestone's open issues, which RELEASE_TEST_OPEN gives as `N:A B` for
+ * milestone N; any other milestone has none.
+ */
 static int gh_api(int argc, char **argv)
 {
+    const char *open = ev("RELEASE_TEST_OPEN"), *m;
+    size_t n;
     if (argc > 3 && !strcmp(argv[2], "-X"))
         return strcmp(ev("RELEASE_TEST_CLOSE"), "fail") == 0;
-    return 1;
+    if (argc < 4 || strcmp(argv[2], "--paginate") || !(m = strstr(argv[3], "/issues?milestone=")))
+        return 1;
+    m += strlen("/issues?milestone=");
+    n = strcspn(m, "&");
+    if (!strncmp(open, m, n) && open[n] == ':')
+        for (open += n + 1; *open; open += strspn(open, " ")) {
+            n = strcspn(open, " ");
+            printf("%.*s\n", (int)n, open);
+            open += n;
+        }
+    return 0;
 }
 /** Answer `gh run download ID ... --dir DIR` with RELEASE_TEST_FAILURES. */
 static int gh_download(int argc, char **argv)
@@ -458,7 +474,7 @@ struct release {
 struct release_row {
     const char *record, *sha, *writes, *runs, *git, *accept, *machines, *windows, *native,
         *failures, *milestone, *ancestor, *master, *push, *lenovo, *prepare, *hold, *testing,
-        *cmdline;
+        *cmdline, *open;
     const char *again; /* the machine of -a, or NULL for a release */
     int rerun, preparing, only;
 };
@@ -549,6 +565,7 @@ static void run(struct release *r, const struct release_row *spec)
     spec_env("RELEASE_TEST_HOLD", spec->hold);
     spec_env("RELEASE_TEST_TESTING", spec->testing);
     spec_env("RELEASE_TEST_CMDLINE", spec->cmdline);
+    spec_env("RELEASE_TEST_OPEN", spec->open);
     if (spec->native) {
         flow_put(f, "state/wt/build/tools/dev/native-hostpeer", "");
         fx_copy(f->self, flow_path(f, "state/wt/build/tools/dev/native-deploy"));
@@ -690,6 +707,38 @@ static int finished_rows(struct release *r)
     return check(r, !f->status && !called(r, " push ") && called(r, "^board archive 7$"),
                  "master already at the commit is not pushed again") &&
            ok;
+}
+/** A milestone with an open issue other than the release's cards stays open. */
+static int open_rows(struct release *r)
+{
+    struct fixture *f = r->f;
+    int ok = 1;
+    char cards[9000];
+    snprintf(cards, sizeof(cards), "%scard release 40\ncard close 41\n", r->finished);
+    run(r, &(struct release_row){.record = cards, .git = "yes", .open = "7:41 12 40 9"});
+    ok = check(r,
+               !f->status && called(r, " push origin " H ":") &&
+                   !called(r, "^gh api -X PATCH repos/toksaitov/rach2/milestones/7 ") &&
+                   called(r, "^board archive 7$") &&
+                   ended_with(r, "release: passed " H "; milestone 7 stays open for #9 #12"),
+               "a milestone with an open issue stays open and its issues are named") &&
+         ok;
+    run(r, &(struct release_row){.record = cards, .git = "yes", .open = "7:40 41"});
+    ok = check(r,
+               !f->status && called(r, "^gh api -X PATCH repos/toksaitov/rach2/milestones/7 ") &&
+                   ended_with(r, "release: passed " H),
+               "the release's own open cards do not keep the milestone open") &&
+         ok;
+    snprintf(cards, sizeof(cards), "milestone 7\nalso 8\n%s", strchr(r->finished, '\n') + 1);
+    run(r, &(struct release_row){.record = cards, .git = "yes", .open = "8:5"});
+    ok = check(r,
+               !f->status && called(r, "^gh api -X PATCH repos/toksaitov/rach2/milestones/7 ") &&
+                   !called(r, "^gh api -X PATCH repos/toksaitov/rach2/milestones/8 ") &&
+                   called(r, "^board archive 8$") &&
+                   ended_with(r, "release: passed " H "; milestone 8 stays open for #5"),
+               "a joined milestone with an open issue stays open while M closes") &&
+         ok;
+    return ok;
 }
 static int closing_rows(struct release *r)
 {
@@ -1619,6 +1668,7 @@ int flow_release(struct fixture *f)
                "the release requests term when it updates the installed root") &&
          ok;
     ok = finished_rows(&r) && ok;
+    ok = open_rows(&r) && ok;
     ok = closing_rows(&r) && ok;
     ok = argument_rows(&r) && ok;
     ok = new_record_rows(&r) && ok;

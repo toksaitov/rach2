@@ -181,9 +181,13 @@
 #   come from the buffer cache.
 # * close: the record says `closing`; SHA is pushed to master by
 #   fast-forward, `git push origin SHA:refs/heads/master`, milestone M and
-#   each N of -c are closed, their cards are archived with `board.sh archive`,
+#   each N of -c are closed when no issue of theirs but the release's own
+#   cards is open, their cards are archived with `board.sh archive`,
 #   sweep.sh removes what the release left, with its output kept beside the
-#   record, and the last line printed is `release: passed SHA`. A start of the
+#   record, and the last line printed is `release: passed SHA`. A milestone
+#   with an open issue, such as a task that needs the installed release,
+#   stays open, and the last line ends `; milestone N stays open for #A #B`;
+#   the task that closes its last issue closes the milestone. A start of the
 #   script that finds a record with `closing` that did not end finishes that
 #   release first, whatever M and SHA it was given.
 #
@@ -1885,8 +1889,22 @@ preflight()
         fail preflight "a trial is armed on the machine"
 }
 
+# open_issues N: print the open issues of milestone N, as `#A #B`, but for
+# the release's own cards, which the close passes after it; fail when they
+# cannot be read.
+open_issues()
+{
+    o=$(net gh api --paginate "repos/$REPO/issues?milestone=$1&state=open&per_page=100" \
+        --jq '.[] | select(.pull_request == null) | .number') || return 1
+    for i in $o; do
+        grep -q "^card [a-z]* $i\$" "$state/record" || echo "$i"
+    done | sort -n | sed 's/^/#/' | tr '\n' ' ' | sed 's/ $//'
+}
+
 # close: move master to SHA, close milestone M and each milestone of the
-# record's `also` lines, and archive their cards.
+# record's `also` lines that has no open issue, and archive their cards. A
+# milestone with an open issue stays open, and `kept` names it with its open
+# issues for the last line; the task that closes its last issue closes it.
 close()
 {
     net git -C "$repo" fetch -q origin || later "the fetch failed"
@@ -1894,14 +1912,23 @@ close()
         net git -C "$repo" push origin "$sha:refs/heads/master" ||
             later "the push of $sha to master failed"
     fi
-    names='' closed="milestone $milestone is"
+    names='' kept=''
     for n in $milestone $(sed -n 's/^also //p' "$state/record"); do
+        open=$(open_issues "$n") || later "the open issues of milestone $n could not be read"
+        if [ -n "$open" ]; then
+            kept="$kept${kept:+; }milestone $n stays open for $open"
+            continue
+        fi
         net gh api -X PATCH "repos/$REPO/milestones/$n" -f state=closed > /dev/null ||
             later "milestone $n could not be closed"
         names="$names${names:+ and }$n"
     done
-    [ "$names" = "$milestone" ] || closed="milestones $names are"
-    report close pass "Master is at $sha, and $closed closed."
+    case $names in
+        '') closed="no milestone is closed" ;;
+        *' and '*) closed="milestones $names are closed" ;;
+        *) closed="milestone $names is closed" ;;
+    esac
+    report close pass "Master is at $sha, and $closed${kept:+; $kept}."
     report release pass "Released $sha on every machine."
     for n in $milestone $(sed -n 's/^also //p' "$state/record"); do
         net sh "$repo/tools/flow/board.sh" archive "$n" > /dev/null ||
@@ -2171,7 +2198,7 @@ main()
     fi
     (cd "$repo" && sh tools/flow/sweep.sh) > "$state/$old.sweep" 2>&1 ||
         say "the sweep failed; $state/$old.sweep has its output"
-    finish "passed $sha"
+    finish "passed $sha${kept:+; $kept}"
 }
 
 main "$@"
