@@ -39,10 +39,13 @@
  * broadcast the probe then reads with SIOCGIFADDR and SIOCGIFBRDADDR unless
  * `addr=A.B.C.D` and `bcast=A.B.C.D` give them, and `ports=OLD:NEW,...` and
  * `ids=OLD:NEW,...` map the ports and the uid. Given `machine=native`, it
- * leaves out the check that the connected socket refused the outsider's
- * datagram, since the count of refused datagrams it waits on is the
- * machine's, which other traffic moves; it still says "DGRAMPROBE OUTSIDE"
- * and checks that the socket hears its peer.
+ * first receives the outsider's datagram, "outside", which the controller's
+ * peer sends each second, on the socket before that socket is connected,
+ * so that the run shows the datagram arrived; it then leaves out the check
+ * that the connected socket refused the outsider, since the count of
+ * refused datagrams it waits on is the machine's, which other traffic
+ * moves, and still checks that the socket hears its peer, past any of the
+ * outsider's datagrams that arrived before the connect.
  */
 
 #include "probe.h"
@@ -440,6 +443,65 @@ static void expect_refused(uint32_t base, int fd, const char *what)
     expect_nothing(fd, what);
 }
 
+/** Receive one datagram on socket `fd` into buf, waiting for it; give its
+ * length, or a negative error. */
+static int receive(int fd)
+{
+    unsigned long args[6];
+
+    args[0] = (uint32_t)fd;
+    args[1] = (unsigned long)buf;
+    args[2] = sizeof(buf);
+    args[3] = 0;
+    args[4] = 0;
+    args[5] = 0;
+    return socketcall(SC_RECVFROM, args);
+}
+
+/** Tell whether a receive of `r` bytes into buf took the outsider's
+ * datagram, "outside". */
+static int is_outside(int r)
+{
+    static const char text[] = "outside";
+    int i;
+
+    if (r != 7) {
+        return 0;
+    }
+    for (i = 0; i < 7; i++) {
+        if (buf[i] != (uint8_t)text[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** Open the socket of the outside case on its port; in a native run, also
+ * receive there the outsider's datagram, which the controller's peer sends
+ * each second, or fail. */
+static int open_outside(void)
+{
+    int fd = open_bound(outside_port);
+
+    if (probe_native() && !is_outside(receive(fd))) {
+        fail("the outsider's datagram did not arrive");
+    }
+    return fd;
+}
+
+/** Receive one datagram on socket `fd`, past, in a native run, the
+ * outsider's datagrams that arrived before `fd` was connected; give its
+ * length, or a negative error. */
+static int receive_past_outsider(int fd)
+{
+    int r;
+
+    do {
+        r = receive(fd);
+    } while (probe_native() && is_outside(r));
+    return r;
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -573,7 +635,7 @@ void probe_main(unsigned long *sp)
     report_held();
 
     /* A sender at another address: the suite's datagram, through a forward. */
-    outside = open_bound(outside_port);
+    outside = open_outside();
     set_sockaddr(our_ip, peer_port);
     args[0] = (uint32_t)outside;
     args[1] = (unsigned long)sa;
@@ -599,13 +661,7 @@ void probe_main(unsigned long *sp)
     if (socketcall(SC_SENDTO, args) != 4) {
         fail("the peer's datagram to the outside-case socket did not send");
     }
-    args[0] = (uint32_t)outside;
-    args[1] = (unsigned long)buf;
-    args[2] = sizeof(buf);
-    args[3] = 0;
-    args[4] = 0;
-    args[5] = 0;
-    if (socketcall(SC_RECVFROM, args) != 4) {
+    if (receive_past_outsider(outside) != 4) {
         fail("the socket that ignored the outsider also ignored its peer");
     }
     sys_close(outside);
