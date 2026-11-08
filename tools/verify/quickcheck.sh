@@ -150,7 +150,8 @@ text() {
 markers() {
     while IFS= read -r f; do
         [ -f "$TREE/$f" ] || continue
-        grep -nIE '^(<<<<<<< |=======$|>>>>>>> )' "$TREE/$f" | cut -d: -f1 | sed "s|^|$f:|"
+        grep -nIE '^(<<<<<<< |=======$|>>>>>>> )' "$TREE/$f" | cut -d: -f1 |
+            while IFS= read -r n; do printf '%s:%s\n' "$f" "$n"; done
     done <"$FILES" | found 'a conflict marker'
 }
 
