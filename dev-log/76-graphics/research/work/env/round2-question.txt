@@ -1,0 +1,10 @@
+Read build/flow/coordinator/graphics-research/env/comparison.md, then the answer of each participant in the same directory as you need it: fable.md, codexwork/report.md, muse.md, position-chat.md. brief.md has the machine's facts and the owner's constraints.
+
+Argue, in at most 60 lines. Say where you were wrong or where another answer is better. Nothing is to be run or changed. Answer exactly these:
+
+1. udmabuf in WSL: the module without a WSL restart, or a whole kernel through .wslconfig? Which first, and what would make you switch?
+2. WINQ-EMU's renderer has had no commit since April and its one NVIDIA report is a freeze. What is the right way to use it: build alpha10 as it is, rebase it on current upstream, or something else? If it freezes on the RTX, what is the very next step, given the Radeon, gfxstream and a second Linux machine?
+3. The owner wants to prove that a thing is possible by comparing against Linux in the same environment. Design the discovery run around that: for each environment, which Linux guest, which workloads (Crysis's fixed route, vkcube, a DXVK and a vkd3d-proton probe, Chromium WebGPU), what is compared and what result would make the owner pursue or drop that path. Give it as one table, at most 10 rows.
+4. Which of DDA, a deliberate GPU hang, a plain Hyper-V lavapipe host, and Dozen behind Venus belong in that run at all? One line each.
+
+Mark each claim measured, read or inferred. Use no subagents.

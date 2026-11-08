@@ -1,0 +1,1 @@
+Read build/flow/coordinator/graphics-research/env/brief.md and answer it as a second opinion, independently. You may use web search if you have it. Do not change any file and do not ssh anywhere. Use no subagents. Keep it under 200 lines, give sources, and spend your effort on questions 2, 3, 6 and 7, where a fresh mind helps most. Your whole answer goes to standard output.

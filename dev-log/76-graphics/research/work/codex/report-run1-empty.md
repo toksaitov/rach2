@@ -1,0 +1,1 @@
+I will follow these rules. I have read `Readme.md`; the working tree is clean.
