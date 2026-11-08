@@ -82,12 +82,14 @@
 #   * the longest ping gap is the longest time between two replies with
 #     requests unanswered between them, across ping's runs, or from the last
 #     reply to the end of its log, and the longest wait the longest between
-#     two replies in sequence;
+#     two replies in sequence. The pause between two runs counts in neither
+#     when the old run's totals show no request after its last reply and the
+#     new run's first request is answered, since nothing went unanswered;
 #   * the worst reply is the longest time ping reports for one, which counts
 #     a frame held and a ping that ran late alike;
-#   * the seconds without a reply sum every wait of over 1 s between replies
-#     and from the last reply to the end of the ping's log, so they count
-#     a link that never came back, as the gap does not;
+#   * the seconds without a reply sum every wait of over 1 s between replies,
+#     but for such a pause, and from the last reply to the end of the ping's
+#     log, so they count a link that never came back, as the gap does not;
 #   * a renewal's time runs from the request to the completion;
 #   * wpa_cli gives up on wpa_supplicant when it does not answer a PING;
 #   * the rm and sync seconds time each rm of a writer's file and each sync of
@@ -483,22 +485,29 @@ table()
                 printf "rx duplicates            %d\n", total[3] + last[3]
                 printf "rx replays               %d\n", total[4] + last[4]
             }'
-    awk -v p="$t0" -v end="$ended" '/ seq=/ { if ($1 - p > 1) away += $1 - p; p = $1 }
-        END { printf "seconds without a reply  %d\n", away + end - p }' "$dir/ping"
+    # cut is 1 after a run whose totals show nothing sent after its last
+    # reply, 2 after a run that lost its tail or ended at a failed send.
     awk -v t0="$t0" -v end="$ended" '
-        / packets transmitted, / { sent += $2; got += $5; asked = heard = 0 }
-        / ping: sendto: / { sent += asked; got += heard; asked = heard = 0 }
+        / packets transmitted, / {
+            cut = $2 > asked ? 2 : 1
+            sent += $2; got += $5; asked = heard = 0
+        }
+        / ping: sendto: / { sent += asked; got += heard; asked = heard = 0; cut = 2 }
         / seq=/ {
             s = $0; sub(/.* seq=/, "", s); s += 0
             ms = $0; sub(/.* time=/, "", ms); ms += 0
             if (ms > worst) worst = ms
             if (ms > 1000) late++
-            d = $1 - prev
-            if (prev && s == seq + 1 && d > stall) stall = d
-            if (prev && s != seq + 1 && d > gap) { gap = d; from = prev }
-            prev = $1; seq = s; asked = s + 1; heard++
+            d = $1 - (prev ? prev : t0)
+            if (!(cut == 1 && s == 0)) {
+                if (d > 1) away += d
+                if (prev && !cut && s == seq + 1 && d > stall) stall = d
+                if (prev && (cut || s != seq + 1) && d > gap) { gap = d; from = prev }
+            }
+            prev = $1; seq = s; asked = s + 1; heard++; cut = 0
         }
         END {
+            printf "seconds without a reply  %d\n", away + end - (prev ? prev : t0)
             if (!prev) prev = t0
             if (end - prev > gap) { gap = end - prev; from = prev }
             sent += asked; got += heard
