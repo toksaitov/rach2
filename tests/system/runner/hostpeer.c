@@ -28,7 +28,13 @@
  *
  *   hostpeer send-repeat PORT TEXT
  *       Send TEXT as a UDP datagram once each second until a termination
- *       signal ends the peer. The native deployment owns and reaps it.
+ *       signal ends the peer. The native deployment owns and reaps it. A
+ *       send that finds no route to the machine, as macOS reports one while
+ *       the machine's link address is not yet known after a reboot, is tried
+ *       again the next second, and the first of a run of them is named on
+ *       stderr. The retries end with the peer, when the deployment stops it
+ *       at the end of its run, and the probe that receives the datagrams
+ *       judges the path within its case's bounds.
  *
  * With HOSTPEER_ADDRESS set to an IPv4 address, each job uses that address
  * in place of 127.0.0.1: a native run on the Lenovo (tests/native/Readme.md)
@@ -52,11 +58,14 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 typedef SOCKET peer_socket;
-#define PEER_INVALID     INVALID_SOCKET
-#define peer_close       closesocket
-#define peer_error       WSAGetLastError()
-#define PEER_INTERRUPTED WSAEINTR
-#define PEER_INUSE       WSAEADDRINUSE
+#define PEER_INVALID        INVALID_SOCKET
+#define peer_close          closesocket
+#define peer_error          WSAGetLastError()
+#define PEER_INTERRUPTED    WSAEINTR
+#define PEER_INUSE          WSAEADDRINUSE
+#define PEER_UNREACHABLE(e) ((e) == WSAEHOSTUNREACH || (e) == WSAEHOSTDOWN || (e) == WSAENETUNREACH)
+#define PEER_HOSTUNREACH    WSAEHOSTUNREACH
+#define PEER_HOSTDOWN       WSAEHOSTDOWN
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -64,11 +73,14 @@ typedef SOCKET peer_socket;
 #include <sys/socket.h>
 #include <sys/time.h>
 typedef int peer_socket;
-#define PEER_INVALID     (-1)
-#define peer_close       close
-#define peer_error       errno
-#define PEER_INTERRUPTED EINTR
-#define PEER_INUSE       EADDRINUSE
+#define PEER_INVALID        (-1)
+#define peer_close          close
+#define peer_error          errno
+#define PEER_INTERRUPTED    EINTR
+#define PEER_INUSE          EADDRINUSE
+#define PEER_UNREACHABLE(e) ((e) == EHOSTUNREACH || (e) == EHOSTDOWN || (e) == ENETUNREACH)
+#define PEER_HOSTUNREACH    EHOSTUNREACH
+#define PEER_HOSTDOWN       EHOSTDOWN
 #endif
 
 #ifdef _WIN32
@@ -341,6 +353,14 @@ static int send_text(long port, const char *text)
     return 0;
 }
 
+/** Name the unreachable error `e`, one that PEER_UNREACHABLE accepts. */
+static const char *unreachable_name(int e)
+{
+    return e == PEER_HOSTUNREACH ? "EHOSTUNREACH"
+           : e == PEER_HOSTDOWN  ? "EHOSTDOWN"
+                                 : "ENETUNREACH";
+}
+
 /* A repeated datagram peer belongs to its deployment process. */
 static volatile sig_atomic_t repeat_stop;
 static void stop_repeat(int sig)
@@ -354,7 +374,7 @@ static int send_repeat(long port, const char *text)
     struct sigaction action;
 #endif
     peer_socket fd = socket(AF_INET, SOCK_DGRAM, 0);
-    int status = 0;
+    int status = 0, unreachable = 0, e;
     size_t size = strlen(text);
     if (fd == PEER_INVALID)
         return 1;
@@ -380,11 +400,19 @@ static int send_repeat(long port, const char *text)
 #endif
         if (sendto(fd, text, size, 0, (struct sockaddr *)&address, sizeof(address)) !=
             (ssize_t)size) {
-            if (peer_error == PEER_INTERRUPTED)
+            if ((e = peer_error) == PEER_INTERRUPTED)
                 continue;
-            socket_error("hostpeer: sendto");
-            status = 1;
-            break;
+            if (!PEER_UNREACHABLE(e)) {
+                socket_error("hostpeer: sendto");
+                status = 1;
+                break;
+            }
+            if (!unreachable)
+                fprintf(stderr, "hostpeer: sendto: %s: trying again each second\n",
+                        unreachable_name(e));
+            unreachable = 1;
+        } else {
+            unreachable = 0;
         }
         /* interval: the outside probe receives one datagram each second */
 #ifdef _WIN32
