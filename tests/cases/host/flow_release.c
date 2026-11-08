@@ -116,7 +116,9 @@ static int sh_mock(int argc, char **argv)
  * milestone's open issues, which RELEASE_TEST_OPEN gives as `N:A B` for
  * milestone N; any other milestone has none. An item `pA` is a pull request,
  * left out only when the query's --jq selects on pull_request as gh would,
- * and `garbage` stands for an error body that gh printed to stdout.
+ * and `garbage` stands for an error body that gh printed to stdout. `retry`
+ * fails the first query as GitHub's 503 does, with its body on stdout, and
+ * answers no issues on the next.
  */
 static int gh_api(int argc, char **argv)
 {
@@ -132,6 +134,18 @@ static int gh_api(int argc, char **argv)
             prs = 0;
     m += strlen("/issues?milestone=");
     n = strcspn(m, "&");
+    if (!strcmp(open, "7:retry")) {
+        char *calls = fx_read(ev("RELEASE_TEST_CALLS")), *c = calls;
+        int asked = 0;
+        while (c && (c = strstr(c, "gh api --paginate ")) != NULL && ++asked)
+            c++;
+        free(calls);
+        if (asked > 1)
+            return 0;
+        printf("{\"message\":\"unavailable\"}\n");
+        fprintf(stderr, "gh: unavailable (HTTP 503)\n");
+        return 1;
+    }
     if (!strncmp(open, m, n) && open[n] == ':')
         for (open += n + 1; *open; open += strspn(open, " ")) {
             n = strcspn(open, " ");
@@ -761,6 +775,13 @@ static int open_rows(struct release *r)
                f->status == 75 && fx_same(flow_path(f, "before"), record(r)) &&
                    !called(r, "^gh api -X PATCH repos/toksaitov/rach2/milestones/7 "),
                "an answer that is not a list of issues waits with the record unchanged") &&
+         ok;
+    run(r, &(struct release_row){.record = r->finished, .git = "yes", .open = "7:retry"});
+    ok = check(r,
+               !f->status && count(flow_path(f, "calls"), "^gh api --paginate ") == 2 &&
+                   called(r, "^gh api -X PATCH repos/toksaitov/rach2/milestones/7 ") &&
+                   ended_with(r, "release: passed " H),
+               "a failed query's output is not kept when its retry finds no open issue") &&
          ok;
     return ok;
 }
