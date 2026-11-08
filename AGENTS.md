@@ -6,7 +6,7 @@ The rules for everyone who works on Rach2, people and coding agents alike. Codex
 * `testing`: the machines that run the suites, how to reach them and run a suite, and how to write a test.
 * `machine`: writing the flash drive or a Lenovo disk, working on the Lenovo, and sittings with the owner.
 
-The rules are kept short on purpose; their history is in commit messages and `dev-log/`.
+The rules are kept short on purpose; their history is in commit messages and `dev-log/`. During a phase of the work, an agent may keep what it should remember in its own memory files; between major phases, what they hold is folded into these files and the memory files are deleted.
 
 ## Project
 
