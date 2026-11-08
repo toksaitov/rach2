@@ -450,8 +450,8 @@ refuse()
 # On Windows the processes of a run share the console and can write into one
 # another's lines, so when the line is broken the suites come from the lines
 # that begin with a suite's own failure, `run: ARCH:SUITE: CASE...: failure:`
-# or `run: ARCH:SUITE: FAIL in`, of which every failed suite prints at least
-# two.
+# or `incomplete:`, or `run: ARCH:SUITE: FAIL in` or `INCOMPLETE in`, of which
+# every failed suite prints at least two.
 failed_in()
 {
     words=$(tr -d '\r' < "$1" 2> /dev/null | grep '^run: result: failed: ' |
@@ -463,7 +463,7 @@ failed_in()
         return 0
     fi
     tr -d '\r' < "$1" 2> /dev/null |
-        sed -nE 's/^run: ((i686|x86_64):[a-z0-9-]+): (.* failure: |FAIL in ).*/\1/p' |
+        sed -nE 's/^run: ((i686|x86_64):[a-z0-9-]+): (.* (failure|incomplete): |FAIL in |INCOMPLETE in ).*/\1/p' |
         sort -u | tr '\n' ' ' | sed 's/ $//'
 }
 
@@ -1369,7 +1369,7 @@ windows()
             echo 'rc=$?'
             echo "tail -n 40 $wout/$id.console"
             # The lines that failed_in reads, wherever they are in the console.
-            echo "grep -aE '^run: (result: failed: |(i686|x86_64):[a-z0-9-]+: (.* failure: |FAIL in ))' $wout/$id.console"
+            echo "grep -aE '^run: (result: failed: |(i686|x86_64):[a-z0-9-]+: (.* (failure|incomplete): |FAIL in |INCOMPLETE in ))' $wout/$id.console"
             # shellcheck disable=SC2016 # the remote shell expands these
             echo 'echo "status $rc"'
         } | ssh -o BatchMode=yes testing 'C:/msys64/usr/bin/bash.exe -l -s' > "$state/$id.log" 2>&1
