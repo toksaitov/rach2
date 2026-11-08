@@ -486,10 +486,11 @@ table()
                 printf "rx replays               %d\n", total[4] + last[4]
             }'
     # cut is 1 after a run whose totals show nothing sent after its last
-    # reply, 2 after a run that lost its tail or ended at a failed send.
+    # reply, 2 once any run since the last reply lost its tail or ended at a
+    # failed send; a run of no requests leaves it as it was.
     awk -v t0="$t0" -v end="$ended" '
         / packets transmitted, / {
-            cut = $2 > asked ? 2 : 1
+            cut = cut == 2 || $2 > asked ? 2 : 1
             sent += $2; got += $5; asked = heard = 0
         }
         / ping: sendto: / { sent += asked; got += heard; asked = heard = 0; cut = 2 }
@@ -499,7 +500,7 @@ table()
             if (ms > worst) worst = ms
             if (ms > 1000) late++
             d = $1 - (prev ? prev : t0)
-            if (!(cut == 1 && s == 0)) {
+            if (!(prev && cut == 1 && s == 0)) {
                 if (d > 1) away += d
                 if (prev && !cut && s == seq + 1 && d > stall) stall = d
                 if (prev && (cut || s != seq + 1) && d > gap) { gap = d; from = prev }
