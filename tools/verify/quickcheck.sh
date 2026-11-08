@@ -147,8 +147,9 @@ text() {
 }
 
 # unquote PATH: print PATH as git names it with core.quotePath's quoting
-# undone: a path git writes in double quotes, as it does one with a
-# backslash, a quote or a control or non-ASCII byte, has its C escapes read.
+# undone, and a newline after it: a path git writes in double quotes, as it
+# does one with a backslash, a quote or a control or non-ASCII byte, has its
+# C escapes read, as git's quote.c writes them.
 unquote() {
     case $1 in
         \"*\") printf '%s\n' "$1" | LC_ALL=C awk '{
@@ -163,6 +164,11 @@ unquote() {
                     out = out sprintf("%c", v); i += 2
                 } else if (c == "n") out = out "\n"
                 else if (c == "t") out = out "\t"
+                else if (c == "a") out = out sprintf("%c", 7)
+                else if (c == "b") out = out sprintf("%c", 8)
+                else if (c == "f") out = out sprintf("%c", 12)
+                else if (c == "r") out = out sprintf("%c", 13)
+                else if (c == "v") out = out sprintf("%c", 11)
                 else out = out c
             }
             print out
@@ -171,13 +177,20 @@ unquote() {
     esac
 }
 
-# markers: find the conflict markers a merge leaves in the changed files.
+# markers: find the conflict markers a merge leaves in the changed files. A
+# finding names the path as git quotes it when the path has a newline, so
+# that each finding stays one line.
 markers() {
+    nl='
+'
     while IFS= read -r q; do
-        f=$(unquote "$q")
+        f=$(unquote "$q"; echo x)
+        f=${f%x}
+        f=${f%"$nl"}
         [ -f "$TREE/$f" ] || continue
+        case $f in *"$nl"*) name=$q ;; *) name=$f ;; esac
         grep -nIE '^(<<<<<<< |=======$|>>>>>>> )' "$TREE/$f" | cut -d: -f1 |
-            while IFS= read -r n; do printf '%s:%s\n' "$f" "$n"; done
+            while IFS= read -r n; do printf '%s:%s\n' "$name" "$n"; done
     done <"$FILES" | found 'a conflict marker'
 }
 
