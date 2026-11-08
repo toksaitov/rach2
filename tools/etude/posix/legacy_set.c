@@ -3027,25 +3027,31 @@ static int on_path(const struct set *x, const char *name, char *out, size_t size
 
 /**
  * The bound of manifest step `step` of case `k`: the case's for a step of
- * the `execute` stage, which the gap's watchdog ends when it makes no
- * progress for a gap, and the gap's for any other.
+ * the `execute` stage of a case with no `quiet` witness, which the gap's
+ * watchdog ends when it makes no progress for a gap, and the gap's for any
+ * other. An announced quiet witness puts off the gap's watchdog to its own
+ * bound, so a case that has one keeps the gap as each step's bound.
  */
 static uint64_t step_bound(const struct legacy_case *k, const struct json *step)
 {
-    const char *stage = json_text(step, "stage");
+    const struct json *progress = json_member(k->json, "progress");
+    const char *stage = json_text(step, "stage"), *kind;
+    size_t i;
 
-    return stage != NULL && strcmp(stage, "execute") == 0 ? k->case_us : k->gap_us;
+    if (stage == NULL || strcmp(stage, "execute") != 0)
+        return k->gap_us;
+    for (i = 0; progress != NULL && progress->type == JSON_ARRAY && i < progress->count; i++)
+        if ((kind = json_text(progress->item[i], "kind")) != NULL && strcmp(kind, "quiet") == 0)
+            return k->gap_us;
+    return k->case_us;
 }
 
 /**
  * Write the scenario invocation of machine case member `m`, whose artifacts
  * are published, for the emulators `qemu` of i686 and x86-64 and the x86-64
  * OVMF code image that `RACH2_OVMF_CODE` names, none when it is unset or
- * empty: an execution step's bound is the case's, and any other step's the
- * case's gap, and its cleanup's bound is the manifest's, or the case's grace
- * when it gives none. The gap's watchdog still ends an execution step that
- * makes no progress for a gap, so that a step whose progress records go on,
- * such as a counter's, may run until the case's bound.
+ * empty: each step's bound is `step_bound`'s, and its cleanup's bound is
+ * the manifest's, or the case's grace when it gives none.
  *
  * @return 0, or -1 with the reason in `why`.
  */
