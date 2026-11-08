@@ -146,9 +146,35 @@ text() {
         grep -v ' file(s) with a conversion' "$WORK/fmt.out" >>"$OUT"
 }
 
+# unquote PATH: print PATH as git names it with core.quotePath's quoting
+# undone: a path git writes in double quotes, as it does one with a
+# backslash, a quote or a control or non-ASCII byte, has its C escapes read.
+unquote() {
+    case $1 in
+        \"*\") printf '%s\n' "$1" | LC_ALL=C awk '{
+            s = substr($0, 2, length($0) - 2); out = ""
+            for (i = 1; i <= length(s); i++) {
+                c = substr(s, i, 1)
+                if (c != "\\") { out = out c; continue }
+                c = substr(s, ++i, 1)
+                if (c ~ /[0-7]/) {
+                    v = 0
+                    for (j = 0; j < 3; j++) v = v * 8 + index("01234567", substr(s, i + j, 1)) - 1
+                    out = out sprintf("%c", v); i += 2
+                } else if (c == "n") out = out "\n"
+                else if (c == "t") out = out "\t"
+                else out = out c
+            }
+            print out
+        }' ;;
+        *) printf '%s\n' "$1" ;;
+    esac
+}
+
 # markers: find the conflict markers a merge leaves in the changed files.
 markers() {
-    while IFS= read -r f; do
+    while IFS= read -r q; do
+        f=$(unquote "$q")
         [ -f "$TREE/$f" ] || continue
         grep -nIE '^(<<<<<<< |=======$|>>>>>>> )' "$TREE/$f" | cut -d: -f1 |
             while IFS= read -r n; do printf '%s:%s\n' "$f" "$n"; done

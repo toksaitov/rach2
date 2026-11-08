@@ -151,7 +151,8 @@ printf '#!/bin/sh\n# s.sh: a fixture.\necho $1\n' >tools/s.sh
 printf '/* u.c: a fixture. */\n/* It is hon''est. */\n/* This is not a lock, it is a queue. */\n' >tools/u.c
 printf "#!/bin/sh\n# v.sh: a fixture.\necho 'Something failed' >&2\n" >tools/v.sh
 printf 'notes\n<<<<<<< ours\none\n=======\ntwo\n>>>>>>> theirs\n' >tools/x.md
-git add tools/q.c tools/q.h tools/r.h tools/s.sh tools/u.c tools/v.sh tools/x.md
+printf 'notes\n=======\n' >'tools/y\z|&.md'
+git add tools/q.c tools/q.h tools/r.h tools/s.sh tools/u.c tools/v.sh tools/x.md 'tools/y\z|&.md'
 head=$(git rev-parse HEAD)
 ! git commit -q -m 'Add the slips' 2>"$WORK/quick.err" || fail "the slips were committed"
 [ "$(git rev-parse HEAD)" = "$head" ] || fail "the refused commit moved HEAD"
@@ -162,8 +163,9 @@ for want in 'tools/q.c:6: a // comment' 'tools/q.c:9: a function with no /\*\* b
     'tools/x.md:2: a conflict marker' 'tools/x.md:4: a conflict marker' 'tools/x.md:6: a conflict marker'; do
     grep -q "^$want" "$WORK/quick.err" || { cat "$WORK/quick.err" >&2; fail "no finding $want"; }
 done
+grep -qxF 'tools/y\z|&.md:2: a conflict marker' "$WORK/quick.err" || { cat "$WORK/quick.err" >&2; fail "no finding of the marker in a path that git quotes"; }
 git reset -q
-rm tools/q.c tools/q.h tools/r.h tools/s.sh tools/u.c tools/v.sh tools/x.md
+rm tools/q.c tools/q.h tools/r.h tools/s.sh tools/u.c tools/v.sh tools/x.md 'tools/y\z|&.md'
 
 # A commit message is one line in the imperative, with no trailing period.
 printf 'text\n' >tools/m.txt
