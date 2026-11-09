@@ -363,7 +363,7 @@
         {"assertion_id": "set-thread-area", "checks": "set_thread_area by int $0x80 with entry_number -1 takes TLS entry 12", "source": "program"},
         {"assertion_id": "tls-from-32", "checks": "32-bit code that loads selector 0x63 into GS reads the entry's block through it", "source": "program"},
         {"assertion_id": "tls-from-64", "checks": "64-bit code that loads the same selector reads the block too", "source": "program"},
-        {"assertion_id": "tls-after-sleep", "checks": "the selector still addresses the block, from both modes, after a sleep switches the process away and back", "source": "program"},
+        {"assertion_id": "tls-after-child", "checks": "a child sets its own entry 12 and reads its own block through 0x63, and the parent that waited for it still reads its block through 0x63 from both modes", "source": "program"},
         {"assertion_id": "get-thread-area", "checks": "get_thread_area reads entry 12 back with the base, limit and flags set", "source": "program"},
         {"assertion_id": "signal-frame", "checks": "a signal taken in 32-bit code runs its 64-bit handler with CS 0x23, SS 0x2B and the RIP after its int $0x80 saved, UC_SIGCONTEXT_SS set and UC_STRICT_RESTORE_SS clear", "source": "program"},
         {"assertion_id": "signal-return", "checks": "the handler's return resumes the 32-bit code, which comes back to 64-bit code with kill's result", "source": "program"},
