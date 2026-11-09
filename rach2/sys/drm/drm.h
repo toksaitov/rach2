@@ -1345,6 +1345,10 @@ int32_t drm_atomic_check_only(struct drm_atomic_state *state);
  * holds nothing of a commit that succeeded. May sleep. */
 int32_t drm_atomic_commit(struct drm_atomic_state *state);
 int32_t drm_atomic_nonblocking_commit(struct drm_atomic_state *state);
+/** Turn every CRTC, plane and connector of `dev` off in one commit, which
+ * drops the framebuffers they show, Linux's drm_atomic_helper_shutdown, for
+ * a driver's unplug: 0 or the commit's error. May sleep. */
+int32_t drm_atomic_helper_shutdown(struct drm_device *dev);
 /** The core's check, Linux's drm_atomic_helper_check: routing, modeset
  * marks, the CRTCs' `mode_valid`, then the planes' and CRTCs'
  * `atomic_check`. */
