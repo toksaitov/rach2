@@ -5,7 +5,7 @@
 .Nm virtio-gpu ,
 .Nm virtio_gpu ,
 .Nm virtio-vga
-.Nd DRM driver of the virtio GPU, as a 2D display
+.Nd DRM driver of the virtio GPU display and virgl 3D
 .Sh SYNOPSIS
 .In drm/drm.h
 .In drm/drm_mode.h
@@ -22,8 +22,11 @@ QEMU's
 a display controller, and
 .Ql -device virtio-vga ,
 which is a VGA controller as well, as Linux 6.12's virtio_gpu does.
-It takes the device's EDID feature when offered, and neither 3D, blob
-resources nor context types.
+It takes the device's EDID and virgl 3D features when offered.
+QEMU's
+.Ql -device virtio-vga-gl
+offers virgl.
+Blob resources and explicit context initialization are not negotiated.
 Under virtio-vga the driver first removes the firmware's framebuffer from
 every memory BAR of the device, so that
 .Xr fbdrm 4
@@ -55,7 +58,7 @@ The kernel logs the device's PCI function as
 or
 .Dq virtio-gpu-pci ,
 the features as Linux's
-.Dq features: -virgl +edid -resource_blob -host_visible
+.Dq features: +virgl +edid -resource_blob -host_visible
 and
 .Dq features: -context_init ,
 the number of scanouts and of capability sets, and each scanout's size
@@ -151,33 +154,75 @@ Mappings are cached.
 When the last reference to a buffer goes, its resource is unreferenced on
 the device and its pages are freed once the device answers.
 .Ss Ioctls
-The render node and the card take Linux's virtio_gpu ioctls, as a driver
-without 3D answers them:
+The render node and the card take Linux's virtio_gpu ioctls:
 .Bl -tag -width Ds
 .It Dv DRM_IOCTL_VIRTGPU_MAP
 The mmap offset of a buffer.
 .It Dv DRM_IOCTL_VIRTGPU_GETPARAM
 .Dv VIRTGPU_PARAM_CAPSET_QUERY_FIX
-is 1 and every other known parameter 0.
+is 1.
+.Dv VIRTGPU_PARAM_3D_FEATURES
+is 1 when virgl was negotiated, and
+.Dv VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs
+has a bit for each offered capset id.
+The other known parameters are 0.
 .It Dv DRM_IOCTL_VIRTGPU_RESOURCE_CREATE
-A 2D resource, target 2, of the given format and size over a new buffer of
-the given size, or a page for 0, with its handle and resource id.
+A resource over a new buffer of the given size, or a page for 0,
+returning its handle and resource id.
+With virgl it passes the target, format, bind flags, dimensions, array size,
+levels, samples and flags to the host.
+Without virgl it accepts a 2D resource, target 2, alone.
 .It Dv DRM_IOCTL_VIRTGPU_RESOURCE_INFO
 A buffer's size and resource id.
 .It Dv DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST
 Copies a box of a buffer to its resource, not waited for; the command's
 fence joins the buffer's reservation.
+With virgl, the box, level and backing offset go to TRANSFER_TO_HOST_3D.
+Nonzero stride and layer stride are refused for these resources.
 .It Dv DRM_IOCTL_VIRTGPU_WAIT
 Waits up to 15 seconds for a buffer's outstanding work, or with
 .Dv VIRTGPU_WAIT_NOWAIT
 says whether there is any.
-.It Dv DRM_IOCTL_VIRTGPU_EXECBUFFER , Dv DRM_IOCTL_VIRTGPU_TRANSFER_FROM_HOST , Dv DRM_IOCTL_VIRTGPU_GET_CAPS
-Fail with
+.It Dv DRM_IOCTL_VIRTGPU_EXECBUFFER
+Copies and queues virgl commands and holds the buffers named by the BO
+handle list until the host answers.
+An input fence descriptor waits for foreign producers; a fence on this
+control queue needs no wait, since its commands are ordered already.
+An output fence descriptor is a close-on-exec sync file.
+Input and output syncobjs, with timeline points, are also accepted.
+Submissions queue without waiting for earlier frames to finish.
+.It Dv DRM_IOCTL_VIRTGPU_TRANSFER_FROM_HOST
+Copies a box from the host into the buffer's backing, asynchronously,
+with a reservation fence for WAIT.
+.It Dv DRM_IOCTL_VIRTGPU_GET_CAPS
+Reads a supported capability set and version, copying the smaller of the
+user's size and the host's size.
+A zero size or an unsupported id or version is
+.Er EINVAL .
+With no capability sets the result is
 .Er ENOSYS .
+.Pp
+EXECBUFFER and TRANSFER_FROM_HOST return
+.Er ENOSYS
+without virgl.
 .It Dv DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB , Dv DRM_IOCTL_VIRTGPU_CONTEXT_INIT
 Fail with
 .Er EINVAL .
 .El
+.Ss Device loss
+Root may write
+.Ql 1
+to
+.Pa /sys/kernel/debug/dri/N/virtio_gpu_reset
+to reset and unplug the virtual GPU.
+Every pending fence fails with
+.Er ENODEV ,
+every context is invalidated, the transport stops DMA and every resource's
+backing is freed.
+The device nodes disappear, old descriptors' ioctls return
+.Er ENODEV
+and old mappings fault.
+A new boot is needed to use the device again.
 .Sh FILES
 .Bl -tag -width /dev/dri/renderD128+N
 .It Pa /dev/dri/cardN
@@ -195,7 +240,9 @@ while the buffer still has work.
 .It Er EINVAL
 A dumb buffer of other than 32 bits a pixel; a
 .Dv DRM_IOCTL_VIRTGPU_RESOURCE_CREATE
-of a 3D target, depth, array, sample count or more than one level; an
+of a 3D target, depth, array, sample count or more than one level without
+virgl; a transfer stride without a blob; ring selection without context
+initialization; an
 unknown
 .Dv DRM_IOCTL_VIRTGPU_GETPARAM
 parameter; a format modifier.
@@ -206,7 +253,7 @@ No buffer of the handle given.
 .It Er ENOSPC
 Every resource id is taken.
 .It Er ENOSYS
-A 3D call.
+A 3D call without virgl, or GET_CAPS on a device with no capability sets.
 .It Er ETIMEDOUT
 The device did not answer in five seconds.
 .El
@@ -215,7 +262,7 @@ The device did not answer in five seconds.
 .Xr fbdrm 4 ,
 .Xr drm-kms 7
 .Sh HISTORY
-The driver follows Linux 6.12's virtio_gpu without 3D.
+The driver follows Linux 6.12's virtio_gpu.
 Its commands are those of virtio 1.2, section 5.7.
 .Sh BUGS
 Under virtio-vga the screen is QEMU's VGA picture, the firmware's
