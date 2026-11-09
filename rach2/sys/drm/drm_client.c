@@ -641,9 +641,9 @@ static void con_settle(void)
     }
 }
 
-/** A master of the console's device took the screen: hand the screen, /fb
- * and the keyboard over. Does not sleep. */
-static void con_hand_over(void)
+/** A master of `dev`, the console's device, took the screen: hand the
+ * screen, /fb and the keyboard over. Does not sleep. */
+static void con_hand_over(struct drm_device *dev)
 {
     uint32_t flags;
 
@@ -656,6 +656,7 @@ static void con_hand_over(void)
     fb_hold();
     console_unlock(flags);
     kd_hold();
+    klog(KLOG_INFO, "console", "card%d: handed to a master, the keyboard off", dev->index);
 }
 
 /** No master holds `dev`, the console's device, now: take the screen back
@@ -679,11 +680,14 @@ static void con_take_back(struct drm_device *dev)
     console_unlock(flags);
     con_settle();
     kd_unhold();
+    klog(KLOG_INFO, "console", "card%d: taken back from a master, the keyboard on", dev->index);
     if (rc != 0) {
         klog(KLOG_WARN, "console", "card%d: screen not set: error %d", dev->index, (int)rc);
     } else if (!con.firmware) {
         klog(KLOG_INFO, "console", "card%d: %ux%u, the font at %ux", dev->index,
              (unsigned)screen.width, (unsigned)screen.height, (unsigned)fbcon_scale());
+    } else {
+        klog(KLOG_INFO, "console", "card%d: the firmware's framebuffer again", dev->index);
     }
 }
 
@@ -696,7 +700,7 @@ static void con_master_changed(struct drm_device *dev, struct drm_file *master)
     }
     con.gen++;
     if (master) {
-        con_hand_over();
+        con_hand_over(dev);
     } else if (con.handed) {
         con_take_back(dev);
     }
