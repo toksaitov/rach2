@@ -12,6 +12,8 @@
  * host-deps: rach2/sys/drm/i915/i915_ring.c rach2/sys/drm/i915/i915_ppgtt.c
  * host-deps: rach2/sys/drm/i915/i915_firstlight.c rach2/sys/drm/i915/i915_rc6.c
  * host-deps: rach2/sys/drm/i915/i915_rps.c rach2/sys/tick.c
+ * host-deps: rach2/sys/drm/i915/intel_bios.c
+ * host-deps: rach2/sys/drm/i915/intel_opregion.c
  *
  * i915_pci.c is included whole. The bus holds the model's 00:02.0, whose
  * configuration space the PCI calls read and write; the DRM core is a
@@ -20,9 +22,12 @@
  * `i915_driver_bind`, as the fault backend will, or probes the bus, which
  * maps BAR 0 through the MMIO backend; `map_mmio_typed` then hands out a
  * buffer of the test's in place of the chip's registers, and another in
- * place of the GTT's entries. The bind's base, forcewake, the power well,
- * stolen memory and the GTT, is i915_base_hosttest.c's, and its rings and
- * interrupts i915_ring_hosttest.c's; here the frame allocator hands out
+ * place of the GTT's entries. The firmware's memory cannot be mapped, so
+ * the bind finds no OpRegion and no option ROM and takes Linux's defaults
+ * for the outputs; intel_bios_hosttest.c tests the tables themselves. The
+ * bind's base, forcewake, the power well, stolen memory and the GTT, is
+ * i915_base_hosttest.c's, and its rings and interrupts
+ * i915_ring_hosttest.c's; here the frame allocator hands out
  * one frame, the heap's pages have made-up physical addresses, and the
  * IOMMU is off. RC6 and the GT's frequency are i915_power_hosttest.c's,
  * and the card has no directory in /sys here.
@@ -151,6 +156,38 @@ uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache)
     free(map_buffer);
     map_buffer = (uint32_t *)calloc(size / 4, sizeof(uint32_t));
     return (uintptr_t)map_buffer;
+}
+
+/* The firmware's memory, the OpRegion at ASLS and the option ROM's
+ * shadow, which this test does not give: each map is counted and fails. */
+static int fw_maps;
+
+uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
+{
+    (void)phys;
+    (void)size;
+    (void)cache;
+    fw_maps++;
+    return 0;
+}
+
+void mmio_unmap(uintptr_t va, size_t size)
+{
+    (void)va;
+    (void)size;
+}
+
+/* DRM's mode helpers, which the panel's decoding calls and the bind does
+ * not reach. */
+uint32_t drm_mode_vrefresh(const struct drm_mode_modeinfo *mode)
+{
+    (void)mode;
+    return 0;
+}
+
+void drm_mode_set_name(struct drm_mode_modeinfo *mode)
+{
+    mode->name[0] = '\0';
 }
 
 int pat_write_combining(void)
@@ -658,8 +695,10 @@ static void row_bind_model(void)
     fresh(&m);
     i915_model_poke(&m, DEIER, DE_MASTER_IRQ_CONTROL | DE_PIPE_VBLANK_IVB(0));
     i915_model_poke(&m, GTIER, GT_RENDER_USER_INTERRUPT);
+    fw_maps = 0;
     CHECK("bind: the model binds", i915_driver_bind(&m.pci, &m.hw) == 0);
     CHECK("bind: nothing mapped", maps == 0);
+    CHECK("bind: the OpRegion at ASLS, then the boot display's ROM, sought", fw_maps == 2);
     dev = last_registered;
     CHECK("bind: one device registered", registered == 1 && dev);
     if (dev) {
@@ -672,6 +711,9 @@ static void row_bind_model(void)
               to_i915(dev)->power.count == 1 && to_i915(dev)->stolen.size == 0x4000000u &&
                   to_i915(dev)->ggtt.total == 0x80000000u && to_i915(dev)->ggtt.nkept == 1 &&
                   to_i915(dev)->uncore.wake_count == 0);
+        CHECK("bind: without a VBT, Linux's defaults for each port",
+              to_i915(dev)->opregion.base == NULL && !to_i915(dev)->vbt.present &&
+                  to_i915(dev)->vbt.nencoders == INTEL_NUM_PORTS);
         check_identity(dev, to_i915(dev));
         check_unplug(&m, dev);
     }

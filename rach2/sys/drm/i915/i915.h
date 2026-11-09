@@ -9,6 +9,7 @@
 #include "../../lib/spinlock.h"
 #include "../../proc/wait_queue.h"
 #include "i915_hw.h"
+#include "intel_bios.h"
 
 /*
  * rach2/sys/drm/i915/Readme.md tells the design. The rules every file of
@@ -341,7 +342,9 @@ struct i915_rps {
  * stolen memory and the GTT's size (SNB_GMCH_CTRL, INTEL_BSM) as the
  * firmware left them, and `subsystem_vendor` and `subsystem_device` the
  * board's ids. `msi_vector` is the vector of the device's message, or -1
- * while it has none; `irqs` counts the interrupts taken on it.
+ * while it has none; `irqs` counts the interrupts taken on it. `opregion`
+ * is the firmware's OpRegion and `vbt` the video BIOS table decoded
+ * (intel_bios.h), Linux's defaults when the firmware gave none.
  */
 struct drm_i915_private {
     struct drm_device drm;
@@ -364,6 +367,8 @@ struct drm_i915_private {
     struct i915_gt gt;
     struct i915_rc6 rc6;
     struct i915_rps rps;
+    struct intel_opregion opregion;
+    struct intel_vbt vbt;
 };
 
 /* The driver's device of a DRM device it bound. */
@@ -387,6 +392,16 @@ const struct i915_id *i915_id_lookup(uint16_t device_id);
  *         restored and the message is off, and every source stays masked.
  */
 int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw);
+
+/**
+ * Find the OpRegion through ASLS and decode the VBT it holds, or the option
+ * ROM's when it holds none, as Linux's intel_opregion_setup and
+ * intel_bios_init do; Linux's defaults stand in when neither has one.
+ * `command` is the PCI command word the firmware left, which says whether
+ * the device decoded the legacy ROM's shadow at boot. Failures are logged
+ * and the bind goes on, as on Linux.
+ */
+void i915_bios_setup(struct drm_i915_private *i915, uint16_t command);
 
 /* ---- i915_uncore.c ---- */
 

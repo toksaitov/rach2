@@ -12,6 +12,7 @@
 #include "../../lib/kerrno.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
+#include "../../mm/paging.h"
 
 #define PCI_VENDOR_INTEL 0x8086
 
@@ -165,7 +166,54 @@ static void i915_unplug(struct drm_device *dev)
 static void i915_release(struct drm_device *dev)
 {
     i915_ggtt_fini(to_i915(dev));
+    intel_bios_fini(&to_i915(dev)->vbt);
+    intel_opregion_fini(&to_i915(dev)->opregion);
     kfree(to_i915(dev));
+}
+
+/* The option ROM's shadow, where the firmware leaves the ROM of the
+ * device that drove the screen at boot (Linux's pci_map_rom with
+ * IORESOURCE_ROM_SHADOW). */
+#define I915_ROM_SHADOW      0xc0000u
+#define I915_ROM_SHADOW_SIZE 0x20000u
+#define PCI_CLASS_DISPLAY    0x03
+#define PCI_COMMAND_IO       0x1
+#define PCI_COMMAND_MEMORY   0x2
+
+void i915_bios_setup(struct drm_i915_private *i915, uint16_t command)
+{
+    const pci_device_t *p = &i915->pci;
+    uint32_t asls, size = 0;
+    uint8_t *vbt = NULL;
+    uintptr_t rom;
+    int32_t err;
+
+    asls = pci_read_config32(p->bus, p->device, p->function, ASLS);
+    err = intel_opregion_setup(&i915->opregion, asls);
+    if (err < 0 && err != -ENODEV) {
+        klog(KLOG_WARN, "i915", "opregion: at 0x%08x not used: error %d", (unsigned)asls, (int)err);
+    }
+    if (i915->opregion.vbt) {
+        err = intel_bios_init(&i915->vbt, i915->opregion.vbt, i915->opregion.vbt_size,
+                              i915->opregion.rvda ? "OpRegion (RVDA)" : "OpRegion (Mailbox #4)");
+    } else {
+        /* The x86 boot display's ROM is the shadow, which it decoded with
+         * I/O and memory on, as Linux's pci_fixup_video judges. */
+        if (p->class_code == PCI_CLASS_DISPLAY && p->subclass == 0 &&
+            (command & (PCI_COMMAND_IO | PCI_COMMAND_MEMORY)) ==
+                (PCI_COMMAND_IO | PCI_COMMAND_MEMORY)) {
+            rom = mmio_map(I915_ROM_SHADOW, I915_ROM_SHADOW_SIZE, PTE_NOCACHE);
+            if (rom) {
+                vbt = intel_bios_rom_vbt((const uint8_t *)rom, I915_ROM_SHADOW_SIZE, &size);
+                mmio_unmap(rom, I915_ROM_SHADOW_SIZE);
+            }
+        }
+        err = intel_bios_init(&i915->vbt, vbt, size, vbt ? "PCI ROM" : NULL);
+        kfree(vbt);
+    }
+    if (err < 0) {
+        klog(KLOG_ERR, "i915", "vbt: decoded in part: error %d", (int)err);
+    }
 }
 
 /**
@@ -220,10 +268,13 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     i915_irq_reset(i915);
     err = i915_base_init(i915);
     if (err == 0) {
+        i915_bios_setup(i915, command);
         err = i915_devices_add(i915);
     }
     if (err < 0) {
         i915_ggtt_fini(i915);
+        intel_bios_fini(&i915->vbt);
+        intel_opregion_fini(&i915->opregion);
         pci_write_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND, command);
         kfree(i915);
         return err;
