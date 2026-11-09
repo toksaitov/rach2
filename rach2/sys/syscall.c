@@ -956,8 +956,9 @@ static void ntp_rtc_sync(void)
 
 /* Whether a struct timex of longs, which adjtimex and clock_adjtime take,
  * has the 64-bit layout of clock_adjtime64's: so where a long has 64 bits,
- * as on x86-64. */
-#define TIMEX_LONGS_WIDE (sizeof(long) == 8)
+ * as on x86-64, except for an i386 call there, whose timex is the 128-byte
+ * one of 32-bit longs, as Linux's compat adjtimex reads it. */
+#define TIMEX_LONGS_WIDE (sizeof(long) == 8 && !in_compat_syscall())
 
 /**
  * The common body of adjtimex, clock_adjtime and clock_adjtime64: the

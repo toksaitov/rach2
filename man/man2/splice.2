@@ -4,6 +4,7 @@
 .Sh NAME
 .Nm splice ,
 .Nm tee ,
+.Nm vmsplice ,
 .Nm sendfile ,
 .Nm copy_file_range
 .Nd copy between descriptors in the kernel
@@ -13,6 +14,8 @@
 .Fn splice "int fd_in" "off_t *off_in" "int fd_out" "off_t *off_out" "size_t len" "unsigned int flags"
 .Ft ssize_t
 .Fn tee "int fd_in" "int fd_out" "size_t len" "unsigned int flags"
+.Ft ssize_t
+.Fn vmsplice "int fd" "const struct iovec *iov" "size_t nr_segs" "unsigned int flags"
 .In sys/sendfile.h
 .Ft ssize_t
 .Fn sendfile "int out_fd" "int in_fd" "off_t *offset" "size_t count"
@@ -76,6 +79,29 @@ bytes from one pipe to another and leaves them in the first, waiting as
 .Fn splice
 does.
 .Pp
+.Fn vmsplice
+copies the
+.Fa nr_segs
+buffers of
+.Fa iov
+into the pipe of the write end
+.Fa fd ,
+as
+.Xr writev 2
+would, or the pipe of a read end into the buffers; a descriptor open both
+ways writes.
+Linux hands the pipe the caller's pages; this kernel copies the bytes,
+which a caller that leaves a buffer alone after
+.Dv SPLICE_F_GIFT
+cannot tell apart.
+The pipe end waits as
+.Fn splice
+does; reading, only the first buffer waits, and the call stops at an
+empty pipe once it has copied a byte.
+The vector is checked whole first, as
+.Xr readv 2
+checks it.
+.Pp
 .Fn sendfile
 copies up to
 .Fa count
@@ -106,6 +132,8 @@ The i386 system call numbers are 313 for
 .Fn splice ,
 315 for
 .Fn tee ,
+316 for
+.Fn vmsplice ,
 187 for
 .Fn sendfile
 with a 32-bit offset and 239 for
@@ -115,7 +143,7 @@ with a 64-bit one, and 377 for
 musl's
 .Fn sendfile
 uses 239.
-On x86-64 they are 275, 276, 40 and 326, every offset is 64 bits, and
+On x86-64 they are 275, 276, 278, 40 and 326, every offset is 64 bits, and
 there is no
 .Nm sendfile64 .
 .Sh RETURN VALUES
@@ -153,15 +181,21 @@ and no room.
 A descriptor is not open, was opened with
 .Dv O_PATH ,
 or is not open for its direction; for
+.Fn vmsplice ,
+also a descriptor that is no pipe; for
 .Fn copy_file_range ,
 also an output with
 .Dv O_APPEND .
 .It Bq Er EFAULT
-An offset cannot be read or written.
+An offset cannot be read or written, or a
+.Fn vmsplice
+vector or buffer cannot be reached.
 .It Bq Er EINTR
 A signal came before a byte moved.
 .It Bq Er EINVAL
-A flag is unknown, neither
+A flag is unknown, a
+.Fn vmsplice
+vector has more than 1024 buffers or 2 GiB or more in all, neither
 .Fn splice
 descriptor is a pipe, both are one pipe, a
 .Fn tee
