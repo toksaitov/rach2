@@ -1218,8 +1218,8 @@ struct sw_sync_create_fence_data {
 
 struct sw_sync_get_deadline {
     uint64_t deadline_ns;
-    uint32_t fence_fd;
     uint32_t pad;
+    int32_t fence_fd;
 };
 
 #define SW_SYNC_IOC_MAGIC        'W'
