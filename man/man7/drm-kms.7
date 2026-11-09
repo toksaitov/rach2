@@ -1,0 +1,261 @@
+.Dd November 10, 2026
+.Dt DRM-KMS 7
+.Os
+.Sh NAME
+.Nm drm-kms ,
+.Nm kms
+.Nd kernel mode setting on a DRM card
+.Sh DESCRIPTION
+A card node of
+.Xr drm 4
+whose driver sets modes describes its display as mode objects and changes
+it by commits, as Linux 6.12 does.
+The structures and numbers are those of
+.In drm/drm_mode.h
+and
+.In drm/drm_fourcc.h .
+.Pp
+A CRTC scans out a mode and composes planes: one primary plane, at most
+one cursor plane, and any overlay planes.
+An encoder feeds a connector from a CRTC it can take, and a connector is an
+output a monitor is plugged into, with the modes of its EDID.
+A framebuffer is a buffer object, or up to four, in a fourcc format with a
+modifier, and a blob is bytes a property names, such as a mode or an EDID.
+Each object has an ID, the lowest free from 1, and properties: each a
+name, flags and values, a range, an enum, a bitmask, a blob or an object.
+.Pp
+The client capabilities of
+.Dv DRM_IOCTL_SET_CLIENT_CAP
+change what a file sees.
+.Dv DRM_CLIENT_CAP_UNIVERSAL_PLANES
+lists the primary and cursor planes beside the overlays;
+.Dv DRM_CLIENT_CAP_ATOMIC
+sets that one too, shows the properties marked
+.Dv DRM_MODE_PROP_ATOMIC
+and allows
+.Dv DRM_IOCTL_MODE_ATOMIC ;
+.Dv DRM_CLIENT_CAP_ASPECT_RATIO
+gives the CEA modes their picture aspect in their flags.
+.Ss Reading the display
+.Bl -tag -width DRM_IOCTL_MODE_OBJ_GETPROPERTIES
+.It Dv DRM_IOCTL_MODE_GETRESOURCES
+The IDs of the framebuffers the file made, the CRTCs, the connectors and
+the encoders, and the limits of a framebuffer's size.
+An array is filled when its count is at least the number there is; each
+count is set to that number.
+.It Dv DRM_IOCTL_MODE_GETPLANERESOURCES
+The planes the file's capabilities list.
+.It Dv DRM_IOCTL_MODE_GETPLANE
+A plane's CRTC and framebuffer, the CRTCs it can take as a mask by index,
+and its formats.
+.It Dv DRM_IOCTL_MODE_GETCRTC
+A CRTC's mode, the primary plane's framebuffer and place, and its gamma
+size.
+.It Dv DRM_IOCTL_MODE_GETENCODER
+An encoder's type, its CRTC and the CRTCs it can take.
+.It Dv DRM_IOCTL_MODE_GETCONNECTOR
+A connector's type, state, size in millimetres, encoders, properties and
+modes.
+A call by the master with
+.Fa count_modes
+0 probes the monitor first: its EDID becomes the connector's
+.Ql EDID
+blob, cleaned as Linux cleans it, and its modes are read in Linux's order,
+checked against the driver's limits, and sorted preferred first, then by
+size, refresh and clock.
+A connected monitor without a usable EDID has the DMT modes up to
+1024x768 at 60 Hz, and a DisplayPort one 640x480 preferred.
+.It Dv DRM_IOCTL_MODE_OBJ_GETPROPERTIES
+An object's property IDs and values.
+.It Dv DRM_IOCTL_MODE_GETPROPERTY
+A property's name, flags, range or enum names.
+.It Dv DRM_IOCTL_MODE_GETPROPBLOB
+A blob's length, and its bytes when the buffer holds them.
+.It Dv DRM_IOCTL_MODE_GETGAMMA
+A CRTC's gamma table, whose size the caller gives.
+.El
+.Ss Blobs and framebuffers
+.Bl -tag -width DRM_IOCTL_MODE_OBJ_GETPROPERTIES
+.It Dv DRM_IOCTL_MODE_CREATEPROPBLOB
+A blob of the caller's bytes, which the file owns.
+.It Dv DRM_IOCTL_MODE_DESTROYPROPBLOB
+Let go of a blob the file owns; a property that names it keeps it.
+.It Dv DRM_IOCTL_MODE_ADDFB2
+A framebuffer of a format, with a handle, pitch and offset for each of the
+format's planes, and with
+.Dv DRM_MODE_FB_MODIFIERS
+a modifier.
+A plane must take the format and modifier, and each object must hold its
+part.
+.It Dv DRM_IOCTL_MODE_ADDFB
+A framebuffer of one object in the format Linux names for a bpp and
+depth.
+.It Dv DRM_IOCTL_MODE_GETFB , Dv DRM_IOCTL_MODE_GETFB2
+A framebuffer's size, format, pitches, offsets and modifier, with a handle
+to each object for the master or root, and 0 for any other caller.
+.It Dv DRM_IOCTL_MODE_RMFB
+Remove a framebuffer the file made, from every plane that shows it first,
+turning off a CRTC whose primary plane it is when the driver needs that.
+.It Dv DRM_IOCTL_MODE_CLOSEFB
+Let go of a framebuffer the file made and leave it on the screen.
+.El
+.Pp
+A file's close removes each framebuffer it made as
+.Dv DRM_IOCTL_MODE_RMFB
+does and lets go of its blobs.
+Each plane's
+.Ql IN_FORMATS
+blob is a
+.Vt struct drm_format_modifier_blob :
+its formats, and for each modifier the formats it goes with.
+.Ss Atomic commits
+.Dv DRM_IOCTL_MODE_ATOMIC
+sets properties of CRTCs, planes and connectors in one state, checks it
+whole, and makes it the display's, or nothing.
+Its flags are
+.Bl -tag -width DRM_MODE_ATOMIC_ALLOW_MODESET
+.It Dv DRM_MODE_ATOMIC_TEST_ONLY
+Check the state and change nothing.
+.It Dv DRM_MODE_ATOMIC_ALLOW_MODESET
+Allow a change of a mode, of a CRTC's active state or of a connector's
+CRTC; without it such a commit is
+.Er EINVAL .
+.It Dv DRM_MODE_ATOMIC_NONBLOCK
+Return before the new state reaches the screen.
+.It Dv DRM_MODE_PAGE_FLIP_EVENT
+Queue a
+.Dv DRM_EVENT_FLIP_COMPLETE
+for each CRTC of the state, with the call's
+.Fa user_data ,
+when the state reaches the screen.
+.It Dv DRM_MODE_PAGE_FLIP_ASYNC
+Flip without waiting for the vblank, on a driver that can.
+.El
+.Pp
+A plane's
+.Ql FB_ID
+and
+.Ql CRTC_ID
+show a framebuffer on a CRTC,
+.Ql SRC_X ,
+.Ql SRC_Y ,
+.Ql SRC_W
+and
+.Ql SRC_H
+choose its part in 16.16 fixed point, and
+.Ql CRTC_X ,
+.Ql CRTC_Y ,
+.Ql CRTC_W
+and
+.Ql CRTC_H
+its place in pixels.
+.Ql IN_FENCE_FD
+is a sync file the commit waits for.
+A CRTC's
+.Ql ACTIVE
+turns it on,
+.Ql MODE_ID
+is a blob of a
+.Vt struct drm_mode_modeinfo ,
+.Ql GAMMA_LUT ,
+.Ql DEGAMMA_LUT
+and
+.Ql CTM
+are colour blobs, and
+.Ql OUT_FENCE_PTR
+is where to write a fence's descriptor.
+A connector's
+.Ql CRTC_ID
+routes it.
+.Ss The calls before atomic
+Each is made one commit, as Linux's helpers make it.
+.Bl -tag -width DRM_IOCTL_MODE_OBJ_SETPROPERTY
+.It Dv DRM_IOCTL_MODE_SETCRTC
+Set a CRTC's mode, framebuffer, offset and connectors, or turn it off;
+framebuffer \-1 keeps the one shown.
+.It Dv DRM_IOCTL_MODE_SETPLANE
+Show a framebuffer on a plane, or hide the plane for framebuffer 0.
+.It Dv DRM_IOCTL_MODE_CURSOR , Dv DRM_IOCTL_MODE_CURSOR2
+Set the cursor from an ARGB8888 buffer object, hide it for handle 0, or
+move it, through the CRTC's cursor plane;
+.Dv DRM_IOCTL_MODE_CURSOR2
+gives the hotspot as well.
+.It Dv DRM_IOCTL_MODE_PAGE_FLIP
+Show another framebuffer of the same format on a CRTC's primary plane,
+without a modeset, with an event when asked.
+.It Dv DRM_IOCTL_MODE_DIRTYFB
+Give the planes that show a framebuffer its changed rectangles as
+.Ql FB_DAMAGE_CLIPS ,
+on a driver that flushes them.
+.It Dv DRM_IOCTL_MODE_SETGAMMA
+Load a CRTC's gamma table and commit it as
+.Ql GAMMA_LUT ,
+or
+.Ql DEGAMMA_LUT
+on a CRTC with only that.
+.It Dv DRM_IOCTL_MODE_OBJ_SETPROPERTY , Dv DRM_IOCTL_MODE_SETPROPERTY
+Set one property; a connector's
+.Ql DPMS
+turns its CRTC off, or on while any of its connectors is on.
+.El
+.Ss Errors
+.Bl -tag -width Er
+.It Er EACCES
+A plane's or connector's
+.Ql CRTC_ID
+of no CRTC.
+.It Er EBUSY
+A page flip of a CRTC whose primary plane shows nothing.
+.It Er EFAULT
+An array or a value out of the caller's memory.
+.It Er EINVAL
+An unknown flag; a value a property does not allow; a modeset without
+.Dv DRM_MODE_ATOMIC_ALLOW_MODESET ;
+an event without a CRTC;
+a format, modifier, pitch or size the device does not take; a framebuffer
+a plane cannot show; a route an encoder cannot take; a page flip that
+changes the format or names a target vblank; a blob of length 0 or of no
+ID; or
+.Dv DRM_IOCTL_MODE_ATOMIC
+by a file without the atomic capability.
+.It Er ENOENT
+An ID of no object of the kind asked, a property an atomic commit names
+that the object does not have, or a framebuffer of another file.
+.It Er ENOSPC
+A plane's source outside its framebuffer.
+.It Er ENOSYS
+.Dv DRM_IOCTL_MODE_SETGAMMA
+on a CRTC without a gamma table, or
+.Dv DRM_IOCTL_MODE_DIRTYFB
+on a driver that needs no flush.
+.It Er ENXIO
+.Dv DRM_IOCTL_MODE_CURSOR
+on a CRTC without a cursor.
+.It Er EOPNOTSUPP
+A device without mode setting, an atomic call on a driver without atomic
+commits, or a lease call.
+.It Er EPERM
+.Dv DRM_IOCTL_MODE_DESTROYPROPBLOB
+of a blob another file owns.
+.It Er ERANGE
+A size or place past 32 bits, or a
+.Dv DRM_IOCTL_MODE_SETCRTC
+offset past 16 bits.
+.El
+.Sh SEE ALSO
+.Xr ioctl 2 ,
+.Xr drm 4 ,
+.Xr dma-buf 7
+.Sh STANDARDS
+The calls, structures, properties, errors, mode lists and the order of
+object IDs are Linux 6.12's.
+.Sh BUGS
+A commit completes before the call returns, so
+.Dv DRM_MODE_ATOMIC_NONBLOCK
+waits, and an event is sent as the commit ends, not at the vblank.
+.Ql OUT_FENCE_PTR
+is written \-1, and a target vblank of a page flip is
+.Er EINVAL .
+The lease calls are
+.Er EOPNOTSUPP .
+The EDID's quirks, DisplayID blocks, stereo modes and tiles are not read.
