@@ -128,6 +128,8 @@ def main():
         proton = Path(env.get("D3D_PROTON", "/opt/proton"))
         launch = [sys.executable, str(proton / "proton")]
         if family in ("probe", "wine"):
+            if family == "wine":
+                env["PROTON_LOG"] = "0"
             server = proton / "files/bin/wineserver"
             status, _ = run_command(launch + ["run", "c:\\windows\\system32\\cmd.exe", "/c", "exit", "0"],
                                     env, out / "prefix.log")
