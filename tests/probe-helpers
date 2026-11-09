@@ -2,6 +2,7 @@
 # use. tools/verify/probecheck.sh reads this file.
 drmcapture capture of a card's scanout and its CRC-32, run by the graphics runners in their guests (tests/graphics/Readme.md)
 hello program that other probes, suites and host tests run or open
+hotplugprobe manual display hotplug check: a QEMU window resize or a VNC SetDesktopSize reaches it as a uevent and a new preferred mode (rach2/sys/drm/Readme.md)
 idreport identity and environment fixture for account probes
 lenovoacpi Lenovo ACPI acceptance run by the native collection on each release
 musl/budgetmusl manual resource budget diagnostic
