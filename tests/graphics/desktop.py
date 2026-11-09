@@ -67,7 +67,7 @@ finally:
 
 def session():
     """Wait for the compositor and check its identity, seat and input database."""
-    original = os.open("/sys/class/input", os.O_PATH | os.O_DIRECTORY)
+    original = os.open("/sys/class/net", os.O_PATH | os.O_DIRECTORY)
     reopened = None
     try:
         reopened = os.open("/proc/self/fd/%d" % original, os.O_PATH | os.O_DIRECTORY)
@@ -80,6 +80,27 @@ def session():
             os.close(original)
         if reopened is not None:
             os.close(reopened)
+    with tempfile.TemporaryDirectory(prefix="desktop-path-", dir="/tmp") as name:
+        path = Path(name) / "held"
+        path.write_bytes(b"held inode")
+        original = os.open(path, os.O_RDONLY)
+        reopened = None
+        try:
+            reopened = os.open("/proc/self/fd/%d" % original, os.O_PATH)
+            path.unlink()
+            os.close(original)
+            original = None
+            assert os.fstat(reopened).st_nlink == 0
+            reader = os.open("/proc/self/fd/%d" % reopened, os.O_RDONLY)
+            try:
+                assert os.read(reader, 32) == b"held inode"
+            finally:
+                os.close(reader)
+        finally:
+            if original is not None:
+                os.close(original)
+            if reopened is not None:
+                os.close(reopened)
     runtime = Path("/run/user/1001")
     while not (runtime / "wayland-0").is_socket():
         time.sleep(0.1)
