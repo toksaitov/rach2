@@ -25,6 +25,20 @@
  *   directory lists the node, the node's `dev` gives its numbers and its
  *   uevent its DEVNAME, and /sys/class/drm links it. Not run on a machine
  *   with no DRM node.
+ * * `dri`: the first card's debugfs files, those IGT 2.0's CRC and
+ *   connector-forcing code opens among them, as Linux 6.12 gives them:
+ *   /sys/kernel/debug/dri/N a link to the device's directory, whose `name`
+ *   reads "DRIVER dev=DIR unique=DIR" and whose `clients` begins with
+ *   Linux's header. For its first connector, which the probe probes as the
+ *   card's master: crtc-0/crc/control and crc/data; `force` reads
+ *   "unspecified", takes "off", which the next probe reports as
+ *   disconnected, and "unspecified" back; `edid_override`, opened with
+ *   O_TRUNC as IGT opens it, takes an EDID of 520 by 290 mm, reads it back
+ *   and gives the next probe that size, and "reset" empties it; and the
+ *   connector's /sys `status` reads "disconnected" at once after "off" and
+ *   "connected" after "detect", as status_store probes. Not run on a
+ *   machine with no card, and the connector's part not on a card without
+ *   one.
  * * `uevent`: a socket of NETLINK_KOBJECT_UEVENT bound to group 1 hears
  *   `add@DEVPATH` with ACTION, SUBSYSTEM, SYNTH_UUID=0 and the SEQNUM that
  *   /sys/kernel/uevent_seqnum then reads, from the kernel (port 0) to group
@@ -48,6 +62,8 @@
 
 #define O_RDONLY    0
 #define O_WRONLY    1
+#define O_RDWR      2
+#define O_TRUNC     01000
 #define O_DIRECTORY 0200000
 #define O_CLOEXEC   02000000
 
@@ -64,6 +80,18 @@
 #define SCM_CREDENTIALS        2
 
 #define DRM_MAJOR 226
+
+#define S_IFLNK 0120000
+
+/* Linux's DRM_IOCTL_SET_MASTER and DRM_IOCTL_MODE_GETCONNECTOR, whose
+ * struct drm_mode_get_connector is 80 bytes on both architectures. */
+#define DRM_IOCTL_SET_MASTER        0x641eul
+#define DRM_IOCTL_MODE_GETCONNECTOR 0xc05064a7ul
+#define GETCONN_ID                  48 /* connector_id */
+#define GETCONN_CONNECTION          60
+#define GETCONN_MM_WIDTH            64
+#define DRM_CONNECTED               1
+#define DRM_DISCONNECTED            2
 
 /* Linux's sockaddr_nl, iovec, msghdr and cmsghdr, whose longs and
  * pointers give each architecture's layout. */
@@ -629,6 +657,241 @@ static void cards_row(void)
     report_held();
 }
 
+/** Write the `len` bytes at `data` to the file `path`, opened with
+ * `flags` beside O_WRONLY: what write returns, or the open's negated
+ * errno. */
+static long write_file(const char *path, const void *data, long len, long flags)
+{
+    long fd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_CLOEXEC | flags, 0), n;
+
+    if (fd < 0) {
+        return fd;
+    }
+    n = syscall3(SYS_WRITE, fd, (long)data, len);
+    syscall1(SYS_CLOSE, fd);
+    return n;
+}
+
+/** Keep the name of the first connector of the card in `card_name`, past
+ * its "cardN-", in the buffer at `arg`. */
+static void first_connector(const char *name, void *arg)
+{
+    char *out = (char *)arg;
+    int n = str_len(card_name);
+
+    if (!out[0] && starts(name, card_name) && name[n] == '-') {
+        join(out, 32, name + n + 1, 0, 0);
+    }
+}
+
+/** An EDID 1.3 of one block: a digital sink 52 by 29 cm, 520 by 290 mm in
+ * its 1024x768 timing at 60 Hz, with the checksum filled at its use. */
+static unsigned char probe_edid[128] = {
+    0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x48, 0x32, 0x02, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x22, 0x01, 0x03, 0x80, 0x34, 0x1d, 0x78, 0x0a, 0xee, 0x91, 0xa3, 0x54, 0x4c, 0x99, 0x26,
+    0x0f, 0x50, 0x54, 0x21, 0x08, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
+    0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x64, 0x19, 0x00, 0x40, 0x41, 0x00, 0x26, 0x30, 0x18, 0x88,
+    0x36, 0x00, 0x08, 0x22, 0x21, 0x00, 0x00, 0x18, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+/** Probe the connector `id` through the card `fd` as its master, as
+ * drmModeGetConnector does: its connection, with its width in mm in
+ * `*mm`. Fails at a refused call. */
+static unsigned get_connector(long fd, unsigned id, unsigned *mm)
+{
+    unsigned long long req[10];
+
+    for (*mm = 0; *mm < 10; ++*mm) {
+        req[*mm] = 0;
+    }
+    *(unsigned *)((char *)req + GETCONN_ID) = id;
+    if (syscall3(SYS_IOCTL, fd, (long)DRM_IOCTL_MODE_GETCONNECTOR, (long)req) != 0) {
+        fail("GETCONNECTOR of the card's first connector is refused");
+    }
+    *mm = *(unsigned *)((char *)req + GETCONN_MM_WIDTH);
+    return *(unsigned *)((char *)req + GETCONN_CONNECTION);
+}
+
+/** The connector `conn`'s file `file` in debugfs's `dir`, into `path`. */
+static void conn_file(char *path, int cap, const char *dir, const char *conn, const char *file)
+{
+    join(path, cap, dir, "/", conn);
+    join(path, cap, path, "/", file);
+}
+
+/** The connector `conn`'s file `file` in /sys, into `path`. */
+static void conn_sys(char *path, int cap, const char *conn, const char *file)
+{
+    join(path, cap, "/sys/class/drm/", card_name, "-");
+    join(path, cap, path, conn, "/");
+    join(path, cap, path, file, 0);
+}
+
+/** `force` reads unspecified, takes off, which the next probe through `fd`
+ * of the connector `id` sees, and unspecified back. */
+static void dri_force(long fd, unsigned id, const char *dir, const char *conn)
+{
+    char path[160], text[64];
+    unsigned mm;
+
+    conn_file(path, sizeof(path), dir, conn, "force");
+    if (read_file(path, text, sizeof(text)) < 0 || !str_eq(text, "unspecified\n")) {
+        fail2("force does not read unspecified: ", path);
+    }
+    if (write_file(path, "off\n", 4, 0) != 4 || read_file(path, text, sizeof(text)) < 0 ||
+        !str_eq(text, "off\n")) {
+        fail2("force does not take off: ", path);
+    }
+    if (get_connector(fd, id, &mm) != DRM_DISCONNECTED) {
+        fail2("the probe after force off does not find the connector disconnected: ", conn);
+    }
+    if (write_file(path, "unspecified", 11, 0) != 11 ||
+        get_connector(fd, id, &mm) != DRM_CONNECTED) {
+        fail2("force unspecified does not bring the connector back: ", conn);
+    }
+}
+
+/** `edid_override`, opened with O_TRUNC, takes the probe's EDID and gives
+ * it back, the next probe has its size, and reset empties it. */
+static void dri_edid(long fd, unsigned id, const char *dir, const char *conn)
+{
+    char path[160], text[256], num[16];
+    unsigned mm, i, sum = 0;
+
+    conn_file(path, sizeof(path), dir, conn, "edid_override");
+    for (i = 0; i < 127; i++) {
+        sum += probe_edid[i];
+    }
+    probe_edid[127] = (unsigned char)(256 - (sum & 0xff));
+    if (write_file(path, probe_edid, 128, O_TRUNC) != 128 ||
+        read_file(path, text, sizeof(text)) != 128) {
+        fail2("edid_override does not take and give back an EDID: ", path);
+    }
+    for (i = 0; i < 128; i++) {
+        if ((unsigned char)text[i] != probe_edid[i]) {
+            fail2("edid_override gives back other bytes: ", path);
+        }
+    }
+    if (get_connector(fd, id, &mm) != DRM_CONNECTED || mm != 520) {
+        decimal(num, mm);
+        fail2("the probe after the override does not give 520 mm but ", num);
+    }
+    if (write_file(path, "reset", 5, O_TRUNC) != 5 || read_file(path, text, sizeof(text)) != 0) {
+        fail2("edid_override is not empty after reset: ", path);
+    }
+    if (get_connector(fd, id, &mm) != DRM_CONNECTED || mm == 520) {
+        fail2("the probe after reset keeps the override's size: ", conn);
+    }
+}
+
+/** The connector's /sys `status` reads disconnected at once after off and
+ * connected after detect. */
+static void dri_status(const char *conn)
+{
+    char sys[160], text[64];
+
+    conn_sys(sys, sizeof(sys), conn, "status");
+    if (write_file(sys, "off\n", 4, 0) != 4 || read_file(sys, text, sizeof(text)) < 0 ||
+        !str_eq(text, "disconnected\n")) {
+        fail2("status does not read disconnected at once after off: ", sys);
+    }
+    if (write_file(sys, "detect\n", 7, 0) != 7 || read_file(sys, text, sizeof(text)) < 0 ||
+        !str_eq(text, "connected\n")) {
+        fail2("status does not read connected after detect: ", sys);
+    }
+}
+
+/**
+ * The card's first connector `conn`: its CRTC's CRC files, forced off and
+ * given an EDID through debugfs and forced through /sys, each seen by the
+ * next probe, with everything set back; `dir` is the card's directory in
+ * debugfs. The probe holds the card's master role for its probes.
+ */
+static void dri_connector(const char *dir, const char *conn)
+{
+    char path[160], sys[160], text[64];
+    unsigned id, i;
+    long fd;
+
+    join(path, sizeof(path), dir, "/crtc-0/crc/control", 0);
+    join(sys, sizeof(sys), dir, "/crtc-0/crc/data", 0);
+    if (!file_mode(path, 0) || !file_mode(sys, 0)) {
+        fail2("no crtc-0/crc/control or crc/data in ", dir);
+    }
+    conn_sys(sys, sizeof(sys), conn, "connector_id");
+    if (read_file(sys, text, sizeof(text)) <= 0) {
+        fail2("no connector_id of ", conn);
+    }
+    for (id = 0, i = 0; text[i] >= '0' && text[i] <= '9'; i++) {
+        id = id * 10 + (unsigned)(text[i] - '0');
+    }
+    join(path, sizeof(path), "/dev/dri/", card_name, 0);
+    fd = syscall3(SYS_OPEN, (long)path, O_RDWR | O_CLOEXEC, 0);
+    if (fd < 0 || syscall3(SYS_IOCTL, fd, (long)DRM_IOCTL_SET_MASTER, 0) != 0) {
+        fail2("the probe cannot be the master of ", path);
+    }
+    dri_force(fd, id, dir, conn);
+    dri_edid(fd, id, dir, conn);
+    dri_status(conn);
+    syscall1(SYS_CLOSE, fd);
+}
+
+/**
+ * The first card's debugfs files, as the header says; not run on a
+ * machine with no card.
+ */
+static void dri_row(void)
+{
+    char link[64], target[64], dir[96], path[160], text[512], conn[32];
+    unsigned long long st[KSTAT_SIZE / 8 + 1];
+    const char *after;
+
+    if (!card_name[0]) {
+        report_skip("no DRM card on this machine");
+        return;
+    }
+    join(link, sizeof(link), "/sys/kernel/debug/dri/", card_name + 4, 0);
+    if (syscall2(SYS_LSTAT, (long)link, (long)st) != 0 ||
+        (*(unsigned *)((char *)st + KSTAT_MODE) & S_IFMT) != S_IFLNK ||
+        read_link(link, target, sizeof(target)) <= 0) {
+        fail2("no link ", link);
+    }
+    join(dir, sizeof(dir), "/sys/kernel/debug/dri/", target, 0);
+    if ((file_mode(dir, 0) & S_IFMT) != S_IFDIR) {
+        fail2("the link does not lead to a directory: ", dir);
+    }
+    join(path, sizeof(path), link, "/name", 0);
+    if (read_file(path, text, sizeof(text)) <= 0) {
+        fail2("no name in ", link);
+    }
+    for (after = text; *after && *after != ' '; after++) {
+    }
+    join(path, sizeof(path), " dev=", target, 0);
+    if (!starts(after, path)) {
+        fail2("name does not give dev= the directory's name: ", text);
+    }
+    join(path, sizeof(path), " unique=", target, "\n");
+    if (str_len(text) < str_len(path) || !str_eq(text + str_len(text) - str_len(path), path)) {
+        fail2("name does not end with unique= the directory's name: ", text);
+    }
+    join(path, sizeof(path), dir, "/clients", 0);
+    if (read_file(path, text, sizeof(text)) <= 0 ||
+        !starts(text, "             command  tgid dev master a   uid      magic\n")) {
+        fail2("clients does not begin with Linux's header: ", path);
+    }
+    conn[0] = '\0';
+    join(path, sizeof(path), "/sys/class/drm/", card_name, "/");
+    if (each_entry(path, first_connector, conn) < 0) {
+        fail2("no listing of ", path);
+    }
+    if (conn[0]) {
+        dri_connector(dir, conn);
+    }
+    report_held();
+}
+
 /** Keep the first entry's name in the buffer at `arg`. */
 static void first_entry(const char *name, void *arg)
 {
@@ -831,7 +1094,7 @@ PROBE_SP_ENTRY;
 /** Run the rows in order; `_start` calls it with the initial stack. */
 void probe_main(unsigned long *sp)
 {
-    static const char *const ids[] = {"debugfs", "class", "pci", "cards", "uevent", "relay"};
+    static const char *const ids[] = {"debugfs", "class", "pci", "cards", "dri", "uevent", "relay"};
     unsigned i;
 
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.screen.sysdrmprobe"));
@@ -842,6 +1105,7 @@ void probe_main(unsigned long *sp)
     class_row();
     pci_row();
     cards_row();
+    dri_row();
     uevent_row();
     relay_row();
     report_end();
