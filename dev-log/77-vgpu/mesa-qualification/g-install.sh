@@ -18,5 +18,6 @@ apt-get install -y \
     gcc-mingw-w64-x86-64 gcc-mingw-w64-i686 wine wine64 \
     cmake ninja-build g++ python3 pkg-config libpng-dev zlib1g-dev \
     libwayland-dev libx11-dev libxcb1-dev libxcb-randr0-dev wayland-protocols \
+    libgl-dev libegl-dev git bc \
     strace jq curl xz-utils file
 apt-cache policy mesa-vulkan-drivers
