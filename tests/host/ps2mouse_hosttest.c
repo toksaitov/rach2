@@ -31,7 +31,8 @@
  * protocol found and the event device registered for it, the vector of the
  * handler, and that interrupts are off for every port access and on again
  * at every return. The handler's rows read the packets it reports, of three
- * bytes and of each wheel's four.
+ * bytes and of each wheel's four. The probe for a Synaptics touchpad, which
+ * synaptics_hosttest.c tests against a touchpad, finds none here.
  */
 
 #include "arch/x86/i8042.c"
@@ -342,6 +343,18 @@ void klog(int level, const char *subsystem, const char *format, ...)
         warnings++;
         last_warning = format;
     }
+}
+
+/** No Synaptics touchpad answers. */
+int synaptics_init(void)
+{
+    return 0;
+}
+
+/** No touchpad's bytes come, since `synaptics_init` found none. */
+void synaptics_byte(uint8_t data)
+{
+    (void)data;
 }
 
 /** Record the event device registered; its pointer is never followed. */
