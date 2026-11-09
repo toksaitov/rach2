@@ -185,6 +185,10 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # `rach2.nofxsr`, which only the i686 kernel takes, since every x86-64
 # processor has FXSR. They are the cases of tests/cases/guest.fpu.json, which
 # etude runs, and have no target here.
+# `tests/run limits`: rseq, SCHED_BATCH and SCHED_IDLE for an ordinary user,
+# guard regions, get_mempolicy and process_vm_readv and process_vm_writev
+# answer as Linux's, by limitsprobe's table. It is the case of
+# tests/cases/guest.limits.json, which etude runs, and has no target here.
 # `tests/run dmabuf`: sealed memfd ranges exported as dma-bufs, shared
 # pages across fork and close, and sync-file export, merge, info and import.
 # The guest case is tests/cases/guest.dmabuf.json and has no make target.

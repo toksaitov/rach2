@@ -27,6 +27,7 @@ winprobe fault
 dirtyprobe crash
 lagprobe mount
 fpuprobe fpu
+limitsprobe limits
 memprobe memory
 poolprobe pools
 mountprobe mount

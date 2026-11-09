@@ -124,6 +124,7 @@ diskpolicy|qemu|full
 console|qemu|core
 screen|qemu|core
 fpu|qemu|core
+limits|qemu|core
 vdso|qemu|core
 dmabuf|qemu|core
 socket|qemu|core
