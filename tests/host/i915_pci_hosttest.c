@@ -10,7 +10,8 @@
  * host-deps: rach2/sys/lib/kctypes.c rach2/sys/mm/frame.c
  * host-deps: tests/host/compat/spinlock_host.c rach2/sys/drm/i915/i915_irq.c
  * host-deps: rach2/sys/drm/i915/i915_ring.c rach2/sys/drm/i915/i915_ppgtt.c
- * host-deps: rach2/sys/drm/i915/i915_firstlight.c
+ * host-deps: rach2/sys/drm/i915/i915_firstlight.c rach2/sys/drm/i915/i915_rc6.c
+ * host-deps: rach2/sys/drm/i915/i915_rps.c rach2/sys/tick.c
  *
  * i915_pci.c is included whole. The bus holds the model's 00:02.0, whose
  * configuration space the PCI calls read and write; the DRM core is a
@@ -23,7 +24,8 @@
  * stolen memory and the GTT, is i915_base_hosttest.c's, and its rings and
  * interrupts i915_ring_hosttest.c's; here the frame allocator hands out
  * one frame, the heap's pages have made-up physical addresses, and the
- * IOMMU is off.
+ * IOMMU is off. RC6 and the GT's frequency are i915_power_hosttest.c's,
+ * and the card has no directory in /sys here.
  *
  * The rows: the id table against Linux 6.12's Haswell GT2 ids; the probe
  * without and with rach2.i915; the bind to the model, with every source
@@ -40,6 +42,7 @@
  */
 
 #include "drm/i915/i915_pci.c"
+#include "fs/sysfs.h"
 #include "iommu.h"
 #include "lib/kirq.h"
 #include "mm/paging.h"
@@ -93,6 +96,37 @@ void klog(int level, const char *subsystem, const char *format, ...)
 int kcmdline_has(const char *flag)
 {
     return cmdline_i915 && strcmp(flag, "rach2.i915") == 0;
+}
+
+/** The card's directory in /sys: none, so the driver adds no files. */
+int drm_sysfs_card_dir(const struct drm_device *dev)
+{
+    (void)dev;
+    return -ENOENT;
+}
+
+int sysfs_add_dir(int parent, const char *name)
+{
+    (void)parent;
+    (void)name;
+    return -ENOENT;
+}
+
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    (void)parent;
+    (void)attr;
+    (void)obj;
+    (void)arg;
+    return -ENOENT;
+}
+
+int sysfs_node_child(int dir, const char *name, int len)
+{
+    (void)dir;
+    (void)name;
+    (void)len;
+    return -ENOENT;
 }
 
 void k_udelay(uint32_t usec)
@@ -477,14 +511,16 @@ static long at(const struct i915_model *m, uint32_t reg, uint32_t value)
     return i < 0 ? 1L << 30 : i;
 }
 
-/** The interrupt registers of each source: mask, enable and identity, and
- * the enable the bind leaves: the display engine's master enable, and the
- * user interrupts of the rings it started, each still masked. */
-static const uint32_t banks[][4] = {
-    {DEIMR, DEIER, DEIIR, DE_MASTER_IRQ_CONTROL},
-    {GTIMR, GTIER, GTIIR, GT_RENDER_USER_INTERRUPT | GT_BLT_USER_INTERRUPT},
-    {GEN6_PMIMR, GEN6_PMIER, GEN6_PMIIR, 0},
-    {SDEIMR, SDEIER, SDEIIR, 0}};
+/** The interrupt registers of each source: mask, enable and identity; the
+ * enable the bind leaves: the display engine's master enable, and the user
+ * interrupts of the rings it started, each still masked; and the times the
+ * identity is cleared: twice by the reset, and the power management's
+ * twice more by RPS's own reset, as Linux's gen6_rps_reset_interrupts. */
+static const uint32_t banks[][5] = {
+    {DEIMR, DEIER, DEIIR, DE_MASTER_IRQ_CONTROL, 2},
+    {GTIMR, GTIER, GTIIR, GT_RENDER_USER_INTERRUPT | GT_BLT_USER_INTERRUPT, 2},
+    {GEN6_PMIMR, GEN6_PMIER, GEN6_PMIIR, 0, 4},
+    {SDEIMR, SDEIER, SDEIIR, 0, 2}};
 
 /**
  * Check that the bind masked, disabled and cleared every source of `m`, in
@@ -511,8 +547,8 @@ static void check_masks(struct i915_model *m)
         long off = at(m, banks[i][1], 0);
         long clear = at(m, banks[i][2], 0xffffffffu);
         CHECK("bind: each bank masked, then off, then cleared", mask < off && off < clear);
-        CHECK("bind: each bank's identity cleared twice",
-              i915_model_count(m, I915_MODEL_WRITE, banks[i][2]) == 2);
+        CHECK("bind: each bank's identity cleared as often as on Linux",
+              i915_model_count(m, I915_MODEL_WRITE, banks[i][2]) == banks[i][4]);
         CHECK("bind: each bank masked now, and off but the master and the rings",
               i915_model_peek(m, banks[i][0]) == 0xffffffffu &&
                   i915_model_peek(m, banks[i][1]) == banks[i][3]);
