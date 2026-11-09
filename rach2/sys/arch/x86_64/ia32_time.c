@@ -17,6 +17,7 @@
 #include "../../lib/kstring.h"
 #include "../../mm/usercopy.h"
 #include "../../network/socket/socket.h"
+#include "../../proc/futex.h"
 #include "../../proc/process.h"
 #include "../../syscall.h"
 #include "../../syscall_internal.h"
@@ -504,8 +505,11 @@ long compat_sys_utimensat_time32(isr_params_t *params)
                        (int)SC_ARG(params, 3));
 }
 
-int ia32_never_restarts(syscall_fn_t fn)
+int ia32_never_restarts(syscall_fn_t fn, const isr_params_t *params)
 {
+    if (fn == compat_sys_futex_time32) {
+        return !futex_restartable(params);
+    }
     return fn == compat_sys_nanosleep_time32 || fn == compat_sys_clock_nanosleep_time32 ||
            fn == compat_sys_clock_nanosleep_time64 || fn == compat_sys_old_select ||
            fn == compat_sys_select || fn == compat_sys_pselect6_time32 ||

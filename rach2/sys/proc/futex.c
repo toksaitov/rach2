@@ -15,6 +15,7 @@
 #include "../lib/kirq.h"
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
+#include "../syscall.h"
 #include "../syscall_internal.h"
 #include "../rtc.h"
 #include "../timer.h"
@@ -52,7 +53,8 @@
 
 /* The head of a robust list, as glibc lays it out: the first entry, the
  * distance from an entry to its futex word, and the entry being taken or
- * released when the thread ended, if any. */
+ * released when the thread ended, if any. An i386 call's list on x86-64 has
+ * the head of 32-bit words, struct robust_head32 (futex.h). */
 struct robust_head {
     uintptr_t next;
     long futex_offset;
@@ -367,6 +369,11 @@ static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_tim
         if (copy_from_user(&ts, utime, sizeof(ts)) != 0) {
             return -EFAULT;
         }
+        if (sizeof(long) > 4u && in_compat_syscall()) {
+            /* futex_time64's high word of the nanoseconds, which Linux
+             * ignores for an i386 caller (get_timespec64). */
+            ts.tv_nsec = (long)(uint32_t)ts.tv_nsec;
+        }
         if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000) {
             return -EINVAL;
         }
@@ -494,40 +501,80 @@ static void robust_release(uintptr_t uaddr, uint32_t tid, int pending)
     }
 }
 
+/** Read the robust list's pointer at `u` into `*v`: a native word, or with
+ * `narrow` a 32-bit one, zero-extended as Linux's compat_ptr. 0 or
+ * -EFAULT. */
+static int robust_ptr(uintptr_t u, int narrow, uintptr_t *v)
+{
+    uint32_t w;
+
+    if (!narrow) {
+        return copy_from_user(v, (const void __user *)u, sizeof(*v)) != 0 ? -EFAULT : 0;
+    }
+    if (copy_from_user(&w, (const void __user *)u, sizeof(w)) != 0) {
+        return -EFAULT;
+    }
+    *v = w;
+    return 0;
+}
+
+/** The futex word of the robust list entry `entry` with the list's
+ * `offset`, cut to 32 bits for a list of `narrow` words. */
+static uintptr_t robust_uaddr(uintptr_t entry, long offset, int narrow)
+{
+    uintptr_t u = entry + (uintptr_t)offset;
+
+    if (narrow) {
+        u &= 0xFFFFFFFFu;
+    }
+    return u;
+}
+
 /**
- * Walk the robust list of the current thread `p`, which is ending or
- * committing an execve, and release each futex on it that the thread still
- * holds, then the one it was taking or giving back, a waiter of which is
- * also woken when it has no owner and is not a priority-inheritance futex.
- * The list is circular through its head; the low bit of an entry marks a
- * priority-inheritance futex and is not part of the address.
+ * Walk the robust list at `list` of the current thread `p`, which is ending
+ * or committing an execve, and release each futex on it that the thread
+ * still holds, then the one it was taking or giving back, a waiter of which
+ * is also woken when it has no owner and is not a priority-inheritance
+ * futex. The list is circular through its head; the low bit of an entry
+ * marks a priority-inheritance futex and is not part of the address. With
+ * `narrow` the list is an i386 call's, of 32-bit words, and an entry's word
+ * is its address plus the offset cut to 32 bits, as Linux's
+ * `compat_exit_robust_list` finds it.
  */
-static void robust_exit(process_t *p)
+static void robust_walk(process_t *p, uintptr_t list, int narrow)
 {
     struct robust_head head;
-    uintptr_t entry;
-    uintptr_t pending;
+    uintptr_t entry, pending;
     int left = ROBUST_LIST_LIMIT;
 
-    if (p->robust_list == 0 ||
-        copy_from_user(&head, (const void __user *)p->robust_list, sizeof(head)) != 0) {
+    if (narrow) {
+        struct robust_head32 h32;
+
+        if (copy_from_user(&h32, (const void __user *)list, sizeof(h32)) != 0) {
+            return;
+        }
+        head.next = h32.next;
+        head.futex_offset = h32.futex_offset;
+        head.op_pending = h32.op_pending;
+    } else if (copy_from_user(&head, (const void __user *)list, sizeof(head)) != 0) {
         return;
     }
     entry = head.next & ~(uintptr_t)1;
     pending = head.op_pending & ~(uintptr_t)1;
-    while (entry != p->robust_list && entry != 0 && left-- > 0) {
+    while (entry != list && entry != 0 && left-- > 0) {
         uintptr_t next;
 
-        if (copy_from_user(&next, (const void __user *)entry, sizeof(next)) != 0) {
+        if (robust_ptr(entry, narrow, &next) != 0) {
             break;
         }
         if (entry != pending) {
-            robust_release(entry + (uintptr_t)head.futex_offset, p->pid, 0);
+            robust_release(robust_uaddr(entry, head.futex_offset, narrow), p->pid, 0);
         }
         entry = next & ~(uintptr_t)1;
     }
     if (pending != 0) {
-        robust_release(pending + (uintptr_t)head.futex_offset, p->pid, (head.op_pending & 1u) == 0);
+        robust_release(robust_uaddr(pending, head.futex_offset, narrow), p->pid,
+                       (head.op_pending & 1u) == 0);
     }
 }
 
@@ -535,8 +582,14 @@ void proc_thread_gone(process_t *p)
 {
     uint32_t zero = 0;
 
-    robust_exit(p);
+    if (p->robust_list != 0) {
+        robust_walk(p, p->robust_list, 0);
+    }
+    if (p->compat_robust_list != 0) {
+        robust_walk(p, p->compat_robust_list, 1);
+    }
     p->robust_list = 0;
+    p->compat_robust_list = 0;
     if (p->clear_child_tid != 0 && p->mm != NULL && p->mm->users > 1 &&
         copy_to_user((void __user *)p->clear_child_tid, &zero, sizeof(zero)) == 0) {
         (void)futex_wake(p->clear_child_tid, 1, FUTEX_MATCH_ANY, 0);
@@ -548,6 +601,13 @@ long sys_set_robust_list(isr_params_t *params)
 {
     if (!current_proc) {
         return -ESRCH;
+    }
+    if (sizeof(long) > 4u && in_compat_syscall()) {
+        if (SC_ARG(params, 1) != sizeof(struct robust_head32)) {
+            return -EINVAL;
+        }
+        current_proc->compat_robust_list = SC_ARG(params, 0);
+        return 0;
     }
     if (SC_ARG(params, 1) != sizeof(struct robust_head)) {
         return -EINVAL;
@@ -581,6 +641,17 @@ long sys_get_robust_list(isr_params_t *params)
              proc_privileged(t))) {
             return -EPERM;
         }
+    }
+    if (sizeof(long) > 4u && in_compat_syscall()) {
+        uint32_t w[2];
+
+        w[0] = (uint32_t)t->compat_robust_list;
+        w[1] = sizeof(struct robust_head32);
+        if (copy_to_user((void __user *)SC_ARG(params, 2), &w[1], sizeof(w[1])) != 0 ||
+            copy_to_user((void __user *)SC_ARG(params, 1), &w[0], sizeof(w[0])) != 0) {
+            return -EFAULT;
+        }
+        return 0;
     }
     head = t->robust_list;
     if (copy_to_user((void __user *)SC_ARG(params, 1), &head, sizeof(head)) != 0 ||

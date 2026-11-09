@@ -47,9 +47,20 @@ long sys_futex_waitv(isr_params_t *params);
  */
 int futex_restartable(const isr_params_t *params);
 
+/* The head of a robust list of 32-bit words, Linux's
+ * compat_robust_list_head: an i386 program's on x86-64, and the native
+ * head's layout on i686. */
+struct robust_head32 {
+    uint32_t next;        /* the first entry, the head's address for none */
+    int32_t futex_offset; /* from an entry to its futex word */
+    uint32_t op_pending;  /* the entry being taken or released, or 0 */
+};
+
 /** set_robust_list takes the list's head and its size, which is the size
  * of the head's three words, 12 bytes on i686 and 24 on x86-64; 0, or
- * -EINVAL for another size. */
+ * -EINVAL for another size. On x86-64 an i386 call names the thread's list
+ * of 32-bit words, of 12 bytes, which is kept and walked beside its native
+ * one, as Linux keeps `compat_robust_list`. */
 long sys_set_robust_list(isr_params_t *params);
 
 /**
@@ -60,7 +71,8 @@ long sys_set_robust_list(isr_params_t *params);
  * show or that has ended; -EPERM when the thread is of another process and
  * the caller is not privileged, and either the caller's effective uid is
  * neither the thread's real nor its effective one, or the thread is
- * privileged; or -EFAULT.
+ * privileged; or -EFAULT. An i386 call on x86-64 gets the thread's list of
+ * 32-bit words and its size, 12, as two 32-bit words.
  */
 long sys_get_robust_list(isr_params_t *params);
 
