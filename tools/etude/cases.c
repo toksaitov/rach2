@@ -1463,13 +1463,15 @@ static void rule_resources(const struct rule *r)
     const struct json *res = json_member(r->c, "resources");
     const struct json *memory = json_member(res, "guest_memory");
     const struct json *native = native_fixtures(r->c);
+    const struct json *machines = json_member(r->c, "machines");
     const char *case_id = json_text(r->c, "case_id");
 
     if (json_member(res, "cpu_millis")->integer > json_member(res, "cpu_ceiling_millis")->integer) {
         finding(r->file, res->line, "%s: the processor reservation is above its ceiling", case_id);
     }
     if (json_member(res, "cpu_class") != NULL &&
-        json_member(json_member(r->c, "requirements"), "qemu") == NULL) {
+        json_member(json_member(r->c, "requirements"), "qemu") == NULL &&
+        (machines == NULL || machines->count == 0)) {
         finding(r->file, res->line, "%s: a processor class is for a case with a QEMU profile",
                 case_id);
     }

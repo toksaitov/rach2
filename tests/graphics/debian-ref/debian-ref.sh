@@ -235,6 +235,9 @@ run()
     [ -f "$prepared" ] || die "no prepared image; run debian-ref.sh prepare"
     [ "$(cat "$prepared.key" 2>/dev/null)" = "$(seedkey)" ] ||
         die "the prepared image is not the one this tree's seed makes; run debian-ref.sh prepare"
+    if [ -n "${ETUDE_SITE:-}" ] && [ ! -r "$site" ]; then
+        die "run: cannot read the selected site policy: $site"
+    fi
     if [ -z "${DEBIAN_REF_CLAIM:-}" ] && [ -f "$site" ]; then
         admitted "$@"
     fi
@@ -274,6 +277,7 @@ run()
         echo "image $(basename "$base") sha512 $(pin sha512)"
         echo "snapshot $(pin snapshot)"
         [ -z "${DEBIAN_REF_CLAIM:-}" ] || echo "claim $DEBIAN_REF_CLAIM"
+        sh "$tree/tests/graphics/runners/common.sh" host
     } > "$work/record"
     status=0
     # shellcheck disable=SC2086 # opts are words

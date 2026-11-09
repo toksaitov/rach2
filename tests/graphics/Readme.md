@@ -152,7 +152,9 @@ Debian 13's kernel is built without vkms (`# CONFIG_DRM_VKMS is not set` in its 
 A guest of the graphics tests runs a process on each of its processors, or measures its performance, so it claims its processors as well as its memory, and the guests of every account on the testing PC are counted against the site's 32 processors: four CPU-bound guests of 8 run at once and a fifth waits. A CPU-bound guest claims every processor and a light one two ([etude's Readme](../../tools/etude/Readme.md#admission)).
 
 * A Rach2 case names its class in its `resources` as `cpu_class`, `bound` or `light`, and etude reserves by it in place of the processors its history measured; inside a launcher claim the case also claims its processors in the site's ledger.
-* The Debian guest's `run` re-runs itself as one claim of the site's ledger through the tree's `etude admit -c`, CPU-bound unless `-l` says it is light, with its memory and QEMU's 1 GiB, and waits in the ledger for the site's wait. The claim's identity is in the run's record. A machine without a site policy, such as the Mac, runs it unclaimed.
+* The Debian guest's `run` re-runs itself as one claim of the site's ledger through the tree's `etude admit -c`, CPU-bound unless `-l` says it is light, with its memory and QEMU's 1 GiB, and waits in the ledger for the site's wait. The claim's identity and the live host ledger are in the run's record. A machine without a site policy, such as the Mac, runs it unclaimed; an explicitly selected unreadable policy is refused.
+
+The WebGL, video and browser cases name the `bound` class. `common.sh host` reads the site's regular `claims` file, counts its claim records and retains its contents as `host_ledger` lines, including processor reservations. The Debian guest records this while its own claim is held, before the browser command starts.
 
 ### Capture
 

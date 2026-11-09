@@ -298,11 +298,16 @@ runner_init()
 # etude's admission ledger, the other runs on the testing host.
 runner_host()
 {
-    ledger=/var/lib/rach2-etude/ledger/claims
+    site=${ETUDE_SITE:-/etc/rach2/etude-site}
+    ledger=/var/lib/rach2-etude/ledger
+    if [ -r "$site" ]; then
+        ledger=$(sed -n 's/^ledger //p' "$site")
+    fi
     echo "host $(uname -n) $(uname -sr)"
     echo "host_load $(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo unknown)"
-    if [ -r "$ledger" ]; then
-        echo "host_claims $(grep -c '^claim ' "$ledger")"
+    if [ -r "$ledger/claims" ]; then
+        echo "host_claims $(awk '$1 == "claim" { n++ } END { print n+0 }' "$ledger/claims")"
+        sed 's/^/host_ledger /' "$ledger/claims"
     else
         echo "host_claims none: no ledger at $ledger"
     fi
