@@ -8,6 +8,7 @@
 #include "process.h"
 #include "wait_queue.h"
 #include "../mm/mm.h"
+#include "../mm/kheap.h"
 #include "../fs/krffs.h"
 #include "../fs/vfs.h"
 #include "../lib/kerrno.h"
@@ -28,6 +29,18 @@
 #define FUTEX_CLOCK_REALTIME 256
 #define FUTEX_MATCH_ANY      0xFFFFFFFFu
 
+/* futex_waitv's flags for each futex, Linux's FUTEX2_ values: the word's
+ * size, of which only 32 bits is taken, and FUTEX2_PRIVATE, which is
+ * FUTEX_PRIVATE_FLAG. FUTEX_WAITV_MAX is the most futexes one call names. */
+#define FUTEX2_SIZE_U32  0x02u
+#define FUTEX2_SIZE_MASK 0x03u
+#define FUTEX2_PRIVATE   0x80u
+#define FUTEX_WAITV_MAX  128u
+
+/* The clocks a futex_waitv deadline is read on, Linux's clockid_t values. */
+#define CLOCK_REALTIME  0
+#define CLOCK_MONOTONIC 1
+
 /* The bits of a robust futex's word beside the owner's thread id. */
 #define FUTEX_WAITERS    0x80000000u
 #define FUTEX_OWNER_DIED 0x40000000u
@@ -46,6 +59,21 @@ struct robust_head {
     uintptr_t op_pending;
 };
 
+/* One futex of a futex_waitv call, as Linux's struct futex_waitv lays it
+ * out, alike in both ABIs. */
+struct futex_waitv {
+    uint64_t val;      /* the value expected, which must fit the word */
+    uint64_t uaddr;    /* the word's address */
+    uint32_t flags;    /* FUTEX2_SIZE_U32, with FUTEX2_PRIVATE or without */
+    uint32_t reserved; /* must be 0 */
+};
+
+/* Linux's struct __kernel_timespec, whose seconds are 64 bits in both ABIs. */
+struct futex_timespec64 {
+    int64_t tv_sec;
+    int64_t tv_nsec;
+};
+
 /* The name futexes in shared memory have instead of an address space. */
 static const char futex_shared_space;
 
@@ -53,16 +81,32 @@ static const char futex_shared_space;
  * the count bounds the walk and not the number of waiters. */
 #define FUTEX_BUCKETS 64
 
-/* A sleeping waiter, on its own kernel stack while it sleeps. */
+/* What a waiting thread sleeps on: one record however many futexes it
+ * waits on, so that a wake of any of them ends the sleep. */
+struct futex_sleeper {
+    int woken;       /* a wake marked one of its waiters */
+    int timed;       /* the wait has a deadline */
+    uint64_t target; /* the tick the sleep ends at, with `timed` */
+    wait_queue_t wq; /* the sleeper's own queue, which only it sleeps on */
+};
+
+/* A waiter filed on one futex, on its thread's kernel stack or in the
+ * vector of a futex_waitv call while the thread sleeps. */
 struct futex_q {
     const void *space; /* the address space's page directory, or shared memory */
     uintptr_t uaddr;   /* the address in it, or the frame and offset */
     uint32_t bitset;   /* a wake's bitset must meet it */
     int woken;         /* a wake marked it and took it off its list */
-    int timed;         /* the wait has a deadline */
-    uint64_t target;   /* the tick the sleep ends at, with `timed` */
-    wait_queue_t wq;   /* the waiter's own queue, which only it sleeps on */
+    struct futex_sleeper *s;
     struct futex_q *next;
+};
+
+/* One futex of a wait, as the caller named it, and its waiter. */
+struct futex_vec {
+    uintptr_t addr; /* the word's user address, aligned to four bytes */
+    uint32_t val;   /* the value the word must hold for the wait to sleep */
+    int shared;     /* named as futex_key names a futex that may be shared */
+    struct futex_q q;
 };
 
 /* Each bucket's waiters, the newest first. */
@@ -74,9 +118,10 @@ static uint32_t futex_bucket(const void *space, uintptr_t uaddr)
     return (uint32_t)((((uintptr_t)space >> 4) ^ (uaddr >> 2) ^ (uaddr >> 12)) % FUTEX_BUCKETS);
 }
 
-/* The ticks from now until the absolute time `at` on the real-time clock, or
- * on the monotonic clock without `realtime`; 0 when it has passed. */
-static uint64_t futex_ticks_until(const struct kernel_timespec *at, int realtime)
+/* The ticks from now until the absolute time of `sec` seconds and `nsec`
+ * nanoseconds, under a second, on the real-time clock, or on the monotonic
+ * clock without `realtime`; 0 when it has passed. */
+static uint64_t futex_ticks_until(int64_t at_sec, uint32_t at_nsec, int realtime)
 {
     int64_t sec;
     int64_t nsec;
@@ -92,8 +137,8 @@ static uint64_t futex_ticks_until(const struct kernel_timespec *at, int realtime
         sec = seconds32;
         nsec = (int64_t)ticks32 * TICK_NS;
     }
-    dsec = (int64_t)at->tv_sec - sec;
-    dnsec = (int32_t)at->tv_nsec - (int32_t)nsec;
+    dsec = at_sec - sec;
+    dnsec = (int32_t)at_nsec - (int32_t)nsec;
     if (dnsec < 0) {
         dnsec += 1000000000;
         dsec--;
@@ -102,6 +147,41 @@ static uint64_t futex_ticks_until(const struct kernel_timespec *at, int realtime
         return 0;
     }
     return tick_span(dsec, (uint32_t)dnsec);
+}
+
+/**
+ * The time `ts` names, as seconds and nanoseconds under a second in `*sec`
+ * and `*nsec`: nanoseconds out of that range carry their whole seconds into
+ * the seconds, as Linux's timespec64_to_ktime takes them, since futex_waitv
+ * does not refuse such a time. The seconds are first cut to 2^40 either way,
+ * where tick_span cuts a span, so the sum cannot overflow.
+ */
+static void futex_ts_norm(const struct futex_timespec64 *ts, int64_t *sec, uint32_t *nsec)
+{
+    const int64_t cap = (int64_t)1 << 40;
+    uint64_t mag, q;
+    uint32_t r1, r2, rem;
+
+    *sec = ts->tv_sec > cap ? cap : (ts->tv_sec < -cap ? -cap : ts->tv_sec);
+    if (ts->tv_nsec >= 0 && ts->tv_nsec < 1000000000) {
+        *nsec = (uint32_t)ts->tv_nsec;
+        return;
+    }
+    /* 10^9 is 15625 * 64000, two divisors tick_div takes. */
+    mag = ts->tv_nsec < 0 ? (uint64_t)0 - (uint64_t)ts->tv_nsec : (uint64_t)ts->tv_nsec;
+    q = tick_div(tick_div(mag, 15625u, &r1), 64000u, &r2);
+    rem = r2 * 15625u + r1;
+    if (ts->tv_nsec >= 0) {
+        *sec += (int64_t)q;
+        *nsec = rem;
+        return;
+    }
+    *sec -= (int64_t)q;
+    *nsec = 0;
+    if (rem != 0) {
+        *sec -= 1;
+        *nsec = 1000000000u - rem;
+    }
 }
 
 /**
@@ -133,12 +213,12 @@ static void futex_key(uintptr_t uaddr, int shared, const void **space, uintptr_t
     }
 }
 
-/** The wait's condition: the waiter was woken, or its deadline has come. */
-static int futex_q_done(void *arg)
+/** The wait's condition: a waiter was woken, or the deadline has come. */
+static int futex_sleeper_done(void *arg)
 {
-    const struct futex_q *q = (const struct futex_q *)arg;
+    const struct futex_sleeper *s = (const struct futex_sleeper *)arg;
 
-    return q->woken || (q->timed && tick_count() >= q->target);
+    return s->woken || (s->timed && tick_count() >= s->target);
 }
 
 /* Take q off its bucket's list, when a wake has not already. */
@@ -155,81 +235,104 @@ static void futex_unlink(struct futex_q *q, uint32_t bucket)
 }
 
 /**
- * Sleep on `uaddr` while it holds `val`.
- *
- * The word is compared and the waiter filed with interrupts off, and the page
- * was made resident before, so the read cannot sleep between the two: a wake
- * after the comparison finds the waiter. `utime` is a relative timeout, or an
- * absolute one with `absolute`, on the monotonic clock or, with
- * FUTEX_CLOCK_REALTIME in `flags_op`, on the real-time clock; `flags_op` has
- * FUTEX_PRIVATE_FLAG for a futex no other process maps. The deadline's tick
- * is fixed before the word's page is brought in, so the time a fault sleeps
- * counts against it, and a deadline the fault outlasted ends the call.
- * Returns 0 when woken, -EAGAIN when the word differs, -ETIMEDOUT at the
- * deadline, -EINTR for a signal, -EINVAL for a timeout out of range and
- * -EFAULT for an address or a timeout the process cannot read.
+ * Take the first `n` waiters of `v` off their lists, with interrupts off;
+ * the index of the last one a wake had marked, or -1 when none was.
  */
-static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_timespec __user *utime,
-                          uint32_t bitset, int absolute, int flags_op)
+static int futex_unqueue(struct futex_vec *v, uint32_t n)
 {
-    struct futex_q q;
-    struct kernel_timespec ts;
-    uint32_t bucket, cur, flags;
-    uint64_t ticks = 0;
-    int rc;
+    uint32_t i;
+    int last = -1;
 
-    q.timed = 0;
-    if (utime) {
-        if (copy_from_user(&ts, utime, sizeof(ts)) != 0) {
-            return -EFAULT;
+    for (i = 0; i < n; i++) {
+        if (v[i].q.woken) {
+            last = (int)i;
+        } else {
+            futex_unlink(&v[i].q, futex_bucket(v[i].q.space, v[i].q.uaddr));
         }
-        if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000) {
-            return -EINVAL;
+    }
+    return last;
+}
+
+/**
+ * Sleep on the `n` futexes of `v` while each word holds its value, until a
+ * wake of any of them, the deadline `s` has, or a signal, as Linux's
+ * futex_wait_multiple does. `s` has `timed` and `target` set, and `ticks`
+ * is 0 for a deadline that had passed when the call began.
+ *
+ * Each word's page is made resident, which may sleep, and with interrupts
+ * off every page is then found still resident, each futex named and its word
+ * compared, and the waiters filed, so no read sleeps between a comparison
+ * and the filing: a wake after the comparison finds the waiter. A page that
+ * left while another was brought in starts the round again.
+ *
+ * Returns the index of the woken futex, the last of them when a wake marked
+ * more than one; -EAGAIN when a word differs, -ETIMEDOUT at the deadline,
+ * -EINTR for a signal, or -EFAULT for a word the process cannot read.
+ */
+static int futex_sleep_on(struct futex_vec *v, uint32_t n, struct futex_sleeper *s, uint64_t ticks)
+{
+    uint32_t i, cur, flags;
+    int rc, woken;
+
+    s->woken = 0;
+    wait_queue_init(&s->wq);
+    for (;;) {
+        for (i = 0; i < n; i++) {
+            if (!vm_prefault_range(v[i].addr, sizeof(uint32_t), 0)) {
+                return -EFAULT;
+            }
         }
-        ticks = absolute ? futex_ticks_until(&ts, (flags_op & FUTEX_CLOCK_REALTIME) != 0)
-                         : tick_span(ts.tv_sec, (uint32_t)ts.tv_nsec);
-        q.timed = 1;
-    }
-    q.target = rtc_ticks_now() + ticks + 1u;
-    if (!vm_prefault_range(uaddr, sizeof(uint32_t), 0)) {
-        return -EFAULT;
+        flags = kirq_save();
+        for (i = 0; i < n; i++) {
+            if (paging_user_phys(current_proc->page_dir, v[i].addr) == 0) {
+                break;
+            }
+        }
+        if (i == n) {
+            break;
+        }
+        kirq_restore(flags);
     }
 
-    futex_key(uaddr, !(flags_op & FUTEX_PRIVATE_FLAG), &q.space, &q.uaddr);
-    q.bitset = bitset;
-    q.woken = 0;
-    q.next = NULL;
-    wait_queue_init(&q.wq);
-    bucket = futex_bucket(q.space, q.uaddr);
+    for (i = 0; i < n; i++) {
+        struct futex_q *q = &v[i].q;
+        uint32_t bucket;
 
-    flags = kirq_save();
-    if (get_user_u32(&cur, uaddr) != 0) {
-        kirq_restore(flags);
-        return -EFAULT;
+        if (get_user_u32(&cur, v[i].addr) != 0) {
+            rc = -EFAULT;
+        } else if (cur != v[i].val) {
+            rc = -EAGAIN;
+        } else {
+            rc = 0;
+        }
+        if (rc != 0) {
+            (void)futex_unqueue(v, i);
+            kirq_restore(flags);
+            return rc;
+        }
+        futex_key(v[i].addr, v[i].shared, &q->space, &q->uaddr);
+        q->woken = 0;
+        q->s = s;
+        bucket = futex_bucket(q->space, q->uaddr);
+        q->next = _waiters[bucket];
+        _waiters[bucket] = q;
     }
-    if (cur != val) {
-        kirq_restore(flags);
-        return -EAGAIN;
-    }
-    if (q.timed && (ticks == 0 || tick_count() >= q.target)) {
+    if (s->timed && (ticks == 0 || tick_count() >= s->target)) {
+        (void)futex_unqueue(v, n);
         kirq_restore(flags);
         return -ETIMEDOUT;
     }
-    q.next = _waiters[bucket];
-    _waiters[bucket] = &q;
     kirq_restore(flags);
 
-    current_proc->wakeup_tick = q.timed ? (q.target != 0 ? q.target : 1u) : 0;
-    rc = wq_wait_event(&q.wq, futex_q_done, &q);
+    current_proc->wakeup_tick = s->timed ? (s->target != 0 ? s->target : 1u) : 0;
+    rc = wq_wait_event(&s->wq, futex_sleeper_done, s);
     current_proc->wakeup_tick = 0;
 
     flags = kirq_save();
-    if (!q.woken) {
-        futex_unlink(&q, bucket);
-    }
+    woken = futex_unqueue(v, n);
     kirq_restore(flags);
-    if (q.woken) {
-        return 0;
+    if (woken >= 0) {
+        return woken;
     }
     if (rc != 0) {
         return rc;
@@ -238,16 +341,62 @@ static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_tim
 }
 
 /**
+ * Sleep on `uaddr` while it holds `val`.
+ *
+ * `utime` is a relative timeout, or an absolute one with `absolute`, on the
+ * monotonic clock or, with FUTEX_CLOCK_REALTIME in `flags_op`, on the
+ * real-time clock; `flags_op` has FUTEX_PRIVATE_FLAG for a futex no other
+ * process maps. The deadline's tick is fixed before the word's page is
+ * brought in, so the time a fault sleeps counts against it, and a deadline
+ * the fault outlasted ends the call. Returns 0 when woken, -EAGAIN when the
+ * word differs, -ETIMEDOUT at the deadline, -EINTR for a signal, -EINVAL for
+ * a timeout out of range and -EFAULT for an address or a timeout the process
+ * cannot read.
+ */
+static int32_t futex_wait(uintptr_t uaddr, uint32_t val, const struct kernel_timespec __user *utime,
+                          uint32_t bitset, int absolute, int flags_op)
+{
+    struct futex_vec v;
+    struct futex_sleeper s;
+    struct kernel_timespec ts;
+    uint64_t ticks = 0;
+    int rc;
+
+    s.timed = 0;
+    if (utime) {
+        if (copy_from_user(&ts, utime, sizeof(ts)) != 0) {
+            return -EFAULT;
+        }
+        if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000) {
+            return -EINVAL;
+        }
+        ticks = absolute ? futex_ticks_until(ts.tv_sec, (uint32_t)ts.tv_nsec,
+                                             (flags_op & FUTEX_CLOCK_REALTIME) != 0)
+                         : tick_span(ts.tv_sec, (uint32_t)ts.tv_nsec);
+        s.timed = 1;
+    }
+    s.target = rtc_ticks_now() + ticks + 1u;
+
+    v.addr = uaddr;
+    v.val = val;
+    v.shared = !(flags_op & FUTEX_PRIVATE_FLAG);
+    v.q.bitset = bitset;
+    rc = futex_sleep_on(&v, 1, &s, ticks);
+    return rc > 0 ? 0 : rc;
+}
+
+/**
  * Wake up to `n` waiters on the futex at `uaddr` whose bitset meets
  * `bitset`, named as `futex_key` names it with `flags_op`; the number
  * woken, or -EFAULT when a futex that may be shared has a page that cannot
  * be brought in.
  *
- * Each waiter marked is woken on its own queue, so the bucket's other
- * sleepers stay asleep. The queue is on the waiter's stack, and the wake
- * comes before interrupts are on again: the waiter cannot leave its wait
- * before then, since the big lock keeps it from running on another
- * processor and interrupts off keep the tick from switching to it here.
+ * Each waiter marked is woken on its sleeper's own queue, so the bucket's
+ * other sleepers stay asleep. The waiter and its sleeper are in memory the
+ * sleeping thread frees once it has left its wait, and the wake comes before
+ * interrupts are on again: the thread cannot leave its wait before then,
+ * since the big lock keeps it from running on another processor and
+ * interrupts off keep the tick from switching to it here.
  */
 static int futex_wake(uintptr_t uaddr, uint32_t n, uint32_t bitset, int flags_op)
 {
@@ -270,9 +419,10 @@ static int futex_wake(uintptr_t uaddr, uint32_t n, uint32_t bitset, int flags_op
 
         if (q->space == space && q->uaddr == uaddr && (q->bitset & bitset) != 0) {
             q->woken = 1;
+            q->s->woken = 1;
             *pp = q->next;
             woken++;
-            wq_wake_all(&q->wq);
+            wq_wake_all(&q->s->wq);
         } else {
             pp = &q->next;
         }
@@ -477,4 +627,72 @@ long sys_futex(isr_params_t *params)
     default:
         return -ENOSYS;
     }
+}
+
+long sys_futex_waitv(isr_params_t *params)
+{
+    const struct futex_waitv __user *uw = (const struct futex_waitv __user *)SC_ARG(params, 0);
+    uint32_t nr = (uint32_t)SC_ARG(params, 1);
+    const struct futex_timespec64 __user *utime =
+        (const struct futex_timespec64 __user *)SC_ARG(params, 3);
+    int32_t clockid = (int32_t)SC_ARG(params, 4);
+    struct futex_waitv w;
+    struct futex_timespec64 ts;
+    struct futex_sleeper s;
+    struct futex_vec *v;
+    uint64_t ticks = 0;
+    int64_t sec;
+    uint32_t nsec, i;
+    int rc = 0;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if ((uint32_t)SC_ARG(params, 2) != 0 || nr == 0 || nr > FUTEX_WAITV_MAX || uw == NULL) {
+        return -EINVAL;
+    }
+    s.timed = 0;
+    if (utime) {
+        if (clockid != CLOCK_REALTIME && clockid != CLOCK_MONOTONIC) {
+            return -EINVAL;
+        }
+        if (copy_from_user(&ts, utime, sizeof(ts)) != 0) {
+            return -EFAULT;
+        }
+        futex_ts_norm(&ts, &sec, &nsec);
+        ticks = futex_ticks_until(sec, nsec, clockid == CLOCK_REALTIME);
+        s.timed = 1;
+    }
+    s.target = rtc_ticks_now() + ticks + 1u;
+
+    v = (struct futex_vec *)kmalloc(nr * sizeof(*v));
+    if (v == NULL) {
+        return -ENOMEM;
+    }
+    for (i = 0; i < nr && rc == 0; i++) {
+        if (copy_from_user(&w, &uw[i], sizeof(w)) != 0) {
+            rc = -EFAULT;
+        } else if ((w.flags & ~(FUTEX2_SIZE_MASK | FUTEX2_PRIVATE)) != 0 || w.reserved != 0 ||
+                   (w.flags & FUTEX2_SIZE_MASK) != FUTEX2_SIZE_U32 ||
+                   (uint32_t)(w.val >> 32) != 0) {
+            rc = -EINVAL;
+        } else {
+            v[i].addr = (uintptr_t)w.uaddr;
+            v[i].val = (uint32_t)w.val;
+            v[i].shared = (w.flags & FUTEX2_PRIVATE) == 0;
+            v[i].q.bitset = FUTEX_MATCH_ANY;
+        }
+    }
+    for (i = 0; i < nr && rc == 0; i++) {
+        if ((v[i].addr & 3u) != 0) {
+            rc = -EINVAL;
+        } else if (!user_range_ok(v[i].addr, sizeof(uint32_t))) {
+            rc = -EFAULT;
+        }
+    }
+    if (rc == 0) {
+        rc = futex_sleep_on(v, nr, &s, ticks);
+    }
+    kfree(v);
+    return rc;
 }

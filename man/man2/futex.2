@@ -1,8 +1,9 @@
-.Dd September 27, 2026
+.Dd November 10, 2026
 .Dt FUTEX 2
 .Os
 .Sh NAME
 .Nm futex ,
+.Nm futex_waitv ,
 .Nm set_robust_list ,
 .Nm get_robust_list
 .Nd wait on a word of memory and wake its waiters
@@ -12,6 +13,8 @@
 .In unistd.h
 .Ft long
 .Fn syscall "SYS_futex" "uint32_t *uaddr" "int op" "uint32_t val" "const struct timespec *timeout" "uint32_t *uaddr2" "uint32_t val3"
+.Ft long
+.Fn syscall "SYS_futex_waitv" "struct futex_waitv *waiters" "unsigned int nr_futexes" "unsigned int flags" "const struct __kernel_timespec *timeout" "clockid_t clockid"
 .Ft long
 .Fn syscall "SYS_set_robust_list" "struct robust_list_head *head" "size_t len"
 .Ft long
@@ -95,6 +98,59 @@ is ignored.
 The requeue, wake-and-modify and priority-inheritance operations, and
 i386's time64 form, number 422, are not implemented; x86-64 has no such
 form.
+.Ss Waiting on several words
+.Nm futex_waitv ,
+number 449 on i386 and on x86-64, sleeps while each of
+.Fa nr_futexes
+words, 1 to 128, holds its value, until a wake of any of them, a signal
+or the deadline, and returns the index in
+.Fa waiters
+of the futex that was woken; when wakes came for several before the
+caller ran, the highest such index.
+Wine waits on it for the events and mutexes of Proton's fsync.
+Each entry is
+.Bd -literal -offset indent
+struct futex_waitv {
+	uint64_t val;		/* the value the word must hold */
+	uint64_t uaddr;		/* the word's address */
+	uint32_t flags;		/* FUTEX2_SIZE_U32 [| FUTEX2_PRIVATE] */
+	uint32_t __reserved;	/* 0 */
+};
+.Ed
+.Pp
+with the same layout on i386 and x86-64.
+.Dv FUTEX2_SIZE_U32 ,
+2, is the only size taken;
+.Dv FUTEX2_PRIVATE ,
+128, names the word as
+.Dv FUTEX_PRIVATE_FLAG
+does, and without it a word in a shared mapping is named by its page as
+above, so a
+.Dv FUTEX_WAKE
+of
+.Nm futex
+by another process wakes it.
+The words are compared and the waiters filed as one step, as for
+.Dv FUTEX_WAIT ,
+so a wake that follows the comparison is not lost; a word that does not
+hold its value ends the call with
+.Er EAGAIN
+and none of them is waited on.
+.Fa flags
+must be 0.
+.Fa timeout ,
+when not NULL, is an absolute time of 64-bit fields on both
+architectures, on the clock
+.Fa clockid
+names,
+.Dv CLOCK_MONOTONIC
+or
+.Dv CLOCK_REALTIME ;
+nanoseconds out of range carry into the seconds, as Linux takes them.
+A signal that ends the wait has it restarted when no handler runs or the
+handler has
+.Dv SA_RESTART ,
+since the deadline is absolute.
 .Ss Robust lists
 .Nm set_robust_list ,
 number 311 on i386 and 273 on x86-64, records
@@ -156,6 +212,8 @@ which
 (273) takes, is 24 bytes.
 .Sh RETURN VALUES
 A wait returns 0 when a wake ended it and a wake the number it woke.
+.Nm futex_waitv
+returns the index of the woken futex.
 The raw call returns a negative error number on failure;
 .Fn syscall
 instead returns -1 and sets
@@ -172,12 +230,15 @@ end a timed wait with
 .Bl -tag -width ETIMEDOUT
 .It Er EAGAIN
 The word did not hold
-.Fa val .
+.Fa val ,
+or a word of
+.Nm futex_waitv
+did not hold its value.
 .It Er EFAULT
-.Fa uaddr
-or
-.Fa timeout
-is not readable.
+.Fa uaddr ,
+.Fa timeout ,
+.Fa waiters
+or a word it names is not readable.
 .It Er EINTR
 A signal ended a wait with a timeout, or one without a timeout that is not
 restarted.
@@ -189,6 +250,23 @@ is not aligned, a bitset operation was given a zero
 has a negative field or nanoseconds past 999999999, or
 .Nm set_robust_list
 was given a length other than the head's size.
+For
+.Nm futex_waitv :
+.Fa flags
+is not 0,
+.Fa nr_futexes
+is 0 or past 128,
+.Fa waiters
+is NULL,
+.Fa clockid
+is another clock with a
+.Fa timeout ,
+or an entry's size is not 32 bits, its flags have an unknown bit, its
+reserved word is not 0, its value does not fit 32 bits or its address is
+not aligned to four bytes.
+.It Er ENOMEM
+.Nm futex_waitv
+could not have the memory for its waiters.
 .It Er EPERM
 .Nm get_robust_list
 named a thread of another user, or a privileged thread of another
