@@ -29,7 +29,7 @@ struct percpu cpu_table[NR_CPUS];
 static process_t proc;
 static isr_params_t frame;
 static uint64_t fs_base, gs_base, kernel_gs_base;
-static unsigned int fs_sel, gs_sel;
+static unsigned int fs_sel, gs_sel, ds_sel, es_sel;
 static uint64_t stored;
 static int failures;
 
@@ -108,6 +108,40 @@ void x86_64_gs_load(unsigned int sel)
     kernel_gs_base = LOADED_BASE;
 }
 
+/** The model's data segment selector. */
+unsigned int x86_64_ds_read(void)
+{
+    return ds_sel;
+}
+
+/** The model's extra segment selector. */
+unsigned int x86_64_es_read(void)
+{
+    return es_sel;
+}
+
+/** Load the model's data segment selector. */
+void x86_64_ds_load(unsigned int sel)
+{
+    ds_sel = sel;
+}
+
+/** Load the model's extra segment selector. */
+void x86_64_es_load(unsigned int sel)
+{
+    es_sel = sel;
+}
+
+/** Copy the model's user value, refusing BAD_ADDR and an oversized read. */
+int copy_from_user(void *dst, const void __user *src, size_t n)
+{
+    if ((unsigned long)src == BAD_ADDR || n > sizeof(stored)) {
+        return -1;
+    }
+    k_memcpy(dst, &stored, n);
+    return 0;
+}
+
 /** Copy `n` bytes to `stored`, which stands for any user address but
  * BAD_ADDR. */
 int copy_to_user(void __user *dst, const void *src, size_t n)
@@ -131,6 +165,7 @@ static void setup(void)
     gs_base = 0xFFFFFFFF80100000ul;
     fs_sel = USER_SEL;
     gs_sel = USER_SEL;
+    ds_sel = es_sel = 0;
     stored = 0;
     cpu_table[0].current = &proc;
 }
