@@ -119,6 +119,7 @@ There is no wireless driver, and the stack is IPv4 alone. On i686 an e1000 or RT
 | NVMe disk | `nvme` | NVMe | `uefi` |
 | USB controller and devices | `qemu-xhci`, `usb-kbd`, `usb-mouse`, `usb-hub`, `usb-storage`, `usb-bot` with `scsi-hd` | xHCI, HID, hub, mass storage | `usb`, `usbdisk` |
 | A USB device with no boot interface | `usb-tablet` | refused | `usb` |
+| VT-d | `-machine q35 -device intel-iommu,intremap=on` | VT-d | none; checked by hand, as [VT-d](sys/arch/x86/iommu/Readme.md#tests) records |
 | Network cards | `rtl8139`, `e1000` | RTL8139, e1000 | `socket`, `e1000` |
 | A card of another model | `e1000e` | refused | `e1000` |
 | Sound | `intel-hda` with `hda-output` on the `wav` backend, which records the output, or with `hda-duplex` on `none` or `sdl`, which give an input, silence or a file; `sb16` | HDA, SB16 | `audio` |
@@ -140,6 +141,7 @@ The one real machine is a Lenovo G50-70 laptop: an Intel Core i3-4030U of four l
 | The processor's HDMI audio | 8086:0A0C | none | passed over |
 | Built-in keyboard and touchpad | | PS/2 | on the 8042; the sessions recorded used USB input, so the records do not say how well these work |
 | Screen | | the framebuffer console | 1366 by 768 under UEFI, mapped write-combining; VGA text by BIOS |
+| VT-d units: dmar0 for the GPU, dmar1 for the rest | | VT-d | interrupt remapping on at boot, translation only for a device given to a domain; checked against a model of both units, not yet on the machine |
 | Power | | the `lynxpoint-lp` profile | power off and restart work; a press of the power button and a closed lid are not handled |
 
 The machine's hardware clock is set to UTC.
