@@ -1,10 +1,11 @@
 # qemu_devices.sh: the QEMU options the run and debug scripts share.
 # shellcheck shell=sh
 #
-# Sourced by the run/debug scripts. Set AUDIO_DEVICE (sb16, hda, or speaker;
-# default speaker) before sourcing; this sets AUDIO_OPTS, NET_OPTS and
-# DISPLAY_OPTS for the QEMU command line, and QEMU, BUILD_DIR and MAKE_ARCH,
-# the words a make of that build begins with, for the architecture.
+# Sourced by the run/debug scripts and tests/graphics/debian-ref. Set
+# AUDIO_DEVICE (sb16, hda, speaker or none; default speaker) before sourcing;
+# this sets AUDIO_OPTS, NET_OPTS, DISPLAY_OPTS and ACCEL_OPTS for the QEMU
+# command line, and QEMU, BUILD_DIR and MAKE_ARCH, the words a make of that
+# build begins with, for the architecture.
 #
 # ARCH picks the architecture as mk/arch.mk does: i686, the default, boots
 # qemu-system-i386 on what build/ holds, and x86_64 boots qemu-system-x86_64
@@ -21,6 +22,20 @@
 # alone. DISPLAY_MODE is passed to -display and replaces that choice:
 #   DISPLAY_MODE=none           no window on any host
 #   DISPLAY_MODE=gtk|sdl|cocoa  the QEMU display of that name
+#
+# DISPLAY_PROFILE attaches the display device of etude's display profile of
+# that name (tools/etude/Readme.md, The QEMU launcher) in place of QEMU's
+# default VGA, with an EDID whose preferred mode is the fixed window of
+# 1280x800: std-vga, virtio-vga, virtio-gpu, virgl or none. virgl draws with
+# the host's GL on its render node through QEMU's egl-headless display, and
+# exports the environment that puts that GL on the testing PC's GPU. The
+# pointer is the PS/2 mouse of the PC's 8042; no USB tablet is attached.
+#
+# ACCEL_OPTS is the accelerator of a graphics run, which the graphics scripts
+# use: KVM with the host's processor and its invariant time-stamp counter,
+# which Rach2's vDSO clock reads, where /dev/kvm opens for reading and
+# writing, and TCG with CPU (max) elsewhere. ACCEL=tcg or ACCEL=kvm chooses.
+# The run scripts keep QEMU's default, TCG.
 
 AUDIO_DEVICE="${AUDIO_DEVICE:-speaker}"
 
@@ -81,6 +96,51 @@ else
     DISPLAY_OPTS=""
 fi
 
+DISPLAY_WINDOW="edid=on,xres=1280,yres=800"
+case "${DISPLAY_PROFILE:-}" in
+    "")
+        ;;
+    none)
+        DISPLAY_OPTS="-vga none $DISPLAY_OPTS"
+        ;;
+    std-vga)
+        DISPLAY_OPTS="-vga none -device VGA,$DISPLAY_WINDOW $DISPLAY_OPTS"
+        ;;
+    virtio-vga)
+        DISPLAY_OPTS="-vga none -device virtio-vga,$DISPLAY_WINDOW $DISPLAY_OPTS"
+        ;;
+    virtio-gpu)
+        DISPLAY_OPTS="-vga none -device virtio-gpu-pci,$DISPLAY_WINDOW $DISPLAY_OPTS"
+        ;;
+    virgl)
+        DISPLAY_OPTS="-vga none -device virtio-vga-gl,$DISPLAY_WINDOW"
+        DISPLAY_OPTS="$DISPLAY_OPTS -display egl-headless,rendernode=/dev/dri/renderD128"
+        GALLIUM_DRIVER=d3d12
+        MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+        export GALLIUM_DRIVER MESA_D3D12_DEFAULT_ADAPTER_NAME
+        ;;
+    *)
+        echo "run: DISPLAY_PROFILE is std-vga, virtio-vga, virtio-gpu, virgl or none, not $DISPLAY_PROFILE" >&2
+        exit 2
+        ;;
+esac
+
+if [ -z "${ACCEL:-}" ]; then
+    if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+        ACCEL=kvm
+    else
+        ACCEL=tcg
+    fi
+fi
+case "$ACCEL" in
+    kvm)
+        ACCEL_OPTS="-accel kvm -cpu host,invtsc=on"
+        ;;
+    *)
+        ACCEL_OPTS="-accel $ACCEL -cpu ${CPU:-max}"
+        ;;
+esac
+
 # The audio device AUDIO_DEVICE chose.
 case "$AUDIO_DEVICE" in
     sb16)
@@ -90,6 +150,9 @@ case "$AUDIO_DEVICE" in
     hda)
         # Intel HD Audio (PCI)
         AUDIO_OPTS="$AUDIO_BACKEND -device intel-hda -device hda-duplex,audiodev=audio0"
+        ;;
+    none)
+        AUDIO_OPTS=""
         ;;
     speaker|*)
         # PC Speaker only (default)

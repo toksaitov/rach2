@@ -36,6 +36,7 @@ RESCUE=1 ./run.sh               # no root, the kernel debug shell
 | `NET_HOSTFWD` | every script | `hostfwd=tcp::8080-:80` | The user network's forwarding rule. `run_from_disk.sh` forwards host port 2222 to the guest's SSH server instead. |
 | `NET` | every script | `on` | `off` passes `-nic none`, so the machine has no network card; without it QEMU would add its default e1000. |
 | `DISPLAY_MODE` | every script | unset | Passed to QEMU's `-display`. Unset, it is `none` on a host other than macOS and Windows when neither `DISPLAY` nor `WAYLAND_DISPLAY` is set, as in an ssh session, and QEMU opens no window; the console is then the terminal alone. |
+| `DISPLAY_PROFILE` | every script | unset | A display profile of the graphics tests in place of QEMU's default VGA, its EDID preferring 1280x800: `std-vga`, `virtio-vga`, `virtio-gpu`, `virgl` or `none` ([the graphics tests' Readme](../tests/graphics/Readme.md#display-profiles)). `virgl` draws through the host's GL with QEMU's egl-headless display, on the testing PC alone. |
 | `DISK` | `run.sh` | none | A raw disk image, attached on the IDE bus, and `rach2.fsdisk` added to the command line. |
 | `DISKBUS` | `run.sh` | IDE | `ahci` attaches `DISK` to an ICH9 AHCI controller instead, and adds `rach2.disk=ahci`, which the kernel ignores. |
 | `DISKNOMOUNT` | `run.sh` | none | `1` attaches `DISK` without `rach2.fsdisk`, so that the kernel mounts the module and the debug shell's `disk` reads the disk. |
