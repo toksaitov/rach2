@@ -48,6 +48,8 @@ static const struct drm_format_info formats[] = {
     {DRM_FORMAT_ABGR8888, 32, 1, {4, 0, 0}, 1, 1, 1},
     {DRM_FORMAT_RGBA8888, 32, 1, {4, 0, 0}, 1, 1, 1},
     {DRM_FORMAT_BGRA8888, 32, 1, {4, 0, 0}, 1, 1, 1},
+    {DRM_FORMAT_XRGB16161616, 0, 1, {8, 0, 0}, 1, 1, 0},
+    {DRM_FORMAT_ARGB16161616, 0, 1, {8, 0, 0}, 1, 1, 1},
     {DRM_FORMAT_YUV420, 0, 3, {1, 1, 1}, 2, 2, 0},
     {DRM_FORMAT_YVU420, 0, 3, {1, 1, 1}, 2, 2, 0},
     {DRM_FORMAT_NV12, 0, 2, {1, 2, 0}, 2, 2, 0},
