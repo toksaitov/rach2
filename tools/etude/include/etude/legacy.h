@@ -108,6 +108,10 @@ struct etude_legacy_set_opts {
     const char *ledger;         /* the absolute directory of the machine's ledger */
     const char *account;        /* the account the claims are made for */
     uint64_t cap[3];            /* the ledger's limits, by enum etude_legacy_resource */
+    const char *site_ledger;    /* inside a launcher claim, the site's shared
+                                   ledger, where a case of a processor class
+                                   also claims its processors; NULL otherwise */
+    uint64_t site_cpu;          /* that ledger's processor limit */
     const char *locks;          /* the absolute directory of the old runner's host
                                    and port locks, which each claim takes; NULL
                                    for none */

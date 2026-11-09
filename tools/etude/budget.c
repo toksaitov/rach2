@@ -676,7 +676,8 @@ static int select_arch(const struct etude_budget_policy *p, const struct cmp_his
         key.value[7] = digests[2];
         key.value[8] = p->os;
         if (item_cost(h, &key, integer_of(resources, "cpu_millis"),
-                      integer_of(resources, "cpu_ceiling_millis"), &cost) != 0) {
+                      integer_of(resources, "cpu_ceiling_millis"), &cost) != 0 ||
+            etude_cost_class(c, &cost) < 0) {
             return -1;
         }
         if (cost.samples == 0) {

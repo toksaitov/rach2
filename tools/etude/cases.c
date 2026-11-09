@@ -1468,6 +1468,11 @@ static void rule_resources(const struct rule *r)
     if (json_member(res, "cpu_millis")->integer > json_member(res, "cpu_ceiling_millis")->integer) {
         finding(r->file, res->line, "%s: the processor reservation is above its ceiling", case_id);
     }
+    if (json_member(res, "cpu_class") != NULL &&
+        json_member(json_member(r->c, "requirements"), "qemu") == NULL) {
+        finding(r->file, res->line, "%s: a processor class is for a case with a QEMU profile",
+                case_id);
+    }
     if (memory != NULL &&
         (same(r->domain, "host") || json_member(memory, "resident_bytes")->integer >
                                         json_member(memory, "configured_bytes")->integer)) {
