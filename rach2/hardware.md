@@ -18,6 +18,7 @@ Both kernels use these features where the processor has them, and run without th
 | Page attribute table | the framebuffer mapped write-combining |
 | `RDSEED`, `RDRAND` | the random generator's trusted seed |
 | NX, 1 GiB pages | x86-64 only: no-execute pages, and the direct map in large pages |
+| VMX with IA32_FEATURE_CONTROL allowing it, or SVM not disabled in VM_CR | x86-64 only: `/dev/kvm` ([kvm(4)](../man/man4/kvm.4)), absent without either |
 
 The interrupt controllers are the 8259 pair and, where the MADT lists one, the I/O APIC. Programs run on every processor the ACPI MADT lists, up to 64, and kernel code on one at a time. A machine whose firmware left the local APIC in x2APIC mode runs on the 8259 pair and one processor. [The PC platform](sys/arch/x86/Readme.md) says when the other processors are started.
 

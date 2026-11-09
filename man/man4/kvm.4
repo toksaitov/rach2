@@ -1,0 +1,193 @@
+.Dd November 10, 2026
+.Dt KVM 4
+.Os
+.Sh NAME
+.Nm kvm
+.Nd the kernel virtual machine interface
+.Sh SYNOPSIS
+.Pa /dev/kvm
+.Sh DESCRIPTION
+.Pa /dev/kvm
+is Linux's KVM interface, API version 12, through which a program such as
+QEMU runs virtual machines on the processor's own virtualization, Intel's
+VMX or AMD's SVM.
+The x86-64 kernel makes it at boot when the processor has one of them and
+the firmware leaves it usable: a character device, 10:232, mode 0666.
+Without either, and on the i686 kernel, there is no node.
+The boot names the extension in a record,
+.Ql kvm: ready: vmx
+or
+.Ql kvm: ready: svm .
+.Pp
+A program uses it through the structures and ioctls of Linux's
+.In linux/kvm.h .
+.Dv KVM_CREATE_VM
+on
+.Pa /dev/kvm
+gives a descriptor of a new VM,
+.Pa anon_inode:kvm-vm ,
+and
+.Dv KVM_CREATE_VCPU
+on that a descriptor of a vCPU,
+.Pa anon_inode:kvm-vcpu:N ;
+both are open for reading and writing and close on exec.
+A vCPU lives as long as its VM, and a VM as long as a descriptor or a
+mapping of one of its vCPUs.
+.Pp
+Each level takes Linux's ioctls of its level:
+.Bl -tag -width Ds
+.It Pa /dev/kvm
+.Dv KVM_GET_API_VERSION ,
+.Dv KVM_CREATE_VM
+of machine type 0,
+.Dv KVM_CHECK_EXTENSION ,
+.Dv KVM_GET_VCPU_MMAP_SIZE ,
+.Dv KVM_GET_MSR_INDEX_LIST ,
+.Dv KVM_GET_MSR_FEATURE_INDEX_LIST ,
+.Dv KVM_GET_MSRS
+of the feature MSRs,
+.Dv KVM_GET_SUPPORTED_CPUID ,
+.Dv KVM_GET_EMULATED_CPUID ,
+which offers no leaf,
+and
+.Dv KVM_X86_GET_MCE_CAP_SUPPORTED .
+.It a VM
+.Dv KVM_CREATE_VCPU ,
+.Dv KVM_CHECK_EXTENSION ,
+.Dv KVM_SET_USER_MEMORY_REGION ,
+.Dv KVM_SET_TSS_ADDR ,
+.Dv KVM_SET_IDENTITY_MAP_ADDR ,
+.Dv KVM_SET_NR_MMU_PAGES ,
+.Dv KVM_GET_NR_MMU_PAGES ,
+.Dv KVM_GET_CLOCK ,
+.Dv KVM_SET_CLOCK ,
+.Dv KVM_SET_BOOT_CPU_ID
+and
+.Dv KVM_ENABLE_CAP .
+.It a vCPU
+.Dv KVM_RUN ,
+the registers
+.Pq Dv KVM_GET_REGS , KVM_GET_SREGS , KVM_GET_FPU , KVM_GET_XSAVE , KVM_GET_XCRS , KVM_GET_DEBUGREGS
+and their sets,
+.Dv KVM_GET_MSRS ,
+.Dv KVM_SET_MSRS ,
+.Dv KVM_SET_CPUID2 ,
+.Dv KVM_GET_CPUID2 ,
+.Dv KVM_GET_VCPU_EVENTS ,
+.Dv KVM_SET_VCPU_EVENTS ,
+.Dv KVM_GET_MP_STATE ,
+.Dv KVM_SET_MP_STATE ,
+.Dv KVM_INTERRUPT ,
+.Dv KVM_NMI ,
+.Dv KVM_SET_SIGNAL_MASK ,
+.Dv KVM_SET_GUEST_DEBUG ,
+.Dv KVM_X86_SETUP_MCE
+and
+.Dv KVM_X86_SET_MCE .
+.El
+.Pp
+.Dv KVM_CHECK_EXTENSION
+answers 1, or a count, for each capability the kernel makes true, and 0
+for the rest.
+A capability turns on with the part of the kernel that gives it: those of
+the memory slots, the in-kernel interrupt controller and ioeventfds are
+not given yet, and neither is any that depends on the backend.
+.Pp
+A vCPU's descriptor maps
+.Dv KVM_GET_VCPU_MMAP_SIZE
+bytes, two pages: the
+.Vt struct kvm_run
+page and the page port I/O data goes through, at
+.Dv KVM_PIO_PAGE_OFFSET .
+A shared mapping is the kernel's own pages, which
+.Dv KVM_RUN
+reads and writes, and a fork's child shares it.
+A private mapping gives each page as it was when first touched, as a
+private mapping of a file does, and its writes stay its own.
+A page past the two raises
+.Dv SIGBUS .
+.Pp
+A VM belongs to the address space that made it.
+Its ioctls, and those of its vCPUs, made from another, as a fork's child
+would make them, fail with
+.Er EIO .
+.Pp
+.Dv KVM_RUN
+gives the guest the answer to the last exit's port or MMIO read first,
+then returns
+.Er EINTR
+at once when
+.Va immediate_exit
+is set in the run page, and also when a signal is pending or another
+thread asked the vCPU to stop, with
+.Dv KVM_EXIT_INTR
+in
+.Va exit_reason .
+That
+.Er EINTR
+is never restarted, with or without
+.Dv SA_RESTART ,
+as on Linux.
+The backends that run guests are not in this kernel yet:
+.Dv KVM_RUN
+otherwise fails with
+.Er EOPNOTSUPP .
+.Sh FILES
+.Bl -tag -width /dev/kvm
+.It Pa /dev/kvm
+the interface
+.El
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er ENOTTY
+An ioctl that
+.Pa /dev/kvm
+or a VM does not take.
+.It Bq Er EINVAL
+An ioctl that a vCPU does not take; an argument outside Linux's bounds,
+such as a machine type other than 0, a vCPU id of 256 or more, a TSS past
+4 GiB less three pages, register state the processor would refuse, an
+XSAVE image past the guest's XCR0, or a flag Linux does not define.
+.It Bq Er E2BIG
+A list longer than the call takes, more than 256 CPUID entries or 256
+MSRs or more; or a buffer too small for the list asked for, whose count
+.Dv KVM_GET_MSR_INDEX_LIST
+and
+.Dv KVM_GET_MSR_FEATURE_INDEX_LIST
+then write back.
+.It Bq Er EEXIST
+.Dv KVM_CREATE_VCPU
+of an id the VM has.
+.It Bq Er EBUSY
+.Dv KVM_SET_IDENTITY_MAP_ADDR
+or
+.Dv KVM_SET_BOOT_CPU_ID
+once the VM has a vCPU;
+.Dv KVM_SET_GUEST_DEBUG
+while an exception waits.
+.It Bq Er ENXIO
+.Dv KVM_INTERRUPT
+while an interrupt waits.
+.It Bq Er EIO
+An ioctl from an address space other than the VM's.
+.It Bq Er EINTR
+.Dv KVM_RUN
+ended by
+.Va immediate_exit ,
+a signal or a request to stop.
+.It Bq Er EOPNOTSUPP
+.Dv KVM_RUN ,
+until the backends run guests.
+.El
+.Sh SEE ALSO
+.Xr ioctl 2 ,
+.Xr mmap 2 ,
+.Xr limits 7
+.Sh STANDARDS
+Linux's KVM API, version 12, for x86, as its
+.Pa Documentation/virt/kvm/api.rst
+gives it.
+.Sh BUGS
+At most 64 vCPUs in a VM, with ids below 256, and 256 memory slots.
+No in-kernel PIC, IOAPIC or PIT, no coalesced MMIO, no dirty ring, no SMM
+and no nested virtualization.
