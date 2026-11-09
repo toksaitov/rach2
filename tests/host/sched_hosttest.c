@@ -101,6 +101,12 @@ void fpu_restore(const void *area)
     CHECK(area != current_proc->fpu, "restore belongs to incoming process");
 }
 
+/** Mark nothing: no row registers an rseq area. */
+void rseq_preempt(process_t *p)
+{
+    (void)p;
+}
+
 /** Check that interrupts are off; no row sets a debug register. */
 void arch_debug_switch(struct process *old, const struct process *next)
 {
