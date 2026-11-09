@@ -158,8 +158,6 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
 #define EVIOCGABS(a)       IOC(IOC_READ, NR_GABS + (a), sizeof(struct input_absinfo))
 #define EVIOCSABS(a, n)    IOC(IOC_WRITE, NR_SABS + (a), n)
 
-#define ABS_MT_POSITION_X 0x35
-
 /* An open: its descriptor and description, nonblocking. */
 struct opened {
     fd_entry_t e;
@@ -281,8 +279,10 @@ static void motion_rows(void)
               is(1, EV_SYN, SYN_REPORT, 0) && is(2, EV_KEY, BTN_LEFT, 0));
     take(&b);
 
-    /* An overflow: the reader that fell behind finds SYN_DROPPED. */
-    for (i = 0; i < EVDEV_QUEUE / 2 + 1; i++) {
+    /* An overflow: the reader that fell behind finds SYN_DROPPED. A mouse
+     * with three axes queues 128 records. */
+    CHECK("a mouse's open queues 128 records", ((struct evdev_client *)a.e.priv)->qmask + 1 == 128);
+    for (i = 0; i < 128 / 2 + 1; i++) {
         packet(dev, EV_REL, REL_WHEEL, 1);
     }
     CHECK("an overflowed queue reads SYN_DROPPED first",
