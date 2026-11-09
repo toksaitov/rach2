@@ -21,6 +21,8 @@ The bullets state only what the records show. A fact the records do not hold, su
 
 | Fault | Project | Milestone | Status | Entry |
 |---|---|---|---|---|
+| Marionette returns before a script finishes with a null timeout | Firefox ESR 153.6.0 | 76 | unreported | [76-display/upstream.md](76-display/upstream.md#marionettes-null-script-timeout-returns-before-the-script-finishes) |
+| Firefox exits on clipboard access without an input seat | Firefox ESR 153.6.0 and GTK | 76 | unreported, draft | [76-display/upstream.md](76-display/upstream.md#firefox-exits-on-clipboard-access-under-a-seatless-compositor) |
 | Linux takes a second panel's type from the VBT without checking its range | Linux 6.12 and 6.18 | 78 | unreported | [78-intel/upstream.md](78-intel/upstream.md#linux-takes-a-second-panels-type-from-the-vbt-without-checking-its-range) |
 | Linux's graphics 7 command parser allows the timestamp of the video ring's old base | Linux 6.12 | 78 | unreported | [78-intel/upstream.md](78-intel/upstream.md#linuxs-graphics-7-command-parser-allows-the-timestamp-of-the-video-rings-old-base) |
 | Linux refuses a timeline fence with the error of the entry before it | Linux 6.12 and 6.18 | 78 | unreported | [78-intel/upstream.md](78-intel/upstream.md#linux-refuses-a-timeline-fence-with-the-error-of-the-entry-before-it) |
