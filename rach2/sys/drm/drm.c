@@ -233,8 +233,16 @@ int32_t drm_dev_register(struct drm_device *dev)
             return rc;
         }
     }
-    devices[i] = dev;
     dev->index = i;
+    rc = drm_sysfs_register(dev);
+    if (rc != 0) {
+        if (render) {
+            devfs_node_unregister(&render->node);
+        }
+        devfs_node_unregister(&card->node);
+        return rc;
+    }
+    devices[i] = dev;
     dev->registered = 1;
     klog(KLOG_INFO, "drm", "%s: card%d", dev->driver->ident.name, i);
     drm_client_dev_register(dev);
@@ -251,6 +259,7 @@ void drm_dev_unplug(struct drm_device *dev)
     }
     dev->unplugged = 1;
     if (dev->registered) {
+        drm_sysfs_unregister(dev);
         devfs_node_unregister(&minors[dev->index][0].node);
         devfs_node_unregister(&minors[dev->index][1].node);
         drm_client_dev_unregister(dev);
