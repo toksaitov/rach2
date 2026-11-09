@@ -1,0 +1,270 @@
+.Dd November 9, 2026
+.Dt DRM 4
+.Os
+.Sh NAME
+.Nm drm
+.Nd the card and render nodes of the display and rendering devices
+.Sh SYNOPSIS
+.In drm/drm.h
+.In drm/drm_mode.h
+.Pp
+.Pa /dev/dri/card0
+to
+.Pa /dev/dri/card63
+.Pp
+.Pa /dev/dri/renderD128
+to
+.Pa /dev/dri/renderD191
+.Sh DESCRIPTION
+Each display or rendering device a driver binds is a DRM device with
+Linux 6.12's interface, which libdrm, Mesa and the compositors use: a card
+node,
+.Pa /dev/dri/cardN ,
+major 226 and minor
+.Ar N ,
+and, when the driver renders, a render node,
+.Pa /dev/dri/renderD Ns Ar M ,
+minor
+.Ar M
+= 128 +
+.Ar N .
+A device takes the lowest free index when it registers, so its number
+follows the order the drivers found their devices; a program finds a
+device by what
+.Dv DRM_IOCTL_VERSION
+and
+.Dv DRM_IOCTL_GET_UNIQUE
+say of it, never by its number.
+.Pa /dev/dri
+is listed only while it has a node.
+.Pp
+Each
+.Xr open 2
+of a node is a DRM file, which every descriptor of that open file
+description shares: those of
+.Xr dup 2 ,
+.Xr fork 2
+and a socket's
+.Dv SCM_RIGHTS .
+.Xr kcmp 2
+with
+.Dv KCMP_FILE
+tells whether two descriptors are one DRM file.
+The file holds its buffer handles, its master role and its events, which
+go when its last descriptor closes.
+An open with
+.Dv O_EXCL
+fails with
+.Er EBUSY .
+.Ss Ioctls
+The calls are Linux's
+.Dv DRM_IOCTL_*
+numbers, type
+.Ql d ,
+with the core's numbers below
+.Dv DRM_COMMAND_BASE
+(0x40) and the driver's from it to 0xa0.
+The argument is copied in and out by the direction both the call's number
+and the kernel's row of it give, and a shorter argument than the kernel's
+is extended with zeros, as Linux does for a program built against an
+older header; the argument is copied out even when the call fails.
+.Pp
+Each row has Linux's flags, which are checked in this order:
+.Dv DRM_ROOT_ONLY
+calls need a privileged caller,
+.Dv DRM_AUTH
+calls on a card node an authenticated file,
+.Dv DRM_MASTER
+calls the master, and a call without
+.Dv DRM_RENDER_ALLOW
+is refused on a render node.
+Each is
+.Er EACCES
+when it fails.
+A render node needs no authentication and has no master: it is for
+rendering into buffers, and the card node for the display.
+.Pp
+.Dv DRM_IOCTL_VERSION ,
+.Dv DRM_IOCTL_GET_UNIQUE ,
+.Dv DRM_IOCTL_GET_CLIENT ,
+.Dv DRM_IOCTL_GET_STATS ,
+.Dv DRM_IOCTL_GET_CAP ,
+.Dv DRM_IOCTL_SET_CLIENT_CAP
+and
+.Dv DRM_IOCTL_SET_VERSION
+answer as Linux's do.
+A client capability of mode setting needs a driver with mode setting;
+.Dv DRM_CLIENT_CAP_ATOMIC
+is refused with
+.Er EOPNOTSUPP
+to a program whose name begins with
+.Ql X ,
+as Linux refuses it to the X server's modesetting driver.
+.Ss Master
+The master of a card is the one DRM file that may set modes.
+The first open of a card that has no master becomes master, with a master
+record of its own.
+The master gives up the role with
+.Dv DRM_IOCTL_DROP_MASTER ,
+and when its file closes.
+.Dv DRM_IOCTL_SET_MASTER
+takes the role while no file holds it:
+a file that was master, called by the process that opened it, or any file
+of a privileged caller; other callers are refused with
+.Er EACCES .
+It is
+.Er EBUSY
+while another file is master, and 0 for the master itself.
+A file that takes the role for the first time makes a master record of its
+own; one that was master already takes its old record back.
+.Ss Authentication
+A file of a card node is authenticated when it made its own master record
+or its opener was privileged.
+Another client gets a magic with
+.Dv DRM_IOCTL_GET_MAGIC ,
+the lowest free number of its master record, from 1, passes it to the
+master, and the master authenticates it with
+.Dv DRM_IOCTL_AUTH_MAGIC .
+A magic is spent by its first use, and a second
+.Dv DRM_IOCTL_AUTH_MAGIC
+with it is
+.Er EINVAL ,
+as is a magic of 0 or of another master record.
+.Ss Buffers
+A buffer object is a range of whole pages a file reaches by a handle, the
+lowest free number from 1 in that file.
+.Dv DRM_IOCTL_GEM_CLOSE
+drops a handle; the object goes when no handle, mapping or dma-buf holds
+it.
+.Dv DRM_IOCTL_GEM_FLINK
+gives the object a name, the lowest free on the device, which any
+authenticated file of the device opens with
+.Dv DRM_IOCTL_GEM_OPEN
+for a handle of its own; the name goes with the object's last handle.
+.Pp
+A dumb buffer is a buffer a program draws into with the processor, for
+the display.
+.Dv DRM_IOCTL_MODE_CREATE_DUMB
+takes
+.Va width ,
+.Va height
+and
+.Va bpp ,
+each not 0, and gives the
+.Va handle ,
+the
+.Va pitch ,
+the bytes of a row,
+.Va ( width
+\(mu
+.Va bpp
++ 7) / 8, and the
+.Va size ,
+.Va pitch
+\(mu
+.Va height
+rounded up to the page.
+A width, height and depth whose size does not fit in 32 bits is
+.Er EINVAL ,
+and a driver without dumb buffers answers
+.Er ENOSYS ;
+.Dv DRM_CAP_DUMB_BUFFER
+says which.
+The buffer's pages are zero.
+.Dv DRM_IOCTL_MODE_MAP_DUMB
+gives the offset at which
+.Xr mmap 2
+on the same node maps the buffer, and
+.Dv DRM_IOCTL_MODE_DESTROY_DUMB
+drops the handle, as
+.Dv DRM_IOCTL_GEM_CLOSE
+does.
+.Pp
+A buffer's offset is a whole number of pages, the same for every file of
+the device, from 4 GiB on x86-64 and from 16 MiB on i386.
+A mapping must be shared, start at the offset and be no longer than the
+buffer, and its file must hold a handle to the buffer; a mapping holds the
+buffer until it is unmapped, so destroying the handle leaves the mapping's
+bytes in place.
+The driver chooses the mapping's cache type: the dumb buffers of a display
+are mapped write-combining, so stores go to memory in bursts, and a
+program reads them back slowly.
+.Ss Events
+.Xr read 2
+gives the file's queued events, each a
+.Vt struct drm_event
+and its body, as many whole events as fit; when the first does not fit it
+returns 0.
+It blocks until one is queued, unless the descriptor is
+.Dv O_NONBLOCK ,
+which answers
+.Er EAGAIN .
+.Xr poll 2
+reports
+.Dv POLLIN
+while an event is queued.
+A file holds at most 4096 bytes of events and of events reserved for it.
+.Ss Unplug
+When a device goes, its nodes leave
+.Pa /dev/dri
+and its open files stay with it: their ioctls and reads answer
+.Er ENODEV ,
+.Xr poll 2
+reports
+.Dv POLLERR
+and
+.Dv POLLHUP ,
+and a touch of a mapping of its buffers raises
+.Dv SIGBUS .
+The device is freed when its last file and its last mapping go.
+.Sh FILES
+.Pa /dev/dri/cardN
+has mode 0660 and
+.Pa /dev/dri/renderDM
+mode 0666, as udev gives them on Linux; both are owned by root and its
+group.
+.Sh ERRORS
+.Bl -tag -width EOPNOTSUPP
+.It Er EACCES
+The file lacks what the call's flags need: privilege, authentication, the
+master role or a card node; or
+.Xr mmap 2
+of a buffer the file holds no handle to.
+.It Er EBUSY
+An open with
+.Dv O_EXCL ,
+or
+.Dv DRM_IOCTL_SET_MASTER
+while another file is master.
+.It Er EFAULT
+The argument cannot be read or written.
+.It Er EINVAL
+A call the core and the driver do not have, an argument out of range, a
+magic unknown or spent,
+.Dv DRM_IOCTL_GEM_CLOSE
+of a handle the file does not hold, or
+.Xr mmap 2
+at an offset no buffer has, longer than its buffer, or private.
+.It Er ENODEV
+The device was unplugged.
+.It Er ENOENT
+A handle the file does not hold, for
+.Dv DRM_IOCTL_GEM_FLINK
+and
+.Dv DRM_IOCTL_MODE_MAP_DUMB ,
+or a name no buffer has, for
+.Dv DRM_IOCTL_GEM_OPEN .
+.It Er ENOSYS
+.Dv DRM_IOCTL_MODE_CREATE_DUMB
+on a driver without dumb buffers.
+.It Er ENOTTY
+A call of another type than
+.Ql d .
+.It Er EOPNOTSUPP
+A feature the driver does not have, such as buffers or mode setting.
+.El
+.Sh SEE ALSO
+.Xr ioctl 2 ,
+.Xr kcmp 2 ,
+.Xr mmap 2 ,
+.Xr mem 4
