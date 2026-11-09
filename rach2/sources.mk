@@ -7,9 +7,14 @@
 # its processor's files and its platform's, the drivers of devices only that
 # platform has among them. Order matters: the link keeps input order, and the
 # multiboot header, first in ARCH_ASM_SRC, must stay within the first 8192
-# bytes of the kernel where loaders search.
+# bytes of the kernel where loaders search. The display devices, the
+# sharing of buffers and the virtio transport keep their lists in their own
+# directories' sources.mk, whose variables C_SRC_SHARED names.
 
 include sys/arch/$(ARCH)/sources.mk
+include sys/drm/sources.mk
+include sys/dmabuf/sources.mk
+include sys/virtio/sources.mk
 
 ASM_SRC = $(ARCH_ASM_SRC)
 
@@ -86,6 +91,7 @@ C_SRC_SHARED = kernel.c \
     sys/mm/frame.c \
     sys/mm/pagecache.c \
     sys/mm/modlayout.c \
+    sys/mm/mempolicy.c \
     sys/proc/process.c \
     sys/proc/exit.c \
     sys/proc/child_signal.c \
@@ -99,6 +105,9 @@ C_SRC_SHARED = kernel.c \
     sys/proc/ns.c \
     sys/proc/pidfd.c \
     sys/proc/coredump.c \
+    sys/proc/kcmp.c \
+    sys/proc/process_vm.c \
+    sys/proc/rseq.c \
     sys/ipc/pipe.c \
     sys/ipc/pipe_ring.c \
     sys/ipc/unix.c \
@@ -125,6 +134,7 @@ C_SRC_SHARED = kernel.c \
     sys/fs/devfs.c \
     sys/fs/synthfs.c \
     sys/fs/procfs.c \
+    sys/fs/debugfs.c \
     sys/usb/usb.c \
     sys/usb/stamp.c \
     sys/usb/xhci.c \
@@ -211,4 +221,7 @@ C_SRC_SHARED = kernel.c \
     sys/lib/kstring.c \
     sys/lib/spinlock.c \
     sys/lib/krandom.c \
-    sys/lib/ksha256.c
+    sys/lib/ksha256.c \
+    $(DRM_C_SRC) \
+    $(DMABUF_C_SRC) \
+    $(VIRTIO_C_SRC)

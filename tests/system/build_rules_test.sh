@@ -97,8 +97,8 @@ mkdir -p "$S/tools/verify" "$S/rach2"
 cp tools/verify/check_sources.sh "$S/tools/verify/"
 cp rach2/Makefile rach2/sources.mk "$S/rach2/"
 # An architecture is a directory with a cpu.h and a sources.mk; the lists
-# they include, such as sys/acpi/sources.mk, come with them.
-for f in $(find rach2/sys -name sources.mk) rach2/sys/arch/*/cpu.h; do
+# they include, such as sys/acpi/sources.mk and sys/drm/pc.mk, come with them.
+for f in $(find rach2/sys -name '*.mk') rach2/sys/arch/*/cpu.h; do
     mkdir -p "$S/$(dirname "$f")"
     cp "$f" "$S/$f"
 done
@@ -128,7 +128,7 @@ for f in Makefile tests/registry tests/Makefile tests/system/suites.mk krffs/Mak
     tests/cases/host/scripts.mk tests/cases/host/family.mk tests/system/fakeapi/native.mk \
     tests/native/native.mk tests/native/sources.mk \
     tests/system/wifi/wifi.mk tests/system/wifi/hwsimrelay.mk \
-    $(find rach2/sys -name sources.mk); do
+    $(find rach2/sys -name '*.mk'); do
     mkdir -p "$C/$(dirname "$f")"
     cp "$f" "$C/$f"
 done
