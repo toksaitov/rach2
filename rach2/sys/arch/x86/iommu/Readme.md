@@ -15,6 +15,8 @@ Two words of the boot line change this, as Linux's do ([the command line](../../
 * `intel_iommu=off`: no device is given to a domain (`iommu_present` is 0 and `iommu_attach` fails with `-ENODEV`); interrupt remapping stays on, as on Linux, where only `intremap=` turns it off. The word may be one of a list, as `intel_iommu=on,igfx_off`; the other values are accepted and change nothing, since translation is off for the host's devices anyway.
 * `intremap=off`: interrupts are not remapped.
 
+With both words, as on Linux, no unit is programmed: each unit's version, capabilities and status are read and logged, translation is turned off only if the firmware left it on, and nothing else is written. The log says `vtd: off by intel_iommu=off intremap=off: N units read`.
+
 A blocked DMA request or interrupt is logged with Linux's words for its reason, up to 32 for each unit, and every one is counted (`iommu_dma_faults`, `iommu_irq_faults`):
 
     vtd: fault: dmar0: dma write from 0:2.0 at 0x200000: reason 0x5, PTE Write access is not set
@@ -109,7 +111,7 @@ So every device of the Lenovo is translated, the GPU in a group of its own with 
 * A unit of three levels and one of four walking one domain, and a domain mapped past the smaller one's reach refused there.
 * The domain calls' refusals, an overlap that leaves nothing of itself, and a page for a table that could not be had.
 * A refused invalidation descriptor reported and the queue going on.
-* `intel_iommu=off` and `intremap=off`.
+* `intel_iommu=off` and `intremap=off`, and both: the Lenovo's units read and no register written, or one command where the firmware left translation on.
 * 42 faults: one lost while the record was full, 32 logged and the rest counted.
 * A full remapping table: the message refused and not enabled.
 

@@ -485,6 +485,7 @@ struct model {
     unsigned int cc_next, tlb_next, fault_next;
     unsigned int last_dest, last_level;
     unsigned long wbf, inv_cc, inv_tlb, inv_iec, waits, iqe;
+    unsigned long writes;     /* register writes of every kind */
     unsigned long violations; /* commands the specification forbids */
     unsigned long stray;      /* reads of memory no table is in */
 };
@@ -790,6 +791,7 @@ void vtd_hw_write32(uintptr_t regs, unsigned int off, uint32_t v)
     struct model *m = (struct model *)(void *)regs;
     unsigned int fro = VTD_CAP_FRO(m->cap), nfr = VTD_CAP_NFR(m->cap);
 
+    m->writes++;
     if (off == VTD_GCMD) {
         m_gcmd(m, v);
     } else if (off == VTD_FSTS) {
@@ -812,6 +814,7 @@ void vtd_hw_write64(uintptr_t regs, unsigned int off, uint64_t v)
 {
     struct model *m = (struct model *)(void *)regs;
 
+    m->writes++;
     if (off == VTD_CCMD && (v >> 63) != 0) {
         m_inv_cc(m, (unsigned int)(v >> 61) & 3u, (unsigned int)(v >> 16) & 0xFFFFu,
                  (unsigned int)v & 0xFFFFu);
@@ -2066,6 +2069,43 @@ static void row_options(void)
     row_end();
 }
 
+/** `intel_iommu=off intremap=off` on the Lenovo's units: each read and
+ * logged, none written, and none up; translation the firmware left on
+ * turned off with one command. */
+static void row_read_only(void)
+{
+    uint32_t a, data;
+
+    row_begin("read_only");
+    setup_lenovo();
+    opt_intel_iommu = "off";
+    opt_intremap = "off";
+    check(t_msi(0, DF(0x1F, 2), 50) == 0, "a message");
+    check(vtd_start() == -1 && vtd_nunits == 0 && !iommu_present() && !intremap_active(),
+          "nothing up");
+    check(models[0].writes == 0 && models[1].writes == 0, "no register written");
+    check(logged("vtd: dmar0: at 0xfed90000, version 1.0, cap 0xc0000020660462, ecap 0xf0101a") &&
+              logged("vtd: dmar1: at 0xfed91000, version 1.0, cap 0xd2008020660462, ecap 0xf010da"),
+          "both units read");
+    check(logged("vtd: dmar0: status 0x0") && logged("vtd: dmar1: status 0x0"), "status read");
+    check(logged("vtd: off by intel_iommu=off intremap=off: 2 units read"), "logged");
+    msi_of(0, DF(0x1F, 2), &a, &data);
+    check(a == 0xFEE00000u && data == 50, "the message as it was");
+    row_end();
+
+    row_begin("read_only_te");
+    setup_lenovo();
+    models[1].gsts |= VTD_GCMD_TE;
+    models[1].cmd |= VTD_GCMD_TE;
+    opt_intel_iommu = "off";
+    opt_intremap = "off";
+    check(vtd_start() == -1 && vtd_nunits == 0, "nothing up");
+    check(models[0].writes == 0 && models[1].writes == 1 && (models[1].gsts & VTD_GCMD_TE) == 0,
+          "translation turned off, nothing else written");
+    check(logged("vtd: dmar1: translation was on: turned off"), "logged");
+    row_end();
+}
+
 /** Faults past the limit are counted, and one lost is counted too. */
 static void row_fault_limit(void)
 {
@@ -2150,6 +2190,7 @@ int main(void)
     row_domain_api();
     row_iqe();
     row_options();
+    row_read_only();
     row_fault_limit();
     row_irt_full();
     free(ecam_mem);

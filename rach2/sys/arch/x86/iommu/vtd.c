@@ -1036,13 +1036,13 @@ int iommu_reserved_regions(uint8_t bus, uint8_t devfn, struct iommu_region *out,
 /* ---- bring-up ---- */
 
 /**
- * Make unit `u`, the table's row `desc`, ready: its registers mapped, what
- * the firmware left on turned off, the root table set and the queue on,
- * translation off. 0, or -1 with a record.
+ * Map unit `u`, the table's row `desc`, and read and log its version and
+ * capabilities, writing none of its registers. 0, or -1 with a record when
+ * it does not answer or walks neither three nor four levels.
  */
-static int unit_start(struct vtd_unit *u, const struct dmar_unit_desc *desc, int index)
+static int unit_read(struct vtd_unit *u, const struct dmar_unit_desc *desc, int index)
 {
-    uint32_t ver, sts;
+    uint32_t ver;
     unsigned int nd;
 
     k_memset(u, 0, sizeof(*u));
@@ -1079,6 +1079,21 @@ static int unit_start(struct vtd_unit *u, const struct dmar_unit_desc *desc, int
     nd = 4u + 2u * VTD_CAP_ND(u->cap);
     u->ndomains = nd >= 8u ? VTD_DID_MAX : (1u << nd);
     u->did_used[0] = 3; /* ids 0 and 1 */
+    return 0;
+}
+
+/**
+ * Make unit `u`, the table's row `desc`, ready: its registers mapped, what
+ * the firmware left on turned off, the root table set and the queue on,
+ * translation off. 0, or -1 with a record.
+ */
+static int unit_start(struct vtd_unit *u, const struct dmar_unit_desc *desc, int index)
+{
+    uint32_t sts;
+
+    if (unit_read(u, desc, index) != 0) {
+        return -1;
+    }
 
     /* What the firmware left on goes off: translation, remapping, the queue
      * once it is empty, and the protected memory regions. */
@@ -1137,9 +1152,47 @@ static int unit_start(struct vtd_unit *u, const struct dmar_unit_desc *desc, int
 }
 
 /**
+ * Read each unit of segment 0 and leave it as the firmware left it, but
+ * for translation, which goes off when it was on: the boot line's
+ * `intel_iommu=off intremap=off`, under which Linux too programs no unit
+ * (`intel_iommu_init` stops at `intel_disable_iommus`). The units read.
+ */
+static int vtd_read_only(void)
+{
+    struct vtd_unit *u;
+    uint32_t sts;
+    int i, n = 0;
+
+    for (i = 0; i < vtd_dmar.nunits; i++) {
+        if (vtd_dmar.units[i].segment != 0) {
+            continue;
+        }
+        u = &vtd_units[n];
+        if (unit_read(u, &vtd_dmar.units[i], n) != 0) {
+            continue;
+        }
+        sts = rd32(u, VTD_GSTS);
+        klog(KLOG_INFO, "vtd", "dmar%d: status 0x%x", n, sts);
+        u->gcmd = sts & (VTD_GCMD_TE | VTD_GCMD_QIE | VTD_GCMD_IRE | VTD_GCMD_CFI);
+        if ((sts & VTD_GCMD_TE) != 0) {
+            klog(KLOG_WARN, "vtd", "dmar%d: translation was on: turned off", n);
+            vtd_set_gcmd(u, VTD_GCMD_TE, 0);
+        }
+        if ((sts & VTD_GCMD_IRE) != 0) {
+            klog(KLOG_WARN, "vtd", "dmar%d: interrupt remapping was on: left on", n);
+        }
+        n++;
+    }
+    klog(KLOG_INFO, "vtd", "off by intel_iommu=off intremap=off: %d units read", n);
+    return n;
+}
+
+/**
  * Read the DMAR table and bring up each unit of segment 0, the fault
  * reports, and, unless the boot line says `intremap=off`, interrupt
- * remapping: the units up, or -1 when there are none.
+ * remapping: the units up, or -1 when there are none. With both
+ * `intel_iommu=off` and `intremap=off` the units are only read, and none
+ * is up.
  */
 int vtd_start(void)
 {
@@ -1156,6 +1209,10 @@ int vtd_start(void)
         return -1;
     }
     dmar_report(&vtd_dmar);
+    if (vtd_hw_option("intel_iommu", "off") && vtd_hw_option("intremap", "off")) {
+        (void)vtd_read_only();
+        return -1;
+    }
     for (i = 0; i < vtd_dmar.nunits; i++) {
         if (vtd_dmar.units[i].segment != 0) {
             klog(KLOG_WARN, "vtd", "dmar: unit of segment %d passed over",
