@@ -59,6 +59,16 @@ on with every source still masked.
 A machine without message vectors leaves the device without interrupts;
 the driver then polls for its work.
 .Pp
+It reads the firmware's description of the outputs and the panel: the
+ACPI OpRegion at the address in the ASLS register, and the video BIOS
+table it holds, or else the one in the option ROM's shadow at 0xc0000.
+The kernel logs
+.Dq i915: opregion
+with its version and mailboxes, and
+.Dq i915: vbt
+with the table's signature, source, version and number of outputs, or that
+there is none and each port takes Linux's defaults.
+.Pp
 It then starts the render and blitter rings: for each a status page and a
 ring of 16 KiB in the global GTT, the ring stopped, emptied and started
 again with every wait bounded.

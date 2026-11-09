@@ -12,3 +12,14 @@ Each entry follows [the upstream fault format](../upstream.md).
 * Rach2: no workaround in the driver. Its writes follow the hardware's clearing sequence, and its version 2 keepalive and time-left operations do not use these status bits. The register model is in the watchdog implementation commit; this entry accompanies the diagnostic tools.
 * Status: unreported.
 * Next: reproduce with qtest on current upstream, correct both assignments to clear the masked written bits, and add a register readback regression before reporting it.
+
+## Linux takes a second panel's type from the VBT without checking its range
+
+* Project: Linux 6.12 and 6.18, `drivers/gpu/drm/i915/display/intel_bios.c` from the corresponding upstream Git tags. No source archive is pinned by this task.
+* Fails: `vbt_get_panel_type`, which begins at line 630 in 6.12 and 634 in 6.18, refuses a first panel's type above 0xf other than 0xff but returns `lfp_options->panel_type2` for a child with the handle LFP2 unchecked, at line 648 in 6.12 and 652 in 6.18. `get_panel_type` then only warns (`drm_WARN_ON` on a type above 0xf other than 0xff) and selects it, and the panel's parsers index the LFP data pointers' sixteen entries and shift the LFP options' per-panel bit fields by it: a type of 0x10 to 0xfe reads past the tables.
+* Found: 2026-11-10 on the Mac, milestone 78, while transcribing the VBT's panel decoding for task 78-10a.
+* Reproduction: not run on Linux. It needs a VBT with a child device of handle LFP2 and an LFP options block whose `panel_type2` is, say, 0x30, booted on a machine with two panels, or such a table loaded through i915's `vbt_firmware` parameter, with KASAN to show the read past the block.
+* Evidence: [Linux 6.12's vbt_get_panel_type](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/i915/display/intel_bios.c#L630) and [Linux 6.18's](https://github.com/torvalds/linux/blob/v6.18/drivers/gpu/drm/i915/display/intel_bios.c#L634). `tests/host/intel_bios_hosttest.c`, row `vbt_panel_type`, checks Rach2's refusal of a second panel type of 0x30.
+* Rach2: `rach2/sys/drm/i915/intel_bios.c`, `vbt_get_panel_type`, checks the second panel's type as the first's and returns -1 for one out of range, in the commit that adds the decoders.
+* Status: unreported.
+* Next: check current upstream's `vbt_get_panel_type`, confirm the read past the tables with KASAN and a crafted table, and send the one-line range check as a patch to intel-gfx.
