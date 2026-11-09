@@ -16,7 +16,10 @@
 
 #define PCI_VENDOR_INTEL 0x8086
 
-/* The board's ids in configuration space. */
+/* The ids, the class and revision, and the board's ids in configuration
+ * space. */
+#define PCI_ID_DWORD            0x00
+#define PCI_CLASS_REVISION      0x08
 #define PCI_SUBSYSTEM_VENDOR_ID 0x2c
 #define PCI_SUBSYSTEM_ID        0x2e
 
@@ -155,6 +158,9 @@ static void i915_unplug(struct drm_device *dev)
     struct drm_i915_private *i915 = to_i915(dev);
 
     i915_gt_pm_disable(i915);
+    if (i915->attached && i915->hw.ops->detach) {
+        i915->hw.ops->detach(&i915->hw);
+    }
     i915_irq_reset(i915);
     i915_msi_stop(i915);
     i915_devices_remove(i915);
@@ -165,10 +171,41 @@ static void i915_unplug(struct drm_device *dev)
  * record. */
 static void i915_release(struct drm_device *dev)
 {
-    i915_ggtt_fini(to_i915(dev));
-    intel_bios_fini(&to_i915(dev)->vbt);
-    intel_opregion_fini(&to_i915(dev)->opregion);
-    kfree(to_i915(dev));
+    struct drm_i915_private *i915 = to_i915(dev);
+
+    i915_ggtt_fini(i915);
+    intel_bios_fini(&i915->vbt);
+    intel_opregion_fini(&i915->opregion);
+    if (i915->attached && i915->hw.ops->release) {
+        i915->hw.ops->release(&i915->hw);
+    }
+    kfree(i915);
+}
+
+/**
+ * Read the identity of the device from the backend's configuration space,
+ * where it answers for one, into `ident`, and have /sys report it for the
+ * function in place of the function's own. The chip's own function needs
+ * nothing: /sys reads its configuration space.
+ */
+static void i915_ident(struct drm_i915_private *i915)
+{
+    struct sysfs_pci_ident *id = &i915->ident;
+    uint32_t ids, cr;
+
+    if (!i915->hw.ops->config_read32) {
+        return;
+    }
+    ids = i915_hw_config32(&i915->hw, &i915->pci, PCI_ID_DWORD);
+    cr = i915_hw_config32(&i915->hw, &i915->pci, PCI_CLASS_REVISION);
+    id->vendor = (uint16_t)ids;
+    id->device = (uint16_t)(ids >> 16);
+    id->subsystem_vendor = i915->subsystem_vendor;
+    id->subsystem_device = i915->subsystem_device;
+    id->class = cr >> 8;
+    id->revision = (uint8_t)cr;
+    id->boot_vga = 0;
+    i915->drm.pci_ident = id;
 }
 
 /* The option ROM's shadow, where the firmware leaves the ROM of the
@@ -237,12 +274,21 @@ static int32_t i915_base_init(struct drm_i915_private *i915)
 
 int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
 {
-    const struct i915_id *id = i915_id_lookup(pdev->device_id);
+    const struct i915_id *id;
     struct drm_i915_private *i915;
+    uint32_t ids = (uint32_t)pdev->device_id << 16 | pdev->vendor_id;
+    uint8_t revision = pdev->revision;
     uint16_t command;
     int32_t err;
 
-    if (!id || pdev->vendor_id != PCI_VENDOR_INTEL) {
+    if (hw->ops->config_read32) {
+        struct i915_hw backend = *hw;
+
+        ids = i915_hw_config32(&backend, pdev, PCI_ID_DWORD);
+        revision = (uint8_t)i915_hw_config32(&backend, pdev, PCI_CLASS_REVISION);
+    }
+    id = i915_id_lookup((uint16_t)(ids >> 16));
+    if (!id || (uint16_t)ids != PCI_VENDOR_INTEL) {
         return -ENODEV;
     }
     i915 = kzalloc(sizeof(*i915));
@@ -250,17 +296,16 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
         return -ENOMEM;
     }
     i915->pci = *pdev;
-    i915->id = id;
     i915->hw = *hw;
+    i915->id = id;
+    i915->revision = revision;
     i915->msi_vector = -1;
     i915->mmio_phys = pci_bar_address64(pdev, I915_GTTMMADR_BAR);
     i915->gmadr_phys = pci_bar_address64(pdev, I915_GMADR_BAR);
-    i915->subsystem_vendor =
-        pci_read_config16(pdev->bus, pdev->device, pdev->function, PCI_SUBSYSTEM_VENDOR_ID);
-    i915->subsystem_device =
-        pci_read_config16(pdev->bus, pdev->device, pdev->function, PCI_SUBSYSTEM_ID);
-    i915->gmch_ctrl = pci_read_config16(pdev->bus, pdev->device, pdev->function, SNB_GMCH_CTRL);
-    i915->bsm = pci_read_config32(pdev->bus, pdev->device, pdev->function, INTEL_BSM);
+    i915->subsystem_vendor = i915_hw_config16(&i915->hw, pdev, PCI_SUBSYSTEM_VENDOR_ID);
+    i915->subsystem_device = i915_hw_config16(&i915->hw, pdev, PCI_SUBSYSTEM_ID);
+    i915->gmch_ctrl = i915_hw_config16(&i915->hw, pdev, SNB_GMCH_CTRL);
+    i915->bsm = i915_hw_config32(&i915->hw, pdev, INTEL_BSM);
 
     command = pci_read_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND);
     pci_enable_memory_space(&i915->pci);
@@ -297,7 +342,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
          id->ulx   ? "/ulx"
          : id->ult ? "/ult"
                    : "",
-         (unsigned)id->device_id, (unsigned)id->platform->gt, (unsigned)pdev->revision);
+         (unsigned)id->device_id, (unsigned)id->platform->gt, (unsigned)i915->revision);
 
     drm_dev_init(&i915->drm, &i915_drm_driver);
     /* No mode setting until the display is driven, as Linux's i915 drops
@@ -305,6 +350,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     i915->drm.features &= ~(DRIVER_MODESET | DRIVER_ATOMIC);
     i915->drm.pci = &i915->pci;
     i915->drm.driver_priv = i915;
+    i915_ident(i915);
     err = drm_dev_register(&i915->drm);
     if (err < 0) {
         klog(KLOG_ERR, "i915", "register: error %d", (int)err);
@@ -320,6 +366,10 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     klog(KLOG_INFO, "i915", "registered: i915 1.6.0 for %s on card %d", i915->drm.unique,
          i915->drm.index);
     i915_sysfs_register(i915);
+    i915->attached = 1;
+    if (i915->hw.ops->attach) {
+        i915->hw.ops->attach(&i915->hw, i915);
+    }
     return 0;
 }
 

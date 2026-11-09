@@ -354,7 +354,8 @@ uint32_t *i915_ring_begin(struct i915_engine *e, struct drm_i915_private *i915, 
     struct i915_ring_room room;
     uint32_t bytes = ndw * 4u, remain, need, *cs, i;
 
-    if (!e->running || (ndw & 1u) || ndw == 0 || bytes > e->ring_size / 2u) {
+    if (!e->running || (ndw & 1u) || ndw == 0 || bytes > e->ring_size / 2u ||
+        i915_hw_fault(&i915->hw, I915_FAULT_SUBMIT) < 0) {
         return 0;
     }
     remain = e->ring_size - e->tail;

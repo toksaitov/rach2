@@ -6,6 +6,7 @@
 #define _I915_H_
 
 #include "../drm.h"
+#include "../../fs/sysfs.h"
 #include "../../lib/spinlock.h"
 #include "../../proc/wait_queue.h"
 #include "i915_hw.h"
@@ -341,10 +342,15 @@ struct i915_rps {
  * aperture. `gmch_ctrl` and `bsm` are the configuration words of the
  * stolen memory and the GTT's size (SNB_GMCH_CTRL, INTEL_BSM) as the
  * firmware left them, and `subsystem_vendor` and `subsystem_device` the
- * board's ids. `msi_vector` is the vector of the device's message, or -1
+ * board's ids, and `revision` the chip's revision; all of these come from
+ * the backend's configuration space where it answers for one
+ * (`config_read32`), and `ident` then holds the identity /sys reports for
+ * the function. `msi_vector` is the vector of the device's message, or -1
  * while it has none; `irqs` counts the interrupts taken on it. `opregion`
  * is the firmware's OpRegion and `vbt` the video BIOS table decoded
- * (intel_bios.h), Linux's defaults when the firmware gave none.
+ * (intel_bios.h), Linux's defaults when the firmware gave none. `attached`
+ * is set once the device is registered and owns its backend, whose
+ * `attach`, `detach` and `release` it then calls.
  */
 struct drm_i915_private {
     struct drm_device drm;
@@ -357,6 +363,9 @@ struct drm_i915_private {
     uint32_t bsm;
     uint16_t subsystem_vendor;
     uint16_t subsystem_device;
+    uint8_t revision;
+    struct sysfs_pci_ident ident;
+    uint8_t attached;
     int msi_vector;
     uint32_t irqs;
     struct i915_uncore uncore;
@@ -385,7 +394,11 @@ const struct i915_id *i915_id_lookup(uint16_t device_id);
  * forcewake, the display power well, stolen memory and the global GTT,
  * takes a vector and enables the device's message on it where the machine
  * has messages, and registers the device as `i915`. A copy of `hw` is
- * kept.
+ * kept. A backend that answers for configuration space gives the ids and
+ * the rest of the chip's identity, which /sys then reports for `pdev`;
+ * otherwise they are `pdev`'s. Once registered, the device owns the
+ * backend and calls its `attach`; on an error the backend is the
+ * caller's again.
  *
  * @return 0, -ENODEV for a device the driver does not bind, -ENOMEM, the
  *         GTT's error or the DRM core's; on an error the command word is
@@ -532,8 +545,9 @@ void i915_ggtt_invalidate(struct drm_i915_private *i915);
  *
  * @return 0; -EINVAL for an offset or an address not of whole pages, an
  *         address past the 39 bits an entry holds or a range past the
- *         GTT; -EBUSY for a range that touches a kept surface. Nothing is
- *         written on an error.
+ *         GTT; -EBUSY for a range that touches a kept surface; or the
+ *         backend's error at I915_FAULT_BIND, -ENOSPC. Nothing is written
+ *         on an error.
  */
 int32_t i915_ggtt_insert(struct drm_i915_private *i915, uint64_t offset, const uint64_t *pages,
                          uint32_t n, int cache);
@@ -653,7 +667,9 @@ void i915_gt_pages_unmap(struct drm_i915_private *i915, void *vaddr, uint32_t np
  * a ring without room waits, 10 ms at most, for the chip's head to move.
  *
  * @return the address, or NULL when the ring is not running, `ndw` is odd
- *         or too large, or the wait reached its bound ("ring space").
+ *         or too large, the wait reached its bound ("ring space"), or the
+ *         backend refused the submission (I915_FAULT_SUBMIT), which
+ *         `hw.faults` then counts.
  */
 uint32_t *i915_ring_begin(struct i915_engine *engine, struct drm_i915_private *i915, uint32_t ndw);
 
@@ -715,9 +731,7 @@ int32_t i915_ppgtt_enable_ring(struct drm_i915_private *i915, struct i915_engine
  * breadcrumb behind it, and the processor reads the value back. Logs
  * `i915: first light: ok` or the failure by name; every wait is bounded.
  *
- * @return 0, -ENODEV without the option, -EIO when the ring is not
- *         running, -ENOMEM, -ETIME when the breadcrumb or the interrupt
- *         did not come, or -EIO when the value read back is wrong.
+ * @return 0, -ENODEV without the option, or `i915_firstlight_run`'s.
  */
 int32_t i915_firstlight(struct drm_i915_private *i915);
 
@@ -884,5 +898,16 @@ int32_t i915_rps_set_boost_mhz(struct drm_i915_private *i915, uint32_t val);
  * the card's directory. A file that cannot be added is logged.
  */
 void i915_sysfs_register(struct drm_i915_private *i915);
+
+/**
+ * First light whatever the command line says, as the fake chip's debugfs
+ * file runs it on demand. The breadcrumb is polled; with the processor's
+ * interrupts on, the user interrupt is taken by the handler.
+ *
+ * @return 0, -EIO when the ring is not running, its submission is refused
+ *         or the value read back is wrong, -ENOMEM, or -ETIME when the
+ *         breadcrumb or the interrupt did not come.
+ */
+int32_t i915_firstlight_run(struct drm_i915_private *i915);
 
 #endif /* _I915_H_ */

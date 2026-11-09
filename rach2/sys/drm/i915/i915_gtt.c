@@ -141,6 +141,10 @@ int32_t i915_ggtt_insert(struct drm_i915_private *i915, uint64_t offset, const u
             return -EINVAL;
         }
     }
+    err = i915_hw_fault(&i915->hw, I915_FAULT_BIND);
+    if (err < 0) {
+        return err;
+    }
     for (i = 0; i < n; i++) {
         i915_gtt_write(&i915->hw, first + i, i915_ggtt_pte_encode(pages[i], cache));
     }
@@ -194,7 +198,7 @@ int32_t i915_ggtt_init(struct drm_i915_private *i915)
     entries = gsm_size / 4u;
     ggtt->total = (uint64_t)entries * I915_GTT_PAGE_SIZE;
 
-    msac = pci_read_config16(pdev->bus, pdev->device, pdev->function, HSW_MSAC);
+    msac = i915_hw_config16(&i915->hw, pdev, HSW_MSAC);
     ggtt->mappable_end = i915_aperture_sizes[(msac >> HSW_MSAC_SIZE_SHIFT) & HSW_MSAC_SIZE_MASK];
     if (ggtt->mappable_end == 0) {
         klog(KLOG_WARN, "i915", "gtt: aperture size code %u unknown, taken as 128 MiB",
