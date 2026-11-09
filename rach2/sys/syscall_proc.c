@@ -2325,8 +2325,9 @@ static int32_t fork_nproc(const process_t *parent)
 /**
  * What a child takes of `parent` besides its memory, files and signals: the
  * session and the process group, which it keeps until it or the parent calls
- * setsid or setpgid, the nice value and the I/O priority, the OOM score
- * adjustment and its floor, the persona, the no_new_privs flag, whether it
+ * setsid or setpgid, the nice value, the scheduling policy without its
+ * SCHED_RESET_ON_FORK and the I/O priority, the OOM score adjustment and
+ * its floor, the persona, the no_new_privs flag, whether it
  * gave up its capabilities, the seccomp mode and filters, the limits, the
  * credentials, and the program name, which `execve` sets and a child that
  * never execs would otherwise never have: a daemon that forks itself into
@@ -2341,6 +2342,7 @@ static void fork_ids(process_t *child, const process_t *parent)
     child->pgid = parent->pgid;
     child->nice = parent->nice;
     child->ioprio = parent->ioprio;
+    child->sched_policy = parent->sched_policy;
     if (child->tg != parent->tg) {
         child->tg->oom_score_adj = parent->tg->oom_score_adj;
         child->tg->oom_score_adj_min = parent->tg->oom_score_adj_min;
@@ -7275,9 +7277,10 @@ long sys_ioprio_get(isr_params_t *params)
     return best;
 }
 
-/* The scheduling policies Linux numbers. Only SCHED_OTHER runs here; the
- * others are defined so that a call about each returns the error or the value
- * Linux returns for it. */
+/* The scheduling policies Linux numbers. SCHED_OTHER, SCHED_BATCH and
+ * SCHED_IDLE are kept as a thread's policy, and every ready thread takes its
+ * turn whichever it has; the others are defined so that a call about each
+ * returns the error or the value Linux returns for it. */
 #define SCHED_OTHER 0
 
 #define SCHED_FIFO 1
@@ -7292,8 +7295,8 @@ long sys_ioprio_get(isr_params_t *params)
 
 #define SCHED_EXT 7
 
-/* The flag of a policy that makes a fork not pass the policy on; accepted
- * with SCHED_OTHER, for which it changes nothing here. */
+/* The flag of a policy that clears itself in a fork's child, which keeps
+ * the policy, as Linux keeps SCHED_BATCH and SCHED_IDLE. */
 #define SCHED_RESET_ON_FORK 0x40000000
 
 /* The highest real-time priority Linux gives SCHED_FIFO and SCHED_RR. */
@@ -7367,26 +7370,29 @@ long sys_sched_yield(isr_params_t *params)
 }
 
 /**
- * Change a process's policy and priority (sched_setscheduler(2)), or its
- * priority alone (sched_setparam, which passes `policy` -1).
+ * Change a thread's policy and priority (sched_setscheduler(2)), or its
+ * priority alone (sched_setparam, which passes `policy` -1 and keeps the
+ * policy and its SCHED_RESET_ON_FORK).
  *
- * `uparam` points at a struct sched_param, one int. SCHED_OTHER with priority
- * 0 is the one setting a process has here, and a request for it succeeds for
- * a caller that may change the target; SCHED_RESET_ON_FORK beside it is
- * accepted and kept nowhere, since a fork has no other policy to reset. The
- * rest fails in Linux's order and with its errors: no parameter or a negative
+ * `uparam` points at a struct sched_param, one int. SCHED_OTHER, SCHED_BATCH
+ * and SCHED_IDLE take priority 0, and are set, with or without
+ * SCHED_RESET_ON_FORK, for a caller that may change the target. The rest
+ * fails in Linux's order and with its errors: no parameter or a negative
  * pid, -EINVAL; an unreadable parameter, -EFAULT; no such process, -ESRCH; a
- * priority outside 0 to 99, or one that does not suit the policy, -EINVAL, as
- * for SCHED_DEADLINE, which takes its parameters from sched_setattr alone;
- * SCHED_FIFO and SCHED_RR, -EPERM, as Linux returns to a caller without
- * CAP_SYS_NICE when RLIMIT_RTPRIO is 0; and a caller that may not change the
- * target, -EPERM. SCHED_BATCH and SCHED_IDLE, which Linux grants anyone, and
- * every other number, -EINVAL: this kernel has one policy.
+ * policy Linux does not define, a priority outside 0 to 99, or one that does
+ * not suit the policy, -EINVAL, as for SCHED_DEADLINE, which takes its
+ * parameters from sched_setattr alone; SCHED_FIFO and SCHED_RR, -EPERM, as
+ * Linux returns to a caller without CAP_SYS_NICE when RLIMIT_RTPRIO is 0.
+ * Without privilege, -EPERM as well for a caller that may not change the
+ * target, for leaving SCHED_IDLE, which Linux counts as nice 20 and allows
+ * only as far as RLIMIT_NICE, 0 here, would, and for clearing
+ * SCHED_RESET_ON_FORK.
  */
 static int32_t sched_set(int pid, int policy, const void __user *uparam)
 {
     int32_t priority;
     process_t *p;
+    int reset;
 
     if (!uparam || pid < 0) {
         return -EINVAL;
@@ -7399,25 +7405,37 @@ static int32_t sched_set(int pid, int policy, const void __user *uparam)
         return -ESRCH;
     }
     if (policy >= 0) {
+        reset = (policy & SCHED_RESET_ON_FORK) != 0;
         policy &= ~SCHED_RESET_ON_FORK;
     } else {
-        policy = SCHED_OTHER;
+        reset = p->sched_reset;
+        policy = p->sched_policy;
     }
     if (priority < 0 || priority > SCHED_RT_PRIO_MAX) {
         return -EINVAL;
     }
     switch (policy) {
     case SCHED_OTHER:
+    case SCHED_BATCH:
+    case SCHED_IDLE:
         if (priority != 0) {
             return -EINVAL;
         }
-        return sched_may_change(p) ? 0 : -EPERM;
+        break;
     case SCHED_FIFO:
     case SCHED_RR:
         return priority == 0 ? -EINVAL : -EPERM;
     default:
         return -EINVAL;
     }
+    if (!sched_may_change(p) ||
+        (!cred_privileged() && ((p->sched_policy == SCHED_IDLE && policy != SCHED_IDLE) ||
+                                (p->sched_reset && !reset)))) {
+        return -EPERM;
+    }
+    p->sched_policy = (uint8_t)policy;
+    p->sched_reset = (uint8_t)reset;
+    return 0;
 }
 
 /** sched_setscheduler takes pid, policy and the struct sched_param; see
@@ -7438,22 +7456,27 @@ long sys_sched_setparam(isr_params_t *params)
 }
 
 /**
- * A process's policy (sched_getscheduler): SCHED_OTHER, the
- * one every process has. -EINVAL for a negative pid, -ESRCH for no process.
+ * A thread's policy (sched_getscheduler), with SCHED_RESET_ON_FORK when it
+ * was set with it. -EINVAL for a negative pid, -ESRCH for no process.
  */
 long sys_sched_getscheduler(isr_params_t *params)
 {
     int pid = (int)SC_ARG(params, 0);
+    process_t *p;
 
     if (pid < 0) {
         return -EINVAL;
     }
-    return sched_target(pid) ? SCHED_OTHER : -ESRCH;
+    p = sched_target(pid);
+    if (!p) {
+        return -ESRCH;
+    }
+    return (long)p->sched_policy | (p->sched_reset ? SCHED_RESET_ON_FORK : 0);
 }
 
 /**
- * A process's scheduling parameter (sched_getparam): the
- * priority 0 of SCHED_OTHER, written to the struct sched_param the second
+ * A process's scheduling parameter (sched_getparam): the priority 0 that
+ * every policy kept here has, written to the struct sched_param the second
  * argument points at. -EINVAL for no parameter or a negative pid, -ESRCH,
  * -EFAULT.
  */

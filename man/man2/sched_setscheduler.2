@@ -40,9 +40,15 @@
 .Fn getcpu "unsigned int *cpu" "unsigned int *node"
 .Sh DESCRIPTION
 The scheduler gives every ready process the processor in turn, a tick at
-a time, and has one policy,
+a time, whatever its policy.
+A thread may have
 .Dv SCHED_OTHER ,
-with priority 0.
+which it starts with,
+.Dv SCHED_BATCH
+or
+.Dv SCHED_IDLE ,
+each with priority 0, and the policy is kept and reported but changes
+nothing in the order the threads run.
 Each processor has its own run queue: a woken process joins the
 processor it last ran on unless that one is busy and another it may run
 on is idle, and a processor with nothing to run takes a process from the
@@ -53,23 +59,39 @@ of 0 names the caller; any other names a process that has not been
 reaped.
 .Pp
 .Fn sched_getscheduler
-returns
+returns the thread's policy,
 .Dv SCHED_OTHER
-.Pq 0
-for every process, and
+.Pq 0 ,
+.Dv SCHED_BATCH
+.Pq 3
+or
+.Dv SCHED_IDLE
+.Pq 5 ,
+with
+.Dv SCHED_RESET_ON_FORK
+added when it was set with it, and
 .Fn sched_getparam
 stores its priority, 0.
 .Fn sched_setscheduler
-and
-.Fn sched_setparam
-accept
-.Dv SCHED_OTHER
-with priority 0, the setting every process already has, from a caller
-that may change the process: one with effective user ID 0, or whose
-effective user ID equals the process's real or effective user ID.
+sets any of the three with priority 0, with
 .Dv SCHED_RESET_ON_FORK
-may be added to the policy and is not kept, since a fork has no other
-policy to reset.
+or without, for a caller that may change the thread: one with effective
+user ID 0, or whose effective user ID equals the thread's real or
+effective user ID.
+.Fn sched_setparam
+keeps the policy and takes priority 0.
+Without privilege a caller may not leave
+.Dv SCHED_IDLE ,
+which Linux counts as nice 20 and lets a thread leave only as far as
+.Dv RLIMIT_NICE ,
+0 here, allows, and may not clear
+.Dv SCHED_RESET_ON_FORK ;
+either fails with
+.Er EPERM .
+A fork's child has its parent's policy without
+.Dv SCHED_RESET_ON_FORK ,
+which Linux clears in the child and which resets only the real-time and
+deadline policies, and an exec keeps both.
 The other policies are refused:
 .Dv SCHED_FIFO
 and
@@ -126,10 +148,6 @@ It returns when the caller's turn comes again, at once when no other
 process is ready.
 .Ss Differences from Linux
 Linux grants
-.Dv SCHED_BATCH
-and
-.Dv SCHED_IDLE
-to any process that may change the target, and
 .Dv SCHED_FIFO
 and
 .Dv SCHED_RR
@@ -138,10 +156,14 @@ to a caller with
 or a
 .Dv RLIMIT_RTPRIO
 that allows the priority.
-This kernel has one policy and refuses them all, to root too.
-Linux reports
-.Dv SCHED_RESET_ON_FORK
-back once it has been set.
+This kernel refuses them, to root too.
+Linux does not let a
+.Dv SCHED_BATCH
+thread that wakes take the processor from the running one, and gives a
+.Dv SCHED_IDLE
+thread a weight far below nice 19's; here both take their turn as
+.Dv SCHED_OTHER
+does.
 .Ss System call interface
 The i386 system call numbers are 154 for
 .Fn sched_setparam ,
@@ -210,8 +232,11 @@ yields, reads the policy, the parameter, the priority ranges, the time
 slice and the affinity, which is every processor
 .Pa /proc/cpuinfo
 lists, sets
-.Dv SCHED_OTHER
-and an affinity of the last processor alone, after which
+.Dv SCHED_OTHER ,
+.Dv SCHED_BATCH
+and
+.Dv SCHED_IDLE
+and reads each back, sets an affinity of the last processor alone, after which
 .Fn getcpu
 returns that processor, and checks the refusals of the other policies, of
 an affinity of a processor past the last, and of another user's process.
@@ -237,10 +262,14 @@ is shorter than the mask or not a multiple of a long, or a mask for
 .Fn sched_setaffinity
 has no processor that is started.
 .It Bq Er EPERM
-The caller may not change the process, or asked for
+The caller may not change the process, asked for
 .Dv SCHED_FIFO
 or
-.Dv SCHED_RR .
+.Dv SCHED_RR ,
+or, without privilege, asked to leave
+.Dv SCHED_IDLE
+or to clear
+.Dv SCHED_RESET_ON_FORK .
 .It Bq Er ESRCH
 No process has the ID
 .Fa pid .
