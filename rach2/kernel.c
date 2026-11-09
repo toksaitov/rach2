@@ -16,6 +16,7 @@
 #include "sys/irq.h"
 #include "sys/mm/heap.h"
 #include "sys/mm/paging.h"
+#include "sys/pci.h"
 #include "sys/mm/mm.h"
 #include "sys/proc/tgroup.h"
 #include "sys/proc/ptrace.h"
@@ -3067,6 +3068,57 @@ static void shell_ping(uint32_t ip, bool want_reply)
 }
 
 /**
+ * The `mmio` command: map BAR 0 of the first display function whole, as one
+ * window of the MMIO region (`pci_bar_map`), write and read back its first
+ * and last words, print the window, the size of the pages at its ends and
+ * the region's use, and free it. It shows the largest framebuffer the
+ * region can map on this architecture, and that its windows are freed.
+ */
+static void show_mmio_display(void)
+{
+    pci_device_t dev;
+    struct pci_window w;
+    size_t used, largest;
+    volatile uint32_t *first, *last;
+    uint64_t base;
+
+    if (!pci_find_device(0x03, 0x00, &dev)) {
+        console_puts("mmio: no display function");
+        return;
+    }
+    base = pci_bar_address64(&dev, 0);
+    w.bar_size = pci_bar_size64(&dev, 0);
+    mmio_usage(&used, &largest);
+    console_printf("mmio: %x:%x.%d bar 0 at 0x", dev.bus, dev.device, dev.function);
+    if (base >> 32) {
+        console_printf("%x%08x", (uint32_t)(base >> 32), (uint32_t)base);
+    } else {
+        console_printf("%x", (uint32_t)base);
+    }
+    console_printf(", %u KiB; region %u KiB used, %u KiB free in one run\n",
+                   (unsigned)(w.bar_size >> 10), (unsigned)(used >> 10), (unsigned)(largest >> 10));
+    if (w.bar_size == 0 || w.bar_size > (uint64_t)largest ||
+        pci_bar_map(&dev, 0, 0, (size_t)w.bar_size, arch_pte_wc(), &w) == 0) {
+        console_puts("mmio: result: fail: the bar does not map");
+        return;
+    }
+    first = (volatile uint32_t *)w.va;
+    last = (volatile uint32_t *)(w.va + w.size - 4);
+    *first = 0x5A5A1234u;
+    *last = 0xA5A54321u;
+    mmio_usage(&used, &largest);
+    console_printf("mmio: window at the region's 0x%x, %u KiB, pages of %u and %u bytes, "
+                   "read 0x%x 0x%x; region %u KiB used\n",
+                   (uint32_t)(w.va - KVA_MMIO), (unsigned)(w.size >> 10),
+                   (unsigned)mmio_page_size(w.va), (unsigned)mmio_page_size(w.va + w.size - 1),
+                   *first, *last, (unsigned)(used >> 10));
+    pci_bar_unmap(&w);
+    mmio_usage(&used, &largest);
+    console_printf("mmio: unmapped; region %u KiB used, %u KiB free in one run\n",
+                   (unsigned)(used >> 10), (unsigned)(largest >> 10));
+}
+
+/**
  * Run one line `cmd` of the debug shell: the commands `help` lists, the
  * audio commands `audio_debug_handle_command` takes, and `poweroff` and
  * `reboot`, which `help` does not list. An empty line does nothing.
@@ -3125,6 +3177,7 @@ static void process_command(const char *cmd)
         console_puts("  usermode            - Test ring 3 execution");
         console_puts("  audio ...           - Audio tests, routing, and HDA diagnostics");
         console_puts("  ahci                - Probe the AHCI/SATA HBA, dump registers, read LBA 0");
+        console_puts("  mmio                - Map the display's BAR 0 whole, then free it");
         console_puts("  netping             - Ping the gateway");
         console_puts("  netbad              - Ping an unreachable host (timeout demo)");
         console_puts("  fault               - Trigger page fault (panic)");
@@ -3452,6 +3505,8 @@ static void process_command(const char *cmd)
         }
         set_fore_color(light_grey);
     } else if (audio_debug_handle_command(cmd)) {
+    } else if (str_equal(cmd, "mmio")) {
+        show_mmio_display();
     } else if (str_equal(cmd, "netping")) {
         shell_ping(net_ip_gateway, true);
     } else if (str_equal(cmd, "netbad")) {
