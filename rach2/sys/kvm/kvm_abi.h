@@ -147,7 +147,7 @@
 #define KVM_CAP_IOEVENTFD_NO_LENGTH         100
 #define KVM_CAP_VM_ATTRIBUTES               101
 #define KVM_CAP_CHECK_EXTENSION_VM          105
-#define KVM_CAP_IMMEDIATE_EXIT              106
+#define KVM_CAP_IMMEDIATE_EXIT              136
 #define KVM_CAP_SPLIT_IRQCHIP               121
 #define KVM_CAP_IOEVENTFD_ANY_LENGTH        122
 #define KVM_CAP_X2APIC_API                  129
