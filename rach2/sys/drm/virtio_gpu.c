@@ -1706,7 +1706,7 @@ static void remove_firmware(const pci_device_t *pci)
         base = pci_bar_address64(pci, i);
         size = pci_bar_size64(pci, i);
         if (base && size) {
-            (void)drm_aperture_remove_conflicting(base, size, "virtio_gpu");
+            (void)drm_aperture_remove_conflicting(base, size, "virtiodrmfb");
         }
         if (pci_bar_is_64bit(pci->bar[i])) {
             i++;
