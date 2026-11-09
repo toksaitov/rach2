@@ -119,6 +119,11 @@ It is
 while another file is master, and 0 for the master itself.
 A file that takes the role for the first time makes a master record of its
 own; one that was master already takes its old record back.
+While a file of the console's card holds the role, the console gives it
+the screen and the keyboard, and takes them back when none does, as
+.Xr console 4
+describes under
+.Sx DRM masters .
 .Ss Authentication
 A file of a card node is authenticated when it made its own master record
 or its opener was privileged.
@@ -331,6 +336,7 @@ A feature the driver does not have, such as buffers or mode setting.
 .Xr kcmp 2 ,
 .Xr mmap 2 ,
 .Xr bochs 4 ,
+.Xr console 4 ,
 .Xr fbdrm 4 ,
 .Xr i915 4 ,
 .Xr mem 4 ,

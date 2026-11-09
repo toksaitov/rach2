@@ -549,6 +549,7 @@ void drm_kms_hotplug_event(struct drm_device *dev)
     if (sd && sd->dev == dev && sd->card) {
         sysfs_uevent(sd->card, "change", "HOTPLUG=1\n");
     }
+    drm_client_dev_hotplug(dev);
 }
 
 void drm_sysfs_connector_hotplug_event(struct drm_connector *connector)

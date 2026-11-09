@@ -1626,6 +1626,13 @@ static int link_reads(int h, const char *want)
  * DRM rows register them.
  */
 static const struct drm_driver row_driver = {DRM_IDENT_VIRTIO_GPU};
+
+/** The console's hotplug, which drm_kms_hotplug_event calls: nothing. */
+void drm_client_dev_hotplug(struct drm_device *dev)
+{
+    (void)dev;
+}
+
 static struct drm_device row_dev;
 static struct drm_connector row_conn;
 static struct drm_display_mode row_mode;

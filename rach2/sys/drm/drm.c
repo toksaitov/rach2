@@ -834,6 +834,18 @@ void drm_aperture_release_firmware(struct drm_device *dev)
     }
 }
 
+int drm_aperture_is_firmware(const struct drm_device *dev)
+{
+    int i;
+
+    for (i = 0; i < DRM_APERTURE_MAX; i++) {
+        if (apertures[i].dev == dev) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 int32_t drm_aperture_remove_conflicting(uint64_t base, uint64_t size, const char *name)
 {
     int i;

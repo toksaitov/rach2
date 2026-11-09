@@ -345,7 +345,10 @@ uint32_t sw_sync_info(char *buf, uint32_t cap);
  * refuses mapping with ENODEV; NULL `free` frees the record with kfree.
  * `page` returns a borrowed physical frame, or 0 on failure, for PRIME
  * imports by other devices; NULL refuses those imports. `map_wc` records
- * the cache type that the exporter and its importers use.
+ * the cache type that the exporter and its importers use. `vmap` returns
+ * the kernel's address of the object's bytes, one contiguous range, for
+ * the console's buffer (drm_client.c): valid while the object is scanned
+ * out, or NULL when the kernel cannot reach it so; NULL `vmap` is the same.
  */
 struct drm_gem_object_funcs {
     void (*free)(struct drm_gem_object *obj);
@@ -353,6 +356,7 @@ struct drm_gem_object_funcs {
     int32_t (*pin)(struct drm_gem_object *obj);
     void (*unpin)(struct drm_gem_object *obj);
     uintptr_t (*page)(struct drm_gem_object *obj, uint32_t pgoff);
+    volatile uint8_t *(*vmap)(struct drm_gem_object *obj);
 };
 
 /*
@@ -1579,13 +1583,15 @@ void drm_dev_put(struct drm_device *dev);
 struct drm_device *drm_dev_at(int index);
 
 /*
- * A listener of the master role: the console (76-11), which gives up the
- * screen while a program holds the role, and the seat's revoke path. Its
- * `changed` runs after each change of a device's master, with the file
- * that holds the role now or NULL when none does: SET_MASTER, DROP_MASTER,
- * the first open of a card with no master, and the release of the master's
- * file by close, exec or exit. It runs in the caller's context and may
- * not sleep.
+ * A listener of the master role: the console (drm_client.c), which gives
+ * up the screen while a program holds the role, and the seat's revoke
+ * path. Its `changed` runs after each change of a device's master, with
+ * the file that holds the role now or NULL when none does: SET_MASTER,
+ * DROP_MASTER, the first open of a card with no master, and the release of
+ * the master's file by close, exec or exit, after the file's framebuffers
+ * have left the display. It runs in the caller's process context and may
+ * sleep, for a commit; the role may change again meanwhile, which runs the
+ * listeners again.
  */
 struct drm_master_notifier {
     void (*changed)(struct drm_device *dev, struct drm_file *master);
@@ -1638,6 +1644,9 @@ int32_t drm_aperture_acquire_firmware(struct drm_device *dev, uint64_t base, uin
 /** Forget the ranges `dev` acquired, for a firmware driver whose bind
  * failed after it acquired them; the removal hook is not called. */
 void drm_aperture_release_firmware(struct drm_device *dev);
+/** Whether `dev` drives the firmware's framebuffer, having acquired a range
+ * that no native driver has removed yet. */
+int drm_aperture_is_firmware(const struct drm_device *dev);
 /** Remove every firmware device whose range overlaps [base, base + size),
  * for the native driver `name`, which the log names. 0. */
 int32_t drm_aperture_remove_conflicting(uint64_t base, uint64_t size, const char *name);
@@ -1662,7 +1671,8 @@ int32_t drm_crtc_add_crc_entry(struct drm_crtc *crtc, int has_frame, uint32_t fr
  * `edid` with no override clears the property. */
 int drm_connector_update_edid(struct drm_connector *connector, const uint8_t *edid, uint32_t len);
 /** Tell user space that `dev`'s outputs changed: the uevent `change` of
- * its card with HOTPLUG=1, which compositors listen for. (drm_sysfs.c) */
+ * its card with HOTPLUG=1, which compositors listen for, and the console
+ * (`drm_client_dev_hotplug`). Process context; may sleep. (drm_sysfs.c) */
 void drm_kms_hotplug_event(struct drm_device *dev);
 /** The same for one connector, with CONNECTOR=its object's ID, as Linux's
  * drm_sysfs_connector_hotplug_event sends after a probe of one output. */
@@ -1704,14 +1714,20 @@ void drm_sysfs_connector_remove(struct drm_connector *connector);
 int drm_sysfs_card_dir(const struct drm_device *dev);
 
 /* ------------------------------------------------------------------------
- * The console as a DRM client, in drm_client.c (76-11a)
+ * The console as a DRM client, in drm_client.c
  */
 
-/** A device registered: the console takes it if it has none, or if this
- * one is a native driver's that replaced the firmware's. */
+/** A device registered: the console takes it if it has none, which is how
+ * a native driver's device that replaced the firmware's comes to it. Only a
+ * device with mode setting and dumb buffers is taken. */
 void drm_client_dev_register(struct drm_device *dev);
-/** A device is going: the console leaves it. */
+/** A device is going: the console leaves it, and gets the keyboard and
+ * /fb back if a master of it held the screen. Does not sleep. */
 void drm_client_dev_unregister(struct drm_device *dev);
+/** `dev`'s outputs changed: while no master holds the console's device, the
+ * console sets its mode again on the outputs connected now. Process
+ * context; may sleep. */
+void drm_client_dev_hotplug(struct drm_device *dev);
 
 /* ------------------------------------------------------------------------
  * The drivers' probes. Each finds its devices, binds and registers them,

@@ -331,8 +331,8 @@ static uintptr_t shmem_obj_page(struct drm_gem_object *obj, uint32_t pgoff)
     return drm_gem_shmem_page((struct drm_gem_shmem_object *)obj, pgoff);
 }
 
-static const struct drm_gem_object_funcs shmem_funcs = {shmem_obj_free, shmem_obj_mmap, NULL, NULL,
-                                                        shmem_obj_page};
+static const struct drm_gem_object_funcs shmem_funcs = {shmem_obj_free, shmem_obj_mmap, NULL,
+                                                        NULL,           shmem_obj_page, NULL};
 
 struct drm_gem_shmem_object *drm_gem_shmem_create(struct drm_device *dev, uint64_t size, int map_wc)
 {
