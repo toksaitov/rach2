@@ -1,0 +1,10 @@
+ffvpx video decoder (RDD remote), process: rdd, codec: vp9
+ffvpx video decoder (RDD remote), process: rdd, codec: vp9
+ffvpx video decoder (RDD remote), process: rdd, codec: vp9
+ffvpx video decoder (RDD remote), process: rdd, codec: vp9
+PDMInitializer, 0: FFmpeg(FFVPX)
+PDMInitializer, 0: Remote: RddProcess
+PDMInitializer, 1: FFmpeg(OS library)
+PDMInitializer, 1: Remote: Utility_Generic
+PDMInitializer, 2: Agnostic
+PDMInitializer, 2: GMP
