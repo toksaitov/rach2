@@ -215,9 +215,10 @@ A tracer changes only the flags a program may change; the data segment
 registers take a null selector, the user data selector or the TLS entry's
 on i386, and CS and SS only the ones they have.
 On x86-64 DS, ES, FS and GS read the thread's selectors and take a null
-selector, 3, the user data selector or the user code selector, which
-Linux also takes, and the kernel loads the base words after them; a write
-of any other selector fails with
+selector, 3, the user data selector, the user code selector, a TLS
+entry's or any of the LDT at privilege 3, which Linux also takes, and the
+kernel loads the base words after them; a write of any other selector
+fails with
 .Er EIO .
 orig_rax is kept in 32 bits and reads back sign-extended, where Linux
 keeps all 64.
@@ -508,7 +509,8 @@ past its end or not a multiple of 4 are
 .Er EIO .
 .Pp
 The register sets follow the tracee's code segment, as Linux's do: a
-thread running 32-bit code, in code segment 0x23, has i386's sets, for
+thread running 32-bit code, in code segment 0x23 or one of the LDT, has
+i386's sets, for
 any tracer:
 .Dv NT_PRSTATUS
 as

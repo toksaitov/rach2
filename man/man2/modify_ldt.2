@@ -1,0 +1,137 @@
+.Dd November 10, 2026
+.Dt MODIFY_LDT 2
+.Os
+.Sh NAME
+.Nm modify_ldt
+.Nd read or write the local descriptor table on x86-64
+.Sh SYNOPSIS
+.In asm/ldt.h
+.In sys/syscall.h
+.In unistd.h
+.Ft long
+.Fn syscall "SYS_modify_ldt" "int func" "void *ptr" "unsigned long bytecount"
+.Sh DESCRIPTION
+.Nm
+reads or writes the local descriptor table, the LDT, of the calling
+process's address space.
+It is the x86-64 kernel's call, number 154 for a 64-bit program and 123
+for an i386 one; the i686 kernel does not have it.
+Musl declares no function for it; use
+.Fn syscall .
+.Pp
+The LDT holds up to 8192 descriptors of 8 bytes, which a program loads by
+selectors whose bit 2, TI, is set: entry
+.Va n
+at RPL 3 is
+.Li "(n << 3) | 7" .
+Every thread of the address space shares it, as on Linux;
+.Xr fork 2
+gives the child a copy, in which a write changes nothing of the parent's,
+and
+.Xr execve 2
+starts the new program with none.
+Each processor loads the table of the thread it runs.
+.Fa func
+selects the operation:
+.Bl -tag -width "0x11"
+.It 0
+Copy the entries up to the highest ever written to
+.Fa ptr ,
+then zeros, to
+.Fa bytecount
+bytes, at most 65536; the result is that count, or 0 when nothing was
+ever written.
+.It 1
+Write one entry in the old mode, from the
+.Vt struct user_desc
+at
+.Fa ptr ,
+whose size
+.Fa bytecount
+must be, 16 bytes, as
+.Xr set_thread_area 2
+describes it.
+A base and a limit of 0 clear the entry, and the descriptor's AVL bit is
+cleared whatever
+.Va useable
+says.
+.It 2
+Copy
+.Fa bytecount
+zero bytes to
+.Fa ptr ,
+at most 128, the default LDT of Linux's 64-bit kernel; the result is that
+count.
+.It 0x11
+Write one entry as function 1 does, keeping
+.Va useable
+in the AVL bit.
+.El
+.Pp
+A write of the
+.Li LDT_empty
+form, read_exec_only and seg_not_present set and every other field 0,
+clears the entry.
+Otherwise the entry gets the descriptor Linux's
+.Fn fill_ldt
+makes: DPL 3, accessed, writable or readable unless read_exec_only, present
+unless seg_not_present, and never a 64-bit code segment.
+16-bit segments are taken, as a Linux built with
+.Dv CONFIG_X86_16BIT
+takes them.
+A write changes the descriptor in place; DS and ES of the calling thread
+that hold a selector of the LDT are loaded again, or with the null selector
+where theirs no longer loads, as on Linux.
+A segment register of another thread keeps the descriptor it loaded until
+it loads the selector again, as the switch does.
+.Pp
+A switch loads the incoming thread's DS, ES, FS and GS again, and one whose
+entry no longer loads gets the null selector, as Linux's fault fixup gives
+it.
+A return to user mode whose CS or SS no longer loads, or whose address is
+past its code segment's limit, is the program's fault at that address: a
+SIGSEGV for a general protection fault and a SIGBUS for a segment not
+present or a stack fault, as on Linux.
+A processor running another thread of the address space when its first
+write makes the table loads it at that thread's first general protection
+fault on a selector of the LDT.
+.Sh RETURN VALUES
+The count of bytes read, 0 for a write, or -1 with
+.Va errno
+set.
+As on Linux, the result is an
+.Vt int
+zero-extended into the register: a 64-bit caller of
+.Fn syscall
+from a C library that judges the whole register finds an error as a
+large positive count, and should test the result as an
+.Vt int .
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EINVAL
+A write's
+.Fa bytecount
+is not 16, its entry is 8192 or more, or it is a conforming code segment,
+contents 3, in the old mode or present.
+.It Bq Er EFAULT
+.Fa ptr
+cannot be read or written.
+.It Bq Er ENOMEM
+The first write found no memory for the table.
+.It Bq Er ENOSYS
+.Fa func
+is none of the four.
+.El
+.Sh SEE ALSO
+.Xr arch_prctl 2 ,
+.Xr set_thread_area 2 ,
+.Xr ia32 7
+.Sh STANDARDS
+Linux's x86 call, with the same numbers and functions.
+Linux's 64-bit kernel hides the high half of ESP after a return to a
+16-bit stack segment behind its espfix stacks; this kernel leaves there
+the high half of its own stack pointer, which the processor does not
+restore.
+Linux loads a table its first write makes on every processor at once, by
+an interprocessor interrupt; this kernel loads it at the first fault that
+needs it.

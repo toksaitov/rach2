@@ -29,7 +29,18 @@
 # 30) push only their vector; the others push a zero first, so the frame has
 # one shape. The gate of `int $0x80`, the i386 system call, pushes the
 # error code SC_ENTRY_IA32 (cpu.h) and the vector SYSCALL_VECTOR, which
-# x86_64_route (idt.c) hands to the system call's handler.
+# x86_64_route (idt.c) hands to the system call's handler. The entries of
+# `sysenter` and of `syscall` from 32-bit code, which the 32-bit vDSO makes,
+# build that same frame, so that the call runs as the `int $0x80` it stands
+# for.
+#
+# Two instructions of the kernel fault on what a program set: the `iretq` of
+# a return to user mode, on a CS or SS whose LDT entry the program changed
+# or a return address past a segment's limit, and the load of a selector
+# into a segment register (switch.s). The common entry turns the first into
+# the program's own fault, and the second resumes where the selector's
+# register gets the null one (`x86_64_fault_fixup`, context.c), as Linux's
+# fault fixups do.
 
 # Byte offsets in the frame, struct isr_params (cpu.h).
 .set F_R11,    32
@@ -37,6 +48,7 @@
 .set F_RIP,    136
 .set F_CS,     144
 .set F_RFLAGS, 152
+.set F_RSP,    160
 .set F_SS,     168
 
 # Byte offsets in struct cpu (percpu.h).
@@ -50,11 +62,14 @@
 .set SYSCALL_VECTOR, 128
 .set SC_ENTRY_IA32,  0x80
 
-# -ENOSYS, the result of a `syscall` from compatibility mode.
-.set ENOSYS_RESULT, -38
-
 # The flags only `iretq` restores: TF, and RF, which `sysret` clears.
 .set RFLAGS_TF_RF, 0x10100
+
+# IF; the flags `sysenter` leaves as the caller had them that the kernel
+# must not run with, NT, AC and TF; and bit 1, which is always set.
+.set RFLAGS_IF,       0x200
+.set RFLAGS_NT_AC_TF, 0x44100
+.set RFLAGS_FIXED,    0x2
 
 # The bottom of the last user page. A return address at or above it is not
 # one `sysretq` may take: an address past the lower half makes it fault in
@@ -273,7 +288,7 @@ isr_common_handler:
     testb $3, 24(%rsp)
     jz .common_from_kernel
     swapgs
-.common_from_kernel:
+.common_save:
     pushq %rax
     pushq %rbx
     pushq %rcx
@@ -344,10 +359,79 @@ isr_exit:
     popq %rax
     addq $16, %rsp
     testb $3, 8(%rsp)
-    jz .exit_iret
+    jz isr_iret
     swapgs
-.exit_iret:
+.globl isr_iret
+isr_iret:
     iretq
+
+# An exception from kernel mode finds the kernel's GS base loaded, but for
+# the two faulting instructions that run with the user's: the `iretq` of a
+# return to user mode (isr_iret) and the load into GS (switch.s). Their
+# faults swap here, and the one of the `iretq` is taken as the program's
+# (.common_bad_iret). Interrupts are off at both, so only the instruction's
+# own fault comes from there.
+.common_from_kernel:
+    pushq %rax
+    leaq isr_iret(%rip), %rax
+    cmpq %rax, 24(%rsp)
+    je .common_bad_iret
+    leaq x86_64_gs_load_insn(%rip), %rax
+    cmpq %rax, 24(%rsp)
+    popq %rax
+    jne .common_save
+    swapgs
+    jmp .common_save
+
+# The fault of the `iretq` to user mode, which Linux's `fixup_bad_iret`
+# makes a fault of the program at the place it was returning to: the five
+# words the `iretq` was loading take the place of the kernel's in the frame,
+# and the frame moves up to where the frame the `iretq` restored began, 136
+# bytes below those five words, so it is a frame of an entry from user mode
+# like any other. The frame is below that place, so it is copied from its
+# last word down. The program then takes the signal of the fault, or, for a
+# selector of an LDT this processor had not loaded, runs on with it loaded
+# (`ldt_fault`, ldt.c).
+.common_bad_iret:
+    popq %rax
+    swapgs
+    pushq %rax
+    pushq %rbx
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+    cld
+    movq F_RSP(%rsp), %rsi
+    movq (%rsi), %rax
+    movq %rax, F_RIP(%rsp)
+    movq 8(%rsi), %rax
+    movq %rax, F_CS(%rsp)
+    movq 16(%rsi), %rax
+    movq %rax, F_RFLAGS(%rsp)
+    movq 24(%rsi), %rax
+    movq %rax, F_RSP(%rsp)
+    movq 32(%rsi), %rax
+    movq %rax, F_SS(%rsp)
+    leaq 32(%rsi), %rdi
+    leaq 168(%rsp), %rsi
+    movl $22, %ecx
+    std
+    rep movsq
+    cld
+    leaq 8(%rdi), %rsp
+    movq %rsp, %rdi
+    call x86_64_route
+    jmp isr_return
 
 # The debug exception's entry. MOV SS can delay one past a `syscall` to the
 # first instruction of syscall_entry, before it has changed the stack or GS,
@@ -359,7 +443,10 @@ isr_exit:
 # processor (debugreg_defer_user, debugreg_defer, x86/debugreg.c), with TF
 # cleared in the saved flags; its signal is posted later on the thread's own
 # stack, at the return to user mode (isr_leave) or before a signal test
-# (arch_debug_deliver).
+# (arch_debug_deliver). The exception of a single step through the
+# `sysenter` entry, whose instruction leaves TF set, is let through with TF
+# kept (debugreg_defer_sysenter, x86/debugreg.c), so that the entry's frame
+# has the program's TF.
 debug_entry:
     pushq %rax
     pushq %rbx
@@ -399,12 +486,17 @@ debug_entry:
     jmp isr_return
 .debug_from_kernel:
     movq F_RIP(%rsp), %rdi
+    call debugreg_defer_sysenter
+    testl %eax, %eax
+    jnz .debug_stepping
+    movq F_RIP(%rsp), %rdi
     call debugreg_defer_user
     testl %eax, %eax
     jnz .debug_deferred
     call debugreg_defer
 .debug_deferred:
     andq $-257, F_RFLAGS(%rsp)
+.debug_stepping:
     testl %ebx, %ebx
     jz .paranoid_restore
     swapgs
@@ -546,14 +638,124 @@ syscall_entry:
     swapgs
     sysretq
 
-# The entry of a `syscall` from compatibility mode, IA32_CSTAR's, which only
-# AMD's processors take: it answers -ENOSYS and returns at once by
-# `sysretl`, the form without REX.W, which returns to the 32-bit code
-# segment STAR names, touching no memory, the stack or GS, as Linux's
-# `ignore_sysret`. A 32-bit program enters by `int $0x80`.
-.globl syscall32_ignore
-syscall32_ignore:
-    movl $ENOSYS_RESULT, %eax
+# The entry of `sysenter`, IA32_SYSENTER_EIP's, which 32-bit code on
+# Intel's processors makes from the vDSO's __kernel_vsyscall after
+# `movl %esp, %ebp` (vdso32code.s), as Linux's `entry_SYSENTER_compat`. The
+# processor has loaded the kernel's CS and SS, and RSP from
+# IA32_SYSENTER_ESP, and cleared IF, and kept no address to return to: the
+# frame has the caller's flags as `pushfq` reads them, with IF set again,
+# and its RIP and RSP come from ia32_fast_syscall (vdso32.c). The
+# instruction clears no other flag, so NT, AC and TF are cleared here, after
+# the frame has them. With TF set the processor steps through each
+# instruction up to the `popfq`, and the debug entry lets it, up to
+# sysenter_stepped.
+.globl sysenter_entry
+sysenter_entry:
+    swapgs
+    movq %gs:CPU_KERNEL_RSP, %rsp
+    pushq $GDT_USER_DATA
+    pushq $0
+    pushfq
+    pushq $GDT_USER_CODE32
+    pushq $0
+    pushq $SC_ENTRY_IA32
+    pushq $SYSCALL_VECTOR
+    pushq %rax
+    pushq %rbx
+    pushq %rcx
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+    cld
+    testl $RFLAGS_NT_AC_TF, F_RFLAGS(%rsp)
+    jnz .sysenter_flags
+.sysenter_flags_clear:
+    orq $RFLAGS_IF, F_RFLAGS(%rsp)
+    movl $1, %esi
+    jmp .fast32_call
+.sysenter_flags:
+    pushq $RFLAGS_FIXED
+    popfq
+.globl sysenter_stepped
+sysenter_stepped:
+    jmp .sysenter_flags_clear
+
+# The entry of a `syscall` from compatibility mode, IA32_CSTAR's, which
+# 32-bit code on AMD's processors makes from __kernel_vsyscall after
+# `movl %ecx, %ebp`, as Linux's `entry_SYSCALL_compat`. The processor has put
+# the caller's EIP in RCX and its flags in R11, and cleared the flags
+# IA32_FMASK names, as for 64-bit code; it has not changed RSP. The frame
+# takes the call's ECX from EBP, and ia32_fast_syscall reads EBP's own value
+# back from the user's stack, where __kernel_vsyscall pushed it.
+#
+# Both entries return by `sysretl`, the form without REX.W, to the 32-bit
+# code segment STAR names, when ia32_fast_syscall says the frame still
+# describes the return to the vDSO's landing pad, and otherwise by `iretq`.
+# `sysretl` takes EIP from ECX, which the landing pad then pops; from the
+# load of the user's stack pointer to `sysretl` the kernel runs on the
+# user's stack, with interrupts off, and touches no memory.
+.globl syscall32_entry
+syscall32_entry:
+    swapgs
+    movq %rsp, %gs:CPU_USER_RSP
+    movq %gs:CPU_KERNEL_RSP, %rsp
+    pushq $GDT_USER_DATA
+    pushq %gs:CPU_USER_RSP
+    pushq %r11
+    pushq $GDT_USER_CODE32
+    pushq %rcx
+    pushq $SC_ENTRY_IA32
+    pushq $SYSCALL_VECTOR
+    pushq %rax
+    pushq %rbx
+    pushq %rbp
+    pushq %rdx
+    pushq %rsi
+    pushq %rdi
+    pushq %rbp
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
+    xorl %esi, %esi
+.fast32_call:
+    movq %rsp, %rdi
+    call ia32_fast_syscall
+    testl %eax, %eax
+    jz isr_exit
+    popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %r11
+    popq %r10
+    popq %r9
+    popq %r8
+    popq %rbp
+    popq %rdi
+    popq %rsi
+    popq %rdx
+    popq %rcx
+    popq %rbx
+    popq %rax
+    # EIP, RFLAGS and the user's RSP, past the vector and the error code.
+    movl 16(%rsp), %ecx
+    movq 32(%rsp), %r11
+    movq 40(%rsp), %rsp
+    swapgs
     # sysretl, which TinyCC's assembler does not name.
     .byte 0x0f, 0x07
 

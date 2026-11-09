@@ -85,8 +85,7 @@ long sys_arch_prctl(isr_params_t *params)
 #define DESC_D          (1UL << 54)
 #define DESC_G          (1UL << 55)
 
-/** Whether `u` is Linux's `LDT_empty` form, which asks for no segment. */
-static int ud_empty(const struct user_desc *u)
+int user_desc_empty(const struct user_desc *u)
 {
     return u->base_addr == 0 && u->limit == 0 &&
            (u->flags & 0xFFu) == (UD_READ_EXEC_ONLY | UD_SEG_NOT_PRESENT);
@@ -103,7 +102,7 @@ static int ud_zero(const struct user_desc *u)
  * segment. */
 static int ud_okay(const struct user_desc *u)
 {
-    if (ud_empty(u) || ud_zero(u)) {
+    if (user_desc_empty(u) || ud_zero(u)) {
         return 1;
     }
     return (u->flags & UD_SEG_32BIT) &&
@@ -111,16 +110,10 @@ static int ud_okay(const struct user_desc *u)
            !(u->flags & UD_SEG_NOT_PRESENT);
 }
 
-/** The descriptor `u` describes, as Linux's `fill_ldt` makes it: DPL 3,
- * accessed, writable unless read_exec_only, and never a long-mode one; 0
- * for no segment. */
-static uint64_t ud_to_desc(const struct user_desc *u)
+uint64_t user_desc_fill(const struct user_desc *u)
 {
     uint64_t d, base = u->base_addr, limit = u->limit, type;
 
-    if (ud_empty(u) || ud_zero(u)) {
-        return 0;
-    }
     type = 1u | ((u->flags & UD_READ_EXEC_ONLY) ? 0u : 2u) |
            (((u->flags & UD_CONTENTS_MASK) >> UD_CONTENTS_SHIFT) << 2);
     d = (limit & 0xFFFFu) | ((base & 0xFFFFFFu) << 16) | (type << DESC_TYPE_SHIFT) | DESC_S |
@@ -138,6 +131,16 @@ static uint64_t ud_to_desc(const struct user_desc *u)
         d |= DESC_G;
     }
     return d;
+}
+
+/** The descriptor of a TLS entry `u` describes, `user_desc_fill`'s; 0 for
+ * no segment. */
+static uint64_t ud_to_desc(const struct user_desc *u)
+{
+    if (user_desc_empty(u) || ud_zero(u)) {
+        return 0;
+    }
+    return user_desc_fill(u);
 }
 
 /** The `struct user_desc` of TLS entry `entry` holding `d`, as Linux's

@@ -41,14 +41,26 @@ static uint8_t nmi_stacks[NR_CPUS][IST_STACK_SIZE] __attribute__((aligned(16)));
 static uint8_t machine_check_stacks[NR_CPUS][IST_STACK_SIZE] __attribute__((aligned(16)));
 static uint8_t debug_stacks[NR_CPUS][IST_STACK_SIZE] __attribute__((aligned(16)));
 
+/*
+ * The stack `sysenter` loads, IA32_SYSENTER_ESP's, on each processor. The
+ * entry moves to the thread's kernel stack before it pushes anything, and
+ * the exceptions that can come first, the NMI, the machine check and the
+ * debug exception, have stacks of their own, so nothing is ever written
+ * here; it keeps RSP a valid kernel address meanwhile, as Linux's entry
+ * stack does.
+ */
+#define SYSENTER_STACK_SIZE 64
+static uint8_t sysenter_stacks[NR_CPUS][SYSENTER_STACK_SIZE] __attribute__((aligned(16)));
+
 /* The flags `syscall` clears on entry: TF, IF, DF, IOPL, NT and AC, so the
  * kernel starts with interrupts off and the direction flag clear. */
 #define SYSCALL_FMASK 0x47700u
 
-/* The `syscall` entry of 64-bit code, and the one of 32-bit code, which
- * answers ENOSYS (isr_handler.s). */
+/* The `syscall` entry of 64-bit code, and the entries of 32-bit code by
+ * `syscall` and by `sysenter` (isr_handler.s). */
 extern void syscall_entry(void);
-extern void syscall32_ignore(void);
+extern void syscall32_entry(void);
+extern void sysenter_entry(void);
 
 /* The operand of `lgdt`, and the routine that loads it and reloads the
  * segment registers (switch.s). */
@@ -130,25 +142,63 @@ void init_gdt(void)
     msr_write(MSR_KERNEL_GS_BASE, 0);
 }
 
+/** Whether the 12 bytes of `cpuid` leaf 0's vendor, EBX, EDX and ECX in
+ * that order, spell `name`. */
+static int vendor_is(const uint32_t v[3], const char *name)
+{
+    const char *b = (const char *)v;
+    int i;
+
+    for (i = 0; i < 12; i++) {
+        if (b[i] != name[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int cpu_ia32_entry(void)
+{
+    uint32_t v[3];
+
+    kcpu_id(0, NULL, &v[0], &v[2], &v[1]);
+    if (vendor_is(v, "GenuineIntel") || vendor_is(v, "CentaurHauls") ||
+        vendor_is(v, "  Shanghai  ")) {
+        return IA32_ENTRY_SYSENTER;
+    }
+    if (vendor_is(v, "AuthenticAMD") || vendor_is(v, "HygonGenuine")) {
+        return IA32_ENTRY_SYSCALL;
+    }
+    return IA32_ENTRY_INT80;
+}
+
 /**
  * IA32_STAR has the kernel's code selector for the entry in bits 32 to 47,
  * and the base of the user's selectors for the return in bits 48 to 63
  * (percpu.h); IA32_LSTAR has the entry, and IA32_FMASK the flags the entry
  * clears. IA32_CSTAR has the entry of a `syscall` from compatibility mode,
- * which AMD's processors take and Intel's refuse with #UD; it answers
- * ENOSYS, as Linux's `ignore_sysret`, since a 32-bit program enters by
- * `int $0x80`.
+ * which AMD's processors take and Intel's refuse with #UD. The `sysenter`
+ * MSRs are written only where 32-bit code uses the instruction, as AMD's
+ * keep 32 bits of them; their code selector is the kernel's, from which
+ * the processor also takes SS, the data selector after it.
  */
 void init_tss(uintptr_t kernel_stack)
 {
+    uint32_t id = cpu_self()->id;
+
     cpu_set_kernel_stack(kernel_stack);
     __asm__ __volatile__("ltr %w0" : : "r"(GDT_TSS));
 
     msr_write(MSR_STAR, ((uint64_t)GDT_USER_CODE32 << 48) | ((uint64_t)GDT_KERNEL_CODE << 32));
     msr_write(MSR_LSTAR, (uint64_t)(uintptr_t)syscall_entry);
-    msr_write(MSR_CSTAR, (uint64_t)(uintptr_t)syscall32_ignore);
+    msr_write(MSR_CSTAR, (uint64_t)(uintptr_t)syscall32_entry);
     msr_write(MSR_FMASK, SYSCALL_FMASK);
     msr_write(MSR_EFER, msr_read(MSR_EFER) | EFER_SCE);
+    if (cpu_ia32_entry() == IA32_ENTRY_SYSENTER) {
+        msr_write(MSR_SYSENTER_CS, GDT_KERNEL_CODE);
+        msr_write(MSR_SYSENTER_ESP, (uint64_t)(uintptr_t)&sysenter_stacks[id][SYSENTER_STACK_SIZE]);
+        msr_write(MSR_SYSENTER_EIP, (uint64_t)(uintptr_t)sysenter_entry);
+    }
 }
 
 /**

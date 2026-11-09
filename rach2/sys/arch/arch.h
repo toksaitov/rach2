@@ -163,6 +163,16 @@ uintptr_t arch_tls_get(void);
 long arch_clone_tls(unsigned long arg, uintptr_t *base_out);
 
 struct process;
+struct mm;
+
+/** Free what the architecture keeps with the address space `mm` beside its
+ * pages, at the last user's put, and stop using it on this processor: the
+ * x86-64's LDT (arch/x86_64/ldt.c); nothing on i686. */
+void arch_mm_release(struct mm *mm);
+
+/** Give `to`, fork's copy of the address space `from`, a copy of what the
+ * architecture keeps with it: 0, or -ENOMEM, and `to` is put. */
+int arch_mm_copy(struct mm *to, const struct mm *from);
 
 /** Make the saved frame `p` start a new program image: at `entry`, with the
  * stack pointer `sp`, the general registers cleared (on i686 all but EAX,

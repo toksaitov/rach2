@@ -48,6 +48,16 @@ long compat_sys_execveat(isr_params_t *params);
 /* ldt.c */
 long sys_modify_ldt(isr_params_t *params);
 
+/** Whether `sel` names a present code segment of DPL 3 in the calling
+ * thread's LDT, which this processor loads first (`ldt_switch`): a CS an
+ * i386 frame's sigreturn may restore, as Linux's `iretq` takes it (ldt.c). */
+int ldt_code_valid(unsigned int sel);
+
+/** For a #GP from user mode in `p` on a selector of an LDT that this
+ * processor has not loaded, load the thread's and return 1, so that the
+ * instruction runs again; else 0 (ldt.c). */
+int ldt_fault(const isr_params_t *p);
+
 /* ia32_signal.c */
 long compat_sys_ptrace(isr_params_t *params);
 long compat_sys_signal(isr_params_t *params);
@@ -226,6 +236,13 @@ struct k_sigaction;
 struct k_siginfo;
 int ia32_sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
                         const struct k_siginfo *info, uint64_t oldmask);
+
+/** Make the system call of an entry by `sysenter` (`sysenter` set) or by
+ * `syscall` from 32-bit code, whose frame `p` the entry built
+ * (isr_handler.s), as the `int $0x80` of __kernel_vsyscall, and return
+ * from its router: nonzero when the return may be by `sysretl` (vdso32.c).
+ * Entered with interrupts off, and returns with them off. */
+int ia32_fast_syscall(isr_params_t *p, int sysenter);
 
 /** The address of the 32-bit vDSO's __kernel_rt_sigreturn when `rt` is
  * set, else of __kernel_sigreturn, in the calling thread's address space,

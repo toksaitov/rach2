@@ -400,8 +400,9 @@ int ia32_sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *s
  * signal number too. The i386 registers come back zero-extended and R8 to
  * R15 stay as they are, as Linux's `ia32_restore_sigcontext` leaves them;
  * CS and SS are the frame's at RPL 3, and a CS that is not the user's
- * 32-bit or 64-bit code selector, or an SS `iretq` cannot load, is refused
- * with -1, the SIGSEGV of Linux's faulting `iretq`. GS, FS, DS and ES are
+ * 32-bit or 64-bit code selector or a code segment of the LDT
+ * (`ldt_code_valid`), or an SS `iretq` cannot load, is refused with -1, the
+ * SIGSEGV of Linux's faulting `iretq`. GS, FS, DS and ES are
  * loaded as `segs_restore` says. A frame without floating-point state gets
  * the initial one. The rt frame's alternate stack comes back as
  * `sigframe_restore` takes it.
@@ -434,7 +435,8 @@ int ia32_sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask)
     }
     cs = (uint64_t)((sc->cs & 0xFFFFu) | 3u);
     ss = (uint64_t)((sc->ss & 0xFFFFu) | 3u);
-    if ((cs != GDT_USER_CODE32 && cs != GDT_USER_CODE) || !sigframe_ss_valid((unsigned int)ss)) {
+    if ((cs != GDT_USER_CODE32 && cs != GDT_USER_CODE && !ldt_code_valid((unsigned int)cs)) ||
+        !sigframe_ss_valid((unsigned int)ss)) {
         return -1;
     }
 

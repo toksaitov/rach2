@@ -55,6 +55,15 @@ struct user_desc {
 #define UD_USEABLE         0x40u
 #define UD_LM              0x80u
 
+/** Whether `u` is Linux's `LDT_empty` form, which asks for no segment
+ * (tls.c). */
+int user_desc_empty(const struct user_desc *u);
+
+/** The descriptor `u` describes, as Linux's `fill_ldt` makes it: DPL 3,
+ * accessed, writable unless read_exec_only, present unless
+ * seg_not_present, and never a long-mode one (tls.c). */
+uint64_t user_desc_fill(const struct user_desc *u);
+
 struct process;
 
 /** Put the three TLS entries of the thread `t` in `u`, each as

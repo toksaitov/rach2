@@ -58,7 +58,7 @@ A program sets its own thread pointer with one call, which differs between the a
 
 * i686 has one TLS entry, 6, where Linux has three, 6 to 8. `set_thread_area` refuses any other entry with EINVAL, and `PTRACE_GET_THREAD_AREA` reads entries 7 and 8 as Linux reads an unused one.
 * The i686 segment always has a 4 GiB limit. Of a `user_desc`, only the base is used; its limit, its granularity bit and its usable bit are ignored.
-* i686 registers no `get_thread_area` or `modify_ldt`, so a program has no local descriptor table, and it answers ENOSYS. The x86-64 kernel's `syscall` table registers no `set_thread_area` or `get_thread_area`, which a program reaches by `int $0x80` alone, and its compat table's `modify_ldt` answers ENOSYS.
+* i686 registers no `get_thread_area` or `modify_ldt`, so a program has no local descriptor table, and it answers ENOSYS. The x86-64 kernel's `syscall` table registers no `set_thread_area` or `get_thread_area`, which a program reaches by `int $0x80` alone; both its tables register `modify_ldt` ([modify_ldt(2)](../../../man/man2/modify_ldt.2)).
 * On x86-64, `PTRACE_GET_THREAD_AREA` and `PTRACE_SET_THREAD_AREA` do not reach the three TLS entries.
 * `arch_prctl` takes only its four codes. Linux's others, `ARCH_GET_CPUID`, `ARCH_SET_CPUID` and the rest, fail with EINVAL.
 * On x86-64 a child of `clone` with `CLONE_SETTLS` keeps its parent's FS selector, where Linux gives it the null selector; its FS base is the one it asked for either way.

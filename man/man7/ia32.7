@@ -42,7 +42,9 @@ calls, as a Linux with its 32-bit emulation lets it:
 .It 0x2b Ta 5 Ta user data, the stack segment of both modes
 .It 0x33 Ta 6 Ta user 64-bit code
 .It 0x40 Ta 8, 9 Ta the processor's TSS
-.It 0x50 Ta 10, 11 Ta the LDT, which is empty
+.It 0x50 Ta 10, 11 Ta the address space's LDT, as
+.Xr modify_ldt 2
+describes it
 .It 0x63, 0x6b, 0x73 Ta 12 to 14 Ta the thread's TLS entries
 .El
 .Pp
@@ -60,8 +62,35 @@ A call interrupted by a signal is restarted by executing the
 .Ql int $0x80
 again, as on i686.
 .Pp
+.Fn __kernel_vsyscall
+of the i386 library of
+.Xr vdso 7
+enters by the faster instruction the processor takes from 32-bit code, as
+Linux's does: by
+.Ql sysenter
+on Intel's, Centaur's and Zhaoxin's processors, and by
+.Ql syscall
+on AMD's and Hygon's.
+The kernel sets it up at boot, after the copy of the library's text,
+keeping
+.Ql int $0x80
+on a processor it does not know.
+Either entry makes the call the
+.Ql int $0x80
+that follows it in the library would make, with the same registers, and
+the kernel's frame of the call names the address after that instruction,
+so that a tracer, a signal frame and a restart see the call as made by
+.Ql int $0x80 ;
+a restart executes that instruction.
+The kernel returns by
+.Ql sysret
+when the frame still names that address in 32-bit code with the flat
+segments, and by
+.Ql iret
+otherwise.
+.Pp
 The table has a row for each of Linux 6.12's i386 numbers, 452 of them.
-232 rows run the x86-64 handler of a call whose arguments and structures
+233 rows run the x86-64 handler of a call whose arguments and structures
 have one layout in both interfaces, such as
 .Xr getpid 2 ,
 .Xr kill 2
@@ -93,7 +122,7 @@ the old
 and
 .Fn mmap2 ,
 does the i386 call's own work;
-13 run a compat handler that returns
+12 run a compat handler that returns
 .Er ENOSYS
 until its translation is written; 89 are empty, where Linux has no call
 or this kernel has no handler, and return
@@ -188,12 +217,13 @@ reports
 .Dv AUDIT_ARCH_I386 ,
 the i386 number, and the result taken in 32 bits.
 .Pp
-The
+A
 .Ql syscall
-instruction in 32-bit code returns
-.Er ENOSYS
-on AMD's processors, which take it, as a Linux without its 32-bit
-emulation answers; Intel's raise an invalid-opcode fault.
+or
+.Ql sysenter
+made by 32-bit code outside the library also makes the i386 call in EAX,
+and returns to the library's return path, as on Linux, which a program
+must not rely on.
 .Ss Thread-local storage
 A thread has three TLS descriptors, entries 12 to 14, which
 .Xr set_thread_area 2
@@ -217,8 +247,11 @@ A tracer's
 or
 .Dv PTRACE_SETREGS
 may write into a data segment register the null selector, 3, 0x23, 0x2b,
-0x33 or the selector of a TLS entry the tracee has set, and into CS 0x23
-or 0x33.
+0x33, the selector of a TLS entry the tracee has set or any selector of
+the LDT at privilege 3, and into CS 0x23, 0x33 or a selector of the LDT; a
+data segment register whose selector does not load gets the null selector
+at the switch, and a CS that does not load is the tracee's fault, as on
+Linux.
 .Ss Signals
 A handler installed by the x86-64
 .Xr sigaction 2
@@ -232,12 +265,12 @@ and
 .Dv UC_STRICT_RESTORE_SS
 only for a signal taken in 64-bit code.
 .Nm rt_sigreturn
-restores CS when it is 0x33, or 0x23 with an instruction pointer below 4
-GiB, and SS when it is a present, writable data segment of privilege 3,
+restores CS when it is 0x33, or 0x23 or a present code segment of
+privilege 3 in the LDT with an instruction pointer below 4 GiB, and SS when it is a present, writable data segment of privilege 3,
 expand-up or expand-down;
 a CS it cannot restore, or an SS it cannot restore with
 .Dv UC_STRICT_RESTORE_SS
-set or with CS 0x23, ends the process with
+set or with a CS of 32-bit code, ends the process with
 .Dv SIGSEGV ,
 as Linux's return does.
 Any other SS it cannot restore becomes 0x2b, as Linux makes it for a
@@ -268,10 +301,6 @@ gets i386's words, siginfo and registers.
 The register sets of a tracee running 32-bit code are i386's for any
 tracer.
 .Sh LIMITS
-.Fn modify_ldt
-returns
-.Er ENOSYS ,
-so the LDT stays empty.
 An i386 frame without
 .Dv SA_RESTORER
 returns through the return code in the frame.
@@ -284,9 +313,17 @@ there, takes one with an i386 handler on an alternate stack,
 kills a child with a seccomp filter of the i386 getpid, and reads
 each call's architecture with
 .Dv PTRACE_GET_SYSCALL_INFO .
+The i686 probe
+.Pa tests/ldtprobe.c ,
+which no suite yet runs on this kernel, writes and reads entries of the
+LDT, loads and calls through them across a switch, a
+.Xr fork 2
+and a signal, and makes its calls through
+.Fn __kernel_vsyscall .
 .Sh SEE ALSO
 .Xr arch_prctl 2 ,
 .Xr execve 2 ,
+.Xr modify_ldt 2 ,
 .Xr ptrace 2 ,
 .Xr seccomp 2 ,
 .Xr set_thread_area 2 ,

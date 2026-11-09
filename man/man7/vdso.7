@@ -80,8 +80,14 @@ Those of version
 are Linux's entry points:
 .Fn __kernel_vsyscall
 makes the system call in EAX with
-.Li int $0x80 ,
-and
+.Li sysenter
+on Intel's processors,
+.Li syscall
+on AMD's and
+.Li int $0x80
+on others, as
+.Xr ia32 7
+describes, and
 .Fn __kernel_sigreturn
 and
 .Fn __kernel_rt_sigreturn
