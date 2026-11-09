@@ -160,6 +160,11 @@ static int msi_map(const pci_device_t *dev, uint32_t address, uint32_t data, uin
              irte_low(data & 0xFFu, (address >> 12) & 0xFFu, (data >> 15) & 1u, (data >> 8) & 7u,
                       (address >> 2) & 1u, (address >> 3) & 1u),
              (uint64_t)sid | ((uint64_t)svt << 18));
+    klog(KLOG_DEBUG, "vtd",
+         "irte: dmar%d index %d: msi of %x:%x.%u, vector %u to apic %u, %s, sid 0x%04x svt %u", ui,
+         index, (unsigned int)dev->bus, (unsigned int)dev->device, (unsigned int)dev->function,
+         data & 0xFFu, (address >> 12) & 0xFFu, ((data >> 15) & 1u) ? "level" : "edge",
+         (unsigned int)sid, svt);
     *raddress = 0xFEE00000u | ((uint32_t)(index & 0x7FFF) << 5) | MSI_REMAP_FORMAT |
                 ((uint32_t)((index >> 15) & 1) << 2);
     *rdata = 0;
@@ -192,6 +197,10 @@ static int ioapic_map(uint8_t id, uint32_t low, uint32_t high, uint32_t *rhigh)
     }
     irte_set(u, index, irte_low(low & 0xFFu, high >> 24, (low >> 15) & 1u, 0, 0, 0),
              (uint64_t)sid | (1ull << 18));
+    klog(KLOG_DEBUG, "vtd",
+         "irte: dmar%d index %d: ioapic %u, vector %u to apic %u, %s, sid 0x%04x svt 1", ui, index,
+         (unsigned int)id, low & 0xFFu, high >> 24, ((low >> 15) & 1u) ? "level" : "edge",
+         (unsigned int)sid);
     *rhigh = ((uint32_t)(index & 0x7FFF) << 17) | (1u << 16);
     return (ui << 16) | index;
 }

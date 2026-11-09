@@ -4,9 +4,10 @@ The driver of Intel's VT-d remapping units, on x86-64: it reads the firmware's D
 
 ## Use
 
-The boot brings the units up after ACPICA, in `platform_firmware_start` (`platform.c`), when the DMAR table names a unit of segment 0. The log says what it found, at `INFO` and, for the table itself, at `DEBUG`:
+The boot brings the units up after ACPICA, in `platform_firmware_start` (`platform.c`), when the DMAR table names a unit of segment 0. The log says what it found, at `INFO` and, for the table itself and each interrupt remapping entry written, at `DEBUG`:
 
     vtd: dmar0: at 0xfed90000, version 1.0, cap 0x80d2008c222f0606, ecap 0xf00f4a
+    vtd: irte: dmar0 index 2: msi of 0:1f.2, vector 40 to apic 0, edge, sid 0x00fa svt 1
     vtd: interrupt remapping: on, compatibility format refused
     vtd: ready: 1 units, interrupt remapping on, translation on for assigned devices only
 
@@ -101,7 +102,7 @@ So every device of the Lenovo is translated, the GPU in a group of its own with 
 
 * QEMU's table, captured from QEMU 10.2.1 (`tests/host/acpi_qemu_tables.h`), and the Lenovo's, rebuilt from Linux's boot log to its 176 bytes; malformed tables, and scopes through absent and present bridges.
 * On QEMU's unit: the I/O APIC's lines, AHCI's MSI and NVMe's MSI-X remapped at the start and delivered; a message from the wrong requester and one in the compatibility format refused and reported; messages enabled, enabled again and disabled while remapping is on, an entry the unit held as not present taken again; and remapping stopped, each source back in the compatibility format.
-* On the Lenovo's two units: the GPU's message through dmar0, the others through dmar1, the I/O APIC's from its own requester id alone, every entry read through the stale copy of memory.
+* On the Lenovo's two units: the GPU's message through dmar0, the others through dmar1, the I/O APIC's from its own requester id alone, every entry read through the stale copy of memory and logged.
 * The requester ids behind a root port, a PCI bridge, a PCIe-to-PCI bridge and a PCI-to-PCIe bridge.
 * The Lenovo's reserved regions, as Linux reports them.
 * The GPU given to a domain: dmar0 translating through tables written back, without the snoop bit, its identity domain of a million 4 KiB pages, a fault past the mapping, a page mapped for reading alone, an unmap the IOTLB forgets, and the GPU physical again once given back.
