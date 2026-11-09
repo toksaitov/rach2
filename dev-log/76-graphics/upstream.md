@@ -5,10 +5,10 @@ Faults this milestone found in another project's code, one section each, in the 
 ## KVM stops a guest on a huge page of a PFNMAP GPU mapping
 
 * Project: Linux 6.12.115, Debian's `linux_6.12.115.orig.tar.xz`, KVM on the host, with i915 and QEMU 10.0.13 (`qemu-system-x86` 1:10.0.13+ds-0+deb13u1).
-* Fails: `KVM_RUN` fails with EFAULT, QEMU prints "kvm run failed Bad address" and the VM stops in `internal-error`, when the guest writes a page of a slot over QEMU's `VM_PFNMAP | VM_IO` mapping of an i915 GEM object held in huge pages. `hva_to_pfn_remapped` returns -EFAULT when `kvm_try_get_pfn`, which is `get_page_unless_zero`, fails (`virt/kvm/kvm_main.c:2886-2959`). That the failing page is a huge page's tail is read in the source, not observed.
+* Fails: `KVM_RUN` fails with EFAULT, QEMU prints "kvm run failed Bad address" and the VM stops in `internal-error`, when the guest writes a page of a slot over QEMU's `VM_PFNMAP | VM_IO` mapping of an i915 GEM object held in huge pages. `hva_to_pfn_remapped` returns -EFAULT when `kvm_try_get_pfn`, which is `get_page_unless_zero`, fails (`virt/kvm/kvm_main.c:2886-2959`). 80-2's bpftrace on `hva_to_pfn` saw the refused page twice: the second page of an order-9 folio of the `i915.gem` mapping, whose own reference count is 0 while its head's is 513, so `get_page_unless_zero` on the tail fails.
 * Found: 2026-11-09, steps 10 and 9b, on the Lenovo under Debian, with WineD3D on GL in a virgl guest; it repeats at the same `rep movsb` with RCX 0x3000.
 * Reproduction: with VT-d on, or with `shmem_enabled` at `always` and VT-d off, run `d3d11probe64.exe` with `PROTON_USE_WINED3D=1` in step 10's guest under KVM with `-display sdl,gl=on`; with VT-d off and `shmem_enabled` at `never` the probe draws and the VM runs.
-* Evidence: `step10.md`, "The guest stopped by KVM"; `step9b.md`, the KVM probe; `step9b/kvm/kvm-probe.txt`, `step9b/kvm/kvm-always.txt`, `step9b/kvm/kvm-maps.txt`; the kernel files read in `step10/linux-src/`; `rulings.md`, ruling 10.
+* Evidence: `step10.md`, "The guest stopped by KVM"; `step9b.md`, the KVM probe; `step9b/kvm/kvm-probe.txt`, `step9b/kvm/kvm-always.txt`, `step9b/kvm/kvm-maps.txt`; the kernel files read in `step10/linux-src/`; `rulings.md`, ruling 10; from the repository's top, `dev-log/80-games/80-2.md`, "The refused page", and `tools/lenovo/debian-ref/efault.bt`.
 * Rach2: nothing; plan item 78-1 carries the reproducer and the requirement that such a slot works or is refused with an error the VM survives.
 * Status: unreported.
 * Next: check whether a current kernel still refuses such a page, and search the KVM list for it.
@@ -60,13 +60,13 @@ Faults this milestone found in another project's code, one section each, in the 
 ## Chromium returns no WebGPU adapter for Venus
 
 * Project: Chromium 156.0.8078.79, Debian's, in a guest with Mesa 25.0.7's Venus driver under QEMU 10.0.13 on hasvk.
-* Fails: `chrome://gpu` lists Dawn's "Vulkan backend - Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2))" as available, but with `--ignore-gpu-blocklist` `requestAdapter` returns null and the page logs "No available adapters.", where on the host the same switch gives Intel's adapter. The GL device is virgl's 0x1af4/0x1050 and Venus reports Intel's IDs; whether Chromium matches them was not read, so the cause is open.
+* Fails: `chrome://gpu` lists Dawn's "Vulkan backend - Virtio-GPU Venus (Intel(R) HD Graphics 4400 (HSW GT2))" as available, but with `--ignore-gpu-blocklist` `requestAdapter` returns null and the page logs "No available adapters.", where on the host the same switch gives Intel's adapter. 80-2 found the cause: Dawn (at 8114a24a35eed1db88d1d897e8bd193a8c334712) offers a Vulkan adapter to Chromium only if `PhysicalDevice::SupportsExternalImages()` holds, which on Linux outside ChromeOS needs opaque-fd semaphores both exportable and importable; Venus reports no opaque-fd semaphore features and only sync-fd ones, while hasvk on the host reports both. Giving Chromium Intel's IDs changes nothing, so the IDs are not the cause.
 * Found: 2026-11-09, step 10, on the Lenovo under Debian.
 * Reproduction: in such a guest, run Chromium with `--ignore-gpu-blocklist` on a page that calls `navigator.gpu.requestAdapter()`.
-* Evidence: `step10.md`, "WebGPU and WebGL in the guest"; `step10/web-a.txt` and `step10/web/`.
+* Evidence: `step10.md`, "WebGPU and WebGL in the guest"; `step10/web-a.txt` and `step10/web/`; from the repository's top, `dev-log/80-games/80-2.md`, "WebGPU on Venus", and `tools/lenovo/debian-ref/extsem.c`.
 * Rach2: nothing.
-* Status: unreported; it may be Chromium's intended behaviour, since without the switch it reports "Disable webgpu on vk via gl interop" (crbug 442791440 and 475935650).
-* Next: read Chromium's adapter selection for the case of a GL device and a Vulkan device of different IDs.
+* Status: not a fault: Dawn's stated requirement and Venus's limit, so nothing to report.
+* Next: nothing; WebGPU on Venus needs Dawn to accept sync-fd semaphores on Linux, as it does on ChromeOS, or Venus to export opaque fds.
 
 ## Crysis hides its HUD for good when it has no sound output
 
