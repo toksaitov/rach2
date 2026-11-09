@@ -73,6 +73,7 @@ Every keyboard feeds one input layer, with one US English keymap, and is an even
 * The VGA's text mode, 80 by 25 cells at 0xB8000, with the kernel's font loaded into the adapter's character memory.
 * The VGA's mode 13h, 320 by 200 with a palette of 256 colors, which a program opens as `/fb`.
 * A linear framebuffer the loader left, as GRUB does under UEFI: direct color of 8 to 32 bits a pixel or 8-bit indexed color, at least 640 by 384 pixels and below 4 GiB. The console draws its cells on it, and `/fb`'s picture is scaled onto it.
+* Intel Haswell GT2 graphics, the HD 4400 (8086:0A16) among the twenty ids Linux 6.12 gives Haswell GT2, at 00:02.0: bound under `rach2.i915` as the DRM device `i915`, with its interrupts masked and its MSI message on ([i915(4)](../man/man4/i915.4)). It renders nothing and sets no modes yet, so the screen stays the firmware's framebuffer.
 
 There is no driver for a graphics card's own modes or acceleration. [Display](sys/display/Readme.md) and [console(4)](../man/man4/console.4) describe the screen.
 

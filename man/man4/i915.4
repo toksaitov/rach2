@@ -1,0 +1,104 @@
+.Dd November 10, 2026
+.Dt I915 4
+.Os
+.Sh NAME
+.Nm i915
+.Nd Intel Haswell graphics driver
+.Sh SYNOPSIS
+.Cd rach2.i915
+.Pp
+.In drm/drm.h
+.In drm/i915_drm.h
+.Pp
+.Pa /dev/dri/cardN
+.Pp
+.Pa /dev/dri/renderD Ns Ar M
+.Sh DESCRIPTION
+The
+.Nm
+driver binds the graphics device of an Intel Haswell processor with GT2
+graphics, the HD 4400 of the Lenovo G50-70 (PCI 8086:0a16) among them:
+the twenty device ids that Linux 6.12 gives the same device data.
+It binds function 0 at 00:02.0 only, as Linux does.
+.Pp
+The driver binds a device only when the kernel command line has
+.Cm rach2.i915 .
+Without it the kernel logs the device and leaves the screen to the
+firmware's framebuffer.
+.Pp
+A bound device is a DRM device, as
+.Xr drm 4
+describes, registered as
+.Ql i915
+with Linux's identity: description
+.Ql Intel Graphics ,
+version 1.6.0 and date 20230929, on the PCI bus.
+It has a card node and a render node, and the features
+.Dv DRIVER_GEM ,
+.Dv DRIVER_RENDER ,
+.Dv DRIVER_SYNCOBJ
+and
+.Dv DRIVER_SYNCOBJ_TIMELINE .
+It does not yet set modes, so it has neither
+.Dv DRIVER_MODESET
+nor
+.Dv DRIVER_ATOMIC ,
+as Linux's i915 on a device without display.
+.Pp
+At bind the driver maps the registers, the first 2 MiB of BAR 0,
+uncached; turns on memory decoding and bus mastering; masks, disables and
+clears every interrupt source of the display engine, the GT, power
+management and the south display; then takes a vector and enables the
+device's MSI message on it.
+A machine without message vectors leaves the device without interrupts,
+which nothing needs yet.
+The kernel logs
+.Dq i915: found
+with the device's place, id, subplatform and revision, and
+.Dq i915: registered
+with its card.
+.Sh IOCTLS
+The core's ioctls are those of
+.Xr drm 4 .
+The driver's own,
+.Dv DRM_IOCTL_I915_*
+from
+.Dv DRM_COMMAND_BASE ,
+fall in the families below.
+.Ss Identity and parameters
+.Dv DRM_IOCTL_VERSION
+answers as above.
+.Dv DRM_IOCTL_I915_GETPARAM
+and
+.Dv DRM_IOCTL_I915_SETPARAM
+are not yet served and fail with
+.Er EINVAL .
+.Ss Buffers
+.Dv DRM_IOCTL_I915_GEM_CREATE ,
+the mapping, domain, caching, tiling, busy and wait calls are not yet
+served and fail with
+.Er EINVAL .
+.Ss Contexts
+.Dv DRM_IOCTL_I915_GEM_CONTEXT_CREATE
+and the context calls are not yet served and fail with
+.Er EINVAL .
+.Ss Submission
+.Dv DRM_IOCTL_I915_GEM_EXECBUFFER2
+and its variants are not yet served and fail with
+.Er EINVAL .
+.Ss Display
+Mode setting is not yet served; see above.
+.Sh FILES
+.Bl -tag -width /dev/dri/renderDM
+.It Pa /dev/dri/cardN
+The card node of a bound device.
+.It Pa /dev/dri/renderD Ns Ar M
+Its render node.
+.El
+.Sh SEE ALSO
+.Xr backlight 4 ,
+.Xr drm 4 ,
+.Xr watchdog 4
+.Sh HISTORY
+The driver follows Linux 6.12's i915, whose register names and device
+table it takes.

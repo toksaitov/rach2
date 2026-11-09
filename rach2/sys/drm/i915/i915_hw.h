@@ -11,8 +11,8 @@
  * The driver reaches its device only through a `struct i915_hw`, so that
  * what stands behind it may change: the registers of BAR 0 mapped
  * uncached (`i915_hw_mmio_init`), the host model of the HD 4400
- * (tests/host/i915_model.c), or the fault backend that completes work at
- * once (i915_fake.c, rach2.i915fake). A register is its offset in BAR 0,
+ * (tests/host/i915_model.c), or a backend that completes work at once for
+ * tests in QEMU. A register is its offset in BAR 0,
  * as i915_reg.h gives it, and every access is 32 bits wide. A backend
  * answers for the first `size` bytes: the MMIO backend for the registers,
  * the first half of BAR 0, since the GTT's half is the global GTT's, which

@@ -102,15 +102,15 @@ const struct i915_id *i915_id_lookup(uint16_t device_id);
 
 /**
  * Bind the PCI function `pdev`, whose registers `hw` reaches, and register
- * its DRM device: the probe's work once BAR 0 is mapped, and the fault
- * backend's and the host model's way in. Turns on memory decoding and bus
- * mastering, masks and clears every interrupt source, takes a vector and
- * enables the device's message on it where the machine has messages, and
- * registers the device as `i915`. A copy of `hw` is kept.
+ * its DRM device: the probe's work once BAR 0 is mapped, and the way in of
+ * any other backend, the host model's among them. Turns on memory decoding
+ * and bus mastering, masks and clears every interrupt source, takes a
+ * vector and enables the device's message on it where the machine has
+ * messages, and registers the device as `i915`. A copy of `hw` is kept.
  *
  * @return 0, -ENODEV for a device the driver does not bind, -ENOMEM, or
- *         the DRM core's error; on an error the device is left as found
- *         but for its interrupt masks.
+ *         the DRM core's error; on an error the command word is restored
+ *         and the message is off, and every source stays masked.
  */
 int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw);
 
