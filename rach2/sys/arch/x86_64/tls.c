@@ -336,3 +336,42 @@ long sys_get_thread_area(isr_params_t *params)
     }
     return 0;
 }
+
+/** The base address the descriptor `d` holds. */
+static uintptr_t desc_base(uint64_t d)
+{
+    return (uintptr_t)(((d >> 16) & 0xFFFFFFu) | ((d >> 56) << 24));
+}
+
+int tls_desc_valid(const struct user_desc *u)
+{
+    return ud_okay(u);
+}
+
+int tls_entry_get(const process_t *t, uint32_t entry, struct user_desc *u)
+{
+    if (entry < GDT_TLS_MIN || entry > GDT_TLS_MAX) {
+        return -EINVAL;
+    }
+    desc_to_ud(t->regs.tls[entry - GDT_TLS_MIN], entry, u);
+    return 0;
+}
+
+int tls_entry_set(process_t *t, uint32_t entry, const struct user_desc *u)
+{
+    if (entry < GDT_TLS_MIN || entry > GDT_TLS_MAX || !ud_okay(u)) {
+        return -EINVAL;
+    }
+    t->regs.tls[entry - GDT_TLS_MIN] = ud_to_desc(u);
+    return 0;
+}
+
+uintptr_t tls_selector_base(const process_t *t, unsigned int sel)
+{
+    unsigned int entry = sel >> 3;
+
+    if ((sel & 4u) != 0 || entry < GDT_TLS_MIN || entry > GDT_TLS_MAX) {
+        return 0;
+    }
+    return desc_base(t->regs.tls[entry - GDT_TLS_MIN]);
+}

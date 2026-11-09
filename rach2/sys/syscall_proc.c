@@ -3747,14 +3747,28 @@ long sys_wait4(isr_params_t *params)
  * si_code, si_pid, si_uid (the child's real uid) and si_status filled and
  * the child's usage in the rusage; and 0 with WNOHANG when no selected child
  * has an event, with those siginfo fields zero and the rusage untouched.
- * Only the bytes through those fields are written, as the architecture's
- * siginfo_t lays them out. -EINVAL for an unknown option or idtype,
- * no event asked for, or an id that does not suit its idtype; -EBADF for a
+ * Only the bytes through those fields are written, as the caller's
+ * siginfo_t lays them out (`siginfo_to_caller`). -EINVAL for an unknown
+ * option or idtype, no event asked for, or an id that does not suit its
+ * idtype; -EBADF for a
  * descriptor that is not a pidfd; -ECHILD, which a pidfd of a process
  * already reaped gives, -EINTR, -EAGAIN; -EFAULT, found before
  * the wait or after it with the child's event left in place, as `do_wait`
  * finds it.
  */
+/** The bytes of a siginfo_t through si_status, which waitid writes: 24 for
+ * an i386 caller on x86-64, as Linux's compat waitid writes, and
+ * SIGINFO_CHLD_BYTES for a native one. */
+static uint32_t siginfo_chld_bytes(void)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (in_compat_syscall()) {
+        return SIGINFO32_CHLD_BYTES;
+    }
+#endif
+    return SIGINFO_CHLD_BYTES;
+}
+
 long sys_waitid(isr_params_t *params)
 {
     int idtype = (int)SC_ARG(params, 0);
@@ -3813,7 +3827,7 @@ long sys_waitid(isr_params_t *params)
     default:
         return -EINVAL;
     }
-    if (uinfo && !user_buffer_ok(uinfo, SIGINFO_CHLD_BYTES, 1)) {
+    if (uinfo && !user_buffer_ok(uinfo, siginfo_chld_bytes(), 1)) {
         return -EFAULT;
     }
     if (rusage_ptr && !user_buffer_ok(rusage_ptr, RUSAGE_BYTES, 1)) {
@@ -3833,11 +3847,11 @@ long sys_waitid(isr_params_t *params)
         ki.pid = pid_seen(r.pid);
         ki.uid = uid_seen(r.uid);
         ki.status = r.info_status;
-        sigframe_fill_siginfo(info, SIGCHLD, &ki);
+        siginfo_to_caller(info, SIGCHLD, &ki);
     }
     ok = (rc == 0 || !rusage_ptr ||
           copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0) &&
-         (!uinfo || copy_to_user((void __user *)uinfo, info, SIGINFO_CHLD_BYTES) == 0);
+         (!uinfo || copy_to_user((void __user *)uinfo, info, siginfo_chld_bytes()) == 0);
     if (rc > 0) {
         wait_done(&r, ok);
     }
@@ -4490,8 +4504,31 @@ long sys_tgkill(isr_params_t *params)
     return do_tkill((int)SC_ARG(params, 0), (int)SC_ARG(params, 1), (int)SC_ARG(params, 2));
 }
 
+void siginfo_to_caller(uint8_t *out, int signo, const struct k_siginfo *info)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (in_compat_syscall()) {
+        ia32_fill_siginfo(out, signo, info);
+        return;
+    }
+#endif
+    sigframe_fill_siginfo(out, signo, info);
+}
+
+void siginfo_from_caller(const uint8_t *in, struct k_siginfo *info)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (in_compat_syscall()) {
+        ia32_take_siginfo(in, info);
+        return;
+    }
+#endif
+    sigframe_take_siginfo(in, info);
+}
+
 /**
- * Copy and decode a queued signal's siginfo before resolving its target.
+ * Copy and decode a queued signal's siginfo, in the caller's layout
+ * (`siginfo_from_caller`), before resolving its target.
  * Returns 0 or -EFAULT. When nonnull, `signo` gets the signal number from
  * the same copy. This may sleep on a user page fault.
  */
@@ -4502,7 +4539,7 @@ static int32_t queued_info(uintptr_t u, struct k_siginfo *info, int32_t *signo)
     if (copy_from_user(buf, (const void __user *)u, sizeof(buf)) != 0) {
         return -EFAULT;
     }
-    sigframe_take_siginfo(buf, info);
+    siginfo_from_caller(buf, info);
     if (signo) {
         k_memcpy(signo, buf, sizeof(*signo));
     }
@@ -4712,24 +4749,56 @@ long sys_rt_sigsuspend(isr_params_t *params)
     if (copy_from_user(&newmask, umask, sizeof(newmask)) != 0) {
         return -EFAULT;
     }
+    return signal_suspend(newmask);
+}
+
+long signal_suspend(uint64_t mask)
+{
     current_proc->saved_sigmask = current_proc->sig_blocked;
     current_proc->sigmask_saved = 1;
-    signal_set_blocked(newmask);
+    signal_set_blocked(mask);
     sig_wait();
     return -EINTR;
+}
+
+long signal_action(int signo, const struct k_sigaction *act, struct k_sigaction *old)
+{
+    if (signo < 1 || signo > KSIG_MAX) {
+        return -EINVAL;
+    }
+    if (act && (signo == SIGKILL || signo == SIGSTOP)) {
+        return -EINVAL; /* cannot be caught or ignored */
+    }
+    if (old) {
+        *old = current_proc->sigacts[signo];
+        old->flags &= ~(unsigned long)SA_IA32_ABI;
+    }
+    if (act) {
+        current_proc->sigacts[signo] = *act;
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+        current_proc->sigacts[signo].flags &= ~(unsigned long)SA_IA32_ABI;
+        if (in_compat_syscall()) {
+            current_proc->sigacts[signo].flags |= SA_IA32_ABI;
+        }
+#endif
+        if (act->handler == KSIG_IGN) {
+            uint32_t f = sig_irq_save();
+            sig_discard(current_proc, KSIG_BIT(signo));
+            sig_irq_restore(f);
+        }
+    }
+    return 0;
 }
 
 /**
  * Install or query a signal disposition (rt_sigaction).
  *
  * Its arguments are signo, const struct k_sigaction* act, struct k_sigaction*
- * old and sigsetsize, which must be 8. The old action is written before the
- * new one is stored. Installing SIG_IGN drops any instance of the signal
- * already pending, the process's and each thread's, as Linux does, with
- * interrupts off so that a signal posted from an interrupt cannot change the
- * pending sets in the middle. A query of SIGKILL or SIGSTOP reports SIG_DFL,
- * as in Linux. -EINVAL for a signal out of range, another sigsetsize, or a
- * new action for SIGKILL or SIGSTOP, which writes no old action; -EFAULT.
+ * old and sigsetsize, which must be 8. The new action is read first and the
+ * old one written after the new one is stored, as Linux does
+ * (`signal_action`). -EINVAL for another sigsetsize, a signal out of range
+ * or a new action for SIGKILL or SIGSTOP, which writes no old action;
+ * -EFAULT.
  */
 long sys_rt_sigaction(isr_params_t *params)
 {
@@ -4737,34 +4806,23 @@ long sys_rt_sigaction(isr_params_t *params)
     const struct k_sigaction __user *uact = (const struct k_sigaction __user *)SC_ARG(params, 1);
     struct k_sigaction __user *uold = (struct k_sigaction __user *)SC_ARG(params, 2);
     uint32_t setsize = USER_LEN32(SC_ARG(params, 3));
-    struct k_sigaction act;
+    struct k_sigaction act, old;
+    long rc;
 
     if (!current_proc) {
         return -ESRCH;
     }
-    if (signo < 1 || signo > KSIG_MAX || setsize != 8) {
+    if (setsize != 8) {
         return -EINVAL;
     }
-    if (uact && (signo == SIGKILL || signo == SIGSTOP)) {
-        return -EINVAL; /* cannot be caught or ignored */
+    if (uact && copy_from_user(&act, uact, sizeof(act)) != 0) {
+        return -EFAULT;
     }
-    if (uold) {
-        if (copy_to_user(uold, &current_proc->sigacts[signo], sizeof(struct k_sigaction)) != 0) {
-            return -EFAULT;
-        }
+    rc = signal_action(signo, uact ? &act : NULL, uold ? &old : NULL);
+    if (rc == 0 && uold && copy_to_user(uold, &old, sizeof(old)) != 0) {
+        return -EFAULT;
     }
-    if (uact) {
-        if (copy_from_user(&act, uact, sizeof(act)) != 0) {
-            return -EFAULT;
-        }
-        current_proc->sigacts[signo] = act;
-        if (act.handler == KSIG_IGN) {
-            uint32_t f = sig_irq_save();
-            sig_discard(current_proc, KSIG_BIT(signo));
-            sig_irq_restore(f);
-        }
-    }
-    return 0;
+    return rc;
 }
 
 /**
@@ -4874,17 +4932,48 @@ struct k_stack {
 #define SS_AUTODISARM 0x80000000u
 #define MINSIGSTKSZ   2048u
 
+long signal_altstack(const struct k_altstack *ss, struct k_altstack *old, uintptr_t sp)
+{
+    int on = sigframe_on_altstack(sp);
+    int32_t flags;
+
+    if (old) {
+        old->sp = current_proc->altstack_sp;
+        old->size = current_proc->altstack_size;
+        old->flags = !current_proc->altstack_on ? SS_DISABLE : (on ? SS_ONSTACK : 0);
+    }
+    if (!ss) {
+        return 0;
+    }
+    if (on) {
+        return -EPERM;
+    }
+    flags = ss->flags & ~SS_AUTODISARM;
+    if (flags != 0 && flags != SS_DISABLE && flags != SS_ONSTACK) {
+        return -EINVAL;
+    }
+    if (flags == SS_DISABLE) {
+        current_proc->altstack_on = 0;
+        current_proc->altstack_sp = 0;
+        current_proc->altstack_size = 0;
+    } else {
+        if (ss->size < MINSIGSTKSZ) {
+            return -ENOMEM;
+        }
+        current_proc->altstack_sp = ss->sp;
+        current_proc->altstack_size = ss->size;
+        current_proc->altstack_on = 1;
+    }
+    return 0;
+}
+
 /**
  * sigaltstack: set or read the alternate stack a handler with
- * SA_ONSTACK runs on. Its arguments are new stack or NULL and old stack or
- * NULL.
- *
- * The old settings are read before the change: SS_DISABLE for none, and
- * SS_ONSTACK while the process runs on the stack, when a change fails with
- * EPERM. SS_AUTODISARM is accepted and has no effect, and other flags are
- * EINVAL. A stack smaller than MINSIGSTKSZ fails with ENOMEM. The old
- * settings are zeroed first, so that the padding after x86-64's int flags
- * gives no byte of the kernel's stack. EFAULT for a copy that fails.
+ * SA_ONSTACK runs on (`signal_altstack`). Its arguments are new stack or
+ * NULL and old stack or NULL. The old settings are zeroed first, so that
+ * the padding after x86-64's int flags gives no byte of the kernel's
+ * stack, and written only when the call succeeds. EFAULT for a copy that
+ * fails.
  */
 long sys_sigaltstack(isr_params_t *params)
 {
@@ -4892,41 +4981,28 @@ long sys_sigaltstack(isr_params_t *params)
     struct k_stack __user *uoss = (struct k_stack __user *)SC_ARG(params, 1);
     struct k_stack cur;
     struct k_stack ss;
-    int on;
-    int32_t flags;
+    struct k_altstack in, old;
+    long rc;
 
     if (!current_proc) {
         return -ESRCH;
     }
-    on = sigframe_on_altstack(FRAME_SP(params));
-    k_memset(&cur, 0, sizeof(cur));
-    cur.ss_sp = current_proc->altstack_sp;
-    cur.ss_size = current_proc->altstack_size;
-    cur.ss_flags = !current_proc->altstack_on ? SS_DISABLE : (on ? SS_ONSTACK : 0);
     if (uss) {
         if (copy_from_user(&ss, uss, sizeof(ss)) != 0) {
             return -EFAULT;
         }
-        if (on) {
-            return -EPERM;
-        }
-        flags = ss.ss_flags & ~SS_AUTODISARM;
-        if (flags != 0 && flags != SS_DISABLE && flags != SS_ONSTACK) {
-            return -EINVAL;
-        }
-        if (flags == SS_DISABLE) {
-            current_proc->altstack_on = 0;
-            current_proc->altstack_sp = 0;
-            current_proc->altstack_size = 0;
-        } else {
-            if (ss.ss_size < MINSIGSTKSZ) {
-                return -ENOMEM;
-            }
-            current_proc->altstack_sp = ss.ss_sp;
-            current_proc->altstack_size = ss.ss_size;
-            current_proc->altstack_on = 1;
-        }
+        in.sp = ss.ss_sp;
+        in.flags = ss.ss_flags;
+        in.size = ss.ss_size;
     }
+    rc = signal_altstack(uss ? &in : NULL, &old, FRAME_SP(params));
+    if (rc != 0) {
+        return rc;
+    }
+    k_memset(&cur, 0, sizeof(cur));
+    cur.ss_sp = old.sp;
+    cur.ss_flags = old.flags;
+    cur.ss_size = old.size;
     if (uoss && copy_to_user(uoss, &cur, sizeof(cur)) != 0) {
         return -EFAULT;
     }
@@ -4937,12 +5013,20 @@ long sys_sigaltstack(isr_params_t *params)
  * rt_sigpending: the signals pending while blocked. Its arguments are set
  * and size of the set in bytes, at most 8; -EINVAL for a larger size, -EFAULT.
  */
+uint64_t signal_pending_blocked(void)
+{
+    uint32_t flags = sig_irq_save();
+    uint64_t set = sig_pending_now() & current_proc->sig_blocked;
+
+    sig_irq_restore(flags);
+    return set;
+}
+
 long sys_rt_sigpending(isr_params_t *params)
 {
     uint32_t size = USER_LEN32(SC_ARG(params, 1));
     uint32_t words[2];
     uint64_t set;
-    uint32_t flags;
 
     if (!current_proc) {
         return -ESRCH;
@@ -4950,9 +5034,7 @@ long sys_rt_sigpending(isr_params_t *params)
     if (size > sizeof(words)) {
         return -EINVAL;
     }
-    flags = sig_irq_save();
-    set = sig_pending_now() & current_proc->sig_blocked;
-    sig_irq_restore(flags);
+    set = signal_pending_blocked();
     words[0] = (uint32_t)set;
     words[1] = (uint32_t)(set >> 32);
     if (copy_to_user((void __user *)SC_ARG(params, 0), words, size) != 0) {
@@ -5313,8 +5395,8 @@ static int32_t sigwait_take(uint64_t set, int timed, uint64_t deadline, struct k
     }
 }
 
-/** `sigwait_take`, with the siginfo copied to `uinfo` unless it is null;
- * -EFAULT when it cannot be. */
+/** `sigwait_take`, with the siginfo copied to `uinfo` unless it is null, in
+ * the caller's layout; -EFAULT when it cannot be. */
 static int32_t sigwait_set(uint64_t set, int timed, uint64_t deadline, void __user *uinfo)
 {
     struct k_siginfo info;
@@ -5322,12 +5404,18 @@ static int32_t sigwait_set(uint64_t set, int timed, uint64_t deadline, void __us
     int32_t signo = sigwait_take(set, timed, deadline, &info);
 
     if (signo > 0 && uinfo) {
-        sigframe_fill_siginfo(buf, (int)signo, &info);
+        siginfo_to_caller(buf, (int)signo, &info);
         if (copy_to_user(uinfo, buf, sizeof(buf)) != 0) {
             return -EFAULT;
         }
     }
     return signo;
+}
+
+/** Read the caller's `struct timespec` at `u` into `ts`: 0 or -EFAULT. */
+static int32_t timespec_read(uintptr_t u, struct kernel_timespec *ts)
+{
+    return copy_from_user(ts, (const void __user *)u, sizeof(*ts)) == 0 ? 0 : -EFAULT;
 }
 
 /**
@@ -5351,6 +5439,16 @@ static int32_t sigwait_set(uint64_t set, int timed, uint64_t deadline, void __us
  */
 long sys_rt_sigtimedwait(isr_params_t *params)
 {
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    return signal_timedwait(SC_ARG(params, 3), SC_ARG(params, 0), SC_ARG(params, 1),
+                            SC_ARG(params, 2), timespec_read);
+}
+
+long signal_timedwait(unsigned long setsize, uintptr_t uset, uintptr_t uinfo, uintptr_t uts,
+                      int32_t (*read_ts)(uintptr_t u, struct kernel_timespec *ts))
+{
     struct kernel_timespec ts;
     uint64_t set;
     uint64_t saved;
@@ -5358,20 +5456,18 @@ long sys_rt_sigtimedwait(isr_params_t *params)
     int timed = 0;
     int32_t rc;
 
-    if (!current_proc) {
-        return -ESRCH;
-    }
-    if (SC_ARG(params, 3) != sizeof(uint64_t)) {
+    if (setsize != sizeof(uint64_t)) {
         return -EINVAL;
     }
-    if (copy_from_user(&set, (const void __user *)SC_ARG(params, 0), sizeof(set)) != 0) {
+    if (copy_from_user(&set, (const void __user *)uset, sizeof(set)) != 0) {
         return -EFAULT;
     }
-    if (SC_ARG(params, 2)) {
+    if (uts) {
         uint64_t ticks;
 
-        if (copy_from_user(&ts, (const void __user *)SC_ARG(params, 2), sizeof(ts)) != 0) {
-            return -EFAULT;
+        rc = read_ts(uts, &ts);
+        if (rc != 0) {
+            return rc;
         }
         if (ts.tv_sec < 0 || ts.tv_nsec < 0 || ts.tv_nsec >= 1000000000) {
             return -EINVAL;
@@ -5383,7 +5479,7 @@ long sys_rt_sigtimedwait(isr_params_t *params)
     set &= ~(uint64_t)KSIG_UNCATCHABLE;
     saved = current_proc->sig_blocked;
     signal_set_blocked(saved & ~set);
-    rc = sigwait_set(set, timed, deadline, (void __user *)SC_ARG(params, 1));
+    rc = sigwait_set(set, timed, deadline, (void __user *)uinfo);
     signal_set_blocked(saved);
     return rc;
 }

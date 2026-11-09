@@ -275,11 +275,14 @@ long arch_ptrace(struct process *t, uint32_t pid, long request, unsigned long ad
  * each.
  */
 
-/** The bytes of the register set `type`, with `*unit` the size of its
- * unit, of which a length must be a multiple (on x86-64 always 8): -EINVAL
- * for a set the architecture lacks, -ENODEV for one the processor lacks,
- * such as the XSAVE image without XSAVE. */
-long arch_regset_size(unsigned long type, uint32_t *unit);
+/** The bytes of the register set `type` of the stopped thread `t`, with
+ * `*unit` the size of its unit, of which a length must be a multiple:
+ * -EINVAL for a set the architecture lacks, -ENODEV for one the processor
+ * lacks, such as the XSAVE image without XSAVE. On x86-64 a thread that
+ * runs 32-bit code has Linux's i386 sets, with their units, as Linux's
+ * `task_user_regset_view` chooses them, and the set's get and set below
+ * follow the same choice. */
+long arch_regset_size(const struct process *t, unsigned long type, uint32_t *unit);
 
 /** Write all of the register set `type` of `t`, a thread stopped for its
  * tracer, into `out`. */

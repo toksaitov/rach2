@@ -11,6 +11,7 @@
 #include "../lib/kint.h"
 #include "../lib/ksignal.h"
 #include "../irq.h"
+#include "../arch/arch.h"
 
 /**
  * Build the frame for a handler of `signo` on the user stack of the current
@@ -66,6 +67,33 @@ void sigframe_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info
  * value and the address of the `siginfo_t` at `in` into `info`, for
  * rt_sigqueueinfo and PTRACE_SETSIGINFO. */
 void sigframe_take_siginfo(const uint8_t *in, struct k_siginfo *info);
+
+/** Write the `siginfo_t` of `signo` with `info` as the calling system
+ * call's ABI lays it out: the i386 one (`ia32_fill_siginfo`) for a call by
+ * `int $0x80` on x86-64, else the architecture's own. For the siginfo a
+ * call returns, such as sigtimedwait's, waitid's and ptrace's. Defined in
+ * syscall_proc.c. */
+void siginfo_to_caller(uint8_t *out, int signo, const struct k_siginfo *info);
+
+/** Read a `siginfo_t` the calling system call passed, in its ABI's layout,
+ * as `siginfo_to_caller` chooses it. Defined in syscall_proc.c. */
+void siginfo_from_caller(const uint8_t *in, struct k_siginfo *info);
+
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+/* The bytes of an i386 `siginfo_t` through si_status, which waitid writes
+ * for an i386 caller. */
+#define SIGINFO32_CHLD_BYTES 24
+
+/** Write the i386 `siginfo_t`, Linux's `compat_siginfo`, of `signo` with
+ * `info` into the SIGINFO_SIZE bytes at `out`: the fields
+ * `sigframe_fill_siginfo` writes, at their i386 offsets, with 32-bit
+ * addresses and values (x86_64/sigframe32.c). */
+void ia32_fill_siginfo(uint8_t *out, int signo, const struct k_siginfo *info);
+
+/** Read the i386 `siginfo_t` at `in` into `info`, as
+ * `sigframe_take_siginfo` reads the native one (x86_64/sigframe32.c). */
+void ia32_take_siginfo(const uint8_t *in, struct k_siginfo *info);
+#endif
 
 /**
  * Whether the user stack pointer `sp` lies on the current process's

@@ -60,6 +60,11 @@
 #define SA_RESTART   0x10000000u
 #define SA_NODEFER   0x40000000u
 #define SA_RESETHAND 0x80000000u
+/* The mark Linux's x86-64 kernel keeps on an action installed by an i386
+ * call, so that its handler gets the i386 frame (arch/x86_64/sigframe32.c),
+ * as Linux's `sigaction_compat_abi` sets it: a 64-bit call clears it, and
+ * no call reports it. Only the x86-64 kernel sets it. */
+#define SA_IA32_ABI  0x02000000u
 
 /* si_code values (Linux). */
 #define SI_USER        0

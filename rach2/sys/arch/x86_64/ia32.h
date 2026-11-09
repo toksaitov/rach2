@@ -226,8 +226,10 @@ long compat_sys_arch_prctl(isr_params_t *params);
 long ia32_ioctl_drm(unsigned int fd, unsigned int cmd, unsigned long arg);
 long ia32_ioctl_gpu(unsigned int fd, unsigned int cmd, unsigned long arg);
 
-/** Build the signal frame of an i386 handler, as `sigframe_setup` builds a
- * 64-bit one; -1 refuses it, and the thread takes SIGSEGV (sigframe32.c). */
+/** Build the signal frame of a handler whose action an i386 call installed
+ * (SA_IA32_ABI), as `sigframe_setup` builds a 64-bit one: the rt frame with
+ * SA_SIGINFO, else the plain one. Returns 0, or -1, with `tf` unchanged, and
+ * the thread takes SIGSEGV (sigframe32.c). */
 struct k_sigaction;
 struct k_siginfo;
 int ia32_sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *sa,
@@ -239,5 +241,19 @@ int ia32_sigframe_setup(isr_params_t *tf, int signo, const struct k_sigaction *s
  * Linux's `ia32_setup_frame` finds it; 0 where the image is not an i386
  * program's or has no vDSO (vdso32.c). */
 uintptr_t ia32_vdso_sigreturn(int rt);
+
+/** Restore the state an i386 frame saved, for the sigreturn (without `rt`)
+ * or rt_sigreturn an i386 call makes, as `sigframe_restore` describes it:
+ * 0, or -1 for a frame that cannot be read or would load a faulting state
+ * (sigframe32.c). */
+int ia32_sigframe_restore(isr_params_t *tf, int rt, uint64_t *mask);
+
+/** The most bytes `ia32_sigframe_setup` puts below the top of an
+ * alternate stack (sigframe32.c). */
+uintptr_t ia32_sigframe_bytes(void);
+
+/** Whether `sel` names a segment an `iretq` to user mode may load into SS
+ * (sigframe.c). */
+int sigframe_ss_valid(unsigned int sel);
 
 #endif /* _X86_64_IA32_H_ */

@@ -17,6 +17,7 @@
 #include "../mm/mm.h"
 #include "../mm/paging.h"
 #include "../mm/usercopy.h"
+#include "../syscall.h"
 #include "../syscall_internal.h"
 
 /* The requests. */
@@ -599,8 +600,9 @@ process_t *ptrace_tracee(uint32_t pid)
 }
 
 /**
- * PTRACE_PEEKTEXT and friends: read the word at `addr` of the stopped
- * thread `t`'s memory into `*word`, or with `write` write it there. The
+ * PTRACE_PEEKTEXT and friends: read the `len` bytes at `addr` of the stopped
+ * thread `t`'s memory into `word`, or with `write` write them there: a word
+ * of the caller's ABI, 4 bytes for an i386 tracer on x86-64. The
  * address space has a reference of the caller's while it is used, since
  * bringing a page in may sleep, and the thread may end and drop its own
  * meanwhile; nothing of `t` is read after the access.
@@ -611,7 +613,7 @@ process_t *ptrace_tracee(uint32_t pid)
  * caller lacks, a change of the thread's ids, or PR_SET_DUMPABLE made so
  * after the attach. 0, or -EIO or -ENOMEM from `paging_access`.
  */
-static int32_t tracee_memory(process_t *t, uintptr_t addr, unsigned long *word, int write)
+static int32_t tracee_memory(process_t *t, uintptr_t addr, void *word, uint32_t len, int write)
 {
     struct mm *mm = t->mm;
     int32_t rc;
@@ -620,20 +622,22 @@ static int32_t tracee_memory(process_t *t, uintptr_t addr, unsigned long *word, 
         return -EIO;
     }
     mm_get(mm);
-    rc = paging_access(mm, addr, word, sizeof(*word), write);
+    rc = paging_access(mm, addr, word, len, write);
     mm_put(mm);
     return rc;
 }
 
 /** PTRACE_GETSIGINFO and PTRACE_SETSIGINFO: the siginfo of the stop of `t`,
- * the thread `pid`, as the 128-byte `siginfo_t` at `data`. 0, -EFAULT, or
- * -ESRCH for a thread gone from its stop during the copy in. */
+ * the thread `pid`, as the 128-byte `siginfo_t` at `data`, in the tracer's
+ * layout, the i386 one for an i386 tracer on x86-64 whatever the tracee
+ * runs, as Linux's `compat_ptrace_request` has it. 0, -EFAULT, or -ESRCH
+ * for a thread gone from its stop during the copy in. */
 static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
 {
     uint8_t buf[SIGINFO_SIZE];
 
     if (!set) {
-        sigframe_fill_siginfo(buf, (int)((t->ptrace_status >> 8) & 0x7F), &t->ptrace_info);
+        siginfo_to_caller(buf, (int)((t->ptrace_status >> 8) & 0x7F), &t->ptrace_info);
         return copy_to_user((void __user *)data, buf, sizeof(buf)) == 0 ? 0 : -EFAULT;
     }
     if (copy_from_user(buf, (const void __user *)data, sizeof(buf)) != 0) {
@@ -643,14 +647,17 @@ static int siginfo_access(uint32_t pid, process_t *t, uintptr_t data, int set)
     if (!t) {
         return -ESRCH;
     }
-    sigframe_take_siginfo(buf, &t->ptrace_info);
+    siginfo_from_caller(buf, &t->ptrace_info);
     return 0;
 }
 
 /**
  * PTRACE_GETREGSET and PTRACE_SETREGSET: the register set `type` of `t`, the
  * thread `pid`, to or from the buffer the `struct iovec` at `data` names,
- * as Linux's `ptrace_regset` moves it. The length must be a multiple of the
+ * as Linux's `ptrace_regset` moves it: the iovec in the tracer's layout,
+ * two 32-bit words from an i386 tracer on x86-64, and the set in the
+ * layout of the tracee's code, which on x86-64 is i386's while it runs
+ * 32-bit code (`arch_regset_size`). The length must be a multiple of the
  * set's unit; it is cut to the set's size, and the iovec's length becomes
  * the bytes moved. The set goes through the heap, since an XSAVE image is
  * larger than a frame of the kernel's stack should be. The copy of the iovec
@@ -666,11 +673,19 @@ static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintpt
     uint8_t *buf;
     long size;
     long rc = 0;
+    int compat = in_compat_syscall();
+    uint32_t iov32[2];
 
-    if (copy_from_user(&iov, (const void __user *)data, sizeof(iov)) != 0) {
+    if (compat) {
+        if (copy_from_user(iov32, (const void __user *)data, sizeof(iov32)) != 0) {
+            return -EFAULT;
+        }
+        iov.iov_base = iov32[0];
+        iov.iov_len = iov32[1];
+    } else if (copy_from_user(&iov, (const void __user *)data, sizeof(iov)) != 0) {
         return -EFAULT;
     }
-    size = arch_regset_size(type, &unit);
+    size = arch_regset_size(t, type, &unit);
     if (size < 0) {
         return size;
     }
@@ -700,21 +715,18 @@ static long regset_access(uint32_t pid, process_t *t, unsigned long type, uintpt
     }
     kfree(buf);
     iov.iov_len = len;
-    if (rc == 0 && copy_to_user((void __user *)(data + sizeof(iov.iov_base)), &iov.iov_len,
-                                sizeof(iov.iov_len)) != 0) {
+    iov32[1] = len;
+    if (rc == 0 && compat &&
+        copy_to_user((void __user *)(data + sizeof(iov32[0])), &iov32[1], sizeof(iov32[1])) != 0) {
+        rc = -EFAULT;
+    } else if (rc == 0 && !compat &&
+               copy_to_user((void __user *)(data + sizeof(iov.iov_base)), &iov.iov_len,
+                            sizeof(iov.iov_len)) != 0) {
         rc = -EFAULT;
     }
     return rc;
 }
 
-/**
- * The requests that need `t`, the thread `pid`, stopped for the caller, as
- * Linux has them. No request uses `t` after a copy that may sleep: one that
- * copies from the caller's memory finds the thread again after the copy
- * (`ptrace_tracee`), one that copies out takes what it copies first, and
- * the memory requests take a reference to the address space themselves
- * (`tracee_memory`).
- */
 /* What PTRACE_GET_SYSCALL_INFO reports, Linux's `struct
  * ptrace_syscall_info`, 88 bytes with its padding: the kind of stop, the
  * architecture, the instruction and stack pointers, then by the kind the
@@ -805,23 +817,37 @@ static long syscall_info(const process_t *t, uintptr_t size, uintptr_t data)
     return (long)actual;
 }
 
+/**
+ * The requests that need `t`, the thread `pid`, stopped for the caller, as
+ * Linux has them. No request uses `t` after a copy that may sleep: one that
+ * copies from the caller's memory finds the thread again after the copy
+ * (`ptrace_tracee`), one that copies out takes what it copies first, and
+ * the memory requests take a reference to the address space themselves
+ * (`tracee_memory`). A word of memory or of the event message is the
+ * tracer's, 4 bytes for an i386 tracer on x86-64, whose word moves the low
+ * half of `data`, as Linux's `compat_ptrace_request` moves it.
+ */
 static long ptrace_stopped(process_t *t, uint32_t pid, long request, uintptr_t addr,
                            unsigned long data)
 {
-    unsigned long word;
+    unsigned long word = 0;
+    uint32_t wlen = (uint32_t)sizeof(word);
     int32_t rc;
 
+    if (in_compat_syscall()) {
+        wlen = 4u;
+    }
     switch (request) {
     case PTRACE_PEEKTEXT:
     case PTRACE_PEEKDATA:
-        rc = tracee_memory(t, addr, &word, 0);
-        if (rc == 0 && copy_to_user((void __user *)data, &word, sizeof(word)) != 0) {
+        rc = tracee_memory(t, addr, &word, wlen, 0);
+        if (rc == 0 && copy_to_user((void __user *)data, &word, wlen) != 0) {
             rc = -EFAULT;
         }
         return rc;
     case PTRACE_POKETEXT:
     case PTRACE_POKEDATA:
-        return tracee_memory(t, addr, &data, 1);
+        return tracee_memory(t, addr, &data, wlen, 1);
     case PTRACE_CONT:
         return ptrace_resume(t, data, 0, 0);
     case PTRACE_SYSCALL:
@@ -844,7 +870,7 @@ static long ptrace_stopped(process_t *t, uint32_t pid, long request, uintptr_t a
         return 0;
     case PTRACE_GETEVENTMSG:
         word = t->ptrace_msg;
-        return copy_to_user((void __user *)data, &word, sizeof(word)) == 0 ? 0 : -EFAULT;
+        return copy_to_user((void __user *)data, &word, wlen) == 0 ? 0 : -EFAULT;
     case PTRACE_GETSIGINFO:
     case PTRACE_SETSIGINFO:
         return siginfo_access(pid, t, data, request == PTRACE_SETSIGINFO);

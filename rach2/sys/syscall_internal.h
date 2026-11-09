@@ -626,6 +626,63 @@ struct kernel_timespec {
     long tv_nsec;
 };
 
+/*
+ * The cores of the signal calls, which the native handlers in
+ * syscall_proc.c and the i386 ones in arch/x86_64/ia32_signal.c share; each
+ * acts on the current thread and takes its structures in the kernel's own
+ * form.
+ */
+
+/**
+ * Install the action `act` for `signo` and give the old one in `old`,
+ * either of them NULL, as Linux's `do_sigaction`: the old action without
+ * SA_IA32_ABI, and on x86-64 the new one marked SA_IA32_ABI for an i386
+ * caller and unmarked for a 64-bit one. Installing SIG_IGN drops any
+ * instance of the signal already pending, the process's and each thread's,
+ * with interrupts off so that a signal posted from an interrupt cannot
+ * change the pending sets in the middle. A query of SIGKILL or SIGSTOP
+ * gives their stored action, SIG_DFL. Returns 0, or -EINVAL for a signal out
+ * of range or a new action for SIGKILL or SIGSTOP, with nothing given.
+ */
+long signal_action(int signo, const struct k_sigaction *act, struct k_sigaction *old);
+
+/** Replace the blocked mask with `mask` and wait for a signal, as
+ * rt_sigsuspend does: always -EINTR, with the old mask back once the
+ * signal is handled. */
+long signal_suspend(uint64_t mask);
+
+/** The current thread's pending signals that its mask blocks, the
+ * process's among them, as rt_sigpending reports them. */
+uint64_t signal_pending_blocked(void);
+
+/* A stack_t of sigaltstack in the kernel's form. */
+struct k_altstack {
+    uintptr_t sp;
+    int32_t flags;
+    unsigned long size;
+};
+
+/**
+ * Give the alternate stack in `old`, unless it is NULL, and set it to `ss`,
+ * unless that is NULL, as Linux's `do_sigaltstack`, with `sp` the caller's
+ * stack pointer. The old settings are SS_DISABLE for none, and SS_ONSTACK
+ * while `sp` is on the stack, when a change fails with -EPERM. SS_AUTODISARM
+ * is accepted and has no effect, and other flags are -EINVAL. A stack
+ * smaller than MINSIGSTKSZ, 2048 bytes in both ABIs, is -ENOMEM. 0 or the
+ * error, with `old` filled either way.
+ */
+long signal_altstack(const struct k_altstack *ss, struct k_altstack *old, uintptr_t sp);
+
+/**
+ * The body of rt_sigtimedwait (sys_rt_sigtimedwait), with the size of the
+ * set, the set's and the siginfo's user addresses, and the timeout's, read
+ * by `read_ts`, which gives 0 or -EFAULT and lets each ABI read its own
+ * `struct timespec`. The siginfo is written in the caller's layout
+ * (`siginfo_to_caller`).
+ */
+long signal_timedwait(unsigned long setsize, uintptr_t uset, uintptr_t uinfo, uintptr_t uts,
+                      int32_t (*read_ts)(uintptr_t u, struct kernel_timespec *ts));
+
 /**
  * The current real time, in seconds and nanoseconds since the epoch, as
  * `rtc_realtime` (clock.c) gives it: the second the machine's clock gave at

@@ -14,6 +14,10 @@
 .Nm sigreturn ,
 .Nm rt_sigreturn ,
 .Nm rt_sigtimedwait ,
+.Nm rt_sigtimedwait_time64 ,
+.Nm signal ,
+.Nm sgetmask ,
+.Nm ssetmask ,
 .Nm pause
 .Nd control signal dispositions and masks
 .Sh SYNOPSIS
@@ -529,6 +533,62 @@ or
 .Nm sigprocmask .
 The kernel action is four 64-bit words: the handler, the flags, the
 restorer and the mask.
+.Ss i386 programs on x86-64
+The x86-64 kernel takes an i386 program's calls through
+.Li int $0x80
+with the i386 numbers and layouts above, and the older calls i386 Linux
+keeps:
+.Nm signal
+(48), which installs the handler in ECX for the signal in EBX with
+.Dv SA_RESETHAND
+and
+.Dv SA_NODEFER
+and returns the old handler;
+.Nm sigaction
+(67), whose action is four 32-bit words: the handler, signals 1 through
+32, the flags and the restorer;
+.Nm sgetmask
+(68) and
+.Nm ssetmask
+(69), which read and replace the mask as one int, the second widening it
+with its sign as Linux does, so that blocking signal 32 blocks 33 through
+64;
+.Nm sigsuspend
+(72), whose mask, signals 1 through 32, is in EDX;
+.Nm sigpending
+(73), which stores signals 1 through 32;
+and
+.Nm rt_sigtimedwait_time64
+(421), whose timeout is the 64-bit
+.Vt struct __kernel_timespec ,
+the upper half of its nanoseconds ignored.
+The
+.Nm rt_sigtimedwait
+of an i386 program takes the 32-bit
+.Vt struct timespec .
+Its
+.Vt siginfo_t ,
+wherever a call reads or writes one, is i386's 128 bytes, the union at
+byte 12.
+.Pp
+An action installed by an i386 call delivers i386's frames, as above,
+with the processor's
+.Ic fxsave64
+or XSAVE image behind the
+.Ic fnsave
+environment Linux converts from it; one installed by an x86-64 call
+delivers x86-64's.
+A frame whose restorer is not given returns through the return code in
+the frame, or through the i386 vDSO's when the kernel maps one.
+A frame that would reach the top of the 32-bit address space is not built,
+and the process ends with
+.Dv SIGSEGV .
+The return calls of the compat table restore an i386 frame; its code
+segment may be the 32-bit or the 64-bit one, and its data selectors that
+cannot be loaded are loaded null.
+Linux switches to the stack a handler's restorer names when the stack
+segment is not the flat one; this kernel has no other stack segment and
+does not.
 .Sh RETURN VALUES
 .Fn sigaction
 and

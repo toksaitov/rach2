@@ -82,8 +82,9 @@ void kfree(void *p)
 }
 
 /** One word, the size and unit of every register set. */
-long arch_regset_size(unsigned long type, uint32_t *unit)
+long arch_regset_size(const process_t *t, unsigned long type, uint32_t *unit)
 {
+    (void)t;
     (void)type;
     *unit = sizeof(unsigned long);
     return sizeof(unsigned long);
@@ -437,8 +438,14 @@ long arch_ptrace(process_t *p, uint32_t pid, long request, uintptr_t addr, unsig
     return -EIO;
 }
 
+/** 0: every row's tracer is a native caller. */
+int in_compat_syscall(void)
+{
+    return 0;
+}
+
 /** Nothing: no row writes a siginfo to the user. */
-void sigframe_fill_siginfo(uint8_t *buf, int sig, const struct k_siginfo *info)
+void siginfo_to_caller(uint8_t *buf, int sig, const struct k_siginfo *info)
 {
     (void)buf;
     (void)sig;
@@ -446,7 +453,7 @@ void sigframe_fill_siginfo(uint8_t *buf, int sig, const struct k_siginfo *info)
 }
 
 /** Nothing: no row reads a siginfo from the user. */
-void sigframe_take_siginfo(const uint8_t *buf, struct k_siginfo *info)
+void siginfo_from_caller(const uint8_t *buf, struct k_siginfo *info)
 {
     (void)buf;
     (void)info;

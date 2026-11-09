@@ -771,3 +771,7 @@ speaker-test 1 alsa-utils
 alsa-info 1 alsa-utils
 alsabat-test 1 alsa-utils
 alsactl 1 alsa-utils
+signal 2 sigaction
+sgetmask 2 sigaction
+ssetmask 2 sigaction
+rt_sigtimedwait_time64 2 sigaction

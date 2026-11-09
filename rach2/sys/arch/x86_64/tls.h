@@ -62,4 +62,27 @@ struct process;
  * Returns how many are set, Linux's `regset_tls_active`. */
 uint32_t ia32_tls_get(const struct process *t, struct user_desc *u);
 
+/*
+ * The TLS entries of another thread, stopped for its tracer, which ptrace's
+ * PTRACE_GET_THREAD_AREA, PTRACE_SET_THREAD_AREA and NT_386_TLS reach.
+ * The record changes, and the switch in writes the GDT.
+ */
+/** Whether set_thread_area takes the descriptor `u`, Linux's
+ * `tls_desc_okay`. */
+int tls_desc_valid(const struct user_desc *u);
+
+/** Describe TLS entry `entry`, 12 to 14, of `t` in `u`, as
+ * get_thread_area does: 0, or -EINVAL for another entry. */
+int tls_entry_get(const struct process *t, uint32_t entry, struct user_desc *u);
+
+/** Make `u`, whose own entry number is not read, TLS entry `entry` of `t`,
+ * as set_thread_area takes a descriptor: 0, or -EINVAL for another entry or
+ * a descriptor refused. */
+int tls_entry_set(struct process *t, uint32_t entry, const struct user_desc *u);
+
+/** The base a load of the selector `sel` gives FS or GS in `t`, as Linux's
+ * `x86_fsgsbase_read_task` reads it: a TLS entry's base, else 0, since no
+ * other user segment of the GDT has a base, and no LDT is loaded. */
+uintptr_t tls_selector_base(const struct process *t, unsigned int sel);
+
 #endif /* _X86_64_TLS_H_ */
