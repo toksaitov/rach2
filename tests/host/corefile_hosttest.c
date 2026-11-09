@@ -932,6 +932,13 @@ uint32_t procfs_ino_pid(int pid)
  * path, which no row reaches: GCC keeps their callers, so a link needs
  * them. */
 
+/** The core writer's descriptors are ordinary files, never dma-bufs. */
+int is_dma_buf_file(const fd_entry_t *e)
+{
+    (void)e;
+    return 0;
+}
+
 /** No row looks up a process: NULL. */
 process_t *get_process(uint32_t pid)
 {

@@ -6,6 +6,7 @@
  */
 
 #include "drm.h"
+#include "../dmabuf/dmabuf.h"
 
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
@@ -115,6 +116,7 @@ void drm_gem_object_put(struct drm_gem_object *obj)
     if (obj->mmap_offset) {
         unlink_obj(&dev->mmap_objects, obj, 1);
     }
+    dma_resv_fini(&obj->resv_own);
     if (obj->funcs && obj->funcs->free) {
         obj->funcs->free(obj);
     } else {

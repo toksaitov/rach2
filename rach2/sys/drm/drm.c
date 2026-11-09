@@ -6,6 +6,7 @@
  */
 
 #include "drm.h"
+#include "../dmabuf/dmabuf.h"
 
 #include "../arch/arch.h"
 #include "../fs/devfs.h"
@@ -439,7 +440,13 @@ static void pending_unlink(struct drm_pending_event *e)
 void drm_send_event(struct drm_pending_event *e)
 {
     struct drm_file *file = e->file;
+    struct dma_fence *fence = e->fence;
 
+    e->fence = NULL;
+    if (fence) {
+        dma_fence_signal(fence);
+        dma_fence_put(fence);
+    }
     if (!file) {
         kfree(e);
         return;
@@ -457,6 +464,8 @@ void drm_send_event(struct drm_pending_event *e)
 
 void drm_event_cancel_free(struct drm_pending_event *e)
 {
+    dma_fence_put(e->fence);
+    e->fence = NULL;
     if (e->file) {
         pending_unlink(e);
         e->file->event_space += e->length;
