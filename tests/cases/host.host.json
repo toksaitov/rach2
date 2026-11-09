@@ -546,6 +546,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "ia32_signal",
+          "checks": "tests/host/ia32_signal_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "icmp",
           "checks": "tests/host/icmp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
