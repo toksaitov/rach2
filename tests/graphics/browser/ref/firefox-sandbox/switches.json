@@ -1,0 +1,45 @@
+{
+  "argv": [
+    "firefox-esr",
+    "--new-instance",
+    "--no-remote",
+    "--kiosk",
+    "--marionette",
+    "--remote-allow-system-access",
+    "--profile",
+    "/tmp/browser.U7wgv9/profile",
+    "about:blank"
+  ],
+  "certificate": "ephemeral local HTTPS certificate accepted by automation",
+  "environment": {
+    "GRAPHICS_CLASS": "conformance",
+    "GRAPHICS_CPUS": "4",
+    "GRAPHICS_DONE": "1",
+    "LP_NUM_THREADS": "0",
+    "MESA_SHADER_CACHE_DIR": "/tmp/graphics-shader-cache",
+    "WAYLAND_DISPLAY": "wayland-runner",
+    "XDG_RUNTIME_DIR": "/tmp/browser.U7wgv9/run",
+    "XDG_SESSION_CLASS": "user",
+    "XDG_SESSION_ID": "4",
+    "XDG_SESSION_TYPE": "tty"
+  },
+  "prefs": {
+    "browser.aboutwelcome.enabled": false,
+    "browser.download.dir": "/tmp/browser.U7wgv9/downloads",
+    "browser.download.folderList": 2,
+    "browser.download.useDownloadDir": true,
+    "browser.helperApps.neverAsk.saveToDisk": "text/plain",
+    "browser.sessionstore.resume_from_crash": false,
+    "browser.shell.checkDefaultBrowser": false,
+    "browser.startup.homepage_override.mstone": "ignore",
+    "dom.events.testing.asyncClipboard": true,
+    "dom.max_chrome_script_run_time": 0,
+    "dom.max_script_run_time": 0,
+    "marionette.port": 50531,
+    "media.autoplay.block-webaudio": false,
+    "media.autoplay.default": 0,
+    "media.cubeb.backend": "pulse",
+    "webgl.force-enabled": true
+  },
+  "version": "Mozilla Firefox 153.6.0esr"
+}

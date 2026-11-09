@@ -86,6 +86,7 @@ def main():
                     samples.extend(part)
             (out / "tones-stop").write_text("stop\n")
             assert player.wait() == 0, "browser sound runner failed"
+            (out / "sound.raw").write_bytes(samples)
             result = measure(samples)
             (out / "sound.json").write_text(json.dumps(result, indent=2) + "\n")
             print("browser: result: %s sound %d mixed windows" % (browser, result["mixed_windows"]), flush=True)

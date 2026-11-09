@@ -16,7 +16,7 @@ mkdir -p "$tree/build/tmp" "$out"
 work=$(mktemp -d "$tree/build/tmp/browser-ref.XXXXXX")
 ins=
 prep=
-if [ "$mode" = webgpu ]; then
+if [ "$mode" = webgpu ] || [ "$mode" = pages ]; then
     make -C "$tree" build/tests/cases/browser/files.tar.gz
     cp "$tree/build/tests/cases/browser/files.tar.gz" "$work/browser.tar.gz"
 else
