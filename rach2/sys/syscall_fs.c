@@ -3253,13 +3253,14 @@ static int open_truncate(struct open_file *ofd, struct vfs_mount *mnt)
  * dup and fork share, and O_CLOEXEC, which opendir and fopen's "e" mode rely
  * on, marks the descriptor. A file of debugfs gets the operations its
  * registrant gave it (`debugfs_bind`), which read, write and ioctl call in
- * place of the file system's, and whose open may refuse.
+ * place of the file system's, and whose open may refuse or sleep.
  *
  * The entry gets its type last, which is what publishes it: until then the
  * slot is a reservation, which no other thread's lookup, close or dup2 can
- * take while the file system's open or the truncation sleeps with the
- * description in use. The entry is found again after those sleeps, since
- * another sharer may have grown the table meanwhile (`fd_entry_now`).
+ * take while the file system's open, the truncation or a debugfs file's
+ * open sleeps with the description in use. The entry is found again after
+ * those sleeps, since another sharer may have grown the table meanwhile
+ * (`fd_entry_now`).
  */
 static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int flags)
 {
@@ -3344,6 +3345,7 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
             fd_free(current_proc->fds, fd);
             return rc;
         }
+        entry = fd_entry_now(current_proc->fds, entry); /* the file's open may sleep */
     }
     entry->type = type;
     return fd;
