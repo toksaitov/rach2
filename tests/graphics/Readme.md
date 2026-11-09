@@ -110,7 +110,6 @@ All three families boot an overlay of the GNU root on `virtio-vga`, without virg
 
 For an author's single-unit run, unpack `bundle.tar` in the Debian guest, place the pinned Proton release at `/opt/proton`, and run `python3 run.py probe 11 /tmp/d3d-11`, `python3 run.py wine proton/d3d10:effect /tmp/d3d-effect`, or `python3 run.py vkd3d test_create_device /tmp/d3d-device`. `D3D_PROTON` may name the same release elsewhere. The output directory must be new and is kept as evidence. The registered families use the same commands on Rach2. The 32-bit programs belong to the compat milestone. lavapipe's recorded limit is feature level 11_1 and shader model 6.0; no feature-level override is passed.
 
-
 ## Limits
 
 * `virgl` and `venus` are the testing PC's alone: the render node's path, the adapter's name and the libraries' paths are its own, the test engine's QEMU on Windows has no GL display, and etude refuses both there.
