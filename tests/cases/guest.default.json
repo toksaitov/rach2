@@ -1332,7 +1332,7 @@
     },
     {
       "case_id": "guest.default.sockettest",
-      "behavior": "A UDP socket is counted while any descriptor refers to it and freed once when the last one closes or its process exits, and recvmmsg's timeout is given back with the time left.",
+      "behavior": "A UDP socket is counted while any descriptor refers to it and freed once when the last one closes or its process exits, recvmmsg's timeout is given back with the time left, and a datagram comes with the timestamp its socket asked for.",
       "units": ["default", "sockettest"],
       "domain": "guest",
       "architectures": ["i686", "x86_64"],
@@ -1345,7 +1345,8 @@
         {"assertion_id": "dup2-share", "checks": "A socket dup2'd onto descriptor 10 is still counted after its first descriptor closes, and the close of the copy returns the count to the start.", "source": "program"},
         {"assertion_id": "fork-share", "checks": "A forked child closes a shared socket and exits 0, the socket is still counted, and the parent's close returns the count to the start.", "source": "program"},
         {"assertion_id": "exit-release", "checks": "Each of 30 children that make a socket and exit without closing it exits 0, and the count is back at the start after each reap.", "source": "program"},
-        {"assertion_id": "recvmmsg-timeout", "checks": "One recvmmsg with a 5 s timeout takes the two datagrams queued on an AF_UNIX pair with their counts and gives back the time left, more than 0 and at most 5 s; a timeout of 10^9 ns fails with EINVAL; on i686 recvmmsg_time64 does the same with the high word of its nanoseconds ignored and given back 0.", "source": "program"}
+        {"assertion_id": "recvmmsg-timeout", "checks": "One recvmmsg with a 5 s timeout takes the two datagrams queued on an AF_UNIX pair with their counts and gives back the time left, more than 0 and at most 5 s; a timeout of 10^9 ns fails with EINVAL; on i686 recvmmsg_time64 does the same with the high word of its nanoseconds ignored and given back 0.", "source": "program"},
+        {"assertion_id": "timestamps", "checks": "Each of SO_TIMESTAMP and SO_TIMESTAMPNS, old and new, turned on alone reads back 1 while the others read 0, and a datagram on an AF_UNIX pair and on a UDP socket sending to itself on the loopback comes with that timestamp alone, of its option's type, in the caller's layout, more than 0 seconds with its fraction in range; turning one off turns all off.", "source": "program"}
       ],
       "branches": [],
       "termination": {"end": "exited", "value": 0},
