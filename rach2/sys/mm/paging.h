@@ -54,6 +54,23 @@ uintptr_t mmu_user_skip(page_dir_t *dir, uintptr_t va);
  * which every directory shares, or NULL where there is none. */
 pte_t *mmu_kernel_table(uintptr_t va);
 
+#if KVA_MMIO_LARGE
+/**
+ * Map the kernel address `va` and the MMU_TABLE_SPAN after it with one
+ * large page at `phys`, both aligned to the span, with the entry flags
+ * `flags`, in place of the leaf table the kernel's directory has there,
+ * whose entry `*saved` keeps for `mmu_kernel_unlarge`; the table's own
+ * entries must be clear. 0, or -1 where there is no table to replace, a
+ * large page is there already or an address is not aligned. The caller
+ * drops the translations. Defined by mmu.c where cpu.h sets KVA_MMIO_LARGE.
+ */
+int mmu_kernel_large(uintptr_t va, phys_addr_t phys, pte_t flags, pte_t *saved);
+
+/** Put back at `va` the directory entry `saved` that `mmu_kernel_large`
+ * took, so that the leaf table maps the span again. */
+void mmu_kernel_unlarge(uintptr_t va, pte_t saved);
+#endif
+
 /**
  * Make the kernel's page tables that every directory shares, a step of
  * `init_paging`, marking each frame carved for them used
@@ -337,8 +354,9 @@ void free_page_directory(page_dir_t *dir);
  * a register is never stale, and return its kernel address; 0, with a
  * record, when the range is empty or wraps or the region has no room left.
  * The address is not the physical one: a driver reaches its registers
- * through what this returns. A region is mapped for the life of the kernel,
- * in tables every directory shares.
+ * through what this returns. A region is mapped in tables every directory
+ * shares, as `mmio_map` maps a window, and stays for the life of the
+ * kernel unless its driver gives it to `mmio_unmap`.
  */
 uintptr_t map_mmio(uintptr_t phys_addr, size_t size);
 
@@ -349,6 +367,38 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size);
  * write-combining.
  */
 uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache);
+
+/**
+ * Map the device memory [phys, phys + size) into a window of the kernel's
+ * MMIO region with the cache bits `cache`, PTE_NOCACHE or PTE_WC, and
+ * return its kernel address, at the offset `phys` has in its page; 0, with
+ * a record, when the range is empty, wraps, lies past what an entry holds
+ * (4 GiB on i686) or finds no free run of the region. Each span of
+ * MMU_TABLE_SPAN that the range covers whole and that starts at a physical
+ * address aligned to it is one large page where cpu.h sets KVA_MMIO_LARGE,
+ * 2 MiB on x86-64, for which the window is placed at the same offset from
+ * an aligned kernel address; the rest is 4 KiB pages. `mmio_unmap` takes
+ * the window away again, so a driver may move a window over a BAR larger
+ * than the region. Pages are never executable where the architecture has
+ * no-execute. Under the big kernel lock.
+ */
+uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache);
+
+/**
+ * Unmap the window `mmio_map` returned at `va` for `size` bytes, the same
+ * size it was given, and give its room back to the region; every processor
+ * drops its translations before it next takes the big lock. Nothing for a
+ * range outside the region.
+ */
+void mmio_unmap(uintptr_t va, size_t size);
+
+/** The page that maps `va` in the MMIO region: PAGE_SIZE, MMU_TABLE_SPAN
+ * for a large page, or 0 where nothing is mapped. */
+size_t mmio_page_size(uintptr_t va);
+
+/** The bytes of the MMIO region in use in `*used`, and the longest free
+ * run, the largest window that can be mapped now, in `*largest`. */
+void mmio_usage(size_t *used, size_t *largest);
 
 /**
  * Map the frame at physical `phys` at a temporary kernel address and return

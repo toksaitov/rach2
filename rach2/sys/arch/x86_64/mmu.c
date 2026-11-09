@@ -452,6 +452,43 @@ pte_t *mmu_kernel_table(uintptr_t va)
     return table_for(_kernel_dir->entries, va, 1, 0, 0);
 }
 
+/** The directory entry of the kernel's PML4 for `va`, which the boot made
+ * for the MMIO region; NULL where there is none. */
+static pte_t *kernel_pde(uintptr_t va)
+{
+    pte_t *pd;
+
+    if (va < KVA_BASE) {
+        return NULL;
+    }
+    pd = table_for(_kernel_dir->entries, va, 2, 0, 0);
+    return pd ? &pd[LEVEL_INDEX(va, 2)] : NULL;
+}
+
+/** The entry takes PTE_PS, which makes it a 2 MiB page, and the cache bits
+ * PWT and PCD, which sit at the same places as in a 4 KiB entry; PAT entry
+ * 1, write-combining, is reached the same way. */
+int mmu_kernel_large(uintptr_t va, phys_addr_t phys, pte_t flags, pte_t *saved)
+{
+    pte_t *e = kernel_pde(va);
+
+    if (!e || !(*e & PTE_P) || (*e & PTE_PS) || ((va | phys) & (MMU_TABLE_SPAN - 1)) != 0) {
+        return -1;
+    }
+    *saved = *e;
+    *e = (pte_t)phys | PTE_PS | flags;
+    return 0;
+}
+
+void mmu_kernel_unlarge(uintptr_t va, pte_t saved)
+{
+    pte_t *e = kernel_pde(va);
+
+    if (e) {
+        *e = saved;
+    }
+}
+
 /**
  * The physical address the kernel's PML4 maps `va` to, through a 1 GiB or
  * 2 MiB page of the direct map as through a 4 KiB one; 0 when nothing is

@@ -154,6 +154,12 @@ typedef uint32_t pte_t;
 #define KVA_PCWIN        0xD0000000u
 #define KVA_MMIO         0xF0000000u
 #define KVA_MMIO_SIZE    0x08000000u
+/* Whether a window of the MMIO region maps its aligned spans of a leaf
+ * table's reach with one large page each (mm/paging.c): not here, since
+ * the kernel turns no PSE on and each directory copies the kernel's
+ * directory entries when it is made, so an entry changed later would not
+ * reach the directories made before. */
+#define KVA_MMIO_LARGE   0
 #define KVA_TEMP         0xF8000000u
 /* Policy: the temporary mappings held at once, one page each, the whole
  * of the region's 4 MiB; a caller that finds none free is told so. */

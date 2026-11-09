@@ -16,6 +16,7 @@
 #include "lib/kstring.h"
 #include "lib/spinlock.h"
 #include "mm/kheap.h"
+#include "mm/paging.h"
 
 /** The word is taken from its aligned dword, the half that bit 1 of the
  * offset selects. */
@@ -418,6 +419,69 @@ uint64_t pci_bar_address64(const pci_device_t *dev, int i)
         phys |= (uint64_t)dev->bar[i + 1] << 32;
     }
     return phys;
+}
+
+/** The BAR's mask is read with the command register's memory decoding off
+ * and the BAR's value restored before decoding is put back as it was. A
+ * 64-bit BAR's upper half is sized with it, as one 64-bit mask. */
+uint64_t pci_bar_size64(const pci_device_t *dev, int i)
+{
+    uint8_t off = (uint8_t)(PCI_BAR0 + 4 * i);
+    uint16_t cmd;
+    uint32_t lo, hi = 0xFFFFFFFFu;
+    uint64_t mask;
+    int wide;
+
+    if (i < 0 || i > 5 || !pci_bar_is_memory(dev->bar[i])) {
+        return 0;
+    }
+    wide = pci_bar_is_64bit(dev->bar[i]);
+    if (wide && i == 5) {
+        return 0;
+    }
+    cmd = pci_read_config16(dev->bus, dev->device, dev->function, PCI_COMMAND);
+    pci_write_config16(dev->bus, dev->device, dev->function, PCI_COMMAND,
+                       (uint16_t)(cmd & ~PCI_CMD_MEMORY_SPACE));
+    pci_write_config32(dev->bus, dev->device, dev->function, off, 0xFFFFFFFFu);
+    lo = pci_read_config32(dev->bus, dev->device, dev->function, off);
+    pci_write_config32(dev->bus, dev->device, dev->function, off, dev->bar[i]);
+    if (wide) {
+        pci_write_config32(dev->bus, dev->device, dev->function, (uint8_t)(off + 4), 0xFFFFFFFFu);
+        hi = pci_read_config32(dev->bus, dev->device, dev->function, (uint8_t)(off + 4));
+        pci_write_config32(dev->bus, dev->device, dev->function, (uint8_t)(off + 4),
+                           dev->bar[i + 1]);
+    }
+    pci_write_config16(dev->bus, dev->device, dev->function, PCI_COMMAND, cmd);
+    mask = ((uint64_t)hi << 32) | (lo & 0xFFFFFFF0u);
+    if (!wide) {
+        mask |= 0xFFFFFFFF00000000ULL;
+    }
+    return (lo & 0xFFFFFFF0u) == 0 && !wide ? 0 : ~mask + 1;
+}
+
+uintptr_t pci_bar_map(const pci_device_t *dev, int i, uint64_t offset, size_t size, pte_t cache,
+                      struct pci_window *w)
+{
+    uint64_t base = pci_bar_address64(dev, i);
+    uint64_t bar_size = w->bar_size;
+
+    w->va = 0;
+    if (base == 0 || size == 0 || offset + size < offset ||
+        (bar_size != 0 && (offset >= bar_size || size > bar_size - offset))) {
+        return 0;
+    }
+    w->va = mmio_map(base + offset, size, cache);
+    w->phys = base + offset;
+    w->size = size;
+    return w->va;
+}
+
+void pci_bar_unmap(struct pci_window *w)
+{
+    if (w->va != 0) {
+        mmio_unmap(w->va, w->size);
+        w->va = 0;
+    }
 }
 
 /**
