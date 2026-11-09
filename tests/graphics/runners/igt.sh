@@ -52,6 +52,11 @@ runner_record "warmup 0"
 runner_record "repetitions 1"
 runner_record "igt $root, $(wc -l < "$root/subtest-list.txt") subtests in its list"
 runner_record "cards $(cd /dev/dri 2> /dev/null && echo card*)"
+if [ -e /sys/kernel/debug/sync/sw_sync ]; then
+    runner_record "sw_sync yes"
+else
+    runner_record "sw_sync no"
+fi
 for name in /sys/kernel/debug/dri/[0-9]*/name; do
     [ -r "$name" ] && runner_record "driver $(cat "$name")"
 done
