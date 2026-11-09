@@ -251,6 +251,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "drm_core",
+          "checks": "tests/host/drm_core_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "drm_core64",
+          "checks": "tests/host/drm_core64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "drm_abi",
           "checks": "tests/host/drm_abi_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1137,7 +1147,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 212
+          "limit": 214
         }
       ],
       "bounds": {
