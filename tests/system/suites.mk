@@ -1926,7 +1926,9 @@ build/tests/graphics/desktop.py: tests/graphics/desktop.py
 # concurrent sound, GPU recovery, and the fixed WebGL and video comparisons.
 BROWSER_FILES = $(wildcard tests/graphics/browser/*) $(GRAPHICS_FILES) \
                 $(wildcard tests/graphics/browser/ref/*/*)
-build/tests/cases/browser/files.tar.gz: $(BROWSER_FILES)
+build/tests/cases/browser/seat.so: tests/graphics/browser/seat.c tests/graphics/browser/seat-build.sh
+	sh tests/graphics/browser/seat-build.sh $@
+build/tests/cases/browser/files.tar.gz: $(BROWSER_FILES) build/tests/cases/browser/seat.so
 	@mkdir -p $(@D)
 	python3 tests/graphics/browser/assets.py $@
 build/tests/graphics/desktop_display.py: tests/graphics/desktop_display.py

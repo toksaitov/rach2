@@ -1,0 +1,4 @@
+{
+  "about:support": "Seccomp-BPF (System Call Filtering)\ttrue\nSeccomp Thread Synchronization\ttrue\nUser Namespaces\ttrue\nContent Process Sandboxing\ttrue\nMedia Plugin Sandboxing\ttrue\nContent Process Sandbox Level\t6\nEffective Content Process Sandbox Level\t6",
+  "application": "Firefox"
+}

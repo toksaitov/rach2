@@ -27,6 +27,10 @@ mkdir -p "$out"
 RUNNER_WORK=$(mktemp -d "${TMPDIR:-/tmp}/browser.XXXXXX")
 runner_start
 runner_record "case $browser $mode"
+if [ "$mode" = pages ]; then
+    # shellcheck disable=SC2034 # common.sh loads the private module
+    RUNNER_SEAT_MODULE=$here/seat.so
+fi
 runner_weston
 python3 "$here/run.py" "$browser" "$mode" "$out" "$RUNNER_WORK"
 runner_finish

@@ -117,7 +117,7 @@ runner_weston()
     export XDG_RUNTIME_DIR WAYLAND_DISPLAY
     mkdir -p "$XDG_RUNTIME_DIR"
     chmod 700 "$XDG_RUNTIME_DIR"
-    setsid weston --backend=headless --renderer=pixman --width="$RUNNER_WIDTH" --height="$RUNNER_HEIGHT" \
+    setsid weston ${RUNNER_SEAT_MODULE:+--modules="$RUNNER_SEAT_MODULE"} --backend=headless --renderer=pixman --width="$RUNNER_WIDTH" --height="$RUNNER_HEIGHT" \
         --shell=kiosk --idle-time=0 --socket="$WAYLAND_DISPLAY" \
         --log="$RUNNER_OUT/weston.log" < /dev/null > /dev/null 2>&1 &
     RUNNER_WESTON=$!

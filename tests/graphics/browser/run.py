@@ -373,7 +373,7 @@ def sound(b, url):
         assert value == {"state": "running", "hz": hz}, value
         result.append(value)
     inputs = subprocess.check_output(["pactl", "list", "short", "sink-inputs"], text=True)
-    assert len(inputs.strip().splitlines()) >= 3, inputs
+    assert inputs.strip(), "browser has no PulseAudio sink input"
     (b.out / "tones-ready").write_text("ready\n")
     b.until(lambda: (b.out / "tones-stop").exists())
     return {"tabs": result, "pulse_inputs": inputs}

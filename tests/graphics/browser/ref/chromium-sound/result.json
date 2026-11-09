@@ -1,0 +1,17 @@
+{
+  "pulse_inputs": "0\t0\t2\tprotocol-native.c\tfloat32le 2ch 44100Hz\n1\t0\t3\tprotocol-native.c\tfloat32le 2ch 44100Hz\n2\t0\t4\tprotocol-native.c\tfloat32le 2ch 44100Hz\n",
+  "tabs": [
+    {
+      "hz": 440,
+      "state": "running"
+    },
+    {
+      "hz": 660,
+      "state": "running"
+    },
+    {
+      "hz": 880,
+      "state": "running"
+    }
+  ]
+}

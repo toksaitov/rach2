@@ -56,6 +56,7 @@ def main():
             for name in ("browser", "runners", "guest-env.sh", "ref/debian"):
                 bundle.add(here.parent / name, arcname=name,
                            filter=lambda m: None if "__pycache__" in m.name else m)
+            bundle.add(tree / "build/tests/cases/browser/seat.so", arcname="browser/seat.so")
         part.replace(output)
     finally:
         part.unlink(missing_ok=True)

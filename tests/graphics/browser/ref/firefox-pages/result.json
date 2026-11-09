@@ -1,0 +1,26 @@
+{
+  "clipboard": "rach2-clipboard",
+  "download": "rach2-file-acceptance\n",
+  "form": "?value=rach2-form",
+  "initial": {
+    "font": true,
+    "secure": true
+  },
+  "storage": {
+    "cache": "rach2-cache",
+    "cookie": "acceptance=rach2-cookie",
+    "indexed": "rach2-indexed",
+    "local": "rach2-local",
+    "session": "rach2-session"
+  },
+  "upload": "rach2-upload",
+  "webgl": {
+    "pixel": [
+      255,
+      128,
+      0,
+      255
+    ],
+    "renderer": "llvmpipe, or similar"
+  }
+}
