@@ -22,11 +22,15 @@ QEMU's
 a display controller, and
 .Ql -device virtio-vga ,
 which is a VGA controller as well, as Linux 6.12's virtio_gpu does.
-It takes the device's EDID and virgl 3D features when offered.
+It takes the device's EDID, virgl 3D, blob resource, context
+initialization and resource UUID features when offered.
 QEMU's
 .Ql -device virtio-vga-gl
-offers virgl.
-Blob resources and explicit context initialization are not negotiated.
+offers virgl, and with
+.Ql blob=on,hostmem=SIZE
+blobs and a host-visible region of that size; with
+.Ql venus=on
+it offers context initialization and the Venus capability set as well.
 Under virtio-vga the driver first removes the firmware's framebuffer from
 every memory BAR of the device, so that
 .Xr fbdrm 4
@@ -61,8 +65,9 @@ the features as Linux's
 .Dq features: +virgl +edid -resource_blob -host_visible
 and
 .Dq features: -context_init ,
-the number of scanouts and of capability sets, and each scanout's size
-whenever it reads the displays.
+the number of scanouts and of capability sets, the host-visible region as
+.Dq host memory window: 0xADDRESS +0xLENGTH ,
+and each scanout's size whenever it reads the displays.
 .Ss Commands
 Every command goes to the device on its control queue, and the cursor's on
 the cursor queue.
@@ -153,6 +158,39 @@ unpadded, and a whole number of pages, and their resources are XRGB8888.
 Mappings are cached.
 When the last reference to a buffer goes, its resource is unreferenced on
 the device and its pages are freed once the device answers.
+.Ss Blobs
+A blob is a resource of guest memory, of host memory, or of both, as
+.Dv VIRTGPU_BLOB_MEM_GUEST ,
+.Dv VIRTGPU_BLOB_MEM_HOST3D
+and
+.Dv VIRTGPU_BLOB_MEM_HOST3D_GUEST
+say; a blob with host memory needs virgl, and its host side is what the
+commands sent with it make, named by its blob id.
+The host-visible region, the device's shared memory region 1, is mapped
+only in pieces.
+A mappable blob of host memory alone is placed at the first piece of the
+region it fits in, and the device maps its memory there; a program maps
+the whole blob, from its start, write-combining, uncached or cached as the
+device answers, and its pages are those of its piece.
+A shareable blob is given a UUID when the device has them.
+A blob is unmapped before its resource is released, and its piece is
+reused once the device has answered.
+On i686, a region whose end lies past 4 GiB, where QEMU puts it, is
+refused with a record, and a mappable blob of host memory alone is then
+.Er EINVAL .
+.Ss Contexts and rings
+Each open file has one context, made at its first 3D call.
+.Dv DRM_IOCTL_VIRTGPU_CONTEXT_INIT
+makes it with a capability set, a number of rings, a mask of the rings
+whose fences send the file an event, and a name.
+Each ring is a fence context of its own: a submission on a ring waits
+for nothing of its own ring, which the device keeps in order, and its
+answer retires only its own ring's earlier fences.
+A submission on a ring in the poll mask sends the file a
+.Dv VIRTGPU_EVENT_FENCE_SIGNALED
+event, a bare
+.Vt struct drm_event
+of 8 bytes, when the device answers it.
 .Ss Ioctls
 The render node and the card take Linux's virtio_gpu ioctls:
 .Bl -tag -width Ds
@@ -165,6 +203,14 @@ is 1.
 is 1 when virgl was negotiated, and
 .Dv VIRTGPU_PARAM_SUPPORTED_CAPSET_IDs
 has a bit for each offered capset id.
+.Dv VIRTGPU_PARAM_RESOURCE_BLOB ,
+.Dv VIRTGPU_PARAM_HOST_VISIBLE ,
+.Dv VIRTGPU_PARAM_CROSS_DEVICE ,
+.Dv VIRTGPU_PARAM_CONTEXT_INIT
+and
+.Dv VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME
+are 1 when blobs, the host-visible region, UUIDs and context
+initialization, for the last two, were found.
 The other known parameters are 0.
 .It Dv DRM_IOCTL_VIRTGPU_RESOURCE_CREATE
 A resource over a new buffer of the given size, or a page for 0,
@@ -173,12 +219,16 @@ With virgl it passes the target, format, bind flags, dimensions, array size,
 levels, samples and flags to the host.
 Without virgl it accepts a 2D resource, target 2, alone.
 .It Dv DRM_IOCTL_VIRTGPU_RESOURCE_INFO
-A buffer's size and resource id.
+A buffer's size and resource id, and for a blob
+.Dv VIRTGPU_BLOB_MEM_GUEST
+or, with any host memory,
+.Dv VIRTGPU_BLOB_MEM_HOST3D .
 .It Dv DRM_IOCTL_VIRTGPU_TRANSFER_TO_HOST
 Copies a box of a buffer to its resource, not waited for; the command's
 fence joins the buffer's reservation.
 With virgl, the box, level and backing offset go to TRANSFER_TO_HOST_3D.
-Nonzero stride and layer stride are refused for these resources.
+Nonzero stride and layer stride are refused but for a blob with host
+memory, and a blob of guest memory alone takes no transfer.
 .It Dv DRM_IOCTL_VIRTGPU_WAIT
 Waits up to 15 seconds for a buffer's outstanding work, or with
 .Dv VIRTGPU_WAIT_NOWAIT
@@ -186,8 +236,12 @@ says whether there is any.
 .It Dv DRM_IOCTL_VIRTGPU_EXECBUFFER
 Copies and queues virgl commands and holds the buffers named by the BO
 handle list until the host answers.
-An input fence descriptor waits for foreign producers; a fence on this
-control queue needs no wait, since its commands are ordered already.
+With
+.Dv VIRTGPU_EXECBUF_RING_IDX
+the submission goes on that ring of the file's context.
+An input fence descriptor waits for producers of another fence context; a
+fence of the same queue or ring needs no wait, since its commands are
+ordered already.
 An output fence descriptor is a close-on-exec sync file.
 Input and output syncobjs, with timeline points, are also accepted.
 Submissions queue without waiting for earlier frames to finish.
@@ -205,9 +259,22 @@ With no capability sets the result is
 EXECBUFFER and TRANSFER_FROM_HOST return
 .Er ENOSYS
 without virgl.
-.It Dv DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB , Dv DRM_IOCTL_VIRTGPU_CONTEXT_INIT
-Fail with
-.Er EINVAL .
+.It Dv DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB
+A blob of the given memory, flags, size in whole pages and blob id,
+returning its handle and resource id.
+Its commands, of a whole number of 4-byte words, go to the host in the
+file's context first.
+.It Dv DRM_IOCTL_VIRTGPU_CONTEXT_INIT
+Makes the file's context with up to four parameters:
+.Dv VIRTGPU_CONTEXT_PARAM_CAPSET_ID ,
+an offered capability set;
+.Dv VIRTGPU_CONTEXT_PARAM_NUM_RINGS ,
+at most 64;
+.Dv VIRTGPU_CONTEXT_PARAM_POLL_RINGS_MASK ,
+within the rings; and
+.Dv VIRTGPU_CONTEXT_PARAM_DEBUG_NAME ,
+its first 63 bytes kept.
+Nothing takes effect unless every parameter is accepted.
 .El
 .Ss Device loss
 Root may write
@@ -241,17 +308,27 @@ while the buffer still has work.
 A dumb buffer of other than 32 bits a pixel; a
 .Dv DRM_IOCTL_VIRTGPU_RESOURCE_CREATE
 of a 3D target, depth, array, sample count or more than one level without
-virgl; a transfer stride without a blob; ring selection without context
-initialization; an
+virgl; a transfer stride without a blob with host memory; a blob the
+device cannot make, with unknown flags or memory, host memory without
+virgl, a blob id or commands for guest memory alone, or no size; a
+mappable blob of host memory without a host-visible region; a
+.Dv DRM_IOCTL_VIRTGPU_CONTEXT_INIT
+without its feature, with more than four parameters, a parameter twice,
+a capability set not offered, more than 64 rings or a poll mask past
+them; a ring the context does not have; an
 unknown
 .Dv DRM_IOCTL_VIRTGPU_GETPARAM
 parameter; a format modifier.
+.It Er EEXIST
+.Dv DRM_IOCTL_VIRTGPU_CONTEXT_INIT
+after the file's context was made.
 .It Er EIO
 The device answered a command with an error.
 .It Er ENOENT
 No buffer of the handle given.
 .It Er ENOSPC
-Every resource id is taken.
+Every resource id is taken, or no piece of the host-visible region holds
+the blob.
 .It Er ENOSYS
 A 3D call without virgl, or GET_CAPS on a device with no capability sets.
 .It Er ETIMEDOUT
