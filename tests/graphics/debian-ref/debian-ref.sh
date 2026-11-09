@@ -4,23 +4,26 @@
 # Rach2's graphics runs (rach2/qemu_devices.sh).
 #
 #   debian-ref.sh fetch
-#   debian-ref.sh prepare
+#   debian-ref.sh prepare [-n]
 #   debian-ref.sh run [-p PROFILE] [-c CPUS] [-m MIB] [-g CLASS] [-d]
-#                     [-r RECORD] COMMAND
+#                     [-r RECORD] [-i FILE]... [-o FILE]... COMMAND
 #
 # `fetch` downloads the pinned cloud image that `image` names and checks its
 # size and SHA-512. `prepare` makes the prepared image, an overlay of it:
 # one boot with the seed, whose `network-config` is empty, runs setup.sh.in,
-# which installs `packages` from the dated snapshot and turns cloud-init off.
+# which installs `packages` from the dated snapshot and turns cloud-init off;
+# with -n it does nothing when the prepared image exists.
 # `run` boots a new overlay of the prepared image with the display PROFILE
 # (std-vga by default), CPUS processors (8) and MIB of memory (8192), copies
-# tests/graphics/guest-env.sh to /tmp/guest-env.sh, runs COMMAND in sh as
-# the user `gfx` over SSH with that file sourced for the run's CLASS
-# (performance by default; -d for a Done's run), powers the guest off and
+# tests/graphics/guest-env.sh to /tmp/guest-env.sh and each FILE of -i to
+# /tmp under its own name, runs COMMAND in sh as the user `gfx` over SSH with
+# that file sourced for the run's CLASS (performance by default; -d for a
+# Done's run), copies the guest's /tmp/NAME to each FILE of -o, NAME being
+# its last component, once COMMAND has succeeded, powers the guest off and
 # removes the overlay. It writes the run's record to RECORD, or to standard
 # error: the profile, firmware, accelerator, processor, CPUs, memory, QEMU's
 # version, the image and the guest's environment. It exits with COMMAND's
-# status.
+# status, or 1 when a file of -o cannot be copied.
 #
 # Debian's GRUB under SeaBIOS resets at once with a display that has no VGA,
 # so the virtio-gpu and none profiles boot by OVMF and the others by
@@ -120,6 +123,7 @@ watch()
 
 prepare()
 {
+    [ "${1:-}" != -n ] || [ ! -f "$prepared" ] || return 0
     fetch
     command -v xorriso >/dev/null || die "xorriso makes the seed; install it"
     [ -f "$key" ] || ssh-keygen -q -t ed25519 -N '' -C debian-ref -f "$key"
@@ -154,8 +158,8 @@ prepare()
 
 run()
 {
-    profile=std-vga cpus=8 mib=8192 class=performance done=0 record=
-    while getopts p:c:m:g:dr: o; do
+    profile=std-vga cpus=8 mib=8192 class=performance done=0 record='' ins='' outs=''
+    while getopts p:c:m:g:dr:i:o: o; do
         case $o in
             p) profile=$OPTARG ;;
             c) cpus=$OPTARG ;;
@@ -163,12 +167,18 @@ run()
             g) class=$OPTARG ;;
             d) done=1 ;;
             r) record=$OPTARG ;;
+            i)
+                [ -f "$OPTARG" ] || die "run: no file $OPTARG"
+                ins="$ins $OPTARG"
+                ;;
+            o) outs="$outs $OPTARG" ;;
             *) exit 2 ;;
         esac
     done
     shift $((OPTIND - 1))
     [ $# -gt 0 ] || die "run: no command"
     [ -f "$prepared" ] || die "no prepared image; run debian-ref.sh prepare"
+    mkdir -p "${TMPDIR:-$tree/build/tmp}"
     work=$(mktemp -d "${TMPDIR:-$tree/build/tmp}/debian-ref.XXXXXX")
     qemu=
     trap 'kill "$qemu" 2>/dev/null || true; rm -rf "$work"' EXIT
@@ -188,7 +198,7 @@ run()
         sleep 1
     done
     # shellcheck disable=SC2086 # opts are words
-    scp -q $opts -P "$port" "$tree/tests/graphics/guest-env.sh" gfx@127.0.0.1:/tmp/guest-env.sh
+    scp -q $opts -P "$port" "$tree/tests/graphics/guest-env.sh" $ins gfx@127.0.0.1:/tmp/
     {
         echo "profile $profile"
         echo "firmware ${firmware%% *}"
@@ -205,6 +215,14 @@ run()
     ssh $opts -p "$port" gfx@127.0.0.1 \
         "GRAPHICS_CLASS=$class GRAPHICS_DONE=$done; export GRAPHICS_CLASS GRAPHICS_DONE;
          . /tmp/guest-env.sh && graphics_env > /tmp/graphics.env && $*" </dev/null || status=$?
+    for f in $outs; do
+        [ "$status" -eq 0 ] || break
+        # shellcheck disable=SC2086 # opts are words
+        scp -q $opts -P "$port" "gfx@127.0.0.1:/tmp/$(basename "$f")" "$f" || {
+            echo "debian-ref: run: cannot copy /tmp/$(basename "$f") out of the guest" >&2
+            status=1
+        }
+    done
     # shellcheck disable=SC2086 # opts are words
     ssh $opts -p "$port" gfx@127.0.0.1 'cat /tmp/graphics.env; sudo systemctl poweroff' \
         </dev/null >> "$work/record" 2>/dev/null || true
@@ -220,10 +238,10 @@ run()
 
 case ${1:-} in
     fetch) fetch ;;
-    prepare) prepare ;;
+    prepare) shift; prepare "$@" ;;
     run) shift; run "$@" ;;
     *)
-        echo "usage: debian-ref.sh fetch | prepare | run [-p PROFILE] [-c CPUS] [-m MIB] [-g CLASS] [-d] [-r RECORD] COMMAND" >&2
+        echo "usage: debian-ref.sh fetch | prepare [-n] | run [-p PROFILE] [-c CPUS] [-m MIB] [-g CLASS] [-d] [-r RECORD] [-i FILE]... [-o FILE]... COMMAND" >&2
         exit 2
         ;;
 esac
