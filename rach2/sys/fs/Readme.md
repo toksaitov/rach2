@@ -60,6 +60,8 @@ A directory descriptor's path is made again at each use: a synthetic directory's
 
 The working directory's path is in the `fs_struct` that `CLONE_FS` shares, in its 64 bytes (`CWD_MAX`) when it fits and in the heap, up to 4096 bytes, when it does not (`proc_cwd_set`).
 
+An `O_PATH` open of a proc descriptor link keeps the mounted file or synthetic object the source descriptor names. A mounted inode gets a new path description, and a synthetic object shares its held description with access disabled on the new descriptor, so closing the source does not invalidate the path.
+
 ### Permissions, ownership and times
 
 A process is privileged when `proc_privileged` is true of it; [the process subsystem's Readme](../proc/Readme.md) gives the rule. `cred_access_bits` judges one class, owner, group or other, by the effective ids, or the real ones for `access`, and passes a caller whose user id of that kind is 0 and who has kept its capabilities. `cred_access_node` applies it to a node of the KRFFS root and `cred_access_ref` to a node of another type, from the attributes the type reports. Both answer `EACCES` to the execution of a non-directory with no execute bit, even for root, and `cred_access_ref` answers `EPERM` to a write of an immutable file. The KRFFS root directory is judged as mode 0755 and not sticky by its identity, since its stored mode has the dirty flag where the setuid bit would be ([krffs.Readme.md](krffs.Readme.md)).

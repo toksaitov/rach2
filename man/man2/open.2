@@ -458,12 +458,10 @@ A final symbolic link is followed unless
 is given, and then the descriptor names the link.
 A link under
 .Pa /proc/ Ns Ar pid Ns Pa /fd
-is not followed: without
+follows the descriptor to a mounted file or synthetic object unless
 .Dv O_NOFOLLOW
-it returns
-.Er ENOENT ,
-as an ordinary open of one does, where Linux gives a descriptor on the
-file the link names.
+names the link itself.
+The new path descriptor keeps the object after the source descriptor closes.
 The file system's own open does not run: a device, an ext2 device inode
 among them, is not opened, a
 .Pa /proc

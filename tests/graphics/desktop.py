@@ -67,6 +67,19 @@ finally:
 
 def session():
     """Wait for the compositor and check its identity, seat and input database."""
+    original = os.open("/sys/class/input", os.O_PATH | os.O_DIRECTORY)
+    reopened = None
+    try:
+        reopened = os.open("/proc/self/fd/%d" % original, os.O_PATH | os.O_DIRECTORY)
+        assert os.fstat(original).st_ino == os.fstat(reopened).st_ino
+        os.close(original)
+        original = None
+        assert os.fstat(reopened).st_mode & 0o170000 == 0o040000
+    finally:
+        if original is not None:
+            os.close(original)
+        if reopened is not None:
+            os.close(reopened)
     runtime = Path("/run/user/1001")
     while not (runtime / "wayland-0").is_socket():
         time.sleep(0.1)
