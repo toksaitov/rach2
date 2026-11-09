@@ -13,6 +13,8 @@
 #                        times from Gallium's HUD dump; ended after loop 4
 #   start ROUTE NAME [ARGS...]  the game in the background, -DEVMODE, for
 #                        the suit's reboot played by uinput-play.py
+#   hud NAME             on a game `start` left at the main menu, the
+#                        suit's reboot from save 07, the HUD read back
 #   stop                 ends the game and cage
 # Output in $OUT/crysis/NAME.
 set -u
@@ -43,21 +45,26 @@ C
 	cp $G/system.cfg "$U/game.cfg" $1/
 }
 # launch ROUTE O ENV ARGS...: the command line for ROUTE, run under cage.
+# Root's session bus does not reach gfx, and bwrap refuses to bind it.
+# umu's Proton maps drive S: to the game's library, which umu takes as the
+# directory above STEAM_COMPAT_INSTALL_PATH, by default the program's own
+# (Bin64); Crysis run from the root of S: finds no language, so the install
+# path is the game's directory, as Steam sets it.
 launch() {
 	r=$1; o=$2; e=$3; shift 3
 	cd $G/Bin64 || exit 1
 	case $r in
 	direct)
 		# shellcheck disable=SC2086
-		runuser -u gfx -- env HOME=/home/gfx XDG_RUNTIME_DIR=$RUN LIBSEAT_BACKEND=seatd \
+		runuser -u gfx -- env -u DBUS_SESSION_BUS_ADDRESS HOME=/home/gfx XDG_RUNTIME_DIR=$RUN LIBSEAT_BACKEND=seatd \
 			cage -- env STEAM_COMPAT_DATA_PATH=$S/compat STEAM_COMPAT_CLIENT_INSTALL_PATH=$S/steam \
 			PROTON_USE_WOW64=1 PROTON_USE_WINED3D=1 WINE_D3D_CONFIG=renderer=gl $e \
 			WINEDEBUG=+timestamp,+pid,+loaddll,+d3d_caps,fixme-all \
 			$P/proton run ./Crysis.exe -dx9 "$@" > $o/wine.out 2>&1 < /dev/null ;;
 	umu)
 		# shellcheck disable=SC2086
-		runuser -u gfx -- env HOME=/home/gfx XDG_RUNTIME_DIR=$RUN LIBSEAT_BACKEND=seatd \
-			cage -- env WINEPREFIX=$S/compat GAMEID=0 STORE=none PROTONPATH=$P \
+		runuser -u gfx -- env -u DBUS_SESSION_BUS_ADDRESS HOME=/home/gfx XDG_RUNTIME_DIR=$RUN LIBSEAT_BACKEND=seatd \
+			cage -- env WINEPREFIX=$S/compat GAMEID=0 STORE=none PROTONPATH=$P STEAM_COMPAT_INSTALL_PATH=$G \
 			PROTONFIXES_DISABLE=1 UMU_RUNTIME_UPDATE=0 PRESSURE_VESSEL_FILESYSTEMS_RW=/srv \
 			UMU_LOG=debug PROTON_USE_WOW64=1 PROTON_USE_WINED3D=1 WINE_D3D_CONFIG=renderer=gl $e \
 			WINEDEBUG=+timestamp,+pid,+loaddll,+d3d_caps,fixme-all \
@@ -76,13 +83,18 @@ prep)
 	mountpoint -q $G || mount -t overlay overlay -o lowerdir=/srv/crysis/game,upperdir=$S/crysis-upper,workdir=$S/crysis-work,metacopy=on,redirect_dir=on $G
 	chown -R gfx:gfx $G
 	mount | grep " $G "
-	modprobe snd-dummy && chmod o+rw /dev/snd/*
+	# udev sets the new card's nodes to root:audio 0660 after modprobe
+	# returns; the chmod waits for it.
+	modprobe snd-dummy && udevadm settle && chmod o+rw /dev/snd/*
 	aplay -l 2>&1 | head -5
 	mkdir -p $S80/umu; tar xf $C80/umu-launcher-1.4.4-zipapp.tar -C $S80; chmod -R a+rX $S80/umu
 	# The first start fetches the runtime once; the runs then set
 	# UMU_RUNTIME_UPDATE=0 so that nothing is fetched again.
 	say "crysis: umu's runtime"
-	runuser -u gfx -- env HOME=/home/gfx XDG_RUNTIME_DIR=$RUN WINEPREFIX=$S/compat GAMEID=0 STORE=none \
+	# umu resolves the program's name against the working directory, which
+	# gfx must be able to read.
+	cd /tmp || exit 1
+	runuser -u gfx -- env -u DBUS_SESSION_BUS_ADDRESS HOME=/home/gfx XDG_RUNTIME_DIR=$RUN WINEPREFIX=$S/compat GAMEID=0 STORE=none \
 		PROTONPATH=$P PROTONFIXES_DISABLE=1 PRESSURE_VESSEL_FILESYSTEMS_RW=/srv \
 		python3 $UMU wineboot.exe --version 2>&1 | tail -5
 	du -sh /home/gfx/.local/share/umu 2>/dev/null
@@ -126,8 +138,34 @@ start)
 	say "crysis: start $r $n: $*" | tee $O/run.log
 	( launch $r $O "" -DEVMODE "$@"; echo "exit $?" >> $O/run.log ) &
 	;;
+hud)
+	# On a game that `start` left at the main menu: load the owner's save 07
+	# (row 3 of LOAD GAME, by date) through the menu, turn the dialog log on,
+	# enter the suit's reboot trigger, and read back the HUD 35 s later: a
+	# screenshot, the game's Flash profiler, the dialog's line times and the
+	# hudShow flag of a save made then (run2 step 9's trial.sh).
+	n=$2; O=$OUT/crysis/$n; Y="python3 -I $R80/uinput-play.py"; V="$U/SaveGames"
+	mkdir -p $O
+	$Y at:240,275 wait:0.3 click:BTN_LEFT wait:2 at:420,413 wait:0.3 click:BTN_LEFT wait:2 \
+		at:936,348 wait:0.3 click:BTN_LEFT wait:1 shot:$O/list.png \
+		at:938,595 wait:0.3 click:BTN_LEFT wait:1.5 shot:$O/confirm.png \
+		at:566,421 wait:0.3 click:BTN_LEFT wait:45 shot:$O/loaded.png \
+		tap:KEY_GRAVE wait:1 type:"log_verbosity 4" tap:KEY_ENTER wait:0.5 \
+		type:"ds_loglevel 4" tap:KEY_ENTER wait:0.5 \
+		type:"gotoe suit_menu_and_objectives" tap:KEY_ENTER tap:KEY_GRAVE wait:35 shot:$O/after.png \
+		tap:KEY_GRAVE wait:1 type:"sys_flash_info 1" tap:KEY_ENTER tap:KEY_GRAVE wait:2 shot:$O/flash.png \
+		tap:KEY_GRAVE wait:1 type:"sys_flash_info 0" tap:KEY_ENTER wait:0.5 \
+		type:"save hud_$n" tap:KEY_ENTER wait:4 tap:KEY_GRAVE wait:1 > $O/uinput.log 2>&1
+	cp $G/Game.log $O/
+	l1=$(grep -E "SID=[0-9]+ Playing new line 1:" $O/Game.log | tail -1 | sed 's/.*now=//')
+	l2=$(grep -E "SID=[0-9]+ Playing new line 2:" $O/Game.log | tail -1 | sed 's/.*now=//')
+	h=$(grep -o -E '<Extension name="GameRules"[^>]*>' "$V/default_hud_$n.xml" | grep -o -E 'hudShow="[0-9]"|hudBroken="[0-9]"' | tr '\n' ' ')
+	mv "$V/default_hud_$n.xml" $O/ 2>/dev/null; rm -f "$V/default_hud_$n.CRYSISJMSF"
+	echo "crysis: hud $n: line 1 at ${l1:-?} s, line 2 at ${l2:-?} s, GameRules: ${h:-hudShow and hudBroken absent}" | tee -a $O/run.log
+	python3 -I -c 'import sys; a, b = float(sys.argv[1]), float(sys.argv[2]); print("crysis: Show after BootSeq: %.0f ms" % ((b + 4 - a - 6) * 1000))' "${l1:-0}" "${l2:-0}" | tee -a $O/run.log
+	;;
 stop)
 	endgame; pgrep -u gfx -l || echo "crysis: nothing runs as gfx"
 	;;
-*) echo "usage: crysis.sh prep|flyby ROUTE NAME|start ROUTE NAME [ARGS]|stop" >&2; exit 1 ;;
+*) echo "usage: crysis.sh prep|flyby ROUTE NAME|start ROUTE NAME [ARGS]|hud NAME|stop" >&2; exit 1 ;;
 esac
