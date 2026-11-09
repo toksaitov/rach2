@@ -21,8 +21,10 @@
 # JOBS processes (4) run at once, each given every JOBSth case of the
 # sample. A process that dies runs again on the cases it had left, and the
 # case it was running is `Crash`, or `Timeout` when dEQP's watchdog ended
-# it; a process that ends with cases left and none running, twice in a row
-# without a case done, leaves those cases `Missing`, as not in the program.
+# it. A process that ends with cases left and none running has met cases
+# its program does not have: when the next runs none of them, or when one
+# that ended cleanly ran none, twice in a row otherwise, they are `Missing`.
+# A first process that fails having run no case stops the run.
 # Each case that does not pass, Missing aside, then runs once more; the
 # first status is its result, and a case that passes the second time is a
 # flake. So is one that does not pass and matches a line of FLAKES, an
@@ -188,7 +190,7 @@ run_cases()
         rm -f "$work/$name.pid"
         parse "$log.out" > "$log.done"
         if [ ! -s "$log.done" ]; then
-            if [ "$n" -eq 1 ]; then
+            if [ "$n" -eq 1 ] && [ "$st" -ne 0 ]; then
                 echo "deqp: $name: $prog ran no case, status $st: $(tail -n 3 "$log.out")" >&2
                 return 1
             fi
