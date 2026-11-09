@@ -444,7 +444,7 @@ static volatile uint8_t *bochs_bo_vmap(struct drm_gem_object *obj)
 }
 
 static const struct drm_gem_object_funcs bochs_bo_funcs = {bochs_bo_free, bochs_bo_mmap, NULL, NULL,
-                                                           NULL,          bochs_bo_vmap};
+                                                           NULL,          bochs_bo_vmap, NULL};
 
 /**
  * MODE_CREATE_DUMB, Linux's drm_gem_vram_fill_create_dumb: rows of `width`
