@@ -67,42 +67,8 @@ const struct i915_id *i915_id_lookup(uint16_t device_id)
 }
 
 /**
- * Mask and clear every interrupt source of the device and clear every
- * enable, the display engine's master enable among them, as Linux's
- * ilk_irq_reset does on Haswell: the display engine's, the error
- * interrupt's, the panel self refresh's, the GT's, the power management's
- * and the south display's. Each identity register is cleared twice, since
- * it can hold a second event behind the first.
- */
-static void i915_irq_quiesce(struct i915_hw *hw)
-{
-    static const uint32_t banks[][3] = {{DEIMR, DEIER, DEIIR},
-                                        {GTIMR, GTIER, GTIIR},
-                                        {GEN6_PMIMR, GEN6_PMIER, GEN6_PMIIR},
-                                        {SDEIMR, SDEIER, SDEIIR}};
-    unsigned i;
-
-    for (i = 0; i < sizeof(banks) / sizeof(banks[0]); i++) {
-        i915_write(hw, banks[i][0], 0xffffffffu);
-        i915_posting_read(hw, banks[i][0]);
-        i915_write(hw, banks[i][1], 0);
-        i915_write(hw, banks[i][2], 0xffffffffu);
-        i915_posting_read(hw, banks[i][2]);
-        i915_write(hw, banks[i][2], 0xffffffffu);
-        i915_posting_read(hw, banks[i][2]);
-        if (banks[i][0] == DEIMR) {
-            i915_write(hw, GEN7_ERR_INT, 0xffffffffu);
-            i915_write(hw, EDP_PSR_IMR, 0xffffffffu);
-            i915_write(hw, EDP_PSR_IIR, 0xffffffffu);
-        }
-    }
-    i915_write(hw, SERR_INT, 0xffffffffu);
-}
-
-/**
- * The device's message: every source is masked, so a message is counted
- * and nothing more; the parts that unmask a source register its handling
- * here.
+ * The device's message: counted, then handled by i915_irq.c, which hands
+ * each source to the handler its owner registered.
  */
 static void i915_irq_handler(isr_params_t *params)
 {
@@ -111,6 +77,7 @@ static void i915_irq_handler(isr_params_t *params)
     for (i = 0; i < sizeof(i915_devices) / sizeof(i915_devices[0]); i++) {
         if (i915_devices[i] && i915_devices[i]->msi_vector == (int)params->vector) {
             i915_devices[i]->irqs++;
+            i915_irq_handle(i915_devices[i]);
         }
     }
 }
@@ -178,17 +145,18 @@ static void i915_devices_remove(struct drm_i915_private *i915)
 }
 
 /**
- * The DRM core's unplug hook: the device stops interrupting and its
- * message and vector are given back. The record stays until its last
- * reference.
+ * The DRM core's unplug hook: the device stops interrupting, its message
+ * and vector are given back, and its rings stop and give their pages
+ * back. The record stays until its last reference.
  */
 static void i915_unplug(struct drm_device *dev)
 {
     struct drm_i915_private *i915 = to_i915(dev);
 
-    i915_irq_quiesce(&i915->hw);
+    i915_irq_reset(i915);
     i915_msi_stop(i915);
     i915_devices_remove(i915);
+    i915_gt_fini(i915);
 }
 
 /** The DRM core's release hook: give the scratch page back and free the
@@ -248,7 +216,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     command = pci_read_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND);
     pci_enable_memory_space(&i915->pci);
     pci_enable_bus_master(&i915->pci);
-    i915_irq_quiesce(&i915->hw);
+    i915_irq_reset(i915);
     err = i915_base_init(i915);
     if (err == 0) {
         err = i915_devices_add(i915);
@@ -260,6 +228,12 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
         return err;
     }
     i915_msi_start(i915);
+    i915_irq_install(i915);
+    if (i915_gt_init(i915) < 0) {
+        klog(KLOG_ERR, "i915", "rings: not started; the GPU takes no work");
+    } else {
+        (void)i915_firstlight(i915);
+    }
 
     klog(KLOG_INFO, "i915",
          "found: %02x:%02x.%x: haswell%s (device id %04x), graphics 7.5, display version "
@@ -279,9 +253,10 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     err = drm_dev_register(&i915->drm);
     if (err < 0) {
         klog(KLOG_ERR, "i915", "register: error %d", (int)err);
-        i915_irq_quiesce(&i915->hw);
+        i915_irq_reset(i915);
         i915_msi_stop(i915);
         i915_devices_remove(i915);
+        i915_gt_fini(i915);
         pci_write_config16(pdev->bus, pdev->device, pdev->function, PCI_COMMAND, command);
         drm_dev_put(&i915->drm);
         return err;

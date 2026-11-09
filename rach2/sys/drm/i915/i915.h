@@ -7,6 +7,7 @@
 
 #include "../drm.h"
 #include "../../lib/spinlock.h"
+#include "../../proc/wait_queue.h"
 #include "i915_hw.h"
 
 /*
@@ -28,7 +29,7 @@
  *
  * Interrupts. Every source is masked and its enable cleared before the
  * device's message is enabled, and a source is unmasked only once the
- * handler of its owner is registered.
+ * handler of its owner is registered (i915_irq_register).
  */
 
 /* What Linux 6.12's device table (i915_pci.c, hsw_gt2_info) says of the
@@ -155,6 +156,109 @@ struct i915_ggtt {
 };
 
 /*
+ * The interrupt banks of Haswell (i915_irq.c): the GT's, power
+ * management's, the display engine's and the south display's, each an
+ * identity, mask and enable register, with a handler for each bit.
+ */
+#define I915_IRQ_GT    0
+#define I915_IRQ_PM    1
+#define I915_IRQ_DE    2
+#define I915_IRQ_SDE   3
+#define I915_IRQ_BANKS 4
+
+struct drm_i915_private;
+
+/* A source's handler: `iir` holds the bits of its bank that were set and
+ * that it registered, already acknowledged. It runs in the interrupt, with
+ * the interrupt mask's lock held, and may only read and write registers,
+ * signal, count and wake. */
+typedef void (*i915_irq_fn)(struct drm_i915_private *i915, uint32_t iir, void *data);
+
+/*
+ * The interrupt state. `lock` is the interrupt mask's lock of i915.h's
+ * order, over the rest. `imr` and `ier` are what the driver last wrote to
+ * each bank's mask and enable; a bit is enabled only while a handler is
+ * registered for it, and unmasked only while it is enabled. `fn` and
+ * `data` are the handlers by bank and bit. `messages` counts the messages
+ * taken, `spurious` those that found no identity bit set, and `unclaimed`
+ * the identity bits that had no handler, each of which is masked and
+ * disabled again when it is seen. `installed` is set once the master
+ * enable is on.
+ */
+struct i915_irq {
+    struct spinlock lock;
+    uint32_t imr[I915_IRQ_BANKS];
+    uint32_t ier[I915_IRQ_BANKS];
+    i915_irq_fn fn[I915_IRQ_BANKS][32];
+    void *data[I915_IRQ_BANKS][32];
+    uint32_t messages;
+    uint32_t spurious;
+    uint32_t unclaimed;
+    uint8_t installed;
+};
+
+/* The engines this part of the driver starts, the render and blitter
+ * rings, by index into `engine`. */
+#define I915_RCS0        0
+#define I915_BCS0        1
+#define I915_NUM_ENGINES 2
+
+/* The bytes of a ring, Linux's legacy ring (SZ_16K). */
+#define I915_RING_SIZE 16384u
+
+/*
+ * An engine and its ring (i915_ring.c). `mmio_base` is the base of its
+ * registers, `hws_pga` the register of its status page's address, and
+ * `irq_bit` its user interrupt, one bit in the GT bank and in its own
+ * RING_IMR.
+ *
+ * The status page is one page at `hws`, the kernel's address, mapped at
+ * `hws_ggtt` in the global GTT; the chip writes breadcrumbs into it. The
+ * ring is `ring_size` bytes at `ring`, virtually contiguous, mapped at
+ * `ring_ggtt`. `tail` is the offset the next command goes to, and `head`
+ * the head as the driver last read it. Both are cached in the LLC, which
+ * the chip snoops.
+ *
+ * Breadcrumbs. `seqno` is the last sequence number emitted, and the
+ * status page's dword I915_GEM_HWS_SEQNO the last the chip has written.
+ * `wq` holds the processes that wait for one, woken from the user
+ * interrupt, which is unmasked while `irq_refs` is above 0. `irq_seen`
+ * counts the user interrupts taken. `running` is set once the ring has
+ * started.
+ */
+struct i915_engine {
+    const char *name;
+    uint32_t mmio_base;
+    uint32_t hws_pga;
+    uint32_t irq_bit;
+    uint32_t *hws;
+    uint32_t hws_ggtt;
+    uint32_t *ring;
+    uint32_t ring_size;
+    uint32_t ring_ggtt;
+    uint32_t head;
+    uint32_t tail;
+    uint32_t seqno;
+    uint32_t irq_refs;
+    uint32_t irq_seen;
+    wait_queue_t wq;
+    uint8_t running;
+};
+
+/*
+ * The GT's own objects (i915_ring.c): the status pages and rings, and
+ * first light's page, which take the global GTT from its top down, from
+ * `ggtt_top` to `ggtt_bottom`, the lowest offset they use. An allocator
+ * of the GTT leaves [ggtt_bottom, total) alone. Space comes back only when
+ * the last taken is given back, and all of it when the rings stop.
+ */
+struct i915_gt {
+    uint64_t ggtt_top;
+    uint64_t ggtt_bottom;
+    struct i915_engine engine[I915_NUM_ENGINES];
+};
+
+/*
  * A bound device. `drm` is first, and its `driver_priv` points back here.
  * `pci` is the function as the probe found it. `hw` reaches its registers.
  * `mmio_phys` is BAR 0's physical address and `gmadr_phys` BAR 2's, the
@@ -181,6 +285,8 @@ struct drm_i915_private {
     struct i915_power power;
     struct i915_stolen stolen;
     struct i915_ggtt ggtt;
+    struct i915_irq irq;
+    struct i915_gt gt;
 };
 
 /* The driver's device of a DRM device it bound. */
@@ -347,5 +453,175 @@ int32_t i915_ggtt_clear_range(struct drm_i915_private *i915, uint64_t offset, ui
 
 /** The entry that maps the GTT offset `offset`; all ones past the GTT. */
 uint32_t i915_ggtt_pte(struct drm_i915_private *i915, uint64_t offset);
+
+/* ---- i915_irq.c ---- */
+
+/**
+ * Mask and clear every interrupt source of the device and clear every
+ * enable, the display engine's master enable among them, as Linux's
+ * ilk_irq_reset does on Haswell, and forget every handler: the state the
+ * bind starts from and the unplug leaves. Takes the interrupt mask's lock.
+ */
+void i915_irq_reset(struct drm_i915_private *i915);
+
+/**
+ * Turn the display engine's master enable on, every source still masked
+ * and disabled, once the device's message is enabled, as Linux's
+ * ilk_irq_postinstall does before its owners unmask their sources.
+ */
+void i915_irq_install(struct drm_i915_private *i915);
+
+/**
+ * Register `fn` for the bits `bits` of the bank `bank` and enable them, so
+ * that each latches in the identity register once unmasked; they stay
+ * masked until `i915_irq_unmask`. A south display source also enables the
+ * display engine's PCH event, which carries it.
+ *
+ * @return 0; -EINVAL for an unknown bank, no bits or the display engine's
+ *         master bit; -EBUSY when a bit has a handler already.
+ */
+int32_t i915_irq_register(struct drm_i915_private *i915, int bank, uint32_t bits, i915_irq_fn fn,
+                          void *data);
+
+/** Mask and disable the bits `bits` of `bank` and forget their handler. */
+void i915_irq_unregister(struct drm_i915_private *i915, int bank, uint32_t bits);
+
+/** Unmask the bits `bits` of `bank` that are registered, with a posting
+ * read, as Linux's gen5_gt_enable_irq; a bit without a handler stays
+ * masked. Takes the interrupt mask's lock, with interrupts off. */
+void i915_irq_unmask(struct drm_i915_private *i915, int bank, uint32_t bits);
+
+/** Mask the bits `bits` of `bank` again, with a posting read. */
+void i915_irq_mask(struct drm_i915_private *i915, int bank, uint32_t bits);
+
+/**
+ * The device's interrupt, as Linux's ilk_irq_handler: the master enable
+ * and the south display's off, then each bank's identity read, written
+ * back and handed to its handlers, the GT's first, then the display
+ * engine's with the south display's behind its PCH event, then power
+ * management's; then the enables restored. Counts the message, a message
+ * with no bit set as spurious, and a bit with no handler as unclaimed,
+ * which it masks and disables. Any context the handler runs in.
+ */
+void i915_irq_handle(struct drm_i915_private *i915);
+
+/* ---- i915_ring.c ---- */
+
+/**
+ * Set up and start the render and blitter rings, as Linux's
+ * xcs_resume: for each a status page and a ring in the global GTT, the
+ * ring stopped and emptied, the status page's address written and the
+ * TLB flushed, the PPGTT's registers (`i915_ppgtt_enable_ring`), and the
+ * ring started with RING_VALID, each wait bounded; then its user
+ * interrupt registered, masked until a waiter needs it. Holds forcewake
+ * throughout.
+ *
+ * @return 0; -ENOMEM; -ENOSPC when the GTT has no room at its top; -EIO
+ *         when a ring would not stop or start, its wait named in
+ *         `hw.last_timeout`. On an error every ring is torn down.
+ */
+int32_t i915_gt_init(struct drm_i915_private *i915);
+
+/** Stop every ring, unregister its interrupt, clear its GTT entries and
+ * free its pages; for the unplug and a failed bind. */
+void i915_gt_fini(struct drm_i915_private *i915);
+
+/**
+ * Take `bytes` from the top of the global GTT's free space for one of the
+ * GT's own objects, page-aligned, and store its offset in `*offset`.
+ *
+ * @return 0, or -ENOSPC when it would reach a kept range or offset 0.
+ */
+int32_t i915_gt_ggtt_take(struct drm_i915_private *i915, uint32_t bytes, uint32_t *offset);
+
+/**
+ * Allocate `npages` pages for the chip, zeroed, virtually contiguous in
+ * the kernel, and map them in the global GTT at the cache level `cache`
+ * at an offset `i915_gt_ggtt_take` gives.
+ *
+ * @return the kernel's address and the GTT offset in `*ggtt`, or NULL
+ *         with nothing held.
+ */
+void *i915_gt_pages_map(struct drm_i915_private *i915, uint32_t npages, int cache, uint32_t *ggtt);
+
+/** Point the pages' entries at the scratch page again and free them; the
+ * GTT's space comes back when it was the last taken. */
+void i915_gt_pages_unmap(struct drm_i915_private *i915, void *vaddr, uint32_t npages,
+                         uint32_t ggtt);
+
+/**
+ * Make room for `ndw` dwords, an even number, in `engine`'s ring and
+ * return where they go: past the end of the ring the rest is filled with
+ * MI_NOOP and the commands start again at 0, as Linux's intel_ring_begin;
+ * a ring without room waits, 10 ms at most, for the chip's head to move.
+ *
+ * @return the address, or NULL when the ring is not running, `ndw` is odd
+ *         or too large, or the wait reached its bound ("ring space").
+ */
+uint32_t *i915_ring_begin(struct i915_engine *engine, struct drm_i915_private *i915, uint32_t ndw);
+
+/** Hand the chip what was written since `i915_ring_begin`: the writes
+ * ordered before the tail's, then RING_TAIL written. */
+void i915_ring_advance(struct i915_engine *engine, struct drm_i915_private *i915);
+
+/**
+ * Emit a breadcrumb on `engine`: MI_STORE_DWORD_INDEX of the next sequence
+ * number to the status page's I915_GEM_HWS_SEQNO and MI_USER_INTERRUPT,
+ * and hand it to the chip.
+ *
+ * @return the sequence number, or 0 when the ring had no room, which is
+ *         never a sequence number.
+ */
+uint32_t i915_engine_emit_breadcrumb(struct drm_i915_private *i915, struct i915_engine *engine);
+
+/** Whether `engine` has written the breadcrumb `seqno`, in the order of
+ * sequence numbers that wrap. */
+int i915_engine_passed(const struct i915_engine *engine, uint32_t seqno);
+
+/** Take a reference to `engine`'s user interrupt, unmasking it with the
+ * first, as Linux's irq_enable: RING_IMR, then the GT's mask. */
+void i915_engine_irq_get(struct drm_i915_private *i915, struct i915_engine *engine);
+
+/** Drop a reference to `engine`'s user interrupt, masking it with the
+ * last. */
+void i915_engine_irq_put(struct drm_i915_private *i915, struct i915_engine *engine);
+
+/**
+ * Wait until `engine` has written the breadcrumb `seqno`, for at most
+ * `timeout_us`: asleep on the engine's queue, woken by the user
+ * interrupt, when a process waits, and polling the status page in bounded
+ * waits when none does, as at boot. The interrupt is unmasked for the
+ * wait.
+ *
+ * @return 0, -ETIME at the timeout, or -EIO when the ring is not running
+ *         and the breadcrumb not written.
+ */
+int32_t i915_engine_wait(struct drm_i915_private *i915, struct i915_engine *engine, uint32_t seqno,
+                         uint32_t timeout_us);
+
+/* ---- i915_ppgtt.c ---- */
+
+/**
+ * Point `engine`'s ring at the aliasing PPGTT, at ring start and after a
+ * reset, as Linux's set_pp_dir: until the PPGTT exists it writes nothing
+ * and the ring runs on the global GTT.
+ *
+ * @return 0.
+ */
+int32_t i915_ppgtt_enable_ring(struct drm_i915_private *i915, struct i915_engine *engine);
+
+/* ---- i915_firstlight.c ---- */
+
+/**
+ * First light, under `rach2.i915.firstlight`: the render ring writes a
+ * value to a page of the global GTT with MI_STORE_DWORD_IMM and a
+ * breadcrumb behind it, and the processor reads the value back. Logs
+ * `i915: first light: ok` or the failure by name; every wait is bounded.
+ *
+ * @return 0, -ENODEV without the option, -EIO when the ring is not
+ *         running, -ENOMEM, -ETIME when the breadcrumb or the interrupt
+ *         did not come, or -EIO when the value read back is wrong.
+ */
+int32_t i915_firstlight(struct drm_i915_private *i915);
 
 #endif /* _I915_H_ */
