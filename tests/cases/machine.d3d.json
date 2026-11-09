@@ -6,551 +6,68 @@
     {
       "case_id": "machine.d3d.9",
       "behavior": "The d3d row 9 runs as test on lavapipe and matches each unit with the stored Debian reference; every probe reads its pixels back",
-      "units": [
-        "tests/graphics/d3d/run.py",
-        "GE-Proton11-12",
-        "Direct3D 9"
-      ],
+      "units": ["tests/graphics/d3d/run.py", "GE-Proton11-12", "Direct3D 9"],
       "domain": "machine",
-      "architectures": [
-        "x86_64"
-      ],
-      "workload": {
-        "arguments": [],
-        "inputs": {
-          "row": "9"
-        },
-        "repetitions": 1,
-        "seed": null
-      },
-      "requirements": {
-        "host_api": "c",
-        "tools": [],
-        "features": {},
-        "hosts": [
-          "linux"
-        ]
-      },
-      "execution": {
-        "program": "d3d_scenario",
-        "stdin": null,
-        "role": "ordinary",
-        "privileges": "an ordinary user",
-        "isolation": [
-          {
-            "fixture": "scratch"
-          }
-        ],
-        "children": "none",
-        "cleanup": "the runner kills and reaps its Wine server and Xvfb and removes its private prefix and shader cache on every exit; libetude-case stops QEMU and removes passed overlays, keeping failed overlays and their unit logs"
-      },
-      "steps": [
-        {
-          "step_id": "boot",
-          "stage": "boot",
-          "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"
-        },
-        {
-          "step_id": "row",
-          "stage": "execute",
-          "machine": "gnu",
-          "does": "mount the second disk read-only and run the named Direct3D row as the ordinary test account through the guest channel"
-        }
-      ],
-      "machines": [
-        {
-          "machine_id": "gnu",
-          "qemu": {
-            "kernel": "kernel",
-            "initrd": null,
-            "disks": [
-              {
-                "name": "gnu-disk",
-                "base": "gnu-image",
-                "cluster_bytes": 65536,
-                "bus": "ahci"
-              },
-              {
-                "name": "d3d-data",
-                "base": "d3d-data",
-                "cluster_bytes": 65536,
-                "bus": "ahci"
-              }
-            ],
-            "cpu": "max",
-            "processors": 8,
-            "memory_bytes": 17179869184,
-            "firmware": "direct",
-            "devices": [],
-            "boot_options": [
-              "rach2.root=ext2"
-            ],
-            "display": "virtio-vga"
-          },
-          "console": "serial",
-          "qmp": true,
-          "helper": false
-        }
-      ],
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"row": "9"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "d3d_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "the runner kills and reaps its Wine server and Xvfb and removes its private prefix and shader cache on every exit; libetude-case stops QEMU and removes passed overlays, keeping failed overlays and their unit logs"},
+      "steps": [{"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"}, {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "mount the second disk read-only and run the named Direct3D row as the ordinary test account through the guest channel"}],
+      "machines": [{"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "d3d-data", "base": "d3d-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 8, "memory_bytes": 17179869184, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}],
       "services": [],
-      "assertions": [
-        {
-          "assertion_id": "row",
-          "checks": "the guest runner exits 0 and prints the exact D3DROW OK token after comparing each unit, its exit, summaries and pixels or its recorded Linux progress marker",
-          "source": "scenario"
-        }
-      ],
+      "assertions": [{"assertion_id": "row", "checks": "the guest runner exits 0 and prints the exact D3DROW OK token after comparing each unit, its exit, summaries and pixels or its recorded Linux progress marker", "source": "scenario"}],
       "branches": [],
-      "termination": {
-        "end": "exited",
-        "value": 0
-      },
-      "progress": [
-        {
-          "witness_id": "stage",
-          "kind": "step",
-          "means": "a step of the manifest has ended",
-          "limit": 2
-        }
-      ],
-      "bounds": {
-        "case": {
-          "floor_us": 5000000,
-          "initial_us": 1320000000,
-          "ceiling_us": 3960000000
-        },
-        "gap": {
-          "floor_us": 1000000,
-          "initial_us": 900000000,
-          "ceiling_us": 2700000000
-        },
-        "stages": {
-          "prepare": {
-            "floor_us": 100000,
-            "initial_us": 30000000,
-            "ceiling_us": 120000000
-          },
-          "boot": {
-            "floor_us": 1000000,
-            "initial_us": 900000000,
-            "ceiling_us": 1800000000
-          },
-          "cleanup": {
-            "floor_us": 100000,
-            "initial_us": 30000000,
-            "ceiling_us": 120000000
-          }
-        }
-      },
-      "resources": {
-        "cpu_millis": 8000,
-        "cpu_ceiling_millis": 8000,
-        "memory_bytes": 18253611008,
-        "disk_bytes": 21474836480,
-        "locks": [],
-        "ports": 0,
-        "loop_devices": 0
-      },
-      "prepare": [
-        {
-          "name": "demo-password",
-          "node": "tests/cases/credentials/rach2_demo_password",
-          "per_architecture": false
-        },
-        {
-          "name": "kernel",
-          "node": "rach2/kernel",
-          "per_architecture": true
-        },
-        {
-          "name": "gnu-image",
-          "node": "images/gnu-test.disk",
-          "per_architecture": true
-        },
-        {
-          "name": "d3d-data",
-          "node": "tests/graphics/d3d/data.ext2",
-          "per_architecture": false
-        },
-        {
-          "name": "d3d_scenario",
-          "node": "tests/cases/machine/d3d_scenario",
-          "per_architecture": false
-        }
-      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 1320000000, "ceiling_us": 3960000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 2700000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 8000, "cpu_ceiling_millis": 8000, "memory_bytes": 18253611008, "disk_bytes": 21474836480, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [{"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}, {"name": "kernel", "node": "rach2/kernel", "per_architecture": true}, {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true}, {"name": "d3d-data", "node": "tests/graphics/d3d/data.ext2", "per_architecture": false}, {"name": "d3d_scenario", "node": "tests/cases/machine/d3d_scenario", "per_architecture": false}],
       "timing": [],
-      "native": {
-        "plan": "none",
-        "class": "image",
-        "reason": "the row reads its immutable payload disk in a new QEMU boot and a private Proton prefix; the same guest runner is used directly for the Debian reference"
-      }
+      "native": {"plan": "none", "class": "image", "reason": "the row reads its immutable payload disk in a new QEMU boot and a private Proton prefix; the same guest runner is used directly for the Debian reference"}
     },
     {
       "case_id": "machine.d3d.11",
       "behavior": "The d3d row 11 runs as test on lavapipe and matches each unit with the stored Debian reference; every probe reads its pixels back",
-      "units": [
-        "tests/graphics/d3d/run.py",
-        "GE-Proton11-12",
-        "Direct3D 11"
-      ],
+      "units": ["tests/graphics/d3d/run.py", "GE-Proton11-12", "Direct3D 11"],
       "domain": "machine",
-      "architectures": [
-        "x86_64"
-      ],
-      "workload": {
-        "arguments": [],
-        "inputs": {
-          "row": "11"
-        },
-        "repetitions": 1,
-        "seed": null
-      },
-      "requirements": {
-        "host_api": "c",
-        "tools": [],
-        "features": {},
-        "hosts": [
-          "linux"
-        ]
-      },
-      "execution": {
-        "program": "d3d_scenario",
-        "stdin": null,
-        "role": "ordinary",
-        "privileges": "an ordinary user",
-        "isolation": [
-          {
-            "fixture": "scratch"
-          }
-        ],
-        "children": "none",
-        "cleanup": "the runner kills and reaps its Wine server and Xvfb and removes its private prefix and shader cache on every exit; libetude-case stops QEMU and removes passed overlays, keeping failed overlays and their unit logs"
-      },
-      "steps": [
-        {
-          "step_id": "boot",
-          "stage": "boot",
-          "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"
-        },
-        {
-          "step_id": "row",
-          "stage": "execute",
-          "machine": "gnu",
-          "does": "mount the second disk read-only and run the named Direct3D row as the ordinary test account through the guest channel"
-        }
-      ],
-      "machines": [
-        {
-          "machine_id": "gnu",
-          "qemu": {
-            "kernel": "kernel",
-            "initrd": null,
-            "disks": [
-              {
-                "name": "gnu-disk",
-                "base": "gnu-image",
-                "cluster_bytes": 65536,
-                "bus": "ahci"
-              },
-              {
-                "name": "d3d-data",
-                "base": "d3d-data",
-                "cluster_bytes": 65536,
-                "bus": "ahci"
-              }
-            ],
-            "cpu": "max",
-            "processors": 8,
-            "memory_bytes": 17179869184,
-            "firmware": "direct",
-            "devices": [],
-            "boot_options": [
-              "rach2.root=ext2"
-            ],
-            "display": "virtio-vga"
-          },
-          "console": "serial",
-          "qmp": true,
-          "helper": false
-        }
-      ],
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"row": "11"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "d3d_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "the runner kills and reaps its Wine server and Xvfb and removes its private prefix and shader cache on every exit; libetude-case stops QEMU and removes passed overlays, keeping failed overlays and their unit logs"},
+      "steps": [{"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"}, {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "mount the second disk read-only and run the named Direct3D row as the ordinary test account through the guest channel"}],
+      "machines": [{"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "d3d-data", "base": "d3d-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 8, "memory_bytes": 17179869184, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}],
       "services": [],
-      "assertions": [
-        {
-          "assertion_id": "row",
-          "checks": "the guest runner exits 0 and prints the exact D3DROW OK token after comparing each unit, its exit, summaries and pixels or its recorded Linux progress marker",
-          "source": "scenario"
-        }
-      ],
+      "assertions": [{"assertion_id": "row", "checks": "the guest runner exits 0 and prints the exact D3DROW OK token after comparing each unit, its exit, summaries and pixels or its recorded Linux progress marker", "source": "scenario"}],
       "branches": [],
-      "termination": {
-        "end": "exited",
-        "value": 0
-      },
-      "progress": [
-        {
-          "witness_id": "stage",
-          "kind": "step",
-          "means": "a step of the manifest has ended",
-          "limit": 2
-        }
-      ],
-      "bounds": {
-        "case": {
-          "floor_us": 5000000,
-          "initial_us": 1320000000,
-          "ceiling_us": 3960000000
-        },
-        "gap": {
-          "floor_us": 1000000,
-          "initial_us": 900000000,
-          "ceiling_us": 2700000000
-        },
-        "stages": {
-          "prepare": {
-            "floor_us": 100000,
-            "initial_us": 30000000,
-            "ceiling_us": 120000000
-          },
-          "boot": {
-            "floor_us": 1000000,
-            "initial_us": 900000000,
-            "ceiling_us": 1800000000
-          },
-          "cleanup": {
-            "floor_us": 100000,
-            "initial_us": 30000000,
-            "ceiling_us": 120000000
-          }
-        }
-      },
-      "resources": {
-        "cpu_millis": 8000,
-        "cpu_ceiling_millis": 8000,
-        "memory_bytes": 18253611008,
-        "disk_bytes": 21474836480,
-        "locks": [],
-        "ports": 0,
-        "loop_devices": 0
-      },
-      "prepare": [
-        {
-          "name": "demo-password",
-          "node": "tests/cases/credentials/rach2_demo_password",
-          "per_architecture": false
-        },
-        {
-          "name": "kernel",
-          "node": "rach2/kernel",
-          "per_architecture": true
-        },
-        {
-          "name": "gnu-image",
-          "node": "images/gnu-test.disk",
-          "per_architecture": true
-        },
-        {
-          "name": "d3d-data",
-          "node": "tests/graphics/d3d/data.ext2",
-          "per_architecture": false
-        },
-        {
-          "name": "d3d_scenario",
-          "node": "tests/cases/machine/d3d_scenario",
-          "per_architecture": false
-        }
-      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 1320000000, "ceiling_us": 3960000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 2700000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 8000, "cpu_ceiling_millis": 8000, "memory_bytes": 18253611008, "disk_bytes": 21474836480, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [{"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}, {"name": "kernel", "node": "rach2/kernel", "per_architecture": true}, {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true}, {"name": "d3d-data", "node": "tests/graphics/d3d/data.ext2", "per_architecture": false}, {"name": "d3d_scenario", "node": "tests/cases/machine/d3d_scenario", "per_architecture": false}],
       "timing": [],
-      "native": {
-        "plan": "none",
-        "class": "image",
-        "reason": "the row reads its immutable payload disk in a new QEMU boot and a private Proton prefix; the same guest runner is used directly for the Debian reference"
-      }
+      "native": {"plan": "none", "class": "image", "reason": "the row reads its immutable payload disk in a new QEMU boot and a private Proton prefix; the same guest runner is used directly for the Debian reference"}
     },
     {
       "case_id": "machine.d3d.12",
       "behavior": "The d3d row 12 runs as test on lavapipe and matches each unit with the stored Debian reference; every probe reads its pixels back",
-      "units": [
-        "tests/graphics/d3d/run.py",
-        "GE-Proton11-12",
-        "Direct3D 12"
-      ],
+      "units": ["tests/graphics/d3d/run.py", "GE-Proton11-12", "Direct3D 12"],
       "domain": "machine",
-      "architectures": [
-        "x86_64"
-      ],
-      "workload": {
-        "arguments": [],
-        "inputs": {
-          "row": "12"
-        },
-        "repetitions": 1,
-        "seed": null
-      },
-      "requirements": {
-        "host_api": "c",
-        "tools": [],
-        "features": {},
-        "hosts": [
-          "linux"
-        ]
-      },
-      "execution": {
-        "program": "d3d_scenario",
-        "stdin": null,
-        "role": "ordinary",
-        "privileges": "an ordinary user",
-        "isolation": [
-          {
-            "fixture": "scratch"
-          }
-        ],
-        "children": "none",
-        "cleanup": "the runner kills and reaps its Wine server and Xvfb and removes its private prefix and shader cache on every exit; libetude-case stops QEMU and removes passed overlays, keeping failed overlays and their unit logs"
-      },
-      "steps": [
-        {
-          "step_id": "boot",
-          "stage": "boot",
-          "machine": "gnu",
-          "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"
-        },
-        {
-          "step_id": "row",
-          "stage": "execute",
-          "machine": "gnu",
-          "does": "mount the second disk read-only and run the named Direct3D row as the ordinary test account through the guest channel"
-        }
-      ],
-      "machines": [
-        {
-          "machine_id": "gnu",
-          "qemu": {
-            "kernel": "kernel",
-            "initrd": null,
-            "disks": [
-              {
-                "name": "gnu-disk",
-                "base": "gnu-image",
-                "cluster_bytes": 65536,
-                "bus": "ahci"
-              },
-              {
-                "name": "d3d-data",
-                "base": "d3d-data",
-                "cluster_bytes": 65536,
-                "bus": "ahci"
-              }
-            ],
-            "cpu": "max",
-            "processors": 8,
-            "memory_bytes": 17179869184,
-            "firmware": "direct",
-            "devices": [],
-            "boot_options": [
-              "rach2.root=ext2"
-            ],
-            "display": "virtio-vga"
-          },
-          "console": "serial",
-          "qmp": true,
-          "helper": false
-        }
-      ],
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"row": "12"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "d3d_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "the runner kills and reaps its Wine server and Xvfb and removes its private prefix and shader cache on every exit; libetude-case stops QEMU and removes passed overlays, keeping failed overlays and their unit logs"},
+      "steps": [{"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2, wait for the root, the login prompt and init's record that it started sshd, then for the server's answer on the case's port"}, {"step_id": "row", "stage": "execute", "machine": "gnu", "does": "mount the second disk read-only and run the named Direct3D row as the ordinary test account through the guest channel"}],
+      "machines": [{"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}, {"name": "d3d-data", "base": "d3d-data", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 8, "memory_bytes": 17179869184, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}],
       "services": [],
-      "assertions": [
-        {
-          "assertion_id": "row",
-          "checks": "the guest runner exits 0 and prints the exact D3DROW OK token after comparing each unit, its exit, summaries and pixels or its recorded Linux progress marker",
-          "source": "scenario"
-        }
-      ],
+      "assertions": [{"assertion_id": "row", "checks": "the guest runner exits 0 and prints the exact D3DROW OK token after comparing each unit, its exit, summaries and pixels or its recorded Linux progress marker", "source": "scenario"}],
       "branches": [],
-      "termination": {
-        "end": "exited",
-        "value": 0
-      },
-      "progress": [
-        {
-          "witness_id": "stage",
-          "kind": "step",
-          "means": "a step of the manifest has ended",
-          "limit": 2
-        }
-      ],
-      "bounds": {
-        "case": {
-          "floor_us": 5000000,
-          "initial_us": 1320000000,
-          "ceiling_us": 3960000000
-        },
-        "gap": {
-          "floor_us": 1000000,
-          "initial_us": 900000000,
-          "ceiling_us": 2700000000
-        },
-        "stages": {
-          "prepare": {
-            "floor_us": 100000,
-            "initial_us": 30000000,
-            "ceiling_us": 120000000
-          },
-          "boot": {
-            "floor_us": 1000000,
-            "initial_us": 900000000,
-            "ceiling_us": 1800000000
-          },
-          "cleanup": {
-            "floor_us": 100000,
-            "initial_us": 30000000,
-            "ceiling_us": 120000000
-          }
-        }
-      },
-      "resources": {
-        "cpu_millis": 8000,
-        "cpu_ceiling_millis": 8000,
-        "memory_bytes": 18253611008,
-        "disk_bytes": 21474836480,
-        "locks": [],
-        "ports": 0,
-        "loop_devices": 0
-      },
-      "prepare": [
-        {
-          "name": "demo-password",
-          "node": "tests/cases/credentials/rach2_demo_password",
-          "per_architecture": false
-        },
-        {
-          "name": "kernel",
-          "node": "rach2/kernel",
-          "per_architecture": true
-        },
-        {
-          "name": "gnu-image",
-          "node": "images/gnu-test.disk",
-          "per_architecture": true
-        },
-        {
-          "name": "d3d-data",
-          "node": "tests/graphics/d3d/data.ext2",
-          "per_architecture": false
-        },
-        {
-          "name": "d3d_scenario",
-          "node": "tests/cases/machine/d3d_scenario",
-          "per_architecture": false
-        }
-      ],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [{"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 2}],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 1320000000, "ceiling_us": 3960000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 2700000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 30000000, "ceiling_us": 120000000}}},
+      "resources": {"cpu_millis": 8000, "cpu_ceiling_millis": 8000, "memory_bytes": 18253611008, "disk_bytes": 21474836480, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [{"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false}, {"name": "kernel", "node": "rach2/kernel", "per_architecture": true}, {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true}, {"name": "d3d-data", "node": "tests/graphics/d3d/data.ext2", "per_architecture": false}, {"name": "d3d_scenario", "node": "tests/cases/machine/d3d_scenario", "per_architecture": false}],
       "timing": [],
-      "native": {
-        "plan": "none",
-        "class": "image",
-        "reason": "the row reads its immutable payload disk in a new QEMU boot and a private Proton prefix; the same guest runner is used directly for the Debian reference"
-      }
+      "native": {"plan": "none", "class": "image", "reason": "the row reads its immutable payload disk in a new QEMU boot and a private Proton prefix; the same guest runner is used directly for the Debian reference"}
     }
   ]
 }
