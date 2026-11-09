@@ -1,0 +1,60 @@
+.Dd November 10, 2026
+.Dt DESKTOP 7
+.Os
+.Sh NAME
+.Nm desktop
+.Nd Weston session, input and sound on the GNU system
+.Sh DESCRIPTION
+The GNU root starts Weston with kiosk-shell as the ordinary account
+.Ql desktop ,
+uid 1001, with a locked password.
+The account belongs to the seat, video, render, input and audio groups.
+Root can run a program as that account with
+.Ql su -s /bin/bash desktop .
+.Pp
+.Xr init 8
+supervises
+.Pa /usr/libexec/rach2-desktop .
+It starts Debian's systemd-udevd, triggers existing devices, waits for
+their events, then starts seatd as root with
+.Ql SEATD_VTBOUND=0 .
+The kernel has no virtual terminal interface.
+The seat socket belongs to the seat group.
+The user's session starts after the socket exists.
+.Pp
+The session has its own D-Bus bus and runtime directory,
+.Pa /run/user/1001 ,
+owned by desktop with mode 0700.
+Weston uses headless with Pixman when no connector is connected.
+A connected display uses DRM with Pixman, or GL when a render node exists.
+.Pp
+A program started from another session needs
+.Ql XDG_RUNTIME_DIR=/run/user/1001 ,
+.Ql WAYLAND_DISPLAY=wayland-0
+and
+.Ql PULSE_SERVER=unix:/run/user/1001/pulse/native .
+The compositor and sound server's output goes to
+.Pa /var/log/services .
+.Sh SOUND
+PulseAudio loads module-oss over
+.Pa /dev/dsp
+without mmap.
+Browsers use the user's native PulseAudio socket.
+ALSA's default PCM converts formats with plug and opens its OSS plugin;
+its control device is
+.Pa /dev/mixer .
+The kernel mixes both routes.
+.Sh FILES
+.Bl -tag -width /etc/xdg/weston/weston.ini
+.It Pa /etc/xdg/weston/weston.ini
+Compositor shell, Xwayland and idle settings.
+.It Pa /etc/pulse/rach2.pa
+PulseAudio modules.
+.It Pa /etc/asound.conf
+ALSA's default PCM and control device.
+.El
+.Sh SEE ALSO
+.Xr pulseaudio 1 ,
+.Xr weston 1 ,
+.Xr input 4 ,
+.Xr init 8

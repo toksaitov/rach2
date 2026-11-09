@@ -1,0 +1,46 @@
+#!/bin/bash
+# Run the compositor and sound server under one desktop session bus.
+set -eu
+export HOME=/home/desktop USER=desktop LOGNAME=desktop
+export XDG_RUNTIME_DIR=/run/user/1001
+export LIBSEAT_BACKEND=seatd SEATD_SOCK=/run/seatd.sock
+export WAYLAND_DISPLAY=wayland-0
+export PULSE_SERVER=unix:$XDG_RUNTIME_DIR/pulse/native
+export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=Weston
+if [ "${1:-}" != --bus ]; then
+    unset DBUS_SESSION_BUS_ADDRESS
+    exec dbus-run-session -- "$0" --bus
+fi
+pulse='' weston=''
+cleanup()
+{
+    trap - EXIT HUP INT TERM
+    for child in "$weston" "$pulse"; do
+        [ -z "$child" ] || kill "$child" 2>/dev/null || :
+    done
+    for child in "$weston" "$pulse"; do
+        [ -z "$child" ] || wait "$child" 2>/dev/null || :
+    done
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+pulseaudio --daemonize=no --use-pid-file=no --exit-idle-time=-1 \
+    --disallow-exit --file=/etc/pulse/rach2.pa &
+pulse=$!
+backend=headless renderer=pixman
+for status in /sys/class/drm/card*-*/status; do
+    [ -r "$status" ] || continue
+    if [ "$(cat "$status")" = connected ]; then
+        backend=drm
+        break
+    fi
+done
+if [ "$backend" = drm ]; then
+    for node in /dev/dri/renderD*; do
+        if [ -c "$node" ]; then renderer=gl; break; fi
+    done
+fi
+weston --backend="$backend" --renderer="$renderer" --socket=wayland-0 \
+    --config=/etc/xdg/weston/weston.ini &
+weston=$!
+wait -n "$pulse" "$weston"

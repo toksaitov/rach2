@@ -30,7 +30,7 @@ The programs of os-real, as [its manifest](../krffs/manifests/os-real.manifest) 
 | `make` | [make(1)](man1/make.1) | pdpmake |  |  |
 | `man` | [man(1)](man1/man.1) | in-house (`man.script`) |  | yes |
 | `mixer` | [mixer(1)](man1/mixer.1) | in-house | yes | yes |
-| `mke2fs` | [mke2fs(8)](man8/mke2fs.8) | e2fsprogs |  |  |
+| `mke2fs` | [mke2fs(8)](man8/mke2fs.8) | e2fsprogs |  | yes |
 | `passwd` | [passwd(1)](man1/passwd.1) | BusyBox (`busybox-suid`) | in-house | yes |
 | `play` | [play(1)](man1/play.1) | sox_ng (`mode`) |  |  |
 | `rec` | [rec(1)](man1/rec.1) | sox_ng (`mode`) |  |  |
@@ -91,7 +91,7 @@ The programs os-simple or the recovery image stages that os-real does not, with 
 
 ### BusyBox applets
 
-The `/bin/busybox` of os-real, the recovery image and the GNU root has 320 applets. Its ash finds an applet before it searches `PATH`, so a KRFFS image, which has no symbolic links, needs no file for each applet ([BusyBox](../vendor/busybox/Readme.md)); on the GNU root, where `/bin/sh` is bash, each applet that no port provides is a link to `/bin/busybox`. Each row is a page and the applets it covers.
+The `/bin/busybox` of os-real, the recovery image and the GNU root has 326 applets. Its ash finds an applet before it searches `PATH`, so a KRFFS image, which has no symbolic links, needs no file for each applet ([BusyBox](../vendor/busybox/Readme.md)); on the GNU root, where `/bin/sh` is bash, each applet that no port provides is a link to `/bin/busybox`. Each row is a page and the applets it covers.
 
 | Page | Applets |
 | --- | --- |
@@ -109,18 +109,20 @@ The `/bin/busybox` of os-real, the recovery image and the GNU root has 320 apple
 | [busybox-mailutils(1)](man1/busybox-mailutils.1) | `makemime`, `popmaildir`, `reformime`, `sendmail` |
 | [busybox-miscutils(1)](man1/busybox-miscutils.1) | `adjtimex`, `ascii`, `bc`, `chat`, `crond`, `dc`, `devmem`, `hexedit`, `less`, `lsscsi`, `makedevs`, `microcom`, `mim`, `mt`, `readahead`, `runlevel`, `rx`, `setfattr`, `setserial`, `strings`, `time`, `tree`, `ts`, `ttysize`, `volname` |
 | [busybox-modutils(8)](man8/busybox-modutils.8) | `depmod`, `insmod`, `lsmod`, `modinfo`, `modprobe`, `rmmod` |
-| [busybox-networking(1)](man1/busybox-networking.1) | `arp`, `arping`, `dnsd`, `dnsdomainname`, `fakeidentd`, `ftpd`, `ftpget`, `ftpput`, `hostname`, `ifconfig`, `ifdown`, `ifup`, `inetd`, `ipcalc`, `netstat`, `nslookup`, `ntpd`, `pscan`, `route`, `ssl_client`, `tcpsvd`, `telnet`, `telnetd`, `tftp`, `tftpd`, `traceroute`, `udhcpc`, `udpsvd`, `vconfig`, `wget`, `whois` |
+| [busybox-networking(1)](man1/busybox-networking.1) | `arp`, `arping`, `dnsd`, `dnsdomainname`, `fakeidentd`, `ftpd`, `ftpget`, `ftpput`, `hostname`, `ifconfig`, `ifdown`, `ifplugd`, `ifup`, `inetd`, `ipcalc`, `netstat`, `nslookup`, `ntpd`, `pscan`, `route`, `ssl_client`, `tcpsvd`, `telnet`, `telnetd`, `tftp`, `tftpd`, `traceroute`, `udhcpc`, `udhcpc6`, `udpsvd`, `vconfig`, `wget`, `whois` |
 | [busybox-printutils(1)](man1/busybox-printutils.1) | `lpd`, `lpq`, `lpr` |
 | [busybox-procps(1)](man1/busybox-procps.1) | `free`, `fuser`, `iostat`, `kill`, `killall`, `killall5`, `lsof`, `mpstat`, `nmeter`, `pgrep`, `pidof`, `pkill`, `pmap`, `powertop`, `ps`, `pstree`, `pwdx`, `smemcap`, `sysctl`, `top`, `uptime`, `watch` |
 | [busybox-runit(8)](man8/busybox-runit.8) | `chpst`, `envdir`, `envuidgid`, `runsv`, `runsvdir`, `setuidgid`, `softlimit`, `sv`, `svc`, `svlogd`, `svok` |
 | [busybox-shell(1)](man1/busybox-shell.1) | `ash`, `cttyhack`, `hush` |
 | [busybox-sysklogd(8)](man8/busybox-sysklogd.8) | `klogd`, `logger`, `logread`, `syslogd` |
-| [busybox-util-linux(1)](man1/busybox-util-linux.1) | `blkid`, `cal`, `chrt`, `fallocate`, `fatattr`, `fbset`, `fdflush`, `fdformat`, `fdisk`, `findfs`, `flock`, `freeramdisk`, `fsck.minix`, `getopt`, `hd`, `hexdump`, `hwclock`, `ipcrm`, `ipcs`, `last`, `linux32`, `linux64`, `lspci`, `lsusb`, `mesg`, `mkdosfs`, `mkfs.minix`, `mkfs.vfat`, `mkswap`, `more`, `mountpoint`, `nologin`, `nsenter`, `pivot_root`, `rdate`, `rdev`, `readprofile`, `renice`, `rev`, `rtcwake`, `script`, `scriptreplay`, `setarch`, `setsid`, `swapoff`, `swapon`, `taskset`, `unshare`, `xxd` |
+| [busybox-util-linux(1)](man1/busybox-util-linux.1) | `acpid`, `blkid`, `cal`, `chrt`, `fallocate`, `fatattr`, `fbset`, `fdflush`, `fdformat`, `fdisk`, `findfs`, `flock`, `freeramdisk`, `fsck.minix`, `getopt`, `hd`, `hexdump`, `hwclock`, `ipcrm`, `ipcs`, `last`, `linux32`, `linux64`, `lspci`, `lsusb`, `mesg`, `mkdosfs`, `mkfs.minix`, `mkfs.vfat`, `mkswap`, `more`, `mountpoint`, `nologin`, `nsenter`, `pivot_root`, `rdate`, `rdev`, `readprofile`, `renice`, `rev`, `rtcwake`, `script`, `scriptreplay`, `setarch`, `setsid`, `swapoff`, `swapon`, `taskset`, `unshare`, `xxd` |
 | [halt(8)](man8/halt.8) | `halt` |
 | [httpd(8)](man8/httpd.8) | `httpd` |
 | [init(8)](man8/init.8) | `init` |
 | [mount(8)](man8/mount.8) | `mount`, `umount` |
 | [nc(1)](man1/nc.1) | `nc` |
+| [ping(1)](man1/ping.1) | `ping`, `ping6` |
+| [rfkill(8)](man8/rfkill.8) | `rfkill` |
 | [sh(1)](man1/sh.1) | `busybox`, `sh` |
 
 ## The GNU system
@@ -354,6 +356,30 @@ The pinned [Debian desktop layer](../vendor/gnu/debian/Readme.md) stages these c
 | `xprop` | `x11-utils` | `/usr/bin/xprop` | [xprop(1)](man1/xprop.1) |
 | `xvinfo` | `x11-utils` | `/usr/bin/xvinfo` | [xvinfo(1)](man1/xvinfo.1) |
 | `xwininfo` | `x11-utils` | `/usr/bin/xwininfo` | [xwininfo(1)](man1/xwininfo.1) |
+| `aconnect` | `alsa-utils` | `/usr/bin/aconnect` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `alsabat` | `alsa-utils` | `/usr/bin/alsabat` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `alsaloop` | `alsa-utils` | `/usr/bin/alsaloop` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `alsamixer` | `alsa-utils` | `/usr/bin/alsamixer` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `alsatplg` | `alsa-utils` | `/usr/bin/alsatplg` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `alsaucm` | `alsa-utils` | `/usr/bin/alsaucm` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `amidi` | `alsa-utils` | `/usr/bin/amidi` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `amixer` | `alsa-utils` | `/usr/bin/amixer` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `aplay` | `alsa-utils` | `/usr/bin/aplay` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `aplaymidi` | `alsa-utils` | `/usr/bin/aplaymidi` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `aplaymidi2` | `alsa-utils` | `/usr/bin/aplaymidi2` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `arecord` | `alsa-utils` | `/usr/bin/arecord` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `arecordmidi` | `alsa-utils` | `/usr/bin/arecordmidi` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `arecordmidi2` | `alsa-utils` | `/usr/bin/arecordmidi2` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `aseqdump` | `alsa-utils` | `/usr/bin/aseqdump` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `aseqnet` | `alsa-utils` | `/usr/bin/aseqnet` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `aseqsend` | `alsa-utils` | `/usr/bin/aseqsend` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `axfer` | `alsa-utils` | `/usr/bin/axfer` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `iecset` | `alsa-utils` | `/usr/bin/iecset` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `nhlt-dmic-info` | `alsa-utils` | `/usr/bin/nhlt-dmic-info` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `speaker-test` | `alsa-utils` | `/usr/bin/speaker-test` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `alsa-info` | `alsa-utils` | `/usr/sbin/alsa-info` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `alsabat-test` | `alsa-utils` | `/usr/sbin/alsabat-test` | [alsa-utils(1)](man1/alsa-utils.1) |
+| `alsactl` | `alsa-utils` | `/usr/sbin/alsactl` | [alsa-utils(1)](man1/alsa-utils.1) |
 
 GE-Proton is installed under `/opt/proton` on x86-64 ([proton(1)](man1/proton.1)); Khronos's WebGL conformance sources are under `/usr/share/webgl`. Their exact pins are in [sources-extra.txt](../vendor/gnu/sources-extra.txt). IGT's tests, built from Debian's intel-gpu-tools source in the Debian builder guest, are under `/usr/libexec/igt-gpu-tools` on x86-64, with its runner `igt_runner` ([igt_runner(1)](man1/igt_runner.1)), `igt_resume` and `igt_results` ([igt_resume(1)](man1/igt_resume.1)) and `igt_comms_decoder` in `/usr/bin`; the source is pinned in [igt/sources.txt](../vendor/gnu/igt/sources.txt).
 

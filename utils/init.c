@@ -2627,7 +2627,7 @@ static int bus_user(void)
 /* The services, and whether the image has the bus and the cron daemon,
  * which `services_found` decides at boot. */
 struct services {
-    struct service log, sshd, bus, cron, ntp, plug, nd, wpa, wcli, wnd;
+    struct service log, sshd, bus, cron, ntp, plug, nd, wpa, wcli, wnd, desktop;
     int bus_wanted, cron_wanted;
     unsigned wired_metric, wifi_metric; /* the indices `set_ra_metric` wrote */
 };
@@ -2642,6 +2642,7 @@ static void services_found(struct services *s)
     memset(s, 0, sizeof(*s));
     s->log.pid = s->sshd.pid = s->bus.pid = s->cron.pid = s->ntp.pid = -1;
     s->plug.pid = s->nd.pid = s->wpa.pid = s->wcli.pid = s->wnd.pid = -1;
+    s->desktop.pid = -1;
     s->bus_wanted = bus_user();
     s->cron_wanted = access(CRON_PROGRAM, X_OK) == 0;
 }
@@ -2685,6 +2686,12 @@ static void start_services(struct services *s)
         s->ntp.pid = spawn_ntpd();
         s->ntp.spawned = time(0);
     }
+    if (s->desktop.pid < 0 && access("/usr/libexec/rach2-desktop", X_OK) == 0) {
+        char *argv[] = {(char *)"rach2-desktop", NULL};
+
+        s->desktop.pid = spawn_service("/usr/libexec/rach2-desktop", argv);
+        s->desktop.spawned = time(0);
+    }
     set_ra_metric(NETWORK_IFACE, NETWORK_RA_METRIC, &s->wired_metric);
     set_ra_metric(WIFI_IFACE, WIFI_RA_METRIC, &s->wifi_metric);
     start_ifplugd(&s->plug);
@@ -2702,7 +2709,8 @@ static int services_ended(struct services *s, pid_t reaped)
            service_ended(&s->bus, reaped) || service_ended(&s->cron, reaped) ||
            service_ended(&s->ntp, reaped) || service_ended(&s->plug, reaped) ||
            service_ended(&s->nd, reaped) || service_ended(&s->wpa, reaped) ||
-           service_ended(&s->wcli, reaped) || service_ended(&s->wnd, reaped);
+           service_ended(&s->wcli, reaped) || service_ended(&s->wnd, reaped) ||
+           service_ended(&s->desktop, reaped);
 }
 
 #endif
