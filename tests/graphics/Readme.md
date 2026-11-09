@@ -28,6 +28,7 @@ Each Debian run writes a record, to the file `-r` names or to standard error as 
 | `virtio-vga` | `virtio-vga` | 1af4:1050, 0300 | SeaBIOS | virtio-gpu with a VGA for the firmware and GRUB |
 | `virtio-gpu` | `virtio-gpu-pci` | 1af4:1050, 0380 | OVMF | virtio-gpu alone |
 | `virgl` | `virtio-vga-gl` with egl-headless | 1af4:1050, 0300 | SeaBIOS | the host's GL through virglrenderer, on the testing PC |
+| `venus` | `virtio-vga-gl` with Venus, blobs and egl-headless | 1af4:1050, 0300 | SeaBIOS | Vulkan through Venus over the host's lavapipe, GL on llvmpipe, on the testing PC |
 | `none` | none | none | OVMF | vkms inside the guest, which a run loads with `modprobe vkms` |
 
 Each device has `edid=on,xres=1280,yres=800`: its EDID prefers the window's fixed 1280x800, since QEMU's EDID also offers modes up to 5120x2160 and a program such as glmark2-drm takes the largest; the modes stay listed for the mode tests. The pointer is the PS/2 mouse of the PC's 8042, which Rach2 drives; no USB tablet is attached, since Rach2's USB HID takes the boot protocol only.
@@ -60,8 +61,22 @@ Debian 13's kernel is built without vkms (`# CONFIG_DRM_VKMS is not set` in its 
 
 The `virgl` profile draws the guest's GL on the testing PC's RTX 4080 SUPER: QEMU's egl-headless display opens WSL's render node, `/dev/dri/renderD128`, a vgem device that only the group `render` may open, and `GALLIUM_DRIVER=d3d12` with `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA` in QEMU's environment put its GL on Mesa's d3d12 driver, which reaches the GPU through `/dev/dxg`; without them it renders on llvmpipe. It needs no kernel module. A Debian guest under it reports the renderer `virgl` in `eglinfo`. `sh tools/setup/doctor.sh` checks the host's side for the account that runs it ([tools/Readme.md](../../tools/Readme.md#the-testing-host)).
 
+### Venus on the testing PC
+
+The `venus` profile gives the guest Vulkan through Venus, over the host's lavapipe, with its frames on screen: QEMU's `virtio-vga-gl` with `venus=on,blob=on,hostmem=4G`, the guest's RAM a shared memfd, and egl-headless on WSL's render node with QEMU's GL on llvmpipe. Three things in QEMU's environment make it work, and etude, `rach2/qemu_devices.sh` and the Debian guest set them alike:
+
+* `GALLIUM_DRIVER=llvmpipe`: Venus's frames are black when QEMU's GL is Mesa's d3d12 driver on the RTX 4080, so Venus and `virgl` are two profiles (run 2, step 6).
+* `VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json`: virglrenderer's render server, which QEMU starts and which inherits the environment, takes lavapipe as the Vulkan device it relays.
+* `LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libm.so.6`: llvmpipe's compiled shaders look libm's functions up in the process's global scope, and `/usr/libexec/virgl_render_server` links only libvulkan and libc, so without the preload a shader that calls one, such as dEQP-VK's `float_controls2` cases on Mesa 26.1's Venus, calls address 0 and the render server dies of a segmentation fault at address 0.
+
+lavapipe exports memory and fences as dma-bufs and sync files only through `/dev/udmabuf`, which WSL's kernel lacks; without it lavapipe drops `VK_EXT_image_drm_format_modifier`, `VK_KHR_external_fence_fd` and `VK_KHR_external_semaphore_fd`, and Venus stops at Vulkan 1.2 with no swapchain. Root loads the module after each start of WSL ([tools/Readme.md](../../tools/Readme.md#the-testing-host)), and the account that runs QEMU must be in `kvm`, the group of `/dev/udmabuf`.
+
+Measured on the testing PC with the module loaded, by `debian-ref.sh run -p venus` under KVM with 8 CPUs and 8 GiB: the Debian guest's virtio-gpu offers 3 capability sets, blobs and a host-visible window of 4 GiB; with Venus's driver alone, `vulkaninfo` gives `Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 256 bits))` at Vulkan 1.3.269 with `VK_KHR_swapchain`, `VK_EXT_external_memory_dma_buf`, `VK_EXT_image_drm_format_modifier` and `VK_KHR_synchronization2`; its GL is `virgl (LLVMPIPE (LLVM 21.1.8, 256 bits))`, OpenGL 4.5 core and ES 3.2; and vkcube on Venus presents 600 frames to a headless Weston on its GL renderer and exits 0. The boot, run and power off take 33 s.
+
+QEMU on Windows gives no Venus. The test engine's QEMU 11.1.2 (`rach2-whpx-d0`, `D:/rach2/build/qemu`) has no `virtio-vga-gl` and no display but `none`. The stock QEMU 11.1.0 (`v11.1.0-12130-ge470268ff4`, `C:/Program Files/qemu`) has the device with its `venus`, `blob` and `hostmem` options, but its virglrenderer is built without the render server: started once under WHPX with `venus=on,blob=on,hostmem=1G` and egl-headless, it logs "Render server support was not enabled in virglrenderer", "failed to initialize venus renderer" and "virgl could not be initialized: -1", and keeps running; the Debian guest's virtio-gpu offers `+virgl +edid +resource_blob +host_visible +context_init` and 2 capability sets, times out reading the first (`timed out waiting for cap set 0`), and falls back to its own llvmpipe for GL and lavapipe for Vulkan.
+
 ## Limits
 
-* `virgl` is the testing PC's alone: the render node's path and the adapter's name are its own, QEMU on Windows has no such display, and etude refuses it there.
-* Venus's frames are black through d3d12, so Venus on screen is a profile of its own on llvmpipe over vgem, with the udmabuf module of WSL's kernel.
+* `virgl` and `venus` are the testing PC's alone: the render node's path, the adapter's name and the libraries' paths are its own, the test engine's QEMU on Windows has no GL display, and etude refuses both there.
+* `venus` needs the udmabuf module, which a restart of WSL unloads until root loads it again; `grep '^udmabuf ' /proc/modules` says whether it is loaded.
 * The Debian guest's packages come from the snapshot of one date; a newer reference takes a new date in `debian-ref/image` and a new `prepare`.
