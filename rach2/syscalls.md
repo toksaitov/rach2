@@ -1,326 +1,330 @@
 # The system calls
 
-This table lists the calls the two kernels register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. `none` marks a call one kernel does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 291 calls and the x86-64 kernel 267. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
+This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 291 calls, the x86-64 kernel 267, and its compat table 188. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
 
-`make syscalls` writes this file from `rach2/sys/arch/i686/systab.c` and `rach2/sys/arch/x86_64/systab.c`, with the numbers in `rach2/sys/arch/i686/sysnr.h` and `rach2/sys/arch/x86_64/sysnr.h`, and `tests/run style` fails when the file differs from what it writes.
+`make syscalls` writes this file from `rach2/sys/arch/i686/systab.c`, `rach2/sys/arch/x86_64/systab.c` and `rach2/sys/arch/x86_64/ia32_systab.c`, with the numbers in `rach2/sys/arch/i686/sysnr.h`, `rach2/sys/arch/x86_64/sysnr.h` and `rach2/sys/arch/x86_64/ia32_sysnr.h`, and `tests/run style` fails when the file differs from what it writes.
 
-| Call | i386 | x86-64 | Page |
-|---|--:|--:|---|
-| `accept` | none | 43 | [accept(2)](../man/man2/accept.2) |
-| `accept4` | 364 | 288 | [accept(2)](../man/man2/accept.2) |
-| `access` | 33 | 21 | [access(2)](../man/man2/access.2) |
-| `adjtimex` | 124 | 159 | [adjtimex(2)](../man/man2/adjtimex.2) |
-| `alarm` | 27 | 37 | [setitimer(2)](../man/man2/setitimer.2) |
-| `arch_prctl` | none | 158 | [arch_prctl(2)](../man/man2/arch_prctl.2) |
-| `bind` | 361 | 49 | [bind(2)](../man/man2/bind.2) |
-| `brk` | 45 | 12 | [brk(2)](../man/man2/brk.2) |
-| `capget` | 184 | 125 | [capget(2)](../man/man2/capget.2) |
-| `capset` | 185 | 126 | [capget(2)](../man/man2/capget.2) |
-| `chdir` | 12 | 80 | [chdir(2)](../man/man2/chdir.2) |
-| `chmod` | 15 | 90 | [chmod(2)](../man/man2/chmod.2) |
-| `chown` | 182 | 92 | [chown(2)](../man/man2/chown.2) |
-| `chown32` | 212 | none | [chown(2)](../man/man2/chown.2) |
-| `chroot` | 61 | 161 | [chroot(2)](../man/man2/chroot.2) |
-| `clock_adjtime` | 343 | 305 | [adjtimex(2)](../man/man2/adjtimex.2) |
-| `clock_adjtime64` | 405 | none | [adjtimex(2)](../man/man2/adjtimex.2) |
-| `clock_getres` | 266 | 229 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `clock_getres_time64` | 406 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `clock_gettime` | 265 | 228 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `clock_gettime64` | 403 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `clock_nanosleep` | 267 | 230 | [nanosleep(2)](../man/man2/nanosleep.2) |
-| `clock_settime` | 264 | 227 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `clock_settime64` | 404 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `clone` | 120 | 56 | [fork(2)](../man/man2/fork.2) |
-| `clone3` | 435 | 435 | [fork(2)](../man/man2/fork.2) |
-| `close` | 6 | 3 | [open(2)](../man/man2/open.2) |
-| `close_range` | 436 | 436 | [open(2)](../man/man2/open.2) |
-| `connect` | 362 | 42 | [connect(2)](../man/man2/connect.2) |
-| `copy_file_range` | 377 | 326 | [splice(2)](../man/man2/splice.2) |
-| `creat` | 8 | 85 | [open(2)](../man/man2/open.2) |
-| `dup` | 41 | 32 | [dup(2)](../man/man2/dup.2) |
-| `dup2` | 63 | 33 | [dup(2)](../man/man2/dup.2) |
-| `dup3` | 330 | 292 | [dup(2)](../man/man2/dup.2) |
-| `epoll_create` | 254 | 213 | [epoll(2)](../man/man2/epoll.2) |
-| `epoll_create1` | 329 | 291 | [epoll(2)](../man/man2/epoll.2) |
-| `epoll_ctl` | 255 | 233 | [epoll(2)](../man/man2/epoll.2) |
-| `epoll_pwait` | 319 | 281 | [epoll(2)](../man/man2/epoll.2) |
-| `epoll_pwait2` | 441 | 441 | [epoll(2)](../man/man2/epoll.2) |
-| `epoll_wait` | 256 | 232 | [epoll(2)](../man/man2/epoll.2) |
-| `eventfd` | 323 | 284 | [eventfd(2)](../man/man2/eventfd.2) |
-| `eventfd2` | 328 | 290 | [eventfd(2)](../man/man2/eventfd.2) |
-| `execve` | 11 | 59 | [execve(2)](../man/man2/execve.2) |
-| `exit` | 1 | 60 | [exit(2)](../man/man2/exit.2) |
-| `exit_group` | 252 | 231 | [exit(2)](../man/man2/exit.2) |
-| `faccessat` | 307 | 269 | [access(2)](../man/man2/access.2) |
-| `faccessat2` | 439 | 439 | [access(2)](../man/man2/access.2) |
-| `fadvise64` | 250 | 221 | [readahead(2)](../man/man2/readahead.2) |
-| `fadvise64_64` | 272 | none | [readahead(2)](../man/man2/readahead.2) |
-| `fallocate` | 324 | 285 | [fallocate(2)](../man/man2/fallocate.2) |
-| `fchdir` | 133 | 81 | [chdir(2)](../man/man2/chdir.2) |
-| `fchmod` | 94 | 91 | [chmod(2)](../man/man2/chmod.2) |
-| `fchmodat` | 306 | 268 | [chmod(2)](../man/man2/chmod.2) |
-| `fchown` | 95 | 93 | [chown(2)](../man/man2/chown.2) |
-| `fchown32` | 207 | none | [chown(2)](../man/man2/chown.2) |
-| `fchownat` | 298 | 260 | [chown(2)](../man/man2/chown.2) |
-| `fcntl` | none | 72 | [fcntl(2)](../man/man2/fcntl.2) |
-| `fcntl64` | 221 | none | [fcntl(2)](../man/man2/fcntl.2) |
-| `fdatasync` | 148 | 75 | [sync(2)](../man/man2/sync.2) |
-| `fgetxattr` | 231 | 193 | [getxattr(2)](../man/man2/getxattr.2) |
-| `flistxattr` | 234 | 196 | [getxattr(2)](../man/man2/getxattr.2) |
-| `flock` | 143 | 73 | [flock(2)](../man/man2/flock.2) |
-| `fork` | 2 | 57 | [fork(2)](../man/man2/fork.2) |
-| `fremovexattr` | 237 | 199 | [getxattr(2)](../man/man2/getxattr.2) |
-| `fsetxattr` | 228 | 190 | [getxattr(2)](../man/man2/getxattr.2) |
-| `fstat` | none | 5 | [stat(2)](../man/man2/stat.2) |
-| `fstat64` | 197 | none | [stat(2)](../man/man2/stat.2) |
-| `fstatat64` | 300 | none | [stat(2)](../man/man2/stat.2) |
-| `fstatfs` | none | 138 | [statfs(2)](../man/man2/statfs.2) |
-| `fstatfs64` | 269 | none | [statfs(2)](../man/man2/statfs.2) |
-| `fsync` | 118 | 74 | [sync(2)](../man/man2/sync.2) |
-| `ftruncate` | 93 | 77 | [truncate(2)](../man/man2/truncate.2) |
-| `ftruncate64` | 194 | none | [truncate(2)](../man/man2/truncate.2) |
-| `futex` | 240 | 202 | [futex(2)](../man/man2/futex.2) |
-| `get_robust_list` | 312 | 274 | [futex(2)](../man/man2/futex.2) |
-| `getcpu` | 318 | 309 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
-| `getcwd` | 183 | 79 | [chdir(2)](../man/man2/chdir.2) |
-| `getdents64` | 220 | 217 | [getdents64(2)](../man/man2/getdents64.2) |
-| `getegid` | none | 108 | [getuid(2)](../man/man2/getuid.2) |
-| `getegid32` | 202 | none | [getuid(2)](../man/man2/getuid.2) |
-| `geteuid` | none | 107 | [getuid(2)](../man/man2/getuid.2) |
-| `geteuid32` | 201 | none | [getuid(2)](../man/man2/getuid.2) |
-| `getgid` | none | 104 | [getuid(2)](../man/man2/getuid.2) |
-| `getgid32` | 200 | none | [getuid(2)](../man/man2/getuid.2) |
-| `getgroups` | none | 115 | [getuid(2)](../man/man2/getuid.2) |
-| `getgroups32` | 205 | none | [getuid(2)](../man/man2/getuid.2) |
-| `getitimer` | 105 | 36 | [setitimer(2)](../man/man2/setitimer.2) |
-| `getpeername` | 368 | 52 | [getsockname(2)](../man/man2/getsockname.2) |
-| `getpgid` | 132 | 121 | [getpid(2)](../man/man2/getpid.2) |
-| `getpgrp` | 65 | 111 | [getpid(2)](../man/man2/getpid.2) |
-| `getpid` | 20 | 39 | [getpid(2)](../man/man2/getpid.2) |
-| `getppid` | 64 | 110 | [getpid(2)](../man/man2/getpid.2) |
-| `getpriority` | 96 | 140 | [getpriority(2)](../man/man2/getpriority.2) |
-| `getrandom` | 355 | 318 | [getrandom(2)](../man/man2/getrandom.2) |
-| `getresgid` | none | 120 | [getuid(2)](../man/man2/getuid.2) |
-| `getresgid32` | 211 | none | [getuid(2)](../man/man2/getuid.2) |
-| `getresuid` | none | 118 | [getuid(2)](../man/man2/getuid.2) |
-| `getresuid32` | 209 | none | [getuid(2)](../man/man2/getuid.2) |
-| `getrlimit` | 76 | 97 | [prlimit64(2)](../man/man2/prlimit64.2) |
-| `getrusage` | 77 | 98 | [getrusage(2)](../man/man2/getrusage.2) |
-| `getsid` | 147 | 124 | [getpid(2)](../man/man2/getpid.2) |
-| `getsockname` | 367 | 51 | [getsockname(2)](../man/man2/getsockname.2) |
-| `getsockopt` | 365 | 55 | [setsockopt(2)](../man/man2/setsockopt.2) |
-| `gettid` | 224 | 186 | [getpid(2)](../man/man2/getpid.2) |
-| `gettimeofday` | 78 | 96 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `getuid` | none | 102 | [getuid(2)](../man/man2/getuid.2) |
-| `getuid32` | 199 | none | [getuid(2)](../man/man2/getuid.2) |
-| `getxattr` | 229 | 191 | [getxattr(2)](../man/man2/getxattr.2) |
-| `inotify_add_watch` | 292 | 254 | [inotify_init(2)](../man/man2/inotify_init.2) |
-| `inotify_init` | 291 | 253 | [inotify_init(2)](../man/man2/inotify_init.2) |
-| `inotify_init1` | 332 | 294 | [inotify_init(2)](../man/man2/inotify_init.2) |
-| `inotify_rm_watch` | 293 | 255 | [inotify_init(2)](../man/man2/inotify_init.2) |
-| `ioctl` | 54 | 16 | [ioctl(2)](../man/man2/ioctl.2) |
-| `ioprio_get` | 290 | 252 | [ioprio_set(2)](../man/man2/ioprio_set.2) |
-| `ioprio_set` | 289 | 251 | [ioprio_set(2)](../man/man2/ioprio_set.2) |
-| `ipc` | 117 | none | [ipc(2)](../man/man2/ipc.2) |
-| `kill` | 37 | 62 | [kill(2)](../man/man2/kill.2) |
-| `lchown` | 16 | 94 | [chown(2)](../man/man2/chown.2) |
-| `lchown32` | 198 | none | [chown(2)](../man/man2/chown.2) |
-| `lgetxattr` | 230 | 192 | [getxattr(2)](../man/man2/getxattr.2) |
-| `link` | 9 | 86 | [link(2)](../man/man2/link.2) |
-| `linkat` | 303 | 265 | [link(2)](../man/man2/link.2) |
-| `listen` | 363 | 50 | [listen(2)](../man/man2/listen.2) |
-| `listxattr` | 232 | 194 | [getxattr(2)](../man/man2/getxattr.2) |
-| `llistxattr` | 233 | 195 | [getxattr(2)](../man/man2/getxattr.2) |
-| `llseek` | 140 | none | [lseek(2)](../man/man2/lseek.2) |
-| `lremovexattr` | 236 | 198 | [getxattr(2)](../man/man2/getxattr.2) |
-| `lseek` | 19 | 8 | [lseek(2)](../man/man2/lseek.2) |
-| `lsetxattr` | 227 | 189 | [getxattr(2)](../man/man2/getxattr.2) |
-| `lstat` | 107 | 6 | [stat(2)](../man/man2/stat.2) |
-| `lstat64` | 196 | none | [stat(2)](../man/man2/stat.2) |
-| `madvise` | 219 | 28 | [brk(2)](../man/man2/brk.2) |
-| `memfd_create` | 356 | 319 | [memfd_create(2)](../man/man2/memfd_create.2) |
-| `mincore` | 218 | 27 | [brk(2)](../man/man2/brk.2) |
-| `mkdir` | 39 | 83 | [mkdir(2)](../man/man2/mkdir.2) |
-| `mkdirat` | 296 | 258 | [mkdir(2)](../man/man2/mkdir.2) |
-| `mknod` | 14 | 133 | [mknod(2)](../man/man2/mknod.2) |
-| `mknodat` | 297 | 259 | [mknod(2)](../man/man2/mknod.2) |
-| `mlock` | 150 | 149 | [brk(2)](../man/man2/brk.2) |
-| `mlock2` | 376 | 325 | [brk(2)](../man/man2/brk.2) |
-| `mlockall` | 152 | 151 | [brk(2)](../man/man2/brk.2) |
-| `mmap` | none | 9 | [brk(2)](../man/man2/brk.2) |
-| `mmap2` | 192 | none | [brk(2)](../man/man2/brk.2) |
-| `mount` | 21 | 165 | [mount(2)](../man/man2/mount.2) |
-| `mprotect` | 125 | 10 | [brk(2)](../man/man2/brk.2) |
-| `mq_getsetattr` | 282 | 245 | [mq_open(2)](../man/man2/mq_open.2) |
-| `mq_notify` | 281 | 244 | [mq_open(2)](../man/man2/mq_open.2) |
-| `mq_open` | 277 | 240 | [mq_open(2)](../man/man2/mq_open.2) |
-| `mq_timedreceive` | 280 | 243 | [mq_open(2)](../man/man2/mq_open.2) |
-| `mq_timedreceive_time64` | 419 | none | [mq_open(2)](../man/man2/mq_open.2) |
-| `mq_timedsend` | 279 | 242 | [mq_open(2)](../man/man2/mq_open.2) |
-| `mq_timedsend_time64` | 418 | none | [mq_open(2)](../man/man2/mq_open.2) |
-| `mq_unlink` | 278 | 241 | [mq_open(2)](../man/man2/mq_open.2) |
-| `mremap` | 163 | 25 | [brk(2)](../man/man2/brk.2) |
-| `msgctl` | 402 | 71 | [msgget(2)](../man/man2/msgget.2) |
-| `msgget` | 399 | 68 | [msgget(2)](../man/man2/msgget.2) |
-| `msgrcv` | 401 | 70 | [msgget(2)](../man/man2/msgget.2) |
-| `msgsnd` | 400 | 69 | [msgget(2)](../man/man2/msgget.2) |
-| `msync` | 144 | 26 | [brk(2)](../man/man2/brk.2) |
-| `munlock` | 151 | 150 | [brk(2)](../man/man2/brk.2) |
-| `munlockall` | 153 | 152 | [brk(2)](../man/man2/brk.2) |
-| `munmap` | 91 | 11 | [brk(2)](../man/man2/brk.2) |
-| `nanosleep` | 162 | 35 | [nanosleep(2)](../man/man2/nanosleep.2) |
-| `newfstatat` | none | 262 | [stat(2)](../man/man2/stat.2) |
-| `newselect` | 142 | none | [select(2)](../man/man2/select.2) |
-| `open` | 5 | 2 | [open(2)](../man/man2/open.2) |
-| `openat` | 295 | 257 | [open(2)](../man/man2/open.2) |
-| `pause` | 29 | 34 | [sigaction(2)](../man/man2/sigaction.2) |
-| `personality` | 136 | 135 | [prctl(2)](../man/man2/prctl.2) |
-| `pidfd_getfd` | 438 | 438 | [pidfd_open(2)](../man/man2/pidfd_open.2) |
-| `pidfd_open` | 434 | 434 | [pidfd_open(2)](../man/man2/pidfd_open.2) |
-| `pidfd_send_signal` | 424 | 424 | [pidfd_open(2)](../man/man2/pidfd_open.2) |
-| `pipe` | 42 | 22 | [pipe(2)](../man/man2/pipe.2) |
-| `pipe2` | 331 | 293 | [pipe(2)](../man/man2/pipe.2) |
-| `pivot_root` | 217 | 155 | [pivot_root(2)](../man/man2/pivot_root.2) |
-| `poll` | 168 | 7 | [poll(2)](../man/man2/poll.2) |
-| `ppoll` | 309 | 271 | [poll(2)](../man/man2/poll.2) |
-| `prctl` | 172 | 157 | [prctl(2)](../man/man2/prctl.2) |
-| `pread64` | 180 | 17 | [read(2)](../man/man2/read.2) |
-| `preadv` | none | 295 | [read(2)](../man/man2/read.2) |
-| `prlimit64` | 340 | 302 | [prlimit64(2)](../man/man2/prlimit64.2) |
-| `pselect6` | 308 | 270 | [select(2)](../man/man2/select.2) |
-| `ptrace` | 26 | 101 | [ptrace(2)](../man/man2/ptrace.2) |
-| `pwrite64` | 181 | 18 | [write(2)](../man/man2/write.2) |
-| `pwritev` | none | 296 | [write(2)](../man/man2/write.2) |
-| `rach2_ping` | none | 400 | [ping(2)](../man/man2/ping.2) |
-| `read` | 3 | 0 | [read(2)](../man/man2/read.2) |
-| `readahead` | 225 | 187 | [readahead(2)](../man/man2/readahead.2) |
-| `readlink` | 85 | 89 | [symlink(2)](../man/man2/symlink.2) |
-| `readlinkat` | 305 | 267 | [symlink(2)](../man/man2/symlink.2) |
-| `readv` | 145 | 19 | [read(2)](../man/man2/read.2) |
-| `reboot` | 88 | 169 | [reboot(2)](../man/man2/reboot.2) |
-| `recvfrom` | 371 | 45 | [recv(2)](../man/man2/recv.2) |
-| `recvmmsg` | 337 | 299 | [recv(2)](../man/man2/recv.2) |
-| `recvmsg` | 372 | 47 | [recv(2)](../man/man2/recv.2) |
-| `removexattr` | 235 | 197 | [getxattr(2)](../man/man2/getxattr.2) |
-| `rename` | 38 | 82 | [rename(2)](../man/man2/rename.2) |
-| `renameat` | 302 | 264 | [rename(2)](../man/man2/rename.2) |
-| `renameat2` | 353 | 316 | [rename(2)](../man/man2/rename.2) |
-| `rmdir` | 40 | 84 | [mkdir(2)](../man/man2/mkdir.2) |
-| `rt_sigaction` | 174 | 13 | [sigaction(2)](../man/man2/sigaction.2) |
-| `rt_sigpending` | 176 | 127 | [sigaction(2)](../man/man2/sigaction.2) |
-| `rt_sigprocmask` | 175 | 14 | [sigaction(2)](../man/man2/sigaction.2) |
-| `rt_sigqueueinfo` | 178 | 129 | [rt_sigqueueinfo(2)](../man/man2/rt_sigqueueinfo.2) |
-| `rt_sigreturn` | 173 | 15 | [sigaction(2)](../man/man2/sigaction.2) |
-| `rt_sigsuspend` | 179 | 130 | [sigaction(2)](../man/man2/sigaction.2) |
-| `rt_sigtimedwait` | 177 | 128 | [sigaction(2)](../man/man2/sigaction.2) |
-| `rt_tgsigqueueinfo` | 335 | 297 | [rt_sigqueueinfo(2)](../man/man2/rt_sigqueueinfo.2) |
-| `sched_get_priority_max` | 159 | 146 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
-| `sched_get_priority_min` | 160 | 147 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
-| `sched_getaffinity` | 242 | 204 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
-| `sched_getparam` | 155 | 143 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
-| `sched_getscheduler` | 157 | 145 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
-| `sched_rr_get_interval` | 161 | 148 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
-| `sched_setaffinity` | 241 | 203 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
-| `sched_setparam` | 154 | 142 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
-| `sched_setscheduler` | 156 | 144 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
-| `sched_yield` | 158 | 24 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
-| `seccomp` | 354 | 317 | [seccomp(2)](../man/man2/seccomp.2) |
-| `select` | 82 | 23 | [select(2)](../man/man2/select.2) |
-| `semctl` | 394 | 66 | [semget(2)](../man/man2/semget.2) |
-| `semget` | 393 | 64 | [semget(2)](../man/man2/semget.2) |
-| `semop` | none | 65 | [semget(2)](../man/man2/semget.2) |
-| `semtimedop` | none | 220 | [semget(2)](../man/man2/semget.2) |
-| `semtimedop_time64` | 420 | none | [semget(2)](../man/man2/semget.2) |
-| `sendfile` | 187 | 40 | [splice(2)](../man/man2/splice.2) |
-| `sendfile64` | 239 | none | [splice(2)](../man/man2/splice.2) |
-| `sendmmsg` | 345 | 307 | [send(2)](../man/man2/send.2) |
-| `sendmsg` | 370 | 46 | [send(2)](../man/man2/send.2) |
-| `sendto` | 369 | 44 | [send(2)](../man/man2/send.2) |
-| `set_robust_list` | 311 | 273 | [futex(2)](../man/man2/futex.2) |
-| `set_thread_area` | 243 | none | [set_thread_area(2)](../man/man2/set_thread_area.2) |
-| `set_tid_address` | 258 | 218 | [set_thread_area(2)](../man/man2/set_thread_area.2) |
-| `setdomainname` | 121 | 171 | [uname(2)](../man/man2/uname.2) |
-| `setgid` | none | 106 | [setuid(2)](../man/man2/setuid.2) |
-| `setgid32` | 214 | none | [setuid(2)](../man/man2/setuid.2) |
-| `setgroups` | none | 116 | [setuid(2)](../man/man2/setuid.2) |
-| `setgroups32` | 206 | none | [setuid(2)](../man/man2/setuid.2) |
-| `sethostname` | 74 | 170 | [uname(2)](../man/man2/uname.2) |
-| `setitimer` | 104 | 38 | [setitimer(2)](../man/man2/setitimer.2) |
-| `setns` | 346 | 308 | [unshare(2)](../man/man2/unshare.2) |
-| `setpgid` | 57 | 109 | [getpid(2)](../man/man2/getpid.2) |
-| `setpriority` | 97 | 141 | [getpriority(2)](../man/man2/getpriority.2) |
-| `setregid` | none | 114 | [setuid(2)](../man/man2/setuid.2) |
-| `setregid32` | 204 | none | [setuid(2)](../man/man2/setuid.2) |
-| `setresgid` | none | 119 | [setuid(2)](../man/man2/setuid.2) |
-| `setresgid32` | 210 | none | [setuid(2)](../man/man2/setuid.2) |
-| `setresuid` | none | 117 | [setuid(2)](../man/man2/setuid.2) |
-| `setresuid32` | 208 | none | [setuid(2)](../man/man2/setuid.2) |
-| `setreuid` | none | 113 | [setuid(2)](../man/man2/setuid.2) |
-| `setreuid32` | 203 | none | [setuid(2)](../man/man2/setuid.2) |
-| `setrlimit` | 75 | 160 | [prlimit64(2)](../man/man2/prlimit64.2) |
-| `setsid` | 66 | 112 | [getpid(2)](../man/man2/getpid.2) |
-| `setsockopt` | 366 | 54 | [setsockopt(2)](../man/man2/setsockopt.2) |
-| `settimeofday` | 79 | 164 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `setuid` | none | 105 | [setuid(2)](../man/man2/setuid.2) |
-| `setuid32` | 213 | none | [setuid(2)](../man/man2/setuid.2) |
-| `setxattr` | 226 | 188 | [getxattr(2)](../man/man2/getxattr.2) |
-| `shmat` | 397 | 30 | [shmget(2)](../man/man2/shmget.2) |
-| `shmctl` | 396 | 31 | [shmget(2)](../man/man2/shmget.2) |
-| `shmdt` | 398 | 67 | [shmget(2)](../man/man2/shmget.2) |
-| `shmget` | 395 | 29 | [shmget(2)](../man/man2/shmget.2) |
-| `shutdown` | 373 | 48 | [shutdown(2)](../man/man2/shutdown.2) |
-| `sigaltstack` | 186 | 131 | [sigaction(2)](../man/man2/sigaction.2) |
-| `signalfd` | 321 | 282 | [signalfd(2)](../man/man2/signalfd.2) |
-| `signalfd4` | 327 | 289 | [signalfd(2)](../man/man2/signalfd.2) |
-| `sigprocmask` | 126 | none | [sigaction(2)](../man/man2/sigaction.2) |
-| `sigreturn` | 119 | none | [sigaction(2)](../man/man2/sigaction.2) |
-| `socket` | 359 | 41 | [socket(2)](../man/man2/socket.2) |
-| `socketcall` | 102 | none | [socketcall(2)](../man/man2/socketcall.2) |
-| `socketpair` | 360 | 53 | [socket(2)](../man/man2/socket.2) |
-| `splice` | 313 | 275 | [splice(2)](../man/man2/splice.2) |
-| `stat` | 106 | 4 | [stat(2)](../man/man2/stat.2) |
-| `stat64` | 195 | none | [stat(2)](../man/man2/stat.2) |
-| `statfs` | none | 137 | [statfs(2)](../man/man2/statfs.2) |
-| `statfs64` | 268 | none | [statfs(2)](../man/man2/statfs.2) |
-| `statx` | 383 | 332 | [stat(2)](../man/man2/stat.2) |
-| `stime` | 25 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `symlink` | 83 | 88 | [symlink(2)](../man/man2/symlink.2) |
-| `symlinkat` | 304 | 266 | [symlink(2)](../man/man2/symlink.2) |
-| `sync` | 36 | 162 | [sync(2)](../man/man2/sync.2) |
-| `syncfs` | 344 | 306 | [sync(2)](../man/man2/sync.2) |
-| `sysinfo` | 116 | 99 | [uname(2)](../man/man2/uname.2) |
-| `syslog` | 103 | 103 | [syslog(2)](../man/man2/syslog.2) |
-| `tee` | 315 | 276 | [splice(2)](../man/man2/splice.2) |
-| `tgkill` | 270 | 234 | [kill(2)](../man/man2/kill.2) |
-| `time` | 13 | 201 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `timer_create` | 259 | 222 | [timer_create(2)](../man/man2/timer_create.2) |
-| `timer_delete` | 263 | 226 | [timer_create(2)](../man/man2/timer_create.2) |
-| `timer_getoverrun` | 262 | 225 | [timer_create(2)](../man/man2/timer_create.2) |
-| `timer_gettime` | 261 | 224 | [timer_create(2)](../man/man2/timer_create.2) |
-| `timer_gettime64` | 408 | none | [timer_create(2)](../man/man2/timer_create.2) |
-| `timer_settime` | 260 | 223 | [timer_create(2)](../man/man2/timer_create.2) |
-| `timer_settime64` | 409 | none | [timer_create(2)](../man/man2/timer_create.2) |
-| `timerfd_create` | 322 | 283 | [timerfd(2)](../man/man2/timerfd.2) |
-| `timerfd_gettime` | 326 | 287 | [timerfd(2)](../man/man2/timerfd.2) |
-| `timerfd_gettime64` | 410 | none | [timerfd(2)](../man/man2/timerfd.2) |
-| `timerfd_settime` | 325 | 286 | [timerfd(2)](../man/man2/timerfd.2) |
-| `timerfd_settime64` | 411 | none | [timerfd(2)](../man/man2/timerfd.2) |
-| `times` | 43 | 100 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `tkill` | 238 | 200 | [kill(2)](../man/man2/kill.2) |
-| `truncate` | 92 | 76 | [truncate(2)](../man/man2/truncate.2) |
-| `truncate64` | 193 | none | [truncate(2)](../man/man2/truncate.2) |
-| `ugetrlimit` | 191 | none | [prlimit64(2)](../man/man2/prlimit64.2) |
-| `umask` | 60 | 95 | [umask(2)](../man/man2/umask.2) |
-| `umount2` | 52 | 166 | [mount(2)](../man/man2/mount.2) |
-| `uname` | 122 | 63 | [uname(2)](../man/man2/uname.2) |
-| `unlink` | 10 | 87 | [link(2)](../man/man2/link.2) |
-| `unlinkat` | 301 | 263 | [link(2)](../man/man2/link.2) |
-| `unshare` | 310 | 272 | [unshare(2)](../man/man2/unshare.2) |
-| `utimensat` | 320 | 280 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `utimensat_time64` | 412 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `vfork` | 190 | 58 | [fork(2)](../man/man2/fork.2) |
-| `wait4` | 114 | 61 | [wait(2)](../man/man2/wait.2) |
-| `waitid` | 284 | 247 | [wait(2)](../man/man2/wait.2) |
-| `waitpid` | 7 | none | [wait(2)](../man/man2/wait.2) |
-| `write` | 4 | 1 | [write(2)](../man/man2/write.2) |
-| `writev` | 146 | 20 | [write(2)](../man/man2/write.2) |
+| Call | i386 | x86-64 | compat | Page |
+|---|--:|--:|--:|---|
+| `accept` | none | 43 | none | [accept(2)](../man/man2/accept.2) |
+| `accept4` | 364 | 288 | 364 | [accept(2)](../man/man2/accept.2) |
+| `access` | 33 | 21 | 33 | [access(2)](../man/man2/access.2) |
+| `adjtimex` | 124 | 159 | none | [adjtimex(2)](../man/man2/adjtimex.2) |
+| `alarm` | 27 | 37 | 27 | [setitimer(2)](../man/man2/setitimer.2) |
+| `arch_prctl` | none | 158 | none | [arch_prctl(2)](../man/man2/arch_prctl.2) |
+| `bind` | 361 | 49 | 361 | [bind(2)](../man/man2/bind.2) |
+| `brk` | 45 | 12 | 45 | [brk(2)](../man/man2/brk.2) |
+| `capget` | 184 | 125 | 184 | [capget(2)](../man/man2/capget.2) |
+| `capset` | 185 | 126 | 185 | [capget(2)](../man/man2/capget.2) |
+| `chdir` | 12 | 80 | 12 | [chdir(2)](../man/man2/chdir.2) |
+| `chmod` | 15 | 90 | 15 | [chmod(2)](../man/man2/chmod.2) |
+| `chown` | 182 | 92 | none | [chown(2)](../man/man2/chown.2) |
+| `chown32` | 212 | none | 212 | [chown(2)](../man/man2/chown.2) |
+| `chroot` | 61 | 161 | 61 | [chroot(2)](../man/man2/chroot.2) |
+| `clock_adjtime` | 343 | 305 | none | [adjtimex(2)](../man/man2/adjtimex.2) |
+| `clock_adjtime64` | 405 | none | 405 | [adjtimex(2)](../man/man2/adjtimex.2) |
+| `clock_getres` | 266 | 229 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
+| `clock_getres_time64` | 406 | none | 406 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
+| `clock_gettime` | 265 | 228 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
+| `clock_gettime64` | 403 | none | 403 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
+| `clock_nanosleep` | 267 | 230 | none | [nanosleep(2)](../man/man2/nanosleep.2) |
+| `clock_nanosleep_time64` | none | none | 407 | [nanosleep(2)](../man/man2/nanosleep.2) |
+| `clock_settime` | 264 | 227 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
+| `clock_settime64` | 404 | none | 404 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
+| `clone` | 120 | 56 | none | [fork(2)](../man/man2/fork.2) |
+| `clone3` | 435 | 435 | 435 | [fork(2)](../man/man2/fork.2) |
+| `close` | 6 | 3 | 6 | [open(2)](../man/man2/open.2) |
+| `close_range` | 436 | 436 | 436 | [open(2)](../man/man2/open.2) |
+| `connect` | 362 | 42 | 362 | [connect(2)](../man/man2/connect.2) |
+| `copy_file_range` | 377 | 326 | 377 | [splice(2)](../man/man2/splice.2) |
+| `creat` | 8 | 85 | 8 | [open(2)](../man/man2/open.2) |
+| `dup` | 41 | 32 | 41 | [dup(2)](../man/man2/dup.2) |
+| `dup2` | 63 | 33 | 63 | [dup(2)](../man/man2/dup.2) |
+| `dup3` | 330 | 292 | 330 | [dup(2)](../man/man2/dup.2) |
+| `epoll_create` | 254 | 213 | 254 | [epoll(2)](../man/man2/epoll.2) |
+| `epoll_create1` | 329 | 291 | 329 | [epoll(2)](../man/man2/epoll.2) |
+| `epoll_ctl` | 255 | 233 | 255 | [epoll(2)](../man/man2/epoll.2) |
+| `epoll_pwait` | 319 | 281 | 319 | [epoll(2)](../man/man2/epoll.2) |
+| `epoll_pwait2` | 441 | 441 | none | [epoll(2)](../man/man2/epoll.2) |
+| `epoll_wait` | 256 | 232 | 256 | [epoll(2)](../man/man2/epoll.2) |
+| `eventfd` | 323 | 284 | 323 | [eventfd(2)](../man/man2/eventfd.2) |
+| `eventfd2` | 328 | 290 | 328 | [eventfd(2)](../man/man2/eventfd.2) |
+| `execve` | 11 | 59 | none | [execve(2)](../man/man2/execve.2) |
+| `exit` | 1 | 60 | 1 | [exit(2)](../man/man2/exit.2) |
+| `exit_group` | 252 | 231 | 252 | [exit(2)](../man/man2/exit.2) |
+| `faccessat` | 307 | 269 | 307 | [access(2)](../man/man2/access.2) |
+| `faccessat2` | 439 | 439 | 439 | [access(2)](../man/man2/access.2) |
+| `fadvise64` | 250 | 221 | none | [readahead(2)](../man/man2/readahead.2) |
+| `fadvise64_64` | 272 | none | none | [readahead(2)](../man/man2/readahead.2) |
+| `fallocate` | 324 | 285 | none | [fallocate(2)](../man/man2/fallocate.2) |
+| `fchdir` | 133 | 81 | 133 | [chdir(2)](../man/man2/chdir.2) |
+| `fchmod` | 94 | 91 | 94 | [chmod(2)](../man/man2/chmod.2) |
+| `fchmodat` | 306 | 268 | 306 | [chmod(2)](../man/man2/chmod.2) |
+| `fchown` | 95 | 93 | none | [chown(2)](../man/man2/chown.2) |
+| `fchown32` | 207 | none | 207 | [chown(2)](../man/man2/chown.2) |
+| `fchownat` | 298 | 260 | 298 | [chown(2)](../man/man2/chown.2) |
+| `fcntl` | none | 72 | none | [fcntl(2)](../man/man2/fcntl.2) |
+| `fcntl64` | 221 | none | none | [fcntl(2)](../man/man2/fcntl.2) |
+| `fdatasync` | 148 | 75 | 148 | [sync(2)](../man/man2/sync.2) |
+| `fgetxattr` | 231 | 193 | 231 | [getxattr(2)](../man/man2/getxattr.2) |
+| `flistxattr` | 234 | 196 | 234 | [getxattr(2)](../man/man2/getxattr.2) |
+| `flock` | 143 | 73 | 143 | [flock(2)](../man/man2/flock.2) |
+| `fork` | 2 | 57 | 2 | [fork(2)](../man/man2/fork.2) |
+| `fremovexattr` | 237 | 199 | 237 | [getxattr(2)](../man/man2/getxattr.2) |
+| `fsetxattr` | 228 | 190 | 228 | [getxattr(2)](../man/man2/getxattr.2) |
+| `fstat` | none | 5 | none | [stat(2)](../man/man2/stat.2) |
+| `fstat64` | 197 | none | none | [stat(2)](../man/man2/stat.2) |
+| `fstatat64` | 300 | none | none | [stat(2)](../man/man2/stat.2) |
+| `fstatfs` | none | 138 | none | [statfs(2)](../man/man2/statfs.2) |
+| `fstatfs64` | 269 | none | none | [statfs(2)](../man/man2/statfs.2) |
+| `fsync` | 118 | 74 | 118 | [sync(2)](../man/man2/sync.2) |
+| `ftruncate` | 93 | 77 | none | [truncate(2)](../man/man2/truncate.2) |
+| `ftruncate64` | 194 | none | none | [truncate(2)](../man/man2/truncate.2) |
+| `futex` | 240 | 202 | none | [futex(2)](../man/man2/futex.2) |
+| `futex_time64` | none | none | 422 | [futex(2)](../man/man2/futex.2) |
+| `get_robust_list` | 312 | 274 | none | [futex(2)](../man/man2/futex.2) |
+| `get_thread_area` | none | none | 244 | [set_thread_area(2)](../man/man2/set_thread_area.2) |
+| `getcpu` | 318 | 309 | 318 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `getcwd` | 183 | 79 | 183 | [chdir(2)](../man/man2/chdir.2) |
+| `getdents64` | 220 | 217 | 220 | [getdents64(2)](../man/man2/getdents64.2) |
+| `getegid` | none | 108 | none | [getuid(2)](../man/man2/getuid.2) |
+| `getegid32` | 202 | none | 202 | [getuid(2)](../man/man2/getuid.2) |
+| `geteuid` | none | 107 | none | [getuid(2)](../man/man2/getuid.2) |
+| `geteuid32` | 201 | none | 201 | [getuid(2)](../man/man2/getuid.2) |
+| `getgid` | none | 104 | none | [getuid(2)](../man/man2/getuid.2) |
+| `getgid32` | 200 | none | 200 | [getuid(2)](../man/man2/getuid.2) |
+| `getgroups` | none | 115 | none | [getuid(2)](../man/man2/getuid.2) |
+| `getgroups32` | 205 | none | 205 | [getuid(2)](../man/man2/getuid.2) |
+| `getitimer` | 105 | 36 | none | [setitimer(2)](../man/man2/setitimer.2) |
+| `getpeername` | 368 | 52 | 368 | [getsockname(2)](../man/man2/getsockname.2) |
+| `getpgid` | 132 | 121 | 132 | [getpid(2)](../man/man2/getpid.2) |
+| `getpgrp` | 65 | 111 | 65 | [getpid(2)](../man/man2/getpid.2) |
+| `getpid` | 20 | 39 | 20 | [getpid(2)](../man/man2/getpid.2) |
+| `getppid` | 64 | 110 | 64 | [getpid(2)](../man/man2/getpid.2) |
+| `getpriority` | 96 | 140 | 96 | [getpriority(2)](../man/man2/getpriority.2) |
+| `getrandom` | 355 | 318 | 355 | [getrandom(2)](../man/man2/getrandom.2) |
+| `getresgid` | none | 120 | none | [getuid(2)](../man/man2/getuid.2) |
+| `getresgid32` | 211 | none | 211 | [getuid(2)](../man/man2/getuid.2) |
+| `getresuid` | none | 118 | none | [getuid(2)](../man/man2/getuid.2) |
+| `getresuid32` | 209 | none | 209 | [getuid(2)](../man/man2/getuid.2) |
+| `getrlimit` | 76 | 97 | none | [prlimit64(2)](../man/man2/prlimit64.2) |
+| `getrusage` | 77 | 98 | none | [getrusage(2)](../man/man2/getrusage.2) |
+| `getsid` | 147 | 124 | 147 | [getpid(2)](../man/man2/getpid.2) |
+| `getsockname` | 367 | 51 | 367 | [getsockname(2)](../man/man2/getsockname.2) |
+| `getsockopt` | 365 | 55 | none | [setsockopt(2)](../man/man2/setsockopt.2) |
+| `gettid` | 224 | 186 | 224 | [getpid(2)](../man/man2/getpid.2) |
+| `gettimeofday` | 78 | 96 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
+| `getuid` | none | 102 | none | [getuid(2)](../man/man2/getuid.2) |
+| `getuid32` | 199 | none | 199 | [getuid(2)](../man/man2/getuid.2) |
+| `getxattr` | 229 | 191 | 229 | [getxattr(2)](../man/man2/getxattr.2) |
+| `inotify_add_watch` | 292 | 254 | 292 | [inotify_init(2)](../man/man2/inotify_init.2) |
+| `inotify_init` | 291 | 253 | 291 | [inotify_init(2)](../man/man2/inotify_init.2) |
+| `inotify_init1` | 332 | 294 | 332 | [inotify_init(2)](../man/man2/inotify_init.2) |
+| `inotify_rm_watch` | 293 | 255 | 293 | [inotify_init(2)](../man/man2/inotify_init.2) |
+| `ioctl` | 54 | 16 | none | [ioctl(2)](../man/man2/ioctl.2) |
+| `ioprio_get` | 290 | 252 | 290 | [ioprio_set(2)](../man/man2/ioprio_set.2) |
+| `ioprio_set` | 289 | 251 | 289 | [ioprio_set(2)](../man/man2/ioprio_set.2) |
+| `ipc` | 117 | none | none | [ipc(2)](../man/man2/ipc.2) |
+| `kill` | 37 | 62 | 37 | [kill(2)](../man/man2/kill.2) |
+| `lchown` | 16 | 94 | none | [chown(2)](../man/man2/chown.2) |
+| `lchown32` | 198 | none | 198 | [chown(2)](../man/man2/chown.2) |
+| `lgetxattr` | 230 | 192 | 230 | [getxattr(2)](../man/man2/getxattr.2) |
+| `link` | 9 | 86 | 9 | [link(2)](../man/man2/link.2) |
+| `linkat` | 303 | 265 | 303 | [link(2)](../man/man2/link.2) |
+| `listen` | 363 | 50 | 363 | [listen(2)](../man/man2/listen.2) |
+| `listxattr` | 232 | 194 | 232 | [getxattr(2)](../man/man2/getxattr.2) |
+| `llistxattr` | 233 | 195 | 233 | [getxattr(2)](../man/man2/getxattr.2) |
+| `llseek` | 140 | none | none | [lseek(2)](../man/man2/lseek.2) |
+| `lremovexattr` | 236 | 198 | 236 | [getxattr(2)](../man/man2/getxattr.2) |
+| `lseek` | 19 | 8 | none | [lseek(2)](../man/man2/lseek.2) |
+| `lsetxattr` | 227 | 189 | 227 | [getxattr(2)](../man/man2/getxattr.2) |
+| `lstat` | 107 | 6 | none | [stat(2)](../man/man2/stat.2) |
+| `lstat64` | 196 | none | none | [stat(2)](../man/man2/stat.2) |
+| `madvise` | 219 | 28 | 219 | [brk(2)](../man/man2/brk.2) |
+| `memfd_create` | 356 | 319 | 356 | [memfd_create(2)](../man/man2/memfd_create.2) |
+| `mincore` | 218 | 27 | 218 | [brk(2)](../man/man2/brk.2) |
+| `mkdir` | 39 | 83 | 39 | [mkdir(2)](../man/man2/mkdir.2) |
+| `mkdirat` | 296 | 258 | 296 | [mkdir(2)](../man/man2/mkdir.2) |
+| `mknod` | 14 | 133 | 14 | [mknod(2)](../man/man2/mknod.2) |
+| `mknodat` | 297 | 259 | 297 | [mknod(2)](../man/man2/mknod.2) |
+| `mlock` | 150 | 149 | 150 | [brk(2)](../man/man2/brk.2) |
+| `mlock2` | 376 | 325 | 376 | [brk(2)](../man/man2/brk.2) |
+| `mlockall` | 152 | 151 | 152 | [brk(2)](../man/man2/brk.2) |
+| `mmap` | none | 9 | none | [brk(2)](../man/man2/brk.2) |
+| `mmap2` | 192 | none | none | [brk(2)](../man/man2/brk.2) |
+| `mount` | 21 | 165 | 21 | [mount(2)](../man/man2/mount.2) |
+| `mprotect` | 125 | 10 | 125 | [brk(2)](../man/man2/brk.2) |
+| `mq_getsetattr` | 282 | 245 | none | [mq_open(2)](../man/man2/mq_open.2) |
+| `mq_notify` | 281 | 244 | none | [mq_open(2)](../man/man2/mq_open.2) |
+| `mq_open` | 277 | 240 | none | [mq_open(2)](../man/man2/mq_open.2) |
+| `mq_timedreceive` | 280 | 243 | none | [mq_open(2)](../man/man2/mq_open.2) |
+| `mq_timedreceive_time64` | 419 | none | 419 | [mq_open(2)](../man/man2/mq_open.2) |
+| `mq_timedsend` | 279 | 242 | none | [mq_open(2)](../man/man2/mq_open.2) |
+| `mq_timedsend_time64` | 418 | none | 418 | [mq_open(2)](../man/man2/mq_open.2) |
+| `mq_unlink` | 278 | 241 | 278 | [mq_open(2)](../man/man2/mq_open.2) |
+| `mremap` | 163 | 25 | 163 | [brk(2)](../man/man2/brk.2) |
+| `msgctl` | 402 | 71 | none | [msgget(2)](../man/man2/msgget.2) |
+| `msgget` | 399 | 68 | 399 | [msgget(2)](../man/man2/msgget.2) |
+| `msgrcv` | 401 | 70 | none | [msgget(2)](../man/man2/msgget.2) |
+| `msgsnd` | 400 | 69 | none | [msgget(2)](../man/man2/msgget.2) |
+| `msync` | 144 | 26 | 144 | [brk(2)](../man/man2/brk.2) |
+| `munlock` | 151 | 150 | 151 | [brk(2)](../man/man2/brk.2) |
+| `munlockall` | 153 | 152 | 153 | [brk(2)](../man/man2/brk.2) |
+| `munmap` | 91 | 11 | 91 | [brk(2)](../man/man2/brk.2) |
+| `nanosleep` | 162 | 35 | none | [nanosleep(2)](../man/man2/nanosleep.2) |
+| `newfstatat` | none | 262 | none | [stat(2)](../man/man2/stat.2) |
+| `newselect` | 142 | none | none | [select(2)](../man/man2/select.2) |
+| `open` | 5 | 2 | none | [open(2)](../man/man2/open.2) |
+| `openat` | 295 | 257 | none | [open(2)](../man/man2/open.2) |
+| `pause` | 29 | 34 | 29 | [sigaction(2)](../man/man2/sigaction.2) |
+| `personality` | 136 | 135 | 136 | [prctl(2)](../man/man2/prctl.2) |
+| `pidfd_getfd` | 438 | 438 | 438 | [pidfd_open(2)](../man/man2/pidfd_open.2) |
+| `pidfd_open` | 434 | 434 | 434 | [pidfd_open(2)](../man/man2/pidfd_open.2) |
+| `pidfd_send_signal` | 424 | 424 | none | [pidfd_open(2)](../man/man2/pidfd_open.2) |
+| `pipe` | 42 | 22 | 42 | [pipe(2)](../man/man2/pipe.2) |
+| `pipe2` | 331 | 293 | 331 | [pipe(2)](../man/man2/pipe.2) |
+| `pivot_root` | 217 | 155 | 217 | [pivot_root(2)](../man/man2/pivot_root.2) |
+| `poll` | 168 | 7 | 168 | [poll(2)](../man/man2/poll.2) |
+| `ppoll` | 309 | 271 | none | [poll(2)](../man/man2/poll.2) |
+| `prctl` | 172 | 157 | 172 | [prctl(2)](../man/man2/prctl.2) |
+| `pread64` | 180 | 17 | none | [read(2)](../man/man2/read.2) |
+| `preadv` | none | 295 | none | [read(2)](../man/man2/read.2) |
+| `prlimit64` | 340 | 302 | 340 | [prlimit64(2)](../man/man2/prlimit64.2) |
+| `pselect6` | 308 | 270 | none | [select(2)](../man/man2/select.2) |
+| `ptrace` | 26 | 101 | none | [ptrace(2)](../man/man2/ptrace.2) |
+| `pwrite64` | 181 | 18 | none | [write(2)](../man/man2/write.2) |
+| `pwritev` | none | 296 | none | [write(2)](../man/man2/write.2) |
+| `rach2_ping` | none | 400 | none | [ping(2)](../man/man2/ping.2) |
+| `read` | 3 | 0 | 3 | [read(2)](../man/man2/read.2) |
+| `readahead` | 225 | 187 | none | [readahead(2)](../man/man2/readahead.2) |
+| `readlink` | 85 | 89 | 85 | [symlink(2)](../man/man2/symlink.2) |
+| `readlinkat` | 305 | 267 | 305 | [symlink(2)](../man/man2/symlink.2) |
+| `readv` | 145 | 19 | none | [read(2)](../man/man2/read.2) |
+| `reboot` | 88 | 169 | 88 | [reboot(2)](../man/man2/reboot.2) |
+| `recvfrom` | 371 | 45 | none | [recv(2)](../man/man2/recv.2) |
+| `recvmmsg` | 337 | 299 | none | [recv(2)](../man/man2/recv.2) |
+| `recvmsg` | 372 | 47 | none | [recv(2)](../man/man2/recv.2) |
+| `removexattr` | 235 | 197 | 235 | [getxattr(2)](../man/man2/getxattr.2) |
+| `rename` | 38 | 82 | 38 | [rename(2)](../man/man2/rename.2) |
+| `renameat` | 302 | 264 | 302 | [rename(2)](../man/man2/rename.2) |
+| `renameat2` | 353 | 316 | 353 | [rename(2)](../man/man2/rename.2) |
+| `rmdir` | 40 | 84 | 40 | [mkdir(2)](../man/man2/mkdir.2) |
+| `rt_sigaction` | 174 | 13 | none | [sigaction(2)](../man/man2/sigaction.2) |
+| `rt_sigpending` | 176 | 127 | none | [sigaction(2)](../man/man2/sigaction.2) |
+| `rt_sigprocmask` | 175 | 14 | none | [sigaction(2)](../man/man2/sigaction.2) |
+| `rt_sigqueueinfo` | 178 | 129 | none | [rt_sigqueueinfo(2)](../man/man2/rt_sigqueueinfo.2) |
+| `rt_sigreturn` | 173 | 15 | none | [sigaction(2)](../man/man2/sigaction.2) |
+| `rt_sigsuspend` | 179 | 130 | none | [sigaction(2)](../man/man2/sigaction.2) |
+| `rt_sigtimedwait` | 177 | 128 | none | [sigaction(2)](../man/man2/sigaction.2) |
+| `rt_tgsigqueueinfo` | 335 | 297 | none | [rt_sigqueueinfo(2)](../man/man2/rt_sigqueueinfo.2) |
+| `sched_get_priority_max` | 159 | 146 | 159 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_get_priority_min` | 160 | 147 | 160 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_getaffinity` | 242 | 204 | none | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_getparam` | 155 | 143 | 155 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_getscheduler` | 157 | 145 | 157 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_rr_get_interval` | 161 | 148 | none | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_rr_get_interval_time64` | none | none | 423 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_setaffinity` | 241 | 203 | none | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_setparam` | 154 | 142 | 154 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_setscheduler` | 156 | 144 | 156 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_yield` | 158 | 24 | 158 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `seccomp` | 354 | 317 | none | [seccomp(2)](../man/man2/seccomp.2) |
+| `select` | 82 | 23 | none | [select(2)](../man/man2/select.2) |
+| `semctl` | 394 | 66 | none | [semget(2)](../man/man2/semget.2) |
+| `semget` | 393 | 64 | 393 | [semget(2)](../man/man2/semget.2) |
+| `semop` | none | 65 | none | [semget(2)](../man/man2/semget.2) |
+| `semtimedop` | none | 220 | none | [semget(2)](../man/man2/semget.2) |
+| `semtimedop_time64` | 420 | none | 420 | [semget(2)](../man/man2/semget.2) |
+| `sendfile` | 187 | 40 | none | [splice(2)](../man/man2/splice.2) |
+| `sendfile64` | 239 | none | 239 | [splice(2)](../man/man2/splice.2) |
+| `sendmmsg` | 345 | 307 | none | [send(2)](../man/man2/send.2) |
+| `sendmsg` | 370 | 46 | none | [send(2)](../man/man2/send.2) |
+| `sendto` | 369 | 44 | 369 | [send(2)](../man/man2/send.2) |
+| `set_robust_list` | 311 | 273 | none | [futex(2)](../man/man2/futex.2) |
+| `set_thread_area` | 243 | none | 243 | [set_thread_area(2)](../man/man2/set_thread_area.2) |
+| `set_tid_address` | 258 | 218 | 258 | [set_thread_area(2)](../man/man2/set_thread_area.2) |
+| `setdomainname` | 121 | 171 | 121 | [uname(2)](../man/man2/uname.2) |
+| `setgid` | none | 106 | none | [setuid(2)](../man/man2/setuid.2) |
+| `setgid32` | 214 | none | 214 | [setuid(2)](../man/man2/setuid.2) |
+| `setgroups` | none | 116 | none | [setuid(2)](../man/man2/setuid.2) |
+| `setgroups32` | 206 | none | 206 | [setuid(2)](../man/man2/setuid.2) |
+| `sethostname` | 74 | 170 | 74 | [uname(2)](../man/man2/uname.2) |
+| `setitimer` | 104 | 38 | none | [setitimer(2)](../man/man2/setitimer.2) |
+| `setns` | 346 | 308 | 346 | [unshare(2)](../man/man2/unshare.2) |
+| `setpgid` | 57 | 109 | 57 | [getpid(2)](../man/man2/getpid.2) |
+| `setpriority` | 97 | 141 | 97 | [getpriority(2)](../man/man2/getpriority.2) |
+| `setregid` | none | 114 | none | [setuid(2)](../man/man2/setuid.2) |
+| `setregid32` | 204 | none | 204 | [setuid(2)](../man/man2/setuid.2) |
+| `setresgid` | none | 119 | none | [setuid(2)](../man/man2/setuid.2) |
+| `setresgid32` | 210 | none | 210 | [setuid(2)](../man/man2/setuid.2) |
+| `setresuid` | none | 117 | none | [setuid(2)](../man/man2/setuid.2) |
+| `setresuid32` | 208 | none | 208 | [setuid(2)](../man/man2/setuid.2) |
+| `setreuid` | none | 113 | none | [setuid(2)](../man/man2/setuid.2) |
+| `setreuid32` | 203 | none | 203 | [setuid(2)](../man/man2/setuid.2) |
+| `setrlimit` | 75 | 160 | none | [prlimit64(2)](../man/man2/prlimit64.2) |
+| `setsid` | 66 | 112 | 66 | [getpid(2)](../man/man2/getpid.2) |
+| `setsockopt` | 366 | 54 | none | [setsockopt(2)](../man/man2/setsockopt.2) |
+| `settimeofday` | 79 | 164 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
+| `setuid` | none | 105 | none | [setuid(2)](../man/man2/setuid.2) |
+| `setuid32` | 213 | none | 213 | [setuid(2)](../man/man2/setuid.2) |
+| `setxattr` | 226 | 188 | 226 | [getxattr(2)](../man/man2/getxattr.2) |
+| `shmat` | 397 | 30 | none | [shmget(2)](../man/man2/shmget.2) |
+| `shmctl` | 396 | 31 | none | [shmget(2)](../man/man2/shmget.2) |
+| `shmdt` | 398 | 67 | 398 | [shmget(2)](../man/man2/shmget.2) |
+| `shmget` | 395 | 29 | 395 | [shmget(2)](../man/man2/shmget.2) |
+| `shutdown` | 373 | 48 | 373 | [shutdown(2)](../man/man2/shutdown.2) |
+| `sigaltstack` | 186 | 131 | none | [sigaction(2)](../man/man2/sigaction.2) |
+| `signalfd` | 321 | 282 | none | [signalfd(2)](../man/man2/signalfd.2) |
+| `signalfd4` | 327 | 289 | none | [signalfd(2)](../man/man2/signalfd.2) |
+| `sigprocmask` | 126 | none | none | [sigaction(2)](../man/man2/sigaction.2) |
+| `sigreturn` | 119 | none | none | [sigaction(2)](../man/man2/sigaction.2) |
+| `socket` | 359 | 41 | 359 | [socket(2)](../man/man2/socket.2) |
+| `socketcall` | 102 | none | none | [socketcall(2)](../man/man2/socketcall.2) |
+| `socketpair` | 360 | 53 | 360 | [socket(2)](../man/man2/socket.2) |
+| `splice` | 313 | 275 | 313 | [splice(2)](../man/man2/splice.2) |
+| `stat` | 106 | 4 | none | [stat(2)](../man/man2/stat.2) |
+| `stat64` | 195 | none | none | [stat(2)](../man/man2/stat.2) |
+| `statfs` | none | 137 | none | [statfs(2)](../man/man2/statfs.2) |
+| `statfs64` | 268 | none | none | [statfs(2)](../man/man2/statfs.2) |
+| `statx` | 383 | 332 | 383 | [stat(2)](../man/man2/stat.2) |
+| `stime` | 25 | none | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
+| `symlink` | 83 | 88 | 83 | [symlink(2)](../man/man2/symlink.2) |
+| `symlinkat` | 304 | 266 | 304 | [symlink(2)](../man/man2/symlink.2) |
+| `sync` | 36 | 162 | 36 | [sync(2)](../man/man2/sync.2) |
+| `syncfs` | 344 | 306 | 344 | [sync(2)](../man/man2/sync.2) |
+| `sysinfo` | 116 | 99 | none | [uname(2)](../man/man2/uname.2) |
+| `syslog` | 103 | 103 | 103 | [syslog(2)](../man/man2/syslog.2) |
+| `tee` | 315 | 276 | 315 | [splice(2)](../man/man2/splice.2) |
+| `tgkill` | 270 | 234 | 270 | [kill(2)](../man/man2/kill.2) |
+| `time` | 13 | 201 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
+| `timer_create` | 259 | 222 | none | [timer_create(2)](../man/man2/timer_create.2) |
+| `timer_delete` | 263 | 226 | 263 | [timer_create(2)](../man/man2/timer_create.2) |
+| `timer_getoverrun` | 262 | 225 | 262 | [timer_create(2)](../man/man2/timer_create.2) |
+| `timer_gettime` | 261 | 224 | none | [timer_create(2)](../man/man2/timer_create.2) |
+| `timer_gettime64` | 408 | none | 408 | [timer_create(2)](../man/man2/timer_create.2) |
+| `timer_settime` | 260 | 223 | none | [timer_create(2)](../man/man2/timer_create.2) |
+| `timer_settime64` | 409 | none | 409 | [timer_create(2)](../man/man2/timer_create.2) |
+| `timerfd_create` | 322 | 283 | 322 | [timerfd(2)](../man/man2/timerfd.2) |
+| `timerfd_gettime` | 326 | 287 | none | [timerfd(2)](../man/man2/timerfd.2) |
+| `timerfd_gettime64` | 410 | none | 410 | [timerfd(2)](../man/man2/timerfd.2) |
+| `timerfd_settime` | 325 | 286 | none | [timerfd(2)](../man/man2/timerfd.2) |
+| `timerfd_settime64` | 411 | none | 411 | [timerfd(2)](../man/man2/timerfd.2) |
+| `times` | 43 | 100 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
+| `tkill` | 238 | 200 | 238 | [kill(2)](../man/man2/kill.2) |
+| `truncate` | 92 | 76 | none | [truncate(2)](../man/man2/truncate.2) |
+| `truncate64` | 193 | none | none | [truncate(2)](../man/man2/truncate.2) |
+| `ugetrlimit` | 191 | none | none | [prlimit64(2)](../man/man2/prlimit64.2) |
+| `umask` | 60 | 95 | 60 | [umask(2)](../man/man2/umask.2) |
+| `umount2` | 52 | 166 | 52 | [mount(2)](../man/man2/mount.2) |
+| `uname` | 122 | 63 | 122 | [uname(2)](../man/man2/uname.2) |
+| `unlink` | 10 | 87 | 10 | [link(2)](../man/man2/link.2) |
+| `unlinkat` | 301 | 263 | 301 | [link(2)](../man/man2/link.2) |
+| `unshare` | 310 | 272 | 310 | [unshare(2)](../man/man2/unshare.2) |
+| `utimensat` | 320 | 280 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
+| `utimensat_time64` | 412 | none | 412 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
+| `vfork` | 190 | 58 | 190 | [fork(2)](../man/man2/fork.2) |
+| `wait4` | 114 | 61 | none | [wait(2)](../man/man2/wait.2) |
+| `waitid` | 284 | 247 | none | [wait(2)](../man/man2/wait.2) |
+| `waitpid` | 7 | none | 7 | [wait(2)](../man/man2/wait.2) |
+| `write` | 4 | 1 | 4 | [write(2)](../man/man2/write.2) |
+| `writev` | 146 | 20 | none | [write(2)](../man/man2/write.2) |

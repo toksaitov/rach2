@@ -231,7 +231,7 @@ mancheck_arch() {
 
 # manual: the pages of the programs and system calls, and rach2/syscalls.md.
 manual() {
-    touched '^man/|/systab\.c$|/sysnr\.h$|/syscall_net\.c$|^utils/programs\.mk$|^krffs/manifests/|^rach2/syscalls\.md$' ||
+    touched '^man/|systab\.c$|sysnr\.h$|^rach2/sys/arch/x86_64/ia32.*\.c$|/syscall_net\.c$|^utils/programs\.mk$|^krffs/manifests/|^rach2/syscalls\.md$' ||
         return 0
     in_tree mancheck.c || return 0
     if ! command -v mandoc >/dev/null 2>&1; then
@@ -244,10 +244,12 @@ manual() {
     }
     : >"$WORK/applets.h"
     mancheck_arch i686 rach2/sys/arch/i686/systab.c:rach2/sys/syscall_net.c
-    mancheck_arch x86_64 rach2/sys/arch/x86_64/systab.c
+    mancheck_arch x86_64 \
+        rach2/sys/arch/x86_64/systab.c:rach2/sys/arch/x86_64/ia32_sysnr.h=rach2/sys/arch/x86_64/ia32_systab.c
     (cd "$TREE" && "$WORK/mancheck" --calls man rach2/sys/arch/i686/sysnr.h \
         rach2/sys/arch/i686/systab.c rach2/sys/arch/x86_64/sysnr.h \
-        rach2/sys/arch/x86_64/systab.c) >"$WORK/syscalls.md" 2>/dev/null
+        rach2/sys/arch/x86_64/systab.c rach2/sys/arch/x86_64/ia32_sysnr.h \
+        rach2/sys/arch/x86_64/ia32_systab.c) >"$WORK/syscalls.md" 2>/dev/null
     cmp -s "$WORK/syscalls.md" "$TREE/rach2/syscalls.md" ||
         echo 'rach2/syscalls.md: not what make syscalls writes; run it' >>"$OUT"
 }

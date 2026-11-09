@@ -9,7 +9,9 @@
  * the BusyBox build keeps beside the binary, since the guest binary does not
  * run on the host; the system calls are the names an architecture's table
  * registers, read from its `systab.c` and numbered by its `sysnr.h`, and the
- * socket operations behind `socketcall`, read from `syscall_net.c`. The pages
+ * socket operations behind `socketcall`, read from `syscall_net.c`. A row
+ * whose handler is NULL, or a stub that `IA32_STUB(name)` defines in a `.c`
+ * file beside the table, registers nothing: the call answers ENOSYS. The pages
  * are `man/manN/NAME.N`, and `man/aliases` lists the pages a second name
  * reaches, one `NAME SECTION TARGET` a line.
  *
@@ -26,18 +28,21 @@
  *            RECOVERY_MANIFEST MANIFEST...
  *
  * SYSTAB_C is a colon-separated list of the files to read the calls and the
- * socket operations from, and SYSNR_H gives each call its number. The exit
+ * socket operations from, and SYSNR_H gives each call its number; an entry
+ * HEADER=SOURCE reads SOURCE with the numbers of HEADER instead, as x86-64's
+ * compat table of i386 calls is numbered by `ia32_sysnr.h`. The exit
  * status is 0 when every name has a page, 1 when a name has none or a file
  * cannot be read, and 2 for a wrong usage.
  *
  *   mancheck --calls MANDIR I686_SYSNR_H I686_SYSTAB_C X86_64_SYSNR_H
- *            X86_64_SYSTAB_C
+ *            X86_64_SYSTAB_C IA32_SYSNR_H IA32_SYSTAB_C
  *
  * reads no manifest and runs no lint, and prints the Markdown of
- * `rach2/syscalls.md`: the calls the two tables register, one row a call in
- * name order, with its number in each table and a link to its page relative
- * to a directory beside MANDIR. It prints nothing and exits 1 when a call has
- * no page or no number, and exits 2 for a wrong number of arguments.
+ * `rach2/syscalls.md`: the calls the three tables register, the i686
+ * kernel's, the x86-64 kernel's and its compat table of i386 calls, one row a
+ * call in name order, with its number in each table and a link to its page
+ * relative to a directory beside MANDIR. It prints nothing and exits 1 when a
+ * call has no page or no number, and exits 2 for a wrong number of arguments.
  */
 #include <ctype.h>
 #include <dirent.h>
@@ -442,12 +447,86 @@ static long header_number(const char *header, const char *macro)
     return number;
 }
 
+static struct name stubs[NAMES]; /* the IA32_STUB handlers beside a table */
+static int nstubs;
+static char stub_dir[512]; /* the directory `stubs` was read from */
+
+/**
+ * Reads into `stubs` the names `IA32_STUB(name)` defines in the `.c` files of
+ * the directory `source` is in, unless that directory was the last one read.
+ */
+static void read_stubs(const char *source)
+{
+    char dir[512];
+    const char *slash = strrchr(source, '/');
+    size_t len = slash ? (size_t)(slash - source) : 1;
+    DIR *d;
+    struct dirent *e;
+
+    if (len >= sizeof(dir)) {
+        fail("%s: a source path is longer than this reads", source, "");
+        return;
+    }
+    memcpy(dir, slash ? source : ".", len);
+    dir[len] = '\0';
+    if (strcmp(dir, stub_dir) == 0) {
+        return;
+    }
+    strcpy(stub_dir, dir);
+    nstubs = 0;
+    d = opendir(dir);
+    if (!d) {
+        return;
+    }
+    while ((e = readdir(d)) != NULL) {
+        char path[1024], line[512];
+        size_t n = strlen(e->d_name);
+        FILE *f;
+
+        if (n < 3 || strcmp(e->d_name + n - 2, ".c") != 0) {
+            continue;
+        }
+        snprintf(path, sizeof(path), "%s/%s", dir, e->d_name);
+        f = fopen(path, "r");
+        if (!f) {
+            continue;
+        }
+        while (fgets(line, sizeof(line), f)) {
+            char name[NAME_MAX_LEN];
+
+            if (strncmp(line, "IA32_STUB(", 10) == 0 &&
+                sscanf(line + 10, "%63[A-Za-z0-9_]", name) == 1) {
+                add(stubs, &nstubs, name, "", NULL, "");
+            }
+        }
+        fclose(f);
+    }
+    closedir(d);
+}
+
+/** Whether `handler`, a table row's handler, registers no call. */
+static int no_handler(const char *handler)
+{
+    int i;
+
+    if (strcmp(handler, "NULL") == 0) {
+        return 1;
+    }
+    for (i = 0; i < nstubs; i++) {
+        if (strcmp(stubs[i].text, handler) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /**
  * Adds to `list` the calls one source file registers, each
  * `table[SYS_NAME]` as `name` with the number `header` gives `SYS_NAME`, and
  * the socket operations it defines, each `#define SC_NAME NUMBER` as `name`
  * with its number. A registered call the header gives no number for is a
- * finding. `source` is kept by reference by `add`.
+ * finding, and a row whose handler is NULL or a stub is skipped. `source` is
+ * kept by reference by `add`.
  */
 static void read_syscalls_from(const char *header, const char *source, struct name *list, int *n)
 {
@@ -458,6 +537,7 @@ static void read_syscalls_from(const char *header, const char *source, struct na
         fail("%s: cannot read", source, "");
         return;
     }
+    read_stubs(source);
     while (fgets(line, sizeof(line), f)) {
         char *p, *q;
         char name[NAME_MAX_LEN], macro[NAME_MAX_LEN + 4];
@@ -467,8 +547,13 @@ static void read_syscalls_from(const char *header, const char *source, struct na
 
         p = strstr(line, "table[SYS_");
         if (p) {
+            char handler[NAME_MAX_LEN];
+
             p += strlen("table[SYS_");
             q = strchr(p, ']');
+            if (q && sscanf(q, "] = %63[A-Za-z0-9_]", handler) == 1 && no_handler(handler)) {
+                continue;
+            }
         } else if (strncmp(line, "#define SC_", 11) == 0) {
             /* `SC_BE16(p)` and the other helper macros are not operations. */
             const char *r;
@@ -520,22 +605,24 @@ static void read_syscalls_from(const char *header, const char *source, struct na
  * Adds to `list` the calls and the socket operations of each file `sources`
  * lists, joined by colons: an architecture's systab.c registers the calls and
  * syscall_net.c defines the socket operations. `header` is the
- * architecture's sysnr.h.
+ * architecture's sysnr.h, and an entry HEADER=SOURCE reads SOURCE with the
+ * numbers of its own HEADER.
  *
  * The path each call is recorded as coming from is printed when the call has
  * no page, after this function has returned, so the paths are kept in static
- * storage for the program's life. Up to eight paths of under 512 bytes are
+ * storage for the program's life. Up to sixteen entries of under 512 bytes are
  * read; more, or a longer one, is a finding.
  */
 static void read_syscalls(const char *header, const char *sources, struct name *list, int *n)
 {
-    static char paths[8][512];
+    static char paths[16][512];
     static int npaths;
     const char *p = sources;
 
     while (*p != '\0') {
         const char *q = strchr(p, ':');
         size_t len = q ? (size_t)(q - p) : strlen(p);
+        char *eq;
 
         if (len >= sizeof(paths[0])) {
             fail("%s: a source path is longer than this reads", sources, "");
@@ -547,7 +634,13 @@ static void read_syscalls(const char *header, const char *sources, struct name *
         }
         memcpy(paths[npaths], p, len);
         paths[npaths][len] = '\0';
-        read_syscalls_from(header, paths[npaths], list, n);
+        eq = strchr(paths[npaths], '=');
+        if (eq) {
+            *eq = '\0';
+            read_syscalls_from(paths[npaths], eq + 1, list, n);
+        } else {
+            read_syscalls_from(header, paths[npaths], list, n);
+        }
         npaths++;
         p = q ? q + 1 : p + len;
     }
@@ -611,8 +704,9 @@ static void check_recovery(const char *listpath, const char *manifest)
     fclose(f);
 }
 
-static struct name calls32[NAMES], calls64[NAMES]; /* the i686 and x86-64 tables */
-static int ncalls32, ncalls64;
+/* The i686 and x86-64 tables, and x86-64's compat table of i386 calls. */
+static struct name calls32[NAMES], calls64[NAMES], callsc[NAMES];
+static int ncalls32, ncalls64, ncallsc;
 
 /** The number of `text` in the `n` names of `list`, or -1 when it is absent. */
 static long number_in(const struct name *list, int n, const char *text)
@@ -644,7 +738,7 @@ static void print_number(long number)
 }
 
 /**
- * The `--calls` mode: prints the Markdown table of the calls both tables
+ * The `--calls` mode: prints the Markdown table of the calls the three tables
  * register, one row a name, only when every call has a number and a page.
  * Returns 0, 1 after a finding, or 2 for a wrong number of arguments.
  */
@@ -653,9 +747,9 @@ static int print_calls(int argc, char **argv)
     char path[512];
     int i;
 
-    if (argc != 7) {
+    if (argc != 9) {
         fprintf(stderr, "usage: mancheck --calls MANDIR I686_SYSNR_H I686_SYSTAB_C "
-                        "X86_64_SYSNR_H X86_64_SYSTAB_C\n");
+                        "X86_64_SYSNR_H X86_64_SYSTAB_C IA32_SYSNR_H IA32_SYSTAB_C\n");
         return 2;
     }
     read_pages(argv[2], 0);
@@ -663,14 +757,21 @@ static int print_calls(int argc, char **argv)
     read_aliases(path);
     read_syscalls(argv[3], argv[4], calls32, &ncalls32);
     read_syscalls(argv[5], argv[6], calls64, &ncalls64);
+    read_syscalls(argv[7], argv[8], callsc, &ncallsc);
     if (ncalls32 == 0 || ncalls64 == 0) {
         fail("%s or %s: no registered call was read", argv[4], argv[6]);
+    }
+    if (ncallsc == 0) {
+        fail("%s: no registered call was read", argv[8], "");
     }
     for (i = 0; i < ncalls32; i++) {
         add(wanted, &nwanted, calls32[i].text, "2", NULL, calls32[i].from);
     }
     for (i = 0; i < ncalls64; i++) {
         add(wanted, &nwanted, calls64[i].text, "2", NULL, calls64[i].from);
+    }
+    for (i = 0; i < ncallsc; i++) {
+        add(wanted, &nwanted, callsc[i].text, "2", NULL, callsc[i].from);
     }
     qsort(wanted, (size_t)nwanted, sizeof(wanted[0]), by_text);
     for (i = 0; i < nwanted; i++) {
@@ -683,29 +784,33 @@ static int print_calls(int argc, char **argv)
         return 1;
     }
     printf("# The system calls\n\n"
-           "This table lists the calls the two kernels register, one row a call, in name "
+           "This table lists the calls the two kernels and the x86-64 kernel's compat table "
+           "register, one row a call, in name "
            "order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in "
            "lower case. A number is the one a program puts in `eax` before `int 0x80` on "
            "i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the "
-           "call on that architecture. `none` marks a call one kernel "
+           "call on that architecture. The compat column is the number a 32-bit program "
+           "puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number "
+           "and reaches the compat table of i386 calls. `none` marks a call a table "
            "does not register, and a number with no handler returns `ENOSYS`. The i686 "
-           "kernel registers %d calls and the x86-64 kernel %d. On i686 the socket "
-           "operations, `accept` among them, are also reached through `socketcall`, whose "
-           "page lists them. [syscalls(2)](../%s/man2/syscalls.2) gives the registers that "
-           "hold the arguments, and each call's page says where the call differs from "
-           "Linux.\n\n",
-           ncalls32, ncalls64, argv[2]);
-    printf("`make syscalls` writes this file from `%s` and `%s`, with the numbers in `%s` "
-           "and `%s`, and `tests/run style` fails when the file differs from what it "
-           "writes.\n\n",
-           argv[4], argv[6], argv[3], argv[5]);
-    printf("| Call | i386 | x86-64 | Page |\n|---|--:|--:|---|\n");
+           "kernel registers %d calls, the x86-64 kernel %d, and its compat table %d. On "
+           "i686 the socket operations, `accept` among them, are also reached through "
+           "`socketcall`, whose page lists them. [syscalls(2)](../%s/man2/syscalls.2) gives "
+           "the registers that hold the arguments, and each call's page says where the call "
+           "differs from Linux.\n\n",
+           ncalls32, ncalls64, ncallsc, argv[2]);
+    printf("`make syscalls` writes this file from `%s`, `%s` and `%s`, with the numbers in "
+           "`%s`, `%s` and `%s`, and `tests/run style` fails when the file differs from "
+           "what it writes.\n\n",
+           argv[4], argv[6], argv[8], argv[3], argv[5], argv[7]);
+    printf("| Call | i386 | x86-64 | compat | Page |\n|---|--:|--:|--:|---|\n");
     for (i = 0; i < nwanted; i++) {
         const char *page = page_of(wanted[i].text, "2");
 
         printf("| `%s` |", wanted[i].text);
         print_number(number_in(calls32, ncalls32, wanted[i].text));
         print_number(number_in(calls64, ncalls64, wanted[i].text));
+        print_number(number_in(callsc, ncallsc, wanted[i].text));
         printf(" [%s(2)](../%s/man2/%s.2) |\n", page, argv[2], page);
     }
     return 0;
