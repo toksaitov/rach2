@@ -26,13 +26,12 @@
 #include "../syscall_internal.h"
 
 /*
- * A file on a disk that shared mappings map: its pages in memory, which
- * every such mapping of the file maps, so that a store through one is seen
- * through all. A page is read from the file at its first touch and written
- * back whole, up to the file's size, which a mapping does not change. Every
- * page in memory is written back, since the kernel does not read from the
- * page tables which pages were stored to. It is found by its mount and inode
- * number, as the calls on the file's descriptors find it.
+ * A disk file's resident pages belong to its private and shared mappings.
+ * A shared store reaches every clean mapping; a private store copies first.
+ * A page is read on first touch and written back whole, up to the file's
+ * size, which a mapping does not change. Shared writers write every page
+ * back, since the kernel does not read the page tables' dirty bits. The
+ * mount and inode number identify the file to descriptor operations.
  */
 struct dshare {
     struct dshare *next;

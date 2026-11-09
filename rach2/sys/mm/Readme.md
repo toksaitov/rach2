@@ -248,7 +248,7 @@ The cache has `PC_SLOTS`, 4096 slots, and uses as many as half the caches' targe
 * The i686 kernel addresses the first 4 GiB of physical memory, and every page it maps is executable. The x86-64 kernel addresses 64 TiB, or 64 GiB without 1 GiB pages.
 * The heap is 256 MiB on i686 whatever the machine has.
 * A file's pages are numbered in 32 bits: a mapping of a file or of shared memory past page 2^32 is refused with EOVERFLOW, and a file in memory ends at 16 TiB less a page.
-* A writable shared mapping of a file is possible on tmpfs and ext2 alone. A store past the end of an ext2 file through a shared mapping is lost, and a touch past the end of a mapped tmpfs file ends in `SIGSEGV`, where Linux sends `SIGBUS` for both.
+* A writable shared mapping of a file is possible on tmpfs and ext2 alone. A touch of a page wholly past EOF on either raises `SIGBUS`, including through a private mapping.
 * A process has at most 65536 regions, unless `vm.max_map_count` is raised.
 * A KRFFS disk root is at most 512 MiB, less on i686 where a BAR shortens the window, and the disk page cache keeps at most 4096 pages.
 * The MMIO region is 128 MiB, of which one window may take the longest free run, 127.8 MiB under QEMU; i686 maps it in 4 KiB pages and only below 4 GiB. The modules together have 64 MiB and must lie below 4 GiB, and i686 has 1024 temporary mappings.

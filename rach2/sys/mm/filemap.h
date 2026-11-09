@@ -25,8 +25,8 @@ struct shmem;
 struct vm_file *filemap_new(const fd_entry_t *e);
 
 /** A private mapping through `e`, borrowing `sh` for tmpfs, or with `disk`
- * the ext2 file's pages,
- * until its first store makes a copy. Other file systems use `filemap_new`.
+ * the ext2 file's pages, until its first store makes a copy. Other file
+ * systems use `filemap_new`.
  * Returns one reference, or NULL when the heap has no room. */
 struct vm_file *filemap_private(const fd_entry_t *e, struct shmem *sh, int disk);
 
@@ -55,8 +55,8 @@ const struct open_file *filemap_ofd(const struct vm_file *f);
  */
 struct vm_file *filemap_disk_shared(const fd_entry_t *e);
 
-/** Whether the file `ino` of `mnt` has its pages in memory for a shared
- * mapping, which a new shared mapping of it then maps too. */
+/** Whether the file `ino` of `mnt` has resident pages for any private or
+ * shared mapping, which descriptor writes must update. */
 int filemap_disk_mapped(const struct vfs_mount *mnt, uint64_t ino);
 
 /** Whether any shared mapping holds this disk file's pages. Private
@@ -71,8 +71,8 @@ void filemap_disk_written(const struct vfs_mount *mnt, uint64_t ino, uint64_t of
 
 /*
  * The system calls on a file's descriptors call the five functions below,
- * so that the file and the pages in memory its shared mappings map agree.
- * Each does nothing when the file has no shared mapping, and each but
+ * so that the file and its resident mapped pages agree.
+ * Each does nothing when the file has no resident-page owner, and each but
  * `filemap_file_truncated` may sleep.
  */
 

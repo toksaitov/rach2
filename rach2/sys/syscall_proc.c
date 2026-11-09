@@ -6193,13 +6193,12 @@ static int32_t mmap_file_check(const fd_entry_t *e, int shared, uint32_t prot)
  * shared mapping of a file in memory is VM_SHARED, the file's own pages; a
  * descriptor that fails `mmap_file_check` is not mapped. A shared mapping of a
  * file on ext2 is VM_SHARED too, the file's pages in memory, which its stores
- * are written back from (`filemap_disk_shared`), when the descriptor is open
- * for writing or another shared mapping has the pages in memory already:
+ * are written back from (`filemap_disk_shared`):
  * ext2's inode number names one file for as long as anything holds it, which
  * is what the pages are found by. Private tmpfs and ext2 mappings borrow
- * those same pages until their first store makes a copy. Through a descriptor
- * open for writing, such
- * a mapping of a file that backs a loop device fails with EBUSY, as write(2)
+ * those same pages until their first store makes a copy. A shared mapping
+ * through a descriptor open for writing of a file that backs a loop device
+ * fails with EBUSY, as write(2)
  * to the file does. A shared mapping of a file of another disk file system,
  * whose inode numbers follow names, is served as a private one when it is
  * read-only, which reads the same bytes, and fails with ENODEV when it may be
