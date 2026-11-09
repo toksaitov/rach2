@@ -78,6 +78,9 @@
 #include "sys/lib/kstring.h"
 #include "sys/vdso.h"
 #include "sys/drm/drm.h"
+#if defined(__x86_64__)
+#include "sys/kvm/kvm.h"
+#endif
 
 /* The boot stack and the guard page below it, from the architecture's
  * loader.s. */
@@ -4225,6 +4228,9 @@ void kernel_main(const struct boot_info *boot)
     start_network();
 
     drm_start();
+#if defined(__x86_64__)
+    kvm_start();
+#endif
 
     check_timing();
     if (kcmdline_has("rach2.strings")) {
