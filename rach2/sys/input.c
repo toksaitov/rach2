@@ -206,10 +206,54 @@ static void deliver(struct input_keyboard *kb, unsigned int keycode, int value, 
     }
     evdev_report(kb->dev, EV_KEY, (uint16_t)keycode, value);
     evdev_report(kb->dev, EV_SYN, SYN_REPORT, 0);
+    if (evdev_grabbed(kb->dev)) {
+        return;
+    }
     kd_key_event(kb, keycode, value);
     n = input_raw_bytes(keycode, value, raw);
     for (i = 0; i < n; i++) {
         kd_raw_code(raw[i]);
+    }
+}
+
+void input_written(uint16_t type, uint16_t code, int32_t value)
+{
+    static const unsigned int leds[3] = {LED_NUM, LED_CAP, LED_SCR};
+    uint8_t raw[3];
+    unsigned int mask, now;
+    int delay, period, i, n;
+
+    switch (type) {
+    case EV_LED:
+        if (code >= 3) {
+            return;
+        }
+        mask = input_leds();
+        now = value ? mask | leds[code] : mask & ~leds[code];
+        if (now != mask) {
+            input_set_leds(now);
+        }
+        return;
+    case EV_REP:
+        if (code > REP_PERIOD || value < 0) {
+            return;
+        }
+        input_get_repeat(&delay, &period);
+        if ((code == REP_DELAY ? delay : period) != value) {
+            input_set_repeat(code == REP_DELAY ? value : delay,
+                             code == REP_PERIOD ? value : period);
+        }
+        return;
+    case EV_KEY:
+        console_poke();
+        kd_key_event(NULL, code, value);
+        n = input_raw_bytes(code, value, raw);
+        for (i = 0; i < n; i++) {
+            kd_raw_code(raw[i]);
+        }
+        return;
+    default:
+        return;
     }
 }
 

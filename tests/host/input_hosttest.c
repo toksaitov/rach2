@@ -1,6 +1,7 @@
 /*
  * input_hosttest.c: every keyboard's key stream in rach2/sys/input.c, its
- * held keys, modifiers, repeat and raw view, driven by key events and ticks.
+ * held keys, modifiers, repeat and raw view, driven by key events and ticks,
+ * and the events a program writes to a keyboard's event device.
  *
  * host-deps: rach2/sys/kbd.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
@@ -140,6 +141,15 @@ void evdev_report_leds(struct evdev *dev, unsigned int mask)
     if (dev) {
         leds[slot_of(dev)] = mask;
     }
+}
+
+/* The event device whose open holds the grab, or NULL. */
+static struct evdev *grabbed_dev;
+
+/** Whether `dev` is the grabbed device a row set. */
+int evdev_grabbed(struct evdev *dev)
+{
+    return dev != NULL && dev == grabbed_dev;
 }
 
 /** Record one key event of the console's keyboard. */
@@ -375,6 +385,53 @@ static void test_raw(void)
     CHECK("a key with no set-1 code has no bytes", input_raw_bytes(0x2F0, KD_KEY_PRESS, b) == 0);
 }
 
+/** A grabbed keyboard's keys reach its event device alone, and the events
+ * a program writes to a keyboard's event device reach the LEDs, the repeat
+ * and the console. */
+static void test_written(struct input_keyboard *kb1)
+{
+    int delay, period;
+
+    clear();
+    grabbed_dev = kb1->dev;
+    input_key_event(kb1, 0x1E, KEY_A, 1);
+    input_key_event(kb1, 0x9E, KEY_A, 0);
+    grabbed_dev = NULL;
+    CHECK("a grabbed keyboard's keys reach its event device", n_ev == 6);
+    CHECK("and not the console", n_kd == 0 && n_raw == 0);
+
+    clear();
+    input_written(EV_KEY, KEY_A, KD_KEY_PRESS);
+    CHECK("a written key reaches the console",
+          n_kd == 1 && kd_events[0].keycode == KEY_A && kd_events[0].value == KD_KEY_PRESS);
+    CHECK("and its raw view", n_raw == 1 && raw_bytes[0] == 0x1E);
+    CHECK("and not the event device again", n_ev == 0);
+    input_written(EV_KEY, KEY_A, KD_KEY_RELEASE);
+
+    input_set_leds(0);
+    input_written(EV_LED, LED_CAPSL, 1);
+    CHECK("a written LED lights it on every keyboard",
+          input_leds() == LED_CAP && leds[0] == 1u << LED_CAPSL && leds[1] == 1u << LED_CAPSL);
+    input_written(EV_LED, LED_NUML, 1);
+    CHECK("a second LED joins it", input_leds() == (LED_CAP | LED_NUM));
+    input_written(EV_LED, LED_CAPSL, 0);
+    CHECK("a written 0 puts it out", input_leds() == LED_NUM);
+    input_written(EV_LED, 3, 1);
+    CHECK("an LED past Scroll Lock is ignored", input_leds() == LED_NUM);
+    input_set_leds(0);
+
+    input_written(EV_REP, REP_DELAY, 500);
+    input_get_repeat(&delay, &period);
+    CHECK("a written delay sets the repeat's", delay == 500 && period == 33 && rep_delay[0] == 500);
+    input_written(EV_REP, REP_PERIOD, 50);
+    input_get_repeat(&delay, &period);
+    CHECK("a written period sets the repeat's", delay == 500 && period == 50);
+    input_written(EV_REP, REP_PERIOD, -1);
+    input_get_repeat(&delay, &period);
+    CHECK("a negative time is ignored", period == 50);
+    input_set_repeat(250, 33);
+}
+
 /** The repeat, by ticks and by counts. */
 static void test_repeat(struct input_keyboard *kb1, struct input_keyboard *kb2)
 {
@@ -508,6 +565,7 @@ int main(void)
     test_set1(&kb1, &kb2);
     test_raw();
     test_repeat(&kb1, &kb2);
+    test_written(&kb1);
     test_detach(&kb1, &kb2);
 
     if (fails == 0) {

@@ -36,30 +36,32 @@ struct evdev;
 
 /* The event types, codes and keys the kernel's drivers report, with
  * Linux's numbers (<linux/input-event-codes.h>). */
-#define EV_SYN      0x00
-#define EV_KEY      0x01
-#define EV_REL      0x02
-#define EV_ABS      0x03
-#define EV_MSC      0x04
-#define EV_SW       0x05
-#define EV_LED      0x11
-#define EV_SND      0x12
-#define EV_REP      0x14
-#define EV_FF       0x15
-#define EV_CNT      0x20
-#define SYN_REPORT  0
-#define SYN_DROPPED 3
-#define MSC_SCAN    4
-#define MSC_CNT     0x08
-#define SW_CNT      0x11
-#define LED_CNT     0x10
-#define SND_CNT     0x08
-#define FF_CNT      0x80
-#define LED_NUML    0 /* the bit numbers of EV_LED's codes */
-#define LED_CAPSL   1
-#define LED_SCROLLL 2
-#define REP_DELAY   0 /* EV_REP's codes, each a time in milliseconds */
-#define REP_PERIOD  1
+#define EV_SYN        0x00
+#define EV_KEY        0x01
+#define EV_REL        0x02
+#define EV_ABS        0x03
+#define EV_MSC        0x04
+#define EV_SW         0x05
+#define EV_LED        0x11
+#define EV_SND        0x12
+#define EV_REP        0x14
+#define EV_FF         0x15
+#define EV_CNT        0x20
+#define SYN_REPORT    0
+#define SYN_CONFIG    1
+#define SYN_MT_REPORT 2
+#define SYN_DROPPED   3
+#define MSC_SCAN      4
+#define MSC_CNT       0x08
+#define SW_CNT        0x11
+#define LED_CNT       0x10
+#define SND_CNT       0x08
+#define FF_CNT        0x80
+#define LED_NUML      0 /* the bit numbers of EV_LED's codes */
+#define LED_CAPSL     1
+#define LED_SCROLLL   2
+#define REP_DELAY     0 /* EV_REP's codes, each a time in milliseconds */
+#define REP_PERIOD    1
 
 /* EV_REL's codes; a wheel's REL_WHEEL counts detents, up positive, and its
  * REL_WHEEL_HI_RES the same turn in 120ths of a detent. */
@@ -310,6 +312,11 @@ void evdev_unregister(struct evdev *dev);
  */
 void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value);
 
+/** Whether an open of `dev` holds the grab (EVIOCGRAB), which takes its
+ * events from the kernel's other consumers, the console's keyboard among
+ * them: 1 or 0. Any context. A NULL `dev` is not grabbed. */
+int evdev_grabbed(struct evdev *dev);
+
 /**
  * Report a keyboard's key as one packet: MSC_SCAN with `scan`, the code the
  * keyboard sent, then the key `code` down (`down` nonzero) or up, then
@@ -358,9 +365,26 @@ int32_t evdev_open(fd_entry_t *e, int n);
  */
 int32_t evdev_read(fd_entry_t *e, char __user *buf, uint32_t count);
 
-/** The `poll` of an open device: POLLIN while its queue has a record, and
- * POLLHUP with POLLERR once the device has gone or the open was revoked,
- * with `*wq` the queue's wait queue. */
+/**
+ * Write whole records from `buf`, as many as fit in `count` bytes and in at
+ * most 4096, in the caller's layout as `evdev_read` gives it, as Linux's
+ * evdev_write takes them: each record's type, code and value are injected
+ * as if the device reported them, its time ignored. A type the device
+ * lacks is dropped. A keyboard's EV_LED lights or puts out an LED and its
+ * EV_REP sets the repeat's delay or period, of every keyboard
+ * (`input_set_leds`, `input_set_repeat`); any other event goes through the
+ * input core's filters to the opens of the device, or to the open that
+ * holds the grab, as `evdev_report` gives it, and a keyboard's key that
+ * reaches them with no grab held reaches the console too. Returns the bytes
+ * taken, 0 for a `count` of 0, -EINVAL for a `count` from 1 to one record
+ * less one byte, -EFAULT, or -ENODEV once the device has gone or the open
+ * was revoked.
+ */
+int32_t evdev_write(fd_entry_t *e, const char __user *buf, uint32_t count);
+
+/** The `poll` of an open device: POLLOUT, and POLLIN while its queue has a
+ * record, or POLLHUP with POLLERR once the device has gone or the open was
+ * revoked, as Linux's evdev_poll; `*wq` is the queue's wait queue. */
 short evdev_poll(fd_entry_t *e, short events, struct wait_queue **wq);
 
 /**

@@ -3,7 +3,8 @@
  * touchpad's, read and asked as Linux's evdev answers: their records and
  * packets, the input core's filters, an overflowed queue, revoke, the
  * clocks of EVIOCSCLOCKID against clock_gettime, the event masks, the
- * absolute axes, and the 16-byte records of an i386 reader.
+ * absolute axes, the 16-byte records of an i386 reader, and the records a
+ * program writes.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
@@ -102,6 +103,21 @@ void input_set_repeat(int delay_ms, int period_ms)
     (void)period_ms;
 }
 
+/* The events evdev.c gave input.c as written to a keyboard, the last of
+ * them, and their count. */
+static uint16_t written_type, written_code;
+static int32_t written_value;
+static int n_written;
+
+/** Record an event written to a keyboard. */
+void input_written(uint16_t type, uint16_t code, int32_t value)
+{
+    written_type = type;
+    written_code = code;
+    written_value = value;
+    n_written++;
+}
+
 /* The wakes of every queue. */
 static int wakes;
 
@@ -156,6 +172,9 @@ int in_compat_syscall(void)
 {
     return compat_caller;
 }
+
+/* A key of the keyboard the write rows register. */
+#define KEY_A 30
 
 /* The ioctls, by Linux's macros. */
 #define IOC(dir, nr, size) (((uint32_t)(dir) << 30) | ((uint32_t)(size) << 16) | ('E' << 8) | (nr))
@@ -608,6 +627,148 @@ static void abs_rows(void)
     evdev_unregister(dev);
 }
 
+/** Write the `n` records `ev` to `o` in the native layout; returns what the
+ * write returns. */
+static int32_t put(struct opened *o, const struct input_event *ev, int n)
+{
+    return evdev_write(&o->e, (const char __user *)ev, (uint32_t)n * (uint32_t)sizeof(*ev));
+}
+
+/** Fill `ev` with the event `type`, `code`, `value`, its time 0. */
+static void event(struct input_event *ev, uint16_t type, uint16_t code, int32_t value)
+{
+    k_memset(ev, 0, sizeof(*ev));
+    ev->type = type;
+    ev->code = code;
+    ev->value = value;
+}
+
+/** A write injects its records as Linux's evdev_write: every open reads
+ * them, the writer's among them, through the input core's filters and the
+ * grab. */
+static void write_rows(void)
+{
+    static struct input_event many[200];
+    struct evdev *dev = mouse();
+    struct input_event ev[4];
+    struct opened a, b;
+    struct wait_queue *wq;
+    int i;
+
+    open_dev(&a, 0);
+    open_dev(&b, 0);
+    CHECK("an open polls writable", evdev_poll(&a.e, POLLOUT, &wq) == POLLOUT);
+    CHECK("a write of 0 bytes takes nothing", evdev_write(&a.e, (const char __user *)ev, 0) == 0);
+    CHECK("a write of less than a record is -EINVAL",
+          evdev_write(&a.e, (const char __user *)ev, sizeof(ev[0]) - 1) == -EINVAL);
+    event(&ev[0], EV_REL, REL_X, 3);
+    event(&ev[1], EV_SYN, SYN_REPORT, 0);
+    CHECK("a write of a packet takes its bytes",
+          evdev_write(&a.e, (const char __user *)ev, 2 * sizeof(ev[0]) + 5) ==
+              2 * (int32_t)sizeof(ev[0]));
+    CHECK("another open reads it",
+          take(&b) > 0 && n_got == 2 && is(0, EV_REL, REL_X, 3) && is(1, EV_SYN, SYN_REPORT, 0));
+    CHECK("so does the writer", take(&a) > 0 && n_got == 2 && is(0, EV_REL, REL_X, 3));
+    event(&ev[0], EV_REL, REL_X, 0);
+    event(&ev[1], EV_REL, REL_HWHEEL, 1);
+    event(&ev[2], EV_SW, 0, 1);
+    event(&ev[3], EV_SYN, SYN_DROPPED, 0);
+    CHECK("records the filters drop are taken", put(&a, ev, 4) == 4 * (int32_t)sizeof(ev[0]));
+    event(&ev[0], EV_SYN, SYN_REPORT, 0);
+    put(&a, ev, 1);
+    CHECK("and nobody reads them: no motion of 0, axis or switch it lacks, nor SYN_DROPPED",
+          take(&b) == -EAGAIN);
+    CHECK("a write from a bad pointer is -EFAULT",
+          evdev_write(&a.e, (const char __user *)8, sizeof(ev[0])) == -EFAULT);
+    for (i = 0; i < 200; i++) {
+        event(&many[i], EV_SYN, SYN_REPORT, 0);
+    }
+    CHECK("a write takes at most 4096 bytes of whole records",
+          put(&a, many, 200) == 4096 / (int32_t)sizeof(many[0]) * (int32_t)sizeof(many[0]));
+
+    CHECK("the reader takes the grab", evdev_ioctl(&b.e, EVIOCGRAB, 1) == 0);
+    event(&ev[0], EV_REL, REL_Y, -2);
+    event(&ev[1], EV_SYN, SYN_REPORT, 0);
+    put(&a, ev, 2);
+    CHECK("the grab's holder alone reads a write",
+          take(&a) == -EAGAIN && take(&b) > 0 && is(0, EV_REL, REL_Y, -2));
+    CHECK("the revoked writer's write is -ENODEV",
+          evdev_ioctl(&a.e, EVIOCREVOKE, 0) == 0 && put(&a, ev, 2) == -ENODEV);
+    evdev_close(&a.e);
+    evdev_close(&b.e);
+    evdev_unregister(dev);
+}
+
+/** A keyboard's written keys, LEDs and repeat go on to input.c, a key only
+ * while it passes the filters and no open holds the grab. */
+static void write_keyboard_rows(void)
+{
+    uint8_t keys[EVDEV_KEY_BYTES];
+    struct input_event ev[2];
+    struct opened a, b;
+    struct evdev *kbd;
+
+    k_memset(keys, 0, sizeof(keys));
+    keys[KEY_A >> 3] |= (uint8_t)(1u << (KEY_A & 7));
+    kbd = evdev_register("AT Translated Set 2 keyboard", EVDEV_BUS_I8042, 1, 1, keys);
+    evdev_describe(kbd, "isa0060/serio0/input0", EVDEV_SCAN | EVDEV_KEYBOARD);
+    open_dev(&a, 0);
+    open_dev(&b, 0);
+    n_written = 0;
+    event(&ev[0], EV_KEY, KEY_A, 1);
+    event(&ev[1], EV_SYN, SYN_REPORT, 0);
+    put(&a, ev, 2);
+    CHECK("a written key reaches the keyboard's opens", take(&b) > 0 && is(0, EV_KEY, KEY_A, 1));
+    CHECK("and the console",
+          n_written == 1 && written_type == EV_KEY && written_code == KEY_A && written_value == 1);
+    put(&a, ev, 2);
+    CHECK("a press of a key down is dropped, for the console too",
+          take(&b) == -EAGAIN && n_written == 1);
+    event(&ev[0], EV_LED, LED_CAPSL, 1);
+    put(&a, ev, 1);
+    CHECK("a written LED goes to input.c", n_written == 2 && written_type == EV_LED &&
+                                               written_code == LED_CAPSL && written_value == 1);
+    event(&ev[0], EV_REP, REP_DELAY, 400);
+    put(&a, ev, 1);
+    CHECK("so does a written repeat", n_written == 3 && written_type == EV_REP &&
+                                          written_code == REP_DELAY && written_value == 400);
+    evdev_ioctl(&b.e, EVIOCGRAB, 1);
+    event(&ev[0], EV_KEY, KEY_A, 0);
+    event(&ev[1], EV_SYN, SYN_REPORT, 0);
+    put(&a, ev, 2);
+    CHECK("a grabbed keyboard's written key reaches the holder alone",
+          take(&b) > 0 && is(0, EV_KEY, KEY_A, 0) && n_written == 3);
+    take(&a);
+    evdev_close(&a.e);
+    evdev_close(&b.e);
+    evdev_unregister(kbd);
+}
+
+/** An i386 writer on the x86-64 kernel writes records of 16 bytes. */
+static void write_compat_rows(void)
+{
+    struct evdev *dev = mouse();
+    uint8_t rec[32];
+    struct opened a, b;
+
+    open_dev(&a, 0);
+    open_dev(&b, 0);
+    compat_caller = 1;
+    k_memset(rec, 0, sizeof(rec));
+    rec[8] = EV_REL; /* type, code and value at 8, 10 and 12 */
+    rec[10] = REL_X;
+    rec[12] = 7; /* the second record, all 0, is SYN_REPORT */
+    CHECK("an i386 writer's record is 16 bytes",
+          evdev_write(&a.e, (const char __user *)rec, 15) == -EINVAL &&
+              evdev_write(&a.e, (const char __user *)rec, 32) == 32);
+    compat_caller = 0;
+    CHECK("and reads as its event",
+          take(&b) > 0 && n_got == 2 && is(0, EV_REL, REL_X, 7) && is(1, EV_SYN, SYN_REPORT, 0));
+    evdev_close(&a.e);
+    evdev_close(&b.e);
+    evdev_unregister(dev);
+}
+
 /** An i386 reader on the x86-64 kernel reads records of 16 bytes, with
  * 32-bit seconds and microseconds, as Linux's `input_event_compat`. */
 static void compat_rows(void)
@@ -654,6 +815,9 @@ int main(void)
     key_state_rows();
     abs_rows();
     compat_rows();
+    write_rows();
+    write_keyboard_rows();
+    write_compat_rows();
     CHECK("every slot is free at the end", !devices[0].used && !devices[1].used);
     if (fails == 0) {
         printf("evdev-test: pass\n");
