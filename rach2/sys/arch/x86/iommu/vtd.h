@@ -277,11 +277,4 @@ int vtd_hw_fault_vector(void);
 /** The local APIC id the units' fault events go to. */
 uint32_t vtd_hw_apic_id(void);
 
-/**
- * The requester id an interrupt from (bus, devfn) carries, as the bridges
- * above it rewrite it: `*svt` 1 with `*sid` the id to match, or 2 with
- * `*sid` the bus range, first bus in its high byte and last in its low.
- */
-void vtd_hw_msi_source(uint8_t bus, uint8_t devfn, unsigned int *svt, uint16_t *sid);
-
 #endif /* _VTD_H_ */

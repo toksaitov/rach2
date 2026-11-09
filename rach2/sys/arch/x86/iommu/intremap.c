@@ -79,6 +79,50 @@ static uint64_t irte_low(unsigned int vector, unsigned int apic, unsigned int le
            ((uint64_t)(vector & 0xFFu) << 16) | ((uint64_t)((apic & 0xFFu) << 8) << 32);
 }
 
+/**
+ * The requester id a message from (bus, devfn) carries, as the bridges
+ * above it rewrite it: `*svt` 1 with `*sid` the id to match, or 2 with
+ * `*sid` the bus range, first bus in its high byte and last in its low.
+ * This is Linux's set_msi_sid over the walk of pci_for_each_dma_alias: a
+ * conventional PCI bridge, or a PCI-to-PCI Express bridge, puts its own id
+ * on what passes it, and a PCI Express-to-PCI bridge its secondary bus with
+ * devfn 0; the topmost such bridge decides. An id of the bridge's own is
+ * matched whole; a secondary bus's, which the device behind it may also
+ * carry as itself, only by the range of buses from there to the device's.
+ */
+static void msi_source(uint8_t bus, uint8_t devfn, unsigned int *svt, uint16_t *sid)
+{
+    pci_device_t br;
+    uint16_t alias = (uint16_t)((bus << 8) | devfn);
+    uint8_t at = bus, from = bus;
+    int guard;
+
+    for (guard = 0; at != 0 && guard < 256 && pci_find_bridge_for_bus(at, &br); guard++) {
+        uint8_t exp = pci_find_capability(br.bus, br.device, br.function, PCI_CAP_ID_PCIE);
+        unsigned int type = 0;
+
+        if (exp != 0) {
+            type =
+                (pci_read_config16(br.bus, br.device, br.function, (uint8_t)(exp + 2)) >> 4) & 0xFu;
+        }
+        if (exp == 0 || type == 0x8u) {
+            alias = (uint16_t)((br.bus << 8) | (br.device << 3) | (br.function & 7u));
+            from = br.bus;
+        } else if (type == 0x7u) {
+            alias = (uint16_t)(at << 8);
+            from = br.bus;
+        }
+        at = br.bus;
+    }
+    if ((alias >> 8) != from) {
+        *svt = 2;
+        *sid = (uint16_t)((alias & 0xFF00u) | bus);
+    } else {
+        *svt = 1;
+        *sid = alias;
+    }
+}
+
 /** The unit of a handle, and its entry. */
 static struct vtd_unit *handle_unit(int handle)
 {
@@ -111,7 +155,7 @@ static int msi_map(const pci_device_t *dev, uint32_t address, uint32_t data, uin
     if (index < 0) {
         return -1;
     }
-    vtd_hw_msi_source(dev->bus, devfn, &svt, &sid);
+    msi_source(dev->bus, devfn, &svt, &sid);
     irte_set(u, index,
              irte_low(data & 0xFFu, (address >> 12) & 0xFFu, (data >> 15) & 1u, (data >> 8) & 7u,
                       (address >> 2) & 1u, (address >> 3) & 1u),
