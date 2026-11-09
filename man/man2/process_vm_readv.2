@@ -59,8 +59,9 @@ only when it copied none.
 The kernel returns the negative error number.
 .Sh EXAMPLES
 .Pa tests/limitsprobe.c
-reads a string from its child, writes into the child's memory and reads
-it back, and is refused the memory of a process of another user.
+reads a string from its child, writes into the child's memory, where the
+child finds the bytes, and is refused the memory of a process of another
+user.
 .Sh ERRORS
 .Bl -tag -width "[ENOMEM]"
 .It Bq Er EFAULT

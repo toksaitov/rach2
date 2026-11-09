@@ -29,8 +29,8 @@
  * cpu_id_start 0, and again is EINVAL; a new area of 16 bytes, or one not
  * aligned to 32, is EINVAL.
  * `sched-user`: an ordinary user sets SCHED_BATCH and SCHED_IDLE and reads
- * each back; leaving SCHED_IDLE is EPERM, as RLIMIT_NICE 0 allows no rise
- * from nice 20, and SCHED_IDLE with priority 1 EINVAL.
+ * each back; leaving SCHED_IDLE is EPERM, as an RLIMIT_NICE of 0 allows no
+ * rise in priority, and SCHED_IDLE with priority 1 EINVAL.
  * `guard-install`: MADV_GUARD_INSTALL over a locked page is EINVAL; over an
  * anonymous page it succeeds, its neighbours keep their contents, and a
  * write(2) from the guard is EFAULT.
@@ -289,14 +289,14 @@ static long cpu_now(void)
     return (long)cpu;
 }
 
-/** Install `h`, a handler of the kind `extra`'s SA_SIGINFO says, for
- * `signo` with SA_RESTORER and the flags `extra`. */
-static void install(int signo, void (*h)(void), unsigned long extra)
+/** Install `h` for `signo` with SA_SIGINFO, which the restorer's
+ * rt_sigreturn needs on i386, and SA_RESTORER. */
+static void install(int signo, void (*h)(void))
 {
     struct k_sigaction ka;
 
     ka.handler = h;
-    ka.flags = SA_RESTORER | extra;
+    ka.flags = SA_RESTORER | SA_SIGINFO;
     ka.restorer = lp_restorer;
     ka.mask[0] = 0;
     ka.mask[1] = 0;
@@ -362,20 +362,37 @@ static void rseq_auxv(unsigned long *sp)
     report_held();
 }
 
+/**
+ * Whether the area's cpu_id and cpu_id_start are the processor getcpu gives,
+ * read on each side of the call so that a move between the reads is seen and
+ * the reading taken again.
+ */
+static int area_current(void)
+{
+    volatile u32 *id = &area.cpu_id, *start = &area.cpu_id_start;
+    int tries;
+
+    for (tries = 0; tries < 100; tries++) {
+        u32 before = *id;
+        u32 cpu = (u32)cpu_now();
+
+        if (*id == before) {
+            return before == cpu && *start == cpu;
+        }
+    }
+    return 0;
+}
+
 /** rseq-register and rseq-errors. */
 static void rseq_register(long ncpu)
 {
     struct rseq_area other __attribute__((aligned(32)));
-    long cpu;
-
     area.cpu_id = 0xFFFFFFFFu;
     area.cpu_id_start = 0;
     area.rseq_cs = 0;
     area.flags = 0;
     check(syscall4(SYS_RSEQ, (long)&area, area_len, 0, RSEQ_SIG) == 0, "rseq registration");
-    cpu = cpu_now();
-    check(area.cpu_id == (u32)cpu && area.cpu_id_start == (u32)cpu,
-          "the area's processor is not getcpu's");
+    check(area_current(), "the area's processor is not getcpu's");
     check(area.node_id == 0 && (long)area.mm_cid < ncpu, "the area's node or mm_cid");
     report_held();
     check(syscall4(SYS_RSEQ, (long)&area, area_len, 0, RSEQ_SIG) == -EBUSY,
@@ -389,7 +406,8 @@ static void rseq_register(long ncpu)
     report_held();
 }
 
-/** rseq-migrate: move to each other processor the mask `all` has. */
+/** rseq-migrate: move to another processor of the mask `all`, and back to
+ * `all`. */
 static void rseq_migrate(const unsigned long *all, long ncpu)
 {
     unsigned long one[2];
@@ -430,7 +448,7 @@ static void set_section(struct rseq_cs *cs, char *abort_ip)
 /** rseq-abort. */
 static void rseq_abort(void)
 {
-    install(SIGUSR1, (void (*)(void))on_usr1, 0);
+    install(SIGUSR1, (void (*)(void))on_usr1);
     set_section(&section, lp_cs_abort);
     usr1_taken = 0;
     check(lp_cs_run(&area.rseq_cs, &section, syscall0(SYS_GETPID)) == 1,
@@ -450,7 +468,7 @@ static void rseq_fork(void)
         if (syscall4(SYS_RSEQ, (long)&area, area_len, 0, RSEQ_SIG) != -EBUSY) {
             sys_exit(2);
         }
-        if (area.cpu_id != (u32)cpu_now()) {
+        if (!area_current()) {
             sys_exit(3);
         }
         set_section(&bad_section, lp_cs_post);
@@ -562,7 +580,7 @@ static void guard_rows(void)
     pid = fork_child();
     if (pid == 0) {
         *(void **)vm_buf = (void *)(map + PAGE);
-        install(SIGSEGV, (void (*)(void))on_segv, SA_SIGINFO);
+        install(SIGSEGV, (void (*)(void))on_segv);
         byte = page[PAGE];
         sys_exit(3);
     }
