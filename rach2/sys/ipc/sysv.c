@@ -786,6 +786,18 @@ static struct sem_undo *sem_undo_of(struct sem_set *set)
     return u;
 }
 
+const void *sysv_sem_undo_list(const struct tgroup *tg)
+{
+    const struct sem_undo *u;
+
+    for (u = undos; u; u = u->next) {
+        if (u->tg == tg) {
+            return tg;
+        }
+    }
+    return NULL;
+}
+
 /** Clear every process's adjustment of semaphore `num` of `set`, or of all
  * its semaphores when `num` is negative, as SETVAL and SETALL do. */
 static void sem_undo_clear(const struct sem_set *set, int num)

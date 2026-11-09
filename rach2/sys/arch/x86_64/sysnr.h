@@ -264,6 +264,7 @@
 #define SYS_SENDMMSG               307
 #define SYS_SETNS                  308
 #define SYS_GETCPU                 309
+#define SYS_KCMP                   312
 #define SYS_RENAMEAT2              316
 #define SYS_SECCOMP                317
 #define SYS_GETRANDOM              318

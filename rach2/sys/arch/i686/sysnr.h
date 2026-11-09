@@ -181,6 +181,7 @@
 #define SYS_SECCOMP                354
 #define SYS_UNSHARE                310
 #define SYS_SETNS                  346
+#define SYS_KCMP                   349
 #define SYS_KILL                   37
 #define SYS_SIGRETURN              119
 #define SYS_RT_SIGRETURN           173

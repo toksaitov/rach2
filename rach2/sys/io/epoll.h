@@ -42,6 +42,18 @@ int epoll_is_set(const struct fd_entry *e);
 short epoll_poll_set(struct fd_entry *e, short events, struct wait_queue **wqs, uint32_t room,
                      uint32_t *n);
 
+struct open_file;
+
+/**
+ * The open file of the `toff`th registration, from 0, of descriptor number
+ * `tfd` in the epoll set `e`, as kcmp's KCMP_EPOLL_TFD asks: 0 with it in
+ * `*ofd`; -EINVAL when `e` is no epoll set, or
+ * -ENOENT for no such registration. A registration whose file has closed is
+ * none.
+ */
+int32_t epoll_target(const struct fd_entry *e, int tfd, uint32_t toff,
+                     const struct open_file **ofd);
+
 /** epoll_create(2) takes a size, which must be positive and is otherwise
  * unused. Returns the descriptor of a new set, -EINVAL, -ENOMEM or -EMFILE. */
 long sys_epoll_create(struct isr_params *params);
