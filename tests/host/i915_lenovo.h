@@ -66,6 +66,14 @@
 #define LENOVO_FW_EDP_DDI_FUNC  0x82200000u
 #define LENOVO_FW_EDP_TRANSCONF 0xc0000010u
 
+/* What else the firmware leaves set, as gfxtool read it on the release
+ * (dev-log/78-intel/78-4b.md): an unclaimed access latched in FPGA_DBG's
+ * bit 31 and in GEN7_ERR_INT's bit 13, and PM interrupt sources enabled,
+ * every one masked. The bind clears all three. */
+#define LENOVO_FW_FPGA_DBG 0x8000e380u
+#define LENOVO_FW_ERR_INT  0x00002000u
+#define LENOVO_FW_PMIER    0x03000076u
+
 /* The capability list: MSI at 0x90 (one 32-bit message, not maskable),
  * power management at 0xd0 (version 2, DSI) and Advanced Features at 0xa4
  * (transaction pending and FLR). */

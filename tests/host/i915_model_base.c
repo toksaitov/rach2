@@ -1,7 +1,8 @@
 /*
- * i915_model_base.c: the host model's forcewake, GT FIFO, display power
- * well and global GTT, the parts of the HD 4400 the Intel driver's base
- * brings up. i915_model.c includes this file and lists its blocks.
+ * i915_model_base.c: the host model's forcewake, unclaimed access, GT
+ * FIFO, display power well and global GTT, the parts of the HD 4400 the
+ * Intel driver's base brings up. i915_model.c includes this file and
+ * lists its blocks.
  */
 
 #include "i915_model_base.h"
@@ -76,6 +77,27 @@ static void fw_tick(struct i915_model *m, void *priv, uint32_t us)
 static const struct i915_model_block i915_model_base_fw = {
     "forcewake", FORCEWAKE_MT, FORCEWAKE_MT, sizeof(struct i915_model_fw),
     fw_reset,    fw_read,      fw_write,     fw_tick};
+
+/* ---- the unclaimed access ---- */
+
+/** FPGA_DBG as the Lenovo's firmware leaves it, an unclaimed access
+ * latched. */
+static void unclaimed_reset(struct i915_model *m, void *priv)
+{
+    (void)priv;
+    i915_model_poke(m, FPGA_DBG, LENOVO_FW_FPGA_DBG);
+}
+
+/** A write of the unclaimed bit clears it; the other bits take nothing. */
+static void unclaimed_write(struct i915_model *m, void *priv, uint32_t reg, uint32_t value)
+{
+    (void)priv;
+    (void)reg;
+    i915_model_poke(m, FPGA_DBG, i915_model_peek(m, FPGA_DBG) & ~(value & FPGA_DBG_RM_NOCLAIM));
+}
+
+static const struct i915_model_block i915_model_base_unclaimed = {
+    "unclaimed", FPGA_DBG, FPGA_DBG, 1, unclaimed_reset, 0, unclaimed_write, 0};
 
 /* ---- the display power well ---- */
 

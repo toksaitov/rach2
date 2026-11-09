@@ -22,7 +22,8 @@
  * gfxtool read on the Lenovo (tests/fixtures/lenovo-gpu/firmware-dump.txt):
  * the display power well on at the BIOS's request, the panel on the eDP
  * transcoder from pipe A, pipe A's plane scanning the firmware's
- * framebuffer at GTT offset 0, and the whole of stolen memory in the GTT.
+ * framebuffer at GTT offset 0, the whole of stolen memory in the GTT, and
+ * an unclaimed access latched and PM's interrupts enabled.
  * The heap's pages have physical addresses of their own, which the
  * model's rings reach through the test; any other address stops the
  * ring. The IOMMU names the Lenovo's RMRR and translates nothing, as with
@@ -38,8 +39,8 @@
  * entries, and the plane, pipe and eDP transcoder read as the firmware
  * left them; the power well was never released; the chip reached no
  * memory but the driver's own pages; and after the bind every interrupt
- * source is masked and only the master enable and the rings' user
- * interrupts are enabled.
+ * source is masked, only the master enable and the rings' user
+ * interrupts are enabled, and the firmware's unclaimed access is cleared.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -597,8 +598,9 @@ static void check_display(struct i915_model *m, struct drm_i915_private *i915)
           well_drops == 0 && i915_model_power(m)->on && i915->power.count == 1);
 }
 
-/** Check that every interrupt source of `m` is masked and only the
- * master enable and the rings' user interrupts are enabled. */
+/** Check that every interrupt source of `m` is masked, only the master
+ * enable and the rings' user interrupts are enabled, and the firmware's
+ * unclaimed access is cleared. */
 static void check_interrupts(struct i915_model *m)
 {
     CHECK("interrupts: every source masked",
@@ -611,6 +613,9 @@ static void check_interrupts(struct i915_model *m)
           i915_model_peek(m, DEIER) == DE_MASTER_IRQ_CONTROL &&
               i915_model_peek(m, GTIER) == (GT_RENDER_USER_INTERRUPT | GT_BLT_USER_INTERRUPT) &&
               i915_model_peek(m, GEN6_PMIER) == 0 && i915_model_peek(m, SDEIER) == 0);
+    CHECK("interrupts: the firmware's unclaimed access cleared, no error latched",
+          !(i915_model_peek(m, FPGA_DBG) & FPGA_DBG_RM_NOCLAIM) &&
+              i915_model_peek(m, GEN7_ERR_INT) == 0);
 }
 
 /** Put a fresh model of the Lenovo's chip on the bus, seen through the
