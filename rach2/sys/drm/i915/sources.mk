@@ -15,4 +15,5 @@ I915_C_SRC = sys/drm/i915/i915_hw.c \
     sys/drm/i915/i915_rc6.c \
     sys/drm/i915/i915_rps.c \
     sys/drm/i915/intel_opregion.c \
-    sys/drm/i915/intel_bios.c
+    sys/drm/i915/intel_bios.c \
+    sys/drm/i915/i915_fake.c

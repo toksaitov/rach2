@@ -526,6 +526,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_fake",
+          "checks": "tests/host/i915_fake_hosttest.c binds the Intel graphics driver to the fake GPU on QEMU's edu device as an HD 4400, runs first light through rings that complete at once with the interrupt taken, and injects each fault from the debugfs file: EIO on submit, ENOSPC on bind, a lost interrupt and a hang reset through GDRST, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "i915_pci",
           "checks": "tests/host/i915_pci_hosttest.c binds the Intel graphics driver to the HD 4400's host model, interrupts masked before MSI, under ASan and UBSan and exits 0",
           "source": "scenario"
