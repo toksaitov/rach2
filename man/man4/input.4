@@ -1,4 +1,4 @@
-.Dd November 9, 2026
+.Dd November 10, 2026
 .Dt INPUT 4
 .Os
 .Sh NAME
@@ -47,6 +47,68 @@ names it, with a wheel and five buttons and no property.
 Every mouse also feeds
 .Pa /dev/mouse ,
 whose three-byte packets carry no wheel.
+.Pp
+A Synaptics touchpad on the PS/2 port, which answers the Synaptics knock
+before the mouse's, is set up as Linux's psmouse sets it: absolute mode, 80
+packets a second, W mode, and the advanced gesture mode where it has one.
+It is
+.Dq SynPS/2 Synaptics TouchPad ,
+product 7 and vendor 2 on the PS/2 controller's bus, at
+.Dq isa0060/serio1/input0 ,
+its version the model's sensor and low byte, 0x01b1 on the Lenovo's.
+Its capabilities are those Linux gives the same pad:
+.Dv ABS_X
+and
+.Dv ABS_Y
+with the limits and resolution the pad gives,
+.Dv ABS_PRESSURE
+to 255,
+.Dv ABS_TOOL_WIDTH
+to 15 on a pad that measures it,
+.Dv BTN_TOUCH ,
+.Dv BTN_TOOL_FINGER
+and, on a pad that counts fingers,
+.Dv BTN_TOOL_DOUBLETAP
+and
+.Dv BTN_TOOL_TRIPLETAP ,
+.Dv BTN_LEFT
+and
+.Dv BTN_RIGHT ,
+.Dv BTN_MIDDLE
+with
+.Dv BTN_FORWARD
+and
+.Dv BTN_BACK
+on a pad with a middle button,
+.Dv BTN_0
+and up for its extra buttons, and
+.Dv INPUT_PROP_POINTER .
+A clickpad, whose pad is its button, has
+.Dv BTN_LEFT
+alone and
+.Dv INPUT_PROP_BUTTONPAD .
+A pad with an image sensor, as the Lenovo's is, keeps two slots:
+.Dv ABS_MT_SLOT ,
+.Dv ABS_MT_TRACKING_ID ,
+.Dv ABS_MT_POSITION_X
+and
+.Dv ABS_MT_POSITION_Y
+as
+.Dv ABS_X
+and
+.Dv ABS_Y ,
+.Dv ABS_MT_PRESSURE ,
+and
+.Dv BTN_TOOL_QUADTAP
+and
+.Dv BTN_TOOL_QUINTTAP ;
+a pad with the advanced gesture mode and no image sensor keeps two slots
+that bound its two contacts, with
+.Dv INPUT_PROP_SEMI_MT .
+A Synaptics pad that answers the knock but not a query or the mode is set
+back to relative mode and named for the mouse protocol it answers,
+.Dq PS/2 Synaptics TouchPad
+and the like.
 .Pp
 The ACPI devices of
 .Xr acpi 4
@@ -137,6 +199,38 @@ A USB mouse reports each turn again in 120ths of a detent,
 .Dv REL_WHEEL_HI_RES ,
 as Linux's generic HID driver does.
 .Pp
+A touchpad's packet is Linux's for the same pad.
+On a pad with slots, each contact is
+.Dv ABS_MT_SLOT
+when the slot changes,
+.Dv ABS_MT_TRACKING_ID ,
+a new number for a new contact and \-1 for a lifted one, and its
+.Dv ABS_MT_POSITION_X ,
+.Dv ABS_MT_POSITION_Y
+and
+.Dv ABS_MT_PRESSURE ;
+a contact keeps its slot while it moves less than 10 mm between packets.
+Then come the pointer of the oldest contact,
+.Dv BTN_TOUCH ,
+.Dv ABS_X ,
+.Dv ABS_Y
+and
+.Dv ABS_PRESSURE ;
+the number of fingers the pad counted, one of
+.Dv BTN_TOOL_FINGER
+to
+.Dv BTN_TOOL_QUINTTAP ;
+the buttons; and
+.Dv SYN_REPORT .
+Y grows toward the user.
+The touchpad moves the pointer of
+.Pa /dev/mouse
+as Linux's mousedev moves that of
+.Pa /dev/input/mice :
+while a finger touches, from the third packet on, by the change over the
+last two packets, the pad's width being 256 counts on both axes; a touch
+shorter than 200 ms is a click of the left button.
+.Pp
 The events pass the filters of Linux's input core: an event of a key or
 axis the device does not have, a press of a key that is down, a release of
 one that is up, a relative motion of 0, and an absolute value within the
@@ -159,7 +253,10 @@ and
 1 for lit; each change ends with
 .Dv SYN_REPORT .
 .Pp
-Each open has a queue of its own, of 64 records.
+Each open has a queue of its own, sized as Linux's evdev sizes it: eight
+packets of the size the device's axes and slots suggest, at least 64
+records and a power of two, which gives a keyboard 64 records, a mouse 128
+and the Lenovo's touchpad 256.
 A read waits until a whole packet is queued and then returns as many whole
 records as its buffer holds, so a buffer smaller than the packet splits it
 and the next read returns the rest, as on Linux.
@@ -190,7 +287,7 @@ The interface's version, 0x010001.
 A
 .Vt struct input_id :
 the bus, 0x11 for the PS/2 controller and 0x03 for USB, the vendor, the
-product and the version, 0.
+product and the version, 0 but for a touchpad's.
 .It Dv EVIOCGNAME , EVIOCGPHYS
 The device's name and its place,
 .Dq isa0060/serio0/input0
@@ -238,7 +335,11 @@ empty goes with them.
 .It Dv EVIOCGPROP
 The bits of the device's properties:
 .Dv INPUT_PROP_POINTER
-for a PS/2 mouse.
+for a PS/2 mouse and a touchpad, and
+.Dv INPUT_PROP_BUTTONPAD
+or
+.Dv INPUT_PROP_SEMI_MT
+for a touchpad that is one.
 .It Dv EVIOCGSND , EVIOCGSW
 No bits: no device here has sounds or switches.
 .It Dv EVIOCGABS , EVIOCSABS
@@ -253,6 +354,17 @@ and so does
 .Dv EVIOCSABS
 of
 .Dv ABS_MT_SLOT .
+.Dv EVIOCGABS
+of
+.Dv ABS_MT_SLOT
+gives the slot the last event was for.
+.It Dv EVIOCGMTSLOTS
+Fill the
+.Vt int32_t Ns s
+after the code at the argument, a multitouch axis such as
+.Dv ABS_MT_TRACKING_ID ,
+with that axis's value in each slot, as many as the slots and the
+request's length allow.
 .It Dv EVIOCGRAB
 With a nonzero argument, take the device for this open alone, so that no
 other open reads its events until it gives it back, with 0, or closes.
@@ -325,6 +437,8 @@ of a type Linux does not answer;
 or
 .Dv EVIOCSABS
 on a device with no absolute axis;
+.Dv EVIOCGMTSLOTS
+on a device with no slots or of a code that is no multitouch axis;
 .Dv EVIOCREVOKE
 with an argument other than 0;
 .Dv EVIOCSCLOCKID
@@ -351,8 +465,14 @@ A USB device that offers no boot protocol, such as QEMU's absolute
 .Cm usb-tablet ,
 gets no node: the USB stack reads only the boot protocol's fixed reports and
 no report descriptor, so a tablet's absolute axes are not reported.
-No device keeps multitouch slots: a device's
-.Dv ABS_MT_SLOT
-event is dropped and its other multitouch axes pass unfiltered, as on Linux
-for a device with no slots.
+The touchpad drivers are Synaptics' alone: an ALPS, Elantech or other
+touchpad is driven as the PS/2 mouse it also is, and a Synaptics pad that
+offers its SMBus bus is driven over PS/2.
+Linux's quirks that it chooses by the pad's ACPI PNP ID are not applied:
+the coordinates of some ThinkPads, the top buttons of others and
+ForcePads.
+A pad's pass-through port, where a pointing stick reports, is not driven,
+and the stick's packets are dropped.
+A packet whose bytes break its form is dropped, as Linux drops it, but the
+pad is not reset after the fifth in a row, as Linux's psmouse resets it.
 A write of events to a node, which Linux takes, is refused.
