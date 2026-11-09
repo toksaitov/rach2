@@ -27,6 +27,7 @@
 #include "sys/mm/filecache.h"
 #include "sys/mm/modlayout.h"
 #include "sys/block/mbr.h"
+#include "sys/block/loop.h"
 #include "sys/fs/devfs.h"
 #include "sys/fs/vfs.h"
 #include "sys/fs/ext2.h"
@@ -1479,6 +1480,7 @@ static void refuse_unmounted_root(void)
 }
 
 static int root_spec_named(void);
+static int root_image_named(void);
 
 /**
  * Halt a boot whose command line asks for two things that cannot both hold.
@@ -1497,7 +1499,7 @@ static void refuse_contradictory_boot_line(void)
 {
     int skipping_disk = kcmdline_has("rach2.nodisk");
     int root_on_disk = kcmdline_has("rach2.fsdisk") || kcmdline_has("rach2.root=disk") ||
-                       kcmdline_has("rach2.root=ext2") || root_spec_named();
+                       kcmdline_has("rach2.root=ext2") || root_spec_named() || root_image_named();
     int wants_rescue = kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue");
 
     if (!skipping_disk || !root_on_disk || wants_rescue) {
@@ -1759,6 +1761,17 @@ static int krffs_disk_mark_clean(void)
     return 0;
 }
 
+/* `rach2.rootimage=SPEC:/PATH`, read whole, and whether a boot that asked
+ * for it failed to bring it up, which `fall_back_from_image` answers with a
+ * restart. `image_host` is the volume the image is on, once the image is the
+ * root: a shutdown writes it out after the root. */
+static char root_image[96];
+static int root_image_failed;
+static struct vfs_mount *image_host;
+
+/* Where the volume that holds a root image is entered from that root. */
+#define ROOT_IMAGE_PLACE "/data"
+
 /* How long a shutdown waits for the writers inside the root before it
    leaves the volume unclean, in milliseconds: a write that a slow disk
    holds up ends well within it, and a dead disk's never does. */
@@ -1787,7 +1800,8 @@ static int shutdown_mount(struct vfs_mount *m)
  * first, as `shutdown_mount` does, so that a volume mounted from a file of
  * another, through a loop device, goes before the volume that holds the
  * file. A bind mount shows its base's file system, and a mount whose disk
- * has gone has nothing to write to; both are passed over. Each is logged
+ * has gone has nothing to write to; both are passed over, and so is the
+ * volume that holds the root's image, which goes after the root. Each is logged
  * as `shutdown: SOURCE: unmounted`, or as failed, after which its next mount
  * checks it. May sleep.
  */
@@ -1810,7 +1824,8 @@ static void shutdown_others(void)
         }
         below = pick->seq;
         if (pick->state != VFS_ACTIVE || !pick->dev || pick->bind_of ||
-            (pick->flags & VFS_MS_RDONLY) || pick == vfs_root_mount() || vfs_mount_gone(pick)) {
+            (pick->flags & VFS_MS_RDONLY) || pick == vfs_root_mount() || pick == image_host ||
+            vfs_mount_gone(pick)) {
             continue;
         }
         if (shutdown_mount(pick)) {
@@ -1851,7 +1866,9 @@ static int shutdown_never(void *arg)
  * would be checked at its next mount. A root of a type other than KRFFS is
  * unmounted after them: its buffers written and its valid bit set, so that the
  * next mount does not check it, once no process is left that could change it
- * after. Each is done as `shutdown_mount` says. An ext2 file system closes
+ * after, and after the root the volume that holds its image file, when the
+ * root is one (`rach2.rootimage=`), since the root's last writes go there.
+ * Each is done as `shutdown_mount` says. An ext2 file system closes
  * itself to new writers and waits for those inside (`shutdown` of `vfs_ops`),
  * since its writers take node locks and not the mount's; a writer stuck in a
  * disk wait that SIGKILL cannot end would otherwise change the volume after its
@@ -1910,6 +1927,14 @@ void kernel_shutdown(int how)
     if (!_krffs_on_disk && vfs_root_mounted() && vfs_root_mount()->type != &vfs_krffs_type) {
         root = vfs_root_mount();
         unmounted = shutdown_mount(root);
+    }
+    if (image_host && !vfs_mount_gone(image_host) && !(image_host->flags & VFS_MS_RDONLY)) {
+        if (shutdown_mount(image_host)) {
+            klog(KLOG_INFO, "shutdown", "%s: unmounted", image_host->source);
+        } else {
+            klog(KLOG_WARN, "shutdown", "%s: the unmount failed; the next mount checks it",
+                 image_host->source);
+        }
     }
     sched_disable();
 
@@ -2723,6 +2748,119 @@ static int init_root_by_identity(const char *spec, int *krffs_mounted)
          : want_ext2 ? "ext2"
                      : "root");
     return -1;
+}
+
+/**
+ * Whether `rach2.rootimage=` is on the boot line, its value read into
+ * `root_image`. A value too long for `root_image` still asks for an image,
+ * with an empty `root_image` that names none, so the boot fails and falls
+ * back rather than mount some other root.
+ */
+static int root_image_named(void)
+{
+    if (!kcmdline_value("rach2.rootimage", root_image, sizeof(root_image))) {
+        root_image[0] = '\0';
+        return kcmdline_count("rach2.rootimage") > 0;
+    }
+    return 1;
+}
+
+/**
+ * Mount the root from an image file, `rach2.rootimage=SPEC:/PATH`: the ext2
+ * partition `SPEC` names, by the forms of `rach2.root=`, mounted first as
+ * the root; the file PATH on it attached to a loop device, writable; the
+ * ext2 file system in the file mounted as the root in its place; and the
+ * partition left mounted, entered as /data from the new root, since the
+ * loop device reads the file through it. Returns 0, or -1 with the reason
+ * logged under `root`, after which the partition may be mounted as the root
+ * and the caller must not start init from it.
+ *
+ * This is the trial root of an installed machine: an unreleased system
+ * kept as a file on the data partition and booted once by `bootctl
+ * rootimage`, so that the installed root is never written to try it.
+ */
+static int init_root_image(void)
+{
+    struct root_match m;
+    const struct part_entry *e;
+    block_device_t *dev;
+    char part[24], node[16], shown[LOOP_PATH_MAX];
+    char *path = 0;
+    int i, index, rc;
+
+    for (i = 0; root_image[i] != '\0'; i++) {
+        if (root_image[i] == ':' && root_image[i + 1] == '/') {
+            root_image[i] = '\0';
+            path = root_image + i + 1;
+            break;
+        }
+    }
+    if (!path || root_image[0] == '\0' || path[1] == '\0') {
+        klog(KLOG_ERR, "root", "image: rach2.rootimage= is not SPEC:/PATH");
+        return -1;
+    }
+    if (block_ready() != 0 || root_resolve(root_image, &m) != 1) {
+        return -1;
+    }
+    e = &m.disk->table.parts[m.slot];
+    part_node_path(part, m.disk, m.slot);
+    if (ext2_root_at(m.disk->dev, e->start_lba, e->sector_count) != 1) {
+        klog(KLOG_ERR, "root", "image: %s: %s has no ext2 file system this kernel mounts",
+             root_image, part);
+        return -1;
+    }
+    if (ext2_root_mount(m.disk->dev, e->start_lba, e->sector_count, part) != 0) {
+        return -1;
+    }
+    index = loop_attach(-1, path, 1);
+    if (index < 0) {
+        klog(KLOG_ERR, "root", "image: %s on %s: the loop device refused it: %d", path, part,
+             index);
+        return -1;
+    }
+    dev = loop_attached_at(index);
+    if (!dev || ext2_root_at(dev, 0, dev->sector_count) != 1) {
+        klog(KLOG_ERR, "root", "image: %s on %s has no ext2 file system this kernel mounts", path,
+             part);
+        return -1;
+    }
+    k_strncpy(node, "/dev/loop0", sizeof(node));
+    node[9] = (char)('0' + index); /* LOOP_DEVICES is below ten */
+    rc = vfs_root_over_image(&vfs_ext2_type, dev, node, ROOT_IMAGE_PLACE, &image_host);
+    if (rc != 0) {
+        klog(KLOG_ERR, "root", "image: %s on %s did not mount: %d", path, part, rc);
+        return -1;
+    }
+    k_strncpy(shown, ROOT_IMAGE_PLACE, sizeof(shown));
+    k_strncpy(shown + k_strlen(shown), path, sizeof(shown) - k_strlen(shown));
+    shown[sizeof(shown) - 1] = '\0';
+    loop_rename(index, shown);
+    set_fore_color(light_green);
+    klog(KLOG_INFO, "root", "image: %s on %s, ext2 through %s%s; %s is %s", path, part, node,
+         (vfs_root_mount()->flags & VFS_MS_RDONLY) ? ", read-only" : "", ROOT_IMAGE_PLACE, part);
+    set_fore_color(light_grey);
+    return 0;
+}
+
+/**
+ * Restart a boot whose root image did not come up, so that the boot loader
+ * takes its saved default, the installed root: the one boot `bootctl
+ * rootimage` armed was spent on this one. The ten seconds leave the reason
+ * on the screen. With `rach2.rescue` the boot goes on to the debug shell
+ * instead. Returns only when the image came up or the shell was asked for.
+ */
+static void fall_back_from_image(void)
+{
+    if (!root_image_failed || kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue")) {
+        return;
+    }
+    set_fore_color(light_red);
+    klog(KLOG_WARN, "boot",
+         "refused: the root image did not come up; restarting into the "
+         "saved default in 10 seconds");
+    set_fore_color(light_grey);
+    k_udelay(10000000);
+    kernel_shutdown(POWER_RESTART);
 }
 
 /**
@@ -4001,7 +4139,11 @@ void kernel_main(const struct boot_info *boot)
         const char *source = "none";
         const char *options = "ro";
 
-        if (kcmdline_has("rach2.root=ext2")) {
+        if (root_image_named()) {
+            mounted = init_root_image();
+            root_ext2 = 1;
+            root_image_failed = mounted != 0;
+        } else if (kcmdline_has("rach2.root=ext2")) {
             mounted = init_ext2_root();
             root_ext2 = 1;
         } else if (root_spec_named()) {
@@ -4099,6 +4241,7 @@ void kernel_main(const struct boot_info *boot)
     rescue_mode = kcmdline_has("rach2.rescue") || kcmdline_has("init=rescue");
 
     if (!rescue_mode) {
+        fall_back_from_image();
         refuse_unmounted_root();
         boot_init_process();
     }

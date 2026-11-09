@@ -526,6 +526,20 @@ int vfs_root_mounted(void);
 int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const char *source,
                   int claim);
 
+/**
+ * Put a root of `type` on `dev`, a loop device over a file of the root
+ * installed now, at entry zero before any process runs, and leave the old
+ * root mounted as a nameless mount entered by `place`, one name below the
+ * new root, as /dev is: the root from an image file, `rach2.rootimage=`.
+ * The permanent mounts move to the new root. `*host` is the old root's
+ * mount, which a shutdown writes out after the new root, since the new
+ * root's blocks go to a file on it. Returns 0, -ENOENT with no root
+ * installed, -EINVAL for a `place` of more than one name, -ENOMEM, or the
+ * constructor's error, after which the old root stays at entry zero.
+ */
+int vfs_root_over_image(const struct vfs_type *type, struct block_device *dev, const char *source,
+                        const char *place, struct vfs_mount **host);
+
 /** The `idx`-th type mount(2) finds by name, or NULL past the last; the
  * order /proc/filesystems lists them in. */
 const struct vfs_type *vfs_type_at(int idx);
