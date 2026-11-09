@@ -180,7 +180,10 @@ int cpu_ia32_entry(void)
  * which AMD's processors take and Intel's refuse with #UD. The `sysenter`
  * MSRs are written only where 32-bit code uses the instruction, as AMD's
  * keep 32 bits of them; their code selector is the kernel's, from which
- * the processor also takes SS, the data selector after it.
+ * the processor also takes SS, the data selector after it. The LDT
+ * register is loaded with the null selector, as Linux's `cpu_init` clears
+ * it, since its state from reset, base 0 and limit 0xFFFF, would let a
+ * selector of an LDT read low memory until the first `ldt_switch` here.
  */
 void init_tss(uintptr_t kernel_stack)
 {
@@ -188,6 +191,8 @@ void init_tss(uintptr_t kernel_stack)
 
     cpu_set_kernel_stack(kernel_stack);
     __asm__ __volatile__("ltr %w0" : : "r"(GDT_TSS));
+    cpu_self()->ldt = NULL;
+    x86_64_lldt(0);
 
     msr_write(MSR_STAR, ((uint64_t)GDT_USER_CODE32 << 48) | ((uint64_t)GDT_KERNEL_CODE << 32));
     msr_write(MSR_LSTAR, (uint64_t)(uintptr_t)syscall_entry);
