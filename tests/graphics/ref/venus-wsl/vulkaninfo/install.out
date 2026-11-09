@@ -1,0 +1,22 @@
+/usr/lib/x86_64-linux-gnu/venus/:
+total 1704
+-rwxr-xr-x 1 root root 1744152 Nov  9 20:55 libvulkan_virtio.so
+
+/usr/share/vulkan/icd.d/:
+total 32
+-rw-r--r-- 1 root root 141 Jun 19 19:20 gfxstream_vk_icd.json
+-rw-r--r-- 1 root root 143 Jun 19 19:20 intel_hasvk_icd.json
+-rw-r--r-- 1 root root 137 Jun 19 19:20 intel_icd.json
+-rw-r--r-- 1 root root 135 Jun 19 19:20 lvp_icd.json
+-rw-r--r-- 1 root root 139 Jun 19 19:20 nouveau_icd.json
+-rw-r--r-- 1 root root 138 Jun 19 19:20 radeon_icd.json
+-rw-r--r-- 1 root root 170 Nov  9 20:55 venus_icd.x86_64.json
+-rw-r--r-- 1 root root 138 Jun 19 19:20 virtio_icd.json.mesa25
+{
+    "ICD": {
+        "api_version": "1.4.354",
+        "library_path": "/usr/lib/x86_64-linux-gnu/venus/libvulkan_virtio.so"
+    },
+    "file_format_version": "1.0.1"
+}local diversion of /usr/lib/x86_64-linux-gnu/libvulkan_virtio.so to /usr/lib/x86_64-linux-gnu/libvulkan_virtio.so.mesa25
+local diversion of /usr/share/vulkan/icd.d/virtio_icd.json to /usr/share/vulkan/icd.d/virtio_icd.json.mesa25
