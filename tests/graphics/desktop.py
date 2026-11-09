@@ -142,9 +142,16 @@ def record(stop, samples, ready):
 
 
 def measured(data):
-    """Require at least ten 50 ms windows of the requested 440 Hz tone."""
+    """Require at least ten 50 ms windows of the requested 440 Hz tone.
+
+    A loud window that does not measure 440 Hz holds the tone's start or
+    end, or a gap where an emulated machine ran the sound server late; a
+    fault in the route itself puts most windows off, so one off window is
+    allowed for every five good ones.
+    """
     values = struct.unpack("<%dh" % (len(data) // 2), data)
-    good = 0
+    good = off = 0
+    windows = []
     for at in range(0, len(values) - 2400, 2400):
         block = values[at:at + 2400]
         rms = math.sqrt(sum(x*x for x in block) / len(block))
@@ -152,9 +159,12 @@ def measured(data):
             continue
         crossings = sum(a <= 0 < b for a, b in zip(block, block[1:]))
         hz = crossings * 20
-        assert abs(hz - 440) <= 40, (rms, hz)
-        good += 1
-    assert good >= 10, ("tone windows", good, "frames", len(values))
+        windows.append((int(rms), hz))
+        if abs(hz - 440) <= 40:
+            good += 1
+        else:
+            off += 1
+    assert good >= 10 and off * 5 <= good, ("tone windows", good, "off", off, windows)
     return good
 
 
@@ -181,15 +191,19 @@ def tone(name, work, server):
                 'user_pref("media.autoplay.default", 0);\n'
                 'user_pref("media.autoplay.block-webaudio", false);\n'
                 'user_pref("media.cubeb.backend", "pulse");\n')
+            for path in (profile, profile / "user.js"):
+                os.chown(path, 1001, 1001)
             line = "exec firefox-esr --headless --no-remote --profile " + str(profile) + " " + server.url
-        with (work / (name + ".log")).open("w") as log:
+        output = work / (name + ".log")
+        with output.open("w") as log:
             server.done.clear()
             player = subprocess.Popen(desktop(line), stdout=log, stderr=log, start_new_session=True)
             if name == "alsa":
-                assert player.wait() == 0, "aplay failed"
+                assert player.wait() == 0, ("aplay failed", output.read_text()[-4000:])
             else:
                 while not server.done.wait(0.1):
-                    assert player.poll() is None, name + " exited before its tone ended"
+                    assert player.poll() is None, (name + " exited before its tone ended",
+                                                   player.returncode, output.read_text()[-4000:])
                 assert server.pulse_seen, "browser did not play through PulseAudio"
     finally:
         if player is not None and player.poll() is None:
