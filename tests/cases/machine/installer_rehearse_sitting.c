@@ -146,7 +146,7 @@ static void install(struct etude_case *c)
         {"again", "alices-own-password"},
         {"uthorized keys", ""},
         {"key for the recovery system", ""},
-        {"row the root", ""},
+        {"row the root", "whole"},
         {"to go on, or stop to stop", "/dev/disk0"},
     };
     static const char *const said[] = {
