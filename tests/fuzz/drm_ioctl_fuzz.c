@@ -12,6 +12,9 @@
  * fuzz-deps: rach2/sys/drm/drm_prime.c rach2/sys/drm/drm_syncobj.c
  * fuzz-deps: rach2/sys/dmabuf/dmabuf.c rach2/sys/dmabuf/fence.c
  * fuzz-deps: rach2/sys/dmabuf/sync_file.c rach2/sys/dmabuf/sw_sync.c
+ * fuzz-deps: rach2/sys/drm/drm_debugfs.c rach2/sys/fs/debugfs.c
+ * fuzz-deps: rach2/sys/arch/x86_64/ia32_ioctl_drm.c
+ * fuzz-deps: rach2/sys/arch/x86_64/ia32_ioctl_gpu.c
  * fuzz-deps: rach2/sys/evdev.c
  * fuzz-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * fuzz-deps: tests/host/compat/spinlock_host.c
@@ -30,31 +33,45 @@
  * caller for good.
  *
  * The input: a byte of flags (bit 0 runs the program as root, bit 1 gives
- * vkms no cursor plane when the harness first starts), a 16-bit length and
+ * vkms no cursor plane when the harness first starts, bit 2 makes the
+ * program an i386 one on the x86-64 kernel), a 16-bit length and
  * that many bytes put in the arena at DATA_OFF, then the steps, each an
  * operation byte and its operands, until the input ends. An open names
  * vkms's card0, the render device's card1 or renderD129, a sw_sync
- * timeline, or the mouse's or the touchpad's event node. An ioctl's
+ * timeline, or the mouse's or the touchpad's event node, or a file of
+ * debugfs by its path, the DRM devices' and sync's. An ioctl's
  * command is built from a type of the stack's (`d`, `E`, `>`, `b`, `W`,
  * or 32 bits as given), a number, a direction and a size, so that every
  * number of every decoder is a byte away; its argument is the bytes that
- * follow, at ARG_OFF of the arena. After the steps every descriptor is
+ * follow, at ARG_OFF of the arena. An i386 program's ioctls of the DRM
+ * core and of dma-buf, sync files and udmabuf go through the compat
+ * path's translations, ia32_ioctl_drm and ia32_ioctl_gpu, which run the
+ * native request on a structure in kernel memory that a user-copy window
+ * opens, and its reads of an event node take the 16-byte records; its
+ * other ioctls pass to the native path, as the compat table passes them.
+ * A write gives a descriptor the bytes that follow. After the steps every
+ * descriptor is
  * closed, and the devices keep what the closes leave, as on a machine
  * whose programs have ended. The 16-bit and 32-bit operands are
  * little-endian. Replayed, the harness prints each ioctl and its result.
  */
 #include "drm/vkms.c"
+#include "arch/x86_64/ia32.h"
 #include "dmabuf/dmabuf.h"
 #include "evdev.h"
+#include "fs/debugfs.h"
 #include "fs/devfs.h"
 #include "fs/fd.h"
+#include "fs/vfs.h"
 #include "fs/file.h"
 #include "io/eventfd.h"
 #include "input.h"
 #include "io/poll.h"
 #include "mm/mm.h"
+#include "mm/usercopy.h"
 #include "proc/percpu.h"
 #include "proc/tgroup.h"
+#include "syscall.h"
 #include "timer.h"
 #include "../fuzz/fuzz.h"
 
@@ -84,28 +101,68 @@ extern void abort(void);
 
 static uint8_t arena[ARENA];
 
-/** Whether the user range [`u`, `u` + `n`) lies in the arena above its
- * first page. */
-static int user_ok(uintptr_t u, size_t n)
+/* The user-copy window of the compat path: kernel memory that the copies
+ * take as the user's while it is open, or none. */
+static uint8_t *window;
+static size_t window_len;
+
+void user_window_open(void *buf, uint32_t len)
 {
-    return u >= 4096 && u <= ARENA && n <= ARENA - u;
+    if (window) {
+        fprintf(stderr, "drm-ioctl-fuzz: a window opened inside another\n");
+        abort();
+    }
+    window = buf;
+    window_len = len;
+}
+
+void user_window_close(void)
+{
+    window = NULL;
+    window_len = 0;
+}
+
+/** Whether [`u`, `u` + `n`) lies wholly in the open window. */
+static int in_window(uintptr_t u, size_t n)
+{
+    return window && u >= (uintptr_t)window && n <= window_len &&
+           u - (uintptr_t)window <= window_len - n;
+}
+
+/** The host address of the user range [`u`, `u` + `n`): in the open
+ * window, or in the arena above its first page; NULL for any other. */
+static uint8_t *user_at(uintptr_t u, size_t n)
+{
+    if (in_window(u, n)) {
+        return (uint8_t *)u;
+    }
+    return u >= 4096 && u <= ARENA && n <= ARENA - u ? arena + u : NULL;
+}
+
+int user_range_ok(uintptr_t addr, size_t len)
+{
+    return len == 0 || user_at(addr, len) != NULL;
 }
 
 int copy_from_user(void *dst, const void __user *src, size_t n)
 {
-    if (!user_ok((uintptr_t)src, n)) {
+    uint8_t *at = user_at((uintptr_t)src, n);
+
+    if (!at) {
         return -1;
     }
-    memcpy(dst, arena + (uintptr_t)src, n);
+    memcpy(dst, at, n);
     return 0;
 }
 
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
-    if (!user_ok((uintptr_t)dst, n)) {
+    uint8_t *at = user_at((uintptr_t)dst, n);
+
+    if (!at) {
         return -1;
     }
-    memcpy(arena + (uintptr_t)dst, src, n);
+    memcpy(at, src, n);
     return 0;
 }
 
@@ -197,6 +254,12 @@ void rtc_realtime(int64_t *sec, int64_t *nsec)
 {
     *sec = 1700000000ll + now_ns / 1000000000ll;
     *nsec = now_ns % 1000000000ll;
+}
+
+/** The wall clock, for debugfs's file times. */
+void get_current_time(int64_t *seconds, int64_t *nanoseconds)
+{
+    rtc_realtime(seconds, nanoseconds);
 }
 
 uint64_t rtc_ticks_now(void)
@@ -489,8 +552,100 @@ fd_entry_t *fd_get(fd_table_t *table, int fd)
 
 /* ---- the stack's state ---- */
 
-static int started, crc_open;
+static int started, crc_open, compat;
 static struct evdev *mouse, *pad;
+
+/* debugfs, mounted once, and the node each descriptor opened on it holds,
+ * as the system call layer's open file holds its node. */
+static struct vfs_mount dfs_mnt;
+static void *dfs_held[FDS];
+
+/* The files of debugfs a program opens: the DRM devices', under each
+ * device's own directory, its unique name, which the dri/MINOR links name,
+ * and sync's. */
+static const char *const dfs_paths[] = {
+    "sync/sw_sync",
+    "sync/info",
+    "dri/vkms/name",
+    "dri/vkms/clients",
+    "dri/vkms/gem_names",
+    "dri/vkms/framebuffer",
+    "dri/vkms/state",
+    "dri/vkms/crtc-0/crc/control",
+    "dri/vkms/crtc-0/crc/data",
+    "dri/vkms/encoder-0/bridges",
+    "dri/vkms/Virtual-1/force",
+    "dri/vkms/Virtual-1/edid_override",
+    "dri/fuzzdrm/name",
+    "dri/fuzzdrm/clients",
+    "dri/fuzzdrm/gem_names",
+};
+
+#define DFS_PATHS ((unsigned)(sizeof(dfs_paths) / sizeof(dfs_paths[0])))
+
+/** The node of debugfs at `path`, held, as the walk finds it a name at a
+ * time; NULL when a name is not there. */
+static void *dfs_walk(const char *path)
+{
+    char name[64];
+    void *dir = NULL, *node = NULL;
+    unsigned n;
+
+    while (*path) {
+        for (n = 0; path[n] && path[n] != '/' && n < sizeof(name) - 1; n++) {
+            name[n] = path[n];
+        }
+        name[n] = '\0';
+        path += n + (path[n] == '/');
+        if (debugfs_vops.lookup(&dfs_mnt, dir, name, &node) != 0) {
+            node = NULL;
+        }
+        if (dir) {
+            debugfs_vops.put(&dfs_mnt, dir);
+        }
+        if (!node) {
+            return NULL;
+        }
+        dir = node;
+    }
+    return node;
+}
+
+/** The one process, by its PID, for drm_debugfs's clients file. */
+process_t *get_process(uint32_t pid)
+{
+    return pid == self.pid ? &self : NULL;
+}
+
+int in_compat_syscall(void)
+{
+    return compat;
+}
+
+long ioctl_fd(int fd, uint32_t request, uintptr_t arg)
+{
+    fd_entry_t *e = fd_get(&fd_table, fd);
+
+    if (!e) {
+        return -EBADF;
+    }
+    if (!e->ops || !e->ops->ioctl) {
+        return -ENOTTY;
+    }
+    return e->ops->ioctl(e, request, arg);
+}
+
+/** The compat path's native call on a structure a translation built in
+ * kernel memory, as ia32_ioctl.c makes it. */
+long ia32_ioctl_native(unsigned int fd, unsigned int cmd, void *buf, uint32_t len)
+{
+    long rc;
+
+    user_window_open(buf, len);
+    rc = ioctl_fd((int)fd, cmd, (uintptr_t)buf);
+    user_window_close();
+    return rc;
+}
 
 /* An event node's operations, as devfs gives them. */
 static const struct file_ops evdev_fuzz_ops = {evdev_read,  NULL, evdev_poll, evdev_ioctl,
@@ -516,6 +671,7 @@ static struct drm_device fuzz_dev;
 static void start(void)
 {
     static uint8_t keys[EVDEV_KEY_BYTES];
+    unsigned i;
 
     if (started) {
         return;
@@ -553,6 +709,19 @@ static void start(void)
     evdev_set_abs(pad, ABS_MT_POSITION_Y, 0, 3000, 0, 0);
     (void)evdev_init_slots(pad, 4, 0);
     evdev_set_prop(pad, INPUT_PROP_BUTTONPAD);
+    if (debugfs_mount(&dfs_mnt, NULL, 0, NULL) != 0) {
+        fprintf(stderr, "drm-ioctl-fuzz: debugfs did not mount\n");
+        abort();
+    }
+    for (i = 0; i < DFS_PATHS; i++) {
+        void *node = dfs_walk(dfs_paths[i]);
+
+        if (!node) {
+            fprintf(stderr, "drm-ioctl-fuzz: debugfs has no %s\n", dfs_paths[i]);
+            abort();
+        }
+        debugfs_vops.put(&dfs_mnt, node);
+    }
 }
 
 /** Let `frames` frames of a 60 Hz clock pass, a millisecond at a time:
@@ -676,8 +845,39 @@ static void op_open(unsigned b)
     }
 }
 
+/** Open the file of debugfs that byte `b` names, as the system call
+ * layer binds a regular file of the mount. */
+static void op_debugfs(unsigned b)
+{
+    void *node = dfs_walk(dfs_paths[b % DFS_PATHS]);
+    fd_entry_t *e;
+    int fd;
+
+    if (!node) {
+        return;
+    }
+    fd = fd_alloc(&fd_table);
+    if (fd < 0) {
+        debugfs_vops.put(&dfs_mnt, node);
+        return;
+    }
+    e = &fd_entries[fd];
+    e->type = FD_TYPE_FILE;
+    e->flags = FD_FLAG_READ | FD_FLAG_WRITE;
+    e->ofd = (struct open_file *)calloc(1, sizeof(struct open_file));
+    e->ofd->refcount = 1;
+    e->ofd->status_flags = OFD_NONBLOCK;
+    if (debugfs_bind(node, e, 2) != 0) {
+        free(e->ofd);
+        fd_free(&fd_table, fd);
+        debugfs_vops.put(&dfs_mnt, node);
+        return;
+    }
+    dfs_held[fd] = node;
+}
+
 /** Close descriptor `fd`: its object's `close` with the description's
- * last descriptor. */
+ * last descriptor, and the debugfs node it held. */
 static void op_close(int fd)
 {
     fd_entry_t *e = &fd_entries[fd];
@@ -687,6 +887,10 @@ static void op_close(int fd)
     }
     free(e->ofd);
     fd_free(&fd_table, fd);
+    if (dfs_held[fd]) {
+        debugfs_vops.put(&dfs_mnt, dfs_held[fd]);
+        dfs_held[fd] = NULL;
+    }
 }
 
 /** Linux's ioctl number of direction `dir`, type `type`, number `nr` and
@@ -726,11 +930,43 @@ static void op_ioctl(struct cursor *c)
     }
     e = &fd_entries[fd];
     if (e->ops && e->ops->ioctl) {
-        int32_t rc = e->ops->ioctl(e, cmd, ARG_OFF);
+        long rc;
 
-        if (FUZZ_LOG) {
-            fprintf(stderr, "drm-ioctl-fuzz: fd %d ioctl %#x: %d\n", fd, (unsigned)cmd, (int)rc);
+        unsigned type = cmd >> 8 & 0xff;
+
+        if (compat && type == 'd') {
+            rc = ia32_ioctl_drm((unsigned)fd, cmd, ARG_OFF);
+        } else if (compat && (type == 'b' || type == '>' || type == 'u')) {
+            rc = ia32_ioctl_gpu((unsigned)fd, cmd, ARG_OFF);
+        } else {
+            rc = e->ops->ioctl(e, cmd, ARG_OFF);
         }
+        if (FUZZ_LOG) {
+            fprintf(stderr, "drm-ioctl-fuzz: fd %d %sioctl %#x: %ld\n", fd, compat ? "i386 " : "",
+                    (unsigned)cmd, rc);
+        }
+    }
+}
+
+/** A write of the bytes that follow, up to a count the program gives. */
+static void op_write(struct cursor *c)
+{
+    int fd = pick_fd(take8(c));
+    unsigned len = take16(c) % (ARG_MAX + 1);
+    fd_entry_t *e;
+
+    if (len > c->n) {
+        len = (unsigned)c->n;
+    }
+    memcpy(arena + ARG_OFF, c->p, len);
+    c->p += len;
+    c->n -= len;
+    if (fd < 0) {
+        return;
+    }
+    e = &fd_entries[fd];
+    if (e->ops && e->ops->write) {
+        (void)e->ops->write(e, (const char __user *)(uintptr_t)ARG_OFF, len);
     }
 }
 
@@ -816,6 +1052,26 @@ static void op_crc(struct cursor *c)
     }
 }
 
+/** The step of the rarer operations, by the byte that follows: a CRC
+ * file's call, an input event, an open of a debugfs file or a write. */
+static void op_other(struct cursor *c)
+{
+    switch (take8(c) % 4) {
+    case 0:
+        op_crc(c);
+        break;
+    case 1:
+        op_event(c);
+        break;
+    case 2:
+        op_debugfs(take8(c));
+        break;
+    case 3:
+        op_write(c);
+        break;
+    }
+}
+
 int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
 {
     struct cursor c;
@@ -826,6 +1082,7 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
     c.n = size;
     flags = take8(&c);
     no_cursor = (flags & 2) != 0;
+    compat = (flags & 4) != 0;
     start();
     self.ruid = self.euid = self.suid = (flags & 1) ? 0 : 1000;
     self.rgid = self.egid = self.sgid = (flags & 1) ? 0 : 1000;
@@ -860,11 +1117,7 @@ int LLVMFuzzerTestOneInput(const unsigned char *data, unsigned long size)
             op_poll(&c);
             break;
         case 7:
-            if (take8(&c) & 1) {
-                op_event(&c);
-            } else {
-                op_crc(&c);
-            }
+            op_other(&c);
             break;
         case 8:
             run_time(1 + (int)(take8(&c) % 8));
