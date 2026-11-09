@@ -134,6 +134,13 @@ int sysfs_node_child(int dir, const char *name, int len)
     return -ENOENT;
 }
 
+/** The fake chip, which i915_fake_hosttest.c tests: no command line here
+ * names it, so the probe never runs. */
+int32_t i915_fake_probe(void)
+{
+    return 0;
+}
+
 void k_udelay(uint32_t usec)
 {
     udelays += usec;
