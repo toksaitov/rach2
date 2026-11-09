@@ -136,7 +136,7 @@ text 0644 /etc/os-release NAME="Rach2"\nPRETTY_NAME="Rach2 1.0.0 with the GNU sy
 # The server's privilege separation runs as `sshd`, which has no password
 # and no shell to log in with, and 74, the number Red Hat's systems give it,
 # is below the 100 from which BusyBox's adduser gives out system accounts.
-text 0644 /etc/passwd root:x:0:0:root:/root:/bin/bash\ntest:x:1000:1000:test:/home/test:/bin/bash\nsshd:x:74:74::/var/empty:/usr/bin/false\nmessagebus:x:81:81::/nonexistent:/usr/bin/false\nnobody:x:65534:65534:nobody:/nonexistent:/usr/bin/false\ndesktop:x:1001:1001:Desktop:/home/desktop:/bin/bash\n
+text 0644 /etc/passwd root:x:0:0:root:/root:/bin/bash\ntest:x:1000:1000:test:/home/test:/bin/bash\nsshd:x:74:74::/var/empty:/usr/bin/false\nmessagebus:x:81:81::/nonexistent:/usr/bin/false\nnobody:x:65534:65534:nobody:/nonexistent:/usr/bin/false\ndesktop:x:1001:1001:Desktop:/home/desktop:/bin/bash\npulse:x:201:201:PulseAudio:/nonexistent:/usr/bin/false\n
 file 0600 /etc/shadow krffs/shadow
 # `tty` is the group of every pseudo-terminal, 5 as on Linux, which write(1)
 # and wall(1) run as to write to another user's terminal. `sudo`, 27 as on
@@ -144,7 +144,7 @@ file 0600 /etc/shadow krffs/shadow
 # any user. `crontab` is the group crontab(1) runs as, which may write the
 # crontabs' directory; 63 is below the system accounts' 100, and no Debian
 # group has that number.
-text 0644 /etc/group root:x:0:\ntty:x:5:\nsudo:x:27:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\ncrontab:x:63:\nnogroup:x:65534:\ndesktop:x:1001:\nseat:x:200:desktop\nvideo:x:44:desktop\nrender:x:104:desktop\ninput:x:105:desktop\naudio:x:29:desktop\n
+text 0644 /etc/group root:x:0:\ntty:x:5:\nsudo:x:27:\ntest:x:1000:\nsshd:x:74:\nmessagebus:x:81:\ncrontab:x:63:\nnogroup:x:65534:\ndesktop:x:1001:\nseat:x:200:desktop\nvideo:x:44:desktop\nrender:x:104:desktop\ninput:x:105:desktop\naudio:x:29:desktop\npulse:x:201:\n
 text 0644 /etc/shells /bin/sh\n/bin/bash\n
 # sudo's rules, Debian's: root and the group sudo may run any command as any
 # user, with a clean environment and on a terminal of its own, and a file in
