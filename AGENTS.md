@@ -129,6 +129,7 @@ The rules are kept short on purpose; their history is in commit messages and `de
 
 * Each component has one Readme. It opens with a summary paragraph, and its `##` sections come from this list, in this order, as it needs them: Use or Running, Results, Interfaces, Sources and license, Local changes, Design, Building, Updating, Adding tests, Limits, Tests.
 * A document states what the code does now, and a fact has one home. A task that changes a contract rewrites the Readme that owns it.
+* A fault found in another project's code is recorded in its milestone's `dev-log/NN-name/upstream.md`, in the format `dev-log/upstream.md` gives, and indexed there, whether or not Rach2 works around it.
 * Every program a system image stages, every BusyBox applet and every system call has a page or an alias under `man/`; a task that adds or changes one changes its page.
 
 ## Git

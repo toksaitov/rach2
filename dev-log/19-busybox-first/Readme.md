@@ -103,7 +103,7 @@ There is no in-house `deluser`; account removal in os-simple requires root to ed
 
 Os-real retains the in-house `ping` because BusyBox requires raw sockets that the kernel does not provide. Raw sockets remain unimplemented, as explained in `vendor/busybox/Readme.md`.
 
-The BusyBox `check_suid` use-after-free and the evidence needed for an upstream report are preserved in [the upstream report record](upstream-report.md), including the original source revision, configuration, reproduction, mitigation and unverified patch proposal. No report has been sent.
+The BusyBox `check_suid` use-after-free and the evidence needed for an upstream report are preserved in [the upstream record](upstream.md), including the original source revision, configuration, reproduction, mitigation and unverified patch proposal. No report has been sent.
 
 ## Verification
 

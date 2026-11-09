@@ -1,8 +1,19 @@
-# BusyBox uses a freed set-id configuration
+# Upstream faults of milestone 19
 
-BusyBox 1.36.1 frees the list parsed from `/etc/busybox.conf` in `check_suid` without clearing the global `suid_config` pointer. A later applet dispatch in the same process traverses that freed list. Rach2 found this while running `ssh test@host id` as uid 1000 during milestone 15. The command faulted; root and interactive logins worked. This record preserves the evidence and reconstruction inputs for a later upstream report. No report or patch has been submitted, and this documentation update runs no new reproduction.
+Faults this milestone recorded in another project's code, one section each, in the format of [`dev-log/upstream.md`](../upstream.md), which indexes them.
 
-## Source and historical evidence
+## BusyBox uses a freed set-id configuration
+
+* Project: BusyBox 1.36.1, `busybox-1.36.1.tar.bz2`, SHA-256 `b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314`.
+* Fails: `check_suid` frees the list parsed from `/etc/busybox.conf` without clearing the global `suid_config` pointer, so a later applet dispatch in the same process traverses the freed list (`libbb/appletlib.c:305, 551, 565, 642`).
+* Found: by 2026-07-09, in milestone 15's end-to-end test, while running `ssh test@host id` as uid 1000; the machine is not recorded. The command faulted; root and interactive logins worked. Milestone 19 holds the record because its plan turned the parser off.
+* Reproduction: build an isolated image from `4e6cd758d8599080475ecb0e4a600afe783648b5` and run `ssh -T test@HOST id`, as Configuration and reproduction below says. The command of interest is `sh -c id`; a smaller standalone reproducer has not been verified.
+* Evidence: commits `04b222add`, `dad27ea15` and `df3df8dda`, and [milestone 15's record](../15-privilege/Readme.md), as Source and historical evidence below lists. The raw fault address, the console transcript and the compiler identities are missing.
+* Rach2: BusyBox stays unprivileged and a separate set-id BusyBox with only `login`, `passwd` and `su` is built with `CONFIG_FEATURE_SUID_CONFIG` off ([plan](plan.md), [`vendor/busybox/Readme.md`](../../vendor/busybox/Readme.md)). No local patch to `check_suid` is applied.
+* Status: unreported. No report or patch has been submitted, and this record ran no new reproduction.
+* Next: Before an upstream submission below: check current upstream and its reporting route, reproduce on the pinned source and on upstream, and settle what the proposed `suid_config = NULL;` does to later lookups.
+
+### Source and historical evidence
 
 The affected pinned source is BusyBox 1.36.1, distributed as `busybox-1.36.1.tar.bz2` from [BusyBox's release archive](https://busybox.net/downloads/busybox-1.36.1.tar.bz2). The repository retains that archive under `vendor/busybox/`; its SHA-256 is `b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314`. The unmodified `libbb/appletlib.c` has SHA-256 `d155776560dbe2d931cbed99d6aaf68bb877a624f4405f0f594d3c424d3fd853`. Both identities were checked against the retained archive on 25 October 2026 without building it.
 
@@ -15,7 +26,7 @@ The durable historical records are:
 
 The original raw fault address, complete console transcript and compiler identities are not present in these committed records. Do not invent them from the diagnosis. A submission should include a fresh, retained reproduction and an exact current upstream revision.
 
-## Configuration and reproduction
+### Configuration and reproduction
 
 The historical image staged the same BusyBox bytes as `/bin/busybox` with mode `04755`, owner root, and `/bin/sh` with mode `0755`. Dropbear used `/bin/sh` for the test account, whose uid and gid were both 1000. The main configuration enabled `FEATURE_SUID`, `FEATURE_SUID_CONFIG`, `FEATURE_PREFER_APPLETS`, `FEATURE_SH_STANDALONE`, `ASH`, `SH_IS_ASH` and `ID`. The standalone shell could dispatch `id` in process instead of executing a new binary.
 
@@ -46,7 +57,7 @@ ssh -T test@HOST id
 
 Here `HOST` is the isolated guest's SSH endpoint; supply its actual port and credentials through the normal test setup. The expected result is the test account's identity and a successful exit. The recorded result was a user page fault. Repeat the root command and an interactive test-account login as the historical controls. The shell command of interest is `sh -c id`; SSH was the original way to reach it, not an established requirement of the bug. A smaller standalone reproducer has not been verified here.
 
-## Cause and proposed correction
+### Cause and proposed correction
 
 In the pinned `libbb/appletlib.c`, `suid_config` is the global list at line 305. `check_suid` starts at line 551 and traverses it at line 565:
 
@@ -77,6 +88,6 @@ This is a proposed correction, not an applied or validated patch. Before submitt
 
 Rach2 first avoided the problem by keeping BusyBox unprivileged and using a separate set-id `su`. Milestone 19 later built a separate BusyBox containing only `login`, `passwd` and `su`, with the faulty parser disabled. The main BusyBox remains unprivileged, and the current images stage no `/etc/busybox.conf`. These configuration changes are the shipped mitigation; no local patch to this function is applied.
 
-## Before an upstream submission
+### Before an upstream submission
 
 Check the current upstream source and reporting instructions, then retain its exact commit, generated configuration, compiler and libc identities. Reproduce the freed read on the pinned source and current upstream, or record precisely where the behavior differs. Preserve the console or sanitizer output, the command's exit status, both historical controls and the behavior after the proposed correction. Review repeated dispatch and privilege-dropping behavior before calling that correction complete. The August record identified `busybox@busybox.net` as the project's preferred reporting route at that time; verify the current route before sending anything.
