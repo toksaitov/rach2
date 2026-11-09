@@ -566,6 +566,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "kvm",
+          "checks": "tests/host/kvm_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "lag",
           "checks": "tests/host/lag_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

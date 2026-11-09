@@ -18,8 +18,6 @@
 #include "../proc/smp.h"
 #include "../rtc.h"
 
-#define O_CLOEXEC 02000000
-
 /* The identity map's address before KVM_SET_IDENTITY_MAP_ADDR, Linux's
  * VMX_EPT_IDENTITY_PAGETABLE_ADDR. */
 #define KVM_IDENT_ADDR_DEFAULT 0xFEFFC000ull
@@ -215,7 +213,7 @@ out:
  * which has no entries: the kernel emulates no instruction the processor
  * lacks. The entries and their count, which Linux writes back only when
  * they fit: 0, -E2BIG, -ENOMEM or -EFAULT. */
-static int32_t get_cpuid(uintptr_t arg, int emulated)
+static int32_t get_supported_cpuid(uintptr_t arg, int emulated)
 {
     struct kvm_cpuid2 head;
     struct kvm_cpuid_entry2 *ent;
@@ -328,9 +326,9 @@ static int32_t dev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     case KVM_GET_MSRS:
         return get_feature_msrs(arg);
     case KVM_GET_SUPPORTED_CPUID:
-        return get_cpuid(arg, 0);
+        return get_supported_cpuid(arg, 0);
     case KVM_GET_EMULATED_CPUID:
-        return get_cpuid(arg, 1);
+        return get_supported_cpuid(arg, 1);
     case KVM_X86_GET_MCE_CAP_SUPPORTED:
         return copy_to_user((void __user *)arg, &mce, sizeof(mce)) ? -EFAULT : 0;
     default:
