@@ -1062,10 +1062,11 @@ build/tests/cases/machine/clockpeer: tests/cases/machine/clockpeer.c
 	@mkdir -p $(@D)
 	$(ETUDE_LINK) -std=c99 -D_DEFAULT_SOURCE
 
-# The scenarios of the installer and grow cases drive their machines at the
-# console, each linked with the console driver, drive.c, and the code that
-# the scenarios of each suite share, lib_SUITE.c.
-CONSOLE_SCENARIOS = build/tests/cases/machine/grow_entry_at_end \
+# The scenarios of the installer, data partition and grow cases drive their
+# machines at the console, each linked with the console driver, drive.c, and
+# the code that the scenarios of each suite share, lib_SUITE.c.
+CONSOLE_SCENARIOS = build/tests/cases/machine/datapart_scenario \
+                    build/tests/cases/machine/grow_entry_at_end \
                     build/tests/cases/machine/grow_interrupted \
                     build/tests/cases/machine/grow_machine_gpt \
                     build/tests/cases/machine/grow_machine_mbr \
