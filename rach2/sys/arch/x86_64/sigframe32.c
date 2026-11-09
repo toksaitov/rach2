@@ -189,12 +189,12 @@ void ia32_take_siginfo(const uint8_t *in, struct k_siginfo *info)
  * 3, which `lar` reads as 0 where the descriptor is out of reach. */
 static int seg_loadable(unsigned int sel)
 {
-    uint32_t ar = 0;
+    unsigned int ar;
 
     if ((sel & ~3u) == 0) {
         return 1;
     }
-    __asm__ __volatile__("larl %1, %0" : "+r"(ar) : "r"((uint32_t)sel));
+    ar = x86_64_lar(sel);
     if ((ar & (AR_P | AR_S | AR_DPL3)) != (AR_P | AR_S | AR_DPL3)) {
         return 0;
     }

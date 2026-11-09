@@ -84,6 +84,16 @@ x86_64_es_read:
     movw %es, %ax
     ret
 
+# unsigned int x86_64_lar(unsigned int sel)
+#
+# The access rights `lar` reads for the descriptor sel names, or 0 where
+# the descriptor is out of the caller's reach or of a type lar refuses.
+.globl x86_64_lar
+x86_64_lar:
+    xorl %eax, %eax
+    larl %edi, %eax
+    ret
+
 # void x86_64_ds_load(unsigned int sel)
 # void x86_64_es_load(unsigned int sel)
 #
