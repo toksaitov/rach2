@@ -64,6 +64,7 @@
 #define SO_SNDBUF      7
 #define SO_RCVBUF      8
 #define SO_KEEPALIVE   9
+#define SO_PRIORITY    12
 #define SO_LINGER      13
 #define SO_PASSCRED    16
 #define SO_PEERCRED    17
@@ -166,6 +167,7 @@ struct unix_sock {
     int shut; /* SHUT_RCV and SHUT_SEND */
     int err;  /* a pending positive errno, for SO_ERROR or the next call */
     int passcred;
+    int priority;              /* SO_PRIORITY, kept for getsockopt; it orders nothing here */
     struct unix_cred peercred; /* what SO_PEERCRED gives, when `has_peercred` */
     int has_peercred;
     int backlog;
@@ -1592,6 +1594,12 @@ int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uint3
     case SO_PASSCRED:
         s->passcred = v != 0;
         return 0;
+    case SO_PRIORITY:
+        if ((v < 0 || v > 6) && !cred_privileged()) {
+            return -EPERM;
+        }
+        s->priority = v;
+        return 0;
     case SO_SNDBUF:
     case SO_SNDBUFFORCE:
         s->sndbuf = buf_size(v);
@@ -1638,6 +1646,9 @@ int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintp
         break;
     case SO_PASSCRED:
         v = s->passcred;
+        break;
+    case SO_PRIORITY:
+        v = s->priority;
         break;
     case SO_SNDBUF:
         v = (int32_t)s->sndbuf;

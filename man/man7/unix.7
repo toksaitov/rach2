@@ -224,6 +224,11 @@ bound a wait, rounded up to 1 ms ticks, which then fails with
 .Dv SO_KEEPALIVE ,
 .Dv SO_LINGER
 and the low-water marks are accepted and change nothing.
+.Dv SO_PRIORITY
+is kept and reported, and orders nothing; a value outside 0 through 6
+takes root, else
+.Er EPERM ,
+as in Linux.
 .Pp
 .Dv FIONREAD
 reports the bytes queued on a stream, or the length of the next message;
