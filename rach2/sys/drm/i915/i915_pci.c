@@ -428,5 +428,11 @@ int32_t i915_probe(void)
             }
         }
     }
+    if (kcmdline_has("rach2.i915fake")) {
+        err = i915_fake_probe();
+        if (err > 0) {
+            bound += err;
+        }
+    }
     return bound > 0 ? bound : -ENODEV;
 }

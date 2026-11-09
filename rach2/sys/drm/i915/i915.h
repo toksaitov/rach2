@@ -416,6 +416,17 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw);
  */
 void i915_bios_setup(struct drm_i915_private *i915, uint16_t command);
 
+/* ---- i915_fake.c ---- */
+
+/**
+ * Bind the fake chip, a test backend that answers as an HD 4400 and
+ * completes every command at once, to each PCI function of QEMU's `edu`
+ * device, 1234:11e8, under `rach2.i915fake`; i915_fake.c tells the rest.
+ *
+ * @return how many were bound, or -ENODEV for none.
+ */
+int32_t i915_fake_probe(void);
+
 /* ---- i915_uncore.c ---- */
 
 /** Clear what the firmware left in the unclaimed-access and GT FIFO error
