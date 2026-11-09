@@ -1,0 +1,103 @@
+.Dd November 10, 2026
+.Dt GET_MEMPOLICY 2
+.Os
+.Sh NAME
+.Nm get_mempolicy
+.Nd the memory policy of a thread or an address, on a machine of one memory node
+.Sh SYNOPSIS
+.In numaif.h
+.Ft long
+.Fn get_mempolicy "int *mode" "unsigned long *nodemask" "unsigned long maxnode" "void *addr" "unsigned long flags"
+.Sh DESCRIPTION
+.Fn get_mempolicy
+answers as Linux 6.12 answers on a machine with one memory node, node 0,
+for a thread that has set no policy, since this kernel has one node and no
+call that sets a policy.
+libnuma's
+.Fn numa_available
+calls it to learn whether the kernel has the call at all.
+.Pp
+With
+.Fa flags
+0 and
+.Fa addr
+0 it stores
+.Dv MPOL_DEFAULT
+.Pq 0
+in
+.Fa mode
+and an empty mask, the default policy's, in
+.Fa nodemask .
+With
+.Dv MPOL_F_ADDR
+.Pq 2
+it answers the same for the mapping that holds
+.Fa addr .
+.Dv MPOL_F_NODE
+.Pq 1
+with
+.Dv MPOL_F_ADDR
+stores instead the node of the page at
+.Fa addr ,
+0, bringing the page in for a read as a fault would.
+.Dv MPOL_F_MEMS_ALLOWED
+.Pq 4
+stores 0 in
+.Fa mode
+and the nodes the thread may use, node 0, in
+.Fa nodemask .
+Either pointer may be null, and then is not written.
+.Pp
+The mask is written as Linux writes it: as many bytes as
+.Fa maxnode No \- 1
+bits take, rounded up to 64-bit words, the bytes past the first long
+cleared.
+A
+.Fa maxnode
+of 1 so has no byte written, except for a 32-bit program on the x86-64
+kernel, which is always written its one 32-bit word.
+.Ss System call interface
+The system call number is 275 on i386 and 239 on x86-64.
+On the x86-64 kernel a 32-bit program's mask is of 32-bit longs.
+.Sh RETURN VALUES
+0 on success.
+On failure -1 is returned with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh EXAMPLES
+.Pa tests/limitsprobe.c
+reads the default policy with its empty mask, the allowed nodes, and the
+node of a page of its own.
+.Sh ERRORS
+.Bl -tag -width "[EFAULT]"
+.It Bq Er EFAULT
+.Fa mode
+or
+.Fa nodemask
+cannot be written;
+.Dv MPOL_F_ADDR
+names an address in no mapping; or the page whose node
+.Dv MPOL_F_NODE
+asks for cannot be read, in a mapping without read access, a guard
+region or device memory.
+.It Bq Er EINVAL
+.Fa nodemask
+is given with a
+.Fa maxnode
+of 0; the mask would take more than a page;
+.Fa flags
+has a bit Linux does not define, or
+.Dv MPOL_F_MEMS_ALLOWED
+with another flag;
+.Fa addr
+is not 0 without
+.Dv MPOL_F_ADDR ;
+or
+.Dv MPOL_F_NODE
+comes without
+.Dv MPOL_F_ADDR ,
+which Linux answers only for a thread with an interleaving policy.
+.El
+.Sh SEE ALSO
+.Xr brk 2 ,
+.Xr sched_setscheduler 2

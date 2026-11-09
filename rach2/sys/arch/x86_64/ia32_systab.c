@@ -38,6 +38,7 @@
 #include "../../proc/ns.h"
 #include "../../proc/kcmp.h"
 #include "../../proc/rseq.h"
+#include "../../mm/mempolicy.h"
 #include "../../proc/pidfd.h"
 #include "../../lib/krandom.h"
 #include "../../lib/kerrno.h"
@@ -367,7 +368,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_FADVISE64_64] = compat_sys_ia32_fadvise64_64;
     table[SYS_VSERVER] = NULL;
     table[SYS_MBIND] = NULL;
-    table[SYS_GET_MEMPOLICY] = NULL;
+    table[SYS_GET_MEMPOLICY] = sys_get_mempolicy;
     table[SYS_SET_MEMPOLICY] = NULL;
     table[SYS_MQ_OPEN] = compat_sys_mq_open;
     table[SYS_MQ_UNLINK] = sys_mq_unlink;

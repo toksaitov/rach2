@@ -29,6 +29,7 @@
 #include "../../proc/ns.h"
 #include "../../proc/kcmp.h"
 #include "../../proc/rseq.h"
+#include "../../mm/mempolicy.h"
 #include "../../proc/pidfd.h"
 #include "../../lib/krandom.h"
 #include "../../lib/kerrno.h"
@@ -167,6 +168,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_PIDFD_GETFD] = sys_pidfd_getfd;
     table[SYS_KCMP] = sys_kcmp;
     table[SYS_RSEQ] = sys_rseq;
+    table[SYS_GET_MEMPOLICY] = sys_get_mempolicy;
     table[SYS_GETDENTS64] = sys_getdents64;
     table[SYS_UTIMENSAT] = sys_utimensat;
     table[SYS_UTIMENSAT_TIME64] = sys_utimensat_time64;
