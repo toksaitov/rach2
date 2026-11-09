@@ -16,6 +16,9 @@
  * host-deps: tests/host/compat/spinlock_host.c
  * host-deps: rach2/sys/drm/i915/i915_rc6.c rach2/sys/drm/i915/i915_rps.c
  * host-deps: rach2/sys/tick.c
+ * host-deps: rach2/sys/drm/i915/intel_bios.c
+ * host-deps: rach2/sys/drm/i915/intel_opregion.c
+ * host-inputs: tests/fixtures/lenovo-gpu/i915_opregion.bin
  *
  * i915_pci.c is included whole, and the driver is bound through
  * `i915_driver_bind` as the probe binds it, over the model's registers
@@ -29,9 +32,10 @@
  * The heap's pages have physical addresses of their own, which the
  * model's rings reach through the test; any other address stops the
  * ring. The IOMMU names the Lenovo's RMRR and translates nothing, as with
- * intel_iommu=off. The processor takes the device's messages whenever the
- * model's clock moves, or, in a second run of each row, leaves them
- * latched, as with its interrupts off.
+ * intel_iommu=off. The firmware's memory holds the Lenovo's OpRegion at
+ * ASLS, read from its fixture, and nothing else. The processor takes the
+ * device's messages whenever the model's clock moves, or, in a second run
+ * of each row, leaves them latched, as with its interrupts off.
  *
  * Each row checks what makes the trial safe for the machine and its
  * screen: no wait reached its bound; nothing outside the GT was written
@@ -44,7 +48,8 @@
  * never released; the chip reached no memory but the driver's own pages;
  * and after the bind every interrupt source is masked, only the master
  * enable and the rings' user interrupts are enabled, and the firmware's
- * unclaimed access is cleared.
+ * unclaimed access is cleared. The bind also decodes the Lenovo's VBT
+ * from the OpRegion, and the release unmaps it.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -72,6 +77,9 @@ extern void *malloc(unsigned long size);
 extern void free(void *p);
 extern char *strstr(const char *s, const char *t);
 extern int strcmp(const char *a, const char *b);
+extern int open(const char *path, int flags, ...);
+extern long read(int fd, void *buf, unsigned long n);
+extern int close(int fd);
 
 static int fails;
 
@@ -169,6 +177,63 @@ uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache)
     (void)size;
     (void)cache;
     return 0;
+}
+
+/* The firmware's memory: the Lenovo's OpRegion at ASLS, as the fixture
+ * holds it, with the maps and unmaps of it counted. */
+static uint8_t opregion[OPREGION_SIZE];
+static int fw_maps, fw_unmaps;
+
+/** The OpRegion's bytes for a map of them, 0 for any other firmware
+ * memory, the option ROM's shadow among them. */
+uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
+{
+    (void)cache;
+    if (phys >= LENOVO_GPU_ASLS && phys + size <= (uint64_t)LENOVO_GPU_ASLS + sizeof(opregion)) {
+        fw_maps++;
+        return (uintptr_t)(opregion + (phys - LENOVO_GPU_ASLS));
+    }
+    return 0;
+}
+
+/** Count an unmap of the OpRegion. */
+void mmio_unmap(uintptr_t va, size_t size)
+{
+    (void)size;
+    if (va == (uintptr_t)opregion) {
+        fw_unmaps++;
+    }
+}
+
+/** Read the OpRegion's fixture into the firmware's memory; 0 when it is
+ * not readable. */
+static int opregion_load(void)
+{
+    long got = 0, r;
+    int fd = open(LENOVO_OPREGION_FILE, 0);
+
+    if (fd < 0) {
+        return 0;
+    }
+    while (got < (long)sizeof(opregion) &&
+           (r = read(fd, opregion + got, sizeof(opregion) - (unsigned long)got)) > 0) {
+        got += r;
+    }
+    close(fd);
+    return got == (long)sizeof(opregion);
+}
+
+/* DRM's mode helpers, which the panel's decoding calls and the bind does
+ * not reach. */
+uint32_t drm_mode_vrefresh(const struct drm_mode_modeinfo *mode)
+{
+    (void)mode;
+    return 0;
+}
+
+void drm_mode_set_name(struct drm_mode_modeinfo *mode)
+{
+    mode->name[0] = '\0';
 }
 
 int pat_write_combining(void)
@@ -709,6 +774,8 @@ static void fresh(struct i915_model *m, struct i915_hw *hw, int firstlight, int 
     handler = 0;
     opt_i915 = 1;
     opt_firstlight = firstlight;
+    CHECK("the OpRegion is read", opregion_load());
+    fw_maps = fw_unmaps = 0;
 }
 
 /**
@@ -735,6 +802,9 @@ static void run(int firstlight, int interrupts)
                   i915->gt.engine[I915_RCS0].running && i915->gt.engine[I915_BCS0].running);
         CHECK("bind: stolen memory inside the RMRR",
               i915->stolen.size == 0x4000000u && i915->stolen.in_rmrr);
+        CHECK("bind: the VBT from the OpRegion's mailbox 4, three outputs",
+              fw_maps == 1 && i915->vbt.present && i915->vbt.version == LENOVO_VBT_VERSION &&
+                  i915->vbt.nencoders == 3 && logged("VBT in mailbox 4"));
         check_display(&m, i915);
         check_interrupts(&m);
         CHECK("gpu: no memory reached but the driver's pages", !rcs->faulted && !bcs->faulted);
@@ -754,6 +824,7 @@ static void run(int firstlight, int interrupts)
         drm_dev_put(last_registered);
         last_registered = 0;
         CHECK("unplug: every page given back", pages_live == 0);
+        CHECK("release: the OpRegion unmapped", fw_unmaps == 1);
     }
     i915_model_free(&m);
     bus = 0;
