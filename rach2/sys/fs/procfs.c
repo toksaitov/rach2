@@ -6828,17 +6828,26 @@ static int32_t procfs_regattr_write(int handle, const char __user *buf, uint32_t
  * page, through its `store`.
  */
 /**
- * Take a write of `count` bytes at `buf` to the uevent of the PCI function
- * or USB device `key` of `node`, as Linux's dev_uevent_store: the action
- * and its arguments (`sysfs_uevent_parse`) are sent as that uevent with the
- * device's variables, so that udev's coldplug hears the device. `count`,
- * -EINVAL, -EFAULT, -ENOENT for a device that is gone, or -ENOMEM.
+ * Take a write of `count` bytes at `buf` to the uevent `attr` of the device
+ * `key` of `node` (`sysfs_attr_uevent`), as Linux's dev_uevent_store: the
+ * action and its arguments (`sysfs_uevent_parse`) are sent as that uevent
+ * with the device's variables, so that udev's coldplug hears the device.
+ * `count`, -EINVAL, -EFAULT, -ENOENT for a device that is gone, or -ENOMEM.
  */
-static int32_t procfs_uevent_write(int node, int key, const char __user *buf, uint32_t count)
+static int32_t procfs_uevent_write(int node, int key, int attr, const char __user *buf,
+                                   uint32_t count)
 {
     char text[SYSFS_SYNTH_ENV_MAX], env[SYSFS_SYNTH_ENV_MAX], action[8], path[96];
+    const char *subsystem = node == SYSFS_PCI_DEVICE   ? "pci"
+                            : node == SYSFS_USB_DEVICE ? "usb"
+                            : node == SYSFS_NET_IF     ? "net"
+                            : node == SYSFS_WLAN_PHY   ? "ieee80211"
+                            : node == SYSFS_RFKILL     ? "rfkill"
+                                                       : "block";
     struct procfs_text vars;
+    struct vpath vp;
     int32_t rc;
+    int got = key;
 
     if (count > sizeof(text)) {
         return -EINVAL;
@@ -6850,15 +6859,19 @@ static int32_t procfs_uevent_write(int node, int key, const char __user *buf, ui
     if (rc != 0) {
         return rc;
     }
+    k_memset(&vp, 0, sizeof(vp));
+    vp.kind = VNODE_SYS_FILE;
+    vp.sysent = node;
+    vp.syskey = key;
+    vp.procfile = attr;
     procfs_text_init(&vars);
-    rc = procfs_gen_uevent(&vars, node, key);
+    rc = procfs_gen_sysfile(&vars, &vp, &got);
     if (rc >= 0 && vars.nomem) {
         rc = -ENOMEM;
     }
     if (rc >= 0) {
         synth_sys_path(node, key, path, (int)sizeof(path));
-        rc = sysfs_uevent_path(path, node == SYSFS_PCI_DEVICE ? "pci" : "usb", action, env,
-                               vars.buf, (uint32_t)vars.len);
+        rc = sysfs_uevent_path(path, subsystem, action, env, vars.buf, (uint32_t)vars.len);
     }
     kfree(vars.buf);
     return rc < 0 ? rc : (int32_t)count;
@@ -6877,8 +6890,9 @@ static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint3
     if (f->origin_task >> 8 == SYSFS_REG) {
         return procfs_regattr_write(f->origin_pid, buf, count);
     }
-    if (f->origin_task >> 8 == SYSFS_PCI_DEVICE || f->origin_task >> 8 == SYSFS_USB_DEVICE) {
-        return procfs_uevent_write(f->origin_task >> 8, f->origin_pid, buf, count);
+    if (sysfs_attr_uevent(f->origin_task >> 8, f->origin_task & 255)) {
+        return procfs_uevent_write(f->origin_task >> 8, f->origin_pid, f->origin_task & 255, buf,
+                                   count);
     }
     if (count > sizeof(text) - 1) {
         return -EINVAL;
