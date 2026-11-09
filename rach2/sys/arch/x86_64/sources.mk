@@ -3,6 +3,7 @@
 # sys/arch/x86/sources.mk's.
 
 include sys/arch/x86/sources.mk
+include sys/arch/x86/iommu/sources.mk
 
 # What TinyCC on Rach2 compiles and links the kernel with: no SSE register,
 # as GCC's -mno-sse has it, since a variadic function's prologue would save
@@ -43,4 +44,5 @@ ARCH_C_SRC = sys/arch/x86_64/mmu.c \
     sys/arch/x86_64/ia32_net.c \
     sys/arch/x86_64/ia32_ipc.c \
     sys/arch/x86_64/ia32_misc.c \
+    $(IOMMU_C_SRC) \
     $(PC_C_SRC)

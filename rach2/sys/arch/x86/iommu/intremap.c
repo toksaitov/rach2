@@ -1,0 +1,278 @@
+/*
+ * intremap.c: interrupt remapping. Each unit has a table of remapping
+ * entries; an I/O APIC's redirection entry or a device's message then names
+ * an entry by its index, and the entry says which vector goes to which
+ * processor, and from which requester id alone it is taken.
+ *
+ * The units refuse compatibility-format interrupts, which name a vector and
+ * a processor themselves and would pass the table by, as Linux has them
+ * (GCMD.CFI clear). So that no interrupt is lost on the way, remapping
+ * starts with them allowed, every redirection entry and message already
+ * enabled is rewritten to name an entry of its own, and only then are they
+ * refused. A message is remapped with no subhandle (SHV clear), so its data
+ * is not read and the one write of its address moves it from one format to
+ * the other; a redirection entry moves with the one write of its high half.
+ */
+
+#include "vtd.h"
+
+#include "../../../klog.h"
+#include "../../../pci.h"
+#include "../ioapic.h"
+
+#define IRTE_PRESENT 1ull
+
+/* The remappable message's address: its format bit, and the index's two
+ * fields (VT-d specification, 5.1.5.2). */
+#define MSI_REMAP_FORMAT (1u << 4)
+
+/* IRTA's size field: 2^(S+1) entries. */
+#define IRTA_SIZE 7u
+
+static int ir_on;
+
+/** A free entry of `u`'s table, marked taken, or -1. */
+static int irte_take(struct vtd_unit *u)
+{
+    unsigned int i;
+
+    for (i = 0; i < VTD_IRT_ENTRIES; i++) {
+        if ((u->irte_used[i / 8] & (1u << (i % 8))) == 0) {
+            u->irte_used[i / 8] |= (uint8_t)(1u << (i % 8));
+            return (int)i;
+        }
+    }
+    klog(KLOG_ERR, "vtd", "dmar%d: interrupt remapping: table full", u->index);
+    return -1;
+}
+
+/**
+ * Write entry `index` of `u`'s table, the high half first so that the
+ * present bit comes last, and drop the unit's cached copy of it.
+ */
+static void irte_set(struct vtd_unit *u, int index, uint64_t lo, uint64_t hi)
+{
+    vtd_write_table(u, &u->irt[2 * index + 1], hi);
+    vtd_write_table(u, &u->irt[2 * index], lo);
+    (void)vtd_inv_iec(u, index);
+}
+
+/** Clear entry `index` of `u`'s table and give it back. */
+static void irte_clear(struct vtd_unit *u, int index)
+{
+    vtd_write_table(u, &u->irt[2 * index], 0);
+    (void)vtd_inv_iec(u, index);
+    vtd_write_table(u, &u->irt[2 * index + 1], 0);
+    u->irte_used[index / 8] &= (uint8_t)~(1u << (index % 8));
+}
+
+/**
+ * The low half of a remapping entry (5.1.4): the vector, the processor's
+ * APIC id in xAPIC's place, bits 47:40, and the delivery mode, trigger,
+ * destination mode and redirection hint of the format it replaces.
+ */
+static uint64_t irte_low(unsigned int vector, unsigned int apic, unsigned int level,
+                         unsigned int dlm, unsigned int dm, unsigned int rh)
+{
+    return IRTE_PRESENT | ((uint64_t)(dm & 1u) << 2) | ((uint64_t)(rh & 1u) << 3) |
+           ((uint64_t)(level & 1u) << 4) | ((uint64_t)(dlm & 7u) << 5) |
+           ((uint64_t)(vector & 0xFFu) << 16) | ((uint64_t)((apic & 0xFFu) << 8) << 32);
+}
+
+/** The unit of a handle, and its entry. */
+static struct vtd_unit *handle_unit(int handle)
+{
+    int ui = handle >> 16;
+
+    return (ui >= 0 && ui < vtd_nunits) ? &vtd_units[ui] : NULL;
+}
+
+/**
+ * The remapper's `map` for a message of `dev`: an entry of its unit for
+ * the compatibility-format (address, data), verifying the requester id
+ * the bridges above it give, and the remapped address and data.
+ */
+static int msi_map(const pci_device_t *dev, uint32_t address, uint32_t data, uint32_t *raddress,
+                   uint32_t *rdata)
+{
+    uint8_t devfn = (uint8_t)((dev->device << 3) | (dev->function & 7u));
+    int ui = dmar_unit_for(&vtd_dmar, dev->bus, devfn), index;
+    struct vtd_unit *u;
+    unsigned int svt;
+    uint16_t sid;
+
+    if (ui < 0 || ui >= vtd_nunits || vtd_units[ui].irt == NULL) {
+        klog(KLOG_ERR, "vtd", "msi: %x:%x.%u under no unit that remaps", (unsigned int)dev->bus,
+             (unsigned int)dev->device, (unsigned int)dev->function);
+        return -1;
+    }
+    u = &vtd_units[ui];
+    index = irte_take(u);
+    if (index < 0) {
+        return -1;
+    }
+    vtd_hw_msi_source(dev->bus, devfn, &svt, &sid);
+    irte_set(u, index,
+             irte_low(data & 0xFFu, (address >> 12) & 0xFFu, (data >> 15) & 1u, (data >> 8) & 7u,
+                      (address >> 2) & 1u, (address >> 3) & 1u),
+             (uint64_t)sid | ((uint64_t)svt << 18));
+    *raddress = 0xFEE00000u | ((uint32_t)(index & 0x7FFF) << 5) | MSI_REMAP_FORMAT |
+                ((uint32_t)((index >> 15) & 1) << 2);
+    *rdata = 0;
+    return (ui << 16) | index;
+}
+
+/**
+ * The remapper's `map` for redirection entry (low, high) of the I/O APIC of
+ * id `id`: an entry of the unit whose scope lists it, verifying its
+ * requester id, and the high half of the remapped redirection entry: the
+ * index in bits 63:49 and the format bit 48 (5.1.5.1). The low half keeps
+ * its vector, polarity, trigger and mask; its fixed delivery and physical
+ * destination are zero bits, as the remapped format wants them.
+ */
+static int ioapic_map(uint8_t id, uint32_t low, uint32_t high, uint32_t *rhigh)
+{
+    struct vtd_unit *u;
+    uint16_t sid;
+    int ui, index;
+
+    if (dmar_ioapic_source(&vtd_dmar, id, &ui, &sid) != 0 || ui >= vtd_nunits ||
+        vtd_units[ui].irt == NULL || (low & 0xF00u) != 0) {
+        klog(KLOG_ERR, "vtd", "ioapic: id %u under no unit that remaps", (unsigned int)id);
+        return -1;
+    }
+    u = &vtd_units[ui];
+    index = irte_take(u);
+    if (index < 0) {
+        return -1;
+    }
+    irte_set(u, index, irte_low(low & 0xFFu, high >> 24, (low >> 15) & 1u, 0, 0, 0),
+             (uint64_t)sid | (1ull << 18));
+    *rhigh = ((uint32_t)(index & 0x7FFF) << 17) | (1u << 16);
+    return (ui << 16) | index;
+}
+
+/** The remappers' `unmap`. */
+static void entry_unmap(int handle)
+{
+    struct vtd_unit *u = handle_unit(handle);
+
+    if (u != NULL && u->irt != NULL) {
+        irte_clear(u, handle & 0xFFFF);
+    }
+}
+
+static const struct pci_msi_remap msi_ops = {msi_map, entry_unmap};
+static const struct ioapic_remap ioapic_ops = {ioapic_map, entry_unmap};
+
+/** Turn remapping off on every unit and free its table. */
+static void units_off(void)
+{
+    int i;
+
+    for (i = 0; i < vtd_nunits; i++) {
+        struct vtd_unit *u = &vtd_units[i];
+
+        if (u->irt == NULL) {
+            continue;
+        }
+        vtd_set_gcmd(u, VTD_GCMD_IRE, 0);
+        vtd_set_gcmd(u, VTD_GCMD_CFI, 0);
+        vtd_hw_page_free(u->irt);
+        u->irt = NULL;
+        u->irt_phys = 0;
+    }
+}
+
+/**
+ * Turn interrupt remapping on, as the file's head describes: 0, or -1 with
+ * a record and every interrupt as it was, when the table does not offer
+ * it, a unit lacks it or the queue, an I/O APIC is in no unit's scope, or
+ * an entry could not be had.
+ */
+int intremap_start(void)
+{
+    uint8_t ids[16];
+    int i, n;
+
+    if ((vtd_dmar.flags & DMAR_INTR_REMAP) == 0) {
+        klog(KLOG_INFO, "vtd", "interrupt remapping: off: the firmware does not offer it");
+        return -1;
+    }
+    for (i = 0; i < vtd_nunits; i++) {
+        if (!VTD_ECAP_IR(vtd_units[i].ecap) || vtd_units[i].iq == NULL) {
+            klog(KLOG_INFO, "vtd", "interrupt remapping: off: dmar%d cannot", i);
+            return -1;
+        }
+    }
+    n = vtd_hw_ioapics(ids, 16);
+    for (i = 0; i < n; i++) {
+        int ui;
+        uint16_t sid;
+
+        if (dmar_ioapic_source(&vtd_dmar, ids[i], &ui, &sid) != 0 || ui >= vtd_nunits) {
+            klog(KLOG_WARN, "vtd", "interrupt remapping: off: ioapic %u is under no unit",
+                 (unsigned int)ids[i]);
+            return -1;
+        }
+    }
+    for (i = 0; i < vtd_nunits; i++) {
+        struct vtd_unit *u = &vtd_units[i];
+
+        u->irt = (uint64_t *)vtd_hw_page(&u->irt_phys);
+        if (u->irt == NULL) {
+            units_off();
+            return -1;
+        }
+        vtd_flush_entry(u, u->irt, 4096);
+        vtd_hw_write64(u->regs, VTD_IRTA, u->irt_phys | IRTA_SIZE);
+        vtd_gcmd_once(u, VTD_GCMD_SIRTP);
+        (void)vtd_inv_iec(u, -1);
+        vtd_set_gcmd(u, VTD_GCMD_CFI, 1);
+        vtd_set_gcmd(u, VTD_GCMD_IRE, 1);
+    }
+    ir_on = 1;
+    if (ioapic_remap_start(&ioapic_ops) != 0) {
+        ir_on = 0;
+        units_off();
+        return -1;
+    }
+    if (pci_msi_remap_start(&msi_ops) != 0) {
+        ioapic_remap_stop();
+        ir_on = 0;
+        units_off();
+        return -1;
+    }
+    for (i = 0; i < vtd_nunits; i++) {
+        vtd_set_gcmd(&vtd_units[i], VTD_GCMD_CFI, 0);
+    }
+    klog(KLOG_INFO, "vtd", "interrupt remapping: on, compatibility format refused");
+    return 0;
+}
+
+/**
+ * Turn interrupt remapping off: compatibility-format interrupts allowed
+ * again, every redirection entry and message rewritten in that format and
+ * its entry given back, and the units' remapping off.
+ */
+void intremap_stop(void)
+{
+    int i;
+
+    if (!ir_on) {
+        return;
+    }
+    for (i = 0; i < vtd_nunits; i++) {
+        vtd_set_gcmd(&vtd_units[i], VTD_GCMD_CFI, 1);
+    }
+    pci_msi_remap_stop();
+    ioapic_remap_stop();
+    units_off();
+    ir_on = 0;
+    klog(KLOG_INFO, "vtd", "interrupt remapping: off");
+}
+
+int intremap_active(void)
+{
+    return ir_on;
+}
