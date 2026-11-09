@@ -1,0 +1,69 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>video runner</title></head>
+<body style="margin:0;background:#000;overflow:hidden">
+<script>
+"use strict";
+// video.html?clip=NAME&warm=W&reps=R: play the muted clip NAME, fullscreen,
+// W + R times, each in a new video element so that its counters start at
+// zero, and post to /event, as each is known: the renderer, a tick every
+// 10 s, each play's frames from getVideoPlaybackQuality() once the clip has
+// ended or failed, and the end. The first W plays are the warm-up.
+const q = new URLSearchParams(location.search);
+const CLIP = q.get("clip");
+const WARM = +(q.get("warm") || 0), REPS = +(q.get("reps") || 1);
+
+function post(event) {
+  return fetch("/event", { method: "POST", body: JSON.stringify(event), keepalive: true });
+}
+
+function renderer(type) {
+  const gl = document.createElement("canvas").getContext(type);
+  if (!gl) return { context: type, renderer: null };
+  const info = gl.getExtension("WEBGL_debug_renderer_info");
+  return {
+    context: type,
+    renderer: gl.getParameter(gl.RENDERER),
+    version: gl.getParameter(gl.VERSION),
+    unmasked: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : null,
+    vendor: info ? gl.getParameter(info.UNMASKED_VENDOR_WEBGL) : null,
+  };
+}
+
+function play(rep) {
+  return new Promise(resolve => {
+    const v = document.createElement("video");
+    v.muted = true;
+    v.autoplay = true;
+    v.playsInline = true;
+    v.style.cssText = "width:100vw;height:100vh;display:block";
+    document.body.appendChild(v);
+    const tick = setInterval(() => post({ kind: "tick", rep: rep, currentTime: v.currentTime }), 10000);
+    let over = false;
+    function end(error) {
+      if (over) return;
+      over = true;
+      clearInterval(tick);
+      const p = v.getVideoPlaybackQuality ? v.getVideoPlaybackQuality() : {};
+      post({ kind: "play", rep: rep, warm: rep < WARM, total: p.totalVideoFrames,
+             dropped: p.droppedVideoFrames, corrupted: p.corruptedVideoFrames,
+             currentTime: v.currentTime, duration: v.duration,
+             width: v.videoWidth, height: v.videoHeight, error: error }).then(() => {
+        v.remove();
+        resolve();
+      });
+    }
+    v.addEventListener("ended", () => end(null));
+    v.addEventListener("error", () => end(v.error ? "media error " + v.error.code + ": " + v.error.message : "media error"));
+    v.src = CLIP;
+    v.play().catch(e => end("play: " + e));
+  });
+}
+
+(async () => {
+  await post({ kind: "renderer", contexts: [renderer("webgl"), renderer("webgl2")] });
+  for (let rep = 0; rep < WARM + REPS; rep++)
+    await play(rep);
+  post({ kind: "done", ok: true });
+})();
+</script>
+</body></html>
