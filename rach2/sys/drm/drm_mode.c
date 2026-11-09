@@ -869,7 +869,7 @@ int32_t drm_universal_plane_init(struct drm_device *dev, struct drm_plane *plane
 {
     struct drm_mode_config *mc = &dev->mode_config;
     uint32_t n = 0;
-    int32_t rc;
+    int32_t rc = 0;
 
     if (mc->num_plane == DRM_MAX_PLANES) {
         return -EINVAL;
@@ -917,7 +917,9 @@ int32_t drm_universal_plane_init(struct drm_device *dev, struct drm_plane *plane
         drm_object_attach_property(&plane->base, plane->hotspot_x_property, 0);
         drm_object_attach_property(&plane->base, plane->hotspot_y_property, 0);
     }
-    rc = in_formats_blob(dev, plane);
+    if (!dev->mode_config.fb_modifiers_not_supported) {
+        rc = in_formats_blob(dev, plane);
+    }
     return rc;
 }
 
@@ -1298,6 +1300,10 @@ struct drm_framebuffer *drm_internal_framebuffer_create(struct drm_device *dev,
         *err = -EINVAL;
         return NULL;
     }
+    if (mc->fb_modifiers_not_supported && (r->flags & DRM_MODE_FB_MODIFIERS)) {
+        *err = -EINVAL;
+        return NULL;
+    }
     if (mc->min_width > r->width || r->width > mc->max_width || mc->min_height > r->height ||
         r->height > mc->max_height) {
         *err = -EINVAL;
@@ -1655,7 +1661,7 @@ int32_t drm_mode_getfb2_ioctl(struct drm_device *dev, void *data, struct drm_fil
     r->height = fb->height;
     r->width = fb->width;
     r->pixel_format = fb->format;
-    r->flags = DRM_MODE_FB_MODIFIERS;
+    r->flags = dev->mode_config.fb_modifiers_not_supported ? 0 : DRM_MODE_FB_MODIFIERS;
     for (i = 0; i < 4; i++) {
         r->handles[i] = 0;
         r->pitches[i] = 0;
@@ -1665,7 +1671,7 @@ int32_t drm_mode_getfb2_ioctl(struct drm_device *dev, void *data, struct drm_fil
     for (i = 0; i < fb->info->num_planes; i++) {
         r->pitches[i] = fb->pitches[i];
         r->offsets[i] = fb->offsets[i];
-        r->modifier[i] = fb->modifier;
+        r->modifier[i] = r->flags ? fb->modifier : 0;
     }
     if (may_get_handles(file)) {
         rc = fb_plane_handles(file, fb, r->handles);

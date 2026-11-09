@@ -994,8 +994,10 @@ int32_t drm_getcap(struct drm_device *dev, void *data, struct drm_file *file)
         break;
     case DRM_CAP_VBLANK_HIGH_CRTC:
     case DRM_CAP_CRTC_IN_VBLANK_EVENT:
-    case DRM_CAP_ADDFB2_MODIFIERS:
         req->value = 1;
+        break;
+    case DRM_CAP_ADDFB2_MODIFIERS:
+        req->value = !mc->fb_modifiers_not_supported;
         break;
     case DRM_CAP_DUMB_PREFERRED_DEPTH:
         req->value = mc->preferred_depth;

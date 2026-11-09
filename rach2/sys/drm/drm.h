@@ -1013,6 +1013,9 @@ struct drm_mode_config {
     int prefer_shadow;
     int async_page_flip;
     int fb_dirty;
+    /* No format modifiers, as Linux's drivers that set it: planes have no
+     * IN_FORMATS, ADDFB2_MODIFIERS is 0 and ADDFB2 refuses them. */
+    int fb_modifiers_not_supported;
     uint32_t num_crtc, num_plane, num_connector, num_encoder;
     struct drm_crtc *crtcs[DRM_MAX_CRTCS];
     struct drm_plane *planes[DRM_MAX_PLANES];
@@ -1244,6 +1247,11 @@ int drm_helper_probe_single_connector_modes(struct drm_connector *connector, uin
  * `vdisplay` and no faster than 61 Hz, Linux's drm_add_modes_noedid. The
  * number added. */
 int drm_add_modes_noedid(struct drm_connector *connector, uint32_t hdisplay, uint32_t vdisplay);
+/** The CVT mode of `hdisplay` by `vdisplay` at `vrefresh` Hz (60 for 0)
+ * into `m`, Linux's drm_cvt_mode, with reduced blanking, interlace or
+ * margins as asked. 1, or 0 for a size of 0. */
+int drm_cvt_mode(int hdisplay, int vdisplay, int vrefresh, int reduced, int interlaced, int margins,
+                 struct drm_mode_modeinfo *m);
 /** Parse the EDID `edid` of `len` bytes into its modes, in the order Linux
  * adds them, through `add(mode, arg)` for each; the number added, 0 for an
  * EDID that is not valid. For drm_connector_update_edid and its tests. */
