@@ -1,8 +1,8 @@
 /*
  * ia32_misc.c: the rest of the i386 calls whose arguments differ: the 16-bit
  * ids, limits and usage, the old uname forms, futex with 32-bit times and the
- * robust list, affinity masks, seccomp's filter, keyctl and kexec_load, for the
- * compat table (ia32_systab.c).
+ * robust list, affinity masks, keyctl and kexec_load, for the compat table
+ * (ia32_systab.c).
  */
 
 #include "ia32.h"
@@ -47,5 +47,4 @@ IA32_STUB(compat_sys_waitid)
 IA32_STUB(compat_sys_keyctl)
 IA32_STUB(compat_sys_set_robust_list)
 IA32_STUB(compat_sys_get_robust_list)
-IA32_STUB(compat_sys_seccomp)
 IA32_STUB(compat_sys_arch_prctl)

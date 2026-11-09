@@ -216,7 +216,6 @@ long compat_sys_waitid(isr_params_t *params);
 long compat_sys_keyctl(isr_params_t *params);
 long compat_sys_set_robust_list(isr_params_t *params);
 long compat_sys_get_robust_list(isr_params_t *params);
-long compat_sys_seccomp(isr_params_t *params);
 long compat_sys_arch_prctl(isr_params_t *params);
 /* The parts of the i386 ABI that are not rows of the table. */
 

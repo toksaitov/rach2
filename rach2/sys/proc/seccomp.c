@@ -21,6 +21,7 @@
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
+#include "../syscall.h"
 
 /* The actions, the high 16 bits of a filter's return; the low 16 are data. */
 #define SECCOMP_RET_KILL_PROCESS 0x80000000u
@@ -508,8 +509,10 @@ uint32_t seccomp_filter_count(const process_t *p)
 /**
  * The filter `struct sock_fprog` at the user address `uprog` describes,
  * checked and copied: its length and the program's address, then the
- * program. The filter is the caller's to free. NULL with `*err` set:
- * -EFAULT, -EINVAL for an empty, long or invalid program, or -ENOMEM.
+ * program. An i386 caller on x86-64 passes Linux's `compat_sock_fprog`,
+ * whose address is 32 bits wide. The filter is the caller's to free. NULL
+ * with `*err` set: -EFAULT, -EINVAL for an empty, long or invalid program,
+ * or -ENOMEM.
  */
 static struct seccomp_filter *filter_from_user(uintptr_t uprog, int32_t *err)
 {
@@ -517,10 +520,21 @@ static struct seccomp_filter *filter_from_user(uintptr_t uprog, int32_t *err)
         unsigned short len;
         uintptr_t filter;
     } prog; /* Linux's struct sock_fprog, in the processor's layout */
+    struct {
+        uint16_t len;
+        uint32_t filter;
+    } prog32; /* Linux's struct compat_sock_fprog, 8 bytes */
     struct seccomp_filter *f;
     uint32_t len;
 
-    if (copy_from_user(&prog, (const void __user *)uprog, sizeof(prog)) != 0) {
+    if (in_compat_syscall()) {
+        if (copy_from_user(&prog32, (const void __user *)uprog, sizeof(prog32)) != 0) {
+            *err = -EFAULT;
+            return NULL;
+        }
+        prog.len = prog32.len;
+        prog.filter = prog32.filter;
+    } else if (copy_from_user(&prog, (const void __user *)uprog, sizeof(prog)) != 0) {
         *err = -EFAULT;
         return NULL;
     }
