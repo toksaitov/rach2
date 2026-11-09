@@ -132,6 +132,11 @@ volatile uint8_t *fbcon_window(void)
     return mapped;
 }
 
+const struct boot_framebuffer *fbcon_boot_screen(void)
+{
+    return &boot.fb;
+}
+
 void k_main(uint32_t magic, const void *info);
 
 /**

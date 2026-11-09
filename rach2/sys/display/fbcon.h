@@ -112,4 +112,9 @@ void fbcon_blank(int blank);
  */
 volatile uint8_t *fbcon_window(void);
 
+/** The screen the loader described, as the boot record keeps it, for the
+ * driver of the firmware's framebuffer (sys/drm/fbdrm.c). The platform
+ * defines it (arch/x86/boot.c). */
+const struct boot_framebuffer *fbcon_boot_screen(void);
+
 #endif /* _FBCON_H_ */
