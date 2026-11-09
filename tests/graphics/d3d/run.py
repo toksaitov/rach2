@@ -75,9 +75,10 @@ def main():
     for key in ("PROTON_USE_WINED3D", "VKD3D_TEST_FILTER", "VKD3D_TEST_EXCLUDE", "VKD3D_TEST_MATCH", "VKD3D_FEATURE_LEVEL", "VKD3D_SHADER_MODEL"):
         env.pop(key, None)
     env.update(GALLIUM_DRIVER="llvmpipe", LIBGL_ALWAYS_SOFTWARE="1",
-               WINEDEBUG="-all", DXVK_LOG_LEVEL="info", VKD3D_DEBUG="info",
+               WINEDEBUG="-all,err+all", DXVK_LOG_LEVEL="info", VKD3D_DEBUG="info",
                MESA_VK_IGNORE_CONFORMANCE_WARNING="1", PROTON_USE_WOW64="1",
-               SteamGameId="2693", DXVK_LOG_PATH=str(out), PROTON_LOG="1",
+               SteamGameId="2693", DXVK_LOG_PATH=str(out),
+               PROTON_LOG="0" if family == "wine" else "1",
                PROTON_LOG_DIR=str(out))
     icds = sorted(Path("/usr/share/vulkan/icd.d").glob("lvp_icd*.json"))
     icds = [p for p in icds if "i686" not in p.name]
@@ -118,23 +119,25 @@ def main():
                 os.close(wr)
         cpus = int(env.get("GRAPHICS_CPUS", os.cpu_count()))
         env["LP_NUM_THREADS"] = "0" if family == "wine" else str(cpus)
-        (out / "environment.json").write_text(json.dumps({
+        record = {
             "uname": list(os.uname()), "family": family, "row": row,
             "environment": {k: v for k, v in env.items() if k.startswith((
                 "VK", "DXVK", "PROTON", "LP_", "MESA_", "GALLIUM", "GRAPHICS"))},
             "display": "Xvfb -noreset 1280x800x24", "cache": "empty private directory",
             "iommu": Path("/proc/cmdline").read_text(),
-        }, indent=2) + "\n")
+        }
+        (out / "environment.json").write_text(json.dumps(record, indent=2) + "\n")
+        print("d3d: environment: " + json.dumps(record), flush=True)
         proton = Path(env.get("D3D_PROTON", "/opt/proton"))
         launch = [sys.executable, str(proton / "proton")]
         if family in ("probe", "wine"):
-            if family == "wine":
-                env["PROTON_LOG"] = "0"
             server = proton / "files/bin/wineserver"
+            print("d3d: prefix: creating", flush=True)
             status, _ = run_command(launch + ["run", "c:\\windows\\system32\\cmd.exe", "/c", "exit", "0"],
                                     env, out / "prefix.log")
             if status:
                 raise RuntimeError("Proton prefix creation failed: %s" % status)
+            print("d3d: prefix: ready", flush=True)
             env["WINEPREFIX"] = str(work / "compat/pfx")
             path = "proton" if family == "probe" else row.split("/", 1)[0]
             kind = "b" if path == "wined3d" else "n"
@@ -161,7 +164,8 @@ def main():
                 actual = {"exit": rc, "summary": counts, "progress": stopped}
                 actual["matched"] = stopped if expected.get("progress") else (
                     rc == expected["exit"] and (counts is not None) == expected["summary"] and
-                    (counts is None or counts[3] == expected["failures"]))
+                    (counts is None or (counts[3] == expected["failures"] and
+                     counts[0] >= expected["min_checks"] and counts[4] <= expected["max_skipped"])))
                 results[unit] = actual
         elif family == "vkd3d":
             env["LD_LIBRARY_PATH"] = str(HERE / "vkd3d") + ":" + env.get("LD_LIBRARY_PATH", "")
@@ -188,7 +192,8 @@ def main():
                 flake = rc in (-signal.SIGSEGV, 128 + signal.SIGSEGV) and name in ref["lavapipe_flakes"]
                 matched = flake or (counts is not None and name + " begin" in text and
                                     name + " end" in text and rc in (0, 1) and
-                                    counts[1] in expected["failures"] and (rc == 0) == (counts[1] == 0))
+                                    counts[1] in expected["failures"] and counts[0] >= expected["min_checks"] and
+                                    counts[3] <= expected["max_skipped"] and (rc == 0) == (counts[1] == 0))
                 result = {"exit": rc, "summary": counts, "linux_flake": flake, "matched": matched}
                 print("d3d: unit: %s %s" % (name, json.dumps(result)), flush=True)
                 return name, result
