@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import signal
+import shlex
 import socketserver
 import struct
 import subprocess
@@ -26,6 +27,42 @@ def desktop(line):
     return ["su", "-s", "/bin/bash", "desktop", "-c",
             "export XDG_RUNTIME_DIR=/run/user/1001 WAYLAND_DISPLAY=wayland-0 "
             "PULSE_SERVER=unix:/run/user/1001/pulse/native; " + line]
+
+
+SEAT_CLIENT = r'''import ctypes, os, threading
+os.environ["LIBSEAT_BACKEND"] = "seatd"
+lib = ctypes.CDLL("libseat.so.1", use_errno=True)
+callback = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_void_p)
+enabled = threading.Event()
+enable = callback(lambda *_: enabled.set())
+disable = callback(lambda seat, _: lib.libseat_disable_seat(seat))
+
+class Listener(ctypes.Structure):
+    """The two seat state callbacks of the public libseat interface."""
+    _fields_ = [("enable", callback), ("disable", callback)]
+
+lib.libseat_open_seat.argtypes = [ctypes.POINTER(Listener), ctypes.c_void_p]
+lib.libseat_open_seat.restype = ctypes.c_void_p
+lib.libseat_dispatch.argtypes = [ctypes.c_void_p, ctypes.c_int]
+lib.libseat_disable_seat.argtypes = [ctypes.c_void_p]
+lib.libseat_open_device.argtypes = [ctypes.c_void_p, ctypes.c_char_p,
+                                    ctypes.POINTER(ctypes.c_int)]
+lib.libseat_close_device.argtypes = [ctypes.c_void_p, ctypes.c_int]
+lib.libseat_close_seat.argtypes = [ctypes.c_void_p]
+listener = Listener(enable, disable)
+seat = lib.libseat_open_seat(ctypes.byref(listener), None)
+assert seat, ctypes.get_errno()
+try:
+    while not enabled.is_set():
+        assert lib.libseat_dispatch(seat, -1) >= 0, ctypes.get_errno()
+    fd = ctypes.c_int(-1)
+    device = lib.libseat_open_device(seat, b"/dev/input/event0", ctypes.byref(fd))
+    assert device >= 0 and fd.value >= 0, ctypes.get_errno()
+    os.close(fd.value)
+    assert lib.libseat_close_device(seat, device) == 0, ctypes.get_errno()
+finally:
+    assert lib.libseat_close_seat(seat) == 0, ctypes.get_errno()
+'''
 
 
 def session():
@@ -50,6 +87,7 @@ def session():
     assert command("stat", "-c", "%G", "/run/seatd.sock").strip() == "seat"
     props = command("udevadm", "info", "--query=property", "--name=/dev/input/event0")
     assert "ID_INPUT=1" in props and "ID_INPUT_KEYBOARD=1" in props, props
+    command(*desktop("python3 -c " + shlex.quote(SEAT_CLIENT)))
     command(*desktop("pactl info"))
     print("desktop: result: session", flush=True)
 

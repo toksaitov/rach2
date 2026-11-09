@@ -1700,7 +1700,8 @@ $(ARCH_BUILD)/tests/musl/creddisk $(ARCH_BUILD)/tests/musl/procfilesmusl: musl-p
 # `tests/run d3d-vkd3d`: vkd3d-proton's units on lavapipe against Debian.
 include tests/graphics/d3d/rules.mk
 
-# The desktop case needs the installed GNU root without the host test products.
+# `tests/run desktop`: an ordinary headless Weston session at boot, input
+# discovery, and browser and ALSA tones measured through OSS loopback.
 DESKTOP_TEST_DISK = $(IMAGES_DIR)/desktop-test.disk
 $(DESKTOP_TEST_DISK): $(OS_REAL_GNU_EXT2) $(MKMBR)
 	@mkdir -p $(@D)
@@ -1710,3 +1711,7 @@ $(DESKTOP_TEST_DISK): $(OS_REAL_GNU_EXT2) $(MKMBR)
 	dd if=$(OS_REAL_GNU_EXT2) of=$@.tmp bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null && \
 	$(MKMBR) --lba $@.tmp 2048:$$((mib * 2048)):83 > /dev/null
 	mv $@.tmp $@
+
+build/tests/graphics/desktop.py: tests/graphics/desktop.py
+	@mkdir -p $(@D)
+	cp $< $@
