@@ -118,3 +118,7 @@ For an author's single-unit run, unpack `bundle.tar` in the Debian guest, place 
 * `venus` needs the udmabuf module, which a restart of WSL unloads until root loads it again; `grep '^udmabuf ' /proc/modules` says whether it is loaded.
 * On Rach2 `drmcapture` needs a DRM CRTC with a valid mode and a framebuffer; an output without a framebuffer has nothing to capture.
 * The Debian guest's packages come from the snapshot of one date; a newer reference takes a new date in `debian-ref/image` and a new `prepare`.
+
+## Tests
+
+The `desktop` family's headless case runs `desktop.py` in the GNU guest. It checks the desktop account, runtime directory, seat socket, keyboard properties and compositor before recording each browser's Web Audio tone through PulseAudio and an ALSA tone through its OSS plugin. It measures the samples from `/dev/dsp` with `rach2.audio.loopback`; the browser cases also require an active PulseAudio sink input.
