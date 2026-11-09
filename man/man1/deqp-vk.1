@@ -1,0 +1,80 @@
+.Dd November 10, 2026
+.Dt DEQP-VK 1
+.Os
+.Sh NAME
+.Nm deqp-vk ,
+.Nm glcts
+.Nd run cases of the Khronos Vulkan and OpenGL conformance tests
+.Sh SYNOPSIS
+.Nm /opt/vk-gl-cts- Ns Ar version Ns Pa /vulkan/deqp-vk
+.Op Ar option ...
+.Nm /opt/vk-gl-cts- Ns Ar version Ns Pa /gl/glcts
+.Op Ar option ...
+.Sh DESCRIPTION
+The x86-64 GNU root installs two releases of VK-GL-CTS, 1.4.1.1 and 1.4.7.1, each under
+.Pa /opt/vk-gl-cts- Ns Ar version ,
+built for the surfaceless EGL platform.
+.Nm
+runs the dEQP-VK cases on the Vulkan drivers the loader finds, and
+.Nm glcts
+runs the dEQP-GLES2, dEQP-GLES3 and dEQP-GLES31 cases, among the others it has, on EGL and OpenGL ES.
+Each reads its data from the directory it is started in, so it is started from its own directory.
+.Pp
+The common options are:
+.Bl -tag -width Ds
+.It Fl n Ar case
+Run the cases whose names match
+.Ar case ,
+in which
+.Ql *
+matches any part of a name.
+.It Fl -deqp-caselist-file= Ns Ar file
+Run the cases listed in
+.Ar file ,
+one a line.
+.It Fl -deqp-log-filename= Ns Ar file
+Write the test log to
+.Ar file ,
+TestResults.qpa by default.
+.It Fl -deqp-surface-type= Ns Ar type
+Draw to a
+.Cm pbuffer
+or another surface type the platform has; the GLES cases on the surfaceless platform use
+.Cm pbuffer .
+.It Fl -deqp-gl-config-name= Ns Ar name
+Use the EGL configuration
+.Ar name ,
+such as
+.Cm rgba8888d24s8ms0 .
+.It Fl -deqp-watchdog=enable
+End a case that runs longer than the watchdog's limits, as Timeout.
+.El
+.Pp
+Each case prints its name and then its status: Pass, Fail, NotSupported, QualityWarning, CompatibilityWarning, ResourceError, InternalError, Crash or Timeout.
+.Sh ENVIRONMENT
+.Bl -tag -width EGL_PLATFORM
+.It Ev EGL_PLATFORM
+Set to
+.Cm surfaceless
+for
+.Nm glcts ;
+without it Mesa's EGL takes another platform and finds no display.
+.It Ev VK_DRIVER_FILES
+The Vulkan drivers' manifests the loader reads, to choose one driver.
+.El
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /opt/vk-gl-cts- Ns Ar version Ns Pa /mustpass
+The case lists, compressed: vk-default.txt.gz, the Vulkan list, and gles2-main.txt.gz, gles3-main.txt.gz and gles31-main.txt.gz, the AOSP GLES lists.
+.It Pa /opt/vk-gl-cts- Ns Ar version Ns Pa /build-info
+The release, its pinned sources, the build's options and compiler, and the length of each list.
+.El
+.Sh EXAMPLES
+Run the GLES 2 information cases on llvmpipe:
+.Bd -literal -offset indent
+cd /opt/vk-gl-cts-1.4.7.1/gl
+EGL_PLATFORM=surfaceless ./glcts -n 'dEQP-GLES2.info.*' \e
+    --deqp-surface-type=pbuffer --deqp-gl-config-name=rgba8888d24s8ms0
+.Ed
+.Sh SEE ALSO
+.Xr vulkaninfo 1
