@@ -242,7 +242,8 @@ static int32_t clients_show(void *data, char *buf, uint32_t cap)
         char comm[16];
         int minor;
 
-        for (f = dev->files, k = 1; k < i; k++) {
+        f = dev->files;
+        for (k = 1; k < i; k++) {
             f = f->dev_next;
         }
         p = get_process(f->pid);
@@ -424,7 +425,8 @@ static int32_t framebuffer_show(void *data, char *buf, uint32_t cap)
         count++;
     }
     for (i = count; i > 0; i--) {
-        for (fb = dev->mode_config.fbs, k = 1; k < i; k++) {
+        fb = dev->mode_config.fbs;
+        for (k = 1; k < i; k++) {
             fb = fb->next;
         }
         emit_str(&e, "framebuffer[");
