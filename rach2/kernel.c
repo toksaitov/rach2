@@ -259,7 +259,8 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
  * delivery, the USB controller's event ring, the
  * keyboards' repeat, after the USB reports that may press or release a key,
  * the block layer's lagged requests and deadlines, the platform's devices,
- * the end of a speaker's tone, and the console's serial port.
+ * vkms's vblank timer, the end of a speaker's tone, and the console's serial
+ * port.
  *
  * The tick is accounted as idle or busy first, before anything below can
  * wake a process: the accounting records what the processor was doing when
@@ -326,6 +327,7 @@ static void timer_handler(isr_params_t *params)
     block_lag_tick();
     block_request_tick();
     platform_tick();
+    vkms_tick();
     speaker_tick();
     tty_console_poll();
 
