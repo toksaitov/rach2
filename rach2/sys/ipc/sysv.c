@@ -14,6 +14,7 @@
  */
 
 #include "../arch/uabi.h"
+#include "ipc32.h"
 #include "sysv.h"
 #include "mqueue.h"
 
@@ -33,10 +34,12 @@
 #include "../lib/kerrno.h"
 #include "../lib/kstring.h"
 #include "../timer.h"
+#include "../syscall.h"
 #include "../syscall_internal.h"
 
 /* The flags of every get and control call, and the bit the C library adds
- * to a command to ask for the 64-bit layouts, which are the only ones. */
+ * to a command to ask for the 64-bit layouts; ipc(2) gives a command
+ * without it the old ones (`sysv_rec`). */
 #define IPC_PRIVATE 0
 #define IPC_CREAT   01000
 #define IPC_EXCL    02000
@@ -271,6 +274,136 @@ static int32_t sysv_perm_set(struct sysv_perm *p, const struct ipc64_perm *in)
     p->uid = (uint32_t)uid;
     p->gid = (uint32_t)gid;
     p->mode = (p->mode & ~0777u) | (in->mode & 0777u);
+    return 0;
+}
+
+/*
+ * The record a control command reads or writes has one of three layouts:
+ * the caller's own (arch/uabi.h); the IPC_64 one of an i386 call on x86-64,
+ * whose times are split in two words (ipc32.h); and the old one of a
+ * command without IPC_64, with 16-bit ids, which only ipc(2), an i386 call
+ * on either kernel, takes, as Linux's ipc_parse_version and
+ * compat_ipc_parse_version have it on x86.
+ */
+#define REC_NATIVE 0
+#define REC_I386   1
+#define REC_OLD    2
+
+/** Whether the call is an i386 call on x86-64, whose records and message
+ * types have 32-bit longs. */
+static int sysv_compat(void)
+{
+    return sizeof(long) > 4u && in_compat_syscall();
+}
+
+/** The layout of the record of a control command of `version`, IPC_64 or
+ * 0 for the old one. */
+static int sysv_rec(int version)
+{
+    if (version != IPC_64) {
+        return REC_OLD;
+    }
+    return sysv_compat() ? REC_I386 : REC_NATIVE;
+}
+
+/** The id `id` in a 16-bit field, Linux's high2lowuid: past 65535 it is
+ * the overflow id, 65534. */
+static uint16_t sysv_id16(uint32_t id)
+{
+    return id > 0xFFFFu ? (uint16_t)65534u : (uint16_t)id;
+}
+
+/** The time `t` as an IPC_64 record of an i386 call holds it, the low word
+ * in `f` and the high in `f`_high. */
+#define REC_TIME64(v, f, t) \
+    ((v)->f = (uint32_t)(uint64_t)(t), (v)->f##_high = (uint32_t)((uint64_t)(t) >> 32))
+
+/** The permissions `in` in the IPC_64 record of an i386 call. */
+static void sysv_perm64_out(const struct ipc64_perm *in, struct ipc32_perm64 *out)
+{
+    out->key = in->key;
+    out->uid = in->uid;
+    out->gid = in->gid;
+    out->cuid = in->cuid;
+    out->cgid = in->cgid;
+    out->mode = in->mode;
+    out->seq = in->seq;
+}
+
+/** The permissions `in` in an old record, as Linux's
+ * ipc64_perm_to_ipc_perm cuts them. */
+static void sysv_perm_old_out(const struct ipc64_perm *in, struct ipc32_perm *out)
+{
+    out->key = in->key;
+    out->uid = sysv_id16(in->uid);
+    out->gid = sysv_id16(in->gid);
+    out->cuid = sysv_id16(in->cuid);
+    out->cgid = sysv_id16(in->cgid);
+    out->mode = in->mode;
+    out->seq = in->seq;
+}
+
+/**
+ * Read IPC_SET's record of `kind` at `buf`, in the layout `rec`, into the
+ * owner, group and bits of `perm`, and for a queue its byte limit into
+ * `*qbytes`. An old record's ids are taken as they are, and its 16-bit
+ * byte limit, when 0, gives way to the whole one beside it, as i386's
+ * kernel reads it; Linux's compat call reads the 16-bit limit alone. 0 or
+ * -EFAULT.
+ */
+static int32_t sysv_set_in(int kind, int rec, const void __user *buf, struct ipc64_perm *perm,
+                           unsigned long *qbytes)
+{
+    union {
+        struct shmid64_ds shm;
+        struct semid64_ds sem;
+        struct msqid64_ds msg;
+        struct ipc32_shmid64_ds shm32;
+        struct ipc32_semid64_ds sem32;
+        struct ipc32_msqid64_ds msg32;
+        struct ipc32_shmid_ds shm_old;
+        struct ipc32_semid_ds sem_old;
+        struct ipc32_msqid_ds msg_old;
+    } u;
+    static const uint32_t sizes[3][3] = {
+        {sizeof(struct shmid64_ds), sizeof(struct ipc32_shmid64_ds), sizeof(struct ipc32_shmid_ds)},
+        {sizeof(struct semid64_ds), sizeof(struct ipc32_semid64_ds), sizeof(struct ipc32_semid_ds)},
+        {sizeof(struct msqid64_ds), sizeof(struct ipc32_msqid64_ds),
+         sizeof(struct ipc32_msqid_ds)}};
+
+    k_memset(&u, 0, sizeof(u));
+    if (copy_from_user(&u, buf, sizes[kind][rec]) != 0) {
+        return -EFAULT;
+    }
+    k_memset(perm, 0, sizeof(*perm));
+    *qbytes = 0;
+    switch (rec) {
+    case REC_NATIVE:
+        *perm = u.shm.perm; /* each record begins with its permissions */
+        if (kind == SYSV_MSG) {
+            *qbytes = u.msg.qbytes;
+        }
+        break;
+    case REC_I386:
+        perm->uid = u.shm32.perm.uid;
+        perm->gid = u.shm32.perm.gid;
+        perm->mode = u.shm32.perm.mode;
+        if (kind == SYSV_MSG) {
+            *qbytes = u.msg32.qbytes;
+        }
+        break;
+    default:
+        perm->uid = u.shm_old.perm.uid;
+        perm->gid = u.shm_old.perm.gid;
+        perm->mode = u.shm_old.perm.mode;
+        if (kind == SYSV_MSG) {
+            *qbytes = u.msg_old.qbytes;
+            if (u.msg_old.qbytes == 0 && !sysv_compat()) {
+                *qbytes = u.msg_old.lqbytes;
+            }
+        }
+        break;
+    }
     return 0;
 }
 
@@ -558,11 +691,49 @@ static void shm_stat_out(struct shm_seg *s, struct shmid64_ds *ds)
     ds->nattch = shm_attaches(shm_mem(s));
 }
 
-/** IPC_INFO and SHM_INFO into `buf`; the highest place in use. */
-static int32_t shm_info_out(int cmd, void __user *buf)
+/** Copy the record of `s` to `buf` in the layout `rec`. 0 or -EFAULT. */
+static int32_t shm_stat_put(struct shm_seg *s, void __user *buf, int rec)
+{
+    struct shmid64_ds ds;
+    struct ipc32_shmid64_ds v;
+    struct ipc32_shmid_ds o;
+
+    shm_stat_out(s, &ds);
+    if (rec == REC_I386) {
+        k_memset(&v, 0, sizeof(v));
+        sysv_perm64_out(&ds.perm, &v.perm);
+        v.segsz = (uint32_t)s->size;
+        REC_TIME64(&v, atime, s->atime);
+        REC_TIME64(&v, dtime, s->dtime);
+        REC_TIME64(&v, ctime, s->ctime);
+        v.cpid = ds.cpid;
+        v.lpid = ds.lpid;
+        v.nattch = (uint32_t)ds.nattch;
+        return copy_to_user(buf, &v, sizeof(v)) != 0 ? -EFAULT : 0;
+    }
+    if (rec == REC_OLD) {
+        k_memset(&o, 0, sizeof(o));
+        sysv_perm_old_out(&ds.perm, &o.perm);
+        o.segsz = (int32_t)s->size;
+        o.atime = (int32_t)s->atime;
+        o.dtime = (int32_t)s->dtime;
+        o.ctime = (int32_t)s->ctime;
+        o.cpid = (uint16_t)ds.cpid;
+        o.lpid = (uint16_t)ds.lpid;
+        o.nattch = (uint16_t)ds.nattch;
+        return copy_to_user(buf, &o, sizeof(o)) != 0 ? -EFAULT : 0;
+    }
+    return copy_to_user(buf, &ds, sizeof(ds)) != 0 ? -EFAULT : 0;
+}
+
+/** IPC_INFO, in the layout `rec`, and SHM_INFO into `buf`; the highest
+ * place in use. An i386 record's shmmax is at most 0x7FFFFFFF, as Linux's
+ * old record and its compat call cut it. */
+static int32_t shm_info_out(int cmd, void __user *buf, int rec)
 {
     struct shminfo64 info;
     struct shm_info used;
+    struct ipc32_shm_info used32;
     int i;
 
     if (cmd == IPC_INFO) {
@@ -572,6 +743,27 @@ static int32_t shm_info_out(int cmd, void __user *buf)
         info.shmmni = SYSV_SLOTS;
         info.shmseg = SYSV_SLOTS;
         info.shmall = SHMMAX;
+        if (rec != REC_NATIVE) {
+            struct ipc32_shminfo64 v;
+            struct ipc32_shminfo o;
+
+            k_memset(&v, 0, sizeof(v));
+            v.shmmax = info.shmmax > 0x7FFFFFFFul ? 0x7FFFFFFFu : (uint32_t)info.shmmax;
+            v.shmmin = (uint32_t)info.shmmin;
+            v.shmmni = (uint32_t)info.shmmni;
+            v.shmseg = (uint32_t)info.shmseg;
+            v.shmall = (uint32_t)info.shmall;
+            o.shmmax = (int32_t)v.shmmax;
+            o.shmmin = (int32_t)v.shmmin;
+            o.shmmni = (int32_t)v.shmmni;
+            o.shmseg = (int32_t)v.shmseg;
+            o.shmall = (int32_t)v.shmall;
+            if ((rec == REC_I386 ? copy_to_user(buf, &v, sizeof(v))
+                                 : copy_to_user(buf, &o, sizeof(o))) != 0) {
+                return -EFAULT;
+            }
+            return sysv_highest(SYSV_SHM);
+        }
         return copy_to_user(buf, &info, sizeof(info)) != 0 ? -EFAULT : sysv_highest(SYSV_SHM);
     }
     k_memset(&used, 0, sizeof(used));
@@ -584,6 +776,13 @@ static int32_t shm_info_out(int cmd, void __user *buf)
         }
     }
     used.shm_rss = used.shm_tot;
+    if (sysv_compat()) {
+        k_memset(&used32, 0, sizeof(used32));
+        used32.used_ids = used.used_ids;
+        used32.shm_tot = (uint32_t)used.shm_tot;
+        used32.shm_rss = (uint32_t)used.shm_rss;
+        return copy_to_user(buf, &used32, sizeof(used32)) != 0 ? -EFAULT : sysv_highest(SYSV_SHM);
+    }
     return copy_to_user(buf, &used, sizeof(used)) != 0 ? -EFAULT : sysv_highest(SYSV_SHM);
 }
 
@@ -595,18 +794,20 @@ static int32_t shm_info_out(int cmd, void __user *buf)
  * meanwhile; IPC_INFO and SHM_INFO give the limits and the use. SHM_LOCK
  * and SHM_UNLOCK do nothing, since no page is ever swapped. EPERM for a
  * caller that neither owns nor made the segment, EINVAL for another
- * command.
+ * command. The records have the layout of `version` (`sysv_rec`).
  */
-static int32_t shm_ctl(int32_t id, int cmd, void __user *buf)
+static int32_t shm_ctl(int32_t id, int cmd, void __user *buf, int version)
 {
-    struct shmid64_ds ds;
+    struct ipc64_perm perm;
+    unsigned long qbytes;
     struct shm_seg *s;
+    int rec = sysv_rec(version);
     int32_t rc;
 
     cmd &= ~IPC_64;
     shm_reap();
     if (cmd == IPC_INFO || cmd == SHM_INFO) {
-        return shm_info_out(cmd, buf);
+        return shm_info_out(cmd, buf, rec);
     }
     s = (struct shm_seg *)sysv_target(SYSV_SHM, id, cmd == SHM_STAT || cmd == SHM_STAT_ANY,
                                       cmd != IPC_STAT && cmd != SHM_STAT, &rc);
@@ -617,19 +818,18 @@ static int32_t shm_ctl(int32_t id, int cmd, void __user *buf)
     case IPC_STAT:
     case SHM_STAT:
     case SHM_STAT_ANY:
-        shm_stat_out(s, &ds);
-        if (copy_to_user(buf, &ds, sizeof(ds)) != 0) {
+        if (shm_stat_put(s, buf, rec) != 0) {
             return -EFAULT;
         }
         return cmd == IPC_STAT ? 0 : sysv_id(&s->perm);
     case IPC_SET:
-        if (copy_from_user(&ds, buf, sizeof(ds)) != 0) {
+        if (sysv_set_in(SYSV_SHM, rec, buf, &perm, &qbytes) != 0) {
             return -EFAULT;
         }
         if (!sysv_owner(&s->perm)) {
             return -EPERM;
         }
-        if (sysv_perm_set(&s->perm, &ds.perm) != 0) {
+        if (sysv_perm_set(&s->perm, &perm) != 0) {
             return -EINVAL;
         }
         s->ctime = sysv_now();
@@ -1026,6 +1226,33 @@ static void sem_stat_out(const struct sem_set *set, struct semid64_ds *ds)
     ds->nsems = set->nsems;
 }
 
+/** Copy the record of `set` to `buf` in the layout `rec`. 0 or -EFAULT. */
+static int32_t sem_stat_put(const struct sem_set *set, void __user *buf, int rec)
+{
+    struct semid64_ds ds;
+    struct ipc32_semid64_ds v;
+    struct ipc32_semid_ds o;
+
+    sem_stat_out(set, &ds);
+    if (rec == REC_I386) {
+        k_memset(&v, 0, sizeof(v));
+        sysv_perm64_out(&ds.perm, &v.perm);
+        REC_TIME64(&v, otime, set->otime);
+        REC_TIME64(&v, ctime, set->ctime);
+        v.nsems = set->nsems;
+        return copy_to_user(buf, &v, sizeof(v)) != 0 ? -EFAULT : 0;
+    }
+    if (rec == REC_OLD) {
+        k_memset(&o, 0, sizeof(o));
+        sysv_perm_old_out(&ds.perm, &o.perm);
+        o.otime = (int32_t)set->otime;
+        o.ctime = (int32_t)set->ctime;
+        o.nsems = (uint16_t)set->nsems;
+        return copy_to_user(buf, &o, sizeof(o)) != 0 ? -EFAULT : 0;
+    }
+    return copy_to_user(buf, &ds, sizeof(ds)) != 0 ? -EFAULT : 0;
+}
+
 /** IPC_INFO and SEM_INFO into `buf`, SEM_INFO with the sets in use as
  * `semusz` and their semaphores as `semaem`; the highest place in use. */
 static int32_t sem_info_out(int cmd, void __user *buf)
@@ -1150,20 +1377,21 @@ static int32_t sem_get_all(const struct sem_set *set, void __user *uarr)
 }
 
 /** IPC_SET and IPC_RMID on `set`, for its owner or its maker: the owner,
- * group and bits from the record at `buf`, or the set's removal, which
- * wakes every waiter with EIDRM. */
-static int32_t sem_ctl_owner(struct sem_set *set, int cmd, void __user *buf)
+ * group and bits from the record at `buf`, of the layout `rec`, or the
+ * set's removal, which wakes every waiter with EIDRM. */
+static int32_t sem_ctl_owner(struct sem_set *set, int cmd, void __user *buf, int rec)
 {
-    struct semid64_ds ds;
+    struct ipc64_perm perm;
+    unsigned long qbytes;
 
-    if (cmd == IPC_SET && copy_from_user(&ds, buf, sizeof(ds)) != 0) {
+    if (cmd == IPC_SET && sysv_set_in(SYSV_SEM, rec, buf, &perm, &qbytes) != 0) {
         return -EFAULT;
     }
     if (!sysv_owner(&set->perm)) {
         return -EPERM;
     }
     if (cmd == IPC_SET) {
-        if (sysv_perm_set(&set->perm, &ds.perm) != 0) {
+        if (sysv_perm_set(&set->perm, &perm) != 0) {
             return -EINVAL;
         }
         set->ctime = sysv_now();
@@ -1180,12 +1408,13 @@ static int32_t sem_ctl_owner(struct sem_set *set, int cmd, void __user *buf)
  * through the array `arg` points at, IPC_STAT, SEM_STAT and SEM_STAT_ANY
  * into the record it points at, the last two by place and returning the
  * id, IPC_SET and IPC_RMID (`sem_ctl_owner`), and IPC_INFO and SEM_INFO.
- * EINVAL for another command.
+ * EINVAL for another command. The records have the layout of `version`
+ * (`sysv_rec`).
  */
-static int32_t sem_ctl(int32_t id, int num, int cmd, uintptr_t arg)
+static int32_t sem_ctl(int32_t id, int num, int cmd, uintptr_t arg, int version)
 {
-    struct semid64_ds ds;
     struct sem_set *set;
+    int rec = sysv_rec(version);
     int32_t rc;
 
     cmd &= ~IPC_64;
@@ -1201,14 +1430,13 @@ static int32_t sem_ctl(int32_t id, int num, int cmd, uintptr_t arg)
     case IPC_STAT:
     case SEM_STAT:
     case SEM_STAT_ANY:
-        sem_stat_out(set, &ds);
-        if (copy_to_user((void __user *)arg, &ds, sizeof(ds)) != 0) {
+        if (sem_stat_put(set, (void __user *)arg, rec) != 0) {
             return -EFAULT;
         }
         return cmd == IPC_STAT ? 0 : sysv_id(&set->perm);
     case IPC_SET:
     case IPC_RMID:
-        return sem_ctl_owner(set, cmd, (void __user *)arg);
+        return sem_ctl_owner(set, cmd, (void __user *)arg, rec);
     case GETALL:
         return sem_get_all(set, (void __user *)arg);
     case SETALL:
@@ -1347,6 +1575,32 @@ static struct msg_queue *msg_hold(int32_t id, uint32_t flag, int32_t *rc)
     return q;
 }
 
+/** The bytes of the type before a message's text in the caller's
+ * msgbuf: a long, which an i386 call on x86-64 has in 32 bits. */
+static uint32_t msg_type_bytes(void)
+{
+    if (sysv_compat()) {
+        return (uint32_t)sizeof(struct ipc32_msgbuf);
+    }
+    return (uint32_t)sizeof(long);
+}
+
+/** Read the type of the caller's message at `umsg` into `*type`, an i386
+ * call's sign-extended. 0 or -EFAULT. */
+static int32_t msg_type_get(const void __user *umsg, long *type)
+{
+    struct ipc32_msgbuf head;
+
+    if (!sysv_compat()) {
+        return copy_from_user(type, umsg, sizeof(*type)) != 0 ? -EFAULT : 0;
+    }
+    if (copy_from_user(&head, umsg, sizeof(head)) != 0) {
+        return -EFAULT;
+    }
+    *type = head.mtype;
+    return 0;
+}
+
 /**
  * msgsnd: append the message at `umsg`, a long type of at least 1 and
  * `size` bytes of text, to queue `id`, waiting while the queue's bytes or
@@ -1369,8 +1623,8 @@ static int32_t msg_snd(int32_t id, const void __user *umsg, uint32_t size, uint3
     if (!m) {
         return -ENOMEM;
     }
-    if (copy_from_user(&m->type, umsg, sizeof(m->type)) != 0 ||
-        copy_from_user(m + 1, (const char __user *)umsg + sizeof(m->type), size) != 0) {
+    if (msg_type_get(umsg, &m->type) != 0 ||
+        copy_from_user(m + 1, (const char __user *)umsg + msg_type_bytes(), size) != 0) {
         kfree(m);
         return -EFAULT;
     }
@@ -1431,9 +1685,13 @@ static struct msg **msg_pick(struct msg_queue *q, long type, uint32_t flag)
 static int32_t msg_copy_out(const struct msg *m, void __user *umsg, uint32_t size)
 {
     uint32_t n = m->size < size ? m->size : size;
+    struct ipc32_msgbuf head;
+    int32_t rc;
 
-    if (copy_to_user(umsg, &m->type, sizeof(m->type)) != 0 ||
-        copy_to_user((char __user *)umsg + sizeof(m->type), m + 1, n) != 0) {
+    head.mtype = (int32_t)m->type;
+    rc = sysv_compat() ? copy_to_user(umsg, &head, sizeof(head))
+                       : copy_to_user(umsg, &m->type, sizeof(m->type));
+    if (rc != 0 || copy_to_user((char __user *)umsg + msg_type_bytes(), m + 1, n) != 0) {
         return -EFAULT;
     }
     return (int32_t)n;
@@ -1509,6 +1767,55 @@ static void msg_stat_out(const struct msg_queue *q, struct msqid64_ds *ds)
     ds->lrpid = sysv_pid_seen(q->lrpid);
 }
 
+/**
+ * Copy the record of `q` to `buf` in the layout `rec`. An old record's
+ * 16-bit counts are cut at 65535 and the whole ones put beside them, as
+ * i386's kernel writes it; Linux's compat call cuts them to their low bits
+ * and leaves the whole ones 0. 0 or -EFAULT.
+ */
+static int32_t msg_stat_put(const struct msg_queue *q, void __user *buf, int rec)
+{
+    struct msqid64_ds ds;
+    struct ipc32_msqid64_ds v;
+    struct ipc32_msqid_ds o;
+
+    msg_stat_out(q, &ds);
+    if (rec == REC_I386) {
+        k_memset(&v, 0, sizeof(v));
+        sysv_perm64_out(&ds.perm, &v.perm);
+        REC_TIME64(&v, stime, q->stime);
+        REC_TIME64(&v, rtime, q->rtime);
+        REC_TIME64(&v, ctime, q->ctime);
+        v.cbytes = q->cbytes;
+        v.qnum = q->qnum;
+        v.qbytes = q->qbytes;
+        v.lspid = ds.lspid;
+        v.lrpid = ds.lrpid;
+        return copy_to_user(buf, &v, sizeof(v)) != 0 ? -EFAULT : 0;
+    }
+    if (rec == REC_OLD) {
+        k_memset(&o, 0, sizeof(o));
+        sysv_perm_old_out(&ds.perm, &o.perm);
+        o.stime = (int32_t)q->stime;
+        o.rtime = (int32_t)q->rtime;
+        o.ctime = (int32_t)q->ctime;
+        o.cbytes = (uint16_t)q->cbytes;
+        o.qnum = (uint16_t)q->qnum;
+        o.qbytes = (uint16_t)q->qbytes;
+        if (!sysv_compat()) {
+            o.cbytes = q->cbytes > 0xFFFFu ? 0xFFFFu : (uint16_t)q->cbytes;
+            o.qnum = q->qnum > 0xFFFFu ? 0xFFFFu : (uint16_t)q->qnum;
+            o.qbytes = q->qbytes > 0xFFFFu ? 0xFFFFu : (uint16_t)q->qbytes;
+            o.lcbytes = q->cbytes;
+            o.lqbytes = q->qbytes;
+        }
+        o.lspid = (uint16_t)ds.lspid;
+        o.lrpid = (uint16_t)ds.lrpid;
+        return copy_to_user(buf, &o, sizeof(o)) != 0 ? -EFAULT : 0;
+    }
+    return copy_to_user(buf, &ds, sizeof(ds)) != 0 ? -EFAULT : 0;
+}
+
 /** IPC_INFO and MSG_INFO into `buf`, MSG_INFO with the queues in use as
  * `msgpool`, their messages as `msgmap` and their bytes as `msgtql`; the
  * highest place in use. */
@@ -1541,25 +1848,26 @@ static int32_t msg_info_out(int cmd, void __user *buf)
 }
 
 /** IPC_SET and IPC_RMID on `q`, for its owner or its maker: the owner,
- * group, bits and byte limit from the record at `buf`, a limit past MSGMNB
- * needing a privileged caller, or the queue's removal, which wakes every
- * waiter with EIDRM. */
-static int32_t msg_ctl_owner(struct msg_queue *q, int cmd, void __user *buf)
+ * group, bits and byte limit from the record at `buf`, of the layout `rec`,
+ * a limit past MSGMNB needing a privileged caller, or the queue's removal,
+ * which wakes every waiter with EIDRM. */
+static int32_t msg_ctl_owner(struct msg_queue *q, int cmd, void __user *buf, int rec)
 {
-    struct msqid64_ds ds;
+    struct ipc64_perm perm;
+    unsigned long qbytes = 0;
 
-    if (cmd == IPC_SET && copy_from_user(&ds, buf, sizeof(ds)) != 0) {
+    if (cmd == IPC_SET && sysv_set_in(SYSV_MSG, rec, buf, &perm, &qbytes) != 0) {
         return -EFAULT;
     }
     if (!sysv_owner(&q->perm) ||
-        (cmd == IPC_SET && ds.qbytes > MSGMNB && !proc_privileged(current_proc))) {
+        (cmd == IPC_SET && qbytes > MSGMNB && !proc_privileged(current_proc))) {
         return -EPERM;
     }
     if (cmd == IPC_SET) {
-        if (sysv_perm_set(&q->perm, &ds.perm) != 0) {
+        if (sysv_perm_set(&q->perm, &perm) != 0) {
             return -EINVAL;
         }
-        q->qbytes = USER_LEN32(ds.qbytes);
+        q->qbytes = USER_LEN32(qbytes);
         q->ctime = sysv_now();
         q->gen++;
         wq_wake_all(&q->wq);
@@ -1572,11 +1880,12 @@ static int32_t msg_ctl_owner(struct msg_queue *q, int cmd, void __user *buf)
 }
 
 /** msgctl: IPC_STAT, MSG_STAT and MSG_STAT_ANY, IPC_SET and IPC_RMID, and
- * IPC_INFO and MSG_INFO, as semctl has them. */
-static int32_t msg_ctl(int32_t id, int cmd, void __user *buf)
+ * IPC_INFO and MSG_INFO, as semctl has them, with records of the layout of
+ * `version` (`sysv_rec`). */
+static int32_t msg_ctl(int32_t id, int cmd, void __user *buf, int version)
 {
-    struct msqid64_ds ds;
     struct msg_queue *q;
+    int rec = sysv_rec(version);
     int32_t rc;
 
     cmd &= ~IPC_64;
@@ -1592,14 +1901,13 @@ static int32_t msg_ctl(int32_t id, int cmd, void __user *buf)
     case IPC_STAT:
     case MSG_STAT:
     case MSG_STAT_ANY:
-        msg_stat_out(q, &ds);
-        if (copy_to_user(buf, &ds, sizeof(ds)) != 0) {
+        if (msg_stat_put(q, buf, rec) != 0) {
             return -EFAULT;
         }
         return cmd == IPC_STAT ? 0 : sysv_id(&q->perm);
     case IPC_SET:
     case IPC_RMID:
-        return msg_ctl_owner(q, cmd, buf);
+        return msg_ctl_owner(q, cmd, buf, rec);
     default:
         return -EINVAL;
     }
@@ -1648,27 +1956,28 @@ static int32_t sem_timed(int32_t id, const void __user *uops, uint32_t n, const 
     return rc != 0 ? rc : sem_op(id, uops, n, uts != NULL, ticks);
 }
 
-/** ipc's SHMAT, which stores the address at `third` and returns 0. */
+/** ipc's SHMAT, which stores the address at `third`, a 32-bit word, and
+ * returns 0. */
 static int32_t shm_at_ipc(int32_t id, uintptr_t addr, uint32_t flag, void __user *third)
 {
     uintptr_t base;
+    uint32_t base32;
     int32_t rc = shm_at(id, addr, flag, &base);
 
-    if (rc == 0 && copy_to_user(third, &base, sizeof(base)) != 0) {
+    base32 = (uint32_t)base;
+    if (rc == 0 && copy_to_user(third, &base32, sizeof(base32)) != 0) {
         rc = -EFAULT;
     }
     return rc;
 }
 
 /** ipc's MSGRCV: version 0 has the buffer and the type in a pair at `ptr`,
- * version 1 the buffer at `ptr` and the type in `fifth`. */
+ * Linux's ipc_kludge of two 32-bit words, version 1 the buffer at `ptr`
+ * and the type in `fifth`. */
 static int32_t msg_rcv_ipc(int version, int32_t id, int32_t size, uint32_t flag, void __user *ptr,
                            long fifth)
 {
-    struct {
-        uintptr_t msgp;
-        long msgtyp;
-    } kludge; /* Linux's struct ipc_kludge */
+    struct ipc32_kludge kludge;
 
     if (version != 0) {
         return msg_rcv(id, ptr, size, fifth, flag);
@@ -1679,17 +1988,19 @@ static int32_t msg_rcv_ipc(int version, int32_t id, int32_t size, uint32_t flag,
     if (copy_from_user(&kludge, ptr, sizeof(kludge)) != 0) {
         return -EFAULT;
     }
-    return msg_rcv(id, (void __user *)kludge.msgp, size, kludge.msgtyp, flag);
+    return msg_rcv(id, (void __user *)(uintptr_t)kludge.msgp, size, kludge.msgtyp, flag);
 }
 
 /**
- * ipc(2), i386's one call to every System V object. The low 16 bits of the
- * first argument choose the operation and the high 16 bits its version; the
- * rest, `first`, `second`, `third`, `ptr` and `fifth` as Linux names them,
- * are the operation's, as the C library passes them. SEMCTL reads its last
- * argument through `ptr`; SHMAT stores the address at `third`, and its
- * version 1, Linux's iBCS2 entry, is EINVAL; MSGRCV's versions are
- * `msg_rcv_ipc`'s. ENOSYS for an unknown operation.
+ * ipc(2), i386's one call to every System V object, on i686 and from an
+ * i386 program on x86-64. The low 16 bits of the first argument choose the
+ * operation and the high 16 bits its version; the rest, `first`, `second`,
+ * `third`, `ptr` and `fifth` as Linux names them, are the operation's, as
+ * the C library passes them, 32-bit words. SEMCTL reads its last argument,
+ * a 32-bit word, through `ptr`; SHMAT stores the address as a 32-bit word
+ * at `third`, and its version 1, Linux's iBCS2 entry, is EINVAL; MSGRCV's
+ * versions are `msg_rcv_ipc`'s. A control command without IPC_64 reads and
+ * writes the old records (`sysv_rec`). ENOSYS for an unknown operation.
  */
 long sys_ipc(struct isr_params *params)
 {
@@ -1698,7 +2009,7 @@ long sys_ipc(struct isr_params *params)
     int32_t first = (int32_t)SC_ARG(params, 1);
     uint32_t second = (uint32_t)SC_ARG(params, 2);
     uintptr_t third = SC_ARG(params, 3), ptr = SC_ARG(params, 4);
-    unsigned long arg;
+    uint32_t arg;
 
     switch (call) {
     case SEMOP:
@@ -1715,16 +2026,16 @@ long sys_ipc(struct isr_params *params)
         if (copy_from_user(&arg, (const void __user *)ptr, sizeof(arg)) != 0) {
             return -EFAULT;
         }
-        return sem_ctl(first, (int)second, (int)third, arg);
+        return sem_ctl(first, (int)second, (int)third, arg, (int)third & IPC_64);
     case MSGSND:
         return msg_snd(first, (const void __user *)ptr, second, (uint32_t)third);
     case MSGRCV:
         return msg_rcv_ipc(version, first, (int32_t)second, (uint32_t)third, (void __user *)ptr,
-                           (long)SC_ARG(params, 5));
+                           (int32_t)SC_ARG(params, 5));
     case MSGGET:
         return msg_get(first, second);
     case MSGCTL:
-        return msg_ctl(first, (int)second, (void __user *)ptr);
+        return msg_ctl(first, (int)second, (void __user *)ptr, (int)second & IPC_64);
     case SHMAT:
         return version == 1 ? -EINVAL : shm_at_ipc(first, ptr, second, (void __user *)third);
     case SHMDT:
@@ -1732,7 +2043,7 @@ long sys_ipc(struct isr_params *params)
     case SHMGET:
         return shm_get(first, second, (uint32_t)third);
     case SHMCTL:
-        return shm_ctl(first, (int)second, (void __user *)ptr);
+        return shm_ctl(first, (int)second, (void __user *)ptr, (int)second & IPC_64);
     default:
         return -ENOSYS;
     }
@@ -1765,7 +2076,7 @@ long sys_semget(struct isr_params *params)
 long sys_semctl(struct isr_params *params)
 {
     return sem_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1), (int)SC_ARG(params, 2),
-                   SC_ARG(params, 3));
+                   SC_ARG(params, 3), IPC_64);
 }
 
 /** shmget(2) takes the key, the size and the flags (`shm_get`). */
@@ -1779,7 +2090,7 @@ long sys_shmget(struct isr_params *params)
 long sys_shmctl(struct isr_params *params)
 {
     return shm_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1),
-                   (void __user *)SC_ARG(params, 2));
+                   (void __user *)SC_ARG(params, 2), IPC_64);
 }
 
 /** shmat(2) takes the segment, the address and the flags, and returns the
@@ -1816,30 +2127,38 @@ long sys_msgsnd(struct isr_params *params)
 /** msgrcv(2) takes the queue, the buffer, the capacity of its text, the
  * type and the flags (`msg_rcv`). The capacity is a `size_t`: one whose
  * long is negative is EINVAL, as Linux has it, and one past the int's range
- * is the most an int holds, since no message is that long. */
+ * is the most an int holds, since no message is that long. An i386 call on
+ * x86-64 has the capacity and the type in 32 bits, sign-extended. */
 long sys_msgrcv(struct isr_params *params)
 {
     long size = (long)SC_ARG(params, 2);
+    long type = (long)SC_ARG(params, 3);
 
+    if (sysv_compat()) {
+        size = (int32_t)SC_ARG(params, 2);
+        type = (int32_t)SC_ARG(params, 3);
+    }
     return msg_rcv((int32_t)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1),
                    size < 0             ? -1
                    : size > 0x7FFFFFFFL ? 0x7FFFFFFF
                                         : (int32_t)size,
-                   (long)SC_ARG(params, 3), (uint32_t)SC_ARG(params, 4));
+                   type, (uint32_t)SC_ARG(params, 4));
 }
 
 /** msgctl(2) takes the queue, the command and the buffer (`msg_ctl`). */
 long sys_msgctl(struct isr_params *params)
 {
     return msg_ctl((int32_t)SC_ARG(params, 0), (int)SC_ARG(params, 1),
-                   (void __user *)SC_ARG(params, 2));
+                   (void __user *)SC_ARG(params, 2), IPC_64);
 }
 
 /**
  * semtimedop with a 64-bit timespec: i686's semtimedop_time64 and x86-64's
- * semtimedop. It takes the set, the operations, their count and a relative
- * timeout, none when NULL (`sem_op`); EINVAL for a negative or malformed
- * timeout, EFAULT for one it cannot read.
+ * semtimedop, and the semtimedop_time64 of an i386 program on x86-64, whose
+ * nanoseconds' high word is ignored, as Linux's get_timespec64 ignores it.
+ * It takes the set, the operations, their count and a relative timeout,
+ * none when NULL (`sem_op`); EINVAL for a negative or malformed timeout,
+ * EFAULT for one it cannot read.
  */
 long sys_semtimedop_time64(struct isr_params *params)
 {
@@ -1849,6 +2168,9 @@ long sys_semtimedop_time64(struct isr_params *params)
     if (SC_ARG(params, 3)) {
         if (copy_from_user(ts, (const void __user *)SC_ARG(params, 3), sizeof(ts)) != 0) {
             return -EFAULT;
+        }
+        if (sysv_compat()) {
+            ts[1] = (int64_t)(uint32_t)ts[1];
         }
         if (ts[0] < 0 || ts[1] < 0 || ts[1] >= 1000000000) {
             return -EINVAL;

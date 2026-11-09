@@ -147,20 +147,6 @@ long compat_sys_ioctl(isr_params_t *params);
  * i386's structures for an i386 call (syscall_net.c). */
 long compat_sys_socketcall(isr_params_t *params);
 
-/* ia32_ipc.c */
-long compat_sys_ipc(isr_params_t *params);
-long compat_sys_mq_open(isr_params_t *params);
-long compat_sys_mq_timedsend_time32(isr_params_t *params);
-long compat_sys_mq_timedreceive_time32(isr_params_t *params);
-long compat_sys_mq_notify(isr_params_t *params);
-long compat_sys_mq_getsetattr(isr_params_t *params);
-long compat_sys_semctl(isr_params_t *params);
-long compat_sys_shmctl(isr_params_t *params);
-long compat_sys_shmat(isr_params_t *params);
-long compat_sys_msgsnd(isr_params_t *params);
-long compat_sys_msgrcv(isr_params_t *params);
-long compat_sys_msgctl(isr_params_t *params);
-
 /* ia32_misc.c */
 long compat_sys_lchown16(isr_params_t *params);
 long compat_sys_oldumount(isr_params_t *params);
@@ -199,8 +185,6 @@ long compat_sys_sched_getaffinity(isr_params_t *params);
 long compat_sys_kexec_load(isr_params_t *params);
 long compat_sys_waitid(isr_params_t *params);
 long compat_sys_keyctl(isr_params_t *params);
-long compat_sys_set_robust_list(isr_params_t *params);
-long compat_sys_get_robust_list(isr_params_t *params);
 long compat_sys_arch_prctl(isr_params_t *params);
 /* The parts of the i386 ABI that are not rows of the table. */
 

@@ -45,7 +45,6 @@ ARCH_C_SRC = sys/arch/x86_64/mmu.c \
     sys/arch/x86_64/ia32_ioctl_drm.c \
     sys/arch/x86_64/ia32_ioctl_gpu.c \
     sys/arch/x86_64/ia32_net.c \
-    sys/arch/x86_64/ia32_ipc.c \
     sys/arch/x86_64/ia32_misc.c \
     $(IOMMU_C_SRC) \
     $(KVM_C_SRC) \

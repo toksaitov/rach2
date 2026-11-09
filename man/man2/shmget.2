@@ -115,10 +115,13 @@ and 398
 which GNU libc makes; musl reaches the same through
 .Xr ipc 2 .
 .Fn shmctl
-takes the 64-bit layout only, which both libraries ask for with
-.Dv IPC_64 .
+takes the 64-bit layout, which both libraries ask for with
+.Dv IPC_64 ;
+.Xr ipc 2
+without it takes the old one.
 .Pp
-On x86-64
+On x86-64 an i386 program has the same calls, with the i386 records, and
+an x86-64 program's
 .Nm shmget
 is call 29,
 .Nm shmat

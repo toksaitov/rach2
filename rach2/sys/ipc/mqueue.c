@@ -20,6 +20,7 @@
  * mq_unlink.
  */
 
+#include "ipc32.h"
 #include "mqueue.h"
 
 #include "../irq.h"
@@ -40,6 +41,7 @@
 #include "../lib/ksignal.h"
 #include "../lib/kstring.h"
 #include "../timer.h"
+#include "../syscall.h"
 #include "../syscall_internal.h"
 
 /* The longest name, the priorities a message may have, and the queues an
@@ -305,6 +307,51 @@ static void mq_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
+/** Whether the call is an i386 call on x86-64, whose mq_attr, timespec
+ * and sigevent have 32-bit longs and pointers. */
+static int mq_compat(void)
+{
+    return sizeof(long) > 4u && in_compat_syscall();
+}
+
+/** Read the caller's struct mq_attr at `u` into `a`: an i386 call's on
+ * x86-64 is Linux's compat_mq_attr, of 32-bit longs, sign-extended. 0 or
+ * -EFAULT. */
+static int32_t mq_attr_get(const void __user *u, struct mq_attr *a)
+{
+    struct ipc32_mq_attr a32;
+
+    if (!mq_compat()) {
+        return copy_from_user(a, u, sizeof(*a)) != 0 ? -EFAULT : 0;
+    }
+    if (copy_from_user(&a32, u, sizeof(a32)) != 0) {
+        return -EFAULT;
+    }
+    k_memset(a, 0, sizeof(*a));
+    a->flags = a32.flags;
+    a->maxmsg = a32.maxmsg;
+    a->msgsize = a32.msgsize;
+    a->curmsgs = a32.curmsgs;
+    return 0;
+}
+
+/** Copy `a` out to the caller's struct mq_attr at `u`, in its layout
+ * (`mq_attr_get`). 0 or -EFAULT. */
+static int32_t mq_attr_put(void __user *u, const struct mq_attr *a)
+{
+    struct ipc32_mq_attr a32;
+
+    if (!mq_compat()) {
+        return copy_to_user(u, a, sizeof(*a)) != 0 ? -EFAULT : 0;
+    }
+    k_memset(&a32, 0, sizeof(a32));
+    a32.flags = (int32_t)a->flags;
+    a32.maxmsg = (int32_t)a->maxmsg;
+    a32.msgsize = (int32_t)a->msgsize;
+    a32.curmsgs = (int32_t)a->curmsgs;
+    return copy_to_user(u, &a32, sizeof(a32)) != 0 ? -EFAULT : 0;
+}
+
 /** The attributes a new queue takes from `uattr`, or the defaults without
  * one: EINVAL for a count or a size below 1 or past the caller's limit,
  * EFAULT for an address it cannot read. */
@@ -318,7 +365,7 @@ static int32_t mq_new_attr(const void __user *uattr, int32_t *maxmsg, int32_t *m
     if (!uattr) {
         return 0;
     }
-    if (copy_from_user(&a, uattr, sizeof(a)) != 0) {
+    if (mq_attr_get(uattr, &a) != 0) {
         return -EFAULT;
     }
     if (a.maxmsg <= 0 || a.msgsize <= 0 || a.maxmsg > (priv ? MQ_HARD_MSGMAX : MQ_MSG_MAX) ||
@@ -545,7 +592,9 @@ static int32_t mq_sleep(struct mqueue *q, struct mq_wait *w)
 /**
  * Set `w`'s deadline, a tick count, from the absolute real-time timeout at
  * `uts`: a timespec of two 64-bit fields when `wide`, else of two longs, 32
- * bits on i686 and 64 on x86-64; no deadline when `uts` is NULL. A time
+ * bits on i686 and 64 on x86-64; an i386 call on x86-64 has 32-bit longs,
+ * and the high word of its 64-bit nanoseconds is ignored, as Linux's
+ * get_timespec64 ignores it. No deadline when `uts` is NULL. A time
  * already past is a deadline of now. EINVAL for nanoseconds outside 0 to
  * 10^9-1 or negative seconds, as Linux checks it before it looks at the
  * queue; EFAULT for an address it cannot read.
@@ -566,6 +615,17 @@ static int32_t mq_deadline(const void __user *uts, int wide, struct mq_wait *w)
         }
         sec = ts64[0];
         nsec = ts64[1];
+        if (mq_compat()) {
+            nsec = (int64_t)(uint32_t)nsec; /* Linux ignores the high word */
+        }
+    } else if (mq_compat()) {
+        int32_t ts32[2];
+
+        if (copy_from_user(ts32, uts, sizeof(ts32)) != 0) {
+            return -EFAULT;
+        }
+        sec = ts32[0];
+        nsec = ts32[1];
     } else {
         if (copy_from_user(tsl, uts, sizeof(tsl)) != 0) {
             return -EFAULT;
@@ -740,7 +800,8 @@ static int32_t mq_receive(int fd, void __user *umsg, uint32_t len, void __user *
 }
 
 /** mq_timedsend(2) takes the descriptor, the message, its length, its
- * priority and the timeout, a timespec of longs (`mq_send`). */
+ * priority and the timeout, a timespec of longs, of 32-bit ones from an
+ * i386 call on x86-64 (`mq_send`). */
 long sys_mq_timedsend(struct isr_params *params)
 {
     return mq_send((int)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1),
@@ -749,8 +810,8 @@ long sys_mq_timedsend(struct isr_params *params)
 }
 
 /** mq_timedreceive(2) takes the descriptor, the buffer, its length, where
- * to store the priority and the timeout, a timespec of longs
- * (`mq_receive`). */
+ * to store the priority and the timeout, a timespec of longs, of 32-bit
+ * ones from an i386 call on x86-64 (`mq_receive`). */
 long sys_mq_timedreceive(struct isr_params *params)
 {
     return mq_receive((int)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1),
@@ -758,8 +819,8 @@ long sys_mq_timedreceive(struct isr_params *params)
                       (const void __user *)SC_ARG(params, 4), 0);
 }
 
-/** i686's mq_timedsend_time64: mq_timedsend with a timespec of two 64-bit
- * fields. */
+/** mq_timedsend_time64, i686's and an i386 program's on x86-64:
+ * mq_timedsend with a timespec of two 64-bit fields. */
 long sys_mq_timedsend_time64(struct isr_params *params)
 {
     return mq_send((int)SC_ARG(params, 0), (const void __user *)SC_ARG(params, 1),
@@ -767,8 +828,8 @@ long sys_mq_timedsend_time64(struct isr_params *params)
                    (const void __user *)SC_ARG(params, 4), 1);
 }
 
-/** i686's mq_timedreceive_time64: mq_timedreceive with a timespec of two
- * 64-bit fields. */
+/** mq_timedreceive_time64, i686's and an i386 program's on x86-64:
+ * mq_timedreceive with a timespec of two 64-bit fields. */
 long sys_mq_timedreceive_time64(struct isr_params *params)
 {
     return mq_receive((int)SC_ARG(params, 0), (void __user *)SC_ARG(params, 1),
@@ -783,7 +844,8 @@ long sys_mq_timedreceive_time64(struct isr_params *params)
  * nothing. EBUSY when a process is registered already, EINVAL for
  * SIGEV_THREAD, whose notice Linux sends through a netlink socket this
  * kernel does not have, for another kind or for a signal outside 1 to 64;
- * EBADF for a descriptor not open on a queue, EFAULT.
+ * EBADF for a descriptor not open on a queue, EFAULT. An i386 call on
+ * x86-64 passes Linux's compat_sigevent, whose value is 32 bits.
  */
 long sys_mq_notify(struct isr_params *params)
 {
@@ -792,6 +854,11 @@ long sys_mq_notify(struct isr_params *params)
         int32_t signo;
         int32_t notify;
     } ev; /* the head of Linux's struct sigevent */
+    struct {
+        uint32_t value;
+        int32_t signo;
+        int32_t notify;
+    } ev32; /* an i386 call's, compat_sigevent's */
     fd_entry_t *e;
     struct mqueue *q = mq_of((int)SC_ARG(params, 0), &e);
 
@@ -804,7 +871,14 @@ long sys_mq_notify(struct isr_params *params)
         }
         return 0;
     }
-    if (copy_from_user(&ev, (const void __user *)SC_ARG(params, 1), sizeof(ev)) != 0) {
+    if (mq_compat()) {
+        if (copy_from_user(&ev32, (const void __user *)SC_ARG(params, 1), sizeof(ev32)) != 0) {
+            return -EFAULT;
+        }
+        ev.value = ev32.value;
+        ev.signo = ev32.signo;
+        ev.notify = ev32.notify;
+    } else if (copy_from_user(&ev, (const void __user *)SC_ARG(params, 1), sizeof(ev)) != 0) {
         return -EFAULT;
     }
     if ((ev.notify != SIGEV_SIGNAL && ev.notify != SIGEV_NONE) ||
@@ -826,7 +900,8 @@ long sys_mq_notify(struct isr_params *params)
  * argument points at unless it is null, with the description's O_NONBLOCK
  * as the flags; then the flags from the one the second points at unless it
  * is null, of which only O_NONBLOCK may be set, else EINVAL. EBADF for a
- * descriptor not open on a queue, EFAULT.
+ * descriptor not open on a queue, EFAULT. Both records are in the
+ * caller's layout (`mq_attr_get`).
  */
 long sys_mq_getsetattr(struct isr_params *params)
 {
@@ -838,7 +913,7 @@ long sys_mq_getsetattr(struct isr_params *params)
         return -EBADF;
     }
     if (SC_ARG(params, 1)) {
-        if (copy_from_user(&a, (const void __user *)SC_ARG(params, 1), sizeof(a)) != 0) {
+        if (mq_attr_get((const void __user *)SC_ARG(params, 1), &a) != 0) {
             return -EFAULT;
         }
         if (a.flags & ~O_NONBLOCK) {
@@ -853,7 +928,7 @@ long sys_mq_getsetattr(struct isr_params *params)
         old.maxmsg = q->maxmsg;
         old.msgsize = q->msgsize;
         old.curmsgs = q->curmsgs;
-        if (copy_to_user((void __user *)SC_ARG(params, 2), &old, sizeof(old)) != 0) {
+        if (mq_attr_put((void __user *)SC_ARG(params, 2), &old) != 0) {
             return -EFAULT;
         }
     }

@@ -97,8 +97,16 @@ or 32-bit
 .Fn semtimedop ;
 both are
 .Xr ipc 2 Ns 's.
+.Fn semctl
+takes the 64-bit layout;
+.Xr ipc 2
+without
+.Dv IPC_64
+takes the old one.
 .Pp
-On x86-64
+On x86-64 an i386 program has the same calls, with the i386 records and
+the high word of a 64-bit timeout's nanoseconds ignored, as Linux does,
+and an x86-64 program's
 .Nm semget
 is call 64,
 .Nm semop

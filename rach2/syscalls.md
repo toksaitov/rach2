@@ -1,6 +1,6 @@
 # The system calls
 
-This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 300 calls, the x86-64 kernel 275, and its compat table 305. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
+This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 300 calls, the x86-64 kernel 275, and its compat table 317. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
 
 `make syscalls` writes this file from `rach2/sys/arch/i686/systab.c`, `rach2/sys/arch/x86_64/systab.c` and `rach2/sys/arch/x86_64/ia32_systab.c`, with the numbers in `rach2/sys/arch/i686/sysnr.h`, `rach2/sys/arch/x86_64/sysnr.h` and `rach2/sys/arch/x86_64/ia32_sysnr.h`, and `tests/run style` fails when the file differs from what it writes.
 
@@ -129,7 +129,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `ioctl` | 54 | 16 | 54 | [ioctl(2)](../man/man2/ioctl.2) |
 | `ioprio_get` | 290 | 252 | 290 | [ioprio_set(2)](../man/man2/ioprio_set.2) |
 | `ioprio_set` | 289 | 251 | 289 | [ioprio_set(2)](../man/man2/ioprio_set.2) |
-| `ipc` | 117 | none | none | [ipc(2)](../man/man2/ipc.2) |
+| `ipc` | 117 | none | 117 | [ipc(2)](../man/man2/ipc.2) |
 | `kcmp` | 349 | 312 | 349 | [kcmp(2)](../man/man2/kcmp.2) |
 | `kill` | 37 | 62 | 37 | [kill(2)](../man/man2/kill.2) |
 | `lchown` | 16 | 94 | none | [chown(2)](../man/man2/chown.2) |
@@ -160,19 +160,19 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `mmap2` | 192 | none | 192 | [brk(2)](../man/man2/brk.2) |
 | `mount` | 21 | 165 | 21 | [mount(2)](../man/man2/mount.2) |
 | `mprotect` | 125 | 10 | 125 | [brk(2)](../man/man2/brk.2) |
-| `mq_getsetattr` | 282 | 245 | none | [mq_open(2)](../man/man2/mq_open.2) |
-| `mq_notify` | 281 | 244 | none | [mq_open(2)](../man/man2/mq_open.2) |
-| `mq_open` | 277 | 240 | none | [mq_open(2)](../man/man2/mq_open.2) |
-| `mq_timedreceive` | 280 | 243 | none | [mq_open(2)](../man/man2/mq_open.2) |
+| `mq_getsetattr` | 282 | 245 | 282 | [mq_open(2)](../man/man2/mq_open.2) |
+| `mq_notify` | 281 | 244 | 281 | [mq_open(2)](../man/man2/mq_open.2) |
+| `mq_open` | 277 | 240 | 277 | [mq_open(2)](../man/man2/mq_open.2) |
+| `mq_timedreceive` | 280 | 243 | 280 | [mq_open(2)](../man/man2/mq_open.2) |
 | `mq_timedreceive_time64` | 419 | none | 419 | [mq_open(2)](../man/man2/mq_open.2) |
-| `mq_timedsend` | 279 | 242 | none | [mq_open(2)](../man/man2/mq_open.2) |
+| `mq_timedsend` | 279 | 242 | 279 | [mq_open(2)](../man/man2/mq_open.2) |
 | `mq_timedsend_time64` | 418 | none | 418 | [mq_open(2)](../man/man2/mq_open.2) |
 | `mq_unlink` | 278 | 241 | 278 | [mq_open(2)](../man/man2/mq_open.2) |
 | `mremap` | 163 | 25 | 163 | [brk(2)](../man/man2/brk.2) |
-| `msgctl` | 402 | 71 | none | [msgget(2)](../man/man2/msgget.2) |
+| `msgctl` | 402 | 71 | 402 | [msgget(2)](../man/man2/msgget.2) |
 | `msgget` | 399 | 68 | 399 | [msgget(2)](../man/man2/msgget.2) |
-| `msgrcv` | 401 | 70 | none | [msgget(2)](../man/man2/msgget.2) |
-| `msgsnd` | 400 | 69 | none | [msgget(2)](../man/man2/msgget.2) |
+| `msgrcv` | 401 | 70 | 401 | [msgget(2)](../man/man2/msgget.2) |
+| `msgsnd` | 400 | 69 | 400 | [msgget(2)](../man/man2/msgget.2) |
 | `msync` | 144 | 26 | 144 | [brk(2)](../man/man2/brk.2) |
 | `munlock` | 151 | 150 | 151 | [brk(2)](../man/man2/brk.2) |
 | `munlockall` | 153 | 152 | 153 | [brk(2)](../man/man2/brk.2) |
@@ -249,7 +249,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `sched_yield` | 158 | 24 | 158 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `seccomp` | 354 | 317 | 354 | [seccomp(2)](../man/man2/seccomp.2) |
 | `select` | 82 | 23 | 82 | [select(2)](../man/man2/select.2) |
-| `semctl` | 394 | 66 | none | [semget(2)](../man/man2/semget.2) |
+| `semctl` | 394 | 66 | 394 | [semget(2)](../man/man2/semget.2) |
 | `semget` | 393 | 64 | 393 | [semget(2)](../man/man2/semget.2) |
 | `semop` | none | 65 | none | [semget(2)](../man/man2/semget.2) |
 | `semtimedop` | none | 220 | none | [semget(2)](../man/man2/semget.2) |
@@ -288,8 +288,8 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `setuid32` | 213 | none | 213 | [setuid(2)](../man/man2/setuid.2) |
 | `setxattr` | 226 | 188 | 226 | [getxattr(2)](../man/man2/getxattr.2) |
 | `sgetmask` | none | none | 68 | [sigaction(2)](../man/man2/sigaction.2) |
-| `shmat` | 397 | 30 | none | [shmget(2)](../man/man2/shmget.2) |
-| `shmctl` | 396 | 31 | none | [shmget(2)](../man/man2/shmget.2) |
+| `shmat` | 397 | 30 | 397 | [shmget(2)](../man/man2/shmget.2) |
+| `shmctl` | 396 | 31 | 396 | [shmget(2)](../man/man2/shmget.2) |
 | `shmdt` | 398 | 67 | 398 | [shmget(2)](../man/man2/shmget.2) |
 | `shmget` | 395 | 29 | 395 | [shmget(2)](../man/man2/shmget.2) |
 | `shutdown` | 373 | 48 | 373 | [shutdown(2)](../man/man2/shutdown.2) |
