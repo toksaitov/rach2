@@ -71,7 +71,7 @@ enum vnode_kind {
     VNODE_PROC_NS_LINK,      /* /proc/<pid>/ns/<kind>, by `procfd` (proc/ns.h's NS_) */
     VNODE_PROC_FDINFO_DIR,   /* /proc/<pid>/fdinfo: a file for each descriptor */
     VNODE_PROC_FDINFO,       /* /proc/<pid>/fdinfo/<n>: its offset and flags, by `procfd` */
-    VNODE_INPUT_DIR,         /* /dev/input: the event devices, each a VNODE_DEV */
+    VNODE_DEV_SUBDIR,        /* /dev/input, /dev/dri: a row of /dev's directories, by `devdir` */
     VNODE_PROC_ACPI_DIR,     /* /proc/acpi: the directory of call */
     VNODE_PROC_ACPI_CALL,    /* /proc/acpi/call: an ACPI method evaluated by its path */
     VNODE_PROC_FS_DIR,       /* /proc/fs: the directory of lockwait */
@@ -174,11 +174,12 @@ const char *synth_ns_name(int kind);
  * meaningful for the kinds its comment names. A VNODE_ENOTDIR path keeps
  * those of the file it goes on past, as far as the classifier read them,
  * and the rest stay as they began: an empty name, a pid of 0, a pty number
- * of -1 and a node of 0.
+ * of -1, a row of -1 and a node of 0.
  */
 struct vpath {
     int kind;
     char name[64]; /* VNODE_DEV: device name, "input/eventN" below /dev/input */
+    int devdir;    /* VNODE_DEV_SUBDIR: the row of /dev's directories (`synth_dev_dir_at`) */
     int pid;       /* VNODE_PROC_*: SYNTH_PID_SELF for /proc/self */
     int procfd;    /* PROC_FD_LINK, PROC_FDINFO: the descriptor number; NS_LINK: the kind */
     int procfile;  /* PROC_FILE, NET_FILE, SYSVIPC: SYNTH_PROC_*; SYS_FILE: the attribute */
@@ -193,7 +194,8 @@ struct vpath {
  * resolved, into `vp`, and return its kind. Empty components are skipped. A
  * path outside /dev, /proc and /sys is VNODE_KRFFS. A name of /dev that is
  * not a special one is VNODE_DEV whether or not the device exists, which
- * devfs decides, and so is a name of /dev/input, as "input/" and the name.
+ * devfs decides, and so is a name in a directory of /dev's table, as the
+ * directory, a slash and the name, such as "input/event0".
  * Whether a process, a descriptor, a processor or a PCI or USB device
  * exists is for the caller to ask, while an interface, a disk node and a
  * backlight are looked up (`sysfs_net_index`, `sysfs_block_find`,
@@ -226,10 +228,35 @@ struct synth_dir {
  * `kind` with the coordinates struct synth_dir has: `pid`, and `tid` when it
  * is not 0, for a process's or a thread's directory; the entry in `pid` for
  * a directory of /proc/sys; the node and the key in `pid` and `tid` for one
- * of /sys. An unknown kind gives "/". The path is NUL-terminated and cut to
+ * of /sys; the row in `pid` for a directory of /dev's table. An unknown
+ * kind gives "/". The path is NUL-terminated and cut to
  * fit; nothing is written when `cap` is not positive.
  */
 void synth_dir_path(int kind, int pid, int tid, char *out, int cap);
+
+/*
+ * The directories of /dev, apart from pts, which devpts owns: a row each,
+ * in the order /dev lists them. A row's devices are devfs's nodes named
+ * "DIR/NAME" (devfs.h). A row marked `always` is present on every machine,
+ * as /dev/input is, even when empty; any other only while devfs has a
+ * device in it (`devfs_subdir_present`), as /dev/dri is while a display
+ * device is bound. A descriptor open on a row's directory has the row in
+ * its record's `pid`.
+ */
+struct synth_dev_dir {
+    const char *name; /* the directory's name in /dev */
+    uint32_t ino;     /* its inode, below devfs's numbers */
+    int always;       /* 1: present when it has no device */
+};
+
+/** The number of rows of /dev's directories. */
+int synth_dev_dir_count(void);
+
+/** Row `n` of /dev's directories, or NULL past the last. */
+const struct synth_dev_dir *synth_dev_dir_at(int n);
+
+/** The row whose name is the `len` bytes at `name`, or -1 for none. */
+int synth_dev_dir_find(const char *name, int len);
 
 /*
  * /proc/sys: a few of Linux's sysctl files, in a table of entries, of which

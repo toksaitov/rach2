@@ -6,17 +6,21 @@
 /*
  * devfs: the devices of /dev. A table maps a name ("null", "zero", ...) to a
  * device with file operations and a major and minor number, and the nodes
- * of the disks join it as the disks are registered. An open of a device
+ * of the disks join it as the disks are registered, and the nodes drivers
+ * make as they bind, through the registry below. An open of a device
  * binds its operations to the descriptor, as a pipe's are, and stat and the
- * listing of /dev are made from the table. The event devices of /dev/input
- * are in the table by the name "input/eventN", which the classifier gives
- * a path below /dev/input (synthfs.h). "console" and "tty" open the
+ * listing of /dev are made from the table. A node in a directory of /dev
+ * has the directory in its name, as the event devices of /dev/input are
+ * "input/eventN" in the table, which the classifier gives a path below the
+ * directory, a row of synthfs's table of them (synthfs.h). "console" and
+ * "tty" open the
  * kernel console as FD_TYPE_CONSOLE, "tty" a pty instead when the caller's
  * session is on one, and "ptmx" opens a new pty pair.
  */
 
 struct fd_entry;
 struct block_device;
+struct file_ops;
 
 /*
  * The st_dev of /dev and its devices. The KRFFS root's files report 0 and
@@ -235,22 +239,63 @@ const char *devfs_fd_name(struct fd_entry *e);
 int devfs_lseek_zero(struct fd_entry *e);
 
 /**
- * The `n`th device present now, from 0: its name and its inode. A device
- * that is not present is skipped and does not end the walk, since
- * bootpart, grubcore and the disk nodes come and go, and a machine can have
- * a later one without an earlier. The inode is the device's place in the
- * table and not in the listing, so it is the number `stat` reports whatever
- * else is present. Returns 1 when `n` names a device, 0 past the last. The
- * event devices are not among them: they are in /dev/input.
+ * The `n`th device present now in /dev itself, from 0: its name and its
+ * inode. A device that is not present is skipped and does not end the
+ * walk, since bootpart, grubcore, the disk nodes and the registered nodes
+ * come and go, and a machine can have a later one without an earlier. The
+ * inode is the device's place in the table and not in the listing, so it is
+ * the number `stat` reports whatever else is present. Returns 1 when `n`
+ * names a device, 0 past the last. A device in a directory of /dev is not
+ * among them (`devfs_subdir_dirent`).
  */
 int devfs_dirent(int n, const char **name, uint32_t *ino);
 
 /**
- * The `n`th event device present now in /dev/input, from 0, as
- * `devfs_dirent` gives the devices of /dev: its name in the directory,
- * eventN, and its inode. Returns 1, or 0 past the last.
+ * The `n`th device present now in the directory `dir` of /dev, "input" or
+ * "dri", from 0, as `devfs_dirent` gives those of /dev: its name in the
+ * directory, such as eventN, and its inode. Returns 1, or 0 past the last.
  */
-int devfs_input_dirent(int n, const char **name, uint32_t *ino);
+int devfs_subdir_dirent(const char *dir, int n, const char **name, uint32_t *ino);
+
+/** Whether row `row` of /dev's directories (synthfs.h) is present now: 1
+ * for a row marked `always` or one with a device present, else 0. */
+int devfs_subdir_present(int row);
+
+/*
+ * The registry of nodes made at run time: a driver's devices, which it
+ * finds as it binds and may lose, such as /dev/dri/card0 and renderD128,
+ * /dev/udmabuf, /dev/kvm and /dev/watchdog. The registrant keeps the
+ * record while it is registered. `name` is the path below /dev: a name of
+ * /dev itself, or "DIR/NAME" for a directory DIR of /dev's table of them
+ * (synthfs.h). A registered node is looked up, stat'ed, listed and opened
+ * as a node of the table is, a character device owned by root with the
+ * permission bits `mode`: an open binds `ops` to the descriptor, with
+ * `priv` NULL, and then calls `open`, unless NULL, which may set the
+ * descriptor's `priv` and refuse with -errno. Its inode is its slot's,
+ * the same for the life of the kernel unless the slots run out. A node
+ * unregistered leaves /dev at once; a descriptor open on it keeps its
+ * operations and its `priv`, and fstat gives its name and numbers until
+ * its slot is taken again, first by a node of the same name.
+ */
+#define DEVFS_NODES_MAX     64
+#define DEVFS_NODE_NAME_MAX 32
+struct devfs_node {
+    const char *name;
+    uint16_t major, minor;
+    uint16_t mode; /* the nine permission bits */
+    const struct file_ops *ops;
+    int32_t (*open)(struct devfs_node *node, struct fd_entry *e, int flags);
+    void *priv; /* the registrant's */
+};
+
+/** Register `node`: 0, -EINVAL for a name no directory of /dev takes or
+ * one too long, or NULL operations, -EEXIST for a name the table, a disk
+ * or a registered node has, or the numbers of a character device present,
+ * or -ENOSPC when every slot is held. */
+int32_t devfs_node_register(struct devfs_node *node);
+
+/** Withdraw `node` from /dev; nothing for a node not registered. */
+void devfs_node_unregister(struct devfs_node *node);
 
 struct block_device;
 
