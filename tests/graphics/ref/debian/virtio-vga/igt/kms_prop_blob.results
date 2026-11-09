@@ -1,0 +1,9 @@
+igt@kms_prop_blob@basic pass
+igt@kms_prop_blob@blob-multiple pass
+igt@kms_prop_blob@blob-prop-core pass
+igt@kms_prop_blob@blob-prop-lifetime pass
+igt@kms_prop_blob@blob-prop-validate pass
+igt@kms_prop_blob@invalid-get-prop pass
+igt@kms_prop_blob@invalid-get-prop-any pass
+igt@kms_prop_blob@invalid-set-prop pass
+igt@kms_prop_blob@invalid-set-prop-any pass

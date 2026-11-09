@@ -1,0 +1,4 @@
+igt@core_auth@basic-auth pass
+igt@core_auth@getclient-master-drop pass
+igt@core_auth@getclient-simple pass
+igt@core_auth@many-magics pass

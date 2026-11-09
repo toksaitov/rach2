@@ -1,0 +1,5 @@
+igt@kms_cursor_crc@cursor-offscreen-64x64 skip
+igt@kms_cursor_crc@cursor-onscreen-64x64 skip
+igt@kms_cursor_crc@cursor-random-64x64 skip
+igt@kms_cursor_crc@cursor-rapid-movement-64x64 skip
+igt@kms_cursor_crc@cursor-sliding-64x64 skip

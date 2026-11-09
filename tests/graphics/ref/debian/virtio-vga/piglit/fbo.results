@@ -1,0 +1,76 @@
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth gl_depth24_stencil8 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth gl_depth32f_stencil8 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth gl_depth_component16 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth gl_depth_component24 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth gl_depth_component32 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth gl_depth_component32f pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth_stencil gl_depth24_stencil8 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit depth_stencil gl_depth32f_stencil8 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit stencil gl_depth24_stencil8 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit stencil gl_depth32f_stencil8 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit stencil gl_stencil_index1 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit stencil gl_stencil_index16 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit stencil gl_stencil_index4 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-depth-stencil-blit stencil gl_stencil_index8 pass
+spec@arb_framebuffer_object@arb_framebuffer_object-get-attachment-parameter-default-framebuffer crash
+spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage pass
+spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage_alpha-to-one pass
+spec@arb_framebuffer_object@execution@msaa-alpha-to-coverage_alpha-to-one_write-z fail
+spec@arb_framebuffer_object@execution@msaa-alpha-to-one pass
+spec@arb_framebuffer_object@execution@msaa-trivial pass
+spec@arb_framebuffer_object@fbo blit from missing attachment pass
+spec@arb_framebuffer_object@fbo blit to missing attachment pass
+spec@arb_framebuffer_object@fbo-alpha pass
+spec@arb_framebuffer_object@fbo-attachments-blit-scaled-linear pass
+spec@arb_framebuffer_object@fbo-blit-scaled-linear pass
+spec@arb_framebuffer_object@fbo-blit-stretch crash
+spec@arb_framebuffer_object@fbo-deriv pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none gl_fragcolor pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none gl_fragdata pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none glblendfunci pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none glblitframebuffer pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none glclear pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none glclearbuffer pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none glcolormaskindexed pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none gldrawpixels pass
+spec@arb_framebuffer_object@fbo-drawbuffers-none use_frag_out pass
+spec@arb_framebuffer_object@fbo-generatemipmap-1d pass
+spec@arb_framebuffer_object@fbo-generatemipmap-1d rgb9_e5 pass
+spec@arb_framebuffer_object@fbo-generatemipmap-3d pass
+spec@arb_framebuffer_object@fbo-generatemipmap-3d rgb9_e5 pass
+spec@arb_framebuffer_object@fbo-generatemipmap-cubemap pass
+spec@arb_framebuffer_object@fbo-generatemipmap-cubemap rgb9_e5 pass
+spec@arb_framebuffer_object@fbo-generatemipmap-cubemap s3tc_dxt1 pass
+spec@arb_framebuffer_object@fbo-getframebufferattachmentparameter-01 pass
+spec@arb_framebuffer_object@fbo-gl_pointcoord pass
+spec@arb_framebuffer_object@fbo-incomplete pass
+spec@arb_framebuffer_object@fbo-incomplete-invalid-texture pass
+spec@arb_framebuffer_object@fbo-incomplete-texture-01 pass
+spec@arb_framebuffer_object@fbo-incomplete-texture-02 pass
+spec@arb_framebuffer_object@fbo-incomplete-texture-03 pass
+spec@arb_framebuffer_object@fbo-incomplete-texture-04 pass
+spec@arb_framebuffer_object@fbo-incomplete@0x0 renderbuffer pass
+spec@arb_framebuffer_object@fbo-incomplete@0x0 texture pass
+spec@arb_framebuffer_object@fbo-incomplete@delete renderbuffer of bound fbo pass
+spec@arb_framebuffer_object@fbo-incomplete@delete texture of bound fbo pass
+spec@arb_framebuffer_object@fbo-incomplete@invalid layer of a 1d-array texture pass
+spec@arb_framebuffer_object@fbo-incomplete@invalid layer of a 2d-array texture pass
+spec@arb_framebuffer_object@fbo-incomplete@invalid layer of a cube-array texture pass
+spec@arb_framebuffer_object@fbo-incomplete@invalid slice of 3d texture pass
+spec@arb_framebuffer_object@fbo-luminance-alpha pass
+spec@arb_framebuffer_object@fbo-mipmap-copypix pass
+spec@arb_framebuffer_object@fbo-scissor-blit fbo pass
+spec@arb_framebuffer_object@fbo-scissor-blit window crash
+spec@arb_framebuffer_object@fbo-tex-rgbx pass
+spec@arb_framebuffer_object@fbo-viewport crash
+spec@arb_framebuffer_object@framebuffer-blit-levels draw depth pass
+spec@arb_framebuffer_object@framebuffer-blit-levels draw rgba pass
+spec@arb_framebuffer_object@framebuffer-blit-levels draw stencil pass
+spec@arb_framebuffer_object@framebuffer-blit-levels read depth pass
+spec@arb_framebuffer_object@framebuffer-blit-levels read rgba pass
+spec@arb_framebuffer_object@framebuffer-blit-levels read stencil pass
+spec@arb_framebuffer_object@framebuffer-blit-mipmap pass
+spec@arb_framebuffer_object@mixed-buffer-sizes pass
+spec@arb_framebuffer_object@negative-readpixels-no-rb pass
+spec@arb_framebuffer_object@same-attachment-renderbuffer-depth_stencil pass
+spec@arb_framebuffer_object@same-attachment-tex2d-depth_stencil pass
