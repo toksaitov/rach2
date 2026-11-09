@@ -776,6 +776,13 @@ void netlink_name(struct socket *sock, uint8_t *sa)
     (void)sa;
 }
 
+/** No datagram came from a group: no row opens a netlink socket. */
+uint32_t netlink_last_group(struct socket *sock)
+{
+    (void)sock;
+    return 0;
+}
+
 /** Refuse every option: no row opens a netlink socket. */
 int32_t netlink_setsockopt(struct socket *s, int optname, int val, int optlen)
 {

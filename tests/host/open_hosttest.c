@@ -1234,6 +1234,19 @@ int sysfs_device_key(int node, int n)
     (void)n;
     return -1;
 }
+/** Fail the row: no row stats a driver's entry of /sys. */
+uint32_t sysfs_node_mode(int handle)
+{
+    (void)handle;
+    check(0, "unexpected stat of a /sys file");
+    return 0;
+}
+/** No PCI function of /sys exists, so none is a display. */
+int sysfs_pci_is_vga(int key)
+{
+    (void)key;
+    return 0;
+}
 /** No descriptor is of /proc/sys. */
 int procfs_fd_is_sys(struct fd_entry *e)
 {
