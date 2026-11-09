@@ -6002,6 +6002,13 @@ long sys_prlimit64(isr_params_t *params)
 
 #define MAP_ANONYMOUS 0x20
 
+#define MAP_32BIT 0x40 /* x86-64: below 2 GiB; i386 has every address so */
+
+/* Where MAP_32BIT looks for room, Linux's 1 GiB to 2 GiB, which leaves the
+ * first gigabyte to a program's own image and heap. */
+#define MAP_32BIT_LO 0x40000000UL
+#define MAP_32BIT_HI 0x80000000UL
+
 #define MAP_LOCKED 0x2000
 
 #define MAP_POPULATE 0x8000
@@ -6314,17 +6321,24 @@ static int32_t mmap_backing(uint32_t flags, int fd, uintptr_t len, struct map_so
 /**
  * Where a new mapping of `len` bytes goes, in `*base`: `addr` itself under
  * MAP_FIXED or MAP_FIXED_NOREPLACE, which fails with EEXIST for a range in
- * use; otherwise a page-aligned hint whose range is free below the
- * stack's growth window, and without one the highest free range below
- * the mmap base and above the heap's top, so the ranges munmap frees are
- * used again. RLIMIT_AS counts the range, less what a fixed mapping replaces.
- * 0, -ENOMEM or -EEXIST. Nothing here sleeps, so the range is still as it
- * was found when the caller inserts the region straight after.
+ * use; otherwise the hint rounded down to its page when that range is free
+ * below the stack's growth window, and without one the highest free range
+ * below the mmap base and above the heap's top, so the ranges munmap frees
+ * are used again. MAP_32BIT in a 64-bit call, as on Linux, rounds the hint
+ * up, takes it only when its range ends by 2 GiB, and otherwise takes the
+ * highest free range from 1 GiB to 2 GiB; a 32-bit call ignores it, its
+ * every address being below 4 GiB. RLIMIT_AS counts the range, less what a
+ * fixed mapping replaces. 0, -ENOMEM or -EEXIST. Nothing here sleeps, so
+ * the range is still as it was found when the caller inserts the region
+ * straight after.
  */
 static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_t flags,
                           uintptr_t *base)
 {
     unsigned long limit = current_proc->rlim[RLIM_AS].cur;
+    uintptr_t lo = PAGE_UP(vm->brk);
+    uintptr_t hi = vm->mmap_base;
+    uintptr_t top = vm->stack_limit;
 
     if (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) {
         if (addr < USER_ADDR_MIN || addr > USER_ADDR_MAX - len) {
@@ -6336,14 +6350,20 @@ static int32_t mmap_place(vm_space_t *vm, uintptr_t addr, uintptr_t len, uint32_
         *base = addr;
         return vm_total(vm) - vm_covered(vm, addr, addr + len) + len > limit ? -ENOMEM : 0;
     }
+    if ((flags & MAP_32BIT) && sizeof(void *) > 4u && !in_compat_syscall()) {
+        lo = MAP_32BIT_LO;
+        hi = MAP_32BIT_HI;
+        top = top < MAP_32BIT_HI ? top : MAP_32BIT_HI;
+        addr = PAGE_UP(addr);
+    }
     *base = 0;
-    if (addr != 0 && (addr & (PAGE_SIZE - 1)) == 0 && addr >= USER_ADDR_MIN &&
-        len <= vm->stack_limit && addr <= vm->stack_limit - len &&
+    addr &= ~(uintptr_t)(PAGE_SIZE - 1);
+    if (addr != 0 && addr >= USER_ADDR_MIN && len <= top && addr <= top - len &&
         !vm_overlaps(vm, addr, addr + len)) {
         *base = addr;
     }
     if (*base == 0) {
-        *base = vm_find_free(vm, len, PAGE_UP(vm->brk), vm->mmap_base);
+        *base = vm_find_free(vm, len, lo, hi);
     }
     return *base == 0 || vm_total(vm) + len > limit ? -ENOMEM : 0;
 }
