@@ -1,0 +1,12 @@
+# packages: what the vtest server guest installs from the snapshot that
+# tests/graphics/debian-ref/image pins, one package a line: virglrenderer's
+# test server, the EGL and OpenGL loaders that it opens at run time through
+# libepoxy and that no package of it depends on, Mesa's llvmpipe that it
+# renders on, and socat, which carries the server's local socket to TCP.
+virgl-server
+libegl1
+libopengl0
+libgl1-mesa-dri
+libegl-mesa0
+libgbm1
+socat
