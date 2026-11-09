@@ -97,8 +97,9 @@
 # read to show N still assigned to this account. A step that fails exits 1
 # with N still assigned to this account, so that its worker keeps it and can
 # release it again; an unassignment that fails and whose result cannot be
-# read leaves the file empty, so that N waits, Ready and assigned, for the
-# manager, which `check` tells, never for two writers. A closed issue is set
+# read leaves the file empty and N's assignment unknown, so that the worst
+# is a task that no loop works, which `check` reports when it is Ready and
+# assigned, never two writers. A closed issue is set
 # Done and nothing else is changed, since its commit may have closed it
 # before its worker hands it back.
 #
