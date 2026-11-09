@@ -14,7 +14,7 @@ $(D3D_DIR)/runtime.tar: tests/graphics/d3d/runtime.sh $(wildcard tests/graphics/
 $(D3D_DIR)/privatefilemusl: tests/musl/privatefilemusl.c | musl-programs
 	cp $(ARCH_BUILD)/tests/musl/privatefilemusl $@
 
-$(D3D_DIR)/bundle.tar: $(D3D_DIR)/privatefilemusl $(D3D_DIR)/compiled.tar $(D3D_DIR)/runtime.tar tests/graphics/d3d/run.py \
+$(D3D_DIR)/bundle.tar: $(D3D_DIR)/compiled.tar $(D3D_DIR)/runtime.tar $(D3D_DIR)/privatefilemusl tests/graphics/d3d/run.py \
                        tests/graphics/guest-env.sh $(wildcard tests/graphics/d3d/ref/*)
 	@set -e; work=; \
 	trap '[ -z "$$work" ] || rm -rf "$$work"; rm -f "$@.tmp"' EXIT; \
