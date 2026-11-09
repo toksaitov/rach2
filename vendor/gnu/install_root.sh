@@ -18,6 +18,8 @@
 #   gdb       GDB and gdbserver
 #   js        the SpiderMonkey shell
 #   debian    the desktop closure, including chromium-headless-shell
+#   venus     Mesa 26.1.6's Venus driver, in place of the closure's Mesa
+#             25.0.7 Venus driver
 #   proton    GE-Proton under /opt/proton, on x86-64
 #   webgl     the pinned conformance suite under /usr/share/webgl
 #   igt       IGT's tests under /usr/libexec/igt-gpu-tools and its runner,
@@ -72,9 +74,9 @@ if [ -z "$TREE" ] || [ ! -d "$TREE" ]; then
     echo "usage: install_root.sh TREE" >&2
     exit 2
 fi
-for part in root native gdb js debian/desktop proton webgl; do
+for part in root native gdb js debian/desktop venus proton webgl; do
     if [ ! -d "$OUT/$part" ]; then
-        echo "gnu: install: no $OUT/$part; run make gnu-ports gnu-native gnu-gdb gnu-js gnu-desktop gnu-proton gnu-webgl" >&2
+        echo "gnu: install: no $OUT/$part; run make gnu-ports gnu-native gnu-gdb gnu-js gnu-desktop gnu-venus gnu-proton gnu-webgl" >&2
         exit 1
     fi
 done
@@ -266,6 +268,27 @@ if [ ! -x "$TREE/usr/lib/chromium/chromium-headless-shell" ] ||
 fi
 rm "$TREE/usr/bin/chromium-headless-shell"
 ln -s ../lib/chromium/chromium-headless-shell "$TREE/usr/bin/chromium-headless-shell"
+
+# The loader lists Venus from Mesa 26.1.6 and every other driver from the
+# closure's 25.0.7 (Readme, Venus): 25.0.7's Venus ICD and library go, and
+# the venus part, whose ICD names its library by path, comes in. The driver's
+# libraries must all be in the root, since nothing resolved them against it.
+for f in "usr/share/vulkan/icd.d/virtio_icd.json" "usr/lib/$GNU_MULTIARCH/libvulkan_virtio.so"; do
+    if [ ! -f "$TREE/$f" ]; then
+        echo "gnu: install: refused: the desktop closure has no /$f, which the venus part replaces" >&2
+        exit 1
+    fi
+    rm "$TREE/$f"
+done
+install_part venus
+venus="$TREE/usr/lib/$GNU_MULTIARCH/venus/libvulkan_virtio.so"
+for lib in $(LC_ALL=C readelf -d "$venus" | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\1/p'); do
+    for d in lib usr/lib "usr/lib/$GNU_MULTIARCH"; do
+        if [ -e "$TREE/$d/$lib" ] || [ -L "$TREE/$d/$lib" ]; then continue 2; fi
+    done
+    echo "gnu: install: refused: the venus driver needs $lib, which the root lacks" >&2
+    exit 1
+done
 
 install_part proton
 install_part webgl

@@ -63,18 +63,21 @@ GNU_ASSET_STEP = $(STEP) -r $(GNU_OUT) -c cc
 GNU_DEBIAN_STAMP = $(GNU_OUT)/debian.stamp
 GNU_PROTON_STAMP = $(GNU_OUT)/proton.stamp
 GNU_WEBGL_STAMP = $(GNU_OUT)/webgl.stamp
-GNU_STEP_STAMPS += $(GNU_DEBIAN_STAMP) $(GNU_PROTON_STAMP) $(GNU_WEBGL_STAMP)
+GNU_VENUS_STAMP = $(GNU_OUT)/venus.stamp
+GNU_STEP_STAMPS += $(GNU_DEBIAN_STAMP) $(GNU_PROTON_STAMP) $(GNU_WEBGL_STAMP) $(GNU_VENUS_STAMP)
 GNU_DEBIAN_LISTS = debian/mesa.list debian/desktop.list debian/browsers.list debian/sound.list debian/tools.list
 GNU_DEBIAN_SOURCES = vendor/gnu/debian/fetch_debs.sh vendor/gnu/debian/fetch_asset.sh \
                      vendor/gnu/debian/resolve_debs.py \
                      $(addprefix vendor/gnu/,$(GNU_DEBIAN_LISTS)) vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
 GNU_PROTON_SOURCES = vendor/gnu/proton/fetch_proton.sh vendor/gnu/debian/fetch_asset.sh vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
+GNU_VENUS_SOURCES = vendor/gnu/debian/fetch_venus.sh vendor/gnu/debian/fetch_asset.sh vendor/gnu/debian/venus.list
 GNU_WEBGL_SOURCES = vendor/gnu/debian/fetch_webgl.sh vendor/gnu/debian/fetch_asset.sh vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
 
-.PHONY: gnu-desktop gnu-proton gnu-webgl
+.PHONY: gnu-desktop gnu-proton gnu-webgl gnu-venus
 gnu-desktop: $(GNU_DEBIAN_STAMP)
 gnu-proton: $(GNU_PROTON_STAMP)
 gnu-webgl: $(GNU_WEBGL_STAMP)
+gnu-venus: $(GNU_VENUS_STAMP)
 
 $(GNU_DEBIAN_STAMP): $(GNU_DEBIAN_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@
@@ -82,6 +85,12 @@ $(GNU_DEBIAN_STAMP): $(GNU_DEBIAN_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	    -o debian/desktop -o work/debian/desktop/files -o work/debian/desktop/closure.txt \
 	    -- sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" \
 	        GNU_DEBIAN_LISTS="$(GNU_DEBIAN_LISTS)" ./vendor/gnu/debian/fetch_debs.sh desktop'
+
+# Mesa 26.1.6's Venus driver alone, beside the desktop's Mesa 25.0.7.
+$(GNU_VENUS_STAMP): $(GNU_VENUS_SOURCES) | $(SHA256TOOL) $(ETUDE)
+	@rm -f $@
+	@$(GNU_ASSET_STEP) -n gnu-venus -t $@ $(STEP_INPUTS) -o venus \
+	    -- $(call GNU_STEP_RUN,vendor/gnu/debian/fetch_venus.sh)
 
 $(GNU_PROTON_STAMP): $(GNU_PROTON_SOURCES) | $(SHA256TOOL) $(ETUDE)
 	@rm -f $@
