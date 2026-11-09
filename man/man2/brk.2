@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 9, 2026
 .Dt BRK 2
 .Os
 .Sh NAME
@@ -146,7 +146,7 @@ or
 Of the other flag bits, those that place the mapping and those that back
 its pages at once, which this page describes below, are taken, and the
 rest are ignored.
-What is mapped is one of four things.
+What is mapped is one of five things.
 .Bl -tag -width Ds
 .It Private anonymous memory
 With
@@ -226,6 +226,37 @@ A read-only shared mapping through a descriptor not open for writing is
 served as a private one, which reads the same bytes, unless another
 shared mapping has the file's pages in memory, which it then maps too.
 A writable shared mapping needs a descriptor open for writing.
+.It A device object
+A descriptor of a device or driver object that maps itself, such as
+.Pa /dev/mem
+.Pq Xr mem 4 ,
+maps the object's memory, a device's range or frames the object keeps,
+from the page offset, with the cache type the object chooses:
+uncached, write-combining or cached.
+The descriptor must be open for reading, and for writing for a writable
+shared mapping; a shared mapping through one not open for writing may
+never be made writable.
+The object decides the rest: it may refuse a private mapping, since
+device memory has no copy-on-write, a range past its end, or a caller.
+Pages are mapped at the first touch, from where the object has them then.
+A driver that moves or frees a page, or loses its device, takes the page
+out of every mapping of it; the next touch maps the page where it is now,
+or, when the object no longer has it, ends in
+.Dv SIGBUS
+with
+.Dv BUS_ADRERR
+and the address, as on Linux.
+The mapping holds a reference on the object, which a fork's copy shares
+and which goes with the last mapping, at
+.Fn munmap ,
+.Xr execve 2
+or exit.
+.Pa /proc/ Ns Ar pid Ns Pa /maps
+shows the mapping shared, with the path of the descriptor, and
+.Pa /proc/ Ns Ar pid Ns Pa /smaps
+gives its
+.Ql io pf
+flags.
 .El
 .Pp
 A page of a file on a loop device or a USB stick, which the kernel cannot
@@ -242,6 +273,7 @@ as on Linux: then the call backs every page before it returns, those of a
 private writable mapping each with a frame of its own, as a write would,
 and the others as a read would, and stops at the first page no memory can
 be had for, leaving the rest to their first touch.
+A device object's pages are always mapped at their first touch.
 .Pp
 Shared memory, anonymous, a file on tmpfs or the pages in memory of a file
 on ext2, has pages up to 16 TiB less a page, the most a file in memory
@@ -357,6 +389,7 @@ length, or with
 to the address in the fifth argument, whatever was mapped there going
 first.
 A mapping of a file keeps mapping the same pages of it.
+A device object's mapping may shrink and move, but not grow, as on Linux.
 .Dv MREMAP_DONTUNMAP
 is not implemented.
 .Pp
@@ -368,7 +401,24 @@ or
 .Dv MADV_FREE
 lets the resident pages of the range go: a private anonymous page reads
 as zeros again, a private page of a file reads the file again, and a
-shared page reads what its shared memory holds.
+shared page reads what its shared memory holds; over a device object's
+mapping, which has no pages to read again, the three are refused.
+.Dv MADV_DONTFORK
+(10) marks the range so that a child that
+.Xr fork 2
+makes after it does not get it: the child has no mapping there, and an
+access to it ends in
+.Dv SIGSEGV .
+.Dv MADV_DOFORK
+(11) clears the mark, and over a device object's mapping is refused, as
+on Linux;
+.Pa /proc/ Ns Ar pid Ns Pa /smaps
+gives a marked mapping the
+.Ql dc
+flag.
+Either splits a mapping the range cuts, as
+.Fn mprotect
+does.
 Any other advice Linux defines from
 .Dv MADV_NORMAL
 (0) to
@@ -551,7 +601,16 @@ rounded up to pages, a mapping of a file whose last page at the new
 length would not fit in 32 bits, or a new address that is not
 page-aligned, lies outside user space or overlaps the old range; for
 .Fn madvise ,
-an advice it does not accept, as above;
+an advice it does not accept, as above, or
+.Dv MADV_DONTNEED ,
+.Dv MADV_DONTNEED_LOCKED ,
+.Dv MADV_FREE
+or
+.Dv MADV_DOFORK
+over a device object's mapping;
+for a device object's
+.Fn mmap ,
+a private mapping or a range the object refuses;
 for
 .Fn msync ,
 an unknown flag, or both
@@ -566,8 +625,9 @@ Musl also rejects an
 offset that is negative, not page-aligned, or not representable as the
 kernel's page offset.
 .It Er EACCES
-A mapping of a file whose descriptor is not open for reading, or a
-writable shared one whose descriptor is not open for writing;
+A mapping of a file or a device object whose descriptor is not open for
+reading, or a writable shared one whose descriptor is not open for
+writing;
 .Fn mprotect
 asking write of a shared mapping of a file that may never be written.
 .It Er EBUSY
@@ -580,21 +640,23 @@ is not open, for a mapping without
 .It Er EFAULT
 The range
 .Fn mremap
-is given is not within one VMA.
+is given is not within one VMA, or would grow a device object's mapping.
 .It Er EIO
 .Fn msync
 could not write a page of a shared mapping back to its file, or the
 file system's fsync of it failed.
 .It Er ENODEV
 .Fa fd
-is not a file, or a writable shared mapping names a file on a disk file
-system other than ext2.
+is neither a file nor an object that maps itself, or a writable shared
+mapping names a file on a disk file system other than ext2.
 .It Er ENOMEM
 A mapping has no suitable address range, would exceed
 .Dv RLIMIT_AS ,
 or cannot obtain a VMA entry, or a fixed mapping lies outside user
 space.
-Unmapping cannot obtain an entry needed to split an area.
+Unmapping, or
+.Fn madvise Ns 's
+fork advice, cannot obtain an entry needed to split an area.
 A page of an
 .Fn mprotect ,
 .Fn madvise
@@ -618,6 +680,10 @@ The page offset of an
 call and its length together pass the last page 32 bits can count; on
 x86-64, the page offset and the length of a mapping of a file or of shared
 memory do.
+.It Er EPERM
+A device object refuses the caller or the range, as
+.Pa /dev/mem
+refuses a caller without privilege and a frame of RAM.
 .It Er ESRCH
 The kernel has no current process.
 .El
@@ -625,4 +691,5 @@ The kernel has no current process.
 .Xr fork 2 ,
 .Xr open 2 ,
 .Xr prlimit64 2 ,
+.Xr mem 4 ,
 .Xr memory 7
