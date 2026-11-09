@@ -221,6 +221,10 @@ of any other selector fails with
 .Er EIO .
 orig_rax is kept in 32 bits and reads back sign-extended, where Linux
 keeps all 64.
+orig_eax and orig_rax read -1 at a stop that no system call entered the
+kernel for, a fault, a breakpoint or an interrupt, as on Linux, and the
+call's number from its entry until the thread next enters the kernel
+otherwise.
 An orig_eax of -1 keeps an interrupted system call from being restarted,
 set at its exit stop or at the signal-delivery stop that follows; at the
 exit stop so does a result in EAX other than
