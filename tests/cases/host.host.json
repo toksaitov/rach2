@@ -966,6 +966,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "synaptics",
+          "checks": "tests/host/synaptics_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "synthfs",
           "checks": "tests/host/synthfs_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
