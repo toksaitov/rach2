@@ -217,9 +217,16 @@ are reported; a buffer size set is doubled, as in Linux, from 4608 to
 425984 bytes.
 .Dv SO_RCVTIMEO
 and
-.Dv SO_SNDTIMEO
+.Dv SO_SNDTIMEO ,
+old and new
+.Pq Xr setsockopt 2 ,
 bound a wait, rounded up to 1 ms ticks, which then fails with
-.Er EAGAIN .
+.Er EAGAIN ;
+negative seconds make a wait fail at once, and microseconds outside
+0 through 999999 fail with
+.Er EDOM ,
+as on Linux.
+Getting either gives the limit back, zero for none.
 .Dv SO_REUSEADDR ,
 .Dv SO_KEEPALIVE ,
 .Dv SO_LINGER

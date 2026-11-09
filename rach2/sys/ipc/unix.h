@@ -104,7 +104,8 @@ int32_t unix_shutdown(fd_entry_t *e, int how);
  * setsockopt(2) at SOL_SOCKET: SO_PASSCRED; SO_PRIORITY, 0 to 6 for anyone and
  * any value for a privileged caller, kept for getsockopt; SO_SNDBUF and
  * SO_RCVBUF, and their FORCE forms, which keep twice the value asked, as Linux
- * does; and SO_RCVTIMEO and SO_SNDTIMEO, a struct timeval. SO_LINGER,
+ * does; and SO_RCVTIMEO and SO_SNDTIMEO, old and new (`sock_timeo_get`),
+ * whose negative seconds wait not at all, as Linux's do. SO_LINGER,
  * SO_REUSEADDR, SO_KEEPALIVE, SO_BROADCAST and the low marks are taken and
  * change nothing. -ENOPROTOOPT for another level or option, -EINVAL for a value
  * shorter than the option's, -EPERM for a priority past 6 without privilege,
@@ -117,9 +118,11 @@ int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uint3
  * SO_PASSCRED, SO_PRIORITY, SO_SNDBUF, SO_RCVBUF, SO_ACCEPTCONN, SO_DOMAIN and
  * SO_PROTOCOL, 0 for SO_REUSEADDR, SO_KEEPALIVE and SO_BROADCAST, and 1 for the
  * low marks; SO_PEERCRED's struct ucred, as the caller's namespaces see it, pid
- * 0 and ids -1 when the socket has none. The value is cut to the length at
- * `len_ptr`, where the length copied is stored. -ENOPROTOOPT for another level
- * or option, -EINVAL for a negative length, -EFAULT.
+ * 0 and ids -1 when the socket has none; SO_RCVTIMEO and SO_SNDTIMEO, old and
+ * new, in the caller's layout (`sock_timeo_put`), 0 for none. The value is
+ * cut to the length at `len_ptr`, where the length copied is stored.
+ * -ENOPROTOOPT for another level or option, -EINVAL for a negative length,
+ * -EFAULT.
  */
 int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintptr_t len_ptr);
 

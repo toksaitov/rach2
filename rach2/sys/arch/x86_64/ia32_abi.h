@@ -2,13 +2,14 @@
 #define _X86_64_IA32_ABI_H_
 
 /*
- * The i386 layouts of the file and time structures an i386 program passes
- * the x86-64 kernel, as Linux 6.12's compat types have them (rach2/ia32.md
- * lists each, and tests/host/ia32_fs_hosttest.c checks their sizes and
- * offsets). i386 aligns a 64-bit integer to 4 bytes, which no x86-64
- * compiler does; each 64-bit member is therefore a pair of 32-bit words, low
- * word first, which IA32_GET64 and IA32_PUT64 join and split, so that each
- * structure has the same bytes on every compiler.
+ * The i386 layouts of the file, time and socket structures an i386 program
+ * passes the x86-64 kernel, as Linux 6.12's compat types have them
+ * (rach2/ia32.md lists each, and tests/host/ia32_fs_hosttest.c and
+ * ia32_net_hosttest.c check their sizes and offsets). i386 aligns a 64-bit
+ * integer to 4 bytes, which no x86-64 compiler does; each 64-bit member is
+ * therefore a pair of 32-bit words, low word first, which IA32_GET64 and
+ * IA32_PUT64 join and split, so that each structure has the same bytes on
+ * every compiler.
  */
 
 #include "../../lib/kint.h"
@@ -202,6 +203,40 @@ struct ia32_sel_arg {
 struct ia32_sigset_arg {
     uint32_t ss;
     uint32_t ss_len;
+};
+
+/* compat_msghdr, of sendmsg, recvmsg and socketcall's: 32-bit pointers and
+ * lengths. */
+struct ia32_msghdr {
+    uint32_t msg_name;
+    int32_t msg_namelen;
+    uint32_t msg_iov;
+    uint32_t msg_iovlen;
+    uint32_t msg_control;
+    uint32_t msg_controllen;
+    uint32_t msg_flags;
+};
+
+/* compat_mmsghdr, of sendmmsg and recvmmsg: the header, then the count the
+ * call stores for it. */
+struct ia32_mmsghdr {
+    struct ia32_msghdr msg_hdr;
+    uint32_t msg_len;
+};
+
+/* compat_cmsghdr: a 32-bit length; the data after it and the next header
+ * are aligned to 4 bytes, not 8 (IA32_CMSG_ALIGN in arch.h). */
+struct ia32_cmsghdr {
+    uint32_t cmsg_len;
+    int32_t cmsg_level;
+    int32_t cmsg_type;
+};
+
+/* __kernel_sock_timeval, of SO_RCVTIMEO_NEW and SO_SNDTIMEO_NEW: 64-bit
+ * seconds and microseconds, the same bytes in both ABIs. */
+struct ia32_sock_timeval {
+    uint32_t tv_sec_lo, tv_sec_hi;
+    uint32_t tv_usec_lo, tv_usec_hi;
 };
 
 #endif /* _X86_64_IA32_ABI_H_ */

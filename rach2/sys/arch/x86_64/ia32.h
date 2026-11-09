@@ -143,16 +143,9 @@ long compat_sys_timerfd_settime64(isr_params_t *params);
 /* ia32_ioctl.c */
 long compat_sys_ioctl(isr_params_t *params);
 
-/* ia32_net.c */
+/* ia32_net.c; the other socket calls are the native handlers, which read
+ * i386's structures for an i386 call (syscall_net.c). */
 long compat_sys_socketcall(isr_params_t *params);
-long compat_sys_recvmmsg_time32(isr_params_t *params);
-long compat_sys_sendmmsg(isr_params_t *params);
-long compat_sys_getsockopt(isr_params_t *params);
-long compat_sys_setsockopt(isr_params_t *params);
-long compat_sys_sendmsg(isr_params_t *params);
-long compat_sys_recvfrom(isr_params_t *params);
-long compat_sys_recvmsg(isr_params_t *params);
-long compat_sys_recvmmsg_time64(isr_params_t *params);
 
 /* ia32_ipc.c */
 long compat_sys_ipc(isr_params_t *params);

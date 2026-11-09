@@ -358,6 +358,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_RECVMSG] = sys_recvmsg;
     table[SYS_SHUTDOWN] = sys_shutdown;
     table[SYS_RECVMMSG] = sys_recvmmsg;
+    table[SYS_RECVMMSG_TIME64] = sys_recvmmsg_time64;
     table[SYS_SENDMMSG] = sys_sendmmsg;
     table[SYS_MSYNC] = sys_msync;
     table[SYS_MREMAP] = sys_mremap;

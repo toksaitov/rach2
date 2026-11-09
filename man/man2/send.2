@@ -93,6 +93,7 @@ describes, at most 1024, as
 .Fn sendmsg
 sends one, and stores each message's count in its
 .Va msg_len .
+A message sent only in part ends the call, as on Linux.
 It returns the number of messages sent, or the first error when none was;
 GNU libc's resolver sends its two queries with it.
 .Pa tests/musl/callsmusl.c
@@ -272,6 +273,11 @@ is 46 and
 .Vt struct msghdr
 has the x86-64 layout, with 64-bit lengths, and control messages are
 aligned to 8 bytes.
+An i386 program on the x86-64 kernel passes the i386 layout, with 32-bit
+pointers and lengths and control messages aligned to 4 bytes, through
+the i386 numbers or
+.Xr socketcall 2 ,
+as on Linux.
 .Sh RETURN VALUES
 On success,
 .Fn send ,

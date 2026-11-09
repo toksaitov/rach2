@@ -1,6 +1,6 @@
 # The system calls
 
-This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 299 calls, the x86-64 kernel 275, and its compat table 293. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
+This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 300 calls, the x86-64 kernel 275, and its compat table 302. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
 
 `make syscalls` writes this file from `rach2/sys/arch/i686/systab.c`, `rach2/sys/arch/x86_64/systab.c` and `rach2/sys/arch/x86_64/ia32_systab.c`, with the numbers in `rach2/sys/arch/i686/sysnr.h`, `rach2/sys/arch/x86_64/sysnr.h` and `rach2/sys/arch/x86_64/ia32_sysnr.h`, and `tests/run style` fails when the file differs from what it writes.
 
@@ -116,7 +116,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `getrusage` | 77 | 98 | none | [getrusage(2)](../man/man2/getrusage.2) |
 | `getsid` | 147 | 124 | 147 | [getpid(2)](../man/man2/getpid.2) |
 | `getsockname` | 367 | 51 | 367 | [getsockname(2)](../man/man2/getsockname.2) |
-| `getsockopt` | 365 | 55 | none | [setsockopt(2)](../man/man2/setsockopt.2) |
+| `getsockopt` | 365 | 55 | 365 | [setsockopt(2)](../man/man2/setsockopt.2) |
 | `gettid` | 224 | 186 | 224 | [getpid(2)](../man/man2/getpid.2) |
 | `gettimeofday` | 78 | 96 | 78 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
 | `getuid` | none | 102 | none | [getuid(2)](../man/man2/getuid.2) |
@@ -217,9 +217,10 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `readlinkat` | 305 | 267 | 305 | [symlink(2)](../man/man2/symlink.2) |
 | `readv` | 145 | 19 | 145 | [read(2)](../man/man2/read.2) |
 | `reboot` | 88 | 169 | 88 | [reboot(2)](../man/man2/reboot.2) |
-| `recvfrom` | 371 | 45 | none | [recv(2)](../man/man2/recv.2) |
-| `recvmmsg` | 337 | 299 | none | [recv(2)](../man/man2/recv.2) |
-| `recvmsg` | 372 | 47 | none | [recv(2)](../man/man2/recv.2) |
+| `recvfrom` | 371 | 45 | 371 | [recv(2)](../man/man2/recv.2) |
+| `recvmmsg` | 337 | 299 | 337 | [recv(2)](../man/man2/recv.2) |
+| `recvmmsg_time64` | 417 | none | 417 | [recv(2)](../man/man2/recv.2) |
+| `recvmsg` | 372 | 47 | 372 | [recv(2)](../man/man2/recv.2) |
 | `removexattr` | 235 | 197 | 235 | [getxattr(2)](../man/man2/getxattr.2) |
 | `rename` | 38 | 82 | 38 | [rename(2)](../man/man2/rename.2) |
 | `renameat` | 302 | 264 | 302 | [rename(2)](../man/man2/rename.2) |
@@ -255,8 +256,8 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `semtimedop_time64` | 420 | none | 420 | [semget(2)](../man/man2/semget.2) |
 | `sendfile` | 187 | 40 | 187 | [splice(2)](../man/man2/splice.2) |
 | `sendfile64` | 239 | none | 239 | [splice(2)](../man/man2/splice.2) |
-| `sendmmsg` | 345 | 307 | none | [send(2)](../man/man2/send.2) |
-| `sendmsg` | 370 | 46 | none | [send(2)](../man/man2/send.2) |
+| `sendmmsg` | 345 | 307 | 345 | [send(2)](../man/man2/send.2) |
+| `sendmsg` | 370 | 46 | 370 | [send(2)](../man/man2/send.2) |
 | `sendto` | 369 | 44 | 369 | [send(2)](../man/man2/send.2) |
 | `set_robust_list` | 311 | 273 | none | [futex(2)](../man/man2/futex.2) |
 | `set_thread_area` | 243 | none | 243 | [set_thread_area(2)](../man/man2/set_thread_area.2) |
@@ -281,7 +282,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `setreuid32` | 203 | none | 203 | [setuid(2)](../man/man2/setuid.2) |
 | `setrlimit` | 75 | 160 | none | [prlimit64(2)](../man/man2/prlimit64.2) |
 | `setsid` | 66 | 112 | 66 | [getpid(2)](../man/man2/getpid.2) |
-| `setsockopt` | 366 | 54 | none | [setsockopt(2)](../man/man2/setsockopt.2) |
+| `setsockopt` | 366 | 54 | 366 | [setsockopt(2)](../man/man2/setsockopt.2) |
 | `settimeofday` | 79 | 164 | 79 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
 | `setuid` | none | 105 | none | [setuid(2)](../man/man2/setuid.2) |
 | `setuid32` | 213 | none | 213 | [setuid(2)](../man/man2/setuid.2) |
@@ -302,7 +303,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `sigreturn` | 119 | none | 119 | [sigaction(2)](../man/man2/sigaction.2) |
 | `sigsuspend` | none | none | 72 | [sigaction(2)](../man/man2/sigaction.2) |
 | `socket` | 359 | 41 | 359 | [socket(2)](../man/man2/socket.2) |
-| `socketcall` | 102 | none | none | [socketcall(2)](../man/man2/socketcall.2) |
+| `socketcall` | 102 | none | 102 | [socketcall(2)](../man/man2/socketcall.2) |
 | `socketpair` | 360 | 53 | 360 | [socket(2)](../man/man2/socket.2) |
 | `splice` | 313 | 275 | 313 | [splice(2)](../man/man2/splice.2) |
 | `ssetmask` | none | none | 69 | [sigaction(2)](../man/man2/sigaction.2) |

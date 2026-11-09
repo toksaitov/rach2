@@ -330,6 +330,81 @@ int user_buffer_ok(uintptr_t addr, size_t len, int write)
            len <= sizeof(memory) - (addr - USER_BASE);
 }
 
+/*
+ * The caller's structures in the kernel's own layout, as syscall_net.c and
+ * syscall_fs.c read them for a native call.
+ */
+
+int iov_fetch(struct kernel_iovec *iov, uintptr_t uvec, uint32_t i)
+{
+    return copy_from_user(iov, (const void __user *)(uvec + (uintptr_t)i * sizeof(*iov)),
+                          sizeof(*iov)) != 0
+               ? -EFAULT
+               : 0;
+}
+
+uint32_t msghdr_size(void)
+{
+    return (uint32_t)sizeof(struct kernel_msghdr);
+}
+
+int msghdr_get(struct kernel_msghdr *h, uintptr_t u)
+{
+    return copy_from_user(h, (const void __user *)u, sizeof(*h)) != 0 ? -EFAULT : 0;
+}
+
+int msghdr_put(uintptr_t u, const struct kernel_msghdr *h)
+{
+    return copy_to_user((void __user *)u, h, sizeof(*h)) != 0 ? -EFAULT : 0;
+}
+
+uint32_t cmsg_hdr(void)
+{
+    return (uint32_t)CMSG_HDR;
+}
+
+uint32_t cmsg_align(uint32_t n)
+{
+    return (uint32_t)CMSG_ALIGN(n);
+}
+
+int cmsg_get(struct kernel_cmsghdr *h, uintptr_t at)
+{
+    return copy_from_user(h, (const void __user *)at, sizeof(*h)) != 0 ? -EFAULT : 0;
+}
+
+int cmsg_put(uintptr_t at, const struct kernel_cmsghdr *h)
+{
+    return copy_to_user((void __user *)at, h, sizeof(*h)) != 0 ? -EFAULT : 0;
+}
+
+int32_t sock_timeo_get(int name, uintptr_t val, uint32_t len, int64_t tv[2])
+{
+    long t[2];
+
+    (void)name;
+    if (len < sizeof(t)) {
+        return -EINVAL;
+    }
+    if (copy_from_user(t, (const void __user *)val, sizeof(t)) != 0) {
+        return -EFAULT;
+    }
+    tv[0] = t[0];
+    tv[1] = t[1];
+    return 0;
+}
+
+uint32_t sock_timeo_put(int name, const int64_t tv[2], uint8_t out[16])
+{
+    long t[2];
+
+    (void)name;
+    t[0] = (long)tv[0];
+    t[1] = (long)tv[1];
+    memcpy(out, t, sizeof(t));
+    return (uint32_t)sizeof(t);
+}
+
 /**
  * A wait: it ends when `cond` holds. A sibling whose condition does not
  * hold sleeps, and tests the condition again each time it is resumed; the

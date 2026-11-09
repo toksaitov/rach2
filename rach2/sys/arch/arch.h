@@ -241,6 +241,37 @@ void ia32_core_fp_notes(uint8_t **p, const struct process *t);
  * x86-64 calls the dispatcher never restarts do, so that an i386 call it
  * answers is not restarted either (x86_64/ia32_time.c). */
 int ia32_never_restarts(syscall_fn_t fn);
+
+/*
+ * The socket structures of an i386 call, which the shared socket code reads
+ * and writes in place of its own while `in_compat_syscall` is true, as
+ * Linux's MSG_CMSG_COMPAT has it (x86_64/ia32_net.c, whose ia32_abi.h
+ * defines them): compat_msghdr, the stride of compat_mmsghdr and the offset
+ * of its count, and compat_cmsghdr, whose data and successor are aligned to
+ * 4 bytes.
+ */
+struct kernel_msghdr;
+struct kernel_cmsghdr;
+#define IA32_MSGHDR_LEN    28u
+#define IA32_MMSGHDR_LEN   32u
+#define IA32_MMSG_LEN_OFF  28u
+#define IA32_CMSG_HDR      12u
+#define IA32_CMSG_ALIGN(n) (((n) + 3u) & ~3u)
+
+/** Read the i386 msghdr at the user address `u` into `h`, its pointers and
+ * lengths zero-extended; 0 or -EFAULT. */
+int ia32_msghdr_get(struct kernel_msghdr *h, uintptr_t u);
+
+/** Write what a receive gives back of `h`, its name's length, its control
+ * length and its flags, into the i386 msghdr at `u`; 0 or -EFAULT. */
+int ia32_msghdr_put(uintptr_t u, const struct kernel_msghdr *h);
+
+/** Read the i386 control message header at `at` into `h`; 0 or -EFAULT. */
+int ia32_cmsg_get(struct kernel_cmsghdr *h, uintptr_t at);
+
+/** Write `h` as an i386 control message header at `at`; 0 or -EFAULT. A
+ * length past 32 bits is cut, which no caller passes. */
+int ia32_cmsg_put(uintptr_t at, const struct kernel_cmsghdr *h);
 #endif
 
 /*

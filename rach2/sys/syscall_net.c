@@ -160,6 +160,10 @@ struct kernel_mmsghdr {
 /* recvmmsg: wait for the first message only. */
 #define MSG_WAITFORONE 0x10000u
 
+/* The flag Linux's i386 message calls add, which a native call may not
+ * pass. */
+#define MSG_CMSG_COMPAT 0x80000000u
+
 /* The creation flags socket(2) takes above the type's low four bits and
  * accept4(2) takes in its flags: the values of O_CLOEXEC and O_NONBLOCK,
  * as Linux defines them. */
@@ -2783,6 +2787,14 @@ static int32_t netlink_memberships_get(struct socket *sock, uintptr_t optval_ptr
     return copy_to_user((void __user *)optlen_ptr, &need, sizeof(need)) != 0 ? -EFAULT : 0;
 }
 
+/** Whether `name` is a SOL_SOCKET time limit, SO_RCVTIMEO or SO_SNDTIMEO,
+ * old or new. */
+static int sock_timeo_opt(int name)
+{
+    return name == SO_RCVTIMEO_OLD || name == SO_SNDTIMEO_OLD || name == SO_RCVTIMEO_NEW ||
+           name == SO_SNDTIMEO_NEW;
+}
+
 /** getsockopt: report the options programs read at setup: SO_ERROR (the
  * pending connection error, cleared by the read), SO_TYPE (the real socket
  * type), SO_REUSEADDR, SO_BROADCAST, SO_KEEPALIVE, SO_RCVBUF and
@@ -2795,7 +2807,10 @@ static int32_t netlink_memberships_get(struct socket *sock, uintptr_t optval_ptr
  * SO_ERROR is read and cleared under the network lock, so the interrupt that
  * sets it cannot come between. The IPv6 options read back as `ipv6_get`
  * reports them, a raw ICMPv6 socket's filter as `icmp6_filter_get` does,
- * and a netlink socket's groups as `netlink_memberships_get` does. A null
+ * and a netlink socket's groups as `netlink_memberships_get` does.
+ * SO_RCVTIMEO and SO_SNDTIMEO, old and new, read back as no limit, a zero
+ * timeval in the caller's layout (`sock_timeo_put`), since these sockets
+ * keep none. A null
  * value with a length of 0 asks only for the length, as on Linux. Returns
  * 0, -ENOPROTOOPT for IP_HDRINCL, for an IPv6 option of a socket of another
  * family or a join or leave, -EINVAL for a negative netlink length, or
@@ -2805,12 +2820,21 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
 {
     fd_entry_t *entry = fd_get(current_proc->fds, fd);
     int val = 0;
+    uint8_t tv[16];
+    const void *src = &val;
     uint32_t olen, width = (uint32_t)sizeof(val);
 
     if (!entry || entry->type != FD_TYPE_SOCKET || !entry->sock) {
         return not_a_socket(entry);
     }
-    if (level == SOL_IPV6 && optname == IPV6_V6ONLY) {
+    if (level == SOL_SOCKET && sock_timeo_opt(optname)) {
+        int64_t none[2];
+
+        none[0] = 0;
+        none[1] = 0;
+        width = sock_timeo_put(optname, none, tv);
+        src = tv;
+    } else if (level == SOL_IPV6 && optname == IPV6_V6ONLY) {
         if (entry->sock->family != AF_INET6)
             return -ENOPROTOOPT;
         val = entry->sock->v6only;
@@ -2872,13 +2896,215 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
     if (olen > width) {
         olen = width;
     }
-    if (olen > 0 && copy_to_user((void __user *)optval_ptr, &val, olen) != 0) {
+    if (olen > 0 && copy_to_user((void __user *)optval_ptr, src, olen) != 0) {
         return -EFAULT;
     }
     if (copy_to_user((void __user *)optlen_ptr, &olen, sizeof(olen)) != 0) {
         return -EFAULT;
     }
     return 0;
+}
+
+/*
+ * The caller's socket structures in its own layout: an i386 call's on the
+ * x86-64 kernel (`in_compat_syscall`), whose msghdr has 32-bit pointers and
+ * lengths and whose control messages have a 32-bit length and 4-byte
+ * alignment, as Linux's MSG_CMSG_COMPAT picks them; else the kernel's own.
+ * The socket calls read and write the caller's headers, vectors
+ * (`iov_fetch`) and control messages through these, so that an i386 call
+ * runs the same code as a native one.
+ */
+
+/** Whether this call's structures are i386's. */
+static int sock_compat(void)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    return in_compat_syscall();
+#else
+    return 0;
+#endif
+}
+
+/** The size of the caller's msghdr (syscall_internal.h). */
+uint32_t msghdr_size(void)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (sock_compat()) {
+        return IA32_MSGHDR_LEN;
+    }
+#endif
+    return (uint32_t)sizeof(struct kernel_msghdr);
+}
+
+/** Read the caller's msghdr (syscall_internal.h). */
+int msghdr_get(struct kernel_msghdr *h, uintptr_t u)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (sock_compat()) {
+        return ia32_msghdr_get(h, u);
+    }
+#endif
+    return copy_from_user(h, (const void __user *)u, sizeof(*h)) != 0 ? -EFAULT : 0;
+}
+
+/** Write back what a receive gives of `h` (syscall_internal.h). */
+int msghdr_put(uintptr_t u, const struct kernel_msghdr *h)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (sock_compat()) {
+        return ia32_msghdr_put(u, h);
+    }
+#endif
+    if ((h->msg_name &&
+         copy_to_user((void __user *)(u + offsetof(struct kernel_msghdr, msg_namelen)),
+                      &h->msg_namelen, sizeof(h->msg_namelen)) != 0) ||
+        copy_to_user((void __user *)(u + offsetof(struct kernel_msghdr, msg_controllen)),
+                     &h->msg_controllen, sizeof(h->msg_controllen)) != 0 ||
+        copy_to_user((void __user *)(u + offsetof(struct kernel_msghdr, msg_flags)), &h->msg_flags,
+                     sizeof(h->msg_flags)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/** The size of the caller's mmsghdr. */
+static uint32_t mmsghdr_size(void)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (sock_compat()) {
+        return IA32_MMSGHDR_LEN;
+    }
+#endif
+    return (uint32_t)sizeof(struct kernel_mmsghdr);
+}
+
+/** The offset of the count in the caller's mmsghdr. */
+static uint32_t mmsg_len_off(void)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (sock_compat()) {
+        return IA32_MMSG_LEN_OFF;
+    }
+#endif
+    return (uint32_t)MMSG_LEN_OFF;
+}
+
+/** The size of the caller's control message header (syscall_internal.h). */
+uint32_t cmsg_hdr(void)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (sock_compat()) {
+        return IA32_CMSG_HDR;
+    }
+#endif
+    return (uint32_t)CMSG_HDR;
+}
+
+/** `n` aligned as the caller's control messages are (syscall_internal.h). */
+uint32_t cmsg_align(uint32_t n)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (sock_compat()) {
+        return IA32_CMSG_ALIGN(n);
+    }
+#endif
+    return (uint32_t)CMSG_ALIGN(n);
+}
+
+/** Read the caller's control message header (syscall_internal.h). */
+int cmsg_get(struct kernel_cmsghdr *h, uintptr_t at)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (sock_compat()) {
+        return ia32_cmsg_get(h, at);
+    }
+#endif
+    return copy_from_user(h, (const void __user *)at, sizeof(*h)) != 0 ? -EFAULT : 0;
+}
+
+/** Write the caller's control message header (syscall_internal.h). */
+int cmsg_put(uintptr_t at, const struct kernel_cmsghdr *h)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (sock_compat()) {
+        return ia32_cmsg_put(at, h);
+    }
+#endif
+    return copy_to_user((void __user *)at, h, sizeof(*h)) != 0 ? -EFAULT : 0;
+}
+
+/** The caller's time limit (syscall_internal.h): two 64-bit words for a new
+ * option, else the caller's timeval. */
+int32_t sock_timeo_get(int name, uintptr_t val, uint32_t len, int64_t tv[2])
+{
+    if (name == SO_RCVTIMEO_NEW || name == SO_SNDTIMEO_NEW) {
+        uint32_t w[4];
+
+        if (len < sizeof(w)) {
+            return -EINVAL;
+        }
+        if (copy_from_user(w, (const void __user *)val, sizeof(w)) != 0) {
+            return -EFAULT;
+        }
+        tv[0] = (int64_t)((uint64_t)w[0] | (uint64_t)w[1] << 32);
+        tv[1] = (int64_t)((uint64_t)w[2] | (uint64_t)w[3] << 32);
+        return 0;
+    }
+    if (sock_compat()) {
+        int32_t t[2];
+
+        if (len < sizeof(t)) {
+            return -EINVAL;
+        }
+        if (copy_from_user(t, (const void __user *)val, sizeof(t)) != 0) {
+            return -EFAULT;
+        }
+        tv[0] = t[0];
+        tv[1] = t[1];
+    } else {
+        long t[2];
+
+        if (len < sizeof(t)) {
+            return -EINVAL;
+        }
+        if (copy_from_user(t, (const void __user *)val, sizeof(t)) != 0) {
+            return -EFAULT;
+        }
+        tv[0] = t[0];
+        tv[1] = t[1];
+    }
+    return 0;
+}
+
+/** The time limit `tv` in the layout `sock_timeo_get` reads
+ * (syscall_internal.h). */
+uint32_t sock_timeo_put(int name, const int64_t tv[2], uint8_t out[16])
+{
+    if (name == SO_RCVTIMEO_NEW || name == SO_SNDTIMEO_NEW) {
+        uint32_t w[4];
+
+        w[0] = (uint32_t)(uint64_t)tv[0];
+        w[1] = (uint32_t)((uint64_t)tv[0] >> 32);
+        w[2] = (uint32_t)(uint64_t)tv[1];
+        w[3] = (uint32_t)((uint64_t)tv[1] >> 32);
+        k_memcpy(out, w, sizeof(w));
+        return (uint32_t)sizeof(w);
+    }
+    if (sock_compat()) {
+        int32_t t[2];
+
+        t[0] = (int32_t)tv[0];
+        t[1] = (int32_t)tv[1];
+        k_memcpy(out, t, sizeof(t));
+        return (uint32_t)sizeof(t);
+    } else {
+        long t[2];
+
+        t[0] = (long)tv[0];
+        t[1] = (long)tv[1];
+        k_memcpy(out, t, sizeof(t));
+        return (uint32_t)sizeof(t);
+    }
 }
 
 /** Whether a receive on `sock` answers with control messages: an AF_INET6
@@ -2893,8 +3119,9 @@ static int rx_control(const struct socket *sock)
 /**
  * Write one control message of `level` and `type` with the `len` bytes at
  * `data` at offset `*used` of the caller's control buffer of `controllen`
- * bytes at `control`, and move `*used` past it and its padding, as far as
- * the buffer goes, as Linux's `put_cmsg` counts it. A message that does not
+ * bytes at `control`, in the caller's layout (`cmsg_put`), and move `*used`
+ * past it and its padding, as far as the buffer goes, as Linux's `put_cmsg`
+ * counts it. A message that does not
  * fit whole is not written and sets MSG_CTRUNC in `*mflags`, after which no
  * other is, so that what was written is a prefix of what was asked for.
  * Returns 0, or -EFAULT.
@@ -2903,7 +3130,7 @@ static int32_t put_cmsg(uintptr_t control, uint32_t controllen, uint32_t *used, 
                         const void *data, uint32_t len, unsigned int *mflags)
 {
     struct kernel_cmsghdr hdr;
-    uint32_t need = (uint32_t)CMSG_HDR + len;
+    uint32_t need = cmsg_hdr() + len;
 
     if ((*mflags & MSG_CTRUNC) || !control || controllen < *used || controllen - *used < need) {
         *mflags |= MSG_CTRUNC;
@@ -2913,11 +3140,11 @@ static int32_t put_cmsg(uintptr_t control, uint32_t controllen, uint32_t *used, 
     hdr.cmsg_len = need;
     hdr.cmsg_level = level;
     hdr.cmsg_type = type;
-    if (copy_to_user((void __user *)(control + *used), &hdr, sizeof(hdr)) != 0 ||
-        copy_to_user((void __user *)(control + *used + CMSG_HDR), data, len) != 0) {
+    if (cmsg_put(control + *used, &hdr) != 0 ||
+        copy_to_user((void __user *)(control + *used + cmsg_hdr()), data, len) != 0) {
         return -EFAULT;
     }
-    *used += (uint32_t)CMSG_ALIGN(need);
+    *used += cmsg_align(need);
     if (*used > controllen) {
         *used = controllen;
     }
@@ -2995,19 +3222,19 @@ static int32_t get_tx_control(const struct socket *sock, uintptr_t control, uint
     opt->src = net_addr4(0);
     opt->hlim = -1;
     opt->tclass = -1;
-    while (control && controllen - off >= (uint32_t)CMSG_HDR) {
+    while (control && controllen - off >= cmsg_hdr()) {
         struct kernel_cmsghdr hdr;
         uint32_t dlen;
         uint8_t data[IN6_PKTINFO_LEN];
         int v;
 
-        if (copy_from_user(&hdr, (const void __user *)(control + off), sizeof(hdr)) != 0) {
+        if (cmsg_get(&hdr, control + off) != 0) {
             return -EFAULT;
         }
-        if (hdr.cmsg_len < CMSG_HDR || hdr.cmsg_len > controllen - off) {
+        if (hdr.cmsg_len < cmsg_hdr() || hdr.cmsg_len > controllen - off) {
             return -EINVAL;
         }
-        dlen = (uint32_t)(hdr.cmsg_len - CMSG_HDR);
+        dlen = (uint32_t)(hdr.cmsg_len - cmsg_hdr());
         if (hdr.cmsg_level == SOL_IPV6) {
             uint32_t want = hdr.cmsg_type == IPV6_PKTINFO ? IN6_PKTINFO_LEN : (uint32_t)sizeof(int);
 
@@ -3016,7 +3243,8 @@ static int32_t get_tx_control(const struct socket *sock, uintptr_t control, uint
                 dlen < want) {
                 return -EINVAL;
             }
-            if (copy_from_user(data, (const void __user *)(control + off + CMSG_HDR), want) != 0) {
+            if (copy_from_user(data, (const void __user *)(control + off + cmsg_hdr()), want) !=
+                0) {
                 return -EFAULT;
             }
             if (hdr.cmsg_type == IPV6_PKTINFO) {
@@ -3037,10 +3265,10 @@ static int32_t get_tx_control(const struct socket *sock, uintptr_t control, uint
                 }
             }
         }
-        if ((uint32_t)CMSG_ALIGN(hdr.cmsg_len) >= controllen - off) {
+        if (cmsg_align((uint32_t)hdr.cmsg_len) >= controllen - off) {
             break;
         }
-        off += (uint32_t)CMSG_ALIGN(hdr.cmsg_len);
+        off += cmsg_align((uint32_t)hdr.cmsg_len);
     }
     return 0;
 }
@@ -3100,7 +3328,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     int32_t taken;
     int32_t whole = 0;
 
-    if (copy_from_user(&hdr, (const void __user *)msg_ptr, sizeof(hdr)) != 0) {
+    if (msghdr_get(&hdr, msg_ptr) != 0) {
         return -EFAULT;
     }
     entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
@@ -3120,7 +3348,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     }
     iovlen = (uint32_t)hdr.msg_iovlen;
 
-    if (!user_buffer_ok(msg_ptr, sizeof(hdr), 1)) {
+    if (!user_buffer_ok(msg_ptr, msghdr_size(), 1)) {
         return -EFAULT;
     }
     if (rx_control(entry->sock) && hdr.msg_control && hdr.msg_controllen > 0 &&
@@ -3136,8 +3364,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     for (i = 0; i < iovlen; i++) {
         struct kernel_iovec iov;
 
-        if (copy_from_user(&iov, (const void __user *)(iov_user + i * sizeof(struct kernel_iovec)),
-                           sizeof(iov)) != 0) {
+        if (iov_fetch(&iov, iov_user, i) != 0) {
             return -EFAULT;
         }
         if (iov.iov_len == 0) {
@@ -3176,7 +3403,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
             return -EFAULT;
         }
     }
-    hdr.msg_namelen = name_ptr ? (int)addr_len : 0;
+    hdr.msg_namelen = (int)addr_len;
     hdr.msg_flags = whole > taken ? (unsigned int)MSG_TRUNC : 0u;
     if (rx_control(entry->sock)) {
         uint32_t used;
@@ -3189,7 +3416,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     } else {
         hdr.msg_controllen = 0;
     }
-    if (copy_to_user((void __user *)msg_ptr, &hdr, sizeof(hdr)) != 0) {
+    if (msghdr_put(msg_ptr, &hdr) != 0) {
         return -EFAULT;
     }
     return (flags & MSG_TRUNC) ? whole : taken;
@@ -3220,7 +3447,7 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
     uint32_t iovlen, namelen, i, total = 0;
     int32_t rc;
 
-    if (copy_from_user(&hdr, (const void __user *)msg_ptr, sizeof(hdr)) != 0) {
+    if (msghdr_get(&hdr, msg_ptr) != 0) {
         return -EFAULT;
     }
     entry = current_proc ? fd_get(current_proc->fds, fd) : (fd_entry_t *)0;
@@ -3252,8 +3479,7 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
         for (i = 0; i < iovlen; i++) {
             struct kernel_iovec one;
 
-            if (copy_from_user(&one, (const void __user *)(iov_user + i * sizeof(one)),
-                               sizeof(one)) != 0) {
+            if (iov_fetch(&one, iov_user, i) != 0) {
                 return total ? (int32_t)total : -EFAULT;
             }
             if (one.iov_len == 0) {
@@ -3273,8 +3499,10 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
     if (iovlen > sizeof(iov) / sizeof(iov[0])) {
         return -EMSGSIZE;
     }
-    if (copy_from_user(iov, (const void __user *)iov_user, iovlen * sizeof(iov[0])) != 0) {
-        return -EFAULT;
+    for (i = 0; i < iovlen; i++) {
+        if (iov_fetch(&iov[i], iov_user, i) != 0) {
+            return -EFAULT;
+        }
     }
     if (iovlen == 1 || entry->sock->type != SOCK_DGRAM ||
         (entry->sock->family != AF_INET && entry->sock->family != AF_INET6 &&
@@ -3375,41 +3603,257 @@ static int32_t unix_make(int call, const unsigned long *args)
     return unix_socket(type, (int)args[2], (int)flags);
 }
 
-static int32_t socket_dispatch(int call, unsigned long *args);
+/** Whether the message of the caller's msghdr at `u` has bytes left after
+ * the `sent` a send took of it, as Linux's msg_data_left tells; 0 when the
+ * header or its vector cannot be read, which the send has already found. */
+static int msg_left(uintptr_t u, uint32_t sent)
+{
+    struct kernel_msghdr hdr;
+    struct kernel_iovec iov;
+    uint64_t total = 0;
+    uint32_t i;
+
+    if (msghdr_get(&hdr, u) != 0 || hdr.msg_iovlen > IOV_MAX_LOCAL) {
+        return 0;
+    }
+    for (i = 0; i < (uint32_t)hdr.msg_iovlen; i++) {
+        if (iov_fetch(&iov, hdr.msg_iov, i) != 0) {
+            return 0;
+        }
+        total += iov.iov_len;
+        if (total > sent) {
+            return 1;
+        }
+    }
+    return 0;
+}
 
 /**
- * sendmmsg and recvmmsg: sendmsg or recvmsg on the socket `args[0]` for each
- * of the `args[2]` headers at `args[1]`, with the flags `args[3]`, storing each
- * message's count in its header, as Linux's do; glibc's resolver sends its
- * two queries with sendmmsg. Returns the messages done, or the first error
- * when none was. After the first message recvmmsg waits for no more, with or
- * without MSG_WAITFORONE, so a call returns what has come; its timeout is not
- * read.
+ * sendmmsg(2): sendmsg on the socket `fd` with `flags` for each of the
+ * `vlen` headers of the caller's mmsghdr array at `vec`, at most MMSG_MAX,
+ * storing each message's count in its header, as Linux's does; glibc's
+ * resolver sends its two queries with it. A message sent in part ends the
+ * call. Returns the messages sent, or the first error when none was.
  */
-static int32_t mmsg(int call, const unsigned long *args)
+static int32_t mmsg_send(unsigned long fd, uintptr_t vec, uint32_t vlen, unsigned long flags)
 {
     unsigned long sub[3];
-    uint32_t vlen = (uint32_t)args[2] > MMSG_MAX ? MMSG_MAX : (uint32_t)args[2];
-    uint32_t i;
+    uint32_t done = 0, size = mmsghdr_size();
     int32_t rc = 0;
 
-    sub[0] = args[0];
-    sub[2] = args[3] & ~MSG_WAITFORONE;
-    for (i = 0; i < vlen; i++) {
-        sub[1] = args[1] + i * sizeof(struct kernel_mmsghdr);
-        rc = socket_dispatch(call == SC_SENDMMSG ? SC_SENDMSG : SC_RECVMSG, sub);
+    if (vlen > MMSG_MAX) {
+        vlen = MMSG_MAX;
+    }
+    sub[0] = fd;
+    sub[2] = flags;
+    while (done < vlen) {
+        sub[1] = vec + done * size;
+        rc = socket_call(SC_SENDMSG, sub);
         if (rc < 0) {
             break;
         }
-        if (copy_to_user((void __user *)(sub[1] + MMSG_LEN_OFF), &rc, sizeof(rc)) != 0) {
+        if (copy_to_user((void __user *)(sub[1] + mmsg_len_off()), &rc, sizeof(rc)) != 0) {
             rc = -EFAULT;
             break;
         }
-        if (call == SC_RECVMMSG) {
-            sub[2] |= MSG_DONTWAIT;
+        done++;
+        if (msg_left(sub[1], (uint32_t)rc)) {
+            break;
         }
     }
-    return i > 0 ? (int32_t)i : rc;
+    return done > 0 ? (int32_t)done : rc;
+}
+
+/**
+ * recvmmsg(2): recvmsg on the socket `fd` with `flags` into each of the
+ * `vlen` headers at `vec`, at most MMSG_MAX, storing each message's count
+ * in its header, as Linux's do_recvmmsg does. Each receive waits as the
+ * socket's would, unless MSG_WAITFORONE, after which none waits once a
+ * message has come. With the timeout `ts`, seconds and nanoseconds, the call
+ * ends after the message during which it ran out, and `ts` is left the time
+ * that remains, 0 once it has run out; as on Linux, it does not end a wait
+ * for a message. Returns the messages received, the first error when none
+ * was, or -EINVAL for a timeout out of range.
+ */
+static int32_t mmsg_recv(unsigned long fd, uintptr_t vec, uint32_t vlen, unsigned long flags,
+                         int64_t *ts)
+{
+    unsigned long sub[3];
+    uint32_t done = 0, size = mmsghdr_size();
+    int64_t end_s = 0, end_ns = 0, now_s, now_ns;
+    int32_t rc = 0;
+
+    if (ts) {
+        if (ts[0] < 0 || ts[1] < 0 || ts[1] >= 1000000000) {
+            return -EINVAL;
+        }
+        rtc_monotonic(&now_s, &now_ns);
+        end_s = ts[0] > 0x3FFFFFFFFFFFFFFFLL - now_s ? 0x3FFFFFFFFFFFFFFFLL : now_s + ts[0];
+        end_ns = now_ns + ts[1];
+        if (end_ns >= 1000000000) {
+            end_ns -= 1000000000;
+            end_s++;
+        }
+    }
+    if (vlen > MMSG_MAX) {
+        vlen = MMSG_MAX;
+    }
+    sub[0] = fd;
+    sub[2] = flags & ~MSG_WAITFORONE;
+    while (done < vlen) {
+        sub[1] = vec + done * size;
+        rc = socket_call(SC_RECVMSG, sub);
+        if (rc < 0) {
+            break;
+        }
+        if (copy_to_user((void __user *)(sub[1] + mmsg_len_off()), &rc, sizeof(rc)) != 0) {
+            rc = -EFAULT;
+            break;
+        }
+        done++;
+        if (flags & MSG_WAITFORONE) {
+            sub[2] |= MSG_DONTWAIT;
+        }
+        if (ts) {
+            rtc_monotonic(&now_s, &now_ns);
+            ts[0] = end_s - now_s;
+            ts[1] = end_ns - now_ns;
+            if (ts[1] < 0) {
+                ts[1] += 1000000000;
+                ts[0]--;
+            }
+            if (ts[0] < 0) {
+                ts[0] = 0;
+                ts[1] = 0;
+            }
+            if (ts[0] == 0 && ts[1] == 0) {
+                break;
+            }
+        }
+    }
+    return done > 0 ? (int32_t)done : rc;
+}
+
+/** Read a recvmmsg timeout at `u` into `ts`: with `wide` Linux's
+ * __kernel_timespec of a 32-bit caller's _time64 call, the high word of its
+ * nanoseconds dropped as get_timespec64 drops it, else the caller's struct
+ * timespec of longs, two 32-bit words for an i386 call. 0 or -EFAULT. */
+static int mmsg_ts_get(uintptr_t u, int wide, int64_t ts[2])
+{
+    if (wide) {
+        uint32_t w[4];
+
+        if (copy_from_user(w, (const void __user *)u, sizeof(w)) != 0) {
+            return -EFAULT;
+        }
+        ts[0] = (int64_t)((uint64_t)w[0] | (uint64_t)w[1] << 32);
+        ts[1] = (int64_t)w[2];
+        return 0;
+    }
+    if (sock_compat()) {
+        int32_t t[2];
+
+        if (copy_from_user(t, (const void __user *)u, sizeof(t)) != 0) {
+            return -EFAULT;
+        }
+        ts[0] = t[0];
+        ts[1] = t[1];
+    } else {
+        long t[2];
+
+        if (copy_from_user(t, (const void __user *)u, sizeof(t)) != 0) {
+            return -EFAULT;
+        }
+        ts[0] = t[0];
+        ts[1] = t[1];
+    }
+    return 0;
+}
+
+/** Write the time `ts` left of a recvmmsg timeout back to `u`, in the
+ * layout `mmsg_ts_get` read; 0 or -EFAULT. */
+static int mmsg_ts_put(uintptr_t u, int wide, const int64_t ts[2])
+{
+    if (wide) {
+        uint32_t w[4];
+
+        w[0] = (uint32_t)(uint64_t)ts[0];
+        w[1] = (uint32_t)((uint64_t)ts[0] >> 32);
+        w[2] = (uint32_t)ts[1];
+        w[3] = 0;
+        return copy_to_user((void __user *)u, w, sizeof(w)) != 0 ? -EFAULT : 0;
+    }
+    if (sock_compat()) {
+        int32_t t[2];
+
+        t[0] = (int32_t)ts[0];
+        t[1] = (int32_t)ts[1];
+        return copy_to_user((void __user *)u, t, sizeof(t)) != 0 ? -EFAULT : 0;
+    } else {
+        long t[2];
+
+        t[0] = (long)ts[0];
+        t[1] = (long)ts[1];
+        return copy_to_user((void __user *)u, t, sizeof(t)) != 0 ? -EFAULT : 0;
+    }
+}
+
+/** recvmmsg with its arguments `args`, the timeout at `args[4]` or none, in
+ * the layout `wide` picks (`mmsg_ts_get`), which is written back with the
+ * time left when a message came. */
+static int32_t recvmmsg_call(const unsigned long *args, int wide)
+{
+    int64_t ts[2];
+    uintptr_t uts = args[4];
+    int32_t n;
+
+    if (uts && mmsg_ts_get(uts, wide, ts) != 0) {
+        return -EFAULT;
+    }
+    n = mmsg_recv(args[0], args[1], (uint32_t)args[2], args[3], uts ? ts : NULL);
+    if (n > 0 && uts && mmsg_ts_put(uts, wide, ts) != 0) {
+        return -EFAULT;
+    }
+    return n;
+}
+
+/** The argument words of socketcall's sub-call `call`, 0 for none it has
+ * (syscall_internal.h). */
+int socketcall_nargs(int call)
+{
+    switch (call) {
+    case SC_PING:
+        return 1;
+    case SC_LISTEN:
+    case SC_SHUTDOWN:
+        return 2;
+    case SC_PING_DATA:
+    case SC_SOCKET:
+    case SC_BIND:
+    case SC_CONNECT:
+    case SC_ACCEPT:
+    case SC_GETSOCKNAME:
+    case SC_GETPEERNAME:
+    case SC_RECVMSG:
+    case SC_SENDMSG:
+        return 3;
+    case SC_PING6:
+    case SC_SOCKETPAIR:
+    case SC_SEND:
+    case SC_RECV:
+    case SC_ACCEPT4:
+    case SC_SENDMMSG:
+        return 4;
+    case SC_SETSOCKOPT:
+    case SC_GETSOCKOPT:
+    case SC_RECVMMSG:
+        return 5;
+    case SC_SENDTO:
+    case SC_RECVFROM:
+        return 6;
+    default:
+        return 0;
+    }
 }
 
 /**
@@ -3417,7 +3861,7 @@ static int32_t mmsg(int call, const unsigned long *args)
  *
  * Its arguments are the SC_* sub-call number and a user pointer to its argument
  * array, of longs. Copies as many as the sub-call takes in one fault-checked
- * read, then dispatches through `socket_dispatch`. Returns its result,
+ * read, then dispatches through `socket_call`. Returns its result,
  * -EINVAL for an unknown sub-call, or -EFAULT.
  */
 long sys_socketcall(isr_params_t *params)
@@ -3425,58 +3869,31 @@ long sys_socketcall(isr_params_t *params)
     int call = (int)SC_ARG(params, 0);
     uintptr_t argp = SC_ARG(params, 1);
     unsigned long args[6];
-    int nargs;
+    int nargs = socketcall_nargs(call);
 
-    switch (call) {
-    case SC_PING:
-        nargs = 1;
-        break;
-    case SC_PING_DATA:
-        nargs = 3;
-        break;
-    case SC_PING6:
-        nargs = 4;
-        break;
-    case SC_LISTEN:
-    case SC_SHUTDOWN:
-        nargs = 2;
-        break;
-    case SC_SOCKET:
-    case SC_BIND:
-    case SC_CONNECT:
-    case SC_ACCEPT:
-    case SC_GETSOCKNAME:
-    case SC_GETPEERNAME:
-        nargs = 3;
-        break;
-    case SC_RECVMSG:
-    case SC_SENDMSG:
-        nargs = 3;
-        break;
-    case SC_SOCKETPAIR:
-    case SC_SEND:
-    case SC_RECV:
-    case SC_ACCEPT4:
-    case SC_SENDMMSG:
-        nargs = 4;
-        break;
-    case SC_SETSOCKOPT:
-    case SC_GETSOCKOPT:
-    case SC_RECVMMSG:
-        nargs = 5;
-        break;
-    case SC_SENDTO:
-    case SC_RECVFROM:
-        nargs = 6;
-        break;
-    default:
+    if (nargs == 0) {
         return -EINVAL;
     }
-
     if (copy_from_user(args, (const void __user *)argp, (uint32_t)nargs * sizeof(args[0])) != 0) {
         return -EFAULT;
     }
-    return socket_dispatch(call, args);
+    return socket_call(call, args);
+}
+
+/** Whether the message call `call` with `args` passes MSG_CMSG_COMPAT, which
+ * Linux keeps for its own i386 calls and refuses from a native one. */
+static int cmsg_compat_refused(int call, const unsigned long *args)
+{
+    unsigned long flags;
+
+    if (call == SC_SENDMSG || call == SC_RECVMSG) {
+        flags = args[2];
+    } else if (call == SC_SENDMMSG || call == SC_RECVMMSG) {
+        flags = args[3];
+    } else {
+        return 0;
+    }
+    return (flags & MSG_CMSG_COMPAT) && !sock_compat();
 }
 
 /**
@@ -3484,20 +3901,27 @@ long sys_socketcall(isr_params_t *params)
  * for the direct socket calls. A call on an AF_UNIX socket, or one that
  * makes one, goes to ipc/unix.c; the rest to the calls above. Returns the
  * sub-call's result, -EOPNOTSUPP for a socketpair of another family, or
- * -EINVAL for an unknown sub-call.
+ * -EINVAL for an unknown sub-call or for a native message call whose flags
+ * have MSG_CMSG_COMPAT (`cmsg_compat_refused`).
  */
-static int32_t socket_dispatch(int call, unsigned long *args)
+int32_t socket_call(int call, unsigned long *args)
 {
     fd_entry_t *e;
 
+    if (cmsg_compat_refused(call, args)) {
+        return -EINVAL;
+    }
     if ((call == SC_SOCKET || call == SC_SOCKETPAIR) && (uint32_t)args[0] == AF_UNIX) {
         return unix_make(call, args);
     }
     if (call == SC_SOCKETPAIR) {
         return -EOPNOTSUPP;
     }
-    if (call == SC_SENDMMSG || call == SC_RECVMMSG) {
-        return mmsg(call, args);
+    if (call == SC_SENDMMSG) {
+        return mmsg_send(args[0], args[1], (uint32_t)args[2], args[3]);
+    }
+    if (call == SC_RECVMMSG) {
+        return recvmmsg_call(args, 0);
     }
     e = (call != SC_SOCKET && call != SC_PING && call != SC_PING_DATA && call != SC_PING6 &&
          current_proc)
@@ -3581,7 +4005,7 @@ static int32_t direct(int call, isr_params_t *params)
     args[3] = SC_ARG(params, 3);
     args[4] = SC_ARG(params, 4);
     args[5] = SC_ARG(params, 5);
-    return socket_dispatch(call, args);
+    return socket_call(call, args);
 }
 
 /** socket(2), the sub-call SC_SOCKET. */
@@ -3678,6 +4102,20 @@ long sys_shutdown(isr_params_t *params)
 long sys_recvmmsg(isr_params_t *params)
 {
     return direct(SC_RECVMMSG, params);
+}
+
+/** recvmmsg_time64, i386's recvmmsg with Linux's __kernel_timespec, on
+ * i686 and in the x86-64 kernel's compat table. */
+long sys_recvmmsg_time64(isr_params_t *params)
+{
+    unsigned long args[5];
+
+    args[0] = SC_ARG(params, 0);
+    args[1] = SC_ARG(params, 1);
+    args[2] = SC_ARG(params, 2);
+    args[3] = SC_ARG(params, 3);
+    args[4] = SC_ARG(params, 4);
+    return recvmmsg_call(args, 1);
 }
 
 /** sendmmsg(2), the sub-call SC_SENDMMSG. */

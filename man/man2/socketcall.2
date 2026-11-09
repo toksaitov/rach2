@@ -116,6 +116,22 @@ without flags, and the two operations of
 are
 .Nm rach2_ping
 (400).
+.Pp
+On the x86-64 kernel an i386 program's
+.Nm
+reads the same 32-bit words, each zero-extended, and runs the operation
+as the i386 direct call would, as Linux's compat_sys_socketcall does:
+the message headers, the vectors, the control messages, the
+.Xr recvmmsg 2
+timeout and the time-limit options of
+.Xr setsockopt 2
+are in the i386 layout, with control messages aligned to 4 bytes.
+.Pp
+A native caller that passes
+.Dv MSG_CMSG_COMPAT
+in the flags of a message operation gets
+.Er EINVAL ,
+as on Linux, which keeps the flag for its i386 calls.
 .Sh RETURN VALUES
 The kernel returns the selected operation's result, or a negative error
 number.
