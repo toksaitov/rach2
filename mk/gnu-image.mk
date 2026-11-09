@@ -9,7 +9,7 @@
 #
 # On an x86-64 Linux host the image is built where the GNU layer is. Its
 # prerequisites are those of os-real's ext2 image, less Dropbear, with the
-# overlay, the list with the CA bundle's digest, the five stamps of the
+# overlay, the list with the CA bundle's digest, the stamps of the
 # layer, and the list and the stamps of the agents' packages it has. On any
 # other host, or wherever GNU_TOOLING is set to a word, the layer and the
 # image are built in etude's tooling machine by vendor/gnu/tooling_image.sh,
@@ -28,7 +28,7 @@ GNU_TEST_EXT2 = $(IMAGES_DIR)/gnu-test.ext2
 $(GNU_TEST_EXT2): build/tests/host-suite/scripts-assets.tar $(KERNEL) $(METAL_KERNEL)
 GNU_IMAGE_STAMPS = $(GNU_PORTS_STAMP) $(GNU_NATIVE_STAMP) $(GNU_GDB_STAMP) \
                    $(GNU_JS_STAMP) $(GNU_DEBIAN_STAMP) $(GNU_PROTON_STAMP) $(GNU_WEBGL_STAMP)
-GNU_IMAGE_DEPS = $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_DEPS_os_real_gnu) \
+GNU_IMAGE_DEPS = mk/gnu-image.mk $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_DEPS_os_real_gnu) \
                  tools/image/mkext2.sh vendor/gnu/install_root.sh vendor/gnu/fetch.sh \
                  tests/system/fakeapi/native/wsclient.c tests/cases/host/products.mk \
                  vendor/gnu/sources-extra.txt $(GNU_IMAGE_STAMPS) $(IMAGE_TOOLS) $(MAN_ALL)
