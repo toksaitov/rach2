@@ -118,6 +118,20 @@ void input_written(uint16_t type, uint16_t code, int32_t value)
     n_written++;
 }
 
+/* The events evdev.c gave mouse.c as written to a mouse, and the last. */
+static int n_pointer;
+static uint16_t pointer_type, pointer_code;
+static int32_t pointer_value;
+
+/** Record an event written to a mouse. */
+void mouse_written(uint16_t type, uint16_t code, int32_t value)
+{
+    pointer_type = type;
+    pointer_code = code;
+    pointer_value = value;
+    n_pointer++;
+}
+
 /* The wakes of every queue. */
 static int wakes;
 
@@ -744,6 +758,38 @@ static void write_keyboard_rows(void)
     evdev_unregister(kbd);
 }
 
+/** A mouse's written motion goes on to mouse.c with no grab held, as
+ * Linux's mousedev takes it, and a grab keeps it from mouse.c. */
+static void write_pointer_rows(void)
+{
+    struct evdev *dev = mouse();
+    struct input_event ev[2];
+    struct opened a, b;
+
+    open_dev(&a, 0);
+    open_dev(&b, 0);
+    n_pointer = 0;
+    event(&ev[0], EV_REL, REL_Y, 4);
+    event(&ev[1], EV_SYN, SYN_REPORT, 0);
+    put(&a, ev, 2);
+    CHECK("a mouse's written motion goes to mouse.c",
+          n_pointer == 2 && pointer_type == EV_SYN && pointer_code == SYN_REPORT);
+    event(&ev[0], EV_REL, REL_Y, 0);
+    put(&a, ev, 1);
+    CHECK("a motion the filters drop does not", n_pointer == 2);
+    CHECK("no open holds the grab", !evdev_grabbed(dev));
+    evdev_ioctl(&b.e, EVIOCGRAB, 1);
+    CHECK("then one does", evdev_grabbed(dev));
+    event(&ev[0], EV_REL, REL_Y, 4);
+    put(&a, ev, 2);
+    CHECK("a grabbed mouse's written motion does not go to mouse.c", n_pointer == 2);
+    take(&a);
+    take(&b);
+    evdev_close(&a.e);
+    evdev_close(&b.e);
+    evdev_unregister(dev);
+}
+
 /** An i386 writer on the x86-64 kernel writes records of 16 bytes. */
 static void write_compat_rows(void)
 {
@@ -817,6 +863,7 @@ int main(void)
     compat_rows();
     write_rows();
     write_keyboard_rows();
+    write_pointer_rows();
     write_compat_rows();
     CHECK("every slot is free at the end", !devices[0].used && !devices[1].used);
     if (fails == 0) {
