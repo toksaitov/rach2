@@ -474,3 +474,12 @@ int32_t paging_access(struct mm *mm, uintptr_t addr, void *buf, uint32_t len, in
     (void)write;
     return -EIO;
 }
+
+/** A zeroed frame: no row asks for a stopped thread's registers. */
+isr_params_t *proc_user_frame(const process_t *t)
+{
+    static isr_params_t frame;
+
+    (void)t;
+    return &frame;
+}
