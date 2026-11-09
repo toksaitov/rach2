@@ -517,6 +517,14 @@ int32_t evdev_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return unexpected();
 }
 
+int32_t evdev_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    (void)e;
+    (void)buf;
+    (void)count;
+    return unexpected();
+}
+
 short evdev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
 {
     (void)e;
