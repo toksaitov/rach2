@@ -3,6 +3,7 @@
  * read, against a model of configuration space with bridges.
  *
  * host-deps: rach2/sys/arch/x86/pciconf.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * The model stands behind the configuration ports 0xCF8 and 0xCFC, so the
  * accessors of arch/x86/pciconf.c run as they do in the kernel, and counts
