@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "family_id": "guest.dmabuf",
+  "summary": "udmabuf sharing and sync-file descriptors",
+  "cases": [
+    {
+      "case_id": "guest.dmabuf.udmabuf",
+      "behavior": "Sealed memfd ranges export as distinct dma-bufs, retain shared pages across mappings and fork, and exchange sync files with merge, inspection and poll",
+      "units": [
+        "udmabufprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": []
+        }
+      },
+      "execution": {
+        "program": "udmabufprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "the probe removes what it made"
+      },
+      "assertions": [
+        {
+          "assertion_id": "create",
+          "checks": "Unsealed, invalid, misaligned, empty and out-of-range inputs fail; exported size, inode and close-on-exec are correct",
+          "source": "program"
+        },
+        {
+          "assertion_id": "map",
+          "checks": "Shared mappings reach the memfd pages, list ranges concatenate in order, private and out-of-range maps fail, and fork shares the pages",
+          "source": "program"
+        },
+        {
+          "assertion_id": "sync",
+          "checks": "Export, merge, info, import, CPU synchronization and poll report completed work",
+          "source": "program"
+        },
+        {
+          "assertion_id": "lifetime",
+          "checks": "The mappings retain all pages after every descriptor closes",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "udmabufprobe",
+          "node": "tests/udmabufprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    }
+  ]
+}

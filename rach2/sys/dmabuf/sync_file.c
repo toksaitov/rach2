@@ -18,7 +18,7 @@ static short sync_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     int32_t status = dma_fence_status(s->fence);
     if (wq)
         *wq = &s->fence->wq;
-    return (short)((status ? (events & 1) : 0) | (status < 0 ? 8 : 0));
+    return (short)(status ? (events & 1) : 0);
 }
 
 /** Release the file's reference on the fence. */
@@ -77,6 +77,38 @@ static int32_t sync_info(struct sync_file *s, uintptr_t arg)
     return copy_to_user((void __user *)arg, &info, sizeof(info)) ? -EFAULT : 0;
 }
 
+/** Merge active leaves as Linux's sync-file merge does, omitting work
+ * already finished and retaining the last completed timestamp if empty. */
+static struct dma_fence *sync_merge(struct dma_fence *a, struct dma_fence *b)
+{
+    struct dma_fence **leaves, *f, *out, *inputs[2];
+    uint32_t i, j, n = 0, total;
+    int64_t timestamp = 0;
+    if (dma_fence_count(a) > 0xffffffffu - dma_fence_count(b))
+        return NULL;
+    total = dma_fence_count(a) + dma_fence_count(b);
+    if ((size_t)total * sizeof(*leaves) / sizeof(*leaves) != total)
+        return NULL;
+    leaves = kmalloc((size_t)total * sizeof(*leaves));
+    if (!leaves)
+        return NULL;
+    inputs[0] = a;
+    inputs[1] = b;
+    for (i = 0; i < 2; i++)
+        for (j = 0; j < dma_fence_count(inputs[i]); j++) {
+            f = dma_fence_at(inputs[i], j);
+            if (!dma_fence_is_signaled(f))
+                leaves[n++] = f;
+            else if (f->timestamp_ns > timestamp)
+                timestamp = f->timestamp_ns;
+        }
+    out = dma_fence_merge(leaves, n);
+    if (!n && out)
+        out->timestamp_ns = timestamp;
+    kfree(leaves);
+    return out;
+}
+
 /** Merge another sync file, query it, or record a deadline hint. */
 static int32_t sync_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
@@ -105,7 +137,7 @@ static int32_t sync_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     inputs[1] = sync_file_get_fence(data.fd2);
     if (!inputs[1])
         return -ENOENT;
-    merged = dma_fence_merge(inputs, 2);
+    merged = sync_merge(inputs[0], inputs[1]);
     dma_fence_put(inputs[1]);
     if (!merged)
         return -ENOMEM;

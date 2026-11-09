@@ -185,6 +185,10 @@ components: harness-kernel busybox check-busybox check-dropbearmulti check-libc 
 # `rach2.nofxsr`, which only the i686 kernel takes, since every x86-64
 # processor has FXSR. They are the cases of tests/cases/guest.fpu.json, which
 # etude runs, and have no target here.
+# `tests/run dmabuf`: sealed memfd ranges exported as dma-bufs, shared
+# pages across fork and close, and sync-file export, merge, info and import.
+# The guest case is tests/cases/guest.dmabuf.json and has no make target.
+
 # `tests/run vdso`: the vDSO, on two processors: under `rach2.tscreliable` the
 # x86-64 kernel keeps its clock from the TSC and vdsomusl's clock calls make
 # no system call by /proc/stat's count, and under `rach2.notsc` each makes

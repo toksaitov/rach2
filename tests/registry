@@ -125,6 +125,7 @@ console|qemu|core
 screen|qemu|core
 fpu|qemu|core
 vdso|qemu|core
+dmabuf|qemu|core
 socket|qemu|core
 bootorder|qemu,mformat,mmd,mcopy,mke2fs,debugfs,e2fsck|full
 reset|qemu|core

@@ -1,0 +1,80 @@
+.Dd November 10, 2026
+.Dt UDMABUF 4
+.Os
+.Sh NAME
+.Nm udmabuf
+.Nd export sealed memory files as shared DMA buffers
+.Sh SYNOPSIS
+.Pa /dev/udmabuf
+.Sh DESCRIPTION
+The udmabuf character device exports ranges of tmpfs files, including
+files made by
+.Xr memfd_create 2 ,
+as dma-buf descriptors.
+The device has mode 0666.
+Its ioctls use Linux's structures and numbers from
+.In linux/udmabuf.h .
+.Bl -tag -width UDMABUF_CREATE_LIST
+.It Dv UDMABUF_CREATE
+Read a
+.Vt struct udmabuf_create :
+.Ar memfd
+is the source descriptor,
+.Ar offset
+and
+.Ar size
+are byte counts, and
+.Ar flags
+may contain
+.Dv UDMABUF_FLAGS_CLOEXEC .
+Return a new read/write dma-buf descriptor.
+.It Dv UDMABUF_CREATE_LIST
+Read a
+.Vt struct udmabuf_create_list
+header followed by its
+.Ar count
+entries of type
+.Vt struct udmabuf_create_item .
+Concatenate the ranges in their given order into one dma-buf.
+The header's flags choose close-on-exec as above.
+.El
+.Pp
+Every offset and size must be a multiple of 4096.
+Every range must lie within its file.
+Each file must have the
+.Dv F_SEAL_SHRINK
+seal and lack
+.Dv F_SEAL_WRITE .
+The list holds at most 1024 ranges and the export at most 64 MiB,
+Linux's default bounds.
+The total size must be nonzero.
+.Pp
+The exported descriptor maps the pinned pages shared.
+Writes through either mapping reach the same pages.
+Closing the source file or the exported descriptor leaves existing
+mappings valid.
+The last descriptor and mapping release the pages.
+See
+.Xr dma-buf 7
+for size queries, synchronization and sync files.
+.Sh ERRORS
+.Bl -tag -width Er
+.It Bq Er EBADFD
+A source descriptor is absent or does not name a tmpfs regular file.
+.It Bq Er EINVAL
+A range is misaligned, outside its file, lacks the required seal or has
+the write seal; the list or total size exceeds its bound, or is empty.
+.It Bq Er EFAULT
+An argument cannot be read.
+.It Bq Er ENOMEM
+The kernel cannot allocate a record or pin a page.
+.It Bq Er EMFILE
+The process has no descriptor available.
+.It Bq Er ENOTTY
+The request is unknown.
+.El
+.Sh SEE ALSO
+.Xr fcntl 2 ,
+.Xr memfd_create 2 ,
+.Xr mmap 2 ,
+.Xr dma-buf 7

@@ -732,3 +732,6 @@ xeglgears.x86_64-linux-gnu 1 mesa-utils
 xeglthreads 1 mesa-utils
 xeglthreads.i386-linux-gnu 1 mesa-utils
 xeglthreads.x86_64-linux-gnu 1 mesa-utils
+dmabuf 7 dma-buf
+sync_file 7 dma-buf
+sw_sync 7 dma-buf

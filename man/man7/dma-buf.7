@@ -1,0 +1,139 @@
+.Dd November 10, 2026
+.Dt DMA-BUF 7
+.Os
+.Sh NAME
+.Nm dma-buf ,
+.Nm sync_file ,
+.Nm sw_sync
+.Nd shared device buffers and completion fences
+.Sh DESCRIPTION
+A dma-buf is an anonymous read/write descriptor for a buffer shared
+between processes and devices.
+Its
+.Pa /proc/PID/fd
+link is
+.Ql anon_inode:dmabuf .
+.Xr fstat 2
+reports a regular file, its byte size and an inode distinct from other
+exports.
+.Xr lseek 2
+with offset zero and
+.Dv SEEK_END
+returns the size; offset zero with
+.Dv SEEK_SET
+rewinds.
+Other seeks fail with
+.Er EINVAL .
+.Xr mmap 2
+maps the pages shared; an invalid range or private mapping fails with
+.Er EINVAL .
+.Pp
+The Linux ioctl structures and numbers are in
+.In linux/dma-buf.h
+and
+.In linux/sync_file.h .
+A fence names a point on a producer's timeline.
+It completes once, successfully or with a negative error.
+A reservation records a buffer's previous writer and readers.
+.Bl -tag -width DMA_BUF_IOCTL_EXPORT_SYNC_FILE
+.It Dv DMA_BUF_IOCTL_SYNC
+Read a
+.Vt struct dma_buf_sync .
+The flags contain READ, WRITE or RW, optionally with END.
+START, the default, waits for the previous writer, and for previous
+readers when access includes WRITE, then begins CPU access.
+END finishes CPU access.
+An invalid flag set is
+.Er EINVAL ;
+an interrupted wait is
+.Er EINTR .
+.It Dv DMA_BUF_IOCTL_EXPORT_SYNC_FILE
+Read and write a
+.Vt struct dma_buf_export_sync_file .
+Flags READ, WRITE or RW choose the reservation snapshot.
+READ includes the previous writer; WRITE also includes readers.
+Return a new close-on-exec sync file in
+.Ar fd .
+.It Dv DMA_BUF_IOCTL_IMPORT_SYNC_FILE
+Read a
+.Vt struct dma_buf_import_sync_file .
+Add its sync-file fence as a reader for READ, or replace the reservation
+as a writer for WRITE or RW.
+An invalid sync file is
+.Er EINVAL .
+.El
+.Ss Sync files
+A sync file carries a fence independently of the buffer descriptor.
+.Xr poll 2
+reports POLLIN when it completes, even on a producer error.
+The sync-file ioctls are:
+.Bl -tag -width SYNC_IOC_SET_DEADLINE
+.It Dv SYNC_IOC_MERGE
+Read and write a
+.Vt struct sync_merge_data .
+Merge this file with
+.Ar fd2
+and return a new close-on-exec sync file in
+.Ar fence ,
+with the given name.
+The result completes after every pending producer completes.
+Completed leaves are omitted, and the latest point of each timeline is kept.
+If no work remains, the result is already complete.
+An invalid second file is
+.Er ENOENT .
+.It Dv SYNC_IOC_FILE_INFO
+Read and write a
+.Vt struct sync_file_info .
+A zero
+.Ar num_fences
+asks for the count alone.
+Otherwise the caller provides room for at least that many
+.Vt struct sync_fence_info
+records through
+.Ar sync_fence_info .
+A smaller array is
+.Er EINVAL .
+Each record has the driver and timeline names, monotonic completion
+time in nanoseconds and status: zero active, one complete, or a negative
+producer error.
+The file's status gives the combined result.
+.It Dv SYNC_IOC_SET_DEADLINE
+Read a
+.Vt struct sync_set_deadline
+and pass its absolute monotonic nanoseconds as a completion hint to every leaf.
+This neither waits nor signals the fence.
+.El
+.Pp
+Unused flags and padding must be zero.
+A bad user address is
+.Er EFAULT ;
+an unknown request is
+.Er ENOTTY .
+.Ss Software timelines
+The debugfs entry
+.Pa /sys/kernel/debug/sync/sw_sync
+opens a new software timeline.
+.Dv SW_SYNC_IOC_CREATE_FENCE
+reads and writes a
+.Vt struct sw_sync_create_fence_data
+and returns a sync file for its 32-bit point in
+.Ar fence .
+.Dv SW_SYNC_IOC_INC
+reads a 32-bit increment and completes every point reached.
+Point comparisons use signed 32-bit differences, including wraparound.
+Closing the timeline completes outstanding points with
+.Er ENOENT .
+.Dv SW_SYNC_GET_DEADLINE
+reads a
+.Vt struct sw_sync_get_deadline
+with a software fence's
+.Ar fence_fd
+and returns its earliest hint, or
+.Er ENOENT
+when none was supplied.
+.Sh SEE ALSO
+.Xr fstat 2 ,
+.Xr lseek 2 ,
+.Xr mmap 2 ,
+.Xr poll 2 ,
+.Xr udmabuf 4

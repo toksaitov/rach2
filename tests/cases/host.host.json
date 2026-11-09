@@ -266,6 +266,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "fence",
+          "checks": "tests/host/fence_hosttest.c drives fences, reservations, sync files and software timelines under the sanitizers and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "dsp",
           "checks": "tests/host/dsp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1167,7 +1172,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 221
+          "limit": 222
         }
       ],
       "bounds": {
