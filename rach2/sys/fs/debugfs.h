@@ -6,12 +6,63 @@
 #include "../lib/kint.h"
 #include "file.h"
 
+struct vfs_mount;
+struct vfs_ops;
+struct block_device;
+
+/* The magic number statfs reports, Linux's DEBUGFS_MAGIC. */
+#define DEBUGFS_MAGIC 0x64626720u
+
+/* The longest name of one file or directory, NUL not counted. */
+#define DEBUGFS_NAME_MAX 63
+
+/* What an open of a registered file calls once its descriptor has `ops`
+ * and `priv` = the registrant's `data`: it may replace both, and refuses
+ * the open with -errno. `flags` are open(2)'s. */
+typedef int32_t (*debugfs_open_fn)(fd_entry_t *e, int flags);
+
 /**
  * Register the file `path`, relative to the mount's root ("sync/sw_sync",
- * "dri/0/name"), with permission bits `mode` and the operations an open
- * binds to its descriptor; the directories on the path come with it. 0, or
- * -errno: -ENODEV while debugfs has no files of its own.
+ * "dri/0/name"), owned by root with the permission bits `mode`, and the
+ * directories on the path that are not there yet, mode 0755. An open of the
+ * file binds `ops` to the descriptor with `priv` set to `data`, then calls
+ * `open` unless it is NULL. 0; -EINVAL for an empty path, an empty, `.` or
+ * `..` component or one past DEBUGFS_NAME_MAX, or NULL `ops`; -EEXIST for a
+ * path that is there; -ENOTDIR for a file on the way; or -ENOMEM. Under the
+ * big kernel lock; does not sleep.
  */
-int32_t debugfs_create_file(const char *path, uint32_t mode, const struct file_ops *ops);
+int32_t debugfs_create_file(const char *path, uint32_t mode, const struct file_ops *ops,
+                            debugfs_open_fn open, void *data);
+
+/**
+ * Take the file or the directory `path`, and everything below it, out of
+ * debugfs at once. A descriptor open on a file taken out keeps its
+ * operations and `priv`, as on Linux, so the registrant keeps what they use
+ * until the last close. Nothing for a path that is not there. Under the big
+ * kernel lock.
+ */
+void debugfs_remove(const char *path);
+
+/**
+ * Bind the registered file `node` of a debugfs mount to the descriptor `e`
+ * just opened on it with open(2)'s `flags`, for the open of a regular file
+ * of the system call layer: `ops`, `priv`, then the file's `open`. 0, or the
+ * `open`'s -errno, with `e->ops` and `e->priv` NULL again.
+ */
+int32_t debugfs_bind(void *node, fd_entry_t *e, int flags);
+
+/* The operations of the debugfs type, which vfs.c's vfs_debugfs_type
+ * gives. */
+extern const struct vfs_ops debugfs_vops;
+
+/**
+ * The constructor of a debugfs mount: every mount shows the one tree, as
+ * Linux's single superblock does, and the first registers the files of the
+ * kernel's own, sync/sw_sync and sync/info. `options` are Linux's: `mode=`
+ * in octal, `uid=` and `gid=` in decimal, for the root directory, and
+ * unknown ones are passed over. 0, or -ENOMEM.
+ */
+int debugfs_mount(struct vfs_mount *mnt, struct block_device *dev, uint32_t flags,
+                  const char *options);
 
 #endif /* _DEBUGFS_H_ */

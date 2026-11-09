@@ -23,7 +23,9 @@
  * that directory is checked here, in the same way for every type. `..` is
  * physical: at the root of a mount over a directory it is taken again at
  * the covered node, at the root of a nameless mount it is the parent's root
- * directory, at the walk's root and at the root of the root mount it stays,
+ * directory, or the directory there that holds the mount when it is
+ * entered by more than one name (/sys/kernel for /sys/kernel/debug), at
+ * the walk's root and at the root of the root mount it stays,
  * and anywhere else it is the type's `lookup` of "..". A path that names a
  * missing or unsearchable directory before its `..` fails.
  *
@@ -35,9 +37,12 @@
  * mount; a `..` first at that root is never handed to the type. A rest that
  * comes back to the mount's root directory in front of the name of a
  * nameless mount there is answered with VFS_ROOT, and the walk enters that
- * mount by its name. A rest that goes on past /proc/PID/fd/N, cwd or root,
- * or /dev/fd/N, is answered with VFS_LINK, and the walk goes on from the
- * object the link refers to. No mount covers a node of such a type.
+ * mount by its name; one that reaches the names of a nameless mount entered
+ * by more than one, as debugfs is by kernel/debug in /sys, is answered
+ * with VFS_ENTER, and the walk enters that mount there. A rest that goes
+ * on past /proc/PID/fd/N, cwd or root, or /dev/fd/N, is answered with
+ * VFS_LINK, and the walk goes on from the object the link refers to. No
+ * mount covers a node of such a type.
  *
  * An operation a type does not have is a NULL pointer, and the wrapper of
  * the operation, below, gives the default answer for it.
@@ -85,6 +90,9 @@
 #define VFS_CLIMB 1
 #define VFS_ROOT  2
 #define VFS_LINK  3
+/* What `lookup_rest` returns when the remainder reaches the names of a
+ * nameless mount entered by more than one, with the mount in its node. */
+#define VFS_ENTER 4
 
 struct vfs_mount;
 struct vfs_name;
@@ -182,7 +190,9 @@ struct vfs_ops {
      * first `len` bytes, in one call. 0 with the node held; VFS_CLIMB with
      * `*left` at a `..` that climbs above the mount root, which the walk
      * takes there; VFS_ROOT with `*left` at the name of a nameless mount at
-     * the mount root, which the walk enters; VFS_LINK with the node of a
+     * the mount root, which the walk enters; VFS_ENTER with a nameless mount
+     * entered by more than one name in `*node`, not held, and `*left` past
+     * those names, which the walk enters; VFS_LINK with the node of a
      * /proc/PID/fd/N, cwd or root link held and `*left` at the rest after
      * it, which the walk goes on with from the link's object; or a negative
      * errno. */
@@ -549,7 +559,9 @@ const struct vfs_type *vfs_type_at(int idx);
  * `parent`, as /dev, /proc and /sys are from the root's and /dev/shm and
  * /dev/mqueue from /dev's: its name in `*name`, and the inode number of its
  * root, or 0 when the type reports none, in `*ino`. 1, or 0 past the last.
- * The synthetic directories list them with their own entries.
+ * The synthetic directories list them with their own entries. A mount
+ * entered by more than one name, which is no entry of that directory, is
+ * left out.
  */
 int vfs_named_mount(const struct vfs_mount *parent, int n, const char **name, uint64_t *ino);
 
@@ -1035,19 +1047,21 @@ struct vpath;
  * a mount of one of the three synthetic types. */
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node);
 
-/* The types defined in vfs.c: the KRFFS root's adapter and the three
- * synthetic types. */
+/* The types defined in vfs.c: the KRFFS root's adapter, the three
+ * synthetic types and debugfs, whose operations are debugfs.c's. */
 extern const struct vfs_type vfs_krffs_type;
 extern const struct vfs_type vfs_devfs_type;
 extern const struct vfs_type vfs_procfs_type;
 extern const struct vfs_type vfs_sysfs_type;
+extern const struct vfs_type vfs_debugfs_type;
 
 /* The permanent mounts, entries 0 to VFS_PERMANENT - 1: the root, /dev,
  * /proc, the tmpfs /dev/shm, a nameless mount in /dev's root directory, the
- * tmpfs of memfd_create's files, which no path reaches, /sys, and the mqueue
- * file system /dev/mqueue, nameless in /dev as /dev/shm is. umount2 answers
- * EBUSY for each it can name. */
-#define VFS_PERMANENT 7
+ * tmpfs of memfd_create's files, which no path reaches, /sys, the mqueue
+ * file system /dev/mqueue, nameless in /dev as /dev/shm is, and debugfs at
+ * /sys/kernel/debug, nameless in /sys and entered by the names
+ * kernel/debug. umount2 answers EBUSY for each it can name. */
+#define VFS_PERMANENT 8
 
 /** The tmpfs memfd_create makes its files on: no path reaches it, no
  * listing shows it, and it lasts as long as the kernel. */

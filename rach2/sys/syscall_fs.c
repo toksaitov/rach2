@@ -30,6 +30,7 @@
 #include "lib/kerrno.h"
 #include "lib/ksignal.h"
 #include "fs/fd.h"
+#include "fs/debugfs.h"
 #include "fs/file.h"
 #include "dmabuf/dmabuf.h"
 #include "fs/lock.h"
@@ -513,7 +514,8 @@ void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
  * (`devfs_fd_moves_offset`); and the framebuffer's the offset, a byte of
  * its pixels. Each may sleep before it sets the offset past
  * what it moved, in a disk request, or in a fault on the caller's buffer or
- * in bringing in a page of a process. A seek through a descriptor that
+ * in bringing in a page of a process; a debugfs file's, whose operations
+ * are its registrant's, may too. A seek through a descriptor that
  * shares the description must wait for it or be lost, and a second transfer
  * must wait to start from where the first leaves the offset. Linux holds
  * such a file's position lock across read, write and lseek alike. pread64
@@ -522,7 +524,7 @@ void fs_exe_close(struct open_file *ofd, struct vfs_mount *locked)
 static struct open_file *ops_offset_held(fd_entry_t *entry)
 {
     return devfs_fd_moves_offset(entry) || entry->type == FD_TYPE_PROC ||
-                   entry->type == FD_TYPE_FRAMEBUFFER
+                   entry->type == FD_TYPE_FRAMEBUFFER || entry->type == FD_TYPE_FILE
                ? entry->ofd
                : NULL;
 }
@@ -3243,7 +3245,9 @@ static int open_truncate(struct open_file *ofd, struct vfs_mount *mnt)
  * access mode is the low two bits of `flags`, read apart from the bits above
  * them. O_APPEND and O_NONBLOCK are status flags of the description, which
  * dup and fork share, and O_CLOEXEC, which opendir and fopen's "e" mode rely
- * on, marks the descriptor.
+ * on, marks the descriptor. A file of debugfs gets the operations its
+ * registrant gave it (`debugfs_bind`), which read, write and ioctl call in
+ * place of the file system's, and whose open may refuse.
  *
  * The entry gets its type last, which is what publishes it: until then the
  * slot is a reservation, which no other thread's lookup, close or dup2 can
@@ -3328,6 +3332,13 @@ static int32_t open_install(struct vfs_ref *ref, int fd, const char *name, int f
     entry->node = mnt_is_root(entry->ofd->vmnt) && entry->ofd->vnode != krffs_fs->node
                       ? (krffs_node_t *)entry->ofd->vnode
                       : NULL;
+    if (type == FD_TYPE_FILE && vfs_mount_base(entry->ofd->vmnt)->type == &vfs_debugfs_type) {
+        rc = debugfs_bind(entry->ofd->vnode, entry, flags);
+        if (rc != 0) {
+            fd_free(current_proc->fds, fd);
+            return rc;
+        }
+    }
     entry->type = type;
     return fd;
 }
