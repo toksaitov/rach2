@@ -1642,6 +1642,57 @@ int32_t drm_atomic_nonblocking_commit(struct drm_atomic_state *state)
     return commit(state, 1);
 }
 
+/** Fill `state` with every connector routed nowhere, every CRTC off with
+ * no mode and every plane off: 0 or -ENOMEM. */
+static int32_t disable_all(struct drm_device *dev, struct drm_atomic_state *state)
+{
+    struct drm_mode_config *mc = &dev->mode_config;
+    struct drm_connector_state *conn;
+    struct drm_crtc_state *cs;
+    struct drm_plane_state *ps;
+    int32_t rc = 0;
+    uint32_t i;
+
+    for (i = 0; rc == 0 && i < mc->num_connector; i++) {
+        conn = drm_atomic_get_connector_state(state, mc->connectors[i]);
+        rc = conn ? drm_atomic_set_crtc_for_connector(state, conn, NULL) : -ENOMEM;
+    }
+    for (i = 0; rc == 0 && i < mc->num_crtc; i++) {
+        cs = drm_atomic_get_crtc_state(state, mc->crtcs[i]);
+        rc = cs ? drm_atomic_set_mode_for_crtc(cs, NULL) : -ENOMEM;
+        if (rc == 0) {
+            cs->active = 0;
+        }
+    }
+    for (i = 0; rc == 0 && i < mc->num_plane; i++) {
+        ps = drm_atomic_get_plane_state(state, mc->planes[i]);
+        rc = ps ? drm_atomic_set_crtc_for_plane(state, ps, NULL) : -ENOMEM;
+        if (rc == 0) {
+            drm_atomic_set_fb_for_plane(ps, NULL);
+        }
+    }
+    return rc;
+}
+
+int32_t drm_atomic_helper_shutdown(struct drm_device *dev)
+{
+    struct drm_atomic_state *state;
+    int32_t rc;
+
+    if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
+        return 0;
+    }
+    drm_modeset_lock_nointr(dev);
+    state = drm_atomic_state_alloc(dev);
+    rc = state ? disable_all(dev, state) : -ENOMEM;
+    if (rc == 0) {
+        rc = drm_atomic_commit(state);
+    }
+    drm_atomic_state_free(state);
+    drm_modeset_unlock(dev);
+    return rc;
+}
+
 struct drm_pending_event *drm_crtc_flip_event(struct drm_crtc *crtc, uint64_t user_data)
 {
     struct drm_pending_event *e = (struct drm_pending_event *)kzalloc(sizeof(*e));
