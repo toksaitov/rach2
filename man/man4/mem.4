@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 9, 2026
 .Dt MEM 4
 .Os
 .Sh NAME
@@ -34,40 +34,58 @@ with
 .Er EPERM
 when it is the first.
 .Pp
-A mapping must be shared, and its pages are mapped when it is made, with
-the processor's cache disabled for them, so a load or a store reaches the
-device.
+A mapping must be shared.
+Its pages are mapped at their first touch, with the processor's cache
+disabled for them, so a load or a store reaches the device.
+A writable mapping needs a descriptor open for writing, and one through a
+descriptor open for reading alone may never be made writable.
 A child of
 .Xr fork 2
-shares them.
-The mapping does not grow with
+shares the pages, unless
+.Xr madvise 2 Ns 's
+.Dv MADV_DONTFORK
+marked the range, which then is not mapped in the child.
+The mapping may shrink and move with
 .Xr mremap 2 ,
-which fails with
-.Er EFAULT ,
+but not grow, which fails with
+.Er EFAULT ;
 .Xr madvise 2
-does not let its pages go and fails with
-.Er EINVAL ,
+does not let its pages go, nor clear the fork mark with
+.Dv MADV_DOFORK ,
+and fails with
+.Er EINVAL ;
 and a core file and
 .Pa /proc/PID/mem
 leave its bytes out, since reading a device's register can change the
 device;
+.Pa /proc/PID/maps
+shows it shared, at the physical address it maps, and
 .Pa /proc/PID/smaps
 gives it the flags
 .Ql io
 and
 .Ql pf .
+.Pp
+The mapping is the first of an object that maps itself through its
+.Xr mmap 2
+operation, as the DRM devices and dma-bufs do.
 .Sh FILES
 .Pa /dev/mem
 has mode 0640, owner and group root, and major 1, minor 1.
 .Sh ERRORS
 .Bl -tag -width EINVAL
+.It Er EACCES
+A writable mapping through a descriptor not open for writing, or
+.Xr mprotect 2
+asking write of a mapping made through one.
+.It Er EINVAL
+A private mapping.
 .It Er EPERM
 The caller is not privileged, or the range has a frame of RAM past the
 first megabyte.
-.It Er EINVAL
-A private mapping.
 .El
 .Sh SEE ALSO
 .Xr busybox-miscutils 1 ,
+.Xr madvise 2 ,
 .Xr mmap 2 ,
 .Xr null 4
