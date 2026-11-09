@@ -107,6 +107,12 @@ uint64_t rtc_ticks_now(void)
 {
     return kernel_ticks;
 }
+
+/** No row's caller is privileged: 0. */
+int cred_privileged(void)
+{
+    return 0;
+}
 static struct fs_struct dirs;
 static fd_table_t shared;
 static fd_entry_t slots[SLOTS];

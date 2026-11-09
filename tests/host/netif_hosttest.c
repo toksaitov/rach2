@@ -791,6 +791,15 @@ uint32_t netlink_last_sender(struct socket *sock, int32_t cred[3])
     return 0;
 }
 
+/** No netlink socket has joined a group: no row opens one. */
+uint32_t netlink_memberships(struct socket *sock, uint32_t *words, uint32_t max)
+{
+    (void)sock;
+    (void)words;
+    (void)max;
+    return 0;
+}
+
 /** Refuse every option: no row opens a netlink socket. */
 int32_t netlink_setsockopt(struct socket *s, int optname, int val, int optlen)
 {
