@@ -21,8 +21,9 @@
 #
 # The job mounts the build disk at /gnu and replaces the tree in /gnu/rach2
 # with the host's, keeping the layer's build tree, build/vendor/gnu or
-# build/x86_64/vendor/gnu, and vendor/gnu/downloads. As the account rach2,
-# uid 1000, it then runs make for the layer's targets in that tree, and
+# build/x86_64/vendor/gnu, and downloads in vendor/gnu/downloads and
+# build/cache. As the account rach2, uid 1000, it runs make for the layer's
+# targets in that tree, and
 # tools/image/mkext2.sh with install_root.sh as mk/gnu-image.mk's rule for a
 # Linux host does. It copies the image to ETUDE_DISK2, sparse, and writes its
 # SHA-256 to the file `digest`. Under DRY_RUN make runs with -n, and no image
@@ -128,10 +129,11 @@ sync_tree()
 {
     cd $TREE || exit 1
     keep=./build$SUFFIX/vendor/gnu
-    find . -mindepth 1 \( -path "$keep" -o -path ./vendor/gnu/downloads \) -prune -o \
+    find . -mindepth 1 \( -path "$keep" -o -path ./vendor/gnu/downloads -o -path ./build/cache \) -prune -o \
         ! -type d -exec rm -f {} + || exit 1
     find . -mindepth 1 -type d -empty ! -path "$keep" ! -path "$keep/*" \
-        ! -path ./vendor/gnu/downloads ! -path './vendor/gnu/downloads/*' -delete || exit 1
+        ! -path ./vendor/gnu/downloads ! -path './vendor/gnu/downloads/*' \
+        ! -path ./build/cache ! -path './build/cache/*' -delete || exit 1
     tar -x -z -f "$WORK/tree.tar.gz" --warning=no-unknown-keyword || exit 1
     echo "gnu: job: the tree has $(find . -path "$keep" -prune -o -type f -print | wc -l) files"
 }

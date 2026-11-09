@@ -1,6 +1,6 @@
 # Debian's chromium-headless-shell
 
-This directory gives the [GNU layer](../Readme.md) a web browser: Debian's `chromium-headless-shell` for i386 or amd64, as `ARCH` selects, with D-Bus's system bus, which the browser asks for, and the packages they depend on. Nothing is compiled. `make gnu-chromium` runs `fetch_chromium.sh`, which unpacks the packages into `chromium/` of the layer's build tree; `install_root.sh` copies the files the root needs from there into the root image.
+This directory gives the [GNU layer](../Readme.md) a web browser: Debian's `chromium-headless-shell` for i386 or amd64, as `ARCH` selects, with D-Bus's system bus, which the browser asks for, and the packages they depend on. Nothing is compiled. `make gnu-chromium` runs `fetch_chromium.sh`, which unpacks the packages into `chromium/` of the layer's build tree; This is the standalone headless stage. The GNU root takes the browser from the general [Debian desktop closure](../debian/Readme.md), which stages its shared libraries once for all desktop clients.
 
 ## Sources and license
 
