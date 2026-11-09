@@ -148,6 +148,12 @@ The domain, the low byte, must be
 (8), else the call fails with
 .Er EINVAL .
 The flag bits above it are kept.
+On the x86-64 kernel
+.Dv PER_LINUX32
+makes
+.Xr uname 2
+report the machine as
+.Ql i686 .
 .Dv ADDR_NO_RANDOMIZE
 (0x0040000), which GDB and
 .Ql setarch -R

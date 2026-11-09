@@ -160,6 +160,29 @@ others:
 (119) and
 .Nm setgroups
 (116).
+.Pp
+For a program that enters the x86-64 kernel by
+.Ql int $0x80 ,
+which
+.Xr ia32 7
+describes, the kernel also runs i386's calls of 16-bit IDs, as Linux does:
+.Nm setuid
+(23),
+.Nm setgid
+(46),
+.Nm setreuid
+(70),
+.Nm setregid
+(71),
+.Nm setresuid
+(164),
+.Nm setresgid
+(170) and
+.Nm setgroups
+(81), whose list is of 16-bit IDs.
+An ID past 65535 reads as 65534, and a 16-bit -1 given as an argument is
+the 32-bit -1.
+The i686 kernel has none of them.
 .Sh RETURN VALUES
 These functions return zero on success.
 On failure they return -1 and set

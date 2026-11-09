@@ -173,8 +173,8 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_SIGPENDING] = compat_sys_sigpending;
     table[SYS_SETHOSTNAME] = sys_sethostname;
     table[SYS_SETRLIMIT] = compat_sys_setrlimit;
-    table[SYS_GETRLIMIT] = compat_sys_old_getrlimit;
-    table[SYS_GETRUSAGE] = compat_sys_getrusage;
+    table[SYS_GETRLIMIT] = sys_old_getrlimit;
+    table[SYS_GETRUSAGE] = sys_getrusage;
     table[SYS_GETTIMEOFDAY] = compat_sys_gettimeofday;
     table[SYS_SETTIMEOFDAY] = compat_sys_settimeofday;
     table[SYS_GETGROUPS] = compat_sys_getgroups16;
@@ -211,7 +211,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_VHANGUP] = NULL;
     table[SYS_IDLE] = NULL;
     table[SYS_VM86OLD] = NULL;
-    table[SYS_WAIT4] = compat_sys_wait4;
+    table[SYS_WAIT4] = sys_wait4;
     table[SYS_SWAPOFF] = NULL;
     table[SYS_SYSINFO] = compat_sys_sysinfo;
     table[SYS_IPC] = sys_ipc;
@@ -336,8 +336,8 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_TKILL] = sys_tkill;
     table[SYS_SENDFILE64] = sys_sendfile;
     table[SYS_FUTEX] = compat_sys_futex_time32;
-    table[SYS_SCHED_SETAFFINITY] = compat_sys_sched_setaffinity;
-    table[SYS_SCHED_GETAFFINITY] = compat_sys_sched_getaffinity;
+    table[SYS_SCHED_SETAFFINITY] = sys_sched_setaffinity;
+    table[SYS_SCHED_GETAFFINITY] = sys_sched_getaffinity;
     table[SYS_SET_THREAD_AREA] = sys_set_thread_area;
     table[SYS_GET_THREAD_AREA] = sys_get_thread_area;
     table[SYS_IO_SETUP] = compat_sys_io_setup;
@@ -378,7 +378,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_MQ_NOTIFY] = sys_mq_notify;
     table[SYS_MQ_GETSETATTR] = sys_mq_getsetattr;
     table[SYS_KEXEC_LOAD] = compat_sys_kexec_load;
-    table[SYS_WAITID] = compat_sys_waitid;
+    table[SYS_WAITID] = sys_waitid;
     table[SYS_ADD_KEY] = NULL;
     table[SYS_REQUEST_KEY] = NULL;
     table[SYS_KEYCTL] = compat_sys_keyctl;

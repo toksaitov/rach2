@@ -272,7 +272,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_SETUID32] = sys_setuid;
     table[SYS_SETGID32] = sys_setgid;
     table[SYS_SETGROUPS32] = sys_setgroups;
-    table[SYS_GETRLIMIT] = sys_getrlimit;
+    table[SYS_GETRLIMIT] = sys_old_getrlimit;
     table[SYS_SETRLIMIT] = sys_setrlimit;
     table[SYS_UGETRLIMIT] = sys_getrlimit;
     table[SYS_PRLIMIT64] = sys_prlimit64;

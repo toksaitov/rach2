@@ -73,6 +73,14 @@ EBX contains
 and ECX points to the 72-byte i386 structure: two timevals of 32-bit
 seconds and microseconds, then fourteen 32-bit counters.
 musl and glibc convert it to their structure with 64-bit seconds.
+An i386 program on the x86-64 kernel, which
+.Xr ia32 7
+describes, gets the same 72 bytes from
+.Nm getrusage ,
+.Nm wait4
+and
+.Nm waitid ,
+each count cut to 32 bits, as Linux's.
 .Pp
 On x86-64
 .Nm getrusage

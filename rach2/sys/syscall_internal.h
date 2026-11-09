@@ -936,6 +936,7 @@ long sys_getgroups(isr_params_t *params);
 long sys_getrlimit(isr_params_t *params);
 
 long sys_setrlimit(isr_params_t *params);
+long sys_old_getrlimit(isr_params_t *params);
 
 long sys_prlimit64(isr_params_t *params);
 

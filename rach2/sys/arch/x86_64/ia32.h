@@ -32,6 +32,10 @@
         return -ENOSYS;             \
     }
 
+/* The 16-bit form of the id `id`, as Linux's high2lowuid: an id past 65535
+ * reads as the overflow id, 65534. */
+#define IA32_ID16(id) ((uint32_t)(id) > 0xFFFFu ? (uint16_t)65534u : (uint16_t)(id))
+
 /* The compat handlers, by their owner's file. */
 
 /* ia32_exec.c */
@@ -162,13 +166,10 @@ long compat_sys_olduname(isr_params_t *params);
 long compat_sys_setreuid16(isr_params_t *params);
 long compat_sys_setregid16(isr_params_t *params);
 long compat_sys_setrlimit(isr_params_t *params);
-long compat_sys_old_getrlimit(isr_params_t *params);
-long compat_sys_getrusage(isr_params_t *params);
 long compat_sys_getgroups16(isr_params_t *params);
 long compat_sys_setgroups16(isr_params_t *params);
 long compat_sys_fchown16(isr_params_t *params);
 long compat_sys_uname(isr_params_t *params);
-long compat_sys_wait4(isr_params_t *params);
 long compat_sys_sysinfo(isr_params_t *params);
 long compat_sys_setfsuid16(isr_params_t *params);
 long compat_sys_setfsgid16(isr_params_t *params);
@@ -180,10 +181,7 @@ long compat_sys_getresgid16(isr_params_t *params);
 long compat_sys_chown16(isr_params_t *params);
 long compat_sys_getrlimit(isr_params_t *params);
 long compat_sys_futex_time32(isr_params_t *params);
-long compat_sys_sched_setaffinity(isr_params_t *params);
-long compat_sys_sched_getaffinity(isr_params_t *params);
 long compat_sys_kexec_load(isr_params_t *params);
-long compat_sys_waitid(isr_params_t *params);
 long compat_sys_keyctl(isr_params_t *params);
 long compat_sys_arch_prctl(isr_params_t *params);
 /* The parts of the i386 ABI that are not rows of the table. */

@@ -2,14 +2,14 @@
 #define _X86_64_IA32_ABI_H_
 
 /*
- * The i386 layouts of the file, time and socket structures an i386 program
- * passes the x86-64 kernel, as Linux 6.12's compat types have them
- * (rach2/ia32.md lists each, and tests/host/ia32_fs_hosttest.c and
- * ia32_net_hosttest.c check their sizes and offsets). i386 aligns a 64-bit
- * integer to 4 bytes, which no x86-64 compiler does; each 64-bit member is
- * therefore a pair of 32-bit words, low word first, which IA32_GET64 and
- * IA32_PUT64 join and split, so that each structure has the same bytes on
- * every compiler.
+ * The i386 layouts of the file, time, socket, limit and usage structures an
+ * i386 program passes the x86-64 kernel, as Linux 6.12's compat types have
+ * them (rach2/ia32.md lists each, and tests/host/ia32_fs_hosttest.c,
+ * ia32_net_hosttest.c and ia32_ipc_hosttest.c check their sizes and
+ * offsets). i386 aligns a 64-bit integer to 4 bytes, which no x86-64
+ * compiler does; each 64-bit member is therefore a pair of 32-bit words, low
+ * word first, which IA32_GET64 and IA32_PUT64 join and split, so that each
+ * structure has the same bytes on every compiler.
  */
 
 #include "../../lib/kint.h"
@@ -238,5 +238,48 @@ struct ia32_sock_timeval {
     uint32_t tv_sec_lo, tv_sec_hi;
     uint32_t tv_usec_lo, tv_usec_hi;
 };
+
+/* compat_rlimit, of getrlimit, ugetrlimit and setrlimit: 32-bit limits,
+ * 0xFFFFFFFF unlimited. */
+struct ia32_rlimit {
+    uint32_t rlim_cur;
+    uint32_t rlim_max;
+};
+
+/* compat_rusage, of getrusage, wait4 and waitid: Linux's eighteen longs in
+ * 32 bits, the two times as old_timeval32. */
+struct ia32_rusage {
+    struct ia32_timeval ru_utime;
+    struct ia32_timeval ru_stime;
+    int32_t ru_maxrss, ru_ixrss, ru_idrss, ru_isrss;
+    int32_t ru_minflt, ru_majflt, ru_nswap, ru_inblock, ru_oublock;
+    int32_t ru_msgsnd, ru_msgrcv, ru_nsignals, ru_nvcsw, ru_nivcsw;
+};
+
+/* compat_sysinfo: the memory sizes in units of `mem_unit` bytes, padded to
+ * 64 bytes. */
+struct ia32_sysinfo {
+    int32_t uptime;
+    uint32_t loads[3];
+    uint32_t totalram, freeram, sharedram, bufferram;
+    uint32_t totalswap, freeswap;
+    uint16_t procs;
+    uint16_t pad;
+    uint32_t totalhigh, freehigh;
+    uint32_t mem_unit;
+    char f[8];
+};
+
+/* compat_tms, of times: 32-bit clock ticks. */
+struct ia32_tms {
+    int32_t tms_utime, tms_stime, tms_cutime, tms_cstime;
+};
+
+/* The fields of struct old_utsname, of olduname (109), five of 65 bytes,
+ * and of struct oldold_utsname, of oldolduname (59), five of 9; the new
+ * utsname has a sixth, the domain name. */
+#define IA32_UTS_FIELDS  5u
+#define IA32_UTS_LEN     65u
+#define IA32_OLD_UTS_LEN 9u
 
 #endif /* _X86_64_IA32_ABI_H_ */

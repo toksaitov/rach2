@@ -3235,7 +3235,38 @@ struct kernel_rusage {
     long uncounted[8];
 };
 
-#define RUSAGE_BYTES sizeof(struct kernel_rusage)
+/** The bytes of the caller's struct rusage: 72, eighteen 32-bit longs, for
+ * an i386 caller on x86-64, as Linux's compat_rusage, else the native
+ * structure's. */
+static uint32_t rusage_bytes(void)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (in_compat_syscall()) {
+        return 18u * 4u;
+    }
+#endif
+    return (uint32_t)sizeof(struct kernel_rusage);
+}
+
+/** Copy `ru` to the caller's struct rusage at `u`, each long truncated to
+ * 32 bits for an i386 caller on x86-64, as Linux's put_compat_rusage does;
+ * 0, or -EFAULT. */
+static int rusage_put(uintptr_t u, const struct kernel_rusage *ru)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (in_compat_syscall()) {
+        const long *w = (const long *)ru;
+        int32_t ru32[18];
+        unsigned i;
+
+        for (i = 0; i < 18u; i++) {
+            ru32[i] = (int32_t)w[i];
+        }
+        return copy_to_user((void __user *)u, ru32, sizeof(ru32));
+    }
+#endif
+    return copy_to_user((void __user *)u, ru, sizeof(*ru));
+}
 
 /** Fill `ru` with `user` and `sys` ticks of CPU time and zero the rest. */
 static void rusage_from_ticks(struct kernel_rusage *ru, uint64_t user, uint64_t sys)
@@ -3682,7 +3713,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uintptr_t rusag
     if (status && !user_buffer_ok((__force uintptr_t)status, sizeof(int), 1)) {
         return -EFAULT;
     }
-    if (rusage_ptr && !user_buffer_ok(rusage_ptr, RUSAGE_BYTES, 1)) {
+    if (rusage_ptr && !user_buffer_ok(rusage_ptr, rusage_bytes(), 1)) {
         return -EFAULT;
     }
     if (pid > 0) {
@@ -3703,7 +3734,7 @@ static int32_t do_wait(int pid, int __user *status, int options, uintptr_t rusag
     }
     seen = pid_seen((uint32_t)rc);
     ok = (!status || copy_to_user((void __user *)status, &r.status, sizeof(r.status)) == 0) &&
-         (!rusage_ptr || copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0);
+         (!rusage_ptr || rusage_put(rusage_ptr, &r.ru) == 0);
     wait_done(&r, ok);
     return ok ? (int32_t)seen : -EFAULT;
 }
@@ -3830,7 +3861,7 @@ long sys_waitid(isr_params_t *params)
     if (uinfo && !user_buffer_ok(uinfo, siginfo_chld_bytes(), 1)) {
         return -EFAULT;
     }
-    if (rusage_ptr && !user_buffer_ok(rusage_ptr, RUSAGE_BYTES, 1)) {
+    if (rusage_ptr && !user_buffer_ok(rusage_ptr, rusage_bytes(), 1)) {
         return -EFAULT;
     }
     rc = wait_find(idtype, id, options, &r);
@@ -3849,8 +3880,7 @@ long sys_waitid(isr_params_t *params)
         ki.status = r.info_status;
         siginfo_to_caller(info, SIGCHLD, &ki);
     }
-    ok = (rc == 0 || !rusage_ptr ||
-          copy_to_user((void __user *)rusage_ptr, &r.ru, RUSAGE_BYTES) == 0) &&
+    ok = (rc == 0 || !rusage_ptr || rusage_put(rusage_ptr, &r.ru) == 0) &&
          (!uinfo || copy_to_user((void __user *)uinfo, info, siginfo_chld_bytes()) == 0);
     if (rc > 0) {
         wait_done(&r, ok);
@@ -3923,7 +3953,7 @@ long sys_getrusage(isr_params_t *params)
 
         ru.maxrss = (long)(now > current_proc->tg->maxrss_kb ? now : current_proc->tg->maxrss_kb);
     }
-    if (copy_to_user((void __user *)SC_ARG(params, 1), &ru, RUSAGE_BYTES) != 0) {
+    if (rusage_put(SC_ARG(params, 1), &ru) != 0) {
         return -EFAULT;
     }
     return 0;
@@ -6224,6 +6254,9 @@ long sys_getgroups(isr_params_t *params)
 
 #define RLIMIT_AS_RES 9
 
+/* Linux's count of resources; a resource number at or past it is EINVAL. */
+#define RLIM_NLIMITS 16u
+
 /** The record's slot for `resource`, or -1 for one that is not kept. */
 static int rlimit_slot(uint32_t resource)
 {
@@ -6330,13 +6363,17 @@ static int rlimit_target(uint32_t pid, process_t **out)
 }
 
 /** getrlimit/ugetrlimit: struct rlimit { unsigned long rlim_cur, rlim_max },
- * the record's own width, with RLIM_INFINITY all ones in either; -EFAULT. */
+ * the record's own width, with RLIM_INFINITY all ones in either; -EINVAL
+ * for a resource of RLIM_NLIMITS or more, then -EFAULT. */
 long sys_getrlimit(isr_params_t *params)
 {
     uint32_t resource = (uint32_t)SC_ARG(params, 0);
     uintptr_t rl = SC_ARG(params, 1);
     unsigned long out[2];
 
+    if (resource >= RLIM_NLIMITS) {
+        return -EINVAL;
+    }
     if (!rl) {
         return -EFAULT;
     }
@@ -6347,8 +6384,35 @@ long sys_getrlimit(isr_params_t *params)
     return 0;
 }
 
+/* The old getrlimit's largest value, which an unlimited one reads as. */
+#define OLD_RLIM_MAX 0x7FFFFFFFul
+
+/**
+ * The old getrlimit of i386, number 76: two 32-bit limits, each at most
+ * 0x7FFFFFFF, unlimited among them, as Linux's old_getrlimit gives them, on
+ * the i686 kernel and for an i386 caller on x86-64. -EINVAL for a resource
+ * of RLIM_NLIMITS or more, -EFAULT.
+ */
+long sys_old_getrlimit(isr_params_t *params)
+{
+    uint32_t resource = (uint32_t)SC_ARG(params, 0);
+    unsigned long cur, max;
+    uint32_t out[2];
+
+    if (resource >= RLIM_NLIMITS) {
+        return -EINVAL;
+    }
+    rlimit_for(current_proc, resource, &cur, &max);
+    out[0] = (uint32_t)(cur > OLD_RLIM_MAX ? OLD_RLIM_MAX : cur);
+    out[1] = (uint32_t)(max > OLD_RLIM_MAX ? OLD_RLIM_MAX : max);
+    if (copy_to_user((void __user *)SC_ARG(params, 1), out, sizeof(out)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
 /** setrlimit: limits in the form getrlimit writes, set by `rlimit_set`;
- * -EFAULT. */
+ * -EFAULT, then -EINVAL for a resource of RLIM_NLIMITS or more. */
 long sys_setrlimit(isr_params_t *params)
 {
     uint32_t resource = (uint32_t)SC_ARG(params, 0);
@@ -6357,6 +6421,9 @@ long sys_setrlimit(isr_params_t *params)
 
     if (copy_from_user(in, (const void __user *)rl, sizeof(in)) != 0) {
         return -EFAULT;
+    }
+    if (resource >= RLIM_NLIMITS) {
+        return -EINVAL;
     }
     return rlimit_set(current_proc, resource, in[0], in[1]);
 }
@@ -6384,7 +6451,8 @@ static uint64_t rlimit_to64(unsigned long v)
  * leaves the new limits in place, as it does on Linux. The copies may sleep,
  * and the target may end while they do, so the new limits are read before the
  * target is looked up, and the old are written after its last use. Returns 0,
- * the error of `rlimit_target` or of `rlimit_set`, or -EFAULT. This is the
+ * the error of `rlimit_target`, -EINVAL for a resource of RLIM_NLIMITS or
+ * more, the error of `rlimit_set`, or -EFAULT. This is the
  * form musl issues for both.
  */
 long sys_prlimit64(isr_params_t *params)
@@ -6405,6 +6473,9 @@ long sys_prlimit64(isr_params_t *params)
     rc = rlimit_target(pid, &p);
     if (rc != 0) {
         return rc;
+    }
+    if (resource >= RLIM_NLIMITS) {
+        return -EINVAL;
     }
     rlimit_for(p, resource, &cur, &max);
     out[0] = rlimit_to64(cur);
@@ -7833,13 +7904,28 @@ long sys_ioprio_get(isr_params_t *params)
 /* The highest real-time priority Linux gives SCHED_FIFO and SCHED_RR. */
 #define SCHED_RT_PRIO_MAX 99
 
+/** The bytes of a long of the caller's CPU mask: 4 for an i386 caller on
+ * x86-64, whose mask is of 32-bit longs, as Linux's compat calls read it. */
+static unsigned long cpu_mask_unit(void)
+{
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+    if (in_compat_syscall()) {
+        return 4u;
+    }
+#endif
+    return sizeof(unsigned long);
+}
+
 /**
- * The bytes of a CPU mask as Linux sizes the one it copies: a long for
- * every bits-of-a-long processors up to the highest started.
+ * The bytes of a CPU mask as Linux sizes the one it copies: a long of the
+ * caller's (`cpu_mask_unit`) for every bits-of-that-long processors up to
+ * the highest started. The mask's bytes are the same little-endian bits in
+ * either size of long.
  */
 static unsigned long cpu_mask_bytes(void)
 {
-    unsigned long bits = sizeof(unsigned long) * 8u;
+    unsigned long unit = cpu_mask_unit();
+    unsigned long bits = unit * 8u;
     unsigned long highest = 0;
     int c;
 
@@ -7848,7 +7934,7 @@ static unsigned long cpu_mask_bytes(void)
             highest = (unsigned long)c;
         }
     }
-    return (highest / bits + 1u) * sizeof(unsigned long);
+    return (highest / bits + 1u) * unit;
 }
 
 /** The processors started, a bit for each. */
@@ -8092,7 +8178,8 @@ long sys_sched_rr_get_interval(isr_params_t *params)
  * a bit for each processor the process may run on of those started, and the
  * call writes `cpu_mask_bytes()` of it and returns that count, as Linux
  * returns the bytes it wrote; the C library clears the rest of a larger
- * set. -EINVAL for a length shorter than that or not a multiple of a long,
+ * set. -EINVAL for a length shorter than that or not a multiple of the
+ * caller's long,
  * -ESRCH for no process, -EFAULT.
  */
 long sys_sched_getaffinity(isr_params_t *params)
@@ -8102,7 +8189,7 @@ long sys_sched_getaffinity(isr_params_t *params)
     process_t *p;
     uint64_t mask;
 
-    if (len < bytes || (len & (sizeof(unsigned long) - 1u)) != 0) {
+    if (len < bytes || (len & (cpu_mask_unit() - 1u)) != 0) {
         return -EINVAL;
     }
     p = sched_target((int)SC_ARG(params, 0));
