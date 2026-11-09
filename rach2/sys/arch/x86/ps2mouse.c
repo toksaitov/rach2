@@ -8,12 +8,18 @@
  *   Byte 0: [Yovf|Xovf|Ysign|Xsign|1|Middle|Right|Left]
  *   Byte 1: X movement, the low 8 bits of a 9-bit value, Xsign its sign
  *   Byte 2: Y movement, the low 8 bits of a 9-bit value, Ysign its sign
+ * A mouse that answers Microsoft's knocks, sample rates set in a fixed order
+ * and then its ID read, sends a fourth: the IntelliMouse (ID 3) its wheel's
+ * turn as a signed byte, and the IntelliMouse Explorer (ID 4) a wheel's turn
+ * with two more buttons, decoded as Linux's psmouse decodes them. The event
+ * device has Linux's name, numbers and capabilities for each protocol.
  */
 #include "i8042.h"
 #include "portio.h"
 #include "ps2mouse.h"
 #include "../arch.h"
 #include "../../platform.h"
+#include "../../evdev.h"
 #include "../../klog.h"
 #include "../../mouse.h"
 #include "isr.h"
@@ -30,6 +36,8 @@
 
 /* Mouse Commands (sent via PS2_CMD_WRITE_MOUSE) */
 #define MOUSE_CMD_RESET        0xFF /* Reset mouse */
+#define MOUSE_CMD_SET_RES      0xE8 /* Set resolution */
+#define MOUSE_CMD_SET_SCALE11  0xE6 /* Set 1:1 scaling */
 #define MOUSE_CMD_RESEND       0xFE /* Resend last packet */
 #define MOUSE_CMD_SET_DEFAULTS 0xF6 /* Set default settings */
 #define MOUSE_CMD_DISABLE      0xF5 /* Disable data reporting */
@@ -45,9 +53,27 @@
 #define PS2_CONFIG_MOUSE_IRQ 0x02 /* Enable IRQ12 for mouse */
 #define PS2_CONFIG_MOUSE_CLK 0x20 /* Disable mouse clock (set=disabled) */
 
-/* The packet being assembled, and the index of its next byte. */
-static uint8_t packet_bytes[3];
+/* The protocols, Linux's `enum psmouse_type`, which EVIOCGID gives as the
+ * product, and the IDs a mouse answers once it speaks the last two. */
+#define PROTO_PS2  1
+#define PROTO_IMPS 5
+#define PROTO_IMEX 6
+#define ID_IMPS    3
+#define ID_IMEX    4
+
+/* The packet being assembled, the index of its next byte, and its size,
+ * three bytes or four with a wheel. */
+static uint8_t packet_bytes[4];
 static int packet_index = 0;
+static int packet_size = 3;
+
+/* The protocol the mouse speaks, PROTO_*, and its event device. */
+static int protocol = PROTO_PS2;
+static struct evdev *mouse_dev;
+
+/* The side and extra buttons held, MOUSE_BUTTON_*: an Explorer's packet
+ * of a wheel's turn of more than 7 does not carry them. */
+static unsigned int extra_buttons;
 
 /* How many bytes the first drain reads before it calls the controller
    stuck. A PS/2 output buffer has one byte, so anything past a handful is a
@@ -150,8 +176,142 @@ static int mouse_reset(void)
 }
 
 /**
- * The IRQ 12 handler, which assembles a three-byte packet one byte an
- * interrupt and puts it in the mouse queue.
+ * Send the three sample rates of `rates` and read the ID the mouse answers
+ * then: one of Microsoft's knocks, which a mouse with a wheel answers by
+ * speaking its protocol from then on. Returns the ID, or -1 when the mouse
+ * did not answer.
+ */
+static int knock(const uint8_t *rates)
+{
+    int i;
+
+    for (i = 0; i < 3; i++) {
+        if (mouse_send_command(MOUSE_CMD_SET_RATE) != MOUSE_ACK ||
+            mouse_send_command(rates[i]) != MOUSE_ACK) {
+            return -1;
+        }
+    }
+    if (mouse_send_command(MOUSE_CMD_GET_ID) != MOUSE_ACK || ps2_wait_mouse_output() < 0) {
+        return -1;
+    }
+    return inb(PS2_DATA_PORT);
+}
+
+/** Send `cmd` and its argument `arg`; a refusal is ignored, since the
+ * mouse works on at its old setting. */
+static void mouse_set(uint8_t cmd, uint8_t arg)
+{
+    if (mouse_send_command(cmd) == MOUSE_ACK) {
+        mouse_send_command(arg);
+    }
+}
+
+/**
+ * Find the protocol the mouse speaks, as Linux's psmouse does, and set it as
+ * Linux sets it: the IntelliMouse's knock, rates 200, 100 and 80, then the
+ * Explorer's, 200, 200 and 80, with the rates 200, 80 and 40 that turn on an
+ * Explorer 4.0's horizontal wheel; then 100 samples a second, 8 counts a
+ * millimetre and 1:1 scaling. A mouse that answers neither knock is a plain
+ * PS/2 mouse of three buttons.
+ */
+static void detect_protocol(void)
+{
+    static const uint8_t imps[3] = {200, 100, 80};
+    static const uint8_t imex[3] = {200, 200, 80};
+    static const uint8_t hwheel[3] = {200, 80, 40};
+    int i;
+
+    protocol = PROTO_PS2;
+    packet_size = 3;
+    if (knock(imps) == ID_IMPS) {
+        protocol = PROTO_IMPS;
+        packet_size = 4;
+        if (knock(imex) == ID_IMEX) {
+            protocol = PROTO_IMEX;
+            for (i = 0; i < 3; i++) {
+                mouse_set(MOUSE_CMD_SET_RATE, hwheel[i]);
+            }
+        }
+    }
+    mouse_set(MOUSE_CMD_SET_RATE, 100);
+    mouse_set(MOUSE_CMD_SET_RES, 3);
+    mouse_send_command(MOUSE_CMD_SET_SCALE11);
+}
+
+/** Register the event device of the mouse, with Linux's name, numbers and
+ * capabilities for its protocol. */
+static void register_mouse(void)
+{
+    const char *name = "PS/2 Generic Mouse";
+    unsigned int caps = MOUSE_POINTER;
+
+    if (protocol == PROTO_IMPS) {
+        name = "ImPS/2 Generic Wheel Mouse";
+        caps |= MOUSE_WHEEL;
+    } else if (protocol == PROTO_IMEX) {
+        name = "ImExPS/2 Generic Explorer Mouse";
+        caps |= MOUSE_WHEEL | MOUSE_HWHEEL | MOUSE_SIDE;
+    }
+    mouse_dev = mouse_register(name, "isa0060/serio1/input0", EVDEV_BUS_I8042, 0x0002,
+                               (uint16_t)protocol, caps);
+}
+
+/** The low `bits` + 1 bits of `v` as a signed number, bit `bits` its sign,
+ * as Linux's `sign_extend32`. */
+static int sign_extend(unsigned v, int bits)
+{
+    int sign = 1 << bits;
+
+    return (int)((v & ((unsigned)sign * 2u - 1u)) ^ (unsigned)sign) - sign;
+}
+
+/**
+ * Report the whole packet in `packet_bytes`: its buttons, its 9-bit
+ * movements, Y turned to Linux's way up, and the fourth byte of a wheel's
+ * protocol, as Linux's `psmouse_process_byte` reads it. A packet with an
+ * overflow bit set, bit 6 or 7, has a movement that cannot be used, and is
+ * dropped.
+ */
+static void report_packet(void)
+{
+    uint8_t flags = packet_bytes[0];
+    uint8_t b3 = packet_bytes[3];
+    int dx = packet_bytes[1];
+    int dy = packet_bytes[2];
+    int wheel = 0, hwheel = 0;
+
+    if (flags & 0xC0) {
+        return;
+    }
+    if (flags & 0x10) {
+        dx -= 256;
+    }
+    if (flags & 0x20) {
+        dy -= 256;
+    }
+    if (protocol == PROTO_IMPS) {
+        wheel = -(int)(int8_t)b3;
+    } else if (protocol == PROTO_IMEX) {
+        switch (b3 & 0xC0) {
+        case 0x80: /* an Explorer 4.0's vertical turn of up to 31 */
+            wheel = -sign_extend(b3, 5);
+            break;
+        case 0x40: /* its horizontal turn */
+            hwheel = -sign_extend(b3, 5);
+            break;
+        default:
+            wheel = -sign_extend(b3, 3);
+            extra_buttons =
+                ((b3 & 0x10) ? MOUSE_BUTTON_SIDE : 0) | ((b3 & 0x20) ? MOUSE_BUTTON_EXTRA : 0);
+            break;
+        }
+    }
+    mouse_report(mouse_dev, (flags & 0x07u) | extra_buttons, dx, -dy, wheel, hwheel);
+}
+
+/**
+ * The IRQ 12 handler, which assembles a packet one byte an interrupt and
+ * reports it.
  *
  * The 8042 raises IRQ 12 for every auxiliary byte. The handler reads the
  * data port only when status bit 0 (PS2_STATUS_OUTPUT_FULL) says a byte
@@ -161,10 +321,7 @@ static int mouse_reset(void)
  *
  * A packet is framed by byte 0, whose bit 3 is always 1: a byte expected as
  * byte 0 with that bit clear is out of step with the stream and is dropped,
- * which brings the stream back in step. The X and Y movements are 9-bit
- * signed values with their high bits in bits 4 and 5 of byte 0; a set
- * overflow bit, bit 6 or 7, marks a movement that cannot be used, and the
- * whole packet is discarded.
+ * which brings the stream back in step.
  */
 static void mouse_irq_handler(isr_params_t *params)
 {
@@ -187,24 +344,8 @@ static void mouse_irq_handler(isr_params_t *params)
 
     packet_bytes[packet_index++] = data;
 
-    if (packet_index >= 3) {
-        uint8_t flags = packet_bytes[0];
-        int dx = packet_bytes[1];
-        int dy = packet_bytes[2];
-
-        if (flags & 0x10) { /* X sign bit: extend the 9th bit */
-            dx |= 0xFFFFFF00;
-        }
-        if (flags & 0x20) { /* Y sign bit: extend the 9th bit */
-            dy |= 0xFFFFFF00;
-        }
-
-        if (!(flags & 0xC0)) { /* no X or Y overflow */
-            uint8_t buttons = flags & 0x07;
-
-            mouse_push_packet(buttons, dx, dy);
-        }
-
+    if (packet_index >= packet_size) {
+        report_packet();
         packet_index = 0;
     }
 }
@@ -281,6 +422,9 @@ int init_mouse(void)
     if (response < 0) {
         klog(KLOG_WARN, "mouse", "the device refused the default settings");
     }
+
+    detect_protocol();
+    register_mouse();
 
     response = mouse_send_command(MOUSE_CMD_ENABLE);
     if (response < 0) {

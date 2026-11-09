@@ -24,6 +24,7 @@ extern int printf(const char *fmt, ...);
 /* ---- the functions outside hid.c that it calls ---- */
 
 #include "../../rach2/sys/input.h"
+#include "../../rach2/sys/mouse.h"
 
 /* Every code the driver sent since the last report, in order; codes past
  * MAX_CODES are dropped. The MSC_SCAN of the last key event. */
@@ -91,18 +92,80 @@ void input_keyboard_detach(struct input_keyboard *kb)
     kb->dev = 0;
 }
 
+/* The mouse's event device: what registered it, and whether it was taken
+ * away; its pointer is `mouse_registrations`, never followed. */
+static int mouse_registrations;
+static int mouse_unregistrations;
+static char mouse_name[32];
+static char mouse_phys[24];
+static uint16_t mouse_bus;
+static uint16_t mouse_vendor;
+static uint16_t mouse_product;
+static unsigned int mouse_caps;
+
+/* The last mouse packet, its device, and the count of them. */
+static struct evdev *mouse_dev;
 static int mouse_dx;
 static int mouse_dy;
-static int mouse_buttons;
+static int mouse_wheel;
+static int mouse_hwheel;
+static unsigned int mouse_buttons;
 static int mouse_reports;
 
-/** Record the last mouse movement and buttons, and count the reports. */
-void input_mouse(int dx, int dy, int buttons)
+/** Copy the string `from` into `to`, of `size` bytes. */
+static void copy_string(char *to, const char *from, unsigned size)
 {
+    unsigned i;
+
+    for (i = 0; i + 1 < size && from[i]; i++) {
+        to[i] = from[i];
+    }
+    to[i] = 0;
+}
+
+/** Record the mouse's registration. */
+struct evdev *mouse_register(const char *name, const char *phys, uint16_t bustype, uint16_t vendor,
+                             uint16_t product, unsigned int caps)
+{
+    mouse_registrations++;
+    copy_string(mouse_name, name, sizeof(mouse_name));
+    copy_string(mouse_phys, phys, sizeof(mouse_phys));
+    mouse_bus = bustype;
+    mouse_vendor = vendor;
+    mouse_product = product;
+    mouse_caps = caps;
+    return (struct evdev *)&mouse_registrations;
+}
+
+/** Record the last mouse packet, and count the reports. */
+void mouse_report(struct evdev *dev, unsigned int buttons, int dx, int dy, int wheel, int hwheel)
+{
+    mouse_dev = dev;
     mouse_dx = dx;
     mouse_dy = dy;
+    mouse_wheel = wheel;
+    mouse_hwheel = hwheel;
     mouse_buttons = buttons;
     mouse_reports++;
+}
+
+/** Count the taking away of the mouse's event device; a NULL one, a
+ * keyboard's slot, is ignored as evdev.c ignores it. */
+void evdev_unregister(struct evdev *dev)
+{
+    if (dev) {
+        mouse_unregistrations++;
+    }
+}
+
+/** Compare two strings. */
+static int same(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
 }
 
 /** Return 1: a mouse is present. */
@@ -255,6 +318,58 @@ static void leds_rows(void)
           hid_led_report(0) == -1 && hid_led_report(USB_MAX_DEVICES + 1) == -1);
 }
 
+/** A mouse: its event device, and its reports with and without a wheel. */
+static void mouse_rows(void)
+{
+    unsigned char mouse[4];
+
+    /* A mouse is registered as Linux's boot-protocol driver names it. */
+    hid_attach(3, HID_MOUSE, 0x0627, 0x0001);
+    CHECK("a mouse is registered once", mouse_registrations == 1);
+    CHECK("as USB HIDBP Mouse 0627:0001 on usb-3/input0",
+          same(mouse_name, "USB HIDBP Mouse 0627:0001") && same(mouse_phys, "usb-3/input0"));
+    CHECK("on the USB bus with its vendor and product",
+          mouse_bus == EVDEV_BUS_USB && mouse_vendor == 0x0627 && mouse_product == 0x0001);
+    CHECK("with a wheel in 120ths and the side buttons",
+          mouse_caps == (MOUSE_WHEEL | MOUSE_HI_RES | MOUSE_SIDE));
+    hid_attach(3, HID_MOUSE, 0x0627, 0x0001);
+    CHECK("a mouse attached again is not registered again", mouse_registrations == 1);
+
+    /* A USB report's Y is positive toward the user, as REL_Y is. */
+    mouse[0] = 0x01;
+    mouse[1] = (unsigned char)5;
+    mouse[2] = (unsigned char)3;
+    mouse[3] = 0;
+    mouse_reports = 0;
+    hid_report(3, HID_MOUSE, mouse, 4);
+    CHECK("a mouse report is passed on", mouse_reports == 1);
+    CHECK("to the mouse's device", mouse_dev == (struct evdev *)&mouse_registrations);
+    CHECK("with its movement", mouse_dx == 5);
+    CHECK("its vertical movement as the report has it", mouse_dy == 3);
+    CHECK("and its buttons", mouse_buttons == MOUSE_LEFT);
+
+    mouse[0] = 0x1A; /* right, side and extra */
+    mouse[1] = 0xFB; /* -5 */
+    mouse[2] = 0xFD; /* -3 */
+    mouse[3] = 0xFF; /* the wheel turned down a detent */
+    hid_report(3, HID_MOUSE, mouse, 4);
+    CHECK("a negative movement stays negative", mouse_dx == -5 && mouse_dy == -3);
+    CHECK("the wheel's byte is its turn", mouse_wheel == -1 && mouse_hwheel == 0);
+    CHECK("the five buttons pass",
+          mouse_buttons == (MOUSE_RIGHT | MOUSE_BUTTON_SIDE | MOUSE_BUTTON_EXTRA));
+    hid_report(3, HID_MOUSE, mouse, 3);
+    CHECK("a report of three bytes turns no wheel", mouse_wheel == 0);
+
+    mouse_reports = 0;
+    hid_report(3, HID_MOUSE, mouse, 2);
+    CHECK("a short mouse report is dropped", mouse_reports == 0);
+
+    hid_gone(3);
+    CHECK("a mouse that goes takes its event device away", mouse_unregistrations == 1);
+    hid_gone(3);
+    CHECK("and only once", mouse_unregistrations == 1);
+}
+
 /**
  * Run the rows and print the result; return 1 when a row failed.
  *
@@ -267,8 +382,6 @@ static void leds_rows(void)
  */
 int main(void)
 {
-    unsigned char mouse[4];
-
     /* A key pressed, held across two reports, and released. */
     keys(1, 0, 0x04, 0, 0); /* 'a' down */
     CHECK("a key pressed sends its make code", sent(1, 0x1E, 0, 0, 0));
@@ -371,27 +484,7 @@ int main(void)
     keys(2, 0, 0x04, 0, 0);
     CHECK("a second keyboard's first report is a press, not a hold", sent(1, 0x1E, 0, 0, 0));
 
-    /* A USB report's Y is positive toward the user, and is negated. */
-    mouse[0] = 0x01;
-    mouse[1] = (unsigned char)5;
-    mouse[2] = (unsigned char)3;
-    mouse[3] = 0;
-    mouse_reports = 0;
-    hid_report(3, HID_MOUSE, mouse, 4);
-    CHECK("a mouse report is passed on", mouse_reports == 1);
-    CHECK("with its movement", mouse_dx == 5);
-    CHECK("its vertical movement turned the other way up", mouse_dy == -3);
-    CHECK("and its buttons", mouse_buttons == 1);
-
-    mouse[1] = 0xFB; /* -5 */
-    mouse[2] = 0xFD; /* -3 */
-    hid_report(3, HID_MOUSE, mouse, 4);
-    CHECK("a negative movement stays negative", mouse_dx == -5);
-    CHECK("and its vertical half is turned as well", mouse_dy == 3);
-
-    mouse_reports = 0;
-    hid_report(3, HID_MOUSE, mouse, 2);
-    CHECK("a short mouse report is dropped", mouse_reports == 0);
+    mouse_rows();
 
     leds_rows();
 

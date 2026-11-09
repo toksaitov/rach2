@@ -19,14 +19,19 @@
  * aux-clock-disable bit, 0x20 queues the configuration byte, and 0x60 and
  * 0xD4 send the next write to port 0x60 to the configuration byte and to the
  * mouse. The mouse answers only while its clock is enabled: an ACK to each
- * command, 0xAA and its ID 0x00 after the ACK of a reset, and reporting on
- * after an ACK of 0xF4. A row can make the mouse lose its answer to one
+ * command and argument, 0xAA and its ID 0x00 after the ACK of a reset, its
+ * ID after the ACK of 0xF2, and reporting on after an ACK of 0xF4. A row can
+ * give it a wheel: then, as QEMU's mouse, it answers ID 3 after the sample
+ * rates 200, 100 and 80, and an Explorer ID 4 after 200, 200 and 80, until
+ * it is reset. A row can make the mouse lose its answer to one
  * command, or ask once for that command again with 0xFE, and can make the
  * controller lose the configuration byte, keep its input buffer full or keep
  * its output buffer full for good. The rows of the bring-up check the
  * writes in order, the state the controller and the mouse are left in, the
- * vector of the handler, and that interrupts are off for every port access
- * and on again at every return.
+ * protocol found and the event device registered for it, the vector of the
+ * handler, and that interrupts are off for every port access and on again
+ * at every return. The handler's rows read the packets it reports, of three
+ * bytes and of each wheel's four.
  */
 
 #include "arch/x86/i8042.c"
@@ -58,7 +63,7 @@ static int fails;
 /* The model 8042: the bytes waiting in its output buffer, first at
  * `model_head`, the reads of its ports, and every port write in order. */
 #define MODEL_BYTES  16
-#define MODEL_WRITES 32
+#define MODEL_WRITES 96
 static uint8_t model_status[MODEL_BYTES];
 static uint8_t model_data[MODEL_BYTES];
 static int model_head;
@@ -85,6 +90,14 @@ static int mouse_silent_to;
 static int mouse_resend_to;
 static int mouse_reporting;
 
+/* The mouse's wheel: the highest ID it answers, 0, ID_IMPS or ID_IMEX; the
+ * ID it answers now; the command whose argument the next byte is, 0 for
+ * none; and how far into a knock the rates have gone, as QEMU counts. */
+static int mouse_wheel;
+static int mouse_id;
+static uint8_t mouse_arg_for;
+static int mouse_knock;
+
 /* Interrupts, as `arch_irq_disable` and `arch_irq_enable` leave them, and the
  * port accesses made while they were on. */
 static int irq_on = 1;
@@ -98,11 +111,20 @@ static int registered_with_irq_on;
 static int warnings;
 static const char *last_warning;
 
-/* The packets the handler handed to the mouse queue. */
-static int pushes;
-static uint8_t pushed_buttons;
-static int pushed_dx;
-static int pushed_dy;
+/* The event device registered, and the packets the handler reported. */
+static int mouse_registrations;
+static const char *registered_name;
+static const char *registered_phys;
+static uint16_t registered_bus;
+static uint16_t registered_vendor;
+static uint16_t registered_product;
+static unsigned int registered_caps;
+static int reports;
+static unsigned int reported_buttons;
+static int reported_dx;
+static int reported_dy;
+static int reported_wheel;
+static int reported_hwheel;
 
 /** Put `data` in the output buffer behind what waits there, with `status`. */
 static void model_put(uint8_t status, uint8_t data)
@@ -144,6 +166,13 @@ static void model_reset(void)
     mouse_silent_to = -1;
     mouse_resend_to = -1;
     mouse_reporting = 0;
+    mouse_wheel = 0;
+    mouse_id = 0;
+    mouse_arg_for = 0;
+    mouse_knock = 0;
+    mouse_registrations = 0;
+    registered_name = 0;
+    registered_product = 0;
     irq_on = 1;
     ports_with_irq_on = 0;
     registrations = 0;
@@ -152,6 +181,32 @@ static void model_reset(void)
     registered_with_irq_on = 0;
     warnings = 0;
     last_warning = 0;
+}
+
+/** Take the sample rate `rate`, which moves a knock on as QEMU's mouse
+ * does: 200 starts one, 100 or 200 then chooses it, and 80 ends it. */
+static void mouse_rate(uint8_t rate)
+{
+    switch (mouse_knock) {
+    case 0:
+        mouse_knock = rate == 200 ? 1 : 0;
+        break;
+    case 1:
+        mouse_knock = rate == 100 ? 2 : rate == 200 ? 3 : 0;
+        break;
+    case 2:
+        if (rate == 80 && mouse_wheel >= ID_IMPS) {
+            mouse_id = ID_IMPS;
+        }
+        mouse_knock = 0;
+        break;
+    default:
+        if (rate == 80 && mouse_wheel >= ID_IMEX) {
+            mouse_id = ID_IMEX;
+        }
+        mouse_knock = 0;
+        break;
+    }
 }
 
 /** Take `cmd`, a byte the controller sent on to the mouse. */
@@ -166,8 +221,21 @@ static void mouse_take(uint8_t cmd)
         return;
     }
     model_put(MOUSE_BYTE, MOUSE_ACK);
-    if (cmd == MOUSE_CMD_RESET) {
+    if (mouse_arg_for) {
+        if (mouse_arg_for == MOUSE_CMD_SET_RATE) {
+            mouse_rate(cmd);
+        }
+        mouse_arg_for = 0;
+        return;
+    }
+    if (cmd == MOUSE_CMD_SET_RATE || cmd == MOUSE_CMD_SET_RES) {
+        mouse_arg_for = cmd;
+    } else if (cmd == MOUSE_CMD_GET_ID) {
+        model_put(MOUSE_BYTE, (uint8_t)mouse_id);
+    } else if (cmd == MOUSE_CMD_RESET) {
         mouse_reporting = 0;
+        mouse_id = 0;
+        mouse_knock = 0;
         model_put(MOUSE_BYTE, 0xAA);
         model_put(MOUSE_BYTE, 0x00);
     } else if (cmd == MOUSE_CMD_SET_DEFAULTS || cmd == MOUSE_CMD_DISABLE) {
@@ -276,12 +344,30 @@ void klog(int level, const char *subsystem, const char *format, ...)
     }
 }
 
-void mouse_push_packet(uint8_t buttons, int dx, int dy)
+/** Record the event device registered; its pointer is never followed. */
+struct evdev *mouse_register(const char *name, const char *phys, uint16_t bustype, uint16_t vendor,
+                             uint16_t product, unsigned int caps)
 {
-    pushes++;
-    pushed_buttons = buttons;
-    pushed_dx = dx;
-    pushed_dy = dy;
+    mouse_registrations++;
+    registered_name = name;
+    registered_phys = phys;
+    registered_bus = bustype;
+    registered_vendor = vendor;
+    registered_product = product;
+    registered_caps = caps;
+    return (struct evdev *)&mouse_registrations;
+}
+
+/** Record the packet reported, and count it. */
+void mouse_report(struct evdev *dev, unsigned int buttons, int dx, int dy, int wheel, int hwheel)
+{
+    (void)dev;
+    reports++;
+    reported_buttons = buttons;
+    reported_dx = dx;
+    reported_dy = dy;
+    reported_wheel = wheel;
+    reported_hwheel = hwheel;
 }
 
 /** Whether the port writes so far are the `n` of `ports` and `values`. */
@@ -345,13 +431,15 @@ static void handler_rows(void)
 
     /* The rest of the packet: X is -2 and Y, positive away from the user,
      * is -3. */
+    reports = 0;
     CHECK("byte 1 is read", interrupt(MOUSE_BYTE, 0xFE) == 1);
     CHECK("byte 2 is read", interrupt(MOUSE_BYTE, 0xFD) == 1);
-    CHECK("three mouse bytes make one packet", pushes == 1);
+    CHECK("three mouse bytes make one packet", reports == 1);
     CHECK("the packet starts the next at byte 0", packet_index == 0);
-    CHECK("the packet has the left button", pushed_buttons == 0x01);
-    CHECK("the packet's dx is -2", pushed_dx == -2);
-    CHECK("the packet's dy is -3, as the wire gives it", pushed_dy == -3);
+    CHECK("the packet has the left button", reported_buttons == MOUSE_LEFT);
+    CHECK("the packet's dx is -2", reported_dx == -2);
+    CHECK("the packet's dy is 3, toward the user as REL_Y has it", reported_dy == 3);
+    CHECK("a plain mouse's packet turns no wheel", reported_wheel == 0 && reported_hwheel == 0);
 
     /* A byte out of step with the stream, in the place of byte 0. */
     CHECK("a byte without bit 3 is read", interrupt(MOUSE_BYTE, 0x02) == 1);
@@ -361,10 +449,60 @@ static void handler_rows(void)
     interrupt(MOUSE_BYTE, 0x48);
     interrupt(MOUSE_BYTE, 0x10);
     interrupt(MOUSE_BYTE, 0x10);
-    CHECK("a packet with an overflow bit is dropped", pushes == 1);
+    CHECK("a packet with an overflow bit is dropped", reports == 1);
     CHECK("a dropped packet starts the next at byte 0", packet_index == 0);
 
     CHECK("the handler writes no port", port_writes == 0);
+}
+
+/** Feed the four bytes of a wheel's packet to the handler. */
+static void packet4(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3)
+{
+    interrupt(MOUSE_BYTE, b0);
+    interrupt(MOUSE_BYTE, b1);
+    interrupt(MOUSE_BYTE, b2);
+    interrupt(MOUSE_BYTE, b3);
+}
+
+/** The packets of the IntelliMouse and the Explorer, read as Linux's
+ * psmouse reads them. */
+static void wheel_rows(void)
+{
+    model_reset();
+    protocol = PROTO_IMPS;
+    packet_size = 4;
+    packet_index = 0;
+    reports = 0;
+    interrupt(MOUSE_BYTE, 0x08);
+    interrupt(MOUSE_BYTE, 0x01);
+    interrupt(MOUSE_BYTE, 0x00);
+    CHECK("an IntelliMouse's packet waits for its fourth byte", reports == 0 && packet_index == 3);
+    interrupt(MOUSE_BYTE, 0xFF);
+    CHECK("the fourth byte ends it", reports == 1 && packet_index == 0);
+    CHECK("its wheel's -1 is a turn up, +1", reported_wheel == 1 && reported_dx == 1);
+    packet4(0x0C, 0x00, 0x00, 0x02);
+    CHECK("a turn down of 2 and the middle button",
+          reported_wheel == -2 && reported_buttons == MOUSE_MIDDLE);
+
+    protocol = PROTO_IMEX;
+    extra_buttons = 0;
+    packet4(0x08, 0x00, 0x00, 0x0F);
+    CHECK("an Explorer's 4-bit -1 is a turn up", reported_wheel == 1 && reported_buttons == 0);
+    packet4(0x08, 0x00, 0x00, 0x31);
+    CHECK("its side and extra buttons, with a turn down",
+          reported_wheel == -1 && reported_buttons == (MOUSE_BUTTON_SIDE | MOUSE_BUTTON_EXTRA));
+    packet4(0x08, 0x00, 0x00, 0x85);
+    CHECK("a 6-bit turn of an Explorer 4.0 keeps the buttons held",
+          reported_wheel == -5 && reported_buttons == (MOUSE_BUTTON_SIDE | MOUSE_BUTTON_EXTRA));
+    packet4(0x08, 0x00, 0x00, 0x7F);
+    CHECK("its horizontal turn, 0x40 and a 6-bit -1, is to the right",
+          reported_hwheel == 1 && reported_wheel == 0);
+    packet4(0x08, 0x00, 0x00, 0x00);
+    CHECK("a packet of 0x00 lets the side buttons go", reported_buttons == 0);
+    CHECK("the wheels' packets write no port", port_writes == 0);
+    protocol = PROTO_PS2;
+    packet_size = 3;
+    packet_index = 0;
 }
 
 /** The mouse's commands, with keys pressed while they wait for the reply. */
@@ -402,13 +540,75 @@ static void command_rows(void)
 #define C PS2_CMD_PORT
 #define D PS2_DATA_PORT
 
+/* The writes a row expects, built with the `expect_*` calls below. */
+static uint16_t expect_port[MODEL_WRITES];
+static uint8_t expect_value[MODEL_WRITES];
+static int expected;
+
+/** Expect `value` written to `port`. */
+static void expect(uint16_t port, uint8_t value)
+{
+    if (expected < MODEL_WRITES) {
+        expect_port[expected] = port;
+        expect_value[expected] = value;
+    }
+    expected++;
+}
+
+/** Expect the byte `b` sent to the mouse, `n` times. */
+static void expect_mouse(uint8_t b, int n)
+{
+    while (n-- > 0) {
+        expect(C, 0xD4);
+        expect(D, b);
+    }
+}
+
+/** Expect the controller's part of a bring-up: the aux port enabled and
+ * the configuration byte read and written. */
+static void expect_controller(void)
+{
+    expected = 0;
+    expect(C, 0xA8);
+    expect(C, 0x20);
+    expect(C, 0x60);
+    expect(D, MOUSE_CONFIG);
+}
+
+/** Expect the knock of the rates `a`, `b` and `c`, and the ID read. */
+static void expect_knock(uint8_t a, uint8_t b, uint8_t c)
+{
+    expect_mouse(0xF3, 1);
+    expect_mouse(a, 1);
+    expect_mouse(0xF3, 1);
+    expect_mouse(b, 1);
+    expect_mouse(0xF3, 1);
+    expect_mouse(c, 1);
+    expect_mouse(0xF2, 1);
+}
+
+/** Expect a plain mouse's protocol found and its settings made: the
+ * IntelliMouse's knock unanswered, then rate 100, resolution 3 and 1:1. */
+static void expect_plain(void)
+{
+    expect_knock(200, 100, 80);
+    expect_mouse(0xF3, 1);
+    expect_mouse(100, 1);
+    expect_mouse(0xE8, 1);
+    expect_mouse(3, 1);
+    expect_mouse(0xE6, 1);
+}
+
+/** Whether the port writes so far are the ones expected. */
+static int writes_expected(void)
+{
+    return writes_are(expect_port, expect_value, expected);
+}
+
 /** `init_mouse` against a working controller and mouse, and against each
  * fault of the controller. */
 static void bringup_controller_rows(void)
 {
-    static const uint16_t whole_ports[] = {C, C, C, D, C, D, C, D, C, D};
-    static const uint8_t whole_values[] = {0xA8, 0x20, 0x60, MOUSE_CONFIG, 0xD4,
-                                           0xFF, 0xD4, 0xF6, 0xD4,         0xF4};
     static const uint16_t lost_config_ports[] = {C, C};
     static const uint8_t lost_config_values[] = {0xA8, 0x20};
 
@@ -418,8 +618,12 @@ static void bringup_controller_rows(void)
     model_put(KEYBOARD_BYTE, 0x1C);
     model_put(MOUSE_BYTE, 0x08);
     CHECK("the bring-up on a working controller succeeds", init_mouse() == 0);
-    CHECK("the controller is written the bring-up's sequence",
-          writes_are(whole_ports, whole_values, 10));
+    expect_controller();
+    expect_mouse(0xFF, 1);
+    expect_mouse(0xF6, 1);
+    expect_plain();
+    expect_mouse(0xF4, 1);
+    CHECK("the controller is written the bring-up's sequence", writes_expected());
     CHECK("the configuration byte enables IRQ 12 and the aux clock and keeps the rest",
           ctl_config == MOUSE_CONFIG);
     CHECK("the mouse reports", mouse_reporting);
@@ -431,6 +635,14 @@ static void bringup_controller_rows(void)
     CHECK("the bring-up touches no port with interrupts on", ports_with_irq_on == 0);
     CHECK("the bring-up turns interrupts on again", irq_on);
     CHECK("a working controller logs no warning", warnings == 0);
+    CHECK("a plain mouse is PS/2 Generic Mouse, isa0060/serio1/input0",
+          mouse_registrations == 1 && strcmp(registered_name, "PS/2 Generic Mouse") == 0 &&
+              strcmp(registered_phys, "isa0060/serio1/input0") == 0);
+    CHECK("on the 8042's bus, vendor 2 and product PSMOUSE_PS2",
+          registered_bus == EVDEV_BUS_I8042 && registered_vendor == 2 &&
+              registered_product == PROTO_PS2);
+    CHECK("a pointer with no wheel", registered_caps == MOUSE_POINTER);
+    CHECK("its packets are three bytes", packet_size == 3);
 
     /* An output buffer that is full for good. */
     model_reset();
@@ -469,23 +681,17 @@ static void bringup_controller_rows(void)
 /** `init_mouse` against each fault of the mouse. */
 static void bringup_mouse_rows(void)
 {
-    static const uint16_t no_reset_ports[] = {C, C, C, D, C, D, C, D, C, D, C, D, C, D};
-    static const uint8_t no_reset_values[] = {0xA8, 0x20, 0x60, MOUSE_CONFIG, 0xD4, 0xFF, 0xD4,
-                                              0xFF, 0xD4, 0xFF, 0xD4,         0xF6, 0xD4, 0xF4};
-    static const uint16_t resend_ports[] = {C, C, C, D, C, D, C, D, C, D, C, D};
-    static const uint8_t resend_values[] = {0xA8, 0x20, 0x60, MOUSE_CONFIG, 0xD4, 0xFF,
-                                            0xD4, 0xF6, 0xD4, 0xF4,         0xD4, 0xF4};
-    static const uint16_t no_enable_ports[] = {C, C, C, D, C, D, C, D, C, D, C, D, C, D};
-    static const uint8_t no_enable_values[] = {0xA8, 0x20, 0x60, MOUSE_CONFIG, 0xD4, 0xFF, 0xD4,
-                                               0xF6, 0xD4, 0xF4, 0xD4,         0xF4, 0xD4, 0xF4};
-
     /* A mouse that does not answer its reset. */
     model_reset();
     mouse_present = 1;
     mouse_silent_to = MOUSE_CMD_RESET;
     CHECK("an unanswered reset is tolerated", init_mouse() == 0);
-    CHECK("the reset is tried three times and the bring-up goes on",
-          writes_are(no_reset_ports, no_reset_values, 14));
+    expect_controller();
+    expect_mouse(0xFF, 3);
+    expect_mouse(0xF6, 1);
+    expect_plain();
+    expect_mouse(0xF4, 1);
+    CHECK("the reset is tried three times and the bring-up goes on", writes_expected());
     CHECK("an unanswered reset leaves the mouse reporting", mouse_reporting);
     CHECK("an unanswered reset registers the handler", registrations == 1);
 
@@ -501,7 +707,12 @@ static void bringup_mouse_rows(void)
     mouse_present = 1;
     mouse_resend_to = MOUSE_CMD_ENABLE;
     CHECK("a resend of the enable is answered", init_mouse() == 0);
-    CHECK("the enable is sent again after a resend", writes_are(resend_ports, resend_values, 12));
+    expect_controller();
+    expect_mouse(0xFF, 1);
+    expect_mouse(0xF6, 1);
+    expect_plain();
+    expect_mouse(0xF4, 2);
+    CHECK("the enable is sent again after a resend", writes_expected());
     CHECK("a resent enable leaves the mouse reporting", mouse_reporting);
 
     /* A mouse whose ACK of the enable is lost. */
@@ -509,10 +720,75 @@ static void bringup_mouse_rows(void)
     mouse_present = 1;
     mouse_silent_to = MOUSE_CMD_ENABLE;
     CHECK("a lost ACK of the enable fails the bring-up", init_mouse() == -1);
-    CHECK("the enable is tried three times", writes_are(no_enable_ports, no_enable_values, 14));
+    expect_controller();
+    expect_mouse(0xFF, 1);
+    expect_mouse(0xF6, 1);
+    expect_plain();
+    expect_mouse(0xF4, 3);
+    CHECK("the enable is tried three times", writes_expected());
     CHECK("a lost ACK of the enable is reported", warned("the device did not enable reporting"));
     CHECK("a lost ACK of the enable registers no handler", registrations == 0);
     CHECK("a lost ACK of the enable turns interrupts on again", irq_on);
+}
+
+/** `init_mouse` against a mouse with a wheel, and an Explorer. */
+static void bringup_wheel_rows(void)
+{
+    model_reset();
+    mouse_present = 1;
+    mouse_wheel = ID_IMPS;
+    CHECK("the bring-up of a wheel mouse succeeds", init_mouse() == 0);
+    expect_controller();
+    expect_mouse(0xFF, 1);
+    expect_mouse(0xF6, 1);
+    expect_knock(200, 100, 80);
+    expect_knock(200, 200, 80);
+    expect_mouse(0xF3, 1);
+    expect_mouse(100, 1);
+    expect_mouse(0xE8, 1);
+    expect_mouse(3, 1);
+    expect_mouse(0xE6, 1);
+    expect_mouse(0xF4, 1);
+    CHECK("an answered knock is followed by the Explorer's", writes_expected());
+    CHECK("a wheel mouse speaks the IntelliMouse's protocol",
+          protocol == PROTO_IMPS && packet_size == 4);
+    CHECK("it is ImPS/2 Generic Wheel Mouse, product PSMOUSE_IMPS, with a wheel",
+          strcmp(registered_name, "ImPS/2 Generic Wheel Mouse") == 0 &&
+              registered_product == PROTO_IMPS && registered_caps == (MOUSE_POINTER | MOUSE_WHEEL));
+    CHECK("every byte of the knocks is read", model_count == 0);
+
+    model_reset();
+    mouse_present = 1;
+    mouse_wheel = ID_IMEX;
+    CHECK("the bring-up of an Explorer succeeds", init_mouse() == 0);
+    expect_controller();
+    expect_mouse(0xFF, 1);
+    expect_mouse(0xF6, 1);
+    expect_knock(200, 100, 80);
+    expect_knock(200, 200, 80);
+    expect_mouse(0xF3, 1);
+    expect_mouse(200, 1);
+    expect_mouse(0xF3, 1);
+    expect_mouse(80, 1);
+    expect_mouse(0xF3, 1);
+    expect_mouse(40, 1);
+    expect_mouse(0xF3, 1);
+    expect_mouse(100, 1);
+    expect_mouse(0xE8, 1);
+    expect_mouse(3, 1);
+    expect_mouse(0xE6, 1);
+    expect_mouse(0xF4, 1);
+    CHECK("an Explorer is sent the rates of the horizontal wheel", writes_expected());
+    CHECK("it speaks the Explorer's protocol", protocol == PROTO_IMEX && packet_size == 4);
+    CHECK("it is ImExPS/2 Generic Explorer Mouse, product PSMOUSE_IMEX, with both wheels and "
+          "five buttons",
+          strcmp(registered_name, "ImExPS/2 Generic Explorer Mouse") == 0 &&
+              registered_product == PROTO_IMEX &&
+              registered_caps == (MOUSE_POINTER | MOUSE_WHEEL | MOUSE_HWHEEL | MOUSE_SIDE));
+    CHECK("an Explorer's bring-up logs no warning", warnings == 0);
+    CHECK("an Explorer's bring-up touches no port with interrupts on", ports_with_irq_on == 0);
+    protocol = PROTO_PS2;
+    packet_size = 3;
 }
 
 #undef C
@@ -521,9 +797,11 @@ static void bringup_mouse_rows(void)
 int main(void)
 {
     handler_rows();
+    wheel_rows();
     command_rows();
     bringup_controller_rows();
     bringup_mouse_rows();
+    bringup_wheel_rows();
     if (fails == 0) {
         printf("ps2mouse-test: pass\n");
     }

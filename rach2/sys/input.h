@@ -1,6 +1,6 @@
 /*
- * input.h: where a keystroke goes, whatever keyboard produced it, and the
- * mouse reports of every mouse.
+ * input.h: where a keystroke goes, whatever keyboard produced it, and
+ * whether a mouse exists; each mouse reports through mouse.h.
  */
 #ifndef _INPUT_H_
 #define _INPUT_H_
@@ -175,15 +175,6 @@ unsigned int input_leds(void);
  * driver (arch/x86/ps2kbd.c), whose commands they are.
  */
 int input_ps2_reply(uint8_t code);
-
-/**
- * Put one mouse report in the mouse queue (`mouse_push_packet`), for the USB
- * mouse driver; the platform's mouse fills the queue itself.
- *
- * The movements are as the driver gives them, in the device's own units, and
- * the buttons are the low three bits: left, right, middle.
- */
-void input_mouse(int dx, int dy, int buttons);
 
 /** Whether any mouse exists, of any kind. `/mouse` opens when one does. */
 int input_mouse_present(void);

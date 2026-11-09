@@ -22,8 +22,9 @@
 /**
  * Say that a device runs in the boot protocol, `device` numbered as for
  * `hid_report`: a keyboard is registered as the event device "USB keyboard
- * N", N being `device`, with its `vendor` and `product`. Nothing for a
- * mouse, or for a keyboard registered already.
+ * N", N being `device`, and a mouse as "USB HIDBP Mouse VVVV:PPPP", each
+ * with its `vendor` and `product`. Nothing for a device registered
+ * already.
  */
 void hid_attach(int device, int kind, uint16_t vendor, uint16_t product);
 
@@ -35,7 +36,8 @@ void hid_attach(int device, int kind, uint16_t vendor, uint16_t product);
  * ignored. `kind` is `HID_KEYBOARD` or `HID_MOUSE`, and `length` is how much
  * actually arrived. A keyboard's report goes to the input layer as the key
  * events of the keys that went down or came up since its last report; a
- * mouse's goes as one movement with its buttons. A report shorter than its
+ * mouse's goes as one packet of its buttons, movement and wheel
+ * (`mouse_report`). A report shorter than its
  * layout is dropped rather than read past.
  */
 void hid_report(int device, int kind, const uint8_t *report, int length);
@@ -62,7 +64,8 @@ void hid_led_sent(int device, int report, int ok);
  * Say that a device has gone, `device` numbered as for `hid_report`.
  *
  * Everything it was holding down is released, its repeat stops and its event
- * device is taken away (`input_keyboard_detach`). Without this a key held
+ * device is taken away (`input_keyboard_detach`, or a mouse's
+ * `evdev_unregister`). Without this a key held
  * while the keyboard is unplugged stays down for ever, because the release
  * that would have lifted it is on a device that is no longer there.
  */

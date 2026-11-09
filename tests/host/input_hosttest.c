@@ -169,14 +169,6 @@ void suspend_wake(void)
 void console_poke(void)
 {}
 
-/** No row moves a mouse. */
-void mouse_push_packet(uint8_t buttons, int dx, int dy)
-{
-    (void)buttons;
-    (void)dx;
-    (void)dy;
-}
-
 /** Forget what the models took. */
 static void clear(void)
 {
