@@ -180,6 +180,9 @@
 #define KVM_INTERNAL_ERROR_DELIVERY_EV            3
 #define KVM_INTERNAL_ERROR_UNEXPECTED_EXIT_REASON 4
 
+/* The flag of an emulation failure that carries the instruction's bytes. */
+#define KVM_INTERNAL_ERROR_EMULATION_FLAG_INSTRUCTION_BYTES 1ull
+
 /* The page offsets of a vCPU's mapping: the run structure, then the data
  * of port I/O, which kvm_run.io.data_offset names. */
 #define KVM_PIO_PAGE_OFFSET 1
