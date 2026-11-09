@@ -778,6 +778,50 @@ static void save_mixer(void)
     }
 }
 
+/* How long a shutdown waits for the processes to end, in milliseconds:
+ * after SIGTERM, which an interactive shell ignores, and then after
+ * SIGKILL, which a process in a disk wait takes only when the wait ends. */
+#define END_TERM_MS 1000
+#define END_KILL_MS 5000
+
+/**
+ * Reap init's children until none is left, every process having been
+ * reparented to init as its parent ended, or until `ms` milliseconds have
+ * passed. Async-signal-safe, for `shutdown_handler`.
+ */
+static void reap_for(long ms)
+{
+    struct timespec step = {0, 10000000L};
+    long waited;
+    pid_t pid;
+
+    for (waited = 0; waited <= ms; waited += 10) {
+        while ((pid = waitpid(-1, NULL, WNOHANG)) > 0) {
+        }
+        if (pid < 0 && errno == ECHILD) {
+            return;
+        }
+        nanosleep(&step, NULL);
+    }
+}
+
+/**
+ * End every other process before a shutdown, as Linux's inits do: SIGTERM,
+ * a wait of END_TERM_MS for them to end, then SIGKILL and a wait of
+ * END_KILL_MS, each wait over once none is left. A file a process held
+ * open is closed at its end, and one removed while open is freed then, so
+ * that the kernel can mark each volume clean. Async-signal-safe.
+ */
+static void end_processes(void)
+{
+    if (kill(-1, SIGTERM) == 0) {
+        reap_for(END_TERM_MS);
+    }
+    if (kill(-1, SIGKILL) == 0) {
+        reap_for(END_KILL_MS);
+    }
+}
+
 /**
  * Stop the machine as the signal `sig` selects. Does not return.
  *
@@ -796,9 +840,10 @@ static void save_mixer(void)
  * second request, such as the second `poweroff` of a power button the
  * firmware reports twice, waits and is never answered.
  *
- * The kernel disables scheduling and writes out the root file system before
- * it stops the machine, and stops it even when that write fails. init does
- * not terminate the user processes first.
+ * Every other process is ended first (`end_processes`), so that the files
+ * they hold are closed and a removed one is freed. The kernel then disables
+ * scheduling and writes out each file system on a disk, the root last,
+ * before it stops the machine, and stops it even when a write fails.
  */
 static void shutdown_handler(int sig)
 {
@@ -811,6 +856,7 @@ static void shutdown_handler(int sig)
     }
     save_backlights();
     save_mixer();
+    end_processes();
     reboot(command);
     _exit(1);
 }
