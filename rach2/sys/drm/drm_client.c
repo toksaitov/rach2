@@ -7,6 +7,7 @@
 
 #include "drm.h"
 
+#include "../arch/arch.h"
 #include "../cmdline.h"
 #include "../display/fb.h"
 #include "../display/fbcon.h"
@@ -14,7 +15,15 @@
 #include "../kio.h"
 #include "../klog.h"
 #include "../lib/kerrno.h"
+#include "../lib/kirq.h"
 #include "../lib/kstring.h"
+#include "../mm/kheap.h"
+#include "../mm/paging.h"
+#include "../proc/process.h"
+#include "../proc/sched.h"
+#include "../proc/wait_queue.h"
+#include "../rtc.h"
+#include "../timer.h"
 
 /*
  * The console takes the first device with mode setting and dumb buffers
@@ -32,6 +41,14 @@
  * or else the size of the loader's screen, so that the console looks as it
  * did at boot, or else the connector's preferred mode. A CRTC with no
  * connector of the console's is turned off.
+ *
+ * A driver whose buffers the kernel cannot address as one range, such as
+ * virtio-gpu's of scattered pages, gives no `vmap`; there fbcon draws on a
+ * shadow in the kernel's heap, and a worker, `kdrmcon`, copies the rows
+ * fbcon changed (`fbcon_take_damage`) into the buffer's pages through
+ * their `page` hook and flushes them to the display as DIRTYFB would,
+ * CON_FLUSH_MS after the last flush at the soonest, as Linux's fbdev
+ * emulation does for a shmem driver with its shadow and damage worker.
  *
  * The firmware's framebuffer (fbdrm) is the screen itself, so there the
  * console draws on it directly, as it did before the device registered,
@@ -52,6 +69,10 @@
 #define CON_GREEN_SHIFT 8
 #define CON_BLUE_SHIFT  0
 
+/* The least time between two flushes of a shadow, Linux's fbdev deferred
+ * I/O delay of HZ/20. */
+#define CON_FLUSH_MS 50u
+
 /* An output the console lights: a CRTC, the connector it drives, and the
  * mode. */
 struct con_output {
@@ -68,7 +89,10 @@ struct con_output {
  * buffer; `lost` that it did on a buffer that went, with its device or out
  * of reach, so that nothing is drawn until another buffer is set. `gen`
  * changes with every change of the master role and every device that comes
- * or goes.
+ * or goes. `shadow` is what fbcon draws on for a buffer without `vmap`,
+ * `shadow_bytes` long, or NULL; `next` a shadow of another size that the
+ * next attach moves fbcon to, and `spare` one it left, freed once the
+ * console's lock is let go.
  */
 static struct {
     struct drm_device *dev;
@@ -81,7 +105,14 @@ static struct {
     struct drm_framebuffer *fb;
     struct drm_gem_object *obj;
     struct boot_framebuffer screen;
+    uint8_t *shadow;
+    uint32_t shadow_bytes;
+    uint8_t *next;
+    uint8_t *spare;
 } con;
+
+static wait_queue_t con_wake;
+static uint64_t con_deadline; /* the tick of the next flush; 0 for none */
 
 static void con_master_changed(struct drm_device *dev, struct drm_file *master);
 
@@ -324,6 +355,48 @@ static void con_describe(struct boot_framebuffer *screen, uint32_t vw, uint32_t 
     screen->blue_bits = 8;
 }
 
+/** The kernel's address of the console's buffer, or NULL for one the
+ * driver cannot map. */
+static volatile uint8_t *con_vmap(void)
+{
+    return con.obj->funcs && con.obj->funcs->vmap ? con.obj->funcs->vmap(con.obj) : NULL;
+}
+
+/** Where fbcon draws for the console's buffer: the buffer itself, or its
+ * shadow. */
+static volatile uint8_t *con_base(void)
+{
+    volatile uint8_t *v = con_vmap();
+
+    return v != NULL ? v : con.shadow;
+}
+
+/**
+ * A shadow for the console's buffer, `h` rows of its pitch, in `*base`:
+ * the one fbcon has when it is that size, else a new one in `con.next`,
+ * zeroed. 0, -ENODEV for a device whose buffers can be neither mapped nor
+ * flushed (no `page` hook or no `fb_dirty`), or -ENOMEM.
+ */
+static int32_t con_shadow_make(struct drm_device *dev, uint32_t h, volatile uint8_t **base)
+{
+    uint32_t bytes = con.fb->pitches[0] * h;
+
+    if (!con.obj->funcs || !con.obj->funcs->page || !dev->mode_config.fb_dirty) {
+        return -ENODEV;
+    }
+    if (con.shadow && con.shadow_bytes == bytes) {
+        *base = con.shadow;
+        return 0;
+    }
+    kfree(con.next);
+    con.next = (uint8_t *)kzalloc(bytes);
+    if (!con.next) {
+        return -ENOMEM;
+    }
+    *base = con.next;
+    return 0;
+}
+
 /**
  * Light the console's outputs on `dev`, as the comment at the top says, and
  * describe where fbcon draws in `*screen` and `*base`: the loader's
@@ -377,9 +450,9 @@ static int32_t con_place(struct drm_device *dev, struct boot_framebuffer *screen
         *base = NULL;
         return 0;
     }
-    *base = con.obj->funcs && con.obj->funcs->vmap ? con.obj->funcs->vmap(con.obj) : NULL;
-    if (*base == NULL) {
-        return -ENODEV;
+    *base = con_vmap();
+    if (*base == NULL && (err = con_shadow_make(dev, h, base)) != 0) {
+        return err;
     }
     con_describe(screen, vw, vh);
     return 0;
@@ -406,10 +479,16 @@ static int32_t con_attach(int32_t rc, const struct boot_framebuffer *screen, vol
         if (con.on_buffer) {
             con.screen = *screen;
         }
+        if (con.next && base == con.next) {
+            con.spare = con.shadow;
+            con.shadow = con.next;
+            con.shadow_bytes = con.fb->pitches[0] * con.fb->height;
+            con.next = NULL;
+        }
         return 0;
     }
     if (con.on_buffer) {
-        old = con.obj->funcs && con.obj->funcs->vmap ? con.obj->funcs->vmap(con.obj) : NULL;
+        old = con_base();
         if (old != NULL && fbcon_attach(&con.screen, old) == 0) {
             return rc;
         }
@@ -420,6 +499,146 @@ static int32_t con_attach(int32_t rc, const struct boot_framebuffer *screen, vol
         fbcon_attach(fbcon_boot_screen(), NULL);
     }
     return rc;
+}
+
+/** Whether a shadow waits for its flushes: the console draws on it and no
+ * master holds the device. */
+static int con_shadowed(void)
+{
+    return con.dev && con.shadow && con.on_buffer && !con.handed;
+}
+
+/** Copy the bytes of the shadow from `from` up to `to` into the console's
+ * buffer, a page at a time through the buffer's `page` hook. Does not
+ * sleep. */
+static void con_copy(uint32_t from, uint32_t to)
+{
+    uint32_t at = from, n, in;
+    uintptr_t phys;
+    uint8_t *va;
+
+    while (at < to) {
+        in = at & (PAGE_SIZE - 1);
+        n = PAGE_SIZE - in < to - at ? PAGE_SIZE - in : to - at;
+        phys = con.obj->funcs->page(con.obj, at / PAGE_SIZE);
+        va = phys ? (uint8_t *)kmap_temp(phys) : NULL;
+        if (!va) {
+            return;
+        }
+        k_memcpy(va + in, con.shadow + at, n);
+        kunmap_temp(va);
+        at += n;
+    }
+}
+
+/** Copy the rows fbcon changed on the shadow into the console's buffer and
+ * flush them to the display. Process context; the flush may sleep. */
+static void con_flush(void)
+{
+    struct drm_framebuffer *fb;
+    struct drm_device *dev;
+    struct drm_mode_rect r;
+    uint32_t top, end, flags;
+    int have;
+
+    if (!con_shadowed()) {
+        return;
+    }
+    flags = console_lock();
+    have = fbcon_take_damage(&top, &end);
+    console_unlock(flags);
+    if (!have) {
+        return;
+    }
+    con_copy(top * con.fb->pitches[0], end * con.fb->pitches[0]);
+    dev = con.dev;
+    fb = con.fb;
+    drm_dev_get(dev);
+    drm_framebuffer_get(fb);
+    r.x1 = 0;
+    r.y1 = (int32_t)top;
+    r.x2 = (int32_t)fb->width;
+    r.y2 = (int32_t)end;
+    (void)drm_framebuffer_dirty(dev, fb, &r);
+    drm_framebuffer_put(fb);
+    drm_dev_put(dev);
+}
+
+/** The worker's wait: past the flush's tick when one is set, else until a
+ * shadow wants flushes. */
+static int con_flush_ready(void *arg)
+{
+    (void)arg;
+    return con_deadline != 0 ? rtc_ticks_now() >= con_deadline : con_shadowed();
+}
+
+#ifndef RACH2_HOSTTEST
+static process_t *con_thread;
+
+/** The worker, kdrmcon: while a shadow is in use, flush it every
+ * CON_FLUSH_MS; otherwise sleep in an idle wait until one is. */
+static void con_thread_main(void)
+{
+    arch_irq_enable();
+    for (;;) {
+        con_deadline = con_shadowed() ? rtc_ticks_now() + CON_FLUSH_MS * TICK_HZ / 1000u : 0;
+        current_proc->wakeup_tick = con_deadline;
+        (void)wq_wait_event_idle(&con_wake, con_flush_ready, NULL);
+        current_proc->wakeup_tick = 0;
+        con_flush();
+    }
+}
+
+/** Start the worker once, on the first shadow. A failure is logged, and
+ * the shadow is then never shown. */
+static void con_worker_start(void)
+{
+    process_t *p;
+    uintptr_t stack;
+    uint32_t flags;
+
+    if (con_thread) {
+        return;
+    }
+    flags = kirq_save();
+    stack = kstack_alloc();
+    p = stack ? alloc_process() : NULL;
+    if (!p) {
+        if (stack) {
+            kstack_free(stack + KERNEL_STACK_SIZE);
+        }
+        kirq_restore(flags);
+        klog(KLOG_ERR, "console", "worker: refused: no record or stack for it");
+        return;
+    }
+    p->kernel_stack = stack + KERNEL_STACK_SIZE;
+    p->space_root = 0;
+    p->page_dir = NULL;
+    p->parent_pid = 0;
+    proc_set_comm(p, "kdrmcon");
+    setup_process_stack(p, con_thread_main);
+    con_thread = p;
+    sched_make_ready(p);
+    kirq_restore(flags);
+}
+#else
+/** The host tests call `con_flush` themselves. */
+static void con_worker_start(void)
+{}
+#endif
+
+/** After an attach, with the console's lock let go: free the shadows fbcon
+ * no longer draws on, and start the worker for one it does. */
+static void con_settle(void)
+{
+    kfree(con.spare);
+    kfree(con.next);
+    con.spare = NULL;
+    con.next = NULL;
+    if (con_shadowed()) {
+        con_worker_start();
+        wq_wake_all(&con_wake);
+    }
 }
 
 /** A master of the console's device took the screen: hand the screen, /fb
@@ -458,6 +677,7 @@ static void con_take_back(struct drm_device *dev)
     rc = con_attach(rc, &screen, base);
     fb_unhold();
     console_unlock(flags);
+    con_settle();
     kd_unhold();
     if (rc != 0) {
         klog(KLOG_WARN, "console", "card%d: screen not set: error %d", dev->index, (int)rc);
@@ -518,6 +738,7 @@ void drm_client_dev_register(struct drm_device *dev)
     rc = con_attach(rc, &screen, base);
     fb_screen_moved();
     console_unlock(flags);
+    con_settle();
     if (rc != 0) {
         klog(KLOG_WARN, "console", "card%d: screen not set: error %d", dev->index, (int)rc);
     }
@@ -550,6 +771,9 @@ void drm_client_dev_unregister(struct drm_device *dev)
         kd_unhold();
     }
     con.on_buffer = 0;
+    kfree(con.shadow);
+    con.shadow = NULL;
+    con.shadow_bytes = 0;
     drm_framebuffer_put(con.fb);
     drm_gem_object_put(con.obj);
     con.fb = NULL;
@@ -577,4 +801,5 @@ void drm_client_dev_hotplug(struct drm_device *dev)
     rc = con_attach(rc, &screen, base);
     fb_screen_moved();
     console_unlock(flags);
+    con_settle();
 }
