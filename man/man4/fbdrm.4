@@ -1,0 +1,116 @@
+.Dd November 10, 2026
+.Dt FBDRM 4
+.Os
+.Sh NAME
+.Nm fbdrm ,
+.Nm simpledrm
+.Nd DRM driver of the framebuffer the boot loader leaves
+.Sh SYNOPSIS
+.In drm/drm.h
+.In drm/drm_mode.h
+.Pp
+.Pa /dev/dri/cardN
+.Sh DESCRIPTION
+The
+.Nm
+driver drives the screen GRUB sets up before it starts the kernel, as
+Linux 6.12's simpledrm drives a firmware framebuffer.
+It binds when the loader's boot information describes a direct-colour
+framebuffer the kernel can reach, in one of the layouts simpledrm knows:
+RGB565, XRGB1555, RGB888, XRGB8888, XBGR8888 or XRGB2101010.
+A machine booted by UEFI always has one; a BIOS boot has one when the
+entry asks for a graphics mode, and none in text mode.
+.Pp
+A native driver of the same screen takes it first.
+The kernel probes the native drivers, such as
+.Xr bochs 4 ,
+before
+.Nm ,
+and a native driver removes the firmware's framebuffer from the ranges its
+device decodes; then
+.Nm
+binds nothing and the kernel logs
+.Dq fbdrm: framebuffer at ADDRESS is a native driver's .
+.Cm nomodeset
+on the kernel command line keeps the native drivers off and leaves the
+screen to
+.Nm ,
+as on Linux.
+.Pp
+A bound framebuffer is a DRM device, as
+.Xr drm 4
+describes, registered as
+.Ql simpledrm
+with Linux's identity: description
+.Ql DRM driver for simple-framebuffer platform devices ,
+version 1.0.0 and date 20200625, on the platform bus as
+.Ql simple-framebuffer.0 .
+It has a card node alone, and the features
+.Dv DRIVER_GEM ,
+.Dv DRIVER_MODESET
+and
+.Dv DRIVER_ATOMIC .
+The kernel logs
+.Dq fbdrm: registered
+with its size, format, pitch, address and card.
+.Ss Display
+The device has one CRTC, one primary plane, one encoder of type
+.Dv DRM_MODE_ENCODER_NONE
+and one connector of type
+.Dv DRM_MODE_CONNECTOR_Unknown ,
+.Ql Unknown-1 ,
+always connected.
+The connector has one mode, the framebuffer's size at 60 Hz with no
+blanking, preferred, and a physical size reckoned at 96 dots an inch, as
+simpledrm gives them.
+The mode cannot change: a commit of another size fails with
+.Er EINVAL .
+.Pp
+The plane takes the framebuffer's own format and XRGB8888.
+Framebuffers are dumb buffers in system memory, at least as wide as the
+screen and at most 4096 pixels or the screen's width, whichever is more.
+A commit copies the framebuffer onto the screen, converting from XRGB8888
+to the screen's format: the damage clips the commit names, through
+.Dv FB_DAMAGE_CLIPS
+or
+.Dv DRM_IOCTL_MODE_DIRTYFB ,
+or the whole plane when it names none.
+Turning the plane off paints the screen black.
+.Ss Choosing the mode
+The mode is the one the loader set, so it is chosen in the GRUB entry that
+starts the kernel.
+On a BIOS machine,
+.Va gfxpayload ,
+set after the
+.Ic multiboot
+or
+.Ic multiboot2
+command, names it:
+.Bd -literal -offset indent
+multiboot2 /boot/kernel rach2.root=...
+set gfxpayload=1366x768x32
+boot
+.Ed
+.Pp
+.Ql auto
+asks the video BIOS for the screen's preferred mode, a list such as
+.Ql 1920x1080,1366x768
+takes the first the video BIOS has, and
+.Ql text
+leaves the screen in text mode, with no framebuffer and so no
+.Nm .
+Under UEFI the framebuffer is the one the firmware set up, whatever the
+variable says.
+.Sh FILES
+.Bl -tag -width /dev/dri/cardN
+.It Pa /dev/dri/cardN
+The card node of the bound framebuffer.
+.El
+.Sh SEE ALSO
+.Xr bochs 4 ,
+.Xr console 4 ,
+.Xr drm 4 ,
+.Xr drm-kms 7
+.Sh HISTORY
+The driver follows Linux 6.12's simpledrm, whose identity, mode, formats
+and copy it takes.

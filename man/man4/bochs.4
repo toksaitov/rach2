@@ -1,0 +1,125 @@
+.Dd November 10, 2026
+.Dt BOCHS 4
+.Os
+.Sh NAME
+.Nm bochs ,
+.Nm bochs-drm
+.Nd DRM driver of QEMU's standard VGA
+.Sh SYNOPSIS
+.In drm/drm.h
+.In drm/drm_mode.h
+.Pp
+.Pa /dev/dri/cardN
+.Sh DESCRIPTION
+The
+.Nm
+driver binds the display adapter of the Bochs DISPI interface, QEMU's
+.Ql -vga std ,
+.Ql -device VGA
+and
+.Ql -device bochs-display ,
+whose PCI id is 1234:1111, and the same adapter under 4321:1111, as
+Linux 6.12's bochs-drm does.
+It needs at least 4 MiB of video memory in BAR 0, and reads the DISPI
+registers through BAR 2 when the device has it and through the ports
+0x1ce and 0x1cf otherwise.
+A device whose DISPI id is not 0xb0c0 to 0xb0cf is not bound.
+.Cm nomodeset
+or
+.Cm bochs.modeset=0
+on the kernel command line keeps the driver off, and the screen goes to
+.Xr fbdrm 4 .
+.Pp
+Before it touches the device the driver removes the firmware's framebuffer
+from every memory BAR the device decodes, so that
+.Xr fbdrm 4
+leaves the screen to it and the machine has one card.
+A bound device is a DRM device, as
+.Xr drm 4
+describes, registered as
+.Ql bochs-drm
+with Linux's identity: description
+.Ql bochs dispi vga interface (qemu stdvga) ,
+version 1.0.0 and date 20130925, on the PCI bus.
+It has a card node alone, and the features
+.Dv DRIVER_GEM ,
+.Dv DRIVER_MODESET
+and
+.Dv DRIVER_ATOMIC .
+The kernel logs
+.Dq bochs: registered
+with the DISPI id, the video memory, the registers' place, whether QEMU
+gave an EDID, and the card.
+.Ss Display
+The device has one CRTC, one primary plane of formats XRGB8888 and
+BGRX8888, one encoder of type
+.Dv DRM_MODE_ENCODER_NONE
+and one connector of type
+.Dv DRM_MODE_CONNECTOR_VIRTUAL ,
+.Ql Virtual-1 ,
+always connected.
+.Pp
+The connector's modes come from the EDID QEMU puts at the start of BAR 2,
+which it gives unless the device has
+.Ql edid=off ;
+the connector then has the
+.Ql EDID
+property, and QEMU's
+.Ql xres
+and
+.Ql yres
+name the preferred mode, 1280x800 by default.
+Without an EDID the modes are the DMT modes up to 8192x8192, with
+1024x768 preferred.
+Either way a mode is listed and accepted only when two frames of it at 32
+bits fit in video memory, so that one can be shown while the other is
+drawn: with QEMU's default 16 MiB, 1920x1080 fits and 1920x1200 does
+not, and
+.Ql vgamem_mb
+raises the limit.
+.Pp
+A mode set writes the DISPI registers as Linux's driver does: 32 bits a
+pixel, the mode's size, and a virtual height of the whole of video memory.
+The plane's buffer is shown through the virtual width and the X and Y
+offsets, which a page flip alone writes, so a flip moves no pixels.
+XRGB8888 sets the little-endian byte order in QEMU's extended registers,
+and BGRX8888 the big-endian one, on a device that has them.
+Turning the CRTC off blanks the screen through the VGA attribute
+controller.
+.Ss Buffers
+Dumb buffers have rows of the width's bytes, unpadded, and a whole number
+of pages.
+A buffer is made in video memory when there is room, from the top down,
+and in system memory otherwise.
+Each buffer a commit shows is pinned in video memory: moved there first,
+with the buffers no commit shows moved out to system memory to make room,
+the least recently shown first.
+A mapping follows its buffer: it is write-combining, and after a move the
+next access reaches the buffer's new place.
+.Sh FILES
+.Bl -tag -width /dev/dri/cardN
+.It Pa /dev/dri/cardN
+The card node of a bound device.
+.El
+.Sh ERRORS
+Besides those of
+.Xr drm 4 :
+.Bl -tag -width Er
+.It Er EINVAL
+A mode whose two frames do not fit in video memory; an import of another
+device's buffer through
+.Dv DRM_IOCTL_PRIME_FD_TO_HANDLE .
+.It Er ENOMEM
+A commit whose buffer finds no room in video memory beside those already
+shown.
+The display is left as it was.
+.El
+.Sh SEE ALSO
+.Xr drm 4 ,
+.Xr fbdrm 4 ,
+.Xr drm-kms 7
+.Sh HISTORY
+The driver follows Linux 6.12's bochs-drm and its VRAM helper, whose
+register sequences, mode limits and buffer placement it takes; it places
+buffers from the top of video memory where TTM places them from the
+bottom.
