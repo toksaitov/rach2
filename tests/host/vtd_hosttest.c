@@ -2,7 +2,7 @@
  * vtd_hosttest.c: the VT-d driver of rach2/sys/arch/x86/iommu/ against a
  * model of the remapping units, over the DMAR tables of QEMU and the Lenovo.
  *
- * host-deps: rach2/sys/pci.c rach2/sys/arch/x86/pciconf.c
+ * host-deps: rach2/sys/arch/x86/pciconf.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c
  * host-deps: tests/host/compat/spinlock_host.c
@@ -18,7 +18,8 @@
  * garbage. The rows give the model DMA requests and interrupts and read
  * where they went, or the fault the unit recorded and fault.c reported.
  *
- * Configuration space is memory behind pciconf.c's ECAM accessors. The I/O
+ * Configuration space is memory behind pciconf.c's ECAM accessors, and
+ * sys/pci.c is included whole so that each row walks its own buses. The I/O
  * APIC is a list of redirection entries that this file's
  * `ioapic_remap_start` rewrites as ioapic.c does; QEMU boots check the real
  * one. The Lenovo's DMAR table is rebuilt from Linux's boot log
@@ -35,6 +36,7 @@
 #include "../../rach2/sys/arch/x86/iommu/vtd.c"
 #include "../../rach2/sys/arch/x86/iommu/intremap.c"
 #include "../../rach2/sys/arch/x86/iommu/fault.c"
+#include "../../rach2/sys/pci.c"
 
 #include "../../rach2/sys/arch/x86/pciconf.h"
 #include "../../rach2/sys/lib/kirq.h"
@@ -1416,6 +1418,12 @@ static void row_begin(const char *name)
     memset(ecam_mem, 0xFF, (unsigned long)ECAM_BUSES << 20);
     memset(msix_tables, 0, sizeof(msix_tables));
     pci_ecam_set((uintptr_t)ecam_mem, 0, ECAM_BUSES - 1);
+    if (pci_list != pci_first) {
+        kfree(pci_list);
+    }
+    pci_list = pci_first;
+    pci_list_cap = PCI_FIRST_MAX;
+    pci_list_len = -1;
 }
 
 /** End the row: messages taken back, the units' tables freed, and every
