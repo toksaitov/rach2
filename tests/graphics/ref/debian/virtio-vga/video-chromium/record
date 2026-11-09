@@ -1,0 +1,58 @@
+runner video
+system Debian GNU/Linux 13 (trixie)
+kernel Linux 6.12.115+deb13.1-amd64
+cpus 4
+memory_kib 8138020
+mesa 25.0.7-2+deb13u1
+iommu units none groups 0 cmdline none
+cache mesa 0 files in /tmp/graphics-shader-cache, emptied at start: 1
+cache browser a new profile for each browser started
+size 1280x800
+load start 0.08 0.02 0.01
+processes start 158
+env GRAPHICS_CLASS=conformance
+env GRAPHICS_CPUS=4
+env GRAPHICS_MEMORY_KIB=8138020
+env LP_NUM_THREADS=0
+env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+env MESA_SHADER_CACHE_FILES=0
+env GRAPHICS_DONE=1
+env XVFB=-noreset
+case video chromium h264-720p.mp4 h264-1080p.mp4 vp9-720p.webm vp9-1080p.webm av1-720p.webm av1-1080p.webm
+warmup 1
+repetitions 3
+clips /tmp/clips
+browser Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)
+switches --ozone-platform=wayland --no-first-run --no-default-browser-check --password-store=basic --start-fullscreen --ignore-gpu-blocklist --disable-gpu-process-crash-limit --js-flags=--expose-gc --disable-background-timer-throttling --disable-renderer-backgrounding --disable-background-networking --disable-hang-monitor --autoplay-policy=no-user-gesture-required
+compositor weston 14.0.2 headless pixman kiosk
+clip h264-720p.mp4 h264 1280x720 30fps 10s 5194436 bytes sha256 1fa10e70195c8f37142c77f8a7dd303a96ef40e368331dd7b6742abb97ed572f
+renderer webgl WebKit WebGL; WebGL 1.0 (OpenGL ES 2.0 Chromium); unmasked ANGLE (Mesa, llvmpipe (LLVM 19.1.7 256 bits), OpenGL ES 3.2); vendor Google Inc. (Mesa)
+renderer webgl2 WebKit WebGL; WebGL 2.0 (OpenGL ES 3.0 Chromium); unmasked ANGLE (Mesa, llvmpipe (LLVM 19.1.7 256 bits), OpenGL ES 3.2); vendor Google Inc. (Mesa)
+clip h264-1080p.mp4 h264 1920x1080 30fps 10s 10379700 bytes sha256 8e566274514deb59d29e5163c00684f5907795a5bd4e74bd5c80239981f9c114
+clip vp9-720p.webm vp9 1280x720 30fps 10s 4091832 bytes sha256 89b813d1ff8464dd5c407b73697e2cc6290e5542509bb1a10cada3947abfff69
+clip vp9-1080p.webm vp9 1920x1080 30fps 10s 8228841 bytes sha256 d8894694e9dcaed9c484b67eb1ba75bbc25655b3f07fae207fc379f7146ccf00
+clip av1-720p.webm av1 1280x720 30fps 10s 2455897 bytes sha256 9191128f69d42283d345bfc81809f4122f2359b484dad977816e8249ececa3da
+clip av1-1080p.webm av1 1920x1080 30fps 10s 4912919 bytes sha256 1aa8f6f66a8087710b0689c7da25402ab96b64b8c7990fd2a2544da88e032402
+load end 0.77 0.41 0.16
+busy 9.2%
+guest profile virtio-vga
+guest firmware seabios
+guest accelerator kvm
+guest cpu host,invtsc=on
+guest cpus 4
+guest memory_mib 8192
+guest qemu QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3)
+guest image debian-13-generic-amd64-20261103-2651.qcow2 sha512 1207e6e3efaff8ee77ab7a32c156a3eea6a9e53f94cfc48efbd1f49ba554ca36ac62ab27395aa813a1775a8c0a393b1a1ce5377d9e5670f6113e3110c57fee4b
+guest snapshot 20261108T000000Z
+guest claim debian-ref:toksaitov-d:303631:1794260574
+guest env GRAPHICS_CLASS=conformance
+guest env GRAPHICS_CPUS=4
+guest env GRAPHICS_MEMORY_KIB=8138020
+guest env LP_NUM_THREADS=0
+guest env MESA_SHADER_CACHE_DIR=/tmp/graphics-shader-cache
+guest env MESA_SHADER_CACHE_FILES=0
+guest env GRAPHICS_DONE=1
+guest env XVFB=-noreset
+host SFW-DPC Linux 6.18.54.1-microsoft-standard-WSL2
+host_load 3.52 4.10 5.36
+host_claims none: no ledger at /var/lib/rach2-etude/ledger/claims

@@ -1,0 +1,4 @@
+webgl: result: chromium 1.0.4 chunk 0 of 4 pages 250 pass 230 fail 14 timeout 6 crash 0 hung 0 skip 0 empty 0 notrun 0 rerun 20 subtests passed 25475 failed 88
+webgl: result: chromium 1.0.4 chunk 1 of 4 pages 250 pass 249 fail 1 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 rerun 1 subtests passed 8587 failed 2
+webgl: result: chromium 1.0.4 chunk 2 of 4 pages 250 pass 239 fail 5 timeout 6 crash 0 hung 0 skip 0 empty 0 notrun 0 rerun 11 subtests passed 20499 failed 714
+webgl: result: chromium 1.0.4 chunk 3 of 4 pages 221 pass 221 fail 0 timeout 0 crash 0 hung 0 skip 0 empty 0 notrun 0 rerun 0 subtests passed 211989 failed 0
