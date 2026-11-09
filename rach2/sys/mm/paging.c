@@ -456,10 +456,11 @@ static int device_fault(page_dir_t *dir, vm_space_t *vm, const vma_t *vma, uintp
 
 /** Whether the region `vma` allows the access: a write needs write, and a
  * read needs read, which mmap and the ELF loader give every region with
- * write or execute. */
+ * write or execute; a guard allows none. */
 static int region_allows(const vma_t *vma, int write)
 {
-    return (vma->prot & (write ? VM_PROT_WRITE : VM_PROT_READ)) != 0;
+    return (vma->prot & (write ? VM_PROT_WRITE : VM_PROT_READ)) != 0 &&
+           !(vma->prot & VM_PROT_GUARD);
 }
 
 /**
@@ -694,7 +695,7 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
  * A region that is private and writable has its pages brought in for a write,
  * which gives each its own frame now, as Linux's populate breaks the sharing
  * of copy-on-write pages; any other for a read, so that a shared page is not
- * made dirty for nothing. A region with no access, or of device memory,
+ * made dirty for nothing. A region with no access, a guard or device memory
  * is passed over, as Linux's populate passes a VM_IO region over. Each
  * page brought in counts as a fault (`fault_count`), as Linux counts its
  * populate's.
@@ -710,7 +711,7 @@ int vm_populate(uintptr_t start, uintptr_t end)
         const vma_t *vma = vm_find(&current_proc->mm->vm, page);
         int write;
 
-        if (!vma || !(vma->prot & VM_PROT_READ) || (vma->prot & VM_PROT_IO)) {
+        if (!vma || !(vma->prot & VM_PROT_READ) || (vma->prot & (VM_PROT_IO | VM_PROT_GUARD))) {
             continue;
         }
         write = (vma->prot & VM_PROT_WRITE) && vma->type != VM_SHARED;
@@ -896,7 +897,8 @@ static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
     uint8_t *map;
 
     if (addr < USER_ADDR_MIN || addr >= USER_ADDR_MAX || vma == NULL ||
-        !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) || (vma->prot & VM_PROT_IO)) {
+        !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
+        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD))) {
         return -EIO;
     }
     if (!pte_present(mm->dir, addr) && !vm_resolve_in(mm, addr, 0, (uintptr_t)RLIM_INFINITY)) {
@@ -907,7 +909,7 @@ static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
     }
     vma = vm_find(&mm->vm, addr);
     if (vma == NULL || !(vma->prot & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXEC)) ||
-        (vma->prot & VM_PROT_IO) || !pte_present(mm->dir, addr)) {
+        (vma->prot & (VM_PROT_IO | VM_PROT_GUARD)) || !pte_present(mm->dir, addr)) {
         return -EIO;
     }
     if (write &&
@@ -966,10 +968,11 @@ static int fetch_refused(uintptr_t addr, const isr_params_t *p)
 /**
  * Signal the current process for its user fault `params` at `addr` that no
  * resolution made legal, a `write` or a read: with `bus`, SIGBUS with
- * BUS_ADRERR, for a device region whose object had no page there; else
- * SIGSEGV, SEGV_ACCERR when a region holds the address and SEGV_MAPERR when
- * none does. Either is forced as Linux forces it, and the death is logged
- * only when no handler and no tracer will see a SIGSEGV.
+ * BUS_ADRERR, for a device region whose object had no page there; else SIGSEGV,
+ * SEGV_ACCERR when a region holds the address and SEGV_MAPERR when none does or
+ * a guard does, as Linux answers a guard's fault. Either is forced as Linux
+ * forces it, and the death is logged only when no handler and no tracer will
+ * see a SIGSEGV.
  */
 static void fault_signal(const isr_params_t *params, uintptr_t addr, int write, int bus)
 {
@@ -980,7 +983,9 @@ static void fault_signal(const isr_params_t *params, uintptr_t addr, int write, 
     if (bus) {
         info.code = BUS_ADRERR;
     } else {
-        info.code = vm_find(&current_proc->mm->vm, addr) ? SEGV_ACCERR : SEGV_MAPERR;
+        const vma_t *vma = vm_find(&current_proc->mm->vm, addr);
+
+        info.code = vma && !(vma->prot & VM_PROT_GUARD) ? SEGV_ACCERR : SEGV_MAPERR;
     }
     info.addr = addr;
     current_proc->trap_nr = PAGE_FAULT_VECTOR;

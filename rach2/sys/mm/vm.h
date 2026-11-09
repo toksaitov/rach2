@@ -56,9 +56,17 @@
 #define VM_PROT_LOCKED      0x200u
 #define VM_PROT_LOCKONFAULT 0x400u
 #define VM_PROT_LOCKS       (VM_PROT_LOCKED | VM_PROT_LOCKONFAULT)
+/* Kept the same way: the region is a guard, as MADV_GUARD_INSTALL makes
+ * one and MADV_GUARD_REMOVE takes away. It has no pages, and an access to
+ * it, the kernel's on the process's behalf too, is refused as one outside
+ * every region is: SIGSEGV with SEGV_MAPERR, or EFAULT. mprotect, mlock, a
+ * fork and mremap keep it, MADV_DONTNEED leaves it, and munmap or a mapping
+ * over it ends it. */
+#define VM_PROT_GUARD       0x800u
 /* The bits a change of the access bits keeps. */
-#define VM_PROT_KEPT \
-    (VM_PROT_NOWRITE | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK | VM_PROT_LOCKS)
+#define VM_PROT_KEPT                                                                             \
+    (VM_PROT_NOWRITE | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK | VM_PROT_LOCKS | \
+     VM_PROT_GUARD)
 
 /* The kind of a region, which /proc/PID/maps reports and the fault, fork
  * and brk paths read. */
@@ -274,10 +282,10 @@ int vm_remove(vm_space_t *vm, uintptr_t start, uintptr_t end);
 int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot);
 
 /**
- * Set the bits `set` and clear the bits `clear` of VM_PROT_DONTFORK in the
- * protection of each region of [start, end), which regions must cover
- * without a gap, splitting and merging as `vm_protect` does. Returns 0; -1
- * for a gap; -2 when a split has no room. An error leaves the regions as
+ * Set the bits `set` and clear the bits `clear` of VM_PROT_DONTFORK and
+ * VM_PROT_GUARD in the protection of each region of [start, end), which regions
+ * must cover without a gap, splitting and merging as `vm_protect` does. Returns
+ * 0; -1 for a gap; -2 when a split has no room. An error leaves the regions as
  * they were.
  */
 int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear);
@@ -326,7 +334,8 @@ uintptr_t vm_total(const vm_space_t *vm);
  * (RLIMIT_AS) as a mapping does; and the new span must be clear of every
  * other region, so that a segment or a mapping placed in the stack's room
  * is not taken into the stack. The pages between are backed as they are
- * touched.
+ * touched. Below a guard (VM_PROT_GUARD) the growth is a region of its own,
+ * which is no guard.
  */
 int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit);
 

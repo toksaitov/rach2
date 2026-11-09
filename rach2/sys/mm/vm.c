@@ -576,7 +576,7 @@ int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot)
 
 int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear)
 {
-    uint32_t mask = (set | clear) & VM_PROT_DONTFORK;
+    uint32_t mask = (set | clear) & (VM_PROT_DONTFORK | VM_PROT_GUARD);
 
     return vm_change(vm, start, end, mask, set & mask, 0);
 }
@@ -704,6 +704,10 @@ int vm_grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
     growth = r->start - page;
     if (vm->total > as_limit || growth > as_limit - vm->total) {
         return 0;
+    }
+    if (r->prot & VM_PROT_GUARD) {
+        /* Linux's guard marks pages, not the region: the growth is stack. */
+        return vm_insert(vm, page, r->start, r->prot & ~(uint32_t)VM_PROT_GUARD, VM_STACK) == 0;
     }
     vm->total += growth;
     r->start = page;

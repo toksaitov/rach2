@@ -276,7 +276,8 @@ int vm_resident(uintptr_t addr, uintptr_t len, int write);
  * Bring in the pages of [start, end) of the current process's regions as
  * faults would, for mmap's MAP_POPULATE and for the locked regions of the
  * mlock calls: those of a private writable region for a write, the others
- * for a read; a region with no access or of device memory is passed over.
+ * for a read; a region with no access, a guard or device memory is passed
+ * over.
  * It stops at the first page that cannot be had, since a populate that
  * falls short leaves the rest to be faulted in later: 0, or -1 when it
  * stopped short, which mmap ignores and mlock answers with EAGAIN. It may
@@ -473,8 +474,9 @@ struct mm;
  * brought in as a fault would bring them, and a write reaches a read-only
  * private page, a breakpoint in the program's text, through a copy of its
  * own, as Linux's FOLL_FORCE does. An address outside user space, a page of
- * no region, of a PROT_NONE one or of device memory, a page that cannot be
- * backed, and a page of a read-only shared region for a write are -EIO.
+ * no region, of a PROT_NONE one, of a guard or of device memory, a page that
+ * cannot be backed, and a page of a read-only shared region for a write are
+ * -EIO.
  * Returns 0, -EIO, or -ENOMEM when no temporary mapping was free. It may
  * sleep, bringing a page in or releasing a file a region let go of
  * meanwhile, and looks each page up again after a sleep.
