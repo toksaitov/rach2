@@ -69,4 +69,5 @@ The bullets state only what the records show. A fact the records do not hold, su
 | lavapipe segfaults in vkd3d-proton's tests | Mesa 25.0.7, lavapipe | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#lavapipe-segfaults-in-vkd3d-protons-tests) |
 | dEQP-VK timeline semaphore cases hang on lavapipe | Mesa 25.0.7, lavapipe | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#deqp-vk-timeline-semaphore-cases-hang-on-lavapipe) |
 | Chromium's GPU sandbox traps Mesa's queue scheduling calls | Chromium 156 and Mesa 25.0.7 | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#chromiums-gpu-sandbox-traps-mesas-queue-scheduling-calls) |
+| Weston requests cursor names absent from Adwaita | Weston 14.0.2 and Adwaita 48.1 | 76 | unreported, draft | [76-display/upstream.md](76-display/upstream.md#weston-requests-cursor-names-absent-from-adwaita) |
 | llvmpipe's JIT calls address 0 for a libm function the host program does not link | Mesa 26.0.8, llvmpipe | 77 | unreported | [77-vgpu/upstream.md](77-vgpu/upstream.md#llvmpipes-jit-calls-address-0-for-a-libm-function-the-host-program-does-not-link) |
