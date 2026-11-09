@@ -848,12 +848,11 @@ long compat_sys_pwritev2(isr_params_t *params)
  */
 
 /* The conversion buffer of a select: the timeout, the sixth argument of
- * pselect6, and the three sets of `setbytes` each. */
+ * pselect6, and the three sets of the x86-64 handler, of longs. */
 struct sel_buf {
     long ts[2];
     unsigned long sigarg[2];
-    uint32_t setbytes;
-    uint32_t words[1]; /* the three sets, `setbytes` bytes each */
+    unsigned long words[1]; /* the three sets, `kbytes` bytes each */
 };
 
 /* Read the 64-bit timespec at `u` into `ts`, the high word of its
