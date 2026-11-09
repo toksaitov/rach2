@@ -110,7 +110,10 @@ A bad user address is
 an unknown request is
 .Er ENOTTY .
 .Ss Software timelines
-The debugfs entry
+The kernel implements software timeline operations, but debugfs does not
+yet publish their entry.
+The interface intended for
+the debugfs entry
 .Pa /sys/kernel/debug/sync/sw_sync
 opens a new software timeline.
 .Dv SW_SYNC_IOC_CREATE_FENCE
