@@ -753,15 +753,27 @@ static void vp_take_window(struct virtio_pci *vp, uint8_t cap, struct vp_window 
     w->base = (uintptr_t)(phys + off); /* physical until vp_map_windows */
 }
 
-/** Record the shared memory region the capability at `cap` names. */
+/**
+ * Record the shared memory region the capability at `cap` names, as Linux's
+ * vp_get_shm_region takes it: the first capability of each id whose BAR is
+ * a programmed memory BAR, and whose offset and length lie within the BAR
+ * without wrapping. Another is passed over with a record. The region is
+ * not mapped; a driver maps the pieces it needs.
+ */
 static void vp_take_shm(struct virtio_pci *vp, uint8_t cap)
 {
     const pci_device_t *p = &vp->pci;
     uint8_t bar = pci_read_config8(p->bus, p->device, p->function, (uint8_t)(cap + VP_CAP_BAR));
     uint8_t id = pci_read_config8(p->bus, p->device, p->function, (uint8_t)(cap + VP_CAP_ID));
-    uint64_t off, len, phys;
+    uint64_t off, len, phys, size;
+    int i;
 
-    if (vp->nshm >= VP_SHM || bar > 5) {
+    for (i = 0; i < vp->nshm; i++) {
+        if (vp->shm[i].id == id) {
+            return;
+        }
+    }
+    if (vp->nshm >= VP_SHM || bar > 5 || !pci_bar_is_memory(p->bar[bar])) {
         return;
     }
     off = pci_read_config32(p->bus, p->device, p->function, (uint8_t)(cap + VP_CAP_OFFSET)) |
@@ -773,7 +785,12 @@ static void vp_take_shm(struct virtio_pci *vp, uint8_t cap)
                                        (uint8_t)(cap + VP_CAP_LENGTH_HI))
            << 32);
     phys = pci_bar_address64(p, bar);
-    if (phys == 0) {
+    size = pci_bar_size64(p, bar);
+    if (phys == 0 || len == 0 || off + len < off || off + len > size) {
+        klog(KLOG_WARN, "virtio",
+             "refused: %s: shared memory %d: offset 0x%x%08x, length 0x%x%08x, bar %d of 0x%x%08x",
+             vp->name, id, (unsigned)(off >> 32), (unsigned)off, (unsigned)(len >> 32),
+             (unsigned)len, bar, (unsigned)(size >> 32), (unsigned)size);
         return;
     }
     vp->shm[vp->nshm].id = id;
