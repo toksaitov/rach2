@@ -56,3 +56,37 @@ $(GNU_CHROMIUM_STAMP): $(GNU_CHROMIUM_SOURCES) | $(GNU_TOOLCHAIN_STAMP) $(ETUDE)
 	    -o chromium -o work/chromium/files -o work/chromium/closure.txt \
 	    -- $(call GNU_STEP_RUN,vendor/gnu/chromium/fetch_chromium.sh)
 	@test -x $(GNU_OUT)/chromium/usr/lib/chromium/chromium-headless-shell || { echo "gnu: chromium: the root has no usr/lib/chromium/chromium-headless-shell" >&2; exit 1; }
+
+# The desktop is one Debian closure, including chromium-headless-shell, so
+# shared libraries are installed once and all clients use the same Mesa.
+GNU_DEBIAN_STAMP = $(GNU_OUT)/debian.stamp
+GNU_PROTON_STAMP = $(GNU_OUT)/proton.stamp
+GNU_WEBGL_STAMP = $(GNU_OUT)/webgl.stamp
+GNU_STEP_STAMPS += $(GNU_DEBIAN_STAMP) $(GNU_PROTON_STAMP) $(GNU_WEBGL_STAMP)
+GNU_DEBIAN_LISTS = debian/mesa.list debian/desktop.list debian/browsers.list debian/sound.list debian/tools.list
+GNU_DEBIAN_SOURCES = vendor/gnu/debian/fetch_debs.sh vendor/gnu/debian/resolve_debs.py \
+                     $(addprefix vendor/gnu/,$(GNU_DEBIAN_LISTS)) vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
+GNU_PROTON_SOURCES = vendor/gnu/proton/fetch_proton.sh vendor/gnu/debian/fetch_asset.sh vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
+GNU_WEBGL_SOURCES = vendor/gnu/debian/fetch_webgl.sh vendor/gnu/debian/fetch_asset.sh vendor/gnu/fetch.sh vendor/gnu/sources-extra.txt
+
+.PHONY: gnu-desktop gnu-proton gnu-webgl
+gnu-desktop: $(GNU_DEBIAN_STAMP)
+gnu-proton: $(GNU_PROTON_STAMP)
+gnu-webgl: $(GNU_WEBGL_STAMP)
+
+$(GNU_DEBIAN_STAMP): $(GNU_DEBIAN_SOURCES) | $(SHA256TOOL) $(ETUDE)
+	@rm -f $@
+	@$(GNU_STEP) -n gnu-desktop -t $@ $(STEP_INPUTS) \
+	    -o debian/desktop -o work/debian/desktop/files -o work/debian/desktop/closure.txt \
+	    -- sh -c 'RACH2_ARCH=$(ARCH) RACH2_GNU_OUT="$$ETUDE_STEP_ROOT" \
+	        GNU_DEBIAN_LISTS="$(GNU_DEBIAN_LISTS)" ./vendor/gnu/debian/fetch_debs.sh desktop'
+
+$(GNU_PROTON_STAMP): $(GNU_PROTON_SOURCES) | $(SHA256TOOL) $(ETUDE)
+	@rm -f $@
+	@$(GNU_STEP) -n gnu-proton -t $@ $(STEP_INPUTS) -o proton \
+	    -- $(call GNU_STEP_RUN,vendor/gnu/proton/fetch_proton.sh)
+
+$(GNU_WEBGL_STAMP): $(GNU_WEBGL_SOURCES) | $(SHA256TOOL) $(ETUDE)
+	@rm -f $@
+	@$(GNU_STEP) -n gnu-webgl -t $@ $(STEP_INPUTS) -o webgl \
+	    -- $(call GNU_STEP_RUN,vendor/gnu/debian/fetch_webgl.sh)

@@ -1,0 +1,12 @@
+# Mesa's CPU and Haswell renderers, with all run-time driver entry points.
+mesa-libgallium=25.0.7-2+deb13u1
+libgl1-mesa-dri=25.0.7-2+deb13u1
+libegl-mesa0=25.0.7-2+deb13u1
+libglx-mesa0=25.0.7-2+deb13u1
+libgbm1=25.0.7-2+deb13u1
+mesa-vulkan-drivers=25.0.7-2+deb13u1
+libegl1
+libgles2
+libgl1
+libvulkan1
+mesa-utils

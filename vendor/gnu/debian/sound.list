@@ -1,0 +1,5 @@
+# Debian's PulseAudio includes module-oss; ALSA's plugin provides pcm_oss.
+pulseaudio
+pulseaudio-utils
+libasound2t64
+libasound2-plugins
