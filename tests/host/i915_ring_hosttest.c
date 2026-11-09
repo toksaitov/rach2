@@ -303,12 +303,12 @@ void wait_queue_init(wait_queue_t *wq)
  * would fails the row after ten seconds of the model's clock. */
 int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
-    int ms = 0;
+    int steps = 0;
 
     (void)wq;
     sleeps++;
     while (!cond(arg)) {
-        if (++ms > 10000) {
+        if (++steps > 10000) {
             stuck_sleeps++;
             return 0;
         }
