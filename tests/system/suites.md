@@ -112,4 +112,4 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `d3d` (full tier; needs qemu, mke2fs; 17408 MiB; x86_64 only): Direct3D 9, 11 and 12 pixels on lavapipe through GE-Proton.
 * `d3d-wine` (full tier; needs qemu, mke2fs; 17408 MiB; x86_64 only): Wine's Direct3D units on both paths against Debian.
 * `d3d-vkd3d` (full tier; needs qemu, mke2fs; 17408 MiB; x86_64 only): vkd3d-proton's units on lavapipe against Debian.
-* `desktop` (full tier; needs qemu, python3; 4096 MiB; x86_64 only): (no sentence in suites.mk names this suite)
+* `desktop` (full tier; needs qemu, python3; 4096 MiB; x86_64 only): an ordinary headless Weston session at boot, input discovery, and browser and ALSA tones measured through OSS loopback.

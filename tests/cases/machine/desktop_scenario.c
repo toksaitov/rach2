@@ -12,6 +12,8 @@ int etude_scenario(struct etude_case *c)
     struct net_case u;
     struct net_boot b;
     struct net_run r;
+    const char *diagnose[] = {"/bin/bash", "-c", "cat /var/log/services; ps -eo pid,ppid,user,args",
+                              NULL};
     const char *argv[] = {"/usr/bin/python3", "-", NULL};
     const char *clients[] = {"session", "chromium", "firefox", "alsa"};
     char password[128], token[96];
@@ -25,7 +27,11 @@ int etude_scenario(struct etude_case *c)
     net_seen(&b, "ext2: root: /dev/disk0p1");
     if (net_login(&b, "root", password, "# ") == ETUDE_OK && etude_guest_open(b.m) != ETUDE_OK)
         net_fail(&u, "the desktop guest command channel did not open");
-    if (net_step(&u, "tones") == ETUDE_OK)
+    if (net_step(&u, "tones") == ETUDE_OK) {
+        net_guest(&u, b.m, diagnose, NULL, NULL, "services", &r);
+        net_run_free(&r);
+    }
+    if (net_ok(&u))
         net_guest(&u, b.m, argv, NULL, etude_artifact(c, "desktop-probe"), "tones", &r);
     for (i = 0; i < sizeof(clients) / sizeof(clients[0]); i++) {
         snprintf(token, sizeof(token), "desktop: result: %s", clients[i]);
