@@ -57,8 +57,9 @@ Return a new close-on-exec sync file in
 .It Dv DMA_BUF_IOCTL_IMPORT_SYNC_FILE
 Read a
 .Vt struct dma_buf_import_sync_file .
-Add its sync-file fence as a reader for READ, or replace the reservation
-as a writer for WRITE or RW.
+Add its sync-file fence as a reader for READ, or join the outstanding
+writers for WRITE or RW.
+Other pending readers and writers remain in the reservation.
 An invalid sync file is
 .Er EINVAL .
 .El

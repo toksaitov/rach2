@@ -16,17 +16,21 @@ void dma_resv_fini(struct dma_resv *r)
     k_memset(r, 0, sizeof(*r));
 }
 
-/** Replace the old work on a write, or append a reader without sleeping. */
+/** Retain outstanding writers and readers when adding another producer. */
 int32_t dma_resv_add_fence(struct dma_resv *r, struct dma_fence *f, int write)
 {
-    struct dma_fence **p;
+    struct dma_fence **p, *inputs[2], *merged;
     uint32_t i, n;
     if (!f)
         return -EINVAL;
     if (write) {
-        dma_fence_get(f);
-        dma_resv_fini(r);
-        r->write = f;
+        inputs[0] = dma_fence_is_signaled(r->write) ? NULL : r->write;
+        inputs[1] = f;
+        merged = dma_fence_merge(inputs, 2);
+        if (!merged)
+            return -ENOMEM;
+        dma_fence_put(r->write);
+        r->write = merged;
         return 0;
     }
     for (i = 0; i < r->nreads;) {
