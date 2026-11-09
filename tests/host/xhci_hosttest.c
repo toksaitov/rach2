@@ -1960,6 +1960,22 @@ static void ehci_rows(void)
     memcpy(pci_cfg, saved_cfg, sizeof(pci_cfg));
 }
 
+/** 0: no row maps a window of a BAR (pci_bar_map). */
+uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
+{
+    (void)phys;
+    (void)size;
+    (void)cache;
+    return 0;
+}
+
+/** Nothing: no row maps a window of a BAR. */
+void mmio_unmap(uintptr_t va, size_t size)
+{
+    (void)va;
+    (void)size;
+}
+
 /**
  * Run the rows and print the result; return 1 when a row failed.
  *

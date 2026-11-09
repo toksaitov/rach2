@@ -150,6 +150,12 @@ extern pte_t mmu_nx;
  */
 #define HARD_MEMORY_LIMIT 0x4000000
 
+/* Whether a window of the MMIO region maps its aligned spans of 2 MiB with
+ * one large page each (mm/paging.c, `mmu_kernel_large`): the region's
+ * directory is shared by every PML4, so a directory entry changed at any
+ * time is seen by every process. */
+#define KVA_MMIO_LARGE 1
+
 /*
  * The kernel's virtual layout, the upper half of the 48-bit address space.
  * Each region has PML4 entries of its own, and every one of the upper

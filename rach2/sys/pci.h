@@ -7,6 +7,7 @@
 #ifndef _PCI_H_
 #define _PCI_H_
 
+#include "arch/arch.h"
 #include "lib/kint.h"
 #include "lib/kdef.h"
 
@@ -339,5 +340,51 @@ bool pci_bar_is_64bit(uint32_t bar);
  * when it is within `uintptr_t`, which on i686 is 32 bits.
  */
 uint64_t pci_bar_address64(const pci_device_t *dev, int i);
+
+/**
+ * The size in bytes of memory BAR `i` of `dev`, a 64-bit one with the BAR
+ * after it, found as the PCI specification sizes a BAR: all ones written,
+ * the bits that stay clear read back, and the value put back, with the
+ * device's memory decoding off meanwhile so that no access lands at the
+ * partial address. 0 for an I/O BAR, a 64-bit one in the last slot, or one
+ * that decodes nothing. Call it before the driver starts the device, as
+ * Linux sizes BARs at enumeration, and with no access to the BAR in
+ * flight.
+ */
+uint64_t pci_bar_size64(const pci_device_t *dev, int i);
+
+/*
+ * A window onto part of a memory BAR, which `pci_bar_map` makes and
+ * `pci_bar_unmap` takes away: the kernel address the part is reached at,
+ * and the physical range behind it. A BAR larger than the kernel's MMIO
+ * region, 128 MiB, such as the 4 GiB QEMU gives virtio-gpu's host memory
+ * high above 4 GiB, is reached a window at a time.
+ */
+struct pci_window {
+    uintptr_t va; /* 0 while no window is mapped */
+    uint64_t phys;
+    size_t size;
+    /* The BAR's size, which the caller sets from `pci_bar_size64` before
+     * the first map so that a window past the BAR's end is refused; 0 for
+     * a size not known. */
+    uint64_t bar_size;
+};
+
+/**
+ * Map [offset, offset + size) of memory BAR `i` of `dev` into a window of
+ * the MMIO region with the cache bits `cache`, PTE_NOCACHE for registers
+ * or PTE_WC for a framebuffer, and fill `w`, which maps nothing before; its
+ * aligned 2 MiB spans are large pages where the architecture has them
+ * (`mmio_map`). Returns the window's kernel address, or 0 for no memory
+ * BAR, an empty range, a range past `w->bar_size` when it is set, an
+ * address an entry cannot hold, 4 GiB and up on i686, or no free run of
+ * the region. Under the big kernel lock.
+ */
+uintptr_t pci_bar_map(const pci_device_t *dev, int i, uint64_t offset, size_t size, pte_t cache,
+                      struct pci_window *w);
+
+/** Take away the window `w` maps, if any, and give its room back to the
+ * MMIO region; `w` maps nothing after. */
+void pci_bar_unmap(struct pci_window *w);
 
 #endif /* _PCI_H_ */

@@ -558,6 +558,22 @@ static void heap_rows(void)
 }
 
 /** Run the rows. */
+/** 0: no row maps a window of a BAR (pci_bar_map). */
+uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
+{
+    (void)phys;
+    (void)size;
+    (void)cache;
+    return 0;
+}
+
+/** Nothing: no row maps a window of a BAR. */
+void mmio_unmap(uintptr_t va, size_t size)
+{
+    (void)va;
+    (void)size;
+}
+
 int main(void)
 {
     walk_rows();

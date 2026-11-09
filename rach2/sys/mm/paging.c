@@ -97,8 +97,20 @@ static uint32_t _temp_stale[KVA_TEMP_SLOTS / 32];
 /* The slot the next search for a free one starts at. */
 static uint32_t _temp_next;
 #endif
-/* The next free page of the MMIO region; a region is mapped for good. */
-static uintptr_t _mmio_next = KVA_MMIO;
+/* The pages of the MMIO region, a bit each, set while a window or a
+ * mapping of `map_mmio` has the page. */
+#define MMIO_PAGES (KVA_MMIO_SIZE / PAGE_SIZE)
+static uint32_t _mmio_used[MMIO_PAGES / 32u];
+/* The first physical address past what an entry can name: 4 GiB on i686,
+ * 2^52 on x86-64. */
+#define MMIO_PHYS_TOP ((uint64_t)PTE_ADDR(~(pte_t)0) + PAGE_SIZE)
+#if KVA_MMIO_LARGE
+/* The region's spans of a leaf table that a large page maps, a bit each,
+ * and for each the directory entry it replaced (`mmu_kernel_large`). */
+#define MMIO_SPANS (KVA_MMIO_SIZE / MMU_TABLE_SPAN)
+static uint32_t _mmio_large[(MMIO_SPANS + 31u) / 32u];
+static pte_t _mmio_tables[MMIO_SPANS];
+#endif
 
 /**
  * The first frame above the boot's reservations and the floor of every scan
@@ -1089,44 +1101,205 @@ uintptr_t map_mmio(uintptr_t phys_addr, size_t size)
     return map_mmio_typed(phys_addr, size, PTE_NOCACHE);
 }
 
+/** The bit of page `i` of the MMIO region in `_mmio_used`. */
+static int mmio_bit(uintptr_t i)
+{
+    return (_mmio_used[i / 32u] >> (i % 32u)) & 1u;
+}
+
+/** Mark the `count` pages of the MMIO region from page `i` used, or free
+ * when `used` is 0. */
+static void mmio_mark(uintptr_t i, uintptr_t count, int used)
+{
+    for (; count > 0; i++, count--) {
+        if (used) {
+            _mmio_used[i / 32u] |= 1u << (i % 32u);
+        } else {
+            _mmio_used[i / 32u] &= ~(1u << (i % 32u));
+        }
+    }
+}
+
+/**
+ * The first page of the lowest free run of `count` pages of the MMIO region
+ * whose index is `phase` modulo `align`, or MMIO_PAGES when there is none.
+ * The region has 32768 pages, so a first fit over the bit map is cheap.
+ */
+static uintptr_t mmio_find(uintptr_t count, uintptr_t align, uintptr_t phase)
+{
+    uintptr_t i, n;
+
+    for (i = phase; i + count <= MMIO_PAGES; i += align) {
+        for (n = 0; n < count && !mmio_bit(i + n); n++) {
+        }
+        if (n == count) {
+            return i;
+        }
+    }
+    return MMIO_PAGES;
+}
+
+#if KVA_MMIO_LARGE
+/** Whether the span of MMU_TABLE_SPAN at `va`, a window's kernel address,
+ * and `phys` behind it can be one large page within [lo, hi). */
+static int mmio_span_large(uintptr_t va, uint64_t phys, uintptr_t lo, uintptr_t hi)
+{
+    return (va & (MMU_TABLE_SPAN - 1)) == 0 && (phys & (MMU_TABLE_SPAN - 1)) == 0 && va >= lo &&
+           hi - va >= MMU_TABLE_SPAN;
+}
+#endif
+
+/** Map the window of `pages` pages at the region's page `first` to the
+ * device memory at `phys`, page-aligned, with the entry flags `flags`:
+ * each aligned span with a large page where the architecture has them, the
+ * rest a page at a time. */
+static void mmio_fill(uintptr_t first, uintptr_t pages, uint64_t phys, pte_t flags)
+{
+    uintptr_t lo = KVA_MMIO + first * PAGE_SIZE;
+    uintptr_t hi = lo + pages * PAGE_SIZE;
+    uintptr_t va = lo;
+
+    while (va < hi) {
+#if KVA_MMIO_LARGE
+        uintptr_t slot = (va - KVA_MMIO) / MMU_TABLE_SPAN;
+
+        if (mmio_span_large(va, phys, lo, hi) &&
+            mmu_kernel_large(va, (phys_addr_t)phys, flags, &_mmio_tables[slot]) == 0) {
+            _mmio_large[slot / 32u] |= 1u << (slot % 32u);
+            arch_tlb_flush_page(va);
+            va += MMU_TABLE_SPAN;
+            phys += MMU_TABLE_SPAN;
+            continue;
+        }
+#endif
+        *kernel_pte(va) = (pte_t)phys | flags;
+        va += PAGE_SIZE;
+        phys += PAGE_SIZE;
+    }
+}
+
 /**
  * The MMIO region's page tables exist from the boot (`mmu_init`) and every
  * directory shares them, so a mapping made here at any time is seen by
- * every process.
+ * every process. A bit for each page of the region says it is taken, so a
+ * window `mmio_unmap` frees is used again.
  *
  * The page count is rounded up by division and not by adding a page less
  * one: a region reaching the top of the address space would wrap that sum to
  * a few bytes, count no pages, map nothing and still return an address.
  */
-uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache)
+uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
 {
-    uintptr_t start_page = phys_addr & ~(PAGE_SIZE - 1);
-    uintptr_t end_addr = phys_addr + size;
-    uintptr_t pages, span, i, va;
+    uint64_t start_page = phys & ~(uint64_t)(PAGE_SIZE - 1);
+    uint64_t end_addr = phys + size;
+    uint64_t span;
+    uintptr_t pages, first, align = 1, phase = 0;
 
-    if (size == 0 || end_addr < phys_addr) {
-        klog(KLOG_ERR, "vm", "map_mmio: bad region 0x%lx, %zu bytes", (unsigned long)phys_addr,
-             size);
+    if (size == 0 || end_addr < phys || end_addr > MMIO_PHYS_TOP) {
+        klog(KLOG_ERR, "vm", "map_mmio: bad region 0x%x%08x, %zu bytes", (uint32_t)(phys >> 32),
+             (uint32_t)phys, size);
         return 0;
     }
     span = end_addr - start_page;
-    pages = span / PAGE_SIZE + ((span % PAGE_SIZE) ? 1u : 0u);
-    if (pages > (KVA_MMIO + KVA_MMIO_SIZE - _mmio_next) / PAGE_SIZE) {
-        klog(KLOG_ERR, "vm", "map_mmio: the MMIO region is full at 0x%lx",
-             (unsigned long)_mmio_next);
+    if (span / PAGE_SIZE + ((span % PAGE_SIZE) ? 1u : 0u) > MMIO_PAGES) {
+        klog(KLOG_ERR, "vm", "map_mmio: 0x%x%08x, %zu bytes, is larger than the MMIO region",
+             (uint32_t)(phys >> 32), (uint32_t)phys, size);
         return 0;
     }
-    va = _mmio_next;
-    for (i = 0; i < pages; i++) {
-        *kernel_pte(va + i * PAGE_SIZE) =
-            (pte_t)(start_page + i * PAGE_SIZE) | PTE_P | PTE_W | cache;
+    pages = (uintptr_t)(span / PAGE_SIZE + ((span % PAGE_SIZE) ? 1u : 0u));
+#if KVA_MMIO_LARGE
+    if (span >= MMU_TABLE_SPAN) {
+        align = MMU_TABLE_SPAN / PAGE_SIZE;
+        phase = (uintptr_t)((start_page / PAGE_SIZE) % align);
     }
-    _mmio_next += pages * PAGE_SIZE;
+#endif
+    first = mmio_find(pages, align, phase);
+    if (first >= MMIO_PAGES && align > 1) {
+        first = mmio_find(pages, 1, 0);
+    }
+    if (first >= MMIO_PAGES) {
+        klog(KLOG_ERR, "vm", "map_mmio: no run of %lu pages free in the MMIO region",
+             (unsigned long)pages);
+        return 0;
+    }
+    mmio_mark(first, pages, 1);
+    mmio_fill(first, pages, start_page, PTE_P | PTE_W | PTE_NOEXEC | cache);
 
     /* Every translation the processor cached goes. */
     arch_space_load(arch_space_root());
+    smp_kernel_mapping_changed();
 
-    return va + (phys_addr - start_page);
+    return KVA_MMIO + first * PAGE_SIZE + (uintptr_t)(phys - start_page);
+}
+
+void mmio_unmap(uintptr_t va, size_t size)
+{
+    uintptr_t lo = va & ~(uintptr_t)(PAGE_SIZE - 1);
+    uintptr_t hi = va + size;
+
+    if (size == 0 || lo < KVA_MMIO || hi < va || hi > KVA_MMIO + KVA_MMIO_SIZE) {
+        return;
+    }
+    hi = (hi + PAGE_SIZE - 1) & ~(uintptr_t)(PAGE_SIZE - 1); /* the region's end is aligned */
+    mmio_mark((lo - KVA_MMIO) / PAGE_SIZE, (hi - lo) / PAGE_SIZE, 0);
+    for (va = lo; va < hi;) {
+#if KVA_MMIO_LARGE
+        uintptr_t slot = (va - KVA_MMIO) / MMU_TABLE_SPAN;
+
+        if (_mmio_large[slot / 32u] & (1u << (slot % 32u))) {
+            _mmio_large[slot / 32u] &= ~(1u << (slot % 32u));
+            mmu_kernel_unlarge(va, _mmio_tables[slot]);
+            arch_tlb_flush_page(va);
+            va += MMU_TABLE_SPAN;
+            continue;
+        }
+#endif
+        *kernel_pte(va) = 0;
+        arch_tlb_flush_page(va);
+        va += PAGE_SIZE;
+    }
+    smp_kernel_mapping_changed();
+}
+
+size_t mmio_page_size(uintptr_t va)
+{
+    pte_t *e;
+
+    if (va < KVA_MMIO || va - KVA_MMIO >= KVA_MMIO_SIZE) {
+        return 0;
+    }
+#if KVA_MMIO_LARGE
+    {
+        uintptr_t slot = (va - KVA_MMIO) / MMU_TABLE_SPAN;
+
+        if (_mmio_large[slot / 32u] & (1u << (slot % 32u))) {
+            return MMU_TABLE_SPAN;
+        }
+    }
+#endif
+    e = kernel_pte(va);
+    return e && (*e & PTE_P) ? PAGE_SIZE : 0;
+}
+
+void mmio_usage(size_t *used, size_t *largest)
+{
+    uintptr_t i, run = 0, best = 0, taken = 0;
+
+    for (i = 0; i < MMIO_PAGES; i++) {
+        if (mmio_bit(i)) {
+            taken++;
+            run = 0;
+        } else if (++run > best) {
+            best = run;
+        }
+    }
+    *used = taken * PAGE_SIZE;
+    *largest = best * PAGE_SIZE;
+}
+
+uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache)
+{
+    return mmio_map((uint64_t)phys_addr, size, cache);
 }
 
 #ifdef ARCH_DIRECT_MAP_ALL

@@ -398,26 +398,30 @@ static void mmio_rows(void)
     }
 
     va = map_mmio(0xFEC00000u, 0x400u);
-    check(va == KVA_MMIO && _mmio_next == KVA_MMIO + PAGE_SIZE &&
+    check(va == KVA_MMIO &&
               test_dir.logical_page_tables[TABLE_OF(KVA_MMIO)]->pages[0] == (0xFEC00000u | 0x1Bu),
           "a register page is mapped at the MMIO region's start, uncached");
 
-    next = _mmio_next;
+    next = KVA_MMIO + PAGE_SIZE;
     refusals_noted = 0;
     va = map_mmio(0x0u, 0xFFFFF001u);
-    check(va == 0 && _mmio_next == next && refusals_noted == 1,
+    check(va == 0 && refusals_noted == 1,
           "a span from the first page into the last, whose rounding would wrap, is refused");
     va = map_mmio(0x800u, 0xFFFFF7FFu);
-    check(va == 0 && _mmio_next == next && refusals_noted == 2,
+    check(va == 0 && refusals_noted == 2,
           "a span ending on the last byte of the address space is refused");
     va = map_mmio(0xFFFFF000u, 0x2000u);
-    check(va == 0 && _mmio_next == next && refusals_noted == 3, "a region that wraps is refused");
+    check(va == 0 && refusals_noted == 3, "a region that wraps is refused");
     check(test_dir.logical_page_tables[TABLE_OF(KVA_MMIO)]->pages[1] == 0,
           "a refused region maps nothing");
 
     va = map_mmio(0xFED00010u, 0x20u);
-    check(va == next + 0x10u && _mmio_next == next + PAGE_SIZE,
+    check(va == next + 0x10u,
           "the next region takes the page after the first, at its offset in the page");
+    mmio_unmap(KVA_MMIO, 0x400u);
+    check(test_dir.logical_page_tables[TABLE_OF(KVA_MMIO)]->pages[0] == 0 &&
+              map_mmio(0xFEE00000u, 0x10u) == KVA_MMIO,
+          "an unmapped page is cleared, and the next region takes it again");
 }
 
 /**
