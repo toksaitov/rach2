@@ -15,4 +15,8 @@ DRM_C_SRC = sys/drm/drm.c \
     sys/drm/drm_sysfs.c \
     sys/drm/drm_vblank.c \
     sys/drm/virtio_gpu.c \
+    sys/drm/virtio_gpu_3d.c \
+    sys/drm/virtio_gpu_submit.c \
+    sys/drm/virtio_gpu_fence.c \
+    sys/drm/virtio_gpu_blob.c \
     sys/drm/vkms.c
