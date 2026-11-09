@@ -72,6 +72,13 @@ int kirq_enabled(void)
     return irq_depth == 0;
 }
 
+/** Run with the scheduler on, so that a caller-sync device must be reached
+ *  from a system call, as it is once the boot has started init. */
+int sched_is_enabled(void)
+{
+    return 1;
+}
+
 /** Allocate a zeroed request record at the first free address. */
 void *kzalloc(size_t size)
 {
