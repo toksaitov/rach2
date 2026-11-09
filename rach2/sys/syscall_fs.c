@@ -8566,8 +8566,11 @@ long sys_access(isr_params_t *params)
  * through a final link unless IN_DONT_FOLLOW, it must name a directory
  * under IN_ONLYDIR (-ENOTDIR), and the caller must be able to read what it
  * names (-EACCES), as on Linux; `inotify_watch` adds the watch, with its
- * own errors. A node of /dev, /proc or /sys can be watched and reports
- * nothing, since no call that changes one tells inotify.
+ * own errors. A /proc/PID/fd/N link that is followed watches the file or
+ * directory its descriptor is open on (`proc_fd_file`), as Linux does, so
+ * that `udevadm settle`'s watch of /run/udev through an O_PATH descriptor
+ * hears the queue's removal. A node of /dev, /proc or /sys can be watched
+ * and reports nothing, since no call that changes one tells inotify.
  */
 long sys_inotify_add_watch(isr_params_t *params)
 {
@@ -8604,6 +8607,18 @@ long sys_inotify_add_watch(isr_params_t *params)
         return rc;
     }
     vp = vfs_synth_vpath(ref.mnt, ref.node);
+    if (vp && vp->kind == VNODE_PROC_FD_LINK && !(mask & IN_DONT_FOLLOW)) {
+        struct vfs_ref obj;
+        struct open_file *held;
+
+        if (proc_fd_file(vp, &obj, &held) == 0) {
+            vfs_walk_unlock(obj.mnt);
+            fd_ofd_unref(held);
+            vfs_ref_release(&ref);
+            ref = obj;
+            vp = NULL;
+        }
+    }
     if (vp) {
         struct kstat s;
 
