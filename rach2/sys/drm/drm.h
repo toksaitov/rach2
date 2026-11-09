@@ -1611,7 +1611,62 @@ int32_t drm_wait_vblank_ioctl(struct drm_device *dev, void *data, struct drm_fil
 int32_t drm_crtc_get_sequence_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t drm_crtc_queue_sequence_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 
-/* drm_syncobj.c (76-3b): sync objects. */
+/* ------------------------------------------------------------------------
+ * Sync objects, in drm_syncobj.c (76-3b)
+ *
+ * A syncobj holds a fence: none, a binary fence, or for a timeline the
+ * newest point of a chain of points (`struct dma_fence_chain`, dmabuf.h),
+ * each of whose numbers covers the points below it. It is held by each
+ * handle any file has to it, by each syncobj file and by each thread that
+ * waits on it, and holds its fence. A driver signals one by giving it a
+ * fence (`drm_syncobj_replace_fence`) or a point (`drm_syncobj_add_point`)
+ * and waits on it through `drm_syncobj_find_fence`. Everything here runs
+ * under the big kernel lock; what may sleep says so.
+ */
+struct syncobj_wait;
+struct syncobj_eventfd;
+struct dma_fence_chain;
+struct drm_syncobj {
+    uint32_t refs;
+    struct dma_fence *fence;          /* NULL, a binary fence or the newest point */
+    struct syncobj_wait *waits;       /* threads waiting for a point to be submitted */
+    struct syncobj_eventfd *eventfds; /* eventfds waiting for a point to be submitted */
+};
+
+/** A new syncobj with one reference, the caller's, signalled at once with
+ * DRM_SYNCOBJ_CREATE_SIGNALED in `flags`; NULL with no memory. */
+struct drm_syncobj *drm_syncobj_create(uint32_t flags);
+/** Take and drop a reference; the last frees the syncobj, its fence and
+ * the eventfds still waiting on it. drm_syncobj_put accepts NULL. */
+void drm_syncobj_get(struct drm_syncobj *syncobj);
+void drm_syncobj_put(struct drm_syncobj *syncobj);
+/** The syncobj of `file`'s `handle`, with a reference, or NULL. */
+struct drm_syncobj *drm_syncobj_find(struct drm_file *file, uint32_t handle);
+/** Make `fence`, which may be NULL, the syncobj's, with a reference of its
+ * own, and tell its waiters and eventfds. Does not sleep. */
+void drm_syncobj_replace_fence(struct drm_syncobj *syncobj, struct dma_fence *fence);
+/** Add the point `point` of `fence` to the timeline in `chain`, a record
+ * of dma_fence_chain_alloc that the syncobj takes, as Linux's
+ * drm_syncobj_add_point: the point follows the syncobj's fence, and the
+ * signalled points just before it are dropped. Does not sleep. */
+void drm_syncobj_add_point(struct drm_syncobj *syncobj, struct dma_fence_chain *chain,
+                           struct dma_fence *fence, uint64_t point);
+/**
+ * The fence of `point` of `file`'s syncobj `handle` (0 for its newest), as
+ * Linux's drm_syncobj_find_fence, with a reference, in `*fence`: the
+ * signalled stub for a point gone by. With
+ * DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT in `flags` it waits up to five
+ * seconds for the point to be submitted, and may sleep. 0, -ENOENT for no
+ * such handle, -EINVAL for a point not submitted, -ETIME or -EINTR.
+ */
+int32_t drm_syncobj_find_fence(struct drm_file *file, uint32_t handle, uint64_t point,
+                               uint32_t flags, struct dma_fence **fence);
+/** Drop every syncobj handle of `file`, as its release does. */
+void drm_syncobj_release(struct drm_file *file);
+
+/* The ioctls, Linux's: each answers EOPNOTSUPP on a device without
+ * DRIVER_SYNCOBJ, and the timeline ones (TRANSFER, TIMELINE_WAIT, EVENTFD,
+ * TIMELINE_SIGNAL and QUERY) without DRIVER_SYNCOBJ_TIMELINE. */
 int32_t drm_syncobj_create_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t drm_syncobj_destroy_ioctl(struct drm_device *dev, void *data, struct drm_file *file);
 int32_t drm_syncobj_handle_to_fd_ioctl(struct drm_device *dev, void *data, struct drm_file *file);

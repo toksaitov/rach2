@@ -296,6 +296,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "syncobj",
+          "checks": "tests/host/syncobj_hosttest.c drives binary and timeline syncobjs, out-of-order points, waits, transfers, queries, eventfds, files, a failed producer's error and the driver features under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "syncobj64",
+          "checks": "tests/host/syncobj64_hosttest.c runs the syncobj rows with x86-64 kernel structures under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "fence",
           "checks": "tests/host/fence_hosttest.c drives fences, reservations, sync files and software timelines under the sanitizers and exits 0",
           "source": "scenario"
