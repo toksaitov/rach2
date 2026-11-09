@@ -12,6 +12,12 @@
 #   build.sh check      boot nctx.qcow2 and print what it holds
 #   build.sh run CMD    boot nctx.qcow2 and run CMD in it, in a copy of this
 #                       directory
+#   build.sh alone      make nctx-alone.qcow2, a compressed copy of
+#                       nctx.qcow2 with no backing file, and SHA256SUMS of
+#                       the three builds, to move to another host
+#   build.sh rehearse   83-6b's session.sh all in a new overlay of the
+#                       prepared image, which has no i915, with
+#                       nctx-alone.qcow2 as its second disk
 #   build.sh all        all of the above, in that order
 #
 # The tarballs, the builds (mesa-nctx.tar.xz, virglrenderer-nctx.tar.xz and
@@ -69,7 +75,7 @@ free_port()
     python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'
 }
 
-# boot DISK: start the guest from DISK, with the std-vga profile that
+# boot DISK [OPTS]: start the guest from DISK, with QEMU's OPTS added, with the std-vga profile that
 # Debian's GRUB needs under SeaBIOS, and wait for SSH. Sets `qemu`, `port`
 # and `opts`; the caller's EXIT trap stops QEMU.
 boot()
@@ -83,7 +89,7 @@ boot()
     . "$tree/rach2/qemu_devices.sh"
     # shellcheck disable=SC2086 # the options are words
     qemu-system-x86_64 $ACCEL_OPTS -smp "$cpus" -m "${mib}M" -machine q35 \
-        -nodefaults -no-reboot -drive file="$1",if=virtio,format=qcow2 \
+        -nodefaults -no-reboot -drive file="$1",if=virtio,format=qcow2 ${2:-} \
         $NET_OPTS -device virtio-rng-pci $DISPLAY_OPTS \
         -serial file:"$work/console.log" -monitor none &
     qemu=$!
@@ -199,6 +205,45 @@ variant()
     return "$status"
 }
 
+alone()
+{
+    [ -f "$cache/nctx.qcow2" ] || die "no nctx.qcow2; run build.sh image"
+    rm -f "$cache/nctx-alone.qcow2"
+    qemu-img convert -c -O qcow2 "$cache/nctx.qcow2" "$cache/nctx-alone.qcow2.part"
+    mv "$cache/nctx-alone.qcow2.part" "$cache/nctx-alone.qcow2"
+    chmod a-w "$cache/nctx-alone.qcow2"
+    (cd "$cache" && sha256sum mesa-nctx.tar.xz virglrenderer-nctx.tar.xz qemu-nctx.tar.xz > SHA256SUMS &&
+        sha256sum nctx-alone.qcow2 > nctx-alone.qcow2.sha256)
+    echo "nctx: result: $cache/nctx-alone.qcow2, $(wc -c < "$cache/nctx-alone.qcow2") bytes"
+}
+
+# rehearse: session.sh all with REHEARSE=1 as root in a new overlay of the
+# prepared image, Debian 13 with Linux 6.12 as on the Lenovo, with
+# nctx-alone.qcow2 as its second disk, /dev/vdb; the session's output is
+# kept as rehearsal.tar in the cache.
+rehearse()
+{
+    session
+    for f in nctx-alone.qcow2 SHA256SUMS; do
+        [ -f "$cache/$f" ] || die "$f: missing; run build.sh alone"
+    done
+    qemu-img create -q -f qcow2 -F qcow2 -b "$ref/prepared.qcow2" "$work/host.qcow2" 32G
+    boot "$work/host.qcow2" "-drive file=$cache/nctx-alone.qcow2,if=virtio,format=raw,readonly=on"
+    echo "nctx: rehearsing 83-6b's session; console in $work/console.log"
+    cp "$key" "$work/id_ed25519"
+    put "$here/session.sh" "$here/guest.sh" "$here/nctxcheck.c" "$here/pins" "$work/snapshot" \
+        "$here/qemu-nctx" "$here/nctx-env" "$cache/SHA256SUMS" "$work/id_ed25519" \
+        "$cache/mesa-nctx.tar.xz" "$cache/virglrenderer-nctx.tar.xz" "$cache/qemu-nctx.tar.xz"
+    status=0
+    in_guest "sudo REHEARSE=1 sh session.sh all . /dev/vdb" || status=$?
+    # shellcheck disable=SC2086 # opts are words
+    ssh $opts -p "$port" gfx@127.0.0.1 'sudo tar cf - -C /srv/nctx out' < /dev/null > "$cache/rehearsal.tar"
+    in_guest "sudo sh session.sh leave"
+    halt
+    echo "nctx: result: status $status, output in $cache/rehearsal.tar"
+    return "$status"
+}
+
 case ${1:-} in
     fetch) fetch ;;
     mesa) build mesa mesa "$(basename "$(pin mesa_url)")" ;;
@@ -207,6 +252,8 @@ case ${1:-} in
     image) image ;;
     check) variant 'sh guest.sh check' ;;
     run) shift; variant "$*" ;;
+    alone) alone ;;
+    rehearse) rehearse ;;
     all)
         fetch
         (build mesa mesa "$(basename "$(pin mesa_url)")")
@@ -216,7 +263,7 @@ case ${1:-} in
         variant 'sh guest.sh check'
         ;;
     *)
-        echo "usage: build.sh fetch | mesa | virgl | qemu | image | check | run CMD | all" >&2
+        echo "usage: build.sh fetch | mesa | virgl | qemu | image | check | run CMD | alone | rehearse | all" >&2
         exit 2
         ;;
 esac
