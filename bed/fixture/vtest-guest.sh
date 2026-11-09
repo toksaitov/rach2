@@ -244,7 +244,10 @@ check()
         sleep 1
     done
     drew=0
-    VTEST_SOCKET_NAME=$sock draw virpipe virpipe || drew=$?
+    # A variable set before a function's name is unspecified in POSIX sh.
+    VTEST_SOCKET_NAME=$sock
+    export VTEST_SOCKET_NAME
+    draw virpipe virpipe || drew=$?
     relayed=0
     wait "$relay" || relayed=$?
     sed 's/^/vtest-guest: /' "$out/relay.out" >&2
