@@ -1,4 +1,5 @@
-/* Inspect an unbound Haswell HD 4400 through /dev/mem. */
+/* Inspect a Haswell HD 4400 through /dev/mem: an unbound one, or one a
+ * driver owns, read only. */
 #define _FILE_OFFSET_BITS 64
 #define _POSIX_C_SOURCE   200809L
 #include <dirent.h>
@@ -54,13 +55,35 @@ static const struct reg_name fixed[] = {{"HSW_PWR_WELL_CTL1", 0x45400},
                                         {"PORT_CLK_SEL_A", 0x46100},
                                         {"PORT_CLK_SEL_B", 0x46104},
                                         {"PORT_CLK_SEL_C", 0x46108},
-                                        {"PORT_CLK_SEL_D", 0x4610C}};
+                                        {"PORT_CLK_SEL_D", 0x4610C},
+                                        {"FPGA_DBG", 0x42300},
+                                        {"GTFIFODBG", 0x120000},
+                                        {"GTFIFOCTL", 0x120008},
+                                        {"GEN6_STOLEN_RESERVED", 0x1082C0},
+                                        {"RENDER_HWS_PGA_GEN7", 0x4080},
+                                        {"BLT_HWS_PGA_GEN7", 0x4280},
+                                        {"DEIMR", 0x44004},
+                                        {"DEIIR", 0x44008},
+                                        {"DEIER", 0x4400C},
+                                        {"GTIMR", 0x44014},
+                                        {"GTIIR", 0x44018},
+                                        {"GTIER", 0x4401C},
+                                        {"GEN6_PMIMR", 0x44024},
+                                        {"GEN6_PMIIR", 0x44028},
+                                        {"GEN6_PMIER", 0x4402C},
+                                        {"GEN7_ERR_INT", 0x44040},
+                                        {"SDEIMR", 0xC4004},
+                                        {"SDEIIR", 0xC4008},
+                                        {"SDEIER", 0xC400C},
+                                        {"SERR_INT", 0xC4040}};
 static volatile uint32_t *mmio;
 static int memfd = -1;
 static int wake_changed, crc_changed;
 static uint32_t crc_reg, crc_saved;
 static volatile sig_atomic_t interrupted;
 static uint32_t aperture;
+static int owned;       /* a driver owns the GPU: nothing is written */
+static char owner[160]; /* why the GPU counts as owned */
 
 /** Read one aligned register of the known four-mebibyte BAR. */
 static uint32_t rd(uint32_t reg)
@@ -106,8 +129,9 @@ static uint32_t le32(const unsigned char *bytes)
            (uint32_t)bytes[3] << 24;
 }
 
-/** Refuse a bound PCI function, by its driver link or uevent. Refuse errors
- * other than a missing driver link, so a permission failure grants nothing. */
+/** Find a bound PCI function, by its driver link or uevent: -1, with the
+ * reason in `owner`, when bound or when its state cannot be read, so that a
+ * permission failure grants nothing. */
 static int unbound(void)
 {
     struct stat st;
@@ -116,30 +140,32 @@ static int unbound(void)
     ssize_t n;
 
     if (lstat(PCI_PATH "driver", &st) == 0 || errno != ENOENT) {
-        fprintf(stderr, "gfxtool: refused: a driver owns the GPU or its state cannot be read\n");
+        snprintf(owner, sizeof(owner), "a driver owns the GPU or its state cannot be read");
         return -1;
     }
     fd = open(PCI_PATH "uevent", O_RDONLY);
     if (fd < 0) {
-        fprintf(stderr, "gfxtool: cannot read the GPU's driver state: %s\n", strerror(errno));
+        snprintf(owner, sizeof(owner), "the GPU's driver state cannot be read: %s",
+                 strerror(errno));
         return -1;
     }
     n = read(fd, text, sizeof(text) - 1);
     close(fd);
     if (n < 0 || n == (ssize_t)sizeof(text) - 1) {
-        fprintf(stderr, "gfxtool: cannot read the GPU's whole uevent\n");
+        snprintf(owner, sizeof(owner), "the GPU's whole uevent cannot be read");
         return -1;
     }
     text[n] = '\0';
     if (!strncmp(text, "DRIVER=", 7) || strstr(text, "\nDRIVER=")) {
-        fprintf(stderr, "gfxtool: refused: a driver owns the GPU\n");
+        snprintf(owner, sizeof(owner), "a driver owns the GPU");
         return -1;
     }
     return 0;
 }
 
-/** Refuse DRM ownership even on a kernel whose PCI sysfs lacks driver
- * links. GET_UNIQUE identifies PCI devices without taking DRM master. */
+/** Find DRM ownership even on a kernel whose PCI sysfs lacks driver
+ * links, as unbound() does. GET_UNIQUE identifies PCI devices without
+ * taking DRM master. */
 static int no_drm_owner(void)
 {
     DIR *dir = opendir("/dev/dri");
@@ -192,14 +218,16 @@ static int no_drm_owner(void)
     }
     closedir(dir);
     if (result) {
-        fprintf(stderr, "gfxtool: refused: DRM owns the GPU or ownership cannot be read\n");
+        snprintf(owner, sizeof(owner), "DRM owns the GPU or ownership cannot be read");
     }
     return result;
 }
 
 /** Map only 8086:0a16 with enabled, below-4-GiB memory BARs. No register is
- * touched until identity and both ownership checks have passed. */
-static int attach(void)
+ * touched until identity and both ownership checks have passed; a GPU that
+ * fails them is refused unless `reading`, which reads it and writes no
+ * register. */
+static int attach(int reading)
 {
     unsigned char config[256];
     uint32_t bar, bar2;
@@ -218,7 +246,12 @@ static int attach(void)
         return -1;
     }
     if (unbound() || no_drm_owner()) {
-        return -1;
+        if (!reading) {
+            fprintf(stderr, "gfxtool: refused: %s\n", owner);
+            return -1;
+        }
+        owned = 1;
+        fprintf(stderr, "gfxtool: reading only, without forcewake: %s\n", owner);
     }
     bar = le32(config + 0x10);
     bar2 = le32(config + 0x18);
@@ -229,12 +262,14 @@ static int attach(void)
         return -1;
     }
     aperture = bar2 & ~0xFu;
-    memfd = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC);
+    /* An owned GPU is mapped for reading alone, so no store can reach it. */
+    memfd = open("/dev/mem", (owned ? O_RDONLY : O_RDWR) | O_SYNC | O_CLOEXEC);
     if (memfd < 0) {
         fprintf(stderr, "gfxtool: cannot open /dev/mem: %s\n", strerror(errno));
         return -1;
     }
-    map = mmap(NULL, MMIO_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, memfd, bar & ~0xFu);
+    map = mmap(NULL, MMIO_SIZE, owned ? PROT_READ : PROT_READ | PROT_WRITE, MAP_SHARED, memfd,
+               bar & ~0xFu);
     if (map == MAP_FAILED) {
         fprintf(stderr, "gfxtool: cannot map GPU registers: %s\n", strerror(errno));
         return -1;
@@ -290,8 +325,10 @@ static void print_reg(const char *name, uint32_t reg)
     printf("%-28s %06x %08x\n", name, reg, rd(reg));
 }
 
-/** Dump display and power registers, GT ring state and the GGTT entries
- * of the CPU-visible aperture, without changing ring or display state. */
+/** Dump display, power and interrupt registers, GT ring state and the GGTT
+ * entries of the CPU-visible aperture, without changing ring or display
+ * state. An unbound GPU's ring reads are made under forcewake; an owned
+ * GPU's are made as the GT is, since its driver keeps forcewake. */
 static int dump(void)
 {
     static const struct reg_name pipe_regs[] = {
@@ -300,15 +337,15 @@ static int dump(void)
         {"DSPOFFSET", 0x701A4}, {"DSPSURFLIVE", 0x701AC}, {"PIPE_CRC_CTL", 0x60050}};
     static const struct reg_name rings[] = {
         {"RCS", 0x2000}, {"VCS", 0x12000}, {"BCS", 0x22000}, {"VECS", 0x1A000}};
-    static const struct reg_name ring_regs[] = {{"TAIL", 0x30}, {"HEAD", 0x34},  {"START", 0x38},
-                                                {"CTL", 0x3C},  {"ACTHD", 0x74}, {"IPEIR", 0x64},
-                                                {"IPEHR", 0x68}};
+    static const struct reg_name ring_regs[] = {
+        {"TAIL", 0x30},  {"HEAD", 0x34},  {"START", 0x38},  {"CTL", 0x3C},     {"ACTHD", 0x74},
+        {"IPEIR", 0x64}, {"IPEHR", 0x68}, {"HWSTAM", 0x98}, {"MI_MODE", 0x9C}, {"IMR", 0xA8}};
     unsigned i, j, pipe;
     char name[64];
 
     print_reg("FORCEWAKE_MT_SAVED", FORCEWAKE_MT);
     print_reg("FORCEWAKE_ACK_HSW_SAVED", FORCEWAKE_ACK);
-    if (forcewake()) {
+    if (!owned && forcewake()) {
         return 1;
     }
     for (i = 0; i < sizeof(fixed) / sizeof(fixed[0]); i++) {
@@ -533,7 +570,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "gfxtool: cannot install cleanup\n");
         return 1;
     }
-    if (attach()) {
+    if (attach(mode != 1)) {
         return 1;
     }
     result = mode == 0 ? dump() : mode == 1 ? crc(pipe, count) : capture(pipe, argv[3]);
