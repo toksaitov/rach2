@@ -1,0 +1,109 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Browser acceptance</title>
+<style>@font-face {font-family: Acceptance; src: url('/font.ttf')} #font {font: 32px Acceptance}</style>
+<p id="font">Rach2 browser acceptance</p>
+<form id="form" action="/form" target="answer"><input name="value" value="rach2-form"><button>Submit</button></form>
+<iframe name="answer"></iframe>
+<input id="upload" type="file">
+<a id="download" href="/download" download="acceptance.txt">Download</a>
+<button id="clipboard">Clipboard</button>
+<canvas id="canvas" width="64" height="64"></canvas>
+<script>
+'use strict';
+window.results = {};
+window.onerror = (event, source, line, col, error) => { results.error = String(error || event); };
+window.addEventListener('unhandledrejection', e => { results.error = String(e.reason); });
+window.addEventListener('message', e => { if (e.origin === location.origin) results.form = e.data; });
+document.querySelector('#clipboard').onclick = async () => {
+ try {
+  await navigator.clipboard.writeText('rach2-clipboard');
+  results.clipboard = await navigator.clipboard.readText();
+ } catch (e) { results.error = String(e); }
+};
+document.querySelector('#upload').onchange = async e => {
+ const data = new FormData(); data.append('file', e.target.files[0]);
+ results.upload = await (await fetch('/upload', {method: 'POST', body: data})).text();
+};
+window.storage = async () => {
+ if (!isSecureContext || location.protocol !== 'https:') throw Error('insecure page');
+ localStorage.setItem('acceptance', 'rach2-local');
+ sessionStorage.setItem('acceptance', 'rach2-session');
+ document.cookie = 'acceptance=rach2-cookie; Secure; SameSite=Strict';
+ const db = await new Promise((resolve, reject) => {
+  const req = indexedDB.open('acceptance', 1);
+  req.onupgradeneeded = () => req.result.createObjectStore('values');
+  req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+ });
+ await new Promise((resolve, reject) => {
+  const tx = db.transaction('values', 'readwrite');
+  tx.objectStore('values').put('rach2-indexed', 'value');
+  tx.oncomplete = resolve; tx.onerror = () => reject(tx.error);
+ });
+ db.close();
+ const cache = await caches.open('acceptance');
+ await cache.put('/cached', new Response('rach2-cache'));
+ await document.fonts.load('32px Acceptance');
+ return {secure: isSecureContext, font: document.fonts.check('32px Acceptance')};
+};
+window.readStorage = async () => {
+ const db = await new Promise((resolve, reject) => {
+  const req = indexedDB.open('acceptance');
+  req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+ });
+ const value = await new Promise((resolve, reject) => {
+  const req = db.transaction('values').objectStore('values').get('value');
+  req.onsuccess = () => resolve(req.result); req.onerror = () => reject(req.error);
+ });
+ db.close();
+ return {local: localStorage.getItem('acceptance'), session: sessionStorage.getItem('acceptance'),
+         indexed: value, cookie: document.cookie,
+         cache: await (await (await caches.open('acceptance')).match('/cached')).text()};
+};
+window.draw = () => {
+ const gl = document.querySelector('canvas').getContext('webgl2');
+ if (!gl) throw Error('no WebGL 2 context');
+ const ext = gl.getExtension('WEBGL_debug_renderer_info');
+ gl.clearColor(1, 0.5, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+ const pixel = new Uint8Array(4); gl.readPixels(1, 1, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+ return {pixel: Array.from(pixel), renderer: ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : ''};
+};
+window.tone = async hz => {
+ window.audio = new AudioContext(); await audio.resume();
+ window.oscillator = audio.createOscillator(); const gain = audio.createGain();
+ oscillator.frequency.value = hz; gain.gain.value = 0.12;
+ oscillator.connect(gain).connect(audio.destination); oscillator.start();
+ return {state: audio.state, hz};
+};
+window.gpu = async () => {
+ const adapter = await navigator.gpu.requestAdapter({forceFallbackAdapter: true});
+ if (!adapter) throw Error('no fallback WebGPU adapter');
+ const info = adapter.info;
+ const device = await adapter.requestDevice();
+ const usage = GPUBufferUsage;
+ const input = device.createBuffer({size: 4096, usage: usage.STORAGE | usage.COPY_SRC | usage.COPY_DST});
+ const output = device.createBuffer({size: 4096, usage: usage.COPY_DST | usage.MAP_READ});
+ const words = Uint32Array.from({length: 1024}, (_, i) => i);
+ device.queue.writeBuffer(input, 0, words);
+ const pipeline = device.createComputePipeline({layout: 'auto', compute: {entryPoint: 'main',
+  module: device.createShaderModule({code: '@group(0) @binding(0) var<storage, read_write> a: array<u32>; @compute @workgroup_size(64) fn main(@builtin(global_invocation_id) i: vec3u) { a[i.x] = a[i.x] * 3u + 7u; }'})}});
+ const group = device.createBindGroup({layout: pipeline.getBindGroupLayout(0), entries: [{binding: 0, resource: {buffer: input}}]});
+ const encoder = device.createCommandEncoder(); const pass = encoder.beginComputePass();
+ pass.setPipeline(pipeline); pass.setBindGroup(0, group); pass.dispatchWorkgroups(16); pass.end();
+ encoder.copyBufferToBuffer(input, 0, output, 0, 4096); device.queue.submit([encoder.finish()]);
+ await output.mapAsync(GPUMapMode.READ);
+ const got = new Uint32Array(output.getMappedRange());
+ const errors = Array.from(got).filter((x, i) => x !== i * 3 + 7).length;
+ output.unmap();
+ const texture = device.createTexture({size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC});
+ const pixels = device.createBuffer({size: 256, usage: usage.COPY_DST | usage.MAP_READ});
+ const enc = device.createCommandEncoder();
+ enc.beginRenderPass({colorAttachments: [{view: texture.createView(), loadOp: 'clear', storeOp: 'store', clearValue: [1, 0.5, 0, 1]}]}).end();
+ enc.copyTextureToBuffer({texture}, {buffer: pixels, bytesPerRow: 256}, [1, 1]);
+ device.queue.submit([enc.finish()]); await pixels.mapAsync(GPUMapMode.READ);
+ const pixel = Array.from(new Uint8Array(pixels.getMappedRange()).slice(0, 4));
+ pixels.unmap(); device.destroy();
+ return {adapter: {vendor: info.vendor, architecture: info.architecture, description: info.description,
+                   device: info.device, fallback: info.isFallbackAdapter}, words: 1024, errors, pixel};
+};
+</script>
