@@ -103,6 +103,23 @@ phys_addr_t mmu_virt_to_phys(const volatile void *v)
     (void)v;
     return 0;
 }
+
+/** -1: no row maps the MMIO region in large pages. */
+int mmu_kernel_large(uintptr_t va, phys_addr_t phys, pte_t flags, pte_t *saved)
+{
+    (void)va;
+    (void)phys;
+    (void)flags;
+    (void)saved;
+    return -1;
+}
+
+/** Nothing. */
+void mmu_kernel_unlarge(uintptr_t va, pte_t saved)
+{
+    (void)va;
+    (void)saved;
+}
 #endif
 
 /** NULL: no row touches a kernel mapping. */
