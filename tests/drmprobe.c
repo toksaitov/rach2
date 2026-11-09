@@ -27,6 +27,13 @@
  * which the core sends at once on a CRTC without vblanks, reads the CRTC back
  * and prints "DRMPROBE FLIP NAME".
  *
+ * With the arguments `hold SECONDS` it is a master that leaves without a
+ * word, for the console's handover: it opens the first card with dumb
+ * buffers, which makes it the master, shows the first mode of the first
+ * connected connector from a buffer of colored bands, prints "DRMPROBE HOLD
+ * NAME", sleeps SECONDS, from 1 to 3600, prints "DRMPROBE HOLD END" and
+ * exits with the card open and the role held, which the exit releases.
+ *
  * Prints "DRMPROBE OK" and exits 0 when every check passes, and otherwise
  * "DRMPROBE FAIL: what" and exits 1 at the first failure. etude's report
  * (probe_report.h), for the case ETUDE_CASE names, has an assertion for
@@ -814,6 +821,85 @@ static void modes_row(int fd)
     report_held();
 }
 
+/** The decimal number `s`, or 0 for one that is not 1 to 3600. */
+static long hold_seconds(const char *s)
+{
+    long n = 0;
+
+    while (*s >= '0' && *s <= '9' && n <= 3600) {
+        n = n * 10 + (*s++ - '0');
+    }
+    return *s == '\0' && n >= 1 && n <= 3600 ? n : 0;
+}
+
+/** The hold mode: show colored bands as the master for `seconds` and exit
+ * without closing the card or dropping the role. */
+static void hold_main(long seconds)
+{
+    static struct drm_mode_modeinfo modes[MAX_MODES];
+    struct drm_mode_get_connector conn;
+    struct drm_mode_create_dumb c;
+    struct drm_mode_map_dumb m;
+    struct drm_mode_fb_cmd f;
+    struct drm_mode_crtc set;
+    struct {
+        long sec, nsec;
+    } ts;
+    char name[64];
+    volatile u32 *px;
+    unsigned long i, words;
+    int fd, index = 0;
+    u32 crtc;
+    long map;
+
+    fd = open_card(&index, name, sizeof(name));
+    if (drm_ioctl(fd, DRM_IOCTL_SET_MASTER, 0) != 0) {
+        fail("SET_MASTER: another process holds the master role");
+    }
+    if (mode_list(fd, &conn, modes, &crtc) == 0) {
+        fail("no mode to show");
+    }
+    zero(&c, sizeof(c));
+    c.width = modes[0].hdisplay;
+    c.height = modes[0].vdisplay;
+    c.bpp = 32;
+    zero(&m, sizeof(m));
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &c) != 0 ||
+        (m.handle = c.handle, drm_ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &m)) != 0 ||
+        sys_failed(map = map_drm(fd, (long)c.size, m.offset))) {
+        fail("the hold's buffer");
+    }
+    px = (volatile u32 *)map;
+    words = (unsigned long)c.pitch / 4 * c.height;
+    for (i = 0; i < words; i++) {
+        px[i] = (i / (c.pitch / 4) / 64) % 2 ? 0x00FF8000u : 0x000080FFu;
+    }
+    zero(&f, sizeof(f));
+    f.width = c.width;
+    f.height = c.height;
+    f.pitch = c.pitch;
+    f.bpp = 32;
+    f.depth = 24;
+    f.handle = c.handle;
+    zero(&set, sizeof(set));
+    set.set_connectors_ptr = (u64)(unsigned long)&conn.connector_id;
+    set.count_connectors = 1;
+    set.crtc_id = crtc;
+    set.mode_valid = 1;
+    set.mode = modes[0];
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_ADDFB, &f) != 0 ||
+        (set.fb_id = f.fb_id, drm_ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &set)) != 0) {
+        fail("SETCRTC of the hold's mode");
+    }
+    probe_line("DRMPROBE HOLD ", modes[0].name, 0);
+    ts.sec = seconds;
+    ts.nsec = 0;
+    /* interval: the master holds the screen for the seconds asked */
+    syscall2(SYS_NANOSLEEP, (long)&ts, 0);
+    probe_line("DRMPROBE HOLD END", 0, 0);
+    sys_exit(0);
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -824,9 +910,19 @@ void probe_main(unsigned long *sp)
     static const char *const ids[] = {"open", "version", "render", "master", "auth", "create",
                                       "map",  "destroy", "prime",  "kcmp",   "modes"};
     char name[64], path[32];
+    char **argv = (char **)(sp + 1);
     int fd, other, index = 0;
     unsigned i;
 
+    if (sp[0] == 3 && same_name(argv[1], "hold")) {
+        long seconds = hold_seconds(argv[2]);
+
+        if (seconds == 0) {
+            probe_line("drmprobe: usage: drmprobe [hold SECONDS]", 0, 0);
+            sys_exit(2);
+        }
+        hold_main(seconds);
+    }
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.screen.drmprobe"));
     for (i = 0; i < sizeof(ids) / sizeof(ids[0]); i++) {
         report_plan(ids[i]);
