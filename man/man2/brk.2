@@ -1,4 +1,4 @@
-.Dd November 9, 2026
+.Dd November 10, 2026
 .Dt BRK 2
 .Os
 .Sh NAME
@@ -295,17 +295,40 @@ the mapping is placed at the page-aligned
 and replaces whatever that range held; with
 .Dv MAP_FIXED_NOREPLACE ,
 a range already in use is refused.
-Otherwise a page-aligned
-.Fa addr
-whose range is free and ends below the stack's growth limit is used as
-it is, and without such a hint the kernel takes the highest free range
-below
+Otherwise
+.Fa addr ,
+rounded down to its page, is used when its range is free and ends below
+the stack's growth limit, and without such a hint the kernel takes the
+highest free range below
 .Ql 0xB0000000
 on i686 or
 .Ql 0x00007F0000000000
 on x86-64 and above the heap's top, so the ranges
 .Fn munmap
 frees are used again.
+.Pp
+.Dv MAP_32BIT ,
+0x40, asks a 64-bit program on x86-64 for a mapping in the first 2 GiB,
+as code built for the small model and Wine's 32-bit pointers need:
+.Fa addr ,
+rounded up to its page, is used when its range is free and ends by
+.Ql 0x80000000 ,
+and otherwise the kernel takes the highest free range from
+.Ql 0x40000000
+to
+.Ql 0x80000000 ,
+or fails with
+.Er ENOMEM .
+Linux takes the lowest free range there instead.
+A call made through
+.Ql int $0x80 ,
+and every call on i686, ignores the flag, as on Linux.
+.Dv MAP_FIXED
+places the mapping at
+.Fa addr
+whatever
+.Dv MAP_32BIT
+asks.
 .Pp
 .Fa prot
 uses
