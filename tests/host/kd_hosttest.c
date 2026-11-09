@@ -268,6 +268,12 @@ void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
     *nanoseconds = 0;
 }
 
+void rtc_monotonic(int64_t *seconds, int64_t *nanoseconds)
+{
+    *seconds = 0;
+    *nanoseconds = 0;
+}
+
 /** Whether the `n` bytes at `a` and `b` differ. */
 static int differ(const void *a, const void *b, unsigned int n)
 {
