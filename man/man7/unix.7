@@ -200,6 +200,17 @@ ids, unless it is root.
 On a stream with
 .Dv SO_PASSCRED ,
 a read does not join the bytes of two senders.
+.Pp
+A datagram or sequenced-packet receiver that asked for
+.Dv SO_TIMESTAMP
+or
+.Dv SO_TIMESTAMPNS ,
+old or new
+.Pq Xr setsockopt 2 ,
+gets the time each message was sent, before its credentials and
+descriptors, in the layout
+.Xr recv 2
+gives; a stream accepts the options and gives no timestamp.
 .Ss Options
 .Dv SO_PEERCRED
 reports the process id and effective ids of the peer when it connected,

@@ -49,13 +49,18 @@
 
 /* The ancillary data a socket asks a receive for, the bits of `rxopt`:
  * IPV6_RECVPKTINFO, IPV6_RECVHOPLIMIT and IPV6_RECVTCLASS of an AF_INET6
- * socket, IP_RECVTTL of an AF_INET one, and SO_PASSCRED of an AF_NETLINK
- * one. */
+ * socket, IP_RECVTTL of an AF_INET one, SO_PASSCRED of an AF_NETLINK one,
+ * and the SO_TIMESTAMP family of a UDP, raw or packet socket: TSTAMP asks
+ * for the time of arrival, TSTAMPNS in nanoseconds, TSNEW in the 64-bit
+ * layout of SO_TIMESTAMP_NEW and SO_TIMESTAMPNS_NEW. */
 #define SOCK_RX_PKTINFO  0x1
 #define SOCK_RX_HOPLIMIT 0x2
 #define SOCK_RX_TCLASS   0x4
 #define SOCK_RX_TTL      0x8
 #define SOCK_RX_CREDS    0x10
+#define SOCK_RX_TSTAMP   0x20
+#define SOCK_RX_TSTAMPNS 0x40
+#define SOCK_RX_TSNEW    0x80
 
 /*
  * What the network layer saw of a datagram it delivered to a UDP or raw
@@ -68,6 +73,8 @@ struct net_rxinfo {
     uint32_t ifindex; /* the interface it came in on, 0 when not known */
     int16_t hlim;     /* its hop limit, or -1 when not known */
     int16_t tclass;   /* its traffic class, or -1 when not known */
+    int64_t tsec;     /* when it was queued, by `rtc_realtime`: seconds */
+    int32_t tnsec;    /* and nanoseconds */
 };
 
 /*
@@ -269,9 +276,9 @@ typedef struct socket {
      * one within it carries DF (`ip_tx_opts`). */
     uint8_t pmtudisc;
 
-    /* What the network layer saw of the UDP or raw datagram most recently
-     * taken or peeked (`socket_dgram_consume`, `socket_dgram_sender`), for
-     * recvmsg's ancillary data. */
+    /* What the network layer saw of the UDP, raw or packet datagram most
+     * recently taken or peeked (`socket_dgram_consume`,
+     * `socket_dgram_sender`), for recvmsg's ancillary data. */
     struct net_rxinfo rx_last;
 
     /* The processes and pollers waiting for data, room, a connection or an
@@ -489,15 +496,15 @@ int socket_dgram_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int le
  * NULL: for UDP its address and port; for a raw socket the source address of
  * its IP header and port 0; and 0 for both for a packet or netlink socket,
  * whose link address `packet_last_addr` reports. With no datagram waiting, a
- * UDP socket reports nothing. A UDP or raw socket keeps in `rx_last` what
- * the network layer saw of the datagram.
+ * UDP socket reports nothing. A UDP, raw or packet socket keeps in `rx_last`
+ * what the network layer saw of the datagram.
  */
 void socket_dgram_consume(struct socket *sock, net_addr_t *src_ip, uint16_t *src_port);
 
 /** Report the oldest waiting datagram's sender as `socket_dgram_consume`
  * does, 0 for both with none waiting, and leave the datagram in place. A
- * packet socket keeps its link address for `packet_last_addr`, and a UDP or
- * raw socket what the network layer saw in `rx_last`. */
+ * packet socket keeps its link address for `packet_last_addr`, and a UDP,
+ * raw or packet socket what the network layer saw in `rx_last`. */
 void socket_dgram_sender(struct socket *sock, net_addr_t *src_ip, uint16_t *src_port);
 
 /*

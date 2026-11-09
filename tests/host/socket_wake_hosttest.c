@@ -93,6 +93,14 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return -EINTR;
 }
 
+/** The wall clock `sock_dgq_put` stamps a datagram with: the epoch, since
+ * no test here reads a timestamp. */
+void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
+{
+    *seconds = 0;
+    *nanoseconds = 0;
+}
+
 /** Take the network lock: a no-op, since no interrupt runs in this model. */
 uint32_t net_lock(void)
 {

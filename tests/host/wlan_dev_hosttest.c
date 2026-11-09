@@ -98,6 +98,14 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/** The wall clock `sock_dgq_put` stamps a datagram with: the epoch, since
+ * no test here reads a timestamp. */
+void rtc_realtime(int64_t *seconds, int64_t *nanoseconds)
+{
+    *seconds = 0;
+    *nanoseconds = 0;
+}
+
 /** Record the lock context presented to the worker boundary. */
 uint32_t net_lock(void)
 {

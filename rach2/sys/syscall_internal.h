@@ -231,6 +231,32 @@ int32_t sock_timeo_get(int name, uintptr_t val, uint32_t len, int64_t tv[2]);
  * structure in the caller's layout at `out`; returns its bytes. */
 uint32_t sock_timeo_put(int name, const int64_t tv[2], uint8_t out[16]);
 
+/* SO_TIMESTAMP and SO_TIMESTAMPNS, old and new; each one's control message
+ * has its number as its type. A socket keeps what they ask for as the
+ * SOCK_RX_TSTAMP, SOCK_RX_TSTAMPNS and SOCK_RX_TSNEW bits (socket.h). */
+#define SO_TIMESTAMP_OLD   29
+#define SO_TIMESTAMPNS_OLD 35
+#define SO_TIMESTAMP_NEW   63
+#define SO_TIMESTAMPNS_NEW 64
+
+/** Whether `optname` is one of the four timestamp options. */
+int sock_tstamp_opt(int optname);
+
+/** The timestamp bits `bits` after setsockopt of the timestamp option
+ * `optname` to `val`, as Linux's sock_set_timestamp sets its flags: turning
+ * one on asks for its kind alone, and turning any off clears all. Other
+ * bits of `bits` are kept. */
+uint8_t sock_tstamp_set(uint8_t bits, int optname, int val);
+
+/** getsockopt's value of the timestamp option `optname` under the bits
+ * `bits`: 1 while it is the one asked for, else 0. */
+int sock_tstamp_get(uint8_t bits, int optname);
+
+/** The timestamp control message the bits `bits` ask for, of the time
+ * `sec` and `nsec`, in the caller's layout at `out`: sets `*type` and
+ * returns the payload's bytes (`sock_timeo_put`). */
+uint32_t sock_tstamp_put(uint8_t bits, int64_t sec, int32_t nsec, int *type, uint8_t out[16]);
+
 /* Format: the vectors readv, writev and sendmsg accept, the Linux IOV_MAX. */
 #define IOV_MAX_LOCAL 1024
 

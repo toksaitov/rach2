@@ -6,11 +6,13 @@
 #include "socket.h"
 #include "../../lib/kstring.h"
 #include "../../mm/kheap.h"
+#include "../../rtc.h"
 
 /**
  * The record is charged with its datagram, so that many small datagrams
  * spend the budget by the heap they hold and not by their bytes alone, as
- * Linux charges a buffer's true size.
+ * Linux charges a buffer's true size. It is stamped with the time it was
+ * queued, which SO_TIMESTAMP reports.
  */
 struct sock_dgram *sock_dgq_put(struct sock_dgq *q, int rcvbuf, const struct sock_dgram *meta,
                                 const uint8_t *data, uint32_t len)
@@ -27,6 +29,13 @@ struct sock_dgram *sock_dgq_put(struct sock_dgq *q, int rcvbuf, const struct soc
     *d = *meta;
     d->next = NULL;
     d->len = len;
+    {
+        int64_t sec, nsec;
+
+        rtc_realtime(&sec, &nsec);
+        d->info.tsec = sec;
+        d->info.tnsec = (int32_t)nsec;
+    }
     k_memcpy(SOCK_DGRAM_DATA(d), data, len);
     if (q->tail) {
         q->tail->next = d;

@@ -126,6 +126,8 @@ struct unix_msg {
     uint32_t len;
     uint32_t off;
     uint32_t charge; /* what it holds of its queue's `rq_charge`, in bytes */
+    int64_t tsec;    /* when it was sent, by `rtc_realtime`: seconds */
+    int32_t tnsec;   /* and nanoseconds */
     struct unix_cred cred;
     struct unix_name from;
     uint32_t nfds;
@@ -167,6 +169,7 @@ struct unix_sock {
     int shut; /* SHUT_RCV and SHUT_SEND */
     int err;  /* a pending positive errno, for SO_ERROR or the next call */
     int passcred;
+    uint8_t tstamp;            /* SO_TIMESTAMP and SO_TIMESTAMPNS, as SOCK_RX_TS* bits */
     int priority;              /* SO_PRIORITY, kept for getsockopt; it orders nothing here */
     struct unix_cred peercred; /* what SO_PEERCRED gives, when `has_peercred` */
     int has_peercred;
@@ -202,6 +205,9 @@ struct unix_in {
     struct unix_name from;
     struct unix_cred cred;
     int has_cred;
+    uint8_t tstamp; /* the timestamp asked for, as SOCK_RX_TS* bits, or 0 */
+    int64_t tsec;   /* the message's time, when `tstamp` */
+    int32_t tnsec;
     uint32_t nfds;
     fd_entry_t *fds;
     uint32_t flags;          /* MSG_TRUNC, MSG_CTRUNC */
@@ -1612,6 +1618,12 @@ int32_t unix_setsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uint3
     case SO_PASSCRED:
         s->passcred = v != 0;
         return 0;
+    case SO_TIMESTAMP_OLD:
+    case SO_TIMESTAMPNS_OLD:
+    case SO_TIMESTAMP_NEW:
+    case SO_TIMESTAMPNS_NEW:
+        s->tstamp = sock_tstamp_set(s->tstamp, name, v);
+        return 0;
     case SO_PRIORITY:
         if ((v < 0 || v > 6) && !cred_privileged()) {
             return -EPERM;
@@ -1665,6 +1677,12 @@ int32_t unix_getsockopt(fd_entry_t *e, int level, int name, uintptr_t val, uintp
         break;
     case SO_PASSCRED:
         v = s->passcred;
+        break;
+    case SO_TIMESTAMP_OLD:
+    case SO_TIMESTAMPNS_OLD:
+    case SO_TIMESTAMP_NEW:
+    case SO_TIMESTAMPNS_NEW:
+        v = sock_tstamp_get(s->tstamp, name);
         break;
     case SO_PRIORITY:
         v = s->priority;
@@ -1898,6 +1916,13 @@ static struct unix_msg *build(const struct unix_sock *s, const struct kernel_iov
         own_cred(&m->cred, 0);
     }
     m->from = s->name;
+    {
+        int64_t sec, nsec;
+
+        rtc_realtime(&sec, &nsec);
+        m->tsec = sec;
+        m->tnsec = (int32_t)nsec;
+    }
     return m;
 }
 
@@ -2349,6 +2374,9 @@ static int32_t recv_msg(struct unix_sock *s, int nonblock, const struct kernel_i
     in->from = m->from;
     in->cred = m->cred;
     in->has_cred = s->passcred;
+    in->tstamp = s->tstamp;
+    in->tsec = m->tsec;
+    in->tnsec = m->tnsec;
     take_fds(m, in, peek);
     rc = (flags & MSG_TRUNC) ? (int32_t)m->len : (int32_t)chunk;
     if (!peek) {
@@ -2430,7 +2458,8 @@ static uint32_t put_rights(uintptr_t at, uint32_t room, struct unix_in *in, int 
 
 /**
  * Write the control messages of a receive to the caller's buffer, in its
- * layout (`cmsg_put`): the credentials, and the descriptors, each installed
+ * layout (`cmsg_put`), in Linux's order: the timestamp the socket asked for
+ * (`sock_tstamp_put`), the credentials, and the descriptors, each installed
  * as a new descriptor.
  * Returns the bytes of the buffer used, a message's padding to the next
  * alignment counted only as far as the buffer goes, as Linux's `put_cmsg`
@@ -2445,16 +2474,30 @@ static uint32_t put_control(uintptr_t control, uint32_t controllen, struct unix_
     struct unix_cred seen;
 
     k_memset(&hdr, 0, sizeof(hdr));
+    if (in->tstamp & SOCK_RX_TSTAMP) {
+        uint8_t ts[16];
+        uint32_t n = sock_tstamp_put(in->tstamp, in->tsec, in->tnsec, &hdr.cmsg_type, ts);
+
+        hdr.cmsg_len = head + n;
+        hdr.cmsg_level = SOL_SOCKET;
+        if (!control || controllen < hdr.cmsg_len || cmsg_put(control, &hdr) != 0 ||
+            copy_to_user((void __user *)(control + head), ts, n) != 0) {
+            in->flags |= MSG_CTRUNC;
+        } else {
+            used = cmsg_align((uint32_t)hdr.cmsg_len);
+            used = used > controllen ? controllen : used;
+        }
+    }
     if (in->has_cred) {
         seen = cred_seen(in->cred);
         hdr.cmsg_len = head + sizeof(seen);
         hdr.cmsg_level = SOL_SOCKET;
         hdr.cmsg_type = SCM_CREDENTIALS;
-        if (!control || controllen < hdr.cmsg_len || cmsg_put(control, &hdr) != 0 ||
-            copy_to_user((void __user *)(control + head), &seen, sizeof(seen)) != 0) {
+        if (!control || controllen - used < hdr.cmsg_len || cmsg_put(control + used, &hdr) != 0 ||
+            copy_to_user((void __user *)(control + used + head), &seen, sizeof(seen)) != 0) {
             in->flags |= MSG_CTRUNC;
         } else {
-            used = cmsg_align((uint32_t)hdr.cmsg_len);
+            used += cmsg_align((uint32_t)hdr.cmsg_len);
             used = used > controllen ? controllen : used;
         }
     }

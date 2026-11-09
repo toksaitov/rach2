@@ -123,11 +123,12 @@ void packet_rx(struct netdev *nd, uint16_t ethertype, const uint8_t *frame, uint
 /* The receive queue is the socket's own (`rq`), which the three steps
  * `socket_dgram_*` read; these keep the link address a receive reports. */
 
-/** Drop the waiting datagram, keeping the address it came from. */
+/** Drop the waiting datagram, keeping the address it came from, and in
+ * `rx_last` what the network layer saw of it. */
 void packet_consume(struct socket *sock);
 
-/** Keep the waiting datagram's address as `packet_consume` keeps it, and
- * leave the datagram waiting: what a peek at it reports. */
+/** Keep the waiting datagram's address and `rx_last` as `packet_consume`
+ * keeps them, and leave the datagram waiting: what a peek at it reports. */
 void packet_note_head(struct socket *sock);
 
 /**
