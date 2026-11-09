@@ -649,8 +649,10 @@ i915-perf-configs 1 intel-gpu-tools
 i915-perf-control 1 intel-gpu-tools
 i915-perf-reader 1 intel-gpu-tools
 i915-perf-recorder 1 intel-gpu-tools
+igt_comms_decoder 1 igt_runner
 igt_facts 1 intel-gpu-tools
 igt_power 1 intel-gpu-tools
+igt_results 1 igt_resume
 igt_stats 1 intel-gpu-tools
 intel-gen4asm 1 intel-gpu-tools
 intel-gen4disasm 1 intel-gpu-tools

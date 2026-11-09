@@ -1,0 +1,42 @@
+.Dd November 10, 2026
+.Dt IGT_RESUME 1
+.Os
+.Sh NAME
+.Nm igt_resume ,
+.Nm igt_results
+.Nd go on with an IGT run, or write its results again
+.Sh SYNOPSIS
+.Nm
+.Ar results
+.Nm igt_results
+.Ar results
+.Sh DESCRIPTION
+.Nm
+goes on with the run of
+.Xr igt_runner 1
+whose directory is
+.Ar results ,
+with the options it was started with: it runs each subtest of the run's job list that has no result yet, as after a crash, a reboot or a run of
+.Ql igt_runner -d ,
+writes
+.Pa results.json
+again and prints
+.Ql Done.
+.Pp
+.Nm igt_results
+runs no subtest.
+It writes
+.Pa results.json
+in
+.Ar results
+from what the run's subtests recorded, and prints
+.Ql Results generated .
+.Sh EXIT STATUS
+.Nm
+exits 0 when the run is whole, 1 when it cannot run the rest, 2 when the overall timeout stopped it, 3 when the results could not be written, and 127 when
+.Ar results
+cannot be read as a run.
+.Nm igt_results
+exits 0 when it wrote the results and 1 otherwise.
+.Sh SEE ALSO
+.Xr igt_runner 1

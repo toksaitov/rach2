@@ -1,0 +1,110 @@
+.Dd November 10, 2026
+.Dt IGT_RUNNER 1
+.Os
+.Sh NAME
+.Nm igt_runner ,
+.Nm igt_comms_decoder
+.Nd run IGT's GPU and display tests and record their results
+.Sh SYNOPSIS
+.Nm
+.Op Ar option ...
+.Ar test_root
+.Ar results
+.Nm
+.Fl L
+.Op Ar option ...
+.Ar test_root
+.Nm igt_comms_decoder
+.Ar file
+.Sh DESCRIPTION
+.Nm
+runs the tests of IGT, the kernel's test suite for DRM drivers, one subtest at a time, and writes what each printed, the kernel's log over its run and its outcome under the directory
+.Ar results ,
+which it makes.
+The x86-64 GNU root has IGT 2.0's tests, built from Debian's intel-gpu-tools source, in
+.Pa /usr/libexec/igt-gpu-tools ,
+the
+.Ar test_root
+to give; the variable
+.Ev IGT_TEST_ROOT
+overrides it.
+At its end
+.Nm
+writes
+.Pa results.json ,
+and prints
+.Ql Done.
+.Pp
+.Nm
+runs as root and refuses another user without
+.Fl -allow-non-root .
+.Pp
+The options most runs use:
+.Bl -tag -width Ds
+.It Fl L , Fl -list-all
+Print every subtest that would run, as
+.Ql igt@ Ns Ar test Ns @ Ns Ar subtest ,
+one a line, and run nothing.
+No
+.Ar results
+is given.
+.It Fl t Ar regex , Fl -include-tests Ar regex
+Run only the subtests whose names match.
+It may be given more than once.
+.It Fl x Ar regex , Fl -exclude-tests Ar regex
+Leave out the subtests whose names match.
+.It Fl -test-list Ar file
+Run the subtests that
+.Ar file
+names, one a line.
+.It Fl m , Fl -multiple-mode
+Run consecutive subtests of one test in one execution of it.
+.It Fl d , Fl -dry-run
+Write the job list in
+.Ar results
+and run nothing;
+.Xr igt_resume 1
+runs it.
+.It Fl o , Fl -overwrite
+Remove
+.Ar results
+first if it exists.
+.It Fl -per-test-timeout Ar seconds , Fl -inactivity-timeout Ar seconds
+Kill a subtest that runs, or prints nothing, for longer.
+.It Fl -allow-non-root
+Run as another user.
+.It Fl h , Fl -help
+Print every option and its meaning.
+.El
+.Pp
+.Nm igt_comms_decoder
+prints, one packet a line, the
+.Pa comms
+file of a subtest's results, which records the test's messages to the runner.
+.Sh FILES
+.Bl -tag -width Ds
+.It Pa /usr/libexec/igt-gpu-tools
+The tests, their libraries in
+.Pa lib ,
+the list of tests
+.Pa test-list.txt
+and the list of every subtest
+.Pa subtest-list.txt ,
+which
+.Ql igt_runner -L /usr/libexec/igt-gpu-tools
+prints the same on Rach2 as in the Debian guest that built them.
+.It Pa /usr/share/igt-gpu-tools
+The images the display tests draw.
+.El
+.Sh EXIT STATUS
+.Nm
+exits 0 when the run ends, whatever its subtests' results, 1 when it cannot start the run, run it or write its results, and 2 when the overall timeout stopped it.
+.Sh EXAMPLES
+Run the vblank subtests of kms_vblank and keep the results in
+.Pa /tmp/r :
+.Pp
+.Dl igt_runner -t 'igt@kms_vblank@.*' /usr/libexec/igt-gpu-tools /tmp/r
+.Sh SEE ALSO
+.Xr igt_resume 1 ,
+.Xr intel-gpu-tools 1 ,
+.Xr modetest 1
