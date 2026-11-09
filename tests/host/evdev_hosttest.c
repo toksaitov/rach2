@@ -2,8 +2,8 @@
  * evdev_hosttest.c: the event devices of rach2/sys/evdev.c, a mouse's and a
  * touchpad's, read and asked as Linux's evdev answers: their records and
  * packets, the input core's filters, an overflowed queue, revoke, the
- * clocks of EVIOCSCLOCKID against clock_gettime, the event masks and the
- * absolute axes.
+ * clocks of EVIOCSCLOCKID against clock_gettime, the event masks, the
+ * absolute axes, and the 16-byte records of an i386 reader.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/kheap_host.c tests/host/compat/spinlock_host.c
@@ -145,6 +145,16 @@ int copy_from_user(void *dst, const void __user *src, size_t n)
     }
     k_memcpy(dst, (const void *)src, n);
     return 0;
+}
+
+/* Whether the calls are an i386 program's on the x86-64 kernel, which a row
+ * sets. */
+static int compat_caller;
+
+/** The convention of the call: an i386 program's while a row says so. */
+int in_compat_syscall(void)
+{
+    return compat_caller;
 }
 
 /* The ioctls, by Linux's macros. */
@@ -598,6 +608,43 @@ static void abs_rows(void)
     evdev_unregister(dev);
 }
 
+/** An i386 reader on the x86-64 kernel reads records of 16 bytes, with
+ * 32-bit seconds and microseconds, as Linux's `input_event_compat`. */
+static void compat_rows(void)
+{
+    struct evdev *dev = mouse();
+    struct opened a;
+    uint8_t buf[64];
+    uint32_t u32;
+    int32_t v;
+
+    CHECK("an open for the i386 reader", open_dev(&a, 0) == 0);
+    fixed = 1;
+    fixed_real = 1700000000LL * 1000000000 + 123456789;
+    packet(dev, EV_REL, REL_X, 5);
+    compat_caller = 1;
+    k_memset(buf, 0xEE, sizeof(buf));
+    CHECK("a read of 15 bytes is -EINVAL", evdev_read(&a.e, (char __user *)buf, 15) == -EINVAL);
+    CHECK("a read of 16 bytes takes one record", evdev_read(&a.e, (char __user *)buf, 16) == 16);
+    k_memcpy(&u32, buf, 4);
+    CHECK("its seconds in 32 bits", u32 == 1700000000);
+    k_memcpy(&u32, buf + 4, 4);
+    CHECK("its microseconds in 32 bits", u32 == 123456);
+    k_memcpy(&v, buf + 12, 4);
+    CHECK("its type, code and value at 8",
+          buf[8] == EV_REL && buf[9] == 0 && buf[10] == REL_X && buf[11] == 0 && v == 5);
+    CHECK("nothing past it", buf[16] == 0xEE);
+    CHECK("the next read takes the SYN_REPORT",
+          evdev_read(&a.e, (char __user *)buf, sizeof(buf)) == 16 && buf[8] == EV_SYN &&
+              buf[16] == 0xEE);
+    compat_caller = 0;
+    packet(dev, EV_REL, REL_Y, 1);
+    CHECK("an x86-64 reader still reads 24 bytes a record", take(&a) == 2 * 24 && n_got == 2);
+    fixed = 0;
+    evdev_close(&a.e);
+    evdev_unregister(dev);
+}
+
 int main(void)
 {
     motion_rows();
@@ -606,6 +653,7 @@ int main(void)
     mask_rows();
     key_state_rows();
     abs_rows();
+    compat_rows();
     CHECK("every slot is free at the end", !devices[0].used && !devices[1].used);
     if (fails == 0) {
         printf("evdev-test: pass\n");

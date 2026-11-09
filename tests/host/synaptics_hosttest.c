@@ -325,8 +325,15 @@ void klog(int level, const char *subsystem, const char *format, ...)
 void console_poke(void)
 {}
 
-/* What evdev.c needs: one processor, fixed clocks, nothing to repeat, and
- * reads that never sleep, since every open is nonblocking. */
+/* What evdev.c needs: one processor, fixed clocks, nothing to repeat,
+ * reads that never sleep, since every open is nonblocking, and calls of
+ * x86-64 programs. */
+
+/** Every call here is an x86-64 program's. */
+int in_compat_syscall(void)
+{
+    return 0;
+}
 
 uint32_t kirq_save(void)
 {

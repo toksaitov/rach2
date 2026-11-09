@@ -34,6 +34,7 @@ static long sys_settimeofday(isr_params_t *params);
 static long sys_stime(isr_params_t *params);
 static long sys_getrandom(isr_params_t *params);
 static long sys_ioctl(isr_params_t *params);
+static long ioctl_fd(int fd_num, uint32_t request, uintptr_t arg);
 static long sys_sysinfo(isr_params_t *params);
 static long sys_syslog(isr_params_t *params);
 static long sys_socketcall(isr_params_t *params);
