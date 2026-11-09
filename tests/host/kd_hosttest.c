@@ -175,6 +175,14 @@ void input_get_repeat(int *delay_ms, int *period_ms)
     *period_ms = repeat_period;
 }
 
+/** No row writes to an event device. */
+void input_written(uint16_t type, uint16_t code, int32_t value)
+{
+    (void)type;
+    (void)code;
+    (void)value;
+}
+
 void input_cancel_repeat(void)
 {
     repeat_cancels++;

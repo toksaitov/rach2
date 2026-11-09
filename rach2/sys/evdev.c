@@ -41,6 +41,10 @@ struct input_event32 {
     int32_t value;
 };
 
+/* The most bytes a write takes, as Linux's evdev_write: 170 records of 24
+ * bytes. */
+#define WRITE_MAX 4096u
+
 /* The fewest records an open queues, and the packets its queue holds, as
  * Linux's EVDEV_MIN_BUFFER_SIZE and EVDEV_BUF_PACKETS (`queue_size`). */
 #define EVDEV_QUEUE   64
@@ -845,6 +849,8 @@ static int accept_event(struct evdev *dev, uint16_t type, uint16_t code, int32_t
         return accept_abs(dev, code, value);
     case EV_MSC:
         return code == MSC_SCAN && (dev->flags & EVDEV_SCAN);
+    case EV_SYN:
+        return code == SYN_REPORT || code == SYN_CONFIG || code == SYN_MT_REPORT;
     default:
         return 1;
     }
@@ -867,7 +873,12 @@ static int pass_all(struct evdev *dev, uint16_t type, uint16_t code, int32_t val
     return wake;
 }
 
-void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value)
+/**
+ * `evdev_report`, which also says whether the event passed the filters and
+ * went out, 1, or was dropped, 0, and in `*grabbed` whether an open held the
+ * grab when it went out.
+ */
+static int report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value, int *grabbed)
 {
     evdev_handler_t handler;
     int64_t sec[CLKS];
@@ -878,15 +889,16 @@ void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
     int how;
     int i;
 
+    *grabbed = 0;
     if (!dev) {
-        return;
+        return 0;
     }
     read_clocks(sec, nsec);
     flags = spin_lock_irqsave(&evdev_lock);
     how = dev->gone ? DROP : accept_event(dev, type, code, &value);
     if (how == DROP) {
         spin_unlock_irqrestore(&evdev_lock, flags);
-        return;
+        return 0;
     }
     if (!dev->stamped) {
         for (i = 0; i < CLKS; i++) {
@@ -903,6 +915,7 @@ void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
     if (type == EV_SYN && code == SYN_REPORT) {
         dev->stamped = 0;
     }
+    *grabbed = dev->grab != NULL;
     handler = dev->grab ? NULL : dev->handler;
     spin_unlock_irqrestore(&evdev_lock, flags);
     if (wake) {
@@ -914,6 +927,28 @@ void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
         }
         handler(dev, type, code, value);
     }
+    return 1;
+}
+
+void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value)
+{
+    int grabbed;
+
+    report(dev, type, code, value, &grabbed);
+}
+
+int evdev_grabbed(struct evdev *dev)
+{
+    uint32_t flags;
+    int grabbed;
+
+    if (!dev) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    grabbed = dev->grab != NULL;
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    return grabbed;
 }
 
 void evdev_report_key(struct evdev *dev, uint32_t scan, uint16_t code, int down)
@@ -1173,7 +1208,7 @@ short evdev_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     if (dead(c)) {
         return POLLHUP | POLLERR;
     }
-    return (short)(events & (c->packet != c->tail ? POLLIN : 0));
+    return (short)(events & (POLLOUT | (c->packet != c->tail ? POLLIN : 0)));
 }
 
 /**
@@ -1464,6 +1499,77 @@ static int type_bytes(const struct evdev *dev, uint32_t type, uint8_t *out)
     default:
         return -1;
     }
+}
+
+/**
+ * Inject the event `type`, `code`, `value` a program wrote to `dev`, as
+ * Linux's input_inject_event: an event of a type the device lacks is
+ * dropped; a keyboard's EV_LED and EV_REP go to the LEDs and the repeat
+ * every keyboard shares (`input_written`), whose change each keyboard's
+ * opens get; any other event takes a driver's path (`evdev_report`), and a
+ * keyboard's key that goes out to its opens with no grab held goes on to the
+ * console (`input_written`), as Linux's input core gives an injected key to
+ * the console's handler.
+ */
+static void inject(struct evdev *dev, uint16_t type, uint16_t code, int32_t value)
+{
+    uint8_t types[EVDEV_KEY_BYTES];
+    uint32_t flags;
+    int keyboard, grabbed;
+
+    flags = spin_lock_irqsave(&evdev_lock);
+    type_bytes(dev, 0, types);
+    keyboard = (dev->flags & EVDEV_KEYBOARD) != 0;
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    if (type >= EV_CNT || !bit_on(types, type)) {
+        return;
+    }
+    if (type == EV_LED || type == EV_REP) {
+        input_written(type, code, value);
+        return;
+    }
+    if (report(dev, type, code, value, &grabbed) && type == EV_KEY && keyboard && !grabbed) {
+        input_written(type, code, value);
+    }
+}
+
+int32_t evdev_write(fd_entry_t *e, const char __user *buf, uint32_t count)
+{
+    struct evdev_client *c = (struct evdev_client *)e->priv;
+    struct input_event32 ev32;
+    struct input_event ev;
+    uint32_t size = sizeof(ev);
+    uint32_t done = 0;
+
+    if (in_compat_syscall()) {
+        size = sizeof(ev32);
+    }
+    if (count > WRITE_MAX) {
+        count = WRITE_MAX;
+    }
+    if (count != 0 && count < size) {
+        return -EINVAL;
+    }
+    if (dead(c)) {
+        return -ENODEV;
+    }
+    while (done + size <= count) {
+        if (size == sizeof(ev)) {
+            if (copy_from_user(&ev, buf + done, size) != 0) {
+                return -EFAULT;
+            }
+        } else {
+            if (copy_from_user(&ev32, buf + done, size) != 0) {
+                return -EFAULT;
+            }
+            ev.type = ev32.type;
+            ev.code = ev32.code;
+            ev.value = ev32.value;
+        }
+        done += size;
+        inject(c->dev, ev.type, ev.code, ev.value);
+    }
+    return (int32_t)done;
 }
 
 /** EVIOCGBIT(type): the bits `type_bytes` gives, cut to `len`; -EINVAL for

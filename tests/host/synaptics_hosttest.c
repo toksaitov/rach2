@@ -369,6 +369,14 @@ void input_set_repeat(int delay_ms, int period_ms)
     (void)period_ms;
 }
 
+/** No row writes to an event device. */
+void input_written(uint16_t type, uint16_t code, int32_t value)
+{
+    (void)type;
+    (void)code;
+    (void)value;
+}
+
 void wait_queue_init(wait_queue_t *wq)
 {
     k_memset(wq, 0, sizeof(*wq));

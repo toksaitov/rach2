@@ -1581,8 +1581,8 @@ static const struct file_ops rtc_ops = {dev_rtc_read, dev_rtc_write, dev_rtc_pol
 
 /* The event devices' operations are evdev.c's, the mixer's mixer.c's and the
    audio device's dsp.c's. */
-static const struct file_ops evdev_ops = {evdev_read,  NULL, evdev_poll, evdev_ioctl,
-                                          evdev_close, NULL, NULL};
+static const struct file_ops evdev_ops = {evdev_read,  evdev_write, evdev_poll, evdev_ioctl,
+                                          evdev_close, NULL,        NULL};
 /* /dev/wsim: the medium of a software radio (wsim(4)). */
 static const struct file_ops wsim_ops = {wsim_read,  wsim_write, wsim_poll, wsim_ioctl,
                                          wsim_close, NULL,       NULL};

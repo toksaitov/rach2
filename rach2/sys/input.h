@@ -162,6 +162,17 @@ void input_cancel_repeat(void);
  */
 void input_set_leds(unsigned int mask);
 
+/**
+ * An event a program wrote to a keyboard's event device (`evdev_write`):
+ * EV_LED lights or puts out the LED `code`, LED_NUML, LED_CAPSL or
+ * LED_SCROLLL of evdev.h, of every keyboard, as `input_set_leds`; EV_REP
+ * sets the repeat's REP_DELAY or REP_PERIOD to `value`, as
+ * `input_set_repeat`; and EV_KEY, a key that passed the input core's
+ * filters with no grab held, goes to the console's keyboard and its raw
+ * view, `value` KD_KEY_*, as a key of a keyboard does. Process context.
+ */
+void input_written(uint16_t type, uint16_t code, int32_t value);
+
 /** The LEDs every keyboard is to show, as `input_set_leds` last set them:
  * 0, all dark, until it is called. Any context. */
 unsigned int input_leds(void);
