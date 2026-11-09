@@ -260,6 +260,13 @@ int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
     return -EINTR;
 }
 
+int wq_wait_event_nointr(wait_queue_t *wq, wq_cond_fn cond, void *arg)
+{
+    (void)wq;
+    CHECK(cond(arg), "a vCPU is never held by another ioctl in the model");
+    return 0;
+}
+
 void wq_wake(wait_queue_t *wq, uint32_t kinds)
 {
     (void)wq;
@@ -276,6 +283,17 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)level;
     (void)subsystem;
     (void)format;
+}
+
+/** A frame is its own address in the model. */
+void *kmap_temp(uintptr_t phys)
+{
+    return (void *)phys;
+}
+
+void kunmap_temp(void *va)
+{
+    (void)va;
 }
 
 /* The last device mapping made: its operations and object. */
@@ -609,6 +627,12 @@ static void abi_rows(void)
     CHECK(__builtin_offsetof(struct kvm_vcpu_events, exception_payload) == 56,
           "the exception payload is where Linux has it");
     CHECK(KVM_RUN == 0xAE80u && KVM_CREATE_VM == 0xAE01u, "KVM_RUN and KVM_CREATE_VM");
+    CHECK(KVM_CAP_IMMEDIATE_EXIT == 136 && KVM_CAP_CHECK_EXTENSION_VM == 105 &&
+              KVM_CAP_SPLIT_IRQCHIP == 121 && KVM_CAP_IOEVENTFD_ANY_LENGTH == 122,
+          "the capabilities' numbers past 100");
+    CHECK(KVM_CAP_MAX_VCPU_ID == 128 && KVM_CAP_X2APIC_API == 129 &&
+              KVM_CAP_GET_MSR_FEATURES == 153 && KVM_CAP_ENABLE_CAP_VM == 98,
+          "and more of them");
     CHECK(KVM_GET_REGS == 0x8090AE81u && KVM_SET_SREGS == 0x4138AE84u,
           "KVM_GET_REGS and KVM_SET_SREGS");
     CHECK(KVM_SET_CPUID2 == 0x4008AE90u && KVM_GET_SUPPORTED_CPUID == 0xC008AE05u,
@@ -810,6 +834,30 @@ static void check_mapping(int vcpu)
     CHECK(v->vm->refs == 3, "the mapping holds the VM, beside the two descriptors");
 }
 
+/** Check the private mapping `f` of the vCPU on `vcpu`: a copy of each
+ * page at the fault, none past them, and the VM's reference let go with the
+ * last region. */
+static void check_private(int vcpu, struct vm_file *f)
+{
+    static uint8_t frame[4096] __attribute__((aligned(4096)));
+    struct kvm_vcpu *v = (struct kvm_vcpu *)entries[vcpu].priv;
+    uint32_t refs = v->vm->refs;
+
+    v->run->exit_reason = 0x5A;
+    v->pio[7] = 0xA5;
+    CHECK(f->fill(f, 0, (uintptr_t)frame) == 0 && ((struct kvm_run *)frame)->exit_reason == 0x5A,
+          "a private mapping's first page is a copy of the run page");
+    CHECK(f->fill(f, 1, (uintptr_t)frame) == 0 && frame[7] == 0xA5,
+          "its second page is a copy of the port I/O page");
+    CHECK(f->fill(f, 2, (uintptr_t)frame) == -1, "and a page past them raises SIGBUS");
+    v->run->exit_reason = 0;
+    v->pio[7] = 0;
+    CHECK(refs == 3, "the private mapping holds the VM");
+    f->path = kmalloc(8);
+    f->release(f);
+    CHECK(v->vm->refs == 2, "its release lets the VM go");
+}
+
 /** KVM_CREATE_VCPU on the VM `vm`, and the vCPU's mapping. Returns the
  * vCPU's descriptor. */
 static int startup_vcpu(int vm)
@@ -828,7 +876,9 @@ static int startup_vcpu(int vm)
     k_memset(&vma, 0, sizeof(vma));
     vma.end = 8192;
     vma.type = VM_FILE;
-    CHECK(entries[vcpu].ops->mmap(&entries[vcpu], &vma) == -EINVAL, "a private mapping");
+    CHECK(entries[vcpu].ops->mmap(&entries[vcpu], &vma) == 0 && vma.file, "a private mapping");
+    check_private(vcpu, vma.file);
+    vma.file = NULL;
     vma.type = VM_SHARED;
     CHECK(entries[vcpu].ops->mmap(&entries[vcpu], &vma) == 0 && map_cache == 0,
           "a shared mapping, cached");

@@ -12,6 +12,7 @@
 #include "../lib/kirq.h"
 #include "../lib/kstring.h"
 #include "../mm/kheap.h"
+#include "../mm/paging.h"
 #include "../mm/usercopy.h"
 #include "../mm/vm.h"
 #include "../proc/process.h"
@@ -86,16 +87,15 @@ static int vcpu_idle(void *arg)
 }
 
 /** Take `v` for one ioctl, waiting while another holds it, as Linux takes
- * the vCPU's mutex: 0, or -EINTR for a signal. */
-static int32_t vcpu_lock(struct kvm_vcpu *v)
+ * the vCPU's mutex. A signal does not end the wait: the holder is a KVM_RUN,
+ * which a signal of its own ends, or a state ioctl, which does not sleep
+ * long; a SIGKILL ends both threads' runs together. */
+static void vcpu_lock(struct kvm_vcpu *v)
 {
     while (v->busy) {
-        if (wq_wait_event(&v->wq, vcpu_idle, v) < 0) {
-            return -EINTR;
-        }
+        wq_wait_event_nointr(&v->wq, vcpu_idle, v);
     }
     v->busy = 1;
-    return 0;
 }
 
 /** Let go of `v`. */
@@ -200,17 +200,71 @@ static void run_put(void *obj)
 
 static const struct vm_device_ops run_vm_ops = {run_page, run_put};
 
+/* A private mapping of a vCPU's run pages: the record its region names,
+ * which holds a reference to the VM. */
+struct run_copy {
+    struct vm_file vf;
+    struct kvm_vcpu *vcpu;
+};
+
+/** Fill the frame `phys` of a private mapping `f` with a copy of the run
+ * page `pgoff` as it is now: 0, or -1 past the pages, which raises SIGBUS
+ * as on Linux. */
+static int run_copy_fill(struct vm_file *f, uint32_t pgoff, uintptr_t phys)
+{
+    struct kvm_vcpu *v = ((struct run_copy *)f)->vcpu;
+    uint8_t *page;
+
+    if (pgoff >= KVM_RUN_PAGES) {
+        return -1;
+    }
+    page = kmap_temp(phys);
+    if (!page) {
+        return -1;
+    }
+    k_memcpy(page, (const uint8_t *)v->run + (uintptr_t)pgoff * 4096u, 4096u);
+    kunmap_temp(page);
+    return 0;
+}
+
+/** The last region of a private mapping `f` is gone: its reference to the
+ * VM goes with the record. */
+static void run_copy_release(struct vm_file *f)
+{
+    struct run_copy *c = (struct run_copy *)f;
+
+    kvm_vm_put(c->vcpu->vm);
+    kfree(c->vf.path);
+    kfree(c);
+}
+
 /**
- * mmap of a vCPU: its run pages, shared and cached, which a fork's child
- * shares as Linux's does. The mapping holds a reference to the VM, so the
- * pages outlive the descriptor. 0, or vm_device_map's error, -EINVAL for a
- * private mapping among them.
+ * mmap of a vCPU: its run pages. A shared mapping maps them cached, and a
+ * fork's child shares it, as Linux's does. A private one, which Linux also
+ * allows, gives each page as it was at the first touch, as a private
+ * mapping of a file does here (mm/vm.h). Either holds a reference to the
+ * VM, so the pages outlive the descriptor. 0, -ENOMEM, or vm_device_map's
+ * error.
  */
 static int32_t vcpu_mmap(fd_entry_t *e, struct vma *vma)
 {
     struct kvm_vcpu *v = (struct kvm_vcpu *)e->priv;
+    struct run_copy *c;
     int32_t r;
 
+    if (vma->type != VM_SHARED) {
+        c = kzalloc(sizeof(*c));
+        if (!c) {
+            return -ENOMEM;
+        }
+        c->vf.refs = 1;
+        c->vf.fill = run_copy_fill;
+        c->vf.release = run_copy_release;
+        c->vcpu = v;
+        kvm_vm_get(v->vm);
+        vma->file = &c->vf;
+        return 0;
+    }
     kvm_vm_get(v->vm);
     r = vm_device_map(vma, &run_vm_ops, v, 0);
     if (r != 0) {
@@ -364,14 +418,14 @@ static void run_post(struct kvm_vcpu *v)
  * IN's bytes from the port I/O page, or the MMIO read's from the run page. */
 static void run_complete(struct kvm_vcpu *v)
 {
-    struct kvm_exit *x = &v->exit;
+    struct kvm_exit *ex = &v->exit;
     uint32_t n;
 
-    if (x->kind == KVM_X_IO) {
-        n = x->io.count * x->io.size;
-        k_memcpy(x->data, v->pio, n < sizeof(x->data) ? n : sizeof(x->data));
-    } else if (x->kind == KVM_X_MMIO) {
-        k_memcpy(x->mmio.data, v->run->u.mmio.data, sizeof(x->mmio.data));
+    if (ex->kind == KVM_X_IO) {
+        n = ex->io.count * ex->io.size;
+        k_memcpy(ex->data, v->pio, n < sizeof(ex->data) ? n : sizeof(ex->data));
+    } else if (ex->kind == KVM_X_MMIO) {
+        k_memcpy(ex->mmio.data, v->run->u.mmio.data, sizeof(ex->mmio.data));
     }
     v->pending = 0;
     if (kvm_backend->complete) {
@@ -387,37 +441,37 @@ static void run_complete(struct kvm_vcpu *v)
 static int32_t run_exit(struct kvm_vcpu *v)
 {
     struct kvm_run *run = v->run;
-    struct kvm_exit *x = &v->exit;
+    struct kvm_exit *ex = &v->exit;
     uint32_t n;
     int r;
 
-    switch (x->kind) {
+    switch (ex->kind) {
     case KVM_X_AGAIN:
         return 0;
     case KVM_X_IO:
-        if (x->io.direction == KVM_EXIT_IO_OUT && kvm_iobus_write(v)) {
+        if (ex->io.direction == KVM_EXIT_IO_OUT && kvm_iobus_write(v)) {
             return 0;
         }
         run->exit_reason = KVM_EXIT_IO;
-        run->u.io = x->io;
+        run->u.io = ex->io;
         run->u.io.data_offset = KVM_PIO_PAGE_OFFSET * 4096u;
-        n = x->io.count * x->io.size;
+        n = ex->io.count * ex->io.size;
         if (n > 4096u) {
             n = 4096u;
         }
-        if (x->io.direction == KVM_EXIT_IO_OUT) {
-            k_memcpy(v->pio, x->data, n);
+        if (ex->io.direction == KVM_EXIT_IO_OUT) {
+            k_memcpy(v->pio, ex->data, n);
         } else {
             v->pending = 1;
         }
         return 1;
     case KVM_X_MMIO:
-        if (x->mmio.is_write && kvm_iobus_write(v)) {
+        if (ex->mmio.is_write && kvm_iobus_write(v)) {
             return 0;
         }
         run->exit_reason = KVM_EXIT_MMIO;
-        run->u.mmio = x->mmio;
-        v->pending = !x->mmio.is_write;
+        run->u.mmio = ex->mmio;
+        v->pending = !ex->mmio.is_write;
         return 1;
     case KVM_X_HLT:
         r = kvm_lapic_halt(v);
@@ -438,23 +492,23 @@ static int32_t run_exit(struct kvm_vcpu *v)
         return 1;
     case KVM_X_INTERNAL:
         run->exit_reason = KVM_EXIT_INTERNAL_ERROR;
-        run->u.internal = x->internal;
+        run->u.internal = ex->internal;
         if (run->u.internal.ndata > 16u) {
             run->u.internal.ndata = 16u;
         }
         return 1;
     case KVM_X_FAIL_ENTRY:
         run->exit_reason = KVM_EXIT_FAIL_ENTRY;
-        run->u.fail_entry.hardware_entry_failure_reason = x->hw_reason;
+        run->u.fail_entry.hardware_entry_failure_reason = ex->hw_reason;
         run->u.fail_entry.cpu = (uint32_t)v->cpu;
         return 1;
     case KVM_X_DEBUG:
         run->exit_reason = KVM_EXIT_DEBUG;
-        run->u.debug = x->debug;
+        run->u.debug = ex->debug;
         return 1;
     case KVM_X_SYSTEM_EVENT:
         run->exit_reason = KVM_EXIT_SYSTEM_EVENT;
-        run->u.system_event = x->system_event;
+        run->u.system_event = ex->system_event;
         return 1;
     default:
         break;
@@ -463,7 +517,7 @@ static int32_t run_exit(struct kvm_vcpu *v)
     k_memset(&run->u.internal, 0, sizeof(run->u.internal));
     run->u.internal.suberror = KVM_INTERNAL_ERROR_UNEXPECTED_EXIT_REASON;
     run->u.internal.ndata = 1;
-    run->u.internal.data[0] = (uint64_t)x->kind;
+    run->u.internal.data[0] = (uint64_t)ex->kind;
     return 1;
 }
 
@@ -724,18 +778,18 @@ static int32_t set_sregs(struct kvm_vcpu *v, uintptr_t arg)
 static int32_t get_fpu(struct kvm_vcpu *v, uintptr_t arg)
 {
     struct kvm_fpu f;
-    const uint8_t *x = v->xsave;
+    const uint8_t *ex = v->xsave;
 
     vcpu_save(v, KVM_PART_FPU);
     k_memset(&f, 0, sizeof(f));
-    k_memcpy(f.fpr, x + 32, sizeof(f.fpr));
-    k_memcpy(&f.fcw, x + 0, 2);
-    k_memcpy(&f.fsw, x + 2, 2);
-    f.ftwx = x[4];
-    k_memcpy(&f.last_opcode, x + 6, 2);
-    k_memcpy(&f.last_ip, x + 8, 8);
-    k_memcpy(&f.last_dp, x + 16, 8);
-    k_memcpy(f.xmm, x + 160, sizeof(f.xmm));
+    k_memcpy(f.fpr, ex + 32, sizeof(f.fpr));
+    k_memcpy(&f.fcw, ex + 0, 2);
+    k_memcpy(&f.fsw, ex + 2, 2);
+    f.ftwx = ex[4];
+    k_memcpy(&f.last_opcode, ex + 6, 2);
+    k_memcpy(&f.last_ip, ex + 8, 8);
+    k_memcpy(&f.last_dp, ex + 16, 8);
+    k_memcpy(f.xmm, ex + 160, sizeof(f.xmm));
     return copy_to_user((void __user *)arg, &f, sizeof(f)) ? -EFAULT : 0;
 }
 
@@ -744,24 +798,24 @@ static int32_t get_fpu(struct kvm_vcpu *v, uintptr_t arg)
 static int32_t set_fpu(struct kvm_vcpu *v, uintptr_t arg)
 {
     struct kvm_fpu f;
-    uint8_t *x = v->xsave;
+    uint8_t *ex = v->xsave;
     uint64_t bv;
 
     if (copy_from_user(&f, (const void __user *)arg, sizeof(f)) != 0) {
         return -EFAULT;
     }
     vcpu_save(v, KVM_PART_FPU);
-    k_memcpy(x + 32, f.fpr, sizeof(f.fpr));
-    k_memcpy(x + 0, &f.fcw, 2);
-    k_memcpy(x + 2, &f.fsw, 2);
-    x[4] = f.ftwx;
-    k_memcpy(x + 6, &f.last_opcode, 2);
-    k_memcpy(x + 8, &f.last_ip, 8);
-    k_memcpy(x + 16, &f.last_dp, 8);
-    k_memcpy(x + 160, f.xmm, sizeof(f.xmm));
-    k_memcpy(&bv, x + XSAVE_HDR, sizeof(bv));
+    k_memcpy(ex + 32, f.fpr, sizeof(f.fpr));
+    k_memcpy(ex + 0, &f.fcw, 2);
+    k_memcpy(ex + 2, &f.fsw, 2);
+    ex[4] = f.ftwx;
+    k_memcpy(ex + 6, &f.last_opcode, 2);
+    k_memcpy(ex + 8, &f.last_ip, 8);
+    k_memcpy(ex + 16, &f.last_dp, 8);
+    k_memcpy(ex + 160, f.xmm, sizeof(f.xmm));
+    k_memcpy(&bv, ex + XSAVE_HDR, sizeof(bv));
     bv |= XFEATURE_X87 | XFEATURE_SSE;
-    k_memcpy(x + XSAVE_HDR, &bv, sizeof(bv));
+    k_memcpy(ex + XSAVE_HDR, &bv, sizeof(bv));
     v->dirty |= KVM_PART_FPU;
     return 0;
 }
@@ -772,22 +826,22 @@ static int32_t get_xsave(struct kvm_vcpu *v, uintptr_t arg)
 {
     uint64_t bv;
     int32_t r;
-    uint8_t *x;
+    uint8_t *ex;
 
     if (kvm_xcr0_supported() == 0) {
         return -EINVAL;
     }
     vcpu_save(v, KVM_PART_FPU);
-    x = kmalloc(KVM_XSAVE_SIZE);
-    if (!x) {
+    ex = kmalloc(KVM_XSAVE_SIZE);
+    if (!ex) {
         return -ENOMEM;
     }
-    k_memcpy(x, v->xsave, KVM_XSAVE_SIZE);
-    k_memcpy(&bv, x + XSAVE_HDR, sizeof(bv));
+    k_memcpy(ex, v->xsave, KVM_XSAVE_SIZE);
+    k_memcpy(&bv, ex + XSAVE_HDR, sizeof(bv));
     bv &= kvm_xcr0_guest(v);
-    k_memcpy(x + XSAVE_HDR, &bv, sizeof(bv));
-    r = copy_to_user((void __user *)arg, x, KVM_XSAVE_SIZE) ? -EFAULT : 0;
-    kfree(x);
+    k_memcpy(ex + XSAVE_HDR, &bv, sizeof(bv));
+    r = copy_to_user((void __user *)arg, ex, KVM_XSAVE_SIZE) ? -EFAULT : 0;
+    kfree(ex);
     return r;
 }
 
@@ -802,38 +856,38 @@ static int32_t set_xsave(struct kvm_vcpu *v, uintptr_t arg)
     uint64_t bv, comp;
     uint32_t mxcsr, i;
     int32_t r = -EINVAL;
-    uint8_t *x;
+    uint8_t *ex;
 
     if (kvm_xcr0_supported() == 0) {
         return -EINVAL;
     }
-    x = kmalloc(KVM_XSAVE_SIZE);
-    if (!x) {
+    ex = kmalloc(KVM_XSAVE_SIZE);
+    if (!ex) {
         return -ENOMEM;
     }
-    if (copy_from_user(x, (const void __user *)arg, KVM_XSAVE_SIZE) != 0) {
+    if (copy_from_user(ex, (const void __user *)arg, KVM_XSAVE_SIZE) != 0) {
         r = -EFAULT;
         goto out;
     }
-    k_memcpy(&bv, x + XSAVE_HDR, sizeof(bv));
-    k_memcpy(&comp, x + XSAVE_HDR + 8, sizeof(comp));
-    k_memcpy(&mxcsr, x + 24, sizeof(mxcsr));
+    k_memcpy(&bv, ex + XSAVE_HDR, sizeof(bv));
+    k_memcpy(&comp, ex + XSAVE_HDR + 8, sizeof(comp));
+    k_memcpy(&mxcsr, ex + 24, sizeof(mxcsr));
     if ((bv & ~kvm_xcr0_guest(v)) || comp != 0) {
         goto out;
     }
     for (i = XSAVE_HDR + 16; i < XSAVE_HDR + 64; i++) {
-        if (x[i] != 0) {
+        if (ex[i] != 0) {
             goto out;
         }
     }
     if ((bv & (XFEATURE_SSE | XFEATURE_YMM)) && (mxcsr & ~MXCSR_MASK)) {
         goto out;
     }
-    k_memcpy(v->xsave, x, KVM_XSAVE_SIZE);
+    k_memcpy(v->xsave, ex, KVM_XSAVE_SIZE);
     v->dirty |= KVM_PART_FPU;
     r = 0;
 out:
-    kfree(x);
+    kfree(ex);
     return r;
 }
 
@@ -862,16 +916,16 @@ static int xcr0_valid(const struct kvm_vcpu *v, uint64_t xcr0)
 /** KVM_GET_XCRS: XCR0 alone, the one Linux gives, or none without XSAVE. */
 static int32_t get_xcrs(struct kvm_vcpu *v, uintptr_t arg)
 {
-    struct kvm_xcrs x;
+    struct kvm_xcrs ex;
 
     vcpu_save(v, KVM_PART_FPU);
-    k_memset(&x, 0, sizeof(x));
+    k_memset(&ex, 0, sizeof(ex));
     if (kvm_xcr0_supported() != 0) {
-        x.nr_xcrs = 1;
-        x.xcrs[0].xcr = 0;
-        x.xcrs[0].value = v->xcr0;
+        ex.nr_xcrs = 1;
+        ex.xcrs[0].xcr = 0;
+        ex.xcrs[0].value = v->xcr0;
     }
-    return copy_to_user((void __user *)arg, &x, sizeof(x)) ? -EFAULT : 0;
+    return copy_to_user((void __user *)arg, &ex, sizeof(ex)) ? -EFAULT : 0;
 }
 
 /** KVM_SET_XCRS: the first entry for XCR0 sets it, and Linux ignores the
@@ -879,21 +933,21 @@ static int32_t get_xcrs(struct kvm_vcpu *v, uintptr_t arg)
  * XSETBV refuses, or -EFAULT. */
 static int32_t set_xcrs(struct kvm_vcpu *v, uintptr_t arg)
 {
-    struct kvm_xcrs x;
+    struct kvm_xcrs ex;
     uint32_t i;
 
-    if (copy_from_user(&x, (const void __user *)arg, sizeof(x)) != 0) {
+    if (copy_from_user(&ex, (const void __user *)arg, sizeof(ex)) != 0) {
         return -EFAULT;
     }
-    if (kvm_xcr0_supported() == 0 || x.nr_xcrs > KVM_MAX_XCRS || x.flags) {
+    if (kvm_xcr0_supported() == 0 || ex.nr_xcrs > KVM_MAX_XCRS || ex.flags) {
         return -EINVAL;
     }
-    for (i = 0; i < x.nr_xcrs; i++) {
-        if (x.xcrs[i].xcr == 0) {
-            if (!xcr0_valid(v, x.xcrs[i].value)) {
+    for (i = 0; i < ex.nr_xcrs; i++) {
+        if (ex.xcrs[i].xcr == 0) {
+            if (!xcr0_valid(v, ex.xcrs[i].value)) {
                 return -EINVAL;
             }
-            v->xcr0 = x.xcrs[i].value;
+            v->xcr0 = ex.xcrs[i].value;
             v->dirty |= KVM_PART_FPU;
             break;
         }
@@ -1412,10 +1466,7 @@ int32_t kvm_vcpu_ioctl(struct fd_entry *e, uint32_t request, uintptr_t arg)
     if (((request >> 8) & 0xFFu) != KVMIO) {
         return -EINVAL;
     }
-    r = vcpu_lock(v);
-    if (r != 0) {
-        return r;
-    }
+    vcpu_lock(v);
     r = request == KVM_RUN ? vcpu_run(v, arg) : vcpu_state_ioctl(v, request, arg);
     vcpu_unlock(v);
     return r;
