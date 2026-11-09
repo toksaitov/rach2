@@ -62,7 +62,15 @@ struct dma_fence *dma_resv_snapshot(struct dma_resv *resv, int write);
 /** Merge fences into one referenced all-of fence, or NULL on allocation
  * failure. Inputs are borrowed; nested arrays are flattened. */
 struct dma_fence *dma_fence_merge(struct dma_fence **fences, uint32_t count);
-/** Number of leaf fences, and the borrowed leaf at index, or NULL. */
+/** Merge the leaves of `count` fences that have not signalled, as Linux's
+ * dma_fence_unwrap_merge: a referenced all-of fence, the one leaf, or a new
+ * signalled fence with the newest leaf's completion time when none is
+ * left; NULL on allocation failure. Inputs are borrowed. */
+struct dma_fence *dma_fence_unwrap_merge(struct dma_fence **fences, uint32_t count);
+/** Number of leaf fences in Linux's dma_fence_unwrap order, and the
+ * borrowed leaf at index, or NULL: an array's fences, a chain's own fence
+ * and those of its earlier points not yet signalled, or the fence itself.
+ * The leaves stay put only until the caller sleeps. */
 uint32_t dma_fence_count(struct dma_fence *fence);
 struct dma_fence *dma_fence_at(struct dma_fence *fence, uint32_t index);
 /** Status: 0 active, 1 completed, or the negative producer error. */
@@ -76,5 +84,51 @@ int32_t sync_file_create(struct dma_fence *fence, const char *name);
 int64_t dma_fence_deadline(struct dma_fence *fence);
 /** Record a deadline hint on every leaf; no wait or signal is implied. */
 void dma_fence_set_deadline(struct dma_fence *fence, int64_t deadline);
+
+/*
+ * A point of a timeline, Linux's dma_fence_chain: it signals once its own
+ * fence and the fences of every earlier point have signalled, and carries
+ * no error of theirs. `prev` is the earlier point, a plain fence or NULL;
+ * `prev_seqno` is the earlier point's seqno when this point continues its
+ * context, else 0, and a point that does not come after its predecessor
+ * gets a context of its own and the predecessor's seqno. The chain holds
+ * `prev` and `fence`; a walk drops the earlier points whose fences have
+ * signalled. `armed` is the fence its callback waits on, or NULL.
+ */
+struct dma_fence_chain;
+struct dma_fence_chain_cb {
+    struct dma_fence_cb cb;
+    struct dma_fence_chain *chain;
+};
+struct dma_fence_chain {
+    struct dma_fence base;
+    struct dma_fence *prev;
+    uint64_t prev_seqno;
+    struct dma_fence *fence;
+    struct dma_fence *armed;
+    struct dma_fence_chain_cb cb;
+};
+
+/** A zeroed chain record, or NULL; free an unused one with kfree. */
+struct dma_fence_chain *dma_fence_chain_alloc(void);
+/** Make `chain` point `seqno` of the fence `fence` after `prev`, taking
+ * over the caller's references to both; `prev` may be NULL. The chain has
+ * one reference, the caller's. */
+void dma_fence_chain_init(struct dma_fence_chain *chain, struct dma_fence *prev,
+                          struct dma_fence *fence, uint64_t seqno);
+/** The chain record of `fence`, or NULL for any other fence. */
+struct dma_fence_chain *to_dma_fence_chain(struct dma_fence *fence);
+/** The earliest point before `fence` whose fence has not signalled, or a
+ * plain fence before it that has not, with a reference, or NULL; dropping
+ * the points between, and the caller's reference to `fence`. */
+struct dma_fence *dma_fence_chain_walk(struct dma_fence *fence);
+/** Replace `*fence`, a chain's newest point, with the point that covers
+ * `seqno`, the newest whose predecessor in its context is below it, or
+ * with NULL when every point up to it has signalled; 0 leaves `*fence` as
+ * it is. Returns 0, or -EINVAL when `*fence` is no chain or has not reached
+ * `seqno`, leaving `*fence` to the caller. */
+int32_t dma_fence_chain_find_seqno(struct dma_fence **fence, uint64_t seqno);
+/** A reference to the shared fence that signalled at its first use. */
+struct dma_fence *dma_fence_get_stub(void);
 
 #endif

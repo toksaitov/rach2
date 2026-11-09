@@ -37,76 +37,61 @@ static void sync_name(char *out, const char *name)
     out[31] = 0;
 }
 
-/** Report leaf fences, with zero num_fences meaning a count query. */
+/**
+ * Report the leaf fences, as Linux's sync_file_ioctl_fence_info: a
+ * num_fences of zero asks for the count and the fence's own status, and a
+ * larger one for every row, with the status of the first leaf that is
+ * active or failed, else 1. The rows are filled before the one copy out,
+ * since a leaf may signal while the copy sleeps.
+ */
 static int32_t sync_info(struct sync_file *s, uintptr_t arg)
 {
     struct sync_file_info info;
-    struct sync_fence_info row;
+    struct sync_fence_info *rows;
     struct dma_fence *f;
     uint32_t i, n;
+    int32_t status, rc = 0;
     if (copy_from_user(&info, (void __user *)arg, sizeof(info)))
         return -EFAULT;
     if (info.flags || info.pad)
         return -EINVAL;
     n = dma_fence_count(s->fence);
-    if (info.num_fences && info.num_fences < n)
-        return -EINVAL;
-    if (info.num_fences) {
-        if (info.sync_fence_info > (uintptr_t)-1 ||
-            (uint64_t)n * sizeof(row) > (uintptr_t)-1 - info.sync_fence_info)
-            return -EFAULT;
+    if (!info.num_fences) {
+        info.status = dma_fence_status(s->fence);
+    } else {
+        if (info.num_fences < n)
+            return -EINVAL;
+        if ((size_t)n * sizeof(*rows) / sizeof(*rows) != n)
+            return -ENOMEM;
+        rows = kzalloc((size_t)n * sizeof(*rows));
+        if (!rows)
+            return -ENOMEM;
+        info.status = 1;
         for (i = 0; i < n; i++) {
             f = dma_fence_at(s->fence, i);
-            k_memset(&row, 0, sizeof(row));
-            sync_name(row.obj_name, f->ops && f->ops->get_timeline_name
-                                        ? f->ops->get_timeline_name(f)
-                                        : "dma_fence");
-            sync_name(row.driver_name,
+            sync_name(rows[i].obj_name, f->ops && f->ops->get_timeline_name
+                                            ? f->ops->get_timeline_name(f)
+                                            : "dma_fence");
+            sync_name(rows[i].driver_name,
                       f->ops && f->ops->get_driver_name ? f->ops->get_driver_name(f) : "rach2");
-            row.status = dma_fence_status(f);
-            row.timestamp_ns = f->timestamp_ns;
-            if (copy_to_user(
-                    (void __user *)(uintptr_t)(info.sync_fence_info + (uint64_t)i * sizeof(row)),
-                    &row, sizeof(row)))
-                return -EFAULT;
+            status = dma_fence_status(f);
+            rows[i].status = status;
+            rows[i].timestamp_ns = status ? f->timestamp_ns : 0;
+            if (info.status > 0)
+                info.status = status;
         }
+        if (info.sync_fence_info > (uintptr_t)-1 ||
+            (uint64_t)n * sizeof(*rows) > (uintptr_t)-1 - info.sync_fence_info ||
+            copy_to_user((void __user *)(uintptr_t)info.sync_fence_info, rows,
+                         (size_t)n * sizeof(*rows)))
+            rc = -EFAULT;
+        kfree(rows);
+        if (rc)
+            return rc;
     }
     sync_name(info.name, s->name);
-    info.status = dma_fence_status(s->fence);
     info.num_fences = n;
     return copy_to_user((void __user *)arg, &info, sizeof(info)) ? -EFAULT : 0;
-}
-
-/** Merge active leaves as Linux's sync-file merge does, omitting work
- * already finished and retaining the last completed timestamp if empty. */
-static struct dma_fence *sync_merge(struct dma_fence *a, struct dma_fence *b)
-{
-    struct dma_fence **leaves, *f, *out, *inputs[2];
-    uint32_t i, j, n = 0, total;
-    int64_t timestamp = 0;
-    if (dma_fence_count(a) > 0xffffffffu - dma_fence_count(b))
-        return NULL;
-    total = dma_fence_count(a) + dma_fence_count(b);
-    if ((size_t)total * sizeof(*leaves) / sizeof(*leaves) != total)
-        return NULL;
-    leaves = kmalloc((size_t)total * sizeof(*leaves));
-    if (!leaves)
-        return NULL;
-    inputs[0] = a;
-    inputs[1] = b;
-    for (i = 0; i < 2; i++)
-        for (j = 0; j < dma_fence_count(inputs[i]); j++) {
-            f = dma_fence_at(inputs[i], j);
-            if (!dma_fence_is_signaled(f))
-                leaves[n++] = f;
-            else if (f->timestamp_ns > timestamp)
-                timestamp = f->timestamp_ns;
-        }
-    out = dma_fence_merge(leaves, n);
-    if (!n && out)
-        out->timestamp_ns = timestamp;
-    kfree(leaves);
-    return out;
 }
 
 /** Merge another sync file, query it, or record a deadline hint. */
@@ -137,7 +122,7 @@ static int32_t sync_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     inputs[1] = sync_file_get_fence(data.fd2);
     if (!inputs[1])
         return -ENOENT;
-    merged = sync_merge(inputs[0], inputs[1]);
+    merged = dma_fence_unwrap_merge(inputs, 2);
     dma_fence_put(inputs[1]);
     if (!merged)
         return -ENOMEM;
@@ -176,7 +161,7 @@ int32_t sync_file_create(struct dma_fence *f, const char *name)
     s = kzalloc(sizeof(*s));
     if (!s)
         return -ENOMEM;
-    s->anon.name = "[sync_file]";
+    s->anon.name = "sync_file";
     s->fence = dma_fence_get(f);
     sync_name(s->name, name ? name : "dma_fence");
     fd = fd_alloc(current_proc->fds);
