@@ -925,7 +925,7 @@ static int walk_rest_link(struct vfs_mount *mnt, void *found, const char *from,
     }
     k_memcpy(dir, from, dlen);
     rc = walk_link(mnt, found, link_end, linkpath, target, links);
-    if (rc != 0 || dlen == 0) {
+    if (rc != 0) {
         return rc;
     }
     tl = (uint32_t)k_strlen(*linkpath);
@@ -972,6 +972,13 @@ static int walk_is_link(struct vfs_mount *mnt, void *node)
     return mnt->type->ops->readlink && mnt->type->ops->getattr &&
            mnt->type->ops->getattr(mount_base(mnt), node, &st) == 0 &&
            (st.mode & 0170000u) == 0120000u;
+}
+
+/** Whether a type taking the rest of a path answered `rc`, VFS_LINK, with
+ * `found` a text link the walk goes on past, as a link made under /dev. */
+static int walk_rest_through(int rc, struct vfs_mount *mnt, void *found)
+{
+    return rc == VFS_LINK && walk_is_link(mnt, found);
 }
 
 /** The length of the rest of the path at `p` that a type taking the rest
@@ -1381,7 +1388,7 @@ begin:
                 jumped = 1;
                 walk_name_text(&name, from, p);
                 rc = walk_object(&cur, found, p, &linkpath, &target, locked);
-            } else if (rc == VFS_LINK && walk_is_link(cur.mnt, found)) {
+            } else if (walk_rest_through(rc, cur.mnt, found)) {
                 rc = walk_rest_link(cur.mnt, found, from, p, &linkpath, &target, &links);
             } else if (!last_comp && !(flags & VFS_WALK_NOFOLLOW) && walk_is_link(cur.mnt, found)) {
                 if (vp->kind == VNODE_PROC_EXE) {

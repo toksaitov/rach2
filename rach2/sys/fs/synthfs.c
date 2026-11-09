@@ -1742,6 +1742,7 @@ static int synth_classify_sys_at(const struct comp *c, int n, struct vpath *vp, 
     struct vpath prefix;
     int k, anchor, h;
 
+    prefix.kind = VNODE_ENOENT; /* read only after the loop has set it */
     if (synth_classify_sysfs_fixed(c, n, vp) != VNODE_ENOENT) {
         return vp->kind;
     }
