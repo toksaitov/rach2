@@ -1,0 +1,86 @@
+.Dd November 10, 2026
+.Dt PROCESS_VM_READV 2
+.Os
+.Sh NAME
+.Nm process_vm_readv ,
+.Nm process_vm_writev
+.Nd copy between the memory of the caller and of another process
+.Sh SYNOPSIS
+.In sys/uio.h
+.Ft ssize_t
+.Fn process_vm_readv "pid_t pid" "const struct iovec *local_iov" "unsigned long liovcnt" "const struct iovec *remote_iov" "unsigned long riovcnt" "unsigned long flags"
+.Ft ssize_t
+.Fn process_vm_writev "pid_t pid" "const struct iovec *local_iov" "unsigned long liovcnt" "const struct iovec *remote_iov" "unsigned long riovcnt" "unsigned long flags"
+.Sh DESCRIPTION
+.Fn process_vm_readv
+copies from the buffers
+.Fa remote_iov
+names in the memory of the process or thread
+.Fa pid
+into the caller's buffers
+.Fa local_iov ,
+and
+.Fn process_vm_writev
+the other way, as Linux 6.12's calls do.
+strace reads the strings of a traced program with the first.
+Each side's buffers are taken in order, the bytes running from one buffer
+of a side into the next, and the copy ends when either side's buffers end.
+.Fa flags
+must be 0.
+.Pp
+The caller may reach the memory of a process whose address space it
+shares, of its own thread group, or, as
+.Xr ptrace 2
+lets it attach, of any process when it is privileged, and otherwise of a
+process whose real, effective and saved user and group IDs are each the
+caller's real user and group ID, which is dumpable and not privileged.
+Unlike a tracer's access, the copy reads only what the target may read
+and writes only what it may write: a page of a mapping without that
+access, of a guard region or of device memory ends the copy.
+.Pp
+Each side has at most 1024 buffers, and the total of the caller's is cut
+to 2147479552 bytes, as Linux cuts a read or write.
+With no byte in the caller's buffers, or none in the remote ones, the
+call returns 0 at once, before it looks for
+.Fa pid .
+.Ss System call interface
+The system call numbers are 347 and 348 on i386, and 310 and 311 on
+x86-64.
+On the x86-64 kernel a 32-bit program's
+.Vt struct iovec
+is two 32-bit words.
+.Sh RETURN VALUES
+The bytes copied.
+When a page of either side fails after some bytes were copied, the call
+returns those, which reach every byte before the failing page; it
+returns -1 and sets
+.Va errno
+only when it copied none.
+The kernel returns the negative error number.
+.Sh EXAMPLES
+.Pa tests/limitsprobe.c
+reads a string from its child, writes into the child's memory and reads
+it back, and is refused the memory of a process of another user.
+.Sh ERRORS
+.Bl -tag -width "[ENOMEM]"
+.It Bq Er EFAULT
+A vector cannot be read, a buffer of the caller runs past user space, or
+the first page to copy could not be read or written, on either side.
+.It Bq Er EINVAL
+.Fa flags
+is not 0, a side has more than 1024 buffers, or a length is negative as a
+signed size.
+.It Bq Er ENOMEM
+The kernel has no room to copy the vectors.
+.It Bq Er EPERM
+The caller may not reach the memory of
+.Fa pid .
+.It Bq Er ESRCH
+.Fa pid
+names no process or thread the caller can see, or one without an address
+space.
+.El
+.Sh SEE ALSO
+.Xr ptrace 2 ,
+.Xr readv 2 ,
+.Xr proc 5

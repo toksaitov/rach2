@@ -302,6 +302,7 @@ pread 2 read
 pread64 2 read
 printenv 1 busybox-coreutils
 printf 1 busybox-coreutils
+process_vm_writev 2 process_vm_readv
 ps 1 busybox-procps
 pscan 1 busybox-networking
 pselect6 2 select
