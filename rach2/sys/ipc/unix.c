@@ -212,7 +212,8 @@ static short unix_poll(fd_entry_t *e, short events, struct wait_queue **wq);
 static int32_t unix_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg);
 static void unix_close(fd_entry_t *e);
 
-static const struct file_ops unix_ops = {unix_read, unix_write, unix_poll, unix_ioctl, unix_close};
+static const struct file_ops unix_ops = {unix_read,  unix_write, unix_poll, unix_ioctl,
+                                         unix_close, NULL,       NULL};
 
 /* Every socket not yet freed. */
 static struct unix_sock *socks;

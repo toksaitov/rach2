@@ -2842,7 +2842,7 @@ static int32_t mem_write(fd_entry_t *e, const char __user *buf, uint32_t count)
     return mem_transfer(e, count);
 }
 
-static const struct file_ops mem_ops = {mem_read, mem_write, 0, 0, 0};
+static const struct file_ops mem_ops = {mem_read, mem_write, 0, 0, 0, NULL, NULL};
 
 /** A read of /dev/bootlog as `dev_bootlog_read` makes it: from the offset,
  * through the copy to the caller's buffer, whose page fault sleeps, and the
@@ -2857,7 +2857,7 @@ static int32_t log_read(fd_entry_t *e, char __user *buf, uint32_t count)
     return (int32_t)count;
 }
 
-static const struct file_ops log_ops = {log_read, 0, 0, 0, 0};
+static const struct file_ops log_ops = {log_read, 0, 0, 0, 0, NULL, NULL};
 
 /* A transfer a row makes through the dispatch of read(2), or of write(2)
  * when `writing` is set, on a descriptor of `type` with `ops`; the seek of

@@ -5122,7 +5122,8 @@ static void sigfd_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
-static const struct file_ops sigfd_ops = {sigfd_read, NULL, sigfd_poll, NULL, sigfd_close};
+static const struct file_ops sigfd_ops = {sigfd_read,  NULL, sigfd_poll, NULL,
+                                          sigfd_close, NULL, NULL};
 
 /**
  * signalfd and signalfd4 take -1 for a new signalfd or the descriptor of one to

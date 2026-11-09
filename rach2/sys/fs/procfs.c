@@ -5631,8 +5631,8 @@ static void procfs_close(fd_entry_t *e)
     }
 }
 
-static const struct file_ops procfs_file_ops = {procfs_read, procfs_write, procfs_poll,
-                                                procfs_ioctl, procfs_close};
+static const struct file_ops procfs_file_ops = {
+    procfs_read, procfs_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
 
 /**
  * The address space a /proc/<pid>/mem descriptor may reach, with a user's
@@ -5721,8 +5721,8 @@ static int32_t procfs_mem_write(fd_entry_t *e, const char __user *buf, uint32_t 
     return procfs_mem_access(e, NULL, buf, count, 1);
 }
 
-static const struct file_ops procfs_mem_ops = {procfs_mem_read, procfs_mem_write, procfs_poll,
-                                               procfs_ioctl, procfs_close};
+static const struct file_ops procfs_mem_ops = {
+    procfs_mem_read, procfs_mem_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
 
 int procfs_is_mem(const fd_entry_t *e)
 {
@@ -6024,8 +6024,8 @@ static int32_t procfs_oom_write(fd_entry_t *e, const char __user *buf, uint32_t 
     return (int32_t)n;
 }
 
-static const struct file_ops procfs_oom_ops = {procfs_oom_read, procfs_oom_write, procfs_poll,
-                                               procfs_ioctl, procfs_close};
+static const struct file_ops procfs_oom_ops = {
+    procfs_oom_read, procfs_oom_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
 
 /** Which of the user namespace's files `file` is, NS_MAP_ (proc/ns.h). */
 static int idmap_which(int file)
@@ -6100,8 +6100,8 @@ static int32_t procfs_idmap_write(fd_entry_t *e, const char __user *buf, uint32_
     return ns_map_write(proc_userns(p), idmap_which(f->origin_file), text, n, current_proc);
 }
 
-static const struct file_ops procfs_idmap_ops = {procfs_idmap_read, procfs_idmap_write, procfs_poll,
-                                                 procfs_ioctl, procfs_close};
+static const struct file_ops procfs_idmap_ops = {
+    procfs_idmap_read, procfs_idmap_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
 
 /**
  * Open /proc/<pid>/uid_map, gid_map or setgroups, `file`, for writing, or
@@ -6526,8 +6526,8 @@ static int32_t procfs_sysctl_write(fd_entry_t *e, const char __user *buf, uint32
     return v == 0 ? (int32_t)count : -EINVAL;
 }
 
-static const struct file_ops procfs_sysctl_ops = {procfs_sysctl_read, procfs_sysctl_write,
-                                                  procfs_poll, procfs_ioctl, procfs_close};
+static const struct file_ops procfs_sysctl_ops = {
+    procfs_sysctl_read, procfs_sysctl_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
 
 /** Read a writable /sys attribute opened for writing as well: its value at
  * this read, from the description's offset. */
@@ -6660,8 +6660,8 @@ static int32_t procfs_sysattr_write(fd_entry_t *e, const char __user *buf, uint3
     return rc != 0 ? rc : (int32_t)count;
 }
 
-static const struct file_ops procfs_sysattr_ops = {procfs_sysattr_read, procfs_sysattr_write,
-                                                   procfs_poll, procfs_ioctl, procfs_close};
+static const struct file_ops procfs_sysattr_ops = {
+    procfs_sysattr_read, procfs_sysattr_write, procfs_poll, procfs_ioctl, procfs_close, NULL, NULL};
 
 /**
  * Open the writable attribute `attr` of the /sys directory `node` of the
@@ -6747,8 +6747,13 @@ static int32_t procfs_acpicall_write(fd_entry_t *e, const char __user *buf, uint
     return rc != 0 ? rc : (int32_t)count;
 }
 
-static const struct file_ops procfs_acpicall_ops = {procfs_acpicall_read, procfs_acpicall_write,
-                                                    procfs_poll, procfs_ioctl, procfs_close};
+static const struct file_ops procfs_acpicall_ops = {procfs_acpicall_read,
+                                                    procfs_acpicall_write,
+                                                    procfs_poll,
+                                                    procfs_ioctl,
+                                                    procfs_close,
+                                                    NULL,
+                                                    NULL};
 
 /**
  * Open /proc/acpi/call, which needs a privileged caller, as its mode, 0600

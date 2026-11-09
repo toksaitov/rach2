@@ -491,7 +491,8 @@ static void ptm_close(fd_entry_t *e)
     }
 }
 
-static const struct file_ops ptm_ops = {ptm_read, ptm_write, ptm_poll, ptm_ioctl, ptm_close};
+static const struct file_ops ptm_ops = {ptm_read,  ptm_write, ptm_poll, ptm_ioctl,
+                                        ptm_close, NULL,      NULL};
 
 /* the slave end */
 
@@ -726,7 +727,7 @@ static void pts_close(fd_entry_t *e)
     }
 }
 
-static const struct file_ops pts_ops = {pts_read, pts_write, pts_poll, NULL, pts_close};
+static const struct file_ops pts_ops = {pts_read, pts_write, pts_poll, NULL, pts_close, NULL, NULL};
 
 /* open paths */
 

@@ -155,8 +155,8 @@ static void eventfd_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
-static const struct file_ops eventfd_ops = {eventfd_read, eventfd_write, eventfd_poll, NULL,
-                                            eventfd_close};
+static const struct file_ops eventfd_ops = {eventfd_read,  eventfd_write, eventfd_poll, NULL,
+                                            eventfd_close, NULL,          NULL};
 
 /** A new eventfd with the counter `count` and the flags `flags`, and a
  * descriptor of the caller's on it: the descriptor, -EINVAL for another

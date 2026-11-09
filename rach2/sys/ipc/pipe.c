@@ -462,7 +462,8 @@ static void pipe_close(fd_entry_t *e)
     }
 }
 
-static const struct file_ops pipe_ops = {pipe_read, pipe_write, pipe_poll, pipe_ioctl, pipe_close};
+static const struct file_ops pipe_ops = {pipe_read,  pipe_write, pipe_poll, pipe_ioctl,
+                                         pipe_close, NULL,       NULL};
 
 int pipe_is(const fd_entry_t *e)
 {

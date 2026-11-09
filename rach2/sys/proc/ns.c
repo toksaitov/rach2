@@ -1125,7 +1125,7 @@ static int32_t nsfs_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 /* A namespace's descriptor has only ioctl and close. */
-const struct file_ops nsfs_ops = {NULL, NULL, NULL, nsfs_ioctl, nsfs_close};
+const struct file_ops nsfs_ops = {NULL, NULL, NULL, nsfs_ioctl, nsfs_close, NULL, NULL};
 
 struct ns_common *nsfs_ns(const fd_entry_t *e)
 {
