@@ -16,6 +16,8 @@
 #include "../proc/wait_queue.h"
 #include "uapi.h"
 
+struct sysfs_pci_ident;
+
 /*
  * rach2/sys/drm/Readme.md tells the design; this header is its contract.
  * The rules every file of sys/drm/ and sys/dmabuf/ keeps:
@@ -867,7 +869,10 @@ struct drm_mode_config {
  * registration. `unique` is GET_UNIQUE's answer: "pci:DDDD:BB:DD.F" for a
  * PCI device and the platform device's name for the rest
  * ("simple-framebuffer.0", "vkms"). `pci` is the PCI function, for
- * /sys's ids, or NULL. `master` is the file that holds the master role,
+ * /sys's ids, or NULL. `pci_ident`, or NULL, is the identity /sys reports
+ * for that function in place of its own, as a driver that stands in for
+ * another chip sets it before registering (sysfs.h's
+ * `sysfs_pci_virtual_add`). `master` is the file that holds the master role,
  * or NULL. `commit_lock` orders commits (the lock rule above).
  */
 struct drm_device {
@@ -879,6 +884,7 @@ struct drm_device {
     int unplugged;
     char unique[32];
     const pci_device_t *pci;
+    const struct sysfs_pci_ident *pci_ident;
     struct drm_file *master;
     uint32_t open_count;
     struct drm_file *files;              /* its open files, through `dev_next` */

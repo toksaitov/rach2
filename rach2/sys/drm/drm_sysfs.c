@@ -22,6 +22,7 @@
 struct drm_sysfs_dev {
     struct drm_device *dev;
     int platform, platform_link;
+    int pci_key; /* the function whose identity the device reported, plus 1, or 0 */
     int drm;
     int card, render;
     int class_card, class_render;
@@ -332,8 +333,21 @@ static int device_parent(struct drm_sysfs_dev *sd)
     int platform = sysfs_anchor(SYSFS_PLATFORM, 0), dir, h;
 
     if (dev->pci) {
-        return sysfs_anchor(SYSFS_PCI_DEVICE,
-                            dev->pci->bus << 8 | dev->pci->device << 3 | dev->pci->function);
+        int key = dev->pci->bus << 8 | dev->pci->device << 3 | dev->pci->function;
+
+        if (dev->pci_ident) {
+            h = sysfs_pci_virtual_add(key, dev->pci_ident);
+            if (h < 0) {
+                return h;
+            }
+            sd->pci_key = key + 1;
+        }
+        h = sysfs_anchor(SYSFS_PCI_DEVICE, key);
+        if (h < 0 && sd->pci_key) {
+            sysfs_pci_virtual_remove(key);
+            sd->pci_key = 0;
+        }
+        return h;
     }
     if (platform < 0) {
         return platform;
@@ -514,6 +528,9 @@ void drm_sysfs_unregister(struct drm_device *dev)
         sysfs_uevent(sd->platform, "remove", NULL);
         sysfs_remove(sd->platform_link);
         sysfs_remove(sd->platform);
+    }
+    if (sd->pci_key) {
+        sysfs_pci_virtual_remove(sd->pci_key - 1);
     }
     k_memset(sd, 0, sizeof(*sd));
 }

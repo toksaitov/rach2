@@ -701,8 +701,22 @@ void netlink_uevent(const uint8_t *msg, uint32_t len)
     uevents_sent++;
 }
 
-/** No PCI function answers on this machine: every read is all ones. */
+/** One PCI function answers on this machine, a virtio display at 00:04.0,
+ * 1af4:1050 with subsystem 1af4:1100; every other read is all ones. */
 uint32_t pci_read_config32(uint8_t bus, uint8_t device, uint8_t function, uint8_t offset)
+{
+    if (bus != 0 || device != 4 || function != 0) {
+        return 0xFFFFFFFFu;
+    }
+    return offset == 0x00   ? 0x10501af4u
+           : offset == 0x04 ? 0x00100007u
+           : offset == 0x08 ? 0x03000001u
+           : offset == 0x2C ? 0x11001af4u
+                            : 0u;
+}
+
+/** No function has extended configuration space. */
+uint32_t pci_read_config32_ext(uint8_t bus, uint8_t device, uint8_t function, uint16_t offset)
 {
     (void)bus;
     (void)device;
@@ -1619,6 +1633,59 @@ static void drm_event_rows(void)
           "and leaves no entry");
 }
 
+/**
+ * A DRM device on a real PCI function that reports another identity, as
+ * the fake Haswell does on QEMU's device, shows that identity in the
+ * function's files, its uevent and the header of its config, and the
+ * function's own once the device is gone.
+ */
+static void drm_ident_rows(void)
+{
+    static const struct sysfs_pci_ident haswell = {0x8086,   0x0a16, 0x17aa, 0x2214,
+                                                   0x030000, 0x0b,   1};
+    static pci_device_t fn = {0};
+    static struct drm_device dev;
+    struct procfs_text t;
+    int rendered;
+
+    fn.device = 4;
+    dev.driver = &row_driver;
+    dev.index = 1;
+    dev.pci = &fn;
+    dev.pci_ident = &haswell;
+    procfs_text_init(&t);
+    check(procfs_gen_pciattr(&t, 0x20, SYSFS_PCI_VENDOR) == 7 &&
+              __builtin_memcmp(t.buf, "0x1af4\n", 7) == 0,
+          "a real function gives its own vendor");
+    check(drm_sysfs_register(&dev) == 0, "a device that reports a PCI identity registers");
+    t.len = 0;
+    check(procfs_gen_pciattr(&t, 0x20, SYSFS_PCI_DEVICE_ID) == 7 &&
+              __builtin_memcmp(t.buf, "0x0a16\n", 7) == 0,
+          "its function then gives the reported device");
+    t.len = 0;
+    check(procfs_gen_pciattr(&t, 0x20, SYSFS_PCI_SUBSYSTEM_VENDOR) == 7 &&
+              __builtin_memcmp(t.buf, "0x17aa\n", 7) == 0,
+          "and subsystem vendor");
+    t.len = 0;
+    rendered = procfs_gen_pciconfig(&t, 0x20);
+    check(rendered == 256 && (uint8_t)t.buf[0] == 0x86 && (uint8_t)t.buf[1] == 0x80 &&
+              (uint8_t)t.buf[2] == 0x16 && (uint8_t)t.buf[3] == 0x0a && t.buf[4] == 0x07 &&
+              (uint8_t)t.buf[8] == 0x0b,
+          "and its config the reported IDs over the device's own command register");
+    t.len = 0;
+    check(procfs_gen_uevent(&t, SYSFS_PCI_DEVICE, 0x20) > 0 &&
+              __builtin_strstr(t.buf, "PCI_ID=8086:0A16\n"),
+          "and its uevent the reported IDs");
+    check(sysfs_device_key(SYSFS_PCI_DEVICE, 0) == -1,
+          "and a reported identity at a real function's address is not listed again");
+    drm_sysfs_unregister(&dev);
+    t.len = 0;
+    check(procfs_gen_pciattr(&t, 0x20, SYSFS_PCI_DEVICE_ID) == 7 &&
+              __builtin_memcmp(t.buf, "0x1050\n", 7) == 0,
+          "and the function's own once the device is gone");
+    kfree(t.buf);
+}
+
 /* What the driver's attribute in the registration rows holds. */
 static char override[16];
 
@@ -1768,6 +1835,7 @@ int main(void)
     drm_link_rows();
     drm_file_rows();
     drm_event_rows();
+    drm_ident_rows();
     sysfs_reg_rows();
     if (!failures) {
         printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
