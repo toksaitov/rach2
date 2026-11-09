@@ -1,0 +1,29 @@
+# The pinned sources of VK-GL-CTS: each release's tarball and the external
+# sources its external/fetch_sources.py names that the build of deqp-vk and
+# glcts reads, each at the commit that file pins. A line gives a name,
+# version, URL and SHA-256, in the format of ../sources.txt; a name ends in
+# the release it belongs to, and the other names are the directories under
+# external/ that fetch_sources.py would clone them into. build_vk_gl_cts.sh
+# fetches and checks each with ../debian/fetch_asset.sh.
+#
+# GitHub signs none of these archives. The release tarballs are GitHub's
+# archives of the tags vulkan-cts-1.4.1.1 and vulkan-cts-1.4.7.1, and the
+# others its archives of the commits; each digest was recorded from the
+# archive as GitHub served it on 2026-11-10, and 1.4.7.1's tarball has the
+# 71,319,922 bytes that the second discovery run built on the Lenovo.
+vk-gl-cts-1.4.1.1 vulkan-cts-1.4.1.1 https://github.com/KhronosGroup/VK-GL-CTS/archive/refs/tags/vulkan-cts-1.4.1.1.tar.gz b3a00ebe3b05cd005853db7f940bbf472543b1e9d79ad9b567ef9ab835b9876f
+spirv-tools-1.4.1.1 3fb52548bc8a68d349d31e21bd4e80e3d953e87c https://github.com/KhronosGroup/SPIRV-Tools/archive/3fb52548bc8a68d349d31e21bd4e80e3d953e87c.tar.gz c47241413abe4792f91e55e1bf65acd2dd1c90266b4ea3dfc8383bcc4b14d184
+glslang-1.4.1.1 a0995c49ebcaca2c6d3b03efbabf74f3843decdb https://github.com/KhronosGroup/glslang/archive/a0995c49ebcaca2c6d3b03efbabf74f3843decdb.tar.gz 84160d535e6889796bb8f106378d16b5667984e642b461b9c2a912da18bacda1
+spirv-headers-1.4.1.1 36d5e2ddaa54c70d2f29081510c66f4fc98e5e53 https://github.com/KhronosGroup/SPIRV-Headers/archive/36d5e2ddaa54c70d2f29081510c66f4fc98e5e53.tar.gz e9632c0e0719889e904f980b824928b15d41e3e6ccdfb0d6dec7f04dc8a86572
+amber-1.4.1.1 1ec5e96db7e0343d045a52c590e30eba154f74a8 https://github.com/google/amber/archive/1ec5e96db7e0343d045a52c590e30eba154f74a8.tar.gz 247bc068a8a4f52523920da0eff2fc671302cdbaa4806dd0aa52374a23433534
+jsoncpp-1.4.1.1 9059f5cad030ba11d37818847443a53918c327b1 https://github.com/open-source-parsers/jsoncpp/archive/9059f5cad030ba11d37818847443a53918c327b1.tar.gz e7a12f50c2125abc9e4b2a38f399393503b6eebd5b4ab75ebb7df1664e768ce7
+nvidia-video-samples-1.4.1.1 45fe88b456c683120138f052ea81f0a958ff3ec4 https://github.com/Igalia/vk_video_samples/archive/45fe88b456c683120138f052ea81f0a958ff3ec4.tar.gz 936b7dc88208e89dbb197fbc2c9bb89c5db09c25ad7f2af9802e6584c119cf6c
+vulkan-video-samples-1.4.1.1 70dfd5a6007680ddb8970d7e71bf7af9ee173f3c https://github.com/KhronosGroup/Vulkan-Video-Samples/archive/70dfd5a6007680ddb8970d7e71bf7af9ee173f3c.tar.gz 7fb57054caafbe58c2ec033f82baf93967ee6153473e82b84d905c4e12efe0a3
+video_generator-1.4.1.1 426300e12a5cc5d4676807039a1be237a2b68187 https://github.com/Igalia/video_generator/archive/426300e12a5cc5d4676807039a1be237a2b68187.tar.gz 0cf3a49bce1c4a5fb940db0d72a8035f2568a11644fc5b315e2bfb5e256354e0
+vk-gl-cts-1.4.7.1 vulkan-cts-1.4.7.1 https://github.com/KhronosGroup/VK-GL-CTS/archive/refs/tags/vulkan-cts-1.4.7.1.tar.gz 2071468a8509528b030c5fc54dbad7f4645bb95c4ccda198e01c722372793462
+spirv-tools-1.4.7.1 1d0401cd2b68ae34cda9ff625bedd1be4ed6214a https://github.com/KhronosGroup/SPIRV-Tools/archive/1d0401cd2b68ae34cda9ff625bedd1be4ed6214a.tar.gz 9c4c7151a5a07d5e920f5a0a5db2486014fa52af80b29f27d20e4ea63bdf3983
+glslang-1.4.7.1 2ff6f609379ce43c4291c732cf6a19dd2461a680 https://github.com/KhronosGroup/glslang/archive/2ff6f609379ce43c4291c732cf6a19dd2461a680.tar.gz 7e282507c4e1ab0ebd0b363f184c2fc45589f11b1e2958d42133e314fa686359
+spirv-headers-1.4.7.1 cb42dec3830d3ac67fa449ecdc0c0f73d5e74498 https://github.com/KhronosGroup/SPIRV-Headers/archive/cb42dec3830d3ac67fa449ecdc0c0f73d5e74498.tar.gz 117010e525fe36b1ce006e0e58a6e0a3b415aabc9179d912b92737f41f3f994f
+amber-1.4.7.1 c9f1e2871ccbb0b0564c4a33e359801144f6b7c1 https://github.com/google/amber/archive/c9f1e2871ccbb0b0564c4a33e359801144f6b7c1.tar.gz 2fbd46f7121ad1de8fe0382f5d05d753e56e0f5003bba66a98e52366f302f4fc
+jsoncpp-1.4.7.1 89e2973c754a9c02a49974d839779b151e95afd6 https://github.com/open-source-parsers/jsoncpp/archive/89e2973c754a9c02a49974d839779b151e95afd6.tar.gz fbdcd9beff428968710f339b15ae3911e295a5a71da0cbadbdd631d7a5aeaaee
+vulkansc-pcutil-1.4.7.1 f67d9e8e1c04f179ebeb837d21ab06192ad43fa0 https://github.com/KhronosGroup/VulkanSC-pcutil/archive/f67d9e8e1c04f179ebeb837d21ab06192ad43fa0.tar.gz a6fc530ab5878033f6c4be3563cc377ae8e253b04c56d4c8100c0bde78274036
