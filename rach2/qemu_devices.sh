@@ -26,10 +26,14 @@
 # DISPLAY_PROFILE attaches the display device of etude's display profile of
 # that name (tools/etude/Readme.md, The QEMU launcher) in place of QEMU's
 # default VGA, with an EDID whose preferred mode is the fixed window of
-# 1280x800: std-vga, virtio-vga, virtio-gpu, virgl or none. virgl draws with
-# the host's GL on its render node through QEMU's egl-headless display, and
-# exports the environment that puts that GL on the testing PC's GPU. The
-# pointer is the PS/2 mouse of the PC's 8042; no USB tablet is attached.
+# 1280x800: std-vga, virtio-vga, virtio-gpu, virgl, venus or none. virgl
+# draws with the host's GL on its render node through QEMU's egl-headless
+# display, and exports the environment that puts that GL on the testing PC's
+# GPU. venus adds Vulkan through Venus over the host's lavapipe, with QEMU's
+# GL on llvmpipe, and backs the guest's RAM, MEMORY (2G by default), with a
+# shared memfd for Venus's blobs; it exports its environment, libm preloaded
+# among it (tests/graphics/Readme.md, Venus on the testing PC). The pointer
+# is the PS/2 mouse of the PC's 8042; no USB tablet is attached.
 #
 # ACCEL_OPTS is the accelerator of a graphics run, which the graphics scripts
 # use: KVM with the host's processor and its invariant time-stamp counter,
@@ -119,8 +123,19 @@ case "${DISPLAY_PROFILE:-}" in
         MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
         export GALLIUM_DRIVER MESA_D3D12_DEFAULT_ADAPTER_NAME
         ;;
+    venus)
+        DISPLAY_OPTS="-vga none -device virtio-vga-gl,$DISPLAY_WINDOW,venus=on,blob=on,hostmem=4G"
+        DISPLAY_OPTS="$DISPLAY_OPTS -display egl-headless,rendernode=/dev/dri/renderD128"
+        DISPLAY_OPTS="$DISPLAY_OPTS -m ${MEMORY:-2G}"
+        DISPLAY_OPTS="$DISPLAY_OPTS -object memory-backend-memfd,id=ram,size=${MEMORY:-2G},share=on"
+        DISPLAY_OPTS="$DISPLAY_OPTS -machine memory-backend=ram"
+        GALLIUM_DRIVER=llvmpipe
+        VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json
+        LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libm.so.6
+        export GALLIUM_DRIVER VK_DRIVER_FILES LD_PRELOAD
+        ;;
     *)
-        echo "run: DISPLAY_PROFILE is std-vga, virtio-vga, virtio-gpu, virgl or none, not $DISPLAY_PROFILE" >&2
+        echo "run: DISPLAY_PROFILE is std-vga, virtio-vga, virtio-gpu, virgl, venus or none, not $DISPLAY_PROFILE" >&2
         exit 2
         ;;
 esac

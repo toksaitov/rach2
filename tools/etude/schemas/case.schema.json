@@ -129,7 +129,7 @@
         "captures": {"type": "array", "items": {"type": "string", "pattern": "^net[1-9]?[0-9]$"}, "uniqueItems": true},
         "smbios_vendor": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[ -~]+$"},
         "acpi_table": {"$ref": "#/$defs/name"},
-        "display": {"enum": ["none", "std-vga", "virtio-vga", "virtio-gpu", "virgl"]}
+        "display": {"enum": ["none", "std-vga", "virtio-vga", "virtio-gpu", "virgl", "venus"]}
       }
     },
     "qemu_id": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,31}$"},

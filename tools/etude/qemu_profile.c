@@ -37,21 +37,43 @@ static const char *const nic_models[] = {"rtl8139", "e1000", NULL};
 /* The members of a device that the launcher sets, which a property cannot. */
 static const char *const set_members[] = {"id", "bus", "port", "drive", "netdev", "mac", NULL};
 
-/* A display profile: the device it attaches and whether the host's GL draws
- * its frames, through QEMU's egl-headless display. */
+/* The environment that puts QEMU's GL on the testing PC's GPU, not llvmpipe. */
+static const char *const virgl_env[] = {
+    "GALLIUM_DRIVER=d3d12",
+    "MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA",
+    NULL,
+};
+
+/* The environment of Venus over the host's lavapipe, with QEMU's GL on
+ * llvmpipe, since Venus's frames are black through d3d12. llvmpipe's
+ * compiled shaders in virglrenderer's render server, which inherits it, look
+ * libm's functions up in the process's global scope, where libm is only if
+ * preloaded; without it they call address 0. */
+static const char *const venus_env[] = {
+    "GALLIUM_DRIVER=llvmpipe",
+    "VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json",
+    "LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libm.so.6",
+    NULL,
+};
+
+/* A display profile: the device it attaches and, for one whose frames the
+ * host's GL draws through QEMU's egl-headless display, QEMU's environment. */
 struct display {
     const char *name;
-    const char *device; /* QEMU's model, or NULL for no display device */
-    int gl;
+    const char *device;     /* QEMU's model, or NULL for no display device */
+    const char *properties; /* the device's own, after the window's */
+    const char *const *env; /* NULL, or the GL display's environment */
+    int shared;             /* the guest's RAM is a shared memfd, for blobs */
 };
 
 static const struct display displays[] = {
-    {"none", NULL, 0},
-    {"std-vga", "VGA", 0},
-    {"virtio-vga", "virtio-vga", 0},
-    {"virtio-gpu", "virtio-gpu-pci", 0},
-    {"virgl", "virtio-vga-gl", 1},
-    {NULL, NULL, 0},
+    {"none", NULL, "", NULL, 0},
+    {"std-vga", "VGA", "", NULL, 0},
+    {"virtio-vga", "virtio-vga", "", NULL, 0},
+    {"virtio-gpu", "virtio-gpu-pci", "", NULL, 0},
+    {"virgl", "virtio-vga-gl", "", virgl_env, 0},
+    {"venus", "virtio-vga-gl", ",venus=on,blob=on,hostmem=4G", venus_env, 1},
+    {NULL, NULL, NULL, NULL, 0},
 };
 
 /* The properties of every display device: an EDID whose preferred mode is
@@ -61,13 +83,6 @@ static const struct display displays[] = {
 /* The host's render node, which egl-headless opens; on the testing PC it is
  * WSL's vgem, and Mesa's d3d12 driver draws on the GPU behind /dev/dxg. */
 #define DISPLAY_RENDER_NODE "/dev/dri/renderD128"
-
-/* The environment that puts QEMU's GL on the testing PC's GPU, not llvmpipe. */
-static const char *const display_gl_env[] = {
-    "GALLIUM_DRIVER=d3d12",
-    "MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA",
-    NULL,
-};
 
 /* The device models that a display profile replaces, so that a profile with
  * one has no other display, and the USB tablet, since its pointer is the PS/2
@@ -101,6 +116,14 @@ static const struct display *display_find(const char *name)
         if (strcmp(d->name, name) == 0)
             return d;
     return NULL;
+}
+
+/** Give the environment of profile `p`'s GL display, or NULL for none. */
+static const char *const *display_env(const struct etude_qemu_profile *p)
+{
+    const struct display *d = display_find(p->display);
+
+    return d != NULL ? d->env : NULL;
 }
 
 int etude_qemu_display_device(const char *model)
@@ -1231,6 +1254,18 @@ static void add_boundary_memory(struct line *l, const char *size)
 }
 
 /**
+ * Back the guest's RAM, of `size`, QEMU's size with its unit, with a shared
+ * memfd, which Venus's blobs map into the host's render server.
+ */
+static void add_shared_memory(struct line *l, const char *size)
+{
+    add(l, 0, "-object");
+    add(l, 0, "memory-backend-memfd,id=etude-ram,size=%s,share=on", size);
+    add(l, 0, "-machine");
+    add(l, 0, "memory-backend=etude-ram");
+}
+
+/**
  * Give the path of an ACPI table as -acpitable's file= takes it, or NULL for
  * one it cannot take. QEMU splits that value at each colon, so a Windows path
  * goes without its drive letter, which must name the drive of the working
@@ -1299,7 +1334,7 @@ static int argv_check(const struct etude_qemu_profile *p, const struct etude_qem
     if (p->firmware == ETUDE_FIRMWARE_OVMF && (x86_64 ? s->ovmf_x86_64 : s->ovmf_i686) == NULL)
         return ENOENT;
 #ifdef _WIN32
-    if (p->display != NULL && display_find(p->display)->gl)
+    if (display_env(p) != NULL)
         return ENOTSUP;
 #endif
     if (out->max < 1 || out->size < 1 ||
@@ -1318,7 +1353,7 @@ static void add_display(struct line *l, const struct etude_qemu_profile *p)
     if (d == NULL || d->device == NULL)
         return;
     add(l, 0, "-device");
-    add(l, 0, "%s,%s", d->device, DISPLAY_WINDOW);
+    add(l, 0, "%s,%s%s", d->device, DISPLAY_WINDOW, d->properties);
 }
 
 /**
@@ -1389,7 +1424,7 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     add(&l, 0, "%s", accel_option(s->accel));
     add(&l, 0, "-nodefaults");
     add(&l, 0, "-display");
-    if (p->display != NULL && display_find(p->display)->gl)
+    if (display_env(p) != NULL)
         add(&l, 0, "egl-headless,rendernode=%s", DISPLAY_RENDER_NODE);
     else
         add(&l, 0, "none");
@@ -1405,6 +1440,8 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
     add(&l, 0, "%s", number);
     if (boundary(p))
         add_boundary_memory(&l, number);
+    else if (p->display != NULL && display_find(p->display)->shared)
+        add_shared_memory(&l, number);
     if ((e = add_machine(&l, p)) != 0)
         return e;
     add_display(&l, p);
@@ -1448,14 +1485,14 @@ static int sdl_audio_variable(const char *entry)
     return strncmp(entry, "SDL_AUDIO", 9) == 0 || strncmp(entry, "SDL_DISKAUDIO", 13) == 0;
 }
 
-/** Say whether `entry` of an environment sets a variable of display_gl_env. */
-static int gl_variable(const char *entry)
+/** Say whether `entry` of an environment sets a variable that `env` sets. */
+static int env_variable(const char *const *env, const char *entry)
 {
     size_t i, n;
 
-    for (i = 0; display_gl_env[i] != NULL; i++) {
-        n = (size_t)(strchr(display_gl_env[i], '=') - display_gl_env[i]) + 1;
-        if (strncmp(entry, display_gl_env[i], n) == 0)
+    for (i = 0; env != NULL && env[i] != NULL; i++) {
+        n = (size_t)(strchr(env[i], '=') - env[i]) + 1;
+        if (strncmp(entry, env[i], n) == 0)
             return 1;
     }
     return 0;
@@ -1471,19 +1508,20 @@ int etude_qemu_env(const struct etude_qemu_profile *p, char *const *envp, const 
 #endif
     struct line l = {out->argv, 0, out->max, out->buf, 0, out->size, 0};
     size_t i;
-    int e, gl;
+    const char *const *gl;
+    int e;
 
     if ((e = audio_check(p, "wav")) != 0)
         return e;
     if (out->max == 0)
         return E2BIG;
     out->argv[0] = NULL;
-    gl = p->display != NULL && display_find(p->display) != NULL && display_find(p->display)->gl;
+    gl = display_env(p);
     for (i = 0; envp != NULL && envp[i] != NULL; i++)
-        if (!sdl_audio_variable(envp[i]) && !(gl && gl_variable(envp[i])))
+        if (!sdl_audio_variable(envp[i]) && !env_variable(gl, envp[i]))
             add(&l, 0, "%s", envp[i]);
-    for (i = 0; gl && display_gl_env[i] != NULL; i++)
-        add(&l, 0, "%s", display_gl_env[i]);
+    for (i = 0; gl != NULL && gl[i] != NULL; i++)
+        add(&l, 0, "%s", gl[i]);
     if (p->audio != NULL && strcmp(audio_backend(p), "sdl") == 0) {
         if (input == NULL || *input == '\0')
             return EINVAL;
