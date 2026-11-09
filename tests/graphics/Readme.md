@@ -114,6 +114,5 @@ For an author's single-unit run, unpack `bundle.tar` in the Debian guest, place 
 
 * `virgl` and `venus` are the testing PC's alone: the render node's path, the adapter's name and the libraries' paths are its own, the test engine's QEMU on Windows has no GL display, and etude refuses both there.
 * `venus` needs the udmabuf module, which a restart of WSL unloads until root loads it again; `grep '^udmabuf ' /proc/modules` says whether it is loaded.
-* On Rach2 `drmcapture` needs a card, which in QEMU no driver gives yet: Rach2's std-vga and virtio-gpu drivers are stubs ([rach2/sys/drm/Readme.md](../../rach2/sys/drm/Readme.md)).
+* On Rach2 `drmcapture` needs a DRM CRTC with a valid mode and a framebuffer; an output without a framebuffer has nothing to capture.
 * The Debian guest's packages come from the snapshot of one date; a newer reference takes a new date in `debian-ref/image` and a new `prepare`.
-
