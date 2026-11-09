@@ -182,6 +182,10 @@
 #define SYS_UNSHARE                310
 #define SYS_SETNS                  346
 #define SYS_KCMP                   349
+#define SYS_PROCESS_VM_READV       347
+#define SYS_PROCESS_VM_WRITEV      348
+#define SYS_GET_MEMPOLICY          275
+#define SYS_RSEQ                   386
 #define SYS_KILL                   37
 #define SYS_SIGRETURN              119
 #define SYS_RT_SIGRETURN           173

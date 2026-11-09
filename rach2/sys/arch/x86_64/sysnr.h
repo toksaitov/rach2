@@ -265,6 +265,10 @@
 #define SYS_SETNS                  308
 #define SYS_GETCPU                 309
 #define SYS_KCMP                   312
+#define SYS_PROCESS_VM_READV       310
+#define SYS_PROCESS_VM_WRITEV      311
+#define SYS_GET_MEMPOLICY          239
+#define SYS_RSEQ                   334
 #define SYS_RENAMEAT2              316
 #define SYS_SECCOMP                317
 #define SYS_GETRANDOM              318

@@ -75,7 +75,13 @@ the distance the interpreter was moved by, 0 without one,
 .Dv AT_SECURE ,
 .Dv AT_RANDOM ,
 .Dv AT_EXECFN ,
-the address of the path as the caller passed it, and
+the address of the path as the caller passed it,
+.Dv AT_RSEQ_FEATURE_SIZE
+28 and
+.Dv AT_RSEQ_ALIGN
+32, the size and alignment of the area
+.Xr rseq 2
+registers, and
 .Dv AT_MINSIGSTKSZ ,
 the least alternate signal stack a frame fits on this processor, whose
 XSAVE state can make it larger than

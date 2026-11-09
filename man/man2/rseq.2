@@ -1,0 +1,154 @@
+.Dd November 10, 2026
+.Dt RSEQ 2
+.Os
+.Sh NAME
+.Nm rseq
+.Nd restartable sequences: the processor a thread runs on, and a critical section a preemption aborts
+.Sh SYNOPSIS
+.In linux/rseq.h
+.In sys/syscall.h
+.In unistd.h
+.Ft int
+.Fn syscall SYS_rseq "struct rseq *rseq" "uint32_t rseq_len" "int flags" "uint32_t sig"
+.Sh DESCRIPTION
+.Fn rseq
+registers the calling thread's
+.Vt struct rseq ,
+an area of its own memory in which the kernel keeps the processor the
+thread runs on, and in which the thread names the critical section it is
+in, as Linux 6.12's call does.
+glibc registers an area in each thread it starts and reads the processor
+from it in
+.Fn sched_getcpu ;
+a library of per-processor data, such as librseq, runs its updates as
+critical sections.
+.Pp
+The area is laid out as Linux's, 32 bytes aligned to 32:
+.Bl -tag -width "cpu_id_start"
+.It Va cpu_id_start
+The processor, offset 0.
+.It Va cpu_id
+The processor, offset 4, or
+.Dv RSEQ_CPU_ID_UNINITIALIZED
+.Pq -1
+while no area is registered.
+.It Va rseq_cs
+The address of the critical section's
+.Vt struct rseq_cs ,
+offset 8, a 64-bit field that the thread sets on entering the section and
+the kernel clears.
+.It Va flags
+Offset 16, which must be 0.
+.It Va node_id
+The memory node, offset 20: 0, since the machine has one.
+.It Va mm_cid
+The concurrency ID, offset 24.
+.El
+.Pp
+The kernel writes
+.Va cpu_id_start ,
+.Va cpu_id ,
+.Va node_id
+and
+.Va mm_cid
+on the thread's first return to user mode after the registration, after
+each switch of the thread away from its processor, and before a signal
+handler runs.
+A
+.Vt struct rseq_cs
+gives the section's
+.Va version ,
+0,
+.Va flags ,
+0, the address of its first instruction
+.Va start_ip ,
+the bytes
+.Va post_commit_offset
+from there to the instruction after the one that commits, and the address
+.Va abort_ip
+of its abort handler, which the 32-bit signature
+.Fa sig
+precedes in memory.
+When the thread is switched away from its processor, or takes a signal,
+while its instruction pointer lies in
+.Bo Va start_ip ,
+.Va start_ip No + Va post_commit_offset
+.Bc ,
+it resumes at
+.Va abort_ip ,
+or its signal handler returns there, with
+.Va rseq_cs
+cleared.
+A section the kernel cannot read, one that is not valid, with a version,
+flags, an abort handler inside it or an address past user space, an
+abort handler without the signature before it, and an area that cannot be
+written end the thread's process with
+.Dv SIGSEGV ,
+unless a handler catches it.
+.Pp
+A registration takes an area of at least 32 bytes aligned to 32.
+.Fa flags
+of
+.Dv RSEQ_FLAG_UNREGISTER
+.Pq 1
+with the area, length and signature registered removes it, and the area
+then reads as an unregistered one: 0 in
+.Va cpu_id_start ,
+.Va node_id
+and
+.Va mm_cid ,
+and -1 in
+.Va cpu_id .
+A thread starts without an area, a
+.Xr fork 2
+child has its parent's, and
+.Xr execve 2
+removes it.
+The auxiliary vector of a new program gives
+.Dv AT_RSEQ_FEATURE_SIZE ,
+28, the bytes of the area this kernel keeps, and
+.Dv AT_RSEQ_ALIGN ,
+32.
+.Ss Differences from Linux
+.Va mm_cid
+is the processor's number, which no two threads of an address space that
+run at once share and which is below the number of processors, as Linux's
+is; Linux also keeps it below the number of the address space's threads.
+The kernel has no
+.Fn membarrier ,
+whose
+.Dv MEMBARRIER_CMD_PRIVATE_EXPEDITED_RSEQ
+aborts the sections of the other threads of a process.
+.Ss System call interface
+The system call number is 386 on i386 and 334 on x86-64.
+The x86-64 kernel takes the i386 number from a 32-bit program, with the
+same area.
+.Sh RETURN VALUES
+0 on success.
+On failure -1 is returned with
+.Va errno
+set; the kernel returns the negative error number.
+.Sh EXAMPLES
+.Pa tests/limitsprobe.c
+registers an area as glibc 2.44 does, reads its processor after a move to
+another processor, and sees a section in which the thread signals itself
+resume at its abort handler.
+.Sh ERRORS
+.Bl -tag -width "[EFAULT]"
+.It Bq Er EBUSY
+The area is registered already.
+.It Bq Er EFAULT
+The area runs past user space, or for an unregistration cannot be
+written.
+.It Bq Er EINVAL
+.Fa flags
+is neither 0 nor
+.Dv RSEQ_FLAG_UNREGISTER ;
+the area is shorter than 32 bytes or not aligned to 32; another area or
+length is registered; or no area is registered to be removed.
+.It Bq Er EPERM
+The signature is not the one registered.
+.El
+.Sh SEE ALSO
+.Xr getcpu 2 ,
+.Xr sched_setscheduler 2

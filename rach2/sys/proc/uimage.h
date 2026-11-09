@@ -13,7 +13,7 @@ struct page_dir;
 
 /* The auxiliary vector's entries, AT_NULL included; an image without a
  * vDSO has a second AT_NULL in place of AT_SYSINFO_EHDR. */
-#define UIMAGE_AUXV 17u
+#define UIMAGE_AUXV 19u
 
 /* Linux's limits on the strings of an execve (fs/exec.c): one string, its
  * NUL included, is at most 32 pages; the strings with their pointers take a
