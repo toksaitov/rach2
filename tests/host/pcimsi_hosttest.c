@@ -213,6 +213,32 @@ void klog(int level, const char *subsystem, const char *fmt, ...)
     (void)fmt;
 }
 
+/** No row searches the bus, so the list of functions never grows past its
+ * first array and asks the heap for nothing. */
+void *kmalloc(size_t size)
+{
+    (void)size;
+    return NULL;
+}
+
+/** Nothing comes from the heap, so nothing goes back. */
+void kfree(void *p)
+{
+    (void)p;
+}
+
+/** Copy `n` bytes, which no row reaches. */
+void *k_memcpy(void *dest, const void *src, size_t n)
+{
+    unsigned char *d = dest;
+    const unsigned char *s = src;
+
+    while (n--) {
+        *d++ = *s++;
+    }
+    return dest;
+}
+
 /* The local APIC identity of the boot processor, set by each row. */
 static unsigned int the_apic_id;
 
