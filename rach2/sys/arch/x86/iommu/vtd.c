@@ -934,8 +934,16 @@ static int attach_locked(struct iommu_domain *d, struct vtd_unit *u, uint8_t bus
     return 0;
 }
 
+/**
+ * A unit without pass-through has its identity domain made here, before the
+ * lock is taken, since a unit without large pages has a million entries to
+ * write and the lock holds interrupts off; one made by another attach in the
+ * meantime wins, and this one is freed.
+ */
 int iommu_attach(struct iommu_domain *d, uint8_t bus, uint8_t devfn)
 {
+    struct iommu_domain *identity = NULL;
+    struct vtd_unit *u;
     uint32_t flags;
     int ui = iommu_unit_of(bus, devfn), r;
 
@@ -945,9 +953,18 @@ int iommu_attach(struct iommu_domain *d, uint8_t bus, uint8_t devfn)
     if ((r = rmrr_check(bus, devfn)) != 0) {
         return r;
     }
+    u = &vtd_units[ui];
+    if (!VTD_ECAP_PT(u->ecap) && u->identity == NULL && (identity = identity_new(u)) == NULL) {
+        return -ENOMEM;
+    }
     flags = spin_lock_irqsave(&vtd_lock);
-    r = attach_locked(d, &vtd_units[ui], bus, devfn);
+    if (identity != NULL && u->identity == NULL) {
+        u->identity = identity;
+        identity = NULL;
+    }
+    r = attach_locked(d, u, bus, devfn);
     spin_unlock_irqrestore(&vtd_lock, flags);
+    iommu_domain_free(identity);
     if (r == 0) {
         klog(KLOG_INFO, "vtd", "attach: %x:%x.%d to domain %d of dmar%d", (unsigned int)bus,
              (unsigned int)(devfn >> 3), (int)(devfn & 7u), (int)d->did[ui], ui);
