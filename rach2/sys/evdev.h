@@ -1,6 +1,6 @@
 /*
  * evdev.h: the input devices of /dev/input/eventN, Linux's event interface,
- * through which every keyboard and button reports its keys to user space.
+ * through which every keyboard, button and mouse reports to user space.
  */
 #ifndef _EVDEV_H_
 #define _EVDEV_H_
@@ -9,7 +9,8 @@
 #include "fs/file.h"
 
 /*
- * A driver registers each device it finds and reports each key through it;
+ * A driver registers each device it finds, with the keys, axes and
+ * properties it has, and reports each key and movement through it;
  * a reader opens the device's node and reads Linux's `struct input_event`
  * records, each open with a queue of its own. The node of device N is
  * /dev/input/eventN, major 13 and minor 64 + N, as on Linux, and is listed
@@ -37,6 +38,8 @@ struct evdev;
  * Linux's numbers (<linux/input-event-codes.h>). */
 #define EV_SYN      0x00
 #define EV_KEY      0x01
+#define EV_REL      0x02
+#define EV_ABS      0x03
 #define EV_MSC      0x04
 #define EV_LED      0x11
 #define EV_REP      0x14
@@ -49,9 +52,53 @@ struct evdev;
 #define REP_DELAY   0 /* EV_REP's codes, each a time in milliseconds */
 #define REP_PERIOD  1
 
+/* EV_REL's codes; a wheel's REL_WHEEL counts detents, up positive, and its
+ * REL_WHEEL_HI_RES the same turn in 120ths of a detent. */
+#define REL_X             0x00
+#define REL_Y             0x01 /* positive toward the user */
+#define REL_HWHEEL        0x06 /* positive to the right */
+#define REL_WHEEL         0x08
+#define REL_WHEEL_HI_RES  0x0b
+#define REL_HWHEEL_HI_RES 0x0c
+#define REL_CNT           0x10
+
+/* EV_ABS's codes: the ones below ABS_MT_SLOT and the multitouch ones from
+ * ABS_MT_FIRST to ABS_MT_LAST, which no device here keeps slots for. */
+#define ABS_X        0x00
+#define ABS_Y        0x01
+#define ABS_PRESSURE 0x18
+#define ABS_MT_SLOT  0x2f
+#define ABS_MT_FIRST 0x30
+#define ABS_MT_LAST  0x3d
+#define ABS_CNT      0x40
+
+/* The properties of EVIOCGPROP. */
+#define INPUT_PROP_POINTER   0x00 /* moves a pointer on a screen */
+#define INPUT_PROP_DIRECT    0x01 /* touches the screen it points at */
+#define INPUT_PROP_BUTTONPAD 0x02 /* a touchpad whose pad is its button */
+#define INPUT_PROP_CNT       0x20
+
+/* A mouse's buttons, EV_KEY codes. */
+#define BTN_LEFT   0x110
+#define BTN_RIGHT  0x111
+#define BTN_MIDDLE 0x112
+#define BTN_SIDE   0x113
+#define BTN_EXTRA  0x114
+
 /* What `evdev_describe` says a device reports beyond its keys. */
 #define EVDEV_SCAN     0x01 /* MSC_SCAN, the code each key came from */
 #define EVDEV_KEYBOARD 0x02 /* a keyboard's EV_REP and its three EV_LED LEDs */
+
+/* An absolute axis's state and limits, Linux's `struct input_absinfo`,
+ * which EVIOCGABS and EVIOCSABS copy: the same 24 bytes on both ABIs. */
+struct input_absinfo {
+    int32_t value; /* the last value reported */
+    int32_t minimum;
+    int32_t maximum;
+    int32_t fuzz;       /* noise filtered out: a smaller change is dropped */
+    int32_t flat;       /* the dead zone about the centre */
+    int32_t resolution; /* units per millimetre, or per radian */
+};
 
 #define KEY_MUTE             113
 #define KEY_VOLUMEDOWN       114
@@ -93,6 +140,32 @@ struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor
 void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags);
 
 /**
+ * Give `dev` the event `code` of `type`, EV_KEY or EV_REL, to report, as
+ * Linux's `input_set_capability` does: a button, or a relative axis. Called
+ * after `evdev_register`, before the device reports. A NULL `dev` is
+ * ignored.
+ */
+void evdev_set_capability(struct evdev *dev, uint16_t type, uint16_t code);
+
+/**
+ * Give `dev` the absolute axis `code`, below ABS_CNT, with its limits and
+ * its value 0, as Linux's `input_set_abs_params` does; EVIOCGABS then
+ * answers for every axis of the device. Called after `evdev_register`,
+ * before the device reports. A NULL `dev` is ignored.
+ */
+void evdev_set_abs(struct evdev *dev, uint16_t code, int32_t minimum, int32_t maximum, int32_t fuzz,
+                   int32_t flat);
+
+/** Give the absolute axis `code` of `dev` the resolution EVIOCGABS gives,
+ * in units per millimetre, as Linux's `input_abs_set_res`. A NULL `dev` is
+ * ignored. */
+void evdev_set_abs_res(struct evdev *dev, uint16_t code, int32_t resolution);
+
+/** Give `dev` the property `prop`, INPUT_PROP_*, which EVIOCGPROP lists.
+ * A NULL `dev` is ignored. */
+void evdev_set_prop(struct evdev *dev, unsigned int prop);
+
+/**
  * Take `dev` away: its node goes from /dev/input, a reader of an open of it
  * is woken and gets -ENODEV, and its slot is free for another device once
  * the last open closes. Any context. A NULL `dev` is ignored.
@@ -101,13 +174,18 @@ void evdev_unregister(struct evdev *dev);
 
 /**
  * Report one event of `dev`: its type, code and value as Linux's
- * `struct input_event` has them, stamped with the real time now and queued
- * for every open of the device, or only for the open that holds the grab;
- * an EV_SYN SYN_REPORT ends a packet and wakes the readers. An EV_KEY of a
- * key the device did not register is dropped, as is a release of a key that
- * is up; a press of a key that is down becomes a repeat, value 2. Any
- * context, an interrupt handler among them; it does not sleep. A NULL
- * `dev`, a device whose registration failed, is ignored.
+ * `struct input_event` has them, queued for every open of the device, or
+ * only for the open that holds the grab; an EV_SYN SYN_REPORT ends a packet
+ * and wakes the readers. Every event of a packet has the time of its first,
+ * on the clock each open chose (EVIOCSCLOCKID). The input core's filters
+ * apply, as Linux's: an event of a key or axis the device did not register
+ * is dropped, as are a key's press while it is down and its release while
+ * it is up (a repeat, value 2, passes), a relative motion of 0, and an
+ * absolute value within the axis's fuzz of the last one. An open does not
+ * get the events its masks leave out (EVIOCSMASK), nor a SYN_REPORT that
+ * ends a packet it got nothing of. Any context, an interrupt handler among
+ * them; it does not sleep. A NULL `dev`, a device whose registration
+ * failed, is ignored.
  */
 void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value);
 
@@ -153,21 +231,25 @@ int32_t evdev_open(fd_entry_t *e, int n);
  * fell behind finds the oldest records dropped and a SYN_DROPPED in their
  * place. Sleeps while the queue is empty, unless the description is
  * nonblocking (-EAGAIN). Returns the bytes read, -EINVAL for a `count`
- * smaller than one record, -EFAULT, or -EINTR.
+ * smaller than one record, -EFAULT, -EINTR, or -ENODEV once the device has
+ * gone or the open was revoked (EVIOCREVOKE).
  */
 int32_t evdev_read(fd_entry_t *e, char __user *buf, uint32_t count);
 
-/** The `poll` of an open device: POLLIN while its queue has a record, with
- * `*wq` the queue's wait queue. */
+/** The `poll` of an open device: POLLIN while its queue has a record, and
+ * POLLHUP with POLLERR once the device has gone or the open was revoked,
+ * with `*wq` the queue's wait queue. */
 short evdev_poll(fd_entry_t *e, short events, struct wait_queue **wq);
 
 /**
- * The ioctls of an open device: EVIOCGVERSION, EVIOCGID, EVIOCGNAME,
- * EVIOCGPHYS, EVIOCGBIT, EVIOCGKEY, EVIOCGLED, EVIOCGRAB, and on a keyboard
- * EVIOCGREP and EVIOCSREP, which read and set every keyboard's repeat, with
- * Linux's numbers and answers. -ENOTTY for another request, -EFAULT for a
- * bad pointer, -ENOSYS for the repeat's requests on a device that is no
- * keyboard.
+ * The ioctls of an open device, with Linux's numbers and answers:
+ * EVIOCGVERSION, EVIOCGID, EVIOCGNAME, EVIOCGPHYS, EVIOCGUNIQ, EVIOCGPROP,
+ * EVIOCGBIT, EVIOCGKEY, EVIOCGLED, EVIOCGSND, EVIOCGSW, EVIOCGABS and
+ * EVIOCSABS, EVIOCGRAB, EVIOCREVOKE, EVIOCSCLOCKID, EVIOCGMASK and
+ * EVIOCSMASK, and on a keyboard EVIOCGREP and EVIOCSREP, which read and set
+ * every keyboard's repeat. -ENODEV on a device that has gone or an open
+ * that was revoked, -EINVAL for another request, -EFAULT for a bad pointer,
+ * -ENOSYS for the repeat's requests on a device that is no keyboard.
  */
 int32_t evdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg);
 
