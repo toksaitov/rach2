@@ -1724,6 +1724,10 @@ int32_t fbdrm_probe(void);
 int32_t i915_probe(void);
 int32_t virtio_gpu_probe(void);
 int32_t vkms_probe(void);
+/** vkms's vblank timer, from the boot processor's tick with interrupts
+ * off: each vblank due on its CRTC since the last call. Nothing while no
+ * vkms device holds vblanks. */
+void vkms_tick(void);
 
 /* ------------------------------------------------------------------------
  * The ioctl handlers of the core's table, one per number, each in the file
