@@ -281,8 +281,8 @@ runner_host()
     ledger=/var/lib/rach2-etude/ledger/claims
     echo "host $(uname -n) $(uname -sr)"
     echo "host_load $(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo unknown)"
-    if [ -d "$ledger" ]; then
-        echo "host_claims $(find "$ledger" -type f 2>/dev/null | wc -l)"
+    if [ -r "$ledger" ]; then
+        echo "host_claims $(grep -c '^claim ' "$ledger")"
     else
         echo "host_claims none: no ledger at $ledger"
     fi
