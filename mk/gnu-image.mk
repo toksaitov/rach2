@@ -31,7 +31,8 @@ GNU_TEST_EXT2 = $(IMAGES_DIR)/gnu-test.ext2
 # rules share the ordinary component producers; no kernel is rebuilt here.
 $(GNU_TEST_EXT2): build/tests/host-suite/scripts-assets.tar $(KERNEL) $(METAL_KERNEL)
 GNU_IMAGE_STAMPS = $(GNU_PORTS_STAMP) $(GNU_NATIVE_STAMP) $(GNU_GDB_STAMP) \
-                   $(GNU_JS_STAMP) $(GNU_DEBIAN_STAMP) $(GNU_PROTON_STAMP) $(GNU_WEBGL_STAMP)
+                   $(GNU_JS_STAMP) $(GNU_DEBIAN_STAMP) $(GNU_PROTON_STAMP) $(GNU_WEBGL_STAMP) \
+                   $(GNU_VENUS_STAMP)
 GNU_IMAGE_DEPS = mk/gnu-image.mk $(DEMO_CREDS) krffs/manifests/os-real-gnu.manifest $(MANIFEST_DEPS_os_real_gnu) \
                  tools/image/mkext2.sh vendor/gnu/install_root.sh vendor/gnu/fetch.sh \
                  tests/system/fakeapi/native/wsclient.c tests/cases/host/products.mk \
@@ -88,7 +89,7 @@ else
 GNU_TOOLING_DEPS = $(filter-out $(GNU_IMAGE_STAMPS),$(GNU_IMAGE_DEPS)) \
                    $(sort $(GNU_TOOLCHAIN_SOURCES) $(GNU_PORTS_SOURCES) $(GNU_NATIVE_SOURCES) \
                           $(GNU_GDB_SOURCES) $(GNU_JS_SOURCES) $(GNU_DEBIAN_SOURCES) $(GNU_PROTON_SOURCES) \
-                          $(GNU_WEBGL_SOURCES)) \
+                          $(GNU_WEBGL_SOURCES) $(GNU_VENUS_SOURCES)) \
                    $(GNU_PORTS_LINK) vendor/gnu/tooling_image.sh vendor/gnu/tooling_job.sh \
                    tools/setup/elfwrap.sh
 GNU_TOOLING_ORDER = $(GNU_IMAGE_ORDER) $(ETUDE) $(SHA256TOOL)

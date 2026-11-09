@@ -1,0 +1,17 @@
+# Mesa 26.1.6's Venus driver, which the root takes from trixie-backports
+# beside Mesa 25.0.7's other drivers (../Readme.md, Venus). A line is NAME
+# VERSION URL SHA-256, as in sources-extra.txt, and its NAME is the package
+# and the Debian architecture; fetch_venus.sh reads the build's line and the
+# Debian reference guest of the graphics tests the amd64 one.
+#
+# Each digest is the one that trixie-backports' Packages index of its
+# architecture lists in Debian's snapshot of 2026-11-08, the reference
+# guest's: the index's own digest is in the suite's InRelease, SHA-256
+# 8ce851dc20fb953f1107d4f9e870d06d3a607c1258a619b629b4023a0a59febd, which
+# gpgv verified with Debian's archive key for trixie,
+# B8E5F13176D2A7A75220028078DBA3BC47EF2265, a subkey of
+# debian-archive-key-13 in sources-extra.txt. The amd64 digest is also the
+# one dev-log/77-vgpu/mesa-qualification.md recorded for the package it
+# qualified.
+mesa-vulkan-drivers-amd64 26.1.6-1~bpo13+1 https://snapshot.debian.org/archive/debian/20261108T000000Z/pool/main/m/mesa/mesa-vulkan-drivers_26.1.6-1~bpo13+1_amd64.deb e2d4a843b8c55ed17c1e8856805f67b553b013b6ce5f15faeec4db7d4d38ff90
+mesa-vulkan-drivers-i386 26.1.6-1~bpo13+1 https://snapshot.debian.org/archive/debian/20261108T000000Z/pool/main/m/mesa/mesa-vulkan-drivers_26.1.6-1~bpo13+1_i386.deb 2005aa5e9e454684498f0b897b2bafa0422ebf6eb4041306a8ec4bba0509c9fa
