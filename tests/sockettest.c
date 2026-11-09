@@ -5,13 +5,15 @@
  * UDP sockets in /proc/net/sockstat and requires one more while its socket
  * is open and the count it started from once the last reference has gone,
  * so a leaked reference shows as a socket still counted, and a double free
- * as one gone too soon or a kernel fault. It exits 0 when the four tests
- * pass and 1 otherwise.
+ * as one gone too soon or a kernel fault. A fifth test receives two
+ * datagrams of an AF_UNIX pair with one recvmmsg and a timeout, which it
+ * requires given back with the time left, and on i386 again through
+ * recvmmsg_time64. It exits 0 when the five tests pass and 1 otherwise.
  *
  * Writes etude's report records (probe_report.h) for the case ETUDE_CASE
  * names: `sockstat`, that the count can be read, and an assertion for each
- * test, `create-close`, `dup2-share`, `fork-share` and `exit-release`, which
- * are not run when the count cannot be read.
+ * test, `create-close`, `dup2-share`, `fork-share`, `exit-release` and
+ * `recvmmsg-timeout`, which are not run when the count cannot be read.
  */
 
 #include "probe.h"
@@ -22,7 +24,30 @@ typedef unsigned int uint32_t;
 #define STDOUT_FILENO 1
 
 #define AF_INET    2
+#define AF_UNIX    1
 #define SOCK_DGRAM 2
+
+/* The struct msghdr and mmsghdr of the probe's ABI, whose natural layout is
+ * Linux's on both: 28 and 32 bytes on i386, 56 and 64 on x86-64. */
+struct iovec {
+    void *iov_base;
+    size_t iov_len;
+};
+
+struct msghdr {
+    void *msg_name;
+    int msg_namelen;
+    struct iovec *msg_iov;
+    size_t msg_iovlen;
+    void *msg_control;
+    size_t msg_controllen;
+    int msg_flags;
+};
+
+struct mmsghdr {
+    struct msghdr msg_hdr;
+    unsigned int msg_len;
+};
 
 /** The write call: the count written, or a negated errno. */
 static int sys_write(int fd, const void *buf, size_t count)
@@ -221,6 +246,114 @@ static int exit_release(void)
     return verdict(1, -1);
 }
 
+/** Send the datagrams "a" and "bc" from `tx`; 1 when both went. */
+static int send_two(int tx)
+{
+    unsigned long args[4];
+
+    args[0] = (unsigned long)tx;
+    args[1] = (unsigned long)"a";
+    args[2] = 1;
+    args[3] = 0;
+    if (socketcall(SC_SEND, args) != 1) {
+        return 0;
+    }
+    args[1] = (unsigned long)"bc";
+    args[2] = 2;
+    return socketcall(SC_SEND, args) == 2;
+}
+
+/** Point the two headers of `v` at the buffers of `buf`, 8 bytes each. */
+static void two_headers(struct mmsghdr *v, struct iovec *iov, char *buf)
+{
+    int i;
+
+    for (i = 0; i < 2; i++) {
+        iov[i].iov_base = buf + 8 * i;
+        iov[i].iov_len = 8;
+        v[i].msg_hdr.msg_name = 0;
+        v[i].msg_hdr.msg_namelen = 0;
+        v[i].msg_hdr.msg_iov = &iov[i];
+        v[i].msg_hdr.msg_iovlen = 1;
+        v[i].msg_hdr.msg_control = 0;
+        v[i].msg_hdr.msg_controllen = 0;
+        v[i].msg_hdr.msg_flags = 0;
+        v[i].msg_len = 0xFFFFFFFFu;
+    }
+}
+
+/** Whether the two headers of `v` got "a" and "bc" in `buf`. */
+static int got_two(const struct mmsghdr *v, const char *buf)
+{
+    return v[0].msg_len == 1 && v[1].msg_len == 2 && buf[0] == 'a' && buf[8] == 'b' &&
+           buf[9] == 'c';
+}
+
+/**
+ * Test 5: one recvmmsg with a timeout of 5 s takes the two datagrams queued
+ * on an AF_UNIX pair, stores each count, and gives the timeout back with the
+ * time left, more than 0 and at most 5 s; a timeout of 10^9 nanoseconds
+ * fails with EINVAL. On i386 recvmmsg_time64 does the same with a 64-bit
+ * timespec whose high word of nanoseconds, set, is ignored and given back
+ * 0. The probe's own ABI is the one checked: its i686 build checks the i386
+ * calls on either kernel.
+ */
+static int recvmmsg_timeout(void)
+{
+    unsigned long args[4];
+    int sv[2];
+    struct mmsghdr v[2];
+    struct iovec iov[2];
+    char buf[16];
+    long ts[2];
+    int ok;
+
+    print("Test 5: recvmmsg with a timeout... ");
+    args[0] = AF_UNIX;
+    args[1] = SOCK_DGRAM;
+    args[2] = 0;
+    args[3] = (unsigned long)sv;
+    if (socketcall(SC_SOCKETPAIR, args) != 0) {
+        return verdict(0, 0);
+    }
+    two_headers(v, iov, buf);
+    ts[0] = 5;
+    ts[1] = 0;
+    ok = send_two(sv[0]) && syscall5(SYS_RECVMMSG, sv[1], (long)v, 2, 0, (long)ts) == 2 &&
+         got_two(v, buf);
+    ok = ok && ts[1] >= 0 && ts[1] < 1000000000L && ts[0] >= 0 &&
+         (ts[0] < 5 || (ts[0] == 5 && ts[1] == 0)) && (ts[0] > 0 || ts[1] > 0);
+    if (!ok) {
+        return verdict(0, 1);
+    }
+    ts[0] = 0;
+    ts[1] = 1000000000L;
+    if (syscall5(SYS_RECVMMSG, sv[1], (long)v, 2, 0, (long)ts) != -22) {
+        return verdict(0, 2);
+    }
+#if !defined __x86_64__
+    {
+        unsigned int t64[4];
+
+        two_headers(v, iov, buf);
+        t64[0] = 5;
+        t64[1] = 0;
+        t64[2] = 0;
+        t64[3] = 0xFFFFFFFFu;
+        ok = send_two(sv[0]) &&
+             syscall5(SYS_RECVMMSG_TIME64, sv[1], (long)v, 2, 0, (long)t64) == 2 &&
+             got_two(v, buf) && t64[1] == 0 && t64[3] == 0 && t64[0] <= 5 && t64[2] < 1000000000u &&
+             (t64[0] > 0 || t64[2] > 0);
+        if (!ok) {
+            return verdict(0, 3);
+        }
+    }
+#endif
+    sys_close(sv[0]);
+    sys_close(sv[1]);
+    return verdict(1, -1);
+}
+
 /** Report the test `id`: held when `ok`, or failed with `why`; return `ok`. */
 static int report_test(const char *id, int ok, const char *why)
 {
@@ -236,7 +369,7 @@ void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
 
-/** The probe: the four tests in order, each printed OK or FAILED. `_start`
+/** The probe: the five tests in order, each printed OK or FAILED. `_start`
  * calls it with the initial stack, whose environment gives the case's
  * identity. */
 void probe_main(unsigned long *sp)
@@ -255,6 +388,7 @@ void probe_main(unsigned long *sp)
         report_plan("dup2-share");
         report_plan("fork-share");
         report_plan("exit-release");
+        report_plan("recvmmsg-timeout");
         report_stop("/proc/net/sockstat has no UDP count");
         sys_exit(1);
     }
@@ -267,8 +401,11 @@ void probe_main(unsigned long *sp)
                           "the socket shared by fork was not freed once by the two closes");
     passed += report_test("exit-release", exit_release(),
                           "a child's exit without a close left its socket counted");
+    passed += report_test("recvmmsg-timeout", recvmmsg_timeout(),
+                          "recvmmsg did not take both datagrams, give back the time left or "
+                          "refuse a timeout out of range");
     report_end();
-    failed = 4 - passed;
+    failed = 5 - passed;
 
     puts("");
     print("Results: ");
