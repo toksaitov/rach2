@@ -1,0 +1,13 @@
+22:18:14 check: fence 
+nctxcheck: fence: 16 GL syncs signalled in order
+nctxcheck: fence: sync file 8 polled ready
+nctxcheck: fence: inside 255,128,0,255 outside 0,0,128,255
+nctxcheck: fence: native fence exported, polled, imported and waited on
+nctxcheck: fence: result: pass
+22:18:14 check: fence: status 0
+host: no i915 events here
+host: dmesg:
+host: qemu's log:
+host: guest running
+guest: dmesg:
+session: fence: status 0

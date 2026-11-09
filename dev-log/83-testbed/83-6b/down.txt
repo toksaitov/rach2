@@ -1,0 +1,8 @@
+22:13:16 down: QEMU ended
+qemu's last lines:
+drm: drm_renderer_capset:159: c=(nil)
+gl_version 46 - core profile enabled
+drm: drm_renderer_capset:159: c=(nil)
+drm: drm_renderer_capset:159: c=(nil)
+drm: drm_renderer_capset:159: c=0x55826bb4aef8
+session: down: status 0

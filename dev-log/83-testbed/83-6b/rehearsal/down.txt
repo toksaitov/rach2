@@ -1,0 +1,5 @@
+22:18:20 down: QEMU ended
+qemu's last lines:
+gl_version 45 - core profile enabled
+GLSL feature level 450
+session: down: status 0

@@ -1,0 +1,12 @@
+22:18:09 check: pressure 64
+nctxcheck: pressure: 4 textures, 64 MiB, written in 0.34 s
+nctxcheck: pressure: read back in 0.15 s, 0 texels differ
+nctxcheck: pressure: copied by the GPU and read back in 0.14 s, 0 texels differ
+nctxcheck: pressure: result: pass
+22:18:10 check: pressure: status 0
+host: no i915 events here
+host: dmesg:
+host: qemu's log:
+host: guest running
+guest: dmesg:
+session: pressure: status 0

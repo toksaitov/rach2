@@ -1,0 +1,10 @@
+22:18:07 check: triangle 
+nctxcheck: triangle: inside 255,128,0,255 outside 0,0,128,255
+nctxcheck: triangle: result: pass
+22:18:08 check: triangle: status 0
+host: no i915 events here
+host: dmesg:
+host: qemu's log:
+host: guest running
+guest: dmesg:
+session: triangle: status 0

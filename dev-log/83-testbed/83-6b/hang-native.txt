@@ -1,0 +1,11 @@
+== Debian Mesa 25.0.7, native
+nctxcheck: hang: robust context: yes
+nctxcheck: hang: wait gave condition satisfied after 6.54 s
+nctxcheck: hang: reset status: guilty
+nctxcheck: hang: reset reported: at once
+nctxcheck: hang: gl error after: 0x0
+nctxcheck: hang: inside 255,128,0,255 outside 0,0,128,255
+nctxcheck: hang: result: pass
+[  450.728719] i915 0000:00:02.0: [drm] GPU HANG: ecode 7:1:85dffffc, in nctxcheck [4759]
+[  450.729797] i915 0000:00:02.0: [drm] Resetting rcs0 for stopped heartbeat on rcs0
+[  450.729892] i915 0000:00:02.0: [drm] nctxcheck[4759] context reset due to GPU hang

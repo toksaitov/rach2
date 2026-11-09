@@ -1,0 +1,26 @@
+22:10:22 check: hang 2147483647
+nctxcheck: hang: robust context: yes
+nctxcheck: hang: wait gave condition satisfied after 5.63 s
+nctxcheck: hang: reset status: none
+nctxcheck: hang: reset status after one more submission: none
+nctxcheck: hang: reset reported: never
+nctxcheck: hang: gl error after: 0x0
+nctxcheck: hang: inside 255,128,0,255 outside 0,0,128,255
+nctxcheck: hang: result: pass
+22:10:28 check: hang: status 0
+host: i915_gem_object_create: 25
+host: i915_vma_bind: 23
+host: i915_vma_unbind: 19
+host: i915_gem_evict: 0
+host: i915_gem_evict_node: 0
+host: i915_gem_evict_vm: 0
+host: i915_gem_shrink: 0
+host: i915_request_add: 10
+host: dmesg:
+[  442.537323] i915 0000:00:02.0: [drm] GPU HANG: ecode 7:1:85dffffc, in qemu-system-x86 [4197]
+[  442.538403] i915 0000:00:02.0: [drm] Resetting rcs0 for stopped heartbeat on rcs0
+[  442.538498] i915 0000:00:02.0: [drm] qemu-system-x86[4197] context reset due to GPU hang
+host: qemu's log:
+host: guest running
+guest: dmesg:
+session: hang: status 0

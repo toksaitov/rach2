@@ -1,0 +1,5 @@
+/dev/sda5        32G   28G  2.6G  92% /
+shmem_enabled: always within_size advise [never] deny force
+removed: /opt/rach2-nctx /srv/nctx
+/dev/sda5        32G   26G  4.5G  86% /
+22:13:17 leave: rtcwake -m off -s 120 in 2 s

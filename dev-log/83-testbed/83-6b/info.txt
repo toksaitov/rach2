@@ -1,0 +1,26 @@
+22:06:17 check: info 
+nctxcheck: info: egl vendor: Mesa Project
+nctxcheck: info: egl version: 1.5
+nctxcheck: info: render node: /dev/dri/renderD128
+nctxcheck: info: gl vendor: Intel
+nctxcheck: info: gl renderer: Mesa Intel(R) HD Graphics 4400 (HSW GT2)
+nctxcheck: info: gl version: OpenGL ES 3.2 Mesa 26.1.6
+nctxcheck: info: native fence: yes
+nctxcheck: info: robustness: yes
+nctxcheck: info: result: pass
+22:06:18 check: info: status 0
+host: i915_gem_object_create: 10
+host: i915_vma_bind: 0
+host: i915_vma_unbind: 0
+host: i915_gem_evict: 0
+host: i915_gem_evict_node: 0
+host: i915_gem_evict_vm: 0
+host: i915_gem_shrink: 0
+host: i915_request_add: 8
+host: dmesg:
+host: qemu's log:
+drm: drm_renderer_capset:159: c=(nil)
+drm: drm_renderer_capset:159: c=0x55826bb4aef8
+host: guest running
+guest: dmesg:
+session: info: status 0

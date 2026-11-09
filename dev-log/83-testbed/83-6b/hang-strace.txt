@@ -1,0 +1,21 @@
+/usr/bin/strace
+nctxcheck: hang: robust context: yes
+nctxcheck: hang: wait gave condition satisfied after 6.59 s
+nctxcheck: hang: reset status: none
+nctxcheck: hang: reset status after one more submission: none
+nctxcheck: hang: reset reported: never
+nctxcheck: hang: gl error after: 0x0
+nctxcheck: hang: inside 255,128,0,255 outside 0,0,128,255
+nctxcheck: hang: result: pass
+[  520.611635] i915 0000:00:02.0: [drm] GPU HANG: ecode 7:1:85dffffc, in qemu-system-x86 [4197]
+[  520.612819] i915 0000:00:02.0: [drm] qemu-system-x86[4197] context reset due to GPU hang
+3597 /srv/nctx/out/strace-hang.txt
+8
+      4  ioctl(49, DRM_IOCTL_I915_GEM_CONTEXT_SETPARAM, 0x55826bb4bb28) = -1 ENODEV (No such device)
+      1  ioctl(49, DRM_IOCTL_SET_CLIENT_NAME, 0x7fff793f0830) = -1 EINVAL (Invalid argument)
+      1  ioctl(49, DRM_IOCTL_I915_GETPARAM, 0x7fff793f0810) = -1 ENODEV (No such device)
+      1  ioctl(49, DRM_IOCTL_GET_UNIQUE, 0x7fff793f0550) = -1 EACCES (Permission denied)
+      1  <... ioctl resumed>, 0x7fff793f07c0) = -1 EIO (Input/output error)
+     26  ioctl(12, DRM_IOCTL_I915_GEM_EXECBUFFER2, 0x7fff793f02b0) = 0
+      3  ioctl(49, DRM_IOCTL_I915_GEM_EXECBUFFER2_WR <unfinished ...>
+      1  ioctl(49, DRM_IOCTL_I915_GEM_EXECBUFFER2_WR, 0x7fff793f07c0) = 0

@@ -1,0 +1,33 @@
+22:05:55 up: /srv/nctx/in/nctx-alone.qcow2, drm_native_context=on, kvm, render node /dev/dri/renderD128, 4 CPUs, 4096 MiB
+22:06:11 up: SSH answered after 16 s
+guest: kernel: 7.2.12+deb13-amd64
+guest: [    5.490183] [drm] pci: virtio-vga detected at 0000:00:03.0
+guest: [    5.503925] [drm] Host memory window: 0x7000000000 +0x100000000
+guest: [    5.505211] [drm] features: +virgl +edid +resource_blob +host_visible
+guest: [    5.505214] [drm] features: +context_init -blob_alignment
+guest: [    5.509487] [drm] number of scanouts: 1
+guest: [    5.510403] [drm] number of cap sets: 3
+guest: [    5.538216] [drm] cap set 0: id 1, max-version 1, max-size 308
+guest: [    5.541152] [drm] cap set 1: id 2, max-version 2, max-size 1408
+guest: [    5.544363] [drm] cap set 2: id 6, max-version 0, max-size 160
+guest: [    5.546619] virtio-pci 0000:00:03.0: [drm] Registered 1 planes with drm panic
+guest: [    5.567446] [drm] Initialized virtio_gpu 0.1.0 for 0000:00:03.0 on minor 0
+guest: [    5.623703] virtio-pci 0000:00:03.0: [drm] fb0: virtio_gpudrmfb frame buffer device
+guest: virgl            : yes
+guest: edid             : yes
+guest: indirect         : yes
+guest: resource uuid    : no
+guest: blob resources   : yes
+guest: context init     : yes
+guest: cap sets         : 3
+guest: scanouts         : 1
+guest: host visible region : 0x7000000000 +0x100000000
+guest: total 0
+guest: drwxr-xr-x 2 root root         80 Nov  9 22:06 by-path
+guest: crw-rw---- 1 root video  226,   0 Nov  9 22:06 card0
+guest: crw-rw---- 1 root render 226, 128 Nov  9 22:06 renderD128
+qemu's log:
+drm: drm_renderer_capset:159: c=(nil)
+gl_version 46 - core profile enabled
+drm: drm_renderer_capset:159: c=(nil)
+session: up: status 0

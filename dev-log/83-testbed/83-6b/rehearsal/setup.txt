@@ -1,0 +1,29 @@
+22:17:00 setup: from /home/gfx/nctx
+mesa-nctx.tar.xz: OK
+virglrenderer-nctx.tar.xz: OK
+qemu-nctx.tar.xz: OK
+packages added or changed:
+> busybox-static 1:1.37.0-6+b9
+> libfdt1 1.7.2-2+b1
+> libslirp0 4.8.0-1+deb13u1
+> qemu-system-data 1:10.0.13+ds-0+deb13u1
+> seabios 1.16.3-2
+kernel: 6.12.115+deb13.1-amd64
+cmdline: BOOT_IMAGE=/boot/vmlinuz-6.12.115+deb13.1-amd64 root=PARTUUID=138f3e8b-bdeb-47ac-84b8-f9df1662abc8 ro console=tty0 console=ttyS0,115200 earlyprintk=ttyS0,115200 consoleblank=0
+shmem_enabled: always within_size advise [never] deny force
+MemTotal:       16379992 kB
+MemAvailable:   15809888 kB
+SwapTotal:             0 kB
+cpus: 16
+00:03.0 VGA compatible controller [0300]: Device [1234:1111] (rev 02)
+	Subsystem: Red Hat, Inc. Device [1af4:1100]
+	Kernel driver in use: bochs-drm
+	Kernel modules: bochs
+render node: /dev/dri/renderD128
+qemu: QEMU emulator version 11.1.2
+qemu: drm_native_context=<bool>
+kvm: yes
+i915 events: 
+/dev/vda1        32G  2.3G   28G   8% /
+/dev/vda1        32G  2.3G   28G   8% /
+session: setup: status 0

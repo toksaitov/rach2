@@ -1,0 +1,19 @@
+22:18:15 check: hang 1000
+nctxcheck: no robust context: egl error 0x3009
+nctxcheck: hang: robust context: no
+nctxcheck: hang: wait gave condition satisfied after 0.04 s
+nctxcheck: hang: reset status: none
+nctxcheck: hang: reset status after 1 more submissions: none
+nctxcheck: hang: reset status after 2 more submissions: none
+nctxcheck: hang: reset status after 3 more submissions: none
+nctxcheck: hang: reset reported: never
+nctxcheck: hang: gl error after: 0x0
+nctxcheck: hang: inside 255,128,0,255 outside 0,0,128,255
+nctxcheck: hang: result: pass
+22:18:16 check: hang: status 0
+host: no i915 events here
+host: dmesg:
+host: qemu's log:
+host: guest running
+guest: dmesg:
+session: hang: status 0
