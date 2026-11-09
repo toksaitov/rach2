@@ -22,8 +22,8 @@
 # its last component, once COMMAND has succeeded, powers the guest off and
 # removes the overlay. It writes the run's record to RECORD, or to standard
 # error: the profile, firmware, accelerator, processor, CPUs, memory, QEMU's
-# version, the image and the guest's environment. It exits with COMMAND's
-# status, or 1 when a file of -o cannot be copied.
+# version, the image, the claim it ran in and the guest's environment. It
+# exits with COMMAND's status, or 1 when a file of -o cannot be copied.
 #
 # On a machine with an installed site policy, /etc/rach2/etude-site or the
 # file ETUDE_SITE names, `run` runs as one claim of the site's ledger through
@@ -245,6 +245,7 @@ run()
         echo "qemu $(qemu-system-x86_64 --version | head -n 1)"
         echo "image $(basename "$base") sha512 $(pin sha512)"
         echo "snapshot $(pin snapshot)"
+        [ -z "${DEBIAN_REF_CLAIM:-}" ] || echo "claim $DEBIAN_REF_CLAIM"
     } > "$work/record"
     status=0
     # shellcheck disable=SC2086 # opts are words

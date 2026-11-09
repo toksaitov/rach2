@@ -37,7 +37,8 @@ PROGS = hello forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe 
         usercopyfault fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe trapprobe ofdprobe \
         waitprobe exitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
         ptyprobe rngprobe orphanprobe loopprobe zombieprobe survivorprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe xsaveprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe ext2probe krffsprobe loopdevprobe bootlogprobe lockwaitprobe \
-        idreport fdfull diskfull oomprobe limitprobe limitsprobe loadprobe conloadprobe partsprobe busprobe ahciprobe bigfileprobe blankprobe lenovoacpi watchdogprobe
+        idreport fdfull diskfull oomprobe limitprobe limitsprobe loadprobe conloadprobe partsprobe busprobe ahciprobe bigfileprobe blankprobe lenovoacpi watchdogprobe \
+        drmcapture
 
 # The probes of an interface only i386 has, built for i686 alone: tlsprobe
 # tests set_thread_area and the %gs thread pointer, where x86-64 keeps the
@@ -94,6 +95,15 @@ $(BUILD)/dnstest: dnstest.c ../utils/resolv.c ../utils/netdb.h \
 	@mkdir -p $(dir $@)
 	$(MUSL_CC) $(MUSL_CFLAGS) -MF $(BUILD)/dnstest.d -o $@ \
 	    $(MUSL_PRE) dnstest.c ../utils/resolv.c $(MUSL_POST)
+
+# drmcapture, the graphics tests' capture of a scanout, is hosted C that
+# Debian's gcc builds from the same source for the reference guest, so it
+# links the ported musl too (tests/graphics/Readme.md).
+$(BUILD)/drmcapture: graphics/capture/drmcapture.c \
+    $(MUSL_PRE) $(MUSL_PREFIX)/lib/libc.a $(MUSL_LIBGCC) $(MUSL_PREFIX)/lib/crtn.o
+	@mkdir -p $(dir $@)
+	$(MUSL_CC) $(MUSL_CFLAGS) -std=c99 -MF $(BUILD)/drmcapture.d -o $@ \
+	    $(MUSL_PRE) graphics/capture/drmcapture.c $(MUSL_POST)
 
 -include $(addprefix $(BUILD)/, $(PROGS:=.d))
 
