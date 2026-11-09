@@ -16,6 +16,7 @@ The manager runs a milestone as the Milestones, Work and Testing sections of `AG
 * On the owner's approval:
   * make the GitHub milestone: `gh api repos/toksaitov/rach2/milestones -f title="NN name" -f description="Branch: BRANCH"`, BRANCH being `milestone/NN-name`, or for a later milestone of a stack the first one's;
   * cut the branch from master and push it, unless the milestone joins a stack's branch;
+  * title each task and subtask in one short plain line that says what the work does, the plan's id after it, such as "Submit GPU work to the Intel driver (78-5b)";
   * file each task as an issue in the milestone, and each subtask as an issue in the milestone linked under its task with `gh api repos/toksaitov/rach2/issues/TASK/sub_issues -F sub_issue_id=ID`, ID being the subtask's `id`, not its number;
   * file a task that only ends on the Lenovo with no `owner-only` label, since its worker adds the label at that step; only a task that is nothing but a step on the Lenovo is filed with it;
   * mark each task that waits on another as blocked by it with `gh api repos/toksaitov/rach2/issues/N/dependencies/blocked_by -F issue_id=ID`, ID the blocker's `id`, so that `board.sh next` offers it only once the blocker is closed;
