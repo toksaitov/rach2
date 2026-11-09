@@ -2692,6 +2692,15 @@ static uint32_t _enosys_big_num = 0;
 
 static uint32_t _enosys_big_pid = 0xFFFFFFFFu;
 
+/** Whether an ioctl, with the arguments in `params`, that failed with
+ * EINTR may be restarted: not one of KVM's (type 0xAE), whose EINTR Linux
+ * gives the caller as it is, as KVM_RUN's after a signal or immediate_exit,
+ * which QEMU waits for. */
+static int ioctl_restartable(const isr_params_t *params)
+{
+    return (((uint32_t)SC_ARG(params, 1) >> 8) & 0xFFu) != 0xAEu;
+}
+
 /**
  * Whether the call the handler `fn` answers, with the arguments in `params`,
  * which a signal interrupted with EINTR, may be restarted, by a signal no
@@ -2699,12 +2708,16 @@ static uint32_t _enosys_big_pid = 0xFFFFFFFFu;
  * the ones Linux never restarts after a handler, which wait for a signal or
  * for a deadline, a timed futex wait among them (`futex_restartable`), or
  * for a System V semaphore or queue, those through ipc(2) among them
- * (`sysv_ipc_restartable`); and the two returns from a handler, whose result
- * register is the interrupted call's. The call is told by its handler, since
+ * (`sysv_ipc_restartable`); an ioctl of KVM's (`ioctl_restartable`); and
+ * the two returns from a handler, whose result register is the interrupted
+ * call's. The call is told by its handler, since
  * its number differs between the architectures.
  */
 static int syscall_restartable(syscall_fn_t fn, const isr_params_t *params)
 {
+    if (fn == sys_ioctl) {
+        return ioctl_restartable(params);
+    }
     if (fn == sys_futex) {
         return futex_restartable(params);
     }
