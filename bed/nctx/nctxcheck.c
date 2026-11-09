@@ -89,6 +89,9 @@ typedef uint64_t GLuint64;
 #define GL_FRAMEBUFFER                0x8D40
 #define GL_FRAMEBUFFER_COMPLETE       0x8CD5
 #define GL_COLOR_ATTACHMENT0          0x8CE0
+#define GL_READ_FRAMEBUFFER           0x8CA8
+#define GL_DRAW_FRAMEBUFFER           0x8CA9
+#define GL_NEAREST                    0x2600
 #define GL_ARRAY_BUFFER               0x8892
 #define GL_STATIC_DRAW                0x88E4
 #define GL_FRAGMENT_SHADER            0x8B30
@@ -143,6 +146,8 @@ static void (*glGenFramebuffers_)(GLsizei, GLuint *);
 static void (*glDeleteFramebuffers_)(GLsizei, const GLuint *);
 static void (*glBindFramebuffer_)(GLenum, GLuint);
 static void (*glFramebufferTexture2D_)(GLenum, GLenum, GLenum, GLuint, GLint);
+static void (*glBlitFramebuffer_)(GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint,
+                                  GLbitfield, GLenum);
 static GLenum (*glCheckFramebufferStatus_)(GLenum);
 static void (*glGenBuffers_)(GLsizei, GLuint *);
 static void (*glBindBuffer_)(GLenum, GLuint);
@@ -264,6 +269,7 @@ static int resolve(void)
     NEED(glDeleteFramebuffers_, "glDeleteFramebuffers");
     NEED(glBindFramebuffer_, "glBindFramebuffer");
     NEED(glFramebufferTexture2D_, "glFramebufferTexture2D");
+    NEED(glBlitFramebuffer_, "glBlitFramebuffer");
     NEED(glCheckFramebufferStatus_, "glCheckFramebufferStatus");
     NEED(glGenBuffers_, "glGenBuffers");
     NEED(glBindBuffer_, "glBindBuffer");
@@ -540,20 +546,47 @@ static uint32_t word(unsigned t, unsigned i)
 }
 
 /**
+ * compare - read the bound framebuffer, SIDE x SIDE, into BUF and count the
+ * texels that differ from texture T's pattern and corner.
+ */
+static unsigned compare(unsigned t, uint32_t *buf)
+{
+    unsigned x, y, bad = 0;
+
+    memset(buf, 0, (size_t)SIDE * SIDE * 4);
+    glReadPixels_(0, 0, SIDE, SIDE, GL_RGBA, GL_UNSIGNED_BYTE, buf);
+    for (y = 0; y < SIDE; y++)
+        for (x = 0; x < SIDE; x++) {
+            const GLubyte *p = (const GLubyte *)&buf[y * SIDE + x];
+
+            if (x < 64 && y < 64) {
+                if (!same(p, t & 255, 255, (t >> 8) & 255, 255))
+                    bad++;
+            } else if (buf[y * SIDE + x] != word(t, y * SIDE + x)) {
+                bad++;
+            }
+        }
+    return bad;
+}
+
+/**
  * pressure - textures of 16 MiB up to MIB, each filled from the CPU and then
- * drawn into by the GPU (a 64 x 64 corner in a colour of its own), then all
- * read back in the reverse order, newest last bound first.
+ * drawn into by the GPU (a 64 x 64 corner in a colour of its own); then all
+ * read back in the reverse order, and then all copied by the GPU, oldest
+ * first, into one target that is read back after each copy.
  *
  * Once the textures outgrow what the host's GPU can keep bound, its driver
- * must evict older ones to bind newer and bind them again for the
- * read-back; the host's counters around this run show how many times.
- * Every texel is compared with what was written.
+ * must evict older ones to bind newer. The first read-back may go through
+ * the CPU's mappings, which need no binding; the GPU's copies must bind each
+ * evicted texture again. The host's counters around this run show how many
+ * times. Every texel is compared with what was written, in both passes.
  */
 static int pressure(int mib)
 {
-    unsigned n = mib / TEX_MIB, t, i, x, y, bad = 0;
+    unsigned n = mib / TEX_MIB, t, i, bad = 0;
     uint32_t *buf = malloc((size_t)SIDE * SIDE * 4);
     GLuint *tex = calloc(n, sizeof(*tex)), *fb = calloc(n, sizeof(*fb)), prog;
+    GLuint sink, sinktex;
     double t0;
 
     if (!buf || !tex || !fb || n == 0)
@@ -587,22 +620,23 @@ static int pressure(int mib)
     t0 = now();
     for (t = n; t-- > 0;) {
         glBindFramebuffer_(GL_FRAMEBUFFER, fb[t]);
-        memset(buf, 0, (size_t)SIDE * SIDE * 4);
-        glReadPixels_(0, 0, SIDE, SIDE, GL_RGBA, GL_UNSIGNED_BYTE, buf);
-        for (y = 0; y < SIDE; y++)
-            for (x = 0; x < SIDE; x++) {
-                uint32_t want = word(t, y * SIDE + x);
-                const GLubyte *p = (const GLubyte *)&buf[y * SIDE + x];
-
-                if (x < 64 && y < 64) {
-                    if (!same(p, t & 255, 255, (t >> 8) & 255, 255))
-                        bad++;
-                } else if (buf[y * SIDE + x] != want) {
-                    bad++;
-                }
-            }
+        bad += compare(t, buf);
     }
     printf("nctxcheck: pressure: read back in %.2f s, %u texels differ\n", now() - t0, bad);
+    if (!(sink = target(SIDE, SIDE, &sinktex)))
+        return fail("framebuffer incomplete");
+    t0 = now();
+    for (t = 0; t < n; t++) {
+        glBindFramebuffer_(GL_READ_FRAMEBUFFER, fb[t]);
+        glBindFramebuffer_(GL_DRAW_FRAMEBUFFER, sink);
+        glBlitFramebuffer_(0, 0, SIDE, SIDE, 0, 0, SIDE, SIDE, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer_(GL_FRAMEBUFFER, sink);
+        bad += compare(t, buf);
+    }
+    printf("nctxcheck: pressure: copied by the GPU and read back in %.2f s, %u texels differ\n",
+           now() - t0, bad);
+    glDeleteFramebuffers_(1, &sink);
+    glDeleteTextures_(1, &sinktex);
     for (t = 0; t < n; t++) {
         glDeleteFramebuffers_(1, &fb[t]);
         glDeleteTextures_(1, &tex[t]);
@@ -731,24 +765,36 @@ static int fence(void)
     return pass();
 }
 
+/** reset_name - the name of a reset status, as the hang check prints it. */
+static const char *reset_name(GLenum st)
+{
+    return st == GL_NO_ERROR                 ? "none"
+           : st == GL_GUILTY_CONTEXT_RESET   ? "guilty"
+           : st == GL_INNOCENT_CONTEXT_RESET ? "innocent"
+           : st == GL_UNKNOWN_CONTEXT_RESET  ? "unknown"
+                                             : "other";
+}
+
 /**
  * hang - a robust context's full-target draw whose every pixel loops LOOPS
- * times, waited on for up to 120 s; then the context's reset status, and a
+ * times, waited on for up to 120 s; then the context's reset status, again
+ * after each of up to three more submissions while it gives none, and a
  * triangle in a new context to show the GPU serves again.
  *
  * With a large LOOPS the draw outlasts the host's hang check, so the host's
  * driver resets the GPU and fails the batch's fence: how that reaches the
- * guest (the wait's result, the reset status, a lost context) is what this
- * reports. The pass needs only the new context's triangle.
+ * guest (the wait's result, the reset status at once or only after the
+ * context submits again) is what this reports, in the line `reset
+ * reported:`. The pass needs only the new context's triangle.
  */
 static int hang(int loops)
 {
     EGLContext ctx;
     GLuint prog, tex;
     GLsync s;
-    GLenum r, st = 0;
+    GLenum r, st = GL_NO_ERROR, st2 = GL_NO_ERROR;
     double t0;
-    int robust = 1;
+    int robust = 1, k;
 
     if (!(ctx = context(1))) {
         robust = 0;
@@ -775,11 +821,23 @@ static int hang(int loops)
            now() - t0);
     if (glGetGraphicsResetStatus_) {
         st = glGetGraphicsResetStatus_();
-        printf("nctxcheck: hang: reset status: %s\n", st == GL_NO_ERROR                 ? "none"
-                                                      : st == GL_GUILTY_CONTEXT_RESET   ? "guilty"
-                                                      : st == GL_INNOCENT_CONTEXT_RESET ? "innocent"
-                                                      : st == GL_UNKNOWN_CONTEXT_RESET  ? "unknown"
-                                                                                        : "other");
+        printf("nctxcheck: hang: reset status: %s\n", reset_name(st));
+        /* Up to three more submissions on the same context, asking after
+         * each, while none is reported. */
+        for (k = 1; st == GL_NO_ERROR && st2 == GL_NO_ERROR && k <= 3; k++) {
+            glClearColor_(0.0f, 0.0f, k / 3.0f, 1.0f);
+            glClear_(GL_COLOR_BUFFER_BIT);
+            glFinish_();
+            st2 = glGetGraphicsResetStatus_();
+            printf("nctxcheck: hang: reset status after %d more submissions: %s\n", k,
+                   reset_name(st2));
+        }
+        if (st != GL_NO_ERROR)
+            printf("nctxcheck: hang: reset reported: at once\n");
+        else if (st2 != GL_NO_ERROR)
+            printf("nctxcheck: hang: reset reported: after %d more submissions\n", k - 1);
+        else
+            printf("nctxcheck: hang: reset reported: never\n");
     } else {
         printf("nctxcheck: hang: reset status: no query\n");
     }

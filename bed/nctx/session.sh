@@ -9,6 +9,7 @@
 #   session.sh capsets          guest.sh capsets on the GPU's render node
 #   session.sh up IMAGE         boot IMAGE, the stack's guest, under the
 #                               bed's QEMU and build nctxcheck in it
+#   session.sh build            build nctxcheck again in the running guest
 #   session.sh check NAME ARGS  nctxcheck NAME ARGS in the guest, with the
 #                               host's i915 events counted around it
 #   session.sh down             power the guest off
@@ -34,9 +35,10 @@ GUEST_MIB=${GUEST_MIB:-$(awk '/MemTotal/ { print ($2 >= 12 * 1048576) ? 4096 : 2
 GUEST_CPUS=${GUEST_CPUS:-4}
 T=/sys/kernel/tracing
 SH=/sys/kernel/mm/transparent_hugepage/shmem_enabled
-# The i915 events counted around each check: bindings into the GPU's
-# address space, their removal, evictions to make room, and requests.
-EVENTS="i915_vma_bind i915_vma_unbind i915_gem_evict i915_gem_evict_node i915_gem_evict_vm i915_request_add"
+# The i915 events counted around each check: objects made, bindings into
+# the GPU's address space, their removal, evictions to make room, the
+# shrinker's passes under memory pressure, and requests.
+EVENTS="i915_gem_object_create i915_vma_bind i915_vma_unbind i915_gem_evict i915_gem_evict_node i915_gem_evict_vm i915_gem_shrink i915_request_add"
 
 say() { echo "$(date -u +%T) $*"; }
 
@@ -169,8 +171,7 @@ up()
         sleep 5
     done
     say "up: SSH answered after $(($(date +%s) - t0)) s"
-    g 'cat > nctxcheck.c' < "$here/nctxcheck.c"
-    g 'cc -std=c99 -O2 -Wall -Wextra -o nctxcheck nctxcheck.c -ldl' < /dev/null || die "up: nctxcheck did not build"
+    build
     echo "guest: kernel: $(g uname -r < /dev/null)"
     g 'sudo dmesg' < /dev/null | grep -i -E 'virtio.gpu|\[drm\]|cap set' | sed 's/^/guest: /'
     # The first of the card's directories in debugfs, which root alone reads.
@@ -178,6 +179,15 @@ up()
     g 'ls -l /dev/dri' < /dev/null | sed 's/^/guest: /'
     echo "qemu's log:"
     cat "$OUT/qemu.log"
+}
+
+# build: copy nctxcheck.c into the guest and build it there.
+build()
+{
+    g 'cat > nctxcheck.c' < "$here/nctxcheck.c"
+    g 'cc -std=c99 -O2 -Wall -Wextra -o nctxcheck nctxcheck.c -ldl' < /dev/null ||
+        die "build: nctxcheck did not build"
+    echo "build: nctxcheck built"
 }
 
 # hist_on, hist_off: count each i915 event in the kernel by a histogram
@@ -312,9 +322,10 @@ case ${1:-} in
     setup) step setup setup "$2" ;;
     capsets) step capsets capsets ;;
     up) step up up "$2" ;;
+    build) step build build ;;
     check) shift; n=$1; shift; step "$n" check "$n" "$@" ;;
     down) step down down ;;
     all) all "$2" "$3" ;;
     leave) leave "${2:-}" ;;
-    *) sed -n '2,24p' "$0" >&2; exit 2 ;;
+    *) sed -n '2,23p' "$0" >&2; exit 2 ;;
 esac
