@@ -1,0 +1,1351 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.webgl",
+  "summary": "The WebGL conformance suite, versions 1.0.4 and 2.0.1, in chunks of 250 pages in Chromium and Firefox ESR on the GNU root under the virtio-vga profile, each judged page by page against the Debian reference guest's stored run; the runner is tests/graphics/runners/webgl.sh and the scenario tests/cases/machine/graphics_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.webgl.chromium-webgl1-00",
+      "behavior": "pages 0 to 249 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "1.0.4", "chunk": "00", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-1.0.4/chromium-1.0.4-00.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 1.0.4 00 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl1-01",
+      "behavior": "pages 250 to 499 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "1.0.4", "chunk": "01", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-1.0.4/chromium-1.0.4-01.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 1.0.4 01 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl1-02",
+      "behavior": "pages 500 to 749 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "1.0.4", "chunk": "02", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-1.0.4/chromium-1.0.4-02.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 1.0.4 02 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl1-03",
+      "behavior": "pages 750 to 999 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "1.0.4", "chunk": "03", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-1.0.4/chromium-1.0.4-03.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 1.0.4 03 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl2-00",
+      "behavior": "pages 0 to 249 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "2.0.1", "chunk": "00", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-2.0.1/chromium-2.0.1-00.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 00 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl2-01",
+      "behavior": "pages 250 to 499 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "2.0.1", "chunk": "01", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-2.0.1/chromium-2.0.1-01.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 01 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl2-02",
+      "behavior": "pages 500 to 749 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "2.0.1", "chunk": "02", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-2.0.1/chromium-2.0.1-02.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 02 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl2-03",
+      "behavior": "pages 750 to 999 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "2.0.1", "chunk": "03", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-2.0.1/chromium-2.0.1-03.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 03 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl2-04",
+      "behavior": "pages 1000 to 1249 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "2.0.1", "chunk": "04", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-2.0.1/chromium-2.0.1-04.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 04 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl2-05",
+      "behavior": "pages 1250 to 1499 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "2.0.1", "chunk": "05", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-2.0.1/chromium-2.0.1-05.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 05 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl2-06",
+      "behavior": "pages 1500 to 1749 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "2.0.1", "chunk": "06", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-2.0.1/chromium-2.0.1-06.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 06 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl2-07",
+      "behavior": "pages 1750 to 1999 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "2.0.1", "chunk": "07", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-2.0.1/chromium-2.0.1-07.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 07 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl2-08",
+      "behavior": "pages 2000 to 2249 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "2.0.1", "chunk": "08", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-2.0.1/chromium-2.0.1-08.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 08 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl2-09",
+      "behavior": "pages 2250 to 2499 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "2.0.1", "chunk": "09", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-2.0.1/chromium-2.0.1-09.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 09 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl2-10",
+      "behavior": "pages 2500 to 2749 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "2.0.1", "chunk": "10", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-2.0.1/chromium-2.0.1-10.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 10 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.chromium-webgl2-11",
+      "behavior": "pages 2750 to 2999 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Chromium under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Chromium", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "version": "2.0.1", "chunk": "11", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-chromium-2.0.1/chromium-2.0.1-11.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b chromium -v 2.0.1 11 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl1-00",
+      "behavior": "pages 0 to 249 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "1.0.4", "chunk": "00", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-1.0.4/firefox-1.0.4-00.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 1.0.4 00 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl1-01",
+      "behavior": "pages 250 to 499 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "1.0.4", "chunk": "01", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-1.0.4/firefox-1.0.4-01.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 1.0.4 01 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl1-02",
+      "behavior": "pages 500 to 749 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "1.0.4", "chunk": "02", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-1.0.4/firefox-1.0.4-02.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 1.0.4 02 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl1-03",
+      "behavior": "pages 750 to 999 of the WebGL conformance suite's list for version 1.0.4, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "1.0.4", "chunk": "03", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-1.0.4/firefox-1.0.4-03.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 1.0.4 03 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl2-00",
+      "behavior": "pages 0 to 249 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "2.0.1", "chunk": "00", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-2.0.1/firefox-2.0.1-00.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 00 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl2-01",
+      "behavior": "pages 250 to 499 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "2.0.1", "chunk": "01", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-2.0.1/firefox-2.0.1-01.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 01 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl2-02",
+      "behavior": "pages 500 to 749 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "2.0.1", "chunk": "02", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-2.0.1/firefox-2.0.1-02.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 02 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl2-03",
+      "behavior": "pages 750 to 999 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "2.0.1", "chunk": "03", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-2.0.1/firefox-2.0.1-03.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 03 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl2-04",
+      "behavior": "pages 1000 to 1249 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "2.0.1", "chunk": "04", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-2.0.1/firefox-2.0.1-04.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 04 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl2-05",
+      "behavior": "pages 1250 to 1499 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "2.0.1", "chunk": "05", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-2.0.1/firefox-2.0.1-05.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 05 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl2-06",
+      "behavior": "pages 1500 to 1749 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "2.0.1", "chunk": "06", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-2.0.1/firefox-2.0.1-06.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 06 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl2-07",
+      "behavior": "pages 1750 to 1999 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "2.0.1", "chunk": "07", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-2.0.1/firefox-2.0.1-07.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 07 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl2-08",
+      "behavior": "pages 2000 to 2249 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "2.0.1", "chunk": "08", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-2.0.1/firefox-2.0.1-08.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 08 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl2-09",
+      "behavior": "pages 2250 to 2499 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "2.0.1", "chunk": "09", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-2.0.1/firefox-2.0.1-09.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 09 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl2-10",
+      "behavior": "pages 2500 to 2749 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "2.0.1", "chunk": "10", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-2.0.1/firefox-2.0.1-10.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 10 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.webgl.firefox-webgl2-11",
+      "behavior": "pages 2750 to 2999 of the WebGL conformance suite's list for version 2.0.1, each run through the suite's own harness in Firefox under a headless Weston on llvmpipe, the chunk in a new browser and each page that does not pass once more, pass as they do in the Debian reference guest, page by page, with at least as many subtests passed",
+      "units": ["tests/graphics/runners/webgl.sh", "tests/graphics/runners/webgl.html", "tests/graphics/runners/judge.py", "Firefox ESR", "Mesa's llvmpipe"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "version": "2.0.1", "chunk": "11", "pages": 250, "reference": "tests/graphics/ref/debian/virtio-vga/webgl-firefox-2.0.1/firefox-2.0.1-11.pages"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run webgl.sh -b firefox -v 2.0.1 11 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py webgl on the chunk's pages file and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    }
+  ]
+}

@@ -1,0 +1,523 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.video",
+  "summary": "H.264, VP9 and AV1 clips at 720p and 1080p in Chromium and Firefox ESR on the GNU root under the virtio-vga profile, frames shown and dropped and the decoder judged against the Debian reference guest's stored plays; the runner is tests/graphics/runners/video.sh and the scenario tests/cases/machine/graphics_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.video.chromium-h264-720p",
+      "behavior": "Chromium plays the 10 s H.264 clip at 720p, muted and fullscreen under a headless Weston, once to warm up and three times counted, each to its end with no media error, showing at least the frames the Debian reference guest showed, dropping a median no more than the most Debian dropped in one play, and with the decoder Debian's Chromium chose",
+      "units": ["tests/graphics/runners/video.sh", "tests/graphics/runners/video.html", "tests/graphics/runners/judge.py", "Chromium"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "clip": "h264-720p.mp4", "warmup": 1, "repetitions": 3, "reference": "tests/graphics/ref/debian/virtio-vga/video-chromium/chromium-h264-720p.mp4.plays"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, and the clips, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b chromium h264-720p.mp4 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "clips", "node": "tests/cases/graphics/clips.tar", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.video.chromium-h264-1080p",
+      "behavior": "Chromium plays the 10 s H.264 clip at 1080p, muted and fullscreen under a headless Weston, once to warm up and three times counted, each to its end with no media error, showing at least the frames the Debian reference guest showed, dropping a median no more than the most Debian dropped in one play, and with the decoder Debian's Chromium chose",
+      "units": ["tests/graphics/runners/video.sh", "tests/graphics/runners/video.html", "tests/graphics/runners/judge.py", "Chromium"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "clip": "h264-1080p.mp4", "warmup": 1, "repetitions": 3, "reference": "tests/graphics/ref/debian/virtio-vga/video-chromium/chromium-h264-1080p.mp4.plays"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, and the clips, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b chromium h264-1080p.mp4 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "clips", "node": "tests/cases/graphics/clips.tar", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.video.chromium-vp9-720p",
+      "behavior": "Chromium plays the 10 s VP9 clip at 720p, muted and fullscreen under a headless Weston, once to warm up and three times counted, each to its end with no media error, showing at least the frames the Debian reference guest showed, dropping a median no more than the most Debian dropped in one play, and with the decoder Debian's Chromium chose",
+      "units": ["tests/graphics/runners/video.sh", "tests/graphics/runners/video.html", "tests/graphics/runners/judge.py", "Chromium"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "clip": "vp9-720p.webm", "warmup": 1, "repetitions": 3, "reference": "tests/graphics/ref/debian/virtio-vga/video-chromium/chromium-vp9-720p.webm.plays"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, and the clips, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b chromium vp9-720p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "clips", "node": "tests/cases/graphics/clips.tar", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.video.chromium-vp9-1080p",
+      "behavior": "Chromium plays the 10 s VP9 clip at 1080p, muted and fullscreen under a headless Weston, once to warm up and three times counted, each to its end with no media error, showing at least the frames the Debian reference guest showed, dropping a median no more than the most Debian dropped in one play, and with the decoder Debian's Chromium chose",
+      "units": ["tests/graphics/runners/video.sh", "tests/graphics/runners/video.html", "tests/graphics/runners/judge.py", "Chromium"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "clip": "vp9-1080p.webm", "warmup": 1, "repetitions": 3, "reference": "tests/graphics/ref/debian/virtio-vga/video-chromium/chromium-vp9-1080p.webm.plays"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, and the clips, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b chromium vp9-1080p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "clips", "node": "tests/cases/graphics/clips.tar", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.video.chromium-av1-720p",
+      "behavior": "Chromium plays the 10 s AV1 clip at 720p, muted and fullscreen under a headless Weston, once to warm up and three times counted, each to its end with no media error, showing at least the frames the Debian reference guest showed, dropping a median no more than the most Debian dropped in one play, and with the decoder Debian's Chromium chose",
+      "units": ["tests/graphics/runners/video.sh", "tests/graphics/runners/video.html", "tests/graphics/runners/judge.py", "Chromium"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "clip": "av1-720p.webm", "warmup": 1, "repetitions": 3, "reference": "tests/graphics/ref/debian/virtio-vga/video-chromium/chromium-av1-720p.webm.plays"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, and the clips, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b chromium av1-720p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "clips", "node": "tests/cases/graphics/clips.tar", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.video.chromium-av1-1080p",
+      "behavior": "Chromium plays the 10 s AV1 clip at 1080p, muted and fullscreen under a headless Weston, once to warm up and three times counted, each to its end with no media error, showing at least the frames the Debian reference guest showed, dropping a median no more than the most Debian dropped in one play, and with the decoder Debian's Chromium chose",
+      "units": ["tests/graphics/runners/video.sh", "tests/graphics/runners/video.html", "tests/graphics/runners/judge.py", "Chromium"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "chromium", "clip": "av1-1080p.webm", "warmup": 1, "repetitions": 3, "reference": "tests/graphics/ref/debian/virtio-vga/video-chromium/chromium-av1-1080p.webm.plays"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, and the clips, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b chromium av1-1080p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "clips", "node": "tests/cases/graphics/clips.tar", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.video.firefox-h264-720p",
+      "behavior": "Firefox ESR plays the 10 s H.264 clip at 720p, muted and fullscreen under a headless Weston, once to warm up and three times counted, each to its end with no media error, showing at least the frames the Debian reference guest showed, dropping a median no more than the most Debian dropped in one play, and with the decoder Debian's Firefox chose",
+      "units": ["tests/graphics/runners/video.sh", "tests/graphics/runners/video.html", "tests/graphics/runners/judge.py", "Firefox ESR"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "clip": "h264-720p.mp4", "warmup": 1, "repetitions": 3, "reference": "tests/graphics/ref/debian/virtio-vga/video-firefox/firefox-h264-720p.mp4.plays"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, and the clips, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b firefox h264-720p.mp4 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "clips", "node": "tests/cases/graphics/clips.tar", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.video.firefox-h264-1080p",
+      "behavior": "Firefox ESR plays the 10 s H.264 clip at 1080p, muted and fullscreen under a headless Weston, once to warm up and three times counted, each to its end with no media error, showing at least the frames the Debian reference guest showed, dropping a median no more than the most Debian dropped in one play, and with the decoder Debian's Firefox chose",
+      "units": ["tests/graphics/runners/video.sh", "tests/graphics/runners/video.html", "tests/graphics/runners/judge.py", "Firefox ESR"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "clip": "h264-1080p.mp4", "warmup": 1, "repetitions": 3, "reference": "tests/graphics/ref/debian/virtio-vga/video-firefox/firefox-h264-1080p.mp4.plays"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, and the clips, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b firefox h264-1080p.mp4 as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "clips", "node": "tests/cases/graphics/clips.tar", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.video.firefox-vp9-720p",
+      "behavior": "Firefox ESR plays the 10 s VP9 clip at 720p, muted and fullscreen under a headless Weston, once to warm up and three times counted, each to its end with no media error, showing at least the frames the Debian reference guest showed, dropping a median no more than the most Debian dropped in one play, and with the decoder Debian's Firefox chose",
+      "units": ["tests/graphics/runners/video.sh", "tests/graphics/runners/video.html", "tests/graphics/runners/judge.py", "Firefox ESR"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "clip": "vp9-720p.webm", "warmup": 1, "repetitions": 3, "reference": "tests/graphics/ref/debian/virtio-vga/video-firefox/firefox-vp9-720p.webm.plays"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, and the clips, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b firefox vp9-720p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "clips", "node": "tests/cases/graphics/clips.tar", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.video.firefox-vp9-1080p",
+      "behavior": "Firefox ESR plays the 10 s VP9 clip at 1080p, muted and fullscreen under a headless Weston, once to warm up and three times counted, each to its end with no media error, showing at least the frames the Debian reference guest showed, dropping a median no more than the most Debian dropped in one play, and with the decoder Debian's Firefox chose",
+      "units": ["tests/graphics/runners/video.sh", "tests/graphics/runners/video.html", "tests/graphics/runners/judge.py", "Firefox ESR"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "clip": "vp9-1080p.webm", "warmup": 1, "repetitions": 3, "reference": "tests/graphics/ref/debian/virtio-vga/video-firefox/firefox-vp9-1080p.webm.plays"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, and the clips, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b firefox vp9-1080p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "clips", "node": "tests/cases/graphics/clips.tar", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.video.firefox-av1-720p",
+      "behavior": "Firefox ESR plays the 10 s AV1 clip at 720p, muted and fullscreen under a headless Weston, once to warm up and three times counted, each to its end with no media error, showing at least the frames the Debian reference guest showed, dropping a median no more than the most Debian dropped in one play, and with the decoder Debian's Firefox chose",
+      "units": ["tests/graphics/runners/video.sh", "tests/graphics/runners/video.html", "tests/graphics/runners/judge.py", "Firefox ESR"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "clip": "av1-720p.webm", "warmup": 1, "repetitions": 3, "reference": "tests/graphics/ref/debian/virtio-vga/video-firefox/firefox-av1-720p.webm.plays"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, and the clips, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b firefox av1-720p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "clips", "node": "tests/cases/graphics/clips.tar", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    },
+    {
+      "case_id": "machine.video.firefox-av1-1080p",
+      "behavior": "Firefox ESR plays the 10 s AV1 clip at 1080p, muted and fullscreen under a headless Weston, once to warm up and three times counted, each to its end with no media error, showing at least the frames the Debian reference guest showed, dropping a median no more than the most Debian dropped in one play, and with the decoder Debian's Firefox chose",
+      "units": ["tests/graphics/runners/video.sh", "tests/graphics/runners/video.html", "tests/graphics/runners/judge.py", "Firefox ESR"],
+      "domain": "machine",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {"browser": "firefox", "clip": "av1-1080p.webm", "warmup": 1, "repetitions": 3, "reference": "tests/graphics/ref/debian/virtio-vga/video-firefox/firefox-av1-1080p.webm.plays"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "hosts": ["linux"]},
+      "execution": {"program": "graphics_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}], "children": "none", "cleanup": "libetude-case stops the machine and removes the overlay, which it keeps after a failure"},
+      "steps": [
+        {"step_id": "boot", "stage": "boot", "machine": "gnu", "does": "boot an overlay of the GNU system's disk on AHCI with rach2.root=ext2 and the virtio-vga display, wait for the root and the login prompt, log in as root at the console and open the framed guest channel"},
+        {"step_id": "stage", "stage": "execute", "machine": "gnu", "does": "make /tmp/graphics and unpack there the runners, the guest's environment and the Debian references, and the clips, owned by the test account"},
+        {"step_id": "run", "stage": "execute", "machine": "gnu", "does": "run video.sh -b firefox av1-1080p.webm as the test account with GRAPHICS_CLASS=conformance and GRAPHICS_DONE=1, through the framed guest channel"},
+        {"step_id": "judge", "stage": "execute", "machine": "gnu", "does": "run judge.py video on the clip's plays and decoders files and the Debian reference's"},
+        {"step_id": "collect", "stage": "execute", "machine": "gnu", "does": "fetch the runner's output as the evidence out.tar.gz and write the host's half of the record, its load and the admission ledger's claims, as the evidence host-record"}
+      ],
+      "machines": [
+        {"machine_id": "gnu", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "gnu-disk", "base": "gnu-image", "cluster_bytes": 65536, "bus": "ahci"}], "cpu": "max", "processors": 4, "memory_bytes": 8589934592, "firmware": "direct", "devices": [], "boot_options": ["rach2.root=ext2"], "display": "virtio-vga"}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "services": [],
+      "assertions": [
+        {"assertion_id": "ran", "checks": "the runner exits 0, having run its whole case, and prints its result line", "source": "scenario"},
+        {"assertion_id": "as-debian", "checks": "judge.py finds the result no worse than the Debian reference guest's, stored under tests/graphics/ref/debian, and prints judge: result: pass", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 5}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 3600000000, "ceiling_us": 14400000000}, "gap": {"floor_us": 1000000, "initial_us": 2400000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 1800000000, "ceiling_us": 3600000000}, "boot": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 1800000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 4000, "memory_bytes": 9663676416, "disk_bytes": 8589934592, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "gnu-image", "node": "images/gnu-test.disk", "per_architecture": true},
+        {"name": "demo-password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "graphics", "node": "tests/cases/graphics/graphics.tar", "per_architecture": false},
+        {"name": "common", "node": "tests/cases/graphics/common.sh", "per_architecture": false},
+        {"name": "clips", "node": "tests/cases/graphics/clips.tar", "per_architecture": false},
+        {"name": "graphics_scenario", "node": "tests/cases/machine/graphics_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "boot", "reason": "the case compares a QEMU guest's browser with the Debian reference guest's in the same QEMU display profile"}
+    }
+  ]
+}

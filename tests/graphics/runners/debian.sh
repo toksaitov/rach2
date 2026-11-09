@@ -4,10 +4,10 @@
 #
 #   debian.sh webgl [-p PROFILE] [-c CPUS] [-m MIB] OUT [WEBGL-ARG]...
 #   debian.sh video [-p PROFILE] [-c CPUS] [-m MIB] OUT [VIDEO-ARG]...
-#   debian.sh clips DIR
+#   debian.sh clips [-t TAR] [DIR]
 #
 # `webgl` and `video` boot the guest with debian-ref.sh run in the display
-# PROFILE (virtio-vga) with CPUS processors (4) and MIB of memory (4096), as
+# PROFILE (virtio-vga) with CPUS processors (4) and MIB of memory (8192), as
 # a Done's run with an empty shader cache, copy in this directory and, for
 # webgl, the pinned WebGL suite, run webgl.sh or video.sh with the ARGs and
 # -o, and put the runner's output in OUT: the record, which gets the guest
@@ -15,10 +15,13 @@
 # after the runner's own, the pages or plays files, `results`, the runner's
 # lines, and `status`, its exit status. video's clips come from DIR of
 # `clips`, by default build/cache/graphics-clips of the main clone.
-# `clips` makes the clips that video.sh names in the guest with Debian's
-# ffmpeg, which it installs from the snapshot for that boot alone, so that
-# the reference guest's browsers find no codec library that Rach2's root
-# lacks, and checks them against clips.sha256.
+# `clips` makes the clips that video.sh names in DIR, unless DIR holds them
+# already, in the guest with Debian's ffmpeg, which it installs from the
+# snapshot for that boot alone, so that the reference guest's browsers find
+# no codec library that Rach2's root lacks, checks them against
+# clips.sha256, and with -t writes them as the archive TAR, which the video
+# cases put on Rach2. Each command prepares the guest first when it has no
+# prepared image of its current inputs.
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -97,7 +100,7 @@ cmd=${1:-}
 [ $# -gt 0 ] && shift
 case $cmd in
     webgl|video)
-        profile=virtio-vga cpus=4 mib=4096
+        profile=virtio-vga cpus=4 mib=8192
         while getopts p:c:m: o; do
             case $o in
                 p) profile=$OPTARG ;;
@@ -110,11 +113,27 @@ case $cmd in
         [ $# -ge 1 ] || die "usage: debian.sh $cmd [-p PROFILE] [-c CPUS] [-m MIB] OUT [ARG]..."
         out=$1
         shift
+        sh "$ref" prepare -n
         run "$cmd" "$profile" "$cpus" "$mib" "$out" "$@"
         ;;
     clips)
+        tar=
+        while getopts t: o; do
+            case $o in
+                t) tar=$OPTARG ;;
+                *) exit 2 ;;
+            esac
+        done
+        shift $((OPTIND - 1))
         dir=${1:-$clips}
         mkdir -p "$dir"
+        if (cd "$dir" && sha256sum -c --quiet "$here/clips.sha256") > /dev/null 2>&1; then
+            # shellcheck disable=SC2046 # the clips' names are words
+            [ -z "$tar" ] || tar -cf "$tar" -C "$dir" $(awk '!/^#/ { print $2 }' "$here/clips.sha256")
+            echo "debian: result: clips in $dir"
+            exit 0
+        fi
+        sh "$ref" prepare -n
         sh "$ref" run -c 8 -m 4096 -i "$work/runners.tar.gz" -o "$work/clips.tar" \
             "cd /tmp && tar -xzf runners.tar.gz &&
              sudo DEBIAN_FRONTEND=noninteractive apt-get -q -y install ffmpeg > /tmp/apt.log 2>&1 &&
@@ -123,10 +142,12 @@ case $cmd in
         tar -xf "$work/clips.tar" -C "$dir"
         (cd "$dir" && sha256sum -c --quiet "$here/clips.sha256") ||
             die "the clips made differ from clips.sha256"
+        # shellcheck disable=SC2046 # the clips' names are words
+        [ -z "$tar" ] || tar -cf "$tar" -C "$dir" $(awk '!/^#/ { print $2 }' "$here/clips.sha256")
         echo "debian: result: clips in $dir"
         ;;
     *)
-        echo "usage: debian.sh webgl|video [-p PROFILE] [-c CPUS] [-m MIB] OUT [ARG]... | clips [DIR]" >&2
+        echo "usage: debian.sh webgl|video [-p PROFILE] [-c CPUS] [-m MIB] OUT [ARG]... | clips [-t TAR] [DIR]" >&2
         exit 2
         ;;
 esac
