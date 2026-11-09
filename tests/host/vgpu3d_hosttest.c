@@ -338,6 +338,42 @@ static void submissions(uint32_t h)
     vgpu_reap(vg);
 }
 
+/** A malformed reply fails its own command and leaves prior work pending. */
+static void malformed_reply(void)
+{
+    struct virtio_gpu_cmd *first, *second;
+    struct dma_fence *f1, *f2;
+    struct virtio_gpu_ctrl_hdr *hdr;
+    uint32_t ctx = ((struct vgpu_context *)file.driver_priv)->id;
+
+    gpu.answer = ANSWER_NEVER;
+    first =
+        vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_SUBMIT_3D, sizeof(struct virtio_gpu_submit_3d));
+    second =
+        vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_SUBMIT_3D, sizeof(struct virtio_gpu_submit_3d));
+    CHECK(first && second, "commands for a malformed fence reply");
+    if (!first || !second) {
+        return;
+    }
+    ((struct virtio_gpu_ctrl_hdr *)(void *)first->page)->ctx_id = ctx;
+    ((struct virtio_gpu_ctrl_hdr *)(void *)second->page)->ctx_id = ctx;
+    vgpu_cmd_send(first, NULL, NULL);
+    vgpu_cmd_send(second, NULL, NULL);
+    f1 = dma_fence_get(first->fence);
+    f2 = dma_fence_get(second->fence);
+    hdr = (void *)(second->page + VIRTIO_GPU_RESP_OFF);
+    hdr->flags = 0;
+    answer_at(1);
+    CHECK(dma_fence_status(f2) == -EIO && !dma_fence_is_signaled(f1),
+          "a missing fence flag does not retire an earlier pending command");
+    answer_at(0);
+    CHECK(dma_fence_status(f1) == 1, "the valid earlier reply completes its own work");
+    dma_fence_put(f1);
+    dma_fence_put(f2);
+    gpu.answer = ANSWER_KICK;
+    vgpu_reap(vg);
+}
+
 /** Reset while commands are outstanding, retaining old handles and mappings. */
 static void reset_pending(uint32_t h)
 {
@@ -432,6 +468,7 @@ int main(void)
     h = resource();
     transfers(h);
     submissions(h);
+    malformed_reply();
     reset_pending(h);
     vgpu_context_close(dev, &file);
     for (i = 0; i < 32; i++) {
