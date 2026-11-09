@@ -2452,7 +2452,7 @@ static int32_t synth_open(const struct vpath *vp, int flags)
         return synth_open_root(vp, flags, 0600u, open_want(flags));
     case VNODE_DEV_DIR:
     case VNODE_PTS_DIR:
-    case VNODE_INPUT_DIR:
+    case VNODE_DEV_SUBDIR:
     case VNODE_PROC_DIR:
     case VNODE_PROC_ACPI_DIR:
     case VNODE_PROC_FS_DIR:
@@ -2501,7 +2501,8 @@ static int32_t synth_open(const struct vpath *vp, int flags)
  * O_CREAT, which asks for a file, is -EISDIR. Another user's /proc/PID/fd
  * and /proc/PID/fdinfo are -EACCES, as Linux keeps a process's descriptors
  * to those who may trace it (`procfs_may_read`). A process, or a device of
- * /sys, that is gone is -ENOENT, and a record the heap has no room for is
+ * /sys, that is gone is -ENOENT, as is a directory of /dev that is absent
+ * (`devfs_subdir_present`), and a record the heap has no room for is
  * -ENFILE.
  */
 static int32_t synth_open_dir(const struct vpath *vp, int flags)
@@ -2532,8 +2533,13 @@ static int32_t synth_open_dir(const struct vpath *vp, int flags)
         !sysfs_device_exists(vp->sysent, vp->syskey)) {
         return -ENOENT;
     }
+    if (vp->kind == VNODE_DEV_SUBDIR && !devfs_subdir_present(vp->devdir)) {
+        return -ENOENT;
+    }
     if (vp->kind == VNODE_SYS_DIR || vp->kind == VNODE_SYS_LINK) {
         sd = synth_dir_alloc(VNODE_SYS_DIR, vp->sysent, vp->syskey);
+    } else if (vp->kind == VNODE_DEV_SUBDIR) {
+        sd = synth_dir_alloc(VNODE_DEV_SUBDIR, vp->devdir, 0);
     } else {
         sd = synth_dir_alloc(
             vp->kind, vp->kind == VNODE_PROC_SYS_DIR ? vp->sysent : (int)pid_seen((uint32_t)pid),
@@ -5846,7 +5852,7 @@ static int synth_kind_is_dir(int kind)
            kind == VNODE_PROC_TASK_DIR || kind == VNODE_PROC_SYS_DIR || kind == VNODE_SYS_DIR ||
            kind == VNODE_SYS_LINK || kind == VNODE_PROC_SYSVIPC_DIR ||
            kind == VNODE_PROC_NET_STAT_DIR || kind == VNODE_PROC_NS_DIR ||
-           kind == VNODE_PROC_FDINFO_DIR || kind == VNODE_INPUT_DIR ||
+           kind == VNODE_PROC_FDINFO_DIR || kind == VNODE_DEV_SUBDIR ||
            kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR;
 }
 
@@ -6640,15 +6646,27 @@ static int32_t synth_fd_stat(int pid, int fd, struct kstat *kst)
 }
 
 /* The inode of /dev/pts, apart from devfs's numbers. */
-#define PTS_INO_DIR   3u
-/* /dev/log's inode, below the slaves' and above the directory's. */
-#define DEV_LOG_INO   4u
-/* The inode of /dev/input; its devices have devfs's numbers. */
-#define INPUT_INO_DIR 5u
+#define PTS_INO_DIR 3u
+/* /dev/log's inode, below the slaves' and /dev's directories' (synthfs.c). */
+#define DEV_LOG_INO 4u
 
 /* Slave N's inode is PTS_INO_BASE + N at every stat, so that the
  * comparison of (st_dev, st_ino) ttyname makes matches. */
 #define PTS_INO_BASE 0x1000u
+
+/** Fill `kst` for row `row` of /dev's directories: a directory of /dev's
+ * mount with the row's inode, or -ENOENT while it is absent
+ * (`devfs_subdir_present`). */
+static int32_t synth_stat_dev_dir(int row, struct kstat *kst)
+{
+    if (!devfs_subdir_present(row)) {
+        return -ENOENT;
+    }
+    kst->st_dev = DEVFS_FSID;
+    kst->st_mode = S_IFDIR | 0755;
+    kst->st_ino = synth_dev_dir_at(row)->ino;
+    return 0;
+}
 
 /** Give `kst` the owner of process `pid`'s files under /proc, as Linux's
  * `task_dump_owner` does: the process's effective user and group IDs while
@@ -6955,11 +6973,8 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
         kst->st_mode = S_IFDIR | 0755;
         kst->st_ino = PTS_INO_DIR;
         return 0;
-    case VNODE_INPUT_DIR:
-        kst->st_dev = DEVFS_FSID;
-        kst->st_mode = S_IFDIR | 0755;
-        kst->st_ino = INPUT_INO_DIR;
-        return 0;
+    case VNODE_DEV_SUBDIR:
+        return synth_stat_dev_dir(vp->devdir, kst);
     case VNODE_PTS: {
         /* Linux's major for a Unix98 pty slave is 136. */
         struct pty *pt = pty_get(vp->pts_index);
@@ -7691,7 +7706,7 @@ static int32_t statfs_fill_mount(struct user_statfs __user *out, struct vfs_moun
 static uint32_t statfs_magic_for_kind(int kind)
 {
     if (kind == VNODE_DEV_DIR || kind == VNODE_DEV || kind == VNODE_PTS_DIR || kind == VNODE_PTS ||
-        kind == VNODE_DEV_LINK || kind == VNODE_INPUT_DIR) {
+        kind == VNODE_DEV_LINK || kind == VNODE_DEV_SUBDIR) {
         return STATFS_MAGIC_DEVFS;
     }
     if (kind == VNODE_KRFFS) {
@@ -13595,6 +13610,21 @@ static int synth_entry(const char *what, uint32_t inode, uint8_t type, char *nam
     return 1;
 }
 
+/** The `n`th entry, past "." and "..", of row `row` of /dev's directories:
+ * its devices present now (`devfs_subdir_dirent`), as `synth_entry` gives
+ * one. */
+static int synth_dev_dir_dirent(int row, int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    const struct synth_dev_dir *d = synth_dev_dir_at(row);
+    const char *dn = NULL;
+    uint32_t dino = 0;
+
+    if (!d || !devfs_subdir_dirent(d->name, n, &dn, &dino)) {
+        dn = NULL;
+    }
+    return synth_entry(dn, dino, DT_CHR, name, ino, dtype);
+}
+
 /** The `n`th entry of /sys/devices/system/cpu, as `synth_sys_dirent`
  * gives it: a directory for each processor, then the attributes. */
 static int synth_sys_cpu_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
@@ -13857,8 +13887,8 @@ static int synth_sysvipc_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype
 }
 
 /** The `n`th entry of /dev past "." and "..", as `synth_dirent_at` lists
- * it: the named mounts, `log`, the descriptors' links, `input` and the
- * devices of devfs. */
+ * it: the named mounts, `log`, the descriptors' links, the directories of
+ * synthfs's table present now and the devices of devfs. */
 static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
 {
     const char *dn = NULL;
@@ -13905,13 +13935,14 @@ static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
         return 1;
     }
     n -= 4;
-    if (n == 0) {
-        k_strncpy(name, "input", 31);
-        *ino = INPUT_INO_DIR;
-        *dtype = DT_DIR;
-        return 1;
+    for (i = 0; i < synth_dev_dir_count(); i++) {
+        if (devfs_subdir_present(i) && n-- == 0) {
+            k_strncpy(name, synth_dev_dir_at(i)->name, 31);
+            *ino = synth_dev_dir_at(i)->ino;
+            *dtype = DT_DIR;
+            return 1;
+        }
     }
-    n--;
     if (!devfs_dirent(n, &dn, &dino) || !dn) {
         return 0;
     }
@@ -13937,10 +13968,11 @@ static int synth_dev_dirent(int n, char *name, uint64_t *ino, uint8_t *dtype)
  * /dev lists first the mounts that stand in it by name, /dev/shm; then
  * `log`, the link to the syslog daemon's socket; then the caller's
  * descriptors, `fd` and the three standard ones (`synth_classify`), each
- * with the inode lstat reports for it; then the directory `input`; then the
- * devices `devfs_dirent` gives, with the registry's inodes. `devfs_dirent`
- * skips a device that is absent, so a device after an absent one is still
- * listed, and /dev/input lists the event devices present in the same way.
+ * with the inode lstat reports for it; then the directories of synthfs's
+ * table present now (`devfs_subdir_present`); then the devices
+ * `devfs_dirent` gives, with the registry's inodes. `devfs_dirent` skips a
+ * device that is absent, so a device after an absent one is still listed,
+ * and a directory of the table lists its devices present in the same way.
  * /dev/pts has an entry for each allocated pseudoterminal, named by its
  * index; /proc/acpi has `call`; a directory
  * of /proc/sys has the entries of the table under it; and /proc has its
@@ -13973,12 +14005,8 @@ static int synth_dirent_at(const struct synth_dir *sd, int *pos, char *name, uin
     if (kind == VNODE_DEV_DIR) {
         return synth_dev_dirent(n, name, ino, dtype);
     }
-    if (kind == VNODE_INPUT_DIR) {
-        const char *dn = NULL;
-        uint32_t dino = 0;
-
-        return synth_entry(devfs_input_dirent(n, &dn, &dino) ? dn : NULL, dino, DT_CHR, name, ino,
-                           dtype);
+    if (kind == VNODE_DEV_SUBDIR) {
+        return synth_dev_dir_dirent(sd->pid, n, name, ino, dtype);
     }
     if (kind == VNODE_PROC_ACPI_DIR) {
         return synth_entry(n == 0 ? "call" : NULL, procfs_ino_acpicall(), DT_REG, name, ino, dtype);

@@ -1,7 +1,8 @@
 /**
  * devfs_hosttest.c: the device files of rach2/sys/fs/devfs.c: the errors of
  * an exclusive create, the devices whose transfers move the description's
- * offset, and the windows /dev/grubcore and a whole-disk node publish.
+ * offset, the windows /dev/grubcore and a whole-disk node publish, and the
+ * registry of nodes made at run time.
  *
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/block/partition.c rach2/sys/block/gpt.c
@@ -318,14 +319,131 @@ static void whole_disk_window(void)
     publishing = 0;
 }
 
+/* /dev's directories as synthfs.c has them: input, always present, and dri,
+   present while it has a node. */
+static const struct synth_dev_dir dev_dirs[] = {{"input", 5u, 1}, {"dri", 6u, 0}};
+
+/** Row `n` of /dev's directories, or NULL past the last. */
+const struct synth_dev_dir *synth_dev_dir_at(int n)
+{
+    return n >= 0 && n < 2 ? &dev_dirs[n] : NULL;
+}
+
+/** The row named by the `len` bytes at `name`, or -1. */
+int synth_dev_dir_find(const char *name, int len)
+{
+    int i, k;
+
+    for (i = 0; i < 2; i++) {
+        for (k = 0; k < len && dev_dirs[i].name[k] == name[k]; k++) {
+        }
+        if (k == len && dev_dirs[i].name[k] == '\0') {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static int node_opens;
+
+/** The open of a registered node: give the descriptor the node's record. */
+static int32_t node_open(struct devfs_node *node, fd_entry_t *e, int flags)
+{
+    (void)flags;
+    node_opens++;
+    e->priv = node->priv;
+    return 0;
+}
+
+static const struct file_ops node_ops = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+
+/** Whether the listing of the directory `dir` of /dev ("" for /dev itself)
+ * has `name` with the inode `ino`. */
+static int listed(const char *dir, const char *name, uint32_t ino)
+{
+    const char *n;
+    uint32_t i;
+    int k;
+
+    for (k = 0; *dir ? devfs_subdir_dirent(dir, k, &n, &i) : devfs_dirent(k, &n, &i); k++) {
+        if (name_eq(n, name) && i == ino) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /**
- * The rows of an open, then those of `offset_devices`, `grubcore_windows`
- * and `whole_disk_window`. An exclusive create of ptmx, null or an absent
- * name, in each access mode and with or without O_DIRECTORY and O_NONBLOCK,
- * is EEXIST for a device and ENOENT for an absent one, and opens no pty
- * master and takes no descriptor. An open of ptmx with O_DIRECTORY is
- * ENOTDIR and opens nothing, and an ordinary open of ptmx opens a pty
- * master. Returns 0 when every check passed and 1 otherwise.
+ * A node registered as dri/card0 at 226:0 is found by its path and by its
+ * number, listed in /dev/dri and not in /dev, and makes /dev/dri present;
+ * its open calls the registrant's. A second node of that name or number, a
+ * name in no directory of /dev's table, and a name too long are refused.
+ * Unregistered, it is gone by path, number and listing, and /dev/dri with
+ * it, while /dev/input, a row always present, stays; registered again, it
+ * has its slot and its inode back.
+ */
+static void registry(void)
+{
+    static int card_state;
+    static struct devfs_node card = {"dri/card0", 226, 0, 0666, &node_ops, node_open, &card_state};
+    static struct devfs_node render = {"dri/renderD128", 226, 128, 0666, &node_ops, NULL, NULL};
+    struct devfs_node other = card;
+    const struct devfs_entry *dev;
+    uint32_t mode = 0, rdev = 0, ino = 0, ino2 = 0;
+    fd_entry_t e;
+    int dri = synth_dev_dir_find("dri", 3), input = synth_dev_dir_find("input", 5);
+
+    check(dri >= 0 && input >= 0 && !devfs_subdir_present(dri) && devfs_subdir_present(input),
+          "/dev/dri is absent with no node and /dev/input is present");
+    check(devfs_node_register(&card) == 0, "dri/card0 registers");
+    check(devfs_stat("dri/card0", &mode, &rdev, &ino) == 0 && rdev == (226u << 8) &&
+              (mode & 0777u) == 0666u && (mode & 0170000u) == 0020000u,
+          "and is found by its path, a character device at 226:0 with mode 0666");
+    check(devfs_name_of(0, 226u << 8) && name_eq(devfs_name_of(0, 226u << 8), "dri/card0") &&
+              devfs_name_of(1, 226u << 8) == NULL,
+          "and by its number, as a character device only");
+    check(listed("dri", "card0", ino) && !listed("", "dri/card0", ino) && devfs_subdir_present(dri),
+          "and is listed in /dev/dri, which is present, and not in /dev");
+    dev = devfs_find("dri/card0");
+    k_memset(&e, 0, sizeof(e));
+    e.priv = &e;
+    check(dev && devfs_open_state(dev, &e, 2) == 0 && node_opens == 1 && e.priv == &card_state,
+          "an open calls the registrant's open with the descriptor's priv cleared");
+    other.minor = 1;
+    check(devfs_node_register(&other) == -EEXIST, "a second node named dri/card0 is refused");
+    other.name = "dri/card1";
+    other.minor = 0;
+    check(devfs_node_register(&other) == -EEXIST, "and so is a second node at 226:0");
+    other.name = "nodir/card1";
+    check(devfs_node_register(&other) == -EINVAL, "a name in no directory of /dev is refused");
+    other.name = "dri/card1/x";
+    check(devfs_node_register(&other) == -EINVAL, "and one two levels down");
+    other.name = "dri/a-name-longer-than-the-slot-keeps";
+    check(devfs_node_register(&other) == -EINVAL, "and one too long for a slot");
+    check(devfs_node_register(&render) == 0 && devfs_stat("dri/renderD128", 0, &rdev, &ino2) == 0 &&
+              rdev == ((226u << 8) | 128u) && ino2 != ino,
+          "dri/renderD128 registers at 226:128 with an inode of its own");
+    devfs_node_unregister(&card);
+    devfs_node_unregister(&render);
+    check(devfs_stat("dri/card0", 0, 0, 0) != 0 && devfs_name_of(0, 226u << 8) == NULL &&
+              !listed("dri", "card0", ino),
+          "unregistered, dri/card0 is gone by path, number and listing");
+    check(!devfs_subdir_present(dri) && devfs_subdir_present(input),
+          "and /dev/dri with it, while /dev/input stays");
+    check(devfs_node_register(&card) == 0 && devfs_stat("dri/card0", 0, 0, &ino2) == 0 &&
+              ino2 == ino,
+          "registered again, dri/card0 has its inode back");
+    devfs_node_unregister(&card);
+}
+
+/**
+ * The rows of an open, then those of `offset_devices`, `grubcore_windows`,
+ * `whole_disk_window` and `registry`. An exclusive create of ptmx, null or
+ * an absent name, in each access mode and with or without O_DIRECTORY and
+ * O_NONBLOCK, is EEXIST for a device and ENOENT for an absent one, and
+ * opens no pty master and takes no descriptor. An open of ptmx with
+ * O_DIRECTORY is ENOTDIR and opens nothing, and an ordinary open of ptmx
+ * opens a pty master. Returns 0 when every check passed and 1 otherwise.
  */
 int main(void)
 {
@@ -348,9 +466,10 @@ int main(void)
     offset_devices();
     grubcore_windows();
     whole_disk_window();
+    registry();
     if (!failures) {
         printf("devfs-hosttest: result: pass: exclusive pty creation, offset devices, "
-               "boot loader windows, the whole-disk window\n");
+               "boot loader windows, the whole-disk window, the registry\n");
     }
     return failures != 0;
 }

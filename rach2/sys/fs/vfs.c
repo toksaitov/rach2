@@ -2721,7 +2721,8 @@ static int synth_link_part(char *full, uint32_t out, const char *p, const char *
  * the link held and `*left` after its name, so that a `..` after the link
  * climbs from the object. Otherwise the whole path,
  * `prefix` and the rest without its `.` and `..`, is classified
- * (`synth_classify`): 0 with a new node held, -ENOENT, -ENOTDIR for a
+ * (`synth_classify`): 0 with a new node held, -ENOENT, also for a
+ * directory of /dev that is absent (`devfs_subdir_present`), -ENOTDIR for a
  * path past a file that is there (`synth_past_present`), -ENAMETOOLONG for
  * a path longer than 255 bytes, or -ENOMEM.
  */
@@ -2794,6 +2795,9 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
     }
     if (kind == VNODE_ENOTDIR) {
         return synth_past_present(&vp) ? -ENOTDIR : -ENOENT;
+    }
+    if (kind == VNODE_DEV_SUBDIR && !devfs_subdir_present(vp.devdir)) {
+        return -ENOENT;
     }
     return synth_take(&vp, node);
 }
@@ -2899,7 +2903,7 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
         kind == VNODE_PROC_NET_DIR || kind == VNODE_PROC_PID || kind == VNODE_PROC_FD_DIR ||
         kind == VNODE_PROC_TASK_DIR || kind == VNODE_SYS_DIR || kind == VNODE_SYS_LINK ||
         kind == VNODE_PROC_SYSVIPC_DIR || kind == VNODE_PROC_NET_STAT_DIR ||
-        kind == VNODE_PROC_NS_DIR || kind == VNODE_PROC_FDINFO_DIR || kind == VNODE_INPUT_DIR ||
+        kind == VNODE_PROC_NS_DIR || kind == VNODE_PROC_FDINFO_DIR || kind == VNODE_DEV_SUBDIR ||
         kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR || kind == VNODE_PROC_SYS_DIR;
 
     k_memset(st, 0, sizeof(*st));

@@ -104,21 +104,58 @@ static void synth_copy_name(struct vpath *vp, struct comp c)
     vp->name[n] = '\0';
 }
 
-/** Classify the components `c` of `n` below /dev/input: the directory, and
- * an event device as the device of /dev named "input/" and its name, which
- * devfs decides whether it exists. */
-static int synth_classify_input(const struct comp *c, int n, struct vpath *vp)
+/* The directories of /dev (synthfs.h). The inodes follow /dev/log's, 4,
+ * with the slaves of /dev/pts from 0x1000 and devfs's nodes above. */
+static const struct synth_dev_dir synth_dev_dirs[] = {
+    {"input", 5u, 1},
+    {"dri", 6u, 0},
+};
+
+#define SYNTH_DEV_DIRS ((int)(sizeof(synth_dev_dirs) / sizeof(synth_dev_dirs[0])))
+
+int synth_dev_dir_count(void)
 {
-    static const char prefix[] = "input/";
+    return SYNTH_DEV_DIRS;
+}
+
+const struct synth_dev_dir *synth_dev_dir_at(int n)
+{
+    return n >= 0 && n < SYNTH_DEV_DIRS ? &synth_dev_dirs[n] : NULL;
+}
+
+int synth_dev_dir_find(const char *name, int len)
+{
+    int i, k;
+
+    for (i = 0; i < SYNTH_DEV_DIRS; i++) {
+        const char *d = synth_dev_dirs[i].name;
+
+        for (k = 0; k < len && d[k] == name[k]; k++) {
+        }
+        if (k == len && d[k] == '\0') {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/** Classify the components `c` of `n` below row `row` of /dev's directories:
+ * the directory, and a device in it as the device of /dev named by the
+ * directory, a slash and its name, which devfs decides whether it exists. */
+static int synth_classify_dev_dir(int row, const struct comp *c, int n, struct vpath *vp)
+{
+    const char *dir = synth_dev_dirs[row].name;
     int i, k;
 
     if (n == 0) {
-        vp->kind = VNODE_INPUT_DIR;
+        vp->kind = VNODE_DEV_SUBDIR;
+        vp->devdir = row;
         return vp->kind;
     }
-    for (i = 0; prefix[i] != '\0'; i++) {
-        vp->name[i] = prefix[i];
+    for (i = 0; dir[i] != '\0'; i++) {
+        vp->name[i] = dir[i];
     }
+    vp->name[i++] = '/';
     for (k = 0; k < c[0].len && i < (int)sizeof(vp->name) - 1; k++) {
         vp->name[i++] = c[0].s[k];
     }
@@ -410,8 +447,9 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
         synth_put(out, cap, &pos, "/dev");
     } else if (kind == VNODE_PTS_DIR) {
         synth_put(out, cap, &pos, "/dev/pts");
-    } else if (kind == VNODE_INPUT_DIR) {
-        synth_put(out, cap, &pos, "/dev/input");
+    } else if (kind == VNODE_DEV_SUBDIR && synth_dev_dir_at(pid)) {
+        synth_put(out, cap, &pos, "/dev/");
+        synth_put(out, cap, &pos, synth_dev_dirs[pid].name);
     } else if (kind == VNODE_PROC_ACPI_DIR) {
         synth_put(out, cap, &pos, "/proc/acpi");
     } else if (kind == VNODE_PROC_FS_DIR) {
@@ -1518,10 +1556,13 @@ static int synth_classify_sysvipc(const struct comp *c, int n, struct vpath *vp)
 }
 
 /** Classify the components `c` of `n` from "dev": the directory, the terminals
- * of /dev/pts and its ptmx, the event devices of /dev/input, the descriptor
- * links and the devices of /dev, whose presence devfs decides. */
+ * of /dev/pts and its ptmx, the directories of /dev's table and their
+ * devices, the descriptor links and the devices of /dev, whose presence
+ * devfs decides. */
 static int synth_classify_dev(const struct comp *c, int n, struct vpath *vp)
 {
+    int row;
+
     if (n == 1) {
         vp->kind = VNODE_DEV_DIR;
         return vp->kind;
@@ -1540,8 +1581,9 @@ static int synth_classify_dev(const struct comp *c, int n, struct vpath *vp)
         }
         return vp->kind;
     }
-    if (comp_eq(c[1], "input")) {
-        return synth_classify_input(c + 2, n - 2, vp);
+    row = synth_dev_dir_find(c[1].s, c[1].len);
+    if (row >= 0) {
+        return synth_classify_dev_dir(row, c + 2, n - 2, vp);
     }
     if (synth_classify_dev_fd(c, n, vp)) {
         return vp->kind;
@@ -1627,6 +1669,7 @@ int synth_classify(const char *path, struct vpath *vp)
     vp->procfd = -1;
     vp->procfile = 0;
     vp->pts_index = -1;
+    vp->devdir = -1;
     vp->sysent = 0;
     vp->syskey = 0;
 

@@ -8,6 +8,7 @@
 #include "../klog.h"
 #include "devfs.h"
 #include "procfs.h"
+#include "synthfs.h"
 
 #include "../block/loop.h"
 #include "fd.h"
@@ -529,6 +530,33 @@ struct disk_node {
 
 static struct disk_node disk_nodes[DISK_MAX * DISK_NODE_WINDOWS];
 static int disk_node_count;
+#define DISK_NODES_CAP ((int)(sizeof(disk_nodes) / sizeof(disk_nodes[0])))
+
+/*
+ * A slot of the registry of nodes made at run time (devfs.h). The slot
+ * keeps its own copy of the node's name and numbers, since a descriptor
+ * open on the node points at the slot's entry and outlives the
+ * registration; `node` is the registrant's record while it is registered
+ * and NULL after. A slot once used is taken again first by a node of the
+ * same name, then only when every slot has been used.
+ */
+struct reg_slot {
+    struct devfs_entry entry; /* first, so an entry pointer is the slot */
+    char name[DEVFS_NODE_NAME_MAX];
+    struct devfs_node *node;
+};
+
+static struct reg_slot reg_slots[DEVFS_NODES_MAX];
+static int reg_slot_count; /* slots ever used, from the first */
+
+/** The registry's slot `dev` is, or NULL for an entry of the table or a
+ * disk node. A slot's operations are its driver's, so its address says. */
+static const struct reg_slot *reg_slot_of(const struct devfs_entry *dev)
+{
+    uintptr_t off = (uintptr_t)dev - (uintptr_t)reg_slots;
+
+    return off < sizeof(reg_slots) ? (const struct reg_slot *)dev : 0;
+}
 
 static const struct file_ops diskwin_ops;
 
@@ -961,8 +989,8 @@ static int32_t loopctl_write(fd_entry_t *entry, const char __user *buffer, uint3
     return rc < 0 ? (int32_t)rc : (int32_t)count;
 }
 
-static const struct file_ops loop_ops = {loop_node_read, loop_node_write, dev_poll, loop_node_ioctl,
-                                         loop_node_close, NULL, NULL};
+static const struct file_ops loop_ops = {
+    loop_node_read, loop_node_write, dev_poll, loop_node_ioctl, loop_node_close, NULL, NULL};
 
 /** write of /dev/framefail: the count its first 16 bytes begin with arms
  * the test switch of the frame allocator (`paging_framefail_arm`). Returns
@@ -992,8 +1020,8 @@ static int32_t framefail_write(fd_entry_t *entry, const char __user *buffer, uin
     return (int32_t)count;
 }
 
-static const struct file_ops framefail_ops = {dev_eof_read, framefail_write, dev_poll, dev_ioctl,
-                                              NULL, NULL, NULL};
+static const struct file_ops framefail_ops = {
+    dev_eof_read, framefail_write, dev_poll, dev_ioctl, NULL, NULL, NULL};
 
 /** LOOP_CTL_GET_FREE, LOOP_CTL_ADD and LOOP_CTL_REMOVE, which losetup and
  * mount make before they attach a file (`loop_control_ioctl`); another
@@ -1006,7 +1034,7 @@ static int32_t loopctl_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 static const struct file_ops loopctl_ops = {dev_eof_read, loopctl_write, dev_poll, loopctl_ioctl,
-                                            NULL, NULL, NULL};
+                                            NULL,         NULL,          NULL};
 
 /* /dev/mem's size: the physical addresses 32 bits reach; and the first
  * megabyte, which it reaches whoever owns it, firmware's tables among it. */
@@ -1086,11 +1114,16 @@ static int32_t dev_mem_write(fd_entry_t *e, const char __user *buf, uint32_t cou
     return dev_mem_rw(e, NULL, buf, count);
 }
 
-static const struct file_ops mem_ops = {dev_mem_read, dev_mem_write, dev_poll, dev_ioctl, NULL, NULL, NULL};
-static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl, NULL, NULL, NULL};
-static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl, NULL, NULL, NULL};
-static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl, NULL, NULL, NULL};
-static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll, dev_ioctl, NULL, NULL, NULL};
+static const struct file_ops mem_ops = {dev_mem_read, dev_mem_write, dev_poll, dev_ioctl,
+                                        NULL,         NULL,          NULL};
+static const struct file_ops null_ops = {dev_eof_read, dev_sink_write, dev_poll, dev_ioctl,
+                                         NULL,         NULL,           NULL};
+static const struct file_ops zero_ops = {dev_zero_read, dev_sink_write, dev_poll, dev_ioctl,
+                                         NULL,          NULL,           NULL};
+static const struct file_ops full_ops = {dev_zero_read, dev_full_write, dev_poll, dev_ioctl,
+                                         NULL,          NULL,           NULL};
+static const struct file_ops rand_ops = {dev_rand_read, dev_sink_write, dev_poll, dev_ioctl,
+                                         NULL,          NULL,           NULL};
 
 /**
  * read of /dev/bootlog: the kernel's records in its ring, from the boot and
@@ -1188,8 +1221,8 @@ static int32_t dev_screenlog_write(fd_entry_t *e, const char __user *buf, uint32
     return (int32_t)count;
 }
 
-static const struct file_ops screenlog_ops = {dev_screenlog_read, dev_screenlog_write, dev_poll,
-                                              dev_ioctl, NULL, NULL, NULL};
+static const struct file_ops screenlog_ops = {
+    dev_screenlog_read, dev_screenlog_write, dev_poll, dev_ioctl, NULL, NULL, NULL};
 
 /*
  * /dev/rtc0: the CMOS clock, which `hwclock` reads and sets through Linux's
@@ -1496,28 +1529,30 @@ static int32_t dev_rtc_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 }
 
 static const struct file_ops rtc_ops = {dev_rtc_read, dev_rtc_write, dev_rtc_poll, dev_rtc_ioctl,
-                                        NULL, NULL, NULL};
+                                        NULL,         NULL,          NULL};
 
 /* The event devices' operations are evdev.c's, the mixer's mixer.c's and the
    audio device's dsp.c's. */
-static const struct file_ops evdev_ops = {evdev_read, NULL, evdev_poll, evdev_ioctl, evdev_close, NULL, NULL};
+static const struct file_ops evdev_ops = {evdev_read,  NULL, evdev_poll, evdev_ioctl,
+                                          evdev_close, NULL, NULL};
 /* /dev/wsim: the medium of a software radio (wsim(4)). */
-static const struct file_ops wsim_ops = {wsim_read, wsim_write, wsim_poll, wsim_ioctl, wsim_close, NULL, NULL};
+static const struct file_ops wsim_ops = {wsim_read,  wsim_write, wsim_poll, wsim_ioctl,
+                                         wsim_close, NULL,       NULL};
 static const struct file_ops mixer_ops = {NULL, NULL, dev_poll, mixer_ioctl, NULL, NULL, NULL};
-static const struct file_ops dsp_ops = {dspdev_read, dspdev_write, dspdev_poll, dspdev_ioctl,
-                                        dspdev_close, NULL, NULL};
+static const struct file_ops dsp_ops = {dspdev_read,  dspdev_write, dspdev_poll, dspdev_ioctl,
+                                        dspdev_close, NULL,         NULL};
 /* /dev/rfkill's are rfkill.c's. */
-static const struct file_ops rfkill_ops = {rfkill_read, rfkill_write, rfkill_poll, rfkill_ioctl,
-                                           rfkill_close, NULL, NULL};
+static const struct file_ops rfkill_ops = {rfkill_read,  rfkill_write, rfkill_poll, rfkill_ioctl,
+                                           rfkill_close, NULL,         NULL};
 
-static const struct file_ops grubcore_ops = {dev_grubcore_read, dev_grubcore_write, dev_poll,
-                                             dev_ioctl, dev_grubcore_close, NULL, NULL};
-static const struct file_ops bootpart_ops = {dev_bootpart_read, dev_bootpart_write, dev_poll,
-                                             dev_ioctl, dev_bootpart_close, NULL, NULL};
-static const struct file_ops bootlog_ops = {dev_bootlog_read, dev_sink_write, dev_poll, dev_ioctl,
-                                            NULL, NULL, NULL};
-static const struct file_ops diskwin_ops = {dev_disk_read, dev_disk_write, dev_poll, dev_ioctl,
-                                            dev_disk_close, NULL, NULL};
+static const struct file_ops grubcore_ops = {
+    dev_grubcore_read, dev_grubcore_write, dev_poll, dev_ioctl, dev_grubcore_close, NULL, NULL};
+static const struct file_ops bootpart_ops = {
+    dev_bootpart_read, dev_bootpart_write, dev_poll, dev_ioctl, dev_bootpart_close, NULL, NULL};
+static const struct file_ops bootlog_ops = {
+    dev_bootlog_read, dev_sink_write, dev_poll, dev_ioctl, NULL, NULL, NULL};
+static const struct file_ops diskwin_ops = {dev_disk_read,  dev_disk_write, dev_poll, dev_ioctl,
+                                            dev_disk_close, NULL,           NULL};
 
 /** Whether `dev` is a raw window a write may reach, for the writer
  * reservation: the whole disks and the two boot windows in every build, the
@@ -1660,24 +1695,29 @@ static int devfs_loop_index(const struct devfs_entry *dev)
     return (int)dev->minor;
 }
 
-/** Whether table entry `i` is present now: bootpart and grubcore only while
- * published, the mixer, dsp and an event device only while `mixer_present`,
- * `dspdev_present` and `evdev_present` say, and every other entry always. */
-static int devfs_entry_present(int i)
+/** Whether `dev`, an entry of the table or a slot of the registry, is
+ * present now: a slot while its node is registered; bootpart and grubcore
+ * only while published; the mixer, dsp and an event device only while
+ * `mixer_present`, `dspdev_present` and `evdev_present` say; and every
+ * other entry always. */
+static int devfs_entry_present(const struct devfs_entry *dev)
 {
-    if (dev_table[i].ops == &evdev_ops) {
-        return evdev_present(dev_table[i].minor - EVDEV_MINOR_BASE);
+    if (reg_slot_of(dev)) {
+        return reg_slot_of(dev)->node != 0;
     }
-    if (dev_table[i].ops == &mixer_ops) {
+    if (dev->ops == &evdev_ops) {
+        return evdev_present(dev->minor - EVDEV_MINOR_BASE);
+    }
+    if (dev->ops == &mixer_ops) {
         return mixer_present();
     }
-    if (dev_table[i].ops == &dsp_ops) {
+    if (dev->ops == &dsp_ops) {
         return dspdev_present();
     }
-    if (dev_table[i].ops == &bootpart_ops) {
+    if (dev->ops == &bootpart_ops) {
         return bootpart.present;
     }
-    if (dev_table[i].ops == &grubcore_ops) {
+    if (dev->ops == &grubcore_ops) {
         return grubcore.present;
     }
     return 1;
@@ -1822,13 +1862,19 @@ void devfs_window_alias(const struct block_device *view, const struct block_devi
 }
 
 /** The index `stat` and the listing agree on: the table's entries first,
- * then the disk nodes in the order the disks were registered. */
+ * then the disk nodes in the order the disks were registered, then the
+ * registry's slots after room for every disk node, so that a slot's
+ * inode does not move as disks come. */
 static int entry_index(const struct devfs_entry *dev)
 {
     const struct disk_node *node = disk_node_of(dev);
+    const struct reg_slot *slot = reg_slot_of(dev);
 
     if (node) {
         return DEVFS_NDEV + (int)(node - disk_nodes);
+    }
+    if (slot) {
+        return DEVFS_NDEV + DISK_NODES_CAP + (int)(slot - reg_slots);
     }
     return (int)(dev - dev_table);
 }
@@ -1840,12 +1886,17 @@ static const struct devfs_entry *devfs_find(const char *name)
     int i;
     for (i = 0; i < DEVFS_NDEV; i++) {
         if (name_eq(dev_table[i].name, name)) {
-            return devfs_entry_present(i) ? &dev_table[i] : NULL;
+            return devfs_entry_present(&dev_table[i]) ? &dev_table[i] : NULL;
         }
     }
     for (i = 0; i < disk_node_count; i++) {
         if (name_eq(disk_nodes[i].name, name)) {
             return disk_node_present(i) ? &disk_nodes[i].entry : NULL;
+        }
+    }
+    for (i = 0; i < reg_slot_count; i++) {
+        if (devfs_entry_present(&reg_slots[i].entry) && name_eq(reg_slots[i].name, name)) {
+            return &reg_slots[i].entry;
         }
     }
     return NULL;
@@ -2139,9 +2190,9 @@ static void devfs_note_open(const struct devfs_entry *dev, fd_entry_t *e)
 
 /**
  * Give the descriptor e of the device dev the state of its own open: the
- * sound device's, an event device's, the radio simulator's or the radio
- * switches'. Returns 0, at once for a device with no such state, or the
- * open's negative errno.
+ * sound device's, an event device's, the radio simulator's, the radio
+ * switches' or a registered node's (`devfs_node.open`). Returns 0, at once
+ * for a device with no such state, or the open's negative errno.
  */
 static int32_t devfs_open_state(const struct devfs_entry *dev, fd_entry_t *e, int flags)
 {
@@ -2156,6 +2207,12 @@ static int32_t devfs_open_state(const struct devfs_entry *dev, fd_entry_t *e, in
     }
     if (dev->ops == &evdev_ops) {
         return evdev_open(e, dev->minor - EVDEV_MINOR_BASE);
+    }
+    if (reg_slot_of(dev)) {
+        struct devfs_node *node = reg_slot_of(dev)->node;
+
+        e->priv = NULL;
+        return node->open ? node->open(node, e, flags) : 0;
     }
     return 0;
 }
@@ -2288,9 +2345,16 @@ const char *devfs_name_of(int block, uint32_t rdev)
     for (i = 0; i < DEVFS_NDEV; i++) {
         const struct devfs_entry *dev = &dev_table[i];
 
-        if (devfs_entry_present(i) && (((uint32_t)dev->major << 8) | dev->minor) == rdev &&
+        if (devfs_entry_present(dev) && (((uint32_t)dev->major << 8) | dev->minor) == rdev &&
             (devfs_type_bits(dev) == 0060000u) == (block != 0)) {
             return dev->name;
+        }
+    }
+    for (i = 0; i < reg_slot_count && !block; i++) {
+        const struct devfs_entry *dev = &reg_slots[i].entry;
+
+        if (devfs_entry_present(dev) && (((uint32_t)dev->major << 8) | dev->minor) == rdev) {
+            return reg_slots[i].name;
         }
     }
     for (i = 0; i < disk_node_count; i++) {
@@ -2348,15 +2412,61 @@ const char *devfs_fd_name(struct fd_entry *e)
     return dev->name;
 }
 
+/** Whether `name` names a node in a directory of /dev, "input/event0" or
+ * "dri/card0", and not one in /dev itself. */
+static int in_subdir(const char *name)
+{
+    while (*name && *name != '/') {
+        name++;
+    }
+    return *name == '/';
+}
+
+/** The entry `n`, from 0, of the slots of the registry present now whose
+ * names `in_dir` accepts with `dir`: 1 with the slot's entry, 0 past the
+ * last. */
+static int reg_nth(int n, const char *dir, int (*in_dir)(const char *, const char *),
+                   const struct reg_slot **out)
+{
+    int i;
+
+    for (i = 0; i < reg_slot_count; i++) {
+        if (devfs_entry_present(&reg_slots[i].entry) && in_dir(reg_slots[i].name, dir) &&
+            n-- == 0) {
+            *out = &reg_slots[i];
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Whether `name` is in /dev itself; `dir` is unused. */
+static int in_root(const char *name, const char *dir)
+{
+    (void)dir;
+    return !in_subdir(name);
+}
+
+/** Whether `name` is "DIR/LEAF" for the directory `dir`, one level down. */
+static int in_named_dir(const char *name, const char *dir)
+{
+    while (*dir && *dir == *name) {
+        dir++;
+        name++;
+    }
+    return *dir == '\0' && *name == '/' && name[1] != '\0' && !in_subdir(name + 1);
+}
+
 int devfs_dirent(int n, const char **name, uint32_t *ino)
 {
+    const struct reg_slot *slot;
     int i;
 
     if (n < 0) {
         return 0;
     }
     for (i = 0; i < DEVFS_NDEV; i++) {
-        if (!devfs_entry_present(i) || dev_table[i].ops == &evdev_ops) {
+        if (!devfs_entry_present(&dev_table[i]) || in_subdir(dev_table[i].name)) {
             continue;
         }
         if (n == 0) {
@@ -2378,21 +2488,141 @@ int devfs_dirent(int n, const char **name, uint32_t *ino)
         }
         n--;
     }
+    if (reg_nth(n, "", in_root, &slot)) {
+        *name = slot->name;
+        *ino = DEVFS_INO(entry_index(&slot->entry));
+        return 1;
+    }
     return 0;
 }
 
-int devfs_input_dirent(int n, const char **name, uint32_t *ino)
+int devfs_subdir_dirent(const char *dir, int n, const char **name, uint32_t *ino)
 {
+    const struct reg_slot *slot;
+    uint32_t skip = (uint32_t)k_strlen(dir) + 1;
     int i;
 
-    for (i = 0; i < DEVFS_NDEV && n >= 0; i++) {
-        if (dev_table[i].ops == &evdev_ops && devfs_entry_present(i) && n-- == 0) {
-            *name = dev_table[i].name + 6; /* past "input/" */
+    if (n < 0) {
+        return 0;
+    }
+    for (i = 0; i < DEVFS_NDEV; i++) {
+        if (devfs_entry_present(&dev_table[i]) && in_named_dir(dev_table[i].name, dir) &&
+            n-- == 0) {
+            *name = dev_table[i].name + skip;
             *ino = DEVFS_INO(i);
             return 1;
         }
     }
+    if (reg_nth(n, dir, in_named_dir, &slot)) {
+        *name = slot->name + skip;
+        *ino = DEVFS_INO(entry_index(&slot->entry));
+        return 1;
+    }
     return 0;
+}
+
+int devfs_subdir_present(int row)
+{
+    const struct synth_dev_dir *d = synth_dev_dir_at(row);
+    const char *name;
+    uint32_t ino;
+
+    return d && (d->always || devfs_subdir_dirent(d->name, 0, &name, &ino));
+}
+
+/** Whether `name` may name a registered node: not empty, short enough for a
+ * slot, and either a name of /dev itself or one name in a directory of
+ * /dev's table (`synth_dev_dir_find`), with no empty part. */
+static int reg_name_ok(const char *name)
+{
+    int len = (int)k_strlen(name);
+    int slash;
+
+    if (len == 0 || len >= DEVFS_NODE_NAME_MAX) {
+        return 0;
+    }
+    for (slash = 0; slash < len && name[slash] != '/'; slash++) {
+    }
+    if (slash == len) {
+        return 1;
+    }
+    return slash > 0 && slash < len - 1 && !in_subdir(name + slash + 1) &&
+           synth_dev_dir_find(name, slash) >= 0;
+}
+
+/** Whether a node of the table, a disk or the registry already has `name`,
+ * present or not, or a present character device has `major` and `minor`. */
+static int reg_taken(const char *name, uint16_t major, uint16_t minor)
+{
+    uint32_t rdev = ((uint32_t)major << 8) | minor;
+    int i;
+
+    for (i = 0; i < DEVFS_NDEV; i++) {
+        if (name_eq(dev_table[i].name, name)) {
+            return 1;
+        }
+    }
+    for (i = 0; i < disk_node_count; i++) {
+        if (name_eq(disk_nodes[i].name, name)) {
+            return 1;
+        }
+    }
+    for (i = 0; i < reg_slot_count; i++) {
+        if (reg_slots[i].node && name_eq(reg_slots[i].name, name)) {
+            return 1;
+        }
+    }
+    return devfs_name_of(0, rdev) != NULL;
+}
+
+int32_t devfs_node_register(struct devfs_node *node)
+{
+    struct reg_slot *slot = NULL;
+    int i;
+
+    if (!node->name || !node->ops || !reg_name_ok(node->name)) {
+        return -EINVAL;
+    }
+    if (reg_taken(node->name, node->major, node->minor)) {
+        return -EEXIST;
+    }
+    for (i = 0; i < reg_slot_count && !slot; i++) {
+        if (!reg_slots[i].node && name_eq(reg_slots[i].name, node->name)) {
+            slot = &reg_slots[i];
+        }
+    }
+    if (!slot && reg_slot_count < DEVFS_NODES_MAX) {
+        slot = &reg_slots[reg_slot_count++];
+    }
+    for (i = 0; i < reg_slot_count && !slot; i++) {
+        if (!reg_slots[i].node) {
+            slot = &reg_slots[i];
+        }
+    }
+    if (!slot) {
+        return -ENOSPC;
+    }
+    k_strncpy(slot->name, node->name, sizeof(slot->name) - 1);
+    slot->name[sizeof(slot->name) - 1] = '\0';
+    slot->entry.name = slot->name;
+    slot->entry.major = node->major;
+    slot->entry.minor = node->minor;
+    slot->entry.lseek_zero = 0;
+    slot->entry.mode = (uint16_t)(node->mode & 0777u);
+    slot->entry.ops = node->ops;
+    slot->node = node;
+    return 0;
+}
+
+void devfs_node_unregister(struct devfs_node *node)
+{
+    int i;
+
+    for (i = 0; i < reg_slot_count; i++) {
+        if (reg_slots[i].node == node) {
+            reg_slots[i].node = NULL;
+        }
+    }
 }
 
 uint32_t devfs_fd_mode(struct fd_entry *e)

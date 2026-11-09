@@ -386,7 +386,9 @@ static void bounds(void)
  * caller to look it up: past a device, by its name; past a pty's slave, by
  * its number; and past a process's file or its exe link, by the process's
  * id. A path past a pty name that is not a number is ENOENT, and so is one
- * past cwd or root, since the classifier follows no link.
+ * past cwd or root, since the classifier follows no link. The directories
+ * of /dev's table, input and dri, classify with their row, and a name in
+ * one as the device of the directory, a slash and the name.
  */
 static void past_a_file(void)
 {
@@ -396,7 +398,16 @@ static void past_a_file(void)
     CHECK(synth_classify("dev/pts/3", &vp) == VNODE_PTS && vp.pts_index == 3);
     CHECK(synth_classify("dev/pts/3/x", &vp) == VNODE_ENOTDIR && vp.pts_index == 3);
     CHECK(synth_classify("dev/pts/x/y", &vp) == VNODE_ENOENT);
-    CHECK(synth_classify("dev/input", &vp) == VNODE_INPUT_DIR);
+    CHECK(synth_classify("dev/input", &vp) == VNODE_DEV_SUBDIR &&
+          eq(synth_dev_dir_at(vp.devdir)->name, "input"));
+    CHECK(synth_classify("dev/dri", &vp) == VNODE_DEV_SUBDIR &&
+          eq(synth_dev_dir_at(vp.devdir)->name, "dri"));
+    CHECK(synth_classify("dev/dri/card0", &vp) == VNODE_DEV && eq(vp.name, "dri/card0"));
+    CHECK(synth_classify("dev/dri/renderD128/x", &vp) == VNODE_ENOTDIR &&
+          eq(vp.name, "dri/renderD128"));
+    CHECK(synth_classify("dev/null", &vp) == VNODE_DEV && vp.devdir == -1);
+    CHECK(synth_dev_dir_find("dri/card0", 3) == 1 && synth_dev_dir_find("dr", 2) < 0 &&
+          synth_dev_dir_find("pts", 3) < 0 && synth_dev_dir_at(synth_dev_dir_count()) == NULL);
     CHECK(synth_classify("dev/input/event3", &vp) == VNODE_DEV && eq(vp.name, "input/event3"));
     CHECK(synth_classify("dev/input/event3/x", &vp) == VNODE_ENOTDIR &&
           eq(vp.name, "input/event3"));
@@ -465,7 +476,8 @@ static void past_a_name(void)
 }
 
 /** The path `synth_dir_path` writes back for a directory, a thread's under
- *  its process's task directory among them. */
+ *  its process's task directory and a row of /dev's directories among
+ *  them. */
 static void paths(void)
 {
     char out[64];
@@ -478,6 +490,10 @@ static void paths(void)
     CHECK(eq(out, "/proc/7/task/9/fd"));
     synth_dir_path(VNODE_PROC_TASK_DIR, 7, 0, out, (int)sizeof(out));
     CHECK(eq(out, "/proc/7/task"));
+    synth_dir_path(VNODE_DEV_SUBDIR, synth_dev_dir_find("dri", 3), 0, out, (int)sizeof(out));
+    CHECK(eq(out, "/dev/dri"));
+    synth_dir_path(VNODE_DEV_SUBDIR, synth_dev_dir_find("input", 5), 0, out, (int)sizeof(out));
+    CHECK(eq(out, "/dev/input"));
 }
 
 /**
