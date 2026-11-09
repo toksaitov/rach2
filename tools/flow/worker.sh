@@ -33,7 +33,10 @@
 # names for testing.sh, if any; `touch STATE/stop` ends the loop after the
 # session that is running; tools/flow/stop.sh stops the session as well.
 # Sessions run with RACH2_MIN_FREE_GIB at 40 unless the environment gives
-# another, so that a build they start stops before it fills the disk. Codex
+# another, so that a build they start stops before it fills the disk, and
+# with RACH2_WORKER_STATE set to STATE, so that `board.sh release` of the
+# loop's task empties STATE/issue and another loop of the same account can
+# take the task at once without this one going on with it. Codex
 # reads at most DOC_BYTES of AGENTS.md, since its own limit, 32 KiB, cuts the
 # file short.
 #
@@ -142,7 +145,8 @@ main()
     echo "$repo" > "$state/repo"
     echo "${RACH2_TESTING_COPY:-}" > "$state/copy"
     RACH2_MIN_FREE_GIB=${RACH2_MIN_FREE_GIB:-40}
-    export RACH2_MIN_FREE_GIB
+    RACH2_WORKER_STATE=$state
+    export RACH2_MIN_FREE_GIB RACH2_WORKER_STATE
     wait_session
     git config core.hooksPath tools/git-hooks
     if [ "$0" != "$state/run/worker.sh" ]; then

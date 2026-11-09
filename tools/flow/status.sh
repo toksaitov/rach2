@@ -233,7 +233,13 @@ else
 fi
 l=$here/build/flow/lenovo
 if [ -d "$l" ]; then
-    echo "lenovo: held by #$(cat "$l/issue" 2> /dev/null || echo '?') since $(date -u -r "$l" '+%Y-%m-%d %H:%M')"
+    holder=$(cat "$l/issue" 2> /dev/null) || holder=
+    case $holder in
+        '') holder='?' ;;
+        *[!0-9]*) ;;
+        *) holder="#$holder" ;;
+    esac
+    echo "lenovo: held by $holder since $(date -u -r "$l" '+%Y-%m-%d %H:%M')"
 else
     echo "lenovo: free"
 fi

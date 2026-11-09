@@ -13,11 +13,12 @@
 # fast-forward. Each -c N names another open milestone whose branch SHA
 # contains, released with M: the record says `also N`, and the close closes N
 # and archives its cards after M's, so that milestones whose branches were
-# joined at their end take one release. The manager starts the script
-# detached in the tmux session `rach2-release`, and starts it again with the
-# same arguments when it ended without finishing; it then resumes from its
-# record. It runs on the owner's computer, which reaches the testing host as
-# `ssh testing` and the Lenovo on its network. A release has these steps,
+# joined at their end, or that share M's branch as a stack, take one
+# release. The manager starts the script detached in the tmux session
+# `rach2-release`, and starts it again with the same arguments when it ended
+# without finishing; it then resumes from its record. It runs on the owner's
+# computer, which reaches the testing host as `ssh testing` and the Lenovo on
+# its network. A release has these steps,
 # each of which the record below lists once it is done:
 #
 # * full: `full.yml` of M's branch runs every suite on both architectures
@@ -140,6 +141,12 @@
 # * hold: while STATE/hold exists, the release does not first touch the
 #   Lenovo; it says the file's line and exits 75, and is started again once a
 #   person's check of a trial boot there has ended and the file is removed.
+# * lock: before it first touches the Lenovo, the release takes the Lenovo's
+#   lock, `build/flow/lenovo` of the main working tree as the machine skill
+#   says, with `release M` in its `issue`, or exits 75 while a task holds it.
+#   It keeps the lock through a failure, which may leave a trial armed, and
+#   through a release started again, and removes it once the Lenovo runs the
+#   committed release and names SHA.
 # * recovery: the Lenovo boots its recovery system from its recovery
 #   partition; the recovery kernel and image on that partition are replaced
 #   when they differ from the build's, keeping the partition's recovery key
@@ -1779,9 +1786,27 @@ check()
             3) refuse "-c: milestone $n is not open or names no branch" ;;
             *) later "milestone $n cannot be read" ;;
         esac
-        git -C "$repo" merge-base --is-ancestor "refs/remotes/origin/$b" "$sha" 2> /dev/null ||
+        [ "$b" = "$branch" ] ||
+            git -C "$repo" merge-base --is-ancestor "refs/remotes/origin/$b" "$sha" 2> /dev/null ||
             refuse "-c: $sha does not contain $b"
     done
+}
+
+# take_lenovo: take the Lenovo's lock as `release M`, or keep it when this
+# release already holds it; exit 75 while another holder has it.
+take_lenovo()
+{
+    if mkdir "$lock" 2> /dev/null; then
+        echo "release $milestone" > "$lock/issue" || later "the Lenovo's lock could not be written"
+    elif [ "$(cat "$lock/issue" 2> /dev/null)" != "release $milestone" ]; then
+        later "the Lenovo's lock is held by $(cat "$lock/issue" 2> /dev/null || echo 'an unnamed holder')"
+    fi
+}
+
+# free_lenovo: remove the Lenovo's lock when this release holds it.
+free_lenovo()
+{
+    [ "$(cat "$lock/issue" 2> /dev/null)" != "release $milestone" ] || rm -rf "$lock"
 }
 
 # unfailed MACHINE: print why MACHINE's last run in the record cannot start
@@ -1991,6 +2016,8 @@ main()
     [ -n "$state" ] ||
         state=$(cd "$repo" && cd "$(git rev-parse --git-common-dir)/.." && pwd)/build/flow/release ||
         exit 1
+    lock=$(cd "$repo" && cd "$(git rev-parse --git-common-dir)/.." && pwd)/build/flow/lenovo ||
+        exit 1
     address=${RACH2_MACHINE_ADDRESS:-192.168.0.106}
     mac=${RACH2_MACHINE_MAC:-28:d2:44:7e:e0:af}
     serial=${RACH2_MACHINE_SERIAL:-S6P2NX0T381638Z}
@@ -2107,6 +2134,7 @@ main()
             system*)
                 grep -q '^touched ' "$state/record" || [ ! -e "$state/hold" ] ||
                     later "the Lenovo is held: $(sed -n 1p "$state/hold")"
+                grep -q '^touched ' "$state/record" || take_lenovo
                 ! grep -q '^install started ' "$state/record" ||
                     fail install "the machine runs $now after the installer was started, so a reboot came before the release saw its result; check the root by hand"
                 note "touched $(date -u '+%FT%TZ')"
@@ -2196,6 +2224,7 @@ main()
         mark record "/etc/rach2/release names $sha"
     fi
 
+    free_lenovo
     grep -q '^closing ' "$state/record" || note "closing $(date -u '+%FT%TZ')"
     close
     note "closed $(date -u '+%FT%TZ')"

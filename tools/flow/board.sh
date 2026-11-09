@@ -6,7 +6,7 @@
 # Usage: board.sh next
 #        board.sh take N
 #        board.sh mine N
-#        board.sh release N [owner|owner-only]
+#        board.sh release N [owner|owner-only|trial]
 #        board.sh branch N
 #        board.sh milestone M
 #        board.sh ready N...
@@ -46,13 +46,15 @@
 # whose description names a branch, with no parent and no open blocker, not
 # labelled `owner`, labelled `owner-only` only when this account is OWNER,
 # and labelled `linux-host` only when this account can build the GNU layer.
-# An issue labelled `owner-only` is nearly always a step on the Lenovo, which
-# one task works at a time, so `next` leaves it out while the Lenovo's lock,
-# `build/flow/lenovo` of the main working tree as the machine skill says, is
-# held; a loop of the owner's then takes other work instead of waiting for
-# the machine. The tasks are in the board's order, whatever their milestones,
-# so that the tasks of every open milestone are one queue whose order the
-# manager sets with `move`.
+# An issue labelled `owner-only` is a step on the Lenovo unless its comment
+# says otherwise, and one task works the Lenovo at a time, so `next` leaves
+# it out while the Lenovo's lock, `build/flow/lenovo` of the main working
+# tree as the machine skill says, is held or cannot be read, and while
+# another issue labelled `owner-only` is In progress, whose loop takes the
+# lock once its session starts; a loop of the owner's then takes other work
+# instead of waiting for the machine. The tasks are in the board's order,
+# whatever their milestones, so that the tasks of every open milestone are
+# one queue whose order the manager sets with `move`.
 # `gh project item-list` does not return that order, so the query asks for
 # the items by position.
 #
@@ -83,7 +85,14 @@
 # `release N owner` sets Backlog and adds the label `owner`, which marks a
 # decision that AGENTS.md gives the owner. `release N owner-only` sets Ready
 # and adds the label `owner-only`, for work that is no decision but that only
-# the owner's accounts can do. A step that fails exits 1 with N still
+# the owner's accounts can do, and removes `linux-host`, since the step left
+# runs on the Mac. `release N trial` does the same but sets Backlog, for a
+# step that boots code never run on the Lenovo, which waits there for the
+# manager's go and `ready N`. When RACH2_WORKER_STATE names the state
+# directory of the loop whose session releases N, and its `issue` file
+# holds N, `release` empties that file before it unassigns this account, so
+# that a loop of the same account that takes N at once is its only writer.
+# A step that fails exits 1 with N still
 # assigned to this account, so that its worker keeps it and can release it
 # again. A closed issue is set Done and nothing else is changed, since its
 # commit may have closed it before its worker hands it back.
@@ -124,8 +133,10 @@
 # `task/N` its milestone's branch already contains, an open card In progress
 # with no assignee, or one that no worker loop holds when HELD lists the
 # issues the loops hold, a card Done or closed whose state or Status
-# disagrees, and an open milestone whose cards are all closed. status.sh runs
-# it on every check.
+# disagrees, and an open milestone whose cards are all closed while no other
+# open milestone with an open card names its branch, since the milestones of
+# a stack wait on one branch for the stack's release. status.sh runs it on
+# every check.
 #
 # `archive [M]` archives the cards of the closed issues of milestone M and of
 # their closed subtasks, and prints the numbers it archived; release.sh runs
@@ -369,11 +380,12 @@ login()
 }
 
 # lenovo_held: succeed when the Lenovo's lock is held, as a directory
-# `build/flow/lenovo` in the main working tree of this clone.
+# `build/flow/lenovo` in the main working tree of this clone, or when that
+# tree cannot be found, so that a doubt offers no step on the Lenovo.
 lenovo_held()
 {
     held_common=$(git rev-parse --path-format=absolute --git-common-dir 2> /dev/null) ||
-        return 1
+        return 0
     [ -d "$held_common/../build/flow/lenovo" ]
 }
 
@@ -382,29 +394,31 @@ next()
     login
     read_board
     busy=0
-    if [ "$me" = "$OWNER" ] && lenovo_held; then busy=1; fi
+    if [ "$me" = "$OWNER" ]; then
+        if lenovo_held || printf '%s\n' "$board" | awk -F '\t' "$LIB"'
+                $4 == "OPEN" && $2 == "In progress" && has($5, "owner-only") { f = 1 }
+                END { exit !f }'; then
+            busy=1
+        fi
+    fi
     printf '%s\n' "$board" | awk -F '\t' -v me="$me" -v owner="$OWNER" -v host="$host" -v busy="$busy" "$LIB"'
         $4 != "OPEN" || $2 != "Ready" || $6 != "" || $7 > 0 || $8 != "" { next }
         $10 != "OPEN" || $11 == "" || has($5, "owner") { next }
         has($5, "owner-only") && (me != owner || busy == 1) { next }
         has($5, "linux-host") && host != 1 { next }
-        { print $9 "\t" NR "\t" $3 "\t" $12 }' |
-        sort -n -k 2,2 | cut -f 3-
+        { print $3 "\t" $12 }'
 }
 
 # move N [AFTER]: put N's card right after AFTER's, or first.
 move()
 {
-    move_item=$(item "$1") && [ -n "$move_item" ] || {
-        echo "board: #$1: it is not on the board" >&2
-        exit 1
-    }
+    [ "$1" != "$2" ] || { echo "board: #$1: a card cannot follow itself" >&2; exit 2; }
+    move_item=$(item "$1") || { echo "board: #$1: cannot read its card" >&2; exit 1; }
+    [ -n "$move_item" ] || { echo "board: #$1: it is not on the board" >&2; exit 1; }
     move_after=
     if [ -n "$2" ]; then
-        move_after=$(item "$2") && [ -n "$move_after" ] || {
-            echo "board: #$2: it is not on the board" >&2
-            exit 1
-        }
+        move_after=$(item "$2") || { echo "board: #$2: cannot read its card" >&2; exit 1; }
+        [ -n "$move_after" ] || { echo "board: #$2: it is not on the board" >&2; exit 1; }
     fi
     gh api graphql -f p="$(id_of project)" -f i="$move_item" \
         ${move_after:+-f a="$move_after"} -f query='
@@ -522,9 +536,9 @@ take()
 
 mine()
 {
-    me=$(gh api user --jq .login)
+    me=$(gh api user --jq .login) && [ -n "$me" ] || exit 1
     who=$(gh issue view "$1" --repo "$REPO" --json state,assignees \
-        --jq 'if .state == "OPEN" then .assignees[].login else empty end')
+        --jq 'if .state == "OPEN" then .assignees[].login else empty end') || exit 1
     if printf '%s\n' "$who" | grep -qx "$me"; then echo yes; else echo no; fi
 }
 
@@ -538,6 +552,7 @@ release()
     case $2 in
         owner) status=Backlog label=owner ;;
         owner-only) label=owner-only ;;
+        trial) status=Backlog label=owner-only ;;
     esac
     if ! set_status "$1" "$status"; then
         echo "board: #$1: cannot set it $status; it is still assigned to $me" >&2
@@ -547,7 +562,18 @@ release()
         echo "board: #$1: set $status, but cannot label it $label; release it again" >&2
         exit 1
     fi
+    if [ "$label" = owner-only ] && ! gh issue edit "$1" --repo "$REPO" --remove-label linux-host > /dev/null 2>&1 &&
+        gh issue view "$1" --repo "$REPO" --json labels --jq '.labels[].name' | grep -qx linux-host; then
+        echo "board: #$1: set $status, but cannot remove linux-host; release it again" >&2
+        exit 1
+    fi
+    claimed=
+    if [ -n "$RACH2_WORKER_STATE" ] && [ "$(cat "$RACH2_WORKER_STATE/issue" 2> /dev/null)" = "$1" ]; then
+        claimed=$RACH2_WORKER_STATE/issue
+        : > "$claimed"
+    fi
     if ! unassign "$1" "$me"; then
+        [ -z "$claimed" ] || echo "$1" > "$claimed"
         echo "board: #$1: set $status, but cannot unassign $me; release it again" >&2
         exit 1
     fi
@@ -683,8 +709,15 @@ check()
         $4 == "OPEN" && $2 == "In progress" && $6 == "" { print "board: #" $3 " is In progress with no assignee" }
         $4 == "OPEN" && $2 == "In progress" && held != "  " && $8 == "" && index(held, " " $3 " ") == 0 &&
             $12 !~ /^Release milestone / { print "board: #" $3 " is In progress but no loop holds it" }
-        $8 == "" && $9 != "" && $10 == "OPEN" { cards[$9]++; if ($4 == "OPEN") open[$9]++ }
-        END { for (m in cards) if (!open[m]) print "board: milestone " m " is open but all its tasks are closed" }'
+        $8 == "" && $9 != "" && $10 == "OPEN" {
+            cards[$9]++; branch[$9] = $11
+            if ($4 == "OPEN") { open[$9]++; shared[$11]++ }
+        }
+        END {
+            for (m in cards)
+                if (!open[m] && !shared[branch[m]])
+                    print "board: milestone " m " is open but all its tasks are closed"
+        }'
     printf '%s\n' "$board" | awk -F '\t' '$4 == "OPEN" && $8 == "" && $11 != "" { print $3 " " $11 }' |
         while read -r n b; do
             # A loop that holds the task may have pushed part of it already.
@@ -887,7 +920,7 @@ case "$1" in
     mine) [ -n "$2" ] || exit 2; mine "$2" ;;
     release)
         [ -n "$2" ] || exit 2
-        case $3 in ''|owner|owner-only) ;; *) exit 2 ;; esac
+        case $3 in ''|owner|owner-only|trial) ;; *) exit 2 ;; esac
         board_ids=$(ids); release "$2" "$3" ;;
     branch) [ -n "$2" ] || exit 2; branch "$2" ;;
     milestone) [ -n "$2" ] || exit 2; milestone "$2" ;;
@@ -900,6 +933,9 @@ case "$1" in
     archive) archive "$2" ;;
     milestones) milestones ;;
     watch) watch "$2" ;;
-    move) [ -n "$2" ] || exit 2; board_ids=$(ids); move "$2" "$3" ;;
+    move)
+        case $2$3 in ''|*[!0-9]*) exit 2 ;; esac
+        [ -z "$4" ] || exit 2
+        board_ids=$(ids); move "$2" "$3" ;;
     *) sed -n 's/^# Usage: /usage: /p; s/^#        /       /p' "$0" >&2; exit 2 ;;
 esac

@@ -22,7 +22,7 @@
 
 * A message from the owner is answered before any more commands run, even while work goes on.
 * Answer each of the owner's questions plainly, as the last thing in the reply, and ask for one decision at a time, in the reply's text: no question boxes, no buttons, and no question in the box at the end of a turn.
-* While the owner discusses options, change nothing until the owner says to do it, and follow no other work: the manager sends only the end of its work or a big incident.
+* While the owner discusses options, change nothing until the owner says to do it, and follow no other work: the manager sends only the end of its work, a failure or a big incident.
 * Tell the owner in the same turn of a delay of a day or more, a cost the owner has not seen, or anything that goes against what the owner asked.
 * Pass each failure the manager reports to the owner at once, in the manager's words. Never tell the owner that a run goes on, or that nothing changed, without reading the run's own output in that turn.
 * Show research the owner asked for whole, and say which of its findings the plan follows and which it sets aside, and why.
