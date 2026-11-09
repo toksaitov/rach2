@@ -1,4 +1,4 @@
-.Dd November 6, 2026
+.Dd November 10, 2026
 .Dt PROC 5
 .Os
 .Sh NAME
@@ -469,9 +469,10 @@ Each remaining line is a type accepted for mounting after a tab, and
 after
 .Ql nodev
 for a type that stands on no device:
-.Ql nodev tmpfs
+.Ql nodev tmpfs ,
+.Ql nodev mqueue
 and
-.Ql nodev mqueue .
+.Ql nodev debugfs .
 .It Pa /proc/fs/lockwait
 One line for each kind of sleeping lock the kernel has used, in the order
 of first use:
@@ -583,10 +584,14 @@ mounts, the tmpfs at
 .Pa /dev/shm ,
 the synthetic
 .Pa /sys ,
-read-only, and the
+read-only, the
 .Ql mqueue
 mount at
 .Pa /dev/mqueue
+and the
+.Ql debugfs
+mount at
+.Pa /sys/kernel/debug
 precede mounts made by programs, which follow in the order they were made,
 so that a mount over another's root comes after it.
 A mount outside the reader's root is left out, and the target is the

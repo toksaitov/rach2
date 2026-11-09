@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 10, 2026
 .Dt MOUNT 2
 .Os
 .Sh NAME
@@ -37,6 +37,7 @@ The supported types are
 .Ql krffs ,
 .Ql tmpfs ,
 .Ql mqueue ,
+.Ql debugfs ,
 and
 .Ql devpts ,
 which shows the system's own
@@ -231,6 +232,18 @@ options are ignored.
 The mount lists the queues of the caller's IPC namespace; see
 .Xr mq_open 2 .
 .Pp
+For
+.Ql debugfs ,
+the source is any string, recorded as given, and nothing is claimed.
+Every mount shows the one tree of files the kernel registers, as on
+Linux, and the options
+.Ql mode= ,
+.Ql uid=
+and
+.Ql gid=
+set its root directory's mode, in octal, and owner; see
+.Xr debugfs 5 .
+.Pp
 For every other type, the source must name a published block device
 under
 .Pa /dev :
@@ -329,7 +342,7 @@ holds the covered directory, and keeps a reference to its parent mount.
 The mount becomes active only after the constructor succeeds.
 A failure releases the claim and references acquired by the call.
 .Pp
-The kernel makes seven mounts at boot, and they are permanent: the root;
+The kernel makes eight mounts at boot, and they are permanent: the root;
 the synthetic
 .Pa /dev
 and
@@ -360,7 +373,14 @@ with
 .Dv MS_NODEV
 and
 .Dv MS_NOEXEC ,
-which lists the queues of the first IPC namespace.
+which lists the queues of the first IPC namespace;
+and debugfs at
+.Pa /sys/kernel/debug ,
+with
+.Dv MS_NOSUID ,
+.Dv MS_NODEV
+and
+.Dv MS_NOEXEC .
 On Linux the init system makes most of these, and each it makes may be
 unmounted.
 .Pa /dev
@@ -370,7 +390,15 @@ and
 .Pa /dev/mqueue
 stand in its root directory by name, as
 .Pa /dev
-stands in the root's; a mount may be placed on a directory inside
+stands in the root's, and debugfs stands in the root directory of
+.Pa /sys
+by the names
+.Pa kernel/debug ,
+whose
+.Pa ..
+is
+.Pa /sys/kernel ;
+a mount may be placed on a directory inside
 .Pa /dev/shm .
 .Pp
 An active mount's source, target and type appear in
@@ -389,8 +417,8 @@ and
 .Ql relatime
 are set; the silent flag and the file system's own options are not
 shown.
-KRFFS, ext2 and mqueue ignore the option string; FAT32, exFAT and tmpfs
-parse it.
+KRFFS, ext2 and mqueue ignore the option string; FAT32, exFAT, tmpfs and
+debugfs parse it.
 .Ss Dirty-volume checks
 Before a writable mount, FAT32 checks a dirty volume with limits of
 32 directory levels including the root and 16 surplus tails.
@@ -603,5 +631,6 @@ There is no current process.
 .Xr open 2 ,
 .Xr pivot_root 2 ,
 .Xr loop 4 ,
+.Xr debugfs 5 ,
 .Xr proc 5 ,
 .Xr mount 8

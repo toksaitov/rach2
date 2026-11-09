@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 10, 2026
 .Dt MOUNT 8
 .Os
 .Sh NAME
@@ -35,16 +35,18 @@ The kernel accepts the types
 .Ql exfat ,
 .Ql ext2 ,
 .Ql krffs ,
-.Ql tmpfs
+.Ql tmpfs ,
+.Ql mqueue
 and
-.Ql mqueue .
+.Ql debugfs .
 The kernel places the root,
 .Pa /dev ,
 .Pa /proc ,
 .Pa /dev/shm ,
-.Pa /sys
-and
+.Pa /sys ,
 .Pa /dev/mqueue
+and
+.Pa /sys/kernel/debug
 itself, and they cannot be unmounted, as
 .Xr mount 2
 describes.
@@ -53,9 +55,10 @@ A mount on an existing mount point goes over it, and hides it until the
 new mount is taken away.
 .Pp
 The source of a
-.Ql tmpfs
-or
+.Ql tmpfs ,
 .Ql mqueue
+or
+.Ql debugfs
 mount is any string.
 For the other types it can be a partition node
 .Pa /dev/diskNpM ,
@@ -239,6 +242,7 @@ longer than 255 bytes.
 .El
 .Sh SEE ALSO
 .Xr mount 2 ,
+.Xr debugfs 5 ,
 .Xr proc 5 ,
 .Xr disk 7 ,
 .Xr loopctl 8

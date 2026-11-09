@@ -1,0 +1,105 @@
+.Dd November 10, 2026
+.Dt DEBUGFS 5
+.Os
+.Sh NAME
+.Nm debugfs
+.Nd the kernel's debug files under /sys/kernel/debug
+.Sh DESCRIPTION
+The kernel mounts debugfs at
+.Pa /sys/kernel/debug
+at boot, with
+.Ql nosuid ,
+.Ql nodev
+and
+.Ql noexec ,
+where Linux systems mount it, and the mount cannot be taken away.
+Its files are those the kernel's subsystems register, as Linux's are,
+for test programs such as IGT's to drive.
+.Pp
+The root directory is root's, with mode 0700, as Linux makes it, so no
+other user looks below it:
+an open, a
+.Xr stat 2
+or a listing of anything below it by any other user fails with
+.Er EACCES .
+A directory is root's with mode 0755 and a file root's with the mode its
+subsystem gives it; a file's size is 0, whatever it reads.
+The times of a file or a directory are those of its making.
+.Pa /sys/kernel/debug
+is a mount of its own, with a device number of its own, and its
+.Pa ..
+is
+.Pa /sys/kernel .
+.Xr statfs 2
+reports
+.Dv DEBUGFS_MAGIC ,
+0x64626720.
+Nothing makes, removes, renames or changes a file or a directory there;
+those calls fail with
+.Er EROFS
+or
+.Er EPERM .
+.Pp
+.Xr mount 2
+places another debugfs mount, which shows the same files; its options
+.Ql mode= ,
+in octal,
+.Ql uid=
+and
+.Ql gid=
+set the root directory's mode and owner for every mount, as on Linux.
+.Ss Files
+.Bl -tag -width Ds
+.It Pa sync/sw_sync
+Mode 0644.
+Each open makes a software timeline of its own, which the descriptor's
+.Dv SW_SYNC_IOC_CREATE_FENCE ,
+.Dv SW_SYNC_IOC_INC
+and
+.Dv SW_SYNC_GET_DEADLINE
+drive, as
+.Xr dma-buf 7
+gives them, and whose close completes its points not yet reached with
+.Er ENOENT .
+Linux's
+.Dv CONFIG_SW_SYNC
+gives the same file.
+.It Pa sync/info
+Mode 0444.
+The live software timelines, oldest first, as Linux 6.12 writes them:
+a header, then for each timeline a line of its name, the command of the
+process that opened it, and its value, a line for each point not yet
+reached, in the order of their values, and an empty line; then the
+header of the sync files, with nothing under it, as on Linux:
+.Bd -literal -offset indent
+objs:
+--------------
+NAME: VALUE
+  fence active: POINT / VALUE
+\&
+fences:
+--------------
+.Ed
+.Pp
+The text is made at the open; a read gives it from the description's
+offset, which
+.Xr lseek 2
+moves.
+.El
+.Sh EXAMPLES
+As root:
+.Bd -literal -offset indent
+# ls /sys/kernel/debug/sync
+info     sw_sync
+# cat /sys/kernel/debug/sync/info
+objs:
+--------------
+fences:
+--------------
+.Ed
+.Sh SEE ALSO
+.Xr mount 2 ,
+.Xr proc 5 ,
+.Xr sysfs 5 ,
+.Xr dma-buf 7 ,
+.Xr mount 8

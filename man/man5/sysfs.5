@@ -352,7 +352,8 @@ link to the input device.
 .It Pa /sys/dev/char/13:M
 A link for each event device, by its numbers, to its directory.
 .It Pa /sys/kernel/debug
-An empty directory, where debugfs is mounted.
+The directory where the kernel mounts debugfs; see
+.Xr debugfs 5 .
 .It Pa /sys/kernel/uevent_seqnum
 The number of the last uevent sent.
 .It Pa /sys/class/net/IF
@@ -816,5 +817,6 @@ MODALIAS=pci:v00008086d00000A04sv000017AAsd00003978bc06sc00i00
 .Xr backlight 4 ,
 .Xr drm 4 ,
 .Xr input 4 ,
+.Xr debugfs 5 ,
 .Xr proc 5 ,
 .Xr netlink 7
