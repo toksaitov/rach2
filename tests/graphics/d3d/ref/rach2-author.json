@@ -1,0 +1,85 @@
+{
+  "run_id": "tests.x86_64.20261109T211329Z.4169247",
+  "kernel_sha256": "dd96015def0552bd13a05039c3778b5762e35df5fd8d4fa8f5ccd9d61896dfa2",
+  "profile": {
+    "architecture": "x86_64",
+    "display": "virtio-vga",
+    "accelerator": "kvm",
+    "cpus": 8,
+    "memory_mib": 16384,
+    "private_mapping_case": {
+      "cpus": 1,
+      "memory_mib": 512
+    }
+  },
+  "rows": {
+    "machine.d3d.9": {
+      "9": {
+        "exit": 0,
+        "pixels": "adapter: AMD Radeon RX 6700 XT driver aticfx64.dll vendor 0x1002 device 0x73df\nCreateDevice: hr=0x00000000\ncaps: vs 3.0 ps 3.0 texture memory 4087 MiB\ncenter 255 128 0 255 corner 0 0 128 255 draw OK\nD3D9 OK\n",
+        "matched": true
+      }
+    },
+    "machine.d3d.11": {
+      "11": {
+        "exit": 0,
+        "pixels": "adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0x0005 device 0x0000 dedicated 16358 MiB shared 16358 MiB\nD3D11CreateDevice: hr=0x00000000 feature level 0xb000\ncenter 255 128 0 255 corner 0 0 128 255 draw OK\nD3D11 OK\n",
+        "matched": true
+      }
+    },
+    "machine.d3d.12": {
+      "12": {
+        "exit": 0,
+        "pixels": "adapter: llvmpipe (LLVM 19.1.7, 256 bits) vendor 0x0005 device 0x0000 dedicated 16358 MiB shared 16358 MiB\nD3D12CreateDevice: hr=0x00000000\nmax feature level: hr=0x00000000 0xb100\nhighest shader model: hr=0x00000000 asked 0x68 got 0x60\noptions: hr=0x00000000 binding tier 3 tiled tier 1 conservative raster tier 0 heap tier 2 typed uav loads 1\ncenter 255 128 0 255 corner 0 0 128 255 draw OK\nD3D12 OK\n",
+        "matched": true
+      }
+    },
+    "machine.d3d.private": {
+      "tmpfs": "passed",
+      "ext2": "passed"
+    },
+    "machine.d3d-wine.proton-d3d10-effect": {
+      "d3d10:effect": {
+        "exit": 0,
+        "summary": [
+          5041,
+          35,
+          0,
+          0,
+          0
+        ],
+        "progress": false,
+        "matched": true
+      }
+    },
+    "machine.d3d-wine.wined3d-d3d10-effect": {
+      "d3d10:effect": {
+        "exit": 0,
+        "summary": [
+          5041,
+          35,
+          0,
+          0,
+          0
+        ],
+        "progress": false,
+        "matched": true
+      }
+    },
+    "machine.d3d-vkd3d.0": {
+      "test_create_device": {
+        "exit": 0,
+        "summary": [
+          17,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "linux_flake": false,
+        "matched": true
+      }
+    }
+  }
+}
