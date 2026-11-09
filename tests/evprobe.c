@@ -38,6 +38,12 @@
  * turns, REL_WHEEL_HI_RES of 120 with each on USB, every record stamped
  * between the clock_gettime calls before and after on its own clock.
  *
+ * `evprobe touchpad`, run by hand on the Lenovo, finds the Synaptics
+ * touchpad's event device, prints its block as Linux's
+ * /proc/bus/input/devices gives it and EVIOCGABS of each of its axes, to set
+ * beside Debian's for the same pad, and requires the identity, bits and
+ * coordinates Linux gives the Lenovo's pad in absolute mode.
+ *
  * Prints "EVPROBE OK" and exits 0. Freestanding; direct system calls
  * (probe.h).
  */
@@ -931,6 +937,238 @@ static void read_acpi_keys(int fd, int *codes, int n)
     }
 }
 
+/* The touchpad's axes and keys, and EV_ABS. */
+#define EV_ABS             3
+#define ABS_X              0x00
+#define ABS_Y              0x01
+#define ABS_PRESSURE       0x18
+#define ABS_TOOL_WIDTH     0x1c
+#define ABS_MT_SLOT        0x2f
+#define ABS_MT_POSITION_X  0x35
+#define ABS_MT_POSITION_Y  0x36
+#define ABS_MT_TRACKING_ID 0x39
+#define ABS_MT_PRESSURE    0x3a
+
+/* Linux's `struct input_absinfo`. */
+struct input_absinfo {
+    int value;
+    int minimum;
+    int maximum;
+    int fuzz;
+    int flat;
+    int resolution;
+};
+
+/** Write `v` in decimal. */
+static void put_dec(long v)
+{
+    char digits[24];
+    unsigned long u = v < 0 ? 0 - (unsigned long)v : (unsigned long)v;
+    int i = (int)sizeof(digits) - 1;
+
+    digits[i] = 0;
+    do {
+        digits[--i] = (char)('0' + u % 10);
+        u /= 10;
+    } while (u != 0);
+    if (v < 0) {
+        digits[--i] = '-';
+    }
+    puts(digits + i);
+}
+
+/** Write `v` into `out` in hex, at least `width` digits, with no 0x and no
+ * terminator; return the digits written. */
+static int hex_into(char *out, unsigned long v, int width)
+{
+    char digits[8];
+    int n = 0, i;
+
+    do {
+        digits[n++] = "0123456789abcdef"[v & 15];
+        v >>= 4;
+    } while (v != 0 && n < 8);
+    while (n < width) {
+        digits[n++] = '0';
+    }
+    for (i = 0; i < n; i++) {
+        out[i] = digits[n - 1 - i];
+    }
+    return n;
+}
+
+/** Write `v` in hex, `width` digits at least, with no 0x. */
+static void put_hex_width(unsigned long v, int width)
+{
+    char text[9];
+
+    text[hex_into(text, v, width)] = 0;
+    puts(text);
+}
+
+/** The 32-bit word at `b`, little-endian. */
+static unsigned long word32(const unsigned char *b)
+{
+    return (unsigned long)b[3] << 24 | (unsigned long)b[2] << 16 | (unsigned long)b[1] << 8 | b[0];
+}
+
+/**
+ * Write the set of `n` bytes at `bits` as /proc/bus/input/devices prints the
+ * line `label` on x86-64: its 64-bit words from the highest that is not 0,
+ * in hex, spaced, or a single 0. The probe prints it so on i686 too, since
+ * the reference is Debian's x86-64 kernel, and takes each word as two
+ * halves, so that it needs no 64-bit arithmetic. Returns whether the text
+ * is `want`.
+ */
+static int put_set(const char *label, const unsigned char *bits, int n, const char *want)
+{
+    char text[16 * 17 + 2];
+    int at = 0, w, i, started = 0;
+
+    for (w = n / 8 - 1; w >= 0; w--) {
+        unsigned long lo = word32(bits + w * 8), hi = word32(bits + w * 8 + 4);
+
+        if (!started && !hi && !lo) {
+            continue;
+        }
+        if (started) {
+            text[at++] = ' ';
+        }
+        started = 1;
+        if (hi) {
+            at += hex_into(text + at, hi, 0);
+            at += hex_into(text + at, lo, 8);
+        } else {
+            at += hex_into(text + at, lo, 0);
+        }
+    }
+    if (!started) {
+        text[at++] = '0';
+    }
+    text[at] = 0;
+    puts("B: ");
+    puts(label);
+    puts("=");
+    puts(text);
+    puts("\n");
+    for (i = 0; want[i] && want[i] == text[i]; i++) {
+    }
+    return want[i] == text[i];
+}
+
+/** Print the touchpad's EVIOCGABS of `code` on `fd`; return whether its
+ * limits are `min` and `max`, or any when `max` is below `min`. */
+static int put_abs(int fd, int code, int min, int max)
+{
+    struct input_absinfo a;
+
+    clear(&a, sizeof(a));
+    if (ioctl(fd, EVIOCGABS(code), (long)&a) != 0) {
+        fail_with("EVIOCGABS of a set axis failed", 1, code);
+    }
+    puts("EVPROBE: abs ");
+    put_hex(code);
+    puts(" value min max fuzz flat res ");
+    put_dec(a.value);
+    puts(" ");
+    put_dec(a.minimum);
+    puts(" ");
+    put_dec(a.maximum);
+    puts(" ");
+    put_dec(a.fuzz);
+    puts(" ");
+    put_dec(a.flat);
+    puts(" ");
+    put_dec(a.resolution);
+    puts("\n");
+    return max < min || (a.minimum == min && a.maximum == max);
+}
+
+/**
+ * The run of `evprobe touchpad`: find the Synaptics touchpad's event device,
+ * print its block as /proc/bus/input/devices gives it and EVIOCGABS of each
+ * axis it has, for comparison with Debian's on the same machine, and fail
+ * unless they are what Linux gives the Lenovo's pad, model 1 with firmware
+ * 8.1, capabilities 0xd00123/0x840300/0x2a800, in absolute mode: the bits
+ * of tests/host/synaptics_hosttest.c and the coordinates Debian's psmouse
+ * logged (dev-log/70-wifi-chip/linux/dmesg.txt). The resolution is printed
+ * and not judged, since that log does not give it.
+ */
+static void touchpad(void)
+{
+    const char *path = find_device("SynPS/2 Synaptics TouchPad");
+    unsigned char bits[96];
+    unsigned short id[4];
+    char text[64];
+    long len;
+    int fd, ok = 1, a;
+
+    fd = open_or_fail(path, O_RDONLY, "the touchpad did not open");
+    clear(id, sizeof(id));
+    if (ioctl(fd, EVIOCGID, (long)id) != 0) {
+        fail("the touchpad's EVIOCGID failed");
+    }
+    puts("I: Bus=");
+    put_hex_width(id[0], 4);
+    puts(" Vendor=");
+    put_hex_width(id[1], 4);
+    puts(" Product=");
+    put_hex_width(id[2], 4);
+    puts(" Version=");
+    put_hex_width(id[3], 4);
+    puts("\n");
+    ok &= id[0] == BUS_I8042 && id[1] == 2 && id[2] == 7 && id[3] == 0x01b1;
+    len = ioctl(fd, EVIOCGNAME(sizeof(text) - 1), (long)text);
+    text[len > 0 ? len : 0] = 0;
+    puts("N: Name=\"");
+    puts(text);
+    puts("\"\n");
+    len = ioctl(fd, EVIOCGPHYS(sizeof(text) - 1), (long)text);
+    text[len > 0 ? len : 0] = 0;
+    puts("P: Phys=");
+    puts(text);
+    puts("\n");
+    ok &= begins(text, "isa0060/serio1/input0") && text[21] == 0;
+
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGPROP(8), (long)bits);
+    ok &= put_set("PROP", bits, 8, "1");
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGBIT(0, 8), (long)bits);
+    ok &= put_set("EV", bits, 8, "b");
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(bits)), (long)bits);
+    ok &= put_set("KEY", bits, 96, "e520 30000 0 0 0 0");
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGBIT(EV_ABS, 8), (long)bits);
+    ok &= put_set("ABS", bits, 8, "660800011000003");
+
+    for (a = 0; a < 64; a++) {
+        if (!bit_on(bits, a)) {
+            continue;
+        }
+        if (a == ABS_X || a == ABS_MT_POSITION_X) {
+            ok &= put_abs(fd, a, 1314, 5670);
+        } else if (a == ABS_Y || a == ABS_MT_POSITION_Y) {
+            ok &= put_abs(fd, a, 1098, 4794);
+        } else if (a == ABS_PRESSURE || a == ABS_MT_PRESSURE) {
+            ok &= put_abs(fd, a, 0, 255);
+        } else if (a == ABS_TOOL_WIDTH) {
+            ok &= put_abs(fd, a, 0, 15);
+        } else if (a == ABS_MT_SLOT) {
+            ok &= put_abs(fd, a, 0, 1);
+        } else if (a == ABS_MT_TRACKING_ID) {
+            ok &= put_abs(fd, a, 0, 65535);
+        } else {
+            ok &= put_abs(fd, a, 1, 0);
+        }
+    }
+    syscall3(SYS_CLOSE, fd, 0, 0);
+    if (!ok) {
+        fail("the touchpad's capabilities are not what Linux gives it");
+    }
+}
+
 /** The run of `evprobe button`. */
 static void button(void)
 {
@@ -1028,8 +1266,10 @@ void probe_main(unsigned long *sp)
         button();
     } else if (argc >= 2 && begins(argv[1], "video")) {
         video();
+    } else if (argc >= 2 && begins(argv[1], "touchpad")) {
+        touchpad();
     } else {
-        fail("usage: evprobe ps2 | usb | mouse | usbmouse | mixer ID | button | video");
+        fail("usage: evprobe ps2 | usb | mouse | usbmouse | mixer ID | button | video | touchpad");
     }
     puts("EVPROBE OK\n");
     sys_exit(0);
