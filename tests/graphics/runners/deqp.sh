@@ -13,10 +13,12 @@
 # case a line, `#` beginning a comment. VERSION is 1.4.7.1, the Lenovo's
 # references, or 1.4.1.1, Mesa 25.0.7's CI pin; CTS is
 # /opt/vk-gl-cts-VERSION. GLES runs glcts and Vulkan deqp-vk, from their
-# directories, with dEQP's watchdog on at 300 s a case, its own limit, the
-# OPTIONs after SUITE added. GLES draws to 256x256 pbuffers of the config
-# rgba8888d24s8ms0 on EGL's surfaceless platform, as Mesa's CI runs it and
-# step 9 did; Vulkan takes the ICDs the environment names.
+# directories, with dEQP's watchdog on, its own limit, at 300 s a case and
+# an iteration, or in 1.4.1.1, which has no options for them, at its fixed
+# 300 s a case and 30 s an iteration, the OPTIONs after SUITE added. GLES
+# draws to 256x256 pbuffers of the config rgba8888d24s8ms0 on EGL's
+# surfaceless platform, as Mesa's CI runs it and step 9 did; Vulkan takes
+# the ICDs the environment names.
 #
 # JOBS processes (4) run at once, each given every JOBSth case of the
 # sample. A process that dies runs again on the cases it had left, and the
@@ -102,7 +104,14 @@ if [ -z "$list" ]; then
 fi
 [ -f "$list" ] || { echo "deqp: no list $list" >&2; exit 1; }
 [ -z "$flakes" ] || [ -f "$flakes" ] || { echo "deqp: no flakes file $flakes" >&2; exit 1; }
-options="--deqp-watchdog=enable --deqp-watchdog-total-time-limit=300 --deqp-watchdog-interval-time-limit=300 --deqp-log-images=disable --deqp-log-shader-sources=disable $*"
+# 1.4.1.1's watchdog has fixed limits, 300 s a case and 30 s an iteration,
+# and no options to change them.
+if (cd "$dir" && "./$prog" --help 2>&1) | grep -q -e '--deqp-watchdog-total-time-limit'; then
+    watchdog="--deqp-watchdog=enable --deqp-watchdog-total-time-limit=300 --deqp-watchdog-interval-time-limit=300"
+else
+    watchdog=--deqp-watchdog=enable
+fi
+options="$watchdog --deqp-log-images=disable --deqp-log-shader-sources=disable $*"
 
 DEQP_PIDS=
 # deqp_cleanup: end the runs still going and the dEQP processes they started,
