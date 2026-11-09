@@ -290,6 +290,13 @@ int user_range_ok(uintptr_t addr, size_t len)
     return in_user(addr, len);
 }
 
+/** Every call here is a native program's, whose robust list is the
+ * native one. */
+int in_compat_syscall(void)
+{
+    return 0;
+}
+
 /** futex_waitv's vector, from the host's heap. */
 void *kmalloc(size_t size)
 {

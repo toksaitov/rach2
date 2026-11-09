@@ -307,12 +307,9 @@ static void mq_close(fd_entry_t *e)
     e->priv = NULL;
 }
 
-/** Whether the call is an i386 call on x86-64, whose mq_attr, timespec
- * and sigevent have 32-bit longs and pointers. */
-static int mq_compat(void)
-{
-    return sizeof(long) > 4u && in_compat_syscall();
-}
+/* Whether the call is an i386 call on x86-64, whose mq_attr, timespec and
+ * sigevent have 32-bit longs and pointers. */
+#define mq_compat() (sizeof(long) > 4u && in_compat_syscall())
 
 /** Read the caller's struct mq_attr at `u` into `a`: an i386 call's on
  * x86-64 is Linux's compat_mq_attr, of 32-bit longs, sign-extended. 0 or
