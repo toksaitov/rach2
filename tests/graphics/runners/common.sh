@@ -192,7 +192,7 @@ runner_browser()
         chromium)
             if [ -n "${RUNNER_CDP:-}" ]; then
                 # shellcheck disable=SC2046 # the switches are words
-                setsid python3 -I "$RUNNER_DIR/cdp.py" "$RUNNER_CDP" "$2" -- \
+                setsid python3 -I "$RUNNER_DIR/cdp.py" "$RUNNER_CDP" "$2" \
                     chromium $(runner_switches chromium) --user-data-dir="$profile" \
                     < /dev/null >> "$3" 2>&1 &
             else
