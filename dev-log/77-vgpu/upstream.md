@@ -1,0 +1,14 @@
+# Upstream faults of milestone 77
+
+Faults this milestone found in another project's code, one section each, in the format of [dev-log/upstream.md](../upstream.md), which indexes them. Paths in the entries are relative to this directory.
+
+## llvmpipe's JIT calls address 0 for a libm function the host program does not link
+
+* Project: Mesa 26.0.8's llvmpipe and lavapipe, Ubuntu 26.04's 26.0.8-1ubuntu0.3 with LLVM 21.1.8, in the render server of Ubuntu's virglrenderer 1.2.0-2ubuntu2.
+* Fails: a shader that llvmpipe compiles to a call of a scalar libm function calls address 0 when the host program does not itself link libm. Gallivm's MCJIT path leaves the functions it does not map itself (`src/gallium/auxiliary/gallivm/lp_bld_init.c:370` at `mesa-26.0.8`) to LLVM's `SectionMemoryManager` (`lp_bld_misc.cpp:628-633`), which looks them up in the process's global scope; `/usr/libexec/virgl_render_server` links only `libvulkan.so.1` and `libc.so.6`, so libm is there only as lavapipe's own dependency, opened locally by the Vulkan loader. The thread `vkr-ring-4` dies with "segfault at 0 ip 0000000000000000", having called through a register that holds 0 from compiled code, after a half-to-float conversion, a multiply and a negation. Which libm function, and why the failed lookup yields 0 and not an LLVM error, were not read.
+* Found: 2026-11-09, the testing PC's WSL, milestone 77, task 77-7a, running VK-GL-CTS 1.4.1.1's `dEQP-VK.spirv_assembly.instruction.graphics.float_controls2.fp16.input_args.cosh_testedWithout_NotNaN_arg1_nan_arg2_one_res_nan_exec_vert` in a Debian 13 guest through Venus with Mesa 26.1.6, whose Venus offers `VK_KHR_shader_float_controls2`.
+* Reproduction: start QEMU 10.2.1 with `virtio-vga-gl,venus=on,blob=on` over the host's lavapipe and run the case above in the guest; the render server dies each time and the guest's `deqp-vk` aborts in a queue submit. The same case passes when run directly on the host's lavapipe by `deqp-vk`, which links libm, and passes through Venus when QEMU runs with `LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libm.so.6`.
+* Evidence: `mesa-qualification.md`, "The host fault"; `mesa-qualification/out/host/render-server-segv.txt` (the core's registers and the code before the call, read by `mesa-qualification/coreread.py`), `host/dmesg-render-server.txt`, `host/versions.txt`; `mesa-qualification/out/deqp-26/` and `deqp-26m/`.
+* Rach2: nothing in its own code. The experiment's `vm.sh` preloads libm into QEMU, and 76-16b's Venus profile is to do the same, as its issue notes.
+* Status: unreported.
+* Next: name the function from the compiled shader (`GALLIVM_DEBUG=asm` in the render server's environment), check Mesa's main branch and the ORC path, `lp_bld_init_orc.cpp`, for the same lookup, and see whether LLVM 21's RuntimeDyld reports or silently zeroes an unresolved symbol.
