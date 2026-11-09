@@ -1,0 +1,429 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.ext2stop",
+  "summary": "An ext2 volume stopped under writes, judged by Rach2's next writable mount and its check first, then the host's e2fsck -fn and the sentinel files, against the same volume powered off in order; the program is tests/cases/machine/ext2stop_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.ext2stop.writes",
+      "behavior": "An ext2 volume that QEMU's quit stops under two writers and a loop of syncs, with sentinel files synced and four removed files held open, mounts writable at the next boot with its check clean or keeping only orphan inodes for e2fsck, keeps its sentinels and takes a write; e2fsck -fn finds in it, before and after that mount, only the held inodes with zero deletion time, their bitmap bits and the free counts; and the same volume powered off as a user stops the machine, the control, is clean and needs no check",
+      "units": [
+        "ext2",
+        "rach2/sys/fs/ext2.c",
+        "rach2/sys/fs/bcache.c",
+        "rach2/kernel.c",
+        "utils/init.c"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {
+          "volume_mib": 64,
+          "sentinels": 8,
+          "sentinel_bytes": 65536,
+          "held": 4,
+          "held_bytes": 40000,
+          "writers": 2,
+          "file_bytes": 20000,
+          "files_before_stop": 100
+        },
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "ext2stop_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          },
+          {
+            "fixture": "disk",
+            "names": [
+              "image-disk"
+            ]
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case ends the machines and removes the three disks, the stopped volume's copy among them, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "volume",
+          "stage": "execute",
+          "does": "write the control disk's MBR with mkmbr and make its 64 MiB ext2 volume with mke2fs, with the installed root's features, a fixed identifier and hash seed"
+        },
+        {
+          "step_id": "control",
+          "stage": "execute",
+          "machine": "control",
+          "does": "boot os-real from its RAM image, log in as root, mount the volume, write and sync the sentinels, hold four files open, remove them and sync, start the writers and the syncs, power off with them running and end the machine"
+        },
+        {
+          "step_id": "stop",
+          "stage": "execute",
+          "machine": "stop",
+          "does": "make the stop disk's volume as the control's, boot, run the same workload and end the machine with QMP's quit once both writers are at their hundredth file"
+        },
+        {
+          "step_id": "kept",
+          "stage": "execute",
+          "does": "copy the stopped disk whole into the disk stopped, before any boot mounts it"
+        },
+        {
+          "step_id": "check",
+          "stage": "execute",
+          "machine": "check",
+          "does": "boot with the stopped disk and the control, mount each in turn, compare its sentinels, write a file, unmount it, and power off"
+        },
+        {
+          "step_id": "judge",
+          "stage": "execute",
+          "does": "run e2fsck -fn on the stopped copy, on the stopped volume after Rach2's mount and on the control, in the image helper machine"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "control",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-real",
+            "disks": [
+              {
+                "name": "control",
+                "bus": "ide",
+                "size_bytes": 68157440
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 268435456,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        },
+        {
+          "machine_id": "stop",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-real",
+            "disks": [
+              {
+                "name": "stop",
+                "bus": "ide",
+                "size_bytes": 68157440
+              },
+              {
+                "name": "stopped",
+                "bus": "ide",
+                "size_bytes": 68157440
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 268435456,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        },
+        {
+          "machine_id": "check",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": "os-real",
+            "disks": [
+              {
+                "name": "stop",
+                "bus": "ide",
+                "size_bytes": 68157440
+              },
+              {
+                "name": "control",
+                "bus": "ide",
+                "size_bytes": 68157440
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 268435456,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": []
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        },
+        {
+          "machine_id": "image-helper",
+          "qemu": {
+            "kernel": "image-kernel",
+            "initrd": "image-tools",
+            "disks": [
+              {
+                "name": "image-disk",
+                "bus": "ide",
+                "size_bytes": 512
+              }
+            ],
+            "cpu": "max",
+            "processors": 1,
+            "memory_bytes": 268435456,
+            "firmware": "direct",
+            "devices": [],
+            "boot_options": [
+              "rach2.rescue"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": true
+        }
+      ],
+      "assertions": [
+        {
+          "assertion_id": "control-volume",
+          "checks": "mkmbr writes the control disk's table and mke2fs makes its volume, each exiting 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "control-mounted",
+          "checks": "/proc/mounts has /dev/disk0p1 /mnt/s ext2 rw 0 0, a mount that writes back, which the scenario prints",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "control-kept",
+          "checks": "the eight sentinels are written and synced",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "control-held",
+          "checks": "four files are made, opened by the shell, printed as HELD=N with inode numbers above 10, removed and synced",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "control-writing",
+          "checks": "both writers print that they reached their hundredth file",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "control-unmounted",
+          "checks": "poweroff, with the writers running and the held files open, says shutdown: /dev/disk0p1: unmounted before the kernel's goodbye",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "control-valid",
+          "checks": "the poweroff left the control's superblock state 1, unmounted cleanly",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "stop-volume",
+          "checks": "mkmbr and mke2fs make the stop disk's volume, each exiting 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "stop-mounted",
+          "checks": "the stop boot mounts its volume rw, as the control",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "stop-kept",
+          "checks": "the sentinels are written and synced",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "stop-held",
+          "checks": "the four held files are made, numbered, removed and synced",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "stop-writing",
+          "checks": "both writers reach their hundredth file, and QMP's quit ends the machine under them",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "stop-dirty",
+          "checks": "the stop left the superblock state 0, the valid bit clear",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "check-writable",
+          "checks": "the next boot mounts the stopped volume as /dev/disk0p1 /mnt/s ext2 rw 0 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "check-check",
+          "checks": "the kernel's check of it says ext2: check: L lost blocks, 4 orphan inodes, kept for e2fsck: the held inodes, whose blocks count among the lost, and no fault",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "check-same",
+          "checks": "each sentinel is byte for byte what wrote it",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "check-wrote",
+          "checks": "a file is written there and synced",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "check-umount",
+          "checks": "the volume unmounts",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "again-writable",
+          "checks": "the control mounts as /dev/disk1p1 /mnt/s ext2 rw 0 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "again-check",
+          "checks": "the kernel does not check the control, which its poweroff left clean",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "again-same",
+          "checks": "each of the control's sentinels is what wrote it",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "again-wrote",
+          "checks": "a file is written on the control and synced",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "again-umount",
+          "checks": "the control unmounts",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "stopped-e2fsck",
+          "checks": "e2fsck -fn on the copy taken before any mount exits 0, or 4 with nothing but its passes, a held inode's zero deletion time, block bitmap differences that are each a block marked used that nothing names, inode bitmap differences that are each a held inode, the free counts, its answers of no and its summary",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "checked-e2fsck",
+          "checks": "e2fsck -fn on the stopped volume after Rach2's mount, write and unmount finds the same and nothing else",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "control-e2fsck",
+          "checks": "e2fsck -fn on the control after both boots exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 6
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 1800000000,
+          "ceiling_us": 5400000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 900000000,
+          "ceiling_us": 2400000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 300000000,
+            "ceiling_us": 900000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 1610612736,
+        "disk_bytes": 402653184,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "os-real",
+          "node": "images/os-real.krffs",
+          "per_architecture": true
+        },
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "mkmbr",
+          "node": "tools/image/mkmbr",
+          "per_architecture": false
+        },
+        {
+          "name": "ext2stop_scenario",
+          "node": "tests/cases/machine/ext2stop_scenario",
+          "per_architecture": false
+        },
+        {
+          "name": "image-kernel",
+          "node": "rach2-recovery/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "image-tools",
+          "node": "images/etude-image.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "disk",
+        "reason": "the case stops a machine under writes to a disk of its own and checks the disk on the host after, which the installed machine's disk cannot be"
+      }
+    }
+  ]
+}
