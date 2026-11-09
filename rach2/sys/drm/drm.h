@@ -7,8 +7,10 @@
 #ifndef _DRM_H_
 #define _DRM_H_
 
+#include "../arch/arch.h"
 #include "../lib/kint.h"
 #include "../fs/fd.h"
+#include "../mm/shmem.h"
 #include "../mm/vm.h"
 #include "../pci.h"
 #include "../proc/wait_queue.h"
@@ -195,8 +197,9 @@ struct drm_ioctl_desc {
  * pitch and size, and may sleep; `gem_prime_import` makes an object of a
  * dma-buf from another device or from udmabuf, or returns NULL with
  * `*err` set; `unplug` stops the hardware once the core has unplugged the
- * device. The display hooks are on each mode object (below) and the
- * commit hooks on the mode configuration.
+ * device; `release` frees the device's record once its last reference is
+ * gone, NULL for a record that is never freed. The display hooks are on
+ * each mode object (below) and the commit hooks on the mode configuration.
  */
 struct drm_driver {
     struct drm_ident ident;
@@ -209,6 +212,7 @@ struct drm_driver {
     void (*unplug)(struct drm_device *dev);
     const struct drm_ioctl_desc *ioctls; /* the driver's own, or NULL */
     int num_ioctls;
+    void (*release)(struct drm_device *dev); /* frees the record after the last put */
 };
 
 /* ------------------------------------------------------------------------
@@ -321,9 +325,13 @@ int32_t sw_sync_open(fd_entry_t *e);
 /*
  * What a driver does for its buffer objects: `free` releases the memory
  * when the last reference goes; `mmap` sets up the region `vma` for a
- * mapping of the object's pages, as file_ops.mmap does for a file
- * (rach2/sys/fs/file.h); `pin` and `unpin` keep the pages where the device
- * reads them for scanout. NULL `mmap` refuses mapping with ENODEV.
+ * mapping of the object's pages from its page `vma->pgoff`, as
+ * file_ops.mmap does for a file (rach2/sys/fs/file.h), and on success the
+ * region takes over the caller's reference to the object: a device region
+ * (`vm_device_map`) whose object is the `struct drm_gem_object` itself, so
+ * that an unplug's `paging_zap_device` finds its pages. `pin` and `unpin`
+ * keep the pages where the device reads them for scanout. NULL `mmap`
+ * refuses mapping with ENODEV; NULL `free` frees the record with kfree.
  */
 struct drm_gem_object_funcs {
     void (*free)(struct drm_gem_object *obj);
@@ -334,12 +342,14 @@ struct drm_gem_object_funcs {
 
 /*
  * A buffer object. `size` is a whole number of pages. `name` is its flink
- * name, 0 for none. `mmap_offset` is where it lies in the mmap space of
- * its device's files, 0 until MAP_DUMB or a driver asks. `dma_buf` is the
- * dma-buf exported of it, kept so that a second export and a self-import
- * find it again; the dma-buf holds a reference on the object, not the
- * other way. `import` is the dma-buf it was made from, held. `resv` is
- * its implicit fences, or its import's.
+ * name, 0 for none, which the object keeps while any file has a handle to
+ * it. `mmap_offset` is where it lies in the mmap space of its device's
+ * files, in bytes, a whole number of pages from DRM_FILE_PAGE_OFFSET_START,
+ * 0 until MAP_DUMB or a driver asks (`drm_gem_create_mmap_offset`).
+ * `dma_buf` is the dma-buf exported of it, kept so that a second export
+ * and a self-import find it again; the dma-buf holds a reference on the
+ * object, not the other way. `import` is the dma-buf it was made from,
+ * held. `resv` is its implicit fences, or its import's.
  */
 struct drm_gem_object {
     uint32_t refs;
@@ -352,8 +362,81 @@ struct drm_gem_object {
     struct dma_resv *resv;
     struct dma_resv resv_own;
     const struct drm_gem_object_funcs *funcs;
-    uint32_t handle_count; /* handles any file has to it */
+    uint32_t handle_count;            /* handles any file has to it */
+    struct drm_gem_object *dev_next;  /* the device's objects */
+    struct drm_gem_object *mmap_next; /* the device's objects with an offset, by offset */
 };
+
+/* The mmap space of a device's buffer objects, Linux's on each ABI: from
+ * 4 GiB for 256 times that on x86-64, and from 16 MiB for 16 times that on
+ * i686, in pages. */
+#define DRM_FILE_PAGE_OFFSET_START                                        \
+    (sizeof(uintptr_t) == 8 ? (uint32_t)((0xFFFFFFFFu >> PAGE_SHIFT) + 1) \
+                            : (uint32_t)((0xFFFFFFu >> PAGE_SHIFT) + 1))
+#define DRM_FILE_PAGE_OFFSET_SIZE                                           \
+    (sizeof(uintptr_t) == 8 ? (uint32_t)((0xFFFFFFFFu >> PAGE_SHIFT) * 256) \
+                            : (uint32_t)((0xFFFFFFu >> PAGE_SHIFT) * 16))
+
+/** Make `obj` an object of `size` bytes, a whole number of pages, of `dev`
+ * with the hooks `funcs`: one reference, the caller's, a reference on the
+ * device, and its own reservation. */
+void drm_gem_object_init(struct drm_device *dev, struct drm_gem_object *obj, uint64_t size,
+                         const struct drm_gem_object_funcs *funcs);
+/** Take a reference to `obj`; NULL is allowed. */
+void drm_gem_object_get(struct drm_gem_object *obj);
+/** Drop a reference; the last frees the object through its `free` and
+ * drops its device. NULL is allowed. */
+void drm_gem_object_put(struct drm_gem_object *obj);
+/** Give `file` a new handle to `obj`, the lowest free from 1, in `*handle`,
+ * with a reference of its own: 0, or -ENOMEM. */
+int32_t drm_gem_handle_create(struct drm_file *file, struct drm_gem_object *obj, uint32_t *handle);
+/** The object of `file`'s `handle`, with a reference taken, or NULL. */
+struct drm_gem_object *drm_gem_object_lookup(struct drm_file *file, uint32_t handle);
+/** Drop `file`'s `handle`: 0, or -EINVAL for no such handle. */
+int32_t drm_gem_handle_delete(struct drm_file *file, uint32_t handle);
+/** Drop every handle of `file`, as its release does. */
+void drm_gem_release(struct drm_file *file);
+/** Give `obj` its place in its device's mmap space, once: 0, or -ENOSPC
+ * when the space has no room for it. */
+int32_t drm_gem_create_mmap_offset(struct drm_gem_object *obj);
+/**
+ * mmap of a card or render node: the object whose offset is the region's
+ * page offset, which the file has a handle to, mapped by its `mmap` from
+ * its own page 0, with a reference the region holds. -ENODEV for a device
+ * unplugged or an object without `mmap`, -EINVAL for no object at that
+ * offset or a range past its end, -EACCES for an object the file has no
+ * handle to, or the hook's error.
+ */
+int32_t drm_gem_mmap(struct drm_file *file, vma_t *vma);
+
+/*
+ * A buffer object of pages from the frame allocator, Linux's GEM shmem
+ * helper, which drivers without memory of their own use for dumb buffers
+ * and imports: its pages are given as they are first touched, zeroed, and
+ * mapped cached, or write-combining when `map_wc` is set, as Linux maps
+ * them. Its `free` and `mmap` are the helper's.
+ */
+struct drm_gem_shmem_object {
+    struct drm_gem_object base;
+    struct shmem pages;
+    int map_wc;
+};
+
+/** A new shmem object of `size` bytes, rounded up to pages, with one
+ * reference, the caller's; NULL with no memory or for a size of 0 or past
+ * SHMEM_MAX_SIZE. */
+struct drm_gem_shmem_object *drm_gem_shmem_create(struct drm_device *dev, uint64_t size,
+                                                  int map_wc);
+/** The frame of page `pgoff` of `obj`, given and zeroed if it had none, or
+ * 0 when none can be had or the page is past the object; no reference is
+ * taken. For a driver that reads or writes the buffer itself. */
+uintptr_t drm_gem_shmem_page(struct drm_gem_shmem_object *obj, uint32_t pgoff);
+/** A driver's `dumb_create` of shmem objects, Linux's
+ * drm_gem_shmem_dumb_create: the pitch of `width` pixels of `bpp` bits,
+ * rounded up to bytes, and the size of `height` rows in whole pages, mapped
+ * cached. 0, -EINVAL for a size past the helper's reach, or -ENOMEM. */
+int32_t drm_gem_shmem_dumb_create(struct drm_file *file, struct drm_device *dev,
+                                  struct drm_mode_create_dumb *args);
 
 /* ------------------------------------------------------------------------
  * Open files
@@ -366,8 +449,9 @@ struct drm_gem_object {
 /* An event queued for a file's reader, the bytes of one uapi event. */
 struct drm_pending_event {
     struct drm_pending_event *next;
-    struct drm_file *file;
-    struct dma_fence *fence; /* signalled when the event is sent, or NULL */
+    struct drm_pending_event *pending_next; /* the file's reserved events */
+    struct drm_file *file;                  /* NULL once the file is released unsent */
+    struct dma_fence *fence;                /* the sender signals it as it sends, or NULL */
     uint32_t length;
     union {
         struct drm_event base;
@@ -376,38 +460,95 @@ struct drm_pending_event {
     } event;
 };
 
-/* A handle of a file's table: to a buffer object or to a syncobj. */
+/* A handle of a file's table: to a buffer object or to a syncobj. A table
+ * is a list in the order of the ids. */
 struct drm_handle {
     uint32_t id;
     void *object;
     struct drm_handle *next;
 };
 
+/** Add `object` to the table `list` under the lowest free id from 1, as
+ * Linux's idr gives handles, into `*id`: 0, or -ENOMEM. */
+int32_t drm_handle_insert(struct drm_handle **list, void *object, uint32_t *id);
+/** The object of `id` in `list`, or NULL. */
+void *drm_handle_find(struct drm_handle *list, uint32_t id);
+/** Take `id` out of `list` and return its object, or NULL for none. */
+void *drm_handle_remove(struct drm_handle **list, uint32_t id);
+
 /*
  * An open of a card or render node, one per open file description. The
  * client caps are what SET_CLIENT_CAP set. `event_space` is how many bytes
  * of events may still queue, Linux's 4096 at open.
+ *
+ * The master role follows Linux's drm_master records, each named here by
+ * an id from the device's `next_master_id`. A file of the card has the id
+ * of the master it was opened under, or a new one of its own when it
+ * became master with none (`is_master`, Linux's meaning: the file made the
+ * record). The device's `master` is the file that holds the role now
+ * (`drm_is_current_master`). `was_master` says it held it once, which lets
+ * it take the role back without privilege while its process is the same.
+ * GET_MAGIC gives a magic in the namespace of the file's master id, and
+ * AUTH_MAGIC by the master spends it (`magic_spent`) as it authenticates
+ * the file. A render node's file has no master id, 0.
  */
 struct drm_file {
     struct drm_device *dev;
     int minor_type; /* DRM_MINOR_PRIMARY or DRM_MINOR_RENDER */
-    uint32_t pid;   /* the opener's thread group, for GET_CLIENT */
+    uint32_t pid;   /* the last thread group to use it, Linux's update */
     uint32_t uid;
-    drm_magic_t magic;
+    drm_magic_t magic; /* 0 until GET_MAGIC */
+    int magic_spent;
     int authenticated;
+    uint32_t master_id;
     int is_master;
     int was_master;
     int universal_planes, atomic, aspect_ratio, writeback_connectors, stereo_allowed,
         supports_virtualized_cursor_plane;
     struct drm_handle *objects;  /* buffer object handles */
     struct drm_handle *syncobjs; /* syncobj handles */
-    uint32_t next_handle;
     struct drm_framebuffer *fbs; /* framebuffers it made, through `file_next` */
     struct drm_pending_event *events, *events_tail;
+    struct drm_pending_event *pending; /* reserved, not yet sent */
     uint32_t event_space;
     wait_queue_t event_wait;
     void *driver_priv;
+    struct drm_file *dev_next; /* the device's open files */
 };
+
+/** Whether `file` holds its device's master role now. */
+#define drm_is_current_master(file) ((file)->dev->master == (file))
+
+/*
+ * Events, Linux's drm_event_reserve, drm_send_event and
+ * drm_event_cancel_free. A sender allocates `e` with kmalloc, sets its
+ * event and `length`, and reserves it, which counts its length against the
+ * file's space and keeps it on the file's list of reserved events. Sending
+ * queues it for the reader, signals its fence and wakes the reader; the
+ * file frees it once read. A file released first leaves its reserved
+ * events with `file` NULL, which a send then frees unread.
+ */
+
+/** Reserve `e` on `file`: 0, or -ENOMEM when the file's space has not
+ * `e->length` bytes, as Linux. */
+int32_t drm_event_reserve(struct drm_file *file, struct drm_pending_event *e);
+/** Send `e`, reserved; it is the file's, or freed. Any context. */
+void drm_send_event(struct drm_pending_event *e);
+/** Take back `e`, reserved and not sent, give back its space and free
+ * it. */
+void drm_event_cancel_free(struct drm_pending_event *e);
+
+/**
+ * The DRM ioctl dispatcher, Linux's drm_ioctl: the handler of `cmd` from
+ * the core's table, or for numbers DRM_COMMAND_BASE to DRM_COMMAND_END - 1
+ * the driver's, called with the kernel's copy of the argument at `arg` if
+ * the caller may call it. ENODEV on a device unplugged, ENOTTY for a
+ * number of another type, EINVAL for a number no row names, EACCES for a
+ * caller the row's flags refuse, EFAULT, ENOMEM, or the handler's answer.
+ * The argument is copied back by the direction the number and the row
+ * share, whatever the handler answered. May sleep.
+ */
+int32_t drm_ioctl(struct drm_file *file, uint32_t cmd, uintptr_t arg);
 
 /* ------------------------------------------------------------------------
  * Display state: mode objects and their atomic state (76-5a, 76-5b)
@@ -739,6 +880,10 @@ struct drm_device {
     const pci_device_t *pci;
     struct drm_file *master;
     uint32_t open_count;
+    struct drm_file *files;              /* its open files, through `dev_next` */
+    uint32_t next_master_id;             /* the last master record's id */
+    struct drm_gem_object *objects;      /* its buffer objects, through `dev_next` */
+    struct drm_gem_object *mmap_objects; /* those with an mmap offset, by offset */
     struct drm_mode_config mode_config;
     int commit_held; /* the commit lock: 1 while a commit holds it */
     wait_queue_t commit_wait;
@@ -755,11 +900,16 @@ struct drm_device {
 void drm_start(void);
 
 /** Fill a new device for `driver`, with one reference, the caller's, and
- * the driver's features. Registers nothing. */
+ * the driver's features; every other member is zero, and the driver sets
+ * `unique`, `pci` and its own before it registers. Registers nothing. */
 void drm_dev_init(struct drm_device *dev, const struct drm_driver *driver);
-/** Register the device's card node, and its render node when the driver
- * has DRIVER_RENDER, through the devfs registry, and tell the console
- * (`drm_client_dev_register`). 0, or -ENOSPC past DRM_MAX_DEVICES. */
+/** Register the device under the lowest free card index: its card node,
+ * and its render node when it has DRIVER_RENDER, through the devfs
+ * registry, with GET_UNIQUE's name made from `pci` or the driver's name
+ * when the driver left `unique` empty; then tell the console
+ * (`drm_client_dev_register`). 0, -ENOSPC past DRM_MAX_DEVICES, or the
+ * registry's error, with nothing registered. The index stays the device's
+ * until its record is released. */
 int32_t drm_dev_register(struct drm_device *dev);
 /** Unplug the device: the device loss above. Any later ioctl of its files
  * answers ENODEV; the record stays until its last holder lets go. */
@@ -770,6 +920,34 @@ void drm_dev_put(struct drm_device *dev);
 /** The registered device of card index `index`, or NULL; for debugfs and
  * /sys, which walk the devices by index. */
 struct drm_device *drm_dev_at(int index);
+
+/*
+ * A listener of the master role: the console (76-11), which gives up the
+ * screen while a program holds the role, and the seat's revoke path. Its
+ * `changed` runs after each change of a device's master, with the file
+ * that holds the role now or NULL when none does: SET_MASTER, DROP_MASTER,
+ * the first open of a card with no master, and the release of the master's
+ * file by close, exec or exit. It runs in the caller's context and may
+ * not sleep.
+ */
+struct drm_master_notifier {
+    void (*changed)(struct drm_device *dev, struct drm_file *master);
+    struct drm_master_notifier *next;
+};
+
+/** Add `n` to the listeners; it stays until removed. */
+void drm_master_notifier_register(struct drm_master_notifier *n);
+/** Take `n` from the listeners; nothing for one not added. */
+void drm_master_notifier_unregister(struct drm_master_notifier *n);
+/** Run every listener for `dev`'s new master `master`, or NULL. */
+void drm_master_changed(struct drm_device *dev, struct drm_file *master);
+
+/** Release what `file` holds of the master role as its file is released:
+ * its magic, and the role, which the listeners are told of. */
+void drm_master_release(struct drm_file *file);
+/** Give `file`, just opened on a card, its master record: the role and a
+ * record of its own when the device has no master, else the master's. */
+void drm_master_open(struct drm_file *file);
 
 /* ------------------------------------------------------------------------
  * The firmware framebuffer's handoff (aperture)
