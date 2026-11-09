@@ -1824,8 +1824,6 @@ static int32_t vgpu_bind(struct virtio_dev *vdev)
         devices_remove(vg);
         goto fail;
     }
-    klog(KLOG_INFO, "virtio_gpu", "card %d: %s, %u scanouts", vg->drm.index, vdev->name,
-         vg->num_scanouts);
     return 0;
 fail:
     vgpu_kill(vg);
