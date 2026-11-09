@@ -2421,13 +2421,14 @@ static int32_t synth_open(const struct vpath *vp, int flags)
 {
     switch (vp->kind) {
     case VNODE_DEV: {
-        uint32_t dmode;
+        uint32_t dmode, uid, gid;
         int32_t rc;
 
-        if (devfs_stat(vp->name, &dmode, NULL, NULL) != 0) {
+        if (devfs_stat(vp->name, &dmode, NULL, NULL) != 0 ||
+            devfs_owner(vp->name, &uid, &gid) != 0) {
             return -ENOENT;
         }
-        rc = cred_access_bits(0, 0, dmode & 0777u, open_want(flags), 0);
+        rc = cred_access_bits(uid, gid, dmode & 0777u, open_want(flags), 0);
         return rc != 0 ? rc : devfs_open(vp->name, flags);
     }
     case VNODE_PTS:
@@ -7111,7 +7112,8 @@ static int32_t synth_stat(const struct vpath *vp, struct kstat *kst, int follow)
         kst->st_ino = ino;
         return 0;
     case VNODE_DEV:
-        if (devfs_stat(vp->name, &mode, &rdev, &ino) != 0) {
+        if (devfs_stat(vp->name, &mode, &rdev, &ino) != 0 ||
+            devfs_owner(vp->name, &kst->st_uid, &kst->st_gid) != 0) {
             return -ENOENT;
         }
         kst->st_dev = DEVFS_FSID;
@@ -8392,6 +8394,7 @@ static int32_t fstat_fill(fd_entry_t *entry, struct kstat *kst)
         kst->st_ino = pp ? pp->inode : 0u;
     } else if (entry->type == FD_TYPE_DEVICE) {
         kst->st_mode = devfs_fd_mode(entry);
+        devfs_fd_owner(entry, &kst->st_uid, &kst->st_gid);
         kst->st_nlink = 1;
         kst->st_blksize = 4096;
         kst->st_dev = DEVFS_FSID;
@@ -9212,9 +9215,91 @@ static int32_t chown_made(int id, uint32_t uid, uint32_t gid)
     return devtree_setattr(id, (uint32_t)-1, uid, gid);
 }
 
-/** Change the mode of name relative to dir, with the caller's ownership
- * checks; return 0 or a negative error from resolution or the file system. */
-static int32_t do_chmod(const char *name, uint32_t mode, int dir)
+/**
+ * chmod of the device `name` under /dev: its owner or a privileged caller
+ * sets its permission bits, as udev sets those of Linux's devtmpfs nodes
+ * (`devfs_setattr`); 0, -ENOENT, -ENOSPC or -EPERM.
+ */
+static int32_t chmod_dev(const char *name, uint32_t mode)
+{
+    uint32_t uid, gid;
+
+    if (devfs_owner(name, &uid, &gid) != 0) {
+        return -ENOENT;
+    }
+    if (!cred_privileged() && current_proc->euid != uid) {
+        return -EPERM;
+    }
+    return devfs_setattr(name, mode & 0777u, (uint32_t)-1, (uint32_t)-1);
+}
+
+/**
+ * chown of the device `name` under /dev, by the rule of `chown_made`: a new
+ * owner takes a privileged caller, and a new group a privileged caller or
+ * the owner naming one of its groups; -1 leaves a field. 0, -ENOENT, -ENOSPC
+ * or -EPERM.
+ */
+static int32_t chown_dev(const char *name, uint32_t uid, uint32_t gid)
+{
+    uint32_t ouid, ogid;
+
+    if (devfs_owner(name, &ouid, &ogid) != 0) {
+        return -ENOENT;
+    }
+    if (!cred_privileged() && ((uid != (uint32_t)-1 && uid != ouid) ||
+                               (gid != (uint32_t)-1 && gid != ogid &&
+                                (current_proc->euid != ouid || !cred_in_group(gid))))) {
+        return -EPERM;
+    }
+    return devfs_setattr(name, (uint32_t)-1, uid, gid);
+}
+
+static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode);
+
+/**
+ * chmod of the /dev, /proc or /sys node `vp`: a pty slave on the pty, its
+ * owner or a privileged caller only, -ENOENT when the pty is gone; an entry
+ * root made under /dev by `chmod_made`; a device by `chmod_dev`; and a
+ * /proc/PID/fd/N link on the descriptor it names (`chmod_fd`), as Linux
+ * follows the link, which udev's chmod of an O_PATH descriptor takes. Every
+ * other node has fixed metadata, which root's request leaves as it is.
+ */
+static int32_t chmod_synth(const struct vpath *vp, uint32_t mode)
+{
+    if (vp->kind == VNODE_PTS) {
+        struct pty *pt = pty_get(vp->pts_index);
+        if (!pt) {
+            return -ENOENT;
+        }
+        if (!cred_privileged() && current_proc->euid != pt->uid) {
+            return -EPERM;
+        }
+        pt->mode = (uint16_t)(mode & 0777u);
+        return 0;
+    }
+    if (vp->kind == VNODE_DEV_MADE) {
+        return chmod_made(vp->syskey, mode);
+    }
+    if (vp->kind == VNODE_DEV && vp->name[0] != '\0') {
+        return chmod_dev(vp->name, mode);
+    }
+    if (vp->kind == VNODE_PROC_FD_LINK) {
+        process_t *p;
+        fd_entry_t *src;
+        int32_t rc = proc_fd_entry(vp, &p, &src);
+
+        return rc != 0 ? rc : chmod_fd(src, mode);
+    }
+    return current_proc->euid == 0 ? 0 : -EPERM; /* fixed metadata root owns */
+}
+
+/**
+ * Set the mode of the file `name`, resolved against `dir`, for chmod,
+ * fchmodat and fchmodat2.  A nonzero `follow` follows a last symbolic link;
+ * zero gives -EOPNOTSUPP for a link, as Linux does, since a link has no mode
+ * of its own.  Returns 0 or a negative errno.
+ */
+static int32_t do_chmod(const char *name, uint32_t mode, int dir, int follow)
 {
     struct vpath vp;
     const struct vpath *svp;
@@ -9222,7 +9307,7 @@ static int32_t do_chmod(const char *name, uint32_t mode, int dir)
     krffs_node_t *node;
     int32_t rc;
 
-    rc = resolve_named(name, VFS_WALK_LOCK, dir, &ref);
+    rc = resolve_named(name, VFS_WALK_LOCK | (follow ? 0 : VFS_WALK_NOFOLLOW), dir, &ref);
     if (rc != 0) {
         return rc;
     }
@@ -9231,27 +9316,19 @@ static int32_t do_chmod(const char *name, uint32_t mode, int dir)
         vp = *svp;
         vfs_walk_unlock(ref.mnt);
         vfs_ref_release(&ref);
-        if (vp.kind == VNODE_PTS) {
-            struct pty *pt = pty_get(vp.pts_index);
-            if (!pt) {
-                return -ENOENT;
-            }
-            if (!cred_privileged() && current_proc->euid != pt->uid) {
-                return -EPERM;
-            }
-            pt->mode = (uint16_t)(mode & 0777u);
-            return 0;
+        if (!follow && synth_is_link(&vp)) {
+            return -EOPNOTSUPP; /* a link's mode does not change, as on Linux */
         }
-        if (vp.kind == VNODE_DEV_MADE) {
-            return chmod_made(vp.syskey, mode);
-        }
-        return current_proc->euid == 0 ? 0 : -EPERM; /* fixed metadata root owns */
+        return chmod_synth(&vp, mode);
     }
     if (!mnt_is_root(ref.mnt)) {
         struct vfs_stat vst;
 
         vfs_node_lock(&ref);
         rc = vfs_getattr(ref.mnt, ref.node, &vst);
+        if (rc == 0 && !follow && (vst.mode & 0170000u) == 0120000u) {
+            rc = -EOPNOTSUPP;
+        }
         if (rc == 0 && !cred_privileged() && current_proc->euid != vst.uid) {
             rc = -EPERM;
         }
@@ -9346,10 +9423,22 @@ static int vfs_chown_plan(struct vfs_stat *vst, uint32_t uid, uint32_t gid)
  * for 0 or -1 in each field succeeds and changes nothing, and any other is
  * -EPERM.
  */
+static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid);
+
 static int32_t chown_synth(const struct vpath *vp, uint32_t uid, uint32_t gid)
 {
+    if (vp->kind == VNODE_PROC_FD_LINK) {
+        process_t *p;
+        fd_entry_t *src;
+        int32_t rc = proc_fd_entry(vp, &p, &src);
+
+        return rc != 0 ? rc : chown_fd(src, uid, gid);
+    }
     if (vp->kind == VNODE_DEV_MADE) {
         return chown_made(vp->syskey, uid, gid);
+    }
+    if (vp->kind == VNODE_DEV && vp->name[0] != '\0') {
+        return chown_dev(vp->name, uid, gid);
     }
     if (vp->kind == VNODE_PTS) {
         struct pty *pt = pty_get(vp->pts_index);
@@ -9467,7 +9556,7 @@ long sys_chmod(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    rc = do_chmod(path_name(path), mode, dir);
+    rc = do_chmod(path_name(path), mode, dir, 1);
     path_buf_put(path);
     return rc;
 }
@@ -9494,7 +9583,64 @@ long sys_fchmodat(isr_params_t *params)
     if (rc != 0) {
         return rc;
     }
-    rc = do_chmod(path_name(path), mode, dir);
+    rc = do_chmod(path_name(path), mode, dir, 1);
+    path_buf_put(path);
+    return rc;
+}
+
+/**
+ * fchmodat2(2): fchmodat(2) with Linux's flags in argument 3.
+ * AT_SYMLINK_NOFOLLOW leaves a final symbolic link unfollowed, whose mode
+ * does not change, -EOPNOTSUPP, and AT_EMPTY_PATH with an empty path
+ * changes what `dirfd` is open on, an O_PATH descriptor's included, or the
+ * working directory for AT_FDCWD; any other bit is -EINVAL. An empty path
+ * without AT_EMPTY_PATH is -ENOENT, and a NULL one -EFAULT. systemd's
+ * udevd sets a device node's mode through it.
+ */
+long sys_fchmodat2(isr_params_t *params)
+{
+    int dirfd = (int)SC_ARG(params, 0);
+    const char __user *upath = (const char __user *)SC_ARG(params, 1);
+    uint32_t mode = (uint32_t)SC_ARG(params, 2);
+    int flags = (int)SC_ARG(params, 3);
+    char *path;
+    int empty = 0;
+    int dir = 0;
+    int32_t rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    if (flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) {
+        return -EINVAL;
+    }
+    if (!upath) {
+        return -EFAULT;
+    }
+    if (flags & AT_EMPTY_PATH) {
+        empty = user_path_empty(upath);
+        if (empty < 0) {
+            return empty;
+        }
+    }
+    if (empty && dirfd != AT_FDCWD) {
+        fd_entry_t *entry = fd_get(current_proc->fds, dirfd);
+
+        return entry ? chmod_fd(entry, mode) : -EBADF;
+    }
+    if (empty) {
+        path = path_buf_get();
+        if (!path) {
+            return -ENOMEM;
+        }
+        k_strncpy(path, proc_cwd(current_proc), VFS_PATH_MAX);
+    } else {
+        rc = path_from_user_dir(dirfd, upath, &path, &dir);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+    rc = do_chmod(path_name(path), mode, dir, !(flags & AT_SYMLINK_NOFOLLOW));
     path_buf_put(path);
     return rc;
 }
@@ -9518,8 +9664,14 @@ long sys_fchmodat(isr_params_t *params)
  */
 static int32_t fchmod_synth(fd_entry_t *entry, uint32_t mode)
 {
+    if (entry->type == FD_TYPE_SYNTH_PATH) {
+        return entry->priv ? chmod_synth((const struct vpath *)entry->priv, mode) : -EBADF;
+    }
     if (synth_fd_made(entry)) {
         return chmod_made(synth_fd_made(entry), mode);
+    }
+    if (entry->type == FD_TYPE_DEVICE && devfs_fd_name(entry)) {
+        return chmod_dev(devfs_fd_name(entry), mode);
     }
     if (entry->type == FD_TYPE_PTS) {
         struct pty *pt = pty_get(pty_slave_index(entry));
@@ -9548,6 +9700,18 @@ long sys_fchmod(isr_params_t *params)
     if (!entry || (entry->flags & FD_FLAG_PATH)) {
         return -EBADF;
     }
+    return chmod_fd(entry, mode);
+}
+
+/**
+ * chmod of the file descriptor `entry` refers to, for fchmod(2), and for
+ * fchmodat2(2) with AT_EMPTY_PATH and chmod(2) of /proc/PID/fd/N, which
+ * take an O_PATH descriptor too: a KRFFS node or a node of a mounted type
+ * by the rules of the path forms, and any other kind as `fchmod_synth`
+ * says.
+ */
+static int32_t chmod_fd(fd_entry_t *entry, uint32_t mode)
+{
     if ((entry->type == FD_TYPE_FILE || entry->type == FD_TYPE_DIR) && entry->node) {
         int rc = krffs_chmod_node(entry->node, mode);
 
@@ -9651,8 +9815,6 @@ long sys_lchown(isr_params_t *params)
                       (uint32_t)SC_ARG(params, 2), 0);
 }
 
-static int32_t chown_fd(fd_entry_t *entry, uint32_t uid, uint32_t gid);
-
 /**
  * fchownat(2) takes dirfd, path, uid, gid and flags.
  *
@@ -9753,6 +9915,9 @@ static int32_t chown_fd_synth(fd_entry_t *entry, uint32_t uid, uint32_t gid)
     }
     if (synth_fd_made(entry)) {
         return chown_made(synth_fd_made(entry), uid, gid);
+    }
+    if (entry->type == FD_TYPE_DEVICE && devfs_fd_name(entry)) {
+        return chown_dev(devfs_fd_name(entry), uid, gid);
     }
     if (entry->type == FD_TYPE_PTS) {
         struct pty *pt = pty_get(pty_slave_index(entry));

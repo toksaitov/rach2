@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 10, 2026
 .Dt CHOWN 2
 .Os
 .Sh NAME
@@ -60,10 +60,11 @@ reaches.
 .Fn chown
 follows
 .Pa /proc/self
-to a process directory, whose ownership is fixed too, and does not
-follow a
+to a process directory, whose ownership is fixed too, follows a
 .Pa /proc/ Ns Ar pid Ns Pa /fd/ Ns Ar n
-link, but it follows
+link to what the descriptor is open on, a descriptor opened with
+.Dv O_PATH
+included, and follows
 .Pa /proc/ Ns Ar pid Ns Pa /exe
 to the program's file itself, wherever it is now, as Linux does, and
 changes that file: a privileged
@@ -90,9 +91,7 @@ finds the descriptor open, as a
 .Fn chown
 of
 .Pa /proc/self/fd/N ,
-a link with fixed root ownership: a request of 0 or -1 for each ID
-succeeds without a change, for any caller, and any other returns
-.Er EPERM .
+which the kernel follows to the descriptor's file.
 .Pp
 .Fn fchownat
 resolves a relative
@@ -148,7 +147,10 @@ stores its own owner and group, but changing either requires effective
 user ID 0.
 A directory or link made under
 .Pa /dev
-stores its owner and group as a file does.
+stores its owner and group as a file does, and so does a device under
+.Pa /dev ,
+whose owner and group the next open checks, as udev sets those of Linux's
+devtmpfs nodes; a device registered anew starts as root's.
 Other synthetic objects under
 .Pa /dev
 and

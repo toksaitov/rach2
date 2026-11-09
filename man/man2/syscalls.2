@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 10, 2026
 .Dt SYSCALLS 2
 .Os
 .Sh NAME
@@ -58,7 +58,7 @@ Linux asks for a capability in each such place, and this kernel asks for
 .Dv CAP_SYS_ADMIN
 in every one.
 .Ss System call numbers
-On i686 the kernel registers the following 306 calls, the operations of
+On i686 the kernel registers the following 307 calls, the operations of
 .Xr socketcall 2
 among them.
 .Bl -column "Number" "System call" -compact
@@ -380,10 +380,11 @@ The following operation numbers select calls through system call 102,
 .It 438 Ta Xr pidfd_getfd 2
 .It 439 Ta Xr faccessat2 2
 .It 441 Ta Xr epoll_pwait2 2
+.It 452 Ta Xr fchmodat2 2
 .It 0x1000 Ta Xr ping 2
 .El
 .Pp
-On x86-64 it registers the following 262 calls.
+On x86-64 it registers the following 263 calls.
 .Bl -column "Number" "System call" -compact
 .It Sy Number Ta Sy System call
 .It 0 Ta Xr read 2
@@ -653,6 +654,7 @@ On x86-64 it registers the following 262 calls.
 .It 438 Ta Xr pidfd_getfd 2
 .It 439 Ta Xr faccessat2 2
 .It 441 Ta Xr epoll_pwait2 2
+.It 452 Ta Xr fchmodat2 2
 .El
 .Sh ERRORS
 .Bl -tag -width "[ENOSYS]"

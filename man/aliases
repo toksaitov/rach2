@@ -112,6 +112,7 @@ fbset 1 busybox-util-linux
 fchdir 2 chdir
 fchmod 2 chmod
 fchmodat 2 chmod
+fchmodat2 2 chmod
 fchown 2 chown
 fchown32 2 chown
 fchownat 2 chown

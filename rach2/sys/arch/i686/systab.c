@@ -341,6 +341,7 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
     table[SYS_SET_ROBUST_LIST] = sys_set_robust_list;
     table[SYS_GET_ROBUST_LIST] = sys_get_robust_list;
     table[SYS_FUTEX_WAITV] = sys_futex_waitv;
+    table[SYS_FCHMODAT2] = sys_fchmodat2;
     table[SYS_EXIT_GROUP] = sys_exit_group;
     table[SYS_SOCKET] = sys_socket;
     table[SYS_SOCKETPAIR] = sys_socketpair;

@@ -169,6 +169,7 @@
 #define SYS_SET_ROBUST_LIST        311
 #define SYS_GET_ROBUST_LIST        312
 #define SYS_FUTEX_WAITV            449
+#define SYS_FCHMODAT2              452
 #define SYS_WAITID                 284
 #define SYS_UTIMENSAT              320
 #define SYS_NANOSLEEP              162

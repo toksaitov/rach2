@@ -79,6 +79,27 @@ uint32_t devfs_fd_ino(struct fd_entry *e);
  * gives it; 0 for a descriptor that is not of a device. */
 uint32_t devfs_fd_mode(struct fd_entry *e);
 
+/**
+ * The owner `*uid` and group `*gid` of the device `name`: root's, 0 and 0,
+ * until `devfs_setattr` gives it others. Returns 0, or -1 for no such device.
+ */
+int devfs_owner(const char *name, uint32_t *uid, uint32_t *gid);
+
+/** The owner and group of the device the descriptor `e` is open on, as
+ * `devfs_owner` gives them; 0 and 0 for a descriptor not of a device. */
+void devfs_fd_owner(struct fd_entry *e, uint32_t *uid, uint32_t *gid);
+
+/**
+ * Give the device `name` the permission bits of `mode`, the owner `uid`
+ * and the group `gid`, each left as it is when (uint32_t)-1, as udev sets
+ * the nodes of Linux's devtmpfs; `devfs_stat`, `devfs_owner` and the check
+ * of an open read them, and a node registered anew starts again as root's
+ * with its driver's mode. The caller has checked the caller's right.
+ * Returns 0, -ENOENT for no such device, or -ENOSPC when DEVFS_OWNED_MAX
+ * devices have attributes already.
+ */
+int32_t devfs_setattr(const char *name, uint32_t mode, uint32_t uid, uint32_t gid);
+
 struct disk;
 struct part_table;
 
@@ -278,6 +299,8 @@ int devfs_subdir_present(int row);
  * its slot is taken again, first by a node of the same name.
  */
 #define DEVFS_NODES_MAX     64
+/* The devices that may have an owner, group or mode of their own at once. */
+#define DEVFS_OWNED_MAX     256
 #define DEVFS_NODE_NAME_MAX 32
 struct devfs_node {
     const char *name;

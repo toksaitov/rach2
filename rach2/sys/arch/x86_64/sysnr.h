@@ -287,6 +287,7 @@
 #define SYS_FACCESSAT2             439
 #define SYS_EPOLL_PWAIT2           441
 #define SYS_FUTEX_WAITV            449
+#define SYS_FCHMODAT2              452
 
 /* Rach2's own call, which Linux does not have: ping(2), the ICMP echo that
  * i386 reaches as socketcall's operations 0x1000 and 0x1001. x86-64 has no
