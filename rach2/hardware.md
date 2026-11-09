@@ -64,7 +64,8 @@ There are no isochronous transfers, so no USB audio or video, and no class drive
 ## Input
 
 * The PS/2 keyboard on the 8042, read as scancode set 1.
-* The PS/2 mouse on the 8042's auxiliary port: three buttons and no wheel.
+* The PS/2 mouse on the 8042's auxiliary port: three buttons, or a wheel and up to five buttons with the IntelliMouse protocols.
+* A Synaptics touchpad on that port, in the absolute mode Linux sets, with two slots on a pad with an image sensor; another touchpad works as the PS/2 mouse it also is.
 * USB boot keyboards and mice, as under USB.
 
 Every keyboard feeds one input layer, with one US English keymap, and is an event device of its own, as on Linux ([input(4)](../man/man4/input.4)); a held USB key does not repeat. [Terminals](sys/tty/Readme.md) follows a keystroke from the driver to a program.
@@ -145,7 +146,8 @@ The one real machine is a Lenovo G50-70 laptop: an Intel Core i3-4030U of four l
 | The soldered USB devices, the Bluetooth radio among them | | none | refused once each at boot |
 | HD Audio, with a Conexant codec 14F1:510F | 8086:9C20 | HDA | plays |
 | The processor's HDMI audio | 8086:0A0C | none | passed over |
-| Built-in keyboard and touchpad | | PS/2 | on the 8042; the sessions recorded used USB input, so the records do not say how well these work |
+| Built-in keyboard | | PS/2 | on the 8042; the sessions recorded used USB input, so the records do not say how well it works |
+| Synaptics touchpad, model 1, firmware 8.1, an image sensor | | PS/2, Synaptics | on the 8042, in absolute mode with two slots and the capabilities Linux gives it; checked against a model of the pad, not yet on the machine |
 | Screen | | the framebuffer console | 1366 by 768 under UEFI, mapped write-combining; VGA text by BIOS |
 | VT-d units: dmar0 for the GPU, dmar1 for the rest | | VT-d | interrupt remapping on at boot, translation only for a device given to a domain; checked against a model of both units, not yet on the machine |
 | Power | | the `lynxpoint-lp` profile | power off and restart work; a press of the power button and a closed lid are not handled |
