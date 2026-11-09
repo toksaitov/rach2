@@ -971,6 +971,7 @@ $(PROBE_SCENARIOS): build/tests/cases/machine/%: tests/cases/machine/%.c \
 # console as they do.
 NET_SCENARIOS = build/tests/cases/machine/d3d_scenario \
                 build/tests/cases/machine/desktop_scenario \
+                build/tests/cases/machine/i915fake_scenario \
                 build/tests/cases/machine/diskdiag_scenario \
                 build/tests/cases/machine/ssh_scenario build/tests/cases/machine/e1000_scenario \
                 build/tests/cases/machine/metal_scenario build/tests/cases/machine/netconsole_scenario \

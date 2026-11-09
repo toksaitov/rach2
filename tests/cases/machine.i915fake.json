@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.i915fake",
+  "summary": "The i915 driver on the fake chip in QEMU, under the GNU root: the identity libdrm reads, the driver Mesa's loader picks, and the faults of the chip's debugfs file; the program is tests/cases/machine/i915fake_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.i915fake.crocus",
+      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device with the fake chip behind it: drmdevice reports 8086:0a16 on board 17aa:380c, Mesa's loader under eglinfo picks crocus for it, and first light run from the fake's debugfs file passes, fails by name under each fault armed there, and passes again once the fault is spent",
+      "units": [
+        "rach2/sys/drm/i915/i915_fake.c",
+        "drmdevice",
+        "eglinfo"
+      ],
+      "domain": "machine",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {}
+      },
+      "execution": {
+        "program": "i915fake_scenario",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [
+          {
+            "fixture": "scratch"
+          }
+        ],
+        "children": "none",
+        "cleanup": "libetude-case stops QEMU and removes the overlay, which it keeps after a failure"
+      },
+      "steps": [
+        {
+          "step_id": "boot",
+          "stage": "boot",
+          "machine": "gnu",
+          "does": "boot an overlay of the GNU system's disk on AHCI with an edu device, rach2.root=ext2 and rach2.i915fake, wait for the driver's line that edu stands in for 8086:0a16, log in as root and open the guest command channel"
+        },
+        {
+          "step_id": "probe",
+          "stage": "execute",
+          "machine": "gnu",
+          "does": "run drmdevice, eglinfo with the loader's debug log on, and first light from /sys/kernel/debug/dri/N/i915_fake plain and under the submit, bind, irq and hang faults"
+        }
+      ],
+      "machines": [
+        {
+          "machine_id": "gnu",
+          "qemu": {
+            "kernel": "kernel",
+            "initrd": null,
+            "disks": [
+              {
+                "name": "gnu-disk",
+                "base": "gnu-image",
+                "cluster_bytes": 65536,
+                "bus": "ahci"
+              }
+            ],
+            "cpu": "max",
+            "processors": 2,
+            "memory_bytes": 2147483648,
+            "firmware": "direct",
+            "devices": [
+              "edu"
+            ],
+            "boot_options": [
+              "rach2.root=ext2",
+              "rach2.i915fake"
+            ]
+          },
+          "console": "serial",
+          "qmp": true,
+          "helper": false
+        }
+      ],
+      "services": [],
+      "assertions": [
+        {
+          "assertion_id": "identity",
+          "checks": "drmdevice reports vendor 8086, device 0a16, subvendor 17aa and subdevice 380c",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "loader",
+          "checks": "Mesa's loader logs the pci id 8086:0a16 with driver crocus",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "faults",
+          "checks": "first light passes, gives -5 under submit, -12 under bind, -62 under irq, passes again, and gives -62 under hang with rcs0 hung, and the script exits 0",
+          "source": "scenario"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [
+        {
+          "witness_id": "stage",
+          "kind": "step",
+          "means": "a step of the manifest has ended",
+          "limit": 2
+        }
+      ],
+      "bounds": {
+        "case": {
+          "floor_us": 5000000,
+          "initial_us": 1200000000,
+          "ceiling_us": 3600000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 900000000,
+          "ceiling_us": 2700000000
+        },
+        "stages": {
+          "prepare": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          },
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 900000000,
+            "ceiling_us": 1800000000
+          },
+          "cleanup": {
+            "floor_us": 100000,
+            "initial_us": 30000000,
+            "ceiling_us": 120000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 2000,
+        "cpu_ceiling_millis": 2000,
+        "memory_bytes": 2952790016,
+        "disk_bytes": 5368709120,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "demo-password",
+          "node": "tests/cases/credentials/rach2_demo_password",
+          "per_architecture": false
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "gnu-image",
+          "node": "images/gnu-test.disk",
+          "per_architecture": true
+        },
+        {
+          "name": "i915fake_scenario",
+          "node": "tests/cases/machine/i915fake_scenario",
+          "per_architecture": false
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "boot",
+        "reason": "the case needs QEMU's edu device, which no installed machine has"
+      }
+    }
+  ]
+}
