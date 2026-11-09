@@ -17,16 +17,23 @@
 #define I915_FW_THREAD_US 5000u
 #define I915_GT_FIFO_US   10000u
 
-/* The registers below this offset, and from GEN11_BSD_RING_BASE up, are
- * the GT's, which need forcewake to read and the FIFO to write (Linux's
- * NEEDS_FORCE_WAKE). */
-#define I915_GT_REG_END  0x40000u
-#define I915_GT_REG_HIGH 0x1c0000u
+/* The GT's registers lie below 0x40000, the one range of Linux's
+ * __gen6_fw_ranges, and need forcewake to read. A write waits for room in
+ * the GT FIFO below 0x40000 and from 0x116000, Linux's NEEDS_FORCE_WAKE,
+ * which gen6_write tests. */
+#define I915_GT_REG_END   0x40000u
+#define I915_GT_FIFO_HIGH 0x116000u
 
-/** Whether `reg` is a register of the GT. */
+/** Whether `reg` is a register of the GT, which a read wakes. */
 static int i915_gt_reg(uint32_t reg)
 {
-    return reg < I915_GT_REG_END || reg >= I915_GT_REG_HIGH;
+    return reg < I915_GT_REG_END;
+}
+
+/** Whether a write to `reg` goes through the GT FIFO. */
+static int i915_gt_fifo_reg(uint32_t reg)
+{
+    return reg < I915_GT_REG_END || reg >= I915_GT_FIFO_HIGH;
 }
 
 void i915_uncore_init(struct drm_i915_private *i915)
@@ -160,7 +167,7 @@ void i915_uncore_write(struct drm_i915_private *i915, uint32_t reg, uint32_t val
 {
     uint32_t flags;
 
-    if (!i915_gt_reg(reg)) {
+    if (!i915_gt_fifo_reg(reg)) {
         i915_write(&i915->hw, reg, value);
         return;
     }

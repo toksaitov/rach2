@@ -178,7 +178,8 @@ static int32_t i915_ring_start(struct drm_i915_private *i915, struct i915_engine
     if (err < 0) {
         return err;
     }
-    i915_write(hw, RING_HWSTAM(base), 0xffffffffu);
+    /* set_hwstam: the render ring keeps bit 0 unmasked. */
+    i915_write(hw, RING_HWSTAM(base), e->mmio_base == RENDER_RING_BASE ? ~1u : 0xffffffffu);
     i915_write(hw, RING_IMR(base), 0xffffffffu);
 
     /* ring_setup_status_page: set_hwsp, then flush_cs_tlb. */

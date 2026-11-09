@@ -340,20 +340,19 @@ int32_t i915_forcewake_get(struct drm_i915_private *i915);
 void i915_forcewake_put(struct drm_i915_private *i915);
 
 /**
- * Read `reg` as Linux's gen6 accessors do: a register of the GT, below
- * 0x40000 or from 0x1c0000, under forcewake taken for the read when no
- * reference is held, and any other directly. A GT register whose
- * forcewake cannot be had reads all ones, as a register of a chip that
- * has gone.
+ * Read `reg` as Linux's accessors do on Haswell: a register of the GT,
+ * below 0x40000, under forcewake taken for the read when no reference is
+ * held, and any other directly. A GT register whose forcewake cannot be
+ * had reads all ones, as a register of a chip that has gone.
  */
 uint32_t i915_uncore_read(struct drm_i915_private *i915, uint32_t reg);
 
 /**
- * Write `value` to `reg` as Linux's gen6 accessors do: a write to a GT
- * register waits, 10 ms at most, until the GT FIFO has more free entries
- * than the 20 it keeps in reserve, since a write that finds it full is
- * lost; a wait that reaches its bound is logged and counted, and the write
- * goes ahead, as on Linux.
+ * Write `value` to `reg` as Linux's gen6 accessors do: a write below
+ * 0x40000 or from 0x116000 waits, 10 ms at most, until the GT FIFO has
+ * more free entries than the 20 it keeps in reserve, since a write that
+ * finds it full is lost; a wait that reaches its bound is logged and
+ * counted, and the write goes ahead, as on Linux.
  */
 void i915_uncore_write(struct drm_i915_private *i915, uint32_t reg, uint32_t value);
 

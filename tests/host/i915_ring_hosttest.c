@@ -451,8 +451,9 @@ static void check_started(struct i915_model *m, struct drm_i915_private *i915,
               i915_model_peek(m, RING_CTL(b)) == (0x3000u | RING_VALID) &&
               i915_model_peek(m, RING_HEAD(b)) == 0 && i915_model_peek(m, RING_TAIL(b)) == 0);
     CHECK("start: no longer told to stop", !(i915_model_peek(m, RING_MI_MODE(b)) & STOP_RING));
-    CHECK("start: the status page's interrupt writes and the ring's interrupts masked",
-          i915_model_peek(m, RING_HWSTAM(b)) == 0xffffffffu &&
+    CHECK("start: the status page's interrupt writes, but the render ring's bit 0, and the "
+          "ring's interrupts masked",
+          i915_model_peek(m, RING_HWSTAM(b)) == (b == RENDER_RING_BASE ? ~1u : 0xffffffffu) &&
               i915_model_peek(m, RING_IMR(b)) == 0xffffffffu);
     CHECK("start: the status page mapped at the LLC's level", mapped(i915, e->hws, 1, e->hws_ggtt));
     CHECK("start: the ring's four pages mapped, each its own",
