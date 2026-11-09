@@ -486,15 +486,28 @@ void isr_line_release(int line, int level)
  */
 int isr_alloc_vector(void)
 {
+    return isr_alloc_vector_aligned(1);
+}
+
+/**
+ * The lowest free message vector that is a multiple of `align`, marked as
+ * given; -1 with a record when none is free. An `align` that is not a power
+ * of two from 1 to 16 is taken as 1.
+ */
+int isr_alloc_vector_aligned(int align)
+{
     int v;
 
+    if (align < 1 || align > 16 || (align & (align - 1)) != 0) {
+        align = 1;
+    }
     for (v = ISR_MSI_FIRST; v <= ISR_MSI_LAST; v++) {
-        if (!_vector_taken[v]) {
+        if (v % align == 0 && !_vector_taken[v]) {
             _vector_taken[v] = 1;
             return v;
         }
     }
-    klog(KLOG_ERR, "isr", "vector: none free for a device");
+    klog(KLOG_ERR, "isr", "vector: none free for a device, aligned to %d", align);
     return -1;
 }
 
