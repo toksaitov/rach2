@@ -12,6 +12,14 @@ The Debian guest is fetched and prepared once for each clone, and each run boots
 
 `fetch` downloads the image that [`debian-ref/image`](debian-ref/image) pins and checks its size and SHA-512. `prepare` boots it once with a cloud-init seed, whose `network-config` is empty, as [`debian-ref/setup.sh.in`](debian-ref/setup.sh.in) says: it points apt at Debian's snapshot of the pinned date, installs [`debian-ref/packages`](debian-ref/packages), Mesa 25.0.7-2+deb13u1 among them, builds vkms, turns cloud-init off so that every later boot is the same, and powers off; the result is `prepared.qcow2`, read-only. It takes a few minutes on the testing PC, most of them apt's downloads. `run` boots an overlay of the prepared image, copies [`guest-env.sh`](guest-env.sh) to `/tmp/guest-env.sh`, runs the command in sh as the user `gfx` over SSH with that file sourced, powers the guest off, removes the overlay and exits with the command's status. Its options are the display profile (`-p`, `std-vga` by default), the CPUs (`-c`, 8), the memory in MiB (`-m`, 8192), the run's class (`-g`, `performance`), `-d` for a Done's run, `-r FILE` for the record, `-i FILE` for a file copied to the guest's `/tmp` before the command, and `-o FILE` for one copied from the guest's `/tmp`, by its last component, once the command has succeeded; each may be given more than once. `prepare -n` prepares only when no prepared image exists, as a build that uses the guest does ([IGT's tests](../../vendor/gnu/Readme.md#igts-tests)). The images and the key that logs in are in `build/cache/debian-ref` of the main clone, which its worktrees share, or in `DEBIAN_REF_CACHE`.
 
+A run on a machine with an installed site policy is a claim of the site's ledger, as [Admission](#admission) says; `-l` marks a light guest. [`capture/drmcapture.c`](capture/drmcapture.c) reads the frame a card scans out and prints its CRC-32, the same on both sides for the same frame:
+
+    sh tests/graphics/debian-ref/debian-ref.sh run -p std-vga -c 2 -m 2048 -l \
+        -i tests/graphics/capture/drmcapture.c \
+        'cc -std=c99 -O2 -o /tmp/drmcapture /tmp/drmcapture.c && sudo /tmp/drmcapture -p'
+
+On Rach2 it is `/drmcapture` of the test image, which `tests/Makefile` builds from the same source against the ported musl.
+
 Rach2's run scripts take the same profiles: `DISPLAY_PROFILE=virtio-gpu ARCH=x86_64 sh rach2/run.sh os-simple` boots with that display in place of QEMU's default VGA ([rach2/qemu_devices.sh](../../rach2/qemu_devices.sh), [rach2/run.Readme.md](../../rach2/run.Readme.md)). A machine case names its profile in its QEMU profile's `display` ([etude's display profiles](../../tools/etude/Readme.md#display-profiles)).
 
 ## Results
@@ -57,6 +65,17 @@ Debian 13's kernel is built without vkms (`# CONFIG_DRM_VKMS is not set` in its 
 
 `GRAPHICS_DONE=1`, `-d` of `run`, empties Mesa's shader cache, `MESA_SHADER_CACHE_DIR`, before the run, so that no shader compiled by an earlier run is reused. `graphics_xvfb` starts Xvfb at 1280x800 with `-noreset`, so that it does not reset when its last client leaves, and `graphics_env` prints the environment for the record.
 
+### Admission
+
+A guest of the graphics tests runs a process on each of its processors, or measures its performance, so it claims its processors as well as its memory, and the guests of every account on the testing PC are counted against the site's 32 processors: four CPU-bound guests of 8 run at once and a fifth waits. A CPU-bound guest claims every processor and a light one two ([etude's Readme](../../tools/etude/Readme.md#admission)).
+
+* A Rach2 case names its class in its `resources` as `cpu_class`, `bound` or `light`, and etude reserves by it in place of the processors its history measured; inside a launcher claim the case also claims its processors in the site's ledger.
+* The Debian guest's `run` re-runs itself as one claim of the site's ledger through the tree's `etude admit -c`, CPU-bound unless `-l` says it is light, with its memory and QEMU's 1 GiB, and waits in the ledger for the site's wait. The claim's identity is in the run's record. A machine without a site policy, such as the Mac, runs it unclaimed.
+
+### Capture
+
+QEMU's screen dump has no surface once the scanout is a dma-buf, so a frame is read inside the guest. `drmcapture` finds the first CRTC that scans out a framebuffer, takes the buffer's handle with GETFB2, which Linux gives to root and the card's master alone, maps it with MAP_DUMB and mmap, and folds each pixel's red, green and blue bytes, row by row, into a CRC-32 (zlib's), without the padding byte or the row's padding; two drivers that lay one picture out in different 32-bit formats or pitches give the same sum. It reads linear XR24, AR24, XB24 and AB24. `-o FILE` writes the frame as a binary PPM, whose pixel bytes give the same CRC-32 to `zlib.crc32`. With `-p` it first sets a pattern of its own, red across, green down and blue their XOR, on the preferred mode of the first connected connector as the card's master, and reads it back the same way; at 1280x800 its sum is `0x85b019e6`, as the Debian guest's std-vga gave it under bochs-drm and as the pattern computed on the host gives it. It uses the C library and the kernel's ioctls alone, with Linux's structures written out, so that neither side needs libdrm.
+
 ### virgl on the testing PC
 
 The `virgl` profile draws the guest's GL on the testing PC's RTX 4080 SUPER: QEMU's egl-headless display opens WSL's render node, `/dev/dri/renderD128`, a vgem device that only the group `render` may open, and `GALLIUM_DRIVER=d3d12` with `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA` in QEMU's environment put its GL on Mesa's d3d12 driver, which reaches the GPU through `/dev/dxg`; without them it renders on llvmpipe. It needs no kernel module. A Debian guest under it reports the renderer `virgl` in `eglinfo`. `sh tools/setup/doctor.sh` checks the host's side for the account that runs it ([tools/Readme.md](../../tools/Readme.md#the-testing-host)).
@@ -79,4 +98,5 @@ QEMU on Windows gives no Venus. The test engine's QEMU 11.1.2 (`rach2-whpx-d0`, 
 
 * `virgl` and `venus` are the testing PC's alone: the render node's path, the adapter's name and the libraries' paths are its own, the test engine's QEMU on Windows has no GL display, and etude refuses both there.
 * `venus` needs the udmabuf module, which a restart of WSL unloads until root loads it again; `grep '^udmabuf ' /proc/modules` says whether it is loaded.
+* On Rach2 `drmcapture` needs a card, which in QEMU no driver gives yet: Rach2's std-vga and virtio-gpu drivers are stubs ([rach2/sys/drm/Readme.md](../../rach2/sys/drm/Readme.md)).
 * The Debian guest's packages come from the snapshot of one date; a newer reference takes a new date in `debian-ref/image` and a new `prepare`.
