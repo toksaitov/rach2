@@ -61,9 +61,17 @@ and
 .Dv KVM_GET_NR_MMU_PAGES ,
 .Dv KVM_GET_CLOCK ,
 .Dv KVM_SET_CLOCK ,
-.Dv KVM_SET_BOOT_CPU_ID
+.Dv KVM_SET_BOOT_CPU_ID ,
+.Dv KVM_ENABLE_CAP ,
+.Dv KVM_CREATE_IRQCHIP ,
+which it refuses,
+.Dv KVM_SET_GSI_ROUTING ,
+.Dv KVM_IRQ_LINE ,
+.Dv KVM_IRQ_LINE_STATUS ,
+.Dv KVM_SIGNAL_MSI ,
+.Dv KVM_IRQFD
 and
-.Dv KVM_ENABLE_CAP .
+.Dv KVM_IOEVENTFD .
 .It a vCPU
 .Dv KVM_RUN ,
 the registers
@@ -80,6 +88,8 @@ and their sets,
 .Dv KVM_INTERRUPT ,
 .Dv KVM_NMI ,
 .Dv KVM_SET_SIGNAL_MASK ,
+.Dv KVM_GET_LAPIC ,
+.Dv KVM_SET_LAPIC ,
 .Dv KVM_SET_GUEST_DEBUG ,
 .Dv KVM_X86_SETUP_MCE
 and
@@ -90,8 +100,8 @@ and
 answers 1, or a count, for each capability the kernel makes true, and 0
 for the rest.
 A capability turns on with the part of the kernel that gives it: those of
-the memory slots, the in-kernel interrupt controller and ioeventfds are
-not given yet, and neither is any that depends on the backend.
+the memory slots are not given yet, and neither is any that depends on the
+backend.
 .Pp
 A vCPU's descriptor maps
 .Dv KVM_GET_VCPU_MMAP_SIZE
@@ -132,6 +142,86 @@ The backends that run guests are not in this kernel yet:
 .Dv KVM_RUN
 otherwise fails with
 .Er EOPNOTSUPP .
+.Ss Interrupts
+The interrupt controller in the kernel is Linux's split one.
+.Dv KVM_ENABLE_CAP
+of
+.Dv KVM_CAP_SPLIT_IRQCHIP
+on a VM, before its first vCPU, with the number of the caller's I/O APIC
+pins in
+.Va args[0] ,
+at most 4096, puts each vCPU's local APIC in the kernel; the PIC and the
+I/O APIC stay in the caller.
+.Dv KVM_CREATE_IRQCHIP ,
+which would put them in the kernel too, fails.
+QEMU's pc and q35 machines ask for it by default and stop when it fails,
+so they run with
+.Fl machine Cm kernel-irqchip=split ,
+or with
+.Cm kernel-irqchip=off ,
+which keeps the local APIC in QEMU as well.
+.Pp
+The local APIC is Linux's: its registers at the guest's APIC base and, in
+x2APIC mode, in MSRs 0x800 to 0x8ff; its timer, one-shot, periodic or at
+.Dv IA32_TSC_DEADLINE ,
+counting at a bus of 1 GHz; the delivery of fixed, lowest-priority, NMI,
+INIT and SIPI messages to the destinations Linux matches; and HLT, which
+waits in the kernel for an interrupt the vCPU can take.
+The guest's CPUID offers x2APIC, and the TSC-deadline mode when
+.Dv KVM_CAP_TSC_DEADLINE_TIMER
+is 1.
+The boot vCPU's LINT0 takes ExtINT at reset, so a vector given by
+.Dv KVM_INTERRUPT ,
+the caller's PIC's, reaches the guest.
+.Dv KVM_GET_LAPIC
+and
+.Dv KVM_SET_LAPIC
+take the APIC's 1 KiB page in Linux's layout, with the x2APIC id in bits
+31:24.
+.Pp
+.Dv KVM_SET_GSI_ROUTING
+takes MSI routes alone, one for each GSI.
+.Dv KVM_IRQ_LINE
+raises a GSI's MSI, and
+.Dv KVM_IRQ_LINE_STATUS
+also gives in
+.Va irq
+the count of APICs that took it, or \-1;
+.Dv KVM_SIGNAL_MSI
+sends an MSI and returns that count.
+When a vector raised level-triggered through the route of a GSI below the
+I/O APIC's pin count ends with an EOI,
+.Dv KVM_RUN
+returns with
+.Dv KVM_EXIT_IOAPIC_EOI
+and the vector in
+.Va eoi.vector .
+.Pp
+.Dv KVM_IRQFD
+ties an eventfd, see
+.Xr eventfd 2 ,
+to a GSI: each write that raises its counter raises the GSI's MSI and
+takes the counter.
+The tie ends with
+.Dv KVM_IRQFD_FLAG_DEASSIGN ,
+the VM's end or the eventfd's last close.
+.Dv KVM_IRQFD_FLAG_RESAMPLE
+is refused, as Linux refuses it with the split controller, and QEMU then
+resamples in its own I/O APIC.
+.Pp
+.Dv KVM_IOEVENTFD
+ties an eventfd to a port, with
+.Dv KVM_IOEVENTFD_FLAG_PIO ,
+or to an MMIO address: a guest's write there of
+.Va len
+bytes, or of any length when
+.Va len
+is 0, and of
+.Va datamatch
+with
+.Dv KVM_IOEVENTFD_FLAG_DATAMATCH ,
+adds 1 to the counter and goes no further.
+A string OUT adds 1 for each element.
 .Sh FILES
 .Bl -tag -width /dev/kvm
 .It Pa /dev/kvm
@@ -157,17 +247,43 @@ and
 then write back.
 .It Bq Er EEXIST
 .Dv KVM_CREATE_VCPU
-of an id the VM has.
+of an id the VM has;
+.Dv KVM_CAP_SPLIT_IRQCHIP
+a second time or once the VM has a vCPU;
+.Dv KVM_CREATE_IRQCHIP
+after it;
+.Dv KVM_INTERRUPT
+with the split controller while a vector waits;
+an ioeventfd that some write would match along with another.
 .It Bq Er EBUSY
 .Dv KVM_SET_IDENTITY_MAP_ADDR
 or
 .Dv KVM_SET_BOOT_CPU_ID
 once the VM has a vCPU;
 .Dv KVM_SET_GUEST_DEBUG
-while an exception waits.
+while an exception waits;
+.Dv KVM_IRQFD
+of an eventfd the VM has an irqfd on.
 .It Bq Er ENXIO
 .Dv KVM_INTERRUPT
-while an interrupt waits.
+without the split controller while an interrupt waits;
+.Dv KVM_CREATE_IRQCHIP ;
+.Dv KVM_IRQ_LINE
+without the split controller.
+.It Bq Er EBADF
+.Dv KVM_IRQFD
+or
+.Dv KVM_IOEVENTFD
+of a descriptor that is not open.
+.It Bq Er ENOENT
+.Dv KVM_IOEVENTFD_FLAG_DEASSIGN
+of no ioeventfd.
+.It Bq Er ENOSPC
+.Dv KVM_IOEVENTFD
+on a bus of 1000 ioeventfds.
+.It Bq Er EPERM
+.Dv KVM_SIGNAL_MSI
+that no APIC took.
 .It Bq Er EIO
 An ioctl from an address space other than the VM's.
 .It Bq Er EINTR
@@ -180,6 +296,7 @@ a signal or a request to stop.
 until the backends run guests.
 .El
 .Sh SEE ALSO
+.Xr eventfd 2 ,
 .Xr ioctl 2 ,
 .Xr mmap 2 ,
 .Xr limits 7
@@ -189,5 +306,9 @@ Linux's KVM API, version 12, for x86, as its
 gives it.
 .Sh BUGS
 At most 64 vCPUs in a VM, with ids below 256, and 256 memory slots.
-No in-kernel PIC, IOAPIC or PIT, no coalesced MMIO, no dirty ring, no SMM
-and no nested virtualization.
+No in-kernel PIC, I/O APIC or PIT, no routes but MSI routes, no irqfd
+resample, no
+.Dv KVM_CAP_X2APIC_API ,
+no coalesced MMIO, no dirty ring, no SMM and no nested virtualization.
+The APIC timer is checked at each entry, and the host's tick of 1 ms
+makes the guest exit, so an expiry reaches the guest within a tick.
