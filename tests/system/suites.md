@@ -115,3 +115,4 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `d3d-wine` (full tier; needs qemu, mke2fs; 17408 MiB; x86_64 only): Wine's Direct3D units on both paths against Debian.
 * `d3d-vkd3d` (full tier; needs qemu, mke2fs; 17408 MiB; x86_64 only): vkd3d-proton's units on lavapipe against Debian.
 * `desktop` (full tier; needs qemu, python3; 4096 MiB; x86_64 only): an ordinary headless Weston session at boot, input discovery, and browser and ALSA tones measured through OSS loopback.
+* `vgpu` (full tier; needs qemu; 256 MiB): QEMU's virtio-vga-gl with a virgl renderer under Rach2's virtio-gpu driver: the capability sets, a context for each open, a 3D texture uploaded and read back, a submission's sync-file out-fence passed on as an in-fence, blocking and non-blocking waits, and a reset that fails the pending fences.

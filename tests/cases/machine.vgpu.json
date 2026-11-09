@@ -128,8 +128,8 @@
       },
       "prepare": [
         {
-          "name": "udmabufprobe",
-          "node": "tests/udmabufprobe",
+          "name": "vgpuprobe",
+          "node": "tests/vgpuprobe",
           "per_architecture": true
         },
         {
