@@ -1145,10 +1145,14 @@ build/tests/cases/grow/grow_tool.sh build/tests/cases/grow/grow_measure.awk:
 # `tests/run installer-repair`: the machine that will not boot, restored,
 # updated or converted from the stick, each update also stopped part way and
 # run again, as the cases of tests/cases/machine.installer-repair.json.
+# `tests/run datapart`: the data partition a new install makes and
+# `rach2-install --data` makes room for, a file on it kept across an update,
+# and the trial roots booted from it, as the case of
+# tests/cases/machine.datapart.json.
 # `tests/run installer-rehearse`: the rehearsal of the Lenovo's install
 # sitting, in its small form with the test stick and on x86-64 at the
 # machine's own size with the product's stick, as the cases of
-# tests/cases/machine.installer-rehearse.json. Etude runs the three, and they
+# tests/cases/machine.installer-rehearse.json. Etude runs the four, and they
 # have no target here.
 # `tests/run uefi`: the machine booted by UEFI firmware, OVMF, from its
 # installed disk, from that disk's recovery entry, from the same disk with its

@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "family_id": "machine.datapart",
+  "summary": "The data partition: made by a new install and by rach2-install --data, kept across an update, and the trial roots bootctl rootimage boots from it; the scenario is tests/cases/machine/datapart_scenario.c",
+  "cases": [
+    {
+      "case_id": "machine.datapart.keep",
+      "behavior": "a new install with a root of 96 MiB makes the data partition after it, and a file on it is kept across an update of the root with its entry unchanged; a broken root image armed with bootctl rootimage is refused and the boot after it takes the installed root, a good one boots once from the data partition with the partition at /data, and a disk installed whole gains the data partition from rach2-install --data, run twice, and boots",
+      "units": ["datapart", "`utils/rach2-install`'s data partition, its root size question and `--data`", "`utils/diskctl.c`'s `data`", "`utils/bootctl.c`'s `rootimage`", "`rach2.rootimage=` in `rach2/kernel.c`"],
+      "domain": "machine",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {"stick": "the test stick", "image": "installer-test.disk on the stick", "root": "installer-root.ext2 on the stick, the update's root and the trial root", "target": "an empty disk of 256 MiB filled with the pattern of fill_pattern", "spare": "another such disk", "password": "the demo password", "new_password": "an-installed-machine", "account": "alice"}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}},
+      "execution": {"program": "datapart_scenario", "stdin": null, "role": "ordinary", "privileges": "an ordinary user", "isolation": [{"fixture": "scratch"}, {"fixture": "disk", "names": ["stick"]}], "children": "none", "cleanup": "libetude-case ends each machine and removes the copies, which it keeps after a failure; the scenario removes its own directory unless an assertion failed"},
+      "steps": [
+        {"step_id": "fill", "stage": "execute", "does": "fill both disks with the pattern and read the demo password"},
+        {"step_id": "install", "stage": "execute", "does": "boot the stick beside the disk, install with a root of 96 MiB, write a file and the two trial roots to the data partition, update the root from the stick and read the file back", "machine": "recovery"},
+        {"step_id": "arm-bad", "stage": "execute", "does": "boot the disk, commit the updated root and arm the broken trial root", "machine": "installed"},
+        {"step_id": "bad", "stage": "execute", "does": "boot the disk and see the kernel refuse the broken image and restart", "machine": "installed"},
+        {"step_id": "fell-back", "stage": "execute", "does": "boot the disk and log in to the installed root", "machine": "installed"},
+        {"step_id": "arm-good", "stage": "execute", "does": "boot the disk and arm the good trial root", "machine": "installed"},
+        {"step_id": "good", "stage": "execute", "does": "boot the disk into the trial root and read its line, its mounts and bootctl's status", "machine": "installed"},
+        {"step_id": "once", "stage": "execute", "does": "boot the disk and log in to the installed root again", "machine": "installed"},
+        {"step_id": "room", "stage": "execute", "does": "boot the stick beside the spare disk, install with the root grown whole, and run rach2-install --data twice", "machine": "room"},
+        {"step_id": "room-boots", "stage": "execute", "does": "boot the spare disk and write a file on its data partition", "machine": "room-installed"}
+      ],
+      "machines": [
+        {"machine_id": "recovery", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, {"name": "target", "size_bytes": 268435456}], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "installed", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "target", "size_bytes": 268435456}], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "room", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "stick", "bus": "device", "id": "stick"}, {"name": "spare", "size_bytes": 268435456}], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [{"model": "qemu-xhci", "id": "xhci"}, {"model": "usb-kbd", "bus": "xhci.0"}, {"model": "usb-storage", "bus": "xhci.0", "drive": "stick", "properties": {"bootindex": "0"}}], "boot_options": []}, "console": "serial", "qmp": true, "helper": false},
+        {"machine_id": "room-installed", "qemu": {"kernel": "kernel", "initrd": null, "disks": [{"name": "spare", "size_bytes": 268435456}], "cpu": "max", "processors": 2, "memory_bytes": 134217728, "firmware": "seabios", "devices": [], "boot_options": []}, "console": "serial", "qmp": true, "helper": false}
+      ],
+      "assertions": [
+        {"assertion_id": "setup", "checks": "both disks are filled with the pattern, and the demo password is read", "source": "scenario"},
+        {"assertion_id": "data-kept", "checks": "the install makes entry 6 and its file system and grows the root up to it, and a file written there reads back after rach2-install --update, on a data partition that checks clean", "source": "scenario"},
+        {"assertion_id": "entry-kept", "checks": "the data partition's line in /proc/disk names Rach2 data and is the same before and after the update", "source": "scenario"},
+        {"assertion_id": "armed-bad", "checks": "the updated root commits, and bootctl rootimage arms the broken image", "source": "scenario"},
+        {"assertion_id": "bad-refused", "checks": "the next boot mounts the broken image's partition, finds no file system in the image, says it restarts into the saved default and stops", "source": "scenario"},
+        {"assertion_id": "fell-back", "checks": "the boot after it starts the installed root from the candidate's line", "source": "scenario"},
+        {"assertion_id": "armed-good", "checks": "bootctl rootimage arms the good image", "source": "scenario"},
+        {"assertion_id": "trial-boots", "checks": "the next boot logs in to the image's root with the image's password, its line has rach2.slot=trialroot, a loop device is its root and the data partition is at /data, and bootctl says it booted trialroot", "source": "scenario"},
+        {"assertion_id": "trial-once", "checks": "the boot after it starts the installed root from the candidate's line again", "source": "scenario"},
+        {"assertion_id": "room-made", "checks": "a disk installed with the root grown whole has no entry 6; rach2-install --data shrinks the root to 96 MiB and makes the data partition and its file system, a second run finds each step done, and both file systems check clean", "source": "scenario"},
+        {"assertion_id": "room-boots", "checks": "the disk boots its shrunk root, and its data partition mounts and takes a file", "source": "scenario"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [
+        {"witness_id": "stage", "kind": "step", "means": "a step of the manifest has ended", "limit": 10}
+      ],
+      "bounds": {"case": {"floor_us": 5000000, "initial_us": 14400000000, "ceiling_us": 28800000000}, "gap": {"floor_us": 1000000, "initial_us": 900000000, "ceiling_us": 7200000000}, "stages": {"prepare": {"floor_us": 100000, "initial_us": 120000000, "ceiling_us": 600000000}, "boot": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "cleanup": {"floor_us": 100000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 2000, "cpu_ceiling_millis": 2000, "memory_bytes": 1073741824, "disk_bytes": 1610612736, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "stick", "node": "images/install-test-stick.img", "per_architecture": true},
+        {"name": "password", "node": "tests/cases/credentials/rach2_demo_password", "per_architecture": false},
+        {"name": "datapart_scenario", "node": "tests/cases/machine/datapart_scenario", "per_architecture": false}
+      ],
+      "timing": [],
+      "native": {"plan": "none", "class": "disk", "reason": "the case installs onto disks from the install stick and boots trial roots from their data partitions"}
+    }
+  ]
+}
