@@ -222,6 +222,8 @@ struct nl_dgram {
     struct nl_dgram *next;
     uint32_t len;
     uint32_t group;
+    uint32_t portid; /* the sender's port, 0 for the kernel */
+    int32_t cred[3]; /* the sender's process, user and group ids */
 };
 
 struct nl_group {
@@ -254,6 +256,8 @@ struct netlink_state {
     struct nl_dgram *head, *tail;
     uint32_t queued;
     uint32_t last_group; /* the `group` of the datagram read last */
+    uint32_t last_portid;
+    int32_t last_cred[3];
 };
 
 static struct netlink_state *states;
@@ -508,6 +512,8 @@ static int enqueue_group(struct netlink_state *st, const uint8_t *data, uint32_t
     d->next = 0;
     d->len = len;
     d->group = group;
+    d->portid = 0;
+    d->cred[0] = d->cred[1] = d->cred[2] = 0;
     k_memcpy(d + 1, data, len);
     if (st->tail) {
         st->tail->next = d;
@@ -2810,7 +2816,56 @@ static void diag_answer(struct nl_build *b, const uint8_t *req, uint16_t type, u
     end_msg(b, rc != 0 ? req : 0, rc);
 }
 
+/**
+ * Pass the datagram of `len` bytes at `buf` from the uevent socket `from`
+ * to `dst`'s group or port, as `netlink_send_to` says; a socket whose
+ * queue would pass NL_NOTIFY_QUEUE_MAX misses it and is told ENOBUFS.
+ */
+static int32_t uevent_pass(struct netlink_state *from, const uint8_t *buf, uint32_t len,
+                           const struct nl_dest *dst)
+{
+    struct netlink_state *st;
+    uint32_t flags;
+    int found = 0;
+
+    if (!dst->privileged) {
+        return -EPERM;
+    }
+    if (len > NL_DGRAM_MAX) {
+        return -EMSGSIZE;
+    }
+    flags = net_lock();
+    for (st = states; st; st = st->next) {
+        int unicast = dst->pid != 0 && st->pid == dst->pid;
+
+        if (st->protocol != NETLINK_KOBJECT_UEVENT || st->seen != from->seen ||
+            (!unicast &&
+             !(dst->group && dst->group <= 32 && (st->groups & GROUP_BIT(dst->group))))) {
+            continue;
+        }
+        found |= unicast;
+        if (st->queued > NL_NOTIFY_QUEUE_MAX || len > NL_NOTIFY_QUEUE_MAX - st->queued ||
+            enqueue_group(st, buf, len, unicast ? 0 : dst->group) != 0) {
+            if (!st->no_enobufs) {
+                st->sock->so_error = ENOBUFS;
+                wq_wake(&st->sock->waiters, WQ_DATA);
+            }
+            continue;
+        }
+        st->tail->portid = from->pid;
+        k_memcpy(st->tail->cred, dst->cred, sizeof(st->tail->cred));
+    }
+    net_unlock(flags);
+    return dst->pid != 0 && !found ? -ECONNREFUSED : (int32_t)len;
+}
+
 int32_t netlink_send(struct socket *sock, const uint8_t *buf, uint32_t len)
+{
+    return netlink_send_to(sock, buf, len, 0);
+}
+
+int32_t netlink_send_to(struct socket *sock, const uint8_t *buf, uint32_t len,
+                        const struct nl_dest *dst)
 {
     struct nl_build *b;
     uint32_t at = 0;
@@ -2821,7 +2876,10 @@ int32_t netlink_send(struct socket *sock, const uint8_t *buf, uint32_t len)
         (void)netlink_bind(sock, 0, st->groups);
     }
     if (st->protocol == NETLINK_KOBJECT_UEVENT) {
-        return (int32_t)len;
+        if (!dst || (dst->pid == 0 && dst->group == 0)) {
+            return (int32_t)len;
+        }
+        return uevent_pass(st, buf, len, dst);
     }
     if (st->protocol == NETLINK_GENERIC) {
         while (at + NLMSG_HDRLEN <= len) {
@@ -2904,8 +2962,22 @@ int netlink_peek(struct socket *sock, uint32_t offset, uint8_t *buf, int len)
     }
     k_memcpy(buf, (const uint8_t *)(st->head + 1) + offset, n);
     st->last_group = st->head->group;
+    st->last_portid = st->head->portid;
+    k_memcpy(st->last_cred, st->head->cred, sizeof(st->last_cred));
     net_unlock(flags);
     return (int)n;
+}
+
+uint32_t netlink_last_sender(struct socket *sock, int32_t cred[3])
+{
+    struct netlink_state *st = state_of(sock);
+
+    if (!st) {
+        cred[0] = cred[1] = cred[2] = 0;
+        return 0;
+    }
+    k_memcpy(cred, st->last_cred, sizeof(st->last_cred));
+    return st->last_portid;
 }
 
 uint32_t netlink_last_group(struct socket *sock)

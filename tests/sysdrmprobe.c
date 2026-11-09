@@ -28,7 +28,12 @@
  *   /sys/kernel/uevent_seqnum then reads, from the kernel (port 0) to group
  *   1, once the probe writes "add" to the uevent of the first card, or of
  *   the first PCI function on a machine with no card. The write queues the
- *   message before it returns, so the receive does not wait.
+ *   message before it returns, so the receive does not wait. The message
+ *   carries SCM_CREDENTIALS of the kernel, all 0, as libudev requires.
+ * * `relay`: root's datagram to group 2 of NETLINK_KOBJECT_UEVENT, as
+ *   udevd passes a device on to libudev's monitors, reaches a socket in
+ *   that group from the sender's port, with the sender's process and user
+ *   ids in its SCM_CREDENTIALS.
  *
  * Prints "SYSDRMPROBE OK" and exits 0 when every check passes, and
  * otherwise "SYSDRMPROBE FAIL: what" and exits 1 at the first failure;
@@ -52,15 +57,40 @@
 #define SOCK_DGRAM             2
 #define NETLINK_KOBJECT_UEVENT 15
 #define MSG_DONTWAIT           0x40
+#define SOL_SOCKET             1
+#define SO_PASSCRED            16
+#define SCM_CREDENTIALS        2
 
 #define DRM_MAJOR 226
 
-/* Linux's sockaddr_nl. */
+/* Linux's sockaddr_nl, iovec, msghdr and cmsghdr, whose longs and
+ * pointers give each architecture's layout. */
 struct sockaddr_nl {
     unsigned short nl_family;
     unsigned short nl_pad;
     unsigned int nl_pid;
     unsigned int nl_groups;
+};
+
+struct iovec {
+    void *iov_base;
+    unsigned long iov_len;
+};
+
+struct msghdr {
+    void *msg_name;
+    unsigned int msg_namelen;
+    struct iovec *msg_iov;
+    unsigned long msg_iovlen;
+    void *msg_control;
+    unsigned long msg_controllen;
+    int msg_flags;
+};
+
+struct cmsghdr {
+    unsigned long cmsg_len;
+    int cmsg_level;
+    int cmsg_type;
 };
 
 /* The first card found, whose uevent the last check writes, or "", and its
@@ -562,40 +592,102 @@ static int msg_has(const char *msg, long n, const char *var)
     return 0;
 }
 
-/**
- * A write of "add" to a uevent file is heard on NETLINK_KOBJECT_UEVENT,
- * from the kernel to group 1, as `add@DEVPATH` with the device's
- * variables and the sequence number /sys/kernel/uevent_seqnum gives.
- */
-static void uevent_row(void)
+/** A socket of NETLINK_KOBJECT_UEVENT with SO_PASSCRED, bound to the
+ * groups `groups`: its descriptor; fails the row on an error. */
+static long uevent_socket(unsigned groups)
 {
     struct sockaddr_nl sa;
-    char path[192], head[200], devpath[208], msg[4096], text[32], subsystem[24], fn[32];
-    long fd, wfd, n;
-    unsigned salen;
+    int one = 1;
+    long fd = syscall3(SYS_SOCKET, AF_NETLINK, SOCK_DGRAM, NETLINK_KOBJECT_UEVENT);
 
-    fn[0] = '\0';
-    if (card_name[0]) {
-        join(path, sizeof(path), "/sys/class/drm/", card_name, "/uevent");
-        join(head, sizeof(head), "add@", card_devpath, 0);
-        join(subsystem, sizeof(subsystem), "SUBSYSTEM=drm", 0, 0);
-    } else {
-        each_entry("/sys/bus/pci/devices", first_entry, fn);
-        join(path, sizeof(path), "/sys/bus/pci/devices/", fn, "/uevent");
-        join(head, sizeof(head), "add@/devices/pci0000:00/", fn, 0);
-        join(subsystem, sizeof(subsystem), "SUBSYSTEM=pci", 0, 0);
-    }
-    fd = syscall3(SYS_SOCKET, AF_NETLINK, SOCK_DGRAM, NETLINK_KOBJECT_UEVENT);
     if (fd < 0) {
         fail("socket of NETLINK_KOBJECT_UEVENT");
+    }
+    if (syscall5(SYS_SETSOCKOPT, fd, SOL_SOCKET, SO_PASSCRED, (long)&one, sizeof(one)) != 0) {
+        fail("SO_PASSCRED on a uevent socket");
     }
     sa.nl_family = AF_NETLINK;
     sa.nl_pad = 0;
     sa.nl_pid = 0;
-    sa.nl_groups = 1;
+    sa.nl_groups = groups;
     if (syscall3(SYS_BIND, fd, (long)&sa, sizeof(sa)) != 0) {
-        fail("bind to the kernel's uevent group");
+        fail("bind of a uevent socket");
     }
+    return fd;
+}
+
+/**
+ * Take a datagram queued on `fd` into `msg` of `cap` bytes, terminated,
+ * without waiting, with its sender's address into `*sa` and the sender's
+ * credentials, SCM_CREDENTIALS, into `cred`: its length, or a negated
+ * errno; fails the row when no credentials came with it.
+ */
+static long recv_cred(long fd, char *msg, long cap, struct sockaddr_nl *sa, int cred[3])
+{
+    unsigned long control[8];
+    struct iovec iov;
+    struct msghdr mh;
+    struct cmsghdr *c = (struct cmsghdr *)control;
+    long n;
+
+    iov.iov_base = msg;
+    iov.iov_len = (unsigned long)cap - 1;
+    mh.msg_name = sa;
+    mh.msg_namelen = sizeof(*sa);
+    mh.msg_iov = &iov;
+    mh.msg_iovlen = 1;
+    mh.msg_control = control;
+    mh.msg_controllen = sizeof(control);
+    mh.msg_flags = 0;
+    n = syscall3(SYS_RECVMSG, fd, (long)&mh, MSG_DONTWAIT);
+    if (n < 0) {
+        return n;
+    }
+    msg[n] = '\0';
+    if (mh.msg_controllen < sizeof(*c) + 12 || c->cmsg_level != SOL_SOCKET ||
+        c->cmsg_type != SCM_CREDENTIALS) {
+        fail("a datagram without SCM_CREDENTIALS on a socket with SO_PASSCRED");
+    }
+    cred[0] = ((int *)(c + 1))[0];
+    cred[1] = ((int *)(c + 1))[1];
+    cred[2] = ((int *)(c + 1))[2];
+    return n;
+}
+
+/** Make the uevent file the uevent row writes, `path`, and the head of the
+ * uevent it sends, `head`, and its SUBSYSTEM, `subsystem`: the first
+ * card's, or the first PCI function's on a machine with none. */
+static void uevent_target(char *path, char *head, char *subsystem)
+{
+    char fn[32];
+
+    fn[0] = '\0';
+    if (card_name[0]) {
+        join(path, 192, "/sys/class/drm/", card_name, "/uevent");
+        join(head, 200, "add@", card_devpath, 0);
+        join(subsystem, 24, "SUBSYSTEM=drm", 0, 0);
+    } else {
+        each_entry("/sys/bus/pci/devices", first_entry, fn);
+        join(path, 192, "/sys/bus/pci/devices/", fn, "/uevent");
+        join(head, 200, "add@/devices/pci0000:00/", fn, 0);
+        join(subsystem, 24, "SUBSYSTEM=pci", 0, 0);
+    }
+}
+
+/**
+ * A write of "add" to a uevent file is heard on NETLINK_KOBJECT_UEVENT,
+ * from the kernel, port 0 and credentials 0, to group 1, as `add@DEVPATH`
+ * with the device's variables and the sequence number
+ * /sys/kernel/uevent_seqnum gives.
+ */
+static void uevent_row(void)
+{
+    struct sockaddr_nl sa;
+    char path[192], head[200], devpath[208], msg[4096], text[32], subsystem[24];
+    long fd = uevent_socket(1), wfd, n;
+    int cred[3];
+
+    uevent_target(path, head, subsystem);
     wfd = syscall3(SYS_OPEN, (long)path, O_WRONLY | O_CLOEXEC, 0);
     if (wfd < 0 || syscall3(SYS_WRITE, wfd, (long)"add\n", 4) != 4) {
         fail2("a write of add to ", path);
@@ -603,15 +695,12 @@ static void uevent_row(void)
     syscall1(SYS_CLOSE, wfd);
     join(devpath, sizeof(devpath), "DEVPATH=", head + 4, 0);
     do {
-        salen = sizeof(sa);
-        n = syscall6(SYS_RECVFROM, fd, (long)msg, sizeof(msg) - 1, MSG_DONTWAIT, (long)&sa,
-                     (long)&salen);
+        n = recv_cred(fd, msg, sizeof(msg), &sa, cred);
         if (n <= 0) {
             fail2("no uevent heard after a write to ", path);
         }
-        msg[n] = '\0';
     } while (!str_eq(msg, head));
-    if (sa.nl_pid != 0 || sa.nl_groups != 1) {
+    if (sa.nl_pid != 0 || sa.nl_groups != 1 || cred[0] != 0 || cred[1] != 0 || cred[2] != 0) {
         fail("the uevent is not from the kernel to group 1");
     }
     if (!msg_has(msg, n, "ACTION=add") || !msg_has(msg, n, subsystem) ||
@@ -630,6 +719,49 @@ static void uevent_row(void)
     report_held();
 }
 
+/**
+ * Root's datagram to group 2 of NETLINK_KOBJECT_UEVENT, as udevd passes a
+ * device on to libudev's monitors, reaches a socket in that group whole,
+ * from the sender's port with the sender's process and user ids.
+ */
+static void relay_row(void)
+{
+    static const char relay[] = "libudev\0sysdrmprobe";
+    struct sockaddr_nl sa, to;
+    char msg[64];
+    long from = uevent_socket(0), in = uevent_socket(2), n;
+    unsigned salen = sizeof(sa);
+    int cred[3], i;
+
+    if (syscall3(SYS_GETSOCKNAME, from, (long)&sa, (long)&salen) != 0 || sa.nl_pid == 0) {
+        fail("no port of the sending uevent socket");
+    }
+    to.nl_family = AF_NETLINK;
+    to.nl_pad = 0;
+    to.nl_pid = 0;
+    to.nl_groups = 2;
+    if (syscall6(SYS_SENDTO, from, (long)relay, sizeof(relay), 0, (long)&to, sizeof(to)) !=
+        (long)sizeof(relay)) {
+        fail("root's send to uevent group 2");
+    }
+    n = recv_cred(in, msg, sizeof(msg), &to, cred);
+    if (n != (long)sizeof(relay)) {
+        fail("no datagram heard in uevent group 2");
+    }
+    for (i = 0; i < n; i++) {
+        if (msg[i] != relay[i]) {
+            fail("the datagram in uevent group 2 is not the one sent");
+        }
+    }
+    if (to.nl_pid != sa.nl_pid || to.nl_groups != 2 || cred[0] != (int)syscall0(SYS_GETPID) ||
+        cred[1] != 0) {
+        fail("the datagram in group 2 is not from the sender's port and ids");
+    }
+    syscall1(SYS_CLOSE, in);
+    syscall1(SYS_CLOSE, from);
+    report_held();
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -637,7 +769,7 @@ PROBE_SP_ENTRY;
 /** Run the rows in order; `_start` calls it with the initial stack. */
 void probe_main(unsigned long *sp)
 {
-    static const char *const ids[] = {"debugfs", "class", "pci", "cards", "uevent"};
+    static const char *const ids[] = {"debugfs", "class", "pci", "cards", "uevent", "relay"};
     unsigned i;
 
     report_begin(report_case((char **)(sp + 1) + sp[0] + 1, "guest.screen.sysdrmprobe"));
@@ -649,6 +781,7 @@ void probe_main(unsigned long *sp)
     pci_row();
     cards_row();
     uevent_row();
+    relay_row();
     report_end();
     probe_line("SYSDRMPROBE OK", 0, 0);
     sys_exit(0);
