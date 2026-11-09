@@ -133,17 +133,25 @@ void pci_io_write8(uint16_t port, uint8_t value);
 void pci_io_write16(uint16_t port, uint16_t value);
 void pci_io_write32(uint16_t port, uint32_t value);
 
-/**
- * Find the first function by class and subclass, scanning every bus, device
- * and function in that order; true and fills `out` on a match, false when
- * none matches. Functions 1 to 7 of a device are read only when function 0's
- * header says it has several.
+/*
+ * The searches below read one list of the functions on the buses, which the
+ * first of them fills by walking bus 0, every bus behind a PCI-to-PCI or
+ * CardBus bridge and every other root bus, once for the life of the kernel
+ * (pci.c). The list is in
+ * the order of bus, device and function; functions 1 to 7 of a device are on
+ * it only when function 0's header says it has several. A search reads the
+ * configuration space of the function it returns, so `out`'s BARs and
+ * interrupt line are as they are now.
  */
+
+/** Find the first function by class and subclass; true and fills `out` on a
+ * match, false when none matches. */
 bool pci_find_device(uint8_t class_code, uint8_t subclass, pci_device_t *out);
 
 /** Find the next class/subclass match after the function `skip_dev` is,
- * in the same order, so that a caller can walk every function of one class;
- * NULL `skip_dev` starts from the first slot. */
+ * so that a caller can walk every function of one class; NULL `skip_dev`
+ * starts from the first function, and a `skip_dev` not on the list finds
+ * nothing. */
 bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *skip_dev,
                           pci_device_t *out);
 

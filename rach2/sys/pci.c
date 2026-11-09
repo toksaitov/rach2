@@ -13,6 +13,8 @@
 #include "pci.h"
 #include "kio.h"
 #include "lib/kirq.h"
+#include "lib/kstring.h"
+#include "mm/kheap.h"
 
 /** The word is taken from its aligned dword, the half that bit 1 of the
  * offset selects. */
@@ -31,35 +33,27 @@ uint8_t pci_read_config8(uint8_t bus, uint8_t device, uint8_t function, uint8_t 
 }
 
 /**
- * Report whether a device responds at this bus/device/function.
- *
- * An absent slot returns all ones from configuration space, so a vendor
- * ID of 0xFFFF means no device.
- */
-static bool pci_device_exists(uint8_t bus, uint8_t device, uint8_t function)
-{
-    uint16_t vendor = pci_read_config16(bus, device, function, PCI_VENDOR_ID);
-    return vendor != 0xFFFF;
-}
-
-/**
  * Fill `out` with the place, identity, class, interrupt line register and
- * six BARs of a function.
+ * six BARs of a function: nine dword reads of configuration space.
  */
 static void pci_read_device_info(uint8_t bus, uint8_t device, uint8_t function, pci_device_t *out)
 {
+    uint32_t id, cls;
     int i;
 
+    id = pci_read_config32(bus, device, function, PCI_VENDOR_ID);
+    /* The dword at 0x08: revision, prog-if, subclass, class. */
+    cls = pci_read_config32(bus, device, function, PCI_REVISION_ID);
     out->bus = bus;
     out->device = device;
     out->function = function;
-    out->vendor_id = pci_read_config16(bus, device, function, PCI_VENDOR_ID);
-    out->device_id = pci_read_config16(bus, device, function, PCI_DEVICE_ID);
-    out->class_code = pci_read_config8(bus, device, function, PCI_CLASS);
-    out->subclass = pci_read_config8(bus, device, function, PCI_SUBCLASS);
-    out->prog_if = pci_read_config8(bus, device, function, PCI_PROG_IF);
-    out->revision = pci_read_config8(bus, device, function, PCI_REVISION_ID);
-    out->irq = pci_read_config8(bus, device, function, PCI_INTERRUPT_LINE);
+    out->vendor_id = (uint16_t)(id & 0xFFFF);
+    out->device_id = (uint16_t)(id >> 16);
+    out->revision = (uint8_t)cls;
+    out->prog_if = (uint8_t)(cls >> 8);
+    out->subclass = (uint8_t)(cls >> 16);
+    out->class_code = (uint8_t)(cls >> 24);
+    out->irq = (uint8_t)pci_read_config32(bus, device, function, PCI_INTERRUPT_LINE);
 
     /* A type 0 header has six BARs at offsets PCI_BAR0, +4, ... +0x14. */
     for (i = 0; i < 6; i++) {
@@ -67,122 +61,258 @@ static void pci_read_device_info(uint8_t bus, uint8_t device, uint8_t function, 
     }
 }
 
-/**
+/*
+ * The functions on the buses, found by one walk the first time a search
+ * needs them and kept for every later search, so that a search reads
+ * configuration space only for the function it returns. Under a hypervisor
+ * each configuration access is an exit, and a walk of all 8192 slots of 256
+ * buses costs some 16,000 of them; the walk reads bus 0 and the bus behind
+ * each bridge it finds there and below, as Linux's does, and so reads only
+ * the buses that exist (`pci_list_build` has the other root buses). The
+ * list is kept in the order of bus, device and function.
+ *
+ * The list holds each function's place, identity, class and header type;
+ * what may change after the walk (the BARs, the interrupt line, a bridge's
+ * bus numbers) is read again when a search returns it. The first search is
+ * the page cache's window probe, early in the boot and before a second
+ * processor runs, so the walk needs no lock. No function is added or
+ * removed after it: the kernel has no PCI hot plug.
+ *
  * A single-function device may answer for all eight function numbers as
  * function 0, so functions 1 to 7 are read only when function 0's header
- * type has bit 7 set, which marks a multi-function device.
- * `pci_find_device_skip`, `pci_nth` and `pci_find_nth_by_id` read the slots
- * the same way.
+ * type has bit 7 set, which marks a multi-function device. A vendor ID of
+ * 0xFFFF, or of 0x0000 from a bridge that answers an empty slot with zeros,
+ * is no function, as Linux takes it.
  */
-bool pci_find_device(uint8_t class_code, uint8_t subclass, pci_device_t *out)
-{
-    uint16_t bus;
-    uint8_t device, function;
+struct pci_place {
+    uint8_t bus;
+    uint8_t device;
+    uint8_t function;
+    uint8_t header; /* the header type byte, bit 7 masked off */
+    uint16_t vendor_id;
+    uint16_t device_id;
+    uint8_t class_code;
+    uint8_t subclass;
+};
 
-    for (bus = 0; bus < 256; bus++) {
-        for (device = 0; device < 32; device++) {
-            if (!pci_device_exists((uint8_t)bus, device, 0)) {
+/* The list starts in `pci_first` and moves to the heap, twice as long each
+ * time, when a machine has more functions; `pci_list_len` is -1 before the
+ * walk. */
+#define PCI_FIRST_MAX 64
+static struct pci_place pci_first[PCI_FIRST_MAX];
+static struct pci_place *pci_list = pci_first;
+static int pci_list_cap = PCI_FIRST_MAX;
+static int pci_list_len = -1;
+
+/** True when a function's identity dword says nothing answered. */
+static bool pci_id_absent(uint32_t id)
+{
+    return (id & 0xFFFF) == 0xFFFF || (id & 0xFFFF) == 0;
+}
+
+/**
+ * Append a function to the list, reading its class; false, with the reason
+ * in the log, when the list is full and no longer one can be had.
+ */
+static bool pci_list_add(uint8_t bus, uint8_t device, uint8_t function, uint32_t id, uint8_t header)
+{
+    struct pci_place *p;
+    uint32_t cls;
+
+    if (pci_list_len == pci_list_cap) {
+        struct pci_place *bigger = kmalloc((size_t)pci_list_cap * 2 * sizeof(*bigger));
+
+        if (bigger == NULL) {
+            klog(KLOG_WARN, "pci", "list: full at %d functions: no memory for more", pci_list_cap);
+            return false;
+        }
+        k_memcpy(bigger, pci_list, (size_t)pci_list_len * sizeof(*bigger));
+        if (pci_list != pci_first) {
+            kfree(pci_list);
+        }
+        pci_list = bigger;
+        pci_list_cap *= 2;
+    }
+    cls = pci_read_config32(bus, device, function, PCI_REVISION_ID);
+    p = &pci_list[pci_list_len++];
+    p->bus = bus;
+    p->device = device;
+    p->function = function;
+    p->header = (uint8_t)(header & 0x7F);
+    p->vendor_id = (uint16_t)(id & 0xFFFF);
+    p->device_id = (uint16_t)(id >> 16);
+    p->subclass = (uint8_t)(cls >> 16);
+    p->class_code = (uint8_t)(cls >> 24);
+    return true;
+}
+
+/* A bit for each bus number. */
+typedef uint32_t pci_busset[8];
+
+#define PCI_BUS_IN(set, b)  (((set)[(b) >> 5] >> ((b) & 31)) & 1u)
+#define PCI_BUS_ADD(set, b) ((set)[(b) >> 5] |= 1u << ((b) & 31))
+
+/**
+ * List the functions of `bus`, and add to `reached` the secondary bus of
+ * each PCI-to-PCI or CardBus bridge among them; false when the list could
+ * not grow.
+ */
+static bool pci_list_bus(uint8_t bus, pci_busset reached)
+{
+    uint8_t device, function, functions, header, header0, secondary;
+    uint32_t id, id0;
+
+    for (device = 0; device < 32; device++) {
+        id0 = pci_read_config32(bus, device, 0, PCI_VENDOR_ID);
+        if (pci_id_absent(id0)) {
+            continue;
+        }
+        header0 = pci_read_config8(bus, device, 0, PCI_HEADER_TYPE);
+        functions = (header0 & 0x80) ? 8 : 1;
+        for (function = 0; function < functions; function++) {
+            id = function == 0 ? id0 : pci_read_config32(bus, device, function, PCI_VENDOR_ID);
+            if (pci_id_absent(id)) {
                 continue;
             }
-
-            for (function = 0; function < 8; function++) {
-                uint8_t cc, sc;
-
-                if (!pci_device_exists((uint8_t)bus, device, function)) {
-                    continue;
-                }
-
-                cc = pci_read_config8((uint8_t)bus, device, function, PCI_CLASS);
-                sc = pci_read_config8((uint8_t)bus, device, function, PCI_SUBCLASS);
-
-                if (cc == class_code && sc == subclass) {
-                    pci_read_device_info((uint8_t)bus, device, function, out);
-                    return true;
-                }
-
-                /* Bit 7 of the header type marks a multi-function device. */
-                if (function == 0) {
-                    uint8_t header_type =
-                        pci_read_config8((uint8_t)bus, device, 0, PCI_HEADER_TYPE);
-                    if (!(header_type & 0x80)) {
-                        break;
-                    }
-                }
+            header =
+                function == 0 ? header0 : pci_read_config8(bus, device, function, PCI_HEADER_TYPE);
+            if (!pci_list_add(bus, device, function, id, header)) {
+                return false;
+            }
+            if ((header & 0x7F) != 0x01 && (header & 0x7F) != 0x02) {
+                continue;
+            }
+            /* Both bridge headers keep the secondary bus at 0x19; a
+             * bridge firmware left unnumbered has 0 there. */
+            secondary = pci_read_config8(bus, device, function, 0x19);
+            if (secondary != 0) {
+                PCI_BUS_ADD(reached, secondary);
             }
         }
     }
-
-    return false;
+    return true;
 }
 
-/** The scan reads every slot up to and including `skip_dev` without
- * matching it, and matches from the slot after. */
+/** Sort the list by bus, device and function: a second pass of the walk
+ * appends the buses that firmware numbered below their bridge's own. */
+static void pci_list_sort(void)
+{
+    int i, j;
+
+    for (i = 1; i < pci_list_len; i++) {
+        struct pci_place t = pci_list[i];
+        uint32_t key = (uint32_t)t.bus << 8 | (uint32_t)t.device << 3 | t.function;
+
+        for (j = i; j > 0; j--) {
+            const struct pci_place *q = &pci_list[j - 1];
+
+            if (((uint32_t)q->bus << 8 | (uint32_t)q->device << 3 | q->function) <= key) {
+                break;
+            }
+            pci_list[j] = pci_list[j - 1];
+        }
+        pci_list[j] = t;
+    }
+}
+
+/**
+ * Walk bus 0 and every bus behind a bridge, in rising order of bus, once
+ * each, and fill the list. A bus numbered below the bridge that leads to it
+ * is read by another pass, so the walk ends with a pass that reads no bus;
+ * each pass reads only buses not read before, and there are 256.
+ *
+ * A machine with several host bridges has a root bus for each, which no
+ * bridge on bus 0 leads to and which Linux finds through ACPI. Once the
+ * bridges are followed, device 0 of the next bus not yet read is read, and
+ * a bus where it answers is walked as a root and its bridges followed before
+ * the next bus is read: the host bridge or root port of such a bus is its
+ * device 0 on the AMD and Intel parts that have them. Device 0 of each bus
+ * is read at most once, 255 reads.
+ */
+static void pci_list_build(void)
+{
+    pci_busset reached, walked;
+    uint16_t bus;
+    uint16_t probe = 1; /* the next bus whose device 0 is to be read */
+    bool more;
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        reached[i] = 0;
+        walked[i] = 0;
+    }
+    PCI_BUS_ADD(reached, 0);
+    pci_list_len = 0;
+    do {
+        more = false;
+        for (bus = 0; bus < 256; bus++) {
+            if (!PCI_BUS_IN(reached, bus) || PCI_BUS_IN(walked, bus)) {
+                continue;
+            }
+            PCI_BUS_ADD(walked, bus);
+            more = true;
+            if (!pci_list_bus((uint8_t)bus, reached)) {
+                pci_list_sort();
+                return;
+            }
+        }
+        for (; !more && probe < 256; probe++) {
+            if (!PCI_BUS_IN(reached, probe) &&
+                !pci_id_absent(pci_read_config32((uint8_t)probe, 0, 0, PCI_VENDOR_ID))) {
+                PCI_BUS_ADD(reached, probe);
+                more = true;
+                klog(KLOG_INFO, "pci", "list: bus %d is a root of its own", (int)probe);
+            }
+        }
+    } while (more);
+    pci_list_sort();
+    klog(KLOG_DEBUG, "pci", "list: %d functions", pci_list_len);
+}
+
+/** The number of functions on the list, walking the buses on the first
+ * call. */
+static int pci_list_count(void)
+{
+    if (pci_list_len < 0) {
+        pci_list_build();
+    }
+    return pci_list_len;
+}
+
+/** Fill `out` from the list's entry `i`, reading its registers now. */
+static void pci_list_take(int i, pci_device_t *out)
+{
+    pci_read_device_info(pci_list[i].bus, pci_list[i].device, pci_list[i].function, out);
+}
+
+bool pci_find_device(uint8_t class_code, uint8_t subclass, pci_device_t *out)
+{
+    return pci_find_device_skip(class_code, subclass, NULL, out);
+}
+
+/** The search matches from the entry after `skip_dev`'s, and finds nothing
+ * when `skip_dev` is not on the list. */
 bool pci_find_device_skip(uint8_t class_code, uint8_t subclass, pci_device_t *skip_dev,
                           pci_device_t *out)
 {
-    uint16_t bus;
-    uint8_t device, function;
+    int i, n = pci_list_count();
     bool past_skip = (skip_dev == NULL);
 
-    for (bus = 0; bus < 256; bus++) {
-        for (device = 0; device < 32; device++) {
-            if (!pci_device_exists((uint8_t)bus, device, 0)) {
-                continue;
+    for (i = 0; i < n; i++) {
+        const struct pci_place *p = &pci_list[i];
+
+        if (!past_skip) {
+            if (p->bus == skip_dev->bus && p->device == skip_dev->device &&
+                p->function == skip_dev->function) {
+                past_skip = true;
             }
-
-            for (function = 0; function < 8; function++) {
-                uint8_t cc, sc;
-
-                if (!pci_device_exists((uint8_t)bus, device, function)) {
-                    continue;
-                }
-
-                if (skip_dev != NULL && bus == skip_dev->bus && device == skip_dev->device &&
-                    function == skip_dev->function) {
-                    past_skip = true;
-                    /* Header type bit 7 marks a multi-function device. */
-                    if (function == 0) {
-                        uint8_t header_type =
-                            pci_read_config8((uint8_t)bus, device, 0, PCI_HEADER_TYPE);
-                        if (!(header_type & 0x80)) {
-                            break;
-                        }
-                    }
-                    continue;
-                }
-
-                if (!past_skip) {
-                    /* Header type bit 7 marks a multi-function device. */
-                    if (function == 0) {
-                        uint8_t header_type =
-                            pci_read_config8((uint8_t)bus, device, 0, PCI_HEADER_TYPE);
-                        if (!(header_type & 0x80)) {
-                            break;
-                        }
-                    }
-                    continue;
-                }
-
-                cc = pci_read_config8((uint8_t)bus, device, function, PCI_CLASS);
-                sc = pci_read_config8((uint8_t)bus, device, function, PCI_SUBCLASS);
-
-                if (cc == class_code && sc == subclass) {
-                    pci_read_device_info((uint8_t)bus, device, function, out);
-                    return true;
-                }
-
-                /* Bit 7 of the header type marks a multi-function device. */
-                if (function == 0) {
-                    uint8_t header_type =
-                        pci_read_config8((uint8_t)bus, device, 0, PCI_HEADER_TYPE);
-                    if (!(header_type & 0x80)) {
-                        break;
-                    }
-                }
-            }
+            continue;
+        }
+        if (p->class_code == class_code && p->subclass == subclass) {
+            pci_list_take(i, out);
+            return true;
         }
     }
-
     return false;
 }
 
@@ -193,70 +323,24 @@ bool pci_find_device_by_id(uint16_t vendor_id, uint16_t device_id, pci_device_t 
 
 bool pci_nth(int nth, pci_device_t *out)
 {
-    uint16_t bus;
-    uint8_t device, function;
-    int seen = 0;
-
-    for (bus = 0; bus < 256; bus++) {
-        for (device = 0; device < 32; device++) {
-            if (!pci_device_exists((uint8_t)bus, device, 0)) {
-                continue;
-            }
-            for (function = 0; function < 8; function++) {
-                if (pci_device_exists((uint8_t)bus, device, function) && seen++ == nth) {
-                    pci_read_device_info((uint8_t)bus, device, function, out);
-                    return true;
-                }
-                if (function == 0 &&
-                    !(pci_read_config8((uint8_t)bus, device, 0, PCI_HEADER_TYPE) & 0x80)) {
-                    break;
-                }
-            }
-        }
+    if (nth < 0 || nth >= pci_list_count()) {
+        return false;
     }
-    return false;
+    pci_list_take(nth, out);
+    return true;
 }
 
 bool pci_find_nth_by_id(uint16_t vendor_id, uint16_t device_id, int nth, pci_device_t *out)
 {
-    uint16_t bus;
-    uint8_t device, function;
-    int seen = 0;
+    int i, n = pci_list_count(), seen = 0;
 
-    for (bus = 0; bus < 256; bus++) {
-        for (device = 0; device < 32; device++) {
-            if (!pci_device_exists((uint8_t)bus, device, 0)) {
-                continue;
-            }
-
-            for (function = 0; function < 8; function++) {
-                uint16_t vid, did;
-
-                if (!pci_device_exists((uint8_t)bus, device, function)) {
-                    continue;
-                }
-
-                vid = pci_read_config16((uint8_t)bus, device, function, PCI_VENDOR_ID);
-                did = pci_read_config16((uint8_t)bus, device, function, PCI_DEVICE_ID);
-
-                if (vid == vendor_id && did == device_id) {
-                    if (seen++ == nth) {
-                        pci_read_device_info((uint8_t)bus, device, function, out);
-                        return true;
-                    }
-                }
-
-                if (function == 0) {
-                    uint8_t header_type =
-                        pci_read_config8((uint8_t)bus, device, 0, PCI_HEADER_TYPE);
-                    if (!(header_type & 0x80)) {
-                        break;
-                    }
-                }
-            }
+    for (i = 0; i < n; i++) {
+        if (pci_list[i].vendor_id == vendor_id && pci_list[i].device_id == device_id &&
+            seen++ == nth) {
+            pci_list_take(i, out);
+            return true;
         }
     }
-
     return false;
 }
 
@@ -372,36 +456,27 @@ uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8
 }
 
 /** Header type 1 is a bridge's, and its secondary bus number is the byte at
- * offset 0x19. */
+ * offset 0x19, read now, since firmware or a driver may number the buses
+ * after the walk. */
 bool pci_find_bridge_for_bus(uint8_t bus, pci_device_t *out)
 {
-    uint16_t b;
-    uint8_t d, f;
+    int i, n = pci_list_count();
 
-    for (b = 0; b < 256; b++) {
-        for (d = 0; d < 32; d++) {
-            for (f = 0; f < 8; f++) {
-                uint16_t vendor = pci_read_config16((uint8_t)b, d, f, PCI_VENDOR_ID);
-                uint8_t header;
+    for (i = 0; i < n; i++) {
+        const struct pci_place *p = &pci_list[i];
 
-                if (vendor == 0xFFFF) {
-                    continue;
-                }
-                header = pci_read_config8((uint8_t)b, d, f, PCI_HEADER_TYPE);
-                if ((header & 0x7F) != 0x01) {
-                    continue; /* not a bridge */
-                }
-                if (pci_read_config8((uint8_t)b, d, f, 0x19) != bus) {
-                    continue;
-                }
-                out->bus = (uint8_t)b;
-                out->device = d;
-                out->function = f;
-                out->vendor_id = vendor;
-                out->device_id = pci_read_config16((uint8_t)b, d, f, PCI_DEVICE_ID);
-                return true;
-            }
+        if (p->header != 0x01) {
+            continue; /* not a bridge */
         }
+        if (pci_read_config8(p->bus, p->device, p->function, 0x19) != bus) {
+            continue;
+        }
+        out->bus = p->bus;
+        out->device = p->device;
+        out->function = p->function;
+        out->vendor_id = p->vendor_id;
+        out->device_id = p->device_id;
+        return true;
     }
     return false;
 }

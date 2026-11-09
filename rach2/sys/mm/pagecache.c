@@ -596,8 +596,8 @@ void *pc_test_page(uint32_t disk_off)
  * Sizes the window from PCWIN_BASE to the lowest device memory BAR whose
  * physical address lies in it, capped at PC_WINDOW_CAP.
  *
- * Walks every bus the driver discovery walks (`pci_find_device_skip` scans
- * buses 0 to 255), not bus 0 alone, so a BAR behind a bridge counts too. A
+ * Reads every function the drivers' searches find (`pci_nth`, bus 0 and
+ * each bus behind a bridge), so a BAR behind a bridge counts too. A
  * BAR's physical address and the window's virtual ones do not meet:
  * `map_mmio` maps a BAR into the kernel's MMIO region, whatever its physical
  * address. The comparison is made in 64 bits, a 64-bit BAR's high dword
@@ -611,38 +611,25 @@ void *pc_test_page(uint32_t disk_off)
 static uint32_t pc_probe_window_size(void)
 {
     uint64_t limit = (uint64_t)PCWIN_BASE + PC_WINDOW_CAP;
-    uint16_t bus;
+    pci_device_t d;
+    int i;
 
-    for (bus = 0; bus < 256; ++bus) {
-        uint8_t dev;
-        for (dev = 0; dev < 32; ++dev) {
-            uint8_t fn;
-            for (fn = 0; fn < 8; ++fn) {
-                uint8_t bari;
-                if (pci_read_config16((uint8_t)bus, dev, fn, 0) == 0xFFFF) {
-                    if (fn == 0) {
-                        break;
-                    }
-                    continue;
-                }
-                for (bari = 0; bari < 6; ++bari) {
-                    uint32_t bar = pci_read_config32((uint8_t)bus, dev, fn, 0x10 + bari * 4u);
-                    uint64_t base;
-                    if (!pci_bar_is_memory(bar)) {
-                        continue;
-                    }
-                    base = pci_bar_address(bar);
-                    if (pci_bar_is_64bit(bar)) {
-                        /* The high dword is the next BAR slot. */
-                        base |= (uint64_t)pci_read_config32((uint8_t)bus, dev, fn,
-                                                            0x10 + (bari + 1u) * 4u)
-                                << 32;
-                        ++bari;
-                    }
-                    if (base >= PCWIN_BASE && base < limit) {
-                        limit = base;
-                    }
-                }
+    for (i = 0; pci_nth(i, &d); ++i) {
+        uint8_t bari;
+        for (bari = 0; bari < 6; ++bari) {
+            uint32_t bar = d.bar[bari];
+            uint64_t base;
+            if (!pci_bar_is_memory(bar)) {
+                continue;
+            }
+            base = pci_bar_address(bar);
+            if (pci_bar_is_64bit(bar)) {
+                /* The high dword is the next BAR slot; the last has none. */
+                base |= bari < 5 ? (uint64_t)d.bar[bari + 1] << 32 : 0;
+                ++bari;
+            }
+            if (base >= PCWIN_BASE && base < limit) {
+                limit = base;
             }
         }
     }
