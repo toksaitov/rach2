@@ -13,6 +13,7 @@ GNU="$(cd "$DIR/.." && pwd)"
 # shellcheck disable=SC2034 # arch.sh reads it
 REPO="$(cd "$GNU/../.." && pwd)"
 . "$GNU/arch.sh"
+. "$DIR/fetch_asset.sh"
 OUT="$GNU_OUT"
 LAYER=${1:-desktop}
 case $LAYER in
@@ -32,9 +33,14 @@ for list in $LISTS; do
         /*|*..*) echo "gnu: debian: invalid list: $list" >&2; exit 2 ;;
     esac
     [ -f "$GNU/$list" ] || { echo "gnu: debian: missing list: $list" >&2; exit 1; }
-    ROOTS="$ROOTS $(awk -v arch="$GNU_DEB_ARCH" '
+    selected=$(awk -v arch="$GNU_DEB_ARCH" '
         /^[ \t]*#/ || NF == 0 { next }
-        NF == 1 || $2 == arch { print $1 }' "$GNU/$list")"
+        NF > 2 || (NF == 2 && $2 != "amd64" && $2 != "i386") { exit 1 }
+        NF == 1 || $2 == arch { print $1 }' "$GNU/$list") || {
+        echo "gnu: debian: malformed package list: $list" >&2
+        exit 1
+    }
+    ROOTS="$ROOTS $selected"
 done
 # Accounts and the base runtime come from the Rach2 manifest and GNU ports.
 UNFOLLOWED="adduser"
@@ -63,9 +69,10 @@ done
 GNUPGHOME="$WORK/gnupg"
 export GNUPGHOME
 
+make -s -C "$REPO" build/tools/verify/sha256
+
 sha256_of()
 {
-    make -s -C "$REPO" build/tools/verify/sha256 || return 1
     "$SHA" "$1" | awk '{print $1}'
 }
 
@@ -111,7 +118,7 @@ keyring()
     mkdir -p "$GNUPGHOME"
     chmod 700 "$GNUPGHOME"
     for k in $KEYS; do
-        asc="$("$GNU/fetch.sh" --path "${k%%:*}")"
+        asc="$(asset "${k%%:*}")"
         fpr="$(gpg --batch --with-colons --show-keys "$asc" | awk -F: '$1 == "fpr" { print $10; exit }')"
         if [ "$fpr" != "${k#*:}" ]; then
             echo "gnu: debian: ${k%%:*}: fingerprint $fpr, expected ${k#*:}" >&2
@@ -188,6 +195,7 @@ step_fetch()
     while read -r name _ archive file _ sha; do
         get "https://snapshot.debian.org/archive/$archive/$SNAPSHOT/$file" \
             "$DEBS/${file##*/}" "$sha"
+        echo "gnu: debian: checked: $name"
     done < "$WORK/closure.txt"
     echo "$(wc -l < "$WORK/closure.txt") packages checked"
 }
