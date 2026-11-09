@@ -774,6 +774,7 @@ void drm_mode_config_cleanup(struct drm_device *dev)
     for (i = 0; i < mc->num_crtc; i++) {
         drm_crtc_state_destroy(mc->crtcs[i]->state);
         mc->crtcs[i]->state = NULL;
+        drm_crtc_vblank_cleanup(mc->crtcs[i]);
         kfree(mc->crtcs[i]->gamma_store);
         mc->crtcs[i]->gamma_store = NULL;
     }
@@ -785,8 +786,8 @@ void drm_mode_config_cleanup(struct drm_device *dev)
         modes_free(&c->modes);
         modes_free(&c->probed_modes);
         drm_property_blob_put(c->edid);
-        drm_property_blob_put(c->edid_override);
-        c->edid = c->edid_override = NULL;
+        c->edid = NULL;
+        drm_edid_override_reset(c);
     }
     /* A framebuffer left over is one no file owns; its objects go with it. */
     while ((fb = mc->fbs) != NULL) {
@@ -942,7 +943,7 @@ int32_t drm_crtc_init_with_planes(struct drm_device *dev, struct drm_crtc *crtc,
         return -ENOMEM;
     }
     crtc->state->crtc = crtc;
-    wait_queue_init(&crtc->vblank.wait);
+    drm_crtc_vblank_init(crtc);
     for (; "crtc-"[at]; at++) {
         crtc->name[at] = "crtc-"[at];
     }
@@ -1914,6 +1915,49 @@ static void modes_sort(struct drm_display_mode **list)
         *link = m;
     }
     *list = sorted;
+}
+
+/** Whether `c` is a space as Linux's strim takes one. */
+static int force_space(char c)
+{
+    return c == ' ' || (c >= '\t' && c <= '\r');
+}
+
+/** Whether the `n` bytes at `word` are the string `lit`. */
+static int force_word(const char *word, uint32_t n, const char *lit)
+{
+    uint32_t i;
+
+    for (i = 0; i < n && lit[i] == word[i]; i++) {
+    }
+    return i == n && lit[n] == '\0';
+}
+
+int32_t drm_connector_force_write(struct drm_connector *connector, const char *buf, uint32_t len)
+{
+    uint32_t start = 0, end = len;
+
+    if (len > 11) {
+        return -EINVAL;
+    }
+    while (start < end && force_space(buf[start])) {
+        start++;
+    }
+    while (end > start && force_space(buf[end - 1])) {
+        end--;
+    }
+    if (force_word(buf + start, end - start, "on")) {
+        connector->force = DRM_FORCE_ON;
+    } else if (force_word(buf + start, end - start, "digital")) {
+        connector->force = DRM_FORCE_ON_DIGITAL;
+    } else if (force_word(buf + start, end - start, "off")) {
+        connector->force = DRM_FORCE_OFF;
+    } else if (force_word(buf + start, end - start, "unspecified")) {
+        connector->force = DRM_FORCE_UNSPECIFIED;
+    } else {
+        return -EINVAL;
+    }
+    return (int32_t)len;
 }
 
 int drm_helper_probe_single_connector_modes(struct drm_connector *connector, uint32_t max_width,
