@@ -66,6 +66,11 @@
 
 set -u
 
+# The recovery system's shell has no sbin directories in its path, and
+# e2fsck, resize2fs and mke2fs are there.
+PATH=$PATH:/sbin:/usr/sbin
+export PATH
+
 ME=rach2-install
 MNT=/mnt/install-source
 TARGET_MNT=/mnt/install-root
