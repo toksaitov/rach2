@@ -107,11 +107,14 @@ Changing the owner or group applies the same clearing even for root.
 An unchanged owner and group leave these bits alone.
 .Pp
 FAT32 and exFAT store only a read-only attribute.
-The requested bits outside 0222 must match the mode derived from the
-mount's umask, or the change gives
-.Er EPERM .
-Any requested write bit clears the read-only attribute; no write bits
-sets it.
+As on Linux, the requested mode is first cut by the mount's umask; its
+read and execute bits must then match the mode derived from the umask,
+and its write bits must be all that the umask allows or none, or the
+change gives
+.Er EPERM ,
+as set-user-ID, set-group-ID and sticky bits do.
+Write bits clear the read-only attribute; no write bits set it, unless
+the umask allows none, when the attribute is left as it is.
 Their root directory has no entry to change and remains unchanged.
 .Pp
 A pseudoterminal slave under

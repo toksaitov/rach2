@@ -3658,7 +3658,7 @@ out:
  * The `setattr` of `vfs_ops`: the mode's write bits, kept as the read-only
  * attribute, and the access and modification times; the root, which has no
  * set, changes nothing. A change of owner, group or any other attribute,
- * and a mode whose other bits differ from the mount's, is -EPERM. A time is
+ * and a mode that `fat_mode_change` refuses, is -EPERM. A time is
  * a DOS stamp with its UTC offset valid and zero; the stamp counts two
  * seconds, so the modification time's odd second goes in its 10 ms count,
  * whose range of 0 to 199 is for that, and the access time, which has no
@@ -3669,17 +3669,16 @@ static int ex_setattr(struct vfs_mount *mnt, void *node, int what, const struct 
 {
     struct ex_mount *em = em_of(mnt);
     struct ex_node *n = node;
+    int read_only = -1;
     int rc;
 
     if (what & ~(VFS_SET_MODE | VFS_SET_ATIME | VFS_SET_MTIME)) {
         return -EPERM;
     }
     if (what & VFS_SET_MODE) {
-        uint32_t base = 0777u & ~em->umask;
-        uint32_t want = st->mode & 07777u;
-
-        if ((want & ~0222u) != (base & ~0222u)) {
-            return -EPERM;
+        rc = fat_mode_change(em->umask, st->mode, &read_only);
+        if (rc != 0) {
+            return rc;
         }
     }
     if (n->is_dir && n->first == em->root) {
@@ -3690,12 +3689,10 @@ static int ex_setattr(struct vfs_mount *mnt, void *node, int what, const struct 
         return rc;
     }
     assert_locked(mnt);
-    if (what & VFS_SET_MODE) {
-        if (st->mode & 0222u) {
-            n->attr = (uint16_t)(n->attr & ~ATTR_READ_ONLY);
-        } else {
-            n->attr |= ATTR_READ_ONLY;
-        }
+    if ((what & VFS_SET_MODE) && read_only == 0) {
+        n->attr = (uint16_t)(n->attr & ~ATTR_READ_ONLY);
+    } else if ((what & VFS_SET_MODE) && read_only == 1) {
+        n->attr |= ATTR_READ_ONLY;
     }
     if (what & VFS_SET_ATIME) {
         uint16_t date, time;

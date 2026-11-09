@@ -33,6 +33,7 @@
  */
 
 #include "../../rach2/sys/fs/fat32.h"
+#include "../../rach2/sys/fs/fatcommon.h"
 #include "../../rach2/sys/fs/bcache.h"
 #include "../../rach2/sys/lib/kerrno.h"
 #include "../../rach2/sys/proc/process.h"
@@ -1495,6 +1496,22 @@ static void long_names_mtools(void)
     }
 }
 
+/** The mode rule of a chmod on other umasks than the fixture's mount has,
+ * judged by `fat_mode_change`, which both drivers' `setattr` call. */
+static void mode_rows(void)
+{
+    int ro = 2;
+
+    check(fat_mode_change(077, 0755, &ro) == 0 && ro == 0,
+          "under umask=077 a mode of 0755 is cut to the mount's 0700, as on Linux");
+    check(fat_mode_change(077, 0555, &ro) == 0 && ro == 1,
+          "and 0555 to 0500, which sets the read-only attribute");
+    check(fat_mode_change(0, 0755, &ro) == -EPERM, "under umask=0 one write bit of three is EPERM");
+    check(fat_mode_change(0222, 0555, &ro) == 0 && ro == -1,
+          "a umask that allows no write bit leaves the attribute alone");
+    check(fat_mode_change(022, 04755, &ro) == -EPERM, "a set-user-ID bit is EPERM");
+}
+
 /**
  * Long names of every kind, written and read back by name and by alias,
  * listed by the check and by mtools; the names that fail with `EINVAL`,
@@ -1645,6 +1662,7 @@ static void long_rows(void)
         st.mode = 0700;
         check(OPS->setattr(&mnt, n, VFS_SET_MODE, &st) == -EPERM,
               "a mode change outside the write bits is EPERM");
+        mode_rows();
         st.uid = 5;
         check(OPS->setattr(&mnt, n, VFS_SET_UID, &st) == -EPERM, "an owner change is EPERM");
         st.size = 3;
