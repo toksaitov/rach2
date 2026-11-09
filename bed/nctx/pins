@@ -1,8 +1,9 @@
 # pins: the matched native-context stack of the bed, kept apart from the
 # root's Mesa. A line is NAME VALUE; build.sh reads it. The tarballs are the
-# upstream releases, checked by size and SHA-256; the Debian packages come
-# from trixie-backports in the snapshot that tests/graphics/debian-ref/image
-# names, at these versions, checked by apt against the archive's signature.
+# upstream releases, checked by size and SHA-256. The Debian packages, and
+# QEMU's source at the version of its packages, come from trixie-backports in
+# the snapshot that tests/graphics/debian-ref/image names, checked by apt
+# against the archive's signature.
 mesa_url https://archive.mesa3d.org/mesa-26.1.6.tar.xz
 mesa_size 77770828
 mesa_sha256 5296b88a0f1e012e2cb9ada150a2bbadf728ca81e5a4fb2ab43c83a4d2158606
