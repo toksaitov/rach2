@@ -261,6 +261,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "drm_prime",
+          "checks": "tests/host/drm_prime_hosttest.c checks PRIME exports, import caching, self-import, cross-device and udmabuf pages, lifetimes and failures under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "drm_prime64",
+          "checks": "tests/host/drm_prime64_hosttest.c runs the PRIME rows with x86-64 kernel structures under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "drm_abi",
           "checks": "tests/host/drm_abi_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

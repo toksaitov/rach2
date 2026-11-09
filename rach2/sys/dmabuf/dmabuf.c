@@ -284,6 +284,6 @@ int32_t dma_buf_fd(struct dma_buf *b, uint32_t flags)
     e->type = FD_TYPE_ANON;
     e->ops = &buf_ops;
     e->priv = dma_buf_ref(b);
-    e->flags = FD_FLAG_READ | FD_FLAG_WRITE | (flags ? FD_FLAG_CLOEXEC : 0);
+    e->flags = FD_FLAG_READ | (b->read_only ? 0 : FD_FLAG_WRITE) | (flags ? FD_FLAG_CLOEXEC : 0);
     return fd;
 }

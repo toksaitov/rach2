@@ -217,6 +217,12 @@ void dma_fence_put(struct dma_fence *f)
         kfree(f);
 }
 
+/** No PRIME objects are made by the core rows. */
+void dma_buf_put(struct dma_buf *buf)
+{
+    CHECK("no PRIME reference in core model", buf == NULL);
+}
+
 /** Release modeled reservation slots at the object's last reference. */
 void dma_resv_fini(struct dma_resv *r)
 {
@@ -1178,6 +1184,9 @@ static void test_unplug(void)
     vma_t vma;
     uintptr_t phys;
     char buf[32];
+    struct drm_gem_object *shared;
+    struct drm_gem_shmem_object *imported;
+    struct dma_buf export;
 
     open_node("dri/card0", &user_a, 0, &a);
     open_node("dri/renderD128", &user_a, 0, &r);
@@ -1194,6 +1203,11 @@ static void test_unplug(void)
     vma.pgoff = (uint32_t)(md.offset >> PAGE_SHIFT);
     CHECK("map before the unplug", a.ops->mmap(&a, &vma) == 0);
     reg = (struct region *)vma.file;
+    shared = reg->obj;
+    k_memset(&export, 0, sizeof(export));
+    shared->dma_buf = &export;
+    imported = drm_gem_shmem_create(&plain_dev, PAGE_SIZE, 0);
+    imported->base.import = &export;
 
     zaps = 0;
     unplugs = 0;
@@ -1201,7 +1215,11 @@ static void test_unplug(void)
     drm_dev_unplug(&fake_dev);
     CHECK("the nodes leave", !node_named("dri/card0") && !node_named("dri/renderD128"));
     CHECK("the driver and the console are told", unplugs == 1 && client_unregisters == 1);
-    CHECK("the mapping's object is zapped", zaps == 1 && zapped_obj == reg->obj);
+    CHECK("the source and importing mappings are zapped",
+          zaps == 2 && zapped_obj == &imported->base);
+    imported->base.import = NULL;
+    shared->dma_buf = NULL;
+    drm_gem_object_put(&imported->base);
     CHECK("a fault after it raises SIGBUS", reg->ops->page(reg->obj, 0, &phys) == -1);
     CHECK("not found by index", drm_dev_at(0) == NULL);
     cap.capability = DRM_CAP_DUMB_BUFFER;

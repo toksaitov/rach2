@@ -31,6 +31,7 @@ int32_t drm_handle_insert(struct drm_handle **list, void *object, uint32_t *id)
     }
     h->id = want;
     h->object = object;
+    h->prime = NULL;
     h->next = *link;
     *link = h;
     *id = want;
@@ -57,6 +58,7 @@ void *drm_handle_remove(struct drm_handle **list, uint32_t id)
             void *object = h->object;
 
             *link = h->next;
+            dma_buf_put(h->prime);
             kfree(h);
             return object;
         }
@@ -107,11 +109,13 @@ static void unlink_obj(struct drm_gem_object **head, struct drm_gem_object *obj,
 void drm_gem_object_put(struct drm_gem_object *obj)
 {
     struct drm_device *dev;
+    struct dma_buf *import;
 
     if (!obj || --obj->refs > 0) {
         return;
     }
     dev = obj->dev;
+    import = obj->import;
     unlink_obj(&dev->objects, obj, 0);
     if (obj->mmap_offset) {
         unlink_obj(&dev->mmap_objects, obj, 1);
@@ -122,6 +126,7 @@ void drm_gem_object_put(struct drm_gem_object *obj)
     } else {
         kfree(obj);
     }
+    dma_buf_put(import);
     drm_dev_put(dev);
 }
 
@@ -262,6 +267,11 @@ uintptr_t drm_gem_shmem_page(struct drm_gem_shmem_object *obj, uint32_t pgoff)
     if ((uint64_t)pgoff >= obj->base.size >> PAGE_SHIFT) {
         return 0;
     }
+    if (obj->base.import) {
+        struct dma_buf *b = obj->base.import;
+
+        return b->ops->page ? b->ops->page(b, pgoff) : 0;
+    }
     phys = shmem_resident(&obj->pages, pgoff);
     if (!phys && shmem_allocate(&obj->pages, (uint64_t)pgoff << PAGE_SHIFT, PAGE_SIZE) == 0) {
         phys = shmem_resident(&obj->pages, pgoff);
@@ -312,7 +322,17 @@ static void shmem_obj_free(struct drm_gem_object *obj)
     kfree(s);
 }
 
-static const struct drm_gem_object_funcs shmem_funcs = {shmem_obj_free, shmem_obj_mmap, NULL, NULL};
+/** Return a shmem object's shared physical frame to a PRIME importer. */
+static uintptr_t shmem_obj_page(struct drm_gem_object *obj, uint32_t pgoff)
+{
+    if (obj->dev->unplugged) {
+        return 0;
+    }
+    return drm_gem_shmem_page((struct drm_gem_shmem_object *)obj, pgoff);
+}
+
+static const struct drm_gem_object_funcs shmem_funcs = {shmem_obj_free, shmem_obj_mmap, NULL, NULL,
+                                                        shmem_obj_page};
 
 struct drm_gem_shmem_object *drm_gem_shmem_create(struct drm_device *dev, uint64_t size, int map_wc)
 {
@@ -329,6 +349,7 @@ struct drm_gem_shmem_object *drm_gem_shmem_create(struct drm_device *dev, uint64
     drm_gem_object_init(dev, &s->base, size, &shmem_funcs);
     s->pages.size = size;
     s->map_wc = map_wc;
+    s->base.map_wc = map_wc;
     return s;
 }
 

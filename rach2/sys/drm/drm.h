@@ -198,7 +198,9 @@ struct drm_ioctl_desc {
  * `dumb_create` makes a dumb buffer for MODE_CREATE_DUMB, sets its handle,
  * pitch and size, and may sleep; `gem_prime_import` makes an object of a
  * dma-buf from another device or from udmabuf, or returns NULL with
- * `*err` set; `unplug` stops the hardware once the core has unplugged the
+ * `*err` set. It borrows the buffer; the core attaches its reference and
+ * reservation to the returned object. NULL selects the shmem import helper.
+ * `unplug` stops the hardware once the core has unplugged the
  * device; `release` frees the device's record once its last reference is
  * gone, NULL for a record that is never freed. The display hooks are on
  * each mode object (below) and the commit hooks on the mode configuration.
@@ -335,12 +337,16 @@ int32_t sw_sync_open(fd_entry_t *e);
  * that an unplug's `paging_zap_device` finds its pages. `pin` and `unpin`
  * keep the pages where the device reads them for scanout. NULL `mmap`
  * refuses mapping with ENODEV; NULL `free` frees the record with kfree.
+ * `page` returns a borrowed physical frame, or 0 on failure, for PRIME
+ * imports by other devices; NULL refuses those imports. `map_wc` records
+ * the cache type that the exporter and its importers use.
  */
 struct drm_gem_object_funcs {
     void (*free)(struct drm_gem_object *obj);
     int32_t (*mmap)(struct drm_gem_object *obj, vma_t *vma);
     int32_t (*pin)(struct drm_gem_object *obj);
     void (*unpin)(struct drm_gem_object *obj);
+    uintptr_t (*page)(struct drm_gem_object *obj, uint32_t pgoff);
 };
 
 /*
@@ -365,6 +371,7 @@ struct drm_gem_object {
     struct dma_resv *resv;
     struct dma_resv resv_own;
     const struct drm_gem_object_funcs *funcs;
+    int map_wc;                       /* PRIME mappings use write-combining */
     uint32_t handle_count;            /* handles any file has to it */
     struct drm_gem_object *dev_next;  /* the device's objects */
     struct drm_gem_object *mmap_next; /* the device's objects with an offset, by offset */
@@ -468,6 +475,7 @@ struct drm_pending_event {
 struct drm_handle {
     uint32_t id;
     void *object;
+    struct dma_buf *prime; /* held export/import cache, NULL for other handles */
     struct drm_handle *next;
 };
 
@@ -476,7 +484,8 @@ struct drm_handle {
 int32_t drm_handle_insert(struct drm_handle **list, void *object, uint32_t *id);
 /** The object of `id` in `list`, or NULL. */
 void *drm_handle_find(struct drm_handle *list, uint32_t id);
-/** Take `id` out of `list` and return its object, or NULL for none. */
+/** Take `id` out of `list`, drop its PRIME cache reference and return its
+ * object, or NULL for none. */
 void *drm_handle_remove(struct drm_handle **list, uint32_t id);
 
 /*
