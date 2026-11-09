@@ -17,7 +17,7 @@ Log in as root with the password in `krffs/rach2_demo_password`, which the build
 
 ## Interfaces
 
-A program enters the kernel with `int 0x80` on i686 and `syscall` on x86-64, with Linux's numbers and registers for the architecture, and a failure is a negative error number. [syscalls.md](syscalls.md) lists the calls each kernel registers, with their numbers and manual pages; [syscalls(2)](../man/man2/syscalls.2) gives the registers.
+A program enters the kernel with `int 0x80` on i686 and `syscall` on x86-64, with Linux's numbers and registers for the architecture, and a failure is a negative error number. [syscalls.md](syscalls.md) lists the calls each kernel registers, with their numbers and manual pages; [syscalls(2)](../man/man2/syscalls.2) gives the registers. [ia32.md](ia32.md) lists every i386 call, structure and ioctl family the x86-64 kernel must give an i386 program, with the task that owns each and its test.
 
 The command line is a list of words, which [cmdline.md](cmdline.md) gives in full. Three are needed first: `rach2.rescue` starts the debug shell in place of `/sbin/init`, `rach2.root=` chooses the root, and `rach2.loglevel=N` sets the least urgent level the screen shows.
 
