@@ -13,7 +13,7 @@ psmouse serio1: synaptics: Touchpad model: 1, fw: 8.1, id: 0x1e2b1, caps: 0xd001
 input: SynPS/2 Synaptics TouchPad as /devices/platform/i8042/serio1/input/input13
 ```
 
-No record has Debian's `/proc/bus/input/devices` block or the axes' EVIOCGABS for it; 80-2's Debian session was asked for them on its issue. Until they are on record, the reference is what Linux's `set_input_params` and `input_mt_init_slots` give those IDs, which `tests/host/synaptics_hosttest.c` checks:
+No record has Debian's `/proc/bus/input/devices` block or the axes' EVIOCGABS for it: 80-2's Debian session had ended when they were asked for. This task's step boots Debian on p5 for a minute first and reads them with `tools/lenovo/debian-ref/touchpad.sh`. Until they are on record, the reference is what Linux's `set_input_params` and `input_mt_init_slots` give those IDs, which `tests/host/synaptics_hosttest.c` checks:
 
 ```
 I: Bus=0011 Vendor=0002 Product=0007 Version=01b1
@@ -29,7 +29,7 @@ with X from 1314 to 5670, Y from 1098 to 4794, pressure and MT pressure to 255, 
 
 ## The step
 
-`evprobe touchpad` (`tests/evprobe.c`) finds the event device by its name, prints its block in the form of `/proc/bus/input/devices` and a line for each axis's EVIOCGABS, `value min max fuzz flat res`, and prints `EVPROBE OK` only when they are the reference's above. The step's commands, the readiness note and the manager's go are on the task's issue.
+`evprobe touchpad` (`tests/evprobe.c`) finds the event device by its name, prints its block in the form of `/proc/bus/input/devices` and a line for each axis's EVIOCGABS in the form `touchpad.sh` prints Debian's, and prints `EVPROBE OK` only when they are the reference's above. The two outputs are compared line for line, less each axis's value, which is only the pad's last reading. The step's commands, the readiness note and the manager's go are on the task's issue.
 
 ## Results
 
