@@ -473,6 +473,13 @@ FOREIGN(drm_syncobj_signal_ioctl)
 FOREIGN(drm_syncobj_timeline_signal_ioctl)
 FOREIGN(drm_syncobj_query_ioctl)
 
+/** drm_mode.c's release of a file's framebuffers and blobs: the model's
+ * files make none. */
+void drm_mode_file_release(struct drm_file *file)
+{
+    (void)file;
+}
+
 /* ---- the fake driver ---- */
 
 struct fake_echo {

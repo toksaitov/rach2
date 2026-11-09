@@ -405,6 +405,7 @@ static void drm_file_release(struct drm_file *file)
     struct drm_file **link;
 
     events_release(file);
+    drm_mode_file_release(file);
     drm_gem_release(file);
     if (file->minor_type == DRM_MINOR_PRIMARY) {
         drm_master_release(file);
