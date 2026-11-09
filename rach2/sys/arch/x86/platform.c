@@ -44,6 +44,7 @@
 #include "../../audio/sb16.h"
 #include "../../block/ata.h"
 #include "../../boot.h"
+#include "../../drm/i915/i915.h"
 #include "../../cmdline.h"
 #include "../../input.h"
 #include "../../iommu.h"
@@ -213,6 +214,11 @@ static void ecam_init(const struct acpi_info *a)
          (int)r.top, (uint32_t)base);
     pci_each(e->bus_first, &r.top, count_extended, &extended);
     klog(KLOG_INFO, "pci", "ecam: %d functions with extended capabilities", extended);
+}
+
+void platform_memory_reserve(struct frame_map *map)
+{
+    (void)i915_stolen_reserve_early(map);
 }
 
 void platform_firmware_init(const struct boot_info *boot)

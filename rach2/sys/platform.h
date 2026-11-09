@@ -25,6 +25,16 @@
  */
 void platform_cpu_init(uintptr_t boot_stack_top);
 
+struct frame_map;
+
+/**
+ * Take out of the boot's memory map `map`, before the frame allocator is
+ * made from it, the memory the machine's devices use that the firmware's
+ * map may not mark: on a PC the stolen memory of Intel's GPU, as Linux's
+ * early quirks do. Configuration space is reached by mechanism #1 alone.
+ */
+void platform_memory_reserve(struct frame_map *map);
+
 struct boot_info;
 
 /**

@@ -4030,6 +4030,7 @@ void kernel_main(const struct boot_info *boot)
                 frame_map_reserve(&map, mod->start, mod->end);
             }
         }
+        platform_memory_reserve(&map);
         init_paging(&map);
         guard_boot_stack();
         map_modules();
