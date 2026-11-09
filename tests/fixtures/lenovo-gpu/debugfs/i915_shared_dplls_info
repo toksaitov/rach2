@@ -1,0 +1,25 @@
+PLL refclks: non-SSC: 24000 kHz, SSC: 135000 kHz
+DPLL0: WRPLL 1, id: 0
+ pipe_mask: 0x0, active: 0x0, on: no
+ tracked hardware state:
+dpll_hw_state: wrpll: 0x202418 spll: 0x0
+DPLL1: WRPLL 2, id: 1
+ pipe_mask: 0x0, active: 0x0, on: no
+ tracked hardware state:
+dpll_hw_state: wrpll: 0x202418 spll: 0x0
+DPLL2: SPLL, id: 2
+ pipe_mask: 0x0, active: 0x0, on: no
+ tracked hardware state:
+dpll_hw_state: wrpll: 0x0 spll: 0x0
+DPLL3: LCPLL 810, id: 3
+ pipe_mask: 0x0, active: 0x0, on: no
+ tracked hardware state:
+dpll_hw_state: wrpll: 0x0 spll: 0x0
+DPLL4: LCPLL 1350, id: 4
+ pipe_mask: 0x1, active: 0x1, on: yes
+ tracked hardware state:
+dpll_hw_state: wrpll: 0x0 spll: 0x0
+DPLL5: LCPLL 2700, id: 5
+ pipe_mask: 0x0, active: 0x0, on: no
+ tracked hardware state:
+dpll_hw_state: wrpll: 0x0 spll: 0x0

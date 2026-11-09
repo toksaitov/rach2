@@ -1,0 +1,27 @@
+[    0.014284] ACPI: DMAR 0x00000000AAFCB000 0000B0 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.014320] ACPI: Reserving DMAR table memory at [mem 0xaafcb000-0xaafcb0af]
+[    0.149549] DMAR: Host address width 39
+[    0.149552] DMAR: DRHD base: 0x000000fed90000 flags: 0x0
+[    0.149563] DMAR: dmar0: reg_base_addr fed90000 ver 1:0 cap c0000020660462 ecap f0101a
+[    0.149571] DMAR: DRHD base: 0x000000fed91000 flags: 0x1
+[    0.149580] DMAR: dmar1: reg_base_addr fed91000 ver 1:0 cap d2008020660462 ecap f010da
+[    0.149587] DMAR: RMRR base: 0x000000aae11000 end: 0x000000aae30fff
+[    0.149592] DMAR: RMRR base: 0x000000ab800000 end: 0x000000af9fffff
+[    0.149597] DMAR-IR: IOAPIC id 2 under DRHD base  0xfed91000 IOMMU 1
+[    0.149602] DMAR-IR: HPET id 0 under DRHD base 0xfed91000
+[    0.149607] DMAR-IR: Queued invalidation will be enabled to support x2apic and Intr-remapping.
+[    0.150248] DMAR-IR: Enabled IRQ remapping in x2apic mode
+[    0.382792] iommu: Default domain type: Translated
+[    0.382796] iommu: DMA domain TLB invalidation policy: lazy mode
+[    0.464812] ACPI: bus type drm_connector registered
+[    0.484671] [drm] Initialized simpledrm 1.0.0 for simple-framebuffer.0 on minor 0
+[    0.492597] simple-framebuffer simple-framebuffer.0: [drm] fb0: simpledrmdrmfb frame buffer device
+[   19.451402] ideapad_acpi VPC2004:00: Keyboard backlight control not available
+[   20.757702] i915 0000:00:02.0: [drm] Found haswell/ult (device ID 0a16) integrated display version 7.00 stepping N/A
+[   20.775674] i915 0000:00:02.0: vgaarb: deactivate vga console
+[   20.780057] i915 0000:00:02.0: vgaarb: VGA decodes changed: olddecodes=io+mem,decodes=io+mem:owns=io+mem
+[   20.853835] [drm] Initialized i915 1.6.0 for 0000:00:02.0 on minor 1
+[   20.885218] fbcon: i915drmfb (fb0) is primary device
+[   20.920723] i915 0000:00:02.0: [drm] fb0: i915drmfb frame buffer device
+[   21.397043] ata1.00: supports DRM functions and may not be fully accessible
+[   21.401496] ata1.00: supports DRM functions and may not be fully accessible

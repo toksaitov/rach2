@@ -1,0 +1,69 @@
+CRTC info
+---------
+[CRTC:49:pipe A]:
+	uapi: enable=yes, active=yes, mode="1366x768": 60 76300 1366 1374 1384 1558 768 771 772 816 0x48 0xa
+	hw: enable=yes, active=yes
+	adjusted_mode="1366x768": 60 76300 1366 1374 1384 1558 768 771 772 816 0x48 0xa
+	pipe__mode="1366x768": 60 76300 1366 1374 1384 1558 768 771 772 816 0x40 0xa
+	pipe src=1366x768+0+0, dither=yes, bpp=18
+	port_clock=270000, lane_count=1
+	No scalers available on this platform
+	[ENCODER:84:DDI A/PHY A]: connectors:
+		[CONNECTOR:85:eDP-1]
+	[PLANE:33:primary A]: type=PRI
+		uapi: [FB:110] XR24 little-endian (0x34325258),0x0,1366x768, visible=visible, src=1366.000000x768.000000+0.000000+0.000000, dst=1366x768+0+0, rotation=0 (0x00000001)
+		hw: [FB:110] XR24 little-endian (0x34325258),0x0,1366x768, visible=yes, src=1366.000000x768.000000+0.000000+0.000000, dst=1366x768+0+0, rotation=0 (0x00000001)
+	[PLANE:38:sprite A]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:44:cursor A]: type=CUR
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	underrun reporting: cpu=yes pch=yes
+[CRTC:66:pipe B]:
+	uapi: enable=no, active=no, mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	hw: enable=no, active=no
+	adjusted_mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe__mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe src=0x0+0+0, dither=no, bpp=0
+	port_clock=0, lane_count=0
+	No scalers available on this platform
+	[PLANE:50:primary B]: type=PRI
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:55:sprite B]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:61:cursor B]: type=CUR
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	underrun reporting: cpu=yes pch=yes
+[CRTC:83:pipe C]:
+	uapi: enable=no, active=no, mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	hw: enable=no, active=no
+	adjusted_mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe__mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe src=0x0+0+0, dither=no, bpp=0
+	port_clock=0, lane_count=0
+	No scalers available on this platform
+	[PLANE:67:primary C]: type=PRI
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:72:sprite C]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:78:cursor C]: type=CUR
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	underrun reporting: cpu=yes pch=yes
+
+Connector info
+--------------
+[CONNECTOR:85:eDP-1]: status: connected
+	physical dimensions: 340x190mm
+	subpixel order: Unknown
+	CEA rev: 0
+	DPCD rev: 11
+	audio support: no
+	DP branch device present: no
+	HDCP version: No Connector Support
+	max bpc: 6
+	fixed modes:
+		"1366x768": 60 76300 1366 1374 1384 1558 768 771 772 816 0x48 0xa
+	modes:
+		"1366x768": 60 76300 1366 1374 1384 1558 768 771 772 816 0x48 0xa
+[CONNECTOR:92:HDMI-A-1]: status: disconnected
+[CONNECTOR:99:DP-1]: status: disconnected
+[CONNECTOR:106:HDMI-A-2]: status: disconnected

@@ -1,0 +1,37 @@
+tests 2188
+pass           1085
+skip           1082
+dmesg-warn     13
+fail           7
+dmesg-fail     1
+first start to last end: 128 s
+
+dmesg-fail      1 igt/kms_panel_fitting
+dmesg-warn      8 igt/kms_scaling_modes
+dmesg-warn      5 igt/kms_panel_fitting
+fail            2 igt/kms_pipe_crc_basic
+fail            2 igt/kms_dirtyfb
+fail            2 igt/kms_pm_rpm
+fail            1 igt/kms_panel_fitting
+
+fail igt@kms_dirtyfb@default-dirtyfb-ioctl
+fail igt@kms_dirtyfb@default-dirtyfb-ioctl@a-edp-1
+dmesg-fail igt@kms_panel_fitting@atomic-fastset
+fail igt@kms_panel_fitting@atomic-fastset@pipe-a-edp-1
+dmesg-warn igt@kms_panel_fitting@atomic-fastset@pipe-b-edp-1
+dmesg-warn igt@kms_panel_fitting@atomic-fastset@pipe-c-edp-1
+dmesg-warn igt@kms_panel_fitting@legacy
+dmesg-warn igt@kms_panel_fitting@legacy@pipe-b-edp-1
+dmesg-warn igt@kms_panel_fitting@legacy@pipe-c-edp-1
+fail igt@kms_pipe_crc_basic@read-crc
+fail igt@kms_pipe_crc_basic@read-crc@pipe-a-edp-1
+fail igt@kms_pm_rpm@modeset-pc8-residency-stress
+fail igt@kms_pm_rpm@pc8-residency
+dmesg-warn igt@kms_scaling_modes@scaling-mode-center
+dmesg-warn igt@kms_scaling_modes@scaling-mode-center@pipe-b-edp-1
+dmesg-warn igt@kms_scaling_modes@scaling-mode-center@pipe-c-edp-1
+dmesg-warn igt@kms_scaling_modes@scaling-mode-full
+dmesg-warn igt@kms_scaling_modes@scaling-mode-full-aspect
+dmesg-warn igt@kms_scaling_modes@scaling-mode-full-aspect@pipe-b-edp-1
+dmesg-warn igt@kms_scaling_modes@scaling-mode-full-aspect@pipe-c-edp-1
+dmesg-warn igt@kms_scaling_modes@scaling-mode-full@pipe-c-edp-1

@@ -1,0 +1,79 @@
+graphics version: 7
+media version: 7
+graphics stepping: **
+media stepping: **
+gt: 2
+memory-regions: 0x21
+page-sizes: 0x1000
+platform: HASWELL
+ppgtt-size: 31
+ppgtt-type: 1
+dma_mask_size: 40
+is_mobile: no
+require_force_probe: no
+is_dgfx: no
+has_64bit_reloc: no
+has_64k_pages: no
+gpu_reset_clobbers_display: no
+has_reset_engine: yes
+has_3d_pipeline: yes
+has_flat_ccs: no
+has_global_mocs: no
+has_gmd_id: no
+has_gt_uc: no
+has_heci_pxp: no
+has_heci_gscfi: no
+has_guc_deprivilege: no
+has_guc_tlb_invalidation: no
+has_l3_ccs_read: no
+has_l3_dpf: yes
+has_llc: yes
+has_logical_ring_contexts: no
+has_logical_ring_elsq: no
+has_media_ratio_mode: no
+has_mslice_steering: no
+has_oa_bpc_reporting: no
+has_oa_slice_contrib_limits: no
+has_oam: no
+has_one_eu_per_fuse_bit: no
+has_pxp: no
+has_rc6: yes
+has_rc6p: no
+has_rps: yes
+has_runtime_pm: yes
+has_snoop: no
+has_coherent_ggtt: yes
+tuning_thread_rr_after_dep: no
+unfenced_needs_alignment: no
+hws_needs_physical: no
+has_pooled_eu: no
+iommu: disabled
+available engines: 40403
+slice total: 1, mask=0001
+subslice total: 2
+slice0: 2 subslices, mask=00000003
+EU total: 20
+EU per subslice: 10
+has slice power gating: no
+has subslice power gating: no
+has EU power gating: no
+Has logical contexts? yes
+scheduler: 0x0
+i915.modeset=-1
+i915.enable_guc=0
+i915.guc_log_level=-1
+i915.guc_firmware_path=(null)
+i915.huc_firmware_path=(null)
+i915.gsc_firmware_path=(null)
+i915.memtest=no
+i915.mmio_debug=0
+i915.reset=3
+i915.inject_probe_failure=0
+i915.force_probe=
+i915.request_timeout_ms=20000
+i915.lmem_size=0
+i915.lmem_bar_size=0
+i915.enable_hangcheck=yes
+i915.error_capture=yes
+i915.enable_gvt=no
+i915.enable_debug_only_api=no

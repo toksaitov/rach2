@@ -1,0 +1,16 @@
+RC1e Enabled: no
+RC6 Enabled: yes
+Deep RC6 Enabled: no
+Deepest RC6 Enabled: no
+Current RC state: RC6
+Core Power Down: no
+Multi-threaded Forcewake Request: 0x0
+RC6 "Locked to RPn" residency since boot: 0 (0 us)
+RC6 residency since boot: 199991870 (255989594 us)
+RC6+ residency since boot: 0 (0 us)
+RC6++ residency since boot: 0 (0 us)
+RC6   voltage: 245mV
+RC6+  voltage: 245mV
+RC6++ voltage: 245mV
+user.bypass_count = 0
+render.wake_count = 1

@@ -1,0 +1,10 @@
+spec@egl 1.4@egl-context-priority
+spec@egl 1.4@eglterminate then unbind context
+spec@egl_ext_device_query@conformance
+spec@egl_ext_image_dma_buf_import_modifiers@conformance
+spec@egl_ext_surface_compression@conformance
+spec@egl_khr_get_all_proc_addresses@conformance
+spec@egl_khr_gl_image@egl_khr_gl_renderbuffer_image-clear-shared-image gl_depth_component24
+spec@egl_khr_gl_image@egl_khr_gl_renderbuffer_image-clear-shared-image gl_rgba
+spec@egl_khr_surfaceless_context@viewport
+spec@egl_mesa_query_driver@conformance

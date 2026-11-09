@@ -1,0 +1,5 @@
+total 0
+drwxr-xr-x    2 root     root            80 Nov  3 22:37 .
+drwxr-xr-x   15 root     root          3400 Nov  3 22:37 ..
+crw-rw----    1 root     video     226,   1 Nov  3 22:37 card1
+crw-rw-rw-    1 root     video     226, 128 Nov  3 22:37 renderD128

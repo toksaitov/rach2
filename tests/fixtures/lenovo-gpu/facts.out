@@ -1,0 +1,370 @@
+== 2026-11-09T00:19:11+00:00  00:19:11 up 0 min,  1 user,  load average: 0.71, 0.17, 0.06
+BOOT_IMAGE=/run2/vmlinuz root=PARTUUID=f640712e-b236-4c5a-b7d8-1b149d598ec0 ro ds=nocloud modprobe.blacklist=ath9k,snd_hda_intel panic=10 intel_iommu=on
+Linux lenovo-debian 6.12.115+deb13.1-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.115-2 (2026-11-01) x86_64 GNU/Linux
+== dmesg: DMAR, IOMMU, stolen memory, i915, vfio, watchdog
+[    0.000000] Command line: BOOT_IMAGE=/run2/vmlinuz root=PARTUUID=f640712e-b236-4c5a-b7d8-1b149d598ec0 ro ds=nocloud modprobe.blacklist=ath9k,snd_hda_intel panic=10 intel_iommu=on
+[    0.014035] ACPI: DMAR 0x00000000AAFCB000 0000B0 (v01 LENOVO CB-01    00000001 ACPI 00040000)
+[    0.014069] ACPI: Reserving DMAR table memory at [mem 0xaafcb000-0xaafcb0af]
+[    0.020542] Reserving Intel graphics memory at [mem 0xaba00000-0xaf9fffff]
+[    0.029839] Kernel command line: BOOT_IMAGE=/run2/vmlinuz root=PARTUUID=f640712e-b236-4c5a-b7d8-1b149d598ec0 ro ds=nocloud modprobe.blacklist=ath9k,snd_hda_intel panic=10 intel_iommu=on
+[    0.029938] DMAR: IOMMU enabled
+[    0.082369] DMAR: Host address width 39
+[    0.082372] DMAR: DRHD base: 0x000000fed90000 flags: 0x0
+[    0.082383] DMAR: dmar0: reg_base_addr fed90000 ver 1:0 cap c0000020660462 ecap f0101a
+[    0.082390] DMAR: DRHD base: 0x000000fed91000 flags: 0x1
+[    0.082399] DMAR: dmar1: reg_base_addr fed91000 ver 1:0 cap d2008020660462 ecap f010da
+[    0.082405] DMAR: RMRR base: 0x000000aae11000 end: 0x000000aae30fff
+[    0.082410] DMAR: RMRR base: 0x000000ab800000 end: 0x000000af9fffff
+[    0.082416] DMAR-IR: IOAPIC id 2 under DRHD base  0xfed91000 IOMMU 1
+[    0.082421] DMAR-IR: HPET id 0 under DRHD base 0xfed91000
+[    0.082425] DMAR-IR: Queued invalidation will be enabled to support x2apic and Intr-remapping.
+[    0.083065] DMAR-IR: Enabled IRQ remapping in x2apic mode
+[    0.250374] NMI watchdog: Enabled. Permanently consumes one hw-PMU counter.
+[    0.311898] ACPI: watchdog: Skipping WDAT on this system because it uses RTC SRAM
+[    0.346240] pci 0000:00:02.0: [8086:0a16] type 00 class 0x030000 conventional PCI endpoint
+[    0.346256] pci 0000:00:02.0: BAR 0 [mem 0xc0000000-0xc03fffff 64bit]
+[    0.346266] pci 0000:00:02.0: BAR 2 [mem 0xb0000000-0xbfffffff 64bit pref]
+[    0.346274] pci 0000:00:02.0: BAR 4 [io  0x4000-0x403f]
+[    0.346293] pci 0000:00:02.0: Video device with shadowed ROM at [mem 0x000c0000-0x000dffff]
+[    0.346426] pci 0000:00:03.0: [8086:0a0c] type 00 class 0x040300 PCIe Root Complex Integrated Endpoint
+[    0.346441] pci 0000:00:03.0: BAR 0 [mem 0xc0610000-0xc0613fff 64bit]
+[    0.352829] iommu: Default domain type: Translated
+[    0.352829] iommu: DMA domain TLB invalidation policy: lazy mode
+[    0.359987] pci 0000:00:02.0: vgaarb: setting as boot VGA device
+[    0.359987] pci 0000:00:02.0: vgaarb: bridge control possible
+[    0.359987] pci 0000:00:02.0: vgaarb: VGA device added: decodes=io+mem,owns=io+mem,locks=none
+[    0.405025] DMAR: No ATSR found
+[    0.405028] DMAR: No SATC found
+[    0.405031] DMAR: IOMMU feature pgsel_inv inconsistent
+[    0.405032] DMAR: IOMMU feature sc_support inconsistent
+[    0.405036] DMAR: IOMMU feature pass_through inconsistent
+[    0.405039] DMAR: dmar0: Using Queued invalidation
+[    0.405051] DMAR: dmar1: Using Queued invalidation
+[    0.405197] pci 0000:00:02.0: Adding to iommu group 0
+[    0.406301] pci 0000:00:00.0: Adding to iommu group 1
+[    0.406316] pci 0000:00:03.0: Adding to iommu group 2
+[    0.406329] pci 0000:00:14.0: Adding to iommu group 3
+[    0.406346] pci 0000:00:16.0: Adding to iommu group 4
+[    0.406359] pci 0000:00:1b.0: Adding to iommu group 5
+[    0.406372] pci 0000:00:1c.0: Adding to iommu group 6
+[    0.406386] pci 0000:00:1c.3: Adding to iommu group 7
+[    0.406398] pci 0000:00:1d.0: Adding to iommu group 8
+[    0.406421] pci 0000:00:1f.0: Adding to iommu group 9
+[    0.406434] pci 0000:00:1f.2: Adding to iommu group 9
+[    0.406446] pci 0000:00:1f.3: Adding to iommu group 9
+[    0.406460] pci 0000:01:00.0: Adding to iommu group 10
+[    0.406473] pci 0000:02:00.0: Adding to iommu group 11
+[    0.407577] DMAR: Intel(R) Virtualization Technology for Directed I/O
+[    1.089443] ACPI: watchdog: Skipping WDAT on this system because it uses RTC SRAM
+[    1.218041] ACPI: watchdog: Skipping WDAT on this system because it uses RTC SRAM
+[    1.247854] iTCO_vendor_support: vendor-support=0
+[    1.279632] iTCO_wdt iTCO_wdt.1.auto: Found a Lynx Point_LP TCO device (Version=2, TCOBASE=0x1860)
+[    1.280616] iTCO_wdt iTCO_wdt.1.auto: initialized. heartbeat=30 sec (nowayout=0)
+[    7.685219] i915 0000:00:02.0: [drm] Found HASWELL/ULT (device ID 0a16) display version 7.00 stepping N/A
+[    7.686666] i915 0000:00:02.0: [drm] VT-d active for gfx access
+[    7.687948] i915 0000:00:02.0: vgaarb: deactivate vga console
+[    7.688026] i915 0000:00:02.0: [drm] Using Transparent Hugepages
+[    7.688035] i915 0000:00:02.0: [drm] DMAR active, disabling use of stolen memory
+[    7.693546] i915 0000:00:02.0: vgaarb: VGA decodes changed: olddecodes=io+mem,decodes=io+mem:owns=io+mem
+[    7.763054] [drm] Initialized i915 1.6.0 for 0000:00:02.0 on minor 0
+[    7.775504] fbcon: i915drmfb (fb0) is primary device
+[    7.829952] i915 0000:00:02.0: [drm] fb0: i915drmfb frame buffer device
+== iommu groups
+group 0 type=DMA: 0000:00:02.0 
+    resv 0x00000000ab800000 0x00000000af9fffff direct-relaxable
+    resv 0x00000000fee00000 0x00000000feefffff msi
+group 1 type=DMA-FQ: 0000:00:00.0 
+    resv 0x00000000fee00000 0x00000000feefffff msi
+group 2 type=DMA-FQ: 0000:00:03.0 
+    resv 0x00000000fee00000 0x00000000feefffff msi
+group 3 type=DMA-FQ: 0000:00:14.0 
+    resv 0x00000000aae11000 0x00000000aae30fff direct-relaxable
+    resv 0x00000000fee00000 0x00000000feefffff msi
+group 4 type=DMA-FQ: 0000:00:16.0 
+    resv 0x00000000fee00000 0x00000000feefffff msi
+group 5 type=DMA-FQ: 0000:00:1b.0 
+    resv 0x00000000fee00000 0x00000000feefffff msi
+group 6 type=DMA-FQ: 0000:00:1c.0 
+    resv 0x00000000fee00000 0x00000000feefffff msi
+group 7 type=DMA-FQ: 0000:00:1c.3 
+    resv 0x00000000fee00000 0x00000000feefffff msi
+group 8 type=DMA-FQ: 0000:00:1d.0 
+    resv 0x00000000aae11000 0x00000000aae30fff direct-relaxable
+    resv 0x00000000fee00000 0x00000000feefffff msi
+group 9 type=DMA-FQ: 0000:00:1f.0 0000:00:1f.2 0000:00:1f.3 
+    resv 0x0000000000000000 0x0000000000ffffff direct-relaxable
+    resv 0x00000000fee00000 0x00000000feefffff msi
+group 10 type=DMA-FQ: 0000:01:00.0 
+    resv 0x00000000fee00000 0x00000000feefffff msi
+group 11 type=DMA-FQ: 0000:02:00.0 
+    resv 0x00000000fee00000 0x00000000feefffff msi
+== dmar units
+dmar0: cap c0000020660462 ecap f0101a version 1:0 address fed90000 devices: 0000:00:02.0 
+dmar1: cap d2008020660462 ecap f010da version 1:0 address fed91000 devices: 0000:00:00.0 0000:00:03.0 0000:00:14.0 0000:00:16.0 0000:00:1b.0 0000:00:1c.0 0000:00:1c.3 0000:00:1d.0 0000:00:1f.0 0000:00:1f.2 0000:00:1f.3 0000:01:00.0 0000:02:00.0 
+== gpu
+vendor: 0x8086
+device: 0x0a16
+subsystem_vendor: 0x17aa
+subsystem_device: 0x380c
+class: 0x030000
+boot_vga: 1
+reset_method: af_flr pm
+power_state: D0
+d3cold_allowed: 1
+iommu_group: ../../../kernel/iommu_groups/0
+driver_override: (null)
+iommu_group: 0
+resource:
+0x00000000c0000000 0x00000000c03fffff 0x0000000000140204
+0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x00000000b0000000 0x00000000bfffffff 0x000000000014220c
+0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x0000000000004000 0x000000000000403f 0x0000000000040101
+0x0000000000000000 0x0000000000000000 0x0000000000000000
+0x00000000000c0000 0x00000000000dffff 0x0000000000000212
+config: GGC 0x50 0211 BDSM 0x5c aba00001 ASLS 0xfc aafb4018 MSAC 0x62 02
+host bridge: 00:00.0 Host bridge [0600]: Intel Corporation Haswell-ULT DRAM Controller [8086:0a04] (rev 0b) GGC 0x50 0211 TOLUD 0xbc afa00001 BDSM 0xb0 aba00001 BGSM 0xb4 ab800001 TSEG 0xb8 ab000001
+lpc: 00:1f.0 ISA bridge [0601]: Intel Corporation 8 Series LPC Controller [8086:9c43] (rev 04)
+00:02.0 VGA compatible controller [0300]: Intel Corporation Haswell-ULT Integrated Graphics Controller [8086:0a16] (rev 0b) (prog-if 00 [VGA controller])
+	Subsystem: Lenovo Device [17aa:380c]
+	Control: I/O+ Mem+ BusMaster+ SpecCycle- MemWINV- VGASnoop- ParErr- Stepping- SERR- FastB2B- DisINTx+
+	Status: Cap+ 66MHz- UDF- FastB2B+ ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+	Latency: 0
+	Interrupt: pin A routed to IRQ 52
+	IOMMU group: 0
+	Region 0: Memory at c0000000 (64-bit, non-prefetchable) [size=4M]
+	Region 2: Memory at b0000000 (64-bit, prefetchable) [size=256M]
+	Region 4: I/O ports at 4000 [size=64]
+	Expansion ROM at 000c0000 [virtual] [disabled] [size=128K]
+	Capabilities: [90] MSI: Enable+ Count=1/1 Maskable- 64bit-
+		Address: fee00018  Data: 0000
+	Capabilities: [d0] Power Management version 2
+		Flags: PMEClk- DSI+ D1- D2- AuxCurrent=0mA PME(D0-,D1-,D2-,D3hot-,D3cold-)
+		Status: D0 NoSoftRst- PME-Enable- DSel=0 DScale=0 PME-
+	Capabilities: [a4] PCI Advanced Features
+		AFCap: TP+ FLR+
+		AFCtrl: FLR-
+		AFStatus: TP-
+	Kernel driver in use: i915
+	Kernel modules: i915
+
+00:02.0 VGA compatible controller: Intel Corporation Haswell-ULT Integrated Graphics Controller (rev 0b)
+00: 86 80 16 0a 07 04 90 00 0b 00 00 03 00 00 00 00
+10: 04 00 00 c0 00 00 00 00 0c 00 00 b0 00 00 00 00
+20: 01 40 00 00 00 00 00 00 00 00 00 00 aa 17 0c 38
+30: 00 00 00 00 90 00 00 00 00 00 00 00 00 01 00 00
+40: 09 00 0c 01 b1 61 00 72 d0 00 5b 14 00 00 00 00
+50: 11 02 00 00 31 00 00 00 00 00 00 00 01 00 a0 ab
+60: 00 00 02 01 00 00 00 00 00 00 00 00 00 00 00 00
+70: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+80: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+90: 05 d0 01 00 18 00 e0 fe 00 00 00 00 00 00 00 00
+a0: 00 00 00 00 13 00 06 03 00 00 00 00 00 00 00 00
+b0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+c0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+d0: 01 a4 22 00 00 00 00 00 00 00 00 00 00 00 00 00
+e0: 00 00 00 00 00 00 00 00 00 80 00 00 00 00 00 00
+f0: 00 00 00 00 00 00 00 00 00 00 0b 00 18 40 fb aa
+
+00:03.0 Audio device [0403]: Intel Corporation Haswell-ULT HD Audio Controller [8086:0a0c] (rev 0b) (prog-if 00 [HDA compatible])
+	Subsystem: Lenovo Device [17aa:3978]
+	Control: I/O- Mem+ BusMaster- SpecCycle- MemWINV- VGASnoop- ParErr- Stepping- SERR- FastB2B- DisINTx-
+	Status: Cap+ 66MHz- UDF- FastB2B- ParErr- DEVSEL=fast >TAbort- <TAbort- <MAbort- >SERR- <PERR- INTx-
+	Interrupt: pin A routed to IRQ 0
+	IOMMU group: 2
+	Region 0: Memory at c0610000 (64-bit, non-prefetchable) [size=16K]
+	Capabilities: [50] Power Management version 2
+		Flags: PMEClk- DSI- D1- D2- AuxCurrent=0mA PME(D0-,D1-,D2-,D3hot-,D3cold-)
+		Status: D0 NoSoftRst- PME-Enable- DSel=0 DScale=0 PME-
+	Capabilities: [60] MSI: Enable- Count=1/1 Maskable- 64bit-
+		Address: 00000000  Data: 0000
+	Capabilities: [70] Express (v1) Root Complex Integrated Endpoint, IntMsgNum 0
+		DevCap:	MaxPayload 128 bytes, PhantFunc 0
+			ExtTag- RBE- FLReset+ TEE-IO-
+		DevCtl:	CorrErr- NonFatalErr- FatalErr- UnsupReq-
+			RlxdOrd- ExtTag- PhantFunc- AuxPwr- NoSnoop+ FLReset-
+			MaxPayload 128 bytes, MaxReadReq 128 bytes
+		DevSta:	CorrErr- NonFatalErr- FatalErr- UnsupReq- AuxPwr- TransPend-
+	Kernel modules: snd_hda_intel
+== rom
+0 bytes copied, 0.00011538 s, 0.0 kB/s
+-rw-r--r-- 1 root root 0 Nov  9 00:19 /root/run2/step11/facts/igd-rom.bin
+000000
+legacy shadow at 0xc0000, first 32 bytes:
+000000 ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff ff
+*
+000020
+== iomem around the stolen memory and RMRRs
+00000000-00000fff : Reserved
+00001000-0006efff : System RAM
+0006f000-0006ffff : Reserved
+00070000-00087fff : System RAM
+00088000-000bffff : Reserved
+  000c0000-000dffff : 0000:00:02.0
+00100000-a307d017 : System RAM
+a307d018-a308a857 : System RAM
+a308a858-a308b017 : System RAM
+a308b018-a309b057 : System RAM
+a309b058-a56affff : System RAM
+a56b0000-a5eaffff : Reserved
+a5eb0000-a74f8fff : System RAM
+a74f9000-a7573fff : Reserved
+a7574000-aa6befff : System RAM
+aa6bf000-aaebefff : Reserved
+aaebf000-aafbefff : ACPI Non-volatile Storage
+aafbf000-aaffefff : ACPI Tables
+aafff000-aaffffff : System RAM
+ab000000-af9fffff : Reserved
+  b0000000-bfffffff : 0000:00:02.0
+  c0000000-c03fffff : 0000:00:02.0
+  fe101000-fe112fff : Reserved
+feb00000-feb0ffff : Reserved
+fec00000-fec00fff : Reserved
+fed00000-fed1ffff : Reserved
+100000000-44f5fffff : System RAM
+== opregion and vbt
+-rw-r--r-- 1 root root 8192 Nov  9 00:19 /root/run2/step11/facts/i915_opregion.bin
+000000   I   n   t   e   l   G   r   a   p   h   i   c   s   M   e   m
+000010
+-rw-r--r-- 1 root root 6144 Nov  9 00:19 /root/run2/step11/facts/i915_vbt.bin
+000000   $   V   B   T       H   A   S   W   E   L   L                
+000010
+platform: HASWELL
+has_64bit_reloc: no
+has_64k_pages: no
+has_reset_engine: yes
+has_3d_pipeline: yes
+has_flat_ccs: no
+has_global_mocs: no
+has_gmd_id: no
+has_gt_uc: no
+has_heci_pxp: no
+has_heci_gscfi: no
+has_guc_deprivilege: no
+has_guc_tlb_invalidation: no
+has_l3_ccs_read: no
+has_l3_dpf: yes
+has_llc: yes
+has_logical_ring_contexts: no
+has_logical_ring_elsq: no
+has_media_ratio_mode: no
+has_mslice_steering: no
+7 shrinkable [0 free] objects, 4591616 bytes
+system: total:0x00000003e1393000 bytes
+stolen-system: total:0x0000000004000000 bytes
+== display
+CRTC info
+---------
+[CRTC:47:pipe A]:
+	uapi: enable=yes, active=yes, mode="1366x768": 60 76300 1366 1374 1384 1558 768 771 772 816 0x48 0xa
+	hw: enable=yes, active=yes
+	adjusted_mode="1366x768": 60 76300 1366 1374 1384 1558 768 771 772 816 0x48 0xa
+	pipe__mode="1366x768": 60 76300 1366 1374 1384 1558 768 771 772 816 0x40 0xa
+	pipe src=1366x768+0+0, dither=yes, bpp=18
+	No scalers available on this platform
+	[ENCODER:80:DDI A/PHY A]: connectors:
+		[CONNECTOR:81:eDP-1]
+	[PLANE:32:primary A]: type=PRI
+		uapi: [FB:106] XR24 little-endian (0x34325258),0x0,1366x768, visible=visible, src=1366.000000x768.000000+0.000000+0.000000, dst=1366x768+0+0, rotation=0 (0x00000001)
+		hw: [FB:106] XR24 little-endian (0x34325258),0x0,1366x768, visible=yes, src=1366.000000x768.000000+0.000000+0.000000, dst=1366x768+0+0, rotation=0 (0x00000001)
+	[PLANE:36:sprite A]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:42:cursor A]: type=CUR
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	underrun reporting: cpu=yes pch=yes
+[CRTC:63:pipe B]:
+	uapi: enable=no, active=no, mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	hw: enable=no, active=no
+	adjusted_mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe__mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe src=0x0+0+0, dither=no, bpp=0
+	No scalers available on this platform
+	[PLANE:48:primary B]: type=PRI
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:52:sprite B]: type=OVL
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	[PLANE:58:cursor B]: type=CUR
+		uapi: [FB:0] n/a,0x0,0x0,, visible=hidden, src=0.000000x0.000000+0.000000+0.000000, dst=0x0+0+0, rotation=0 (0x00000001)
+	underrun reporting: cpu=yes pch=yes
+[CRTC:79:pipe C]:
+	uapi: enable=no, active=no, mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	hw: enable=no, active=no
+	adjusted_mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe__mode="": 0 0 0 0 0 0 0 0 0 0 0x0 0x0
+	pipe src=0x0+0+0, dither=no, bpp=0
+	No scalers available on this platform
+backlight 47 of 937
+vtconsoles:
+vtcon0 bind=0 (S) dummy device
+vtcon1 bind=1 (M) frame buffer device
+== watchdog
+crw------- 1 root root  10, 130 Nov  9 00:18 /dev/watchdog
+crw------- 1 root root 245,   0 Nov  9 00:18 /dev/watchdog0
+Device:        /dev/watchdog0
+Identity:      iTCO_wdt [version 2]
+Timeout:       30 seconds
+Timeleft:       2 seconds
+Pre-timeout:    0 seconds
+Pre-timeout governor: 
+FLAG           DESCRIPTION               STATUS BOOT-STATUS
+KEEPALIVEPING  Keep alive ping reply          0           0
+MAGICCLOSE     Supports magic close char      0           0
+SETTIMEOUT     Set timeout (in seconds)       0           0
+== vfio and kvm
+CONFIG_KVM_INTEL=m
+# CONFIG_KVM_INTEL_PROVE_VE is not set
+CONFIG_ITCO_WDT=m
+CONFIG_ITCO_VENDOR_SUPPORT=y
+CONFIG_VFIO=m
+CONFIG_VFIO_GROUP=y
+CONFIG_VFIO_CONTAINER=y
+CONFIG_VFIO_IOMMU_TYPE1=m
+# CONFIG_VFIO_NOIOMMU is not set
+CONFIG_VFIO_VIRQFD=y
+# CONFIG_VFIO_DEBUGFS is not set
+CONFIG_VFIO_PCI_CORE=m
+CONFIG_VFIO_PCI_MMAP=y
+CONFIG_VFIO_PCI_INTX=y
+CONFIG_VFIO_PCI=m
+CONFIG_VFIO_PCI_VGA=y
+CONFIG_VFIO_PCI_IGD=y
+CONFIG_VFIO_MDEV=m
+# CONFIG_IOMMU_DEFAULT_DMA_STRICT is not set
+CONFIG_IOMMU_DEFAULT_DMA_LAZY=y
+# CONFIG_IOMMU_DEFAULT_PASSTHROUGH is not set
+CONFIG_INTEL_IOMMU=y
+CONFIG_INTEL_IOMMU_SVM=y
+# CONFIG_INTEL_IOMMU_DEFAULT_ON is not set
+CONFIG_INTEL_IOMMU_DEFAULT_ON_INTGPU_OFF=y
+# CONFIG_INTEL_IOMMU_DEFAULT_OFF is not set
+CONFIG_INTEL_IOMMU_FLOPPY_WA=y
+CONFIG_INTEL_IOMMU_SCALABLE_MODE_DEFAULT_ON=y
+CONFIG_INTEL_IOMMU_PERF_EVENTS=y
+CONFIG_IRQ_REMAP=y
+/lib/modules/6.12.115+deb13.1-amd64/kernel/drivers/vfio/pci/vfio-pci.ko.xz
+/lib/modules/6.12.115+deb13.1-amd64/kernel/drivers/vfio/pci/vfio-pci-core.ko.xz
+/lib/modules/6.12.115+deb13.1-amd64/kernel/drivers/vfio/vfio_iommu_type1.ko.xz
+/lib/modules/6.12.115+deb13.1-amd64/kernel/drivers/vfio/vfio.ko.xz
+ids:Initial PCI IDs to add to the vfio driver, format is "vendor:device[:subvendor[:subdevice[:class[:class_mask]]]]" and multiple comma separated entries can be specified (string)
+nointxmask:Disable support for PCI 2.3 style INTx masking.  If this resolves problems for specific devices, report lspci -vvvxxx to linux-pci@vger.kernel.org so the device can be fixed automatically via the broken_intx_masking flag. (bool)
+disable_vga:Disable VGA resource access through vfio-pci (bool)
+disable_idle_d3:Disable using the PCI D3 low power state for idle, unused devices (bool)
+enable_sriov:Enable support for SR-IOV configuration.  Enabling SR-IOV on a PF typically requires support of the userspace PF driver, enabling VFs without such support may result in non-functional VFs or PF. (bool)
+disable_denylist:Disable use of device denylist. Disabling the denylist allows binding to devices with known errata that may lead to exploitable stability or security issues when accessed by untrusted users. (bool)
+allow_unsafe_interrupts:Enable VFIO IOMMU support for on platforms without interrupt remapping support. (bool)
+disable_hugepages:Disable VFIO IOMMU support for IOMMU hugepages. (bool)
+dma_entry_limit:Maximum number of user DMA mappings per container (65535). (uint)
+i915                 4386816  1
+kvm_intel             417792  0
+kvm                  1396736  1 kvm_intel
+iTCO_wdt               16384  0
+iTCO_vendor_support    12288  1 iTCO_wdt
+== memory
+MemTotal:       16272972 kB
+MemAvailable:   15856340 kB
+ShmemHugePages:     4096 kB
+Hugetlb:               0 kB
+thp enabled: [always] madvise never shmem: always within_size advise [never] deny force
+8192
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda5        32G   27G  4.0G  87% /

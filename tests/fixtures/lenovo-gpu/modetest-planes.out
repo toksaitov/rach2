@@ -1,0 +1,472 @@
+opened device `Intel Graphics` on driver `i915` (version 1.6.0 at 0)
+CRTCs:
+id	fb	pos	size
+49	110	(0,0)	(1366x768)
+  #0 1366x768 60.02 1366 1374 1384 1558 768 771 772 816 76300 flags: nhsync, nvsync; type: preferred, driver
+  props:
+	24 VRR_ENABLED:
+		flags: range
+		values: 0 1
+		value: 0
+	25 DEGAMMA_LUT:
+		flags: blob
+		blobs:
+
+		value:
+	26 DEGAMMA_LUT_SIZE:
+		flags: immutable range
+		values: 0 4294967295
+		value: 1024
+	27 CTM:
+		flags: blob
+		blobs:
+
+		value:
+	28 GAMMA_LUT:
+		flags: blob
+		blobs:
+
+		value:
+	29 GAMMA_LUT_SIZE:
+		flags: immutable range
+		values: 0 4294967295
+		value: 1024
+66	0	(0,0)	(0x0)
+  #0  -nan 0 0 0 0 0 0 0 0 0 flags: ; type: 
+  props:
+	24 VRR_ENABLED:
+		flags: range
+		values: 0 1
+		value: 0
+	25 DEGAMMA_LUT:
+		flags: blob
+		blobs:
+
+		value:
+	26 DEGAMMA_LUT_SIZE:
+		flags: immutable range
+		values: 0 4294967295
+		value: 1024
+	27 CTM:
+		flags: blob
+		blobs:
+
+		value:
+	28 GAMMA_LUT:
+		flags: blob
+		blobs:
+
+		value:
+	29 GAMMA_LUT_SIZE:
+		flags: immutable range
+		values: 0 4294967295
+		value: 1024
+83	0	(0,0)	(0x0)
+  #0  -nan 0 0 0 0 0 0 0 0 0 flags: ; type: 
+  props:
+	24 VRR_ENABLED:
+		flags: range
+		values: 0 1
+		value: 0
+	25 DEGAMMA_LUT:
+		flags: blob
+		blobs:
+
+		value:
+	26 DEGAMMA_LUT_SIZE:
+		flags: immutable range
+		values: 0 4294967295
+		value: 1024
+	27 CTM:
+		flags: blob
+		blobs:
+
+		value:
+	28 GAMMA_LUT:
+		flags: blob
+		blobs:
+
+		value:
+	29 GAMMA_LUT_SIZE:
+		flags: immutable range
+		values: 0 4294967295
+		value: 1024
+
+Planes:
+id	crtc	fb	CRTC x,y	x,y	gamma size	possible crtcs
+33	49	110	0,0		0,0	0       	0x00000001
+  formats: C8 RG16 XR24 XB24 XR30 XB30 XB4H
+  props:
+	8 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 1
+	30 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000700000018000000
+			02000000380000004338202052473136
+			58523234584232345852333058423330
+			58423448000000007f00000000000000
+			00000000000000000100000000000001
+			7f000000000000000000000000000000
+			0000000000000000
+		in_formats blob decoded:
+			 C8:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 RG16:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XR24:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB24:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XR30:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB30:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB4H:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+	31 IN_FORMATS_ASYNC:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000700000018000000
+			02000000380000004338202052473136
+			58523234584232345852333058423330
+			58423448000000007e00000000000000
+			00000000000000000100000000000001
+			00000000000000000000000000000000
+			0000000000000000
+	36 rotation:
+		flags: bitmask
+		values: rotate-0=0x1 rotate-180=0x4
+		value: 1
+	37 zpos:
+		flags: immutable range
+		values: 0 0
+		value: 0
+38	0	0	0,0		0,0	0       	0x00000001
+  formats: XR24 XB24 XR30 XB30 XR4H XB4H YUYV YVYU UYVY VYUY
+  props:
+	8 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 0
+	30 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000a00000018000000
+			02000000400000005852323458423234
+			58523330584233305852344858423448
+			59555956595659555559565956595559
+			ff030000000000000000000000000000
+			0100000000000001ff03000000000000
+			00000000000000000000000000000000
+		in_formats blob decoded:
+			 XR24:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB24:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XR30:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB30:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XR4H:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB4H:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 YUYV:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 YVYU:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 UYVY:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 VYUY:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+	40 rotation:
+		flags: bitmask
+		values: rotate-0=0x1 rotate-180=0x4
+		value: 1
+	41 COLOR_ENCODING:
+		flags: enum
+		enums: ITU-R BT.601 YCbCr=0 ITU-R BT.709 YCbCr=1
+		value: 1
+	42 COLOR_RANGE:
+		flags: enum
+		enums: YCbCr limited range=0 YCbCr full range=1
+		value: 0
+	43 zpos:
+		flags: immutable range
+		values: 1 1
+		value: 1
+44	0	0	0,0		0,0	0       	0x00000001
+  formats: AR24
+  props:
+	8 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 2
+	30 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000100000018000000
+			01000000200000004152323400000000
+			01000000000000000000000000000000
+			0000000000000000
+		in_formats blob decoded:
+			 AR24:  LINEAR(0x0)
+	46 rotation:
+		flags: bitmask
+		values: rotate-0=0x1 rotate-180=0x4
+		value: 1
+	32 SIZE_HINTS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			400040008000800000010001
+	48 zpos:
+		flags: immutable range
+		values: 2 2
+		value: 2
+50	0	0	0,0		0,0	0       	0x00000002
+  formats: C8 RG16 XR24 XB24 XR30 XB30 XB4H
+  props:
+	8 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 1
+	30 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000700000018000000
+			02000000380000004338202052473136
+			58523234584232345852333058423330
+			58423448000000007f00000000000000
+			00000000000000000100000000000001
+			7f000000000000000000000000000000
+			0000000000000000
+		in_formats blob decoded:
+			 C8:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 RG16:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XR24:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB24:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XR30:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB30:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB4H:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+	31 IN_FORMATS_ASYNC:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000700000018000000
+			02000000380000004338202052473136
+			58523234584232345852333058423330
+			58423448000000007e00000000000000
+			00000000000000000100000000000001
+			00000000000000000000000000000000
+			0000000000000000
+	53 rotation:
+		flags: bitmask
+		values: rotate-0=0x1 rotate-180=0x4
+		value: 1
+	54 zpos:
+		flags: immutable range
+		values: 0 0
+		value: 0
+55	0	0	0,0		0,0	0       	0x00000002
+  formats: XR24 XB24 XR30 XB30 XR4H XB4H YUYV YVYU UYVY VYUY
+  props:
+	8 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 0
+	30 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000a00000018000000
+			02000000400000005852323458423234
+			58523330584233305852344858423448
+			59555956595659555559565956595559
+			ff030000000000000000000000000000
+			0100000000000001ff03000000000000
+			00000000000000000000000000000000
+		in_formats blob decoded:
+			 XR24:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB24:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XR30:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB30:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XR4H:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB4H:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 YUYV:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 YVYU:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 UYVY:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 VYUY:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+	57 rotation:
+		flags: bitmask
+		values: rotate-0=0x1 rotate-180=0x4
+		value: 1
+	58 COLOR_ENCODING:
+		flags: enum
+		enums: ITU-R BT.601 YCbCr=0 ITU-R BT.709 YCbCr=1
+		value: 1
+	59 COLOR_RANGE:
+		flags: enum
+		enums: YCbCr limited range=0 YCbCr full range=1
+		value: 0
+	60 zpos:
+		flags: immutable range
+		values: 1 1
+		value: 1
+61	0	0	0,0		0,0	0       	0x00000002
+  formats: AR24
+  props:
+	8 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 2
+	30 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000100000018000000
+			01000000200000004152323400000000
+			01000000000000000000000000000000
+			0000000000000000
+		in_formats blob decoded:
+			 AR24:  LINEAR(0x0)
+	63 rotation:
+		flags: bitmask
+		values: rotate-0=0x1 rotate-180=0x4
+		value: 1
+	32 SIZE_HINTS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			400040008000800000010001
+	65 zpos:
+		flags: immutable range
+		values: 2 2
+		value: 2
+67	0	0	0,0		0,0	0       	0x00000004
+  formats: C8 RG16 XR24 XB24 XR30 XB30 XB4H
+  props:
+	8 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 1
+	30 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000700000018000000
+			02000000380000004338202052473136
+			58523234584232345852333058423330
+			58423448000000007f00000000000000
+			00000000000000000100000000000001
+			7f000000000000000000000000000000
+			0000000000000000
+		in_formats blob decoded:
+			 C8:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 RG16:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XR24:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB24:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XR30:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB30:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB4H:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+	31 IN_FORMATS_ASYNC:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000700000018000000
+			02000000380000004338202052473136
+			58523234584232345852333058423330
+			58423448000000007e00000000000000
+			00000000000000000100000000000001
+			00000000000000000000000000000000
+			0000000000000000
+	70 rotation:
+		flags: bitmask
+		values: rotate-0=0x1 rotate-180=0x4
+		value: 1
+	71 zpos:
+		flags: immutable range
+		values: 0 0
+		value: 0
+72	0	0	0,0		0,0	0       	0x00000004
+  formats: XR24 XB24 XR30 XB30 XR4H XB4H YUYV YVYU UYVY VYUY
+  props:
+	8 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 0
+	30 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000a00000018000000
+			02000000400000005852323458423234
+			58523330584233305852344858423448
+			59555956595659555559565956595559
+			ff030000000000000000000000000000
+			0100000000000001ff03000000000000
+			00000000000000000000000000000000
+		in_formats blob decoded:
+			 XR24:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB24:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XR30:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB30:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XR4H:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 XB4H:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 YUYV:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 YVYU:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 UYVY:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+			 VYUY:  INTEL_X_TILED(0x100000000000001) LINEAR(0x0)
+	74 rotation:
+		flags: bitmask
+		values: rotate-0=0x1 rotate-180=0x4
+		value: 1
+	75 COLOR_ENCODING:
+		flags: enum
+		enums: ITU-R BT.601 YCbCr=0 ITU-R BT.709 YCbCr=1
+		value: 1
+	76 COLOR_RANGE:
+		flags: enum
+		enums: YCbCr limited range=0 YCbCr full range=1
+		value: 0
+	77 zpos:
+		flags: immutable range
+		values: 1 1
+		value: 1
+78	0	0	0,0		0,0	0       	0x00000004
+  formats: AR24
+  props:
+	8 type:
+		flags: immutable enum
+		enums: Overlay=0 Primary=1 Cursor=2
+		value: 2
+	30 IN_FORMATS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			01000000000000000100000018000000
+			01000000200000004152323400000000
+			01000000000000000000000000000000
+			0000000000000000
+		in_formats blob decoded:
+			 AR24:  LINEAR(0x0)
+	80 rotation:
+		flags: bitmask
+		values: rotate-0=0x1 rotate-180=0x4
+		value: 1
+	32 SIZE_HINTS:
+		flags: immutable blob
+		blobs:
+
+		value:
+			400040008000800000010001
+	82 zpos:
+		flags: immutable range
+		values: 2 2
+		value: 2
+

@@ -1,0 +1,57 @@
+pages 2865
+{'subtests': 392430, 'successful': 383624, 'skipped': 793, 'failed': 8806, 'timedOut': 0, 'totalTime': 2757534}
+left out 793 run 2072 subtests run 391637 passed 383624 failed 8013 timed out 0 skipped 0 time ms 2757534
+pages run 2072 pages failing 51 pages all-skipped 0 pages not run 0
+failing pages by dir: [('conformance2/textures', 29), ('conformance2/wasm', 6), ('conformance/textures', 3), ('conformance/glsl', 2), ('conformance/more', 2), ('conformance/attribs', 1), ('conformance/extensions', 1), ('conformance/misc', 1), ('conformance/uniforms', 1), ('conformance2/attribs', 1), ('conformance2/extensions', 1), ('conformance2/reading', 1), ('conformance2/renderbuffers', 1), ('conformance2/transform_feedback', 1)]
+failing subtests by dir: [('conformance2/textures', 7360), ('conformance2/attribs', 512), ('conformance/glsl', 52), ('conformance/textures', 47), ('conformance/extensions', 16), ('conformance2/wasm', 6), ('conformance/attribs', 4), ('conformance/misc', 4), ('conformance/uniforms', 4), ('conformance2/reading', 3), ('conformance/more', 2), ('conformance2/extensions', 1), ('conformance2/renderbuffers', 1), ('conformance2/transform_feedback', 1)]
+576 0 577 conformance2/textures/canvas_sub_rectangle/tex-2d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+544 0 561 conformance2/textures/image_bitmap_from_canvas/tex-2d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+544 0 561 conformance2/textures/image_bitmap_from_blob/tex-2d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+512 0 545 conformance2/attribs/gl-bindAttribLocation-aliasing-inactive.html
+512 0 513 conformance2/textures/canvas_sub_rectangle/tex-3d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+512 0 706 conformance2/textures/webgl_canvas/tex-2d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+505 0 674 conformance2/textures/image_data/tex-2d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+464 0 594 conformance2/textures/image_data/tex-3d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+420 0 449 conformance2/textures/canvas/tex-2d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+272 0 281 conformance2/textures/image_bitmap_from_image/tex-2d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+228 0 3265 conformance2/textures/misc/immutable-tex-render-feedback.html
+224 0 241 conformance2/textures/image_bitmap_from_canvas/tex-3d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+216 0 218 conformance2/textures/image/tex-3d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+216 0 241 conformance2/textures/image_bitmap_from_video/tex-2d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+216 0 241 conformance2/textures/image_bitmap_from_video/tex-3d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+212 0 213 conformance2/textures/image/tex-2d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+208 0 281 conformance2/textures/image_bitmap_from_image_data/tex-2d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+208 0 281 conformance2/textures/image_bitmap_from_image_bitmap/tex-2d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+192 0 193 conformance2/textures/webgl_canvas/tex-3d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+176 0 193 conformance2/textures/canvas/tex-3d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+145 0 146 conformance2/textures/video/tex-2d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+145 0 146 conformance2/textures/video/tex-3d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+139 0 766 conformance2/textures/misc/tex-unpack-params-with-flip-y-and-premultiply-alpha.html
+112 0 121 conformance2/textures/image_bitmap_from_image/tex-3d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+112 0 121 conformance2/textures/image_bitmap_from_blob/tex-3d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+92 0 121 conformance2/textures/image_bitmap_from_image_data/tex-3d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+92 0 121 conformance2/textures/image_bitmap_from_image_bitmap/tex-3d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+64 0 65 conformance2/textures/svg_image/tex-2d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+50 0 67 conformance/glsl/bugs/vector-matrix-constructor-scalarization.html
+44 0 65 conformance/textures/misc/video-rotation.html
+16 0 1913 conformance/extensions/webgl-compressed-texture-astc.html
+12 0 13 conformance2/textures/svg_image/tex-3d-rgb10_a2-rgba-unsigned_int_2_10_10_10_rev.html
+4 0 118 conformance/attribs/gl-get-attrib-location-errors.html
+4 0 65 conformance/misc/shader-precision-format.html
+4 0 118 conformance/uniforms/gl-get-uniform-location-errors.html
+3 0 28 conformance2/reading/read-pixels-into-pixel-pack-buffer.html
+2 0 3 conformance/glsl/misc/shader-with-double-underscore.html
+2 0 13 conformance/textures/misc/tex-image-svg-image-no-natural-width-and-height.html
+2 0 3 conformance2/textures/misc/tex-image-10bpc.html
+1 0 14 conformance/textures/misc/texture-active-bind.html
+1 0 2 conformance/more/functions/texImage2DHTML.html
+1 0 2 conformance/more/functions/texSubImage2DHTML.html
+1 0 4 conformance2/extensions/required-extensions.html
+1 0 33 conformance2/renderbuffers/readbuffer.html
+1 0 49 conformance2/transform_feedback/switching-objects.html
+1 0 2 conformance2/wasm/bufferdata-16gb-wasm-memory.html
+1 0 2 conformance2/wasm/buffersubdata-16gb-wasm-memory.html
+1 0 2 conformance2/wasm/getbuffersubdata-16gb-wasm-memory.html
+1 0 2 conformance2/wasm/readpixels-16gb-wasm-memory.html
+1 0 2 conformance2/wasm/teximage2d-16gb-wasm-memory.html
+1 0 2 conformance2/wasm/texsubimage2d-16gb-wasm-memory.html

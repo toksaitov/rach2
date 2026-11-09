@@ -1,0 +1,10 @@
+19:28:24 start gles2 17165 cases
+19:30:59 end gles2: cases 17165, wall 154.2 s, jobs 4 CompatibilityWarning 3 NotSupported 111 Pass 17051 
+19:30:59 start gles3 44778 cases
+19:40:26 end gles3: cases 44778, wall 567.7 s, jobs 4 CompatibilityWarning 4 Fail 1 NotSupported 211 Pass 44521 QualityWarning 41 
+19:40:26 start gles31 37802 cases
+19:58:46 end gles31: cases 37802, wall 1099.5 s, jobs 4 Fail 14 NotSupported 323 Pass 37449 QualityWarning 16 
+19:59:06 start vk 6431 cases
+20:00:28 end vk: cases 6431, wall 81.4 s, jobs 4 Fail 1 NotSupported 5493 Pass 936 ResourceError 1 
+20:02:39 start vk 64303 cases
+20:05:25 end vk: cases 64303, wall 166.1 s, jobs 4 Fail 5 NotSupported 54969 Pass 9326 ResourceError 3 
