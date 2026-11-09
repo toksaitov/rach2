@@ -27,6 +27,17 @@
  * that is not there among them, and must read KEY_BRIGHTNESSDOWN and
  * KEY_BRIGHTNESSUP from the Notify of its \RTST.
  *
+ * `evprobe mouse` and `evprobe usbmouse` find the PS/2 mouse's event device,
+ * "ImExPS/2 Generic Explorer Mouse", or the USB one's, "USB HIDBP Mouse",
+ * check its numbers, buttons, axes and properties as Linux gives them,
+ * revoke one open, which then reads ENODEV, set another's clock to
+ * CLOCK_MONOTONIC and print "EVPROBE: move the mouse". The suite then moves
+ * the mouse by 10 and 5 through QMP, presses and releases the left button,
+ * and turns the wheel up a detent and down one; the monotonic open and a
+ * second, on the real time, must each read the motion, the button and both
+ * turns, REL_WHEEL_HI_RES of 120 with each on USB, every record stamped
+ * between the clock_gettime calls before and after on its own clock.
+ *
  * Prints "EVPROBE OK" and exits 0. Freestanding; direct system calls
  * (probe.h).
  */
@@ -41,6 +52,7 @@
 #define O_NONBLOCK 04000
 
 #define EAGAIN 11
+#define ENODEV 19
 #define EBUSY  16
 #define EINVAL 22
 
@@ -53,18 +65,33 @@
 #define EVIOCGPHYS(n)   (0x80004507L | (long)(n) << 16)
 #define EVIOCGKEY(n)    (0x80004518L | (long)(n) << 16)
 #define EVIOCGBIT(t, n) ((0x80004520L + (t)) | (long)(n) << 16)
+#define EVIOCGPROP(n)   (0x80004509L | (long)(n) << 16)
+#define EVIOCGABS(a)    (0x80184540L + (a))
 #define EVIOCGRAB       0x40044590L
+#define EVIOCREVOKE     0x40044591L
+#define EVIOCSCLOCKID   0x400445A0L
 
-#define EV_SYN      0
-#define EV_KEY      1
-#define EV_MSC      4
-#define SYN_REPORT  0
-#define SYN_DROPPED 3
-#define MSC_SCAN    4
-#define KEY_A       30
-#define BUS_USB     0x03
-#define BUS_I8042   0x11
-#define BUS_HOST    0x19
+#define CLOCK_REALTIME  0
+#define CLOCK_MONOTONIC 1
+
+#define EV_SYN           0
+#define EV_KEY           1
+#define EV_REL           2
+#define EV_MSC           4
+#define REL_X            0
+#define REL_Y            1
+#define REL_HWHEEL       6
+#define REL_WHEEL        8
+#define REL_WHEEL_HI_RES 11
+#define BTN_LEFT         0x110
+#define BTN_EXTRA        0x114
+#define SYN_REPORT       0
+#define SYN_DROPPED      3
+#define MSC_SCAN         4
+#define KEY_A            30
+#define BUS_USB          0x03
+#define BUS_I8042        0x11
+#define BUS_HOST         0x19
 
 /* The keys of the ACPI devices, and Linux's product numbers of the power
  * button's and the video bus's event devices. */
@@ -96,6 +123,11 @@ struct input_event {
     unsigned short type;
     unsigned short code;
     int value;
+};
+
+struct timespec {
+    long tv_sec;
+    long tv_nsec;
 };
 
 struct pollfd {
@@ -517,6 +549,200 @@ static void keyboard(int usb)
     syscall3(SYS_CLOSE, idle, 0, 0);
 }
 
+/** The time of clock `clock` now, in microseconds. */
+static long long now_usec(int clock)
+{
+    struct timespec ts;
+
+    clear(&ts, sizeof(ts));
+    if (syscall2(SYS_CLOCK_GETTIME, clock, (long)&ts) != 0) {
+        fail("clock_gettime failed");
+    }
+    return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
+}
+
+/** Check the identity and capabilities of the mouse open on `fd`: its bus,
+ * vendor and product, place, types, buttons, axes and properties, with
+ * REL_HWHEEL and INPUT_PROP_POINTER on PS/2 and REL_WHEEL_HI_RES on USB. */
+static void check_mouse(int fd, int usb)
+{
+    unsigned char bits[96];
+    unsigned short id[4];
+    unsigned char abs[24];
+    char phys[64];
+    long len;
+    int i;
+
+    clear(id, sizeof(id));
+    if (ioctl(fd, EVIOCGID, (long)id) != 0 || id[0] != (usb ? BUS_USB : BUS_I8042)) {
+        fail_with("the mouse's EVIOCGID gives another bus", 1, id[0]);
+    }
+    if (!usb && (id[1] != 2 || id[2] != 6)) {
+        fail_with("the PS/2 mouse is not vendor 2, product PSMOUSE_IMEX", 1,
+                  (long)id[1] << 16 | id[2]);
+    }
+    len = ioctl(fd, EVIOCGPHYS(sizeof(phys) - 1), (long)phys);
+    if (len <= 0) {
+        fail_with("the mouse's EVIOCGPHYS gives nothing", 1, -len);
+    }
+    phys[len] = 0;
+    if (!begins(phys, usb ? "usb-" : "isa0060/serio1/input0")) {
+        fail("the mouse's EVIOCGPHYS gives another place");
+    }
+    clear(bits, sizeof(bits));
+    if (ioctl(fd, EVIOCGBIT(0, 4), (long)bits) <= 0 ||
+        bits[0] != (1 << EV_SYN | 1 << EV_KEY | 1 << EV_REL)) {
+        fail_with("the mouse's EVIOCGBIT(0) is not EV_SYN, EV_KEY and EV_REL", 1, bits[0]);
+    }
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGBIT(EV_REL, 2), (long)bits);
+    if (!bit_on(bits, REL_X) || !bit_on(bits, REL_Y) || !bit_on(bits, REL_WHEEL) ||
+        bit_on(bits, REL_HWHEEL) == usb || bit_on(bits, REL_WHEEL_HI_RES) != usb) {
+        fail_with("the mouse's axes are not Linux's", 1, bits[1] << 8 | bits[0]);
+    }
+    clear(bits, sizeof(bits));
+    ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(bits)), (long)bits);
+    for (i = BTN_LEFT; i <= BTN_EXTRA; i++) {
+        if (!bit_on(bits, i)) {
+            fail_with("the mouse lacks a button", 1, i);
+        }
+    }
+    clear(bits, sizeof(bits));
+    if (ioctl(fd, EVIOCGPROP(4), (long)bits) != 4 || bits[0] != (usb ? 0 : 1)) {
+        fail_with("the mouse's EVIOCGPROP is not Linux's", 1, bits[0]);
+    }
+    if ((len = ioctl(fd, EVIOCGABS(0), (long)abs)) != -EINVAL) {
+        fail_with("EVIOCGABS of a mouse is not EINVAL", 1, len);
+    }
+}
+
+/** What a reader of the mouse has seen, a bit each. */
+#define SEEN_X     0x01
+#define SEEN_Y     0x02
+#define SEEN_DOWN  0x04
+#define SEEN_UP    0x08
+#define SEEN_WHEEL 0x10 /* a turn up */
+#define SEEN_BACK  0x20 /* a turn down */
+#define SEEN_ALL   0x3F
+
+/* What a reader of the mouse has read so far. */
+struct mouse_read {
+    int seen;  /* SEEN_* */
+    int hires; /* REL_WHEEL_HI_RES records of a detent */
+    int dx;    /* the motion summed */
+    int dy;
+};
+
+/** Take the record `ev` into `r`; fail the probe, naming the reader `who`,
+ * for a record a mouse does not send. */
+static void take_record(const struct input_event *ev, struct mouse_read *r, const char *who)
+{
+    if (ev->type == EV_REL && ev->code == REL_X) {
+        r->dx += ev->value;
+        r->seen |= SEEN_X;
+    } else if (ev->type == EV_REL && ev->code == REL_Y) {
+        r->dy += ev->value;
+        r->seen |= SEEN_Y;
+    } else if (ev->type == EV_KEY && ev->code == BTN_LEFT) {
+        r->seen |= ev->value ? SEEN_DOWN : SEEN_UP;
+    } else if (ev->type == EV_REL && ev->code == REL_WHEEL) {
+        r->seen |= ev->value == 1 ? SEEN_WHEEL : ev->value == -1 ? SEEN_BACK : 0;
+    } else if (ev->type == EV_REL && ev->code == REL_WHEEL_HI_RES) {
+        r->hires += ev->value == 120 || ev->value == -120;
+    } else if (ev->type != EV_SYN || ev->code != SYN_REPORT) {
+        puts(who);
+        fail_with(" read a record of another kind", 1, ev->type << 16 | ev->code);
+    }
+}
+
+/**
+ * Read the mouse on `fd` until the motion of 10 and 5, the left button
+ * pressed and released and the wheel turned up and down have all come, with
+ * REL_WHEEL_HI_RES of 120 beside each turn when `usb`; each record must be
+ * stamped between `from` and the time of `clock` after the read. `who`
+ * names the reader.
+ */
+static void read_mouse(int fd, int usb, int clock, long long from, const char *who)
+{
+    struct input_event ev[16];
+    struct mouse_read r;
+
+    clear(ev, sizeof(ev));
+    clear(&r, sizeof(r));
+    while (r.seen != SEEN_ALL || r.dx < 10 || r.dy < 5) {
+        long got = syscall3(SYS_READ, fd, (long)ev, (long)sizeof(ev));
+        long long to = now_usec(clock);
+        int i;
+
+        if (got <= 0 || got % (long)sizeof(ev[0]) != 0) {
+            puts(who);
+            fail_with(" did not read whole records", 1, got);
+        }
+        for (i = 0; i < (int)(got / (long)sizeof(ev[0])); i++) {
+            long long at = (long long)ev[i].sec * 1000000 + (long long)ev[i].usec;
+
+            if (at < from || at > to) {
+                puts(who);
+                fail_with(" read a record stamped outside the clock_gettime calls", 1,
+                          (long)(at - from));
+            }
+            take_record(&ev[i], &r, who);
+        }
+    }
+    if (r.dx != 10 || r.dy != 5) {
+        puts(who);
+        fail_with(" read another motion", 1, (long)r.dx << 16 | (r.dy & 0xFFFF));
+    }
+    if (usb && r.hires != 2) {
+        puts(who);
+        fail_with(" did not read REL_WHEEL_HI_RES with each turn", 1, r.hires);
+    }
+}
+
+/** The run of `evprobe mouse` or `evprobe usbmouse`. */
+static void mouse(int usb)
+{
+    const char *path = find_device(usb ? "USB HIDBP Mouse" : "ImExPS/2 Generic Explorer Mouse");
+    long long mono, real;
+    struct input_event ev;
+    int a, b, gone, clock;
+    long rc;
+
+    a = open_or_fail(path, O_RDONLY, "the mouse did not open");
+    b = open_or_fail(path, O_RDONLY, "the mouse did not open twice");
+    gone = open_or_fail(path, O_RDONLY, "the mouse did not open thrice");
+    check_mouse(a, usb);
+    clock = 5;
+    if ((rc = ioctl(a, EVIOCSCLOCKID, (long)&clock)) != -EINVAL) {
+        fail_with("EVIOCSCLOCKID of an unknown clock is not EINVAL", 1, rc);
+    }
+    clock = CLOCK_MONOTONIC;
+    if (ioctl(a, EVIOCSCLOCKID, (long)&clock) != 0) {
+        fail("EVIOCSCLOCKID did not take CLOCK_MONOTONIC");
+    }
+    if ((rc = ioctl(gone, EVIOCREVOKE, 1)) != -EINVAL) {
+        fail_with("EVIOCREVOKE with an argument is not EINVAL", 1, rc);
+    }
+    if (ioctl(gone, EVIOCREVOKE, 0) != 0) {
+        fail("EVIOCREVOKE failed");
+    }
+    if ((rc = syscall3(SYS_READ, gone, (long)&ev, sizeof(ev))) != -ENODEV) {
+        fail_with("a revoked open does not read ENODEV", 1, rc);
+    }
+    if ((rc = ioctl(gone, EVIOCGRAB, 1)) != -ENODEV) {
+        fail_with("a revoked open's ioctl is not ENODEV", 1, rc);
+    }
+    mono = now_usec(CLOCK_MONOTONIC);
+    real = now_usec(CLOCK_REALTIME);
+    puts("EVPROBE: move the mouse\n");
+    read_mouse(a, usb, CLOCK_MONOTONIC, mono, "the monotonic reader");
+    read_mouse(b, usb, CLOCK_REALTIME, real, "the real-time reader");
+    puts("EVPROBE: mouse: read by both readers\n");
+    syscall3(SYS_CLOSE, a, 0, 0);
+    syscall3(SYS_CLOSE, b, 0, 0);
+    syscall3(SYS_CLOSE, gone, 0, 0);
+}
+
 /** Read the mixer's volume through `fd`, failing the probe when it cannot. */
 static int volume(int fd)
 {
@@ -790,8 +1016,12 @@ void probe_main(unsigned long *sp)
 
     if (argc >= 2 && begins(argv[1], "ps2")) {
         keyboard(0);
+    } else if (argc >= 2 && begins(argv[1], "usbmouse")) {
+        mouse(1);
     } else if (argc >= 2 && begins(argv[1], "usb")) {
         keyboard(1);
+    } else if (argc >= 2 && begins(argv[1], "mouse")) {
+        mouse(0);
     } else if (argc >= 3 && begins(argv[1], "mixer")) {
         mixer(argv[2]);
     } else if (argc >= 2 && begins(argv[1], "button")) {
@@ -799,7 +1029,7 @@ void probe_main(unsigned long *sp)
     } else if (argc >= 2 && begins(argv[1], "video")) {
         video();
     } else {
-        fail("usage: evprobe ps2 | usb | mixer ID | button | video");
+        fail("usage: evprobe ps2 | usb | mouse | usbmouse | mixer ID | button | video");
     }
     puts("EVPROBE OK\n");
     sys_exit(0);
