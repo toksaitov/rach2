@@ -66,6 +66,14 @@ unusedStructMember:*tests/musl/callsmusl.c
 # members around them are the layout.
 unusedStructMember:*tests/evprobe.c
 
+# wow64probe is built for x86-64 alone, but the guest list checks it as i386
+# code. Its `struct sock_filter` is the program seccomp reads whole, and its
+# `struct timespec64` the deadline of 0 futex_waitv reads whole, so their
+# members are the layout; its shift of the CS and SS word by 48 is of a long
+# that has 64 bits where the probe is built.
+unusedStructMember:*tests/wow64probe.c
+shiftTooManyBits:*tests/wow64probe.c
+
 # `struct kernel_termios` in the key latency probe is Linux's, which TCGETS
 # and TCSETS copy whole; the probe changes the input and local flags and two
 # control characters, and the members between them are the layout.
