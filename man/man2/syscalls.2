@@ -22,6 +22,19 @@ flags.
 The result is returned in EAX or RAX; a failure is a negative error number.
 Musl uses its Linux system call layer of either architecture unchanged.
 .Pp
+On x86-64 a program may also execute
+.Ql int 0x80
+with an i386 number in EAX and the arguments in EBX, ECX, EDX, ESI, EDI
+and EBP, from 64-bit code or from 32-bit code in the 32-bit code segment,
+as Linux allows.
+The kernel takes each argument zero-extended from its 32-bit register,
+runs the call at the i386 number in its compat table of i386 calls, and
+returns the result in EAX.
+.Xr ia32 7
+describes the compat table, and
+.Pa rach2/syscalls.md
+lists the calls it registers in its compat column.
+.Pp
 A page's numbers and registers are the i386 interface's.
 On x86-64 a call takes its number from the second table below and its
 arguments, in the order the page gives them, in the x86-64 registers; a
@@ -648,4 +661,5 @@ The system call number is not registered.
 .El
 .Sh SEE ALSO
 .Xr socketcall 2 ,
+.Xr ia32 7 ,
 .Xr rach2 7

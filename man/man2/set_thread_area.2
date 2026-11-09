@@ -3,6 +3,7 @@
 .Os
 .Sh NAME
 .Nm set_thread_area ,
+.Nm get_thread_area ,
 .Nm set_tid_address
 .Nd set the thread's TLS base and its end's futex word
 .Sh SYNOPSIS
@@ -86,20 +87,69 @@ starts without one unless
 names one with
 .Dv CLONE_CHILD_CLEARTID .
 .Pp
-The x86-64 kernel registers no
-.Nm set_thread_area ,
-which Linux keeps there for 32-bit programs: a thread's TLS base is the FS
-base, which
+On the x86-64 kernel a 64-bit thread's TLS base is the FS base, which
 .Xr arch_prctl 2
 sets and reads, and which
 .Dv CLONE_SETTLS
-gives a new thread.
+gives a new thread; its
+.Ql syscall
+table registers no
+.Nm set_thread_area .
 .Nm set_tid_address
 is call 218 there, with the address in RDI, and does what it does on
 i386.
+.Pp
+32-bit code reaches
+.Nm set_thread_area
+(243) and
+.Nm get_thread_area
+(244) on the x86-64 kernel by
+.Ql int $0x80 ,
+through the compat table of
+.Xr ia32 7 ,
+with the pointer in EBX.
+There a thread has three TLS entries, 12, 13 and 14 of the GDT, as on
+Linux.
+.Va entry_number
+0xffffffff takes the lowest one whose descriptor is empty and writes its
+number back; 12 to 14 replace that entry; any other number fails with
+.Er EINVAL .
+The flags are checked as Linux checks them: the segment must be present
+and 32-bit, its contents at most 1 (an expand-down data segment), and a
+descriptor of
+.Va base_addr ,
+.Va limit
+and
+.Va flags
+all zero, or of the read-exec-only and not-present bits alone, empties the
+entry.
+The base, limit, limit-in-pages, read-exec-only and useable bits are kept.
+The selector is
+.Ql "(entry_number << 3) | 3" :
+0x63, 0x6b or 0x73.
+A data segment register of the calling thread that holds the changed
+selector is loaded again, with the null selector when the entry was
+emptied.
+The three descriptors are part of the thread's state: the kernel writes
+them into the processor's GDT on every switch to the thread, a child made
+by
+.Xr fork 2
+or
+.Xr clone 2
+copies its parent's, and
+.Xr execve 2
+empties them.
+.Pp
+.Nm get_thread_area
+reads the entry whose number the
+.Vt user_desc
+at its argument names, from 12 to 14, and fills the structure with the
+entry's base, limit and flags.
 .Sh RETURN VALUES
 .Nm set_thread_area
-returns zero on success.
+and
+.Nm get_thread_area
+return zero on success.
 .Nm set_tid_address
 returns the calling thread's ID.
 The raw calls return a negative error number on failure;
@@ -113,16 +163,29 @@ requests entry 0xffffffff with flags 0x51 and a base pointing to its
 thread control block, then loads the returned selector into %gs.
 It checks stored values across system calls, timer interrupts, and
 context switches, including a child with a different TLS base.
+On x86-64,
+.Pa tests/wow64probe.c
+takes an entry by
+.Ql int $0x80 ,
+reads its block through selector 0x63 from 32-bit and 64-bit code, before
+and after a sleep, and reads the entry back with
+.Nm get_thread_area .
 .Sh ERRORS
 .Bl -tag -width "[EINVAL]"
 .It Bq Er EFAULT
 .Nm set_thread_area
-cannot read the descriptor or write back its entry number.
+cannot read the descriptor or write back its entry number, or
+.Nm get_thread_area
+cannot read or write the structure.
 .It Bq Er EINVAL
 The requested entry number or segment flags are not supported.
 .It Bq Er ESRCH
-There is no current process.
+There is no current process, or on x86-64
+.Nm set_thread_area
+was asked for a free entry and all three are in use.
 .El
 .Sh SEE ALSO
+.Xr arch_prctl 2 ,
 .Xr fork 2 ,
-.Xr getpid 2
+.Xr getpid 2 ,
+.Xr ia32 7
