@@ -27,7 +27,7 @@ Rach2's own. The structures and numbers of `kvm_abi.h` follow Linux's `include/u
 | `slots.c`, `tdp.c`, `dirty.c` | stubs of the memory slots, the guest-physical tables and the dirty log |
 | `irq.c`, `vlapic.c` | stubs of the interrupt routing and the local APIC in the kernel |
 | `iobus.c` | a stub of the ioeventfds' bus |
-| `decode.c` | a stub of the instruction decoder for MMIO |
+| `decode.h`, `decode.c` | the decoder of the guest instructions that reach an MMIO exit, and the internal error for one it does not know |
 | `sources.mk` | the directory's files, which the x86-64 kernel's list includes |
 
 ## Design
@@ -48,6 +48,12 @@ KVM_RUN (`vcpu.c`) holds the vCPU for the call, swaps in the signal mask KVM_SET
 
 `struct kvm_backend` (`kvm.h`) is the contract: `probe` at boot; `vm_init`, `vm_free`, `vcpu_init` and `vcpu_free`; `enter`, which runs with interrupts off and without the big lock, takes no lock and does not sleep; `exit`, under the big lock, which fills `v->exit` and the interrupt flags the run page reports; `complete`, `save` and `inject`; `check_extension`; and `tdp`, the format of its guest-physical entries, EPT's or the AMD64 format, so that one walker in `tdp.c` builds both.
 
+### The MMIO decoder
+
+An MMIO exit tells the backend the guest-physical address and, on VMX, whether the access read or wrote, but not the operand: that is in the instruction, which `kvm_decode` (`decode.h`) reads from the guest's bytes at its RIP, in the mode of its code segment. It gives the instruction's length, what it does with memory (`KVM_OP_*`: a load, a store, an arithmetic and logic operation, a unary one, XCHG, MOVS, STOS, PUSH or POP), the memory operand's size, the register or immediate, the widening of MOVZX, MOVSX and MOVSXD, the segment and address as base, index, scale and displacement, the address size, and the REP and LOCK prefixes. The backend reads or writes the register, completes the access through the run page, and steps RIP by the length. Prefixes are read as the processor reads them: the last segment override and the last of 0xF2 and 0xF3 count, REX counts only right before the opcode, REX.W outweighs 0x66, and the 16-bit ModRM forms take SS for an address through BP.
+
+An instruction outside that set, one whose ModRM names a register, a LOCK the processor would refuse with #UD, and one that would pass 15 bytes are refused. The backend then does what Linux's `handle_emulation_failure` does: it injects #UD into a guest above CPL 0, and at CPL 0 reports KVM_EXIT_INTERNAL_ERROR through `kvm_decode_fail`, which lays out the run page as Linux's `prepare_emulation_failure_exit`: suberror KVM_INTERNAL_ERROR_EMULATION, the flag that the instruction's bytes follow, the bytes padded with 0x90, then the exit's reason and qualifications.
+
 ### Lock order
 
 1. The big kernel lock, which every ioctl runs under.
@@ -64,11 +70,13 @@ The registers, special registers, XSAVE image, XCR0, events, debug registers, MP
 
 * At most 64 vCPUs in a VM, with ids below 256; 256 memory slots, which `slots.c` will hold; 256 entries for KVM_SET_CPUID2 and KVM_GET_CPUID2, and fewer than 256 MSRs at once for KVM_GET_MSRS and KVM_SET_MSRS, as Linux's bounds.
 * Only the machine type 0. The in-kernel interrupt controller will be the split irqchip alone, the local APIC in the kernel and the PIC and IOAPIC in the caller; there is no in-kernel PIT, no coalesced MMIO, no dirty ring, and no SMM or nested virtualization.
+* The MMIO decoder knows the instructions `decode.h` lists, which compilers emit for device registers; Linux's emulator knows nearly all of x86, so an MMIO access through another instruction, such as BT, CMPXCHG, a string compare or an SSE move, is an internal error here and emulated there.
 * KVM_GET_SUPPORTED_CPUID offers no paravirtual leaf, no performance counters, no PKU and no AMX.
 * Until the backends land, KVM_RUN fails with `EOPNOTSUPP`, and QEMU 10, which requires the slots' and interrupts' capabilities, stops before it.
 
 ## Tests
 
 * `tests/host/kvm_hosttest.c` includes `kvm.c` and `vcpu.c` and links `cpuid.c` and `msr.c` over a model of the Lenovo's Haswell and a fake backend: the structures' sizes and the ioctl and capability numbers against Linux's; QEMU 10's start-up in the order of its sources, to KVM_RUN and the backend's refusal; each exit kind through the run page, with port and MMIO answers, immediate_exit, a signal, a kick and a triple fault; the big lock let go and interrupts off for the entry; the state ioctls' refusals; the shared and private mappings; `EIO` from another address space; and every allocation given back.
+* `tests/host/kvm_decode_hosttest.c` decodes a table of encodings in the three modes, each row with its length and decoded access, and refused rows, and checks `kvm_decode_fail`'s layout; `tests/fuzz/x86dec_fuzz.c` puts random bytes through the decoder in each mode and checks each decode against `decode.h`'s rules.
 * `tests/host/eventfd_hosttest.c` covers the eventfd interface that irqfd and ioeventfd will use.
 * `tests/musl/kvmmusl.c`, a native case on the Lenovo: the run page mapped shared and private, read by KVM_RUN under `immediate_exit`, and shared with a fork's child, whose KVM_RUN is `EIO`. It runs under QEMU's TCG with `-cpu max`, which offers SVM, too.

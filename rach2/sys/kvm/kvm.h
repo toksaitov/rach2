@@ -443,25 +443,7 @@ int kvm_lapic_halt(struct kvm_vcpu *v);
 /** Free vlapic.c's share of `v`. */
 void kvm_lapic_free(struct kvm_vcpu *v);
 
-/* decode.c: the instruction decoder, replaced by 81-5. */
-
-/*
- * One decoded access to guest memory: its length in bytes, the operand's
- * size, whether it writes, and for a write the value. `bytes` and `len`
- * are the instruction's.
- */
-struct kvm_insn {
-    uint8_t bytes[15];
-    uint32_t len;  /* the instruction's length */
-    uint32_t size; /* the access's bytes */
-    int write;
-    uint64_t value; /* a write's value */
-};
-
-/** Decode the `n` bytes at `bytes`, an instruction run in `mode` (16, 32
- * or 64) that accessed guest memory, into `out`: 0, or -1 for an
- * instruction the decoder does not know, which goes to the caller as
- * KVM_INTERNAL_ERROR_EMULATION with the bytes. */
-int kvm_decode(const uint8_t *bytes, uint32_t n, int mode, struct kvm_insn *out);
+/* decode.c: the instruction decoder of MMIO exits, in decode.h. */
+#include "decode.h"
 
 #endif /* _KVM_H_ */
