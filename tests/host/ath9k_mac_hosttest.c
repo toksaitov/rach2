@@ -133,9 +133,19 @@ int isr_msi_ready(void)
     return msi_ready;
 }
 
-int isr_alloc_vector(void)
+int isr_alloc_vector_aligned(int align)
 {
+    (void)align;
     return 0x60;
+}
+
+uint8_t pci_find_capability(uint8_t bus, uint8_t device, uint8_t function, uint8_t id)
+{
+    (void)bus;
+    (void)device;
+    (void)function;
+    (void)id;
+    return 0;
 }
 
 void isr_free_vector(int vector)

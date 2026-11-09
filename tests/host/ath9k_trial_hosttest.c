@@ -273,6 +273,8 @@ uint16_t pci_read_config16(uint8_t bus, uint8_t device, uint8_t function, uint8_
         return 0x4026;
     if (offset == 0x80)
         return link_control;
+    if (offset == 0x52)
+        return 0x0184; /* MSI: 64-bit, maskable, Count=1/4, as Linux's lspci read it */
     return 0;
 }
 
@@ -342,8 +344,11 @@ int isr_msi_ready(void)
     return 1;
 }
 
-int isr_alloc_vector(void)
+static int msi_align_asked; /* the alignment the driver asked of its vector */
+
+int isr_alloc_vector_aligned(int align)
 {
+    msi_align_asked = align;
     return 52;
 }
 
@@ -1837,6 +1842,7 @@ static int trial(void)
     CHECK(logged("ath9k: probe: 02:00.0 AR9565 rev 1.0.1 mac b8:ee:65:32:89:15 subsys "
                  "17aa:4026") == 1);
     CHECK(!chip_irq_on_at_msi);
+    CHECK(msi_align_asked == (polled ? 0 : 4));
     CHECK(!(ath9k_model_peek(&model, AR_IER) & AR_IER_ENABLE));
     CHECK(serdes_writes == 1);
     CHECK(ath9k_model_peek(&model, AR_PCIE_PM_CTRL) & AR_PCIE_PM_CTRL_ENA);

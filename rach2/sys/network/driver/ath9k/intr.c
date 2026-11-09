@@ -30,6 +30,13 @@
 #define EMPTY_MAX 1000
 #define BURST_MAX 1000
 
+/* The chip writes its message number into the low bits of the message
+ * data, as many as its Multiple Message Capable field allows (two on the
+ * AR9565, `Count=1/4`), even with Multiple Message Enable at one vector. The
+ * causes all use message 0 (AR_INTCFG), so the low bits arrive cleared: an
+ * unaligned vector V lands on V rounded down, another device's. */
+#define MSI_ALIGN_MAX 16
+
 /* What serve found. */
 #define SERVE_NONE  0 /* no cause */
 #define SERVE_DONE  1 /* causes served */
@@ -62,11 +69,31 @@ static void ath9k_msi(isr_params_t *params)
 }
 
 /**
+ * The alignment the card's message vector needs: the count of vectors its
+ * MSI capability says it can use, from 1 to MSI_ALIGN_MAX. An interrupt
+ * remapper ignores the data when it routes by the entry's handle, so the
+ * alignment is then not needed, but it costs nothing.
+ */
+static int msi_align(const struct ath9k *ah)
+{
+    const pci_device_t *d = &ah->bus.dev;
+    uint8_t cap = pci_find_capability(d->bus, d->device, d->function, PCI_CAP_ID_MSI);
+    uint16_t control;
+    int align;
+
+    if (cap == 0)
+        return 1;
+    control = pci_read_config16(d->bus, d->device, d->function, (uint8_t)(cap + 2));
+    align = 1 << ((control & PCI_MSI_MULTIPLE_CAP) >> 1);
+    return align > MSI_ALIGN_MAX ? MSI_ALIGN_MAX : align;
+}
+
+/**
  * Take a vector for the card's messages and enable them, as the RTL8168's
  * driver does: the handler first, so that no message arrives on a vector
- * nothing serves, then the capability. The chip's own message engine is
- * enabled with its interrupts, from mac.msi. A card left polled has its
- * INTx line masked.
+ * nothing serves, then the capability. The vector is aligned as
+ * `msi_align` says. The chip's own message engine is enabled with its
+ * interrupts, from mac.msi. A card left polled has its INTx line masked.
  */
 int ath9k_intr_attach(struct ath9k *ah)
 {
@@ -84,7 +111,7 @@ int ath9k_intr_attach(struct ath9k *ah)
         klog(KLOG_INFO, "ath9k", "interrupts: polled, no usable APIC");
         return 0;
     }
-    vector = isr_alloc_vector();
+    vector = isr_alloc_vector_aligned(msi_align(ah));
     if (vector < 0) {
         intx_off(ah);
         klog(KLOG_INFO, "ath9k", "interrupts: polled, no vector free");
