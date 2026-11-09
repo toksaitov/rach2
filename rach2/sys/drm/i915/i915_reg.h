@@ -1,0 +1,621 @@
+/*
+ * i915_reg.h: the registers of Haswell's graphics device that the Intel
+ * driver uses, by Linux 6.12's names and with Haswell's values only.
+ */
+#ifndef _I915_REG_H_
+#define _I915_REG_H_
+
+/*
+ * Each block names the Linux 6.12 file it is transcribed from, under
+ * drivers/gpu/drm/i915/ unless the path says otherwise. Linux's _MMIO()
+ * wrapper is dropped: a register here is its offset in BAR 0, an unsigned
+ * int, and a register of an engine, pipe, transcoder or port is a macro of
+ * that index. Where Linux has a value per generation, the one Haswell
+ * (graphics version 7.5, display version 7) takes is the one kept, and a
+ * name that Linux gives several generations keeps Linux's name. A field
+ * that a later part of the driver needs and that is not here is added to
+ * its register's block, from the same file.
+ *
+ * Nothing here is read or written but through i915_hw.h.
+ */
+
+/* ------------------------------------------------------------------------
+ * PCI configuration space (intel_pci_config.h, include/drm/intel/i915_drm.h)
+ */
+
+#define I915_GTTMMADR_BAR 0 /* BAR 0: registers, then the GTT */
+#define I915_GMADR_BAR    2 /* BAR 2: the aperture */
+#define I915_IO_BAR       4
+
+/* The GMCH graphics control word, at 0x50 of 00:02.0 and of 00:00.0. */
+#define SNB_GMCH_CTRL       0x50
+#define SNB_GMCH_GGMS_SHIFT 8 /* GTT size: 0 none, 1 1 MiB, 2 2 MiB */
+#define SNB_GMCH_GGMS_MASK  0x3
+#define SNB_GMCH_GMS_SHIFT  3 /* stolen memory in units of 32 MiB */
+#define SNB_GMCH_GMS_MASK   0x1f
+
+/* The base of stolen memory; its low bit is the lock. */
+#define INTEL_BSM      0x5c
+#define INTEL_BSM_MASK 0xfff00000u
+
+#define ASLE  0xe4
+#define SWSCI 0xe8
+#define LBPC  0xf4
+#define ASLS  0xfc /* the OpRegion's physical address */
+
+/* ------------------------------------------------------------------------
+ * The layout of BAR 0 (gt/intel_ggtt.c: gen6_gttmmadr_size and
+ * gen6_gttadr_offset; intel_uncore.c: intel_uncore_setup_mmio)
+ */
+
+#define I915_GTTMMADR_SIZE 0x400000u /* 4 MiB */
+#define I915_MMIO_SIZE     0x200000u /* the registers, the first half */
+#define I915_GSM_OFFSET    0x200000u /* the GTT, the second half */
+
+/* ------------------------------------------------------------------------
+ * Uncore and forcewake (gt/intel_gt_regs.h, intel_mchbar_regs.h)
+ */
+
+#define GAM_ECOCHK                      0x4090
+#define HSW_IDICR                       0x9008
+#define IDIHASHMSK(x)                   (((x) & 0x3fu) << 16)
+#define ECOBUS                          0xa180
+#define FORCEWAKE_MT_ENABLE             (1u << 5)
+#define FORCEWAKE_MT                    0xa188 /* masked: bits 31:16 enable 15:0 */
+#define GTFIFODBG                       0x120000
+#define GT_FIFO_SBDROPERR               (1u << 6)
+#define GT_FIFO_BLOBDROPERR             (1u << 5)
+#define GT_FIFO_SB_READ_ABORTERR        (1u << 4)
+#define GT_FIFO_DROPERR                 (1u << 3)
+#define GT_FIFO_OVFERR                  (1u << 2)
+#define GT_FIFO_IAWRERR                 (1u << 1)
+#define GT_FIFO_IARDERR                 (1u << 0)
+#define GTFIFOCTL                       0x120008
+#define GT_FIFO_FREE_ENTRIES_MASK       0x7fu
+#define GT_FIFO_NUM_RESERVED_ENTRIES    20
+#define HSW_EDRAM_CAP                   0x120010
+#define FORCEWAKE_ACK_HSW               0x130044
+#define FORCEWAKE_KERNEL                (1u << 0)
+#define FORCEWAKE_USER                  (1u << 1)
+#define FORCEWAKE_KERNEL_FALLBACK       (1u << 15)
+#define GEN6_GT_THREAD_STATUS_REG       0x13805c
+#define GEN6_GT_THREAD_STATUS_CORE_MASK 0x7u
+#define FPGA_DBG                        0x42300
+#define FPGA_DBG_RM_NOCLAIM             (1u << 31)
+
+/* A masked register: the high half selects which bits of the low half a
+ * write changes (i915_reg_defs.h: _MASKED_BIT_ENABLE and _DISABLE). */
+#define I915_MASKED_ENABLE(a)  (((uint32_t)(a) << 16) | (uint32_t)(a))
+#define I915_MASKED_DISABLE(a) ((uint32_t)(a) << 16)
+
+/* The MCHBAR mirror in BAR 0 (intel_mchbar_regs.h). */
+#define MCHBAR_MIRROR_BASE_SNB 0x140000
+#define MAD_DIMM_C0            (MCHBAR_MIRROR_BASE_SNB + 0x5004)
+#define MAD_DIMM_C1            (MCHBAR_MIRROR_BASE_SNB + 0x5008)
+#define GEN6_GT_PERF_STATUS    (MCHBAR_MIRROR_BASE_SNB + 0x5948)
+#define GEN6_RP_STATE_LIMITS   (MCHBAR_MIRROR_BASE_SNB + 0x5994)
+#define GEN6_RP_STATE_CAP      (MCHBAR_MIRROR_BASE_SNB + 0x5998)
+#define D_COMP_HSW             (MCHBAR_MIRROR_BASE_SNB + 0x5f0c)
+
+/* ------------------------------------------------------------------------
+ * Interrupts (i915_reg.h): the display engine's, the GT's, the power
+ * management's and the south display's, each a status, mask, identity
+ * and enable register.
+ */
+
+#define DEISR                         0x44000
+#define DEIMR                         0x44004
+#define DEIIR                         0x44008
+#define DEIER                         0x4400c
+#define DE_MASTER_IRQ_CONTROL         (1u << 31)
+#define DE_ERR_INT_IVB                (1u << 30)
+#define DE_GSE_IVB                    (1u << 29)
+#define DE_PCH_EVENT_IVB              (1u << 28)
+#define DE_DP_A_HOTPLUG_IVB           (1u << 27)
+#define DE_AUX_CHANNEL_A_IVB          (1u << 26)
+#define DE_EDP_PSR_INT_HSW            (1u << 19)
+#define DE_PLANE_FLIP_DONE_IVB(plane) (1u << (3 + 5 * (plane)))
+#define DE_PIPE_VBLANK_IVB(pipe)      (1u << ((pipe) * 5))
+
+#define GTISR                                  0x44010
+#define GTIMR                                  0x44014
+#define GTIIR                                  0x44018
+#define GTIER                                  0x4401c
+#define GT_BLT_FLUSHDW_NOTIFY_INTERRUPT        (1u << 26)
+#define GT_BLT_CS_ERROR_INTERRUPT              (1u << 25)
+#define GT_BLT_USER_INTERRUPT                  (1u << 22)
+#define GT_BSD_CS_ERROR_INTERRUPT              (1u << 15)
+#define GT_BSD_USER_INTERRUPT                  (1u << 12)
+#define GT_RENDER_L3_PARITY_ERROR_INTERRUPT_S1 (1u << 11)
+#define GT_RENDER_L3_PARITY_ERROR_INTERRUPT    (1u << 5)
+#define GT_RENDER_PIPECTL_NOTIFY_INTERRUPT     (1u << 4)
+#define GT_CS_MASTER_ERROR_INTERRUPT           (1u << 3)
+#define GT_RENDER_USER_INTERRUPT               (1u << 0)
+
+#define GEN6_PMISR                  0x44020
+#define GEN6_PMIMR                  0x44024
+#define GEN6_PMIIR                  0x44028
+#define GEN6_PMIER                  0x4402c
+#define PM_VEBOX_CS_ERROR_INTERRUPT (1u << 12)
+#define PM_VEBOX_USER_INTERRUPT     (1u << 10)
+#define GEN6_PM_RP_DOWN_TIMEOUT     (1u << 6)
+#define GEN6_PM_RP_UP_THRESHOLD     (1u << 5)
+#define GEN6_PM_RP_DOWN_THRESHOLD   (1u << 4)
+#define GEN6_PM_RP_UP_EI_EXPIRED    (1u << 2)
+#define GEN6_PM_RP_DOWN_EI_EXPIRED  (1u << 1)
+
+#define GEN7_ERR_INT 0x44040
+
+/* The eDP panel's self refresh (display/intel_psr_regs.h). */
+#define EDP_PSR_IMR 0x64834
+#define EDP_PSR_IIR 0x64838
+
+#define SDEISR                0xc4000
+#define SDEIMR                0xc4004
+#define SDEIIR                0xc4008
+#define SDEIER                0xc400c
+#define SERR_INT              0xc4040
+#define SDE_AUXD_CPT          (1u << 27)
+#define SDE_AUXC_CPT          (1u << 26)
+#define SDE_AUXB_CPT          (1u << 25)
+#define SDE_PORTD_HOTPLUG_CPT (1u << 23)
+#define SDE_PORTC_HOTPLUG_CPT (1u << 22)
+#define SDE_PORTB_HOTPLUG_CPT (1u << 21)
+#define SDE_CRT_HOTPLUG_CPT   (1u << 19)
+#define SDE_GMBUS_CPT         (1u << 17)
+#define SDE_ERROR_CPT         (1u << 16)
+#define PCH_PORT_HOTPLUG      0xc4030
+
+/* ------------------------------------------------------------------------
+ * Engines (i915_reg.h, gt/intel_engine_regs.h, gt/intel_gt_regs.h): each
+ * engine's registers are at its base.
+ */
+
+#define RENDER_RING_BASE   0x02000
+#define GEN6_BSD_RING_BASE 0x12000
+#define VEBOX_RING_BASE    0x1a000
+#define BLT_RING_BASE      0x22000
+
+#define RING_TAIL(base)             ((base) + 0x30)
+#define TAIL_ADDR                   0x001ffff8u
+#define RING_HEAD(base)             ((base) + 0x34)
+#define HEAD_WRAP_COUNT             0xffe00000u
+#define HEAD_ADDR                   0x001ffffcu
+#define RING_START(base)            ((base) + 0x38)
+#define RING_CTL(base)              ((base) + 0x3c)
+#define RING_CTL_SIZE(size)         ((uint32_t)(size) - 4096u) /* bytes, to pages */
+#define RING_NR_PAGES               0x001ff000u
+#define RING_VALID                  0x00000001u
+#define RING_WAIT_SEMAPHORE         (1u << 10)
+#define RING_WAIT                   (1u << 11)
+#define RING_PSMI_CTL(base)         ((base) + 0x50)
+#define GEN6_BSD_GO_INDICATOR       (1u << 4)
+#define GEN6_BSD_SLEEP_INDICATOR    (1u << 3)
+#define GEN6_PSMI_SLEEP_MSG_DISABLE (1u << 0)
+#define RING_IPEIR(base)            ((base) + 0x64)
+#define RING_IPEHR(base)            ((base) + 0x68)
+#define RING_INSTDONE(base)         ((base) + 0x6c)
+#define RING_INSTPS(base)           ((base) + 0x70)
+#define RING_ACTHD(base)            ((base) + 0x74)
+#define RING_DMA_FADD(base)         ((base) + 0x78)
+#define RING_HWS_PGA(base)          ((base) + 0x80)
+#define RING_NOPID(base)            ((base) + 0x94)
+#define RING_HWSTAM(base)           ((base) + 0x98)
+#define RING_MI_MODE(base)          ((base) + 0x9c)
+#define MODE_IDLE                   (1u << 9)
+#define STOP_RING                   (1u << 8)
+#define RING_IMR(base)              ((base) + 0xa8)
+#define RING_EIR(base)              ((base) + 0xb0)
+#define RING_EMR(base)              ((base) + 0xb4)
+#define RING_ESR(base)              ((base) + 0xb8)
+#define RING_INSTPM(base)           ((base) + 0xc0)
+#define RING_BBSTATE(base)          ((base) + 0x110)
+#define RING_BB_PPGTT               (1u << 5)
+#define RING_SBBADDR(base)          ((base) + 0x114)
+#define RING_SBBSTATE(base)         ((base) + 0x118)
+#define RING_BBADDR(base)           ((base) + 0x140)
+#define CCID(base)                  ((base) + 0x180)
+#define RING_PP_DIR_DCLV(base)      ((base) + 0x220)
+#define PP_DIR_DCLV_2G              0xffffffffu
+#define RING_PP_DIR_BASE(base)      ((base) + 0x228)
+#define RING_MODE_GEN7(base)        ((base) + 0x29c)
+#define GFX_RUN_LIST_ENABLE         (1u << 15)
+#define GFX_INTERRUPT_STEERING      (1u << 14)
+#define GFX_TLB_INVALIDATE_EXPLICIT (1u << 13)
+#define GFX_PPGTT_ENABLE            (1u << 9)
+#define RING_TIMESTAMP(base)        ((base) + 0x358)
+#define RING_TIMESTAMP_UDW(base)    ((base) + 0x358 + 4)
+
+/* The status page addresses of Haswell's four engines. */
+#define RENDER_HWS_PGA_GEN7 0x4080
+#define BSD_HWS_PGA_GEN7    0x4180
+#define BLT_HWS_PGA_GEN7    0x4280
+#define VEBOX_HWS_PGA_GEN7  0x4380
+
+#define HWSTAM              0x2098
+#define EIR                 0x20b0
+#define EMR                 0x20b4
+#define ESR                 0x20b8
+#define INSTPM              0x20c0
+#define GEN7_FF_THREAD_MODE 0x20a0
+#define GFX_MODE            0x2520
+#define ERROR_GEN6          0x40a0
+#define DONE_REG            0x40b0
+#define ARB_MODE            0x4030
+#define HSW_GTT_CACHE_EN    0x4024
+#define CACHE_MODE_0_GEN7   0x7000
+#define CACHE_MODE_1        0x7004
+#define GEN7_GT_MODE        0x7008
+#define GEN7_SC_INSTDONE    0x7100
+#define GEN7_L3CNTLREG1     0xb01c
+#define GEN7_L3SQCREG4      0xb034
+#define HSW_SCRATCH1        0xb038
+#define GEN7_ROW_INSTDONE   0xe164
+#define BCS_SWCTRL          0x22200
+
+/* ------------------------------------------------------------------------
+ * Reset (gt/intel_gt_regs.h): a domain's bit is set to reset it and reads
+ * back clear when the reset is done.
+ */
+
+#define GEN6_GDRST        0x941c
+#define GEN6_GRDOM_FULL   (1u << 0)
+#define GEN6_GRDOM_RENDER (1u << 1)
+#define GEN6_GRDOM_MEDIA  (1u << 2)
+#define GEN6_GRDOM_BLT    (1u << 3)
+#define GEN6_GRDOM_VECS   (1u << 4)
+
+/* ------------------------------------------------------------------------
+ * Fences and swizzling (i915_reg.h, gt/intel_gt_regs.h)
+ */
+
+#define I915_FENCE_REGS_HSW         32
+#define FENCE_REG_GEN6_LO(i)        (0x100000 + (i) * 8)
+#define FENCE_REG_GEN6_HI(i)        (0x100000 + (i) * 8 + 4)
+#define GEN6_FENCE_PITCH_SHIFT      32 /* of the 64-bit pair */
+#define GEN7_FENCE_MAX_PITCH_VAL    0x0800
+#define I965_FENCE_TILING_Y_SHIFT   1
+#define I965_FENCE_REG_VALID        (1u << 0)
+#define TILECTL                     0x101000
+#define TILECTL_SWZCTL              (1u << 0)
+#define DISP_ARB_CTL                0x45000
+#define DISP_TILE_SURFACE_SWIZZLING (1u << 13)
+#define DISP_ARB_CTL2               0x45004
+
+/* ------------------------------------------------------------------------
+ * The global GTT's entries (gt/intel_gtt.h): one dword a page, with bits
+ * 39:32 of the address in bits 10:4.
+ */
+
+#define GEN6_PTE_VALID                 (1u << 0)
+#define HSW_CACHEABILITY_CONTROL(bits) ((((bits) & 0x7u) << 1) | (((bits) & 0x8u) << (11 - 3)))
+#define HSW_WB_LLC_AGE3                HSW_CACHEABILITY_CONTROL(0x2u)
+#define HSW_WB_LLC_AGE0                HSW_CACHEABILITY_CONTROL(0x3u)
+#define HSW_WB_ELLC_LLC_AGE3           HSW_CACHEABILITY_CONTROL(0x8u)
+#define HSW_WB_ELLC_LLC_AGE0           HSW_CACHEABILITY_CONTROL(0xbu)
+#define HSW_WT_ELLC_LLC_AGE3           HSW_CACHEABILITY_CONTROL(0x7u)
+#define HSW_WT_ELLC_LLC_AGE0           HSW_CACHEABILITY_CONTROL(0x6u)
+#define HSW_PTE_UNCACHED               0u
+#define HSW_GTT_ADDR_ENCODE(addr)      ((uint32_t)(addr) | ((uint32_t)((uint64_t)(addr) >> 28) & 0x7f0u))
+#define GEN6_PDE_SHIFT                 22
+#define GEN6_PDE_VALID                 (1u << 0)
+
+/* ------------------------------------------------------------------------
+ * RC6, frequency and the pcode mailbox (i915_reg.h, gt/intel_gt_regs.h)
+ */
+
+#define GEN6_RPNSWREQ                0xa008
+#define GEN6_RC_VIDEO_FREQ           0xa00c
+#define GEN6_RP_INTERRUPT_LIMITS     0xa014
+#define GEN6_RPSTAT1                 0xa01c
+#define GEN6_RP_CONTROL              0xa024
+#define GEN6_RP_MEDIA_TURBO          (1u << 11)
+#define GEN6_RP_MEDIA_HW_NORMAL_MODE (2u << 9)
+#define GEN6_RP_MEDIA_IS_GFX         (1u << 8)
+#define GEN6_RP_UP_THRESHOLD         0xa02c
+#define GEN6_RP_DOWN_THRESHOLD       0xa030
+#define GEN6_RP_CUR_UP_EI            0xa050
+#define GEN6_RP_CUR_UP               0xa054
+#define GEN6_RP_PREV_UP              0xa058
+#define GEN6_RP_CUR_DOWN_EI          0xa05c
+#define GEN6_RP_CUR_DOWN             0xa060
+#define GEN6_RP_PREV_DOWN            0xa064
+#define GEN6_RP_UP_EI                0xa068
+#define GEN6_RP_DOWN_EI              0xa06c
+#define GEN6_RP_IDLE_HYSTERSIS       0xa070
+#define GEN6_RC_CONTROL              0xa090
+#define GEN6_RC_CTL_RC6pp_ENABLE     (1u << 16)
+#define GEN6_RC_CTL_RC6p_ENABLE      (1u << 17)
+#define GEN6_RC_CTL_RC6_ENABLE       (1u << 18)
+#define GEN6_RC_CTL_EI_MODE(x)       ((uint32_t)(x) << 27)
+#define GEN6_RC_CTL_HW_ENABLE        (1u << 31)
+#define GEN6_RC_STATE                0xa094
+#define GEN6_RC1_WAKE_RATE_LIMIT     0xa098
+#define GEN6_RC6_WAKE_RATE_LIMIT     0xa09c
+#define GEN6_RC_EVALUATION_INTERVAL  0xa0a8
+#define GEN6_RC_IDLE_HYSTERSIS       0xa0ac
+#define GEN6_RC_SLEEP                0xa0b0
+#define GEN6_RC1e_THRESHOLD          0xa0b4
+#define GEN6_RC6_THRESHOLD           0xa0b8
+#define GEN6_RC6p_THRESHOLD          0xa0bc
+#define GEN6_RC6pp_THRESHOLD         0xa0c0
+#define GEN6_PMINTRMSK               0xa168
+#define GEN6_GT_GFX_RC6_LOCKED       0x138104
+#define GEN6_GT_GFX_RC6              0x138108
+#define GEN6_GT_GFX_RC6p             0x13810c
+#define GEN6_GT_GFX_RC6pp            0x138110
+#define GEN6_PCODE_MAILBOX           0x138124
+#define GEN6_PCODE_READY             (1u << 31)
+#define GEN6_PCODE_DATA              0x138128
+#define GEN6_PCODE_DATA1             0x13812c
+
+/* ------------------------------------------------------------------------
+ * Display power wells (i915_reg.h): four request registers, BIOS, driver,
+ * KVMR and debug, each a request bit and a state bit per well; Haswell's
+ * one well is index 15, the bits 31 and 30.
+ */
+
+#define HSW_PWR_WELL_CTL1           0x45400 /* BIOS */
+#define HSW_PWR_WELL_CTL2           0x45404 /* driver */
+#define HSW_PWR_WELL_CTL3           0x45408 /* KVMR */
+#define HSW_PWR_WELL_CTL4           0x4540c /* debug */
+#define HSW_PW_CTL_IDX_GLOBAL       15
+#define HSW_PWR_WELL_CTL_REQ(idx)   (0x2u << ((idx) * 2))
+#define HSW_PWR_WELL_CTL_STATE(idx) (0x1u << ((idx) * 2))
+#define HSW_NDE_RSTWRN_OPT          0x46408
+
+/* ------------------------------------------------------------------------
+ * Pipes, transcoders, planes and cursors (i915_reg.h,
+ * display/i9xx_plane_regs.h, display/intel_cursor_regs.h,
+ * display/intel_display_device.c's offsets): pipes A to C are 0 to 2, and
+ * the eDP transcoder, which only pipe A's panel uses, is 3.
+ */
+
+#define I915_PIPE_A    0
+#define I915_PIPE_B    1
+#define I915_PIPE_C    2
+#define I915_TRANS_EDP 3
+
+/* A transcoder's register at its A offset `a`: A, B and C 0x1000 apart and
+ * the eDP transcoder at 0x6f000 in place of 0x60000. */
+#define I915_TRANS_REG(trans, a) \
+    ((trans) == I915_TRANS_EDP ? (a) - 0x60000 + 0x6f000 : (a) + (trans) * 0x1000)
+/* A transcoder's configuration, in the pipe range 0x70000, with the same
+ * spacing. */
+#define I915_TRANS2_REG(trans, a) \
+    ((trans) == I915_TRANS_EDP ? (a) - 0x70000 + 0x7f000 : (a) + (trans) * 0x1000)
+
+#define TRANS_HTOTAL(t)          I915_TRANS_REG(t, 0x60000)
+#define TRANS_HBLANK(t)          I915_TRANS_REG(t, 0x60004)
+#define TRANS_HSYNC(t)           I915_TRANS_REG(t, 0x60008)
+#define TRANS_VTOTAL(t)          I915_TRANS_REG(t, 0x6000c)
+#define TRANS_VBLANK(t)          I915_TRANS_REG(t, 0x60010)
+#define TRANS_VSYNC(t)           I915_TRANS_REG(t, 0x60014)
+#define PIPESRC(p)               (0x6001c + (p) * 0x1000)
+#define TRANSCONF(t)             I915_TRANS2_REG(t, 0x70008)
+#define TRANSCONF_ENABLE         (1u << 31)
+#define TRANSCONF_STATE_ENABLE   (1u << 30)
+#define TRANSCONF_INTERLACE_MASK (7u << 21)
+#define TRANSCONF_DITHER_EN      (1u << 4)
+#define PIPE_MISC(p)             (0x70030 + (p) * 0x1000)
+#define PIPE_MISC_BPC_MASK       (7u << 5)
+#define PIPE_MISC_BPC_8          (0u << 5)
+#define PIPE_MISC_BPC_10         (1u << 5)
+#define PIPE_MISC_BPC_6          (2u << 5)
+#define PIPE_MISC_DITHER_ENABLE  (1u << 4)
+#define PIPE_FRMCOUNT_G4X(p)     (0x70040 + (p) * 0x1000)
+#define PIPE_FLIPCOUNT_G4X(p)    (0x70044 + (p) * 0x1000)
+
+#define DSPCNTR(p)                (0x70180 + (p) * 0x1000)
+#define DISP_ENABLE               (1u << 31)
+#define DISP_PIPE_GAMMA_ENABLE    (1u << 30)
+#define DISP_FORMAT_MASK          (0xfu << 26)
+#define DISP_FORMAT_8BPP          (2u << 26)
+#define DISP_FORMAT_BGRX565       (5u << 26)
+#define DISP_FORMAT_BGRX888       (6u << 26)
+#define DISP_FORMAT_RGBX101010    (8u << 26)
+#define DISP_FORMAT_BGRX101010    (10u << 26)
+#define DISP_FORMAT_RGBX888       (14u << 26)
+#define DISP_TRICKLE_FEED_DISABLE (1u << 14)
+#define DISP_TILED                (1u << 10)
+#define DSPSTRIDE(p)              (0x70188 + (p) * 0x1000)
+#define DSPSURF(p)                (0x7019c + (p) * 0x1000)
+#define DSPOFFSET(p)              (0x701a4 + (p) * 0x1000) /* y << 16 | x */
+#define DSPSURFLIVE(p)            (0x701ac + (p) * 0x1000)
+
+#define CURCNTR(p) (0x70080 + (p) * 0x1000)
+#define CURBASE(p) (0x70084 + (p) * 0x1000)
+#define CURPOS(p)  (0x70088 + (p) * 0x1000)
+
+/* The pipe CRC (display/intel_pipe_crc_regs.h): one result on Haswell. */
+#define PIPE_CRC_CTL(p)             (0x60050 + (p) * 0x1000)
+#define PIPE_CRC_ENABLE             (1u << 31)
+#define PIPE_CRC_SOURCE_MASK_IVB    (3u << 29)
+#define PIPE_CRC_SOURCE_PRIMARY_IVB (0u << 29)
+#define PIPE_CRC_SOURCE_SPRITE_IVB  (1u << 29)
+#define PIPE_CRC_SOURCE_PF_IVB      (2u << 29)
+#define PIPE_CRC_EXP_HSW(p)         (0x60054 + (p) * 0x1000)
+#define PIPE_CRC_RES_HSW(p)         (0x60064 + (p) * 0x1000)
+
+/* The panel fitters: three, 0x800 apart. */
+#define PF_WIN_POS(i)         (0x68070 + (i) * 0x800)
+#define PF_WIN_SZ(i)          (0x68074 + (i) * 0x800)
+#define PF_CTL(i)             (0x68080 + (i) * 0x800)
+#define PF_ENABLE             (1u << 31)
+#define PF_PIPE_SEL_IVB(pipe) ((uint32_t)(pipe) << 29)
+
+/* Watermarks: pipe C's level 0 is apart from A's and B's. */
+#define WM0_PIPE_ILK(p)            ((p) == I915_PIPE_C ? 0x45200 : 0x45100 + (p) * 4)
+#define WM1_LP_ILK                 0x45108
+#define WM2_LP_ILK                 0x4510c
+#define WM3_LP_ILK                 0x45110
+#define WM1S_LP_ILK                0x45120
+#define WM_MISC                    0x45260
+#define WM_MISC_DATA_PARTITION_5_6 (1u << 0)
+
+/* ------------------------------------------------------------------------
+ * DDI, its clocks and PLLs (i915_reg.h): ports A to E are 0 to 4.
+ */
+
+#define DDI_BUF_CTL(port)            (0x64000 + (port) * 0x100)
+#define DDI_BUF_CTL_ENABLE           (1u << 31)
+#define DDI_BUF_IS_IDLE              (1u << 7)
+#define DDI_A_4_LANES                (1u << 4)
+#define DDI_PORT_WIDTH(width)        (((uint32_t)(width) - 1) << 1)
+#define DDI_PORT_WIDTH_MASK          (7u << 1)
+#define DDI_INIT_DISPLAY_DETECTED    (1u << 0)
+#define DDI_BUF_TRANS(port)          (0x64e00 + (port) * 0x60)
+#define DP_TP_CTL(port)              (0x64040 + (port) * 0x100)
+#define DP_TP_CTL_ENABLE             (1u << 31)
+#define DP_TP_STATUS(port)           (0x64044 + (port) * 0x100)
+#define DP_TP_STATUS_IDLE_DONE       (1u << 25)
+#define TRANS_DDI_FUNC_CTL(t)        I915_TRANS_REG(t, 0x60400)
+#define TRANS_DDI_FUNC_ENABLE        (1u << 31)
+#define TRANS_DDI_PORT_SHIFT         28
+#define TRANS_DDI_PORT_MASK          (7u << 28)
+#define TRANS_DDI_SELECT_PORT(x)     ((uint32_t)(x) << 28)
+#define TRANS_DDI_MODE_SELECT_MASK   (7u << 24)
+#define TRANS_DDI_MODE_SELECT_HDMI   (0u << 24)
+#define TRANS_DDI_MODE_SELECT_DVI    (1u << 24)
+#define TRANS_DDI_MODE_SELECT_DP_SST (2u << 24)
+#define TRANS_DDI_BPC_MASK           (7u << 20)
+#define TRANS_DDI_EDP_INPUT_MASK     (7u << 12)
+#define TRANS_DDI_EDP_INPUT_A_ON     (0u << 12)
+#define TRANS_DDI_EDP_INPUT_A_ONOFF  (4u << 12)
+#define TRANS_DDI_EDP_INPUT_B_ONOFF  (5u << 12)
+#define TRANS_DDI_EDP_INPUT_C_ONOFF  (6u << 12)
+
+#define SPLL_CTL                0x46020
+#define SPLL_PLL_ENABLE         (1u << 31)
+#define WRPLL_CTL(pll)          (0x46040 + (pll) * 0x20)
+#define WRPLL_PLL_ENABLE        (1u << 31)
+#define PORT_CLK_SEL(port)      (0x46100 + (port) * 4)
+#define PORT_CLK_SEL_MASK       (7u << 29)
+#define PORT_CLK_SEL_LCPLL_2700 (0u << 29)
+#define PORT_CLK_SEL_LCPLL_1350 (1u << 29)
+#define PORT_CLK_SEL_LCPLL_810  (2u << 29)
+#define PORT_CLK_SEL_SPLL       (3u << 29)
+#define PORT_CLK_SEL_WRPLL1     (4u << 29)
+#define PORT_CLK_SEL_WRPLL2     (5u << 29)
+#define PORT_CLK_SEL_NONE       (7u << 29)
+#define TRANS_CLK_SEL(t)        (0x46140 + (t) * 4)
+#define TRANS_CLK_SEL_DISABLED  (0u << 29)
+#define TRANS_CLK_SEL_PORT(x)   (((uint32_t)(x) + 1) << 29)
+
+/* The CD clock's source. */
+#define LCPLL_CTL                 0x130040
+#define LCPLL_PLL_DISABLE         (1u << 31)
+#define LCPLL_PLL_LOCK            (1u << 30)
+#define LCPLL_CLK_FREQ_MASK       (3u << 26)
+#define LCPLL_CLK_FREQ_450        (0u << 26)
+#define LCPLL_CD_CLOCK_DISABLE    (1u << 25)
+#define LCPLL_POWER_DOWN_ALLOW    (1u << 22)
+#define LCPLL_CD_SOURCE_FCLK      (1u << 21)
+#define LCPLL_CD_SOURCE_FCLK_DONE (1u << 19)
+
+#define SFUSE_STRAP 0xc2014
+
+/* The HDMI infoframes of transcoder `t` (i915_reg.h). */
+#define HSW_TVIDEO_DIP_CTL(t)      I915_TRANS_REG(t, 0x60200)
+#define HSW_TVIDEO_DIP_AVI_DATA(t) I915_TRANS_REG(t, 0x60220)
+
+/* ------------------------------------------------------------------------
+ * The panel power sequencer and backlight (display/intel_pps_regs.h,
+ * display/intel_backlight_regs.h), in the PCH's range on Haswell.
+ */
+
+#define PCH_PPS_BASE          0xc7200
+#define PP_STATUS             (PCH_PPS_BASE + 0x00)
+#define PP_ON                 (1u << 31)
+#define PP_READY              (1u << 30)
+#define PP_SEQUENCE_MASK      (3u << 28)
+#define PP_CYCLE_DELAY_ACTIVE (1u << 27)
+#define PP_CONTROL            (PCH_PPS_BASE + 0x04)
+#define PANEL_UNLOCK_MASK     0xffff0000u
+#define PANEL_UNLOCK_REGS     0xabcd0000u
+#define EDP_FORCE_VDD         (1u << 3)
+#define EDP_BLC_ENABLE        (1u << 2)
+#define PANEL_POWER_RESET     (1u << 1)
+#define PANEL_POWER_ON        (1u << 0)
+#define PP_ON_DELAYS          (PCH_PPS_BASE + 0x08)
+#define PP_OFF_DELAYS         (PCH_PPS_BASE + 0x0c)
+#define PP_DIVISOR            (PCH_PPS_BASE + 0x10)
+
+#define BLC_PWM_CPU_CTL2          0x48250
+#define BLM_PWM_ENABLE            (1u << 31)
+#define BLC_PWM_CPU_CTL           0x48254
+#define UTIL_PIN_CTL              0x48400
+#define BLC_PWM_PCH_CTL1          0xc8250
+#define BLM_PCH_PWM_ENABLE        (1u << 31)
+#define BLM_PCH_OVERRIDE_ENABLE   (1u << 30)
+#define BLM_PCH_POLARITY          (1u << 29)
+#define BLC_PWM_PCH_CTL2          0xc8254
+#define BACKLIGHT_DUTY_CYCLE_MASK 0xffffu
+
+/* ------------------------------------------------------------------------
+ * DisplayPort AUX (display/intel_dp_aux_regs.h): port A's channel is the
+ * CPU's, B to D the PCH's; each has a control and five data registers.
+ */
+
+#define DP_AUX_CH_CTL(port)             ((port) == 0 ? 0x64010 : 0xe4110 + ((port) - 1) * 0x100)
+#define DP_AUX_CH_DATA(port, i)         (DP_AUX_CH_CTL(port) + 4 + (i) * 4)
+#define DP_AUX_CH_CTL_SEND_BUSY         (1u << 31)
+#define DP_AUX_CH_CTL_DONE              (1u << 30)
+#define DP_AUX_CH_CTL_INTERRUPT         (1u << 29)
+#define DP_AUX_CH_CTL_TIME_OUT_ERROR    (1u << 28)
+#define DP_AUX_CH_CTL_TIME_OUT_MASK     (3u << 26)
+#define DP_AUX_CH_CTL_TIME_OUT_400us    (0u << 26)
+#define DP_AUX_CH_CTL_TIME_OUT_600us    (1u << 26)
+#define DP_AUX_CH_CTL_TIME_OUT_800us    (2u << 26)
+#define DP_AUX_CH_CTL_RECEIVE_ERROR     (1u << 25)
+#define DP_AUX_CH_CTL_MESSAGE_SIZE_MASK (0x1fu << 20)
+#define DP_AUX_CH_CTL_MESSAGE_SIZE(x)   ((uint32_t)(x) << 20)
+#define DP_AUX_CH_CTL_PRECHARGE_2US(x)  ((uint32_t)(x) << 16)
+#define DP_AUX_CH_CTL_BIT_CLOCK_2X_MASK 0x7ffu
+
+/* ------------------------------------------------------------------------
+ * GMBUS and the GPIO pins (display/intel_gmbus_regs.h), at the PCH's
+ * display base 0xc0000.
+ */
+
+#define PCH_DISPLAY_BASE        0xc0000
+#define GPIO(pin)               (PCH_DISPLAY_BASE + 0x5010 + 4 * (pin))
+#define GPIO_CLOCK_DIR_MASK     (1u << 0)
+#define GPIO_CLOCK_DIR_OUT      (1u << 1)
+#define GPIO_CLOCK_VAL_MASK     (1u << 2)
+#define GPIO_CLOCK_VAL_OUT      (1u << 3)
+#define GPIO_CLOCK_VAL_IN       (1u << 4)
+#define GPIO_DATA_DIR_MASK      (1u << 8)
+#define GPIO_DATA_DIR_OUT       (1u << 9)
+#define GPIO_DATA_VAL_MASK      (1u << 10)
+#define GPIO_DATA_VAL_OUT       (1u << 11)
+#define GPIO_DATA_VAL_IN        (1u << 12)
+#define GMBUS0                  (PCH_DISPLAY_BASE + 0x5100)
+#define GMBUS_RATE_100KHZ       (0u << 8)
+#define GMBUS_HOLD_EXT          (1u << 7)
+#define GMBUS1                  (PCH_DISPLAY_BASE + 0x5104)
+#define GMBUS_SW_CLR_INT        (1u << 31)
+#define GMBUS_SW_RDY            (1u << 30)
+#define GMBUS_ENT               (1u << 29)
+#define GMBUS_CYCLE_NONE        (0u << 25)
+#define GMBUS_CYCLE_WAIT        (1u << 25)
+#define GMBUS_CYCLE_INDEX       (2u << 25)
+#define GMBUS_CYCLE_STOP        (4u << 25)
+#define GMBUS_BYTE_COUNT_SHIFT  16
+#define GMBUS_BYTE_COUNT_MAX    256u
+#define GMBUS_SLAVE_INDEX_SHIFT 8
+#define GMBUS_SLAVE_ADDR_SHIFT  1
+#define GMBUS_SLAVE_READ        (1u << 0)
+#define GMBUS2                  (PCH_DISPLAY_BASE + 0x5108)
+#define GMBUS_INUSE             (1u << 15)
+#define GMBUS_HW_WAIT_PHASE     (1u << 14)
+#define GMBUS_STALL_TIMEOUT     (1u << 13)
+#define GMBUS_INT               (1u << 12)
+#define GMBUS_HW_RDY            (1u << 11)
+#define GMBUS_SATOER            (1u << 10)
+#define GMBUS_ACTIVE            (1u << 9)
+#define GMBUS3                  (PCH_DISPLAY_BASE + 0x510c)
+#define GMBUS4                  (PCH_DISPLAY_BASE + 0x5110)
+#define GMBUS5                  (PCH_DISPLAY_BASE + 0x5120)
+
+#endif /* _I915_REG_H_ */
