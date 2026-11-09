@@ -1,0 +1,7 @@
+# nctx-env: sourced to run a program on the bed's Mesa 26.1.6, whose Crocus
+# takes the native-context path on a virtio-gpu node that offers it, in
+# place of the system's Mesa.
+# shellcheck shell=sh
+LD_LIBRARY_PATH=/opt/rach2-nctx/mesa/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+__EGL_VENDOR_LIBRARY_FILENAMES=/opt/rach2-nctx/mesa/share/glvnd/egl_vendor.d/50_mesa.json
+export LD_LIBRARY_PATH __EGL_VENDOR_LIBRARY_FILENAMES
