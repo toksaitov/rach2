@@ -81,6 +81,7 @@ typedef __SIZE_TYPE__ size_t;
 #define SYS_RECVFROM          45
 #define SYS_SENDMSG           46
 #define SYS_RECVMSG           47
+#define SYS_RECVMMSG          299
 #define SYS_SHUTDOWN          48
 #define SYS_BIND              49
 #define SYS_LISTEN            50
@@ -436,6 +437,8 @@ static __inline__ long syscall0(long n)
 #define SYS_SENDMSG           370
 #define SYS_RECVFROM          371
 #define SYS_RECVMSG           372
+#define SYS_RECVMMSG          337
+#define SYS_RECVMMSG_TIME64   417
 #define SYS_SHUTDOWN          373
 
 /* The calls only i386 has, and the narrower calls of the old names. */
