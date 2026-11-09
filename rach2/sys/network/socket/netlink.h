@@ -92,6 +92,12 @@ void netlink_close(struct socket *sock);
  * `net_lock` itself. */
 int netlink_bind(struct socket *sock, uint32_t pid, uint32_t groups);
 
+/** Put the groups `sock` has joined in `words`, `max` of them, as Linux's
+ * NETLINK_LIST_MEMBERSHIPS gives them: group G is bit (G - 1) % 32 of word
+ * (G - 1) / 32. Returns the number of words the groups need, which may pass
+ * `max`, 0 for none. Takes net_lock. */
+uint32_t netlink_memberships(struct socket *sock, uint32_t *words, uint32_t max);
+
 /** Set the SOL_NETLINK option `optname` of `sock` to `val`, the int the caller
  * gave in `optlen` bytes: NETLINK_ADD_MEMBERSHIP and NETLINK_DROP_MEMBERSHIP a
  * group, including generic groups above 32; NETLINK_NO_ENOBUFS, NETLINK_EXT_ACK

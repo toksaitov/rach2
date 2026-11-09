@@ -564,6 +564,13 @@ a generic netlink group past 32 is joined by these options; other
 protocols accept such a group and send nothing to it.
 A group of 0 is
 .Er EINVAL .
+.Xr getsockopt 2
+of
+.Dv NETLINK_LIST_MEMBERSHIPS
+(9) gives the groups joined, a bit for each in the same order, in as many
+whole 32-bit words as the length offered holds, and sets the length to the
+bytes all of them need; a null buffer with a length of 0 asks for that
+length alone.
 A socket of
 .Dv NETLINK_ROUTE
 hears of the changes to the machine's interfaces, addresses and routes as

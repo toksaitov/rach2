@@ -315,7 +315,8 @@ static int32_t not_a_socket(const fd_entry_t *entry)
 #define ICMP6_FILTER 1
 
 /* Netlink's level, whose options `netlink_setsockopt` takes. */
-#define SOL_NETLINK 270
+#define SOL_NETLINK              270
+#define NETLINK_LIST_MEMBERSHIPS 9 /* getsockopt: the groups joined */
 
 /* msg_flags: the control messages did not all fit the caller's buffer. */
 #define MSG_CTRUNC 0x8
@@ -2738,7 +2739,7 @@ static int32_t bound_device_get(const struct socket *sock, uintptr_t optval_ptr,
     if (nd) {
         k_strncpy(name, nd->name, sizeof(name) - 1);
     }
-    if (!optval_ptr || !optlen_ptr) {
+    if (!optlen_ptr) {
         return -EFAULT;
     }
     if (copy_from_user(&olen, (const void __user *)optlen_ptr, sizeof(olen)) != 0) {
@@ -2757,6 +2758,31 @@ static int32_t bound_device_get(const struct socket *sock, uintptr_t optval_ptr,
     return 0;
 }
 
+/** getsockopt(SOL_NETLINK, NETLINK_LIST_MEMBERSHIPS) of netlink socket
+ * `sock`: the groups it has joined (`netlink_memberships`), in as many whole
+ * 32-bit words as the caller's length holds, and that length set to the
+ * bytes all of them need, as Linux's netlink_getsockopt answers, so that a
+ * caller asks first with a null buffer and a length of 0. 0 or -EFAULT. */
+static int32_t netlink_memberships_get(struct socket *sock, uintptr_t optval_ptr,
+                                       uintptr_t optlen_ptr)
+{
+    uint32_t words[32], len, need, i;
+
+    need = netlink_memberships(sock, words, 32) * 4u;
+    if (copy_from_user(&len, (const void __user *)optlen_ptr, sizeof(len)) != 0) {
+        return -EFAULT;
+    }
+    if ((int32_t)len < 0) {
+        return -EINVAL;
+    }
+    for (i = 0; i < 32 && (i + 1) * 4u <= need && (i + 1) * 4u <= len; i++) {
+        if (copy_to_user((void __user *)(optval_ptr + i * 4u), &words[i], 4) != 0) {
+            return -EFAULT;
+        }
+    }
+    return copy_to_user((void __user *)optlen_ptr, &need, sizeof(need)) != 0 ? -EFAULT : 0;
+}
+
 /** getsockopt: report the options programs read at setup: SO_ERROR (the
  * pending connection error, cleared by the read), SO_TYPE (the real socket
  * type), SO_REUSEADDR, SO_BROADCAST, SO_KEEPALIVE, SO_RCVBUF and
@@ -2768,9 +2794,12 @@ static int32_t bound_device_get(const struct socket *sock, uintptr_t optval_ptr,
  * what was copied, less than an int for a caller that offered less.
  * SO_ERROR is read and cleared under the network lock, so the interrupt that
  * sets it cannot come between. The IPv6 options read back as `ipv6_get`
- * reports them, and a raw ICMPv6 socket's filter as `icmp6_filter_get`
- * does. Returns 0, -ENOPROTOOPT for IP_HDRINCL, for an IPv6 option of a
- * socket of another family or a join or leave, or -EFAULT. */
+ * reports them, a raw ICMPv6 socket's filter as `icmp6_filter_get` does,
+ * and a netlink socket's groups as `netlink_memberships_get` does. A null
+ * value with a length of 0 asks only for the length, as on Linux. Returns
+ * 0, -ENOPROTOOPT for IP_HDRINCL, for an IPv6 option of a socket of another
+ * family or a join or leave, -EINVAL for a negative netlink length, or
+ * -EFAULT. */
 static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_ptr,
                              uintptr_t optlen_ptr)
 {
@@ -2797,6 +2826,9 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
         }
     } else if (level == SOL_ICMPV6 && optname == ICMP6_FILTER) {
         return icmp6_filter_get(entry->sock, optval_ptr, optlen_ptr);
+    } else if (level == SOL_NETLINK && optname == NETLINK_LIST_MEMBERSHIPS &&
+               entry->sock->family == AF_NETLINK) {
+        return netlink_memberships_get(entry->sock, optval_ptr, optlen_ptr);
     } else if (level == SOL_SOCKET && optname == SO_TYPE) {
         val = raw_echo_id(entry->sock) >= 0 ? SOCK_DGRAM : entry->sock->type;
     } else if (level == SOL_SOCKET && optname == SO_ERROR) {
