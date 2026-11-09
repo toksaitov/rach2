@@ -152,27 +152,14 @@ static int32_t reset_write(fd_entry_t *e, const char __user *buf, uint32_t count
 
 static const struct file_ops reset_ops = {NULL, reset_write, NULL, NULL, reset_close, NULL, NULL};
 
-/** Register the root-only reset trigger; return 0 or the debugfs error. */
+/** Register the root-only reset trigger in the device's debugfs directory,
+ * which `dri/N` links to; return 0 or the debugfs error. */
 int32_t vgpu_reset_register(struct virtio_gpu_device *vg)
 {
-    char *p = vg->reset_path;
-    uint32_t n = (uint32_t)vg->drm.index;
-    char digits[11];
-    uint32_t i = 0;
-
     if (!vg->has_virgl) {
         return 0;
     }
-    k_memcpy(p, "dri/", 4);
-    p += 4;
-    do {
-        digits[i++] = (char)('0' + n % 10);
-        n /= 10;
-    } while (n);
-    while (i) {
-        *p++ = digits[--i];
-    }
-    k_memcpy(p, "/virtio_gpu_reset", sizeof("/virtio_gpu_reset"));
+    drm_debugfs_path(&vg->drm, "virtio_gpu_reset", vg->reset_path, sizeof(vg->reset_path));
     return debugfs_create_file(vg->reset_path, 0200u, &reset_ops, reset_open, vg);
 }
 

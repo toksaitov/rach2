@@ -973,6 +973,18 @@ void drm_debugfs_register(struct drm_device *dev)
     }
 }
 
+void drm_debugfs_path(const struct drm_device *dev, const char *name, char *path, uint32_t cap)
+{
+    char full[DRM_DEBUGFS_PATH];
+
+    if (cap == 0) {
+        return;
+    }
+    dev_path(full, dev, name);
+    k_strncpy(path, full, cap);
+    path[cap - 1u] = '\0';
+}
+
 void drm_debugfs_unregister(struct drm_device *dev)
 {
     char path[DRM_DEBUGFS_PATH];

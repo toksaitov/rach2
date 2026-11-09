@@ -624,6 +624,16 @@ int32_t drm_syncobj_find_fence(struct drm_file *file, uint32_t h, uint64_t p, ui
 }
 #endif
 
+/** The core's path of a driver's file in the device's debugfs directory,
+ * which the model names DEV for every device. */
+void drm_debugfs_path(const struct drm_device *dev, const char *name, char *path, uint32_t cap)
+{
+    (void)dev;
+    k_strncpy(path, "dri/DEV/", cap);
+    k_strncpy(path + 8, name, cap - 8u);
+    path[cap - 1u] = '\0';
+}
+
 /** Register the reset trigger, keeping its operations in the 3D model. */
 #ifndef VGPU_3D_TEST
 int32_t debugfs_create_file(const char *path, uint32_t mode, const struct file_ops *ops,
