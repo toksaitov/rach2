@@ -2,8 +2,9 @@
 # VK-GL-CTS's vk-default mustpass list on Venus, in JOBS deqp-vk processes (4),
 # each given every JOBS-th case of the sample. A process that dies or prints
 # nothing for 300 s is restarted after its case, which is counted as Crash or
-# Timeout. Writes OUT/results.csv (case,status), OUT/summary.txt and each
-# process's log; the .qpa files go to OUT/qpa/.
+# Timeout; a process that runs no case at all stops the run. Writes
+# OUT/results.csv (case,status), OUT/summary.txt and each process's log; the
+# .qpa files go to OUT/qpa/.
 import collections, os, subprocess, sys, threading, time
 
 CTS = os.path.expanduser('~/cts')
@@ -45,10 +46,11 @@ def worker(j, todo):
             [BIN + '/deqp-vk', '--deqp-caselist-file=' + lst,
              '--deqp-log-filename=%s/qpa/job%d-%d.qpa' % (out, j, n),
              '--deqp-log-images=disable', '--deqp-log-shader-sources=disable',
-             '--deqp-surface-type=window', '--deqp-wsi-type=wayland'],
+             '--deqp-surface-type=window'],
             cwd=BIN, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         last = [time.time()]
         cur = [None]
+        seen = False
 
         def watch():
             while p.poll() is None:
@@ -61,6 +63,7 @@ def worker(j, todo):
             last[0] = time.time()
             log.write(line)
             if line.startswith("Test case '"):
+                seen = True
                 cur[0] = line[11:line.rindex("'")]
             elif cur[0] and line.startswith('  ') and line.strip():
                 st = line.split()[0]
@@ -69,6 +72,12 @@ def worker(j, todo):
                 todo.remove(cur[0])
                 cur[0] = None
         p.wait()
+        if not seen:
+            # deqp-vk refused its arguments or could not start at all.
+            sys.stderr.write('deqp-run: job %d ran no case, status %d; see %s\n'
+                             % (j, p.returncode, log.name))
+            log.close()
+            os._exit(2)
         if cur[0]:
             with lock:
                 results[cur[0]] = 'Timeout' if p.returncode == -9 else 'Crash'

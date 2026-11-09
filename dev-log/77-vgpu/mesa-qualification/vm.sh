@@ -14,7 +14,9 @@
 #
 # Images live in C (build/cache/77-7a), runs in O (build/tmp/77-7a). QEMU's
 # stderr, with virglrenderer's, goes to O/qemu-NAME.log; the guest's console
-# to O/console-NAME.log.
+# to O/console-NAME.log. QEMU runs with libm preloaded (PRELOAD; empty for
+# none), which its render server inherits: without it llvmpipe's compiled
+# shaders call address 0 for libm functions there (../upstream.md).
 #
 set -eu
 C=${C:-/home/toksaitov-m/rach2/build/cache/77-7a}
@@ -22,6 +24,8 @@ O=${O:-/home/toksaitov-m/rach2/build/tmp/77-7a}
 PORT=${PORT:-22599}
 SMP=${SMP:-16}
 MEM=${MEM:-16G}
+HOSTMEM=${HOSTMEM:-4G}
+PRELOAD=${PRELOAD-/usr/lib/x86_64-linux-gnu/libm.so.6}
 KEY=$O/key
 SSHOPT="-i $KEY -p $PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o ConnectTimeout=5"
 
@@ -58,13 +62,13 @@ start() {
     }
     mkdir -p "$O/hostcache"
     rm -rf "$O/hostcache/"*
-    VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json \
+    LD_PRELOAD=$PRELOAD VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json \
         MESA_SHADER_CACHE_DIR=$O/hostcache VIRGL_LOG_LEVEL=info \
         setsid -f qemu-system-x86_64 -name "77-7a-$n" \
         -accel kvm -cpu host -smp "$SMP" -m "$MEM" \
         -object memory-backend-memfd,id=mem,size=$MEM,share=on \
         -machine q35,memory-backend=mem \
-        -vga none -device virtio-vga-gl,venus=on,blob=on,hostmem=4G \
+        -vga none -device virtio-vga-gl,venus=on,blob=on,hostmem=$HOSTMEM \
         -display egl-headless,rendernode=/dev/dri/renderD128 \
         -drive file="$C/$n.qcow2",if=virtio,format=qcow2,cache=unsafe \
         -drive file="$C/seed.iso",if=virtio,format=raw,readonly=on \
