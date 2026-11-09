@@ -261,6 +261,26 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "drm_edid",
+          "checks": "tests/host/drm_edid_hosttest.c gives QEMU's and the Lenovo panel's EDIDs Linux's mode lists, blobs and sizes, and mends or drops corrupt blocks as Linux does, under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "drm_edid64",
+          "checks": "tests/host/drm_edid64_hosttest.c runs the EDID rows with x86-64 kernel structures under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "drm_kms",
+          "checks": "tests/host/drm_kms_hosttest.c checks mode objects, properties, blobs, framebuffers, atomic commits and the legacy calls over them against a fake driver under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "drm_kms64",
+          "checks": "tests/host/drm_kms64_hosttest.c runs the KMS rows with x86-64 kernel structures under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "drm_prime",
           "checks": "tests/host/drm_prime_hosttest.c checks PRIME exports, import caching, self-import, cross-device and udmabuf pages, lifetimes and failures under ASan and UBSan",
           "source": "scenario"
@@ -1212,7 +1232,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 226
+          "limit": 230
         }
       ],
       "bounds": {
