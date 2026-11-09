@@ -279,6 +279,14 @@ void fb_redraw(void)
     CHECK(locked == 1, "the mode is drawn again under the console's lock");
 }
 
+/** A native write's damage, which the console's DRM client takes. */
+void fb_native_damage(uint32_t offset, uint32_t len)
+{
+    (void)offset;
+    (void)len;
+    CHECK(locked == 1, "a native write's damage is told under the console's lock");
+}
+
 static struct open_file description;
 static fd_entry_t entry;
 

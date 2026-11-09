@@ -82,6 +82,12 @@ int fb_screen(struct fb_screen *s);
  */
 void fb_redraw(void);
 
+/** Tell the console that /fb wrote the bytes from `offset` to `offset +
+ * len` of the native mode's pixels, so that a console drawn on a shadow
+ * copies them to the display (fbcon.h's `fbcon_damage`). The caller holds
+ * the console's lock. */
+void fb_native_damage(uint32_t offset, uint32_t len);
+
 /** Leave the graphics mode, either, and return to the text console,
  * redrawn: on a VGA mode 3, with its palette and the saved font loaded
  * again. Out of the modes, it does nothing. */

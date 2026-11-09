@@ -419,6 +419,9 @@ static uint32_t fb_store(fd_entry_t *e, const char __user *buf, uint32_t count, 
                fb_epoch == shot->epoch;
         if (same) {
             k_memcpy(gfx_current.framebuffer + shot->at + done, chunk, n);
+            if (shot->mode == GFX_MODE_NATIVE) {
+                fb_native_damage(shot->at + done, n);
+            }
         }
         console_unlock(flags);
         if (!same) {

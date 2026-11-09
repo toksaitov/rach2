@@ -134,6 +134,19 @@ void fbcon_detach(int forget);
  */
 int fbcon_attach(const struct boot_framebuffer *fb, volatile uint8_t *base);
 
+/** Add the bytes from `offset` to `offset + len` of the screen, which /fb's
+ * native mode wrote, to the damage. The caller holds the console's lock. */
+void fbcon_damage(uint32_t offset, uint32_t len);
+
+/**
+ * Take the rows of pixels stored to since the last call, for a console
+ * whose screen is a shadow that must be copied to the display: 1 with the
+ * rows from `*top` up to `*end`, or 0 when none changed. Every store of
+ * fbcon counts, and /fb's through `fbcon_damage`. The caller holds the
+ * console's lock.
+ */
+int fbcon_take_damage(uint32_t *top, uint32_t *end);
+
 /** The font's scale on the screen, 0 on the VGA's text mode; for the log. */
 uint32_t fbcon_scale(void);
 

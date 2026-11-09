@@ -85,6 +85,11 @@ static volatile uint8_t *screen_base;
 static int detached;
 static int gone;
 
+/* The rows of pixels stored to since `fbcon_take_damage` last took them,
+ * from `damage_top` up to `damage_end`; none while they are equal. */
+static uint32_t damage_top;
+static uint32_t damage_end;
+
 /*
  * The program that holds /fb (vga_gfx.c) has the screen to itself while
  * `gfx_on`: at the native mode, which it writes itself, while `native_on`,
@@ -166,6 +171,21 @@ static void put_pixel(volatile uint8_t *p, uint32_t v)
     }
 }
 
+/** Add the rows of pixels from `top` up to `end` to the damage. */
+static void damage_rows(uint32_t top, uint32_t end)
+{
+    if (top >= end) {
+        return;
+    }
+    if (damage_top == damage_end) {
+        damage_top = top;
+        damage_end = end;
+        return;
+    }
+    damage_top = top < damage_top ? top : damage_top;
+    damage_end = end > damage_end ? end : damage_end;
+}
+
 /** Draw screen cell `i` as `cell` shows it, underlined when the cursor is
  * on it; nothing for a cell past the screen's edge, which a screen smaller
  * than the grid leaves out. */
@@ -182,6 +202,7 @@ static void draw_cell(volatile uint8_t *base, uint32_t i, uint16_t cell, int wit
     if (left + GLYPH_WIDTH * fb_scale > fb_width || top + GLYPH_HEIGHT * fb_scale > fb_height) {
         return;
     }
+    damage_rows(top, top + GLYPH_HEIGHT * fb_scale);
     for (r = 0; r < GLYPH_HEIGHT; r++) {
         uint32_t bits = rows[r];
 
@@ -383,6 +404,7 @@ static void clear_screen(volatile uint8_t *base)
 {
     uint32_t row, col, i;
 
+    damage_rows(0, fb_height);
     for (row = 0; row < fb_height; row++) {
         volatile uint8_t *p = base + row * fb_pitch;
 
@@ -516,6 +538,7 @@ void fbcon_gfx_frame(const uint8_t *pixels)
     if (!gfx_on || native_on || base == NULL) {
         return;
     }
+    damage_rows(gfx_top, gfx_top + gfx_height);
     for (line = 0; line < GFX_HEIGHT; line++) {
         /* Screen row `row` shows the picture's line row * 200 / height. */
         uint32_t end = ((line + 1) * gfx_height + GFX_HEIGHT - 1) / GFX_HEIGHT;
@@ -626,4 +649,23 @@ int fbcon_attach(const struct boot_framebuffer *fb, volatile uint8_t *base)
 uint32_t fbcon_scale(void)
 {
     return fbcon_active ? fb_scale : 0;
+}
+
+void fbcon_damage(uint32_t offset, uint32_t len)
+{
+    if (len == 0 || fb_pitch == 0) {
+        return;
+    }
+    damage_rows(offset / fb_pitch, (offset + len - 1) / fb_pitch + 1);
+}
+
+int fbcon_take_damage(uint32_t *top, uint32_t *end)
+{
+    if (damage_top == damage_end) {
+        return 0;
+    }
+    *top = damage_top;
+    *end = damage_end < fb_height ? damage_end : fb_height;
+    damage_top = damage_end = 0;
+    return *top < *end;
 }

@@ -83,6 +83,13 @@ volatile uint8_t *fbcon_native_begin(void)
     return native_screen;
 }
 
+/** A native write's damage, which no shadow here takes. */
+void fbcon_damage(uint32_t offset, uint32_t len)
+{
+    (void)offset;
+    (void)len;
+}
+
 extern int printf(const char *format, ...);
 static int failures;
 static uint32_t masked;   /* the modelled interrupt flag: 1 when masked */
