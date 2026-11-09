@@ -236,10 +236,11 @@ static void synth_put_proc(char *out, int cap, int *pos, int pid, int tid)
  * each open; the bounds of descriptors and open files and the count of
  * those open (fs/fd.h); whether exec randomizes a new image's layout
  * (mm/vm.h); net/ipv6/conf, whose entries follow the table's
- * (`synth_sys_ipv6`); and TCP's keepalive defaults, black-hole detection and
- * give-up (tcp.h). An entry whose text is empty is procfs's, which
- * reads its value when the file is opened. A new entry goes at the end, so
- * that the indices SYNTH_SYS_ names stay the same. */
+ * (`synth_sys_ipv6`); TCP's keepalive defaults, black-hole detection and
+ * give-up (tcp.h); and Linux 6.12's highest capability, 40, and FIPS mode,
+ * off, which libcap and libgcrypt read. An entry whose text is empty is
+ * procfs's, which reads its value when the file is opened. A new entry goes
+ * at the end, so that the indices SYNTH_SYS_ names stay the same. */
 static const struct {
     int parent;
     const char *name;
@@ -292,7 +293,10 @@ static const struct {
                {21, "tcp_keepalive_intvl", ""},
                {21, "tcp_keepalive_probes", ""},
                {21, "tcp_mtu_probing", ""},
-               {21, "tcp_retries2", ""}};
+               {21, "tcp_retries2", ""},
+               {6, "cap_last_cap", "40\n"},
+               {0, "crypto", 0},
+               {50, "fips_enabled", "0\n"}};
 
 /* The entries of the table. */
 #define SYNTH_SYS_TABLE ((int)(sizeof(sysents) / sizeof(sysents[0])))
