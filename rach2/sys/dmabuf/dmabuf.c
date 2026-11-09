@@ -1,12 +1,285 @@
-/*
- * dmabuf.c: dma-bufs, buffers shared between devices, processes and the
- * CPU through descriptors. A stub until 76-3a writes it, which makes none.
- */
+/* Exported buffers, implicit reservations and their anonymous descriptors. */
+#include "dmabuf.h"
+#include "../mm/kheap.h"
+#include "../mm/usercopy.h"
+#include "../lib/kerrno.h"
+#include "../lib/kstring.h"
 
-#include "../drm/drm.h"
+/** Drop every reservation reference and return it to its empty state. */
+void dma_resv_fini(struct dma_resv *r)
+{
+    uint32_t i;
+    dma_fence_put(r->write);
+    for (i = 0; i < r->nreads; i++)
+        dma_fence_put(r->reads[i]);
+    kfree(r->reads);
+    k_memset(r, 0, sizeof(*r));
+}
 
+/** Replace the old work on a write, or append a reader without sleeping. */
+int32_t dma_resv_add_fence(struct dma_resv *r, struct dma_fence *f, int write)
+{
+    struct dma_fence **p;
+    uint32_t i, n;
+    if (!f)
+        return -EINVAL;
+    if (write) {
+        dma_fence_get(f);
+        dma_resv_fini(r);
+        r->write = f;
+        return 0;
+    }
+    for (i = 0; i < r->nreads;) {
+        if (dma_fence_is_signaled(r->reads[i])) {
+            dma_fence_put(r->reads[i]);
+            r->reads[i] = r->reads[--r->nreads];
+        } else
+            i++;
+    }
+    if (r->nreads == r->cap) {
+        n = r->cap ? r->cap * 2 : 4;
+        if (n < r->cap || (size_t)n * sizeof(*p) / sizeof(*p) != n)
+            return -ENOMEM;
+        p = kmalloc((size_t)n * sizeof(*p));
+        if (!p)
+            return -ENOMEM;
+        if (r->nreads)
+            k_memcpy(p, r->reads, r->nreads * sizeof(*p));
+        kfree(r->reads);
+        r->reads = p;
+        r->cap = n;
+    }
+    r->reads[r->nreads++] = dma_fence_get(f);
+    return 0;
+}
+
+/** Snapshot work that must finish before a read or a write may start. */
+struct dma_fence *dma_resv_snapshot(struct dma_resv *r, int write)
+{
+    struct dma_fence **p, *f;
+    uint32_t i, n = write ? r->nreads : 0;
+    if (n == 0xffffffffu || ((size_t)n + 1) * sizeof(*p) / sizeof(*p) != (size_t)n + 1)
+        return NULL;
+    p = kmalloc(((size_t)n + 1) * sizeof(*p));
+    if (!p)
+        return NULL;
+    p[0] = r->write;
+    for (i = 0; i < n; i++)
+        p[i + 1] = r->reads[i];
+    f = dma_fence_merge(p, n + 1);
+    kfree(p);
+    return f;
+}
+
+/** Take a buffer reference. */
+struct dma_buf *dma_buf_ref(struct dma_buf *b)
+{
+    if (b)
+        b->refs++;
+    return b;
+}
+
+/** Release completion watches and exporter storage after the last holder. */
+void dma_buf_put(struct dma_buf *b)
+{
+    int i;
+    if (!b || --b->refs)
+        return;
+    for (i = 0; i < 2; i++) {
+        dma_fence_remove_callback(b->poll_fences[i], &b->poll_cb[i].cb);
+        dma_fence_put(b->poll_fences[i]);
+    }
+    if (b->ops->release)
+        b->ops->release(b);
+    if (b->resv == &b->own)
+        dma_resv_fini(&b->own);
+    kfree(b);
+}
+
+/** Make a buffer with one reference and a distinct stat inode. */
+struct dma_buf *dma_buf_export(uint64_t size, const struct dma_buf_ops *ops, void *priv,
+                               struct dma_resv *resv)
+{
+    static uint64_t next_ino = 1;
+    struct dma_buf *b;
+    if (!size || size > 0x7fffffffffffffffull || !ops)
+        return NULL;
+    b = kzalloc(sizeof(*b));
+    if (!b)
+        return NULL;
+    b->anon.name = "dmabuf";
+    b->refs = 1;
+    b->size = size;
+    b->ino = next_ino++;
+    b->ops = ops;
+    b->priv = priv;
+    b->resv = resv ? resv : &b->own;
+    wait_queue_init(&b->wq);
+    return b;
+}
+
+/** Wake pollers after any watched reservation fence completes. */
+static void buf_ready(struct dma_fence *f, struct dma_fence_cb *cb)
+{
+    struct dma_buf *b = ((struct dma_buf_poll_cb *)cb)->buf;
+    (void)f;
+    wq_wake_all(&b->wq);
+}
+
+/** Poll snapshots of the reservation, arming callbacks before sleeping. */
+static short buf_poll(fd_entry_t *e, short events, struct wait_queue **wq)
+{
+    struct dma_buf *b = e->priv;
+    struct dma_fence *f;
+    short mask = 0;
+    int i;
+    if (wq)
+        *wq = &b->wq;
+    for (i = 0; i < 2; i++) {
+        if (!(events & (i ? 4 : 1)))
+            continue;
+        f = dma_resv_snapshot(b->resv, i);
+        if (!f) {
+            mask |= 8;
+            continue;
+        }
+        dma_fence_remove_callback(b->poll_fences[i], &b->poll_cb[i].cb);
+        dma_fence_put(b->poll_fences[i]);
+        b->poll_fences[i] = f;
+        b->poll_cb[i].buf = b;
+        if (dma_fence_add_callback(f, &b->poll_cb[i].cb, buf_ready))
+            mask |= i ? 4 : 1;
+    }
+    return mask;
+}
+
+/** Permit only Linux's dma-buf size query and rewind. */
+static int64_t buf_seek(fd_entry_t *e, int64_t offset, int whence)
+{
+    struct dma_buf *b = e->priv;
+    if (whence != 0 && whence != 2)
+        return -EINVAL;
+    if (offset)
+        return -EINVAL;
+    return whence == 2 ? (int64_t)b->size : 0;
+}
+
+/** Map through the exporter after checking the exported extent. */
+static int32_t buf_mmap(fd_entry_t *e, vma_t *vma)
+{
+    struct dma_buf *b = e->priv;
+    uint64_t off = (uint64_t)vma->pgoff << 12;
+    if (off > b->size || vma->end - vma->start > b->size - off)
+        return -EINVAL;
+    return b->ops->mmap ? b->ops->mmap(b, vma) : -ENODEV;
+}
+
+/** Wait on a reservation snapshot, then give the exporter CPU access. */
+static int32_t buf_sync(struct dma_buf *b, uint64_t flags)
+{
+    struct dma_fence *f;
+    int32_t rc;
+    if ((flags & ~((uint64_t)DMA_BUF_SYNC_VALID_FLAGS_MASK)) || !(flags & DMA_BUF_SYNC_RW))
+        return -EINVAL;
+    if (!(flags & DMA_BUF_SYNC_END)) {
+        f = dma_resv_snapshot(b->resv, (flags & DMA_BUF_SYNC_WRITE) != 0);
+        if (!f)
+            return -ENOMEM;
+        rc = dma_fence_wait_until(f, 1, -1);
+        dma_fence_put(f);
+        if (rc)
+            return rc;
+    }
+    return b->ops->cpu_access ? b->ops->cpu_access(b, flags) : 0;
+}
+
+/** Check sync-file import or export access flags. */
+static int valid_access(uint32_t flags)
+{
+    return flags && !(flags & ~(uint32_t)DMA_BUF_SYNC_RW);
+}
+
+/** Synchronize CPU access, or import and export explicit fence snapshots. */
+static int32_t buf_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
+{
+    struct dma_buf *b = e->priv;
+    struct dma_buf_sync sync;
+    struct dma_buf_export_sync_file data;
+    struct dma_fence *f;
+    int32_t rc;
+    if (request == DMA_BUF_IOCTL_SYNC) {
+        if (copy_from_user(&sync, (void __user *)arg, sizeof(sync)))
+            return -EFAULT;
+        return buf_sync(b, sync.flags);
+    }
+    if (request != DMA_BUF_IOCTL_EXPORT_SYNC_FILE && request != DMA_BUF_IOCTL_IMPORT_SYNC_FILE)
+        return -ENOTTY;
+    if (copy_from_user(&data, (void __user *)arg, sizeof(data)))
+        return -EFAULT;
+    if (!valid_access(data.flags))
+        return -EINVAL;
+    if (request == DMA_BUF_IOCTL_IMPORT_SYNC_FILE) {
+        f = sync_file_get_fence(data.fd);
+        if (!f)
+            return -EINVAL;
+        rc = dma_resv_add_fence(b->resv, f, (data.flags & DMA_BUF_SYNC_WRITE) != 0);
+        dma_fence_put(f);
+        if (!rc)
+            wq_wake_all(&b->wq);
+        return rc;
+    }
+    f = dma_resv_snapshot(b->resv, (data.flags & DMA_BUF_SYNC_WRITE) != 0);
+    if (!f)
+        return -ENOMEM;
+    rc = sync_file_create(f, "dmabuf");
+    dma_fence_put(f);
+    if (rc < 0)
+        return rc;
+    data.fd = rc;
+    if (copy_to_user((void __user *)arg, &data, sizeof(data))) {
+        fd_free(current_proc->fds, rc);
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/** Drop the descriptor's buffer reference. */
+static void buf_close(fd_entry_t *e)
+{
+    dma_buf_put(e->priv);
+    e->priv = NULL;
+}
+
+static const struct file_ops buf_ops = {NULL,      NULL,     buf_poll, buf_ioctl,
+                                        buf_close, buf_mmap, buf_seek};
+
+/** Identify dma-bufs by their operations, including duplicated descriptors. */
 int is_dma_buf_file(const fd_entry_t *e)
 {
-    (void)e;
-    return 0;
+    return e && e->ops == &buf_ops;
+}
+
+/** Find and reference a caller's dma-buf descriptor. */
+struct dma_buf *dma_buf_get(int32_t fd)
+{
+    fd_entry_t *e = current_proc ? fd_get(current_proc->fds, fd) : NULL;
+    return is_dma_buf_file(e) && !(e->flags & FD_FLAG_PATH) ? dma_buf_ref(e->priv) : NULL;
+}
+
+/** Install a read/write descriptor with its own buffer reference. */
+int32_t dma_buf_fd(struct dma_buf *b, uint32_t flags)
+{
+    fd_entry_t *e;
+    int32_t fd;
+    if (!current_proc || (flags & ~02000000u))
+        return -EINVAL;
+    fd = fd_alloc(current_proc->fds);
+    if (fd < 0)
+        return fd;
+    e = &current_proc->fds->entries[fd];
+    e->type = FD_TYPE_ANON;
+    e->ops = &buf_ops;
+    e->priv = dma_buf_ref(b);
+    e->flags = FD_FLAG_READ | FD_FLAG_WRITE | (flags ? FD_FLAG_CLOEXEC : 0);
+    return fd;
 }

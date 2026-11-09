@@ -254,6 +254,7 @@ struct dma_fence {
     int signaled;
     int32_t error; /* 0, or the -errno the work failed with */
     int64_t timestamp_ns;
+    int64_t deadline_ns; /* earliest requested completion hint, INT64_MAX if none */
     struct dma_fence_cb *cbs;
     wait_queue_t wq;
     int signaling_enabled;
@@ -285,7 +286,7 @@ int dma_fence_remove_callback(struct dma_fence *fence, struct dma_fence_cb *cb);
 /**
  * Wait for the fence until the CLOCK_MONOTONIC time `deadline_ns`, or for
  * ever when it is negative; sleeps. Returns 0 once signalled (the fence's
- * error is read from it), -ETIME at the deadline, or -ERESTARTSYS for a
+ * error is read from it), -ETIME at the deadline, or -EINTR for a
  * signal when `intr` is set.
  */
 int32_t dma_fence_wait_until(struct dma_fence *fence, int intr, int64_t deadline_ns);
