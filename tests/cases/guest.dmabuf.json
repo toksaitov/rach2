@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "guest.dmabuf",
-  "summary": "udmabuf sharing and sync-file descriptors",
+  "summary": "udmabuf sharing, sync-file descriptors and fences with slow, concurrent and failing producers",
   "cases": [
     {
       "case_id": "guest.dmabuf.udmabuf",
@@ -126,6 +126,193 @@
         }
       ],
       "timing": [],
+      "native": {
+        "plan": "native",
+        "fixtures": [
+          {
+            "fixture": "workspace"
+          }
+        ]
+      }
+    },
+    {
+      "case_id": "guest.dmabuf.fence",
+      "behavior": "A slow producer, eight concurrent producers on one buffer and a failing producer write shared buffers behind sw_sync fences, and each consumer reads the fence state, success or the producer error, before the buffer, over udmabuf and over a card's dumb buffers and syncobjs where a driver offers them",
+      "units": [
+        "fenceprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "i686",
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 134217728,
+          "firmware": "direct",
+          "devices": [
+            "rtl8139"
+          ],
+          "boot_options": []
+        }
+      },
+      "execution": {
+        "program": "fenceprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "the probe removes what it made"
+      },
+      "assertions": [
+        {
+          "assertion_id": "slow",
+          "checks": "A consumer sees a slow producer's fence active, wakes on it, reads its success and then the whole buffer the producer wrote",
+          "source": "program"
+        },
+        {
+          "assertion_id": "concurrent",
+          "checks": "Eight producers on one buffer give the consumer's fence eight leaves; it signals after the last, and every producer's slice is whole",
+          "source": "program"
+        },
+        {
+          "assertion_id": "failed",
+          "checks": "A producer that exits without signalling fails its fence with ENOENT, which the parent and three forked consumers each read through their own sync files",
+          "source": "program"
+        },
+        {
+          "assertion_id": "dumb",
+          "checks": "The slow, concurrent and failed rows pass over a card's dumb buffers exported by PRIME",
+          "source": "program"
+        },
+        {
+          "assertion_id": "syncobj-wait",
+          "checks": "A syncobj wait, and a timeline point's wait and query where offered, end after a slow producer, whose success the syncobj's sync file reports before the buffer is read",
+          "source": "program"
+        },
+        {
+          "assertion_id": "syncobj-error",
+          "checks": "A failed producer's error reaches the parent and three forked consumers through the syncobj's fence, while their syncobj waits succeed as on Linux",
+          "source": "program"
+        }
+      ],
+      "branches": [
+        {
+          "group_id": "card",
+          "decided_by": "report",
+          "alternatives": [
+            {
+              "alternative_id": "dumb",
+              "when": null,
+              "assertions": [
+                "dumb"
+              ]
+            },
+            {
+              "alternative_id": "none",
+              "when": null,
+              "assertions": []
+            }
+          ]
+        },
+        {
+          "group_id": "syncobj",
+          "decided_by": "report",
+          "alternatives": [
+            {
+              "alternative_id": "offered",
+              "when": null,
+              "assertions": [
+                "syncobj-wait",
+                "syncobj-error"
+              ]
+            },
+            {
+              "alternative_id": "none",
+              "when": null,
+              "assertions": []
+            }
+          ]
+        }
+      ],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 268435456,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0
+      },
+      "prepare": [
+        {
+          "name": "fenceprobe",
+          "node": "tests/fenceprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [
+        {
+          "kind": "injected_delay",
+          "where": "tests/fenceprobe.c:292",
+          "assumes": "a producer sleeps a fifth of a second after its go as the stimulus, so that the consumer is asleep on the fence; the probe judges only the fence states and the bytes that follow, never elapsed time",
+          "uncertainty_us": null
+        }
+      ],
       "native": {
         "plan": "native",
         "fixtures": [
