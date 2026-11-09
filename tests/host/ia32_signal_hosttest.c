@@ -1,0 +1,720 @@
+/**
+ * Check the i386 signal frames, siginfo and ptrace registers of the x86-64
+ * kernel, `arch/x86_64/sigframe32.c` and `arch/x86_64/ptrace.c`, against
+ * Linux 6.12's layouts, over a model of user memory, the selectors and the
+ * floating-point state, compiled with x86-64's `cpu.h`.
+ *
+ * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-cflags: -DRACH2_HOST_X86_64 -DFPU_X86_64
+ *
+ * The offsets are those of Linux's `sigcontext_32`, `ucontext_ia32`,
+ * `rt_sigframe_ia32`, `sigframe_ia32`, `compat_siginfo` and
+ * `user_regs_struct32`, as arch/x86/include/asm/sigframe.h,
+ * arch/x86/include/uapi/asm/sigcontext.h, include/linux/compat.h and
+ * arch/x86/include/asm/user32.h give them.
+ */
+#include "arch/x86_64/sigframe32.c"
+#include "arch/x86_64/ptrace.c"
+#include "lib/kstring.h"
+
+extern int printf(const char *format, ...);
+
+#ifndef offsetof
+#define offsetof(type, member) ((size_t)&((type *)0)->member)
+#endif
+
+struct percpu cpu_table[NR_CPUS];
+static process_t proc, tracee;
+static isr_params_t tracee_frame;
+static int failures;
+
+/* The model's user memory: USER_LEN bytes from USER_BASE, below 4 GiB. */
+#define USER_BASE 0x40000000ul
+#define USER_LEN  0x10000ul
+static uint8_t user[USER_LEN];
+
+/* The model's selectors, MSRs and floating-point calls. */
+static unsigned int fs_sel, gs_sel, ds_sel, es_sel;
+static uint64_t fs_base, kernel_gs_base;
+static int fpu_resets, fpu_loads, fpu_puts;
+static uintptr_t vdso_rt, vdso_plain;
+static int compat;
+
+/* What the i386 frame's state costs in the model: an fxsave image. */
+#define FP_BYTES 624u
+
+/** Count a failure and print `row` when `ok` is 0. */
+static void check(int ok, const char *row)
+{
+    if (!ok) {
+        printf("ia32-signal-hosttest: fail: %s\n", row);
+        failures++;
+    }
+}
+
+/** The model's byte at user address `a` for `n` bytes, or NULL. */
+static uint8_t *at(uintptr_t a, size_t n)
+{
+    if (a < USER_BASE || a + n > USER_BASE + USER_LEN || a + n < a) {
+        return NULL;
+    }
+    return user + (a - USER_BASE);
+}
+
+int copy_from_user(void *dst, const void __user *src, size_t n)
+{
+    uint8_t *p = at((uintptr_t)src, n);
+
+    if (!p) {
+        return -1;
+    }
+    k_memcpy(dst, p, n);
+    return 0;
+}
+
+int copy_to_user(void __user *dst, const void *src, size_t n)
+{
+    uint8_t *p = at((uintptr_t)dst, n);
+
+    if (!p) {
+        return -1;
+    }
+    k_memcpy(p, src, n);
+    return 0;
+}
+
+/** The 32-bit word at user address `a`. */
+static uint32_t word_at(uintptr_t a)
+{
+    uint32_t v = 0;
+    uint8_t *p = at(a, 4);
+
+    if (p) {
+        k_memcpy(&v, p, 4);
+    }
+    return v;
+}
+
+/** Store `v` at user address `a`. */
+static void word_put(uintptr_t a, uint32_t v)
+{
+    uint8_t *p = at(a, 4);
+
+    if (p) {
+        k_memcpy(p, &v, 4);
+    }
+}
+
+uint64_t msr_read(uint32_t msr)
+{
+    return msr == MSR_FS_BASE ? fs_base : kernel_gs_base;
+}
+
+void msr_write(uint32_t msr, uint64_t value)
+{
+    if (msr == MSR_FS_BASE) {
+        fs_base = value;
+    } else {
+        kernel_gs_base = value;
+    }
+}
+
+unsigned int x86_64_fs_read(void)
+{
+    return fs_sel;
+}
+
+unsigned int x86_64_gs_read(void)
+{
+    return gs_sel;
+}
+
+unsigned int x86_64_ds_read(void)
+{
+    return ds_sel;
+}
+
+unsigned int x86_64_es_read(void)
+{
+    return es_sel;
+}
+
+void x86_64_fs_load(unsigned int sel)
+{
+    fs_sel = sel;
+    fs_base = 0xBAD;
+}
+
+void x86_64_gs_load(unsigned int sel)
+{
+    gs_sel = sel;
+    kernel_gs_base = 0xBAD;
+}
+
+void x86_64_ds_load(unsigned int sel)
+{
+    ds_sel = sel;
+}
+
+void x86_64_es_load(unsigned int sel)
+{
+    es_sel = sel;
+}
+
+/** `lar` in the model: the GDT's user code and data descriptors at DPL 3,
+ * and nothing else. */
+unsigned int x86_64_lar(unsigned int sel)
+{
+    switch (sel) {
+    case GDT_USER_DATA:
+        return 0x00C0F300u;
+    case GDT_USER_CODE32:
+        return 0x00CFFB00u;
+    case GDT_USER_CODE:
+        return 0x00AFFB00u;
+    default:
+        return 0;
+    }
+}
+
+uintptr_t fpu_frame32_place(uintptr_t sp)
+{
+    return ((sp - 512u) & ~(uintptr_t)63) - 112u;
+}
+
+uintptr_t fpu_frame32_bytes(void)
+{
+    return FP_BYTES;
+}
+
+int fpu_frame32_put(uintptr_t fp, const void *area, uint32_t cs, uint32_t ds)
+{
+    (void)area;
+    (void)cs;
+    (void)ds;
+    fpu_puts++;
+    return at(fp, 112) ? 0 : -1;
+}
+
+int fpu_frame32_load(uintptr_t fp)
+{
+    fpu_loads++;
+    return at(fp, 112) ? 0 : -1;
+}
+
+uint32_t fpu_frame_uc_flags(void)
+{
+    return 0;
+}
+
+void fpu_save(void *area)
+{
+    (void)area;
+}
+
+void fpu_reset(void)
+{
+    fpu_resets++;
+}
+
+void fpu_env32_get(const void *area, uint8_t *env, uint32_t cs, uint32_t ds)
+{
+    (void)area;
+    (void)cs;
+    (void)ds;
+    k_memset(env, 0, FPU_ENV_SIZE);
+}
+
+void fpu_env32_set(void *area, const uint8_t *env)
+{
+    (void)area;
+    (void)env;
+}
+
+void fpu_fx_get(const void *area, uint8_t *fx)
+{
+    (void)area;
+    k_memset(fx, 0, FX_SIZE);
+}
+
+int fpu_fx_set(void *area, const uint8_t *fx)
+{
+    (void)area;
+    (void)fx;
+    return 0;
+}
+
+uint32_t fpu_xstate_size(void)
+{
+    return 0;
+}
+
+void fpu_xstate_view(uint8_t *copy)
+{
+    (void)copy;
+}
+
+int fpu_xstate_set(void *area, const uint8_t *in)
+{
+    (void)area;
+    (void)in;
+    return 0;
+}
+
+uintptr_t ia32_vdso_sigreturn(int rt)
+{
+    return rt ? vdso_rt : vdso_plain;
+}
+
+int sigframe_on_altstack(uintptr_t sp)
+{
+    return current_proc->altstack_on && sp > current_proc->altstack_sp &&
+           sp <= current_proc->altstack_sp + current_proc->altstack_size;
+}
+
+int sigframe_ss_valid(unsigned int sel)
+{
+    return sel == GDT_USER_DATA;
+}
+
+int in_compat_syscall(void)
+{
+    return compat;
+}
+
+isr_params_t *proc_user_frame(const process_t *t)
+{
+    (void)t;
+    return &tracee_frame;
+}
+
+process_t *ptrace_tracee(uint32_t pid)
+{
+    (void)pid;
+    return &tracee;
+}
+
+/** Debug register `n` reads as 0xD0 + n in the model. */
+unsigned long debugreg_peek(const process_t *t, unsigned n)
+{
+    (void)t;
+    return 0xD0u + n;
+}
+
+int debugreg_poke(process_t *t, unsigned n, unsigned long v)
+{
+    (void)t;
+    (void)n;
+    (void)v;
+    return 0;
+}
+
+uint32_t core_note_bytes(uint32_t descsz)
+{
+    return descsz;
+}
+
+void core_note_put(uint8_t **p, const char *name, uint32_t type, const void *desc, uint32_t descsz)
+{
+    (void)p;
+    (void)name;
+    (void)type;
+    (void)desc;
+    (void)descsz;
+}
+
+int tls_desc_valid(const struct user_desc *u)
+{
+    (void)u;
+    return 1;
+}
+
+int tls_entry_get(const struct process *t, uint32_t entry, struct user_desc *u)
+{
+    (void)t;
+    (void)entry;
+    k_memset(u, 0, sizeof(*u));
+    return 0;
+}
+
+int tls_entry_set(struct process *t, uint32_t entry, const struct user_desc *u)
+{
+    (void)t;
+    (void)entry;
+    (void)u;
+    return 0;
+}
+
+uintptr_t tls_selector_base(const struct process *t, unsigned int sel)
+{
+    (void)t;
+    (void)sel;
+    return 0;
+}
+
+/* A size or offset and Linux's value of it. */
+struct layout_row {
+    size_t got, want;
+    const char *what;
+};
+
+#define ROW(got, want) {(size_t)(got), (size_t)(want), #got}
+
+static const struct layout_row layout[] = {
+    ROW(sizeof(struct sigcontext32), 88),
+    ROW(offsetof(struct sigcontext32, gs), 0),
+    ROW(offsetof(struct sigcontext32, ds), 12),
+    ROW(offsetof(struct sigcontext32, edi), 16),
+    ROW(offsetof(struct sigcontext32, eax), 44),
+    ROW(offsetof(struct sigcontext32, trapno), 48),
+    ROW(offsetof(struct sigcontext32, eip), 56),
+    ROW(offsetof(struct sigcontext32, cs), 60),
+    ROW(offsetof(struct sigcontext32, eflags), 64),
+    ROW(offsetof(struct sigcontext32, esp_at_signal), 68),
+    ROW(offsetof(struct sigcontext32, ss), 72),
+    ROW(offsetof(struct sigcontext32, fpstate), 76),
+    ROW(offsetof(struct sigcontext32, oldmask), 80),
+    ROW(offsetof(struct sigcontext32, cr2), 84),
+    ROW(sizeof(struct ucontext32), 116),
+    ROW(offsetof(struct ucontext32, ss_sp), 8),
+    ROW(offsetof(struct ucontext32, ss_flags), 12),
+    ROW(offsetof(struct ucontext32, ss_size), 16),
+    ROW(offsetof(struct ucontext32, mc), 20),
+    ROW(offsetof(struct ucontext32, sigmask), 108),
+    ROW(sizeof(struct rt_sigframe32), 268),
+    ROW(offsetof(struct rt_sigframe32, sig), 4),
+    ROW(offsetof(struct rt_sigframe32, pinfo), 8),
+    ROW(offsetof(struct rt_sigframe32, puc), 12),
+    ROW(offsetof(struct rt_sigframe32, info), 16),
+    ROW(offsetof(struct rt_sigframe32, uc), 144),
+    ROW(offsetof(struct rt_sigframe32, retcode), 260),
+    ROW(sizeof(struct sigframe32), 732),
+    ROW(offsetof(struct sigframe32, sc), 8),
+    ROW(offsetof(struct sigframe32, fpstate_unused), 96),
+    ROW(offsetof(struct sigframe32, extramask), 720),
+    ROW(offsetof(struct sigframe32, retcode), 724),
+    ROW(R32_EBX * 4, 0),
+    ROW(R32_ECX * 4, 4),
+    ROW(R32_EDX * 4, 8),
+    ROW(R32_ESI * 4, 12),
+    ROW(R32_EDI * 4, 16),
+    ROW(R32_EBP * 4, 20),
+    ROW(R32_EAX * 4, 24),
+    ROW(R32_DS * 4, 28),
+    ROW(R32_ES * 4, 32),
+    ROW(R32_FS * 4, 36),
+    ROW(R32_GS * 4, 40),
+    ROW(R32_ORIG_EAX * 4, 44),
+    ROW(R32_EIP * 4, 48),
+    ROW(R32_CS * 4, 52),
+    ROW(R32_EFLAGS * 4, 56),
+    ROW(R32_ESP * 4, 60),
+    ROW(R32_SS * 4, 64),
+    ROW(R32_COUNT * 4, 68),
+    ROW(USER32_DEBUGREG, 252),
+    ROW(USER32_SIZE, 284),
+};
+
+/** The structures' sizes and offsets are Linux's. */
+static void run_layout(void)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(layout) / sizeof(layout[0]); i++) {
+        check(layout[i].got == layout[i].want, layout[i].what);
+    }
+}
+
+/** Whether the `n` bytes at `a` and `b` are equal; `a` may be NULL. */
+static int same(const uint8_t *a, const uint8_t *b, size_t n)
+{
+    size_t i;
+
+    if (!a) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/** The word at byte `off` of the siginfo `si`. */
+static uint32_t si_word(const uint8_t *si, unsigned off)
+{
+    return get32(si + off);
+}
+
+/** compat_siginfo: signo, errno and code, then the union at byte 12. */
+static void run_siginfo(void)
+{
+    uint8_t si[SIGINFO_SIZE];
+    struct k_siginfo info, back;
+
+    k_memset(&info, 0, sizeof(info));
+    info.code = 0; /* SI_USER */
+    info.pid = 41;
+    info.uid = 1000;
+    ia32_fill_siginfo(si, SIGUSR1, &info);
+    check(si_word(si, 0) == SIGUSR1 && si_word(si, 8) == 0 && si_word(si, 12) == 41 &&
+              si_word(si, 16) == 1000,
+          "kill's pid at 12 and uid at 16");
+
+    info.code = SI_QUEUE;
+    info.value = 0x1234567890ul;
+    ia32_fill_siginfo(si, 40, &info);
+    check(si_word(si, 20) == 0x34567890u, "sigqueue's value at 20, its low half");
+    ia32_take_siginfo(si, &back);
+    check(back.code == SI_QUEUE && back.pid == 41 && back.uid == 1000 && back.value == 0x34567890u,
+          "sigqueue's siginfo read back");
+
+    k_memset(&info, 0, sizeof(info));
+    info.code = CLD_EXITED;
+    info.pid = 7;
+    info.uid = 5;
+    info.status = 3;
+    ia32_fill_siginfo(si, SIGCHLD, &info);
+    check(si_word(si, 12) == 7 && si_word(si, 16) == 5 && si_word(si, 20) == 3,
+          "SIGCHLD's pid, uid and status at 12, 16 and 20");
+
+    k_memset(&info, 0, sizeof(info));
+    info.code = SEGV_MAPERR;
+    info.addr = 0xFFFF0000DEADBEEFul;
+    ia32_fill_siginfo(si, SIGSEGV, &info);
+    check(si_word(si, 12) == 0xDEADBEEFu && si_word(si, 16) == 0,
+          "a fault's address at 12, its low half alone");
+
+    k_memset(&info, 0, sizeof(info));
+    info.code = SIGSYS_SECCOMP;
+    info.addr = 0x08048123u;
+    info.uid = 20;
+    info.status = (int32_t)0x40000003u;
+    ia32_fill_siginfo(si, SIGSYS, &info);
+    check(si_word(si, 12) == 0x08048123u && si_word(si, 16) == 20 && si_word(si, 20) == 0x40000003u,
+          "seccomp SIGSYS's call address, number and architecture at 12, 16 and 20");
+}
+
+/** Give the running thread an i386 context: its frame `tf` interrupted at
+ * EIP 0x08049100 with the stack at `sp`. */
+static void setup(isr_params_t *tf, uintptr_t sp)
+{
+    k_memset(&proc, 0, sizeof(proc));
+    k_memset(tf, 0, sizeof(*tf));
+    k_memset(user, 0, sizeof(user));
+    cpu_table[0].current = &proc;
+    tf->rax = 0xFFFFFFFF00000011ul;
+    tf->rbx = 0x22;
+    tf->rcx = 0x33;
+    tf->rdx = 0x44;
+    tf->rsi = 0x55;
+    tf->rdi = 0x66;
+    tf->rbp = 0x77;
+    tf->r8 = 0x88;
+    tf->rip = 0x08049100u;
+    tf->rsp = sp;
+    tf->cs = GDT_USER_CODE32;
+    tf->ss = GDT_USER_DATA;
+    tf->rflags = 0x202u | EFLAGS_DF | EFLAGS_TF;
+    ds_sel = es_sel = GDT_USER_DATA;
+    fs_sel = 0;
+    gs_sel = 0;
+    fpu_resets = fpu_loads = fpu_puts = 0;
+    vdso_rt = vdso_plain = 0;
+}
+
+/** The rt frame: Linux's layout under an i386 stack pointer, its
+ * arguments in registers, and the return through rt_sigreturn. */
+static void run_rt_frame(void)
+{
+    isr_params_t tf;
+    struct k_sigaction sa;
+    struct k_siginfo info;
+    uintptr_t sp = USER_BASE + 0x8000u, f;
+    uint64_t mask = 0;
+
+    setup(&tf, sp);
+    k_memset(&sa, 0, sizeof(sa));
+    sa.handler = 0x08049000u;
+    sa.flags = SA_SIGINFO | SA_RESTORER;
+    sa.restorer = 0x0804A000u;
+    k_memset(&info, 0, sizeof(info));
+    info.pid = 9;
+    check(ia32_sigframe_setup(&tf, SIGUSR2, &sa, &info, 0x8000000100000004ull) == 0,
+          "the rt frame is built");
+    f = tf.rsp;
+    check(((f + 4u) & 15u) == 0, "the rt frame's stack is i386's: 4 past a 16-byte boundary");
+    check(f + sizeof(struct rt_sigframe32) <= fpu_frame32_place(sp) && f < sp,
+          "the rt frame lies below its floating-point state");
+    check(tf.rip == 0x08049000u && tf.rax == SIGUSR2 && tf.rdx == f + 16u && tf.rcx == f + 144u &&
+              tf.cs == GDT_USER_CODE32 && tf.ss == GDT_USER_DATA,
+          "the handler's EIP, EAX, EDX and ECX and its segments");
+    check((tf.rflags & (EFLAGS_DF | EFLAGS_TF)) == 0, "DF and TF cleared for the handler");
+    check(word_at(f) == 0x0804A000u && word_at(f + 4) == SIGUSR2 && word_at(f + 8) == f + 16u &&
+              word_at(f + 12) == f + 144u,
+          "pretcode is SA_RESTORER's, then sig, pinfo and puc");
+    check(word_at(f + 16) == SIGUSR2 && word_at(f + 16 + 12) == 9, "the siginfo at byte 16");
+    check(word_at(f + 144 + 20 + 44) == 0x11u && word_at(f + 144 + 20 + 32) == 0x22u &&
+              word_at(f + 144 + 20 + 56) == 0x08049100u &&
+              word_at(f + 144 + 20 + 60) == GDT_USER_CODE32 &&
+              word_at(f + 144 + 20 + 76) == fpu_frame32_place(sp) &&
+              word_at(f + 144 + 20 + 80) == 4u,
+          "the sigcontext's EAX, EBX, EIP, CS, fpstate and oldmask");
+    check(word_at(f + 144 + 108) == 4u && word_at(f + 144 + 112) == 0x80000001u,
+          "the ucontext's two mask words");
+    check(word_at(f + 144 + 12) == SS_DISABLE, "uc_stack's flags without an alternate stack");
+    check(fpu_puts == 1 && fpu_resets == 1, "the state saved and the handler's reset");
+
+    /* The handler changes EAX and returns through rt_sigreturn. */
+    word_put(f + 144 + 20 + 44, 0x99u);
+    tf.rsp = f + 4u;
+    tf.rax = 0;
+    tf.r8 = 0x1888;
+    check(ia32_sigframe_restore(&tf, 1, &mask) == 0, "rt_sigreturn restores the frame");
+    check(tf.rax == 0x99u && tf.rbx == 0x22u && tf.rip == 0x08049100u && tf.rsp == sp &&
+              tf.cs == GDT_USER_CODE32 && tf.ss == GDT_USER_DATA && tf.r8 == 0x1888,
+          "the registers the handler left, zero-extended, and R8 untouched");
+    check(mask == 0x8000000100000004ull, "the mask the frame saved");
+    check(fpu_loads == 1, "the state loaded from the frame");
+
+    /* A code selector that is not a user one is refused. */
+    tf.rsp = f + 4u;
+    word_put(f + 144 + 20 + 60, 0x10u);
+    check(ia32_sigframe_restore(&tf, 1, &mask) == -1, "a kernel CS in the frame is refused");
+}
+
+/** The plain frame: its retcode as the return without SA_RESTORER, the
+ * vDSO's when there is one, and extramask. */
+static void run_plain_frame(void)
+{
+    isr_params_t tf;
+    struct k_sigaction sa;
+    struct k_siginfo info;
+    uintptr_t sp = USER_BASE + 0x8000u, f;
+    uint64_t mask = 0;
+    static const uint8_t retcode[8] = {0x58, 0xB8, 0x77, 0x00, 0x00, 0x00, 0xCD, 0x80};
+
+    setup(&tf, sp);
+    k_memset(&sa, 0, sizeof(sa));
+    sa.handler = 0x08049000u;
+    k_memset(&info, 0, sizeof(info));
+    check(ia32_sigframe_setup(&tf, SIGINT, &sa, &info, 0x0000000700000002ull) == 0,
+          "the plain frame is built");
+    f = tf.rsp;
+    check(((f + 4u) & 15u) == 0 && tf.rdx == 0 && tf.rcx == 0, "the plain frame's stack");
+    check(word_at(f) == f + 724u && same(at(f + 724u, 8), retcode, 8),
+          "without a restorer or a vDSO it returns to its own popl, movl, int $0x80");
+    check(word_at(f + 8 + 80) == 2u && word_at(f + 720) == 7u,
+          "oldmask and extramask hold the mask's halves");
+
+    tf.rsp = f + 8u;
+    check(ia32_sigframe_restore(&tf, 0, &mask) == 0 && mask == 0x0000000700000002ull &&
+              tf.rsp == sp,
+          "sigreturn takes the frame 8 below the stack pointer");
+
+    setup(&tf, sp);
+    vdso_plain = 0x0F7F0400u;
+    check(ia32_sigframe_setup(&tf, SIGINT, &sa, &info, 0) == 0 && word_at(tf.rsp) == 0x0F7F0400u,
+          "without a restorer it returns through the vDSO's");
+}
+
+/** SA_ONSTACK's frame goes on the alternate stack; one that would reach
+ * 4 GiB is refused. */
+static void run_stacks(void)
+{
+    isr_params_t tf;
+    struct k_sigaction sa;
+    struct k_siginfo info;
+    uintptr_t sp = USER_BASE + 0x8000u;
+
+    setup(&tf, sp);
+    proc.altstack_sp = USER_BASE + 0xA000u;
+    proc.altstack_size = 0x4000u;
+    proc.altstack_on = 1;
+    k_memset(&sa, 0, sizeof(sa));
+    sa.handler = 0x08049000u;
+    sa.flags = SA_SIGINFO | SA_ONSTACK | SA_RESTORER;
+    k_memset(&info, 0, sizeof(info));
+    check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == 0 && tf.rsp > USER_BASE + 0xA000u &&
+              tf.rsp < USER_BASE + 0xE000u,
+          "SA_ONSTACK's frame lies on the alternate stack");
+    check(word_at(tf.rsp + 144 + 8) == USER_BASE + 0xA000u && word_at(tf.rsp + 144 + 12) == 0 &&
+              word_at(tf.rsp + 144 + 16) == 0x4000u,
+          "uc_stack as sigaltstack read it where the signal came");
+
+    setup(&tf, 0xFFFFFF00u);
+    sa.flags = SA_SIGINFO | SA_RESTORER;
+    check(ia32_sigframe_setup(&tf, SIGUSR1, &sa, &info, 0) == -1 && tf.rsp == 0xFFFFFF00u,
+          "a frame that would reach 4 GiB is refused");
+}
+
+/** An i386 tracer's registers: user_regs_struct32 from PTRACE_GETREGS and
+ * PEEKUSER, and the i386 register sets of a 32-bit tracee. */
+static void run_ptrace(void)
+{
+    isr_params_t tf;
+    uintptr_t buf = USER_BASE + 0x100u;
+    uint32_t unit = 0;
+
+    setup(&tf, USER_BASE + 0x8000u);
+    k_memset(&tracee, 0, sizeof(tracee));
+    k_memset(&tracee_frame, 0, sizeof(tracee_frame));
+    tracee_frame.rbx = 0xAAAA00000000B0B0ul;
+    tracee_frame.rax = 0xC0C0u;
+    tracee_frame.rip = 0x08049200u;
+    tracee_frame.cs = GDT_USER_CODE32;
+    tracee_frame.ss = GDT_USER_DATA;
+    tracee_frame.rsp = 0xFFFFD000u;
+    tracee.orig_nr = 20;
+    tracee.regs.ds_sel = GDT_USER_DATA;
+    compat = 1;
+
+    check(arch_ptrace(&tracee, 2, PTRACE_GETREGS, 0, buf) == 0, "an i386 tracer's GETREGS");
+    check(word_at(buf) == 0xB0B0u && word_at(buf + 24) == 0xC0C0u &&
+              word_at(buf + 28) == GDT_USER_DATA && word_at(buf + 44) == 20u &&
+              word_at(buf + 48) == 0x08049200u && word_at(buf + 52) == GDT_USER_CODE32 &&
+              word_at(buf + 60) == 0xFFFFD000u && word_at(buf + 64) == GDT_USER_DATA &&
+              word_at(buf + 68) == 0,
+          "user_regs_struct32's 68 bytes, low halves");
+    check(arch_ptrace(&tracee, 2, PTRACE_PEEKUSER, 24, buf) == 0 && word_at(buf) == 0xC0C0u,
+          "PEEKUSER of EAX at 24");
+    check(arch_ptrace(&tracee, 2, PTRACE_PEEKUSER, 256, buf) == 0 && word_at(buf) == 0xD1u,
+          "PEEKUSER of u_debugreg[1] at 256");
+    check(arch_ptrace(&tracee, 2, PTRACE_PEEKUSER, 280, buf) == 0 && word_at(buf) == 0xD7u,
+          "PEEKUSER of u_debugreg[7], struct user32's last word");
+    check(arch_ptrace(&tracee, 2, PTRACE_PEEKUSER, 248, buf) == 0 && word_at(buf) == 0,
+          "PEEKUSER of a field that is not a register reads 0");
+    check(arch_ptrace(&tracee, 2, PTRACE_PEEKUSER, 284, buf) == -EIO &&
+              arch_ptrace(&tracee, 2, PTRACE_PEEKUSER, 26, buf) == -EIO,
+          "PEEKUSER past struct user32 or unaligned is EIO");
+    check(arch_ptrace(&tracee, 2, PTRACE_ARCH_PRCTL, 0, buf) == -EIO,
+          "ARCH_PRCTL is not an i386 tracer's");
+    compat = 0;
+
+    check(arch_regset_size(&tracee, NT_PRSTATUS, &unit) == 68 && unit == 4,
+          "a 32-bit tracee's NT_PRSTATUS is user_regs_struct32");
+    check(arch_regset_size(&tracee, NT_PRFPREG, &unit) == 108 &&
+              arch_regset_size(&tracee, NT_PRXFPREG, &unit) == 512 &&
+              arch_regset_size(&tracee, NT_386_TLS, &unit) == 48 && unit == 16,
+          "a 32-bit tracee's NT_PRFPREG, NT_PRXFPREG and NT_386_TLS");
+    tracee_frame.cs = GDT_USER_CODE;
+    check(arch_regset_size(&tracee, NT_PRSTATUS, &unit) == 27 * 8 && unit == 8,
+          "a 64-bit tracee's NT_PRSTATUS is user_regs_struct");
+}
+
+int main(void)
+{
+    run_layout();
+    run_siginfo();
+    run_rt_frame();
+    run_plain_frame();
+    run_stacks();
+    run_ptrace();
+    if (failures) {
+        printf("ia32-signal-hosttest: %d failures\n", failures);
+        return failures > 255 ? 255 : failures;
+    }
+    printf("ia32-signal-hosttest: ok\n");
+    return 0;
+}
