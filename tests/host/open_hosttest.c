@@ -1241,6 +1241,19 @@ uint32_t sysfs_node_mode(int handle)
     check(0, "unexpected stat of a /sys file");
     return 0;
 }
+/** No row's mount is debugfs. */
+const struct vfs_type vfs_debugfs_type = {"debugfs", 0, 0, 0, 1};
+
+/** Fail the row: no row opens a file of debugfs. */
+int32_t debugfs_bind(void *node, fd_entry_t *e, int flags)
+{
+    (void)node;
+    (void)e;
+    (void)flags;
+    check(0, "unexpected open of a debugfs file");
+    return -EIO;
+}
+
 /** No PCI function of /sys exists, so none is a display. */
 int sysfs_pci_is_vga(int key)
 {

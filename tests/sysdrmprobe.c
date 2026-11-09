@@ -686,7 +686,7 @@ static long uevent_socket(unsigned groups)
  */
 static long recv_cred(long fd, char *msg, long cap, struct sockaddr_nl *sa, int cred[3])
 {
-    unsigned long control[8];
+    unsigned long control[8] = {0};
     struct iovec iov;
     struct msghdr mh;
     struct cmsghdr *c = (struct cmsghdr *)control;
