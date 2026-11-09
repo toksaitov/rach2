@@ -13,6 +13,7 @@ The Make targets build for the architecture `ARCH` names, so `make ARCH=x86_64 g
 * `make gnu-js`: the SpiderMonkey shell ([`spidermonkey/`](spidermonkey/Readme.md)).
 * `make gnu-chromium`: Debian's chromium-headless-shell with its libraries ([`chromium/`](chromium/Readme.md)).
 * `make gnu-desktop`: Debian's Mesa, Weston, seatd, udev, Xwayland, browsers, sound, fonts and graphics tools ([`debian/`](debian/Readme.md)).
+* `make gnu-venus`: Mesa 26.1.6's Venus driver, which the root takes in place of the desktop's ([Venus](#venus)).
 * `make gnu-proton` and `make gnu-webgl`: GE-Proton on x86-64 ([`proton/`](proton/Readme.md)) and the pinned WebGL conformance suite.
 * `make ARCH=x86_64 gnu-igt`: IGT's tests and runner, built from Debian's intel-gpu-tools source in the Debian builder guest ([IGT's tests](#igts-tests)).
 * `make ARCH=x86_64 GNU_AGENTS=NAME... gnu-agents`: the packages of the agents layer that `GNU_AGENTS` names, or every one for `all` ([`agents/`](agents/Readme.md)).
@@ -115,6 +116,7 @@ wpa_supplicant joins a Wi-Fi network through the kernel's nl80211: WPA, WPA2 and
 
 * `root/`, `native/`, `gdb/` and `js/`.
 * The files of the desktop packages, including chromium-headless-shell, with paths under `/bin`, `/lib` and `/sbin` moved under `/usr`. Packages whose libraries the root already builds (`libc6`, GCC's, zlib, liblzma, PCRE2, util-linux's, libffi, SQLite, bzip2 and zstd) and the base packages the root supplies are left out; the list is `SKIP` in the script.
+* Mesa 26.1.6's Venus driver from `venus/`, after Mesa 25.0.7's Venus ICD and library are removed ([Venus](#venus)).
 * GE-Proton under `/opt/proton` on x86-64, and WebGL under `/usr/share/webgl`.
 * IGT's tests and runner, from `igt/`, when `GNU_IGT` is 1, as `mk/gnu-image.mk` sets it for an x86-64 root made on an x86-64 Linux host.
 * The packages of the agents layer that `GNU_AGENTS` names, each as `fetch_agents.sh` staged it.
@@ -140,6 +142,20 @@ The stage, `igt/` of the build tree, has what the package lacks:
 * `/usr/libexec/igt-gpu-tools/subtest-list.txt`: every subtest, as `igt_runner --list-all` lists them in the guest. The same command on Rach2, `igt_runner -L /usr/libexec/igt-gpu-tools`, must print the same file.
 
 `work/igt/build.log` is the guest's log, which ends with the subtest list; before it are the versions of the compiler and the libraries built against, the flags, and the libraries the stage needs, every one of which the desktop closure or the root has. `work/igt/guest.record` is the guest's run record. On the testing host the first build had 401 test programs, 399 of them in `test-list.txt`, and 63,928 subtests, 56 MiB with their debugging information, and the step took 77 seconds, the guest's boot and its downloads among them, with its 8 processors under KVM. `GNU_IGT_CPUS` and `GNU_IGT_MIB` give the guest's processors and memory, 8 and 8192 MiB. The step's inputs are the script, the pins and the builder's files, so that a change to the guest builds the tests again.
+
+### Venus
+
+The root has two Mesas. Debian 13's Mesa 25.0.7, in the desktop closure ([`debian/mesa.list`](debian/mesa.list)), supplies llvmpipe, lavapipe, Crocus, hasvk and every other driver. Mesa 26.1.6 from trixie-backports supplies the Venus driver alone, the Vulkan driver that relays to the host's Vulkan through virtio-gpu. 25.0.7's Venus lacks what Direct3D on Venus needs: DXVK and vkd3d-proton refuse it for want of `VK_KHR_load_store_op_none`, and Wine cannot map device memory where a 32-bit program under WoW64 can address it without `VK_EXT_map_memory_placed`. 26.1.6's Venus has both, with `VK_KHR_maintenance6`, and passed the qualification that the development log's Mesa qualification record gives: DXVK and vkd3d-proton draw on it for 64-bit and 32-bit programs, and every case of a dEQP-VK sample that passes on 25.0.7 passes on 26.1.6. Only Venus is taken from 26.1.6: the other drivers' results and Linux references were taken on 25.0.7, and the Venus driver needs no LLVM and links only libraries the closure has.
+
+[`debian/venus.list`](debian/venus.list) pins `mesa-vulkan-drivers` 26.1.6-1~bpo13+1 for amd64 and i386 by SHA-256, with its URL in Debian's snapshot of 2026-11-08; its header says how the digests were checked. [`debian/fetch_venus.sh`](debian/fetch_venus.sh), the step `gnu-venus`, fetches the build's architecture's package into `build/cache/gnu`, refuses it unless it has that digest, and stages three of its files in `venus/`:
+
+* `/usr/lib/MULTIARCH/venus/libvulkan_virtio.so`, the driver, MULTIARCH being `x86_64-linux-gnu` or `i386-linux-gnu`.
+* `/usr/share/vulkan/icd.d/venus_icd.ARCH.json`, ARCH being `x86_64` or `i686`: Debian's ICD with the library's absolute path in place of its bare name, which the loader would find as 25.0.7's library of the same name. The script refuses an ICD of another form.
+* `/usr/share/doc/mesa-venus/copyright`, the package's notice.
+
+`install_root.sh` removes 25.0.7's `virtio_icd.json` and `libvulkan_virtio.so`, refusing when the closure has neither, installs `venus/`, and refuses the root when a library the driver needs is not in it. So the Vulkan loader lists Venus from 26.1.6 and every other driver from 25.0.7. The i386 stage is the i686 root's, and the one that an i386 layer of the x86-64 root takes; their ICDs' names differ by architecture, so both can be in one root. The Debian reference guest of the graphics tests installs the same driver the same way ([its Readme](../../tests/graphics/Readme.md#the-reference-guest)), so that its results are Linux's on the driver Rach2 has.
+
+A new Venus pin is a new line in `venus.list` and new Linux references, which the qualification record lists; it changes no other driver.
 
 ## Building
 

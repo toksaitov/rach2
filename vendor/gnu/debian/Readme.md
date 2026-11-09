@@ -18,7 +18,7 @@ WebGL's full commit and archive SHA-256 are in `../sources-extra.txt`; `fetch_we
 
 `install_root.sh` takes the desktop closure as one layer, including chromium-headless-shell. Its SKIP list preserves the GNU ports and the image's init, accounts and base configuration. Debian's `libtinfo6` stays because the GNU ncurses build has no separate `libtinfo.so.6`; LLVM loads it through libedit. Debian's libraries with different sonames, including OpenSSL 3 and FFmpeg 7, coexist with the newer GNU ports. Python 3.13 is installed by its versioned name for Debian's Python modules; the GNU port keeps `python3`. No package maintainer script runs. The image supplies the BLAS and LAPACK alternatives and the default Adwaita cursor theme, builds the GSettings, GdkPixbuf and MIME caches, renders the upstream manual pages and rebuilds its loader cache.
 
-Mesa 25.0.7 supplies llvmpipe, lavapipe, Crocus and hasvk. Lavapipe's Direct3D limit is feature level 11_1 and shader model 6.0 with the pinned Proton. EGL enumerates only DRM devices with a render node. A card-only display uses Pixman in Weston; a program that opens the card itself can still render with GL.
+Mesa 25.0.7 supplies llvmpipe, lavapipe, Crocus and hasvk; the root's Venus driver is Mesa 26.1.6's, which `fetch_venus.sh` stages from `venus.list` beside this layer ([Venus](../Readme.md#venus)). Lavapipe's Direct3D limit is feature level 11_1 and shader model 6.0 with the pinned Proton. EGL enumerates only DRM devices with a render node. A card-only display uses Pixman in Weston; a program that opens the card itself can still render with GL.
 
 ## Updating
 
