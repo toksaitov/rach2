@@ -36,9 +36,14 @@
  * its request at once; the GT FIFO always has 64 free entries; a power
  * well's state follows its requests at once; INSTPM's flush is done as it
  * is asked for; the identity and error registers clear the bits written;
- * the status registers take nothing; and GEN6_GDRST resets the engines
- * whose domains it names and reads 0 again at once. The GTT's entries are
- * memory of the size the GMCH control word gives.
+ * the status registers take nothing; GEN6_GDRST resets the engines
+ * whose domains it names and reads 0 again at once; GEN6_RP_STATE_CAP
+ * gives the Lenovo's limits, and a request in GEN6_RPNSWREQ is run within
+ * them at once and shown in GEN6_RPSTAT1; and the pcode mailbox finishes
+ * each command as it is posted, with the Lenovo's RPe for the duty cycle,
+ * 0 for the overclocking parameters and the RC6 voltages, the frequency
+ * table taken, and any other command refused as an illegal one. The
+ * GTT's entries are memory of the size the GMCH control word gives.
  *
  * Rings. A ring runs from its head to its tail whenever the driver writes
  * its tail, its control or its MI_MODE, while it is valid, not stopped and
@@ -88,6 +93,12 @@
 #define FAKE_SUBSYSTEM      0x380c17aau
 #define FAKE_GMCH_CTRL      (2u << SNB_GMCH_GGMS_SHIFT) /* 2 MiB of GTT, no stolen memory */
 #define FAKE_MSAC           (1u << HSW_MSAC_SIZE_SHIFT) /* a 256 MiB aperture */
+
+/* The GT's frequency limits, the Lenovo's (i915_model_rc6.h): RPn 4, RP1 4
+ * and RP0 20, in units of 50 MHz; and its efficient frequency RPe 10, in
+ * bits 15:8 of the pcode's duty cycle answer. */
+#define FAKE_RP_STATE_CAP 0x00040414u
+#define FAKE_PCODE_DDCC   0x00000a00u
 
 /* The GT FIFO's free entries, always. */
 #define FAKE_FIFO_ENTRIES 64u
@@ -157,7 +168,7 @@ struct i915_fake {
     uintptr_t doorbell;
     pci_device_t pdev;
     struct drm_i915_private *i915;
-    char path[32];
+    char path[64];
     int32_t light;
 };
 
@@ -488,6 +499,41 @@ static uint32_t fake_reg_read(struct i915_fake *f, uint32_t reg)
     return R(f, reg);
 }
 
+/** The pcode's command `cmd`, posted with the ready bit, finished: its
+ * answer in GEN6_PCODE_DATA, then the ready bit cleared and the status in
+ * the mailbox's low byte. */
+static void fake_pcode(struct i915_fake *f, uint32_t cmd)
+{
+    uint32_t status = 0;
+
+    switch (cmd & 0xffu) {
+    case HSW_PCODE_DYNAMIC_DUTY_CYCLE_CONTROL:
+        R(f, GEN6_PCODE_DATA) = FAKE_PCODE_DDCC;
+        break;
+    case GEN6_READ_OC_PARAMS:
+    case GEN6_PCODE_READ_RC6VIDS:
+        R(f, GEN6_PCODE_DATA) = 0;
+        break;
+    case GEN6_PCODE_WRITE_MIN_FREQ_TABLE:
+        break;
+    default:
+        status = GEN6_PCODE_ILLEGAL_CMD;
+        break;
+    }
+    R(f, GEN6_PCODE_MAILBOX) = status & GEN6_PCODE_ERROR_MASK;
+}
+
+/** A frequency request in GEN6_RPNSWREQ, run within RPn and RP0 and shown
+ * in GEN6_RPSTAT1's CAGF. */
+static void fake_rps(struct i915_fake *f, uint32_t value)
+{
+    uint32_t want = value >> HSW_FREQUENCY_SHIFT, cap = R(f, GEN6_RP_STATE_CAP);
+    uint32_t rpn = (cap >> 16) & 0xffu, rp0 = cap & 0xffu;
+
+    want = want < rpn ? rpn : want > rp0 ? rp0 : want;
+    R(f, GEN6_RPSTAT1) = want << HSW_CAGF_SHIFT;
+}
+
 /** A register written as the chip takes it, and whatever the write
  * starts. */
 static void fake_reg_write(struct i915_fake *f, uint32_t reg, uint32_t value)
@@ -522,6 +568,16 @@ static void fake_reg_write(struct i915_fake *f, uint32_t reg, uint32_t value)
     case GEN6_GDRST:
         fake_reset(f, value);
         R(f, reg) = 0;
+        break;
+    case GEN6_PCODE_MAILBOX:
+        R(f, reg) = value;
+        if (value & GEN6_PCODE_READY) {
+            fake_pcode(f, value);
+        }
+        break;
+    case GEN6_RPNSWREQ:
+        R(f, reg) = value;
+        fake_rps(f, value);
         break;
     default:
         R(f, reg) = value;
@@ -917,18 +973,6 @@ static void fake_raise_edu(struct i915_fake *f)
     }
 }
 
-/** The path of the device's file, "dri/N/i915_fake", into `f->path`. */
-static void fake_path(struct i915_fake *f, int index)
-{
-    struct fake_text t;
-
-    t.len = 0;
-    text_put(&t, "dri/");
-    text_num(&t, (uint32_t)index, 0);
-    text_put(&t, "/i915_fake");
-    k_memcpy(f->path, t.text, t.len + 1u);
-}
-
 /** The device is registered: map edu's interrupt register and make the
  * device's debugfs file. */
 static void fake_attach(struct i915_hw *hw, struct drm_i915_private *i915)
@@ -941,7 +985,7 @@ static void fake_attach(struct i915_hw *hw, struct drm_i915_private *i915)
     if (bar) {
         f->doorbell = mmio_map(bar, FAKE_EDU_BYTES, PTE_NOCACHE);
     }
-    fake_path(f, i915->drm.index);
+    drm_debugfs_path(&i915->drm, "i915_fake", f->path, sizeof(f->path));
     err = debugfs_create_file(f->path, 0600u, &fake_file_ops, fake_file_open, f);
     if (err < 0) {
         klog(KLOG_ERR, "i915", "fake: %s: error %d", f->path, (int)err);
@@ -1011,6 +1055,8 @@ static struct i915_fake *i915_fake_create(struct i915_hw *hw)
     for (i = 0; i < sizeof(imr) / sizeof(imr[0]); i++) {
         R(f, imr[i]) = 0xffffffffu;
     }
+    R(f, GEN6_RP_STATE_CAP) = FAKE_RP_STATE_CAP;
+    R(f, GEN6_RPSTAT1) = ((FAKE_RP_STATE_CAP >> 16) & 0xffu) << HSW_CAGF_SHIFT;
     fake_reset(f, GEN6_GRDOM_FULL);
     f->light = 1;
     hw->ops = &fake_ops;

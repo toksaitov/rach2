@@ -45,7 +45,7 @@ command as it is handed over, without reading batches; its message is a
 real MSI of the edu function; and it has no stolen memory and nothing
 behind its aperture.
 Its file
-.Pa /sys/kernel/debug/dri/N/i915_fake
+.Pa /sys/kernel/debug/dri/DEVICE/i915_fake
 injects faults, as
 .Xr debugfs 5
 describes.
@@ -161,7 +161,7 @@ Mode setting is not yet served; see above.
 The card node of a bound device.
 .It Pa /dev/dri/renderD Ns Ar M
 Its render node.
-.It Pa /sys/kernel/debug/dri/N/i915_fake
+.It Pa /sys/kernel/debug/dri/DEVICE/i915_fake
 The fault file of a device bound to the fake chip.
 .El
 .Ss The card in /sys
