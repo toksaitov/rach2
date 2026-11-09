@@ -44,7 +44,8 @@ struct pci_virtual {
 
 static struct pci_virtual pci_virtuals[SYSFS_PCI_VIRTUAL_MAX];
 
-/* Linux's UEVENT_BUFFER_SIZE: the most bytes of one uevent. */
+/* Linux's UEVENT_BUFFER_SIZE: the most bytes of one uevent's variables,
+ * from ACTION to SEQNUM; its header, ACTION@DEVPATH, is apart. */
 #define UEVENT_MAX 2048u
 
 /* The number of the last uevent sent. */
@@ -516,18 +517,19 @@ int sysfs_pci_virtual_nth(int n)
     return -1;
 }
 
-/* A uevent being built: its bytes and their count, and whether one did not
- * fit. */
+/* A uevent being built: its bytes and their count, the most it may hold,
+ * and whether one did not fit. */
 struct uevent_msg {
     char *buf;
     uint32_t len;
+    uint32_t cap;
     int full;
 };
 
 /** Append the `n` bytes at `s` to `m`. */
 static void ue_put(struct uevent_msg *m, const char *s, uint32_t n)
 {
-    if (m->full || n > UEVENT_MAX - m->len) {
+    if (m->full || n > m->cap - m->len) {
         m->full = 1;
         return;
     }
@@ -577,14 +579,17 @@ int32_t sysfs_uevent_path(const char *path, const char *subsystem, const char *a
                           const char *env, const char *vars, uint32_t vars_len)
 {
     struct uevent_msg m;
+    uint32_t head;
 
-    m.buf = kmalloc(UEVENT_MAX);
+    path += 4; /* "/sys" */
+    head = (uint32_t)k_strlen(action) + 1 + (uint32_t)k_strlen(path) + 1;
+    m.buf = kmalloc(head + UEVENT_MAX);
     if (!m.buf) {
         return -ENOMEM;
     }
     m.len = 0;
+    m.cap = head + UEVENT_MAX;
     m.full = 0;
-    path += 4; /* "/sys" */
     ue_str(&m, action);
     ue_str(&m, "@");
     ue_str(&m, path);
