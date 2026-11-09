@@ -10,6 +10,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = Path(__file__).resolve().parent
 WINE_SUMMARY = r"%s: (\d+) tests executed \((\d+) marked as todo, (\d+) as flaky, (\d+) failures?\), (\d+) skipped"
@@ -31,28 +32,37 @@ STALL = "dxgi.c:8040: Test marked todo: d3d10: test 2: Got unexpected present co
 
 
 def run_command(argv, env, log, stop_at=None):
-    """Log every byte, return the exit and a matched progress marker, and reap the child."""
+    """Wait for the command itself, retaining output even if a descendant keeps it open."""
     stopped = False
-    proc = subprocess.Popen(argv, env=env, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, start_new_session=True)
-    CHILDREN.add(proc)
-    try:
-        with log.open("wb") as dest:
-            for line in proc.stdout:
-                dest.write(line)
-                dest.flush()
-                if stop_at and stop_at.encode() in line:
-                    stopped = True
-                    os.killpg(proc.pid, signal.SIGKILL)
-                    break
-        proc.wait()
-        return proc.returncode, stopped
-    finally:
-        if proc.poll() is None:
-            os.killpg(proc.pid, signal.SIGKILL)
+    with log.open("wb") as dest:
+        proc = subprocess.Popen(argv, env=env, stdout=dest,
+                                stderr=subprocess.STDOUT, start_new_session=True)
+        CHILDREN.add(proc)
+        try:
+            if stop_at:
+                marker = stop_at.encode()
+                pending = b""
+                with log.open("rb") as source:
+                    while proc.poll() is None:
+                        chunk = source.read()
+                        pending = pending + chunk
+                        if marker in pending:
+                            stopped = True
+                            os.killpg(proc.pid, signal.SIGKILL)
+                            break
+                        pending = pending[-len(marker):]
+                        # Poll output; elapsed time decides no verdict.
+                        time.sleep(0.02)
             proc.wait()
-        proc.stdout.close()
-        CHILDREN.discard(proc)
+            (log.with_suffix(log.suffix + ".exit.json")).write_text(
+                json.dumps({"pid": proc.pid, "exit": proc.returncode,
+                            "progress": stopped}) + "\n")
+            return proc.returncode, stopped
+        finally:
+            if proc.poll() is None:
+                os.killpg(proc.pid, signal.SIGKILL)
+                proc.wait()
+            CHILDREN.discard(proc)
 
 
 def summaries(text, expression):
@@ -75,7 +85,7 @@ def main():
     for key in ("PROTON_USE_WINED3D", "VKD3D_TEST_FILTER", "VKD3D_TEST_EXCLUDE", "VKD3D_TEST_MATCH", "VKD3D_FEATURE_LEVEL", "VKD3D_SHADER_MODEL"):
         env.pop(key, None)
     env.update(GALLIUM_DRIVER="llvmpipe", LIBGL_ALWAYS_SOFTWARE="1",
-               WINEDEBUG="-all,err+all", DXVK_LOG_LEVEL="info", VKD3D_DEBUG="info",
+               WINEDEBUG="-all,err+all,warn+winstation", DXVK_LOG_LEVEL="info", VKD3D_DEBUG="info",
                MESA_VK_IGNORE_CONFORMANCE_WARNING="1", PROTON_USE_WOW64="1",
                SteamGameId="2693", DXVK_LOG_PATH=str(out),
                PROTON_LOG="0" if family == "wine" else "1",
