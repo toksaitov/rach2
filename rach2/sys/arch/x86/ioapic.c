@@ -11,6 +11,13 @@
  *
  * The select register is shared by every access, so each access takes the
  * pair with interrupts off, as configuration mechanism #1 does.
+ *
+ * While an interrupt remapper is in place, an entry's high half names an
+ * entry of the remapper's table in place of the destination: its index in
+ * bits 63:49 and the format in bit 48 (VT-d specification, 5.1.5.1). The
+ * low half is the same in both formats, since the delivery is fixed and
+ * the destination physical, whose zero bits 10:8 and 11 the remapped
+ * format asks for there.
  */
 
 #include "ioapic.h"
@@ -41,12 +48,18 @@ struct ioapic {
 static struct ioapic chips[ACPI_MAX_IOAPICS];
 static int nchips;
 
-/* Where each ISA line was routed: its chip, and the input on it; chip -1
- * for a line not routed. */
+/* Where each ISA line was routed: its chip, the input on it, the local APIC
+ * it goes to, and the remapper's entry or -1; chip -1 for a line not
+ * routed. */
 static struct {
     int chip;
     uint32_t input;
+    uint8_t dest;
+    int handle;
 } lines[16];
+
+/* The interrupt remapper in place, or NULL. */
+static const struct ioapic_remap *remap;
 
 /** Read the internal register `reg` of `c` through its select register and
  * window. */
@@ -79,6 +92,7 @@ int ioapic_init(const struct acpi_info *a)
     nchips = 0;
     for (i = 0; i < 16; i++) {
         lines[i].chip = -1;
+        lines[i].handle = -1;
     }
     for (i = 0; i < a->nioapics; i++) {
         struct ioapic *c = &chips[nchips];
@@ -115,8 +129,8 @@ int ioapic_init(const struct acpi_info *a)
 int ioapic_route_line(int line, int pci, uint8_t vector, uint8_t dest)
 {
     struct acpi_route r;
-    uint32_t low;
-    int i;
+    uint32_t low, high;
+    int i, handle = -1;
 
     if (line < 0 || line > 15 || acpi_isa_route(acpi_get(), line, pci, &r) != 0) {
         return -1;
@@ -128,11 +142,21 @@ int ioapic_route_line(int line, int pci, uint8_t vector, uint8_t dest)
             continue;
         }
         low = vector | (r.low ? RTE_LOW_ACTIVE : 0u) | (r.level ? RTE_LEVEL : 0u);
+        high = (uint32_t)dest << 24;
+        if (remap != NULL && (handle = remap->map(c->id, low, high, &high)) < 0) {
+            klog(KLOG_WARN, "ioapic", "route: line %d has no remapping entry", line);
+            return -1;
+        }
         /* The destination first, while the entry is still masked. */
-        reg_write(c, IOAPIC_REG_TABLE + 2u * (r.gsi - c->gsi_base) + 1u, (uint32_t)dest << 24);
+        reg_write(c, IOAPIC_REG_TABLE + 2u * (r.gsi - c->gsi_base) + 1u, high);
         reg_write(c, IOAPIC_REG_TABLE + 2u * (r.gsi - c->gsi_base), low);
+        if (lines[line].handle >= 0 && remap != NULL) {
+            remap->unmap(lines[line].handle);
+        }
         lines[line].chip = i;
         lines[line].input = r.gsi - c->gsi_base;
+        lines[line].dest = dest;
+        lines[line].handle = handle;
         klog(KLOG_DEBUG, "ioapic", "route: line %d to gsi %d, vector %d, %s, active %s", line,
              (int)r.gsi, (int)vector, r.level ? "level" : "edge", r.low ? "low" : "high");
         return 0;
@@ -161,4 +185,51 @@ int ioapic_line_pending(int line)
     }
     return (reg_read(&chips[lines[line].chip], IOAPIC_REG_TABLE + 2u * lines[line].input) &
             RTE_PENDING) != 0;
+}
+
+int ioapic_remap_start(const struct ioapic_remap *ops)
+{
+    int line, back;
+
+    for (line = 0; line < 16; line++) {
+        const struct ioapic *c;
+        uint32_t reg, high;
+
+        if (lines[line].chip < 0) {
+            continue;
+        }
+        c = &chips[lines[line].chip];
+        reg = IOAPIC_REG_TABLE + 2u * lines[line].input;
+        lines[line].handle = ops->map(c->id, reg_read(c, reg), reg_read(c, reg + 1u), &high);
+        if (lines[line].handle < 0) {
+            for (back = 0; back < line; back++) {
+                if (lines[back].chip >= 0 && lines[back].handle >= 0) {
+                    c = &chips[lines[back].chip];
+                    reg_write(c, IOAPIC_REG_TABLE + 2u * lines[back].input + 1u,
+                              (uint32_t)lines[back].dest << 24);
+                    ops->unmap(lines[back].handle);
+                    lines[back].handle = -1;
+                }
+            }
+            return -1;
+        }
+        reg_write(c, reg + 1u, high);
+    }
+    remap = ops;
+    return 0;
+}
+
+void ioapic_remap_stop(void)
+{
+    int line;
+
+    for (line = 0; line < 16; line++) {
+        if (lines[line].chip >= 0 && lines[line].handle >= 0 && remap != NULL) {
+            reg_write(&chips[lines[line].chip], IOAPIC_REG_TABLE + 2u * lines[line].input + 1u,
+                      (uint32_t)lines[line].dest << 24);
+            remap->unmap(lines[line].handle);
+            lines[line].handle = -1;
+        }
+    }
+    remap = NULL;
 }

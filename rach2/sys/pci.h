@@ -222,12 +222,15 @@ void pci_msi_message(uint8_t vector, uint32_t *address, uint32_t *data);
  * log when the device has no MSI capability or one that runs past the end of
  * its configuration space. A device that offers several vectors is told to
  * use one. The architecture's message controller must be ready, and the
- * device a bus master, since a message is a memory write.
+ * device a bus master, since a message is a memory write. While a remapper
+ * is in place (`pci_msi_remap_start`) the message written is its remapped
+ * one, and -1 is also returned when it has no entry to give.
  */
 int pci_msi_enable(const pci_device_t *dev, uint8_t vector);
 
-/** Stop `dev` from sending MSI messages, leaving its address and data as
- * they are; a device with no MSI capability is left alone. */
+/** Stop `dev` from sending MSI messages; a device with no MSI capability is
+ * left alone. A remapped message is rewritten in the compatibility format
+ * and its entry given back; otherwise the address and data stay. */
 void pci_msi_disable(const pci_device_t *dev);
 
 /* The MSI-X capability: its control word's function mask and table size,
@@ -264,6 +267,37 @@ int pci_msix_hold(const pci_device_t *dev);
  * ready and the device a bus master.
  */
 int pci_msix_enable(const pci_device_t *dev, uintptr_t table, uint8_t vector);
+
+/** Disable `dev`'s MSI-X, and give back the remapping entry of the entry
+ * `pci_msix_enable` wrote, which is rewritten in the compatibility format. */
+void pci_msix_disable(const pci_device_t *dev);
+
+/*
+ * An interrupt remapper's way to the messages devices send. `map` takes an
+ * entry of the remapper's table for the compatibility-format message
+ * (address, data) that `pci_msi_message` made for `dev`, and gives the
+ * remapped address and data to write in its place: the entry's handle, or
+ * -1. `unmap` gives a handle's entry back.
+ */
+struct pci_msi_remap {
+    int (*map)(const pci_device_t *dev, uint32_t address, uint32_t data, uint32_t *raddress,
+               uint32_t *rdata);
+    void (*unmap)(int handle);
+};
+
+/**
+ * Send every message enabled through this file, MSI and MSI-X, through
+ * `ops`, those enabled from now on too: each enabled message is rewritten
+ * in the remapped format, by the one write of its address. 0, or -1 when an
+ * entry could not be had, in which case every message is as it was. The
+ * remapper takes compatibility-format messages until this returns.
+ */
+int pci_msi_remap_start(const struct pci_msi_remap *ops);
+
+/** Rewrite every enabled message in the compatibility format, its data
+ * first, and give its entry back; messages enabled from now on are not
+ * remapped. The remapper must take compatibility-format messages. */
+void pci_msi_remap_stop(void);
 
 /**
  * Find the bridge whose secondary bus is `bus`, filling `out`'s place, vendor
