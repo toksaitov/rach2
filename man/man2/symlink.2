@@ -53,7 +53,12 @@ support creation of symbolic links.
 The parent directory must permit writing, and path resolution requires
 search permission on ancestor directories.
 A read-only mount or synthetic namespace returns
-.Er EROFS .
+.Er EROFS ,
+except the directories of
+.Pa /dev
+that
+.Xr mkdir 2
+names, which take a link under the write permission of the parent.
 Writable KRFFS, FAT32, and exFAT mounts return
 .Er EPERM
 because they have no symbolic-link creation operation.

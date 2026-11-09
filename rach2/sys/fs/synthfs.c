@@ -9,6 +9,7 @@
 #include "../display/backlight.h"
 #include "../rfkill.h"
 #include "sysfs.h"
+#include "devtree.h"
 
 /* A path component as a (pointer, length) slice; the path is not modified. */
 struct comp {
@@ -452,6 +453,10 @@ void synth_dir_path(int kind, int pid, int tid, char *out, int cap)
     }
     if (kind == VNODE_SYS_DIR) {
         synth_sys_path(pid, tid, out, cap);
+        return;
+    }
+    if (kind == VNODE_DEV_MADE) {
+        devtree_path(pid, out, cap);
         return;
     }
     if (kind == VNODE_DEV_DIR) {

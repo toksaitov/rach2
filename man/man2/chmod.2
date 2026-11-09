@@ -121,6 +121,9 @@ A pseudoterminal slave under
 .Pa /dev/pts
 stores the low nine permission bits on the terminal, by path or descriptor,
 under the owner-or-root rule.
+A directory or link made under
+.Pa /dev
+stores its permission bits under the same rule.
 Other synthetic objects and descriptors have fixed metadata.
 For these, effective user ID 0 receives success without a change;
 other callers receive

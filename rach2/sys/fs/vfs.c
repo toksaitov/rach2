@@ -19,6 +19,7 @@
 #include "bcache.h"
 #include "dcache.h"
 #include "devfs.h"
+#include "devtree.h"
 #include "fat32.h"
 #include "exfat.h"
 #include "ext2.h"
@@ -894,6 +895,48 @@ static int walk_link(struct vfs_mount *mnt, void *found, const char *rest, char 
     return walk_splice(*linkpath, *target, tlen, rest);
 }
 
+/**
+ * Follow the text link `found` that a type taking the rest of a path found
+ * in the part of it from `from` to `link_end`, as `walk_link` does with the
+ * rest of the path, from `link_end` on. The walk goes on from where it
+ * handed that part over, so a relative target, which Linux reads from the
+ * link's directory, gets the part before the link's name in front of it,
+ * as a link made under /dev, /dev/char/13:64 to ../input/event0, needs.
+ * Returns what `walk_link` does, or -ENAMETOOLONG.
+ */
+static int walk_rest_link(struct vfs_mount *mnt, void *found, const char *from,
+                          const char *link_end, char **linkpath, char **target, int *links)
+{
+    char dir[256];
+    const char *s = link_end;
+    uint32_t dlen, tl;
+    int rc;
+
+    while (s > from && s[-1] == '/') {
+        s--;
+    }
+    while (s > from && s[-1] != '/') {
+        s--;
+    }
+    dlen = (uint32_t)(s - from);
+    if (dlen >= sizeof(dir)) {
+        node_put(mnt, found);
+        return -ENAMETOOLONG;
+    }
+    k_memcpy(dir, from, dlen);
+    rc = walk_link(mnt, found, link_end, linkpath, target, links);
+    if (rc != 0 || dlen == 0) {
+        return rc;
+    }
+    tl = (uint32_t)k_strlen(*linkpath);
+    if (dlen + tl + 1 > VFS_PATH_MAX) {
+        return -ENAMETOOLONG;
+    }
+    k_memmove(*linkpath + dlen, *linkpath, tl + 1);
+    k_memcpy(*linkpath, dir, dlen);
+    return 0;
+}
+
 static int walk_exe(struct vfs_ref *cur, void *found, int locked, struct vfs_name **entry);
 static int synth_object_link(const struct vpath *vp);
 static int walk_object(struct vfs_ref *cur, void *found, const char *rest, char **linkpath,
@@ -1338,6 +1381,8 @@ begin:
                 jumped = 1;
                 walk_name_text(&name, from, p);
                 rc = walk_object(&cur, found, p, &linkpath, &target, locked);
+            } else if (rc == VFS_LINK && walk_is_link(cur.mnt, found)) {
+                rc = walk_rest_link(cur.mnt, found, from, p, &linkpath, &target, &links);
             } else if (!last_comp && !(flags & VFS_WALK_NOFOLLOW) && walk_is_link(cur.mnt, found)) {
                 if (vp->kind == VNODE_PROC_EXE) {
                     walk_name_text(&name, from, p);
@@ -1347,7 +1392,7 @@ begin:
                     }
                     break;
                 }
-                rc = walk_link(cur.mnt, found, "", &linkpath, &target, &links);
+                rc = walk_rest_link(cur.mnt, found, from, p, &linkpath, &target, &links);
             } else {
                 walk_name_text(&name, from, p);
                 ref_move_node(&cur, found);
@@ -2769,6 +2814,37 @@ static int synth_past_present(const struct vpath *vp)
     return !SYSFS_KEYED(vp->sysent) || sysfs_device_exists(vp->sysent, vp->syskey);
 }
 
+/**
+ * Give `vp`, the classification of the path `full`, the entry root made
+ * under /dev that the path names (devtree.h), when the classifier gave the
+ * path to a device devfs does not have, or to a path past a file that is
+ * not there: VNODE_DEV_MADE with the entry's id in `syskey`. A path in
+ * /dev/pts, a device that is there and a path past a file that is there
+ * keep their classification, and a path that goes on past a made link,
+ * which the walk follows before, is VNODE_ENOENT.
+ */
+static void synth_made(const char *full, struct vpath *vp)
+{
+    int id;
+
+    if (full[0] != 'd' || full[1] != 'e' || full[2] != 'v' || full[3] != '/' ||
+        (full[4] == 'p' && full[5] == 't' && full[6] == 's' &&
+         (full[7] == '\0' || full[7] == '/')) ||
+        (vp->kind != VNODE_DEV && vp->kind != VNODE_ENOTDIR) ||
+        (vp->kind == VNODE_DEV && devfs_stat(vp->name, 0, 0, 0) == 0) ||
+        (vp->kind == VNODE_ENOTDIR && synth_past_present(vp))) {
+        return;
+    }
+    id = devtree_resolve(full + 4, (uint32_t)k_strlen(full + 4));
+    if (id > 0) {
+        vp->kind = VNODE_DEV_MADE;
+        vp->syskey = id;
+        vp->name[0] = '\0';
+    } else if (id == -ENOTDIR) {
+        vp->kind = VNODE_ENOENT;
+    }
+}
+
 /** Whether the synthetic node `vp` is a link the walk follows to the object
  * it refers to, not to a text: /proc/PID/fd/N, which /dev/fd/N, /dev/stdin,
  * /dev/stdout and /dev/stderr are too, and /proc/PID/cwd and root. */
@@ -2800,9 +2876,10 @@ static struct vfs_mount *mount_deep_at(struct vfs_mount *mnt, const char *text, 
 
 /**
  * Whether the part of a path classified so far, the `out` bytes of `full`,
- * names a link the walk follows to its object (`synth_object_link`) and more
- * of the rest, from `p` to `end`, comes after it: VFS_LINK with a new node of
- * the link held in `*node`, 0 when it does not, or -ENOMEM.
+ * names a link the walk follows, to its object (`synth_object_link`) or a
+ * link made under /dev to its text, and more of the rest, from `p` to `end`,
+ * comes after it: VFS_LINK with a new node of the link held in `*node`, 0
+ * when it does not, or -ENOMEM.
  */
 static int synth_link_part(char *full, uint32_t out, const char *p, const char *end, void **node)
 {
@@ -2816,7 +2893,8 @@ static int synth_link_part(char *full, uint32_t out, const char *p, const char *
     }
     full[out] = '\0';
     synth_classify(full, &vp);
-    if (!synth_object_link(&vp)) {
+    synth_made(full, &vp);
+    if (!synth_object_link(&vp) && !(vp.kind == VNODE_DEV_MADE && devtree_is_dir(vp.syskey) == 0)) {
         return 0;
     }
     return synth_take(&vp, node) != 0 ? -ENOMEM : VFS_LINK;
@@ -2907,7 +2985,9 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
     }
     full[out] = '\0';
 
-    kind = synth_classify(full, &vp);
+    synth_classify(full, &vp);
+    synth_made(full, &vp);
+    kind = vp.kind;
     if (kind == VNODE_ENOENT) {
         return -ENOENT;
     }
@@ -3007,11 +3087,12 @@ static int synth_lookup_rest(struct vfs_mount *mnt, const char *rest, uint32_t l
 
 /** The `getattr` of the synthetic types, what the resolver needs of a node:
  * whether it is a directory or a link it follows, /proc/<pid>/exe, cwd and
- * root and /dev/log, and the mode the search rule reads (0755 under /dev,
- * 0555 under /proc and /sys, all root's). A device's link under /sys is
- * classified rather than resolved, as /proc/self is, so to the resolver it
- * is the directory it leads to. The system call layer reports the full
- * attributes itself. */
+ * root, /dev/log and a link made under /dev, and the mode the search rule
+ * reads (0755 under /dev, 0555 under /proc and /sys, all root's, and an
+ * entry's own mode and owner made under /dev, which is -ENOENT once it is
+ * removed). A device's link under /sys is classified rather than resolved,
+ * as /proc/self is, so to the resolver it is the directory it leads to. The
+ * system call layer reports the full attributes itself. */
 static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 {
     const struct synth_node *sn = node;
@@ -3025,6 +3106,18 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
         kind == VNODE_PROC_ACPI_DIR || kind == VNODE_PROC_FS_DIR || kind == VNODE_PROC_SYS_DIR;
 
     k_memset(st, 0, sizeof(*st));
+    if (kind == VNODE_DEV_MADE) {
+        struct devtree_attr a;
+
+        if (devtree_attr(sn->vp.syskey, &a) != 0) {
+            return -ENOENT;
+        }
+        st->mode = a.mode;
+        st->nlink = a.nlink;
+        st->uid = a.uid;
+        st->gid = a.gid;
+        return 0;
+    }
     if (is_dir) {
         st->mode = VFS_S_IFDIR | (mnt == mounts[1] ? 0755u : 0555u);
     } else if (kind == VNODE_PROC_EXE || kind == VNODE_PROC_CWD || kind == VNODE_PROC_ROOT ||
@@ -3038,7 +3131,8 @@ static int synth_getattr(struct vfs_mount *mnt, void *node, struct vfs_stat *st)
 }
 
 /** The `readlink` of the synthetic types, the target of a link as text:
- * /dev/log's, fixed; /proc/<pid>/exe's, the path of the program the process
+ * /dev/log's, fixed; a link's made under /dev, as it was written;
+ * /proc/<pid>/exe's, the path of the program the process
  * runs (`procfs_readlink_exe`); and /proc/<pid>/cwd's and root's, the paths
  * of its directories (`procfs_readlink_dir`). -ENOENT for a process that is
  * gone, -EINVAL for a node that is no link. The resolver goes on from exe's
@@ -3051,6 +3145,11 @@ static int synth_readlink(struct vfs_mount *mnt, void *node, char *buf, uint32_t
     int pid;
 
     (void)mnt;
+    if (sn->vp.kind == VNODE_DEV_MADE) {
+        int n = devtree_readlink(sn->vp.syskey, buf, cap);
+
+        return n > (int)cap ? (int)cap : n;
+    }
     if (sn->vp.kind == VNODE_DEV_LINK) {
         uint32_t n = (uint32_t)k_strlen(SYNTH_DEV_LOG_TARGET);
 
