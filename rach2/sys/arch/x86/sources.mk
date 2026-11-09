@@ -4,10 +4,12 @@
 # serial port and the PS/2 devices; and the files outside arch/ that only a
 # PC build compiles: ATA, VGA, the framebuffer console, and the Sound
 # Blaster 16 with its DMA controller. ACPI's files are sys/acpi/sources.mk's,
-# and the PC's display drivers sys/drm/pc.mk's.
+# the PC's display drivers sys/drm/pc.mk's, and the Intel graphics driver's
+# sys/drm/i915/sources.mk's.
 
 include sys/acpi/sources.mk
 include sys/drm/pc.mk
+include sys/drm/i915/sources.mk
 
 PC_C_SRC = sys/arch/x86/boot.c \
     sys/arch/x86/mbinfo.c \
@@ -54,4 +56,5 @@ PC_C_SRC = sys/arch/x86/boot.c \
     sys/audio/dma.c \
     sys/audio/sb16.c \
     $(DRM_PC_C_SRC) \
+    $(I915_C_SRC) \
     $(ACPI_C_SRC)
