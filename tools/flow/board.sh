@@ -18,6 +18,7 @@
 #        board.sh archive [M]
 #        board.sh milestones
 #        board.sh watch [FILE]
+#        board.sh move N [AFTER]
 #
 # A milestone is a GitHub milestone, and its description names its branch on
 # its first line that begins `Branch:`, as `Branch: NAME`; backquotes and
@@ -45,8 +46,13 @@
 # whose description names a branch, with no parent and no open blocker, not
 # labelled `owner`, labelled `owner-only` only when this account is OWNER,
 # and labelled `linux-host` only when this account can build the GNU layer.
-# They are in the board's order, whatever their milestones, so that the tasks
-# of every open milestone are one queue whose order the manager sets.
+# An issue labelled `owner-only` is nearly always a step on the Lenovo, which
+# one task works at a time, so `next` leaves it out while the Lenovo's lock,
+# `build/flow/lenovo` of the main working tree as the machine skill says, is
+# held; a loop of the owner's then takes other work instead of waiting for
+# the machine. The tasks are in the board's order, whatever their milestones,
+# so that the tasks of every open milestone are one queue whose order the
+# manager sets with `move`.
 # `gh project item-list` does not return that order, so the query asks for
 # the items by position.
 #
@@ -99,6 +105,10 @@
 # to this account, closes N with COMMENT and sets it Done. It refuses, naming
 # them, while a subtask of N is open, since the manager may add one to a task
 # that is being worked.
+#
+# `move N [AFTER]` puts N's card right after AFTER's on the board, or first
+# when AFTER is not given; the board's order is the order in which `next`
+# offers tasks, and the manager sets it with this.
 #
 # `card M PARENT TITLE` files an issue TITLE in milestone M, a sub-issue of
 # PARENT unless PARENT is `-`, assigned to OWNER and put on the board in
@@ -358,17 +368,52 @@ login()
     }
 }
 
+# lenovo_held: succeed when the Lenovo's lock is held, as a directory
+# `build/flow/lenovo` in the main working tree of this clone.
+lenovo_held()
+{
+    held_common=$(git rev-parse --path-format=absolute --git-common-dir 2> /dev/null) ||
+        return 1
+    [ -d "$held_common/../build/flow/lenovo" ]
+}
+
 next()
 {
     login
     read_board
-    printf '%s\n' "$board" | awk -F '\t' -v me="$me" -v owner="$OWNER" -v host="$host" "$LIB"'
+    busy=0
+    if [ "$me" = "$OWNER" ] && lenovo_held; then busy=1; fi
+    printf '%s\n' "$board" | awk -F '\t' -v me="$me" -v owner="$OWNER" -v host="$host" -v busy="$busy" "$LIB"'
         $4 != "OPEN" || $2 != "Ready" || $6 != "" || $7 > 0 || $8 != "" { next }
         $10 != "OPEN" || $11 == "" || has($5, "owner") { next }
-        has($5, "owner-only") && me != owner { next }
+        has($5, "owner-only") && (me != owner || busy == 1) { next }
         has($5, "linux-host") && host != 1 { next }
         { print $9 "\t" NR "\t" $3 "\t" $12 }' |
         sort -n -k 2,2 | cut -f 3-
+}
+
+# move N [AFTER]: put N's card right after AFTER's, or first.
+move()
+{
+    move_item=$(item "$1") && [ -n "$move_item" ] || {
+        echo "board: #$1: it is not on the board" >&2
+        exit 1
+    }
+    move_after=
+    if [ -n "$2" ]; then
+        move_after=$(item "$2") && [ -n "$move_after" ] || {
+            echo "board: #$2: it is not on the board" >&2
+            exit 1
+        }
+    fi
+    gh api graphql -f p="$(id_of project)" -f i="$move_item" \
+        ${move_after:+-f a="$move_after"} -f query='
+        mutation($p: ID!, $i: ID!, $a: ID) {
+            updateProjectV2ItemPosition(input: {projectId: $p, itemId: $i,
+                afterId: $a}) { clientMutationId } }' > /dev/null || {
+        echo "board: #$1: cannot move its card" >&2
+        exit 1
+    }
 }
 
 # finished N: when issue N is closed, set it Done, say so and succeed;
@@ -855,5 +900,6 @@ case "$1" in
     archive) archive "$2" ;;
     milestones) milestones ;;
     watch) watch "$2" ;;
+    move) [ -n "$2" ] || exit 2; board_ids=$(ids); move "$2" "$3" ;;
     *) sed -n 's/^# Usage: /usage: /p; s/^#        /       /p' "$0" >&2; exit 2 ;;
 esac

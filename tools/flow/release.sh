@@ -80,10 +80,10 @@
 #   runs again what its `again` line named; a SHA that a rebase onto master
 #   made keeps it, as -r keeps any pass. The native cases run on every
 #   install, so the Lenovo's pass is not kept. Without -r everything runs.
-# * -p: prepare, which the manager runs at the end of a milestone, before the
-#   release, to find what would stop the release at its setup. It reads no
-#   record and writes none, and touches neither GitHub's runners nor the
-#   Lenovo. Three parts run at once. wsl: in a copy on the testing host,
+# * -p: prepare, which the manager runs at the end of a milestone or a stack,
+#   before the release, to find what would stop the release at its setup. It
+#   reads no record and writes none, and touches neither GitHub's runners nor
+#   the Lenovo. Three parts run at once. wsl: in a copy on the testing host,
 #   `build/worktrees/prepare` of the owner's, made new from a worktree of SHA
 #   here, it builds both architectures as the full run does and then runs
 #   `tests/run style host` on both. windows: Windows' preparation as the

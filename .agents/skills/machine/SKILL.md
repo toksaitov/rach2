@@ -9,7 +9,7 @@ The Hardware section of `AGENTS.md` says what may be written and when the owner 
 
 ## Targets
 
-* This work is the owner's: only the owner's sessions on the Mac mini, the manager and its worker sessions among them, write a disk or work on the Lenovo. `tools/flow/release.sh`, which the manager starts, installs on the Lenovo each commit that passed on every machine.
+* This work is the owner's: only the owner's sessions on the Mac mini, the manager and its worker sessions among them, write a disk or work on the Lenovo. A task that needs the Lenovo is still open to every loop, as Handing over a step below says. `tools/flow/release.sh`, which the manager starts, installs on the Lenovo each commit that passed on every machine.
 * The owner has authorized writes to two targets: the development flash drive on the Mac mini, and any disk of the Lenovo. Both hold nothing but this work, and both are a sandbox: write them as the work needs, without asking and without naming them to the owner first, and take no backup, restore or hash for their safety. Report afterwards what was written and where. Any other target, such as a second flash drive, another machine or hardware of another kind, needs the owner's authorization.
 * The Mac mini's internal SSD, an APPLE SSD AP0512Z with serial `0ba02f1140bcba20`, is never written.
 * A check of the target runs before every write, in place of asking. A target on the Mac must be external, removable and on USB, and must report the flash drive's serial and size: a SanDisk 3.2Gen1 of 61,524,148,224 bytes with USB serial `00014101091624031318`. Its device node changes between connections, so the serial and the size identify it. A target that is internal, or that reports the SSD's serial, is refused and the write does not run.
@@ -26,6 +26,14 @@ The Hardware section of `AGENTS.md` says what may be written and when the owner 
 ## Taking the Lenovo
 
 * One task works the Lenovo at a time, since several milestones may be open at once. Before its first boot or write, a task takes the machine with `mkdir "$(git rev-parse --git-common-dir)/../build/flow/lenovo"` and writes its issue number to `issue` in that directory; when the mkdir fails, another task holds it, named in that file, and this one waits for it with the tool's own notice, never taking it. The task removes the directory once the release is back in both slots.
+
+* The manager takes the lock in the same way for the Lenovo steps of its own: a checkpoint's trial boot, with `checkpoint NN` in `issue`, and a release, with `release M`, from before `release.sh` starts until it ends.
+* Several prepared steps that need the same kernel and take neither the screen, the GPU nor sound may share one boot: the holder runs them in turn and records each result on its own task. A step that takes the screen or the GPU, graphics among them, has a boot to itself.
+
+## Handing over a step
+
+* A loop that cannot reach the Lenovo, a team member's, does its task up to the step on the Lenovo and then prepares that step whole: it pushes the commit; says where the built kernel, root or trial root is, or the one command that builds it; gives the commands in order, what to read and what passes; and, for code that has never run on the Lenovo, adds the readiness note that Trial boots below asks for. It writes all of this as one comment on the task and hands the task back with `sh tools/flow/board.sh release N owner-only`.
+* `board.sh next` offers an `owner-only` task to the owner's loops only while the lock is free. The loop that takes it takes the lock, runs the step as written, and finishes the task, with whatever code the step's result needs.
 
 ## Trial boots
 
