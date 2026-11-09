@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.vgpu",
-  "summary": "Virtio GPU virgl 3D and device loss",
+  "summary": "Virtio GPU virgl 3D, device loss, blobs and context init",
   "cases": [
     {
       "case_id": "machine.vgpu.virgl",
@@ -153,6 +153,132 @@
         "plan": "none",
         "class": "layout",
         "reason": "This case requires QEMU virtio-vga-gl and resets that virtual GPU; it uses the guest probe runner under the virgl display profile"
+      }
+    },
+    {
+      "case_id": "machine.vgpu.blob",
+      "behavior": "Blobs of host memory mapped from the host-visible region, written and read back through a host copy and a transfer, and CONTEXT_INIT with each offered capability set, whose polled ring sends its fence event",
+      "units": [
+        "vgpuprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 268435456,
+          "firmware": "direct",
+          "devices": [],
+          "boot_options": [],
+          "display": "venus"
+        },
+        "hosts": [
+          "linux"
+        ]
+      },
+      "execution": {
+        "program": "vgpuprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "any",
+        "isolation": [],
+        "children": "reaped",
+        "cleanup": "the probe removes what it made"
+      },
+      "assertions": [
+        {
+          "assertion_id": "blob-params",
+          "checks": "Blobs, host-visible memory, context init and the capability sets of virgl, virgl2 and Venus are offered",
+          "source": "program"
+        },
+        {
+          "assertion_id": "context-init",
+          "checks": "A context of each offered capability set, Venus among them, is created with one polled ring, whose empty submission comes back as a fence event, and a second CONTEXT_INIT is refused",
+          "source": "program"
+        },
+        {
+          "assertion_id": "blob",
+          "checks": "A mappable blob of host memory is created, mapped and written, and its 64 bytes, copied on the host to a buffer with guest backing, read back unchanged through a transfer",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 402653184,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0,
+        "cpu_class": "light"
+      },
+      "prepare": [
+        {
+          "name": "vgpuprobe",
+          "node": "tests/vgpuprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
+        "reason": "This case requires QEMU virtio-vga-gl with Venus, blobs and host-visible memory; it uses the guest probe runner under the venus display profile"
       }
     }
   ]
