@@ -1,0 +1,20 @@
+host: qemu /opt/rach2-nctx/qemu-nctx, render node /dev/dri/renderD128
+drm: drm_renderer_capset:159: c=(nil)
+gl_version 45 - core profile enabled
+failed to initialize drm rendererqemu-system-x86_64: virgl could not be initialized: -19
+[    7.078468] [drm:virtio_gpu_init.cold [virtio_gpu]] *ERROR* timed out waiting for cap set 0
+guest: [    2.039756] [drm] pci: virtio-gpu-pci detected at 0000:00:01.0
+guest: [    2.040258] [drm] Host memory window: 0xe0000000 +0x10000000
+guest: [    2.040300] [drm] features: +virgl +edid +resource_blob +host_visible
+guest: [    2.040312] [drm] features: +context_init
+guest: [    2.044204] [drm] number of scanouts: 1
+guest: [    2.044242] [drm] number of cap sets: 3
+guest: [    7.078468] [drm:virtio_gpu_init.cold [virtio_gpu]] *ERROR* timed out waiting for cap set 0
+guest: [   12.200304] [drm] Initialized virtio_gpu 0.1.0 for 0000:00:01.0 on minor 0
+guest: [   12.233921] virtio-pci 0000:00:01.0: [drm] fb0: virtio_gpudrmfb frame buffer device
+guest: context init     : yes
+guest: cap sets         : 0
+[   15.304107] reboot: Power down
+qemu-system-x86_64: ../src/dispatch_common.c:872: epoxy_get_proc_address: Assertion `0 && "Couldn't find current GLX or EGL context.\n"' failed.
+Aborted
+session: capsets: status 0

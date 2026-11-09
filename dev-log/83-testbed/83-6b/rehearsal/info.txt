@@ -1,0 +1,18 @@
+22:18:05 check: info 
+nctxcheck: info: egl vendor: Mesa Project
+nctxcheck: info: egl version: 1.5
+nctxcheck: info: render node: /dev/dri/renderD128
+nctxcheck: info: gl vendor: Mesa
+nctxcheck: info: gl renderer: virgl (LLVMPIPE (LLVM 19.1.7, 256 bits))
+nctxcheck: info: gl version: OpenGL ES 3.2 Mesa 26.1.6
+nctxcheck: info: native fence: yes
+nctxcheck: info: robustness: no
+nctxcheck: info: result: pass
+22:18:06 check: info: status 0
+host: no i915 events here
+host: dmesg:
+host: qemu's log:
+GLSL feature level 450
+host: guest running
+guest: dmesg:
+session: info: status 0

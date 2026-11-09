@@ -1,0 +1,25 @@
+22:05:06 setup: from /srv/nctx/in
+mesa-nctx.tar.xz: OK
+virglrenderer-nctx.tar.xz: OK
+qemu-nctx.tar.xz: OK
+packages added or changed:
+> busybox-static 1:1.37.0-6+b9
+kernel: 6.12.115+deb13.1-amd64
+cmdline: BOOT_IMAGE=/run2/vmlinuz root=PARTUUID=f640712e-b236-4c5a-b7d8-1b149d598ec0 ro ds=nocloud modprobe.blacklist=ath9k,snd_hda_intel panic=10 intel_iommu=off
+shmem_enabled: always within_size advise [never] deny force
+MemTotal:       16272968 kB
+MemAvailable:   15673488 kB
+SwapTotal:             0 kB
+cpus: 4
+00:02.0 VGA compatible controller [0300]: Intel Corporation Haswell-ULT Integrated Graphics Controller [8086:0a16] (rev 0b)
+	Subsystem: Lenovo Device [17aa:380c]
+	Kernel driver in use: i915
+	Kernel modules: i915
+render node: /dev/dri/renderD128
+qemu: QEMU emulator version 11.1.2
+qemu: drm_native_context=<bool>
+kvm: yes
+i915 events: i915_gem_object_create i915_vma_bind i915_vma_unbind i915_gem_evict i915_gem_evict_node i915_gem_evict_vm i915_gem_shrink i915_request_add 
+/dev/sda5        32G   28G  2.6G  92% /
+/dev/sda5        32G   28G  2.6G  92% /
+session: setup: status 0

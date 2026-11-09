@@ -1,0 +1,10 @@
+22:18:11 check: submit 1000
+nctxcheck: submit: 1000 draws, 15 fences waited, 0.79 s, last 231,3,128
+nctxcheck: submit: result: pass
+22:18:13 check: submit: status 0
+host: no i915 events here
+host: dmesg:
+host: qemu's log:
+host: guest running
+guest: dmesg:
+session: submit: status 0
