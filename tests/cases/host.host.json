@@ -531,6 +531,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_trial",
+          "checks": "tests/host/i915_trial_hosttest.c binds the Intel graphics driver to the HD 4400's host model as the Lenovo's firmware leaves it, without and with first light, and finds no wait at its bound, no display register or framebuffer GTT entry written, the power well kept, no memory reached but the driver's own and every interrupt source masked, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "icmp",
           "checks": "tests/host/icmp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
