@@ -196,6 +196,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "devmap",
+          "checks": "tests/host/devmap_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "devmap64",
+          "checks": "tests/host/devmap64_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "dhcpc",
           "checks": "tests/host/dhcpc_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1112,7 +1122,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 207
+          "limit": 211
         }
       ],
       "bounds": {
