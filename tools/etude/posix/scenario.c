@@ -1768,6 +1768,7 @@ static uint64_t decl_need(const struct etude_case *c, const struct machine_decl 
     p.memory_bytes = jnum(qp, "memory_bytes");
     p.memory_profile = jtext(qp, "memory_profile");
     p.audio = jtext(qp, "audio");
+    p.display = jtext(qp, "display");
     p.firmware = firmware_of(jtext(qp, "firmware"));
     p.no_i8042 = jbool(qp, "i8042") == 0;
     p.q35 = jtext(qp, "machine") != NULL && strcmp(jtext(qp, "machine"), "q35") == 0;
@@ -1995,6 +1996,7 @@ static enum etude_status make_profile(struct etude_case_machine *m, const char *
     p->devices = m->devices;
     p->boot_options = m->options;
     p->smbios_vendor = jtext(qp, "smbios_vendor");
+    p->display = jtext(qp, "display");
     p->acpi_table =
         jtext(qp, "acpi_table") != NULL ? etude_artifact(c, jtext(qp, "acpi_table")) : NULL;
     p->firmware = firmware_of(firmware);

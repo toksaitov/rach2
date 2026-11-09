@@ -857,6 +857,49 @@ static void rule_audio(const struct rule *r)
     }
 }
 
+/**
+ * Reports a display of the QEMU profile `qemu` that the launcher refuses:
+ * one beside another display device or a USB tablet, or on a machine
+ * without the 8042 that its PS/2 mouse is on.
+ */
+static void known_display(const struct rule *r, const struct json *qemu)
+{
+    const struct json *devices = json_member(qemu, "devices");
+    const struct json *i8042 = json_member(qemu, "i8042");
+    const char *model;
+    size_t i;
+
+    if (qemu == NULL || json_text(qemu, "display") == NULL)
+        return;
+    if (i8042 != NULL && !i8042->integer)
+        finding(r->file, qemu->line,
+                "%s: a display needs the 8042, whose PS/2 mouse is its pointer",
+                json_text(r->c, "case_id"));
+    for (i = 0; devices != NULL && i < devices->count; i++) {
+        model = devices->item[i]->type == JSON_STRING ? devices->item[i]->string
+                                                      : json_text(devices->item[i], "model");
+        if (etude_qemu_display_device(model))
+            finding(r->file, devices->item[i]->line,
+                    "%s: the device %s beside the profile's display", json_text(r->c, "case_id"),
+                    model);
+    }
+}
+
+/**
+ * A QEMU profile's display is its only display device, with the PS/2 mouse
+ * and no USB tablet.
+ */
+static void rule_display(const struct rule *r)
+{
+    const struct json *machines = json_member(r->c, "machines");
+    size_t i;
+
+    known_display(r, json_member(json_member(r->c, "requirements"), "qemu"));
+    for (i = 0; machines != NULL && i < machines->count; i++) {
+        known_display(r, json_member(machines->item[i], "qemu"));
+    }
+}
+
 /** Returns 1 when `list`, an array, has the string `value`. */
 static int listed(const struct json *list, const char *value)
 {
@@ -1335,6 +1378,7 @@ static int qemu_memory(const struct rule *r, const struct json *qemu,
     p.initrd = json_text(qemu, "initrd");
     p.memory_profile = json_text(qemu, "memory_profile");
     p.audio = json_text(qemu, "audio");
+    p.display = json_text(qemu, "display");
     p.memory_bytes = (uint64_t)json_member(qemu, "memory_bytes")->integer;
     p.processors = json_member(qemu, "processors")->integer <= 64
                        ? (unsigned)json_member(qemu, "processors")->integer
@@ -1616,6 +1660,7 @@ static void check_case(const char *file, const struct json *c, const char *root)
     rule_attached(&r);
     rule_captures(&r);
     rule_audio(&r);
+    rule_display(&r);
     rule_steps(&r);
     rule_helper_architecture(&r);
     rule_suspensions(&r);

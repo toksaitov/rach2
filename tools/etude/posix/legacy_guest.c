@@ -340,6 +340,7 @@ static int make_profile(struct legacy_guest *g)
     p->audio = json_text(q, "audio");
     p->audio_backend = json_text(q, "audio_backend");
     p->audio_input = audio_input != NULL ? g->audio_input : NULL;
+    p->display = json_text(q, "display");
     p->firmware = firmware != NULL && strcmp(firmware, "seabios") == 0 ? ETUDE_FIRMWARE_SEABIOS
                                                                        : ETUDE_FIRMWARE_DIRECT;
     p->devices = g->devices;
