@@ -28,7 +28,14 @@ The browser runners, [`runners/webgl.sh`](runners/webgl.sh) and [`runners/video.
     sh tests/graphics/runners/debian.sh video OUT -b firefox h264-1080p.mp4 vp9-1080p.webm
     sh tests/graphics/runners/debian.sh clips
 
-`webgl` and `video` take the profile (`-p`, `virtio-vga`), the CPUs (`-c`, 4) and the memory (`-m`, 8192 MiB) before OUT, and the runner's own options after it; each boots the guest as a Done's conformance run, copies in the runners, and for `webgl` the pinned suite from the GNU layer's cache, and puts the runner's output in OUT with its `status`. `clips` makes the six clips in the build cache of the main clone, `build/cache/graphics-clips`, unless they are there already, and `-t TAR` also writes them as an archive. On Rach2 the same runners are the `webgl` and `video` suites, `tests/run webgl` and `tests/run video`, a case for each chunk or clip, such as `machine.webgl.chromium-webgl2-03` or `machine.video.firefox-av1-1080p` ([Browser runners](#browser-runners)).
+The display and GL runners, [`runners/igt.sh`](runners/igt.sh), [`runners/modetest.sh`](runners/modetest.sh), [`runners/piglit.sh`](runners/piglit.sh) and [`runners/glmark2.sh`](runners/glmark2.sh), run the same way:
+
+    sh tests/graphics/runners/debian.sh igt -p none OUT kms_atomic
+    sh tests/graphics/runners/debian.sh modetest -p std-vga OUT
+    sh tests/graphics/runners/debian.sh piglit OUT all
+    sh tests/graphics/runners/debian.sh glmark2 OUT
+
+A runner's command takes the profile (`-p`, `virtio-vga`), the CPUs (`-c`, 4) and the memory (`-m`, 8192 MiB) before OUT, and the runner's own options after it; each boots the guest as a Done's run, of the performance class for glmark2 and the conformance class for the others, copies in the runners and `igt-76.list`, and what the runner needs: for `webgl` the pinned suite from the GNU layer's cache, for `igt` the IGT stage, which it builds with `make ARCH=x86_64 gnu-igt` when the tree has none, with Debian's `intel-gpu-tools` for its libraries and Linux's sw_sync, which [`debian-ref/sw_sync.sh`](debian-ref/sw_sync.sh) builds as a module from the guest kernel's own source and loads, since Debian's kernel has none (CONFIG_SW_SYNC is not set, and it is a boolean), for `modetest` `drmcapture`, compiled there, and for `piglit` Debian's `piglit`; it installs a package from the snapshot for that boot alone, so that the prepared image stays the one every worktree shares. `igt` and `modetest` run their runner as root, with vkms loaded in the profile `none`, and it puts the runner's output in OUT with its `status`. `clips` makes the six clips in the build cache of the main clone, `build/cache/graphics-clips`, unless they are there already, and `-t TAR` also writes them as an archive. On Rach2 the same runners are the `webgl` and `video` suites, `tests/run webgl` and `tests/run video`, a case for each chunk or clip, such as `machine.webgl.chromium-webgl2-03` or `machine.video.firefox-av1-1080p` ([Browser runners](#browser-runners)), and the others the `igt`, `modetest`, `piglit` and `glmark2` suites, such as `machine.igt.kms_atomic-vkms`, `machine.modetest.std-vga`, `machine.piglit.glsl-1.10` and `machine.glmark2.wayland` ([Display and GL runners](#display-and-gl-runners)).
 
 ## Results
 
@@ -46,7 +53,16 @@ and writes `BROWSER-VERSION-NN.pages`, a line a page in the list's order: `INDEX
 
 and writes `BROWSER-CLIP.plays`, a line a play, `REP WARM TOTAL DROPPED CORRUPTED SECONDS WIDTHxHEIGHT ERROR` (`-` for a count the browser does not give, as Firefox gives no corrupted frames), and `BROWSER-CLIP.decoders`, the decoder's name as the browser gives it. A runner exits 0 when every page or play ran; a failed page is a result, which [`runners/judge.py`](runners/judge.py) compares with the reference's.
 
-The Debian references of the `virtio-vga` profile are stored in [`ref/debian/virtio-vga`](ref/debian/Readme.md), each run's directory with its `record`, `results` and pages or plays files.
+The display and GL runners write the same record, without the browser's lines and with their own: `igt.sh` the IGT stage, the cards, whether `sync/sw_sync` exists, each driver that debugfs's `dri/N/name` names, and the list's length and SHA-256; `modetest.sh` the driver and the count of modes; `piglit.sh` piglit's version, the platform and each part's pattern; `glmark2.sh` its version and the renderer. Each prints one line:
+
+    igt: result: 1 tests, 21 results: pass 14 skip 7 fail 0 other 0
+    modetest: result: 15 modes on 1 connectors: set 15 failed 0
+    piglit: result: gl-1.0 386 results: pass 378 skip 0 fail 5 other 3
+    glmark2: result: 33 scenes: Success 27 Failure 0 Unknown 6 score 890
+
+`igt.sh` writes `TEST.results` for each test program and `piglit.sh` `PART.results` for each part, a line a test or subtest, `NAME RESULT`; `modetest.sh` writes `modes`, a line a mode, `CONNECTOR INDEX NAME REFRESH set WxH CRC` or `... failed`; `glmark2.sh` writes `validations`, `SCENE RESULT`, and `scores`, each scene's frames per second and the score. Each script's header gives the format whole.
+
+The Debian references are stored in [`ref/debian`](ref/debian/Readme.md), a directory for each display profile, each run's directory with its `record`, `results` and the files above.
 
 ## Design
 
@@ -152,9 +168,21 @@ The runs are a Done's conformance runs, `GRAPHICS_CLASS=conformance` with Mesa's
 
 The `webgl` and `video` suites ([tests/cases/machine.webgl.json](../cases/machine.webgl.json), [tests/cases/machine.video.json](../cases/machine.video.json)) run these on Rach2: [`graphics_scenario.c`](../cases/machine/graphics_scenario.c) boots an overlay of the GNU root's disk with the `virtio-vga` profile, 4 CPUs and 8 GiB, logs in as root at the console, unpacks there an archive of the runners, `guest-env.sh` and the references, and for a clip the clips, runs the runner as the test account with the conformance class, runs `judge.py` against the stored reference, and fetches the output. A case is `machine.webgl.BROWSER-webglN-NN`, chunk NN of WebGL N's list, or `machine.video.BROWSER-CODEC-SIZE`; its assertions are `ran`, the runner ran its whole case, and `as-debian`, the judge's pass.
 
+### Display and GL runners
+
+`igt.sh` runs IGT's tests through `igt_runner`, as root, over a named part of [`igt-76.list`](igt-76.list): a line names a test program whole or the subtests a shell pattern matches, which the runner expands against the stage's `subtest-list.txt`, so that both guests run the same subtests by name, and `igt_runner --test-list` runs each subtest in a process of its own and reads the kernel's log. `judge.py results` compares each subtest with the reference's: a pass must pass and a skip must skip, since a skip is the guest's answer about its device, and a failure of Linux's may end as it likes; a subtest the reference has and the run lacks is worse, as is one the run alone has that neither passes nor skips. Dynamic subtests carry the connector's name, as `igt@kms_atomic@test-only@pipe-a-virtual-1`, so Rach2's names must be Linux's. IGT's stage runs in the Debian guest from the same build as Rach2's root, unpacked over `/usr`.
+
+`modetest.sh` lists the card's connectors with `modetest -M DRIVER -c`, by the DRM driver's name, which is how modetest opens a card, and sets each mode of each connected connector in turn with `modetest -s CONNECTOR:#INDEX`, which draws its test pattern into a dumb buffer at the mode's size. modetest then waits on its standard input, which the runner holds on a FIFO while `drmcapture` reads the CRTC's framebuffer back until it is another than the one before; the CRC covers the pattern as the kernel holds it. modetest reports a mode it cannot set on its standard error and waits all the same, so the runner ends it on that line. `judge.py modes` asks for the same modes in the same order, and each that Linux set set here at its size with its CRC. In the Debian guest std-vga gave 15 modes, from 1280x800 to 640x480, every one set.
+
+`piglit.sh` runs parts of piglit's `quick` profile, each a pattern of test names, with a process on each CPU, on the surfaceless EGL platform, which needs no display server; Rach2's root has Xwayland and no Xvfb, and surfaceless runs the same on both sides. `LIBGL_ALWAYS_SOFTWARE=1` gives llvmpipe at once, where EGL would first try the virtio-gpu render node and fail on it. Tests of a window system's front buffer or swaps crash or skip there, on both sides alike. `judge.py results` judges it as it judges IGT.
+
+`glmark2.sh` runs `glmark2-wayland` under the runners' headless Weston, off screen at 1280x800, once with `--validate`, which compares each scene's frame with glmark2's own reference, and once as the benchmark. `judge.py glmark2` asks each scene Linux validated as Success to be a Success; the score is recorded and not judged.
+
+The four suites run these on Rach2 with the same `graphics_scenario.c`. An IGT case is `machine.igt.TEST-PROFILE`, a test program on `vkms` (the profile `none` with `rach2.vkms` on the boot line), `std-vga` or `virtio-vga`, in 4 GiB with 2 CPUs; the KMS, PRIME and sync file programs run on each profile and the sync object programs on `virtio-vga` alone, the one with sync objects. A modetest case is `machine.modetest.PROFILE`, on both architectures, with `drmcapture` of the test image's build put beside the runners. IGT and modetest run as root, which takes the card's master; piglit and glmark2 run as the test account, in 8 GiB with 4 CPUs.
+
 ## Updating
 
-A reference is made again whole when the guest's packages, a runner or a browser switch changes: `debian.sh webgl` with `all` for each browser and version, and `debian.sh video` with every clip for each browser, then each run's output, without its logs, in place of its directory under `ref/debian/virtio-vga`. The video runs are made with no build and at most one other guest on the host, as Browser runners says; each record's `host_load` shows the load. A new clip takes a line of `video.sh`'s table, `video.sh make` in the guest twice to see that it repeats, its line in `clips.sha256` and its cases.
+A reference is made again whole when the guest's packages, a runner or a browser switch changes: `debian.sh webgl` with `all` for each browser and version, and `debian.sh video` with every clip for each browser, then each run's output, without its logs, in place of its directory under `ref/debian/virtio-vga`. The video runs are made with no build and at most one other guest on the host, as Browser runners says; each record's `host_load` shows the load. The display and GL references are made the same way, each command's output without its logs, `results.json` and the runner's own log, in its directory: `debian.sh igt` with no test for `none`, `std-vga` and `virtio-vga` into `ref/debian/PROFILE/igt`, `debian.sh modetest` for `std-vga` and `virtio-vga` into `ref/debian/PROFILE/modetest`, and `debian.sh piglit all` and `debian.sh glmark2` into `ref/debian/virtio-vga/piglit` and `glmark2`. A new IGT subtest takes a line of `igt-76.list`, its references made again and, for a new test program, its cases. A new clip takes a line of `video.sh`'s table, `video.sh make` in the guest twice to see that it repeats, its line in `clips.sha256` and its cases.
 
 ## Limits
 
@@ -162,6 +190,8 @@ A reference is made again whole when the guest's packages, a runner or a browser
 * `venus` needs the udmabuf module, which a restart of WSL unloads until root loads it again; `grep '^udmabuf ' /proc/modules` says whether it is loaded.
 * On Rach2 `drmcapture` needs a DRM CRTC with a valid mode and a framebuffer; an output without a framebuffer has nothing to capture.
 * The Debian guest's packages come from the snapshot of one date; a newer reference takes a new date in `debian-ref/image` and a new `prepare`.
+* IGT's tests are built for x86-64 alone, on an x86-64 Linux host, so the `igt` suite runs there alone ([IGT's tests](../../vendor/gnu/Readme.md#igts-tests)). Rach2 has no `dri/N/name` in debugfs, so its IGT records name no driver.
+* Debian's sw_sync is Linux's code built as a module for the boot, not the kernel's built-in; it makes the same `sync/sw_sync` and `sync/info`.
 * The browser suites run on x86-64 and on Linux hosts alone: the references are the Debian guest's on the testing PC under KVM, and on the Mac an x86-64 guest runs under TCG.
 * The pages that time out at the harness's 20 s limit vary from run to run, and so do the frames dropped; the judge allows for both as Browser runners says.
 
