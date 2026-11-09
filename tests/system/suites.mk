@@ -916,6 +916,33 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 	@mkdir -p $(@D)
 	cp "`sh vendor/gnu/fetch.sh --path sed`" $@
 
+# `tests/run webgl`: the WebGL conformance suite, versions 1.0.4 and 2.0.1, in
+# chunks of 250 pages in Chromium and Firefox ESR on the GNU root under the
+# virtio-vga profile, each chunk judged page by page against the Debian
+# reference guest's stored run, as the cases of tests/cases/machine.webgl.json.
+# `tests/run video`: H.264, VP9 and AV1 clips at 720p and 1080p in Chromium and
+# Firefox ESR on the GNU root, the frames shown and dropped and the decoder
+# judged against the Debian reference guest's stored plays, as the cases of
+# tests/cases/machine.video.json. Etude runs both with graphics_scenario
+# (tests/graphics/Readme.md). The cases put on the machine graphics.tar, the
+# runners, the guest's environment and the references, and for a clip
+# clips.tar, which debian.sh makes in the Debian guest when this clone's cache
+# does not hold the clips that clips.sha256 pins; common.sh writes the host's
+# half of each record.
+GRAPHICS_FILES = $(wildcard tests/graphics/runners/*) tests/graphics/guest-env.sh \
+                 $(shell find tests/graphics/ref/debian -type f 2>/dev/null)
+build/tests/cases/graphics/graphics.tar: $(GRAPHICS_FILES)
+	@mkdir -p $(@D)
+	tar -cf $@.tmp -C tests/graphics runners guest-env.sh ref/debian
+	mv $@.tmp $@
+build/tests/cases/graphics/common.sh: tests/graphics/runners/common.sh
+	@mkdir -p $(@D)
+	cp $< $@
+build/tests/cases/graphics/clips.tar: tests/graphics/runners/clips.sha256 tests/graphics/runners/video.sh
+	@mkdir -p $(@D)
+	sh tests/graphics/runners/debian.sh clips -t $@.tmp
+	mv $@.tmp $@
+
 # `tests/run codexapi`: OpenAI's Responses protocol in the C fake API
 # service, proved against the pinned upstream Codex in a fresh home on an
 # isolated GNU Rach2 machine: two turns over a WebSocket, a refused second
