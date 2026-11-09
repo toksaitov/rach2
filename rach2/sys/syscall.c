@@ -2627,10 +2627,16 @@ long sys_syslog(isr_params_t *params)
     }
 }
 
+/* The execution domain of a 32-bit x86 program, personality(2)'s low byte,
+ * under which the x86-64 kernel's uname reports i686, as Linux's
+ * COMPAT_UTS_MACHINE; `setarch i686` and `linux32` set it. */
+#define PER_LINUX32 0x8u
+
 /**
  * uname(2): fill the struct utsname at its argument with the fixed fields of
  * syscall.h, the host and domain names of the caller's UTS namespace and the
- * architecture's name. Returns 0 or -EFAULT.
+ * architecture's name, which on x86-64 is i686 for a process whose
+ * execution domain is PER_LINUX32, whatever its code. Returns 0 or -EFAULT.
  */
 long sys_uname(isr_params_t *params)
 {
@@ -2643,6 +2649,9 @@ long sys_uname(isr_params_t *params)
     uname_field(uts.release, UTS_RELEASE);
     uname_field(uts.version, UTS_VERSION);
     uname_field(uts.machine, ARCH_NAME);
+    if (sizeof(long) > 4u && (current_proc->persona & 0xFFu) == PER_LINUX32) {
+        uname_field(uts.machine, "i686");
+    }
     uname_field(uts.domainname, uts_domainname());
 
     if (copy_to_user(user_uts, &uts, sizeof(uts)) != 0) {

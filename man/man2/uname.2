@@ -47,6 +47,17 @@ on the i686 kernel and
 on the x86-64 one, which
 .Ql uname -m
 prints.
+On the x86-64 kernel a caller whose
+.Xr personality 2
+is
+.Dv PER_LINUX32 ,
+which
+.Ql setarch i686
+and
+.Ql linux32
+set, reads
+.Ql i686 ,
+as on Linux.
 .It Va domainname
 The domain name of the caller's UTS namespace, initially
 .Ql (none) .
@@ -132,6 +143,24 @@ On x86-64
 is call 63;
 .Nm sysinfo
 is 99, and its structure is x86-64's, 112 bytes, its counts 64-bit longs.
+.Pp
+For a program that enters the x86-64 kernel by
+.Ql int $0x80 ,
+which
+.Xr ia32 7
+describes, the kernel runs i386's calls with i386's structures:
+.Nm sysinfo
+writes the 64-byte one, and when the RAM does not fit 32 bits it doubles
+.Va mem_unit ,
+up to the page size, and halves each size with it, as Linux does.
+It also runs i386's old forms of
+.Nm uname :
+.Nm olduname
+(109) writes the first five fields of 65 bytes, without the domain name,
+and
+.Nm oldolduname
+(59) the first five cut to 8 bytes and a null, 9 bytes each.
+The i686 kernel has neither old form.
 .Sh RETURN VALUES
 These functions return 0 on success, or -1 on failure with
 .Va errno

@@ -65,15 +65,6 @@ long ia32_native(const isr_params_t *params, syscall_fn_t fn, void *win, uint32_
 /* The address of a conversion buffer, as a native argument. */
 #define KPTR(p) ((unsigned long)(uintptr_t)(p))
 
-/* Linux's overflow ids, which a 16-bit field gets for an id past it. */
-#define IA32_OVERFLOW_ID 65534u
-
-/* The 16-bit form of the id `id`, as Linux's high2lowuid. */
-static uint16_t id16(uint32_t id)
-{
-    return id > 0xFFFFu ? (uint16_t)IA32_OVERFLOW_ID : (uint16_t)id;
-}
-
 /* The old 16-bit encoding of the device number `dev`, which the kernel
  * keeps in Linux's new encoding (major in bits 8 to 19, minor in bits 0 to 7
  * and 20 to 31), as Linux's old_encode_dev. */
@@ -130,8 +121,8 @@ static long put_stat(uintptr_t u, const struct user_stat *st)
     s.st_ino = (uint32_t)st->st_ino;
     s.st_mode = (uint16_t)st->st_mode;
     s.st_nlink = (uint16_t)st->st_nlink;
-    s.st_uid = id16(st->st_uid);
-    s.st_gid = id16(st->st_gid);
+    s.st_uid = IA32_ID16(st->st_uid);
+    s.st_gid = IA32_ID16(st->st_gid);
     s.st_rdev = (uint32_t)st->st_rdev;
     s.st_size = (uint32_t)st->st_size;
     s.st_blksize = (uint32_t)st->st_blksize;
@@ -159,8 +150,8 @@ static long put_old_stat(uintptr_t u, const struct user_stat *st)
     s.st_ino = (uint16_t)st->st_ino;
     s.st_mode = (uint16_t)st->st_mode;
     s.st_nlink = (uint16_t)st->st_nlink;
-    s.st_uid = id16(st->st_uid);
-    s.st_gid = id16(st->st_gid);
+    s.st_uid = IA32_ID16(st->st_uid);
+    s.st_gid = IA32_ID16(st->st_gid);
     s.st_rdev = dev16(st->st_rdev);
     s.st_size = (uint32_t)st->st_size;
     s.st_atime = (uint32_t)st->st_atime;

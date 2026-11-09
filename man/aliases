@@ -790,3 +790,7 @@ utimes 2 gettimeofday
 futimesat 2 gettimeofday
 pselect6_time64 2 select
 ppoll_time64 2 poll
+nice 2 getpriority
+olduname 2 uname
+oldolduname 2 uname
+umount 2 mount

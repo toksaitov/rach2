@@ -1,6 +1,6 @@
 # The system calls
 
-This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 300 calls, the x86-64 kernel 275, and its compat table 317. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
+This table lists the calls the two kernels and the x86-64 kernel's compat table register, one row a call, in name order. A name is the call's constant in `sysnr.h` without its `SYS_` prefix, in lower case. A number is the one a program puts in `eax` before `int 0x80` on i686, or in `rax` before `syscall` on x86-64, and is Linux's number for the call on that architecture. The compat column is the number a 32-bit program puts in `eax` before `int 0x80` on the x86-64 kernel, which is the i386 number and reaches the compat table of i386 calls. `none` marks a call a table does not register, and a number with no handler returns `ENOSYS`. The i686 kernel registers 300 calls, the x86-64 kernel 275, and its compat table 350. On i686 the socket operations, `accept` among them, are also reached through `socketcall`, whose page lists them. [syscalls(2)](../man/man2/syscalls.2) gives the registers that hold the arguments, and each call's page says where the call differs from Linux.
 
 `make syscalls` writes this file from `rach2/sys/arch/i686/systab.c`, `rach2/sys/arch/x86_64/systab.c` and `rach2/sys/arch/x86_64/ia32_systab.c`, with the numbers in `rach2/sys/arch/i686/sysnr.h`, `rach2/sys/arch/x86_64/sysnr.h` and `rach2/sys/arch/x86_64/ia32_sysnr.h`, and `tests/run style` fails when the file differs from what it writes.
 
@@ -11,14 +11,14 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `access` | 33 | 21 | 33 | [access(2)](../man/man2/access.2) |
 | `adjtimex` | 124 | 159 | 124 | [adjtimex(2)](../man/man2/adjtimex.2) |
 | `alarm` | 27 | 37 | 27 | [setitimer(2)](../man/man2/setitimer.2) |
-| `arch_prctl` | none | 158 | none | [arch_prctl(2)](../man/man2/arch_prctl.2) |
+| `arch_prctl` | none | 158 | 384 | [arch_prctl(2)](../man/man2/arch_prctl.2) |
 | `bind` | 361 | 49 | 361 | [bind(2)](../man/man2/bind.2) |
 | `brk` | 45 | 12 | 45 | [brk(2)](../man/man2/brk.2) |
 | `capget` | 184 | 125 | 184 | [capget(2)](../man/man2/capget.2) |
 | `capset` | 185 | 126 | 185 | [capget(2)](../man/man2/capget.2) |
 | `chdir` | 12 | 80 | 12 | [chdir(2)](../man/man2/chdir.2) |
 | `chmod` | 15 | 90 | 15 | [chmod(2)](../man/man2/chmod.2) |
-| `chown` | 182 | 92 | none | [chown(2)](../man/man2/chown.2) |
+| `chown` | 182 | 92 | 182 | [chown(2)](../man/man2/chown.2) |
 | `chown32` | 212 | none | 212 | [chown(2)](../man/man2/chown.2) |
 | `chroot` | 61 | 161 | 61 | [chroot(2)](../man/man2/chroot.2) |
 | `clock_adjtime` | 343 | 305 | 343 | [adjtimex(2)](../man/man2/adjtimex.2) |
@@ -61,7 +61,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `fchdir` | 133 | 81 | 133 | [chdir(2)](../man/man2/chdir.2) |
 | `fchmod` | 94 | 91 | 94 | [chmod(2)](../man/man2/chmod.2) |
 | `fchmodat` | 306 | 268 | 306 | [chmod(2)](../man/man2/chmod.2) |
-| `fchown` | 95 | 93 | none | [chown(2)](../man/man2/chown.2) |
+| `fchown` | 95 | 93 | 95 | [chown(2)](../man/man2/chown.2) |
 | `fchown32` | 207 | none | 207 | [chown(2)](../man/man2/chown.2) |
 | `fchownat` | 298 | 260 | 298 | [chown(2)](../man/man2/chown.2) |
 | `fcntl` | none | 72 | 55 | [fcntl(2)](../man/man2/fcntl.2) |
@@ -92,13 +92,13 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `getcwd` | 183 | 79 | 183 | [chdir(2)](../man/man2/chdir.2) |
 | `getdents` | none | none | 141 | [getdents64(2)](../man/man2/getdents64.2) |
 | `getdents64` | 220 | 217 | 220 | [getdents64(2)](../man/man2/getdents64.2) |
-| `getegid` | none | 108 | none | [getuid(2)](../man/man2/getuid.2) |
+| `getegid` | none | 108 | 50 | [getuid(2)](../man/man2/getuid.2) |
 | `getegid32` | 202 | none | 202 | [getuid(2)](../man/man2/getuid.2) |
-| `geteuid` | none | 107 | none | [getuid(2)](../man/man2/getuid.2) |
+| `geteuid` | none | 107 | 49 | [getuid(2)](../man/man2/getuid.2) |
 | `geteuid32` | 201 | none | 201 | [getuid(2)](../man/man2/getuid.2) |
-| `getgid` | none | 104 | none | [getuid(2)](../man/man2/getuid.2) |
+| `getgid` | none | 104 | 47 | [getuid(2)](../man/man2/getuid.2) |
 | `getgid32` | 200 | none | 200 | [getuid(2)](../man/man2/getuid.2) |
-| `getgroups` | none | 115 | none | [getuid(2)](../man/man2/getuid.2) |
+| `getgroups` | none | 115 | 80 | [getuid(2)](../man/man2/getuid.2) |
 | `getgroups32` | 205 | none | 205 | [getuid(2)](../man/man2/getuid.2) |
 | `getitimer` | 105 | 36 | 105 | [setitimer(2)](../man/man2/setitimer.2) |
 | `getpeername` | 368 | 52 | 368 | [getsockname(2)](../man/man2/getsockname.2) |
@@ -108,18 +108,18 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `getppid` | 64 | 110 | 64 | [getpid(2)](../man/man2/getpid.2) |
 | `getpriority` | 96 | 140 | 96 | [getpriority(2)](../man/man2/getpriority.2) |
 | `getrandom` | 355 | 318 | 355 | [getrandom(2)](../man/man2/getrandom.2) |
-| `getresgid` | none | 120 | none | [getuid(2)](../man/man2/getuid.2) |
+| `getresgid` | none | 120 | 171 | [getuid(2)](../man/man2/getuid.2) |
 | `getresgid32` | 211 | none | 211 | [getuid(2)](../man/man2/getuid.2) |
-| `getresuid` | none | 118 | none | [getuid(2)](../man/man2/getuid.2) |
+| `getresuid` | none | 118 | 165 | [getuid(2)](../man/man2/getuid.2) |
 | `getresuid32` | 209 | none | 209 | [getuid(2)](../man/man2/getuid.2) |
-| `getrlimit` | 76 | 97 | none | [prlimit64(2)](../man/man2/prlimit64.2) |
-| `getrusage` | 77 | 98 | none | [getrusage(2)](../man/man2/getrusage.2) |
+| `getrlimit` | 76 | 97 | 76 | [prlimit64(2)](../man/man2/prlimit64.2) |
+| `getrusage` | 77 | 98 | 77 | [getrusage(2)](../man/man2/getrusage.2) |
 | `getsid` | 147 | 124 | 147 | [getpid(2)](../man/man2/getpid.2) |
 | `getsockname` | 367 | 51 | 367 | [getsockname(2)](../man/man2/getsockname.2) |
 | `getsockopt` | 365 | 55 | 365 | [setsockopt(2)](../man/man2/setsockopt.2) |
 | `gettid` | 224 | 186 | 224 | [getpid(2)](../man/man2/getpid.2) |
 | `gettimeofday` | 78 | 96 | 78 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `getuid` | none | 102 | none | [getuid(2)](../man/man2/getuid.2) |
+| `getuid` | none | 102 | 24 | [getuid(2)](../man/man2/getuid.2) |
 | `getuid32` | 199 | none | 199 | [getuid(2)](../man/man2/getuid.2) |
 | `getxattr` | 229 | 191 | 229 | [getxattr(2)](../man/man2/getxattr.2) |
 | `inotify_add_watch` | 292 | 254 | 292 | [inotify_init(2)](../man/man2/inotify_init.2) |
@@ -132,7 +132,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `ipc` | 117 | none | 117 | [ipc(2)](../man/man2/ipc.2) |
 | `kcmp` | 349 | 312 | 349 | [kcmp(2)](../man/man2/kcmp.2) |
 | `kill` | 37 | 62 | 37 | [kill(2)](../man/man2/kill.2) |
-| `lchown` | 16 | 94 | none | [chown(2)](../man/man2/chown.2) |
+| `lchown` | 16 | 94 | 16 | [chown(2)](../man/man2/chown.2) |
 | `lchown32` | 198 | none | 198 | [chown(2)](../man/man2/chown.2) |
 | `lgetxattr` | 230 | 192 | 230 | [getxattr(2)](../man/man2/getxattr.2) |
 | `link` | 9 | 86 | 9 | [link(2)](../man/man2/link.2) |
@@ -180,9 +180,12 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `nanosleep` | 162 | 35 | 162 | [nanosleep(2)](../man/man2/nanosleep.2) |
 | `newfstatat` | none | 262 | none | [stat(2)](../man/man2/stat.2) |
 | `newselect` | 142 | none | 142 | [select(2)](../man/man2/select.2) |
+| `nice` | none | none | 34 | [getpriority(2)](../man/man2/getpriority.2) |
 | `oldfstat` | none | none | 28 | [stat(2)](../man/man2/stat.2) |
 | `oldlstat` | none | none | 84 | [stat(2)](../man/man2/stat.2) |
+| `oldolduname` | none | none | 59 | [uname(2)](../man/man2/uname.2) |
 | `oldstat` | none | none | 18 | [stat(2)](../man/man2/stat.2) |
+| `olduname` | none | none | 109 | [uname(2)](../man/man2/uname.2) |
 | `open` | 5 | 2 | 5 | [open(2)](../man/man2/open.2) |
 | `openat` | 295 | 257 | 295 | [open(2)](../man/man2/open.2) |
 | `pause` | 29 | 34 | 29 | [sigaction(2)](../man/man2/sigaction.2) |
@@ -238,12 +241,12 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `rt_tgsigqueueinfo` | 335 | 297 | 335 | [rt_sigqueueinfo(2)](../man/man2/rt_sigqueueinfo.2) |
 | `sched_get_priority_max` | 159 | 146 | 159 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_get_priority_min` | 160 | 147 | 160 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
-| `sched_getaffinity` | 242 | 204 | none | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_getaffinity` | 242 | 204 | 242 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_getparam` | 155 | 143 | 155 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_getscheduler` | 157 | 145 | 157 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
-| `sched_rr_get_interval` | 161 | 148 | none | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_rr_get_interval` | 161 | 148 | 161 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_rr_get_interval_time64` | none | none | 423 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
-| `sched_setaffinity` | 241 | 203 | none | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
+| `sched_setaffinity` | 241 | 203 | 241 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_setparam` | 154 | 142 | 154 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_setscheduler` | 156 | 144 | 156 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
 | `sched_yield` | 158 | 24 | 158 | [sched_setscheduler(2)](../man/man2/sched_setscheduler.2) |
@@ -263,28 +266,28 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `set_thread_area` | 243 | none | 243 | [set_thread_area(2)](../man/man2/set_thread_area.2) |
 | `set_tid_address` | 258 | 218 | 258 | [set_thread_area(2)](../man/man2/set_thread_area.2) |
 | `setdomainname` | 121 | 171 | 121 | [uname(2)](../man/man2/uname.2) |
-| `setgid` | none | 106 | none | [setuid(2)](../man/man2/setuid.2) |
+| `setgid` | none | 106 | 46 | [setuid(2)](../man/man2/setuid.2) |
 | `setgid32` | 214 | none | 214 | [setuid(2)](../man/man2/setuid.2) |
-| `setgroups` | none | 116 | none | [setuid(2)](../man/man2/setuid.2) |
+| `setgroups` | none | 116 | 81 | [setuid(2)](../man/man2/setuid.2) |
 | `setgroups32` | 206 | none | 206 | [setuid(2)](../man/man2/setuid.2) |
 | `sethostname` | 74 | 170 | 74 | [uname(2)](../man/man2/uname.2) |
 | `setitimer` | 104 | 38 | 104 | [setitimer(2)](../man/man2/setitimer.2) |
 | `setns` | 346 | 308 | 346 | [unshare(2)](../man/man2/unshare.2) |
 | `setpgid` | 57 | 109 | 57 | [getpid(2)](../man/man2/getpid.2) |
 | `setpriority` | 97 | 141 | 97 | [getpriority(2)](../man/man2/getpriority.2) |
-| `setregid` | none | 114 | none | [setuid(2)](../man/man2/setuid.2) |
+| `setregid` | none | 114 | 71 | [setuid(2)](../man/man2/setuid.2) |
 | `setregid32` | 204 | none | 204 | [setuid(2)](../man/man2/setuid.2) |
-| `setresgid` | none | 119 | none | [setuid(2)](../man/man2/setuid.2) |
+| `setresgid` | none | 119 | 170 | [setuid(2)](../man/man2/setuid.2) |
 | `setresgid32` | 210 | none | 210 | [setuid(2)](../man/man2/setuid.2) |
-| `setresuid` | none | 117 | none | [setuid(2)](../man/man2/setuid.2) |
+| `setresuid` | none | 117 | 164 | [setuid(2)](../man/man2/setuid.2) |
 | `setresuid32` | 208 | none | 208 | [setuid(2)](../man/man2/setuid.2) |
-| `setreuid` | none | 113 | none | [setuid(2)](../man/man2/setuid.2) |
+| `setreuid` | none | 113 | 70 | [setuid(2)](../man/man2/setuid.2) |
 | `setreuid32` | 203 | none | 203 | [setuid(2)](../man/man2/setuid.2) |
-| `setrlimit` | 75 | 160 | none | [prlimit64(2)](../man/man2/prlimit64.2) |
+| `setrlimit` | 75 | 160 | 75 | [prlimit64(2)](../man/man2/prlimit64.2) |
 | `setsid` | 66 | 112 | 66 | [getpid(2)](../man/man2/getpid.2) |
 | `setsockopt` | 366 | 54 | 366 | [setsockopt(2)](../man/man2/setsockopt.2) |
 | `settimeofday` | 79 | 164 | 79 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
-| `setuid` | none | 105 | none | [setuid(2)](../man/man2/setuid.2) |
+| `setuid` | none | 105 | 23 | [setuid(2)](../man/man2/setuid.2) |
 | `setuid32` | 213 | none | 213 | [setuid(2)](../man/man2/setuid.2) |
 | `setxattr` | 226 | 188 | 226 | [getxattr(2)](../man/man2/getxattr.2) |
 | `sgetmask` | none | none | 68 | [sigaction(2)](../man/man2/sigaction.2) |
@@ -318,7 +321,7 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `sync` | 36 | 162 | 36 | [sync(2)](../man/man2/sync.2) |
 | `sync_file_range` | none | none | 314 | [sync(2)](../man/man2/sync.2) |
 | `syncfs` | 344 | 306 | 344 | [sync(2)](../man/man2/sync.2) |
-| `sysinfo` | 116 | 99 | none | [uname(2)](../man/man2/uname.2) |
+| `sysinfo` | 116 | 99 | 116 | [uname(2)](../man/man2/uname.2) |
 | `syslog` | 103 | 103 | 103 | [syslog(2)](../man/man2/syslog.2) |
 | `tee` | 315 | 276 | 315 | [splice(2)](../man/man2/splice.2) |
 | `tgkill` | 270 | 234 | 270 | [kill(2)](../man/man2/kill.2) |
@@ -335,12 +338,13 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `timerfd_gettime64` | 410 | none | 410 | [timerfd(2)](../man/man2/timerfd.2) |
 | `timerfd_settime` | 325 | 286 | 325 | [timerfd(2)](../man/man2/timerfd.2) |
 | `timerfd_settime64` | 411 | none | 411 | [timerfd(2)](../man/man2/timerfd.2) |
-| `times` | 43 | 100 | none | [gettimeofday(2)](../man/man2/gettimeofday.2) |
+| `times` | 43 | 100 | 43 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
 | `tkill` | 238 | 200 | 238 | [kill(2)](../man/man2/kill.2) |
 | `truncate` | 92 | 76 | 92 | [truncate(2)](../man/man2/truncate.2) |
 | `truncate64` | 193 | none | 193 | [truncate(2)](../man/man2/truncate.2) |
-| `ugetrlimit` | 191 | none | none | [prlimit64(2)](../man/man2/prlimit64.2) |
+| `ugetrlimit` | 191 | none | 191 | [prlimit64(2)](../man/man2/prlimit64.2) |
 | `umask` | 60 | 95 | 60 | [umask(2)](../man/man2/umask.2) |
+| `umount` | none | none | 22 | [mount(2)](../man/man2/mount.2) |
 | `umount2` | 52 | 166 | 52 | [mount(2)](../man/man2/mount.2) |
 | `uname` | 122 | 63 | 122 | [uname(2)](../man/man2/uname.2) |
 | `unlink` | 10 | 87 | 10 | [link(2)](../man/man2/link.2) |
@@ -352,8 +356,8 @@ This table lists the calls the two kernels and the x86-64 kernel's compat table 
 | `utimes` | none | none | 271 | [gettimeofday(2)](../man/man2/gettimeofday.2) |
 | `vfork` | 190 | 58 | 190 | [fork(2)](../man/man2/fork.2) |
 | `vmsplice` | 316 | 278 | 316 | [splice(2)](../man/man2/splice.2) |
-| `wait4` | 114 | 61 | none | [wait(2)](../man/man2/wait.2) |
-| `waitid` | 284 | 247 | none | [wait(2)](../man/man2/wait.2) |
+| `wait4` | 114 | 61 | 114 | [wait(2)](../man/man2/wait.2) |
+| `waitid` | 284 | 247 | 284 | [wait(2)](../man/man2/wait.2) |
 | `waitpid` | 7 | none | 7 | [wait(2)](../man/man2/wait.2) |
 | `write` | 4 | 1 | 4 | [write(2)](../man/man2/write.2) |
 | `writev` | 146 | 20 | 146 | [write(2)](../man/man2/write.2) |

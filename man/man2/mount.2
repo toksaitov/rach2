@@ -520,6 +520,15 @@ The number for
 is 52, with target in EBX and flags in ECX.
 On x86-64 the numbers are 165 and 166, with the same arguments in RDI,
 RSI, RDX, R10 and R8.
+For a program that enters the x86-64 kernel by
+.Ql int $0x80 ,
+which
+.Xr ia32 7
+describes, i386's
+.Nm umount
+(22) is
+.Fn umount2
+with no flags.
 .Sh RETURN VALUES
 These functions return 0 on success, or -1 on failure and set
 .Va errno .

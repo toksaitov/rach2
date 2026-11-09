@@ -199,7 +199,13 @@ The older calls
 .Nm setrlimit
 (75), and
 .Nm ugetrlimit
-(191) use two unsigned 32-bit fields, with 4294967295 as infinity.
+(191) use two unsigned 32-bit fields, with 4294967295 as infinity, but
+.Nm getrlimit
+gives at most 2147483647, an unlimited value among them, as Linux's.
+An i386 program on the x86-64 kernel, which
+.Xr ia32 7
+describes, has the same calls: a limit past 32 bits reads as 4294967295,
+and 4294967295 sets it unlimited.
 On x86-64,
 .Nm getrlimit
 (97) and
@@ -255,7 +261,10 @@ past a limit of 256 KiB.
 .It Er EFAULT
 A required limit buffer cannot be read or written.
 .It Er EINVAL
-For a stored resource, the new soft limit exceeds the new hard limit.
+The resource is 16,
+.Dv RLIM_NLIMITS ,
+or more; or, for a stored resource, the new soft limit exceeds the new
+hard limit.
 .It Er EPERM
 A caller without effective user ID 0 tries to raise a stored hard limit
 or select a process with a different real user ID.

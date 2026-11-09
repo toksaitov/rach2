@@ -312,6 +312,10 @@ The i386 system call numbers are 78 for
 and 320 for
 .Fn utimensat .
 The time structures in this kernel interface have 32-bit seconds fields.
+.Fn times
+fills four 32-bit counts; for an i386 program on the x86-64 kernel, which
+.Xr ia32 7
+describes, each is cut to 32 bits, and so is the tick count it returns.
 The signed 32-bit seconds field overflows in 2038 for real time and after
 about 68 years since boot for monotonic time.
 .Pp

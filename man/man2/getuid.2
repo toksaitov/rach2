@@ -113,6 +113,29 @@ others:
 (120) and
 .Nm getgroups
 (115).
+.Pp
+For a program that enters the x86-64 kernel by
+.Ql int $0x80 ,
+which
+.Xr ia32 7
+describes, the kernel also runs i386's calls of 16-bit IDs, as Linux does:
+.Nm getuid
+(24),
+.Nm getgid
+(47),
+.Nm geteuid
+(49),
+.Nm getegid
+(50),
+.Nm getresuid
+(165),
+.Nm getresgid
+(171) and
+.Nm getgroups
+(80), whose list is of 16-bit IDs.
+An ID past 65535 reads as 65534, and a 16-bit -1 given as an argument is
+the 32-bit -1.
+The i686 kernel has none of them.
 .Sh RETURN VALUES
 .Fn getuid ,
 .Fn geteuid ,

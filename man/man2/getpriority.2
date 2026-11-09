@@ -74,6 +74,26 @@ ECX
 and EDX the nice value.
 On x86-64 the numbers are 140 and 141, with the same arguments in RDI, RSI
 and RDX.
+.Pp
+The x86-64 kernel also runs i386's
+.Nm nice
+(34) for a program that enters it by
+.Ql int $0x80 ,
+as
+.Xr ia32 7
+describes: it adds the increment in EBX, held to -40 through 40, to the
+caller's nice value, which stays within -20 to 19, and returns 0.
+A negative increment without privilege fails with
+.Er EPERM ,
+as on Linux with its default
+.Dv RLIMIT_NICE
+of 0.
+The i686 kernel has no
+.Nm nice ;
+musl implements
+.Fn nice
+through
+.Fn setpriority .
 As on Linux, the raw
 .Fn getpriority
 returns 20 less the nice value, 40 for -20 through 1 for 19, so that no

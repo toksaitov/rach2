@@ -189,8 +189,14 @@ The i386 numbers are 182 for
 .Nm fchown32 ,
 and 298 for
 .Nm fchownat .
-Each older number and its 32-bit variant use the same handler and
-32-bit ID arguments.
+On the i686 kernel each older number and its 32-bit variant use the same
+handler and 32-bit ID arguments.
+On the x86-64 kernel, for a program that enters it by
+.Ql int $0x80 ,
+which
+.Xr ia32 7
+describes, the older numbers take 16-bit IDs, as on Linux: an argument's
+low 16 bits, with the 16-bit -1 leaving the ID as it is.
 Musl uses the 32-bit variants for
 .Fn chown ,
 .Fn lchown ,

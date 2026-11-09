@@ -204,6 +204,14 @@ The raw
 reads at most that many bytes of the mask.
 .Fn sched_rr_get_interval
 writes a 32-bit timespec.
+An i386 program on the x86-64 kernel, which
+.Xr ia32 7
+describes, has the i386 calls: its mask is of 32-bit longs, four bytes
+with 32 processors or fewer, as on i386,
+.Nm sched_rr_get_interval
+writes a 32-bit timespec, and
+.Nm sched_rr_get_interval_time64
+(423) a timespec of 64-bit fields.
 .Pp
 musl implements
 .Fn sched_setscheduler ,
