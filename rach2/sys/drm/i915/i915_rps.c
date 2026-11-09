@@ -106,7 +106,7 @@ static int rps_clamp(int v, int lo, int hi)
 /** The chip's unit nearest `mhz`, as Linux's intel_freq_opcode. */
 static int rps_opcode(uint32_t mhz)
 {
-    return (int)((mhz + RPS_MHZ / 2) / RPS_MHZ);
+    return (int)(mhz / RPS_MHZ + (mhz % RPS_MHZ >= RPS_MHZ / 2));
 }
 
 /** Nanoseconds as the PM unit's count, a sixteenth of the 12.5 MHz
