@@ -21,7 +21,10 @@ extern void free(void *p);
  * above the table and `&i915_model_base,` in it. The table ends with NULL.
  */
 
-static const struct i915_model_block *const i915_model_blocks[I915_MODEL_BLOCKS + 1] = {0};
+#include "i915_model_base.c"
+
+static const struct i915_model_block *const i915_model_blocks[I915_MODEL_BLOCKS + 1] = {
+    &i915_model_base_fw, &i915_model_base_pw, &i915_model_base_fifo, &i915_model_base_gtt, 0};
 
 int i915_model_nblocks(void)
 {
@@ -133,7 +136,7 @@ static void model_delay_us(struct i915_hw *hw, uint32_t us)
 }
 
 static const struct i915_hw_ops i915_model_ops = {"model", model_read32, model_write32,
-                                                  model_delay_us};
+                                                  model_delay_us, 0};
 
 uint32_t i915_model_config(const struct i915_model *m, unsigned at, unsigned width)
 {

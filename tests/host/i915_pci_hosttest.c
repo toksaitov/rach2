@@ -4,8 +4,11 @@
  * against the host model of the Lenovo's HD 4400.
  *
  * host-deps: rach2/sys/drm/i915/i915_hw.c tests/host/i915_model.c
+ * host-deps: rach2/sys/drm/i915/i915_uncore.c rach2/sys/drm/i915/i915_power.c
+ * host-deps: rach2/sys/drm/i915/i915_stolen.c rach2/sys/drm/i915/i915_gtt.c
  * host-deps: tests/host/compat/kheap_host.c rach2/sys/lib/kstring.c
- * host-deps: rach2/sys/lib/kctypes.c
+ * host-deps: rach2/sys/lib/kctypes.c rach2/sys/mm/frame.c
+ * host-deps: tests/host/compat/spinlock_host.c
  *
  * i915_pci.c is included whole. The bus holds the model's 00:02.0, whose
  * configuration space the PCI calls read and write; the DRM core is a
@@ -13,7 +16,10 @@
  * out in order. A row binds the driver to the model through
  * `i915_driver_bind`, as the fault backend will, or probes the bus, which
  * maps BAR 0 through the MMIO backend; `map_mmio_typed` then hands out a
- * buffer of the test's in place of the chip's registers.
+ * buffer of the test's in place of the chip's registers, and another in
+ * place of the GTT's entries. The bind's base, forcewake, the power well,
+ * stolen memory and the GTT, is i915_base_hosttest.c's; here the frame
+ * allocator hands out one frame and the IOMMU is off.
  *
  * The rows: the id table against Linux 6.12's Haswell GT2 ids; the probe
  * without and with rach2.i915; the bind to the model, with every source
@@ -29,6 +35,8 @@
  */
 
 #include "drm/i915/i915_pci.c"
+#include "iommu.h"
+#include "lib/kirq.h"
 #include "mm/paging.h"
 #include "udelay.h"
 #include "i915_model.h"
@@ -62,8 +70,10 @@ static uintptr_t map_phys;
 static size_t map_size;
 static pte_t map_cache;
 static int maps;
-static uint32_t *map_buffer;
+static uint32_t *map_buffer, *gsm_buffer;
+static pte_t gsm_cache;
 static uint32_t udelays;
+static int frames, frames_freed;
 
 /** The boot log: nothing to keep. */
 void klog(int level, const char *subsystem, const char *format, ...)
@@ -83,15 +93,83 @@ void k_udelay(uint32_t usec)
     udelays += usec;
 }
 
+/** BAR 0's registers in `map_buffer`, and the GTT's entries, BAR 0's
+ * second half, in `gsm_buffer`. */
 uintptr_t map_mmio_typed(uintptr_t phys_addr, size_t size, pte_t cache)
 {
     maps++;
+    if (phys_addr == LENOVO_GPU_BAR0 + I915_GSM_OFFSET) {
+        gsm_cache = cache;
+        free(gsm_buffer);
+        gsm_buffer = (uint32_t *)calloc(size / 4, sizeof(uint32_t));
+        return (uintptr_t)gsm_buffer;
+    }
     map_phys = phys_addr;
     map_size = size;
     map_cache = cache;
     free(map_buffer);
     map_buffer = (uint32_t *)calloc(size / 4, sizeof(uint32_t));
     return (uintptr_t)map_buffer;
+}
+
+int pat_write_combining(void)
+{
+    return 1;
+}
+
+uint32_t kirq_save(void)
+{
+    return 0;
+}
+
+void kirq_restore(uint32_t flags)
+{
+    (void)flags;
+}
+
+uintptr_t alloc_frame(void)
+{
+    frames++;
+    return 0x12345000u;
+}
+
+void free_frame(uintptr_t phys)
+{
+    (void)phys;
+    frames_freed++;
+}
+
+int paging_zero_frame(uintptr_t phys)
+{
+    (void)phys;
+    return 0;
+}
+
+int paging_frame_is_device(uintptr_t phys)
+{
+    (void)phys;
+    return 1;
+}
+
+int iommu_present(void)
+{
+    return 0;
+}
+
+int iommu_unit_of(uint8_t b, uint8_t devfn)
+{
+    (void)b;
+    (void)devfn;
+    return -1;
+}
+
+int iommu_reserved_regions(uint8_t b, uint8_t devfn, struct iommu_region *out, int max)
+{
+    (void)b;
+    (void)devfn;
+    (void)out;
+    (void)max;
+    return 0;
 }
 
 /** Whether (bus, device, function) is the model's chip. */
@@ -257,6 +335,7 @@ static void fresh(struct i915_model *m)
     last_registered = 0;
     maps = 0;
     udelays = 0;
+    frames = frames_freed = 0;
     cmdline_i915 = 0;
 }
 
@@ -332,10 +411,11 @@ static void row_probe_mmio(void)
     fresh(&m);
     cmdline_i915 = 1;
     CHECK("probe: one device bound", i915_probe() == 1);
-    CHECK("probe: BAR 0's registers mapped once", maps == 1);
+    CHECK("probe: BAR 0's registers and the GTT's entries mapped, once each", maps == 2);
     CHECK("probe: at 0xc0000000", map_phys == LENOVO_GPU_BAR0);
     CHECK("probe: the registers' 2 MiB", map_size == I915_MMIO_SIZE);
     CHECK("probe: uncached", map_cache == PTE_NOCACHE);
+    CHECK("probe: the GTT's entries write-combining", gsm_cache == PTE_WC);
     CHECK("probe: registered", registered == 1 && last_registered);
     i915 = last_registered ? to_i915(last_registered) : 0;
     CHECK("probe: through the MMIO backend", i915 && strcmp(i915->hw.ops->name, "mmio") == 0 &&
@@ -364,15 +444,25 @@ static const uint32_t banks[][3] = {{DEIMR, DEIER, DEIIR},
 
 /**
  * Check that the bind masked, disabled and cleared every source of `m`, in
- * that order, before it enabled the message, and read no register but by
- * the posting reads of those writes.
+ * that order, before it enabled the message, and before its base, which
+ * starts with forcewake's reset, read no register but by the posting reads
+ * of those writes.
  */
 static void check_masks(struct i915_model *m)
 {
-    uint32_t posting = 0;
-    unsigned i;
+    uint32_t posting = 0, reads = 0, i;
+    long base = -1;
 
-    for (i = 0; i < sizeof(banks) / sizeof(banks[0]); i++) {
+    for (i = 0; i < m->nlog && base < 0; i++) {
+        if (m->log[i].reg == FPGA_DBG) {
+            base = (long)i;
+        } else if (m->log[i].op == I915_MODEL_READ) {
+            reads++;
+        }
+    }
+    CHECK("bind: the base after the masks", base > at(m, SERR_INT, 0xffffffffu));
+
+    for (i = 0; i < (uint32_t)(sizeof(banks) / sizeof(banks[0])); i++) {
         long mask = at(m, banks[i][0], 0xffffffffu);
         long off = at(m, banks[i][1], 0);
         long clear = at(m, banks[i][2], 0xffffffffu);
@@ -391,7 +481,7 @@ static void check_masks(struct i915_model *m)
           at(m, EDP_PSR_IMR, 0xffffffffu) < msi_enabled_at &&
               at(m, EDP_PSR_IIR, 0xffffffffu) < msi_enabled_at);
     CHECK("bind: the south errors cleared", at(m, SERR_INT, 0xffffffffu) < msi_enabled_at);
-    CHECK("bind: no register read but by the posting reads", m->reads == posting);
+    CHECK("bind: no register read before the base but by the posting reads", reads == posting);
 }
 
 /** Check the configuration words the bind of `m` read and wrote. */
@@ -457,6 +547,8 @@ static void check_unplug(struct i915_model *m, struct drm_device *dev)
 {
     struct drm_i915_private *i915 = to_i915(dev);
 
+    m->nlog = 0;
+    m->log_lost = 0;
     i915->irqs = 0;
     raise_msi(48);
     raise_msi(49);
@@ -466,12 +558,13 @@ static void check_unplug(struct i915_model *m, struct drm_device *dev)
           msi_disables == 1 && vectors_freed == 1 && i915->msi_vector == -1 &&
               (m->config[LENOVO_GPU_CAP_MSI + 2] & 1u) == 0);
     CHECK("unplug: every source masked again",
-          i915_model_count(m, I915_MODEL_WRITE, DEIMR) == 2 && i915_model_peek(m, DEIER) == 0);
+          i915_model_count(m, I915_MODEL_WRITE, DEIMR) == 1 && i915_model_peek(m, DEIER) == 0);
     i915->irqs = 0;
     raise_msi(48);
     CHECK("unplug: the handler forgets the device", i915->irqs == 0);
     drm_dev_put(dev);
     CHECK("release: the record freed", released == 1);
+    CHECK("release: the GTT's scratch page given back", frames == 1 && frames_freed == 1);
     last_registered = 0;
 }
 
@@ -494,6 +587,11 @@ static void row_bind_model(void)
               to_i915(dev)->hw.ops == m.hw.ops && to_i915(dev)->hw.priv == &m);
         check_masks(&m);
         check_config(&m, to_i915(dev));
+        CHECK("bind: the base up: the well held, stolen memory found, the GTT's 2 GiB with the "
+              "firmware's framebuffer kept",
+              to_i915(dev)->power.count == 1 && to_i915(dev)->stolen.size == 0x4000000u &&
+                  to_i915(dev)->ggtt.total == 0x80000000u && to_i915(dev)->ggtt.nkept == 1 &&
+                  to_i915(dev)->uncore.wake_count == 0);
         check_identity(dev, to_i915(dev));
         check_unplug(&m, dev);
     }
@@ -563,6 +661,7 @@ static void row_register_fails(void)
     CHECK("register fails: the message off and its vector back",
           msi_disables == 1 && vectors_freed == 1);
     CHECK("register fails: the record released", released == 1);
+    CHECK("register fails: the GTT's scratch page given back", frames == 1 && frames_freed == 1);
     CHECK("register fails: every source masked",
           i915_model_peek(&m, DEIMR) == 0xffffffffu && i915_model_peek(&m, SDEIER) == 0);
     done(&m);
@@ -707,6 +806,7 @@ int main(void)
     row_register_fails();
     row_boundary();
     free(map_buffer);
+    free(gsm_buffer);
     if (fails) {
         printf("i915-pci-test: %d failed\n", fails);
         return 1;
