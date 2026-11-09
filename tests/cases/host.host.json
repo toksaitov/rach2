@@ -321,6 +321,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "ia32_net",
+          "checks": "tests/host/ia32_net_hosttest.c checks the i386 msghdr, mmsghdr, cmsghdr with its 4-byte alignment, the timevals of the socket time limits and recvmmsg's timespecs against Linux 6.12, and the msghdr and cmsghdr conversions and socketcall of the x86-64 kernel's compat calls, under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "syncobj",
           "checks": "tests/host/syncobj_hosttest.c drives binary and timeline syncobjs, out-of-order points, waits, transfers, queries, eventfds, files, a failed producer's error and the driver features under ASan and UBSan",
           "source": "scenario"
