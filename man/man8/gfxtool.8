@@ -1,0 +1,62 @@
+.Dd November 10, 2026
+.Dt GFXTOOL 8
+.Os
+.Sh NAME
+.Nm gfxtool
+.Nd inspect the firmware display on an unbound Intel HD 4400
+.Sh SYNOPSIS
+.Nm
+.Cm dump
+.Nm
+.Cm crc
+.Ar A|B|C frames
+.Nm
+.Cm capture
+.Ar A|B|C file.ppm
+.Sh DESCRIPTION
+.Nm
+uses
+.Pa /dev/mem
+to inspect the Intel Haswell HD 4400 at PCI function 0000:00:02.0.
+It refuses any identity but 8086:0a16, disabled memory decoding, BARs
+above 4 GiB and an aperture other than 256 MiB.
+It checks the PCI driver link, uevent and DRM device identities and
+refuses a bound GPU or an ownership check it cannot complete.
+Run it as root, with driver binding stopped for the session.
+.Pp
+.Cm dump
+prints named display, panel power, PWM, power-well and forcewake
+registers, the render, video, blitter and video-enhancement rings,
+and all 65536 GGTT entries of the CPU-visible aperture.
+Ring reads temporarily request forcewake; a prior request is preserved.
+.Pp
+.Cm crc
+enables the selected pipe's post-panel-fitter CRC source, skips the
+first two frames, and prints the frame counter and five hexadecimal
+CRC words for each requested frame.
+The frame count is 1 through 1000000.
+It requires an enabled primary plane and refuses an already enabled CRC.
+A frame that changes during the read fails the command.
+The saved CRC control is restored on exit.
+The command preserves firmware routing; a Haswell eDP route that bypasses
+the panel fitter needs a mode set before this CRC source can be used.
+.Pp
+.Cm capture
+reads the primary plane's surface, source offset, stride and source size
+and writes a binary PPM of its pixels through the GGTT aperture.
+It supports linear RGB565, XRGB8888, XBGR8888, XRGB2101010 and
+XBGR2101010, converting each to eight bits per colour.
+It refuses disabled, tiled, rotated and unknown formats and a surface
+outside the aperture.
+It captures the primary plane before gamma, scaling and cursor composition.
+It refuses an existing output file and removes a partial capture on failure.
+.Pp
+Each register wait ends after at most one second or 10000 reads.
+Interrupt, termination, hangup and broken-pipe signals return through
+cleanup, which restores temporary register changes.
+Forced termination cannot run cleanup.
+.Sh EXIT STATUS
+Zero on success, 1 on refusal or an I/O failure, and 2 for invalid arguments.
+.Sh SEE ALSO
+.Xr mem 4 ,
+.Xr watchdog 4

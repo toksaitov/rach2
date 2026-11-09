@@ -1,0 +1,3 @@
+# A private diagnostic root for the watchdog and unsupported-GPU checks.
+file 0755 /watchdogprobe build/tests/watchdogprobe
+file 0755 /gfxtool build/utils/sbin/gfxtool

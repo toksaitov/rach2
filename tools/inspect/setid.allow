@@ -33,6 +33,13 @@ trusted file 0755:0:0 /etude-guest build/tools/etude/guest/etude-guest
 sentinel /etude-guest 0755:0:0
 init none
 
+# The watchdog diagnostic image has two root-run tools and no set-id files.
+manifest watchdog
+trusted file 0755:0:0 /watchdogprobe build/tests/watchdogprobe
+trusted file 0755:0:0 /gfxtool build/utils/sbin/gfxtool
+sentinel /watchdogprobe 0755:0:0
+init none
+
 manifest os-real
 setid /bin/su 04755:0:0 build/vendor/busybox/busybox-suid
 setid /bin/passwd 04755:0:0 build/vendor/busybox/busybox-suid

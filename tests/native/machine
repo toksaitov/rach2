@@ -32,3 +32,4 @@ musl/saltnoent a processor without RDSEED and RDRAND, by QEMU's -cpu qemu64
 musl/sandboxmusl pivot_root, whose new root is a mount's root, as the test image's root is and a private root made by chroot is not
 musl/ndwatchmusl router advertisements sent on the card, eth0, and a second ndwatch on it, on a link of its own
 musl/procfilesmusl the os-real applets with a held host connection and a known image size
+watchdogprobe the q35 watchdog case requires QMP watchdog pause; the Lenovo expiry has its own trial boot in task 78-1b

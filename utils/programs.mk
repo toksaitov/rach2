@@ -10,7 +10,7 @@ UTILITIES = true false echo yes cat pwd touch mkdir rm mv cp ls ping nc \
             wifi
 
 SBIN_PROGS = init-shell init-login init-metal init-recovery login su sudo passwd adduser \
-             adduser-crash bootctl wsimrelay
+             adduser-crash bootctl wsimrelay gfxtool
 
 SRC_ping = ping.c resolv.c
 HDR_ping = netdb.h

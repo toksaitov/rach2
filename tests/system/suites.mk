@@ -360,6 +360,16 @@ $(GRUB_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh $(KERNEL) $(GRUB_TES
 	RACH2_DISK_EXT2_IMAGE=$(GRUB_TEST_EXT2) \
 	RACH2_DISK_RECOVERY_MB=8 \
 	    sh tools/image/mkdisk_grub.sh $(KERNEL) $@
+# `tests/run watchdog`: version 2 TCO expiry on q35, observed as QMP's
+# watchdog run state, and gfxtool's refusal of std-vga before MMIO.
+WATCHDOG_IMAGE = $(ARCH_CASE_DIR)/watchdog/watchdog.krffs
+$(WATCHDOG_IMAGE): krffs/manifests/watchdog.manifest $(ARCH_BUILD)/tests/watchdogprobe \
+                   $(ARCH_BUILD)/utils/sbin/gfxtool $(IMAGE_TOOLS) | krffs
+	$(MKIMAGE) krffs/manifests/watchdog.manifest $@ 4
+
+$(ARCH_BUILD)/utils/sbin/gfxtool: utils/gfxtool.c utils/programs.mk $(LIBC_STAMP)
+	$(MAKE) -C utils ../$@
+
 # `tests/run bootorder`: the GRUB disk on the second AHCI port behind a
 # disk holding nothing, booted by the firmware, its root found as disk 1. It
 # is the case of tests/cases/machine.bootorder.json, which etude runs, and has
@@ -370,6 +380,7 @@ $(GRUB_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh $(KERNEL) $(GRUB_TES
 # on each entry's line. The blank disk in front of it is an empty disk of the
 # case.
 BOOTORDER_CASE_DISK = $(ARCH_CASE_DIR)/bootorder/bootorder.disk
+
 $(BOOTORDER_CASE_DISK): $(DEMO_CREDS) tools/image/mkdisk_grub.sh tools/image/grub-embed.cfg \
                         $(KERNEL) $(GRUB_TEST_EXT2) $(DISK_TOOLS) $(GRUB_FILES) \
                         | rach2 krffs $(MANIFEST_PARTS_os_real)

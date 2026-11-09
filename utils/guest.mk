@@ -92,6 +92,9 @@ mixer: mixer.c
 wifi: wifi.c
 	$(UCC) $(UFLAGS) -o wifi.new wifi.c
 	mv wifi.new wifi
+gfxtool: gfxtool.c
+	$(UCC) $(UFLAGS) -o gfxtool.new gfxtool.c
+	mv gfxtool.new gfxtool
 
 update: update.c
 	$(UCC) $(UFLAGS) -o update.new update.c
