@@ -370,6 +370,17 @@ struct process {
      * end, and its length; 0 for none. */
     uintptr_t robust_list;
     uint32_t robust_len;
+    /* rseq(2) (rseq.c): the address of the area the thread registered, 0
+     * for none, its length and its signature; the events that abort a
+     * critical section, RSEQ_EVENT_ bits, set since a return to user mode
+     * last took them; and whether the next return to user mode must look
+     * at the area. A fork passes the registration on, a thread and an exec
+     * start without one. */
+    uintptr_t rseq;
+    uint32_t rseq_len;
+    uint32_t rseq_sig;
+    uint32_t rseq_event;
+    uint32_t rseq_notify;
     /* The scheduling policy sched_setscheduler(2) set, SCHED_OTHER (0),
      * SCHED_BATCH (3) or SCHED_IDLE (5), and whether SCHED_RESET_ON_FORK
      * came with it. A fork passes the policy on and clears the flag in the

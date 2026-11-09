@@ -5,6 +5,7 @@
 #include "../arch/arch.h"
 #include "sched.h"
 #include "ptrace.h"
+#include "rseq.h"
 #include "suspend.h"
 #include "tgroup.h"
 #include "../io/timerfd.h"
@@ -420,6 +421,7 @@ void schedule(void)
     if (old->state == PROC_READY && old != cpu->idle) {
         sched_append(old);
     }
+    rseq_preempt(old);
     next->state = PROC_RUNNING;
     next->cpu = me;
 

@@ -17,6 +17,7 @@
 #include "../../lib/kstring.h"
 #include "../../proc/process.h"
 #include "../../proc/ptrace.h"
+#include "../../proc/rseq.h"
 #include "../../proc/smp.h"
 #include "debugreg.h"
 #if !defined(__x86_64__)
@@ -629,7 +630,8 @@ void isr_paranoid_router(isr_params_t *params)
 
 /**
  * The return to the interrupted code, after its router: deliver a signal
- * pending for a return to user mode, and give back the big lock the router
+ * pending for a return to user mode, update the thread's rseq area
+ * (`rseq_return`), and give back the big lock the router
  * took; a tick the router took without the lock returns as it came.
  * Interrupts are off. A forked child's first return comes here too,
  * with the depth its fork gave it.
@@ -647,6 +649,7 @@ void isr_leave(isr_params_t *params)
     }
     deliver_signals(params);
     if (FRAME_USER(params)) {
+        rseq_return(params);
         debugreg_resume();
     }
     bkl_exit();

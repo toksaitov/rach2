@@ -37,6 +37,7 @@
 #include "../../proc/seccomp.h"
 #include "../../proc/ns.h"
 #include "../../proc/kcmp.h"
+#include "../../proc/rseq.h"
 #include "../../proc/pidfd.h"
 #include "../../lib/krandom.h"
 #include "../../lib/kerrno.h"
@@ -476,7 +477,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_STATX] = sys_statx;
     table[SYS_ARCH_PRCTL] = compat_sys_arch_prctl;
     table[SYS_IO_PGETEVENTS] = compat_sys_io_pgetevents;
-    table[SYS_RSEQ] = NULL;
+    table[SYS_RSEQ] = sys_rseq;
     table[SYS_SEMGET] = sys_semget;
     table[SYS_SEMCTL] = compat_sys_semctl;
     table[SYS_SHMGET] = sys_shmget;

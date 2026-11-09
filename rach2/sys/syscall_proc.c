@@ -29,6 +29,7 @@
 #include "proc/uimage.h"
 #include "proc/sigframe.h"
 #include "proc/pidfd.h"
+#include "proc/rseq.h"
 #include "lib/krandom.h"
 #include "lib/kerrno.h"
 #include "lib/kirq.h"
@@ -1973,6 +1974,7 @@ static void exec_commit(isr_params_t *params, struct exec_state *s)
         }
     }
     current_proc->clear_child_tid = 0;
+    rseq_exec(current_proc);
     current_proc->altstack_on = 0;
     current_proc->altstack_sp = 0;
     current_proc->altstack_size = 0;
@@ -2581,6 +2583,7 @@ static int32_t do_fork(isr_params_t *params, const struct fork_req *req)
     child->parent_pid =
         (req->flags & (CLONE_THREAD | CLONE_PARENT)) ? parent->parent_pid : parent->tgid;
     fork_ids(child, parent);
+    rseq_fork(child, parent, (req->flags & CLONE_VM) != 0);
     rc = ns_fork(child, parent, req->flags);
     if (rc != 0) {
         goto fail_built;
@@ -4904,6 +4907,7 @@ void deliver_signals(isr_params_t *tf)
         }
         oldmask =
             current_proc->sigmask_saved ? current_proc->saved_sigmask : current_proc->sig_blocked;
+        rseq_signal(tf, signo);
         if (sigframe_setup(tf, signo, sa, &info, oldmask) != 0) {
             terminate_current_process(SIGSEGV | WCOREFLAG);
             return;
@@ -7429,8 +7433,8 @@ static int32_t sched_set(int pid, int policy, const void __user *uparam)
         return -EINVAL;
     }
     if (!sched_may_change(p) ||
-        (!cred_privileged() && ((p->sched_policy == SCHED_IDLE && policy != SCHED_IDLE) ||
-                                (p->sched_reset && !reset)))) {
+        (!cred_privileged() &&
+         ((p->sched_policy == SCHED_IDLE && policy != SCHED_IDLE) || (p->sched_reset && !reset)))) {
         return -EPERM;
     }
     p->sched_policy = (uint8_t)policy;
