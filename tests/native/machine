@@ -9,6 +9,7 @@ conloadprobe lines typed at the serial console, which the Lenovo lacks
 drmcapture a frame drawn for the graphics runners in a guest beside the same frame of the Debian guest; with -p it takes the display as the card's master
 evprobe keys pressed through QEMU's monitor while it reads, and QEMU's HDA and Sound Blaster models
 frag6probe a Packet Too Big that lowers the path MTU of ::1 for ten minutes, for every program on the machine
+hotplugprobe a display resized by QEMU's window or a VNC client while it waits, which a running machine cannot do to itself
 keylatprobe a key typed on a USB keyboard, and rach2.usblatency on the boot line
 lagprobe rach2.blocklag and its companions on the boot line
 lockwaitprobe rach2.blocklag on the boot line, and the empty ext2 volume on the root disk's second partition
