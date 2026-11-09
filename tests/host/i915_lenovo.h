@@ -49,6 +49,17 @@
 #define LENOVO_RMRR_BASE   0xab800000u
 #define LENOVO_RMRR_END    0xaf9fffffu
 
+/* The firmware's framebuffer, as Linux found it at load
+ * (tests/fixtures/lenovo-gpu/debugfs/i915_gem_framebuffer): 1366x768 at
+ * 32 bits, linear, at GTT offset 0 and stolen offset 0, 0x408000 bytes,
+ * which make a stride of 5504 bytes; pipe A's primary plane scans it out,
+ * and the console draws on it at the aperture's base. */
+#define LENOVO_FW_FB_WIDTH  1366
+#define LENOVO_FW_FB_HEIGHT 768
+#define LENOVO_FW_FB_STRIDE 5504
+#define LENOVO_FW_FB_GGTT   0x0u
+#define LENOVO_FW_FB_BYTES  0x408000u
+
 /* The capability list: MSI at 0x90 (one 32-bit message, not maskable),
  * power management at 0xd0 (version 2, DSI) and Advanced Features at 0xa4
  * (transaction pending and FLR). */

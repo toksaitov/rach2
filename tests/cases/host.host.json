@@ -461,6 +461,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_base",
+          "checks": "tests/host/i915_base_hosttest.c brings up the Intel graphics driver's forcewake, power well, stolen memory and global GTT on the HD 4400's host model, a stuck forcewake ack failing by name and the firmware's GTT entries kept, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "i915_pci",
           "checks": "tests/host/i915_pci_hosttest.c binds the Intel graphics driver to the HD 4400's host model, interrupts masked before MSI, under ASan and UBSan and exits 0",
           "source": "scenario"
