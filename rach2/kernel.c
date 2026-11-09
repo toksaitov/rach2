@@ -75,6 +75,7 @@
 #include "sys/lib/kint.h"
 #include "sys/lib/kstring.h"
 #include "sys/vdso.h"
+#include "sys/drm/drm.h"
 
 /* The boot stack and the guard page below it, from the architecture's
  * loader.s. */
@@ -3971,6 +3972,8 @@ void kernel_main(const struct boot_info *boot)
     }
 
     start_network();
+
+    drm_start();
 
     check_timing();
     if (kcmdline_has("rach2.strings")) {
