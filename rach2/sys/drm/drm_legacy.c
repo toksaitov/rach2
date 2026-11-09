@@ -384,8 +384,8 @@ out:
  * PAGE_FLIP, Linux's drm_mode_page_flip_ioctl with
  * drm_atomic_helper_page_flip: show another framebuffer of the same format
  * on a CRTC's primary plane in a nonblocking commit that may not change the
- * mode, and send FLIP_COMPLETE when asked. A target vblank needs 76-5b's
- * vblank counter and is refused with EINVAL until then.
+ * mode, and send FLIP_COMPLETE when asked. A target vblank is refused with
+ * EINVAL, as Linux refuses it for a driver without page_flip_target.
  */
 int32_t drm_mode_page_flip_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
