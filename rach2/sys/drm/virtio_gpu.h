@@ -37,6 +37,9 @@
 #define VIRTIO_GPU_CMD_GET_CAPSET_INFO          0x0108u
 #define VIRTIO_GPU_CMD_GET_CAPSET               0x0109u
 #define VIRTIO_GPU_CMD_GET_EDID                 0x010Au
+#define VIRTIO_GPU_CMD_RESOURCE_ASSIGN_UUID     0x010Bu
+#define VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB     0x010Cu
+#define VIRTIO_GPU_CMD_SET_SCANOUT_BLOB         0x010Du
 #define VIRTIO_GPU_CMD_CTX_CREATE               0x0200u
 #define VIRTIO_GPU_CMD_CTX_DESTROY              0x0201u
 #define VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE      0x0202u
@@ -45,6 +48,8 @@
 #define VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D      0x0205u
 #define VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D    0x0206u
 #define VIRTIO_GPU_CMD_SUBMIT_3D                0x0207u
+#define VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB        0x0208u
+#define VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB      0x0209u
 #define VIRTIO_GPU_RESP_OK_CAPSET_INFO          0x1102u
 #define VIRTIO_GPU_RESP_OK_CAPSET               0x1103u
 #define VIRTIO_GPU_CMD_UPDATE_CURSOR            0x0300u
@@ -52,6 +57,8 @@
 #define VIRTIO_GPU_RESP_OK_NODATA               0x1100u
 #define VIRTIO_GPU_RESP_OK_DISPLAY_INFO         0x1101u
 #define VIRTIO_GPU_RESP_OK_EDID                 0x1104u
+#define VIRTIO_GPU_RESP_OK_RESOURCE_UUID        0x1105u
+#define VIRTIO_GPU_RESP_OK_MAP_INFO             0x1106u
 #define VIRTIO_GPU_RESP_ERR_UNSPEC              0x1200u
 #define VIRTIO_GPU_RESP_ERR_OUT_OF_MEMORY       0x1201u
 #define VIRTIO_GPU_RESP_ERR_INVALID_SCANOUT_ID  0x1202u
@@ -61,7 +68,41 @@
 
 /* A header's `flags`: the device answers once the command's work is done,
  * and copies `fence_id` into its answer. */
-#define VIRTIO_GPU_FLAG_FENCE 1u
+#define VIRTIO_GPU_FLAG_FENCE         1u
+/* With FENCE: the fence is on ring `ring_idx` of the command's context,
+ * which retires it in that ring's order alone. */
+#define VIRTIO_GPU_FLAG_INFO_RING_IDX 2u
+
+/* Where a blob's memory is, and what it may be used for. */
+#define VIRTIO_GPU_BLOB_MEM_GUEST             1u
+#define VIRTIO_GPU_BLOB_MEM_HOST3D            2u
+#define VIRTIO_GPU_BLOB_MEM_HOST3D_GUEST      3u
+#define VIRTIO_GPU_BLOB_FLAG_USE_MAPPABLE     1u
+#define VIRTIO_GPU_BLOB_FLAG_USE_SHAREABLE    2u
+#define VIRTIO_GPU_BLOB_FLAG_USE_CROSS_DEVICE 4u
+
+/* The cache type a MAP_BLOB answer gives the mapping, in its low bits. */
+#define VIRTIO_GPU_MAP_CACHE_MASK     0x0Fu
+#define VIRTIO_GPU_MAP_CACHE_NONE     0u
+#define VIRTIO_GPU_MAP_CACHE_CACHED   1u
+#define VIRTIO_GPU_MAP_CACHE_UNCACHED 2u
+#define VIRTIO_GPU_MAP_CACHE_WC       3u
+
+/* CTX_CREATE's `context_init`: the context's capability set in its low
+ * byte, 0 for the device's default. */
+#define VIRTIO_GPU_CONTEXT_INIT_CAPSET_ID_MASK 0xFFu
+
+/* Capability set ids. */
+#define VIRTIO_GPU_CAPSET_VIRGL            1u
+#define VIRTIO_GPU_CAPSET_VIRGL2           2u
+#define VIRTIO_GPU_CAPSET_GFXSTREAM_VULKAN 3u
+#define VIRTIO_GPU_CAPSET_VENUS            4u
+#define VIRTIO_GPU_CAPSET_CROSS_DOMAIN     5u
+#define VIRTIO_GPU_CAPSET_DRM              6u
+
+/* The shared memory region of host-visible memory, which MAP_BLOB places
+ * blobs in (virtio 1.2, 5.7.5). */
+#define VIRTIO_GPU_SHM_ID_HOST_VISIBLE 1u
 
 /* The resource formats of 2D resources. */
 #define VIRTIO_GPU_FORMAT_B8G8R8A8_UNORM 1u
@@ -131,6 +172,22 @@ struct virtio_gpu_set_scanout {
     uint32_t resource_id;
 };
 
+/* SET_SCANOUT_BLOB: the scanout shows rectangle `r` of a blob read as a
+ * framebuffer of `width` by `height` pixels of `format`, its planes at
+ * `offsets` with their `strides`. */
+struct virtio_gpu_set_scanout_blob {
+    struct virtio_gpu_ctrl_hdr hdr;
+    struct virtio_gpu_rect r;
+    uint32_t scanout_id;
+    uint32_t resource_id;
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;
+    uint32_t padding;
+    uint32_t strides[4];
+    uint32_t offsets[4];
+};
+
 struct virtio_gpu_resource_flush {
     struct virtio_gpu_ctrl_hdr hdr;
     struct virtio_gpu_rect r;
@@ -197,6 +254,37 @@ struct virtio_gpu_transfer_3d {
 struct virtio_gpu_submit_3d {
     struct virtio_gpu_ctrl_hdr hdr;
     uint32_t size, padding;
+};
+
+/* Followed by `nr_entries` struct virtio_gpu_mem_entry for a blob with
+ * guest memory. */
+struct virtio_gpu_resource_create_blob {
+    struct virtio_gpu_ctrl_hdr hdr;
+    uint32_t resource_id;
+    uint32_t blob_mem;
+    uint32_t blob_flags;
+    uint32_t nr_entries;
+    uint64_t blob_id;
+    uint64_t size;
+};
+
+struct virtio_gpu_resource_map_blob {
+    struct virtio_gpu_ctrl_hdr hdr;
+    uint32_t resource_id;
+    uint32_t padding;
+    uint64_t offset; /* bytes into the host-visible region */
+};
+
+struct virtio_gpu_resp_map_info {
+    struct virtio_gpu_ctrl_hdr hdr;
+    uint32_t map_info; /* VIRTIO_GPU_MAP_CACHE_* */
+    uint32_t padding;
+};
+
+/* UNMAP_BLOB and ASSIGN_UUID have RESOURCE_UNREF's layout. */
+struct virtio_gpu_resp_resource_uuid {
+    struct virtio_gpu_ctrl_hdr hdr;
+    uint8_t uuid[16];
 };
 
 struct virtio_gpu_cursor_pos {
@@ -338,6 +426,17 @@ struct drm_virtgpu_get_caps {
     uint32_t pad;
 };
 
+#define VIRTGPU_EXECBUF_FLAGS \
+    (VIRTGPU_EXECBUF_FENCE_FD_IN | VIRTGPU_EXECBUF_FENCE_FD_OUT | VIRTGPU_EXECBUF_RING_IDX)
+
+#define VIRTGPU_BLOB_MEM_GUEST             0x0001u
+#define VIRTGPU_BLOB_MEM_HOST3D            0x0002u
+#define VIRTGPU_BLOB_MEM_HOST3D_GUEST      0x0003u
+#define VIRTGPU_BLOB_FLAG_USE_MAPPABLE     0x0001u
+#define VIRTGPU_BLOB_FLAG_USE_SHAREABLE    0x0002u
+#define VIRTGPU_BLOB_FLAG_USE_CROSS_DEVICE 0x0004u
+#define VIRTGPU_BLOB_FLAG_USE_MASK         0x0007u
+
 struct drm_virtgpu_resource_create_blob {
     uint32_t blob_mem;
     uint32_t blob_flags;
@@ -349,6 +448,20 @@ struct drm_virtgpu_resource_create_blob {
     uint64_t cmd;
     uint64_t blob_id;
 };
+
+#define VIRTGPU_CONTEXT_PARAM_CAPSET_ID       0x0001
+#define VIRTGPU_CONTEXT_PARAM_NUM_RINGS       0x0002
+#define VIRTGPU_CONTEXT_PARAM_POLL_RINGS_MASK 0x0003
+#define VIRTGPU_CONTEXT_PARAM_DEBUG_NAME      0x0004
+
+struct drm_virtgpu_context_set_param {
+    uint64_t param;
+    uint64_t value;
+};
+
+/* The type of the bare event, a struct drm_event alone, that a file reads
+ * when a fence of a ring in its poll mask signals. */
+#define VIRTGPU_EVENT_FENCE_SIGNALED 0x90000000u
 
 struct drm_virtgpu_context_init {
     uint32_t num_params;
@@ -401,9 +514,10 @@ struct drm_virtgpu_context_init {
 #define VIRTIO_GPU_CMD_EXTRA 64 /* entry pages beyond the command's own */
 #define VIRTIO_GPU_CMD_SGS   (VIRTIO_GPU_CMD_EXTRA + 2)
 #define VIRTIO_GPU_PAGE_ENTS (PAGE_SIZE / sizeof(struct virtio_gpu_mem_entry))
-#define VIRTIO_GPU_INLINE_ENTS                                                   \
-    ((VIRTIO_GPU_RESP_OFF - sizeof(struct virtio_gpu_resource_attach_backing)) / \
-     sizeof(struct virtio_gpu_mem_entry))
+/* The memory entries that fit in the command's page after a request of
+ * `req` bytes, before the answer. */
+#define VIRTIO_GPU_INLINE_ENTS(req) \
+    ((VIRTIO_GPU_RESP_OFF - (uint32_t)(req)) / (uint32_t)sizeof(struct virtio_gpu_mem_entry))
 
 struct virtio_gpu_device;
 
@@ -431,6 +545,9 @@ struct virtio_gpu_cmd {
     uint32_t nin;
     uint32_t nout;           /* segments the device reads, then one it writes */
     struct dma_fence *fence; /* held; NULL on the cursor queue */
+    uint64_t fence_ctx;      /* the fence's context, 0 for the device's */
+    uint32_t ring_idx;       /* with `ring`, the context's ring it goes on */
+    int ring;                /* the fence is on a ring of a context */
     uint32_t resp_type;      /* the answer's type, once `done` */
     int prepared;            /* the fence has its number and one reference */
     int queued;              /* started: its fence is live */
@@ -478,11 +595,27 @@ struct vgpu_attachment {
     struct virtio_gpu_object *bo; /* borrowed; its free detaches every context */
 };
 
+/* The most rings CONTEXT_INIT gives a context, and the longest debug
+ * name, Linux's. */
+#define VGPU_MAX_RINGS      64
+#define VGPU_DEBUG_NAME_MAX 64
+
+/*
+ * A file's context. CONTEXT_INIT sets `context_init`, the rings and the
+ * name before the context is created, which the first use does otherwise
+ * with the defaults; `created` is set once CTX_CREATE is sent. Ring `i`'s
+ * fences are on the fence context `base_fence_ctx + i`.
+ */
 struct vgpu_context {
     struct vgpu_context *next;
     uint32_t id;
     struct vgpu_attachment *attached;
     int created;
+    uint32_t context_init;                /* the capability set id, 0 for the default */
+    uint32_t num_rings;                   /* 0 when CONTEXT_INIT gave none */
+    uint64_t ring_mask;                   /* rings whose fences send the file an event */
+    uint64_t base_fence_ctx;              /* 0 when there are no rings */
+    char debug_name[VGPU_DEBUG_NAME_MAX]; /* "" for the default */
 };
 
 struct virtio_gpu_device {
@@ -499,6 +632,12 @@ struct virtio_gpu_device {
     char reset_path[48];
     int has_edid;
     int has_indirect;
+    int has_blob;                         /* VIRTIO_GPU_F_RESOURCE_BLOB */
+    int has_context_init;                 /* VIRTIO_GPU_F_CONTEXT_INIT */
+    int has_uuid;                         /* VIRTIO_GPU_F_RESOURCE_UUID */
+    int has_host_visible;                 /* the region below is there and reachable */
+    uint64_t hostmem_addr, hostmem_len;   /* the host-visible region */
+    struct virtio_gpu_object *hostmem_bo; /* its pieces in use, by offset */
     uint32_t num_scanouts;
     uint32_t num_capsets;
     struct virtio_gpu_output *outputs; /* num_scanouts of them */
@@ -528,6 +667,22 @@ struct virtio_gpu_object {
     uint32_t width, height;
     struct virtio_gpu_object *next;
     int dumb;
+    /* A blob: its VIRTGPU_BLOB_MEM_*, 0 for a resource that is none, and
+     * its VIRTGPU_BLOB_FLAG_*. A blob of host memory alone, HOST3D, has no
+     * pages of its own and is reached, when mappable, through the piece of
+     * the host-visible region at `hv_offset` that MAP_BLOB placed it in,
+     * with the cache type `map_info`; `hv_next` links the device's pieces
+     * in order of offset. `vmap` is the kernel's window onto the piece. */
+    uint32_t blob_mem;
+    uint32_t blob_flags;
+    int host_visible; /* has its piece of the region */
+    int map_ok;       /* MAP_BLOB answered with its cache type */
+    uint32_t map_info;
+    uint64_t hv_offset;
+    struct virtio_gpu_object *hv_next;
+    uintptr_t vmap;
+    int uuid_ok; /* ASSIGN_UUID answered with `uuid` */
+    uint8_t uuid[16];
 };
 
 /**
@@ -558,6 +713,29 @@ int32_t vgpu_cmd_send_wait(struct virtio_gpu_cmd *cmd, void *out, uint32_t bytes
 int32_t vgpu_cmd_payload(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes, int response);
 /** Copy a completed response after its header to user; 0 or -EFAULT. */
 int32_t vgpu_caps_copy(struct virtio_gpu_cmd *cmd, uint64_t user, uint32_t bytes);
+/** Fill an ATTACH_BACKING or CREATE_BLOB request of `req` bytes with the
+ * memory entries of `bo`'s pages; *n gets their count. 0 or -errno. */
+int32_t vgpu_backing_entries(struct virtio_gpu_cmd *cmd, struct virtio_gpu_object *bo, uint32_t *n);
+/** Make `bo` an object of `vg` of `size` bytes, a whole number of pages:
+ * of shmem pages, or of host memory alone with `host`, one reference. */
+void vgpu_obj_init(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, uint64_t size,
+                   int host);
+/** The lowest free resource id, now taken, or 0; and its return. */
+uint32_t vgpu_res_id_get(struct virtio_gpu_device *vg);
+void vgpu_res_id_put(struct virtio_gpu_device *vg, uint32_t id);
+/** The `free` of every object of the driver: its detaches, UNMAP_BLOB and
+ * RESOURCE_UNREF, and its storage once the host has answered. */
+void vgpu_obj_free(struct drm_gem_object *obj);
+/** What a blob holds beyond an object: its piece of host-visible memory
+ * and the kernel's window onto it, given back. */
+void vgpu_blob_release(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
+/** Queue the UNMAP_BLOB of a blob placed in host-visible memory; 0, or
+ * -ENOMEM. */
+int32_t vgpu_blob_unmap(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo);
+/** Find the host-visible region at bind, when blobs were negotiated. */
+void vgpu_hostmem_init(struct virtio_gpu_device *vg);
+/** The object functions of a blob of host memory alone. */
+extern const struct drm_gem_object_funcs vgpu_host_funcs;
 /** Free completed commands; process context. */
 void vgpu_reap(struct virtio_gpu_device *vg);
 /** Stop DMA, fail commands and free backing and contexts; process context. */
@@ -590,11 +768,14 @@ int32_t vgpu_get_caps_ioctl(struct drm_device *, void *, struct drm_file *);
 int32_t vgpu_transfer_3d_ioctl(struct drm_device *, void *, struct drm_file *, int);
 int32_t vgpu_wait_ioctl(struct drm_device *, void *, struct drm_file *);
 int32_t vgpu_blob_ioctl(struct drm_device *, void *, struct drm_file *);
-/*
- * * Wait for foreign leaves of a dependency; this device's queue already
- * orders its own.
- * 0 or -errno, interruptible, process context. */
-int32_t vgpu_wait_dependency(struct virtio_gpu_device *vg, struct dma_fence *fence);
+int32_t vgpu_context_init_ioctl(struct drm_device *, void *, struct drm_file *);
+/**
+ * Wait for the leaves of a dependency on any fence context but `context`,
+ * the waiter's own, whose order the queue keeps; 0 or -errno,
+ * interruptible, process context.
+ */
+int32_t vgpu_wait_dependency(struct virtio_gpu_device *vg, struct dma_fence *fence,
+                             uint64_t context);
 /** Register or remove the reset trigger; registration returns 0 or -errno. */
 int32_t vgpu_reset_register(struct virtio_gpu_device *vg);
 void vgpu_reset_remove(struct virtio_gpu_device *vg);

@@ -225,8 +225,9 @@ int32_t vgpu_context_open(struct virtio_gpu_device *vg, struct drm_file *file)
 }
 
 /**
- * Queue the file's CTX_CREATE once; return 0 or -errno without a fence
- * wait.
+ * Queue the file's CTX_CREATE once, with the capability set and the name
+ * CONTEXT_INIT gave, if any, else the device's default set and "rach2";
+ * return 0 or -errno without a fence wait.
  */
 int32_t vgpu_context_ensure(struct virtio_gpu_device *vg, struct drm_file *file)
 {
@@ -248,8 +249,9 @@ int32_t vgpu_context_ensure(struct virtio_gpu_device *vg, struct drm_file *file)
     }
     req = (struct virtio_gpu_ctx_create *)(void *)cmd->page;
     req->hdr.ctx_id = ctx->id;
-    req->nlen = 5;
-    k_memcpy(req->debug_name, "rach2", 5);
+    req->context_init = ctx->context_init;
+    req->nlen = (uint32_t)k_strlen(ctx->debug_name[0] ? ctx->debug_name : "rach2");
+    k_memcpy(req->debug_name, ctx->debug_name[0] ? ctx->debug_name : "rach2", req->nlen);
     vgpu_cmd_send(cmd, NULL, NULL);
     ctx->created = 1;
     return 0;
@@ -375,8 +377,10 @@ static void transfer_done(struct virtio_gpu_cmd *cmd)
 }
 
 /**
- * Queue an upload or readback, keeping its buffer until completion; return
- * 0 or -errno.
+ * Queue an upload or readback, keeping its buffer until completion, as
+ * Linux: a blob of guest memory alone has no host copy and is refused, and
+ * only a blob with host memory takes a stride or a layer stride. Return 0
+ * or -errno.
  */
 int32_t vgpu_transfer_3d_ioctl(struct drm_device *dev, void *data, struct drm_file *file, int from)
 {
@@ -398,12 +402,14 @@ int32_t vgpu_transfer_3d_ioctl(struct drm_device *dev, void *data, struct drm_fi
         return -ENOENT;
     }
     bo = vgpu_bo(obj);
-    if (!bo || !bo->res_id || a->stride || a->layer_stride) {
+    if (!bo || !bo->res_id || bo->blob_mem == VIRTGPU_BLOB_MEM_GUEST ||
+        (bo->blob_mem != VIRTGPU_BLOB_MEM_HOST3D && bo->blob_mem != VIRTGPU_BLOB_MEM_HOST3D_GUEST &&
+         (a->stride || a->layer_stride))) {
         rc = -EINVAL;
         goto out;
     }
     dependency = dma_resv_snapshot(obj->resv, 1);
-    rc = dependency ? vgpu_wait_dependency(vg, dependency) : -ENOMEM;
+    rc = dependency ? vgpu_wait_dependency(vg, dependency, vg->fence_context) : -ENOMEM;
     dma_fence_put(dependency);
     if (rc || vg->dead) {
         if (!rc) {

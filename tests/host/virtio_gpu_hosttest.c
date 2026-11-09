@@ -143,6 +143,24 @@ int copy_to_user(void __user *dst, const void *src, size_t n)
     return 0;
 }
 
+/** Copy a string from a test address, at most `n` bytes; one below 4096
+ * faults. The length, or -ENAMETOOLONG with no NUL among the `n`. */
+int strncpy_from_user(char *dst, const char __user *src, uint32_t n)
+{
+    uint32_t i;
+
+    if ((uintptr_t)src < 4096) {
+        return -EFAULT;
+    }
+    for (i = 0; i < n; i++) {
+        dst[i] = ((const char *)src)[i];
+        if (!dst[i]) {
+            return (int)i;
+        }
+    }
+    return -ENAMETOOLONG;
+}
+
 #define UPTR(p) ((uint64_t)(uintptr_t)(p))
 
 static char last_log[256];
@@ -263,8 +281,19 @@ int32_t drm_event_reserve(struct drm_file *file, struct drm_pending_event *e)
     return 0;
 }
 
-/** Signal an event's fence, give back its space, if it has a file, and
- * free it. */
+/* Events sent and taken back, and the type of the last sent. */
+static uint32_t events_sent, events_cancelled, last_event_type;
+
+/** Give back a reserved event's space, if it has a file, and free it. */
+static void event_free(struct drm_pending_event *e)
+{
+    if (e->file) {
+        e->file->event_space += e->length;
+    }
+    kfree(e);
+}
+
+/** Signal an event's fence, count it, and free it, as if read. */
 void drm_send_event(struct drm_pending_event *e)
 {
     struct dma_fence *fence = e->fence;
@@ -274,16 +303,17 @@ void drm_send_event(struct drm_pending_event *e)
         dma_fence_signal(fence);
         dma_fence_put(fence);
     }
-    if (e->file) {
-        e->file->event_space += e->length;
-    }
-    kfree(e);
+    events_sent++;
+    last_event_type = e->event.base.type;
+    event_free(e);
 }
 
 /** Take back a reserved event. */
 void drm_event_cancel_free(struct drm_pending_event *e)
 {
-    drm_send_event(e);
+    dma_fence_put(e->fence);
+    events_cancelled++;
+    event_free(e);
 }
 
 #ifndef VGPU_3D_TEST
@@ -394,12 +424,17 @@ void drm_gem_object_put(struct drm_gem_object *obj)
     drm_dev_put(d);
 }
 
+/* Handles, each also on its file's list of `struct drm_handle`, where
+ * PRIME keeps its export. `prime_drop` drops a deleted handle's export, in
+ * the rows that have them. */
 #define MAX_HANDLES 32
 static struct {
     struct drm_file *file;
     uint32_t id;
     struct drm_gem_object *obj;
+    struct drm_handle node;
 } handles[MAX_HANDLES];
+static void (*prime_drop)(struct dma_buf *buf);
 
 /** The lowest free handle of `file` from 1, holding `obj`. */
 int32_t drm_gem_handle_create(struct drm_file *file, struct drm_gem_object *obj, uint32_t *handle)
@@ -427,6 +462,11 @@ int32_t drm_gem_handle_create(struct drm_file *file, struct drm_gem_object *obj,
     handles[slot].file = file;
     handles[slot].id = id;
     handles[slot].obj = obj;
+    k_memset(&handles[slot].node, 0, sizeof(handles[slot].node));
+    handles[slot].node.id = id;
+    handles[slot].node.object = obj;
+    handles[slot].node.next = file->objects;
+    file->objects = &handles[slot].node;
     obj->refs++;
     *handle = id;
     return 0;
@@ -453,6 +493,16 @@ int32_t drm_gem_handle_delete(struct drm_file *file, uint32_t handle)
 
     for (i = 0; i < MAX_HANDLES; i++) {
         if (handles[i].file == file && handles[i].id == handle) {
+            struct drm_handle **p;
+
+            for (p = &file->objects; *p && *p != &handles[i].node; p = &(*p)->next) {
+            }
+            if (*p) {
+                *p = handles[i].node.next;
+            }
+            if (handles[i].node.prime && prime_drop) {
+                prime_drop(handles[i].node.prime);
+            }
             handles[i].file = NULL;
             drm_gem_object_put(handles[i].obj);
             return 0;
@@ -791,7 +841,50 @@ static struct {
     uint32_t transfers, flushes;
     struct virtio_gpu_update_cursor cursor;
     uint32_t cursor_cmd;
+    uint64_t hostmem_len; /* shared memory region 1, 0 for none */
+    uint32_t windows;     /* kernel windows onto it now mapped */
+    pte_t window_cache;   /* the last window's cache bits */
 } gpu;
+
+/* Host-visible memory: shared memory region 1 at 14 TiB, as QEMU places
+ * it, whose first HOSTMEM_BACKING bytes are host memory here, which the
+ * model's MAP_BLOB and the kernel's windows reach. */
+#define HOSTMEM_ADDR    ((uint64_t)14 << 40)
+#define HOSTMEM_BACKING (1u << 20)
+static uint8_t hostmem[HOSTMEM_BACKING];
+
+int virtio_shm_region(struct virtio_dev *d, uint8_t id, uint64_t *addr, uint64_t *len)
+{
+    (void)d;
+    if (id != VIRTIO_GPU_SHM_ID_HOST_VISIBLE || !gpu.hostmem_len) {
+        return -ENOENT;
+    }
+    *addr = HOSTMEM_ADDR;
+    *len = gpu.hostmem_len;
+    return 0;
+}
+
+/** A window onto a piece of host-visible memory, which must lie within
+ * the modeled bytes. */
+uintptr_t mmio_map(uint64_t phys, size_t size, pte_t cache)
+{
+    CHECK(phys >= HOSTMEM_ADDR && phys - HOSTMEM_ADDR + size <= HOSTMEM_BACKING,
+          "a kernel window maps a piece of host-visible memory, never the whole");
+    if (phys < HOSTMEM_ADDR || phys - HOSTMEM_ADDR + size > HOSTMEM_BACKING) {
+        return 0;
+    }
+    gpu.windows++;
+    gpu.window_cache = cache;
+    return (uintptr_t)&hostmem[phys - HOSTMEM_ADDR];
+}
+
+void mmio_unmap(uintptr_t va, size_t size)
+{
+    (void)size;
+    CHECK(va >= (uintptr_t)hostmem && va < (uintptr_t)hostmem + HOSTMEM_BACKING && gpu.windows,
+          "an unmapped window was mapped");
+    gpu.windows--;
+}
 
 /** The request bytes of a chain, its readable segments gathered, into
  * `buf` of `cap`: their length. */
@@ -1736,7 +1829,7 @@ static void row_ioctls(void)
     mp.handle = 77;
     CHECK(vgpu_map_ioctl(dev, &mp, &file) == -ENOENT, "MAP of no handle is ENOENT");
 
-    gpu.answer = ANSWER_REAP;
+    gpu.answer = ANSWER_NEVER;
     k_memset(&t, 0, sizeof(t));
     t.bo_handle = rc.bo_handle;
     t.box.w = 16;
@@ -1746,8 +1839,8 @@ static void row_ioctls(void)
     w.handle = rc.bo_handle;
     w.flags = VIRTGPU_WAIT_NOWAIT;
     CHECK(vgpu_wait_ioctl(dev, &w, &file) == -EBUSY, "WAIT NOWAIT while the transfer is out");
-    (void)virtqueue_reap(vg->ctrlq);
-    CHECK(vgpu_wait_ioctl(dev, &w, &file) == 0, "WAIT once it is answered");
+    gpu.q[0].flight[gpu.q[0].nflight - 1].answered = 1;
+    CHECK(vgpu_wait_ioctl(dev, &w, &file) == 0, "WAIT once it is answered, which its reap takes");
     w.flags = 0;
     CHECK(vgpu_wait_ioctl(dev, &w, &file) == 0, "a waiting WAIT on an idle buffer");
     gpu.answer = ANSWER_KICK;

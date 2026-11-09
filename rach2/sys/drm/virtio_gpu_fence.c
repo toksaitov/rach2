@@ -24,7 +24,9 @@ static const struct dma_fence_ops vgpu_fence_ops = {fence_driver, fence_timeline
 
 /**
  * Initialize a command's fence once before reservation or descriptor
- * publication.
+ * publication: the next id of the device's, on the command's fence
+ * context, and with a ring, VIRTIO_GPU_FLAG_INFO_RING_IDX and the ring's
+ * index, as Linux's virtio_gpu_fence_emit.
  */
 void vgpu_cmd_prepare(struct virtio_gpu_cmd *cmd)
 {
@@ -33,19 +35,27 @@ void vgpu_cmd_prepare(struct virtio_gpu_cmd *cmd)
     uint32_t flags = spin_lock_irqsave(&vg->lock);
 
     if (cmd->fence && !cmd->prepared) {
-        dma_fence_init(cmd->fence, &vgpu_fence_ops, vg->fence_context, ++vg->fence_seq);
+        dma_fence_init(cmd->fence, &vgpu_fence_ops,
+                       cmd->fence_ctx ? cmd->fence_ctx : vg->fence_context, ++vg->fence_seq);
         hdr->flags |= VIRTIO_GPU_FLAG_FENCE;
         hdr->fence_id = vg->fence_seq;
+        if (cmd->ring) {
+            hdr->flags |= VIRTIO_GPU_FLAG_INFO_RING_IDX;
+            hdr->ring_idx = (uint8_t)cmd->ring_idx;
+        }
         cmd->prepared = 1;
     }
     spin_unlock_irqrestore(&vg->lock, flags);
 }
 
 /**
- * Wait interruptibly for foreign fence leaves; queue order covers this
- * device's leaves.
+ * Wait interruptibly for each leaf of `fence` on a fence context other than
+ * `context`, as Linux's virtio_gpu_do_fence_wait: the device keeps the
+ * order of one context's fences, those of the control queue or of one ring,
+ * and of nothing across them.
  */
-int32_t vgpu_wait_dependency(struct virtio_gpu_device *vg, struct dma_fence *fence)
+int32_t vgpu_wait_dependency(struct virtio_gpu_device *vg, struct dma_fence *fence,
+                             uint64_t context)
 {
     struct dma_fence *leaf, *stable;
     uint32_t i, n;
@@ -58,7 +68,7 @@ int32_t vgpu_wait_dependency(struct virtio_gpu_device *vg, struct dma_fence *fen
     n = dma_fence_count(stable);
     for (i = 0; i < n; i++) {
         leaf = dma_fence_at(stable, i);
-        if (leaf && leaf->context != vg->fence_context) {
+        if (leaf && leaf->context != context) {
             rc = dma_fence_wait_until(leaf, 1, 0x7fffffffffffffffll);
             if (rc) {
                 break;

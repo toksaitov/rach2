@@ -68,12 +68,14 @@ static int vgpu_wake_ready;
 
 static const struct drm_gem_object_funcs vgpu_obj_funcs;
 
-/** The virtio-gpu object `obj` is, or NULL for one of another kind, such
- * as an import through the shmem helper. */
-/** Return this driver's buffer record, or NULL for a foreign GEM object. */
+/** The virtio-gpu object `obj` is, of shmem pages or of host memory alone,
+ * or NULL for one of another kind, such as an import through the shmem
+ * helper. */
 struct virtio_gpu_object *vgpu_bo(struct drm_gem_object *obj)
 {
-    return obj && obj->funcs == &vgpu_obj_funcs ? (struct virtio_gpu_object *)obj : NULL;
+    return obj && (obj->funcs == &vgpu_obj_funcs || obj->funcs == &vgpu_host_funcs)
+               ? (struct virtio_gpu_object *)obj
+               : NULL;
 }
 
 /** Return the driver record embedded around dev; dev belongs to this driver. */
@@ -247,9 +249,11 @@ static void cmd_submit(struct virtio_gpu_cmd *cmd)
 
 /**
  * A queue's `done`: the device answered `cmd` with `len` bytes. The fence
- * signals first, failing with -EIO on an error answer, while the command is
- * still neither its waiter's to free nor on the done list; then it is
- * marked done, and the commands held for the queue go in. Handler context.
+ * signals first, failing with -EIO on an error answer, and with it every
+ * earlier fence of its fence context, whose order the device keeps, as
+ * Linux's virtio_gpu_fence_event_process does, while the command is still
+ * neither its waiter's to free nor on the done list; then it is marked
+ * done, and the commands held for the queue go in. Handler context.
  */
 static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
 {
@@ -280,7 +284,8 @@ static void cmd_done(struct virtqueue *vq, void *token, uint32_t len)
             dma_fence_signal(cmd->fence);
         } else {
             for (prior = vg->live; prior; prior = prior->live_next) {
-                if (prior->queued && prior->fence && prior->fence->seqno <= cmd->fence->seqno) {
+                if (prior->queued && prior->fence && prior->fence->context == cmd->fence->context &&
+                    prior->fence->seqno <= cmd->fence->seqno) {
                     dma_fence_signal(prior->fence);
                 }
             }
@@ -556,6 +561,38 @@ static void vgpu_set_scanout(struct virtio_gpu_device *vg, uint32_t scanout, uin
     vgpu_cmd_send(cmd, NULL, NULL);
 }
 
+/**
+ * SET_SCANOUT_BLOB, Linux's virtio_gpu_cmd_set_scanout_blob: scanout
+ * `scanout` shows rectangle `r` of the blob `bo` read as the framebuffer
+ * `fb`, XRGB8888 alone, which the device calls B8G8R8X8. Not waited for.
+ */
+static void vgpu_set_scanout_blob(struct virtio_gpu_device *vg, uint32_t scanout,
+                                  struct virtio_gpu_object *bo, const struct drm_framebuffer *fb,
+                                  struct virtio_gpu_rect r)
+{
+    struct virtio_gpu_cmd *cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_SET_SCANOUT_BLOB,
+                                              sizeof(struct virtio_gpu_set_scanout_blob));
+    struct virtio_gpu_set_scanout_blob *req;
+    int i;
+
+    if (!cmd) {
+        klog(KLOG_WARN, "virtio_gpu", "scanout %u: no memory for SET_SCANOUT_BLOB", scanout);
+        return;
+    }
+    req = cmd_req(cmd, struct virtio_gpu_set_scanout_blob);
+    req->scanout_id = scanout;
+    req->resource_id = bo->res_id;
+    req->format = VIRTIO_GPU_FORMAT_B8G8R8X8_UNORM;
+    req->width = fb->width;
+    req->height = fb->height;
+    for (i = 0; i < 4; i++) {
+        req->strides[i] = fb->pitches[i];
+        req->offsets[i] = fb->offsets[i];
+    }
+    req->r = r;
+    vgpu_cmd_send(cmd, NULL, NULL);
+}
+
 /** A TRANSFER_TO_HOST_2D of rectangle `r` of resource `res`, whose first
  * pixel lies `offset` bytes into its backing, not yet started; NULL with no
  * memory. */
@@ -593,21 +630,19 @@ static int32_t vgpu_flush(struct virtio_gpu_device *vg, uint32_t res, struct vir
     return vgpu_cmd_send_wait(cmd, NULL, 0);
 }
 
-/** The memory entry slot `n` of an ATTACH_BACKING: after the request in
- * the command's page for the first ones, then in the extra pages, the
- * next of which is taken when `n` first reaches it. NULL with no memory or
- * past VIRTIO_GPU_CMD_EXTRA pages. */
-static struct virtio_gpu_mem_entry *entry_slot(struct virtio_gpu_cmd *cmd, uint32_t n)
+/** The memory entry slot `n` of a request of `req` bytes: after the
+ * request in the command's page for the first ones, then in the extra
+ * pages, the next of which is taken when `n` first reaches it. NULL with no
+ * memory or past VIRTIO_GPU_CMD_EXTRA pages. */
+static struct virtio_gpu_mem_entry *entry_slot(struct virtio_gpu_cmd *cmd, uint32_t req, uint32_t n)
 {
-    struct virtio_gpu_mem_entry *inl =
-        (struct virtio_gpu_mem_entry *)(void *)(cmd->page +
-                                                sizeof(struct virtio_gpu_resource_attach_backing));
+    struct virtio_gpu_mem_entry *inl = (struct virtio_gpu_mem_entry *)(void *)(cmd->page + req);
     uint32_t k;
 
-    if (n < VIRTIO_GPU_INLINE_ENTS) {
+    if (n < VIRTIO_GPU_INLINE_ENTS(req)) {
         return &inl[n];
     }
-    n -= (uint32_t)VIRTIO_GPU_INLINE_ENTS;
+    n -= VIRTIO_GPU_INLINE_ENTS(req);
     k = n / (uint32_t)VIRTIO_GPU_PAGE_ENTS;
     if (k >= VIRTIO_GPU_CMD_EXTRA) {
         return NULL;
@@ -623,57 +658,43 @@ static struct virtio_gpu_mem_entry *entry_slot(struct virtio_gpu_cmd *cmd, uint3
 }
 
 /**
- * An ATTACH_BACKING of `bo`'s pages to its resource `res`, each page given
- * now, runs of adjacent frames as one entry, not yet started. NULL with
- * *err -ENOMEM, or -E2BIG for a chain of more segments than the queue
- * takes.
+ * Follow the request of `cmd`, ATTACH_BACKING or CREATE_BLOB, with the
+ * memory entries of `bo`'s pages, each page given now, runs of adjacent
+ * frames as one entry, and set its segments; their count goes in *n. 0;
+ * -ENOMEM, or -E2BIG for a chain of more segments than the queue takes.
  */
-static struct virtio_gpu_cmd *vgpu_attach_cmd(struct virtio_gpu_device *vg,
-                                              struct virtio_gpu_object *bo, uint32_t res,
-                                              int32_t *err)
+int32_t vgpu_backing_entries(struct virtio_gpu_cmd *cmd, struct virtio_gpu_object *bo, uint32_t *n)
 {
-    struct virtio_gpu_cmd *cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
-                                              sizeof(struct virtio_gpu_resource_attach_backing));
-    struct virtio_gpu_resource_attach_backing *req;
     struct virtio_gpu_mem_entry *e = NULL;
-    uint32_t pages = (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT), p, n = 0, k, left;
+    uint32_t pages = (uint32_t)(bo->shmem.base.size >> PAGE_SHIFT), p, k, left;
+    uint32_t req = cmd->sg[0].len, inl = VIRTIO_GPU_INLINE_ENTS(req);
     uintptr_t phys;
 
-    *err = -ENOMEM;
-    if (!cmd) {
-        return NULL;
-    }
+    *n = 0;
     for (p = 0; p < pages; p++) {
         phys = drm_gem_shmem_page(&bo->shmem, p);
         if (!phys) {
-            goto fail;
+            return -ENOMEM;
         }
         if (e && e->addr + e->length == (uint64_t)phys && e->length <= 0xFFFFFFFFu - PAGE_SIZE) {
             e->length += PAGE_SIZE;
             continue;
         }
-        e = entry_slot(cmd, n);
+        e = entry_slot(cmd, req, *n);
         if (!e) {
-            if (n >= VIRTIO_GPU_INLINE_ENTS + VIRTIO_GPU_CMD_EXTRA * VIRTIO_GPU_PAGE_ENTS) {
-                *err = -E2BIG;
-            }
-            goto fail;
+            return *n >= inl + VIRTIO_GPU_CMD_EXTRA * VIRTIO_GPU_PAGE_ENTS ? -E2BIG : -ENOMEM;
         }
         e->addr = (uint64_t)phys;
         e->length = PAGE_SIZE;
         e->padding = 0;
-        n++;
+        (*n)++;
     }
     if (cmd->nextra + 2 > (uint32_t)cmd->vq->size) {
-        *err = -E2BIG;
-        goto fail;
+        return -E2BIG;
     }
-    req = cmd_req(cmd, struct virtio_gpu_resource_attach_backing);
-    req->resource_id = res;
-    req->nr_entries = n;
-    k = n < VIRTIO_GPU_INLINE_ENTS ? n : (uint32_t)VIRTIO_GPU_INLINE_ENTS;
+    k = *n < inl ? *n : inl;
     cmd->sg[0].len += k * (uint32_t)sizeof(struct virtio_gpu_mem_entry);
-    left = n - k;
+    left = *n - k;
     for (k = 0; k < cmd->nextra; k++) {
         uint32_t here = left < VIRTIO_GPU_PAGE_ENTS ? left : (uint32_t)VIRTIO_GPU_PAGE_ENTS;
 
@@ -682,11 +703,35 @@ static struct virtio_gpu_cmd *vgpu_attach_cmd(struct virtio_gpu_device *vg,
         left -= here;
     }
     cmd->nout = 1 + cmd->nextra;
-    *err = 0;
+    return 0;
+}
+
+/**
+ * An ATTACH_BACKING of `bo`'s pages to its resource `res`, not yet started
+ * (`vgpu_backing_entries`). NULL with *err -ENOMEM or -E2BIG.
+ */
+static struct virtio_gpu_cmd *vgpu_attach_cmd(struct virtio_gpu_device *vg,
+                                              struct virtio_gpu_object *bo, uint32_t res,
+                                              int32_t *err)
+{
+    struct virtio_gpu_cmd *cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
+                                              sizeof(struct virtio_gpu_resource_attach_backing));
+    struct virtio_gpu_resource_attach_backing *req;
+    uint32_t n;
+
+    *err = -ENOMEM;
+    if (!cmd) {
+        return NULL;
+    }
+    *err = vgpu_backing_entries(cmd, bo, &n);
+    if (*err != 0) {
+        vgpu_cmd_free(cmd);
+        return NULL;
+    }
+    req = cmd_req(cmd, struct virtio_gpu_resource_attach_backing);
+    req->resource_id = res;
+    req->nr_entries = n;
     return cmd;
-fail:
-    vgpu_cmd_free(cmd);
-    return NULL;
 }
 
 /* ------------------------------------------------------------------------
@@ -694,7 +739,7 @@ fail:
  */
 
 /** The lowest free resource id from 1, now taken, or 0 when all are. */
-static uint32_t res_id_get(struct virtio_gpu_device *vg)
+uint32_t vgpu_res_id_get(struct virtio_gpu_device *vg)
 {
     uint32_t i;
 
@@ -713,7 +758,7 @@ static uint32_t res_id_get(struct virtio_gpu_device *vg)
 }
 
 /** Give back resource id `id`. */
-static void res_id_put(struct virtio_gpu_device *vg, uint32_t id)
+void vgpu_res_id_put(struct virtio_gpu_device *vg, uint32_t id)
 {
     if (id >= 1 && id <= VIRTIO_GPU_MAX_RESOURCES) {
         vg->res_ids[(id - 1) / 32] &= ~(1u << ((id - 1) % 32));
@@ -766,19 +811,21 @@ static uintptr_t obj_page(struct drm_gem_object *obj, uint32_t pgoff)
     return drm_gem_shmem_page(&((struct virtio_gpu_object *)obj)->shmem, pgoff);
 }
 
-/** Free an object's frames, its resource id and its record. */
+/** Free an object's frames, its piece of host-visible memory, its resource
+ * id and its record. */
 static void obj_release(struct virtio_gpu_object *bo)
 {
     struct virtio_gpu_object **p;
     struct virtio_gpu_device *vg = to_vg(bo->shmem.base.dev);
 
+    vgpu_blob_release(vg, bo);
     for (p = &vg->resources; *p && *p != bo; p = &(*p)->next) {
     }
     if (*p) {
         *p = bo->next;
     }
     if (bo->res_id) {
-        res_id_put(to_vg(bo->shmem.base.dev), bo->res_id);
+        vgpu_res_id_put(to_vg(bo->shmem.base.dev), bo->res_id);
     }
     shmem_free(&bo->shmem.pages);
     kfree(bo);
@@ -799,13 +846,15 @@ static void unref_done(struct virtio_gpu_cmd *cmd)
 }
 
 /**
- * The `free` of an object, after its last reference: RESOURCE_UNREF, which
- * also detaches the backing, and the frames freed once the host has
- * answered, since until then it may read them, as Linux's
- * virtio_gpu_free_object does. Without memory for the command, the frames
- * are freed only after an unplug resets the device and revokes mappings.
+ * The `free` of an object, after its last reference: UNMAP_BLOB for a blob
+ * placed in host-visible memory, then RESOURCE_UNREF, which also detaches
+ * the backing, and the frames and the piece freed once the host has
+ * answered, since until then it may use them, as Linux's
+ * virtio_gpu_free_object and virtio_gpu_vram_free do. Without memory for
+ * the commands, they are freed only after an unplug resets the device and
+ * revokes mappings.
  */
-static void obj_free(struct drm_gem_object *obj)
+void vgpu_obj_free(struct drm_gem_object *obj)
 {
     struct virtio_gpu_object *bo = (struct virtio_gpu_object *)obj;
     struct virtio_gpu_device *vg = to_vg(obj->dev);
@@ -815,6 +864,10 @@ static void obj_free(struct drm_gem_object *obj)
     if (bo->res_id && !vg->dead) {
         cmd = vgpu_cmd_new(vg, vg->ctrlq, VIRTIO_GPU_CMD_RESOURCE_UNREF,
                            sizeof(struct virtio_gpu_resource_unref));
+        if (cmd && bo->host_visible && vgpu_blob_unmap(vg, bo) != 0) {
+            vgpu_cmd_free(cmd);
+            cmd = NULL;
+        }
         if (cmd) {
             cmd_req(cmd, struct virtio_gpu_resource_unref)->resource_id = bo->res_id;
             drm_dev_get(obj->dev);
@@ -827,8 +880,25 @@ static void obj_free(struct drm_gem_object *obj)
     obj_release(bo);
 }
 
-static const struct drm_gem_object_funcs vgpu_obj_funcs = {obj_free, obj_mmap, NULL,
-                                                           NULL,     obj_page, NULL};
+static const struct drm_gem_object_funcs vgpu_obj_funcs = {vgpu_obj_free, obj_mmap, NULL,
+                                                           NULL,          obj_page, NULL};
+
+/**
+ * Make `bo`, zeroed, an object of `vg` of `size` bytes, a whole number of
+ * pages, on the device's list: of shmem pages, given as they are first
+ * asked for, or with `host` of host memory alone, which has none. One
+ * reference, the caller's; no resource id yet.
+ */
+void vgpu_obj_init(struct virtio_gpu_device *vg, struct virtio_gpu_object *bo, uint64_t size,
+                   int host)
+{
+    drm_gem_object_init(&vg->drm, &bo->shmem.base, size, host ? &vgpu_host_funcs : &vgpu_obj_funcs);
+    bo->next = vg->resources;
+    vg->resources = bo;
+    if (!host) {
+        bo->shmem.pages.size = size;
+    }
+}
 
 /**
  * A new object of `size` bytes with a 2D resource of `format` and
@@ -863,14 +933,11 @@ struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t
         *err = -ENOMEM;
         return NULL;
     }
-    drm_gem_object_init(&vg->drm, &bo->shmem.base, size, &vgpu_obj_funcs);
-    bo->next = vg->resources;
-    vg->resources = bo;
-    bo->shmem.pages.size = size;
+    vgpu_obj_init(vg, bo, size, 0);
     bo->format = format;
     bo->width = width;
     bo->height = height;
-    id = res_id_get(vg);
+    id = vgpu_res_id_get(vg);
     if (!id) {
         *err = -ENOSPC;
         drm_gem_object_put(&bo->shmem.base);
@@ -886,7 +953,7 @@ struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t
         } else {
             *err = -ENOMEM;
         }
-        res_id_put(vg, id);
+        vgpu_res_id_put(vg, id);
         drm_gem_object_put(&bo->shmem.base);
         return NULL;
     }
@@ -913,8 +980,14 @@ struct virtio_gpu_object *vgpu_obj_create(struct virtio_gpu_device *vg, uint64_t
     }
     *err = vgpu_cmd_send_wait(create, NULL, 0);
     if (*err != 0) {
+        /* An error answer leaves the host without the id, which an UNREF
+         * would name in vain; only one not answered yet may hold it. */
         vgpu_cmd_free(attach);
-        bo->res_id = id;
+        if (*err == -ETIMEDOUT) {
+            bo->res_id = id;
+        } else {
+            vgpu_res_id_put(vg, id);
+        }
         drm_gem_object_put(&bo->shmem.base);
         return NULL;
     }
@@ -1058,7 +1131,8 @@ static int damage_merged(const struct drm_plane_state *old, const struct drm_pla
  * The primary plane's update, Linux's virtio_gpu_primary_plane_update: with
  * no framebuffer or the CRTC off, the scanout shows nothing; otherwise the
  * damaged rectangle of a dumb buffer goes to the host, the scanout is set
- * again when the framebuffer, the source or the mode changed, and the
+ * again, with SET_SCANOUT_BLOB for a blob, when the framebuffer, the source
+ * or the mode changed, and the
  * rectangle is flushed to the screen. May sleep.
  */
 static void primary_update(struct drm_plane *plane, struct drm_atomic_state *state)
@@ -1099,9 +1173,14 @@ static void primary_update(struct drm_plane *plane, struct drm_atomic_state *sta
     if (fb != old->fb || ps->src_w != old->src_w || ps->src_h != old->src_h ||
         ps->src_x != old->src_x || ps->src_y != old->src_y ||
         (cs && drm_atomic_crtc_needs_modeset(cs))) {
-        vgpu_set_scanout(
-            vg, o->index, res,
-            rect_of(ps->src_x >> 16, ps->src_y >> 16, ps->src_w >> 16, ps->src_h >> 16));
+        struct virtio_gpu_rect src =
+            rect_of(ps->src_x >> 16, ps->src_y >> 16, ps->src_w >> 16, ps->src_h >> 16);
+
+        if (bo && bo->blob_mem) {
+            vgpu_set_scanout_blob(vg, o->index, bo, fb, src);
+        } else {
+            vgpu_set_scanout(vg, o->index, res, src);
+        }
     }
     (void)vgpu_flush(vg, res, rect_of_drm(&r));
 }
@@ -1467,11 +1546,17 @@ static int32_t vgpu_getparam_ioctl(struct drm_device *dev, void *data, struct dr
         value = (int32_t)to_vg(dev)->capset_mask;
         break;
     case VIRTGPU_PARAM_RESOURCE_BLOB:
+        value = to_vg(dev)->has_blob;
+        break;
     case VIRTGPU_PARAM_HOST_VISIBLE:
+        value = to_vg(dev)->has_host_visible;
+        break;
     case VIRTGPU_PARAM_CROSS_DEVICE:
+        value = to_vg(dev)->has_uuid;
+        break;
     case VIRTGPU_PARAM_CONTEXT_INIT:
     case VIRTGPU_PARAM_EXPLICIT_DEBUG_NAME:
-        value = 0;
+        value = to_vg(dev)->has_context_init;
         break;
     default:
         return -EINVAL;
@@ -1523,7 +1608,9 @@ static int32_t vgpu_resource_create_ioctl(struct drm_device *dev, void *data, st
     return err;
 }
 
-/** RESOURCE_INFO: a handle's object's size and resource id. ENOENT. */
+/** RESOURCE_INFO: a handle's object's size and resource id, and where a
+ * blob's memory is as Linux says it: HOST3D for any with host memory,
+ * GUEST for guest memory alone, 0 for no blob. ENOENT. */
 static int32_t vgpu_resource_info_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 {
     struct drm_virtgpu_resource_info *ri = (struct drm_virtgpu_resource_info *)data;
@@ -1537,6 +1624,9 @@ static int32_t vgpu_resource_info_ioctl(struct drm_device *dev, void *data, stru
     bo = vgpu_bo(obj);
     ri->size = (uint32_t)obj->size;
     ri->res_handle = bo ? bo->res_id : 0;
+    ri->blob_mem = !bo || !bo->blob_mem                     ? 0
+                   : bo->blob_mem == VIRTGPU_BLOB_MEM_GUEST ? VIRTGPU_BLOB_MEM_GUEST
+                                                            : VIRTGPU_BLOB_MEM_HOST3D;
     drm_gem_object_put(obj);
     return 0;
 }
@@ -1608,7 +1698,8 @@ static const struct drm_ioctl_desc vgpu_ioctls[DRM_VIRTIO_NUM_IOCTLS] = {
     {DRM_IOCTL_VIRTGPU_GET_CAPS, DRM_RENDER_ALLOW, vgpu_get_caps_ioctl, "VIRTGPU_GET_CAPS"},
     {DRM_IOCTL_VIRTGPU_RESOURCE_CREATE_BLOB, DRM_RENDER_ALLOW, vgpu_blob_ioctl,
      "VIRTGPU_RESOURCE_CREATE_BLOB"},
-    {DRM_IOCTL_VIRTGPU_CONTEXT_INIT, DRM_RENDER_ALLOW, vgpu_blob_ioctl, "VIRTGPU_CONTEXT_INIT"}};
+    {DRM_IOCTL_VIRTGPU_CONTEXT_INIT, DRM_RENDER_ALLOW, vgpu_context_init_ioctl,
+     "VIRTGPU_CONTEXT_INIT"}};
 
 /* ------------------------------------------------------------------------
  * The device's life
@@ -1788,9 +1879,14 @@ static int32_t vgpu_queues_init(struct virtio_gpu_device *vg)
     vg->has_virgl = virtio_has(vg->vdev, VIRTIO_GPU_F_VIRGL);
     vg->has_edid = virtio_has(vg->vdev, VIRTIO_GPU_F_EDID);
     vg->has_indirect = virtio_has(vg->vdev, VIRTIO_F_INDIRECT_DESC);
-    klog(KLOG_INFO, "virtio_gpu", "features: %cvirgl %cedid -resource_blob -host_visible",
-         vg->has_virgl ? '+' : '-', vg->has_edid ? '+' : '-');
-    klog(KLOG_INFO, "virtio_gpu", "features: -context_init");
+    vg->has_blob = virtio_has(vg->vdev, VIRTIO_GPU_F_RESOURCE_BLOB);
+    vg->has_context_init = virtio_has(vg->vdev, VIRTIO_GPU_F_CONTEXT_INIT);
+    vg->has_uuid = virtio_has(vg->vdev, VIRTIO_GPU_F_RESOURCE_UUID);
+    vgpu_hostmem_init(vg);
+    klog(KLOG_INFO, "virtio_gpu", "features: %cvirgl %cedid %cresource_blob %chost_visible",
+         vg->has_virgl ? '+' : '-', vg->has_edid ? '+' : '-', vg->has_blob ? '+' : '-',
+         vg->has_host_visible ? '+' : '-');
+    klog(KLOG_INFO, "virtio_gpu", "features: %ccontext_init", vg->has_context_init ? '+' : '-');
     vg->vdev->priv = vg;
     vg->vdev->config_changed = vgpu_config_changed;
     rc = virtio_queue_setup(vg->vdev, VIRTIO_GPU_QUEUE_CONTROL, cmd_done, vg, &vg->ctrlq);
@@ -1806,9 +1902,10 @@ static int32_t vgpu_queues_init(struct virtio_gpu_device *vg)
 /**
  * Bind the virtio device `vdev`, Linux's virtio_gpu_probe and
  * virtio_gpu_init: the firmware's framebuffer removed under virtio-vga, the
- * features negotiated (EDID and virgl), both
- * queues, the display, DRIVER_OK, the EDIDs and the displays read, and the
- * DRM device registered. 0 or -errno, with the device reset.
+ * features negotiated (EDID, virgl, resource UUIDs, blobs and context
+ * initialization), the host-visible region found, both queues, the
+ * display, DRIVER_OK, the EDIDs and the displays read, and the DRM device
+ * registered. 0 or -errno, with the device reset.
  */
 static int32_t vgpu_bind(struct virtio_dev *vdev)
 {
@@ -1837,7 +1934,12 @@ static int32_t vgpu_bind(struct virtio_dev *vdev)
         kfree(vg);
         return -ENOMEM;
     }
-    rc = virtio_init(vdev, VIRTIO_BIT(VIRTIO_GPU_F_EDID) | VIRTIO_BIT(VIRTIO_GPU_F_VIRGL), 2);
+    rc = virtio_init(vdev,
+                     VIRTIO_BIT(VIRTIO_GPU_F_EDID) | VIRTIO_BIT(VIRTIO_GPU_F_VIRGL) |
+                         VIRTIO_BIT(VIRTIO_GPU_F_RESOURCE_UUID) |
+                         VIRTIO_BIT(VIRTIO_GPU_F_RESOURCE_BLOB) |
+                         VIRTIO_BIT(VIRTIO_GPU_F_CONTEXT_INIT),
+                     2);
     if (rc != 0) {
         kfree(vg->res_ids);
         kfree(vg);
