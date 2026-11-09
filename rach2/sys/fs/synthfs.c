@@ -930,6 +930,7 @@ const char *sysfs_attr(int node, int n)
 int sysfs_attr_writable(int node, int attr)
 {
     return (node == SYSFS_RTC0 && attr == 5) || (node == SYSFS_POWER && attr == 1) ||
+           ((node == SYSFS_PCI_DEVICE || node == SYSFS_USB_DEVICE) && attr == 0) ||
            (node == SYSFS_BACKLIGHT && (attr == BACKLIGHT_POWER || attr == BACKLIGHT_BRIGHTNESS)) ||
            (node == SYSFS_RFKILL && (attr == RFKILL_ATTR_SOFT || attr == RFKILL_ATTR_STATE));
 }

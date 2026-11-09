@@ -573,52 +573,38 @@ static void ue_lines(struct uevent_msg *m, const char *text, uint32_t len)
     }
 }
 
-int32_t sysfs_uevent(int dir, const char *action, const char *env)
+int32_t sysfs_uevent_path(const char *path, const char *subsystem, const char *action,
+                          const char *env, const char *vars, uint32_t vars_len)
 {
     struct uevent_msg m;
-    char path[256], link[256];
-    int sub, attr, n, i;
-    int32_t got;
 
-    if (!is_dir(node_of(dir))) {
-        return -ENOENT;
-    }
-    m.buf = kmalloc(2 * UEVENT_MAX);
+    m.buf = kmalloc(UEVENT_MAX);
     if (!m.buf) {
         return -ENOMEM;
     }
     m.len = 0;
     m.full = 0;
-    sysfs_node_path(dir, path, (int)sizeof(path));
+    path += 4; /* "/sys" */
     ue_str(&m, action);
     ue_str(&m, "@");
-    ue_str(&m, path + 4);
+    ue_str(&m, path);
     ue_put(&m, "", 1);
     ue_str(&m, "ACTION=");
     ue_str(&m, action);
     ue_put(&m, "", 1);
     ue_str(&m, "DEVPATH=");
-    ue_str(&m, path + 4);
+    ue_str(&m, path);
     ue_put(&m, "", 1);
-    sub = sysfs_node_child(dir, "subsystem", 9);
-    n = sub > 0 ? sysfs_link_text(sub, link, (int)sizeof(link) - 1) : -1;
-    if (n > 0) {
-        for (i = n; i > 0 && link[i - 1] != '/'; i--) {
-        }
-        link[n] = '\0';
+    if (subsystem) {
         ue_str(&m, "SUBSYSTEM=");
-        ue_str(&m, link + i);
+        ue_str(&m, subsystem);
         ue_put(&m, "", 1);
     }
     if (env) {
         ue_lines(&m, env, (uint32_t)k_strlen(env));
     }
-    attr = sysfs_node_child(dir, "uevent", 6);
-    got = attr > 0 ? sysfs_node_show(attr, m.buf + UEVENT_MAX, UEVENT_MAX) : 0;
-    if (got > (int32_t)UEVENT_MAX) {
-        m.full = 1;
-    } else if (got > 0) {
-        ue_lines(&m, m.buf + UEVENT_MAX, (uint32_t)got);
+    if (vars) {
+        ue_lines(&m, vars, vars_len);
     }
     ue_str(&m, "SEQNUM=");
     ue_u32(&m, uevent_seqnum + 1);
@@ -633,6 +619,38 @@ int32_t sysfs_uevent(int dir, const char *action, const char *env)
     return 0;
 }
 
+int32_t sysfs_uevent(int dir, const char *action, const char *env)
+{
+    char path[256], link[256];
+    char *vars;
+    int sub, attr, n, i;
+    int32_t got, rc;
+
+    if (!is_dir(node_of(dir))) {
+        return -ENOENT;
+    }
+    vars = kmalloc(UEVENT_MAX);
+    if (!vars) {
+        return -ENOMEM;
+    }
+    sysfs_node_path(dir, path, (int)sizeof(path));
+    sub = sysfs_node_child(dir, "subsystem", 9);
+    n = sub > 0 ? sysfs_link_text(sub, link, (int)sizeof(link) - 1) : -1;
+    for (i = n; i > 0 && link[i - 1] != '/'; i--) {
+    }
+    if (n > 0) {
+        link[n] = '\0';
+    }
+    attr = sysfs_node_child(dir, "uevent", 6);
+    got = attr > 0 ? sysfs_node_show(attr, vars, UEVENT_MAX) : 0;
+    rc = got > (int32_t)UEVENT_MAX
+             ? -E2BIG
+             : sysfs_uevent_path(path, n > 0 ? link + i : NULL, action, env, got > 0 ? vars : NULL,
+                                 got > 0 ? (uint32_t)got : 0);
+    kfree(vars);
+    return rc;
+}
+
 /** Whether the `len` bytes at `s` are the word `w`. */
 static int word_is(const char *s, uint32_t len, const char *w)
 {
@@ -643,12 +661,47 @@ static int word_is(const char *s, uint32_t len, const char *w)
     return i == len && w[i] == '\0';
 }
 
-int32_t sysfs_uevent_write(int dir, const char *buf, uint32_t len)
+/** The number of the uevent action named by the `len` bytes at `s` in
+ * `actions`, or -1. */
+static int action_of(const char *const *actions, const char *s, uint32_t len)
 {
-    static const char *const actions[] = {"add",    "remove",  "change", "move",
-                                          "online", "offline", "bind",   "unbind"};
-    char env[256], action[8];
-    uint32_t at = 0, start, n = 0, i, words = 0, plen;
+    int i;
+
+    for (i = 0; actions[i]; i++) {
+        if (word_is(s, len, actions[i])) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/** Append the argument word of `len` bytes at `s`, the `nth` after the
+ * action, to `env` of SYSFS_SYNTH_ENV_MAX bytes at `*n`: the first is the
+ * UUID, 36 characters, and the rest `KEY=value`. 0, or -EINVAL. */
+static int32_t synth_arg(char *env, uint32_t *n, uint32_t nth, const char *s, uint32_t len)
+{
+    const char *prefix = nth == 1 ? "SYNTH_UUID=" : "SYNTH_ARG_";
+    uint32_t plen = (uint32_t)k_strlen(prefix), i;
+
+    for (i = 0; i < len && s[i] != '='; i++) {
+    }
+    if ((nth == 1 && len != 36) || (nth > 1 && (i == 0 || i == len)) ||
+        *n + plen + len + 2 > SYSFS_SYNTH_ENV_MAX) {
+        return -EINVAL;
+    }
+    k_memcpy(env + *n, prefix, plen);
+    *n += plen;
+    k_memcpy(env + *n, s, len);
+    *n += len;
+    env[(*n)++] = '\n';
+    return 0;
+}
+
+int32_t sysfs_uevent_parse(const char *buf, uint32_t len, char *action, char *env)
+{
+    static const char *const actions[] = {"add",     "remove", "change", "move", "online",
+                                          "offline", "bind",   "unbind", 0};
+    uint32_t at = 0, start, n = 0, words = 0;
     int a = -1;
 
     while (at < len) {
@@ -663,29 +716,12 @@ int32_t sysfs_uevent_write(int dir, const char *buf, uint32_t len)
             break;
         }
         if (words == 0) {
-            for (i = 0; i < sizeof(actions) / sizeof(actions[0]); i++) {
-                if (word_is(buf + start, at - start, actions[i])) {
-                    a = (int)i;
-                }
-            }
-            if (a < 0) {
-                return -EINVAL;
-            }
-        } else {
-            const char *prefix = words == 1 ? "SYNTH_UUID=" : "SYNTH_ARG_";
-
-            if (words == 1 && at - start != 36) {
-                return -EINVAL;
-            }
-            plen = (uint32_t)k_strlen(prefix);
-            if (n + plen + (at - start) + 2 > sizeof(env)) {
-                return -EINVAL;
-            }
-            k_memcpy(env + n, prefix, plen);
-            n += plen;
-            k_memcpy(env + n, buf + start, at - start);
-            n += at - start;
-            env[n++] = '\n';
+            a = action_of(actions, buf + start, at - start);
+        } else if (synth_arg(env, &n, words, buf + start, at - start) != 0) {
+            return -EINVAL;
+        }
+        if (a < 0) {
+            return -EINVAL;
         }
         words++;
     }
@@ -697,10 +733,20 @@ int32_t sysfs_uevent_write(int dir, const char *buf, uint32_t len)
         n = 13;
     }
     env[n] = '\0';
-    k_strncpy(action, actions[a], sizeof(action) - 1);
-    action[sizeof(action) - 1] = '\0';
-    i = (uint32_t)sysfs_uevent(dir, action, env);
-    return (int32_t)i < 0 ? (int32_t)i : (int32_t)len;
+    k_strncpy(action, actions[a], 7);
+    action[7] = '\0';
+    return 0;
+}
+
+int32_t sysfs_uevent_write(int dir, const char *buf, uint32_t len)
+{
+    char env[SYSFS_SYNTH_ENV_MAX], action[8];
+    int32_t rc = sysfs_uevent_parse(buf, len, action, env);
+
+    if (rc == 0) {
+        rc = sysfs_uevent(dir, action, env);
+    }
+    return rc < 0 ? rc : (int32_t)len;
 }
 
 uint32_t sysfs_uevent_seqnum(void)
