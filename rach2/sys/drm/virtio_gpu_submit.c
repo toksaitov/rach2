@@ -91,7 +91,7 @@ static int32_t sync_parse(struct virtio_gpu_device *vg, struct drm_file *file,
                            bytes)) {
             return -EFAULT;
         }
-        if (a.flags & ~VIRTGPU_EXECBUF_SYNCOBJ_RESET) {
+        if ((out && a.flags) || (a.flags & ~VIRTGPU_EXECBUF_SYNCOBJ_RESET)) {
             return -EINVAL;
         }
         syncs[i].obj = drm_syncobj_find(file, a.handle);

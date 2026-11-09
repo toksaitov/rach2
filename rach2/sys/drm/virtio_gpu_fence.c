@@ -47,20 +47,26 @@ void vgpu_cmd_prepare(struct virtio_gpu_cmd *cmd)
  */
 int32_t vgpu_wait_dependency(struct virtio_gpu_device *vg, struct dma_fence *fence)
 {
-    struct dma_fence *leaf;
-    uint32_t i, n = dma_fence_count(fence);
-    int32_t rc;
+    struct dma_fence *leaf, *stable;
+    uint32_t i, n;
+    int32_t rc = 0;
 
+    stable = dma_fence_unwrap_merge(&fence, 1);
+    if (!stable) {
+        return -ENOMEM;
+    }
+    n = dma_fence_count(stable);
     for (i = 0; i < n; i++) {
-        leaf = dma_fence_at(fence, i);
+        leaf = dma_fence_at(stable, i);
         if (leaf && leaf->context != vg->fence_context) {
             rc = dma_fence_wait_until(leaf, 1, 0x7fffffffffffffffll);
             if (rc) {
-                return rc;
+                break;
             }
         }
     }
-    return vg->dead ? -ENODEV : 0;
+    dma_fence_put(stable);
+    return rc ? rc : (vg->dead ? -ENODEV : 0);
 }
 
 /**

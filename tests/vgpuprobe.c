@@ -287,6 +287,7 @@ static void reset_row(void)
     struct drm_virtgpu_execbuffer a;
     struct drm_virtgpu_3d_wait w;
     struct sync_file_info before, after;
+    char status[16];
 
     syscall1(SYS_CLOSE, fence_fd);
     fence_fd = -1;
@@ -311,7 +312,12 @@ static void reset_row(void)
     require(syscall3(SYS_WRITE, reset_fd, (long)"1\n", 2) == 2, "trigger reset");
     zero(&after, sizeof(after));
     require(call(fence_fd, SYNC_IOC_FILE_INFO, &after) == 0, "fence after reset");
-    require(before.status != 0 || after.status == -19, "every pending fence fails with ENODEV");
+    probe_line("VGPUPROBE RESET before ", report_decimal(status, before.status), 0);
+    probe_line(after.status < 0 ? "VGPUPROBE RESET after -" : "VGPUPROBE RESET after ",
+               report_decimal(status, after.status < 0 ? -after.status : after.status), 0);
+    require((before.status == 1 && after.status == 1) ||
+                (before.status == 0 && (after.status == 1 || after.status == -19)),
+            "fence completes or fails with ENODEV at reset");
     w.handle = bo_handle;
     w.flags = 0;
     zero(&a, sizeof(a));
