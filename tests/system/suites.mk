@@ -1780,7 +1780,11 @@ $(ARCH_BUILD)/tests/musl/creddisk $(ARCH_BUILD)/tests/musl/procfilesmusl: musl-p
 include tests/graphics/d3d/rules.mk
 
 # `tests/run desktop`: an ordinary headless Weston session at boot, input
-# discovery, and browser and ALSA tones measured through OSS loopback.
+# discovery, and browser and ALSA tones measured through OSS loopback; Weston
+# at boot on bochs with Pixman and on virtio-gpu with GL, the browsers taking
+# keys and a click through QMP, a resolution change, and the console's frame
+# and keyboard back after Weston's SIGKILL; on i686, Weston on bochs, evdev,
+# an llvmpipe render checked pixel by pixel and modetest.
 DESKTOP_TEST_DISK = $(IMAGES_DIR)/desktop-test.disk
 $(DESKTOP_TEST_DISK): $(OS_REAL_GNU_EXT2) $(MKMBR)
 	@mkdir -p $(@D)
@@ -1792,6 +1796,10 @@ $(DESKTOP_TEST_DISK): $(OS_REAL_GNU_EXT2) $(MKMBR)
 	mv $@.tmp $@
 
 build/tests/graphics/desktop.py: tests/graphics/desktop.py
+	@mkdir -p $(@D)
+	cp $< $@
+
+build/tests/graphics/desktop_display.py: tests/graphics/desktop_display.py
 	@mkdir -p $(@D)
 	cp $< $@
 
