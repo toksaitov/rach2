@@ -5,7 +5,7 @@
 #
 #   debian-ref.sh fetch
 #   debian-ref.sh prepare [-n]
-#   debian-ref.sh run [-p PROFILE] [-c CPUS] [-m MIB] [-g CLASS] [-d]
+#   debian-ref.sh run [-p PROFILE] [-c CPUS] [-m MIB] [-g CLASS] [-d] [-l]
 #                     [-r RECORD] [-i FILE]... [-o FILE]... COMMAND
 #
 # `fetch` downloads the pinned cloud image that `image` names and checks its
@@ -24,6 +24,12 @@
 # error: the profile, firmware, accelerator, processor, CPUs, memory, QEMU's
 # version, the image and the guest's environment. It exits with COMMAND's
 # status, or 1 when a file of -o cannot be copied.
+#
+# On a machine with an installed site policy, /etc/rach2/etude-site or the
+# file ETUDE_SITE names, `run` runs as one claim of the site's ledger through
+# the tree's `etude admit -c`, which takes the guest's processors and its
+# memory with QEMU's 1 GiB: every CPU, or with -l, a light guest's, two.
+# It waits in the ledger for the site's wait, as etude's own guests do.
 #
 # Debian's GRUB under SeaBIOS resets at once with a display that has no VGA,
 # so the virtio-gpu and none profiles boot by OVMF and the others by
@@ -156,16 +162,43 @@ prepare()
     echo "debian-ref: result: prepared $prepared"
 }
 
+# site_field NAME: the value of the field NAME of the site policy $site.
+site_field()
+{
+    sed -n "s/^$1 //p" "$site"
+}
+
+# admitted ARGS: run `run ARGS` again as a claim of the site's ledger, with
+# the processors and the memory that $cpus, $mib and $light give.
+admitted()
+{
+    etude=$tree/build/tools/etude/etude
+    make -s -C "$tree" ARCH=i686 build/tools/etude/etude >&2 || die "run: etude did not build"
+    if [ "$light" = 1 ] && [ "$cpus" -gt 2 ]; then
+        millis=2000
+    else
+        millis=$((cpus * 1000))
+    fi
+    bytes=$(((mib + 1024) * 1048576))
+    id=debian-ref:$(id -un):$$:$(date +%s)
+    exec "$etude" admit -c -d "$(site_field locks)" -w "$(site_field wait)" \
+        "$(site_field ledger)" "$id" "$(id -un)" shared "$millis,$bytes,1" \
+        "$(site_field capacity)" "$(site_field seconds)" \
+        "$(command -v env)" DEBIAN_REF_CLAIM="$id" sh "$0" run "$@"
+}
+
 run()
 {
-    profile=std-vga cpus=8 mib=8192 class=performance done=0 record='' ins='' outs=''
-    while getopts p:c:m:g:dr:i:o: o; do
+    profile=std-vga cpus=8 mib=8192 class=performance done=0 light=0 record='' ins='' outs=''
+    site=${ETUDE_SITE:-/etc/rach2/etude-site}
+    while getopts p:c:m:g:dlr:i:o: o; do
         case $o in
             p) profile=$OPTARG ;;
             c) cpus=$OPTARG ;;
             m) mib=$OPTARG ;;
             g) class=$OPTARG ;;
             d) done=1 ;;
+            l) light=1 ;;
             r) record=$OPTARG ;;
             i)
                 [ -f "$OPTARG" ] || die "run: no file $OPTARG"
@@ -175,9 +208,12 @@ run()
             *) exit 2 ;;
         esac
     done
-    shift $((OPTIND - 1))
-    [ $# -gt 0 ] || die "run: no command"
+    [ $# -ge "$OPTIND" ] || die "run: no command"
     [ -f "$prepared" ] || die "no prepared image; run debian-ref.sh prepare"
+    if [ -z "${DEBIAN_REF_CLAIM:-}" ] && [ -f "$site" ]; then
+        admitted "$@"
+    fi
+    shift $((OPTIND - 1))
     mkdir -p "${TMPDIR:-$tree/build/tmp}"
     work=$(mktemp -d "${TMPDIR:-$tree/build/tmp}/debian-ref.XXXXXX")
     qemu=
@@ -241,7 +277,7 @@ case ${1:-} in
     prepare) shift; prepare "$@" ;;
     run) shift; run "$@" ;;
     *)
-        echo "usage: debian-ref.sh fetch | prepare [-n] | run [-p PROFILE] [-c CPUS] [-m MIB] [-g CLASS] [-d] [-r RECORD] [-i FILE]... [-o FILE]... COMMAND" >&2
+        echo "usage: debian-ref.sh fetch | prepare [-n] | run [-p PROFILE] [-c CPUS] [-m MIB] [-g CLASS] [-d] [-l] [-r RECORD] [-i FILE]... [-o FILE]... COMMAND" >&2
         exit 2
         ;;
 esac
