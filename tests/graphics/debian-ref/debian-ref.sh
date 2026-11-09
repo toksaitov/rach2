@@ -153,6 +153,9 @@ prepare()
     rm -rf "$work"
     mkdir -p "$work/seed"
     trap 'kill "$qemu" 2>/dev/null || true; rm -rf "$work"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     # shellcheck disable=SC2086 # the line's fields
     set -- $venus
     sed -e "s|@SNAPSHOT@|$(pin snapshot)|" \
@@ -240,6 +243,9 @@ run()
     work=$(mktemp -d "${TMPDIR:-$tree/build/tmp}/debian-ref.XXXXXX")
     qemu=
     trap 'kill "$qemu" 2>/dev/null || true; rm -rf "$work"' EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
     qemu-img create -q -f qcow2 -F qcow2 -b "$prepared" "$work/run.qcow2"
     port=$(free_port)
     machine "$profile" "$cpus" "$mib" "$work/run.qcow2"
