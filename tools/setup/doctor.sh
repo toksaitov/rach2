@@ -259,9 +259,13 @@ fi
 # display (tests/graphics/Readme.md) draws through Mesa's d3d12 driver with
 # the profile's environment and opens the render node, which the group
 # `render` alone may. Surfaceless EGL, since `-p gbm` would open card0, which
-# belongs to `video`. A renderer that is not the GPU's, llvmpipe above all,
-# would let virgl's runs measure the host's CPU.
-GPU_RENDERER="D3D12 (NVIDIA GeForce RTX 4080 SUPER)"
+# belongs to `video`. A renderer that is not D3D12's, llvmpipe above all,
+# would let virgl's runs measure the host's CPU. The adapter is the one
+# MESA_D3D12_DEFAULT_ADAPTER_NAME names, NVIDIA as in the virgl profile unless
+# the caller names another: Mesa takes the first adapter whose name holds it,
+# in any case, and the first adapter of all when none does, which on the
+# testing PC is the Ryzen's own graphics.
+gpu_adapter=${MESA_D3D12_DEFAULT_ADAPTER_NAME:-NVIDIA}
 if [ -e /dev/dxg ]; then
     echo
     echo "The testing PC's GPU, for the virgl display:"
@@ -269,14 +273,23 @@ if [ -e /dev/dxg ]; then
         row "[MISSING]" "eglinfo" "$(hint mesa-utils-bin)"
         missing=$((missing + 1))
     else
-        found=$(GALLIUM_DRIVER=d3d12 MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA eglinfo -B -p surfaceless 2>/dev/null |
+        found=$(GALLIUM_DRIVER=d3d12 MESA_D3D12_DEFAULT_ADAPTER_NAME=$gpu_adapter eglinfo -B -p surfaceless 2>/dev/null |
             sed -n 's/^OpenGL core profile renderer: //p' | head -1)
-        if [ "$found" = "$GPU_RENDERER" ]; then
-            row "[PASS]" "GL renderer" "$found, for $(id -un)"
-        else
-            row "[FAIL]" "GL renderer" "${found:-none} for $(id -un); virgl needs $GPU_RENDERER"
+        name=$(printf '%s\n' "$found" | sed -n 's/^D3D12 (\(.*\))$/\1/p' | tr '[:upper:]' '[:lower:]')
+        want=$(printf '%s\n' "$gpu_adapter" | tr '[:upper:]' '[:lower:]')
+        case "$name" in
+        "")
+            row "[FAIL]" "GL renderer" "${found:-none} for $(id -un); virgl needs a D3D12 renderer"
             missing=$((missing + 1))
-        fi
+            ;;
+        *"$want"*)
+            row "[PASS]" "GL renderer" "$found, for $(id -un)"
+            ;;
+        *)
+            row "[FAIL]" "GL renderer" "$found for $(id -un), not $gpu_adapter; MESA_D3D12_DEFAULT_ADAPTER_NAME names the GPU"
+            missing=$((missing + 1))
+            ;;
+        esac
     fi
     if [ -r /dev/dri/renderD128 ] && [ -w /dev/dri/renderD128 ]; then
         row "[PASS]" "render node" "/dev/dri/renderD128 opens for $(id -un)"
