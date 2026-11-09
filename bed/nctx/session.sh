@@ -18,7 +18,8 @@
 #                               work, and with --now power off by rtcwake
 #
 # Each step writes OUT/STEP.txt, OUT being /srv/nctx/out, and prints it.
-# GUEST_MIB (4096) and GUEST_CPUS (4) size the guest.
+# GUEST_MIB and GUEST_CPUS (4) size the guest; a check that runs past 900 s
+# in the guest is stopped there.
 set -u
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -27,7 +28,9 @@ W=/srv/nctx
 OUT=$W/out
 PORT=2290
 REHEARSE=${REHEARSE:-0}
-GUEST_MIB=${GUEST_MIB:-4096}
+# The guest takes 4 GiB on a host of 12 GiB or more, else 2 GiB, which
+# leaves the host the memory the pressure check's textures need.
+GUEST_MIB=${GUEST_MIB:-$(awk '/MemTotal/ { print ($2 >= 12 * 1048576) ? 4096 : 2048 }' /proc/meminfo)}
 GUEST_CPUS=${GUEST_CPUS:-4}
 T=/sys/kernel/tracing
 SH=/sys/kernel/mm/transparent_hugepage/shmem_enabled
@@ -84,13 +87,14 @@ setup()
     # probe's tools. Mesa, the kernel and Debian's QEMU are held so that no
     # dependency moves the host the earlier references were taken on.
     dpkg-query -W -f '${Package} ${Version}\n' > "$W/packages-before.txt"
-    hold=$(dpkg-query -W -f '${Package}\n' 'linux-image-*' 'libgl1-mesa-dri' 'mesa-*' \
-        'libegl-mesa0' 'libgbm1' 'libglx-mesa0' 'qemu-system-x86' 2>/dev/null)
+    hold=$(dpkg-query -W -f '${db:Status-Abbrev} ${Package}\n' 'linux-image-*' \
+        'libgl1-mesa-dri' 'mesa-*' 'libegl-mesa0' 'libgbm1' 'libglx-mesa0' \
+        'qemu-system-x86' 2>/dev/null | awk '$1 == "ii" { print $2 }')
     # shellcheck disable=SC2086 # a list of names
     apt-mark hold $hold > /dev/null
     DEBIAN_FRONTEND=noninteractive apt-get -q -y install --no-install-recommends \
         qemu-system-data seabios libepoxy0 libgbm1 libslirp0 libpixman-1-0 \
-        libvulkan1 libdrm2 libglib2.0-0t64 cpio busybox-static kmod pciutils \
+        libvulkan1 libdrm2 libglib2.0-0t64 libfdt1 cpio busybox-static kmod pciutils \
         > "$W/apt.log" 2>&1 || { tail -n 20 "$W/apt.log"; die "setup: apt-get failed"; }
     # shellcheck disable=SC2086 # a list of names
     apt-mark unhold $hold > /dev/null
@@ -148,7 +152,7 @@ up()
         -machine q35,memory-backend=mem -nodefaults -no-reboot \
         -drive file="$image",if=virtio,format=qcow2,snapshot=on \
         -netdev user,id=net0,hostfwd=tcp:127.0.0.1:$PORT-:22 \
-        -device virtio-net-pci,netdev=net0 -device virtio-rng-pci \
+        -device virtio-net-pci,netdev=net0,romfile= -device virtio-rng-pci \
         -vga none -device virtio-vga-gl,blob=true,hostmem=4G,drm_native_context=$nctx \
         -display egl-headless,rendernode="$n" \
         -serial file:"$W/console.log" -monitor none \
@@ -169,7 +173,8 @@ up()
     g 'cc -std=c99 -O2 -Wall -Wextra -o nctxcheck nctxcheck.c -ldl' < /dev/null || die "up: nctxcheck did not build"
     echo "guest: kernel: $(g uname -r < /dev/null)"
     g 'sudo dmesg' < /dev/null | grep -i -E 'virtio.gpu|\[drm\]|cap set' | sed 's/^/guest: /'
-    g 'sudo sh -c "cat /sys/kernel/debug/dri/*/virtio-gpu-features"' < /dev/null | sed 's/^/guest: /'
+    # The first of the card's directories in debugfs, which root alone reads.
+    g "sudo sh -c 'for f in /sys/kernel/debug/dri/*/virtio-gpu-features; do cat \$f; break; done'" < /dev/null | sed 's/^/guest: /'
     g 'ls -l /dev/dri' < /dev/null | sed 's/^/guest: /'
     echo "qemu's log:"
     cat "$OUT/qemu.log"
@@ -210,10 +215,11 @@ check()
     kill -0 "$pid" 2>/dev/null || die "check: the guest has gone"
     d0=$(dmesg | wc -l)
     q0=$(wc -l < "$OUT/qemu.log")
+    gd0=$(g 'sudo dmesg | wc -l' < /dev/null)
     hist_on
     say "check: $name $*"
     status=0
-    g ". $top/nctx-env && ./nctxcheck $name $*" < /dev/null || status=$?
+    g ". $top/nctx-env && timeout 900 ./nctxcheck $name $*" < /dev/null || status=$?
     say "check: $name: status $status"
     hist_off
     echo "host: dmesg:"
@@ -222,7 +228,7 @@ check()
     sed "1,${q0}d" "$OUT/qemu.log"
     echo "host: guest $(kill -0 "$pid" 2>/dev/null && echo running || echo gone)"
     echo "guest: dmesg:"
-    g 'sudo dmesg | tail -n 20' 2>/dev/null < /dev/null
+    g "sudo dmesg | sed '1,${gd0:-0}d'" 2>/dev/null < /dev/null
     return "$status"
 }
 
