@@ -84,6 +84,10 @@ unusedStructMember:*tests/keylatprobe.c
 # some members, and the rest are the layout.
 unusedStructMember:*tests/drmprobe.c
 
+# The DRM compat probe's structures are Linux's in i386's layout, which the
+# probe checks whole; it reads some members, and the rest are the layout.
+unusedStructMember:*tests/drmcompatprobe.c
+
 # The kernel's copies of Linux's structures.
 
 # The i386 and x86-64 signal frames, statx, the rusage, the siginfo a wait

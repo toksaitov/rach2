@@ -7,6 +7,7 @@ bootlogprobe a boot line of its own, and the kernel's ring holding every record 
 busprobe the IDE driver's two channels and its 48-bit commands
 conloadprobe lines typed at the serial console, which the Lenovo lacks
 drmcapture a frame drawn for the graphics runners in a guest beside the same frame of the Debian guest; with -p it takes the display as the card's master
+drmcompatprobe an i386 program's DRM calls through the x86-64 kernel's compat path, which the i686 build alone makes and the ia32 cases run in QEMU
 evprobe keys pressed through QEMU's monitor while it reads, and QEMU's HDA and Sound Blaster models
 frag6probe a Packet Too Big that lowers the path MTU of ::1 for ten minutes, for every program on the machine
 hotplugprobe a display resized by QEMU's window or a VNC client while it waits, which a running machine cannot do to itself
