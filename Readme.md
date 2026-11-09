@@ -57,6 +57,7 @@ For x86-64, install the `x86_64-elf` toolchain, build with `make ARCH=x86_64`, a
 | [`ports/`](ports/doom/Readme.md) | the Doom port |
 | [`vendor/`](man/programs.md#the-vendored-projects) | third-party projects and the GNU system |
 | [`tests/`](tests/Readme.md) | probes, host tests, system suites, fuzz harnesses |
+| [`bed/`](bed/Readme.md) | the testbed's programs: the vtest relay and its Debian guest |
 | [`tools/`](tools/Readme.md) | machine setup, image builders, style checks |
 | [`mk/`](mk/Readme.md) | shared Make rules |
 

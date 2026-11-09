@@ -1,0 +1,100 @@
+.Dd November 9, 2026
+.Dt VTESTRELAY 1
+.Os
+.Sh NAME
+.Nm vtestrelay
+.Nd carry Mesa's vtest protocol from its local socket to a server over TCP
+.Sh SYNOPSIS
+.Nm
+.Op Fl 1v
+.Op Fl s Ar socket
+.Ar host port
+.Nm
+.Fl -version
+.Sh DESCRIPTION
+.Nm
+listens on a Unix socket for Mesa's vtest client, the
+.Cm virpipe
+driver, and carries each client's connection to the vtest server at
+.Ar host
+and
+.Ar port
+over TCP.
+It forks a child for each client, which connects to the server, relays both
+directions until both have ended and exits.
+.Pp
+The client always asks for the newest protocol, and the newer protocols
+pass file descriptors on the socket, which a network connection cannot carry.
+.Nm
+therefore drops the client's version query,
+.Dv VCMD_PING_PROTOCOL_VERSION .
+The server sees only the busy wait that the client sends behind it and
+answers that first, which the client takes for a server of protocol 0.
+Under protocol 0 every resource's contents, transfers in and out alike,
+travel in the stream, and a fence is a busy wait on the server.
+.Pp
+.Nm
+reads the client's commands to find the query, and refuses a command that
+protocol 0 has not, or one before
+.Dv VCMD_CREATE_RENDERER ,
+by closing both connections.
+It passes the server's replies on unread.
+The words of a command are in the machine's own byte order, so both ends must
+share it.
+.Pp
+The options are:
+.Bl -tag -width Ds
+.It Fl 1
+Relay the first client in the listening process and exit with its status,
+removing the socket.
+.It Fl s Ar socket
+Listen on
+.Ar socket
+instead of the path that
+.Ev VTEST_SOCKET_NAME
+names, or
+.Pa /tmp/.virgl_test
+when it is unset, which is where Mesa's client connects by default.
+A socket file left at that path by a relay that has ended is removed; a path
+where a server answers, or one that is not a socket, is refused.
+.It Fl v
+Report the socket on start, and each connection's command counts by kind and
+its bytes in each direction when it ends, as a
+.Ql "vtestrelay: result:"
+line on standard error.
+.It Fl -version
+Print the relay's version and the protocol it keeps to, and exit.
+.El
+.Pp
+.Dv SIGTERM ,
+.Dv SIGINT
+and
+.Dv SIGHUP
+stop the listening process, which removes the socket; a child goes on until
+its client ends.
+.Sh ENVIRONMENT
+.Bl -tag -width Ds
+.It Ev VTEST_SOCKET_NAME
+The socket to listen on, as Mesa's client reads it.
+.El
+.Sh EXIT STATUS
+0 when the relay was stopped by a signal, or with
+.Fl 1
+when the client's connection ended cleanly; 1 on an error or a refused
+command; 2 on a usage error.
+.Sh EXAMPLES
+Draw with Mesa's
+.Cm virpipe
+on a vtest server whose TCP port 5555 QEMU forwards to the host's port
+10555:
+.Bd -literal -offset indent
+vtestrelay -s /tmp/vtest.sock 127.0.0.1 10555 &
+VTEST_SOCKET_NAME=/tmp/vtest.sock LIBGL_ALWAYS_SOFTWARE=1 \e
+    GALLIUM_DRIVER=virpipe eglinfo -p surfaceless
+.Ed
+.Sh SEE ALSO
+The source,
+.Pa bed/vtestrelay.c ,
+and
+.Pa bed/Readme.md
+in Rach2's tree, which describes the guest that serves vtest.
