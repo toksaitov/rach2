@@ -1,0 +1,70 @@
+#!/bin/sh
+# setup.sh.in: the reference guest's setup, which cloud-init runs as root on
+# the preparing boot. debian-ref.sh puts the snapshot's date in place of
+# @SNAPSHOT@ and the package list in place of @PACKAGES@. It points apt at
+# Debian's snapshot of that date, installs the packages, turns cloud-init off
+# so that every later boot is the same, and reports on the serial console,
+# which debian-ref.sh reads.
+set -eu
+
+say()
+{
+    echo "debian-ref: $*" > /dev/ttyS0
+}
+
+trap 'say "failed: setup stopped at line $LINENO"' EXIT
+
+rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
+cat > /etc/apt/sources.list.d/debian.sources <<SOURCES
+Types: deb deb-src
+URIs: http://snapshot.debian.org/archive/debian/@SNAPSHOT@
+Suites: trixie trixie-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb deb-src
+URIs: http://snapshot.debian.org/archive/debian-security/@SNAPSHOT@
+Suites: trixie-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+SOURCES
+: > /etc/apt/sources.list
+cat > /etc/apt/apt.conf.d/80rach2-snapshot <<'CONF'
+Acquire::Check-Valid-Until "false";
+Acquire::Retries "5";
+APT::Install-Recommends "false";
+CONF
+
+say "updating"
+export DEBIAN_FRONTEND=noninteractive
+apt-get -q update
+say "installing"
+# shellcheck disable=SC2086 # the list is words
+apt-get -q -y install @PACKAGES@
+
+# Debian's kernel is built without vkms (CONFIG_DRM_VKMS is not set), which
+# the `none` profile's runs load; build it from the source of the running
+# kernel's own version, against its headers, into updates/, unloaded until a
+# run asks for it with `modprobe vkms`.
+say "building vkms"
+kernel=$(uname -r)
+version=$(dpkg-query -W -f '${Version}' "linux-image-$kernel")
+apt-get -q -y install "linux-headers-$kernel" "linux-source-6.12=$version"
+mkdir -p /root/vkms
+tar -xf /usr/src/linux-source-6.12.tar.xz -C /root/vkms --strip-components=5 \
+    linux-source-6.12/drivers/gpu/drm/vkms
+make -C "/lib/modules/$kernel/build" M=/root/vkms CONFIG_DRM_VKMS=m modules
+install -D -m 644 /root/vkms/vkms.ko "/lib/modules/$kernel/updates/vkms.ko"
+depmod "$kernel"
+rm -rf /root/vkms
+apt-get -q -y purge linux-source-6.12
+apt-get -q -y clean
+
+touch /etc/cloud/cloud-init.disabled
+say "version: vkms $(modinfo -F vermagic vkms)"
+for p in libgl1-mesa-dri mesa-vulkan-drivers weston; do
+    say "version: $p $(dpkg-query -W -f '${Version}' $p)"
+done
+say "version: kernel $(uname -r)"
+trap - EXIT
+say "prepared"
