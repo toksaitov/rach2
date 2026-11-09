@@ -17,7 +17,7 @@
 set -u
 
 cd "$(dirname "$0")/../.." || exit 1
-find rach2 krffs utils ish tests tools mk man ports vendor \
+find rach2 krffs utils ish tests bed tools mk man ports vendor \
     -path vendor/musl/install -prune -o \
     -path 'vendor/musl/musl-*' -prune -o \
     -path 'vendor/busybox/busybox-*' -prune -o \
