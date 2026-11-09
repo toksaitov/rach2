@@ -68,6 +68,7 @@
 #include "input.h"
 #include "io/poll.h"
 #include "mm/mm.h"
+#include "mouse.h"
 #include "mm/usercopy.h"
 #include "proc/percpu.h"
 #include "proc/tgroup.h"
@@ -508,6 +509,29 @@ void input_set_repeat(int delay_ms, int period_ms)
 {
     repeat_delay = delay_ms;
     repeat_period = period_ms;
+}
+
+/**
+ * Take an event a program wrote to a keyboard's node, or an LED or repeat
+ * event to any node, which the kernel gives the console; the harness has
+ * none, so the event goes nowhere.
+ */
+void input_written(uint16_t type, uint16_t code, int32_t value)
+{
+    (void)type;
+    (void)code;
+    (void)value;
+}
+
+/**
+ * Take a mouse's event a program wrote to its node, which the kernel gives
+ * the mouse queue; the harness has none, so the event goes nowhere.
+ */
+void mouse_written(uint16_t type, uint16_t code, int32_t value)
+{
+    (void)type;
+    (void)code;
+    (void)value;
 }
 
 /* ---- the process and its descriptors ---- */
