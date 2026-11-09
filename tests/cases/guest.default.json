@@ -348,7 +348,7 @@
     },
     {
       "case_id": "guest.default.wow64probe",
-      "behavior": "On x86-64 a 64-bit process runs 32-bit code in the GDT's 32-bit code segment and makes i386 calls by int $0x80 through the compat table, with set_thread_area's TLS entries, signals taken in 32-bit code, seccomp and ptrace judging each call's architecture, futex_waitv through the compat table, and MAP_32BIT and hints below 4 GiB placing memory a 32-bit pointer reaches.",
+      "behavior": "On x86-64 a 64-bit process runs 32-bit code in the GDT's 32-bit code segment and makes i386 calls by int $0x80 through the compat table, with set_thread_area's TLS entries, signals taken in 32-bit code by 64-bit and by i386 handlers, seccomp and ptrace judging each call's architecture, futex_waitv through the compat table, and MAP_32BIT and hints below 4 GiB placing memory a 32-bit pointer reaches.",
       "units": ["default", "wow64probe"],
       "domain": "guest",
       "architectures": ["x86_64"],
@@ -367,6 +367,8 @@
         {"assertion_id": "get-thread-area", "checks": "get_thread_area reads entry 12 back with the base, limit and flags set", "source": "program"},
         {"assertion_id": "signal-frame", "checks": "a signal taken in 32-bit code runs its 64-bit handler with CS 0x23, SS 0x2B and the RIP after its int $0x80 saved, UC_SIGCONTEXT_SS set and UC_STRICT_RESTORE_SS clear", "source": "program"},
         {"assertion_id": "signal-return", "checks": "the handler's return resumes the 32-bit code, which comes back to 64-bit code with kill's result", "source": "program"},
+        {"assertion_id": "ia32-altstack-frame", "checks": "a handler the i386 rt_sigaction installs with SA_ONSTACK, on a stack the i386 sigaltstack sets, runs in 32-bit code on that stack, 4 bytes past a 16-byte boundary, with the signal in EAX and on its stack, uc_stack's flags 0, the saved EIP after the int $0x80 and CS 0x23, and the i386 siginfo's signal and pid", "source": "program"},
+        {"assertion_id": "ia32-altstack-return", "checks": "its return through its restorer's i386 rt_sigreturn resumes the 32-bit code with kill's result, and the i386 sigaltstack still reads the stack set and not in use", "source": "program"},
         {"assertion_id": "seccomp-native-kept", "checks": "a child installs a filter that kills AUDIT_ARCH_I386 number 20, and its x86-64 call of number 20, writev, is allowed", "source": "program"},
         {"assertion_id": "seccomp-i386-killed", "checks": "its i386 getpid by int $0x80 ends it with SIGSYS", "source": "program"},
         {"assertion_id": "ptrace-arch", "checks": "PTRACE_GET_SYSCALL_INFO reports AUDIT_ARCH_I386 and number 20 at the entry of a tracee's int $0x80 getpid, and AUDIT_ARCH_X86_64 and number 60 at its exit call's", "source": "program"},
