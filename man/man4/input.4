@@ -16,6 +16,11 @@ Each input device the kernel drives is a node of
 with Linux's evdev interface: major 13, minor 64 and up.
 A node is listed only while its device is there, and a device takes the
 lowest free node when it is found.
+Each device and its node are also listed under
+.Pa /sys/class/input ,
+below the PS/2 port or USB interface the device came from, and a uevent
+announces each as it comes and goes, as udev and libinput expect; see
+.Xr sysfs 5 .
 The PS/2 keyboard is
 .Dq AT Translated Set 2 keyboard
 and each USB keyboard
@@ -459,7 +464,8 @@ on a device that is no keyboard.
 .Xr acpi 4 ,
 .Xr console 4 ,
 .Xr ideapad 4 ,
-.Xr mixer 4
+.Xr mixer 4 ,
+.Xr sysfs 5
 .Sh CAVEATS
 A USB device that offers no boot protocol, such as QEMU's absolute
 .Cm usb-tablet ,

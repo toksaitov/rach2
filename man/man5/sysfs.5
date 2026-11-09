@@ -3,7 +3,7 @@
 .Os
 .Sh NAME
 .Nm sysfs
-.Nd the devices, display devices, network interfaces, clock, backlights and sleep states under /sys
+.Nd the devices, input devices, display devices, network interfaces, clock, backlights and sleep states under /sys
 .Sh DESCRIPTION
 The kernel mounts a synthetic, read-only file system at
 .Pa /sys ,
@@ -16,6 +16,10 @@ read, each PCI function and each running USB device and what it says of
 itself in its
 .Pa uevent ,
 a PCI function's identity and configuration space,
+the input devices under
+.Pa /sys/class/input ,
+which udev and libinput read, each below the i8042 port or the USB
+interface it came from, with the uevents that announce them,
 the display devices under
 .Pa /sys/class/drm ,
 which libdrm, Mesa and libudev read to find each card, with the
@@ -103,6 +107,36 @@ and
 its bus and the controller's slot for it, three decimal digits each; and
 .Ql DEVTYPE=usb_device .
 A write of an action sends that uevent.
+.It Pa /sys/devices/usb/B-P[.P...]/B-P[.P...]:C.I
+The interface of a USB keyboard or mouse, by its configuration value C
+and its number I, made with its input device and linked from
+.Pa /sys/bus/usb/devices :
+.Pa bInterfaceNumber ,
+.Pa bAlternateSetting ,
+.Pa bInterfaceClass ,
+.Pa bInterfaceSubClass
+and
+.Pa bInterfaceProtocol ,
+as Linux formats them;
+.Pa modalias ,
+.Ql usb:v...ic03isc01ip01in00
+as Linux writes it;
+a
+.Pa subsystem
+link to
+.Pa /sys/bus/usb ;
+and its
+.Pa uevent :
+.Ql DEVTYPE=usb_interface ,
+.Ql DRIVER ,
+.Ql usbkbd
+or
+.Ql usbmouse ,
+.Ql PRODUCT ,
+.Ql TYPE ,
+.Ql INTERFACE ,
+its class, subclass and protocol in decimal, and
+.Ql MODALIAS .
 .It Pa /sys/class/drm
 A link for each DRM node and connector to its directory below its
 device, and
@@ -188,6 +222,135 @@ and its
 .Pa drm .
 .Pa /sys/bus/platform/devices
 links each.
+.It Pa /sys/devices/platform/i8042/serioK
+The PS/2 controller's port K, 0 for the keyboard's and 1 for the mouse's,
+linked from
+.Pa /sys/bus/serio/devices
+once a device on it registers:
+.Pa description ,
+.Ql i8042 KBD port
+or
+.Ql i8042 AUX port ;
+.Pa modalias ,
+.Ql serio:ty06pr00id00ex00
+for the keyboard's translated port and
+.Ql serio:ty01pr00id00ex00
+for the mouse's;
+.Pa bind_mode ,
+.Ql auto ;
+.Pa id/type ,
+.Pa id/proto ,
+.Pa id/id
+and
+.Pa id/extra ,
+two hexadecimal digits each;
+a
+.Pa subsystem
+link to
+.Pa /sys/bus/serio ;
+and its
+.Pa uevent ,
+.Ql DRIVER ,
+.Ql atkbd
+or
+.Ql psmouse ,
+the four
+.Ql SERIO_
+variables and
+.Ql MODALIAS .
+The i8042's own
+.Pa uevent
+has
+.Ql DRIVER=i8042
+and
+.Ql MODALIAS=platform:i8042 .
+.It Pa /sys/class/input
+A link for each input device,
+.Pa inputN ,
+and for its event device,
+.Pa eventN ,
+to its directory.
+An input device's N is the lowest free from 0, as Linux numbers them;
+an event device's is the N of
+.Pa /dev/input/eventN
+.Pq Xr input 4 .
+.It Pa /sys/devices/.../input/inputN
+An input device, below its parent: the i8042's port, the USB interface,
+or
+.Pa /sys/devices/virtual
+for a device with neither, such as the ACPI buttons.
+It has
+.Pa name
+and
+.Pa phys ,
+the strings of EVIOCGNAME and EVIOCGPHYS;
+.Pa uniq ,
+empty, since no driver gives a serial number;
+.Pa properties
+and
+.Pa capabilities/ev ,
+.Pa key ,
+.Pa rel ,
+.Pa abs ,
+.Pa msc ,
+.Pa led ,
+.Pa snd ,
+.Pa ff
+and
+.Pa sw ,
+bitmaps as Linux prints them, in hexadecimal words of the caller's long,
+the highest word that has a bit set first;
+.Pa id/bustype ,
+.Pa id/vendor ,
+.Pa id/product
+and
+.Pa id/version ,
+four hexadecimal digits each;
+.Pa modalias ,
+.Ql input:b...v...p...e...-e...
+with each kind of event the device sends;
+a
+.Pa subsystem
+link to
+.Pa /sys/class/input ;
+a
+.Pa device
+link to its parent, but under
+.Pa /sys/devices/virtual ;
+and its
+.Pa uevent :
+.Ql PRODUCT ,
+.Ql NAME
+and
+.Ql PHYS
+when it has them,
+.Ql PROP ,
+.Ql EV ,
+a variable for each other kind of event it sends, and
+.Ql MODALIAS ,
+cut short with
+.Ql +,
+as Linux cuts it when the message would pass 2048 bytes.
+.It Pa /sys/devices/.../input/inputN/eventN
+The input device's event device:
+.Pa dev ,
+.Ql 13:M ,
+where M is 64 more than N;
+.Pa uevent ,
+.Ql MAJOR ,
+.Ql MINOR
+and
+.Ql DEVNAME
+.Pq Pa input/eventN ;
+a
+.Pa subsystem
+link to
+.Pa /sys/class/input ;
+and a
+.Pa device
+link to the input device.
+.It Pa /sys/dev/char/13:M
+A link for each event device, by its numbers, to its directory.
 .It Pa /sys/kernel/debug
 An empty directory, where debugfs is mounted.
 .It Pa /sys/kernel/uevent_seqnum
@@ -481,7 +644,8 @@ The kernel sends a uevent to the sockets of
 .Dv NETLINK_KOBJECT_UEVENT
 bound to group 1
 .Pq Xr netlink 7
-when a DRM node or connector comes or goes,
+when a DRM node or connector comes or goes, and an input device, its
+event device, its USB interface or the i8042's port,
 .Ql add
 or
 .Ql remove ,
@@ -538,8 +702,8 @@ beside a USB device's
 the CPUs and the firmware interfaces.
 Rach2 has none of them.
 .Pa /sys/dev/char
-lists only the DRM nodes, and only the PCI functions, the USB devices
-and the entries drivers add have a writable
+lists only the DRM nodes and the event devices, and only the PCI
+functions, the USB devices and the entries drivers add have a writable
 .Pa uevent .
 A virtio-gpu card's
 .Pa device
@@ -581,6 +745,21 @@ last, since
 takes a first line of
 .Ql DEVTYPE
 for an interface's.
+Only a USB keyboard's or mouse's interface is listed, and only while its
+input device is registered; its
+.Pa uevent
+gives the device's class as 0/0/0, which a boot keyboard and mouse have.
+An input device has no
+.Pa power ,
+.Pa inhibited
+or
+.Pa driver ,
+and
+.Pa /sys/bus/serio/drivers
+is empty.
+The entries of an input device that a driver registers in an interrupt,
+as the USB stack does, are made by the kernel thread kinputd a moment
+later, where Linux makes them at once.
 .Sh FILES
 .Bl -tag -width /sys/bus/pci/devices
 .It Pa /sys/bus/pci/devices
@@ -611,7 +790,11 @@ The disk nodes by their numbers.
 .It Pa /sys/class/drm
 The DRM nodes and connectors.
 .It Pa /sys/dev/char
-The DRM nodes by their numbers.
+The DRM nodes and the event devices by their numbers.
+.It Pa /sys/class/input
+The input devices and their event devices.
+.It Pa /sys/bus/serio/devices
+The i8042's ports.
 .It Pa /sys/devices/platform
 The platform devices.
 .It Pa /sys/kernel/debug
@@ -632,5 +815,6 @@ MODALIAS=pci:v00008086d00000A04sv000017AAsd00003978bc06sc00i00
 .Xr busybox-util-linux 1 ,
 .Xr backlight 4 ,
 .Xr drm 4 ,
+.Xr input 4 ,
 .Xr proc 5 ,
 .Xr netlink 7
