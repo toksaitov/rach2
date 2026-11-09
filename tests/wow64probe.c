@@ -25,7 +25,10 @@
  * same number alone and kill the process that makes the i386 one with
  * SIGSYS. PTRACE_GET_SYSCALL_INFO must report the architecture of each call
  * a tracee makes, AUDIT_ARCH_I386 for `int $0x80`; like Linux, it reports a
- * system call stop only with PTRACE_O_TRACESYSGOOD.
+ * system call stop only with PTRACE_O_TRACESYSGOOD. A tracer must read -1
+ * in orig_rax at the stops of an `int3` in 64-bit code and in 32-bit code
+ * and of a write to address 0, which are no system call, and the call's
+ * number at a system call's entry stop.
  *
  * An mmap with MAP_32BIT must place the mapping between 1 GiB and 2 GiB,
  * also when its hint is above 2 GiB, and must take a free hint below 2 GiB;
@@ -75,6 +78,8 @@
 #define EAGAIN    11
 #define ETIMEDOUT 110
 #define SIGUSR1   10
+#define SIGSEGV   11
+#define SIGTRAP   5
 #define SIGSTOP   19
 #define SIGSYS    31
 
@@ -103,6 +108,8 @@
 #define SECCOMP_DATA_ARCH        4
 
 #define PTRACE_TRACEME            0
+#define PTRACE_PEEKUSER           3
+#define PTRACE_CONT               7
 #define PTRACE_SYSCALL            24
 #define PTRACE_SETOPTIONS         0x4200
 #define PTRACE_O_TRACESYSGOOD     1
@@ -168,6 +175,7 @@ static const char *const assertion_id[] = {"far-call",
                                            "seccomp-native-kept",
                                            "seccomp-i386-killed",
                                            "ptrace-arch",
+                                           "orig-rax",
                                            "map32bit",
                                            "map32bit-hint",
                                            "low-hint",
@@ -249,13 +257,14 @@ unsigned long saved_rsp;
  * word at GS:0; kill32 sends SIGUSR1 to the process EDX names and returns
  * kill's result once the handler has returned to it.
  *
- * handler32 is an i386 SA_SIGINFO handler, which records into h32 what it
+ * int3_32 executes `int3` in 32-bit code. handler32 is an i386 SA_SIGINFO
+ * handler, which records into h32 what it
  * finds and returns to its restorer, restorer32, which makes the i386
  * rt_sigreturn.
  */
 long call32(void *entry, void *stack_top, unsigned long arg);
 extern char mode32[], getpid32[], nocall32[], set32[], tls32[], kill32[], kill32_int80[];
-extern char handler32[], restorer32[];
+extern char handler32[], restorer32[], int3_32[];
 
 __asm__(".text\n"
         ".code64\n"
@@ -345,6 +354,10 @@ __asm__(".text\n"
         "    movl 12(%eax), %ecx\n"
         "    movl %ecx, h32+32\n"
         "    ret\n"
+        ".globl int3_32\n"
+        "int3_32:\n"
+        "    int3\n"
+        "    ljmp $0x33, $back64\n"
         ".globl restorer32\n"
         "restorer32:\n"
         "    movl $173, %eax\n"
@@ -660,6 +673,72 @@ static void run_ptrace(void)
     report_held();
 }
 
+/* The offsets in x86-64's user_regs_struct of orig_rax and cs. */
+#define USER_ORIG_RAX 120
+#define USER_CS       136
+
+/** Resume the stopped tracee `pid` with `request` and wait for its next
+ * stop; that stop's signal, or -1 when it did not stop. */
+static int resume(long pid, long request)
+{
+    int status = 0;
+
+    if (syscall4(SYS_PTRACE, request, pid, 0, 0) != 0 ||
+        syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || (status & 0xFF) != 0x7F) {
+        return -1;
+    }
+    return (status >> 8) & 0xFF;
+}
+
+/** The word at byte `off` of the stopped tracee `pid`'s user area, or
+ * 0x5A5A when it cannot be read. */
+static long peekuser(long pid, long off)
+{
+    long word = 0x5A5A;
+
+    if (syscall4(SYS_PTRACE, PTRACE_PEEKUSER, pid, off, (long)&word) != 0) {
+        return 0x5A5A;
+    }
+    return word;
+}
+
+/** orig_rax as a tracer reads it: -1 at the stops of an int3 in 64-bit and
+ * in 32-bit code and of a fault, and the number at a system call's entry. */
+static void run_orig(void)
+{
+    int status = 0, ok;
+    long pid = syscall0(SYS_FORK);
+
+    if (pid < 0) {
+        fail("fork");
+    }
+    if (pid == 0) {
+        syscall4(SYS_PTRACE, PTRACE_TRACEME, 0, 0, 0);
+        syscall2(SYS_KILL, syscall0(SYS_GETPID), SIGSTOP);
+        __asm__ __volatile__("int3");
+        run32(int3_32, 0);
+        syscall0(SYS_GETPID);
+        *(volatile int *)0 = 1;
+        sys_exit(0);
+    }
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || (status & 0xFF) != 0x7F) {
+        fail("a traced child did not stop");
+    }
+    ok = resume(pid, PTRACE_CONT) == SIGTRAP && peekuser(pid, USER_ORIG_RAX) == -1 &&
+         peekuser(pid, USER_CS) == GDT_USER_CODE;
+    ok = ok && resume(pid, PTRACE_CONT) == SIGTRAP && peekuser(pid, USER_ORIG_RAX) == -1 &&
+         peekuser(pid, USER_CS) == GDT_USER_CODE32;
+    ok = ok && resume(pid, PTRACE_SYSCALL) == SIGTRAP && peekuser(pid, USER_ORIG_RAX) == SYS_GETPID;
+    ok = ok && resume(pid, PTRACE_CONT) == SIGSEGV && peekuser(pid, USER_ORIG_RAX) == -1;
+    syscall2(SYS_KILL, pid, 9);
+    child_status(pid);
+    if (!ok) {
+        fail("orig_rax was not -1 at an int3 in 64-bit or 32-bit code or at a fault, or not the "
+             "number at a system call's entry");
+    }
+    report_held();
+}
+
 /** An anonymous mapping of `len` bytes at the hint `addr` with `flags`
  * beside MAP_ANONYMOUS; its address, or a negated errno. */
 static unsigned long map(unsigned long addr, unsigned long len, long flags)
@@ -798,6 +877,7 @@ void probe_main(unsigned long *sp)
     run_ia32_signal();
     run_seccomp();
     run_ptrace();
+    run_orig();
     run_map32();
     run_futexv();
     report_end();

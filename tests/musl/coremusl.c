@@ -19,6 +19,10 @@
  * zero, since only a hole reads as zeros without being written. A child of two
  * threads whose main thread aborts while the other spins in user mode leaves
  * WCOREDUMP and a core with a status for each thread, the aborting one's first.
+ * A child that makes a system call and then writes to address 0 leaves a core
+ * whose NT_PRSTATUS has SIGSEGV and -1 in orig_eax or orig_rax, which Linux
+ * writes on every entry to the kernel that is not a system call, and not the
+ * number of the call before the fault.
  * One whose limit is 0, and one that is not dumpable, leave no file and no
  * WCOREDUMP.
  *
@@ -94,6 +98,8 @@ typedef Elf64_Nhdr Nhdr;
 #define PR_SPIN_REG   136
 #define SPIN_LOOP     "xorl %%r12d, %%r12d\n1:\tincq %%r12\n\tmovq %%r12, %0\n\tjmp 1b"
 #define SPIN_REG_NAME "r12"
+/* orig_rax, the sixteenth register of pr_reg. */
+#define PR_ORIG       232
 #else
 typedef Elf32_Ehdr Ehdr;
 typedef Elf32_Phdr Phdr;
@@ -108,6 +114,8 @@ typedef Elf32_Nhdr Nhdr;
 #define PR_SPIN_REG   84
 #define SPIN_LOOP     "xorl %%esi, %%esi\n1:\tincl %%esi\n\tmovl %%esi, %0\n\tjmp 1b"
 #define SPIN_REG_NAME "esi"
+/* orig_eax, the twelfth register of pr_reg. */
+#define PR_ORIG       116
 #endif
 #define PR_CURSIG 12
 
@@ -162,6 +170,8 @@ enum {
     THREADS_CORE,
     THREADS_STATUS,
     THREADS_REGS,
+    SEGV_CORE,
+    SEGV_ORIG,
     LIMIT_ZERO,
     NOT_DUMPABLE,
     HOLE_DIRS,
@@ -172,12 +182,12 @@ enum {
 };
 
 static const char *const check_ids[CHECKS] = {
-    "dir-path",          "dir-and-link", "abort-core", "file-where-link", "read-core",
-    "elf-header",        "one-note",     "prstatus",   "prpsinfo",        "auxv",
-    "segments-inside",   "mark",         "two-page",   "read-short",      "short-header",
-    "short-notes-whole", "short-notes",  "short-cut",  "short-limit",     "threads-core",
-    "threads-status",    "threads-regs", "limit-zero", "not-dumpable",    "hole-dirs",
-    "hole-children",     "hole-count",   "hole-zero",
+    "dir-path",          "dir-and-link", "abort-core",    "file-where-link", "read-core",
+    "elf-header",        "one-note",     "prstatus",      "prpsinfo",        "auxv",
+    "segments-inside",   "mark",         "two-page",      "read-short",      "short-header",
+    "short-notes-whole", "short-notes",  "short-cut",     "short-limit",     "threads-core",
+    "threads-status",    "threads-regs", "segv-core",     "segv-orig",       "limit-zero",
+    "not-dumpable",      "hole-dirs",    "hole-children", "hole-count",      "hole-zero",
 };
 
 /** In the process that began the report, report every check before `check`
@@ -785,6 +795,67 @@ static int threads_row(void)
 }
 
 /**
+ * Check the core of a child that faults after a system call: it ends by
+ * SIGSEGV with WCOREDUMP, and its NT_PRSTATUS has SIGSEGV and an orig_eax or
+ * orig_rax of -1. Returns 0, or 1 after the failure is printed.
+ */
+static int segv_row(void)
+{
+    int status, found = 0;
+    size_t size;
+    unsigned char *core;
+    const Ehdr *eh;
+    pid_t child = fork();
+    int i;
+
+    if (child == 0) {
+        struct rlimit rl = {RLIM_INFINITY, RLIM_INFINITY};
+
+        if (chdir(DIR_PATH) != 0 || setrlimit(RLIMIT_CORE, &rl) != 0) {
+            _exit(2);
+        }
+        syscall(SYS_getpid);
+        *(volatile int *)0 = 1;
+        _exit(3);
+    }
+    if (child < 0 || waitpid(child, &status, 0) != child || !WIFSIGNALED(status) ||
+        WTERMSIG(status) != SIGSEGV || !WCOREDUMP(status) || !(core = slurp(CORE_PATH, &size)) ||
+        size < sizeof(*eh)) {
+        return fail(SEGV_CORE, "a fault's core");
+    }
+    eh = (const Ehdr *)core;
+    for (i = 0; i < eh->e_phnum && eh->e_phoff + (size_t)(i + 1) * sizeof(Phdr) <= size; i++) {
+        const Phdr *ph = (const Phdr *)(core + eh->e_phoff) + i;
+        const unsigned char *p = core + ph->p_offset;
+
+        const unsigned char *end = p + ph->p_filesz;
+
+        while (ph->p_type == PT_NOTE && ph->p_offset + ph->p_filesz <= size && p + 12 <= end) {
+            const Nhdr *n = (const Nhdr *)p;
+            const unsigned char *desc = p + 12 + ((n->n_namesz + 3) & ~3u);
+            long orig;
+            int16_t cursig;
+
+            if (n->n_type == NT_PRSTATUS && n->n_descsz == PRSTATUS_SIZE &&
+                desc + PRSTATUS_SIZE <= end) {
+                memcpy(&cursig, desc + PR_CURSIG, sizeof(cursig));
+                memcpy(&orig, desc + PR_ORIG, sizeof(orig));
+                found = cursig == SIGSEGV && orig == -1;
+                break;
+            }
+            p = desc + ((n->n_descsz + 3) & ~3u);
+        }
+    }
+    free(core);
+    unlink(CORE_PATH);
+    if (!found) {
+        errno = 0;
+        return fail(SEGV_ORIG, "orig_eax or orig_rax of a fault's core is not -1");
+    }
+    return 0;
+}
+
+/**
  * Check the children that leave no core file: one whose limit is 0 and one
  * that is not dumpable. Returns 0, or 1 after the failure is printed.
  */
@@ -848,7 +919,7 @@ int main(int argc, char **argv)
         return 1;
     }
     unlink(CORE_PATH);
-    if (no_core_rows() != 0 || hole_row() != 0) {
+    if (segv_row() != 0 || no_core_rows() != 0 || hole_row() != 0) {
         return 1;
     }
     rmdir(DIR_PATH);
