@@ -7,6 +7,7 @@ The file system layer is the part of the kernel between the system calls on file
 * [ext2.Readme.md](ext2.Readme.md), [fat32.Readme.md](fat32.Readme.md) (the type `vfat`) and [exfat.Readme.md](exfat.Readme.md): the disk formats of other systems.
 * [tmpfs.Readme.md](tmpfs.Readme.md): tmpfs, `/dev/shm`, and the files of `memfd_create(2)`.
 * [synthfs.Readme.md](synthfs.Readme.md): `/dev`, the raw disk windows, `/proc` and `/sys`.
+* [debugfs.Readme.md](debugfs.Readme.md): debugfs at `/sys/kernel/debug`, the files the kernel's subsystems register for test programs.
 * [lock.Readme.md](lock.Readme.md): the advisory locks of `fcntl(2)` and `flock(2)`.
 * [../ipc/Readme.md](../ipc/Readme.md): the POSIX message queues at `/dev/mqueue`.
 * [../mm/Readme.md](../mm/Readme.md): the page cache under the KRFFS root and the mappings of files; [../block/Readme.md](../block/Readme.md): the disks.
@@ -39,7 +40,7 @@ A description (`struct open_file`) is shared by the descriptors that `dup` and `
 
 `truncate(2)` truncates through a description of its own, so it runs the type's `open` and `release`, and is counted in the unmount's log record, as an `open(2)` without `O_PATH` is ([vfs.Readme.md](vfs.Readme.md)).
 
-The description lock (`fd_ofd_lock`) keeps a sharer from using the offset while another sleeps in a disk request with it. On a type that sets `ns_serialised` ([vfs.Readme.md](vfs.Readme.md)), it takes the mount's namespace lock first. `read`, `write`, `lseek`, `getdents64`, `ftruncate`, `truncate` and `fallocate` hold it, and so does the read or write of a device or `/proc` file whose offset moves; `pread64` and `pwrite64` hold it on a regular file and give a device or `/proc` file a copy of the description instead (`pio_view`). An `O_APPEND` write reads the file's size under it. A directory's offset is its listing's cursor, a value of the type's own, so `lseek` on a directory of a file system takes only 0, the current cursor, or one the listing reports, which it finds by reading the listing from the start (`dir_cursor_valid`).
+The description lock (`fd_ofd_lock`) keeps a sharer from using the offset while another sleeps in a disk request with it. On a type that sets `ns_serialised` ([vfs.Readme.md](vfs.Readme.md)), it takes the mount's namespace lock first. `read`, `write`, `lseek`, `getdents64`, `ftruncate`, `truncate` and `fallocate` hold it, and so does the read or write of a device, `/proc` or debugfs file whose offset moves; `pread64` and `pwrite64` hold it on a regular file and give a device, `/proc` or debugfs file a copy of the description instead (`pio_view`). An `O_APPEND` write reads the file's size under it. A directory's offset is its listing's cursor, a value of the type's own, so `lseek` on a directory of a file system takes only 0, the current cursor, or one the listing reports, which it finds by reading the listing from the start (`dir_cursor_valid`).
 
 ### Copies between descriptors
 

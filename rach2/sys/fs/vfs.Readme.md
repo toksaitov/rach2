@@ -19,7 +19,7 @@ A file used as an executable or its ELF interpreter excludes writers with `ETXTB
 
 ### The mount table
 
-`mounts` in `vfs.c` is an array of pointers to `struct vfs_mount` records. A record comes from the heap when its mount is made and goes back at the unmount, so its address does not change when the array grows. The array starts with eight slots and doubles when a new mount finds none free. The first seven entries, `VFS_PERMANENT`, are made at boot and never unmounted:
+`mounts` in `vfs.c` is an array of pointers to `struct vfs_mount` records. A record comes from the heap when its mount is made and goes back at the unmount, so its address does not change when the array grows. The array starts with eight slots and doubles when a new mount finds none free. The first eight entries, `VFS_PERMANENT`, are made at boot and never unmounted:
 
 | Entry | Path | Type | Flags |
 | --- | --- | --- | --- |
@@ -30,8 +30,9 @@ A file used as an executable or its ELF interpreter excludes writers with `ETXTB
 | 4 | none | tmpfs of `memfd_create`, root mode 0555 | nosuid, nodev |
 | 5 | `/sys` | sysfs | ro, nosuid, nodev, noexec |
 | 6 | `/dev/mqueue` | mqueue | nosuid, nodev, noexec |
+| 7 | `/sys/kernel/debug` | debugfs ([debugfs.Readme.md](debugfs.Readme.md)) | nosuid, nodev, noexec |
 
-`vfs_init` installs the KRFFS root at entry 0, and `vfs_init_root` a root of another type, the ext2 root of `rach2.root=ext2` ([../../Readme.md](../../Readme.md)), with the partition's claim kept in the entry; either then installs the other six (`install_permanent`). A permanent mount that fails to construct panics. A mount placed by `mount(2)` takes a slot past the permanent ones.
+`vfs_init` installs the KRFFS root at entry 0, and `vfs_init_root` a root of another type, the ext2 root of `rach2.root=ext2` ([../../Readme.md](../../Readme.md)), with the partition's claim kept in the entry; either then installs the other seven (`install_permanent`). A permanent mount that fails to construct panics. A mount placed by `mount(2)` takes a slot past the permanent ones.
 
 A record has its type, its device (NULL for a type with none), its flags, its state, its parent and the node it covers, the covered path (its target's path from the root of the mount table, at most 255 bytes), the source string (kept to 31 bytes), a reference count, a count of operations in progress, its namespace lock, its root node, the type's private state, the counts of opens and releases, its first write error, its claim, the mask of mount namespaces that do not see it (`ns_hidden`, [../proc/ns.Readme.md](../proc/ns.Readme.md)), and for a bind its base and the path of its root within the base.
 
@@ -39,7 +40,7 @@ A mount is `VFS_FREE`, `VFS_MOUNTING`, `VFS_ACTIVE` or `VFS_UNMOUNTING`. `vfs_en
 
 A mount point is the covered directory's node, held through the parent type's `hold` for the life of the mount. The resolver replaces it with the mount's root (`mount_covering`), `..` at the mount's root climbs back to it, and `vfs_leaf_mount` shows it to a namespace change, so `mkdir` of its name answers `EEXIST` and `unlink`, `rmdir` and `rename` answer `EBUSY`. A mount still `VFS_MOUNTING` covers its node as an active one does, so a directory cannot be removed or renamed while a constructor sleeps on its device.
 
-The synthetic types have no node to cover, so `/dev`, `/proc` and `/sys` are nameless mounts: each is entered by the last component of its covered path from the root directory of its parent (`mount_named_at`), and `/dev/shm` and `/dev/mqueue` are entered by name from `/dev`'s root directory in the same way. The memfd tmpfs has no parent and no path, and no walk reaches it.
+The synthetic types have no node to cover, so `/dev`, `/proc` and `/sys` are nameless mounts: each is entered by the last component of its covered path from the root directory of its parent (`mount_named_at`), and `/dev/shm` and `/dev/mqueue` are entered by name from `/dev`'s root directory in the same way. A nameless mount's name is its recorded path below its parent's (`mount_entry_name`), and it may be more than one name: debugfs is entered from `/sys`'s root directory by `kernel/debug`. A type that takes the rest of a path in one call answers `VFS_ENTER` with that mount when the rest, its `.` and `..` resolved as text, reaches those names, and the walk enters it there; `..` at its root goes to its parent's root directory with the names before its last put in front of the rest of the path (`nameless_up`), so it is `/sys/kernel`. A listing of the parent's root directory shows no such mount, whose last name is the type's own entry in a directory below. The memfd tmpfs has no parent and no path, and no walk reaches it.
 
 ### Types and operations
 
@@ -62,7 +63,7 @@ Before each component the resolver checks search permission on the directory (`m
 A component longer than `VFS_NAME_MAX`, 255 bytes, is `ENAMETOOLONG`. Then:
 
 * `.` is passed over.
-* `..` is physical. At the walk's root, and at the root of the root mount whatever the walk's root is, it stays. At the root of a mount over a directory the walk moves to the covered node and takes the same `..` again there. At the root of a nameless mount it is the parent's root directory. Anywhere else it is the type's `lookup` of `..`. A missing or unsearchable directory before a `..` fails the path, as on Linux.
+* `..` is physical. At the walk's root, and at the root of the root mount whatever the walk's root is, it stays. At the root of a mount over a directory the walk moves to the covered node and takes the same `..` again there. At the root of a nameless mount it is the parent's root directory, or for one entered by more than one name the directory there that holds it. Anywhere else it is the type's `lookup` of `..`. A missing or unsearchable directory before a `..` fails the path, as on Linux.
 * In a root directory, the name of a nameless mount there enters that mount.
 * Otherwise the type's `lookup` gives the node, or the name cache gives what it gave before. On a type with `readlink`, a node `getattr` reports as a symbolic link is followed when more of the path comes after it, and at the last component unless the caller passed `VFS_WALK_NOFOLLOW`. The target replaces the component: an absolute one restarts at the walk's root, a relative one goes on in the directory the link was found in. The target and the rest of the path must fit `VFS_PATH_MAX`, 4096 bytes with the terminator (`ENAMETOOLONG`); the forty-first link is `ELOOP` (`VFS_LINK_MAX` is 40); an empty target is `ENOENT`. The walk takes two path pages at its first link and gives them back when it returns.
 * A node a mount covers is replaced by that mount's root.

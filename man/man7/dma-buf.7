@@ -111,12 +111,17 @@ A bad user address is
 an unknown request is
 .Er ENOTTY .
 .Ss Software timelines
-The kernel implements software timeline operations, but debugfs does not
-yet publish their entry.
-The interface intended for
-the debugfs entry
-.Pa /sys/kernel/debug/sync/sw_sync
-opens a new software timeline.
+Each open of
+.Pa /sys/kernel/debug/sync/sw_sync ,
+which root alone reaches, makes a new software timeline, named by the
+command of the process that opened it, which
+.Dv SYNC_IOC_FILE_INFO
+reports as each of its fences'
+.Ar obj_name ,
+with the driver
+.Ql sw_sync ;
+see
+.Xr debugfs 5 .
 .Dv SW_SYNC_IOC_CREATE_FENCE
 reads and writes a
 .Vt struct sw_sync_create_fence_data
@@ -140,4 +145,5 @@ when none was supplied.
 .Xr lseek 2 ,
 .Xr mmap 2 ,
 .Xr poll 2 ,
-.Xr udmabuf 4
+.Xr udmabuf 4 ,
+.Xr debugfs 5
