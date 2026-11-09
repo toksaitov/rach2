@@ -1,11 +1,34 @@
-.Dd November 9, 2026
+.Dd November 10, 2026
 .Dt IA32 7
 .Os
 .Sh NAME
 .Nm ia32
 .Nd 32-bit code and i386 system calls under the x86-64 kernel
 .Sh DESCRIPTION
-The x86-64 kernel lays out its global descriptor table (GDT) as Linux
+The x86-64 kernel runs i386 programs, ELF32 executables for i386 with
+ELF32 interpreters, in 32-bit mode, in the layout and with the initial
+stack and auxiliary vector that
+.Xr execve 2
+describes, and maps them the 32-bit library of
+.Xr vdso 7 .
+Such a program starts with CS 0x23 and DS, ES and SS 0x2b, and its
+.Xr mmap 2 ,
+.Fn mmap2 ,
+.Xr mremap 2 ,
+.Xr munmap 2
+and
+.Xr mprotect 2
+keep below 4 GiB.
+.Xr clone 2
+takes the i386 order of arguments, and its
+.Dv CLONE_SETTLS
+argument is a
+.Vt struct user_desc
+whose descriptor the child gets, as
+.Xr set_thread_area 2
+sets one.
+.Pp
+The kernel lays out its global descriptor table (GDT) as Linux
 does, so that a 64-bit process can run 32-bit code and make i386 system
 calls, as a Linux with its 32-bit emulation lets it:
 .Bl -column "Selector" "Entries" -offset indent
@@ -41,10 +64,18 @@ have one layout in both interfaces, such as
 .Xr kill 2
 and
 .Xr close 2 ;
-168 run a compat handler, written for a call whose structures differ,
-which returns
+168 run a compat handler, written for a call whose structures differ:
+those of
+.Xr execve 2 ,
+.Fn execveat ,
+.Xr clone 2 ,
+the old
+.Xr mmap 2
+and
+.Fn mmap2
+translate their calls, and the others return
 .Er ENOSYS
-until its translation is written; 96 are empty, where Linux has no call
+until their translation is written; 96 are empty, where Linux has no call
 or this kernel has no handler, and return
 .Er ENOSYS ,
 as does a number with no row.
@@ -128,9 +159,6 @@ as Linux's return does.
 Any other SS it cannot restore becomes 0x2b, as Linux makes it for a
 64-bit program that saved no SS.
 .Sh LIMITS
-The kernel loads no 32-bit ELF program: 32-bit code runs inside a 64-bit
-process that enters it.
-There is no 32-bit vDSO, and
 .Fn modify_ldt
 returns
 .Er ENOSYS ,
@@ -150,8 +178,10 @@ each call's architecture with
 .Dv PTRACE_GET_SYSCALL_INFO .
 .Sh SEE ALSO
 .Xr arch_prctl 2 ,
+.Xr execve 2 ,
 .Xr ptrace 2 ,
 .Xr seccomp 2 ,
 .Xr set_thread_area 2 ,
 .Xr sigaction 2 ,
-.Xr syscalls 2
+.Xr syscalls 2 ,
+.Xr vdso 7

@@ -108,33 +108,39 @@ uint32_t vclock_resolution_ns(void);
 uint32_t clock_calls(void);
 
 /*
- * The image and the page, which the mapping below places. An architecture
- * without a vDSO has no pages.
+ * The images and the page, which the mapping below places. The images are
+ * one for each ABI the kernel runs programs of: its own programs', and on
+ * x86-64 the 32-bit one an i386 program is given (arch/x86_64/vdso32.c),
+ * which shares the data page. An architecture without a vDSO has no pages.
  */
+#define VDSO_NATIVE 0
+#define VDSO_IA32   1
 
-/** The pages of the vDSO's image, 0 where there is none. */
-uint32_t vdso_image_pages(void);
+/** The pages of the vDSO's image for the ABI `abi`, 0 where there is
+ * none. */
+uint32_t vdso_image_pages(int abi);
 
-/** The physical frame of the image's page `page`, or of the data page for
- * VDSO_DATA_PAGE. */
+/** The physical frame of page `page` of the image for the ABI `abi`, or
+ * of the data page for VDSO_DATA_PAGE. */
 #define VDSO_DATA_PAGE 0xFFFFFFFFu
-uintptr_t vdso_frame(uint32_t page);
+uintptr_t vdso_frame(int abi, uint32_t page);
 
-/** The bytes the vDSO takes in an address space: the data page and the
- * image, or 0 where there is none. */
-uintptr_t vdso_span(void);
+/** The bytes the vDSO takes in an address space of the ABI `abi`: the
+ * data page and the image, or 0 where there is none. */
+uintptr_t vdso_span(int abi);
 
 /**
- * Add the data page at `at` and the image after it to `vm`, each a region
- * of its own whose pages come from the kernel's frames when first touched,
- * the data page read-only and the image read and execute, neither ever
- * writable. Returns the image's address, AT_SYSINFO_EHDR; 0 where there is
- * no vDSO; -1 when a region cannot be added, with `vm` as it was.
+ * Add the data page at `at` and the image for the ABI `abi` after it to
+ * `vm`, each a region of its own whose pages come from the kernel's frames
+ * when first touched, the data page read-only and the image read and
+ * execute, neither ever writable. Returns the image's address,
+ * AT_SYSINFO_EHDR; 0 where there is no vDSO; -1 when a region cannot be
+ * added, with `vm` as it was.
  */
-intptr_t vdso_map(struct vm_space *vm, uintptr_t at);
+intptr_t vdso_map(struct vm_space *vm, uintptr_t at, int abi);
 
 /** The region's name in /proc/PID/maps, "[vvar]" or "[vdso]", for a file
- * that `vdso_map` maps, and NULL for any other. */
+ * that `vdso_map` maps, of either image, and NULL for any other. */
 const char *vdso_region_name(const struct vm_file *f);
 
 /** Whether `f` is the file of the data page, [vvar], which a core file

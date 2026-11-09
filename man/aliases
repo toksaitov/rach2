@@ -95,6 +95,7 @@ egrep 1 busybox-findutils
 env 1 busybox-coreutils
 envdir 8 busybox-runit
 envuidgid 8 busybox-runit
+execveat 2 execve
 exit_group 2 exit
 expand 1 busybox-coreutils
 expr 1 busybox-coreutils

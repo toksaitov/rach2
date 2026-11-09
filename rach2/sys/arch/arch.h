@@ -203,6 +203,22 @@ void arch_syscall_init(syscall_fn_t *table, void (*dispatch)(isr_params_t *param
  * i386 number, for the calls a frame's SC_COMPAT marks (x86_64/ia32_systab.c).
  * The entry is the one `arch_syscall_init` routes. */
 void ia32_syscall_init(syscall_fn_t *table);
+
+/** AT_HWCAP of an i386 program, Linux's ELF_HWCAP: the EDX of `cpuid` leaf
+ * 1 (x86_64/ia32_exec.c). */
+uint32_t ia32_hwcap(void);
+
+/** The address of __kernel_vsyscall in the 32-bit vDSO whose image is at
+ * `base`, AT_SYSINFO (x86_64/vdso32.c). */
+uintptr_t vdso32_vsyscall_at(uintptr_t base);
+
+/** clone's CLONE_SETTLS in an i386 call: the `struct user_desc` at `uptr`
+ * read and checked into the TLS entry and descriptor the child gets, as
+ * set_thread_area checks one; 0 or its error (x86_64/tls.c). The second
+ * gives them to `child` before it first runs. */
+struct process;
+long ia32_clone_tls(unsigned long uptr, uint32_t *entry, uint64_t *desc);
+void ia32_clone_tls_set(struct process *child, uint32_t entry, uint64_t desc);
 #endif
 
 /*

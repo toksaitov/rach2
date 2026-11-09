@@ -218,25 +218,27 @@ static void tls_reload(unsigned int sel, uint64_t d)
  * written back; -EINVAL for a descriptor refused or an entry outside 12 to
  * 14; -ESRCH when -1 finds no empty entry, or with no current process.
  */
-long sys_set_thread_area(isr_params_t *params)
+/**
+ * Read the `struct user_desc` at `uptr` and make its descriptor, as Linux's
+ * `do_set_thread_area` does before it sets one: the entry, 12 to 14, into
+ * `*entry`, where -1 picks the calling thread's first empty one and writes
+ * it back, and the descriptor into `*desc`. 0; -EFAULT when the structure
+ * cannot be read or the entry written back; -EINVAL for a descriptor
+ * refused or an entry outside 12 to 14; -ESRCH when -1 finds none empty.
+ */
+static long tls_desc_from_user(uintptr_t uptr, uint32_t *entry, uint64_t *desc)
 {
-    uintptr_t uptr = SC_ARG(params, 0);
     struct user_desc u;
-    uint32_t entry;
-    uint64_t d;
     int i;
 
-    if (!current_proc) {
-        return -ESRCH;
-    }
     if (copy_from_user(&u, (const void __user *)uptr, sizeof(u)) != 0) {
         return -EFAULT;
     }
     if (!ud_okay(&u)) {
         return -EINVAL;
     }
-    entry = u.entry_number;
-    if (entry == (uint32_t)-1) {
+    *entry = u.entry_number;
+    if (*entry == (uint32_t)-1) {
         i = 0;
         while (i < ARCH_TLS_ENTRIES && current_proc->regs.tls[i] != 0) {
             i++;
@@ -244,19 +246,55 @@ long sys_set_thread_area(isr_params_t *params)
         if (i == ARCH_TLS_ENTRIES) {
             return -ESRCH;
         }
-        entry = (uint32_t)(GDT_TLS_MIN + i);
-        if (copy_to_user((void __user *)uptr, &entry, sizeof(entry)) != 0) {
+        *entry = (uint32_t)(GDT_TLS_MIN + i);
+        if (copy_to_user((void __user *)uptr, entry, sizeof(*entry)) != 0) {
             return -EFAULT;
         }
     }
-    if (entry < GDT_TLS_MIN || entry > GDT_TLS_MAX) {
+    if (*entry < GDT_TLS_MIN || *entry > GDT_TLS_MAX) {
         return -EINVAL;
     }
-    d = ud_to_desc(&u);
+    *desc = ud_to_desc(&u);
+    return 0;
+}
+
+long sys_set_thread_area(isr_params_t *params)
+{
+    uint32_t entry;
+    uint64_t d;
+    long rc;
+
+    if (!current_proc) {
+        return -ESRCH;
+    }
+    rc = tls_desc_from_user(SC_ARG(params, 0), &entry, &d);
+    if (rc != 0) {
+        return rc;
+    }
     current_proc->regs.tls[entry - GDT_TLS_MIN] = d;
     cpu_self()->gdt[entry] = d;
     tls_reload((entry << 3) | 3u, d);
     return 0;
+}
+
+/**
+ * clone's CLONE_SETTLS in an i386 call, whose TLS argument at `uptr` is a
+ * `struct user_desc`, as Linux's `set_new_tls` takes it from a compat call:
+ * the entry and descriptor the child is to have, read and checked here in
+ * the parent, as set_thread_area checks one, an entry of -1 picking the
+ * parent's first empty one, which the child's copy of the entries has
+ * empty too. The child's thread pointer stays the parent's.
+ */
+long ia32_clone_tls(unsigned long uptr, uint32_t *entry, uint64_t *desc)
+{
+    return tls_desc_from_user(uptr, entry, desc);
+}
+
+/** Give `child`, not yet run, the TLS descriptor `desc` in entry `entry`,
+ * which `ia32_clone_tls` made; its first switch writes it into the GDT. */
+void ia32_clone_tls_set(process_t *child, uint32_t entry, uint64_t desc)
+{
+    child->regs.tls[entry - GDT_TLS_MIN] = desc;
 }
 
 /**

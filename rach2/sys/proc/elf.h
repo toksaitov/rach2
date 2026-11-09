@@ -4,7 +4,9 @@
  *
  * The programs are ELF32 on i686 and ELF64 on x86-64, the class `ELF_CLASS`
  * names (arch/arch.h), and the types `Elf_Ehdr` and `Elf_Phdr` are that
- * class's headers.
+ * class's headers. The x86-64 kernel loads i386 programs too, ELF32 images
+ * of EM_386 (ELF_IA32), whose headers the loader reads into the native
+ * types, so that the code past the read sees one form.
  *
  * Reference: ELF specification (TIS Committee, v1.2), and the System V ABI's
  * ELF-64 Object File Format.
@@ -183,6 +185,14 @@ typedef Elf32_Ehdr Elf_Ehdr;
 typedef Elf32_Phdr Elf_Phdr;
 #endif
 
+/* Whether the kernel loads i386 programs beside its own: the x86-64
+ * kernel, which has their compat system call table. */
+#if defined(IA32_SYSCALL_TABLE_SIZE)
+#define ELF_IA32 1
+#else
+#define ELF_IA32 0
+#endif
+
 /**
  * Whether the `size` bytes at `data` are an ELF program of type ET_EXEC
  * this kernel runs: the magic, the class `ELF_CLASS`, little-endian, the
@@ -244,6 +254,7 @@ typedef struct elf_seg {
  * address-space map (VMAs).
  */
 typedef struct {
+    uint8_t cls;          /* the image's ELF class, ELFCLASS32 or ELFCLASS64 */
     uintptr_t entry;      /* AT_ENTRY: program entry point */
     uintptr_t phdr_vaddr; /* AT_PHDR: vaddr of the program header table */
     uint32_t phent;       /* AT_PHENT: size in bytes of one program header */
@@ -258,10 +269,12 @@ typedef struct {
  * Whether the `len` bytes at `ehdr` begin with the ELF header of an ET_EXEC
  * or ET_DYN program this kernel loads: the checks of `elf_check` the header
  * alone can answer, with a program header table offset that fits in 32
- * bits. The table is not bounded against the file and the entry point is
- * not checked; the loader, which reads the rest of the file on demand,
- * fails a short read of the table and checks the entry against the user
- * image window. execve uses it to tell a program from a script.
+ * bits. Under ELF_IA32 an ELF32 header of EM_386, whose program headers
+ * are ELF32's, passes too. The table is not bounded against the file and
+ * the entry point is not checked; the loader, which reads the rest of the
+ * file on demand, fails a short read of the table and checks the entry
+ * against the user image window. execve uses it to tell a program from a
+ * script.
  */
 bool elf_valid_exec(const void *ehdr, uint32_t len);
 
@@ -269,10 +282,12 @@ bool elf_valid_exec(const void *ehdr, uint32_t len);
 #define ELF_INTERP_MAX 256
 
 /*
- * What exec reads of an image before it loads it: its type, the page span
- * of its PT_LOAD segments, and the interpreter PT_INTERP names, "" for none.
+ * What exec reads of an image before it loads it: its class, ELFCLASS32 for
+ * an i386 program under ELF_IA32, its type, the page span of its PT_LOAD
+ * segments, and the interpreter PT_INTERP names, "" for none.
  */
 typedef struct {
+    uint8_t cls;
     uint16_t type;
     uintptr_t lo;
     uintptr_t hi;
@@ -287,15 +302,17 @@ typedef struct {
 int elf_read_layout(elf_read_fn readfn, void *ctx, int interp, elf_layout_t *out);
 
 /** The address at run time of the program header table at file offset
- * `phoff`, AT_PHDR, where a static C library finds its PT_TLS: its place in
- * the PT_LOAD whose file bytes contain the whole table, or 0 for none. */
-uintptr_t elf_phdr_vaddr(const Elf_Phdr *phdrs, uint16_t phnum, uint64_t phoff);
+ * `phoff`, of `phnum` entries of `phent` bytes each in the file, AT_PHDR,
+ * where a static C library finds its PT_TLS: its place in the PT_LOAD whose
+ * file bytes contain the whole table, or 0 for none. */
+uintptr_t elf_phdr_vaddr(const Elf_Phdr *phdrs, uint16_t phnum, uint32_t phent, uint64_t phoff);
 
 /**
- * Load an ELF program into `dir`, reading it through `read` with `ctx`, and
- * describe it in `out`: the segment table, the image's end (the heap's
- * base), the entry point and the program header geometry. Every segment is
- * copied into frames of its own; the boot loads the first program so.
+ * Load an ELF program of the architecture's own class into `dir`, reading
+ * it through `read` with `ctx`, and describe it in `out`: the segment table,
+ * the image's end (the heap's base), the entry point and the program header
+ * geometry. Every segment is copied into frames of its own; the boot loads
+ * the first program so, and an i386 program is -ENOEXEC here.
  *
  * The file is read on demand and never held whole, so its size has no
  * bound. Each PT_LOAD must be well formed and lie in the user image window,
@@ -319,7 +336,9 @@ int elf_load_image(elf_read_fn read, void *ctx, struct page_dir *dir, elf_image_
 /**
  * The same with every address moved by `bias`, page-aligned, which must be
  * 0 for an ET_EXEC image: an ET_DYN program or interpreter at its base.
- * Another `bias` is -ENOEXEC.
+ * Another `bias` is -ENOEXEC. Under ELF_IA32 an i386 program loads too,
+ * with `out->cls` ELFCLASS32, its segments and entry below IA32_TASK_SIZE
+ * and AT_PHENT the 32 bytes of its program headers.
  *
  * With `file`, a private mapping of the file `read` reads, a segment whose
  * file offset and address agree modulo the page is not copied but recorded

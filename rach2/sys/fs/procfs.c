@@ -1163,13 +1163,13 @@ static int procfs_gen_environ(struct procfs_text *t, int pid)
 }
 
 /** /proc/<pid>/auxv: the auxiliary vector the program was given, the words
- * of its initial stack as the address space keeps them, through its AT_NULL
- * pair; -EACCES for a caller `procfs_may_read_mem` refuses. */
+ * of its initial stack as the address space keeps them, 4 bytes each for an
+ * i386 program, through its AT_NULL pair; -EACCES for a caller
+ * `procfs_may_read_mem` refuses. */
 static int procfs_gen_auxv(struct procfs_text *t, int pid)
 {
     process_t *p = procfs_proc(pid);
-    uint32_t i;
-    int b;
+    uint32_t word, pair, i;
 
     if (!p) {
         return -ENOENT;
@@ -1177,13 +1177,22 @@ static int procfs_gen_auxv(struct procfs_text *t, int pid)
     if (!procfs_may_read_mem(p)) {
         return -EACCES;
     }
-    for (i = 0; p->mm && i + 1 < MM_AUXV_WORDS; i += 2) {
-        const uint8_t *pair = (const uint8_t *)&p->mm->auxv[i];
+    if (!p->mm) {
+        return t->len;
+    }
+    word = (uint32_t)sizeof(p->mm->auxv[0]);
+    if (p->mm->compat) {
+        word = 4u;
+    }
+    for (pair = 0; (pair + 1u) * 2u * word <= sizeof(p->mm->auxv); pair++) {
+        const uint8_t *at = (const uint8_t *)p->mm->auxv + pair * 2u * word;
+        uint8_t type = 0;
 
-        for (b = 0; b < (int)(2 * sizeof(p->mm->auxv[0])); b++) {
-            ap_ch(t, (char)pair[b]);
+        for (i = 0; i < 2u * word; i++) {
+            ap_ch(t, (char)at[i]);
+            type |= i < word ? at[i] : 0u;
         }
-        if (p->mm->auxv[i] == 0) {
+        if (type == 0) {
             break;
         }
     }

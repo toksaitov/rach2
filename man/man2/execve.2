@@ -1,13 +1,17 @@
-.Dd November 1, 2026
+.Dd November 10, 2026
 .Dt EXECVE 2
 .Os
 .Sh NAME
-.Nm execve
+.Nm execve ,
+.Nm execveat
 .Nd replace the current process image
 .Sh SYNOPSIS
 .In unistd.h
 .Ft int
 .Fn execve "const char *path" "char *const argv[]" "char *const envp[]"
+.In fcntl.h
+.Ft int
+.Fn execveat "int dirfd" "const char *path" "char *const argv[]" "char *const envp[]" "int flags"
 .Sh DESCRIPTION
 .Fn execve
 replaces the calling process's image with the program at
@@ -322,8 +326,11 @@ of the process is open on, as on Linux.
 This is how the C library's
 .Fn fexecve
 runs a descriptor when the kernel has no
-.Fn execveat ,
-which this one does not register.
+.Fn execveat ;
+.Fn execveat
+with
+.Dv AT_EMPTY_PATH ,
+below, runs one the same way.
 A descriptor opened with
 .Dv O_PATH
 runs its file, and so does one whose file has lost its name.
@@ -353,6 +360,114 @@ the link has no path, as
 says.
 A script run so is given the path the caller passed, and the descriptor
 must stay open for its interpreter to read the script by it, as on Linux.
+.Ss execveat
+.Fn execveat
+is
+.Fn execve
+with the program named as
+.Xr openat 2
+names a file.
+A relative
+.Fa path
+is taken from the directory
+.Fa dirfd
+is open on, or from the working directory when
+.Fa dirfd
+is
+.Dv AT_FDCWD ;
+an absolute one ignores
+.Fa dirfd .
+.Fa flags
+may hold
+.Dv AT_SYMLINK_NOFOLLOW ,
+for which a
+.Fa path
+whose last component is a symbolic link fails with
+.Er ELOOP ,
+and
+.Dv AT_EMPTY_PATH ,
+for which an empty
+.Fa path
+runs the file
+.Fa dirfd
+is open on, as an
+.Fn execve
+of
+.Pa /proc/self/fd/ Ns Ar dirfd
+runs it, an
+.Dv O_PATH
+descriptor's included.
+With
+.Dv AT_FDCWD
+that is the working directory, which no program is, and fails with
+.Er EACCES .
+.Pp
+The new image's
+.Dv AT_EXECFN ,
+and the name a script's interpreter is given, is
+.Fa path
+when it is absolute or
+.Fa dirfd
+is
+.Dv AT_FDCWD ;
+otherwise
+.Pa /dev/fd/ Ns Ar dirfd Ns Pa / Ns Ar path ,
+or
+.Pa /dev/fd/ Ns Ar dirfd
+for the descriptor itself, as on Linux.
+When that descriptor is marked
+.Dv FD_CLOEXEC
+the new image could not open that name, and a script so named fails with
+.Er ENOENT ,
+as on Linux, since its interpreter could not read it.
+.Pp
+The i386 call number is 358 and the x86-64 one 322.
+.Ss i386 programs on x86-64
+The x86-64 kernel also loads ELF32 executables for i386, with ELF32
+interpreters, and runs them in 32-bit mode, as Linux with its 32-bit
+emulation does; an interpreter of the other class than its program fails
+with
+.Er ELIBBAD .
+Such a program has the layout Linux gives one: its address space ends at
+.Ad 0xFFFFE000 ,
+where its stack's top is;
+.Xr mmap 2
+and
+.Xr mremap 2
+place mappings, and the kernel the interpreter, below
+.Ad 0xF7FFE000 ,
+128 MiB under the stack, and fail with
+.Er ENOMEM
+for a fixed address past the end; a position-independent program goes at
+.Ad 0x00400000 .
+Where addresses are randomized, the stack's top is lowered by pages under
+8 MiB, the top of the mapping range by pages under 1 MiB, and a
+position-independent program raised by pages under 1 MiB.
+Its initial stack is the System V i386 one, of 4-byte words, and its
+auxiliary vector has, beside the entries above,
+.Dv AT_HWCAP ,
+the feature bits
+.Ic cpuid
+leaf 1 gives in EDX,
+.Dv AT_PLATFORM ,
+the address of the string
+.Ql i686 ,
+.Dv AT_SYSINFO ,
+the address of the 32-bit vDSO's
+.Fn __kernel_vsyscall ,
+and
+.Dv AT_SYSINFO_EHDR ,
+that vDSO's address, which
+.Xr vdso 7
+describes.
+.Pa /proc/ Ns Ar pid Ns Pa /auxv
+gives the vector in 4-byte words.
+The program makes its system calls with
+.Li int $0x80
+by the i386 numbers, as
+.Xr ia32 7
+describes.
+Either kind of program may run the other.
 .Ss Failure
 The path is resolved and its permissions checked first, as Linux opens
 the program before it copies the vectors.
@@ -395,7 +510,8 @@ child still has it; that parent then runs again.
 .Pp
 The i386 system call number is 11.
 EBX contains the path pointer, ECX the argument-vector pointer, and
-EDX the environment-vector pointer.
+EDX the environment-vector pointer, whose pointers are 4 bytes, also for
+an i386 call on x86-64.
 .Pp
 On x86-64 the loader takes little-endian ELF64 executables for x86-64 of
 the same types, and builds the System V x86-64 initial stack, whose words
@@ -515,25 +631,49 @@ The process is ending, or another thread's
 is waiting for the process's other threads to end; the caller has
 .Dv SIGKILL
 pending and ends before it returns to user mode.
+.It Bq Er EBADF
+.Fn execveat
+was given a relative
+.Fa path ,
+or an empty one with
+.Dv AT_EMPTY_PATH ,
+and a
+.Fa dirfd
+that is not an open descriptor.
 .It Bq Er EBUSY
 Path resolution entered a mount being mounted or unmounted.
 .It Bq Er EFAULT
 The path, a vector, or a string cannot be read from user memory.
 .It Bq Er EINVAL
-The file system cannot supply a required attribute or read operation.
+The file system cannot supply a required attribute or read operation, or
+.Fn execveat
+was given a flag other than
+.Dv AT_SYMLINK_NOFOLLOW
+and
+.Dv AT_EMPTY_PATH .
 .It Bq Er EIO
 Reading the program or file system metadata failed, or the device was removed.
 .It Bq Er ELIBBAD
 The interpreter a
 .Dv PT_INTERP
-names is not an ELF image this kernel loads.
+names is not an ELF image this kernel loads, or is of the other class
+than its program.
 .It Bq Er ELOOP
-Path resolution would follow more than 40 symbolic links.
+Path resolution would follow more than 40 symbolic links, or the last
+component of the path
+.Fn execveat
+was given with
+.Dv AT_SYMLINK_NOFOLLOW
+is a symbolic link.
 .It Bq Er ENAMETOOLONG
 The path, its current-directory prefix, a component, or a symbolic-link
 expansion exceeds its buffer.
 .It Bq Er ENOENT
-The path is empty, or a component of the program's path, a script's
+The path is empty without
+.Dv AT_EMPTY_PATH ,
+a script was named through a descriptor marked
+.Dv FD_CLOEXEC ,
+or a component of the program's path, a script's
 interpreter path or a
 .Dv PT_INTERP
 path does not exist.
@@ -550,7 +690,9 @@ on i686, and from
 .Ad 0x00010000
 to
 .Ad 0x00007FFFFFFFE000
-on x86-64.
+on x86-64, or below
+.Ad 0xFFFFE000
+for an i386 program there.
 .It Bq Er ENOMEM
 The exec workspace, the new address space, a page of the new image or its
 stack, a region record, the copy of a shared descriptor table, or storage
@@ -577,7 +719,9 @@ duplicate or inherited descriptor or one marked close-on-exec.
 .Xr exit 2 ,
 .Xr fcntl 2 ,
 .Xr fork 2 ,
+.Xr openat 2 ,
 .Xr personality 2 ,
 .Xr prlimit64 2 ,
 .Xr wait 2 ,
+.Xr ia32 7 ,
 .Xr vdso 7

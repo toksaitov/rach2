@@ -33,7 +33,9 @@
  * /proc/PID/cmdline and environ read; and the auxiliary vector it was given,
  * which /proc/PID/auxv reads. So is the dumpable flag of prctl(2), as Linux
  * keeps it with the address space: every thread that shares the space has the
- * one flag.
+ * one flag. So is the image's ABI, an i386 program's on the x86-64 kernel,
+ * which Linux keeps as the thread flag TIF_ADDR32 that every thread of the
+ * image has.
  */
 #ifndef _MM_H_
 #define _MM_H_
@@ -49,7 +51,7 @@ struct vfs_ref;
 /* The words of an auxiliary vector an address space keeps: two for each of
  * the UIMAGE_AUXV entries an image is given (proc/uimage.h), which
  * syscall_proc.c checks. */
-#define MM_AUXV_WORDS 38
+#define MM_AUXV_WORDS 44
 
 struct mm {
     uint32_t users;
@@ -68,7 +70,20 @@ struct mm {
     uintptr_t arg_end;
     uintptr_t env_start;
     uintptr_t env_end;
+    /* The auxiliary vector as the image's stack has it: in words of a
+     * pointer's width, or for an i386 image (`compat`) in 4-byte words
+     * packed from the start of the array, as Linux's saved_auxv keeps a
+     * compat task's. */
     unsigned long auxv[MM_AUXV_WORDS];
+    /* Whether the image is an i386 program the x86-64 kernel runs: its
+     * address space ends at IA32_TASK_SIZE, its threads run 32-bit code,
+     * and its core file is ELFCLASS32; 0 for a native image and on i686,
+     * whose programs are native. A fork's copy takes it. */
+    uint32_t compat;
+    /* The address of the vDSO's image in the address space, AT_SYSINFO_EHDR,
+     * or 0 for none, from which an i386 signal frame finds the vDSO's
+     * sigreturn code (ia32.h). A fork's copy takes it. */
+    uintptr_t vdso;
     /* Whether the process running this image may leave a core file, and be
      * traced or have its memory opened through /proc by a caller without
      * privilege: 1 for a new address space and for an image an exec builds,

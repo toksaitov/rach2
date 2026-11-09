@@ -1214,7 +1214,7 @@ static uintptr_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
                             const elf_image_t *img, uintptr_t ehdr, uintptr_t *bottom)
 {
     struct uimage u;
-    struct uimage_aux root = {0, 0, 0, 0, 0, 0, 0};
+    struct uimage_aux root = {0, 0, 0, 0, 0, 0, 0, 0, 0};
     uint8_t random16[16];
     uint32_t envc = 0;
     uintptr_t sp = 0;
@@ -1248,6 +1248,7 @@ static uintptr_t boot_stack(struct mm *mm, int argc, char *argv[], char *envp[],
         mm->env_start = u.env_start;
         mm->env_end = u.env_end;
         k_memcpy(mm->auxv, u.auxv, sizeof(mm->auxv));
+        mm->vdso = ehdr;
     }
     uimage_release(&u);
     return sp;
@@ -1417,8 +1418,8 @@ static void exec_program(int argc, char *argv[])
     boot_exec_done();
     entry_point = img.entry;
 
-    user_sp = boot_stack(mm, argc, argv, default_envp, &img, vdso_span() ? vdso_at + PAGE_SIZE : 0,
-                         &stack_bottom);
+    user_sp = boot_stack(mm, argc, argv, default_envp, &img,
+                         vdso_span(VDSO_NATIVE) ? vdso_at + PAGE_SIZE : 0, &stack_bottom);
     if (user_sp == 0) {
         mm_put(mm);
         console_puts("exec: the initial stack could not be built");
@@ -1427,7 +1428,7 @@ static void exec_program(int argc, char *argv[])
 
     if (elf_setup_vmas(&mm->vm, &img, img.image_end, USER_STACK_BASE, VM_STACK_MAX_GROWTH,
                        USER_MMAP_BASE) != 0 ||
-        vdso_map(&mm->vm, vdso_at) < 0 ||
+        vdso_map(&mm->vm, vdso_at, VDSO_NATIVE) < 0 ||
         (stack_bottom < USER_STACK_BASE && !vm_grow_stack(&mm->vm, stack_bottom, RLIM_INFINITY))) {
         mm_put(mm);
         console_puts("exec: no memory for the program's regions");

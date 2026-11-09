@@ -35,12 +35,15 @@
 #define AT_EUID              12 /* Effective user id                      (populated) */
 #define AT_GID               13 /* Real group id                          (populated) */
 #define AT_EGID              14 /* Effective group id                     (populated) */
+#define AT_PLATFORM          15 /* The processor's name, an i386 program's (populated) */
+#define AT_HWCAP             16 /* CPUID leaf 1's EDX, an i386 program's  (populated) */
 #define AT_CLKTCK            17 /* times(2) ticks per second, 100         (populated) */
 #define AT_SECURE            23 /* 1 when euid != ruid or egid != rgid    (populated) */
 #define AT_RANDOM            25 /* Address of 16 random bytes             (populated) */
 #define AT_RSEQ_FEATURE_SIZE 27 /* The bytes of struct rseq kept   (populated) */
 #define AT_RSEQ_ALIGN        28 /* The alignment of an rseq area         (populated) */
 #define AT_EXECFN            31 /* Address of the program's path          (populated) */
+#define AT_SYSINFO           32 /* __kernel_vsyscall, an i386 program's   (populated) */
 #define AT_SYSINFO_EHDR      33 /* The vDSO's ELF header, x86-64 only    (populated) */
 #define AT_MINSIGSTKSZ       51 /* The least alternate stack a frame fits (populated) */
 

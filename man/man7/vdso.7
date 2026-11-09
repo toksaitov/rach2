@@ -1,4 +1,4 @@
-.Dd November 1, 2026
+.Dd November 10, 2026
 .Dt VDSO 7
 .Os
 .Sh NAME
@@ -48,6 +48,49 @@ Both libraries call the clock through it on x86-64; the i686 kernel maps no
 vDSO and gives no
 .Dv AT_SYSINFO_EHDR ,
 so every clock call there is a system call.
+.Ss The i386 library
+An i386 program that the x86-64 kernel runs, as
+.Xr ia32 7
+describes, gets a 32-bit library in place of the 64-bit one, built at
+boot as Linux's
+.Pa linux-gate.so.1
+is laid out, at
+.Dv AT_SYSINFO_EHDR
+with its data page below it, and the address of its
+.Fn __kernel_vsyscall
+as
+.Dv AT_SYSINFO .
+Its functions follow the i386 calling convention, and those of version
+.Dv LINUX_2.6
+read the same data page as the 64-bit library's:
+.Fn __vdso_clock_gettime ,
+with a
+.Vt struct timespec
+of 32-bit seconds,
+.Fn __vdso_clock_gettime64 ,
+with one of 64-bit seconds,
+.Fn __vdso_gettimeofday ,
+.Fn __vdso_time ,
+.Fn __vdso_clock_getres
+and
+.Fn __vdso_getcpu .
+Each falls back to the i386 system call as the 64-bit one does.
+Those of version
+.Dv LINUX_2.5
+are Linux's entry points:
+.Fn __kernel_vsyscall
+makes the system call in EAX with
+.Li int $0x80 ,
+and
+.Fn __kernel_sigreturn
+and
+.Fn __kernel_rt_sigreturn
+make
+.Xr sigreturn 2
+and
+.Fn rt_sigreturn ,
+the return a signal frame's restorer names.
+The library has no names without the prefix, as Linux's has none.
 .Ss The clock from the TSC
 The clock functions answer without the kernel only where it keeps its clock from
 the processor's time-stamp counter.

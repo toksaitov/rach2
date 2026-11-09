@@ -72,6 +72,7 @@
 #define SYS_FORK                   57
 #define SYS_VFORK                  58
 #define SYS_EXECVE                 59
+#define SYS_EXECVEAT               322
 #define SYS_EXIT                   60
 #define SYS_WAIT4                  61
 #define SYS_KILL                   62
