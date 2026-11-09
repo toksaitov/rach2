@@ -598,6 +598,25 @@ static void _dispatch(isr_params_t *params)
     }
 }
 
+/* The vector of a system call's frame on both kernels, `int $0x80`'s, which
+ * x86-64's `syscall` entry gives its frame too (SYSCALL_VECTOR of each
+ * architecture's sysnr.h). */
+#define SYSCALL_ENTRY 0x80u
+
+/**
+ * Mark an entry from user mode that is not a system call with -1 in the
+ * interrupted thread's `orig_nr`, as Linux writes -1 in `orig_ax` on every
+ * such entry, so that its tracer and its core file read -1 there and not
+ * the number of the last call. Only the thread itself writes the field
+ * while it runs, so no lock is needed.
+ */
+static void user_entry(const isr_params_t *params)
+{
+    if (FRAME_USER(params) && params->vector != SYSCALL_ENTRY && current_proc) {
+        current_proc->orig_nr = -1;
+    }
+}
+
 /**
  * Take the big lock and run the handler chain of a processor exception or
  * a system call; `isr_leave` gives the lock back. `params` is the saved
@@ -606,6 +625,7 @@ static void _dispatch(isr_params_t *params)
  */
 void _isr_router(isr_params_t *params)
 {
+    user_entry(params);
     bkl_enter();
 #ifdef DEBUG
     klog(KLOG_DEBUG, "isr", "interrupt: vector 0x%X", params->vector);
@@ -662,6 +682,7 @@ void isr_leave(isr_params_t *params)
  */
 void isr_local_router(isr_params_t *params)
 {
+    user_entry(params);
     if (params->vector == IPI_VECTOR) {
         smp_ipi();
         lapic_eoi();
@@ -735,6 +756,7 @@ void _irq_router(isr_params_t *params)
 {
     struct percpu *cpu = this_cpu();
 
+    user_entry(params);
     if (FRAME_PC(params) == (unsigned long)arch_idle_resume) {
         FRAME_IRQ_OFF(params);
     }
