@@ -802,4 +802,8 @@ void drm_client_dev_hotplug(struct drm_device *dev)
     fb_screen_moved();
     console_unlock(flags);
     con_settle();
+    if (rc != 0) {
+        klog(KLOG_WARN, "console", "card%d: hotplug: screen not set: error %d", dev->index,
+             (int)rc);
+    }
 }

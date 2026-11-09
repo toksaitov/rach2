@@ -269,7 +269,7 @@ static void name_of(char *out, uint32_t cap, const char *prefix, uint32_t n)
     uint32_t len = 0;
     int d = 0;
 
-    while (prefix[len] && len < cap - 1) {
+    while (len < cap - 1 && prefix[len]) {
         out[len] = prefix[len];
         len++;
     }
