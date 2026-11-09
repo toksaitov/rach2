@@ -299,6 +299,60 @@ The requests are in
 .Xr ioctl 2 ,
 and the header for programs is
 .In rach2/fb.h .
+.Ss DRM masters
+The console is the in-kernel client of the first card under
+.Pa /dev/dri
+that sets modes, as Linux's fbdev emulation is.
+A process that becomes the card's DRM master, by its first open of the
+card or by
+.Dv DRM_IOCTL_SET_MASTER ,
+takes the screen and the keyboard from the console: the console draws
+nothing, the program that owns
+.Pa /fb
+reads
+.Dv FB_EVENT_LOST
+and its writes wait, or fail with
+.Er EAGAIN
+on a nonblocking descriptor, an open of
+.Pa /fb
+by another program fails with
+.Er EBUSY ,
+and the keyboard is in
+.Dv K_OFF ,
+so that keys typed meanwhile reach no program.
+.Dv KDGKBMODE
+then reports, and
+.Dv KDSKBMODE
+sets, the mode that returns.
+.Pp
+The console takes them back when no process holds the master role: after
+.Dv DRM_IOCTL_DROP_MASTER ,
+or when the master closes the card or exits, by a signal or not.
+On a native driver it sets a mode on each connected display, scanned out
+from a buffer of its own, and draws its text there again.
+The mode is the size that
+.Ql video= Ns Ar W Ns x Ns Ar H
+names on the kernel's command line, else the size of the screen the
+loader left, else the display's preferred mode.
+On the firmware's framebuffer, as
+.Xr fbdrm 4
+drives it, it turns the card's output off and draws on the firmware's
+screen again.
+The keyboard's mode returns, the owner of
+.Pa /fb
+reads
+.Dv FB_EVENT_REGAINED
+and redraws its whole screen, and its writes go on.
+A display connected or disconnected while no master holds the card moves
+the console to the new modes in the same way.
+.Pp
+The console keeps the columns and rows it had at boot.
+On a screen of another size it draws them at the largest whole scale of
+the font at which they fit, centered, and on one too small for them at
+scale 1 it shows those that fit from the top left corner.
+Until a master first leaves the card, the console stays where it was at
+boot: on the loader's framebuffer, or on the VGA's text mode, which it
+then leaves for the card's buffer.
 .Ss Terminal requests
 The console and pseudoterminal slaves answer these
 .Xr ioctl 2
@@ -389,7 +443,9 @@ gives Linux's key codes, a code below 128 as one byte with 0x80 set on
 its release and a higher one as three, 0x00 or 0x80, then the code's
 high and low seven bits each with 0x80 set;
 .Dv K_OFF
-gives nothing.
+gives nothing, and is the mode while a DRM master holds the screen, as
+.Sx DRM masters
+describes.
 In the last three modes the lock keys, the scrollback keys and the
 kernel shell's Ctrl-C do nothing, and bytes received on COM1 are
 discarded; the key bytes pass through the line discipline, whose
@@ -522,4 +578,6 @@ may refuse them.
 .Xr open 2 ,
 .Xr backlight 4 ,
 .Xr bootlog 4 ,
+.Xr drm 4 ,
+.Xr fbdrm 4 ,
 .Xr proc 5

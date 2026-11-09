@@ -431,8 +431,20 @@ static void bochs_bo_free(struct drm_gem_object *obj)
     kfree(bo);
 }
 
+/** The `vmap` of a buffer: the kernel's window on it in video memory, where
+ * a buffer scanned out is pinned; NULL for one in system memory. */
+static volatile uint8_t *bochs_bo_vmap(struct drm_gem_object *obj)
+{
+    struct bochs_bo *bo = (struct bochs_bo *)obj;
+
+    if (!bo->in_vram || obj->dev->unplugged) {
+        return NULL;
+    }
+    return (volatile uint8_t *)(to_bochs(obj->dev)->vram + bo->offset);
+}
+
 static const struct drm_gem_object_funcs bochs_bo_funcs = {bochs_bo_free, bochs_bo_mmap, NULL, NULL,
-                                                           NULL};
+                                                           NULL,          bochs_bo_vmap};
 
 /**
  * MODE_CREATE_DUMB, Linux's drm_gem_vram_fill_create_dumb: rows of `width`
