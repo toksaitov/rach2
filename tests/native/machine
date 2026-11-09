@@ -6,6 +6,7 @@ blockprobe a root mounted by rach2.fsdisk or rach2.root=disk, and the IDE contro
 bootlogprobe a boot line of its own, and the kernel's ring holding every record since that boot
 busprobe the IDE driver's two channels and its 48-bit commands
 conloadprobe lines typed at the serial console, which the Lenovo lacks
+drmcapture a frame drawn for the graphics runners in a guest beside the same frame of the Debian guest; with -p it takes the display as the card's master
 evprobe keys pressed through QEMU's monitor while it reads, and QEMU's HDA and Sound Blaster models
 frag6probe a Packet Too Big that lowers the path MTU of ::1 for ten minutes, for every program on the machine
 keylatprobe a key typed on a USB keyboard, and rach2.usblatency on the boot line
