@@ -111,6 +111,7 @@ $(GNU_WEBGL_STAMP): $(GNU_WEBGL_SOURCES) | $(SHA256TOOL) $(ETUDE)
 GNU_IGT_STAMP = $(GNU_OUT)/igt.stamp
 GNU_STEP_STAMPS += $(GNU_IGT_STAMP)
 GNU_IGT_SOURCES = vendor/gnu/igt/build_igt.sh vendor/gnu/igt/sources.txt vendor/gnu/debian/fetch_asset.sh \
+                  vendor/gnu/debian/venus.list \
                   $(addprefix tests/graphics/debian-ref/,debian-ref.sh image packages setup.sh.in \
                       user-data.in meta-data network-config) \
                   tests/graphics/guest-env.sh rach2/qemu_devices.sh
