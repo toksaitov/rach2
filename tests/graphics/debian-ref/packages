@@ -35,3 +35,8 @@ glmark2-wayland
 glmark2-es2-wayland
 glmark2-x11
 fio
+chromium
+firefox-esr
+fonts-dejavu-core
+fonts-liberation
+fonts-noto-core
