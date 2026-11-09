@@ -737,3 +737,4 @@ xeglthreads.x86_64-linux-gnu 1 mesa-utils
 dmabuf 7 dma-buf
 sync_file 7 dma-buf
 sw_sync 7 dma-buf
+kms 7 drm-kms

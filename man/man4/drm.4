@@ -100,6 +100,8 @@ is refused with
 to a program whose name begins with
 .Ql X ,
 as Linux refuses it to the X server's modesetting driver.
+.Xr drm-kms 7
+gives the mode-setting calls.
 .Ss Master
 The master of a card is the one DRM file that may set modes.
 The first open of a card that has no master becomes master, with a master
@@ -330,4 +332,5 @@ A feature the driver does not have, such as buffers or mode setting.
 .Xr mmap 2 ,
 .Xr mem 4 ,
 .Xr udmabuf 4 ,
-.Xr dma-buf 7
+.Xr dma-buf 7 ,
+.Xr drm-kms 7
