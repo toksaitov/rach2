@@ -425,6 +425,13 @@ struct vfs_mount *vfs_mount_at(int idx)
     return idx == 0 ? &mount : 0;
 }
 
+/** The open model's descriptors never refer to exported dma-bufs. */
+int is_dma_buf_file(const fd_entry_t *e)
+{
+    (void)e;
+    return 0;
+}
+
 /** No row opens a message queue. */
 int mq_fd_ref(const struct fd_entry *e, struct vfs_ref *r)
 {
