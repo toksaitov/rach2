@@ -706,6 +706,23 @@ static void con_master_changed(struct drm_device *dev, struct drm_file *master)
     }
 }
 
+/**
+ * Probe each connector of `dev` once, as Linux's fbdev client does in its
+ * initial configuration, so that sysfs and GETCONNECTOR give the displays'
+ * status and modes while the console stays on the boot screen. May sleep.
+ */
+static void con_probe(struct drm_device *dev)
+{
+    struct drm_mode_config *mc = &dev->mode_config;
+    uint32_t i;
+
+    drm_modeset_lock_nointr(dev);
+    for (i = 0; i < mc->num_connector; i++) {
+        drm_helper_probe_single_connector_modes(mc->connectors[i], mc->max_width, mc->max_height);
+    }
+    drm_modeset_unlock(dev);
+}
+
 void drm_client_dev_register(struct drm_device *dev)
 {
     struct boot_framebuffer screen;
@@ -732,6 +749,7 @@ void drm_client_dev_register(struct drm_device *dev)
     klog(KLOG_INFO, "console", "card%d: %s", dev->index,
          con.firmware ? "the firmware's framebuffer" : "a native display");
     if (!con.lost) {
+        con_probe(dev);
         return;
     }
     rc = con_place(dev, &screen, &base);
