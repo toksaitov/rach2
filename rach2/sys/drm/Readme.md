@@ -4,7 +4,7 @@
 
 ## Use
 
-`drm_start()` runs once from `kernel.c`, after the network has started, and logs `drm: start`. It starts `/dev/udmabuf`, then probes the display devices in the order the handoff needs: the PC's native drivers (bochs, through `arch_drm_probe(ARCH_DRM_NATIVE)`), virtio-gpu, then the driver of the firmware's framebuffer (fbdrm, through `arch_drm_probe(ARCH_DRM_FIRMWARE)`), then vkms, the display in software. A probe that finds no device answers `ENODEV` and is not logged; any other error is logged as `drm: NAME: error N`. While every driver is a stub, the kernel logs `drm: start` and `/dev/dri` is absent.
+`drm_start()` runs once from `kernel.c`, after the network has started, and logs `drm: start`. It starts `/dev/udmabuf`, then probes the display devices in the order the handoff needs: the PC's native drivers (bochs and [i915](i915/Readme.md), through `arch_drm_probe(ARCH_DRM_NATIVE)`), virtio-gpu, then the driver of the firmware's framebuffer (fbdrm, through `arch_drm_probe(ARCH_DRM_FIRMWARE)`), then vkms, the display in software. A probe that finds no device answers `ENODEV` and is not logged; any other error is logged as `drm: NAME: error N`. While every other driver is a stub, the kernel logs `drm: start`, and `/dev/dri` is absent unless `rach2.i915` binds an Intel Haswell chip.
 
 ## Interfaces
 
@@ -21,7 +21,7 @@
 * Display state. `struct drm_mode_object` (with up to `DRM_OBJECT_MAX_PROPERTY` properties), `drm_property`, `drm_property_blob`, `drm_framebuffer`, `drm_plane` (`DRM_PLANE_TYPE_*`), `drm_crtc` with its `drm_vblank` and `drm_crtc_crc_entry` ring, `drm_encoder`, `drm_connector` (`DRM_CONNECTOR_*` status, `DRM_FORCE_*`, its EDID and override) and `drm_display_mode` are the mode objects; `drm_plane_state`, `drm_crtc_state`, `drm_connector_state` and `drm_atomic_state` (up to `DRM_MAX_CRTCS`, `DRM_MAX_PLANES` and `DRM_MAX_CONNECTORS`) a commit's states; `drm_plane_funcs`, `drm_crtc_funcs` (with the CRC hooks `set_crc_source`, `verify_crc_source` and `get_crc_sources`) and `drm_connector_funcs` the drivers' hooks; and `drm_mode_config` a device's limits, objects and `atomic_check` and `atomic_commit`.
 * The handoff. `drm_aperture_acquire_firmware` records the range of the firmware's framebuffer a firmware driver drives and the hook that removes it, in a table of `DRM_APERTURE_MAX` (4); `drm_aperture_remove_conflicting` removes each firmware device whose range overlaps a native driver's.
 * Helpers. `drm_crtc_handle_vblank`, `drm_crtc_add_crc_entry`, `drm_connector_update_edid` and `drm_kms_hotplug_event` are what a driver calls from its interrupts and probes; `drm_client_dev_register` and `drm_client_dev_unregister` tell the console of a device that comes and goes.
-* Probes. `bochs_probe`, `fbdrm_probe`, `virtio_gpu_probe` and `vkms_probe` bind their devices and return how many, or `-errno`. bochs and fbdrm reach PC-only code, so `drm_start` calls them through `arch_drm_probe` ([`../arch/arch.h`](../arch/arch.h)), which `drm_pc.c` defines on the PC.
+* Probes. `bochs_probe`, `fbdrm_probe`, `i915_probe`, `virtio_gpu_probe` and `vkms_probe` bind their devices and return how many, or `-errno`. bochs, i915 and fbdrm reach PC-only code, so `drm_start` calls them through `arch_drm_probe` ([`../arch/arch.h`](../arch/arch.h)), which `drm_pc.c` defines on the PC.
 * Ioctl handlers. Every handler the core's table names is declared, grouped by the file that defines it: `drm.c` the identity, capabilities, `drm_noop` and `drm_invalid_op`; `drm_auth.c` magic and the master role; `drm_gem.c` handles, flink and dumb buffers; `drm_prime.c` PRIME; `drm_mode.c` the mode objects, properties, blobs, framebuffers and leases; `drm_legacy.c` the calls before atomic; `drm_atomic.c` the atomic commit; `drm_vblank.c` vblank waits and CRTC sequences; and `drm_syncobj.c` sync objects.
 
 ## Sources and license
@@ -34,11 +34,11 @@ The opening comment of `drm.h` is the design every file keeps: locking under the
 
 The handoff follows Linux's aperture helpers. fbdrm drives the framebuffer the loader left and records its range. A native driver, before it touches its hardware, removes every firmware device in the ranges its device decodes; the console leaves the removed device and moves to the native one when that registers. So a machine shows one card for its screen, the native one when there is one.
 
-The files of `sys/drm/` that every architecture compiles are listed in [`sources.mk`](sources.mk), and those that reach PC-only code, bochs, fbdrm, the console's client and the PC's probes, in [`pc.mk`](pc.mk), which `sys/arch/x86/sources.mk` includes; `sys/dmabuf/sources.mk` and `sys/virtio/sources.mk`, the [virtio transport](../virtio/Readme.md)'s, are included by `rach2/sources.mk`. Each stub's opening comment names the work that replaces it.
+The files of `sys/drm/` that every architecture compiles are listed in [`sources.mk`](sources.mk), and those that reach PC-only code, bochs, fbdrm, the console's client and the PC's probes, in [`pc.mk`](pc.mk), which `sys/arch/x86/sources.mk` includes, as it does the Intel driver's [`i915/sources.mk`](i915/sources.mk); `sys/dmabuf/sources.mk` and `sys/virtio/sources.mk`, the [virtio transport](../virtio/Readme.md)'s, are included by `rach2/sources.mk`. Each stub's opening comment names the work that replaces it.
 
 ## Limits
 
-* No driver binds a device yet, so `/dev/dri` is absent.
+* No driver binds a device yet but i915, and that only under `rach2.i915`, so `/dev/dri` is otherwise absent.
 * The ioctls of the stub files, PRIME, the mode objects, the atomic commit, vblank and sync objects, answer `EOPNOTSUPP`.
 
 ## Tests
