@@ -483,6 +483,14 @@ chmod 0755 "$TREE/usr/bin/screen"
 chmod 0711 "$TREE/usr/libexec/ssh-keysign" "$TREE/var/lib/sudo"
 chmod 0700 "$TREE/var/lib/sudo/lectured"
 
+# Install the desktop service and its sound and compositor configuration.
+mkdir -p "$TREE/etc/xdg/weston" "$TREE/etc/pulse" "$TREE/usr/libexec"
+install -m 0644 "$DIR/desktop/weston.ini" "$TREE/etc/xdg/weston/weston.ini"
+install -m 0644 "$DIR/desktop/default.pa" "$TREE/etc/pulse/rach2.pa"
+install -m 0644 "$DIR/desktop/asound.conf" "$TREE/etc/asound.conf"
+install -m 0755 "$DIR/desktop/rach2-desktop" "$TREE/usr/libexec/rach2-desktop"
+install -m 0755 "$DIR/desktop/rach2-session" "$TREE/usr/libexec/rach2-session"
+
 # The shadow file the manifest stages, krffs/shadow, has the lines of the
 # accounts that log in, root's and test's, which every image shares. shadow's
 # pwck reports an account of /etc/passwd that has no line, so the GNU root's

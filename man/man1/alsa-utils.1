@@ -1,0 +1,81 @@
+.Dd November 10, 2026
+.Dt ALSA-UTILS 1
+.Os
+.Sh NAME
+.Nm alsa-utils
+.Nd ALSA playback, recording, mixer and MIDI tools
+.Sh SYNOPSIS
+.Nm aplay
+.Op Fl q
+.Op Fl D Ar pcm
+.Ar file
+.Nm arecord
+.Op Fl D Ar pcm
+.Op Fl f Ar format
+.Op Fl r Ar rate
+.Ar file
+.Sh DESCRIPTION
+The GNU root includes Debian's alsa-utils package.
+.Xr desktop 7
+configures the default PCM as ALSA's plug converter over the OSS plugin.
+.Nm aplay
+plays a WAVE file through that PCM.
+.Nm arecord
+records from it.
+.Fl D
+selects another PCM; each program's
+.Fl Fl help
+lists its format and device options.
+.Pp
+.Nm speaker-test
+plays generated tones.
+.Nm alsabat
+checks playback and capture, and
+.Nm alsaloop
+copies between capture and playback PCMs.
+.Nm alsamixer
+and
+.Nm amixer
+control ALSA mixers.
+.Nm iecset
+sets digital audio status.
+.Nm alsactl
+saves, restores and initializes ALSA card state.
+.Nm alsa-info
+collects diagnostic information, and
+.Nm alsabat-test
+runs the audio test script.
+.Pp
+.Nm aconnect
+connects ALSA sequencer ports;
+.Nm aplaymidi ,
+.Nm aplaymidi2 ,
+.Nm arecordmidi
+and
+.Nm arecordmidi2
+play or record MIDI;
+.Nm aseqdump
+reads sequencer events,
+.Nm aseqnet
+relays them over the network, and
+.Nm aseqsend
+sends them.
+.Nm amidi
+reads or writes raw MIDI bytes.
+.Nm axfer
+transfers PCM frames.
+.Nm alsatplg
+compiles topology files,
+.Nm alsaucm
+manages use-case configuration, and
+.Nm nhlt-dmic-info
+reads digital microphone topology information.
+.Sh LIMITS
+Rach2 supplies OSS devices, without native ALSA card, sequencer or MIDI
+kernel interfaces.
+Tools that require those interfaces report no such device.
+The default PCM's OSS route supports playback and capture as described in
+.Xr dsp 4 .
+.Sh SEE ALSO
+.Xr dsp 4 ,
+.Xr desktop 7

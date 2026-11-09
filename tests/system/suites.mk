@@ -1699,3 +1699,14 @@ $(ARCH_BUILD)/tests/musl/creddisk $(ARCH_BUILD)/tests/musl/procfilesmusl: musl-p
 # `tests/run d3d-wine`: Wine's Direct3D units on both paths against Debian.
 # `tests/run d3d-vkd3d`: vkd3d-proton's units on lavapipe against Debian.
 include tests/graphics/d3d/rules.mk
+
+# The desktop case needs the installed GNU root without the host test products.
+DESKTOP_TEST_DISK = $(IMAGES_DIR)/desktop-test.disk
+$(DESKTOP_TEST_DISK): $(OS_REAL_GNU_EXT2) $(MKMBR)
+	@mkdir -p $(@D)
+	rm -f $@.tmp
+	mib=$$(($$(wc -c < $(OS_REAL_GNU_EXT2)) / 1048576)) && \
+	dd if=/dev/zero of=$@.tmp bs=1048576 count=0 seek=$$((mib + 2)) 2>/dev/null && \
+	dd if=$(OS_REAL_GNU_EXT2) of=$@.tmp bs=1048576 seek=1 conv=notrunc,sparse 2>/dev/null && \
+	$(MKMBR) --lba $@.tmp 2048:$$((mib * 2048)):83 > /dev/null
+	mv $@.tmp $@
