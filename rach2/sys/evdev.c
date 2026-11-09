@@ -74,16 +74,6 @@ struct input_event {
 #define NR_GABS       0x40u /* to 0x7F: EVIOCGABS(axis) is 0x40 + axis */
 #define NR_SABS       0xC0u /* to 0xFF: EVIOCSABS(axis), a write */
 #define EV_VERSION    0x010001
-#define EV_SW         0x05
-#define EV_SND        0x12
-#define EV_FF         0x15
-#define EV_CNT        0x20
-#define KEY_CNT       (KEY_MAX + 1)
-#define MSC_CNT       0x08
-#define SW_CNT        0x11
-#define LED_CNT       0x10
-#define SND_CNT       0x08
-#define FF_CNT        0x80
 #define BITS_LONGS(n) (((n) + 8 * sizeof(long) - 1) / (8 * sizeof(long)))
 #define BITS_BYTES(n) (BITS_LONGS(n) * sizeof(long))
 
@@ -154,6 +144,7 @@ struct evdev {
     int rep[2];         /* a keyboard's REP_DELAY and REP_PERIOD, ms */
     int has_abs;        /* EV_ABS: `absinfo` answers EVIOCGABS */
     int stamped;        /* a packet has begun, at `stamp` */
+    uint32_t gen;       /* the registration's number, `evdev_desc`'s */
     const char *name;
     const char *phys;                          /* NULL: EVIOCGPHYS answers -ENOENT */
     uint16_t id[4];                            /* bustype, vendor, product, version */
@@ -181,6 +172,13 @@ static struct evdev devices[EVDEV_MAX];
 
 /* Over the devices and their opens' queues. */
 static struct spinlock evdev_lock = SPINLOCK_INIT;
+
+/* The registrations so far, which number each, and the registrations and
+ * unregistrations, whose waiters `change_wq` holds; static storage starts
+ * it empty, so a change before anyone waits can wake it. */
+static uint32_t registered_count;
+static uint32_t change_count;
+static wait_queue_t change_wq;
 
 /** Whether bit `n` of the set `bits` is on. */
 static int bit_on(const uint8_t *bits, unsigned n)
@@ -235,8 +233,13 @@ struct evdev *evdev_register(const char *name, uint16_t bustype, uint16_t vendor
         dev->id[2] = product;
         k_memcpy(dev->keys, keys, EVDEV_KEY_BYTES);
         wait_queue_init(&dev->wq);
+        dev->gen = ++registered_count;
+        change_count++;
     }
     spin_unlock_irqrestore(&evdev_lock, flags);
+    if (dev) {
+        wq_wake_all(&change_wq);
+    }
     return dev;
 }
 
@@ -629,8 +632,10 @@ void evdev_unregister(struct evdev *dev)
     if (!dev->clients) {
         dev->used = 0;
     }
+    change_count++;
     spin_unlock_irqrestore(&evdev_lock, flags);
     wq_wake_all(&dev->wq);
+    wq_wake_all(&change_wq);
 }
 
 /**
@@ -1366,59 +1371,144 @@ static int32_t set_mask(struct evdev_client *c, uintptr_t arg)
 }
 
 /**
- * EVIOCGBIT(type): the bits of the event types `dev` has, of its keys, of
- * its relative and absolute axes, of its MSC codes and of a keyboard's
- * LEDs, and none of the other types, each of its own length, cut to `len`.
- * -EINVAL for a type Linux's evdev does not answer, EV_REP among them, whose
- * times EVIOCGREP gives.
+ * Store in `out`, of EVDEV_KEY_BYTES bytes, the bits EVIOCGBIT(type) gives
+ * of `dev`: those of the event types it has, of its keys, of its relative
+ * and absolute axes, of its MSC codes and of a keyboard's LEDs, and none of
+ * the other types. Returns the bytes of the type's bits, each of its own
+ * length, or -1 for a type Linux's evdev does not answer, EV_REP among them,
+ * whose times EVIOCGREP gives. The caller holds the evdev lock.
  */
-static int32_t type_bits(const struct evdev *dev, uint32_t type, uintptr_t arg, uint32_t len)
+static int type_bytes(const struct evdev *dev, uint32_t type, uint8_t *out)
 {
-    uint8_t bits[8];
     unsigned i;
 
-    k_memset(bits, 0, sizeof(bits));
+    k_memset(out, 0, EVDEV_KEY_BYTES);
     switch (type) {
     case 0:
-        bits[0] =
+        out[0] =
             (uint8_t)(1u << EV_SYN | 1u << EV_KEY | ((dev->flags & EVDEV_SCAN) ? 1u << EV_MSC : 0));
         for (i = 0; i < sizeof(dev->rel); i++) {
             if (dev->rel[i]) {
-                bits[0] |= 1u << EV_REL;
+                out[0] |= 1u << EV_REL;
             }
         }
         if (dev->has_abs) {
-            bits[0] |= 1u << EV_ABS;
+            out[0] |= 1u << EV_ABS;
         }
         if (dev->flags & EVDEV_KEYBOARD) {
-            bits[EV_LED >> 3] |= (uint8_t)(1u << (EV_LED & 7));
-            bits[EV_REP >> 3] |= (uint8_t)(1u << (EV_REP & 7));
+            out[EV_LED >> 3] |= (uint8_t)(1u << (EV_LED & 7));
+            out[EV_REP >> 3] |= (uint8_t)(1u << (EV_REP & 7));
         }
-        return bits_out(arg, len, bits, BITS_BYTES(EV_CNT));
+        return (int)BITS_BYTES(EV_CNT);
     case EV_KEY:
-        return bits_out(arg, len, dev->keys, EVDEV_KEY_BYTES);
+        k_memcpy(out, dev->keys, EVDEV_KEY_BYTES);
+        return EVDEV_KEY_BYTES;
     case EV_MSC:
-        bits[0] = (uint8_t)((dev->flags & EVDEV_SCAN) ? 1u << MSC_SCAN : 0);
-        return bits_out(arg, len, bits, BITS_BYTES(MSC_CNT));
+        out[0] = (uint8_t)((dev->flags & EVDEV_SCAN) ? 1u << MSC_SCAN : 0);
+        return (int)BITS_BYTES(MSC_CNT);
     case EV_REL:
-        return bits_out(arg, len, dev->rel, BITS_BYTES(REL_CNT));
+        k_memcpy(out, dev->rel, sizeof(dev->rel));
+        return (int)BITS_BYTES(REL_CNT);
     case EV_ABS:
-        return bits_out(arg, len, dev->abs, BITS_BYTES(ABS_CNT));
+        k_memcpy(out, dev->abs, sizeof(dev->abs));
+        return (int)BITS_BYTES(ABS_CNT);
     case EV_SW:
-        return bits_out(arg, len, NULL, BITS_BYTES(SW_CNT));
+        return (int)BITS_BYTES(SW_CNT);
     case EV_LED:
         if (dev->flags & EVDEV_KEYBOARD) {
-            bits[0] = 1u << LED_NUML | 1u << LED_CAPSL | 1u << LED_SCROLLL;
-            return bits_out(arg, len, bits, BITS_BYTES(LED_CNT));
+            out[0] = 1u << LED_NUML | 1u << LED_CAPSL | 1u << LED_SCROLLL;
         }
-        return bits_out(arg, len, NULL, BITS_BYTES(LED_CNT));
+        return (int)BITS_BYTES(LED_CNT);
     case EV_SND:
-        return bits_out(arg, len, NULL, BITS_BYTES(SND_CNT));
+        return (int)BITS_BYTES(SND_CNT);
     case EV_FF:
-        return bits_out(arg, len, NULL, BITS_BYTES(FF_CNT));
+        return (int)BITS_BYTES(FF_CNT);
     default:
-        return -EINVAL;
+        return -1;
     }
+}
+
+/** EVIOCGBIT(type): the bits `type_bytes` gives, cut to `len`; -EINVAL for
+ * a type it does not answer. */
+static int32_t type_bits(const struct evdev *dev, uint32_t type, uintptr_t arg, uint32_t len)
+{
+    uint8_t bits[EVDEV_KEY_BYTES];
+    uint32_t flags = spin_lock_irqsave(&evdev_lock);
+    int n = type_bytes(dev, type, bits);
+
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    return n < 0 ? -EINVAL : bits_out(arg, len, bits, (uint32_t)n);
+}
+
+/** Copy the string `s`, or "" for NULL, into `out` of EVDEV_TEXT_MAX
+ * bytes, cut to fit. */
+static void copy_text(char *out, const char *s)
+{
+    int i = 0;
+
+    while (s && s[i] && i < EVDEV_TEXT_MAX - 1) {
+        out[i] = s[i];
+        i++;
+    }
+    out[i] = '\0';
+}
+
+/** Store the bits of `type` of `dev` in `out`, of `cap` bytes, as
+ * `type_bytes` gives them; the evdev lock is held. */
+static void type_copy(const struct evdev *dev, uint32_t type, uint8_t *out, uint32_t cap)
+{
+    uint8_t bits[EVDEV_KEY_BYTES];
+    int n = type_bytes(dev, type, bits);
+
+    k_memset(out, 0, cap);
+    k_memcpy(out, bits, n < 0 ? 0 : (uint32_t)n < cap ? (uint32_t)n : cap);
+}
+
+int evdev_snapshot(int n, struct evdev_desc *out)
+{
+    struct evdev *dev;
+    uint32_t flags;
+    int present;
+
+    if (n < 0 || n >= EVDEV_MAX) {
+        return 0;
+    }
+    dev = &devices[n];
+    flags = spin_lock_irqsave(&evdev_lock);
+    present = dev->used && !dev->gone;
+    if (present) {
+        out->gen = dev->gen;
+        copy_text(out->name, dev->name);
+        copy_text(out->phys, dev->phys);
+        k_memcpy(out->id, dev->id, sizeof(out->id));
+        type_copy(dev, 0, out->ev, sizeof(out->ev));
+        type_copy(dev, EV_KEY, out->key, sizeof(out->key));
+        type_copy(dev, EV_REL, out->rel, sizeof(out->rel));
+        type_copy(dev, EV_ABS, out->abs, sizeof(out->abs));
+        type_copy(dev, EV_MSC, out->msc, sizeof(out->msc));
+        type_copy(dev, EV_LED, out->led, sizeof(out->led));
+        type_copy(dev, EV_SND, out->snd, sizeof(out->snd));
+        type_copy(dev, EV_FF, out->ff, sizeof(out->ff));
+        type_copy(dev, EV_SW, out->sw, sizeof(out->sw));
+        k_memset(out->prop, 0, sizeof(out->prop));
+        k_memcpy(out->prop, dev->props, sizeof(dev->props));
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    return present;
+}
+
+uint32_t evdev_changes(void)
+{
+    uint32_t flags = spin_lock_irqsave(&evdev_lock);
+    uint32_t n = change_count;
+
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    return n;
+}
+
+struct wait_queue *evdev_change_queue(void)
+{
+    return &change_wq;
 }
 
 /**

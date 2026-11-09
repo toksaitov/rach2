@@ -4670,8 +4670,7 @@ uint32_t sysfs_ino(int node, int key, int file)
     return SYSFS_INO_FIXED + (uint32_t)node + ((uint32_t)file << 8);
 }
 
-/** The key of USB device `r`, or -1 when a port of it does not fit one. */
-static int sysfs_usb_key(const struct usb_sys_row *r)
+int sysfs_usb_key(const struct usb_sys_row *r)
 {
     int key, k;
 

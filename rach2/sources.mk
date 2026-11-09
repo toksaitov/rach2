@@ -38,6 +38,7 @@ C_SRC_SHARED = kernel.c \
     sys/kd.c \
     sys/keymap.c \
     sys/evdev.c \
+    sys/evdev_sysfs.c \
     sys/rfkill.c \
     sys/panic.c \
     sys/block/block.c \

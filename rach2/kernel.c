@@ -39,6 +39,7 @@
 #include "sys/proc/sched.h"
 #include "sys/proc/smp.h"
 #include "sys/power.h"
+#include "sys/evdev.h"
 #include "sys/proc/elf.h"
 #include "sys/proc/uimage.h"
 #include "sys/lib/krandom.h"
@@ -1309,6 +1310,7 @@ static void enter_program(struct mm *mm, const char *name, uintptr_t entry, uint
     if (init_pid == 0) {
         init_pid = user_proc->pid;
         platform_threads_start();
+        evdev_sysfs_start();
     }
 
     if (!init_is_starting) {

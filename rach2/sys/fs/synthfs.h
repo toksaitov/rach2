@@ -518,6 +518,13 @@ int sysfs_block_whole(int key);
  * device. */
 int sysfs_block_loop(int key);
 
+struct usb_sys_row;
+
+/** The USB part, in procfs.c: the key of the running USB device `r`
+ * (usb/core.h's `usb_core_row`), or -1 when a port of it does not fit
+ * one. */
+int sysfs_usb_key(const struct usb_sys_row *r);
+
 /** Write the name of the device `key` of `node`, SYSFS_PCI_DEVICE or
  * SYSFS_USB_DEVICE, into `out` of `cap` bytes, NUL-terminated. */
 void synth_sys_device_name(int node, int key, char *out, int cap);

@@ -41,11 +41,20 @@ struct evdev;
 #define EV_REL      0x02
 #define EV_ABS      0x03
 #define EV_MSC      0x04
+#define EV_SW       0x05
 #define EV_LED      0x11
+#define EV_SND      0x12
 #define EV_REP      0x14
+#define EV_FF       0x15
+#define EV_CNT      0x20
 #define SYN_REPORT  0
 #define SYN_DROPPED 3
 #define MSC_SCAN    4
+#define MSC_CNT     0x08
+#define SW_CNT      0x11
+#define LED_CNT     0x10
+#define SND_CNT     0x08
+#define FF_CNT      0x80
 #define LED_NUML    0 /* the bit numbers of EV_LED's codes */
 #define LED_CAPSL   1
 #define LED_SCROLLL 2
@@ -142,6 +151,7 @@ struct input_absinfo {
 #define KEY_DISPLAY_OFF      245
 #define KEY_MICMUTE          248
 #define KEY_MAX              0x2ff
+#define KEY_CNT              (KEY_MAX + 1)
 
 /**
  * Register an input device and give it the lowest free node. `name` is the
@@ -367,5 +377,63 @@ int32_t evdev_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg);
 
 /** Release the queue of the open `e`, and its grab if it holds one. */
 void evdev_close(fd_entry_t *e);
+
+/*
+ * What /sys shows of each device (evdev_sysfs.c), which a driver may
+ * register in an interrupt, where /sys cannot be changed: a worker reads
+ * the table after each change and brings /sys in line with it.
+ */
+
+/* The bytes of a description's texts, with the NUL, and of a set of bits
+ * of `n` codes in whole 64-bit words, which EVIOCGBIT's longs fit on both
+ * ABIs. */
+#define EVDEV_TEXT_MAX      64
+#define EVDEV_BITS_BYTES(n) ((((n) + 63) / 64) * 8)
+
+/* A device as one registration of it describes itself: a copy, taken at
+ * once, of its texts, its EVIOCGID, the bits EVIOCGBIT gives of each type
+ * and those EVIOCGPROP gives. */
+struct evdev_desc {
+    uint32_t gen; /* the registration's number, new at each `evdev_register` */
+    char name[EVDEV_TEXT_MAX];
+    char phys[EVDEV_TEXT_MAX]; /* "" for none */
+    uint16_t id[4];            /* bustype, vendor, product, version */
+    uint8_t ev[EVDEV_BITS_BYTES(EV_CNT)];
+    uint8_t key[EVDEV_KEY_BYTES];
+    uint8_t rel[EVDEV_BITS_BYTES(REL_CNT)];
+    uint8_t abs[EVDEV_BITS_BYTES(ABS_CNT)];
+    uint8_t msc[EVDEV_BITS_BYTES(MSC_CNT)];
+    uint8_t led[EVDEV_BITS_BYTES(LED_CNT)];
+    uint8_t snd[EVDEV_BITS_BYTES(SND_CNT)];
+    uint8_t ff[EVDEV_BITS_BYTES(FF_CNT)];
+    uint8_t sw[EVDEV_BITS_BYTES(SW_CNT)];
+    uint8_t prop[EVDEV_BITS_BYTES(INPUT_PROP_CNT)];
+};
+
+/** Describe device `n` into `*out`: 1 while it is registered, 0 for a
+ * slot with no device, or one whose device has gone. Any context. */
+int evdev_snapshot(int n, struct evdev_desc *out);
+
+/** The count of registrations and unregistrations so far; a worker that
+ * has seen a count sleeps on `evdev_change_queue` until it moves. */
+uint32_t evdev_changes(void);
+
+/** The wait queue every registration and unregistration wakes. */
+struct wait_queue *evdev_change_queue(void);
+
+/**
+ * Bring /sys in line with the devices registered: add the directories of
+ * each new device, /sys/class/input/inputN and its eventN with their links
+ * and parents, and send their "add" uevents, and send "remove" for each
+ * device that has gone and take its entries away. Under the big lock, in
+ * process context, since sysfs.h's entries take heap. Defined in
+ * evdev_sysfs.c.
+ */
+void evdev_sysfs_sync(void);
+
+/** Start the worker that runs `evdev_sysfs_sync` at each change, kinputd,
+ * after the first program has its pid, and sync the devices registered at
+ * boot. Defined in evdev_sysfs.c. */
+void evdev_sysfs_start(void);
 
 #endif /* _EVDEV_H_ */

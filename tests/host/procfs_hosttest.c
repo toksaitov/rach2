@@ -4,10 +4,12 @@
  * thread, task ids, descriptor links, /proc/PID/mem, /proc/PID/exe, the
  * paths of /proc/PID/maps, a read of a process's arguments while the process
  * is reaped, oom_score_adj, and the /sys entries and uevents of a DRM device
- * and of a driver's own attributes, links and PCI identity.
+ * and of a driver's own attributes, links and PCI identity, and those of
+ * a PS/2 keyboard and a USB mouse (evdev_sysfs.c).
  *
  * host-deps: tests/host/compat/vm_iter_host.c
  * host-deps: rach2/sys/fs/sysfs.c rach2/sys/drm/drm_sysfs.c
+ * host-deps: rach2/sys/evdev_sysfs.c
  * host-deps: rach2/sys/fs/name.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/tick.c
@@ -69,6 +71,7 @@ static int sysfs_net_wiphy(int index);
 static const char *sysfs_wlan_driver(int index);
 #include "fs/procfs.c"
 #include "drm/drm.h"
+#include "evdev.h"
 #include "arch/i686/mmu.h"
 #include "ns_first.h"
 
@@ -651,13 +654,21 @@ int synth_net_slot(int origin)
  * synthfs.c gives them, and the empty string for any other. */
 void synth_sys_path(int node, int key, char *out, int cap)
 {
-    const char *path = node == SYSFS_CLASS_DRM  ? "/sys/class/drm"
-                       : node == SYSFS_DEV_CHAR ? "/sys/dev/char"
-                       : node == SYSFS_KERNEL   ? "/sys/kernel"
-                       : node == SYSFS_PLATFORM ? "/sys/devices/platform"
-                       : node == SYSFS_BUS_PCI  ? "/sys/bus/pci"
-                       : node == SYSFS_PCI_ROOT ? "/sys/devices/pci0000:00"
-                                                : "";
+    const char *path = node == SYSFS_CLASS_DRM        ? "/sys/class/drm"
+                       : node == SYSFS_DEV_CHAR       ? "/sys/dev/char"
+                       : node == SYSFS_KERNEL         ? "/sys/kernel"
+                       : node == SYSFS_PLATFORM       ? "/sys/devices/platform"
+                       : node == SYSFS_BUS_PCI        ? "/sys/bus/pci"
+                       : node == SYSFS_PCI_ROOT       ? "/sys/devices/pci0000:00"
+                       : node == SYSFS_CLASS          ? "/sys/class"
+                       : node == SYSFS_BUS            ? "/sys/bus"
+                       : node == SYSFS_DEVICES        ? "/sys/devices"
+                       : node == SYSFS_BUS_PLATFORM   ? "/sys/bus/platform"
+                       : node == SYSFS_PLATFORM_LINKS ? "/sys/bus/platform/devices"
+                       : node == SYSFS_BUS_USB        ? "/sys/bus/usb"
+                       : node == SYSFS_USB_LINKS      ? "/sys/bus/usb/devices"
+                       : node == SYSFS_USB_DEVICE     ? "/sys/devices/usb/1-1"
+                                                      : "";
 
     if (node == SYSFS_PCI_DEVICE && cap >= 32) {
         __builtin_snprintf(out, (unsigned long)cap, "/sys/devices/pci0000:00/0000:%02x:%02x.%x",
@@ -670,10 +681,14 @@ void synth_sys_path(int node, int key, char *out, int cap)
     }
 }
 
-/** A PCI function's name, as synthfs.c gives it; only PCI is asked here. */
+/** A PCI function's name, as synthfs.c gives it, and the one USB device's,
+ * at the first port of the first controller. */
 void synth_sys_device_name(int node, int key, char *out, int cap)
 {
-    (void)node;
+    if (node == SYSFS_USB_DEVICE) {
+        __builtin_snprintf(out, (unsigned long)cap, "1-1");
+        return;
+    }
     __builtin_snprintf(out, (unsigned long)cap, "0000:%02x:%02x.%x", (unsigned)(key >> 8),
                        (unsigned)((key >> 3) & 31), (unsigned)(key & 7));
 }
@@ -687,7 +702,7 @@ void klog(int level, const char *subsystem, const char *format, ...)
 }
 
 /* The uevents sent, NUL-ended strings one after another, and their bytes. */
-static char uevents[8192];
+static char uevents[32768];
 static uint32_t uevents_len;
 static int uevents_sent;
 
@@ -743,12 +758,50 @@ bool pci_nth(int nth, pci_device_t *out)
     return false;
 }
 
-/** The USB stack has no device. */
+/* While set, the USB stack's entry 0 runs a boot-protocol mouse, 0627:0001,
+ * at the first port of the first controller; else it has no device. */
+static int usb_mouse_in;
+
+/** The USB stack's mouse while `usb_mouse_in` is set, else no device. */
 int usb_core_row(int index, struct usb_sys_row *row)
 {
-    (void)index;
-    (void)row;
-    return -1;
+    if (!usb_mouse_in || index != 0) {
+        return -1;
+    }
+    k_memset(row, 0, sizeof(*row));
+    row->bus = 1;
+    row->depth = 1;
+    row->ports[0] = 1;
+    row->devnum = 1;
+    row->vendor = 0x0627;
+    row->product = 0x0001;
+    row->config = 1;
+    row->ifclass = 3;
+    row->ifsubclass = 1;
+    row->ifprotocol = 2;
+    return 0;
+}
+
+/* The event devices the input rows register, by slot, and whether each is
+ * there; and whether the caller is an i386 program. */
+static struct evdev_desc input_devs[EVDEV_MAX];
+static int input_present[EVDEV_MAX];
+static int compat_caller;
+
+/** The device of slot `n` the input rows registered. */
+int evdev_snapshot(int n, struct evdev_desc *out)
+{
+    if (n < 0 || n >= EVDEV_MAX || !input_present[n]) {
+        return 0;
+    }
+    *out = input_devs[n];
+    return 1;
+}
+
+/** Whether the caller is an i386 program, as the row sets. */
+int in_compat_syscall(void)
+{
+    return compat_caller;
 }
 
 /** Whether the stat line `line` has the user and system times `user` and
@@ -1818,6 +1871,275 @@ static void sysfs_reg_rows(void)
     check(!sysfs_device_exists(SYSFS_PCI_DEVICE, 0xA0), "a withdrawn function is gone");
 }
 
+/** Whether the uevents sent since `from` hold the bytes of `text`. */
+static int sent_has(uint32_t from, const char *text)
+{
+    uint32_t n = (uint32_t)__builtin_strlen(text), at;
+
+    for (at = from; at + n <= uevents_len; at++) {
+        if (__builtin_memcmp(uevents + at, text, n) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/** Set bit `n` of `bits`. */
+static void bit_set(uint8_t *bits, unsigned n)
+{
+    bits[n >> 3] |= (uint8_t)(1u << (n & 7));
+}
+
+/** Store the 64-bit `word` at word `i` of `bits`, its lowest byte first. */
+static void word_set(uint8_t *bits, int i, uint64_t word)
+{
+    int b;
+
+    for (b = 0; b < 8; b++) {
+        bits[i * 8 + b] = (uint8_t)(word >> (8 * b));
+    }
+}
+
+/**
+ * Slot 0 an AT keyboard with the keys Linux's atkbd gives a translated
+ * one, and slot 1 a USB boot mouse with five buttons, a wheel and a tilt
+ * wheel in detents and in 120ths, the registrations numbered `gen` and
+ * one more.
+ */
+static void input_devices(uint32_t gen)
+{
+    struct evdev_desc *kb = &input_devs[0], *ms = &input_devs[1];
+    unsigned n;
+
+    k_memset(input_devs, 0, sizeof(input_devs));
+    kb->gen = gen;
+    k_strncpy(kb->name, "AT Translated Set 2 keyboard", EVDEV_TEXT_MAX);
+    k_strncpy(kb->phys, "isa0060/serio0/input0", EVDEV_TEXT_MAX);
+    kb->id[0] = 0x11;
+    kb->id[1] = 0x1;
+    kb->id[2] = 0x1;
+    kb->id[3] = 0xab41;
+    kb->ev[0] = 0x13;
+    kb->ev[2] = 0x12;
+    word_set(kb->key, 0, 0xfffffffffffffffeull);
+    word_set(kb->key, 1, 0xfeffffdfffefffffull);
+    word_set(kb->key, 2, 0x03803078f800d001ull);
+    word_set(kb->key, 3, 0x402000000ull);
+    kb->msc[0] = 0x10;
+    kb->led[0] = 0x07;
+    ms->gen = gen + 1;
+    k_strncpy(ms->name, "USB HIDBP Mouse 0627:0001", EVDEV_TEXT_MAX);
+    k_strncpy(ms->phys, "usb-1/input0", EVDEV_TEXT_MAX);
+    ms->id[0] = 0x03;
+    ms->id[1] = 0x0627;
+    ms->id[2] = 0x0001;
+    ms->ev[0] = 0x07;
+    for (n = BTN_LEFT; n <= BTN_EXTRA; n++) {
+        bit_set(ms->key, n);
+    }
+    bit_set(ms->rel, REL_X);
+    bit_set(ms->rel, REL_Y);
+    bit_set(ms->rel, REL_HWHEEL);
+    bit_set(ms->rel, REL_WHEEL);
+    bit_set(ms->rel, REL_WHEEL_HI_RES);
+    bit_set(ms->rel, REL_HWHEEL_HI_RES);
+    bit_set(ms->prop, INPUT_PROP_POINTER);
+    input_present[0] = input_present[1] = 1;
+}
+
+/* The entries the input rows find. */
+static int in_class, in_kbd, in_mouse, in_serio, in_iface;
+
+static void input_link_rows(void);
+
+/**
+ * A sync publishes the keyboard below the i8042's first port and the mouse
+ * below its USB interface, sending "add" for each parent it made, then for
+ * inputN and eventN, and links each from /sys/class/input and its event
+ * node from /sys/dev/char, as Linux's input core and evdev do.
+ */
+static void input_publish_rows(void)
+{
+    uint32_t mark = uevents_len;
+    int sent = uevents_sent, platform;
+
+    input_devices(100);
+    usb_mouse_in = 1;
+    evdev_sysfs_sync();
+    platform = sysfs_anchor_find(SYSFS_PLATFORM, 0);
+    in_class = child(sysfs_anchor_find(SYSFS_CLASS, 0), "input");
+    in_serio = child(child(platform, "i8042"), "serio0");
+    in_kbd = child(child(in_serio, "input"), "input0");
+    in_iface = child(sysfs_anchor_find(SYSFS_USB_DEVICE, 1 << 20), "1-1:1.0");
+    in_mouse = child(child(in_iface, "input"), "input1");
+    check(uevents_sent == sent + 7 && in_class > 0 && in_kbd > 0 && in_mouse > 0,
+          "a sync publishes a keyboard and a mouse with seven uevents");
+    check(__builtin_strcmp(uevents + mark, "add@/devices/platform/i8042") == 0 &&
+              uevent_has(mark, 1, "DEVPATH=/devices/platform/i8042/serio0") &&
+              uevent_has(mark, 1, "SUBSYSTEM=serio") && uevent_has(mark, 1, "DRIVER=atkbd") &&
+              uevent_has(mark, 2, "DEVPATH=/devices/platform/i8042/serio0/input/input0") &&
+              uevent_has(mark, 2, "SUBSYSTEM=input") && uevent_has(mark, 2, "EV=120013") &&
+              uevent_has(mark, 2, "NAME=\"AT Translated Set 2 keyboard\"") &&
+              uevent_has(mark, 3, "DEVNAME=input/event0") &&
+              uevent_has(mark, 4, "DEVPATH=/devices/usb/1-1/1-1:1.0") &&
+              uevent_has(mark, 4, "SUBSYSTEM=usb") &&
+              uevent_has(mark, 4, "DEVTYPE=usb_interface") &&
+              uevent_has(mark, 5, "DEVPATH=/devices/usb/1-1/1-1:1.0/input/input1") &&
+              uevent_has(mark, 6, "DEVPATH=/devices/usb/1-1/1-1:1.0/input/input1/event1"),
+          "the i8042, its port, the keyboard, its event node, the USB interface, the mouse "
+          "and its event node are added in that order, each with its subsystem");
+    input_link_rows();
+}
+
+/** The links of the input rows' devices: /sys/class/input's, /sys/dev/char's,
+ * each device's to its parent and subsystem, and the buses' to their
+ * devices. */
+static void input_link_rows(void)
+{
+    check(
+        link_reads(child(in_class, "input0"), "../../devices/platform/i8042/serio0/input/input0") &&
+            link_reads(child(in_class, "event0"),
+                       "../../devices/platform/i8042/serio0/input/input0/event0") &&
+            link_reads(child(in_class, "input1"), "../../devices/usb/1-1/1-1:1.0/input/input1") &&
+            link_reads(child(sysfs_anchor_find(SYSFS_DEV_CHAR, 0), "13:65"),
+                       "../../devices/usb/1-1/1-1:1.0/input/input1/event1"),
+        "/sys/class/input links inputN and eventN, and /sys/dev/char each event node");
+    check(link_reads(child(in_kbd, "device"), "../../../serio0") &&
+              link_reads(child(in_kbd, "subsystem"), "../../../../../../class/input") &&
+              link_reads(child(in_mouse, "device"), "../../../1-1:1.0") &&
+              link_reads(child(child(in_kbd, "event0"), "device"), "../../input0") &&
+              link_reads(child(in_serio, "subsystem"), "../../../../bus/serio") &&
+              link_reads(child(in_iface, "subsystem"), "../../../../bus/usb") &&
+              link_reads(child(sysfs_anchor_find(SYSFS_USB_LINKS, 0), "1-1:1.0"),
+                         "../../../devices/usb/1-1/1-1:1.0") &&
+              link_reads(child(sysfs_anchor_find(SYSFS_PLATFORM_LINKS, 0), "i8042"),
+                         "../../../devices/platform/i8042"),
+          "each device links its parent and its subsystem, and the buses link their devices");
+}
+
+/**
+ * The files of inputN render the IDs, the texts and the capability masks
+ * as Linux prints them: the kernel's longs in hexadecimal from the highest
+ * set, and 32-bit words to an i386 program.
+ */
+static void input_file_rows(void)
+{
+    int caps = child(in_kbd, "capabilities"), mcaps = child(in_mouse, "capabilities");
+    char text[2048];
+
+    check(reg_is(child(caps, "ev"), "120013\n") &&
+              reg_is(child(caps, "key"),
+                     "402000000 3803078f800d001 feffffdfffefffff fffffffffffffffe\n") &&
+              reg_is(child(caps, "msc"), "10\n") && reg_is(child(caps, "led"), "7\n") &&
+              reg_is(child(caps, "rel"), "0\n") && reg_is(child(caps, "sw"), "0\n"),
+          "a keyboard's capability masks read as Linux prints them");
+    check(reg_is(child(mcaps, "ev"), "7\n") && reg_is(child(mcaps, "key"), "1f0000 0 0 0 0\n") &&
+              reg_is(child(mcaps, "rel"), "1943\n") && reg_is(child(in_mouse, "properties"), "1\n"),
+          "and a mouse's, with its buttons, wheels and pointer property");
+    compat_caller = 1;
+    check(reg_is(child(caps, "key"),
+                 "4 2000000 3803078 f800d001 feffffdf ffefffff ffffffff fffffffe\n") &&
+              reg_is(child(mcaps, "key"), "1f0000 0 0 0 0 0 0 0 0\n"),
+          "to an i386 program in 32-bit words");
+    compat_caller = 0;
+    check(reg_is(child(in_kbd, "name"), "AT Translated Set 2 keyboard\n") &&
+              reg_is(child(in_kbd, "phys"), "isa0060/serio0/input0\n") &&
+              reg_is(child(in_kbd, "uniq"), "\n") &&
+              reg_is(child(child(in_kbd, "id"), "bustype"), "0011\n") &&
+              reg_is(child(child(in_kbd, "id"), "version"), "ab41\n"),
+          "the name, place, serial and IDs");
+    check(reg_is(child(in_mouse, "modalias"),
+                 "input:b0003v0627p0001e0000-e0,1,2,k110,111,112,113,114,r0,1,6,8,B,C,amlsfw\n"),
+          "the modalias names each code in capitals");
+    check(reg_is(child(in_mouse, "uevent"),
+                 "PRODUCT=3/627/1/0\nNAME=\"USB HIDBP Mouse 0627:0001\"\nPHYS=\"usb-1/input0\"\n"
+                 "PROP=1\nEV=7\nKEY=1f0000 0 0 0 0\nREL=1943\nMODALIAS=input:b0003v0627p0001e0000-"
+                 "e0,1,2,k110,111,112,113,114,r0,1,6,8,B,C,amlsfw\n"),
+          "a mouse's uevent has the variables Linux's input core gives");
+    check(reg_text(child(in_kbd, "uevent"), text, (int)sizeof(text)) > 0 &&
+              __builtin_strstr(text, "MSC=10\nLED=7\nMODALIAS=input:b0011v0001p0001eAB41-e0,1,4,"
+                                     "11,14,k71,72,") &&
+              __builtin_strstr(text, ",ram4,l0,1,2,sfw\n"),
+          "and a keyboard's its scan codes, LEDs and keys");
+    check(reg_is(child(child(in_kbd, "event0"), "dev"), "13:64\n") &&
+              reg_is(child(child(in_kbd, "event0"), "uevent"),
+                     "MAJOR=13\nMINOR=64\nDEVNAME=input/event0\n"),
+          "eventN gives its numbers and its name in /dev");
+    check(reg_is(child(in_serio, "uevent"), "DRIVER=atkbd\nSERIO_TYPE=06\nSERIO_PROTO=00\n"
+                                            "SERIO_ID=00\nSERIO_EXTRA=00\n"
+                                            "MODALIAS=serio:ty06pr00id00ex00\n") &&
+              reg_is(child(in_serio, "description"), "i8042 KBD port\n") &&
+              reg_is(child(child(in_serio, "id"), "type"), "06\n"),
+          "the i8042's port gives its driver, type and modalias");
+    check(reg_is(child(in_iface, "uevent"),
+                 "DEVTYPE=usb_interface\nDRIVER=usbmouse\nPRODUCT=627/1/0\nTYPE=0/0/0\n"
+                 "INTERFACE=3/1/2\nMODALIAS=usb:v0627p0001d0000dc00dsc00dp00ic03isc01ip02in00\n") &&
+              reg_is(child(in_iface, "bInterfaceProtocol"), "02\n"),
+          "the USB interface gives its class, protocol and modalias");
+}
+
+/**
+ * A mouse unplugged sends "remove" for its event node, itself and its
+ * interface and leaves nothing of them; plugged again it is input1 again,
+ * the lowest number free. A device with every key has its keys cut from
+ * its uevent's modalias, ended by "+,", so that the uevent fits in 2048
+ * bytes, while its modalias file has them all.
+ */
+static void input_change_rows(void)
+{
+    uint32_t mark = uevents_len;
+    int sent = uevents_sent, h;
+    char text[4096];
+    unsigned n;
+
+    input_present[1] = 0;
+    usb_mouse_in = 0;
+    evdev_sysfs_sync();
+    check(uevents_sent == sent + 3 &&
+              __builtin_strcmp(uevents + mark,
+                               "remove@/devices/usb/1-1/1-1:1.0/input/input1/event1") == 0 &&
+              uevent_has(mark, 1, "DEVPATH=/devices/usb/1-1/1-1:1.0/input/input1") &&
+              uevent_has(mark, 2, "DEVPATH=/devices/usb/1-1/1-1:1.0"),
+          "an unplugged mouse sends remove for its event node, itself and its interface");
+    check(!child(in_class, "input1") && !child(in_class, "event1") &&
+              !child(sysfs_anchor_find(SYSFS_DEV_CHAR, 0), "13:65") &&
+              sysfs_node_kind(in_iface) == 0 && sysfs_node_kind(in_mouse) == 0 &&
+              !child(sysfs_anchor_find(SYSFS_USB_LINKS, 0), "1-1:1.0"),
+          "and leaves nothing of them");
+    input_present[1] = 1;
+    input_devs[1].gen = 200;
+    usb_mouse_in = 1;
+    evdev_sysfs_sync();
+    in_mouse = child(child(child(sysfs_anchor_find(SYSFS_USB_DEVICE, 1 << 20), "1-1:1.0"), "input"),
+                     "input1");
+    check(in_mouse > 0 && child(in_class, "input1") > 0, "plugged again it is input1 again");
+    k_memset(&input_devs[2], 0, sizeof(input_devs[2]));
+    input_devs[2].gen = 300;
+    k_strncpy(input_devs[2].name, "every key", EVDEV_TEXT_MAX);
+    input_devs[2].ev[0] = 0x03;
+    for (n = 1; n < KEY_CNT; n++) {
+        bit_set(input_devs[2].key, n);
+    }
+    input_present[2] = 1;
+    mark = uevents_len;
+    sent = uevents_sent;
+    evdev_sysfs_sync();
+    h = child(child(child(sysfs_anchor_find(SYSFS_DEVICES, 0), "virtual"), "input"), "input2");
+    check(uevents_sent == sent + 2 && h > 0 &&
+              uevent_has(mark, 0, "DEVPATH=/devices/virtual/input/input2") &&
+              sent_has(mark, ",+,ramlsfw"),
+          "a device with no parent is virtual, and its uevent's modalias is cut to fit");
+    check(reg_text(child(h, "modalias"), text, (int)sizeof(text)) > 2048 &&
+              __builtin_strstr(text, ",2FE,ramlsfw\n"),
+          "while its modalias file names every key");
+    input_present[0] = input_present[1] = input_present[2] = 0;
+    usb_mouse_in = 0;
+    evdev_sysfs_sync();
+    check(!child(in_class, "input0") && !child(in_class, "input2") &&
+              sysfs_node_count(in_class) == 0 && !child(in_serio, "input"),
+          "every device gone, /sys/class/input is empty and the port keeps no input");
+}
+
 int main(void)
 {
     struct procfs_text text;
@@ -1870,13 +2192,16 @@ int main(void)
     drm_ident_rows();
     pci_uevent_rows();
     sysfs_reg_rows();
+    input_publish_rows();
+    input_file_rows();
+    input_change_rows();
     if (!failures) {
-        printf(
-            "procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
-            "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
-            "process's arguments, oom_score_adj, the paths of the maps, the uptime idle "
-            "sum, an interface's counts, a DRM device's /sys entries and uevents, and a "
-            "driver's attribute, link and PCI identity, and writes of a PCI function's uevent\n");
+        printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
+               "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
+               "process's arguments, oom_score_adj, the paths of the maps, the uptime idle "
+               "sum, an interface's counts, a DRM device's /sys entries and uevents, and a "
+               "driver's attribute, link and PCI identity, writes of a PCI function's uevent, and "
+               "an input device's /sys entries, capability masks and uevents\n");
     }
     return failures != 0;
 }
