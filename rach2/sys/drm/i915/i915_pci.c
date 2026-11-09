@@ -145,14 +145,15 @@ static void i915_devices_remove(struct drm_i915_private *i915)
 }
 
 /**
- * The DRM core's unplug hook: the device stops interrupting, its message
- * and vector are given back, and its rings stop and give their pages
- * back. The record stays until its last reference.
+ * The DRM core's unplug hook: RPS and RC6 turned off, the device stops
+ * interrupting, its message and vector are given back, and its rings stop
+ * and give their pages back. The record stays until its last reference.
  */
 static void i915_unplug(struct drm_device *dev)
 {
     struct drm_i915_private *i915 = to_i915(dev);
 
+    i915_gt_pm_disable(i915);
     i915_irq_reset(i915);
     i915_msi_stop(i915);
     i915_devices_remove(i915);
@@ -229,11 +230,14 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     }
     i915_msi_start(i915);
     i915_irq_install(i915);
+    i915_rc6_init(i915);
+    i915_rps_init(i915);
     if (i915_gt_init(i915) < 0) {
         klog(KLOG_ERR, "i915", "rings: not started; the GPU takes no work");
     } else {
         (void)i915_firstlight(i915);
     }
+    i915_gt_pm_enable(i915);
 
     klog(KLOG_INFO, "i915",
          "found: %02x:%02x.%x: haswell%s (device id %04x), graphics 7.5, display version "
@@ -253,6 +257,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     err = drm_dev_register(&i915->drm);
     if (err < 0) {
         klog(KLOG_ERR, "i915", "register: error %d", (int)err);
+        i915_gt_pm_disable(i915);
         i915_irq_reset(i915);
         i915_msi_stop(i915);
         i915_devices_remove(i915);
@@ -263,6 +268,7 @@ int32_t i915_driver_bind(const pci_device_t *pdev, const struct i915_hw *hw)
     }
     klog(KLOG_INFO, "i915", "registered: i915 1.6.0 for %s on card %d", i915->drm.unique,
          i915->drm.index);
+    i915_sysfs_register(i915);
     return 0;
 }
 

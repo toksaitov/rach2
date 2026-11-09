@@ -109,6 +109,7 @@
 #define GEN6_GT_PERF_STATUS    (MCHBAR_MIRROR_BASE_SNB + 0x5948)
 #define GEN6_RP_STATE_LIMITS   (MCHBAR_MIRROR_BASE_SNB + 0x5994)
 #define GEN6_RP_STATE_CAP      (MCHBAR_MIRROR_BASE_SNB + 0x5998)
+#define DCLK                   (MCHBAR_MIRROR_BASE_SNB + 0x5e04)
 #define D_COMP_HSW             (MCHBAR_MIRROR_BASE_SNB + 0x5f0c)
 
 /* ------------------------------------------------------------------------
@@ -157,6 +158,9 @@
 #define GEN6_PM_RP_DOWN_THRESHOLD   (1u << 4)
 #define GEN6_PM_RP_UP_EI_EXPIRED    (1u << 2)
 #define GEN6_PM_RP_DOWN_EI_EXPIRED  (1u << 1)
+#define GEN6_PM_RPS_EVENTS                                                             \
+    (GEN6_PM_RP_UP_EI_EXPIRED | GEN6_PM_RP_UP_THRESHOLD | GEN6_PM_RP_DOWN_EI_EXPIRED | \
+     GEN6_PM_RP_DOWN_THRESHOLD | GEN6_PM_RP_DOWN_TIMEOUT)
 
 #define GEN7_ERR_INT 0x44040
 
@@ -203,6 +207,7 @@
 #define RING_WAIT_SEMAPHORE         (1u << 10)
 #define RING_WAIT                   (1u << 11)
 #define RING_PSMI_CTL(base)         ((base) + 0x50)
+#define RING_MAX_IDLE(base)         ((base) + 0x54)
 #define GEN6_BSD_GO_INDICATOR       (1u << 4)
 #define GEN6_BSD_SLEEP_INDICATOR    (1u << 3)
 #define GEN6_PSMI_SLEEP_MSG_DISABLE (1u << 0)
@@ -342,50 +347,76 @@
  * RC6, frequency and the pcode mailbox (i915_reg.h, gt/intel_gt_regs.h)
  */
 
-#define GEN6_RPNSWREQ                0xa008
-#define GEN6_RC_VIDEO_FREQ           0xa00c
-#define GEN6_RP_INTERRUPT_LIMITS     0xa014
-#define GEN6_RPSTAT1                 0xa01c
-#define GEN6_RP_CONTROL              0xa024
-#define GEN6_RP_MEDIA_TURBO          (1u << 11)
-#define GEN6_RP_MEDIA_HW_NORMAL_MODE (2u << 9)
-#define GEN6_RP_MEDIA_IS_GFX         (1u << 8)
-#define GEN6_RP_UP_THRESHOLD         0xa02c
-#define GEN6_RP_DOWN_THRESHOLD       0xa030
-#define GEN6_RP_CUR_UP_EI            0xa050
-#define GEN6_RP_CUR_UP               0xa054
-#define GEN6_RP_PREV_UP              0xa058
-#define GEN6_RP_CUR_DOWN_EI          0xa05c
-#define GEN6_RP_CUR_DOWN             0xa060
-#define GEN6_RP_PREV_DOWN            0xa064
-#define GEN6_RP_UP_EI                0xa068
-#define GEN6_RP_DOWN_EI              0xa06c
-#define GEN6_RP_IDLE_HYSTERSIS       0xa070
-#define GEN6_RC_CONTROL              0xa090
-#define GEN6_RC_CTL_RC6pp_ENABLE     (1u << 16)
-#define GEN6_RC_CTL_RC6p_ENABLE      (1u << 17)
-#define GEN6_RC_CTL_RC6_ENABLE       (1u << 18)
-#define GEN6_RC_CTL_EI_MODE(x)       ((uint32_t)(x) << 27)
-#define GEN6_RC_CTL_HW_ENABLE        (1u << 31)
-#define GEN6_RC_STATE                0xa094
-#define GEN6_RC1_WAKE_RATE_LIMIT     0xa098
-#define GEN6_RC6_WAKE_RATE_LIMIT     0xa09c
-#define GEN6_RC_EVALUATION_INTERVAL  0xa0a8
-#define GEN6_RC_IDLE_HYSTERSIS       0xa0ac
-#define GEN6_RC_SLEEP                0xa0b0
-#define GEN6_RC1e_THRESHOLD          0xa0b4
-#define GEN6_RC6_THRESHOLD           0xa0b8
-#define GEN6_RC6p_THRESHOLD          0xa0bc
-#define GEN6_RC6pp_THRESHOLD         0xa0c0
-#define GEN6_PMINTRMSK               0xa168
-#define GEN6_GT_GFX_RC6_LOCKED       0x138104
-#define GEN6_GT_GFX_RC6              0x138108
-#define GEN6_GT_GFX_RC6p             0x13810c
-#define GEN6_GT_GFX_RC6pp            0x138110
-#define GEN6_PCODE_MAILBOX           0x138124
-#define GEN6_PCODE_READY             (1u << 31)
-#define GEN6_PCODE_DATA              0x138128
-#define GEN6_PCODE_DATA1             0x13812c
+#define GEN6_RPNSWREQ                                   0xa008
+#define HSW_FREQUENCY(x)                                ((uint32_t)(x) << 24)
+#define HSW_FREQUENCY_SHIFT                             24
+#define GEN6_RC_VIDEO_FREQ                              0xa00c
+#define GEN6_RP_DOWN_TIMEOUT                            0xa010
+#define GEN6_RP_INTERRUPT_LIMITS                        0xa014
+#define GEN6_RPSTAT1                                    0xa01c
+#define HSW_CAGF_SHIFT                                  7
+#define HSW_CAGF_MASK                                   (0x7fu << 7) /* bits 13:7 */
+#define GEN6_RP_CONTROL                                 0xa024
+#define GEN6_RP_MEDIA_TURBO                             (1u << 11)
+#define GEN6_RP_MEDIA_HW_NORMAL_MODE                    (2u << 9)
+#define GEN6_RP_MEDIA_IS_GFX                            (1u << 8)
+#define GEN6_RP_ENABLE                                  (1u << 7)
+#define GEN6_RP_UP_BUSY_AVG                             (2u << 3)
+#define GEN6_RP_DOWN_IDLE_AVG                           (2u << 0)
+#define GEN6_RP_UP_THRESHOLD                            0xa02c
+#define GEN6_RP_DOWN_THRESHOLD                          0xa030
+#define GEN6_RP_CUR_UP_EI                               0xa050
+#define GEN6_RP_CUR_UP                                  0xa054
+#define GEN6_RP_PREV_UP                                 0xa058
+#define GEN6_RP_CUR_DOWN_EI                             0xa05c
+#define GEN6_RP_CUR_DOWN                                0xa060
+#define GEN6_RP_PREV_DOWN                               0xa064
+#define GEN6_RP_UP_EI                                   0xa068
+#define GEN6_RP_DOWN_EI                                 0xa06c
+#define GEN6_RP_IDLE_HYSTERSIS                          0xa070
+#define GEN6_RC_CONTROL                                 0xa090
+#define GEN6_RC_CTL_RC6pp_ENABLE                        (1u << 16)
+#define GEN6_RC_CTL_RC6p_ENABLE                         (1u << 17)
+#define GEN6_RC_CTL_RC6_ENABLE                          (1u << 18)
+#define GEN6_RC_CTL_EI_MODE(x)                          ((uint32_t)(x) << 27)
+#define GEN6_RC_CTL_HW_ENABLE                           (1u << 31)
+#define GEN6_RC_STATE                                   0xa094
+#define RC_SW_TARGET_STATE_SHIFT                        16
+#define GEN6_RC1_WAKE_RATE_LIMIT                        0xa098
+#define GEN6_RC6_WAKE_RATE_LIMIT                        0xa09c
+#define GEN6_RC6pp_WAKE_RATE_LIMIT                      0xa0a0
+#define GEN6_RC_EVALUATION_INTERVAL                     0xa0a8
+#define GEN6_RC_IDLE_HYSTERSIS                          0xa0ac
+#define GEN6_RC_SLEEP                                   0xa0b0
+#define GEN6_RC1e_THRESHOLD                             0xa0b4
+#define GEN6_RC6_THRESHOLD                              0xa0b8
+#define GEN6_RC6p_THRESHOLD                             0xa0bc
+#define GEN6_RC6pp_THRESHOLD                            0xa0c0
+#define GEN6_PMINTRMSK                                  0xa168
+#define GEN6_GT_GFX_RC6_LOCKED                          0x138104
+#define GEN6_GT_GFX_RC6                                 0x138108
+#define GEN6_GT_GFX_RC6p                                0x13810c
+#define GEN6_GT_GFX_RC6pp                               0x138110
+#define GEN6_PCODE_MAILBOX                              0x138124
+#define GEN6_PCODE_READY                                (1u << 31)
+#define GEN6_PCODE_ERROR_MASK                           0xffu
+#define GEN6_PCODE_SUCCESS                              0x0
+#define GEN6_PCODE_ILLEGAL_CMD                          0x1
+#define GEN7_PCODE_TIMEOUT                              0x2
+#define GEN7_PCODE_ILLEGAL_DATA                         0x3
+#define GEN11_PCODE_ILLEGAL_SUBCOMMAND                  0x4
+#define GEN11_PCODE_LOCKED                              0x6
+#define GEN7_PCODE_MIN_FREQ_TABLE_GT_RATIO_OUT_OF_RANGE 0x10
+#define GEN11_PCODE_REJECTED                            0x11
+#define GEN6_PCODE_READ_RC6VIDS                         0x5
+#define GEN6_PCODE_WRITE_MIN_FREQ_TABLE                 0x8
+#define GEN6_PCODE_READ_MIN_FREQ_TABLE                  0x9
+#define GEN6_READ_OC_PARAMS                             0xc
+#define HSW_PCODE_DYNAMIC_DUTY_CYCLE_CONTROL            0x1a
+#define GEN6_PCODE_DATA                                 0x138128
+#define GEN6_PCODE_FREQ_IA_RATIO_SHIFT                  8
+#define GEN6_PCODE_FREQ_RING_RATIO_SHIFT                16
+#define GEN6_PCODE_DATA1                                0x13812c
 
 /* ------------------------------------------------------------------------
  * Display power wells (i915_reg.h): four request registers, BIOS, driver,
