@@ -1,0 +1,70 @@
+#!/usr/bin/env bpftrace
+/*
+ * efault.bt: each time KVM refuses a page of a VM_PFNMAP mapping, print the
+ * mapping, the page's flags and reference count, and those of the folio it
+ * belongs to, with the kernel stack. Linux 6.12: hva_to_pfn calls
+ * hva_to_pfn_remapped for VM_IO and VM_PFNMAP mappings, which Debian's
+ * build inlines; that walks the page table with follow_pfnmap_start, takes a
+ * reference with kvm_try_get_pfn (get_page_unless_zero), and calls
+ * follow_pfnmap_end with the pfn found either way. A refusal makes
+ * hva_to_pfn return KVM_PFN_ERR_FAULT (0x7ff << 52), QEMU's "Bad address".
+ * struct page is 64 bytes and the memory map starts at vmemmap_base.
+ */
+kprobe:hva_to_pfn
+{
+	@in[tid] = 1;
+	@hva[tid] = arg0;
+	@pfn[tid] = 0;
+	@vma[tid] = 0;
+	@calls = count();
+}
+
+kprobe:follow_pfnmap_end
+/@in[tid]/
+{
+	$a = (struct follow_pfnmap_args *)arg0;
+	@pfn[tid] = $a->pfn;
+	@vma[tid] = (uint64)$a->vma;
+	@pfnmap = count();
+}
+
+kretprobe:hva_to_pfn
+/@in[tid]/
+{
+	if (retval == 0x7ff0000000000000 && @vma[tid]) {
+		$vma = (struct vm_area_struct *)@vma[tid];
+		$pfn = @pfn[tid];
+		$base = *(uint64 *)kaddr("vmemmap_base");
+		$page = (struct page *)($base + $pfn * 64);
+		$ch = $page->compound_head;
+		printf("%s refused: comm %s pid %d hva 0x%lx vma 0x%lx-0x%lx vm_flags 0x%lx file %s\n",
+		    strftime("%H:%M:%S", nsecs), comm, pid, @hva[tid],
+		    $vma->vm_start, $vma->vm_end, $vma->vm_flags,
+		    $vma->vm_file != 0 ? str($vma->vm_file->f_path.dentry->d_name.name) : "-");
+		printf("  pfn 0x%lx page flags 0x%lx refcount %d mapcount %d compound_head 0x%lx\n",
+		    $pfn, $page->flags, $page->_refcount.counter,
+		    $page->_mapcount.counter, $ch);
+		if ($ch & 1) {
+			$head = (struct page *)($ch - 1);
+			$hpfn = ((uint64)$head - $base) / 64;
+			$tail1 = (struct page *)($ch - 1 + 64);
+			printf("  head pfn 0x%lx (tail index %d) flags 0x%lx refcount %d mapcount %d order %d\n",
+			    $hpfn, $pfn - $hpfn, $head->flags, $head->_refcount.counter,
+			    $head->_mapcount.counter, $tail1->flags & 0xff);
+		}
+		printf("%s\n", kstack(12));
+		@refused = count();
+	}
+	delete(@in[tid]);
+	delete(@hva[tid]);
+	delete(@pfn[tid]);
+	delete(@vma[tid]);
+}
+
+END
+{
+	clear(@in);
+	clear(@hva);
+	clear(@pfn);
+	clear(@vma);
+}
