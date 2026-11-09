@@ -35,6 +35,28 @@ The format and index are in [../upstream.md](../upstream.md).
 * Status: unreported, draft record from Rach2's run.
 * Next: read the current `bochs_hw_setmode` and QEMU's `vbe_ioport_write_data`, reproduce under Linux with two clients, and check whether TTM's placement there ever puts a buffer in the cleared range.
 
+## Marionette's null script timeout returns before the script finishes
+
+* Project: Firefox ESR 153.6.0, Debian's `153.6.0esr-1~deb13u1`. The installed `omni.ja` contains Marionette's `evaluate.sys.mjs`, SHA-256 `60c1fb04ee7513b80312e2a7100ccc86eb84980a10e78b0a17199d6efc0290e6`; the extracted file is in the worker's `build/runs/browser-2689-upstream/evaluate-installed.mjs`, outside git.
+* Fails: a null WebDriver script timeout returns null while an asynchronous script is still pending. `evaluate.sys.mjs:92-103` leaves `timeoutPromise` undefined for a null timeout, then includes it in both `Promise.race` calls at lines 133-136 and 156. The undefined entry resolves the race before the script's promise.
+* Found: 2026-11-10, milestone 76, in the Debian reference guest under KVM on the testing host's WSL, while task 2689 implemented Firefox's HTTPS acceptance.
+* Reproduction: `browser/null-timeout.py` beside this record starts the pinned Firefox with Marionette and executes one promise which returns 123 after a queued callback. The default script timeout returns 123, a null timeout returns null, and restoring 30000 returns 123 again.
+* Evidence: `dev-log/76-display/browser/null-timeout.json` records the three raw replies; the installed module was extracted with Python's zipfile reader from Firefox's own `omni.ja`. The mirror at `mozilla/gecko-dev` commit `5836a062726f715fda621338a17b51aff30d0a8c` has the same two races.
+* Rach2: `tests/graphics/browser/protocol.py` keeps Firefox's default script timeout instead of setting it to null. It uses the ordinary WebDriver promise result; the HTTPS acceptance then completed storage, forms and files.
+* Status: unreported.
+* Next: check current mozilla-central, then report the reproduction and filter an absent timeout promise out of both races.
+
+## Firefox exits on clipboard access under a seatless compositor
+
+* Project: Firefox ESR 153.6.0, Debian's `153.6.0esr-1~deb13u1`, with its GTK Wayland backend under Weston 14.0.2. The GTK package version and the fault's source file and line have not been recorded.
+* Fails: the browser exits and generates a minidump when the HTTPS page's clipboard button writes and reads text under a headless Weston with no input seat. Its log repeatedly prints `gdk_seat_get_keyboard` assertions before the exit. A backtrace is still needed to locate the null access.
+* Found: 2026-11-10, milestone 76, in the Debian reference guest under KVM on the testing host's WSL, during task 2689's HTTPS acceptance.
+* Reproduction: run `tests/graphics/browser/run.sh firefox pages OUT` without its private seat module under a headless Weston; the storage, form, upload and download operations complete, then the clipboard click closes the Marionette socket and the browser exits. With a keyboard and pointer seat in the same compositor, the whole page passes.
+* Evidence: `build/runs/browser-2689-firefox/browser.log` and `marionette.jsonl` in the worker's Mac checkout; the successful page is `tests/graphics/browser/ref/firefox-pages/result.json`. The temporary profile's minidump was removed by the runner's exit cleanup.
+* Rach2: `tests/graphics/browser/seat.c` gives only the page cases' private compositor an input seat. Both browsers then pass the clipboard check over Wayland without changing their sandbox policy.
+* Status: unreported, draft; the fault's owner between Firefox and GTK is not established.
+* Next: retain the next minidump, get a symbolized backtrace, identify the source access and check current Firefox and GTK before reporting it.
+
 ## Linux's elantech reports a v3 pad's stick packet to no device
 
 * Project: Linux 6.12, `drivers/input/mouse/elantech.c`, as tagged `v6.12` in torvalds/linux; the source tarball is not kept by Rach2.

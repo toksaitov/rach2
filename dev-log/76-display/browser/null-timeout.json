@@ -1,0 +1,12 @@
+{
+  "version": "153.6.0",
+  "before": {
+    "value": 123
+  },
+  "null_timeout": {
+    "value": null
+  },
+  "after": {
+    "value": 123
+  }
+}
