@@ -986,14 +986,30 @@ int32_t drm_mode_crtc_set_gamma_size(struct drm_crtc *crtc, uint32_t size)
         return -ENOMEM;
     }
     for (i = 0; i < size; i++) {
-        uint16_t v = size > 1 ? (uint16_t)((i * 0xffffu) / (size - 1)) : 0;
-
-        store[i] = store[size + i] = store[2 * size + i] = v;
+        store[i] = store[size + i] = store[2 * size + i] = (uint16_t)(i << 8);
     }
     kfree(crtc->gamma_store);
     crtc->gamma_store = store;
     crtc->gamma_size = size;
     return 0;
+}
+
+void drm_crtc_enable_color_mgmt(struct drm_crtc *crtc, uint32_t degamma_lut_size, int has_ctm,
+                                uint32_t gamma_lut_size)
+{
+    struct drm_mode_config *mc = &crtc->dev->mode_config;
+
+    if (degamma_lut_size) {
+        drm_object_attach_property(&crtc->base, mc->degamma_lut_property, 0);
+        drm_object_attach_property(&crtc->base, mc->degamma_lut_size_property, degamma_lut_size);
+    }
+    if (has_ctm) {
+        drm_object_attach_property(&crtc->base, mc->ctm_property, 0);
+    }
+    if (gamma_lut_size) {
+        drm_object_attach_property(&crtc->base, mc->gamma_lut_property, 0);
+        drm_object_attach_property(&crtc->base, mc->gamma_lut_size_property, gamma_lut_size);
+    }
 }
 
 int32_t drm_encoder_init(struct drm_device *dev, struct drm_encoder *encoder, uint32_t type)
