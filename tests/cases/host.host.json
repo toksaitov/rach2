@@ -451,6 +451,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "i915_pci",
+          "checks": "tests/host/i915_pci_hosttest.c binds the Intel graphics driver to the HD 4400's host model, interrupts masked before MSI, under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "icmp",
           "checks": "tests/host/icmp_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
@@ -1172,7 +1177,7 @@
           "witness_id": "checks",
           "kind": "counter",
           "means": "a check of the case has ended, passed or failed",
-          "limit": 222
+          "limit": 223
         }
       ],
       "bounds": {
