@@ -78,6 +78,12 @@ static int faults(const void *p, size_t n)
     return fault_at != NULL && (const char *)fault_at >= c && (const char *)fault_at < c + n;
 }
 
+/** Every call here is an x86-64 program's. */
+int in_compat_syscall(void)
+{
+    return 0;
+}
+
 int copy_to_user(void __user *dst, const void *src, size_t n)
 {
     if (faults(dst, n)) {
