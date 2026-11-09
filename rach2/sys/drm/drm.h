@@ -1003,8 +1003,15 @@ int32_t drm_crtc_init_with_planes(struct drm_device *dev, struct drm_crtc *crtc,
                                   struct drm_plane *primary, struct drm_plane *cursor,
                                   const struct drm_crtc_funcs *funcs);
 /** Give `crtc` a gamma table of `size` entries for GETGAMMA and SETGAMMA,
- * a linear ramp. 0 or -ENOMEM. */
+ * Linux's ramp of entry N at N << 8. 0, -EINVAL for 0 or over 65536
+ * entries, or -ENOMEM. */
 int32_t drm_mode_crtc_set_gamma_size(struct drm_crtc *crtc, uint32_t size);
+/** Attach the colour properties, Linux's drm_crtc_enable_color_mgmt:
+ * DEGAMMA_LUT with its size when `degamma_lut_size` is not 0, CTM when
+ * `has_ctm`, GAMMA_LUT with its size when `gamma_lut_size` is not 0. A CRTC
+ * with GAMMA_LUT or DEGAMMA_LUT takes SETGAMMA as a commit of that blob. */
+void drm_crtc_enable_color_mgmt(struct drm_crtc *crtc, uint32_t degamma_lut_size, int has_ctm,
+                                uint32_t gamma_lut_size);
 /** Make `encoder` an encoder of `dev` of DRM_MODE_ENCODER_* `type`; the
  * driver sets `possible_crtcs`. 0 or -EINVAL past the table. */
 int32_t drm_encoder_init(struct drm_device *dev, struct drm_encoder *encoder, uint32_t type);
