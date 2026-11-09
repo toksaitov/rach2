@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 9, 2026
 .Dt DISK 7
 .Os
 .Sh NAME
@@ -56,7 +56,8 @@ Out-of-range and overlapping entries are refused and counted.
 At most fifteen partitions are accepted per disk.
 .Ss Partition identities
 The boot-line settings
-.Ql rach2.root=SPEC
+.Ql rach2.root=SPEC ,
+.Ql rach2.rootimage=SPEC:/PATH
 and
 .Ql rach2.boot=SPEC
 select partitions by identity.
@@ -159,11 +160,42 @@ The ext2 root.
 The BIOS boot partition, LBA 34 through 2047, with GRUB's BIOS core and
 no file system.
 .El
+.Pp
+.Xr rach2-install 8
+adds entry 6 on a disk with room for it, the data partition, named
+.Ql Rach2 data ,
+of the Linux file system type, an ext2 volume labelled
+.Ql Rach2 data ,
+after the root and up to the backup table or the next partition.
+An update of the root never writes it.
+It holds what the machine keeps across updates of its root, among them the
+trial roots
+.Ql bootctl rootimage
+boots.
+Its node is
+.Pa /dev/disk0p6
+on a machine with one disk, and
+.Ql GPTID=GUID,6
+names it on the boot line; the installed root does not mount it by
+itself.
 .Ss Loop devices
 .Pa /dev/loop0
 through
 .Pa /dev/loop3
 provide block devices over regular files.
+A boot with
+.Ql rach2.rootimage=SPEC:/PATH
+mounts the partition
+.Ar SPEC
+names, attaches its file
+.Ar PATH
+to the first free loop device, writable, and mounts the ext2 file system
+there as the root; the partition is then mounted at
+.Pa /data
+under it, and
+.Pa /proc/loop
+gives the file as
+.Pa /data/PATH .
 See
 .Xr loopctl 8 .
 .Sh FILES
@@ -185,6 +217,7 @@ Disk records and counters.
 .Xr nvme 4 ,
 .Xr recovery 7 ,
 .Xr bootctl 8 ,
+.Xr diskctl 8 ,
 .Xr growroot 8 ,
 .Xr loopctl 8 ,
 .Xr mount 8 ,

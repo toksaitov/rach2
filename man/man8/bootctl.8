@@ -1,9 +1,9 @@
-.Dd October 3, 2026
+.Dd November 9, 2026
 .Dt BOOTCTL 8
 .Os
 .Sh NAME
 .Nm bootctl
-.Nd manage boot kernels, menus, and defaults
+.Nd manage boot kernels, menus, defaults, and trial roots
 .Sh SYNOPSIS
 .Nm
 .Cm status
@@ -23,6 +23,8 @@
 .Cm fallback
 .Nm
 .Cm env Ar KEY Op Ar VALUE
+.Nm
+.Cm rootimage Ar SPEC : Ns Ar /PATH
 .Nm
 .Fl -target Ar PARTITION COMMAND
 .Ar ...
@@ -103,6 +105,9 @@ An empty
 .Ql next_entry
 is reported as
 .Ql empty (a trial was consumed) .
+When the menu slot has a trial root's entry, a line gives the image it
+boots:
+.Dl bootctl: trial root: SPEC:/PATH
 .Pp
 The
 .Ql bootctl: booted:
@@ -110,6 +115,7 @@ line reports
 .Ql candidate ,
 .Ql fallback ,
 .Ql recovery, from the recovery partition and neither slot ,
+.Ql trialroot, the candidate's kernel on a root image ,
 or
 .Ql not from a slot (no rach2.slot= on /proc/cmdline) .
 .It Cm kernel Ar FILE
@@ -159,8 +165,11 @@ Success is reported as:
 Arm one boot of
 .Ql candidate ,
 .Ql fallback ,
-or
-.Ql recovery .
+.Ql recovery ,
+or, when the menu slot has the entry
+.Cm rootimage
+writes,
+.Ql trialroot .
 Other entry names are refused.
 The menu also consumes
 .Ql next_entry=text ,
@@ -247,6 +256,54 @@ or
 An empty value is refused because an empty
 .Ql next_entry
 is the marker left by a trial boot.
+.It Cm rootimage Ar SPEC : Ns Ar /PATH
+Boot a root image once: an ext2 file system in the file
+.Ar PATH
+on the ext2 partition
+.Ar SPEC
+names, the data partition of an installed machine, booted with the
+candidate slot's kernel and
+.Ql rach2.rootimage=SPEC:/PATH ,
+so that the installed root is not written to try another system.
+.Ar SPEC
+takes the forms of
+.Ql rach2.root=
+that have no space in them:
+.Ql PARTUUID= ,
+.Ql GPTID=GUID,N ,
+.Ql UUID=
+or
+.Pa /dev/diskNpM ;
+the whole operand is at most 95 bytes of letters, digits and
+.Ql ._,=:/+- .
+The command writes a menu entry with the id
+.Ql trialroot
+at the end of the menu slot, between the lines
+.Ql # bootctl rootimage: one boot of a root image
+and
+.Ql # bootctl rootimage: end ,
+in place of an earlier such entry, and keeps the rest of the slot.
+The entry's line is
+.Ql rach2.rootimage=SPEC:/PATH rach2.slot=trialroot
+followed by this boot's words, less those that choose the root, the slot
+or the first program, so that the trial root has this machine's network
+and console; a line longer than the kernel's 510 bytes is refused.
+It then sets
+.Ql next_entry=trialroot .
+The stub's menu sets its default after it reads the slot and knows no
+.Ql trialroot ,
+so the slot itself clears
+.Ql next_entry
+and boots the entry; the boot after it takes the saved default.
+A trial root that does not mount makes the kernel restart after ten
+seconds into that default.
+The kernel mounts the partition as
+.Pa /data
+under the trial root.
+A trial root cannot commit or install a kernel, since its line has
+neither slot.
+Success is reported as:
+.Dl bootctl: armed: the next boot starts the candidate's kernel on SPEC:/PATH once; the boot after it takes the saved default
 .El
 .Sh EXAMPLES
 Install a kernel from the running system, reboot to try it, then inspect
@@ -254,6 +311,10 @@ and commit it:
 .Dl bootctl kernel /tmp/kernel
 .Dl reboot
 .Dl bootctl status && bootctl commit
+.Pp
+Boot a root image on the data partition once, from the installed root:
+.Dl bootctl rootimage GPTID=1acef00d-0f1e-4d2c-8b3a-c0ffee000001,6:/trial/root.img
+.Dl reboot
 .Sh DIAGNOSTICS
 A kernel file that cannot be opened or read is reported as
 .Ql bootctl: cannot open 'FILE'
@@ -273,6 +334,19 @@ An unsupported trial entry is reported as
 .Ql bootctl: not a menu entry this disk has: 'ENTRY' .
 An unsupported environment key is reported as
 .Ql bootctl: not a key this tool writes: 'KEY' .
+.Pp
+.Cm rootimage
+refuses an operand with
+.Ql bootctl: 'SPEC' has a character a boot line cannot carry
+or
+.Ql bootctl: 'SPEC' is not SPEC:/PATH of at most 95 bytes ,
+a line too long with
+.Ql bootctl: the trial's line would pass the kernel's 510 bytes ,
+and a menu that would not fit with
+.Ql bootctl: the menu with the trial root's entry does not fit the N-byte slot .
+.Ql bootctl trial trialroot
+with no such entry reports
+.Ql bootctl: the menu has no trial root; stage one with `bootctl rootimage SPEC:/PATH` .
 .Pp
 Menu refusals include
 .Ql bootctl: 'FILE' is empty ,
