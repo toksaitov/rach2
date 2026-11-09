@@ -61,6 +61,7 @@
 
 #define SIGKILL 9
 #define SIGUSR1 10
+#define SIGSEGV 11
 #define SIGALRM 14
 #define SIGTERM 15
 #define SIGSTOP 19
@@ -649,14 +650,35 @@ void probe_main(unsigned long *sp)
               "child terminated by SIGTERM (WTERMSIG)");
     }
 
-    /* 4. A forged selector in the frame the kernel restores. */
+    /* 4. A forged selector in the frame the kernel restores, in a child. It
+     * exits 3 after the handler ran and 4 when it did not. On x86-64 the
+     * return restores CS and SS from the frame, as Linux does, and refuses
+     * the forged ones with SIGSEGV, as Linux's faulting `iretq` ends the
+     * process; on i686 the forged GS is not loaded and the child goes on. */
     part("forge-ran");
-    install(SIGUSR1, forge_handler);
-    forge_ran = 0;
-    syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);
-    check(forge_ran == 1, "forge-ran", "the forging handler ran");
-    check(syscall1(SYS_GETPID, 0) > 0, "forge-survived",
-          "the machine survives a forged selector in the frame");
+    pid = syscall1(SYS_FORK, 0);
+    check(pid >= 0, "forge-ran", "fork");
+    if (pid == 0) {
+        install(SIGUSR1, forge_handler);
+        forge_ran = 0;
+        syscall2(SYS_KILL, syscall1(SYS_GETPID, 0), SIGUSR1);
+        sys_exit(forge_ran ? 3 : 4);
+    }
+    if (pid > 0) {
+        status = 0;
+        check(syscall3(SYS_WAITPID, pid, (long)&status, 0) == pid, "forge-ran",
+              "reap the forging child");
+        check(status != (4 << 8), "forge-ran", "the forging handler ran");
+#if defined __x86_64__
+        check((status & 0x7f) == SIGSEGV, "forge-survived",
+              "the return through forged CS and SS ends the child with SIGSEGV");
+#else
+        check(status == (3 << 8), "forge-survived",
+              "the child goes on past a forged GS in the frame");
+#endif
+        check(syscall1(SYS_GETPID, 0) > 0, "forge-survived",
+              "the machine survives a forged selector in the frame");
+    }
 
     /* 5. A one-shot handler runs once. */
     part("resethand");
