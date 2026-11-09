@@ -108,16 +108,26 @@ static int wait_status(const struct vtd_unit *u, uint32_t mask, uint32_t want, c
  * keeping the others as they were set, and wait for the status to follow.
  * The status register holds the one-shot bits too, so the command written
  * is the persistent bits kept in `u->gcmd`, never the status read back.
+ * CFI is waited for a millisecond and no longer, without a record, since
+ * QEMU's unit leaves its status clear whatever the command says.
  */
 void vtd_set_gcmd(struct vtd_unit *u, uint32_t bit, int on)
 {
+    unsigned int i;
+
     if (on) {
         u->gcmd |= bit;
     } else {
         u->gcmd &= ~bit;
     }
     wr32(u, VTD_GCMD, u->gcmd);
-    (void)wait_status(u, bit, on ? bit : 0u, "command");
+    if (bit != VTD_GCMD_CFI) {
+        (void)wait_status(u, bit, on ? bit : 0u, "command");
+        return;
+    }
+    for (i = 0; i < 1000u && (rd32(u, VTD_GSTS) & bit) != (on ? bit : 0u); i++) {
+        vtd_hw_udelay(1);
+    }
 }
 
 /** Issue the one-shot command `bit` (SRTP, SIRTP or WBF) beside the
