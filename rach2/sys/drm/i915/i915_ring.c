@@ -395,10 +395,7 @@ uint32_t i915_engine_emit_breadcrumb(struct drm_i915_private *i915, struct i915_
     if (!cs) {
         return 0;
     }
-    seqno = e->seqno + 1u;
-    if (seqno == 0) {
-        seqno = 1;
-    }
+    seqno = e->seqno == 0xffffffffu ? 1u : e->seqno + 1u; /* 0 is never a seqno */
     cs[0] = MI_STORE_DWORD_INDEX;
     cs[1] = I915_GEM_HWS_SEQNO_ADDR;
     cs[2] = seqno;
