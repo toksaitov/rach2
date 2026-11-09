@@ -135,6 +135,7 @@ C_SRC_SHARED = kernel.c \
     sys/fs/pathbuf.c \
     sys/fs/devfs.c \
     sys/fs/synthfs.c \
+    sys/fs/sysfs.c \
     sys/fs/procfs.c \
     sys/fs/debugfs.c \
     sys/usb/usb.c \

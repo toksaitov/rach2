@@ -187,6 +187,7 @@ struct vpath {
     int tid;       /* VNODE_PROC_*: TID in /proc/<pid>/task/TID, or 0 */
     int sysent;    /* VNODE_PROC_SYS_*: the entry of the /proc/sys table; VNODE_SYS_*: the node */
     int syskey;    /* VNODE_SYS_*: the device of a device's node (`synth_sys_device_name`) */
+    int sysreg;    /* VNODE_SYS_LINK: the registered link (sysfs.h) the path ends on, or 0 */
 };
 
 /**
@@ -353,7 +354,10 @@ const char *synth_sysvipc_name(int origin);
  * /sys: the parts of Linux's sysfs that programs here read: the PCI
  * functions and USB devices with their uevent files, the network interfaces
  * and their statistics, the clock and its wake alarm, the backlights, the
- * sleep states, the disk nodes, the processors and the memory block. Each
+ * sleep states, the disk nodes, the processors and the memory block, and
+ * the entries drivers add (sysfs.h) below these and below the empty
+ * directories they need, /sys/class/drm, /sys/dev/char, /sys/kernel and
+ * /sys/devices/platform. Each
  * directory is a numbered node, below; a node of which there is one for each
  * device, interface, backlight, processor or disk node has a `syskey` that
  * says which. A backlight's key is its index (display/backlight.h). A PCI
@@ -410,6 +414,37 @@ const char *synth_sysvipc_name(int origin);
 #define SYSFS_WLAN_DRIVER     39 /* phyN/device/DRIVER */
 #define SYSFS_CLASS_RFKILL    40 /* /sys/class/rfkill */
 #define SYSFS_RFKILL          41 /* /sys/class/rfkill/rfkillN, whose key is N */
+/* An entry a driver added (sysfs.h), whose key is its handle. */
+#define SYSFS_REG             42
+#define SYSFS_KERNEL          43 /* /sys/kernel */
+#define SYSFS_KERNEL_DEBUG    44 /* /sys/kernel/debug, where debugfs is mounted */
+#define SYSFS_CLASS_DRM       45 /* /sys/class/drm, a link for each DRM node and connector */
+#define SYSFS_DEV_CHAR        46 /* /sys/dev/char, a link for each registered device */
+#define SYSFS_PLATFORM        47 /* /sys/devices/platform */
+#define SYSFS_BUS_PLATFORM    48 /* /sys/bus/platform */
+#define SYSFS_PLATFORM_LINKS  49 /* /sys/bus/platform/devices */
+
+/* The `procfile` of each file of a PCI function's directory, by Linux's
+ * names (`sysfs_pci_attr`); 1 has no file, since 1 + 1 is the inode number
+ * of the function's link. boot_vga is there only for a VGA function. */
+#define SYSFS_PCI_UEVENT           0
+#define SYSFS_PCI_VENDOR           3
+#define SYSFS_PCI_DEVICE_ID        4
+#define SYSFS_PCI_SUBSYSTEM_VENDOR 5
+#define SYSFS_PCI_SUBSYSTEM_DEVICE 6
+#define SYSFS_PCI_CLASS            7
+#define SYSFS_PCI_REVISION         8
+#define SYSFS_PCI_BOOT_VGA         9
+#define SYSFS_PCI_ATTRS            10
+
+/** The name of the file `attr` of a PCI function's directory, or NULL for a
+ * number with none. */
+const char *sysfs_pci_attr(int attr);
+
+/** Whether the file `attr` of the /sys directory `node` of device `key`
+ * takes a privileged write: one `sysfs_attr_writable` names, or a
+ * registered attribute with a `store`, whose handle is `key`. */
+int sysfs_file_writable(int node, int key, int attr);
 
 /** Return the radio index of a network interface, or -1. */
 int sysfs_net_wiphy(int index);
@@ -417,13 +452,13 @@ int sysfs_net_wiphy(int index);
 const char *sysfs_wlan_driver(int index);
 
 /** Whether the /sys directory `node` is one of a device, an interface, a
- * processor or a disk node, which `syskey` says, and which exists only while
- * that does. */
+ * processor, a disk node or a registered entry, which `syskey` says, and
+ * which exists only while that does. */
 #define SYSFS_KEYED(node)                                                                  \
     ((node) == SYSFS_PCI_DEVICE || (node) == SYSFS_USB_DEVICE || (node) == SYSFS_NET_IF || \
      (node) == SYSFS_NET_STATS || (node) == SYSFS_CPUN || (node) == SYSFS_CPU_TOPOLOGY ||  \
      (node) == SYSFS_BACKLIGHT || SYSFS_IS_BLOCK(node) || (node) == SYSFS_RFKILL ||        \
-     ((node) >= SYSFS_WLAN_PHY && (node) <= SYSFS_WLAN_DRIVER))
+     ((node) >= SYSFS_WLAN_PHY && (node) <= SYSFS_WLAN_DRIVER) || (node) == SYSFS_REG)
 
 /** Whether `node` is a directory of a disk node: its own, its queue's, its
  * device's or a loop device's `loop`. */

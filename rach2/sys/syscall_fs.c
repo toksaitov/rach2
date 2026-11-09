@@ -47,6 +47,7 @@
 #include "fs/exfat.h"
 #include "fs/devfs.h"
 #include "fs/synthfs.h"
+#include "fs/sysfs.h"
 #include "fs/vfs.h"
 #include "fs/name.h"
 #include "block/usbdisk.h"
@@ -6457,9 +6458,14 @@ static void synth_sys_identity(const struct vpath *vp, struct kstat *kst, int fo
 {
     kst->st_dev = SYSFS_FSID;
     if (vp->kind == VNODE_SYS_FILE) {
-        kst->st_mode = S_IFREG | (sysfs_attr_writable(vp->sysent, vp->procfile) ? 0644 : 0444);
+        kst->st_mode = S_IFREG | (vp->sysent == SYSFS_REG ? sysfs_node_mode(vp->syskey)
+                                  : sysfs_attr_writable(vp->sysent, vp->procfile) ? 0644u
+                                                                                  : 0444u);
         kst->st_size = 4096;
         kst->st_ino = sysfs_ino(vp->sysent, vp->syskey, 1 + vp->procfile);
+    } else if (vp->kind == VNODE_SYS_LINK && !follow && vp->sysreg) {
+        kst->st_mode = 0120777; /* S_IFLNK | 0777 */
+        kst->st_ino = sysfs_ino(SYSFS_REG, vp->sysreg, 0);
     } else if (vp->kind == VNODE_SYS_LINK && !follow) {
         kst->st_mode = 0120777; /* S_IFLNK | 0777 */
         kst->st_ino =
@@ -6476,6 +6482,10 @@ static void synth_sys_identity(const struct vpath *vp, struct kstat *kst, int fo
 static int32_t synth_sys_stat(const struct vpath *vp, struct kstat *kst, int follow)
 {
     if (SYSFS_KEYED(vp->sysent) && !sysfs_device_exists(vp->sysent, vp->syskey)) {
+        return -ENOENT;
+    }
+    if (vp->kind == VNODE_SYS_FILE && vp->sysent == SYSFS_PCI_DEVICE &&
+        vp->procfile == SYSFS_PCI_BOOT_VGA && !sysfs_pci_is_vga(vp->syskey)) {
         return -ENOENT;
     }
     synth_sys_identity(vp, kst, follow);
@@ -6510,6 +6520,20 @@ static int synth_sys_link(const struct vpath *vp, char *out, int cap)
         out[n++] = path[i];
     }
     return n;
+}
+
+/** The text of the /sys link `vp` into `out` of `cap` bytes: a registered
+ * link's (`sysfs_link_text`), or a device's (`synth_sys_link`); its length,
+ * or -ENOENT for a device or a target that is gone. */
+static int synth_sys_readlink(const struct vpath *vp, char *out, int cap)
+{
+    if (vp->sysreg) {
+        return sysfs_link_text(vp->sysreg, out, cap);
+    }
+    if (SYSFS_KEYED(vp->sysent) && !sysfs_device_exists(vp->sysent, vp->syskey)) {
+        return -ENOENT;
+    }
+    return synth_sys_link(vp, out, cap);
 }
 
 /**
@@ -7429,8 +7453,7 @@ static int32_t do_readlink(const char *name, char __user *ubuf, uint32_t bufsiz,
         n = pid < 0 ? -ENOENT
                     : procfs_readlink_dir(pid, kind == VNODE_PROC_ROOT, link, VFS_PATH_MAX);
     } else if (kind == VNODE_SYS_LINK) {
-        n = sysfs_device_exists(vp.sysent, vp.syskey) ? synth_sys_link(&vp, link, VFS_PATH_MAX)
-                                                      : -ENOENT;
+        n = synth_sys_readlink(&vp, link, VFS_PATH_MAX);
     } else if (kind == VNODE_DEV_LINK) {
         n = (int)k_strlen(SYNTH_DEV_LOG_TARGET);
         k_memcpy(link, SYNTH_DEV_LOG_TARGET, (uint32_t)n);
@@ -13756,13 +13779,22 @@ static int synth_sys_radio_dirent(int node, int key, int n, char *name, uint64_t
  */
 static int synth_sys_bus_dirent(int node, int key, int n, char *name, uint64_t *ino, uint8_t *dtype)
 {
-    int dev, links;
+    int dev, links, attr;
 
-    if (node == SYSFS_PCI_DEVICE && n == 1) {
-        return synth_entry("config", sysfs_ino(node, key, 1 + SYSFS_PCI_CONFIG), DT_REG, name, ino,
-                           dtype);
+    if (node == SYSFS_PCI_DEVICE) {
+        for (attr = 0; attr < SYSFS_PCI_ATTRS; attr++) {
+            if (!sysfs_pci_attr(attr) || (attr == SYSFS_PCI_BOOT_VGA && !sysfs_pci_is_vga(key))) {
+                continue;
+            }
+            if (n-- == 0) {
+                return synth_entry(sysfs_pci_attr(attr), sysfs_ino(node, key, 1 + attr), DT_REG,
+                                   name, ino, dtype);
+            }
+        }
+        return synth_entry(n == 0 ? "subsystem" : NULL, sysfs_ino(SYSFS_BUS_PCI, 0, 2), DT_LNK,
+                           name, ino, dtype);
     }
-    if (node == SYSFS_PCI_DEVICE || node == SYSFS_USB_DEVICE) {
+    if (node == SYSFS_USB_DEVICE) {
         return synth_entry(n == 0 ? "uevent" : NULL, sysfs_ino(node, key, 1), DT_REG, name, ino,
                            dtype);
     }
@@ -13782,14 +13814,16 @@ static int synth_sys_bus_dirent(int node, int key, int n, char *name, uint64_t *
 }
 
 /**
- * The `n`th entry of the /sys directory `node`, whose device is `key`: its
- * name, inode and type, and 1, or 0 past the last. The fixed directories
- * hold the next ones down, a bus's `devices` a link for each device, the
- * directory the links lead to a directory for each, a device's directory
- * its uevent, a processor's its `topology`, /sys/class/net its interfaces
- * and /sys/class/backlight its backlights, each with its attributes.
+ * The `n`th entry of the fixed /sys directory `node`, whose device is `key`:
+ * its name, inode and type, and 1, or 0 past the last. The fixed
+ * directories hold the next ones down, a bus's `devices` a link for each
+ * device, the directory the links lead to a directory for each, a device's
+ * directory its uevent, a processor's its `topology`, /sys/class/net its
+ * interfaces and /sys/class/backlight its backlights, each with its
+ * attributes.
  */
-static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino, uint8_t *dtype)
+static int synth_sys_fixed_dirent(int node, int key, int n, char *name, uint64_t *ino,
+                                  uint8_t *dtype)
 {
     static const struct {
         int node;
@@ -13819,7 +13853,14 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
                  {SYSFS_RTC_DEVICE, "power", SYSFS_RTC_POWER},
                  {SYSFS_ROOT, "block", SYSFS_BLOCK},
                  {SYSFS_ROOT, "dev", SYSFS_DEV},
-                 {SYSFS_DEV, "block", SYSFS_DEV_BLOCK}};
+                 {SYSFS_DEV, "block", SYSFS_DEV_BLOCK},
+                 {SYSFS_DEV, "char", SYSFS_DEV_CHAR},
+                 {SYSFS_ROOT, "kernel", SYSFS_KERNEL},
+                 {SYSFS_KERNEL, "debug", SYSFS_KERNEL_DEBUG},
+                 {SYSFS_CLASS, "drm", SYSFS_CLASS_DRM},
+                 {SYSFS_DEVICES, "platform", SYSFS_PLATFORM},
+                 {SYSFS_BUS, "platform", SYSFS_BUS_PLATFORM},
+                 {SYSFS_BUS_PLATFORM, "devices", SYSFS_PLATFORM_LINKS}};
     int i;
 
     for (i = 0; i < (int)(sizeof(fixed) / sizeof(fixed[0])); i++) {
@@ -13857,11 +13898,40 @@ static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino,
                            dtype);
     }
     if (node == SYSFS_RTC0 || node == SYSFS_RTC_POWER || node == SYSFS_POWER ||
-        node == SYSFS_MEMORY || node == SYSFS_MEMORY0) {
+        node == SYSFS_MEMORY || node == SYSFS_MEMORY0 || node == SYSFS_KERNEL ||
+        node == SYSFS_CLASS_DRM) {
         return synth_entry(sysfs_attr(node, n), sysfs_ino(node, 0, 1 + n), DT_REG, name, ino,
                            dtype);
     }
+    if (node >= SYSFS_REG) {
+        return 0;
+    }
     return synth_sys_bus_dirent(node, key, n, name, ino, dtype);
+}
+
+/**
+ * The `n`th entry of the /sys directory `node` of device `key`: first the
+ * entries drivers added below it (sysfs.h), in the order of their slots,
+ * then the fixed directory's own (`synth_sys_fixed_dirent`); a registered
+ * directory has only the first. Its name, inode and type, and 1, or 0 past
+ * the last.
+ */
+static int synth_sys_dirent(int node, int key, int n, char *name, uint64_t *ino, uint8_t *dtype)
+{
+    int anchor = node == SYSFS_REG ? key : sysfs_anchor_find(node, key);
+    int count = anchor > 0 ? sysfs_node_count(anchor) : 0;
+    int h, kind;
+
+    if (n < count) {
+        h = sysfs_node_nth(anchor, n);
+        kind = sysfs_node_kind(h);
+        return synth_entry(h > 0 ? sysfs_node_name(h) : NULL, sysfs_ino(SYSFS_REG, h, 0),
+                           kind == SYSFS_NODE_ATTR   ? DT_REG
+                           : kind == SYSFS_NODE_LINK ? DT_LNK
+                                                     : DT_DIR,
+                           name, ino, dtype);
+    }
+    return node == SYSFS_REG ? 0 : synth_sys_fixed_dirent(node, key, n - count, name, ino, dtype);
 }
 
 /**
