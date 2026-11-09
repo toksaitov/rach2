@@ -60,6 +60,12 @@
 #define LENOVO_FW_FB_GGTT   0x0u
 #define LENOVO_FW_FB_BYTES  0x408000u
 
+/* The panel's route as the firmware left it (firmware-dump.txt):
+ * TRANS_DDI_FUNC_CTL_EDP enabled on DDI A in DisplayPort SST from pipe A
+ * always on, and the eDP transcoder enabled and active. */
+#define LENOVO_FW_EDP_DDI_FUNC  0x82200000u
+#define LENOVO_FW_EDP_TRANSCONF 0xc0000010u
+
 /* The capability list: MSI at 0x90 (one 32-bit message, not maskable),
  * power management at 0xd0 (version 2, DSI) and Advanced Features at 0xa4
  * (transaction pending and FLR). */

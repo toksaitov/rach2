@@ -186,22 +186,27 @@ static const struct i915_model_block i915_model_base_fifo = {
 /* ---- the global GTT and the firmware's display ---- */
 
 /**
- * The GTT as the Lenovo's firmware leaves it: its framebuffer, in stolen
- * memory from its base, mapped from GTT offset 0, uncached, and pipe A's
- * primary plane scanning it out. Every other entry reads 0. The plane's
- * registers are the pipe block's (78-9) once it exists; until then the
- * register file holds them.
+ * The GTT as the Lenovo's firmware leaves it, as gfxtool dumped it
+ * (tests/fixtures/lenovo-gpu/firmware-dump.txt): the whole of stolen
+ * memory mapped in order from GTT offset 0, uncached, its first 0x408000
+ * bytes the framebuffer that pipe A's primary plane scans out, and every
+ * other entry all ones, where the dump has a stray bit clear here and
+ * there. The eDP transcoder drives the panel from pipe A always on. The
+ * display's registers are the pipe block's (78-9) once it exists; until
+ * then the register file holds them.
  */
 static void gtt_reset(struct i915_model *m, void *priv)
 {
-    uint32_t i;
+    uint32_t i, stolen = (LENOVO_STOLEN_END - LENOVO_STOLEN_BASE + 1u) / 4096u;
 
     (void)priv;
-    for (i = 0; i < LENOVO_FW_FB_BYTES / 4096u; i++) {
+    for (i = 0; i < (I915_MODEL_BAR0 - I915_GSM_OFFSET) / 4u; i++) {
         uint32_t addr = LENOVO_STOLEN_BASE + i * 4096u;
-        i915_model_poke(m, I915_GSM_OFFSET + (LENOVO_FW_FB_GGTT / 4096u + i) * 4u,
-                        HSW_GTT_ADDR_ENCODE(addr) | GEN6_PTE_VALID);
+        i915_model_poke(m, I915_GSM_OFFSET + i * 4u,
+                        i < stolen ? HSW_GTT_ADDR_ENCODE(addr) | GEN6_PTE_VALID : 0xffffffffu);
     }
+    i915_model_poke(m, TRANS_DDI_FUNC_CTL(I915_TRANS_EDP), LENOVO_FW_EDP_DDI_FUNC);
+    i915_model_poke(m, TRANSCONF(I915_TRANS_EDP), LENOVO_FW_EDP_TRANSCONF);
     i915_model_poke(m, DSPCNTR(I915_PIPE_A), DISP_ENABLE | DISP_FORMAT_BGRX888);
     i915_model_poke(m, DSPSURF(I915_PIPE_A), LENOVO_FW_FB_GGTT);
     i915_model_poke(m, DSPSTRIDE(I915_PIPE_A), LENOVO_FW_FB_STRIDE);
