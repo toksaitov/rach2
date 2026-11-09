@@ -31,6 +31,7 @@
 #include "synthfs.h"
 #include "tmpfs.h"
 #include "../ipc/mqueue.h"
+#include "debugfs.h"
 #include "../mm/filecache.h"
 #include "../io/inotify.h"
 
@@ -438,10 +439,43 @@ static const char *path_last(const char *path)
     return last;
 }
 
+static uint32_t path_below(const struct vfs_mount *m);
+
+/**
+ * The name a nameless mount is entered by from its parent's root directory:
+ * its recorded path below its parent's, such as "shm" for /dev/shm, or
+ * "kernel/debug", of more than one name, for /sys/kernel/debug inside /sys;
+ * the last component of its path when that is not below its parent's.
+ */
+static const char *mount_entry_name(const struct vfs_mount *m)
+{
+    uint32_t pl = path_below(m->parent);
+
+    if ((pl == 0 || path_under(m->covered_path, m->parent->covered_path, pl)) &&
+        m->covered_path[pl] == '/' && m->covered_path[pl + 1] != '\0') {
+        return m->covered_path + pl + 1;
+    }
+    return path_last(m->covered_path);
+}
+
+/** Whether a nameless mount's entry name has more than one name in it. */
+static int mount_deep(const struct vfs_mount *m)
+{
+    const char *c;
+
+    for (c = mount_entry_name(m); *c; c++) {
+        if (*c == '/') {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /** The active nameless mount, of those the caller's mount namespace sees,
  * entered by the name comp[0..len) from the root directory of `mnt`, as
  * /dev, /proc and /sys are from the root's and /dev/shm and /dev/mqueue
- * from /dev's; or NULL. */
+ * from /dev's, or by the names comp[0..len) when `len` spans several, as
+ * /sys/kernel/debug is from /sys's; or NULL. */
 static struct vfs_mount *mount_named_at(struct vfs_mount *mnt, const char *comp, uint32_t len)
 {
     int i;
@@ -454,7 +488,7 @@ static struct vfs_mount *mount_named_at(struct vfs_mount *mnt, const char *comp,
         if (!m || m->state != VFS_ACTIVE || m->parent != mnt || m->covered || !vfs_mount_seen(m)) {
             continue;
         }
-        name = path_last(m->covered_path);
+        name = mount_entry_name(m);
         for (n = 0; n < len && name[n] == comp[n]; n++) {
         }
         if (n == len && name[n] == '\0') {
@@ -480,10 +514,10 @@ int vfs_named_mount(const struct vfs_mount *parent, int n, const char **name, ui
         struct vfs_stat st;
 
         if (!m || m->state != VFS_ACTIVE || m->parent != parent || m->covered ||
-            !vfs_mount_seen(m) || n-- > 0) {
+            !vfs_mount_seen(m) || mount_deep(m) || n-- > 0) {
             continue;
         }
-        *name = path_last(m->covered_path);
+        *name = mount_entry_name(m);
         *ino = m->type->ops->getattr && m->type->ops->getattr(m, m->root, &st) == 0 ? st.ino : 0;
         return 1;
     }
@@ -989,6 +1023,60 @@ static void walk_name_text(struct walk_name *wn, const char *p, const char *end)
     }
 }
 
+/**
+ * Prepare `..` at the root of the nameless mount `m`, which the walk takes
+ * to its parent's root directory: for a mount entered by more than one
+ * name, as /sys/kernel/debug is from /sys, put the names before its last in
+ * front of the rest of the path at `*p`, in the path page `*linkpath`, as a
+ * link's target goes, so that the parent's type takes them from there. The
+ * record `wn` drops a name for each name the mount is entered by, since the
+ * walk records those it takes again. 0, -ENOMEM or -ENAMETOOLONG.
+ */
+static int nameless_up(const struct vfs_mount *m, struct walk_name *wn, const char **p,
+                       const char **last_comp, char **linkpath, char **target)
+{
+    const char *entry = mount_entry_name(m);
+    uint32_t up = (uint32_t)k_strlen(entry);
+    const char *c;
+    int rc;
+
+    while (up > 0 && entry[up - 1] != '/') {
+        up--;
+    }
+    walk_name_add(wn, "..", 2);
+    if (up == 0) {
+        return 0;
+    }
+    for (c = entry; c < entry + up; c++) {
+        if (*c == '/') {
+            walk_name_add(wn, "..", 2);
+        }
+    }
+    if (walk_pages(linkpath, target) != 0) {
+        return -ENOMEM;
+    }
+    k_memcpy(*target, entry, up - 1);
+    rc = walk_splice(*linkpath, *target, (int)(up - 1), *p);
+    if (rc < 0) {
+        return rc;
+    }
+    *p = *linkpath;
+    if (*last_comp) {
+        *last_comp = walk_last_comp(*linkpath);
+    }
+    return 0;
+}
+
+/** Move the walk at `cur` onto the root of the mount `m`, and on through
+ * the mounts made over that root (`walk_cross`). 0, or `walk_move`'s
+ * error. */
+static int walk_enter(struct vfs_ref *cur, struct vfs_mount *m, int locked)
+{
+    int rc = walk_move(cur, m, m->root, locked);
+
+    return rc == 0 ? walk_cross(cur, locked) : rc;
+}
+
 /** End the record `wn` of a walk that succeeded: its path, "/" for the root,
  * or an empty string when nothing was recorded. */
 static void walk_name_end(struct walk_name *wn)
@@ -1232,6 +1320,15 @@ begin:
                 p = left;
                 continue;
             }
+            if (rc == VFS_ENTER) {
+                walk_name_text(&name, from, left);
+                p = left;
+                rc = walk_enter(&cur, found, locked);
+                if (rc != 0) {
+                    goto out_err;
+                }
+                continue;
+            }
             if (rc < 0) {
                 goto out_err;
             }
@@ -1315,8 +1412,8 @@ begin:
                 continue;
             }
             if (cur.node == cur.mnt->root) {
-                walk_name_add(&name, comp, len);
-                rc = walk_move(&cur, cur.mnt->parent, cur.mnt->parent->root, locked);
+                rc = nameless_up(cur.mnt, &name, &p, &last_comp, &linkpath, &target);
+                rc = rc == 0 ? walk_move(&cur, cur.mnt->parent, cur.mnt->parent->root, locked) : rc;
                 if (rc != 0) {
                     goto out_err;
                 }
@@ -1327,10 +1424,7 @@ begin:
         m = mount_named(cur.mnt, cur.node, comp);
         if (m) {
             walk_name_add(&name, comp, len);
-            rc = walk_move(&cur, m, m->root, locked);
-            if (rc == 0) {
-                rc = walk_cross(&cur, locked);
-            }
+            rc = walk_enter(&cur, m, locked);
             if (rc != 0) {
                 goto out_err;
             }
@@ -2684,6 +2778,26 @@ static int synth_object_link(const struct vpath *vp)
            vp->kind == VNODE_PROC_ROOT;
 }
 
+/** The length of the first `out` bytes of `path` without their last name
+ * and the slash before it: what `..` leaves of a path resolved as text. */
+static uint32_t text_parent(const char *path, uint32_t out)
+{
+    while (out > 0 && path[out - 1] != '/') {
+        out--;
+    }
+    return out > 0 ? out - 1 : 0;
+}
+
+/** The nameless mount entered from the root directory of `mnt` by the
+ * names text[0..len), when they are more than one, as /sys/kernel/debug is
+ * by kernel/debug from /sys's; or NULL. */
+static struct vfs_mount *mount_deep_at(struct vfs_mount *mnt, const char *text, uint32_t len)
+{
+    struct vfs_mount *m = mount_named_at(mnt, text, len);
+
+    return m && mount_deep(m) ? m : 0;
+}
+
 /**
  * Whether the part of a path classified so far, the `out` bytes of `full`,
  * names a link the walk follows to its object (`synth_object_link`) and more
@@ -2715,7 +2829,9 @@ static int synth_link_part(char *full, uint32_t out, const char *p, const char *
  * classified by string. A `..` that would climb above the mount root returns
  * VFS_CLIMB with `*left` at that `..`, which the walk takes at the mount
  * root. A name at the mount root that a nameless mount is entered by, as
- * `shm` in /dev after `pts/..`, returns VFS_ROOT with `*left` at that name.
+ * `shm` in /dev after `pts/..`, returns VFS_ROOT with `*left` at that name;
+ * the names of one entered by more than one, as `kernel/debug` in /sys,
+ * return VFS_ENTER with that mount in `*node` and `*left` past them.
  * A part that names a link the walk follows to its object and has more of
  * the rest after it returns VFS_LINK (`synth_link_part`), with a new node of
  * the link held and `*left` after its name, so that a `..` after the link
@@ -2731,6 +2847,7 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
 {
     char full[256];
     struct vpath vp;
+    struct vfs_mount *deep;
     uint32_t plen = (uint32_t)k_strlen(prefix);
     uint32_t out;
     const char *p = rest;
@@ -2767,12 +2884,7 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
                 *left = comp;
                 return VFS_CLIMB;
             }
-            while (out > 0 && full[out - 1] != '/') {
-                out--;
-            }
-            if (out > 0) {
-                out--;
-            }
+            out = text_parent(full, out);
             continue;
         }
         if (out + 1 + len + 1 > sizeof(full)) {
@@ -2781,6 +2893,12 @@ static int synth_rest(struct vfs_mount *mnt, const char *prefix, const char *res
         full[out++] = '/';
         k_memcpy(full + out, comp, len);
         out += len;
+        deep = mount_deep_at(mnt, full + plen + 1, out - plen - 1);
+        if (deep) {
+            *node = deep;
+            *left = p;
+            return VFS_ENTER;
+        }
         kind = synth_link_part(full, out, p, end, node);
         if (kind != 0) {
             *left = p;
@@ -3207,6 +3325,7 @@ static int sysfs_mount(struct vfs_mount *mnt, block_device_t *dev, uint32_t flag
 const struct vfs_type vfs_devfs_type = {"devfs", devfs_mount, &devfs_vops, 0, 1, 0, 0};
 const struct vfs_type vfs_procfs_type = {"proc", procfs_mount, &procfs_vops, 0, 1, 0, 0};
 const struct vfs_type vfs_sysfs_type = {"sysfs", sysfs_mount, &sysfs_vops, 0, 1, 0, 0};
+const struct vfs_type vfs_debugfs_type = {"debugfs", debugfs_mount, &debugfs_vops, 0, 1, 0, 0};
 
 const struct vpath *vfs_synth_vpath(struct vfs_mount *mnt, void *node)
 {
@@ -3291,9 +3410,10 @@ static void install(int idx, const struct vfs_type *type, const char *path,
  * 0555, stays empty, since its files have no names; chroot to a
  * /proc/PID/fdinfo makes that root the process's root. Then /sys,
  * read-only, nosuid, nodev and noexec, entered by name as /dev and /proc
- * are, and last the mqueue file system at /dev/mqueue, which lists the
- * first IPC namespace's POSIX queues and is entered by its name in /dev as
- * /dev/shm is.
+ * are, the mqueue file system at /dev/mqueue, which lists the first IPC
+ * namespace's POSIX queues and is entered by its name in /dev as /dev/shm
+ * is, and last debugfs, nosuid, nodev and noexec, entered from /sys's root
+ * directory by the names kernel/debug, where Linux systems mount it.
  */
 static void install_permanent(void)
 {
@@ -3310,6 +3430,9 @@ static void install_permanent(void)
     install(6, &vfs_mqueue_type, "/dev/mqueue", mounts[1], 0);
     mounts[6]->flags = VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC;
     k_strncpy(mounts[6]->source, "mqueue", sizeof(mounts[6]->source));
+    install(7, &vfs_debugfs_type, "/sys/kernel/debug", mounts[5], 0);
+    mounts[7]->flags = VFS_MS_NOSUID | VFS_MS_NODEV | VFS_MS_NOEXEC;
+    k_strncpy(mounts[7]->source, "debugfs", sizeof(mounts[7]->source));
 }
 
 struct vfs_mount *vfs_memfd_mount(void)
@@ -3437,13 +3560,9 @@ int vfs_root_over_image(const struct vfs_type *type, struct block_device *dev, c
  * them. The root's adapter and the synthetic types are not here:
  * `vfs_do_mount` takes the name "proc" itself, and nothing mounts the
  * others by name. */
-static const struct vfs_type *const mount_types[] = {&vfs_vfat_type,
-                                                     &vfs_exfat_type,
-                                                     &vfs_ext2_type,
-                                                     &vfs_krffs_volume_type,
-                                                     &vfs_tmpfs_type,
-                                                     &vfs_mqueue_type,
-                                                     0};
+static const struct vfs_type *const mount_types[] = {
+    &vfs_vfat_type,  &vfs_exfat_type,  &vfs_ext2_type,    &vfs_krffs_volume_type,
+    &vfs_tmpfs_type, &vfs_mqueue_type, &vfs_debugfs_type, 0};
 
 /* The entries of `mount_types`, its terminator apart, counted from the table
  * so that a type added to it is found with no number to change. */

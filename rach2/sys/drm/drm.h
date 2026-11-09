@@ -322,6 +322,12 @@ int32_t udmabuf_start(void);
 /** Give the descriptor `e`, just opened on debugfs's sync/sw_sync, a new
  * software timeline: 0 or -errno. */
 int32_t sw_sync_open(fd_entry_t *e);
+/** Write debugfs's sync/info into `cap` bytes at `buf`, NUL-terminated and
+ * cut to fit, as Linux 6.12 writes it: each live software timeline by its
+ * opener's command and value, with its points not yet reached, then the
+ * `fences:` header, with nothing under it, as on Linux. Returns the length
+ * of the whole text; a NULL `buf` measures it. Under the big kernel lock. */
+uint32_t sw_sync_info(char *buf, uint32_t cap);
 
 /* ------------------------------------------------------------------------
  * Buffer objects: GEM, in drm_gem.c (76-4a)
