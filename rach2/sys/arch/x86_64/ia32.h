@@ -69,30 +69,22 @@ long compat_sys_rt_sigtimedwait_time64(isr_params_t *params);
 long compat_sys_pidfd_send_signal(isr_params_t *params);
 
 /* ia32_fs.c */
-long compat_sys_open(isr_params_t *params);
 long compat_sys_stat(isr_params_t *params);
-long compat_sys_lseek(isr_params_t *params);
 long compat_sys_fstat(isr_params_t *params);
 long compat_sys_fcntl64(isr_params_t *params);
 long compat_sys_ustat(isr_params_t *params);
 long compat_sys_old_select(isr_params_t *params);
 long compat_sys_lstat(isr_params_t *params);
 long compat_sys_old_readdir(isr_params_t *params);
-long compat_sys_truncate(isr_params_t *params);
-long compat_sys_ftruncate(isr_params_t *params);
 long compat_sys_statfs(isr_params_t *params);
 long compat_sys_fstatfs(isr_params_t *params);
 long compat_sys_newstat(isr_params_t *params);
 long compat_sys_newlstat(isr_params_t *params);
 long compat_sys_newfstat(isr_params_t *params);
-long compat_sys_llseek(isr_params_t *params);
 long compat_sys_getdents(isr_params_t *params);
 long compat_sys_select(isr_params_t *params);
-long compat_sys_readv(isr_params_t *params);
-long compat_sys_writev(isr_params_t *params);
 long compat_sys_ia32_pread64(isr_params_t *params);
 long compat_sys_ia32_pwrite64(isr_params_t *params);
-long compat_sys_sendfile(isr_params_t *params);
 long compat_sys_ia32_truncate64(isr_params_t *params);
 long compat_sys_ia32_ftruncate64(isr_params_t *params);
 long compat_sys_ia32_stat64(isr_params_t *params);
@@ -106,7 +98,6 @@ long compat_sys_ia32_fadvise64(isr_params_t *params);
 long compat_sys_statfs64(isr_params_t *params);
 long compat_sys_fstatfs64(isr_params_t *params);
 long compat_sys_ia32_fadvise64_64(isr_params_t *params);
-long compat_sys_openat(isr_params_t *params);
 long compat_sys_ia32_fstatat64(isr_params_t *params);
 long compat_sys_pselect6_time32(isr_params_t *params);
 long compat_sys_ppoll_time32(isr_params_t *params);
@@ -126,13 +117,11 @@ long compat_sys_epoll_pwait2(isr_params_t *params);
 
 /* ia32_time.c */
 long compat_sys_time32(isr_params_t *params);
-long compat_sys_stime32(isr_params_t *params);
 long compat_sys_utime32(isr_params_t *params);
 long compat_sys_gettimeofday(isr_params_t *params);
 long compat_sys_settimeofday(isr_params_t *params);
 long compat_sys_setitimer(isr_params_t *params);
 long compat_sys_getitimer(isr_params_t *params);
-long compat_sys_adjtimex_time32(isr_params_t *params);
 long compat_sys_nanosleep_time32(isr_params_t *params);
 long compat_sys_timer_create(isr_params_t *params);
 long compat_sys_timer_settime32(isr_params_t *params);
@@ -146,7 +135,10 @@ long compat_sys_futimesat_time32(isr_params_t *params);
 long compat_sys_utimensat_time32(isr_params_t *params);
 long compat_sys_timerfd_settime32(isr_params_t *params);
 long compat_sys_timerfd_gettime32(isr_params_t *params);
-long compat_sys_clock_adjtime32(isr_params_t *params);
+long compat_sys_clock_settime64(isr_params_t *params);
+long compat_sys_clock_nanosleep_time64(isr_params_t *params);
+long compat_sys_timer_settime64(isr_params_t *params);
+long compat_sys_timerfd_settime64(isr_params_t *params);
 
 /* ia32_ioctl.c */
 long compat_sys_ioctl(isr_params_t *params);
@@ -218,6 +210,24 @@ long compat_sys_set_robust_list(isr_params_t *params);
 long compat_sys_get_robust_list(isr_params_t *params);
 long compat_sys_arch_prctl(isr_params_t *params);
 /* The parts of the i386 ABI that are not rows of the table. */
+
+/**
+ * Run the x86-64 handler `fn` for the i386 call of `params`, with the
+ * arguments `a0` to `a5` as whole 64-bit registers in a copy of the frame
+ * that is not marked SC_COMPAT, and with the `winlen` bytes of kernel memory
+ * at `win`, when it is not NULL, open to its user-copy checks for the call
+ * (`user_window_open`), so that a structure converted there may be passed by
+ * its address. Returns the handler's result (ia32_fs.c).
+ */
+long ia32_native(const isr_params_t *params, syscall_fn_t fn, void *win, uint32_t winlen,
+                 unsigned long a0, unsigned long a1, unsigned long a2, unsigned long a3,
+                 unsigned long a4, unsigned long a5);
+
+/** Read the i386 timespec, or the 64-bit one of the _time64 calls with the
+ * high word of its nanoseconds dropped, at `u` into the seconds and
+ * nanoseconds `ts`; 0 or -EFAULT (ia32_fs.c). */
+int ia32_get_timespec(uintptr_t u, long ts[2]);
+int ia32_get_timespec64(uintptr_t u, long ts[2]);
 
 /** The ioctl translations of the DRM core and of the GPU drivers, for the
  * compat ioctl path: each answers the call `cmd` on `fd` with `arg`, or

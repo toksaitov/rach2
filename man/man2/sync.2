@@ -1,4 +1,4 @@
-.Dd September 27, 2026
+.Dd November 10, 2026
 .Dt SYNC 2
 .Os
 .Sh NAME
@@ -101,6 +101,27 @@ and 148 for
 The descriptor is passed in EBX.
 On x86-64 the numbers are 162, 306, 74 and 75, and the descriptor is
 passed in RDI.
+.Pp
+The x86-64 kernel also runs, for a program that enters it by
+.Ql int $0x80 ,
+which
+.Xr ia32 7
+describes, i386's
+.Nm sync_file_range
+(314), which takes the descriptor, the offset and the length in two
+words each, low word first, and the flags.
+As on Linux, an unknown flag, a negative offset or length or a range past
+the largest offset is
+.Er EINVAL ,
+a descriptor not open is
+.Er EBADF
+and a pipe or socket
+.Er ESPIPE .
+With
+.Dv SYNC_FILE_RANGE_WRITE
+it writes out the whole file's data, as
+.Fn fdatasync
+does, which covers the range.
 .Sh RETURN VALUES
 .Fn sync
 has no return value; its kernel call always returns 0.

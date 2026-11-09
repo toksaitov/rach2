@@ -776,3 +776,16 @@ signal 2 sigaction
 sgetmask 2 sigaction
 ssetmask 2 sigaction
 rt_sigtimedwait_time64 2 sigaction
+oldstat 2 stat
+oldfstat 2 stat
+oldlstat 2 stat
+getdents 2 getdents64
+readdir 2 getdents64
+preadv2 2 read
+pwritev2 2 write
+sync_file_range 2 sync
+utime 2 gettimeofday
+utimes 2 gettimeofday
+futimesat 2 gettimeofday
+pselect6_time64 2 select
+ppoll_time64 2 poll

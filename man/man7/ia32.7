@@ -61,27 +61,63 @@ A call interrupted by a signal is restarted by executing the
 again, as on i686.
 .Pp
 The table has a row for each of Linux 6.12's i386 numbers, 452 of them.
-188 rows run the x86-64 handler of a call whose arguments and structures
+204 rows run the x86-64 handler of a call whose arguments and structures
 have one layout in both interfaces, such as
 .Xr getpid 2 ,
 .Xr kill 2
 and
-.Xr close 2 ;
-168 run a compat handler, written for a call whose structures differ:
-those of
+.Xr close 2 ,
+or whose handler reads the i386 layout itself, such as
+.Xr readv 2
+and
+.Xr adjtimex 2 ;
+88 run a compat handler, which turns the i386 structures and the 64-bit
+arguments i386 splits over two registers, low word first, into the x86-64
+handler's and its results back, as Linux's compat calls do, or, for
 .Xr execve 2 ,
 .Fn execveat ,
 .Xr clone 2 ,
 the old
 .Xr mmap 2
 and
-.Fn mmap2
-translate their calls, and the others return
+.Fn mmap2 ,
+does the i386 call's own work;
+71 run a compat handler that returns
 .Er ENOSYS
-until their translation is written; 96 are empty, where Linux has no call
+until its translation is written; 89 are empty, where Linux has no call
 or this kernel has no handler, and return
 .Er ENOSYS ,
 as does a number with no row.
+.Pp
+The translated calls are the stat and statfs families, the calls with
+split offsets, lengths and advice such as
+.Nm pread64 ,
+.Nm ftruncate64 ,
+.Nm fallocate
+and
+.Nm sync_file_range ,
+.Nm getdents ,
+.Nm readdir
+and the locks of
+.Nm fcntl64 ,
+the vectored reads and writes,
+.Nm select
+and
+.Nm poll
+in their forms, and the time calls with both the 32-bit and the 64-bit
+timespec.
+A value too wide for its i386 field is
+.Er EOVERFLOW
+where Linux's compat call answers so.
+A sleep,
+.Nm select
+or
+.Nm poll
+that a handled signal interrupts returns
+.Er EINTR ,
+even under
+.Dv SA_RESTART ,
+as its x86-64 form and Linux's do.
 .Xr set_thread_area 2
 and
 .Xr get_thread_area 2

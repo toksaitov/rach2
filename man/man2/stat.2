@@ -1,4 +1,4 @@
-.Dd October 2, 2026
+.Dd November 10, 2026
 .Dt STAT 2
 .Os
 .Sh NAME
@@ -466,6 +466,35 @@ long          unused[3];
 .Ed
 .Pp
 x86-64 has no narrower structure and no 64-suffixed calls.
+.Pp
+The x86-64 kernel runs the i386 calls for a program that enters it by
+.Ql int $0x80 ,
+which
+.Xr ia32 7
+describes, and three more:
+.Nm oldstat
+(18),
+.Nm oldfstat
+(28) and
+.Nm oldlstat
+(84), which fill the 32-byte
+.Vt __old_kernel_stat
+of 16-bit device and inode numbers, mode, link count and ids and times in
+whole seconds; and
+.Nm fstat
+(108).
+.Nm stat , lstat
+and
+.Nm fstat
+fill the 64-byte i386
+.Vt struct stat
+of a 32-bit device, inode number and size and a 16-bit mode, link count
+and ids, and the 64-suffixed calls the 96-byte structure above.
+As on Linux, an inode number, link count or, for
+.Nm stat ,
+size too wide for its field is
+.Er EOVERFLOW ,
+an id too wide reads as 65534, and the old calls cut the size to 32 bits.
 .Sh RETURN VALUES
 These functions return 0 on success.
 On failure they return -1 and set

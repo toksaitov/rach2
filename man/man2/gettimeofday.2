@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 10, 2026
 .Dt GETTIMEOFDAY 2
 .Os
 .Sh NAME
@@ -340,6 +340,22 @@ GNU libc tries it first for every
 and
 .Fn futimens ;
 musl makes it only for a time whose seconds do not fit in 32 bits.
+.Pp
+The x86-64 kernel also runs, for a program that enters it by
+.Ql int $0x80 ,
+which
+.Xr ia32 7
+describes, i386's
+.Nm utime
+(30), which takes a path and a pointer to two 32-bit seconds, the access
+and the modification time;
+.Nm utimes
+(271), which takes a path and two timevals of 32-bit fields; and
+.Nm futimesat
+(299), which takes a directory descriptor before them.
+A null pointer sets both times to the current time, and a microsecond
+count outside 0 to 999999 is
+.Er EINVAL .
 musl implements
 .Fn gettimeofday
 through
