@@ -2749,7 +2749,7 @@ static int syscall_restartable(syscall_fn_t fn, const isr_params_t *params)
         return sysv_ipc_restartable(params);
     }
 #if defined(IA32_SYSCALL_TABLE_SIZE)
-    if (ia32_never_restarts(fn)) {
+    if (ia32_never_restarts(fn, params)) {
         return 0;
     }
 #endif

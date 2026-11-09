@@ -367,9 +367,13 @@ struct process {
     struct tgroup *tg;
     uint32_t tgid;
     /* The robust futex list set_robust_list names, walked at the thread's
-     * end, and its length; 0 for none. */
+     * end, and its length; 0 for none. `compat_robust_list` is the list an
+     * i386 call names on x86-64, of 32-bit entries, which Linux keeps beside
+     * the native one, so that a thread running both kinds of code has
+     * both; 0 for none, and on i686 always. */
     uintptr_t robust_list;
     uint32_t robust_len;
+    uintptr_t compat_robust_list;
     /* rseq(2) (rseq.c): the address of the area the thread registered, 0
      * for none, its length and its signature; the events that abort a
      * critical section, RSEQ_EVENT_ bits, set since a return to user mode
