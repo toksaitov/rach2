@@ -921,7 +921,7 @@ static struct virtio_gpu_output *crtc_output(struct drm_crtc *crtc)
  * shows a framebuffer brings its CRTC into the commit and lies within it
  * unscaled, the primary plane covering it, the cursor anywhere.
  */
-static int32_t plane_check(struct drm_plane *plane, struct drm_atomic_state *state)
+static int32_t vgpu_plane_check(struct drm_plane *plane, struct drm_atomic_state *state)
 {
     struct drm_plane_state *ps = drm_atomic_get_new_plane_state(state, plane);
     struct drm_crtc_state *cs;
@@ -1094,8 +1094,8 @@ static void crtc_disable(struct drm_crtc *crtc, struct drm_atomic_state *state)
     vgpu_set_scanout(o->vg, o->index, 0, rect_of(0, 0, 0, 0));
 }
 
-static const struct drm_plane_funcs primary_funcs = {plane_check, primary_update, NULL};
-static const struct drm_plane_funcs cursor_funcs = {plane_check, cursor_update, NULL};
+static const struct drm_plane_funcs primary_funcs = {vgpu_plane_check, primary_update, NULL};
+static const struct drm_plane_funcs cursor_funcs = {vgpu_plane_check, cursor_update, NULL};
 static const struct drm_crtc_funcs crtc_funcs = {NULL, NULL, crtc_disable, NULL, NULL, NULL,
                                                  NULL, NULL, NULL,         NULL, NULL};
 
@@ -1664,13 +1664,16 @@ static void vgpu_kill(struct virtio_gpu_device *vg)
     vgpu_reap(vg);
 }
 
-/** The core's unplug, after the nodes have gone: the device is stopped
- * (`vgpu_kill`). The record stays until the last reference. */
+/** The core's unplug, after the nodes have gone, Linux's virtio_gpu_remove:
+ * the display is turned off, which lets go of the framebuffers it shows,
+ * and the device stopped (`vgpu_kill`). The record stays until the last
+ * reference. */
 static void vgpu_unplug(struct drm_device *dev)
 {
     struct virtio_gpu_device *vg = to_vg(dev);
 
     devices_remove(vg);
+    (void)drm_atomic_helper_shutdown(dev);
     vgpu_kill(vg);
 }
 
