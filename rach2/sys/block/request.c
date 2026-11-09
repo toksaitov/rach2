@@ -46,6 +46,7 @@
 #include "../panic.h"
 #include "../timer.h"
 #include "../proc/process.h"
+#include "../proc/sched.h"
 #include "../proc/wait_queue.h"
 
 /* Policy: how many requests may be live at once unless `rach2.blockpool`
@@ -538,6 +539,20 @@ int block_request_flags(block_device_t *device, int write, uint64_t lba, uint32_
 }
 
 /**
+ * Whether a caller outside a system call may still call a device that sleeps
+ * its caller (`BLOCK_CALLER_SYNC`): only the boot, before the scheduler is
+ * on, when no other context runs, so that nothing the device's chain waits
+ * for can be held by another and nothing in it sleeps. It reaches the device
+ * below by the same rules as any caller that cannot sleep. That is how the
+ * boot mounts a root from an image file and loads /sbin/init from it
+ * (`rach2.rootimage=`).
+ */
+static int caller_sync_in_place(void)
+{
+    return !sched_is_enabled();
+}
+
+/**
  * The transfer of a device that sleeps its caller and answers in the same
  * call, `BLOCK_CALLER_SYNC`, which is called directly and takes no request.
  * On a `BLOCK_WRITE_THROUGH` one, a write without `BLOCK_REQ_NOFLUSH` is
@@ -549,9 +564,12 @@ static int transfer_caller_sync(block_device_t *device, int write, uint64_t lba,
     int rc;
 
     if (!kirq_enabled() || !current_proc || !current_proc->in_syscall) {
-        k_panic("block: a sleeping device was reached outside syscall context");
+        if (!caller_sync_in_place()) {
+            k_panic("block: a sleeping device was reached outside syscall context");
+        }
+    } else {
+        current_proc->disk_waits++; /* the device sleeps the caller in the call */
     }
-    current_proc->disk_waits++; /* the device sleeps the caller in the call */
     if (!write) {
         return device->read ? device->read(device, lba, count, buffer) : -EIO;
     }
@@ -652,7 +670,8 @@ int block_flush(block_device_t *device)
         return 0; /* every write it answered was flushed before the answer */
     }
     if (!kirq_enabled() || !current_proc || !current_proc->in_syscall) {
-        if (block_flags(device) & BLOCK_POLLABLE) {
+        if ((block_flags(device) & BLOCK_POLLABLE) ||
+            ((device->flags & BLOCK_CALLER_SYNC) && caller_sync_in_place())) {
             return device->flush(device, 0);
         }
         k_panic("block: a sleeping device was reached outside syscall context");
