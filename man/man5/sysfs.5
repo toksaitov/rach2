@@ -179,8 +179,12 @@ which takes a write of
 .Ql on ,
 .Ql on-digital
 or
-.Ql off
-to force it, followed by a hotplug event;
+.Ql off ,
+with one newline at most, to force it; when the force changes, or the write
+is
+.Ql detect ,
+the connector is probed again at once, and when the force changes a
+hotplug event follows;
 .Pa enabled ,
 .Ql enabled
 while an encoder drives it;

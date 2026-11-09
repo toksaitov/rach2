@@ -22,9 +22,16 @@ an open, a
 .Xr stat 2
 or a listing of anything below it by any other user fails with
 .Er EACCES .
-A directory is root's with mode 0755 and a file root's with the mode its
-subsystem gives it; a file's size is 0, whatever it reads.
-The times of a file or a directory are those of its making.
+A directory is root's with mode 0755, a file root's with the mode its
+subsystem gives it, and a symbolic link root's with mode 0777.
+A file's size is 0, whatever it reads, until a truncation, which
+.Xr open 2
+with
+.Dv O_TRUNC
+makes, sets the size that
+.Xr stat 2
+reports and nothing else, as on Linux.
+The times of a node are those of its making.
 .Pa /sys/kernel/debug
 is a mount of its own, with a device number of its own, and its
 .Pa ..
@@ -34,11 +41,25 @@ is
 reports
 .Dv DEBUGFS_MAGIC ,
 0x64626720.
-Nothing makes, removes, renames or changes a file or a directory there;
+Nothing else makes, removes, renames or changes a node there;
 those calls fail with
 .Er EROFS
 or
 .Er EPERM .
+.Pp
+Most files are text, as Linux's seq files are: a read from offset 0 makes
+the text anew, and later reads give the rest of it from the description's
+offset, which
+.Xr lseek 2
+moves by
+.Dv SEEK_SET
+and
+.Dv SEEK_CUR ;
+.Dv SEEK_END
+fails with
+.Er EINVAL .
+A write to a text file that takes none fails with
+.Er EINVAL .
 .Pp
 .Xr mount 2
 places another debugfs mount, which shows the same files; its options
@@ -80,11 +101,132 @@ NAME: VALUE
 fences:
 --------------
 .Ed
-.Pp
-The text is made at the open; a read gives it from the description's
-offset, which
-.Xr lseek 2
-moves.
+.It Pa dri
+The display devices' files, one directory for each device registered with
+the DRM core, as Linux 6.12 makes them.
+.It Pa dri/DEVICE
+The directory of one device, named as Linux names it: by its PCI function,
+such as
+.Pa 0000:00:02.0 ,
+or by its platform device, such as
+.Pa simple-framebuffer.0
+or
+.Pa vkms .
+.It Pa dri/N , dri/M
+Symbolic links to the device's directory, by the minor number of its card
+node
+.Pa /dev/dri/cardN
+and, for a device with a render node, of
+.Pa /dev/dri/renderDM ,
+M = 128 + N, by which IGT finds the device of a descriptor.
+.It Pa dri/DEVICE/name
+Mode 0444.
+The driver's name, the device's,
+the bus name of the master once its
+.Dv DRM_IOCTL_SET_VERSION
+of interface 1.1 or later gave it,
+and the device's name again:
+.Bd -literal -offset indent
+bochs-drm dev=0000:00:02.0 master=pci:0000:00:02.0 unique=0000:00:02.0
+.Ed
+.It Pa dri/DEVICE/clients
+Mode 0444.
+A header, then a line for each open file of the device's nodes, the oldest
+first: the command and thread group of the process that last used it, or
+.Ql <unknown> ,
+the node's minor number,
+.Ql y
+or
+.Ql n
+for whether it is the master and whether it is authenticated, the
+process's effective uid, and its magic:
+.Bd -literal -offset indent
+             command  tgid dev master a   uid      magic
+              weston   312   0   y    y     0          0
+.Ed
+.It Pa dri/DEVICE/gem_names
+Mode 0444, for a device with GEM.
+Each buffer object with a flink name, by name, with its size in bytes,
+the handles to it and its references.
+.It Pa dri/DEVICE/framebuffer
+Mode 0444, for a device with mode setting.
+Each framebuffer, the newest first, as Linux's
+.Fn drm_framebuffer_print_info
+writes it: the command of its maker, its references, its format as a
+fourcc, its modifier, its size, and each plane's size, pitch, offset and
+buffer object.
+.It Pa dri/DEVICE/state
+Mode 0444, for a device with atomic mode setting.
+The state of each plane, then of each CRTC, then of each connector, as
+Linux's
+.Fn drm_state_dump
+writes them.
+.It Pa dri/DEVICE/crtc-N/crc/control
+Mode 0644.
+A write names the source of the CRTC's CRCs for the next open of
+.Pa crc/data ;
+.Er EINVAL
+for a source the driver does not have,
+.Er E2BIG
+past 4095 bytes, and
+.Er EBUSY
+while
+.Pa crc/data
+is open.
+A read gives each source the driver lists and takes, a line each, the
+chosen one followed by
+.Ql * ;
+nothing for a driver that lists none.
+.It Pa dri/DEVICE/crtc-N/crc/data
+Mode 0444.
+The open starts the source, and fails with
+.Er EINVAL
+on a CRTC without CRCs,
+.Er EIO
+while the CRTC is off, and
+.Er EBUSY
+while another open has it; the last close stops it.
+Each read waits for a frame, or fails with
+.Er EAGAIN
+under
+.Dv O_NONBLOCK ,
+and gives one line of it, ended by a newline and a NUL: the frame number as
+.Ql 0x%08x ,
+or ten
+.Ql X
+for a source without one, and each value as
+.Ql \ 0x%08x .
+A buffer too short for the line fails with
+.Er EINVAL .
+.Xr poll 2
+reports
+.Dv POLLIN
+while a line waits.
+.It Pa dri/DEVICE/encoder-N/bridges
+Mode 0444.
+The bridges of the encoder's chain, which no driver has; empty.
+.It Pa dri/DEVICE/CONNECTOR/force
+Mode 0644, for each connector, by its name, such as
+.Pa Virtual-1 .
+Reads
+.Ql unspecified ,
+.Ql off ,
+.Ql on
+or
+.Ql digital ;
+a write of one of the four words, with a newline at most after it, sets
+what the next probe of the connector reports, the first by detection;
+anything else, or more than 11 bytes, fails with
+.Er EINVAL .
+.It Pa dri/DEVICE/CONNECTOR/edid_override
+Mode 0644.
+A write of an EDID, of the blocks its base block names, stands in for the
+sink's from the next probe on, and a write of
+.Ql reset
+drops it;
+.Er EINVAL
+for bytes that are not a valid EDID.
+A read gives the override's bytes, or nothing.
 .El
 .Sh EXAMPLES
 As root:
@@ -96,10 +238,15 @@ objs:
 --------------
 fences:
 --------------
+# cat /sys/kernel/debug/dri/0/name
+bochs-drm dev=0000:00:02.0 unique=0000:00:02.0
+# echo off > /sys/kernel/debug/dri/0/Virtual-1/force
 .Ed
 .Sh SEE ALSO
 .Xr mount 2 ,
+.Xr drm 4 ,
 .Xr proc 5 ,
 .Xr sysfs 5 ,
 .Xr dma-buf 7 ,
+.Xr drm-kms 7 ,
 .Xr mount 8
