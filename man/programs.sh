@@ -391,7 +391,7 @@ BEGIN {
 
     print "## The GNU system"
     print ""
-    print "The [GNU layer](../vendor/gnu/Readme.md) builds a cross toolchain with glibc, the ports below, binutils, GCC and GDB to run on Rach2, the SpiderMonkey shell, and Debian'"'"'s chromium-headless-shell, and installs them over the musl system in the os-real-gnu root, an ext2 image. The path finds a port'"'"'s program before a program of the musl system of the same name, and the ports'"'"' pages are on the machine but not in this repository; [the layer'"'"'s Readme](../vendor/gnu/Readme.md#on-the-machine) has the details."
+    print "The [GNU layer](../vendor/gnu/Readme.md) builds a cross toolchain with glibc, the ports below, binutils, GCC and GDB to run on Rach2, the SpiderMonkey shell, and Debian'"'"'s desktop packages, and installs them over the musl system in the os-real-gnu root, an ext2 image. The path finds a port'"'"'s program before a program of the musl system of the same name, and the ports'"'"' pages are on the machine but not in this repository; [the layer'"'"'s Readme](../vendor/gnu/Readme.md#on-the-machine) has the details."
     print ""
     print "### The root over os-real"
     print ""
@@ -424,6 +424,21 @@ BEGIN {
         print ""
     }
 
+    print "### Desktop packages"
+    print ""
+    print "The pinned [Debian desktop layer](../vendor/gnu/debian/Readme.md) stages these commands on both architectures. Mesa also supplies architecture-qualified names beside its canonical commands. The original Debian pages are rendered on the machine; the project pages below retain their text or document the tool family."
+    print ""
+    print "| Program | Package | Path | Page |"
+    print "| --- | --- | --- | --- |"
+    while ((getline line < "vendor/gnu/debian/commands") > 0) {
+        if (line ~ /^#/) continue
+        split(line, f, " ")
+        printf "| `%s` | `%s` | `%s` | %s |\n", f[1], f[2], f[3], page(f[1])
+    }
+    close("vendor/gnu/debian/commands")
+    print ""
+    print "GE-Proton is installed under `/opt/proton` on x86-64 ([proton(1)](man1/proton.1)); Khronos'"'"'s WebGL conformance sources are under `/usr/share/webgl`. Their exact pins are in [sources-extra.txt](../vendor/gnu/sources-extra.txt)."
+    print ""
     print "### Compilers, debugger and browser"
     print ""
     print "| Program | Version | Purpose |"

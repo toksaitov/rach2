@@ -91,7 +91,7 @@ The programs os-simple or the recovery image stages that os-real does not, with 
 
 ### BusyBox applets
 
-The `/bin/busybox` of os-real, the recovery image and the GNU root has 326 applets. Its ash finds an applet before it searches `PATH`, so a KRFFS image, which has no symbolic links, needs no file for each applet ([BusyBox](../vendor/busybox/Readme.md)); on the GNU root, where `/bin/sh` is bash, each applet that no port provides is a link to `/bin/busybox`. Each row is a page and the applets it covers.
+The `/bin/busybox` of os-real, the recovery image and the GNU root has 320 applets. Its ash finds an applet before it searches `PATH`, so a KRFFS image, which has no symbolic links, needs no file for each applet ([BusyBox](../vendor/busybox/Readme.md)); on the GNU root, where `/bin/sh` is bash, each applet that no port provides is a link to `/bin/busybox`. Each row is a page and the applets it covers.
 
 | Page | Applets |
 | --- | --- |
@@ -109,25 +109,23 @@ The `/bin/busybox` of os-real, the recovery image and the GNU root has 326 apple
 | [busybox-mailutils(1)](man1/busybox-mailutils.1) | `makemime`, `popmaildir`, `reformime`, `sendmail` |
 | [busybox-miscutils(1)](man1/busybox-miscutils.1) | `adjtimex`, `ascii`, `bc`, `chat`, `crond`, `dc`, `devmem`, `hexedit`, `less`, `lsscsi`, `makedevs`, `microcom`, `mim`, `mt`, `readahead`, `runlevel`, `rx`, `setfattr`, `setserial`, `strings`, `time`, `tree`, `ts`, `ttysize`, `volname` |
 | [busybox-modutils(8)](man8/busybox-modutils.8) | `depmod`, `insmod`, `lsmod`, `modinfo`, `modprobe`, `rmmod` |
-| [busybox-networking(1)](man1/busybox-networking.1) | `arp`, `arping`, `dnsd`, `dnsdomainname`, `fakeidentd`, `ftpd`, `ftpget`, `ftpput`, `hostname`, `ifconfig`, `ifdown`, `ifplugd`, `ifup`, `inetd`, `ipcalc`, `netstat`, `nslookup`, `ntpd`, `pscan`, `route`, `ssl_client`, `tcpsvd`, `telnet`, `telnetd`, `tftp`, `tftpd`, `traceroute`, `udhcpc`, `udhcpc6`, `udpsvd`, `vconfig`, `wget`, `whois` |
+| [busybox-networking(1)](man1/busybox-networking.1) | `arp`, `arping`, `dnsd`, `dnsdomainname`, `fakeidentd`, `ftpd`, `ftpget`, `ftpput`, `hostname`, `ifconfig`, `ifdown`, `ifup`, `inetd`, `ipcalc`, `netstat`, `nslookup`, `ntpd`, `pscan`, `route`, `ssl_client`, `tcpsvd`, `telnet`, `telnetd`, `tftp`, `tftpd`, `traceroute`, `udhcpc`, `udpsvd`, `vconfig`, `wget`, `whois` |
 | [busybox-printutils(1)](man1/busybox-printutils.1) | `lpd`, `lpq`, `lpr` |
 | [busybox-procps(1)](man1/busybox-procps.1) | `free`, `fuser`, `iostat`, `kill`, `killall`, `killall5`, `lsof`, `mpstat`, `nmeter`, `pgrep`, `pidof`, `pkill`, `pmap`, `powertop`, `ps`, `pstree`, `pwdx`, `smemcap`, `sysctl`, `top`, `uptime`, `watch` |
 | [busybox-runit(8)](man8/busybox-runit.8) | `chpst`, `envdir`, `envuidgid`, `runsv`, `runsvdir`, `setuidgid`, `softlimit`, `sv`, `svc`, `svlogd`, `svok` |
 | [busybox-shell(1)](man1/busybox-shell.1) | `ash`, `cttyhack`, `hush` |
 | [busybox-sysklogd(8)](man8/busybox-sysklogd.8) | `klogd`, `logger`, `logread`, `syslogd` |
-| [busybox-util-linux(1)](man1/busybox-util-linux.1) | `acpid`, `blkid`, `cal`, `chrt`, `fallocate`, `fatattr`, `fbset`, `fdflush`, `fdformat`, `fdisk`, `findfs`, `flock`, `freeramdisk`, `fsck.minix`, `getopt`, `hd`, `hexdump`, `hwclock`, `ipcrm`, `ipcs`, `last`, `linux32`, `linux64`, `lspci`, `lsusb`, `mesg`, `mkdosfs`, `mkfs.minix`, `mkfs.vfat`, `mkswap`, `more`, `mountpoint`, `nologin`, `nsenter`, `pivot_root`, `rdate`, `rdev`, `readprofile`, `renice`, `rev`, `rtcwake`, `script`, `scriptreplay`, `setarch`, `setsid`, `swapoff`, `swapon`, `taskset`, `unshare`, `xxd` |
+| [busybox-util-linux(1)](man1/busybox-util-linux.1) | `blkid`, `cal`, `chrt`, `fallocate`, `fatattr`, `fbset`, `fdflush`, `fdformat`, `fdisk`, `findfs`, `flock`, `freeramdisk`, `fsck.minix`, `getopt`, `hd`, `hexdump`, `hwclock`, `ipcrm`, `ipcs`, `last`, `linux32`, `linux64`, `lspci`, `lsusb`, `mesg`, `mkdosfs`, `mkfs.minix`, `mkfs.vfat`, `mkswap`, `more`, `mountpoint`, `nologin`, `nsenter`, `pivot_root`, `rdate`, `rdev`, `readprofile`, `renice`, `rev`, `rtcwake`, `script`, `scriptreplay`, `setarch`, `setsid`, `swapoff`, `swapon`, `taskset`, `unshare`, `xxd` |
 | [halt(8)](man8/halt.8) | `halt` |
 | [httpd(8)](man8/httpd.8) | `httpd` |
 | [init(8)](man8/init.8) | `init` |
 | [mount(8)](man8/mount.8) | `mount`, `umount` |
 | [nc(1)](man1/nc.1) | `nc` |
-| [ping(1)](man1/ping.1) | `ping`, `ping6` |
-| [rfkill(8)](man8/rfkill.8) | `rfkill` |
 | [sh(1)](man1/sh.1) | `busybox`, `sh` |
 
 ## The GNU system
 
-The [GNU layer](../vendor/gnu/Readme.md) builds a cross toolchain with glibc, the ports below, binutils, GCC and GDB to run on Rach2, the SpiderMonkey shell, and Debian's chromium-headless-shell, and installs them over the musl system in the os-real-gnu root, an ext2 image. The path finds a port's program before a program of the musl system of the same name, and the ports' pages are on the machine but not in this repository; [the layer's Readme](../vendor/gnu/Readme.md#on-the-machine) has the details.
+The [GNU layer](../vendor/gnu/Readme.md) builds a cross toolchain with glibc, the ports below, binutils, GCC and GDB to run on Rach2, the SpiderMonkey shell, and Debian's desktop packages, and installs them over the musl system in the os-real-gnu root, an ext2 image. The path finds a port's program before a program of the musl system of the same name, and the ports' pages are on the machine but not in this repository; [the layer's Readme](../vendor/gnu/Readme.md#on-the-machine) has the details.
 
 ### The root over os-real
 
@@ -151,6 +149,213 @@ Besides the ports, [the root's manifest](../krffs/manifests/os-real-gnu.manifest
 | `write` | `/usr/bin/write` | on the machine | [util-linux](../vendor/gnu/ports/util-linux.sh) |
 
 It does not stage `/bin/dropbearmulti`, `/bin/iw`, `/bin/sh`, `/bin/wpa_cli`, `/bin/wpa_passphrase` and `/bin/wpa_supplicant`, which os-real does; and `/sbin/init` is `init-metal`, where os-real has `init-login`.
+
+### Desktop packages
+
+The pinned [Debian desktop layer](../vendor/gnu/debian/Readme.md) stages these commands on both architectures. Mesa also supplies architecture-qualified names beside its canonical commands. The original Debian pages are rendered on the machine; the project pages below retain their text or document the tool family.
+
+| Program | Package | Path | Page |
+| --- | --- | --- | --- |
+| `Xwayland` | `xwayland` | `/usr/bin/Xwayland` | [Xwayland(1)](man1/Xwayland.1) |
+| `amd_hdmi_compliance` | `intel-gpu-tools` | `/usr/bin/amd_hdmi_compliance` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `amdgpu_stress` | `libdrm-tests` | `/usr/bin/amdgpu_stress` | [drm-tools(1)](man1/drm-tools.1) |
+| `appres` | `x11-utils` | `/usr/bin/appres` | [appres(1)](man1/appres.1) |
+| `chromium` | `chromium` | `/usr/bin/chromium` | [chromium(1)](man1/chromium.1) |
+| `chromium-headless-shell` | `chromium-headless-shell` | `/usr/bin/chromium-headless-shell` | [chromium(1)](man1/chromium.1) |
+| `dbus-cleanup-sockets` | `dbus-bin` | `/usr/bin/dbus-cleanup-sockets` | [dbus-cleanup-sockets(1)](man1/dbus-cleanup-sockets.1) |
+| `dbus-daemon` | `dbus-daemon` | `/usr/bin/dbus-daemon` | [dbus-daemon(1)](man1/dbus-daemon.1) |
+| `dbus-monitor` | `dbus-bin` | `/usr/bin/dbus-monitor` | [dbus-monitor(1)](man1/dbus-monitor.1) |
+| `dbus-run-session` | `dbus-daemon` | `/usr/bin/dbus-run-session` | [dbus-run-session(1)](man1/dbus-run-session.1) |
+| `dbus-send` | `dbus-bin` | `/usr/bin/dbus-send` | [dbus-send(1)](man1/dbus-send.1) |
+| `dbus-update-activation-environment` | `dbus-bin` | `/usr/bin/dbus-update-activation-environment` | [dbus-update-activation-environment(1)](man1/dbus-update-activation-environment.1) |
+| `dbus-uuidgen` | `dbus-bin` | `/usr/bin/dbus-uuidgen` | [dbus-uuidgen(1)](man1/dbus-uuidgen.1) |
+| `dpcd_reg` | `intel-gpu-tools` | `/usr/bin/dpcd_reg` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `drmdevice` | `libdrm-tests` | `/usr/bin/drmdevice` | [drm-tools(1)](man1/drm-tools.1) |
+| `editres` | `x11-utils` | `/usr/bin/editres` | [editres(1)](man1/editres.1) |
+| `eglgears_wayland` | `mesa-utils` | `/usr/bin/eglgears_wayland` | [mesa-utils(1)](man1/mesa-utils.1) |
+| `eglgears_x11` | `mesa-utils` | `/usr/bin/eglgears_x11` | [mesa-utils(1)](man1/mesa-utils.1) |
+| `eglinfo` | `mesa-utils` | `/usr/bin/eglinfo` | [mesa-utils(1)](man1/mesa-utils.1) |
+| `egltri_wayland` | `mesa-utils` | `/usr/bin/egltri_wayland` | [mesa-utils(1)](man1/mesa-utils.1) |
+| `egltri_x11` | `mesa-utils` | `/usr/bin/egltri_x11` | [mesa-utils(1)](man1/mesa-utils.1) |
+| `es2_info` | `mesa-utils` | `/usr/bin/es2_info` | [es2_info(1)](man1/es2_info.1) |
+| `es2gears_wayland` | `mesa-utils` | `/usr/bin/es2gears_wayland` | [mesa-utils(1)](man1/mesa-utils.1) |
+| `es2gears_x11` | `mesa-utils` | `/usr/bin/es2gears_x11` | [mesa-utils(1)](man1/mesa-utils.1) |
+| `es2tri` | `mesa-utils` | `/usr/bin/es2tri` | [es2tri(1)](man1/es2tri.1) |
+| `fc-cache` | `fontconfig` | `/usr/bin/fc-cache` | [fc-cache(1)](man1/fc-cache.1) |
+| `fc-cat` | `fontconfig` | `/usr/bin/fc-cat` | [fc-cat(1)](man1/fc-cat.1) |
+| `fc-conflist` | `fontconfig` | `/usr/bin/fc-conflist` | [fc-conflist(1)](man1/fc-conflist.1) |
+| `fc-list` | `fontconfig` | `/usr/bin/fc-list` | [fc-list(1)](man1/fc-list.1) |
+| `fc-match` | `fontconfig` | `/usr/bin/fc-match` | [fc-match(1)](man1/fc-match.1) |
+| `fc-pattern` | `fontconfig` | `/usr/bin/fc-pattern` | [fc-pattern(1)](man1/fc-pattern.1) |
+| `fc-query` | `fontconfig` | `/usr/bin/fc-query` | [fc-query(1)](man1/fc-query.1) |
+| `fc-scan` | `fontconfig` | `/usr/bin/fc-scan` | [fc-scan(1)](man1/fc-scan.1) |
+| `fc-validate` | `fontconfig` | `/usr/bin/fc-validate` | [fc-validate(1)](man1/fc-validate.1) |
+| `firefox` | `firefox-esr` | `/usr/bin/firefox` | [firefox-esr(1)](man1/firefox-esr.1) |
+| `firefox-esr` | `firefox-esr` | `/usr/bin/firefox-esr` | [firefox-esr(1)](man1/firefox-esr.1) |
+| `glmark2` | `glmark2-x11` | `/usr/bin/glmark2` | [glmark2(1)](man1/glmark2.1) |
+| `glmark2-drm` | `glmark2-drm` | `/usr/bin/glmark2-drm` | [glmark2-drm(1)](man1/glmark2-drm.1) |
+| `glmark2-wayland` | `glmark2-wayland` | `/usr/bin/glmark2-wayland` | [glmark2-wayland(1)](man1/glmark2-wayland.1) |
+| `glxdemo` | `mesa-utils` | `/usr/bin/glxdemo` | [glxdemo(1)](man1/glxdemo.1) |
+| `glxgears` | `mesa-utils` | `/usr/bin/glxgears` | [glxgears(1)](man1/glxgears.1) |
+| `glxheads` | `mesa-utils` | `/usr/bin/glxheads` | [glxheads(1)](man1/glxheads.1) |
+| `glxinfo` | `mesa-utils` | `/usr/bin/glxinfo` | [glxinfo(1)](man1/glxinfo.1) |
+| `gputop` | `intel-gpu-tools` | `/usr/bin/gputop` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `gtk-update-icon-cache` | `gtk-update-icon-cache` | `/usr/bin/gtk-update-icon-cache` | [gtk-update-icon-cache(1)](man1/gtk-update-icon-cache.1) |
+| `gtk4-update-icon-cache` | `gtk-update-icon-cache` | `/usr/bin/gtk4-update-icon-cache` | [gtk4-update-icon-cache(1)](man1/gtk4-update-icon-cache.1) |
+| `i915-perf-configs` | `intel-gpu-tools` | `/usr/bin/i915-perf-configs` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `i915-perf-control` | `intel-gpu-tools` | `/usr/bin/i915-perf-control` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `i915-perf-reader` | `intel-gpu-tools` | `/usr/bin/i915-perf-reader` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `i915-perf-recorder` | `intel-gpu-tools` | `/usr/bin/i915-perf-recorder` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `igt_facts` | `intel-gpu-tools` | `/usr/bin/igt_facts` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `igt_power` | `intel-gpu-tools` | `/usr/bin/igt_power` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `igt_stats` | `intel-gpu-tools` | `/usr/bin/igt_stats` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel-gen4asm` | `intel-gpu-tools` | `/usr/bin/intel-gen4asm` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel-gen4disasm` | `intel-gpu-tools` | `/usr/bin/intel-gen4disasm` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel-gfx-fw-info` | `intel-gpu-tools` | `/usr/bin/intel-gfx-fw-info` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel-gpu-overlay` | `intel-gpu-tools` | `/usr/bin/intel-gpu-overlay` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_audio_dump` | `intel-gpu-tools` | `/usr/bin/intel_audio_dump` | [intel_audio_dump(1)](man1/intel_audio_dump.1) |
+| `intel_backlight` | `intel-gpu-tools` | `/usr/bin/intel_backlight` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_bios_dumper` | `intel-gpu-tools` | `/usr/bin/intel_bios_dumper` | [intel_bios_dumper(1)](man1/intel_bios_dumper.1) |
+| `intel_display_bandwidth` | `intel-gpu-tools` | `/usr/bin/intel_display_bandwidth` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_display_crc` | `intel-gpu-tools` | `/usr/bin/intel_display_crc` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_display_poller` | `intel-gpu-tools` | `/usr/bin/intel_display_poller` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_dp_compliance` | `intel-gpu-tools` | `/usr/bin/intel_dp_compliance` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_dump_decode` | `intel-gpu-tools` | `/usr/bin/intel_dump_decode` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_error_decode` | `intel-gpu-tools` | `/usr/bin/intel_error_decode` | [intel_error_decode(1)](man1/intel_error_decode.1) |
+| `intel_firmware_decode` | `intel-gpu-tools` | `/usr/bin/intel_firmware_decode` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_forcewaked` | `intel-gpu-tools` | `/usr/bin/intel_forcewaked` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_framebuffer_dump` | `intel-gpu-tools` | `/usr/bin/intel_framebuffer_dump` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_gem_info` | `intel-gpu-tools` | `/usr/bin/intel_gem_info` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_gpu_abrt` | `intel-gpu-tools` | `/usr/bin/intel_gpu_abrt` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_gpu_frequency` | `intel-gpu-tools` | `/usr/bin/intel_gpu_frequency` | [intel_gpu_frequency(1)](man1/intel_gpu_frequency.1) |
+| `intel_gpu_time` | `intel-gpu-tools` | `/usr/bin/intel_gpu_time` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_gpu_top` | `intel-gpu-tools` | `/usr/bin/intel_gpu_top` | [intel_gpu_top(1)](man1/intel_gpu_top.1) |
+| `intel_gtt` | `intel-gpu-tools` | `/usr/bin/intel_gtt` | [intel_gtt(1)](man1/intel_gtt.1) |
+| `intel_guc_logger` | `intel-gpu-tools` | `/usr/bin/intel_guc_logger` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_gvtg_test` | `intel-gpu-tools` | `/usr/bin/intel_gvtg_test` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_infoframes` | `intel-gpu-tools` | `/usr/bin/intel_infoframes` | [intel_infoframes(1)](man1/intel_infoframes.1) |
+| `intel_l3_parity` | `intel-gpu-tools` | `/usr/bin/intel_l3_parity` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_lid` | `intel-gpu-tools` | `/usr/bin/intel_lid` | [intel_lid(1)](man1/intel_lid.1) |
+| `intel_opregion_decode` | `intel-gpu-tools` | `/usr/bin/intel_opregion_decode` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_panel_fitter` | `intel-gpu-tools` | `/usr/bin/intel_panel_fitter` | [intel_panel_fitter(1)](man1/intel_panel_fitter.1) |
+| `intel_perf_counters` | `intel-gpu-tools` | `/usr/bin/intel_perf_counters` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_pm_rpm` | `intel-gpu-tools` | `/usr/bin/intel_pm_rpm` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_reg` | `intel-gpu-tools` | `/usr/bin/intel_reg` | [intel_reg(1)](man1/intel_reg.1) |
+| `intel_reg_checker` | `intel-gpu-tools` | `/usr/bin/intel_reg_checker` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_residency` | `intel-gpu-tools` | `/usr/bin/intel_residency` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_stepping` | `intel-gpu-tools` | `/usr/bin/intel_stepping` | [intel_stepping(1)](man1/intel_stepping.1) |
+| `intel_tiling_detect` | `intel-gpu-tools` | `/usr/bin/intel_tiling_detect` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `intel_vbt_decode` | `intel-gpu-tools` | `/usr/bin/intel_vbt_decode` | [intel_vbt_decode(1)](man1/intel_vbt_decode.1) |
+| `intel_watermark` | `intel-gpu-tools` | `/usr/bin/intel_watermark` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `libinput` | `libinput-tools` | `/usr/bin/libinput` | [libinput(1)](man1/libinput.1) |
+| `listres` | `x11-utils` | `/usr/bin/listres` | [listres(1)](man1/listres.1) |
+| `lsgpu` | `intel-gpu-tools` | `/usr/bin/lsgpu` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `mako-render` | `python3-mako` | `/usr/bin/mako-render` | [mako-render(1)](man1/mako-render.1) |
+| `mesa-overlay-control.py` | `mesa-vulkan-drivers` | `/usr/bin/mesa-overlay-control.py` | [mesa-overlay-control.py(1)](man1/mesa-overlay-control.py.1) |
+| `modeprint` | `libdrm-tests` | `/usr/bin/modeprint` | [drm-tools(1)](man1/drm-tools.1) |
+| `modetest` | `libdrm-tests` | `/usr/bin/modetest` | [drm-tools(1)](man1/drm-tools.1) |
+| `msm_dp_compliance` | `intel-gpu-tools` | `/usr/bin/msm_dp_compliance` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `pa-info` | `pulseaudio-utils` | `/usr/bin/pa-info` | [pa-info(1)](man1/pa-info.1) |
+| `pacat` | `pulseaudio-utils` | `/usr/bin/pacat` | [pacat(1)](man1/pacat.1) |
+| `pacmd` | `pulseaudio-utils` | `/usr/bin/pacmd` | [pacmd(1)](man1/pacmd.1) |
+| `pactl` | `pulseaudio-utils` | `/usr/bin/pactl` | [pactl(1)](man1/pactl.1) |
+| `padsp` | `pulseaudio-utils` | `/usr/bin/padsp` | [padsp(1)](man1/padsp.1) |
+| `pamon` | `pulseaudio-utils` | `/usr/bin/pamon` | [pamon(1)](man1/pamon.1) |
+| `paplay` | `pulseaudio-utils` | `/usr/bin/paplay` | [paplay(1)](man1/paplay.1) |
+| `parec` | `pulseaudio-utils` | `/usr/bin/parec` | [parec(1)](man1/parec.1) |
+| `parecord` | `pulseaudio-utils` | `/usr/bin/parecord` | [parecord(1)](man1/parecord.1) |
+| `pasuspender` | `pulseaudio-utils` | `/usr/bin/pasuspender` | [pasuspender(1)](man1/pasuspender.1) |
+| `pax11publish` | `pulseaudio-utils` | `/usr/bin/pax11publish` | [pax11publish(1)](man1/pax11publish.1) |
+| `pdb3.13` | `python3.13` | `/usr/bin/pdb3.13` | [pdb3.13(1)](man1/pdb3.13.1) |
+| `peglgears` | `mesa-utils` | `/usr/bin/peglgears` | [mesa-utils(1)](man1/mesa-utils.1) |
+| `piglit` | `piglit` | `/usr/bin/piglit` | [piglit(1)](man1/piglit.1) |
+| `proptest` | `libdrm-tests` | `/usr/bin/proptest` | [drm-tools(1)](man1/drm-tools.1) |
+| `pulseaudio` | `pulseaudio` | `/usr/bin/pulseaudio` | [pulseaudio(1)](man1/pulseaudio.1) |
+| `pydoc3.13` | `python3.13` | `/usr/bin/pydoc3.13` | [pydoc3.13(1)](man1/pydoc3.13.1) |
+| `pygettext3.13` | `python3.13` | `/usr/bin/pygettext3.13` | [pygettext3.13(1)](man1/pygettext3.13.1) |
+| `python3.13` | `python3.13-minimal` | `/usr/bin/python3.13` | [python3.13(1)](man1/python3.13.1) |
+| `seatd` | `seatd` | `/usr/sbin/seatd` | [seatd(8)](man8/seatd.8) |
+| `seatd-launch` | `seatd` | `/usr/bin/seatd-launch` | [seatd-launch(1)](man1/seatd-launch.1) |
+| `setxkbmap` | `x11-xkb-utils` | `/usr/bin/setxkbmap` | [setxkbmap(1)](man1/setxkbmap.1) |
+| `start-pulseaudio-x11` | `pulseaudio` | `/usr/bin/start-pulseaudio-x11` | [start-pulseaudio-x11(1)](man1/start-pulseaudio-x11.1) |
+| `systemd-hwdb` | `udev` | `/usr/bin/systemd-hwdb` | [systemd-hwdb(8)](man8/systemd-hwdb.8) |
+| `udevadm` | `udev` | `/usr/bin/udevadm` | [udevadm(8)](man8/udevadm.8) |
+| `update-icon-caches` | `gtk-update-icon-cache` | `/usr/sbin/update-icon-caches` | [update-icon-caches(8)](man8/update-icon-caches.8) |
+| `update-mime-database` | `shared-mime-info` | `/usr/bin/update-mime-database` | [update-mime-database(1)](man1/update-mime-database.1) |
+| `vbltest` | `libdrm-tests` | `/usr/bin/vbltest` | [drm-tools(1)](man1/drm-tools.1) |
+| `viewres` | `x11-utils` | `/usr/bin/viewres` | [viewres(1)](man1/viewres.1) |
+| `vkcube` | `vulkan-tools` | `/usr/bin/vkcube` | [vkcube(1)](man1/vkcube.1) |
+| `vkcubepp` | `vulkan-tools` | `/usr/bin/vkcubepp` | [vkcube(1)](man1/vkcube.1) |
+| `vkgears` | `mesa-utils` | `/usr/bin/vkgears` | [mesa-utils(1)](man1/mesa-utils.1) |
+| `vulkaninfo` | `vulkan-tools` | `/usr/bin/vulkaninfo` | [vulkaninfo(1)](man1/vulkaninfo.1) |
+| `wcap-decode` | `weston` | `/usr/bin/wcap-decode` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston` | `weston` | `/usr/bin/weston` | [weston(1)](man1/weston.1) |
+| `weston-calibrator` | `weston` | `/usr/bin/weston-calibrator` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-clickdot` | `weston` | `/usr/bin/weston-clickdot` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-cliptest` | `weston` | `/usr/bin/weston-cliptest` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-constraints` | `weston` | `/usr/bin/weston-constraints` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-content_protection` | `weston` | `/usr/bin/weston-content_protection` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-debug` | `weston` | `/usr/bin/weston-debug` | [weston-debug(1)](man1/weston-debug.1) |
+| `weston-dnd` | `weston` | `/usr/bin/weston-dnd` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-editor` | `weston` | `/usr/bin/weston-editor` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-eventdemo` | `weston` | `/usr/bin/weston-eventdemo` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-flower` | `weston` | `/usr/bin/weston-flower` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-fullscreen` | `weston` | `/usr/bin/weston-fullscreen` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-image` | `weston` | `/usr/bin/weston-image` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-multi-resource` | `weston` | `/usr/bin/weston-multi-resource` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-presentation-shm` | `weston` | `/usr/bin/weston-presentation-shm` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-resizor` | `weston` | `/usr/bin/weston-resizor` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-scaler` | `weston` | `/usr/bin/weston-scaler` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-screenshooter` | `weston` | `/usr/bin/weston-screenshooter` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-simple-damage` | `weston` | `/usr/bin/weston-simple-damage` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-simple-dmabuf-egl` | `weston` | `/usr/bin/weston-simple-dmabuf-egl` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-simple-dmabuf-feedback` | `weston` | `/usr/bin/weston-simple-dmabuf-feedback` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-simple-dmabuf-v4l` | `weston` | `/usr/bin/weston-simple-dmabuf-v4l` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-simple-egl` | `weston` | `/usr/bin/weston-simple-egl` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-simple-shm` | `weston` | `/usr/bin/weston-simple-shm` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-simple-touch` | `weston` | `/usr/bin/weston-simple-touch` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-smoke` | `weston` | `/usr/bin/weston-smoke` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-stacking` | `weston` | `/usr/bin/weston-stacking` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-subsurfaces` | `weston` | `/usr/bin/weston-subsurfaces` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-tablet` | `weston` | `/usr/bin/weston-tablet` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-terminal` | `weston` | `/usr/bin/weston-terminal` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-touch-calibrator` | `weston` | `/usr/bin/weston-touch-calibrator` | [weston-clients(1)](man1/weston-clients.1) |
+| `weston-transformed` | `weston` | `/usr/bin/weston-transformed` | [weston-clients(1)](man1/weston-clients.1) |
+| `xdg-desktop-icon` | `xdg-utils` | `/usr/bin/xdg-desktop-icon` | [xdg-desktop-icon(1)](man1/xdg-desktop-icon.1) |
+| `xdg-desktop-menu` | `xdg-utils` | `/usr/bin/xdg-desktop-menu` | [xdg-desktop-menu(1)](man1/xdg-desktop-menu.1) |
+| `xdg-email` | `xdg-utils` | `/usr/bin/xdg-email` | [xdg-email(1)](man1/xdg-email.1) |
+| `xdg-icon-resource` | `xdg-utils` | `/usr/bin/xdg-icon-resource` | [xdg-icon-resource(1)](man1/xdg-icon-resource.1) |
+| `xdg-mime` | `xdg-utils` | `/usr/bin/xdg-mime` | [xdg-mime(1)](man1/xdg-mime.1) |
+| `xdg-open` | `xdg-utils` | `/usr/bin/xdg-open` | [xdg-open(1)](man1/xdg-open.1) |
+| `xdg-screensaver` | `xdg-utils` | `/usr/bin/xdg-screensaver` | [xdg-screensaver(1)](man1/xdg-screensaver.1) |
+| `xdg-settings` | `xdg-utils` | `/usr/bin/xdg-settings` | [xdg-settings(1)](man1/xdg-settings.1) |
+| `xdpyinfo` | `x11-utils` | `/usr/bin/xdpyinfo` | [xdpyinfo(1)](man1/xdpyinfo.1) |
+| `xdriinfo` | `x11-utils` | `/usr/bin/xdriinfo` | [xdriinfo(1)](man1/xdriinfo.1) |
+| `xe-perf-configs` | `intel-gpu-tools` | `/usr/bin/xe-perf-configs` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `xe-perf-control` | `intel-gpu-tools` | `/usr/bin/xe-perf-control` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `xe-perf-reader` | `intel-gpu-tools` | `/usr/bin/xe-perf-reader` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `xe-perf-recorder` | `intel-gpu-tools` | `/usr/bin/xe-perf-recorder` | [intel-gpu-tools(1)](man1/intel-gpu-tools.1) |
+| `xeglgears` | `mesa-utils` | `/usr/bin/xeglgears` | [mesa-utils(1)](man1/mesa-utils.1) |
+| `xeglthreads` | `mesa-utils` | `/usr/bin/xeglthreads` | [mesa-utils(1)](man1/mesa-utils.1) |
+| `xev` | `x11-utils` | `/usr/bin/xev` | [xev(1)](man1/xev.1) |
+| `xfd` | `x11-utils` | `/usr/bin/xfd` | [xfd(1)](man1/xfd.1) |
+| `xfontsel` | `x11-utils` | `/usr/bin/xfontsel` | [xfontsel(1)](man1/xfontsel.1) |
+| `xkbbell` | `x11-xkb-utils` | `/usr/bin/xkbbell` | [xkbbell(1)](man1/xkbbell.1) |
+| `xkbcomp` | `x11-xkb-utils` | `/usr/bin/xkbcomp` | [xkbcomp(1)](man1/xkbcomp.1) |
+| `xkbevd` | `x11-xkb-utils` | `/usr/bin/xkbevd` | [xkbevd(1)](man1/xkbevd.1) |
+| `xkbprint` | `x11-xkb-utils` | `/usr/bin/xkbprint` | [xkbprint(1)](man1/xkbprint.1) |
+| `xkbvleds` | `x11-xkb-utils` | `/usr/bin/xkbvleds` | [xkbvleds(1)](man1/xkbvleds.1) |
+| `xkbwatch` | `x11-xkb-utils` | `/usr/bin/xkbwatch` | [xkbwatch(1)](man1/xkbwatch.1) |
+| `xkill` | `x11-utils` | `/usr/bin/xkill` | [xkill(1)](man1/xkill.1) |
+| `xlsatoms` | `x11-utils` | `/usr/bin/xlsatoms` | [xlsatoms(1)](man1/xlsatoms.1) |
+| `xlsclients` | `x11-utils` | `/usr/bin/xlsclients` | [xlsclients(1)](man1/xlsclients.1) |
+| `xlsfonts` | `x11-utils` | `/usr/bin/xlsfonts` | [xlsfonts(1)](man1/xlsfonts.1) |
+| `xmessage` | `x11-utils` | `/usr/bin/xmessage` | [xmessage(1)](man1/xmessage.1) |
+| `xprop` | `x11-utils` | `/usr/bin/xprop` | [xprop(1)](man1/xprop.1) |
+| `xvinfo` | `x11-utils` | `/usr/bin/xvinfo` | [xvinfo(1)](man1/xvinfo.1) |
+| `xwininfo` | `x11-utils` | `/usr/bin/xwininfo` | [xwininfo(1)](man1/xwininfo.1) |
+
+GE-Proton is installed under `/opt/proton` on x86-64 ([proton(1)](man1/proton.1)); Khronos's WebGL conformance sources are under `/usr/share/webgl`. Their exact pins are in [sources-extra.txt](../vendor/gnu/sources-extra.txt).
 
 ### Compilers, debugger and browser
 
