@@ -1,7 +1,7 @@
 # The kernel mixes OSS streams; PulseAudio supplies the desktop protocol.
 .nofail
-load-module module-oss device=/dev/dsp sink_name=oss source_name=oss mmap=0
+load-module module-oss device=/dev/dsp sink_name=oss_output source_name=oss_input mmap=0
 load-module module-native-protocol-unix
-set-default-sink oss
-set-default-source oss
+set-default-sink oss_output
+set-default-source oss_input
 .fail

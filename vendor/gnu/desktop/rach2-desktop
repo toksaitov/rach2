@@ -16,6 +16,8 @@ trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 mkdir -p /run/udev /run/user
 install -d -m 0700 -o desktop -g desktop /run/user/1001
+# The X servers' socket directories, which Debian's tmpfiles.d/x11.conf makes.
+install -d -m 1777 /tmp/.X11-unix /tmp/.ICE-unix
 setsid /usr/lib/systemd/systemd-udevd --resolve-names=never &
 udev=$!
 until udevadm control --ping 2>/dev/null; do

@@ -24,7 +24,7 @@ cleanup()
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
-pulseaudio --daemonize=no --use-pid-file=no --exit-idle-time=-1 \
+pulseaudio -n --daemonize=no --use-pid-file=no --exit-idle-time=-1 \
     --disallow-exit --file=/etc/pulse/rach2.pa &
 pulse=$!
 backend=headless renderer=pixman

@@ -10,9 +10,9 @@ The account has a locked password and belongs to `seat`, `video`, `render`, `inp
 
 ## Design
 
-`rach2-desktop` starts systemd-udevd outside systemd, waits for its control socket to answer, triggers existing devices and settles their events. It starts seatd with `SEATD_VTBOUND=0` because Rach2 has no VT interface. The seat socket belongs to the `seat` group. The session starts only after that socket exists, under the desktop account's supplementary groups and a private D-Bus session bus.
+`rach2-desktop` makes `/tmp/.X11-unix` and `/tmp/.ICE-unix`, mode 1777, as Debian's `tmpfiles.d/x11.conf` does at boot, since Weston's Xwayland module binds its listening socket there and Weston 14.0.2 exits with a segmentation fault when that bind fails. It starts systemd-udevd outside systemd, waits for its control socket to answer, triggers existing devices and settles their events. It starts seatd with `SEATD_VTBOUND=0` because Rach2 has no VT interface. The seat socket belongs to the `seat` group. The session starts only after that socket exists, under the desktop account's supplementary groups and a private D-Bus session bus.
 
-`rach2-session` runs PulseAudio and Weston in the foreground. `/etc/pulse/rach2.pa` loads `module-oss` over `/dev/dsp` without mmap and exposes the user's native PulseAudio socket. A machine without sound can still start the session. `/etc/asound.conf` gives ALSA clients a `plug` conversion over the OSS plugin. Both routes use the kernel's mixer; the ALSA default opens OSS directly. Programs that use PulseAudio find its socket through `PULSE_SERVER`.
+`rach2-session` runs PulseAudio and Weston in the foreground. PulseAudio runs `/etc/pulse/rach2.pa` alone, not Debian's `default.pa`; it loads `module-oss` over `/dev/dsp` without mmap, as the sink `oss_output` and the source `oss_input`, whose names differ since PulseAudio keeps one namespace for both, and exposes the user's native PulseAudio socket. A machine without sound can still start the session. `/etc/asound.conf` gives ALSA clients a `plug` conversion over the OSS plugin. Both routes use the kernel's mixer; the ALSA default opens OSS directly. Programs that use PulseAudio find its socket through `PULSE_SERVER`.
 
 ## Building
 
