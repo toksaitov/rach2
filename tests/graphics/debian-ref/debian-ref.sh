@@ -72,7 +72,7 @@ machine()
     # shellcheck disable=SC2034 # qemu_devices.sh reads them
     DISPLAY_PROFILE=$1 DISPLAY_MODE=none ARCH=x86_64 AUDIO_DEVICE=none
     # shellcheck disable=SC2034 # qemu_devices.sh reads them
-    NIC=virtio-net-pci NET_HOSTFWD="hostfwd=tcp:127.0.0.1:$port-:22"
+    NIC=virtio-net-pci NET_HOSTFWD="hostfwd=tcp:127.0.0.1:$port-:22" MEMORY=${3}M
     # shellcheck source=../../../rach2/qemu_devices.sh
     . "$tree/rach2/qemu_devices.sh"
     case $1 in

@@ -186,11 +186,11 @@ struct etude_qemu_profile {
                                                   48000 Hz; NULL otherwise */
     const char *display;                       /* NULL, or the display profile:
                                                   "none", "std-vga",
-                                                  "virtio-vga", "virtio-gpu" or
-                                                  "virgl"; a profile with one is
-                                                  a graphics boot, which takes
-                                                  the host's processor under
-                                                  KVM */
+                                                  "virtio-vga", "virtio-gpu",
+                                                  "virgl" or "venus"; a profile
+                                                  with one is a graphics boot,
+                                                  which takes the host's
+                                                  processor under KVM */
 };
 
 /* The longest SMBIOS vendor a profile may name. */
@@ -293,7 +293,7 @@ struct etude_qemu_line {
  *         8042 beside it; ENOENT for a
  *         firmware the site lacks, E2BIG when `out` is too small; ENOTSUP for
  *         a lazy boundary profile the site has not enabled, and on Windows
- *         for the `virgl` display.
+ *         for the `virgl` and `venus` displays.
  */
 int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_site *s,
                     const char *console, const char *qmp, const char *audio,
@@ -307,7 +307,9 @@ int etude_qemu_argv(const struct etude_qemu_profile *p, const struct etude_qemu_
  * device, so that SDL's disk driver reads the profile's input file as the
  * card's input and writes its output nowhere. Under the `virgl` display it
  * sets GALLIUM_DRIVER=d3d12 and MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA in
- * place of the caller's, which put QEMU's GL on the testing PC's GPU.
+ * place of the caller's, which put QEMU's GL on the testing PC's GPU; under
+ * `venus`, GALLIUM_DRIVER=llvmpipe, VK_DRIVER_FILES naming lavapipe and
+ * LD_PRELOAD naming libm, for Venus over the host's lavapipe.
  * `input` is the profile's `audio_input` as the QEMU that runs names it.
  *
  * @return 0, or an error number: EINVAL for audio etude_qemu_argv refuses
