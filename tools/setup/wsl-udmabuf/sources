@@ -1,0 +1,5 @@
+# The WSL kernel releases whose source build.sh takes: the release, as
+# uname -r gives it before "-microsoft-standard-WSL2", and the SHA-256 of
+# Microsoft's archive of its tag, linux-msft-wsl-RELEASE, from
+# https://github.com/microsoft/WSL2-Linux-Kernel/archive/refs/tags/.
+6.18.54.1 5f9752ec753f6c0facae7f999660e475b13a45c849eef7e2ea9e39453c947d45
