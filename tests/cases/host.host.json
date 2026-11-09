@@ -716,6 +716,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "pciwalk",
+          "checks": "tests/host/pciwalk_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "pipe_copy",
           "checks": "tests/host/pipe_copy_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

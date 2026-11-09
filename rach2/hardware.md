@@ -1,6 +1,6 @@
 # Hardware
 
-This page lists the hardware the Rach2 kernel drives, one class at a time, and then the machines it is tested on: QEMU, with the devices the suites attach, and one laptop, the Lenovo G50-70. A device that is not listed has no driver. Most drivers find their device by its PCI class, so any controller of that class is tried; where a driver matches a vendor and device ID, the ID is given as `vendor:device` in hexadecimal. Each class links the Readme of its driver, which has the detail and the limits.
+This page lists the hardware the Rach2 kernel drives, one class at a time, and then the machines it is tested on: QEMU, with the devices the suites attach, and one laptop, the Lenovo G50-70. A device that is not listed has no driver. The kernel finds PCI functions on bus 0, behind each PCI-to-PCI and CardBus bridge, and on each other root bus whose device 0 answers. Most drivers find their device by its PCI class, so any controller of that class is tried; where a driver matches a vendor and device ID, the ID is given as `vendor:device` in hexadecimal. Each class links the Readme of its driver, which has the detail and the limits.
 
 ## Processors
 

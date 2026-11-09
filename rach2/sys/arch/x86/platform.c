@@ -225,29 +225,30 @@ void platform_firmware_init(const struct boot_info *boot)
     smpboot_init(boot);
 }
 
-/** A `pci_each` visit: add the function's interrupt line to the set at
- * `arg` when it has an interrupt pin and the line is below 16. */
-static void note_line(uint8_t bus, uint8_t dev, uint8_t fn, void *arg)
+/** Add `d`'s interrupt line register to `*lines` when the function has an
+ * interrupt pin and the line is below 16. */
+static void note_line(const pci_device_t *d, uint16_t *lines)
 {
-    uint8_t pin = pci_read_config8(bus, dev, fn, PCI_INTERRUPT_PIN);
-    uint8_t line = pci_read_config8(bus, dev, fn, PCI_INTERRUPT_LINE);
-
-    if (pin != 0 && line < 16) {
-        *(uint16_t *)arg |= (uint16_t)(1u << line);
+    if (pci_read_config8(d->bus, d->device, d->function, PCI_INTERRUPT_PIN) != 0 && d->irq < 16) {
+        *lines |= (uint16_t)(1u << d->irq);
     }
 }
 
 /**
  * The lines a PCI function's interrupt line register gives, for a function
  * that has an interrupt pin: the ISA lines firmware routed the PIRQs to,
- * which the I/O APIC takes level-triggered.
+ * which the I/O APIC takes level-triggered. The functions are those of the
+ * list pci.c walks once.
  */
 static uint16_t pci_lines(void)
 {
     uint16_t lines = 0;
-    uint32_t last = 255;
+    pci_device_t d;
+    int i;
 
-    pci_each(0, &last, note_line, &lines);
+    for (i = 0; pci_nth(i, &d); i++) {
+        note_line(&d, &lines);
+    }
     return lines;
 }
 
