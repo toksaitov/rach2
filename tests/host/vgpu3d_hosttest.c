@@ -344,11 +344,13 @@ static void reset_pending(uint32_t h)
     struct drm_virtgpu_execbuffer a;
     struct drm_virtgpu_3d_wait w;
     struct drm_gem_object *obj;
-    struct dma_fence *pending;
+    struct dma_fence *pending, *completed;
     fd_entry_t e;
     uint32_t word = 0;
     uintptr_t phys;
 
+    completed = sync_file_get_fence(3);
+    CHECK(dma_fence_status(completed) == 1, "a previously completed fence before reset");
     obj = drm_gem_object_lookup(&file, h);
     k_memset(&a, 0, sizeof(a));
     a.command = UPTR(&word);
@@ -369,6 +371,8 @@ static void reset_pending(uint32_t h)
     CHECK(reset_file_ops->write(&e, "1\n", 2) == 2, "the debugfs trigger resets the device");
     CHECK(gpu.torn_down && vg->dead && !registered_path[0],
           "reset stops DMA and removes its trigger");
+    CHECK(dma_fence_status(completed) == 1, "reset preserves a completed fence's success");
+    dma_fence_put(completed);
     CHECK(dma_fence_status(pending) == -ENODEV, "pending sync-file fence reports device loss");
     CHECK(vgpu_bo(obj)->res_id == 0 && pages_held == 0 && !vg->live,
           "reset frees every backing page and outstanding command");
@@ -383,6 +387,34 @@ static void reset_pending(uint32_t h)
     reset_file_ops->close(&e);
     dma_fence_put(pending);
     drm_gem_object_put(obj);
+}
+
+/** Force loss while releasing backing, before a host could stop reading it. */
+static void release_failure(int no_memory)
+{
+    uint32_t h;
+
+    model_reset();
+    k_memset(&three, 0, sizeof(three));
+    gpu.offered |= VIRTIO_BIT(VIRTIO_GPU_F_VIRGL);
+    gpu.config.num_capsets = 2;
+    CHECK(bind() == 1 && vgpu_open(dev, &file) == 0, "bind for resource-release failure");
+    h = resource();
+    drm_dev_get(dev);
+    if (no_memory) {
+        fail_after = 0;
+    } else {
+        gpu.fail_type = VIRTIO_GPU_CMD_RESOURCE_UNREF;
+    }
+    CHECK(drm_gem_handle_delete(&file, h) == 0, "close the resource in the forced failure");
+    fail_after = -1;
+    vgpu_reap(vg);
+    CHECK(vg->dead && gpu.torn_down && !pages_held && !vg->resources,
+          "an unref allocation failure or error stops DMA before backing is freed");
+    vgpu_context_close(dev, &file);
+    unbind();
+    model_reset();
+    CHECK(!allocations && !irq_depth, "the forced release failure leaves no allocations or locks");
 }
 
 /** Run only the new 3D rows against the real driver and fence code. */
@@ -414,6 +446,8 @@ int main(void)
     model_reset();
     CHECK(!allocations && !pages_held && !irq_depth,
           "all model allocations, pages and locks are released");
+    release_failure(1);
+    release_failure(0);
     printf("vgpu3d-test: %s\n", failures ? "FAIL" : "PASS");
     return failures ? 1 : 0;
 }
