@@ -188,6 +188,33 @@ void wq_wake_all(wait_queue_t *wq)
     wq_wake(wq, WQ_ALL);
 }
 
+/** The fence model counts event completion; the fence test drives callbacks. */
+int32_t dma_fence_signal(struct dma_fence *f)
+{
+    if (f->signaled)
+        return -EINVAL;
+    f->signaled = 1;
+    return 0;
+}
+
+/** Release a modeled fence after its last holder. */
+void dma_fence_put(struct dma_fence *f)
+{
+    if (f && --f->refs == 0)
+        kfree(f);
+}
+
+/** Release modeled reservation slots at the object's last reference. */
+void dma_resv_fini(struct dma_resv *r)
+{
+    uint32_t i;
+    dma_fence_put(r->write);
+    for (i = 0; i < r->nreads; i++)
+        dma_fence_put(r->reads[i]);
+    kfree(r->reads);
+    k_memset(r, 0, sizeof(*r));
+}
+
 /** A wait would sleep: no row reaches one. */
 int wq_wait_event(wait_queue_t *wq, wq_cond_fn cond, void *arg)
 {
