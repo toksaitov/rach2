@@ -6,6 +6,7 @@
 .Nd Intel Haswell graphics driver
 .Sh SYNOPSIS
 .Cd rach2.i915
+.Cd rach2.i915.firstlight
 .Pp
 .In drm/drm.h
 .In drm/i915_drm.h
@@ -49,9 +50,26 @@ At bind the driver maps the registers, the first 2 MiB of BAR 0,
 uncached; turns on memory decoding and bus mastering; masks, disables and
 clears every interrupt source of the display engine, the GT, power
 management and the south display; then takes a vector and enables the
-device's MSI message on it.
-A machine without message vectors leaves the device without interrupts,
-which nothing needs yet.
+device's MSI message on it, and turns the display engine's master enable
+on with every source still masked.
+A machine without message vectors leaves the device without interrupts;
+the driver then polls for its work.
+.Pp
+It then starts the render and blitter rings: for each a status page and a
+ring of 16 KiB in the global GTT, the ring stopped, emptied and started
+again with every wait bounded.
+Each ring's user interrupt is enabled and stays masked except while the
+driver waits for that ring's work; every other source stays masked.
+A ring that does not start is logged, and the device takes no work.
+.Pp
+With
+.Cm rach2.i915.firstlight
+the render ring writes one value to a page of the global GTT before any
+display code runs, and the kernel logs
+.Dq i915: first light: ok
+or the failure by name: no room in the ring, no breadcrumb, the value read
+back, or no user interrupt.
+.Pp
 The kernel logs
 .Dq i915: found
 with the device's place, id, subplatform and revision, and
