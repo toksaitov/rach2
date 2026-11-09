@@ -7,6 +7,7 @@
 #ifndef _VIRTIO_H_
 #define _VIRTIO_H_
 
+#include "../pci.h"
 #include "../lib/kint.h"
 #include "../lib/spinlock.h"
 
@@ -357,5 +358,9 @@ void virtio_interrupt_config(struct virtio_dev *d);
  *         mapped, -ENOMEM when every record is taken.
  */
 int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out);
+
+/** The PCI function of `d`, for a driver that needs its class or BARs, or
+ * NULL for a device of another transport. */
+const pci_device_t *virtio_pci_function(const struct virtio_dev *d);
 
 #endif /* _VIRTIO_H_ */

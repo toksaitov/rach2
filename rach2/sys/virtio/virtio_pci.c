@@ -924,3 +924,8 @@ int virtio_pci_find(uint16_t id, int nth, struct virtio_dev **out)
     }
     return -ENODEV;
 }
+
+const pci_device_t *virtio_pci_function(const struct virtio_dev *d)
+{
+    return d && d->ops == &vp_ops ? &((const struct virtio_pci *)d->transport)->pci : NULL;
+}
