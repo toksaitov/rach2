@@ -9,7 +9,8 @@
  * with no handler must return ENOSYS. set_thread_area with entry_number -1
  * must take the first free TLS entry, 12, whose selector, 0x63, loaded into
  * GS must address the block it names from 32-bit and from 64-bit code, and
- * keep addressing it after the process sleeps and runs again;
+ * keep addressing it after the process has waited for a child that set and
+ * used an entry 12 of its own;
  * get_thread_area must read the entry back. A signal taken in 32-bit code
  * must run its 64-bit handler with the interrupted CS, 0x23, and SS in the
  * frame, UC_SIGCONTEXT_SS set and UC_STRICT_RESTORE_SS clear, and its return
@@ -17,7 +18,8 @@
  * judging the architecture and the number, must leave the x86-64 call of the
  * same number alone and kill the process that makes the i386 one with
  * SIGSYS. PTRACE_GET_SYSCALL_INFO must report the architecture of each call
- * a tracee makes, AUDIT_ARCH_I386 for `int $0x80`.
+ * a tracee makes, AUDIT_ARCH_I386 for `int $0x80`; like Linux, it reports a
+ * system call stop only with PTRACE_O_TRACESYSGOOD.
  *
  * Everything the 32-bit code touches lies below 4 GiB: the probe is linked
  * at 0x400000, and its 32-bit stack and the buffers it passes to i386 calls
@@ -81,6 +83,8 @@
 
 #define PTRACE_TRACEME            0
 #define PTRACE_SYSCALL            24
+#define PTRACE_SETOPTIONS         0x4200
+#define PTRACE_O_TRACESYSGOOD     1
 #define PTRACE_GET_SYSCALL_INFO   0x420E
 #define PTRACE_SYSCALL_INFO_ENTRY 1
 
@@ -119,7 +123,7 @@ static const char *const assertion_id[] = {"far-call",
                                            "set-thread-area",
                                            "tls-from-32",
                                            "tls-from-64",
-                                           "tls-after-sleep",
+                                           "tls-after-child",
                                            "get-thread-area",
                                            "signal-frame",
                                            "signal-return",
@@ -155,11 +159,6 @@ struct k_sigaction {
     unsigned mask[2];
 };
 
-struct timespec {
-    long sec;
-    long nsec;
-};
-
 /* A classic BPF instruction, as seccomp takes it. */
 struct sock_filter {
     unsigned short code;
@@ -177,6 +176,7 @@ struct sock_fprog {
 static unsigned char stack32[16384] __attribute__((aligned(16)));
 static struct user_desc desc;
 static unsigned int tls_block[4] = {0x5A5A1234u};
+static unsigned int child_block[4] = {0x6B6B5678u};
 
 /* What the signal handler saw: uc_flags, the saved RIP and CS/SS word. */
 static volatile unsigned long seen_flags, seen_rip, seen_csgsfs;
@@ -342,9 +342,9 @@ static void run_entry(void)
 /** set_thread_area's entry, loaded into GS from both modes, and read back. */
 static void run_tls(void)
 {
-    struct timespec ts;
     unsigned int word;
-    static struct user_desc back;
+    long pid;
+    static struct user_desc back, child_desc;
 
     desc.entry_number = (unsigned int)-1;
     desc.base_addr = (unsigned int)(unsigned long)tls_block;
@@ -366,13 +366,24 @@ static void run_tls(void)
         fail("64-bit code did not read the block through selector 0x63 in GS");
     }
     report_held();
-    ts.sec = 0;
-    ts.nsec = 20000000;
-    syscall2(SYS_NANOSLEEP, (long)&ts, 0);
-    syscall0(SYS_SCHED_YIELD);
+    pid = syscall0(SYS_FORK);
+    if (pid < 0) {
+        fail("fork");
+    }
+    if (pid == 0) {
+        child_desc.entry_number = GDT_TLS_MIN;
+        child_desc.base_addr = (unsigned int)(unsigned long)child_block;
+        child_desc.limit = 0xFFFFF;
+        child_desc.flags = UD_FLAGS;
+        sys_exit(run32(set32, (unsigned long)&child_desc) != 0 ||
+                 (unsigned int)run32(tls32, TLS_SELECTOR) != child_block[0]);
+    }
+    if (child_status(pid) != 0) {
+        fail("a child did not read its own block through its entry 12");
+    }
     __asm__ __volatile__("movl %%gs:0, %0" : "=r"(word) : : "memory");
     if (word != tls_block[0] || (unsigned int)run32(tls32, TLS_SELECTOR) != tls_block[0]) {
-        fail("selector 0x63 no longer addressed the block after a sleep");
+        fail("selector 0x63 no longer addressed the block after a child set its own entry 12");
     }
     report_held();
     back.entry_number = GDT_TLS_MIN;
@@ -469,8 +480,9 @@ static void run_ptrace(void)
         sys_exit(0);
     }
     status = 0;
-    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || (status & 0xFF) != 0x7F) {
-        fail("a traced child did not stop");
+    if (syscall3(SYS_WAITPID, pid, (long)&status, 0) != pid || (status & 0xFF) != 0x7F ||
+        syscall4(SYS_PTRACE, PTRACE_SETOPTIONS, pid, 0, PTRACE_O_TRACESYSGOOD) != 0) {
+        fail("a traced child did not stop, or did not take PTRACE_O_TRACESYSGOOD");
     }
     for (i = 0; i < 16; i++) {
         unsigned int arch;
