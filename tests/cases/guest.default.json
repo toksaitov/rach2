@@ -454,6 +454,42 @@
       "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
     },
     {
+      "case_id": "guest.default.mmapdevprobe",
+      "behavior": "Root maps device memory through /dev/mem's mmap operation: the local APIC and the first megabyte read right, the refusals are Linux's, and fork, MADV_DONTFORK, the other advice, mremap and munmap treat the mapping as Linux treats one of device memory.",
+      "units": ["default", "mmapdevprobe"],
+      "domain": "guest",
+      "architectures": ["i686", "x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "mmapdevprobe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "assertions": [
+        {"assertion_id": "open", "checks": "/dev/mem opens for reading and writing.", "source": "program"},
+        {"assertion_id": "apic", "checks": "A shared read-write mapping of the local APIC's page at 0xFEE00000 reads a version that is not 0.", "source": "program"},
+        {"assertion_id": "maps", "checks": "/proc/self/maps has a line for the mapping at its address that reads rw-s fee00000 and names /dev/mem.", "source": "program"},
+        {"assertion_id": "low", "checks": "A shared mapping of the page at 0xF0000 reads the same 64 bytes as pread at that offset.", "source": "program"},
+        {"assertion_id": "refused", "checks": "A private mapping is EINVAL, a frame of RAM at 32 MiB is EPERM, and a writable shared mapping through a descriptor open for reading alone is EACCES.", "source": "program"},
+        {"assertion_id": "nowrite", "checks": "A read-only shared mapping through that descriptor reads the version, and mprotect's write on it is EACCES.", "source": "program"},
+        {"assertion_id": "fork", "checks": "A fork's child reads the parent's version through the inherited mapping and exits 0.", "source": "program"},
+        {"assertion_id": "dontfork", "checks": "After MADV_DONTFORK over the mapping, a fork's child that touches its address dies of SIGSEGV.", "source": "program"},
+        {"assertion_id": "advice", "checks": "MADV_DOFORK and MADV_DONTNEED over the mapping are EINVAL.", "source": "program"},
+        {"assertion_id": "mremap", "checks": "mremap's growth of the mapping is EFAULT, and a move with MREMAP_FIXED returns the new address, which reads the version.", "source": "program"},
+        {"assertion_id": "munmap", "checks": "munmap of the moved mapping succeeds.", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "mmapdevprobe", "node": "tests/mmapdevprobe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    },
+    {
       "case_id": "guest.default.forkro",
       "behavior": "A forked child's write to a read-only page it inherited kills the child with SIGSEGV.",
       "units": ["default", "forkro"],

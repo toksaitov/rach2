@@ -17,6 +17,7 @@ fsbaseprobe
 wow64probe x86_64
 errnoprobe
 vmprobe
+mmapdevprobe
 forkro
 cowregrant
 usercopyfault

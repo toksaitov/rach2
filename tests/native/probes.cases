@@ -102,6 +102,7 @@ case lstest -- lstest
 case memprobe -- memprobe machine=native
 case memprobe.total -- memprobe total
 case miscprobe -- miscprobe
+case mmapdevprobe -- mmapdevprobe
 case modeprobe.ext2 ids:1000 stage:suidhelper -- modeprobe helper=suidhelper
 case modeprobe.krffs ids:1000 stage:suidhelper volume:krffs:krffs16 \
     -- modeprobe vol0 helper=../suidhelper
