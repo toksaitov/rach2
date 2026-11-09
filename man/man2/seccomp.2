@@ -142,6 +142,24 @@ On x86-64 a filter sees
 0xc000003e, and the x86-64 numbers, and
 .Nm seccomp
 is call 317.
+A call that enters by
+.Ql int $0x80
+there, from 32-bit or 64-bit code, is an i386 call of the compat table of
+.Xr ia32 7 :
+the filter sees
+.Dv AUDIT_ARCH_I386 ,
+0x40000003, its i386 number and its arguments zero-extended from the
+32-bit registers, a
+.Dv SIGSYS
+it raises has that
+.Va si_arch ,
+and the strict mode leaves it the i386 numbers of
+.Xr read 2 ,
+.Xr write 2 ,
+.Xr exit 2
+and
+.Xr sigreturn 2 ,
+3, 4, 1 and 119, as on Linux.
 .Sh RETURN VALUES
 0 on success; for
 .Dv SECCOMP_FILTER_FLAG_TSYNC ,

@@ -387,6 +387,40 @@ when the tracer ends; every tracee is detached then.
 .It Dv PTRACE_GETEVENTMSG
 The event's message, into the word at
 .Fa data .
+At a system call stop it is 1 at the entry and 2 at the exit, as on Linux.
+.It Dv PTRACE_GET_SYSCALL_INFO
+Linux's
+.Vt struct ptrace_syscall_info ,
+of which at most
+.Fa addr
+bytes are written at
+.Fa data ;
+the call returns the size of the whole description.
+It holds the kind of stop, the architecture of the call, the instruction
+and stack pointers, and by the kind: at a system call entry stop the
+call's number and six arguments, 80 bytes; at an exit stop its result
+and whether it is an error, a value from -4095 to -1, 33 bytes; at a
+.Dv PTRACE_EVENT_SECCOMP
+stop the number, the arguments and the filter's data, 84 bytes.
+As on Linux, a system call stop is described only when it is reported
+as
+.Dv SIGTRAP No | 0x80 ,
+with
+.Dv PTRACE_O_TRACESYSGOOD ;
+any other stop gives 24 bytes of kind
+.Dv PTRACE_SYSCALL_INFO_NONE .
+The architecture is
+.Dv AUDIT_ARCH_I386
+on i686 and
+.Dv AUDIT_ARCH_X86_64
+on x86-64, except for a call that entered by
+.Ql int $0x80
+on x86-64, which is
+.Dv AUDIT_ARCH_I386
+with the i386 number, its arguments zero-extended from the 32-bit
+registers and its result taken in 32 bits, as
+.Xr ia32 7
+describes.
 .It Dv PTRACE_GETSIGINFO , PTRACE_SETSIGINFO
 The 128-byte
 .Vt siginfo_t

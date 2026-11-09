@@ -21,7 +21,7 @@ It also declares `ptrace_fork_attach`, which `do_fork` calls; `ptrace_exit_notif
 
 `arch/arch.h` declares the architecture's part, which each architecture's `ptrace.c` and `arch/x86/debugreg.c` define: `arch_ptrace` answers the architecture's own requests, `arch_regs_get` reads the registers in the order of its `user_regs_struct`, `arch_regset_size`, `arch_regset_get` and `arch_regset_set` move a register set, `arch_ptrace_step` sets or clears the trap flag, `arch_core_fp_size` and `arch_core_fp_notes` write a core file's floating-point notes, and `arch_debug_switch`, `arch_debug_pending` and `arch_debug_deliver` keep the hardware breakpoints.
 
-Named without their `PTRACE_` prefix, the requests `proc/ptrace.c` answers are `TRACEME`, `ATTACH`, `SEIZE`, the four memory requests, `CONT`, `SYSCALL`, `SINGLESTEP`, `KILL`, `DETACH`, `INTERRUPT`, `LISTEN`, `SETOPTIONS`, `GETEVENTMSG`, `GETSIGINFO`, `SETSIGINFO`, `GETREGSET` and `SETREGSET`. The architecture answers the rest:
+Named without their `PTRACE_` prefix, the requests `proc/ptrace.c` answers are `TRACEME`, `ATTACH`, `SEIZE`, the four memory requests, `CONT`, `SYSCALL`, `SINGLESTEP`, `KILL`, `DETACH`, `INTERRUPT`, `LISTEN`, `SETOPTIONS`, `GETEVENTMSG`, `GETSIGINFO`, `SETSIGINFO`, `GET_SYSCALL_INFO`, `GETREGSET` and `SETREGSET`. The architecture answers the rest:
 
 | | i686 (`arch/i686/ptrace.c`) | x86-64 (`arch/x86_64/ptrace.c`) |
 | --- | --- | --- |
@@ -39,7 +39,7 @@ A thread's record (`proc/process.h`) keeps its tracing state:
 
 * `ptrace`, the `PT_` flags of `ptrace.h`: traced, seized, stopping at system calls, stepping, a stop requested (`PT_INTERRUPT`), a seized thread's first stop still to come (`PT_START`), and kept in its stop by `PTRACE_LISTEN`;
 * `tracer`, the tracer's process ID, and `ptrace_opts`, the options;
-* `ptrace_status`, the wait status of the ptrace stop the thread is in, or 0; `ptrace_reported`, set once the tracer's wait has reported that stop; `ptrace_signo`, the signal the tracer resumes it with; `ptrace_msg`, the event's message; and `ptrace_info`, the siginfo of the stop;
+* `ptrace_status`, the wait status of the ptrace stop the thread is in, or 0; `ptrace_reported`, set once the tracer's wait has reported that stop; `ptrace_signo`, the signal the tracer resumes it with; `ptrace_msg`, the event's message, which a system call stop sets to 1 at the entry and 2 at the exit, as Linux does, so that `PTRACE_GET_SYSCALL_INFO` tells the two apart; and `ptrace_info`, the siginfo of the stop;
 * `orig_nr`, the system call a stop is in, or -1, which the tracer reads and writes as `orig_eax` or `orig_rax`;
 * `ptrace_exit_seen`, set once the tracer's wait has reported the end of the process;
 * `debugreg[8]`, the debug registers as the tracer set them, and `debug_pending`, a debug exception deferred in the kernel.
@@ -113,7 +113,7 @@ A core file has the registers of each thread as the requests read them. [The pro
 * The tracer is a whole process; Linux makes the attaching thread the tracer.
 * An unprivileged caller's attach to a thread inside `execve` fails with `EPERM`, where Linux waits for the exec to end.
 * `PTRACE_INTERRUPT` of a call that is never restarted, such as `nanosleep`, makes it fail with `EINTR`, where Linux restarts it.
-* Linux's `PTRACE_PEEKSIGINFO`, `PTRACE_GETSIGMASK`, `PTRACE_SETSIGMASK`, `PTRACE_SYSEMU` and `PTRACE_GET_SYSCALL_INFO` are among the requests that answer `EIO`.
+* Linux's `PTRACE_PEEKSIGINFO`, `PTRACE_GETSIGMASK`, `PTRACE_SETSIGMASK` and `PTRACE_SYSEMU` are among the requests that answer `EIO`.
 * On x86-64 `orig_rax` is kept in 32 bits.
 * i686 has one TLS entry for `PTRACE_GET_THREAD_AREA` and `PTRACE_SET_THREAD_AREA` ([thread-local storage](../arch/tls.Readme.md)).
 * The core file is always named `core` and has no `NT_SIGINFO` or `NT_FILE` note ([core(5)](../../../man/man5/core.5)).
