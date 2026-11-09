@@ -34,6 +34,7 @@ ARCH_C_SRC = sys/arch/x86_64/mmu.c \
     sys/arch/x86_64/vdso.c \
     sys/arch/x86_64/ia32_systab.c \
     sys/arch/x86_64/ia32_exec.c \
+    sys/arch/x86_64/ia32_core.c \
     sys/arch/x86_64/vdso32.c \
     sys/arch/x86_64/ldt.c \
     sys/arch/x86_64/sigframe32.c \

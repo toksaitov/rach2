@@ -55,4 +55,11 @@ struct user_desc {
 #define UD_USEABLE         0x40u
 #define UD_LM              0x80u
 
+struct process;
+
+/** Put the three TLS entries of the thread `t` in `u`, each as
+ * get_thread_area describes it, an empty one in Linux's `LDT_empty` form.
+ * Returns how many are set, Linux's `regset_tls_active`. */
+uint32_t ia32_tls_get(const struct process *t, struct user_desc *u);
+
 #endif /* _X86_64_TLS_H_ */

@@ -123,17 +123,16 @@ void fpu_xstate_view(uint8_t *copy);
  */
 int fpu_xstate_set(void *area, const uint8_t *in);
 
-#if !defined(FPU_X86_64)
 /** Write the x87 part of `area` into `env` as the 108-byte i386
  * `user_i387_struct`, converted from the `fxsave` image as Linux's
- * `convert_from_fxsr` converts it, or copied from the `fnsave` one. */
+ * `convert_from_fxsr` converts it, or copied from the `fnsave` one. The
+ * x86-64 kernel gives it to i386 programs. */
 void fpu_env_get(const void *area, uint8_t *env);
 
 /** Put the 108-byte `user_i387_struct` `env` into the x87 part of `area`,
  * as Linux's `convert_to_fxsr` does; with XSAVE the x87 state is then
  * marked in use. */
 void fpu_env_set(void *area, const uint8_t *env);
-#endif
 
 /*
  * The signal frame's floating-point state, Linux's on each architecture.

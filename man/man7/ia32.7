@@ -27,6 +27,9 @@ argument is a
 whose descriptor the child gets, as
 .Xr set_thread_area 2
 sets one.
+A signal that dumps core leaves an ELF32 core file of i386's notes, as
+.Xr core 5
+describes.
 .Pp
 The kernel lays out its global descriptor table (GDT) as Linux
 does, so that a 64-bit process can run 32-bit code and make i386 system

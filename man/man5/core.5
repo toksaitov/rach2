@@ -1,4 +1,4 @@
-.Dd October 3, 2026
+.Dd November 10, 2026
 .Dt CORE 5
 .Os
 .Sh NAME
@@ -149,11 +149,28 @@ is the
 image, and there is no
 .Dv NT_PRXFPREG .
 .Pp
+An i386 program that the x86-64 kernel runs, as
+.Xr ia32 7
+describes, leaves the i386 file, as Linux's 32-bit emulation leaves it:
+ELF32 for
+.Dv EM_386 ,
+with the notes listed first, the vector in 4-byte words through its
+.Dv AT_NULL
+pair, and after the floating-point notes of each thread, when one of its
+three TLS entries is set,
+.Dv NT_386_TLS ,
+named
+.Dq LINUX ,
+the three entries as
+.Xr get_thread_area 2
+gives them.
+.Pp
 .Dv NT_PRSTATUS ,
 .Dv NT_FPREGSET ,
-.Dv NT_PRXFPREG
-and
+.Dv NT_PRXFPREG ,
 .Dv NT_X86_XSTATE
+and
+.Dv NT_386_TLS
 follow for each other thread.
 One
 .Dv PT_LOAD
@@ -211,4 +228,5 @@ one whose limit is 0, or which is not dumpable, leaves none.
 .Xr prlimit64 2 ,
 .Xr sigaction 2 ,
 .Xr vfork 2 ,
-.Xr wait 2
+.Xr wait 2 ,
+.Xr ia32 7
