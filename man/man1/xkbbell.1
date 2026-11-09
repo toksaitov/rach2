@@ -1,0 +1,53 @@
+.Dd November 9, 2026
+.Dt XKBBELL 1
+.Os
+.Sh NAME
+.Nm xkbbell
+.Nd XKB extension user utility
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     xkbbell [-display <dpy>] [-synch] [-dev <id>] [-force] [-nobeep] [-bf
+     <id>] [-kf <id>] [-v <volume>] [-w <id>] [-help|-version]
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     user utility
+.Ed
+.Ss "OPTIONS"
+.Bd -literal
+     -display <dpy>
+             specifies which display to use
+
+     -synch  turns on synchronization
+
+     -dev <id>
+             specifies which device to use
+
+     -force  force audible bell
+
+     -nobeep suppress server bell, event only
+
+     -bf <id>
+             specifies which bell feedback to use
+
+     -kf <id>
+             specifies which keyboard feedback to use
+
+     -v <volume>
+             specifies which volume to use
+
+     -w <id> specifies which  window to use
+
+     -help   print list of options and exit
+
+     -version
+             print program version and exit
+
+     If neither device nor feedback are specified, xkbbell uses the default
+     values for the core keyboard device.
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/x11-xkb-utils/copyright .

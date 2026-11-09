@@ -1,0 +1,48 @@
+.Dd November 9, 2026
+.Dt FC-CONFLIST 1
+.Os
+.Sh NAME
+.Nm fc-conflist
+.Nd list the configuration files processed by Fontconfig
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     fc-conflist [ -Vh ]
+
+      [ --version ]  [ --help ]
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     fc-conflist prints an annotated list of all the configuration files
+     processed by Fontconfig.
+
+     The output is a `-' or `+' depending on whether the file is ignored or
+     processed, a space, the file's path, a colon and space, and the
+     description from the file or `No description' if none is present.
+
+     The order of files looks like how fontconfig actually processes them
+     except one contains <include> element.  In that case, it will be shown
+     after processing all the sub directories where is targeted by <include>.
+.Ed
+.Ss "OPTIONS"
+.Bd -literal
+     This program follows the usual GNU command line syntax, with long options
+     starting with two dashes (`-'). A summary of options is included below.
+
+     -V     Show version of the program and exit.
+
+     -h     Show summary of options.
+.Ed
+.Ss "RETURN CODES"
+.Bd -literal
+     fc-conflist returns error code 0 for successful parsing, or 1 if any
+     errors occurred or if at least one font face could not be opened.
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     This manual page was updated by Akira TAGOH <akira@tagoh.org>.
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/fontconfig/copyright .

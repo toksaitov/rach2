@@ -1,0 +1,50 @@
+.Dd November 9, 2026
+.Dt PACMD 1
+.Os
+.Sh NAME
+.Nm pacmd
+.Nd Reconfigure a PulseAudio sound server during runtime
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     pacmd
+
+     pacmd --help
+
+     pacmd --version
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     This tool can be used to introspect or reconfigure a running PulseAudio
+     sound server during runtime. It connects to the sound server and offers a
+     simple live shell that can be used to enter the commands also understood
+     in the default.pa configuration scripts.
+
+     To exit the live shell, use ctrl+d. Note that the 'exit' command inside
+     the shell will tell the PulseAudio daemon itself to shutdown!
+
+     If any arguments are passed on the command line, they will be passed into
+     the live shell which will process the command and exit.
+.Ed
+.Ss "OPTIONS"
+.Bd -literal
+     -h | --help
+            Show help.
+
+     --version
+            Show version information.
+.Ed
+.Ss "AUTHORS"
+.Bd -literal
+     The PulseAudio Developers <pulseaudio-discuss (at) lists (dot)
+     freedesktop (dot) org>; PulseAudio is available from
+     http://pulseaudio.org/
+.Ed
+.Ss "SEE ALSO"
+.Bd -literal
+     pulse-cli-syntax(5), pulseaudio(1), pactl(1), default.pa(5)
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/pulseaudio-utils/copyright .

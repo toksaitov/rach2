@@ -1,0 +1,16 @@
+.Dd November 9, 2026
+.Dt PIGLIT 1
+.Os
+.Sh NAME
+.Nm piglit
+.Nd run graphics conformance tests
+.Sh DESCRIPTION
+.Nm
+runs the Piglit graphics tests and produces result summaries.
+.Pp
+.Dl piglit run quick RESULTS
+.Dl piglit summary console RESULTS
+.Pp
+The desktop layer supplies the Debian test data and Python modules.
+Use a new result directory for each run and record the renderer, driver and case list.
+The graphics runners set the concurrency and select the cases for a checkpoint or release.

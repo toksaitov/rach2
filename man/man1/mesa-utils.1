@@ -1,0 +1,19 @@
+.Dd November 9, 2026
+.Dt MESA-UTILS 1
+.Os
+.Sh NAME
+.Nm mesa-utils
+.Nd inspect EGL and GL implementations and draw examples
+.Sh DESCRIPTION
+Mesa's utilities inspect GL and EGL implementations and draw sample scenes.
+.Nm eglinfo
+lists EGL platforms, devices and extensions;
+.Nm glxinfo
+lists GLX and OpenGL information on an X display.
+The gears and triangle programs draw through the interface in their name.
+Wayland programs use
+.Ev WAYLAND_DISPLAY ;
+X11 programs use
+.Ev DISPLAY .
+.Ev LIBGL_ALWAYS_SOFTWARE=1
+selects CPU rendering.

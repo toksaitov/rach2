@@ -1,0 +1,40 @@
+.Dd November 9, 2026
+.Dt INTEL_ERROR_DECODE 1
+.Os
+.Sh NAME
+.Nm intel_error_decode
+.Nd Decode an Intel GPU dump automatically captured by the kernel at the time of an error
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     intel_error_decode [FILENAME]
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     intel_error_decode is a tool that decodes the instructions and state of
+     the GPU at the time of an error. It requires kernel 2.6.34 or newer, and
+     either debugfs mounted on /sys/kernel/debug or /debug containing a
+     current i915_error_state or you can pass a file containing a saved error.
+.Ed
+.Ss "ARGUMENTS"
+.Bd -literal
+     FILENAME
+            Decodes a previously saved error.
+.Ed
+.Ss "REPORTING BUGS"
+.Bd -literal
+     Report bugs on fd.o GitLab:
+     <https://gitlab.freedesktop.org/drm/igt-gpu-tools/-/issues>
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     IGT Developers <igt-dev@lists.freedesktop.org>
+.Ed
+.Ss "COPYRIGHT"
+.Bd -literal
+     2010,2012,2016 Intel Corporation
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/intel-gpu-tools/copyright .

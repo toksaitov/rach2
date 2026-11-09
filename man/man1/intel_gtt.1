@@ -1,0 +1,36 @@
+.Dd November 9, 2026
+.Dt INTEL_GTT 1
+.Os
+.Sh NAME
+.Nm intel_gtt
+.Nd Dump the contents of an Intel GPU's GTT
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     intel_gtt
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     intel_gtt is a tool to view the contents of the GTT on an Intel GPU. The
+     GTT is the page table that maps between GPU addresses and system memory.
+     This tool can be useful in debugging the Linux AGP driver initialization
+     of the chip or in debugging later overwriting of the GTT with garbage
+     data.
+.Ed
+.Ss "REPORTING BUGS"
+.Bd -literal
+     Report bugs on fd.o GitLab:
+     <https://gitlab.freedesktop.org/drm/igt-gpu-tools/-/issues>
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     IGT Developers <igt-dev@lists.freedesktop.org>
+.Ed
+.Ss "COPYRIGHT"
+.Bd -literal
+     2010,2012,2016 Intel Corporation
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/intel-gpu-tools/copyright .

@@ -1,0 +1,52 @@
+.Dd November 9, 2026
+.Dt UPDATE-MIME-DATABASE 1
+.Os
+.Sh NAME
+.Nm update-mime-database
+.Nd a program to build the Shared MIME-Info database cache
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     update-mime-database -h | -v | [ -V | -n ] MIME-DIR
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     update-mime-database is a program which is responsible for updating the
+     shared mime-info cache according to the system described in the Shared
+     MIME-Info Database specification
+     <http://www.freedesktop.org/wiki/Specifications/shared-mime-info-spec>
+     from the X Desktop Group.
+.Ed
+.Ss "OPTIONS"
+.Bd -literal
+     -h     Print out a command summary.
+
+     -v     Print out the version information.
+
+     -V     Be verbose.
+
+     -n     Only update if MIME-DIR/packages/ or a file in that directory is
+            newer than MIME-DIR/version. This is useful for package pre- and
+            post-installation scripts.
+.Ed
+.Ss "ARGUMENTS"
+.Bd -literal
+     MIME-DIR
+            This is the directory for which update-mime-database should
+            rebuild the cache. Mandatory if none of the options is provided.
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     Filip Van Raemdonck (mechanix@debian.org) wrote this manpage for the
+     Debian GNU/Linux project, but it may be used by others.
+.Ed
+.Ss "LICENCE"
+.Bd -literal
+     Copyright (C) 2002 Thomas Leonard.
+     You may redistribute copies of update-mime-database under the terms of
+     the GNU General Public License.
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/shared-mime-info/copyright .

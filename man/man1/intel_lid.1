@@ -1,0 +1,34 @@
+.Dd November 9, 2026
+.Dt INTEL_LID 1
+.Os
+.Sh NAME
+.Nm intel_lid
+.Nd Poll the values of different reports about laptop lid state
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     intel_lid
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     intel_lid is a tool to poll ACPI and the BIOS scratch register's
+     reporting of laptop lid state. This can be used for debugging issues with
+     laptop modesetting for lid opening and closing.
+.Ed
+.Ss "REPORTING BUGS"
+.Bd -literal
+     Report bugs on fd.o GitLab:
+     <https://gitlab.freedesktop.org/drm/igt-gpu-tools/-/issues>
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     IGT Developers <igt-dev@lists.freedesktop.org>
+.Ed
+.Ss "COPYRIGHT"
+.Bd -literal
+     2010,2012-2013,2016 Intel Corporation
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/intel-gpu-tools/copyright .

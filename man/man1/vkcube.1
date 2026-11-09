@@ -1,0 +1,21 @@
+.Dd November 9, 2026
+.Dt VKCUBE 1
+.Os
+.Sh NAME
+.Nm vkcube
+.Nd draw a cube with Vulkan
+.Sh DESCRIPTION
+.Nm vkcube
+and
+.Nm vkcubepp
+are Vulkan demonstration programs.
+The option
+.Fl Fl wsi Ar wayland
+selects Wayland;
+.Fl Fl c Ar count
+ends after that many frames.
+.Ev VK_ICD_FILENAMES
+selects the Vulkan driver manifest.
+The software driver is lavapipe.
+.Xr vulkaninfo 1
+prints the selected implementation and its capabilities.

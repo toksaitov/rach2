@@ -1,0 +1,34 @@
+.Dd November 9, 2026
+.Dt UPDATE-ICON-CACHES 8
+.Os
+.Sh NAME
+.Nm update-icon-caches
+.Nd Update wrapper script for the icon caches
+.Sh DESCRIPTION
+.Ss "SYNOPSIS"
+.Bd -literal
+     update-icon-caches directory [ ... ]
+.Ed
+.Ss "DESCRIPTION"
+.Bd -literal
+     update-icon-caches is a wrapper script for updating the icon caches in a
+     list of directories.
+
+     In each of the directories passed as arguments, the icon cache is updated
+     if it is already present. It is not created if it does not already exist.
+
+     If the theme index file is not present, the icon cache is removed.
+.Ed
+.Ss "SEE ALSO"
+.Bd -literal
+     gtk-update-icon-cache(1)
+.Ed
+.Ss "AUTHOR"
+.Bd -literal
+     This manual page was written by Josselin Mouette <joss@debian.org>, for
+     the Debian GNU/Linux system.
+.Ed
+.Sh RACH2
+This is Debian's manual, rendered from the pinned package.
+The package's copyright and license terms are installed under
+.Pa /usr/share/doc/gtk-update-icon-cache/copyright .
