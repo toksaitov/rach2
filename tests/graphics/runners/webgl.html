@@ -1,0 +1,112 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>webgl runner</title>
+<script src="/js/webgl-test-harness.js"></script>
+</head>
+<body style="margin:0">
+<iframe id="page" style="width:100vw;height:100vh;border:0"></iframe>
+<script>
+"use strict";
+// webgl.html?version=V&only=I,J,...: run the pages of the WebGL conformance
+// suite's list for version V whose indexes are given, one after another in
+// the frame, through the suite's own harness, js/webgl-test-harness.js,
+// which reads the 00_test_list.txt files with their --min-version and
+// --max-version options as webgl-conformance-tests.html does. The page posts
+// to /event, as each is known: the renderer, the list's length and digest,
+// each page started, a tick every 10 s while one runs, each page's result,
+// and the end.
+const q = new URLSearchParams(location.search);
+const VERSION = q.get("version") || "2.0.1";
+const ONLY = (q.get("only") || "").split(",").filter(s => s !== "").map(Number);
+
+function post(event) {
+  return fetch("/event", { method: "POST", body: JSON.stringify(event), keepalive: true });
+}
+
+// The renderer of a WebGL context, unmasked where the browser gives it.
+function renderer(type) {
+  const gl = document.createElement("canvas").getContext(type);
+  if (!gl) return { context: type, renderer: null };
+  const info = gl.getExtension("WEBGL_debug_renderer_info");
+  return {
+    context: type,
+    renderer: gl.getParameter(gl.RENDERER),
+    version: gl.getParameter(gl.VERSION),
+    unmasked: info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : null,
+    vendor: info ? gl.getParameter(info.UNMASKED_VENDOR_WEBGL) : null,
+  };
+}
+
+async function digest(text) {
+  const bytes = new TextEncoder().encode(text);
+  if (!crypto.subtle) return null;
+  const sum = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(sum)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+post({ kind: "renderer", contexts: [renderer("webgl"), renderer("webgl2")] });
+
+const files = [];
+const index = {};
+let page = null;
+let tick = 0;
+const R = WebGLTestHarnessModule.TestHarness.reportType;
+
+function report(type, url, msg, success, skipped) {
+  switch (type) {
+    case R.ADD_PAGE:
+      index[msg] = files.length;
+      files.push(msg);
+      break;
+    case R.READY:
+      ready();
+      break;
+    case R.START_PAGE:
+      page = { url: url, index: index[url], passed: 0, failed: 0, skipped: 0, timeouts: 0 };
+      tick = Date.now();
+      post({ kind: "start", index: page.index, url: url });
+      return true;
+    case R.TEST_RESULT:
+      if (success === undefined) page.timeouts++;
+      else if (skipped) page.skipped++;
+      else if (success) page.passed++;
+      else page.failed++;
+      if (Date.now() - tick >= 10000) {
+        tick = Date.now();
+        post({ kind: "tick", index: page.index });
+      }
+      break;
+    case R.FINISH_PAGE:
+      // success undefined: the harness's 20 s watchdog ended the page.
+      page.status = success === undefined ? "timeout"
+        : page.failed > 0 || page.timeouts > 0 ? "fail"
+        : page.passed === 0 && page.skipped > 0 ? "skip"
+        : page.passed === 0 ? "empty" : "pass";
+      post(Object.assign({ kind: "result" }, page));
+      break;
+    case R.FINISHED_ALL_TESTS:
+      post({ kind: "done", ok: success === true, message: msg || "" });
+      break;
+  }
+  return true;
+}
+
+let harness = null;
+
+async function ready() {
+  post({ kind: "list", version: VERSION, count: files.length, sha256: await digest(files.join("\n") + "\n") });
+  const run = ONLY.filter(i => i >= 0 && i < files.length);
+  // As TestHarness.runTests does, for the given indexes instead of a range.
+  harness.idleIFrames = harness.iframes.slice(0);
+  harness.runningTests = {};
+  harness.testsToRun = run;
+  harness.numTestsRemaining = run.length;
+  harness.startNextTest();
+}
+
+// The suite's pages report to window.parent.webglTestHarness
+// (js/js-test-pre.js), as webgl-conformance-tests.html sets it.
+harness = window.webglTestHarness = new WebGLTestHarnessModule.TestHarness(
+  document.getElementById("page"), "00_test_list.txt", report,
+  { version: VERSION, allowSkip: 0, quiet: 0 });
+</script>
+</body></html>
