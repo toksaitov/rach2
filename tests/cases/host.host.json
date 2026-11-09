@@ -1196,6 +1196,16 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "vkms",
+          "checks": "tests/host/vkms_hosttest.c binds the software display with the mode-setting core and checks its objects, the boot option and module parameters, the composition of the planes against the test's own frame and CRC, vblanks from the tick over a model clock, equal CRCs for equal frames, catching up, the gamma table, rotations and formats under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
+          "assertion_id": "vkms64",
+          "checks": "tests/host/vkms64_hosttest.c runs the software display's rows with x86-64 kernel structures under ASan and UBSan",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "vm",
           "checks": "tests/host/vm_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"
