@@ -15,6 +15,55 @@
  */
 
 struct isr_params;
+struct eventfd;
+
+/*
+ * The kernel's side, for irqfd and ioeventfd (rach2/sys/kvm/), VFIO's
+ * interrupts and a transport's doorbells, as Linux's eventfd_ctx. A holder
+ * takes a reference from a descriptor of the caller's (`eventfd_get`),
+ * which keeps the counter after the descriptor closes, and drops it with
+ * `eventfd_put`. A hook on the counter (`eventfd_hook_add`) is told of
+ * each rise, by a program's write or the kernel's `eventfd_signal`, and of
+ * the last close of the descriptor. The counter and the hooks have a
+ * spinlock, so `eventfd_signal` may be called from an interrupt handler;
+ * the rest is called under the big lock.
+ */
+struct eventfd_hook {
+    /* The counter rose: called with the counter's lock held and
+     * interrupts off, from the writer's or the signaller's context, so it
+     * must not sleep or call the eventfd's functions. Return 1 to take the
+     * counter, as a read would, Linux's eventfd_ctx_do_read in irqfd's
+     * wakeup, or 0 to leave it. */
+    int (*signal)(struct eventfd_hook *h);
+    /* The last descriptor closed: called once, under the big lock, after
+     * the hook has left the counter's list; NULL for none. It may sleep. */
+    void (*hangup)(struct eventfd_hook *h);
+    struct eventfd_hook *next; /* the counter's list */
+};
+
+/** A reference to the eventfd the caller's descriptor `fd` is open on, or
+ * NULL with `*err` -EBADF for no such descriptor or -EINVAL for one that is
+ * not an eventfd, as Linux's eventfd_ctx_fdget. */
+struct eventfd *eventfd_get(int fd, int32_t *err);
+
+/** Drop a reference `eventfd_get` took; the last one, after the last
+ * close, frees the counter. */
+void eventfd_put(struct eventfd *ev);
+
+/** Add 1 to the counter, as Linux's eventfd_signal, waking the readers and
+ * telling the hooks; nothing at 0xFFFFFFFFFFFFFFFF. Safe in an interrupt
+ * handler. */
+void eventfd_signal(struct eventfd *ev);
+
+/** Put `h` on the counter's list: 1 when the counter is above 0 already,
+ * which the caller acts on as on a signal, else 0. After the last close,
+ * `h` is not added and its hangup runs at once: -1. */
+int eventfd_hook_add(struct eventfd *ev, struct eventfd_hook *h);
+
+/** Take `h` off the counter's list; nothing for a hook not on it. The
+ * counter's value, taken as a read would, goes into `*cnt` unless NULL,
+ * as Linux's eventfd_ctx_remove_wait_queue. */
+void eventfd_hook_remove(struct eventfd *ev, struct eventfd_hook *h, uint64_t *cnt);
 
 /** eventfd2(2) takes the initial value and the flags EFD_CLOEXEC,
  * EFD_NONBLOCK and EFD_SEMAPHORE, and eventfd(2) the value alone. Returns
