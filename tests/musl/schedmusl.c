@@ -20,20 +20,20 @@
  * that has moved to a new session with setsid may not set the group of a
  * child left in the old one, which is EPERM and leaves the child's group.
  *
- * `sched_yield` returns 0. Every process has SCHED_OTHER with priority 0, and
- * asking for it, with SCHED_RESET_ON_FORK or not, succeeds; SCHED_FIFO and
- * SCHED_RR fail with EPERM, and the other policies, a priority that does not
- * suit its policy, and an unknown policy with EINVAL. The priority ranges
- * are Linux's, and the time slice is one 1 ms tick. The affinity is the
+ * `sched_yield` returns 0. Every process starts with SCHED_OTHER at priority 0,
+ * and asking for it, with SCHED_RESET_ON_FORK or not, succeeds, as do
+ * SCHED_BATCH and SCHED_IDLE, which sched_getscheduler then reads back;
+ * SCHED_FIFO and SCHED_RR fail with EPERM, and SCHED_DEADLINE, a priority that
+ * does not suit its policy, and an unknown policy with EINVAL. The priority
+ * ranges are Linux's, and the time slice is one 1 ms tick. The affinity is the
  * processors /proc/cpuinfo lists, by their ids, which need not run without a
- * gap, read raw as the bytes of the longs the highest takes, four on i386 to
- * 32 processors and eight past them and on x86-64; a mask of the last
- * processor alone is accepted, kept, and moves the caller there, as getcpu
- * then says, and one of a processor not started fails with EINVAL. A caller
- * of another user may not change root's process, a pid of no process fails
- * with ESRCH, and a negative pid with EINVAL. musl answers the policy and
- * parameter calls with ENOSYS itself, so those rows call the kernel through
- * `syscall`.
+ * gap, read raw as the bytes of the longs the highest takes, four on i386 to 32
+ * processors and eight past them and on x86-64; a mask of the last processor
+ * alone is accepted, kept, and moves the caller there, as getcpu then says, and
+ * one of a processor not started fails with EINVAL. A caller of another user
+ * may not change root's process, a pid of no process fails with ESRCH, and a
+ * negative pid with EINVAL. musl answers the policy and parameter calls with
+ * ENOSYS itself, so those rows call the kernel through `syscall`.
  *
  * /proc/self/oom_score_adj reads 0 at first and is root's, mode 0644, while
  * the process is dumpable; a write, opened as a shell's redirection opens
@@ -145,6 +145,7 @@ static const char *const assertion_id[] = {"gettid-pid",
                                            "priority-zero",
                                            "other-accepted",
                                            "setparam-zero",
+                                           "batch-idle-set",
                                            "realtime-eperm",
                                            "priority-einval",
                                            "policy-einval",
@@ -592,8 +593,9 @@ static int not_root(void)
 }
 
 /**
- * Check yielding, and the policy and parameter calls that ask for what every
- * process has: SCHED_OTHER at priority 0. Returns 0, or 1 after the failure is
+ * Check yielding, the policy and parameter calls that ask for what every
+ * process starts with, SCHED_OTHER at priority 0, and the change to
+ * SCHED_BATCH and SCHED_IDLE and back. Returns 0, or 1 after the failure is
  * printed.
  */
 static int policy_calls(void)
@@ -623,16 +625,22 @@ static int policy_calls(void)
         return fail("sched_setparam of priority 0 was refused");
     }
     row_held();
+    if (set_policy(0, SCHED_BATCH, 0) != 0 || syscall(SYS_sched_getscheduler, 0L) != SCHED_BATCH ||
+        set_policy(0, SCHED_IDLE, 0) != 0 || syscall(SYS_sched_getscheduler, 0L) != SCHED_IDLE ||
+        set_policy(0, SCHED_OTHER, 0) != 0 || syscall(SYS_sched_getscheduler, 0L) != SCHED_OTHER) {
+        return fail("SCHED_BATCH, SCHED_IDLE and SCHED_OTHER were not each set and read back");
+    }
+    row_held();
     return 0;
 }
 
 /**
- * Check that the policies and priorities this kernel does not run each fail
+ * Check that the policies and priorities this kernel does not take each fail
  * with EPERM or EINVAL. Returns 0, or 1 after the failure is printed.
  */
 static int policy_refusals(void)
 {
-    static const int refused[] = {SCHED_BATCH, SCHED_IDLE, SCHED_DEADLINE, 4, 42};
+    static const int refused[] = {SCHED_DEADLINE, 4, 42};
     struct sched_param sp;
     unsigned int i;
 
@@ -643,13 +651,14 @@ static int policy_refusals(void)
     row_held();
     if (set_policy(0, SCHED_FIFO, 0) != -1 || errno != EINVAL ||
         set_policy(0, SCHED_OTHER, 10) != -1 || errno != EINVAL ||
+        set_policy(0, SCHED_IDLE, 1) != -1 || errno != EINVAL ||
         set_policy(0, SCHED_RR, 100) != -1 || errno != EINVAL) {
         return fail("a priority that does not suit its policy was not refused with EINVAL");
     }
     row_held();
     for (i = 0; i < sizeof(refused) / sizeof(refused[0]); i++) {
         if (set_policy(0, refused[i], 0) != -1 || errno != EINVAL) {
-            return fail("a policy this kernel does not run was not refused with EINVAL");
+            return fail("a policy this kernel does not take was not refused with EINVAL");
         }
     }
     row_held();

@@ -370,6 +370,13 @@ struct process {
      * end, and its length; 0 for none. */
     uintptr_t robust_list;
     uint32_t robust_len;
+    /* The scheduling policy sched_setscheduler(2) set, SCHED_OTHER (0),
+     * SCHED_BATCH (3) or SCHED_IDLE (5), and whether SCHED_RESET_ON_FORK
+     * came with it. A fork passes the policy on and clears the flag in the
+     * child, as Linux does for these policies; an exec keeps both. The
+     * scheduler does not read the policy. */
+    uint8_t sched_policy;
+    uint8_t sched_reset;
     /* Set once this thread has been through the stop in effect in its
      * process, which a tracer may then have resumed it from; cleared when
      * the process continues. */
