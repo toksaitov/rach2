@@ -1,0 +1,32 @@
+{
+  "argv": [
+    "chromium",
+    "--ozone-platform=wayland",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--password-store=basic",
+    "--start-fullscreen",
+    "--ignore-certificate-errors",
+    "--remote-debugging-port=0",
+    "--user-data-dir=/tmp/browser.kyuGUA/profile",
+    "--disable-background-networking",
+    "--disable-hang-monitor",
+    "--disable-background-timer-throttling",
+    "--disable-renderer-backgrounding",
+    "--autoplay-policy=no-user-gesture-required",
+    "--ignore-gpu-blocklist",
+    "about:blank"
+  ],
+  "certificate": "ephemeral local HTTPS certificate accepted by automation",
+  "environment": {
+    "GRAPHICS_CLASS": "conformance",
+    "GRAPHICS_CPUS": "4",
+    "GRAPHICS_DONE": "1",
+    "LP_NUM_THREADS": "0",
+    "MESA_SHADER_CACHE_DIR": "/tmp/graphics-shader-cache",
+    "WAYLAND_DISPLAY": "wayland-runner",
+    "XDG_RUNTIME_DIR": "/tmp/browser.kyuGUA/run"
+  },
+  "prefs": {},
+  "version": "Chromium 156.0.8078.79 built on Debian GNU/Linux 13 (trixie)"
+}

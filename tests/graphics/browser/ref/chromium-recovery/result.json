@@ -1,0 +1,23 @@
+{
+  "after": {
+    "pixel": [
+      255,
+      128,
+      0,
+      255
+    ],
+    "renderer": "ANGLE (Mesa, llvmpipe (LLVM 19.1.7 256 bits), OpenGL ES 3.2)"
+  },
+  "before": {
+    "pixel": [
+      255,
+      128,
+      0,
+      255
+    ],
+    "renderer": "ANGLE (Mesa, llvmpipe (LLVM 19.1.7 256 bits), OpenGL ES 3.2)"
+  },
+  "losses": 1,
+  "new_pid": 982,
+  "old_pid": 848
+}
