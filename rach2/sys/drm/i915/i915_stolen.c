@@ -23,6 +23,12 @@
 
 #define I915_STOLEN_UNIT 0x2000000u /* GMS counts 32 MiB */
 
+/* Only x86-64's kernel reads the DMAR table. A host test models the
+ * Lenovo, an x86-64 machine, whatever processor the build machine has. */
+#if defined(__x86_64__) || defined(RACH2_HOSTTEST)
+#define I915_STOLEN_DMAR 1
+#endif
+
 /** The stolen memory that the GMCH control word `gmch` and BDSM `bsm`
  * describe, as Linux's gen6_stolen_size and intel_stolen_base: its base in
  * `*base` and its size, 0 for none, in `*size`. */
@@ -76,7 +82,7 @@ static int i915_stolen_allocator_owns(uint64_t base, uint64_t size)
     return 0;
 }
 
-#if defined(__x86_64__)
+#if defined(I915_STOLEN_DMAR)
 /** The device's number and function, as the IOMMU's calls take them. */
 static uint8_t i915_devfn(const struct drm_i915_private *i915)
 {
@@ -148,7 +154,7 @@ void i915_stolen_init(struct drm_i915_private *i915)
     struct i915_stolen *st = &i915->stolen;
     const char *where = "", *dmar = "";
     uint64_t base, size;
-#if defined(__x86_64__)
+#if defined(I915_STOLEN_DMAR)
     int rmrr;
 #endif
 
@@ -167,7 +173,7 @@ void i915_stolen_init(struct drm_i915_private *i915)
              (unsigned long)base, (unsigned long)(base + size - 1));
         return;
     }
-#if defined(__x86_64__)
+#if defined(I915_STOLEN_DMAR)
     rmrr = i915_stolen_in_rmrr(i915, base, size);
     if (rmrr == 0) {
         klog(KLOG_ERR, "i915",
@@ -183,7 +189,7 @@ void i915_stolen_init(struct drm_i915_private *i915)
         return;
     }
     st->for_objects = 1;
-#if defined(__x86_64__)
+#if defined(I915_STOLEN_DMAR)
     if (rmrr == 1) {
         st->in_rmrr = 1;
         where = ", inside the device's reserved region";
