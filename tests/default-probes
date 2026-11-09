@@ -1,9 +1,10 @@
 # The default suite's programs, one a line, in the order selfbuild's scenario
 # runs them in one boot of the test image: those that rewrite the account
 # files after those that read them, and those that change staged files last.
-# A program that i386 alone builds has `i686` after its name. Each has a case
-# guest.default.NAME of tests/cases/guest.default.json, and
-# tools/verify/probecheck.sh reads this file.
+# A program that one architecture alone builds has `i686` or `x86_64` after
+# its name. Each has a case guest.default.NAME of
+# tests/cases/guest.default.json, and tools/verify/probecheck.sh reads this
+# file.
 dirtest
 stattest
 rmtest
@@ -13,6 +14,7 @@ dup2test
 auxvprobe
 tlsprobe i686
 fsbaseprobe
+wow64probe x86_64
 errnoprobe
 vmprobe
 forkro

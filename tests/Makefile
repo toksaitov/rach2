@@ -33,7 +33,7 @@ MUSL_POST    = $(MUSL_PREFIX)/lib/libc.a $(MUSL_LIBGCC) $(MUSL_PREFIX)/lib/crtn.
 PROGS = hello forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe keylatprobe evprobe \
         rmtest mvtest lstest stdintest dup2test \
         pingtest packetprobe rawprobe frag6probe netifprobe dgramprobe udptest tcptest sockettest dnstest auxvprobe \
-        tlsprobe fsbaseprobe errnoprobe vmprobe vmfault forkro cowregrant \
+        tlsprobe fsbaseprobe wow64probe errnoprobe vmprobe vmfault forkro cowregrant \
         usercopyfault fdstale dirgrow dirprobe unlinkdirprobe pathcanon timeprobe sigprobe credprobe ownprobe permprobe trapprobe ofdprobe \
         waitprobe exitprobe pipeprobe pollprobe devprobe ttyprobe jobprobe miscprobe \
         ptyprobe rngprobe orphanprobe loopprobe zombieprobe survivorprobe procprobe suidprobe suidhelper sudoprobe modeprobe searchprobe stickyprobe blockprobe bootprobe persistprobe stressprobe winprobe dirtyprobe rebootprobe lagprobe fpuprobe xsaveprobe memprobe poolprobe vfsprobe mountprobe fatwriteprobe usbdiskprobe ext2probe krffsprobe loopdevprobe bootlogprobe lockwaitprobe \
@@ -46,6 +46,14 @@ PROGS = hello forktest shelltest dirtest stattest usbprobe mouseprobe intrprobe 
 I686_ONLY = tlsprobe
 ifeq ($(ARCH),x86_64)
 PROGS := $(filter-out $(I686_ONLY),$(PROGS))
+endif
+
+# The probes of an interface only x86-64 has, built for x86-64 alone:
+# wow64probe runs 32-bit code in a 64-bit process, which an i686 kernel has
+# no 64-bit mode to do.
+X86_64_ONLY = wow64probe
+ifeq ($(ARCH),i686)
+PROGS := $(filter-out $(X86_64_ONLY),$(PROGS))
 endif
 
 # A probe is compiled and linked in one step, so the only file besides the

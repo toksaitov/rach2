@@ -170,5 +170,6 @@ case vmfault end:signal:11 -- vmfault
 case vmprobe -- vmprobe
 case waitprobe stage:native/hello.txt -- waitprobe
 case winprobe end:signal:11 -- winprobe
+case wow64probe -- wow64probe
 case xsaveprobe -- xsaveprobe core=xsaveprobe.d
 case zombieprobe -- zombieprobe

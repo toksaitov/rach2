@@ -347,6 +347,45 @@
       "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
     },
     {
+      "case_id": "guest.default.wow64probe",
+      "behavior": "On x86-64 a 64-bit process runs 32-bit code in the GDT's 32-bit code segment and makes i386 calls by int $0x80 through the compat table, with set_thread_area's TLS entries, signals taken in 32-bit code, seccomp and ptrace judging each call's architecture.",
+      "units": ["default", "wow64probe"],
+      "domain": "guest",
+      "architectures": ["x86_64"],
+      "workload": {"arguments": [], "inputs": {}, "repetitions": 1, "seed": null},
+      "requirements": {"host_api": "c", "tools": [], "features": {}, "qemu": {"kernel": "kernel", "initrd": "test-image", "disks": [], "cpu": "max", "processors": 1, "memory_bytes": 134217728, "firmware": "direct", "devices": ["rtl8139"], "boot_options": []}},
+      "execution": {"program": "wow64probe", "stdin": null, "role": "ordinary", "privileges": "any", "isolation": [], "children": "reaped", "cleanup": "the probe removes what it made"},
+      "assertions": [
+        {"assertion_id": "far-call", "checks": "code entered by a far return to selector 0x23 runs in 32-bit mode with CS 0x23, and a far jump to 0x33 comes back", "source": "program"},
+        {"assertion_id": "int80-from-64", "checks": "int $0x80 with the i386 getpid number, 20, from 64-bit code returns the pid", "source": "program"},
+        {"assertion_id": "int80-from-32", "checks": "the same call from 32-bit code returns the pid", "source": "program"},
+        {"assertion_id": "int80-enosys", "checks": "i386 number 222, which has no handler, returns ENOSYS from either mode", "source": "program"},
+        {"assertion_id": "set-thread-area", "checks": "set_thread_area by int $0x80 with entry_number -1 takes TLS entry 12", "source": "program"},
+        {"assertion_id": "tls-from-32", "checks": "32-bit code that loads selector 0x63 into GS reads the entry's block through it", "source": "program"},
+        {"assertion_id": "tls-from-64", "checks": "64-bit code that loads the same selector reads the block too", "source": "program"},
+        {"assertion_id": "tls-after-sleep", "checks": "the selector still addresses the block, from both modes, after a sleep switches the process away and back", "source": "program"},
+        {"assertion_id": "get-thread-area", "checks": "get_thread_area reads entry 12 back with the base, limit and flags set", "source": "program"},
+        {"assertion_id": "signal-frame", "checks": "a signal taken in 32-bit code runs its 64-bit handler with CS 0x23, SS 0x2B and the RIP after its int $0x80 saved, UC_SIGCONTEXT_SS set and UC_STRICT_RESTORE_SS clear", "source": "program"},
+        {"assertion_id": "signal-return", "checks": "the handler's return resumes the 32-bit code, which comes back to 64-bit code with kill's result", "source": "program"},
+        {"assertion_id": "seccomp-native-kept", "checks": "a child installs a filter that kills AUDIT_ARCH_I386 number 20, and its x86-64 call of number 20, writev, is allowed", "source": "program"},
+        {"assertion_id": "seccomp-i386-killed", "checks": "its i386 getpid by int $0x80 ends it with SIGSYS", "source": "program"},
+        {"assertion_id": "ptrace-arch", "checks": "PTRACE_GET_SYSCALL_INFO reports AUDIT_ARCH_I386 and number 20 at the entry of a tracee's int $0x80 getpid, and AUDIT_ARCH_X86_64 and number 60 at its exit call's", "source": "program"}
+      ],
+      "branches": [],
+      "termination": {"end": "exited", "value": 0},
+      "progress": [],
+      "bounds": {"case": {"floor_us": 1000000, "initial_us": 300000000, "ceiling_us": 900000000}, "gap": {"floor_us": 1000000, "initial_us": 120000000, "ceiling_us": 600000000}, "stages": {"boot": {"floor_us": 1000000, "initial_us": 60000000, "ceiling_us": 300000000}}},
+      "resources": {"cpu_millis": 1000, "cpu_ceiling_millis": 1000, "memory_bytes": 268435456, "disk_bytes": 0, "locks": [], "ports": 0, "loop_devices": 0},
+      "prepare": [
+        {"name": "wow64probe", "node": "tests/wow64probe", "per_architecture": true},
+        {"name": "kernel", "node": "rach2/kernel", "per_architecture": true},
+        {"name": "etude-guest", "node": "tools/etude/guest/etude-guest", "per_architecture": true},
+        {"name": "test-image", "node": "images/test.krffs", "per_architecture": true}
+      ],
+      "timing": [],
+      "native": {"plan": "native", "fixtures": [{"fixture": "workspace"}]}
+    },
+    {
       "case_id": "guest.default.errnoprobe",
       "behavior": "A failing system call returns the negated errno that Linux returns",
       "units": ["default", "errnoprobe"],
