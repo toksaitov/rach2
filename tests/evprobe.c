@@ -30,7 +30,8 @@
  * `evprobe mouse` and `evprobe usbmouse` find the PS/2 mouse's event device,
  * "ImExPS/2 Generic Explorer Mouse", or the USB one's, "USB HIDBP Mouse",
  * check its numbers, buttons, axes and properties as Linux gives them,
- * revoke one open, which then reads ENODEV, set another's clock to
+ * write a packet from one open and read it back from another, revoke one
+ * open, which then reads ENODEV, set another's clock to
  * CLOCK_MONOTONIC and print "EVPROBE: move the mouse". The suite then moves
  * the mouse by 10 and 5 through QMP, presses and releases the left button,
  * and turns the wheel up a detent and down one; the monotonic open and a
@@ -705,6 +706,45 @@ static void read_mouse(int fd, int usb, int clock, long long from, const char *w
     }
 }
 
+/** A packet written to the mouse's event device reads back from another
+ * open whole, as Linux's evdev_write injects it, in the records of the
+ * probe's own build: 16 bytes for an i386 program on either kernel. */
+static void write_back(const char *path)
+{
+    struct input_event ev[3], got[4];
+    int w, r;
+    long rc;
+
+    w = open_or_fail(path, O_WRONLY, "the mouse did not open for writing");
+    r = open_or_fail(path, O_RDONLY | O_NONBLOCK, "the mouse did not open to read a write");
+    clear(ev, sizeof(ev));
+    ev[0].type = EV_REL;
+    ev[0].code = REL_X;
+    ev[0].value = 3;
+    ev[1].type = EV_REL;
+    ev[1].code = REL_Y;
+    ev[1].value = -4;
+    ev[2].type = EV_SYN;
+    if ((rc = syscall3(SYS_WRITE, w, (long)ev, sizeof(ev[0]) - 1)) != -EINVAL) {
+        fail_with("a write of less than a record is not EINVAL", 1, rc);
+    }
+    if ((rc = syscall3(SYS_WRITE, w, (long)ev, sizeof(ev))) != (long)sizeof(ev)) {
+        fail_with("a write of a packet did not take it", 1, rc);
+    }
+    clear(got, sizeof(got));
+    if ((rc = syscall3(SYS_READ, r, (long)got, sizeof(got))) != (long)sizeof(ev)) {
+        fail_with("the written packet did not read back whole", 1, rc);
+    }
+    if (got[0].type != EV_REL || got[0].code != REL_X || got[0].value != 3 ||
+        got[1].type != EV_REL || got[1].code != REL_Y || got[1].value != -4 ||
+        got[2].type != EV_SYN || got[2].code != 0 || got[2].value != 0) {
+        fail("the written packet read back as another");
+    }
+    syscall3(SYS_CLOSE, w, 0, 0);
+    syscall3(SYS_CLOSE, r, 0, 0);
+    puts("EVPROBE: mouse: a write read back\n");
+}
+
 /** The run of `evprobe mouse` or `evprobe usbmouse`. */
 static void mouse(int usb)
 {
@@ -714,6 +754,7 @@ static void mouse(int usb)
     int a, b, gone, clock;
     long rc;
 
+    write_back(path);
     a = open_or_fail(path, O_RDONLY, "the mouse did not open");
     b = open_or_fail(path, O_RDONLY, "the mouse did not open twice");
     gone = open_or_fail(path, O_RDONLY, "the mouse did not open thrice");

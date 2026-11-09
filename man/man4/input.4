@@ -284,12 +284,38 @@ and ask for the keys held with
 A read waits for a packet unless the descriptor is nonblocking;
 .Xr poll 2
 reports
+.Dv POLLOUT ,
 .Dv POLLIN
-while one is queued, and
+while a packet is queued, or
 .Dv POLLHUP
 with
 .Dv POLLERR
 once the device has gone or the open was revoked.
+.Pp
+.Xr write 2
+takes whole records in the reader's layout, as many as fit in its count
+and in 4096 bytes, and returns the bytes it took; each record's type, code
+and value are given to the device as if it had reported them, and its time
+is ignored, as Linux's evdev takes a write.
+A type the device lacks is dropped.
+The other events go through the filters above to the device's opens, the
+writer's own among them, or to the open that holds the grab alone, and a
+keyboard's key that reaches them with no grab held also reaches the console
+as a key typed, and a mouse's motion and buttons reach
+.Pa /dev/mouse
+as a packet at each
+.Dv SYN_REPORT ,
+as Linux's mousedev takes them.
+A keyboard's
+.Dv EV_LED
+lights or puts out that LED, and its
+.Dv EV_REP
+sets the repeat's
+.Dv REP_DELAY
+or
+.Dv REP_PERIOD ,
+of every keyboard, as the console's LEDs and repeat are shared; the
+change reaches each keyboard's opens as a packet of its own.
 .Pp
 The ioctls are Linux's:
 .Bl -tag -width EVIOCGBIT
@@ -380,7 +406,10 @@ request's length allow.
 .It Dv EVIOCGRAB
 With a nonzero argument, take the device for this open alone, so that no
 other open reads its events until it gives it back, with 0, or closes.
-The console still reads the keys.
+A grabbed keyboard's keys do not reach the console either, nor a grabbed
+mouse's packets
+.Pa /dev/mouse ,
+as on Linux.
 .It Dv EVIOCREVOKE
 With the argument 0, end this open's use of the device for good: it gets
 no more events, gives up a grab it holds, and reads, polls and asks as if
@@ -439,8 +468,10 @@ A nonblocking read with no packet queued.
 .It Bq Er EBUSY
 .Dv EVIOCGRAB
 of a device another open holds.
+.It Bq Er EFAULT
+A read or write whose buffer is not the caller's.
 .It Bq Er EINVAL
-A read smaller than one record;
+A read, or a write of more than 0 bytes, smaller than one record;
 .Dv EVIOCGRAB
 with 0 by an open that does not hold the device;
 .Dv EVIOCGBIT
@@ -468,6 +499,7 @@ on a device that is no keyboard.
 .Xr busybox-util-linux 1 ,
 .Xr clock_gettime 2 ,
 .Xr poll 2 ,
+.Xr write 2 ,
 .Xr acpi 4 ,
 .Xr console 4 ,
 .Xr ideapad 4 ,
@@ -488,4 +520,6 @@ A pad's pass-through port, where a pointing stick reports, is not driven,
 and the stick's packets are dropped.
 A packet whose bytes break its form is dropped, as Linux drops it, but the
 pad is not reset after the fifth in a row, as Linux's psmouse resets it.
-A write of events to a node, which Linux takes, is refused.
+The keys of a device with keys that is no keyboard, such as the power
+button, reach no console, whether reported or written, while Linux's
+console takes them; it shows in Linux's raw keyboard modes alone.
