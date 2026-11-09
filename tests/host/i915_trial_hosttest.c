@@ -14,6 +14,8 @@
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: rach2/sys/mm/frame.c
  * host-deps: tests/host/compat/spinlock_host.c
+ * host-deps: rach2/sys/drm/i915/i915_rc6.c rach2/sys/drm/i915/i915_rps.c
+ * host-deps: rach2/sys/tick.c
  *
  * i915_pci.c is included whole, and the driver is bound through
  * `i915_driver_bind` as the probe binds it, over the model's registers
@@ -33,14 +35,16 @@
  *
  * Each row checks what makes the trial safe for the machine and its
  * screen: no wait reached its bound; nothing outside the GT was written
- * but the interrupt registers, the GT FIFO's and GTT's flush and the power
- * well's takeover, and in the GT nothing but forcewake, the two rings and
- * their status pages; no write reached the firmware's 1032 framebuffer
- * entries, and the plane, pipe and eDP transcoder read as the firmware
- * left them; the power well was never released; the chip reached no
- * memory but the driver's own pages; and after the bind every interrupt
- * source is masked, only the master enable and the rings' user
- * interrupts are enabled, and the firmware's unclaimed access is cleared.
+ * but the interrupt registers, the GT FIFO's and GTT's flush, the power
+ * well's takeover and the pcode mailbox, and in the GT nothing but
+ * forcewake, the two rings and their status pages, and RC6's and the
+ * frequency's registers, which Linux writes as the driver does; no write
+ * reached the firmware's 1032 framebuffer entries, and the plane, pipe
+ * and eDP transcoder read as the firmware left them; the power well was
+ * never released; the chip reached no memory but the driver's own pages;
+ * and after the bind every interrupt source is masked, only the master
+ * enable and the rings' user interrupts are enabled, and the firmware's
+ * unclaimed access is cleared.
  *
  * Returns 0 when every row passes, 1 otherwise.
  */
@@ -48,6 +52,7 @@
 #include <stdarg.h>
 
 #include "drm/i915/i915_pci.c"
+#include "fs/sysfs.h"
 #include "iommu.h"
 #include "lib/kirq.h"
 #include "mm/paging.h"
@@ -119,6 +124,37 @@ int kcmdline_has(const char *flag)
 {
     return (opt_i915 && strcmp(flag, "rach2.i915") == 0) ||
            (opt_firstlight && strcmp(flag, "rach2.i915.firstlight") == 0);
+}
+
+/** The card's directory in /sys: none, so the driver adds no files. */
+int drm_sysfs_card_dir(const struct drm_device *dev)
+{
+    (void)dev;
+    return -ENOENT;
+}
+
+int sysfs_add_dir(int parent, const char *name)
+{
+    (void)parent;
+    (void)name;
+    return -ENOENT;
+}
+
+int sysfs_add_attr(int parent, const struct sysfs_attr *attr, void *obj, int arg)
+{
+    (void)parent;
+    (void)attr;
+    (void)obj;
+    (void)arg;
+    return -ENOENT;
+}
+
+int sysfs_node_child(int dir, const char *name, int len)
+{
+    (void)dir;
+    (void)name;
+    (void)len;
+    return -ENOENT;
 }
 
 void k_udelay(uint32_t usec)
@@ -516,35 +552,65 @@ static void on_delay(struct i915_model *m)
 
 /* ---- rows ---- */
 
-/* The registers outside the GT that the bind may write: the unclaimed
- * access and FIFO errors cleared, the GTT's flush, every interrupt bank
- * and the error and self refresh interrupts, and the power well's
- * takeover from the BIOS. */
-static const uint32_t outside_ok[] = {FPGA_DBG,
-                                      GTFIFODBG,
-                                      GFX_FLSH_CNTL_GEN6,
-                                      DEIMR,
-                                      DEIIR,
-                                      DEIER,
-                                      GTIMR,
-                                      GTIIR,
-                                      GTIER,
-                                      GEN6_PMIMR,
-                                      GEN6_PMIIR,
-                                      GEN6_PMIER,
-                                      GEN7_ERR_INT,
-                                      EDP_PSR_IMR,
-                                      EDP_PSR_IIR,
-                                      SDEIMR,
-                                      SDEIIR,
-                                      SDEIER,
-                                      SERR_INT,
-                                      HSW_PWR_WELL_CTL1,
-                                      HSW_PWR_WELL_CTL2};
+/* The registers the bind may write besides forcewake and the rings':
+ * outside the GT, the unclaimed access and FIFO errors cleared, the GTT's
+ * flush, every interrupt bank and the error and self refresh interrupts,
+ * the power well's takeover from the BIOS and the pcode mailbox; in the
+ * GT, RC6's and RPS's registers, as Linux's gen6_rc6_enable and
+ * gen6_rps_enable write them, with the idle limits of the video and
+ * video enhancement engines, whose rings the driver does not start. */
+static const uint32_t writes_ok[] = {GEN6_PCODE_MAILBOX,
+                                     GEN6_PCODE_DATA,
+                                     GEN6_PCODE_DATA1,
+                                     GEN6_PMINTRMSK,
+                                     GEN6_RC1_WAKE_RATE_LIMIT,
+                                     GEN6_RC1e_THRESHOLD,
+                                     GEN6_RC6_THRESHOLD,
+                                     GEN6_RC6_WAKE_RATE_LIMIT,
+                                     GEN6_RC6p_THRESHOLD,
+                                     GEN6_RC6pp_THRESHOLD,
+                                     GEN6_RC6pp_WAKE_RATE_LIMIT,
+                                     GEN6_RC_CONTROL,
+                                     GEN6_RC_EVALUATION_INTERVAL,
+                                     GEN6_RC_IDLE_HYSTERSIS,
+                                     GEN6_RC_SLEEP,
+                                     GEN6_RC_STATE,
+                                     GEN6_RPNSWREQ,
+                                     GEN6_RP_CONTROL,
+                                     GEN6_RP_DOWN_EI,
+                                     GEN6_RP_DOWN_THRESHOLD,
+                                     GEN6_RP_DOWN_TIMEOUT,
+                                     GEN6_RP_IDLE_HYSTERSIS,
+                                     GEN6_RP_INTERRUPT_LIMITS,
+                                     GEN6_RP_UP_EI,
+                                     GEN6_RP_UP_THRESHOLD,
+                                     RING_MAX_IDLE(GEN6_BSD_RING_BASE),
+                                     RING_MAX_IDLE(VEBOX_RING_BASE),
+                                     FPGA_DBG,
+                                     GTFIFODBG,
+                                     GFX_FLSH_CNTL_GEN6,
+                                     DEIMR,
+                                     DEIIR,
+                                     DEIER,
+                                     GTIMR,
+                                     GTIIR,
+                                     GTIER,
+                                     GEN6_PMIMR,
+                                     GEN6_PMIIR,
+                                     GEN6_PMIER,
+                                     GEN7_ERR_INT,
+                                     EDP_PSR_IMR,
+                                     EDP_PSR_IIR,
+                                     SDEIMR,
+                                     SDEIIR,
+                                     SDEIER,
+                                     SERR_INT,
+                                     HSW_PWR_WELL_CTL1,
+                                     HSW_PWR_WELL_CTL2};
 
 /** Whether `reg`, written, belongs to what the bind may write: the GT's
  * forcewake, the render and blitter rings and their status page
- * registers, or a register of `outside_ok`. */
+ * registers, or a register of `writes_ok`, RC6's and RPS's among them. */
 static int write_ok(uint32_t reg)
 {
     unsigned i;
@@ -554,8 +620,8 @@ static int write_ok(uint32_t reg)
         (reg >= BLT_RING_BASE && reg < BLT_RING_BASE + 0x1000u)) {
         return 1;
     }
-    for (i = 0; i < sizeof(outside_ok) / sizeof(outside_ok[0]); i++) {
-        if (reg == outside_ok[i]) {
+    for (i = 0; i < sizeof(writes_ok) / sizeof(writes_ok[0]); i++) {
+        if (reg == writes_ok[i]) {
             return 1;
         }
     }
@@ -576,7 +642,9 @@ static void check_display(struct i915_model *m, struct drm_i915_private *i915)
             bad++;
         }
     }
-    CHECK("display: no register written but the interrupts', the flush's and the well's", !bad);
+    CHECK("display: no register written but the interrupts', the flush's, the well's and power "
+          "management's",
+          !bad);
     CHECK("display: no write reached the firmware's framebuffer entries", kept_writes == 0);
     for (i = 0; i < 16384u; i++) {
         uint32_t pte = i915_model_peek(m, I915_GSM_OFFSET + i * 4u);
