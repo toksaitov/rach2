@@ -447,7 +447,7 @@ void ia32_syscall_init(syscall_fn_t *table)
     table[SYS_SCHED_SETATTR] = NULL;
     table[SYS_SCHED_GETATTR] = NULL;
     table[SYS_RENAMEAT2] = sys_renameat2;
-    table[SYS_SECCOMP] = compat_sys_seccomp;
+    table[SYS_SECCOMP] = sys_seccomp;
     table[SYS_GETRANDOM] = sys_getrandom;
     table[SYS_MEMFD_CREATE] = sys_memfd_create;
     table[SYS_BPF] = NULL;
