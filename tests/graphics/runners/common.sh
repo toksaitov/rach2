@@ -74,7 +74,7 @@ runner_start()
 # kernel's own words for it on its command line.
 runner_iommu()
 {
-    units=$(find /sys/class/iommu -mindepth 1 -maxdepth 1 -printf '%f ' 2>/dev/null)
+    units=$(find /sys/class/iommu -mindepth 1 -maxdepth 1 -printf '%f ' 2>/dev/null || true)
     groups=$(find /sys/kernel/iommu_groups -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)
     words=$(tr ' ' '\n' < /proc/cmdline | grep -i iommu | tr '\n' ' ')
     runner_record "iommu units ${units:-none} groups $groups cmdline ${words:-none}"
