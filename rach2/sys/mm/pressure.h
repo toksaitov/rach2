@@ -6,8 +6,9 @@
  * of managed memory, half each, which is the most either grows to; they
  * take frames as they fill and give them back under pressure: when free
  * frames fall below the low mark, reclaim evicts clean cached pages and
- * buffers and, from a system call, writes dirty ones back, until the free
- * count is above the high mark or nothing is left to give. It runs before
+ * buffers and, from a system call, writes dirty ones back, then asks the
+ * shrinkers drivers registered, until the free count is above the high
+ * mark or nothing is left to give. It runs before
  * the allocation that needed the room: in fork, exec, mmap and brk, and
  * before a user page is backed for a fault or a copy. A fault enters with
  * interrupts off and outside any call, so reclaim there takes clean frames
@@ -48,13 +49,34 @@ size_t mem_reserve_frames(void);
  */
 int mem_may_take(int user_page);
 
+/*
+ * A driver's memory that reclaim may take back, as Linux's struct shrinker:
+ * a GPU driver's purgeable buffers, whose contents the program said it can
+ * lose. `shrink` frees up to `want` frames of it and returns how many it
+ * freed; `may_sleep` is 1 only from a system call with interrupts on, and
+ * with 0 it must not sleep, since reclaim also runs inside a page fault.
+ * The record is the driver's, embedded in its own, and is called under the
+ * big kernel lock.
+ */
+struct mem_shrinker {
+    uint32_t (*shrink)(struct mem_shrinker *s, uint32_t want, int may_sleep);
+    struct mem_shrinker *next; /* the next registered, kept by pressure.c */
+};
+
+/** Register `s`, which reclaim then asks after the caches, the later
+ * registered first; `s` must not be registered already. */
+void mem_shrinker_register(struct mem_shrinker *s);
+
+/** Take `s` off the list; nothing for one that is not on it. */
+void mem_shrinker_unregister(struct mem_shrinker *s);
+
 /**
  * Give the caches' frames back while the free count is below the high mark,
  * an eighth of managed memory, or until they give nothing: the buffer
- * cache's first, then the file cache's, then the page cache's. Dirty ones
- * are written back, which sleeps, only from a system call with interrupts
- * on. Returns how many frames came back. `mem_balance` calls it only below
- * the low mark.
+ * cache's first, then the file cache's, then the page cache's, then each
+ * registered shrinker's. Dirty ones are written back, which sleeps, only
+ * from a system call with interrupts on. Returns how many frames came back.
+ * `mem_balance` calls it only below the low mark.
  */
 uint32_t mem_reclaim(void);
 

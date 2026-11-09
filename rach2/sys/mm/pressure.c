@@ -18,6 +18,43 @@
  * count belongs to that process. */
 static volatile uint32_t irq_depth;
 
+/* The registered shrinkers, the last registered first. */
+static struct mem_shrinker *shrinkers;
+
+void mem_shrinker_register(struct mem_shrinker *s)
+{
+    s->next = shrinkers;
+    shrinkers = s;
+}
+
+void mem_shrinker_unregister(struct mem_shrinker *s)
+{
+    struct mem_shrinker **link;
+
+    for (link = &shrinkers; *link; link = &(*link)->next) {
+        if (*link == s) {
+            *link = s->next;
+            s->next = NULL;
+            return;
+        }
+    }
+}
+
+/** Ask each shrinker for frames until `want` came back or each was asked;
+ * returns how many came back. The next is read before the call, so a
+ * shrinker may unregister itself. */
+static uint32_t shrinkers_shrink(uint32_t want, int may_sleep)
+{
+    struct mem_shrinker *s, *next;
+    uint32_t got = 0;
+
+    for (s = shrinkers; s && got < want; s = next) {
+        next = s->next;
+        got += s->shrink(s, want - got, may_sleep);
+    }
+    return got;
+}
+
 void irq_enter(void)
 {
     if (current_proc) {
@@ -118,6 +155,9 @@ uint32_t mem_reclaim(void)
         }
         if (freed < want) {
             freed += pc_shrink(want - freed, can_write, &written);
+        }
+        if (freed < want) {
+            freed += shrinkers_shrink(want - freed, can_write);
         }
         if (freed == 0) {
             break;
