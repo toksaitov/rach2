@@ -49,11 +49,13 @@
 
 /* The ancillary data a socket asks a receive for, the bits of `rxopt`:
  * IPV6_RECVPKTINFO, IPV6_RECVHOPLIMIT and IPV6_RECVTCLASS of an AF_INET6
- * socket, and IP_RECVTTL of an AF_INET one. */
+ * socket, IP_RECVTTL of an AF_INET one, and SO_PASSCRED of an AF_NETLINK
+ * one. */
 #define SOCK_RX_PKTINFO  0x1
 #define SOCK_RX_HOPLIMIT 0x2
 #define SOCK_RX_TCLASS   0x4
 #define SOCK_RX_TTL      0x8
+#define SOCK_RX_CREDS    0x10
 
 /*
  * What the network layer saw of a datagram it delivered to a UDP or raw

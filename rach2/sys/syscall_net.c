@@ -1106,24 +1106,71 @@ static uint32_t sockaddr_len_of(const struct socket *sock)
  * of the requests the socket answers. */
 #define NETLINK_SEND_MAX 65536
 
-/** Send the netlink message of `len` bytes at buf from the socket `sock`,
- * holding a reference to it, since a generic netlink request may sleep and
- * another thread may close the descriptor meanwhile. Returns
- * `netlink_send`'s result. */
-static int32_t netlink_send_held(struct socket *sock, const uint8_t *buf, uint32_t len)
+/**
+ * Read the destination of a netlink send, the caller's sockaddr_nl of
+ * `addrlen` bytes at `sa_ptr`, or none, into `dst`, with the sender's
+ * privilege and credentials, its process and real user and group ids, as
+ * Linux's netlink_sendmsg takes them. 0, -EINVAL for an address too short or
+ * of another family, or -EFAULT.
+ */
+static int32_t netlink_dest(uintptr_t sa_ptr, int addrlen, struct nl_dest *dst)
 {
-    int32_t rc;
+    uint8_t nl[SOCKADDR_NL_LEN];
+    uint32_t groups;
 
+    k_memset(dst, 0, sizeof(*dst));
+    dst->privileged = proc_privileged(current_proc);
+    dst->cred[0] = (int32_t)current_proc->tgid;
+    dst->cred[1] = (int32_t)current_proc->ruid;
+    dst->cred[2] = (int32_t)current_proc->rgid;
+    if (!sa_ptr || addrlen == 0) {
+        return 0;
+    }
+    if (addrlen < SOCKADDR_NL_LEN) {
+        return -EINVAL;
+    }
+    if (copy_from_user(nl, (const void __user *)sa_ptr, sizeof(nl)) != 0) {
+        return -EFAULT;
+    }
+    if ((nl[0] | nl[1] << 8) != AF_NETLINK) {
+        return -EINVAL;
+    }
+    dst->pid =
+        (uint32_t)nl[4] | (uint32_t)nl[5] << 8 | (uint32_t)nl[6] << 16 | (uint32_t)nl[7] << 24;
+    groups =
+        (uint32_t)nl[8] | (uint32_t)nl[9] << 8 | (uint32_t)nl[10] << 16 | (uint32_t)nl[11] << 24;
+    for (dst->group = 0; groups != 0 && !(groups & 1u); groups >>= 1) {
+        dst->group++;
+    }
+    dst->group += groups != 0;
+    return 0;
+}
+
+/** Send the netlink message of `len` bytes at buf from the socket `sock` to
+ * the caller's address of `addrlen` bytes at `sa_ptr`, or none, holding a
+ * reference to the socket, since a generic netlink request may sleep and
+ * another thread may close the descriptor meanwhile. Returns
+ * `netlink_send_to`'s result, or `netlink_dest`'s error. */
+static int32_t netlink_send_held(struct socket *sock, const uint8_t *buf, uint32_t len,
+                                 uintptr_t sa_ptr, int addrlen)
+{
+    struct nl_dest dst;
+    int32_t rc = netlink_dest(sa_ptr, addrlen, &dst);
+
+    if (rc != 0) {
+        return rc;
+    }
     socket_ref(sock);
-    rc = netlink_send(sock, buf, len);
+    rc = netlink_send_to(sock, buf, len, &dst);
     socket_unref(sock);
     return rc;
 }
 
-/** Send the netlink message of `len` bytes at user address `buf_ptr`.
- * Returns `netlink_send`'s result, -EMSGSIZE past `NETLINK_SEND_MAX`,
- * -ENOMEM or -EFAULT. */
-static int32_t netlink_send_user(struct socket *sock, uintptr_t buf_ptr, int len)
+/** Send the netlink message of `len` bytes at user address `buf_ptr` to
+ * the address at `sa_ptr`. Returns `netlink_send_held`'s result, -EMSGSIZE
+ * past `NETLINK_SEND_MAX`, -ENOMEM or -EFAULT. */
+static int32_t netlink_send_user(struct socket *sock, uintptr_t buf_ptr, int len, uintptr_t sa_ptr,
+                                 int addrlen)
 {
     uint8_t *copy;
     int32_t rc;
@@ -1139,19 +1186,25 @@ static int32_t netlink_send_user(struct socket *sock, uintptr_t buf_ptr, int len
         kfree(copy);
         return -EFAULT;
     }
-    rc = netlink_send_held(sock, copy, (uint32_t)len);
+    rc = netlink_send_held(sock, copy, (uint32_t)len, sa_ptr, addrlen);
     kfree(copy);
     return rc;
 }
 
 /** The sockaddr_nl of the sender of the datagram `sock` read last into `sa`,
- * which is zeroed: the kernel, port id 0, with the bit of the group a
- * notification went to in nl_groups. */
+ * which is zeroed: its port id, 0 for the kernel, with the bit of the group
+ * the datagram went to in nl_groups. */
 static void netlink_sender(struct socket *sock, uint8_t *sa)
 {
     uint32_t group = netlink_last_group(sock);
+    int32_t cred[3];
+    uint32_t pid = netlink_last_sender(sock, cred);
 
     sa[0] = (uint8_t)AF_NETLINK;
+    sa[4] = (uint8_t)pid;
+    sa[5] = (uint8_t)(pid >> 8);
+    sa[6] = (uint8_t)(pid >> 16);
+    sa[7] = (uint8_t)(pid >> 24);
     sa[8] = (uint8_t)group;
     sa[9] = (uint8_t)(group >> 8);
     sa[10] = (uint8_t)(group >> 16);
@@ -1233,7 +1286,7 @@ static int32_t do_sendto_opt(int fd, uintptr_t buf_ptr, int len, int flags, uint
     }
 
     if (entry->sock->family == AF_NETLINK) {
-        return netlink_send_user(entry->sock, buf_ptr, len);
+        return netlink_send_user(entry->sock, buf_ptr, len, sa_ptr, addrlen);
     }
     if (cut_off(entry->sock)) {
         return -ENETUNREACH;
@@ -2113,6 +2166,9 @@ static int32_t do_shutdown(int fd, int how)
 
 #define SO_KEEPALIVE 9
 
+#define SO_PASSCRED     16
+#define SCM_CREDENTIALS 2
+
 #define IPPROTO_TCP 6
 
 #define TCP_NODELAY 1
@@ -2454,6 +2510,50 @@ static int32_t icmp6_filter_get(struct socket *sock, uintptr_t optval_ptr, uintp
     return 0;
 }
 
+/** Whether `optname` is one of the SOL_SOCKET flags `socket_flag_set` and
+ * `socket_flag_get` keep. */
+static int socket_flag(int optname)
+{
+    return optname == SO_BROADCAST || optname == SO_REUSEADDR || optname == SO_KEEPALIVE ||
+           optname == SO_PASSCRED;
+}
+
+/** setsockopt's SOL_SOCKET flags, SO_BROADCAST, SO_REUSEADDR, SO_KEEPALIVE
+ * and SO_PASSCRED, set from `val`; SO_PASSCRED counts on a netlink socket
+ * alone, whose receives carry credentials here. Another option is passed
+ * over. 0, or -EINVAL for a value shorter than an int. */
+static int32_t socket_flag_set(struct socket *sock, int optname, int val, int optlen)
+{
+    if (!socket_flag(optname)) {
+        return 0;
+    }
+    if (optlen < (int)sizeof(int)) {
+        return -EINVAL;
+    }
+    if (optname == SO_PASSCRED) {
+        if (sock->family == AF_NETLINK) {
+            sock->rxopt =
+                (uint8_t)(val ? sock->rxopt | SOCK_RX_CREDS : sock->rxopt & ~SOCK_RX_CREDS);
+        }
+    } else if (optname == SO_BROADCAST) {
+        sock->broadcast = val ? 1 : 0;
+    } else if (optname == SO_REUSEADDR) {
+        sock->reuseaddr = val ? 1 : 0;
+    } else {
+        sock->keepalive = val ? 1 : 0;
+    }
+    return 0;
+}
+
+/** getsockopt's value of the SOL_SOCKET flag `optname`. */
+static int socket_flag_get(const struct socket *sock, int optname)
+{
+    return optname == SO_BROADCAST   ? sock->broadcast
+           : optname == SO_REUSEADDR ? sock->reuseaddr
+           : optname == SO_KEEPALIVE ? sock->keepalive
+                                     : (sock->rxopt & SOCK_RX_CREDS) != 0;
+}
+
 /**
  * setsockopt: keep SO_BROADCAST, SO_REUSEADDR and SO_KEEPALIVE, the hop limit
  * IP_TTL (1 to 255), SO_BINDTODEVICE, an interface by name or none for an empty
@@ -2615,18 +2715,8 @@ static int32_t do_setsockopt(int fd, int level, int optname, uintptr_t optval_pt
         return tcp_option_set(entry->sock, optname, optlen, val);
     }
 
-    if (level == SOL_SOCKET &&
-        (optname == SO_BROADCAST || optname == SO_REUSEADDR || optname == SO_KEEPALIVE)) {
-        if (optlen < (int)sizeof(int)) {
-            return -EINVAL;
-        }
-        if (optname == SO_BROADCAST) {
-            entry->sock->broadcast = val ? 1 : 0;
-        } else if (optname == SO_REUSEADDR) {
-            entry->sock->reuseaddr = val ? 1 : 0;
-        } else {
-            entry->sock->keepalive = val ? 1 : 0;
-        }
+    if (level == SOL_SOCKET) {
+        return socket_flag_set(entry->sock, optname, val, optlen);
     }
     return 0;
 }
@@ -2733,12 +2823,8 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
         val = entry->sock->pmtudisc;
     } else if (level == SOL_SOCKET && optname == SO_RCVBUF) {
         val = entry->sock->rcvbuf;
-    } else if (level == SOL_SOCKET && optname == SO_BROADCAST) {
-        val = entry->sock->broadcast;
-    } else if (level == SOL_SOCKET && optname == SO_REUSEADDR) {
-        val = entry->sock->reuseaddr;
-    } else if (level == SOL_SOCKET && optname == SO_KEEPALIVE) {
-        val = entry->sock->keepalive;
+    } else if (level == SOL_SOCKET && socket_flag(optname)) {
+        val = socket_flag_get(entry->sock, optname);
     } else if (level == IPPROTO_TCP && tcp_option_kept(optname) &&
                entry->sock->type == SOCK_STREAM) {
         val = tcp_option_get(entry->sock, optname);
@@ -2764,12 +2850,12 @@ static int32_t do_getsockopt(int fd, int level, int optname, uintptr_t optval_pt
 }
 
 /** Whether a receive on `sock` answers with control messages: an AF_INET6
- * UDP or raw socket that asked for one (IPV6_RECV*), or an AF_INET one that
- * asked for IP_RECVTTL. */
-static int inet_rx_control(const struct socket *sock)
+ * UDP or raw socket that asked for one (IPV6_RECV*), an AF_INET one that
+ * asked for IP_RECVTTL, or an AF_NETLINK one with SO_PASSCRED. */
+static int rx_control(const struct socket *sock)
 {
-    return (sock->family == AF_INET6 || sock->family == AF_INET) && sock->type != SOCK_STREAM &&
-           sock->rxopt != 0;
+    return (sock->family == AF_INET6 || sock->family == AF_INET || sock->family == AF_NETLINK) &&
+           sock->type != SOCK_STREAM && sock->rxopt != 0;
 }
 
 /**
@@ -2813,10 +2899,11 @@ static int32_t put_cmsg(uintptr_t control, uint32_t controllen, uint32_t *used, 
  * datagram's is known; for an AF_INET6 one IPV6_PKTINFO, its destination
  * and the interface it came in on, an IPv4 one's destination mapped, and
  * IPV6_HOPLIMIT and IPV6_TCLASS, each an int, when the datagram's are
- * known. Sets `*used` to the bytes of the buffer used. Returns 0, or
- * -EFAULT.
+ * known; for an AF_NETLINK one with SO_PASSCRED, SCM_CREDENTIALS, the
+ * sender's struct ucred, all 0 for the kernel, as Linux gives a uevent.
+ * Sets `*used` to the bytes of the buffer used. Returns 0, or -EFAULT.
  */
-static int32_t put_rx_control(const struct socket *sock, uintptr_t control, uint32_t controllen,
+static int32_t put_rx_control(struct socket *sock, uintptr_t control, uint32_t controllen,
                               uint32_t *used, unsigned int *mflags)
 {
     const struct net_rxinfo *info = &sock->rx_last;
@@ -2824,6 +2911,13 @@ static int32_t put_rx_control(const struct socket *sock, uintptr_t control, uint
     int v;
 
     *used = 0;
+    if (sock->family == AF_NETLINK) {
+        int32_t cred[3];
+
+        (void)netlink_last_sender(sock, cred);
+        return put_cmsg(control, controllen, used, SOL_SOCKET, SCM_CREDENTIALS, cred, sizeof(cred),
+                        mflags);
+    }
     if (sock->family == AF_INET) {
         if ((sock->rxopt & SOCK_RX_TTL) && info->hlim >= 0) {
             v = info->hlim;
@@ -2997,7 +3091,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     if (!user_buffer_ok(msg_ptr, sizeof(hdr), 1)) {
         return -EFAULT;
     }
-    if (inet_rx_control(entry->sock) && hdr.msg_control && hdr.msg_controllen > 0 &&
+    if (rx_control(entry->sock) && hdr.msg_control && hdr.msg_controllen > 0 &&
         (hdr.msg_controllen > 0x7FFFFFFFu ||
          !user_buffer_ok(hdr.msg_control, (uint32_t)hdr.msg_controllen, 1))) {
         return -EFAULT;
@@ -3052,7 +3146,7 @@ static int32_t do_recvmsg(int fd, uintptr_t msg_ptr, int flags)
     }
     hdr.msg_namelen = name_ptr ? (int)addr_len : 0;
     hdr.msg_flags = whole > taken ? (unsigned int)MSG_TRUNC : 0u;
-    if (inet_rx_control(entry->sock)) {
+    if (rx_control(entry->sock)) {
         uint32_t used;
 
         if (put_rx_control(entry->sock, hdr.msg_control, (uint32_t)hdr.msg_controllen, &used,
@@ -3182,7 +3276,7 @@ static int32_t do_sendmsg(int fd, uintptr_t msg_ptr, int flags)
         total += (uint32_t)iov[i].iov_len;
     }
     if (entry->sock->family == AF_NETLINK) {
-        rc = netlink_send_held(entry->sock, gathered, total);
+        rc = netlink_send_held(entry->sock, gathered, total, name_ptr, (int)namelen);
     } else {
         rc = udp_sendto(entry, gathered, (int)total, name_ptr, (int)namelen, opt);
     }

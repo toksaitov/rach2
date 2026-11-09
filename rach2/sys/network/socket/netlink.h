@@ -124,8 +124,30 @@ void netlink_name(struct socket *sock, uint8_t *sa);
  * left, and what follows is ignored, as Linux ignores it: iproute2's ip sends
  * a request in a buffer longer than the request, with zeros after it. An
  * unbound socket is bound first, as by `netlink_bind` with 0. On a socket of
- * NETLINK_KOBJECT_UEVENT the messages are dropped. */
+ * NETLINK_KOBJECT_UEVENT a datagram to the kernel is dropped. */
 int32_t netlink_send(struct socket *sock, const uint8_t *buf, uint32_t len);
+
+/* The destination of a datagram a program sends, from its sockaddr_nl:
+ * the port, 0 for the kernel, and the group, the lowest bit of nl_groups
+ * as a number from 1, or 0; and of its sender, whether it may send to a
+ * group or a port, as CAP_NET_ADMIN lets it on Linux, and its process,
+ * user and group ids, which a receiver with SO_PASSCRED gets. */
+struct nl_dest {
+    uint32_t pid;
+    uint32_t group;
+    int privileged;
+    int32_t cred[3];
+};
+
+/** Send as `netlink_send` does, to `dst`. On a socket of
+ * NETLINK_KOBJECT_UEVENT a datagram to a group goes whole to every such
+ * socket of the sender's namespace in that group, the sender too when it is
+ * in it, and a datagram to a port to that socket, as udevd passes uevents
+ * on to libudev's monitors: `len`, -EPERM for a sender without the
+ * privilege, -ECONNREFUSED for a port no socket has, -EMSGSIZE past
+ * NL_DGRAM_MAX bytes, or -ENOMEM. */
+int32_t netlink_send_to(struct socket *sock, const uint8_t *buf, uint32_t len,
+                        const struct nl_dest *dst);
 
 /** Send the uevent of `len` bytes at `msg` to every NETLINK_KOBJECT_UEVENT
  * socket of the first network namespace in group 1, as Linux broadcasts
@@ -137,6 +159,10 @@ void netlink_uevent(const uint8_t *msg, uint32_t len);
  * peeked at last: the bit of the group it was sent to, as Linux's
  * netlink_group_mask gives it, and 0 for an answer or a group above 32. */
 uint32_t netlink_last_group(struct socket *sock);
+
+/** The sender's port of that datagram, 0 for the kernel, and its process,
+ * user and group ids into `cred`, all 0 for the kernel. */
+uint32_t netlink_last_sender(struct socket *sock, int32_t cred[3]);
 
 /** Bytes in the oldest queued datagram, or -1 when none is queued. */
 int netlink_pending(struct socket *sock);

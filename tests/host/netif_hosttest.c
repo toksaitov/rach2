@@ -783,6 +783,14 @@ uint32_t netlink_last_group(struct socket *sock)
     return 0;
 }
 
+/** No datagram came from a sender: no row opens a netlink socket. */
+uint32_t netlink_last_sender(struct socket *sock, int32_t cred[3])
+{
+    (void)sock;
+    cred[0] = cred[1] = cred[2] = 0;
+    return 0;
+}
+
 /** Refuse every option: no row opens a netlink socket. */
 int32_t netlink_setsockopt(struct socket *s, int optname, int val, int optlen)
 {
