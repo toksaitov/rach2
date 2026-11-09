@@ -396,8 +396,8 @@ static void events_release(struct drm_file *file)
 
 /**
  * The release of a file, as Linux's drm_file_free: its events, its
- * handles, its master role, then the driver's `postclose`, and the device's
- * reference.
+ * display objects, its syncobj and buffer handles, its master role, then
+ * the driver's `postclose`, and the device's reference.
  */
 static void drm_file_release(struct drm_file *file)
 {
@@ -406,6 +406,7 @@ static void drm_file_release(struct drm_file *file)
 
     events_release(file);
     drm_mode_file_release(file);
+    drm_syncobj_release(file);
     drm_gem_release(file);
     if (file->minor_type == DRM_MINOR_PRIMARY) {
         drm_master_release(file);
