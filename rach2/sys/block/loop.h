@@ -86,6 +86,12 @@ void loop_repoint(struct vfs_mount *mnt, const void *from, void *to);
  */
 void loop_device_gone(block_device_t *device);
 
+/** Record `path` as what device `index`'s file is called, for /proc/loop
+ * and LOOP_GET_STATUS64, once the boot has moved the volume the file is on
+ * (`rach2.rootimage=`); a path longer than LOOP_PATH_MAX is cut. Does
+ * nothing for a device with no file. */
+void loop_rename(int index, const char *path);
+
 /** One line of /proc/loop for `index`, written into `buffer` of `cap` bytes:
  * its size, `rw` or `ro`, its writes and syncs, and its path or `(gone)`.
  * Returns its length, or 0 when the slot is free. */

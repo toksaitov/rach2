@@ -3373,6 +3373,64 @@ int vfs_init_root(const struct vfs_type *type, struct block_device *dev, const c
     return 0;
 }
 
+/*
+ * The new root takes entry zero and the old one a slot past the permanent
+ * mounts, where an unmount would look for it, with its sequence after the
+ * permanent ones so that /proc/PID/mountinfo lists it below the root. No
+ * process runs yet, so no process root or descriptor names either record,
+ * and the loop device keeps its own pointer to the old one.
+ */
+int vfs_root_over_image(const struct vfs_type *type, struct block_device *dev, const char *source,
+                        const char *place, struct vfs_mount **host)
+{
+    struct vfs_mount *old, *m;
+    int i, j, rc;
+
+    if (!vfs_root_mounted()) {
+        return -ENOENT;
+    }
+    if (place[0] != '/' || place[1] == '\0' || path_last(place) != place + 1 ||
+        k_strlen(place) >= VFS_COVERED_PATH_MAX) {
+        return -EINVAL;
+    }
+    i = mount_new_slot();
+    if (i < 0) {
+        return -ENOMEM;
+    }
+    m = mounts[i];
+    k_memset(m, 0, sizeof(*m));
+    m->type = type;
+    m->dev = dev;
+    m->state = VFS_MOUNTING;
+    mount_lock_init(m);
+    m->claim = -1;
+    k_strncpy(m->covered_path, "/", sizeof(m->covered_path));
+    k_strncpy(m->source, source, sizeof(m->source));
+    m->source[sizeof(m->source) - 1] = '\0';
+    rc = type->mount(m, dev, 0, 0);
+    if (rc != 0) {
+        mount_release(m);
+        mount_refused(dev);
+        return rc;
+    }
+    m->state = VFS_ACTIVE;
+    old = mounts[0];
+    mounts[0] = m;
+    mounts[i] = old;
+    for (j = 1; j < VFS_PERMANENT; j++) {
+        if (mounts[j] && mounts[j]->parent == old) {
+            mounts[j]->parent = m;
+        }
+    }
+    old->parent = m;
+    old->covered = 0;
+    old->seq = ++mount_seq;
+    k_strncpy(old->covered_path, place, sizeof(old->covered_path));
+    m->refs++;
+    *host = old;
+    return 0;
+}
+
 /* mount(2) and umount2(2). */
 
 /* The types mount(2) finds by name, in the order /proc/filesystems lists

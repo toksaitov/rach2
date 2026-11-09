@@ -595,6 +595,18 @@ int loop_attach(int index, const char *path, int writable)
     return index;
 }
 
+void loop_rename(int index, const char *path)
+{
+    struct loop_device *loop;
+
+    if (index < 0 || index >= LOOP_DEVICES || !loops[index].attached) {
+        return;
+    }
+    loop = &loops[index];
+    k_strncpy(loop->path, path, sizeof(loop->path));
+    loop->path[sizeof(loop->path) - 1] = '\0';
+}
+
 /**
  * A slot claimed by an attachment still inside the steps that sleep is
  * refused: releasing it would free a claim about to publish itself, and the
