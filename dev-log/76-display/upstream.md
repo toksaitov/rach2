@@ -23,3 +23,14 @@ The format and index are in [../upstream.md](../upstream.md).
 * Rach2: `rach2/sys/drm/vkms.c`'s `vkms_atomic_check` divides by the entry's size, so both architectures take 256 entries, in task 2685's vkms commit.
 * Status: unreported.
 * Next: run the reproduction on i386, then send the one-character patch to dri-devel.
+## Linux's bochs-drm lets a mode set zero other buffers
+
+* Project: Linux 6.12, `drivers/gpu/drm/tiny/bochs.c`, with QEMU's standard VGA as the device; the QEMU here is 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.3). Rach2 keeps no copy of either source.
+* Fails: `bochs_hw_setmode` writes `VBE_DISPI_INDEX_ENABLE` as 0 and then as `VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED`, without `VBE_DISPI_NOCLEARMEM`. QEMU's DISPI zeroes the new mode's `yres` times its line length of video memory from offset 0 when the enable goes from clear to set without that bit, so each mode set wipes every buffer object that lies in that range, whether or not it is shown. The lines in Linux's and QEMU's sources have not been recorded.
+* Found: 2026-11-10, on the testing host's WSL in QEMU, milestone 76, while Rach2's console became a DRM client on bochs (task 2544): with the console's buffer of 4,096,000 bytes at the top of the 16 MiB of video memory, `tests/drmprobe.c` placed its 1920x1080 buffer at offset 0x42f000, filled it, set the mode and read zeros back, `DRMPROBE FAIL: a buffer's mapping changed when its mode was set`.
+* Reproduction: on Rach2 before the fix, boot the test image with `-device VGA,edid=on,xres=1280,yres=800`, run `exec /drmprobe hold 4` so that the console takes a buffer, then `exec /drmprobe`. On Linux the same needs a client whose buffer lies below the mode's size from offset 0 when another client sets a mode; that run remains to be made.
+* Evidence: the serial log of the failing boot and the trace of buffer placement were kept only in the worker's scratch; the fix's commit message names the cause.
+* Rach2: `bochs_set_mode` enables with `VBE_DISPI_NOCLEARMEM`, in task 2544's bochs commit.
+* Status: unreported, draft record from Rach2's run.
+* Next: read the current `bochs_hw_setmode` and QEMU's `vbe_ioport_write_data`, reproduce under Linux with two clients, and check whether TTM's placement there ever puts a buffer in the cleared range.
+

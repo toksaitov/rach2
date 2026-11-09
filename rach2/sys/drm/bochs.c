@@ -32,6 +32,7 @@
 #define VBE_DISPI_ID0                    0xb0c0
 #define VBE_DISPI_ENABLED                0x01
 #define VBE_DISPI_LFB_ENABLED            0x40
+#define VBE_DISPI_NOCLEARMEM             0x80
 
 /* BAR 2's layout: the EDID from 0, the VGA ports 0x3c0 to 0x3df from
  * 0x400, the DISPI registers from 0x500, and QEMU's extension from 0x600:
@@ -171,7 +172,9 @@ static void bochs_blank(struct bochs_device *b, int blank)
 }
 
 /** Set the mode `mode` at 32 bits a pixel, the whole of video memory its
- * virtual height, and show it, Linux's bochs_hw_setmode. */
+ * virtual height, and show it, Linux's bochs_hw_setmode. The enable keeps
+ * video memory: without VBE_DISPI_NOCLEARMEM the device zeroes the mode's
+ * size from offset 0, where another buffer may lie. */
 static void bochs_set_mode(struct bochs_device *b, const struct drm_mode_modeinfo *mode)
 {
     if (b->drm.unplugged) {
@@ -191,7 +194,8 @@ static void bochs_set_mode(struct bochs_device *b, const struct drm_mode_modeinf
     bochs_dispi_write(b, VBE_DISPI_INDEX_VIRT_HEIGHT, (uint16_t)b->yres_virtual);
     bochs_dispi_write(b, VBE_DISPI_INDEX_X_OFFSET, 0);
     bochs_dispi_write(b, VBE_DISPI_INDEX_Y_OFFSET, 0);
-    bochs_dispi_write(b, VBE_DISPI_INDEX_ENABLE, VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED);
+    bochs_dispi_write(b, VBE_DISPI_INDEX_ENABLE,
+                      VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED | VBE_DISPI_NOCLEARMEM);
 }
 
 /**
