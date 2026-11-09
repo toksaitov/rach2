@@ -161,22 +161,46 @@ set or with CS 0x23, ends the process with
 as Linux's return does.
 Any other SS it cannot restore becomes 0x2b, as Linux makes it for a
 64-bit program that saved no SS.
+.Pp
+A handler installed by an i386 call,
+.Nm signal ,
+.Nm sigaction
+or
+.Nm rt_sigaction
+made by
+.Ql int $0x80 ,
+gets i386's frames instead, from 64-bit code or 32-bit code alike, and
+runs in 32-bit code with CS 0x23 and SS 0x2b; the i386 return calls
+restore them.
+The i386 signal calls take i386's
+.Vt sigaction ,
+.Vt stack_t
+and
+.Vt siginfo_t ,
+as
+.Xr sigaction 2
+describes, and a tracer that makes
+.Xr ptrace 2
+by
+.Ql int $0x80
+gets i386's words, siginfo and registers.
+The register sets of a tracee running 32-bit code are i386's for any
+tracer.
 .Sh LIMITS
 .Fn modify_ldt
 returns
 .Er ENOSYS ,
 so the LDT stays empty.
-A handler installed by an i386
-.Fn rt_sigaction
-is not yet given an i386 frame, since that call is a compat handler that
-returns
-.Er ENOSYS .
+An i386 frame without
+.Dv SA_RESTORER
+returns through the return code in the frame.
 .Sh EXAMPLES
 The default suite's
 .Pa tests/wow64probe.c
 enters 32-bit code, makes i386 calls from both modes, takes a TLS entry
 and reads through its selector, takes a signal in 32-bit code and returns
-there, kills a child with a seccomp filter of the i386 getpid, and reads
+there, takes one with an i386 handler on an alternate stack,
+kills a child with a seccomp filter of the i386 getpid, and reads
 each call's architecture with
 .Dv PTRACE_GET_SYSCALL_INFO .
 .Sh SEE ALSO

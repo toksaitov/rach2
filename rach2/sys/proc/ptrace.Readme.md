@@ -25,9 +25,11 @@ Named without their `PTRACE_` prefix, the requests `proc/ptrace.c` answers are `
 
 | | i686 (`arch/i686/ptrace.c`) | x86-64 (`arch/x86_64/ptrace.c`) |
 | --- | --- | --- |
-| Requests of `arch_ptrace` | `PEEKUSER`, `POKEUSER`, `GETREGS`, `SETREGS`, `GETFPREGS`, `SETFPREGS`, `GETFPXREGS`, `SETFPXREGS`, `GET_THREAD_AREA`, `SET_THREAD_AREA` | `PEEKUSER`, `POKEUSER`, `GETREGS`, `SETREGS`, `GETFPREGS`, `SETFPREGS`, `ARCH_PRCTL` |
-| Register sets | `NT_PRSTATUS`, `NT_PRFPREG`, `NT_PRXFPREG`, `NT_X86_XSTATE` | `NT_PRSTATUS`, `NT_PRFPREG`, `NT_X86_XSTATE` |
+| Requests of `arch_ptrace` | `PEEKUSER`, `POKEUSER`, `GETREGS`, `SETREGS`, `GETFPREGS`, `SETFPREGS`, `GETFPXREGS`, `SETFPXREGS`, `GET_THREAD_AREA`, `SET_THREAD_AREA` | `PEEKUSER`, `POKEUSER`, `GETREGS`, `SETREGS`, `GETFPREGS`, `SETFPREGS`, `ARCH_PRCTL`, `GET_THREAD_AREA`, `SET_THREAD_AREA`; for an i386 tracer, i386's list without `ARCH_PRCTL` |
+| Register sets | `NT_PRSTATUS`, `NT_PRFPREG`, `NT_PRXFPREG`, `NT_X86_XSTATE` | `NT_PRSTATUS`, `NT_PRFPREG`, `NT_X86_XSTATE`; for a tracee running 32-bit code, i386's, with `NT_PRXFPREG` and `NT_386_TLS` |
 | A core file's floating-point notes | `NT_PRFPREG`, `NT_PRXFPREG`, and `NT_X86_XSTATE` with XSAVE | `NT_PRFPREG`, and `NT_X86_XSTATE` with XSAVE |
+
+An i386 tracer is a thread that makes `ptrace` by `int $0x80` on x86-64 (`in_compat_syscall`). It gets i386's interface, as from a Linux with i386 emulation: `ptrace_stopped` moves 4-byte words for the memory requests and `GETEVENTMSG`, `siginfo_access` gives the i386 siginfo (`siginfo_to_caller`, `siginfo_from_caller`), `regset_access` reads the 8-byte i386 `struct iovec`, and `arch_ptrace` answers through `ia32_arch_ptrace`, with `user_regs_struct32` and `struct user32`. The register sets follow the tracee instead, as Linux's `task_user_regset_view` chooses them: a tracee whose code segment is not the 64-bit one has the i386 sets for any tracer.
 
 Any other request answers `EIO`. [The architectures' Readme](../arch/Readme.md) gives each architecture's `user_regs_struct` and `struct user`.
 

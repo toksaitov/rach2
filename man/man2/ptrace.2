@@ -436,7 +436,88 @@ describes it.
 The kernel has one TLS entry, 6.
 Entries 7 and 8 read as Linux reads an unused entry, and a write to them
 must leave them unused.
+On x86-64 the entries are 12, 13 and 14, as
+.Xr set_thread_area 2
+gives them there, and a write sets the base of FS or GS where the
+tracee's selector names the entry.
 .El
+.Ss i386 tracers and tracees on x86-64
+On x86-64 a tracer that makes the call by
+.Ql int $0x80
+gets i386's interface, as on a Linux with i386 emulation:
+.Dv PTRACE_PEEKDATA ,
+.Dv PTRACE_POKEDATA ,
+their text forms and
+.Dv PTRACE_GETEVENTMSG
+move 4-byte words;
+.Dv PTRACE_GETSIGINFO
+and
+.Dv PTRACE_SETSIGINFO
+take i386's 128-byte
+.Vt siginfo_t ,
+whose union starts at byte 12;
+.Dv PTRACE_GETREGSET
+and
+.Dv PTRACE_SETREGSET
+take an 8-byte
+.Vt struct iovec ;
+and the architecture's requests are i386's:
+.Dv PTRACE_PEEKUSER
+and
+.Dv PTRACE_POKEUSER
+of the 284-byte
+.Vt struct user32 ,
+with the 17 registers of
+.Vt user_regs_struct32
+from 0 and the debug registers from 252, and every other field reading
+0 and taking a write that changes nothing;
+.Dv PTRACE_GETREGS
+and
+.Dv PTRACE_SETREGS
+of
+.Vt user_regs_struct32 ,
+68 bytes, the low halves of the tracee's registers, a write zero-extended
+and a selector written to FS or GS loading the base its TLS entry gives;
+.Dv PTRACE_GETFPREGS
+and
+.Dv PTRACE_SETFPREGS
+of the 108-byte
+.Ic fnsave
+layout, made from the
+.Ic fxsave64
+image as Linux converts it;
+.Dv PTRACE_GETFPXREGS
+and
+.Dv PTRACE_SETFPXREGS
+(18 and 19) of the 512-byte image; and
+.Dv PTRACE_GET_THREAD_AREA
+and
+.Dv PTRACE_SET_THREAD_AREA
+(25 and 26).
+Any other architecture request, such as
+.Dv PTRACE_ARCH_PRCTL ,
+is
+.Er EIO .
+Offsets of
+.Vt struct user32
+past its end or not a multiple of 4 are
+.Er EIO .
+.Pp
+The register sets follow the tracee's code segment, as Linux's do: a
+thread running 32-bit code, in code segment 0x23, has i386's sets, for
+any tracer:
+.Dv NT_PRSTATUS
+as
+.Vt user_regs_struct32 ,
+.Dv NT_PRFPREG
+as the 108-byte layout, set whole,
+.Dv NT_PRXFPREG ,
+.Dv NT_X86_XSTATE ,
+and
+.Dv NT_386_TLS
+(0x200), its three TLS entries as 16-byte
+.Vt user_desc
+records, all checked before any is set.
 .Pp
 Every request but
 .Dv PTRACE_TRACEME ,
