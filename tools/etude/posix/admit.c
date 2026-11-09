@@ -189,9 +189,10 @@ done:
 /** Print the command's arguments and return the usage status. */
 static int usage(void)
 {
-    fprintf(stderr, "etude admit: usage: etude admit [-i] [-p] [-d locks] [-w seconds] [-r file] "
-                    "ledger id account shared|alone cpu,bytes,bytes capacity seconds "
-                    "command [args...]\n");
+    fprintf(stderr,
+            "etude admit: usage: etude admit [-c] [-i] [-p] [-d locks] [-w seconds] [-r file] "
+            "ledger id account shared|alone cpu,bytes,bytes capacity seconds "
+            "command [args...]\n");
     return 2;
 }
 
@@ -232,27 +233,39 @@ static int refused(const char *record)
     return stopped ? 128 + stopped : 2;
 }
 
+/* What the command line asks for. */
+struct request {
+    const char *dir, *record, *ledger, *id, *account;
+    unsigned wait, seconds; /* -w's bound and the command's, in seconds */
+    int legacy, alone, input;
+    int cpu; /* -c: the claim takes the processors with the memory */
+    struct etude_ledger_res res[3], cap[3];
+    char **command;
+};
+
 /**
- * Admit claim `id`, asking again each second for up to `seconds` while the
- * request waits in the ledger, and once without waiting when `seconds` is 0.
+ * Admit the claim of `q`, asking again each second for up to -w's seconds
+ * while the request waits in the ledger, and once without waiting without -w.
  *
  * A measured preparation, with ETUDE_PREPARATION_GRANT, reserves all three
- * supplied resources. Unmeasured compatibility commands reserve only memory;
- * their existing processor sharing and free-disk checks remain unchanged.
+ * supplied resources. A command of -c, a guest whose processors must be its
+ * own, reserves its processors and its memory. Unmeasured compatibility
+ * commands reserve only memory; their existing processor sharing and
+ * free-disk checks remain unchanged.
  *
  * @return 0 once admitted; -1 with errno set when refused, ETIMEDOUT at the
  *         bound and EINTR after a stop signal, with no request left waiting.
  */
-static int admit(struct etude_ledger *l, const char *id, const char *account,
-                 const struct etude_ledger_res *res, const struct etude_ledger_res *cap,
-                 unsigned seconds)
+static int admit(struct etude_ledger *l, const struct request *q)
 {
+    const char *id = q->id;
+    unsigned seconds = q->wait;
     uint64_t until = posix_now_us() + (uint64_t)seconds * 1000000;
     int e;
-    size_t first = getenv("ETUDE_PREPARATION_GRANT") ? 0 : 1;
-    size_t count = first ? 1 : 3;
+    size_t first = getenv("ETUDE_PREPARATION_GRANT") || q->cpu ? 0 : 1;
+    size_t count = getenv("ETUDE_PREPARATION_GRANT") ? 3 : q->cpu ? 2 : 1;
 
-    while (etude_ledger_admit(l, id, account, res + first, count, cap + first, count,
+    while (etude_ledger_admit(l, id, q->account, q->res + first, count, q->cap + first, count,
                               seconds != 0) != 0) {
         e = errno;
         if (seconds != 0 && e == EAGAIN && !stopped && posix_now_us() < until) {
@@ -273,15 +286,6 @@ static int admit(struct etude_ledger *l, const char *id, const char *account,
     return 0;
 }
 
-/* What the command line asks for. */
-struct request {
-    const char *dir, *record, *ledger, *id, *account;
-    unsigned wait, seconds; /* -w's bound and the command's, in seconds */
-    int legacy, alone, input;
-    struct etude_ledger_res res[3], cap[3];
-    char **command;
-};
-
 /** Read the command line into `q`; 0, or -1 for a wrong usage. */
 static int parse(int argc, char **argv, struct request *q)
 {
@@ -293,8 +297,11 @@ static int parse(int argc, char **argv, struct request *q)
 #else
     q->dir = "/tmp";
 #endif
-    while ((opt = getopt(argc, argv, "+ipd:w:r:")) != -1) {
+    while ((opt = getopt(argc, argv, "+cipd:w:r:")) != -1) {
         switch (opt) {
+        case 'c':
+            q->cpu = 1;
+            break;
         case 'i':
             q->input = 1;
             break;
@@ -364,7 +371,7 @@ static struct etude_bridge *take(struct etude_ledger *l, const struct request *q
     uint64_t began = posix_now_us(), spent;
     char offset[32];
 
-    if (l == NULL || admit(l, q->id, q->account, q->res, q->cap, q->wait) != 0) {
+    if (l == NULL || admit(l, q) != 0) {
         if (errno == ETIMEDOUT)
             fprintf(stderr, "etude admit: result: refused: admission: no room in %u seconds\n",
                     q->wait);
