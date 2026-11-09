@@ -177,33 +177,103 @@ void drm_gem_release(struct drm_file *file)
     }
 }
 
+/**
+ * The first page offset of `dev`'s mmap space from which `pages` pages
+ * touch neither an object's offset nor a driver's node, into `*at`: 0, or
+ * -ENOSPC. Each range in the way moves the candidate past it and starts the
+ * search again, so the two lists need not be merged.
+ */
+static int32_t mmap_space_find(struct drm_device *dev, uint64_t pages, uint64_t *at)
+{
+    uint64_t start = DRM_FILE_PAGE_OFFSET_START;
+    uint64_t end = start + DRM_FILE_PAGE_OFFSET_SIZE;
+    struct drm_gem_object *o;
+    struct drm_mmap_node *n;
+    int moved = 1;
+
+    while (moved) {
+        moved = 0;
+        for (o = dev->mmap_objects; o; o = o->mmap_next) {
+            uint64_t a = o->mmap_offset >> PAGE_SHIFT, b = a + (o->size >> PAGE_SHIFT);
+
+            if (a < start + pages && start < b) {
+                start = b;
+                moved = 1;
+            }
+        }
+        for (n = dev->mmap_nodes; n; n = n->next) {
+            uint64_t a = n->offset >> PAGE_SHIFT, b = a + (n->obj->size >> PAGE_SHIFT);
+
+            if (a < start + pages && start < b) {
+                start = b;
+                moved = 1;
+            }
+        }
+    }
+    if (pages > end - start) {
+        return -ENOSPC;
+    }
+    *at = start;
+    return 0;
+}
+
 int32_t drm_gem_create_mmap_offset(struct drm_gem_object *obj)
 {
     struct drm_device *dev = obj->dev;
     struct drm_gem_object **link = &dev->mmap_objects;
-    uint64_t pages = obj->size >> PAGE_SHIFT;
-    uint64_t start = DRM_FILE_PAGE_OFFSET_START;
-    uint64_t end = start + DRM_FILE_PAGE_OFFSET_SIZE;
+    uint64_t start;
 
     if (obj->mmap_offset) {
         return 0;
     }
-    /* The first gap that fits, in the order of the offsets. */
-    for (; *link; link = &(*link)->mmap_next) {
-        uint64_t at = (*link)->mmap_offset >> PAGE_SHIFT;
-
-        if (at - start >= pages) {
-            break;
-        }
-        start = at + ((*link)->size >> PAGE_SHIFT);
-    }
-    if (pages > end - start) {
+    if (mmap_space_find(dev, obj->size >> PAGE_SHIFT, &start) != 0) {
         return -ENOSPC;
+    }
+    while (*link && (*link)->mmap_offset < start << PAGE_SHIFT) {
+        link = &(*link)->mmap_next;
     }
     obj->mmap_offset = start << PAGE_SHIFT;
     obj->mmap_next = *link;
     *link = obj;
     return 0;
+}
+
+int32_t drm_mmap_node_add(struct drm_mmap_node *node)
+{
+    struct drm_device *dev = node->obj->dev;
+    struct drm_mmap_node **link = &dev->mmap_nodes;
+    uint64_t start;
+
+    if (node->offset) {
+        return 0;
+    }
+    if (mmap_space_find(dev, node->obj->size >> PAGE_SHIFT, &start) != 0) {
+        return -ENOSPC;
+    }
+    while (*link && (*link)->offset < start << PAGE_SHIFT) {
+        link = &(*link)->next;
+    }
+    node->offset = start << PAGE_SHIFT;
+    node->next = *link;
+    *link = node;
+    return 0;
+}
+
+void drm_mmap_node_remove(struct drm_mmap_node *node)
+{
+    struct drm_mmap_node **link;
+
+    if (!node->offset) {
+        return;
+    }
+    for (link = &node->obj->dev->mmap_nodes; *link; link = &(*link)->next) {
+        if (*link == node) {
+            *link = node->next;
+            break;
+        }
+    }
+    node->offset = 0;
+    node->next = NULL;
 }
 
 /** Whether `file` has a handle to `obj`, which Linux's mmap asks
@@ -224,6 +294,7 @@ int32_t drm_gem_mmap(struct drm_file *file, vma_t *vma)
 {
     struct drm_device *dev = file->dev;
     struct drm_gem_object *obj;
+    struct drm_mmap_node *node = NULL;
     uint32_t pages = (uint32_t)((vma->end - vma->start) >> PAGE_SHIFT);
     uint32_t start;
     int32_t rc;
@@ -236,19 +307,27 @@ int32_t drm_gem_mmap(struct drm_file *file, vma_t *vma)
             break;
         }
     }
+    if (!obj) {
+        for (node = dev->mmap_nodes; node; node = node->next) {
+            if ((node->offset >> PAGE_SHIFT) == vma->pgoff) {
+                obj = node->obj;
+                break;
+            }
+        }
+    }
     if (!obj || pages > obj->size >> PAGE_SHIFT) {
         return -EINVAL;
     }
     if (!file_has_handle(file, obj)) {
         return -EACCES;
     }
-    if (!obj->funcs || !obj->funcs->mmap) {
+    if (!node && (!obj->funcs || !obj->funcs->mmap)) {
         return -ENODEV;
     }
-    start = (uint32_t)(obj->mmap_offset >> PAGE_SHIFT);
+    start = (uint32_t)(vma->pgoff);
     drm_gem_object_get(obj);
     vma->pgoff -= start;
-    rc = obj->funcs->mmap(obj, vma);
+    rc = node ? node->mmap(node, vma) : obj->funcs->mmap(obj, vma);
     if (rc != 0) {
         vma->pgoff += start;
         drm_gem_object_put(obj);
@@ -331,8 +410,8 @@ static uintptr_t shmem_obj_page(struct drm_gem_object *obj, uint32_t pgoff)
     return drm_gem_shmem_page((struct drm_gem_shmem_object *)obj, pgoff);
 }
 
-static const struct drm_gem_object_funcs shmem_funcs = {shmem_obj_free, shmem_obj_mmap, NULL,
-                                                        NULL,           shmem_obj_page, NULL};
+static const struct drm_gem_object_funcs shmem_funcs = {shmem_obj_free, shmem_obj_mmap, NULL, NULL,
+                                                        shmem_obj_page, NULL,           NULL};
 
 struct drm_gem_shmem_object *drm_gem_shmem_create(struct drm_device *dev, uint64_t size, int map_wc)
 {

@@ -349,6 +349,9 @@ uint32_t sw_sync_info(char *buf, uint32_t cap);
  * the kernel's address of the object's bytes, one contiguous range, for
  * the console's buffer (drm_client.c): valid while the object is scanned
  * out, or NULL when the kernel cannot reach it so; NULL `vmap` is the same.
+ * `cpu_access` is the exporter's part of a dma-buf's DMA_BUF_IOCTL_SYNC,
+ * with its DMA_BUF_SYNC_ flags, once the fences are waited for: 0 or
+ * -errno; NULL does nothing. It may sleep.
  */
 struct drm_gem_object_funcs {
     void (*free)(struct drm_gem_object *obj);
@@ -357,6 +360,7 @@ struct drm_gem_object_funcs {
     void (*unpin)(struct drm_gem_object *obj);
     uintptr_t (*page)(struct drm_gem_object *obj, uint32_t pgoff);
     volatile uint8_t *(*vmap)(struct drm_gem_object *obj);
+    int32_t (*cpu_access)(struct drm_gem_object *obj, uint64_t flags);
 };
 
 /*
@@ -422,12 +426,39 @@ int32_t drm_gem_create_mmap_offset(struct drm_gem_object *obj);
 /**
  * mmap of a card or render node: the object whose offset is the region's
  * page offset, which the file has a handle to, mapped by its `mmap` from
- * its own page 0, with a reference the region holds. -ENODEV for a device
+ * its own page 0, with a reference the region holds; or the object of a
+ * driver's node there, mapped by the node's `mmap`. -ENODEV for a device
  * unplugged or an object without `mmap`, -EINVAL for no object at that
  * offset or a range past its end, -EACCES for an object the file has no
  * handle to, or the hook's error.
  */
 int32_t drm_gem_mmap(struct drm_file *file, vma_t *vma);
+
+/*
+ * A further place of an object in its device's mmap space, which a driver
+ * gives for another way of mapping it, as i915 gives one for each kind of
+ * mapping MMAP_OFFSET names (Linux's drm_vma_offset_node beside the
+ * object's own). It spans the object's size from `offset`, in bytes, a
+ * whole number of pages, 0 until `drm_mmap_node_add` places it. An mmap at
+ * that offset by a file with a handle to `obj` calls `mmap`, with the
+ * node and the region, as `drm_gem_object_funcs.mmap` is called: on
+ * success the region takes over a reference to `obj` that the core took.
+ * The driver keeps the node, and takes it out with `drm_mmap_node_remove`
+ * before `obj` is freed; the node holds no reference.
+ */
+struct drm_mmap_node {
+    struct drm_gem_object *obj;
+    uint64_t offset;
+    int32_t (*mmap)(struct drm_mmap_node *node, vma_t *vma);
+    struct drm_mmap_node *next; /* the device's nodes, by offset */
+};
+
+/** Place `node`, whose `obj` and `mmap` are set, in the mmap space of its
+ * object's device, first-fit beside the objects' own offsets: 0, or
+ * -ENOSPC when the space has no room. A placed node is left as it is. */
+int32_t drm_mmap_node_add(struct drm_mmap_node *node);
+/** Take `node` out of its device's mmap space; nothing when unplaced. */
+void drm_mmap_node_remove(struct drm_mmap_node *node);
 
 /*
  * A buffer object of pages from the frame allocator, Linux's GEM shmem
@@ -1554,6 +1585,7 @@ struct drm_device {
     uint32_t next_master_id;             /* the last master record's id */
     struct drm_gem_object *objects;      /* its buffer objects, through `dev_next` */
     struct drm_gem_object *mmap_objects; /* those with an mmap offset, by offset */
+    struct drm_mmap_node *mmap_nodes;    /* drivers' further offsets, by offset */
     struct drm_mode_config mode_config;
     int debugfs;     /* its debugfs directory is made (drm_debugfs.c) */
     int commit_held; /* the commit lock: 1 while a commit holds it */

@@ -44,7 +44,16 @@ static uintptr_t prime_page(struct dma_buf *buf, uint32_t pgoff)
     return obj->funcs->page(obj, pgoff);
 }
 
-static const struct dma_buf_ops prime_ops = {prime_mmap, prime_release, NULL, prime_page};
+/** The exporter's part of a CPU access sync, where its driver has one. */
+static int32_t prime_cpu_access(struct dma_buf *buf, uint64_t flags)
+{
+    struct drm_gem_object *obj = buf->priv;
+
+    return obj->funcs && obj->funcs->cpu_access ? obj->funcs->cpu_access(obj, flags) : 0;
+}
+
+static const struct dma_buf_ops prime_ops = {prime_mmap, prime_release, prime_cpu_access,
+                                             prime_page};
 
 /** Find a GEM handle's cache entry; the big kernel lock protects the table. */
 static struct drm_handle *prime_handle(struct drm_file *file, uint32_t handle)
