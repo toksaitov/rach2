@@ -19,7 +19,9 @@
  * the same buffer; a master that comes while the console's commit runs
  * keeps the screen; `video=` and a hotplug move the console to a buffer of
  * the size named; a buffer that cannot be mapped when the master leaves is
- * forgotten until the next place; the firmware's device is taken back with
+ * forgotten until the next place, or, on a device whose framebuffers are
+ * flushed, drawn through a shadow whose damaged rows a flush copies and
+ * commits; the firmware's device is taken back with
  * its CRTC off and the console on the loader's framebuffer; and every
  * allocation and reference is given back.
  *
@@ -53,22 +55,7 @@ void drm_master_changed(struct drm_device *d, struct drm_file *master)
 
 /* ---- the device's references and the aperture ---- */
 
-static int dev_refs, firmware;
-
-/** Hold the device. */
-void drm_dev_get(struct drm_device *d)
-{
-    (void)d;
-    dev_refs++;
-}
-
-/** Let the device go. */
-void drm_dev_put(struct drm_device *d)
-{
-    (void)d;
-    CHECK(dev_refs > 0, "the device is put no more than it is held");
-    dev_refs--;
-}
+static int firmware;
 
 /** Whether the device is the firmware's, as the row sets it. */
 int drm_aperture_is_firmware(const struct drm_device *d)
@@ -177,6 +164,34 @@ void fb_screen_moved(void)
     moves++;
 }
 
+/* The damage fbcon would have recorded, which a row sets. */
+static uint32_t damage_top, damage_end;
+
+/** Give the row's damage once. */
+int fbcon_take_damage(uint32_t *top, uint32_t *end)
+{
+    CHECK(locked, "the damage is taken under the console's lock");
+    if (damage_top == damage_end) {
+        return 0;
+    }
+    *top = damage_top;
+    *end = damage_end;
+    damage_top = damage_end = 0;
+    return 1;
+}
+
+/** A frame's address is its own: the test's pages are its memory. */
+void *kmap_temp(uintptr_t phys)
+{
+    return (void *)phys;
+}
+
+/** Nothing to unmap. */
+void kunmap_temp(void *va)
+{
+    (void)va;
+}
+
 /** Record the keyboard's hold. */
 void kd_hold(void)
 {
@@ -204,7 +219,20 @@ static struct drm_mode_config *mc = &dev.mode_config;
 
 /* The video memory the dumb buffers' `vmap` gives, by object. */
 static uint8_t vram[MAX_GEM][16];
-static int next_gem, dumb_creates, intrude, unmapped;
+static int next_gem, dumb_creates, intrude, unmapped, plane_updates;
+
+/* The pages behind every buffer, as the `page` hook gives them: 4 MiB,
+ * room for the largest buffer of the rows. */
+#define BACKING_PAGES 1024u
+static uint8_t backing[BACKING_PAGES * PAGE_SIZE];
+
+/** A buffer's page `pgoff`: the test's backing, the same for every
+ * buffer; 0 past it. */
+static uintptr_t fake_page(struct drm_gem_object *obj, uint32_t pgoff)
+{
+    (void)obj;
+    return pgoff < BACKING_PAGES ? (uintptr_t)(backing + pgoff * PAGE_SIZE) : 0;
+}
 
 /** Each buffer's address in the model's video memory; NULL while
  * `unmapped`, as for a buffer moved out of it. */
@@ -213,7 +241,7 @@ static volatile uint8_t *fake_vmap(struct drm_gem_object *obj)
     return unmapped ? NULL : vram[obj - gem];
 }
 
-static const struct drm_gem_object_funcs gem_funcs = {NULL, NULL, NULL, NULL, NULL, fake_vmap};
+static const struct drm_gem_object_funcs gem_funcs = {NULL, NULL, NULL, NULL, fake_page, fake_vmap};
 
 /** The mode `w` by `h` at 60 Hz, preferred when `preferred` is set. */
 static void add_mode(struct drm_connector *c, uint16_t w, uint16_t h, int preferred)
@@ -283,7 +311,15 @@ static int32_t fake_plane_check(struct drm_plane *plane, struct drm_atomic_state
     return 0;
 }
 
-static const struct drm_plane_funcs plane_funcs = {fake_plane_check, NULL, NULL};
+/** Count the plane's updates, which a flush is. */
+static void fake_plane_update(struct drm_plane *plane, struct drm_atomic_state *state)
+{
+    (void)plane;
+    (void)state;
+    plane_updates++;
+}
+
+static const struct drm_plane_funcs plane_funcs = {fake_plane_check, fake_plane_update, NULL};
 static const struct drm_crtc_funcs crtc_funcs = {NULL, NULL, NULL, NULL, NULL, NULL,
                                                  NULL, NULL, NULL, NULL, NULL};
 static const struct drm_connector_funcs conn_funcs = {detect, get_modes, NULL, NULL};
@@ -332,7 +368,7 @@ static const struct drm_mode_modeinfo *crtc_mode(void)
 static void row_register(void)
 {
     drm_client_dev_register(&dev);
-    CHECK(con.dev == &dev && dev_refs == 1, "the console holds the device");
+    CHECK(con.dev == &dev && dev.refs == 1, "the console holds the device");
     CHECK(listeners == &con_notifier, "the console listens for the master role");
     CHECK(attaches == 0 && dumb_creates == 0 && !crtc_mode(),
           "the console stays on the loader's screen");
@@ -457,6 +493,46 @@ static void row_unmapped(void)
           "the next place draws again, and /fb follows");
 }
 
+/** A buffer the kernel cannot map, on a device whose framebuffers are
+ * flushed, is drawn through a shadow that a flush copies and commits. */
+static void row_shadow(void)
+{
+    uint32_t pitch;
+    int u;
+
+    mc->fb_dirty = 1;
+    unmapped = 1;
+    open_as_self(&fa);
+    drm_mode_file_release(&fa);
+    drm_master_release(&fa);
+    CHECK(con.on_buffer && con.shadow && attached_base == con.shadow && !con.next && !con.spare,
+          "the console draws on a shadow");
+    pitch = con.fb->pitches[0];
+    CHECK(con.shadow_bytes == pitch * con.fb->height && con_flush_ready(NULL),
+          "the shadow is the buffer's size and wants its flushes");
+    k_memset(con.shadow + 2 * pitch, 0x5A, 2 * pitch);
+    damage_top = 2;
+    damage_end = 4;
+    u = plane_updates;
+    con_flush();
+    CHECK(backing[2 * pitch] == 0x5A && backing[4 * pitch - 1] == 0x5A &&
+              backing[2 * pitch - 1] == 0 && backing[4 * pitch] == 0 && plane_updates == u + 1,
+          "a flush copies the damaged rows to the buffer's pages and commits them");
+    open_as_self(&fb_);
+    damage_top = 0;
+    damage_end = 1;
+    con_flush();
+    CHECK(plane_updates == u + 1 && damage_end == 1 && !con_flush_ready(NULL),
+          "nothing is flushed while a master holds the device");
+    drm_mode_file_release(&fb_);
+    drm_master_release(&fb_);
+    CHECK(!con.handed && attached_base == con.shadow, "the shadow is kept for the next return");
+    damage_top = damage_end = 0;
+    k_memset(backing, 0, sizeof(backing));
+    unmapped = 0;
+    mc->fb_dirty = 0;
+}
+
 /** The firmware's device: the CRTC off, the console on the loader's
  * screen. */
 static void row_firmware(void)
@@ -464,7 +540,7 @@ static void row_firmware(void)
     int d = detaches, f = forgets, a = attaches, m = moves, c = dumb_creates;
 
     drm_client_dev_unregister(&dev);
-    CHECK(!con.dev && !con.fb && dev_refs == 0, "the console lets the device go");
+    CHECK(!con.dev && !con.fb && dev.refs == 0, "the console lets the device go");
     CHECK(detaches == d + 1 && forgets == f + 1 && moves == m + 1,
           "a console on the device's buffer forgets it, and /fb follows");
     drm_client_dev_register(&dev);
@@ -484,7 +560,7 @@ static void row_firmware(void)
     CHECK(attached_base == NULL && attached.width == 1024 && attached.addr == loader.addr,
           "fbcon draws on the loader's framebuffer");
     drm_client_dev_unregister(&dev);
-    CHECK(dev_refs == 0, "the device is let go");
+    CHECK(dev.refs == 0, "the device is let go");
 }
 
 /** Run the rows. */
@@ -513,6 +589,7 @@ int main(void)
     row_intruder();
     row_hotplug();
     row_unmapped();
+    row_shadow();
     row_firmware();
     drm_mode_config_cleanup(&dev);
     CHECK(allocations == base, "every allocation freed");

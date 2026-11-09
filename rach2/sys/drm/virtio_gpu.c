@@ -827,8 +827,8 @@ static void obj_free(struct drm_gem_object *obj)
     obj_release(bo);
 }
 
-static const struct drm_gem_object_funcs vgpu_obj_funcs = {obj_free, obj_mmap, NULL, NULL,
-                                                           obj_page};
+static const struct drm_gem_object_funcs vgpu_obj_funcs = {obj_free, obj_mmap, NULL,
+                                                           NULL,     obj_page, NULL};
 
 /**
  * A new object of `size` bytes with a 2D resource of `format` and
