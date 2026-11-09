@@ -3,7 +3,7 @@
  * fork, unmap and revocation paths of mm/paging.c, with i686's `cpu.h`;
  * devmap64_hosttest.c runs the same rows with x86-64's.
  *
- * host-deps: rach2/sys/mm/vm.c rach2/sys/mm/frame.c
+ * host-deps: rach2/sys/mm/vm.c rach2/sys/mm/frame.c rach2/sys/mm/notify.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast

@@ -3,7 +3,7 @@
  * the memory, and the holds, which keep only the record; and the program's
  * file it keeps.
  *
- * host-deps: tests/host/compat/vm_iter_host.c
+ * host-deps: tests/host/compat/vm_iter_host.c rach2/sys/mm/notify.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  *
  * `mm/mm.c` is included whole, over a model of the paging layer that counts

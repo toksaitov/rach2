@@ -4,7 +4,7 @@
  * kernel stack's guard page, on i686.
  *
  * host-deps: tests/host/compat/vm_iter_host.c
- * host-deps: rach2/sys/mm/frame.c
+ * host-deps: rach2/sys/mm/frame.c rach2/sys/mm/notify.c
  * host-deps: rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
  * host-deps: tests/host/compat/spinlock_host.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast

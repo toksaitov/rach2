@@ -46,8 +46,14 @@ struct proc_rlimit {
 #define RLIM_STACK    3
 #define RLIM_CORE     4
 #define RLIM_FSIZE    5
-#define RLIM_COUNT    6
+#define RLIM_MEMLOCK  6
+#define RLIM_COUNT    7
 #define RLIM_INFINITY (~0UL)
+
+/* RLIMIT_MEMLOCK a process starts with, soft and hard, 8 MiB, which is
+ * Linux's MLOCK_LIMIT: the bytes a process without privilege may lock with
+ * the mlock calls, and apart from them pin for devices. */
+#define RLIM_MEMLOCK_DEFAULT 0x800000u
 
 /* The soft RLIMIT_STACK a process starts with, 8 MiB, which is Linux's;
  * an exec that runs with ids its caller lacks lowers a larger one to it. */
@@ -210,8 +216,8 @@ struct process {
     uint32_t irq_depth;
     /* The resource limits `prlimit64` keeps, by the RLIM_ slots: threads of
      * the real user, open descriptors, and in bytes the address space, the
-     * stack, a core file and a file written; soft and hard, inherited by
-     * fork and exec. */
+     * stack, a core file, a file written and memory locked; soft and hard,
+     * inherited by fork and exec. */
     struct proc_rlimit rlim[RLIM_COUNT];
     /* The depth of `mem_reclaim` calls the process is in: while it is above
      * 0, its own allocations, the requests a writeback needs, may take from

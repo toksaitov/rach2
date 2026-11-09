@@ -15,13 +15,13 @@
 
 /* Region protection bits; the first three are the values of PROT_READ,
  * PROT_WRITE and PROT_EXEC. */
-#define VM_PROT_READ     0x1u
-#define VM_PROT_WRITE    0x2u
-#define VM_PROT_EXEC     0x4u
+#define VM_PROT_READ        0x1u
+#define VM_PROT_WRITE       0x2u
+#define VM_PROT_EXEC        0x4u
 /* Given to paging_protect_range, and not kept in a region, for a shared
  * region, whose pages are shared on purpose: a write goes to the frame they
  * share, never to a copy. */
-#define VM_PROT_SHARED   0x8u
+#define VM_PROT_SHARED      0x8u
 /* Kept in a region's protection beside the three access bits: the region
  * may never be made writable. A shared mapping of a file opened without
  * write access has it, and so has a shared mapping of a file on a disk,
@@ -30,24 +30,35 @@
  * while it is set, as Linux's mprotect answers EACCES for a mapping without
  * VM_MAYWRITE; splits, merges, copies and moves keep it with the rest of
  * the protection. */
-#define VM_PROT_NOWRITE  0x10u
+#define VM_PROT_NOWRITE     0x10u
 /* Kept the same way: the region maps device memory, a device object's
  * pages (`vm_device_map`), whose fault asks the object for the page and
  * whose frames need not be the allocator's. Nothing reads it on a process's
  * behalf, a core file or /proc/PID/mem, since a read of a device register
  * can change the device. */
-#define VM_PROT_IO       0x20u
+#define VM_PROT_IO          0x20u
 /* Kept the same way, beside VM_PROT_IO: the pages are mapped
  * write-combining (PTE_WC), or uncached where the processor has no
  * write-combining; with VM_PROT_UC, uncached (PTE_NOCACHE); with neither,
  * cached, as for a page of RAM. */
-#define VM_PROT_WC       0x40u
-#define VM_PROT_UC       0x80u
+#define VM_PROT_WC          0x40u
+#define VM_PROT_UC          0x80u
 /* Kept the same way: a fork's child does not get the region, as Linux's
  * VM_DONTCOPY, which MADV_DONTFORK sets and MADV_DOFORK clears. */
-#define VM_PROT_DONTFORK 0x100u
+#define VM_PROT_DONTFORK    0x100u
+/* Kept the same way: the region is locked, as Linux's VM_LOCKED, by mlock,
+ * mlock2, mlockall or MAP_LOCKED. Its pages count in VmLck and against
+ * RLIMIT_MEMLOCK, are brought in when it is locked, and madvise may not
+ * drop them but with MADV_DONTNEED_LOCKED; a fork's child does not inherit
+ * the lock. With VM_PROT_LOCKONFAULT beside it, as Linux's VM_LOCKONFAULT,
+ * the pages are locked as they are touched and not brought in at once.
+ * Device memory is never locked. */
+#define VM_PROT_LOCKED      0x200u
+#define VM_PROT_LOCKONFAULT 0x400u
+#define VM_PROT_LOCKS       (VM_PROT_LOCKED | VM_PROT_LOCKONFAULT)
 /* The bits a change of the access bits keeps. */
-#define VM_PROT_KEPT     (VM_PROT_NOWRITE | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK)
+#define VM_PROT_KEPT \
+    (VM_PROT_NOWRITE | VM_PROT_IO | VM_PROT_WC | VM_PROT_UC | VM_PROT_DONTFORK | VM_PROT_LOCKS)
 
 /* The kind of a region, which /proc/PID/maps reports and the fault, fork
  * and brk paths read. */
@@ -134,6 +145,10 @@ typedef struct vm_space {
     uintptr_t brk;         /* current program break (top of the heap VMA)  */
     uintptr_t stack_limit; /* lowest address the stack VMA may grow down to */
     uintptr_t mmap_base;   /* a mapping without a hint goes below it */
+    /* The VM_PROT_LOCKS bits a new region of mmap or brk takes, which
+     * mlockall's MCL_FUTURE sets and munlockall clears; 0 in a new space
+     * and in a fork's copy, as Linux's def_flags. */
+    uint32_t def_prot;
     /* Gap search proof: above gap_top, no hole fits gap_len in [gap_lo,gap_hi).
      * A zero gap_len is invalid; removing coverage clears it. */
     uintptr_t gap_top, gap_len, gap_lo, gap_hi;
@@ -166,7 +181,9 @@ void vm_free(vm_space_t *vm);
 
 /** Make `dst`, which owns no nodes, a copy of `src` without its regions
  * marked VM_PROT_DONTFORK, whose regions take a reference each to the files
- * they map; 0, or -1 with no memory, with `dst` left empty. */
+ * they map and lose their locks, as a fork's child does not inherit them,
+ * and whose `def_prot` is 0; 0, or -1 with no memory, with `dst` left
+ * empty. */
 int vm_copy(vm_space_t *dst, const vm_space_t *src);
 
 /** The region that holds `addr` (`start <= addr < end`), or NULL. */
@@ -264,6 +281,29 @@ int vm_protect(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t prot);
  * they were.
  */
 int vm_advise(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t set, uint32_t clear);
+
+/**
+ * Give each region of [start, end) but those of device memory the lock
+ * bits `bits`, VM_PROT_LOCKED alone, with VM_PROT_LOCKONFAULT, or 0 to
+ * unlock, in place of those it had; [start, end) must be covered without a
+ * gap, and the regions it cuts are split at its ends and merged as
+ * `vm_protect` does. Returns 0; -1 for a gap; -2 when a split has no room.
+ * An error leaves the regions as they were.
+ */
+int vm_lock(vm_space_t *vm, uintptr_t start, uintptr_t end, uint32_t bits);
+
+/** Give every region but those of device memory the lock bits `bits`, as
+ * `vm_lock` does over the whole space, for mlockall and munlockall; no
+ * region is split, so it cannot fail. */
+void vm_lock_all(vm_space_t *vm, uint32_t bits);
+
+/** Bytes of [start, end) that locked regions cover, and with the whole
+ * address space for a range, VmLck of /proc/PID/status. */
+uintptr_t vm_locked_in(const vm_space_t *vm, uintptr_t start, uintptr_t end);
+
+/** Bytes the locked regions cover together: VmLck of /proc/PID/status and
+ * what RLIMIT_MEMLOCK bounds for the mlock calls. */
+uintptr_t vm_locked(const vm_space_t *vm);
 
 /** Make room for `n` more regions now, so the changes after cannot fail;
  * 0 ok, -1 at the limit or with no memory. */

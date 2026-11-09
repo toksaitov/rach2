@@ -7,7 +7,7 @@
  * host-deps: tests/host/compat/vfs_name_none.c
  * host-deps: rach2/sys/fs/fd.c rach2/sys/lib/kstring.c
  * host-deps: rach2/sys/lib/kctypes.c tests/host/compat/park_host.c
- * host-deps: rach2/sys/fs/nodelock.c
+ * host-deps: rach2/sys/fs/nodelock.c rach2/sys/mm/notify.c
  * host-cflags: -Wno-pointer-to-int-cast -Wno-int-to-pointer-cast
  *
  * The rows check:

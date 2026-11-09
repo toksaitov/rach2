@@ -306,6 +306,7 @@ static void process_limits(process_t *p)
     p->rlim[RLIM_CORE].cur = 0;
     p->rlim[RLIM_CORE].max = RLIM_INFINITY;
     p->rlim[RLIM_FSIZE].cur = p->rlim[RLIM_FSIZE].max = RLIM_INFINITY;
+    p->rlim[RLIM_MEMLOCK].cur = p->rlim[RLIM_MEMLOCK].max = RLIM_MEMLOCK_DEFAULT;
 }
 
 /** New directories, at / with umask 022 and one reference, or NULL. */

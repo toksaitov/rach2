@@ -20,6 +20,8 @@
 #include "../proc/smp.h"
 #include "../lib/spinlock.h"
 #include "mm.h"
+#include "notify.h"
+#include "pin.h"
 #include "pressure.h"
 
 /* SIGBUS's code for an address with no object behind it (Linux's). */
@@ -239,7 +241,9 @@ void frame_take_boot(uintptr_t frame)
     }
 }
 
-static int cow_fault(page_dir_t *dir, uintptr_t addr);
+static int cow_fault(struct mm *mm, uintptr_t addr);
+static int page_private(struct mm *mm, uintptr_t addr, int writable);
+static uint32_t frame_maps(uintptr_t frame);
 
 /** The entry of `dir`'s own table for the user address `addr`, or NULL where
  * there is no table. */
@@ -447,6 +451,23 @@ static int region_allows(const vma_t *vma, int write)
 }
 
 /**
+ * Grow the stack down to `page` for a fault outside every region, as
+ * `vm_grow_stack` does under RLIMIT_AS `as_limit`; a locked stack's growth
+ * also counts against RLIMIT_MEMLOCK, as Linux's acct_stack_growth checks
+ * it. 1 if grown, 0 if not.
+ */
+static int grow_stack(vm_space_t *vm, uintptr_t page, uintptr_t as_limit)
+{
+    const vma_t *above = vm_lower(vm, page);
+
+    if (above && above->type == VM_STACK && (above->prot & VM_PROT_LOCKED) && page < above->start &&
+        !mem_lock_room(vm_locked(vm) / PAGE_SIZE, (above->start - page) / PAGE_SIZE)) {
+        return 0;
+    }
+    return vm_grow_stack(vm, page, as_limit);
+}
+
+/**
  * One try at `vm_resolve_in`: 1 when the page is present and allows the
  * access, 0 when the access is illegal or no frame could be had, and -1
  * when a file's page was read while the regions changed.
@@ -475,7 +496,7 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
     mem_balance();
     vma = vm_find(vm, addr);
     if (!vma) {
-        if (!vm_grow_stack(vm, addr & ~(PAGE_SIZE - 1), as_limit)) {
+        if (!grow_stack(vm, addr & ~(PAGE_SIZE - 1), as_limit)) {
             return 0;
         }
     } else {
@@ -486,7 +507,7 @@ static int vm_resolve_once(struct mm *mm, uintptr_t addr, int write, uintptr_t a
             if (!write || pte_writable(dir, addr)) {
                 return 1;
             }
-            if (!cow_fault(dir, addr)) {
+            if (!cow_fault(mm, addr)) {
                 return 0;
             }
             fault_count(0);
@@ -557,6 +578,23 @@ static int vm_resolve_in(struct mm *mm, uintptr_t addr, int write, uintptr_t as_
         rc = vm_resolve_once(mm, addr, write, as_limit);
     } while (rc < 0);
     return rc;
+}
+
+/** RLIMIT_MEMLOCK is the caller's, as Linux reads the current task's; a
+ * privileged caller has CAP_IPC_LOCK and no bound. */
+int mem_lock_room(unsigned long have, unsigned long pages)
+{
+    unsigned long limit;
+
+    if (!current_proc || proc_privileged(current_proc)) {
+        return 1;
+    }
+    limit = current_proc->rlim[RLIM_MEMLOCK].cur;
+    if (limit == RLIM_INFINITY) {
+        return 1;
+    }
+    limit /= PAGE_SIZE;
+    return have <= limit && pages <= limit - have;
 }
 
 /** `vm_resolve_in` for the current process's address space. */
@@ -649,12 +687,12 @@ int vm_prefault_range(uintptr_t addr, uintptr_t len, int write)
  * page brought in counts as a fault (`fault_count`), as Linux counts its
  * populate's.
  */
-void vm_populate(uintptr_t start, uintptr_t end)
+int vm_populate(uintptr_t start, uintptr_t end)
 {
     uintptr_t page;
 
     if (!current_proc || !current_proc->mm) {
-        return;
+        return -1;
     }
     for (page = start & ~(PAGE_SIZE - 1); page < end; page += PAGE_SIZE) {
         const vma_t *vma = vm_find(&current_proc->mm->vm, page);
@@ -665,23 +703,88 @@ void vm_populate(uintptr_t start, uintptr_t end)
         }
         write = (vma->prot & VM_PROT_WRITE) && vma->type != VM_SHARED;
         if (!vm_resolve(page, write)) {
-            return;
+            return -1;
         }
     }
+    return 0;
+}
+
+/** Whether a pin may hold the page at `page` of `mm` for the access:
+ * it lies in a region that allows the access and is not device memory,
+ * whose pages are a device's already. */
+static int pin_allows(struct mm *mm, uintptr_t page, int write)
+{
+    const vma_t *vma = vm_find(&mm->vm, page);
+
+    return vma && !(vma->prot & VM_PROT_IO) && region_allows(vma, write);
+}
+
+/**
+ * Each page is brought in as a fault would, which may sleep; once every
+ * page is in, the range is checked again with nothing that sleeps, as
+ * `vm_prefault_range` does, and brought in again when a page went. From
+ * then on nothing sleeps: a private page shared with another address space,
+ * by a fork or as a file's page, is given a frame of its own with its
+ * rights (`page_private`), so that a later write by the process reaches the
+ * frame the device has, as Linux unshares a page it pins, and the frame is
+ * pinned.
+ */
+int paging_pin_range(struct mm *mm, uintptr_t start, uintptr_t end, int write, uintptr_t *frames)
+{
+    uintptr_t as_limit = current_proc ? current_proc->rlim[RLIM_AS].cur : RLIM_INFINITY;
+    uintptr_t page;
+    uint32_t i = 0;
+
+    do {
+        for (page = start; page < end; page += PAGE_SIZE) {
+            if (!pin_allows(mm, page, write)) {
+                return -EFAULT;
+            }
+            if (!vm_resolve_in(mm, page, write, as_limit)) {
+                return pin_allows(mm, page, write) ? -ENOMEM : -EFAULT;
+            }
+        }
+    } while (!range_ready(mm, start, end, write));
+    for (page = start; page < end; page += PAGE_SIZE, i++) {
+        const vma_t *vma = vm_find(&mm->vm, page);
+        pte_t *e = user_pte(mm->dir, page);
+
+        if (!pin_allows(mm, page, write)) {
+            break;
+        }
+        if (vma->type != VM_SHARED &&
+            ((*e & PTE_COW) || frame_maps(PTE_ADDR(*e) / PAGE_SIZE) > 1) &&
+            page_private(mm, page, (vma->prot & VM_PROT_WRITE) != 0) != 0) {
+            break;
+        }
+        frames[i] = PTE_ADDR(*user_pte(mm->dir, page));
+        if (frame_pin(frames[i]) != 0) {
+            break;
+        }
+    }
+    if (page >= end) {
+        return 0;
+    }
+    while (i--) {
+        frame_unpin(frames[i]);
+    }
+    return -ENOMEM;
 }
 
 /**
  * Resolve a write to the present copy-on-write (PTE_COW) page at `addr` of
- * `dir`. When this address space holds the frame's last reference, the page
- * is made writable in place and loses its mark; otherwise a writable copy
- * of its own takes its place, and the shared frame's reference is dropped.
- * The caller balanced memory before it looked at the page, so nothing here
- * sleeps and the entry read is the one replaced. Returns 1 if it resolved
- * the page, 0 if the page is not present or not copy-on-write or no frame
- * could be had or copied for it.
+ * `mm`. When this address space holds the frame's last mapping, the page is
+ * made writable in place and loses its mark, whatever pins the frame has;
+ * otherwise a writable copy of its own takes its place, the ranges
+ * registered on the page are told (MMN_COW), and the shared frame's
+ * reference is dropped. The caller balanced memory before it looked at the
+ * page, so nothing here sleeps and the entry read is the one replaced.
+ * Returns 1 if it resolved the page, 0 if the page is not present or not
+ * copy-on-write or no frame could be had or copied for it.
  */
-static int cow_fault(page_dir_t *dir, uintptr_t addr)
+static int cow_fault(struct mm *mm, uintptr_t addr)
 {
+    page_dir_t *dir = mm->dir;
     pte_t *e = user_pte(dir, addr);
     pte_t pte;
     uintptr_t old_phys, frame;
@@ -698,7 +801,7 @@ static int cow_fault(page_dir_t *dir, uintptr_t addr)
     old_phys = PTE_ADDR(pte);
     frame = old_phys / PAGE_SIZE;
 
-    if (frame >= _frames_number || _frames[frame] <= 1) {
+    if (frame >= _frames_number || frame_maps(frame) <= 1) {
         *e = (pte & ~(pte_t)PTE_COW) | PTE_W;
         paging_flush_dir(dir, addr);
         return 1;
@@ -712,6 +815,8 @@ static int cow_fault(page_dir_t *dir, uintptr_t addr)
         free_frame(new_phys);
         return 0;
     }
+    addr &= ~(uintptr_t)(PAGE_SIZE - 1);
+    mmn_notify(mm, MMN_COW, addr, addr + PAGE_SIZE);
     *e = (pte_t)new_phys | PTE_P | PTE_W | PTE_U | (pte & PTE_NOEXEC);
     paging_flush_dir(dir, addr);
     frame_unref(old_phys);
@@ -719,7 +824,7 @@ static int cow_fault(page_dir_t *dir, uintptr_t addr)
 }
 
 /**
- * Give the present page at `addr` of `dir` a frame of its own, as a
+ * Give the present page at `addr` of `mm` a frame of its own, as a
  * copy-on-write fault would, but keeping its rights: a store the kernel then
  * makes through its own mapping of the frame changes this address space
  * alone. A copy-on-write page of a region that is `writable` takes the
@@ -732,8 +837,9 @@ static int cow_fault(page_dir_t *dir, uintptr_t addr)
  * first, so nothing here sleeps. 0, or -1 when no frame could be had or
  * copied.
  */
-static int page_private(page_dir_t *dir, uintptr_t addr, int writable)
+static int page_private(struct mm *mm, uintptr_t addr, int writable)
 {
+    page_dir_t *dir = mm->dir;
     pte_t *e = user_pte(dir, addr);
     pte_t pte;
     uintptr_t old_phys;
@@ -743,11 +849,11 @@ static int page_private(page_dir_t *dir, uintptr_t addr, int writable)
         return -1;
     }
     if ((pte & PTE_COW) && writable) {
-        return cow_fault(dir, addr) ? 0 : -1;
+        return cow_fault(mm, addr) ? 0 : -1;
     }
     old_phys = PTE_ADDR(pte);
     new_phys = old_phys;
-    if (old_phys / PAGE_SIZE < _frames_number && _frames[old_phys / PAGE_SIZE] > 1) {
+    if (frame_maps(old_phys / PAGE_SIZE) > 1) {
         new_phys = alloc_user_frame();
         if (new_phys == 0) {
             return -1;
@@ -756,6 +862,8 @@ static int page_private(page_dir_t *dir, uintptr_t addr, int writable)
             free_frame(new_phys);
             return -1;
         }
+        addr &= ~(uintptr_t)(PAGE_SIZE - 1);
+        mmn_notify(mm, MMN_COW, addr, addr + PAGE_SIZE);
     }
     *e = (pte_t)new_phys | (pte & PTE_FLAGS & ~(pte_t)PTE_COW);
     paging_flush_dir(dir, addr);
@@ -790,9 +898,9 @@ static int access_page(struct mm *mm, uintptr_t addr, uint8_t *p, uint32_t len, 
         (vma->prot & VM_PROT_IO) || !pte_present(mm->dir, addr)) {
         return -EIO;
     }
-    if (write && (vma->type == VM_SHARED
-                      ? !(vma->prot & VM_PROT_WRITE)
-                      : page_private(mm->dir, addr, (vma->prot & VM_PROT_WRITE) != 0) != 0)) {
+    if (write &&
+        (vma->type == VM_SHARED ? !(vma->prot & VM_PROT_WRITE)
+                                : page_private(mm, addr, (vma->prot & VM_PROT_WRITE) != 0) != 0)) {
         return -EIO;
     }
     map = kmap_temp(paging_user_phys(mm->dir, addr) & ~(uintptr_t)(PAGE_SIZE - 1));
@@ -1427,9 +1535,23 @@ void frame_ref(uintptr_t phys)
     spin_unlock_irqrestore(&frame_lock, flags);
 }
 
+/** Count `frame`, whose word just reached 0, among the free frames, with
+ * `frame_lock` held. A frame freed below a hint moves the hint down to it. */
+static void frame_freed(uintptr_t frame)
+{
+    _free_frames++;
+    if (frame < _window_frames) {
+        _free_window_frames++;
+        if (frame >= _user_frames_start && frame < _next_free_frame) {
+            _next_free_frame = frame;
+        }
+    } else if (frame < _next_free_upper) {
+        _next_free_upper = frame;
+    }
+}
+
 /** `frame_unref` with `frame_lock` held. A state word is not a count: a
- * frame the map does not offer has no mapping to drop. A frame freed below
- * a hint moves the hint down to it. */
+ * frame the map does not offer has no mapping to drop. */
 static uint32_t frame_unref_locked(uintptr_t phys)
 {
     uintptr_t frame = phys / PAGE_SIZE;
@@ -1442,17 +1564,60 @@ static uint32_t frame_unref_locked(uintptr_t phys)
     }
     _frames[frame]--;
     if (_frames[frame] == 0) {
-        _free_frames++;
-        if (frame < _window_frames) {
-            _free_window_frames++;
-            if (frame >= _user_frames_start && frame < _next_free_frame) {
-                _next_free_frame = frame;
-            }
-        } else if (frame < _next_free_upper) {
-            _next_free_upper = frame;
-        }
+        frame_freed(frame);
     }
     return _frames[frame];
+}
+
+/** A frame at FRAME_REF_MAX - FRAME_PIN_BIAS or above has no room for one
+ * more pin below the state words. */
+int frame_pin(uintptr_t phys)
+{
+    uintptr_t frame = phys / PAGE_SIZE;
+    uint32_t flags = spin_lock_irqsave(&frame_lock);
+    int rc = -1;
+
+    if (frame < _frames_number && _frames[frame] != 0 &&
+        _frames[frame] < FRAME_REF_MAX - FRAME_PIN_BIAS) {
+        _frames[frame] += FRAME_PIN_BIAS;
+        rc = 0;
+    }
+    spin_unlock_irqrestore(&frame_lock, flags);
+    return rc;
+}
+
+void frame_unpin(uintptr_t phys)
+{
+    uintptr_t frame = phys / PAGE_SIZE;
+    uint32_t flags = spin_lock_irqsave(&frame_lock);
+
+    if (frame < _frames_number && _frames[frame] >= FRAME_PIN_BIAS &&
+        _frames[frame] < FRAME_REF_MAX) {
+        _frames[frame] -= FRAME_PIN_BIAS;
+        if (_frames[frame] == 0) {
+            frame_freed(frame);
+        }
+    }
+    spin_unlock_irqrestore(&frame_lock, flags);
+}
+
+/** The references of `frame` that are not pins: its mappings, and the
+ * table of a file's pages that keeps one. 0 for one past the table or a
+ * state word. */
+static uint32_t frame_maps(uintptr_t frame)
+{
+    if (frame >= _frames_number || _frames[frame] >= FRAME_REF_MAX) {
+        return 0;
+    }
+    return _frames[frame] % FRAME_PIN_BIAS;
+}
+
+int frame_pinned(uintptr_t phys)
+{
+    uintptr_t frame = phys / PAGE_SIZE;
+
+    return frame < _frames_number && _frames[frame] >= FRAME_PIN_BIAS &&
+           _frames[frame] < FRAME_REF_MAX;
 }
 
 uint32_t frame_unref(uintptr_t phys)
@@ -1516,7 +1681,7 @@ uintptr_t alloc_user_frame(void)
             if (_frames[f] != 0 && _frames[f] < FRAME_REF_MAX) {
                 user_used++;
             }
-            if (_frames[f] > 1 && _frames[f] < FRAME_REF_MAX) {
+            if (frame_maps(f) > 1) {
                 user_shared++;
             }
         }
@@ -1604,8 +1769,11 @@ void paging_zap_device(const void *obj, uint32_t pgoff, uint32_t count)
             uint32_t to = last < end ? last : end;
 
             if (from < to && vm_device_object(r->file) == obj) {
-                unmap_user_range(p->mm->dir, r->start + (uintptr_t)(from - r->pgoff) * PAGE_SIZE,
-                                 r->start + (uintptr_t)(to - r->pgoff) * PAGE_SIZE);
+                uintptr_t lo = r->start + (uintptr_t)(from - r->pgoff) * PAGE_SIZE;
+                uintptr_t hi = r->start + (uintptr_t)(to - r->pgoff) * PAGE_SIZE;
+
+                mmn_notify(p->mm, MMN_TRUNCATE, lo, hi);
+                unmap_user_range(p->mm->dir, lo, hi);
             }
         }
     }
@@ -1662,7 +1830,7 @@ static void protect_page(page_dir_t *dir, pte_t *e, uintptr_t addr, uint32_t pro
             pte |= PTE_W;
         } else if (pte & PTE_COW) {
             /* Still shared: the first write copies or takes it. */
-        } else if (frame < _frames_number && _frames[frame] > 1) {
+        } else if (frame_maps(frame) > 1) {
             pte = (pte & ~(pte_t)PTE_W) | PTE_COW;
         } else {
             pte |= PTE_W;
@@ -1687,18 +1855,35 @@ void paging_protect_range(page_dir_t *dir, uintptr_t start, uintptr_t end, uint3
 /**
  * Give the child's directory `child_dir` the page of the parent, the
  * directory in use, whose entry is `*e`, at `va` in a region of type `type`,
- * as `paging_fork_copy` describes: 0, or -1 with no memory for a table. A
- * page is given only when it is present, user or PROT_NONE, and names a
- * frame other than 0. A writable private page is made read-only and
+ * as `paging_fork_copy` describes: 0, or -1 with no memory for a table or a
+ * copy. A page is given only when it is present, user or PROT_NONE, and
+ * names a frame other than 0. A writable private page is made read-only and
  * copy-on-write in the parent too, so that the first write on either side
- * faults into `cow_fault`.
+ * faults into `cow_fault`. A private page pinned for a device (`frame_pin`)
+ * stays the parent's as it is, and the child gets a copy with the same
+ * rights, as Linux copies a page that may be pinned at fork: a write by the
+ * parent would otherwise move the parent to a copy and leave the device
+ * with the frame the child has.
  */
 static int fork_copy_page(page_dir_t *child_dir, pte_t *e, uintptr_t va, vm_type_t type)
 {
     pte_t pte = *e;
     uintptr_t parent_phys = PTE_ADDR(pte);
+    uintptr_t copy;
 
     if (!(pte & PTE_P) || !(pte & (PTE_U | PTE_NONE)) || parent_phys == 0) {
+        return 0;
+    }
+    if (type != VM_SHARED && frame_pinned(parent_phys)) {
+        copy = alloc_user_frame();
+        if (copy == 0) {
+            return -1;
+        }
+        if (paging_copy_frame(copy, parent_phys) != 0 ||
+            map_user_frame(child_dir, va, copy, pte & PTE_FLAGS & ~(pte_t)PTE_COW) != 0) {
+            free_frame(copy);
+            return -1;
+        }
         return 0;
     }
     if (type == VM_SHARED) {
@@ -1726,7 +1911,9 @@ static int fork_copy_page(page_dir_t *child_dir, pte_t *e, uintptr_t va, vm_type
  * The walk is over the parent's regions, and in each over the leaf tables
  * the parent has there, passing a table's span where it has none: every
  * user page lies in a region, and a walk of the whole of user space would
- * take 64 million steps on x86-64.
+ * take 64 million steps on x86-64. The ranges registered on a writable
+ * private region are told first (MMN_PROTECT), since its pages become
+ * read-only in the parent.
  */
 int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
 {
@@ -1738,6 +1925,9 @@ int paging_fork_copy(struct mm *from, page_dir_t *child_dir)
 
         if (region->prot & VM_PROT_DONTFORK) {
             continue;
+        }
+        if (region->type != VM_SHARED && (region->prot & VM_PROT_WRITE)) {
+            mmn_notify(from, MMN_PROTECT, region->start, region->end);
         }
         for (va = region->start; va < region->end; va = next) {
             pte_t *table = user_span(parent_dir, va, region->end, &next);

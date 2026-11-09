@@ -1396,8 +1396,9 @@ static void ap_smaps_kb(struct procfs_text *t, const char *name, unsigned long p
  * written since, the ones Linux has copied from the file; gdb's gcore leaves
  * the others out of a core and reads them from the file. The kernel does not
  * count the processes that map a page, so Pss is Rss, a page another process
- * also maps being counted whole to each; there is no swap, no huge page and
- * no locking, so those fields are 0.
+ * also maps being counted whole to each; there is no swap and no huge page
+ * of user memory, so those fields are 0. Locked is Rss for a locked region,
+ * flagged `lo`, and `lf` when it is locked on fault.
  * -EACCES for a caller `procfs_may_read_mem` refuses, as for maps.
  */
 static int procfs_gen_smaps(struct procfs_text *t, int pid)
@@ -1434,15 +1435,17 @@ static int procfs_gen_smaps(struct procfs_text *t, int pid)
         ap_smaps_kb(t, "Anonymous:", !of_file ? clean + dirty : shared ? 0 : dirty);
         ap_smaps_kb(t, "Swap:", 0);
         ap_smaps_kb(t, "SwapPss:", 0);
-        ap_smaps_kb(t, "Locked:", 0);
+        ap_smaps_kb(t, "Locked:", (r->prot & VM_PROT_LOCKED) ? clean + dirty : 0);
         ap_str(t, "VmFlags:");
         ap_str(t, (r->prot & VM_PROT_READ) ? " rd" : "");
         ap_str(t, (r->prot & VM_PROT_WRITE) ? " wr" : "");
         ap_str(t, (r->prot & VM_PROT_EXEC) ? " ex" : "");
         ap_str(t, shared ? " sh" : "");
         ap_str(t, r->type == VM_STACK ? " gd" : "");
+        ap_str(t, (r->prot & VM_PROT_LOCKED) ? " lo" : "");
         ap_str(t, (r->prot & VM_PROT_IO) ? " io pf" : "");
         ap_str(t, (r->prot & VM_PROT_DONTFORK) ? " dc" : "");
+        ap_str(t, (r->prot & VM_PROT_LOCKONFAULT) ? " lf" : "");
         ap_ch(t, '\n');
     }
     return t->len;
@@ -1683,8 +1686,8 @@ static int procfs_gen_status(struct procfs_text *t, int pid)
 
         ap_kb(t, "VmPeak", size);
         ap_kb(t, "VmSize", size);
-        ap_kb(t, "VmLck", 0);
-        ap_kb(t, "VmPin", 0);
+        ap_kb(t, "VmLck", vm_locked(&mm->vm));
+        ap_kb(t, "VmPin", mm->pinned * PAGE_SIZE);
         ap_kb(t, "VmHWM", rss);
         ap_kb(t, "VmRSS", rss);
         ap_kb(t, "VmData", mm_bytes(mm, VM_DATA) + mm_bytes(mm, VM_HEAP) + mm_bytes(mm, VM_ANON));
