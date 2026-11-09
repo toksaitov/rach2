@@ -754,19 +754,29 @@ static int pass_event(struct evdev_client *c, const struct evdev *dev, uint16_t 
     return 0;
 }
 
+/** `a` + `b` in 32 bits, wrapping as Linux's kernel, built with
+ * -fno-strict-overflow, computes it; a user's EVIOCSABS sets any fuzz. */
+static int32_t wrap_add(int32_t a, int32_t b)
+{
+    return (int32_t)((uint32_t)a + (uint32_t)b);
+}
+
 /** Linux's `input_defuzz_abs_event`: `value` drawn toward `old` the more,
- * the nearer it is to it within `fuzz`, and `old` itself within half. */
+ * the nearer it is to it within `fuzz`, and `old` itself within half, in
+ * Linux's wrapping arithmetic. */
 static int32_t defuzz(int32_t value, int32_t old, int32_t fuzz)
 {
+    int32_t twice = (int32_t)((uint32_t)fuzz * 2u);
+
     if (fuzz) {
-        if (value > old - fuzz / 2 && value < old + fuzz / 2) {
+        if (value > wrap_add(old, -(fuzz / 2)) && value < wrap_add(old, fuzz / 2)) {
             return old;
         }
-        if (value > old - fuzz && value < old + fuzz) {
-            return (old * 3 + value) / 4;
+        if (value > (int32_t)((uint32_t)old - (uint32_t)fuzz) && value < wrap_add(old, fuzz)) {
+            return wrap_add((int32_t)((uint32_t)old * 3u), value) / 4;
         }
-        if (value > old - fuzz * 2 && value < old + fuzz * 2) {
-            return (old + value) / 2;
+        if (value > (int32_t)((uint32_t)old - (uint32_t)twice) && value < wrap_add(old, twice)) {
+            return wrap_add(old, value) / 2;
         }
     }
     return value;
