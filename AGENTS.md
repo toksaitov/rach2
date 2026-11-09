@@ -108,7 +108,7 @@ The rules are kept short on purpose; their history is in commit messages and `de
 * A reply to the owner makes sense alone, since the owner often reads it on a phone with nothing else in view. Use short sentences, ordinary words and no em-dashes. Plain means free of project shorthand, of issue numbers without a description and of commit hashes, not simplified: name the real mechanism, give the measured numbers, say what is known and what is not, and use no analogies unless asked. An argument is a few short paragraphs, each opening with its point; bullets are for lists.
 * Ask the owner one question at a time, in the reply's text and as its last line, with no lettered options: name the concrete thing, what changes and what is gained or risked.
 * Give times in the owner's UTC+6, read from `date` or from the event's own timestamp, never carried over from earlier or guessed. Text the owner will paste elsewhere goes alone in one fenced code block.
-* Issues and comments on GitHub are written like replies, the subject first and the evidence after.
+* Issues and comments on GitHub are written like replies, the subject first and the evidence after. An issue's title says what the work does in plain words that read alone, a verb in the imperative first and the plan's id in parentheses at the end.
 
 ### Register rule
 
