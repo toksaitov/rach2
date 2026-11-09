@@ -544,6 +544,8 @@ tty 4 console
 ptmx 4 console
 pts 4 console
 dri 4 drm
+simpledrm 4 fbdrm
+bochs-drm 4 bochs
 bootpart 4 disk
 grubcore 4 disk
 loop-control 4 loop
