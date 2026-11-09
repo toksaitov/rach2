@@ -1,0 +1,15 @@
+/**
+ * Host test of pins, locked regions and the MMIO region's windows with
+ * x86-64's `cpu.h`: the rows of pin_hosttest.c over x86-64's page table
+ * entries, with a 4 GiB BAR at 14 TiB mapped in 2 MiB pages.
+ *
+ * host-deps: rach2/sys/mm/vm.c rach2/sys/mm/frame.c rach2/sys/mm/notify.c
+ * host-deps: rach2/sys/mm/pin.c
+ * host-deps: rach2/sys/pci.c rach2/sys/lib/kstring.c rach2/sys/lib/kctypes.c
+ * host-deps: tests/host/compat/spinlock_host.c
+ * host-cflags: -DRACH2_HOST_X86_64
+ *
+ * Returns 0 when every row passes, 1 otherwise.
+ */
+
+#include "pin_hosttest.c"
