@@ -1,0 +1,79 @@
+.Dd November 10, 2026
+.Dt WATCHDOG 4
+.Os
+.Sh NAME
+.Nm watchdog
+.Nd Intel TCO hardware watchdog
+.Sh SYNOPSIS
+.Pa /dev/watchdog
+.Sh DESCRIPTION
+The version 2 TCO timer of an Intel ICH9 or Lynx Point-LP resets the
+machine when an armed timer is left unfed through both expiry stages.
+The kernel identifies the chipset before accessing PMBASE plus 0x60
+and the NO_REBOOT bit of RCBA plus 0x3410.
+Other chipsets have no device node.
+The timer is halted at boot and at an orderly shutdown.
+.Pp
+Opening the device arms the timer.
+Only one open file description may hold it; a second open fails with
+.Er EBUSY .
+A nonempty write feeds it.
+Closing after a write containing the byte
+.Ql V
+halts it, unless a later nonempty write lacked that byte.
+A zero-length write changes nothing.
+A close without that magic byte feeds once and leaves the timer armed,
+including a close caused by a process exit or signal.
+The timer may be opened again.
+There is no nowayout mode.
+.Pp
+The interface uses Linux's ioctl numbers and structures from
+.In linux/watchdog.h :
+.Bl -tag -width WDIOC_GETBOOTSTATUS
+.It Dv WDIOC_GETSUPPORT
+Return a 40-byte
+.Vt watchdog_info
+with identity
+.Ql iTCO_wdt ,
+firmware version 2, and SETTIMEOUT, KEEPALIVEPING and MAGICCLOSE options.
+.It Dv WDIOC_GETSTATUS , WDIOC_GETBOOTSTATUS
+Return an integer zero, as Linux's iTCO driver does.
+.It Dv WDIOC_KEEPALIVE
+Feed the timer; the argument is unused.
+.It Dv WDIOC_SETTIMEOUT
+Read an integer timeout, 3 through 614 seconds, program it and feed.
+Write the requested seconds back through the same pointer.
+The default is 30 seconds.
+The hardware counts 0.6-second ticks; seconds are converted by multiplying
+by 10 and dividing by 6, with truncation, as Linux's version 2 driver does.
+.It Dv WDIOC_GETTIMEOUT
+Return the requested timeout in seconds.
+.It Dv WDIOC_GETTIMELEFT
+Return the current countdown in whole seconds, truncated.
+This reads the current stage, as Linux does.
+.It Dv WDIOC_SETOPTIONS
+Read an integer mask: WDIOS_DISABLECARD (1) halts the timer;
+WDIOS_ENABLECARD (2) arms it.
+When both are set, halt precedes arm.
+A mask containing neither fails with
+.Er EINVAL .
+.El
+.Pp
+A read is unsupported.
+Unknown ioctls fail with
+.Er ENOTTY .
+Bad user pointers fail with
+.Er EFAULT ;
+an invalid timeout with
+.Er EINVAL ;
+and a register that refuses a change with
+.Er EIO .
+There are no unbounded waits in the driver.
+.Sh FILES
+.Pa /dev/watchdog
+is a character device, major 10, minor 130, mode 0600, owned by root.
+.Sh SEE ALSO
+.Xr ioctl 2 ,
+.Xr open 2 ,
+.Xr write 2 ,
+.Xr acpi 4

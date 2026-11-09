@@ -4,6 +4,8 @@ The host tests compile kernel and user sources as ordinary programs for the buil
 
 ## Running
 
+`itco_hosttest.c` drives the production TCO register and file operations against a register model. It checks the reserved bits, start and halt write order, both expiry stages and reload, magic and ordinary close, the Linux ioctls, invalid arguments and user pointers, absent registers, locked NO_REBOOT, and refused timer and halt writes. Hardware time is advanced in ticks, without a host clock.
+
 `etude prepare collection host` builds the programs and immutable input inventory of [`tests/cases/host.host.json`](../cases/host.host.json). `etude run host` executes that prepared suite through the native C driver [`tests/cases/host/host.c`](../cases/host/host.c). The collection holds the tree while its checks run. No compiler, interpreter or Linux tooling machine runs on the execution host. [The driver's Readme](../cases/host/Readme.md) defines preparation, execution and unsupported adapters.
 
 The cases keep their assertion identifiers:
