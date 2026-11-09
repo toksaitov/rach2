@@ -37,7 +37,11 @@
  * and 64-bit deadline, must fail with EAGAIN for a word that differs and
  * with ETIMEDOUT for a deadline that has passed, and a child's wake of the
  * third of three words in a shared page that MAP_32BIT placed must end it
- * with index 2.
+ * with index 2. The i386 ioctl's SIOCGSTAMP and SIOCGSTAMPNS, old, on a UDP
+ * socket must fail with ENOENT before its first receive and give the time
+ * of the datagram received after it in two 32-bit words, an i386
+ * `old_timeval32` and `old_timespec32`, with the seconds of the 64-bit
+ * SIOCGSTAMP_NEW.
  *
  * Everything the 32-bit code touches lies below 4 GiB: the probe is linked
  * at 0x400000, and its 32-bit stack and the buffers it passes to i386 calls
@@ -63,6 +67,7 @@
 
 /* The i386 numbers the probe makes by `int $0x80`. */
 #define I386_GETPID          20
+#define I386_IOCTL           54
 #define I386_KILL            37
 #define I386_RT_SIGACTION    174
 #define I386_SIGALTSTACK     186
@@ -127,6 +132,11 @@
 #define LOW_2G        0x80000000ul
 #define PAGE          4096ul
 
+#define SIOCGSTAMP_OLD   0x8906ul
+#define SIOCGSTAMPNS_OLD 0x8907ul
+#define SIOCGSTAMP_NEW   0x80108906ul
+#define ENOENT           2
+
 #define FUTEX_WAKE      1
 #define FUTEX2_SIZE_U32 0x02
 #define CLOCK_MONOTONIC 1
@@ -179,7 +189,8 @@ static const char *const assertion_id[] = {"far-call",
                                            "map32bit",
                                            "map32bit-hint",
                                            "low-hint",
-                                           "futexv-int80"};
+                                           "futexv-int80",
+                                           "sockstamp-int80"};
 
 /** Print "WOW64PROBE FAIL: " and `why`, end the report at the assertion that
  * `why` fails, and exit 1. */
@@ -858,6 +869,72 @@ static void run_futexv(void)
     report_held();
 }
 
+/** SIOCGSTAMP and SIOCGSTAMPNS by the i386 ioctl on a UDP socket that sends
+ * a datagram to itself on the loopback, before and after its receive. */
+static void run_sockstamp(void)
+{
+    static unsigned int tv[4], ts[4], wide[4];
+    static unsigned long sa[2];
+    static unsigned int salen = 16;
+    unsigned long args[6];
+    char c;
+    long u;
+    int i;
+
+    args[0] = 2; /* AF_INET */
+    args[1] = 2; /* SOCK_DGRAM */
+    args[2] = 0;
+    u = sock_call(SC_SOCKET, args);
+    if (u < 0) {
+        fail("a UDP socket could not be made");
+    }
+    if (int80(I386_IOCTL, (unsigned long)u, SIOCGSTAMP_OLD, (unsigned long)tv) != -ENOENT) {
+        fail("the i386 SIOCGSTAMP before any receive did not fail with ENOENT");
+    }
+    ((unsigned short *)sa)[0] = 2;
+    ((unsigned int *)sa)[1] = 0x0100007Fu; /* 127.0.0.1 in network order */
+    args[0] = (unsigned long)u;
+    args[1] = (unsigned long)sa;
+    args[2] = 16;
+    if (sock_call(SC_BIND, args) != 0) {
+        fail("the UDP socket could not be bound to the loopback");
+    }
+    args[2] = (unsigned long)&salen;
+    if (sock_call(SC_GETSOCKNAME, args) != 0) {
+        fail("getsockname");
+    }
+    args[1] = (unsigned long)"x";
+    args[2] = 1;
+    args[3] = 0;
+    args[4] = (unsigned long)sa;
+    args[5] = 16;
+    if (sock_call(SC_SENDTO, args) != 1) {
+        fail("the UDP socket could not send to itself");
+    }
+    args[1] = (unsigned long)&c;
+    args[4] = 0;
+    args[5] = 0;
+    if (sock_call(SC_RECVFROM, args) != 1) {
+        fail("the UDP socket did not receive its datagram");
+    }
+    for (i = 0; i < 4; i++) {
+        tv[i] = ts[i] = 0xFFFFFFFFu;
+    }
+    if (int80(I386_IOCTL, (unsigned long)u, SIOCGSTAMP_OLD, (unsigned long)tv) != 0 ||
+        int80(I386_IOCTL, (unsigned long)u, SIOCGSTAMPNS_OLD, (unsigned long)ts) != 0 ||
+        syscall3(SYS_IOCTL, u, (long)SIOCGSTAMP_NEW, (long)wide) != 0) {
+        fail("SIOCGSTAMP or SIOCGSTAMPNS after a receive failed");
+    }
+    if (tv[0] == 0 || tv[0] != wide[0] || tv[1] >= 1000000u || tv[2] != 0xFFFFFFFFu ||
+        tv[3] != 0xFFFFFFFFu || ts[0] != tv[0] || ts[1] >= 1000000000u || ts[2] != 0xFFFFFFFFu ||
+        ts[3] != 0xFFFFFFFFu) {
+        fail("the i386 SIOCGSTAMP or SIOCGSTAMPNS did not give the receive's time in two "
+             "32-bit words");
+    }
+    syscall1(SYS_CLOSE, u);
+    report_held();
+}
+
 void probe_main(unsigned long *sp);
 
 PROBE_SP_ENTRY;
@@ -880,6 +957,7 @@ void probe_main(unsigned long *sp)
     run_orig();
     run_map32();
     run_futexv();
+    run_sockstamp();
     report_end();
     say("WOW64PROBE OK\n");
     sys_exit(0);
