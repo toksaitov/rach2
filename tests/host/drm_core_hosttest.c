@@ -125,6 +125,20 @@ void drm_sysfs_unregister(struct drm_device *dev)
     (void)dev;
 }
 
+/** The debugfs files, which a boot checks; here a device has none. */
+void drm_debugfs_init(void)
+{}
+
+void drm_debugfs_register(struct drm_device *dev)
+{
+    (void)dev;
+}
+
+void drm_debugfs_unregister(struct drm_device *dev)
+{
+    (void)dev;
+}
+
 /* The registry: the nodes registered now. */
 #define NODES 8
 static struct devfs_node *nodes[NODES];

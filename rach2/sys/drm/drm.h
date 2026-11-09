@@ -532,6 +532,7 @@ struct drm_file {
     uint32_t master_id;
     int is_master;
     int was_master;
+    int set_busid; /* SET_VERSION 1.1 or later named its master's bus */
     int universal_planes, atomic, aspect_ratio, writeback_connectors, stereo_allowed,
         supports_virtualized_cursor_plane;
     struct drm_handle *objects;  /* buffer object handles */
@@ -680,6 +681,7 @@ struct drm_framebuffer {
     struct drm_mode_object base;
     struct drm_device *dev;
     struct drm_file *owner; /* its maker, until RMFB, CLOSEFB or close */
+    char comm[16];          /* its maker's program name, for debugfs */
     const struct drm_format_info *info;
     uint32_t format;   /* DRM_FORMAT_* */
     uint64_t modifier; /* DRM_FORMAT_MOD_LINEAR unless ADDFB2 gave one */
@@ -1553,6 +1555,7 @@ struct drm_device {
     struct drm_gem_object *objects;      /* its buffer objects, through `dev_next` */
     struct drm_gem_object *mmap_objects; /* those with an mmap offset, by offset */
     struct drm_mode_config mode_config;
+    int debugfs;     /* its debugfs directory is made (drm_debugfs.c) */
     int commit_held; /* the commit lock: 1 while a commit holds it */
     wait_queue_t commit_wait;
     void *driver_priv;
@@ -1720,6 +1723,27 @@ int32_t drm_sysfs_connector_add(struct drm_connector *connector);
 void drm_sysfs_connector_remove(struct drm_connector *connector);
 /** The handle (../fs/sysfs.h) of the cardN directory of `dev`, or 0. */
 int drm_sysfs_card_dir(const struct drm_device *dev);
+
+/* ------------------------------------------------------------------------
+ * The device in debugfs, in drm_debugfs.c
+ */
+
+/** Make debugfs's `dri` directory, as Linux does when DRM loads; called by
+ * `drm_start`. */
+void drm_debugfs_init(void);
+/** Make the files of `dev`, whose `index` is set, in debugfs, as Linux
+ * 6.12 does: `dri/DIR`, DIR the name of the PCI function ("0000:00:02.0")
+ * or the platform device, with `name`, `clients`, `gem_names`,
+ * `framebuffer`, `state`, `crtc-N/crc/control` and `crc/data`,
+ * `encoder-N/bridges` and each connector's `force` and `edid_override`, as
+ * the device has them; and the links `dri/N` and `dri/(128 + N)` to it.
+ * Every node holds a reference to the device, so its CRTCs and connectors
+ * outlive every open of their files. Called by `drm_dev_register`; a
+ * failure is logged and leaves the device without files, as debugfs never
+ * fails a driver on Linux. */
+void drm_debugfs_register(struct drm_device *dev);
+/** Take `dev`'s files and links out of debugfs; for `drm_dev_unplug`. */
+void drm_debugfs_unregister(struct drm_device *dev);
 
 /* ------------------------------------------------------------------------
  * The console as a DRM client, in drm_client.c
