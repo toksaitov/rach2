@@ -981,6 +981,16 @@ int paging_frame_is_device(uintptr_t phys)
     return 0;
 }
 
+/** A device region for a mapping of /dev/mem, which no row makes. */
+int vm_device_map(vma_t *vma, const struct vm_device_ops *ops, void *obj, uint32_t cache)
+{
+    (void)vma;
+    (void)ops;
+    (void)obj;
+    (void)cache;
+    return unexpected();
+}
+
 /** Whether the random source is hardware entropy, which no row reads. */
 int krandom_is_trusted(void)
 {
