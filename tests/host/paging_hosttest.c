@@ -216,6 +216,22 @@ void vm_file_put(struct vm_file *f)
     (void)f;
 }
 
+/** NULL: no row maps a device object. */
+void *vm_device_object(const struct vm_file *f)
+{
+    (void)f;
+    return 0;
+}
+
+/* The processes whose address spaces a device zap walks: none. */
+process_t *proc_list;
+
+/** The write-combining bits, which no row maps. */
+pte_t arch_pte_wc(void)
+{
+    return PTE_WC;
+}
+
 /* The guard page below the running thread's kernel stack, and the thread's
  * pid, as the process layer would answer for them. */
 #define GUARD_PAGE 0xC0104000u
