@@ -145,6 +145,10 @@ unsigned int x86_64_es_read(void);
 void x86_64_ds_load(unsigned int sel);
 void x86_64_es_load(unsigned int sel);
 
+/* The access rights of the descriptor `sel` names, as `lar` reads them, or
+ * 0 where lar refuses it (switch.s). */
+unsigned int x86_64_lar(unsigned int sel);
+
 /**
  * Fill the boot processor's record, with its GDT and its TSS, load the GDT,
  * and make the record GS's base, with 0 as the program's base in
