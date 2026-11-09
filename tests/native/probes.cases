@@ -37,6 +37,8 @@ case dirtyprobe root:krffs -- dirtyprobe
 # Less free space than the 32 MiB the probe writes at most.
 case diskfull root:krffs:16 -- diskfull
 case dnstest root:ext2-dir stage:native/hosts -- dnstest
+# The Lenovo's card is fbdrm on the loader's framebuffer; no mode is set.
+case drmprobe -- drmprobe
 case dup2test -- dup2test
 case errnoprobe -- errnoprobe
 case exitprobe -- exitprobe
