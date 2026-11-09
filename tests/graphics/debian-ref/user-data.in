@@ -1,0 +1,23 @@
+#cloud-config
+# user-data.in: cloud-init's configuration of the reference guest's one
+# preparing boot. debian-ref.sh puts the account's key in place of @KEY@ and
+# the setup script, in base64, in place of @SETUP@.
+users:
+  - name: gfx
+    groups: [sudo, video, render, input, audio]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+      - @KEY@
+ssh_pwauth: false
+write_files:
+  - path: /root/debian-ref-setup.sh
+    permissions: "0755"
+    encoding: b64
+    content: @SETUP@
+runcmd:
+  - [/root/debian-ref-setup.sh]
+power_state:
+  mode: poweroff
+  condition: true
