@@ -1419,6 +1419,12 @@ uint32_t sysfs_node_mode(int handle)
     return 0;
 }
 
+/** Every row's caller is native: no call comes through the i386 entry. */
+int in_compat_syscall(void)
+{
+    return 0;
+}
+
 /** No /sys device exists: -1. */
 int sysfs_device_key(int node, int n)
 {
