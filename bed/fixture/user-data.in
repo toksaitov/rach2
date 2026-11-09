@@ -1,0 +1,14 @@
+#cloud-config
+# user-data.in: cloud-init's configuration of the vtest server guest's one
+# preparing boot. vtest-guest.sh puts the setup script, in base64, in place
+# of @SETUP@. The guest has no login: it serves vtest from its boot on.
+write_files:
+  - path: /root/vtest-guest-setup.sh
+    permissions: "0755"
+    encoding: b64
+    content: @SETUP@
+runcmd:
+  - [/root/vtest-guest-setup.sh]
+power_state:
+  mode: poweroff
+  condition: true

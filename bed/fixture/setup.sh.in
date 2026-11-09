@@ -1,0 +1,121 @@
+#!/bin/sh
+# setup.sh.in: the vtest server guest's setup, which cloud-init runs as root
+# on the preparing boot. vtest-guest.sh puts the snapshot's date in place of
+# @SNAPSHOT@, the package list in place of @PACKAGES@ and the guest's vtest
+# port in place of @PORT@. It points apt at Debian's snapshot of that date,
+# installs the packages, adds the services that serve vtest over TCP from
+# every later boot, turns cloud-init off so that every later boot is the
+# same, and reports on the serial console, which vtest-guest.sh reads.
+set -eu
+
+say()
+{
+    echo "vtest-guest: $*" > /dev/ttyS0
+}
+
+trap 'say "failed: setup stopped at line $LINENO"' EXIT
+
+rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
+cat > /etc/apt/sources.list.d/debian.sources <<SOURCES
+Types: deb
+URIs: http://snapshot.debian.org/archive/debian/@SNAPSHOT@
+Suites: trixie trixie-updates
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+
+Types: deb
+URIs: http://snapshot.debian.org/archive/debian-security/@SNAPSHOT@
+Suites: trixie-security
+Components: main
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+SOURCES
+: > /etc/apt/sources.list
+cat > /etc/apt/apt.conf.d/80rach2-snapshot <<'CONF'
+Acquire::Check-Valid-Until "false";
+Acquire::Retries "5";
+APT::Install-Recommends "false";
+CONF
+
+say "updating"
+export DEBIAN_FRONTEND=noninteractive
+apt-get -q update
+say "installing"
+# shellcheck disable=SC2086 # the list is words
+apt-get -q -y install @PACKAGES@
+apt-get -q -y clean
+
+# The server renders on llvmpipe: the guest's display has no render node,
+# and LIBGL_ALWAYS_SOFTWARE keeps a later one with a GPU on the same driver.
+# It forks a child for each client; socat forks one for each connection.
+# Both write their diagnostics to the serial console, which a run reads.
+useradd --system --no-create-home --shell /usr/sbin/nologin vtest
+cat > /etc/systemd/system/vtest-server.service <<'UNIT'
+[Unit]
+Description=virglrenderer's vtest server on /run/vtest/vtest.sock
+
+[Service]
+User=vtest
+RuntimeDirectory=vtest
+Environment=LIBGL_ALWAYS_SOFTWARE=1
+StandardOutput=journal+console
+StandardError=journal+console
+ExecStart=/usr/bin/virgl_test_server --use-egl-surfaceless --socket-path /run/vtest/vtest.sock
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+cat > /etc/systemd/system/vtest-tcp.service <<'UNIT'
+[Unit]
+Description=The vtest server's socket on TCP port @PORT@
+Requires=vtest-server.service
+After=vtest-server.service
+
+[Service]
+User=vtest
+StandardError=journal+console
+ExecStart=/usr/bin/socat TCP-LISTEN:@PORT@,fork,reuseaddr,nodelay UNIX-CONNECT:/run/vtest/vtest.sock
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+cat > /usr/local/sbin/vtest-ready <<'READY'
+#!/bin/sh
+# vtest-ready: report the versions and `ready` on the serial console once
+# the server's socket exists and its TCP port listens.
+i=0
+until [ -S /run/vtest/vtest.sock ] && ss -Hltn 'sport = :@PORT@' | grep -q .; do
+    i=$((i + 1))
+    if [ "$i" -gt 120 ]; then
+        echo "vtest-guest: failed: no server on port @PORT@" > /dev/ttyS0
+        exit 1
+    fi
+    sleep 1
+done
+for p in virgl-server libgl1-mesa-dri socat; do
+    echo "vtest-guest: version: $p $(dpkg-query -W -f '${Version}' $p)" > /dev/ttyS0
+done
+echo "vtest-guest: version: kernel $(uname -r)" > /dev/ttyS0
+echo "vtest-guest: ready on port @PORT@" > /dev/ttyS0
+READY
+chmod 755 /usr/local/sbin/vtest-ready
+cat > /etc/systemd/system/vtest-ready.service <<'UNIT'
+[Unit]
+Description=Report the vtest server ready on the serial console
+Requires=vtest-tcp.service
+After=vtest-tcp.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/vtest-ready
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl enable vtest-server.service vtest-tcp.service vtest-ready.service
+
+touch /etc/cloud/cloud-init.disabled
+for p in virgl-server libgl1-mesa-dri socat; do
+    say "version: $p $(dpkg-query -W -f '${Version}' $p)"
+done
+trap - EXIT
+say "prepared"
