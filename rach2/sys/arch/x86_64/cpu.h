@@ -283,8 +283,12 @@ typedef unsigned int core_uid_t;
 /* The running processor's index in the per-processor table
  * (proc/percpu.h): the `id` of the processor's own record, which GS's base
  * points at in the kernel, at offset 24 (percpu.h). A host test runs as
- * processor 0. */
-#if defined(RACH2_HOSTTEST)
+ * processor 0, or, built with RACH2_HOST_CPU, as the processor its own
+ * `host_cpu` names. */
+#if defined(RACH2_HOSTTEST) && defined(RACH2_HOST_CPU)
+extern unsigned int host_cpu;
+#define arch_cpu_id() host_cpu
+#elif defined(RACH2_HOSTTEST)
 #define arch_cpu_id() 0u
 #else
 static __inline__ unsigned int arch_cpu_id(void)
