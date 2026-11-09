@@ -58,7 +58,7 @@ int etude_scenario(struct etude_case *c)
         net_fail(&u, "the browser guest command channel did not open");
     stage(&u, &b, mode);
     snprintf(command, sizeof(command),
-             "su desktop -s /bin/sh -c 'GRAPHICS_CLASS=conformance GRAPHICS_DONE=1; "
+             "su -s /bin/sh desktop -c 'GRAPHICS_CLASS=conformance GRAPHICS_DONE=1; "
              "export GRAPHICS_CLASS GRAPHICS_DONE; . /tmp/graphics/guest-env.sh && "
              "graphics_env > /tmp/graphics.env && sh /tmp/graphics/browser/run.sh %s %s "
              "/tmp/browser-out'",
