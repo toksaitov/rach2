@@ -189,6 +189,7 @@ Both boot reports read and print and configure nothing. `platform_report` runs t
 * The serial console is COM1 alone, at 115200 baud; the PS/2 mouse speaks the plain, IntelliMouse or IntelliMouse Explorer protocol, or Synaptics' touchpad protocol and no other vendor's, so an ALPS or Elantech touchpad works as a plain mouse, and a Synaptics pad's pass-through port, where a pointing stick reports, is not driven; the speaker plays a square wave and no samples; of SMBIOS only the BIOS vendor is read.
 * The CMOS clock's century is taken as 2000, and the FADT's century register is logged but not used.
 * The floating-point state covers x87, SSE, AVX and AVX-512 alone, `XCR0` bits 0 to 2 and 5 to 7.
+* On the Lenovo an expiry of the TCO watchdog does not bring the machine back: under Linux 6.12, which programs the TCO as `itco.c` does and leaves SMI_EN's TCO_EN set on version 2, the first stage's expiry left the machine down until it was powered on by hand. No hang experiment may count on the watchdog to return it.
 
 ## Tests
 

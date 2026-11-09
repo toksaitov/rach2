@@ -2,7 +2,7 @@
 
 Every task and subtask of the graphics plan (`plan.md` beside this file, draft 6i), in milestone order, for the manager to file. Revised for draft 6g after the four reviews of draft 6f, and for draft 6h after Codex's and Fable's confirmation of 6g; what was done with each finding is in `review-6f/disposition.md`. Merged on 2026-11-09 from three splits made against draft 6e, which stay beside it as `tasks-76.md`, `tasks-77-79.md` and `tasks-80-83.md`. Where the splits disagreed, this file settles it, and `plan.md`'s section "Problems the task split found" lists every problem the splits raised with what was done about it. "Problems item N" in a task names item N of its own split's list, which `plan.md` keeps under that split's name.
 
-Totals: 8 milestones, 141 tasks, 670 subtasks, 76-20's task and five subtasks among them only if the owner takes it (140 and 665 without). By milestone: 76, 39 tasks and 205 subtasks; 77, 11 and 52; 78, 31 and 135; 79, 16 and 78; 80, 14 and 70; 81, 12 and 53; 82, 5 and 25; 83, 13 and 52. 29 tasks are `lenovo` (76-10c, 76-11b, 76-15c, 76-17b, 77-10, 78-1b, 78-4b, 78-5c, 78-6c, 78-10d, 78-11b, 78-11c, 78-12b, 78-13b, 78-14b, 80-2, 80-5, 80-6, 80-7b, 80-9, 81-3b, 81-6d, 81-7, 82-4b, 83-2b, 83-5b, 83-6b, 83-6c, 83-7) and 46 are `linux-host` (76-13a, 76-13b, 76-14a, 76-14b, 76-17a, 76-17b, 76-20, 76-21, 76-22b, 76-22c, 77-2, 77-3, 77-4a, 77-4b, 77-5, 77-6, 77-7a, 77-7b, 77-8, 77-9, 78-14a, 79-6c, 79-8b, 79-8c, 79-8d, 80-1, 80-3, 80-4, 80-7a, 80-7b, 80-7c, 80-8b, 81-2, 81-6b, 81-6c, 82-3, 82-4a, 83-1a, 83-1b, 83-2a, 83-2b, 83-3b, 83-4, 83-5a, 83-6a, 83-6c). The Sitting at the end adds three tasks and four subtasks, filed after the release as milestone 84.
+Totals: 8 milestones, 141 tasks, 670 subtasks, 76-20's task and five subtasks among them only if the owner takes it (140 and 665 without). By milestone: 76, 39 tasks and 205 subtasks; 77, 11 and 52; 78, 31 and 135; 79, 16 and 78; 80, 14 and 70; 81, 12 and 53; 82, 5 and 25; 83, 13 and 52. 29 tasks are `lenovo` (76-10c, 76-11b, 76-15c, 76-17b, 77-10, 78-1b, 78-4b, 78-5c, 78-6c, 78-10d, 78-11b, 78-11c, 78-12b, 78-13b, 78-14b, 80-2, 80-5, 80-6, 80-7b, 80-9, 81-3b, 81-6d, 81-7, 82-4b, 83-2b, 83-5b, 83-6b, 83-6c, 83-7) and 46 are `linux-host` (76-13a, 76-13b, 76-14a, 76-14b, 76-17a, 76-17b, 76-20, 76-21, 76-22b, 76-22c, 77-2, 77-3, 77-4a, 77-4b, 77-5, 77-6, 77-7a, 77-7b, 77-8, 77-9, 78-14a, 79-6c, 79-8b, 79-8c, 79-8d, 80-1, 80-3, 80-4, 80-7a, 80-7b, 80-7c, 80-8b, 81-2, 81-6b, 81-6c, 82-3, 82-4a, 83-1a, 83-1b, 83-2a, 83-2b, 83-3b, 83-4, 83-5a, 83-6a, 83-6c). The Sitting at the end adds four tasks and six subtasks, filed after the release as milestone 84; 84-4 joined it when 78-1b's expiry left the Lenovo down.
 
 ## Conventions
 
@@ -2457,3 +2457,13 @@ The steps that need the owner at the Lenovo. They leave 76's, 78's and 80's task
 * Subtasks:
   * 84-3.1 The owner plays the whole first level on the released system through umu, on 80-9's route with working sound at `mixer vol 1` unless the owner sets another, in a boot of its own; check: the owner's report, recorded in `80-9.md`.
 * Done: the first level played through to the owner's criterion, with the report recorded.
+
+### 84-4 The watchdog's expiry, watched
+
+* Files: `dev-log/78-intel/78-1b.md` (after 78-1b).
+* Waits on: 78-1b (`evidence`: the driver armed, fed and stopped on the Lenovo, and Debian's expiry that left the machine down).
+* Labels: `lenovo`, `owner-only`.
+* Subtasks:
+  * 84-4.1 Debian on p5, 78-1b's watchdog session held over to the sitting, with the owner watching the screen: `/dev/watchdog0` armed at 30 s and left unfed, first as 78-1b ran it (TCO_EN left set), then, if the machine comes back or once it is powered on, in a second boot with `iTCO_wdt.turn_SMI_watchdog_clear_off=2`, which clears TCO_EN so that only the chipset's second stage resets; SMI_EN read before each; check: what the screen showed at each expiry, the times to return or not, recorded in `78-1b.md`.
+  * 84-4.2 Rach2's trial expiry, step 13 of `78-1b.md` (`wdtrial 30 120`), on the released system, with the owner watching the screen; if only the run with TCO_EN cleared came back under Debian, the Rach2 driver gains Linux's option first and the trial uses it; check: the reset within 60 s of the last feed and the release back, or what the screen showed.
+* Done: the cause of the Lenovo's failure to return from a TCO expiry is known, and the watchdog either returns the machine under Rach2 or is recorded as unable to.
