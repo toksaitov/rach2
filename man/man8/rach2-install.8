@@ -1,15 +1,17 @@
-.Dd November 1, 2026
+.Dd November 9, 2026
 .Dt RACH2-INSTALL 8
 .Os
 .Sh NAME
 .Nm rach2-install
-.Nd install Rach2 on a disk or update an installed root
+.Nd install Rach2 on a disk, update an installed root or make room for the data partition
 .Sh SYNOPSIS
 .Nm
 .Op Fl -source Ar DIR
 .Nm
 .Op Fl -console Cm term
 .Fl -update Ar IMAGE DISK
+.Nm
+.Fl -data Ar DISK SIZE
 .Sh DESCRIPTION
 The
 .Nm
@@ -32,6 +34,9 @@ partition, the EFI system partition, with GRUB's EFI image as
 beside the kernels, the menu and its environment block; partition 2 is
 the recovery partition, partition 3 the ext2 root, and partition 4 the
 BIOS boot partition, which holds GRUB's BIOS core.
+The installer adds partition 6, the data partition, after the root, as
+.Xr disk 7
+describes.
 The disk boots by BIOS and by UEFI.
 On the installed machine,
 .Ql bootctl grub
@@ -93,12 +98,27 @@ A file larger than 16384 bytes, one that is not text, one that holds a
 private key, and one with no line that is a key are refused and the
 question is asked again.
 .It Root size
-Choose whether to grow the root into the whole disk.
-An empty answer,
+Give the size the root grows to, a number followed by
+.Ql M ,
+.Ql G
+or
+.Ql T
+for mebibytes, gibibytes or tebibytes; the rest of the disk becomes the
+data partition.
+An empty answer is
+.Ql 64G .
+The answer
+.Ql whole ,
 .Ql y
 or
 .Ql yes
-grows it; any other answer leaves the root at the image's size.
+grows the root into the whole disk and makes no data partition, and
+.Ql n
+or
+.Ql no
+leaves the root at the image's size.
+Any other answer is explained and requested again.
+A size smaller than the image's root leaves the root at the image's size.
 .It Confirmation
 The disk's identity, account, keys, recovery key, and choice of root size
 are displayed.
@@ -163,12 +183,24 @@ This makes init start Dropbear without
 .Fl g ,
 permitting root to log in over SSH with a password.
 .It
-Grow the root into the free space after it, if requested, with
+Make the data partition, when a size was given and the disk has 131072
+sectors, 64 MiB, or more after the root's room up to its backup table;
+a disk with fewer, or with an MBR, has none, and the installer says so.
+.Ql diskctl data
+makes entry 6 from the first mebibyte boundary after the root's room,
+and
+.Xr mke2fs 8
+makes its file system, ext2 with an inode for every 64 KiB, labelled
+.Ql Rach2 data .
+.It
+Grow the root, if requested, with
 .Xr growroot 8
 and the disk's identity
 .Ql diskctl id
 prints, as
-.Ql GPTID=GUID,3 .
+.Ql GPTID=GUID,3 :
+up to the data partition when there is one, and into the rest of the
+disk otherwise.
 .El
 .Pp
 If the installer finds a recovery partition, it archives the three account
@@ -227,6 +259,8 @@ With
 writes a root file system image into an installed machine's root partition.
 The partition table is changed only to grow that partition into the
 free space after it.
+The data partition is neither written nor moved, and the files on it are
+kept.
 The disk must have a first partition that
 .Xr bootctl 8
 can read as a boot partition and an installed root containing
@@ -414,9 +448,45 @@ A failed trial or an interrupted write returns the machine to recovery.
 After trying the new root,
 .Ql bootctl commit
 makes it the saved default.
+.Pp
+With
+.Fl -data Ar DISK SIZE ,
+.Nm
+makes room for the data partition on a disk installed without one, whose
+root fills the space up to the next partition.
+It runs from the recovery system, with nothing on
+.Ar DISK
+mounted.
+The disk must have a GUID table with entry 6 free.
+The root is the highest of entries 4 to 1 that mounts as ext2 and has
+.Pa /etc/passwd
+and
+.Pa /etc/rach2 ;
+.Ar SIZE ,
+in the form the root size question takes, must not exceed it.
+The installer checks the root with
+.Ql e2fsck -fp ,
+which must end with status 0 or 1, shrinks its file system to
+.Ar SIZE
+with
+.Xr resize2fs 8 ,
+gives its entry that length with
+.Ql diskctl shrink ,
+and makes the data partition over the sectors freed, up to the next
+partition, as an install makes it.
+A run stopped after any step can be run again: the file system already
+at
+.Ar SIZE
+is not moved, an entry already that length is not written, and an entry 6
+named
+.Ql Rach2 data
+whose file system checks is kept.
 .Sh EXIT STATUS
-The exit status is 0 when the disk contains the installed system or,
-for an update, when the new root is on disk and armed for a trial boot.
+The exit status is 0 when the disk contains the installed system,
+for an update, when the new root is on disk and armed for a trial boot,
+and with
+.Fl -data ,
+when the data partition is on the disk.
 Other statuses indicate failure, with the reason on standard error.
 A failure before the image write stops the run without starting that write.
 .Sh EXAMPLES
@@ -436,6 +506,10 @@ rach2-install --console term --update /stick/rach2-metal-disk.ext2 /dev/disk0
 umount /stick
 .Ed
 Save the sectors the procedure will overwrite before running the update.
+.Pp
+Make room for a data partition after a root of 64 GiB on a disk that has
+none, from recovery:
+.Dl rach2-install --data /dev/disk0 64G
 The space reserved for the boot and recovery copies does not cover a
 backup of a grown root.
 The RAM root has no room for the 1 GiB update image.
@@ -445,5 +519,8 @@ The RAM root has no room for the 1 GiB update image.
 .Xr recovery 7 ,
 .Xr bootctl 8 ,
 .Xr diskctl 8 ,
+.Xr e2fsck 8 ,
 .Xr growroot 8 ,
-.Xr reflash 8
+.Xr mke2fs 8 ,
+.Xr reflash 8 ,
+.Xr resize2fs 8

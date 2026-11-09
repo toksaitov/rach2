@@ -59,8 +59,12 @@ on os-real, the installed system and the GNU system; on the GNU system
 .Pa /bin/mkfs.ext2
 is a link to it, the name util-linux's
 .Ic mkfs -t ext2
-runs; the recovery image, whose kernel writes partitions, has no room for
-it in its 4 MiB.
+runs.
+The recovery image stages it at
+.Pa /sbin/mke2fs ,
+where
+.Xr rach2-install 8
+makes the data partition's file system with it.
 Its defaults are compiled in from
 .Pa vendor/e2fsprogs/mke2fs.conf
 and are what the kernel's ext2 driver mounts writable: revision 1, 4 KiB
@@ -201,6 +205,8 @@ which is not installed.
 .Bl -tag -width /etc/mke2fs.conf
 .It Pa /bin/mke2fs
 The program.
+.It Pa /sbin/mke2fs
+The program, in the recovery image.
 .It Pa /etc/mke2fs.conf
 The configuration, read in place of the compiled-in defaults when it
 exists; no image stages one.
