@@ -13,6 +13,7 @@
 #include "../mm/kheap.h"
 #include "../mm/usercopy.h"
 #include "../lib/kerrno.h"
+#include "../lib/spinlock.h"
 
 #define EFD_SEMAPHORE 1
 #define EFD_NONBLOCK  04000
@@ -25,12 +26,49 @@
 /* The counter's largest value: a write that would pass it waits. */
 #define EFD_MAX 0xFFFFFFFFFFFFFFFEull
 
+/*
+ * The counter. `lock` is over `count` and `hooks`, which a kernel signal
+ * from an interrupt handler changes and walks; `refs` counts the open
+ * description, until its last close, and each kernel holder, all under the
+ * big lock.
+ */
 struct eventfd {
     struct anon_obj anon;
     uint64_t count;
     int semaphore;
     wait_queue_t wq;
+    struct spinlock lock;
+    uint32_t refs;
+    int closed; /* the last descriptor has closed */
+    struct eventfd_hook *hooks;
 };
+
+/** Take what a read takes from the counter of `ev`, whose lock the caller
+ * holds: 1 with EFD_SEMAPHORE, else the whole counter. */
+static uint64_t take_locked(struct eventfd *ev)
+{
+    uint64_t value = (ev->semaphore && ev->count) ? 1u : ev->count;
+
+    ev->count -= value;
+    return value;
+}
+
+/** Tell the hooks of `ev`, whose lock the caller holds, that the counter
+ * rose; the counter is taken when a hook asks. Returns 1 when one did. */
+static int signal_locked(struct eventfd *ev)
+{
+    struct eventfd_hook *h, *next;
+    int took = 0;
+
+    for (h = ev->hooks; h; h = next) {
+        next = h->next;
+        if (h->signal(h) && ev->count != 0) {
+            take_locked(ev);
+            took = 1;
+        }
+    }
+    return took;
+}
 
 /** Whether the description of `e` is non-blocking. */
 static int nonblocking(const fd_entry_t *e)
@@ -72,10 +110,12 @@ static int32_t eventfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
 {
     struct eventfd *ev = (struct eventfd *)e->priv;
     uint64_t value;
+    uint32_t flags;
 
     if (count < sizeof(value)) {
         return -EINVAL;
     }
+again:
     while (ev->count == 0) {
         if (nonblocking(e)) {
             return -EAGAIN;
@@ -84,8 +124,12 @@ static int32_t eventfd_read(fd_entry_t *e, char __user *buf, uint32_t count)
             return -EINTR;
         }
     }
-    value = ev->semaphore ? 1u : ev->count;
-    ev->count -= value;
+    flags = spin_lock_irqsave(&ev->lock);
+    value = take_locked(ev);
+    spin_unlock_irqrestore(&ev->lock, flags);
+    if (value == 0) {
+        goto again; /* a hook took it between the wait and the lock */
+    }
     wq_wake(&ev->wq, WQ_ROOM);
     if (copy_to_user((void __user *)buf, &value, sizeof(value)) != 0) {
         return -EFAULT;
@@ -103,6 +147,8 @@ static int32_t eventfd_write(fd_entry_t *e, const char __user *buf, uint32_t cou
 {
     struct eventfd *ev = (struct eventfd *)e->priv;
     struct add a;
+    uint32_t flags;
+    int took = 0;
 
     if (count < sizeof(a.value)) {
         return -EINVAL;
@@ -114,17 +160,28 @@ static int32_t eventfd_write(fd_entry_t *e, const char __user *buf, uint32_t cou
         return -EINVAL;
     }
     a.ev = ev;
-    while (!fits(&a)) {
-        if (nonblocking(e)) {
-            return -EAGAIN;
+    for (;;) {
+        while (!fits(&a)) {
+            if (nonblocking(e)) {
+                return -EAGAIN;
+            }
+            if (wq_wait_event(&ev->wq, fits, &a) < 0) {
+                return -EINTR;
+            }
         }
-        if (wq_wait_event(&ev->wq, fits, &a) < 0) {
-            return -EINTR;
+        flags = spin_lock_irqsave(&ev->lock);
+        if (fits(&a)) {
+            break; /* else a kernel signal came between the wait and the lock */
         }
+        spin_unlock_irqrestore(&ev->lock, flags);
     }
     ev->count += a.value;
     if (a.value != 0) {
-        wq_wake(&ev->wq, WQ_DATA);
+        took = signal_locked(ev);
+    }
+    spin_unlock_irqrestore(&ev->lock, flags);
+    if (a.value != 0) {
+        wq_wake(&ev->wq, took ? (WQ_DATA | WQ_ROOM) : WQ_DATA);
     }
     return (int32_t)sizeof(a.value);
 }
@@ -148,11 +205,28 @@ static short eventfd_poll(fd_entry_t *e, short events, struct wait_queue **wq)
     return (short)(mask & events);
 }
 
-/** The last close of an eventfd: the counter is freed. */
+/** The last close of an eventfd: each hook leaves the list and is told,
+ * and the description's reference goes. */
 static void eventfd_close(fd_entry_t *e)
 {
-    kfree(e->priv);
+    struct eventfd *ev = (struct eventfd *)e->priv;
+    struct eventfd_hook *h, *next;
+    uint32_t flags;
+
+    flags = spin_lock_irqsave(&ev->lock);
+    ev->closed = 1;
+    h = ev->hooks;
+    ev->hooks = NULL;
+    spin_unlock_irqrestore(&ev->lock, flags);
+    for (; h; h = next) {
+        next = h->next;
+        h->next = NULL;
+        if (h->hangup) {
+            h->hangup(h);
+        }
+    }
     e->priv = NULL;
+    eventfd_put(ev);
 }
 
 static const struct file_ops eventfd_ops = {eventfd_read,  eventfd_write, eventfd_poll, NULL,
@@ -175,6 +249,7 @@ static int32_t eventfd_open(uint32_t count, uint32_t flags)
         return -ENOMEM;
     }
     ev->anon.name = "[eventfd]";
+    ev->refs = 1;
     ev->count = count;
     ev->semaphore = (flags & EFD_SEMAPHORE) != 0;
     wait_queue_init(&ev->wq);
@@ -205,4 +280,89 @@ long sys_eventfd2(struct isr_params *params)
 long sys_eventfd(struct isr_params *params)
 {
     return eventfd_open((uint32_t)SC_ARG(params, 0), 0);
+}
+
+struct eventfd *eventfd_get(int fd, int32_t *err)
+{
+    fd_entry_t *e = current_proc ? fd_get(current_proc->fds, fd) : NULL;
+    struct eventfd *ev;
+
+    if (!e) {
+        *err = -EBADF;
+        return NULL;
+    }
+    if (e->ops != &eventfd_ops || !e->priv) {
+        *err = -EINVAL;
+        return NULL;
+    }
+    ev = (struct eventfd *)e->priv;
+    ev->refs++;
+    return ev;
+}
+
+void eventfd_put(struct eventfd *ev)
+{
+    if (--ev->refs == 0) {
+        kfree(ev);
+    }
+}
+
+void eventfd_signal(struct eventfd *ev)
+{
+    uint32_t flags = spin_lock_irqsave(&ev->lock);
+    int took = 0;
+
+    if (ev->count == 0xFFFFFFFFFFFFFFFFull) {
+        spin_unlock_irqrestore(&ev->lock, flags);
+        return;
+    }
+    ev->count++;
+    took = signal_locked(ev);
+    spin_unlock_irqrestore(&ev->lock, flags);
+    wq_wake(&ev->wq, took ? (WQ_DATA | WQ_ROOM) : WQ_DATA);
+}
+
+int eventfd_hook_add(struct eventfd *ev, struct eventfd_hook *h)
+{
+    uint32_t flags;
+    int r;
+
+    flags = spin_lock_irqsave(&ev->lock);
+    if (ev->closed) {
+        spin_unlock_irqrestore(&ev->lock, flags);
+        h->next = NULL;
+        if (h->hangup) {
+            h->hangup(h);
+        }
+        return -1;
+    }
+    h->next = ev->hooks;
+    ev->hooks = h;
+    r = ev->count != 0;
+    spin_unlock_irqrestore(&ev->lock, flags);
+    return r;
+}
+
+void eventfd_hook_remove(struct eventfd *ev, struct eventfd_hook *h, uint64_t *cnt)
+{
+    struct eventfd_hook **p;
+    uint64_t value = 0;
+    uint32_t flags;
+
+    flags = spin_lock_irqsave(&ev->lock);
+    for (p = &ev->hooks; *p; p = &(*p)->next) {
+        if (*p == h) {
+            *p = h->next;
+            h->next = NULL;
+            break;
+        }
+    }
+    if (cnt) {
+        value = take_locked(ev);
+        *cnt = value;
+    }
+    spin_unlock_irqrestore(&ev->lock, flags);
+    if (value != 0) {
+        wq_wake(&ev->wq, WQ_ROOM);
+    }
 }
