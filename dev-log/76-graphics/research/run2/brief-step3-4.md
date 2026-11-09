@@ -1,0 +1,8 @@
+# Steps 3 and 4: suite times and guests side by side
+
+Rows 3 and 4 of `run2-plan.md`, in the environment step 1 chose, using the guest set up in step 2 (`run2/step1.md`, `run2/step2.md`). They decide which suites stay in each Done and their subset sizes (3), and the admission limit and LP_NUM_THREADS (4).
+
+* Step 3: in the Debian guest on lavapipe and llvmpipe, the wall time of the WebGL conformance suite (Khronos's, run headless in Chromium), piglit (Debian's or built from its pinned source), dEQP-VK from VK-GL-CTS (built from the pinned Khronos source on the testing PC, outside the guest), Wine's own Direct3D tests and vkd3d-proton's test suite, each at LP_NUM_THREADS 2, 4 and 8 with the guest's CPUs to match. Record passes, failures, crashes and time; where a whole suite takes more than an hour, time a fixed subset and say how it was chosen.
+* Step 4: two, then five such guests at once beside one suite load, threads capped; measure each guest's slowdown and the host's load, and find the count where the slowdown passes two.
+* No other heavy work runs on the testing PC during these timings. Close with the suites and subsets each Done should hold, and the admission limit.
+* From step 2 (`run2/step2.md`): its guest overlay, with GE-Proton11-12 and the probes, is `/home/testing/rach2/build/cache/run2/step2/deb-step2.qcow2`; base your own overlay on a copy of it, not on it. Debian's Wine needs `wine32:i386` for 32-bit programs. Chromium needs `--ignore-gpu-blocklist` for WebGL on llvmpipe, and its GPU process runs unsandboxed there (step 2 traced why); run the WebGL suite that way and say so.

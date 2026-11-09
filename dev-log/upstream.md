@@ -19,8 +19,6 @@ The bullets state only what the records show. A fact the records do not hold, su
 
 ## Index
 
-Milestone 76's entries are drafts in `build/flow/coordinator/upstream-76-draft.md` until the graphics run's directory, `dev-log/76-graphics/research/run2/`, is committed; they then move to `dev-log/76-graphics/upstream.md`, and their rows take links.
-
 | Fault | Project | Milestone | Status | Entry |
 |---|---|---|---|---|
 | BusyBox uses a freed set-id configuration | BusyBox 1.36.1 | 19 | unreported | [19-busybox-first/upstream.md](19-busybox-first/upstream.md#busybox-uses-a-freed-set-id-configuration) |
@@ -59,15 +57,15 @@ Milestone 76's entries are drafts in `build/flow/coordinator/upstream-76-draft.m
 | The access point sends its queue under a new key with the old key's numbers | TP-Link access point | 74 | unreported | [74-wifi-soak/upstream.md](74-wifi-soak/upstream.md#the-access-point-sends-its-queue-under-a-new-key-with-the-old-keys-numbers) |
 | The access point forgets a station without a deauthentication | TP-Link access point | 74 | unreported | [74-wifi-soak/upstream.md](74-wifi-soak/upstream.md#the-access-point-forgets-a-station-without-a-deauthentication) |
 | Linux 6.18.58 goes silent at key renewals on the Lenovo | Linux 6.18.58, Alpine's | 74 | unreported, cause unproved | [74-wifi-soak/upstream.md](74-wifi-soak/upstream.md#linux-61858-goes-silent-at-key-renewals-on-the-lenovo) |
-| KVM stops a guest on a huge page of a PFNMAP GPU mapping | Linux 6.12.115, KVM | 76 | draft, unreported | `76-graphics/upstream.md`, draft |
-| Chromium's VA-API decoder exports a surface that i965 has no buffer for | Chromium 156 and i965 2.4.1 | 76 | draft, unreported | `76-graphics/upstream.md`, draft |
-| WineD3D's Vulkan renderer reads a NULL SPIR-V program in Crysis | Wine 11.0 in GE-Proton11-12 | 76 | draft, unreported | `76-graphics/upstream.md`, draft |
-| Weston's Xwayland window manager frames an undecorated fullscreen X window | Weston 14.0.2 | 76 | draft, unreported | `76-graphics/upstream.md`, draft |
-| QEMU on Windows dies with ANGLE's Vulkan backend | QEMU 11.1.0 for Windows and ANGLE | 76 | draft, unreported | `76-graphics/upstream.md`, draft |
-| Chromium returns no WebGPU adapter for Venus | Chromium 156 | 76 | draft, unreported | `76-graphics/upstream.md`, draft |
-| Crysis hides its HUD for good when it has no sound output | Crysis | 76 | draft, unreported | `76-graphics/upstream.md`, draft |
-| Crocus hangs the GPU in piglit's multisample read-front tests | Mesa 25.0.7, Crocus | 76 | draft, unreported | `76-graphics/upstream.md`, draft |
-| i915 underruns the FIFO on pipes B and C through the panel fitter | Linux 6.12.115, i915 | 76 | draft, unreported | `76-graphics/upstream.md`, draft |
-| lavapipe segfaults in vkd3d-proton's tests | Mesa 25.0.7, lavapipe | 76 | draft, unreported | `76-graphics/upstream.md`, draft |
-| dEQP-VK timeline semaphore cases hang on lavapipe | Mesa 25.0.7, lavapipe | 76 | draft, unreported | `76-graphics/upstream.md`, draft |
-| Chromium's GPU sandbox traps Mesa's queue scheduling calls | Chromium 156 and Mesa 25.0.7 | 76 | draft, unreported | `76-graphics/upstream.md`, draft |
+| KVM stops a guest on a huge page of a PFNMAP GPU mapping | Linux 6.12.115, KVM | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#kvm-stops-a-guest-on-a-huge-page-of-a-pfnmap-gpu-mapping) |
+| Chromium's VA-API decoder exports a surface that i965 has no buffer for | Chromium 156 and i965 2.4.1 | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#chromiums-va-api-decoder-exports-a-surface-that-i965-has-no-buffer-for) |
+| WineD3D's Vulkan renderer reads a NULL SPIR-V program in Crysis | Wine 11.0 in GE-Proton11-12 | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#wined3ds-vulkan-renderer-reads-a-null-spir-v-program-in-crysis) |
+| Weston's Xwayland window manager frames an undecorated fullscreen X window | Weston 14.0.2 | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#westons-xwayland-window-manager-frames-an-undecorated-fullscreen-x-window) |
+| QEMU on Windows dies with ANGLE's Vulkan backend | QEMU 11.1.0 for Windows and ANGLE | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#qemu-on-windows-dies-with-angles-vulkan-backend) |
+| Chromium returns no WebGPU adapter for Venus | Chromium 156 | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#chromium-returns-no-webgpu-adapter-for-venus) |
+| Crysis hides its HUD for good when it has no sound output | Crysis | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#crysis-hides-its-hud-for-good-when-it-has-no-sound-output) |
+| Crocus hangs the GPU in piglit's multisample read-front tests | Mesa 25.0.7, Crocus | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#crocus-hangs-the-gpu-in-piglits-multisample-read-front-tests) |
+| i915 underruns the FIFO on pipes B and C through the panel fitter | Linux 6.12.115, i915 | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#i915-underruns-the-fifo-on-pipes-b-and-c-through-the-panel-fitter) |
+| lavapipe segfaults in vkd3d-proton's tests | Mesa 25.0.7, lavapipe | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#lavapipe-segfaults-in-vkd3d-protons-tests) |
+| dEQP-VK timeline semaphore cases hang on lavapipe | Mesa 25.0.7, lavapipe | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#deqp-vk-timeline-semaphore-cases-hang-on-lavapipe) |
+| Chromium's GPU sandbox traps Mesa's queue scheduling calls | Chromium 156 and Mesa 25.0.7 | 76 | unreported | [76-graphics/upstream.md](76-graphics/upstream.md#chromiums-gpu-sandbox-traps-mesas-queue-scheduling-calls) |
