@@ -7,4 +7,8 @@ I915_C_SRC = sys/drm/i915/i915_hw.c \
     sys/drm/i915/i915_uncore.c \
     sys/drm/i915/i915_power.c \
     sys/drm/i915/i915_stolen.c \
-    sys/drm/i915/i915_gtt.c
+    sys/drm/i915/i915_gtt.c \
+    sys/drm/i915/i915_irq.c \
+    sys/drm/i915/i915_ring.c \
+    sys/drm/i915/i915_ppgtt.c \
+    sys/drm/i915/i915_firstlight.c

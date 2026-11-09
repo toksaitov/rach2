@@ -246,26 +246,48 @@
 #define BLT_HWS_PGA_GEN7    0x4280
 #define VEBOX_HWS_PGA_GEN7  0x4380
 
-#define HWSTAM              0x2098
-#define EIR                 0x20b0
-#define EMR                 0x20b4
-#define ESR                 0x20b8
-#define INSTPM              0x20c0
-#define GEN7_FF_THREAD_MODE 0x20a0
-#define GFX_MODE            0x2520
-#define ERROR_GEN6          0x40a0
-#define DONE_REG            0x40b0
-#define ARB_MODE            0x4030
-#define HSW_GTT_CACHE_EN    0x4024
-#define CACHE_MODE_0_GEN7   0x7000
-#define CACHE_MODE_1        0x7004
-#define GEN7_GT_MODE        0x7008
-#define GEN7_SC_INSTDONE    0x7100
-#define GEN7_L3CNTLREG1     0xb01c
-#define GEN7_L3SQCREG4      0xb034
-#define HSW_SCRATCH1        0xb038
-#define GEN7_ROW_INSTDONE   0xe164
-#define BCS_SWCTRL          0x22200
+#define HWSTAM                0x2098
+#define EIR                   0x20b0
+#define EMR                   0x20b4
+#define ESR                   0x20b8
+#define INSTPM                0x20c0
+#define INSTPM_TLB_INVALIDATE (1u << 9) /* of RING_INSTPM, masked */
+#define INSTPM_SYNC_FLUSH     (1u << 5)
+#define GEN7_FF_THREAD_MODE   0x20a0
+#define GFX_MODE              0x2520
+#define ERROR_GEN6            0x40a0
+#define DONE_REG              0x40b0
+#define ARB_MODE              0x4030
+#define HSW_GTT_CACHE_EN      0x4024
+#define CACHE_MODE_0_GEN7     0x7000
+#define CACHE_MODE_1          0x7004
+#define GEN7_GT_MODE          0x7008
+#define GEN7_SC_INSTDONE      0x7100
+#define GEN7_L3CNTLREG1       0xb01c
+#define GEN7_L3SQCREG4        0xb034
+#define HSW_SCRATCH1          0xb038
+#define GEN7_ROW_INSTDONE     0xe164
+#define BCS_SWCTRL            0x22200
+
+/* ------------------------------------------------------------------------
+ * Commands (gt/intel_gpu_commands.h): a command's first dword holds its
+ * opcode in bits 28:23 and, for one of more than a dword, its length less
+ * 2 in the low bits. The status page's dwords (gt/intel_engine.h).
+ */
+
+#define MI_INSTR(opcode, flags)    (((uint32_t)(opcode) << 23) | (uint32_t)(flags))
+#define MI_NOOP                    MI_INSTR(0, 0)
+#define MI_USER_INTERRUPT          MI_INSTR(0x02, 0)
+#define MI_BATCH_BUFFER_END        MI_INSTR(0x0a, 0)
+#define MI_STORE_DWORD_IMM_GEN4    MI_INSTR(0x20, 2)
+#define MI_USE_GGTT                (1u << 22)
+#define MI_STORE_DWORD_INDEX       MI_INSTR(0x21, 1)
+#define MI_STORE_DWORD_INDEX_SHIFT 2
+#define MI_OPCODE(dw)              (((dw) >> 23) & 0x3fu)
+#define MI_LENGTH(dw)              (((dw) & 0x3fu) + 2u)
+
+#define I915_GEM_HWS_SEQNO      0x40 /* the dword the breadcrumb writes */
+#define I915_GEM_HWS_SEQNO_ADDR (I915_GEM_HWS_SEQNO << MI_STORE_DWORD_INDEX_SHIFT)
 
 /* ------------------------------------------------------------------------
  * Reset (gt/intel_gt_regs.h): a domain's bit is set to reset it and reads
