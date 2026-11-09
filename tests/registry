@@ -41,6 +41,10 @@
 gnu|qemu,ssh,scp,sftp,python3|full|gnu-test*|2048
 webgl|qemu|full||8192|x86_64
 video|qemu,qemu-img,ssh,scp,ssh-keygen,xorriso,curl,sha256sum|full||8192|x86_64
+igt|qemu|full||4096|x86_64
+modetest|qemu|full||2048
+piglit|qemu|full||8192|x86_64
+glmark2|qemu|full||8192|x86_64
 agents|qemu|full|etude-agents.disk*|4096|x86_64
 agentsaccept|qemu|full||4352|x86_64
 installer-rehearse|qemu,qemu-img,xorriso,shasum|full||512

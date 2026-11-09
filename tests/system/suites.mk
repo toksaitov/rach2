@@ -937,17 +937,32 @@ build/tests/cases/gnu/sed.tar.xz: vendor/gnu/fetch.sh vendor/gnu/sources.txt
 # `tests/run video`: H.264, VP9 and AV1 clips at 720p and 1080p in Chromium and
 # Firefox ESR on the GNU root, the frames shown and dropped and the decoder
 # judged against the Debian reference guest's stored plays, as the cases of
-# tests/cases/machine.video.json. Etude runs both with graphics_scenario
-# (tests/graphics/Readme.md). The cases put on the machine graphics.tar, the
-# runners, the guest's environment and the references, and for a clip
-# clips.tar, which debian.sh makes in the Debian guest when this clone's cache
-# does not hold the clips that clips.sha256 pins; common.sh writes the host's
-# half of each record.
+# tests/cases/machine.video.json.
+# `tests/run igt`: IGT's KMS, PRIME, sync file and sync object tests that
+# tests/graphics/igt-76.list names, one test program a case, on vkms, std-vga
+# and virtio-vga on the GNU root, each subtest judged against the Debian
+# reference guest's stored result on the same profile, as the cases of
+# tests/cases/machine.igt.json.
+# `tests/run modetest`: every mode of std-vga and virtio-vga set by libdrm's
+# modetest on the GNU root and read back with drmcapture, at the reference's
+# size and checksum, as the cases of tests/cases/machine.modetest.json.
+# `tests/run piglit`: parts of piglit's quick profile on llvmpipe on the GNU
+# root, each test judged against the Debian reference guest's stored result,
+# as the cases of tests/cases/machine.piglit.json.
+# `tests/run glmark2`: glmark2's scenes validated on llvmpipe under a headless
+# Weston on the GNU root as in the Debian reference guest, with the score
+# recorded, as the case of tests/cases/machine.glmark2.json.
+# Etude runs them all with graphics_scenario (tests/graphics/Readme.md). The
+# cases put on the machine graphics.tar, the runners, the IGT list, the
+# guest's environment and the references, for a clip clips.tar, which
+# debian.sh makes in the Debian guest when this clone's cache does not hold
+# the clips that clips.sha256 pins, and for modetest drmcapture; common.sh
+# writes the host's half of each record.
 GRAPHICS_FILES = $(wildcard tests/graphics/runners/*) tests/graphics/guest-env.sh \
-                 $(shell find tests/graphics/ref/debian -type f 2>/dev/null)
+                 tests/graphics/igt-76.list $(shell find tests/graphics/ref/debian -type f 2>/dev/null)
 build/tests/cases/graphics/graphics.tar: $(GRAPHICS_FILES)
 	@mkdir -p $(@D)
-	tar -cf $@.tmp -C tests/graphics runners guest-env.sh ref/debian
+	tar -cf $@.tmp -C tests/graphics runners guest-env.sh igt-76.list ref/debian
 	mv $@.tmp $@
 build/tests/cases/graphics/common.sh: tests/graphics/runners/common.sh
 	@mkdir -p $(@D)
