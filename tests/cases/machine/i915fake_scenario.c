@@ -7,14 +7,16 @@
 
 /*
  * The guest's script: drmdevice's report, the lines of Mesa's loader that
- * eglinfo logs, then first light run from the fake's file, plain and under
- * each fault, one `step` line each. The hang goes last, since nothing in the
- * file takes a hung ring back.
+ * eglinfo logs on the surfaceless platform, then first light run from the
+ * fake's file, plain and under each fault, one `step` line each. eglinfo's
+ * exit is not judged: crocus fails in driCreateContextAttribs while the
+ * driver's own ioctls answer EINVAL. The hang goes last, since nothing in
+ * the file takes a hung ring back.
  */
 static const char script[] = "drmdevice 2>&1\n"
                              "echo '--- loader'\n"
-                             "EGL_LOG_LEVEL=debug LIBGL_DEBUG=verbose eglinfo 2>&1 >/dev/null |"
-                             " grep -E 'pci id for fd|MESA-LOADER'\n"
+                             "EGL_LOG_LEVEL=debug stdbuf -oL eglinfo -p surfaceless 2>&1 |"
+                             " grep -E 'pci id for fd|using driver|EGL driver name'\n"
                              "echo '--- fake'\n"
                              "f=$(ls -d /sys/kernel/debug/dri/*/i915_fake | head -n 1)\n"
                              "echo \"file $f\"\n"
@@ -73,7 +75,9 @@ int etude_scenario(struct etude_case *c)
                    drm_field(r.out, "subvendor_id", "17aa") &&
                    drm_field(r.out, "subdevice_id", "380c"),
                "drmdevice did not report 8086:0a16 on board 17aa:380c");
-    net_assert(&u, "loader", net_find(r.out, ": 8086:0a16, driver crocus") != NULL,
+    net_assert(&u, "loader",
+               net_find(r.out, "pci id for fd #: 8086:0a16, driver crocus") != NULL &&
+                   net_find(r.out, "EGL driver name: crocus") != NULL,
                "Mesa's loader did not pick crocus for 8086:0a16");
     light = net_find(r.out, "step light: light ok");
     net_assert(&u, "faults",
