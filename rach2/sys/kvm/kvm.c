@@ -74,11 +74,12 @@ void kvm_vm_put(struct kvm_vm *vm)
     if (--vm->refs != 0) {
         return;
     }
+    /* The irqfds first, whose hooks reach the vCPUs' APICs. */
+    kvm_irq_free(vm);
+    kvm_iobus_free(vm);
     for (i = 0; i < vm->nr_vcpus; i++) {
         kvm_vcpu_free(vm->vcpus[i]);
     }
-    kvm_iobus_free(vm);
-    kvm_irq_free(vm);
     kvm_tdp_free(vm);
     kvm_slots_free(vm);
     if (kvm_backend && kvm_backend->vm_free) {

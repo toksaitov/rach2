@@ -25,6 +25,7 @@
 #define MSR_MTRR_FIX_16K_A0000 0x259u
 #define MSR_MTRR_FIX_4K_C0000  0x268u
 #define MSR_IA32_CR_PAT        0x277u
+#define MSR_IA32_TSC_DEADLINE  0x6E0u
 #define MSR_MTRR_DEF_TYPE      0x2FFu
 #define MSR_IA32_MC0_CTL       0x400u
 #define MSR_STAR               0xC0000081u
@@ -47,8 +48,9 @@
 /* The value of UCODE_REV a guest reads, Linux's. */
 #define UCODE_REV_VAL 0x100000000ull
 
-/* KVM_GET_MSR_INDEX_LIST: the MSRs a caller saves and restores. TSC_AUX
- * is last, and listed only where the host has RDTSCP. */
+/* KVM_GET_MSR_INDEX_LIST: the MSRs a caller saves and restores, the TSC
+ * deadline among them, which the local APIC keeps (vlapic.c). TSC_AUX is
+ * last, and listed only where the host has RDTSCP. */
 static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       MSR_IA32_SYSENTER_ESP,
                                       MSR_IA32_SYSENTER_EIP,
@@ -63,6 +65,7 @@ static const uint32_t index_list[] = {MSR_IA32_SYSENTER_CS,
                                       MSR_IA32_MISC_ENABLE,
                                       MSR_IA32_MCG_STATUS,
                                       MSR_IA32_MCG_CTL,
+                                      MSR_IA32_TSC_DEADLINE,
                                       MSR_TSC_AUX};
 
 static const uint32_t feature_list[] = {MSR_IA32_UCODE_REV};
@@ -201,7 +204,12 @@ static int mce_bank_msr(const struct kvm_vcpu *v, uint32_t index, uint32_t *bank
 int kvm_msr_get(struct kvm_vcpu *v, uint32_t index, uint64_t *value)
 {
     uint32_t bank, reg, i;
+    int r;
 
+    r = kvm_lapic_msr(v, index, 0, value, 1);
+    if (r != 1) {
+        return r;
+    }
     switch (index) {
     case MSR_IA32_TSC:
         *value = arch_cycles() + (uint64_t)v->tsc_offset;
@@ -283,6 +291,10 @@ int kvm_msr_set(struct kvm_vcpu *v, uint32_t index, uint64_t value)
     uint32_t bank, reg;
     int slot;
 
+    slot = kvm_lapic_msr(v, index, 1, &value, 1);
+    if (slot != 1) {
+        return slot;
+    }
     switch (index) {
     case MSR_IA32_TSC:
         v->tsc_offset = (int64_t)(value - arch_cycles());

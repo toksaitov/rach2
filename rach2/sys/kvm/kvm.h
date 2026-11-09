@@ -59,10 +59,11 @@ struct kvm_vcpu;
 /*
  * The kinds of exit a backend's `exit` gives the run loop, in the vCPU's
  * `exit` record. The loop re-enters for KVM_X_AGAIN and answers the rest:
- * port I/O and MMIO go to the caller unless the in-kernel bus takes them
- * (iobus.c), HLT goes to the caller unless the in-kernel local APIC waits
- * for an interrupt (vlapic.c), and the others go to the caller as their
- * KVM_EXIT_* reasons.
+ * port I/O and MMIO go to the caller unless the local APIC's page or the
+ * in-kernel bus takes them (vlapic.c, iobus.c), HLT goes to the caller
+ * unless the in-kernel local APIC waits for an interrupt (vlapic.c), an
+ * interrupt window goes to the caller only when it asked for one, and the
+ * others go to the caller as their KVM_EXIT_* reasons.
  */
 enum kvm_exit_kind {
     KVM_X_AGAIN = 0,   /* handled in the kernel; enter again */
@@ -138,10 +139,20 @@ struct kvm_tdp_format {
  * parts `parts` of the backend's state into the vCPU's record. `inject`
  * makes the event the record's `events` holds pending for the next entry,
  * so an interrupt, an NMI or an exception reaches the guest at its next
- * instruction boundary. `check_extension` answers the capabilities whose
- * truth depends on the processor, such as KVM_CAP_X86_ROBUST_SINGLESTEP:
- * the value KVM_CHECK_EXTENSION gives, 0 for none. `tdp` is the format of
- * its guest-physical entries.
+ * instruction boundary; with the local APIC in the kernel and no interrupt
+ * in `events`, it also asks `kvm_lapic_pending` for the vector waiting,
+ * injects the one `kvm_lapic_ack` gives when the guest can take an
+ * interrupt at the entry, recording it in `events.interrupt`, and
+ * otherwise arms the processor's interrupt-window exit, which it reports
+ * as KVM_X_IRQ_WINDOW. It arms that exit, too, while the caller's run page
+ * asks for the window. A guest's RDMSR and WRMSR of the APIC base, the TSC
+ * deadline and the x2APIC registers go to `kvm_lapic_msr`, and a backend
+ * that lets the guest write CR8 without an exit gives the value to
+ * `kvm_lapic_set_cr8` after each exit and loads `kvm_lapic_cr8`'s before
+ * each entry, since CR8 is the APIC's TPR. `check_extension` answers the
+ * capabilities whose truth depends on the processor, such as
+ * KVM_CAP_X86_ROBUST_SINGLESTEP: the value KVM_CHECK_EXTENSION gives, 0 for
+ * none. `tdp` is the format of its guest-physical entries.
  */
 struct kvm_backend {
     const char *name;
@@ -200,6 +211,7 @@ struct kvm_vm {
 #define KVM_REQ_EXIT         0x1u /* go back to the caller */
 #define KVM_REQ_EVENT        0x2u /* an event to inject */
 #define KVM_REQ_TRIPLE_FAULT 0x4u /* end in KVM_EXIT_SHUTDOWN */
+#define KVM_REQ_EOI_EXIT     0x8u /* end in KVM_EXIT_IOAPIC_EOI (vlapic.c) */
 
 /* The most MSRs a vCPU keeps, those of the index list, the MTRRs and the
  * machine-check banks. */
@@ -303,8 +315,19 @@ void kvm_vcpu_free(struct kvm_vcpu *v);
 
 /** Ask `v` to leave guest mode and see its requests: an interrupt to the
  * processor it runs on when it is in the guest there, and nothing more
- * when it is not, since the loop reads `requests` before each entry. */
+ * when it is not, since the loop reads `requests` before each entry. The
+ * request is set atomically, so an interrupt handler or a hook under
+ * another subsystem's spinlock may kick, without the big lock. */
 void kvm_vcpu_kick(struct kvm_vcpu *v, uint32_t request);
+
+/** Clear the request `request` of `v` atomically: whether it was set. */
+int kvm_vcpu_test_clear(struct kvm_vcpu *v, uint32_t request);
+
+/** Give `v` the state an INIT leaves, as Linux's kvm_vcpu_reset with
+ * `init_event`: the registers, segments, control registers, events and
+ * debug registers of a reset, keeping the APIC base, the FPU's state, XCR0,
+ * the MSRs and the TSC. vlapic.c resets the APIC itself. */
+void kvm_vcpu_init_reset(struct kvm_vcpu *v);
 
 /** The vCPU ioctls, file_ops.ioctl of a vCPU's descriptor. */
 int32_t kvm_vcpu_ioctl(struct fd_entry *e, uint32_t request, uintptr_t arg);
@@ -398,7 +421,7 @@ int kvm_tdp_fault(struct kvm_vm *vm, uint64_t gfn, int write);
 /** KVM_GET_DIRTY_LOG and KVM_CLEAR_DIRTY_LOG, `request` naming which. */
 int32_t kvm_dirty_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg);
 
-/* irq.c: interrupt routing, irqfd and MSIs, replaced by 81-4. */
+/* irq.c: interrupt routing, irqfd and MSIs. */
 
 /** The VM ioctls of irq.c: KVM_CREATE_IRQCHIP, KVM_IRQ_LINE,
  * KVM_IRQ_LINE_STATUS, KVM_SET_GSI_ROUTING, KVM_IRQFD, KVM_SIGNAL_MSI. */
@@ -407,14 +430,21 @@ int32_t kvm_irq_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg);
 /** KVM_ENABLE_CAP of KVM_CAP_SPLIT_IRQCHIP on `vm`. */
 int32_t kvm_irq_enable_split(struct kvm_vm *vm, const struct kvm_enable_cap *cap);
 
-/** The capabilities of irq.c: IRQ_ROUTING, IRQFD, IRQFD_RESAMPLE,
- * SIGNAL_MSI, SPLIT_IRQCHIP, IRQ_INJECT_STATUS. */
+/** The capabilities of irq.c: IRQCHIP, IRQ_ROUTING, IRQFD,
+ * IRQFD_RESAMPLE, SIGNAL_MSI, SPLIT_IRQCHIP, IRQ_INJECT_STATUS,
+ * TSC_DEADLINE_TIMER. */
 int32_t kvm_irq_check_extension(long cap);
 
-/** Free irq.c's share of `vm`. */
+/** Whether an EOI of `vector` goes to the caller's I/O APIC: some route of
+ * the GSIs KVM_CAP_SPLIT_IRQCHIP reserved for its pins is a level-triggered
+ * MSI of that vector, as Linux's kvm_scan_ioapic_routes finds. Under the
+ * big lock. */
+int kvm_irq_eoi_exits(struct kvm_vm *vm, uint32_t vector);
+
+/** Free irq.c's share of `vm`, its irqfds among them. */
 void kvm_irq_free(struct kvm_vm *vm);
 
-/* iobus.c: the in-kernel bus and ioeventfd, replaced by 81-4. */
+/* iobus.c: the in-kernel bus and ioeventfd. */
 
 /** KVM_IOEVENTFD. */
 int32_t kvm_iobus_ioctl(struct kvm_vm *vm, uint32_t request, uintptr_t arg);
@@ -430,18 +460,112 @@ int32_t kvm_iobus_check_extension(long cap);
 /** Free iobus.c's share of `vm`. */
 void kvm_iobus_free(struct kvm_vm *vm);
 
-/* vlapic.c: the local APIC in the kernel, replaced by 81-4. */
+/* vlapic.c: the local APIC in the kernel. */
 
-/** KVM_GET_LAPIC and KVM_SET_LAPIC of `v`. */
+/*
+ * One interrupt as the local APICs take it, from an MSI, an IPI or a local
+ * vector table entry, as Linux's struct kvm_lapic_irq. `delivery_mode` is
+ * the ICR's bits 10:8 in place (KVM_APIC_DM_*), `dest_mode` 1 for a
+ * logical destination, `shorthand` the ICR's bits 19:18 as 0 to 3 (none,
+ * self, all, all but self), `trig_mode` 1 for a level-triggered one, and
+ * `redir_hint` an MSI's redirection hint, which makes a fixed interrupt
+ * go to one of its destinations as a lowest-priority one does.
+ */
+#define KVM_APIC_DM_FIXED   0x000u
+#define KVM_APIC_DM_LOWEST  0x100u
+#define KVM_APIC_DM_SMI     0x200u
+#define KVM_APIC_DM_REMRD   0x300u
+#define KVM_APIC_DM_NMI     0x400u
+#define KVM_APIC_DM_INIT    0x500u
+#define KVM_APIC_DM_STARTUP 0x600u
+#define KVM_APIC_DM_EXTINT  0x700u
+struct kvm_lapic_irq {
+    uint32_t vector;
+    uint32_t delivery_mode;
+    uint32_t dest_mode;
+    uint32_t level;
+    uint32_t trig_mode;
+    uint32_t shorthand;
+    uint32_t dest_id;
+    int redir_hint;
+};
+
+/** Make the local APIC of `v`, a vCPU of a VM whose interrupt controller
+ * is split, in the state of a reset: 0 or -ENOMEM. At KVM_CREATE_VCPU. */
+int kvm_lapic_create(struct kvm_vcpu *v);
+
+/** The ioctls of `v` that the local APIC answers: KVM_GET_LAPIC,
+ * KVM_SET_LAPIC, KVM_INTERRUPT, KVM_GET_MP_STATE and KVM_SET_MP_STATE. */
 int32_t kvm_lapic_ioctl(struct kvm_vcpu *v, uint32_t request, uintptr_t arg);
 
 /** A HLT of `v`: 1 when it goes to the caller as KVM_EXIT_HLT, which it
- * does with no local APIC in the kernel; 0 when an interrupt ended the wait
- * and the vCPU enters again; -EINTR for a signal. May sleep. */
+ * does with no local APIC in the kernel; 0 when the vCPU is HALTED and
+ * `kvm_lapic_prepare` waits for its wake-up before the next entry. */
 int kvm_lapic_halt(struct kvm_vcpu *v);
 
 /** Free vlapic.c's share of `v`. */
 void kvm_lapic_free(struct kvm_vcpu *v);
+
+/**
+ * Deliver `irq` to the local APICs of `vm` it names, from the APIC of
+ * `src` for an IPI or from a device for NULL, as Linux's
+ * kvm_irq_delivery_to_apic: the count of APICs that took it, or -1 when
+ * none was named. Safe without the big lock and with interrupts off,
+ * from an irqfd's hook, since it only sets bits atomically, kicks and
+ * wakes.
+ */
+int kvm_lapic_deliver(struct kvm_vm *vm, struct kvm_vcpu *src, const struct kvm_lapic_irq *irq);
+
+/** The vector `v` takes at its next interrupt boundary: the external
+ * vector KVM_INTERRUPT gave while LINT0 takes ExtINT, else the highest one
+ * requested above the processor priority; -1 for none. */
+int kvm_lapic_pending(struct kvm_vcpu *v);
+
+/** Take the vector `kvm_lapic_pending` gives, as the processor's
+ * acknowledgement does: the external vector is used up, or the APIC's moves
+ * from IRR to ISR. The vector, or -1 for none. */
+int kvm_lapic_ack(struct kvm_vcpu *v);
+
+/** Offer the MMIO access of `v->exit` to `v`'s APIC page: 1 when it was
+ * the APIC's, a read answered to the backend through `complete`; 0 when it
+ * goes on to the bus and the caller. */
+int kvm_lapic_mmio(struct kvm_vcpu *v);
+
+/**
+ * Read or write, by `write`, the MSR `index` of `v` when it is the
+ * APIC's: IA32_APIC_BASE, IA32_TSC_DEADLINE or an x2APIC register
+ * (0x800 to 0x8FF). `host` is 1 for KVM_GET_MSRS and KVM_SET_MSRS, which
+ * may move the APIC base between any two modes. 0, -1 for a fault the
+ * guest takes as #GP and the caller as a refusal, or 1 for an MSR that is
+ * not the APIC's.
+ */
+int kvm_lapic_msr(struct kvm_vcpu *v, uint32_t index, int write, uint64_t *value, int host);
+
+/** Set the APIC base of `v` to `value`, with the checks of Linux's
+ * kvm_set_apic_base: 0, or -1 for reserved bits, an invalid mode, or, from
+ * the guest (`host` 0), x2APIC back to xAPIC or disabled to x2APIC. */
+int kvm_lapic_set_base(struct kvm_vcpu *v, uint64_t value, int host);
+
+/** CR8 of `v`, the TPR's high four bits. */
+uint64_t kvm_lapic_cr8(struct kvm_vcpu *v);
+
+/** Set the TPR of `v` from CR8 `cr8`. */
+void kvm_lapic_set_cr8(struct kvm_vcpu *v, uint64_t cr8);
+
+/**
+ * Ready `v` for an entry, before each one, with the local APIC in the
+ * kernel: deliver an expired timer, take an INIT or a SIPI, wait while the
+ * vCPU is halted or waits for a SIPI until an event wakes it, and make
+ * an interrupt waiting an event to inject (KVM_REQ_EVENT). 0 to enter; 1
+ * to go to the caller with the run page's exit set, KVM_EXIT_IOAPIC_EOI;
+ * -EINTR for a signal or a request to leave, with KVM_EXIT_INTR. May sleep.
+ */
+int32_t kvm_lapic_prepare(struct kvm_vcpu *v);
+
+/** Whether the caller of `v` may inject an external interrupt now, the
+ * run page's `ready_for_interrupt_injection` with the APIC in the kernel:
+ * the guest takes interrupts, none waits, and LINT0 takes ExtINT. */
+int kvm_lapic_ready(struct kvm_vcpu *v);
 
 /* decode.c: the instruction decoder of MMIO exits, in decode.h. */
 #include "decode.h"
