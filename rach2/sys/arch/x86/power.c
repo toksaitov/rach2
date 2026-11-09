@@ -18,6 +18,7 @@
 
 #include "smbios.h"
 #include "board.h"
+#include "itco.h"
 #include "../../cmdline.h"
 
 /* The chipset reset control port. Bit 1 selects a hard reset and bit 2 is the
@@ -276,6 +277,7 @@ static void power_reset(void)
 
 void power_prepare(int how)
 {
+    itco_shutdown();
     if (how == POWER_OFF) {
         (void)acpica_power_off_prepare();
     }

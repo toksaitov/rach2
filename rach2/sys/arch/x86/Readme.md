@@ -47,6 +47,10 @@ The platform reads these words of the kernel command line, which [cmdline.md](..
 
 ## Design
 
+### The watchdog
+
+`itco.c` drives the version 2 TCO watchdog of the `ich9` and `lynxpoint-lp` profiles through the PMBASE and enabled RCBA that `board.c` exposes. It registers `/dev/watchdog` through the device registry after the board probe, with the timer halted; an exclusive open arms it. [watchdog(4)](../../../../man/man4/watchdog.4) owns the user contract. The register sequence follows Linux 6.12's `drivers/watchdog/iTCO_wdt.c`: preserve reserved bits, program 0.6-second ticks, clear NO_REBOOT before starting, reload, and read back halt and timeout writes. An orderly stop halts the timer through `power_prepare`. All accesses are bounded and serialized by the big lock; there is no interrupt handler or software feeding thread. The host test supplies the register callbacks and advances the hardware ticks itself.
+
 ### Sources
 
 `sources.mk` sets `PC_C_SRC`, which both `i686/sources.mk` and `x86_64/sources.mk` include: the 33 C files here and the seven PC drivers above. `iommu/` has the VT-d driver, which `x86_64/sources.mk` alone includes. The platform has no assembly; the first code a started processor runs is each architecture's `trampoline.s`. Every file compiles for both architectures, with `#if defined(__x86_64__)` where they differ, and an instruction the staged TinyCC's assembler lacks, such as `rdrand`, `xsave` or a debug register move, is written as its bytes. The readers of firmware data, `mbinfo.c`, `acpi.c`, `smbios.c`, the judgements of `board.c` and the decoding of `cmos.c`, reach memory and registers only through what they are given, so that host tests can feed them tables no machine can be made to produce.

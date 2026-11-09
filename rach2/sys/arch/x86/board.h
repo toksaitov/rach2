@@ -134,4 +134,11 @@ int board_sci_line(void);
 /** The profile in force, or NULL unless `board_init` returned BOARD_FOUND. */
 const board_profile_t *board_current(void);
 
+/** The validated ACPI I/O base, or 0 without a board profile. */
+uint16_t board_pmbase(void);
+
+/** The enabled root-complex register base of the ICH9 or Lynx Point-LP,
+ * or 0 for another profile or an unprogrammed or disabled RCBA. */
+uint32_t board_rcba(void);
+
 #endif /* _BOARD_H_ */

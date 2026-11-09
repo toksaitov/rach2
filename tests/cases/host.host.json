@@ -461,6 +461,11 @@
           "source": "scenario"
         },
         {
+          "assertion_id": "itco",
+          "checks": "tests/host/itco_hosttest.c checks the TCO register sequence, two-stage expiry and watchdog file ABI under ASan and UBSan and exits 0",
+          "source": "scenario"
+        },
+        {
           "assertion_id": "ish",
           "checks": "tests/host/ish_hosttest.c compiles with its host-deps sources under ASan and UBSan and exits 0",
           "source": "scenario"

@@ -16,6 +16,7 @@
 #include "apicdiag.h"
 #include "apictimer.h"
 #include "board.h"
+#include "itco.h"
 #include "diag.h"
 #include "ioapic.h"
 #include "ps2kbd.h"
@@ -416,6 +417,7 @@ void platform_board_init(void)
     } else {
         klog(KLOG_WARN, "board", "none: no profile matched; poweroff will halt");
     }
+    itco_init();
 }
 
 /** ACPICA first, since the VT-d units are found through its tables; the

@@ -36,6 +36,10 @@ The interrupt controllers are the 8259 pair and, where the MADT lists one, the I
 | Intel Lynx Point-LP | 00:1f.0 | 8086:9C40 to 9C4F |
 | Intel Wildcat Point-LP | 00:1f.0 | 8086:9CC0 to 9CCF |
 
+| Watchdog | Chipsets | Interface |
+| --- | --- | --- |
+| Intel TCO, version 2 | ICH9 and Lynx Point-LP above | [watchdog(4)](../man/man4/watchdog.4), armed only by an open of `/dev/watchdog`; 0.6-second ticks, 3 to 614 seconds per programmed countdown |
+
 ## Storage
 
 | Controller | Found by | Notes |

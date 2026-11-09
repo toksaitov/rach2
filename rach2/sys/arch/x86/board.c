@@ -333,3 +333,20 @@ const board_profile_t *board_current(void)
 {
     return (board_verdict == BOARD_FOUND) ? board_found : 0;
 }
+
+uint16_t board_pmbase(void)
+{
+    return board_verdict == BOARD_FOUND ? (uint16_t)(board_port - BOARD_PM1_CNT_OFFSET) : 0;
+}
+
+uint32_t board_rcba(void)
+{
+    const board_profile_t *p = board_current();
+    uint32_t raw;
+
+    if (!p || (p != board_lookup("ich9") && p != board_lookup("lynxpoint-lp"))) {
+        return 0;
+    }
+    raw = pci_read_config32(p->bus, p->device, p->function, 0xF0);
+    return raw != 0xFFFFFFFFu && (raw & 1u) ? raw & 0xFFFFC000u : 0;
+}
