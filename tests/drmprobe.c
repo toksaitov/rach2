@@ -22,7 +22,10 @@
  * dumb buffer of its size shown on the first CRTC by SETCRTC, and reads it
  * back with GETCRTC; the buffer's pattern reads the same through its mapping
  * after the mode is set, since a driver may move a buffer to scan it out. Each
- * mode set prints "DRMPROBE MODE NAME".
+ * mode set prints "DRMPROBE MODE NAME". On the first mode it flips once to a
+ * second buffer with PAGE_FLIP, reads the FLIP_COMPLETE event from the card,
+ * which the core sends at once on a CRTC without vblanks, reads the CRTC back
+ * and prints "DRMPROBE FLIP NAME".
  *
  * Prints "DRMPROBE OK" and exits 0 when every check passes, and otherwise
  * "DRMPROBE FAIL: what" and exits 1 at the first failure. etude's report
@@ -183,6 +186,32 @@ struct drm_mode_destroy_dumb {
     u32 handle;
 };
 
+struct drm_mode_crtc_page_flip {
+    u32 crtc_id;
+    u32 fb_id;
+    u32 flags;
+    u32 reserved;
+    u64 user_data;
+};
+
+/* An event read from the card: its header, then a vblank's or a flip's. */
+struct drm_event {
+    u32 type;
+    u32 length;
+};
+
+struct drm_event_vblank {
+    struct drm_event base;
+    u64 user_data;
+    u32 tv_sec;
+    u32 tv_usec;
+    u32 sequence;
+    u32 crtc_id;
+};
+
+#define DRM_MODE_PAGE_FLIP_EVENT 0x01
+#define DRM_EVENT_FLIP_COMPLETE  0x02
+
 #define DRM_IOCTL_GEM_CLOSE          DRM_IOW(0x09, struct drm_gem_close)
 #define DRM_IOCTL_PRIME_HANDLE_TO_FD DRM_IOWR(0x2d, struct drm_prime_handle)
 #define DRM_IOCTL_PRIME_FD_TO_HANDLE DRM_IOWR(0x2e, struct drm_prime_handle)
@@ -203,6 +232,7 @@ struct drm_mode_destroy_dumb {
 #define DRM_IOCTL_MODE_GETCONNECTOR DRM_IOWR(0xA7, struct drm_mode_get_connector)
 #define DRM_IOCTL_MODE_ADDFB        DRM_IOWR(0xAE, struct drm_mode_fb_cmd)
 #define DRM_IOCTL_MODE_RMFB         DRM_IOWR(0xAF, unsigned int)
+#define DRM_IOCTL_MODE_PAGE_FLIP    DRM_IOWR(0xB0, struct drm_mode_crtc_page_flip)
 
 #define DRM_CAP_DUMB_BUFFER 0x1
 
@@ -631,16 +661,21 @@ static u32 mode_list(int fd, struct drm_mode_get_connector *conn, struct drm_mod
     return 0;
 }
 
-/** Set `mode` on `crtc` and `conn` from a dumb buffer of its size with a
- * pattern, read the CRTC back, and take the buffer down. */
-static void mode_set(int fd, u32 crtc, u32 conn, const struct drm_mode_modeinfo *mode)
+/* A dumb buffer of a mode's size, mapped, and its framebuffer. */
+struct mode_fb {
+    u32 handle;
+    u32 fb_id;
+    u64 size;
+    long map;
+};
+
+/** Make a dumb buffer of `mode`'s size into `*b`, write the pattern of
+ * `seed` into its first MODE_WORDS words, and add it as a framebuffer. */
+static void fb_make(int fd, const struct drm_mode_modeinfo *mode, struct mode_fb *b, u32 seed)
 {
     struct drm_mode_create_dumb c;
     struct drm_mode_map_dumb m;
-    struct drm_mode_destroy_dumb d;
     struct drm_mode_fb_cmd f;
-    struct drm_mode_crtc set, get;
-    long map;
 
     zero(&c, sizeof(c));
     c.width = mode->hdisplay;
@@ -652,10 +687,10 @@ static void mode_set(int fd, u32 crtc, u32 conn, const struct drm_mode_modeinfo 
     zero(&m, sizeof(m));
     m.handle = c.handle;
     if (drm_ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &m) != 0 ||
-        sys_failed(map = map_drm(fd, (long)c.size, m.offset))) {
+        sys_failed(b->map = map_drm(fd, (long)c.size, m.offset))) {
         fail("a mode's buffer is not mapped");
     }
-    fill((volatile u32 *)map, MODE_WORDS, 0x600DF00Du);
+    fill((volatile u32 *)b->map, MODE_WORDS, seed);
     zero(&f, sizeof(f));
     f.width = mode->hdisplay;
     f.height = mode->vdisplay;
@@ -666,11 +701,77 @@ static void mode_set(int fd, u32 crtc, u32 conn, const struct drm_mode_modeinfo 
     if (drm_ioctl(fd, DRM_IOCTL_MODE_ADDFB, &f) != 0) {
         fail("ADDFB of a mode's buffer");
     }
+    b->handle = c.handle;
+    b->fb_id = f.fb_id;
+    b->size = c.size;
+}
+
+/** Remove `b`'s framebuffer, which turns its CRTC off if it is shown, and
+ * unmap and destroy its buffer. */
+static void fb_drop(int fd, struct mode_fb *b)
+{
+    struct drm_mode_destroy_dumb d;
+
+    d.handle = b->handle;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_RMFB, &b->fb_id) != 0 ||
+        syscall2(SYS_MUNMAP, b->map, (long)b->size) != 0 ||
+        drm_ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &d) != 0) {
+        fail("a mode's framebuffer and buffer are not taken down");
+    }
+}
+
+/** On `crtc`, which shows a framebuffer in `mode`, flip to a second one
+ * with PAGE_FLIP and its event, read FLIP_COMPLETE from the card, read the
+ * CRTC back, and take the second buffer down. */
+static void flip_row(int fd, u32 crtc, const struct drm_mode_modeinfo *mode)
+{
+    struct drm_mode_crtc_page_flip flip;
+    struct drm_event_vblank ev;
+    struct drm_mode_crtc get;
+    struct mode_fb b;
+
+    fb_make(fd, mode, &b, 0xF11Bu);
+    zero(&flip, sizeof(flip));
+    flip.crtc_id = crtc;
+    flip.fb_id = b.fb_id;
+    flip.flags = DRM_MODE_PAGE_FLIP_EVENT;
+    flip.user_data = 0xF11B0001ull;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_PAGE_FLIP, &flip) != 0) {
+        fail("PAGE_FLIP to a second framebuffer");
+    }
+    zero(&ev, sizeof(ev));
+    if (syscall3(SYS_READ, fd, (long)&ev, sizeof(ev)) != (long)sizeof(ev) ||
+        ev.base.type != DRM_EVENT_FLIP_COMPLETE || ev.base.length != sizeof(ev) ||
+        ev.user_data != flip.user_data || ev.crtc_id != crtc) {
+        fail("the card gives no FLIP_COMPLETE of the flip");
+    }
+    zero(&get, sizeof(get));
+    get.crtc_id = crtc;
+    if (drm_ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &get) != 0 || get.fb_id != b.fb_id ||
+        !same_mode(&get.mode, mode)) {
+        fail("GETCRTC does not read back the flip");
+    }
+    if (!holds((volatile u32 *)b.map, MODE_WORDS, 0xF11Bu)) {
+        fail("a buffer's mapping changed when it was flipped to");
+    }
+    probe_line("DRMPROBE FLIP ", mode->name, 0);
+    fb_drop(fd, &b);
+}
+
+/** Set `mode` on `crtc` and `conn` from a dumb buffer of its size with a
+ * pattern, read the CRTC back, flip once if `flip` is set, and take the
+ * buffer down. */
+static void mode_set(int fd, u32 crtc, u32 conn, const struct drm_mode_modeinfo *mode, int flip)
+{
+    struct drm_mode_crtc set, get;
+    struct mode_fb b;
+
+    fb_make(fd, mode, &b, 0x600DF00Du);
     zero(&set, sizeof(set));
     set.set_connectors_ptr = (u64)(unsigned long)&conn;
     set.count_connectors = 1;
     set.crtc_id = crtc;
-    set.fb_id = f.fb_id;
+    set.fb_id = b.fb_id;
     set.mode_valid = 1;
     set.mode = *mode;
     if (drm_ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &set) != 0) {
@@ -680,23 +781,22 @@ static void mode_set(int fd, u32 crtc, u32 conn, const struct drm_mode_modeinfo 
     zero(&get, sizeof(get));
     get.crtc_id = crtc;
     if (drm_ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &get) != 0 || !get.mode_valid ||
-        get.fb_id != f.fb_id || !same_mode(&get.mode, mode)) {
+        get.fb_id != b.fb_id || !same_mode(&get.mode, mode)) {
         probe_line("DRMPROBE FAIL MODE ", mode->name, 0);
         fail("GETCRTC does not read back the mode set");
     }
-    if (!holds((volatile u32 *)map, MODE_WORDS, 0x600DF00Du)) {
+    if (!holds((volatile u32 *)b.map, MODE_WORDS, 0x600DF00Du)) {
         fail("a buffer's mapping changed when its mode was set");
     }
     probe_line("DRMPROBE MODE ", mode->name, 0);
-    d.handle = c.handle;
-    if (drm_ioctl(fd, DRM_IOCTL_MODE_RMFB, &f.fb_id) != 0 ||
-        syscall2(SYS_MUNMAP, map, (long)c.size) != 0 ||
-        drm_ioctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &d) != 0) {
-        fail("a mode's framebuffer and buffer are not taken down");
+    if (flip) {
+        flip_row(fd, crtc, mode);
     }
+    fb_drop(fd, &b);
 }
 
-/** As the master, set each mode of the first connected connector. */
+/** As the master, set each mode of the first connected connector, and
+ * flip once on the first. */
 static void modes_row(int fd)
 {
     static struct drm_mode_modeinfo modes[MAX_MODES];
@@ -709,7 +809,7 @@ static void modes_row(int fd)
     }
     n = mode_list(fd, &conn, modes, &crtc);
     for (i = 0; i < n; i++) {
-        mode_set(fd, crtc, conn.connector_id, &modes[i]);
+        mode_set(fd, crtc, conn.connector_id, &modes[i], i == 0);
     }
     report_held();
 }
