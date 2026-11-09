@@ -30,10 +30,18 @@ struct input_event {
     int32_t value;
 };
 
-/* The records an open queues, a power of two: Linux's least, for a device
- * that gives no hint of its packets' size. */
-#define EVDEV_QUEUE 64
-#define QUEUE_MASK  (EVDEV_QUEUE - 1)
+/* The fewest records an open queues, and the packets its queue holds, as
+ * Linux's EVDEV_MIN_BUFFER_SIZE and EVDEV_BUF_PACKETS (`queue_size`). */
+#define EVDEV_QUEUE   64
+#define EVDEV_PACKETS 8
+
+/* The largest tracking number, after which they start again at 0, and its
+ * top bit, by which the older of two numbers is told across the wrap. */
+#define TRKID_MAX 0xffff
+#define TRKID_SGN 0x8000
+
+/* The values a slot keeps, one for each multitouch axis. */
+#define MT_VALUES (ABS_MT_LAST - ABS_MT_FIRST + 1)
 
 /* The ioctl numbers are Linux's: _IOC(dir, 'E', nr, size), with the
  * direction in the top two bits, the size in the next fourteen, then the
@@ -57,6 +65,7 @@ struct input_event {
 #define NR_GPHYS      0x07u
 #define NR_GUNIQ      0x08u
 #define NR_GPROP      0x09u
+#define NR_GMTSLOTS   0x0Au /* EVIOCGMTSLOTS(len): a code, then a value a slot */
 #define NR_GKEY       0x18u
 #define NR_GLED       0x19u
 #define NR_GSND       0x1Au
@@ -113,6 +122,7 @@ struct evdev_client {
     unsigned head;
     unsigned tail;
     unsigned packet;
+    unsigned qmask;  /* the queue's size less one; the size is a power of two */
     int clock;       /* CLK_*, the clock its records are stamped by */
     int revoked;     /* EVIOCREVOKE: it gets nothing, and reads -ENODEV */
     uint32_t masked; /* a bit 1 << type for each type with a mask set */
@@ -125,7 +135,15 @@ struct evdev_client {
     uint8_t mask_led[BITS_BYTES(LED_CNT)];
     uint8_t mask_snd[BITS_BYTES(SND_CNT)];
     uint8_t mask_ff[BITS_BYTES(FF_CNT)];
-    struct input_event queue[EVDEV_QUEUE];
+    struct input_event *queue; /* qmask + 1 records, from the heap */
+};
+
+/* A slot of a device that keeps slots: the value of each multitouch axis,
+ * ABS_MT_TRACKING_ID -1 while it has no contact, and the frame that last
+ * named it (`evdev_mt_report_slot_state`). */
+struct evdev_slot {
+    int32_t abs[MT_VALUES];
+    unsigned int frame;
 };
 
 struct evdev {
@@ -145,6 +163,13 @@ struct evdev {
     uint8_t abs[BITS_BYTES(ABS_CNT)];          /* the absolute axes it has */
     uint8_t props[BITS_BYTES(INPUT_PROP_CNT)]; /* INPUT_PROP_* */
     struct input_absinfo absinfo[ABS_CNT];
+    int num_slots;         /* the slots it keeps, 0 for none */
+    int slot;              /* the slot the last ABS_MT_SLOT chose */
+    unsigned int mt_flags; /* INPUT_MT_* */
+    unsigned int frame;    /* the slots' frame, ended by `evdev_mt_drop_unused` */
+    unsigned int trkid;    /* the next tracking number, before the cut to TRKID_MAX */
+    struct evdev_slot slots[EVDEV_MT_SLOTS];
+    evdev_handler_t handler;
     int64_t stamp_sec[CLKS]; /* the packet's time on each clock */
     int32_t stamp_nsec[CLKS];
     struct evdev_client *clients;
@@ -223,6 +248,13 @@ void evdev_describe(struct evdev *dev, const char *phys, unsigned int flags)
     }
 }
 
+void evdev_set_version(struct evdev *dev, uint16_t version)
+{
+    if (dev) {
+        dev->id[3] = version;
+    }
+}
+
 void evdev_set_capability(struct evdev *dev, uint16_t type, uint16_t code)
 {
     if (!dev) {
@@ -263,6 +295,324 @@ void evdev_set_prop(struct evdev *dev, unsigned int prop)
 {
     if (dev && prop < INPUT_PROP_CNT) {
         set_bit(dev->props, prop);
+    }
+}
+
+/** Copy the absolute axis `src` of `dev` to `dst` without its fuzz, as
+ * Linux's `copy_abs`, when the device has `src`. */
+static void copy_abs(struct evdev *dev, uint16_t dst, uint16_t src)
+{
+    if (bit_on(dev->abs, src)) {
+        dev->absinfo[dst] = dev->absinfo[src];
+        dev->absinfo[dst].fuzz = 0;
+        set_bit(dev->abs, dst);
+    }
+}
+
+int evdev_init_slots(struct evdev *dev, int num_slots, unsigned int flags)
+{
+    int i;
+
+    if (!dev || num_slots < 1 || num_slots > EVDEV_MT_SLOTS) {
+        return -EINVAL;
+    }
+    if (dev->num_slots) {
+        return dev->num_slots != num_slots ? -EINVAL : 0;
+    }
+    dev->num_slots = num_slots;
+    dev->mt_flags = flags;
+    evdev_set_abs(dev, ABS_MT_SLOT, 0, num_slots - 1, 0, 0);
+    evdev_set_abs(dev, ABS_MT_TRACKING_ID, 0, TRKID_MAX, 0, 0);
+    if (flags & (INPUT_MT_POINTER | INPUT_MT_DIRECT)) {
+        set_bit(dev->keys, BTN_TOUCH);
+        copy_abs(dev, ABS_X, ABS_MT_POSITION_X);
+        copy_abs(dev, ABS_Y, ABS_MT_POSITION_Y);
+        copy_abs(dev, ABS_PRESSURE, ABS_MT_PRESSURE);
+    }
+    if (flags & INPUT_MT_POINTER) {
+        set_bit(dev->keys, BTN_TOOL_FINGER);
+        set_bit(dev->keys, BTN_TOOL_DOUBLETAP);
+        if (num_slots >= 3) {
+            set_bit(dev->keys, BTN_TOOL_TRIPLETAP);
+        }
+        if (num_slots >= 4) {
+            set_bit(dev->keys, BTN_TOOL_QUADTAP);
+        }
+        if (num_slots >= 5) {
+            set_bit(dev->keys, BTN_TOOL_QUINTTAP);
+        }
+        set_bit(dev->props, INPUT_PROP_POINTER);
+    }
+    if (flags & INPUT_MT_DIRECT) {
+        set_bit(dev->props, INPUT_PROP_DIRECT);
+    }
+    if (flags & INPUT_MT_SEMI_MT) {
+        set_bit(dev->props, INPUT_PROP_SEMI_MT);
+    }
+    for (i = 0; i < num_slots; i++) {
+        dev->slots[i].abs[ABS_MT_TRACKING_ID - ABS_MT_FIRST] = -1;
+    }
+    dev->frame = 1; /* no slot is used in the first frame */
+    return 0;
+}
+
+int evdev_mt_report_slot_state(struct evdev *dev, int tool, int active)
+{
+    struct evdev_slot *slot;
+    uint32_t flags;
+    int32_t id;
+
+    if (!dev || !dev->num_slots) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    slot = &dev->slots[dev->slot];
+    slot->frame = dev->frame;
+    id = slot->abs[ABS_MT_TRACKING_ID - ABS_MT_FIRST];
+    if (active && id < 0) {
+        id = (int32_t)(dev->trkid++ & TRKID_MAX);
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    if (!active) {
+        evdev_report(dev, EV_ABS, ABS_MT_TRACKING_ID, -1);
+        return 0;
+    }
+    evdev_report(dev, EV_ABS, ABS_MT_TRACKING_ID, id);
+    evdev_report(dev, EV_ABS, ABS_MT_TOOL_TYPE, tool);
+    return 1;
+}
+
+void evdev_mt_report_finger_count(struct evdev *dev, int count)
+{
+    evdev_report(dev, EV_KEY, BTN_TOOL_FINGER, count == 1);
+    evdev_report(dev, EV_KEY, BTN_TOOL_DOUBLETAP, count == 2);
+    evdev_report(dev, EV_KEY, BTN_TOOL_TRIPLETAP, count == 3);
+    evdev_report(dev, EV_KEY, BTN_TOOL_QUADTAP, count == 4);
+    evdev_report(dev, EV_KEY, BTN_TOOL_QUINTTAP, count == 5);
+}
+
+void evdev_mt_report_pointer_emulation(struct evdev *dev, int use_count)
+{
+    struct evdev_slot *oldest = NULL;
+    int32_t x = 0, y = 0, p, reported_p = 0;
+    int32_t oldid, id;
+    int has_pressure;
+    uint32_t flags;
+    int count = 0;
+    int i;
+
+    if (!dev || !dev->num_slots) {
+        return;
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    has_pressure = bit_on(dev->abs, ABS_MT_PRESSURE);
+    oldid = (int32_t)dev->trkid;
+    for (i = 0; i < dev->num_slots; i++) {
+        struct evdev_slot *s = &dev->slots[i];
+
+        id = s->abs[ABS_MT_TRACKING_ID - ABS_MT_FIRST];
+        if (id < 0) {
+            continue;
+        }
+        if ((id - oldid) & TRKID_SGN) {
+            oldest = s;
+            oldid = id;
+        }
+        if (has_pressure) {
+            p = s->abs[ABS_MT_PRESSURE - ABS_MT_FIRST];
+            if (oldid == id) {
+                reported_p = p;
+            }
+        }
+        count++;
+    }
+    if (oldest) {
+        x = oldest->abs[ABS_MT_POSITION_X - ABS_MT_FIRST];
+        y = oldest->abs[ABS_MT_POSITION_Y - ABS_MT_FIRST];
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+
+    evdev_report(dev, EV_KEY, BTN_TOUCH, count > 0);
+    if (use_count) {
+        evdev_mt_report_finger_count(dev, count);
+    }
+    if (oldest) {
+        evdev_report(dev, EV_ABS, ABS_X, x);
+        evdev_report(dev, EV_ABS, ABS_Y, y);
+        if (has_pressure) {
+            evdev_report(dev, EV_ABS, ABS_PRESSURE, reported_p);
+        }
+    } else if (has_pressure) {
+        evdev_report(dev, EV_ABS, ABS_PRESSURE, 0);
+    }
+}
+
+void evdev_mt_drop_unused(struct evdev *dev)
+{
+    int lift[EVDEV_MT_SLOTS];
+    uint32_t flags;
+    int i, n = 0;
+
+    if (!dev || !dev->num_slots) {
+        return;
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    for (i = 0; i < dev->num_slots; i++) {
+        if (dev->slots[i].abs[ABS_MT_TRACKING_ID - ABS_MT_FIRST] >= 0 &&
+            dev->slots[i].frame != dev->frame) {
+            lift[n++] = i;
+        }
+    }
+    dev->frame++;
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    for (i = 0; i < n; i++) {
+        evdev_report(dev, EV_ABS, ABS_MT_SLOT, lift[i]);
+        evdev_report(dev, EV_ABS, ABS_MT_TRACKING_ID, -1);
+    }
+}
+
+/**
+ * One step of Linux's `adjust_dual`, over the `step`-strided entries of a
+ * row or column of the cost matrix from `begin` to `end`: subtract from
+ * each the mean of its two least, so that one entry goes negative. `eq` and
+ * `mu` are as Linux passes them. Returns whether the step changed which
+ * entries are negative.
+ */
+static int adjust_dual(int *begin, int step, int *end, int eq, int mu)
+{
+    int f, *p, s, c;
+
+    if (begin == end) {
+        return 0;
+    }
+    f = *begin;
+    p = begin + step;
+    s = p == end ? f + 1 : *p;
+    for (; p != end; p += step) {
+        if (*p < f) {
+            s = f;
+            f = *p;
+        } else if (*p < s) {
+            s = *p;
+        }
+    }
+    c = (f + s + 1) / 2;
+    if (c == 0 || (c > mu && (!eq || mu > 0))) {
+        return 0;
+    }
+    if (s < 0 && mu <= 0) {
+        c *= 2; /* Linux's penalty of overcovers, for positive matrices */
+    }
+    for (p = begin; p != end; p += step) {
+        *p -= c;
+    }
+    return (c < s && s <= 0) || (f >= 0 && f < c);
+}
+
+/** Linux's `find_reduced_matrix`: reduce the `nrc` costs at `w`, `nr`
+ * contacts to a row of each of the `nc` slots with contacts, until each
+ * contact has at most one negative entry. */
+static void find_reduced_matrix(int *w, int nr, int nc, int nrc, int mu)
+{
+    int i, k, sum;
+
+    for (k = 0; k < nrc; k++) {
+        for (i = 0; i < nr; i++) {
+            adjust_dual(w + i, nr, w + i + nrc, nr <= nc, mu);
+        }
+        sum = 0;
+        for (i = 0; i < nrc; i += nr) {
+            sum += adjust_dual(w + i, 1, w + i + nr, nc <= nr, mu);
+        }
+        if (!sum) {
+            break;
+        }
+    }
+}
+
+int evdev_mt_assign_slots(struct evdev *dev, int *slots, const struct evdev_mt_pos *pos,
+                          int num_pos, int dmax)
+{
+    int w[EVDEV_MT_SLOTS * EVDEV_MT_SLOTS];
+    int active[EVDEV_MT_SLOTS];
+    int mu = 2 * dmax * dmax;
+    uint32_t flags;
+    int i, j, nrc = 0, *row;
+
+    if (!dev || !dev->num_slots || !(dev->mt_flags & INPUT_MT_TRACK)) {
+        return -ENXIO;
+    }
+    if (num_pos > dev->num_slots) {
+        return -EINVAL;
+    }
+    if (num_pos < 1) {
+        return 0;
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    for (i = 0; i < dev->num_slots; i++) {
+        const int32_t *v = dev->slots[i].abs;
+
+        active[i] = v[ABS_MT_TRACKING_ID - ABS_MT_FIRST] >= 0;
+        if (!active[i]) {
+            continue;
+        }
+        for (j = 0; j < num_pos; j++) {
+            int dx = v[ABS_MT_POSITION_X - ABS_MT_FIRST] - pos[j].x;
+            int dy = v[ABS_MT_POSITION_Y - ABS_MT_FIRST] - pos[j].y;
+
+            w[nrc++] = dx * dx + dy * dy - mu;
+        }
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+
+    find_reduced_matrix(w, num_pos, nrc / num_pos, nrc, mu);
+    for (j = 0; j < num_pos; j++) {
+        slots[j] = -1;
+    }
+    row = w;
+    for (i = 0; i < dev->num_slots; i++) {
+        if (!active[i]) {
+            continue;
+        }
+        for (j = 0; j < num_pos; j++) {
+            if (row[j] < 0) {
+                slots[j] = i;
+                break;
+            }
+        }
+        row += num_pos;
+    }
+    for (i = 0; i < dev->num_slots; i++) {
+        if (active[i]) {
+            continue;
+        }
+        for (j = 0; j < num_pos; j++) {
+            if (slots[j] < 0) {
+                slots[j] = i;
+                break;
+            }
+        }
+    }
+    return 0;
+}
+
+int evdev_get_abs(struct evdev *dev, uint16_t code, struct input_absinfo *out)
+{
+    uint32_t flags;
+
+    if (!dev || code >= ABS_CNT || !bit_on(dev->abs, code)) {
+        return -EINVAL;
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    *out = dev->absinfo[code];
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    return 0;
+}
+
+void evdev_set_handler(struct evdev *dev, evdev_handler_t fn)
+{
+    if (dev) {
+        dev->handler = fn;
     }
 }
 
@@ -367,9 +717,9 @@ static int pass_event(struct evdev_client *c, const struct evdev *dev, uint16_t 
     ev.code = code;
     ev.value = value;
     c->queue[c->head] = ev;
-    c->head = (c->head + 1) & QUEUE_MASK;
+    c->head = (c->head + 1) & c->qmask;
     if (c->head == c->tail) {
-        c->tail = (c->head - 2) & QUEUE_MASK;
+        c->tail = (c->head - 2) & c->qmask;
         c->queue[c->tail] = ev;
         c->queue[c->tail].type = EV_SYN;
         c->queue[c->tail].code = SYN_DROPPED;
@@ -401,17 +751,59 @@ static int32_t defuzz(int32_t value, int32_t old, int32_t fuzz)
     return value;
 }
 
+/* What `accept_event` decides of an event. */
+#define DROP      0 /* it goes to no open */
+#define PASS      1 /* it goes to the opens */
+#define PASS_SLOT 2 /* it goes after an ABS_MT_SLOT of the slot it is for */
+
+/**
+ * The absolute axes' part of `accept_event`, Linux's
+ * `input_handle_abs_event`: ABS_MT_SLOT only chooses the slot of the
+ * multitouch values after it, and is itself held back until one of them
+ * passes; a multitouch value is filtered against its slot's value on a
+ * device that keeps slots and passes unfiltered on one that does not;
+ * another value is filtered against the axis's.
+ */
+static int accept_abs(struct evdev *dev, uint16_t code, int32_t *value)
+{
+    int32_t *old;
+    int new_slot = 0;
+
+    if (code == ABS_MT_SLOT) {
+        if (dev->num_slots && *value >= 0 && *value < dev->num_slots) {
+            dev->slot = *value;
+        }
+        return DROP;
+    }
+    if (code < ABS_MT_FIRST || code > ABS_MT_LAST) {
+        old = &dev->absinfo[code].value;
+    } else if (dev->num_slots) {
+        old = &dev->slots[dev->slot].abs[code - ABS_MT_FIRST];
+        new_slot = dev->slot != dev->absinfo[ABS_MT_SLOT].value;
+    } else {
+        return PASS;
+    }
+    *value = defuzz(*value, *old, dev->absinfo[code].fuzz);
+    if (*value == *old) {
+        return DROP;
+    }
+    *old = *value;
+    if (new_slot) {
+        dev->absinfo[ABS_MT_SLOT].value = dev->slot;
+        return PASS_SLOT;
+    }
+    return PASS;
+}
+
 /**
  * The input core's filter, with the evdev lock held: whether the event
- * `type`, `code`, `*value` of `dev` goes to its opens, as Linux's
- * `input_get_disposition` decides, keeping the keys down and each absolute
- * axis's value. An absolute value is defuzzed in `*value`. ABS_MT_SLOT is
- * dropped and the other multitouch axes pass unfiltered, as Linux's do for
- * a device that keeps no slots.
+ * `type`, `code`, `*value` of `dev` goes to its opens, DROP, PASS or
+ * PASS_SLOT, as Linux's `input_get_disposition` decides, keeping the keys
+ * down, each absolute axis's value and each slot's. An absolute value is
+ * defuzzed in `*value`.
  */
 static int accept_event(struct evdev *dev, uint16_t type, uint16_t code, int32_t *value)
 {
-    struct input_absinfo *a;
     uint8_t bit;
 
     switch (type) {
@@ -431,19 +823,10 @@ static int accept_event(struct evdev *dev, uint16_t type, uint16_t code, int32_t
     case EV_REL:
         return code < REL_CNT && bit_on(dev->rel, code) && *value != 0;
     case EV_ABS:
-        if (code >= ABS_CNT || !bit_on(dev->abs, code) || code == ABS_MT_SLOT) {
+        if (code >= ABS_CNT || !bit_on(dev->abs, code)) {
             return 0;
         }
-        if (code >= ABS_MT_FIRST && code <= ABS_MT_LAST) {
-            return 1;
-        }
-        a = &dev->absinfo[code];
-        *value = defuzz(*value, a->value, a->fuzz);
-        if (*value == a->value) {
-            return 0;
-        }
-        a->value = *value;
-        return 1;
+        return accept_abs(dev, code, value);
     case EV_MSC:
         return code == MSC_SCAN && (dev->flags & EVDEV_SCAN);
     default:
@@ -451,13 +834,32 @@ static int accept_event(struct evdev *dev, uint16_t type, uint16_t code, int32_t
     }
 }
 
-void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value)
+/** Queue the event `type`, `code`, `value` for the opens of `dev`, or for
+ * the open that holds the grab, with the evdev lock held. Returns whether
+ * the readers are to be woken. */
+static int pass_all(struct evdev *dev, uint16_t type, uint16_t code, int32_t value)
 {
     struct evdev_client *c;
+    int wake = 0;
+
+    if (dev->grab) {
+        return pass_event(dev->grab, dev, type, code, value);
+    }
+    for (c = dev->clients; c; c = c->next) {
+        wake |= pass_event(c, dev, type, code, value);
+    }
+    return wake;
+}
+
+void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value)
+{
+    evdev_handler_t handler;
     int64_t sec[CLKS];
     int32_t nsec[CLKS];
     uint32_t flags;
+    int32_t slot = 0;
     int wake = 0;
+    int how;
     int i;
 
     if (!dev) {
@@ -465,7 +867,8 @@ void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
     }
     read_clocks(sec, nsec);
     flags = spin_lock_irqsave(&evdev_lock);
-    if (dev->gone || !accept_event(dev, type, code, &value)) {
+    how = dev->gone ? DROP : accept_event(dev, type, code, &value);
+    if (how == DROP) {
         spin_unlock_irqrestore(&evdev_lock, flags);
         return;
     }
@@ -476,19 +879,24 @@ void evdev_report(struct evdev *dev, uint16_t type, uint16_t code, int32_t value
         }
         dev->stamped = 1;
     }
-    if (dev->grab) {
-        wake = pass_event(dev->grab, dev, type, code, value);
-    } else {
-        for (c = dev->clients; c; c = c->next) {
-            wake |= pass_event(c, dev, type, code, value);
-        }
+    if (how == PASS_SLOT) {
+        slot = dev->slot;
+        wake |= pass_all(dev, EV_ABS, ABS_MT_SLOT, slot);
     }
+    wake |= pass_all(dev, type, code, value);
     if (type == EV_SYN && code == SYN_REPORT) {
         dev->stamped = 0;
     }
+    handler = dev->grab ? NULL : dev->handler;
     spin_unlock_irqrestore(&evdev_lock, flags);
     if (wake) {
         wq_wake(&dev->wq, WQ_DATA);
+    }
+    if (handler) {
+        if (how == PASS_SLOT) {
+            handler(dev, EV_ABS, ABS_MT_SLOT, slot);
+        }
+        handler(dev, type, code, value);
     }
 }
 
@@ -564,24 +972,87 @@ int evdev_present(int n)
     return devices[n].used && !devices[n].gone;
 }
 
+/** The number of bits set in the `n` bytes at `bits`. */
+static unsigned bits_set(const uint8_t *bits, unsigned n)
+{
+    unsigned i, count = 0;
+    uint8_t b;
+
+    for (i = 0; i < n; i++) {
+        for (b = bits[i]; b; b &= (uint8_t)(b - 1)) {
+            count++;
+        }
+    }
+    return count;
+}
+
+/**
+ * The records an open of `dev` queues, as Linux's evdev sizes its buffer:
+ * room for EVDEV_PACKETS packets of the size that Linux's
+ * `input_estimate_events_per_packet` guesses from the axes and slots, and
+ * at least EVDEV_QUEUE, rounded up to a power of two. A keyboard's queue
+ * holds 64 records, a mouse's 128 and a touchpad's with two slots 256.
+ */
+static unsigned queue_size(const struct evdev *dev)
+{
+    unsigned events, size;
+    int mt_slots = 0;
+    unsigned i;
+
+    if (dev->num_slots) {
+        mt_slots = dev->num_slots;
+    } else if (bit_on(dev->abs, ABS_MT_TRACKING_ID)) {
+        mt_slots =
+            dev->absinfo[ABS_MT_TRACKING_ID].maximum - dev->absinfo[ABS_MT_TRACKING_ID].minimum + 1;
+        mt_slots = mt_slots < 2 ? 2 : mt_slots > 32 ? 32 : mt_slots;
+    } else if (bit_on(dev->abs, ABS_MT_POSITION_X)) {
+        mt_slots = 2;
+    }
+    events = (unsigned)mt_slots + 1; /* SYN_MT_REPORT and SYN_REPORT */
+    for (i = 0; i < ABS_CNT; i++) {
+        if (bit_on(dev->abs, i)) {
+            events += (i == ABS_MT_SLOT || (i >= ABS_MT_FIRST && i <= ABS_MT_LAST))
+                          ? (unsigned)mt_slots
+                          : 1u;
+        }
+    }
+    events += bits_set(dev->rel, sizeof(dev->rel));
+    events += 7; /* the keys and MSC codes */
+    events *= EVDEV_PACKETS;
+    size = EVDEV_QUEUE;
+    while (size < events) {
+        size *= 2;
+    }
+    return size;
+}
+
 int32_t evdev_open(fd_entry_t *e, int n)
 {
     struct evdev_client *c;
     struct evdev *dev;
     uint32_t flags;
+    unsigned size;
 
     if (!evdev_present(n)) {
         return -ENODEV;
     }
+    dev = &devices[n];
+    size = queue_size(dev);
     c = (struct evdev_client *)kzalloc(sizeof(*c));
     if (!c) {
         return -ENOMEM;
     }
+    c->queue = (struct input_event *)kzalloc(size * sizeof(struct input_event));
+    if (!c->queue) {
+        kfree(c);
+        return -ENOMEM;
+    }
+    c->qmask = size - 1;
     c->clock = CLK_REAL;
-    dev = &devices[n];
     flags = spin_lock_irqsave(&evdev_lock);
     if (dev->gone || !dev->used) {
         spin_unlock_irqrestore(&evdev_lock, flags);
+        kfree(c->queue);
         kfree(c);
         return -ENODEV;
     }
@@ -629,7 +1100,7 @@ int32_t evdev_read(fd_entry_t *e, char __user *buf, uint32_t count)
         }
         while (n < 8 && c->tail != c->packet && done + (n + 1) * sizeof(ev[0]) <= count) {
             ev[n++] = c->queue[c->tail];
-            c->tail = (c->tail + 1) & QUEUE_MASK;
+            c->tail = (c->tail + 1) & c->qmask;
         }
         spin_unlock_irqrestore(&evdev_lock, flags);
         if (n > 0) {
@@ -810,7 +1281,7 @@ static int32_t set_clock(struct evdev_client *c, uintptr_t arg)
             ev.code = SYN_DROPPED;
             ev.value = 0;
             c->queue[c->head] = ev;
-            c->head = (c->head + 1) & QUEUE_MASK;
+            c->head = (c->head + 1) & c->qmask;
         }
     }
     spin_unlock_irqrestore(&evdev_lock, flags);
@@ -961,7 +1432,7 @@ static void flush_type(struct evdev_client *c, uint16_t type)
     unsigned i, head = c->tail, n = 1;
 
     c->packet = c->tail;
-    for (i = c->tail; i != c->head; i = (i + 1) & QUEUE_MASK) {
+    for (i = c->tail; i != c->head; i = (i + 1) & c->qmask) {
         struct input_event *ev = &c->queue[i];
         int report = ev->type == EV_SYN && ev->code == SYN_REPORT;
 
@@ -972,7 +1443,7 @@ static void flush_type(struct evdev_client *c, uint16_t type)
             c->queue[head] = *ev;
         }
         n++;
-        head = (head + 1) & QUEUE_MASK;
+        head = (head + 1) & c->qmask;
         if (report) {
             n = 0;
             c->packet = head;
@@ -982,10 +1453,46 @@ static void flush_type(struct evdev_client *c, uint16_t type)
 }
 
 /**
+ * EVIOCGMTSLOTS(len): fill the int32_t after the code at `arg` with the
+ * value of that multitouch axis in each slot of `dev`, as many as the slots
+ * and the `len` bytes allow, as Linux's `evdev_handle_mt_request`. -EINVAL
+ * for a device without slots or a code that is no multitouch value,
+ * -EFAULT.
+ */
+static int32_t mt_slots(struct evdev *dev, uintptr_t arg, uint32_t len)
+{
+    int32_t values[EVDEV_MT_SLOTS];
+    uint32_t code, flags;
+    int i, n;
+
+    if (copy_from_user(&code, (const void __user *)arg, sizeof(code)) != 0) {
+        return -EFAULT;
+    }
+    if (!dev->num_slots || code < ABS_MT_FIRST || code > ABS_MT_LAST) {
+        return -EINVAL;
+    }
+    n = len < sizeof(code) ? 0 : (int)((len - sizeof(code)) / sizeof(int32_t));
+    if (n > dev->num_slots) {
+        n = dev->num_slots;
+    }
+    flags = spin_lock_irqsave(&evdev_lock);
+    for (i = 0; i < n; i++) {
+        values[i] = dev->slots[i].abs[code - ABS_MT_FIRST];
+    }
+    spin_unlock_irqrestore(&evdev_lock, flags);
+    if (n > 0 && copy_to_user((char __user *)arg + sizeof(code), values,
+                              (uint32_t)n * sizeof(int32_t)) != 0) {
+        return -EFAULT;
+    }
+    return 0;
+}
+
+/**
  * The ioctls that read a string, a set of bits or an axis, numbered `nr`
  * with the caller's length `len`: the name, place and serial, the
- * properties, the keys down, a keyboard's LEDs, the sounds and switches,
- * which no device here has, EVIOCGBIT and EVIOCGABS. Reading the keys or
+ * properties, the slots' values (EVIOCGMTSLOTS), the keys down, a
+ * keyboard's LEDs, the sounds and switches, which no device here has,
+ * EVIOCGBIT and EVIOCGABS. Reading the keys or
  * the LEDs takes their records out of the queue of `c`, since the state read
  * includes them. -EINVAL for another number, and for EVIOCGABS on a device
  * with no absolute axis.
@@ -1022,6 +1529,8 @@ static int32_t read_ioctl(struct evdev_client *c, uint32_t nr, uintptr_t arg, ui
         return string_out(arg, len, NULL);
     case NR_GPROP:
         return bits_out(arg, len, dev->props, BITS_BYTES(INPUT_PROP_CNT));
+    case NR_GMTSLOTS:
+        return mt_slots(dev, arg, len);
     case NR_GKEY:
         flags = spin_lock_irqsave(&evdev_lock);
         k_memcpy(down, dev->down, sizeof(down));
@@ -1175,5 +1684,6 @@ void evdev_close(fd_entry_t *e)
     }
     spin_unlock_irqrestore(&evdev_lock, flags);
     e->priv = NULL;
+    kfree(c->queue);
     kfree(c);
 }
