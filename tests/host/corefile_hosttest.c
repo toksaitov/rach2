@@ -69,6 +69,7 @@ static long sys_pivot_root(isr_params_t *params);
 static long sys_faccessat2(isr_params_t *params);
 static long sys_splice(isr_params_t *params);
 static long sys_tee(isr_params_t *params);
+static long sys_vmsplice(isr_params_t *params);
 static long sys_sendfile(isr_params_t *params);
 static long sys_sendfile32(isr_params_t *params);
 static long sys_copy_file_range(isr_params_t *params);
