@@ -24,7 +24,9 @@ struct itco {
     void *ctx;
     int timeout; /* requested seconds, as Linux reports GETTIMEOUT */
     int opened;
-    int magic; /* the last nonempty write contained V */
+    int magic;   /* the last nonempty write contained V */
+    int running; /* started and not since stopped: Linux's WDOG_ACTIVE */
+    int pinged;  /* started or fed since the last GETSTATUS */
 };
 
 /** Set NO_REBOOT to `on`; 0 or -EIO when firmware refuses the change. */
@@ -77,7 +79,8 @@ static int itco_start(struct itco *t)
 }
 
 /** Program Linux's 3..614 seconds in 0.6 s ticks, preserving reserved bits;
- * 0, -EINVAL for the range, or -EIO for a register that refuses the write. */
+ * 0, or -EINVAL for the range or a register that refuses the write, as
+ * Linux's iTCO_wdt_set_timeout returns for both. */
 static int itco_timeout(struct itco *t, int seconds)
 {
     uint16_t value, ticks;
@@ -89,7 +92,7 @@ static int itco_timeout(struct itco *t, int seconds)
     value = t->rd(t->ctx, TCO_TMR);
     t->wr(t->ctx, TCO_TMR, (uint16_t)((value & ~TCO_MASK) | ticks));
     if ((t->rd(t->ctx, TCO_TMR) & TCO_MASK) != ticks) {
-        return -EIO;
+        return -EINVAL;
     }
     t->timeout = seconds;
     return 0;
@@ -115,7 +118,58 @@ static int itco_attach(struct itco *t)
     t->wr(t->ctx, TCO1_STS, 8);
     t->wr(t->ctx, TCO2_STS, 2);
     t->wr(t->ctx, TCO2_STS, 4);
-    return itco_timeout(t, 30);
+    return itco_timeout(t, 30) ? -EIO : 0;
+}
+
+/** Start a halted timer, as Linux's watchdog_start does: a running one is
+ * left alone. 0 or the start error, with the timer halted. */
+static int itco_arm(struct itco *t)
+{
+    int result;
+
+    if (t->running) {
+        return 0;
+    }
+    result = itco_start(t);
+    if (result == 0) {
+        t->running = 1;
+        t->pinged = 1;
+    }
+    return result;
+}
+
+/** Halt a running timer, as Linux's watchdog_stop does; 0 or -EIO. */
+static int itco_disarm(struct itco *t)
+{
+    if (!t->running) {
+        return 0;
+    }
+    if (itco_stop(t) != 0) {
+        return -EIO;
+    }
+    t->running = 0;
+    return 0;
+}
+
+/** Feed a running timer, as Linux's watchdog_ping does; a halted timer
+ * is not touched. */
+static void itco_keepalive(struct itco *t)
+{
+    if (t->running) {
+        itco_ping(t);
+        t->pinged = 1;
+    }
+}
+
+/** Linux's watchdog_get_status for a driver without a status callback:
+ * MAGICCLOSE while a magic close is pending, KEEPALIVEPING if started or
+ * fed since the last call, which clears it. */
+static int itco_status(struct itco *t)
+{
+    int status = (t->magic ? 0x100 : 0) | (t->pinged ? 0x8000 : 0);
+
+    t->pinged = 0;
+    return status;
 }
 
 #ifndef RACH2_HOSTTEST
@@ -171,7 +225,7 @@ static int32_t itco_open(struct devfs_node *node, fd_entry_t *e, int flags)
     if (watchdog.opened) {
         return -EBUSY;
     }
-    result = itco_start(&watchdog);
+    result = itco_arm(&watchdog);
     if (result == 0) {
         watchdog.opened = 1;
         watchdog.magic = 0;
@@ -205,28 +259,28 @@ static int32_t itco_write(fd_entry_t *e, const char __user *buf, uint32_t count)
             }
         }
     }
-    itco_ping(&watchdog);
+    itco_keepalive(&watchdog);
     return (int32_t)count;
 }
 
-/** Stop on magic close, else feed once and leave armed, as Linux does. */
+/** Stop a running timer on magic close, else feed it once and leave it
+ * armed, as Linux's watchdog_release does; a halted timer is left alone. */
 static void itco_close(fd_entry_t *e)
 {
     (void)e;
-    if (watchdog.magic) {
-        if (itco_stop(&watchdog) != 0) {
-            klog(KLOG_ERR, "watchdog", "stop: the timer refused halt");
-        }
-    } else {
-        itco_ping(&watchdog);
-        klog(KLOG_WARN, "watchdog", "close: still armed without magic close");
+    if (watchdog.running && (!watchdog.magic || itco_disarm(&watchdog) != 0)) {
+        itco_keepalive(&watchdog);
+        klog(KLOG_WARN, "watchdog", "close: did not stop: %s",
+             watchdog.magic ? "the timer refused halt" : "no magic close");
     }
     watchdog.opened = 0;
     watchdog.magic = 0;
 }
 
 /** Linux watchdog ioctls, whose structures contain only 32-bit integers
- * and bytes on both ABIs; 0, -ENOTTY, -EFAULT, or a hardware/range error. */
+ * and bytes on both ABIs; 0, -ENOTTY, -EFAULT, or a hardware/range error.
+ * SETOPTIONS without either flag fails with -ENOTTY, as Linux's ioctl
+ * returns -ENOIOCTLCMD there and the VFS turns it into -ENOTTY. */
 static int32_t itco_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
 {
     static const struct {
@@ -240,6 +294,8 @@ static int32_t itco_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
     case 0x80285700u: /* WDIOC_GETSUPPORT */
         return copy_to_user((void __user *)arg, &info, sizeof(info)) ? -EFAULT : 0;
     case 0x80045701u: /* WDIOC_GETSTATUS */
+        value = itco_status(&watchdog);
+        break;
     case 0x80045702u: /* WDIOC_GETBOOTSTATUS */
         break;
     case 0x80045704u: /* WDIOC_SETOPTIONS */
@@ -248,15 +304,15 @@ static int32_t itco_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
             return -EFAULT;
         }
         if (request == 0x80045704u) {
-            result = -EINVAL;
+            result = -ENOTTY;
             if (value & 1) {
-                result = itco_stop(&watchdog);
+                result = itco_disarm(&watchdog);
                 if (result) {
                     return result;
                 }
             }
             if (value & 2) {
-                result = itco_start(&watchdog);
+                result = itco_arm(&watchdog);
             }
             return result;
         }
@@ -264,11 +320,11 @@ static int32_t itco_ioctl(fd_entry_t *e, uint32_t request, uintptr_t arg)
         if (result) {
             return result;
         }
-        itco_ping(&watchdog);
+        itco_keepalive(&watchdog);
         value = watchdog.timeout;
         break;
     case 0x80045705u: /* WDIOC_KEEPALIVE */
-        itco_ping(&watchdog);
+        itco_keepalive(&watchdog);
         return 0;
     case 0x80045707u: /* WDIOC_GETTIMEOUT */
         value = watchdog.timeout;
@@ -317,6 +373,7 @@ void itco_shutdown(void)
 {
     if (registered) {
         itco_stop(&watchdog);
+        watchdog.running = 0;
     }
 }
 #endif

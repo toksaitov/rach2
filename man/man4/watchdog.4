@@ -17,13 +17,16 @@ The timer is halted at boot and at an orderly shutdown.
 Opening the device arms the timer.
 Only one open file description may hold it; a second open fails with
 .Er EBUSY .
-A nonempty write feeds it.
+A nonempty write feeds it while it runs.
 Closing after a write containing the byte
 .Ql V
 halts it, unless a later nonempty write lacked that byte.
 A zero-length write changes nothing.
 A close without that magic byte feeds once and leaves the timer armed,
 including a close caused by a process exit or signal.
+A timer halted by
+.Dv WDIOC_SETOPTIONS
+stays halted at close.
 The timer may be opened again.
 There is no nowayout mode.
 .Pp
@@ -36,12 +39,18 @@ Return a 40-byte
 with identity
 .Ql iTCO_wdt ,
 firmware version 2, and SETTIMEOUT, KEEPALIVEPING and MAGICCLOSE options.
-.It Dv WDIOC_GETSTATUS , WDIOC_GETBOOTSTATUS
+.It Dv WDIOC_GETSTATUS
+Return Linux's status flags for a driver without its own:
+WDIOF_MAGICCLOSE (0x100) while the last nonempty write held the magic byte,
+and WDIOF_KEEPALIVEPING (0x8000) if the timer was armed or fed since the
+previous call, which clears that flag.
+.It Dv WDIOC_GETBOOTSTATUS
 Return an integer zero, as Linux's iTCO driver does.
 .It Dv WDIOC_KEEPALIVE
-Feed the timer; the argument is unused.
+Feed the timer while it runs; the argument is unused.
 .It Dv WDIOC_SETTIMEOUT
-Read an integer timeout, 3 through 614 seconds, program it and feed.
+Read an integer timeout, 3 through 614 seconds, program it, and feed the
+timer if it runs.
 Write the requested seconds back through the same pointer.
 The default is 30 seconds.
 The hardware counts 0.6-second ticks; seconds are converted by multiplying
@@ -55,8 +64,10 @@ This reads the current stage, as Linux does.
 Read an integer mask: WDIOS_DISABLECARD (1) halts the timer;
 WDIOS_ENABLECARD (2) arms it.
 When both are set, halt precedes arm.
+Arming a running timer or halting a halted one changes nothing.
 A mask containing neither fails with
-.Er EINVAL .
+.Er ENOTTY ,
+as on Linux.
 .El
 .Pp
 A read is unsupported.
@@ -64,9 +75,9 @@ Unknown ioctls fail with
 .Er ENOTTY .
 Bad user pointers fail with
 .Er EFAULT ;
-an invalid timeout with
+an invalid timeout, or a timer register that refuses it, with
 .Er EINVAL ;
-and a register that refuses a change with
+and a halt or NO_REBOOT bit that refuses a change with
 .Er EIO .
 There are no unbounded waits in the driver.
 .Sh FILES

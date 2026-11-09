@@ -121,6 +121,7 @@ static void setup(void)
     watchdog.gcs_wr = model_gcs_wr;
     watchdog.ctx = &model;
     watchdog.opened = watchdog.magic = watchdog.timeout = 0;
+    watchdog.running = watchdog.pinged = 0;
     bad_user = NULL;
 }
 
@@ -190,6 +191,74 @@ void klog(int level, const char *subsystem, const char *format, ...)
     (void)format;
 }
 
+/** GETSTATUS reports a pending magic close and a feed since the last call,
+ * as Linux's core does; SETOPTIONS without a flag is Linux's -ENOTTY. The
+ * timer was armed last and not fed since. */
+static void status(void)
+{
+    int value = -1;
+
+    CHECK(itco_ioctl(NULL, 0x80045701u, (uintptr_t)&value) == 0 && value == 0x8000);
+    CHECK(itco_ioctl(NULL, 0x80045701u, (uintptr_t)&value) == 0 && value == 0);
+    CHECK(itco_write(NULL, "V", 1) == 1);
+    CHECK(itco_ioctl(NULL, 0x80045701u, (uintptr_t)&value) == 0 && value == 0x8100);
+    CHECK(itco_write(NULL, "x", 1) == 1);
+    CHECK(itco_ioctl(NULL, 0x80045702u, (uintptr_t)&value) == 0 && value == 0);
+    value = 0;
+    CHECK(itco_ioctl(NULL, 0x80045704u, (uintptr_t)&value) == -ENOTTY);
+}
+
+/** A timer halted by SETOPTIONS is not written by a feed, a second halt or
+ * a close without magic, as Linux's core skips an inactive device. */
+static void halted(void)
+{
+    int value = 1;
+    unsigned at;
+
+    CHECK(itco_ioctl(NULL, 0x80045704u, (uintptr_t)&value) == 0 && !watchdog.running);
+    at = model.writes;
+    CHECK(itco_ioctl(NULL, 0x80045705u, 0) == 0 && itco_write(NULL, "x", 1) == 1);
+    CHECK(itco_ioctl(NULL, 0x80045704u, (uintptr_t)&value) == 0);
+    itco_close(NULL);
+    CHECK(model.writes == at && (model.words[TCO1_CNT / 2] & TCO_HALT));
+}
+
+/** The Lenovo trial's path, start to finish: attach, open, a 30-second
+ * timeout, two minutes fed every 10 s with the time left read, then no feed
+ * until both stages expire 60 s after the last one. Only TCO_RLD is written
+ * between the timeout and the reset. */
+static void trial(void)
+{
+    int value = 30, left = -1;
+    unsigned i, at;
+
+    setup();
+    CHECK(itco_attach(&watchdog) == 0 && (model.gcs & TCO_NO_REBOOT));
+    CHECK(itco_open(NULL, NULL, 0) == 0 && !(model.gcs & TCO_NO_REBOOT));
+    CHECK(itco_ioctl(NULL, 0xC0045706u, (uintptr_t)&value) == 0 && value == 30);
+    CHECK((model.words[TCO_TMR / 2] & TCO_MASK) == 50);
+    at = model.writes;
+    for (i = 0; i < 12; i++) {
+        advance(&model, 16);
+        CHECK(itco_ioctl(NULL, 0x8004570Au, (uintptr_t)&left) == 0 && left == 20);
+        CHECK(itco_write(NULL, "x", 1) == 1 && model.left == 50);
+    }
+    CHECK(model.resets == 0 && model.stage == 0 && !(model.words[TCO1_STS / 2] & 8));
+    advance(&model, 10);
+    CHECK(itco_ioctl(NULL, 0x8004570Au, (uintptr_t)&left) == 0 && left == 24);
+    advance(&model, 40);
+    CHECK(model.stage == 1 && model.resets == 0 && (model.words[TCO1_STS / 2] & 8));
+    CHECK(itco_ioctl(NULL, 0x8004570Au, (uintptr_t)&left) == 0 && left == 30);
+    advance(&model, 49);
+    CHECK(model.resets == 0);
+    advance(&model, 1);
+    CHECK(model.resets == 1 && (model.words[TCO2_STS / 2] & 2));
+    for (i = at; i < model.writes; i++) {
+        CHECK(model.regs[i] == TCO_RLD);
+    }
+    CHECK(model.writes - at == 12);
+}
+
 /** Check actual writes, expiry, failures, exclusive open and the ioctl ABI. */
 int main(void)
 {
@@ -253,14 +322,15 @@ int main(void)
     CHECK(itco_timeout(&watchdog, 2) == -EINVAL);
     CHECK(itco_timeout(&watchdog, -1) == -EINVAL);
     CHECK(itco_ioctl(NULL, 0x80045707u, (uintptr_t)&value) == 0 && value == 614);
-    CHECK(itco_ioctl(NULL, 0x80045701u, (uintptr_t)&value) == 0 && value == 0);
-    CHECK(itco_ioctl(NULL, 0x80045702u, (uintptr_t)&value) == 0 && value == 0);
+    status();
     CHECK(itco_ioctl(NULL, 0x8004570Au, (uintptr_t)&value) == 0);
     CHECK(itco_ioctl(NULL, 0x80045799u, 0) == -ENOTTY);
     CHECK(itco_ioctl(NULL, 0x80045707u, 0) == -EFAULT);
     CHECK(itco_ioctl(NULL, 0xC0045706u, 0) == -EFAULT);
     bad_user = "bad";
     CHECK(itco_write(NULL, bad_user, 3) == -EFAULT);
+    halted();
+    trial();
     setup();
     model.absent = 1;
     CHECK(itco_attach(&watchdog) == -EIO && model.writes == 0);
