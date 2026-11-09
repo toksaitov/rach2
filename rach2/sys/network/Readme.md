@@ -13,7 +13,7 @@ A program uses Linux's socket calls, each with its page in the manual: [socket(2
 ### Configuration
 
 * The network-interface requests of [ioctl(2)](../../../man/man2/ioctl.2): addresses, masks, flags, MTUs, routes and ARP entries, and, on an `AF_INET6` socket, IPv6's addresses and routes, as BusyBox's `ifconfig` and `route -A inet6` give them.
-* [netlink(7)](../../../man/man7/netlink.7): the requests of `ip` and `ip -6`, glibc's `getifaddrs` and `ss`, and the notifications `ip monitor` and the watchers of a network change hear.
+* [netlink(7)](../../../man/man7/netlink.7): the requests of `ip` and `ip -6`, glibc's `getifaddrs` and `ss`, the notifications `ip monitor` and the watchers of a network change hear, and the kernel's uevents and udevd's relays on NETLINK_KOBJECT_UEVENT, with SCM_CREDENTIALS under SO_PASSCRED.
 * `/proc/net/*` and `/proc/sys/net/ipv6/conf` in [proc(5)](../../../man/man5/proc.5) and `/sys/class/net` in [sysfs(5)](../../../man/man5/sysfs.5); [ipv6(7)](../../../man/man7/ipv6.7) and [icmp6(7)](../../../man/man7/icmp6.7) describe the IPv6 stack as a program sees it.
 * The boot line: [cmdline.md](../../cmdline.md) lists `rach2.ip=`, `rach2.gateway=`, `rach2.ifaddr=`, `rach2.netconsole`, `rach2.nonet` and `rach2.nicfail=`.
 
