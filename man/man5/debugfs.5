@@ -233,6 +233,53 @@ drops it;
 .Er EINVAL
 for bytes that are not a valid EDID.
 A read gives the override's bytes, or nothing.
+.It Pa dri/DEVICE/i915_fake
+Mode 0600.
+Present for a device bound to the fake chip of
+.Xr i915 4 ,
+under
+.Cm rach2.i915fake .
+A read gives a line for each fault, each ring and the device's messages,
+and the result of the last first light:
+.Bd -literal -offset indent
+fault NAME armed COUNT injected COUNT
+ring rcs0 commands COUNT batches COUNT hung 0|1
+messages COUNT
+light never|ok|error -ERRNO
+.Ed
+.Pp
+A write of one command, 63 bytes at most, arms a fault:
+.Ql NAME
+once,
+.Ql NAME N
+.Ar N
+times, 0 to disarm it, and
+.Ql NAME always
+for every time.
+.Ql submit
+fails the next submission to a ring with
+.Er EIO ,
+as a wedged GPU does;
+.Ql bind
+fails the next bind into the global GTT with
+.Er ENOSPC ;
+.Ql hang
+hangs the ring at the next command it would run, until a reset of the
+ring's domain;
+.Ql irq
+loses the next user interrupt, whose sequence number is still written.
+.Ql clear
+disarms every fault, and
+.Ql light
+runs first light on the render ring now, as
+.Cm rach2.i915.firstlight
+does at boot.
+Any other command fails with
+.Er EINVAL .
+The text is made at the open and again after each write, and a read gives
+it from the description's offset.
+The kernel logs each injection as
+.Dq i915: fake: injected: NAME .
 .El
 .Sh EXAMPLES
 As root:

@@ -7,6 +7,7 @@
 .Sh SYNOPSIS
 .Cd rach2.i915
 .Cd rach2.i915.firstlight
+.Cd rach2.i915fake
 .Pp
 .In drm/drm.h
 .In drm/i915_drm.h
@@ -30,6 +31,24 @@ The driver binds a device only when the kernel command line has
 .Cm rach2.i915 .
 Without it the kernel logs the device and leaves the screen to the
 firmware's framebuffer.
+.Pp
+With
+.Cm rach2.i915fake
+the driver also binds, for tests in QEMU, each function of QEMU's
+.Ql edu
+device (PCI 1234:11e8) with a fake chip behind it in place of the
+hardware: the fake answers as the Lenovo's HD 4400, so the function's
+.Pa /sys
+entries report 8086:0a16, revision 0b, board 17aa:380c and class
+0x030000, and libdrm and Mesa find a Haswell GT2; its rings complete each
+command as it is handed over, without reading batches; its message is a
+real MSI of the edu function; and it has no stolen memory and nothing
+behind its aperture.
+Its file
+.Pa /sys/kernel/debug/dri/N/i915_fake
+injects faults, as
+.Xr debugfs 5
+describes.
 .Pp
 A bound device is a DRM device, as
 .Xr drm 4
@@ -81,8 +100,8 @@ With
 the render ring writes one value to a page of the global GTT before any
 display code runs, and the kernel logs
 .Dq i915: first light: ok
-or the failure by name: no room in the ring, no breadcrumb, the value read
-back, or no user interrupt.
+or the failure by name: no room in the ring, the submission refused, no
+breadcrumb, the value read back, or no user interrupt.
 .Pp
 The GT sleeps in RC6 while it is idle, with Linux's thresholds: under the
 hardware's timers after 64 ms without work, and at once while the driver
@@ -142,6 +161,8 @@ Mode setting is not yet served; see above.
 The card node of a bound device.
 .It Pa /dev/dri/renderD Ns Ar M
 Its render node.
+.It Pa /sys/kernel/debug/dri/N/i915_fake
+The fault file of a device bound to the fake chip.
 .El
 .Ss The card in /sys
 The card's directory,
@@ -194,7 +215,8 @@ wrapping at 2^32.
 .Sh SEE ALSO
 .Xr backlight 4 ,
 .Xr drm 4 ,
-.Xr watchdog 4
+.Xr watchdog 4 ,
+.Xr debugfs 5
 .Sh HISTORY
 The driver follows Linux 6.12's i915, whose register names and device
 table it takes.
