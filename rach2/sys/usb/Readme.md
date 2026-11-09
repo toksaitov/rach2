@@ -8,7 +8,7 @@ The USB stack drives keyboards, mice, flash drives and hubs attached to xHCI hos
 
 The stack delivers:
 
-* Keystrokes as Linux's key codes through `input_key_event`, with each key's usage as its `MSC_SCAN`, into the input layer that the PS/2 keyboard feeds too and that repeats a held key in software, and mouse reports through `input_mouse`, into the queue the PS/2 mouse fills ([`input.h`](../input.h)). `input_mouse_found`, called when a boot mouse is configured, lets `/mouse` be opened ([`synthfs.Readme.md`](../fs/synthfs.Readme.md)).
+* Keystrokes as Linux's key codes through `input_key_event`, with each key's usage as its `MSC_SCAN`, into the input layer that the PS/2 keyboard feeds too and that repeats a held key in software, and mouse reports through `mouse_report`, into the mouse's event device and the queue the PS/2 mouse fills ([`mouse.h`](../mouse.h)). `input_mouse_found`, called when a boot mouse is configured, lets `/mouse` be opened ([`synthfs.Readme.md`](../fs/synthfs.Readme.md)).
 * A block device for each logical unit of a flash drive, with `submit` and `flush` and no `read` or `write`, since a transfer completes later, in the pump. `block/usbdisk.c` registers it as a removable disk and publishes its nodes; [`block/Readme.md`](../block/Readme.md) describes that side.
 * `/proc/usb` and the `FBK` line of `/proc/interrupts` ([`proc(5)`](../../../man/man5/proc.5)), and a link and a `uevent` per device under `/sys/bus/usb/devices`, which BusyBox's `lsusb` reads ([`sysfs(5)`](../../../man/man5/sysfs.5), [`busybox-util-linux(1)`](../../../man/man1/busybox-util-linux.1)).
 
@@ -105,7 +105,7 @@ A boot keyboard's report is 8 bytes: modifier bits, a reserved byte and six key 
 
 A keyboard's LEDs are its one output report, a byte with Num Lock in bit 0, Caps Lock in bit 1 and Scroll Lock in bit 2. At each pass the core asks `hid_led_report` whether a running keyboard's byte differs from what the input layer wants (`input_leds`); a keyboard just attached has shown nothing, so it is sent its LEDs at once. The byte goes as `SET_REPORT` (request 0x09, value 0x0200 for the Output report with ID 0, the interface's number as index) in a control transfer with a one-byte OUT data stage, one at a time on the control endpoint, which nothing else uses on a running keyboard, and `hid_led_sent` hears its outcome. A report that fails, or has not completed in 500 ms, is logged once and none is sent to that keyboard again until it is attached again, since a stall leaves the control endpoint halted and a keyboard without LEDs may refuse the request for good.
 
-A boot mouse's report is at least 3 bytes: three buttons and signed X and Y. Y is negated, since a USB report's is positive toward the user and the queue's, like the PS/2 report's, away from the user, so the two mice give the queue the same sign for the same movement ([terminals](../tty/Readme.md)).
+A boot mouse's report is at least 3 bytes: five buttons and signed X and Y, Y positive toward the user as `mouse_report` takes it, and a signed wheel in a fourth byte when the report has one ([terminals](../tty/Readme.md)). The mouse is the event device "USB HIDBP Mouse VVVV:PPPP" at "usb-N/input0", as Linux's boot-protocol driver names it, and reports each wheel detent also as 120 of `REL_WHEEL_HI_RES`.
 
 ### Hubs
 
@@ -160,7 +160,7 @@ Under `rach2.usblatency`, `stamp.c` records the path of the last USB keystroke a
 The disk side's limits are in [`block/Readme.md`](../block/Readme.md).
 
 * Only xHCI controllers are driven.
-* Keyboards and mice are driven through the boot protocol alone. Report descriptors are not read, so a device without a boot interface is not driven and a mouse wheel is ignored.
+* Keyboards and mice are driven through the boot protocol alone. Report descriptors are not read, so a device without a boot interface, such as an absolute tablet, is not driven, and a mouse's wheel is read only from the fourth byte that most boot mice send.
 * Mass storage is SCSI over Bulk-Only Transport, with 512-byte blocks. A drive that offers only UAS is not driven.
 * There are no isochronous transfers, so no USB audio or video.
 * A controller has one interrupter and one command in flight, so its devices are enumerated one at a time.

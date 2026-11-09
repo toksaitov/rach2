@@ -1,9 +1,9 @@
-.Dd November 1, 2026
+.Dd November 9, 2026
 .Dt INPUT 4
 .Os
 .Sh NAME
 .Nm input
-.Nd the event devices of the keyboards and buttons
+.Nd the event devices of the keyboards, mice and buttons
 .Sh SYNOPSIS
 .In linux/input.h
 .Pp
@@ -26,6 +26,27 @@ gives them.
 A keyboard's keys reach its node beside the console, which every keyboard
 shares; see
 .Xr console 4 .
+.Pp
+The PS/2 mouse is named for the protocol it answers, as Linux's psmouse
+names it: a mouse that answers Microsoft's IntelliMouse Explorer knock is
+.Dq ImExPS/2 Generic Explorer Mouse ,
+product 6, with a wheel, a horizontal wheel and five buttons; one that
+answers the IntelliMouse's alone is
+.Dq ImPS/2 Generic Wheel Mouse ,
+product 5, with a wheel and three buttons; any other is
+.Dq PS/2 Generic Mouse ,
+product 1, with three buttons.
+Each is vendor 2 on the PS/2 controller's bus, at
+.Dq isa0060/serio1/input0 ,
+with the property
+.Dv INPUT_PROP_POINTER .
+A USB mouse in the boot protocol is
+.Dq USB HIDBP Mouse VVVV:PPPP ,
+its vendor and product in hexadecimal, as Linux's boot-protocol driver
+names it, with a wheel and five buttons and no property.
+Every mouse also feeds
+.Pa /dev/mouse ,
+whose three-byte packets carry no wheel.
 .Pp
 The ACPI devices of
 .Xr acpi 4
@@ -52,11 +73,15 @@ records, as many as fit in its count: the time of the event, its type, its
 code and its value.
 The time is two
 .Vt long Ns s ,
-the seconds and microseconds of the real time, so a record is 16 bytes on
-i686 and 24 on x86-64, as
+seconds and microseconds, so a record is 16 bytes on i686 and 24 on
+x86-64, as
 .In linux/input.h
 lays it out under the C library's 64-bit
 .Vt time_t .
+Every record of a packet has the time of the packet's first event, read on
+the clock the open chose with
+.Dv EVIOCSCLOCKID :
+the real time unless it chose another, as on Linux.
 .Pp
 A key is reported as one packet of three records:
 .Dv EV_MSC
@@ -91,6 +116,33 @@ with the value 2 and
 .Dv SYN_REPORT .
 A press of a key that is down already, which a PS/2 keyboard sends while
 the key is held, is dropped.
+.Pp
+A mouse's packet is its buttons that changed,
+.Dv EV_KEY
+.Dv BTN_LEFT
+to
+.Dv BTN_EXTRA
+with 1 for a press and 0 for a release; its motion,
+.Dv EV_REL
+.Dv REL_X
+to the right and
+.Dv REL_Y
+toward the user; a wheel's turn,
+.Dv REL_WHEEL
+in detents, up positive, and
+.Dv REL_HWHEEL ,
+right positive; and
+.Dv SYN_REPORT .
+A USB mouse reports each turn again in 120ths of a detent,
+.Dv REL_WHEEL_HI_RES ,
+as Linux's generic HID driver does.
+.Pp
+The events pass the filters of Linux's input core: an event of a key or
+axis the device does not have, a press of a key that is down, a release of
+one that is up, a relative motion of 0, and an absolute value within the
+axis's fuzz of the last are dropped, and so is a
+.Dv SYN_REPORT
+that would end a packet with nothing in it.
 When the repeat's times change, each keyboard reports the ones that
 changed as
 .Dv EV_REP
@@ -126,7 +178,9 @@ reports
 .Dv POLLIN
 while one is queued, and
 .Dv POLLHUP
-once the device has gone.
+with
+.Dv POLLERR
+once the device has gone or the open was revoked.
 .Pp
 The ioctls are Linux's:
 .Bl -tag -width EVIOCGBIT
@@ -150,13 +204,18 @@ no device has a serial number.
 .It Dv EVIOCGBIT
 The bits of the event types the device reports,
 .Dv EV_SYN ,
-.Dv EV_KEY
+.Dv EV_KEY ,
+for a mouse
+.Dv EV_REL ,
+for a device with absolute axes
+.Dv EV_ABS ,
 and, for a keyboard,
 .Dv EV_MSC ,
 .Dv EV_LED
 and
 .Dv EV_REP ;
-of the keys it can report; of its
+of the keys and buttons it can report; of its relative and absolute axes;
+of its
 .Dv EV_MSC
 codes,
 .Dv MSC_SCAN ;
@@ -170,16 +229,65 @@ The other types answer no bits, and
 answers
 .Er EINVAL ,
 as on Linux.
-.It Dv EVIOCGKEY
-The bits of the keys down now.
-.It Dv EVIOCGLED
-The bits of a keyboard's LEDs lit; none for another device.
-.It Dv EVIOCGPROP , EVIOCGSND , EVIOCGSW
-No bits: no device here has properties, sounds or switches.
+.It Dv EVIOCGKEY , EVIOCGLED
+The bits of the keys down now, or of a keyboard's LEDs lit, none for
+another device.
+As on Linux, the records of that type still queued for the open are taken
+out of its queue, since the state read includes them, and a packet left
+empty goes with them.
+.It Dv EVIOCGPROP
+The bits of the device's properties:
+.Dv INPUT_PROP_POINTER
+for a PS/2 mouse.
+.It Dv EVIOCGSND , EVIOCGSW
+No bits: no device here has sounds or switches.
+.It Dv EVIOCGABS , EVIOCSABS
+Read or set a
+.Vt struct input_absinfo
+of an absolute axis: its value, minimum, maximum, fuzz, flat and
+resolution.
+A structure shorter than Linux's sets the resolution to 0.
+A device with no absolute axis answers
+.Er EINVAL ,
+and so does
+.Dv EVIOCSABS
+of
+.Dv ABS_MT_SLOT .
 .It Dv EVIOCGRAB
 With a nonzero argument, take the device for this open alone, so that no
 other open reads its events until it gives it back, with 0, or closes.
 The console still reads the keys.
+.It Dv EVIOCREVOKE
+With the argument 0, end this open's use of the device for good: it gets
+no more events, gives up a grab it holds, and reads, polls and asks as if
+the device had gone, while the device's other opens go on.
+A seat manager such as seatd revokes a session's descriptors when the
+session loses the seat.
+.It Dv EVIOCSCLOCKID
+Stamp this open's records by the clock whose id the int argument holds:
+.Dv CLOCK_REALTIME ,
+the default,
+.Dv CLOCK_MONOTONIC ,
+which libinput chooses, or
+.Dv CLOCK_BOOTTIME ,
+which reads as the monotonic clock, as
+.Xr clock_gettime 2
+reads it.
+A change of clock empties a queue that holds records and puts a
+.Dv SYN_DROPPED ,
+stamped by the new clock, in their place, read with the next packet.
+.It Dv EVIOCGMASK , EVIOCSMASK
+Read or set, through a
+.Vt struct input_mask ,
+the mask of one event type, a bit for each code, which leaves out of this
+open's queue the codes whose bits are off; the mask of
+.Dv EV_SYN
+chooses whole types.
+A type with no mask set reads all ones.
+A code past the buffer's size is off, a type that takes no mask is
+ignored, and
+.Dv SYN_REPORT
+always passes.
 .It Dv EVIOCGREP , EVIOCSREP
 Read into, or set from, two unsigned ints a keyboard's repeat: the delay
 before a held key's first repeat and the period between repeats, in
@@ -210,24 +318,41 @@ of a device another open holds.
 .It Bq Er EINVAL
 A read smaller than one record;
 .Dv EVIOCGRAB
-with 0 by an open that does not hold the device; or
+with 0 by an open that does not hold the device;
 .Dv EVIOCGBIT
-of a type Linux does not answer.
+of a type Linux does not answer;
+.Dv EVIOCGABS
+or
+.Dv EVIOCSABS
+on a device with no absolute axis;
+.Dv EVIOCREVOKE
+with an argument other than 0;
+.Dv EVIOCSCLOCKID
+of another clock; or an ioctl evdev does not know, as on Linux.
 .It Bq Er ENODEV
 An open of a node with no device, or any call on an open whose device has
-gone, such as a USB keyboard unplugged.
+gone, such as a USB keyboard unplugged, or that was revoked.
 .It Bq Er ENOSYS
 .Dv EVIOCGREP
 or
 .Dv EVIOCSREP
 on a device that is no keyboard.
-.It Bq Er ENOTTY
-Another ioctl.
 .El
 .Sh SEE ALSO
 .Xr busybox-util-linux 1 ,
+.Xr clock_gettime 2 ,
 .Xr poll 2 ,
 .Xr acpi 4 ,
 .Xr console 4 ,
 .Xr ideapad 4 ,
 .Xr mixer 4
+.Sh CAVEATS
+A USB device that offers no boot protocol, such as QEMU's absolute
+.Cm usb-tablet ,
+gets no node: the USB stack reads only the boot protocol's fixed reports and
+no report descriptor, so a tablet's absolute axes are not reported.
+No device keeps multitouch slots: a device's
+.Dv ABS_MT_SLOT
+event is dropped and its other multitouch axes pass unfiltered, as on Linux
+for a device with no slots.
+A write of events to a node, which Linux takes, is refused.

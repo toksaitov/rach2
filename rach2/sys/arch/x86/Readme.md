@@ -181,7 +181,7 @@ Both boot reports read and print and configure nothing. `platform_report` runs t
 * The reference counter is read in 32 bits, or 24 for the PM timer, and extended at each tick, so a stretch without a tick longer than its wrap, 4.7 s for the PM timer and 43 s for QEMU's 100 MHz HPET, loses the wraps. The time-stamp counter's rate is measured over 20 ms and is as good as that measurement. The calibrations are right under a stop of the processor shorter than the reference's wrap, and, against the 8254, when one of the three waits ran without a stop.
 * Five chipsets have power profiles. The sleep type 7 and the ACPI enable 0xA0 of the Lynx Point and Wildcat Point rows are the PCH's encoding and the value their firmware publishes, and no emulator has those chipsets.
 * The stops' waits are loop counts, not times.
-* The serial console is COM1 alone, at 115200 baud; the mouse has three buttons and no wheel; the speaker plays a square wave and no samples; of SMBIOS only the BIOS vendor is read.
+* The serial console is COM1 alone, at 115200 baud; the PS/2 mouse speaks the plain, IntelliMouse or IntelliMouse Explorer protocol and no vendor's own, such as Synaptics' or ALPS' touchpad protocols, so a touchpad works as a plain mouse; the speaker plays a square wave and no samples; of SMBIOS only the BIOS vendor is read.
 * The CMOS clock's century is taken as 2000, and the FADT's century register is logged but not used.
 * The floating-point state covers x87, SSE, AVX and AVX-512 alone, `XCR0` bits 0 to 2 and 5 to 7.
 
