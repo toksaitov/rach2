@@ -7882,8 +7882,9 @@ long sys_fstatfs64(isr_params_t *params)
 /**
  * Fill `kst`, which has the boot times, with the stat of the anonymous
  * descriptor `entry`, for `fstat_fill`: a message queue's is its file's, a
- * namespace's nsfs's file of the namespace, and any other's Linux's
- * anonymous inode. Returns 0, or the error of the queue's getattr.
+ * namespace's nsfs's file of the namespace, a dma-buf's size and distinct
+ * inode, and any other's Linux's anonymous inode. Returns 0, or the error
+ * of the queue's getattr.
  */
 static int32_t fstat_anon(fd_entry_t *entry, struct kstat *kst)
 {
@@ -7899,7 +7900,6 @@ static int32_t fstat_anon(fd_entry_t *entry, struct kstat *kst)
         kst->st_mode = S_IFREG | 0600;
         kst->st_ino = buf->ino;
         kst->st_size = (int64_t)buf->size;
-        kst->st_blocks = (buf->size + 511) >> 9;
     } else if (nsfs_ns(entry)) {
         kst->st_dev = NSFS_DEV;
         kst->st_mode = S_IFREG | 0444;

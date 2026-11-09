@@ -272,6 +272,46 @@ static void buffer_cases(void)
     dma_fence_put(w);
     dma_fence_put(r);
 }
+/** Imported writers from independent producers must all remain visible. */
+static void import_cases(void)
+{
+    struct dma_buf *b = dma_buf_export(4096, &model_ops, NULL, NULL);
+    struct dma_fence *a = new_fence(dma_fence_context_alloc(1), 1);
+    struct dma_fence *c = new_fence(dma_fence_context_alloc(1), 1);
+    struct dma_fence *r = new_fence(dma_fence_context_alloc(1), 1), *snapshot;
+    struct dma_buf_import_sync_file data;
+    struct wait_queue *q;
+    int fd = dma_buf_fd(b, 0), fa = sync_file_create(a, "first");
+    int fc = sync_file_create(c, "second");
+    fd_entry_t *e = fd_get(&table, fd);
+    dma_resv_add_fence(b->resv, r, 0);
+    data.flags = DMA_BUF_SYNC_WRITE;
+    data.fd = fa;
+    CHECK(!buf_ioctl(e, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, (uintptr_t)&data), "first writer import");
+    data.fd = fc;
+    CHECK(!buf_ioctl(e, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, (uintptr_t)&data), "second writer import");
+    snapshot = dma_resv_snapshot(b->resv, 1);
+    CHECK(dma_fence_count(snapshot) == 3, "both writers and previous reader retained");
+    dma_fence_put(snapshot);
+    dma_fence_signal(c);
+    CHECK(buf_poll(e, 5, &q) == 0, "second writer does not hide pending first writer");
+    dma_fence_set_error(a, -EIO);
+    dma_fence_signal(a);
+    CHECK(buf_poll(e, 5, &q) == 1, "read ready but old reader still holds write access");
+    snapshot = dma_resv_snapshot(b->resv, 0);
+    CHECK(dma_fence_status(snapshot) == -EIO, "imported producer error retained");
+    dma_fence_put(snapshot);
+    dma_fence_signal(r);
+    CHECK(buf_poll(e, 5, &q) == 5, "write ready only after every producer");
+    fd_free(&table, fa);
+    fd_free(&table, fc);
+    fd_free(&table, fd);
+    dma_buf_put(b);
+    dma_fence_put(a);
+    dma_fence_put(c);
+    dma_fence_put(r);
+}
+
 /** Drive software points, deadline hints, wraparound and closing a producer. */
 static void timeline_cases(void)
 {
@@ -324,6 +364,7 @@ int main(void)
     fence_cases();
     merge_cases();
     buffer_cases();
+    import_cases();
     timeline_cases();
     for (i = 0; i < 64; i++)
         CHECK(slots[i].type == FD_TYPE_NONE, "all descriptors closed");

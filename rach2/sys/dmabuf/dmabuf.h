@@ -47,7 +47,7 @@ int32_t dma_buf_fd(struct dma_buf *buf, uint32_t flags);
 struct dma_buf *dma_buf_get(int32_t fd);
 /** Release every reservation slot and its storage; big kernel lock held. */
 void dma_resv_fini(struct dma_resv *resv);
-/** Add a read fence, or replace all slots for a write. 0 or -ENOMEM.
+/** Add a read fence, or join outstanding writers. 0 or -ENOMEM.
  * The reservation takes its own reference; does not sleep. */
 int32_t dma_resv_add_fence(struct dma_resv *resv, struct dma_fence *fence, int write);
 /** Snapshot the write fence and, for write access, the readers too.

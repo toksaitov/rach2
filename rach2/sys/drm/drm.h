@@ -292,13 +292,13 @@ int dma_fence_remove_callback(struct dma_fence *fence, struct dma_fence_cb *cb);
 int32_t dma_fence_wait_until(struct dma_fence *fence, int intr, int64_t deadline_ns);
 
 /*
- * The implicit fences of a buffer, Linux's dma_resv: the last write and
- * the reads since. A new write replaces all of them; a new read is added.
+ * The implicit fences of a buffer, Linux's dma_resv: outstanding writes
+ * and reads. A new write joins the write fence; a new read is added.
  * Each slot holds a reference. Kept by a buffer object, or by its dma-buf
  * when it is imported, so that every device and the CPU see one set.
  */
 struct dma_resv {
-    struct dma_fence *write;
+    struct dma_fence *write; /* all pending writers, or NULL */
     struct dma_fence **reads;
     uint32_t nreads, cap;
 };
