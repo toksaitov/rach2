@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "family_id": "machine.i915fake",
-  "summary": "The i915 driver on the fake chip in QEMU, under the GNU root: the identity libdrm reads, the driver Mesa's loader picks, and the faults of the chip's debugfs file; the program is tests/cases/machine/i915fake_scenario.c",
+  "summary": "The i915 driver on the fake chip in QEMU: under the GNU root the identity libdrm reads, the driver Mesa's loader picks and the faults of the chip's debugfs file, which tests/cases/machine/i915fake_scenario.c runs; under the test image the buffers i915gemprobe tiles, maps and reads back",
   "cases": [
     {
       "case_id": "machine.i915fake.crocus",
@@ -179,6 +179,139 @@
       "native": {
         "plan": "none",
         "class": "boot",
+        "reason": "the case needs QEMU's edu device, which no installed machine has"
+      }
+    },
+    {
+      "case_id": "machine.i915fake.gem",
+      "behavior": "with rach2.i915fake the i915 driver binds QEMU's edu device, and an X tiled buffer object of 64 KiB with a stride of 2048 bytes, written through a GTT map and read back through a write-back CPU map, holds each dword where X tiling and the swizzle the driver reports put it",
+      "units": [
+        "rach2/sys/drm/i915/i915_gem_mman.c",
+        "rach2/sys/drm/i915/i915_gem_tiling.c",
+        "i915gemprobe"
+      ],
+      "domain": "guest",
+      "architectures": [
+        "x86_64"
+      ],
+      "workload": {
+        "arguments": [],
+        "inputs": {},
+        "repetitions": 1,
+        "seed": null
+      },
+      "requirements": {
+        "host_api": "c",
+        "tools": [],
+        "features": {},
+        "qemu": {
+          "kernel": "kernel",
+          "initrd": "test-image",
+          "disks": [],
+          "cpu": "max",
+          "processors": 1,
+          "memory_bytes": 536870912,
+          "firmware": "direct",
+          "devices": [
+            "edu"
+          ],
+          "boot_options": [
+            "rach2.i915fake"
+          ]
+        }
+      },
+      "execution": {
+        "program": "i915gemprobe",
+        "stdin": null,
+        "role": "ordinary",
+        "privileges": "an ordinary user",
+        "isolation": [],
+        "children": "none",
+        "cleanup": "the probe unmaps and closes what it made"
+      },
+      "assertions": [
+        {
+          "assertion_id": "object",
+          "checks": "the render node whose driver is i915 makes a 64 KiB object and tiles it X with a stride of 2048 bytes, reporting swizzle none or 9/10",
+          "source": "program"
+        },
+        {
+          "assertion_id": "gtt",
+          "checks": "each dword written its offset through a GTT map reads back through that map",
+          "source": "program"
+        },
+        {
+          "assertion_id": "detile",
+          "checks": "after SET_DOMAIN to the CPU, a write-back CPU map holds each dword at the offset X tiling and the swizzle give it",
+          "source": "program"
+        },
+        {
+          "assertion_id": "idle",
+          "checks": "BUSY reports the object idle and WAIT returns 0",
+          "source": "program"
+        }
+      ],
+      "branches": [],
+      "termination": {
+        "end": "exited",
+        "value": 0
+      },
+      "progress": [],
+      "bounds": {
+        "case": {
+          "floor_us": 1000000,
+          "initial_us": 300000000,
+          "ceiling_us": 900000000
+        },
+        "gap": {
+          "floor_us": 1000000,
+          "initial_us": 120000000,
+          "ceiling_us": 600000000
+        },
+        "stages": {
+          "boot": {
+            "floor_us": 1000000,
+            "initial_us": 60000000,
+            "ceiling_us": 300000000
+          }
+        }
+      },
+      "resources": {
+        "cpu_millis": 1000,
+        "cpu_ceiling_millis": 1000,
+        "memory_bytes": 671088640,
+        "disk_bytes": 0,
+        "locks": [],
+        "ports": 0,
+        "loop_devices": 0,
+        "cpu_class": "light"
+      },
+      "prepare": [
+        {
+          "name": "i915gemprobe",
+          "node": "tests/i915gemprobe",
+          "per_architecture": true
+        },
+        {
+          "name": "kernel",
+          "node": "rach2/kernel",
+          "per_architecture": true
+        },
+        {
+          "name": "etude-guest",
+          "node": "tools/etude/guest/etude-guest",
+          "per_architecture": true
+        },
+        {
+          "name": "test-image",
+          "node": "images/test.krffs",
+          "per_architecture": true
+        }
+      ],
+      "timing": [],
+      "native": {
+        "plan": "none",
+        "class": "layout",
         "reason": "the case needs QEMU's edu device, which no installed machine has"
       }
     }

@@ -386,8 +386,9 @@ $(WATCHDOG_IMAGE): krffs/manifests/watchdog.manifest $(ARCH_BUILD)/tests/watchdo
 # `tests/run i915fake`: the i915 driver on its fake chip, QEMU's edu device
 # answering as the HD 4400, under the GNU root: libdrm reads 8086:0a16, Mesa's
 # loader picks crocus, and first light fails by name under each fault of the
-# chip's debugfs file. The case is tests/cases/machine.i915fake.json and
-# boots gnu-test.disk.
+# chip's debugfs file; and under the test image, i915gemprobe's X tiled
+# buffer written through a GTT map reads back detiled through a CPU map. The
+# cases are tests/cases/machine.i915fake.json; the first boots gnu-test.disk.
 
 $(ARCH_BUILD)/utils/sbin/gfxtool: utils/gfxtool.c utils/programs.mk $(LIBC_STAMP)
 	$(MAKE) -C utils ../$@

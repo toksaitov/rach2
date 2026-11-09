@@ -115,7 +115,7 @@ One line per suite, in the order the pool starts them, from `tests/run inventory
 * `conload` (core tier; needs qemu, mformat; 128 MiB): every line typed at the console under load arrives, numbered and checksummed, with the reader parked, as type-ahead, after an interrupt character to a foreground child, and across an exec.
 * `textbusy` (full tier; needs qemu; 128 MiB; x86_64 only): executable files exclude writers until the last image ends, and bind mounts retain removed KRFFS boot-root files until last close.
 * `watchdog` (full tier; needs qemu; 128 MiB): version 2 TCO expiry on q35, observed as QMP's watchdog run state, and gfxtool's refusal of std-vga before MMIO.
-* `i915fake` (full tier; needs qemu; 2048 MiB; x86_64 only): the i915 driver on its fake chip, QEMU's edu device answering as the HD 4400, under the GNU root: libdrm reads 8086:0a16, Mesa's loader picks crocus, and first light fails by name under each fault of the chip's debugfs file.
+* `i915fake` (full tier; needs qemu; 2048 MiB; x86_64 only): the i915 driver on its fake chip, QEMU's edu device answering as the HD 4400, under the GNU root: libdrm reads 8086:0a16, Mesa's loader picks crocus, and first light fails by name under each fault of the chip's debugfs file; and under the test image, i915gemprobe's X tiled buffer written through a GTT map reads back detiled through a CPU map.
 * `d3d` (full tier; needs qemu, mke2fs; 17408 MiB; x86_64 only): Direct3D 9, 11 and 12 pixels on lavapipe through GE-Proton.
 * `d3d-wine` (full tier; needs qemu, mke2fs; 17408 MiB; x86_64 only): Wine's Direct3D units on both paths against Debian.
 * `d3d-vkd3d` (full tier; needs qemu, mke2fs; 17408 MiB; x86_64 only): vkd3d-proton's units on lavapipe against Debian.
