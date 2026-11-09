@@ -109,6 +109,22 @@ int32_t sysfs_uevent(int dir, const char *action, const char *env);
  */
 int32_t sysfs_uevent_write(int dir, const char *buf, uint32_t len);
 
+/** Send the uevent `action` of the device whose directory is `path`,
+ * "/sys/...", as `sysfs_uevent` does, with SUBSYSTEM `subsystem` (or none
+ * for NULL), the lines of `env`, and the `vars_len` bytes of variables at
+ * `vars`, lines of `KEY=value` (or none for NULL): for a fixed directory's
+ * device, which has no entry here. 0, -ENOMEM or -E2BIG. */
+int32_t sysfs_uevent_path(const char *path, const char *subsystem, const char *action,
+                          const char *env, const char *vars, uint32_t vars_len);
+
+#define SYSFS_SYNTH_ENV_MAX 256
+
+/** Parse a write of a `uevent` file, as `sysfs_uevent_write` takes it, into
+ * the action, `action` of 8 bytes, and the lines of its variables, `env` of
+ * SYSFS_SYNTH_ENV_MAX bytes. 0, or -EINVAL for a word that is no action, a
+ * UUID not of 36 characters, an argument without `=` or too many. */
+int32_t sysfs_uevent_parse(const char *buf, uint32_t len, char *action, char *env);
+
 /** The number of the last uevent sent, /sys/kernel/uevent_seqnum. */
 uint32_t sysfs_uevent_seqnum(void);
 

@@ -1686,6 +1686,38 @@ static void drm_ident_rows(void)
     kfree(t.buf);
 }
 
+/**
+ * A write of a PCI function's uevent sends that action with the function's
+ * variables, as udev's coldplug writes it: a bare action carries
+ * SYNTH_UUID=0, a UUID and arguments are passed on, and another word, a
+ * short UUID or a function that is gone is refused.
+ */
+static void pci_uevent_rows(void)
+{
+    static const char change[] = "change 01234567-89ab-cdef-0123-456789abcdef SEAT=seat0\n";
+    uint32_t mark = uevents_len;
+
+    check(procfs_uevent_write(SYSFS_PCI_DEVICE, 0x20, "add\n", 4) == 4 &&
+              __builtin_strcmp(uevents + mark, "add@/devices/pci0000:00/0000:00:04.0") == 0 &&
+              uevent_has(mark, 0, "SUBSYSTEM=pci") && uevent_has(mark, 0, "SYNTH_UUID=0") &&
+              uevent_has(mark, 0, "PCI_ID=1AF4:1050") &&
+              uevent_has(mark, 0, "PCI_SLOT_NAME=0000:00:04.0"),
+          "a write of add to a PCI function's uevent sends its add");
+    mark = uevents_len;
+    check(procfs_uevent_write(SYSFS_PCI_DEVICE, 0x20, change, sizeof(change) - 1) ==
+                  (int32_t)sizeof(change) - 1 &&
+              uevent_has(mark, 0, "ACTION=change") &&
+              uevent_has(mark, 0, "SYNTH_UUID=01234567-89ab-cdef-0123-456789abcdef") &&
+              uevent_has(mark, 0, "SYNTH_ARG_SEAT=seat0"),
+          "and passes a UUID and arguments on");
+    mark = uevents_len;
+    check(procfs_uevent_write(SYSFS_PCI_DEVICE, 0x20, "plug\n", 5) == -EINVAL &&
+              procfs_uevent_write(SYSFS_PCI_DEVICE, 0x20, "add 1234\n", 9) == -EINVAL &&
+              procfs_uevent_write(SYSFS_PCI_DEVICE, 0x28, "add\n", 4) == -ENOENT &&
+              uevents_len == mark,
+          "and refuses another word, a short UUID and a function that is gone");
+}
+
 /* What the driver's attribute in the registration rows holds. */
 static char override[16];
 
@@ -1836,13 +1868,15 @@ int main(void)
     drm_file_rows();
     drm_event_rows();
     drm_ident_rows();
+    pci_uevent_rows();
     sysfs_reg_rows();
     if (!failures) {
-        printf("procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
-               "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
-               "process's arguments, oom_score_adj, the paths of the maps, the uptime idle "
-               "sum, an interface's counts, a DRM device's /sys entries and uevents, and a "
-               "driver's attribute, link and PCI identity\n");
+        printf(
+            "procfs-hosttest: result: pass: stat allocation failure and times, descriptor "
+            "links, task ids, the mem descriptor's counts, the exe link, a read of a reaped "
+            "process's arguments, oom_score_adj, the paths of the maps, the uptime idle "
+            "sum, an interface's counts, a DRM device's /sys entries and uevents, and a "
+            "driver's attribute, link and PCI identity, and writes of a PCI function's uevent\n");
     }
     return failures != 0;
 }

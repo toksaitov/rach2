@@ -476,7 +476,8 @@ const char *sysfs_attr(int node, int n);
 
 /** Whether the attribute `attr` of `node` takes a privileged write:
  * rtc0's wakealarm, /sys/power's state, a backlight's brightness and
- * bl_power, and a radio switch's soft and state. */
+ * bl_power, a radio switch's soft and state, and a PCI function's or a USB
+ * device's uevent. */
 int sysfs_attr_writable(int node, int attr);
 
 /** The interfaces' part, in procfs.c: the index of the interface named by
